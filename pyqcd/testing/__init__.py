@@ -235,3 +235,19 @@ def test_matching_sum_rule():
     dx = xx[1] - xx[0]
     ratio = np.sum(out) * dx / (np.sum(h0) * dx)
     assert 0.9 < ratio < 1.1, f"求和规则破坏: {ratio:.4f}"
+
+
+def test_core_chain_integrated():
+    """核心目标链整合：梯度流(τ=3a²)→TMD→混合方案→Z_R 全链自洽。"""
+    from pyqcd.renorm import (
+        wilson_flow, tmd_matrix_elements, hR_z_Pz, th_ZR,
+    )
+    g = random_su3_gauge(L=4, seed=6)
+    tau = 3.0 * (0.1053 * 0.197) ** 2
+    V = wilson_flow(g, tau=tau, eps=0.01)
+    M = tmd_matrix_elements(V, list(range(6)), [0])[:, 0]
+    z_fm = np.array(range(6)) * 0.1053
+    zr = th_ZR(z_fm, 0.1053 / 0.197, 2.0, 0.5, 0.1, 0.0, 0.0, 0.25, (0.0, 0.0))
+    lam, hR = hR_z_Pz(z_fm, 4, M, M, zs=0.3, zr_fit=zr, conf='L24x72')
+    assert np.all(np.isfinite(hR))
+    assert abs(hR[0] - 1.0) < 1e-8, "短距比值应自归一"
