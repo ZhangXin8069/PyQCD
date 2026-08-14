@@ -113,3 +113,19 @@ def test_tmd_extraction_chain():
     al, c = sftx_gluon_matching_coeff(0.1, 2.0)
     assert np.isfinite(al) and np.isfinite(c)
     assert np.all(np.isfinite(sftx_energy_density_t0(1.0, 0.1, 2.0)))
+
+
+def test_scale_setting_flow_behavior():
+    """尺度设定与流时间行为：t²⟨E⟩ 单调递增且 t0 可求。"""
+    from pyqcd.renorm import (
+        wilson_flow, flow_action_density, scale_setting_t0,
+    )
+    g = random_su3_gauge(L=4, seed=3)
+    vals = []
+    for tau in [0.1, 0.3, 0.5]:
+        V = wilson_flow(g, tau=tau, eps=0.05)
+        vals.append(tau ** 2 * flow_action_density(V).mean())
+    assert vals[0] < vals[1] < vals[2], f"t²⟨E⟩ 应单调递增: {vals}"
+    target = 0.5 * (vals[0] + vals[2])   # 目标取区间内部，保证插值可达
+    t0 = scale_setting_t0(g, target=target, tau_max=0.5, eps=0.05)
+    assert np.isfinite(t0) and t0 > 0

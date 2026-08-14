@@ -173,18 +173,28 @@ def flow_action_density(U):
     return 0.25 * E
 
 
-def scale_setting_t0(U, target=0.3, tau_min=0.01, tau_max=1.0,
+def scale_setting_t0(U, target=0.3, tau_min=0.01, tau_max=2.0,
                      n_probe=20, eps=0.01):
-    """尺度设定：求流时间 t₀ 使 t²⟨E(t)⟩ = target（Luescher 2010 惯例）。"""
+    """尺度设定：求流时间 t₀ 使 t²⟨E(t)⟩ = target（Luescher 2010 惯例）。
+
+    若目标值在搜索范围内未达到（t²⟨E⟩ 单调递增但未及 target），
+    自动扩大搜索范围至 tau_max × 8 并重新探测。
+    """
     taus = np.linspace(tau_min, tau_max, n_probe)
-    V = U
     t_prev, E2_prev = 0.0, 0.0
-    for i, tau in enumerate(taus):
-        V = wilson_flow(U, tau, eps=eps)
-        E2 = tau ** 2 * flow_action_density(V).mean()
-        if i > 0 and (E2 - target) * (E2_prev - target) < 0:
-            from scipy.interpolate import interp1d
-            f = interp1d([t_prev, tau], [E2_prev, E2])
-            return float(f(target))
-        t_prev, E2_prev = tau, E2
+    for _ in range(3):   # 最多 3 次扩围
+        for i, tau in enumerate(taus):
+            V = wilson_flow(U, tau, eps=eps)
+            E2 = tau ** 2 * flow_action_density(V).mean()
+            if i > 0 and (E2 - target) * (E2_prev - target) < 0:
+                # 反插值：x=E2, y=tau → f(target_E2) = t₀
+                from scipy.interpolate import interp1d
+                f = interp1d([E2_prev, E2], [t_prev, tau])
+                return float(f(target))
+            t_prev, E2_prev = tau, E2
+        if E2_prev >= target:
+            break
+        tau_max *= 4
+        taus = np.linspace(tau_min, tau_max, n_probe)
+        t_prev, E2_prev = 0.0, 0.0
     raise ValueError(f"target t²⟨E⟩={target} 未在 τ∈[{tau_min},{tau_max}] 内达到")
