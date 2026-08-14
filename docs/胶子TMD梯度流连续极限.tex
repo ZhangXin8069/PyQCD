@@ -427,7 +427,7 @@ F32P30 & 0, 1.00, 1.50       & 0, 2, 3 \\
     F_{\mu\nu}(x) = -\frac{i}{8a^2} (Q_{\mu\nu}(x) - Q_{\nu\mu}(x)).
 \end{equation}
 
-在代码实现中（\texttt{examples/Operator.py}和\texttt{code/gluon\_pdf\_full\_workflow.py}），这一构造通过以下步骤完成：
+在代码实现中（\texttt{refer/donghx/Operator.py}和\texttt{refer/zhangxin/gluon\_pdf\_full\_workflow.py}），这一构造通过以下步骤完成：
 \begin{enumerate}
     \item 计算所有6个平面（$\mu<\nu$）上的plaquette；
     \item 通过适当的平移构造clover项$Q_{\mu\nu}$；
@@ -532,7 +532,7 @@ Perambulator仅依赖于规范场构型而不依赖于插值算符的选择，�
     C_{3\text{pt}}(\Pz; z, \bperp; \tsep, t) = \sum_{t_0} \left(\mathcal{O}(z, \bperp; t_0 + t) - \langle \mathcal{O}(z, \bperp; t_0 + t) \rangle\right) \times \left(C_{2\text{pt}}(\Pz; t_0 + \tsep, t_0) - \langle C_{2\text{pt}}(\Pz; t_0 + \tsep, t_0) \rangle\right).
 \end{equation}
 
-这一分解的物理含义是：胶子算符的期望值减除真空期望值后，与核子两点关联函数的涨落部分相关联。在代码实现中（\texttt{code/gluon\_pdf\_full\_workflow.py}），非连通图的计算通过以下步骤完成：
+这一分解的物理含义是：胶子算符的期望值减除真空期望值后，与核子两点关联函数的涨落部分相关联。在代码实现中（\texttt{refer/zhangxin/gluon\_pdf\_full\_workflow.py}），非连通图的计算通过以下步骤完成：
 \begin{enumerate}
     \item 对每个时间片$t_0$计算胶子算符$\mathcal{O}(z, \bperp; t_0 + t)$；
     \item 计算所有时间片上胶子算符的平均值$\langle \mathcal{O} \rangle$；
@@ -807,7 +807,7 @@ $[\cdots]_+$表示加分布（plus distribution），其定义为：
 
 \subsection{代码架构概览}
 
-本库中包含两套独立的胶子PDF工作流实现（\texttt{code/}目录），以及64个质子两点关联函数脚本（\texttt{examples/}目录）。表~\ref{tab:code_structure}给出了代码架构的概览。
+本库中包含两套独立的胶子PDF工作流实现（\texttt{refer/zhangxin/}目录），以及64个质子两点关联函数脚本（\texttt{refer/donghx/}目录）。表~\ref{tab:code_structure}给出了代码架构的概览。
 
 \begin{table}[H]
 \centering
@@ -817,19 +817,19 @@ $[\cdots]_+$表示加分布（plus distribution），其定义为：
 \toprule
 文件 & 功能 & 关键特性 \\
 \midrule
-\texttt{code/gluon\_pdf\_full\_workflow.py} & 完整的10步单脚本工作流（$\sim$1900行） & dataclass配置，自包含实现 \\
-\texttt{code/gluon\_pdf\_workflow.py} & 子命令式工作流（$\sim$1580行） & MPI支持，系综预设 \\
-\texttt{examples/Operator.py} & Plaquette和场强张量构造 & CuPy GPU加速 \\
-\texttt{examples/gamma\_matrix\_cupy\_DR.py} & DeGrand-Rossi基Dirac矩阵 & CuPy实现 \\
-\texttt{examples/input\_output\_4\_cupy.py} & 规范组态和关联函数的I/O & HDF5/npy格式 \\
-\texttt{examples/2pt\_proton\_Cg5gmu\_*.py} & 64个质子2pt关联函数脚本 & 6系综$\times$3动量方向$\times$2后端 \\
+\texttt{refer/zhangxin/gluon\_pdf\_full\_workflow.py} & 完整的10步单脚本工作流（$\sim$1900行） & dataclass配置，自包含实现 \\
+\texttt{refer/zhangxin/gluon\_pdf\_workflow.py} & 子命令式工作流（$\sim$1580行） & MPI支持，系综预设 \\
+\texttt{refer/donghx/Operator.py} & Plaquette和场强张量构造 & CuPy GPU加速 \\
+\texttt{refer/donghx/gamma\_matrix\_cupy\_DR.py} & DeGrand-Rossi基Dirac矩阵 & CuPy实现 \\
+\texttt{refer/donghx/input\_output\_4\_cupy.py} & 规范组态和关联函数的I/O & HDF5/npy格式 \\
+\texttt{refer/donghx/2pt\_proton\_Cg5gmu\_*.py} & 64个质子2pt关联函数脚本 & 6系综$\times$3动量方向$\times$2后端 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{场强张量的GPU实现}
 
-在\texttt{examples/Operator.py}中，场强张量的计算通过CuPy在GPU上实现：
+在\texttt{refer/donghx/Operator.py}中，场强张量的计算通过CuPy在GPU上实现：
 
 \begin{verbatim}
 def compute_field_strength_tensor(U):
@@ -848,13 +848,13 @@ def compute_field_strength_tensor(U):
 
 张量约定遵循：
 \begin{itemize}
-    \item \texttt{examples/}中的OPE代码：规范场形状 $[N_t, N_z, N_y, N_x, \text{dir}, \text{color}, \text{color}]$
-    \item \texttt{code/}中的工作流：规范场形状 $[\text{color}, \text{color}, \text{direction}, x, y, z, t]$
+    \item \texttt{refer/donghx/}中的OPE代码：规范场形状 $[N_t, N_z, N_y, N_x, \text{dir}, \text{color}, \text{color}]$
+    \item \texttt{refer/zhangxin/}中的工作流：规范场形状 $[\text{color}, \text{color}, \text{direction}, x, y, z, t]$
 \end{itemize}
 
 \subsection{胶子算符的构造}
 
-在\texttt{code/gluon\_pdf\_full\_workflow.py}中，非极化胶子算符通过以下步骤构造：
+在\texttt{refer/zhangxin/gluon\_pdf\_full\_workflow.py}中，非极化胶子算符通过以下步骤构造：
 
 \begin{enumerate}
     \item 使用\texttt{compute\_field\_strength\_tensor}计算所有格点上的$F_{\mu\nu}$；
@@ -868,7 +868,7 @@ def compute_field_strength_tensor(U):
 
 \subsection{蒸馏与两点关联函数}
 
-蒸馏计算的核心步骤在\texttt{code/gluon\_pdf\_workflow.py}中实现：
+蒸馏计算的核心步骤在\texttt{refer/zhangxin/gluon\_pdf\_workflow.py}中实现：
 
 \begin{enumerate}
     \item 使用QUDA/PyQUDA计算三维Laplace算符的本征值和本征矢；
@@ -882,8 +882,8 @@ def compute_field_strength_tensor(U):
 
 本库中的代码支持多种GPU后端：
 \begin{itemize}
-    \item \textbf{NVIDIA CUDA}：通过CuPy（\texttt{examples/*\_gpu.py}）；
-    \item \textbf{AMD/Hygon DCU}：通过PyTorch兼容层（\texttt{examples/*\_dcu.py}）；
+    \item \textbf{NVIDIA CUDA}：通过CuPy（\texttt{refer/donghx/*\_gpu.py}）；
+    \item \textbf{AMD/Hygon DCU}：通过PyTorch兼容层（\texttt{refer/donghx/*\_dcu.py}）；
     \item \textbf{CPU fallback}：当GPU库不可用时自动回退到NumPy。
 \end{itemize}
 
@@ -1167,13 +1167,13 @@ except ImportError:
 
 [9] & Ji (2014), ``Parton physics from large-momentum effective field theory'' & \texttt{docs/Parton\_Physics\_from\_Large-Momentum\_Effective\_Field\_Theory.pdf} \\
 
-[10] & Ji, Zhang \& Zhao (2017), Nucl. Phys. B & \texttt{docs/}相关文件 \\
+[10] & Ji, Zhang \& Zhao (2017), Nucl. Phys. B & \texttt{refer/papers/}相关文件 \\
 
-[11] & Balitsky, Morris \& Radyushkin (2020), Phys. Lett. B & \texttt{docs/}相关文件 \\
+[11] & Balitsky, Morris \& Radyushkin (2020), Phys. Lett. B & \texttt{refer/papers/}相关文件 \\
 
-[12] & Balitsky, Morris \& Radyushkin (2022), Phys. Rev. D & \texttt{docs/}相关文件 \\
+[12] & Balitsky, Morris \& Radyushkin (2022), Phys. Rev. D & \texttt{refer/papers/}相关文件 \\
 
-[13] & Zhang et al. (2019), ``Multiplicative renormalizability of gluon quasi-PDF'' & \texttt{docs/}相关文件 \\
+[13] & Zhang et al. (2019), ``Multiplicative renormalizability of gluon quasi-PDF'' & \texttt{refer/papers/}相关文件 \\
 
 [14] & Chen et al. (CLQCD/LPC, 2025), ``Unpolarized gluon PDF in the continuum limit'' & \texttt{docs/Unpolarized gluon PDF of the nucleon from lattice QCD in the continuum limit.pdf} \\
 
@@ -1193,60 +1193,60 @@ except ImportError:
 
 [22] & Ma et al. (LPC, 2025), ``Quark Transverse Spin-Momentum Correlation: The Boer-Mulders Function'' & \texttt{docs/Quark Transverse Spin-Momentum Correlation of the Nucleon from Lattice QCD The Boer-Mulders Function.pdf} \\
 
-[23] & Peardon et al. (HadSpec, 2009), ``Distillation method'' & \texttt{docs/}相关文件 \\
+[23] & Peardon et al. (HadSpec, 2009), ``Distillation method'' & \texttt{refer/papers/}相关文件 \\
 
-[24] & Egerer et al. (2021), ``Momentum smearing'' & \texttt{docs/}相关文件 \\
+[24] & Egerer et al. (2021), ``Momentum smearing'' & \texttt{refer/papers/}相关文件 \\
 
 [25] & Egerer et al. (HadStruc, 2022), ``Towards the determination of the gluon helicity distribution'' & \texttt{docs/Towards the determination of the gluon helicity distribution in the nucleon from lattice quantum chromodynamics.pdf} \\
 
-[26] & Ji et al. (2021), ``Hybrid renormalization scheme'' & \texttt{docs/}相关文件 \\
+[26] & Ji et al. (2021), ``Hybrid renormalization scheme'' & \texttt{refer/papers/}相关文件 \\
 
-[27] & Yao, Ji \& Zhang (2023), ``Matching kernel for gluon quasi-PDF'' & \texttt{docs/}相关文件 \\
+[27] & Yao, Ji \& Zhang (2023), ``Matching kernel for gluon quasi-PDF'' & \texttt{refer/papers/}相关文件 \\
 
 [28] & 内部笔记, ``Note of gluon PDFs'' & \texttt{docs/Note of gluon PDFs.pdf} \\
-    & & \texttt{文档/note\_of\_gluon\_PDFs.tex} \\
+    & & \texttt{docs/胶子PDF笔记.tex} \\
 
-[29] & 梯度流重整化解析 & \texttt{补充/格点QCD中的梯度流重整化.tex} \\
+[29] & 梯度流重整化解析 & \texttt{docs/格点QCD中的梯度流重整化.tex} \\
 
-[30] & TMD-PDF解析 & \texttt{补充/格点QCD中的TMD\_PDF.tex} \\
+[30] & TMD-PDF解析 & \texttt{docs/格点QCD中的TMD\_PDF.tex} \\
 
-[31] & LaMET解析 & \texttt{补充/格点QCD中的大动量有效理论.tex} \\
+[31] & LaMET解析 & \texttt{docs/格点QCD中的大动量有效理论.tex} \\
 
-[32] & 场强张量推导 & \texttt{补充/格点QCD中的场强张量.tex} \\
+[32] & 场强张量推导 & \texttt{docs/格点QCD中的场强张量.tex} \\
 
-[33] & 胶子算符构造 & \texttt{补充/格点QCD中的胶子算符.tex} \\
+[33] & 胶子算符构造 & \texttt{docs/格点QCD中的胶子算符.tex} \\
 
-[34] & 胶子PDF理论推导 & \texttt{文档/gluon\_pdf\_derivation.tex} \\
+[34] & 胶子PDF理论推导 & \texttt{docs/胶子PDF完整推导.tex} \\
 
-[35] & 胶子PDF连续极限计算 & \texttt{文档/gluon\_PDF\_continuum.tex} \\
+[35] & 胶子PDF连续极限计算 & \texttt{docs/胶子PDF连续极限.tex} \\
 
-[36] & 理论解析与工作流 & \texttt{refer/理论解析与工作流.tex} \\
+[36] & 理论解析与工作流 & \texttt{docs/理论解析与工作流.tex} \\
 
-[37] & 连续极限胶子PDF Beamer & \texttt{reports/gluon\_pdf\_continuum\_beamer.tex} \\
+[37] & 连续极限胶子PDF Beamer & \texttt{docs/胶子PDF连续极限幻灯片.tex} \\
 
-[38] & 代码：完整工作流 & \texttt{code/gluon\_pdf\_full\_workflow.py} \\
+[38] & 代码：完整工作流 & \texttt{refer/zhangxin/gluon\_pdf\_full\_workflow.py} \\
 
-[39] & 代码：子命令式工作流 & \texttt{code/gluon\_pdf\_workflow.py} \\
+[39] & 代码：子命令式工作流 & \texttt{refer/zhangxin/gluon\_pdf\_workflow.py} \\
 
-[40] & 代码：Operator.py & \texttt{examples/Operator.py} \\
+[40] & 代码：Operator.py & \texttt{refer/donghx/Operator.py} \\
 
-[41] & 代码：gamma\_matrix\_cupy\_DR.py & \texttt{examples/gamma\_matrix\_cupy\_DR.py} \\
+[41] & 代码：gamma\_matrix\_cupy\_DR.py & \texttt{refer/donghx/gamma\_matrix\_cupy\_DR.py} \\
 
-[42] & 代码：input\_output\_4\_cupy.py & \texttt{examples/input\_output\_4\_cupy.py} \\
+[42] & 代码：input\_output\_4\_cupy.py & \texttt{refer/donghx/input\_output\_4\_cupy.py} \\
 
-[43] & 外推方法 & \texttt{补充/格点QCD中的外推.tex} \\
+[43] & 外推方法 & \texttt{docs/格点QCD中的外推.tex} \\
 
-[44] & 重整化方法 & \texttt{补充/格点QCD中的重整化.tex} \\
+[44] & 重整化方法 & \texttt{docs/格点QCD中的重整化.tex} \\
 
-[45] & 关联函数 & \texttt{补充/格点QCD中的关联函数.tex} \\
+[45] & 关联函数 & \texttt{docs/格点QCD中的关联函数.tex} \\
 
-[46] & 误差统计方法 & \texttt{补充/格点QCD中的误差统计.tex} \\
+[46] & 误差统计方法 & \texttt{docs/格点QCD中的误差统计.tex} \\
 
-[47] & 重采样方法 & \texttt{补充/格点QCD中的重采样方法.tex} \\
+[47] & 重采样方法 & \texttt{docs/格点QCD中的重采样方法.tex} \\
 
-[48] & CLQCD (2024), Phys. Rev. D & \texttt{docs/}相关文件 \\
+[48] & CLQCD (2024), Phys. Rev. D & \texttt{refer/papers/}相关文件 \\
 
-[49] & CLQCD (2025), Phys. Rev. D & \texttt{docs/}相关文件 \\
+[49] & CLQCD (2025), Phys. Rev. D & \texttt{refer/papers/}相关文件 \\
 
 [50] & Francis et al. (2025), ``Gradient flow for PDFs'' & \texttt{docs/Gradient\_Flow\_for\_Parton\_Distribution\_Functions\_First\_Application\_to\_the\_Pion.pdf} \\
 \end{longtable}
@@ -1426,55 +1426,55 @@ A.~Francis, P.~Fritzsch, R.~V.~Harlander \textit{et al.},
 
 \bibitem{NoteGluonPDFs}
 内部笔记, ``Note of gluon PDFs,''
-\texttt{docs/Note of gluon PDFs.pdf} 和 \texttt{文档/note\_of\_gluon\_PDFs.tex}.
+\texttt{docs/Note of gluon PDFs.pdf} 和 \texttt{docs/胶子PDF笔记.tex}.
 
 \bibitem{GFnote}
 梯度流重整化解析,
-\texttt{补充/格点QCD中的梯度流重整化.tex}.
+\texttt{docs/格点QCD中的梯度流重整化.tex}.
 
 \bibitem{TMDnote}
 TMD-PDF解析,
-\texttt{补充/格点QCD中的TMD\_PDF.tex}.
+\texttt{docs/格点QCD中的TMD\_PDF.tex}.
 
 \bibitem{LaMETnote}
 大动量有效理论解析,
-\texttt{补充/格点QCD中的大动量有效理论.tex}.
+\texttt{docs/格点QCD中的大动量有效理论.tex}.
 
 \bibitem{Fmununote}
 场强张量推导,
-\texttt{补充/格点QCD中的场强张量.tex}.
+\texttt{docs/格点QCD中的场强张量.tex}.
 
 \bibitem{GluonOpNote}
 胶子算符构造,
-\texttt{补充/格点QCD中的胶子算符.tex}.
+\texttt{docs/格点QCD中的胶子算符.tex}.
 
 \bibitem{DerivationNote}
 胶子PDF理论推导,
-\texttt{文档/gluon\_pdf\_derivation.tex}.
+\texttt{docs/胶子PDF完整推导.tex}.
 
 \bibitem{ContinuumNote}
 胶子PDF连续极限计算,
-\texttt{文档/gluon\_PDF\_continuum.tex}.
+\texttt{docs/胶子PDF连续极限.tex}.
 
 \bibitem{WorkflowCode}
 代码：完整工作流,
-\texttt{code/gluon\_pdf\_full\_workflow.py}.
+\texttt{refer/zhangxin/gluon\_pdf\_full\_workflow.py}.
 
 \bibitem{WorkflowCodeMPI}
 代码：子命令式工作流,
-\texttt{code/gluon\_pdf\_workflow.py}.
+\texttt{refer/zhangxin/gluon\_pdf\_workflow.py}.
 
 \bibitem{OperatorCode}
 代码：场强张量构造,
-\texttt{examples/Operator.py}.
+\texttt{refer/donghx/Operator.py}.
 
 \bibitem{GammaCode}
 代码：Dirac矩阵,
-\texttt{examples/gamma\_matrix\_cupy\_DR.py}.
+\texttt{refer/donghx/gamma\_matrix\_cupy\_DR.py}.
 
 \bibitem{IOcode}
 代码：I/O工具,
-\texttt{examples/input\_output\_4\_cupy.py}.
+\texttt{refer/donghx/input\_output\_4\_cupy.py}.
 
 \end{thebibliography}
 

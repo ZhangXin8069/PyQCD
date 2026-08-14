@@ -54,7 +54,7 @@
 
 \begin{abstract}
 \noindent
-涂抹（smearing）是格点QCD中抑制统计噪声、改善算符-态重叠、从而可靠提取低能物理的关键数值技术。本文以统一视角系统解析格点QCD中的smear算法：按作用对象分为\textbf{夸克场涂抹}（Wuppertal/Jacobi涂抹、动量涂抹、蒸馏方法）与\textbf{规范场平滑}（APE涂抹、HYP涂抹、stout涂抹、梯度流/Wilson flow）两大类；按数学结构分为\textbf{格点算符型}（离散迭代）与\textbf{连续演化型}（流方程）。在理论层面，本文给出Wuppertal涂抹核$J = (1+\sigma\nabla^2/n_\sigma)^{n_\sigma}$、stout变换$U_\mu' = \exp(iQ_\mu)U_\mu$的完整推导及其投影性质，阐明动量涂抹$\tilde\psi(x) = e^{i\vec{\zeta}\cdot\vec{x}}\psi(x)$通过带相位本征矢构造高动量插值算符的原理，并说明梯度流作为可重整化连续涂抹的理论地位。在实现层面，本文结合本库代码（\texttt{snsc/main.py}的相位因子计算、\texttt{examples/sush/lqcddb}的stout涂抹实现、\texttt{examples/donghx}与\texttt{examples/zhangxin}的动量涂抹蒸馏脚本）逐行解读各类smear算法的数值实现，并汇总其在CLQCD胶子PDF、蒸馏2pt关联函数等实际计算中的应用。
+涂抹（smearing）是格点QCD中抑制统计噪声、改善算符-态重叠、从而可靠提取低能物理的关键数值技术。本文以统一视角系统解析格点QCD中的smear算法：按作用对象分为\textbf{夸克场涂抹}（Wuppertal/Jacobi涂抹、动量涂抹、蒸馏方法）与\textbf{规范场平滑}（APE涂抹、HYP涂抹、stout涂抹、梯度流/Wilson flow）两大类；按数学结构分为\textbf{格点算符型}（离散迭代）与\textbf{连续演化型}（流方程）。在理论层面，本文给出Wuppertal涂抹核$J = (1+\sigma\nabla^2/n_\sigma)^{n_\sigma}$、stout变换$U_\mu' = \exp(iQ_\mu)U_\mu$的完整推导及其投影性质，阐明动量涂抹$\tilde\psi(x) = e^{i\vec{\zeta}\cdot\vec{x}}\psi(x)$通过带相位本征矢构造高动量插值算符的原理，并说明梯度流作为可重整化连续涂抹的理论地位。在实现层面，本文结合本库代码（\texttt{snsc/main.py}的相位因子计算、\texttt{refer/sush/lqcddb}的stout涂抹实现、\texttt{refer/donghx}与\texttt{refer/zhangxin}的动量涂抹蒸馏脚本）逐行解读各类smear算法的数值实现，并汇总其在CLQCD胶子PDF、蒸馏2pt关联函数等实际计算中的应用。
 \end{abstract}
 
 \tableofcontents
@@ -227,10 +227,10 @@ phase_total   = phase_smear * phase_P
 VVV_Pz[t]     = compute_vvv_baryon_block(eig_t, phase_total, Nev1, Nx, fn)
 \end{verbatim}
 
-在\texttt{examples/donghx/2pt\_proton\_Cg5gmu\_L32x64\_mom2\_xdir\_gpu.py}中，动量涂抹相位通过\texttt{phase\_calc(Mom)}逐点生成：
+在\texttt{refer/donghx/2pt\_proton\_Cg5gmu\_L32x64\_mom2\_xdir\_gpu.py}中，动量涂抹相位通过\texttt{phase\_calc(Mom)}逐点生成：
 
 \begin{verbatim}
-# examples/donghx/2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py
+# refer/donghx/2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py
 def phase_calc(Mom):
     phase_factor = np.zeros(Nx*Nx*Nx, dtype=complex)
     for z in range(0, Nx):
@@ -315,7 +315,7 @@ eigvecs = (data[..., 0] + 1j*data[..., 1])[:self.cfg.Nev1]
 eigvecs = eigvecs.reshape(self.cfg.Nev1, Nx*Nx*Nx, 3)
 \end{verbatim}
 
-蒸馏方法的详细解析见本库\cite{DistillationDoc}（\texttt{补充/格点QCD蒸馏方法解析.tex}），此处不赘述。
+蒸馏方法的详细解析见本库\cite{DistillationDoc}（\texttt{docs/格点QCD蒸馏方法解析.tex}），此处不赘述。
 
 % ============================================================
 \section{规范场平滑：APE涂抹}
@@ -397,10 +397,10 @@ $Q_\mu$是$su(3)$代数的\textbf{反厄米无迹}部分：$\Omega_\mu U^\dagger
 
 \subsection{本库的stout涂抹实现}
 
-本库\texttt{lqcddb}包（\texttt{examples/sush/lqcddb/src/lqcddb/base/smear\_gauge.py}）实现了完整的stout涂抹。其实现严格遵循(\ref{eq:stout})–(\ref{eq:stout_Omega})：
+本库\texttt{lqcddb}包（\texttt{refer/sush/lqcddb/src/lqcddb/base/smear\_gauge.py}）实现了完整的stout涂抹。其实现严格遵循(\ref{eq:stout})–(\ref{eq:stout_Omega})：
 
 \begin{verbatim}
-# examples/sush/lqcddb/src/lqcddb/base/smear_gauge.py
+# refer/sush/lqcddb/src/lqcddb/base/smear_gauge.py
 # stout_smear_ndarray(gauge, nstep, rho)   — 规范场形状 (3, Nt, Nz, Ny, Nx, Nc, Nc)
 def stout_smear_ndarray(gauge, nstep, rho):
     backend = get_backend()
@@ -468,7 +468,7 @@ e^{iQ} = f_0(Q)\, \mathbf{1} + f_1(Q)\, Q + f_2(Q)\, Q^2,
 
 \subsection{可重整化性}
 
-梯度流不同于经验性涂抹的关键是其\textbf{严格的重整化性质}：L\"uscher与Weisz证明了，对任意$t>0$，流规范场$B_\mu(x,t)$在标准QCD参数重整化后是紫外有限的，且流场本身不需要波函数重整化\cite{LuscherWeisz2011}。因此梯度流不仅是数值平滑技巧，更提供了在连续极限下控制算符混合的系统框架——其详细理论（$D+1$维场论表示、小流时展开SFTX、在PDFs重整化中的应用）见本库\cite{GradientFlowDoc}（\texttt{补充/格点QCD中的梯度流重整化.tex}）。
+梯度流不同于经验性涂抹的关键是其\textbf{严格的重整化性质}：L\"uscher与Weisz证明了，对任意$t>0$，流规范场$B_\mu(x,t)$在标准QCD参数重整化后是紫外有限的，且流场本身不需要波函数重整化\cite{LuscherWeisz2011}。因此梯度流不仅是数值平滑技巧，更提供了在连续极限下控制算符混合的系统框架——其详细理论（$D+1$维场论表示、小流时展开SFTX、在PDFs重整化中的应用）见本库\cite{GradientFlowDoc}（\texttt{docs/格点QCD中的梯度流重整化.tex}）。
 
 % ============================================================
 \section{smear算法的系统比较}
@@ -513,7 +513,7 @@ e^{iQ} = f_0(Q)\, \mathbf{1} + f_1(Q)\, Q + f_2(Q)\, Q^2,
 
     \item \textbf{规范场平滑}以APE涂抹为起点，HYP涂抹通过在超立方体内分步构造staple获得更局域的平滑并抑制Wilson线线性发散，stout涂抹通过解析指数变换保持可微性从而可嵌入HMC，梯度流则将离散涂抹推广为具有严格重整化性质的连续演化\cite{APE1987,HYP2001,Morningstar2004,LuscherWeisz2011}。
 
-    \item \textbf{本库实践}中，三类涂抹技术构成一个完整的生态：stout涂抹的规范场 $\to$ Laplace本征矢/蒸馏 $\to$ 动量涂抹perambulator $\to$ 高动量2pt关联函数（胶子PDF的连通部分），HYP涂抹/梯度流的规范场 $\to$ Clover $F_{\mu\nu}$与Wilson线胶子算符（非连通OPE部分）\cite{Chen2025gluon,NoteGluonPDFs}。代码层面，\texttt{snsc/main.py}、\texttt{examples/donghx/}、\texttt{examples/zhangxin/}与\texttt{examples/sush/lqcddb/}分别对应相位因子、蒸馏本征矢/相位、动量涂抹配置与stout涂抹的数值实现。
+    \item \textbf{本库实践}中，三类涂抹技术构成一个完整的生态：stout涂抹的规范场 $\to$ Laplace本征矢/蒸馏 $\to$ 动量涂抹perambulator $\to$ 高动量2pt关联函数（胶子PDF的连通部分），HYP涂抹/梯度流的规范场 $\to$ Clover $F_{\mu\nu}$与Wilson线胶子算符（非连通OPE部分）\cite{Chen2025gluon,NoteGluonPDFs}。代码层面，\texttt{snsc/main.py}、\texttt{refer/donghx/}、\texttt{refer/zhangxin/}与\texttt{refer/sush/lqcddb/}分别对应相位因子、蒸馏本征矢/相位、动量涂抹配置与stout涂抹的数值实现。
 \end{enumerate}
 
 未来方向包括：更高阶的流方程数值积分（O($\epsilon^3$)以上的RK格式）与多尺度涂抹策略；动量涂抹与其他smear的定量对比；以及梯度流框架下统一处理夸克场与规范场涂抹的算符构造（小流时展开SFTX的应用）\cite{GradientFlowDoc}。
@@ -619,11 +619,11 @@ Phys.\ Rev.\ D \textbf{111}, 054504 (2025), arXiv:2408.03548.
 
 \bibitem{DistillationDoc}
 ``格点QCD蒸馏方法解析,''
-本库补充文档：\texttt{补充/格点QCD蒸馏方法解析.tex}。
+本库补充文档：\texttt{docs/格点QCD蒸馏方法解析.tex}。
 
 \bibitem{GradientFlowDoc}
 ``格点QCD中的梯度流重整化,''
-本库补充文档：\texttt{补充/格点QCD中的梯度流重整化.tex}。
+本库补充文档：\texttt{docs/格点QCD中的梯度流重整化.tex}。
 
 \end{thebibliography}
 

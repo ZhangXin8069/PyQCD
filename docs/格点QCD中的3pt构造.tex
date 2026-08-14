@@ -22,7 +22,7 @@
 \noindent
 \textbf{三点关联函数（three-point correlation function, 3pt）}是格点QCD中连接基础夸克-胶子动力学与实验可观测量（形状因子、PDF、TMD-PDF、衰变常数等）的核心计算对象。与仅编码强子质量和重叠因子的两点关联函数（2pt）不同，三点关联函数通过在源和汇之间的中间时间片插入\textbf{流算符}（电磁流$V_\mu$、轴矢流$A_\mu$、准PDF算符$O(z)$、或四夸克算符），提取强子态之间的\textbf{跃迁矩阵元}——这正是所有强子结构物理的出发点。
 
-本文基于本库中的三本核心教材（Gattringer与Lang的\textit{Quantum Chromodynamics on the Lattice}第11章、Gupta的\textit{Introduction to Lattice QCD}、Peskin与Schroeder的\textit{An Introduction to Quantum Field Theory}）、约15篇研究论文、以及\texttt{examples/}和\texttt{snsc/}目录中的完整代码实现，从以下七个维度系统解析格点QCD中三点关联函数的完整构造链：
+本文基于本库中的三本核心教材（Gattringer与Lang的\textit{Quantum Chromodynamics on the Lattice}第11章、Gupta的\textit{Introduction to Lattice QCD}、Peskin与Schroeder的\textit{An Introduction to Quantum Field Theory}）、约15篇研究论文、以及\texttt{refer/}和\texttt{snsc/}目录中的完整代码实现，从以下七个维度系统解析格点QCD中三点关联函数的完整构造链：
 
 \textbf{第一维度——理论基础：Euclidean关联函数与谱分解（§2）：}
 从Euclidean路径积分出发，推导三点关联函数的一般形式 $C_{3\text{pt}} = \langle O_{\text{snk}}(t_{\text{sep}}) J(\tau) O_{\text{src}}^\dagger(0) \rangle$。给出完整的四态谱分解——基态-基态信号、激发态-激发态散射项、以及基态-激发态跃迁项——并分析各项在大时间分离极限下的渐近行为。
@@ -43,7 +43,7 @@
 详述三类策略：(i) \textbf{多态拟合}——系统比较two-simRR、two-sim等拟合方案对$t_{\text{sep}}^{\min}$和$n_{\text{ex}}$的敏感性；(ii) \textbf{求和法}——通过对插入时间$t$求和消除$O(e^{-\Delta E t_{\text{sep}}})$的激发态贡献；(iii) \textbf{GEVP变分法}——通过求解$C(t)v = \lambda(t)C(t_0)v$从扩展算符基中分离近似独立的能级。
 
 \textbf{第七维度——代码实现与本库中的实战（§8）：}
-展示\texttt{examples/zhangxin/gluon\_pdf\_workflow.py}和\texttt{snsc/main.py}中三点函数构造的实际代码——从VVV张量构造、perambulator收缩、到OPE非连通三点函数的系综关联和bootstrap/jackknife误差传播。
+展示\texttt{refer/zhangxin/gluon\_pdf\_workflow.py}和\texttt{snsc/main.py}中三点函数构造的实际代码——从VVV张量构造、perambulator收缩、到OPE非连通三点函数的系综关联和bootstrap/jackknife误差传播。
 \end{abstract}
 
 \tableofcontents
@@ -122,10 +122,10 @@ Peskin \& Schroeder~\cite{PeskinSchroeder1995} & K\"all\'en-Lehmann谱表示，�
 \textbf{相关代码：}
 \begin{itemize}[leftmargin=*]
     \item \texttt{snsc/main.py} — PDF全流程（13步），含3pt构造、VVV张量、OPE非连通计算~\cite{snscMain2026}
-    \item \texttt{examples/zhangxin/gluon\_pdf\_workflow.py} — 生产级3pt工作流，含2pt/ope/pla子命令
-    \item \texttt{examples/zhangxin/main-3pt.py} — Pion 3pt IOG数据分析
-    \item \texttt{examples/zhangxin/include.py} — \texttt{data\_analyse}类，含3pt/2pt比值分析的完整实现
-    \item \texttt{examples/zhangxin/main\_iog.py} — IOG格式的3pt提取与ratio分析
+    \item \texttt{refer/zhangxin/gluon\_pdf\_workflow.py} — 生产级3pt工作流，含2pt/ope/pla子命令
+    \item \texttt{refer/zhangxin/main-3pt.py} — Pion 3pt IOG数据分析
+    \item \texttt{refer/zhangxin/include.py} — \texttt{data\_analyse}类，含3pt/2pt比值分析的完整实现
+    \item \texttt{refer/zhangxin/main\_iog.py} — IOG格式的3pt提取与ratio分析
 \end{itemize}
 
 % ==============================================================================
@@ -627,7 +627,7 @@ np.save('_3pt.npy', analyse.readed_jcknf['readed_3pt_iog_U'])
 C.~Gattringer and C.~B.~Lang,
 \textit{Quantum Chromodynamics on the Lattice: An Introductory Presentation},
 Lect.\ Notes Phys.\ \textbf{788}, Springer (2010).
-[来源: \texttt{books/Quantum Chromodynamics on the Lattice.pdf}]
+[来源: \texttt{refer/books/Quantum Chromodynamics on the Lattice.pdf}]
 \begin{itemize}
     \item 第11章（§11.4）：$\pi$介子形状因子的格点计算——3pt构造、顺序源法、比值法（式11.104）
     \item 第6章：关联函数的谱分解、有效质量、变分法
@@ -637,7 +637,7 @@ Lect.\ Notes Phys.\ \textbf{788}, Springer (2010).
 R.~Gupta,
 \textit{Introduction to Lattice QCD},
 Lecture Notes, arXiv:hep-lat/9807028.
-[来源: \texttt{books/INTRODUCTION TO LATTICE QCD.pdf}]
+[来源: \texttt{refer/books/INTRODUCTION TO LATTICE QCD.pdf}]
 \begin{itemize}
     \item 第17章：强子谱学中的两点和三点关联函数
 \end{itemize}
@@ -646,7 +646,7 @@ Lecture Notes, arXiv:hep-lat/9807028.
 M.~E.~Peskin and D.~V.~Schroeder,
 \textit{An Introduction to Quantum Field Theory},
 Westview Press (1995).
-[来源: \texttt{books/An Introduction to Quantum Field Theory.pdf}]
+[来源: \texttt{refer/books/An Introduction to Quantum Field Theory.pdf}]
 \begin{itemize}
     \item 第7章（§7.1）：K\"all\'en-Lehmann谱表示（3pt的场论基础）
     \item 第18章：OPE与色散关系（3pt中流插入的算符分析）
@@ -655,7 +655,7 @@ Westview Press (1995).
 \bibitem{correlationFunctions2026}
 \textit{格点QCD中的关联函数：谱分解、插值算符与激发态控制},
 基于本库全部相关文献、教材与代码的综合解析, 2026年7月.
-[来源: \texttt{补充/格点QCD中的关联函数.pdf}]
+[来源: \texttt{docs/格点QCD中的关联函数.pdf}]
 \begin{itemize}
     \item §3.1--3.5：标准3pt、比值法、双态拟合、R̃方法、非连通3pt
     \item §5：激发态污染的系统控制——多态拟合、求和法、GEVP
@@ -664,7 +664,7 @@ Westview Press (1995).
 \bibitem{wickContraction2026}
 \textit{格点QCD中的维克收缩与傅里叶变换},
 基于本库全部相关文献与教材的综合解析, 2026年7月.
-[来源: \texttt{补充/格点QCD中的维克收缩与傅里叶变换.pdf}]
+[来源: \texttt{docs/格点QCD中的维克收缩与傅里叶变换.pdf}]
 \begin{itemize}
     \item §2：Wick定理、介子和重子的收缩公式、非连通图与真空减除
     \item §3：蒸馏框架中的perambulator、elemental和广义perambulator
@@ -674,7 +674,7 @@ Westview Press (1995).
 \bibitem{distillation2026}
 \textit{格点QCD蒸馏方法解析},
 基于本库全部相关文献与教材的综合解析, 2026年7月.
-[来源: \texttt{补充/格点QCD蒸馏方法解析.pdf}]
+[来源: \texttt{docs/格点QCD蒸馏方法解析.pdf}]
 \begin{itemize}
     \item §3.4（定义3.3）：广义Perambulator与三点函数的蒸馏框架表达
 \end{itemize}
@@ -682,7 +682,7 @@ Westview Press (1995).
 \bibitem{propagatorSolvers2026}
 \textit{格点QCD中的传播子求解：夸克源、Krylov子空间迭代器与多网格预条件},
 基于本库全部相关文献与教材的综合解析, 2026年7月.
-[来源: \texttt{补充/格点QCD中的传播子求解.pdf}]
+[来源: \texttt{docs/格点QCD中的传播子求解.pdf}]
 \begin{itemize}
     \item §3.3：顺序源——三点函数的传播子链
 \end{itemize}
@@ -690,7 +690,7 @@ Westview Press (1995).
 \bibitem{formFactors2026}
 \textit{格点QCD中的形状因子：从电磁流到TMD软函数},
 基于本库全部相关文献与教材的综合解析, 2026年7月.
-[来源: \texttt{补充/格点QCD中的形状因子.pdf}]
+[来源: \texttt{docs/格点QCD中的形状因子.pdf}]
 \begin{itemize}
     \item §3.1--3.3：三点关联函数与流插入、比值法、顺序源方法
 \end{itemize}
@@ -698,7 +698,7 @@ Westview Press (1995).
 \bibitem{feynmanDiagrams2026}
 \textit{格点QCD中的常见费曼图},
 基于本库全部相关文献与教材的综合解析, 2026年7月.
-[来源: \texttt{补充/格点QCD中的常见费曼图.pdf}]
+[来源: \texttt{docs/格点QCD中的常见费曼图.pdf}]
 \begin{itemize}
     \item §5：连通三点函数示意图（图10）与拓扑分类
 \end{itemize}
@@ -722,7 +722,7 @@ Westview Press (1995).
 \bibitem{errorStats2026}
 \textit{格点QCD中的误差统计：从重采样到FLAG误差预算},
 基于本库全部相关文献与教材的综合解析, 2026年7月.
-[来源: \texttt{补充/格点QCD中的误差统计.pdf}]
+[来源: \texttt{docs/格点QCD中的误差统计.pdf}]
 \begin{itemize}
     \item §4：3pt激发态污染的bootstrap/Jackknife误差估计
 \end{itemize}
@@ -730,7 +730,7 @@ Westview Press (1995).
 \bibitem{hadronSpectroscopy2026}
 \textit{格点QCD中的强子谱学：从内插算符到淬火谱的完整解析},
 基于本库全部相关文献与教材的综合解析, 2026年7月.
-[来源: \texttt{补充/格点QCD中的强子谱学.pdf}]
+[来源: \texttt{docs/格点QCD中的强子谱学.pdf}]
 \begin{itemize}
     \item §5.3：变分方法（GEVP）在激发态能谱提取中的应用
 \end{itemize}
@@ -754,26 +754,26 @@ in preparation (2025).
 \end{itemize}
 
 \bibitem{gluonWorkflow2026}
-\textit{examples/zhangxin/gluon\_pdf\_workflow.py} — 生产级胶子PDF工作流,
+\textit{refer/zhangxin/gluon\_pdf\_workflow.py} — 生产级胶子PDF工作流,
 代码实现, consolidated from donghx's original code.
-[来源: \texttt{examples/zhangxin/gluon\_pdf\_workflow.py}]
+[来源: \texttt{refer/zhangxin/gluon\_pdf\_workflow.py}]
 \begin{itemize}
     \item ope子命令：$F_{\mu\nu}$、Wilson线、非定域算符构造
     \item 2pt子命令：蒸馏perambulator + VVV + Wick收缩
 \end{itemize}
 
 \bibitem{main3pt2026}
-\textit{examples/zhangxin/main-3pt.py} — Pion 3pt IOG数据分析,
+\textit{refer/zhangxin/main-3pt.py} — Pion 3pt IOG数据分析,
 代码实现.
-[来源: \texttt{examples/zhangxin/main-3pt.py}]
+[来源: \texttt{refer/zhangxin/main-3pt.py}]
 \begin{itemize}
     \item 读取IOG格式的3pt/2pt数据，执行jackknife比值分析
 \end{itemize}
 
 \bibitem{include2026}
-\textit{examples/zhangxin/include.py} — 核心分析模块（约900行）,
+\textit{refer/zhangxin/include.py} — 核心分析模块（约900行）,
 代码实现.
-[来源: \texttt{examples/zhangxin/include.py}]
+[来源: \texttt{refer/zhangxin/include.py}]
 \begin{itemize}
     \item \texttt{data\_analyse}类：3pt比值分析、jackknife重采样、IOG读取
 \end{itemize}

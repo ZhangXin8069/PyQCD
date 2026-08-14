@@ -88,8 +88,8 @@ C_X(t) \equiv \langle (X_i - \langle X\rangle)(X_{i+t} - \langle X\rangle) \rang
 \toprule
 文献 & 核心贡献 \\
 \midrule
-\texttt{books/Quantum Chromodynamics on the Lattice.pdf} & §4.5 统计数据分析：不相关误差、自相关函数与$\tau_{\text{int}}$、Binning（分块法）、统计Bootstrap与Jackknife的完整定义和公式；§6.3.2 关联$\chi^2$拟合与协方差矩阵 \\
-\texttt{books/INTRODUCTION TO LATTICE QCD.pdf} & §16.1 统计误差与binning检验的实践视角；自相关时间的物理分析 \\
+\texttt{refer/books/Quantum Chromodynamics on the Lattice.pdf} & §4.5 统计数据分析：不相关误差、自相关函数与$\tau_{\text{int}}$、Binning（分块法）、统计Bootstrap与Jackknife的完整定义和公式；§6.3.2 关联$\chi^2$拟合与协方差矩阵 \\
+\texttt{refer/books/INTRODUCTION TO LATTICE QCD.pdf} & §16.1 统计误差与binning检验的实践视角；自相关时间的物理分析 \\
 \texttt{refer/papers/The Path to Proton Structure at One-Percent Accuracy.pdf} &
 NNPDF4.0的Monte Carlo Replica方法——Bootstrap理念在大规模PDF全局分析中的最新应用 \\
 \bottomrule
@@ -423,21 +423,21 @@ NNPDF4.0使用1000个replica，通过``压缩算法''（Compressor algorithm）�
 C.~Gattringer and C.~B.~Lang,
 \textit{Quantum Chromodynamics on the Lattice: An Introductory Presentation},
 Lect.\ Notes Phys.\ \textbf{788}, Springer (2010).
-\\\textbf{[来源:} \texttt{books/Quantum Chromodynamics on the Lattice.pdf}\textbf{]}
+\\\textbf{[来源:} \texttt{refer/books/Quantum Chromodynamics on the Lattice.pdf}\textbf{]}
 \\§4.5: 不相关误差公式的推导（Eq.\,(4.53)--(4.58)）、自相关函数$C_X(t)$与归一化自相关$\Gamma_X(t)$（Eq.\,(4.59)--(4.61)）、指数自相关时间$\tau_{\text{exp}}$与积分自相关时间$\tau_{\text{int}}$（Eq.\,(4.63)--(4.67)）、Binning/Blocking方法、统计Bootstrap的完整定义（$K$个伪样本、均值$\bar\theta$与方差$\sigma_{\bar\theta}^2$，Eq.\,(4.71)）、Jackknife的完整定义（$N$个子集、方差公式$\sigma^2_{\hat\theta} = \frac{N-1}{N}\sum_n(\theta_n-\hat\theta)^2$，Eq.\,(4.72)--(4.73)）、临界减速（Eq.\,(4.69)--(4.70)）。§6.3.2: 关联$\chi^2$拟合的定义（Eq.\,(6.58)）、协方差矩阵$\operatorname{Cov}_N(t,t')$（Eq.\,(6.60)）、逆协方差权重的稳定性问题。
 
 \bibitem{Gupta1997intro}
 R.~Gupta,
 ``Introduction to Lattice QCD,''
 arXiv:hep-lat/9807028 (1997).
-\\\textbf{[来源:} \texttt{books/INTRODUCTION TO LATTICE QCD.pdf}\textbf{]}
+\\\textbf{[来源:} \texttt{refer/books/INTRODUCTION TO LATTICE QCD.pdf}\textbf{]}
 \\§16.1: 统计误差与Monte Carlo抽样、binning检验用于确定独立组态的实践指南、自相关时间的唯象分析（HMC轨迹长度5000--10000单位与$m_\pi/M_\rho \ge 0.56$的80单位退相关时间）。
 
 \bibitem{PeskinSchroeder1995}
 M.~E.~Peskin and D.~V.~Schroeder,
 \textit{An Introduction to Quantum Field Theory},
 Westview Press (1995).
-\\\textbf{[来源:} \texttt{books/An Introduction to Quantum Field Theory.pdf}\textbf{]}
+\\\textbf{[来源:} \texttt{refer/books/An Introduction to Quantum Field Theory.pdf}\textbf{]}
 \\统计力学与Monte Carlo方法的理论背景（Part I）。
 
 \bibitem{NNPDF2021}
@@ -493,7 +493,7 @@ Nucl.\ Phys.\ B \textbf{969}, 115443 (2021), arXiv:2103.02965.
 \vspace{0.5cm}
 \noindent\rule{\textwidth}{0.5pt}
 \small
-\textbf{交叉参考建议：}本报告应结合同一\texttt{补充/}目录下的以下文件阅读：
+\textbf{交叉参考建议：}本报告应结合同一\texttt{docs/}目录下的以下文件阅读：
 \begin{itemize}[nosep]
     \item \texttt{格点QCD中的关联函数.pdf}——关联函数的构造与拟合为Bootstrap/Jackknife的主要应用场景
     \item \texttt{格点QCD中的外推.pdf}——外推中的系统误差估计与统计误差的协同
