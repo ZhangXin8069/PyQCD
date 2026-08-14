@@ -17,9 +17,19 @@ TMD 扩展（本库新增，供梯度流重整化 TMD-PDF 使用）：
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from ..tools._backend import get_backend
+
+_asnumpy = getattr(get_backend(), 'asnumpy', None)
+
+
+def _to_cpu(x):
+    if _asnumpy is not None:
+        return _asnumpy(x)
+    return np.asarray(x)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -154,7 +164,7 @@ def gluon_ope_operator_z0(gauge, mu: int, nu: int, z_dir: int, delta_z: int,
     for zi in range(delta_z):
         if zi == 0:
             ope_t = cp.einsum("tzyxab,tzyxba->tzyx", F, F_tilde)
-            ope[0] = cp.asnumpy(cp.sum(ope_t, axis=spatial_axes)).real
+            ope[0] = _to_cpu(cp.sum(ope_t, axis=spatial_axes)).real
             continue
 
         ope_t = cp.roll(F, -zi, axis=z_axis)
@@ -167,9 +177,69 @@ def gluon_ope_operator_z0(gauge, mu: int, nu: int, z_dir: int, delta_z: int,
             ope_t = cp.einsum("...ab,...bc->...ac", ope_t, U_fwd)
 
         trace = cp.einsum("...aa->...", ope_t)
-        ope[zi] = cp.asnumpy(cp.sum(trace, axis=spatial_axes)).real
+        ope[zi] = _to_cpu(cp.sum(trace, axis=spatial_axes)).real
 
     return ope.astype(compute_dtype)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Gauge reader（ILDG .lime，照抄 compute_ope.py）
+# ═══════════════════════════════════════════════════════════════════
+
+def _first_link_unitarity(raw: np.ndarray, Nc: int = 3) -> float:
+    """首 3×3 链接的幺正性偏差 |U·U† − I|。"""
+    U = raw[:Nc * Nc * 2].reshape(Nc, Nc, 2)
+    Uc = U[..., 0] + 1j * U[..., 1]
+    return float(np.abs(Uc @ Uc.conj().T - np.eye(Nc)).max())
+
+
+def read_gauge_lime(filepath: str, Nt: int, Nx: int, Nc: int = 3) -> np.ndarray:
+    """读 .lime 规范组态 → complex128 (Nt,Nx,Nx,Nx,4,Nc,Nc)。
+
+    ILDG .lime 为大端 float64 + XML 头 + 尾部记录；扫描 ±16KB 窗口
+    按幺正性定位数据起点。
+    """
+    expected_elems = Nt * Nx * Nx * Nx * 4 * Nc * Nc * 2
+    expected_bytes = expected_elems * 8
+    file_size = os.path.getsize(filepath)
+    approx_off = file_size - expected_bytes
+
+    def _read_at(off):
+        with open(filepath, 'rb') as f:
+            f.seek(off)
+            return np.fromfile(f, dtype='>f8', count=expected_elems)
+
+    if 0 <= approx_off < file_size:
+        raw = _read_at(approx_off)
+        if raw.size == expected_elems and _first_link_unitarity(raw, Nc) < 1e-3:
+            return _gauge_from_raw(raw, Nt, Nx, Nc)
+
+    for delta in range(-16384, 16385, 8):
+        off = approx_off + delta
+        if off < 0 or off + expected_bytes > file_size:
+            continue
+        raw = _read_at(off)
+        if raw.size == expected_elems and _first_link_unitarity(raw, Nc) < 1e-3:
+            return _gauge_from_raw(raw, Nt, Nx, Nc)
+
+    raise ValueError(f"No valid gauge data found in {filepath} "
+                     f"(size={file_size} bytes)")
+
+
+def _gauge_from_raw(raw: np.ndarray, Nt: int, Nx: int, Nc: int = 3) -> np.ndarray:
+    raw = raw.reshape(Nt, Nx, Nx, Nx, 4, Nc, Nc, 2)
+    tg = raw[..., 0] + 1j * raw[..., 1]
+    return tg.astype(np.complex128, copy=False)
+
+
+def _read_gauge_or_skip(filepath: str, Nt: int, Nx: int, Nc: int = 3):
+    """尝试读组态；文件不存在返回 None（供管线占位）。"""
+    if not filepath or not os.path.exists(filepath):
+        return None
+    try:
+        return read_gauge_lime(filepath, Nt, Nx, Nc)
+    except (ValueError, OSError):
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════════
