@@ -101,21 +101,21 @@ def staple_6(U):
 # ═══════════════════════════════════════════════════════════════════
 
 def flow_derivative(U):
-    """Z(V) = P_{ah}[Ω·V†]·V —— 流方程右端（含投影，保持 SU(3)）。
+    """流方程右端的生成元 Z(V) = P_{ah}[Ω·V†]（无迹反厄米，∈ su(3)）。
 
     P_{ah}[M] = (M − M†)/2 − Tr(M − M†)/(2N)·I
+    RK 积分中：V(t+ε) = exp(ε·Z)·V(t)。
     """
     cp = get_backend()
     Omega = staple_6(U)
     X = cp.einsum("...ab,...cb->...ac", Omega, U.conj())
-    X_ah = 0.5 * (X - X.conj().transpose(0, 1, 2, 3, 5, 4))
+    X_ah = 0.5 * (X - X.conj().transpose(0, 1, 2, 3, 4, 6, 5))
     tr = cp.einsum("...aa->...", X_ah)
-    X_ah = X_ah - (tr / 3.0)[..., None, None] * cp.eye(3, dtype=X_ah.dtype)
-    return cp.einsum("...ab,...bc->...ac", X_ah, U)
+    return X_ah - (tr / 3.0)[..., None, None] * cp.eye(3, dtype=X_ah.dtype)
 
 
 def wilson_flow_step(U, eps):
-    """单步 RK3（Luescher 2010 Eq.(3.8)）。"""
+    """单步 RK3（Luescher 2010 Eq.(3.8)）：V(t+ε) = exp(Σ cᵢZᵢ)·V(t)。"""
     cp = get_backend()
     W0 = U
     Z0 = flow_derivative(W0)
