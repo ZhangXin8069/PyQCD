@@ -1,16 +1,30 @@
-# AGENTS.md — reports
+# AGENTS.md — docs
 
-胶子 PDF 项目 Beamer 演示幻灯片（英文，XeLaTeX）。
+格点 QCD 中文 LaTeX 笔记（47 篇，xelatex 编译；文件名统一为中文）。
 
-| 文件 | 内容 |
+## 文件
+
+| 类别 | 文件（节选） |
 |---|---|
-| `gluon_pdf_slides.tex` | 胶子 PDF 理论与工作流幻灯片 |
-| `gluon_pdf_continuum_beamer.tex` | 胶子 PDF 连续极限结果幻灯片 |
+| 胶子 PDF 总论 | `胶子PDF笔记.tex`、`胶子PDF完整推导.tex`、`胶子PDF计算代码解析.tex` |
+| 连续极限 | `胶子PDF连续极限.tex`、`胶子PDF连续极限幻灯片.tex`、`胶子PDF幻灯片.tex` |
+| TMD/重整化 | `格点QCD中的TMD_PDF.tex`、`格点QCD中的梯度流重整化.tex`、`格点QCD中的重整化.tex` |
+| 理论框架 | `格点QCD中的光锥PDF、准PDF、赝PDF.tex`、`格点QCD中的大动量有效理论.tex`、`格点QCD中的准PDF与quasi_PDF.tex` |
+| 格点技术 | `格点QCD中的Wilson线.tex`、`格点QCD中的场强张量.tex`、`格点QCD中的胶子算符.tex`、`格点QCD中的smear算法.tex` |
+| 方法学 | `格点QCD中的外推.tex`、`格点QCD中的误差统计.tex`、`格点QCD中的重采样方法.tex`、`格点QCD中的蒙卡方法.tex` |
+| 分析与专题 | `质子自旋危机解析.tex`、`格点QCD蒸馏方法解析.tex`、`格点上计算胶子准算符.tex` |
+
+完整清单：`ls docs/*.tex`（47 篇）；`*.aux/*.log/*.out/*.nav/*.snm/*.toc` 为编译产物（gitignore）。
 
 ## 编译
 
 ```bash
-xelatex -interaction=nonstopmode -halt-on-error <file>.tex   # 两遍（TOC/交叉引用）
+cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelatex；两遍
 ```
 
-主题：`metropolis`、`Madrid`、`CambridgeUS`。`汇报/` 为中文详细报告。
+## 约定
+
+- 文件名统一中文（英文名已迁移时中文化）；tex 内路径引用指向 `/root/PyQCD/`。
+- 文本模式数学符号需 `$...$` 包裹（如 `$\pi$介子`）；`\quad` 后跟中文须空格。
+- 依赖宏包：ctexart/beamer、amsmath、physics、slashed、natbib（无 biblatex）。
+- 新文档放入本目录并登记到上方表格。
