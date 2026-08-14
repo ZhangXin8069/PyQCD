@@ -13,6 +13,7 @@ from pyqcd.testing import (  # noqa: F401
     test_hybrid_ratio,
     test_tmd_extraction_chain,
     test_scale_setting_flow_behavior,
+    test_hyp_smear,
 )
 
 
