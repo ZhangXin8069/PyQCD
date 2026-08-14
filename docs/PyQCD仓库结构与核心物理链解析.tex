@@ -104,6 +104,18 @@
         $E(P_z) = \sqrt{m^2 + k_2 P_z^2 + k_3 P_z^4 a^2}$（合成数据精确恢复）。
 \end{itemize}
 
+\section{第 4 轮：物理验证与 HYP 涂抹}
+
+\begin{itemize}
+  \item 尺度设定与流时间行为：$t^2\langle E(t)\rangle$ 单调递增（物理正确），
+        t₀ 反插值（修复插值方向 bug）；
+  \item 新增 \texttt{pyqcd/smear/\_hyp.py}：完整 HYP 涂抹（Hasenbusch 2001
+        三级 (μ,ν) 对结构，$\alpha_1{=}0.75, \alpha_2{=}0.6, \alpha_3{=}0.3$）；
+        SU(3) 保持 $10^{-16}$，作用量平滑化验证通过；
+  \item debug 修复：numpy 批量 eigh 特征向量相位不一致 → SVD 极分解；
+        V3 数组形状多加方向维；scale\_setting\_t0 插值方向。
+\end{itemize}
+
 \section{新增功能（本轮）}
 
 \begin{itemize}

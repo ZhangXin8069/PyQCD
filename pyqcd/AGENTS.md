@@ -21,6 +21,8 @@
 | `operator/` | Clover 场强 F、对偶 F̃、胶子 OPE 算符、.lime 读取、TMD staple 扩展 | compute_ope.py + 新写 |
 | `analysis/` | Jackknife/Bootstrap/meff/ratio_3pt + disconnected(code_1)/meff/3pt 编排 + 色散拟合 | lib/analyse + analyze.py/zengch 逻辑 |
 | `renorm/_tmdextract.py` | ★ 准 TMD-PDF/CS 核/SFTX 1 圈匹配 | 理论文档新写 |
+| `smear/` | HYP 涂抹（Hasenbusch 2001，梯度流备选方案） | 理论文档对比项新写 |
+| `analysis/_dispersion.py` | 色散关系拟合 E(Pz)=√(m²+k₂Pz²+k₃Pz⁴a²) | zengch fit_E0 逻辑 |
 | `renorm/` | ★ 自重整化 Z_R、混合方案、NLO 匹配、外推、梯度流、TMD 提取 | refer/zengch 逻辑移植 + 理论文档新写 |
 | `pipeline/` | 集中配置 + 9 步管线调度（+tmd 步） | config.py/run_pipeline.py |
 | `testing/` | 集成测试函数（examples/pyqcd/conftest.py 入口） | 新写 |
