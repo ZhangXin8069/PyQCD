@@ -86,10 +86,10 @@
 \textbf{工作目录：} \texttt{/root/PyQCD/}
 
 \vspace{0.5cm}
-\textbf{代码来源：} \texttt{examples/} 目录
+\textbf{代码来源：} \texttt{refer/donghx/} 目录
 
 \vspace{0.5cm}
-\textbf{参考文献来源：} \texttt{books/}, \texttt{refer/papers/}, \texttt{refer/} 目录
+\textbf{参考文献来源：} \texttt{refer/books/}, \texttt{refer/papers/}, \texttt{refer/} 目录
 \end{center}
 
 \newpage
@@ -214,10 +214,10 @@ Distillation 方法~\cite{Peardon2009} 是一种夸克场涂抹技术，通过�
 
 \textbf{参考来源：}
 \begin{itemize}
-    \item \texttt{refer/理论解析与工作流.pdf} — 理论框架与工作流说明
+    \item \texttt{docs/理论解析与工作流.pdf} — 理论框架与工作流说明
     \item \texttt{refer/papers/Note of gluon PDFs.pdf} — Eq(20), Eq(25)
     \item \texttt{refer/papers/Distillation at High-Momentum.pdf} — 动量涂抹蒸馏方法
-    \item \texttt{books/INTRODUCTION TO LATTICE QCD.pdf} — 格点 QCD 基础
+    \item \texttt{refer/books/INTRODUCTION TO LATTICE QCD.pdf} — 格点 QCD 基础
 \end{itemize}
 
 \subsection{功能概述}
@@ -524,8 +524,8 @@ for _dz in range(delta_z):
 
 \textbf{参考来源：}
 \begin{itemize}
-    \item \texttt{books/Quantum Chromodynamics on the Lattice.pdf} — 格点规范场论
-    \item \texttt{books/An Introduction to Quantum Field Theory.pdf} — 场论基础
+    \item \texttt{refer/books/Quantum Chromodynamics on the Lattice.pdf} — 格点规范场论
+    \item \texttt{refer/books/An Introduction to Quantum Field Theory.pdf} — 场论基础
     \item \texttt{refer/papers/More On Large-Momentum Effective Theory Approach to Parton Physics.pdf}
     \item \texttt{refer/papers/A complete non-perturbative renormalization prescription for quasi-PDFs.pdf}
 \end{itemize}
@@ -724,8 +724,8 @@ def plaquette_clover_all_tilde(pla_all, Nt, Nx):
 
 \textbf{参考来源：}
 \begin{itemize}
-    \item \texttt{books/An Introduction to Quantum Field Theory.pdf} — Dirac 矩阵与旋量表示
-    \item \texttt{books/INTRODUCTION TO LATTICE QCD.pdf} — 格点上的 Dirac 矩阵约定
+    \item \texttt{refer/books/An Introduction to Quantum Field Theory.pdf} — Dirac 矩阵与旋量表示
+    \item \texttt{refer/books/INTRODUCTION TO LATTICE QCD.pdf} — 格点上的 Dirac 矩阵约定
 \end{itemize}
 
 \subsection{功能概述}
@@ -859,9 +859,9 @@ def write_data_ascii(data, T, L, filename, complex=True, verbose=False):
 
 \textbf{参考来源：}
 \begin{itemize}
-    \item \texttt{refer/理论解析与工作流.pdf} — 完整工作流说明
+    \item \texttt{docs/理论解析与工作流.pdf} — 完整工作流说明
     \item \texttt{refer/papers/Note of gluon PDFs.pdf} — 理论框架
-    \item \texttt{code/gluon\_pdf\_full\_workflow.py} — 系统化重构代码
+    \item \texttt{refer/zhangxin/gluon\_pdf\_full\_workflow.py} — 系统化重构代码
 \end{itemize}
 
 \subsection{功能概述}
@@ -932,19 +932,19 @@ C_{gg}^{\text{LO}}(\xi, \mu/P_z) = \delta(1-\xi)
 
 以下是本代码库中所有 PDF 参考文献的完整列表，按类别组织。
 
-\subsection{理论教材 (\texttt{books/})}
+\subsection{理论教材 (\texttt{refer/books/})}
 
 \begin{enumerate}
     \item \textbf{An Introduction to Quantum Field Theory} \\
-    \texttt{books/An Introduction to Quantum Field Theory.pdf} \\
+    \texttt{refer/books/An Introduction to Quantum Field Theory.pdf} \\
     量子场论的标准教材，涵盖路径积分量子化、重整化群、非阿贝尔规范理论等基础内容。
 
     \item \textbf{INTRODUCTION TO LATTICE QCD} \\
-    \texttt{books/INTRODUCTION TO LATTICE QCD.pdf} \\
+    \texttt{refer/books/INTRODUCTION TO LATTICE QCD.pdf} \\
     格点 QCD 的入门教材，涵盖格点作用量、蒙特卡洛模拟、强子谱计算等。
 
     \item \textbf{Quantum Chromodynamics on the Lattice} \\
-    \texttt{books/Quantum Chromodynamics on the Lattice.pdf} \\
+    \texttt{refer/books/Quantum Chromodynamics on the Lattice.pdf} \\
     格点规范场论的进阶教材，详细讨论 Wilson 费米子、改进作用量、手征对称性等。
 \end{enumerate}
 
@@ -1135,7 +1135,7 @@ C_{gg}^{\text{LO}}(\xi, \mu/P_z) = \delta(1-\xi)
 
 \begin{enumerate}
     \item \textbf{理论解析与工作流} \\
-    \texttt{refer/理论解析与工作流.pdf} \\
+    \texttt{docs/理论解析与工作流.pdf} \\
     本项目的理论框架总览与计算工作流说明文档。
 \end{enumerate}
 
