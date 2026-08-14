@@ -9,7 +9,7 @@
 ## pyqcd 示例
 
 ```bash
-python examples/pyqcd/conftest.py                 # 6 项测试（γ/重整化/梯度流/TMD/匹配/混合）
+python examples/pyqcd/conftest.py                 # 16 项测试（γ基/重整化/梯度流/TMD/匹配/混合/提取链等）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流重整化胶子 TMD 全链示例
 ```
 

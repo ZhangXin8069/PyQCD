@@ -1,4 +1,4 @@
-# AGENTS.md — examples
+# AGENTS.md — refer
 
 lattice-pdf 项目全部 Python 代码，按贡献者组织。各子目录有自己的 CLAUDE.md（已归档为 `.CLAUDE.md.<ts>.bak` 供参考）。
 
@@ -8,6 +8,9 @@ lattice-pdf 项目全部 Python 代码，按贡献者组织。各子目录有自
 | `zhangxin/` | 张 X | 胶子 PDF 完整工作流 + 数据分析框架 |
 | `huangcl/` | 黄 CL | 多步 Chroma 流水线（contract → ratio → energy） |
 | `sush/` | 苏 SH | 蒸馏收缩框架 + lqcddb 包 |
+| `zengch/` | 曾 C | 重整化/混合方案/拟合逻辑（pyqcd/renorm 移植来源） |
+| `papers/` | — | 文献 PDF（104 篇，tex 内 `refer/papers/` 引用） |
+| `books/` | — | 教材 PDF 与 latex 源 |
 
 ## 快速参考
 

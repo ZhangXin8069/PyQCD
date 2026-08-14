@@ -7,7 +7,7 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（7 项：γ/重整化/梯度流/TMD/匹配/混合/TMD提取链）
+python examples/pyqcd/conftest.py    # 全量测试（16 项：γ基/Z_R/梯度流/TMD算符/匹配/混合/提取链/标度/HYP/τ极限/比值拟合/HYP-流一致/后端一致/端到端meff/求和规则/核心链）
 python examples/pyqcd/verify_consistency.py   # 一致性验证（vs docker-v20260805 输出，A–E 全 0 差异）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
 cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，两遍）
@@ -19,7 +19,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 |---|---|
 | `pyqcd/` | 主包（lattice/tools/vertex/contraction/operator/analysis/renorm/pipeline/testing） |
 | `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 |
-| `docs/` | 47 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） |
+| `docs/` | 51 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books），只读 |
 | `logs/` | 按 tag 归档产物（stab0/ 等） |
 | `cpp/` | C++ 后端占位 |
@@ -42,7 +42,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 - 编译：docs 与 logs 的 tex 一律 xelatex（中文）；`\quad` 后跟中文需空格。
 - 测试：无 pytest 框架依赖，examples/pyqcd/conftest.py 直接运行。
 - refer/ 只读参考：pyqcd 逻辑照抄但不 import。
-- git tag 约定：stab<N>/dev<N>/bug<N>/test<N>（当前 stab0）。
+- git tag 约定：stab<N>/dev<N>/bug<N>/test<N>（当前 bug0）。
 
 ## 反模式
 
