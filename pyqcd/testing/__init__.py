@@ -95,3 +95,21 @@ def test_hybrid_ratio():
     assert len(lam) == len(z)
     assert np.all(np.isfinite(hR))
     assert hR[0] > 0   # 短距比值接近 1
+
+
+def test_tmd_extraction_chain():
+    """TMD 提取链：准 TMD-PDF / CS 核 / SFTX 系数可运行且有限。"""
+    from pyqcd.renorm import (
+        quasi_tmd_pdf, cs_kernel_from_ratio, sftx_gluon_matching_coeff,
+        sftx_energy_density_t0,
+    )
+    z = np.linspace(0.1, 1.0, 32)
+    hr = np.exp(-z / 0.3)[:, None] * np.array([1.0, 0.8])[None, :]
+    x, xg = quasi_tmd_pdf(hr, z, [0.2, 0.4], 2.0)
+    assert xg.shape == (256, 2)
+    assert np.all(np.isfinite(xg))
+    K = cs_kernel_from_ratio(hr, hr * 1.1, 2.5, 2.0)
+    assert np.all(np.isfinite(K))
+    al, c = sftx_gluon_matching_coeff(0.1, 2.0)
+    assert np.isfinite(al) and np.isfinite(c)
+    assert np.all(np.isfinite(sftx_energy_density_t0(1.0, 0.1, 2.0)))

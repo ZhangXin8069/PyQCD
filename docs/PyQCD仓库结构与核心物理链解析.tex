@@ -79,11 +79,39 @@
 链接幺正性偏差 $< 10^{-6}$；OPE 与 TMD staple 算符均可运行并给出实数结果
 （examples/pyqcd/conftest.py 6 项测试全绿）。
 
+\section{一致性验证（vs output\_20260802\_120104）}
+
+验证脚本 examples/pyqcd/verify\_consistency.py 五组对照全部通过（逐位 0 差异）：
+
+\begin{itemize}
+  \item A. 函数级：$\gamma$ 矩阵、相位因子、VdV 顶点、Jackknife、meff、
+        plaquette\_clover（12 项，max$|$diff$|$ = 0）；
+  \item B. meff 复算：proton/pion 在 P0/P2 的 E0 与 analysis\_summary.json
+        完全一致（相对差 = 0，含误差加权平台窗与 fallback 逻辑）；
+  \item C. OPE 组合：$O = -O_{30} - O_{31} + 2O_{01}$ 与 ope\_combined 逐位一致；
+  \item D. 连通 3pt 比值 $R(\tau)$：4 通道与参考 npy 完全一致；
+  \item E. 不相连 ratio（code\_1 拟合）：ratio 与 c0/c1/dE/chi2 全部 0 差异。
+\end{itemize}
+
+\section{新增功能（本轮）}
+
+\begin{itemize}
+  \item \texttt{pyqcd/analysis/\_disconnected.py}：不相连胶子 ratio + 逐 z 相关拟合
+        （code\_1.py 算法自包含移植，lsqfit 实现）；
+  \item \texttt{pyqcd/analysis/\_correlators.py}：meff/3pt 比值分析编排 API；
+  \item \texttt{pyqcd/renorm/\_tmdextract.py}：准 TMD-PDF 傅里叶变换、
+        混合方案 TMD 匹配、CS 核提取（LPC 2020 比值法）、SFTX 1 圈匹配系数
+        （Suzuki 2013 / Mereghetti 2022）；
+  \item 梯度流 RK3 步长收敛性验证：$\varepsilon$: 0.02$\rightarrow$0.01 差
+        $1.4\times10^{-6}$（$O(\varepsilon^3)$），SU(3) 偏差 $<10^{-13}$。
+\end{itemize}
+
 \section{结论}
 
 PyQCD 已完成 lattice-pdf 迁移规范化：路径统一指向 /root/PyQCD、docs 文件名中文化
 并全部重编译、成功实例规范化为 pyqcd 包、参考代码（zengch 重整化链）按逻辑移植
 为自包含实现，并依据 refer/papers/gluon\_tmd\_gradient\_flow\_continuum.tex
 自行构造了梯度流与 TMD staple 算符代码，形成完整的梯度流重整化胶子 TMD-PDF 计算链。
+pyqcd 与成功实例（docker-v20260805 输出）的全部可复算环节逐位一致。
 
 \end{document}
