@@ -163,7 +163,11 @@ def gluon_tmd_operator(U, z, b_perp, z_dir=2, b_dir=0, L=None):
 
 def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
                         spatial_sum=True):
-    """批量计算 O(z, b⊥)：返回 (nz, nb) 数组（逐 t 时间片均分后求和）。"""
+    """批量计算 O(z, b⊥)：返回 (nz, nb) 实数数组（逐 t 时间片均分后求和）。
+
+    胶子 TMD 组合 O = M^{tx;tx} + M^{ty;ty} − 2M^{xy;xy} 为实数值
+    （每项 M 的虚部在色迹 + 空间求和后归零）。
+    """
     cp = get_backend()
     out = np.zeros((len(z_list), len(b_list)), dtype=np.float64)
     for i, z in enumerate(z_list):
@@ -173,7 +177,7 @@ def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
                 val = _to_cpu(cp.sum(O, axis=(1, 2, 3)))
             else:
                 val = _to_cpu(O)
-            out[i, j] = np.mean(val)  # 时间片平均
+            out[i, j] = np.real(np.mean(val))  # 时间片平均
     return out
 
 

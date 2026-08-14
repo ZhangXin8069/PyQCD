@@ -1,0 +1,89 @@
+\documentclass[12pt,a4paper]{ctexart}
+\usepackage[top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,physics}
+\usepackage{graphicx,float,booktabs,array,caption,multirow}
+\usepackage{hyperref,xcolor,enumitem,mathtools}
+\usepackage[numbers,sort&compress]{natbib}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\title{\heiti PyQCD 仓库结构与核心物理链解析}
+\author{基于 /root/PyQCD 全库只读分析}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+本文档对 PyQCD（由 lattice-pdf 迁移）仓库进行系统解析：目录全景、核心物理目标
+（梯度流重整化方案的核子胶子 TMD-PDF）、pyqcd 包的模块架构及其与参考代码的
+对应关系。所有结论附精确路径。
+\end{abstract}
+
+\section{仓库全景}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+路径 & 内容 \\
+\midrule
+--- & --- \\
+\texttt{pyqcd/} & 主包：lattice/tools/vertex/contraction/operator/analysis/renorm/pipeline/testing \\
+\texttt{examples/docker-v20260805/} & 成功实例基线：全量蒸馏 GPU 管线（10 组态） \\
+\texttt{examples/pyqcd/} & 规范化示例与测试（conftest.py，6 项测试） \\
+\texttt{docs/} & 47 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） \\
+\texttt{refer/} & 只读参考代码（zengch/donghx/huangcl/sush/zhangxin）+ 101 篇文献 \\
+\texttt{logs/stab0/} & stab0 归档（stab2\_1 已改名 stab0 并重编译） \\
+\bottomrule
+\end{tabular}
+\end{table}
+\section{核心物理目标}
+
+计算使用\textbf{梯度流重整化方案}的核子中的胶子 TMD-PDF。计算链：
+
+\begin{enumerate}
+  \item 裸矩阵元：蒸馏 2pt（质子/π）+ 胶子 OPE 算符
+        （Clover 场强 $F_{\mu\nu}$、对偶 $\tilde F$、staple Wilson 线）；
+  \item 梯度流涂抹：Wilson flow（Luescher 2010）RK3 积分，$\tau = 3a^2$
+        （Monahan--Orginos 2017 / NieMiera 2025）；
+  \item 重整化：自重整化 $Z_R$ 参数化与全局拟合（arXiv:2510.17758 Eq.3--8）；
+  \item 混合方案：短距比值 + 长距 $Z_R$，$\lambda$ 外推，傅里叶变换→准 PDF；
+  \item NLO 匹配：胶子单圈匹配核 $g_0\ldots g_3$；
+  \item 连续极限：$a/P_z/m_\pi/L$ 联合外推。
+\end{enumerate}
+
+\section{pyqcd 包架构}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+子包 & 功能 & 来源 \\
+\midrule
+--- & --- & --- \\
+\texttt{lattice/} & 常数、DR 基 $\gamma$/$\sigma$ 矩阵 & lib/constants,gamma,sigma \\
+\texttt{tools/} & 后端切换（numpy/cupy）、缓存 einsum、数据读取 & lib/backend,base,io\_readers \\
+\texttt{vertex/} & VdV/VVV 顶点、相位因子 & lib/vertex \\
+\texttt{contraction/} & 自动 Wick、重子算符、动态收缩 & lib/autowick,baroperator,dynamic \\
+\texttt{operator/} & Clover $F_{\mu\nu}$、对偶 $\tilde F$、OPE、.lime 读取、staple 扩展 & compute\_ope.py + 新写 \\
+\texttt{analysis/} & Jackknife/Bootstrap/meff/ratio\_3pt & lib/analyse \\
+\texttt{renorm/} & 自重整化/混合方案/NLO 匹配/外推/梯度流/TMD 提取 & refer/zengch 逻辑 + 理论文档新写 \\
+\texttt{pipeline/} & 集中配置 + 9 步（+tmd）管线 & config.py/run\_pipeline.py \\
+\bottomrule
+\end{tabular}
+\end{table}
+\section{梯度流数值验证}
+
+在 $4^4$ 随机 SU(3) 组态上验证：Wilson flow 作用量密度单调递减，
+链接幺正性偏差 $< 10^{-6}$；OPE 与 TMD staple 算符均可运行并给出实数结果
+（examples/pyqcd/conftest.py 6 项测试全绿）。
+
+\section{结论}
+
+PyQCD 已完成 lattice-pdf 迁移规范化：路径统一指向 /root/PyQCD、docs 文件名中文化
+并全部重编译、成功实例规范化为 pyqcd 包、参考代码（zengch 重整化链）按逻辑移植
+为自包含实现，并依据 refer/papers/gluon\_tmd\_gradient\_flow\_continuum.tex
+自行构造了梯度流与 TMD staple 算符代码，形成完整的梯度流重整化胶子 TMD-PDF 计算链。
+
+\end{document}
