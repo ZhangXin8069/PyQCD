@@ -93,6 +93,17 @@
   \item E. 不相连 ratio（code\_1 拟合）：ratio 与 c0/c1/dE/chi2 全部 0 差异。
 \end{itemize}
 
+\section{一致性验证扩展与新增功能（第 3 轮）}
+
+\begin{itemize}
+  \item 扩展对照（verify\_consistency.py F 组，全部 0 差异）：VVV 重子顶点、
+        Wick 收缩（质子 2pt）、顺序传播子 seq\_peram、完整 OPE 算符三分量；
+  \item 优化：staple\_6 向量化（整场 roll 预计算复用，1.5--1.8$\times$ 加速，
+        数学逐位一致）；梯度流 RK3 收敛 $O(\varepsilon^3)$ 验证；
+  \item 新增：\texttt{pyqcd/analysis/\_dispersion.py} 色散关系拟合
+        $E(P_z) = \sqrt{m^2 + k_2 P_z^2 + k_3 P_z^4 a^2}$（合成数据精确恢复）。
+\end{itemize}
+
 \section{新增功能（本轮）}
 
 \begin{itemize}
