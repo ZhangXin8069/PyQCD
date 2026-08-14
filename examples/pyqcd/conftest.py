@@ -20,6 +20,7 @@ from pyqcd.testing import (  # noqa: F401
     test_gpu_backend_consistency,
     test_end_to_end_synthetic_meff,
     test_matching_sum_rule,
+    test_core_chain_integrated,
 )
 
 
