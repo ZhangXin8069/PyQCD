@@ -129,3 +129,15 @@ def test_scale_setting_flow_behavior():
     target = 0.5 * (vals[0] + vals[2])   # 目标取区间内部，保证插值可达
     t0 = scale_setting_t0(g, target=target, tau_max=0.5, eps=0.05)
     assert np.isfinite(t0) and t0 > 0
+
+
+def test_hyp_smear():
+    """HYP 涂抹：SU(3) 保持 + 作用量密度平滑化（降低）。"""
+    from pyqcd.smear import hyp_smear
+    from pyqcd.renorm import flow_action_density
+    g = random_su3_gauge(L=6, seed=2)
+    V = hyp_smear(g)
+    dev = np.abs(V[0, 0, 0, 0, 0] @ V[0, 0, 0, 0, 0].conj().T - np.eye(3)).max()
+    assert dev < 1e-10, f"SU(3) 保持失败: {dev}"
+    E0, E1 = flow_action_density(g).mean(), flow_action_density(V).mean()
+    assert E1 < E0, f"HYP 应平滑化（E 降低）: {E0} -> {E1}"
