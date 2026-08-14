@@ -173,3 +173,54 @@ def test_ratio_fit_extraction():
     assert abs(res['c0_z0'] - 0.6) < 0.02
     assert abs(res['c0_z1'] - 0.3) < 0.02
     assert abs(res['deltaE'] - 1.2) < 0.1
+
+
+def test_hyp_vs_flow_consistent():
+    """HYP 涂抹与 Wilson flow 定性一致（理论文档对比项）：O(z) 高度相关。"""
+    from pyqcd.smear import hyp_smear
+    from pyqcd.renorm import wilson_flow, tmd_matrix_elements
+    g = random_su3_gauge(L=4, seed=7)
+    Vh = hyp_smear(g)
+    Vf = wilson_flow(g, tau=0.05, eps=0.05)
+    Mh = tmd_matrix_elements(Vh, [1, 2, 3], [0])[:, 0]
+    Mf = tmd_matrix_elements(Vf, [1, 2, 3], [0])[:, 0]
+    c = np.corrcoef(Mh, Mf)[0, 1]
+    assert c > 0.9, f"HYP 与 flow 应定性一致（r={c:.3f}）"
+
+
+def test_gpu_backend_consistency():
+    """GPU(cupy) 后端：flow 结果与 CPU 一致（无 cupy 时跳过）。"""
+    try:
+        import cupy as cp
+    except ImportError:
+        return
+    from pyqcd.tools import set_backend
+    from pyqcd.renorm import wilson_flow
+    g = random_su3_gauge(L=4, seed=2)
+    set_backend('numpy')
+    V_cpu = wilson_flow(g, tau=0.04, eps=0.02)
+    set_backend('cupy')
+    V_gpu = cp.asnumpy(wilson_flow(cp.asarray(g), tau=0.04, eps=0.02))
+    set_backend('numpy')
+    d = np.abs(V_cpu - V_gpu).max()
+    assert d < 1e-10, f"CPU/GPU 不一致: {d:.3e}"
+
+
+def test_end_to_end_synthetic_meff():
+    """端到端合成验证：含已知质量的 cosh 2pt → meff 精确恢复。"""
+    from pyqcd.analysis import Jackknife, meff
+    rng = np.random.default_rng(4)
+    M_true = 1.12
+    a_fm = 0.1053
+    a_gev_inv = a_fm / 0.1973269804
+    nt = 72
+    t = np.arange(nt)
+    C = np.cosh(M_true * a_gev_inv * (t - nt / 2))
+    noise = 1e-3 * C * rng.standard_normal((10, nt))
+    data = C[None, :] + noise
+    jk = Jackknife(data, Nconf_axes=0)
+    mf = meff(jk['data_sample'], a_fm, Nconf_axes=0, Nt_axes=1,
+              meff_type='cosh')
+    mmean = np.real(mf['data_mean'])
+    M_rec = np.mean(mmean[8:20])
+    assert abs(M_rec - M_true) / M_true < 0.02, f"恢复偏差过大: {M_rec}"

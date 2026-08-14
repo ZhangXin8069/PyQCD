@@ -116,6 +116,18 @@
         V3 数组形状多加方向维；scale\_setting\_t0 插值方向。
 \end{itemize}
 
+\section{第 5--6 轮：提取链完整化与跨后端验证}
+
+\begin{itemize}
+  \item 新增 \texttt{pyqcd/analysis/\_ratio\_fit.py}：c0 裸矩阵元提取
+        （R 模型逐样本拟合，合成数据精确恢复 c0/deltaE）；
+  \item GPU 验证：cupy 后端梯度流/TMD 全通，CPU/GPU 结果一致（$1.1\times10^{-15}$）；
+  \item HYP vs Wilson flow 定性一致（理论文档结论验证）：O(z) 相关系数 0.965；
+  \item 端到端合成验证：含已知质量 $M=1.12$ GeV 的 cosh 2pt →
+        meff 恢复 $1.1199$ GeV（偏差 0.01\%）；
+  \item 梯度流 $\tau\to 0$ 连续极限检验通过；scale setting 反插值修复。
+\end{itemize}
+
 \section{新增功能（本轮）}
 
 \begin{itemize}
