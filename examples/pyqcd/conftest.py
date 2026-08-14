@@ -14,6 +14,8 @@ from pyqcd.testing import (  # noqa: F401
     test_tmd_extraction_chain,
     test_scale_setting_flow_behavior,
     test_hyp_smear,
+    test_gradient_flow_tau_limit,
+    test_ratio_fit_extraction,
 )
 
 

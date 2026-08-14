@@ -141,3 +141,35 @@ def test_hyp_smear():
     assert dev < 1e-10, f"SU(3) 保持失败: {dev}"
     E0, E1 = flow_action_density(g).mean(), flow_action_density(V).mean()
     assert E1 < E0, f"HYP 应平滑化（E 降低）: {E0} -> {E1}"
+
+
+def test_gradient_flow_tau_limit():
+    """梯度流 τ→0 连续极限：TMD 矩阵元平滑恢复到未涂抹值。"""
+    from pyqcd.renorm import wilson_flow, tmd_matrix_elements
+    g = random_su3_gauge(L=4, seed=5)
+    M0 = tmd_matrix_elements(g, [0, 1], [0, 1])
+    V = wilson_flow(g, tau=0.01, eps=0.01)
+    Mt = tmd_matrix_elements(V, [0, 1], [0, 1])
+    d_small = np.abs(Mt - M0).max()
+    Vb = wilson_flow(g, tau=0.2, eps=0.01)
+    Mb = tmd_matrix_elements(Vb, [0, 1], [0, 1])
+    d_big = np.abs(Mb - M0).max()
+    assert d_small < d_big, f"τ→0 应更接近未涂抹值: {d_small} vs {d_big}"
+
+
+def test_ratio_fit_extraction():
+    """c0 裸矩阵元提取（R 模型拟合）：合成数据精确恢复。"""
+    from pyqcd.analysis import R_model, fit_ratio
+    rng = np.random.default_rng(1)
+    z_list = [0, 1]
+    z_set = np.array([0] * 16 + [1] * 16)
+    tsep = np.array([8] * 8 + [10] * 8 + [8] * 8 + [10] * 8)
+    ti = np.tile(np.arange(1, 9), 4)
+    pars = (0.6, -0.3, 0.1, 0.3, -0.2, 0.05, 1.2)
+    th = R_model(z_set, tsep, ti, z_list, *pars)
+    samples = th[:, None] + 0.01 * rng.standard_normal((32, 50))
+    data = (z_set, tsep, ti, th, np.ones(32) * 0.01, samples, z_list, [8, 10], 0)
+    res = fit_ratio(data)
+    assert abs(res['c0_z0'] - 0.6) < 0.02
+    assert abs(res['c0_z1'] - 0.3) < 0.02
+    assert abs(res['deltaE'] - 1.2) < 0.1
