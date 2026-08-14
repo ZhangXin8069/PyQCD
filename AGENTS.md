@@ -42,7 +42,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 - 编译：docs 与 logs 的 tex 一律 xelatex（中文）；`\quad` 后跟中文需空格。
 - 测试：无 pytest 框架依赖，examples/pyqcd/conftest.py 直接运行。
 - refer/ 只读参考：pyqcd 逻辑照抄但不 import。
-- git tag 约定：stab<N>/dev<N>/bug<N>/test<N>（当前 bug0）。
+- git tag 约定：stab<N>/dev<N>/bug<N>/test<N>（当前 stab1）。
 
 ## 反模式
 
