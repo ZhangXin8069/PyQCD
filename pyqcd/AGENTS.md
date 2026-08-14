@@ -19,7 +19,7 @@
 | `vertex/` | VdV/VVV 顶点、相位因子 | lib/vertex |
 | `contraction/` | 自动 Wick、重子算符、seqperam、动态收缩 | lib/autowick,baroperator,seqperam,dynamic |
 | `operator/` | Clover 场强 F、对偶 F̃、胶子 OPE 算符、.lime 读取、TMD staple 扩展 | compute_ope.py + 新写 |
-| `analysis/` | Jackknife/Bootstrap/meff/ratio_3pt + disconnected(code_1)/meff/3pt 编排 | lib/analyse + analyze.py 逻辑 |
+| `analysis/` | Jackknife/Bootstrap/meff/ratio_3pt + disconnected(code_1)/meff/3pt 编排 + 色散拟合 | lib/analyse + analyze.py/zengch 逻辑 |
 | `renorm/_tmdextract.py` | ★ 准 TMD-PDF/CS 核/SFTX 1 圈匹配 | 理论文档新写 |
 | `renorm/` | ★ 自重整化 Z_R、混合方案、NLO 匹配、外推、梯度流、TMD 提取 | refer/zengch 逻辑移植 + 理论文档新写 |
 | `pipeline/` | 集中配置 + 9 步管线调度（+tmd 步） | config.py/run_pipeline.py |

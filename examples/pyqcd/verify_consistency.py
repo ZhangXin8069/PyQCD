@@ -232,6 +232,68 @@ def test_e():
     return all_ok
 
 
+def test_f():
+    print("F. VVV 重子顶点 / Wick 收缩 / seq_peram / 完整 OPE 对照")
+    all_ok = True
+    # VVV
+    from pyqcd.vertex import Mom_VVV_sink_t as vvv_pyqcd
+    from pyqcd.vertex import phase_exp_3pt as pe3_pyqcd
+    from lib.vertex import Mom_VVV_sink_t as vvv_ref
+    from lib.vertex import phase_exp_3pt as pe3_ref
+    rng = np.random.default_rng(11)
+    Lv, Nev = 4, 10
+    eigs = (rng.standard_normal((Nev, Lv, Lv, Lv, 3))
+            + 1j * rng.standard_normal((Nev, Lv, Lv, Lv, 3))).astype(np.complex64)
+    p1, p2 = pe3_pyqcd(Lv, [0, 0, 2]), pe3_ref(Lv, [0, 0, 2])
+    a, b = vvv_pyqcd(p1, eigs), vvv_ref(p2, eigs)
+    d = np.abs(a - b).max()
+    ok = d < 1e-5; all_ok &= ok
+    print(f"  {'PASS' if ok else 'FAIL'} VVV: max|diff| = {d:.3e}")
+
+    # Wick 2pt proton
+    from pyqcd.contraction import wick_contraction as wc_pyqcd
+    from lib.autowick import wick_contraction as wc_ref
+    sink = ['|', 'u', 'u', 'gamma_7', 'd', '|']
+    src = ['|', 'u^d', 'gamma_7', 'd^d', 'u^d', '|']
+    r1 = wc_pyqcd(sink, src, Cpt='2pt')
+    r2 = wc_ref(sink, src, Cpt='2pt')
+    d1 = {k: r1[k] for k in ['result_indx', 'result_sign', 'operators']}
+    d2 = {k: r2[k] for k in ['result_indx', 'result_sign', 'operators']}
+    ok = d1 == d2; all_ok &= ok
+    print(f"  {'PASS' if ok else 'FAIL'} Wick 2pt proton: identical={ok}")
+
+    # seq_peram
+    from pyqcd.contraction import seq_peram as sp_pyqcd
+    from lib.seqperam import seq_peram as sp_ref
+    peram = (rng.standard_normal((8, 4, 4, 12, 12))
+             + 1j * rng.standard_normal((8, 4, 4, 12, 12))).astype(np.complex64)
+    a, b = sp_pyqcd(peram), sp_ref(peram)
+    d = np.abs(a - b).max()
+    ok = d < 1e-10; all_ok &= ok
+    print(f"  {'PASS' if ok else 'FAIL'} seq_peram: max|diff| = {d:.3e}")
+
+    # 完整 OPE 算符（三分量）
+    from pyqcd.operator import gluon_ope_operator_z0
+    import compute_ope as _co
+    _co.HAS_CUPY = False; _co.cp = np
+    if not hasattr(np, 'asnumpy'):
+        np.asnumpy = np.asarray
+    rng = np.random.default_rng(9)
+    Lg = 6
+    g = np.zeros((Lg, Lg, Lg, Lg, 4, 3, 3), dtype=np.complex128)
+    for idx in np.ndindex(Lg, Lg, Lg, Lg, 4):
+        H = (rng.standard_normal((3, 3)) + 1j * rng.standard_normal((3, 3)))
+        H = H - H.conj().T - np.trace(H - H.conj().T) / 3 * np.eye(3)
+        g[idx] = expm(H)
+    for (mu, nu) in [(0, 1), (3, 0), (3, 1)]:
+        a = gluon_ope_operator_z0(g, mu, nu, 2, 4, Lg, Lg)
+        b = _co.compute_ope_donghx_gpu(g, mu, nu, 2, 4, Lg, Lg, print)
+        d = np.abs(a - b).max()
+        ok = d < 1e-10; all_ok &= ok
+        print(f"  {'PASS' if ok else 'FAIL'} OPE ({mu},{nu}): max|diff| = {d:.3e}")
+    return all_ok
+
+
 def test_c():
     print("C. OPE 组合逻辑对照（ops 三分量 → ope_combined）")
     out_dir = os.path.join(ROOT, 'examples', 'docker-v20260805', 'output',
@@ -268,6 +330,8 @@ def main():
     ok &= test_d()
     print()
     ok &= test_e()
+    print()
+    ok &= test_f()
     print()
     print("全部通过" if ok else "存在不一致！")
     sys.exit(0 if ok else 1)
