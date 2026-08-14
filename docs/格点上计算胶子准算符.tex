@@ -56,7 +56,7 @@
 （8）\textbf{矩阵元提取与激发态控制}——比值法$C_3/C_2$、双态拟合、多源汇分离$t_{\text{sep}}$策略；
 （9）\textbf{重整化与匹配}——ratio方案、混合方案（hybrid scheme）中的$Z_R$因子计算、以及从裸格点矩阵元到$\overline{\text{MS}}$光锥PDF的完整流程；
 （10）\textbf{统计方法}——Bootstrap/Jackknife重采样与关联$\chi^2$拟合在协方差矩阵处理中的应用。
-全文以CLQCD/LPC合作组的实际计算为例，辅以本库中examples/目录的完整Python代码解析（CuPy GPU加速、MPI并行、opt\_einsum张量收缩），呈现从原始规范组态到可与全局拟合比较的物理胶子PDF的完整数值实现链路，所有论据均标注参考源。
+全文以CLQCD/LPC合作组的实际计算为例，辅以本库中refer/donghx/目录的完整Python代码解析（CuPy GPU加速、MPI并行、opt\_einsum张量收缩），呈现从原始规范组态到可与全局拟合比较的物理胶子PDF的完整数值实现链路，所有论据均标注参考源。
 \end{abstract}
 
 \tableofcontents
@@ -875,68 +875,68 @@ Phys.\ Rev.\ D \textbf{98}, 056004 (2018), arXiv:1801.03917.
 C.~Gattringer and C.~B.~Lang,
 \textit{Quantum Chromodynamics on the Lattice: An Introductory Presentation},
 Lect.\ Notes Phys.\ \textbf{788}, Springer (2010).
-\quad\textbf{[来源:} \texttt{books/Quantum Chromodynamics on the Lattice.pdf}\textbf{]}
+\quad\textbf{[来源:} \texttt{refer/books/Quantum Chromodynamics on the Lattice.pdf}\textbf{]}
 
 \bibitem{Gupta1997}
 R.~Gupta,
 ``Introduction to Lattice QCD,''
 arXiv:hep-lat/9807028.
-\quad\textbf{[来源:} \texttt{books/INTRODUCTION TO LATTICE QCD.pdf}\textbf{]}
+\quad\textbf{[来源:} \texttt{refer/books/INTRODUCTION TO LATTICE QCD.pdf}\textbf{]}
 
 \bibitem{Peskin1995}
 M.~E.~Peskin and D.~V.~Schroeder,
 \textit{An Introduction to Quantum Field Theory},
 Westview Press (1995).
-\quad\textbf{[来源:} \texttt{books/An Introduction to Quantum Field Theory.pdf}\textbf{]}
+\quad\textbf{[来源:} \texttt{refer/books/An Introduction to Quantum Field Theory.pdf}\textbf{]}
 
 \bibitem{代码解析}
 \textbf{格点QCD计算质子中非极化胶子PDF的完整代码解析}（本库综合文档），
-\texttt{代码/code\_analysis.pdf}
-\quad 含examples/目录中所有Python代码的逐模块解析
+\texttt{docs/胶子PDF计算代码解析.pdf}
+\quad 含refer/donghx/目录中所有Python代码的逐模块解析
 
 \bibitem{本库补充1}
 \textbf{格点QCD中的胶子算符：分类、构造、重整化与匹配}，
-\texttt{补充/格点QCD中的胶子算符.pdf}
+\texttt{docs/格点QCD中的胶子算符.pdf}
 
 \bibitem{本库补充2}
 \textbf{格点QCD中的光锥PDF与准PDF：定义、匹配与等价性}，
-\texttt{补充/格点QCD中的光锥PDF与quasi\_PDF.pdf}
+\texttt{docs/格点QCD中的光锥PDF与quasi\_PDF.pdf}
 
 \bibitem{本库补充3}
 \textbf{格点QCD中的光锥PDF、准PDF与赝PDF}，
-\texttt{补充/格点QCD中的光锥PDF、准PDF、赝PDF.pdf}
+\texttt{docs/格点QCD中的光锥PDF、准PDF、赝PDF.pdf}
 
 \bibitem{本库补充4}
 \textbf{格点QCD中的大动量有效理论}，
-\texttt{补充/格点QCD中的大动量有效理论.pdf}
+\texttt{docs/格点QCD中的大动量有效理论.pdf}
 
 \bibitem{本库补充5}
 \textbf{格点QCD蒸馏方法解析}，
-\texttt{补充/格点QCD蒸馏方法解析.pdf}
+\texttt{docs/格点QCD蒸馏方法解析.pdf}
 
 \bibitem{本库补充6}
 \textbf{格点QCD中的重采样方法：Bootstrap、Jackknife、Binning与关联拟合}，
-\texttt{补充/格点QCD中的重采样方法.pdf}
+\texttt{docs/格点QCD中的重采样方法.pdf}
 
 \bibitem{本库补充7}
 \textbf{格点QCD中的重整化：从连续场论到非定域算符}，
-\texttt{补充/格点QCD中的重整化.pdf}
+\texttt{docs/格点QCD中的重整化.pdf}
 
 \bibitem{本库补充8}
 \textbf{格点QCD中的Wilson线}，
-\texttt{补充/格点QCD中的Wilson线.pdf}
+\texttt{docs/格点QCD中的Wilson线.pdf}
 
 \bibitem{本库补充9}
 \textbf{格点QCD中的UV涨落：线性发散、重正子与幂次修正}，
-\texttt{补充/格点QCD中的UV涨落.pdf}
+\texttt{docs/格点QCD中的UV涨落.pdf}
 
 \bibitem{本库补充10}
 \textbf{格点QCD中的关联函数：谱分解、激发态控制与拟合策略}，
-\texttt{补充/格点QCD中的关联函数.pdf}
+\texttt{docs/格点QCD中的关联函数.pdf}
 
 \bibitem{本库补充11}
 \textbf{格点QCD中的场强张量}，
-\texttt{补充/格点QCD中的场强张量.pdf}
+\texttt{docs/格点QCD中的场强张量.pdf}
 
 \bibitem{本库补充12}
 \textbf{理论解析与工作流}，
