@@ -77,7 +77,26 @@ def main():
     O_ope = gluon_ope_operator_z0(V, 0, 1, 2, 4, L, L)
     print(f"共线 OPE O_01(z)（对照）: {np.round(O_ope[:4, 0], 4)}")
 
-    print("\n完成：梯度流 → TMD staple 算符 → 自重整化比值 全链跑通。")
+    # ── TMD 提取链：准 TMD-PDF + CS 核（完整物理链）──
+    from pyqcd.renorm import (
+        quasi_tmd_pdf, cs_kernel_from_ratio, sftx_gluon_matching_coeff,
+    )
+    # 用流场矩阵元（z 依赖）构造准 TMD-PDF（演示：z 网格 → x 空间）
+    z_grid = np.linspace(0.1, 1.0, 32)
+    M_z = tmd_matrix_elements(V, [0, 1, 2], [0])   # (nz, nb=1)
+    # 外推/插值到 z_grid（演示用线性插值）
+    z_data = np.array([0, 1, 2]) * 0.1053
+    hr = np.interp(z_grid, z_data, M_z[:, 0])[:, None]
+    x, xg = quasi_tmd_pdf(hr, z_grid, [0.2], pz_gev=1.87)
+    print(f"准 TMD-PDF x·g̃(x): x∈[{x[0]:.2f},{x[-1]:.2f}], "
+          f"xg[0:3]={np.round(xg[:3], 4)}")
+    # CS 核（两动量比值，演示）
+    K = cs_kernel_from_ratio(hr * 1.0, hr * 1.1, 2.5, 2.0)
+    print(f"CS 核 K(b⊥)（演示）: {np.round(K, 4)}")
+    al, c = sftx_gluon_matching_coeff(0.1, 2.0)
+    print(f"SFTX 匹配系数: α_s/4π={al:.4f}, c(t,μ)={c:.4f}")
+
+    print("\n完成：梯度流 → TMD staple 算符 → 自重整化 → 准TMD-PDF/CS核/SFTX 全链跑通。")
 
 
 if __name__ == '__main__':
