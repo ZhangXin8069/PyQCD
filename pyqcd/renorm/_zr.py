@@ -96,7 +96,7 @@ def th_ZR(z_, a_, mu_, k, d, m0, m2, lambda_qcd, f_set):
     z_set_new_gev = np.asarray(z_, dtype=float) / fm_to_GeV
     nf = 3.0
     b0_ = b0(nf)
-    a_set = np.array([a_, a_ ** 2.0])[:, None]
+    a_set = np.array([a_, a_ ** 2.0])
     f_set_arr = np.asarray(f_set, dtype=float)
 
     log_hb = (k * z_set_new_gev) / (a_ * np.log(a_ * lambda_qcd))
@@ -105,7 +105,10 @@ def th_ZR(z_, a_, mu_, k, d, m0, m2, lambda_qcd, f_set):
     )
     log_hb += np.log((1.0 + d / np.log(a_ * lambda_qcd)) ** 2.0) / 2.0
     log_hb += (m0 + m2 * a_ ** 2) * z_set_new_gev
-    log_hb += np.sum(f_set_arr * a_set, axis=0)
+    if f_set_arr.ndim == 1:
+        log_hb += f_set_arr @ a_set
+    else:
+        log_hb += np.sum(f_set_arr * a_set[:, None], axis=0)
     return np.exp(log_hb)
 
 
