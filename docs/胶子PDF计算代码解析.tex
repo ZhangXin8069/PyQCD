@@ -89,7 +89,7 @@
 \textbf{代码来源：} \texttt{examples/} 目录
 
 \vspace{0.5cm}
-\textbf{参考文献来源：} \texttt{books/}, \texttt{docs/}, \texttt{refer/} 目录
+\textbf{参考文献来源：} \texttt{books/}, \texttt{refer/papers/}, \texttt{refer/} 目录
 \end{center}
 
 \newpage
@@ -215,8 +215,8 @@ Distillation 方法~\cite{Peardon2009} 是一种夸克场涂抹技术，通过�
 \textbf{参考来源：}
 \begin{itemize}
     \item \texttt{refer/理论解析与工作流.pdf} — 理论框架与工作流说明
-    \item \texttt{docs/Note of gluon PDFs.pdf} — Eq(20), Eq(25)
-    \item \texttt{docs/Distillation at High-Momentum.pdf} — 动量涂抹蒸馏方法
+    \item \texttt{refer/papers/Note of gluon PDFs.pdf} — Eq(20), Eq(25)
+    \item \texttt{refer/papers/Distillation at High-Momentum.pdf} — 动量涂抹蒸馏方法
     \item \texttt{books/INTRODUCTION TO LATTICE QCD.pdf} — 格点 QCD 基础
 \end{itemize}
 
@@ -441,10 +441,10 @@ for Px in Pzlist:
 
 \textbf{参考来源：}
 \begin{itemize}
-    \item \texttt{docs/Note of gluon PDFs.pdf} — Eq(25) OPE 定义
-    \item \texttt{docs/Unpolarized gluon distribution in the nucleon from lattice quantum chromodynamics.pdf} — 主要方法论文
-    \item \texttt{docs/Gluon Quasi-PDF From Lattice QCD.pdf} — 胶子 quasi-PDF
-    \item \texttt{docs/First Nucleon Gluon PDF from Large Momentum Effective Theory.pdf}
+    \item \texttt{refer/papers/Note of gluon PDFs.pdf} — Eq(25) OPE 定义
+    \item \texttt{refer/papers/Unpolarized gluon distribution in the nucleon from lattice quantum chromodynamics.pdf} — 主要方法论文
+    \item \texttt{refer/papers/Gluon Quasi-PDF From Lattice QCD.pdf} — 胶子 quasi-PDF
+    \item \texttt{refer/papers/First Nucleon Gluon PDF from Large Momentum Effective Theory.pdf}
 \end{itemize}
 
 \subsection{功能概述}
@@ -526,8 +526,8 @@ for _dz in range(delta_z):
 \begin{itemize}
     \item \texttt{books/Quantum Chromodynamics on the Lattice.pdf} — 格点规范场论
     \item \texttt{books/An Introduction to Quantum Field Theory.pdf} — 场论基础
-    \item \texttt{docs/More On Large-Momentum Effective Theory Approach to Parton Physics.pdf}
-    \item \texttt{docs/A complete non-perturbative renormalization prescription for quasi-PDFs.pdf}
+    \item \texttt{refer/papers/More On Large-Momentum Effective Theory Approach to Parton Physics.pdf}
+    \item \texttt{refer/papers/A complete non-perturbative renormalization prescription for quasi-PDFs.pdf}
 \end{itemize}
 
 \subsection{功能概述}
@@ -789,8 +789,8 @@ elif i == 17:  # (gamma3*gamma1) * P_-  [负宇称]
 
 \textbf{参考来源：}
 \begin{itemize}
-    \item \texttt{docs/Distillation at High-Momentum.pdf} — 蒸馏方法数据格式
-    \item \texttt{docs/Kinematically-enhanced interpolating operators for boosted hadrons.pdf}
+    \item \texttt{refer/papers/Distillation at High-Momentum.pdf} — 蒸馏方法数据格式
+    \item \texttt{refer/papers/Kinematically-enhanced interpolating operators for boosted hadrons.pdf}
 \end{itemize}
 
 \subsection{功能概述}
@@ -860,7 +860,7 @@ def write_data_ascii(data, T, L, filename, complex=True, verbose=False):
 \textbf{参考来源：}
 \begin{itemize}
     \item \texttt{refer/理论解析与工作流.pdf} — 完整工作流说明
-    \item \texttt{docs/Note of gluon PDFs.pdf} — 理论框架
+    \item \texttt{refer/papers/Note of gluon PDFs.pdf} — 理论框架
     \item \texttt{code/gluon\_pdf\_full\_workflow.py} — 系统化重构代码
 \end{itemize}
 
@@ -948,187 +948,187 @@ C_{gg}^{\text{LO}}(\xi, \mu/P_z) = \delta(1-\xi)
     格点规范场论的进阶教材，详细讨论 Wilson 费米子、改进作用量、手征对称性等。
 \end{enumerate}
 
-\subsection{LaMET 理论框架 (\texttt{docs/})}
+\subsection{LaMET 理论框架 (\texttt{refer/papers/})}
 
 \begin{enumerate}
     \item \textbf{Parton Physics from Large-Momentum Effective Field Theory} \\
-    \texttt{docs/Parton Physics from Large-Momentum Effective Field Theory.pdf} \\
+    \texttt{refer/papers/Parton Physics from Large-Momentum Effective Field Theory.pdf} \\
     Ji 等人关于 LaMET 的综述，涵盖 quasi-PDF 的基本理论和微扰匹配。
 
     \item \textbf{More On Large-Momentum Effective Theory Approach to Parton Physics} \\
-    \texttt{docs/More On Large-Momentum Effective Theory Approach to Parton Physics.pdf} \\
+    \texttt{refer/papers/More On Large-Momentum Effective Theory Approach to Parton Physics.pdf} \\
     LaMET 的进一步讨论，包括幂次修正和重整子。
 
     \item \textbf{Factorization Theorem Relating Euclidean and Light-Cone Parton Distributions} \\
-    \texttt{docs/Factorization Theorem Relating Euclidean and Light-Cone Parton Distributions.pdf} \\
+    \texttt{refer/papers/Factorization Theorem Relating Euclidean and Light-Cone Parton Distributions.pdf} \\
     证明欧氏关联函数与光锥 PDF 之间的因子化定理。
 
     \item \textbf{Power corrections and renormalons in parton quasi-distributions} \\
-    \texttt{docs/Power corrections and renormalons in parton quasi-distributions.pdf} \\
+    \texttt{refer/papers/Power corrections and renormalons in parton quasi-distributions.pdf} \\
     讨论 quasi-PDF 中的幂次修正和重整子效应。
 \end{enumerate}
 
-\subsection{胶子 PDF 计算 (\texttt{docs/})}
+\subsection{胶子 PDF 计算 (\texttt{refer/papers/})}
 
 \begin{enumerate}
     \item \textbf{Note of gluon PDFs} \hfill \textbf{（主要参考文献）} \\
-    \texttt{docs/Note of gluon PDFs.pdf} \\
+    \texttt{refer/papers/Note of gluon PDFs.pdf} \\
     内部笔记，包含本文档的核心方程 Eq(20)（矩阵元定义）和 Eq(25)（OPE 分解）。
 
     \item \textbf{Unpolarized gluon distribution in the nucleon from lattice quantum chromodynamics} \hfill \textbf{（主要参考文献）} \\
-    \texttt{docs/Unpolarized gluon distribution in the nucleon from lattice quantum chromodynamics.pdf} \\
+    \texttt{refer/papers/Unpolarized gluon distribution in the nucleon from lattice quantum chromodynamics.pdf} \\
     在连续极限下计算核子中非极化胶子分布的主要论文。
 
     \item \textbf{First Nucleon Gluon PDF from Large Momentum Effective Theory} \\
-    \texttt{docs/First Nucleon Gluon PDF from Large Momentum Effective Theory.pdf} \\
+    \texttt{refer/papers/First Nucleon Gluon PDF from Large Momentum Effective Theory.pdf} \\
     首次使用 LaMET 从格点 QCD 计算核子胶子 PDF。
 
     \item \textbf{Gluon Quasi-PDF From Lattice QCD} \\
-    \texttt{docs/Gluon Quasi-PDF From Lattice QCD.pdf} \\
+    \texttt{refer/papers/Gluon Quasi-PDF From Lattice QCD.pdf} \\
     格点 QCD 中胶子 quasi-PDF 的计算方法。
 
     \item \textbf{Physical-Continuum Limit of the Nucleon Gluon Parton Distribution from Lattice QCD} \\
-    \texttt{docs/Physical-Continuum Limit of the Nucleon Gluon Parton Distribution from Lattice QCD.pdf} \\
+    \texttt{refer/papers/Physical-Continuum Limit of the Nucleon Gluon Parton Distribution from Lattice QCD.pdf} \\
     在物理 pion 质量和连续极限下的核子胶子 PDF。
 
     \item \textbf{Nucleon Gluon Distribution Function from 2+1+1-Flavor Lattice QCD} \\
-    \texttt{docs/Nucleon Gluon Distribution Function from 2+1+1-Flavor Lattice QCD.pdf} \\
+    \texttt{refer/papers/Nucleon Gluon Distribution Function from 2+1+1-Flavor Lattice QCD.pdf} \\
     使用 2+1+1 味动力学费米子的胶子分布计算。
 
     \item \textbf{Gluon Parton Distribution of the Pion from Lattice QCD} \\
-    \texttt{docs/Gluon Parton Distribution of the Pion from Lattice QCD.pdf} \\
+    \texttt{refer/papers/Gluon Parton Distribution of the Pion from Lattice QCD.pdf} \\
      pion 中胶子 PDF 的格点计算。
 
     \item \textbf{The Gluon Moment and Parton Distribution Function of the Pion from $N_f = 2 + 1 + 1$ Lattice QCD} \\
-    \texttt{docs/The Gluon Moment and Parton Distribution Function of the Pion from Nf = 2 + 1 + 1 Lattice QCD.pdf}
+    \texttt{refer/papers/The Gluon Moment and Parton Distribution Function of the Pion from Nf = 2 + 1 + 1 Lattice QCD.pdf}
 
     \item \textbf{Gluon PDF of the proton using twisted mass fermions} \\
-    \texttt{docs/Gluon PDF of the proton using twisted mass fermions.pdf}
+    \texttt{refer/papers/Gluon PDF of the proton using twisted mass fermions.pdf}
 
     \item \textbf{First Self-Renormalized Gluon PDF of Nucleon from Large-Momentum Effective Theory in the Continuum Limit} \\
-    \texttt{docs/First Self-Renormalized Gluon PDF of Nucleon from Large-Momentum Effective Theory in the Continuum Limit.pdf}
+    \texttt{refer/papers/First Self-Renormalized Gluon PDF of Nucleon from Large-Momentum Effective Theory in the Continuum Limit.pdf}
 
     \item \textbf{Towards the determination of the gluon helicity distribution in the nucleon from lattice quantum chromodynamics} \\
-    \texttt{docs/Towards the determination of the gluon helicity distribution in the nucleon from lattice quantum chromodynamics.pdf}
+    \texttt{refer/papers/Towards the determination of the gluon helicity distribution in the nucleon from lattice quantum chromodynamics.pdf}
 \end{enumerate}
 
-\subsection{准 PDF 与重整化 (\texttt{docs/})}
+\subsection{准 PDF 与重整化 (\texttt{refer/papers/})}
 
 \begin{enumerate}
     \item \textbf{A complete non-perturbative renormalization prescription for quasi-PDFs} \\
-    \texttt{docs/A complete non-perturbative renormalization prescription for quasi-PDFs.pdf} \\
+    \texttt{refer/papers/A complete non-perturbative renormalization prescription for quasi-PDFs.pdf} \\
     quasi-PDF 的完整非微扰重整化方案（Hybrid 方案）。
 
     \item \textbf{A Hybrid Renormalization Scheme for Quasi Light-Front Correlations in Large-Momentum Effective Theory} \\
-    \texttt{docs/A Hybrid Renormalization Scheme for Quasi Light-Front Correlations in Large-Momentum Effective Theory.pdf}
+    \texttt{refer/papers/A Hybrid Renormalization Scheme for Quasi Light-Front Correlations in Large-Momentum Effective Theory.pdf}
 
     \item \textbf{Multiplicative renormalizability of quasi-parton operators} \\
-    \texttt{docs/Multiplicative renormalizability of quasi-parton operators.pdf}
+    \texttt{refer/papers/Multiplicative renormalizability of quasi-parton operators.pdf}
 
     \item \textbf{Improved quasi parton distribution through Wilson line renormalization} \\
-    \texttt{docs/Improved quasi parton distribution through Wilson line renormalization.pdf}
+    \texttt{refer/papers/Improved quasi parton distribution through Wilson line renormalization.pdf}
 
     \item \textbf{Impact of gauge fixing precision on the continuum limit of non-local quark-bilinear lattice operators} \\
-    \texttt{docs/Impact of gauge fixing precision on the continuum limit of non-local quark-bilinear lattice operators.pdf}
+    \texttt{refer/papers/Impact of gauge fixing precision on the continuum limit of non-local quark-bilinear lattice operators.pdf}
 
     \item \textbf{One-loop evolution of parton pseudo-distribution functions on the lattice} \\
-    \texttt{docs/One-loop evolution of parton pseudo-distribution functions on the lattice.pdf}
+    \texttt{refer/papers/One-loop evolution of parton pseudo-distribution functions on the lattice.pdf}
 \end{enumerate}
 
-\subsection{PDF 全局分析 (\texttt{docs/})}
+\subsection{PDF 全局分析 (\texttt{refer/papers/})}
 
 \begin{enumerate}
     \item \textbf{New CTEQ global analysis of quantum chromodynamics with high-precision data from the LHC} \\
-    \texttt{docs/New CTEQ global analysis of quantum chromodynamics with high-precision data from the LHC.pdf}
+    \texttt{refer/papers/New CTEQ global analysis of quantum chromodynamics with high-precision data from the LHC.pdf}
 
     \item \textbf{Parton distributions from LHC, HERA, Tevatron and fixed target data: MSHT20 PDFs} \\
-    \texttt{docs/Parton distributions from LHC, HERA, Tevatron and fixed target data MSHT20 PDFs.pdf}
+    \texttt{refer/papers/Parton distributions from LHC, HERA, Tevatron and fixed target data MSHT20 PDFs.pdf}
 
     \item \textbf{The Path to Proton Structure at One-Percent Accuracy} \\
-    \texttt{docs/The Path to Proton Structure at One-Percent Accuracy.pdf}
+    \texttt{refer/papers/The Path to Proton Structure at One-Percent Accuracy.pdf}
 
     \item \textbf{Constraints on large-$x$ parton distributions from new weak boson production and deep-inelastic scattering data} \\
-    \texttt{docs/Constraints on large-x parton distributions from new weak boson production and deep-inelastic scattering data.pdf}
+    \texttt{refer/papers/Constraints on large-x parton distributions from new weak boson production and deep-inelastic scattering data.pdf}
 \end{enumerate}
 
-\subsection{TMD 与自旋物理 (\texttt{docs/})}
+\subsection{TMD 与自旋物理 (\texttt{refer/papers/})}
 
 \begin{enumerate}
     \item \textbf{Unpolarized Transverse-Momentum-Dependent Parton Distributions of the Nucleon from Lattice QCD} \\
-    \texttt{docs/Unpolarized Transverse-Momentum-Dependent Parton Distributions of the Nucleon from Lattice QCD.pdf}
+    \texttt{refer/papers/Unpolarized Transverse-Momentum-Dependent Parton Distributions of the Nucleon from Lattice QCD.pdf}
 
     \item \textbf{Transverse-Momentum-Dependent Wave Functions of Pion from Lattice QCD} \\
-    \texttt{docs/Transverse-Momentum-Dependent Wave Functions of Pion from Lattice QCD.pdf}
+    \texttt{refer/papers/Transverse-Momentum-Dependent Wave Functions of Pion from Lattice QCD.pdf}
 
     \item \textbf{Renormalization of transverse-momentum-dependent parton distribution on the lattice} \\
-    \texttt{docs/Renormalization of transverse-momentum-dependent parton distribution on the lattice.pdf}
+    \texttt{refer/papers/Renormalization of transverse-momentum-dependent parton distribution on the lattice.pdf}
 
     \item \textbf{Quark Transverse Spin-Momentum Correlation of the Nucleon from Lattice QCD: The Boer-Mulders Function} \\
-    \texttt{docs/Quark Transverse Spin-Momentum Correlation of the Nucleon from Lattice QCD The Boer-Mulders Function.pdf}
+    \texttt{refer/papers/Quark Transverse Spin-Momentum Correlation of the Nucleon from Lattice QCD The Boer-Mulders Function.pdf}
 
     \item \textbf{Lattice-QCD Calculations of TMD Soft Function Through Large-Momentum Effective Theory} \\
-    \texttt{docs/Lattice-QCD Calculations of TMD Soft Function Through Large-Momentum Effective Theory.pdf}
+    \texttt{refer/papers/Lattice-QCD Calculations of TMD Soft Function Through Large-Momentum Effective Theory.pdf}
 
     \item \textbf{Proton Isovector Helicity Distribution on the Lattice at Physical Pion Mass} \\
-    \texttt{docs/Proton Isovector Helicity Distribution on the Lattice at Physical Pion Mass.pdf}
+    \texttt{refer/papers/Proton Isovector Helicity Distribution on the Lattice at Physical Pion Mass.pdf}
 
     \item \textbf{Nucleon Transversity Distribution in the Continuum and Physical Mass Limit from Lattice QCD} \\
-    \texttt{docs/Nucleon Transversity Distribution in the Continuum and Physical Mass Limit from Lattice QCD.pdf}
+    \texttt{refer/papers/Nucleon Transversity Distribution in the Continuum and Physical Mass Limit from Lattice QCD.pdf}
 \end{enumerate}
 
-\subsection{强子谱与计算方法 (\texttt{docs/})}
+\subsection{强子谱与计算方法 (\texttt{refer/papers/})}
 
 \begin{enumerate}
     \item \textbf{Distillation at High-Momentum} \\
-    \texttt{docs/Distillation at High-Momentum.pdf} \\
+    \texttt{refer/papers/Distillation at High-Momentum.pdf} \\
     高动量下的蒸馏方法，包括动量涂抹的 perambulator 构造。
 
     \item \textbf{Kinematically-enhanced interpolating operators for boosted hadrons} \\
-    \texttt{docs/Kinematically-enhanced interpolating operators for boosted hadrons.pdf}
+    \texttt{refer/papers/Kinematically-enhanced interpolating operators for boosted hadrons.pdf}
 
     \item \textbf{A novel quark-field creation operator construction for hadronic physics in lattice QCD} \\
-    \texttt{docs/A novel quark-field creation operator construction for hadronic physics in lattice QCD.pdf}
+    \texttt{refer/papers/A novel quark-field creation operator construction for hadronic physics in lattice QCD.pdf}
 
     \item \textbf{Quark masses and low energy constants in the continuum from the tadpole improved clover ensembles} \\
-    \texttt{docs/Quark masses and low energy constants in the continuum from the tadpole improved clover ensembles.pdf}
+    \texttt{refer/papers/Quark masses and low energy constants in the continuum from the tadpole improved clover ensembles.pdf}
 
     \item \textbf{Charmed meson masses and decay constants in the continuum from the tadpole improved clover ensembles} \\
-    \texttt{docs/Charmed meson masses and decay constants in the continuum from the tadpole improved clover ensembles.pdf}
+    \texttt{refer/papers/Charmed meson masses and decay constants in the continuum from the tadpole improved clover ensembles.pdf}
 
     \item \textbf{Calculation of heavy meson light-cone distribution amplitudes from lattice QCD} \\
-    \texttt{docs/Calculation of heavy meson light-cone distribution amplitudes from lattice QCD.pdf}
+    \texttt{refer/papers/Calculation of heavy meson light-cone distribution amplitudes from lattice QCD.pdf}
 
     \item \textbf{Parton Distribution Function of a Deuteron-like Dibaryon System from Lattice QCD} \\
-    \texttt{docs/Parton Distribution Function of a Deuteron-like Dibaryon System from Lattice QCD.pdf}
+    \texttt{refer/papers/Parton Distribution Function of a Deuteron-like Dibaryon System from Lattice QCD.pdf}
 \end{enumerate}
 
-\subsection{赝分布与短程结构 (\texttt{docs/})}
+\subsection{赝分布与短程结构 (\texttt{refer/papers/})}
 
 \begin{enumerate}
     \item \textbf{Gluon Pseudo-Distributions at Short Distances: Forward Case} \\
-    \texttt{docs/Gluon Pseudo-Distributions at Short Distances Forward Case.pdf}
+    \texttt{refer/papers/Gluon Pseudo-Distributions at Short Distances Forward Case.pdf}
 
     \item \textbf{Short-Distance Structure of Unpolarized Gluon Pseudodistributions} \\
-    \texttt{docs/Short-Distance Structure of Unpolarized Gluon Pseudodistributions.pdf}
+    \texttt{refer/papers/Short-Distance Structure of Unpolarized Gluon Pseudodistributions.pdf}
 
     \item \textbf{Connecting Euclidean to light-cone correlations} \\
-    \texttt{docs/Connecting Euclidean to light-cone correlations From flavor nonsinglet in forward kinematics to flavor singlet in non-forward kinematics.pdf}
+    \texttt{refer/papers/Connecting Euclidean to light-cone correlations From flavor nonsinglet in forward kinematics to flavor singlet in non-forward kinematics.pdf}
 \end{enumerate}
 
-\subsection{其他相关文献 (\texttt{docs/})}
+\subsection{其他相关文献 (\texttt{refer/papers/})}
 
 \begin{enumerate}
     \item \textbf{Unpolarized isovector quark distribution function from Lattice QCD: A systematic analysis of renormalization and matching} \\
-    \texttt{docs/Unpolarized isovector quark distribution function from Lattice QCD A systematic analysis of renormalization and matching.pdf}
+    \texttt{refer/papers/Unpolarized isovector quark distribution function from Lattice QCD A systematic analysis of renormalization and matching.pdf}
 
     \item \textbf{Accessing gluon parton distributions in large momentum effective theory} \\
-    \texttt{docs/Accessing gluon parton distributions in large momentum effective theory.pdf}
+    \texttt{refer/papers/Accessing gluon parton distributions in large momentum effective theory.pdf}
 
     \item \textbf{The g1 problem: Deep inelastic electron scattering and the spin of the proton} \\
-    \texttt{docs/The g1 problem Deep inelastic electron scattering and the spin of the proton.pdf}
+    \texttt{refer/papers/The g1 problem Deep inelastic electron scattering and the spin of the proton.pdf}
 
     \item \textbf{Strangeness in the proton from W+charm production and SIDIS data} \\
-    \texttt{docs/Strangeness in the proton from W+charm production and SIDIS data.pdf}
+    \texttt{refer/papers/Strangeness in the proton from W+charm production and SIDIS data.pdf}
 \end{enumerate}
 
 \subsection{工作流文档 (\texttt{refer/})}
