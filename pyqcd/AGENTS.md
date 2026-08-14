@@ -23,6 +23,7 @@
 | `renorm/_tmdextract.py` | ★ 准 TMD-PDF/CS 核/SFTX 1 圈匹配 | 理论文档新写 |
 | `smear/` | HYP 涂抹（Hasenbusch 2001，梯度流备选方案） | 理论文档对比项新写 |
 | `analysis/_dispersion.py` | 色散关系拟合 E(Pz)=√(m²+k₂Pz²+k₃Pz⁴a²) | zengch fit_E0 逻辑 |
+| `analysis/_ratio_fit.py` | c0 裸矩阵元提取（R 模型逐样本拟合） | zengch fit_ratio 逻辑 |
 | `renorm/` | ★ 自重整化 Z_R、混合方案、NLO 匹配、外推、梯度流、TMD 提取 | refer/zengch 逻辑移植 + 理论文档新写 |
 | `pipeline/` | 集中配置 + 9 步管线调度（+tmd 步） | config.py/run_pipeline.py |
 | `testing/` | 集成测试函数（examples/pyqcd/conftest.py 入口） | 新写 |
