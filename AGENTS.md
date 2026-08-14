@@ -7,7 +7,8 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（6 项：γ/重整化/梯度流/TMD/匹配/混合方案）
+python examples/pyqcd/conftest.py    # 全量测试（7 项：γ/重整化/梯度流/TMD/匹配/混合/TMD提取链）
+python examples/pyqcd/verify_consistency.py   # 一致性验证（vs docker-v20260805 输出，A–E 全 0 差异）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
 cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，两遍）
 ```

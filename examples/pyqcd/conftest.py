@@ -11,6 +11,7 @@ from pyqcd.testing import (  # noqa: F401
     test_tmd_operator_runs,
     test_matching_kernel,
     test_hybrid_ratio,
+    test_tmd_extraction_chain,
 )
 
 
