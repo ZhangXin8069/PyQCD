@@ -224,3 +224,14 @@ def test_end_to_end_synthetic_meff():
     mmean = np.real(mf['data_mean'])
     M_rec = np.mean(mmean[8:20])
     assert abs(M_rec - M_true) / M_true < 0.02, f"恢复偏差过大: {M_rec}"
+
+
+def test_matching_sum_rule():
+    """NLO 匹配求和规则：∫hR_PDF ≈ ∫hR_tilde（O(αs) 修正内守恒）。"""
+    from pyqcd.renorm import hR_PDF
+    xx = np.linspace(0.02, 1.48, 148)
+    h0 = np.exp(-(xx - 0.4) ** 2 / 0.05)
+    out = hR_PDF(xx, Pz_=4, conf='L24x72', hR_tilde_data=h0, mu_=2.0)
+    dx = xx[1] - xx[0]
+    ratio = np.sum(out) * dx / (np.sum(h0) * dx)
+    assert 0.9 < ratio < 1.1, f"求和规则破坏: {ratio:.4f}"
