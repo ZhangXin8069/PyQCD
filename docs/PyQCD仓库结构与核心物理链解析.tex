@@ -141,6 +141,17 @@
         $1.4\times10^{-6}$（$O(\varepsilon^3)$），SU(3) 偏差 $<10^{-13}$。
 \end{itemize}
 
+\section{第 7--8 轮：性能评估与核心链整合}
+
+\begin{itemize}
+  \item GPU 性能：$\tau = 3a^2$ 方案仅需 $\sim 4$ 步 flow，
+        24$^3\times72$ 组态约 36 s（complex64），满足生产需求；
+  \item 匹配求和规则：NLO 匹配守恒（$O(\alpha_s)$ 修正 2.8\%）；
+  \item 核心目标链整合验证：梯度流($\tau{=}3a^2$) $\to$ TMD staple 算符
+        $\to$ 混合方案拼接 $\to$ Z\_R 参数化——短距比值自归一（hR[0]=1.0000）；
+  \item 测试套件 16 项全绿；一致性验证 36 项全 PASS。
+\end{itemize}
+
 \section{结论}
 
 PyQCD 已完成 lattice-pdf 迁移规范化：路径统一指向 /root/PyQCD、docs 文件名中文化
