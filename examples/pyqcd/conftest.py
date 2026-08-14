@@ -16,6 +16,9 @@ from pyqcd.testing import (  # noqa: F401
     test_hyp_smear,
     test_gradient_flow_tau_limit,
     test_ratio_fit_extraction,
+    test_hyp_vs_flow_consistent,
+    test_gpu_backend_consistency,
+    test_end_to_end_synthetic_meff,
 )
 
 
