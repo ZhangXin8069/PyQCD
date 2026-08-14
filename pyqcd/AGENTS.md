@@ -19,7 +19,8 @@
 | `vertex/` | VdV/VVV 顶点、相位因子 | lib/vertex |
 | `contraction/` | 自动 Wick、重子算符、seqperam、动态收缩 | lib/autowick,baroperator,seqperam,dynamic |
 | `operator/` | Clover 场强 F、对偶 F̃、胶子 OPE 算符、.lime 读取、TMD staple 扩展 | compute_ope.py + 新写 |
-| `analysis/` | Jackknife/Bootstrap/meff/ratio_3pt | lib/analyse |
+| `analysis/` | Jackknife/Bootstrap/meff/ratio_3pt + disconnected(code_1)/meff/3pt 编排 | lib/analyse + analyze.py 逻辑 |
+| `renorm/_tmdextract.py` | ★ 准 TMD-PDF/CS 核/SFTX 1 圈匹配 | 理论文档新写 |
 | `renorm/` | ★ 自重整化 Z_R、混合方案、NLO 匹配、外推、梯度流、TMD 提取 | refer/zengch 逻辑移植 + 理论文档新写 |
 | `pipeline/` | 集中配置 + 9 步管线调度（+tmd 步） | config.py/run_pipeline.py |
 | `testing/` | 集成测试函数（examples/pyqcd/conftest.py 入口） | 新写 |
@@ -33,7 +34,8 @@
   流时间物理约定 τ=3a²（NieMiera 2025）。
 - 重整化：z 单位 fm（内部转 GeV⁻¹ 用 fm_to_GeV=0.197）；μ=2 GeV 默认。
 - 日志：`print` + `verbose` 参数；管线产物写 logs/（gitignore 豁免）。
-- 测试：`python examples/pyqcd/conftest.py`（或 cd examples && pytest .）。
+- 测试：`python examples/pyqcd/conftest.py`（7 项）；一致性验证：
+  `python examples/pyqcd/verify_consistency.py`（A–E 五组对照，全部 0 差异）。
 
 ## 反模式（勿重复）
 

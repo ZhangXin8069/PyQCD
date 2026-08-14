@@ -25,6 +25,11 @@ from ._tmd import (
     tmd_matrix_elements, gradient_flow_renormalized_tmd,
     self_renormalized_ratio, invariant_amplitude, collins_soper_kernel,
 )
+from ._tmdextract import (
+    quasi_tmd_pdf, cs_kernel_from_ratio, soft_function_intrinsic,
+    tmd_matching_hybrid, sftx_gluon_matching_coeff,
+    sftx_energy_density_t0,
+)
 
 __all__ = [
     # 常数
@@ -46,6 +51,9 @@ __all__ = [
     "staple_wilson_line", "M_mu_lambda_nu_rho", "gluon_tmd_operator",
     "tmd_matrix_elements", "gradient_flow_renormalized_tmd",
     "self_renormalized_ratio", "invariant_amplitude", "collins_soper_kernel",
+    "quasi_tmd_pdf", "cs_kernel_from_ratio", "soft_function_intrinsic",
+    "tmd_matching_hybrid", "sftx_gluon_matching_coeff",
+    "sftx_energy_density_t0",
 ]
 
 Namespace.__module__ = "pyqcd.renorm"
