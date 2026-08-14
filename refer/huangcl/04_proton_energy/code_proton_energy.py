@@ -14,7 +14,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "98_tools"))
 from analysis_tools import (  # noqa: E402
     sem, resample, get_peak_memory_gb, DEFAULT_PLOT_COLORS,
-    plot_multi_errbars, plot_multi_scatter,
+    plot_errbar, plot_scatter,
 )
 
 # ===== 独立开关，方便调试时修改 =====
@@ -271,7 +271,7 @@ if __name__ == "__main__":
             sem_data[_dir] = sem(mass, jack)
 
         # 图1: eff mass 对比
-        plot_multi_errbars(
+        plot_errbar(
             x_vals, effmass_data,
             save_path=os.path.join(outpa.result_dir, "eff_mass.png"),
             xlabel="t/a", ylabel="aE",
@@ -287,10 +287,8 @@ if __name__ == "__main__":
         # 图2: SEM 对比散点图 (t=0~14)
         t_max_sem = 15  # t=0~14
         x_sem = np.arange(t_max_sem)
-        sem_scatter = {}
-        for _dir in ["xdir", "ydir", "zdir", "ave"]:
-            sem_scatter[_dir] = sem_data[_dir][:t_max_sem]
-        plot_multi_scatter(
+        sem_scatter = {k: v[:t_max_sem] for k, v in sem_data.items()}
+        plot_scatter(
             x_sem, sem_scatter,
             save_path=os.path.join(outpa.result_dir, "sem_comparison.png"),
             xlabel="t/a", ylabel="SEM(aE)",

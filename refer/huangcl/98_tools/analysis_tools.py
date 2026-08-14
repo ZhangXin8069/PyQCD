@@ -71,6 +71,7 @@ class FitParams:
     dt_start: int
     dt_end: int
     svdcut: float = None
+    nex: int = 0    # FH 时 τ 方向两端各去掉的点数
 
 
 @dataclass
@@ -93,7 +94,7 @@ class OutputParams:
 # 统计 / 重采样
 # ============================================================
 
-def sem(data: np.ndarray, jackknife: bool) -> np.ndarray:
+def sem(data: np.ndarray, jackknife: bool = False) -> np.ndarray:
     """
     计算标准误. 
 
@@ -115,7 +116,7 @@ def sem(data: np.ndarray, jackknife: bool) -> np.ndarray:
     return error
 
 
-def resample(corr: np.ndarray, jackknife: bool, Nsample: int) -> np.ndarray:
+def resample(corr: np.ndarray, Nsample: int, jackknife: bool = False, ) -> np.ndarray:
     """
     对 corr 进行重采样. 
 
@@ -152,7 +153,7 @@ def resample(corr: np.ndarray, jackknife: bool, Nsample: int) -> np.ndarray:
     return re_corr
 
 
-def calc_cov(arr: np.ndarray, jackknife: bool) -> Tuple[np.ndarray, float]:
+def calc_cov(arr: np.ndarray, jackknife: bool = False) -> Tuple[np.ndarray, float]:
     """
     计算协方差矩阵与条件数. 
 
@@ -253,51 +254,70 @@ def fit(
     x_coor,
     model: Callable,
     fitpa: FitParams,
-    jackknife: bool,
+    jackknife: bool = False,
+    debug: bool = False,
+    debugNfit: Optional[int] = 20,
 ) -> Tuple[Dict[str, np.ndarray], np.ndarray, float, lsqfit.nonlinear_fit]:
     """
-    对每个 sample 做 lsqfit 非线性拟合. 
+    对每个 sample 做 lsqfit 非线性拟合.
+    注意: 返回数组始终为 Nsample 大小, debug 模式下未拟合的数据用 NaN 填充.
 
     Parameters
     ----------
     y_coor : np.ndarray
-        数据数组, shape 为 (Nsample, Ndata). 
+        数据数组, shape 为 (Nsample, Ndata).
     x_coor : array-like
-        拟合点坐标, 传给 lsqfit 的 data. 
+        拟合点坐标, 传给 lsqfit 的 data.
     model : Callable
-        模型函数, 签名 model(x, p) -> np.ndarray. 
+        模型函数, 签名 model(x, p) -> np.ndarray.
     fitpa : FitParams
-        拟合参数 dataclass, 包含 p0, prior, svdcut. 
-        优先使用 prior; 若 prior 为 None 或空, 则退化为使用 p0. 
+        拟合参数 dataclass, 包含 p0, prior, svdcut.
+        优先使用 prior; 若 prior 为 None 或空, 则退化为使用 p0.
     jackknife : bool
-        是否为 jackknife 样本. 
+        是否为 jackknife 样本.
+    debug : bool
+        debug 模式: 协方差只保留对角元, 避免样本量少时协方差奇异.
+    debugNfit : int, optional
+        debug 模式下只拟合前 debugNfit 个样本 (协方差仍用全部样本计算).
+        返回数组始终为 Nsample 大小, 未拟合的数据用 NaN 填充.
 
     Returns
     -------
     fit_result : Dict[str, np.ndarray]
-        拟合结果, 包含每个参数及 chi2/dof. 
-        key 为参数名, 额外包含 "chi2" 键. 
+        拟合结果, 包含每个参数及 chi2/dof.
+        key 为参数名, 额外包含 "chi2" 键.
+        始终返回 Nsample 大小, 未拟合条目为 NaN.
     cov : np.ndarray
-        协方差矩阵. 
+        协方差矩阵.
     cond : float
-        条件数. 
+        条件数.
     last_fit_info : lsqfit.nonlinear_fit
-        最后一个 sample 的拟合对象. 
+        最后一个 sample 的拟合对象.
     """
     Nsample, _ = y_coor.shape
     param_names = list(fitpa.p0.keys())
     n_params = len(param_names)
 
-    fit_result = {name: np.zeros(Nsample) for name in param_names}
-    fit_result["chi2"] = np.zeros(Nsample)
+    # 确定实际拟合的样本数
+    if debug:
+        Nfit = min(debugNfit, Nsample)
+        print(f"debug mode, fit number: {Nfit}")
+    else:
+        Nfit = Nsample
 
+    # 始终分配 Nsample 大小, 未拟合的条目填 NaN
+    # 这样调用方无需感知 debug 模式, 统一用 (Nsample, Nz) 接收
+    fit_result = {name: np.full(Nsample, np.nan) for name in param_names}
+    fit_result["chi2"] = np.full(Nsample, np.nan)
+
+    # 协方差始终用全部样本计算
     cov, cond = calc_cov(y_coor, jackknife)
 
     # 优先使用 prior, 否则退化为 p0
     use_prior = fitpa.prior is not None and len(fitpa.prior) > 0
 
     last_fit_info = None
-    for _id in range(Nsample):
+    for _id in range(Nfit):
         y_gvar = gv.gvar(y_coor[_id], cov)
 
         if use_prior:
@@ -379,7 +399,7 @@ def do_fit_and_report(
 
     for i in range(Ni):
         _fit_result, _cov, _cond, _last_fit_info = fit(
-            y_coor[:, i, :], x_coor, model, fitpa, jack)
+            y_coor[:, i, :], x_coor, model, fitpa, jack, debug, 20)
         for name in param_names + ["chi2"]:
             all_fit_result[name][:, i] = _fit_result[name]
         all_cond[i] = _cond
@@ -426,97 +446,10 @@ def do_fit_and_report(
 
 
 # ============================================================
-# 画图
+# 画图 — 统一函数 (dict 输入, 兼容单条与多条)
 # ============================================================
 
-def plot_single_errbar(
-    x: np.ndarray,
-    y: np.ndarray,
-    yerr: Optional[np.ndarray],
-    save_path: str,
-    *,
-    xlabel: str = "x",
-    ylabel: str = "y",
-    xlim: Optional[List[float]] = None,
-    ylim: Optional[List[float]] = None,
-    title: Optional[str] = None,
-    label: Optional[str] = None,
-    legend_loc: str = "upper right",
-    figsize: Tuple[float, float] = (8, 6),
-    dpi: float = 150,
-    plot_colors: Optional[List[str]] = None,
-    # 阴影色带开关与参数
-    show_band: bool = False,
-    band_x: Optional[np.ndarray] = None,
-    band_y_down: Optional[np.ndarray] = None,
-    band_y_up: Optional[np.ndarray] = None,
-    band_color: str = "gray",
-    band_alpha: float = 0.35,
-    band_label: str = "Fit band",
-):
-    """
-    通用单条误差棒图. 
-
-    固定参数: 
-        - capsize = 0 (误差棒无帽子)
-        - 默认颜色为 DEFAULT_PLOT_COLORS[0]
-
-    show_band=True 时, 在 band_x 与 [band_y_down, band_y_up] 之间填充色带. 
-    该色带通常用于表示某个拟合参数 (如 E0 或 c0) 的 ±1σ 范围. 
-    调用方需要自行构造 band_x, band_y_down, band_y_up, 例如: 
-        band_x = np.array([fitpa.dt_start, fitpa.dt_end])
-        band_y_down = np.array([E0_mean - E0_err, E0_mean - E0_err])
-        band_y_up = np.array([E0_mean + E0_err, E0_mean + E0_err])
-    """
-    if plot_colors is None:
-        plot_colors = DEFAULT_PLOT_COLORS
-
-    default_color = plot_colors[0]
-    color = default_color
-    ecolor = default_color
-
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-
-    ax.errorbar(
-        x, y, yerr=yerr,
-        fmt='x',
-        color=color,
-        ecolor=ecolor,
-        capsize=0,
-        label=label,
-    )
-
-    if show_band:
-        ax.fill_between(
-            band_x,
-            band_y_down,
-            band_y_up,
-            color=band_color,
-            alpha=band_alpha,
-            linewidth=0,
-            zorder=1,
-            label=band_label,
-        )
-
-    if xlim is not None:
-        ax.set_xlim(xlim[0], xlim[1])
-    if ylim is not None:
-        ax.set_ylim(ylim[0], ylim[1])
-
-    ax.set_xlabel(xlabel, fontsize=16, labelpad=8)
-    ax.set_ylabel(ylabel, fontsize=16, labelpad=8)
-    if title is not None:
-        ax.set_title(title, fontsize=13, pad=12)
-    if label is not None or show_band:
-        ax.legend(loc=legend_loc)
-
-    plt.tight_layout()
-    fig.savefig(save_path, bbox_inches="tight")
-    print(f"  saved: {save_path}")
-    plt.close(fig)
-
-
-def plot_multi_errbars(
+def plot_errbar(
     x: np.ndarray,
     y_data: Dict[str, Tuple[np.ndarray, np.ndarray]],
     save_path: str,
@@ -531,49 +464,58 @@ def plot_multi_errbars(
     figsize: Tuple[float, float] = (10, 6),
     dpi: float = 150,
     plot_colors: Optional[List[str]] = None,
+    # 阴影色带
+    show_band: bool = False,
+    band_x: Optional[np.ndarray] = None,
+    band_y_down: Optional[np.ndarray] = None,
+    band_y_up: Optional[np.ndarray] = None,
+    band_color: str = "gray",
+    band_alpha: float = 0.35,
+    band_label: str = "Fit band",
 ):
     """
-    通用多条误差棒对比图. 
-
-    固定参数: 
-        - capsize = 0 (误差棒无帽子)
-        - 颜色从 plot_colors 按顺序循环取
-        - 同一横坐标的多条误差棒自动左右错开, 相邻间隔为 x_offset
+    误差棒图, dict 输入, 兼容一组或多组数据.
 
     Parameters
     ----------
     x : np.ndarray
-        公共横坐标. 
+        公共横坐标.
     y_data : Dict[str, Tuple[np.ndarray, np.ndarray]]
-        每条误差棒的数据, key 为图例标签 label, 
-        value 为 (y_mean, y_err) 元组. 
+        key 为图例标签, value 为 (y_mean, y_err).
+        单条时 dict 长度为 1, 多条时自动左右错开.
+
+    固定参数:
+        - capsize = 0 (误差棒无帽子)
+        - 颜色从 plot_colors 按顺序循环取
+        - 多条时同一横坐标自动左右错开, 相邻间隔为 x_offset
+
+    show_band=True 时, 在 band_x 与 [band_y_down, band_y_up] 之间填充色带.
     """
     if plot_colors is None:
         plot_colors = DEFAULT_PLOT_COLORS
 
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
     labels = list(y_data.keys())
     n = len(labels)
-    if n > 1:
-        offsets = np.linspace(-(n - 1) * x_offset / 2,
-                              (n - 1) * x_offset / 2, n)
-    else:
-        offsets = [0.0]
-
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    offsets = np.linspace(-(n - 1) * x_offset / 2,
+                          (n - 1) * x_offset / 2, n)
 
     for i, label in enumerate(labels):
         y_mean, y_err = y_data[label]
         color = plot_colors[i % len(plot_colors)]
-        x_shift = offsets[i]
         ax.errorbar(
-            np.array(x) + x_shift,
-            y_mean,
-            yerr=y_err,
-            fmt='x',
-            color=color,
-            ecolor=color,
-            capsize=0,
-            label=label,
+            np.asarray(x) + offsets[i],
+            y_mean, yerr=y_err,
+            fmt='x', color=color, ecolor=color,
+            capsize=0, label=label,
+        )
+
+    if show_band:
+        ax.fill_between(
+            band_x, band_y_down, band_y_up,
+            color=band_color, alpha=band_alpha,
+            linewidth=0, zorder=1, label=band_label,
         )
 
     if xlim is not None:
@@ -593,96 +535,7 @@ def plot_multi_errbars(
     plt.close(fig)
 
 
-def plot_single_scatter(
-    x: np.ndarray,
-    y: np.ndarray,
-    save_path: str,
-    *,
-    xlabel: str = "x",
-    ylabel: str = "y",
-    xlim: Optional[List[float]] = None,
-    ylim: Optional[List[float]] = None,
-    title: Optional[str] = None,
-    label: Optional[str] = None,
-    legend_loc: str = "upper right",
-    figsize: Tuple[float, float] = (8, 6),
-    dpi: float = 150,
-    plot_colors: Optional[List[str]] = None,
-    # ---- 水平参考线 ----
-    show_hline: bool = False,
-    hline_y: float = 1.0,
-    hline_label: Optional[str] = None,
-    hline_color: Optional[str] = None,
-    hline_style: str = "--",
-    hline_width: float = 1.5,
-):
-    """
-    通用单条散点图.
-
-    默认是任意散点图, 可通过参数调整为特定用途.
-    例如画 chi2/dof 散点图时:
-        ylabel = r"$\\chi^2 / \\mathrm{d.o.f.}$"
-        ylim   = [0, 2]
-        show_hline = True, hline_y = 1.0,
-        hline_label = r"$\\chi^2 / \\mathrm{d.o.f.} = 1$"
-
-    Parameters
-    ----------
-    x : np.ndarray
-        自变量 (横坐标).
-    y : np.ndarray
-        因变量 (纵坐标).
-    save_path : str
-        图片保存路径.
-    show_hline : bool
-        是否画水平参考线, 默认 False.
-    hline_y : float
-        水平线纵坐标, 默认 1.0.
-    hline_label : str, optional
-        水平线图例标签, 默认 None (不显示).
-    hline_color : str, optional
-        水平线颜色, 默认使用 plot_colors[0].
-    hline_style : str
-        水平线线型, 默认 '--'.
-    hline_width : float
-        水平线线宽, 默认 1.5.
-    """
-    if plot_colors is None:
-        plot_colors = DEFAULT_PLOT_COLORS
-
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-
-    # 水平参考线
-    if show_hline:
-        _hline_color = hline_color if hline_color is not None else plot_colors[0]
-        ax.axhline(y=hline_y, color=_hline_color, linestyle=hline_style,
-                   linewidth=hline_width, label=hline_label)
-
-    # 散点 (第二种颜色, 'x' 标记)
-    color = plot_colors[1 % len(plot_colors)]
-    ax.scatter(x, y, marker="x", color=color, s=40, linewidths=1.5,
-               label=label, zorder=3)
-
-    if xlim is not None:
-        ax.set_xlim(xlim[0], xlim[1])
-    if ylim is not None:
-        ax.set_ylim(ylim[0], ylim[1])
-
-    ax.set_xlabel(xlabel, fontsize=16, labelpad=8)
-    ax.set_ylabel(ylabel, fontsize=16, labelpad=8)
-    if title is not None:
-        ax.set_title(title, fontsize=13, pad=12)
-    # 有数据标签或水平线标签时显示图例
-    if label is not None or hline_label is not None:
-        ax.legend(loc=legend_loc)
-
-    plt.tight_layout()
-    fig.savefig(save_path, bbox_inches="tight")
-    print(f"  saved: {save_path}")
-    plt.close(fig)
-
-
-def plot_multi_scatter(
+def plot_scatter(
     x: np.ndarray,
     y_data: Dict[str, np.ndarray],
     save_path: str,
@@ -706,48 +559,24 @@ def plot_multi_scatter(
     hline_width: float = 1.5,
 ):
     """
-    通用多条散点对比图.
-
-    默认是任意散点对比图, 可通过参数调整为特定用途.
-    例如画 chi2/dof 散点对比图时:
-        ylabel = r"$\\chi^2 / \\mathrm{d.o.f.}$"
-        ylim   = [0, 2]
-        show_hline = True, hline_y = 1.0,
-        hline_label = r"$\\chi^2 / \\mathrm{d.o.f.} = 1$"
+    散点图, dict 输入, 兼容一组或多组数据.
 
     Parameters
     ----------
     x : np.ndarray
-        公共自变量 (横坐标).
+        公共横坐标.
     y_data : Dict[str, np.ndarray]
-        每条散点数据, key 为图例标签, value 为 y 值数组.
+        key 为图例标签, value 为 y 值数组.
+        单条时 dict 长度为 1, 多条时自动左右错开.
     save_path : str
         图片保存路径.
     x_offset : float
         相邻曲线横坐标偏移量, 默认 0.3.
     show_hline : bool
         是否画水平参考线, 默认 False.
-    hline_y : float
-        水平线纵坐标, 默认 1.0.
-    hline_label : str, optional
-        水平线图例标签, 默认 None (不显示).
-    hline_color : str, optional
-        水平线颜色, 默认使用 plot_colors[0].
-    hline_style : str
-        水平线线型, 默认 '--'.
-    hline_width : float
-        水平线线宽, 默认 1.5.
     """
     if plot_colors is None:
         plot_colors = DEFAULT_PLOT_COLORS
-
-    labels = list(y_data.keys())
-    n = len(labels)
-    if n > 1:
-        offsets = np.linspace(-(n - 1) * x_offset / 2,
-                              (n - 1) * x_offset / 2, n)
-    else:
-        offsets = [0.0]
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
@@ -757,11 +586,14 @@ def plot_multi_scatter(
         ax.axhline(y=hline_y, color=_hline_color, linestyle=hline_style,
                    linewidth=hline_width, label=hline_label)
 
-    # 每个散点 (颜色从第二种开始循环, 'x' 标记, 横坐标错开)
+    labels = list(y_data.keys())
+    n = len(labels)
+    offsets = np.linspace(-(n - 1) * x_offset / 2,
+                          (n - 1) * x_offset / 2, n)
+
     for i, label in enumerate(labels):
         color = plot_colors[(i + 1) % len(plot_colors)]
-        x_shift = offsets[i]
-        ax.scatter(np.array(x) + x_shift, y_data[label],
+        ax.scatter(np.asarray(x) + offsets[i], y_data[label],
                    marker="x", color=color, s=40,
                    linewidths=1.5, label=label, zorder=3)
 
@@ -775,6 +607,74 @@ def plot_multi_scatter(
     if title is not None:
         ax.set_title(title, fontsize=14, pad=12)
     ax.legend(loc=legend_loc)
+
+    plt.tight_layout()
+    fig.savefig(save_path, bbox_inches="tight")
+    print(f"  saved: {save_path}")
+    plt.close(fig)
+
+
+def plot_hist(
+    data_dict: Dict[str, np.ndarray],
+    save_path: str,
+    *,
+    xlabel: str = "value",
+    ylabel: str = "frequency",
+    title: Optional[str] = None,
+    jackknife: bool = False,
+    figsize: Tuple[float, float] = (10, 6),
+    dpi: float = 150,
+    plot_colors: Optional[List[str]] = None,
+):
+    """
+    直方图, dict 输入, 兼容一组或多组数据.
+
+    Parameters
+    ----------
+    data_dict : Dict[str, np.ndarray]
+        key 为图例标签, value 为 1D 样本值数组.
+    save_path : str
+        图片保存路径.
+    jackknife : bool
+        是否使用 jackknife SEM.
+    """
+    if plot_colors is None:
+        plot_colors = DEFAULT_PLOT_COLORS
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    # 收集样本值, 计算 mean ± sem
+    all_vals = []
+    summaries = []  # (mean, sem, label)
+    for label, vals in data_dict.items():
+        all_vals.append(vals)
+        _mean = vals.mean()
+        _sem = sem(vals, jackknife)
+        summaries.append((_mean, _sem, label))
+
+    # 统一横轴范围
+    vmin = min(v.min() for v in all_vals)
+    vmax = max(v.max() for v in all_vals)
+    margin = (vmax - vmin) * 0.15 if vmax > vmin else 0.5
+    x_range = (vmin - margin, vmax + margin)
+
+    # bins 数量
+    n_bins = int(np.sqrt(len(all_vals[0])))
+
+    # 画直方图, label 中直接包含 mean(sem) 信息
+    for i, (label, vals) in enumerate(data_dict.items()):
+        color = plot_colors[i % len(plot_colors)]
+        _mean, _sem, _ = summaries[i]
+        label_text = f"{label} {_mean:.3g}({_sem:.3g})"
+        ax.hist(vals, bins=n_bins, range=x_range,
+                color=color, alpha=0.35, edgecolor=color,
+                linewidth=0.8, label=label_text)
+
+    ax.set_xlabel(xlabel, fontsize=14)
+    ax.set_ylabel(ylabel, fontsize=14)
+    if title is not None:
+        ax.set_title(title, fontsize=13)
+    ax.legend(loc="upper right", fontsize=10)
 
     plt.tight_layout()
     fig.savefig(save_path, bbox_inches="tight")

@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "98_tools"))
 from analysis_tools import (  # noqa: E402
     sem, resample, get_peak_memory_gb, DEFAULT_PLOT_COLORS,
-    plot_multi_errbars, plot_multi_scatter,
+    plot_errbar, plot_scatter,
 )
 
 
@@ -37,6 +37,10 @@ class SampleParams:
     momP: int       # 动量符号, ±2
     Nsample: int
     dt_max: int
+    # 需要平均的 dir 列表, 如 ["neg_x", "neg_y", "neg_z"]
+    ave_dirs: list[str] = field(default_factory=lambda: [
+                                "pos_x", "pos_y", "pos_z",
+                                "neg_x", "neg_y", "neg_z"])
 
     @property
     def Nconf(self):
@@ -104,15 +108,6 @@ part_end = args.e
 # ylim 固定为 [0, 0.8], dt_list 只与动量绝对值有关
 _plotpa_config = {
     # |Pz| : dt_list
-    2: list(range(6, 16)),
-    3: list(range(5, 14)),
-    4: list(range(5, 12)),
-    5: list(range(5, 11)),
-    6: list(range(5, 10)),
-}
-
-_cmp_plotpa_config = {
-    # |Pz| : dt_list
     2: list(range(5, 14)),
     3: list(range(5, 13)),
     4: list(range(5, 12)),
@@ -143,18 +138,12 @@ if conf_short == "L24x72":
         momP=2,
         Nsample=3000,
         dt_max=20,
+        ave_dirs=["pos_z", "neg_x", "neg_y", "neg_z"],
     )
 
     # 根据动量大小 P 构造画图参数 (ylim 固定 [0, 0.8])
     plotpa = PlotParams(
         dt_list=_plotpa_config[sampa.P],
-        z_list=_fixed_z_list,
-        xlim=_fixed_xlim,
-        ylim=[0, 0.8],
-    )
-
-    cmp_plotpa = PlotParams(
-        dt_list=_cmp_plotpa_config[sampa.P],
         z_list=_fixed_z_list,
         xlim=_fixed_xlim,
         ylim=[0, 0.8],
@@ -169,12 +158,6 @@ if plotpa.dt_list[-1] > sampa.dt_max - 1:
     print(
         f"Warning: dt_list max {plotpa.dt_list[-1]} exceeds dt_max-1={sampa.dt_max - 1}, truncating")
     plotpa.dt_list = [dt for dt in plotpa.dt_list if dt <= sampa.dt_max - 1]
-
-if cmp_plotpa.dt_list[-1] > sampa.dt_max - 1:
-    print(
-        f"Warning: cmp dt_list max {cmp_plotpa.dt_list[-1]} exceeds dt_max-1={sampa.dt_max - 1}, truncating")
-    cmp_plotpa.dt_list = [
-        dt for dt in cmp_plotpa.dt_list if dt <= sampa.dt_max - 1]
 
 
 # debug / jack 调整
@@ -199,8 +182,8 @@ outpa = OutputParams(
     conf_short=conf_short,
     P=sampa.P,
 )
-# 创建六个子目录 (pos_x, neg_x, pos_y, neg_y, pos_z, neg_z)
-for _d in ["pos_x", "neg_x", "pos_y", "neg_y", "pos_z", "neg_z"]:
+# 创建六个子目录 (pos_x, neg_x, pos_y, neg_y, pos_z, neg_z) 和 ave 目录
+for _d in ["pos_x", "neg_x", "pos_y", "neg_y", "pos_z", "neg_z", "ave"]:
     outpa.get_sub_dir(_d)
 # =========================
 
@@ -255,7 +238,7 @@ def compute_ope(sampa: SampleParams, axis: str, jack: bool):
     print(f"the loaded _ope's shape: {_ope.shape}")
     _ope = _ope.transpose(0, 2, 1)  # (Nconf, tau, z)
 
-    ope_raw = resample(_ope, jack, sampa.Nsample)  # (Nsample, Nt, Nx)
+    ope_raw = resample(_ope, sampa.Nsample)  # (Nsample, Nt, Nx)
 
     print("==================== compute ope end ====================")
     return _ope, ope_raw
@@ -332,8 +315,8 @@ def compute_ratio(sampa: SampleParams, Px: int, Py: int, Pz: int,
     gc.collect()
 
     # resample
-    corr2 = resample(corr2_avg, jack, sampa.Nsample)  # (Nsample, dt)
-    ope = resample(ope_avg, jack, sampa.Nsample)       # (Nsample, dtau, z)
+    corr2 = resample(corr2_avg, sampa.Nsample)  # (Nsample, dt)
+    ope = resample(ope_avg, sampa.Nsample)       # (Nsample, dtau, z)
 
     del corr2_avg, ope_avg
     gc.collect()
@@ -493,11 +476,11 @@ if __name__ == "__main__":
     else:
         print("===== skip compute ratio, loading ratio from file =====")
 
-    # ---- Part 2: plot (六个目录分别画图) ----
+    # ---- Part 2: plot (六个目录分别画图 + ave 平均) ----
     if part_start <= 2:
         time0 = time.perf_counter()
 
-        # 画 pos_x, neg_x, pos_y, neg_y, pos_z, neg_z（使用 plotpa）
+        # 加载所有 6 个方向的 ratio
         _dir_mom_map = {
             "pos_x": (sampa.P, 0, 0),
             "neg_x": (-sampa.P, 0, 0),
@@ -505,15 +488,25 @@ if __name__ == "__main__":
             "neg_y": (0, -sampa.P, 0),
             "pos_z": (0, 0,  sampa.P),
             "neg_z": (0, 0, -sampa.P),
+            "ave":   (0, 0, sampa.P),
         }
+        _all_ratios = {}
         for _dir in ["pos_x", "neg_x", "pos_y", "neg_y", "pos_z", "neg_z"]:
-            load_dir = outpa.sub_dir_path(_dir)
-            load_path = os.path.join(load_dir, "ratio.npy")
+            load_path = os.path.join(outpa.sub_dir_path(_dir), "ratio.npy")
             print(f"===== loading ratio ({_dir}) from {load_path} =====")
-            ratio = np.load(load_path)
-            print(f"ratio loaded, shape: {ratio.shape}")
+            _all_ratios[_dir] = np.load(load_path)
+            print(f"  loaded, shape: {_all_ratios[_dir].shape}")
+
+        # 计算 ave 平均 (不保存 npy)
+        print(f"===== computing ave over dirs: {sampa.ave_dirs} =====")
+        _ave_ratios = [_all_ratios[_d] for _d in sampa.ave_dirs]
+        _all_ratios["ave"] = np.mean(_ave_ratios, axis=0)
+        print(f"  ratio_ave shape: {_all_ratios['ave'].shape}")
+
+        # 统一画图: 6 个方向 + ave
+        for _dir in ["pos_x", "neg_x", "pos_y", "neg_y", "pos_z", "neg_z", "ave"]:
             Px, Py, Pz = _dir_mom_map[_dir]
-            plot_ratio(ratio, plotpa, load_dir, jack, _dir,
+            plot_ratio(_all_ratios[_dir], plotpa, outpa.sub_dir_path(_dir), jack, _dir,
                        Nconf=sampa.Nconf, Nsample=sampa.Nsample,
                        Px=Px, Py=Py, Pz=Pz)
 
@@ -533,7 +526,7 @@ if __name__ == "__main__":
             x_tau = np.arange(10)
 
             # 图1: 误差棒比较
-            plot_multi_errbars(
+            plot_errbar(
                 x_tau, ope_data,
                 save_path=os.path.join(
                     outpa.ope_dir, f"{_tag}_comparison_errbar.png"),
@@ -541,13 +534,11 @@ if __name__ == "__main__":
                 xlim=[-0.5, 9.5],
                 ylim=_ope_ylim,
                 x_offset=0.2,
-                title=(
-                    f"{conf_short}, z=0, {_tag}"
-                ),
+                title=f"{conf_short}, z=0, {_tag}",
             )
 
             # 图2: SEM 比较
-            plot_multi_scatter(
+            plot_scatter(
                 x_tau, sem_data,
                 save_path=os.path.join(
                     outpa.ope_dir, f"{_tag}_comparison_sem.png"),
@@ -555,9 +546,7 @@ if __name__ == "__main__":
                 xlim=[-0.5, 9.5],
                 ylim=_ope_sem_ylim,
                 x_offset=0.2,
-                title=(
-                    f"{conf_short}, z=0, {_tag}"
-                ),
+                title=f"{conf_short}, z=0, {_tag}",
             )
             print(f"  {_tag} plots saved")
         print("===== ope comparison plot end =====")

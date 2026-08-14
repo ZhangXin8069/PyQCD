@@ -22,10 +22,10 @@ export NUMEXPR_NUM_THREADS=1
 # ===== 用户配置：修改此处即可 =====
 conf_short="L24x72"
 part_start=1
-part_end=3
+part_end=2
 # ==================================
 
-code="code_02_ratio"
+code="code_bare_matrix"
 log="_${code}.log"
 
 . /public/home/huangcl/act_venv.sh
