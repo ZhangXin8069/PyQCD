@@ -10,6 +10,9 @@ source ./env.sh                      # 环境（若存在）
 python examples/pyqcd/conftest.py    # 全量测试（17 项：γ基/Z_R/梯度流/TMD算符/匹配/混合/提取链/标度/HYP/τ极限/比值拟合/HYP-流一致/后端一致/端到端meff/求和规则/核心链/TMD-NLO匹配）
 python examples/pyqcd/verify_consistency.py   # 一致性验证（vs docker-v20260805 输出，A–E 全 0 差异）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
+bash logs/test0/run-local.sh        # ana_3dir 三方向差异分析+作图测试（test12 风格，17 项断言）
+bash examples/test0/run-local.sh    # 蒸馏管线一致性测试（调用 pyqcd 复现 docker-v20260805 全量输出）
+python examples/test0/main.py verify --run-dir examples/test0/v<ts>   # 一致性验证（A–E 项）
 cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，两遍）
 ```
 
@@ -18,11 +21,31 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | 目录 | 内容 |
 |---|---|
 | `pyqcd/` | 主包（lattice/tools/vertex/contraction/operator/analysis/renorm/pipeline/testing） |
-| `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 |
+| `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 |
 | `docs/` | 51 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books），只读 |
-| `logs/` | 按 tag 归档产物（stab0/ 等） |
+| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ ana_3dir 三方向差异分析测试套件 |
 | `cpp/` | C++ 后端占位 |
+
+## 蒸馏管线一致性测试（examples/test0）
+
+调用 pyqcd 包复现成功实例 `examples/docker-v20260805/output/output_20260802_120104`
+的全量结果（10 组态 9 步：vertex→2pt→ope→3pt→4pt→analysis→plots→report）：
+中间数据 + 图表 + LaTeX 报告完整保存于版本目录 `examples/test0/v<YYYYMMDDHHMM>/`
+（test12 约定），逐项数值一致。`main.py` 只含测试/编排代码（计算委托
+`pyqcd.pipeline.run_pipeline`，实现于 `pyqcd/pipeline/_steps.py`，照抄 docker 逻辑自包含）。
+冒烟：`python examples/test0/main.py run --conf-ids 6250`（Nconf<2 时 disconnected
+拟合自动跳过，统计无意义）；全量：`bash examples/test0/run-local.sh`（~3-5h）。
+一致性容差：中间数据 rel<1e-6、分析结果 rel<1e-8；verify 按组态数自适应
+（Nconf=10 时 B/C/D 统计量严格比对）。已验证：conf6250 中间数据逐位一致
+（rel=0.000e+00），全量 237/237 PASS。
+
+## 数据分析与作图（pyqcd/analysis/_ana_3dir.py）
+
+输入数据路径 → 分析并作图（独立实现，功能对齐 refer/huangcl/05_ana_3dir_diff_sem）：
+读取三方向（x/y/z/ave）ratio.npy 与 corr2.npy → 有效质量、归一化协方差（相关系数）、
+直方图（mean±sem）；顶层入口 `analyze_3dir(data_root, out_root, AnaParams)`，
+数据结构 `<root>/<conf>/Pz<Pz>/{x,y,z,ave}_dir/ratio.npy` + `corr2_{dir}.npy`。
 
 ## 核心物理链（pyqcd/renorm）
 

@@ -189,11 +189,23 @@ def cmd_run(args):
 # ═══════════════════════════════════════════════════════════════════
 
 def _rel_maxdiff(a, b):
-    """逐元素相对差的最大值（分母为 |b| 的 norm，避免除零）。"""
+    """逐元素相对差的最大值（分母为 |b| 的 norm，避免除零）。
+
+    NaN 处理：要求两边 NaN 位置完全相同；只对非 NaN 位置计算相对差
+    （meff 在噪声尾区含 NaN 属物理预期，基线同样位置亦有 NaN）。
+    """
     a = np.asarray(a, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)
     if a.shape != b.shape:
         return float('inf')
+    mask = np.isnan(a) | np.isnan(b)
+    if mask.any():
+        if not np.array_equal(np.isnan(a), np.isnan(b)):
+            return float('inf')
+        a = a[~mask]
+        b = b[~mask]
+        if a.size == 0:
+            return 0.0
     denom = np.linalg.norm(b)
     if denom == 0:
         return float(np.linalg.norm(a))
