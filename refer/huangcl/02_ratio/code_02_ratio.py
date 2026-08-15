@@ -306,6 +306,48 @@ def compute_ratio(sampa: SampleParams, Px: int, Py: int, Pz: int,
     del _corr
     gc.collect()
 
+    # # 对 ti 求平均, 消除源时间依赖
+    # corr2_avg = _corr2_rel.mean(axis=1)  # (Nconf, dt)
+    # ope_avg = _ope_rel.mean(axis=1)      # (Nconf, dtau, z)
+    # corr3_avg = _corr3.mean(axis=1)      # (Nconf, dt, dtau, z)
+
+    # del _corr2_rel, _ope_rel, _corr3
+    # gc.collect()
+
+    # # resample
+    # corr2 = resample(corr2_avg, sampa.Nsample)  # (Nsample, dt)
+    # ope = resample(ope_avg, sampa.Nsample)       # (Nsample, dtau, z)
+
+    # del corr2_avg, ope_avg
+    # gc.collect()
+
+    # # corr3 按 dt 切片分别做 resample, 避免爆内存
+    # corr3 = np.zeros((sampa.Nsample, sampa.dt_max,
+    #                   sampa.dt_max, sampa.Nx), dtype=complex)
+    # for _dt in range(sampa.dt_max):
+    #     corr3[:, _dt, :, :] = resample(
+    #         corr3_avg[:, _dt, :, :], jack, sampa.Nsample)
+
+    # del corr3_avg
+    # gc.collect()
+
+    # print("start to compute ratio")
+    # # ratio: (Nsample, dt, dtau, z)
+    # ratio = np.zeros((sampa.Nsample, sampa.dt_max,
+    #                  sampa.dt_max, sampa.Nx), dtype=float)
+    # for _dt in range(sampa.dt_max):
+    #     corr3_dt = corr3[:, _dt, :, :]  # (Nsample, dtau, z)
+    #     corr2_dt = corr2[:, _dt]        # (Nsample,)
+
+    #     # disconnected 部分: <C3> - <C2> * <ope>
+    #     corr3_disc = corr3_dt - corr2_dt[:, np.newaxis, np.newaxis] * ope
+
+    #     # ratio = C3_disc / C2
+    #     ratio[:, _dt, :, :] = (
+    #         corr3_disc / corr2_dt[:, np.newaxis, np.newaxis]).real
+
+    # print("ratio shape:", ratio.shape)
+
     # 对 ti 求平均, 消除源时间依赖
     corr2_avg = _corr2_rel.mean(axis=1)  # (Nconf, dt)
     ope_avg = _ope_rel.mean(axis=1)      # (Nconf, dtau, z)
