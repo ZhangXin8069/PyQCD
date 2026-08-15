@@ -216,6 +216,10 @@ class ArraySlicer:
             dimensions replaced by the number of selected indices.
         """
         backend = get_backend()
+        # 与输入数组类型一致（numpy 数组用 numpy.take，cupy 数组用 cupy.take），
+        # 避免全局 backend 与输入类型不一致导致 cupy/numpy 数组混杂。
+        if not type(self.arr).__module__.startswith('cupy'):
+            backend = _np
         idx = [slice(None)] * self.arr.ndim
         for d, ind in zip(dims, indices):
             idx[d] = ind

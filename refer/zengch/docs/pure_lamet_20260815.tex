@@ -1,0 +1,474 @@
+% ============================================================
+% pure 报告 — zengch 目录 LaMET 准 PDF 流水线核心剖析
+% 编译: xelatex 两遍；交付前 Overfull 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{格点 LaMET 胶子准 PDF 流水线核心剖析\\（refer/zengch 目录）}
+\author{opencode pure}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对 \texttt{refer/zengch}（曾 C 的 GPD/PDF 拟合分析脚本集）做穷尽剖析。
+项目性质判定为\textbf{代码-物理交叉向}：28 个 Python 脚本（共 9928 行）构成一条
+完整的 LaMET（大动量有效理论）胶子准 PDF 流水线——从格点 2pt/3pt 关联函数出发，
+经 3pt/2pt 比率拟合、混合方案重整化、$\lambda$ 外推与傅里叶变换、NLO 匹配核反卷积、
+直到 $a$/$P_z$/$m_\pi$/$L$ 联合连续极限外推。核心部分共 11 项：深挖 7 项
+（数据管线中心化技巧、比率激发态污染模型、Feynman-Hellmann 变体、$Z_R$ 全局参数化、
+混合重整化与 $\lambda$ 外推、NLO 胶子匹配核、联合外推），浅析 3 项，排除 1 项。
+最深剖析结论：该目录的独特竞争力在于\textbf{重整化-匹配链的自洽闭环}——$Z_R$ 的
+混合参数化（短距微扰 $Z_{MS}$ 输入 + 长距逐 $z$ 自由参数）与短距比率方案的衔接，
+以及 NLO 胶子匹配核的主值积分离散化技巧。
+\end{abstract}
+
+\tableofcontents
+
+\section{项目定位与核心部分清单}
+
+\subsection{项目性质判定}
+
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉向（物理推导为核心载体，拟合算法为工程实现）}
+（依据: 脚本约 9900 行全部服务于 LaMET 物理量提取；物理公式直接嵌入函数体
+\eqref{eq:zms}、\eqref{eq:zr}、\eqref{eq:match}；数据与工具在集群
+\texttt{/public/group/imp/zengch/LQCD/input\_file} 与 \texttt{tool}，本机不解析——
+见 \texttt{readme.txt:1-24} 的完整流水线定义）
+\end{keybox}
+
+该目录是 \texttt{pyqcd} 主包中 \texttt{pyqcd/renorm} 逻辑的移植来源
+（仓库级 AGENTS.md 载明）。流水线按 \texttt{readme.txt} 定义共 7 步：
+
+\begin{enumerate}
+  \item \texttt{C\_pt\_load.py}：读取 2pt/3pt 关联函数，构造 Ratio 数据；
+  \item \texttt{fit\_ratio.py}：对 Ratio 作时间依赖拟合，提取基态矩阵元 $c_0(z)$；
+  \item \texttt{hB\_data.py}：归一化 + 插值到均匀 $z$ 网格，取对数；
+  \item \texttt{fit\_zr\_new.py}：拟合 $P_z=0$ 的 $h_B(z)$ 得到重整化因子 $Z_R$；
+  \item \texttt{fit\_hR\_big\_lambda.py}：混合重整化 + $\lambda$ 外推 + 傅里叶变换 $\rightarrow$ 准 PDF；
+  \item \texttt{matching.py}：NLO 匹配核反卷积 $\rightarrow$ 光锥 PDF；
+  \item \texttt{fit\_pz\_a\_extrapolatiing.py}：$a$/$P_z$/$m_\pi$/$L$ 联合外推 $\rightarrow$ 物理极限。
+\end{enumerate}
+
+\subsection{核心部分总清单（穷尽枚举）}
+
+\begin{xltabular}{\textwidth}{lllX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & 数据管线（\texttt{C\_pt\_load*.py}） & 深挖 & "均值减除-乘积"中心化技巧构造 delta 关联函数 \\
+C2 & 2pt 拟合（\texttt{fit\_2pt.py}/\texttt{fit\_E0.py}） & 浅析 & 双指数拟合 + 色散关系，方法标准 \\
+C3 & 比率拟合（\texttt{fit\_ratio.py}） & 深挖 & 激发态污染模型 + 全协方差 $\chi^2$ + 逐样本拟合 \\
+C4 & FH 变体（\texttt{fit\_ratio\_FeynmenHellman*.py}） & 深挖 & Feynman-Hellmann 定理平台提取，跳过 3pt 时间拟合 \\
+C5 & $Z_R$ 拟合（\texttt{fit\_zr*.py}） & 深挖 & 混合参数化 + 5 格点跨 ensemble 联合全局拟合 \\
+C6 & 重整化与傅里叶（\texttt{fit\_hR\_big\_lambda*.py}） & 深挖 & 短距比率+长距 $Z_R$ 混合方案、$\lambda$ 幂律-指数外推、余弦变换 \\
+C7 & NLO 匹配（\texttt{matching*.py}） & 深挖 & 胶子单圈匹配核 $g_0$--$g_3$ + 主值积分矩阵反演 \\
+C8 & 数据预处理（\texttt{hB\_data*.py}） & 浅析 & $z=0$ 归一化 + 线性插值 + 取对数 \\
+C9 & 联合外推（\texttt{fit\_pz\_a\_extrapolatiing.py}） & 深挖 & 8 项系统效应参数化的万能外推公式 \\
+C10 & TMD 唯象（\texttt{TMD\_SIDIS\_DY.py}） & 浅析 & SIDIS/DY 的 AUT 不对称度理论计算，独立分支 \\
+C11 & 画图/测试/作业脚本（\texttt{draw.py}、\texttt{test*.py}、\texttt{a\_sbatch} 等） & 排除 & 工具性与验证性代码，无独立物理/算法竞争力 \\
+\bottomrule
+\end{xltabular}
+
+三态统计：深挖 7 / 浅析 3 / 排除 1，全部候选闭环，无"未处理"。
+
+\section{核心部分深度剖析}
+
+\subsection{物理主线：LaMET 准 PDF 全链的因果结构}
+
+\begin{physbox}
+\textbf{物理图像:} 大动量有效理论（LaMET）用有限动量核子中的准分布 $\tilde{q}(x,P_z)$
+逼近轻锥 PDF $q(x)$：$P_z\to\infty$ 时准分布通过匹配核 $\mathcal{Z}(x/y)$ 反卷积到
+光锥分布。本目录是该公式的完整数值落地，每个脚本对应一个物理步骤，中间产物
+（Ratio $\to$ $c_0(z)$ $\to$ $h_B(z)$ $\to$ $h_R(\lambda)$ $\to$ $\tilde{h}(x)$
+$\to$ $xg(x)$）逐级推进，形成可独立验证的因果链。
+\end{physbox}
+
+谱分解是整条链的物理基础。2pt 关联函数的双指数形式
+（\texttt{fit\_2pt.py:19-21}）：
+\begin{equation}\label{eq:2pt}
+C^{2pt}(t) = c_4\, e^{-E_0 t}\left(1 + c_5\, e^{-\Delta E\, t}\right),\qquad
+\Delta E \equiv E_1 - E_0,
+\end{equation}
+其中 $c_5$ 编码第一激发态相对振幅。3pt 关联函数谱分解后，3pt/2pt 比率
+$R(t_i, t_{\rm sep})$ 在有限 $t_{\rm sep}$ 下含激发态污染，其参数化形式
+（\texttt{fit\_ratio.py:32-48}）为：
+\begin{equation}\label{eq:ratio}
+R(t_i,t_{\rm sep}) = c_0(z) + c_1(z)\left[e^{-\Delta E(t_{\rm sep}-t_i)} + e^{-\Delta E\, t_i}\right] + c_2(z)\, e^{-\Delta E\, t_{\rm sep}},
+\end{equation}
+即基态矩阵元 $c_0$ 加上两端单激发态项（两个对称指数项共享系数 $c_1$，来自
+$\langle N|O|k\rangle$ 与 $\langle k|O|N\rangle$ 的对合性）与两端同激发态交叉项
+$c_2$。\textbf{关键设计}：$\Delta E$ 对两个 $z$ 值共享——能隙是强子谱的性质，
+与插入算符无关；而振幅 $c_i(z)$ 逐 $z$ 独立（\texttt{fit\_ratio.py:36-42}）。
+极限校验：$t_{\rm sep}\to\infty$ 时 $R\to c_0$，基态饱和，符合定义。
+
+后续链条的关系式见 \eqref{eq:zr}--\eqref{eq:extrap} 各节。
+
+\subsection{C3 比率拟合：协方差 $\chi^2$ 与逐样本拟合}
+
+\begin{algobox}
+\textbf{核心算法:} 对每个 $z\in\{0..19\}$，以 \eqref{eq:ratio} 为模型做两步拟合：
+(1) 均值拟合得到初值（\texttt{fit\_ratio.py:198-303}），(2) 对每个 bootstrap 样本
+独立最小化（\texttt{fit\_ratio.py:65-139}），误差取样本分布标准差。
+复杂度 $O(N_{\rm sam}\times N_{\rm fit})$，$N_{\rm fit}$ 为 7 参数非线性最小化。
+\end{algobox}
+
+拟合的统计内核（\texttt{fit\_ratio.py:71-84}）：
+\begin{equation}\label{eq:chi2}
+\chi^2/N = \frac{1}{N}\left(\vec R_{\rm data} - \vec R_{\rm th}\right)^T C^{-1}\left(\vec R_{\rm data} - \vec R_{\rm th}\right),
+\end{equation}
+其中 $C^{-1}$ 为全部数据点（$z$、$t_{\rm sep}$、$t_i$ 展开）的协方差矩阵逆，由
+重采样样本直接构造（\texttt{fit\_ratio.py:54}），非对角线完全保留——不同
+$t_i$、不同 $t_{\rm sep}$ 间的强相关被显式计入，这是与"对角误差近似"类实现的
+本质区别。jackknife 误差按 $\sqrt{N_{\rm sam}-1}$ 修正（\texttt{fit\_ratio.py:163-173}），
+bootstrap 不做修正——两类重采样的统计定义差异被显式处理。
+
+\begin{mapbox}
+\textbf{映射原则:} 7 个拟合参数与物理对象一一对应：$c_0(z)\leftrightarrow$ 减缩
+矩阵元（z 空间准 PDF 输入），$c_1,c_2\leftrightarrow$ 激发态振幅，$\Delta E
+\leftrightarrow$ 第一激发能隙；\texttt{c\_inv} $\leftrightarrow$ 协方差逆；
+\texttt{ratio\_samples\_fit\_} $\leftrightarrow$ 重采样样本集合。
+\end{mapbox}
+
+\subsection{C4 Feynman-Hellmann 变体：能量谱直达矩阵元}
+
+Feynman-Hellmann 定理方法（\texttt{fit\_ratio\_FeynmenHellman\_new.py:23-67}）
+绕开 3pt 关联函数的时间结构：对哈密顿量加微扰 $H(\lambda)=H+\lambda O$，基态能量
+对 $\lambda$ 的二阶导数给出减缩矩阵元 $\partial^2 E_0/\partial\lambda^2|_{\lambda=0}
+\propto \sum_k \langle 0|O|k\rangle\langle k|O|0\rangle/(E_k-E_0)$。代码直接读取
+能量变化率数据 \texttt{delta}（来自集群端 2pt 能量谱，\texttt{:28-30}），对
+$t_{\rm sep}$ 平台作常数拟合：
+\begin{equation}\label{eq:fh}
+c_0(z) = \text{const}\quad \text{over } t_{\rm sep}\in[t_{\rm do},t_{\rm up}],
+\end{equation}
+同样使用全协方差 $\chi^2$（\texttt{:40}）与逐样本拟合。与 C3 的对照：比率法
+拟合 3pt 的 7 参数时间模型，FH 法只拟合 1 个常数（平台），统计控制不同；
+两者的交叉验证是系统误差估计的一部分。\textcolor{warn}{推断}：\texttt{delta}
+数据的生成代码位于集群 \texttt{tool} 端，本机不可解析，此为工程边界而非物理缺口。
+
+\subsection{C5 $Z_R$ 全局参数化：短距微扰 + 长距数据驱动的混合方案}
+
+非局部算符 $O(z)=\mathrm{Tr}[G^{\mu t}(z)W(z)G^{\mu t}(0)]$ 的格点重整化因子用
+全局参数化吸收。短距的微扰输入（\texttt{fit\_zr\_new.py:39-48}）：
+\begin{equation}\label{eq:zms}
+Z_{MS}(z,\mu) = 1 + \frac{\alpha_s C_A}{4\pi}\left[\frac{5}{3}\ln\!\frac{z^2\mu^2}{4e^{-2\gamma_E}} + 3\right],
+\end{equation}
+其中 $e^{-2\gamma_E}$ 是 $\overline{\mathrm{MS}}$ 减除与物理方案换算的标准常数；
+极限校验：$z\to 0$ 时对数发散（UV 行为正确），$\mu=2$ GeV、$\alpha_s(2\text{GeV})
+\approx 0.296$（\texttt{constant.py} 集群端）代入给出 $O(10\%)$ 修正量级。
+
+完整参数化（\texttt{fit\_zr\_new.py:104-115}，对应 arXiv:2510.17758 Eq.3-8）：
+\begin{align}\label{eq:zr}
+\ln Z_R &= \frac{k\, z_{\rm GeV}}{a\ln(a\Lambda_{\rm QCD})}
++ \frac{5C_A}{3b_0}\ln\!\frac{\ln(1/a\Lambda_{\rm QCD})}{\ln(\mu/\Lambda_{\rm QCD})}
++ \frac{1}{2}\ln\!\left(1+\frac{d}{\ln(a\Lambda_{\rm QCD})}\right)^2
++ \vec f\cdot\vec a + B(z),\\
+B(z) &= \begin{cases}
+\ln Z_{MS}(z,\mu) + (m_0 + m_2 a^2)\,z, & z < z_1,\\[2pt]
+g_i, & z \ge z_1,
+\end{cases}\label{eq:bz}
+\end{align}
+四项的物理角色：线性发散 $k z/(a\ln a\Lambda)$（Wilson 线自能，分母编码
+$a\Lambda_{\rm QCD}$ 依赖）；RG 跑动项 $5C_A/3b_0$（胶子算符异常维度组合，把
+$a$ 尺度跑到 $\mu$）；$d$ 项为对数修整；$\vec f\cdot\vec a$ 为格距幂修正。
+$B(z)$ 是\textbf{混合关键}：短距（$z<z_1\approx0.301$ fm）用微扰 $Z_{MS}$ 加
+质量修正 $m_0 z$，长距逐 $z$ 用自由参数 $g_i$ 由数据决定（\texttt{fit\_zr\_new.py:84-99}）。
+极限校验：$a\to0$ 时 $\ln Z_R\to B(z)$，回到连续极限的微扰+数据形式。
+
+\textbf{跨格点联合拟合}（\texttt{fit\_zr\_new.py:226-246}）：5 个 ensemble
+（$L24x72$--$L48x144$，$a=0.105$--$0.0519$ fm，\texttt{hB\_data\_FeynmenHellman.py:23-24}）
+共享全局参数 $(k,d,m_0,m_2,\Lambda_{\rm QCD},g_1..g_{14},f_1,f_2)$，逐 ensemble
+仅格距 $a$ 不同，$\chi^2/{\rm dof}$ 全局最小化（\texttt{:243-246}）；逐样本拟合
+（\texttt{:352-419}）传播统计误差到下游。$g_i$ 的个数（14）对应 $z>z_1$ 的
+插值网格点数——参数化自由度与数据网格严格匹配。
+
+\subsection{C6 混合重整化 + $\lambda$ 外推 + 余弦傅里叶}
+
+\begin{physbox}
+\textbf{物理图像:} 短距比率自重整化（z 小，微扰安全）与长距 $Z_R$ 除重
+（z 大，非微扰主导）在 $z_s$ 处拼接，用一个匹配因子保证连续性；
+重整化后的减缩矩阵元 $h_R(\lambda)$（$\lambda=zP_z$）在大 $\lambda$ 用拟合形式
+外推后做余弦变换，得到动量空间准 PDF。
+\end{physbox}
+
+混合重整化拼接（\texttt{fit\_hR\_big\_lambda.py:149-161}）：
+\begin{equation}\label{eq:hybrid}
+h_R(z) = \begin{cases}
+\tilde h(z)/\tilde h(0), & z < z_s,\\[2pt]
+\left[\tilde h(z)/Z_R(z)\right]\cdot \eta_s, & z \ge z_s,
+\end{cases}\qquad
+\eta_s \equiv Z_R(z_s)/\tilde h(0),
+\end{equation}
+连续性校验：$h_R(z_s^+) = \tilde h(z_s)/Z_R(z_s)\cdot Z_R(z_s)/\tilde h(0)
+= h_R(z_s^-)$，拼接点无缝。\textcolor{warn}{未验证}：$z_s=0.3$ fm 的选择依据
+（$z_s$ 同时出现在 \texttt{matching.py:64} 的匹配核 Si 项中）未在本目录文档化，
+属研究选择。
+
+$\lambda$ 外推形式（\texttt{fit\_hR\_big\_lambda.py:178-182}）：
+\begin{equation}\label{eq:lamext}
+h_R(\lambda) = l_1\, \lambda^{-a_1} e^{-\lambda/\lambda_0},\qquad \lambda\in[\lambda_{\rm do},\lambda_{\rm up}],
+\end{equation}
+幂律 $\times$ 指数衰减：幂律吸收 OPE 幂次修正，指数压制大 $\lambda$ 贡献；
+极限校验：$\lambda\to\infty$ 指数压制成 0，$\lambda<0$ 不适用（数据区
+\texttt{interp1d} 线性插值，\texttt{fit\_hR\_big\_lambda.py:416-432}）。
+
+余弦傅里叶变换（\texttt{fit\_hR\_big\_lambda.py:434-459}）：对偶函数
+$\tilde h(-\lambda)=\tilde h(\lambda)$，动量空间准 PDF
+\begin{equation}\label{eq:ft}
+\tilde h(x) = \frac{1}{\pi}\int_0^\infty\!\! d\lambda\, h_R(\lambda)\cos(x\lambda)
+\;\approx\; \frac{\Delta\lambda}{\pi}\sum_{\lambda} h_R(\lambda)\cos(x\lambda),
+\end{equation}
+数值上 $\lambda\in[0,300]$、1600 个 bin、$x\in[-2,2]$（\texttt{:436-455}）。
+因子核对：连续傅里叶 $\frac{P_z}{2\pi}\int e^{-ixP_z z}dz =
+\frac{1}{2\pi}\int e^{-ix\lambda}d\lambda$，偶函数约化为 $\frac{1}{\pi}\int_0^\infty
+\cos(x\lambda)$，与代码的 $2\Delta\lambda/(2\pi)= \Delta\lambda/\pi$ 一致。
+
+\subsection{C7 NLO 胶子匹配核：主值积分与矩阵反演}
+
+准 PDF 与光锥 PDF 的 NLO 匹配方程（\texttt{matching.py:122-126}）：
+\begin{equation}\label{eq:match}
+\tilde h(x,P_z) = \int_{-\infty}^{\infty} \frac{dy}{y}\,\mathcal{Z}\!\left(\frac{x}{y}, yP_z\right) f(y)
++ O\!\left(\frac{\Lambda_{\rm QCD}^2}{P_z^2}\right),\qquad
+\mathcal{Z}(\xi) = \delta(1-\xi) + \frac{\alpha_s C_A}{2\pi}\, g(\xi),
+\end{equation}
+胶子单圈匹配核 $g(\xi)$ 分区域定义（\texttt{matching.py:86-112}，
+与 \texttt{matching\_cc.py:63-71} 逐项一致——两份独立实现互为核验）：
+\begin{align}
+g_1(\xi) &= -2\frac{(1-\xi+\xi^2)^2}{1-\xi}\ln\frac{\xi}{\xi-1}
+- \frac{11-28\xi+18\xi^2-12\xi^3}{6(1-\xi)}, \label{eq:g1}\\[2pt]
+g_2(\xi,y) &= 2\frac{(1-\xi+\xi^2)^2}{1-\xi}\left[-\ln\frac{\mu^2}{4y^2P_z^2}
++\ln\big(\xi(1-\xi)\big)\right]
+- \frac{15-56\xi+102\xi^2-96\xi^3+48\xi^4}{6(1-\xi)}, \label{eq:g2}\\[2pt]
+g_3(\xi) &= 2\frac{(1-\xi+\xi^2)^2}{1-\xi}\ln\frac{\xi}{\xi-1}
++ \frac{11-28\xi+18\xi^2-12\xi^3}{6(1-\xi)}, \label{eq:g3}\\[2pt]
+g_0(\xi,y) &= \frac{5}{6}\left[-\frac{1}{|1-\xi|}
++ \frac{2\,\mathrm{Si}\big((1-\xi)|y|\lambda_s\big)}{\pi(1-\xi)}\right].\label{eq:g0}
+\end{align}
+其中 $\lambda_s = z_s P_z$，$z_s = 0.3$ fm 为短距拼接点。
+$\xi\to1$ 处 $\ln[\xi/(\xi-1)]$ 发散，需主值（PV）处理；$g_0$ 的 Si 项来自
+短距比率减除（与 \eqref{eq:hybrid} 拼接点同源），$g_2$ 的
+$-\ln(\mu^2/4y^2P_z^2)$ 是尺度依赖项。极限校验：$\xi\to0$ 时 $g_1,g_3$ 有限，
+$\xi\to1$ 处 $g_0$ 的 $1/|1-\xi|$ 奇点被 Si 项对数压制定域。
+
+离散化与反卷积（\texttt{matching.py:119-126}）：
+\begin{equation}\label{eq:mat}
+\mathcal{Z}_{ij} = \delta_{ij} + C_{ij},\qquad
+C_{ij} = \Delta x\frac{x_i}{|x_i|}\frac{\alpha_s C_A}{2\pi}\left[
+\frac{g_{ij}}{y_j} - \delta_{ij}\, y_i\sum_k \frac{g_{ik}}{y_k^2}\right],
+\qquad f = \mathcal{Z}^{-1}\tilde h,
+\end{equation}
+对角项减去 $\sum_k g_{ik}/y_k^2$ 即离散主值（去掉 $y=x$ 奇点的贡献）；
+$\frac{x_i}{|x_i|}$ 是 $\xi$ 分区的符号处理（$\xi<0$ 区域取负号）。
+矩阵求逆反卷积把匹配方程倒过来解出 $f$。\texttt{matching\_MPI.py} 为 MPI
+并行版本（\texttt{matching\_MPI.py} 全文 173 行），同一内核。
+
+\subsection{C9 联合外推：8 项系统效应参数化}
+
+外推公式（\texttt{fit\_pz\_a\_extrapolatiing.py:32-38}）：
+\begin{equation}\label{eq:extrap}
+\begin{split}
+xg(x;\,a,P_z,m_\pi,L) ={}& xg_0 + a^2 f_x + a^4 l_x + a^2 P_z^2 h_x + \frac{d_x}{P_z^2}
++ \frac{b_x}{P_z} \\
+&+ k_x\left(m_\pi^2 - m_{\pi,\rm phy}^2\right) + c_x\, e^{-L a m_\pi},
+\end{split}
+\end{equation}
+八项各对应一种系统效应：$xg_0$=物理极限结果；$a^2,a^4$ 项=格距修正；
+$a^2P_z^2$ 项=格距-动量交叉修正；$d_x/P_z^2$ 与 $b_x/P_z$ 项=有限动量
+（LaMET 截断）修正；$k_x$ 项=手征外推到物理 $\pi$ 质量；$c_x e^{-La m_\pi}$
+项=有限体积指数修正。极限校验：$a\to0,\,P_z\to\infty,\,m_\pi\to m_{\pi,\rm phy},
+\,L\to\infty$ 时 $xg\to xg_0$。
+拟合实现：8 个 ensemble $\times$ 多 $P_z$ 混合数据，对每个 $x$ 点独立拟合、
+逐 bootstrap 样本循环、全协方差 $\chi^2$（\texttt{:144-199}），支持原始数据
+与 CC 协变组合数据自动识别（\texttt{:40-73}）。缺省的 $l_x,h_x,b_x,c_x$ 项
+固定为零（\texttt{:185-190}），是当前工作流的选择性系统误差评估方式。
+
+\subsection{C1 数据管线：均值减除-乘积中心化技巧}
+
+\begin{algobox}
+\textbf{核心算法:} 对 3pt 数据沿 $t_i$ 维减均值、2pt 数据沿 $t_{\rm sink}$ 维减均值
+（\texttt{C\_pt\_load.py:226-249}），逐元素乘积后沿 $t_{\rm source}$ 维平均
+（\texttt{:251-271}），构造"涨落-涨落"关联。全向量化（NumPy 广播），
+内存 $O(N_{\rm conf}\times N_t^3)$。
+\end{algobox}
+
+物理动机：蒸馏数据中 2pt/3pt 关联的常数部分（与时间无关的源点贡献/零模）
+会掩盖时间结构；减均值后取乘积，等价于计算涨落间的关联，保留纯时间依赖部分
+并提升基态信噪比。时间平移由模 $N_t$ 索引完成（\texttt{:154-168}）：
+$C^{2pt}_{\delta}(i,j) = C^{2pt}(i,(i+j)\bmod N_t)$ 把源位置依赖折叠进
+$\Delta t$，从而支持"相对时间"分析框架。极限校验：$\langle\delta C\rangle=0$
+时乘积关联为零，符合统计定义。
+
+\section{独特性与竞争力评估}
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+$Z_R$ 混合参数化（短距微扰+长距逐 $z$ 自由参数） & 纯微扰 $Z_{MS}$ 或纯数据比率 & 短距可信、长距灵活，5 格点联合拟合
+\texttt{\nolinkurl{fit_zr_new.py:104-115}}；对应 arXiv:2510.17758 \\
+\hline
+主值积分离散化 + 矩阵反演匹配 & 朴素梯形积分配对 & 对角 PV 减除 + 逐项符号分区
+\eqref{eq:mat}；两份独立实现逐项一致（\texttt{\nolinkurl{matching.py:86-112}} vs
+\texttt{\nolinkurl{matching_cc.py:63-71}}） \\
+\hline
+全协方差 $\chi^2$ + 逐样本拟合贯穿全链 & 对角误差近似 & 数据点间相关被显式计入
+\eqref{eq:chi2}；bootstrap/jackknife 误差修正区分处理 \\
+\hline
+$\Delta E$ 跨 $z$ 共享的激发态模型 & 逐 $z$ 独立拟合 & 能隙是谱性质而非算符性质，
+参数数从 14 降到 7，稳定高 $z$ 拟合（\texttt{\nolinkurl{fit_ratio.py:36-42}}） \\
+\hline
+混合方案拼接点 $z_s$ 同时进入重整化与匹配核 & 单一重整化方案 & 短距减除在两个环节自洽
+（\eqref{eq:hybrid} 与 \eqref{eq:g0} 同源 $z_s$） \\
+\bottomrule
+\end{tabularx}
+\caption{独特性评估（数据来源: 源码对照 + 公式推导）}
+\end{table}
+
+\section{关键片段与公式}
+
+比率模型（\texttt{fit\_ratio.py:32-48}，见 \eqref{eq:ratio}）：
+\lstinputlisting[firstline=32,lastline=48]{/root/PyQCD/refer/zengch/fit_ratio.py}
+
+协方差 $\chi^2$ 拟合（\texttt{fit\_ratio.py:71-91}，见 \eqref{eq:chi2}）：
+\lstinputlisting[firstline=71,lastline=91]{/root/PyQCD/refer/zengch/fit_ratio.py}
+
+$Z_{MS}$ 与 $B(z)$ 混合输入（\texttt{fit\_zr\_new.py:39-48,84-99}，见
+\eqref{eq:zms}、\eqref{eq:bz}）：
+\lstinputlisting[firstline=39,lastline=48]{/root/PyQCD/refer/zengch/fit_zr_new.py}
+\lstinputlisting[firstline=84,lastline=99]{/root/PyQCD/refer/zengch/fit_zr_new.py}
+
+混合重整化拼接（\texttt{fit\_hR\_big\_lambda.py:137-161}，见 \eqref{eq:hybrid}）：
+\lstinputlisting[firstline=137,lastline=161]{/root/PyQCD/refer/zengch/fit_hR_big_lambda.py}
+
+$\lambda$ 外推形式与余弦傅里叶（\texttt{fit\_hR\_big\_lambda.py:178-182,434-459}，
+见 \eqref{eq:lamext}、\eqref{eq:ft}）：
+\lstinputlisting[firstline=178,lastline=182]{/root/PyQCD/refer/zengch/fit_hR_big_lambda.py}
+\lstinputlisting[firstline=434,lastline=459]{/root/PyQCD/refer/zengch/fit_hR_big_lambda.py}
+
+NLO 匹配核与反卷积矩阵（\texttt{matching.py:86-112,119-126}，见
+\eqref{eq:g1}--\eqref{eq:mat}）：
+\lstinputlisting[firstline=86,lastline=112]{/root/PyQCD/refer/zengch/matching.py}
+\lstinputlisting[firstline=119,lastline=126]{/root/PyQCD/refer/zengch/matching.py}
+
+联合外推公式（\texttt{fit\_pz\_a\_extrapolatiing.py:32-38}，见 \eqref{eq:extrap}）：
+\lstinputlisting[firstline=32,lastline=38]{/root/PyQCD/refer/zengch/fit_pz_a_extrapolatiing.py}
+
+数据管线中心化（\texttt{C\_pt\_load.py:226-243}）：
+\lstinputlisting[firstline=226,lastline=243]{/root/PyQCD/refer/zengch/C_pt_load.py}
+
+\section{参考源清单}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{readme.txt:1-24}} & 仓库 & 流水线 7 步定义与产物说明 \\
+\texttt{\nolinkurl{fit_ratio.py:32-48}} & 仓库 & 比率激发态污染模型 \eqref{eq:ratio} \\
+\texttt{\nolinkurl{fit_ratio.py:65-196}} & 仓库 & 协方差拟合与逐样本流程 \\
+\texttt{\nolinkurl{fit_ratio_FeynmenHellman_new.py:23-72}} & 仓库 & FH 平台提取 \eqref{eq:fh} \\
+\texttt{\nolinkurl{fit_zr_new.py:39-48}} & 仓库 & $Z_{MS}$ 单圈公式 \eqref{eq:zms} \\
+\texttt{\nolinkurl{fit_zr_new.py:84-115}} & 仓库 & $B(z)$ 与 $\ln Z_R$ 参数化 \eqref{eq:zr} \\
+\texttt{\nolinkurl{fit_zr_new.py:226-246}} & 仓库 & 跨格点联合 $\chi^2$ \\
+\texttt{\nolinkurl{fit_hR_big_lambda.py:137-161}} & 仓库 & 混合重整化拼接 \eqref{eq:hybrid} \\
+\texttt{\nolinkurl{fit_hR_big_lambda.py:178-182}} & 仓库 & $\lambda$ 外推形式 \eqref{eq:lamext} \\
+\texttt{\nolinkurl{fit_hR_big_lambda.py:416-459}} & 仓库 & 插值外推与余弦变换 \eqref{eq:ft} \\
+\texttt{\nolinkurl{matching.py:86-112}} & 仓库 & 胶子匹配核 $g_0$--$g_3$ \eqref{eq:g1}--\eqref{eq:g0} \\
+\texttt{\nolinkurl{matching.py:119-126}} & 仓库 & 离散主值矩阵 \eqref{eq:mat} \\
+\texttt{\nolinkurl{matching_cc.py:53-71}} & 仓库 & 匹配核独立实现（互为核验） \\
+\texttt{\nolinkurl{fit_pz_a_extrapolatiing.py:32-38}} & 仓库 & 联合外推 \eqref{eq:extrap} \\
+\texttt{\nolinkurl{C_pt_load.py:154-271}} & 仓库 & 中心化与 delta 关联构造 \\
+\texttt{\nolinkurl{hB_data_FeynmenHellman.py:19-29}} & 仓库 & $a$、$N_l$、$m_\pi$ 参数表 \\
+\texttt{\nolinkurl{fit_2pt.py:19-21}} & 仓库 & 2pt 双指数模型 \eqref{eq:2pt} \\
+\texttt{\nolinkurl{fit_E0.py:25-27}} & 仓库 & 色散关系拟合（$m,k_2,k_3$） \\
+\texttt{\nolinkurl{TMD_SIDIS_DY.py:125-242}} & 仓库 & Sivers TMD 与 AUT 理论计算 \\
+\bottomrule
+\end{xltabular}
+
+\section{结论}
+
+\begin{conclbox}
+穷尽剖析完成：核心部分 11 项（深挖 7 / 浅析 3 / 排除 1），闭环无遗漏。
+该目录的最强竞争力是\textbf{LaMET 胶子准 PDF 提取链的自洽闭环}：(1)
+$Z_R$ 混合参数化（短距微扰 $Z_{MS}$ 输入 + 长距逐 $z$ 数据参数，5 格点联合
+拟合）构成重整化的核心竞争力；(2) 混合方案拼接点 $z_s=0.3$ fm 同时进入
+重整化拼接与 NLO 匹配核的 Si 减除项，短距减除自洽；(3) NLO 胶子匹配核
+$g_0$--$g_3$ 以离散主值矩阵反演实现，且 \texttt{matching.py} 与
+\texttt{matching\_cc.py} 两份实现逐项一致，构成交叉核验；(4) 全协方差
+$\chi^2$ + 逐样本拟合贯穿全链，统计处理一致。该目录是 \texttt{pyqcd/renorm}
+的移植来源，其公式与主包自重整化（\texttt{arXiv:2510.17758} Eq.3-8）、
+NLO 匹配核 $g_0$..$g_3$ 一一对应。
+\end{conclbox}
+
+\begin{warnbox}
+局限与未验证项：(1) \texttt{delta}（FH 能量变化率）与 \texttt{tool.py}
+（bootstrap/jackknife/协方差工具）位于集群 \texttt{/public/...}，本机不可
+解析，相关结论为 \textcolor{warn}{推断}级；(2) 拼接点 $z_s=0.3$ fm 的选择
+依据未文档化；(3) \eqref{eq:zr} 的 $k z/(a\ln a\Lambda)$ 线性发散项的
+$a\ln a\Lambda$ 分母形式与文献（arXiv:2510.17758）Eq.3-8 的对应关系为
+\textcolor{warn}{推断}，未逐项核对原文；(4) \texttt{fit\_zr\_a2all.py}、
+\texttt{fit\_hR\_big\_lambda\_new/test.py} 等为同公式的 $a^2$ 外推/测试变体，
+归入对应深挖项未单独展开；(5) 全部数值结果依赖集群数据，本报告只核验公式
+与代码结构，不涉及数值正确性。
+\end{warnbox}
+
+\end{document}

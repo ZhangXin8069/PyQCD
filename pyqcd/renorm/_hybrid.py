@@ -98,10 +98,13 @@ def fit_hR_lambda(par_ini, lambda_range, lamb, hR_data):
     return res.x
 
 
-def hR_lambda(lambda_, pz_gev, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
+def hR_lambda(lambda_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
               zs, z_data, hR_pz, hR_0, zr_fit, conf):
-    """插值 + 外推拼接的 hR(λ)：λ ≤ λ_extra 用插值，否则用外推尾巴。"""
-    lambda_data, hR_data = hR_z_Pz(z_data, pz_gev, hR_pz, hR_0, zs, zr_fit, conf)
+    """插值 + 外推拼接的 hR(λ)：λ ≤ λ_extra 用插值，否则用外推尾巴。
+
+    Pz_: 格点单位动量（内部经 pz_to_gev 转换为 GeV，与 zengch 原版一致）。
+    """
+    lambda_data, hR_data = hR_z_Pz(z_data, Pz_, hR_pz, hR_0, zs, zr_fit, conf)
 
     from scipy.interpolate import interp1d
     interp = interp1d(lambda_data, hR_data, kind='linear', axis=0,
@@ -113,17 +116,18 @@ def hR_lambda(lambda_, pz_gev, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
     return res
 
 
-def hR_x(x_, pz_gev, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
+def hR_x(x_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
          zs, z_data, hR_pz, hR_0, zr_fit, conf):
     """傅里叶变换 → 准 PDF：hR(x) = (2/(2π))·∫dλ hR(λ)·cos(x·λ)。
 
-    x_ 必须为向量；用快速余弦傅里叶（scipy 数值积分）。"""
+    x_ 必须为向量；用快速余弦傅里叶（scipy 数值积分）。
+    Pz_: 格点单位动量（内部经 pz_to_gev 转换为 GeV，与 zengch 原版一致）。"""
     lambda_max = 60.0   # 积分截断（足够大以覆盖外推尾巴）
     n = 4096
     lam = np.linspace(0.0, lambda_max, n)
     dlam = lam[1] - lam[0]
 
-    hr = hR_lambda(lam, pz_gev, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
+    hr = hR_lambda(lam, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
                    zs, z_data, hR_pz, hR_0, zr_fit, conf)
     if hr.ndim > 1:
         # 逐样本余弦变换

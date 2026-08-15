@@ -23,12 +23,16 @@ import numpy as np
 
 from ..tools._backend import get_backend
 
-_asnumpy = getattr(get_backend(), 'asnumpy', None)
-
 
 def _to_cpu(x):
-    if _asnumpy is not None:
-        return _asnumpy(x)
+    """后端无关的 GPU→CPU 转换（cupy 禁止 np.asarray 隐式转换，须用 asnumpy/get）。"""
+    b = get_backend()
+    asnumpy = getattr(b, 'asnumpy', None)
+    if asnumpy is not None:
+        return asnumpy(x)
+    getter = getattr(x, 'get', None)
+    if getter is not None:
+        return getter()
     return np.asarray(x)
 
 

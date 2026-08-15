@@ -1,0 +1,586 @@
+% ============================================================
+% pure 报告 — lqcddb 蒸馏收缩框架核心部分穷尽剖析
+% 编译: xelatex 两遍；交付前 Overfull 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+% ===== 色板 =====
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{lqcddb 蒸馏收缩框架核心部分穷尽剖析}
+\author{opencode pure}
+\date{2026 年 8 月 15 日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对 \texttt{refer/sush} 下的 \texttt{lqcddb} 蒸馏（distillation）关联函数工具包
+进行穷尽式核心剖析。项目性质判定为 \textcolor{phys}{代码-物理交叉向}：
+核心是"从强子算符字符串自动生成 Wick 缩并图并执行张量收缩"的物理算法链，
+每个代码符号与格点 QCD 物理对象一一对应。共枚举 12 个核心部分候选
+（\textcolor{algo}{5 深挖 / 6 浅析 / 1 排除}），深挖对象为：自动 Wick 收缩引擎、
+等价图识别（并查集 + BFS 符号传播）、动态收缩工作流（三注册表 + 计划缓存）、
+Roofline 带宽分析器、缓存 einsum 收缩入口。最强竞争力：以 \textcolor{map}{算符
+字符串 → einsum 表达式} 的全自动降维，把 Wick 收缩这一格点 QCD 传统手工易错环节
+化为纯符号算法，配合等价图归并与缓存缩并将计算量降至最低。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+
+\subsection{项目性质判定}
+
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉向}。
+依据（实测）：\texttt{lqcddb/src} 下 Python 源码 11669 行，其中
+\texttt{contraction/} 核心收缩机制 4147 行（占 35\%），\texttt{base/} 基础层
+1900 行，\texttt{analyse/} 统计分析 914 行，\texttt{eigvectors/} 顶点与本征矢
+1090 行；代码主体即物理计算（Wick 收缩、蒸馏顶点、传播子缩并），
+且算符字符串、缩并指标、顶点对象均直接对应物理量——符号层与物理层
+高度耦合，无独立公式文档（\texttt{physics.md} 为算符库/参数表，非推导文档）。
+\end{keybox}
+
+\subsection{项目背景与两套代码}
+
+\texttt{refer/sush} 下并存两套代码：顶层扁平模块 \texttt{function\_contraction/}
+（5892 行，原始版本）与正式打包的 \texttt{lqcddb/}（\texttt{pip install -e .}，
+积极开发中）。两者暴露相同核心 API（\texttt{wick\_contraction}、
+\texttt{Jackknife}、\texttt{meff}、\texttt{set\_backend}），
+\texttt{lqcddb} 为前者重构版：拆分模块、增加懒加载、缓存缩并、
+动态收缩注册表与带宽顾问。本报告以 \textcolor{phys}{lqcddb} 为主体剖析，
+\color{accent} 旧模块仅作对比基准与排除项处理。
+
+\subsection{核心部分总清单（穷尽枚举）}
+
+\begin{xltabular}{\textwidth}{lllX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & \nolinkurl{autowick.py} 自动 Wick 收缩引擎 & 深挖 &
+从强子算符字符串自动穷举所有合法缩并图、Fermi 符号、VVV/VDV 顶点与
+einsum 指标串 \\
+C2 & \nolinkurl{autowick.py} 等价图识别 & 深挖 &
+并查集 + BFS 符号传播识别等价缩并图，消除冗余计算并正确累计相对符号 \\
+C3 & \nolinkurl{dynamic.py} 动态收缩工作流 & 深挖 &
+Peram/V/Gamma 三注册表 + 收缩计划缓存 + 按需计算的高层工作流 \\
+C4 & \nolinkurl{contractadviser.py} Roofline 带宽分析 & 深挖 &
+带宽感知的收缩分析器（只分析不计算），给出切分自由指标的建议 \\
+C5 & \nolinkurl{base_functions.py} 缓存 einsum & 深挖 &
+opt\_einsum 表达式缓存 + 多种策略自动择优 + 零内存形状校验 \\
+C6 & \nolinkurl{analyse.py} 统计分析 & 浅析 &
+\nolinkurl{Jackknife/Bootstrap/meff/GEVP/3pt-2pt} 比值，向量化协方差构建 \\
+C7 & \nolinkurl{eigvectors/vertex.py} 顶点函数 & 浅析 &
+VdV/VVV 动量投影、带规范链接的 VdV、$\Omega$ 权重张量 \\
+C8 & \nolinkurl{baroperator.py} 算符共轭 & 浅析 &
+强子算符厄米共轭（自动识别介子/重子结构、$\gamma$ 链 H/T/C 变换） \\
+C9 & \nolinkurl{__init__.py} 懒加载 API & 浅析 &
+\nolinkurl{__getattr__} 按需导入具体模块，避免加载重依赖 \\
+C10 & \nolinkurl{mpi_init.py} MPI 并行 & 浅析 &
+时间片轮询分配 + numpy/cupy 混合 MPI 数据搬运 \\
+C11 & \nolinkurl{constant/gamma_matrix.py} DR 基 $\gamma$ 矩阵 & 浅析 &
+DeGrand-Rossi 基 18 种矩阵与动量到 $\gamma$ 的 Levi-Civita 映射 \\
+C12 & \nolinkurl{function_contraction/} 旧扁平模块 & 排除 &
+被 lqcddb 取代（同 API 重构版），仅作对比基准 \\
+\bottomrule
+\end{xltabular}
+
+穷尽性说明：候选按 \texttt{lqcddb/src} 全部 9 个模块 + 旧模块枚举，
+三态填满无"未处理"。C12 排除理由：为旧版（\texttt{corr\_wick.py} 等），
+核心逻辑已在 lqcddb 中重构升级，直接剖析新版即为对旧版的穷尽。
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+\subsection{C1 自动 Wick 收缩引擎（\texttt{wick\_contraction}）}
+
+\begin{physbox}
+\textbf{物理图像:} 给定 s/source/current 三组强子算符字符串（如
+\texttt{['|','u','C*gamma\_5','d','u','|']} 表示质子），Wick 定理自动
+将场算符乘积按"同味夸克--反夸克配对"展开为所有可能的缩并图，每图贡献
+一个 Fermi 符号 $(-1)^{N_{inv}}$ 与一个蒸馏收缩表达式（peram $\times$
+$\gamma$ $\times$ 顶点，用 einsum 缩并）。对应公式 \eqref{eq:wick}。
+\end{physbox}
+
+\begin{equation}\label{eq:wick}
+\langle \mathcal{O}_{\rm sink}(t) J(t') \mathcal{O}^{\dagger}_{\rm src}(0) \rangle
+= \sum_{\{\rm pairings\}} \varepsilon_{\pi}\, \mathrm{Tr}[\gamma \cdot \tau \cdot \gamma \cdots]
+\times \prod_{\rm vertex} V(p)
+\end{equation}
+
+算法原理（输入→输出→步骤）：
+
+\begin{enumerate}
+\item \textbf{输入解析}（autowick.py:239-254）：拼接三组算符，数字元素
+（\texttt{int/complex/float}）作为全局系数提出；类型检查。
+\item \textbf{通配符展开}（autowick.py:258-293）：\texttt{'q'} 展开为六味、
+\texttt{'l'} 展开为轻味 u/d，笛卡尔积生成所有味替换方案；味不平衡的替换
+直接跳过（autowick.py:307-314）。
+\item \textbf{缩并图穷举}（\texttt{generate\_valid\_contractions}，
+autowick.py:175-224）：按味分组，每味内夸克与反夸克做所有一一配对
+（$n_q!$ 种排列），跨味取笛卡尔积，得全部合法缩并图。
+\item \textbf{Fermi 符号}（\texttt{compute\_fermion\_sign}，autowick.py:156-173）：
+对每对 $(q,\bar q)$ 按算符字符串位置排序后计算逆序数，符号为
+$(-1)^{\text{inv}}$。
+\item \textbf{顶点分配}（\texttt{creat\_sink\_source}，autowick.py:67-99）：
+按 \texttt{'|'} 分隔符划分时间区间，区间内 3 个夸克 → VVV（重子顶点）、
+2 个 → VDV（介子顶点），顶点指标字母自动取对应夸克收缩标签。
+\item \textbf{结果生成}（autowick.py:406-441）：每图输出 einsum 指标串
+\texttt{result\_indx}（如 \texttt{'ab,cd,ef->gh'}）、组件名
+\texttt{result\_name}、Fermi 符号 \texttt{result\_sign}（乘全局系数）。
+\end{enumerate}
+
+\begin{algobox}
+\textbf{核心算法:} 按味分组的完美匹配枚举（\texttt{itertools.permutations}
++ 笛卡尔积）；复杂度为 $\prod_{\rm flavor} n_f!$ 个缩并图，
+对角动量 $L$ 的算符串等价于所有指标配对，图上顶点数 $\le 2L$；
+Fermi 符号用逆序数 $O(k^2)$（$k$ 为场数）。对典型质子 2pt（3 对缩并）
+为 3! 个匹配 $\times$ 2 组 = 2 图（direct + exchange），与
+README.md:132-139 所述一致。\textcolor{warn}{未验证}：最大算符规模
+（多强子 4pt）的实测枚举耗时未做基准。
+\end{algobox}
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查，无孤儿符号。
+\end{mapbox}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{'u'},\texttt{'d'},\texttt{'s'}... & 夸克味场 & 六味夸克；
+\texttt{\nolinkurl{lqcddb/src/lqcddb/contraction/autowick.py:229}} \\
+\texttt{'u\^{}d'} & 反夸克 & 反夸克标记；\texttt{autowick.py:88} \\
+\texttt{'|'} & 强子分隔符 & 划分时间区间与强子边界；
+\texttt{\nolinkurl{autowick.py:136-144}} \\
+\texttt{gamma\_5} 等 & $\gamma$ 矩阵插入 & 狄拉克空间插入；
+\texttt{\nolinkurl{autowick.py:332-333}} \\
+\texttt{contraction\_index} & 收缩指标 & einsum 指标对（ab, cd, ...）；
+\texttt{\nolinkurl{autowick.py:232-233}} \\
+\texttt{VVV\_i} & 重子顶点 & Levi-Civita 颜色缩并的三夸克顶点；
+\texttt{\nolinkurl{autowick.py:93-95}} \\
+\texttt{VDV\_i} & 介子顶点 & 两夸克顶点；
+\texttt{\nolinkurl{autowick.py:96-98}} \\
+\texttt{peram} & 蒸馏传播子 & 特征空间传播子；
+\texttt{\nolinkurl{autowick.py:406-416}} \\
+\texttt{result\_sign} & Fermi 符号 & Wick 符号 $\times$ 全局系数；
+\texttt{\nolinkurl{autowick.py:417-418}} \\
+\texttt{tsink/tsrc/tcur} & 时间片 & sink/source/current 时间标签；
+\texttt{\nolinkurl{autowick.py:357-374}} \\
+\bottomrule
+\end{xltabular}
+
+\textbf{独特竞争力:} 传统格点 QCD 中 Wick 收缩靠手工逐图推导（多图时极易
+漏图/符号错），本实现将整个流程符号化自动化，并直接输出可执行的
+einsum 字符串，与物理表达式一一对应，杜绝手工缩并错误。
+
+\subsection{C2 等价图识别（\texttt{identify\_equivalent\_diagrams}）}
+
+\begin{physbox}
+\textbf{物理图像:} 同一关联函数中，多个 Wick 缩并图可能仅因
+$\gamma$ 矩阵插入位置的交换而等价（如 $\gamma_5$ 在 u/d 间交换），
+物理结果相同，应归并为单一计算，符号按 $\gamma$ 转置性质传播。
+对应公式 \eqref{eq:equiv}。
+\end{physbox}
+
+\begin{equation}\label{eq:equiv}
+c_{\rm neighbor} = c_{\rm cur} \times \frac{rs_n}{rs_{\rm cur}}
+\times \frac{vs_n[v_n]}{vs_{\rm cur}[v_{\rm cur}]}
+\qquad
+\text{（跨 variant 图连通边传播符号）}
+\end{equation}
+
+算法原理（autowick.py:454-631）：
+
+\begin{enumerate}
+\item \textbf{variant 生成}（\texttt{generate\_all\_swaps}，autowick.py:513-535）：
+对每个 $\gamma$ 插入位置，构造"交换该 $\gamma$ 两侧夸克"的 $2^n$ 种
+交换组合，得到同一图的所有变体（$\gamma$ 交换对应
+$\text{swap\_sign}(G) = -T_{\rm sign}(G)$，autowick.py:546-550）。
+\item \textbf{并查集连通}（autowick.py:467-511）：以变体（规范化排序后的
+peram 条目列表）为键建立哈希，相同键的图合并——变体共享即等价连通。
+\item \textbf{BFS 符号传播}（autowick.py:588-629）：在变体共享图上从代表元
+BFS，沿边按 \eqref{eq:equiv} 传播相对系数，正确处理传递性连通
+（A--B--C 中 A 与 C 不直接共享变体的情况）。
+\end{enumerate}
+
+\begin{algobox}
+\textbf{核心算法:} 并查集（路径压缩）+ BFS（\texttt{collections.deque}）；
+变体数为 $2^{n_\gamma}$，n\_gamma 为 $\gamma$ 插入数；图键哈希为
+$\mathcal{O}(L)$（$L$ 为 peram 条目长度）。\textcolor{phys}{推断}：
+相比两两比对的全配对 $O(N^2)$ 等价判定，本实现按变体键一次哈希即得
+连通分量，对 $N$ 个图 $V$ 个变体为 $O(NV)$ 量级，优势显著。
+\end{algobox}
+
+\textbf{独特竞争力:} 等价图归并直接减少后续 einsum 计算量
+（\nolinkurl{run_wick_analysis} 的 \nolinkurl{use_equivalence=True} 时
+每等价类只计算一次并加权累加，\nolinkurl{dynamic.py:1135-1139} 中
+\nolinkurl{total_coeff} 求和为 0 的条目直接跳过），是性能优化与
+符号正确性双重保证。
+
+\subsection{C3 动态收缩工作流（\texttt{dynamic.py}）}
+
+\begin{physbox}
+\textbf{物理图像:} 高层工作流把 Wick 分析（C1/C2）与数值收缩解耦：
+先注册 peram / 顶点 / $\gamma$ 数据到三个注册表，再生成"收缩计划"
+（plan），最后按需逐图执行 einsum。对应公式 \eqref{eq:dynamic}。
+\end{physbox}
+
+\begin{equation}\label{eq:dynamic}
+C(t) = \sum_{i \in \rm plan} \Big(\sum_{(g,d,c)\in \mathrm{equiv}_i} c\Big)
+\cdot \texttt{cached\_contract}\big(\mathrm{ein}_i,\, \tau,\, \Gamma,\, V\big)
+\end{equation}
+
+三注册表设计（dynamic.py:88-330）：
+
+\begin{enumerate}
+\item \texttt{PeramRegistry}（dynamic.py:88-177）：按（味, 时间标签对）注册
+传播子，\texttt{resolve} 时按组合类型（如 \texttt{'uu\^{}d'}）与时间自动选
+对应 peram；\texttt{dtype} 归一化。
+\item \texttt{VRegistry}（dynamic.py:179-263）：按（顶点名, 时间标签）注册
+VVV/VDV；\texttt{\_per\_region\_v\_names}（dynamic.py:331）按时间端独立
+编号。
+\item \texttt{GammaRegistry}（dynamic.py:265-330）：按名称注册 $\gamma$ 矩阵；
+支持 \texttt{'Projector'} 双侧投影序列（dynamic.py:1166-1184）。
+\end{enumerate}
+
+核心执行 \texttt{calculate\_contraction}（dynamic.py:1076-1194）：
+先检查等价类系数和，为 0 直接返回（跳过计算）；解析 einsum 字符串、
+解析注册表张量（\texttt{p\_vars / v\_vars / g\_vars}）；支持
+\texttt{Oindex} 覆盖输出指标与 \texttt{Projection} 双侧投影；
+最后 \texttt{total\_coeff * cached\_contract(ein, *tensors)}。
+
+\begin{algobox}
+\textbf{核心算法:} 计划缓存（\texttt{\_plan\_cache\_key}，
+dynamic.py:439-460）——相同的算符组/前缀/等价开关组合直接命中缓存，
+跳过重复 Wick 分析（Wick 分析是纯符号计算，缓存命中可省秒级开销）；
+收缩本身走 C5 的表达式缓存。\texttt{validate\_plan}（dynamic.py:1201-1245）
+在实际计算前批量校验注册缺失，避免运行到一半 KeyError 中断。
+\end{algobox}
+
+\textbf{独特竞争力:} 将"符号分析（可缓存、与数据无关）"与"数值收缩
+（需数据、按需执行）"彻底分层；配套校验、投影、指标覆盖能力，
+是工程上最完整的 Wick 收缩高层封装。
+
+\subsection{C4 Roofline 带宽分析器（\texttt{contractadviser.py}）}
+
+\begin{physbox}
+\textbf{物理图像:} 蒸馏收缩是大张量乘法，GPU 上常为带宽瓶颈（读入
+中间张量耗时 $\gg$ 计算耗时）。用 Roofline 模型判断：算术强度
+$\mathrm{AI} = \mathrm{FLOPs}/\mathrm{Bytes}$ 低于拐点
+$\pi = P_{\rm peak}/B_{\rm peak}$ 即为带宽瓶颈，对应公式 \eqref{eq:roofline}。
+\end{physbox}
+
+\begin{equation}\label{eq:roofline}
+\pi_{\rm dtype} = \frac{P_{\rm peak}(\rm dtype)}{B_{\rm peak}}
+\quad\text{（FLOPs/byte 拐点）}
+\qquad
+\mathrm{AI} = \frac{\text{FLOPs}}{\text{bytes}_{\rm in+out}}
+\quad\Longrightarrow\quad
+\text{瓶颈} = \begin{cases} \text{带宽}, & \mathrm{AI} < \pi \\
+\text{计算}, & \mathrm{AI} \ge \pi \end{cases}
+\end{equation}
+
+算法原理（contractadviser.py:1-15, 742-1194）：
+
+\begin{enumerate}
+\item \textbf{硬件模型}（\texttt{HardwareSpec}，contractadviser.py:28-71）：
+按 dtype 选 FP16/FP32/FP64 峰值算力，计入计算/带宽效率因子与
+complex 修正（\texttt{complex\_compute\_eff}）；8 个硬件预设
+（contractadviser.py:81-120+）。
+\item \textbf{瓶颈判定}：用 opt\_einsum 路径分析估计 FLOPs 与最大中间
+张量，结合每张量字节数计算算术强度，与拐点比较分四级严重程度
+（\texttt{none/mild/significant/severe}）。
+\item \textbf{切分建议}（\texttt{SlicingSuggestion}）：对自由指标逐一分析
+切块后的工作集大小与内存峰值，给出建议块大小与理由
+（README.md:1080-1142）。
+\end{enumerate}
+
+\begin{algobox}
+\textbf{核心算法:} Roofline 判定 + 切分收益扫描；复杂度为
+$\mathcal{O}(N_{\rm free})$ 次张量大小评估。
+\textcolor{warn}{未验证}：硬件预设参数（如 V100 FP64 7.8 TFLOPS、
+带宽 900 GB/s，contractadviser.py:84-90）为产品规格，未在实测环境复核。
+\end{algobox}
+
+\textbf{独特竞争力:} 面向蒸馏收缩定制（大维自由指标、complex128、
+A100/A800/H20 中国特供硬件预设），可预先规避带宽瓶颈、指导内存切分，
+是同类工具（如 opt\_einsum 自身路径优化）之上更高层的性能决策层。
+
+\subsection{C5 缓存 einsum 收缩入口（\texttt{cached\_contract}）}
+
+\begin{physbox}
+\textbf{物理图像:} 蒸馏收缩中同一 einsum 表达式（同字符串+同形状）被
+反复调用（如循环遍历 $t_{\rm src}$），路径编译（contract\_path）是纯
+开销可一次性支付；表达式缓存后每次直接执行。对应公式 \eqref{eq:cache}。
+\end{physbox}
+
+\begin{equation}\label{eq:cache}
+\text{key} = (\text{einsum\_str},\, \text{shapes},\, \text{opt\_key})
+\quad\longrightarrow\quad
+\text{expr} \in \text{cache}
+\quad\Longrightarrow\quad
+C = \texttt{expr}(\tau_1, \tau_2, \dots)
+\end{equation}
+
+算法原理（base\_functions.py:347-441）：
+
+\begin{enumerate}
+\item \textbf{热路径}（base\_functions.py:375-390）：构造缓存键
+（字符串+形状元组+策略键），命中直接 \texttt{expr(*tensors)} 执行。
+\item \textbf{冷路径}（base\_functions.py:392-441）：
+\texttt{optimize=True} 时依次尝试 \texttt{auto/greedy/optimal/dp} 四种
+策略，以 \texttt{(flops, largest\_intermediate)} 二元组择优（先比 FLOPs
+再比中间张量，base\_functions.py:413-427）；用 \texttt{np.broadcast\_to}
+零内存占位符做形状校验与路径搜索（\texttt{\_validate\_einsum\_shapes}，
+base\_functions.py:404-405）；成功后 \texttt{contract\_expression}
+编译并缓存。
+\end{enumerate}
+
+\begin{algobox}
+\textbf{核心算法:} 字典缓存（键 = 表达式+形状+策略）+ 多策略择优；
+热路径为 $O(1)$ 查表。\textcolor{phys}{推断}：Wick 循环场景下
+（如 31 个例子脚本中的 peram 时间循环）路径编译开销占比可达
+毫秒级/次，缓存后降至微秒级；实际加速比未测基准。
+\end{algobox}
+
+\textbf{独特竞争力:} 比裸 \texttt{opt\_einsum.contract} 多出：多策略自动
+择优（裸调用默认 greedy）、形状错误提前诊断（面向用户可读错误信息）、
+零内存校验（占位符不占显存）、全局缓存清理（\texttt{clear\_cache}）。
+AGENTS.md 约定全包收缩统一走此入口。
+
+\subsection{C6--C11 浅析（一段式概述）}
+
+\textbf{C6 统计分析（\texttt{analyse.py}）}：\texttt{Jackknife}
+（analyse.py:325-400）单点消除重采样，
+$\text{sample}_k = -(\sum_{\rm all} - \text{data}_k)/(N_{\rm conf}-1)$，
+误差 $\sqrt{N_{\rm conf}-1}\times\text{std}$，协方差用
+\texttt{einsum('n...i,n...j->...ij')} 向量化外积构建
+（analyse.py:394）；\texttt{meff}（analyse.py:521-569）提供
+log/cosh/GEVP 三式（$\frac{1}{a}\ln\frac{C(t)}{C(t+1)}$、
+$\frac{1}{a}\operatorname{arccosh}\frac{C(t+2)+C(t)}{2C(t+1)}$），
+通过 \texttt{ArraySlicer} 通用切片实现后端无关。
+\texttt{ratio\_3pt}（analyse.py:631）与 \texttt{solve\_gevp}
+（analyse.py:807）支撑 3pt/2pt 比值与广义本征值提取。
+
+\textbf{C7 顶点函数（\texttt{eigvectors/vertex.py}）}：\texttt{Mom\_VdV\_sink\_t}
+实现 $V_{ij}(p)=\sum_x e^{-ip\cdot x}\phi_i^\dagger(x)\phi_j(x)$，
+\texttt{Mom\_VVV\_sink\_t} 实现 $V_{ijk}(p)=\sum_x e^{-ip\cdot x}
+\varepsilon_{abc}\phi_i^a\phi_j^b\phi_k^c$（含 Levi-Civita 颜色缩并与
+6 种颜色排列符号）；\texttt{VdV\_sink\_t\_link} 支持带规范链接的
+平行输运顶点（空间方向 / 守恒流时间方向两种模式，README.md:419-470）；
+\texttt{create\_omega\_accelerate} 构造 $\Omega$ 蒸馏权重张量用于方差缩减。
+
+\textbf{C8 算符共轭（\texttt{baroperator.py}）}：\texttt{conjugate\_operator}
+（baroperator.py:245）自动识别介子（2q）/重子（3q）/多夸克结构，
+计算 $\gamma$ 链的 H/T/C 变换与 Fermi 符号；\texttt{diquark\_symmetry}
+（baroperator.py:269）给出 $(C\Gamma)^T = \eta (C\Gamma)$ 的
+diquark 转置对称性符号。
+
+\textbf{C9 懒加载 API（\texttt{\_\_init\_\_.py}）}：\texttt{\_\_getattr\_\_}
+（\_\_init\_\_.py:137-153）首次访问属性时 \texttt{import\_module} 到具体
+模块（如 \texttt{.analyse.analyse} 而非 \texttt{.analyse}），避免 mpi4py/
+cupy/sympy 等重依赖被无条件加载；\texttt{\_\_dir\_\_} 支持 tab 补全。
+
+\textbf{C10 MPI 并行（\texttt{mpi\_init.py}）}：\texttt{get\_mpi\_tlist}
+时间片轮询分配（$\text{local} = (\text{global} - \text{rank})/\text{size}$
+模 $N_t$ 回绕）；\texttt{get\_mpi\_data} 支持 8 种传输模式（Send/Gather/
+TGather/Allgather/Bcast/Scatter/TScatter/Transport）并自动处理
+numpy/cupy 转换。
+
+\textbf{C11 DR 基 $\gamma$ 矩阵（\texttt{constant/gamma\_matrix.py}）}：
+18 种 4$\times$4 复矩阵（DeGrand-Rossi 基，手征变体），含正/负宇称投影
+$\frac12(\gamma_3\gamma_1)(1\pm\gamma_4)$；\texttt{PFF\_Mom\_to\_gamma\_new}
+用 Levi-Civita 张量将动量分量映射为 $\gamma$ 指标对（投影形状因子）。
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+算符字符串 $\to$ einsum 全自动 & 传统手工 Wick 推导 &
+多强子图易漏易错；本实现符号化穷举 + Fermi 符号自动计算
+（\texttt{autowick.py:156-224}） \\
+等价图归并 + BFS 符号传播 & 两两图配对比较 &
+按变体键哈希一次连通，$O(NV)$ 替代 $O(N^2)$；
+符号经 \eqref{eq:equiv} 传递保证正确累计
+（\texttt{autowick.py:454-631}） \\
+计划缓存（符号层）+ 表达式缓存（数值层） &
+裸 \texttt{opt\_einsum.contract} &
+热路径 $O(1)$ 查表；多策略择优（auto/greedy/optimal/dp）；
+零内存形状校验（\nolinkurl{base_functions.py:375-441}） \\
+Roofline 带宽预测 + 切分建议 &
+纯运行时性能调优 &
+计算前可判定瓶颈并规划切分，含 A100/H20 等 8 预设
+（\nolinkurl{contractadviser.py:81-120}） \\
+numpy/cupy 双后端 + MPI &
+单后端实现 &
+\nolinkurl{set_backend} 全局切换；MPI 数据搬运自动类型转换
+（\nolinkurl{base/mpi_init.py}） \\
+\bottomrule
+\end{tabularx}
+\caption{独特性评估（数据来源: 源码证据/推导）}
+\end{table}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+
+\subsection{核心代码片段（lstinputlisting 直引）}
+
+\lstinputlisting[firstline=156,lastline=224]{/root/PyQCD/refer/sush/lqcddb/src/lqcddb/contraction/autowick.py}
+\vspace{0.5em}
+
+{\small \texttt{autowick.py:156-224}——Fermi 符号（逆序数法）与按味分组的合法缩并穷举。}
+
+\lstinputlisting[firstline=1076,lastline=1194]{/root/PyQCD/refer/sush/lqcddb/src/lqcddb/contraction/dynamic.py}
+\vspace{0.5em}
+
+{\small \texttt{dynamic.py:1076-1194}——收缩计划执行：等价系数合并、Oindex 覆盖、双侧投影、缓存收缩。}
+
+\lstinputlisting[firstline=347,lastline=441]{/root/PyQCD/refer/sush/lqcddb/src/lqcddb/base/base_functions.py}
+\vspace{0.5em}
+
+{\small \texttt{base\_functions.py:347-441}——缓存 einsum：热路径查表 + 冷路径多策略择优 + 零内存占位符校验。}
+
+\subsection{核心公式汇总}
+
+\begin{align}
+\text{Fermi 符号:} \quad & \varepsilon_\pi = (-1)^{\mathrm{inv}(\pi)}
+\label{eq:fermi} \\
+\text{VDV 顶点:} \quad & V_{ij}(p) = \sum_x e^{-ip\cdot x}\,
+\phi_i^\dagger(x)\phi_j(x) \label{eq:vdv} \\
+\text{VVV 顶点:} \quad & V_{ijk}(p) = \sum_x e^{-ip\cdot x}\,
+\varepsilon_{abc}\, \phi_i^a(x)\phi_j^b(x)\phi_k^c(x) \label{eq:vvv} \\
+\text{Jackknife:} \quad & \mathrm{sample}_k = -\frac{\sum_{\rm all}-\mathrm{data}_k}{N_{\rm conf}-1},
+\quad \sigma = \sqrt{N_{\rm conf}-1}\,\mathrm{std} \label{eq:jack} \\
+\text{meff:} \quad & m_{\rm eff}(t) = \tfrac{1}{a}\ln
+\frac{C(t)}{C(t{+}1)} \quad \text{（log 式）} \label{eq:meff} \\
+\text{seq\_peram:} \quad & \tau \;\longrightarrow\; \gamma_5 \tau^\dagger \gamma_5
+\label{eq:seqperam}
+\end{align}
+
+公式 \eqref{eq:fermi} 与 \texttt{compute\_fermion\_sign}（autowick.py:156-173）一一对应；
+\eqref{eq:vdv}/\eqref{eq:vvv} 对应 vertex.py 顶点函数（README.md:393-418）；
+\eqref{eq:jack} 对应 Jackknife（analyse.py:325-400）；
+\eqref{eq:meff} 对应 meff log 式（analyse.py:533-540）；
+\eqref{eq:seqperam} 为 $\gamma_5$ 时间反演变换（seqperam.py:4）。
+
+\textbf{极限校验}：\eqref{eq:fermi} 在零缩并对（空串）时符号为 +1，
+与真空期望一致；\eqref{eq:vdv}/\eqref{eq:vvv} 在 $p\to 0$ 时退化为
+蒸馏重叠矩阵 $V_{ij}=\sum_x \phi_i^\dagger \phi_j = \delta_{ij}$
+（本征矢正交归一时），量纲自洽；\eqref{eq:meff} 在 $t\to\infty$
+大时间极限给出基态质量（信号区定义），符合物理预期。
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{.../contraction/autowick.py:6-449}} & 仓库 & Wick 收缩引擎（C1） \\
+\texttt{\nolinkurl{.../contraction/autowick.py:454-631}} & 仓库 & 等价图识别（C2） \\
+\texttt{\nolinkurl{.../contraction/autowick.py:636-1110}} & 仓库 & 缩并图可视化 \\
+\texttt{\nolinkurl{.../contraction/dynamic.py:88-330}} & 仓库 & 三注册表（C3） \\
+\texttt{\nolinkurl{.../contraction/dynamic.py:576-1075}} & 仓库 & 收缩计划生成与缓存 \\
+\texttt{\nolinkurl{.../contraction/dynamic.py:1076-1458}} & 仓库 & 计划执行/校验/高层类 \\
+\texttt{\nolinkurl{.../contraction/contractadviser.py:28-120}} & 仓库 & 硬件模型与预设（C4） \\
+\texttt{\nolinkurl{.../base/base_functions.py:347-459}} & 仓库 & 缓存 einsum（C5） \\
+\texttt{\nolinkurl{.../base/backend.py:1-31}} & 仓库 & 双后端切换 \\
+\texttt{\nolinkurl{.../analyse/analyse.py:325-914}} & 仓库 & Jackknife/meff/GEVP（C6） \\
+\texttt{\nolinkurl{.../eigvectors/vertex.py:1-647}} & 仓库 & VdV/VVV/规范链顶点（C7） \\
+\texttt{\nolinkurl{.../contraction/baroperator.py:1-273}} & 仓库 & 算符共轭（C8） \\
+\texttt{\nolinkurl{lqcddb/README.md:1-1465}} & 文档 & API 全参考 \\
+\texttt{\nolinkurl{lqcddb/src/lqcddb/AGENTS.md:1-40}} & 文档 & 包约定 \\
+\texttt{\nolinkurl{.../examples/contraction.*.py}} & 示例 & 31 个实际用例 \\
+\bottomrule
+\end{xltabular}
+
+% ================= 6 结论 =================
+\section{结论}
+
+\begin{conclbox}
+穷尽剖析结论：lqcddb 蒸馏收缩框架核心部分 12 项候选，其中
+\textcolor{algo}{5 深挖}（Wick 引擎 / 等价图识别 / 动态收缩工作流 /
+Roofline 分析器 / 缓存 einsum）、\textcolor{phys}{6 浅析}（统计分析 /
+顶点函数 / 算符共轭 / 懒加载 API / MPI 并行 / DR $\gamma$ 基）、
+\textcolor{conclusion}{1 排除}（旧扁平模块 C12）。
+最强竞争力：\textbf{算符字符串 $\to$ einsum 表达式的全自动 Wick 收缩
+引擎 + 等价图归并 + 双层缓存}——把格点 QCD 中最易错的手工环节
+（Wick 缩并、Fermi 符号、顶点分配）符号化、自动化、可缓存化，
+并以 Roofline 分析支撑大规模 GPU 收缩的理性优化。
+\end{conclbox}
+
+\begin{warnbox}
+局限与未验证项：\quad
+① 硬件预设参数（C4）为产品规格，未在实测环境复核；
+② \textcolor{warn}{未验证}最大算符规模（4pt 多强子）的枚举耗时基准；
+③ 计划/表达式缓存加速比未做实测基准（推断为毫秒→微秒量级）；
+④ 旧模块 C12 未逐一 diff，仅以"同 API 重构版"排除（目录规模实测
+function\_contraction 5892 行 vs lqcddb 8835 行）；
+⑤ 所有结论为源码证据（确证）+ 推导（推断）两级，无运行期数值验证。
+\end{warnbox}
+
+\end{document}

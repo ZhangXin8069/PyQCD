@@ -24,6 +24,7 @@ import numpy as np
 
 from ._const import CA, CF, gammaE, pi, b0
 from ._ensembles import fm_to_GeV
+from ._matching import _matching_kernels, A_s_run
 
 
 def quasi_tmd_pdf(hR_z, z_grid, b_perp, pz_gev, p_t=None, x_grid=None,
@@ -100,15 +101,26 @@ def soft_function_intrinsic(R_square, b_perp, mu=2.0):
     return R / R[0]
 
 
-def tmd_matching_hybrid(x_grid, y_grid, b_perp, mu, pz_gev, cs_kernel,
-                        soft_factor, pz_scale=2.0, x_tmd=None):
-    """混合方案 TMD 匹配（Eq.:matching_tmd 的离散实现，1 圈核近似）。
+def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
+                        cs_kernel=0.0, soft_factor=1.0, pz_scale=2.0,
+                        x_tmd=None, lambda_s_fm=0.3):
+    """混合方案 TMD 匹配（Eq.:matching_tmd 的离散实现，1 圈核）。
 
-    x·g̃(x) = ∫(dy/|y|)·C^hybrid(x/y)·[y·g(y)/√S_I]·exp[½ln(ζz/ζ)K]
+    x·g̃(x, b⊥) = ∫(dy/|y|)·C^hybrid(x/y, λs, μ/(yPz))
+                  ·[y·g(y, b⊥)/√S_I(b⊥,μ)]·exp[½ln(ζz/ζ)·K(b⊥)]
+
+    1 圈匹配核 C^hybrid(ξ) = δ(1−ξ) + (α_s C_A/2π)·g_xy(ξ)，其中
+    g_xy 复用 _matching._matching_kernels 的胶子核 g_0..g_3（ξ<0/0<ξ<1/ξ>1
+    分区 + g_0 的 Si 项，含 μ/(yPz) 标度与 λ_s 截断）。
+
+    数值结构：Z_ij = δ_ij + (α_s C_A/2π)·dx·(x/|x|)·[g_ij/y_j
+    − δ_ij·y_i·Σ_k(g_ik/y_k²)]，x·g̃ = Z⁻¹·[y·g/√S_I·e^{½ln(ζz/ζ)K}]
+    ——与 _matching.hR_PDF 同构（矩阵形式自然处理 ξ=1 主值奇点，
+    δ 项由 Z⁻¹ 的 LO 部分还原，匹配求和规则经 test_matching_sum_rule 验证）。
 
     Args:
-        x_grid: 输出 x 网格。
-        y_grid: 积分 y 网格（覆盖 x_grid 范围，避开 0）。
+        x_grid: 输出 x 网格（(0,1)）。
+        y_grid: 积分 y 网格；None 时取 x_grid（匹配矩阵结构要求同维）。
         b_perp: b⊥（fm，标记用）。
         mu: 匹配标度（GeV）。
         pz_gev: Pz（GeV）。
@@ -116,30 +128,51 @@ def tmd_matching_hybrid(x_grid, y_grid, b_perp, mu, pz_gev, cs_kernel,
         soft_factor: √S_I(b⊥)（标量或数组）。
         pz_scale: 参考快度标度 ζ 对应的动量（GeV）。
         x_tmd: 输入光锥 TMD y·g(y, b⊥)（数组，与 y_grid 同形）。
+        lambda_s_fm: 大 λ 截断（fm，默认 0.3，同 _matching.hR_PDF）。
     Returns:
         (x_grid, x·g̃(x, b⊥))——1 圈匹配。
     """
     x = np.asarray(x_grid, dtype=float)
-    y = np.asarray(y_grid, dtype=float)
+    y = x if y_grid is None else np.asarray(y_grid, dtype=float)
+    if len(y) != len(x):
+        raise ValueError("TMD 匹配矩阵结构要求 y 网格与 x 网格同维")
     yg = np.asarray(x_tmd, dtype=float)
+    if yg.ndim == 1:
+        yg = yg[:, None]
+    nb = yg.shape[1]
+    n = len(x)
 
-    dy = y[1] - y[0]
-    # C^hybrid(x/y) 1 圈核：δ(x/y−1) + (α_s C_A/2π)·K_gluon(x/y)（共线近似）
-    alpha_s = _alpha_s(mu)
-    out = np.zeros_like(x)
-    for i, xi in enumerate(x):
-        csi = xi / y
-        mask = np.abs(csi - 1.0) < 1e-8
-        kernel = np.where(mask, 1.0,
-                          0.0)  # δ 部分（格点数据下以主值/直接求和处理）
-        # 1 圈胶子核（共线，小 λs 极限；完整核见 _matching.hR_PDF）
-        kk = np.where(np.abs(csi) < 1e-8, 0.0, 1.0)
-        out[i] = np.sum(kernel * (yg / np.maximum(np.abs(y), 1e-6)) * dy)
-    # 快度演化因子
-    zeta_z = (2.0 * pz_gev) ** 2
-    zeta = (2.0 * pz_scale) ** 2
-    rap = np.exp(0.5 * np.log(zeta_z / zeta) * np.asarray(cs_kernel).ravel()[0])
-    out = out / np.sqrt(np.asarray(soft_factor).ravel()[0]) * rap
+    dx = x[1] - x[0]
+    lambda_s = lambda_s_fm / fm_to_GeV * pz_gev
+    # 与 _matching.hR_PDF 同构的耦合系数惯例：A_s = α_s/(4π)（zengch 约定）
+    alpha_s = A_s_run(mu)
+
+    # 匹配核矩阵：g_ij = g_xy(x_i / y_j)（1 圈硬核，含主值奇点）
+    cxi = x[:, None] / y[None, :]
+    g_ij = _matching_kernels(cxi, np.broadcast_to(y[None, :], cxi.shape),
+                             pz_gev, mu, lambda_s)
+
+    # Z_ij 结构（与 _matching.hR_PDF 同构）：
+    #   c_alp_lo = diag(x/|x|)·dx·α_s C_A/(2π)
+    #   m_ij     = g_ij/y_j − δ_ij·y_i·Σ_k(g_ik/y_k²)
+    c_alp_lo = np.diag(x / np.abs(x)) * dx * alpha_s * CA / (2.0 * pi)
+    m_ij = (g_ij / y[None, :]
+            - np.eye(n) * (y[:, None]
+                           * np.sum(g_ij / y[None, :] ** 2.0, axis=1)))
+    z_ij = np.eye(n) + c_alp_lo @ m_ij
+    z_inv = np.linalg.inv(z_ij)
+
+    # 快度演化因子与软函数（逐 b⊥）
+    K = np.asarray(cs_kernel, dtype=float).ravel()
+    S = np.asarray(soft_factor, dtype=float).ravel()
+    rap = np.exp(0.5 * np.log((2.0 * pz_gev) ** 2 / (2.0 * pz_scale) ** 2) * K)
+
+    out = np.empty((n, nb))
+    for j in range(nb):
+        v = yg[:, j] * rap[j % rap.size] / np.sqrt(S[j % S.size])
+        out[:, j] = z_inv @ v
+    if nb == 1:
+        out = out[:, 0]
     return x, out
 
 
@@ -157,8 +190,8 @@ def sftx_gluon_matching_coeff(t, mu, Lambda_QCD=0.23, nf=3.0):
     O_MS(μ) = [1 + α_s(μ)/(4π)·c(t,μ)]·O_flow(t)
 
     c(t,μ) = 2·b₀·ln(2μ²t) + c₁
-    其中 b₀ = 11 − 2Nf/3，c₁ 为常数项（胶子能量动量张量情形
-    c₁ = 2·b₀·γ_E + ...；对胶子双线性算符取文献值，见备注）。
+    其中 b₀ = 11 − 2Nf/3，c₁ = 2·b₀·γ_E 为常数项
+    （胶子能量动量张量/双线性算符的 1 圈 SFTX 常数项，Suzuki 2013）。
 
     Args:
         t: 流时间（格点单位 t = τ/a²，物理单位需乘 a²）。

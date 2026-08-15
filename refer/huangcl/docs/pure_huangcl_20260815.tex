@@ -1,0 +1,588 @@
+% ============================================================
+% pure 报告 — 规范模板 v2（xelatex + ctex）
+% 主题: 黄 CL 格点 QCD 流水线核心部分穷尽剖析
+% 编译: xelatex 两遍; 交付前 Overfull 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+% ===== 色板 =====
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+% ===== 全局防溢出 =====
+\setlength{\emergencystretch}{6em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+% ===== 标题层次 =====
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+% ===== 彩色框 =====
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+% ===== 代码样式 =====
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{黄 CL 格点 QCD 流水线核心剖析:\\ 胶子 OPE 算符、比值提取与统计推断}
+\author{opencode pure}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对黄 CL 的 L24x72 系综分析流水线（\texttt{\nolinkurl{refer/huangcl/}}）做穷尽式核心剖析。
+项目性质判定为\textbf{代码-物理交叉向}：12 个核心候选模块共约 1.0 万行 Python，全部为物理
+计算脚本，物理公式内嵌于模型函数与注释，且存在强代码符号与物理对象的双向映射。
+穷尽枚举 12 个候选并分配三态：\textcolor{phys}{深挖 7}（clover 场强张量、双线性胶子 OPE 算符、
+质子 2pt 蒸馏、重采样/协方差/拟合框架、3pt/2pt 比值、Feynman--Hellmann 变换、有效质量）、
+\textcolor{phys}{浅析 3}、\textcolor{phys}{排除 2}。最深剖析结论：\textbf{GPU 胶子 OPE 算符族}
+（闭合色环双线性算符与三指标对线性组合）与\textbf{jackknife 统计框架}（协方差恒等式与
+$\sqrt{N-1}$ 标准误均经数值验证至机器精度）构成流水线最强竞争力；实测产物
+$c_0(z)$（$z=0..9$ 从 $0.662(96)$ 衰减至 $0.026(20)$）与 $E_0=0.7698(72)\,a^{-1}$（$P_z=2$）
+被引用为流程闭环证据。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+
+\subsection{项目性质判定}
+
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉向}。
+判定依据（实测）：主体为物理计算代码（4 步流水线 + 98\_tools 工具库 + 06 分析，共 12 个
+核心 Python 模块约 10169 行），无独立推导文档（公式内嵌于模型函数与注释），代码符号与
+物理对象一一对应（$F_{\mu\nu}$、$W$ 线、$R(z)$、meff、FH），故采用\textbf{交叉框架}剖析：
+映射表 + 逐符号解释 + 物理推导链。
+\end{keybox}
+
+流水线全貌（\texttt{\nolinkurl{AGENTS.md}} + 各步 \texttt{\nolinkurl{AGENTS.md}}）：
+步骤 0 用 CuPy 在 GPU 上计算胶子 OPE 与质子 2pt（\texttt{\nolinkurl{00_contract/}}、
+\texttt{\nolinkurl{01_proton_contract/}}）；步骤 2 计算 3pt/2pt 比值 $R(z)$ 并做多参数拟合
+（\texttt{\nolinkurl{02_ratio/}}）；步骤 4 提取质子有效能量（\texttt{\nolinkurl{04_proton_energy/}}）；
+另含 Feynman--Hellmann 裸矩阵元分析（\texttt{\nolinkurl{06_FH_bare_matele/}}）。步骤 3
+（\texttt{\nolinkurl{03_ana_ratio/}}）声明跳过。
+
+\subsection{核心部分总清单（穷尽枚举）}
+
+\begin{xltabular}{\textwidth}{lXlX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & Clover 场强张量（\texttt{\nolinkurl{Operator.py:48-174}}） & 深挖 &
+einsum 向量化四顶角组合 $F_{\mu\nu}$（式 \eqref{eq:clover}），$\varepsilon$ 对偶 \\
+C2 & 双线性胶子 OPE 算符与组合（\texttt{\nolinkurl{Operator.py:339-368}}、
+\texttt{\nolinkurl{Calc_ope_unpol.py:74-90}}） & 深挖 &
+闭合色环双线性算符（式 \eqref{eq:bilocal}），MPI 三路并行，组合经交叉验证 \\
+C3 & 质子 2pt 蒸馏（\texttt{\nolinkurl{2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py}}） & 深挖 &
+动量涂抹三矢量顶角 VVV + 蒸馏传播子收缩，GPU 分块省显存 \\
+C4 & $\gamma$ 矩阵 DR 基（\texttt{\nolinkurl{98_tools/gamma_matrix_cupy_DR.py}}） & 浅析 &
+手征基，18 个矩阵，已数值验证反对易关系（标准内容） \\
+C5 & 重采样与统计推断框架（\texttt{\nolinkurl{98_tools/analysis_tools.py}} 及各处内嵌版） & 深挖 &
+jackknife 协方差恒等式精确实现；bootstrap 计数矩阵 BLAS 加速；lsqfit 式 SVD 截断 $\chi^2$ \\
+C6 & 3pt/2pt 比值与激发态拟合（\texttt{\nolinkurl{02_ratio/code.py:258-360}}） & 深挖 &
+断开型减除 + 源时间平移平均 + 对称两态模型（式 \eqref{eq:model3pt}） \\
+C7 & Feynman--Hellmann 变换（\texttt{\nolinkurl{06_FH_bare_matele/code_FH_bare_matele.py:254-288}}） & 深挖 &
+$\tau$ 求和压制激发态污染，$nex$ 端点截断，六方向平均 \\
+C8 & 质子有效质量与能量拟合（\texttt{\nolinkurl{04_proton_energy/code.py}}） & 深挖 &
+meff 对数差商 + 两态模型（式 \eqref{eq:c2model}），晶格单位转 GeV \\
+C9 & Slurm 模板化任务生成（\texttt{\nolinkurl{multi.sh}}） & 浅析 &
+sed 占位符（\texttt{=NT=}、\texttt{=CONF=}）逐组态生成，通用 shell 技巧 \\
+C10 & 三方向 SEM 差异分析（\texttt{\nolinkurl{05_ana_3dir_diff_sem/}}） & 浅析 &
+中间诊断：三方向比值/2pt/meff 分布直方图对比 \\
+C11 & 03\_ana\_ratio / 03\_bare\_matrix & 排除 & AGENTS.md 声明步骤 3 已跳过，中间尝试未用 \\
+C12 & 99\_ref\_code & 排除 & 历史参考脚本（旧拟合/匹配），无文档、非当前流水线产物 \\
+\bottomrule
+\end{xltabular}
+
+\noindent 三态计数：\textcolor{phys}{深挖 7 / 浅析 3 / 排除 2}（报告结尾重述）。
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+% ---------------- C1 ----------------
+\subsection{C1. Clover 场强张量 $F_{\mu\nu}$（物理图像 + 推导链）}
+
+\begin{physbox}
+\textbf{物理图像:} 场强张量是规范场的"曲率"——用最小方环（plaquette）的闭合路径相位差测量。
+Clover（四顶角）构造在 $a\to0$ 极限精确实现连续场强 $F_{\mu\nu}$，而单个 plaquette 只到
+$O(a^2)$；对偶 $\tilde F_{\mu\nu}=\frac12\varepsilon_{\mu\nu\rho\sigma}F^{\rho\sigma}$
+交换电场与磁场分量，是构建胶子双线性算符的必需成分。对应公式 \eqref{eq:clover}。
+\end{physbox}
+
+单 plaquette 顶角（连续极限的场强编码）：
+\begin{equation}\label{eq:plaquette}
+P_{\mu\nu}(x)=U_\mu(x)\,U_\nu(x+\hat\mu)\,U_\mu^\dagger(x+\hat\nu)\,U_\nu^\dagger(x)
+=1+a^2g\,F_{\mu\nu}(x)+O(a^4).
+\end{equation}
+代码 \texttt{\nolinkurl{plaquette_new}}（Operator.py:48-74）以 4 次 \texttt{einsum} 链式
+矩阵乘实现式 \eqref{eq:plaquette}；\texttt{np.roll} 自动处理周期边界（张量约定
+$[t,z,y,x,\mu,\text{color},\text{color}]$，\texttt{3-mu} 轴即 $\mu$ 方向平移）。
+
+Clover 四顶角组合 \texttt{\nolinkurl{plaquette_clover_new}}（Operator.py:77-161）：
+以 $\pm\mu,\pm\nu$ 四个角点平移的 plaquette $P_{\mu\nu}^{(\pm\pm)}$ 相加，取 $P-P^\dagger$
+（反厄米部分），乘 $-i/8$ 得厄米场强：
+\begin{equation}\label{eq:clover}
+F_{\mu\nu}(x)=-\frac{i}{8}\sum_{p\in\{\,++,\,+-\,,\,-+,\,--\,\}}
+\left[\,P_{\mu\nu}^{(p)}(x)-P_{\mu\nu}^{(p)\dagger}(x)\,\right].
+\end{equation}
+\noindent 推导依据：\textcolor{phys}{(1)} 厄米性——$P-P^\dagger$ 反厄米，乘 $-i$ 转厄米，且
+$F^\dagger = \frac{i}{8}\sum(P^\dagger-P)=F$（确证，代数恒等）；\textcolor{phys}{(2)} 归一因子
+$1/8$：4 顶角 $\times$（$P-P^\dagger$ 的 2 重差）组合，抵消 $O(a^2)$ 单顶角误差项（确证于
+代码结构，连续极限意义为标准结果）；\textcolor{phys}{(3)} 无 $a^2g$ 因子——比值 $R(z)$ 中
+与质子关联函数归一相消（\textcolor{phys}{推断}：仓库无显式声明）。
+
+对偶场强 \texttt{\nolinkurl{plaquette_clover_all_tilde}}（Operator.py:177-184）经
+\texttt{Tensor4} 收缩实现：
+\begin{equation}\label{eq:dual}
+\tilde F_{\mu\nu}(x)=\frac{1}{2}\,\varepsilon_{\mu\nu\rho\sigma}\,F^{\rho\sigma}(x),
+\qquad \text{Tensor4}\equiv\tfrac12\varepsilon_{0123}{=+1},
+\end{equation}
+\texttt{Tensor4} 由置换奇偶性算法构造（Operator.py:9-39），已数值验证
+$\text{Tensor4}=\tfrac12\varepsilon$（$\varepsilon_{0123}=+1$，反对称精确，\textcolor{accent}{确证}）。
+
+\begin{algobox}
+\textbf{核心算法:} 全向量化场强构造。时间/空间复杂度：16 个 $(\mu,\nu)$ 指标对 $\times$ 4 顶角
+$\times$ 4 次 einsum 批量 $3\times3$ 复矩阵乘，每次对 $N_t N_x^3$ 个格点并行；
+\texttt{pla} 数组占用 $16\,N_tN_x^3\cdot 9\cdot 16$ 字节 $\approx 2.3$ GB（L24x72），
+故必须 GPU 且按指标对拆分（见 C2）。
+\end{algobox}
+
+% ---------------- C2 ----------------
+\subsection{C2. 双线性胶子 OPE 算符与组合验证（物理 + 映射 + 算法）}
+
+\begin{physbox}
+\textbf{物理图像:} 胶子分布函数要求"两点"非局域算符：在分离 $z$ 的两端各放一个场强，
+中间用 Wilson 线保证规范不变。本代码的构造为\textbf{闭合色环}：$F_{\mu\nu}$ 在 $-z$、
+$\tilde F_{\mu'\nu'}$ 在 $0$，由 $W$ 与 $W^\dagger$ 两段反向 Wilson 线连通（谱线经数值
+逐项核对与代码 einsum 链一致，且 $z$ 依赖真实存在，\textcolor{accent}{确证}）。
+\end{physbox}
+
+算符形式（\texttt{\nolinkurl{operators_new_z0_mu2}}，Operator.py:339-368）：
+\begin{equation}\label{eq:bilocal}
+O^{\mu\nu;\mu'\nu'}(z)=\sum_{x_\perp,t}\operatorname{Tr}\Big[
+F_{\mu\nu}(x-z)\,W^\dagger(x{-}z\to x)\,\tilde F_{\mu'\nu'}(x)\,W(x{-}z\to x)\Big],
+\end{equation}
+其中 $W(x{-}z\to x)=U_z(x{-}z)U_z(x{-}z{+}1)\cdots U_z(x{-}1)$。代码以 $F(-\delta_z)$ 起始，
+依次右乘 $\delta_z$ 个共轭链接（roll 位置 $-1..-\delta_z$）、$\tilde F(0)$、$\delta_z$ 个正向
+链接（位置 $-\delta_z..-1$），最后对色指标取迹并按 $x_\perp,t$ 求和，返回形状 $(N_t,)$ 数组。
+平移等价形式 $O(z)=\operatorname{Tr}[F(0)W^\dagger(0{\to}z)\tilde F(z)W(0{\to}z)]$。
+（几何与 z 依赖性已用随机 SU(3) 链接的最小模型按代码步骤逐项复现，\textcolor{accent}{确证}。）
+
+指标对拆分与组合（\texttt{\nolinkurl{Calc_ope_unpol.py:74-90}}，zdir 为动量方向，$\perp_1,\perp_2$
+为其两个横向方向）：
+\begin{equation}\label{eq:comb}
+O(z)=-\mathcal{M}^{tx;tx}(z)-\mathcal{M}^{ty;ty}(z)+2\,\mathcal{M}^{xy;xy}(z),
+\qquad \mathcal{M}^{\mu\nu;\mu'\nu'}\equiv\sum_t O^{\mu\nu;\mu'\nu'}(t,\cdot),
+\end{equation}
+即 rank 0 算 $F_{t\perp_1}W\tilde F_{t\perp_1}$，rank 1 算 $F_{t\perp_2}W\tilde F_{t\perp_2}$，
+rank 2 算 $F_{\perp_1\perp_2}W\tilde F_{\perp_1\perp_2}$（MPI 三路并行，每 rank 独立读规范场，
+内存 $\times3$ 换取免同步）。$\varepsilon$ 对偶给出分量关系（由 \eqref{eq:dual} 与 $F$
+反对称性手推并核对，\textcolor{accent}{确证}）：
+\begin{equation}\label{eq:dualrel}
+\tilde F_{tx}=F^{yz},\qquad \tilde F_{ty}=-F^{xz},\qquad \tilde F_{xy}=-F^{tz}\;\big(=F^{zt}\big),
+\end{equation}
+故式 \eqref{eq:comb} 展开为 $\;-\operatorname{Tr}[F^{tx}WF^{yz}]+\operatorname{Tr}[F^{ty}WF^{xz}]
+-2\operatorname{Tr}[F^{xy}WF^{tz}]$。纵向无穷动量极限（$P_\mu F^{\mu\nu}=0$ 壳上横度，
+$F^{t\perp}\to F^{\perp z}$，$F^{tz}\to -F^{zz}$）下，前三项电-磁混合项相消，留下
+$O\to 2\operatorname{Tr}[F^{xy}WF^{zz}]$（\textcolor{accent}{确证}，形式计算）。
+该组合与父项目文档（PyQCD 根 AGENTS.md）记载的胶子 TMD 组合
+$M^{tx;tx}+M^{ty;ty}-2M^{xy;xy}$ 仅差整体符号（\textcolor{accent}{确证}，文档对照）；
+其与非极化胶子准 PDF 的对应关系在仓库内无推导文本（\textcolor{phys}{推断}）。
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查，无孤儿符号。
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{gauge[t,z,y,x,$\mu$,a,b]} & $U_\mu(x)_{ab}$ & 规范链接变量；\texttt{\nolinkurl{Operator.py:5,99}} \\
+\texttt{pla[$\mu$,$\nu$]} & $F_{\mu\nu}(x)$ & clover 场强（无 $a^2g$ 因子）；\texttt{\nolinkurl{Operator.py:164-174}} \\
+\texttt{pla\_tilde} & $\tilde F_{\mu\nu}$ & 对偶场强；\texttt{\nolinkurl{Operator.py:177-184}} \\
+\texttt{Tensor4} & $\tfrac12\varepsilon_{\mu\nu\rho\sigma}$ & $\varepsilon_{0123}=+1$，数值验证；\texttt{\nolinkurl{Operator.py:9-39}} \\
+\texttt{delta\_z} & $z/a$ & 非局域分离（格点单位）；\texttt{\nolinkurl{Calc_ope_unpol.py:23}} \\
+\texttt{operators\_new\_z0\_mu2} & $O^{\mu\nu;\mu'\nu'}(z)$ & 闭合色环双线性算符；\texttt{\nolinkurl{Operator.py:339-368}} \\
+\texttt{\_mu,\_nu}（rank 拆分） & $(t,\perp_1),(t,\perp_2),(\perp_1,\perp_2)$ & 三个独立指标对；\texttt{\nolinkurl{Calc_ope_unpol.py:74-90}} \\
+\texttt{ops\_mu3\_nu0/1, mu0\_nu1} & $\mathcal{M}^{tx},\mathcal{M}^{ty},\mathcal{M}^{xy}$ & 输出文件命名；\texttt{\nolinkurl{Calc_ope_unpol.py:129-133}} \\
+\texttt{-\_ope\_30-\_ope\_31+2*\_ope\_01} & $O(z)$ 组合 & 式 \eqref{eq:comb}；\texttt{\nolinkurl{02_ratio/code.py:286}} \\
+\bottomrule
+\end{xltabular}
+
+组合的\textbf{交叉验证}（\texttt{\nolinkurl{02_ratio/test_ope_structure.py:47-79}}）：对师兄
+（zengch）参考算符 \texttt{ops\_dz*.npz} 逐一比较六种组合的逐元素最大差，生产代码选用
+$-O_{ti}-O_{tj}+2O_{ij}$（组合 4）。数值匹配本身需集群数据（\textcolor{warn}{未验证}，
+本地无 \texttt{/public/} 数据）。
+
+\lstinputlisting[firstline=339,lastline=368]{/root/PyQCD/refer/huangcl/00_contract/00_code/Operator.py}
+\lstinputlisting[firstline=74,lastline=90]{/root/PyQCD/refer/huangcl/00_contract/00_code/Calc_ope_unpol.py}
+\lstinputlisting[firstline=60,lastline=63]{/root/PyQCD/refer/huangcl/02_ratio/test_ope_structure.py}
+
+% ---------------- C3 ----------------
+\subsection{C3. 质子 2pt 蒸馏收缩（映射 + 算法）}
+
+\begin{physbox}
+\textbf{物理图像:} 蒸馏（distillation）把夸克传播子投影到低维本征空间，使三矢量 Wick 收缩
+退化为 $N_{ev}\times N_{ev}\times N_{ev}$ 张量运算；动量涂抹（mom\textunderscore smear）在
+本征矢量上乘相位 $e^{-iP\cdot x}$，等效对源做动量投影，直接给出动量本征态上核子关联函数。
+\end{physbox}
+
+动量涂抹三矢量顶角 \texttt{\nolinkurl{VVV_Calc_cupy}}（2pt 脚本:244-318）：
+\begin{equation}\label{eq:vvv}
+V_{abc}(t)=\sum_x e^{-iP\cdot x}\,\varepsilon^{ijk}\,v^i_a(x)\,v^j_b(x)\,v^k_c(x),
+\end{equation}
+6 项 Levi--Civita 收缩按 $x$ 分块累加（中间张量超显存，块化处理），每块一次
+\texttt{einsum} 收缩，模式为 "x,ax,bx,cx->abc"，即每 $t$ 片
+$\sim 6 N_x \cdot (N_x^2 N_{ev}^3)$ 乘加。随后对每个源时间以蒸馏传播子
+（\texttt{\nolinkurl{readin_peram}}，形状 $(t,d_{sink},d_{source},e_{sink},e_{source})$，
+按 $d_{source}$ 分片读入）完成
+$C_{g5g4}$ 插值子收缩（脚本:366-387）：
+\begin{equation}\label{eq:2pt}
+C(t_{sink},t_{source})_{il}=\underbrace{V_{abc}\,\tau_{gjad}\,\tau'_{gjbe}\,\tau_{ilcf}\,V^*_{def}}_{\text{直项}}
+-\underbrace{V_{abc}\,\tau_{glaf}\,\tau'_{gjbe}\,\tau_{ijcd}\,V^*_{def}}_{\text{交换项}},
+\end{equation}
+直项与交换项分别对应质子的两组 Wick 收缩（$(u,d)$ 与 $(d,u)$ 交换），
+$\tau'=(\Gamma\,\tau\,\Gamma)$、$\Gamma=C\gamma_5\gamma_4$（\texttt{gamma(7)@gamma(4)}，
+DR 基下 $C\gamma_5\gamma_4=(\gamma_3\gamma_1)\gamma_4$）。最终以奇偶投影
+$P_\pm=\frac12(1\pm\gamma_4)$ 收缩自旋指标，得正/负宇称关联函数（脚本:408-409）。
+方向约定：$t_{sink}<t_{source}$ 时正宇称取 $-1$ 因子（时间反演对称性，脚本:414-424）。
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{VVV\_sink[t]} & $V_{abc}(t)$ & 动量涂抹三矢量顶角，式 \eqref{eq:vvv}；\texttt{\nolinkurl{2pt:244-318}} \\
+\texttt{phase\_factor} & $e^{-iP\cdot x\,2\pi/N_x}$ & 动量相位；\texttt{\nolinkurl{2pt:155-165}} \\
+\texttt{peram\_u} & $\tau(t,d,e)$ & 蒸馏传播子；\texttt{\nolinkurl{2pt:205-236}} \\
+\texttt{interProject1/2} & $\Gamma=C\gamma_5\gamma_4$ & 质子插值子；\texttt{\nolinkurl{2pt:131-139}} \\
+\texttt{matrix\_pplus/pm} & $\frac12(1\pm\gamma_4)$ & 奇偶宇称投影；\texttt{\nolinkurl{2pt:102-105}} \\
+\texttt{contrac\_nucl\_matrix} & $C(t_s,t_{so})$ & 完整 Wick 收缩，式 \eqref{eq:2pt}；\texttt{\nolinkurl{2pt:356-387}} \\
+\bottomrule
+\end{xltabular}
+
+\lstinputlisting[firstline=366,lastline=387]{/root/PyQCD/refer/huangcl/00_contract/00_code/2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py}
+
+% ---------------- C5 ----------------
+\subsection{C5. 重采样与统计推断框架（算法 + 正确性论证）}
+
+\begin{physbox}
+\textbf{物理图像:} 格点关联函数按组态（配置）统计；误差必须由组态间涨落决定。jackknife
+（留一）与 bootstrap（有放回重采样）把 $N_{conf}$ 个原始样本扩成 $N_{sample}$ 个"伪样本"，
+再对每个伪样本独立走完整拟合管线，最后用伪样本分布直接给出拟合参数的统计误差——完全避开
+误差传播公式。
+\end{physbox}
+
+\begin{algobox}
+\textbf{核心算法:} 重采样 + 协方差 + $\chi^2$ 三件套（\texttt{\nolinkurl{analysis_tools.py:97-245}}）。
+jackknife 伪样本 $\hat x_j=(N\bar x-x_j)/(N-1)$ 与标准误 $\sigma=\text{std}\cdot\sqrt{N-1}$
+（式 \eqref{eq:jk}）；bootstrap 用\textbf{计数矩阵 $\times$ 数据矩阵}的一次 BLAS 完成全部
+$N_{sample}$ 个样本均值（注释声明较 Python 循环快 10--20 倍，\textcolor{phys}{推断}）；
+协方差与条件数经 \texttt{eigvalsh} 得到；$\chi^2$ 支持 lsqfit 式 SVD 截断。
+\end{algobox}
+
+\begin{align}
+\hat x_j &= \frac{N\bar x-x_j}{N-1} \label{eq:jk}
+\quad(\text{jackknife 伪样本}),\qquad
+\sigma_{\bar x}=\text{std}\{\hat x_j\}\cdot\sqrt{N-1}, \\
+\mathrm{Cov} &= \frac{N-1}{N}\sum_j(\hat x_j-\bar{\hat x})(\hat x_j-\bar{\hat x})^T
+=\frac{1}{N(N-1)}\sum_i(x_i-\bar x)(x_i-\bar x)^T,\label{eq:jkcov}\\
+\chi^2 &= \Delta^T C^{-1}\Delta,\qquad
+C^{-1}\to\sum_{\lambda>\lambda_{\max}\cdot s} \lambda^{-1}\,\hat e_\lambda\hat e_\lambda^T
+\;\;(\text{SVD 截断，lsqfit 式}).\label{eq:chi2}
+\end{align}
+式 \eqref{eq:jkcov} 右端恒等式用 $\hat x_j-\bar{\hat x}=(\bar x-x_j)/(N-1)$ 一步得到；
+已数值验证至机器精度（相对差 $2\times10^{-16}$），且 $\sigma_{\bar x}$ 与真标准误
+$\sqrt{\sum(x_i-\bar x)^2/[N(N-1)]}$ 逐样本相等（\textcolor{accent}{确证}）。
+正确性要点：jackknife 样本协方差直接以伪样本计算并乘 $(N-1)/N$，恰好等于估计量协方差，
+不存在尺度误差；bootstrap 用 $(1/N)$ 归一，等价于样本协方差除以样本数（\textcolor{accent}{确证}）。
+
+逐样本拟合（\texttt{\nolinkurl{fit}}()，\texttt{\nolinkurl{analysis_tools.py:252-351}}）：每伪样本
+$y=\text{gvar}(\hat y_j,\,C)$ 后调 \texttt{\nolinkurl{lsqfit.nonlinear_fit}}，prior 非空时优先
+（否则 $p_0$）；结果数组固定为 $N_{sample}$ 大小，debug 模式未拟合样本以 NaN 填充，
+接口对调用方透明。debug 模式退化为对角协方差并只拟合前 20 个样本（登录节点快速迭代）。
+
+\lstinputlisting[firstline=139,lastline=153]{/root/PyQCD/refer/huangcl/98_tools/analysis_tools.py}
+\lstinputlisting[firstline=156,lastline=183]{/root/PyQCD/refer/huangcl/98_tools/analysis_tools.py}
+
+% ---------------- C6 ----------------
+\subsection{C6. 3pt/2pt 比值 $R(z)$ 与激发态拟合（物理推导 + 数值结果）}
+
+\begin{physbox}
+\textbf{物理图像:} 胶子算符与核子无夸克线连接（断开型插入）。比值
+$R(t,\tau,z)=\big[\langle O(\tau,z)\,C_2(t)\rangle-\langle O\rangle\langle C_2\rangle\big]/
+\langle C_2\rangle$ 在"源时间平均 + 真空减除"后，随 $t,\tau$ 的激发态污染被模型吸收，
+平台值即归一化裸矩阵元 $\langle P|O(z)|P\rangle/\langle P|P\rangle\equiv c_0(z)$。
+\end{physbox}
+
+数据装配（\texttt{\nolinkurl{compute_ratio}}，02\_ratio/code.py:258-346）：对每个源时间
+$t_i$，用 \texttt{np.roll} 把 $C_2(t_i{+}t,t_i)$ 平移到 $t_i=0$（$N_t=72$ 个源时间全部
+平均，统计增强 $\sim\sqrt{72}$）；样本级构建 $C_3=O\cdot C_2$、重采样后减 $C_2\cdot O$
+断开部分，逐 $z$ 得：
+\begin{equation}\label{eq:ratio}
+R(dt,\tau,z)=\Big\langle \frac{C_3^{\text{disc}}}{C_2}\Big\rangle_{t_i}
+\xrightarrow{\;t_i\text{平均}\;}\langle O(z)\rangle_{N}
+\quad(\text{归一化断开型矩阵元}).
+\end{equation}
+激发态模型（\texttt{\nolinkurl{model}}，code.py:354-360）——谱分解到第一激发态、源/汇
+插值子相同（对称性 $\Rightarrow$ 两端点污染振幅相等）：
+\begin{equation}\label{eq:model3pt}
+R(dt,\tau)=c_0+c_1\,e^{-dE\,\tau}+c_1\,e^{-dE\,(dt-\tau)}.
+\end{equation}
+推导依据：3pt 谱分解 $\langle O(\tau)\rangle\propto A_0^2e^{-E_0 dt}\,h(z)
++A_0A_1\big[e^{-E_0\tau}e^{-E_1(dt-\tau)}+e^{-E_1\tau}e^{-E_0(dt-\tau)}\big]+\cdots$
+除以 2pt 后即得式 \eqref{eq:model3pt}（每步为谱分解 + 比值归一，\textcolor{accent}{确证}
+与代码模型逐项一致）。$c_0=h(z,P_z)$ 为裸矩阵元；$c_1$ 为激发态振幅，$dE$ 为激发能隙。
+
+拟合管线：6 组窗口（$t_{sep}\in[6,9]$、$nex\in[2,4]$），prior 优先
+（$c_0=0.6(5)$、$c_1=-2(2)$、$dE=1(3)$），逐 $z$ 独立拟合（code.py:402-425）。实测结果
+（\texttt{\nolinkurl{1_fit_report.txt}}，tsep7\_11\_nex2，\textcolor{accent}{确证}）：
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{0.95\textwidth}{lXXXXX}
+\toprule
+$z$ & 0 & 1 & 2 & 3 & 4 \\
+\midrule
+$c_0(z)$ & $0.662(96)$ & $0.67(10)$ & $0.599(95)$ & $0.465(76)$ & $0.333(54)$ \\
+$z$ & 5 & 6 & 7 & 8 & 9 \\
+\midrule
+$c_0(z)$ & $0.224(36)$ & $0.147(26)$ & $0.094(22)$ & $0.054(20)$ & $0.026(20)$ \\
+\bottomrule
+\end{tabularx}
+\caption{裸矩阵元 $c_0(z)$（$P_z=2$，jackknife，$\chi^2/\text{dof}\approx1.0$；数据来源:
+\texttt{\nolinkurl{02_ratio/1_result/L24x72/fit_Pz2_Nsam200_dtmax20_tsep7_11_nex2/1_fit_report.txt}}）}
+\end{table}
+
+\noindent 物理图像：$c_0(z)$ 随 $z$ 单调衰减（Ioffe 时间分布），短距由胶子分布主导，长距
+（$z\gtrsim6$）受 Wilson 线指数重整化支配（裸量，后续需重整化）。协方差条件数
+$\sim10^4$--$10^5$（病态），故 prior 与 SVD 处理不可或缺（\textcolor{accent}{确证}，报告数据）。
+
+\lstinputlisting[firstline=296,lastline=333]{/root/PyQCD/refer/huangcl/02_ratio/code.py}
+\lstinputlisting[firstline=354,lastline=360]{/root/PyQCD/refer/huangcl/02_ratio/code.py}
+
+% ---------------- C7 ----------------
+\subsection{C7. Feynman--Hellmann 变换（推导链 + 极限校验）}
+
+\begin{physbox}
+\textbf{物理图像:} 把比值对插入时间 $\tau$ 求和（FH 变换），激发态污染从"两端指数"
+$e^{-dE\,\tau}+e^{-dE(dt-\tau)}$ 塌缩成"整体指数" $e^{-dE\,t}$，且二次污染 $e^{-2dE\,t}$
+衰减双倍快——平台更早、误差更小，是比值法的统计增强版本。
+\end{physbox}
+
+定义（\texttt{\nolinkurl{compute_fh}}，code\_FH\_bare\_matele.py:254-288，
+$nex$ 为 $\tau$ 两端各截断点数）：
+\begin{equation}\label{eq:fhdef}
+S(t)=\sum_{\tau=nex}^{t-nex} R(t,\tau),\qquad
+\mathrm{FH}(t)=S(t+1)-S(t).
+\end{equation}
+代入式 \eqref{eq:model3pt} 作几何求和（每步依据：式 \eqref{eq:model3pt} + 等比级数求和）：
+\begin{align}
+S(t)&=(t+1-2nex)\,c_0
++c_1\frac{e^{-dE\,nex}-e^{-dE\,(t+1-nex)}}{1-e^{-dE}}
++c_1\,e^{-dE\,t}\,\frac{e^{dE\,nex}-e^{-dE\,(t-nex)}}{e^{dE}-1},\label{eq:fhS}\\
+\mathrm{FH}(t)&=c_0+c_1\,e^{-dE\,(t+1-nex)}
++c_1\,(1+e^{-dE})\,e^{-dE\,(2t+1-2nex)}+O(e^{-3dE\,t}).\label{eq:fhres}
+\end{align}
+\noindent 推导校验：\textcolor{accent}{(1)} 极限 $t\to\infty$：$\mathrm{FH}(t)\to c_0$（式
+\eqref{eq:fhres} 前三项全部指数衰减）——平台值即裸矩阵元，与代码用常数模型
+$fh\_model=c_0$ 拟合平台一致；\textcolor{accent}{(2)} $nex$ 截断：$\tau\in[nex,t-nex]$
+区间要求 $t>2\,nex$，代码在配置期显式校验
+\texttt{dt\_start $>$ 2*nex} 并报错退出（code\_FH\_bare\_matele.py:152-158）；
+\textcolor{accent}{(3)} 代码实现 $\mathrm{FH}[t]=S(t)-S(t-1)$（\texttt{temp -
+np.roll(temp,1)}），与式 \eqref{eq:fhdef} 的 $\mathrm{FH}(t)=S(t+1)-S(t)$ 仅差指标重标号
+（$t\to t-1$），平台位置平移 1 格，物理结论不变（\textcolor{accent}{确证}，实现细节）。
+统计增强：$t_i$ 平均与六方向（$\pm x,\pm y,\pm z$）平均后 FH 信噪比显著高于单点比值
+（\textcolor{phys}{推断}，代码结构 + 结果图 \texttt{\nolinkurl{06_FH_bare_matele/1_result/.../bestfit/z*.png}}）。
+
+\lstinputlisting[firstline=254,lastline=288]{/root/PyQCD/refer/huangcl/06_FH_bare_matele/code_FH_bare_matele.py}
+
+% ---------------- C8 ----------------
+\subsection{C8. 质子有效质量与两态拟合（物理 + 数值）}
+
+\begin{physbox}
+\textbf{物理图像:} 2pt 关联函数在大 $t$ 由最低能态主导：$C_2(t)\propto e^{-E_0 t}$。
+有效质量 $m_{\text{eff}}(t)=\ln[C_2(t)/C_2(t+1)]$ 在平台期直接读出 $E_0$；两态模型把
+基态+第一激发态同时拟合，平台可提前、系统误差可控。
+\end{physbox}
+
+实现（\texttt{\nolinkurl{04_proton_energy/code.py}}）：源时间平移平均后
+（compute\_corr2，脚本:183-217），有效质量与模型：
+\begin{align}
+m_{\text{eff}}(t)&=\ln\frac{C_2(t)}{C_2(t+1)}\cdot\frac{\hbar c}{a},
+\qquad \frac{\hbar c}{a}=\frac{0.197}{0.1053}\,\text{GeV}\approx1.87\,\text{GeV},
+\label{eq:meff}\\
+C_2(t)&=c_0\,e^{-E_0 t}\,\big(1+c_1\,e^{-dE\,t}\big),\label{eq:c2model}
+\end{align}
+拟合窗口 $t\in[6,12]$，$svdcut=10^{-6}$（脚本:105-109,272）。实测：
+$E_0=0.7698(72)\,a^{-1}\approx1.44$ GeV（$P_z=2$，$\chi^2/\text{dof}=0.46$，
+\texttt{\nolinkurl{2_fit_report.txt}}，\textcolor{accent}{确证}）；色带图
+（eff\_mass.png）叠加平台拟合区验证（\textcolor{accent}{确证}，图形产物）。
+单位换算量纲检查：$\hbar c=0.197$ GeV$\cdot$fm，$a=0.1053$ fm $\Rightarrow$
+$\hbar c/a=1.87$ GeV（无量纲自洽，\textcolor{accent}{确证}）。
+
+\lstinputlisting[firstline=225,lastline=231]{/root/PyQCD/refer/huangcl/04_proton_energy/code.py}
+
+% ---------------- 浅析 ----------------
+\subsection{浅析部分（C4、C9、C10）}
+
+\textbf{C4 $\gamma$ 矩阵 DR 基}（\texttt{\nolinkurl{98_tools/gamma_matrix_cupy_DR.py}}）：
+手征（DeGrand--Rossi）基，18 个 $4\times4$ 矩阵。已数值验证（\textcolor{accent}{确证}）：
+全部厄米、$\{\gamma_\mu,\gamma_\nu\}=2\delta_{\mu\nu}$ 精确、$\gamma_5=\gamma_1\gamma_2\gamma_3\gamma_4$、
+$\gamma_7=\gamma_3\gamma_1=-\gamma_2\gamma_4\gamma_5$（与代码注释一致）。DR 基为动量涂抹
+质子蒸馏（C3）的插值子组合提供基础。标准内容，故浅析。
+
+\textbf{C9 Slurm 模板化任务生成}（\texttt{\nolinkurl{multi.sh}}）：占位符
+\texttt{=NT=}/\texttt{=NX=}/\texttt{=CONF=} 经 sed 逐组态替换生成
+\texttt{02\_input/} 下任务目录并 \texttt{sbatch} 提交（00\_contract/01\_submit/01\_create\_task/multi.sh:44-51）。
+通用 shell 工程技巧，非核心物理。
+
+\textbf{C10 三方向 SEM 差异分析}（\texttt{\nolinkurl{05_ana_3dir_diff_sem/code_ana_3dir_diff_sem.py}}）：
+对三方向（$x,y,z$）的比值/2pt/meff 分布画直方图对比（均值与 jackknife SEM 标注在标签中），
+属中间诊断工具，用于核对方向独立性假设。
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+einsum + np.roll 全向量化场强 & 朴素多重 Python 循环 & 每顶角 4 次批量 $3\times3$ 矩阵乘；周期边界自动处理，无显式取模 \\
+$(\mu,\nu)$ 指标对 MPI 三路并行 & 单进程顺序计算 & 三路并行；每 rank 独立读规范场免同步（内存 $\times3$ 为代价） \\
+jackknife 协方差恒等式 & 直接对伪样本求协方差 & $(N-1)/N$ 因子使伪样本协方差精确等于估计量协方差（数值验证 $2\times10^{-16}$） \\
+bootstrap 计数矩阵 BLAS & Python 循环重采样 & 一次 $N_{sample}\times N_{conf}$ 乘 $N_{conf}\times M$ 矩阵乘；注释声明 10--20$\times$（推断） \\
+prior 优先的逐样本 lsqfit & 单次拟合 & 200 伪样本全协方差传播参数误差；debug 对角退化加速迭代 \\
+FH $\tau$ 求和压制激发态 & 单点比值平台 & 单激发态污染由 $e^{-dE\cdot\min(\tau,dt-\tau)}$ 变为 $e^{-dE\,t}+e^{-2dE\,t}$（式 \eqref{eq:fhres}） \\
+算符组合交叉验证 & 独立实现（师兄 zengch） & test\_ope\_structure.py 六组合最大差对比（数值需集群，未验证） \\
+debug/jack 双模式管线 & 单一模式 & 登录节点对角协方差快速排错 + 生产完整 jackknife，同一代码 \\
+\bottomrule
+\end{tabularx}
+\caption{独特性评估（数据来源: 实测/推导；标注推断处为注释声明）}
+\end{table}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+
+公式（编号公式集中索引）：
+\begin{itemize}
+\item 式 \eqref{eq:plaquette}——plaquette 顶角（连续极限场强）；式 \eqref{eq:clover}——clover 场强。
+\item 式 \eqref{eq:dual}——$\varepsilon$ 对偶；式 \eqref{eq:bilocal}——闭合色环双线性算符；
+式 \eqref{eq:comb}——非极化组合；式 \eqref{eq:dualrel}——分量对偶关系。
+\item 式 \eqref{eq:vvv}——动量涂抹三矢量顶角；式 \eqref{eq:2pt}——质子 2pt Wick 收缩。
+\item 式 \eqref{eq:jk}--\eqref{eq:chi2}——jackknife/SEM/协方差/$\chi^2$（含 SVD 截断）。
+\item 式 \eqref{eq:ratio}——比值定义；式 \eqref{eq:model3pt}——比值两态模型。
+\item 式 \eqref{eq:fhdef}--\eqref{eq:fhres}——FH 变换与激发态压制推导。
+\item 式 \eqref{eq:meff}--\eqref{eq:c2model}——有效质量与 2pt 两态模型。
+\end{itemize}
+
+关键代码片段（直引，行号即参考源）：
+
+\lstinputlisting[firstline=150,lastline=160]{/root/PyQCD/refer/huangcl/00_contract/00_code/Operator.py}
+
+\lstinputlisting[firstline=35,lastline=39]{/root/PyQCD/refer/huangcl/98_tools/gamma_matrix_cupy_DR.py}
+
+\begin{lstlisting}[firstline=44,lastline=49,language=bash]
+\end{lstlisting}
+\lstinputlisting[firstline=44,lastline=49,language=bash]{/root/PyQCD/refer/huangcl/00_contract/01_submit/01_create_task/multi.sh}
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+
+\begin{xltabular}{\textwidth}{XlX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{00_contract/00_code/Operator.py:9-39}} & 仓库 & Tensor4=½$\varepsilon$ 构造（数值验证） \\
+\texttt{\nolinkurl{00_contract/00_code/Operator.py:77-161}} & 仓库 & clover 四顶角场强 $F_{\mu\nu}$ \\
+\texttt{\nolinkurl{00_contract/00_code/Operator.py:339-368}} & 仓库 & 双线性算符 $O^{\mu\nu;\mu'\nu'}(z)$ \\
+\texttt{\nolinkurl{00_contract/00_code/Calc_ope_unpol.py:74-90}} & 仓库 & MPI 指标对拆分（3 rank） \\
+\texttt{\nolinkurl{00_contract/00_code/2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py:244-318}} & 仓库 & VVV 动量涂抹顶角 \\
+\texttt{\nolinkurl{00_contract/00_code/2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py:366-387}} & 仓库 & $C_{g5g4}$ 插值子 Wick 收缩 \\
+\texttt{\nolinkurl{98_tools/analysis_tools.py:97-245}} & 仓库 & sem/resample/协方差/$\chi^2$ \\
+\texttt{\nolinkurl{98_tools/analysis_tools.py:252-351}} & 仓库 & 逐样本 lsqfit 拟合 \\
+\texttt{\nolinkurl{02_ratio/code.py:258-346}} & 仓库 & 比值 $R(z)$ 装配（源时间平均+断开减除） \\
+\texttt{\nolinkurl{02_ratio/code.py:354-360}} & 仓库 & 比值两态模型 \\
+\texttt{\nolinkurl{02_ratio/test_ope_structure.py:47-79}} & 仓库 & 组合交叉验证（六组合最大差） \\
+\texttt{\nolinkurl{02_ratio/1_result/L24x72/fit_Pz2_Nsam200_dtmax20_tsep7_11_nex2/1_fit_report.txt}} & 产物 & $c_0(z)$ 拟合报告（z=0..9） \\
+\texttt{\nolinkurl{06_FH_bare_matele/code_FH_bare_matele.py:254-288}} & 仓库 & FH 变换实现 \\
+\texttt{\nolinkurl{04_proton_energy/code.py:183-217,225-231}} & 仓库 & 2pt 装配与两态模型 \\
+\texttt{\nolinkurl{04_proton_energy/1_result/L24x72/_Pz2/2_fit_report.txt}} & 产物 & $E_0$ 拟合报告 \\
+\texttt{\nolinkurl{AGENTS.md}} & 文档 & 流水线步骤定义（0/1/2/4，步骤 3 跳过） \\
+\bottomrule
+\end{xltabular}
+
+% ================= 6 结论 =================
+\section{结论}
+
+\begin{conclbox}
+穷尽剖析完成：12 个候选 = \textcolor{phys}{深挖 7 / 浅析 3 / 排除 2}。
+\textbf{最强竞争力}：① \textcolor{phys}{GPU 胶子 OPE 算符族}（C1+C2）——clover 场强 +
+$\varepsilon$ 对偶 + 闭合色环 Wilson 线 + 三指标对组合（式 \eqref{eq:comb}），算符几何经数值
+逐项验证、组合经师兄参考交叉验证（数值匹配待集群复现）；
+② \textcolor{phys}{jackknife 统计框架}（C5）——协方差恒等式与 $\sqrt{N-1}$ 标准误精确实现
+（机器精度验证），配合 prior 优先的逐样本 lsqfit 处理病态协方差（条件数 $10^4$--$10^5$）。
+物理闭环（C6--C8）以实测产物为证：$c_0(z)$ 从 $0.662(96)$（$z=0$）单调衰减至 $0.026(20)$
+（$z=9$），$E_0=0.7698(72)\,a^{-1}\approx1.44$ GeV（$P_z=2$）。
+\end{conclbox}
+
+\begin{warnbox}
+\textbf{局限与未验证项}：① 组合 \eqref{eq:comb} 与非极化胶子分布的对应在仓库内无推导文本
+（\textcolor{phys}{推断}，与父项目文档一致）；② test\_ope\_structure.py 的数值匹配结果需
+集群 \texttt{/public/} 数据复现（\textcolor{warn}{未验证}）；③ bootstrap 加速 10--20$\times$
+为注释声明（\textcolor{phys}{推断}）；④ $R(z)$ 为断开型构造（$O\cdot C_2$ 因子化近似），严格
+定义依赖组内文献；⑤ $c_0(z)$ 为裸量，长距受 Wilson 线指数重整化支配，重整化超出本流水线；
+⑥ 闭合色环算符的"双线"几何（$W$ 与 $W^\dagger$ 同跨度）之物理动机为\textcolor{phys}{推断}
+（几何本身确证）；⑦ C3 脚本为 donghx 副本，其独特性主要为蒸馏工程实现。
+\end{warnbox}
+
+\end{document}
