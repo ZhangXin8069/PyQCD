@@ -1,0 +1,125 @@
+task:
+  name: sigma_c_plus_baryon_2pt_point_source
+  description: Compute the rest-frame two-point correlator of the Sigma_c+ baryon with quark content udc using a local interpolating field with the requested flavor-symmetric light diquark structure Cg1 = C@gamma_x, point source at [0, 0, 0, 0], and the standard forward positive-parity projector Tmat=(I+gamma_t)/2; save the resulting correlator as plain text without header in the run directory. This single-configuration setup is to be treated as an execution/debug measurement rather than a physics-quality spectroscopy determination.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: sigma_c_plus_2pt
+      type: baryon_2pt
+      name: Sigma_c+ forward positive-parity two-point function
+
+  hadrons:
+    - id: sigma_c_plus
+      name: Sigma_c+
+      type: baryon
+      flavor: udc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} C gamma_x d^b)c^c with sink spin projection Tmat=(I+gamma_t)/2; the Cgamma_x light diquark is symmetric in spinor indices and is used here as the requested Sigma-type flavor-symmetric light-diquark operator for the J=1/2 Sigma_c+ channel
+      subtype: charmed_baryon
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use stout-smeared links in the Dirac operator exactly as requested. One light propagator is reused for both u and d only through isospin degeneracy of the light action; the Sigma-type flavor assignment is enforced in the baryon contraction, not by identifying the operator as a generic nucleon template. Verify achieved solver residual after inversion and fail the run if the requested stopping criterion is not met.
+      sink:
+        id: point_sink_l
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use the same stout-smeared links for the charm inversion as specified by the task. Record the achieved residual explicitly. Treat the use of this ensemble charm mass and clover action for Sigma_c+ as an input assumption of the supplied setup; charm discretization/tuning is not validated by this single-configuration run and must be regarded as a limitation of any physics interpretation.
+      sink:
+        id: point_sink_c
+        type: point
+
+measurement:
+  correlators:
+    - id: sigma_c_plus_2pt_measurement
+      type: baryon_2pt
+      propagator: prop_l
+      observable: sigma_c_plus_2pt
+      propagators_used:
+        - prop_l
+        - prop_c
+      contraction_description: Compute the zero-momentum local baryon two-point correlator for O_Sigma_c+=epsilon^{abc}(u^{Ta} C gamma_x d^b)c^c and its adjoint, with two light lines supplied by prop_l and the charm line supplied by prop_c. Include both Wick-contraction topologies associated with the two light quarks, then apply the rest-frame forward projector Tmat=(I+gamma_t)/2 and trace over spin at the sink. Sum over all spatial sink positions to form C(t) for t=0..71.
+      assumptions:
+        - Zero momentum is an explicit rest-frame assumption for this 2pt task.
+        - The projector isolates the standard forward positive-parity component but does not by itself remove backward-state contamination or excited-state overlap.
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - Save one row per time slice in a plain txt file in the run directory.
+  - Use exactly three whitespace-separated columns per row: t Re Im.
+  - Write data only with no header, labels, or extra text.
+  - Treat the single listed configuration as a code-test/debug run, not a final spectroscopy dataset.
+
+freeform_plan: |

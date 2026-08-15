@@ -1,0 +1,199 @@
+task:
+  name: Lambda_to_Lambda_3pt_vector_current
+  description: >
+    Three-point correlation function for Lambda -> Lambda with flavor-diagonal
+    vector current (s->s, gamma_x). Uses point source at origin, zero momentum,
+    sequential source method with sink time t_seq=8. Positive-parity projection
+    via T = (I + gamma_t)/2. Stout-smeared gauge links (1 step, rho=0.125, ndim=4)
+    for all inversions. Only the 3pt correlator is computed; no 2pt.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: Lambda_FF_vec
+      type: baryon_3pt
+      name: "Lambda vector form factor (s->s, gamma_x)"
+
+  hadrons:
+    - id: Lambda_src
+      name: Lambda_source
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) s^c"
+      parity_projector: "(I + gamma_t) / 2"
+    - id: Lambda_snk
+      name: Lambda_sink
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) s^c"
+      parity_projector: "(I + gamma_t) / 2"
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1e-10
+        maxiter: 10000
+        multigrid:
+          block: [[6, 6, 6, 3], [4, 4, 4, 6]]
+        notes: "Multigrid solver for light quark; uses stout-smeared links. Tolerance relaxed to 1e-10 for reliable convergence on 24^3x72."
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1e-10
+        maxiter: 10000
+        multigrid:
+          block: [[6, 6, 6, 3], [4, 4, 4, 6]]
+        notes: "Multigrid solver for strange quark; uses stout-smeared links."
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+        notes: >
+          Sequential source built from the Lambda sink at t=8 using forward
+          prop_l (u and d quark lines). The Lambda (uds) sink has exactly one u
+          and one d quark, so the sink block B contains only ONE contraction term
+          (direct contraction of u->u and d->d via prop_l) — there is no exchange
+          term unlike the proton (uud) case. The s-quark spin-color index is left
+          open. Sequential source is eta = gamma_5 B^dagger gamma_5. Solved on the
+          strange quark with stout-smeared links. The generate_einsum tool must
+          use the single-term (no-exchange) baryon_3pt topology for the Lambda.
+        forward_propagators: [prop_l]
+        sink_time: 8
+        parity_projector: "(I + gamma_t) / 2"
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1e-10
+        maxiter: 10000
+        multigrid:
+          block: [[6, 6, 6, 3], [4, 4, 4, 6]]
+        notes: "Multigrid solver for sequential strange propagator."
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: Lambda_3pt_vec
+      type: baryon_3pt
+      observable: Lambda_FF_vec
+      current:
+        type: vector
+        gamma: gamma_x
+        flavor_insertion: "s->s"
+      source_hadron: Lambda_src
+      sink_hadron: Lambda_snk
+      sequential_propagator: prop_s_seq
+      forward_propagators: [prop_l, prop_s]
+      sink_time: 8
+      parity_projector: "(I + gamma_t) / 2"
+      momentum_transfer: [0, 0, 0]
+      notes: >
+        Final 3pt contraction: C_3(tau) = sum_z Tr[G_s^{seq}(z,tau) gamma_x S_s(z,tau)].
+        Only one connected topology exists (no disconnected diagrams for this
+        flavor-diagonal single-strange-quark operator, no exchange term in the
+        sink block because Lambda has only one u and one d). Contact terms at
+        tau=0 and tau=t_seq are computed and saved; physical interpretation
+        should handle them in the analysis stage.
+
+output:
+  format: txt
+  metadata: false
+  filename: "Lambda_3pt_vector_corr.txt"
+  notes: "Raw 3pt correlator values saved per current-insertion time slice, no header."
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+extras:
+  - "Only 3pt function computed; 2pt function explicitly excluded per user request."
+  - "Positive-parity projector T = (I + gamma_4) / 2 in DeGrand-Rossi basis."
+  - "Lambda (uds) sink block has only ONE u/d contraction term — no exchange (unlike proton's two-u-quark structure). The generate_einsum tool must use the single-term baryon_3pt topology."
+  - "Sequential source built on strange-quark line at sink; requires one extra inversion per configuration."
+  - "Contact terms (tau=0 and tau=t_seq) included in output; analysis should handle them."
+  - "Solver tolerance relaxed from 1e-12 to 1e-10 for reliable multigrid-CG convergence on 24^3x72; 10000 maxiter is a safe upper bound."
+  - "t_seq=8 on a 72-slice lattice is short for a baryon; expect significant excited-state contamination. Physical interpretation requires either multiple sink times and a 2pt fit, or deferral to a future systematic study."

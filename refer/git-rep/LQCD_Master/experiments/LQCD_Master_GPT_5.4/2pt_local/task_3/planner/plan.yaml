@@ -1,0 +1,100 @@
+task:
+  name: eta_s_connected_2pt_point_source_stout_txt
+  description: Compute the zero-momentum connected eta_s proxy two-point function for the flavor-diagonal strange pseudoscalar operator sbar gamma_5 s, using a single point source at [0, 0, 0, 0]. Construct a stout-smeared copy of the gauge field with parameters (n_steps=1, rho=0.125, ndim=4), use that smeared field in the strange-quark Dirac inversion, and save the final per-configuration correlator as plain text with no header or extra text in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: eta_s_connected_2pt
+      type: meson_2pt
+      name: connected eta_s proxy pseudoscalar two-point function
+
+  hadrons:
+    - id: eta_s_connected
+      name: eta_s
+      type: meson
+      flavor: flavor-diagonal connected strange pseudoscalar (eta_s proxy)
+      momentum: [0, 0, 0]
+      interpolating_operator: sbar gamma_5 s
+      subtype: connected_pseudoscalar_flavor_diagonal_proxy
+
+  propagators:
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_clover
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use a stout-smeared copy of the loaded gauge field exactly once in the Dirac operator for the strange-quark inversion. The requested propagator is the full 12 spin-color point-source solve from source position [0,0,0,0]. These mass and clover parameters are valid only insofar as they match the stated C24P29 ensemble metadata.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: corr_eta_s_connected_2pt
+      type: meson_2pt
+      propagator: prop_s_point
+      observable: eta_s_connected_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - compute the connected correlator C(t)=sum_x Tr[S_s^dagger(x,t;0) S_s(x,t;0)] for sbar gamma_5 s
+  - omit disconnected flavor-singlet strange loops intentionally; this is eta_s proxy production, not full eta or eta-prime spectroscopy
+  - use only the fixed source at [0,0,0,0] with no source-time averaging or translational averaging beyond the sink spatial sum
+  - write one txt file per configuration in the run directory named eta_s_connected_2pt_cfg_<cfg>.txt with exactly Lt=72 rows of real-part values only and no header, index, or comments
+
+freeform_plan: |

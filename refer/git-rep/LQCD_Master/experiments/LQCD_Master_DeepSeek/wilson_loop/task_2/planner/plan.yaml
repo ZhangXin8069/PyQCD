@@ -1,0 +1,120 @@
+task:
+  name: wilson_loop_R1_T2
+  description: |
+    Compute rectangular Wilson loop W(R=1, T=2) averaged over XT, YT, and ZT planes
+    using unsmeared gauge links. Pure-gauge measurement; no quark propagators or
+    fermion inversions required. Save the final scalar result to a plain text file.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wl_R1_T2
+      type: wilsonloop
+      name: Wilson loop W(R=1,T=2), plane-averaged
+
+  hadrons: []
+
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "No gauge link smearing (stout smearing disabled)"
+  - "Wilson loop computed directly from original unsmeared gauge links"
+  - "Result averaged over XT, YT, ZT planes per configuration"
+  - "Final scalar value written as plain text (no header) to output file"
+
+freeform_plan: |
+  ## Physics Goal
+  Compute the rectangular Wilson loop W(R=1, T=2) defined as:
+
+    W_{μν}(R,T) = (1/N_c) Re Tr P[U_μ(x) U_ν(x+Rμ̂) ... U_μ†(x+Tν̂+Rμ̂) ... U_ν†(x+Tν̂)]
+
+  with R=1 spatial extent and T=2 temporal extent. The loop traces a 1×2 rectangle
+  in the μν plane. Average over the three spatial-temporal planes (XT, YT, ZT)
+  for improved statistics. The result is a single real number per gauge configuration.
+
+  ## Physical Context
+  Wilson loops at small (R,T) probe short-distance gauge dynamics and serve as
+  building blocks for larger loops. W(1,2) is the smallest non-trivial rectangle
+  beyond the plaquette and contributes to the static potential extraction and
+  Creutz ratio analysis at small separations.
+
+  ## Computational Steps
+
+  1. Initialization: PyQUDA initialization with lattice size [24,24,24,72] and
+     process grid [1,1,1,4] (4 MPI ranks along t-direction).
+
+  2. Gauge Loading: Read the gauge configuration from the provided Chroma QIO
+     (LIME) format file. No stout smearing or any other link smearing is applied.
+
+  3. Wilson Loop Construction:
+     - XT plane: path = [X] + [T,T] + [-X] + [-T,-T]
+     - YT plane: path = [Y] + [T,T] + [-Y] + [-T,-T]
+     - ZT plane: path = [Z] + [T,T] + [-Z] + [-T,-T]
+     Use gauge.loop() with 4 groups, weights [1,1,1,0].
+
+  4. Trace Extraction: For each plane (groups 0,1,2), transfer the per-site
+     SU(3) matrix to host via getHost(), reshape to (N_sites, 3, 3), compute
+     complex trace, take real part. Average the three planes' ReTr arrays
+     point-by-point.
+
+  5. Global Reduction: Reshape the local ReTr field to match the local lattice
+     volume, then use gatherLattice() with [-1,-1,-1,-1] to sum across MPI ranks.
+     On rank 0, sum all elements and divide by (total_sites * N_c) to obtain the
+     configuration-averaged Wilson loop value.
+
+  6. Output: Write the single scalar value (as a float) to a plain text file
+     named "wl_R1_T2_cfg10000.txt" in the run directory, with no header,
+     no extra text, no metadata. Just the number.
+
+  ## Key Parameters
+  - N_c = 3, normalization: divide by N_c in the final trace
+  - Total sites = 24 × 24 × 24 × 72 = 995,328
+  - Lattice dimensions: [24, 24, 24, 72]
+  - MPI: 4 ranks, process grid [1, 1, 1, 4]
+  - PyQUDA direction constants: X, Y, Z, T and their negatives -X, -Y, -Z, -T
+  - gauge.loop() returns LatticeGauge with 4 groups; each res[i] is a LatticeLink

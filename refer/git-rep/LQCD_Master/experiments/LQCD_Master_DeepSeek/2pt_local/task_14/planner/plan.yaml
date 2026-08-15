@@ -1,0 +1,150 @@
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+task:
+  name: Lambda_c_2pt
+  description: >
+    Two-point correlation function of the Lambda_c baryon (udc) at zero momentum.
+    Point source at [0,0,0,0], stout-smeared gauge links (1 step, rho=0.125, ndim=4),
+    Cg5 diquark operator, positive-parity projector (1+gamma_t)/2.
+    Lambda_c has three distinct quark flavors (u, d, c) → single Wick contraction topology
+    (no exchange term; unlike the proton uud case).
+    Result saved as plain text.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: lambda_c_corr
+      type: baryon_2pt
+      name: Lambda_c two-point correlator
+
+  hadrons:
+    - id: lambda_c
+      name: Lambda_c
+      type: baryon
+      flavor: udc
+      momentum: [0, 0, 0]
+      interpolating_operator: Cg5
+      subtype: positive_parity
+      notes: >
+        All three quark flavors (u, d, c) are distinct, yielding exactly one
+        Wick contraction topology. The 'exchange' topology that appears for uud
+        baryons (proton) does not exist here because it would require the charm
+        quark to contract with a light antiquark, which is flavor-violating.
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          CGNR (CG on the normal equations M†M) for the non-Hermitian Wilson-clover
+          operator. Multigrid preconditioning with [6,6,6,3]→[4,4,4,6] coarsening.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          CGNR (CG on the normal equations M†M). The multigrid parameters
+          [6,6,6,3]→[4,4,4,6] are tuned for light quarks and may provide
+          little acceleration for the heavy charm quark (mass 0.4159). If
+          convergence is slow or the solver stalls, fall back to plain CGNR
+          without multigrid preconditioning for the charm propagator.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: lambda_c_2pt
+      type: baryon_2pt
+      propagator: [prop_l, prop_c]
+      observable: lambda_c_corr
+      notes: >
+        The baryon_2pt einsum generator must be called with flavor='udc'
+        (three distinct flavors) to produce a single-term contraction.
+        prop_l is reused for both u and d quarks via isospin symmetry.
+        The contraction is: ε^{abc}ε^{a'b'c'} (Cγ5)_{αβ} (Cγ5)_{α'β'} P⁺_{γ'γ}
+        × S_{l,αα'}^{aa'} S_{l,ββ'}^{bb'} S_{c,γγ'}^{cc'} (single topology only).
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Single contraction topology: all three quark flavors (u, d, c) are distinct — only the direct term S_u⊗S_d⊗S_c contributes. No exchange topology exists (unlike the proton uud case)."
+  - "Projector: Tmat = (1 + gamma_t) / 2 applied to the charm-quark Dirac index for positive-parity extraction."
+  - "Diquark: Cg5 = C @ gamma_5 for the ud pair in the Lambda_c interpolating operator."
+  - "prop_l reused for both u and d quarks via isospin symmetry."
+  - "Solver: CGNR (CG on M†M normal equations) required for the non-Hermitian Wilson-clover Dirac operator. The underlying library is expected to handle M†M internally."
+  - "Charm multigrid caveat: the MG coarsening [6,6,6,3]→[4,4,4,6] is optimized for light quarks; for charm (mass 0.4159), plain CGNR without multigrid may converge faster if MG stalling is observed."
+  - "Zero-momentum rest-frame correlator; plain-text output with no header to run directory."

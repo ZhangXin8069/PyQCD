@@ -1,0 +1,166 @@
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+task:
+  name: omega_c0_baryon_2pt
+  description: >-
+    Two-point correlation function of Omega_c0 baryon (ssc, J^P=1/2^+)
+    with Cg5 diquark and positive-parity projector (1+gamma_4)/2,
+    using a point source at [0,0,0,0] with stout-smeared gauge links
+    (n_steps=1, rho=0.125, ndim=4). The ss diquark uses Cg5 (= C @ gamma_5)
+    because (C gamma_5)^T = -C gamma_5 is antisymmetric in spinor space,
+    which is required for a non-vanishing diquark with two identical
+    strange quarks. The originally requested Cg1 (= C @ gamma_x) satisfies
+    (C gamma_1)^T = +C gamma_1 (symmetric) and would yield an identically
+    zero baryon operator when contracted with the antisymmetric epsilon^{abc}.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: omega_c0_mass
+      type: baryon_2pt
+      name: Omega_c0 two-point function
+
+  hadrons:
+    - id: omega_c0
+      name: Omega_c0
+      type: baryon
+      flavor: ssc
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (s^{Ta} C gamma_5 s^b) c^c"
+      parity_projector: "(1 + gamma_4) / 2"
+      notes: >-
+        J^P = 1/2^+ Omega_c baryon with two identical strange quarks forming
+        a Cg5 (= C @ gamma_5) diquark and one charm quark. Cg5 is the
+        physically required choice: (C gamma_5)^T = -C gamma_5 combines with
+        the antisymmetric color tensor epsilon^{abc} to yield a non-zero
+        baryon operator (Pauli principle). Positive parity extracted via
+        Tmat = (I + gamma_4)/2.
+
+  propagators:
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: multigrid
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+        notes: "Strange quark propagator from point source using multigrid solver; stout-smeared gauge links."
+      sink:
+        id: point_sink
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >-
+          Charm quark propagator from point source using CG solver.
+          CG is preferred over multigrid for heavy quarks: the Dirac
+          operator is well-conditioned at the charm mass and CG converges
+          reliably without multigrid setup overhead. A convergence check
+          should be performed; if the solver fails to reach tolerance
+          within maxiter, the inversion should be flagged and retried.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: omega_c0_2pt
+      type: baryon_2pt
+      propagators: [prop_s, prop_c]
+      observable: omega_c0_mass
+      diquark_gamma: Cg5
+      projector: "(1 + gamma_4) / 2"
+      notes: >-
+        Baryon two-point contraction with two identical strange quarks
+        forming a Cg5 diquark and one charm quark. Contraction via
+        generate_einsum(type="baryon_2pt",
+        source_op=BaryonOp('omega_c0', {'a':'s','b':'s','c':'c'}, 'Cg5'),
+        sink_op=BaryonOp('omega_c0', {'a':'s','b':'s','c':'c'}, 'Cg5'),
+        projector='(1+gamma_4)/2').
+        Two contraction topologies (direct + exchange) arise from the
+        identical strange quarks, analogous to the proton case but with
+        strange quarks in the diquark and a charm spectator.
+
+output:
+  format: txt
+  metadata: false
+  destination: "./omega_c0_2pt_result.txt"
+  notes: "Raw correlator values C(t) for t=0..71, one value per line, no header or extra text."
+
+extras:
+  - "Single point source at spacetime origin [0,0,0,0] for both propagators."
+  - "Stout gauge-link smearing: n_steps=1, rho=0.125, ndim=4 applied once and reused for all inversions."
+  - "Diquark uses Cg5 = C @ gamma_5 (NOT Cg1). Cg5 is physically required because (C gamma_5)^T = -C gamma_5 (antisymmetric) combines with antisymmetric epsilon^{abc} to yield a non-zero baryon operator for identical strange quarks. Cg1 is symmetric under transpose and would give a zero correlator."
+  - "Omega_c0 has J^P = 1/2^+ (not spin-3/2). The interpolating operator carries no Lorentz vector index, consistent with a spin-1/2 state."
+  - "Positive-parity channel isolated via projector Tmat = (I + gamma_4) / 2."
+  - "Charm propagator uses CG solver (not multigrid) for reliable convergence at heavy quark mass; maxiter=20000 with convergence-failure check."
+  - "Strange propagator uses multigrid solver with ensemble-level parameters."
+  - "Output written as bare numbers, one per time slice, to omega_c0_2pt_result.txt in the run directory."

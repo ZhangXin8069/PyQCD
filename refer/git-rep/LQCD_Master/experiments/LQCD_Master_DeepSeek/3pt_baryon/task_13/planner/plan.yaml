@@ -1,0 +1,231 @@
+task:
+  name: Xi_cc_to_Xi_c_3pt
+  description: >
+    Three-point correlation function for Xi_cc++ (ucc) to Xi_c+ (usc) decay via
+    the (c->s) vector current. Uses the sequential-source method with point source
+    at the origin, zero momentum, and sink at t_seq=8. Only the 3pt correlator is
+    computed (no 2pt functions). All gauge links are stout-smeared (1 step,
+    rho=0.125, 4-dim) before Dirac inversion.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: xi_cc_to_xi_c_vector_3pt
+      type: baryon_3pt
+      name: "Xi_cc++ -> Xi_c+ vector current three-point function"
+
+  hadrons:
+    - id: Xi_cc_plus_plus
+      name: Xi_cc_plus_plus
+      type: baryon
+      flavor: ucc
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 c^b) c^c"
+      subtype: source
+    - id: Xi_c_plus
+      name: Xi_c_plus
+      type: baryon
+      flavor: usc
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 s^b) c^c"
+      subtype: sink
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: "Multigrid solver for light quark propagator. Tolerance set to 1e-10 for practical convergence; convergence must be monitored."
+      sink:
+        id: sink_point
+        type: point
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 5000
+        notes: >
+          Charm quark propagator, reused for BOTH roles: (1) spectator charm line
+          source->sink in the sequential-source B-block construction at t=8, and
+          (2) annihilating charm line source->current in the final contraction at
+          t=tau. Both charm quarks at the source share the same point, so a single
+          forward charm inversion suffices. Spin-color indices are contracted on
+          independent legs in each use.
+      sink:
+        id: sink_point
+        type: point
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: volume
+        source_position: [*, *, *, 8]
+        source_momentum: [0, 0, 0]
+        notes: >
+          Sequential propagator. The sequential source eta_seq = gamma_5 B^dagger
+          gamma_5 is constructed as a VOLUME source spanning the entire spatial
+          slice at t=8 (B is summed over all spatial positions x at the sink time
+          slice). B is the sink block built from prop_l and prop_c contracted with
+          the Xi_c+ operator and the positive-parity projector T=(1+gamma_4)/2,
+          with free strange-quark color-spin indices. The sequential source must
+          cover the full spatial volume at t=8 for a zero-momentum three-point
+          function (a point source at a single spatial location would produce a
+          wrong sequential propagator). The strange-quark Dirac operator is inverted
+          on this volume source.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: >
+          Sequential strange propagator inversion from sink at t=8. Tolerance set
+          to 1e-10 with maxiter 10000. Convergence must be monitored; raise a
+          warning if tolerance is not reached within maxiter and record the actual
+          residual.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: xi_cc_to_xi_c_3pt_corr
+      type: baryon_3pt
+      propagator: prop_s_seq
+      observable: xi_cc_to_xi_c_vector_3pt
+      notes: >
+        Three-point correlator C3(tau). The sequential-source construction follows
+        the same logic as the Lambda->p transition in Lambda_proton_formfactor.md,
+        adapted for the Xi_cc(ucc)->Xi_c(usc) flavor structure.
+        
+        WICK CONTRACTION — Two topologies exist, differing by which source charm
+        quark the current charm quark attaches to:
+          Topology 1: current c attaches to source spectator c (color c in epsilon^{abc});
+                      sink spectator c attaches to source diquark c (color b).
+          Topology 2: current c attaches to source diquark c (color b);
+                      sink spectator c attaches to source spectator c (color c).
+        After color-index relabeling b<->c in Topology 2, the epsilon antisymmetry
+        flips the sign, canceling the relative minus sign from fermion
+        anticommutation. Both topologies are identical because both charm quarks
+        share the same prop_c and S_c^{ad}*S_c^{cr} = S_c^{cr}*S_c^{ad}. Only one
+        topology needs to be implemented, with a factor of 2.
+        
+        PARITY PROJECTOR: T = (1+gamma_4)/2 acts on the SPECTATOR CHARM QUARK
+        LINE, connecting the source spectator charm (color index c in epsilon^{abc},
+        spin gamma') to the sink spectator charm (color index f in epsilon^{def},
+        spin gamma). The projector is absorbed into the sequential-source
+        construction at the sink. It must NOT be applied to the strange-quark
+        (diquark partner) line.
+        
+        SEQUENTIAL SOURCE: The sink block B is constructed at t=8 by summing over
+        all spatial positions x. B encodes the Xi_c+ sink operator contracted with
+        prop_l (u-quark source->sink) and prop_c (spectator charm source->sink),
+        the C*gamma_5 diquark structures, and the parity projector T, leaving the
+        strange-quark color-spin indices (p,e; rho,beta) free. The sequential
+        source is eta_seq^{pe}_{rho,beta} = [gamma_5 B^dagger gamma_5]^{pe}_{rho,beta}.
+        
+        FINAL CONTRACTION:
+          C3(tau) = sum_z Tr[ G_s_seq(z,tau) * gamma_x * S_c(z,tau) ]
+        where G_s_seq is the sequential strange propagator (inverted from eta_seq)
+        and S_c is the forward charm propagator prop_c evaluated at the current
+        insertion time tau. The current gamma structure is gamma_x (vector, spatial
+        x-direction). The parity projector is already encoded in G_s_seq and does
+        not appear explicitly in the final trace.
+        
+        PROP_C DUAL USE: prop_c is read at two different time slices in two
+        independent contractions: at t=8 for the B-block construction (spectator
+        line, spin-color indices contracted with the sink operator and T) and at
+        t=tau for the final contraction (annihilating line, spin-color indices
+        contracted with gamma_x and G_s_seq). These are independent reads of the
+        same propagator object.
+        
+        Current insertion times: tau = 1, 2, ..., 7 (excluding contact terms at
+        tau=0 and tau=8).
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Only the 3pt correlator is computed; no 2pt functions are evaluated or saved"
+  - "Stout link smearing (n_steps=1, rho=0.125, ndim=4) applied to all gauge fields before all Dirac inversions"
+  - "Output: C3(tau) values for tau=1..7 written as whitespace-separated numbers to a single .txt file in the run directory, with no header"
+  - "Parity projector T = (1 + gamma_4)/2 acts on the spectator charm quark line (color index c at source, f at sink), NOT on the strange quark line"
+  - "Current gamma structure: gamma_x (vector, spatial x-direction)"
+  - "Sequential source is a volume source at t=8 spanning the full spatial slice; B block is summed over all x at t=8 before eta_seq = gamma_5 B^dagger gamma_5 is constructed"
+  - "Both Wick topologies are equivalent after epsilon relabeling (factor of 2); only one needs implementation"
+  - "prop_c is used in two independent roles: (a) spectator line source->sink in B-block, (b) annihilating line source->current in final contraction; both read the same propagator at different time slices"
+  - "Solver convergence must be checked; if tolerance 1e-10 is not reached within maxiter, raise a warning and record the actual residual norm"

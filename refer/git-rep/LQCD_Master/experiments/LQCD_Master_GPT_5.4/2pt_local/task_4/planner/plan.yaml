@@ -1,0 +1,95 @@
+task:
+  name: etac_connected_two_point_function
+  description: Compute the zero-momentum connected pseudoscalar charmonium two-point correlation function using the local operator cbar gamma5 c, with a point source at [0, 0, 0, 0]. All charm inversions are performed on stout-smeared gauge links with parameters (n_steps=1, rho=0.125, ndim=4). This is a per-configuration production measurement on cfg 10000 of ensemble C24P29 and should be interpreted as the connected eta_c-like correlator unless disconnected charm-annihilation diagrams are added separately. Save the final correlator as a plain txt file in the run directory with no header or extra text; only rank 0 writes the file.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: etac_conn_2pt
+      type: meson_2pt
+      name: connected eta_c-like pseudoscalar charmonium two-point correlator
+
+  hadrons:
+    - id: etac_conn
+      name: eta_c connected channel
+      type: meson
+      flavor: cbar-c
+      momentum: [0, 0, 0]
+      interpolating_operator: cbar gamma5 c
+      subtype: pseudoscalar_charmonium_connected
+
+  propagators:
+    - id: prop_c_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the ensemble-provided charm clover parameters on stout-smeared Dirac-operator links for this valence solve. Do not assume the listed light-quark multigrid setup is validated for charm; use a standard clover inversion strategy that is stable for the charm mass, with residual checked explicitly. The stout smearing here applies to the links entering the inversion, while the interpolating operator remains local cbar gamma5 c.
+      sink:
+        id: local_operator_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: measure_etac_conn_2pt
+      type: meson_2pt
+      propagator: prop_c_point
+      observable: etac_conn_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - use generate_einsum with type meson_2pt for cbar gamma5 c
+  - perform zero-momentum spatial sum at sink time slices
+  - write exactly one txt file in the run directory named etac_connected_2pt_cfg10000.txt
+  - save rows as t Re Im with no header and rank-0-only output
+
+freeform_plan: |
+  Not used because this is a standard hadron two-point calculation.

@@ -1,0 +1,150 @@
+task:
+  name: etac_nonlocal_2pt_zmax10
+  description: Compute the zero-momentum nonlocal eta_c two-point correlator C(t,z) for z=0..10 using a local source operator at [0,0,0,0] and a sink operator with a straight +z Wilson-line displacement applied only to the charm-quark leg. Use stout-smeared gauge links for the charm inversions and the original unsmeared gauge field for the nonlocal Wilson line. This scope uses cfg 10000 only and should be treated as a code-validation run rather than a statistically reliable physics production result.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: etac_nonlocal_z_2pt
+      type: meson_2pt
+      name: nonlocal eta_c two-point function C(t,z) with straight-link +z displacement on the quark leg only
+
+  hadrons:
+    - id: etac
+      name: eta_c
+      type: meson
+      flavor: cbar-c charmonium
+      momentum: [0, 0, 0]
+      interpolating_operator: "Source: O_src(0)=cbar(0) gamma_5 c(0). Sink: O_snk(z,t)=sum_x cbar(x,t) gamma_5 W_z(x,x+z*e_z;U_orig) c(x+z*e_z,t), with z=0..10 and only the quark field displaced. The measured correlator is C(t,z)=< O_snk(z,t) O_src^dagger(0) >."
+      subtype: nonlocal_pseudoscalar
+
+  propagators:
+    - id: prop_c_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: charm_clover_stout_c24p29
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use the charm clover operator defined for this ensemble with the requested stout-smeared inversion links (n_steps=1, rho=0.125, ndim=4). Do not assume the listed multigrid setup is valid for this heavy-quark solve unless the implementation explicitly supports and has been tuned for the charm clover operator on these smeared links; otherwise use a standard supported Krylov solve on the smeared operator. The mass and clover coefficient written here are the ensemble charm parameters to be used consistently for this inversion.
+      sink:
+        id: nonlocal_z_shifted_quark_leg
+        type: other
+
+measurement:
+  correlators:
+    - id: corr_etac_nonlocal_zdir
+      type: meson_2pt
+      propagator: prop_c_point
+      observable: etac_nonlocal_z_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - save plain text only in run directory
+  - no header line
+  - no extra explanatory text
+  - compute separations z=0 through 10 inclusive
+  - use original unsmeared gauge links only for Wilson-line displacement
+  - one line per t z real imag
+  - cfg10000 only is validation scope not production physics
+
+freeform_plan: |
+  Standard nonlocal meson-2pt task.
+
+  Exact operator definition:
+  - Source operator at x0=(0,0,0,0):
+      O_src(0) = cbar(0) gamma_5 c(0)
+  - Sink operator at Euclidean time t with straight +z displacement z_sep:
+      O_snk(z_sep,t) = sum_x cbar(x,t) gamma_5 W_z(x, x+z_sep*e_z; U_orig) c(x+z_sep*e_z,t)
+    where W_z is the ordered product of original unsmeared gauge links along +z from x to x+z_sep*e_z.
+
+  Measured observable:
+      C(t,z_sep) = < O_snk(z_sep,t) O_src^dagger(0) >,
+    with zero spatial momentum enforced by the explicit sum over x at the sink. This is the intended object here; it is not a site-resolved estimator.
+
+  Wick contraction and final working form:
+  - For eta_c, O_src^dagger(0) contributes the usual local pseudoscalar source structure.
+  - Contracting the two charm fields gives
+      C(t,z_sep) = - sum_x Tr[ S_c(0;x,t) gamma_5 W_z(x,x+z_sep*e_z;U_orig) S_c(x+z_sep*e_z,t;0) gamma_5 ]
+  - Using gamma_5-hermiticity, S_c(0;x,t)=gamma_5 S_c^dagger(x,t;0) gamma_5, this becomes
+      C(t,z_sep) = sum_x Tr[ S_c^dagger(x,t;0) W_z(x,x+z_sep*e_z;U_orig) S_c(x+z_sep*e_z,t;0) ]
+    which is the exact contraction to implement when only the quark leg is shifted and the antiquark leg remains local.
+
+  Propagator and sink construction details:
+  1. Load the original gauge configuration for cfg 10000.
+  2. Create a stout-smeared copy of the gauge field with parameters (n_steps=1, rho=0.125, ndim=4) and use only this smeared copy for the charm Dirac inversion.
+  3. Invert one charm point-source propagator S_c(x;0) from source position [0,0,0,0].
+  4. Build the nonlocal sink on the full solved propagator field, not only on a single sink timeslice before solve:
+     - for each sink site x=(x,y,z,t) and each z_sep in 0..10,
+       define x_shift=(x, y, z+z_sep mod Lz, t);
+     - evaluate the straight Wilson line W_z(x,x_shift;U_orig) as the ordered product of unsmeared links U_z along the wrapped periodic path;
+     - form the shifted/transported quark leg
+         S_c^shift(x,t;0;z_sep) = W_z(x,x_shift;U_orig) S_c(x_shift,t;0).
+     - then contract S_c^dagger(x,t;0) with S_c^shift(x,t;0;z_sep).
+  5. For z_sep=0, W_z is the identity and the correlator must reduce exactly to the local eta_c two-point contraction built from the same forward propagator.
+
+  Boundary and gauge-covariant implementation rule:
+  - Spatial directions are periodic. When z+z_sep exceeds Lz-1, wrap x_shift with modulo Lz.
+  - The Wilson line must follow the same wrapped path on the original unsmeared gauge field, multiplying the sequence of U_z links across the boundary as needed. This is part of the observable definition and must be handled explicitly to preserve gauge covariance.
+
+  Numerical scope and caveat:
+  - The task explicitly mixes two link sets: stout-smeared links for inversion and original unsmeared links for the nonlocal Wilson line. This is not a derived simplification; it is part of the requested observable definition and should be documented as such.
+  - Because only cfg 10000 and one source position are requested, this run is suitable for code validation and observable construction checks only, not for a statistically credible physics determination.
+
+  Validation requirements:
+  1. z_sep=0 must reproduce the local eta_c correlator normalization and time dependence from the same point-source propagator.
+  2. The correlator saved for each (t,z_sep) should be checked for the expected near-reality of this zero-momentum pseudoscalar construction; any sizable imaginary part should be flagged as a convention or implementation issue.
+  3. Confirm that the nonlocal result changes when replacing unsmeared Wilson-line links by smeared ones; this is a sanity check that the requested mixed-link construction is actually being used.
+
+  Output format:
+  - Write exactly one plain-text file in the run directory.
+  - No header, no comments, no metadata.
+  - One line per datum in the fixed layout:
+      t z_sep real(C) imag(C)
+    for all t=0..71 and z_sep=0..10.

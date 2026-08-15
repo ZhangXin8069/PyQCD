@@ -1,0 +1,121 @@
+task:
+  name: sigma_plus_baryon_2pt_point_stout_Cg1_positive_parity
+  description: Compute the zero-momentum Sigma+ (uus) baryon two-point correlator on ensemble C24P29 using a point source at [0, 0, 0, 0], with the local interpolating operator epsilon^{abc}(u^{Ta} C gamma_x u^b)s^c, positive-parity projector Tmat=(I+gamma_t)/2, and clover inversions performed on 1-step 4D stout-smeared links with rho=0.125; save the projected correlator as plain text in the run directory with no header or extra text. This is a single-configuration, single-source test measurement, not a production spectroscopy analysis.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: sigma_plus_2pt
+      type: baryon_2pt
+      name: Sigma+ positive-parity two-point function
+
+  hadrons:
+    - id: sigma_plus
+      name: Sigma+
+      type: baryon
+      flavor: uus
+      momentum: [0, 0, 0]
+      interpolating_operator: O_Sigma+ = epsilon^{abc}(u^{Ta} C gamma_x u^b)s^c, with Obar_Sigma+ the corresponding Dirac-conjugate source operator and projected correlator C(t)=Tr[Tmat <O_Sigma+(t) Obar_Sigma+(0)>], Tmat=(I+gamma_t)/2
+      subtype: positive_parity
+
+  propagators:
+    - id: prop_l_point_src0000
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_stout_cg
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Invert the valence clover Dirac operator constructed on the 1-step 4D stout-smeared gauge links requested by the task. Use periodic spatial and anti-periodic temporal fermion boundary conditions. This single forward light propagator is reused for both identical u lines in the Sigma+ contraction; no unverified multigrid setup is assumed in this test plan.
+      sink:
+        id: point_sink
+        type: point
+
+    - id: prop_s_point_src0000
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_stout_cg
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Invert the valence clover Dirac operator constructed on the same 1-step 4D stout-smeared gauge links. Use the same boundary conditions as for the light solve. This is the single forward strange propagator entering the mixed-flavor Sigma+ contraction.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: sigma_plus_2pt_meas
+      type: baryon_2pt
+      propagator:
+        - prop_l_point_src0000
+        - prop_s_point_src0000
+      observable: sigma_plus_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - Use one explicit mixed-flavor Sigma+ baryon contraction with two identical light u lines and one strange line, including the required identical-u exchange term.
+  - Keep the operator exactly Cg1=C@gamma_x as requested; do not average over x,y,z in this test run.
+  - Apply zero-momentum projection by summing over all spatial sink sites on each timeslice before the spin trace with Tmat.
+  - Save one plain-text file per configuration in the run directory, in source-time lattice order t=0..71, with one real projected correlator value per line and no header.
+  - Interpret the saved correlator as the forward positive-parity projected channel; backward propagation contains opposite-parity contamination on the finite-T lattice.
+
+freeform_plan: |

@@ -1,0 +1,126 @@
+task:
+  name: xi_cc_dcc_baryon_2pt_point_source
+  description: Compute the zero-momentum two-point correlation function for the doubly charmed cascade channel built from the local interpolator epsilon^{abc}(d^{Ta} C gamma_5 c^b)c^c, using a point source at [0, 0, 0, 0], stout-smeared gauge links for all inversions with parameters (n_steps=1, rho=0.125, ndim=4), and the positive-parity projector Tmat=(I+gamma_t)/2; form the projected scalar correlator C(t) and save the final result as plain txt in the run directory without header or extra text. This is an executable smoke-test correlator on the specified ensemble; because the charm setup is not documented here as a validated spectroscopy tuning, the output should not be interpreted as a precision Xi_cc physics result without separate heavy-quark validation.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: xi_cc_2pt
+      type: baryon_2pt
+      name: Positive-parity zero-momentum two-point correlator for the dcc doubly charmed baryon channel
+
+  hadrons:
+    - id: xi_cc_dcc
+      name: Xi_cc(dcc)-channel baryon
+      type: baryon
+      flavor: dcc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (d^{Ta} C gamma_5 c^b) c^c
+      subtype: doubly charmed spin-1/2 local baryon channel with dc scalar diquark structure
+
+  propagators:
+    - id: prop_light_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_mg
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Light-quark Clover inversion on stout-smeared links from the point source. Use the ensemble multigrid setup for the light solve and record the achieved residual.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_charm_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm_standard
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Charm-quark Clover inversion on the same stout-smeared links from the same point source. Do not assume the ensemble light-sector multigrid hierarchy is valid for charm; use a standard non-MG solve unless a dedicated charm MG validation is available, and record the achieved residual. This charm setup is treated here as test-level unless separately validated for heavy-baryon spectroscopy.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: xi_cc_baryon_2pt_measurement
+      type: baryon_2pt
+      propagator:
+        - prop_light_point
+        - prop_charm_point
+      observable: xi_cc_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - The intended channel is the local doubly charmed dcc spin-1/2 positive-parity baryon created by epsilon(d^T Cg5 c)c; this is a channel assignment for a smoke test, not a precision state-identification claim.
+  - Build the baryon_2pt contraction with quark_a=light, quark_b=charm, quark_c=charm and include both direct and identical-charm exchange topologies with the correct relative sign from fermion antisymmetry.
+  - Apply Tmat=(I+gamma_t)/2 to the sink spin indices before tracing so the measured object is a scalar positive-parity correlator C(t) after the spatial sum.
+  - Use c_gamma=I4 for the third quark line and diquark_gamma=Cg5 in the contraction generator; reuse the single charm propagator on both c lines.
+  - Perform zero-momentum projection by summing over all spatial sink sites at fixed t, then save exactly three whitespace-separated columns t Re Im to ./xi_cc_dcc_2pt.txt with no header or extra text.
+  - Validation checkpoint: require successful light and charm solver residuals and a basic sanity check that the projected correlator is finite and shows the expected Euclidean-time decay pattern before accepting the txt output as usable.

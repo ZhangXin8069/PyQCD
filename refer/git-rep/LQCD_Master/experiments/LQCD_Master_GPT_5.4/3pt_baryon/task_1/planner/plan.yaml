@@ -1,0 +1,199 @@
+task:
+  name: proton_proton_vector_current_3pt_full
+  description: Compute the full proton-to-proton three-point correlator for the local flavor-diagonal vector current J_x = ubar gamma_x u at zero momentum with proton source and sink operators epsilon^{abc}(u^T C gamma_5 d)u, positive-parity projector Tmat=(I+gamma_t)/2, point source at [0,0,0,0], tseq=8, and stout-smeared inversion links; include both connected and disconnected contributions, but do not save any standalone 2pt correlator.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: proton_vector_3pt_full_ux
+      type: baryon_3pt
+      name: Full proton to proton three-point correlator with local current ubar gamma_x u
+    - id: proton_vector_3pt_connected_ux
+      type: baryon_3pt
+      name: Connected proton to proton three-point correlator with local current ubar gamma_x u
+    - id: proton_vector_3pt_disconnected_ux
+      type: custom
+      name: Disconnected proton to proton three-point contribution with local current ubar gamma_x u
+
+  hadrons:
+    - id: proton
+      name: proton
+      type: baryon
+      flavor: uud with isospin-symmetric light propagator reused for both u and d
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} C gamma_5 d^b) u^c
+      subtype: octet_baryon_positive_parity
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_forward
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator from the fixed point source; reused for both u and d lines by isospin symmetry and also reused internally for the disconnected baryon block at source-sink separation 8.
+      sink:
+        id: proton_sink_local
+        type: point
+
+    - id: prop_l_seq_t8_pplus
+      quark_flavor: light
+      source:
+        source_type: volume
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_sequential
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: This is not a literal point or wall source. Build the sequential source from the full proton sink block on the sink timeslice t_sink=8 with zero sink momentum, Tmat=(I+gamma_t)/2, diquark gamma Cg5 at source and sink, apply the two-dagger convention gamma_5 B^dagger gamma_5, and then invert the light Dirac operator on that sequential source.
+      sink:
+        id: current_insertion_local
+        type: other
+
+    - id: prop_l_loop_stochastic
+      quark_flavor: light
+      source:
+        source_type: volume
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_loop
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Stochastic light-quark volume-source solves for the disconnected loop estimator L_x(t)=sum_vecz Tr[gamma_x S_l(z,t;z,t)]. Use a fixed stochastic setup per configuration, e.g. Z4 noise with sufficient samples and spin-color treatment to make the disconnected term explicit; this contributes to the full flavor-diagonal correlator but is not saved as a standalone observable.
+      sink:
+        id: disconnected_loop_local
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_proton_proton_vector_u_gammax_connected_t8
+      type: baryon_3pt
+      propagator: prop_l_seq_t8_pplus
+      observable: proton_vector_3pt_connected_ux
+      requires_runtime_objects:
+        - prop_l_point
+        - gamma_x current matrix
+        - spatial sum over insertion timeslice
+        - insertion window t_ins = 1..7
+      codegen:
+        tool: generate_einsum
+        args:
+          type: baryon_3pt
+          src_a: u
+          src_b: d
+          src_c: u
+          snk_a: u
+          snk_b: d
+          snk_c: u
+          current_quark: u
+          current_antiquark: u
+          current_gamma: gamma_x
+          projector: P_plus
+          diquark_gamma_src: Cg5
+          diquark_gamma_snk: Cg5
+          c_gamma_src: I4
+          c_gamma_snk: I4
+          tseq: '8'
+
+    - id: c3_proton_proton_vector_u_gammax_disconnected_t8
+      type: other
+      propagator: prop_l_loop_stochastic
+      observable: proton_vector_3pt_disconnected_ux
+      requires_runtime_objects:
+        - prop_l_point
+        - proton source-to-sink baryon block at tseq = 8 with Tmat = (I + gamma_t) / 2
+        - gamma_x loop insertion
+        - spatial sum over insertion timeslice
+        - insertion window t_ins = 1..7
+
+    - id: c3_proton_proton_vector_u_gammax_full_t8
+      type: other
+      propagator: prop_l_point
+      observable: proton_vector_3pt_full_ux
+      combines:
+        - c3_proton_proton_vector_u_gammax_connected_t8
+        - c3_proton_proton_vector_u_gammax_disconnected_t8
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - Save exactly one plain txt file in the run directory with no header and columns tseq t_ins Re Im.
+  - Write output only on rank 0; non-root ranks do not write files.
+  - Do not save any standalone 2pt correlator, although the disconnected term reuses an internal proton source-sink baryon block at tseq=8.
+  - Use the connected baryon_3pt code-generation arguments explicitly fixed here: uud -> uud with current_quark=u, current_antiquark=u, current_gamma=gamma_x, projector=P_plus, diquark gamma Cg5, tseq=8.
+  - Treat tseq=8 with local source and sink as a minimal raw-data production choice; further tseq values or smearing are needed later to control excited-state systematics.
+
+freeform_plan: |

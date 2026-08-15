@@ -1,0 +1,198 @@
+task:
+  name: lambda_b_to_lambda_c_3pt_axial
+  description: >
+    Three-point correlation function for Lambda_b to Lambda_c+ decay with
+    axial current (b->c transition, gamma1 gamma5).  Source Lambda_b at t=0
+    with operator epsilon^{abc} (u^T C gamma5 d) b.  Sink Lambda_c+ at t=8
+    with operator epsilon^{abc} (u^T C gamma5 d) c.  Current insertion
+    bar{c} gamma1 gamma5 b.  Positive-parity projector (1+gamma4)/2.
+    Point source, zero momentum.  No two-point function computed.
+    DeGrand-Rossi gamma basis: gamma1–gamma3 (spatial), gamma4 (temporal),
+    gamma5 = gamma1 gamma2 gamma3 gamma4.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: C3_LbLc_axial
+      type: baryon_3pt
+      name: "Lambda_b -> Lambda_c axial-current three-point function"
+
+  hadrons:
+    - id: Lb_src
+      name: Lambda_b_source
+      type: baryon
+      flavor: udb
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma5 d^b) b^c"
+      subtype: source
+    - id: Lc_snk
+      name: Lambda_c_sink
+      type: baryon
+      flavor: udc
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma5 d^b) c^c"
+      subtype: sink
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: >
+          Multigrid solver. Forward light propagator for u,d quarks in
+          both source (Lambda_b) and sink (Lambda_c+) operators. In the
+          three-point function, prop_l participates exclusively in the
+          intermediate sink-block construction at t=8; it does NOT appear
+          in the final current-contraction trace.
+      sink:
+        id: sink_light
+        type: point
+
+    - id: prop_b
+      quark_flavor: bottom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_bottom
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          CG solver for heavy bottom quark (am_b=1.5). Forward propagator
+          from point source at t=0. Contracts directly with the axial
+          current gamma1 gamma5 in the final trace:
+          Tr[G_c_seq(z,tau) gamma1 gamma5 S_b(z,tau)].
+      sink:
+        id: sink_bottom
+        type: point
+
+    - id: prop_c_seq
+      quark_flavor: charm
+      source:
+        source_type: sequential
+        source_position: [null, null, null, 8]
+        source_momentum: [0, 0, 0]
+        notes: >
+          CRITICAL — sequential source, NOT a point source.
+          The null spatial entries indicate the source spans the FULL
+          spatial volume at time slice t=8. The sequential source is
+          constructed from the Lambda_c+ sink block B (built from prop_l
+          for the u,d diquark at t=8, with projector (1+gamma4)/2) via
+          the two-dagger convention: η^seq = γ5 B† γ5.
+          Solving D_c G_c_seq = η^seq yields the charm sequential
+          propagator connecting the current insertion to the sink.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: >
+          CG solver for charm quark (am_c=0.4159). Sequential inversion
+          on the full-volume sequential source at t=8.
+      sink:
+        id: sink_charm_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: C3_LbLc_axial
+      type: baryon_3pt
+      source_hadron: Lb_src
+      sink_hadron: Lc_snk
+      current: "bar{c} gamma1 gamma5 b"
+      projector: "(1 + gamma4) / 2"
+      sequential_propagator: prop_c_seq
+      sink_block_propagators: [prop_l]
+      current_contraction_propagator: prop_b
+      tseq: 8
+      observable: C3_LbLc_axial
+      two_dagger_convention: "Sequential source η^seq = γ5 B† γ5, where B is the Lambda_c+ sink block at t=8 (built from prop_l and projector (1+gamma4)/2)"
+      contraction_form: >
+        C3(tau) = sum_{z} e^{i q·z} Tr[ G_c_seq(z,tau) gamma1 gamma5 S_b(z,tau) ]
+        with q = 0 (zero momentum).
+        prop_l appears ONLY in the intermediate sink-block construction
+        at t=8. prop_b is the only forward propagator appearing in the
+        final trace with the current.
+      notes: >
+        DeGrand-Rossi gamma basis:
+        gamma1, gamma2, gamma3 (spatial), gamma4 (temporal),
+        gamma5 = gamma1 gamma2 gamma3 gamma4.
+        gamma1 gamma5 is the axial-vector current J_A^{x} = bar{c} γ_1 γ_5 b.
+        The positive-parity projector P+ = (1+gamma4)/2 isolates the
+        ground-state baryon signal.
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "No two-point function computed; only the three-point correlator is evaluated."
+  - "Result is saved as plain text (no header) to a file in the run directory."
+  - "Output is a 1D array of length 9 (tau = 0 through tseq = 8)."
+  - "Gauge links are stout-smeared once (rho=0.125, 4-dim) before all Dirac inversions."
+  - "DeGrand-Rossi gamma basis: gamma1 (x-spatial), gamma4 (temporal), gamma5 = gamma1 gamma2 gamma3 gamma4."

@@ -1,0 +1,118 @@
+task:
+  name: D_plus_two_point
+  description: "Calculate the two-point correlation function of the D+ meson (pseudoscalar, quark content anti-d + charm) using point source propagators on stout-smeared gauge links. Output raw correlator data to a plain text file."
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: D_plus_2pt
+      type: meson_2pt
+      name: D_plus_meson_two_point_correlator
+
+  hadrons:
+    - id: D_plus
+      name: D+
+      type: meson
+      flavor: "anti-d + charm"
+      momentum: [0, 0, 0]
+      interpolating_operator: "bar{d} gamma5 c"
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-8
+        maxiter: 20000
+        notes: "Light quark solver using multigrid. Tolerance and maxiter are standard conservative values."
+      sink:
+        id: point_sink
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: charm_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-8
+        maxiter: 5000
+        notes: "Charm quark solver. Heavy quark converges rapidly with CG; no multigrid needed."
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: D_plus_corr
+      type: meson_2pt
+      propagator:
+        - prop_l
+        - prop_c
+      observable: D_plus_2pt
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Output must be a plain text file with no headers or extra text, containing only the raw correlator values."
+  - "Use generate_einsum with type=meson_2pt, quark=c, antiquark=d, gamma=g5 to obtain the contraction code."
+  - "Both propagators share the identical point source at [0,0,0,0] and use the same stout-smeared gauge links."

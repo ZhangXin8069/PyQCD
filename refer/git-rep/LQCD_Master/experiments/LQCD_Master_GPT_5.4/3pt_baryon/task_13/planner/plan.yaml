@@ -1,0 +1,207 @@
+task:
+  name: xi_ccpp_to_xi_cplus_c_to_s_vector_3pt
+  description: Compute a per-configuration zero-momentum baryon three-point correlator for Xi_cc++ -> Xi_c+ with the local vector current bar{s} gamma_x c, using the fixed source operator epsilon^{abc}(u^T C gamma_5 c)c, sink operator epsilon^{abc}(u^T C gamma_5 s)c, positive-parity projector (I + gamma_t)/2, point source at [0,0,0,0], tseq = 8, and stout-smeared gauge links for all inversions. This plan is scoped as a technical single-configuration correlator-generation test, not a physics-quality production measurement.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  category: matrix_element
+  transition: Xi_cc++ -> Xi_c+
+  observables:
+    - id: xi_cc_to_xi_c_vec_x_c3
+      type: baryon_3pt
+      name: Xi_cc++ to Xi_c+ three-point function with c_to_s vector current gamma_x
+
+  hadrons:
+    - id: xi_ccpp_src
+      name: Xi_cc++
+      type: baryon
+      flavor: ucc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} C gamma_5 c^b) c^c
+      subtype: doubly_charmed_baryon_source
+      normalization: Use the operator exactly as specified, with no extra external 1/sqrt(2) factor in this raw correlator.
+      exchange_symmetry: The two identical charm fields are handled by summing the two connected Wick topologies generated for the source charm attachments with their code-generated relative signs; no additional combinatorial prefactor is inserted.
+    - id: xi_cplus_snk
+      name: Xi_c+
+      type: baryon
+      flavor: usc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} C gamma_5 s^b) c^c
+      subtype: singly_charmed_baryon_sink
+
+  currents:
+    - id: vec_current_x
+      type: local_vector
+      expression: bar{s} gamma_x c
+      incoming_flavor: charm
+      outgoing_flavor: strange
+      gamma: gamma_x
+      executor_flavor_direction:
+        current_quark: c
+        current_antiquark: s
+
+  projectors:
+    - id: projector_pos_parity
+      expression: (I + gamma_t) / 2
+      purpose: positive_parity_channel
+      executor_name: P_plus
+
+  propagators:
+    - id: prop_u_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator for the spectator u quark, using the ensemble clover setup and multigrid hierarchy on the stout-smeared gauge field.
+      sink:
+        id: sink_point_u
+        type: point
+    - id: prop_c_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward charm propagator reused for both source charm lines and for the current-side charm line. This follows the fixed ensemble valence-charm setup as provided; because no separate charm-tuning or heavy-quark improvement justification is supplied for a≈0.1052 fm, treat this as an implementation-level test correlator rather than a validated physics-production charm setup.
+      sink:
+        id: sink_point_c
+        type: point
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_sequential_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential propagator in the outgoing strange flavor, built from the Xi_c+ sink block at zero momentum with tseq = 8 and projector (I + gamma_t)/2, then inverted with the strange Dirac operator on the same stout-smeared gauge field.
+      sink:
+        id: sink_seq_s
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_xi_cc_to_xi_c_vec_x
+      type: baryon_3pt
+      propagator: prop_s_seq
+      propagators_used:
+        - prop_u_point
+        - prop_c_point
+        - prop_s_seq
+      observable: xi_cc_to_xi_c_vec_x_c3
+      source_hadron: xi_ccpp_src
+      sink_hadron: xi_cplus_snk
+      current: vec_current_x
+      projector: projector_pos_parity
+      tseq: 8
+      source_position: [0, 0, 0, 0]
+      sink_momentum: [0, 0, 0]
+      transfer_momentum: [0, 0, 0]
+      wick_structure: Two connected topologies arise from attaching the current-annihilated charm field to either of the two identical charm quarks in the Xi_cc++ source; no disconnected diagram contributes for this flavor-changing current.
+      sequential_source_strategy: Build the Xi_c+ sink block from the spectator u forward propagator and the spectator c forward propagator, apply the first gamma5 dagger to form the sequential source, invert with the strange Dirac operator, apply the second gamma5 dagger, and contract with gamma_x and the forward charm propagator.
+      executor_contract:
+        source_flavors: [u, c, c]
+        sink_flavors: [u, s, c]
+        current_quark: c
+        current_antiquark: s
+        current_gamma: gamma_x
+        projector: P_plus
+        diquark_gamma_src: Cg5
+        diquark_gamma_snk: Cg5
+        c_gamma_src: I4
+        c_gamma_snk: I4
+        tseq: '8'
+      insertion_time_window:
+        start: 1
+        stop: 7
+      normalization: Compute the raw bare Euclidean three-point correlator only; no current renormalization, no source/sink overlap cancellation, and no extra interpolator normalization factor beyond the fixed operator definition.
+      scope: Single configuration and single source position only; suitable for code-path validation and numerical smoke testing, not for a statistically controlled physics result.
+
+output:
+  format: other
+  filename: xi_cc_to_xi_c_vec_x_tseq8_cfg10000.txt
+  metadata: false
+  layout: columns are tseq, t_ins, real_part, imag_part
+  header: false
+  destination: run_directory
+
+extras:
+  - use_generate_einsum_for_baryon_3pt_only_once
+  - explicit_current_direction_current_quark_c_current_antiquark_s
+  - xi_cc_source_uses_two_charm_topologies_summed_no_extra_prefactor
+  - single_cfg_single_source_technical_test_only
+  - do_not_compute_any_2pt_correlator
+  - save_rank0_txt_without_header
+
+freeform_plan: |
+  Not used because this is a standard hadronic three-point function task.

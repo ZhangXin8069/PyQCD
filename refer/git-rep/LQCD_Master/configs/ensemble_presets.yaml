@@ -1,0 +1,161 @@
+C24P29:
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+
+  dimensions: [24, 24, 24, 72]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+
+  quark_mass:
+    light: -0.2770
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid: [[6, 6, 6, 3], [4, 4, 4, 6]]
+
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+F32P30:
+  cfg_path: /public/home/tangmen/work_pyquda/LQCD_skills_test/ens/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_{n_cfg}_hyp0_gfixed3
+
+  dimensions: [32, 32, 32, 96]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+
+  lattice_spacing: 0.0775
+  anisotropy: 1.0
+
+  quark_mass:
+    light: -0.2295
+    strange: -0.2038
+    charm: 0.1974
+
+  xi_0: 1.0
+  clover: 1.141151096
+  multigrid: [[4, 4, 4, 4]]
+
+  mpi_num: 8
+  process_grid: [1, 1, 2, 4]
+
+G36P29:
+  cfg_path: /public/share/weiwang/clqcd/beta6.498_mu-0.2150_ms-0.1926_L36x108/Configurations/Original/s1.0_cfg_{n_cfg}.lime
+
+  dimensions: [36, 36, 36, 108]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+
+  lattice_spacing: 0.0683
+  anisotropy: 1.0
+
+  quark_mass:
+    light: -0.2150
+    strange: -0.1928
+    charm: 0.1433
+
+  xi_0: 1.0
+  clover: 1.134139449
+  multigrid: [[4, 3, 3, 9], [9, 3, 3, 2]]
+
+  mpi_num: 12
+  process_grid: [1, 2, 2, 3]
+
+H48P32:
+  cfg_path: /public/share/weiwang/clqcd/beta6.72_mu-0.1850_ms-0.1700_L48x144/Configurations/Original/beta6.72_mu-0.1850_ms-0.1700_L48x144_cfg_{n_cfg}.lime
+
+  dimensions: [48, 48, 48, 144]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+
+  lattice_spacing: 0.0520
+  anisotropy: 1.0
+
+  quark_mass:
+    light: -0.1850
+    strange: -0.1701
+    charm: 0.0551
+
+  xi_0: 1.0
+  clover: 1.119272410
+  multigrid: [[6, 6, 6, 4], [8, 4, 4, 6]]
+
+  mpi_num: 24
+  process_grid: [1, 2, 2, 6]
+
+C48P14:
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2825_ms-0.2310_L48x96/Configurations/Original/beta6.20_mu-0.2825_ms-0.2310_L48x96_cfg_{n_cfg}.lime
+
+  dimensions: [48, 48, 48, 96]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+
+  quark_mass:
+    light: -0.2825
+    strange: -0.2335
+    charm: 0.4205
+
+  xi_0: 1.0
+  clover: 1.160587196
+  multigrid: [[6, 6, 6, 4], [8, 4, 4, 6]]
+
+  mpi_num: 16
+  process_grid: [1, 2, 2, 4]
+
+C32P23:
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2790_ms-0.2400_L32x64/Configurations/Original/beta6.20_mu-0.2790_ms-0.2400_L32x64_cfg_{n_cfg}.lime
+
+  dimensions: [32, 32, 32, 64]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+
+  quark_mass:
+    light: -0.2790
+    strange: -0.2337
+    charm: 0.4190
+
+  xi_0: 1.0
+  clover: 1.160678675
+  multigrid: [[4, 4, 4, 4], [8, 8, 4, 4]]
+
+  mpi_num: 8
+  process_grid: [1, 1, 2, 4]
+
+F32P21:
+  cfg_path: /public/share/weiwang/clqcd/beta6.41_mu-0.2320_ms-0.2050_L32x64/Configurations/Original_new/beta6.41_mu-0.2320_ms-0.2050_L32x64_cfg_{n_cfg}.lime
+
+  dimensions: [32, 32, 32, 64]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+
+  lattice_spacing: 0.0775
+  anisotropy: 1.0
+
+  quark_mass:
+    light: -0.2320
+    strange: -0.2023
+    charm: 0.1996
+
+  xi_0: 1.0
+  clover: 1.140888283
+  multigrid: [[4, 4, 4, 4], [8, 8, 4, 4]]
+
+  mpi_num: 8
+  process_grid: [1, 1, 2, 4]

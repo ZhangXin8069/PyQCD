@@ -1,0 +1,13 @@
+This revised plan keeps the original goal and setup but corrects the main physics omission: for the flavor-diagonal current \(\bar s\,\gamma_x\gamma_5\,s\) in \(\Lambda\to\Lambda\), the requested three-point function is not just a connected strange-line insertion. The full correlator contains both a connected contribution and a disconnected strange-loop contribution, so the plan now defines the final observable as their sum.
+
+The connected sector remains close to the previous scheme. It uses the local \(\Lambda\) interpolator \(\epsilon^{abc}(u^T C\gamma_5 d)s\) at source and sink, zero momentum, point source at \([0,0,0,0]\), projector \(T=(I+\gamma_t)/2\), and \(t_{\rm seq}=8\). By isospin symmetry, one forward light propagator is reused for the \(u\) and \(d\) spectator lines, one forward strange propagator carries the source strange quark, and one strange sequential propagator is built from the sink block with the open strange index.
+
+The essential addition is the disconnected sector. The plan now includes a strange loop estimator for
+\[
+L_s(\tau)=\sum_{\vec x}\mathrm{Tr}[\gamma_x\gamma_5 S_s(x,x)]
+\]
+on the same stout-smeared gauge field, combined with the corresponding Lambda source-sink baryon block on the same configuration. This internal baryon block is needed to form the disconnected three-point function, but it is not promoted to a separate saved two-point observable, so the user instruction "do not compute the 2pt function" is respected at the output level.
+
+The ensemble block is kept exactly consistent with the supplied fixed configuration, including the valence strange mass \(m_s=-0.2356\). Because the configuration path label contains `ms-0.2400`, the plan explicitly treats \(m_s=-0.2356\) as the prescribed valence input for this job rather than silently pretending the setup is unitary. All inversions use clover fermions on stout-smeared links with \((n_{\rm step},\rho,n_{\rm dim})=(1,0.125,4)\), tolerance \(10^{-10}\), and maximum iteration count 10000.
+
+The output contract is also tightened. The saved file is now the full raw summed correlator only, written as plain text in the run directory with no header and no extra text, and it includes all insertion times \(t_{\rm ins}=0,\ldots,8\) rather than silently dropping contact times. This makes the product a clean per-configuration correlator-generation job, suitable for later analysis or filtering without losing information at production time.

@@ -1,0 +1,119 @@
+task:
+  name: wilson_loops_C24P29
+  description: >
+    Compute all 16 rectangular Wilson loops W(R,T) for R = 1,2,3,4 and
+    T = 1,2,3,4 on a single gauge configuration (cfg 10000) of the C24P29
+    ensemble (24³×72, β=6.20).  Each loop is averaged over the three
+    spatial-temporal planes XT, YT, ZT.  No link smearing is applied; the
+    original unsmeared gauge links are used directly.  This is a pure-gauge
+    measurement — no quark propagators or Dirac inversions are involved.
+    Output is a plain three-column text file (R, T, W_val per line, no header).
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wloop
+      type: wilsonloop
+      name: Wilson loops W(R,T) R,T∈{1,2,3,4} plane-averaged
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: text
+  metadata: false
+
+extras:
+  - "No gauge link smearing (stout/APE/HYP) applied; original unsmeared links used."
+  - "Each W(R,T) averaged over XT, YT, ZT spatial-temporal planes."
+  - "Single configuration: cfg 10000."
+  - "Output: plain three-column text file with columns R, T, W_val; one line per (R,T) pair, no header."
+
+freeform_plan: |
+  ── Physics goal ──
+  Measure the expectation values of rectangular R×T Wilson loops from a
+  single pure-gauge configuration, without link smearing, as a first look at
+  the static quark-antiquark potential signal on the C24P29 ensemble.
+
+  ── Observable definition ──
+  For each R ∈ {1,2,3,4} and T ∈ {1,2,3,4}, compute:
+
+      W_μν(R,T) = (1/Nc) Re Tr P[ U_μ … U_ν … U_μ† … U_ν† ]
+
+  where the path is: R steps in μ, T steps in ν, R steps in −μ, T steps in −ν.
+  Average over the three spatial-temporal planes:
+      W(R,T) = ⅓ [ W_XT(R,T) + W_YT(R,T) + W_ZT(R,T) ]
+
+  ── Computational strategy (PyQUDA) ──
+  1. Initialise PyQUDA with grid [1,1,1,4] on lattice [24,24,24,72].
+  2. Load gauge configuration cfg 10000 via io.readChromaQIOGauge(),
+     then call gauge.toDevice() to transfer the gauge field to GPU.
+     (Omitting toDevice() leaves the field on the host and will cause
+     gauge.loop() to fail or return zeros.)
+  3. Do NOT apply any smearing (gauge.stoutSmear or similar).
+  4. For each (R,T) pair, build three path lists:
+       path_XT = [X]*R + [T]*T + [-X]*R + [-T]*T
+       path_YT = [Y]*R + [T]*T + [-Y]*R + [-T]*T
+       path_ZT = [Z]*R + [T]*T + [-Z]*R + [-T]*T
+     Pack them into 4 groups for gauge.loop():
+       groups = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+       weights = [1, 1, 1, 0]
+     call res = gauge.loop(groups, weights).
+  5. For each of the first three results res[i] (i=0,1,2):
+       - getHost() → reshape(-1, Nc, Nc) → trace (axis -2,-1) → .real
+       - reshape to the exact local lattice shape for gatherLattice:
+         local_shape = (2, Lt//grid[3], Lz, Ly, (Lx//grid[0])//2)
+         = (2, 72//4, 24, 24, (24//1)//2) = (2, 18, 24, 24, 12)
+       - gatherLattice to rank 0 with axes [-1, -1, -1, -1].
+     Average the three plane sums element-wise before the final sum.
+  6. Final value: W_val = global_sum.sum() / (total_sites * Nc).
+  7. Write all 16 results as lines "R  T  W_val" (three columns,
+     space-separated, floating-point) to a plain text file in the run
+     directory.  No header row.
+
+  ── Justification of choices ──
+  - R and T up to 4: keeps loop area ≤ 16, avoiding severe SNR degradation
+    on a single configuration while still sampling the short-distance
+    Coulomb region and the onset of the linear rise.
+  - Plane averaging (XT+YT+ZT): exploits the cubic spatial symmetry to
+    increase statistics at zero cost, yielding a ×3 gain in effective
+    measurements per configuration.
+  - No smearing: preserves the bare potential signal; smearing would
+    distort short-distance physics and is better deferred to a separate
+    systematic study.
+  - Single configuration: sufficient for a code-validation / quick-look
+    run; extension to multiple configs is a trivial loop over cfg_num.

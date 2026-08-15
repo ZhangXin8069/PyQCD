@@ -1,0 +1,185 @@
+task:
+  name: xic_to_xi_vector_3pt
+  description: Compute the zero-momentum Xi_c to Xi baryon three-point correlation function for the c->s vector transition using source operator epsilon^{abc}(d^T C gamma_5 s)c, sink operator epsilon^{abc}(d^T C gamma_5 s)s, current J_x = \bar{s} gamma_x c, projector Tmat = (I + gamma_t)/2, point source at [0, 0, 0, 0], and tseq = 8; use stout-smeared gauge links with (n_steps, rho, ndim) = (1, 0.125, 4) for every inversion, do not compute 2pt functions, and treat this fixed single-configuration/single-source setup as a template or smoke-test run rather than a production physics measurement.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: xic_to_xi_vec_x_3pt
+      type: baryon_3pt
+      name: Xi_c to Xi three-point function with local vector current \bar{s} gamma_x c at zero momentum and positive-parity projection
+
+  hadrons:
+    - id: xic_src
+      name: Xi_c
+      type: baryon
+      flavor: dsc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(d^{Ta} C gamma_5 s^b)c^c
+      subtype: charmed_cascade_source
+    - id: xi_snk
+      name: Xi
+      type: baryon
+      flavor: dss
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(d^{Ta} C gamma_5 s^b)s^c
+      subtype: strange_cascade_sink
+
+  propagators:
+    - id: prop_d_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: dirac_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator for the d spectator line from the common point source; u/d degeneracy is available on the ensemble, but this transition explicitly uses the d line.
+      sink:
+        id: point_sink_d
+        type: point
+    - id: prop_s_fwd
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: dirac_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward strange propagator for the spectator s line entering the Xi sink block; this propagator is distinct from the strange sequential solve.
+      sink:
+        id: point_sink_s
+        type: point
+    - id: prop_c_fwd
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: dirac_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward charm propagator from the fixed ensemble valence input; for this plan it is used as a template/smoke-test heavy quark setup on C24P29, not as a separately retuned heavy-quark production action.
+      sink:
+        id: point_sink_c
+        type: point
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: dirac_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential strange propagator built from the Xi sink block at tseq = 8 with zero sink momentum, diquark gamma C gamma_5, and Tmat = (I + gamma_t)/2; this is the correct sequential flavor because the current \bar{s} gamma_x c creates the sink-side s quark.
+      sink:
+        id: xi_sink_sequential
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_xic_to_xi_gamma_x_tsep8
+      type: baryon_3pt
+      propagator: prop_s_seq
+      observable: xic_to_xi_vec_x_3pt
+      tseq: 8
+      source_momentum: [0, 0, 0]
+      sink_momentum: [0, 0, 0]
+      insertion_current: bar(s) gamma_x c
+
+output:
+  format: other
+  metadata: false
+  path: .
+  filename_pattern: xic_to_xi_vec3pt_cfg{cfg_num}_src0000_tseq8.txt
+  columns:
+    - tseq
+    - t_ins
+    - Re
+    - Im
+  header: false
+
+extras:
+  - single-configuration single-source smoke test only, not a production decay analysis
+  - verify Wick routing: sink block uses forward d and forward s, sequential solve is strange, final contraction uses forward charm with gamma_x
+  - code-generation convention: current_quark=c and current_antiquark=s for baryon_3pt
+  - use P_plus equivalent to Tmat=(I+gamma_t)/2
+  - do not compute or save any 2pt correlator
+
+freeform_plan: |
+  Standard task; freeform mode is not used.

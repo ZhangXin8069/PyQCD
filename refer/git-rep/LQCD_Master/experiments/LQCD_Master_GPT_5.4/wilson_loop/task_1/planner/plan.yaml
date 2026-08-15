@@ -1,0 +1,135 @@
+task:
+  name: wilson_loop_R1_T1_xt_yt_zt_average_cfg10000
+  description: Compute the per-configuration rectangular Wilson loop W(R=1,T=1) on cfg 10000, average equally over the XT, YT, and ZT planes, and save the final scalar result as plain text without header or extra text in the run directory.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wl_r1_t1_xt_yt_zt_cfg
+      type: wilsonloop
+      name: Per-configuration Wilson loop W(R=1,T=1) averaged over XT, YT, and ZT planes
+
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - pure_gauge
+  - per_configuration_result
+  - no_fermion_inversions
+  - rank0_write_only
+  - plain_text_output
+
+freeform_plan: |
+  Physics category: pure-gauge observable measurement.
+
+  Scope and interpretation:
+  - This task measures a single-configuration value on cfg 10000 only.
+  - The requested final result is therefore a per-configuration observable, not an ensemble expectation value.
+  - No quark propagators, Dirac solves, fermion inversions, or hadronic correlators enter anywhere.
+
+  Observable definition:
+  - Compute W(R=1,T=1) in each of the three spatial-temporal planes XT, YT, ZT.
+  - For R=T=1, each loop is the elementary 1x1 plaquette in the corresponding mu-T plane:
+    - XT path: [X, T, -X, -T]
+    - YT path: [Y, T, -Y, -T]
+    - ZT path: [Z, T, -Z, -T]
+  - At each site x and for each active plane, extract ReTr(U_loop(x)).
+  - Form the plane-averaged per-site field:
+      f(x) = (ReTr U_XT(x) + ReTr U_YT(x) + ReTr U_ZT(x)) / 3
+  - The final normalized Wilson-loop value is
+      W_avg = (1 / (V4 * Nc)) * sum_x f(x)
+    with Nc = 3 and V4 = Lx * Ly * Lz * Lt.
+
+  Important normalization rule:
+  - The equal physics average over XT, YT, ZT is performed explicitly in post-processing as a factor 1/3.
+  - PyQUDA gauge.loop() weights are used only to satisfy API packing and select active groups; they must not be relied on as the final plane-average normalization.
+  - Therefore, after extracting the three returned loop fields, sum their ReTr contributions explicitly, divide by 3 once, then divide by V4 and Nc once.
+
+  Numerical implementation strategy:
+  - Initialize PyQUDA with lattice dimensions [24, 24, 24, 72] and process grid [1, 1, 1, 4].
+  - Load cfg 10000 from the provided gauge-file template and move the gauge field to device.
+  - Do not apply stout/APE/HYP smearing; use the original gauge links, since the task requests the basic W(1,1).
+  - Construct the three paths for XT, YT, ZT as above.
+  - Because PyQUDA gauge.loop() requires exactly 4 outer groups, pack as:
+      groups = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+      weights = [1, 1, 1, 0]
+    where the fourth entry is a dummy padding group only.
+  - For each active returned field res[i], i=0,1,2:
+    - transfer to host,
+    - reshape to (-1, Nc, Nc),
+    - compute re_tr_i = trace(U_i).real as a per-site scalar array.
+  - Form the per-site averaged scalar array:
+      re_tr_avg = (re_tr_0 + re_tr_1 + re_tr_2) / 3.0
+
+  MPI reduction details:
+  - Do not average locally and then write partial results.
+  - First reshape re_tr_avg into the local even-odd lattice layout expected by gatherLattice:
+      local_shape = (2, Lt_local, Lz_local, Ly_local, Lx_local_over_2)
+    with, for this run,
+      Lt_local = 72 / 4 = 18,
+      Lz_local = 24,
+      Ly_local = 24,
+      Lx_local_over_2 = 24 / 2 = 12.
+    Hence the required local shape is:
+      (2, 18, 24, 24, 12)
+  - Call core.gatherLattice(re_tr_avg_field, [-1, -1, -1, -1]).
+  - On rank 0, sum the gathered global field to a scalar and divide by total_sites * Nc, where total_sites = 24 * 24 * 24 * 72.
+  - Non-root ranks must not write output files.
+
+  Output contract:
+  - Write exactly one scalar numeric value for cfg 10000 to a txt file in the run directory.
+  - File contents: the number only; no header, label, comment, JSON, YAML, or extra text. A trailing newline is acceptable.
+  - To preserve provenance and avoid ambiguous overwrite, use a cfg-specific deterministic filename:
+      wilson_loop_W_R1_T1_cfg10000.txt
+  - Only rank 0 writes the file, and it overwrites any existing file of the same name intentionally for reruns of cfg 10000.
+
+  Validation checks:
+  - Confirm no fermion object, solver, inverter, propagator, or correlator code path is invoked.
+  - Confirm the computed observable is real and finite.
+  - Confirm exactly three active planes are included with equal weight only in explicit post-processing.
+  - Confirm normalization is applied exactly once for the plane average (1/3) and exactly once for color normalization (1/Nc).
+  - Confirm the local field passed to gatherLattice has shape (2, 18, 24, 24, 12) on each rank for the stated process grid.
+  - Use the identity W(1,1) = temporal plaquette average over XT, YT, ZT as a sanity check on path ordering and normalization.
+  - Require the final value to lie in a physically reasonable plaquette range for this ensemble, i.e. positive and well below 1 after 1/Nc normalization.
+
+  Execution details:
+  - Recommended launcher: mpirun -np 4 python script.py
+  - One plain-text output file is produced for cfg 10000 only.

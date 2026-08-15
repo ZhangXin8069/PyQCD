@@ -1,0 +1,108 @@
+task:
+  name: jpsi_vector_connected_twopoint_point_source
+  description: Compute the zero-momentum connected J/psi meson two-point correlation function on ensemble C24P29 using a charm point-source propagator from [0,0,0,0], with stout-smeared gauge links in the clover inversion defined by n_steps=1, rho=0.125, ndim=4, using local vector interpolating operators cbar gamma_x c, cbar gamma_y c, and cbar gamma_z c, averaging the three polarizations, and save the final plain-text correlator in the run directory with no header or extra text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: jpsi_connected_2pt
+      type: meson_2pt
+      name: Connected J/psi vector two-point function
+
+  hadrons:
+    - id: jpsi
+      name: J/psi
+      type: meson
+      flavor: cbar-c charmonium
+      momentum: [0, 0, 0]
+      interpolating_operator: local vector cbar gamma_i c with i in {gamma_x, gamma_y, gamma_z}, averaged over the three spatial polarizations
+      subtype: vector_charmonium_connected
+
+  propagators:
+    - id: prop_c_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm_stout
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the ensemble-provided charm clover action parameters for technical correlator generation on C24P29. Interpret the requested stout tuple as (n_steps, rho, ndim) = (1, 0.125, 4), and use the same stout-smeared links consistently wherever the clover Dirac operator depends on gauge links, including hopping and clover-term construction.
+      sink:
+        id: zero_momentum_local_vector_sink
+        type: other
+
+measurement:
+  correlators:
+    - id: jpsi_vector_gamma_x
+      type: meson_2pt
+      propagator: prop_c_point
+      observable: jpsi_connected_2pt
+    - id: jpsi_vector_gamma_y
+      type: meson_2pt
+      propagator: prop_c_point
+      observable: jpsi_connected_2pt
+    - id: jpsi_vector_gamma_z
+      type: meson_2pt
+      propagator: prop_c_point
+      observable: jpsi_connected_2pt
+    - id: jpsi_vector_avg
+      type: other
+      propagator: prop_c_point
+      observable: jpsi_connected_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - connected correlator only; disconnected charm-annihilation diagrams are omitted and must not be implied in claims
+  - compute C_i(t)=sum_x Tr[S_c^dagger(x,t;0) (gamma5 gamma_i) S_c(x,t;0) (gamma_i gamma5)] for i=x,y,z and average equally
+  - apply zero-momentum projection by summing over all sink spatial sites on each timeslice
+  - save one row per timeslice as t ReC ImC in a txt file in the run directory with no header or extra text
+  - validate C_x C_y C_z separately before averaging, check near-zero imaginary part, and record achieved solver residual
+
+freeform_plan: |
+  Not used because this is a standard hadron two-point correlator task.

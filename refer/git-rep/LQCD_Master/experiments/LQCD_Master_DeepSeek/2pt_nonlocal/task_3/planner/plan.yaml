@@ -1,0 +1,185 @@
+task:
+  name: etas_nonlocal_2pt
+  description: >
+    Nonlocal two-point correlation function of the eta_s meson (ssbar, J^PC = 0^-+,
+    interpolating operator = sbar gamma_5 s). The s-quark field is spatially shifted by z
+    in the +z-direction and connected by a straight Wilson line built from the original
+    (unsmeared) gauge links. Maximum separation z = 10. Point source at [0,0,0,0].
+    Inversions use stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4). Only the
+    connected Wick contraction is evaluated.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables: []
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: txt
+  metadata: false
+
+freeform_plan: |
+  PHYSICS GOAL:
+  Compute the nonlocal two-point correlation function of the eta_s meson
+  (ssbar, J^PC = 0^-+, interpolating operator = sbar gamma_5 s) with the
+  s-quark field spatially shifted by z lattice units in the +z-direction.
+  The gauge connection is a straight Wilson line built from the original
+  (unsmeared) gauge links. This observable is a building block for
+  quasi-distribution amplitude (quasi-DA) studies of the eta_s meson.
+
+  OPERATOR DEFINITIONS (DeGrand-Rossi basis, gamma_5^dag = gamma_5):
+
+    Sink (nonlocal, time t, separation z):
+      O_etas(t; z) = sum_x sbar^a_alpha(x,t) [gamma_5]_{alpha,beta}
+                     W^{ab}(x, x+z*e_z; t) s^b_beta(x+z*e_z, t)
+    where a,b are color indices, alpha,beta are spin indices, and
+    W(x, x+z*e_z; t) is the straight Wilson line along +z at time slice t:
+      W(x, x+z*e_z; t) = U_z(x,t) * U_z(x+e_z,t) * ... * U_z(x+(z-1)*e_z,t)
+    For z=0, W is the 3x3 identity matrix.
+
+    Source (local, time 0):
+      O_etas^dag(0) = -sum_y sbar^c_gamma(y,0) [gamma_5]_{gamma,delta} s^d_delta(y,0)
+    (The minus sign arises from gamma_4 gamma_5^dag gamma_4 = -gamma_5.)
+
+  CORRELATOR (connected diagram only, zero momentum, point source at [0,0,0,0]):
+
+    After Wick contraction (fermion anticommutation minus sign cancels the
+    minus from O^dag) and applying gamma_5-hermiticity
+    (S(0;x) = gamma_5 S^dag(x;0) gamma_5), the connected correlator
+    reduces to:
+
+      C(z; t) = sum_x Tr_spin,color[ S_s^dag(x,t; 0,0) *
+                 W(x, x+z*e_z; t) * S_s(x+z*e_z, t; 0,0) ]
+
+    where S_s is the strange-quark propagator from a point source at the
+    origin [0,0,0,0]. For z=0, W is the identity and this reduces to the
+    standard local eta_s two-point function:
+      C(0; t) = sum_x Tr[ S_s^dag(x,t; 0,0) * S_s(x,t; 0,0) ]
+    which provides a consistency check.
+
+    The correlator is complex-valued for z != 0; both real and imaginary
+    parts are saved.
+
+  COMPUTATIONAL STEPS:
+
+  1. Load gauge configuration from the original (unsmeared) Lime file.
+     Keep a copy for Wilson-line construction.
+
+  2. Construct stout-smeared gauge links:
+     - n_steps = 1, rho = 0.125, ndim = 4
+     - These smeared links are used ONLY for the Dirac operator inversion.
+
+  3. Compute the strange-quark propagator prop_s:
+     - Source: point source at spacetime position [0, 0, 0, 0]
+       (all momentum phases equal to 1).
+     - Dirac operator: Wilson-clover, with stout-smeared gauge links.
+     - Quark mass: -0.2356 (strange).
+     - Clover coefficient: c_sw = 1.160920226.
+     - Solver: multigrid with coarse-grid levels
+         level 1: [6, 6, 6, 3]
+         level 2: [4, 4, 4, 6]
+     - Tolerance: 1e-12, maximum iterations: 20000.
+     - Boundary conditions: spatial periodic, temporal anti-periodic.
+
+  4. For each separation z in {0, 1, 2, ..., 10}:
+
+     a. Build the straight Wilson line W(x, x+z*e_z; t) at every
+        spatial site x and time slice t from the ORIGINAL (unsmeared)
+        gauge links:
+          W(x, x+z*e_z; t) = prod_{k=0}^{z-1} U_z(x + k*e_z, t)
+        For z=0, W is the 3x3 identity matrix.
+        Periodic boundary conditions apply to spatial shifts.
+
+     b. Construct the shifted propagator at each (x, t):
+          prop_s_shifted(x, t; z) = W(x, x+z*e_z; t) * prop_s(x+z*e_z, t)
+        where prop_s(x+z*e_z, t) is the standard propagator evaluated
+        at the shifted spatial position (with periodic wrap-around on
+        the 24^3 spatial volume).
+
+     c. Contract at each time slice t = 0, ..., 71:
+          C(z, t) = sum_x Tr[ prop_s^dag(x, t) * prop_s_shifted(x, t; z) ]
+        where the trace runs over spin (4) and color (3) indices,
+        and the sum runs over all spatial sites x.
+        Store both Re[C(z,t)] and Im[C(z,t)].
+
+     d. Write results to a plain-text file:
+        - Filename: etas_nonlocal_2pt_z{z:02d}.txt
+          (e.g., etas_nonlocal_2pt_z00.txt ... etas_nonlocal_2pt_z10.txt)
+        - Contents: 72 lines, one per time slice t.
+        - Each line:  t  Re[C(z,t)]  Im[C(z,t)]
+          (three whitespace-separated columns).
+        - NO header line, NO comments, NO extra text.
+        - Saved in the current run directory.
+
+  OUTPUT SUMMARY:
+    11 plain-text files, one per z value.
+    Each file contains 72 lines (T = 72 time slices).
+    Format per line: <t> <Re[C]> <Im[C]>.
+
+  NOTES AND ASSUMPTIONS:
+    - Only the connected Wick contraction is computed. Disconnected
+      contributions (ssbar pair created from the vacuum within a single
+      time slice) are not evaluated; they are numerically expensive and
+      not needed for a first quasi-DA study.
+    - The nonlocal shift is applied to the s-quark (not sbar) field,
+      as specified. The sbar field remains at position x.
+    - The Wilson line is constructed from the original unsmeared gauge
+      links, as specified.
+    - The Dirac operator inversion uses stout-smeared gauge links
+      (n_steps=1, rho=0.125, ndim=4), as specified.
+    - A single point source at [0,0,0,0] is used. No source averaging is
+      performed. This yields a valid but statistically noisy estimator.
+    - Spatial boundary conditions are periodic; the z-shift wraps around
+      the 24^3 spatial volume automatically.
+    - PyQUDA GPU framework with 4 MPI ranks in the t-direction is assumed.
+    - The gauge configuration index n_cfg is substituted via the cfg_path
+      template string.
+
+extras:
+  - "Nonlocal shift applied to quark (s) propagator only, not antiquark"
+  - "Wilson line constructed from original unsmeared gauge links"
+  - "Dirac operator inversions use stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4)"
+  - "Connected diagram only; no disconnected contributions"
+  - "Point source at [0,0,0,0]; no source averaging"
+  - "One txt file per z separation; no header; columns: t Re[C] Im[C]"

@@ -1,0 +1,7 @@
+Use multi_hadron_2pt to compute the combined two-baryon two-point function for a local 6-quark operator. The combined interpolating operator at source and sink is:
+
+  O = (u^T Cg5 d) d  *  (u^T Cg5 d) u  
+
+Use single-term baryon operators only (no octet flavor combinations). Apply P_plus projector on each baryon block individually (per-baryon block projection, not composite-level). The contraction should be one multi-hadron 2pt object, NOT a product of separate baryon 2pt correlators.
+
+Use point source at [0,0,0,0] for all quark propagators. Use stout smeared gauge links with (n_steps=1, rho=0.125, ndim=4) for the inversions. Save the result to a txt file in the run directory.

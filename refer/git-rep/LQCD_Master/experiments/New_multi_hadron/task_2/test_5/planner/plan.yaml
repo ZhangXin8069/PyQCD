@@ -1,0 +1,144 @@
+task:
+  name: three_baryon_local9q_multihadron_2pt
+  description: Compute a single combined three-baryon two-point correlator for a local nine-quark operator built from three single-term nucleon-like baryon blocks, with per-baryon positive-parity projection and a non-factorized multi-hadron contraction.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 8
+  process_grid:
+    - 1
+    - 1
+    - 2
+    - 4
+
+physics:
+  observables:
+    - id: obs_three_baryon_2pt
+      type: multi_hadron_2pt
+      name: local_three_baryon_nine_quark_two_point_function
+
+  hadrons:
+    - id: hadron_n_block_1
+      name: neutron_block_1
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cg5 d) d
+      subtype: single_term_local_baryon
+    - id: hadron_p_block
+      name: proton_block
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cg5 d) u
+      subtype: single_term_local_baryon
+    - id: hadron_n_block_2
+      name: neutron_block_2
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cg5 d) d
+      subtype: single_term_local_baryon
+    - id: hadron_three_baryon_source_sink
+      name: three_baryon_local_9q_operator
+      type: other
+      flavor: uuudddddd
+      momentum: [0, 0, 0]
+      interpolating_operator: ((u^T Cg5 d) d) * ((u^T Cg5 d) u) * ((u^T Cg5 d) d)
+      subtype: multi_hadron_operator
+
+  propagators:
+    - id: prop_light_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: wilson_clover_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the same stout-smeared links for every light-quark inversion; by isospin symmetry u and d lines are all constructed from this single light propagator reused across the full nine-quark contraction.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: corr_three_baryon_multihadron_2pt
+      type: multi_hadron_2pt
+      propagator: prop_light_point
+      observable: obs_three_baryon_2pt
+      hadron_blocks:
+        - hadron_n_block_1
+        - hadron_p_block
+        - hadron_n_block_2
+      source_sink_operator:
+        source: hadron_three_baryon_source_sink
+        sink: hadron_three_baryon_source_sink
+      contraction_strategy: combined_single_object
+      factorization: forbidden
+      block_projectors:
+        - baryon: hadron_n_block_1
+          projector: P_plus
+          expression: (1+gamma4)/2
+          application_level: per_baryon_block
+        - baryon: hadron_p_block
+          projector: P_plus
+          expression: (1+gamma4)/2
+          application_level: per_baryon_block
+        - baryon: hadron_n_block_2
+          projector: P_plus
+          expression: (1+gamma4)/2
+          application_level: per_baryon_block
+      flavor_alias:
+        u: prop_light_point
+        d: prop_light_point
+
+output:
+  format: other
+  path: ./three_baryon_local9q_multihadron_2pt.txt
+  text_format: txt
+  metadata: true
+
+extras:
+  - Use one combined multi_hadron_2pt contraction object for the full 9-quark operator.
+  - Do not decompose the result into a product of separate baryon two-point correlators.
+  - Apply P_plus=(1+gamma4)/2 independently on each of the three baryon blocks.
+  - Launch with 8 MPI ranks on grid_size [1, 1, 2, 4].
+  - Save the correlator as a txt file in the run directory.
+
+freeform_plan: |

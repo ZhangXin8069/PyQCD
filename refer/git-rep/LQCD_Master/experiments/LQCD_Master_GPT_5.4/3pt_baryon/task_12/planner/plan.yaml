@@ -1,0 +1,197 @@
+task:
+  name: lambda_to_proton_axial_3pt
+  description: Compute a per-configuration Lambda-to-proton baryon three-point correlator with the axial current J_x^A = \bar{u} gamma_x gamma_5 s at zero momentum, using a point source at [0, 0, 0, 0], positive-parity sink projector Tmat = (I + gamma_t) / 2, and the sequential-source method with tseq = 8; do not compute any two-point correlator. Because this rewrite must remain consistent with the fixed configuration block, use the listed valence strange mass m_s = -0.2356 and treat the result as a single-configuration production/smoke-test datum tied to that fixed setup.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: c3_lambda_to_p_axial_x
+      type: baryon_3pt
+      name: Lambda_to_proton_axial_current_x_three_point
+      current: \bar{u} gamma_x gamma_5 s
+      transition: Lambda_to_proton
+      projector: (I + gamma_t) / 2
+      source_sink_separation: 8
+      momentum_transfer: [0, 0, 0]
+      notes: Zero-momentum source, sink, and current projection. The physical routing is Lambda(uds) -> proton(uud) with the strange quark converted to an up quark by the axial current.
+
+  hadrons:
+    - id: lambda_baryon
+      name: Lambda
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} C gamma_5 d^b) s^c
+      subtype: octet_baryon
+
+    - id: proton_baryon
+      name: proton
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} C gamma_5 d^b) u^c
+      subtype: octet_baryon
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_forward
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator on stout-smeared links, reused for both u and d lines by isospin symmetry. Record achieved residual and iteration count; fail the job if the solve does not converge to the requested tolerance.
+      sink:
+        id: sink_forward_point_l
+        type: point
+
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_forward
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward strange propagator from the same point source, used only on the current side of the final contraction. Keep this mass consistent with the fixed ensemble metadata for this rewrite, and record achieved residual and iteration count; fail the job on non-convergence.
+      sink:
+        id: sink_forward_point_s
+        type: point
+
+    - id: prop_l_seq_t8
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_sequential
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Light sequential propagator at tseq = 8. Build the proton sink block from the two light spectator lines with Tmat = (I + gamma_t) / 2, apply the standard first dagger gamma_5 B^dagger gamma_5 to form the sequential source, perform the light sequential inversion, then apply the second dagger before the final current contraction. Record achieved residual and iteration count; fail the job on non-convergence.
+      sink:
+        id: sink_sequential_t8
+        type: other
+
+measurement:
+  correlators:
+    - id: lambda_to_p_axial_x_3pt
+      type: baryon_3pt
+      propagator: prop_l_seq_t8
+      observable: c3_lambda_to_p_axial_x
+      source_hadron: lambda_baryon
+      sink_hadron: proton_baryon
+      required_forward_propagators:
+        - prop_l_point
+        - prop_s_point
+      sequential_source_from_sink: proton_baryon
+      sequential_sink_time: 8
+      current:
+        flavor_transition: s_to_u
+        current_field_order: anti_u_gamma_x_gamma_5_s
+        dirac_structure: gamma_x gamma_5
+        codegen_flavor_mapping: current_quark=s, current_antiquark=u
+      contraction_strategy: Use the baryon sequential-source method with one forward light propagator reused for u and d, one forward strange propagator on the current side, and one light sequential inversion built from the proton sink block. The proton sink block uses the two light spectator lines only; the strange line does not enter the sink block and is contracted only in the final axial-current trace.
+      insertion_time_window:
+        saved_tau_values: [1, 2, 3, 4, 5, 6, 7]
+        convention: inclusive_list_excluding_source_and_sink_contacts_for_tseq_8
+      momentum_projection:
+        source: [0, 0, 0]
+        sink: [0, 0, 0]
+        current_transfer: [0, 0, 0]
+      validation:
+        - Verify the generated baryon_3pt code uses source flavors (u,d,s), sink flavors (u,d,u), and current mapping current_quark=s plus current_antiquark=u with axial gamma_x gamma_5.
+        - Verify the sink projector is exactly Tmat = (I + gamma_t) / 2 in the sink block and nowhere replaced by another projector.
+        - Record achieved residuals and iteration counts for prop_l_point, prop_s_point, and prop_l_seq_t8; abort output if any inversion fails tolerance or maxiter.
+        - Save only the three-point correlator values for tau = 1..7 after successful convergence and convention checks.
+      notes: This plan is intentionally restricted to the requested three-point function on cfg 10000 with one source position. It is suitable as a per-configuration production test or smoke test, not as a statistically complete physics analysis.
+
+output:
+  format: other
+  metadata: false
+  file_type: txt
+  content: rows of tseq, insertion_time, real_part, imag_part
+  filename: c3_lambda_to_p_axial_x_cfg10000_tseq8.txt
+  location: run_directory
+  header: false
+  row_convention: exact rows for (8, tau, Re[C3], Im[C3]) with tau in [1, 2, 3, 4, 5, 6, 7] and no extra text
+
+extras:
+  - matrix_element
+  - baryon_3pt
+  - sequential_source
+  - zero_momentum
+  - point_source
+
+freeform_plan: |
+  Not used because this is a standard hadronic three-point correlator task.

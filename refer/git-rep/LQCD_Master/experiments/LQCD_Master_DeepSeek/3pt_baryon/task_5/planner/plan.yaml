@@ -1,0 +1,289 @@
+task:
+  name: lambda_to_proton_vector_3pt
+  description: >
+    Three-point correlation function for Λ → p transition via the (s→u) vector current J_x = ū γ_x s.
+
+    The computation follows the sequential-source (two-dagger) method:
+      1. Solve forward light propagator S_l(x;0) and forward strange propagator S_s(x;0)
+         from a point source at (0,0,0,0) on stout-smeared gauge links.
+      2. At the sink time t_f=8, build the sequential-source block B(0) by contracting
+         S_l(x,t_f;0) with the proton sink operator (Cγ₅ diquark) and the positive-parity
+         projector T = (1+γ_t)/2.  This contraction contains two topologically distinct
+         terms (direct and exchange) with a relative minus sign from fermion antisymmetry.
+      3. First dagger: η_seq = γ₅ B† γ₅; solve D_l G_seq = η_seq for the sequential propagator.
+      4. Second dagger yields G_l_seq_dag, which is contracted with S_s and the vector current.
+      5. For each τ = 0,…,8: C₃(τ) = Σ_z Tr[G_l_seq(z,τ) γ_x S_s(z,τ)].
+
+    Only the 3pt function is computed; no 2pt is generated.  Raw values are written to a
+    plain text file with no header.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_to_p_vector_3pt
+      type: baryon_3pt
+      name: "Λ → p vector current three-point function"
+      description: >
+        C₃(τ) = Σ_z Tr_spin,color[ G_l_seq(z,τ;0) γ_x S_s(z,τ;0) ],  τ = 0,…,8.
+        G_l_seq is the light-quark sequential propagator (two-dagger convention)
+        and S_s is the forward strange propagator, both originating from the
+        same point source at (0,0,0,0).  The current is J_x = ū γ_x s (spatial
+        direction x, γ₁ in the DeGrand-Rossi basis).  Zero momentum transfer.
+      current: "ū γ_x s"
+      current_gamma: gamma_x
+      projector: "(1 + γ_t) / 2"
+      sink_time: 8
+      source_momentum: [0, 0, 0]
+      sink_momentum: [0, 0, 0]
+      momentum_transfer: [0, 0, 0]
+
+  hadrons:
+    - id: lambda_src
+      name: Λ_source
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: "ε^{abc} (u^{aT} C γ₅ d^b) s^c"
+      role: source
+      diquark_gamma: Cg5
+
+    - id: proton_snk
+      name: proton_sink
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: "ε^{abc} (u^{aT} C γ₅ d^b) u^c"
+      role: sink
+      diquark_gamma: Cg5
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            n_steps: 1
+            rho: 0.125
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+        notes: "Standard multigrid solve for light-quark propagator from point source."
+      sink:
+        id: sink_full_volume
+        type: point
+      role: forward
+      description: >
+        Forward light-quark propagator S_l(x;0) from point source at (0,0,0,0).
+        Used exclusively as input to the sequential-source B-block construction
+        (evaluated at t_f=8, all spatial sites) — NOT directly contracted in the
+        final three-point trace.  Flavor symmetry S_u = S_d = S_l is applied.
+
+    - id: prop_s_fwd
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            n_steps: 1
+            rho: 0.125
+            ndim: 4
+      solver:
+        id: solver_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+        notes: "Standard multigrid solve for strange-quark propagator from point source."
+      sink:
+        id: sink_full_volume
+        type: point
+      role: forward
+      description: >
+        Forward strange-quark propagator S_s(x;0) from point source at (0,0,0,0).
+        Directly contracted with the sequential propagator and the vector current
+        γ_x in the final three-point trace.
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential
+        depends_on_forward: prop_l_fwd
+        sink_hadron: proton_snk
+        sink_time: 8
+        projector: "(1 + γ_t) / 2"
+        source_position: [0, 0, 0, 0]
+        description: >
+          Sequential propagator G_l_seq solved from the sequential source
+          η_seq constructed at the origin via the two-dagger convention.
+
+          === Sequential-source construction (B-block) ===
+
+          At t_f=8, the forward light propagator S_l(x_vec,t_f;0) is contracted
+          with the proton sink operator and projector T = (1+γ_t)/2 to form the
+          sequential-source block B at the origin:
+
+            B^{rf}_{ρλ}(0) = Σ_{x_vec} ε^{abc} ε^{def}
+              (Cγ₅)_{αβ} (γ₅C)_{β₁α₁} T_{λγ}
+              [ S_l^{ad}_{αα₁}(x,0) S_l^{be}_{ββ₁}(x,0) δ^{cr} δ_{γρ}          ← direct
+                − S_l^{ar}_{αρ}(x,0) S_l^{be}_{ββ₁}(x,0) S_l^{cd}_{γα₁}(x,0) ]  ← exchange
+
+          where:
+            • x = (x_vec, t_f) and 0 = (0,0,0,0).
+            • The minus sign between the direct and exchange terms is essential —
+              it originates from fermion antisymmetry in the Wick contraction and
+              is required for physical correctness.
+            • Indices: ρ (spin, connects to current), λ (spin, connects to
+              strange-quark line at source), r,f (color, connect to current and
+              strange lines respectively).
+            • The einsum for this step is generated by a dedicated tool call:
+                generate_einsum(type="sequential_source_block",
+                                sink_hadron="proton", diquark_gamma="Cg5",
+                                projector="(1+gamma_t)/2")
+              This call produces BOTH the direct and exchange einsum strings,
+              including the correct relative sign.
+
+          === Solve ===
+
+          First dagger:  η_seq(0) = γ₅ B†(0) γ₅
+          Solve:         D_l G_seq = η_seq    (same light-quark Dirac operator)
+          Second dagger: G_l_seq_dag = γ₅ G_seq† γ₅
+
+          The code variable G_l_seq_dag (after the second dagger) carries the
+          correct spin-color index structure for the final contraction with S_s.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            n_steps: 1
+            rho: 0.125
+            ndim: 4
+      solver:
+        id: solver_light_seq
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+        notes: "Sequential propagator solve; same light-quark Dirac operator as prop_l_fwd."
+      sink:
+        id: sink_full_volume
+        type: point
+      role: sequential
+      description: >
+        Light-quark sequential propagator G_l_seq(z,τ;0).  At each time slice τ
+        the propagator is contracted with the forward strange propagator S_s and
+        the vector current γ_x to yield C₃(τ).
+
+measurement:
+  correlators:
+    - id: c3pt_vector
+      type: baryon_3pt
+      observable: lambda_to_p_vector_3pt
+      sequential_source_input: prop_l_fwd
+      sequential_propagator: prop_l_seq
+      forward_propagator: prop_s_fwd
+      current_insertion: gamma_x
+      projector: "(1 + γ_t) / 2"
+      time_range:
+        tau_start: 0
+        tau_end: 8
+      method: sequential_source_two_dagger
+      description: >
+        The measurement proceeds in two stages:
+
+        (A) Sequential-source construction — prop_l_fwd is evaluated at t_f=8
+            and contracted with the proton sink operator and projector T to build
+            the B-block (see prop_l_seq.source.description for the full two-term
+            einsum).  prop_l_fwd is NOT directly contracted in the final trace.
+
+        (B) Final contraction — for each τ = 0,…,8:
+              C₃(τ) = Σ_z Tr_spin,color[ G_l_seq(z,τ;0) γ_x S_s(z,τ;0) ]
+            The einsum for the final trace is generated by:
+              generate_einsum(type="baryon_3pt", source="Lambda", sink="proton",
+                              current=("s","u","gamma_x"))
+
+        Warning: τ=0 and τ=t_f=8 contain current-at-source/sink contact terms
+        and source-sink overlap artifacts.  These points are included in the raw
+        output for completeness but should be excluded from subsequent physical
+        fits (e.g., restrict fits to τ ∈ [1,7] or a sub-range where the
+        ground-state plateau is clean).
+
+output:
+  format: plain_text
+  filename: lambda_to_proton_vector_3pt_result.txt
+  description: >
+    One line per current-insertion time τ:
+      τ  Re[C₃(τ)]  Im[C₃(τ)]
+    No header, no metadata, no extra text.  Space-separated values.
+  metadata: false
+
+extras:
+  - "Do not compute any 2pt correlation functions; only the 3pt is required."
+  - "Output raw 3pt correlator values to a plain txt file with no headers."
+  - "Apply stout link smearing (n_steps=1, rho=0.125, ndim=4) to gauge links before all Dirac inversions (forward and sequential)."
+  - "Use the two-dagger sequential-source convention: η_seq = γ₅ B† γ₅; solve D G_seq = η_seq; G_seq_dag = γ₅ G_seq† γ₅."
+  - "All quark propagators share the same point source at (0,0,0,0) and zero momentum."
+  - "Single gauge configuration (cfg 10000) is processed."
+  - "The B-block includes exactly two terms (direct and exchange) with a relative minus sign from fermion antisymmetry; using only one term yields a physically incorrect sequential source."
+  - "prop_l_fwd is used only as input to the sequential-source construction; it is NOT contracted directly in the final C₃ trace."
+  - "Note: τ=0 and τ=t_f=8 contain contact terms (current at source/sink); these points should be excluded from subsequent physical fits."
+  - "Note: a bare point source at t_f=8 (≈0.84 fm) without Gaussian/Wuppertal smearing may yield significant excited-state contamination in a baryon three-point function; consider adding source/sink smearing in a production run."

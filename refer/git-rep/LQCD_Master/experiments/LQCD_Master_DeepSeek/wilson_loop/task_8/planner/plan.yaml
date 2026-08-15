@@ -1,0 +1,100 @@
+task:
+  name: wilson_loop_R3_T2
+  description: "Compute rectangular Wilson loop W(R=3,T=2) averaged over XT, YT, ZT planes using unsmeared gauge links on C24P29 ensemble, single configuration 10000."
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: wl_R3_T2
+      type: wilsonloop
+      name: "Wilson loop W(R=3,T=2) 3-plane average"
+
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "No gauge link smearing: use original unsmeared links"
+  - "Single configuration: cfg=10000"
+  - "3-plane average: XT, YT, ZT"
+  - "Output: single numeric value in wl_R3_T2.txt with no header"
+
+freeform_plan: |
+  ## Physics Goal
+  Compute the rectangular Wilson loop W(R=3, T=2) on configuration 10000
+  of the C24P29 ensemble (24^3 × 72, β=6.20, a≈0.1052 fm).
+  Average over XT, YT, and ZT spatial–temporal planes to improve statistics.
+  No gauge-link smearing is applied — use the original unsmeared links directly.
+
+  ## Definition
+  W_{μν}(R,T) = (1/N_c) Re Tr P[∏ U_μ × ∏ U_ν × ∏ U_μ† × ∏ U_ν†]
+  traced over N_c=3 colors, normalized by 1/N_c, averaged over all lattice sites.
+
+  ## Computational Steps
+  1. Initialize PyQUDA with grid=[1,1,1,4] on the 24^3×72 lattice.
+  2. Load gauge configuration from the provided cfg_path template
+     (fill {n_cfg} with 10000) using io.readChromaQIOGauge, then toDevice().
+  3. Do NOT apply any stout/APE/HYP smearing — work with raw gauge links.
+  4. For each of the three planes (XT, YT, ZT):
+     a. Construct the closed path: R=3 steps forward in spatial direction,
+        T=2 steps forward in temporal direction, R=3 steps backward in spatial,
+        T=2 steps backward in temporal.
+     b. Call gauge.loop() with all three paths packed into four outer groups
+        (pad the fourth group with a dummy path and assign weight 0).
+     c. For each active group, transfer the result to host, reshape to
+        per-site Nc×Nc matrices, and compute the real trace.
+  5. Average the per-site Re Tr values over the three active planes.
+  6. Gather across MPI ranks using core.gatherLattice and sum.
+  7. Compute the final Wilson loop value:
+     W = sum_{all sites}(ReTr_avg) / (total_sites × Nc).
+     total_sites = 24 × 24 × 24 × 72 = 995328.
+  8. On rank 0, write the single floating-point number to wl_R3_T2.txt
+     in the run directory with no header, no metadata, no extra whitespace.
+
+  ## Expected Output
+  A single text file wl_R3_T2.txt containing one floating-point number:
+  the Wilson loop W(R=3,T=2) averaged over XT, YT, ZT planes.

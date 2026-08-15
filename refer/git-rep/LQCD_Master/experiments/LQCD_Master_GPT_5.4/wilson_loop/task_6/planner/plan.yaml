@@ -1,0 +1,133 @@
+task:
+  name: wilson_loop_R3_T1_xt_yt_zt_average
+  description: Compute the per-configuration rectangular Wilson loop W(R=3,T=1) on configuration 10000 of the C24P29 ensemble, average over the XT, YT, and ZT planes, and write exactly one plain-text numeric result to a txt file in the run directory.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wilson_loop_r3_t1
+      type: wilsonloop
+      name: Rectangular Wilson loop W(R=3,T=1) averaged over XT, YT, and ZT planes on a single configuration
+
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - gauge_only
+  - plain_text_output
+  - rank0_writes_only
+  - average_xt_yt_zt
+  - no_header
+
+freeform_plan: |
+  Physical scope:
+  This is a pure-gauge measurement. The task is to produce a per-configuration estimator of the rectangular Wilson loop W(R=3,T=1) on cfg 10000, averaged over the XT, YT, and ZT planes. It is not an ensemble expectation value, and no statistical analysis over multiple configurations is included here.
+
+  Gauge-only requirements:
+  - Load the gauge links for cfg 10000.
+  - Do not construct quark propagators.
+  - Do not invoke Dirac solvers or fermion inversions.
+  - Do not use hadron operators or correlator contractions.
+  - Use the original gauge links with no link smearing, since none was requested.
+
+  Runtime setup:
+  1. Initialize PyQUDA with lattice dimensions [24,24,24,72] and process grid [1,1,1,4].
+  2. Before measurement, verify that the launched MPI world size equals the product of the requested process grid and matches ensemble.mpi_num = 4. Abort immediately on mismatch.
+  3. Read configuration 10000 from:
+     /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_10000.lime
+  4. Move the gauge field to device memory.
+
+  Wilson-loop geometry:
+  - Spatial extent R = 3.
+  - Temporal extent T = 1.
+  - Build the three closed rectangular paths:
+    XT: [X, X, X, T, -X, -X, -X, -T]
+    YT: [Y, Y, Y, T, -Y, -Y, -Y, -T]
+    ZT: [Z, Z, Z, T, -Z, -Z, -Z, -T]
+
+  PyQUDA loop packing:
+  - Because gauge.loop() requires exactly 4 outer groups, call it with
+    [[path_XT], [path_YT], [path_ZT], [path_XT]]
+    and weights [1, 1, 1, 0].
+  - The fourth entry is padding only and must carry zero weight.
+
+  Per-plane extraction and reduction:
+  1. For each active result i = 0,1,2 corresponding to XT, YT, ZT:
+     - obtain the returned lattice link field res[i],
+     - transfer to host with getHost(),
+     - determine Nc from the loaded gauge object rather than hard-coding it,
+     - reshape to (-1, Nc, Nc),
+     - compute the per-site real color trace ReTr(U) for that plane.
+  2. Form the summed per-site field
+       f(x) = ReTr_XT(x) + ReTr_YT(x) + ReTr_ZT(x).
+     Do not divide by 3 before the final normalization unless done consistently only once.
+  3. Reshape f(x) to the local lattice field layout required by gatherLattice for the even-odd gauge layout:
+       (2, Lt_local, Lz_local, Ly_local, Lx_local/2)
+     with this run's process grid [1,1,1,4], hence
+       Lt_local = 72 / 4 = 18,
+       Lz_local = 24,
+       Ly_local = 24,
+       Lx_local/2 = 24 / 2 = 12,
+     so the exact local shape is:
+       (2, 18, 24, 24, 12)
+  4. Use gatherLattice(field, [-1, -1, -1, -1]) to assemble the full field on rank 0.
+
+  Normalization:
+  Define V = 24 * 24 * 24 * 72 from ensemble.dimensions and Nc from the gauge object.
+  The final reported scalar is
+    W_avg = (sum_x [ReTr_XT(x) + ReTr_YT(x) + ReTr_ZT(x)]) / (3 * V * Nc).
+  This single formula is the only normalization to apply.
+
+  Output contract:
+  - The script must resolve the run directory as the current working directory at runtime.
+  - The output path is exactly:
+      ./wilson_loop_R3_T1.txt
+    relative to that run directory.
+  - Only rank 0 may create/write the file.
+  - The file must contain exactly one numeric value followed by a newline.
+  - No header, no labels, no metadata, no additional text.
+  - Non-root ranks must not write the file.
+  - The script should not emit user-facing extra output that could be confused with the measurement result.
+
+  Deliverable form:
+  - A single flat measurement script.
+  - One per-configuration Wilson-loop number for cfg 10000.
+  - No ensemble averaging stage, no post-processing stage, and no fermionic infrastructure.

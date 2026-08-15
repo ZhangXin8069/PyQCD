@@ -1,0 +1,122 @@
+task:
+  name: kaon_2pt
+  description: "Calculate the zero-momentum two-point correlation function for a charged kaon K+ (pseudoscalar meson, flavor content s-bar u). Point source at the origin [0,0,0,0] with stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4). The contraction is performed via generate_einsum(type='meson_2pt', quark='u', antiquark='s', gamma='g5'), which yields Re Tr[prop_s^dagger prop_l]."
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: kaon_mass
+      type: meson_2pt
+      name: "Kaon two-point correlation function (K+)"
+
+  hadrons:
+    - id: kaon_plus
+      name: "K+"
+      type: meson
+      flavor: "s_bar u"
+      momentum: [0, 0, 0]
+      interpolating_operator: "bar{s} gamma5 u"
+      subtype: "pseudoscalar"
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "Multigrid solver using two-level MG from ensemble definition: block sizes [6,6,6,3] and [4,4,4,6]"
+      sink:
+        id: sink_point_l
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "Multigrid solver using two-level MG from ensemble definition: block sizes [6,6,6,3] and [4,4,4,6]"
+      sink:
+        id: sink_point_s
+        type: point
+
+measurement:
+  correlators:
+    - id: kaon_2pt_corr
+      type: meson_2pt
+      quark_propagator: prop_l
+      antiquark_propagator: prop_s
+      observable: kaon_mass
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Save correlator values as plain text with one real-valued number per time slice (T=0 through T=71), separated by newlines, no header or extra commentary; write to corr_kaon_2pt.txt in the run directory"
+  - "Contraction formula: C(t) = sum_x Re Tr[S_s_dagger(x,t) S_l(x,t)], where S_l=prop_l (u-quark, no dagger) and S_s=prop_s (s-antiquark, dagger applied). The explicit real-part extraction discards any round-off imaginary remnant. The contraction code is generated deterministically by generate_einsum(type='meson_2pt', quark='u', antiquark='s', gamma='g5')."

@@ -1,0 +1,152 @@
+task:
+  name: rho_nonlocal_2pt_zshift_max10
+  description: Compute the zero-momentum connected isovector light-light nonlocal vector two-point correlator in the rho channel with a straight +z Wilson-line displacement applied only to the quark leg, for separations z=0..10, from a point source at [0,0,0,0]. Use stout-smeared links for the light-quark inversion and the original unsmeared gauge field for the nonlocal Wilson line. Measure gamma_x, gamma_y, and gamma_z channels separately, then output their average as the final txt result with no header in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: rho_nonlocal_z_2pt
+      type: meson_2pt
+      name: connected isovector light-light nonlocal vector two-point correlator with +z quark displacement
+
+  hadrons:
+    - id: rho_isovector_nonlocal
+      name: rho-channel connected isovector nonlocal vector meson correlator
+      type: meson
+      flavor: connected isovector light-light channel under exact u/d degeneracy; explicit flavor structure dbar gamma_i W u at sink and ubar gamma_i d at source, evaluated with one degenerate light propagator
+      momentum: [0, 0, 0]
+      interpolating_operator: "For i in {gamma_x,gamma_y,gamma_z}, O_i(z,t)=sum_x dbar(x,t) gamma_i W_z(x,x+z e_z;t) u(x+z e_z,t), with local source O_i^dagger(0)=sum_y ubar(y,0) gamma_i d(y,0). The Wilson line W_z(x,x+z e_z;t)=prod_{n=0}^{z-1} U_z(x+n e_z,t) is a straight spatial path on a single timeslice built from the original unsmeared gauge field; for z=0, W=1. The nonlocal shift is applied only to the quark leg u(x+z e_z,t); the antiquark leg dbar(x,t) remains local."
+      subtype: nonlocal_vector_bilinear
+
+  propagators:
+    - id: prop_l_point_stout
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_mg_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: invert the light clover operator defined on stout-smeared links using the ensemble multigrid setup; use the same boundary conditions as the ensemble; convergence criterion must be the true solver residual for the stout-smeared operator, and the multigrid hierarchy must be validated for this smeared-link inversion before production use
+      sink:
+        id: point_sink_with_nonlocal_quark_shift
+        type: other
+
+measurement:
+  correlators:
+    - id: corr_rho_nonlocal_zavg
+      type: meson_2pt
+      propagator: prop_l_point_stout
+      observable: rho_nonlocal_z_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - measure z separations 0 through 10 inclusive in lattice units
+  - build the Wilson line only from spatial +z links on the same sink timeslice with periodic spatial wrapping
+  - use the original unsmeared gauge field for the Wilson line and the stout-smeared gauge field for inversion as an explicit mixed operator-action definition
+  - save the final averaged correlator to a txt file with exactly four whitespace-separated columns z t ReC ImC and no header
+  - treat cfg 10000 with one source at [0,0,0,0] as a validation run rather than a statistically meaningful production measurement
+  - inspect gamma_x gamma_y and gamma_z channels separately before polarization averaging as an implementation check
+
+freeform_plan: |
+  Standard meson nonlocal-2pt task.
+
+  Physical observable:
+  Compute the bare zero-momentum connected isovector light-light nonlocal vector correlator
+
+    C_i(z,t) = sum_{x} < [dbar(x,t) gamma_i W_z(x,x+z e_z;t) u(x+z e_z,t)] [ubar(0) gamma_i d(0)] >
+
+  with i in {x,y,z}, z = 0,1,...,10, and source fixed at x_src = (0,0,0,0). The reported final observable is
+
+    C_avg(z,t) = (C_x(z,t) + C_y(z,t) + C_z(z,t)) / 3.
+
+  Flavor/channel statement:
+  This is not a flavor-diagonal rho0 correlator. It is the connected isovector light-light vector channel written with explicit dbar gamma_i W u and ubar gamma_i d flavor structure. Under exact u/d degeneracy on this ensemble, both quark lines are represented by the same light propagator prop_l.
+
+  Mixed-link definition:
+  The task explicitly defines a mixed operator/action setup:
+  - the light-quark propagator is inverted with the stout-smeared clover operator;
+  - the nonlocal Wilson line in the sink operator is built from the original unsmeared gauge field.
+  This mixed choice is part of the operator definition and must be documented with the output. The resulting correlator is a bare nonlocal correlator with Wilson-line self-energy contamination and no renormalization prescription.
+
+  Wick-contraction convention:
+  With S_l the forward light propagator from the point source, the sink operator is implemented by shifting only the quark leg:
+
+    S_l^shift(x,t;0) = W_z(x,x+z e_z;t) S_l(x+z e_z,t;0).
+
+  The antiquark leg remains local at x:
+
+    C_i(z,t) = sum_x Tr[ S_l^dagger(x,t;0) (gamma_5 gamma_i) S_l^shift(x,t;0) (gamma_i gamma_5) ]
+
+  up to the standard connected isovector meson sign/basis convention handled by the contraction generator. The key implementation check is the endpoint/orientation convention:
+  - start at sink position x on timeslice t;
+  - move forward along +z for z links using original gauge links U_z;
+  - end at x+z e_z on the same timeslice;
+  - multiply that Wilson line onto the quark propagator evaluated at the displaced endpoint.
+  For z=0, S_l^shift = S_l and the correlator reduces to the local vector 2pt for each polarization.
+
+  Numerical implementation steps:
+  1. Initialize the lattice and MPI layout with dimensions [24,24,24,72] and process grid [1,1,1,4].
+  2. Load cfg 10000 from the ensemble path.
+  3. Keep one copy of the original gauge field unchanged for Wilson-line construction.
+  4. Create a stout-smeared copy with n_steps=1, rho=0.125, ndim=4 for the clover inversion.
+  5. Verify that the clover coefficient 1.160920226, quark mass -0.277, and the ensemble multigrid hierarchy are compatible with the stout-smeared operator actually being inverted.
+  6. Invert one light point-source propagator from source [0,0,0,0] on the stout-smeared gauge field. Require convergence in the true residual of the smeared-link operator.
+  7. For each z = 0..10, build the straight same-timeslice Wilson line W_z(x,x+z e_z;t) from original unsmeared spatial z-links only, using periodic spatial wrapping.
+  8. Form the shifted quark propagator S_l^shift(x,t;0) = W_z(x,x+z e_z;t) S_l(x+z e_z,t;0).
+  9. For each polarization gamma_x, gamma_y, gamma_z, contract the local antiquark leg with the shifted quark leg to obtain C_i(z,t).
+  10. Save or inspect C_x, C_y, and C_z internally as a validation check because z-directed nonlocality breaks the naive equivalence of longitudinal and transverse polarizations at finite lattice spacing.
+  11. Form the final average C_avg(z,t) = (C_x + C_y + C_z)/3.
+  12. Write one plain-text file in the run directory with no header and exactly four whitespace-separated columns:
+
+        z  t  ReC_avg  ImC_avg
+
+      for all z=0..10 and t=0..71 in deterministic row order, with z as the outer index and t as the inner index.
+
+  Validation-scope statement:
+  With only cfg 10000 and one point source, this run is a validation/smoke-test data-production job, not a statistically meaningful scientific measurement. It is suitable for confirming operator construction, Wilson-line orientation, z=0 local-limit behavior, and polarization handling. A production study would require many configurations and multiple source positions/times.

@@ -1,0 +1,158 @@
+task:
+  name: kaon_nonlocal_2pt
+  description: >
+    Compute the nonlocal two-point correlation function of a K+ meson
+    (\bar{s} u, pseudoscalar channel) with a Wilson-line shift applied
+    to the light-quark (u) propagator in the z-direction for separations
+    z = 0 through 10.  The source is a point source at [0,0,0,0].
+    Propagator inversions use stout-smeared gauge links
+    (n_steps=1, rho=0.125, ndim=4).  The Wilson line for the nonlocal
+    shift uses the original (unsmeared) gauge links.  Zero momentum.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num: ['10000']
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions: [24, 24, 24, 72]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: kaon_nonlocal_2pt
+      type: meson_2pt
+      name: kaon_nonlocal_correlator
+      nonlocal:
+        direction: z
+        max_separation: 10
+        shift_on: prop_l
+        wilson_line_gauge: original
+
+  hadrons:
+    - id: kaon
+      name: K_plus
+      type: meson
+      flavor: anti-s_u
+      momentum: [0, 0, 0]
+      interpolating_operator: "\\bar{s}(\\vec{x},t) \\gamma_5 W(\\vec{x},\\vec{x}+z\\hat{z};t) u(\\vec{x}+z\\hat{z},t)"
+      gamma_structure: gamma5
+      subtype: pseudoscalar
+      source_operator: "O_K^\\dagger(0) = -\\bar{u}(\\vec{0},0) \\gamma_5 s(\\vec{0},0)"
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+      sink:
+        id: prop_l_sink
+        type: nonlocal_shifted
+        nonlocal:
+          direction: z
+          max_separation: 10
+          wilson_line_gauge: original
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+      sink:
+        id: prop_s_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: kaon_nonlocal_2pt_meas
+      type: meson_2pt_nonlocal
+      propagators: [prop_l, prop_s]
+      observable: kaon_nonlocal_2pt
+      gamma: gamma5
+      contraction: >
+        C(z,t) = +\sum_{\vec{x}} Tr[ S_s^\dagger(\vec{x},t;0) \cdot
+        W(\vec{x},\vec{x}+z\hat{z};t) \cdot S_u(\vec{x}+z\hat{z},t;0) ]
+        where trace runs over spin and color. Positive sign follows from
+        the correct Hermitian conjugate O_K^\dagger = -\bar{u}\gamma_5 s
+        and \gamma_5-hermiticity.
+      nonlocal_shift:
+        direction: z
+        max_separation: 10
+        shift_on: prop_l
+        wilson_line_gauge: original
+      momentum_projection: [0, 0, 0]
+
+output:
+  format: txt
+  filename: kaon_nonlocal_2pt.txt
+  metadata: false
+  complex_format: (re,im)
+  description: >
+    One row per z-separation (0..10). Each row contains 72 entries,
+    one per timeslice t=0..71. Each entry is formatted as "(re,im)"
+    (parentheses, comma-separated real and imaginary parts). Entries on
+    a row are space-separated. No header, no trailing whitespace.
+
+extras:
+  - "Source-operator sign: O_K^\\dagger(0) = -\\bar{u}(0) \\gamma_5 s(0) (proper Hermitian conjugate)"
+  - "Contraction sign: positive (+), derived from correct O_K^\\dagger sign + \\gamma_5-hermiticity"
+  - "Original gauge links MUST be copied and retained before stout smearing; original links → Wilson line, smeared links → Dirac inversions"
+  - "Wilson line: straight path along +\\hat{z}, built from original U_z links, periodic wrap-around via (x_z + k) mod L_z"
+  - "Nonlocal shift: applied to light-quark (u) propagator as color-matrix × color-spinor-matrix product: \\tilde{S}_u(\\vec{x},t) = W(\\vec{x},\\vec{x}+z\\hat{z};t) · S_u(\\vec{x}+z\\hat{z},t;0)"
+  - "Propagator inversions: stout-smeared gauge links, n_steps=1, rho=0.125, ndim=4"
+  - "Point source at lattice coordinate [0,0,0,0] for both propagators"
+  - "Gamma structure: \\gamma_5 (DeGrand-Rossi basis)"
+  - "Zero momentum projection: p = [0,0,0]"
+  - "Complex output format: (re,im) per entry, space-separated per row"
+  - "Periodic boundary: x_z + z >= L_z handled via (x_z + z) mod L_z = 24"
+  - "Executor note: meson_2pt_nonlocal type requires the Wilson-line construction + shifted-propagator contraction; if unsupported, implement as meson_2pt with manual Wilson-line logic"

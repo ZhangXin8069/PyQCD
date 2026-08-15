@@ -1,0 +1,6 @@
+Calculate the nonlocal two-point function of a D_s (\bar s c) meson with a nonlocal shift to a maximum separation of 10 in the z direction.
+Use the point source at position [0,0,0,0].
+Apply the nonlocal shift to the quark propagator, not the antiquark propagator.
+Use the original gauge field for the shift.
+Invert all propagators using stout-smeared gauge links with parameters (1, 0.125, 4).
+Save the final result without any header or extra text to a txt file in the run directory.

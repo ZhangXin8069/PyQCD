@@ -1,0 +1,177 @@
+task:
+  name: bc_to_jpsi_vector_3pt
+  description: Compute a zero-momentum bare Euclidean meson three-point correlator for Bc- -> J/psi with source meson anti-c b, sink meson anti-c c, source interpolator gamma_5, sink interpolator gamma_x, and current cbar gamma_x b, using the user-fixed point source at [0, 0, 0, 0] and tseq = 8; save only the final three-point data to a plain txt file in the run directory. This production is explicitly a bare correlator data product and not by itself a physical decay-form-factor determination.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions: [24, 24, 24, 72]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: c3_bc_to_jpsi_vx_bare
+      type: meson_3pt
+      name: bare_Bc_to_Jpsi_vector_gamma_x_three_point
+
+  hadrons:
+    - id: src_bc_minus
+      name: Bc-
+      type: meson
+      flavor: anti-c b
+      momentum: [0, 0, 0]
+      interpolating_operator: cbar * gamma_5 * b
+      subtype: local_heavy_heavy_pseudoscalar
+    - id: snk_jpsi_x
+      name: J/psi
+      type: meson
+      flavor: anti-c c
+      momentum: [0, 0, 0]
+      interpolating_operator: cbar * gamma_x * c
+      subtype: local_heavy_heavy_vector
+
+  propagators:
+    - id: prop_c_forward
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm_forward_nomg
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward charm propagator for the spectator anti-charm line. Use a direct heavy-clover solve on the stout-smeared gauge field; do not assume the ensemble light-quark multigrid setup is valid for this heavy solve unless separately validated.
+      sink:
+        id: local_sink_c
+        type: point
+
+    - id: prop_b_forward
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_bottom_forward_nomg_debug
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward bottom-line solve for the active source-side b quark annihilated by the current. This uses the fixed valence parameters supplied in the configuration facts, but these parameters are not asserted here to be a tuned RHQ/Fermilab/NRQCD bottom action. Treat the resulting correlator as a debugging or bare-method data product with uncontrolled bottom discretization systematics, not as a validated physical Bc decay calculation.
+      sink:
+        id: local_sink_b
+        type: point
+
+    - id: prop_c_sequential
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm_sequential_nomg
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential charm propagator for fixed sink operator gamma_x, zero sink momentum, and tseq = 8. Build the sequential source from the J/psi sink block on the stout-smeared gauge field and solve again with the same heavy-charm clover action; do not inherit the ensemble multigrid block without separate heavy-sector validation.
+      sink:
+        id: sequential_sink_jpsi_gx_p000_t8
+        type: other
+
+measurement:
+  correlators:
+    - id: meas_c3_bc_to_jpsi_vx_t8
+      type: meson_3pt
+      propagator: prop_c_sequential
+      propagators_used:
+        - prop_c_forward
+        - prop_b_forward
+        - prop_c_sequential
+      observable: c3_bc_to_jpsi_vx_bare
+      source_hadron: src_bc_minus
+      sink_hadron: snk_jpsi_x
+      current_operator: cbar * gamma_x * b
+      current_quark_flow:
+        source_quark_annihilated: bottom
+        sink_quark_created: charm
+        spectator_antiquark: anti-charm
+      gamma_structure:
+        gamma_src: gamma_5
+        gamma_snk: gamma_x
+        gamma_cur: gamma_x
+      tseq: 8
+      source_position: [0, 0, 0, 0]
+      source_momentum: [0, 0, 0]
+      sink_momentum: [0, 0, 0]
+      insertion_momentum: [0, 0, 0]
+      disconnected_diagrams: false
+      renormalization:
+        included_in_measurement: false
+        notes: This run computes only the bare Euclidean three-point correlator. No claim of a physical Bc -> J/psi decay matrix element or form factor should be made without a separate heavy-heavy b->c current normalization/improvement program.
+      implementation_notes:
+        - Use the meson sequential-source method with fixed sink momentum zero and fixed tseq = 8, as requested.
+        - Perform an explicit flavor-flow validation before code generation: source meson anti-c b, sink meson anti-c c, spectator anti-c carried by the forward charm propagator, active b annihilated at the current, and c created at the current.
+        - For the meson_3pt code-generation convention, pass current_quark = b and current_antiquark = c so the generated contraction matches the physical current cbar * gamma_x * b.
+        - Generate the contraction code through the meson_3pt einsum generator for source anti-c b, sink anti-c c, gamma_src = gamma_5, gamma_snk = gamma_x, gamma_cur = gamma_x, and tseq = 8.
+        - Save insertion times 1 through 7 only, excluding source and sink contact points.
+        - The user-fixed point source and local sink/operator choice is executable but expected to have sizable excited-state contamination for heavy-heavy mesons.
+        - The user-fixed tseq = 8 corresponds to about 0.84 fm on this lattice and should be treated as a short-separation exploratory choice rather than a plateau-validated production separation.
+
+output:
+  format: other
+  metadata: false
+  filename: bc_to_jpsi_c3_cfg10000_src0000_gsrcg5_gsnkgx_gcurgx_tseq8.txt
+  layout: columns are tseq, t_ins, real_part, imag_part with no header and no extra text
+  location: run directory
+
+extras:
+  - use MPI with 4 ranks and process grid [1, 1, 1, 4]
+  - do not compute any 2pt correlator
+  - use only configuration 10000 from the specified ensemble
+  - record ensemble-action IDs and gamma/source choices in the run log because the txt output must remain headerless
+
+freeform_plan: ''

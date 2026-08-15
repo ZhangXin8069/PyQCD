@@ -1,0 +1,190 @@
+task:
+  name: bc_to_jpsi_vector_3pt
+  description: >
+    Three-point correlation function for Bc- → J/psi transition via the
+    b→c vector current \bar{c} γ_x b.  Source: Bc- meson (anti-c b) with
+    pseudoscalar γ₅ interpolator.  Sink: J/psi meson (anti-c c) with
+    vector γ_x interpolator.  Point source at [0,0,0,0].  Zero-momentum
+    projection at sink achieved by coherent spatial sum over all x at
+    t_seq=8 in the sequential-source construction.  All Dirac inversions
+    use stout-smeared gauge links (n_step=1, ρ=0.125, ndim=4).
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: bc_jpsi_vector_3pt
+      type: meson_3pt
+      name: "Bc_to_Jpsi_vector_transition"
+
+  hadrons:
+    - id: bc_minus
+      name: "Bc-"
+      type: meson
+      flavor: "anti-c b"
+      momentum: [0, 0, 0]
+      interpolating_operator: "gamma_5"
+      subtype: "pseudoscalar"
+
+    - id: jpsi
+      name: "J/psi"
+      type: meson
+      flavor: "anti-c c"
+      momentum: [0, 0, 0]
+      interpolating_operator: "gamma_x"
+      subtype: "vector"
+
+  propagators:
+    - id: prop_c_fwd
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_charm_fwd
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+        notes: >
+          Forward charm propagator.  Used both as spectator anti‑c line
+          (source→sink) and as base for sequential‑source construction
+          at t_seq=8.  Multigrid is retained; if convergence fails
+          within maxiter, fall back to BiCGStab with tolerance 1e-10.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_b_fwd
+      quark_flavor: bottom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_bottom_fwd
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-8
+        maxiter: 5000
+        notes: >
+          Bottom quark am_b=1.5 is very heavy — multigrid is unreliable.
+          Use a direct CG or BiCGStab solver.  Tolerance relaxed to 1e-8
+          because the heavy propagator falls off rapidly; the 3pt signal
+          is dominated by the charm lines.  Validate the residual on a
+          test configuration before full production.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_c_seq
+      quark_flavor: charm
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+        sequential_source:
+          forward_propagator: prop_c_fwd
+          sink_hadron: jpsi
+          t_seq: 8
+          spatial_summation: all
+          notes: >
+            The sequential source is constructed by summing prop_c_fwd
+            over all spatial positions x at t_seq=8, combined with the
+            J/ψ γ_x sink operator.  This coherent sum achieves zero‑momentum
+            projection; a single‑point sink would contaminate the result
+            with all momenta.  The resulting source is wall‑like and acts
+            at time slice 8.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_charm_seq
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 3000
+        notes: >
+          Sequential charm propagator.  Use BiCGStab or CG with relaxed
+          tolerance 1e-10; the sequential source is noisier than a point
+          source and tight tolerances may waste iterations.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: bc_jpsi_3pt_corr
+      type: meson_3pt
+      propagators: [prop_c_fwd, prop_b_fwd, prop_c_seq]
+      observable: bc_jpsi_vector_3pt
+      current:
+        gamma: "gamma_x"
+        flavor: "c_b"
+        operator: "bar_c_gamma_x_b"
+      source_hadron: bc_minus
+      sink_hadron: jpsi
+      t_seq: 8
+      source_gamma: "gamma_5"
+      sink_gamma: "gamma_x"
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Sequential source uses coherent spatial sum over all x at t_seq=8 for zero-momentum projection; a single-point sink was replaced."
+  - "Source operator sign: O†_Bc = −b̄γ₅c carries a factor −1 from {γ₄,γ₅}=0. This must propagate into the final correlator sign."
+  - "t_seq=8 (≈0.84 fm) is short for heavy-meson systems; significant excited-state contamination is expected in both Bc- and J/psi channels."
+  - "Bottom quark mass am_b=1.5 requires a direct CG/BiCGStab solver (not multigrid); validate convergence on a test configuration first."
+  - "Verify that generate_einsum supports meson_3pt with distinct source/sink flavors (c̄b → c̄c). If not, implement manual Wick contraction."

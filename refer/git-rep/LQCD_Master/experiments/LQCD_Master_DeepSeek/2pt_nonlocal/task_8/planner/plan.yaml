@@ -1,0 +1,166 @@
+task:
+  name: jpsi_nonlocal_2pt
+  description: >
+    Calculation of the nonlocal two-point correlation function for the J/psi
+    vector meson (charm-anticharm, c\bar{c}). The charm-quark field is shifted
+    by z_len in the +z-direction (0 <= z_len <= 10), connected by a Wilson line
+    constructed from the original unsmeared gauge links. Vector polarizations
+    (gamma_x, gamma_y, gamma_z) are averaged. Point source at [0,0,0,0].
+    Propagators are inverted using stout-smeared gauge links with parameters
+    (n_steps=1, rho=0.125, ndim=4).
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: jpsi_nl_2pt
+      type: meson_2pt
+      name: J/psi nonlocal two-point function
+
+  hadrons:
+    - id: jpsi
+      name: J/psi
+      type: meson
+      flavor: charm-anticharm
+      momentum: [0, 0, 0]
+      interpolating_operator: "\bar{c}(x) \gamma_i W(x, x+z\hat{z}) c(x+z\hat{z})"
+      subtype: vector_nonlocal
+      notes: >
+        Sink operator is nonlocal with Wilson line W on the charm-quark leg.
+        Source operator is local: \bar{c}(0) \gamma_j c(0).  The adjoint
+        source operator in the DeGrand-Rossi basis is
+        O_j^\u2020 = -\bar{c}(0) \gamma_j c(0), giving an overall minus sign
+        that cancels against the fermion-loop minus from Wick contraction,
+        yielding the same sign convention as the rho-meson reference.
+
+  propagators:
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+        notes: "CG solver for charm quark; charm mass is heavy enough for fast CG convergence."
+      sink:
+        id: sink_point_and_shifted
+        type: point
+        notes: >
+          The same propagator is used for both:
+          (1) unshifted antiquark line  \u2014 S_c(x, t; 0, 0) daggered in the contraction;
+          (2) shifted quark line \u2014 S_shifted(x,t) = W(x, x+z_hat*z_len) * S_c(x+z_hat*z_len, t; 0, 0),
+          where W is the straight Wilson line in +z built from ORIGINAL (unsmeared) gauge links.
+          Shift applied for z_len = 0, 1, 2, ..., 10.
+
+measurement:
+  correlators:
+    - id: jpsi_nl_corr
+      type: meson_2pt
+      propagator: prop_c
+      observable: jpsi_nl_2pt
+      notes: >
+        ===== GAUGE-LINK HANDLING =====
+        BEFORE applying stout smearing, COPY the original unsmeared gauge
+        configuration (e.g. to gauge_orig).  The Wilson line MUST be built
+        from gauge_orig, NOT from the smeared links.  If using PyQUDA,
+        call gauge.getHost() and store the copy before gauge.stoutSmear().
+
+        ===== PERIODIC BOUNDARY CONDITIONS =====
+        When x_z + z_len >= Lz, the shifted point wraps around the periodic
+        spatial boundary.  Indices into gauge links must be taken modulo Lz.
+        The Wilson line crossing the boundary uses the boundary-spanning
+        gauge link U_z(x with x_z = Lz-1).
+
+        ===== CONTRACTION (use generate_einsum \u2014 do NOT hardcode) =====
+        For each z_len in [0, 10] and each time slice t:
+        1. Build the straight Wilson line W(x, x+z_hat*z_len) in the +z
+           direction from gauge_orig (unsmeared links), respecting periodic
+           boundary conditions (mod Lz).
+        2. Form S_shifted(x,t) = W(x, x+z_hat*z_len) * S_c(x+z_hat*z_len, t; 0,0).
+        3. For each spatial polarization i in {1,2,3} (gamma_x, gamma_y, gamma_z):
+           Call generate_einsum(type="meson_2pt", quark="c", antiquark="c",
+           gamma="g{i}").  Substitute S_shifted for the quark-line propagator
+           and the unshifted S_c for the antiquark-line propagator (which
+           gets daggered).
+
+           The correct contraction after gamma_5-hermiticity is:
+             C_i(z_len, t) = sum_x Tr[ S_c^\u2020(x,t) (gamma_5 gamma_i) S_shifted(x,t) (gamma_i gamma_5) ]
+
+           NOTE: this is Tr[S^\u2020 (gamma_5 gamma_i) S (gamma_i gamma_5)],
+           NOT Tr[S^\u2020 gamma_i S gamma_i].  The gamma_5 factors are
+           essential; omitting them produces a numerically different
+           correlator that does not match the standard local J/psi
+           vector correlator in the z_len=0 limit.
+
+        4. Average: C(z_len, t) = (1/3) * (C_1 + C_2 + C_3).
+        5. Store both Re[C] and Im[C].
+
+        ===== z_len=0 CONSISTENCY CHECK =====
+        At z_len=0 the Wilson line is the identity, S_shifted = S_c, and the
+        correlator MUST match the standard local J/psi vector correlator with
+        the same sign convention as the rho meson (positive at large t).
+
+output:
+  format: txt
+  metadata: false
+  notes: >
+    Save to nonlocal_2pt_jpsi.txt in the run directory.
+    One line per (z_len, t): "z_len t Re[C] Im[C]".
+    No header, no extra text. z_len and t are integers,
+    Re[C] and Im[C] are floating-point numbers.
+
+extras:
+  - "Copy original gauge links before stout smearing; Wilson line built from unsmeared links only"
+  - "Propagator inversion uses stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4)"
+  - "Contraction by generate_einsum(type='meson_2pt', quark='c', antiquark='c', gamma='g{i}') \u2014 do NOT hardcode"
+  - "Wilson line must handle periodic spatial boundary (mod Lz) including boundary-crossing links"
+  - "z_len=0 limit must recover standard local J/psi vector correlator with rho-meson sign convention"

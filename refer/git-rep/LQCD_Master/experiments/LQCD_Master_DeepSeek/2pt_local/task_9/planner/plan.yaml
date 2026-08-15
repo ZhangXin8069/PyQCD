@@ -1,0 +1,104 @@
+task:
+  name: proton_two_point
+  description: >
+    Calculate the proton two-point correlation function using a point source
+    at [0,0,0,0] with stout-smeared gauge links (rho=0.125, n_steps=1, ndim=4).
+    Use Cg5 (C gamma_5) diquark structure and Tmat = (I + gamma_4)/2 projector
+    to extract the positive parity channel. Output raw correlator as plain text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: proton_2pt
+      type: baryon_2pt
+      name: Proton two-point correlation function
+
+  hadrons:
+    - id: proton
+      name: proton
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) u^c"
+      subtype: positive_parity
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 5000
+        notes: "Multigrid solver with coarse levels [6,6,6,3] and [4,4,4,6]"
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: proton_corr_pp
+      type: baryon_2pt
+      propagator: prop_l
+      observable: proton_2pt
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Diquark structure: Cg5 = C gamma_5 for ud diquark in the proton interpolating operator"
+  - "Parity projector: Tmat = (I + gamma_4) / 2, extracting the positive-parity ground state"
+  - "Stout-smeared gauge links: rho=0.125, n_steps=1, ndim=4 applied to all gauge links used in Dirac inversion"
+  - "Point source at [0,0,0,0] with no Gaussian/Wuppertal source smearing"
+  - "Point sink with no smearing, yielding a point-point (PP) correlator"
+  - "Single light-quark propagator reused for all three quark lines via flavor symmetry (prop_u = prop_d = prop_l)"
+  - "Output raw correlator C(t) as whitespace-separated numbers to proton_2pt.txt in the run directory, no header"
+  - "Zero-momentum frame (p=[0,0,0]) at both source and sink"
+  - "CAVEAT: point-source baryon correlators suffer rapid SNR degradation; ground-state signal typically lost beyond t ~ 6-8. Smeared (Gaussian/Wuppertal) sources are recommended for production-quality proton spectroscopy (per LQCD-physics decision rules)."
+  - "CAVEAT: single-configuration run (cfg 10000) provides no statistical averaging. For quantitative results run on O(100-1000) configurations with multiple source positions per config."
+  - "SIGN NOTE: the overall sign of the baryon_2pt contraction must be verified via generate_einsum(type='baryon_2pt'). The derivation in proton_mass.md Step 3c.2 yields a positive sign (no leading minus), but Step 4 of the same reference inconsistently carries a minus sign. The executor must reconcile this with the tool output."

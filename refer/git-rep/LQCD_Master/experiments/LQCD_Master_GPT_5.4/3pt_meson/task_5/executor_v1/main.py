@@ -1,0 +1,143 @@
+import os
+import sys
+import numpy as np
+import cupy as cp
+from opt_einsum import contract
+from pyquda_utils import core, io, gamma, source
+
+# Run: mpirun -n 4 python3 main.py ~/.cache 10000
+
+# 1. parameter definitions (hard-coded)
+resource_path = sys.argv[1]
+n_cfg = sys.argv[2]
+
+latt_size = [24, 24, 24, 72]
+grid_size = [1, 1, 1, 4]
+cfg_path_template = "/public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime"
+
+x_src = [0, 0, 0, 0]
+tseq = 8
+
+t_boundary = -1
+anisotropy = 1.0
+xi_0 = 1.0
+csw = 1.160920226
+
+mass_l = -0.277
+mass_b = 1.5
+
+tol_l = 1.0e-12
+tol_b = 1.0e-12
+maxiter_l = 10000
+maxiter_b = 20000
+multigrid_l = [[6, 6, 6, 3], [4, 4, 4, 6]]
+multigrid_b = [[6, 6, 6, 3], [4, 4, 4, 6]]
+
+stout_nstep = 1
+stout_rho = 0.125
+stout_ndim = 4
+
+out_dir = "."
+out_path = os.path.join(out_dir, f"c3_B_to_pi_vec_x_cfg{int(n_cfg):05d}.txt")
+
+# 2. read gauge configuration
+core.init(grid_size, latt_size, backend="cupy", resource_path=resource_path)
+latt_info = core.LatticeInfo(latt_size, t_boundary=t_boundary, anisotropy=anisotropy)
+
+cfg_path = cfg_path_template.format(n_cfg=n_cfg)
+gauge = io.readChromaQIOGauge(cfg_path)
+gauge.toDevice()
+
+gauge_stout = gauge.copy()
+gauge_stout.stoutSmear(stout_nstep, stout_rho, stout_ndim)
+
+# 3. construct the Dirac operator
+# light propagator is used for the spectator anti-u line and for the d sequential solve
+try:
+    dirac_l = core.getClover(latt_info, mass_l, tol_l, maxiter_l, xi_0, csw, csw, multigrid_l)
+    dirac_b = core.getClover(latt_info, mass_b, tol_b, maxiter_b, xi_0, csw, csw, multigrid_b)
+except AttributeError:
+    dirac_l = core.getDirac(latt_info, mass_l, tol_l, maxiter_l, xi_0, csw, csw, multigrid_l)
+    dirac_b = core.getDirac(latt_info, mass_b, tol_b, maxiter_b, xi_0, csw, csw, multigrid_b)
+
+dirac_d = dirac_l
+
+# 4. compute forward propagators
+pt_src = source.source12(latt_info, "point", x_src)
+
+with dirac_l.useGauge(gauge_stout):
+    prop_l = core.invertPropagator(dirac_l, pt_src)
+
+with dirac_b.useGauge(gauge_stout):
+    prop_b = core.invertPropagator(dirac_b, pt_src)
+
+# 5. extract observable / compute contraction
+# FROM generate_einsum (meson_3pt)
+# ═══════════════════════════════════════════════════════
+# Meson 3pt:
+#   spectator  = u  (prop_l)
+#   forward    = b  (prop_b)
+#   sequential = d (prop_seq)
+#   sink Gamma = G5
+#   src Gamma  = G5
+#   cur Gamma  = g1
+# ═══════════════════════════════════════════════════════
+
+# ------------------------------------------------------------------
+#  Gamma matrices
+# ------------------------------------------------------------------
+I4 = cp.eye(4, dtype=cp.complex128)
+G5 = cp.asarray(gamma.gamma(15), dtype=cp.complex128)
+Gamma_snk = cp.asarray(gamma.gamma(15), dtype=cp.complex128)
+Gamma_src = cp.asarray(gamma.gamma(15), dtype=cp.complex128)
+Gamma_cur = cp.asarray(gamma.gamma(1), dtype=cp.complex128)
+
+# ------------------------------------------------------------------
+#  G5-conjugate gammas:  Γ̄ = γ₅ . Γ . γ₅
+#  These appear in the sink block.
+# ------------------------------------------------------------------
+Gamma_snk_bar = G5 @ Gamma_snk @ G5
+Gamma_src_bar = G5 @ Gamma_src @ G5
+
+# ------------------------------------------------------------------
+#  Step 1 -- Sink block
+#  B(x) = Γ̄_snk . S_spectator . Γ̄_src
+#  The spectator anti-u line is represented by the forward light propagator.
+# ------------------------------------------------------------------
+B = core.LatticePropagator(latt_info)
+B.data = contract(
+    "AB, wtzyxBCab, CD -> wtzyxADab",
+    Gamma_snk_bar, prop_l.data, Gamma_src_bar,
+)
+
+# ------------------------------------------------------------------
+#  Step 2 -- Sequential source + solve at t_sink = tseq
+# ------------------------------------------------------------------
+src_seq = source.sequential12(B, tseq)
+
+with dirac_d.useGauge(gauge_stout):
+    prop_seq = core.invertPropagator(dirac_d, src_seq)
+
+# ------------------------------------------------------------------
+#  Step 3 -- Final contraction for J_x = dbar gamma_x b
+#  tmp_prop = gamma5 * S_seq^dagger * gamma5, then contract with Gamma_x and b line.
+# ------------------------------------------------------------------
+tmp_prop = core.LatticePropagator(latt_info)
+tmp_prop.data = contract(
+    "AB, wtzyxCBji, CD -> wtzyxADij",
+    G5, prop_seq.data.conj(), G5,
+)
+
+three_pt_local = contract(
+    "wtzyxijba, jk, wtzyxkiab -> t",
+    tmp_prop.data, Gamma_cur, prop_b.data,
+)
+
+C3_t = core.gatherLattice(cp.asnumpy(three_pt_local), [0, -1, -1, -1])
+
+# 6. save the result
+if core.getMPIRank() == 0:
+    tau = np.arange(1, tseq, dtype=np.int32)
+    c3_window = np.asarray(C3_t[tau], dtype=np.complex128).reshape(-1)
+    out = np.column_stack((tau, c3_window.real, c3_window.imag))
+    np.savetxt(out_path, out, fmt=["%d", "%.16e", "%.16e"])
