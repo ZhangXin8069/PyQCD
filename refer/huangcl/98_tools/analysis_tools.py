@@ -210,15 +210,16 @@ def calc_chi2(
     """
     diff = y_data - y_fit
 
-    if svdcut is None:
-        return diff @ np.linalg.solve(cov, diff)
+    # if svdcut is None:
+    #     return diff @ np.linalg.solve(cov, diff)
 
-    eigval, eigvec = np.linalg.eigh(cov)
-    cut = eigval.max() * svdcut
-    mask = eigval > cut
-    eig_inv = 1.0 / eigval[mask]
-    cov_inv = eigvec[:, mask] @ np.diag(eig_inv) @ eigvec[:, mask].T
-    return diff @ cov_inv @ diff
+    # eigval, eigvec = np.linalg.eigh(cov)
+    # cut = eigval.max() * svdcut
+    # mask = eigval > cut
+    # eig_inv = 1.0 / eigval[mask]
+    # cov_inv = eigvec[:, mask] @ np.diag(eig_inv) @ eigvec[:, mask].T
+    # return diff @ cov_inv @ diff
+    return diff @ np.linalg.solve(cov, diff)
 
 
 def calc_chi2_dof(
@@ -315,7 +316,10 @@ def fit(
 
     # 优先使用 prior, 否则退化为 p0
     use_prior = fitpa.prior is not None and len(fitpa.prior) > 0
-
+    if use_prior:
+        print('use prior to fit')
+    else:
+        print('use p0 to fit')
     last_fit_info = None
     for _id in range(Nfit):
         y_gvar = gv.gvar(y_coor[_id], cov)
