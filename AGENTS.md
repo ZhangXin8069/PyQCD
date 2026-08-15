@@ -31,7 +31,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 |
 | `docs/` | 51 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books）+ `git-rep/` 外来参考仓库（quda/PyQUDA/lamet-agent/EasyDistillation/LQCD_Master，只读、其 AGENTS.md 已归档） |
-| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 + test6/ pyqcd 独立复现套件（.ref_run/ 存 refer 实跑真值，verify_04_repro.py 数值比对） |
+| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 + test6/ pyqcd 独立复现套件（.ref_run/ 存 refer 实跑真值，verify_04_repro.py 数值比对）+ test7/ 服务器正式工作版（100 组态，GPU V100，env.sh 启动，输入检查机制 + 实时进度日志） |
 | `cpp/` | C++ 后端占位 |
 | `.opencode/skills/` | 归集的 LQCD_Master 上游技能（lqcd-analysis 等 5 个，原位置保留） |
 
