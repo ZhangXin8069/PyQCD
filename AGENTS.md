@@ -17,6 +17,7 @@ bash logs/test0_bare/run-local.sh   # 03_bare_matrix 三方向裸矩阵元测试
 bash logs/test0_energy/run-local.sh # 04_proton_energy 有效能量测试（8 项断言）
 bash logs/test0_fh/run-local.sh     # 06_FH_bare_matele FH 变换测试（38 项断言）
 bash logs/stab1/run-local.sh        # 全功能真实数据实战（docker 基线 10 组态，45 项断言 + 106 图 + 报告）
+bash logs/test6/run-local.sh        # pyqcd 独立复现 04_proton_energy（879 组态三方向，逐位一致 + 7 图 + 12 断言）
 bash examples/test0/run-local.sh    # 蒸馏管线一致性测试（调用 pyqcd 复现 docker-v20260805 全量输出）
 python examples/test0/main.py verify --run-dir examples/test0/v<ts>   # 一致性验证（A–E 项）
 cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，两遍）
@@ -30,7 +31,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 |
 | `docs/` | 51 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books），只读 |
-| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 |
+| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 + test6/ pyqcd 独立复现套件（.ref_run/ 存 refer 实跑真值，verify_04_repro.py 数值比对） |
 | `cpp/` | C++ 后端占位 |
 
 ## 蒸馏管线一致性测试（examples/test0）
