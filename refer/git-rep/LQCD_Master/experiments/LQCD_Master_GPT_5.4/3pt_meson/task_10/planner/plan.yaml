@@ -1,0 +1,172 @@
+task:
+  name: anti_Bs0_to_Ds_vector_3pt_vecx_zero_momentum
+  description: Compute only the connected meson three-point correlator for anti-Bs0 -> Ds+ with source operator sbar * gamma5 * b, sink operator sbar * gamma5 * c, current J_x = cbar * gamma_x * b, point source at [0, 0, 0, 0], zero source and sink momentum, fixed sink-source separation tseq = 8, and stout-smeared gauge links with parameters (n_steps=1, rho=0.125, ndim=4) for all inversions. Because a spatial vector current between pseudoscalar states at zero recoil is expected to be symmetry-suppressed, treat this run as a raw correlator executability / near-null check rather than a physics-form-factor production measurement. Do not compute any 2pt correlators. Save the final 3pt result as plain text in the run directory with no header or extra text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: c3_anti_bs0_to_ds_vecx
+      type: meson_3pt
+      name: anti_Bs0_to_Ds_plus_vector_x_three_point_raw
+
+  hadrons:
+    - id: anti_bs0_src
+      name: anti-Bs0
+      type: meson
+      flavor: anti-strange bottom
+      momentum: [0, 0, 0]
+      interpolating_operator: sbar * gamma5 * b
+      subtype: pseudoscalar_heavy_strange
+    - id: ds_plus_snk
+      name: Ds+
+      type: meson
+      flavor: anti-strange charm
+      momentum: [0, 0, 0]
+      interpolating_operator: sbar * gamma5 * c
+      subtype: pseudoscalar_heavy_strange
+
+  propagators:
+    - id: prop_b_fwd
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_bottom_clover
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward b-quark point-source propagator from the common source. This uses the user-requested stout-smeared-link inversion, but with the ensemble-provided valence parameters retained unchanged; therefore this object should be treated as a raw heavy-quark test propagator, not as a validated production-quality physical b-quark action.
+      sink:
+        id: sink_point_b
+        type: point
+
+    - id: prop_s_fwd
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_clover
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward strange spectator propagator from the common point source. It is reused in the Ds+ sink block and remains the spectator line from source to sink.
+      sink:
+        id: sink_point_s
+        type: point
+
+    - id: prop_c_seq
+      quark_flavor: charm
+      source:
+        source_type: wall
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm_seq_clover
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: This is NOT a literal point sink inversion. Construct a proper meson sequential source on the full sink timeslice t = 8 with zero sink momentum from the Ds+ sink operator sbar * gamma5 * c and the forward strange spectator propagator, then invert the charm Dirac operator on that extended timeslice source. The sequential source is fixed by gamma5 at the sink, sink momentum [0,0,0], and tseq = 8.
+      sink:
+        id: sink_seq_c
+        type: other
+
+measurement:
+  correlators:
+    - id: meas_c3_anti_bs0_to_ds_vecx
+      type: meson_3pt
+      propagator: prop_c_seq
+      observable: c3_anti_bs0_to_ds_vecx
+      required_propagators:
+        - prop_b_fwd
+        - prop_s_fwd
+        - prop_c_seq
+      source_hadron: anti_bs0_src
+      sink_hadron: ds_plus_snk
+      current: cbar * gamma_x * b
+      sink_momentum: [0, 0, 0]
+      source_momentum: [0, 0, 0]
+      tseq: 8
+      insertion_time_range: [1, 7]
+      contraction_notes: Build the Ds+ sink sequential source from prop_s_fwd and gamma5 at t = 8, solve the charm sequential propagator, and perform the final meson 3pt contraction with the forward bottom propagator and current gamma_x. The observable is the raw zero-momentum 3pt correlator C3(tau) for tau = 1..7 only; omit contact times tau = 0 and tau = 8.
+      interpretation_notes: With pseudoscalar source and sink at zero recoil and a spatial vector current, the correlator is expected to be symmetry-suppressed. Keep the requested setup unchanged, but interpret the output as a code-path / near-null check, not a phenomenological form-factor determination.
+
+output:
+  format: other
+  metadata: false
+  filename: c3_antiBs0_to_Ds_vecx_tseq8_cfg10000.txt
+  location: run_directory
+  row_definition: one line per insertion time tau
+  columns:
+    - tau
+    - real_part
+    - imag_part
+  insertion_time_range: [1, 7]
+  header: none
+  extra_text: none
+  normalization: raw_correlator_unrenormalized
+
+extras:
+  - no_2pt
+  - zero_momentum_source_and_sink
+  - sequential_sink_time_8
+  - point_source_at_origin
+  - save_plain_txt_no_header
+  - raw_near_null_executability_check
+
+freeform_plan: |

@@ -1,0 +1,180 @@
+task:
+  name: xi_minus_to_lambda_component_vector_3pt
+  description: Compute the zero-momentum baryon three-point correlator for Xi- -> Lambda using the user-specified source and sink interpolators, the local vector current ubar gamma_x s, point source [0,0,0,0], positive-parity projector (I + gamma_t)/2, and tseq = 8. Because the sink operator is fixed to epsilon^{abc}(u^T Cgamma_5 d)s rather than the fully normalized SU(3)-octet Lambda operator, the target is the specified uds Lambda-like component correlator unless a later replacement to the octet-Lambda operator is explicitly requested.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: xi_to_lambda_component_vec_x_c3
+      type: baryon_3pt
+      name: Xi- to user-specified Lambda-like uds component vector-current three-point correlator with gamma_x
+
+  hadrons:
+    - id: xi_minus_src
+      name: Xi-
+      type: baryon
+      flavor: dss
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (d^{Ta} Cgamma_5 s^b) s^c
+      subtype: octet_baryon
+    - id: lambda_component_snk
+      name: Lambda-like uds component
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} Cgamma_5 d^b) s^c
+      subtype: specified_uds_component_not_full_octet_lambda
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_forward
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator on stout-smeared links; reused for the source d line and, by isospin symmetry, for the sink/source u line needed after the s -> u current insertion.
+      sink:
+        id: sink_point_forward_light
+        type: point
+    - id: prop_s_fwd
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_forward
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward strange propagator on stout-smeared links; used for the source strange lines and for the spectator strange line in the sink block. Before production, verify that the ensemble registry intentionally pairs this valence strange mass with the listed configuration path whose filename contains ms-0.2400.
+      sink:
+        id: sink_point_forward_strange
+        type: point
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: other
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_sequential
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: This is not an independent point-source solve. Build a baryon sequential source from the sink block at tseq = 8 using the user-specified Lambda-like sink operator, projector Tmat = (I + gamma_t)/2, and the d and s spectator propagators (prop_l_fwd and prop_s_fwd). Apply the two-dagger convention gamma_5 B^dagger gamma_5, solve with the light Dirac operator, then form the second daggered sequential propagator for the final contraction with gamma_x and the forward strange propagator.
+      sink:
+        id: sink_sequential_lambda_component
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_xi_minus_to_lambda_component_vec_x
+      type: baryon_3pt
+      propagator: prop_l_seq
+      observable: xi_to_lambda_component_vec_x_c3
+      required_propagators:
+        - prop_l_fwd
+        - prop_s_fwd
+        - prop_l_seq
+      source_hadron: xi_minus_src
+      sink_hadron: lambda_component_snk
+      current:
+        local_current: ubar gamma_x s
+        current_quark_annihilated: strange
+        current_antiquark_created: light
+        gamma_structure: gamma_x
+      projector: (I + gamma_t) / 2
+      tseq: 8
+      source_position: [0, 0, 0, 0]
+      sink_momentum: [0, 0, 0]
+      source_momentum: [0, 0, 0]
+      contraction_strategy: Construct the sink block for epsilon^{abc}(u^T Cgamma_5 d)s with open u leg, using the spectator d line from prop_l_fwd and spectator s line from prop_s_fwd. Include both Wick-contraction topologies generated by the two identical strange quarks in the Xi- source, i.e. both possible attachments of the current ubar gamma_x s to the two source-s lines, with the required relative sign from fermion exchange. Then build the light sequential source at tseq = 8, invert with the light Dirac operator, dagger back with gamma_5, and contract the resulting sequential light propagator with gamma_x and the forward strange propagator.
+      insertion_time_range:
+        start: 1
+        stop: 7
+      state_interpretation: This correlator corresponds to the user-specified uds sink component; it should not be labeled a fully projected physical Lambda correlator unless the sink operator is replaced by the normalized octet-Lambda combination and the contraction is regenerated accordingly.
+      execution_scope: Keep the workflow batch-compatible in n_cfg via the cfg_path template even though the current ensemble block lists cfg_num = ['10000'].
+
+output:
+  format: other
+  metadata: false
+  filename: xi_minus_to_lambda_vec_x_tseq8_cfg{n_cfg}.txt
+  layout: columns are tseq, t_ins, real_part, imag_part with no header and no extra text; write the txt file in the run directory.
+
+extras:
+  - no_2pt_requested
+  - zero_momentum_only
+  - include_both_source_s_attachments
+  - validate_strange_mass_mapping
+  - mpi_grid_1x1x1x4
+
+freeform_plan: |
+  Not used because this is a standard hadronic three-point-function task.

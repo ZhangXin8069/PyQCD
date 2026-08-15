@@ -1,0 +1,119 @@
+task:
+  name: xi_minus_baryon_2pt_point_source
+  description: Compute the zero-momentum two-point correlation function of the Xi- baryon (dss) using a point source at [0,0,0,0], stout-smeared gauge links for all inversions, ds diquark with Cgamma5 structure, and the positive-parity projector Tmat=(I+gamma_t)/2; write the final correlator as plain text in the run directory without header or extra text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: xi_minus_2pt
+      type: baryon_2pt
+      name: Xi- baryon two-point correlator
+
+  hadrons:
+    - id: xi_minus
+      name: Xi-
+      type: baryon
+      flavor: dss
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(d^{Ta} Cgamma5 s^b) s^c with Cgamma5=C@gamma_5 and positive-parity projection Tmat=(I+gamma_t)/2 applied at the correlator level
+      subtype: octet_baryon_positive_parity
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_stout
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Clover inversion on stout-smeared gauge links; anti-periodic temporal fermion boundary condition inherited from ensemble.
+      sink:
+        id: point_sink
+        type: point
+
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_stout
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Reuse the same stout-smeared gauge field as the light solve; this single strange propagator is reused for both s quark lines.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: xi_minus_baryon_2pt_measurement
+      type: baryon_2pt
+      propagator: prop_l_point
+      observable: xi_minus_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - Use zero-momentum projection by summing over all spatial sink sites at each sink time.
+  - Generate the Xi- baryon contraction through the baryon two-point einsum/codegen path rather than handwriting the tensor contraction.
+  - Reuse one strange propagator for both strange quark legs in the Xi- interpolator.
+  - Save one plain-text correlator value per time slice to a txt file in the run directory with no header and no extra commentary.
+  - Use gamma_t as the Euclidean temporal gamma matrix gamma_4 in Tmat=(I+gamma_t)/2.
+
+freeform_plan: |

@@ -1,0 +1,386 @@
+% ============================================================
+% pure 报告 — LQCD Master 核心部分穷尽剖析
+% 主题: 强子关联函数自动 Wick 收缩与 einsum 代码生成引擎
+% 编译: xelatex x2；交付前 Overfull 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+% ===== 色板（语义化）=====
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{格点 QCD 强子关联函数自动生成引擎 —— 核心物理算法与代码-物理映射穷尽剖析}
+\author{opencode pure}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本项目 LQCD Master 为 \textcolor{phys}{代码-物理交叉向}项目：以自然语言物理任务为输入，
+经 Planner/Executor 双 Agent 管线产出 PyQUDA 可执行代码（依据：全库 74 个 Python 文件
+共 263\,050 行，核心为 utils/generate\_einsum 收缩引擎与 core\_architecture 编排层）。
+本报告穷尽枚举 11 个核心候选（C1--C11），其中 5 项深挖、4 项浅析、2 项排除。
+最深剖析结论：\textbf{wicklib 自动 Wick 收缩引擎 + 三夸克 576 拓扑预计算结构因子法}
+为最具独特竞争力部分——前者把场论级收缩（费米子符号、$\gamma$ 代数、色结构）编码为
+邻接矩阵与位掩码代数，自动产出 einsum 代码；后者把 576 个拓扑化简为运行时 576 次
+标量 MAC（约 $\mu$s 量级），替代约十万行生成代码（sink\_pnn\_full.py 达 100\,829 行）。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+\subsection{项目性质判定}
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉向}（依据：核心模块为物理计算代码
+utils/generate\_einsum（约 2\,500 行手写引擎 + 生成产物 20 万行）+ 物理知识库
+skills/（lqcd-physics-correlator/spectrum、pyquda-gauge/tool 等 5 个技能与参考文档）+
+Agent 编排层 core\_architecture 与 prompts/；代码与物理内容占比相当，且存在
+紧密的逐符号对应关系）。
+\end{keybox}
+
+\subsection{核心部分总清单（穷尽枚举）}
+\begin{xltabular}{\textwidth}{lllX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & wicklib 自动 Wick 收缩引擎 & 深挖 & 邻接矩阵表示收缩拓扑、费米子符号自动计入、$\gamma$ 代数位掩码化 \\
+C2 & 强子算符构造（hadron\_operator + wicklib/operator） & 深挖 & 介子/重子/双夸克块对象模型，转置与厄米共轭自动传播 \\
+C3 & 两点关联函数生成链（two\_pt） & 深挖 & 收缩$\to$einsum$\to$PyQUDA 五步管线，含 $\gamma_5$-厄米性折叠 \\
+C4 & 三点关联函数生成链（three\_pt） & 深挖 & 拓扑枚举 + 顺序源（sequential source）代码生成 \\
+C5 & 三夸克 576 拓扑预计算（three\_baryon\_opt） & 深挖 & 结构因子离线预计算，运行时标量 MAC 替代十万行代码 \\
+C6 & 大规模生成代码产物（sink\_pnn\_full 等） & 浅析 & 引擎输出 10 万行级生产代码（产物，非引擎本体） \\
+C7 & Agent 编排（core\_architecture） & 浅析 & Planner critique-rewrite + Executor 静态分析/动态测试 \\
+C8 & 物理技能知识库（skills/） & 浅析 & 强子算符/质量提取公式的注入式知识库 \\
+C9 & 静态检查与 Slurm 提交（utils/static\_check 等） & 浅析 & PyQUDA 代码静态分析与作业队列监控 \\
+C10 & 命名转换层（\_wick\_translate） & 深挖 & wicklib 符号$\leftrightarrow$PyQUDA 变量名的双向映射 \\
+C11 & experiments/ 与 benchmark/ 数据目录 & 排除 & 实验输出与基准数据（非核心逻辑，数据体量占比大） \\
+\bottomrule
+\end{xltabular}
+
+本节给出穷尽枚举与三态分配：\textcolor{algo}{6 深挖}（C1/C2/C3/C4/C5/C10）、
+3 浅析（C6--C9）、2 排除（C11 及 three\_pt/\_to\_delete 废弃样例）。
+其中 C10 命名转换层与 C1--C4 均为生成链的必经环节且各有独立算法内容，故计入深挖。
+以下各节按物理图像$\to$算法$\to$映射三层剖析。
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+\subsection{C1: wicklib 自动 Wick 收缩引擎}
+\begin{physbox}
+\textbf{物理图像:} 强子关联函数 $\langle \mathcal{O}_{\rm snk}(t)\, \mathcal{O}^\dagger_{\rm src}(0)\rangle$
+对路径积分求值等价于对费米场做\textbf{全配对}（Wick 收缩）：每个配对贡献一条传播子
+$S(x,y)$，配对的交叉数决定费米子符号 $(-1)^{N_{\mathrm{cross}}}$。引擎把这一场论操作
+编码为"算符张量流 $\to$ 邻接矩阵 $\to$ einsum 字符串"三段流水。
+\end{physbox}
+
+\subsubsection{物理推导链：两点关联函数的 Wick 收缩}
+以 $\pi^+ = \bar d\,\gamma_5 u$ 为例（物理知识库 \nolinkurl{skills/lqcd-physics-correlator/reference/pion_mass.md:7-30}）：
+\begin{equation}\label{eq:pi_corr}
+C_\pi(p;t,0)=\langle \bar d(x)\gamma_5 u(x)\; \bar u(y)\gamma_5 d(y)\rangle
+=-\sum_{x,y}e^{-ip\cdot(x-y)}\operatorname{Tr}\!\big[\gamma_5\,S_u(x,y)\,\gamma_5\,S_d(y,x)\big],
+\end{equation}
+依据：\textcolor{evidence}{Wick 定理}（唯一配对，负号来自费米子反对易）；\textcolor{evidence}{$\gamma_5$-厄米性}：
+\begin{equation}\label{eq:g5herm}
+S(y,x)=\gamma_5\,S^\dagger(x,y)\,\gamma_5,\qquad
+S_{\rm bwd}=S^\dagger_{\rm fwd}\;\text{(代码中折叠进 $\gamma$ 插入)}.
+\end{equation}
+在 $u$/$d$ 味简并下（$S_u=S_d=S_l$）：
+\begin{equation}\label{eq:pi_final}
+C_\pi(p;t,0)=\sum_{x,y}e^{-ip\cdot(x-y)}\operatorname{Tr}\!\big[S_l^\dagger(x,y)\,S_l(x,y)\big],
+\end{equation}
+对应代码输出 \texttt{contract('wtzyxCBba, wtzyxCBba -> t', prop\_l.conj(), prop\_l)}
+（\nolinkurl{utils/generate_einsum/MANUAL.md:102-107} 确证）。
+\textcolor{warn}{极限校验}：$m_q\to\infty$ 时 $S_l\to 0$，$C_\pi\to 0$（对应），
+满足退化要求。
+
+\subsubsection{算法原理：邻接矩阵与符号计数}
+\begin{algobox}
+\textbf{核心算法:} Wick 配对穷举 + 邻接矩阵编码。输入为算符的张量流
+（QuarkFieldTensor 与 SpinColorTensor 序列），输出为（系数, einsum 下标串, 操作数表）。
+复杂度：配对数为 $\prod_f n_f!$（$n_f$ 为第 $f$ 味夸克对数目）；
+$\gamma$ 乘法为 $O(1)$ 位掩码运算。
+\end{algobox}
+\lstinputlisting[firstline=63,lastline=86]{/Users/zhangxin/LQCD_Master/utils/generate_einsum/wicklib/correlator.py}
+\textcolor{algo}{符号计入}：第 78--80 行按配对距离奇偶给出 $(-1)^{d}$；
+\textcolor{algo}{正确性依据}：同味配对穷举（第 75--84 行），未匹配夸克报错
+（第 73/86 行），保证每项可复核。物理对象：每个 $S_{\rm snk,src}$ 边
+（\nolinkurl{utils/generate_einsum/wicklib/adjacency.py:30-35}）。
+
+\subsubsection{$\gamma$ 代数的位掩码实现}
+\begin{equation}\label{eq:gamma_mul}
+\Gamma_i\,\Gamma_j = \operatorname{sign}(i,j)\,\Gamma_{i\oplus j},\qquad
+\operatorname{sign}(i,j)=(-1)^{|i\land j|}\;\text{按位奇偶修正},
+\end{equation}
+其中 $i,j\in\{0,\dots,15\}$ 为 4 位掩码（\nolinkurl{utils/generate_einsum/wicklib/gamma.py:4-55} 确证：
+第 45 行 XOR 求积、第 47--52 行分权重符号表 popsign）。
+\textcolor{phys}{转置/厄米/狄拉克共轭}（第 57--78 行）均以 popcnt 奇偶给出系数，
+$O(1)$ 完成——这是引擎能快速化简任意 $\gamma$ 链的基础。
+
+\begin{mapbox}
+\textbf{映射原则:} 收缩引擎中每个对象均可双向追溯至物理量。
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{QuarkFieldTensor} & 夸克场 $q_\alpha^a(x)$ & 味/位置/旋量指标/色指标 \\
+\texttt{SpinGammaTensor} & $\Gamma_{\alpha\beta}$ & $\gamma$ 矩阵旋量分量 \\
+\texttt{ColorDeltaTensor} & $\delta^{ab}$ & 色单态收缩（介子） \\
+\texttt{ColorEpsilonTensor} & $\epsilon^{abc}$ & 全反对称色张量（重子） \\
+\texttt{AdjacencyEdge} & 传播子 $S(x,y)$ & \nolinkurl{wicklib/adjacency.py:21-35} \\
+\texttt{pair\_quark\_antiquark} & Wick 配对 & \nolinkurl{wicklib/correlator.py:63-86} \\
+\bottomrule
+\end{xltabular}
+
+\subsection{C2: 强子算符构造 —— 介子/重子/双夸克块}
+\begin{physbox}
+\textbf{物理图像:} 介子算符 $M=\bar q\,\Gamma\,q'$ 是色单态双线性；重子算符
+$B=\epsilon_{abc}\,(q_a^T\,C\Gamma'\,q_b)\,q_c$ 由双夸克（颜色反对称对）
+与旁观夸克组成，$C\gamma_5$（$J^P=\tfrac12^+$ 八重态）与 $C\gamma_1$（$J^P=\tfrac32^+$ 十重态）
+对应不同的味道-旋量对称性。
+\end{physbox}
+\lstinputlisting[firstline=81,lastline=99]{/Users/zhangxin/LQCD_Master/utils/generate_einsum/hadron_operator.py}
+对应 wicklib 对象层：\texttt{QuarkBlock.to\_tensor} 引入 $\delta^{ab}$、$\Gamma_{\alpha\beta}$
+与新旋量/色指标（\nolinkurl{wicklib/operator.py:181-199} 确证）；
+\texttt{DiquarkBlock} 用 $\epsilon^{abc}$ 与转置夸克（第 246--265 行）编码
+$q_a^T$——转置在对象模型中作为标记（transpose 标志）传播，避免显式矩阵转置，
+这是"代码-物理一一对应"的典型例证。
+
+\textcolor{phys}{$C\gamma_5$ 选择依据}：色反对称 + 旋量反对称（$C\gamma_5$ 的交换对称性）
+强制味道反对称，即八重态；$C\gamma_1$ 对应味道对称，即十重态——代码注释
+（\nolinkurl{hadron_operator.py:86-88}）直接记录该物理规则，属"物理进代码"。
+
+\subsection{C3/C10: 两点关联函数生成链与命名转换层}
+\begin{algobox}
+\textbf{核心算法:} 五步管线（\nolinkurl{MANUAL.md:40-63}）：
+算符定义 $\to$ 张量$\to$wicklib 块（\nolinkurl{_wick_translate.py:52-76}）$\to$
+Wick 收缩+化简（\nolinkurl{two_pt/contract.py:95-146}）$\to$
+einsum 提取（\nolinkurl{wicklib/adjacency.py:157-214}）$\to$
+PyQUDA 格式化（\nolinkurl{two_pt/codegen.py:27-117}）。
+\end{algobox}
+\lstinputlisting[firstline=157,lastline=214]{/Users/zhangxin/LQCD_Master/utils/generate_einsum/wicklib/adjacency.py}
+\textcolor{algo}{要点}：第 165--184 行对 $\gamma$ 矩阵与 $\epsilon$ 建立子标；第 186--212 行
+把每个传播子边写为 \texttt{propag\_f\_sink\_source} 形式的操作数
+（flavor/sink/source 分别表示味、末态、初态位置）；
+第 196--211 行把\textbf{链接、导数、涂抹}前缀编码进变量名
+（$W$ 链变量、$D$ 协变导数、$S$ 涂抹——\textcolor{map}{映射层 C10 的核心}）。
+
+\textcolor{phys}{反向传播子折叠}（\nolinkurl{_wick_translate.py:93-122} 确证）：
+$S_{\rm bwd}=G5 @ S.dag() @ G5$ 由 \texttt{\_rename\_op} 自动生成，即公式
+\eqref{eq:g5herm} 在代码生成层的直接体现；同一性化简
+\texttt{\_simplify\_gammas}（第 125--151 行）取消 $\gamma^2=I$ 相邻对。
+
+\subsubsection{介子 2pt 格式化}
+\texttt{pyquda\_format\_contract}（\nolinkurl{two_pt/codegen.py:47-117}）识别
+4 操作数介子型：$\gamma_{\rm snk}$ 插 $G5 @ \gamma$、$\gamma_{\rm src}$ 插 $\gamma @ G5$
+（第 74--75 行，对应 \texttt{rho\_mass.md} 参考约定），并自动检测同味介子的
+\textbf{断连图}（第 112--116 行，标注 [DISCONNECTED]，需 all-to-all 方法——
+物理风险显式入码）。
+
+\begin{mapbox}
+\textbf{映射表（双向）:} 代码符号 $\leftrightarrow$ 物理对象。
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{prop\_l / prop\_s} & $S_l / S_s$ & 轻/奇异夸克传播子 \\
+\texttt{G5} & $\gamma_5$ & \nolinkurl{_wick_translate.py:84-86} \\
+\texttt{Cg5 / Cg1} & $C\gamma_5/C\gamma_1$ & 双夸克，$J^P=1/2^+/3/2^+$ \\
+\texttt{gtg5} & $\gamma_4\gamma_5$ & 非定域流 \\
+\texttt{Tmat} & $P_+=(1+\gamma_4)/2$ & 重子自旋投影 \\
+\texttt{wtzyx} 前缀 & 格点时空指标 & $t,z,y,x$ 张量维序 \\
+\texttt{.data} & 格点场数组 & PyQUDA LatticePropagator 存储 \\
+\bottomrule
+\end{xltabular}
+
+\subsection{C4: 三点关联函数 —— 拓扑枚举与顺序源}
+\begin{physbox}
+\textbf{物理图像:} 三点函数 $\langle O_{\rm snk}\,J\,O_{\rm src}^\dagger\rangle$ 的收缩
+需先枚举"旁观夸克不变、两条流线在算符间交换"的拓扑（如 $p\to p$ 4 拓扑、
+$\Omega^-\to\Omega^-$ 18 拓扑、全异味 1 拓扑，\nolinkurl{MANUAL.md:189-201} 确证），
+再用\textbf{顺序源}（sequential source）方法以 $O(N)$ 次求逆实现
+（\nolinkurl{MANUAL.md:227-246}：sink 块 $B$ $\to$ 顺序传播子
+$\to$ 最终 $Tr[G_{\rm seq}^\dagger \Gamma_{\rm cur} S_{\rm fwd}]$）。
+\end{physbox}
+\textcolor{phys}{对应公式}：
+\begin{equation}\label{eq:3pt}
+C_3(t_{\rm snk},t_{\rm cur})=\sum_{\vec x}\operatorname{Tr}\!\Big[
+\gamma_5\,G_{\rm seq}^\dagger\,\Gamma_{\rm cur}\,S_{\rm fwd}\Big],
+\qquad G_{\rm seq}(t_{\rm snk})=\big[B\cdot S\big](t_{\rm snk}).
+\end{equation}
+\textcolor{phys}{极限校验}：$t_{\rm cur}\to t_{\rm snk}$ 时三点退化为两点（断连顶角可忽略），
+与标准文献一致（推断，未实测）。拓扑枚举规则以味道匹配实现
+（\nolinkurl{three_pt/contract.py} 与 MANUAL.md:378-391 确证）。
+
+\subsection{C5: 三夸克 576 拓扑预计算 —— 结构因子法}
+\begin{algobox}
+\textbf{核心算法:} pn$\Lambda$ 三夸克两点函数（$4u+4d+1s$ 共 $4!\times4!\times1!=576$ 个
+Wick 拓扑）。离线阶段用 wicklib + opt\_einsum 预计算 576 个\textbf{结构因子}
+$s_k$（复常数，存为 np.array），运行时只需：
+\begin{equation}\label{eq:struct}
+C_3(t)=\sum_{k=1}^{576} \sigma_k\,s_k\prod_{i=1}^{9}\operatorname{Tr}[S_i(t)],
+\end{equation}
+$\sigma_k$ 为费米子符号（预存数组）。复杂度：$O(576\times 9)$ 次矩阵迹 + 576 次标量 MAC，
+约 $\mu$s（注释原话："576 scalar MACs on CPU ($\sim\mu$s)"，
+\nolinkurl{three_baryon_opt/gen_pnL_fast.py:1-7} 确证）。
+\end{algobox}
+\lstinputlisting[firstline=1,lastline=10]{/Users/zhangxin/LQCD_Master/utils/generate_einsum/three_baryon_opt/gen_pnL_fast.py}
+\lstinputlisting[firstline=747,lastline=765]{/Users/zhangxin/LQCD_Master/utils/generate_einsum/three_baryon_opt/gen_pnL_fast.py}
+\textcolor{warn}{对比}：朴素路径（\nolinkurl{three_baryon/gen_pnL_2pt.py:38-45}）把 576
+项写成 576 个 GPU einsum 调用（每项 24 个操作数、9 个传播子）；结构因子法把它压缩为
+CPU 标量循环——代价是离线预计算（一次性成本）与传播子仅以迹 $\operatorname{Tr}[S_i]$ 参与
+（要求 sink 端为点源构造，属应用范围限制）。\textcolor{warn}{未验证}：本报告未在本机
+复跑 GPU 基准，$\mu$s 量级为文件注释原文，非本会话实测。
+
+\subsection{C6--C9: 浅析部分}
+\begin{itemize}
+\item \textcolor{algo}{C6 生成产物}：sink\_pnn\_full.py（100\,829 行）与 sink\_pnn\_block.py
+（100\,806 行）为 C5 引擎的\textbf{朴素版输出}，同为 576 拓扑的展开实现；
+两者规模是"自动生成 $\gg$ 手写"能力的最直观证据（\textcolor{warn}{未验证}
+：仅按行数统计，未做逐行审阅）。
+\item \textcolor{algo}{C7 Agent 编排}：orchestrator.py（816 行）实现 Planner critique-rewrite
+循环（\nolinkurl{core_architecture/orchestrator.py:109-133}）与 Executor
+生成$\to$静态检查$\to$Slurm 测试提交$\to$失败反馈重写的闭环
+（第 201--281 行），含队列状态机（squeue/sacct/scontrol 解析）。
+\item \textcolor{algo}{C8 物理知识库}：skills/lqcd-physics-correlator 等 5 技能注入
+算符约定、$\gamma_5$-厄米性与质量提取公式（如 pion\_mass.md 全文即公式 \eqref{eq:pi_final}
+的推导笔记）。
+\item \textcolor{algo}{C9 静态检查}：static\_check.py（536 行）对生成代码做
+PyQUDA 特定静态分析，submit\_tool.py 封装 sbatch/squeue。
+\end{itemize}
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+自动 Wick 收缩+费米子符号 & 手工推导（文献级） & 576 拓扑无遗漏、符号自动计入
+（\nolinkurl{wicklib/correlator.py:63-86}） \\
+$\gamma$ 位掩码代数 & sympy/显式 $4\times4$ 矩阵 & 每次乘法 $O(1)$，可穷举化简
+（\nolinkurl{wicklib/gamma.py:42-55}） \\
+结构因子预计算 & 576 个 GPU einsum & 运行时 576 标量 MAC 替代 10 万行代码
+（\nolinkurl{gen_pnL_fast.py:1-7}） \\
+代码规模能力 & 手写 einsum & 生成 10 万行级生产代码（C6 实测行数） \\
+Agent 闭环 & 单次生成 & 静态分析+Slurm 动态测试+失败反馈重写（C7） \\
+\bottomrule
+\end{tabularx}
+\caption{独特性评估（数据来源: 文件行数实测与代码结构分析）}
+\end{table}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+核心公式汇总：Wick 收缩 \eqref{eq:pi_corr}、$\gamma_5$-厄米性 \eqref{eq:g5herm}、
+$\gamma$ 代数 \eqref{eq:gamma_mul}、三点顺序源 \eqref{eq:3pt}、结构因子法 \eqref{eq:struct}。
+
+关键代码片段（直引，各 $\le$40 行）：Wick 配对（C1 节）、$\gamma$ 乘法
+（\nolinkurl{wicklib/gamma.py:42-55}）、einsum 提取（C3 节）、结构因子运行时循环
+（C5 节）。其中 $\gamma$ 乘法片段如下：
+\lstinputlisting[firstline=42,lastline=55]{/Users/zhangxin/LQCD_Master/utils/generate_einsum/wicklib/gamma.py}
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\nolinkurl{wicklib/correlator.py:63-86} & 仓库 & Wick 配对穷举与费米子符号 \\
+\nolinkurl{wicklib/gamma.py:4-78} & 仓库 & $\gamma$ 位掩码代数与共轭 \\
+\nolinkurl{wicklib/adjacency.py:157-214} & 仓库 & einsum 字符串生成 \\
+\nolinkurl{wicklib/operator.py:181-299} & 仓库 & 夸克/双夸克块对象模型 \\
+\nolinkurl{hadron_operator.py:59-99} & 仓库 & 介子/重子算符定义 \\
+\nolinkurl{_wick_translate.py:93-122} & 仓库 & $\gamma_5$-厄米性与命名映射 \\
+\nolinkurl{two_pt/codegen.py:27-117} & 仓库 & PyQUDA contract 格式化 \\
+\nolinkurl{three_baryon_opt/gen_pnL_fast.py:1-7} & 仓库 & 576 结构因子法声明 \\
+\nolinkurl{MANUAL.md:40-63} & 仓库 & 2pt 五步管线 \\
+\nolinkurl{core_architecture/orchestrator.py:109-281} & 仓库 & Agent 编排闭环 \\
+\nolinkurl{pion_mass.md:7-46} & 仓库 & $\pi$ 两点函数推导笔记 \\
+\bottomrule
+\end{xltabular}
+
+% ================= 6 结论 =================
+\section{结论}
+\begin{conclbox}
+穷尽剖析完成：核心候选 11 个（\textcolor{algo}{6 深挖 / 3 浅析 / 2 排除}）。
+最强竞争力为 wicklib 自动 Wick 收缩引擎（C1）与三夸克结构因子预计算（C5）的
+\textbf{组合}：前者把场论收缩机械化（邻接矩阵 + 位掩码 $\gamma$ 代数 + 自动符号），
+后者把机械展开的产物再压缩为 576 个标量 MAC。整条链
+（算符$\to$Wick$\to$einsum$\to$PyQUDA 代码）形成"物理公式可直接执行"的闭环，
+辅以 Agent 编排层实现无人值守的物理计算流水线。
+\end{conclbox}
+\begin{warnbox}
+\begin{itemize}
+\item C5 的 $\mu$s 性能为文件注释原文（\nolinkurl{gen_pnL_fast.py:6}），
+本会话未在 GPU 上复测（本机无 PyQUDA/CUDA 环境，\textcolor{warn}{未验证}）。
+\item 结构因子法适用范围受限：要求所有传播子以迹参与（点源/定点构造），
+非一般源情形不适用。
+\item 断连图（如 $\eta_s$ 色环）仅标注 [DISCONNECTED] 并注释，未给出
+all-to-all 实现（物理风险点）。
+\item 三态计数中 C6 生成产物 10 万行仅按行数判定，未逐行审阅正确性。
+\item 排除项 C11（experiments/benchmark 数据）与样例代码
+（three\_pt/\_to\_delete）未纳入剖析，因其为数据/废弃代码。
+\end{itemize}
+\end{warnbox}
+
+\end{document}

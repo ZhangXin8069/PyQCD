@@ -1,0 +1,10 @@
+Calculate the three-point correlation function for Bc- -> J/psi decay via (b->c) vector current.
+Use the Bc- meson with quark content anti-c b at the source.
+Use the J/psi meson with quark content anti-c c at the sink.
+Use the gamma_5 interpolating operator for the source meson.
+Use the gamma_x interpolating operator for the sink meson.
+Use the transition current \bar{c} gamma_x b.
+Use the point source at position [0,0,0,0], zero momentum, and tseq = 8.
+Invert all propagators using stout-smeared gauge links with parameters (1, 0.125, 4).
+Do not compute the 2pt function.
+Save the final result without any header or extra text to a txt file in the run directory.

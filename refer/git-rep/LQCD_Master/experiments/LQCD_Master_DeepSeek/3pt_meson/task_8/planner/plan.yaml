@@ -1,0 +1,218 @@
+task:
+  name: Ds_to_phi_3pt
+  description: >-
+    Three-point correlation function for Ds+ -> phi meson transition via
+    c->s vector current. Point source at origin, zero momentum, sink time
+    tseq=8, stout-smeared gauge links for all inversions. Sequential
+    strange propagator constructed via two-dagger convention from both
+    source (gamma_5, daggered) and sink (gamma_x) operators. Charm solver
+    uses standard CG (multigrid not appropriate). No 2pt computed. Result
+    saved as plain text to run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: ds_phi_3pt
+      type: meson_3pt
+      name: "Ds+ to phi three-point correlator via c->s vector current"
+
+  hadrons:
+    - id: ds_plus
+      name: Ds_plus_source
+      type: meson
+      flavor: "c anti-s"
+      momentum: [0, 0, 0]
+      interpolating_operator: "gamma_5"
+      use_dagger_at_source: true
+      subtype: source
+      notes: >-
+        Ds+ = c s_bar. Interpolating operator O_Ds = s_bar gamma_5 c.
+        At the source we use the Hermitian conjugate O_Ds† = c_bar gamma_5 s
+        (up to an overall sign, using DeGrand-Rossi basis where gamma_5†=gamma_5
+        and gamma_4 gamma_5 = -gamma_5 gamma_4). The flag use_dagger_at_source
+        instructs the executor and generate_einsum to form the daggered operator.
+
+    - id: phi
+      name: phi_sink
+      type: meson
+      flavor: "s anti-s"
+      momentum: [0, 0, 0]
+      interpolating_operator: "gamma_x"
+      subtype: sink
+      notes: >-
+        phi = s s_bar. Sink meson annihilated at t=8 with gamma_x
+        (vector x-polarization) interpolator. Used as-is (no dagger)
+        at the sink in the three-point correlator.
+
+  propagators:
+    - id: prop_s_fwd
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_fwd
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 20000
+        solver_type: multigrid
+        notes: >-
+          Forward strange propagator; spectator quark line from source to sink.
+          Use multigrid-preconditioned CG with ensemble multigrid parameters
+          (2-level: blocks [6,6,6,3] and [4,4,4,6]).
+      sink:
+        id: sink_s_fwd
+        type: point
+
+    - id: prop_c_fwd
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm_fwd
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 20000
+        solver_type: cg
+        notes: >-
+          Forward charm propagator; active quark line that undergoes c->s
+          transition at the current insertion. Standard CG solver is used
+          because multigrid preconditioning is not designed for heavy quarks
+          and may fail to converge or produce incorrect results.
+      sink:
+        id: sink_c_fwd
+        type: point
+
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: sequential
+        source_time: 8
+        notes: >-
+          Sequential strange propagator. The sequential source eta_seq is
+          constructed at t_f=8 via the two-dagger convention from:
+          (1) the sink operator (gamma_x from phi),
+          (2) the daggered source operator (gamma_5 from Ds+, daggered),
+          (3) the spectator forward strange propagator prop_s_fwd.
+          First, form the sink block B from the phi sink operator (gamma_x),
+          the spectator prop_s_fwd, and the daggered source structure.
+          Then compute eta_seq = gamma_5 B† gamma_5.
+          Solve D_s · G_seq = eta_seq to obtain the sequential propagator.
+          This propagator encodes the converted s-quark line from the current
+          insertion point back to the sink.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 20000
+        solver_type: multigrid
+        notes: >-
+          Multigrid solver for the sequential strange propagator, same mass
+          and solver settings as prop_s_fwd. One additional inversion per
+          (sink momentum, spin projector) combination.
+      sink:
+        id: sink_s_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: ds_phi_3pt_corr
+      type: meson_3pt
+      observable: ds_phi_3pt
+      source_hadron: ds_plus
+      sink_hadron: phi
+      current: "s_bar gamma_x c"
+      sink_time: 8
+      spectator_propagator: prop_s_fwd
+      active_propagator: prop_c_fwd
+      sequential_propagator: prop_s_seq
+      notes: >-
+        Three-point correlator C3(tau) = sum_z Tr[G_seq(z,tau) gamma_x S_c(z,tau; 0,0)].
+        Sequential source eta_seq is formed at t_f=8 from both the sink operator
+        (gamma_x, phi) and the daggered source operator (gamma_5, Ds+).
+        generate_einsum is called with type="meson_3pt" and receives both
+        source and sink gamma structures for correct spin contraction.
+        Connected diagram only; the disconnected s-quark loop at the phi sink
+        is neglected (OZI-suppressed at leading order, but note that phi–omega
+        mixing indicates OZI violation; results should be interpreted with this
+        systematic caveat).
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "No two-point function computation required"
+  - "Plain-text output: two columns (tau, C3(tau)) for tau = 0..8, one line per tau, saved to run directory"
+  - "All inversions use stout-smeared gauge links: n_steps=1 rho=0.125 ndim=4"
+  - "Point source at [0,0,0,0], zero momentum, sequential source at t=8"
+  - "Charm quark solver: standard CG (multigrid not used for heavy charm)"
+  - "Strange quark solvers (forward and sequential): multigrid-preconditioned CG"
+  - "Connected diagram only; disconnected s-quark loop at phi sink neglected (OZI-suppressed approximation)"
+  - "Single configuration (cfg 10000); statistical error not estimated"
+  - "Ds source operator is daggered at the source: O_Ds† = c_bar gamma_5 s"

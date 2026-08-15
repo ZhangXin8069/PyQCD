@@ -1,0 +1,127 @@
+task:
+  name: wilson_loops_16_rectangles_xt_yt_zt_single_run
+  description: Compute rectangular Wilson loops W(R,T) on one gauge configuration for all ordered pairs R=1,2,3,4 and T=1,2,3,4, with R the spatial extent and T the temporal extent, average each loop over the XT, YT, and ZT planes in a single pure-gauge run, and write a plain text file in the run directory with one line per loop containing three whitespace-separated fields: R T value, with no header.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wl_rectangles_rt
+      type: wilsonloop
+      name: Rectangular Wilson loops W(R,T) averaged over XT, YT, ZT
+
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - pure_gauge_only
+  - single_configuration
+  - text_output_no_header
+  - average_over_xt_yt_zt
+  - deterministic_rt_order
+  - validate_line_count
+
+freeform_plan: |
+  Physics category: pure-gauge observable measurement.
+
+  Physical objective:
+  Measure the rectangular Wilson loop
+    W(R,T) = (1/Nc) Re Tr U_loop(R,T)
+  using gauge links only. This is a pure-gauge task: no quark propagators, no Dirac operator setup, no fermion sources, and no inversions.
+
+  Observable definition and ordering:
+  Follow the task statement literally and keep W(R,T) as an ordered observable with:
+    R = spatial extent in the X, Y, or Z direction,
+    T = temporal extent in the Euclidean time direction.
+  Therefore compute all 16 ordered pairs:
+    (1,1) (1,2) (1,3) (1,4)
+    (2,1) (2,2) (2,3) (2,4)
+    (3,1) (3,2) (3,3) (3,4)
+    (4,1) (4,2) (4,3) (4,4)
+  Do not reduce the set by any R<->T symmetry, because the task fixes T as the temporal extent and explicitly requests the full R,T grid.
+
+  Plane averaging:
+  For each ordered pair (R,T), compute the loop in the three spatial-temporal planes:
+    XT, YT, ZT
+  with paths:
+    XT: +X repeated R, +T repeated T, -X repeated R, -T repeated T
+    YT: +Y repeated R, +T repeated T, -Y repeated R, -T repeated T
+    ZT: +Z repeated R, +T repeated T, -Z repeated R, -T repeated T
+  Average the resulting scalar loop values equally over these three planes.
+
+  PyQUDA implementation strategy:
+  1. Initialize PyQUDA with lattice size [24, 24, 24, 72] and process grid [1, 1, 1, 4].
+  2. Read configuration 10000 from the provided cfg_path.
+  3. Move the gauge field to device memory.
+  4. Do not apply link smearing, since the task requests the Wilson loops on the loaded gauge links and does not request smeared-link observables.
+  5. For each ordered pair (R,T) in deterministic nested-loop order:
+       for R in [1,2,3,4]:
+         for T in [1,2,3,4]:
+     construct the XT, YT, and ZT rectangular paths.
+  6. Call gauge.loop() using exactly 4 outer groups as required by the PyQUDA API. Pack the three active paths plus one dummy padded group, e.g. groups [XT, YT, ZT, XT] with weights [1, 1, 1, 0], so only the first three groups contribute physically.
+  7. For each of the three active returned lattice-link fields:
+     - transfer to host,
+     - verify the returned object shape is compatible with a per-site Nc x Nc matrix field under the active domain decomposition,
+     - reshape only after this validation,
+     - take the real part of the color trace at each site.
+  8. Average the three plane-resolved per-site trace fields pointwise, then divide by Nc=3 to form the normalized per-site Wilson-loop field.
+  9. Reduce the normalized field over the full lattice to one scalar per (R,T). If MPI gather/reduction utilities are used, validate that the local lattice shape assumed by the reduction matches the actual decomposition for process grid [1,1,1,4] before forming the final volume average.
+  10. On rank 0, append one output line per loop to a text buffer in the exact format:
+        R T value
+      with whitespace separation and no header.
+
+  Output contract resolution:
+  The task wording contains a small interface inconsistency: it says 'two-column text file' but also specifies 'R T value per line', which is three fields. For reproducible execution, treat the explicit per-line content as authoritative. Therefore write a plain text file with three whitespace-separated entries per line:
+    R T value
+  and no header.
+
+  Output file:
+    ./wilson_loops_rt.txt
+
+  Validation requirements:
+  - After each (R,T), confirm exactly one scalar value has been produced after XT/YT/ZT and volume averaging.
+  - At the end of the run, confirm the file contains exactly 16 lines.
+  - Confirm the line ordering matches the deterministic nested-loop order over R first, then T.
+  - If any shape validation or reduction-layout validation fails, abort rather than writing potentially incorrect averages.
+
+  Notes:
+  - This remains a freeform gauge-only task, so hadron, propagator, and correlator sections are intentionally empty.
+  - Ensemble fermion metadata is preserved only because it is part of the fixed ensemble configuration; it is not used in the active Wilson-loop measurement logic.
+  - The script should be a single flat executable production script suitable for one-run cluster execution.

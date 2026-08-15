@@ -1,0 +1,119 @@
+task:
+  name: lambda_baryon_2pt_positive_parity_point_source
+  description: Compute the zero-momentum Lambda baryon two-point correlator for the local interpolating operator epsilon_{abc}(u^T_a Cgamma5 d_b)s_c, using a point source at [0,0,0,0], the positive-parity projector Tmat=(I+gamma_t)/2 with gamma_t identified as the Euclidean temporal gamma gamma_4, and save the projected correlator as plain text in the run directory with no header or extra text. This is a single-configuration debug/smoke-test run on cfg 10000, not a production statistics run.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_2pt_pp
+      type: baryon_2pt
+      name: Lambda baryon positive-parity two-point function
+
+  hadrons:
+    - id: lambda_baryon
+      name: Lambda
+      type: baryon
+      flavor: uds; operator slots are u, d, s explicitly, with isospin symmetry used only at the propagator level so that S_u = S_d = S_l in the implementation
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon_{abc}(u^T_a Cgamma5 d_b)s_c
+      subtype: positive_parity_ground_state
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_stout_request
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use this propagator for both the u and d slots of the Lambda contraction via S_u = S_d = S_l. The stout tuple from the task is resolved explicitly as (n_steps=1, rho=0.125, ndim=4). This inversion setup must match the target solver API. Because the ensemble metadata provided here does not itself certify whether the fermion operator is defined with stout-smeared links, execution should proceed only if the requested stout-smeared inversion links are indeed the intended valence Dirac operator for this task; otherwise the calculation becomes a mixed-action object.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_stout_request
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Strange propagator from the same point source, using the same stout-link convention as the light solve. This line supplies the single s slot in epsilon_{abc}(u^T_a Cgamma5 d_b)s_c.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: lambda_2pt_measurement
+      type: baryon_2pt
+      propagator: prop_l_point
+      observable: lambda_2pt_pp
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - Single Lambda contraction uses prop_l_point twice for the u and d lines and prop_s_point once for the s line; do not create separate light-only and strange-only correlators.
+  - Source and sink baryon operator are both epsilon_{abc}(u^T_a Cgamma5 d_b)s_c, with the standard two-term baryon Wick contraction for identical light-quark propagators in the u and d slots under S_u=S_d.
+  - Save the projected correlator C_Lambda_PP(t)=Tr[Tmat C_Lambda(t)] with Tmat=(I+gamma_4)/2 after summing over all spatial sink positions for zero momentum.
+  - Write exactly one real number per time slice, ordered by t=0...71, to ./lambda_2pt_pp.txt in the run directory with no header, labels, or metadata.
+
+freeform_plan: |
+  Not used because this is a standard baryon two-point correlator task.

@@ -1,0 +1,133 @@
+task:
+  name: sigma_plus_2pt
+  description: "Calculate the two-point correlation function of Sigma+ baryon (uus) with Cγ₁ diquark operator and positive-parity projector (1+γ₄)/2. Point source at origin, stout-smeared gauge links for inversions. Single-configuration debugging run (cfg 10000)."
+  task_mode: standard
+
+physics:
+  observables:
+    - id: sigma_plus_mass
+      type: baryon_2pt
+      name: "Sigma+ two-point function"
+
+  hadrons:
+    - id: sigma_plus
+      name: "Sigma+"
+      type: baryon
+      flavor: "uus"
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_1 u^b) s^c"
+      subtype: "positive_parity"
+      projector: "(1 + gamma_4) / 2"
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: "CGNR (CG on normal equations D†D) — required because the clover-improved Wilson Dirac operator is only γ₅-Hermitian, not Hermitian positive-definite. Multigrid preconditioner applied to the normal equations."
+      sink:
+        id: point_sink
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: strange_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: "CGNR (CG on normal equations D†D) — same rationale as light solver. Multigrid preconditioner applied to the normal equations."
+      sink:
+        id: point_sink_s
+        type: point
+
+measurement:
+  correlators:
+    - id: sigma_plus_2pt_corr
+      type: baryon_2pt
+      propagators:
+        - prop_l
+        - prop_l
+        - prop_s
+      observable: sigma_plus_mass
+      projector: "(1 + gamma_4) / 2"
+      diquark_gamma: "Cg1"
+      notes: "Two Wick-contraction topologies from the two u-quark pairings at source and sink (direct + exchange). Both contribute with the same sign after color-index relabeling, analogous to the proton case."
+
+output:
+  format: txt
+  metadata: false
+  description: "Two-column plain text (space-separated): time-slice index t and correlator value C(t). No header line. One line per time slice from t=0 to t=T-1."
+
+extras:
+  - "Solver: CGNR (CG on D†D normal equations) because the clover Dirac operator is only γ₅-Hermitian, not HPD"
+  - "Diquark: Cγ₁ (=C@gamma_x) gives an antisymmetric spin structure under quark exchange — correct for the flavor-symmetric uu diquark (spin-0 'good' diquark). The P⁺=(1+γ₄)/2 projector isolates the positive-parity channel but does not fully exclude spin-3/2 Σ*(1385); the spin-0 diquark suppresses J=3/2 coupling"
+  - "Do NOT average over gamma matrices; use only Cg1 as specified"
+  - "Point source at [0,0,0,0] with no source smearing — acceptable for debugging but will limit ground-state overlap. Production runs should add Gaussian/Wuppertal source smearing"
+  - "Single configuration (cfg 10000): this is a debugging/validation run. No statistical error estimate is possible. Production requires ≥50–100 configurations with multiple source times"
+  - "Output: two-column txt (t, C(t)) without header, saved to run directory"
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4

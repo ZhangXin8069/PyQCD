@@ -1,0 +1,202 @@
+task:
+  name: D0_to_pi_minus_3pt
+  description: >
+    Three-point correlation function for D0 -> pi- decay via (c->d) vector current.
+    Source: D0 meson (anti-u, c) with gamma_5 interpolator at t=0.
+    Sink: pi- meson (anti-u, d) with gamma_5 interpolator at t=t_seq=8.
+    Current: \bar{d} gamma_1 c (vector current in x-direction).
+    Sequential source method with point source at origin, zero momentum.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: d0_to_pi_3pt
+      type: meson_3pt
+      name: "D0 -> pi- transition via c->d vector current"
+      source_hadron: D0
+      sink_hadron: pi_minus
+      current:
+        type: vector
+        gamma: gamma1
+        flavor_in: charm
+        flavor_out: light
+        momentum_transfer: [0, 0, 0]
+      t_seq: 8
+
+  hadrons:
+    - id: D0
+      name: D0_meson
+      type: meson
+      flavor: "anti-u, charm"
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_5
+      role: source
+    - id: pi_minus
+      name: pi_minus_meson
+      type: meson
+      flavor: "anti-u, down"
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_5
+      role: sink
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 5000
+        notes: "Multigrid solver for light quark on stout-smeared gauge links"
+      sink:
+        id: sink_point
+        type: point
+      role: forward
+      notes: "Forward light-quark propagator: u-quark line from source to sink"
+
+    - id: prop_c_fwd
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 5000
+        notes: "Multigrid solver for charm quark on stout-smeared gauge links"
+      sink:
+        id: sink_point
+        type: point
+      role: forward
+      notes: "Forward charm-quark propagator: c-quark line from source to current"
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+        sequential_details:
+          t_seq: 8
+          sink_hadron: pi_minus
+          forward_propagator: prop_l_fwd
+          two_dagger: true
+          description: >
+            Construct sink block B(x) = prop_l_fwd(x,t_seq) * gamma_5.
+            Sequential source: eta_seq(x) = gamma_5 * B_dagger(x) * gamma_5.
+            Solve D_l * G_seq = eta_seq for the sequential propagator.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 5000
+        notes: "Multigrid solver for sequential light-quark propagator"
+      sink:
+        id: sink_point
+        type: point
+      role: sequential
+      notes: "Sequential light-quark propagator: d-quark line from sink to current"
+
+measurement:
+  correlators:
+    - id: d0_to_pi_3pt_corr
+      type: meson_3pt
+      observable: d0_to_pi_3pt
+      source_hadron: D0
+      sink_hadron: pi_minus
+      current:
+        type: vector
+        gamma: gamma1
+        flavor_in: charm
+        flavor_out: light
+      forward_propagators:
+        - prop_l_fwd
+        - prop_c_fwd
+      sequential_propagator: prop_l_seq
+      contraction:
+        method: sequential_source
+        expression: "C3(tau) = sum_z Tr[G_seq(z,tau) * gamma1 * prop_c_fwd(z,tau; 0,0)]"
+      t_seq: 8
+      tau_range: [0, 8]
+
+output:
+  format: txt
+  filename: d0_to_pi_3pt_result.txt
+  description: "Three-point correlator values for each current insertion time tau = 0..8. Plain text, one complex value per line (real imag), no header."
+  metadata: false
+
+extras:
+  - "No 2pt function computed"
+  - "Single configuration cfg_num=10000"
+  - "Stout smearing: n_steps=1, rho=0.125, ndim=4 on all gauge links for inversions"
+  - "Zero momentum at source, sink, and current insertion"
+  - "Sequential source at t_seq=8, two-dagger convention"
+  - "Use generate_einsum tool for the contraction code, not hand-written einsum"

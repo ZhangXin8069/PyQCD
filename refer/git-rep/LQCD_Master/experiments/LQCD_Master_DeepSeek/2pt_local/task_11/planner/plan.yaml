@@ -1,0 +1,155 @@
+task:
+  name: xi_minus_2pt
+  description: >
+    Calculate the two-point correlation function of the Xi- baryon (dss)
+    using a point source at the origin [0,0,0,0], stout-smeared gauge
+    links (rho=0.125, n_steps=1, ndim=4), Cg5 diquark operator, and
+    positive-parity projector T = (1 + gamma_4)/2.  The strange quark
+    solver mass is set to -0.2400 (unitary with the sea strange mass used
+    in configuration generation; cf. cfg_path ms-0.2400).
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: xi_minus_2pt
+      type: baryon_2pt
+      name: Xi- two-point function
+
+  hadrons:
+    - id: xi_minus
+      name: Xi-
+      type: baryon
+      flavor: dss
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (s^{Ta} C gamma_5 d^b) s^c
+      subtype: positive_parity
+      parity_projector: (1 + gamma_4) / 2
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: multigrid_cg
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          Light quark (d) inverter.  WARNING: the default ensemble two-level
+          MG blocking [[6,6,6,3],[4,4,4,6]] leaves only 1 site/rank on the
+          coarsest level with process grid [1,1,1,4] (local 24³×18).  Use
+          single-level blocking [[4,4,4,3]] or two-level [[4,4,4,3],[2,2,2,3]]
+          so the coarsest level retains O(10²) sites/rank and the MG solve
+          remains well-conditioned.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: multigrid_cg
+        quark_mass: -0.2400
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          Strange quark (s) inverter.  Solver kappa = -0.2400 matches the
+          sea strange mass used in gauge configuration generation (see
+          cfg_path "ms-0.2400"), giving a unitary valence = sea calculation.
+          This differs from the ensemble quark_mass.strange entry (-0.2356)
+          which is a partially-quenched physics kappa; the unitary choice is
+          preferred for spectroscopy.  Same MG-blocking warning as prop_l applies.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: xi_minus_2pt_corr
+      type: baryon_2pt
+      propagator:
+        - prop_l
+        - prop_s
+      observable: xi_minus_2pt
+      quark_line_mapping:
+        quark_a: s → prop_s
+        quark_b: d → prop_l
+        quark_c: s → prop_s
+      notes: >
+        Baryon two-point contraction for Xi- (dss).  Quark lines a (diquark s)
+        and c (spectator s) both contract with prop_s; quark line b (diquark d)
+        contracts with prop_l.  Two Wick-contraction topologies (direct and
+        exchange) contribute with the same sign after epsilon-tensor relabeling,
+        analogous to the proton case.  The actual contraction must be obtained
+        via the generate_einsum tool (type="baryon_2pt"); do NOT hand-code
+        the einsum—any formula appearing in documentation is illustrative only.
+
+output:
+  format: txt
+  metadata: false
+  notes: >
+    Save bare correlator values to a plain text file (no header, no metadata)
+    in the run directory.  One correlator value per time slice, for t = 0 to T-1.
+
+extras: []

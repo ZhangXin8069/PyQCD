@@ -1,0 +1,107 @@
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+task:
+  name: wilson_loop_R1_T3
+  description: Compute rectangular Wilson loop W(R=1,T=3) averaged over XT, YT, ZT planes using unsmeared gauge links. Pure-gauge measurement with no quark propagators or Dirac inversions.
+  task_mode: freeform
+
+physics:
+  observables:
+    - id: wilson_loop_R1_T3
+      type: wilsonloop
+      name: Wilson loop W(R=1,T=3) plane-averaged
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "No gauge link smearing (stout_smear disabled)"
+  - "Result saved as single float to wilson_loop_R1_T3.txt"
+
+freeform_plan: |
+  ## Physics Goal
+  Compute the rectangular Wilson loop W(R=1, T=3) for the static quark-antiquark potential at short distance. The Wilson loop is a gauge-invariant probe of confinement: at large R and T, ⟨W(R,T)⟩ ∼ exp(−σ R T) with string tension σ. At R=1, T=3 we are in the short-distance regime sensitive to the Coulomb-like part of the potential. Averaging over XT, YT, ZT spatial-temporal planes improves statistics by exploiting spatial rotational symmetry.
+
+  ## Definition
+  W_{μν}(R,T) = (1/Nc) Re Tr P[∏ U_μ (R steps forward) ∏ U_ν (T steps forward) ∏ U_μ† (R steps backward) ∏ U_ν† (T steps backward)]
+
+  ## Parameters
+  - R = 1, T = 3
+  - Planes: XT, YT, ZT (all spatial-temporal planes)
+  - Nc = 3 (SU(3) gauge group)
+  - No link smearing (use raw unsmeared gauge links)
+  - MPI: 4 ranks with process grid [1,1,1,4] (t-direction split, giving Lt_local = 72/4 = 18 per rank)
+
+  ## Computation Steps
+  1. Initialize PyQUDA with lattice size [24, 24, 24, 72] and process grid [1, 1, 1, 4]. Use CuPy backend. Set resource_path to "./tunecache".
+  2. Load gauge configuration number 10000 using PyQUDA's io.readChromaQIOGauge from the specified cfg_path (formatted with n_cfg=10000).
+  3. Transfer the gauge field to GPU via gauge.toDevice().
+  4. Do NOT apply stoutSmear or any other link smearing — use the raw, unsmeared gauge links directly.
+  5. Construct Wilson loop paths for the three spatial-temporal planes:
+     - XT plane: path_XT = [X]*1 + [T]*3 + [-X]*1 + [-T]*3
+     - YT plane: path_YT = [Y]*1 + [T]*3 + [-Y]*1 + [-T]*3
+     - ZT plane: path_ZT = [Z]*1 + [T]*3 + [-Z]*1 + [-T]*3
+     where X, Y, Z, T are PyQUDA direction constants and -X, -Y, -Z, -T are the reverse directions.
+  6. Call gauge.loop() with exactly 4 groups (PyQUDA API requirement):
+     groups = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+     weights = [1, 1, 1, 0]
+     The 4th group is a dummy (weight 0). This computes all three active planes in a single call.
+  7. For each active plane i = 0, 1, 2:
+     - Transfer result to host: U = res[i].getHost().reshape(-1, Nc, Nc)
+     - Compute per-site real trace: re_tr = numpy.trace(U, axis1=-2, axis2=-1).real
+     - Accumulate into re_tr_sum (initialize as None, then re_tr_sum = re_tr if re_tr_sum is None else re_tr_sum + re_tr).
+  8. Average over the 3 planes: re_tr_avg = re_tr_sum / 3.0
+  9. Reshape to local lattice field shape accounting for even-odd preconditioning and MPI t-split:
+     local_shape = (2, 18, 24, 24, 12)  # (parity, Lt_local=72/4, Lz, Ly, Lx/2)
+     field = re_tr_avg.reshape(local_shape)
+  10. MPI gather to rank 0: global_sum = core.gatherLattice(field, [-1, -1, -1, -1])
+  11. On rank 0 only:
+      total_sites = 24 * 24 * 24 * 72 = 995328
+      W_val = float(global_sum.sum()) / (total_sites * Nc)
+  12. On rank 0: open "wilson_loop_R1_T3.txt" in write mode and write only the numeric value of W_val (no header, no metadata, no label). Use e.g. f"{W_val:.12f}".
+  13. Clean up and finalize.
+
+  ## Output
+  A single text file "wilson_loop_R1_T3.txt" in the current working directory containing one line with the plane-averaged Wilson loop value W(R=1,T=3) as a floating-point number.

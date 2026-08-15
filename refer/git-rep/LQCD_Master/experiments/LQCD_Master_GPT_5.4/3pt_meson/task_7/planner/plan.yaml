@@ -1,0 +1,157 @@
+task:
+  name: Bminus_to_Kstar_vector_3pt
+  description: Compute the bare lattice three-point correlation function for the formal flavor-changing transition B- (ubar b) -> K*-(ubar s) induced by the local vector current J_x = sbar gamma_x b, using a point source at [0,0,0,0], zero source and sink momentum, fixed source-sink separation tseq=8, and stout-smeared links in the propagator inversions as explicitly requested. This run is a smoke-test bare correlator production only; no claim of physically controlled b-quark phenomenology is made on this ensemble/action setup, and no two-point correlators are to be computed.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: b_to_kstar_vec_3pt
+      type: meson_3pt
+      name: Bminus_to_Kstar_vector_current_three_point_bare
+
+  hadrons:
+    - id: bminus_src
+      name: B-
+      type: meson
+      flavor: ubar b
+      momentum: [0, 0, 0]
+      interpolating_operator: ubar gamma_5 b
+      subtype: pseudoscalar_heavy_light_source
+    - id: kstar_snk
+      name: K*-
+      type: meson
+      flavor: ubar s
+      momentum: [0, 0, 0]
+      interpolating_operator: ubar gamma_x s
+      subtype: vector_light_strange_sink_x_polarized
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light_clover
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward light propagator from the common point source. In the meson 3pt contraction this supplies the spectator u line; the spectator antiquark in the external meson operators is represented through the usual source/sink conjugation and gamma5-hermiticity relation on the light propagator, not by a separate inversion.
+      sink:
+        id: sink_point_light
+        type: point
+
+    - id: prop_b_fwd
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_bottom_clover_formal
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: Formal forward heavy propagator for the b line entering the current. This is kept only because the fixed ensemble configuration includes bottom=1.5 and the task explicitly requests B- -> K*- with b->s current. On this lattice spacing this should be treated strictly as a bare correlator smoke test, not a validated physical bottom-quark setup.
+      sink:
+        id: sink_point_bottom
+        type: point
+
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_seq_clover
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 12000
+        notes: Strange sequential propagator for the fixed sink ubar gamma_x s at tf=8 and p_f=0. For source O_B^dagger(0)=bbar gamma_5 u and sink O_K*(x)=ubar gamma_x s, the connected 3pt is C3(tau)=sum_x,z <[ubar gamma_x s](x,tf) [sbar gamma_x b](z,tau) [bbar gamma_5 u](0)>. Wick contraction gives Tr[S_l(0,x) gamma_x S_s(x,z) gamma_x S_b(z,0) gamma_5]. Using gamma5-hermiticity on the unequal-flavor spectator only, S_l(0,x)=gamma5 S_l(x,0)^dagger gamma5, the sink-fixed sequential source is built on the strange line with source term proportional to gamma_x gamma5 S_l(x,0)^dagger gamma5 at tf=8. The resulting sequential strange propagator is then contracted with the forward bottom propagator and the source gamma_5 structure. This fixes the flavor flow and dagger convention explicitly for the requested process.
+      sink:
+        id: sink_seq_kstar_x_t8_p0
+        type: other
+
+measurement:
+  correlators:
+    - id: corr_b_to_kstar_vec_x_tseq8
+      type: meson_3pt
+      propagator: prop_s_seq
+      observable: b_to_kstar_vec_3pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - Compute only the 3pt function; do not compute any 2pt correlators.
+  - Treat the result as a bare lattice correlator with x-polarized vector sink and local current J_x = sbar gamma_x b; no renormalization or improvement factor is applied in this task.
+  - Use the propagator inversions exactly with the requested stout-link parameters (n_steps=1, rho=0.125, ndim=4); this is a user-forced setup and should be recorded as such.
+  - Write one row per insertion time tau with columns: tau ReC ImC, using only the physically relevant range 1 <= tau <= 7 for tseq=8, no header, plain txt in the run directory.
+  - Route contraction generation through the PyQUDA correlator/einsum code-generation tool rather than hand-writing einsum strings.
+
+freeform_plan: |

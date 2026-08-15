@@ -1,0 +1,155 @@
+task:
+  name: three_baryon_local9q_multihadron_2pt
+  description: Compute one combined multi_hadron_2pt correlator for a local nine-quark neutron-proton-neutron operator built from three single-term baryon blocks, with P_plus=(1+gamma4)/2 applied to each baryon block separately at both source and sink, using a single fully combined contraction rather than factorized baryon two-point functions.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 8
+  process_grid:
+    - 1
+    - 1
+    - 2
+    - 4
+
+physics:
+  observables:
+    - id: obs_three_baryon_2pt
+      type: multi_hadron_2pt
+      name: local_9q_npn_two_point_function
+
+  hadrons:
+    - id: hadron_n_src_1
+      name: neutron_block_1_source
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus[(u^T Cgamma5 d)d], with P_plus=(1+gamma4)/2 applied to this baryon block at the source
+      subtype: neutron_single_term_projected_source
+    - id: hadron_p_src
+      name: proton_block_source
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus[(u^T Cgamma5 d)u], with P_plus=(1+gamma4)/2 applied to this baryon block at the source
+      subtype: proton_single_term_projected_source
+    - id: hadron_n_src_2
+      name: neutron_block_2_source
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus[(u^T Cgamma5 d)d], with P_plus=(1+gamma4)/2 applied to this baryon block at the source
+      subtype: neutron_single_term_projected_source
+    - id: hadron_n_snk_1
+      name: neutron_block_1_sink
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus[(u^T Cgamma5 d)d], with P_plus=(1+gamma4)/2 applied to this baryon block at the sink
+      subtype: neutron_single_term_projected_sink
+    - id: hadron_p_snk
+      name: proton_block_sink
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus[(u^T Cgamma5 d)u], with P_plus=(1+gamma4)/2 applied to this baryon block at the sink
+      subtype: proton_single_term_projected_sink
+    - id: hadron_n_snk_2
+      name: neutron_block_2_sink
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus[(u^T Cgamma5 d)d], with P_plus=(1+gamma4)/2 applied to this baryon block at the sink
+      subtype: neutron_single_term_projected_sink
+    - id: hadron_9q
+      name: combined_three_baryon_local_operator
+      type: other
+      flavor: u^3 d^6
+      momentum: [0, 0, 0]
+      interpolating_operator: '[P_plus(u^T Cgamma5 d)d] [P_plus(u^T Cgamma5 d)u] [P_plus(u^T Cgamma5 d)d] at source and sink, with P_plus applied independently to each baryon block and the full operator treated as one local nine-quark multi-hadron object'
+      subtype: local_three_baryon_9q_multihadron_operator
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use stout-smeared links only in the light-quark Dirac operator for this inversion; reuse the resulting single light propagator for all u and d quark lines by isospin symmetry; execute on 8 MPI ranks with grid_size/process_grid [1, 1, 2, 4].
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: corr_three_baryon_2pt
+      type: multi_hadron_2pt
+      propagator: prop_l_point
+      observable: obs_three_baryon_2pt
+      composite_operator: hadron_9q
+      source_blocks:
+        - hadron_n_src_1
+        - hadron_p_src
+        - hadron_n_src_2
+      sink_blocks:
+        - hadron_n_snk_1
+        - hadron_p_snk
+        - hadron_n_snk_2
+      contraction_strategy: single_combined_multihadron_contraction
+      factorized_correlators: false
+
+output:
+  format: other
+  metadata: true
+
+extras:
+  - use_multi_hadron_2pt_generator
+  - apply_P_plus_per_baryon_block_at_source_and_sink
+  - single_combined_contraction_object
+  - grid_size_1_1_2_4_on_8_ranks
+  - save_txt_in_run_directory
+
+freeform_plan: |

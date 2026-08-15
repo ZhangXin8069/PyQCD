@@ -1,0 +1,156 @@
+task:
+  name: pion_nonlocal_2pt
+  description: >
+    Compute the nonlocal two-point correlation function of a π+ meson with a
+    nonlocal shift along the z-direction up to separation z_max=10 (lattice units).
+    The nonlocal shift is applied to the quark (u-quark) propagator via a straight
+    Wilson line in the +z direction constructed from the original (unsmeared) gauge
+    links. Periodic boundary conditions are enforced: when x_z + z ≥ 24 the shifted
+    coordinate wraps as (x_z + z) mod 24 and the Wilson line crosses the periodic
+    boundary using the gauge link at z=23 → z=0. The Dirac operator inversion uses
+    stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4); the original gauge
+    field is preserved in memory for Wilson line construction. A single point source
+    at [0,0,0,0] with zero momentum is used. Only the real part of the complex
+    correlator is saved (the imaginary part is pure noise on a single configuration).
+    The output is a plain text file (no header) with shape (11,72).
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: pion_nonlocal_2pt
+      type: custom
+      name: pion_nonlocal_correlator
+
+  hadrons:
+    - id: pi_plus
+      name: pion_plus
+      type: meson
+      flavor: anti-d_u
+      momentum: [0, 0, 0]
+      interpolating_operator: "O_π+(x; z) = d̄(x) γ_5 W(x, x+ẑ) u(x+ẑ)"
+      subtype: nonlocal
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_multigrid
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: >
+          CG solver with multigrid preconditioner on stout-smeared (1,0.125,4) gauge
+          links. Multigrid levels: (6,6,6,3) and (4,4,4,6). The original (unsmeared)
+          gauge field must be loaded and preserved before stout smearing is applied;
+          the Wilson line in the nonlocal operator uses these original links while
+          the Dirac operator inversion uses the stout-smeared copy.
+      sink:
+        id: sink_point
+        type: point
+        notes: "Point sink at all sites; no sink smearing. Nonlocal shift applied as post-processing."
+
+measurement:
+  correlators:
+    - id: pion_nonlocal_corr
+      type: custom
+      propagator: prop_l_point
+      observable: pion_nonlocal_2pt
+      notes: >
+        For each z in [0, 10], compute the nonlocal pion two-point function:
+
+        C(z; t) = Re Σ_x Tr_spin,color[ S_l†(x,t; 0,0) W(x, x'+ẑ) S_l(x'+ẑ, t; 0,0) ]
+
+        where x'+ẑ denotes the periodically wrapped coordinate:
+          x'_μ = x_μ for μ ≠ z,  x'_z = (x_z + z) mod 24.
+
+        W(x, x'+ẑ) is the straight Wilson line in +z direction built from ORIGINAL
+        (unsmeared) gauge links U_z^orig:
+          W(x, x'+ẑ) = Π_{k=0}^{z-1} U_z^orig(x + k ẑ)
+
+        When the path crosses the periodic boundary, i.e. when x_z + k = 24 for some
+        intermediate step k, the index wraps from 23 → 0 using the gauge link
+        U_z^orig at z=23 (which connects site 23 to site 0 under periodic BC).
+
+        The trace Tr_spin,color runs over both Dirac (4×4) and color (3×3) indices,
+        implemented via an explicit einsum contraction. The gamma structure (γ5 at
+        source and sink) has been fully absorbed by the Wick contraction with
+        γ5-hermiticity, leaving a trivial S† W S contraction with no residual gamma
+        insertions between the propagators.
+
+        Only the REAL PART of the complex-valued trace is saved. The imaginary part
+        is zero up to roundoff after summation over the full spatial volume, by
+        hermiticity of the pion two-point correlator.
+
+        Output shape: (11, 72) for z = 0,…,10 and t = 0,…,71.
+
+output:
+  format: txt
+  metadata: false
+  notes: >
+    Save the REAL part of C(z,t) to a plain text file in the run directory with
+    no header or extra text. Each row (z = 0..10) occupies one line and contains
+    72 space-separated floating-point values for time slices t = 0..71. The file
+    contains exactly 11 lines with 72 columns each. No header, no metadata, no
+    imaginary part.
+
+extras:
+  - "Point source at origin [0,0,0,0]; single time source."
+  - "Nonlocal shift applied to quark (u-quark) propagator via unsmeared straight Wilson line in +z."
+  - "Periodic boundary wrapping: when x_z + z ≥ 24, use (x_z + z) mod 24; Wilson line crosses boundary at z=23→0."
+  - "Original gauge field preserved before stout smearing; Wilson line uses original links, Dirac inversion uses stout-smeared links."
+  - "Stout smearing (n_steps=1, rho=0.125, ndim=4) used for Dirac operator inversion only."
+  - "Maximum z-separation: 10 lattice units (z = 0..10 inclusive)."
+  - "Zero momentum projection throughout (p = [0,0,0])."
+  - "Single gauge configuration: cfg 10000."
+  - "Only real part of complex correlator saved; imaginary part discarded as pure noise."
+  - "Trace runs over both spin (Dirac 4×4) and color (SU(3)) indices via explicit einsum."

@@ -1,0 +1,121 @@
+task:
+  name: eta_s_connected_2pt
+  description: >
+    Compute ONLY the connected Wick contraction of the s̄s pseudoscalar two-point
+    correlator at zero momentum using a Gaussian-smeared point source at [0,0,0,0].
+    Stout-smeared gauge links (1 step, rho=0.125, 4-dim) are applied on a copy of
+    the gauge field before the Dirac operator inversion. The result is the
+    connected piece C_conn(t) = Σ_x Tr[S_s†(x,t) S_s(x,t)] — NOT the physical η_s
+    correlator. The flavor-diagonal disconnected fermion-loop diagram is an
+    equal-order contribution that cannot be evaluated from a single point source;
+    it requires a separate stochastic all-to-all measurement.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: eta_s_connected_corr
+      type: meson_2pt
+      name: connected sbar-s pseudoscalar two-point correlator
+
+  hadrons:
+    - id: connected_sbar_s_ps
+      name: connected_sbar_s_pseudoscalar
+      type: meson
+      flavor: s-antis
+      momentum: [0, 0, 0]
+      interpolating_operator: "s_bar gamma_5 s (connected part only)"
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_s_stout_smear
+      quark_flavor: strange
+      source:
+        source_type: point_smear
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+        smear:
+          method: gaussian_wuppertal
+          parameters:
+            n_steps: 60
+            width: 2.0
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+          notes: >
+            Applied on a copy of the loaded gauge field. The stout-smeared copy is
+            passed to the Dirac operator inversion; the original unsmeared links
+            are preserved for loading and I/O.
+      solver:
+        id: multigrid_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: >
+          Multigrid solver using ensemble blocking parameters.
+          Blocking arrays follow the [T, Z, Y, X] convention as stored in the
+          ensemble metadata. Verify against the PyQUDA multigrid API at runtime:
+          if the solver expects [X, Y, Z, T] ordering, transpose the blocking
+          arrays accordingly. Level 1: [6,6,6,3], Level 2: [4,4,4,6].
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: eta_s_connected_2pt_meas
+      type: meson_2pt
+      propagator: prop_s_stout_smear
+      observable: eta_s_connected_corr
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "WARNING — Physical correctness: The η_s (s̄s) meson is flavor-diagonal. Its physical correlator contains both a connected Wick contraction AND a disconnected fermion-loop diagram of equal importance. This plan computes ONLY the connected piece C_conn(t). The result is NOT the physical η_s correlator and MUST NOT be used to extract the physical η_s mass without the disconnected contribution. The disconnected diagram requires a separate stochastic all-to-all propagator measurement."
+  - "Gaussian/Wuppertal source smearing (n_step=60, width≈2.0 lattice units) is applied to the point source at [0,0,0,0] to improve ground-state overlap. These parameters are reasonable defaults for a ~0.105 fm lattice spacing; they can be tuned to optimize the effective-mass plateau length."
+  - "The stout-smeared gauge field is produced as a copy: gauge_smeared = gauge.copy(); gauge_smeared.stoutSmear(n_step=1, rho=0.125, n_dim=4). The Dirac operator must receive gauge_smeared, not the original gauge object."
+  - "The null-momentum correlator is C(t) = Σ_x Tr[S_s†(x,t; 0,0) S_s(x,t; 0,0)] where S_s is the strange-quark propagator from the smeared point source, and the spatial sum projects to zero momentum at the sink."

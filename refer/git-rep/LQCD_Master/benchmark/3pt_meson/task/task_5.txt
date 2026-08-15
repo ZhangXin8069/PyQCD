@@ -1,0 +1,9 @@
+Calculate the three-point correlation function for B- -> pi- decay via (b->d) vector current.
+Use the B- meson with quark content anti-u b at the source.
+Use the pi- meson with quark content anti-u d at the sink.
+Use the gamma_5 interpolating operator for both source and sink mesons.
+Use the transition current \bar{d} gamma_x b.
+Use the point source at position [0,0,0,0], zero momentum, and tseq = 8.
+Invert all propagators using stout-smeared gauge links with parameters (1, 0.125, 4).
+Do not compute the 2pt function.
+Save the final result without any header or extra text to a txt file in the run directory.

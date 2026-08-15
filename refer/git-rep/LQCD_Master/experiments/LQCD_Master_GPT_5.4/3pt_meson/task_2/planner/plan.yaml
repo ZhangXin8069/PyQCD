@@ -1,0 +1,179 @@
+task:
+  name: D0_to_piminus_vector_3pt
+  description: Compute only the connected D0 -> pi- three-point correlator for the local flavor-changing current J_x = bar(d) gamma_x c, using local gamma_5 interpolating operators for D0(bar(u)c) at the source and pi-(bar(u)d) at the sink, a point source at [0,0,0,0], zero source and sink momentum, and fixed source-sink separation tseq = 8. All forward and sequential inversions must use the same stout-smeared links specified by (n_steps=1, rho=0.125, ndim=4) as part of the valence Dirac operator actually inverted. Do not compute any two-point correlators. Save the final correlator deterministically as plain text in the run directory with no header.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: d0_to_piminus_vx_3pt
+      type: meson_3pt
+      name: D0_to_pi_minus_vector_current_gamma_x_connected
+
+  hadrons:
+    - id: d0_src
+      name: D0
+      type: meson
+      flavor: anti-u c
+      momentum: [0, 0, 0]
+      interpolating_operator: "bar(u) gamma_5 c"
+      subtype: pseudoscalar
+    - id: piminus_snk
+      name: pi-
+      type: meson
+      flavor: anti-u d
+      momentum: [0, 0, 0]
+      interpolating_operator: "bar(u) gamma_5 d"
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_l_spec
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_forward_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward light propagator S_l(x,0) used for the spectator anti-u line. This is the only light forward solve. Use the stout-smeared links inside the inverted valence operator, not merely as an external preprocessing step. The daughter d quark is identified with the degenerate light flavor only at the action level; the flavor flow in the contraction remains distinct.
+      sink:
+        id: point_sink_l
+        type: point
+    - id: prop_c_fwd
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: charm_forward_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward charm propagator S_c(x,0) from the common point source. Do not route this solve through light-quark multigrid by default. Treat the charm setup on this ensemble as unvalidated for controlled physics; this run is acceptable as an implementation test unless an independently tuned relativistic charm setup and renormalization are documented.
+      sink:
+        id: point_sink_c
+        type: point
+    - id: prop_l_seq_pi
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_sequential_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Light sequential propagator through the sink d leg at fixed sink operator bar(u) gamma_5 d, zero sink momentum, and t_sink = tseq = 8. Build the sequential source from the spectator forward light propagator on the sink time slice, eta_seq(x, t_sink) = sum_y delta_t(y,t_sink) e^{-i p_f·y} gamma_5 S_l(y,0) with p_f = 0, then invert the same stout-link valence light operator to obtain the sink-to-current object. Use gamma5-hermiticity consistently so that the final contraction is written entirely with forward/seq objects of the implemented convention; do not substitute a generic meson template without this orientation check.
+      sink:
+        id: seq_sink_pi
+        type: other
+
+measurement:
+  correlators:
+    - id: d0_to_piminus_vx_3pt_meas
+      type: meson_3pt
+      propagator: prop_l_seq_pi
+      observable: d0_to_piminus_vx_3pt
+      source_hadron: d0_src
+      sink_hadron: piminus_snk
+      current: "bar(d) gamma_x c"
+      source_time: 0
+      sink_time: 8
+      tseq: 8
+      source_momentum: [0, 0, 0]
+      sink_momentum: [0, 0, 0]
+      insertion_momentum: [0, 0, 0]
+      insertion_times:
+        start: 1
+        stop: 7
+        include_endpoints: false
+      contractions:
+        connected_only: true
+        disconnected: false
+      correlator_definition: |
+        C3_x(tau; t_sink=8, t_src=0) = sum_{x,z} < [bar(u) gamma_5 d](x,8) [bar(d) gamma_x c](z,tau) [bar(c) gamma_5 u](0,0) >,
+        with x=(vec{x},8), z=(vec{z},tau), p_i=p_f=0.
+        Wick contraction gives the single connected topology
+        C3_x(tau) = - sum_{x,z} Tr[ S_l(0,x) gamma_5 S_l(x,z) gamma_x S_c(z,0) gamma_5 ]
+        = - sum_{x,z} Tr[ G_l^seq(z,0; t_sink=8, gamma_5, p_f=0) gamma_x S_c(z,0) gamma_5 ]
+        where G_l^seq is the light sequential object built from the sink d leg and the spectator anti-u propagator after applying the implementation's gamma5-hermiticity convention.
+      normalization_notes: Local local operators, no momentum prefactors at p_i=p_f=0, no current renormalization applied inside this production task. Record bare complex correlator only.
+      scientific_status: At p_i = p_f = 0, the pseudoscalar-to-pseudoscalar matrix element of the spatial vector current V_x is expected to vanish by rotational symmetry because <pi(p_f)|V_i|D(p_i)> = f_+(q^2)(p_i+p_f)_i + f_-(q^2)(p_i-p_f)_i, which is zero for i=x when both momenta are zero. Therefore this measurement should be labeled as a code-path/infrastructure check, not a physics form-factor determination.
+      validation_notes: No 2pt correlators are produced by instruction. This forbids an internal check of energies, overlaps, and excited-state size at tseq=8. Any interpretation beyond a code test requires prior validated 2pt inputs and current renormalization from outside this task.
+
+output:
+  format: other
+  metadata: false
+  filename: ./d0_to_piminus_vx_3pt_tseq8_cfg10000.txt
+  layout: one line per insertion time in ascending tau order; each line contains exactly three whitespace-separated columns: tau Re[C3_x(tau)] Im[C3_x(tau)]
+
+extras:
+  - save_plain_txt_only
+  - no_2pt_computation
+  - current_gamma_x
+  - tseq_8
+  - zero_source_and_sink_momentum
+  - bare_correlator_only
+
+freeform_plan: |
+  Not used because this is a standard hadronic correlator task.

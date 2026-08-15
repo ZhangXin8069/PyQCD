@@ -1,0 +1,4 @@
+Calculate the two-point function of an eta_s meson.
+Use the point source at position [0,0,0,0].
+Invert all propagators using stout-smeared gauge links with parameters (1, 0.125, 4).
+Save the final result without any header or extra text to a txt file in the run directory.

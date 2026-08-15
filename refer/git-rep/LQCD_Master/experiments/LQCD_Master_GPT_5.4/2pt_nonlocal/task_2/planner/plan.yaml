@@ -1,0 +1,173 @@
+task:
+  name: kaon_nonlocal_2pt_zshift_max10
+  description: Compute the bare nonlocal kaon two-point correlator in the pseudoscalar channel for flavor content sbar-u, using a point source at [0,0,0,0]. Apply the straight spatial +z Wilson-line displacement only to the u-quark line at the sink for separations z=0..10, with the Wilson line built from the original unsmeared gauge field. Use stout-smeared gauge links with parameters (n_steps=1, rho=0.125, ndim=4) only in the Dirac inversions. Save the final correlator as plain numeric text with no header or extra text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: kaon_nonlocal_2pt
+      type: meson_2pt
+      name: bare mixed-link nonlocal kaon two-point function with +z displacement on the u line only
+
+  hadrons:
+    - id: kaon_nonlocal
+      name: kaon
+      type: meson
+      flavor: sbar u
+      momentum: [0, 0, 0]
+      interpolating_operator: "O_K(z,t)=sum_x sbar(x,t) gamma5 W_z(x,t; x+z*e_z,t) u(x+z*e_z,t), with source O_K^dagger(0)=ubar(0) gamma5 s(0), z=0..10"
+      subtype: nonlocal_meson_2pt
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_stout_mg
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the stout-smeared gauge field only for the light-quark Dirac inversion. Residual is the norm of the solver residual used by the production inverter. Multigrid setup follows the ensemble configuration and must be validated on the stout-smeared clover operator before production use.
+      sink:
+        id: sink_bilocal_u_shift_input
+        type: other
+
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_stout
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the stout-smeared gauge field only for the strange-quark Dirac inversion. The strange line remains local in the nonlocal operator and is not Wilson-line shifted. If multigrid is not validated for the strange solve on this stout-smeared clover setup, use the standard validated non-MG inverter for this mass.
+      sink:
+        id: sink_local_s_line
+        type: other
+
+measurement:
+  correlators:
+    - id: corr_kaon_nonlocal_z0_to_10
+      type: meson_2pt
+      propagator: prop_l_point
+      observable: kaon_nonlocal_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - bare_mixed_link_operator
+  - plain_txt_output_only
+  - no_header_no_extra_text
+  - output_columns_z_t_re_im
+  - z_separation_range_0_10
+  - shift_applied_only_to_u_line
+  - original_gauge_used_for_wilson_line
+  - periodic_wrap_in_z
+  - mandatory_z0_local_crosscheck
+  - single_cfg_single_source_debug_level
+
+freeform_plan: |
+  Physics target:
+  Compute the bare nonlocal kaon correlator in the pseudoscalar channel,
+  C(z,t) = sum_{x} < [sbar(x,t) gamma5 W_z(x,t; x+z e_z,t) u(x+z e_z,t)] [ubar(0) gamma5 s(0)] >,
+  for z = 0,1,...,10 and t = 0,1,...,71, with source at x_src = (0,0,0,0).
+  This plan intentionally defines a mixed-link bare operator: the quark propagators are obtained from a stout-smeared clover Dirac operator, while the Wilson line in the nonlocal sink operator is built from the original unsmeared gauge field, exactly as requested.
+
+  Wick contraction and line assignment:
+  With flavor nonsinglet content sbar-u, only the connected meson contraction is required. Using gamma5-hermiticity for the strange line,
+  S_s(0;x,t) = gamma5 S_s(x,t;0)^dagger gamma5,
+  the correlator can be written as
+  C(z,t) = - sum_{x} Tr[ gamma5 S_l^W(x+z e_z,t;0) gamma5 S_s(0;x,t) ]
+         = - sum_{x} Tr[ gamma5 S_l^W(x+z e_z,t;0) gamma5 gamma5 S_s(x,t;0)^dagger gamma5 ]
+         = - sum_{x} Tr[ gamma5 S_l^W(x+z e_z,t;0) S_s(x,t;0)^dagger gamma5 ].
+  Equivalently, by cyclicity of the trace,
+  C(z,t) = - sum_{x} Tr[ S_s(x,t;0)^dagger S_l^W(x+z e_z,t;0) ],
+  where
+  S_l^W(x+z e_z,t;0) = W_z(x,t; x+z e_z,t) S_l(x+z e_z,t;0).
+  This makes explicit that the nonlocal shift is applied only to the u-quark line, while the strange antiquark line remains local at x.
+
+  Shift and Wilson-line convention:
+  For each integer displacement z in 0..10, define the straight Wilson line at fixed sink time t,
+  W_z(x,t; x+z e_z,t) = product_{n=0}^{z-1} U_z(x+n e_z,t),
+  using the original unsmeared gauge field links in the +z direction.
+  For z=0, W_0 = 1 and the operator reduces to the local pseudoscalar kaon operator on the same mixed-link inversion setup.
+  Spatial boundary conditions are periodic. Therefore the endpoint x+z e_z is implemented with z-coordinate wrapping modulo Lz=24. Since z_max=10 < Lz/2, the requested path is still taken as the forward straight +z path and never replaced by a shorter backward path.
+
+  Numerical realization:
+  1. Load the original gauge configuration for cfg 10000.
+  2. Create a stout-smeared copy of the gauge field with parameters n_steps=1, rho=0.125, ndim=4.
+  3. Invert the light propagator S_l(x;0) from point source [0,0,0,0] on the stout-smeared clover operator.
+  4. Invert the strange propagator S_s(x;0) from the same point source on the stout-smeared clover operator.
+  5. For each sink time t and each z=0..10, build W_z from the original unsmeared gauge field and construct the derived shifted light-line object
+     S_l^W(x+z e_z,t;0) = W_z(x,t; x+z e_z,t) S_l(x+z e_z,t;0).
+  6. Contract the shifted light line with the local strange line according to the trace above, then sum over all sink spatial positions x to project zero momentum.
+  7. Save one plain-text record per (z,t) with exactly four whitespace-separated numeric columns:
+     z  t  ReC  ImC
+     and no header, no comments, and no extra text.
+
+  Data objects required by the measurement:
+  - forward light propagator prop_l_point on stout-smeared inversion links;
+  - forward strange propagator prop_s_point on stout-smeared inversion links;
+  - derived shifted-light object built from prop_l_point and the original-gauge Wilson line for each z.
+  Although the standard measurement block can reference only one propagator field, the contraction is defined to require both forward propagators plus the derived shifted-light object. Downstream implementation must not treat this as a single-propagator correlator.
+
+  Validation and scope:
+  - Mandatory closure test: for z=0, verify that the result matches the local kaon two-point correlator computed from the same stout-smeared inversion setup.
+  - Check that ImC is numerically consistent with the actual per-configuration contraction; do not force a real projection in output.
+  - This is a bare correlator production task only; no renormalization is applied here.
+  - One configuration and one point source provide only a debug-level or pipeline-validation measurement, not a physics-quality statistical result.

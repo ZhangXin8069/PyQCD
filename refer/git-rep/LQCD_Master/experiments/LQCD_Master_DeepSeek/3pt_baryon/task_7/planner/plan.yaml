@@ -1,0 +1,251 @@
+task:
+  name: xic_to_xi_3pt_vx
+  description: >-
+    Three-point correlation function for Ξ_c → Ξ semileptonic decay via c→s vector current.
+    Source: Ξ_c baryon with interpolating operator ε^{abc} (d^{Ta} Cγ₅ s^b) c^c at t=0.
+    Sink: Ξ baryon with operator ε^{def} (d^{Td} Cγ₅ s^e) s^f at t_seq=8.
+    Current insertion: s̄ γ_x c (vector, γ₁ in DeGrand-Rossi basis) at intermediate time τ.
+    Parity projector: T = (I + γ₄) / 2 applied at sink to isolate positive-parity channel.
+    Point source at [0,0,0,0], zero momentum throughout.
+    All inversions use stout-smeared gauge links (n_steps=1, ρ=0.125, ndim=4).
+    Only the 3pt function is computed; no 2pt function.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: xic_to_xi_vx_3pt
+      type: baryon_3pt
+      name: "Ξ_c → Ξ three-point function, vector current γ_x"
+
+  hadrons:
+    - id: xic_source
+      name: "Xi_c"
+      type: baryon
+      flavor: "dsc"
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (d^{Ta} C gamma_5 s^b) c^c"
+      role: source
+      subtype: "charmed_baryon"
+    - id: xi_sink
+      name: "Xi"
+      type: baryon
+      flavor: "dss"
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{def} (d^{Td} C gamma_5 s^e) s^f"
+      role: sink
+      subtype: "strange_baryon"
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        solver_type: multigrid
+        multigrid_levels:
+          - block_size: [6, 6, 6, 3]
+          - block_size: [4, 4, 4, 6]
+        notes: "Light quark d propagator; point-to-all, saved at all spacetime points (full volume)"
+      sink:
+        id: sink_full
+        type: full
+        notes: "Full-volume sink: propagator saved at all (x,t) for sequential-source construction at t=8"
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        solver_type: multigrid
+        multigrid_levels:
+          - block_size: [6, 6, 6, 3]
+          - block_size: [4, 4, 4, 6]
+        notes: "Strange quark s propagator; point-to-all, full volume"
+      sink:
+        id: sink_full
+        type: full
+        notes: "Full-volume sink; needed for sink-block construction and 3pt contraction"
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        solver_type: cgne
+        notes: >-
+          Charm quark c propagator; point-to-all, full volume.
+          CGNE (CG on normal equations D†D) is required because the Wilson/clover Dirac
+          operator D is γ₅-Hermitian but not Hermitian positive-definite; standard CG
+          would diverge. CGNE solves D†D x = D† b, which is Hermitian positive-definite.
+      sink:
+        id: sink_full
+        type: full
+        notes: "Full-volume sink; needed for contraction with sequential propagator at all τ"
+    - id: seq_s
+      quark_flavor: strange
+      source:
+        source_type: sequential
+        source_position: [null, null, null, 8]
+        source_momentum: [0, 0, 0]
+        notes: >-
+          Sequential source constructed at t=8 from the Ξ sink operator.
+
+          Construction steps (two-dagger convention):
+          1. At t=8, take prop_l(x,8;0,0) and prop_s(x,8;0,0) for all spatial x⃗.
+          2. Build the sink block B by contracting with the Ξ operator
+             ε^{def} (d^{Td} Cγ₅ s^e) s^f and applying the parity projector T = (I+γ₄)/2.
+             Both contraction topologies (s̄→s^e and s̄→s^f) are included in B;
+             after color-index relabeling e↔f, epsilon antisymmetry (−1) cancels the
+             fermion-exchange sign (−1), so both terms add with the same sign.
+          3. Form η_seq = γ₅ B† γ₅ (first dagger: B†; second dagger: γ₅ … γ₅).
+          4. Solve D_s · G_seq = η_seq.
+          The resulting sequential propagator G_seq is full-volume, saved at all (z,τ).
+          Zero momentum at sink (p⃗_f = 0⃗) eliminates Fourier phase factors; the spatial
+          sum over x⃗ in step 2 projects to zero momentum.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        solver_type: multigrid
+        multigrid_levels:
+          - block_size: [6, 6, 6, 3]
+          - block_size: [4, 4, 4, 6]
+        notes: "Sequential strange propagator; same solver parameters as forward strange; multigrid inversion"
+      sink:
+        id: sink_full
+        type: full
+        notes: "Full-volume sink; needed for contraction with prop_c at all intermediate τ"
+
+measurement:
+  correlators:
+    - id: xic_to_xi_3pt_contract
+      type: baryon_3pt
+      source_hadron: xic_source
+      sink_hadron: xi_sink
+      current:
+        quark_bilinear: "s_bar gamma_x c"
+        gamma_structure: "gamma_1"
+        flavor_pair: [strange, charm]
+      projector: "(I + gamma_4) / 2"
+      t_seq: 8
+      t_source: 0
+      forward_propagators:
+        - prop_l
+        - prop_s
+        - prop_c
+      sequential_propagator: seq_s
+      contraction_topology: >-
+        Two topologies from identical s quarks in Ξ sink (s̄ in current attaches to
+        s^e in diquark or s^f as external quark). After color-index relabeling e↔f:
+        epsilon^{dfe} = −epsilon^{def} and the fermion-exchange sign is −1, giving
+        net +1 (same sign for both topologies). The sequential-source construction
+        in B automatically encodes both contributions.
+      momentum_transfer: [0, 0, 0]
+      notes: >-
+        Final contraction: C₃(τ) = Σ_{z⃗} Tr[ G_seq(z⃗,τ) γ_x S_c(z⃗,τ) ].
+        G_seq ≡ seq_s (sequential strange propagator), S_c ≡ prop_c (forward charm).
+        No Fourier phase factor (zero momentum). Projector already applied in sink block.
+
+output:
+  format: txt
+  metadata: false
+  filename: "xic_to_xi_3pt_vx_result.txt"
+  description: "Raw three-point correlator values C_3(τ) for τ = 0..8, one value per line, no headers"
+
+extras:
+  - "Two-point function is NOT computed per user request"
+  - "Sequential source uses two-dagger convention: B → η_seq = γ₅ B† γ₅, then D_s · G_seq = η_seq"
+  - "Charm propagator uses CGNE (not CG) because the Wilson/clover D is γ₅-Hermitian, not Hermitian positive-definite"
+  - "All four inversions share identical stout-smeared gauge field (n_steps=1, ρ=0.125, ndim=4)"
+  - "Zero momentum throughout; no Fourier phase factors in source, sink, or contraction"
+  - "Point source + single config: statistical precision is limited; production runs require multiple source positions and O(100+) configurations"
+  - "No quark-field smearing (point source/sink): expect significant excited-state contamination; ground-state plateau may require larger t_seq in production"
+  - "Two-topology sign verified: epsilon antisymmetry (−1) × fermion-exchange (−1) = +1, both topologies add coherently"
+  - "Sink block B encodes both contraction topologies (s̄→s^e and s̄→s^f); generate_einsum handles this automatically"

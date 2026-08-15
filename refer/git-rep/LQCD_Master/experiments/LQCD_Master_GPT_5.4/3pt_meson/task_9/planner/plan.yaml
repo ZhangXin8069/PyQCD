@@ -1,0 +1,198 @@
+task:
+  name: Ds_plus_cc_vector_3pt_zero_momentum_smoke_test
+  description: Compute the raw connected Ds+ to Ds+ meson three-point correlator with source and sink operator sbar gamma5 c and local charm vector current cbar gamma_x c at zero source and sink momentum, using a point source at [0, 0, 0, 0], tseq = 8, and stout-smeared inversion links. This task is treated as a one-configuration raw-correlator production and code-validation run, not as a complete electromagnetic form-factor measurement, because the chosen zero-momentum kinematics with a spatial vector current component are expected to give a vanishing physical pseudoscalar-to-pseudoscalar matrix element up to lattice artifacts and statistical noise.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: ds_cc_3pt_raw
+      type: meson_3pt
+      name: Raw connected charm-current Ds+ three-point correlator at zero momentum
+      current: cbar gamma_x c
+      momentum_transfer: [0, 0, 0]
+      connected_only: true
+      expected_continuum_behavior: For pseudoscalar to pseudoscalar at p_i = p_f = 0, the spatial vector current matrix element is expected to vanish; any nonzero signal in this single-configuration run should be interpreted as noise and/or lattice artifact rather than a physical form-factor determination.
+      notes: This observable is not the full electromagnetic matrix element. It includes only the connected charm-current insertion with spectator anti-strange quark, omits the strange-current connected contribution, omits flavor-diagonal disconnected loops, and is saved as a bare unrenormalized 3pt correlator without Z_V.
+
+  hadrons:
+    - id: ds_src
+      name: Ds+
+      type: meson
+      flavor: anti-s c
+      momentum: [0, 0, 0]
+      interpolating_operator: sbar gamma5 c
+      subtype: pseudoscalar
+    - id: ds_snk
+      name: Ds+
+      type: meson
+      flavor: anti-s c
+      momentum: [0, 0, 0]
+      interpolating_operator: sbar gamma5 c
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_s_fwd
+      quark_flavor: strange
+      role: spectator_forward
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_s
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Strange forward propagator on stout-smeared links. Ensemble multigrid settings may be used here in the production script.
+      sink:
+        id: sink_point_s
+        type: point
+
+    - id: prop_c_fwd
+      quark_flavor: charm
+      role: current_line_forward
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_c
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward charm propagator for the source-to-current line. Heavy-quark discretization effects are not controlled in this task; this run is for raw-correlator output only. The charm solve should be validated separately rather than assuming the light-quark multigrid setup is automatically optimal.
+      sink:
+        id: sink_point_c
+        type: point
+
+    - id: prop_c_seq
+      quark_flavor: charm
+      role: sequential_charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+        sequential_source: true
+        sink_time_separation: 8
+        sink_hadron: ds_snk
+        sink_operator: sbar gamma5 c
+        sink_momentum: [0, 0, 0]
+        based_on_propagators: [prop_s_fwd, prop_c_fwd]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_c_seq
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential charm inversion built from the zero-momentum Ds+ sink block at tseq = 8 with gamma5 sink interpolator. Use the same Dirac discretization as the forward charm solve; if multigrid is not stable or beneficial for charm, fall back to a standard non-multigrid Clover solve while keeping the same source, mass, and residual target.
+      sink:
+        id: sink_seq_c
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_ds_cc_gammax_q0_tseq8_cfg10000
+      type: meson_3pt
+      propagator: prop_c_seq
+      spectator_propagator: prop_s_fwd
+      forward_current_propagator: prop_c_fwd
+      observable: ds_cc_3pt_raw
+      source_hadron: ds_src
+      sink_hadron: ds_snk
+      source_time: 0
+      sink_time: 8
+      insertion_times: [1, 2, 3, 4, 5, 6, 7]
+      source_momentum: [0, 0, 0]
+      sink_momentum: [0, 0, 0]
+      current_gamma: gamma_x
+      current_flavor_structure: cbar gamma_x c
+      sequential_source_method: true
+      omit_two_point_function: true
+      save_contact_terms: false
+      contraction_strategy: Generate the meson_3pt contraction code with generate_einsum once, using Ds+ source and sink bilinears with gamma5 and the charm vector current gamma_x, then perform only the requested three-point contraction and save the raw correlator window 1..7.
+      tool_args:
+        type: meson_3pt
+        src_antiquark: s
+        src_quark: c
+        sink_antiquark: s
+        snk_quark: c
+        current_quark: c
+        current_antiquark: c
+        gamma_src: gamma5
+        gamma_snk: gamma5
+        gamma_cur: gamma_x
+        tseq: '8'
+      interpretation_boundary: Output is a bare connected charm-current 3pt correlator only. No 2pt normalization, no plateau analysis, no full electromagnetic-current reconstruction, and no vector-current renormalization are part of this task.
+      statistics_scope: Single configuration cfg 10000 with one point source at [0,0,0,0]; treat as an integration/smoke test rather than a physics measurement.
+
+output:
+  format: other
+  metadata: false
+  directory: .
+  filename: c3_Ds_cc_gammax_q0_cfg10000_tseq8.txt
+  file_extension: txt
+  header: false
+  include_extra_text: false
+  columns: [t_seq, t_ins, re, im]
+  notes: Save plain text rows only, one row per insertion time in 1..7, with no header and no auxiliary text. The file records the raw bare three-point correlator requested by this task.
+
+extras:
+  - raw connected charm-current correlator only
+  - expected zero signal at q=0 with gamma_x
+  - single-configuration smoke test
+  - point source at [0,0,0,0]
+  - stout smearing for all inversions
+  - no two-point correlator
+
+freeform_plan: ''

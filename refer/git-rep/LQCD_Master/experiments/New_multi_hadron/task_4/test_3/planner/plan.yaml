@@ -1,0 +1,198 @@
+task:
+  name: three_baryon_local9q_multihadron_2pt
+  description: Compute the zero-momentum combined multi-hadron two-point correlator for the local nine-quark operator O=[(u^T Cg5 d)d]*[(u^T Cg5 d)u]*[(u^T Cg5 d)s] using single-term baryon blocks only. Build one multi_hadron_2pt contraction object with the full local 9-quark Wick-contraction structure at source and sink; do not factorize into separately measured baryon two-point correlators. Apply P_plus=(1+gamma4)/2 independently to each baryon block at both source and sink. Use point sources at [0, 0, 0, 0] for all propagators, stout-smeared gauge links with n_steps=1, rho=0.125, ndim=4 for the inversions, and save the correlator to a txt file in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+runtime:
+  mpi_ranks: 8
+  grid_size:
+    - 1
+    - 1
+    - 2
+    - 4
+  nodes: 2
+  gpus_per_node: 4
+  launcher_notes: Use the runtime grid_size [1, 1, 2, 4] as the authoritative execution decomposition for this measurement.
+
+physics:
+  observables:
+    - id: obs_three_baryon_local9q
+      type: multi_hadron_2pt
+      name: Combined three-baryon two-point correlator for a local nine-quark operator
+
+  hadrons:
+    - id: baryon_block_udd
+      name: neutron_like_single_term_block
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon(abc) * (u^T_a Cg5 d_b) * d_c
+      subtype: single_term_baryon_block
+      source_projector: P_plus
+      sink_projector: P_plus
+    - id: baryon_block_uud
+      name: proton_like_single_term_block
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon(def) * (u^T_d Cg5 d_e) * u_f
+      subtype: single_term_baryon_block
+      source_projector: P_plus
+      sink_projector: P_plus
+    - id: baryon_block_uds
+      name: lambda_like_single_term_block
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon(ghi) * (u^T_g Cg5 d_h) * s_i
+      subtype: single_term_baryon_block
+      source_projector: P_plus
+      sink_projector: P_plus
+    - id: local9q_combined_operator
+      name: ordered_local_three_baryon_operator
+      type: other
+      flavor: udd_uud_uds
+      momentum: [0, 0, 0]
+      interpolating_operator: '[epsilon(abc)*(u^T_a Cg5 d_b)*d_c] * [epsilon(def)*(u^T_d Cg5 d_e)*u_f] * [epsilon(ghi)*(u^T_g Cg5 d_h)*s_i]'
+      subtype: local_9q_combined_multihadron_operator
+      block_order:
+        - baryon_block_udd
+        - baryon_block_uud
+        - baryon_block_uds
+      source_projectors:
+        - P_plus
+        - P_plus
+        - P_plus
+      sink_projectors:
+        - P_plus
+        - P_plus
+        - P_plus
+      contraction_structure: single_combined_multihadron_object
+      factorized_product_forbidden: true
+
+  propagators:
+    - id: prop_l_point_stout
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward light-quark propagator on stout-smeared links; reused for all u and d lines by isospin symmetry.
+      sink:
+        id: light_point_sink
+        type: point
+    - id: prop_s_point_stout
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward strange-quark propagator on stout-smeared links for the single s line in the third baryon block.
+      sink:
+        id: strange_point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: corr_three_baryon_local9q
+      type: multi_hadron_2pt
+      propagator:
+        - prop_l_point_stout
+        - prop_s_point_stout
+      observable: obs_three_baryon_local9q
+      source_operator: local9q_combined_operator
+      sink_operator: local9q_combined_operator
+      baryon_blocks:
+        - baryon_block_udd
+        - baryon_block_uud
+        - baryon_block_uds
+      block_projectors:
+        source:
+          - P_plus
+          - P_plus
+          - P_plus
+        sink:
+          - P_plus
+          - P_plus
+          - P_plus
+      combined_contraction: true
+      factorized_correlators_forbidden: true
+      momentum_projection: zero_total_momentum
+
+output:
+  format: other
+  metadata: true
+
+extras:
+  - save_txt_filename=three_baryon_local9q_cfg10000.txt
+  - run_directory_output=true
+  - runtime_grid_size=[1,1,2,4]
+  - apply_P_plus_per_baryon_block=true
+  - contraction_mode=single_combined_multihadron_object
+
+freeform_plan: |
+  Not used because this is a standard multi-hadron correlator task with an explicit hadrons -> propagators -> correlators chain.

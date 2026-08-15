@@ -1,0 +1,190 @@
+task:
+  name: Ds_star_nonlocal_2pt
+  description: |
+    Nonlocal two-point function of the vector Ds* meson (s̄ c, JP=1⁻).
+    The sink interpolating operator is nonlocal with a spatial Wilson-line
+    shift in the z-direction applied to the charm quark, up to a maximum
+    separation of 10 lattice units.  The source operator is local.
+    Gauge links used for the Wilson line are the original (unsmeared) links.
+    Dirac inversions use stout-smeared links (ρ=0.125, n_steps=1, ndim=4).
+    The three vector polarisations (γ_x, γ_y, γ_z) are averaged.
+    
+    Full Wick-contraction derivation in the DeGrand–Rossi basis yields:
+      C(n_z, t) = –(1/3) Σ_{i∈{x,y,z}} Σ_x
+        Tr[ S_s†(x,t;0) (γ₅γ_i) W(x,x+n_z·ẑ;t) S_c(x+n_z·ẑ,t;0) (γ_iγ₅) ]
+    where W is the ordered product of original U_z links along +z, and
+    S_s, S_c are the strange/charm point-source propagators inverted with
+    stout-smeared gauge links.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: ds_star_nonlocal_2pt
+      type: meson_2pt
+      name: Ds_star_vector_nonlocal_correlator
+
+  hadrons:
+    - id: Ds_star
+      name: Ds_star
+      type: meson
+      flavor: "s̄ c"
+      momentum: [0, 0, 0]
+      interpolating_operator: "γ_i, i ∈ {x, y, z}"
+      subtype: vector
+      notes: |
+        Sink operator (nonlocal):
+          O_{sink,i}(x,t; ẑ,n_z) = s̄(x,t) γ_i W(x, x+n_z·ẑ; t) c(x+n_z·ẑ, t)
+        Source operator (local, creation operator):
+          O_{src,i}(0) = c̄(0) γ_i s(0)
+        The two-point correlator is ⟨O_{sink}(t; n_z) O_{src}(0)⟩ — the source
+        is the creation operator itself, not its Dirac adjoint.  The Wilson
+        line W is built from original (unsmeared) gauge links along +z at
+        fixed time slice t; the nonlocal shift acts only on the charm quark.
+
+  propagators:
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+        notes: |
+          Stout-smeared links are used for Dirac inversions only.  The
+          original unsmeared gauge field MUST be preserved separately (load
+          a second copy or reload from disk) for Wilson-line construction.
+      solver:
+        id: solver_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "Strange quark Dirac inversion with stout-smeared links and multigrid."
+      sink:
+        id: sink_strange_point
+        type: point
+
+    - id: prop_c_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+        notes: |
+          Same as prop_s_point: stout-smeared links for inversion; original
+          unsmeared links preserved separately for the nonlocal shift.
+      solver:
+        id: solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "Charm quark Dirac inversion with stout-smeared links and multigrid."
+      sink:
+        id: sink_charm_shifted
+        type: other
+        notes: |
+          Post-inversion: for each n_z ∈ [0,10], the charm propagator is
+          shifted using the ORIGINAL gauge links:
+            S_c^{shift}(x,t; n_z) = W(x, x+n_z·ẑ; t) · S_c(x+n_z·ẑ, t; 0)
+          where W is the ordered product of unsmeared U_z links along +z.
+          For n_z = 0, W = 1 and S_c^{shift}(x,t; 0) = S_c(x,t; 0).
+          This construction is a custom post-inversion step; it does NOT
+          use generate_einsum.
+
+measurement:
+  correlators:
+    - id: ds_star_nonlocal_corr
+      type: meson_2pt
+      propagator: [prop_s_point, prop_c_point]
+      observable: ds_star_nonlocal_2pt
+      notes: |
+        Custom nonlocal measurement — generate_einsum is NOT used.
+        Explicit post-inversion procedure for each n_z = 0,…,10:
+        
+        1. Load / access the original (unsmeared) gauge links.
+        2. For each time slice t, build the Wilson line
+           W(x, x+n_z·ẑ; t) = Π_{k=0}^{n_z-1} U_z(x+k·ẑ, t)
+           from unsmeared U_z links along the +z direction.
+        3. Shift the charm propagator:
+           S_c^{shift}(x,t; n_z) = W(x, x+n_z·ẑ; t) · S_c(x+n_z·ẑ, t; 0)
+           (For n_z = 0, S_c^{shift} = S_c identically.)
+        4. For each polarisation i ∈ {x, y, z} and time slice t, compute
+           C_i(n_z,t) = –Σ_x Tr[ S_s†(x,t;0) (γ₅γ_i) S_c^{shift}(x,t;n_z) (γ_iγ₅) ]
+        5. Average over polarisations:
+           C(n_z,t) = (C_x + C_y + C_z) / 3
+        6. Output Re[C(n_z,t)] and Im[C(n_z,t)].
+        
+        The spin matrices (γ₅γ_i) and (γ_iγ₅) should be pre-computed.
+        For n_z = 0 this reduces to the standard local Ds* two-point
+        function with the correct γ₅ structure.
+
+output:
+  format: txt
+  metadata: false
+  notes: |
+    Plain text file saved in the run directory, no header line.
+    Each row contains: n_z  t  Re[C(n_z,t)]  Im[C(n_z,t)]
+    n_z runs from 0 to 10, t runs from 0 to 71.
+
+extras:
+  - "Nonlocal shift range: n_z = 0, 1, …, 10 in the +z-direction."
+  - "Wilson line built from original (unsmeared) gauge links along +z at fixed t."
+  - "Two gauge-field copies required: (a) original unsmeared for Wilson line, (b) stout-smeared (ρ=0.125, 1 step, 4D) for Dirac inversions. Both must coexist or be reloaded."
+  - "Three vector polarisations averaged: (γ_x + γ_y + γ_z) / 3."
+  - "Single point source at [0,0,0,0]; one source per configuration."
+  - "Correlator includes γ₅ factors: Tr[S_s† (γ₅γ_i) W S_c (γ_iγ₅)], derived via full Wick contraction + γ₅-hermiticity in the DeGrand–Rossi basis."
+  - "generate_einsum is NOT used for this measurement; the nonlocal shift is a custom post-inversion construction."
+  - "Multigrid coarse-grid note: second-level blocks [4,4,4,6] on a 4×4×4×24 first-level coarse grid yield a 1×1×1×4 coarsest grid (1×1×1×1 per MPI rank). Most multigrid backends handle a single-site coarse solve via direct inversion; if the solver aborts, switch second-level blocks to [2,2,2,4] for a 2×2×2×6 coarsest grid."
+  - "The source operator O_{src}(0) = c̄(0) γ_i s(0) is the creation operator itself; the correlator is ⟨O_{sink}(t) O_{src}(0)⟩ with no additional Dirac adjoint on the source."

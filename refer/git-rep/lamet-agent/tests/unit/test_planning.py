@@ -1,0 +1,2547 @@
+from __future__ import annotations
+
+import json
+import copy
+from pathlib import Path
+
+import numpy as np
+import pytest
+from typer.testing import CliRunner
+
+from lamet_agent.__main__ import app
+from lamet_agent.planning import (
+    PlanAgentState,
+    _PlanAgentSession,
+    _ask_plan_agent_question,
+    _apply_user_answer_to_candidate,
+    _run_planning_tool,
+    _stage_parameter_gaps,
+    _next_questions_for_state,
+    _manifest_question_id_from_user_input_action,
+    apply_manifest_json_patches,
+    build_repaired_manifests,
+    check_manifest_draft,
+    convert_correlator_h5,
+    inspect_correlator_h5_files,
+    load_relaxed_manifest,
+    plan_correlator_h5_conversions,
+    run_interactive_plan,
+    validate_candidate_payload,
+)
+from lamet_agent.stages.correlator.functions import _read_2pt, _read_3pt
+
+
+def _write_kernel(root: Path) -> None:
+    (root / "lamet_agent").mkdir(parents=True)
+    (root / "lamet_agent" / "kernels.py").write_text("# test kernel\n", encoding="utf-8")
+
+
+def _minimal_payload(root: Path, data_path: str = "data/c2.h5") -> dict:
+    return {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "random_seed": 1984,
+            "stages": ["correlator_analysis", "renormalization"],
+        },
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "c2",
+                    "correlator_type": "2pt",
+                    "data_path": data_path,
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T3",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                }
+            ],
+            "artifacts": [],
+            "kernels": [
+                {
+                    "stage": "matching",
+                    "kernel_id": "CG_gt_quark_PDF_hybrid_NLO",
+                    "kernel_path": "lamet_agent/kernels.py",
+                    "kernel_parameters": {},
+                }
+            ],
+        },
+        "stages": {
+            "correlator_analysis": {"defaults": {}, "jobs": [{"id": "ca", "correlator_ids": ["c2"], "params": {"momentum": "PX0PY0PZ0"}}]},
+            "renormalization": {
+                "defaults": {"scheme": "hybrid", "strategy": "external_denominator", "zs_fm": 0.2},
+                "jobs": [{"id": "rn", "inputs": {"target": "ca", "denominator": "ca"}}],
+            },
+        },
+    }
+
+
+def test_load_relaxed_manifest_accepts_jsonc(tmp_path: Path) -> None:
+    path = tmp_path / "draft.jsonc"
+    path.write_text(
+        """
+        {
+          // comments are accepted in plan mode
+          "metadata": {"run_id": "demo",},
+          "inputs": {},
+          "stages": {}
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    payload, raw = load_relaxed_manifest(path)
+
+    assert payload["metadata"]["run_id"] == "demo"
+    assert "// comments" in raw
+
+
+def test_load_relaxed_manifest_preserves_url_like_strings(tmp_path: Path) -> None:
+    path = tmp_path / "draft.jsonc"
+    path.write_text(
+        """
+        {
+          "metadata": {
+            "run_id": "demo",
+            "root_directory": "https://example.invalid/project",
+          },
+          "inputs": {},
+          "stages": {}
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    payload, _raw = load_relaxed_manifest(path)
+
+    assert payload["metadata"]["root_directory"] == "https://example.invalid/project"
+
+
+def test_check_manifest_draft_reports_scheme_mismatch_and_missing_path(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_kernel(root)
+    payload = _minimal_payload(root)
+    payload["stages"]["perturbative_matching"] = {"defaults": {"scheme": "ratio"}, "jobs": []}
+    path = tmp_path / "draft.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    issues = check_manifest_draft(path, payload)
+
+    messages = [issue.message for issue in issues]
+    assert any("Correlator data file does not exist" in message for message in messages)
+    assert any("differs from renormalization scheme" in message for message in messages)
+
+
+def test_plan_reports_stage_parameter_gaps_before_building(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "random_seed": 1984,
+            "stages": ["fourier_transform"],
+        },
+        "inputs": {"correlators": [], "artifacts": [{"id": "rn", "path": "rn.nc", "stage": "renormalization"}], "kernels": []},
+        "stages": {"fourier_transform": {"defaults": {}, "jobs": [{"id": "ft", "inputs": {"input": "rn"}}]}},
+    }
+    path = tmp_path / "draft.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    state = PlanAgentState(path, "", payload, payload)
+    state.stage_completion_checked = True
+    state.stage_required_checked.add("fourier_transform")
+    state.stage_optional_checked.add("fourier_transform")
+
+    listed = _run_planning_tool(state, "list_stage_parameter_gaps", {})
+    gaps = listed["stage_parameter_gaps"]
+    assert not any(gap["parameter"] in {"order", "coord_unit"} for gap in gaps)
+    assert any(gap["parameter"] == "y_grid" for gap in gaps)
+    assert any(gap["parameter"] == "momentum_gev" for gap in gaps)
+
+    blocked = _run_planning_tool(state, "build_quick_full_candidates", {})
+    assert blocked["ok"] is False
+    assert "missing parameters" in blocked["error"]
+    assert blocked["next_questions"][0]["question_id"] == "stage_params.fourier_transform.ft"
+
+
+def test_planning_reports_legacy_zs_locations_and_flat_parameter_gaps(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_kernel(root)
+    payload = _minimal_payload(root)
+    payload["inputs"]["kernels"][0]["kernel_parameters"] = {"zs_fm": 0.2}
+    payload["stages"]["renormalization"]["defaults"].pop("zs_fm")
+    payload["stages"]["renormalization"]["defaults"]["scheme_parameters"] = {"zs_fm": 0.2}
+
+    issues = check_manifest_draft(tmp_path / "draft.json", payload)
+    gaps = _stage_parameter_gaps(payload)
+
+    issue_paths = {issue.manifest_path for issue in issues}
+    assert "inputs.kernels[0].kernel_parameters.zs_fm" in issue_paths
+    assert "stages.renormalization.defaults.scheme_parameters.zs_fm" in issue_paths
+    assert any(gap["path"] == "stages.renormalization.defaults.zs_fm" for gap in gaps)
+
+
+def test_planning_accepts_ratio_without_hybrid_parameters(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["stages"]["renormalization"]["defaults"] = {"scheme": "ratio", "strategy": "external_denominator"}
+
+    gaps = _stage_parameter_gaps(payload)
+
+    assert not any(gap["stage"] == "renormalization" for gap in gaps)
+
+
+def test_planning_distinguishes_self_renormalization_fit_jobs(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["inputs"]["kernels"] = [{
+        "stage": "renormalization",
+        "kernel_id": "ZMSbar_pdf",
+        "kernel_path": "lamet_agent/kernels.py",
+        "kernel_parameters": {},
+    }]
+    payload["stages"]["renormalization"] = {
+        "defaults": {"scheme": "ratio", "strategy": "self_renormalization"},
+        "jobs": [
+            {
+                "id": "rn_fit",
+                "inputs": {"reference": "ca"},
+                "params": {"scheme_parameters": {"LambdaQCD_gev": 0.1, "d": -0.08183}},
+            }
+        ],
+    }
+
+    gaps = _stage_parameter_gaps(payload)
+
+    assert not any(gap["stage"] == "renormalization" for gap in gaps)
+
+
+def test_plan_load_manifest_reports_combined_metadata_question(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"].pop("random_seed", None)
+    payload["metadata"].pop("resample_mode", None)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, payload)
+
+    loaded = _run_planning_tool(state, "load_manifest", {})
+
+    assert loaded["next_questions"][0]["question_id"] == "metadata.required"
+
+
+def test_plan_reports_correlator_metadata_question_before_ambiguous_paths(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["inputs"]["correlators"][0].pop("momentum", None)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, payload)
+
+    loaded = _run_planning_tool(state, "load_manifest", {})
+
+    assert loaded["next_questions"][0]["question_id"] == "inputs.correlators.0.momentum"
+
+
+def test_run_fallback_plan_repairs_invalid_paths_in_order(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    payload = _minimal_payload(tmp_path / "wrong-root")
+    payload["inputs"]["artifacts"] = [
+        {"id": "external", "stage": "renormalization", "path": "missing-artifact.bin"}
+    ]
+    payload["inputs"]["kernels"][0]["kernel_path"] = "missing-kernel.py"
+    state = PlanAgentState(
+        tmp_path / "draft.json",
+        "",
+        copy.deepcopy(payload),
+        copy.deepcopy(payload),
+        path_repair_project_root=project_root,
+    )
+
+    question = _next_questions_for_state(state)[0]
+    assert question["question_id"] == "metadata.root_directory"
+    assert question["choices"][0]["value"] == str(project_root.resolve())
+
+    applied = _apply_user_answer_to_candidate(
+        state,
+        "metadata.root_directory",
+        str(project_root.resolve()),
+    )
+    assert applied["event"] == "user_answer_applied"
+    assert state.candidate_payload["metadata"]["root_directory"] == str(project_root.resolve())
+    assert _next_questions_for_state(state)[0]["question_id"] == "inputs.correlators.0.data_path"
+
+    (project_root / "correct-data.h5").write_bytes(b"data")
+    _apply_user_answer_to_candidate(
+        state,
+        "inputs.correlators.0.data_path",
+        "correct-data.h5",
+    )
+    assert _next_questions_for_state(state)[0]["question_id"] == "inputs.artifacts.0.path"
+
+    (project_root / "correct-artifact.bin").write_bytes(b"artifact")
+    _apply_user_answer_to_candidate(
+        state,
+        "inputs.artifacts.0.path",
+        "correct-artifact.bin",
+    )
+    assert _next_questions_for_state(state)[0]["question_id"] == "inputs.kernels.0.kernel_path"
+
+    (project_root / "correct-kernel.py").write_text("# kernel\n", encoding="utf-8")
+    _apply_user_answer_to_candidate(
+        state,
+        "inputs.kernels.0.kernel_path",
+        "correct-kernel.py",
+    )
+
+    assert _next_questions_for_state(state)[0]["question_id"] == "stage.add_remaining"
+    assert not (project_root / "artifacts").exists()
+
+
+def test_plan_does_not_write_conversion_control_answers_to_manifest(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, payload)
+
+    applied = _apply_user_answer_to_candidate(state, "inputs.correlators.0.axis_mapping", "yes")
+
+    assert applied["event"] == "user_answer_not_applied"
+    assert "axis_mapping" not in state.candidate_payload["inputs"]["correlators"][0]
+
+
+def test_plan_normalizes_legacy_matching_kernel_stage(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"]["stages"] = ["perturbative_matching"]
+    payload["inputs"]["correlators"] = []
+    payload["inputs"]["artifacts"] = [
+        {
+            "id": "ft",
+            "stage": "fourier_transform",
+            "path": "ft.nc",
+            "momentum": "PX2PY0PZ0",
+            "volume": "S16T3",
+            "lattice_spacing_fm": 0.1,
+        }
+    ]
+    payload["inputs"]["kernels"][0]["stage"] = "matching"
+    payload["stages"] = {
+        "perturbative_matching": {
+            "defaults": {"mu": 2.0, "component": "re"},
+            "jobs": [{"id": "mt", "inputs": {"quasi": "ft"}}],
+        }
+    }
+
+    gaps = _stage_parameter_gaps(payload)
+    quick, full, edits = build_repaired_manifests(tmp_path / "draft.json", payload, [])
+
+    assert not any(gap["parameter"] == "kernel_id" for gap in gaps)
+    assert quick["inputs"]["kernels"][0]["stage"] == "perturbative_matching"
+    assert full["inputs"]["kernels"][0]["stage"] == "perturbative_matching"
+    assert any(edit["path"] == "inputs.kernels[0].stage" for edit in edits)
+
+
+def test_plan_strict_validation_rejects_handwritten_matching_momentum_gev(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"]["stages"] = ["perturbative_matching"]
+    payload["inputs"]["correlators"] = []
+    payload["inputs"]["artifacts"] = [
+        {
+            "id": "ft",
+            "stage": "fourier_transform",
+            "path": "ft.nc",
+            "momentum": "PX2PY0PZ0",
+            "volume": "S16T3",
+            "lattice_spacing_fm": 0.1,
+        }
+    ]
+    payload["inputs"]["kernels"][0]["stage"] = "perturbative_matching"
+    payload["stages"] = {
+        "perturbative_matching": {
+            "defaults": {"momentum_gev": 2.15, "mu": 2.0, "component": "re"},
+            "jobs": [{"id": "mt", "inputs": {"quasi": "ft"}}],
+        }
+    }
+
+    valid, issues = validate_candidate_payload(tmp_path / "draft.json", payload)
+
+    assert valid is False
+    assert any("stages.perturbative_matching.defaults.momentum_gev" in issue.message for issue in issues)
+
+
+def test_plan_requires_patch_after_yes_to_stage_parameter_completion(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "random_seed": 1984,
+            "stages": ["fourier_transform"],
+        },
+        "inputs": {"correlators": [], "artifacts": [{"id": "rn", "path": "rn.nc", "stage": "renormalization"}], "kernels": []},
+        "stages": {"fourier_transform": {"defaults": {}, "jobs": [{"id": "ft", "inputs": {"input": "rn"}}]}},
+    }
+    path = tmp_path / "draft.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    state = PlanAgentState(path, "", payload, payload)
+    state.stage_completion_checked = True
+    state.stage_required_checked.add("fourier_transform")
+    state.stage_optional_checked.add("fourier_transform")
+
+    answered = _run_planning_tool(
+        state,
+        "apply_manifest_patch_to_candidate",
+        {"patches": [{"op": "add", "path": "/stages/fourier_transform/defaults/order", "value": ["LA"]}]},
+    )
+    assert answered["ok"] is True
+    assert answered["candidate_complete"] is False
+    state.parameter_completion_checked = True
+    state.parameter_completion_requested = True
+    blocked = _run_planning_tool(state, "build_quick_full_candidates", {})
+    assert blocked["ok"] is False
+    assert "still have missing parameters" in blocked["error"]
+
+
+def test_plan_stage_question_accepts_free_form_subset() -> None:
+    outputs: list[str] = []
+    answer = _ask_plan_agent_question(
+        {"question_id": "stage.add_remaining", "prompt": "Add missing stages?", "choices": ["yes", "no"]},
+        input_func=lambda prompt: "I only want renormalization and fourier_transform",
+        output_func=outputs.append,
+    )
+
+    assert answer == "I only want renormalization and fourier_transform"
+
+
+def test_plan_stage_subset_answer_adds_requested_stage_shells(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, payload)
+
+    answer = _run_planning_tool(
+        state,
+        "load_manifest",
+        {},
+    )
+    assert answer["stage_completion_question_required"] is True
+    applied = _apply_user_answer_to_candidate(state, "stage.add_remaining", "I only want renormalization and fourier_transform")
+    assert applied["event"] == "user_answer_applied"
+    assert state.stage_completion_checked is True
+    assert state.stage_completion_requested is True
+    assert state.candidate_payload["metadata"]["stages"] == ["correlator_analysis", "renormalization", "fourier_transform"]
+    assert state.candidate_payload["stages"]["fourier_transform"]["jobs"] == [{"id": "fourier_transform"}]
+
+
+def test_plan_stage_none_answer_keeps_partial_workflow(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, payload)
+
+    applied = _apply_user_answer_to_candidate(state, "stage.add_remaining", "none")
+
+    assert applied["event"] == "user_answer_not_applied"
+    assert state.stage_completion_checked is True
+    assert state.stage_completion_requested is False
+
+
+def test_stage_control_question_id_is_not_rewritten_to_manifest_path() -> None:
+    question_id = _manifest_question_id_from_user_input_action(
+        {"question_id": "stage.add_remaining", "prompt": "This manifest is not a full canonical flow."},
+        "metadata.random_seed was skipped earlier.",
+    )
+
+    assert question_id == "stage.add_remaining"
+
+
+def test_unused_stage_question_is_asked_before_add_remaining(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["stages"]["review"] = {
+        "defaults": {"literature": False, "literature_max_papers": 4},
+        "jobs": [{"id": "review"}],
+    }
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    question = _next_questions_for_state(state)[0]
+
+    assert question["question_id"] == "stage.unused.review"
+    assert "not listed in metadata.stages" in question["prompt"]
+
+
+def test_unused_stage_include_adds_metadata_stage(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["stages"]["review"] = {
+        "defaults": {"literature": False, "literature_max_papers": 4},
+        "jobs": [{"id": "review"}],
+    }
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    applied = _apply_user_answer_to_candidate(state, "stage.unused.review", "include")
+
+    assert applied["event"] == "user_answer_applied"
+    assert state.candidate_payload["metadata"]["stages"] == [
+        "correlator_analysis",
+        "renormalization",
+        "review",
+    ]
+    assert "review" in state.candidate_payload["stages"]
+
+
+def test_unused_stage_remove_drops_stage_config(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["stages"]["review"] = {
+        "defaults": {"literature": False, "literature_max_papers": 4},
+        "jobs": [{"id": "review"}],
+    }
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    applied = _apply_user_answer_to_candidate(state, "stage.unused.review", "remove")
+
+    assert applied["event"] == "user_answer_applied"
+    assert "review" not in state.candidate_payload["stages"]
+    assert state.candidate_payload["metadata"]["stages"] == ["correlator_analysis", "renormalization"]
+
+
+def test_unused_stage_question_id_is_not_rewritten_to_manifest_path() -> None:
+    question_id = _manifest_question_id_from_user_input_action(
+        {"question_id": "stage.unused.review", "prompt": "Include unused review?"},
+        "metadata.random_seed was skipped earlier.",
+    )
+
+    assert question_id == "stage.unused.review"
+
+
+def test_check_manifest_draft_reports_unused_stage(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["stages"]["review"] = {
+        "defaults": {"literature": False, "literature_max_papers": 4},
+        "jobs": [{"id": "review"}],
+    }
+
+    issues = check_manifest_draft(tmp_path / "draft.json", payload)
+
+    assert any(
+        issue.severity == "error" and issue.manifest_path == "stages.review" and "not listed in `metadata.stages`" in issue.message
+        for issue in issues
+    )
+
+
+def test_plan_asks_unused_stage_before_llm(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["stages"]["review"] = {
+        "defaults": {"literature": False, "literature_max_papers": 4},
+        "jobs": [{"id": "review"}],
+    }
+    manifest = tmp_path / "draft.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    outputs: list[str] = []
+
+    result = run_interactive_plan(
+        manifest,
+        backend="mock",
+        input_func=lambda prompt: "q",
+        output_func=outputs.append,
+    )
+
+    assert result is None
+    joined = "\n".join(outputs)
+    assert "not listed in metadata.stages" in joined
+    assert "Plan cancelled" in joined
+
+
+def test_stage_choice_question_id_is_not_rewritten_to_manifest_path() -> None:
+    question_id = _manifest_question_id_from_user_input_action(
+        {"question_id": "stage_required.renormalization", "prompt": "renormalization required choices"},
+        "metadata.random_seed was skipped earlier.",
+    )
+
+    assert question_id == "stage_required.renormalization"
+
+
+def test_stage_required_answer_updates_stage_defaults(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["stages"]["renormalization"]["defaults"] = {}
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "stage_required.renormalization",
+        "scheme=hybrid, strategy=external_denominator, zs_fm=0.2",
+    )
+
+    assert result["event"] == "user_answer_applied"
+    assert state.stage_required_checked == {"renormalization"}
+    assert state.candidate_payload["stages"]["renormalization"]["defaults"]["scheme"] == "hybrid"
+    assert state.candidate_payload["stages"]["renormalization"]["defaults"]["strategy"] == "external_denominator"
+    assert state.candidate_payload["stages"]["renormalization"]["defaults"]["zs_fm"] == 0.2
+
+
+def test_stage_required_answer_updates_job_inputs(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["stages"]["renormalization"] = {
+        "defaults": {"scheme": "hybrid", "strategy": "external_denominator", "zs_fm": 0.2},
+        "jobs": [{"id": "rn"}],
+    }
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "stage_required.renormalization",
+        '{"target": "ca_pz", "denominator": "ca_p0"}',
+    )
+
+    assert result["event"] == "user_answer_applied"
+    assert state.candidate_payload["stages"]["renormalization"]["jobs"][0]["inputs"] == {"target": "ca_pz", "denominator": "ca_p0"}
+    assert "target" not in state.candidate_payload["stages"]["renormalization"]["defaults"]
+
+
+def test_extrapolation_required_answer_updates_lightcone_input(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"]["stages"] = ["extrapolation"]
+    payload["stages"] = {"extrapolation": {"defaults": {}, "jobs": [{"id": "ext"}]}}
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "stage_required.extrapolation",
+        '{"inputs.lightcone": ["mt_p4", "mt_p5"]}',
+    )
+
+    assert result["event"] == "user_answer_applied"
+    assert state.candidate_payload["stages"]["extrapolation"]["jobs"][0]["inputs"] == {"lightcone": ["mt_p4", "mt_p5"]}
+
+
+def test_stage_required_answer_keeps_list_stage_fields_as_lists(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "stage_required.correlator_analysis",
+        "fit_scope=3pt_ratio, fitting_form=Breit",
+    )
+
+    assert result["event"] == "user_answer_applied"
+    assert state.candidate_payload["stages"]["correlator_analysis"]["defaults"]["fit_scope"] == ["3pt_ratio"]
+    assert state.candidate_payload["stages"]["correlator_analysis"]["defaults"].get("fit_strategy") is None
+    assert state.candidate_payload["stages"]["correlator_analysis"]["defaults"]["fitting_form"] == "Breit"
+
+
+def test_stage_optional_answer_keeps_fit_strategy_as_list(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "stage_optional.correlator_analysis",
+        "fit_strategy=chained, nstate=1",
+    )
+
+    assert result["event"] == "user_answer_applied"
+    assert state.candidate_payload["stages"]["correlator_analysis"]["defaults"]["fit_strategy"] == ["chained"]
+    assert state.candidate_payload["stages"]["correlator_analysis"]["defaults"]["nstate"] == [1]
+
+
+def test_unparsed_stage_answer_does_not_mark_stage_checked(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(state, "stage_required.renormalization", "hybrid ratio please")
+
+    assert result["event"] == "user_answer_not_applied"
+    assert state.stage_required_checked == set()
+    assert state.candidate_payload == payload
+
+
+def test_required_none_does_not_clear_existing_stage_gaps(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"]["stages"] = ["fourier_transform"]
+    payload["stages"] = {"fourier_transform": {"defaults": {}, "jobs": [{"id": "ft"}]}}
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(state, "stage_required.fourier_transform", "none")
+
+    assert result["event"] == "user_answer_not_applied"
+    assert state.stage_required_checked == set()
+
+
+def test_none_manifest_answer_is_not_written_as_string(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(state, "stages.correlator_analysis.defaults.component", "none")
+
+    assert result["event"] == "user_answer_not_applied"
+    assert "component" not in state.candidate_payload["stages"]["correlator_analysis"]["defaults"]
+
+
+def test_axis_description_is_not_written_to_data_path(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "inputs.correlators.0.data_path",
+        "shape (64, 48), axis 0 is time, axis 1 is cfg",
+    )
+
+    assert result["event"] == "user_answer_not_applied"
+    assert state.candidate_payload["inputs"]["correlators"][0]["data_path"] == "data/c2.h5"
+
+
+def test_metadata_answers_can_be_applied_one_at_a_time(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"].pop("random_seed")
+    payload["metadata"].pop("resample_mode")
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    seed = _apply_user_answer_to_candidate(state, "metadata.random_seed", 1984)
+    mode = _apply_user_answer_to_candidate(state, "metadata.resample_mode", "jk")
+
+    assert seed["event"] == "user_answer_applied"
+    assert mode["event"] == "user_answer_applied"
+    assert state.candidate_payload["metadata"]["random_seed"] == 1984
+    assert state.candidate_payload["metadata"]["resample_mode"] == "jk"
+
+
+def test_combined_metadata_answer_updates_required_fields(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"].pop("random_seed")
+    payload["metadata"].pop("resample_mode")
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(state, "metadata.required", "random_seed=1984, resample_mode=jackknife")
+
+    assert result["event"] == "user_answer_applied"
+    assert state.candidate_payload["metadata"]["random_seed"] == 1984
+    assert state.candidate_payload["metadata"]["resample_mode"] == "jk"
+
+
+def test_complete_stage_skips_required_question_and_asks_optional(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+    state.stage_completion_checked = True
+
+    question = _next_questions_for_state(state)[0]
+
+    assert question["question_id"] == "stage_optional.correlator_analysis"
+    assert "correlator_analysis" in state.stage_required_checked
+
+
+def test_text_plan_reads_metadata_from_free_form_request(tmp_path: Path) -> None:
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion PDF manifest from c2.h5. "
+        "Use random_seed 1984 and resample_mode jk. "
+        "Only correlator_analysis is required.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+
+    assert payload["metadata"]["random_seed"] == 1984
+    assert payload["metadata"]["resample_mode"] == "jk"
+
+
+def test_text_plan_target_observable_does_not_match_data_path(tmp_path: Path) -> None:
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a manifest with target_observable: pdf from sample_2pt.npy and current_data_path sample_current.npz. "
+        "Use random_seed 1984 and resample_mode jk.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+
+    assert payload["metadata"]["target_observable"] == "pdf"
+    assert all("distribution_type" not in item for item in payload["inputs"]["correlators"])
+
+
+@pytest.mark.parametrize(("distribution_type", "stored"), [("unpolarized", False), ("helicity", True), ("transversity", True)])
+def test_text_plan_records_only_nondefault_distribution_type(
+    tmp_path: Path, distribution_type: str, stored: bool
+) -> None:
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion quark PDF manifest from sample_2pt.npy and current_data_path sample_current.npz. "
+        f"distribution_type: {distribution_type}. Use random_seed 1984 and resample_mode jk.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+    three_point = next(item for item in payload["inputs"]["correlators"] if item["correlator_type"] == "3pt")
+
+    assert ("distribution_type" in three_point) is stored
+    if stored:
+        assert three_point["distribution_type"] == distribution_type
+
+
+def test_text_plan_parses_only_explicit_fourier_observable(tmp_path: Path) -> None:
+    (tmp_path / "rn_input.nc").write_text("placeholder", encoding="utf-8")
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a manifest with target_observable: pdf from rn_input.nc. Run fourier_transform with "
+        "fourier observable: nucleon_quark_helicity_quasi_pdf and y_grid [-0.5, 0, 0.5]. "
+        "Use random_seed 1984 and resample_mode jk.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+
+    assert payload["metadata"]["target_observable"] == "pdf"
+    assert payload["stages"]["fourier_transform"]["defaults"]["observable"] == "nucleon_quark_helicity_quasi_pdf"
+    assert not any(gap["parameter"] == "observable" for gap in _stage_parameter_gaps(payload, manifest))
+
+
+def test_external_fourier_input_without_provenance_requires_observable(tmp_path: Path) -> None:
+    (tmp_path / "rn_input.nc").write_text("placeholder", encoding="utf-8")
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a manifest with target_observable: pdf from rn_input.nc. Run fourier_transform with "
+        "y_grid [-0.5, 0, 0.5]. Use random_seed 1984 and resample_mode jk.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+
+    assert any(gap["parameter"] == "observable" for gap in _stage_parameter_gaps(payload, manifest))
+
+
+def test_gluon_text_plan_normalizes_fourier_sector(tmp_path: Path) -> None:
+    (tmp_path / "rn_pz.nc").write_text("placeholder", encoding="utf-8")
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion gluon PDF manifest from rn_pz.nc. Use random_seed 1984 and resample_mode jk. "
+        "Run fourier_transform with "
+        "y_grid [-0.5, 0, 0.5] and sector sea.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+
+    assert payload["metadata"]["parton"] == "gluon"
+    assert payload["stages"]["fourier_transform"]["defaults"]["sector"] == "full"
+
+
+def test_da_text_plan_normalizes_fourier_sector(tmp_path: Path) -> None:
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion DA manifest from rn_pz.nc. "
+        "Use random_seed 1984 and resample_mode jk. "
+        "Run fourier_transform with y_grid {\"start\": -1.0, \"stop\": 1.0, \"num\": 101} and sector valence.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+
+    assert payload["metadata"]["target_observable"] == "da"
+    assert payload["stages"]["fourier_transform"]["defaults"]["sector"] == "full"
+
+
+def test_text_plan_omits_default_fourier_coord_unit(tmp_path: Path) -> None:
+    (tmp_path / "rn_pz.nc").write_text("placeholder", encoding="utf-8")
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion PDF manifest from rn_pz.nc. "
+        "Use random_seed 1984 and resample_mode jk. "
+        'Run fourier_transform with y_grid {"start": -1.0, "stop": 1.0, "num": 101}.',
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+
+    assert "coord_unit" not in payload["stages"]["fourier_transform"]["defaults"]
+
+
+def test_text_plan_keeps_explicit_fourier_coord_unit_override(tmp_path: Path) -> None:
+    (tmp_path / "rn_pz.nc").write_text("placeholder", encoding="utf-8")
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion PDF manifest from rn_pz.nc. "
+        "Use random_seed 1984 and resample_mode jk. "
+        'Run fourier_transform with y_grid {"start": -1.0, "stop": 1.0, "num": 101} and coord_unit: lattice.',
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+
+    assert payload["stages"]["fourier_transform"]["defaults"]["coord_unit"] == "lattice"
+
+
+def test_text_plan_reads_colon_json_stage_defaults(tmp_path: Path) -> None:
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion PDF manifest from rn_pz.nc. "
+        "Use random_seed 1984 and resample_mode jk. "
+        "Run fourier_transform and perturbative_matching. "
+        "y_grid: {\"start\": -1.0, \"stop\": 1.0, \"num\": 101}. "
+        "scheme_scan: {\"zmin_values\": [1], \"zmax_values\": [5], \"z_ext_max\": 8}. "
+        "quasi_y_ls: {\"start\": -1.0, \"stop\": 1.0, \"num\": 100}.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+
+    assert payload["stages"]["fourier_transform"]["defaults"]["y_grid"]["num"] == 101
+    assert payload["stages"]["fourier_transform"]["defaults"]["scheme_scan"]["z_ext_max"] == 8
+    assert payload["stages"]["perturbative_matching"]["defaults"]["quasi_y_ls"]["num"] == 100
+
+
+def test_text_plan_reads_partial_artifact_fallback_metadata(tmp_path: Path) -> None:
+    (tmp_path / "mt_p5.nc").write_text("not a real netcdf", encoding="utf-8")
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a partial extrapolation manifest from mt_p5.nc. "
+        "mt_p5.nc: stage perturbative_matching, path mt_p5.nc. If metadata is missing, use momentum PX5PY0PZ0, volume S48T64, lattice_spacing_fm 0.0574, hadron pion, gfix CG, bz_direction X. "
+        "Use random_seed 1984 and resample_mode jk. Run extrapolation.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+    artifact = payload["inputs"]["artifacts"][0]
+    ok, issues = validate_candidate_payload(manifest, payload)
+
+    assert artifact["momentum"] == "PX5PY0PZ0"
+    assert artifact["volume"] == "S48T64"
+    assert artifact["lattice_spacing_fm"] == 0.0574
+    assert not any("IO backends" in issue.message for issue in issues)
+
+
+def test_text_plan_deduplicates_repeated_discrete_3pt_values(tmp_path: Path) -> None:
+    for name in ("a060_x_p0_3pt_ts8.h5", "a060_x_p0_3pt_ts10.h5", "a060_x_p5_3pt_ts8.h5", "a060_x_p5_3pt_ts10.h5"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion PDF correlator_analysis manifest from "
+        "a060_x_p0_3pt_ts8.h5 with bT 0, bz 0, tsep 8; "
+        "a060_x_p0_3pt_ts10.h5 with bT 0, bz 0, tsep 10; "
+        "a060_x_p5_3pt_ts8.h5 with bT 0, bz 0, tsep 8; "
+        "a060_x_p5_3pt_ts10.h5 with bT 0, bz 0, tsep 10. "
+        "Use random_seed 1984 and resample_mode jk.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+    three_points = [item for item in payload["inputs"]["correlators"] if item["correlator_type"] == "3pt"]
+
+    assert len(three_points) == 4
+    assert {tuple(item["bT"]) for item in three_points} == {(0,)}
+    assert {tuple(item["bz"]) for item in three_points} == {(0,)}
+    assert {tuple(item["tsep"]) for item in three_points} == {(8,), (10,)}
+
+
+def test_text_plan_reads_current_operator_for_3pt_label(tmp_path: Path) -> None:
+    (tmp_path / "sample_p0_3pt_ts8.h5").write_text("", encoding="utf-8")
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion PDF correlator_analysis manifest from sample_p0_3pt_ts8.h5. "
+        "Use random_seed 1984, resample_mode jk, current_operator for 3pt: current, bT 0, bz 0, tsep 8.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+    three_point = next(item for item in payload["inputs"]["correlators"] if item["correlator_type"] == "3pt")
+
+    assert three_point["current_operator"] == "current"
+
+
+def test_text_plan_reads_correlator_required_choices(tmp_path: Path) -> None:
+    np.save(tmp_path / "local_PX0PY0PZ6_2pt.npy", np.ones((64, 4)))
+    np.save(tmp_path / "nonlocal_PX0PY0PZ6_2pt.npy", np.ones((1, 64, 4)))
+    manifest = tmp_path / "request.txt"
+    manifest.write_text(
+        "Build a pion DA qda_ratio correlator_analysis manifest from local_PX0PY0PZ6_2pt.npy and nonlocal_PX0PY0PZ6_2pt.npy. "
+        "Use random_seed 1984, resample_mode jk, momentum PX0PY0PZ6, lattice_spacing_fm: 0.0574, sink_operator: sink, bT 0, bz 0, bz_direction Z. "
+        "fit_scope: qda_ratio. fitting_form: Breit.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(manifest)
+    defaults = payload["stages"]["correlator_analysis"]["defaults"]
+    nonlocal_pt2 = next(item for item in payload["inputs"]["correlators"] if item["correlator_id"] == "nonlocal_PX0PY0PZ6_2pt")
+
+    assert defaults["fit_scope"] == ["qda_ratio"]
+    assert defaults["fitting_form"] == "Breit"
+    assert nonlocal_pt2["sink_operator"] == "sink_nonlocal"
+    assert nonlocal_pt2["lattice_spacing_fm"] == 0.0574
+
+
+def test_stage_parameter_gap_answer_applies_first_gap_path(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"]["stages"] = ["fourier_transform"]
+    payload["inputs"]["correlators"] = []
+    payload["inputs"]["kernels"] = []
+    payload["inputs"]["artifacts"] = [
+        {
+            "id": "rn",
+            "stage": "renormalization",
+            "path": "rn.nc",
+            "momentum": "PX1PY0PZ0",
+            "volume": "S16T5",
+            "lattice_spacing_fm": 0.1,
+            "hadron": "pion",
+        }
+    ]
+    payload["stages"] = {"fourier_transform": {"defaults": {}, "jobs": [{"id": "ft", "inputs": {"input": "rn"}}]}}
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "stage_params.fourier_transform.ft",
+        '{"start": -1.0, "stop": 1.0, "num": 101}',
+    )
+
+    assert result["event"] == "user_answer_applied"
+    assert state.candidate_payload["stages"]["fourier_transform"]["defaults"]["y_grid"]["num"] == 101
+
+
+def test_stage_parameter_gap_answer_uses_matching_question_id(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"]["stages"] = ["renormalization", "perturbative_matching"]
+    payload["inputs"]["artifacts"] = [
+        {"id": "ft", "stage": "fourier_transform", "path": "ft.nc", "momentum": "PX1PY0PZ0", "volume": "S16T5", "lattice_spacing_fm": 0.1}
+    ]
+    payload["inputs"]["kernels"] = [
+        {"stage": "perturbative_matching", "kernel_id": "CG_gt_quark_PDF_hybrid_NLO", "kernel_path": "lamet_agent/kernels.py"}
+    ]
+    payload["stages"] = {
+        "renormalization": {"defaults": {"scheme": "hybrid", "strategy": "external_denominator"}, "jobs": [{"id": "rn", "inputs": {"target": "ca_p1", "denominator": "ca_p0"}}]},
+        "perturbative_matching": {"defaults": {"scheme": "hybrid", "kernel_id": "CG_gt_quark_PDF_hybrid_NLO"}, "jobs": [{"id": "mt_p5", "inputs": {"quasi": "ft"}}]},
+    }
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(state, "stage_params.perturbative_matching.mt_p5", "0.1722")
+
+    assert result["event"] == "user_answer_applied"
+    assert state.candidate_payload["stages"]["perturbative_matching"]["defaults"]["zs_fm"] == 0.1722
+    assert "zs_fm" not in state.candidate_payload["stages"]["renormalization"]["defaults"]
+
+
+def test_stage_optional_answer_updates_stage_defaults(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"]["stages"].append("fourier_transform")
+    payload["stages"]["fourier_transform"] = {
+        "defaults": {},
+        "jobs": [{"id": "ft", "inputs": {"input": "rn"}}],
+    }
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "stage_optional.fourier_transform",
+        '{"y_grid": {"start": -1.0, "stop": 1.0, "num": 5}}',
+    )
+
+    assert result["event"] == "user_answer_applied"
+    assert state.stage_optional_checked == {"fourier_transform"}
+    assert state.candidate_payload["stages"]["fourier_transform"]["defaults"]["y_grid"]["num"] == 5
+
+
+def test_da_stage_answer_normalizes_fourier_sector(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"]["target_observable"] = "da"
+    payload["metadata"]["stages"] = ["fourier_transform"]
+    payload["stages"] = {
+        "fourier_transform": {
+            "defaults": {},
+            "jobs": [{"id": "ft", "inputs": {"input": "rn"}}],
+        }
+    }
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "stage_optional.fourier_transform",
+        '{"sector": "valence"}',
+    )
+
+    assert result["event"] == "user_answer_applied"
+    assert state.candidate_payload["stages"]["fourier_transform"]["defaults"]["sector"] == "full"
+
+
+def test_da_manifest_patch_normalizes_fourier_sector(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["metadata"]["target_observable"] = "da"
+    payload["metadata"]["stages"] = ["fourier_transform"]
+    payload["stages"] = {
+        "fourier_transform": {
+            "defaults": {},
+            "jobs": [{"id": "ft", "inputs": {"input": "rn"}}],
+        }
+    }
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _run_planning_tool(
+        state,
+        "apply_manifest_patch_to_candidate",
+        {"patches": [{"op": "add", "path": "/stages/fourier_transform/defaults/sector", "value": "valence"}], "allow_incomplete": True},
+    )
+
+    assert result["ok"] is True
+    assert state.candidate_payload["stages"]["fourier_transform"]["defaults"]["sector"] == "full"
+
+
+def test_manifest_patch_deduplicates_correlator_discrete_values(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    payload["inputs"]["correlators"][0]["correlator_type"] = "3pt"
+    payload["inputs"]["correlators"][0]["bT"] = [0]
+    payload["inputs"]["correlators"][0]["bz"] = [0]
+    payload["inputs"]["correlators"][0]["tsep"] = [8]
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _run_planning_tool(
+        state,
+        "apply_manifest_patch_to_candidate",
+        {
+            "patches": [
+                {"op": "replace", "path": "/inputs/correlators/0/bT", "value": [0, 0, 0, 0]},
+                {"op": "replace", "path": "/inputs/correlators/0/bz", "value": [0, 0]},
+                {"op": "replace", "path": "/inputs/correlators/0/tsep", "value": [8, 8, 10]},
+            ],
+            "allow_incomplete": True,
+        },
+    )
+
+    assert result["ok"] is True
+    assert state.candidate_payload["inputs"]["correlators"][0]["bT"] == [0]
+    assert state.candidate_payload["inputs"]["correlators"][0]["bz"] == [0]
+    assert state.candidate_payload["inputs"]["correlators"][0]["tsep"] == [8, 10]
+
+
+def test_manifest_confirmation_answer_is_not_applied(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+
+    result = _apply_user_answer_to_candidate(
+        state,
+        "confirm.inputs.correlators.0.current_operator",
+        "yes",
+    )
+
+    assert result["event"] == "user_answer_not_applied"
+    assert state.candidate_payload == payload
+
+
+def test_mock_plan_stage_answer_still_runs_conversions(tmp_path: Path) -> None:
+    session = _PlanAgentSession(
+        backend="mock",
+        manifest_path=tmp_path / "request.txt",
+        manifest_text="",
+        api_key=None,
+        provider=None,
+        model_name=None,
+        base_url=None,
+    )
+
+    session.observe({"event": "user_answer", "question_id": "stage.add_remaining", "value": "none"})
+
+    action = session.decide()
+    assert action["action"] == "call_tool"
+    assert action["tool_name"] == "plan_correlator_h5_conversions"
+
+
+def test_plan_stage_params_question_without_choices_accepts_free_text() -> None:
+    answer = _ask_plan_agent_question(
+        {"question_id": "stage_params.fourier_transform.ft", "prompt": "Choose Fourier order."},
+        input_func=lambda prompt: "LA",
+        output_func=lambda text: None,
+    )
+
+    assert answer == "LA"
+
+
+def test_planner_requests_missing_bz_direction_for_3pt() -> None:
+    payload = {
+        "metadata": {"random_seed": 1984, "resample_mode": "jk", "stages": []},
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "c3",
+                    "correlator_type": "3pt",
+                    "source_operator": "g5",
+                    "sink_operator": "g5",
+                    "current_operator": "gT_nonlocal",
+                    "volume": "S16T32",
+                    "lattice_spacing_fm": 0.1,
+                    "momentum": ["PX0PY0PZ0"],
+                    "bT": [0],
+                    "bz": [0],
+                    "tsep": [8],
+                }
+            ]
+        },
+    }
+    state = PlanAgentState(Path("draft.json"), "", payload, payload)
+    questions = _next_questions_for_state(state)
+    assert questions[0]["question_id"] == "inputs.correlators.0.bz_direction"
+
+
+def test_correlator_h5_conversion_outputs_existing_reader_layout(tmp_path: Path) -> None:
+    h5py = pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    root.mkdir()
+    data_dir = root / "data"
+    data_dir.mkdir()
+    pt2_cfg_time = np.arange(15, dtype=float).reshape(5, 3)
+    pt3_cfg_tau_z0 = np.arange(12, dtype=float).reshape(3, 4)
+    pt3_cfg_tau_z1 = np.arange(12, 24, dtype=float).reshape(3, 4)
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "random_seed": 1984,
+            "stages": ["correlator_analysis"],
+        },
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "c2",
+                    "correlator_type": "2pt",
+                    "data_path": "data/raw_2pt.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T3",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                },
+                {
+                    "correlator_id": "c3",
+                    "correlator_type": "3pt",
+                    "data_path": "data/raw_3pt.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                    "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+                    "bT": [0],
+                    "bz": [0, 1],
+                    "tsep": [3],
+                },
+            ],
+            "artifacts": [],
+            "kernels": [],
+        },
+        "stages": {"correlator_analysis": {"defaults": {}, "jobs": [{"id": "ca", "correlator_ids": ["c2", "c3"], "params": {"momentum": "PX0PY0PZ0"}}]}},
+    }
+    with h5py.File(data_dir / "raw_2pt.h5", "w") as h5f:
+        h5f.create_dataset("raw_pt2", data=pt2_cfg_time)
+    with h5py.File(data_dir / "raw_3pt.h5", "w") as h5f:
+        h5f.attrs["bz_direction"] = "Z"
+        h5f.create_dataset("raw_z0", data=pt3_cfg_tau_z0)
+        h5f.create_dataset("raw_z1", data=pt3_cfg_tau_z1)
+    path = tmp_path / "draft.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    inspections = inspect_correlator_h5_files(path, payload)
+    c3_inspection = next(item for item in inspections if item.correlator_id == "c3")
+    assert c3_inspection.attrs["bz_direction"] == "Z"
+
+    conversions = plan_correlator_h5_conversions(path, payload)
+    assert len(conversions) == 2
+    assert all(item.ambiguous for item in conversions)
+    state = PlanAgentState(path, "", payload, payload, conversions=conversions)
+    result = _run_planning_tool(
+        state,
+        "apply_correlator_conversion_mapping",
+        {
+            "correlator_id": "c2",
+            "datasets": [{"source": "raw_pt2", "target": "g5/g5/PX0PY0PZ0", "transpose": True}],
+        },
+    )
+    assert result["ok"] is True
+    result = _run_planning_tool(
+        state,
+        "apply_correlator_conversion_mapping",
+        {
+            "correlator_id": "c3",
+            "datasets": [
+                {"source": "raw_z0", "target": "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", "transpose": True},
+                {"source": "raw_z1", "target": "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz1", "transpose": True},
+            ],
+        },
+    )
+    assert result["ok"] is True
+    for conversion in conversions:
+        convert_correlator_h5(conversion)
+
+    c2_output = next(item for item in conversions if item.correlator_id == "c2").output_file
+    c3_output = next(item for item in conversions if item.correlator_id == "c3").output_file
+    with h5py.File(c3_output) as h5f:
+        assert h5f.attrs["bz_direction"] == "Z"
+        assert h5f.attrs["standard_correlator_hdf5_version"] == 2
+    assert np.array_equal(
+        _read_2pt(c2_output, source_operator="g5", sink_operator="g5", momentum="PX0PY0PZ0"),
+        pt2_cfg_time,
+    )
+    assert np.array_equal(
+        _read_3pt(
+            c3_output,
+            source_operator="g5",
+            sink_operator="g5",
+            current_operator="gT_nonlocal",
+            momentum="PX0PY0PZ0",
+            bT=0,
+            bz=1,
+            tsep=3,
+        ),
+        pt3_cfg_tau_z1,
+    )
+
+
+def test_correlator_numpy_conversion_outputs_standard_h5_and_script(tmp_path: Path) -> None:
+    pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    pt2_cfg_time = np.arange(15, dtype=float).reshape(5, 3)
+    np.save(data_dir / "raw_2pt.npy", pt2_cfg_time)
+    payload = _minimal_payload(root, data_path="data/raw_2pt.npy")
+    path = tmp_path / "draft.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    conversions = plan_correlator_h5_conversions(path, payload)
+    assert len(conversions) == 1
+    assert conversions[0].ambiguous
+    state = PlanAgentState(path, "", payload, payload, conversions=conversions)
+    result = _run_planning_tool(
+        state,
+        "apply_correlator_conversion_mapping",
+        {
+            "correlator_id": "c2",
+            "datasets": [{"source": "array", "target": "g5/g5/PX0PY0PZ0", "transpose": True}],
+        },
+    )
+    assert result["ok"] is True
+    convert_correlator_h5(state.conversions[0])
+
+    assert Path(state.conversions[0].script_file).is_file()
+    assert np.array_equal(
+        _read_2pt(
+            state.conversions[0].output_file,
+            source_operator="g5",
+            sink_operator="g5",
+            momentum="PX0PY0PZ0",
+        ),
+        pt2_cfg_time,
+    )
+
+
+def test_correlator_npz_conversion_with_axis_order_and_index(tmp_path: Path) -> None:
+    pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    data = np.arange(2 * 3 * 4, dtype=float).reshape(2, 3, 4)
+    np.savez(data_dir / "raw_3pt.npz", all_z=data)
+    payload = _minimal_payload(root)
+    payload["inputs"]["correlators"] = [
+        {
+            "correlator_id": "c3",
+            "correlator_type": "3pt",
+            "data_path": "data/raw_3pt.npz",
+            "ensemble": "E",
+            "hadron": "pion",
+            "gfix": "CG",
+            "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+            "momentum": ["PX0PY0PZ0"],
+            "lattice_spacing_fm": 0.1,
+
+
+            "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+            "bT": [0],
+            "bz": [0, 1],
+            "tsep": [3],
+        }
+    ]
+    path = tmp_path / "draft.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    conversions = plan_correlator_h5_conversions(path, payload)
+    assert conversions[0].ambiguous
+    state = PlanAgentState(path, "", payload, payload, conversions=conversions)
+    targets = [
+        "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0",
+        "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz1",
+    ]
+    result = _run_planning_tool(
+        state,
+        "apply_correlator_conversion_mapping",
+        {
+            "correlator_id": "c3",
+            "datasets": [
+                {"source": "all_z", "target": targets[0], "index": {"0": 0}, "transpose": True},
+                {"source": "all_z", "target": targets[1], "index": {"0": 1}, "transpose": True},
+            ],
+        },
+    )
+    assert result["ok"] is True
+    convert_correlator_h5(state.conversions[0])
+
+    assert np.array_equal(
+        _read_3pt(
+            state.conversions[0].output_file,
+            source_operator="g5",
+            sink_operator="g5",
+            current_operator="gT_nonlocal",
+            momentum="PX0PY0PZ0",
+            bT=0,
+            bz=1,
+            tsep=3,
+        ),
+        data[1],
+    )
+
+
+def test_text_plan_composes_2pt_current_into_standard_3pt_h5(tmp_path: Path) -> None:
+    pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    c2 = np.arange(8, dtype=float).reshape(2, 4)
+    current = np.full((1, 4), 2.0)
+    np.save(data_dir / "sample_2pt.npy", c2)
+    np.savez(data_dir / "sample_current.npz", current=current)
+    request = tmp_path / "request.txt"
+    request.write_text(
+        f"Build a DA plan from {data_dir / 'sample_2pt.npy'} and current file {data_dir / 'sample_current.npz'}.",
+        encoding="utf-8",
+    )
+
+    payload, raw = load_relaxed_manifest(request)
+    correlators = payload["inputs"]["correlators"]
+
+    assert "sample_current.npz" in raw
+    assert [item["correlator_type"] for item in correlators] == ["2pt", "3pt"]
+    planned_correlator = correlators[1]
+    assert planned_correlator["plan_sources"]["two_point"].endswith("sample_2pt.npy")
+    conversions = plan_correlator_h5_conversions(request, payload)
+    planned = next(item for item in conversions if item.operation == "compose_2pt_current")
+    assert planned.ambiguous is False
+
+    convert_correlator_h5(planned)
+    quick, full, _edits = build_repaired_manifests(request, payload, conversions)
+    for repaired in (quick, full):
+        assert "plan_sources" not in json.dumps(repaired)
+        repaired_3pt = next(item for item in repaired["inputs"]["correlators"] if item["correlator_id"] == "planned_3pt_from_current")
+        assert repaired_3pt["data_path"].endswith("request_planned_3pt.h5")
+
+    assert np.array_equal(
+        _read_3pt(
+            planned.output_file,
+            source_operator="source",
+            sink_operator="sink",
+            current_operator="current",
+            momentum="PX0PY0PZ0",
+            bT=0,
+            bz=0,
+            tsep=1,
+        ),
+        np.repeat(c2[1:2] * current, 2, axis=0).T,
+    )
+
+
+def test_text_plan_expands_momentum_tsep_npy_template_into_standard_h5(tmp_path: Path) -> None:
+    pytest.importorskip("h5py")
+    inputs = tmp_path / "npy_inputs"
+    inputs.mkdir()
+    np.save(inputs / "a060_x_p0_2pt.npy", np.ones((64, 5), dtype=np.complex128))
+    np.save(inputs / "a060_x_p5_2pt.npy", np.ones((64, 5), dtype=np.complex128) * 2)
+    for mom in (0, 5):
+        for tsep in (8, 10):
+            np.save(inputs / f"a060_x_p{mom}_3pt_ts{tsep}.npy", np.ones((3, tsep + 1, 5), dtype=np.complex128) * (mom + tsep))
+    request = tmp_path / "CGPDF.txt"
+    request.write_text(
+        "Analyze a coulomb-gauge fixing pion quark PDF workflow from two-point npy file and three-point npy file.\n"
+        f"The two-point correlator file is {inputs / 'a060_x_p0_2pt.npy'}.\n"
+        f"The three-point correlator file is {inputs}/a060_x_p{{mom}}_3pt_ts{{tsep}}.npy, where mom means the momentum and tsep means t-separation.\n"
+        "Correlator_analysis, hybrid-ratio renormalization, fourier_transform, perturbative_matching and review are required for the manifest draft.\n"
+        "Review literature: true.\n",
+        encoding="utf-8",
+    )
+
+    payload, _raw = load_relaxed_manifest(request)
+    correlators = payload["inputs"]["correlators"]
+    assert payload["metadata"]["stages"] == ["correlator_analysis", "renormalization", "fourier_transform", "perturbative_matching", "review"]
+    assert payload["stages"]["review"]["defaults"] == {"literature": True, "literature_max_papers": 4}
+    assert {item["correlator_id"] for item in correlators} == {
+        "a060_x_p0_2pt",
+        "a060_x_p5_2pt",
+        "a060_x_p0_3pt_ts8",
+        "a060_x_p0_3pt_ts10",
+        "a060_x_p5_3pt_ts8",
+        "a060_x_p5_3pt_ts10",
+    }
+    conversions = plan_correlator_h5_conversions(request, payload)
+    assert len(conversions) == 6
+    assert all(not item.ambiguous for item in conversions)
+    three_point = next(item for item in conversions if item.correlator_id == "a060_x_p5_3pt_ts10")
+    assert len(three_point.datasets) == 3
+
+    convert_correlator_h5(three_point)
+
+    assert np.array_equal(
+        _read_3pt(
+            three_point.output_file,
+            source_operator="source",
+            sink_operator="sink",
+            current_operator="current",
+            momentum="PX5PY0PZ0",
+            bT=0,
+            bz=2,
+            tsep=10,
+        ),
+        (np.ones((11, 5), dtype=np.complex128) * 15).T,
+    )
+
+
+def test_build_quick_full_candidates_plans_missing_conversions(tmp_path: Path) -> None:
+    np.save(tmp_path / "sample_2pt.npy", np.ones((64, 4)))
+    np.savez(tmp_path / "sample_current.npz", current=np.ones((1, 4)))
+    request = tmp_path / "request.txt"
+    request.write_text(
+        "Build a pion PDF correlator_analysis manifest from sample_2pt.npy and current_data_path sample_current.npz. "
+        "Use ensemble planned, CG, volume S48T64, lattice spacing 0.0574 fm, momentum PX0PY0PZ0, "
+        "source operator source, sink operator sink, current operator current, bz_direction Z, bT 0, bz 0, tsep 1. "
+        "Use plan-only 2pt_current composition. Only correlator_analysis is required.",
+        encoding="utf-8",
+    )
+    payload, _raw = load_relaxed_manifest(request)
+    payload["metadata"]["random_seed"] = 1984
+    payload["metadata"]["resample_mode"] = "jk"
+    state = PlanAgentState(request, request.read_text(encoding="utf-8"), payload, copy.deepcopy(payload))
+    state.stage_completion_checked = True
+    state.stage_required_checked.add("correlator_analysis")
+    state.stage_optional_checked.add("correlator_analysis")
+
+    result = _run_planning_tool(state, "build_quick_full_candidates", {})
+
+    assert result["ok"] is True
+    assert state.conversions
+    dumped = json.dumps(state.full)
+    assert "sample_2pt.npy" not in dumped
+    assert "2pt_current" not in dumped
+    assert "plan_sources" not in dumped
+
+
+def test_text_plan_drafts_multiple_2pt_current_components(tmp_path: Path) -> None:
+    np.save(tmp_path / "sample_p0_2pt.npy", np.ones((64, 4)))
+    np.save(tmp_path / "sample_p1_2pt.npy", np.ones((64, 4)))
+    np.savez(tmp_path / "sample_current_V4.npz", current=np.ones((1, 4)))
+    np.savez(tmp_path / "sample_current_A4.npz", current=np.ones((1, 4)))
+    request = tmp_path / "request.txt"
+    request.write_text(
+        "Build a pion PDF correlator_analysis manifest from sample_p0_2pt.npy sample_p1_2pt.npy "
+        "and current_data_path sample_current_V4.npz sample_current_A4.npz. "
+        "Use ensemble planned, CG, volume S48T64, lattice spacing 0.0574 fm, bz_direction Z, bT 0, bz 0, tsep 1. "
+        "Use plan-only 2pt_current composition. Only correlator_analysis is required.",
+        encoding="utf-8",
+    )
+
+    payload, _raw = load_relaxed_manifest(request)
+    planned = [item for item in payload["inputs"]["correlators"] if item["correlator_type"] == "3pt"]
+
+    assert len(planned) == 4
+    assert {item["current_operator"] for item in planned} == {"V4", "A4"}
+    assert {item["momentum"][0] for item in planned} == {"PX0PY0PZ0", "PX1PY0PZ0"}
+
+
+def test_text_plan_maps_nonlocal_qda_2pt_template_into_standard_h5(tmp_path: Path) -> None:
+    pytest.importorskip("h5py")
+    local = np.ones((64, 5), dtype=np.complex128)
+    nonlocal_data = np.arange(3 * 64 * 5, dtype=float).reshape(3, 64, 5).astype(np.complex128)
+    np.save(tmp_path / "local_PX0PY0PZ6_2pt.npy", local)
+    np.save(tmp_path / "nonlocal_PX0PY0PZ6_2pt.npy", nonlocal_data)
+    request = tmp_path / "qda_da.txt"
+    request.write_text(
+        "Build a GI pion DA qda_ratio correlator_analysis manifest.\n"
+        "Use ensemble planned, volume S48T64, lattice spacing 0.0574 fm, momentum PX0PY0PZ6.\n"
+        "The local 2pt file is local_PX0PY0PZ6_2pt.npy.\n"
+        "The nonlocal DA 2pt file is nonlocal_PX0PY0PZ6_2pt.npy with axes bz,time,cfg.\n"
+        "Use fit_scope qda_ratio. Only correlator_analysis is required.\n",
+        encoding="utf-8",
+    )
+
+    payload, _raw = load_relaxed_manifest(request)
+
+    assert payload["stages"]["correlator_analysis"]["defaults"] == {"fit_scope": ["qda_ratio"]}
+    nonlocal_correlator = next(item for item in payload["inputs"]["correlators"] if item["correlator_id"].startswith("nonlocal"))
+    assert nonlocal_correlator["sink_operator"] == "sink_nonlocal"
+    assert nonlocal_correlator["bz"] == [0, 1, 2]
+    conversions = plan_correlator_h5_conversions(request, payload)
+    mapping = next(item for item in conversions if item.correlator_id == "nonlocal_PX0PY0PZ6_2pt")
+    assert len(mapping.datasets) == 3
+
+    convert_correlator_h5(mapping)
+
+    assert np.array_equal(
+        _read_2pt(
+            mapping.output_file,
+            source_operator="source",
+            sink_operator="sink_nonlocal",
+            momentum="PX0PY0PZ6",
+            bT=0,
+            bz=2,
+        ),
+        nonlocal_data[2].T,
+    )
+
+
+def test_correlator_conversion_mapping_rejects_bad_shapes_and_targets(tmp_path: Path) -> None:
+    pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    data = np.zeros((2, 3, 4), dtype=float)
+    np.savez(data_dir / "raw_3pt.npz", all_z=data)
+    payload = _minimal_payload(root)
+    payload["inputs"]["correlators"] = [
+        {
+            "correlator_id": "c3",
+            "correlator_type": "3pt",
+            "data_path": "data/raw_3pt.npz",
+            "ensemble": "E",
+            "hadron": "pion",
+            "gfix": "CG",
+            "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+            "momentum": ["PX0PY0PZ0"],
+            "lattice_spacing_fm": 0.1,
+
+
+            "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+            "bT": [0],
+            "bz": [0, 1],
+            "tsep": [3],
+        }
+    ]
+    path = tmp_path / "draft.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    conversions = plan_correlator_h5_conversions(path, payload)
+    state = PlanAgentState(path, "", payload, payload, conversions=conversions)
+
+    duplicate = _run_planning_tool(
+        state,
+        "apply_correlator_conversion_mapping",
+        {
+            "correlator_id": "c3",
+            "datasets": [
+                {"source": "all_z", "target": "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", "index": {"0": 0}, "transpose": True},
+                {"source": "all_z", "target": "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", "index": {"0": 1}, "transpose": True},
+            ],
+        },
+    )
+    assert duplicate["ok"] is False
+
+    bad_axis = _run_planning_tool(
+        state,
+        "apply_correlator_conversion_mapping",
+        {
+            "correlator_id": "c3",
+            "datasets": [
+                {"source": "all_z", "target": "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", "index": {"0": 0}, "axis_order": [0, 0]},
+                {"source": "all_z", "target": "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz1", "index": {"0": 1}, "transpose": True},
+            ],
+        },
+    )
+    assert bad_axis["ok"] is False
+
+    bad_tau = _run_planning_tool(
+        state,
+        "apply_correlator_conversion_mapping",
+        {
+            "correlator_id": "c3",
+            "datasets": [
+                {"source": "all_z", "target": "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", "index": {"0": 0}},
+                {"source": "all_z", "target": "g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz1", "index": {"0": 1}},
+            ],
+        },
+    )
+    assert bad_tau["ok"] is False
+
+
+def test_cli_plan_mock_accept_writes_quick_and_full_manifests(tmp_path: Path) -> None:
+    h5py = pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    with h5py.File(data_dir / "c2.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/PX0PY0PZ0", data=np.ones((5, 3)))
+    with h5py.File(data_dir / "c3.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", data=np.ones((4, 3)))
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "random_seed": 1984,
+            "stages": ["correlator_analysis"],
+        },
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "c2",
+                    "correlator_type": "2pt",
+                    "data_path": "data/c2.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                },
+                {
+                    "correlator_id": "c3",
+                    "correlator_type": "3pt",
+                    "data_path": "data/c3.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                    "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+                    "bT": [0],
+                    "bz": [0],
+                    "tsep": [3],
+                },
+            ],
+            "artifacts": [],
+            "kernels": [],
+        },
+        "stages": {"correlator_analysis": {"defaults": {"nstate": [2, 3]}, "jobs": [{"id": "ca", "correlator_ids": ["c2", "c3"], "params": {"momentum": "PX0PY0PZ0"}}]}},
+    }
+    manifest = tmp_path / "draft.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["plan", str(manifest), "--backend", "mock"], input="2\nnone\nnone\na\n")
+
+    assert result.exit_code == 0, result.output
+    quick_path = root / "artifacts" / "plan_manifests" / "draft.quick.json"
+    full_path = root / "artifacts" / "plan_manifests" / "draft.full.json"
+    assert quick_path.is_file()
+    assert full_path.is_file()
+    quick = json.loads(quick_path.read_text(encoding="utf-8"))
+    full = json.loads(full_path.read_text(encoding="utf-8"))
+    assert quick["stages"]["correlator_analysis"]["defaults"]["nstate"] == [2]
+    assert "sample_error_mode" not in full["metadata"]
+    assert "model_average" not in full["stages"]["correlator_analysis"]["defaults"]
+    assert "pt2_windows" not in full["stages"]["correlator_analysis"]["defaults"]
+    assert "pt3_tau_cuts" not in full["stages"]["correlator_analysis"]["defaults"]
+
+
+def test_full_plan_variant_preserves_explicit_correlator_windows(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    explicit_pt2 = [{"tmin": 3, "tmax": 12}, {"tmin": 5, "tmax": 13}]
+    explicit_tau = [2, 4]
+    payload["stages"] = {
+        "correlator_analysis": {
+            "defaults": {
+                "pt2_windows": explicit_pt2,
+                "pt3_tau_cuts": explicit_tau,
+                "nstate": [2],
+            },
+            "jobs": [],
+        }
+    }
+
+    _quick, full, _edits = build_repaired_manifests(
+        tmp_path / "draft.json", payload, []
+    )
+
+    defaults = full["stages"]["correlator_analysis"]["defaults"]
+    assert defaults["pt2_windows"] == explicit_pt2
+    assert defaults["pt3_tau_cuts"] == explicit_tau
+
+
+def test_cli_plan_asks_missing_random_seed_once_and_applies_answer(tmp_path: Path) -> None:
+    h5py = pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    with h5py.File(data_dir / "c2.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/PX0PY0PZ0", data=np.ones((5, 3)))
+    with h5py.File(data_dir / "c3.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", data=np.ones((4, 3)))
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "bs",
+            "sample_error_mode": "covariance",
+            "bs_samples": 20,
+            "stages": ["correlator_analysis"],
+        },
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "c2",
+                    "correlator_type": "2pt",
+                    "data_path": "data/c2.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                },
+                {
+                    "correlator_id": "c3",
+                    "correlator_type": "3pt",
+                    "data_path": "data/c3.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                    "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+                    "bT": [0],
+                    "bz": [0],
+                    "tsep": [3],
+                },
+            ],
+            "artifacts": [],
+            "kernels": [],
+        },
+        "stages": {
+            "correlator_analysis": {
+                "defaults": {"nstate": [2, 3], "model_average": True},
+                "jobs": [{"id": "ca", "correlator_ids": ["c2", "c3"], "params": {"momentum": "PX0PY0PZ0"}}],
+            }
+        },
+    }
+    manifest = tmp_path / "draft.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["plan", str(manifest), "--backend", "mock"], input="random_seed=1984, resample_mode=bs\nnone\nnone\na\n")
+
+    assert result.exit_code == 0, result.output
+    assert "metadata required choices" in result.output
+    quick = json.loads((root / "artifacts" / "plan_manifests" / "draft.quick.json").read_text(encoding="utf-8"))
+    full = json.loads((root / "artifacts" / "plan_manifests" / "draft.full.json").read_text(encoding="utf-8"))
+    assert full["metadata"]["random_seed"] == 1984
+    assert quick["metadata"]["random_seed"] == 1984
+    assert quick["metadata"]["resample_mode"] == "bs"
+    assert quick["metadata"]["sample_error_mode"] == "covariance"
+    assert quick["stages"]["correlator_analysis"]["defaults"]["model_average"] is True
+    assert "Unresolved questions" not in result.output
+
+
+def test_plan_rejects_malformed_llm_user_input_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    h5py = pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    with h5py.File(data_dir / "c2.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/PX0PY0PZ0", data=np.ones((5, 3)))
+    with h5py.File(data_dir / "c3.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", data=np.ones((4, 3)))
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "random_seed": 1984,
+            "stages": ["correlator_analysis"],
+        },
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "c2",
+                    "correlator_type": "2pt",
+                    "data_path": "data/c2.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                },
+                {
+                    "correlator_id": "c3",
+                    "correlator_type": "3pt",
+                    "data_path": "data/c3.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                    "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+                    "bT": [0],
+                    "bz": [0],
+                    "tsep": [3],
+                },
+            ],
+            "artifacts": [],
+            "kernels": [],
+        },
+        "stages": {"correlator_analysis": {"defaults": {}, "jobs": [{"id": "ca", "correlator_ids": ["c2", "c3"], "params": {"momentum": "PX0PY0PZ0"}}]}},
+    }
+    manifest = tmp_path / "draft.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    actions = iter(
+        [
+            {"action": "request_user_input", "reason": "Need input but omitted prompt.", "args": {}},
+            {"action": "call_tool", "tool_name": "load_manifest", "args": {}, "reason": "Inspect manifest."},
+            {"action": "call_tool", "tool_name": "check_manifest_draft", "args": {}, "reason": "Check manifest."},
+            {"action": "call_tool", "tool_name": "plan_correlator_h5_conversions", "args": {}, "reason": "Plan conversions."},
+            {"action": "call_tool", "tool_name": "inspect_correlator_h5_files", "args": {}, "reason": "Inspect HDF5."},
+            {"action": "call_tool", "tool_name": "build_quick_full_candidates", "args": {}, "reason": "Build candidates."},
+            {
+                "action": "request_user_input",
+                "reason": "Confirm whether to add downstream stages.",
+                "args": {"question_id": "stage.add_remaining", "prompt": "Add extra downstream stages?"},
+            },
+            {"action": "call_tool", "tool_name": "build_quick_full_candidates", "args": {}, "reason": "Build candidates after stage preference."},
+            {
+                "action": "request_user_input",
+                "reason": "Confirm optional correlator_analysis choices.",
+                "args": {"question_id": "stage_optional.correlator_analysis", "prompt": "correlator_analysis optional choices. Reply none."},
+            },
+            {"action": "call_tool", "tool_name": "build_quick_full_candidates", "args": {}, "reason": "Build candidates after stage choices."},
+            {"action": "propose_plan", "reason": "Ready.", "args": {"summary": "Ready after rejecting malformed question."}},
+        ]
+    )
+
+    def fake_request_llm_text(**kwargs):
+        del kwargs
+        return json.dumps(next(actions))
+
+    monkeypatch.setattr("lamet_agent.planning.request_llm_text", fake_request_llm_text)
+    outputs: list[str] = []
+    answers = iter(["none", "none", "a"])
+
+    result = run_interactive_plan(
+        manifest,
+        backend="api",
+        provider="deepseek",
+        model_name="deepseek-chat",
+        api_key="test",
+        input_func=lambda prompt: next(answers),
+        output_func=outputs.append,
+    )
+
+    assert result is not None
+    assert "Planner needs user input." not in "\n".join(outputs)
+    assert (root / "artifacts" / "plan_manifests" / "draft.full.json").is_file()
+
+
+def test_plan_applies_manifest_path_user_answer_without_llm_patch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    h5py = pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    with h5py.File(data_dir / "c2.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/PX0PY0PZ0", data=np.ones((5, 3)))
+    with h5py.File(data_dir / "c3.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", data=np.ones((4, 3)))
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "stages": ["correlator_analysis"],
+        },
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "c2",
+                    "correlator_type": "2pt",
+                    "data_path": "data/c2.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                },
+                {
+                    "correlator_id": "c3",
+                    "correlator_type": "3pt",
+                    "data_path": "data/c3.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                    "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+                    "bT": [0],
+                    "bz": [0],
+                    "tsep": [3],
+                },
+            ],
+            "artifacts": [],
+            "kernels": [],
+        },
+        "stages": {"correlator_analysis": {"defaults": {}, "jobs": [{"id": "ca", "correlator_ids": ["c2", "c3"], "params": {"momentum": "PX0PY0PZ0"}}]}},
+    }
+    manifest = tmp_path / "draft.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    actions = iter(
+        [
+            {
+                "action": "request_user_input",
+                "reason": "Need the required random seed.",
+                "args": {"question_id": "random_seed", "prompt": "metadata.random_seed is required. Enter an integer seed."},
+            },
+            {"action": "call_tool", "tool_name": "plan_correlator_h5_conversions", "args": {}, "reason": "Plan conversions."},
+            {"action": "call_tool", "tool_name": "inspect_correlator_h5_files", "args": {}, "reason": "Inspect HDF5."},
+            {"action": "call_tool", "tool_name": "build_quick_full_candidates", "args": {}, "reason": "Build candidates."},
+            {
+                "action": "request_user_input",
+                "reason": "Confirm whether to add downstream stages.",
+                "args": {"question_id": "stage.add_remaining", "prompt": "Add extra downstream stages?"},
+            },
+            {"action": "call_tool", "tool_name": "build_quick_full_candidates", "args": {}, "reason": "Build candidates after stage preference."},
+            {
+                "action": "request_user_input",
+                "reason": "Confirm optional correlator_analysis choices.",
+                "args": {"question_id": "stage_optional.correlator_analysis", "prompt": "correlator_analysis optional choices. Reply none."},
+            },
+            {"action": "call_tool", "tool_name": "build_quick_full_candidates", "args": {}, "reason": "Build candidates after stage choices."},
+            {"action": "call_tool", "tool_name": "build_quick_full_candidates", "args": {}, "reason": "Build candidates after optional choices."},
+            {"action": "propose_plan", "reason": "Ready.", "args": {"summary": "Ready after user seed answer."}},
+        ]
+    )
+
+    def fake_request_llm_text(**kwargs):
+        del kwargs
+        return json.dumps(next(actions))
+
+    answers = iter(["1999", "no", "none", "a"])
+    monkeypatch.setattr("lamet_agent.planning.request_llm_text", fake_request_llm_text)
+
+    result = run_interactive_plan(
+        manifest,
+        backend="api",
+        provider="deepseek",
+        model_name="deepseek-chat",
+        api_key="test",
+        input_func=lambda prompt: next(answers),
+        output_func=lambda text: None,
+    )
+
+    assert result is not None
+    full = json.loads((root / "artifacts" / "plan_manifests" / "draft.full.json").read_text(encoding="utf-8"))
+    assert full["metadata"]["random_seed"] == 1999
+
+
+def test_cli_plan_revision_expands_fit_window_search(tmp_path: Path) -> None:
+    h5py = pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    with h5py.File(data_dir / "c2.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/PX0PY0PZ0", data=np.ones((5, 3)))
+    with h5py.File(data_dir / "c3.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", data=np.ones((4, 3)))
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "random_seed": 1984,
+            "stages": ["correlator_analysis"],
+        },
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "c2",
+                    "correlator_type": "2pt",
+                    "data_path": "data/c2.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                },
+                {
+                    "correlator_id": "c3",
+                    "correlator_type": "3pt",
+                    "data_path": "data/c3.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                    "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+                    "bT": [0],
+                    "bz": [0],
+                    "tsep": [3],
+                },
+            ],
+            "artifacts": [],
+            "kernels": [],
+        },
+        "stages": {
+            "correlator_analysis": {
+                "defaults": {
+                    "pt2_windows": [{"tmin": 3, "tmax": 12}, {"tmin": 4, "tmax": 12}],
+                    "pt3_tau_cuts": [2, 3],
+                },
+                "jobs": [{"id": "ca", "correlator_ids": ["c2", "c3"], "params": {"momentum": "PX0PY0PZ0"}}],
+            }
+        },
+    }
+    manifest = tmp_path / "draft.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["plan", str(manifest), "--backend", "mock"], input="2\nnone\nnone\nr\nPlease broaden the fit window search.\n2\na\n")
+
+    assert result.exit_code == 0, result.output
+    assert "LLM expanded the fit-window search" in result.output
+    assert "stages.correlator_analysis.defaults.pt2_windows" in result.output
+    full_path = root / "artifacts" / "plan_manifests" / "draft.full.json"
+    full = json.loads(full_path.read_text(encoding="utf-8"))
+    defaults = full["stages"]["correlator_analysis"]["defaults"]
+    assert {"tmin": 2, "tmax": 12} in defaults["pt2_windows"]
+    assert {"tmin": 6, "tmax": 12} in defaults["pt2_windows"]
+    assert defaults["pt3_tau_cuts"] == [2, 3, 4, 5]
+    assert "model_average" not in defaults
+    assert "sample_error_mode" not in full["metadata"]
+    assert "Quick manifest changes:" in result.output
+    assert "Full manifest changes:" in result.output
+
+
+def test_cli_plan_revision_can_revert_tau_cuts_after_broadening(tmp_path: Path) -> None:
+    h5py = pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    with h5py.File(data_dir / "c2.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/PX0PY0PZ0", data=np.ones((5, 3)))
+    with h5py.File(data_dir / "c3.h5", "w") as h5f:
+        h5f.create_dataset("g5/g5/gT_nonlocal/PX0PY0PZ0/tsep3/bT0/bz0", data=np.ones((4, 3)))
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "random_seed": 1984,
+            "stages": ["correlator_analysis"],
+        },
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "c2",
+                    "correlator_type": "2pt",
+                    "data_path": "data/c2.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                },
+                {
+                    "correlator_id": "c3",
+                    "correlator_type": "3pt",
+                    "data_path": "data/c3.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                    "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+                    "bT": [0],
+                    "bz": [0],
+                    "tsep": [3],
+                },
+            ],
+            "artifacts": [],
+            "kernels": [],
+        },
+        "stages": {
+            "correlator_analysis": {
+                "defaults": {
+                    "pt2_windows": [{"tmin": 3, "tmax": 12}, {"tmin": 4, "tmax": 12}],
+                    "pt3_tau_cuts": [2, 3],
+                },
+                "jobs": [{"id": "ca", "correlator_ids": ["c2", "c3"], "params": {"momentum": "PX0PY0PZ0"}}],
+            }
+        },
+    }
+    manifest = tmp_path / "draft.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["plan", str(manifest), "--backend", "mock"],
+        input="2\nnone\nnone\nr\nPlease broaden the fit window search.\nr\nPlease revert the tau cuts.\na\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "LLM reverted the tau-cut search" in result.output
+    full = json.loads((root / "artifacts" / "plan_manifests" / "draft.full.json").read_text(encoding="utf-8"))
+    defaults = full["stages"]["correlator_analysis"]["defaults"]
+    assert defaults["pt3_tau_cuts"] == [2, 3]
+    assert {"tmin": 2, "tmax": 12} in defaults["pt2_windows"]
+
+
+def test_manifest_json_patch_add_replace_remove_object_and_list_values() -> None:
+    payload = {
+        "metadata": {"stages": ["correlator_analysis"]},
+        "inputs": {"artifacts": [{"id": "old"}]},
+        "stages": {"correlator_analysis": {"defaults": {}, "jobs": []}},
+    }
+
+    patched, edits = apply_manifest_json_patches(
+        payload,
+        [
+            {"op": "add", "path": "/metadata/random_seed", "value": 1984},
+            {"op": "add", "path": "/metadata/stages/-", "value": "renormalization"},
+            {"op": "replace", "path": "/inputs/artifacts/0/id", "value": "new"},
+            {"op": "remove", "path": "/stages/correlator_analysis/defaults"},
+        ],
+    )
+
+    assert patched["metadata"]["random_seed"] == 1984
+    assert patched["metadata"]["stages"] == ["correlator_analysis", "renormalization"]
+    assert patched["inputs"]["artifacts"][0]["id"] == "new"
+    assert "defaults" not in patched["stages"]["correlator_analysis"]
+    assert len(edits) == 4
+
+
+def test_manifest_json_patch_accepts_dotted_manifest_paths() -> None:
+    payload = {"metadata": {"stages": ["correlator_analysis"]}, "inputs": {}, "stages": {}}
+
+    patched, edits = apply_manifest_json_patches(
+        payload,
+        [{"op": "add", "path": "metadata.random_seed", "value": 1990}],
+    )
+
+    assert patched["metadata"]["random_seed"] == 1990
+    assert edits[0]["path"] == "metadata.random_seed"
+
+
+def test_manifest_json_patch_rejects_unsupported_or_unsafe_paths() -> None:
+    payload = {"metadata": {}, "inputs": {}, "stages": {}}
+
+    with pytest.raises(ValueError, match="Unsupported JSON Patch op"):
+        apply_manifest_json_patches(payload, [{"op": "copy", "path": "/metadata/run_id", "value": "demo"}])
+    with pytest.raises(ValueError, match="may only modify"):
+        apply_manifest_json_patches(payload, [{"op": "add", "path": "/outside/value", "value": "demo"}])
+    with pytest.raises(ValueError, match="Cannot replace missing"):
+        apply_manifest_json_patches(payload, [{"op": "replace", "path": "/metadata/run_id", "value": "demo"}])
+
+
+def test_validate_candidate_manifest_rejects_duplicate_job_ids(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_kernel(root)
+    data_dir = root / "data"
+    data_dir.mkdir()
+    (data_dir / "c2.h5").write_text("placeholder", encoding="utf-8")
+    payload = _minimal_payload(root)
+    patched, _ = apply_manifest_json_patches(
+        payload,
+        [{"op": "replace", "path": "/stages/renormalization/jobs/0/id", "value": "ca"}],
+    )
+
+    ok, issues = validate_candidate_payload(tmp_path / "draft.json", patched)
+
+    assert not ok
+    assert any("globally unique" in issue.message for issue in issues)
+
+
+def test_planning_patch_tool_rejects_invalid_candidate_without_mutating_state(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_kernel(root)
+    data_dir = root / "data"
+    data_dir.mkdir()
+    (data_dir / "c2.h5").write_text("placeholder", encoding="utf-8")
+    payload = _minimal_payload(root)
+    state = PlanAgentState(
+        manifest_path=tmp_path / "draft.json",
+        manifest_text=json.dumps(payload),
+        original_payload=payload,
+        candidate_payload=json.loads(json.dumps(payload)),
+    )
+
+    observation = _run_planning_tool(
+        state,
+        "apply_manifest_patch_to_candidate",
+        {"patches": [{"op": "replace", "path": "/stages/renormalization/jobs/0/id", "value": "ca"}]},
+    )
+
+    assert observation["ok"] is False
+    assert state.candidate_payload["stages"]["renormalization"]["jobs"][0]["id"] == "rn"
+
+
+def test_planning_patch_tool_rejects_plan_only_conversion_fields(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, json.loads(json.dumps(payload)))
+
+    observation = _run_planning_tool(
+        state,
+        "apply_manifest_patch_to_candidate",
+        {"patches": [{"op": "add", "path": "/inputs/correlators/0/plan_sources", "value": {"two_point": "c2.npy"}}]},
+    )
+
+    assert observation["ok"] is False
+    assert "plan-only" in observation["error"]
+    assert "plan_sources" not in state.candidate_payload["inputs"]["correlators"][0]
+
+
+def test_correlator_manifest_answer_invalidates_planned_conversions(tmp_path: Path) -> None:
+    payload = _minimal_payload(tmp_path)
+    state = PlanAgentState(tmp_path / "draft.json", "", payload, copy.deepcopy(payload))
+    state.conversions = [object()]  # type: ignore[list-item]
+
+    result = _apply_user_answer_to_candidate(state, "inputs.correlators.0.source_operator", "g5")
+
+    assert result["event"] == "user_answer_applied"
+    assert state.conversions == []
+
+
+def test_cli_plan_mock_revision_adds_renormalization_stage_from_english_instruction(tmp_path: Path) -> None:
+    h5py = pytest.importorskip("h5py")
+    root = tmp_path / "repo"
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    for name in ("p0_2pt.h5", "p0_3pt.h5", "p5_2pt.h5", "p5_3pt.h5"):
+        with h5py.File(data_dir / name, "w") as h5f:
+            if "2pt" in name:
+                momentum = "PX0PY0PZ0" if name.startswith("p0") else "PX5PY0PZ0"
+                h5f.create_dataset(f"g5/g5/{momentum}", data=np.ones((5, 3)))
+            else:
+                momentum = "PX0PY0PZ0" if name.startswith("p0") else "PX5PY0PZ0"
+                h5f.create_dataset(f"g5/g5/gT_nonlocal/{momentum}/tsep3/bT0/bz0", data=np.ones((4, 3)))
+    payload = {
+        "metadata": {
+            "run_id": "demo",
+            "root_directory": str(root),
+            "artifacts_directory": "artifacts",
+            "target_observable": "pdf",
+            "parton": "quark",
+            "resample_mode": "jk",
+            "random_seed": 1984,
+            "stages": ["correlator_analysis"],
+        },
+        "inputs": {
+            "correlators": [
+                {
+                    "correlator_id": "p0_2pt",
+                    "correlator_type": "2pt",
+                    "data_path": "data/p0_2pt.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                },
+                {
+                    "correlator_id": "p0_3pt",
+                    "correlator_type": "3pt",
+                    "data_path": "data/p0_3pt.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX0PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                    "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+                    "bT": [0],
+                    "bz": [0],
+                    "tsep": [3],
+                },
+                {
+                    "correlator_id": "p5_2pt",
+                    "correlator_type": "2pt",
+                    "data_path": "data/p5_2pt.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX5PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                },
+                {
+                    "correlator_id": "p5_3pt",
+                    "correlator_type": "3pt",
+                    "data_path": "data/p5_3pt.h5",
+                    "ensemble": "E",
+                    "hadron": "pion",
+                    "gfix": "CG",
+                    "source_operator": "g5", "sink_operator": "g5", "volume": "S16T5",
+                    "momentum": ["PX5PY0PZ0"],
+                    "lattice_spacing_fm": 0.1,
+
+
+                    "current_operator": "gT_nonlocal", "bz_direction": "Z",
+
+
+                    "bT": [0],
+                    "bz": [0],
+                    "tsep": [3],
+                },
+            ],
+            "artifacts": [],
+            "kernels": [],
+        },
+        "stages": {
+            "correlator_analysis": {
+                "defaults": {"fit_scope": ["3pt_ratio"]},
+                "jobs": [
+                    {"id": "ca_p0_fh", "correlator_ids": ["p0_2pt", "p0_3pt"], "params": {"momentum": "PX0PY0PZ0"}},
+                    {"id": "ca_p5_fh", "correlator_ids": ["p5_2pt", "p5_3pt"], "params": {"momentum": "PX5PY0PZ0"}},
+                ],
+            }
+        },
+    }
+    manifest = tmp_path / "draft.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["plan", str(manifest), "--backend", "mock"], input="2\nnone\nnone\nr\nPlease add the renormalization stage.\nnone\nnone\na\n")
+
+    assert result.exit_code == 0, result.output
+    full = json.loads((root / "artifacts" / "plan_manifests" / "draft.full.json").read_text(encoding="utf-8"))
+    assert full["metadata"]["stages"] == ["correlator_analysis", "renormalization"]
+    assert full["stages"]["renormalization"]["defaults"]["scheme"] == "hybrid"
+    assert full["stages"]["renormalization"]["defaults"]["strategy"] == "external_denominator"
+    assert full["stages"]["renormalization"]["jobs"] == [
+        {"id": "rn_p5_fh", "inputs": {"target": "ca_p5_fh", "denominator": "ca_p0_fh"}}
+    ]
+
+
+def test_text_plan_drafts_2pt_current_composition_without_chinese_json(tmp_path: Path) -> None:
+    from lamet_agent.planning.core import load_relaxed_manifest
+
+    (tmp_path / "c2.npy").write_bytes(b"")
+    (tmp_path / "current.npz").write_bytes(b"")
+    request = tmp_path / "request.txt"
+    chinese_prefix = "\u8bf7\u7528"
+    request.write_text(
+        f"{chinese_prefix} c2.npy and current.npz to compose a nonlocal disconnected 3pt for pion DA.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(request)
+    correlators = payload["inputs"]["correlators"]
+    assert [item["correlator_type"] for item in correlators] == ["2pt", "3pt"]
+    assert correlators[1]["correlator_id"] == "planned_3pt_from_current"
+    assert correlators[1]["plan_sources"]["two_point"] == "c2.npy"
+    assert correlators[1]["plan_sources"]["current"] == "current.npz"
+    dumped = json.dumps(payload, ensure_ascii=False)
+    assert not any("\u4e00" <= char <= "\u9fff" for char in dumped)
+
+
+def test_text_plan_preserves_explicit_gpd_operators(tmp_path: Path) -> None:
+    from lamet_agent.planning.core import load_relaxed_manifest
+
+    np.save(tmp_path / "gpd_PX0PY0PZ0_2pt.npy", np.ones((64, 4)))
+    np.save(tmp_path / "gpd_PX1PY0PZ0_2pt.npy", np.ones((64, 4)))
+    np.save(tmp_path / "gpd_PX1PY0PZ0_3pt_ts8.npy", np.ones((2, 9, 4)))
+    request = tmp_path / "gpd_nonforward.txt"
+    request.write_text(
+        "Build a pion GPD non-forward correlator_analysis manifest. "
+        "Use source operator g5, sink operator g5, current operator gt. "
+        "Files: gpd_PX0PY0PZ0_2pt.npy, gpd_PX1PY0PZ0_2pt.npy, gpd_PX1PY0PZ0_3pt_ts8.npy.",
+        encoding="utf-8",
+    )
+
+    payload, _text = load_relaxed_manifest(request)
+    correlators = payload["inputs"]["correlators"]
+    assert {item["source_operator"] for item in correlators} == {"g5"}
+    assert {item["sink_operator"] for item in correlators} == {"g5"}
+    assert [item["current_operator"] for item in correlators if item["correlator_type"] == "3pt"] == ["gt"]
+    conversions = plan_correlator_h5_conversions(request, payload)
+    targets = [dataset["target"] for mapping in conversions for dataset in mapping.datasets]
+    assert "g5/g5/gt/PX1PY0PZ0/tsep8/bT0/bz0" in targets

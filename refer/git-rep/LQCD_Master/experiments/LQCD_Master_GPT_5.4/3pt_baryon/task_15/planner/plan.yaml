@@ -1,0 +1,182 @@
+task:
+  name: xi_minus_to_lambda_like_uds_axial_3pt
+  description: Compute the Xi- -> user-specified Lambda-like baryon three-point correlation function with the axial current J_x^A = \bar{u} gamma_x gamma_5 s at zero momentum, using the literal source operator epsilon^{abc} (d^{Ta} C gamma_5 s^b) s^c and the literal sink operator epsilon^{abc} (u^{Ta} C gamma_5 d^b) s^c, a point source at [0, 0, 0, 0], positive-parity projector Tmat = (I + gamma_t) / 2, source-sink separation tseq = 8, and stout-smeared gauge links for all inversions; do not compute any 2pt correlators and save the final 3pt data to a plain txt file in the run directory. Because the sink operator is the single uds component explicitly requested by the task, this plan treats the result as an operator-level Lambda-like uds correlator rather than a fully flavor-projected physical Lambda matrix element.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: xi_lambda_like_uds_axial_x_3pt
+      type: baryon_3pt
+      name: Xi-_to_user_specified_uds_sink_axial_current_x_component
+      current_operator: \bar{u} gamma_x gamma_5 s
+      transition: dss -> uds
+      momentum_transfer: [0, 0, 0]
+      projector: (I + gamma_t) / 2
+      tseq: 8
+      notes: This observable follows the literal source and sink operators provided in the task. It is not advertised as an isospin-clean physical Lambda matrix element because the requested sink operator is a single uds flavor component rather than the full Lambda flavor combination.
+
+  hadrons:
+    - id: xi_minus_src
+      name: Xi-
+      type: baryon
+      flavor: dss
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (d^{Ta} C gamma_5 s^b) s^c
+      subtype: octet_baryon_source
+    - id: lambda_like_uds_snk
+      name: Lambda_like_uds_component
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} C gamma_5 d^b) s^c
+      subtype: user_specified_local_uds_sink_component
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator is reused for both u and d by isospin symmetry. In this channel it supplies the source d line, the sink d spectator line, and the sequential solve for the current-created u quark.
+      sink:
+        id: sink_point_forward_light
+        type: point
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward strange propagator is used for the sink strange spectator and for both strange lines in the Xi- source before the s -> u axial transition. This keeps the plan consistent with the provided ensemble block; because the cfg-path naming encodes ms=-0.2400 while the valence strange mass here is -0.2356, the run should be documented as partially quenched relative to the path label unless the registry convention is known to differ.
+      sink:
+        id: sink_point_forward_strange
+        type: point
+
+measurement:
+  correlators:
+    - id: c3_xi_to_lambda_like_uds_axial_x_tseq8
+      type: baryon_3pt
+      propagator: prop_l_point
+      observable: xi_lambda_like_uds_axial_x_3pt
+      source_hadron: xi_minus_src
+      sink_hadron: lambda_like_uds_snk
+      forward_propagators:
+        - prop_l_point
+        - prop_s_point
+      sequential_source:
+        method: fixed_sink_sequential_source
+        sequential_quark_flavor: light
+        tseq: 8
+        sink_momentum: [0, 0, 0]
+        sink_projector: (I + gamma_t) / 2
+        sink_block_inputs:
+          - prop_l_point
+          - prop_s_point
+        code_generation_inputs:
+          src_quarks: [d, s, s]
+          snk_quarks: [u, d, s]
+          current_quark: s
+          current_antiquark: u
+          current_gamma: gamma_x@gamma_5
+          projector: P_plus
+          diquark_gamma_source: Cg5
+          diquark_gamma_sink: Cg5
+          c_gamma_source: I4
+          c_gamma_sink: I4
+        notes: Build the sink block for the literal uds sink operator using the sink d spectator from prop_l_point and the sink s spectator from prop_s_point, with the u line supplied by the sequential solve. Apply the first gamma_5 dagger to the sink block, create the sequential source at t = 8, solve a light sequential propagator, apply the second gamma_5 dagger, and finally contract with Gamma_cur = gamma_x @ gamma_5 and the forward strange propagator. The flavor flow must be enforced explicitly as src=(d,s,s), snk=(u,d,s), current_quark=s, current_antiquark=u.
+      wick_structure: Two connected topologies contribute because the axial current can annihilate either of the two strange quarks in the Xi- source. Both connected topologies must be included in the baryon_3pt construction; there is no disconnected contribution for the flavor-changing current \bar{u} gamma_x gamma_5 s.
+      insertion_time_window:
+        start: 1
+        stop: 7
+      momentum_phase: unity
+      compute_2pt: false
+      statistics_note: This plan uses one configuration and one point source only, so the result is suitable as a code-validation or smoke-test measurement, not as a physics-quality dataset.
+
+output:
+  format: other
+  filename: xi_to_lambda_like_uds_axial_x_tseq8_cfg10000.txt
+  location: run_directory
+  metadata: false
+  layout:
+    columns:
+      - t_seq
+      - t_ins
+      - real
+      - imag
+    header: false
+    root_rank_only: true
+
+extras:
+  - single flat PyQUDA production script
+  - use generate_einsum once for baryon_3pt contraction code generation
+  - explicit flavor-flow check for src dss, snk uds, current s->u
+  - one-config one-source run is validation only
+  - rank-0 plain txt output without header
+
+freeform_plan: |
+  Not used because this is a standard baryon three-point correlator task.

@@ -1,0 +1,9 @@
+This plan computes the requested object as a single local nine-quark `multi_hadron_2pt` correlator, not as a product of three separate baryon correlators. The source and sink are each defined as one composite operator `O = NPN` with all three baryon blocks evaluated at the same spacetime point, and the zero-momentum projection is applied only after assembling the full composite operator.
+
+The neutron and proton building blocks remain the single-term octet-like operators specified in the original task, but `P_plus = (1 + gamma4)/2` is inserted on each baryon block before forming the three-baryon operator. This enforces the required per-baryon block projection and avoids an incorrect projector acting only on the final nine-quark object.
+
+To make the contraction unambiguous, the measurement now explicitly requires one fully combined 9-quark Wick contraction with all inter-block exchange terms included across the three `u` fields and six `d` fields. That is the key physics correction: the executor is told to generate the full local 9-quark contraction, not a blockwise or product-like approximation.
+
+The propagator setup stays minimal and consistent with the operator content: one light point-source propagator from `[0,0,0,0]`, reused for both `u` and `d` by isospin symmetry. The inversions are performed with 1-step stout-smeared links using the requested stout parameters, and the output is written as a plain-text file in the run directory.
+
+The run geometry requested by the task is kept under `task.runtime` as `8` MPI ranks with `grid_size = [1,1,2,4]`. The ensemble block is preserved exactly as supplied, and the plan explicitly marks those ensemble process-grid entries as archive metadata rather than the measurement launch geometry. The solver block also flags that the quoted light-quark mass and clover coefficient must correspond to the tuned stout-smeared valence action; if not, they must be replaced before production.

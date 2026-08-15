@@ -1,0 +1,209 @@
+task:
+  name: B_to_K_vector_3pt_point_src_debug
+  description: Compute the connected B- -> K- meson three-point correlation function for the local current J_x = bar(s) gamma_x b using point-source propagators from [0,0,0,0], zero spatial momentum at source and sink, fixed source-sink separation tseq=8, and stout-smeared gauge links for all inversions. Do not produce or save any 2pt correlators. This setup is to be treated as a single-configuration code-validation/debug measurement rather than a controlled physical B-physics production calculation, because the heavy quark is implemented with the ensemble clover operator and bare mass parameter listed in the ensemble block.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: obs_B_to_K_vec_x_3pt
+      type: meson_3pt
+      name: B-_to_K-_vector_current_gamma_x_three_point_connected
+
+  hadrons:
+    - id: hadron_Bminus
+      name: B-
+      type: meson
+      flavor: anti-u b
+      momentum: [0, 0, 0]
+      interpolating_operator: bar(u) gamma_5 b
+      subtype: pseudoscalar_heavy_light
+    - id: hadron_Kminus
+      name: K-
+      type: meson
+      flavor: anti-u s
+      momentum: [0, 0, 0]
+      interpolating_operator: bar(u) gamma_5 s
+      subtype: pseudoscalar_light_strange
+
+  propagators:
+    - id: prop_l_spec
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light_point
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator S_l(x,0) from the common point source. This single propagator is reused as the spectator anti-u line for both source and sink contractions via gamma5-hermiticity. Use the ensemble clover operator on the stout-smeared links.
+      sink:
+        id: sink_point_l
+        type: point
+
+    - id: prop_b_fwd
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_bottom_point
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 20000
+        notes: Forward heavy propagator S_b(x,0) from the B source. This is implemented with the same clover kernel and user-specified mass parameter from the ensemble block; therefore the result is suitable only for code validation/debugging and not as a controlled physical b-quark calculation. Require residual and norm checks on every solve.
+      sink:
+        id: sink_point_b
+        type: point
+
+    - id: prop_s_seq_K
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_seq_K
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential strange propagator for a fixed K- sink at tseq=8 and p_f=(0,0,0). Construct the sink source from the pseudoscalar sink gamma5 acting on the spectator light propagator at the sink, in the standard meson fixed-sink construction: for sink point x=(vec(x),tseq), build eta_seq(x;0) proportional to e^{-ip_f.x} gamma_5 S_l(0,x) = e^{-ip_f.x} gamma_5 gamma_5 S_l^dagger(x,0) gamma_5 = e^{-ip_f.x} S_l^dagger(x,0) gamma_5, summed over sink spatial sites at t=8. Solve D_s G_s_seq = eta_seq. The open source index is the heavy-current index to be closed later with gamma_x and the forward b propagator.
+      sink:
+        id: sink_seq_K
+        type: other
+
+measurement:
+  correlators:
+    - id: corr_B_to_K_vec_x_tseq8
+      type: meson_3pt
+      propagator: prop_s_seq_K
+      observable: obs_B_to_K_vec_x_3pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - plain_text_txt_output
+  - no_header
+  - no_2pt_measurement
+  - tseq_8_only
+  - zero_momentum_only
+  - single_cfg_debug_run
+
+freeform_plan: |
+  Not used because this is a standard hadronic three-point correlator task.
+
+  Physics definition and contraction to be implemented:
+
+  Source operator:
+    O_B^dagger(0) = bar(b)(0) gamma_5 u(0)
+  Sink operator:
+    O_K(x) = bar(u)(x) gamma_5 s(x)
+  Current:
+    J_x(z) = bar(s)(z) gamma_x b(z)
+
+  With x=(vec(x),t_f), z=(vec(z),tau), t_f=tseq=8, p_i=p_f=0, the connected 3pt is
+
+    C3(tau) = sum_{vec(x),vec(z)} < O_K(x) J_x(z) O_B^dagger(0) >
+            = - sum_{vec(x),vec(z)} Tr[ gamma_5 S_s(x,z) gamma_x S_b(z,0) gamma_5 S_l(0,x) ]
+
+  where S_l is the light spectator propagator, S_b the forward heavy propagator, and S_s the strange line from the current to the sink. Using gamma5-hermiticity for the spectator,
+
+    S_l(0,x) = gamma_5 S_l^dagger(x,0) gamma_5
+
+  so the correlator may be written equivalently as
+
+    C3(tau) = - sum_{vec(x),vec(z)} Tr[ gamma_5 S_s(x,z) gamma_x S_b(z,0) S_l^dagger(x,0) gamma_5 ]
+
+  Fixed-sink sequential-source choice:
+    Because the sink meson is K- = bar(u) s with gamma_5 at zero momentum and fixed t_f=8, the natural sequential leg is the strange quark line running from the current insertion to the sink. Define the sink block
+
+      B(x;0) = sum_{vec(x), t_f=8} e^{-ip_f.x} gamma_5 S_l(0,x)
+
+    and solve the strange sequential inversion with this sink source on the sink time slice. The resulting sequential propagator represents the contraction of the strange line with the K sink and the spectator light line. The final 3pt for each insertion time tau is then obtained by summing over vec(z) at fixed tau and contracting the sequential strange propagator with gamma_x and the forward heavy propagator.
+
+  Measurement details:
+    1. Load cfg 10000.
+    2. Apply stout smearing to the gauge links used in all inversions with n_steps=1, rho=0.125, ndim=4.
+    3. Invert the light propagator from source [0,0,0,0].
+    4. Invert the heavy propagator from the same source with the ensemble-listed bottom mass parameter.
+    5. Build the zero-momentum K sink sequential source on time slice t_f=8 using gamma_5 and the light spectator propagator.
+    6. Invert for the strange sequential propagator.
+    7. For each integer insertion time tau in the strict open interval 0 < tau < 8, i.e. tau = 1,2,3,4,5,6,7, contract the sequential strange propagator with gamma_x and the forward heavy propagator, summing over spatial sites vec(z).
+    8. Do not evaluate tau=0 or tau=8 to avoid source/sink contact terms.
+
+  Kinematic note:
+    The user-requested kinematics p_i=p_f=0 imply q=0. For pseudoscalar-to-pseudoscalar transitions in the continuum, the spatial vector-current matrix element vanishes at zero three-momentum by rotational symmetry, so this setup is not suitable for physical B->K form-factor extraction. It is retained exactly as requested only as a code-path/debug test of the 3pt contraction.
+
+  Validation allowed despite no 2pt production:
+    - Check solver residuals and iteration counts for all three inversions.
+    - Check gamma5-hermiticity numerically on sampled spin-color components of the light propagator.
+    - Check that the correlator is computed only on tau=1..7.
+    - Check that the resulting correlator is numerically consistent with near-zero values within noise for the zero-momentum spatial-current setup; any large signal indicates a likely implementation error.
+    - These checks are internal only and are not to be saved as separate correlator products.
+
+  Output convention:
+    Save exactly one txt file in the run directory with no header and no extra text. Each line must contain one tau slice in ascending order with the deterministic column layout:
+
+      tau  Re[C3(tau)]  Im[C3(tau)]
+
+    so the file has 7 rows corresponding to tau=1..7. No additional text is allowed in the payload file. If auxiliary run metadata are needed by the workflow manager, they must be kept outside this txt payload.

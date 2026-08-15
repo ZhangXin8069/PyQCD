@@ -1,0 +1,226 @@
+task:
+  name: Lambda_to_Lambda_axial_3pt
+  description: >-
+    Three-point correlation function for Lambda -> Lambda transition with
+    axial current insertion J = bar{s} gamma_1 gamma_5 s.
+    COMPUTES ONLY THE CONNECTED DIAGRAM. The disconnected s-quark loop
+    contribution is not computed — this result does not represent the full
+    matrix element <Lambda | bar{s} gamma_1 gamma_5 s | Lambda>.
+    Point source at [0,0,0,0], zero momentum, sink at t_seq=8,
+    positive-parity projector T = (1+gamma_4)/2.
+    All propagators inverted on stout-smeared gauge links (n_step=1, rho=0.125, ndim=4).
+    Single configuration (cfg 10000). No 2pt function computed.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_axial_matrix_element
+      type: baryon_3pt
+      name: "Lambda to Lambda axial current matrix element (CONNECTED ONLY)"
+      notes: >-
+        Connected contribution to <Lambda | bar{s} gamma_1 gamma_5 s | Lambda>.
+        The current is flavor-diagonal (strange-to-strange). In the full theory
+        both connected and disconnected diagrams contribute. The disconnected
+        s-quark loop diagram (requiring stochastic volume-source inversion and
+        a loop estimator Tr[gamma_1 gamma_5 S_s(z,z)]) is NOT computed here.
+        Contact terms contaminate tau=0 and tau=t_seq=8; these must be excluded
+        from any subsequent physics analysis.
+
+  hadrons:
+    - id: lambda_src
+      name: Lambda_source
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^{b}) s^{c}"
+      position: [0, 0, 0, 0]
+      notes: >-
+        Creation (Dirac-conjugate) operator at t=0.
+        Full form: bar{O}_Lambda = epsilon^{def} bar{s}^f (bar{d}^e gamma_4 gamma_5 gamma_4 C bar{u}^{Td}).
+        In the DeGrand-Rossi basis, gamma_4 gamma_5 gamma_4 = -gamma_5, giving
+        gamma_4 gamma_5 gamma_4 C = -gamma_5 C. After index transposition in the
+        Wick contraction, (-gamma_5 C)^T = C gamma_5 (using C^T = -C, gamma_5^T = gamma_5).
+        Thus the source-side spin structure simplifies to (C gamma_5), matching
+        the sink-side interpolating operator. The generate_einsum call must supply
+        the source operator in its Dirac-conjugate form to obtain the correct sign.
+
+    - id: lambda_snk
+      name: Lambda_sink
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^{b}) s^{c}"
+      projector: "(1 + gamma_4) / 2"
+      position: [0, 0, 0, 8]
+      notes: >-
+        Annihilation operator at t=8 with positive-parity projector.
+        The open strange-quark index carries the projector T = (1+gamma_4)/2.
+        This sink block is used to construct the sequential source via the
+        two-dagger convention.
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: "Multigrid solver with blocking [6,6,6,3] -> [4,4,4,6]."
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: "Multigrid solver with blocking [6,6,6,3] -> [4,4,4,6]."
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+        notes: >-
+          Sequential source built from the Lambda sink block at t=8 via the
+          two-dagger convention.
+          1. Construct sink block B(0) by contracting two prop_l lines with the
+             Lambda operator structure epsilon^{abc} (C gamma_5)_{\alpha\beta}
+             (C gamma_5)_{\alpha'\beta'} and applying the projector T=(1+gamma_4)/2
+             on the open strange index at the sink time t=8, then using
+             gamma_5-hermiticity to shift to t=0.
+          2. eta_seq(0) = gamma_5 B^dagger(0) gamma_5.
+          3. Solve D_s G_s_seq = eta_seq (strange-quark Dirac operator).
+          NOTE: This is a same-flavor sequential propagator (strange -> strange).
+          The generate_einsum tool's baryon_3pt mode must support the case where
+          the current quark flavor equals the sequential propagator flavor.
+          If baryon_3pt has only been validated for flavor-changing currents
+          (e.g., Lambda->p with u-quark sequential), cross-check the output
+          against a manual derivation on a small spin-color test before production.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_seq_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: "Same multigrid solver setup as the forward strange propagator."
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: lambda_3pt_axial_x
+      type: baryon_3pt
+      source_hadron: lambda_src
+      sink_hadron: lambda_snk
+      current: "bar{s} gamma_1 gamma_5 s"
+      forward_propagators:
+        - prop_l
+        - prop_s
+      sequential_propagator: prop_s_seq
+      sequential_source_hadron: lambda_snk
+      t_seq: 8
+      t_source: 0
+      projector: "(1 + gamma_4) / 2"
+      momentum_transfer: [0, 0, 0]
+      diagram_type: connected
+      notes: >-
+        Connected diagram: the strange current connects the source s-quark
+        (prop_s, forward) to the sink s-quark (prop_s_seq, sequential).
+        The contraction at each current insertion time tau is:
+        C_3(tau) = sum_z Tr[ G_s_seq(z, tau) gamma_1 gamma_5 S_s(z, tau) ]
+        where G_s_seq = prop_s_seq and S_s = prop_s.
+        
+        WARNING — Contact terms: at tau = 0 (current on source time slice)
+        and tau = t_seq = 8 (current on sink time slice), the three-point
+        function receives unphysical contact contributions that do not
+        correspond to the desired matrix element. Only tau in [1, 2, ..., 7]
+        should be used for any subsequent ratio-plot or fitting analysis.
+
+output:
+  format: txt
+  metadata: false
+  description: "Raw three-point correlator values for tau=0..8 (inclusive), one float per line, no header."
+
+extras:
+  - "CONNECTED DIAGRAM ONLY: the disconnected s-quark loop contribution is not computed. For the full matrix element <Lambda|bar{s} gamma_1 gamma_5 s|Lambda>, a disconnected measurement would be needed (stochastic Z_2/Z_4 volume source on the strange quark, plus a loop estimator Tr[gamma_1 gamma_5 S_s(z,z)])."
+  - "Single configuration (cfg 10000): the result is one noisy data point per tau with no statistical error estimate. Meaningful physics interpretation requires averaging over many configurations."
+  - "Contact terms at tau=0 and tau=8: these values are contaminated by unphysical contact contributions and must be excluded from any subsequent effective-mass or ratio-plot extraction. Only tau in [1..7] is safe for analysis."
+  - "Same-flavor sequential source risk: Lambda->Lambda with bar{s}Gamma s requires a strange sequential propagator. If the generate_einsum baryon_3pt mode has only been validated for flavor-changing currents (e.g., Lambda->p with light sequential), manually cross-check the einsum structure on a small spin-color test before production."
+  - "Source operator gamma structure: the creation operator carries gamma_4 gamma_5 gamma_4 C, which after transposition simplifies to (C gamma_5). The generate_einsum call must receive the source operator in its Dirac-conjugate form."
+  - "No 2pt function computed (user explicitly requested 3pt only)."
+  - "Stout link smearing (1 step, rho=0.125, 4-dim) applied before all inversions."
+  - "Gamma convention: DeGrand-Rossi basis; gamma_x = gamma_1, gamma_t = gamma_4."
+  - "Output file: C3_axial_tau.txt in run directory, one float per line for tau=0..8."

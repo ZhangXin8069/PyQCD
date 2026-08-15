@@ -1,0 +1,65 @@
+The submitted test job failed during dynamic testing. Rewrite the implementation to fix the failing test run.
+
+Observed Slurm status:
+JobState=FAILED ExitCode=1:0
+
+Observed error:
+ValueError)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda_comm/__init__.py", line 51, in critical
+    raise category(msg)
+ValueError: Grid size [1, 1, 2, 4] must matches MPI size 4
+Traceback (most recent call last):
+  File "main.py", line 34, in <module>
+    core.init(grid_size, latt_size, backend="cupy", resource_path=resource_path)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda/__init__.py", line 142, in init
+    initGrid(grid_map, grid_size, latt_size)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda_comm/__init__.py", line 279, in initGrid
+    _MPI_LOGGER.critical(f"Grid size {grid_size} must matches MPI size {_MPI_SIZE}", ValueError)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda_comm/__init__.py", line 51, in critical
+    raise category(msg)
+ValueError: Grid size [1, 1, 2, 4] must matches MPI size 4
+PyQUDA CRITICAL: Grid size [1, 1, 2, 4] must matches MPI size 4
+ValueError: Grid size [1, 1, 2, 4] must matches MPI size 4
+Stack (most recent call last):
+  File "main.py", line 34, in <module>
+    core.init(grid_size, latt_size, backend="cupy", resource_path=resource_path)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda/__init__.py", line 142, in init
+    initGrid(grid_map, grid_size, latt_size)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda_comm/__init__.py", line 279, in initGrid
+    _MPI_LOGGER.critical(f"Grid size {grid_size} must matches MPI size {_MPI_SIZE}", ValueError)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda_comm/__init__.py", line 50, in critical
+    self.logger.critical(msg, exc_info=category(msg), stack_info=True)
+Traceback (most recent call last):
+  File "main.py", line 34, in <module>
+    core.init(grid_size, latt_size, backend="cupy", resource_path=resource_path)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda/__init__.py", line 142, in init
+    initGrid(grid_map, grid_size, latt_size)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda_comm/__init__.py", line 279, in initGrid
+    _MPI_LOGGER.critical(f"Grid size {grid_size} must matches MPI size {_MPI_SIZE}", ValueError)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda_comm/__init__.py", line 51, in critical
+    raise category(msg)
+ValueError: Grid size [1, 1, 2, 4] must matches MPI size 4
+Traceback (most recent call last):
+  File "main.py", line 34, in <module>
+    core.init(grid_size, latt_size, backend="cupy", resource_path=resource_path)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda/__init__.py", line 142, in init
+    initGrid(grid_map, grid_size, latt_size)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda_comm/__init__.py", line 279, in initGrid
+    _MPI_LOGGER.critical(f"Grid size {grid_size} must matches MPI size {_MPI_SIZE}", ValueError)
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/pyquda_comm/__init__.py", line 51, in critical
+    raise category(msg)
+ValueError: Grid size [1, 1, 2, 4] must matches MPI size 4
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+mpirun detected that one or more processes exited with non-zero status, thus causing
+the job to be terminated. The first process to do so was:
+
+  Process name: [[55554,1],1]
+  Exit code:    1
+--------------------------------------------------------------------------
+
+Observed output:
+PyQUDA INFO: Using default grid mapping

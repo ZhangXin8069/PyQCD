@@ -1,0 +1,151 @@
+task:
+  name: lambda_uds_operator_2pt_point_source_positive_parity
+  description: Compute the zero-momentum two-point correlator for the exact requested local uds baryon operator epsilon_{abc}(u^T_a C gamma_5 d_b)s_c on ensemble C24P29, using a point source at [0, 0, 0, 0], stout-smeared gauge links in the inversions with parameters n_steps=1, rho=0.125, ndim=4, and the positive-parity projector Tmat=(I+gamma_4)/2; write only the final correlator values to a plain txt file in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_uds_operator_2pt_pp
+      type: baryon_2pt
+      name: Positive-parity zero-momentum two-point function of the exact requested local uds operator
+
+  hadrons:
+    - id: lambda_uds_operator
+      name: Lambda-like uds local baryon operator
+      type: baryon
+      flavor: exact requested uds operator with light-light diquark Cg5; this plan computes that operator correlator directly and does not promote it to the full octet isospin-singlet Lambda interpolator
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon_{abc} (u^T_a C gamma_5 d_b) s_c
+      subtype: positive_parity_projected_local_uds_operator
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_stout
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the ensemble multigrid setup and anti-periodic temporal boundary condition; this single forward light propagator is reused for both u and d lines by isospin symmetry within the uds baryon contraction.
+      sink:
+        id: point_sink_l
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_stout
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Solve from the same point source as the light propagator so all three quark lines originate at one source point; this propagator supplies the strange leg in the combined uds contraction.
+      sink:
+        id: point_sink_s
+        type: point
+
+measurement:
+  correlators:
+    - id: lambda_uds_operator_2pt_measurement
+      type: baryon_2pt
+      propagator: prop_l
+      observable: lambda_uds_operator_2pt_pp
+      required_propagators:
+        - prop_l
+        - prop_s
+      hadron: lambda_uds_operator
+      momentum_projection:
+        sink_momentum: [0, 0, 0]
+        sink_spatial_sum: true
+      projector:
+        expression: (I + gamma_4) / 2
+        alias: Tmat
+      contraction:
+        baryon_operator:
+          flavor_order:
+            - u
+            - d
+            - s
+          diquark_gamma: Cg5
+          source_operator: epsilon_{abc} (u^T_a C gamma_5 d_b) s_c
+          sink_operator: epsilon_{abc} (u^T_a C gamma_5 d_b) s_c
+        codegen:
+          method: generate_einsum
+          arguments:
+            type: baryon_2pt
+            baryon: lambda_uds_operator
+            flavor_content:
+              - u
+              - d
+              - s
+            diquark_gamma: Cg5
+            projector: (I + gamma_4) / 2
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - save plain text only
+  - no header lines
+  - output file in run directory
+  - use Euclidean gamma_4 for time projector
+  - zero-momentum sink sum before writing
+
+freeform_plan: |
+  Not used because this is a standard baryon two-point correlator task.

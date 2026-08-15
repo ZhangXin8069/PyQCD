@@ -1,0 +1,224 @@
+task:
+  name: D0_to_Kstar_3pt
+  description: >
+    Compute the three-point correlation function for the D0 → K*- transition
+    via the (c → s) flavour-changing vector current.  The source hadron is the
+    D0 meson (c anti-u, J^P = 0^-).  The creation operator that appears in the
+    three-point correlator at the source is \bar{c} γ₅ u — the hermitian
+    conjugate of the standard pseudoscalar annihilation operator \bar{u} γ₅ c.
+    The sink hadron is the K*- meson (s anti-u, J^P = 1^-), annihilated with
+    a γ_x interpolating operator.  The transition current is \bar{s} γ_x c
+    (vector, spatial x-component).  A sequential-source method with the
+    two-dagger convention is used.  Stout-smeared gauge links (1 step,
+    rho = 0.125, ndim = 4) are applied to all Dirac inversions.  Only the 3pt
+    correlator is computed; no 2pt functions are evaluated.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: D0_to_Kstar_3pt
+      type: meson_3pt
+      name: "D0 → K*- three-point function via c→s vector current"
+
+  hadrons:
+    - id: D0_source
+      name: D0
+      type: meson
+      flavor: "c anti-u  (J^P = 0^-)"
+      momentum: [0, 0, 0]
+      interpolating_operator: "gamma_5 — annihilation operator \bar{u}γ₅c; correlator uses creation operator \bar{c}γ₅u (hermitian conjugate)"
+      subtype: source
+    - id: Kstar_sink
+      name: "K*-"
+      type: meson
+      flavor: "s anti-u  (J^P = 1^-)"
+      momentum: [0, 0, 0]
+      interpolating_operator: "gamma_x"
+      subtype: sink
+
+  propagators:
+    - id: prop_light_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          Forward light-quark (u/d) propagator S_l(x;0) from point source
+          at origin.  Used for the anti-u line connecting source to sink in
+          the sink-block construction and for the sink sequential source.
+      sink:
+        id: sink_light_fwd
+        type: point
+
+    - id: prop_charm_fwd
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          Forward charm propagator S_c(x;0) from point source at origin.
+          Used for the c-quark line connecting source (\bar{c}γ₅u at t=0)
+          to the current insertion.  Note: am_c ≈ 0.42 on this ensemble;
+          Wilson-clover fermions suffer O((am_c)²) discretisation errors.
+      sink:
+        id: sink_charm_fwd
+        type: point
+
+    - id: prop_strange_seq
+      quark_flavor: strange
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+        notes: >
+          Sequential source for the strange quark constructed via the
+          two-dagger convention:
+            (a) Sink block at each spatial point x on tseq=8:
+                B(x) = S_u(0; x, tseq) γ_x
+                where S_u(0;x) = γ₅ S_l†(x;0) γ₅  (γ₅-hermiticity)
+            (b) First dagger — sequential source:
+                η_seq(x) = γ₅ B†(x) γ₅  (non-zero only on time slice 8)
+            (c) Solve:  D_s G_seq = η_seq
+            (d) Second dagger:  G_seq_dag = γ₅ G_seq† γ₅
+          The source γ₅ from D0 appears ONLY in the final contraction
+          and is NOT included in η_seq.  The sequential source is NOT a
+          uniform wall; its spatial dependence is determined point-by-point
+          from the forward light propagator.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          Sequential strange propagator solved from the sink sequential
+          source η_seq.  One inversion per sink momentum and gamma structure.
+      sink:
+        id: sink_strange_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: D0_to_Kstar_3pt_corr
+      type: meson_3pt
+      propagator: prop_strange_seq
+      observable: D0_to_Kstar_3pt
+      source_hadron: D0_source
+      sink_hadron: Kstar_sink
+      tseq: 8
+      current:
+        flavor_in: charm
+        flavor_out: strange
+        gamma_structure: "gamma_x"
+        description: "Vector current \bar{s} γ_x c (spatial x-component)"
+      sequential_source:
+        convention: two-dagger
+        sink_block: "B(x) = γ₅ S_l†(x,tseq;0) γ₅ γ_x"
+        first_dagger: "η_seq = γ₅ B† γ₅"
+        second_dagger: "G_seq_dag = γ₅ G_seq† γ₅"
+      final_contraction: >
+        C₃(τ) = Σ_y Tr[ G_seq_dag(y,τ) γ_x S_c(y,τ) γ₅ ]
+        for τ = 0, 1, …, tseq.
+        The γ₅ at the right end is the source operator; the γ_x between
+        G_seq_dag and S_c is the current.  G_seq_dag carries the s-quark
+        line from sink to current; S_c carries the c-quark line from source
+        to current.
+      notes: >
+        Only a single connected diagram contributes (no disconnected pieces
+        for this flavour combination).  Result is stored as real values.
+        Caveat: tseq=8 (~0.84 fm) may be too short to suppress excited-state
+        contamination for the heavy D meson.  Only one spatial polarisation
+        (γ_x) is used; averaging over γ_x,γ_y,γ_z would improve statistics
+        but requires three separate sequential inversions.
+
+output:
+  format: txt
+  metadata: false
+  filename: D0_to_Kstar_3pt_result.txt
+  notes: "Plain text file with numerical result values (no headers or extra text), saved in the run directory"
+
+extras:
+  - "tseq = 8 fixed sink time"
+  - "zero momentum at source and sink"
+  - "only the 3pt function is computed; no 2pt functions"
+  - "stout link smearing (1 step, rho = 0.125, ndim = 4) on all gauge links used in inversions"
+  - "point source at [0, 0, 0, 0] for forward propagators"
+  - "sequential source is non-zero only on time slice 8, point-by-point from S_l (NOT a uniform wall)"
+  - "result written as plain text without any header to the run directory"
+  - "two-dagger convention: η_seq = γ₅ B† γ₅ (1st), G_seq_dag = γ₅ G_seq† γ₅ (2nd)"
+  - "source γ₅ resides only in the final contraction Tr[G_seq_dag γ_x S_c γ₅], not in η_seq"
+  - "charm discretisation errors O((am_c)²) are significant at a≈0.105 fm with Wilson-clover fermions"
+  - "tseq=8 (~0.84 fm) may not fully suppress excited-state contamination for the D meson"

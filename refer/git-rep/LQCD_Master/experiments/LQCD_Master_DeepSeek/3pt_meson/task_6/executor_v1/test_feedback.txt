@@ -1,0 +1,86 @@
+The submitted test job failed during dynamic testing. Rewrite the implementation to fix the failing test run.
+
+Observed Slurm status:
+JobState=FAILED ExitCode=1:0
+
+Observed error:
+Traceback (most recent call last):
+  File "main.py", line 143, in <module>
+    out = np.column_stack((tseq_col, t_list, C3_window.real, C3_window.imag))
+  File "<__array_function__ internals>", line 200, in column_stack
+  File "/public/home/xywangsjtu/Config_PyQUDA/zmh-2604/lib/python3.8/site-packages/numpy/lib/shape_base.py", line 656, in column_stack
+    return _nx.concatenate(arrays, 1)
+  File "<__array_function__ internals>", line 200, in concatenate
+ValueError: all the input array dimensions except for the concatenation axis must match exactly, but along dimension 0, the array at index 0 has size 9 and the array at index 2 has size 72
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+mpirun detected that one or more processes exited with non-zero status, thus causing
+the job to be terminated. The first process to do so was:
+
+  Process name: [[7917,1],0]
+  Exit code:    1
+--------------------------------------------------------------------------
+
+Observed output:
+at 1.780e+03 us per call
+                     free     =     0.000 secs (  0.008%),	 with        5 calls at 1.200e+00 us per call
+        total accounted       =     0.061 secs ( 81.880%)
+        total missing         =     0.013 secs ( 18.120%)
+
+             invertQuda Total time =    30.516 secs
+                     init     =     0.258 secs (  0.844%),	 with     3578 calls at 7.199e+01 us per call
+                 preamble     =     0.000 secs (  0.000%),	 with      144 calls at 3.750e-01 us per call
+                  compute     =    25.231 secs ( 82.683%),	 with      182 calls at 1.386e+05 us per call
+                 epilogue     =     0.199 secs (  0.653%),	 with      144 calls at 1.383e+03 us per call
+                     free     =     0.001 secs (  0.002%),	 with      747 calls at 8.353e-01 us per call
+        total accounted       =    25.689 secs ( 84.182%)
+        total missing         =     4.827 secs ( 15.818%)
+
+     invertMultiSrcQuda Total time =    13.573 secs
+                     init     =     0.090 secs (  0.665%),	 with    10718 calls at 8.422e+00 us per call
+                 preamble     =     1.406 secs ( 10.358%),	 with     2933 calls at 4.793e+02 us per call
+                  compute     =    11.904 secs ( 87.709%),	 with    27718 calls at 4.295e+02 us per call
+                 epilogue     =     0.091 secs (  0.672%),	 with      769 calls at 1.185e+02 us per call
+                     free     =     0.001 secs (  0.006%),	 with     1491 calls at 5.540e-01 us per call
+                    eigen     =     0.013 secs (  0.095%),	 with     2253 calls at 5.739e+00 us per call
+        total accounted       =    13.505 secs ( 99.504%)
+        total missing         =     0.067 secs (  0.496%)
+
+   gaugeObservablesQuda Total time =     0.000 secs
+
+         gaugeSmearQuda Total time =     0.103 secs
+                     init     =     0.001 secs (  1.357%),	 with        2 calls at 7.015e+02 us per call
+                  compute     =     0.006 secs (  5.992%),	 with        1 calls at 6.194e+03 us per call
+                    comms     =     0.055 secs ( 53.264%),	 with        1 calls at 5.506e+04 us per call
+                     free     =     0.000 secs (  0.002%),	 with        1 calls at 2.000e+00 us per call
+        total accounted       =     0.063 secs ( 60.615%)
+        total missing         =     0.041 secs ( 39.385%)
+
+                endQuda Total time =     0.040 secs
+                     free     =     0.000 secs (  0.050%),	 with       11 calls at 1.818e+00 us per call
+        total accounted       =     0.000 secs (  0.050%)
+        total missing         =     0.040 secs ( 99.950%)
+
+       initQuda-endQuda Total time =    50.571 secs
+
+                   QUDA Total time =    49.098 secs
+                 download     =     0.080 secs (  0.163%),	 with        7 calls at 1.143e+04 us per call
+                   upload     =     0.002 secs (  0.004%),	 with        1 calls at 2.149e+03 us per call
+                     init     =     5.029 secs ( 10.243%),	 with    14381 calls at 3.497e+02 us per call
+                 preamble     =     1.406 secs (  2.864%),	 with     3077 calls at 4.570e+02 us per call
+                  compute     =    37.202 secs ( 75.771%),	 with    27929 calls at 1.332e+03 us per call
+                    comms     =     0.075 secs (  0.153%),	 with        9 calls at 8.342e+03 us per call
+                 epilogue     =     0.290 secs (  0.591%),	 with      913 calls at 3.181e+02 us per call
+                     free     =     0.002 secs (  0.003%),	 with     2270 calls at 6.789e-01 us per call
+                    eigen     =     0.013 secs (  0.026%),	 with     2253 calls at 5.762e+00 us per call
+        total accounted       =    44.099 secs ( 89.819%)
+        total missing         =     4.999 secs ( 10.181%)
+
+Device memory used = 3662.2 MiB
+Pinned device memory used = 128.0 MiB
+Managed memory used = 0.0 MiB
+Page-locked host memory used = 124.0 MiB
+Total host memory used >= 147.2 MiB

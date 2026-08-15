@@ -1,0 +1,123 @@
+task:
+  name: jpsi_2pt_vector
+  description: >
+    Calculate the two-point correlation function of the J/psi vector meson (c\bar{c} charmonium, J^{PC}=1^{--})
+    using a point source at [0,0,0,0] with stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4).
+    Use vector interpolating operators gamma_x, gamma_y, gamma_z for the three polarizations, average over them,
+    and save the raw correlator as a plain text file with one value per time slice to ./jpsi_2pt_result.txt.
+    The correct meson_2pt contraction in the DeGrand-Rossi basis for a vector meson is
+    Tr[S_c† (γ_5 γ_i) S_c (γ_i γ_5)], not Tr[S_c† γ_i S_c γ_i]; generate_einsum handles the γ_5 factors internally.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: jpsi_2pt
+      type: meson_2pt
+      name: J/psi two-point function (vector channel, polarization-averaged)
+
+  hadrons:
+    - id: jpsi
+      name: J/psi
+      type: meson
+      flavor: charm-anticharm (c\bar{c})
+      momentum: [0, 0, 0]
+      interpolating_operator: "\\bar{c} \\gamma_i c, i=x,y,z (vector operators, averaged over 3 polarizations)"
+      subtype: vector
+
+  propagators:
+    - id: prop_charm
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: charm_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          Charm quark propagator inversion on stout-smeared gauge links.
+          Multigrid blocking: level-0 [6,6,6,3], level-1 [4,4,4,6].
+          CRITICAL: multigrid near-null-space vectors must be compatible with stout-smeared links.
+          If the vectors were tuned on unsmeared configurations, multigrid performance may degrade
+          significantly (slow Krylov convergence or stall). After each inversion, assert that the
+          true residual ≤ 1e-12; if multigrid fails to converge within maxiter, fall back to a
+          standard CG solver with maxiter 40000 and the same tolerance.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: jpsi_corr
+      type: meson_2pt
+      propagator: prop_charm
+      propagator_quark: prop_charm
+      propagator_antiquark: prop_charm
+      observable: jpsi_2pt
+      gamma_structures:
+        - gamma_x
+        - gamma_y
+        - gamma_z
+      polarization_average: true
+      notes: >
+        Both quark and antiquark lines use the same prop_charm (c\bar{c} meson).
+        The code generator is called as:
+        generate_einsum(type="meson_2pt", quark="c", antiquark="c", gamma="gi") for i=1,2,3.
+        The tool internally applies the correct γ_5 factors; the physical contraction is
+        Tr[S_c† (γ_5 γ_i) S_c (γ_i γ_5)], matching the rho-meson derivation.
+        The three polarization correlators are averaged at each time slice to produce C(t).
+
+output:
+  format: txt
+  metadata: false
+  destination: "./jpsi_2pt_result.txt"
+
+extras: []

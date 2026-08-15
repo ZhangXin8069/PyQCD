@@ -1,0 +1,125 @@
+task:
+  name: omega_cc_baryon_2pt_point_source
+  description: Compute the zero-momentum two-point correlator for the user-specified scc baryon operator epsilon^{abc}(s^{Ta} Cgamma5 c^b)c^c from a point source at [0,0,0,0], using inversions on stout-smeared gauge links with parameters (n_steps=1, rho=0.125, ndim=4), and contract with the positive-parity projector Tmat=(I+gamma_t)/2; save the final correlator as plain text in the run directory without header or extra text. Because only one configuration and one source are requested, this plan is treated as a code-validation / smoke-test measurement rather than a precision spectroscopy calculation.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: omega_cc_2pt
+      type: baryon_2pt
+      name: User-specified scc baryon positive-parity two-point function
+
+  hadrons:
+    - id: omega_cc
+      name: Omega_cc
+      type: baryon
+      flavor: scc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (s^{Ta} Cgamma5 c^b) c^c
+      subtype: user_requested_local_scc_J1over2_operator_test
+
+  propagators:
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: strange_clover_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Strange source-to-all propagator on the user-requested stout-smeared links. Use the ensemble strange mass and clover coefficient exactly as provided in the fixed configuration.
+      sink:
+        id: point_sink
+        type: point
+
+    - id: prop_c_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: charm_clover_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 20000
+        notes: Charm source-to-all propagator on the user-requested stout-smeared links, using the charm mass and clover coefficient supplied in the fixed configuration. Do not implicitly apply the light-quark multigrid setup to this solve unless separately validated for the charm operator; use a charm-appropriate solver path supported by the run environment.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: omega_cc_baryon_2pt_measurement
+      type: baryon_2pt
+      propagator: prop_s_point
+      observable: omega_cc_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - mixed-flavor baryon contraction must use both prop_s_point and prop_c_point, with prop_c_point reused for the two identical charm lines
+  - include the two Wick topologies induced by the identical charm quarks in the scc baryon contraction
+  - incorporate Tmat = (I + gamma_t) / 2 directly in the spin contraction for the baryon 2pt, not as a separate postprocessing step
+  - sum over all spatial sink positions to project zero momentum
+  - save plain-text rows as t ReC ImC for t=0..71 in a txt file in the run directory with no header or extra text
+
+freeform_plan: |

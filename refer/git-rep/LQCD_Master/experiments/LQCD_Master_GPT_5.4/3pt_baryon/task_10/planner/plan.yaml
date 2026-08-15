@@ -1,0 +1,153 @@
+task:
+  name: Lambda_b_to_proton_vector_3pt
+  description: Compute the zero-momentum bare Lambda_b-to-proton three-point correlation function with source operator epsilon^{abc}(u^T C gamma_5 d)b, sink operator epsilon^{abc}(u^T C gamma_5 d)u, inserted current \bar{u} gamma_x b, positive-parity projector Tmat=(I+gamma_t)/2, point source at [0,0,0,0], and tseq=8. This plan is restricted to raw 3pt data production on the fixed C24P29 setup and is not by itself a validated physical b-decay calculation.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: lambda_b_to_p_vector_3pt
+      type: baryon_3pt
+      name: Bare Lambda_b-to-proton baryon three-point correlator for J_x = \bar{u} gamma_x b with positive-parity sink projection
+
+  hadrons:
+    - id: lambda_b_src
+      name: Lambda_b
+      type: baryon
+      flavor: u d b
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} C gamma_5 d^b)b^c
+      subtype: spin-1/2 source baryon used only for raw 3pt production on the fixed heavy-valence setup
+    - id: proton_snk
+      name: proton
+      type: baryon
+      flavor: u d u
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} C gamma_5 d^b)u^c
+      subtype: spin-1/2 sink baryon with positive-parity projector Tmat=(I+gamma_t)/2
+
+  propagators:
+    - id: prop_light_forward
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_forward
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator on stout-smeared links; reused for both u and d by isospin symmetry and for both proton sink-block spectator lines. The ensemble multigrid setup is appropriate here.
+      sink:
+        id: forward_point_sink
+        type: point
+    - id: prop_bottom_forward
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_bottom_forward
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Separate heavy-valence forward solve for the current-side b line on the same stout-smeared links. Do not assume the light-quark multigrid setup is reused here; use a separately validated heavy-solver configuration or plain clover solve. This fixed m_b=1.5 setup is treated as a bare heavy-valence correlator input for pipeline testing, not as a controlled physical b-quark action.
+      sink:
+        id: forward_bottom_point_sink
+        type: point
+    - id: prop_light_sequential_t8
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_sequential
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential light propagator built from the proton sink block at tseq=8, zero sink momentum, diquark gamma C gamma_5, and projector Tmat=(I+gamma_t)/2. Construct the sink block from two forward light propagators, apply the first gamma_5 dagger, invert the sequential source, then apply the second gamma_5 dagger before the final contraction.
+      sink:
+        id: sequential_sink_t8
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_lambda_b_to_p_gamma_x_tseq8
+      type: baryon_3pt
+      propagator: prop_light_sequential_t8
+      observable: lambda_b_to_p_vector_3pt
+
+output:
+  format: other
+  file_type: txt
+  path: ./Lambda_b_to_proton_vector_3pt_cfg10000_tseq8.txt
+  columns:
+    - tseq
+    - insertion_time
+    - real_part
+    - imaginary_part
+  metadata: false
+
+extras:
+  - Scope is raw bare 3pt production only; do not interpret this single-configuration result as a physical Lambda_b decay observable.
+  - Use baryon sequential-source method with one forward light propagator, one forward heavy b-line propagator, and one light sequential propagator.
+  - Use projector Tmat=(I+gamma_t)/2 and current gamma_x at zero momentum with tseq=8.
+  - Save only plain numeric txt rows in the run directory with no header and no extra text.
+  - Do not compute any 2pt correlator.
+
+freeform_plan: |
+  This is a standard baryon 3pt task, so the structured sections define the executable workflow. Build the proton sink block from two forward light propagators with the positive-parity projector Tmat=(I+gamma_t)/2, form the sequential source with the first gamma_5 dagger, solve the light sequential propagator at tseq=8 on the same stout-smeared gauge field, apply the second gamma_5 dagger, and contract the resulting sequential propagator with gamma_x and the forward heavy b-line propagator. Sum over spatial sites at each insertion time, gather to rank 0, and write only the numeric columns (tseq, insertion_time, real_part, imaginary_part) to ./Lambda_b_to_proton_vector_3pt_cfg10000_tseq8.txt. Because the fixed ensemble information provides only a placeholder heavy-valence mass/coefficient pair and no tuned RHQ/Fermilab/NRQCD prescription or current renormalization, the deliverable here is explicitly a bare 3pt correlator data product for code-path validation, not a controlled physical Lambda_b -> p decay result.

@@ -1,0 +1,342 @@
+task:
+  name: ds_nonlocal_2pt
+  description: >
+    Nonlocal two-point correlation function of D_s⁺ (c ̄s, J^P=0⁻) meson
+    with spatial separation z=0..10 along +z. Point source at [0,0,0,0].
+    Wilson line on original gauge links; inversions on stout-smeared links
+    (1 step, ρ=0.125, 4-dim). Single configuration.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: ds_nonlocal_2pt
+      type: custom
+      name: D_s nonlocal two-point correlation function
+
+  hadrons:
+    - id: ds
+      name: D_s+
+      type: meson
+      flavor: charm quark (c) and strange antiquark ( ̄s)
+      momentum: [0, 0, 0]
+      interpolating_operator: " ̄s(x) γ₅ W(x, x+ẑ) c(x+ẑ)"
+      subtype: pseudoscalar_nonlocal
+
+  propagators:
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: bicgstab_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-8
+        maxiter: 10000
+        notes: BiCGStab solver for heavy charm quark on stout-smeared gauge field. Multigrid coarse-grid correction is ineffective at m_c≈0.4159 (nullspace vectors tuned for light quarks) and may slow or destabilize convergence.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-8
+        maxiter: 10000
+        notes: Multigrid solver for strange quark on stout-smeared gauge field. Block sizes [6,6,6,3]/[4,4,4,6] are appropriate for near-massless nullspace vectors; m_s≈−0.2356 is light enough for effective coarse-grid correction.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: ds_nonlocal_corr
+      type: other
+      propagator: [prop_c, prop_s]
+      observable: ds_nonlocal_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - "Nonlocal shift applied to charm (quark) propagator via Wilson line from original gauge links"
+  - "Strange (antiquark) propagator remains unshifted (local)"
+  - "Wilson line direction: +z, maximum separation z_max=10"
+  - "Result saved as plain text to ds_nonlocal_2pt.txt with columns: z t Re[C] Im[C]"
+  - "Single configuration cfg 10000"
+  - "Charm propagator solved with BiCGStab (not multigrid) — multigrid coarse-grid correction is ineffective for heavy quarks and may destabilize convergence"
+  - "Strange propagator solved with multigrid (appropriate for near-massless-like nullspace vectors)"
+
+freeform_plan: |
+  ==========================================================================
+  PHYSICS GOAL
+  ==========================================================================
+  Compute the nonlocal two-point correlation function of the D_s⁺ meson
+  (flavor content: charm quark c, strange antiquark  ̄s; J^P = 0⁻) with
+  spatial separation z along the +z direction for z = 0, 1, 2, ..., 10.
+
+  This is a building block for the D_s quasi-distribution amplitude
+  (quasi-DA) within the LaMET (Large-Momentum Effective Theory) framework.
+  Zero-momentum projection (p = 0) is used throughout.
+
+  ==========================================================================
+  OPERATOR DEFINITION
+  ==========================================================================
+  Nonlocal pseudoscalar interpolating operator at sink (time t):
+
+    O_Ds(⃗x, t; z) =  ̄s(⃗x, t) · γ₅ · W(⃗x, t; ⃗x+ẑ, t) · c(⃗x+ẑ, t)
+
+  where W(⃗x, t; ⃗x+ẑ, t) is the straight Wilson line of length z along
+  the +z spatial direction, constructed from the ORIGINAL (unsmeared) gauge
+  links at time slice t.
+
+  Local pseudoscalar interpolating operator at source (time 0):
+
+    O_Ds†(0) = c ̄(0) · γ₅ · s(0)
+
+  The nonlocal shift is applied exclusively to the charm (quark) propagator.
+  The strange (antiquark) propagator remains local.
+
+  For z = 0, W(x, x) = 1 and the operator reduces to the standard local
+  D_s⁺ operator  ̄s γ₅ c.
+
+  ==========================================================================
+  WICK CONTRACTION
+  ==========================================================================
+  Two-point correlator at zero momentum:
+
+    C(z; t) = Σ_{⃗x} ⟨ O_Ds(⃗x, t; z) · O_Ds†(0, 0) ⟩
+
+  Expanding and contracting quark fields:
+
+    C(z; t) = Σ_{⃗x} ⟨  ̄s(⃗x,t) γ₅ W(⃗x,t; ⃗x+ẑ,t) c(⃗x+ẑ,t)
+                     · c ̄(0,0) γ₅ s(0,0) ⟩
+
+  Wick contraction → one connected diagram:
+
+    C(z; t) = Σ_{⃗x} Tr[ S_s(0,0; ⃗x,t) · γ₅
+                       · W(⃗x,t; ⃗x+ẑ,t) · S_c(⃗x+ẑ,t; 0,0) · γ₅ ]
+
+  Apply γ₅-hermiticity:  S_s(0,0; ⃗x,t) = γ₅ · S_s†(⃗x,t; 0,0) · γ₅
+  and cyclic property of trace (γ₅·γ₅ = 1):
+
+    C(z; t) = Σ_{⃗x} Tr[ S_s†(⃗x,t; 0,0)
+                       · W(⃗x,t; ⃗x+ẑ,t) · S_c(⃗x+ẑ,t; 0,0) ]
+
+  ==========================================================================
+  SHIFTED PROPAGATOR
+  ==========================================================================
+  Define the shifted charm propagator at each sink site (⃗x, t):
+
+    S_c_shifted(⃗x, t; z) = W(⃗x, t; ⃗x+ẑ, t) · S_c(⃗x+ẑ, t; 0, 0)
+
+  This is a 3×3 color matrix (in spinor space: 4×4 spin acted on by the
+  color Wilson line) multiplying the charm propagator at the displaced
+  point, effectively transporting it back to ⃗x via the Wilson line.
+
+  The correlator becomes a local trace at each sink point:
+
+    C(z; t) = Σ_{⃗x} Tr[ S_s†(⃗x,t; 0,0) · S_c_shifted(⃗x,t; z) ]
+
+  where Tr runs over both spin (4×4) and color (3×3) indices.
+
+  ==========================================================================
+  COMPUTATIONAL WORKFLOW
+  ==========================================================================
+
+  Step 1 — Load gauge configuration
+  ---------------------------------
+  - Read configuration cfg 10000 from the C24P29 ensemble
+    (24³×72, β=6.20, a≈0.1052 fm).
+  - Keep a copy of the ORIGINAL gauge links (for Wilson line construction).
+
+  Step 2 — Stout-smear gauge field for inversions
+  -----------------------------------------------
+  - Apply stout smearing to the gauge links:
+      n_steps = 1,  ρ = 0.125,  ndim = 4
+  - This smeared field is used ONLY for Dirac operator inversions.
+
+  Step 3 — Invert charm quark propagator (BiCGStab)
+  --------------------------------------------------
+  - Source: point source at [x=0, y=0, z=0, t=0], spin-color unit source.
+  - Dirac operator: Wilson-clover with c_sw = 1.160920226, m_c = 0.4159,
+    on stout-smeared gauge links.
+  - Solver: BiCGStab (NOT multigrid). The multigrid coarse-grid correction
+    relies on near-nullspace vectors tuned for light quarks; at m_c ≈ 0.4159
+    the nullspace structure is absent, and the coarse-grid correction can
+    slow or destabilize convergence rather than accelerate it.
+    BiCGStab is the standard Krylov solver for heavy-quark Wilson-clover
+    systems (the Dirac operator is γ₅-Hermitian, not Hermitian).
+  - Parameters: tolerance = 1e-8, max iterations = 10000.
+  - Result: prop_c(x,y,z,t; 0) — a 4-spin × 3-color object at every
+    lattice site (all t, all ⃗x).
+
+  Step 4 — Invert strange quark propagator (Multigrid)
+  -----------------------------------------------------
+  - Same source position [0,0,0,0], same stout-smeared gauge field.
+  - Dirac operator: Wilson-clover with c_sw = 1.160920226, m_s = -0.2356.
+  - Solver: multigrid (PyQUDA) with block sizes [6,6,6,3] / [4,4,4,6].
+    The strange quark mass m_s ≈ -0.2356 is light enough that the
+    near-nullspace vectors still provide effective coarse-grid correction.
+  - Parameters: tolerance = 1e-8, max iterations = 10000.
+  - Result: prop_s(x,y,z,t; 0) — 4-spin × 3-color at every lattice site.
+
+  Step 5 — Construct Wilson lines from original gauge links
+  ---------------------------------------------------------
+  For each z in {0, 1, 2, ..., 10}:
+    For each spatial site (x, y, z_coord) on each time slice t:
+      If z_coord + z < Lz (24), build the straight Wilson line:
+
+        W(x,y,z_coord,t; z) = U_z(x,y,z_coord,t)
+                            · U_z(x,y,z_coord+1,t)
+                            · ...
+                            · U_z(x,y,z_coord+z-1,t)
+
+      where U_z are the ORIGINAL gauge links in the +z direction.
+      The result is a 3×3 color matrix.
+
+      For sites near the boundary where z_coord + z ≥ Lz:
+        Since spatial BCs are periodic, wrap around:
+        continue from z_coord+z-Lz.
+
+      For z = 0: W = 1 (3×3 identity).
+
+  Step 6 — Build shifted charm propagator
+  ----------------------------------------
+  For each z and for every lattice site (x,y,z_coord,t):
+
+    // Get the charm propagator at the displaced point
+    prop_c_displaced = prop_c(x, y, (z_coord+z) mod Lz, t)
+      [shape: (4,3)]
+
+    // Multiply by Wilson line (acts on color index only)
+    S_c_shifted(x,y,z_coord,t; z)[spin=i, color=a]
+      = Σ_b  W(x,y,z_coord,t; z)[a,b]
+           · prop_c_displaced[spin=i, color=b]
+
+    This is a spinor-color contraction: the 3×3 Wilson line matrix
+    multiplies the color index of the charm propagator, leaving the
+    4 spin components unchanged.
+
+  Step 7 — Contract correlator
+  -----------------------------
+  For each z and each time slice t:
+
+    Initialize C(z,t) = 0 (complex).
+    For each spatial site (x,y,z_coord):
+      // Strange propagator at sink (dagger for conjugate transpose)
+      prop_s_dag = conjugate_transpose(prop_s(x,y,z_coord,t))
+        [shape: (3,4) after color-spin transpose]
+
+      // Multiply and trace: Tr[ S_s† · S_c_shifted ] over spin and color
+      M[spin=i, spin=j] = Σ_{a} prop_s_dag[color=a, spin=i]
+                                · S_c_shifted[spin=j, color=a]
+
+      C(z,t) += Σ_i M[i,i]    // trace over spin
+
+    The trace runs over both spin (4×4) and color (3×3) indices.
+
+    In einsum-like notation:
+      C[z,t] = Σ_{⃗x} einsum('ci,ic', prop_s†(x,t), S_c_shifted(x,t;z))
+    where c = color, i = spin.
+
+  ==========================================================================
+  OUTPUT FORMAT
+  ==========================================================================
+  Save results to a plain text file in the run directory:
+    ds_nonlocal_2pt.txt
+
+  Format (NO header, NO metadata, NO comments):
+    Each row contains four whitespace-separated numbers:
+      z  t  Re[C(z,t)]  Im[C(z,t)]
+
+  Rows are ordered by z (outer loop) then t (inner loop):
+    z=0, t=0
+    z=0, t=1
+    ...
+    z=0, t=71
+    z=1, t=0
+    ...
+    z=10, t=71
+
+  All values are double-precision floats.
+
+  ==========================================================================
+  PHYSICS NOTES
+  ==========================================================================
+  - For z=0, C(0,t) is the standard local D_s two-point function and
+    should follow cosh-like behavior (meson with periodic temporal BC
+    after squaring anti-periodic fermion BC).
+  - For z>0, C(z,t) decays with z due to the nonlocal separation;
+    the signal will be noisier at larger z.
+  - The ratio C(z,t)/C(0,t) isolates the z-dependence relevant for
+    the quasi-DA.
+  - Using original gauge links for the Wilson line (rather than
+    smeared links) preserves the correct renormalization pattern of
+    the nonlocal operator.
+  - Using stout-smeared links for the Dirac operator improves
+    inverter convergence without affecting the operator definition.
+  - Only one configuration is analyzed; for production physics,
+    many more configurations would be needed for statistical precision.

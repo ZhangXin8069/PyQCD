@@ -1,0 +1,164 @@
+task:
+  name: xi_c0_baryon_2pt_point_source
+  description: Compute the source-shifted zero-momentum two-point correlation function of the Xi_c0 baryon with quark content dsc on cfg 10000 using a local point source at [0, 0, 0, 0]. Use the antisymmetric light-diquark interpolator epsilon^{abc}(d^{Ta} Cgamma5 s^b)c^c, which corresponds to the Xi_c channel and not Xi'_c, with the Euclidean positive-parity projector Tmat=(I+gamma_t)/2 where gamma_t=gamma_4. Invert the d, s, and c propagators on the same stout-smeared gauge-field copy with parameters (n_steps=1, rho=0.125, ndim=4), form the correlator solely from those three propagators, and save the final plain-text correlator in the run directory without header.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: xi_c0_2pt
+      type: baryon_2pt
+      name: Xi_c0 positive-parity zero-momentum two-point correlator
+
+  hadrons:
+    - id: xi_c0
+      name: Xi_c0
+      type: baryon
+      flavor: dsc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(d^{Ta} Cgamma5 s^b)c^c with source and sink projected to zero momentum and traced with Tmat=(I+gamma_t)/2, gamma_t=gamma_4; this is the antisymmetric light-diquark Xi_c interpolator, not Xi'_c
+      subtype: charmed_baryon
+
+  propagators:
+    - id: prop_light_d
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: d-quark line from the fixed point source; inversion performed on the common stout-smeared gauge-field copy used for all propagators.
+      sink:
+        id: point_sink_light
+        type: point
+
+    - id: prop_strange_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: s-quark line from the same fixed point source; inversion performed on the same stout-smeared gauge-field copy as the d and c solves.
+      sink:
+        id: point_sink_strange
+        type: point
+
+    - id: prop_charm_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: c-quark line from the same fixed point source; the supplied charm mass/clover setup is accepted here as fixed input for correlator production only, with charm-tuning systematics outside scope.
+      sink:
+        id: point_sink_charm
+        type: point
+
+measurement:
+  correlators:
+    - id: xi_c0_baryon_2pt_measurement
+      type: baryon_2pt
+      observable: xi_c0_2pt
+      propagators:
+        - prop_light_d
+        - prop_strange_s
+        - prop_charm_c
+      hadron: xi_c0
+      contraction:
+        baryon_contraction_id: xi_c0_dsc_Cg5_pospar
+        diquark_gamma: Cg5
+        projector: Tmat
+        projector_definition: (I + gamma_t) / 2
+        gamma_t_definition: gamma_4
+        wick_structure: distinct_flavor_baryon_2pt
+        generator_requirement: Verify the baryon_2pt generator for flavors (d,s,c), operator epsilon(d^T Cgamma5 s)c, and projector Tmat before production; do not substitute a reused generic contraction without this check.
+      momentum_projection:
+        source: [0, 0, 0]
+        sink: [0, 0, 0]
+      timeslice_output: source_shifted
+      correlator_definition: Tr[Tmat < O_Xi_c0(t) Obar_Xi_c0(0) >] summed over spatial sink positions to produce C(t)
+      scope: per_configuration_debug_correlator
+
+output:
+  format: other
+  metadata: false
+  filename: xi_c0_2pt_cfg10000.txt
+  location: run_directory
+  text_layout: t Re Im
+  header: none
+
+extras:
+  - Use MPI with 4 ranks and process grid [1, 1, 1, 4].
+  - Use gamma_t as the Euclidean temporal gamma gamma_4 in Tmat=(I+gamma_t)/2.
+  - Apply stout smearing once to make a common smeared-link gauge copy, and use only propagators inverted on that copy in the final contraction.
+  - This task produces one per-configuration correlator file for cfg 10000 and is not by itself a spectroscopy-quality mass determination.
+
+freeform_plan: |

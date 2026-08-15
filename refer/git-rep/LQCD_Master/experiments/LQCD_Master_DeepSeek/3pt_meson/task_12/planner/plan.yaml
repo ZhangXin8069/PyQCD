@@ -1,0 +1,189 @@
+task:
+  name: d0_to_eta_u_3pt
+  description: >
+    Three-point correlation function for D⁰ → η_u transition via (c→u) vector current.
+    Source: D⁰ meson (anti‑u, c) with γ₅ interpolator at t=0, point source at [0,0,0,0], zero momentum.
+    Sink: η_u meson (anti‑u, u) with γ₅ interpolator at tseq=8, zero momentum.
+    Current: J_x = ū γ_x c (vector, x‑direction) inserted at intermediate time τ ∈ [0, tseq].
+    Stout‑smeared gauge links (n_steps=1, rho=0.125, ndim=4) used for all inversions.
+    Sequential‑source method: the sequential light propagator is constructed on the full spatial
+    volume at t=8 using the forward light propagator and both sink (γ₅) and source (γ₅) spin
+    structures embedded via the standard two‑dagger convention.
+    Only the connected 3pt correlator is computed; no two‑point functions are produced.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions: [24, 24, 24, 72]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: d0_to_eta_u_3pt
+      type: meson_3pt
+      name: D0 to eta_u transition via vector current
+
+  hadrons:
+    - id: D0
+      name: D0
+      type: meson
+      flavor: [anti-u, c]
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_5
+      subtype: source
+    - id: eta_u
+      name: eta_u
+      type: meson
+      flavor: [anti-u, u]
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_5
+      subtype: sink
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+        notes: >
+          The same multigrid parameters are used for the charm quark (m=0.4159) as for the
+          light quark (m=−0.277). For heavy quarks the coarse‑grid correction may degrade;
+          if the solver fails to converge at tolerance 1e‑12, fall back to a standard CG
+          solver or relax the tolerance to 1e‑10 for the charm propagator only.
+      sink:
+        id: sink_point_c
+        type: point
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+        notes: >
+          The spatial coordinates [0,0,0] are placeholders.  The sequential source is
+          constructed on the entire spatial volume at t=8: for every spatial site x⃗ at
+          t=tseq the source value is built from the forward light propagator S_l(x⃗,8;0⃗,0),
+          the sink γ₅, and the source γ₅ via the two‑dagger convention.  This full‑volume
+          construction is essential for the zero‑momentum sink projection.
+      sequential_source:
+        forward_propagator: prop_l
+        sink_hadron: eta_u
+        source_hadron: D0
+        spectator_flavor: light
+        notes: >
+          Both the sink interpolator (γ₅ from η_u) and the source interpolator (γ₅ from D⁰)
+          are embedded into the sequential‑source block B(x).  The sequential source is then
+          η_seq = γ₅ B† γ₅ (two‑dagger convention).  After solving D_l G_seq = η_seq, the
+          3pt contraction is C₃(τ)=Σ_z Tr[G_seq(z,τ) γ_x S_c(z,τ;0,0)] — no additional
+          gamma matrices appear in the final trace because they are already absorbed into G_seq.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_seq
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+      sink:
+        id: sink_point_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: d0_to_eta_u_3pt_meas
+      type: meson_3pt
+      propagator: [prop_l_seq, prop_c]
+      observable: d0_to_eta_u_3pt
+      current:
+        flavor_pair: [u, c]
+        gamma: gamma_x
+      source_hadron: D0
+      sink_hadron: eta_u
+      tseq: 8
+      notes: >
+        Contraction: C₃(τ) = Σ_z Tr[ G_seq(z,τ) · γ_x · S_c(z,τ; 0,0) ] for τ = 0,…,tseq.
+        Both source and sink γ₅ are embedded in the sequential propagator G_seq; they do not
+        appear explicitly in the final trace.
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Connected diagram only: the η_u meson is flavour‑diagonal (ūu) and would admit disconnected quark‑loop contributions that are physically relevant for its mass and matrix elements. This computation includes only the connected topology; disconnected diagrams are not evaluated. The result represents the connected part of the D⁰→η_u transition matrix element."
+  - "Sequential source is full‑volume at t=8, not a single spatial point. The zero‑momentum sink projection requires summing over all sink spatial positions, which is built into the sequential‑source construction by using the forward propagator at every spatial site."
+  - "The 3pt correlator is complex‑valued and saved as raw numbers (one per τ from 0 to tseq=8) without headers."
+  - "No two‑point functions are computed, consistent with the task specification."
+  - "Output file is written to the run directory with name d0_to_eta_u_3pt_cfg{cfg_num}.txt."
+  - "Charm multigrid caveat: the same MG parameters as the light quark are used. If convergence fails, fall back to CG or relax tolerance to 1e‑10 for prop_c only."

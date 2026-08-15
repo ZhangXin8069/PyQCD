@@ -1,0 +1,175 @@
+task:
+  name: xi_cc_baryon_2pt
+  description: >
+    Calculate the zero-momentum two-point correlation function of the Xi_cc (dcc)
+    doubly-charmed baryon using a single point source at t=0. The interpolating
+    operator is O = epsilon^{abc} (d^{Ta} C gamma_5 c^b) c^c, forming a dc diquark
+    with Cγ5 and a spectator charm quark. A positive-parity projector
+    P⁺ = (1 + γ₄)/2 is applied to isolate the ground-state 1/2⁺ channel.
+    All quark propagators are inverted on stout-smeared gauge links
+    (n_steps=1, rho=0.125, ndim=4).
+    NOTE: Because the two charm quarks are identical, the Wick contraction yields
+    two terms (direct and exchange of the two charm quarks at slots b and c).
+    The exchange pattern is NOT the same as the proton (uud) template — the
+    exchange is between the two charm quarks, not between light and charm.
+    The final correlator must be real; take np.real() before writing output.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: xi_cc_2pt
+      type: baryon_2pt
+      name: Xi_cc two-point function (positive parity)
+
+  hadrons:
+    - id: xi_cc
+      name: Xi_cc
+      type: baryon
+      flavor: dcc
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (d^{Ta} C gamma_5 c^b) c^c"
+      parity_projector: "(1 + gamma_4) / 2"
+      subtype: doubly_charmed
+      quark_slot_mapping:
+        slot_a: d  # light quark → prop_l
+        slot_b: c  # charm quark, diquark partner → prop_c
+        slot_c: c  # charm quark, spectator → prop_c (reused)
+      diquark_gamma: Cg5
+      diquark_slots: [0, 1]
+      projector_slot: 2
+      exchange_slots: [1, 2]
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        solver_type: multigrid
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-8
+        maxiter: 10000
+        notes: "Light (d) quark inversion; multigrid solver with default coarse-grid parameters"
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm
+        solver_type: CG
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-8
+        maxiter: 20000
+        notes: >
+          Charm quark inversion. MUST use a standard Krylov solver (CG or BICGSTAB),
+          NOT the multigrid solver which is tuned for light-quark masses and will
+          fail to converge or converge incorrectly for heavy quarks. The heavier
+          charm mass (0.4159 vs light -0.277) may require more iterations; maxiter
+          is set to 20000 to accommodate this.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: xi_cc_corr
+      type: baryon_2pt
+      propagators:
+        - prop_l
+        - prop_c
+        - prop_c
+      observable: xi_cc_2pt
+      generate_einsum_args:
+        type: baryon_2pt
+        flavors: [light, charm, charm]
+        diquark_gamma: Cg5
+        diquark_slots: [0, 1]
+        projector: Pplus
+        projector_slot: 2
+      notes: >
+        Two charm propagators (reusing prop_c twice — slots b and c) and one light
+        propagator (slot a). The diquark gamma is Cγ5 for the dc pair at slots [0,1].
+        P⁺ = (1+γ4)/2 projects slot 2 (spectator charm) to positive parity.
+        Wick contraction: two terms — direct, and exchange of the two identical
+        charm quarks at slots b↔c. The exchange pattern differs from the proton
+        (u→u exchange at a↔c): here the exchange is b↔c, the two charm quarks.
+        The propagate tensor factor S_l^{aa'} S_c^{bb'} S_c^{cc'} is identical
+        for both terms; only the gamma/spin-projector contraction differs.
+        IMPORTANT: After computing the correlator trace, take np.real() — the
+        zero-momentum baryon correlator is real, and any imaginary part is noise.
+        If generate_einsum does not support non-degenerate flavors natively,
+        the tool must be extended or the contraction must be specified manually
+        using the explicit slot mapping above.
+
+output:
+  format: txt
+  metadata: false
+  notes: >
+    Save raw correlator data as plain text with no header and no metadata.
+    One real-valued number per time slice (t = 0, 1, ..., T-1), one per line.
+    Apply np.real() to the complex correlator before writing.
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+extras: []

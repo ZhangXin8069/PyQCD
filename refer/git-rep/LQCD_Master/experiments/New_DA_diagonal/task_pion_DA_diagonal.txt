@@ -1,0 +1,39 @@
+Compute the nonlocal pion two-point function with diagonal Wilson-line displacement.
+
+## Source
+
+Wall source at t=31. Read the Coulomb-gauge-fixed C24P29 configuration from `/public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/CoulombGaugeFixed/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{cfg}_hyp0_gfixed3.scidac`. The source momentum is along the body diagonal (1,1,1). Compute five wall-source propagators with momenta p = 0, +1, +2, -1, -2 along the body diagonal direction. Use mass=-0.2770, clover=`1 / 0.951479**3`, multigrid=`[[4,4,4,4]]`, tol=`1e-6`, and maxiter=1000. Invert the propagators with stout-smeared gauge links using `stoutSmear(1, 0.125, 4)`; use the same Coulomb-gauge-fixed links before stout smearing, not the `Original` configuration, for the Wilson-line `covDev` shifts.
+
+## Interpolating Operator
+
+To reproduce the old data, use source Gamma = `gamma.gamma(7) @ gamma.gamma(15)` and sink Gamma = `gamma.gamma(15) @ gamma.gamma(7)`. At the sink, the operator is bilocal with a straight Wilson line along the body diagonal direction (1,1,1):
+  O_sink(x; z) = \bar{d}(x) · Gamma_sink · W(x, x+z) · u(x+z)
+where z is the number of diagonal steps (each step is length sqrt(3) in lattice units).
+
+## Wilson Line Implementation
+
+Each diagonal step consists of 6 possible shortest paths along the lattice axes:
+  (x,y,z), (x,z,y), (y,x,z), (y,z,x), (z,x,y), (z,y,x)
+Average the 6 paths to reduce discretization effects. Implement as a custom shift function that applies covDev along each of the three axes in all order permutations and averages the results.
+Also compute the negative direction with the 6 permutations of directions (4,5,6).
+For z=0 use the unshifted propagator; for each following z, apply this one averaged diagonal step recursively to the already averaged propagator at z-1. Do not enumerate all paths of length 3z or use permutations of repeated x, y, and z steps.
+
+Maximum z-separation: 12.
+
+## Momentum Combinations
+
+Four physical channels, each formed from two propagators:
+- P=0: shift=0, anti=0
+- P=2: shift=+1, anti=-1
+- P=3: shift=+1, anti=-2
+- P=3: shift=+2, anti=-1
+
+The anti-side propagator enters the contraction with a complex conjugate.
+For every channel multiply the contraction by the sink phase `getPhase([-(shift-anti)] * 3)`: the four phases are 0, -2, -3, and -3 along (1,1,1), respectively.
+
+## Contraction
+
+The contraction is a nonlocal meson two-point function using the source and sink Gamma matrices above. Generate the einsum pattern via the appropriate tool call. The contraction reduces to time (-> t).
+## Output
+
+Save as a dictionary `.npy` with full metadata. Its complex `data` must be structured as (momentum_channel, shift_direction, z_sep, gamma_sink, gamma_source, t), with shape (4, 2, 13, 1, 1, 72); do not split real and imaginary parts.

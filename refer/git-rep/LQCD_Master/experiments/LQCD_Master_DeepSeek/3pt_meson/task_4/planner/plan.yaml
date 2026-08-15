@@ -1,0 +1,190 @@
+task:
+  name: B_to_K_3pt_vector
+  description: >
+    Three-point correlation function for B⁻ → K⁻ transition via (b→s) vector
+    current s̄γₓb.  Source B⁻ (b ū) at t=0, created by O†_{B⁻}=b̄γ₅u.
+    Sink K⁻ (s ū) at tseq=8, annihilated by O_{K⁻}=ūγ₅s.
+    Point source at origin, zero momentum. Sequential source through the sink.
+    All inversions use stout-smeared gauge links (1 step, ρ=0.125, 4‑dim).
+    **Warning**: at zero momentum the spatial vector matrix element vanishes
+    by rotational symmetry; the output will be consistent with zero.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: BtoK_3pt
+      type: meson_3pt
+      name: "B⁻ → K⁻ three-point function via vector current s̄γₓb"
+
+  hadrons:
+    - id: Bm_source
+      name: B-
+      type: meson
+      flavor: "b ū  (bottom quark + up antiquark)"
+      momentum: [0, 0, 0]
+      interpolating_operator: "b̄ γ₅ u"
+      subtype: source
+    - id: Km_sink
+      name: K-
+      type: meson
+      flavor: "s ū  (strange quark + up antiquark)"
+      momentum: [0, 0, 0]
+      interpolating_operator: "ū γ₅ s"
+      subtype: sink
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          Multigrid-preconditioned CG for light spectator (u) quark.
+          Forward propagator S_u(x;0) from point source to all points.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_b
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_bottom
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 5000
+        notes: >
+          Standard CG for heavy bottom quark (mass=1.5, well-conditioned).
+          Forward propagator S_b(z;0) from source to current insertion.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: >
+          CG for strange-quark sequential propagator G_s_seq(z;t_f).
+          Sequential source at t=8 built via the two-dagger convention:
+          1) spectator u propagator at sink S_u(x;0) is γ₅-hermiticity
+          converted to backward: S_u(0;x) = γ₅ S_u†(x;0) γ₅.
+          2) Combined with sink γ₅ to form sink block B(x).
+          3) Sequential source η_seq = γ₅·B†·γ₅, inverted with D_s.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: BtoK_3pt_meas
+      type: meson_3pt
+      propagator: prop_s_seq
+      observable: BtoK_3pt
+      notes: >
+        Three-point contraction at each τ (1 ≤ τ ≤ 7):
+        C₃(τ) = Σ_z Tr[G_s_seq(z;τ) · γ_x · S_b(z;0)].
+        G_s_seq carries the sink structure and spectator propagation.
+        S_b is the forward bottom-quark propagator.
+        generate_einsum input:
+          source: quark=b, antiquark=u, gamma=g5
+          sink:   quark=s, antiquark=u, gamma=g5
+          current: quark=s, antiquark=b, gamma=gx
+        WARNING: at p=0, ⟨K⁻|s̄γₓb|B⁻⟩ = 0 by rotational symmetry.
+        Nonzero signal requires either p≠0 or the temporal current γ₄.
+
+output:
+  format: txt
+  metadata: false
+  notes: >
+    Raw numerical values (real part) of the three-point correlator
+    C₃(τ) for τ = 1,…,7, one value per line, no headers.
+
+extras:
+  - "Compute only the three-point correlator; do not compute any two-point functions."
+  - "Output plain text file with raw numerical values, no header lines or metadata."
+  - "All gauge links used in inversions are stout-smeared: n_step=1, rho=0.125, ndim=4."
+  - "Sequential source constructed through the sink at t_seq=8 using the two-dagger convention with γ₅-hermiticity of the spectator propagator."
+  - "Current insertion: vector gamma_x (s̄ γ_x b)."
+  - "WARNING: At zero momentum the spatial component ⟨K⁻(0)|s̄γₓb|B⁻(0)⟩ = 0 by rotational symmetry. The three-point correlator is expected to be statistically consistent with zero."
+  - "WARNING: tseq=8 (≈0.84 fm) is very short for a B meson; expect significant excited-state contamination."
+  - "The spectator u‑quark propagator runs backward (sink→source); γ₅-hermiticity S_u(0;x)=γ₅S_u†(x;0)γ₅ must be applied before building the sequential source."
+  - "For generate_einsum: source (quark=b, antiquark=u, gamma=g5), sink (quark=s, antiquark=u, gamma=g5), current (quark=s, antiquark=b, gamma=gx)."

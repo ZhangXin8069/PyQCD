@@ -1,0 +1,91 @@
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+task:
+  name: rho_meson_2pt_point_source
+  description: >
+    Compute the two-point correlation function of the rho+ meson at zero momentum
+    using a point source at spatial origin and time slice 0, with stout-smeared
+    gauge links (n_steps=1, rho=0.125, ndim=4). The correlator is formed by
+    contracting one light-quark point-source propagator with itself, traced with
+    the vector gamma matrices gamma_x, gamma_y, gamma_z and averaged over the three
+    polarizations. The full 72-time-slice correlator is saved as a plain text file
+    with no header or metadata.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: rho_2pt
+      type: meson_2pt
+      name: rho_meson_two_point_correlator
+
+  hadrons:
+    - id: rho_plus
+      name: rho
+      type: meson
+      flavor: anti-d + u (both light quarks)
+      momentum: [0, 0, 0]
+      interpolating_operator: "\\bar{d} \\gamma_i u  (i = 1,2,3; averaged)"
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Multigrid solver using blocking parameters from ensemble (level 1: [6,6,6,3], level 2: [4,4,4,6])
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: rho_corr
+      type: meson_2pt
+      propagator: prop_l_point
+      observable: rho_2pt
+
+output:
+  format: txt
+  metadata: false
+
+extras: []

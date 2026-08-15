@@ -1,0 +1,8 @@
+Calculate the three-point correlation function for Ds+ -> Ds+ electromagnetic transition via (c->c) vector current.
+Use the Ds+ meson with quark content anti-s c at both source and sink.
+Use the gamma_5 interpolating operator at both source and sink.
+Use the transition current \bar{c} gamma_x c.
+Use the point source at position [0,0,0,0], zero momentum, and tseq = 8.
+Invert all propagators using stout-smeared gauge links with parameters (1, 0.125, 4).
+Do not compute the 2pt function.
+Save the final result without any header or extra text to a txt file in the run directory.

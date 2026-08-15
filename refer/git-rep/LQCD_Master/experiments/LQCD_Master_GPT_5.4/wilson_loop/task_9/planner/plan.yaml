@@ -1,0 +1,152 @@
+task:
+  name: wilson_loop_R3_T3_xt_yt_zt_average_cfg10000
+  description: Compute the per-configuration rectangular Wilson loop estimator W(R=3,T=3) on cfg 10000 of the C24P29 ensemble, using gauge links only, averaging equally over the XT, YT, and ZT planes, and writing only the final averaged scalar value to a plain txt file in the run directory.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wilson_loop_r3_t3_avg_cfg10000
+      type: wilsonloop
+      name: Per-configuration Wilson loop estimator W(R=3,T=3) averaged over XT, YT, and ZT planes on cfg 10000
+
+  hadrons: []
+
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - gauge_only
+  - root_rank_txt_only
+  - planewise_validation
+  - dummy_group_ignored
+
+freeform_plan: |
+  Physical category:
+    Pure-gauge Wilson-loop measurement only. This task computes the bare rectangular loop average and does not extract a static potential, effective potential, or any fermionic observable.
+
+  Deliverable and scope:
+    The deliverable is a per-configuration estimator for cfg 10000, not an ensemble-averaged physics result.
+    The final reported number is
+      W_avg(cfg10000; R=3, T=3) = [W_XT + W_YT + W_ZT] / 3
+    with each W_plane defined as the lattice average of (1/Nc) Re Tr of the ordered link product around the corresponding 3x3 rectangle.
+
+  Ensemble usage note:
+    Use the provided ensemble block exactly for configuration location, lattice geometry, and MPI layout.
+    For this gauge-only task, quark masses, clover, multigrid, and fermionic boundary-condition details are carried only as ensemble metadata and are not used in the measurement logic.
+
+  Gauge-field input and geometry:
+    Read cfg 10000 from the provided LIME/QIO path.
+    Lattice dimensions are 24 x 24 x 24 x 72.
+    MPI process grid is [1,1,1,4], so the local time extent per rank is 72 / 4 = 18.
+
+  Wilson-loop definition:
+    Use Nc = 3 and compute
+      W_plane = (1 / (V * Nc)) * sum_x Re Tr U_loop_plane(x)
+    where V = 24 * 24 * 24 * 72 is the full lattice four-volume, and U_loop_plane(x) is the ordered SU(3) matrix product around the rectangle based at site x.
+    No additional normalization factor is applied after this step.
+
+  Paths for R=3, T=3:
+    XT path:
+      +X,+X,+X,+T,+T,+T,-X,-X,-X,-T,-T,-T
+    YT path:
+      +Y,+Y,+Y,+T,+T,+T,-Y,-Y,-Y,-T,-T,-T
+    ZT path:
+      +Z,+Z,+Z,+T,+T,+T,-Z,-Z,-Z,-T,-T,-T
+
+  PyQUDA gauge.loop packing rule:
+    Because gauge.loop() requires exactly 4 outer groups, call it with
+      groups  = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+      weights = [1, 1, 1, 0]
+    The fourth entry is dummy padding only. It must be ignored completely in all physics averaging and validation.
+    Only returned entries 0, 1, and 2 contribute to W_XT, W_YT, W_ZT.
+
+  Returned object handling and validated reduction chain:
+    For each active result res[i] with i in {0,1,2}:
+      1. Transfer to host with getHost().
+      2. Interpret the host data as a lattice field of SU(3) matrices and flatten only the site dimensions, leaving the final Nc x Nc color indices intact.
+      3. Compute the per-site real color trace ReTr(x) = Re Tr U_loop(x).
+      4. Reshape the scalar site field to the local even-odd lattice shape required by gatherLattice:
+           local_shape = (2, 18, 24, 24, 12)
+         corresponding to
+           (parity, local_t, local_z, local_y, local_x/2)
+         for dimensions [24,24,24,72] and process grid [1,1,1,4].
+      5. Apply core.gatherLattice(field, [-1,-1,-1,-1]) to assemble the global scalar field on rank 0.
+      6. On rank 0 only, sum over all sites and divide once by V * Nc, with
+           V = 24 * 24 * 24 * 72
+           Nc = 3
+         to obtain W_plane.
+    This fixes the normalization and makes the gather shape explicit for executability.
+
+  Minimal validation before final averaging:
+    Compute W_XT, W_YT, and W_ZT separately.
+    Before forming W_avg, verify on rank 0 that all three values are finite real scalars.
+    If any plane value is non-finite, treat this as a measurement failure and do not write an output file.
+    If all are finite, form the equal-weight average
+      W_avg = (W_XT + W_YT + W_ZT) / 3.
+    This validation is intentionally minimal and targeted at catching path-packing, indexing, or reduction mistakes.
+
+  Smearing choice:
+    Do not apply link smearing.
+    Use the gauge links as loaded.
+
+  Output contract:
+    Root rank only writes the file
+      wilson_loop_R3_T3_avg_cfg10000.txt
+    in the current run directory.
+    File content must be exactly one plain decimal floating-point number representing W_avg.
+    A single trailing newline is allowed.
+    No header, labels, JSON, YAML, comments, or additional text are permitted in the file.
+    Non-root ranks must not write this file.
+    In normal success mode, emit no informational stdout text.
+    If the file already exists, overwrite it.
+
+  Script structure expectations for downstream implementation:
+    1. Initialize PyQUDA with lattice [24,24,24,72] and grid [1,1,1,4].
+    2. Load cfg 10000 from the provided path and move the gauge field to device.
+    3. Construct the XT, YT, and ZT R=3, T=3 rectangular paths.
+    4. Call gauge.loop() with the 4-group padded packing and weights [1,1,1,0].
+    5. Use only result indices 0,1,2.
+    6. For each of those three results, compute the per-plane scalar using the explicit local shape (2,18,24,24,12), gather, and divide by V*Nc exactly once.
+    7. Validate that the three plane values are finite.
+    8. Average them equally to obtain W_avg.
+    9. On rank 0 only, overwrite wilson_loop_R3_T3_avg_cfg10000.txt with the numeric value only.
+
+  Scientific interpretation note:
+    This plan produces a single-configuration Wilson-loop estimator for cfg 10000. It is suitable for data production or code validation, but by itself it is not an ensemble-averaged observable with uncertainty.
