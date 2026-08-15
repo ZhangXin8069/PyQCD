@@ -115,6 +115,35 @@ def test_tmd_extraction_chain():
     assert np.all(np.isfinite(sftx_energy_density_t0(1.0, 0.1, 2.0)))
 
 
+def test_tmd_matching_nlo():
+    """TMD 混合方案 1 圈匹配：Z⁻¹ 还原输入、快度/软因子生效、形状正确。"""
+    from pyqcd.renorm import tmd_matching_hybrid
+    x = np.linspace(0.05, 0.95, 48)
+    yg = x * np.exp(-x / 0.3)         # 物理输入 y·g(y)（y→0 衰减）
+    # 1) δ 项（LO）主导：cs=0, S=1 → 输出 ≈ 输入（NLO 修正 O(αs) < 30%）
+    x_o, out = tmd_matching_hybrid(x, b_perp=[0.2], mu=2.0, pz_gev=2.0,
+                                   cs_kernel=0.0, soft_factor=1.0, x_tmd=yg)
+    assert x_o.shape == x.shape
+    assert np.all(np.isfinite(out))
+    assert np.max(np.abs(out - yg)) < 0.3 * np.max(yg)
+    # 2) 快度演化因子：pz_scale≠pz → 输出 × exp[½ln((2Pz)²/(2ζ)²)K]
+    _, out_rap = tmd_matching_hybrid(x, b_perp=[0.2], mu=2.0, pz_gev=2.0,
+                                     cs_kernel=0.1, soft_factor=1.0,
+                                     pz_scale=1.0, x_tmd=yg)
+    rap = np.exp(0.5 * np.log((2.0 * 2.0) ** 2 / (2.0 * 1.0) ** 2) * 0.1)
+    assert np.allclose(out_rap, out * rap, rtol=1e-8)
+    # 3) 软函数：S=4 → 输出 ×½
+    _, out_s = tmd_matching_hybrid(x, b_perp=[0.2], mu=2.0, pz_gev=2.0,
+                                   cs_kernel=0.0, soft_factor=4.0, x_tmd=yg)
+    assert np.allclose(out_s, out / 2.0, rtol=1e-8)
+    # 4) 多 b⊥：nb=2 输出形状 (nx, 2)
+    yg2 = np.column_stack([yg, 0.5 * yg])
+    _, out2 = tmd_matching_hybrid(x, b_perp=[0.2, 0.4], mu=2.0, pz_gev=2.0,
+                                  cs_kernel=0.0, soft_factor=1.0, x_tmd=yg2)
+    assert out2.shape == (len(x), 2)
+    assert np.all(np.isfinite(out2))
+
+
 def test_scale_setting_flow_behavior():
     """尺度设定与流时间行为：t²⟨E⟩ 单调递增且 t0 可求。"""
     from pyqcd.renorm import (

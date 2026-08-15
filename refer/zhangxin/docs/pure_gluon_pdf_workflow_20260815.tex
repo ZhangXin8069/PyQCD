@@ -1,0 +1,548 @@
+% ============================================================
+% pure 报告 — 规范模板 v2（xelatex + ctex）
+% 主题: 胶子 PDF 工作流核心剖析（Clover 场强 → 光锥 PDF）
+% 编译: xelatex 两遍；交付前 Overfull 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+% ===== 色板（语义化；全文档同一颜色只表达同一类含义）=====
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+% ===== 全局防溢出设置 =====
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+% ===== 层次分明的标题 =====
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+% ===== 彩色标识框 =====
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+% ===== 代码样式 =====
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{胶子 PDF 工作流核心剖析：从 Clover 场强到光锥 PDF 的代码--物理映射}
+\author{opencode pure}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对 \texttt{zhangxin/}（张 X 的胶子 PDF 工作流）做穷尽性核心剖析。
+项目性质判定为\textbf{代码--物理交叉向}：核心是一套用 LaMET 框架计算核子非极化
+胶子 quasi-PDF 的完整数值链（Clover 场强 $\to$ 对偶场强 $\to$ 非局域 Wilson 线
+OPE 算符 $\to$ 蒸馏质子两点函数 $\to$ 矩阵元 $\to$ Fourier 变换 $\to$ 微扰匹配），
+配套生产级工程架构（MPI 并行、CuPy GPU 后端、系综预设、子命令 CLI）与统计
+分析框架（jackknife、有效质量、比值、Wilson 线分析）。共枚举核心部分候选
+10 项：深挖 6、浅析 3、排除 1。最深结论：非局域胶子 OPE 算符的
+$\mathrm{Tr}_c[F_{z\mu}(z)\,W(z{\leftarrow}0)\,\tilde{F}^{\mu z}(0)\,W(0{\leftarrow}z)]$
+构造是全部物理的枢纽——它是唯一同时承载场强张量、对偶变换、Wilson 线与
+Lorentz 指标组合语义的代码对象；而匹配与重整化环节目前为 LO 占位实现，是
+物理结论最需警惕的未验证部分。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+
+\subsection{项目性质判定}
+
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码--物理交叉向}（依据：两个主工作流脚本共
+3512 行，其中物理核心函数——场强/对偶/算符/蒸馏/傅里叶/匹配——约占 60\%；
+每个核心代码符号均有明确物理对象且可双向追溯；配套统计与工程代码
+\~40\%）。
+\end{keybox}
+
+项目定位（依据 \texttt{AGENTS.md}）：张 X 的胶子 PDF 研究框架，目标是计算
+\textbf{核子中的胶子 TMD-PDF/PDF}，物理方法为 LaMET + 蒸馏（distillation）。
+仓库同时提供两个实现：自包含单脚本流水线（理解算法用）与模块化 MPI 生产版
+（HPC 运行用），外加基于 \texttt{include.py} 的关联函数分析框架。
+
+\subsection{核心部分总清单（穷尽枚举）}
+
+\begin{xltabular}{\textwidth}{lllX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & Clover 场强与对偶场强 & 深挖 &
+四 plaquette 组合 + 反厄米投影 + Levi-Civita 对偶，全 einsum 向量化 \\
+C2 & 非局域 OPE 算符与 Wilson 线 & 深挖 &
+$\mathrm{Tr}_c[F\,W\,\tilde{F}\,W]$ 枢纽构造，含 $+z/-z$/xy/规范固定 4 类变体 \\
+C3 & 蒸馏质子 2pt（VVV、perambulator、Wick 收缩、宇称投影） & 深挖 &
+$\varepsilon_{ijk}$ 六项收缩 + 直接/交换费曼图 + 边界符号约定 \\
+C4 & quasi-PDF 重构链（矩阵元$\to$Fourier$\to$匹配） & 深挖 &
+反对称 sin 变换 + LO 匹配核占位实现（未验证项） \\
+C5 & 生产工程架构（MPI、CuPy 后端、系综预设、CLI） & 深挖 &
+Lorentz 对按 rank 分发、6 系综预设、stdin 向后兼容 \\
+C6 & 统计分析框架（include.py、lsq\_tools.py） & 深挖 &
+向量化 jackknife、cosh 有效质量、比值/折叠分析、符号微分拟合 \\
+C7 & IOG 二进制读取器（iog\_reader/） & 浅析 &
+ctypes 桥接 C 库，元数据标签解释为 DataFrame \\
+C8 & 分析脚本族（main*.py） & 浅析 &
+pion 3pt 比值、meff、IOG 提取的使用层 \\
+C9 & Chroma 测量流水线 & 浅析 &
+Chroma XML 输入生成（源/传播子/顺序源/building-block） \\
+C10 & 说明文档（AGENTS.md 等） & 排除 &
+通用约定说明，无独特性；README.md 仅 2 行占位 \\
+\bottomrule
+\end{xltabular}
+
+候选枚举覆盖全仓库 12 个 Python 源文件与 2 个说明文件，三态填满、
+无"未处理"项。
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+\subsection{C1：Clover 场强与对偶场强}
+
+\begin{physbox}
+\textbf{物理图像:} 格点上的场强张量 $F_{\mu\nu}(x)$ 用围绕格点 $x$ 的四个基本
+plaquette 的反对称组合构造——Clover 叶。plaquette $P_{\mu\nu}(x)$ 是最小的
+格点规范不变闭合环，相当于"连续极限下的 $F_{\mu\nu}$ 的平行输运量子化"；
+对偶场强 $\tilde{F}$ 则是 Hodge 对偶，把色磁场换为色电场。
+\end{physbox}
+
+在 $a=1$、$g_0=1$ 的格点单位下，单 plaquette 与连续场强的对应关系为
+$P_{\mu\nu}(x) \simeq \exp(i a^2 F_{\mu\nu}) \simeq 1 + i a^2 F_{\mu\nu} + O(a^4)$，
+故反厄米组合给出（依据：定义 + $a=1$ 近似）：
+\begin{equation}\label{eq:clover}
+F_{\mu\nu}(x) = -\frac{i}{8}\sum_{p\in\text{clover}}\left(P_p(x) - P_p^\dagger(x)\right)
+,\qquad
+\tilde{F}_{\mu\nu} = \frac{1}{2}\varepsilon_{\mu\nu\rho\sigma}F^{\rho\sigma}.
+\end{equation}
+\eqref{eq:clover} 中四叶 plaquette 的几何排列为 $P_{\mu\nu}$、$P_{\nu,-\mu}$、
+$P_{-\mu,-\nu}$、$P_{-\nu,\mu}$（见 \texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:346-359}}
+的注释图）。$\varepsilon$ 张量按排列奇偶性逐元素构造并乘以 $1/2$ 前因子
+（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:239-287}}），缩并即得对偶场强
+（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:509-514}}）。
+
+\textbf{量纲检查:} 在 $a=1$ 下 $F_{\mu\nu}$ 无量纲；对偶缩并 $\varepsilon F$ 不
+改变量纲。\textbf{极限校验:} 若规范场为纯规范（零场强），四 plaquette 均
+为单位元，$Q-Q^\dagger=0$，$F=0$，正确（零场强极限）；$g_0\to0$ 时
+$P\to 1$ 同理。
+
+代码实现要点：四个 plaquette 通过 \texttt{np.roll} 做格点平移（
+\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:373-377}}），全部缩并用
+\texttt{opt\_einsum} 的张量记号表达，无显式循环；生产版用
+\texttt{np.einsum} 逐对实现并标注"EXACT copy from Operator.py"
+（\texttt{\nolinkurl{gluon\_pdf\_workflow.py:528-619}}），保证与原始 donghx 脚本数值一致。
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查，无孤儿符号。
+\end{mapbox}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{gauge[...,mu,:,:]} & $U_\mu(x)$ & SU(3) 规范链接，末三维为色矩阵；\texttt{\nolinkurl{gluon_pdf_full_workflow.py:312}} \\
+\texttt{pla\_ru 等四叶} & $P_{\mu\nu}$ 族 & 四个定向 plaquette；\texttt{\nolinkurl{gluon_pdf_full_workflow.py:379-451}} \\
+\texttt{ans} & $Q-Q^\dagger$ & Clover 反厄米组合；\texttt{\nolinkurl{gluon_pdf_full_workflow.py:455-461}} \\
+\texttt{epsilon4} & $\varepsilon_{\mu\nu\rho\sigma}/2$ & Levi-Civita 对偶张量；\texttt{\nolinkurl{gluon_pdf_full_workflow.py:239-287}} \\
+\texttt{pla\_tilde} & $\tilde{F}_{\mu\nu}$ & Hodge 对偶场强；\texttt{\nolinkurl{gluon_pdf_workflow.py:639-651}} \\
+\bottomrule
+\end{xltabular}
+
+独特点：全 einsum 无循环的 Clover 构造在两个工作流中独立实现但逻辑逐行对应，
+为跨实现一致性验证（\texttt{verify} 类测试）提供了天然基准。
+
+\subsection{C2：非局域胶子 OPE 算符与 Wilson 线（核心中的核心）}
+
+\begin{physbox}
+\textbf{物理图像:} 胶子 quasi-PDF 需要"把胶子从质子里拉出来看"：在 z 处放
+一个场强算符、在 0 处放一个对偶场强算符，中间用 Wilson 线（规范连接的
+平行输运"绳子"）连接以保持规范不变。绳长 $z$ 是准 PDF 的坐标空间变量；
+对 $z$ 做 Fourier 变换就得到动量分数 $x$ 的分布。
+\end{physbox}
+
+非局域 OPE 算符的规范形式（代码注释引 Eq.(25)，\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:521-537}}）：
+\begin{equation}\label{eq:ope}
+O(z) = \mathrm{Tr}_c\!\left[ F_{\mu\nu}(z)\, W(z{\leftarrow}0)\,
+\tilde{F}^{\nu}_{\ \,\mu}(0)\, W(0{\leftarrow}z) \right],
+\qquad
+W(0{\to}z) = \prod_{k=0}^{z-1} U_z(k\hat{z}).
+\end{equation}
+其中 $F_{\mu\nu}(z)$ 为沿 Wilson 线方向 $\hat{z}$ 的场强分量，$\tilde{F}$ 为
+对偶场强。物理动机：胶子场的双线性 $\mathrm{Tr}[F F]$ 型算符在连续 QCD 中
+是胶子分布的定义式 $g(x) \sim \int dz\, e^{ixPz}\langle F(z)WF(0)W\rangle$
+（LaMET 框架）；Wilson 线保证整体规范不变性。
+
+代码实现（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:573-613}}）为六步流水：
+① \texttt{np.roll} 将 $F$ 平移到 $z=\delta_z$；② 反向 Wilson 线
+$W(z{\leftarrow}0)=\prod U_z^\dagger$；③ 在 0 处插入 $\tilde{F}$；
+④ 正向 Wilson 线 $\prod U_z$；⑤ 色迹 $\mathrm{Tr}_c$；⑥ 空间求和。
+几何结构（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:539-547}}）为
+
+\[
+\text{F}_{\mu\nu}(z)\ \xleftarrow{W(z\leftarrow 0)}\ \text{F}_{\mu_2\nu_2}(0)
+\]
+
+\textbf{极限与退化校验:} $z=0$ 时两条 Wilson 线退化为单位元，
+$O(0)=\mathrm{Tr}_c[F_{\mu\nu}\tilde{F}^{\nu\mu}]$ 为局域算符（正确退化为
+胶子自旋/密度算符族）；$z\to L/2$（反周期边界）时 Wilson 线环绕晶格，
+数值上应呈指数衰减信号。\textbf{量纲检查:} $F$、$\tilde{F}$、$W$ 均无量纲，
+$O(z)$ 无量纲。
+
+非极化胶子需要三对 Lorentz 指标组合（\texttt{\nolinkurl{gluon\_pdf\_workflow.py:1003-1007}}）：
+\begin{equation}\label{eq:pairs}
+(\mu\nu,\mu_2\nu_2) = (t,\perp_1;\ t,\perp_1),\ (t,\perp_2;\ t,\perp_2),\ 
+(\perp_1,\perp_2;\ \perp_1,\perp_2),
+\end{equation}
+即两个"时间-横向"组合加一个"双横向"组合，$\perp_i$ 为垂直于 Wilson 线方向的
+两个横方向。三对恰好对应生产版 MPI 的三个 rank（见 C5）。
+
+\textbf{算符变体矩阵}（\texttt{\nolinkurl{gluon\_pdf\_workflow.py:659-816}}）：
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{函数} & 物理变体 & 用途 \\
+\midrule
+\endhead
+\texttt{operators\_new\_z0\_mu2} & 标准 $+z$ 算符 & 非极化/螺旋度主算符 \\
+\texttt{operators\_new\_z0\_mu2\_xy} & 保留横向 (x,y) 维 & 横向动量分辨（TMD 走向） \\
+\texttt{operators\_new\_z0\_mz\_mu2} & 负 $z$ 方向 & $z\leftrightarrow -z$ 对称性利用 \\
+\texttt{operators\_FF\_z0} & 无 Wilson 线 & 规范固定（Coulomb/Landau）下的廉价版 \\
+\bottomrule
+\end{xltabular}
+
+\begin{warnbox}
+\texttt{operators\_FF\_z0} 中 $z$ 方向硬编码为 2（z 方向）且无 Wilson 线，
+仅在规范固定有效；若误用于未固定规范组态，物理结论无效（推断，依据
+\texttt{\nolinkurl{gluon\_pdf\_workflow.py:786-801}} 注释）。
+\end{warnbox}
+
+\subsection{C3：蒸馏质子 2pt（VVV、Wick 收缩、宇称投影）}
+
+\begin{physbox}
+\textbf{物理图像:} 蒸馏（distillation）把夸克传播子投影到低维 Laplace 本征
+矢量空间：$v^a_i(x)$ 是三维 Laplace 算符的第 $a$ 个本征矢量（$i$ 为色指标）。
+三夸克块 $\Phi_{abc}$ 把三个本征矢"拧"成质子的规范不变构型（
+$\varepsilon_{ijk}$ 全反对称 + 动量相位），perambulator $\tau$ 是蒸馏空间中的
+夸克传播子。两点函数就是这两者的 Wick 收缩——直接项减交换项对应两个
+费曼图（质子内两个夸克交换）。
+\end{physbox}
+
+动量投影的三夸克块（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:692-705}}）：
+\begin{equation}\label{eq:vvv}
+\Phi_{abc}(P) = \sum_{x} e^{-iP\cdot x}\, \varepsilon_{ijk}\,
+v_i^{\,a}(x)\, v_j^{\,b}(x)\, v_k^{\,c}(x),
+\end{equation}
+实现中 $\varepsilon_{ijk}$ 的六个置换显式展开为三次"正号（偶排列）+三次
+负号（奇排列）"的 einsum 收缩，并按 $x$-层分片以控制显存
+（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:726-784}}）；生产版相同逻辑在 GPU 上
+执行（\texttt{\nolinkurl{gluon\_pdf\_workflow.py:884-929}}）。
+
+两点函数 Wick 收缩（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:824-846}}）：
+\begin{equation}\label{eq:wick}
+C_2(t_{\rm snk},t_{\rm src}) =
+\mathrm{Tr}\!\left[\Phi_{\rm snk}\,\tau\,(\Gamma\tau\Gamma)\,\tau\,\Phi_{\rm src}^*\right]_{\rm direct}
+-
+\mathrm{Tr}\!\left[\Phi_{\rm snk}\,\tau\,(\Gamma\tau\Gamma)\,\tau\,\Phi_{\rm src}^*\right]_{\rm exchange},
+\end{equation}
+其中 $\Gamma$ 为插值算符的 Dirac 结构（$C\gamma_5\gamma_4$，即
+\texttt{gamma[15]}，\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1480-1481}}），
+$\Gamma\tau\Gamma$ 为夹层 perambulator（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1490-1493}}）。
+随后宇称投影 $P_{\pm} = (\gamma_0\pm\gamma_4)/2$（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1509-1510}}）
+并按时间反周期边界条件加符号约定：$t_{\rm snk}<t_{\rm src}$ 时正宇称分量取负号、
+$t_{\rm snk}>t_{\rm src}$ 时负宇称分量取负号（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1514-1519}}）。
+
+\textbf{量纲检查:} $\Phi$ 无量纲（本征矢归一化），$\tau$ 无量纲，$C_2$ 无量纲。
+\textbf{极限校验:} $Nev_1\to0$ 时 $\Phi=0$、$C_2=0$（退化正确）；动量 $P=0$
+时相位因子退化为 1，$\Phi$ 为纯空间构型。\textbf{边界情形:} 时间分离
+$2\le\Delta t\le30$ 的选择（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1500}}）滤除
+源汇污染近邻时间片。
+
+\begin{mapbox}
+\textbf{映射:} \texttt{eigvecs}$\leftrightarrow$ 本征矢 $v^a_i(x)$；
+\texttt{phase\_factor}$\leftrightarrow$ 动量相位 $e^{-iP\cdot x}$；
+\texttt{VVV\_sink}$\leftrightarrow$ 三夸克块 $\Phi_{abc}(P)$；
+\texttt{peram\_u}$\leftrightarrow$ perambulator $\tau$（形状
+$(Nt,4,4,Nev,Nev)$，\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:947}}）；
+\texttt{CG5peram\_uCG5}$\leftrightarrow\Gamma\tau\Gamma$；
+\texttt{interp}$\leftrightarrow\Gamma=C\gamma_5\gamma_4$。
+\end{mapbox}
+
+\subsection{C4：quasi-PDF 重构链（矩阵元$\to$Fourier$\to$匹配）}
+
+\begin{physbox}
+\textbf{物理图像:} 这是 LaMET 的输出端：质子中的胶子分布 = 坐标空间矩阵元
+的 Fourier 变换。矩阵元 $h(z,P_z)=\langle P|O(z)|P\rangle$ 在断开
+（disconnect）近似下直接由 OPE 算符期望值给出；再与 2pt 比值并做 plateau
+平均剔除激发态污染；对 $z$ 做 sin 变换得到"被 boost 拉长的"准分布
+$\tilde g(x,P_z)$；最后用微扰匹配核把准分布"还原"成光锥 PDF $g(x)$。
+\end{physbox}
+
+非极化胶子的反对称部分（$\tilde g$ 对 $z\to -z$ 为奇函数）用 sin 变换
+（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1086-1137}}）：
+\begin{equation}\label{eq:ft}
+\tilde g(x,P_z) = \frac{2P_z}{x}\int_0^{z_{\max}} dz\,
+h(z,P_z)\,\sin(x P_z z),
+\qquad
+h(z,P_z) = \lim_{\Delta t\to\infty}
+\frac{C_3(\Delta t,z)}{C_2(\Delta t)},
+\end{equation}
+$h$ 的 plateau 提取见 \texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:979-1031}}，
+断开近似下的组态平均 + jackknife 见 \texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1034-1083}}。
+匹配核 LO 为恒等（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1144-1173}}）：
+\begin{equation}\label{eq:match}
+g(x,\mu) = \tilde g(x,P_z) - \frac{\alpha_s}{2\pi}
+\int_x^1 \frac{dy}{y}\, C_{gg}\!\left(\frac{x}{y}\right)\tilde g(y,P_z),
+\qquad C_{gg}^{(\rm LO)}(\xi) = \delta(1-\xi),
+\end{equation}
+
+\textbf{量纲检查:} $P_z = 2\pi n_z/L$（\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1600}}）
+在格点单位下无量纲，$z$ 亦无量纲，故 $\tilde g$ 无量纲（PDF 归一化要求
+$\int_0^1 dx\, g(x)=1$）。\textbf{极限校验:} $x\to0$ 时前因子 $2P_z/x$ 发散——
+小 $x$ 是准 PDF 的已知困难区，未做处理（局限）；$P_z\to0$ 时 $\tilde g\to0$
+（无 boost 则无信息）；$z_{\max}\to\infty$ 时积分趋于完整 Fourier 变换。
+
+\begin{warnbox}
+该链有三处\textcolor{warn}{未验证/占位}实现（代码注释明示）：
+① \eqref{eq:match} 的 NLO 匹配核为占位符，\texttt{matching\_kernel\_gg\_lo}
+仅返回 $\delta(1-\xi)$；② Fourier 变换未含重整化因子（注释"这里忽略了重整化
+因子"，\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1101}}）；③ 该链未经过真实
+组态数据端到端数值验证（本报告为只读分析，不运行数据）。任何基于此链的
+PDF 数值结论须以"NLO 匹配与重整化完成"为前提（推断）。
+\end{warnbox}
+
+\subsection{C5：生产工程架构（MPI、CuPy、系综预设、CLI）}
+
+\begin{algobox}
+\textbf{核心算法:} 子命令式 CLI（\texttt{2pt}/\texttt{ope}/\texttt{pla}/\texttt{full}）
++ 内建 6 系综预设 + 双后端抽象（CuPy/NumPy）+ MPI 按 Lorentz 对分发；
+复杂度：OPE 主循环 $O(N_t N_x^3\, \delta_z^2)$ 次 $3\times3$ 矩阵乘，可并行
+分解为 rank 数份。
+\end{algobox}
+
+三层工程设计的独特性（\texttt{gluon\_pdf\_workflow.py}）：
+
+\textbf{① 后端抽象}（\texttt{\nolinkurl{gluon\_pdf\_workflow.py:45-100}}）：\texttt{get\_xp()}
+统一返回 \texttt{cupy} 或 \texttt{numpy}，\texttt{asarray}/\texttt{to\_numpy}/
+\texttt{synchronize}/\texttt{free\_memory\_pool} 构成完整的显存生命周期管理。
+物理核心函数全部走 \texttt{xp = get\_xp()} 通道，一份代码双后端运行——对比
+朴素实现（GPU/CPU 两套代码）是显著工程优势。
+
+\textbf{② MPI 粒度与物理对齐}（\texttt{\nolinkurl{gluon\_pdf\_workflow.py:1234-1241}}）：
+Lorentz 对（3 对，见 \eqref{eq:pairs}）按 rank 取模分发——
+$\text{pair}_i$ 到 $\text{rank}\,(i \bmod \text{size})$。三对恰配三 rank，
+天然无通信并行；\texttt{--no-mpi} 与串行回退保证单机可用。
+
+\textbf{③ 系综预设}（\texttt{\nolinkurl{gluon\_pdf\_workflow.py:107-151}}）：6 个生产系综
+（L24x72、L32x64、L32x96、L36x108、L48x96、L48x144），每个封装
+$\beta$/质量/格点/动量涂抹参数与集群路径模板，\texttt{\{conf\_id\}} 占位符
+按组态号替换（\texttt{\nolinkurl{gluon\_pdf\_workflow.py:154-164}}）——把"每次手写
+参数文件"压缩为一行命令。\textbf{向后兼容:} \texttt{parse\_stdin\_params}
+保留原 \texttt{fileinput} 键值对格式（\texttt{\nolinkurl{gluon\_pdf\_workflow.py:1357-1389}}），
+旧脚本无需迁移即可复用。
+
+\begin{mapbox}
+\textbf{映射:} \texttt{ENSEMBLES} $\leftrightarrow$ 生产格点系综库（
+$\beta=6.20\sim6.72$，对应 $a\approx0.1\sim0.06$ fm 量级，推断）；
+\texttt{rank} $\leftrightarrow$ MPI 进程；\texttt{link\_dir} $\leftrightarrow$
+Wilson 线方向 $(\hat x,\hat y,\hat z)$；\texttt{--delta-z} $\leftrightarrow$
+最大 $z/a$。
+\end{mapbox}
+
+\subsection{C6：统计分析框架（jackknife、有效质量、比值与折叠）}
+
+\begin{physbox}
+\textbf{物理图像:} 关联函数分析的三大标准动作：① jackknife——删除一个组态
+再平均，从"组态间涨落"直接给出统计误差，无需分布假设；② 有效质量——
+由关联函数的局域比反解单粒子能量（log 或 cosh 形式，后者利用时间反演
+对称性）；③ 比值——$C_3/C_2$ 消去源/汇归一化因子，plateau 区平均得到
+矩阵元。
+\end{physbox}
+
+jackknife 的向量化实现是算法亮点（\texttt{\nolinkurl{include.py:234-240}}）：
+\begin{equation}\label{eq:jk}
+\bar\theta_i = \frac{\sum_{j\neq i} x_j}{n-1} = \frac{S - x_i}{n-1},
+\qquad
+\sigma_{\rm JK}^2 = \frac{n-1}{n}\sum_i(\bar\theta_i-\bar\theta)^2 ,
+\end{equation}
+单次求和 $S$ 复用 $n$ 次，$O(n)$ 总开销而非朴素 $O(n^2)$（
+\texttt{\nolinkurl{include.py:238-239}} 一行完成全部子样本）。
+
+cosh 有效质量（\texttt{\nolinkurl{include.py:259-261}}）：
+\begin{equation}\label{eq:meff}
+m_{\rm eff}(t) = \frac{0.1973\ \mathrm{GeV\cdot fm}}{a}
+\operatorname{arccosh}\!\frac{C(t+1)+C(t-1)}{2C(t)}
+\end{equation}
+其中 $a$（\texttt{alttc}）为格距（fm），前因子完成 $1/a\to\mathrm{GeV}$
+量纲转换（\texttt{\nolinkurl{include.py:103}}）。
+
+比值分析（\texttt{\nolinkurl{include.py:301-304}}）：每个 $t_{\rm sep}$ 下
+$R(t)=\mathrm{Re}\,C_3(t)/C_2(t_{\rm sep})$，仅保留
+$t\le t_{\rm sep}$ 区间；\texttt{link\_analyse} 在 $t_{\rm sep}/2\pm5$ 窗口
+plateau 平均（\texttt{\nolinkurl{include.py:324}}）。\textbf{折叠增益:}
+\texttt{link\_fold} 把 $z$ 与 $-z$ 平均（\texttt{\nolinkurl{include.py:285-288}}），
+统计量翻倍且强制时间反演对称性——与 \texttt{time\_fold}
+（\texttt{\nolinkurl{include.py:182}}）同源。
+
+\textbf{拟合工具}（\texttt{\nolinkurl{lsq\_tools.py:65-118}}）：\texttt{cov\_M} 构造
+协方差矩阵，\texttt{lsq\_fit} 用 \texttt{lsqfit} 包做单/双态非线性拟合
+（\texttt{svdcut=1e-3} 处理近奇异协方差），支持 \texttt{p0} 与 prior 两种
+模式。另有 \texttt{\nolinkurl{include.py:485-559}} 的符号微分最优化
+（\texttt{min\_fun\_descent}/\texttt{min\_fun\_newton}，sympy 求导 +
+步长解析求解）——小众但自洽的备选拟合路径（\textcolor{warn}{未验证}
+在真实数据上的收敛性）。
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+双工作流同物理核心 & 单一脚本 & 单脚本可读全链（\texttt{gluon\_pdf\_full\_workflow.py}），生产版
+可 HPC 并行（MPI + GPU），物理函数逐行对应可交叉验证 \\
+einsum 全向量化无循环 & 逐格点嵌套循环 & 张量记号直译物理公式、可读且
+可 GPU 化；\texttt{opt\_einsum} 自动路径优化 \\
+蒸馏 + 动量涂抹 & 点源/墙源 & 组态数$\times$时间片压缩为
+$Nev_1^3$ 维子空间，多源多动量复用传播子；显存按 $x$-层分片 \\
+MPI 粒度 = Lorentz 对 & 时间片切分 & 3 对 $\leftrightarrow$ 3 rank 天然对齐，
+零通信；非整倍数时取模回退 \\
+jackknife 向量化 & 逐样本循环 & 单求和复用 $n$ 次，$O(n)$ 替代 $O(n^2)$
+（\texttt{\nolinkurl{include.py:238-239}}） \\
+IOG ctypes 桥接 & 手写二进制解析 & 直接复用 Chroma 输出，元数据标签
+自动解释（\texttt{\nolinkurl{iog\_reader/iog\_reader.py:14-41}}） \\
+\bottomrule
+\end{tabularx}
+\caption{独特性评估（数据来源: 代码结构实测与推导）}
+\end{table}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+
+\subsection{非局域 OPE 算符核心循环（六步构造）}
+
+\lstinputlisting[firstline=571,lastline=613]{/root/PyQCD/refer/zhangxin/gluon_pdf_full_workflow.py}
+
+注意第 574 行 \texttt{np.roll} 的平移量 $-\delta_z$ 对应"$F$ 位于 $z$ 处"，
+第 579 行回绕方向逐链接取共轭（$W^\dagger$），构成规范连接的闭合环。
+
+\subsection{Wick 收缩：直接项与交换项}
+
+\lstinputlisting[firstline=824,lastline=846]{/root/PyQCD/refer/zhangxin/gluon_pdf_full_workflow.py}
+
+\subsection{向量化 jackknife（单求和复用）}
+
+\lstinputlisting[firstline=234,lastline=249]{/root/PyQCD/refer/zhangxin/include.py}
+
+\subsection{核心公式汇总}
+
+\begin{equation}
+F_{\mu\nu}(x) = -\frac{i}{8}\sum_{p}\left(P_p(x)-P_p^\dagger(x)\right),\qquad
+\tilde{F}_{\mu\nu} = \frac{1}{2}\varepsilon_{\mu\nu\rho\sigma}F^{\rho\sigma}
+\end{equation}
+\begin{equation}
+O(z) = \mathrm{Tr}_c\!\left[F_{\mu\nu}(z)\,W(z{\leftarrow}0)\,
+\tilde{F}^{\nu}_{\ \,\mu}(0)\,W(0{\leftarrow}z)\right]
+\end{equation}
+\begin{equation}
+\Phi_{abc}(P) = \sum_x e^{-iP\cdot x}\,\varepsilon_{ijk}\,
+v_i^{\,a}(x)v_j^{\,b}(x)v_k^{\,c}(x)
+\end{equation}
+\begin{equation}
+\tilde g(x,P_z) = \frac{2P_z}{x}\int_0^{z_{\max}}\!dz\,
+h(z,P_z)\,\sin(xP_z z),\qquad
+g(x,\mu) = \tilde g - \frac{\alpha_s}{2\pi}\int_x^1\frac{dy}{y}C_{gg}\,\tilde g
+\end{equation}
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\detokenize{gluon_pdf_full_workflow.py:290-461}} & 仓库 & 场强构造（plaquette、Clover、反厄米投影） \\
+\texttt{\detokenize{gluon_pdf_full_workflow.py:521-652}} & 仓库 & 非局域 OPE 算符与全 $z$ 循环 \\
+\texttt{\detokenize{gluon_pdf_full_workflow.py:692-846}} & 仓库 & VVV 三夸克块与 Wick 收缩 \\
+\texttt{\detokenize{gluon_pdf_full_workflow.py:979-1137}} & 仓库 & 矩阵元提取与 Fourier 变换 \\
+\texttt{\detokenize{gluon_pdf_full_workflow.py:1144-1286}} & 仓库 & LO 匹配核与 jackknife \\
+\texttt{\detokenize{gluon_pdf_workflow.py:107-164}} & 仓库 & 系综预设与解析 \\
+\texttt{\detokenize{gluon_pdf_workflow.py:528-816}} & 仓库 & 生产版场强与算符族（EXACT copy 标注） \\
+\texttt{\detokenize{gluon_pdf_workflow.py:978-1025}} & 仓库 & Lorentz 对分配（unpol/helicity/gauge\_fix） \\
+\texttt{\detokenize{gluon_pdf_workflow.py:1357-1429}} & 仓库 & stdin/文件参数向后兼容 \\
+\texttt{\detokenize{include.py:234-261}} & 仓库 & jackknife 与 cosh 有效质量 \\
+\texttt{\detokenize{include.py:275-327}} & 仓库 & 比值与 Wilson 线分析（含折叠） \\
+\texttt{\detokenize{iog_reader/iog_reader.py:14-41}} & 仓库 & IOG ctypes 桥接 \\
+\texttt{\detokenize{lsq_tools.py:65-118}} & 仓库 & 协方差与 lsqfit 拟合 \\
+\texttt{\detokenize{beta6.20_.../creat_chroma.py:2-609}} & 仓库 & Chroma 测量流水线生成 \\
+\bottomrule
+\end{xltabular}
+
+% ================= 6 结论 =================
+\section{结论}
+
+\begin{conclbox}
+穷尽剖析完成：核心部分候选 10 项（深挖 6 / 浅析 3 / 排除 1）。
+\textbf{最强竞争力}在物理核心——非局域 OPE 算符族
+$O(z)=\mathrm{Tr}_c[F\,W\,\tilde{F}\,W]$（\eqref{eq:ope}）以单一构造同时
+承载场强、对偶、Wilson 线与 Lorentz 指标选择语义，且以全 einsum 向量化
+双工作流一致实现；配套工程（MPI 对粒度对齐、双后端、系综预设）与统计
+框架（向量化 jackknife、cosh 有效质量、折叠对称性）构成完整生产链。
+\end{conclbox}
+
+\begin{warnbox}
+\textbf{未验证/局限项}：① NLO 匹配核与重整化因子为占位实现（
+\texttt{\nolinkurl{gluon\_pdf\_full\_workflow.py:1144-1173}}、\texttt{:1101}），
+\eqref{eq:match} 链的 PDF 数值结论不可直接采信；② 小 $x$ 前因子 $2P_z/x$
+发散未处理；③ 本报告为只读分析，未运行真实组态数据验证数值正确性；
+④ \texttt{operators\_FF\_z0} 的硬编码 $z$ 方向与无 Wilson 线构造仅适用
+规范固定组态；⑤ 集群路径（\texttt{/public/...}）在本地不可访问，端到端
+运行需在 HPC 环境。
+\end{warnbox}
+
+\end{document}

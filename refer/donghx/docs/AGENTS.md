@@ -5,6 +5,7 @@
 | 文件 | 说明 |
 |---|---|
 | `donghx_code_analysis.tex` / `.pdf` | donghx 的 CuPy/DCU GPU 代码分析 |
+| `pure_gluon_ope_distillation_*.tex` / `.pdf` | pure 穷尽剖析：非定域胶子 OPE 算符 + 蒸馏质子 2pt（代码-物理映射） |
 
 ## 编译
 
