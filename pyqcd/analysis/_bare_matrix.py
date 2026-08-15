@@ -108,7 +108,8 @@ def _ratio_from_raw(_corr, _ope_01, _ope_30, _ope_31, sampa, jack,
     corr3 = resample(_corr3, jack, sampa.Nsample)
 
     corr3_disc = corr3 - corr2[:, :, :, None, None] * ope[:, :, None, :, :]
-    ratio = np.mean(corr3_disc / corr2[:, :, :, None, None], axis=1).real
+    eps = 1e-30
+    ratio = np.mean(corr3_disc / (corr2[:, :, :, None, None] + eps), axis=1).real
     if verbose:
         print(f"ratio shape: {ratio.shape}")
     return ratio

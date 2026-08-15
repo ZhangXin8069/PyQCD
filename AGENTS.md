@@ -16,6 +16,7 @@ bash logs/test0_anaratio/run-local.sh  # 03_ana_ratio 纯画图测试（25 项�
 bash logs/test0_bare/run-local.sh   # 03_bare_matrix 三方向裸矩阵元测试（18 项断言）
 bash logs/test0_energy/run-local.sh # 04_proton_energy 有效能量测试（8 项断言）
 bash logs/test0_fh/run-local.sh     # 06_FH_bare_matele FH 变换测试（38 项断言）
+bash logs/stab1/run-local.sh        # 全功能真实数据实战（docker 基线 10 组态，45 项断言 + 106 图 + 报告）
 bash examples/test0/run-local.sh    # 蒸馏管线一致性测试（调用 pyqcd 复现 docker-v20260805 全量输出）
 python examples/test0/main.py verify --run-dir examples/test0/v<ts>   # 一致性验证（A–E 项）
 cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，两遍）
@@ -29,7 +30,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 |
 | `docs/` | 51 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books），只读 |
-| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格） |
+| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 |
 | `cpp/` | C++ 后端占位 |
 
 ## 蒸馏管线一致性测试（examples/test0）
@@ -67,6 +68,16 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 统计基元 sem/resample/cov_mat 复用 `_disconnected.py`；各套件合成数据
 （物理可解析：meff/E0/c0 精确恢复）经 makedata 生成，verify 断言
 产物存在性 + 解析形状 + 参数恢复。
+
+## 全功能真实数据实战（logs/stab1）
+
+docker-v20260805 基线（10 组态真实数据）驱动全部分析功能链实战：
+02_ratio → 03_ana_ratio → 04_proton_energy（P2/P0）→ 06_FH → 05_ana_3dir
++ 中文 LaTeX 报告。数据适配：corr_pp (Nt,) → 平移不变切片矩阵 (Nt,Nt)；
+P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）。
+物理断言：P0 meff 平台 ≈ 1.12 GeV（质子质量，已验证结论）、P2 ≈ 1.56 GeV
+（色散）、E0 与 meff 平台一致；拟合用 svdcut=1e-6（10 组态协方差奇异）。
+分析报告：logs/stab1/docs/stab1_analysis.pdf（代码+物理+日志+交叉四视角）。
 
 ## 核心物理链（pyqcd/renorm）
 
