@@ -149,7 +149,8 @@ def compute_ratio(data_root, sampa: SampleParams2pt, jack: bool,
     gc.collect()
 
     corr3_disc = corr3 - corr2[:, :, :, None, None] * ope[:, :, None, :, :]
-    ratio = np.mean(corr3_disc / corr2[:, :, :, None, None], axis=1)
+    eps = 1e-30   # 除零保护（与 _disconnected.py 一致）
+    ratio = np.mean(corr3_disc / (corr2[:, :, :, None, None] + eps), axis=1)
     ratio = ratio.real
     if verbose:
         print("ratio shape:", ratio.shape)
