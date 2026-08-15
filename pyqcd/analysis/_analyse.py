@@ -14,6 +14,15 @@ from ..lattice._constants import fm2GeV
 from ..tools._base import ArraySlicer
 
 
+def _errstate(backend):
+    """后端无关的 errstate：numpy 有，cupy 没有（cupy 下直接计算并容忍 NaN）。"""
+    ctx = getattr(backend, 'errstate', None)
+    if ctx is not None:
+        return ctx(divide='ignore', invalid='ignore')
+    from contextlib import nullcontext
+    return nullcontext()
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Momentum to Energy conversion (GeV)
 # ═══════════════════════════════════════════════════════════════════
@@ -104,7 +113,7 @@ def Jackknife(data, Nconf_axes=0, only_sample: bool = False, cov_axes=None):
         Keys: 'data_sample', 'data_mean', 'data_err', 'data_cov' (if cov_axes).
     """
     # Auto-detect backend from input data type
-    is_cupy = hasattr(data, 'device')
+    is_cupy = type(data).__module__.startswith('cupy')
     if is_cupy:
         backend = get_backend()
     else:
@@ -264,7 +273,7 @@ def meff(data_sample, alttc, Nconf_axes: int = 0, Nt_axes: int = 1,
         Keys: 'data_sample', 'data_mean', 'data_err'.
     """
     # Auto-detect backend
-    is_cupy = hasattr(data_sample, 'device')
+    is_cupy = type(data_sample).__module__.startswith('cupy')
     if is_cupy:
         backend = get_backend()
     else:
@@ -280,7 +289,7 @@ def meff(data_sample, alttc, Nconf_axes: int = 0, Nt_axes: int = 1,
 
     meff_sample = backend.zeros_like(data_sample)
 
-    with backend.errstate(divide='ignore', invalid='ignore'):
+    with _errstate(backend):
         if meff_type == 'log':
             ArraySlicer(meff_sample).assign(
                 dims=[Nt_axes],
@@ -388,7 +397,7 @@ def ratio_3pt(data_3pt_sample, data_2ptI_sample, data_2ptF_sample=None,
         Keys: 'data_sample', 'data_mean', 'data_err'.
     """
     # Auto-detect backend from input to avoid cupy/numpy mismatch
-    is_cupy = hasattr(data_3pt_sample, 'device')
+    is_cupy = type(data_3pt_sample).__module__.startswith('cupy')
     if is_cupy:
         backend = get_backend()
     else:
@@ -437,7 +446,7 @@ def ratio_3pt(data_3pt_sample, data_2ptI_sample, data_2ptF_sample=None,
 
         num = C2I_tsep_minus_tau * C2F_at_tau * C2F_tsep
         den = C2F_tsep_minus_tau * C2I_at_tau * C2I_tsep
-        with backend.errstate(invalid='ignore', divide='ignore'):
+        with _errstate(backend):
             sqrt_term = backend.sqrt(backend.maximum(
                 backend.nan_to_num(num / den, nan=0.0), 0))
         ratio_sample = data_3pt_sample / C2F_tsep * sqrt_term
@@ -487,7 +496,7 @@ def ratio_3pt(data_3pt_sample, data_2ptI_sample, data_2ptF_sample=None,
 
             num = C2I_tshift * C2F_tau * C2F_tsep
             den = C2F_tshift * C2I_tau * C2I_tsep
-            with backend.errstate(invalid='ignore', divide='ignore'):
+            with _errstate(backend):
                 sqrt_term = backend.sqrt(backend.maximum(
                     backend.nan_to_num(num / den, nan=0.0), 0))
 
@@ -541,7 +550,7 @@ def loop_tsrc(data, indx: list = None, Boundary_Conditions: str = 'Periodic',
         indx = [-2, -3]
 
     backend = get_backend()
-    type_cupy = hasattr(data, 'device')  # check if cupy array
+    type_cupy = type(data).__module__.startswith('cupy')
 
     if type_cupy:
         data_np = data.get()

@@ -14,11 +14,12 @@ from __future__ import annotations
 import numpy as np
 
 from ._analyse import Jackknife, meff, ratio_3pt
+from ..pipeline._config import ANALYSIS_MOMENTA, FM2GEV, NX
 
 
 def run_meff_jackknife(corr_2pt_all, conf_ids, NT=72, ALttc=0.1053,
                        meff_types=None, logger=print):
-    """Jackknife 有效质量（analyze.py run_meff_jackknife 等价）。
+    """Jackknife 有效质量（analyze.py run_meff_jackknife 等价，含 E_exp/dev）。
 
     Args:
         corr_2pt_all: {conf_id: {'corr_pp_P0': (Nt,), 'corr_pion_P2': (Nt,), ...}}
@@ -35,6 +36,7 @@ def run_meff_jackknife(corr_2pt_all, conf_ids, NT=72, ALttc=0.1053,
     ]
     results = {}
     for particle, mom, key in channels:
+        ml = f"P{list(ANALYSIS_MOMENTA[particle].values())[0 if mom == 'P0' else 1]}"
         stack = np.stack([np.real(corr_2pt_all[cid][key]) for cid in conf_ids])
         jk = Jackknife(stack, Nconf_axes=0)
         mf = meff(jk['data_sample'], ALttc, Nconf_axes=0, Nt_axes=1,
@@ -54,14 +56,25 @@ def run_meff_jackknife(corr_2pt_all, conf_ids, NT=72, ALttc=0.1053,
         E0 = float(np.sum(mmean[ps:pe][mask] * w) / np.sum(w))
         E0_err = float(1.0 / np.sqrt(np.sum(w)))
 
+        # ── 期望能量与色散检查（与 docker-v20260805 analyze.py 一致）──
+        if mom == 'P0':
+            E_exp = 1.0 if particle == 'proton' else 0.30
+        else:
+            m0 = results.get(f'{particle}_P0', {}).get('E0', E0)
+            p_phys = (2 * np.pi * 2 / NX) * (FM2GEV / ALttc)   # ≈ 0.981 GeV
+            E_exp = np.sqrt(m0 ** 2 + p_phys ** 2)
+        dev = abs(E0 - E_exp) / (E0_err + 1e-10)
+        status = '✓' if dev < 2 else ('⚠' if dev < 4 else '✗')
+
         results[f'{particle}_{mom}'] = {
-            'E0': E0, 'E0_err': E0_err,
+            'E0': E0, 'E0_err': E0_err, 'E_exp': E_exp, 'dev': dev,
             'plateau': (ps, pe), 'npts': int(np.sum(mask)),
             'meff_mean': mmean, 'meff_err': merr,
             'corr_mean': cmean, 'corr_err': cerr,
         }
-        logger(f"{particle} {mom}: E0 = {E0:.4f} ± {E0_err:.4f} GeV, "
-               f"plateau [{ps},{pe}]")
+        logger(f"{particle} {ml}: E0 = {E0:.4f} ± {E0_err:.4f} GeV  "
+               f"(expected {E_exp:.3f}, {status} dev={dev:.1f}σ, "
+               f"plateau t∈[{ps},{pe}], {int(np.sum(mask))} pts)")
     return results
 
 

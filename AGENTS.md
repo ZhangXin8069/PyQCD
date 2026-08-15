@@ -7,7 +7,7 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（16 项：γ基/Z_R/梯度流/TMD算符/匹配/混合/提取链/标度/HYP/τ极限/比值拟合/HYP-流一致/后端一致/端到端meff/求和规则/核心链）
+python examples/pyqcd/conftest.py    # 全量测试（17 项：γ基/Z_R/梯度流/TMD算符/匹配/混合/提取链/标度/HYP/τ极限/比值拟合/HYP-流一致/后端一致/端到端meff/求和规则/核心链/TMD-NLO匹配）
 python examples/pyqcd/verify_consistency.py   # 一致性验证（vs docker-v20260805 输出，A–E 全 0 差异）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
 cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，两遍）
@@ -32,7 +32,9 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
    Clover F_μν、对偶 F̃、staple Wilson 线、组合 O = M^{tx;tx}+M^{ty;ty}−2M^{xy;xy}。
 3. **自重整化**（`_zr.py`）：Z_R 参数化与全局拟合（arXiv:2510.17758 Eq.3-8）。
 4. **混合方案**（`_hybrid.py`）：短距比值 + 长距 Z_R，λ 外推，傅里叶→准 PDF。
-5. **NLO 匹配**（`_matching.py`）：胶子单圈匹配核 g_0..g_3。
+5. **NLO 匹配**（`_matching.py` + `_tmdextract.py`）：胶子单圈匹配核 g_0..g_3；
+   TMD 混合方案匹配 `tmd_matching_hybrid` 用 Z_ij 矩阵结构（δ + α_sC_A/2π 核），
+   复用 `_matching_kernels`（A_s = α_s/4π，zengch 约定），快度演化 + 软函数。
 6. **连续极限**（`_extrapolate.py`）：a/Pz/mπ/L 联合外推。
 
 ## 关键约定

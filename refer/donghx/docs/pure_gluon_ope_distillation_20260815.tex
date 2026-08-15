@@ -1,0 +1,524 @@
+% ============================================================
+% pure 报告 — 穷尽剖析: 董 HX 断连胶子 PDF 计算代码
+% 主题: 非定域胶子 OPE 算符 + 蒸馏质子 2pt 的代码-物理映射
+% 编译: xelatex 两遍; 交付前 Overfull 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+% 宏包顺序固定，不可调整（存在依赖：tcolorbox 依赖 xcolor 等）
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}              % 公式编号 \label/\eqref 交叉引用
+\usepackage{amssymb}              % \mathbb 黑板体
+\usepackage{microtype}            % 微排版，缓解长词/URL 溢出
+\usepackage{listings}             % 代码直引 \lstinputlisting
+\usepackage{xcolor}
+\usepackage{booktabs}             % 表格粗线规范
+\usepackage{longtable}            % 长表自动跨页（核心部分清单必用）
+\usepackage{xltabular}            % 跨页+自动换行合体（longtable+tabularx，长表用）
+\usepackage{tabularx}             % X 列自动换行（防表格溢出）
+\usepackage{hyperref}             % 书签/链接（最后加载，避免与其它宏包冲突）
+\usepackage{fancyhdr}             % 页眉页脚
+\usepackage[most]{tcolorbox}      % most = 含 breakable（彩色框可跨页）
+\usepackage{titlesec}             % 章节标题着色
+
+% ===== 色板（语义化；全文档同一颜色只表达同一类含义）=====
+% —— 基础五色（analy 与 pure 通用，同义）——
+\definecolor{accent}{HTML}{1F4E79}        % 主色(深蓝): 章节标题/强调主色
+\definecolor{evidence}{HTML}{1E8449}      % 仓库证据(绿): 参考源/证据句/代码注释
+\definecolor{reference}{HTML}{8C6D1F}     % 参考背景(棕): 知识库/书籍旁证
+\definecolor{conclusion}{HTML}{8B1A1A}    % 结论(深红): 结论框
+\definecolor{codebg}{HTML}{F4F6F7}        % 代码块底色(浅灰)
+% —— pure 场景色（三类核心 + 状态）——
+\definecolor{algo}{HTML}{E67E22}          % 算法(橙): 核心算法/数据结构/复杂度
+\definecolor{phys}{HTML}{6C3483}          % 物理(紫): 物理图像/公式/推导链
+\definecolor{map}{HTML}{C2185B}           % 映射(玫红): 代码符号↔物理对象
+\definecolor{warn}{HTML}{D35400}          % 未验证/局限(橙红): 风险与缺口
+\definecolor{hl}{HTML}{FDF6E3}            % 重点强调(浅黄底): 关键句底色
+
+% ===== 全局防溢出设置 =====
+\setlength{\emergencystretch}{3em}        % 长词/URL 断行缓冲
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys} % 链接着色
+
+% ===== 层次分明的标题 =====
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+% ===== 彩色标识框（均带 breakable 防跨页溢出）=====
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+% ===== 代码样式（防溢出关键）=====
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,              % 本仓库主体为 Python
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,            % 长行自动断行
+  breakatwhitespace=false,    % 任意位置断行（防超长 token 溢出）
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space}, % 断行箭头
+  keepspaces=true,           % 断行保留缩进
+  columns=flexible,           % 可变宽度字形，缓解等宽溢出
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{董 HX 断连胶子 PDF 代码穷尽剖析: 非定域胶子 OPE 算符与蒸馏质子 2pt}
+\author{opencode pure}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对 \texttt{\detokenize{refer/donghx}}（董 HX 的 LaMET 断连胶子 PDF 计算代码）做穷尽剖析。
+项目性质判定为 \textcolor{phys}{代码-物理交叉}：64 个 Python 脚本（25\,376 行）全部围绕一条
+物理主线——质子中胶子 PDF 的格点计算，按 \textcolor{phys}{断连三点关联函数的解耦}拆分为
+（1）质子 2pt（蒸馏 + 动量涂抹）与（2）胶子 OPE 算符（Clover 场强 $F_{\mu\nu}$ 与对偶
+$\widetilde{F}_{\mu\nu}$ 经 Wilson 线连接）。核心部分共 13 项（深挖 8 / 浅析 3 / 排除 2）。
+最深结论：代码实现了 \textcolor{phys}{$F(0)W(0,z)\widetilde F(z)W(z,0)$ 型非定域胶子算符}的
+逐格点、逐色、逐时间实现，MPI 三秩恰好对应非极化 PDF 的三个独立分量组合
+$O^{tx;tx}+O^{ty;ty}-2O^{xy;xy}$，与仓库主项目 pyqcd 的算符约定完全一致
+（\textcolor{phys}{推断}级，依据见 \eqref{eq:unpol}）。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+\subsection{项目性质判定}
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉}。
+依据（实测）：仓库主体为物理计算脚本（64 个 \texttt{.py}，25\,376 行），公式与物理对象
+内嵌于代码结构与注释中，另有中文物理说明 \texttt{\detokenize{介绍.md}}；独特性载体为
+代码符号 $\leftrightarrow$ 物理对象的一一对应（$F_{\mu\nu}$、$\widetilde F$、Wilson 线、
+蒸馏收缩、动量涂抹），故采用\emph{映射表 + 逐符号解释}的剖析框架。
+\end{keybox}
+
+物理背景（\textcolor{evidence}{参考源} \texttt{\detokenize{介绍.md:1-5}}）：
+质子中的胶子 PDF 涉及 \textcolor{phys}{断连图}，三点关联函数可解耦为质子 2pt 与 OPE
+两部分；2pt 用\textbf{动量涂抹蒸馏}，OPE 为\textbf{场强张量与 Wilson 线}构成的非定域胶子算符。
+\begin{refbox}
+仓库外的文献笔记（note，含 Eq.(20) 矩阵元与 Eq.(25) 的 OPE 拆分）不在本仓库内，
+本报告不转写其具体公式，仅按代码实测内容重建算符结构。
+\end{refbox}
+
+\subsection{核心部分总清单（穷尽枚举）}
+\begin{xltabular}{\textwidth}{lllX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & Clover 场强 $F_{\mu\nu}$（\texttt{Operator.py:77-161}） & 深挖 & 四定向方格反厄米组合，$-\mathrm i/8$ 归一化，$O(a^2)$ 改进 \\
+C2 & 对偶场强 $\widetilde F$（\texttt{Operator.py:9-39,177-184}） & 深挖 & 自构造 $1/2\,\varepsilon_{\mu\nu\rho\sigma}$ 张量 + 缩并 \\
+C3 & 非定域胶子算符（\texttt{Operator.py:339-466}） & 深挖 & $F$--Wilson 线--$\widetilde F$ 双链构造，6 种几何变体 \\
+C4 & OPE 流水线与 MPI 秩分配（\texttt{Calc\_ope\_*.py}） & 深挖 & 三秩恰对应非极化 PDF 三独立分量；螺旋度含 $\pm z$ 位移 \\
+C5 & 蒸馏 VVV 收缩与动量涂抹（\texttt{Calc\_VVV.py:62-136}） & 深挖 & 六项反对称组合 + 格点位相，$x_i$ 分片控制显存 \\
+C6 & 质子 2pt Wick 收缩（\texttt{2pt\_proton\_*.py:335-421}） & 深挖 & 插值算符夹心 perambulator + 正宇称投影 \\
+C7 & DR 基 $\gamma$ 矩阵（\texttt{gamma\_matrix\_cupy\_DR.py}） & 深挖 & 18 个索引 0--17，手征变体基，代数经数值核验 \\
+C8 & 蒸馏数据 I/O（\texttt{input\_output\_4\_cupy.py}） & 深挖 & 文件尺寸反推 $N_{\rm ev}$，无元数据解析，L.~Liu 格式输出 \\
+C9 & 单时间片内存优化版（\texttt{Calc\_helicity\_mpi.py}） & 浅析 & 逐 $t$ 循环省显存；时间方向方格占位返回零（未完成） \\
+C10 & Clover 预计算缓存（\texttt{Calc\_pla.py}） & 浅析 & 一次计算 $F$ 存 \texttt{.npz}，多作业复用 \\
+C11 & 规范固定变体（\texttt{Calc\_ope\_gauge\_fix\_*.py}） & 浅析 & 无 \texttt{link\_dir} 参数化，输出布局 $(dz,Nt)$ \\
+C12 & 52 个 2pt 脚本同构变体 & 排除 & 格点/动量/方向/后端参数复制，无新算法（样板） \\
+C13 & 产物巡检（\texttt{check\_exist*.py}） & 排除 & 文件存在性扫描脚本，无物理与算法内容 \\
+\bottomrule
+\end{xltabular}
+
+三态计数：深挖 8、浅析 3、排除 2，无"未处理"。
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+\subsection{C1--C2: 场强张量 $F_{\mu\nu}$ 与对偶 $\widetilde F_{\mu\nu}$}
+\begin{physbox}
+\textbf{物理图像:} 场强张量是格点胶子动力学的\"曲率\"——最小方格（plaquette）的闭合链接积
+捕获 $U_\mu(x)U_\nu(x+\hat\mu)U^\dagger_\mu(x+\hat\nu)U^\dagger_\nu(x)$ 携带的非对易相位；
+Clover 构造把四个共享顶点 $x$ 的定向方格叠加，抵消 $O(a)$ 离散误差，
+其反厄米部分正比于连续场强 $F_{\mu\nu}$（\eqref{eq:Fclover}）。
+对偶 $\widetilde F_{\mu\nu}=\tfrac12\varepsilon_{\mu\nu\rho\sigma}F^{\rho\sigma}$ 由
+自构造的 $1/2\varepsilon$ 张量缩并得到（\eqref{eq:tilde}），是螺旋度（极化）算符的构件。
+\end{physbox}
+
+\subsubsection{推导链}
+格点链接变量与连续规范场的对应（$a$ 为格距，$g$ 为耦合常数，光滑场近似）：
+\begin{equation}\label{eq:link}
+U_\mu(x)=e^{\mathrm i g a A_\mu(x+\tfrac a2\hat\mu)} = \mathbb 1 + \mathrm i g a A_\mu + O(a^2),
+\end{equation}
+方格闭合积：
+\begin{equation}\label{eq:plaq}
+P_{\mu\nu}(x)=U_\mu(x)\,U_\nu(x+\hat\mu)\,U^\dagger_\mu(x+\hat\nu)\,U^\dagger_\nu(x)
+= \exp\!\big(\mathrm i g a^2 F^{\mathrm{cont}}_{\mu\nu}(x)\big)+O(a^4),
+\end{equation}
+其中 $F^{\mathrm{cont}}_{\mu\nu}=\partial_\mu A_\nu-\partial_\nu A_\mu+\mathrm i g[A_\mu,A_\nu]$。
+Clover 场强（四方格共享顶点 $x$：$P_{\mu\nu},P_{\nu,-\mu},P_{-\mu,-\nu},P_{-\nu,\mu}$）：
+\begin{equation}\label{eq:Fclover}
+F^{c}_{\mu\nu}(x)
+=-\frac{\mathrm i}{8}\sum_{\mathrm{dirs}}\big[P_{\mathrm{dir}}(x)-P^\dagger_{\mathrm{dir}}(x)\big]
+=-\frac{\mathrm i}{8}\big(Q_{\mu\nu}-Q^\dagger_{\mu\nu}\big)
+= g a^2\,F^{\mathrm{cont}}_{\mu\nu}(x)+O(a^4),
+\end{equation}
+其中 $Q_{\mu\nu}$ 为四定向方格之和。\emph{推导依据}：由 \eqref{eq:plaq}，
+$P-P^\dagger=2\mathrm i g a^2 F+O(a^4)$；四方向求和（Clover 平均）抵消含一阶导数的
+$O(a^2)$ 改进项之外的同阶对称化误差，故误差为 $O(a^4)$（tree-level improved）。
+\emph{量纲检查}：格点 $F^{c}$ 无量纲，连续 $F^{\mathrm{cont}}$ 量纲 $a^{-2}$，
+因子 $g a^2$ 补齐量纲，符合 \eqref{eq:Fclover}。
+
+\emph{退化与极限校验}：$g\to 0$ 时 $P-P^\dagger\to 0$，$F^c\to 0$（自由理论无曲率）；
+$P$ 对角元（$P^\dagger P=\mathbb 1$ 约束下）无贡献，反厄米化确保 $F^c$ 为厄米矩阵
+（$-\mathrm i\times\text{反厄米}=\text{厄米}$），与连续场强厄米性一致。
+
+对偶场强由自构造的 Levi-Civita 张量缩并：
+\begin{equation}\label{eq:tilde}
+\widetilde F_{\mu\nu}(x)=\sum_{\rho\sigma}\tfrac12\varepsilon_{\mu\nu\rho\sigma}\,F^{c}_{\rho\sigma}(x),
+\qquad
+\texttt{Tensor4}[i,j,k,l]=\tfrac12\varepsilon_{ijk\ell},
+\end{equation}
+双重对偶恒等式（数值核验 $\max|\tfrac12\varepsilon\circ\tfrac12\varepsilon|=0.5$，符合
+$\varepsilon^{\mu\nu\rho\sigma}\varepsilon_{\rho\sigma\alpha\beta}
+=-2(\delta^\mu_\alpha\delta^\nu_\beta-\delta^\mu_\beta\delta^\nu_\alpha)$）：
+\begin{equation}\label{eq:dual2}
+\widetilde{\widetilde F}_{\mu\nu}=-F_{\mu\nu}.
+\end{equation}
+
+\subsubsection{代码-物理映射}
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查，无孤儿符号。
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{gauge} & $U_\mu(x)$ & 复 SU(3) 链接场，布局 $(Nt,Nz,Ny,Nx,4,3,3)$；\\
+\texttt{plaquette\_clover\_new} & $F^c_{\mu\nu}$ & 四定向方格反厄米和 $-\mathrm i/8$（\eqref{eq:Fclover}）；\texttt{\nolinkurl{Operator.py:77-161}} \\
+\texttt{-1j*ans/8.0} & 归一化 & 使 $F^c=ga^2F^{\mathrm{cont}}+O(a^4)$；\texttt{\nolinkurl{Operator.py:160}} \\
+\texttt{.conj().transpose(0,1,2,3,5,4)} & $P^\dagger$ & 色指标转置（共轭转置，末两轴）；\texttt{\nolinkurl{Operator.py:152-158}} \\
+\texttt{Tensor4} & $\tfrac12\varepsilon$ & 索引奇偶性构造，重复指标置零；\texttt{\nolinkurl{Operator.py:9-39}} \\
+\texttt{plaquette\_clover\_all\_tilde} & $\widetilde F$ & \texttt{contract("opmn,...->..."} 缩并；\texttt{\nolinkurl{Operator.py:177-184}} \\
+\texttt{np.roll(gauge,-1,3-mu)} & $x+\hat\mu$ 平移 & 周期边界位移（轴 $3-\mu$ 对应坐标 $\mu$）；\texttt{\nolinkurl{Operator.py:53}} \\
+\texttt{pla[mu,nu]} & $F_{\mu\nu}$ 全部格点 & 布局 $(4,4,Nt,Nx,Nx,Nx,3,3)$，含时间片；\\
+\bottomrule
+\end{xltabular}
+
+代码直引（四定向方格中两方向的构造，Clover 关键结构）：
+\lstinputlisting[firstline=77,lastline=99]{/root/PyQCD/refer/donghx/Operator.py}
+\lstinputlisting[firstline=150,lastline=161]{/root/PyQCD/refer/donghx/Operator.py}
+\textcolor{evidence}{证据}：反厄米和 $-1\mathrm j\cdot\texttt{ans}/8$ 与 \eqref{eq:Fclover}
+逐一对应；$\varepsilon$ 张量构造的数值核验（$\varepsilon_{0123}=+1/2,\varepsilon_{1023}=-1/2$，
+重复指标为 0）通过。
+
+\subsection{C3--C4: 非定域胶子算符与 OPE 流水线}
+\begin{physbox}
+\textbf{物理图像:} 胶子准 PDF 的非定域算符是两个场强分别置于分离为 $z$ 的两点，由
+Wilson 线沿光锥方向连接以保持规范不变——\"弦上两端的曲率\"。代码把 $F_{\mu\nu}$ 位移到
+$z$ 处、$\widetilde F_{\mu'\nu'}$ 留在原点，两段链接积（一段 $U$、一段 $U^\dagger$）
+往返连接，最后取色迹并求和掉空间坐标，逐时间片输出（\eqref{eq:op}）。
+\end{physbox}
+
+\subsubsection{推导链}
+非定域算符（$W(0,z)$ 为沿 $\hat z$ 方向的 Wilson 线，$\hat z$ 由 \texttt{link\_dir} 选择）：
+\begin{equation}\label{eq:op}
+\begin{aligned}
+O^{\mu\nu;\mu'\nu'}(z,t)
+&=\mathrm{tr}_c\Big[\widetilde F_{\mu'\nu'}(0)\,W(0,z)\,F_{\mu\nu}(z)\,W(z,0)\Big],\\
+W(0,z)&=\prod_{n=0}^{z/a-1}U_3(x+n\hat z).
+\end{aligned}
+\end{equation}
+代码实现几何（\texttt{operators\_new\_z0\_mu2}, \texttt{\nolinkurl{Operator.py:339-368}}）：
+先将 $F_{\mu\nu}$ 平移至 $z$（代码以 \texttt{np.roll} 沿 $\hat z$ 轴位移 $-dz$），再乘
+$z\to 0$ 的 $U^\dagger$ 链、原点处乘 $\widetilde F_{\mu'\nu'}$、最后乘 $0\to z$ 的 $U$ 链，
+色迹与空间求和得 $O(t,z)$。\emph{退化校验}（$z=0$）：
+\begin{align}\label{eq:opz0}
+O^{\mu\nu;\mu'\nu'}(0,t)&=\mathrm{tr}_c\big[\widetilde F_{\mu'\nu'}(0)F_{\mu\nu}(0)\big]
+\quad\longleftrightarrow\quad \text{位移为 0、双链循环为空，}\\
+&\qquad\qquad\qquad\text{直接 $F$--$\widetilde F$ 缩并（代码路径一致）}.
+\end{align}
+$z=0$ 时 $\widetilde F F$ 缩并对应局域算符；对螺旋度组合恰为拓扑荷密度算符
+$F\widetilde F$ 的结构原型。
+
+非极化胶子 PDF 需要的三个独立分量由 MPI 三秩分配
+（\texttt{\nolinkurl{Calc\_ope\_unpol.py:76-93}}）：
+\begin{equation}\label{eq:unpol}
+\text{rank 0}:(t,e_1),\quad
+\text{rank 1}:(t,e_2),\quad
+\text{rank 2}:(e_1,e_2),\qquad
+e_1=(zdir+1)\%3,\; e_2=(zdir+2)\%3,
+\end{equation}
+对应非极化组合（zdir=z 时 $e_1=x,e_2=y$）：
+\begin{equation}\label{eq:unpolcomb}
+O_{\mathrm{unpol}}(z)=O^{tx;tx}(z)+O^{ty;ty}(z)-2\,O^{xy;xy}(z),
+\end{equation}
+三个分量独立输出为 \texttt{ops\_mu$\mu$\_nu$\nu$\_dz$\ldots$.npy}，组合由下游分析完成。
+螺旋度（极化）算符同时计算 $\pm z$ 位移（\texttt{\nolinkurl{Calc\_ope\_helicity.py:122-142}}），
+并使用对偶场强 $\widetilde F$（\texttt{pla\_tilde}）：
+\begin{equation}\label{eq:hel}
+O^{\pm}_{\mathrm{hel}}(z,t)=\mathrm{tr}_c\big[F_{\mu\nu}(0)\,W(0,\pm z)\,\widetilde F_{\mu\nu}(\pm z)\,W(\pm z,0)\big],
+\qquad
+\Delta G \leftarrow O^{+}-O^{-}\ (\text{组合，下游完成}),
+\end{equation}
+其中 $F\widetilde F$（与拓扑荷密度同型）是螺旋度算符的标准结构。
+
+\subsubsection{代码-物理映射}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{link\_dir}/\texttt{zdir} & $\hat z$ 方向 & Wilson 线方向（x/y/z $\to$ 0/1/2）；\texttt{\nolinkurl{Calc_ope_unpol.py:56-64}} \\
+\texttt{delta\_z} & $z/a$ & 分离距离（格点单位）；\\
+\texttt{operators\_new\_z0\_mu2} & $O(z)$ & $+z$ 位移、含 $\widetilde F$、逐 $t$ 输出；\texttt{\nolinkurl{Operator.py:339-368}} \\
+\texttt{operators\_new\_z0\_mz\_mu2} & $O(-z)$ & $-z$ 位移变体（\texttt{delta\_z} 取负）；\texttt{\nolinkurl{Operator.py:371-399}} \\
+\texttt{\_mu,\_nu,\_mu2,\_nu2} & $(\mu\nu),(\mu'\nu')$ & 两场强指标，秩 0/1/2 分配见 \eqref{eq:unpol}；\\
+\texttt{ops[:,dz]} & $O(t,z)$ & 每时间片每 $z$ 分离一个复数（空间求和后）；\\
+\texttt{pla\_tilde} & $\widetilde F$ & 螺旋度流水线传入 \texttt{pla\_tilde}，非极化传 \texttt{pla}；\\
+\texttt{np.save(...npy)} & 输出 & 三分量独立存档，文件名含指标与 $dz$；\\
+\bottomrule
+\end{xltabular}
+
+代码直引（秩分配与非极化主循环）：
+\lstinputlisting[firstline=76,lastline=93]{/root/PyQCD/refer/donghx/Calc_ope_unpol.py}
+\lstinputlisting[firstline=122,lastline=142]{/root/PyQCD/refer/donghx/Calc_ope_helicity.py}
+
+\textcolor{evidence}{证据}：\eqref{eq:unpol} 直接对应 \texttt{Calc\_ope\_unpol.py:76-93} 的
+\texttt{rank} 分支（r0/r1 取 $(3,e)$、r2 取 $(e_1,e_2)$，且 $\mu=\mu',\nu=\nu'$）；
+非极化传 \texttt{pla}、螺旋度传 \texttt{pla\_tilde} 的差异可直接读码确认。
+\textcolor{phys}{推断}：\eqref{eq:unpolcomb} 的组合公式与 $\Delta G$ 的 $F\widetilde F$ 结构
+依据仓库主项目 pyqcd 的算符约定与标准文献（arXiv:2510.17758 式(3)--(8)），非本仓库直接给出。
+
+\subsection{C5--C6: 蒸馏收缩——VVV、动量涂抹与质子 2pt}
+\begin{physbox}
+\textbf{物理图像:} 蒸馏法把夸克传播子投影到低维特征向量空间 $V$：$\tau = V^\dagger D^{-1}V$，
+代价从 $O(N_x^3)$ 降到 $O(N_{\rm ev}^2)$。VVV 是三个特征向量带动量位相的反对称收缩
+（质子插值算符的蒸馏像，\eqref{eq:vvv}）；2pt 关联函数由源/汇两个 VVV 与两条
+perambulator 链（其中一条夹插值算符 $\Gamma$）Wick 收缩而成，再经正宇称投影
+（\eqref{eq:twopt}、\eqref{eq:pp}）。动量涂抹给源特征向量乘位相 $e^{-\mathrm i P_{\rm smear}\cdot x}$，
+提升与选定动量态的重叠。
+\end{physbox}
+
+\subsubsection{推导链}
+蒸馏特征向量 $\{v_a\}_{a=1}^{N_{\rm ev}}$（$v$ 为 $N_x^3\times N_c$ 维）；
+VVV（六项全反对称，\texttt{\nolinkurl{2pt_proton_Cg5gmu_L36x108_mom2_zdir_dcu.py:284-300}}）：
+\begin{equation}\label{eq:vvv}
+V_{abc}(t,P)=\sum_{x} e^{-\mathrm i P\cdot x}\;\varepsilon^{ijk}\; v^{(i)}_a(x)\,v^{(j)}_b(x)\,v^{(k)}_c(x),
+\end{equation}
+其中 $\varepsilon$ 的六项为 $(012),(120),(201)$ 取正、$(210),(021),(102)$ 取负，
+即排列奇偶性符号（与 \texttt{C1} 的 $\varepsilon$ 构造同源思想）。\emph{推导依据}：代码对
+\texttt{e0,e1,e2}（三色分量）显式列出六项收缩，符号模式与全反对称张量完全一致。
+动量位相（\texttt{phase\_calc\_fast}, \texttt{\nolinkurl{2pt_proton_Cg5gmu_L36x108_mom2_zdir_dcu.py:98-115}}）：
+\begin{equation}\label{eq:phase}
+e^{-\mathrm i P\cdot x}=\exp\!\Big(-\frac{2\pi\mathrm i}{L}\,(P_z z+P_y y+P_x x)\Big),
+\end{equation}
+源端动量涂抹（\texttt{momsmear\_phase=-2} 沿 $z$）：特征向量乘
+$e^{-\mathrm i(-2)\cdot 2\pi z/L}=e^{+4\pi\mathrm i z/L}$，即 $P_{\rm smear}=+2\times 2\pi/L$ 沿 $z$
+（按 $e^{+\mathrm i P\cdot x}$ 约定）。
+2pt Wick 收缩（插值算符 $\Gamma_1=\gamma_7\gamma_4,\ \Gamma_2=\gamma_7\gamma_4$ 即 \texttt{\_Cg5g4} 变体；
+$C_{\gamma5}=\varepsilon^{abc}(u_a^T C\gamma_5 d_b)u_c$ 型质子源）：
+\begin{equation}\label{eq:twopt}
+\begin{aligned}
+C_{\Gamma}(t_2,t_1)&=\underbrace{VVV(t_2)\,\tau\,\big[\Gamma_1\tau\Gamma_2\big]\,\tau\,\overline{VVV}(t_1)}_{\text{直接项}} \\
+&\quad-\underbrace{VVV(t_2)\,\tau\,\big[\Gamma_1\tau\Gamma_2\big]\,\tau\,\overline{VVV}(t_1)}_{\text{交叉项}},
+\end{aligned}
+\end{equation}
+其中 $\tau$ 为 perambulator、$\overline{VVV}=\mathrm{conj}(VVV)$ 为源端共轭；省略的指标为
+色-自旋收缩指标（直接项 $(gjad,gjbe,ilcf,def)$、交叉项 $(glaf,gjbe,ijcd,def)$），
+两项对应 Wick 收缩的不同配对（两 $u$ 夸克交换），代码以两个 \texttt{contract} 显式写出。
+正宇称投影（$P_+=\tfrac12(1+\gamma_4)$ 幂等性经数值核验），且 $t_{\rm sink}<t_{\rm source}$ 时反号
+（欧氏时间反演约定）：
+\begin{equation}\label{eq:pp}
+C_{++}(t_2,t_1)=\mathrm{tr}\big[P_+ C(t_2,t_1)\big],\qquad
+C_{++}(t_2,t_1)\to -C_{++}(t_2,t_1)\quad(t_2<t_1),
+\end{equation}
+信号时间窗 $2\le t_2-t_1\le 30$（\texttt{\nolinkurl{2pt_proton_Cg5gmu_L36x108_mom2_zdir_dcu.py:348-349}}）。
+
+\subsubsection{代码-物理映射}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{eigvecs} & $v_a(x)$ & 蒸馏特征向量（$N_{\rm ev},N_x^3,N_c$），二进制读取；\\
+\texttt{phase\_factor} & $e^{-\mathrm iP\cdot x}$ & 动量位相（\eqref{eq:phase}）；\texttt{\nolinkurl{2pt...dcu.py:98-115}} \\
+\texttt{phase\_factor\_mom\_smear} & 动量涂抹 & 源位相 $e^{+4\pi iz/L}$；\texttt{\nolinkurl{2pt...dcu.py:170-204}} \\
+\texttt{VVV\_sink} & $V_{abc}(t,P)$ & 汇端三特征向量收缩（\eqref{eq:vvv}）；\texttt{\nolinkurl{Calc_VVV.py:62-136}} \\
+\texttt{peram\_u} & $\tau$ & 蒸馏传播子（$t_{\rm sink},d_{\rm sink},d_{\rm source},e_{\rm sink},e_{\rm source}$）；\\
+\texttt{interProject1/2} & $\Gamma_1,\Gamma_2$ & $\gamma_7\gamma_4$（Cg5g4 插值算符）；\\
+\texttt{CG5peram\_uCG5} & $\Gamma_1\tau\Gamma_2$ & 夹心传播子；\texttt{\nolinkurl{2pt...dcu.py:342-344}} \\
+\texttt{matrix\_pplus} & $P_+$ & 正宇称投影 $\tfrac12(1+\gamma_4)$；\texttt{\nolinkurl{2pt...dcu.py:121}} \\
+\texttt{contrac\_nucl\_pp} & $C_{++}$ & 投影后关联函数；\texttt{\nolinkurl{2pt...dcu.py:386-394}} \\
+\texttt{x} 分片循环 & 显存控制 & 中间张量按 $x$ 切片累积（GPU 显存限制）；\texttt{\nolinkurl{Calc_VVV.py:76-123}} \\
+\bottomrule
+\end{xltabular}
+
+代码直引（VVV 六项收缩与 2pt 主收缩）：
+\lstinputlisting[firstline=284,lastline=300]{/root/PyQCD/refer/donghx/2pt_proton_Cg5gmu_L36x108_mom2_zdir_dcu.py}
+\lstinputlisting[firstline=346,lastline=364]{/root/PyQCD/refer/donghx/2pt_proton_Cg5gmu_L36x108_mom2_zdir_dcu.py}
+
+\textcolor{evidence}{证据}：六项收缩的符号模式、$x_i$ 分片循环、$\Gamma$ 夹心、宇称投影与
+\eqref{eq:vvv}--\eqref{eq:pp} 逐项对应；$P_+$ 幂等性（$P_+^2=P_+$）数值核验通过。
+\textcolor{warn}{未验证}：动量涂抹位相符号约定（$P_{\rm smear}=+2\times 2\pi/L$）为按
+$e^{+\mathrm i P\cdot x}$ 约定的推断；最终物理动量组合 $P_{\rm sink}-P_{\rm smear}$ 需
+配合动量本征态分析确认，本机无集群数据路径无法实测。
+
+\subsection{C7: DeGrand--Rossi 基 $\gamma$ 矩阵}
+蒸馏收缩要求对每个插值算符显式操作 $4\times 4$ 自旋矩阵。代码用\textbf{手征变体 DR 基}
+（\texttt{\nolinkurl{gamma_matrix_cupy_DR.py:1-110}}）：$\gamma_5=\mathrm{diag}(1,1,-1,-1)$ 对角，
+$\gamma_4$ 实对称（时间方向），$\gamma_1,\gamma_2,\gamma_3$ 空间方向。
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查，无孤儿符号。
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{g0..g5} & $\mathbb 1,\gamma_1..\gamma_4,\gamma_5$ & DR 基基本矩阵；\texttt{\nolinkurl{gamma_matrix_cupy_DR.py:7-46}} \\
+\texttt{gamma(6..15)} & 双矩阵积 & 如 \texttt{g2@g3}（恒等 $\gamma_2\gamma_3=-\gamma_1\gamma_4\gamma_5$）；\texttt{\nolinkurl{:68-96}} \\
+\texttt{gamma(16),gamma(17)} & 手征投影 & $\tfrac12(1\pm\gamma_4)$ 组合（$\gamma_3\gamma_1$ 因子）；\texttt{\nolinkurl{:98-106}} \\
+\texttt{gamma(7)=g3@g1} & 插值算符构件 & 质子插值算符的自旋结构（与 $\gamma_4$ 组合成 Cg5g4）；\\
+\texttt{matrix\_pplus} & $P_+$ & $\tfrac12(\gamma_0+\gamma_4)$，正宇称投影；\\
+\bottomrule
+\end{xltabular}
+
+\lstinputlisting[firstline=49,lastline=66]{/root/PyQCD/refer/donghx/gamma_matrix_cupy_DR.py}
+
+\textcolor{evidence}{核验结果（数值实测）}：Clifford 代数 $\{\gamma_\mu,\gamma_\nu\}=2\delta_{\mu\nu}$
+（$\mu,\nu=1..4$）成立；$\gamma_5^2=\mathbb 1$ 且与全部 $\gamma_\mu$ 反交换；
+恒等式 $-\gamma_1\gamma_4\gamma_5=\gamma_2\gamma_3$、$-\gamma_2\gamma_4\gamma_5=\gamma_3\gamma_1$、
+$-\gamma_3\gamma_4\gamma_5=\gamma_1\gamma_2$ 全部成立（与代码注释一一对应）；
+$(\gamma_3\gamma_1)^2=-\mathbb 1$（两个反交换矩阵之积，符合狄拉克代数）。
+
+\subsection{C8: 蒸馏数据 I/O——无元数据格式解析}
+蒸馏数据为裸二进制（float64，实部/虚部交错），维度由\textbf{文件尺寸反推}
+（\texttt{\nolinkurl{input_output_4_cupy.py:17-26,44-66,105-119}}）：
+特征向量 $N_{\rm ev}=\text{size}/(N_x^3\cdot 3\cdot 2)$；perambulator 单文件尺寸
+$4\times N_t\times N_{\rm ev}\times 4\times N_{\rm ev}\times 2$，故
+$N_{\rm ev}=\sqrt{\text{size}/(4\cdot 4\cdot N_t\cdot 2)}$；VVV 为 $N_{\rm ev}^3\cdot 2$，
+$N_{\rm ev}=\sqrt[3]{\text{size}/2}$。perambulator 布局
+\texttt{d\_source,t\_sink,ev\_source,d\_sink,ev\_sink,complex} 经
+\texttt{transpose(1,3,0,4,2,5)} 转为收缩友好布局（\texttt{\nolinkurl{input_output_4_cupy.py:57-64}}）。
+输出端 \texttt{write\_data\_ascii} 生成 L.~Liu 格式（首行 \texttt{nsamples T 1 L 1} + 时间计数列 +
+实虚两列，32 位小数精度），供下游关联函数分析直接使用
+（\texttt{\nolinkurl{input_output_4_cupy.py:203-241}}）。
+
+\lstinputlisting[firstline=44,lastline=66]{/root/PyQCD/refer/donghx/input_output_4_cupy.py}
+
+\textcolor{evidence}{证据}：四个解析函数的 $N_{\rm ev}$ 公式均与文件布局自洽
+（peram 含两个 $N_{\rm ev}$ 维度平方项，VVV 立方项，eigvec 线性项）；
+CPU/GPU 双通道（\texttt{\_device}/\texttt{\_cpu}）为同一解析逻辑的 CuPy 移植。
+\textcolor{warn}{局限}：此类反推要求维度在 $\{N_{\rm ev},N_t,N_x\}$ 间无歧义；
+对 2pt 的 \texttt{twopt\_slice\_pp\_...} 输出（\texttt{npy}）不适用。
+
+\subsection{C9--C11: 浅析部分}
+\begin{itemize}
+\item \textbf{C9 单时间片版本}（\texttt{\nolinkurl{Calc_helicity_mpi.py}}）：逐时间片计算方格与
+  算符以省显存；但 \texttt{plaquette\_clover\_single\_time} 对含时间方向的 $(\mu\nu)$
+  返回零占位（\texttt{\nolinkurl{Calc_helicity_mpi.py:116-120}}），而螺旋度恰需
+  $(t,e_1),(t,e_2)$ 分量，故该文件\textcolor{warn}{未验证}可产出完整螺旋度算符；
+  疑似时间维需要外部（跨时间片）处理，代码注释亦声明\"时间方向需要外部处理\"。
+\item \textbf{C10 方格缓存}（\texttt{\nolinkurl{Calc_pla.py}}）：$F_{\mu\nu}$ 一次计算存
+  \texttt{ops\_pla\_conf.npz}，\texttt{Calc\_ope\_unpol\_new.py:109} 直接加载，避免逐作业重复。
+\item \textbf{C11 规范固定变体}（\texttt{Calc\_ope\_gauge\_fix\_*.py}）：去除
+  \texttt{link\_dir} 参数化与秩分配，输出布局 $(dz,Nt)$；与主线版物理等价性
+  \textcolor{warn}{未验证}（推测为特定规范/拓扑荷计算场景使用）。
+\end{itemize}
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+$O(a^2)$ 改进 Clover 场强 & 朴素单方格 $P-P^\dagger$ & 四方向求和抵消 $O(a)$ 导数误差，
+  误差降至 $O(a^4)$（\eqref{eq:Fclover}，tree-level improved）；\texttt{\nolinkurl{Operator.py:77-161}} \\
+自构造 $1/2\varepsilon$ 张量 & 手写 $\varepsilon$ 分量表 & 索引奇偶性公式化构造（12 行），
+  免出错；数值核验 $\varepsilon_{0123}=+1/2$ 等全部通过；\texttt{\nolinkurl{Operator.py:9-39}} \\
+MPI 秩分配映射物理分量 & 串行遍历全部 $(\mu\nu)$ & 三秩恰好覆盖非极化 PDF 三独立分量
+  \eqref{eq:unpol}，零冗余；每秩独立写盘，天然可合并；\texttt{\nolinkurl{Calc_ope_unpol.py:76-93}} \\
+6 种算符几何变体一次成库 & 单一几何实现 & $\pm z$ 位移、$\widetilde F$ 有无、$xy$ 分辨、
+  空间平均六种组合，覆盖非极化/螺旋度/TMD 三类需求；\texttt{\nolinkurl{Operator.py:187-466}} \\
+蒸馏 I/O 无元数据反推 & 需要 sidecar 元数据的方案 & 维度全部由文件尺寸反推，与任何
+  上游生成器解耦；CPU/GPU 双通道；\texttt{\nolinkurl{input_output_4_cupy.py}} \\
+$x_i$ 分片显存控制 & 一次性大张量收缩 & 中间张量按 $x$ 切片累积，单 GPU 可跑大格点；
+  \texttt{\nolinkurl{Calc_VVV.py:76-123}} \\
+\bottomrule
+\end{tabularx}
+\caption{独特性评估（数据来源: 代码实测 + 数值核验）}
+\end{table}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+核心公式链（推导见第 2 节）：
+\begin{align}
+F^{c}_{\mu\nu} &= -\frac{\mathrm i}{8}\big(Q_{\mu\nu}-Q^\dagger_{\mu\nu}\big)
+= ga^2F^{\mathrm{cont}}_{\mu\nu}+O(a^4), \label{eq:keyF} \\
+\widetilde F_{\mu\nu} &= \tfrac12\varepsilon_{\mu\nu\rho\sigma}F^{c}_{\rho\sigma}, \qquad
+\widetilde{\widetilde F}=-F, \label{eq:keyFtilde} \\
+O^{\mu\nu;\mu'\nu'}(z,t) &= \mathrm{tr}_c\big[\widetilde F_{\mu'\nu'}(0)\,W(0,z)\,F_{\mu\nu}(z)\,W(z,0)\big], \label{eq:keyO} \\
+O_{\mathrm{unpol}} &= O^{tx;tx}+O^{ty;ty}-2O^{xy;xy}, \qquad
+O^{\pm}_{\mathrm{hel}} = F\,W\,F^{({\rm mz})}\,\widetilde F\,W, \label{eq:keycomb} \\
+V_{abc}(t,P) &= \sum_x e^{-\mathrm iP\cdot x}\,\varepsilon^{ijk}\,v^{(i)}_a v^{(j)}_b v^{(k)}_c, \label{eq:keyVVV} \\
+C_{++}(t_2,t_1) &= \mathrm{tr}\Big[P_+\big(VVV\,\tau\,\Gamma\tau\Gamma\,\tau\,\overline{VVV}\big)\Big]
+ - \mathrm{tr}\Big[P_+\big(VVV\,\tau\,\Gamma\tau\Gamma\,\tau\,\overline{VVV}\big)_{\text{cross}}\Big] \nonumber\\
+&\quad\longleftrightarrow\quad \text{正宇称投影后关联函数（$t_2<t_1$ 时反号，见 \eqref{eq:pp}）}. \label{eq:key2pt}
+\end{align}
+最核心代码片段（算符双链构造，即 \eqref{eq:keyO} 的直接实现）：
+\lstinputlisting[firstline=339,lastline=368]{/root/PyQCD/refer/donghx/Operator.py}
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\detokenize{Operator.py:9-39}} & 仓库 & $1/2\varepsilon$ 张量构造（\eqref{eq:tilde}） \\
+\texttt{\detokenize{Operator.py:77-161}} & 仓库 & Clover 场强 $F^c_{\mu\nu}$（\eqref{eq:Fclover}） \\
+\texttt{\detokenize{Operator.py:177-184}} & 仓库 & 对偶场强 $\widetilde F$（\eqref{eq:tilde}） \\
+\texttt{\detokenize{Operator.py:339-399}} & 仓库 & 非定域算符 $\pm z$ 变体（\eqref{eq:op}） \\
+\texttt{\detokenize{Calc_ope_unpol.py:76-93}} & 仓库 & MPI 秩分配（\eqref{eq:unpol}） \\
+\texttt{\detokenize{Calc_ope_helicity.py:122-142}} & 仓库 & 螺旋度 $\pm z$ 循环（\eqref{eq:hel}） \\
+\texttt{\detokenize{Calc_VVV.py:62-136}} & 仓库 & VVV 收缩与分片（\eqref{eq:vvv}） \\
+\texttt{\detokenize{2pt_proton_Cg5gmu_L36x108_mom2_zdir_dcu.py:284-300}} & 仓库 & 六项反对称收缩（\eqref{eq:vvv}） \\
+\texttt{\detokenize{2pt_proton_Cg5gmu_L36x108_mom2_zdir_dcu.py:335-421}} & 仓库 & 2pt 主收缩与宇称投影（\eqref{eq:twopt},\eqref{eq:pp}） \\
+\texttt{\detokenize{gamma_matrix_cupy_DR.py:7-110}} & 仓库 & DR 基 $\gamma$ 矩阵 \\
+\texttt{\detokenize{input_output_4_cupy.py:17-119}} & 仓库 & 蒸馏数据格式解析 \\
+\texttt{\detokenize{input_output_4_cupy.py:203-241}} & 仓库 & L.~Liu 格式输出 \\
+\texttt{\detokenize{介绍.md:1-5}} & 仓库 & 物理背景与任务拆分说明 \\
+\texttt{\detokenize{AGENTS.md}} & 仓库 & 命名约定与关键文件索引 \\
+arXiv:2510.17758 & 文献 & 非极化组合与 $Z_R$ 参数化（\eqref{eq:unpolcomb} 依据，推断级） \\
+\bottomrule
+\end{xltabular}
+
+% ================= 6 结论 =================
+\section{结论}
+\begin{conclbox}
+穷尽剖析结论：核心部分 13 项，\textcolor{algo}{深挖 8}（Clover/对偶场强、非定域算符、
+OPE 流水线、VVV/动量涂抹、2pt 收缩、DR $\gamma$ 基、蒸馏 I/O）/
+\textcolor{map}{浅析 3}（单时间片版、方格缓存、规范固定变体）/
+\textcolor{warn}{排除 2}（同构脚本变体、巡检脚本）。
+最强竞争力：\textcolor{phys}{MPI 秩分配与物理分量的一一对应}——三秩恰好覆盖非极化胶子 PDF
+的三个独立分量（\eqref{eq:unpol}），组合公式 \eqref{eq:unpolcomb} 与仓库主项目 pyqcd
+（$O^{tx;tx}+O^{ty;ty}-2O^{xy;xy}$）完全一致（推断级）；配套的 $O(a^2)$ 改进 Clover、
+自构造 $\varepsilon$ 张量、六变体算符库与无元数据蒸馏 I/O 构成完整、自洽、可并行的
+断连胶子 PDF 计算链。
+\end{conclbox}
+\begin{warnbox}
+局限与未验证项：（1）非极化组合 \eqref{eq:unpolcomb} 与螺旋度 $\Delta G$ 的 $F\widetilde F$ 归属为
+\textcolor{warn}{推断}（依据主项目约定与文献，非本仓库直接给出）；（2）\texttt{Calc\_helicity\_mpi.py}
+时间方向方格返回零占位，其完整产出能力\textcolor{warn}{未验证}；（3）动量涂抹位相符号约定
+\textcolor{warn}{未验证}（本机无集群数据路径，无法实测）；（4）Clover 场强未做无迹化，单位阵
+部分对无色算符的贡献通常须在分析阶段减除（推断）；（5）性能数据（运行耗时/显存）未实测，
+仅为代码结构推断。
+\end{warnbox}
+
+\end{document}

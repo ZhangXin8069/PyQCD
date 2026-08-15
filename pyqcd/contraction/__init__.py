@@ -7,13 +7,14 @@ from ._baroperator import (
     split_hadrons, classify_structure, conjugate_operator, dagger_quark,
 )
 from ._seqperam import seq_peram
-from ._dynamic import PeramRegistry, VRegistry, GammaRegistry, dynamic_contraction
+from ._dynamic import PeramRegistry, VRegistry, GammaRegistry, dynamic_contraction, clear_plan_cache
 
 __all__ = [
     "wick_contraction", "identify_equivalent_diagrams",
     "split_hadrons", "classify_structure", "conjugate_operator", "dagger_quark",
     "seq_peram",
     "PeramRegistry", "VRegistry", "GammaRegistry", "dynamic_contraction",
+    "clear_plan_cache",
 ]
 
 Namespace.__module__ = "pyqcd.contraction"

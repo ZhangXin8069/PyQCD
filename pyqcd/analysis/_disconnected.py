@@ -189,4 +189,72 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
             'ratio': ratio, 'c0': para_c0, 'c1': para_c1,
             'dE': para_dE, 'chi2': chi2,
         }
+
+    # ── 绘图（code_1.py 风格：ratio/c0/chi2，与 analyze.py 一致）──
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    for had_name, res in ch_results.items():
+        _plot_disconnected(had_name, res, out_dir, logger)
     return ch_results
+
+
+def _plot_disconnected(had_name, res, out_dir, logger=print):
+    """code_1.py 风格图：ratio.png（逐 z）、c0.png、chi2.png。"""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    ratio = res['ratio']              # (Nsample, dt, dtau, z)
+    para_c0, para_c1 = res['c0'], res['c1']
+    chi2 = res['chi2']
+    rm = ratio.mean(0); re_ = sem(ratio, True)
+
+    # c0 vs z
+    z_list = list(range(rm.shape[-1]))
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.errorbar(z_list, para_c0.mean(0), yerr=sem(para_c0, True), fmt='x-',
+                label='c0(z)')
+    ax.axhline(0, color='gray', lw=0.8)
+    ax.set_xlabel('z')
+    ax.set_ylabel('c0')
+    ax.set_title(f'{had_name}: c0 vs z (disconnected ratio fit)')
+    ax.legend(); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, f'c0_{had_name}.png'), dpi=150)
+    plt.close(fig)
+
+    # chi2/dof vs z
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.scatter(z_list, chi2.mean(0), s=30)
+    ax.axhline(1.0, color='orange', ls='--')
+    ax.set_xlabel('z'); ax.set_ylabel('chi2/dof'); ax.set_ylim(0, 2)
+    ax.set_title(f'{had_name}: chi2/dof vs z')
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, f'chi2_{had_name}.png'), dpi=150)
+    plt.close(fig)
+
+    # ratio(dt,dtau,z) 若干 z
+    zs = [0, 6, 12, 18]
+    zs = [z for z in zs if z < rm.shape[-1]]
+    nrow = (len(zs) + 1) // 2
+    fig, axes = plt.subplots(nrow, 2, figsize=(12, 4 * nrow), squeeze=False)
+    for k, z in enumerate(zs):
+        ax = axes[k // 2][k % 2]
+        for dt in [8, 10, 12, 14]:
+            if dt >= rm.shape[0]:
+                continue
+            tau = np.arange(dt + 1)
+            xv = tau - dt / 2
+            yv = rm[dt, :dt + 1, z]
+            ye = re_[dt, :dt + 1, z]
+            ax.errorbar(xv, yv, yerr=ye, fmt='x', capsize=0, label=f'dt={dt}')
+        ax.set_xlabel('tau - t_sep/2'); ax.set_ylabel('R')
+        ax.set_title(f'z={z}, c0={para_c0[:, z].mean():.3f}')
+        ax.legend(fontsize=8); ax.grid(alpha=0.3)
+    fig.suptitle(f'{had_name}: Disconnected ratio R(dt,dtau,z), Pz=2')
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, f'ratio_{had_name}.png'), dpi=150)
+    plt.close(fig)
+    logger(f"  Plots saved to {out_dir}")
