@@ -2,15 +2,27 @@
 
 Jackknife/Bootstrap/meff/ratio_3pt、disconnected/3pt 编排、色散拟合（`_dispersion.py`）、
 c0 裸矩阵元提取（`_ratio_fit.py`，zengch 逻辑移植）、
-三方向差异分析与作图（`_ana_3dir.py`，独立实现，功能对齐 refer/huangcl/05_ana_3dir_diff_sem）。
+数据分析与作图功能链（独立实现，功能对齐 refer/huangcl 02/03/04/05/06 步）。
 
-## _ana_3dir.py（输入数据路径 → 分析 → 作图）
+## 功能链模块
 
-- 顶层入口：`analyze_3dir(data_root, out_root, AnaParams, jackknife=False)`。
-- 数据约定：`<data_root>/<conf>/Pz<Pz>/{x,y,z,ave}_dir/ratio.npy`（(Nsample,Ntsep,Ntins,Nz)）
-  与 `corr2_{dir}.npy`（(Nsample,Ntsep)）。
-- 分析：有效质量 `log(C(t)/C(t+1))`（np.roll）、归一化协方差（相关系数）、mean±sem；
-  统计复用 `_disconnected.py` 的 `sem`/`cov_mat`。
-- 作图：matplotlib 函数内延迟导入 + `use('Agg')`；输出
-  `<out_root>/<conf>/{ratio,corr2,eff_mass}/hist_*.png` + `ana_3dir_summary.json`。
-- 测试：`bash logs/test0/run-local.sh`（17 项断言：存在性/数值自洽/meff 恢复/相关矩阵性质）。
+| 模块 | 功能（参考脚本） | 顶层入口 |
+|---|---|---|
+| `_ana_3dir.py` | 05：三方向 ratio/corr2 → meff/相关矩阵/直方图 | `analyze_3dir` |
+| `_plots.py` | 图表工具全集（plot_errbar/scatter/hist + single/multi + 10 色 + 峰值内存） | — |
+| `_fitter.py` | calc_chi2(_dof)/fit（lsqfit 封装，prior 优先）/FitParams/make_summary_table | — |
+| `_ratio2pt.py` | 02：2pt+OPE → 真空扣除 ratio → 逐 z 拟合 → ratio/c0/chi2 图 | `run_ratio2pt` |
+| `_ana_ratio.py` | 03：纯画图（单 fit 图/对比图/nofit 图，读 02 输出） | `ana_ratio_plot_all` |
+| `_bare_matrix.py` | 03_bare：三方向（动量置换+OPE 组合）ratio → 平均 → 拟合 → 图 | `run_bare_matrix` |
+| `_proton_energy.py` | 04：2pt → corr2 → E0 拟合 → eff_mass 图（unit=0.197/a GeV） | `run_energy` |
+| `_fh.py` | 06：6 方向 ratio 平均 → FH 变换（多 nex）→ 常数拟合 → FH/参数/对比图 | `run_fh` |
+
+## 约定
+
+- 统计基元 sem/resample/cov_mat/model_ratio 复用 `_disconnected.py`；图表一律走 `_plots.py`
+  （matplotlib 函数内延迟导入 + `use('Agg')`）；报告 ASCII 表用 `_fitter.make_summary_table`
+  （不引入 prettytable 依赖）。
+- 数据路径全部参数化（data_root 注入），中间产物（ratio/corr2/fit npz/report txt/png）可读写；
+  run_ratio2pt/run_bare_matrix 支持 parts=(start,end) 断点续跑。
+- 测试：`bash logs/test0_ratio|test0_anaratio|test0_bare|test0_energy|test0_fh/run-local.sh`
+  （test12 风格：makedata 合成物理可解析数据 → verify 断言产物/形状/参数恢复）。

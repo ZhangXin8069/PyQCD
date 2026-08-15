@@ -11,6 +11,11 @@ python examples/pyqcd/conftest.py    # 全量测试（17 项：γ基/Z_R/梯度�
 python examples/pyqcd/verify_consistency.py   # 一致性验证（vs docker-v20260805 输出，A–E 全 0 差异）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
 bash logs/test0/run-local.sh        # ana_3dir 三方向差异分析+作图测试（test12 风格，17 项断言）
+bash logs/test0_ratio/run-local.sh  # 02_ratio 3pt/2pt 比值+拟合+图测试（18 项断言）
+bash logs/test0_anaratio/run-local.sh  # 03_ana_ratio 纯画图测试（25 项断言）
+bash logs/test0_bare/run-local.sh   # 03_bare_matrix 三方向裸矩阵元测试（18 项断言）
+bash logs/test0_energy/run-local.sh # 04_proton_energy 有效能量测试（8 项断言）
+bash logs/test0_fh/run-local.sh     # 06_FH_bare_matele FH 变换测试（38 项断言）
 bash examples/test0/run-local.sh    # 蒸馏管线一致性测试（调用 pyqcd 复现 docker-v20260805 全量输出）
 python examples/test0/main.py verify --run-dir examples/test0/v<ts>   # 一致性验证（A–E 项）
 cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，两遍）
@@ -24,7 +29,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 |
 | `docs/` | 51 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books），只读 |
-| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ ana_3dir 三方向差异分析测试套件 |
+| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格） |
 | `cpp/` | C++ 后端占位 |
 
 ## 蒸馏管线一致性测试（examples/test0）
@@ -46,6 +51,22 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 读取三方向（x/y/z/ave）ratio.npy 与 corr2.npy → 有效质量、归一化协方差（相关系数）、
 直方图（mean±sem）；顶层入口 `analyze_3dir(data_root, out_root, AnaParams)`，
 数据结构 `<root>/<conf>/Pz<Pz>/{x,y,z,ave}_dir/ratio.npy` + `corr2_{dir}.npy`。
+
+## 数据分析与作图功能链（pyqcd/analysis，独立实现，功能对齐 refer/huangcl 02/03/04/06 步）
+
+| 模块 | 功能（参考脚本） | 顶层入口 | 测试套件 |
+|---|---|---|---|
+| `_plots.py` | 图表工具全集：plot_errbar/scatter/hist + single/multi 封装 + 10 色 | — | 各套件共用 |
+| `_fitter.py` | calc_chi2(_dof)/fit（lsqfit 封装）/FitParams/ASCII 报告表 | — | 各套件共用 |
+| `_ratio2pt.py` | 02_ratio：2pt+OPE → 真空扣除 ratio → 逐 z 拟合 → ratio/c0/chi2 图 | `run_ratio2pt` | logs/test0_ratio（18 项） |
+| `_ana_ratio.py` | 03_ana_ratio：纯画图（单 fit 图+对比图+nofit 图） | `ana_ratio_plot_all` | logs/test0_anaratio（25 项） |
+| `_bare_matrix.py` | 03_bare_matrix：三方向 ratio+平均+拟合+图 | `run_bare_matrix` | logs/test0_bare（18 项） |
+| `_proton_energy.py` | 04：corr2 + E0 拟合 + eff_mass 图（GeV） | `run_energy` | logs/test0_energy（8 项） |
+| `_fh.py` | 06：6 方向 ratio 平均 → FH 变换 → 常数拟合 → FH/参数/对比图 | `run_fh` | logs/test0_fh（38 项） |
+
+统计基元 sem/resample/cov_mat 复用 `_disconnected.py`；各套件合成数据
+（物理可解析：meff/E0/c0 精确恢复）经 makedata 生成，verify 断言
+产物存在性 + 解析形状 + 参数恢复。
 
 ## 核心物理链（pyqcd/renorm）
 
