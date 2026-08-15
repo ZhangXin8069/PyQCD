@@ -1,0 +1,5 @@
+Calculate the two-point function of a Lambda baryon with the operator epsilon_{abc} (u^T_a Cg5 d_b) s_c.
+Use the point source at position [0,0,0,0].
+Invert all propagators using stout-smeared gauge links with parameters (1, 0.125, 4).
+Use the projector Tmat = (I + gamma_t) / 2, to extract the positive parity channel.
+Save the final result without any header or extra text to a txt file in the run directory.

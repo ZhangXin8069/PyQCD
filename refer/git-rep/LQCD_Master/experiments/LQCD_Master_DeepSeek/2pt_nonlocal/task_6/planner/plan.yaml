@@ -1,0 +1,175 @@
+task:
+  name: dplus_nonlocal_2pt
+  description: >
+    Nonlocal two-point function of D+ meson (cd̄) with a Wilson line shift applied
+    to the charm quark propagator along the +z direction, from separation 0 to 10
+    lattice units. Point source at the origin [0,0,0,0]. Inversions use stout-smeared
+    gauge links (ρ=0.125, n_steps=1, ndim=4); the Wilson line is constructed from
+    the original unsmeared gauge links. Periodic spatial boundary conditions are
+    handled by wrapping both the propagator index and the Wilson-line path modulo L_z.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: dplus_nonlocal_2pt
+      type: nonlocal_meson_2pt
+      name: "D+ nonlocal two-point function"
+
+  hadrons:
+    - id: dplus
+      name: "D+"
+      type: meson
+      flavor: "c dbar"
+      momentum: [0, 0, 0]
+      interpolating_operator: "dbar(x) gamma5 W(x, x+z) c(x+z)"
+      subtype: pseudoscalar_nonlocal
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: multigrid_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-08
+        maxiter: 10000
+        notes: "Light (down) quark propagator via multigrid with stout-smeared links"
+      sink:
+        id: sink_l
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: multigrid_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-08
+        maxiter: 10000
+        notes: "Charm quark propagator via multigrid with stout-smeared links. If multigrid fails to converge for the heavy charm quark, fall back to a plain CG solver with the same tolerance and maxiter."
+      sink:
+        id: sink_c
+        type: point
+
+measurement:
+  correlators:
+    - id: dplus_nonlocal
+      type: nonlocal_meson_2pt
+      propagator: prop_c
+      observable: dplus_nonlocal_2pt
+      notes: >
+        CONTRACTION FORMULA (fully derived from Wick contraction + γ₅-hermiticity):
+
+          C(z, t) = Σ_x Tr[ S_l^†(x,t) · W_orig(x, x+z·e_z, t) · S_c(x+z·e_z, t) ]
+
+        where:
+          - S_l^†(x,t) is the plain Hermitian conjugate (complex-conjugate transpose)
+            of prop_l(x,t).  It is NOT the γ₅-dagger γ₅·S_l^†·γ₅.
+          - S_c(x+z, t) = prop_c(x+z, t) is the charm propagator at the shifted sink point.
+          - W_orig(x, x+z·e_z, t) is the straight Wilson line along +z from x to x+z·e_z
+            built from the ORIGINAL (unsmeared) gauge links at timeslice t.
+
+        NO γ₅ MATRICES appear in the final trace — they cancel via γ₅-hermiticity
+        and cyclic permutation of the trace.  For z=0 (W=I) this correctly reduces
+        to the standard local D+ two-point function  C(0,t) = Σ_x Tr[ S_l^†(x,t) S_c(x,t) ].
+
+        WILSON LINE CONSTRUCTION (explicit algorithm):
+          1. Load the original gauge field and preserve a copy BEFORE stout smearing
+             is applied for the inversions. Both the original and smeared gauge
+             fields must be simultaneously accessible during the contraction.
+          2. For a given separation z_sep and spatial point x = (x_x, x_y, x_z)
+             at timeslice t, build the product of original U_z links:
+               W(x, x+z·e_z) = U_z_orig(x) · U_z_orig(x+e_z) · … · U_z_orig(x+(z-1)e_z)
+             For z_sep = 0, W = I (3×3 identity in color space).
+          3. PERIODIC SPATIAL BOUNDARY CONDITIONS:
+             - Propagator index: S_c(x+z·e_z, t) wraps as
+               x_z → (x_z + z_sep) mod 24.
+             - Wilson-line path: when stepping along +z, if the current z-coordinate
+               reaches 24, it wraps to 0 and the product continues using the gauge
+               link U_z_orig at the wrapped position.
+             This ensures the full computation is consistent with the periodic
+             spatial lattice.
+
+        Both real and imaginary parts are recorded.  The nonlocal correlator is
+        generally complex for z ≠ 0.
+
+output:
+  format: other
+  metadata: false
+  notes: >
+    Save as a plain text file named 'dplus_nonlocal_2pt_cfg10000.txt' in the
+    run directory, with no header or extra text.  Each line contains:
+      z_sep  t  Re[C(z,t)]  Im[C(z,t)]
+    for z_sep = 0,1,…,10 and t = 0,1,…,71.
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+extras:
+  - "Nonlocal shift applied only to the charm quark propagator (not the light antiquark)"
+  - "Wilson line constructed from original unsmeared gauge links, preserved before stout smearing"
+  - "Shift direction: +z, maximum separation: 10 lattice units"
+  - "Point source at origin [0,0,0,0]"
+  - "Stout smearing for inversions: rho=0.125, n_steps=1, ndim=4"
+  - "Single configuration: cfg 10000"
+  - "Output: plain text file, no header, z t Re[C] Im[C]"
+  - "Periodic spatial BC: propagator index and Wilson-line path wrap at z=0/23 boundary"
+  - "Corrected contraction: Tr[S_l^† · W · S_c] with no γ₅ matrices; reduces to Tr[S_l^† S_c] at z=0"
+  - "Charm multigrid fallback: if multigrid does not converge, use plain CG solver"

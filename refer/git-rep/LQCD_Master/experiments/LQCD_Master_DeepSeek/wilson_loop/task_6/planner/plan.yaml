@@ -1,0 +1,188 @@
+task:
+  name: wilson_loop_R3_T1
+  description: >
+    Compute the rectangular Wilson loop W(R=3, T=1) averaged over the XT, YT,
+    and ZT spatial-temporal planes on a single gauge configuration using the
+    original unsmeared gauge links. Pure-gauge measurement only: load gauge
+    links, compute Wilson loops via gauge.loop(), and reduce to a single
+    scalar. No quark propagators, Dirac solvers, or fermion inversions. No
+    stout/APE/HYP link smearing of any kind. Result written as a plain
+    floating-point value (no header, no metadata) to wilson_loop_R3_T1.txt.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wilson_loop_R3_T1
+      type: wilsonloop
+      name: "W(R=3, T=1) plane-averaged Wilson loop"
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: txt
+  metadata: false
+
+freeform_plan: |
+  ## Physics Objective
+
+  Compute the rectangular Wilson loop $W(R=3, T=1)$ on a single gauge
+  configuration (cfg 10000) from the C24P29 ensemble ($24^3 \times 72$,
+  $\beta = 6.20$, $a \approx 0.1052$ fm). The Wilson loop is a pure-gauge
+  observable defined as the normalized real trace of the product of SU(3)
+  gauge links around a closed rectangular path. Average over the three
+  spatial-temporal planes XT, YT, and ZT to increase statistics. No quark
+  fields, propagators, or inversions are involved.
+
+  ## Definition
+
+  $$
+  W_{\mu\nu}(R,T) = \frac{1}{N_c}\; \mathrm{Re\,Tr}\;
+  \Bigg[\prod_{i=0}^{R-1} U_\mu(x + i\hat{\mu})
+  \prod_{j=0}^{T-1} U_\nu(x + R\hat{\mu} + j\hat{\nu})
+  \prod_{i=0}^{R-1} U_\mu^\dagger(x + T\hat{\nu} + (R-1-i)\hat{\mu})
+  \prod_{j=0}^{T-1} U_\nu^\dagger(x + (T-1-j)\hat{\nu})\Bigg]
+  $$
+
+  with $N_c = 3$, $R = 3$, $T = 1$. The path is closed and gauge invariant
+  by construction.
+
+  ## Computational Steps
+
+  1.  **Initialize** PyQUDA with process grid $[1, 1, 1, 4]$ and lattice
+      dimensions $[24, 24, 24, 72]$. The four MPI ranks partition the
+      temporal direction.
+
+  2.  **Load gauge configuration** from the Chroma QIO LIME file at the
+      provided `cfg_path`. Transfer links to the GPU via `toDevice()`.
+
+  3.  **No smearing** — use the original unsmeared gauge links directly.
+      Do not apply stoutSmear, APE smearing, or HYP smearing.
+
+  4.  **Construct three Wilson-loop paths** using PyQUDA direction constants
+      (`from pyquda_utils.core import X, Y, Z, T`):
+
+      ```
+      path_XT = [X]*3  + [T]*1  + [-X]*3 + [-T]*1    # 8 hops, XT plane
+      path_YT = [Y]*3  + [T]*1  + [-Y]*3 + [-T]*1    # 8 hops, YT plane
+      path_ZT = [Z]*3  + [T]*1  + [-Z]*3 + [-T]*1    # 8 hops, ZT plane
+      ```
+
+      Each path: 3 forward spatial → 1 forward time → 3 backward spatial
+      → 1 backward time.
+
+  5.  **Evaluate with `gauge.loop()`** using the 4-group packing convention
+      (the PyQUDA API requires exactly 4 outer groups; inactive groups get
+      zero weight):
+
+      ```
+      res = gauge.loop([[path_XT], [path_YT], [path_ZT], [path_XT]],
+                        [1, 1, 1, 0])
+      ```
+
+      This returns a `LatticeGauge` with 4 slots; only the first three
+      (indices 0, 1, 2) carry the physical Wilson-loop fields.
+
+  6.  **Extract per-site ReTr for each active plane:**
+
+      ```python
+      import numpy as np
+      Nc = gauge.latt_info.Nc   # = 3
+
+      re_tr_sum = None
+      for i in range(3):
+          U = res[i].getHost().reshape(-1, Nc, Nc)
+          re_tr = np.trace(U, axis1=-2, axis2=-1).real
+          re_tr_sum = re_tr if re_tr_sum is None else re_tr_sum + re_tr
+      re_tr_avg = re_tr_sum / 3.0
+      ```
+
+  7.  **MPI-gather** from all ranks to rank 0 using `core.gatherLattice`,
+      **not** raw `mpi4py.MPI.Allreduce`:
+
+      ```python
+      grid = core.getGridSize()
+      local_shape = (2,
+                     latt_size[3] // grid[3],
+                     latt_size[2],
+                     latt_size[1],
+                     (latt_size[0] // grid[0]) // 2)
+      field = re_tr_avg.reshape(local_shape)
+      global_sum = core.gatherLattice(field, [-1, -1, -1, -1])
+      ```
+
+  8.  **Reduce to scalar on rank 0:**
+
+      ```python
+      total_sites = (latt_size[0] * latt_size[1] *
+                     latt_size[2] * latt_size[3])
+      if core.getMPIRank() == 0:
+          W_avg = float(global_sum.sum()) / (total_sites * Nc)
+      ```
+
+  9.  **Write output** — rank 0 writes the bare floating-point value to
+      `wilson_loop_R3_T1.txt` with no header, label, or metadata:
+
+      ```python
+      with open("wilson_loop_R3_T1.txt", "w") as f:
+          f.write(str(W_avg))
+      ```
+
+  ## MPI Launch
+
+      mpirun -np 4 python wilson_loop_R3_T1.py <resource_path> 10000
+
+  ## Key constraints
+
+  - Pure gauge only: no `prop_l`, `prop_s`, Dirac operators, or fermion
+    inversions anywhere.
+  - No link smearing: the `stoutSmear`, `apeSmear`, or `hypSmear` methods
+    are never called.
+  - Single configuration: cfg 10000 only.
+  - Output is a single scalar written as plain ASCII text with no header.
+
+extras:
+  - "Pure gauge measurement — no quark propagators or Dirac inversions"
+  - "No gauge link smearing of any kind (stout/APE/HYP)"
+  - "Single configuration (cfg 10000) from C24P29 ensemble"
+  - "Result is one scalar written to wilson_loop_R3_T1.txt with no header"

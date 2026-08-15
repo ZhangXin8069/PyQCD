@@ -1,0 +1,134 @@
+task:
+  name: lambda_2pt
+  description: >
+    Compute the two-point correlation function of the Lambda baryon
+    using the interpolating operator O_Lambda = epsilon_{abc} (u^T_a C gamma_5 d_b) s_c.
+    Use a single point source at [0,0,0,0] with stout-smeared gauge links
+    (n_steps=1, rho=0.125, ndim=4). Project the positive-parity channel with
+    T = (I + gamma_4)/2. Save the correlator as a single-column ASCII file.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_2pt
+      type: baryon_2pt
+      name: "Lambda baryon two-point function"
+
+  hadrons:
+    - id: lambda
+      name: Lambda
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon_{abc} (u^T_a C gamma_5 d_b) s_c"
+      subtype: positive_parity
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_l
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+        notes: "CG solver for light quark Wilson-clover Dirac operator on stout-smeared gauge links"
+      sink:
+        id: sink_l
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_s
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+        notes: "CG solver for strange quark Wilson-clover Dirac operator on stout-smeared gauge links"
+      sink:
+        id: sink_s
+        type: point
+
+measurement:
+  correlators:
+    - id: lambda_corr
+      type: baryon_2pt
+      propagators:
+        - prop_l
+        - prop_l
+        - prop_s
+      observable: lambda_2pt
+      projector: "(I + gamma_4) / 2"
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Save final Lambda two-point correlator as a single-column ASCII txt file in the run directory, no headers or extra text."
+  - "Use generate_einsum tool (type=baryon_2pt) for the contraction code."
+  - "Lambda has three distinct quark flavours (u, d, s); there is only one Wick contraction term because u and d, though degenerate in mass (S_u = S_d = S_l), are distinct field labels. No exchange contribution arises."
+  - "The projector T = (I + gamma_4)/2 selects the forward-propagating positive-parity Lambda ground state. In the DeGrand-Rossi basis gamma_t = gamma_4."
+  - "Stout link smearing is applied to the gauge configuration before the Dirac operator is constructed (not on the quark source)."
+  - "Point source at [0,0,0,0] is used for both light and strange propagators with no Gaussian/Wuppertal source smearing."

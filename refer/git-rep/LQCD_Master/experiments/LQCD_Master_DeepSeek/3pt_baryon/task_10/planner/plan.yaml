@@ -1,0 +1,212 @@
+task:
+  name: Lambda_b_to_p_3pt_vector
+  description: >
+    Three-point correlation function for Λ_b → p decay via b→u vector current.
+    Source: Λ_b baryon with operator ε^{abc}(u^{Ta} Cγ₅ d^b) b^c at t=0 (point source).
+    Sink: proton with operator ε^{abc}(u^{Ta} Cγ₅ d^b) u^c at t_f=8.
+    Current insertion: \bar{u} γ₁ b (vector) at intermediate time τ = 1,…,7.
+    Projector: T = (1+γ₄)/2 for positive-parity channel.
+    Sequential-source method: proton sink block built at t_f=8 from forward light
+    propagator; sequential source placed across entire spatial volume of time slice 8;
+    sequential light propagator solved; contracted with forward bottom propagator.
+    Contraction routed through generate_einsum(type='baryon_3pt', …).
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: Lambda_b_to_p_3pt_Vx
+      type: baryon_3pt
+      name: "Λ_b → p three-point function with vector current γ₁"
+
+  hadrons:
+    - id: Lambda_b
+      name: Lambda_b
+      type: baryon
+      flavor: udb
+      momentum: [0, 0, 0]
+      interpolating_operator: "ε^{abc} (u^{Ta} C γ₅ d^b) b^c"
+      subtype: heavy_light
+
+    - id: proton
+      name: proton
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: "ε^{abc} (u^{Ta} C γ₅ d^b) u^c"
+      subtype: nucleon
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        algorithm: cg
+        preconditioner: multigrid
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: "Multigrid-preconditioned CG; blocking from ensemble multigrid settings"
+      sink:
+        id: sink_point_fwd
+        type: point
+
+    - id: prop_b_fwd
+      quark_flavor: custom
+      custom_flavor_name: bottom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_bottom
+        algorithm: cg
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: "Plain CG for heavy quark; multigrid is not applied (ineffective at m≈1.5)"
+      sink:
+        id: sink_point_fwd_b
+        type: point
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential
+        source_timeslice: 8
+        spatial_extent: volume
+        source_momentum: [0, 0, 0]
+        sequential_details:
+          forward_propagator: prop_l_fwd
+          sink_hadron: proton
+          sink_timeslice: 8
+          projector: "(1 + γ₄) / 2"
+          sink_momentum: [0, 0, 0]
+          convention: two_dagger
+          notes: "Sequential source η^seq = γ₅ B† γ₅ placed on entire spatial volume at t_f=8"
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        algorithm: cg
+        preconditioner: multigrid
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: "Multigrid-preconditioned CG on sequential source at t_f=8"
+      sink:
+        id: sink_point_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: corr_3pt_Lb_p_Vx
+      type: baryon_3pt
+      propagator:
+        - prop_l_fwd
+        - prop_b_fwd
+        - prop_l_seq
+      observable: Lambda_b_to_p_3pt_Vx
+      source_hadron: Lambda_b
+      sink_hadron: proton
+      current:
+        gamma_structure: "γ₁"
+        gamma_index: 1
+        type: vector
+        flavor_pair: [u, b]
+      sink_timeslice: 8
+      source_timeslice: 0
+      projector: "(1 + γ₄) / 2"
+      momentum_transfer: [0, 0, 0]
+      contraction: >
+        Use generate_einsum(type='baryon_3pt', source_hadron='Lambda_b',
+        sink_hadron='proton', current='ub_Vx', seq_prop='prop_l_seq',
+        fwd_prop='prop_b_fwd') to produce the correct spin-color einsum.
+        Physical form: C₃(τ) = Σ_z Tr[ G_l^seq(z,τ) γ₁ S_b(z,τ; 0) ],
+        where G_l^seq is the sequential light propagator from the proton sink
+        at t_f=8 and S_b is the forward bottom propagator from the point source
+        at t=0. Summed over spatial volume for each τ ∈ [1,7].
+      notes: >
+        G_l^seq originates from the volume sequential source on time slice 8
+        (not from the origin). The two Wick topologies (direct and exchange) are
+        combined inside the sink-block construction by generate_einsum.
+
+output:
+  format: txt
+  metadata: false
+  description: "Raw 3pt correlator values C₃(τ) for τ=1..7, one value per line, no headers"
+
+extras:
+  - "No 2pt functions are computed"
+  - "Point source at single spacetime location [0,0,0,0] on a single configuration (cfg 10000)"
+  - "Sequential source spans entire spatial volume on time slice t_f=8 (volume source required for zero sink momentum)"
+  - "Sequential source constructed via two-dagger convention: η_seq = γ₅ B† γ₅"
+  - "Sink block B includes both direct and exchange Wick topologies"
+  - "Bottom quark mass m_b=1.5 (lattice units) is lighter than physical; the result corresponds to a bottom-like heavy baryon, not a physical Λ_b"
+  - "Bottom-quark solver uses plain CG without multigrid (multigrid is ineffective at m≈1.5)"
+  - "Gauge-field stout smearing (n_steps=1, rho=0.125, ndim=4) applied to all Dirac operator calls"
+  - "Contraction must be generated via generate_einsum(type='baryon_3pt', …), not hand-coded from a trace formula"
+  - "Single-configuration, single-source result has no error estimate; multiple configurations and sources are needed for physics conclusions"

@@ -1,0 +1,197 @@
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+task:
+  name: proton_proton_vector_3pt_gamma_x
+  description: >-
+    Compute the three-point correlation function for proton to proton
+    with a vector current insertion (u→u, gamma_x, i.e. gamma(1) in the
+    DeGrand-Rossi basis).  The proton interpolating operator
+    ε^{abc} (u^{Ta} Cγ₅ d^b) u^c is used at both source and sink.
+    The positive-parity projector T = (1 + γ₄)/2 is applied.
+    A point source is placed at [0,0,0,0] with zero momentum transfer;
+    the sequential source is built at t_sink = 8 following the strict
+    two-dagger convention η^seq = γ₅ B† γ₅.  Only the 3pt function is
+    computed; no 2pt is requested.
+
+    CRITICAL (p→p vs Λ→p):  Unlike the Λ→p case where the source contains
+    exactly one strange quark coupled to the current, here both source and
+    sink contain two degenerate u quarks.  The sink block B must be
+    antisymmetrised over both u-quark attachment possibilities (direct +
+    exchange), and the final 3pt contraction must include the exchange term
+    where the current couples to the second source u quark.  The
+    generate_einsum tool must be invoked with baryon-3pt parameters for the
+    flavour-diagonal (u→u) case with two indistinguishable light source quarks.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: proton_3pt_vec_gammax
+      type: baryon_3pt
+      name: proton_vector_current_gamma_x
+      source_hadron: proton_src
+      sink_hadron: proton_snk
+      current:
+        flavor: [u, u]
+        gamma: gamma_x
+        type: vector
+      projector: "(1 + gamma_t) / 2"
+      notes: >-
+        Flavour-diagonal vector current in a baryon with two degenerate
+        u quarks.  Sink-block construction and final 3pt contraction must
+        be antisymmetrised over both u-quark lines.  generate_einsum must
+        receive baryon-3pt parameters for the flavour-diagonal case with
+        two indistinguishable light source quarks.
+
+  hadrons:
+    - id: proton_src
+      name: proton
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) u^c"
+      position: [0, 0, 0, 0]
+    - id: proton_snk
+      name: proton
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) u^c"
+      position: [0, 0, 0, 8]
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_light_fwd
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "CG inverter with 2-level multigrid preconditioner"
+      sink:
+        id: sink_point
+        type: point
+      notes: >-
+        This single forward propagator is reused for (a) building the
+        sink block B at t_sink=8 and (b) the final 3pt trace.  Both uses
+        must reference the same variable to guarantee all quark lines
+        originate from the same point source at [0,0,0,0].
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential
+        t_sink: 8
+        depends_on: prop_l_fwd
+        hadron: proton_snk
+        projector: "(1 + gamma_t) / 2"
+        construction: >-
+          TWO-DAGGER CONVENTION (mandatory — see Lambda_proton_formfactor.md):
+          1. Build sink block B at t_sink=8 from prop_l_fwd contracted with
+             the proton sink operator and projector (1+γ₄)/2.  Because the
+             proton contains two degenerate u quarks, B must be antisymmetrised
+             over both u-quark attachment possibilities (direct + exchange).
+          2. Form sequential source: η^seq = γ₅ B† γ₅.
+          3. Solve D_l G^seq = η^seq on stout-smeared gauge links.
+          4. The object entering the final 3pt contraction is G_l_seq_dag,
+             i.e. G^seq after the second dagger / conjugation / reordering.
+             Omitting the two-dagger step yields an incorrect spin structure
+             and unphysical 3pt values.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_light_seq
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "CG inverter for sequential propagator; same stout-smeared gauge field as forward solve"
+      sink:
+        id: sink_point_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: proton_3pt_gammax
+      type: baryon_3pt
+      forward_propagator: prop_l_fwd
+      sequential_propagator: prop_l_seq
+      observable: proton_3pt_vec_gammax
+      current_gamma: gamma_x
+      t_seq: 8
+      notes: >-
+        Final contraction form:
+          C₃(τ) = Σ_z Tr[ G_l_seq_dag(z,τ)  γ₁  prop_l_fwd(z,τ) ]
+        where G_l_seq_dag is the sequential propagator after the full
+        two-dagger convention and prop_l_fwd is the same forward propagator
+        used to build the sink block.  The contraction must be antisymmetrised
+        over the two degenerate u-quark lines in the source; the
+        generate_einsum tool receives the correct baryon-3pt flavour-diagonal
+        parameters and produces the full einsum string.
+
+output:
+  format: txt
+  metadata: false
+  filename: proton_3pt_vector_gammax_result.txt
+
+extras:
+  - "Only one gauge configuration (cfg 10000) is used."
+  - "No two-point function is computed; only the 3pt correlator is produced."
+  - "Solver tolerance 1e-12 and maxiter 10000 are conservative production defaults."
+  - "The sequential propagator inherits the same stout-smearing and solver setup as the forward propagator."
+  - "Two-dagger convention: sequential source η^seq = γ₅ B† γ₅, with B built from prop_l_fwd at t_sink=8 and antisymmetrised over both source u-quark lines."
+  - "p→p differs from Λ→p: both source and sink contain two degenerate u quarks; sink-block construction and final contraction must be antisymmetrised.  The generate_einsum tool call must receive baryon-3pt parameters for the flavour-diagonal case with two indistinguishable light source quarks."
+  - "The same prop_l_fwd variable is used for sink-block construction and the final 3pt trace, ensuring all quark lines originate from the same point source at [0,0,0,0]."
+  - "Final contraction uses G_l_seq_dag (sequential propagator after second dagger/conjugation), following Lambda_proton_formfactor.md convention."

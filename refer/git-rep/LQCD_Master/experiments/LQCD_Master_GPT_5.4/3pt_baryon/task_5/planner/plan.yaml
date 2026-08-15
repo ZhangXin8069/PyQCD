@@ -1,0 +1,157 @@
+task:
+  name: lambda_to_proton_vector_current_3pt
+  description: Compute the raw zero-momentum Euclidean Lambda-to-proton three-point correlation function for the valence s->u vector transition with local current \bar{u} gamma_x s, source operator epsilon^{abc}(u^{Ta} C gamma_5 d^b)s^c, sink operator epsilon^{abc}(u^{Ta} C gamma_5 d^b)u^c, positive-parity projector Tmat=(I+gamma_t)/2, point source at [0,0,0,0], and source-sink separation tseq=8; do not compute any two-point correlators, and save only the final three-point data as plain txt in the run directory. This run produces an unnormalized Euclidean 3pt correlator only, not a decay amplitude or form factor.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_p_vector_3pt
+      type: baryon_3pt
+      name: Lambda_to_proton_s_to_u_vector_current_gamma_x_raw_3pt
+
+  hadrons:
+    - id: lambda_baryon
+      name: Lambda
+      type: baryon
+      flavor: uds with isospin-symmetric light sector u=d=l
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} C gamma_5 d^b)s^c
+      subtype: octet_baryon
+    - id: proton_baryon
+      name: proton
+      type: baryon
+      flavor: uud with isospin-symmetric light sector u=d=l
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} C gamma_5 d^b)u^c
+      subtype: octet_baryon
+
+  propagators:
+    - id: light_forward_prop
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_forward_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward clover light-quark inversion on stout-smeared links; by isospin symmetry this single propagator is reused for both source u/d lines and for the two light lines entering the proton sink block in the sequential-source construction.
+      sink:
+        id: forward_point_sink_light
+        type: point
+
+    - id: strange_forward_prop
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: strange_forward_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward clover strange-quark inversion on stout-smeared links; this is the current-side propagator contracted with gamma_x in the final trace. Keep the strange valence mass consistent with the fixed ensemble block even though the gauge-file path contains ms-0.2400 in its label.
+      sink:
+        id: forward_point_sink_strange
+        type: point
+
+    - id: light_sequential_prop
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_sequential_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential light-quark inversion built from the zero-momentum proton sink block using Tmat=(I+gamma_t)/2 at tseq=8. Construct the sink block from light_forward_prop, apply the two-dagger convention gamma_5 B^dagger gamma_5 to form the sequential source, then invert with the same clover action on the same stout-smeared links.
+      sink:
+        id: proton_sequential_sink_tseq8
+        type: other
+
+measurement:
+  correlators:
+    - id: lambda_p_vector_current_gamma_x_tseq8
+      type: baryon_3pt
+      propagator: light_forward_prop + strange_forward_prop + light_sequential_prop
+      observable: lambda_p_vector_3pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - confirm before production that C24P29 uses the same clover action, mass convention, and stout-link inversion setup assumed here
+  - build the proton sink block explicitly from light_forward_prop with Tmat=(I+gamma_t)/2, then form gamma5 B^dagger gamma5 and solve the light sequential propagator
+  - generate baryon_3pt einsum once via codegen for Lambda->p with current_gamma=gamma_x and projector P_plus
+  - save root-rank-only plain txt in the run directory as c3pt_lambda_p_gamma_x_tseq8_cfg10000.txt with columns tseq t_ins Re Im and no header
+  - use insertion times 1 through 7 only
+
+freeform_plan: |

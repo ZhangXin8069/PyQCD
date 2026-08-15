@@ -1,0 +1,433 @@
+% ============================================================
+% pure 报告 — lamet-agent 核心部分穷尽剖析
+% 规范模板 v2（xelatex + ctex）
+% 编译: xelatex -interaction=nonstopmode -halt-on-error -file-line-error pure_core_20260815.tex
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+% ===== 色板（语义化）=====
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+% ===== 全局防溢出 =====
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+% ===== 标题层次 =====
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+% ===== 彩色标识框 =====
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+% ===== 代码样式 =====
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{lamet-agent 核心部分穷尽剖析：\\ NLO 匹配核、谱分解拟合与 LLM 驱动的 LaMET 工作流}
+\author{opencode pure}
+\date{2026-08-15}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本项目性质判定为\textcolor{phys}{代码-物理交叉}：80 个 Python 文件、约 4.6 万行中，
+物理计算代码（NLO 匹配核、谱分解拟合、重归一化方案、Fourier 尾部处理）约 1.4 万行，
+LLM 编排与数据基础设施约 6 千行，物理公式以内嵌 docstring 与文档形式与代码同址。
+穷尽枚举核心部分候选 12 项：\textcolor{phys}{深挖 6 项}（C1 匹配核体系、C2 谱分解拟合、
+C3 重归一化方案、C4 Fourier 变换与尾部拟合、C5 EnsembleData 容器、C6 LLM DAG 编排），
+\textcolor{phys}{浅析 3 项}（C7 manifest 参数契约、C8 planning、C9 matching/extrapolation 工具），
+\textcolor{phys}{排除 3 项}（C10 绘图/LLM/追踪基础设施、C11 文献工具、C12 测试）。
+最深剖析结论：C1 的\textcolor{algo}{统一离散化架构}——一张 NLO 匹配矩阵同时服务
+Coulomb-gauge 与 gauge-invariant 三算子三方案 PDF 核、真二变量 DA 核与前重整化子重求和，
+全部经列和 plus 处方与 $\delta(x-y)$ 线性插值存续统一还原。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+\subsection{项目性质判定}
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉}。依据（实测）：仓库根
+\texttt{\nolinkurl{lamet_agent/}} 下物理计算模块 \texttt{\nolinkurl{kernels.py}}（1941 行）、
+\texttt{\nolinkurl{stages/correlator/functions.py}}（5782 行）、
+\texttt{\nolinkurl{stages/fourier/functions.py}}（3290 行）、
+\texttt{\nolinkurl{stages/renorm/functions.py}}（1657 行）合计约 1.27 万行，
+占核心代码大头；编排与容器 \texttt{\nolinkurl{agent.py}}（1012 行）、
+\texttt{\nolinkurl{manifest.py}}（956 行）、\texttt{\nolinkurl{core/data.py}}（549 行）、
+\texttt{\nolinkurl{core/tools.py}}（922 行）为支撑。NLO 匹配核公式直接内嵌于
+\texttt{\nolinkurl{kernels.py}} 系数函数，README 亦以 LaTeX 公式记录重归一化方案。
+\end{keybox}
+
+\subsection{核心部分总清单（穷尽枚举）}
+\begin{xltabular}{\textwidth}{lllX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & \texttt{kernels.py} 匹配核体系 & 深挖 & 统一离散化：一个构造器服务 CG/GI 三算子、PDF/DA、三种方案与 LRR 重求和 \\
+C2 & correlator 谱分解与裸矩阵元 & 深挖 & $n$-态谱分解模型 + logGBF 模型平均，样本级谱拟合 \\
+C3 & 重归一化方案 & 深挖 & scheme/strategy 解耦（ratio/hybrid/msbar $\times$ 外部分母/自重归一化） \\
+C4 & Fourier 变换与尾部拟合 & 深挖 & 完整矩形/梯形求积、负 $z$ 对称性补全、尾部模型与 scheme 扫描 \\
+C5 & \texttt{core/data.py} EnsembleData & 深挖 & 样本轴封装 + gvar/NetCDF 无损失往返 + 泛化变换算子 \\
+C6 & \texttt{agent.py} LLM/tool DAG & 深挖 & 每个 job 隔离 store + 必需工具序列强制 + 观测回环 \\
+C7 & manifest 参数契约校验 & 浅析 & 闭合契约拒绝未知键，含最相近键提示 \\
+C8 & \texttt{planning/} 模块 & 浅析 & LLM 驱动 manifest 规划，JSON Patch 受保护应用 \\
+C9 & matching/extrapolation 工具 & 浅析 & C1 的消费端与系统atics 外推 \\
+C10 & plotting/llm/trace/banner & 排除 & 通用样板基础设施，无独特竞争力 \\
+C11 & \texttt{lamet\_literature/}、\texttt{papers/} & 排除 & 文献抓取与论文库辅助工具，与核心分析链正交 \\
+C12 & \texttt{tests/unit/} & 排除 & 测试证据（公式 pin、回归），非剖析主体 \\
+\bottomrule
+\end{xltabular}
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+\subsection{C1: NLO 匹配核体系（\texttt{kernels.py}）}
+
+\begin{physbox}
+\textbf{物理图像:} LaMET 因子化把光锥分布 $f(x)$ 写为准分布 $\tilde f(y,P_z)$
+的积分变换（\eqref{eq:factorization}）；NLO 修正由一个在 $\xi=x/y$ 处有
+plus 奇性的系数函数承载。代码把全部方案差异压缩进少数闭式系数
+$C(\xi,\dots)$，把全部数值差异压缩进一个离散化器，使同一张矩阵
+``kernel @ quasi'' 即得匹配结果。
+\end{physbox}
+
+\begin{equation}\label{eq:factorization}
+f(x,\mu)=\int\frac{dy}{|y|}\,C^{-1}\!\left(\frac{x}{y},\frac{\mu}{yP_z}\right)\tilde f(y,P_z),
+\qquad L=\ln\frac{4y^2P_z^2}{\mu^2}.
+\end{equation}
+\eqref{eq:factorization} 的代码镜像即
+\texttt{\nolinkurl{kernels.py:1846-1868}} 的 \texttt{\_PDF\_STRUCTURE}。
+
+\paragraph{系数函数（闭式物理）} ratio 方案主干
+\texttt{\nolinkurl{kernels.py:180-202}}（arXiv:2602.11283 Eq.~2.16）：
+\begin{align}\label{eq:cratio}
+C_r^{(1)}(\xi)&=
+\left[\frac{1+\xi^2}{1-\xi}\right]_{+}L
++\frac{1+\xi^2}{1-\xi}\bigl[\mathrm{sgn}(\xi)\ln|\xi|+\mathrm{sgn}(1-\xi)\ln|1-\xi|\bigr]\notag\\
+&\quad+\mathrm{sgn}(\xi)+\frac{3\xi-1}{\xi-1}\cdot\frac{\mathrm{arctan}/\mathrm{arctanh}\bigl(\sqrt{|1-2\xi|}\bigr)}{\sqrt{|1-2\xi|}}
+-\frac{1.5}{|1-\xi|},
+\end{align}
+其中 $\mathrm{arctan}/\mathrm{arctanh}$ 支由 $\xi$ 相对 $1/2$ 的位置选择（
+\texttt{\nolinkurl{kernels.py:162-177}}），尽管平方根在 $\xi=1/2$ 表面奇异，解析极限使系数跨点光滑。
+MSbar（Eq.~2.14）与 hybrid（Eq.~2.19--2.20）仅在 \eqref{eq:cratio} 上叠加有限修正：
+\begin{equation}\label{eq:cmsbar}
+C_{\overline{\mathrm{MS}}}=C_r+\frac{0.5}{|1-\xi|},\qquad
+C_{\mathrm{hyb}}=C_r+\frac12\left[\frac{1}{|1-\xi|}-\frac{2\,\mathrm{Si}\bigl((1-\xi)|y|z_sP_z\bigr)}{\pi(1-\xi)}\right],
+\end{equation}
+后者即 Wilson 线正弦积分项；$\gamma^z$ 仅 MSbar 与 $\gamma^t$ 差 $+2(1-\xi)$（Eq.~2.15，
+\texttt{\nolinkurl{kernels.py:252-274}}）；transversity 三方案全等（Eqs.~2.17/2.18/2.21）。
+gauge-invariant 族以同样结构转录 arXiv:2412.20461 Eqs.~(23)-(24)、arXiv:2604.00143
+Eqs.~(C6)-(C8)、arXiv:2208.08008 Eqs.~(22)-(23)（\texttt{\nolinkurl{kernels.py:939-1072}}）。
+
+\paragraph{统一离散化与两种 plus 处方}
+\texttt{build\_matching\_matrix}（\texttt{\nolinkurl{kernels.py:361-437}}）把任意核密度
+$d(x,y)$ 离散成 $(n_x,n_y)$ 矩阵：逐列填充非对角项、逐列求和归零（plus 处方还原
+$x=y$ 奇性）、LO $\delta(x-y)$ 用 $y$ 网格到 $x$ 网格的线性插值存续（网格错位时
+LO 项不消失），返回
+\begin{equation}\label{eq:matrix}
+M=I-\frac{\alpha_s C_F}{2\pi}\,K\,\Delta y,\qquad
+\sum_y K(x,y)\Delta y=0.
+\end{equation}
+MSbar 核走 \texttt{\_build\_pdf\_matrix}（\texttt{\nolinkurl{kernels.py:557-654}}）：
+因其 $0.5/|1-\xi|$ 只在 $\xi\in[0,2]$ 内被 plus 化，网格不可达的 $\xi$ 尾部须由
+显式积分 \texttt{\_uncovered\_ksi\_intervals} 补全，逐 $x$ 行的 $\delta$ 项携带
+$\mathrm{diag}_{\mathrm{extra}}(L)-\int d\xi\,C_{\mathrm{plus}}$（\eqref{eq:delta}）。
+这是对合作方参考核（\texttt{msbar\_kernel/*.npy}）逐点复现的\textcolor{accent}{确证}，
+有测试 pin（\texttt{\nolinkurl{tests/unit/test_kernels.py}} 类）。
+\begin{equation}\label{eq:delta}
+\Delta_{\delta}(x)=\mathrm{diag}_{\mathrm{extra}}\bigl(L(x)\bigr)-\sum_j
+C_{\mathrm{plus}}\!\Bigl(\frac{x}{y_j},L(x),x\Bigr)\frac{|x|\,\Delta y}{y_j^2}
+-\sum_{\mathrm{gaps}}\int d\xi\,C_{\mathrm{plus}}(\xi,L(x),x).
+\end{equation}
+
+\paragraph{DA 核：真二变量函数} 介子 DA 核 $V(x,y)$（arXiv:2212.14415
+Eq.~(4.15)）含 $|x-y|/\bigl(y(y-1)\bigr)$ 类项，不是 $x/y$ 的函数，故以裸密度身份
+进入 \eqref{eq:matrix}（带自身 $1/y$、$1/(1-y)$ 极点，plain $dy$ 测度；
+\texttt{\nolinkurl{kernels.py:1274-1344}}）。ratio 的 Wilson 项 $3/(2|x-y|)$
+（\texttt{V\_qq\_rto}）不是装饰：它抵消 $V$ 的偶性 $-3/(2|x|)$ 尾，使每列
+plus 归零积分良定且网格无关——这是 $z_s\to\infty$ 极限下 hybrid Si 项的形式。
+
+\paragraph{前重整化子重求和（LRR）} 直线 Wilson 线的线性 UV 发散使系数
+$c_n\sim n!(\beta_0/2\pi)^n$ 增长，LRR（arXiv:2305.05212 Eqs.~(12)-(17)）以
+矩阵指数全阶求和（\texttt{\nolinkurl{kernels.py:1680-1713}}）：
+\begin{equation}\label{eq:lrr}
+M_{\mathrm{LRR}}=\bigl(M_{\mathrm{fix}}+r_0M_{C_z}\bigr)\exp\!\bigl(-M_{C_z}\,r_{\mathrm{sumPV}}\bigr),
+\qquad r_n=N_m|z\mu|\Bigl(\frac{\beta_0}{2\pi}\Bigr)^n
+\frac{\Gamma(n+1+b)}{\Gamma(1+b)}\Bigl(1+\frac{bc_1}{n+b}+\cdots\Bigr),
+\end{equation}
+其中 $r_{\mathrm{sumPV}}$ 为 PV Borel 和（指数积分函数 $E_\nu$，\texttt{mpmath}），
+$C_z$ 为正规化线性尾的 Fourier 变换（\texttt{\nolinkurl{kernels.py:1611-1652}}），
+$M_{C_z}$ 为裸 plus 离散化。重整化子为 Wilson 线属性，与算子无关，故一个
+$C_z$ 服务 $\gamma^t/\gamma^z$/transversity/DA 全部核。核的出处经
+\texttt{@kernel\_reference} 装饰器挂载（\texttt{\nolinkurl{kernels.py:660-678}}），
+报告据此引用文献——新核无需改报告。
+
+\subsection{C2: correlator 谱分解与裸矩阵元提取（\texttt{stages/correlator/}）}
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查，无孤儿符号。
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{pt2\_re\_fcn} & 2pt 关联函数 & $\sum_n z_n^2/(2E_n)[e^{-E_n t}+e^{-E_n(L_t-t)}]$；\texttt{\nolinkurl{stages/correlator/functions.py:402-404}} \\
+\texttt{pt3\_ratio\_fcn} & 3pt/2pt 比率 & 谱分解分子除以 2pt 分母；\texttt{\nolinkurl{stages/correlator/functions.py:440-465}} \\
+\texttt{qda\_ratio\_fcn} & qDA 比率 & 非定域算子 2pt 分子 / 选定 2pt 模型；\texttt{\nolinkurl{stages/correlator/functions.py:489-505}} \\
+\texttt{O00/ z\_n} & 基态裸矩阵元 & 与 overlap $z_n$ 耦合提取；\texttt{\nolinkurl{stages/correlator/functions.py:1359-1401}} \\
+\texttt{fit\_matrix\_element} & 矩阵元拟合入口 & 窗口/先验/策略参数化；\texttt{\nolinkurl{stages/correlator/functions.py:871}} \\
+\texttt{bayesian\_average} & logGBF 模型平均 & 多先验宽度 BMA 组合；\texttt{\nolinkurl{stages/correlator/functions.py:1101-1105}} \\
+\texttt{select\_data\_window} & 数据窗选择 & 样本平均可行性与稳健性索引；\texttt{\nolinkurl{stages/correlator/functions.py:1184}} \\
+\bottomrule
+\end{xltabular}
+
+\paragraph{谱分解模型} 2pt 与 3pt/2pt 比率的 $n$-态模型（
+\texttt{\nolinkurl{stages/correlator/functions.py:392-465}}）：
+\begin{align}
+C_{2}(t)&=\sum_{n}\frac{z_n^2}{2E_n}\Bigl[e^{-E_n t}+e^{-E_n(L_t-t)}\Bigr], \label{eq:2pt}\\
+R(t,\tau)&=\frac{\sum_{n,m}O_{nm}\,z_n z_m\,e^{-E_n(t-\tau)}e^{-E_m\tau}
+\big/(4E_nE_m)}{C_2(t)}, \label{eq:3pt}
+\end{align}
+\eqref{eq:3pt} 的代码即 \texttt{pt3\_ratio\_fcn} 的双求和与归一（
+\texttt{\nolinkurl{stages/correlator/functions.py:450-465}}）。qDA 的
+$bz=0$ 回退分母用混合 overlap $z_n z'_n$ 而非 $z_n^2$（
+\texttt{\nolinkurl{stages/correlator/functions.py:407-437}}），且 $z=0$ 点因
+分子分母同源恒为 1，直接赋 $1+0j$ 跳过拟合。
+
+\paragraph{模型平均与窗扫描} \texttt{model\_average=true} 时在同一数据窗内扫描
+$n_{\mathrm{state}}$ 与先验宽度候选，以 logGBF 权重 BMA 组合（
+\texttt{\nolinkurl{stages/correlator/functions.py:1066-1105}}），系统差按
+\texttt{\nolinkurl{bare_re/im_sys_sdev}} 入 NetCDF attrs。窗口缺省时由重采样后的前半程
+2pt 信噪比端点自动生成有界扫描（\texttt{\_auto\_pt2\_windows}），返回
+跨 $z$ 可行性摘要与 \texttt{\nolinkurl{recommended_robust_index}} 供 LLM 采用——这是
+\eqref{eq:2pt}--\eqref{eq:3pt} 与代理自动化之间的关键耦合点。
+
+\subsection{C3: 重归一化方案（\texttt{stages/renorm/}）}
+
+\begin{physbox}
+\textbf{物理图像:} 格点裸矩阵元携带线性 UV 发散与 $z=0$ 有限归一化；重归一化
+用 scheme（物理方案）与 strategy（实现方式）解耦：外部分母策略逐点相除，
+自重归一化策略以零动量参考的短距离 $\overline{\mathrm{MS}}$ 匹配固定有限常数。
+\end{physbox}
+
+\paragraph{外部分母策略} ratio 方案（\texttt{\nolinkurl{stages/renorm/functions.py:464-585}}）：
+\begin{equation}\label{eq:ratio}
+h^R_s(z)=\frac{h^{\mathrm{target}}_s(z)}{h^{\mathrm{denominator}}_s(z)},\qquad
+z_{\mathrm{fm}}=(z/a)\,a_{\mathrm{fm}},
+\end{equation}
+每重采样样本逐点相除（\texttt{\nolinkurl{stages/renorm/functions.py:517}}）；
+hybrid 在 $|z|\le z_s$ 用比值、$|z|>z_s$ 乘长距指数 $e^{(\delta m+m_0)(|z_{\mathrm{fm}}|-z_s)}$
+（\texttt{\nolinkurl{stages/renorm/functions.py:519-530}}）。
+
+\paragraph{自重归一化策略}（\texttt{\nolinkurl{stages/renorm/functions.py:700-1000}}）
+拟合 $g(z)-\ln Z_{\overline{\mathrm{MS}}}(z)\simeq m_0z+b$，构造
+\begin{equation}\label{eq:zr}
+z_R(z,a)=\exp\bigl[\ln M_{\mathrm{fit}}(z,a)-g(z)+m_0z\bigr],\qquad
+H_{\mathrm{ren}}(z)=\frac{H_{\mathrm{bare}}(z)}{z_R(z)\,Z_{\overline{\mathrm{MS}}}(z)},
+\end{equation}
+其中坐标空间 $\overline{\mathrm{MS}}$ 转换因子（\texttt{\nolinkurl{kernels.py:104-122}}）：
+\begin{equation}\label{eq:zmsbar}
+Z_{\overline{\mathrm{MS}}}(z;\mu)=1+\frac{\alpha_s C_F}{2\pi}\Bigl[
+1.5\ln\frac{\mu^2 z^2 e^{2\gamma_E}}{4}+\mathrm{offset}\Bigr],\qquad
+\mathrm{offset}=\begin{cases}5/2,&\text{PDF},\\7/2,&\text{DA},\end{cases}
+\end{equation}
+量纲检查：$[\mu z]$ 无量纲（$z$ 以 $\mathrm{fm}\to\mathrm{GeV}^{-1}$ 经
+$\hbar c=0.197327$）；$m\to0$ 极限下 \eqref{eq:zr} 回到纯对数匹配；
+$z\to0$ 时 $Z_{\overline{\mathrm{MS}}}\to 1+\mathcal O(\alpha_s)$，有限。
+hybrid 分支 $|z|>z_s$ 用 $H_{\mathrm{denom}}(z_s^{\mathrm{grid}})/z_R(z_s^{\mathrm{grid}})$
+构造每样本常数 $Z_{T,s}$，保持两分支在切换格点连续并传播分母不确定性。
+
+\subsection{C4: Fourier 变换与尾部拟合（\texttt{stages/fourier/}）}
+
+\begin{physbox}
+\textbf{物理图像:} 动量空间分布是坐标空间矩阵元的 Fourier 变换；
+格点有限 $z$ 范围与统计尾部噪声迫使分段方案（短距直接求和 + 长距参数化尾部），
+负 $z$ 分支由实部偶/虚部奇对称性补全。
+\end{physbox}
+\begin{equation}\label{eq:ft}
+\tilde f(xP_z)=\frac{1}{2\pi}\int dz\,e^{ixP_z z}\,h(z)\approx
+\sum_j w_j\,e^{ixP_z z_j}\,h(z_j),
+\end{equation}
+\eqref{eq:ft} 的求积在 \texttt{sum\_ft\_re\_im} 中显式实现
+（\texttt{\nolinkurl{stages/fourier/functions.py:240-291}}）：均匀网格用矩形
+$w_j=\Delta z$，非均匀网格用梯形权重 $w_0=\Delta z_{01}/2$、$w_j=(z_{j+1}-z_{j-1})/2$；
+实/虚通道分别累加 $\cos$ 与 $\sin$ 相位。负 $z$ 补全
+（\texttt{\nolinkurl{stages/fourier/functions.py:309-326}}）利用
+$\mathrm{Re}\,h(-z)=\mathrm{Re}\,h(z)$、$\mathrm{Im}\,h(-z)=-\mathrm{Im}\,h(z)$
+对称性构造全轴积分。DA 另有 $\exp(+i\lambda/2)h$ 投影实值化再旋转回
+（\texttt{\nolinkurl{stages/fourier/functions.py:294-306}}）。
+尾部模型按可观测量的渐近行为参数化（quark-like 与核子/介子胶子两族，
+\texttt{\nolinkurl{stages/fourier/functions.py:524-759}}），
+\texttt{run\_fourier\_workflow}（\texttt{\nolinkurl{stages/fourier/functions.py:1552}}）
+对 scheme 候选执行完整扫描并在样本级并行拟合（\texttt{workers} 进程池），
+每样本 fit-on-data 与 gvar 误差双通道输出。
+
+\subsection{C5: EnsembleData 容器与重采样（\texttt{core/data.py}）}
+
+\begin{algobox}
+\textbf{核心算法:} 一个 xarray 数组 = 首轴 \texttt{resample}（raw/jackknife/bootstrap/
+gvar 样本）+ 物理坐标；jackknife 为删除一子样平均
+（\texttt{\nolinkurl{core/data.py:313-322}}），bootstrap 为随机重抽平均
+（\texttt{\nolinkurl{core/data.py:324-333}}），均以 $n$-样本线性开销实现
+（jackknife 用求和差一次完成）；gvar 往返把 \texttt{gvar.GVar} 拆存
+mean/sdev 两数组并在加载时重建（\texttt{\nolinkurl{core/data.py:148-204}}），
+NetCDF 无损。复杂度：重采样 $O(n_{\mathrm{sample}}\cdot N_{\mathrm{data}})$，
+坐标变换经 \texttt{xarray.apply\_ufunc} 向量化，跨样本运算由
+\texttt{aligned\_ref\_array} 广播对齐（\texttt{\nolinkurl{core/data.py:449-475}}）。
+\end{algobox}
+正确性要点：\texttt{RESAMPLE\_DIM} 保留名拒绝物理维同名（
+\texttt{\nolinkurl{core/data.py:91-92}}）；拼接沿新维时校验
+ensemble/resample/dims 一致性（\texttt{\nolinkurl{core/data.py:335-373}}）；
+binning 前校验整除并告警。该容器是 C2--C4 全部物理流程的数据主干，
+是唯一经 \texttt{to\_netcdf}/\texttt{from\_netcdf} 跨 stage 传递的格式
+（README 明确 \texttt{auto\_complex=True} 支持复数原生往返）。
+
+\subsection{C6: LLM/tool DAG 编排（\texttt{agent.py}）}
+
+\begin{algobox}
+\textbf{核心算法:} 逐 stage、逐 job 的隔离 store 循环
+（\texttt{\nolinkurl{agent.py:98-284}}）：静态上下文一次装配
+（\texttt{build\_stage\_static\_prompt}），随后最多 \texttt{max\_tool\_steps}
+轮 LLM 决策；每轮动作经 \texttt{prepare\_tool\_args} 归一化
+（manifest 路径、plot 路径解析）后执行工具，观测作为下一轮用户消息回环；
+terminal 工具写 \texttt{store["output"]} 并注册到 job id，供下游角色引用。
+必需的顺序工具序列（\texttt{required\_job\_tool\_sequence}）强制执行——
+LLM 跳步即被纠正（\texttt{\nolinkurl{agent.py:194-206,221-227}}）；
+\eqref{eq:matrix} 等物理工具的输入因此始终按 \texttt{\{target, denominator\}}
+等角色名从上游 job id 解析（DAG 边即 manifest 的 role inputs）。
+\end{algobox}
+设计取舍：LLM 是编排者而非计算者——全部数值走白名单工具，工具参数受
+\texttt{\nolinkurl{STAGE_PARAM_CONTRACTS}} 闭合校验（C7），使 40 轮上限内每个 job 收敛到
+确定产物；\texttt{mock} 后端可确定性回放（\texttt{--actions-path} JSONL），
+把整条分析链变成可回归测试的管线。
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+统一离散化（C1） & 逐核手写循环 & 一个构造器覆盖 CG/GI、PDF/DA、三方案与 LRR；系数函数闭式、离散化共享，新增核为一行包装 \\
+两种 plus 处方分工 & 单一列和处方 & MSbar 的 $[0,2]$ 截断计数子项须 ksi 积分路径（\texttt{\_build\_pdf\_matrix}）；已验证复现合作方 \texttt{msbar\_kernel/*.npy} \\
+LRR 矩阵指数 & 固定阶截断 & 全阶重求和去除 $\mathcal O(\Lambda_{\mathrm{QCD}}z)$ 幂修正且不双计；PV Borel 和数值有存档验证（$\mu=100$\,GeV 时 $dPVasym=4.9371$） \\
+谱函数与 BMA（C2） & 单模型固定窗 & 窗/阶/先验在样本平均数据上预调，logGBF 加权模型平均，统计/系统误差分通道入档 \\
+scheme/strategy 解耦（C3） & 混合方案特例 & ratio/hybrid/msbar 与外部分母/自重归一化正交组合，跨算子 $z_R$ 重映射支持 PDF$\to$DA 参照系转移 \\
+DAG 强约束（C6） & 自由工具调用 & 必需工具序列 + 闭合参数契约，使 LLM 编排可确定性回放与测试 \\
+\bottomrule
+\end{tabularx}
+\caption{独特性评估（数据来源: 实测/推导/测试 pin）}
+\end{table}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+ratio 系数闭式（\eqref{eq:cratio} 的代码镜像）：
+\lstinputlisting[firstline=180,lastline=202]{/Users/zhangxin/lamet-agent/lamet_agent/kernels.py}
+hybrid 的 Wilson 线修正（\eqref{eq:cmsbar} 第二式）：
+\lstinputlisting[firstline=277,lastline=292]{/Users/zhangxin/lamet-agent/lamet_agent/kernels.py}
+3pt/2pt 比率谱模型（\eqref{eq:3pt}）：
+\lstinputlisting[firstline=440,lastline=465]{/Users/zhangxin/lamet-agent/lamet_agent/stages/correlator/functions.py}
+hybrid 分段应用（\eqref{eq:ratio} 的混合变体）：
+\lstinputlisting[firstline=517,lastline=537]{/Users/zhangxin/lamet-agent/lamet_agent/stages/renorm/functions.py}
+非均匀网格 Fourier 求积（\eqref{eq:ft}）：
+\lstinputlisting[firstline=268,lastline=291]{/Users/zhangxin/lamet-agent/lamet_agent/stages/fourier/functions.py}
+jackknife 重采样：
+\lstinputlisting[firstline=313,lastline=333]{/Users/zhangxin/lamet-agent/lamet_agent/core/data.py}
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{lamet_agent/kernels.py:180-202}} & 仓库 & $C_r^{(1)}$ ratio 系数（Eq.~2.16） \\
+\texttt{\nolinkurl{lamet_agent/kernels.py:228-274}} & 仓库 & MSbar/gz 系数（Eqs.~2.14-2.15） \\
+\texttt{\nolinkurl{lamet_agent/kernels.py:277-292}} & 仓库 & hybrid Si 修正（Eqs.~2.19-2.20） \\
+\texttt{\nolinkurl{lamet_agent/kernels.py:361-437}} & 仓库 & 统一离散化与列和 plus 处方 \\
+\texttt{\nolinkurl{lamet_agent/kernels.py:557-654}} & 仓库 & MSbar ksi 积分 plus 处方 \\
+\texttt{\nolinkurl{lamet_agent/kernels.py:1274-1394}} & 仓库 & DA 核 $V_{qq,h/p/t}$ 与 Wilson 项 \\
+\texttt{\nolinkurl{lamet_agent/kernels.py:1557-1713}} & 仓库 & LRR：$r_n$、PV Borel 和、矩阵指数 \\
+\texttt{\nolinkurl{stages/correlator/functions.py:392-505}} & 仓库 & 2pt/3pt/qDA 谱分解模型 \\
+\texttt{\nolinkurl{stages/correlator/functions.py:1066-1184}} & 仓库 & logGBF 权重与窗选择 \\
+\texttt{\nolinkurl{stages/renorm/functions.py:464-585}} & 仓库 & 外部分母 ratio/hybrid 应用 \\
+\texttt{\nolinkurl{stages/renorm/functions.py:700-1000}} & 仓库 & 自重归一化 $z_R$ 构造与 apply \\
+\texttt{\nolinkurl{stages/fourier/functions.py:240-326}} & 仓库 & 求积与负 $z$ 对称性补全 \\
+\texttt{\nolinkurl{stages/fourier/functions.py:524-759}} & 仓库 & 尾部渐近模型参数化 \\
+\texttt{\nolinkurl{core/data.py:148-204}} & 仓库 & gvar/NetCDF 无损往返 \\
+\texttt{\nolinkurl{core/data.py:313-333}} & 仓库 & jackknife/bootstrap 重采样 \\
+\texttt{\nolinkurl{agent.py:98-284}} & 仓库 & LLM/tool 循环与必需序列强制 \\
+\texttt{\nolinkurl{README.md:766-771}} & 文档 & 动量公式 $p=2\pi\hbar c\sqrt{n_x^2+n_y^2+n_z^2}/(L_s a)$ \\
+\texttt{\nolinkurl{README.md:260-290}} & 文档 & 重归一化方案与 $z_{\mathrm{fm}}$ 约定 \\
+\bottomrule
+\end{xltabular}
+
+% ================= 6 结论 =================
+\section{结论}
+\begin{conclbox}
+穷尽剖析结论：核心部分候选 12 项——\textcolor{phys}{深挖 6 / 浅析 3 / 排除 3}。
+最强竞争力为 \textcolor{algo}{统一离散化匹配核架构}（C1）：闭式系数函数与
+共享离散化器解耦，使 NLO Coulomb-gauge 与 gauge-invariant 三算子、PDF 与 DA、
+ratio/msbar/hybrid 三方案及前重整化子全阶重求和共用一张匹配矩阵的构造逻辑；
+两种 plus 处方按物理结构分工并逐点复现合作方参考核。与之配合的谱分解拟合
+（C2，BMA 模型平均）、方案/策略解耦重归一化（C3）与完整求积 Fourier（C4）
+构成从格点关联函数到光锥分布的完整物理链；EnsembleData（C5）与强约束
+LLM 编排（C6）使整链可确定性回放。
+\end{conclbox}
+\begin{warnbox}
+未验证/局限：① DA 方向 LRR 应用以"重整化子普适性"为假设，注释明确待 DA 专属文献
+（\texttt{\nolinkurl{kernels.py:1805-1808}}）；② \texttt{C\_hybrid\_gi\_gz} 未实现
+Eq.~(C6) 的 $\delta C_M$ 与 NNLO 项（NLO only，\texttt{\nolinkurl{kernels.py:1024-1026}}）；
+③ 本报告公式由源码/docstring 转录核验，未逐一对照 arXiv 原文数字；
+④ 排除项 C10--C12 的理由于第 1 节清单注明；⑤ 运行级端到端数值（真实格点数据
+运行输出）本次未执行，属未验证层面。
+\end{warnbox}
+
+\end{document}

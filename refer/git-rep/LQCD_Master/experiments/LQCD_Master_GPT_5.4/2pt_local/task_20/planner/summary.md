@@ -1,0 +1,10 @@
+This revised plan keeps the original objective and setup, but makes the baryon measurement physically and operationally complete.
+
+The target is the zero-momentum two-point function built from the user-requested local operator
+\(\epsilon^{abc}(s^{Ta} C\gamma_5 c^b)c^c\), projected with \(T=(1+\gamma_t)/2\) to the positive-parity channel. Since this is an \(scc\) baryon, the correlator requires one strange propagator and one charm propagator, with the charm propagator reused for the two identical charm lines. The plan now states that explicitly and also records that the contraction contains two Wick topologies because of the identical charm quarks.
+
+The ensemble block is kept exactly consistent with the provided configuration. The inversions use the requested stout-smeared links with parameters interpreted in the standard order \((n_\text{steps}=1,\rho=0.125,n_\text{dim}=4)\). The strange and charm solver inputs are tied to the masses and clover coefficient already present in the fixed ensemble information rather than introducing new action parameters. The charm solver note now explicitly warns not to assume that the listed light-quark multigrid setup is automatically valid for charm.
+
+The plan also corrects the projection logic: the parity projector is part of the baryon spin contraction itself, not an after-the-fact operation. For the output, the file format is made unambiguous by saving `t ReC ImC` with no header, which preserves the full correlator while still satisfying the user's requirement of plain text without extra text.
+
+Finally, the plan states clearly that one source on one configuration is only sufficient for a smoke test or code-validation run, not for credible Omega_cc spectroscopy. That preserves the requested calculation while setting the correct scientific expectation.

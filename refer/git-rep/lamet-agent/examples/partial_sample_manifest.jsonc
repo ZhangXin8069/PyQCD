@@ -1,0 +1,154 @@
+{
+  // NOTE: JSONC (JSON with comments). Comments document the design; strip them
+  // if a strict-JSON parser is required.
+  //
+  // PARTIAL / RESUME EXAMPLE: start the pipeline from fourier_transform.
+  //
+  // This is the companion to examples/sample_manifest.jsonc (the full
+  // p0+p4+p5 run). It shows how to begin mid-pipeline when the upstream
+  // products already exist on disk.
+  //
+  // Two ingredients make "resume from a middle stage" work:
+  //   1. metadata.stages lists ONLY the stages you want to run (order = run order).
+  //   2. The first job(s) of the resumed sub-pipeline read their input from an
+  //      EXTERNAL SOURCE NODE declared under inputs.artifacts, instead of from
+  //      an upstream job id.
+  //
+  // Reference resolution rule (for any `inputs` value, which is always an id):
+  //   1. a job id produced earlier in THIS run (upstream output), else
+  //   2. an external source id under inputs.artifacts, else
+  //   3. a correlator id under inputs.correlators (first stage only).
+  //
+  // Here p4 and p5 each resume from their pre-computed renormalized matrix
+  // elements, run fourier_transform -> perturbative_matching, and reconverge at
+  // the extrapolation placeholder (MERGE POINT).
+  // An optional review job uses
+  // "defaults": {"literature": true, "literature_max_papers": 4}.
+  "metadata": {
+    "run_id": "workflow_cg_qpdf_partial_from_fourier",
+    "root_directory": "..", // resolve paths from the repository root
+    "artifacts_directory": "examples/artifacts", // relative to the root directory for storing artifacts
+    "target_observable": "pdf", // "pdf", "da" or "gpd"
+    "parton": "quark", // "quark" or "gluon"
+    "resample_mode": "jk", // "jk" or "bs"
+    "sample_error_mode": "covariance", // "mean", "median", or "covariance"; "median" requires resample_mode "bs"
+    "random_seed": 1984, // required; RNG seed for every resampling step in the run
+    // Only the stages to run, in execution order. correlator_analysis and
+    // renormalization are intentionally absent (their products come in as
+    // external source nodes below).
+    "stages": ["fourier_transform", "perturbative_matching", "extrapolation"]
+  },
+  "inputs": {
+    // No raw `correlators` here: we are not running the correlator stage.
+    // External pre-computed products enter as SOURCE NODES with their own ids,
+    // so downstream jobs can reference them uniformly by id.
+    "artifacts": [
+      {
+        "id": "rn_p4", // handle referenced by the fourier job below
+        "stage": "renormalization", // which stage this product is equivalent to
+        "path": "examples/artifacts/a060_x_p4_renormalized_matrix_elements.nc", // relative to root_directory
+        "momentum": "PX4PY0PZ0",
+        "volume": "S48T64",
+        "lattice_spacing_fm": 0.0574,
+        "hadron": "pion",
+        "gfix": "CG"
+      },
+      {
+        "id": "rn_p5",
+        "stage": "renormalization",
+        "path": "examples/artifacts/a060_x_p5_renormalized_matrix_elements.nc",
+        "momentum": "PX5PY0PZ0",
+        "volume": "S48T64",
+        "lattice_spacing_fm": 0.0574,
+        "hadron": "pion",
+        "gfix": "CG"
+      }
+    ],
+    "kernels": [
+      {
+        "stage": "perturbative_matching",
+        "kernel_id": "CG_gt_quark_PDF_hybrid_NLO",
+        "kernel_path": "lamet_agent/kernels.py", // relative to the root directory
+        "kernel_parameters": {}
+      }
+    ]
+  },
+  "stages": {
+    "fourier_transform": {
+      "defaults": {
+        "order": ["LA", "NLA"],
+        "sector": "valence", // quark PDF/GPD: sea/valence/singlet/full; gluon and DA: full
+        "observable": "pion_quark_unpolarized_quasi_pdf", // explicit because legacy external .nc inputs may lack provenance attrs
+        "coord_unit": "fm", // default for renormalized .nc inputs; override with "lattice", "gev_inv", or "lambda" only when needed
+        "posterior_prior_error_scale": [2.0, 3.0, 5.0],
+        "y_grid": {
+          "start": -2.0,
+          "stop": 2.0,
+          "num": 100
+        },
+        // scheme_scan ranges must use coord_unit (here "fm"); convert lattice
+        // indices as z_fm = n * a_fm (a_fm=0.0574 below). Prefer omitting
+        // zmin/zmax/z_ext_max to let the stage auto-fill from the data grid.
+        "scheme_scan": {
+          "zmin_values": [0.5166, 0.574, 0.6314, 0.6888],
+          "zmax_values": [1.2054, 1.2628, 1.3202, 1.3776],
+          "z_ext_max": 5.74,
+          "smooth": "linear",
+          "model_average": false,
+          "max_schemes": 200
+        }
+      },
+      "jobs": [
+        {
+          "id": "ft_p4",
+          "inputs": { "input": "rn_p4" },
+          "params": {}
+        },
+        {
+          "id": "ft_p5",
+          "inputs": { "input": "rn_p5" },
+          "params": {}
+        }
+      ]
+    },
+    "perturbative_matching": {
+      "defaults": {
+        "scheme": "hybrid",
+        "mu": 2.0,
+        "component": "re", // "re" or "im" or "re+im"
+        // Both optional. quasi_y_ls is what the kernel integrates over; it must stay
+        // inside the grid the quasi input actually carries, avoid 0, and be uniform.
+        // Spelled out here to match the upstream Fourier y_grid -- keep the two in
+        // step, since a quasi_y_ls left behind after y_grid moves silently
+        // interpolates onto the stale grid instead of following it.
+        "quasi_y_ls": {"start": -2.0, "stop": 2.0, "num": 100},
+        // lc_x_ls is what the matched PDF comes out on (unconstrained).
+        "lc_x_ls": {"start": -2.0, "stop": 2.0, "num": 100}
+      },
+      "jobs": [
+        {
+          "id": "mt_p4",
+          "inputs": { "quasi": "ft_p4" }, // from here on, internal job-id references
+          "params": { "zs_fm": 0.1722 }
+        },
+        {
+          "id": "mt_p5",
+          "inputs": { "quasi": "ft_p5" },
+          "params": { "zs_fm": 0.1722 }
+        }
+      ]
+    },
+    "extrapolation": {
+      // MERGE POINT: combine matched distributions at several momenta for
+      // the large-momentum and continuum extrapolation.
+      "defaults": {},
+      "jobs": [
+        {
+          "id": "ex_pdf",
+          "inputs": { "lightcone": ["mt_p4", "mt_p5"] },
+          "params": {}
+        }
+      ]
+    }
+  }
+}

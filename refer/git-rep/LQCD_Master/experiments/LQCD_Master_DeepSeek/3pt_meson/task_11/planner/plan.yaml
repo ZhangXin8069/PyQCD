@@ -1,0 +1,199 @@
+task:
+  name: K_to_pi_3pt
+  description: 'Three-point correlation function for K- -> pi- transition via (s->d)
+    vector current. Source: K- meson (anti-u s) at t=0 with gamma_5 interpolator.
+    Sink: pi- meson (anti-u d) at t=8 with gamma_5 interpolator. Current: bar{d} gamma_x
+    s (vector, spatial x-direction). Point source at origin, zero momentum. Only 3pt
+    computed (no 2pt).'
+  task_mode: standard
+physics:
+  observables:
+  - id: K_to_pi_3pt
+    type: meson_3pt
+    name: K_to_pi_transition_vector
+  hadrons:
+  - id: K_minus_src
+    name: K_minus
+    type: meson
+    flavor: anti-u_s
+    momentum:
+    - 0
+    - 0
+    - 0
+    interpolating_operator: gamma_5
+    role: source
+  - id: pi_minus_snk
+    name: pi_minus
+    type: meson
+    flavor: anti-u_d
+    momentum:
+    - 0
+    - 0
+    - 0
+    interpolating_operator: gamma_5
+    role: sink
+  propagators:
+  - id: prop_l
+    quark_flavor: light
+    source:
+      source_type: point
+      source_position:
+      - 0
+      - 0
+      - 0
+      - 0
+      source_momentum:
+      - 0
+      - 0
+      - 0
+    gauge_field:
+      stout_link_smear:
+        enabled: true
+        parameters:
+          rho: 0.125
+          n_steps: 1
+          ndim: 4
+    solver:
+      id: solver_l
+      quark_mass: -0.277
+      clover_coefficient: 1.160920226
+      tolerance: 1.0e-12
+      maxiter: 20000
+      notes: Light-quark CG solver with multigrid preconditioner
+    sink:
+      id: sink_l
+      type: point
+  - id: prop_s
+    quark_flavor: strange
+    source:
+      source_type: point
+      source_position:
+      - 0
+      - 0
+      - 0
+      - 0
+      source_momentum:
+      - 0
+      - 0
+      - 0
+    gauge_field:
+      stout_link_smear:
+        enabled: true
+        parameters:
+          rho: 0.125
+          n_steps: 1
+          ndim: 4
+    solver:
+      id: solver_s
+      quark_mass: -0.2356
+      clover_coefficient: 1.160920226
+      tolerance: 1.0e-10
+      maxiter: 20000
+      notes: Strange-quark CG solver with multigrid preconditioner
+    sink:
+      id: sink_s
+      type: point
+  - id: prop_l_seq
+    quark_flavor: light
+    source:
+      source_type: sequential
+      source_position:
+      - 0
+      - 0
+      - 0
+      - 0
+      source_momentum:
+      - 0
+      - 0
+      - 0
+    gauge_field:
+      stout_link_smear:
+        enabled: true
+        parameters:
+          rho: 0.125
+          n_steps: 1
+          ndim: 4
+    solver:
+      id: solver_l_seq
+      quark_mass: -0.277
+      clover_coefficient: 1.160920226
+      tolerance: 1.0e-12
+      maxiter: 20000
+      notes: 'Sequential light-quark propagator constructed from forward prop_l at
+        sink time t=8 using pi- sink operator gamma_5 via the two-dagger convention:
+        eta_seq = gamma_5 * (sink_block)^dag * gamma_5, where sink_block is built
+        from prop_l at t=8 combined with the gamma_5 structure. Solved with the same
+        light-quark Dirac operator as prop_l.'
+    sink:
+      id: sink_l_seq
+      type: point
+measurement:
+  correlators:
+  - id: K_to_pi_3pt_corr
+    type: meson_3pt
+    source_hadron: K_minus_src
+    sink_hadron: pi_minus_snk
+    current:
+      quark_pair:
+      - d
+      - s
+      gamma: gamma_x
+      description: Vector current bar{d} gamma_x s, spatial x-direction
+    source_time: 0
+    sink_time: 8
+    forward_propagators:
+    - prop_l
+    - prop_s
+    sequential_propagator: prop_l_seq
+    observable: K_to_pi_3pt
+    notes: 'Contraction: Tr[prop_l_seq(z) * gamma_x * prop_s(z)] summed over spatial
+      z at each current insertion time tau=1..7. Uses generate_einsum for correct
+      spin/color contraction. Momentum transfer q = 0.'
+output:
+  format: txt
+  metadata: false
+  filename: K_to_pi_3pt_result.txt
+  notes: 'Plain text file with one float per line: C3(tau) for tau=1..7. No headers,
+    no metadata.'
+extras:
+- No 2pt function computed
+- 'Single configuration: 10000'
+- tseq = 8, source at t=0, current insertion tau = 1..7
+- Use generate_einsum tool for contraction code
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4

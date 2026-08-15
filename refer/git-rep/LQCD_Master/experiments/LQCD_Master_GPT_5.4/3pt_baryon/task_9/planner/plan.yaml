@@ -1,0 +1,212 @@
+task:
+  name: lambda_b_to_lambda_bare_3pt_vector_pilot
+  description: Compute a zero-momentum bare pilot three-point correlator for the Lambda_b -> Lambda transition with local current J_x = sbar gamma_x b, using the requested point source at [0,0,0,0], projector Tmat = (I + gamma_t)/2, tseq = 8, and stout-smeared inversion links. This plan is intentionally limited to a per-configuration prototype correlator for contraction, solver, and output validation; it is not yet a production-quality decay form-factor calculation.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_b_to_lambda_c3_vx_bare
+      type: baryon_3pt
+      name: Bare Lambda_b to Lambda three-point correlator with J_x = sbar gamma_x b
+      current: sbar gamma_x b
+      lattice_current: local heavy-light vector current without matching factor
+      continuum_interpretation: prototype bare correlator only; no renormalized decay matrix element is claimed
+      projector: P_plus
+      tseq: 8
+      source_hadron: lambda_b
+      sink_hadron: lambda
+      source_momentum: [0, 0, 0]
+      sink_momentum: [0, 0, 0]
+      current_momentum: [0, 0, 0]
+      insertion_window: [1, 2, 3, 4, 5, 6, 7]
+      statistics_scope: single configuration, single source position pilot run
+
+  hadrons:
+    - id: lambda_b
+      name: Lambda_b
+      type: baryon
+      flavor: udb
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} C gamma_5 d^b) b^c
+      subtype: spin-1/2 positive-parity heavy baryon source
+    - id: lambda
+      name: Lambda
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} C gamma_5 d^b) s^c
+      subtype: spin-1/2 positive-parity strange baryon sink
+
+  propagators:
+    - id: prop_light_forward
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator reused for both u and d spectator lines in the Lambda sink block.
+      sink:
+        id: sink_point
+        type: point
+    - id: prop_bottom_forward
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_bottom_pilot
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward bottom propagator for the active source-side b line annihilated by J_x. In this revised plan it is treated explicitly as a pilot heavy-clover/Fermilab-style placeholder using the fixed-config parameter set, suitable only for validating the baryon_3pt workflow on this ensemble until dedicated heavy-quark tuning and dispersion checks are supplied.
+      sink:
+        id: sink_point
+        type: point
+    - id: prop_strange_sequential
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential inversion uses the strange Dirac operator because the current creates the sink strange quark. The fixed configuration uses valence strange mass -0.2356 while the gauge-path label contains ms-0.2400; this must therefore be treated as the supplied partially-quenched/retuned valence choice unless separate provenance is provided.
+      sink:
+        id: sink_lambda_seq
+        type: other
+
+measurement:
+  correlators:
+    - id: measure_lambda_b_to_lambda_c3_vx_bare
+      type: baryon_3pt
+      propagator: prop_light_forward
+      observable: lambda_b_to_lambda_c3_vx_bare
+      required_propagators:
+        - prop_light_forward
+        - prop_bottom_forward
+        - prop_strange_sequential
+      interpretation_scope: bare pilot correlator only
+      contraction_strategy:
+        sequential_method: fixed_sink
+        sink_block: Build the Lambda sink block with two forward light propagators only, epsilon tensors, Cgamma5 diquark structure, zero sink momentum phase, and Tmat = (I + gamma_t)/2.
+        first_dagger: Apply gamma_5 B^dagger gamma_5 before forming the sequential source.
+        sequential_source: Construct source.sequential12(B, 8) and invert with the strange Dirac operator on the same stout-smeared gauge field.
+        second_dagger: Apply gamma_5 G_seq^dagger gamma_5 to obtain the ordered sequential propagator for the final trace.
+        final_trace: Contract the ordered strange sequential propagator with gamma_x and the forward bottom propagator, then sum over spatial sites at zero current momentum.
+      einsum_generation:
+        tool_type: baryon_3pt
+        source_flavors: [u, d, b]
+        sink_flavors: [u, d, s]
+        current_quark: b
+        current_antiquark: s
+        current_gamma: gamma_x
+        projector: P_plus
+        diquark_gamma_src: Cg5
+        diquark_gamma_snk: Cg5
+        c_gamma_src: I4
+        c_gamma_snk: I4
+        tseq: '8'
+      current_matching:
+        applied: false
+        notes: No Z_V^{sb} or O(a) heavy-light improvement is included in this prototype; the saved object is the unrenormalized lattice 3pt correlator.
+      excited_state_control:
+        source_type: point
+        sink_smearing: none
+        assessment: Requested setup is retained as a code-validation pilot, but it is not sufficient by itself for controlled Lambda_b -> Lambda matrix-element extraction.
+      save_timeslices:
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+
+output:
+  format: other
+  metadata: false
+  file_suffix: .txt
+  layout: columns [t_seq, t_ins, real, imag]
+  header: none
+  location: run directory
+
+extras:
+  - Use MPI with 4 ranks on process grid [1,1,1,4].
+  - Do not compute any 2pt correlators.
+  - Use only zero-momentum phases equal to one.
+  - Treat this single-cfg single-source run as a prototype, not a production decay measurement.
+  - A physical form-factor program will additionally need tuned heavy-quark parameters, current matching, and larger source/tseq statistics.
+
+freeform_plan: |
+  Not used because this is a standard baryon three-point correlator task.

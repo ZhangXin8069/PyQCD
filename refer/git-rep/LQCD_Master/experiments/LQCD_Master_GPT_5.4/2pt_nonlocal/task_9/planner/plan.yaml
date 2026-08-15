@@ -1,0 +1,182 @@
+task:
+  name: dstar_plus_nonlocal_vector_2pt_zmax10
+  description: Compute the nonlocal zero-momentum two-point correlator of the vector D*+ meson in the dbar-c channel from a point source at [0, 0, 0, 0], with a spatial Wilson-line displacement in the +z direction of length z=0..10 applied only to the charm-quark line at the sink operator; use stout-smeared gauge links only for the light and charm inversions, use the original unsmeared gauge links to build the nonlocal shift, measure the three vector polarizations gamma_x, gamma_y, gamma_z, retain transverse and longitudinal channels separately and also provide their simple arithmetic average for compatibility with the original request, and write deterministic headerless plain-text output in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: dstar_nonlocal_2pt
+      type: custom
+      name: Nonlocal vector D*+ two-point function with z-directed Wilson-line displacement on the charm sink leg
+
+  hadrons:
+    - id: dstar_plus
+      name: D*+
+      type: meson
+      flavor: dbar-c
+      momentum: [0, 0, 0]
+      interpolating_operator: "O_i(z,t)=sum_x dbar(x,t) gamma_i W(x,x+z zhat) c(x+z zhat,t), with source operator O_i^dagger(0)=cbar(0) gamma_i d(0), i in {gamma_x,gamma_y,gamma_z}, z=0..10"
+      subtype: nonlocal_vector_meson
+
+  propagators:
+    - id: prop_c_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm_clover
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward charm propagator S_c(y,0) from the point source, solved with stout-smeared links. This parameter set is taken from the fixed ensemble configuration and should be treated here as an input setup for this run, not as a separately validated charm-tuning statement.
+      sink:
+        id: sink_point_charm
+        type: point
+
+    - id: prop_d_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light_clover
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward light propagator S_d(x,0)=S_l(x,0) from the same point source, representing the d line. The dbar sink leg in D*+(dbar c) is realized in the meson contraction through the backward light propagator obtained from gamma5-hermiticity, S_d(0,x)=gamma5 S_d(x,0)^dagger gamma5.
+      sink:
+        id: sink_point_light
+        type: point
+
+measurement:
+  correlators:
+    - id: dstar_nonlocal_vector_corr
+      type: meson_2pt
+      propagator: prop_c_point
+      observable: dstar_nonlocal_2pt
+    - id: dstar_nonlocal_vector_corr_light_support
+      type: meson_2pt
+      propagator: prop_d_point
+      observable: dstar_nonlocal_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - "Wick-contracted correlator to implement: C_i(z,t)=sum_x Tr[(gamma5 S_d(x,0)^dagger gamma5) gamma_i W(x,x+z zhat) S_c(x+z zhat,0) gamma_i], with z=0..10 and i in {x,y,z}."
+  - "Build the shifted charm object exactly as S_c_shift^(z)(x,t)=W(x,x+z zhat) S_c(x+z zhat,t;0,0), i.e. shift the charm sink endpoint only; do not shift the light line."
+  - "Use the original unsmeared gauge field for W(x,x+z zhat); this is a user-imposed mixed-link operator definition, not a claim of matched renormalization to the stout-smeared inversion kernel."
+  - "Apply spatial periodic wrapping in the displaced z coordinate and Wilson line path: x_z+k is understood modulo Lz=24 for k=0..z."
+  - "Because the displacement is along z, keep C_T=(C_x+C_y)/2 and C_L=C_z as separate outputs; also write C_avg=(C_x+C_y+C_z)/3 to satisfy the original request, without assuming exact cubic equivalence."
+  - "This is a single-configuration functional/test measurement on cfg 10000, not a statistically credible physics average."
+  - "Write a deterministic headerless txt file with columns: cfg_index z t Re[C_x] Im[C_x] Re[C_y] Im[C_y] Re[C_z] Im[C_z] Re[C_T] Im[C_T] Re[C_L] Im[C_L] Re[C_avg] Im[C_avg], ordered by ascending z then ascending t."
+
+freeform_plan: |
+  Standard nonlocal meson-2pt task.
+
+  Physics target:
+  Compute the Euclidean nonlocal heavy-light vector correlator for the D*+ channel,
+    O_i(z,t) = sum_x dbar(x,t) gamma_i W(x,x+z zhat) c(x+z zhat,t),
+    O_i^dagger(0) = cbar(0) gamma_i d(0),
+  with i in {x,y,z} and z = 0,1,...,10.
+
+  Exact Wick-contracted form to be implemented:
+    C_i(z,t) = sum_x < O_i(z,t) O_i^dagger(0) >
+             = sum_x Tr[ S_d(0;x,t) gamma_i W(x,x+z zhat) S_c(x+z zhat,t;0) gamma_i ]
+             = sum_x Tr[ (gamma5 S_d(x,t;0)^dagger gamma5) gamma_i W(x,x+z zhat) S_c(x+z zhat,t;0) gamma_i ].
+  This fixes the requested operator placement unambiguously: the nonlocal Wilson-line shift acts on the charm quark propagator at the sink, through the object W(x,x+z zhat) S_c(x+z,0), while the dbar line is local and comes from the forward light solve via gamma5-hermiticity.
+
+  Propagators and derived objects:
+  1. Forward light propagator S_d(x,0)=S_l(x,0) from point source [0,0,0,0], using stout-smeared inversion links.
+  2. Forward charm propagator S_c(x,0) from the same point source, using stout-smeared inversion links.
+  3. For each z=0..10, construct the shifted charm sink object
+       S_c_shift^(z)(x,t) = W(x,x+z zhat) S_c(x+z zhat,t;0),
+     where W is the ordered product of original unsmeared gauge links along +z at fixed t.
+
+  Boundary handling:
+  The lattice is spatially periodic. For each sink site x=(x,y,z0,t) and displacement z, the displaced endpoint x+z zhat and every intermediate link position on the Wilson line are evaluated with the spatial z coordinate taken modulo Lz=24. Thus the path wraps periodically whenever z0+z >= 24.
+
+  Polarization treatment:
+  Since the nonlocal displacement singles out the z direction, cubic symmetry is broken at finite z. Therefore do not rely only on a blind 1/3 polarization average during measurement. Measure and save:
+    C_x(z,t), C_y(z,t), C_z(z,t),
+    C_T(z,t) = (C_x + C_y)/2,
+    C_L(z,t) = C_z,
+    C_avg(z,t) = (C_x + C_y + C_z)/3.
+  The final average C_avg is still produced because it was explicitly requested, but the separated transverse/longitudinal channels are retained for physical interpretability and debugging.
+
+  Gauge-link usage split:
+  - Dirac inversions for both forward propagators: stout-smeared links with (n_steps=1, rho=0.125, ndim=4).
+  - Nonlocal Wilson line in the operator: original unsmeared gauge field.
+  This is a mixed operator/action definition imposed by the task. It should be recorded as such; any renormalization or matching consequences are outside the scope of this single-run production plan.
+
+  Measurement chain:
+  - Load cfg 10000.
+  - Generate stout-smeared links for inversions only.
+  - Invert charm and light propagators from the common point source [0,0,0,0].
+  - For each t=0..71, z=0..10, and i in {x,y,z}, build S_c_shift^(z), perform the zero-momentum sink sum over spatial x, and accumulate C_i(z,t).
+  - Form C_T, C_L, and C_avg from the three polarization components.
+
+  Numerical/interpretive status:
+  This plan uses only cfg 10000 from the fixed configuration, so it should be regarded as a code-validation or functional measurement, not a final scientific determination of a D* correlator. In addition, the charm mass and clover setup are taken directly from the provided ensemble configuration; heavy-quark discretization/tuning systematics are not resolved here and should be flagged in any physics interpretation.
+
+  Output contract:
+  Save one plain txt file in the run directory with no header and no extra text. Write one row for every (z,t) pair, ordered first by z ascending (0..10) and then by t ascending (0..71). Each row contains exactly:
+    cfg_index z t Re[C_x] Im[C_x] Re[C_y] Im[C_y] Re[C_z] Im[C_z] Re[C_T] Im[C_T] Re[C_L] Im[C_L] Re[C_avg] Im[C_avg].
+  Values are per-configuration measurements for cfg 10000; no ensemble averaging is implied.

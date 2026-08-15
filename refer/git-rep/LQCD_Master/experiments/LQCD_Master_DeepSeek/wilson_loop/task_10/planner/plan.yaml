@@ -1,0 +1,104 @@
+task:
+  name: wilson_loop_R1_T4
+  description: >-
+    Compute rectangular Wilson loop W(R=1, T=4) averaged over XT, YT, and ZT planes.
+    Pure-gauge measurement using unsmeared gauge links. No quark propagators, Dirac
+    solvers, or fermion inversions. Save the final value to a plain text file.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: wl_R1_T4
+      type: wilsonloop
+      name: Wilson loop W(R=1, T=4) plane-averaged
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "No gauge link smearing (stout/APE/HYP)"
+  - "Average over XT, YT, ZT spatial-temporal planes"
+  - "Output path: ./W_R1_T4.txt (plain text, value only)"
+
+freeform_plan: |
+  ## Physics Objective
+  Compute the rectangular Wilson loop W(R=1, T=4) as a pure-gauge observable
+  to probe the static quark-antiquark potential at short distance R=1.
+  The Wilson loop is defined as:
+    W_{μν}(R,T) = (1/Nc) Re Tr P[∏ U]
+  where the path goes R steps in μ, T steps in ν, R steps backward in μ,
+  T steps backward in ν.
+
+  ## Calculation Strategy
+  1. Load the gauge configuration (LIME-format Chroma QIO file) for cfg 10000
+     from the provided path.
+  2. Do NOT apply any stout, APE, or HYP smearing — use the original unsmeared
+     gauge links directly.
+  3. Build the Wilson loop path for R=1, T=4:
+     - XT plane: [X] + [T, T, T, T] + [-X] + [-T, -T, -T, -T]
+     - YT plane: [Y] + [T, T, T, T] + [-Y] + [-T, -T, -T, -T]
+     - ZT plane: [Z] + [T, T, T, T] + [-Z] + [-T, -T, -T, -T]
+     Total path length = 1 + 4 + 1 + 4 = 10 links.
+  4. Compute the Wilson loop using gauge.loop() with 4 groups:
+     groups = [[XT_path], [YT_path], [ZT_path], [XT_path]]
+     weights = [1, 1, 1, 0]
+     The 4th group is a dummy (weight 0) required by PyQUDA's gauge.loop() API.
+  5. Extract per-site ReTr for each of the 3 active planes, average them,
+     then perform MPI reduction (gatherLattice) to sum over all lattice sites.
+  6. Normalize: W = (sum of ReTr) / (total_sites * Nc).
+  7. Save the final scalar value as plain text (no header, no extra text)
+     to ./W_R1_T4.txt in the run directory.
+
+  ## Lattice Parameters
+  - Lattice size: 24 × 24 × 24 × 72
+  - MPI process grid: [1, 1, 1, 4] (4 ranks in t-direction)
+  - Nc = 3 (SU(3) gauge group)
+  - Configuration file: beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_10000.lime
+
+  ## Output
+  - A single plain-text file W_R1_T4.txt containing only the numerical value
+    of the plane-averaged Wilson loop W(R=1, T=4), with no header or metadata.

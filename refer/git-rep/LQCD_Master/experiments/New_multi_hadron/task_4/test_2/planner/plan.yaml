@@ -1,0 +1,192 @@
+task:
+  name: three_baryon_local_9q_multi_hadron_2pt
+  description: Compute a single combined multi-hadron two-point correlator for a local nine-quark operator built from three literal single-term local baryon blocks, with per-baryon P_plus projection applied before assembling the full non-factorized contraction.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: three_baryon_2pt_local_9q
+      type: multi_hadron_2pt
+      name: Combined three-baryon two-point function of a local nine-quark operator at zero momentum
+
+  hadrons:
+    - id: baryon_n_single
+      name: neutron_like_single_term_block
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon(a,b,c) * (u^T_a Cg5 d_b) * d_c
+      subtype: local_single_term_baryon_block
+    - id: baryon_p_single
+      name: proton_like_single_term_block
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon(a,b,c) * (u^T_a Cg5 d_b) * u_c
+      subtype: local_single_term_baryon_block
+    - id: baryon_uds_single
+      name: uds_single_term_block
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon(a,b,c) * (u^T_a Cg5 d_b) * s_c
+      subtype: local_single_term_baryon_block
+    - id: three_baryon_local_9q
+      name: local_three_baryon_product_operator
+      type: other
+      flavor: uudddduds
+      momentum: [0, 0, 0]
+      interpolating_operator: (epsilon(a,b,c) * (u^T_a Cg5 d_b) * d_c) * (epsilon(d,e,f) * (u^T_d Cg5 d_e) * u_f) * (epsilon(g,h,i) * (u^T_g Cg5 d_h) * s_i)
+      subtype: local_multi_baryon_9q_operator
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_point
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: One forward light propagator from the origin is reused for all u and d quark lines by isospin symmetry in the full nine-quark contraction.
+      sink:
+        id: sink_point_l
+        type: point
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_point
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: One forward strange propagator from the same origin is used only for the s quark in the third baryon block.
+      sink:
+        id: sink_point_s
+        type: point
+
+measurement:
+  correlators:
+    - id: three_baryon_local_9q_corr
+      type: multi_hadron_2pt
+      observable: three_baryon_2pt_local_9q
+      propagator: prop_l_point
+      propagators:
+        - prop_l_point
+        - prop_s_point
+      source_operator:
+        id: three_baryon_local_9q_src
+        type: local_multi_baryon_9q_operator
+        composite_operator: three_baryon_local_9q
+        baryon_blocks:
+          - baryon_id: baryon_n_single
+            projector: P_plus
+            projector_definition: (1 + gamma4) / 2
+          - baryon_id: baryon_p_single
+            projector: P_plus
+            projector_definition: (1 + gamma4) / 2
+          - baryon_id: baryon_uds_single
+            projector: P_plus
+            projector_definition: (1 + gamma4) / 2
+        momentum: [0, 0, 0]
+      sink_operator:
+        id: three_baryon_local_9q_snk
+        type: local_multi_baryon_9q_operator
+        composite_operator: three_baryon_local_9q
+        baryon_blocks:
+          - baryon_id: baryon_n_single
+            projector: P_plus
+            projector_definition: (1 + gamma4) / 2
+          - baryon_id: baryon_p_single
+            projector: P_plus
+            projector_definition: (1 + gamma4) / 2
+          - baryon_id: baryon_uds_single
+            projector: P_plus
+            projector_definition: (1 + gamma4) / 2
+        momentum: [0, 0, 0]
+      contraction_strategy:
+        type: single_combined_multi_hadron_object
+        factorized_product: false
+        baryon_block_order:
+          - baryon_n_single
+          - baryon_p_single
+          - baryon_uds_single
+        notes: Use one non-factorized nine-quark contraction object that simultaneously consumes light and strange propagators.
+      execution:
+        mpi_ranks: 8
+        grid_size: [1, 1, 2, 4]
+        launcher_layout: 2_nodes_x_4_gpus
+
+output:
+  format: other
+  metadata: true
+  filename: ./three_baryon_local_9q_corr.txt
+  layout: plain_text_columns
+  contents:
+    - t
+    - ReC
+    - ImC
+
+extras:
+  - Use one `multi_hadron_2pt` contraction object containing all nine quark lines and all Wick contractions.
+  - Do not replace the observable by a product of separately measured neutron-like, proton-like, and uds-block baryon correlators.
+  - The `uds` block is the literal single-term operator `(u^T Cg5 d) s`, with no Lambda octet mixing or flavor symmetrization.
+  - Generate contractions through the executor multi-hadron codegen/einsum toolchain rather than hand-coded Wick contractions.
+  - Save the plain-text correlator file in the run directory using the structured output target above.
+
+freeform_plan: |
+  Not used because this is a standard hadronic correlator task with explicit hadron, propagator, and correlator structure.

@@ -1,0 +1,146 @@
+task:
+  name: sigma_minus_baryon_2pt_point_source
+  description: Compute the zero-momentum Sigma- baryon two-point correlator in the positive-parity channel using a point source at [0,0,0,0], a symmetric dd diquark with Cg1=C@gamma_x, and valence inversions performed with stout-smeared links; save plain-text projected correlator values in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: sigma_minus_2pt_pp
+      type: baryon_2pt
+      name: Sigma- two-point function, zero momentum, positive parity
+
+  hadrons:
+    - id: sigma_minus
+      name: Sigma-
+      type: baryon
+      flavor: dds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(d^{Ta} C gamma_x d^b)s^c with Tmat=(I+gamma_t)/2 applied after the full spin-color contraction
+      subtype: spin_half_sigma_channel_positive_parity
+
+  propagators:
+    - id: prop_l_point_stout
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use stout-smeared gauge links inside the clover Dirac operator for the light-valence inversion; this single light propagator is reused for both identical d lines. Multigrid acceleration may be used only if supported for this smeared-link operator; otherwise fall back to a standard solver with the same mass and clover parameters.
+      sink:
+        id: point_sink
+        type: point
+
+    - id: prop_s_point_stout
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use the same stout-smeared gauge links inside the clover Dirac operator for the strange-valence inversion. Multigrid acceleration may be used only if supported for this smeared-link operator; otherwise use a standard solver.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: sigma_minus_2pt_measurement
+      type: baryon_2pt
+      propagator: prop_l_point_stout
+      observable: sigma_minus_2pt_pp
+      hadron: sigma_minus
+      propagators_required:
+        light: prop_l_point_stout
+        strange: prop_s_point_stout
+      contraction:
+        quark_content: dds
+        baryon_operator: Sigma-
+        diquark_gamma: Cg1
+        identical_quark_flavor: d
+        strange_spectator: true
+        projector: Tmat=(I+gamma_t)/2
+        momentum_projection: zero_momentum_sink_sum
+        contraction_terms: direct_plus_exchange_for_two_identical_d_quarks
+      result_definition:
+        quantity: real_part_of_projected_zero_momentum_two_point_function
+        time_dependence: one value for each sink time slice
+      validation:
+        - Confirm the Cg1 dd diquark is implemented with the required symmetric spin structure for identical d quarks in the Sigma channel.
+        - Confirm the two identical-d contraction terms are included and respect permutation symmetry.
+        - Confirm the parity projector is applied after full baryon spin contraction.
+        - Confirm the resulting projected correlator is nonvanishing and numerically real within floating-point tolerance.
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - This is a single-configuration single-source smoke test, not a production spectroscopy dataset.
+  - Generate the Sigma- baryon contraction explicitly for quark content dds using one reused light propagator and one strange propagator.
+  - Use the dd diquark gamma structure Cg1 corresponding to C@gamma_x.
+  - Apply the positive-parity projector Tmat=(I+gamma_t)/2 only after the full spin-color contraction.
+  - Save only the real part of the zero-momentum projected correlator to a txt file in the run directory, one line per timeslice and no header.
+
+freeform_plan: |

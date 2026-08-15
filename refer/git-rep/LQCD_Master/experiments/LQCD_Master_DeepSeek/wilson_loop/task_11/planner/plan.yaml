@@ -1,0 +1,126 @@
+task:
+  name: wilson_loop_R4_T1
+  description: >
+    Compute rectangular Wilson loop W(R=4, T=1) averaged over XT, YT, and ZT planes.
+    Pure-gauge measurement using unsmeared gauge links. No fermion propagators or
+    Dirac solvers. Result saved as a plain-text scalar to a txt file.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wl_R4_T1
+      type: wilsonloop
+      name: "Wilson loop W(R=4,T=1) averaged over XT, YT, ZT planes"
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "No gauge link smearing applied; use original unsmeared gauge links"
+  - "Result saved as single scalar value to wl_R4_T1.txt in run directory"
+  - "MPI grid 1×1×1×4; gatherLattice to rank 0 before writing"
+  - "Single configuration: cfg 10000 only"
+
+freeform_plan: |
+  ## Physics Objective
+  Compute the rectangular Wilson loop W(R=4, T=1) as a pure-gauge observable.
+  The Wilson loop is defined on the lattice as the ordered product of SU(3) gauge
+  links along a closed rectangular path, normalized by (1/N_c) Re Tr:
+
+    W_{mu nu}(R,T) = (1/N_c) Re Tr [P prod_loop U_mu]
+
+  This observable probes the static quark-antiquark potential.  For short T the
+  loop is dominated by the Coulomb self-energy and is a sensitive probe of the
+  lattice gauge action and discretisation effects.
+
+  ## Paths and Plane Averaging
+  To improve statistics, compute W(R=4,T=1) on three spatial-temporal planes and
+  take the unweighted average:
+
+    XT plane: path_XT = [X]*4 + [T]*1 + [-X]*4 + [-T]*1
+    YT plane: path_YT = [Y]*4 + [T]*1 + [-Y]*4 + [-T]*1
+    ZT plane: path_ZT = [Z]*4 + [T]*1 + [-Z]*4 + [-T]*1
+
+  Final result: W_avg = (W_xt + W_yt + W_zt) / 3
+
+  ## Computational Steps
+  1. Initialise PyQUDA: grid_size=[1,1,1,4], latt_size=[24,24,24,72],
+     backend="cupy", resource_path from command line.
+  2. Load the gauge configuration from
+     /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/
+     using io.readChromaQIOGauge(). Transfer to device.
+  3. Do NOT apply any link smearing (no stoutSmear, APE, or HYP).
+  4. Build the three plane paths as listed above using PyQUDA direction constants
+     X, Y, Z, T, -X, -Y, -Z, -T.
+  5. Call gauge.loop() with exactly 4 groups:
+       groups = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+       weights = [1, 1, 1, 0]
+     The fourth group is a dummy (weight 0) to satisfy PyQUDA's 4-group
+     requirement.
+  6. For each active group i = 0, 1, 2:
+       a. Transfer res[i] from GPU to CPU via getHost().
+       b. Reshape to (-1, Nc, Nc).
+       c. Compute per-site complex trace then take the real part.
+  7. Average the three per-site real traces element-wise:
+       re_tr_avg = (re_tr_0 + re_tr_1 + re_tr_2) / 3.0
+  8. MPI: use core.gatherLattice(re_tr_field, [-1,-1,-1,-1]) to sum
+     contributions from all 4 ranks onto rank 0.
+  9. On rank 0 only:
+       W_val = float(global_sum.sum()) / (total_sites * Nc)
+     where total_sites = 24*24*24*72 = 995328 and Nc = 3.
+ 10. Write W_val as a plain scalar (no header, no label, no extra whitespace
+     beyond the numeric representation) to wl_R4_T1.txt in the current working
+     directory.
+ 11. Finalise and exit.
+
+  ## Key Parameters
+  - Nc = 3
+  - R = 4, T = 1
+  - No smearing whatsoever
+  - MPI: 4 ranks split in the temporal direction
+  - Gauge field layout: [4, 2, Lt, Lz, Ly, Lx//2, Nc, Nc]
+  - LatticeLink (from gauge.loop) layout: [2, Lt, Lz, Ly, Lx//2, Nc, Nc]

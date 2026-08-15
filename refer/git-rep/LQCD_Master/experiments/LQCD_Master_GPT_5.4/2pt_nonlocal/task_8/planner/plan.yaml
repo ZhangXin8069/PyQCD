@@ -1,0 +1,168 @@
+task:
+  name: jpsi_nonlocal_2pt_zshift_max10
+  description: Compute the zero-momentum bare connected hidden-charm nonlocal two-point correlator in the J/psi vector channel from a point source at [0, 0, 0, 0], with a straight +z Wilson-line displacement of length dz=0..10 applied only to the charm-quark propagator. Use stout-smeared gauge links only in the charm Dirac inversion, use the original unsmeared gauge field to construct the nonlocal transport, average the gamma_x, gamma_y, gamma_z polarizations, and write the final plain-text correlator table in the run directory with no header or extra text. This is a smoke-test / bare-correlator production on cfg 10000, not a statistically complete spectroscopy result.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: jpsi_nonlocal_2pt
+      type: custom
+      name: Bare connected hidden-charm nonlocal vector two-point function with +z Wilson-line displacement on the quark line only
+
+  hadrons:
+    - id: jpsi_vector
+      name: J/psi
+      type: meson
+      flavor: cbar c
+      momentum: [0, 0, 0]
+      interpolating_operator: "Sink operator: O_i(dz,t)=sum_x cbar(x,t) gamma_i W_z(x,x+dz*e_z;U_original) c(x+dz*e_z,t), source operator: O_i^dagger(0)=cbar(x0,0) gamma_i c(x0,0), with i in {gamma_x,gamma_y,gamma_z}, x0=[0,0,0], and dz=0..10. The connected correlator is C_i(dz,t)=sum_x Tr[S_c(x,t;x0,0) gamma_i gamma_5 S_c^dagger(x+dz*e_z,t;x0,0) gamma_5 W_z^dagger(x,x+dz*e_z)] after Wick contraction, equivalently C_i(dz,t)=sum_x Tr[S_c(x,t;x0,0) gamma_i U_z_shifted(x,dz,t) gamma_i] with the antiquark line rewritten by gamma5-hermiticity and the quark-shift-only convention implemented on the forward propagator transported back to x."
+      subtype: nonlocal_vector_meson
+
+  propagators:
+    - id: prop_c_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: charm_clover_stout_bicgstab_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the charm clover operator built on a stout-smeared copy of the gauge field with (n_steps=1, rho=0.125, ndim=4). Treat this as a valence hidden-charm test correlator unless the charm parameter 0.4159 has been independently validated against charmonium spectroscopy on this ensemble. Do not rely on the listed multigrid hierarchy for production by default; first attempt a standard heavy-quark solver such as BiCGStab/CGNR on the stout-smeared operator, verify achieved residual <= 1e-12, and fall back to a non-MG Krylov solve if MG is unstable or unsupported for this heavy clover setup.
+      sink:
+        id: point_sink_with_nonlocal_transport
+        type: other
+
+measurement:
+  correlators:
+    - id: jpsi_nonlocal_corr_z0_to_z10
+      type: other
+      propagator: prop_c_point
+      observable: jpsi_nonlocal_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - plain_txt_output_only
+  - average_gamma_x_gamma_y_gamma_z
+  - original_gauge_used_for_nonlocal_shift
+  - shift_applied_only_to_quark_propagator
+  - z_separation_range_0_10
+
+freeform_plan: |
+  Physics target and scope:
+  - Measure the bare connected hidden-charm nonlocal vector 2pt with a local source and a nonlocal sink in the J/psi channel.
+  - This plan intentionally follows the task-imposed hybrid setup: stout-smeared links for the Dirac inversion, but the original unsmeared gauge links for the nonlocal Wilson line.
+  - The output is a bare correlator only. No renormalization or physical interpretation of the dz dependence beyond a bare diagnostic is claimed here.
+  - Disconnected charm-annihilation diagrams are neglected as an approximation, justified operationally by their usual OZI suppression in J/psi studies, not because they are exactly absent.
+  - Because only cfg 10000 and one point source are requested, classify this as a debug / smoke-test correlator generation rather than a statistically credible physics determination.
+
+  Operator definition:
+  - Source at x0=(0,0,0,0):
+
+      O_i^src(0) = cbar(x0,0) gamma_i c(x0,0),   i in {x,y,z}
+
+  - Sink at Euclidean time t with straight +z displacement dz:
+
+      O_i^snk(dz,t) = sum_x cbar(x,t) gamma_i W_z(x, x+dz e_z; U_original) c(x+dz e_z,t)
+
+  - Wilson line convention:
+
+      W_z(x, x+dz e_z) = Prod_{n=0}^{dz-1} U_z(x+n e_z)
+
+    with dz=0 giving the identity, positive orientation only, and spatial periodic boundary conditions used when x_z+dz exceeds Lz-1. The path is the shortest specified forward +z path of length dz, exactly as requested.
+
+  Connected Wick contraction:
+  - For each polarization i, the connected correlator is
+
+      C_i(dz,t) = sum_x < O_i^snk(dz,t) O_i^src(0)^† >_conn
+
+    Using the local vector source and gamma5-hermiticity for the antiquark line,
+
+      S_c(y,x0)^† = gamma_5 S_c(x0,y) gamma_5
+
+    the code-level contraction can be organized as a local line at x and a shifted quark line:
+
+      S_c^shift(x,t; x0,0; dz) = W_z(x, x+dz e_z; U_original) S_c(x+dz e_z,t; x0,0)
+
+    so that
+
+      C_i(dz,t) = sum_x Tr[ S_c(x,t; x0,0)^† (gamma_5 gamma_i) S_c^shift(x,t; x0,0; dz) (gamma_i gamma_5) ]
+
+    This explicitly implements the task requirement that only the quark propagator is shifted, while the antiquark propagator remains unshifted/local at x.
+
+  Polarization averaging:
+  - Compute C_i(dz,t) separately for i=x,y,z using gamma_x, gamma_y, gamma_z.
+  - Form the required average only after the three contractions are computed:
+
+      C_avg(dz,t) = (C_x(dz,t) + C_y(dz,t) + C_z(dz,t)) / 3
+
+    This fixes the source/sink gamma structure unambiguously and preserves the possibility of internal checks before averaging, even though only the average is written to the final txt output.
+
+  Numerical workflow:
+  1. Load the original gauge configuration for cfg 10000.
+  2. Make a stout-smeared copy with n_steps=1, rho=0.125, ndim=4 for inversion only.
+  3. Invert the charm clover operator on the stout-smeared gauge field from the point source at [0,0,0,0] to obtain the forward propagator S_c(x;0).
+  4. Verify solver convergence explicitly from the true residual. If the preferred heavy-quark solver is unstable, switch to a robust non-MG Krylov fallback on the same stout-smeared operator.
+  5. For each dz=0..10 and sink site x on timeslice t, construct the quark-shifted propagator
+
+       S_c^shift(x,t;0;dz) = W_z(x, x+dz e_z; U_original) S_c(x+dz e_z,t;0)
+
+     using the unsmeared/original links, with periodic wrap in +z.
+  6. For each i in {gamma_x, gamma_y, gamma_z}, form the connected nonlocal meson contraction using the local antiquark line at x and the shifted quark line above.
+  7. Sum over all spatial x to project to zero momentum. The normalization convention is a plain spatial sum, not divided by the spatial volume.
+  8. Average the three polarizations after contraction.
+  9. Save one plain-text file in the run directory containing exactly the rows
+
+       dz  t  ReC  ImC
+
+     for dz=0..10 and t=0..71 in lexicographic order, with no header and no extra text.
+
+  Validation and interpretation notes:
+  - The task calls the target J/psi. In this single-run plan, the safer statement is that we are computing a bare connected hidden-charm vector correlator using the ensemble's provided valence charm parameter 0.4159. Interpreting it as a tuned J/psi observable requires independent charm tuning validation outside this plan.
+  - The hybrid construction (smeared-link inversion, unsmeared-link Wilson line) is retained exactly because it is requested, but it is not a standard fully matched operator/action setup and should be labeled as such in any downstream interpretation.
+  - The dz dependence of the bare correlator is strongly affected by Wilson-line self-energy / nonlocal operator renormalization. No structural interpretation of long-distance dz behavior should be made from this output alone.
+  - With only one configuration and one source, the result is suitable for implementation verification, symmetry checks, and file-format validation, not for a publishable claim.

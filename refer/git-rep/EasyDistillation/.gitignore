@@ -1,0 +1,15 @@
+.vscode
+.idea
+.cache
+*.so
+DATA
+__pycache__
+logs
+*.txt
+!requirements.txt
+*.tmp
+*.svg
+*.png
+*.pdf
+venv
+.venv

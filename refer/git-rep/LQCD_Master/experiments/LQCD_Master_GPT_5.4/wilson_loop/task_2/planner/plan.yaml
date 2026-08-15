@@ -1,0 +1,133 @@
+task:
+  name: wilson_loop_R1_T2_xt_yt_zt
+  description: Compute the per-configuration rectangular pure-gauge Wilson loop W(R=1,T=2), averaged equally over the XT, YT, and ZT planes and over all spacetime origins, and save the final scalar result to a plain txt file in the run directory with no header or extra text.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wilson_loop_r1_t2
+      type: wilsonloop
+      name: Per-configuration rectangular Wilson loop W(R=1,T=2) averaged over XT, YT, ZT
+
+  hadrons: []
+
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - pure_gauge_only
+  - average_xt_yt_zt
+  - unsmeared_links
+  - rank0_single_txt_output
+  - no_fermion_inversions
+
+freeform_plan: |
+  Physics category:
+    This is a pure-gauge observable measurement only. No quark propagators, Wick contractions, source construction, Dirac solvers, or fermion inversions enter the task. The ensemble block is retained for run configuration and gauge-file provenance; its fermion-related fields are not part of the active observable definition.
+
+  Measurement target:
+    Deliver a per-configuration quantity, not an ensemble average:
+      W_cfg(R=1,T=2) = (W_XT + W_YT + W_ZT) / 3
+    where each W_plane is itself averaged over all lattice origins on the loaded gauge configuration.
+    For this plan, the active input is cfg 10000 from the stated cfg_path template, so the output is a single-configuration gauge observable for that configuration.
+
+  Observable definition:
+    Measure the bare unsmeared rectangular Wilson loop
+      W_{mu,nu}(R,T) = (1/Nc) Re Tr Prod_path U
+    with R=1 and T=2 in the three spatial-temporal planes XT, YT, and ZT.
+    Here 'unsmeared' is part of the observable choice for this run: use the original gauge links exactly as loaded, with no stout/APE/HYP smearing applied before measurement.
+
+  Gauge-path specification:
+    Use the three closed rectangular paths:
+      XT: [X, T, T, -X, -T, -T]
+      YT: [Y, T, T, -Y, -T, -T]
+      ZT: [Z, T, T, -Z, -T, -T]
+    For PyQUDA gauge.loop(), which requires exactly 4 outer groups, pack as:
+      groups = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+      weights = [1, 1, 1, 0]
+    The fourth entry is padding only and must not contribute because its weight is exactly zero. The implementation must treat only the first three groups as active measurements.
+
+  Numerical execution scheme:
+    1. Initialize PyQUDA with lattice size [24, 24, 24, 72] and MPI process grid [1, 1, 1, 4].
+    2. Load gauge configuration cfg 10000 from the provided LIME path and move it to device memory.
+    3. Do not construct propagators and do not initialize any fermion solver workflow.
+    4. Build the XT, YT, and ZT Wilson-loop paths for R=1, T=2 exactly as listed above.
+    5. Call gauge.loop(groups, weights) once for the packed set of planes.
+    6. Validate the returned object before reduction: confirm that each active result is a per-site color matrix field, not a pre-reduced scalar, and that host extraction can be reshaped to (-1, Nc, Nc) consistently.
+    7. Determine Nc from the loaded gauge object if available; if not, use the SU(3) value implied by the ensemble and verify consistency with the returned matrix shape.
+    8. For each active plane i in {XT,YT,ZT}:
+       - transfer res[i] to host,
+       - reshape to per-site Nc x Nc matrices,
+       - compute ReTr at each local site,
+       - reshape the scalar field to the local lattice layout required by the MPI gather for process grid [1,1,1,4],
+       - gather/reconstruct the global field on rank 0,
+       - divide by Nc,
+       - average over the full global four-volume V = 24*24*24*72.
+    9. Form the final observable on rank 0 as the equal arithmetic mean of the three plane-averaged values:
+         W_cfg(R=1,T=2) = (W_XT + W_YT + W_ZT)/3.
+    10. Do not print banners, labels, or diagnostic text into the output file.
+
+  Reduction and normalization recipe:
+    Use the concrete normalization path
+      per-site loop matrix -> ReTr -> divide by Nc -> global average over all lattice sites -> average over 3 planes.
+    The result must therefore be
+      W_plane = (1/V) sum_x [ Re Tr U_loop_plane(x) / Nc ]
+      W_cfg   = (W_XT + W_YT + W_ZT) / 3
+    with V the full lattice four-volume, not the local volume on one MPI rank.
+
+  MPI and shape checks:
+    Because the run uses 4 ranks with t-decomposition [1,1,1,4], the implementation must explicitly verify that the local scalar field shape passed to the lattice gather matches the decomposition expected by the runtime before forming the global average. This check is mandatory to prevent silent normalization or reshape errors.
+
+  File output contract:
+    Write exactly one file on rank 0 only, in the current working directory from which the measurement script is launched.
+    Filename:
+      wilson_loop_R1_T2_avg_xt_yt_zt_cfg10000.txt
+    File contents:
+      one numeric scalar in plain text followed by a single newline
+    No header, no labels, no extra spaces, and no additional text are allowed. Non-root ranks must not write this file.
+
+  Scope note:
+    This plan produces a single-configuration measurement W_cfg(R=1,T=2). It does not claim to produce an ensemble expectation value <W(R,T)>, which would require repeating the same measurement over multiple gauge configurations and performing subsequent statistical analysis.

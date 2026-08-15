@@ -1,0 +1,126 @@
+task:
+  name: lambda_c_baryon_2pt_point_source
+  description: Compute the zero-momentum two-point correlation function of the local J^P=1/2^+ Lambda_c baryon with flavor content udc using a point source at [0, 0, 0, 0], the ud scalar diquark structure C@gamma_5, and the positive-parity projector Tmat=(I+gamma_t)/2; invert the light and charm propagators with a stout-smeared-link clover Dirac operator using stout parameters (n_steps=1, rho=0.125, ndim=4); save the projected correlator as plain text in the run directory without any header or extra text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_c_2pt_pp
+      type: baryon_2pt
+      name: Lambda_c local positive-parity two-point function
+
+  hadrons:
+    - id: lambda_c
+      name: Lambda_c
+      type: baryon
+      flavor: udc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} C gamma_5 d^b)c^c with source and sink both in the local J^P=1/2 channel, and correlator trace projected by Tmat=(I+gamma_t)/2
+      subtype: local_ground_state_positive_parity_channel
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the light-quark clover Dirac operator built with stout-smeared links; this single light propagator is reused for both u and d by isospin symmetry in the Lambda_c mixed-flavor contraction.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the charm-quark clover Dirac operator with the same stout-smeared-link definition specified for this task; treat the listed charm mass and clover coefficient as the ensemble-provided tuned setup to be used consistently for this Lambda_c smoke-test calculation.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: lambda_c_2pt_measurement
+      type: baryon_2pt
+      propagator: prop_l
+      observable: lambda_c_2pt_pp
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - Build the Lambda_c 2pt with both prop_l and prop_c; prop_l is reused for the u and d lines while prop_c supplies the charm line.
+  - Use a channel-specific mixed-flavor baryon contraction generator for epsilon(u^T Cg5 d)c at source and sink, including the correct two-light-one-charm permutation and sign structure; do not use a generic three-light baryon template.
+  - Interpret stout parameters (1, 0.125, 4) as the stout-smeared links used inside the Dirac operator for all propagator inversions, not as a separate measurement-only smearing step.
+  - Save one line per Euclidean time slice after zero-momentum spatial summation and Tmat projection, with two whitespace-separated columns Re C(t) and Im C(t), and no header or extra text.
+  - This single-configuration single-point-source setup is a smoke test/debug measurement, not a production-quality Lambda_c spectroscopy determination.
+
+freeform_plan: |
+  Not used because this is a standard hadron two-point correlator task.

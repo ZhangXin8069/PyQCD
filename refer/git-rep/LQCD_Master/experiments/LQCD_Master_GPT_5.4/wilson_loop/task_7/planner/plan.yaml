@@ -1,0 +1,112 @@
+task:
+  name: wilson_loop_R2_T3_xt_yt_zt_average
+  description: Compute the rectangular Wilson loop W(R=2,T=3) on the C24P29 ensemble, averaging equally over XT, YT, and ZT planes, using gauge links only and writing the final scalar result to a plain txt file in the run directory with no header or extra text.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wl_R2_T3_avg
+      type: wilsonloop
+      name: Rectangular Wilson loop W(R=2,T=3) averaged over XT, YT, and ZT planes
+
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - plain_text_output
+  - gauge_only
+  - mpi_reduce_average
+  - no_fermion_inversions
+
+freeform_plan: |
+  Physics category: pure-gauge observable. This is not a hadron spectroscopy or matrix-element task, so no hadron operators, propagators, Wick contractions, or Dirac inversions are involved.
+
+  Target observable:
+  - Measure the rectangular Wilson loop W(R=2,T=3).
+  - Use three spatial-temporal planes: XT, YT, ZT.
+  - Average the three plane measurements with equal weight 1/3.
+  - For each plane, evaluate the real trace of the ordered product of SU(3) links around the rectangle, average over all lattice sites, and normalize by Nc=3.
+
+  Ensemble and runtime setup:
+  - Use the provided ensemble C24P29.
+  - Lattice size is [24, 24, 24, 72].
+  - Use MPI with process grid [1, 1, 1, 4].
+  - Load configuration number 10000 from the provided cfg_path template by substituting n_cfg=10000.
+  - Initialize PyQUDA with the given lattice and process grid.
+
+  Boundary condition note:
+  - Although the ensemble records temporal anti-periodic boundary conditions for fermions, this measurement is gauge-only and depends only on gauge links. No fermion boundary-condition handling is required in the measurement script.
+
+  Wilson-loop construction:
+  - Use rectangle extent R=2 in the spatial direction and T=3 in the temporal direction.
+  - Build three paths:
+    - XT: [+X, +X, +T, +T, +T, -X, -X, -T, -T, -T]
+    - YT: [+Y, +Y, +T, +T, +T, -Y, -Y, -T, -T, -T]
+    - ZT: [+Z, +Z, +T, +T, +T, -Z, -Z, -T, -T, -T]
+  - Call gauge.loop() with exactly four outer groups, as required by PyQUDA. Pack the three active planes into the first three groups and use a duplicated dummy path in the fourth group with weight 0.
+  - Use weights [1, 1, 1, 0].
+
+  Per-configuration estimator:
+  - For each active returned link field, transfer to host memory.
+  - Reshape to a site list of Nc x Nc matrices.
+  - Compute ReTr at each local site.
+  - Average the three plane values sitewise or equivalently average the three final plane means.
+  - Use gatherLattice to assemble the distributed field to rank 0.
+  - Compute the final scalar:
+      W_avg = (1 / (V * Nc)) * sum_x (1/3) * [ReTr W_XT(x) + ReTr W_YT(x) + ReTr W_ZT(x)]
+    with V = 24 * 24 * 24 * 72 and Nc = 3.
+
+  Smearing choice:
+  - Use unsmeared gauge links.
+  - This is the most conservative completion because the user asked only for W(R=2,T=3) and did not request stout/APE/HYP smoothing.
+
+  Output requirement:
+  - Write exactly one plain-text floating-point number followed by a newline to a txt file in the run directory.
+  - Do not include headers, labels, JSON, YAML, or other metadata text.
+  - Use a simple filename in the run directory: wilson_loop_R2_T3_avg.txt
+  - Only rank 0 performs the file write.
+
+  Implementation notes for the flat script:
+  - Single self-contained Python script.
+  - Import pyquda_utils.core and pyquda_utils.io, plus numpy.
+  - Initialize core with resource_path="./tunecache" so the script is runnable in the current run directory without placeholders.
+  - Read one configuration, move gauge field to device, compute loop, reduce, and write the txt output.
+  - No analysis stage, no bootstrap, and no fit are needed for this single-configuration measurement.

@@ -1,0 +1,790 @@
+% ============================================================
+% pure 报告 — EasyDistillation 蒸馏法格点 QCD 核心部分穷尽剖析
+% 编译: cd docs && xelatex -interaction=nonstopmode -halt-on-error -file-line-error pure_distillation_20260815.tex (×2)
+% 交付前 Overfull 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+% ===== 色板 =====
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{格点 QCD 蒸馏法 (Distillation) 实现穷尽剖析：\\ EasyDistillation 的核心物理与代码-物理映射}
+\author{opencode pure}
+\date{2026-08-15}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对格点 QCD 蒸馏法（distillation method）Python 实现 EasyDistillation 的核心部分进行穷尽剖析。
+项目性质判定为\textcolor{map}{代码-物理交叉}：物理对象（拉普拉斯本征矢、蒸馏传播子 perambulator、顶点矩阵
+elemental、两点关联函数、$O_h$ 双盖群不可约表示）与算法实现（opt\_einsum 自动收缩、SymPy 符号化 Wick
+收缩、图论连通分量化简、解析 SU(3) 指数化）逐符号对应。
+核心部分共 17 项：\textcolor{accent}{深挖 8} / \textcolor{phys}{浅析 5} / \textcolor{warn}{排除 4}。
+最深剖析结论：本项目最强竞争力集中于三处——(i) \textcolor{algo}{Stout 平滑的解析 SU(3) 矩阵指数化}
+（Cayley--Hamilton 法，四种后端实现，GPU 友好无迭代误差）；(ii) \textcolor{algo}{夸克收缩的符号化--图论
+双轨自动化}（SymPy 按 Wick 定理生成传播子图，QuarkDiagram 自动生成 opt\_einsum 收缩下标，含同构图哈希
+归一化）；(iii) \textcolor{phys}{$O_h$ 双盖群小群约化的硬编码不可约表示库}（11{,}613 行预生成数据，
+运行期零群构造开销）。全部结论附 \texttt{文件:行号} 参考源与分级标注（确证/推断/未验证）。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+
+\subsection{项目性质判定}
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉}（依据: 仓库 42 个 Python 源文件 20{,}628 行中，
+物理计算模块（generator/correlator/insertion/symmetry）约 68\%，通用基础设施（filedata/backend/dispatch）
+约 15\%，符号化自动收缩（quark\_contract/quark\_diagram）约 17\%；每个核心物理量均有直接对应代码符号，
+双向映射可查——见第 2 节各映射表）。
+\end{keybox}
+
+EasyDistillation 是一个蒸馏法格点 QCD 数值包：先求解三维规范协变拉普拉斯算子的低能本征矢构造
+蒸馏算子，再生成 perambulator 与 elemental，最后自动完成夸克收缩得到强子关联函数。它覆盖了蒸馏法
+计算的全部数据流，且每条数据流都有 numpy/cupy/QUDA/CUDA 多后端实现。
+
+\subsection{核心部分总清单（穷尽枚举）}
+以下清单穷尽仓库全部核心模块，三态（深挖/浅析/排除）填满，无"未处理"项。
+
+\begin{xltabular}{\textwidth}{lllX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & 蒸馏法物理框架与公式链 & 深挖 & 蒸馏算子/传播子/顶点的完整定义链与极限校验 \\
+C2 & 拉普拉斯本征矢生成 & 深挖 & 多后端求解 + 本征矢相位归一化约定 \\
+C3 & Stout 平滑（解析 SU(3) 指数化） & 深挖 & Cayley--Hamilton 闭式公式，4 种实现 \\
+C4 & Elemental 生成 & 深挖 & 协变导数展开 + 动量投影 + 随机混合 \\
+C5 & Perambulator 生成 & 深挖 & Dirac 求逆 + MRHS 批量 + V$^\dagger$SV 收缩 \\
+C6 & 自动 Wick 收缩与图算法 & 深挖 & 符号化收缩 + 自动 einsum 下标生成 + 图同构化简 \\
+C7 & $O_h^D$ 群论不可约表示框架 & 深挖 & 硬编码小群不可约表示库 + Wigner 旋转 \\
+C8 & 两点关联函数收缩 & 深挖 & 蒸馏空间两轮收缩的单一 einsum 表达 \\
+C9 & 插入算子体系（gamma/导数命名） & 浅析 & 比特/三进制编码枚举 16 gamma 与导数组合 \\
+C10 & 双粒子角动量基 & 浅析 & CG 系数 + 球谐函数的算子基构造 \\
+C11 & 数据层（filedata/preset） & 浅析 & 多格式（ILDG/Binary/Ndarray）惰性加载 \\
+C12 & 自动关联函数构造（hadron.py） & 浅析 & 从强子不可约表示行直接生成收缩表达式 \\
+C13 & 其他生成器（噪声/密度/广义/位移） & 浅析 & 蒸馏法扩展算子族 \\
+C14 & quark\_draw 费曼图绘制 & 排除 & 通用 feynman 库的薄封装（样板代码） \\
+C15 & backend 后端抽象 & 排除 & numpy/cupy 二选一的调度开关（样板代码） \\
+C16 & dispatch 任务分发 & 排除 & MPI 文件锁分发的通用并行设施 \\
+C17 & tests/ 测试套件 & 排除 & 弱场验证数据驱动，属验证证据而非核心算法 \\
+\bottomrule
+\end{xltabular}
+
+\begin{keybox}
+\textbf{穷尽性声明:} 全部 17 项候选均已显式分配三态（8 深挖 / 5 浅析 / 4 排除），
+本节之后第 2 节逐一剖析深挖项，第 6 节重述计数闭合。
+\end{keybox}
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+\subsection{C1 蒸馏法物理框架：图像、定义与公式链}
+\label{sec:c1}
+
+\subsubsection{物理图像}
+\begin{physbox}
+\textbf{物理图像:} 蒸馏法（distillation，Peardon 等，\url{https://arxiv.org/abs/0905.2160}）把格点上的
+夸克场投影到拉普拉斯算子低能本征矢张成的有限维子空间上，使"非局域平滑 + 传播子 + 顶点"全部降维为
+$N_e \times N_e$ 小矩阵运算。物理代价（$N_e$ 的选取）与计算收益（收缩成本从 $O(V^2)$ 降到 $O(N_e^2)$）由
+本征矢个数 $N_e$ 精确权衡——这是蒸馏法与点源/盒源方法最本质的分界。
+\end{physbox}
+
+\subsubsection{模型设定}
+\begin{itemize}
+\item 自由度: 规范场 $U_\mu(x)\in SU(3)$，夸克场 $\psi(x)\in\mathbb{C}^3 \otimes \mathbb{C}^4$（色 $\times$ 旋量），
+  格点尺寸 $V = L_xL_yL_zL_t$（代码 \texttt{lattice/constant.py:1-3} 固定 $N_c=3, N_s=4, N_d=4$）。
+\item 本征矢: 三维（仅空间）规范协变拉普拉斯算子 $-\nabla^2$ 的最小 $N_e$ 个本征值对应本征矢
+  $v^{(k)}(x)$，组成 $V$ 矩阵（尺寸 $L_zL_yL_xN_c \times N_e$）。
+\item 边界条件: 时间方向周期/反周期由 \nolinkurl{t_boundary} 控制
+  （\texttt{\nolinkurl{lattice/generator/perambulator.py:63}}），空间方向周期性内建。
+\end{itemize}
+
+\subsubsection{公式推导链}
+\label{sec:c1_formulas}
+
+\textbf{第一步（定义）: 蒸馏算子。} 拉普拉斯本征矢满足
+\begin{equation}\label{eq:laplace}
+-\nabla^2\, v^{(k)}(x) = \lambda_k\, v^{(k)}(x),\qquad
+\nabla^2\psi(x) \equiv \sum_{\mu=1}^{3}\Big[U_\mu(x)\psi(x+\hat{\mu}) + U_\mu^\dagger(x-\hat{\mu})\psi(x-\hat{\mu}) - 2\psi(x)\Big],
+\end{equation}
+其中后一项为规范协变二点导数（自由情形下 $-\nabla^2$ 本征值为 $6-2\sum_\mu\cos k_\mu \in [0,12]$，
+即代码注释 "SA 用 evals、LA 用 12-evals" 的量纲依据，见 \texttt{lattice/generator/eigenvector.py:16}）。
+蒸馏算子定义为前 $N_e$ 个本征矢的外积：
+\begin{equation}\label{eq:distill}
+\Box(x,y) \equiv \sum_{k=1}^{N_e} v^{(k)}(x)\, v^{(k)\dagger}(y) = V(x)V^\dagger(y),\qquad
+\tilde{\psi} = \Box\,\psi .
+\end{equation}
+\eqref{eq:distill} 为幂等投影：$\Box^2=\Box$（因 $\{v^{(k)}\}$ 正交归一），且 $V^\dagger V = \mathbb{1}_{N_e}$。
+极限校验：$N_e \to N_{\text{full}} = 3V$ 时 $\Box \to \delta_{xy}$（完全投影）；$N_e \to 0$ 时 $\Box\to 0$，两极限行为合理。
+
+\textbf{第二步（定义）: perambulator。} 将夸克传播子 $M^{-1}$（$M$ 为 Dirac 矩阵）夹在两个蒸馏算子之间，
+得到蒸馏空间传播子：
+\begin{equation}\label{eq:peram}
+\tau(t_f,t_i) \equiv V^\dagger(t_f)\, M^{-1}\, V(t_i),\qquad
+\tau_{ij} = \sum_{x,y} v_i^\dagger(x,t_f)\, M^{-1}(x,t_f; y,t_i)\, v_j(y,t_i),
+\end{equation}
+尺寸 $N_e \times N_e$（代码缓存 \texttt{lattice/generator/perambulator.py:102}）。量纲检查：$M^{-1}$
+为逆质量量纲，$V$ 无量纲，故 $\tau$ 与传播子同量纲，符合 $\langle \tilde\psi \tilde{\bar\psi}\rangle = \tau$。
+
+\textbf{第三步（定义）: elemental。} 顶点算子由 $\gamma$ 矩阵、协变导数与动量相位组成：
+\begin{equation}\label{eq:elemental}
+\Phi^{(\Gamma,n)}_{ij}(t,\mathbf{p}) \equiv \sum_{\mathbf{x}} e^{i\mathbf{p}\cdot\mathbf{x}}\,
+v_i^\dagger(\mathbf{x},t)\, \Gamma\, \big[\nabla^{(n)} v_j\big](\mathbf{x},t),
+\end{equation}
+其中 $\nabla^{(n)} = \nabla_{d_1}\cdots\nabla_{d_n}$ 为 $n$ 阶协变导数链（$\nabla_\mu v(x) \equiv U_\mu(x)v(x+\hat\mu) - v(x)$）。
+$n$ 阶导数组合数
+\begin{equation}\label{eq:nderiv}
+N_{\text{deriv}}(n) = \sum_{k=0}^{n} 3^{k} = \frac{3^{n+1}-1}{2}
+\quad\Rightarrow\quad N_{\text{deriv}}(0)=1,\; N_{\text{deriv}}(1)=4,\; N_{\text{deriv}}(2)=13,
+\end{equation}
+与代码 \texttt{lattice/generator/elemental.py:48} 的 \texttt{num\_derivative = (3 ** (num\_nabla + 1) - 1) // 2}
+完全一致。极限校验：$\mathbf{p}\to 0$ 时相位因子 $\to 1$，$\Phi$ 退化为无动量投影的顶点；$n=0$ 时退化为
+$\Gamma\otimes V^\dagger V$ 型局域顶点，符合预期。
+
+\textbf{第四步（推导）: 两点关联函数。} 介子插值场 $\mathcal{O}(t)=\bar\psi(t)\Gamma\Phi(t)\psi(t)$ 的两点
+关联函数 $C(t_f-t_i)=\langle \mathcal{O}(t_f)\mathcal{O}^\dagger(t_i)\rangle$ 按 Wick 定理收缩（两对夸克场
+两两配对，符号由费米子反对易决定，见 C6），在蒸馏空间中约化为
+\begin{equation}\label{eq:twopoint}
+C(t_f-t_i) \;=\; -\mathrm{Tr}\Big[
+\underbrace{\gamma_5 \tau^\dagger(t_f,t_i)\gamma_5}_{\tau_{\mathrm{bw}}}
+\; \Phi_\alpha(t_f) \; \tau(t_f,t_i) \;
+\underbrace{\gamma_4 \Phi_\beta^\dagger(t_i)\gamma_4}_{\gamma\text{-共轭源顶点}} \Big],
+\end{equation}
+其中 $\gamma_5 \tau^\dagger \gamma_5$ 因子来自 $\gamma_5$-厄米性
+$M^\dagger = \gamma_5 M\gamma_5$，故 $(M^{-1})^\dagger = \gamma_5 M^{-1}\gamma_5$
+（代码 \texttt{\nolinkurl{lattice/correlator/one_particle.py:57}}），
+$\gamma_4$-共轭为粒子--反粒子时间反演约定。公式 \eqref{eq:twopoint} 与代码实际收缩
+（\texttt{lattice/correlator/one\_particle.py:64-72}）逐符号对应（见 C8）。量纲检查：$\Phi$ 无量纲、
+$\tau$ 为逆质量量纲，$C$ 无量纲（格点单位制），符合。
+
+\textbf{极限与退化校验（公式链总校验）:}
+\begin{itemize}
+\item $N_e\to$ 满秩: $\Box\to\delta$，\eqref{eq:peram} 还原为精确传播子，\eqref{eq:twopoint} 还原为
+  常规两点函数（双线性收缩），合理。
+\item $t_f=t_i$（局域传播子）: \eqref{eq:peram} 的 $\tau_{\mathrm{local}} = V^\dagger M^{-1}V$ 退化为
+  常数矩阵的迹运算，与代码 \texttt{PropagatorLocal}（\texttt{lattice/quark\_diagram.py:206-230}）一致。
+\item 手征极限 $m\to 0$: $\tau \sim 1/m$ 发散，关联函数随之发散——格点规范理论中由有限体积
+  屏蔽而非表达式奇异处理，量纲自洽。
+\end{itemize}
+
+\begin{mapbox}
+\textbf{映射原则:} C1 的每个物理量在代码中均有直接载体，双向可查（详见 C2--C8 映射表）：
+$-\nabla^2 \leftrightarrow$ \texttt{\_Laplacian}；$V \leftrightarrow$ \texttt{eigenvector/evecs}；
+$\tau \leftrightarrow$ \texttt{VSV/tau}；$\Phi \leftrightarrow$ \texttt{VPV/phi}；$\gamma \leftrightarrow$
+\texttt{gamma(n)}；$e^{i\mathbf p\cdot\mathbf x} \leftrightarrow$ \texttt{MomentumPhase}。
+\end{mapbox}
+
+\subsection{C2 拉普拉斯本征矢生成：多后端求解}
+\label{sec:c2}
+
+\begin{algobox}
+\textbf{核心算法:} 对固定时间片 $t$，组装三维规范协变拉普拉斯算子（\texttt{\_Laplacian}，
+\ref{sec:c1_formulas} 之 \eqref{eq:laplace}），用迭代本征求解器（scipy/cupyx 的 ARPACK，或 QUDA 的
+Lanczos）求最小本征值对应的 $N_e$ 个本征矢；随后按首位分量相位统一归一化（renorm phase），
+消除跨组态/跨时间片本征矢的任意 $U(1)$ 相位。
+\end{algobox}
+
+\textbf{关键实现:} 算子组装用 \texttt{opt\_einsum} 一次收缩 + 移位（\texttt{backend.roll}），
+对全部格点向量化，无逐点循环：
+\lstinputlisting[firstline=11,lastline=26]{/Users/zhangxin/EasyDistillation/lattice/generator/eigenvector.py}
+
+\textbf{三种求解路径}（\texttt{lattice/generator/eigenvector.py:234-312, 356-370}）：
+\begin{itemize}
+\item \texttt{\nolinkurl{laplacian_cupy_numpy}}: 纯 Python 组装 + \texttt{\nolinkurl{scipy/cupyx.sparse.linalg.eigsh}}
+  （SA 端、tol 控制），最灵活，可用于 numpy 后端；
+\item \texttt{\nolinkurl{laplacian_quda}}: 把单时间片配置装入 QUDA 的 \texttt{\nolinkurl{QUDA_LAPLACE_DSLASH}}，
+  用 \texttt{\nolinkurl{QUDA_EIG_TR_LANCZOS}} 求 $N_e$ 个本征对（可开 Chebyshev 多项式加速），返回前按
+  $2(N_d-1)$ 重标定（\texttt{eigenvector.py:307}），与 \eqref{eq:laplace} 的 [0,12] 量纲一致；
+\item \texttt{\nolinkurl{laplacian_quda_scipy}}: 仅用 QUDA 提供拉普拉斯矩阵向量积，外部仍走 ARPACK。
+\end{itemize}
+
+\textbf{相位归一化（renorm phase）:} 本征矢 $v^{(k)}$ 定义到整体相位 $e^{i\theta_k}$ 为止；蒸馏法
+要求跨组态一致（否则 perambulator/elemental 出现随机相位差）。代码取
+\texttt{renorm\_phase = angle(evecs[:, 0])}（\texttt{eigenvector.py:255}）并对全体乘
+$e^{-i\theta_k}$，把每个本征矢的第一分量归为实数。这是格点蒸馏法工程实现中必要且非平凡的细节。
+
+\begin{mapbox}
+\textbf{代码-物理映射:}
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{U[mu]} & 规范链接 $U_\mu(x)$ & 色旋转矩阵，\texttt{roll} 实现 $\hat\mu$ 方向平移；
+  \texttt{\nolinkurl{lattice/generator/eigenvector.py:19-24}} \\
+\texttt{\_Laplacian} & $-\nabla^2$ 算子 & 协变二点导数与对角项 $6F$ 之差；
+  \texttt{\nolinkurl{lattice/generator/eigenvector.py:11-26}} \\
+\texttt{evals/evecs} & $(\lambda_k, v^{(k)})$ & SA 端最小本征对；
+  \texttt{\nolinkurl{lattice/generator/eigenvector.py:246-257}} \\
+\texttt{renorm\_phase} & 本征矢 $U(1)$ 相位约定 & 首分量归实，跨组态一致；
+  \texttt{\nolinkurl{lattice/generator/eigenvector.py:254-256}} \\
+\texttt{project\_SU3} & SU(3) 群流形投影 & 迭代 $U\mapsto\tfrac12(U+U^{\dagger-1})$ 消漂移；
+  \texttt{\nolinkurl{lattice/generator/eigenvector.py:55-65}} \\
+\texttt{stout\_smear} & 平滑规范场 $U^{(n)}$ & 供蒸馏平滑源使用（见 C3）；
+  \texttt{\nolinkurl{lattice/generator/eigenvector.py:215-232}} \\
+\bottomrule
+\end{xltabular}
+
+\textbf{复杂度:} 组装 $O(V N_c^2)$（6 次收缩）；迭代求解 $O(N_{\text{iter}} \cdot V N_c^2)$，
+ARPACK 每步一次算子作用；Lanczos 收敛迭代数远小于 $3V$ 维全对角化 $O((3V)^3)$，为蒸馏法
+"只取低模"策略的效率基础（推断，未做基准测试）。
+
+\subsection{C3 Stout 平滑：SU(3) 解析矩阵指数化}
+\label{sec:c3}
+
+这是本仓库最精巧的数值物理模块。平滑规范场由 Morningstar--Peardon 三步构造
+（\url{https://arxiv.org/abs/hep-lat/0311018}，代码注释引用见
+\texttt{lattice/generator/eigenvector.py:123-190} 与 elemental 同构实现）。
+
+\subsubsection{公式推导链}
+\textbf{第一步（定义）: 2 环 staple 求和与 $Q$ 矩阵。} 对方向 $\mu$ 定义
+\begin{equation}\label{eq:stoutC}
+C_\mu(x) = \rho \sum_{\nu\neq\mu}\Big[
+U_\nu(x)\,U_\mu(x+\hat\nu)\,U_\nu^\dagger(x+\hat\mu)
++ U_\nu^\dagger(x-\hat\nu+\hat\mu)\,U_\mu(x-\hat\nu)\,U_\nu(x-\hat\nu)\Big],
+\end{equation}
+对应两条二环路径（plaquette 的 "上—右—回" 与 "回—上—右"）。代码
+\texttt{\nolinkurl{_stout_smear_ndarray:132-138}} 用 \texttt{roll} + \texttt{@} 逐项实现。
+随后构造
+\begin{equation}\label{eq:stoutQ}
+Q_\mu \equiv \frac{i}{2}\Big(C_\mu U_\mu^\dagger - U_\mu C_\mu^\dagger\Big) - \frac{i}{6}\,\mathrm{Tr}\Big(C_\mu U_\mu^\dagger - U_\mu C_\mu^\dagger\Big)\mathbb{1},
+\end{equation}
+即 $Q = \tfrac{i}{2}(\Omega^\dagger - \Omega)$ 的反对称部分取无迹投影（$\Omega \equiv C U^\dagger$）。
+性质（确证，可直接验证）: $Q^\dagger = Q$（厄米）、$\mathrm{Tr}\,Q = 0$。
+
+\textbf{第二步（公式）: 解析指数化。} 平滑链接定义为
+\begin{equation}\label{eq:stoutU}
+U_\mu'(x) = e^{iQ_\mu(x)}\, U_\mu(x),\qquad e^{iQ} \in SU(3).
+\end{equation}
+对无迹厄米 $3\times3$ 矩阵 $Q$，由 Cayley--Hamilton 定理（$Q$ 满足三次特征多项式），指数函数可写为
+$Q$ 的二次多项式：
+\begin{equation}\label{eq:exp3}
+e^{iQ} = f_0\,\mathbb{1} + f_1\,Q + f_2\,Q^2,
+\end{equation}
+其中系数由 $Q$ 的谱决定。设 $Q$ 本征值为 $i\lambda_1, i\lambda_2, i\lambda_3$（$\sum\lambda_k = 0$，
+由无迹性），令其参数化为 $\lambda_1 = u$，$\lambda_{2,3} = -\tfrac{u}{2} \pm iw$ 的插值形式；
+对三个插值节点应用拉格朗日插值并整理（推导要点: $f_0 = \sum_k e^{i\lambda_k}\lambda_j\lambda_l /
+\big[(\lambda_k-\lambda_j)(\lambda_k-\lambda_l)\big]$ 等三式对称化），得到代码中的闭式表达
+（\texttt{eigenvector.py:100-120}，与 Morningstar--Peardon 附录一致）:
+\begin{align}
+u &= \sqrt{c_1/3}\,\cos(\theta/3),\qquad w = \sqrt{c_1}\,\sin(\theta/3),\label{eq:u_w}\\
+c_1 &\equiv \tfrac12\mathrm{Re}\,\mathrm{Tr}\,Q^2,\qquad
+c_0 \equiv \tfrac13\mathrm{Re}\,\mathrm{Tr}\,Q^3,\qquad
+\theta \equiv \arccos\!\big(c_0 / c_0^{\max}\big),\quad
+c_0^{\max} = 2(c_1/3)^{3/2},\label{eq:c0c1}\\
+f_0 &= \frac{(u^2-w^2)e^{2iu} + e^{iu}\big(8u^2\cos w + 2iu(3u^2+w^2)\,\mathrm{sinc}\,w\big)}{9u^2-w^2},\label{eq:f0}\\
+f_1 &= \frac{2u\,e^{2iu} - e^{iu}\big(2u\cos w - i(3u^2-w^2)\,\mathrm{sinc}\,w\big)}{9u^2-w^2},\label{eq:f1}\\
+f_2 &= \frac{e^{2iu} - e^{iu}\big(\cos w + 3iu\,\mathrm{sinc}\,w\big)}{9u^2-w^2}.\label{eq:f2}
+\end{align}
+其中 $c_0 \ge 0$ 时 $\theta = \arccos(c_0/c_0^{\max})$，$c_0<0$ 时取共轭分支
+（代码 \texttt{parity} 标记 \texttt{eigenvector.py:95-96, 113-115}）——由
+$\mathrm{Tr}\,Q^3$ 的符号选择 $e^{\pm iQ}$ 本征值分支，保持 $\det e^{iQ}=1$。
+
+\textbf{第三步（数值细节）: 小 $w$ 级数展开。} $w\to 0$ 时 $\mathrm{sinc}\,w = \sin w/w$ 计算出现
+$0/0$ 退化；代码用 $\sin w/w$ 的泰勒展开截断至 $w^8$ 阶
+（\texttt{eigenvector.py:105}）:
+\begin{equation}\label{eq:sinc}
+\mathrm{sinc}\,w \approx 1 - \frac{w^2}{6}\Big(1 - \frac{w^2}{20}\Big(1 - \frac{w^2}{42}\Big(1-\frac{w^2}{72}\Big)\Big)),
+\qquad |w| \le 0.05,
+\end{equation}
+乘开即 $1 - w^2/6 + w^4/120 - w^6/5040 + w^8/362880$（确证，逐项验算一致）；
+$|w|>0.05$ 用精确 $\sin w/w$。
+
+\textbf{极限与退化校验:}
+\begin{itemize}
+\item $\rho\to 0$: $C_\mu\to 0 \Rightarrow Q\to 0 \Rightarrow e^{iQ}\to\mathbb{1}$，
+  $U'\to U$（不平滑）——合理（\eqref{eq:stoutC} 线性依赖 $\rho$）。
+\item $w\to 0$, $u\to 0$: $Q\to 0$，\eqref{eq:exp3} 的 $f$ 系数 $f_0\to 1, f_1\to 0, f_2\to 0$
+  （级数展开确保无奇点），$U'\to U$——一致。
+\item 保群性: 由构造 $Q$ 厄米无迹 $\Rightarrow e^{iQ}$ 幺正 $\det=1$；数值实现无显式再投影
+  （\texttt{project\_SU3} 仅在外部可选调用），依赖公式的精确性——这是解析法相对数值 expm 的
+  优势之一。
+\end{itemize}
+
+\textbf{四种实现（多后端策略）:}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{algo}{实现} & 适用后端 & 特点 \\
+\midrule
+\endhead
+\texttt{\_stout\_smear\_ndarray\_naive} & numpy/cupy & 复指数直接求值，教学清晰；
+  \texttt{\nolinkurl{eigenvector.py:67-121}} \\
+\texttt{\_stout\_smear\_ndarray} & numpy/cupy & 实部/虚部分离的预展开（避免复数幂），
+  即默认路径；\texttt{\nolinkurl{eigenvector.py:123-190}} \\
+\texttt{\_stout\_smear\_cuda\_kernel} & cupy & 自定义 CUDA kernel（\texttt{stout\_smear.cu}），
+  网格按格点并行，$O(V)$ 线程；\texttt{\nolinkurl{eigenvector.py:192-201}} \\
+\texttt{\_stout\_smear\_quda} & QUDA & 调用库级 \texttt{smearSTOUT}；
+  \texttt{\nolinkurl{eigenvector.py:203-213}} \\
+\bottomrule
+\end{xltabular}
+
+\begin{mapbox}
+\textbf{代码-物理映射:}
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{Q} & 厄米无迹生成元 $iQ$ & \eqref{eq:stoutQ} 之 $Q$；
+  \texttt{\nolinkurl{eigenvector.py:88-90}} \\
+\texttt{c0, c1, c0\_max} & 谱不变量 $c_0, c_1, c_0^{\max}$ & \eqref{eq:c0c1}；
+  \texttt{\nolinkurl{eigenvector.py:91-96}} \\
+\texttt{u, w} & 本征值参数化 $u, w$ & \eqref{eq:u_w}；
+  \texttt{\nolinkurl{eigenvector.py:98-99}} \\
+\texttt{f0, f1, f2} & 插值系数 $f_0,f_1,f_2$ & \eqref{eq:exp3}--\eqref{eq:f2}；
+  \texttt{\nolinkurl{eigenvector.py:110-120}} \\
+\texttt{sinc\_w} & $\sin w/w$ 小参数近似 & \eqref{eq:sinc}；
+  \texttt{\nolinkurl{eigenvector.py:105-108}} \\
+\texttt{rho} & 平滑强度 $\rho$ & 无量纲，典型 0.1；
+  \texttt{\nolinkurl{eigenvector.py:215}} \\
+\bottomrule
+\end{xltabular}
+
+\textbf{复杂度:} 每平滑步每方向 $O(V N_c^3)$（6 次 $3\times3$ 收缩 + 指数化）；
+CUDA kernel 以 $\mathcal O(V/2)$ 线程块并行，是 numpy 版的逐点向量化（未测速，推断）。
+
+\subsection{C4 Elemental 生成：导数展开与动量投影}
+\label{sec:c4}
+
+\begin{algobox}
+\textbf{核心算法:} 对每个本征矢对 $(i,j)$ 计算 \eqref{eq:elemental}：先按导数链 $\nabla^{(n)}$ 作用
+（协变差分，\texttt{\_nD}），再乘动量相位 $e^{i\mathbf p\cdot\mathbf x}$ 并在全空间求和。高阶导数
+链用"左/右求导分配"技巧（积分分部）拆分为多个基础差分，自动枚举 $2^n$ 种分配并加权。
+\end{algobox}
+
+\textbf{协变导数实现}（\texttt{lattice/generator/elemental.py:279-288}）:
+\lstinputlisting[firstline=279,lastline=288]{/Users/zhangxin/EasyDistillation/lattice/generator/elemental.py}
+
+\textbf{导数链的自动枚举与分部积分}（\texttt{elemental.py:309-337}）:
+\lstinputlisting[firstline=309,lastline=337]{/Users/zhangxin/EasyDistillation/lattice/generator/elemental.py}
+
+上段代码把 $n$ 阶导数链的所有 $2^n$ 种左/右分配逐一遍历（\texttt{pick\_nabla} 的二进制位），
+对"右求导"贡献系数 $(-1)^{\#\text{right}}$——这正是分部积分
+$\int v^\dagger \nabla v = -\int (\nabla v)^\dagger v$ 在格点上的离散实现，同时利用
+$(\nabla v)^\dagger = v^\dagger \overleftarrow\nabla$ 的厄米性把全部求导集中在右边执行，
+复用同一 \texttt{\_nD} 内核。
+
+\textbf{动量投影:} \texttt{MomentumPhase}（\texttt{lattice/insertion/phase.py:41-46}）把
+$e^{i\mathbf p\cdot\mathbf x} = \prod_\mu e^{2\pi i n_\mu x_\mu/L_\mu}$ 分解为三向一维相位数组
+的乘积并缓存，避免逐点复数幂。
+
+\textbf{随机混合（blending）:} 当 \texttt{is\_blending=True} 时，对"全本征矢空间 $N_e$ 分为若干块
+（totNe 组）但只取其中 usedNe 子集"的随机稀释方案，构造修正系数矩阵
+\texttt{stocastic\_coeff}（\texttt{elemental.py:61-95}）:
+块内对角元 $N_t/u$、非对角元 $N_t(N_t-1)/[u(u-1)]$、跨块元 $N_tN_s/(uv)$（$u,v$ 为块内
+实际使用数），乘入收缩以无偏估计全空间结果——对应蒸馏法中"部分本征矢 + 随机噪声"的
+混合估计（与 C13 噪声矢量生成器配套）。
+
+\begin{mapbox}
+\textbf{代码-物理映射:}
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{derivative(n)} & 导数链 $\nabla^{(n)}$ 编码 & 三进制方向码（0=dx,1=dy,2=dz）；
+  \texttt{\nolinkurl{lattice/insertion/derivative.py:23-33}} \\
+\texttt{\_nD} & 协变差分作用 $V\mapsto\nabla^{(n)}V$ & \eqref{eq:elemental} 之 $\nabla^{(n)}v$；
+  \texttt{\nolinkurl{elemental.py:279-288}} \\
+\texttt{num\_derivative} & 导数组合数 $N_{\text{deriv}}$ & \eqref{eq:nderiv}；
+  \texttt{\nolinkurl{elemental.py:48}} \\
+\texttt{MomentumPhase} & 平面波 $e^{i\mathbf p\cdot\mathbf x}$ & 方向分解+缓存；
+  \texttt{\nolinkurl{insertion/phase.py:6-53}} \\
+\texttt{VPV} & 顶点矩阵 $\Phi$ & $[N_{\text{deriv}}, N_{\text{mom}}, N_e, N_e]$；
+  \texttt{\nolinkurl{elemental.py:56}} \\
+\texttt{stocastic\_coeff} & 混合无偏权重 & 稀释修正系数；
+  \texttt{\nolinkurl{elemental.py:71-95}} \\
+\bottomrule
+\end{xltabular}
+
+\textbf{复杂度:} 每时间片每导数每动量一次 $O(V N_e^2 N_c)$ 收缩，总量
+$O\big(N_t N_{\text{deriv}} N_{\text{mom}} V N_e^2 N_c\big)$；\texttt{\_nD} 每次 $O(V N_e N_c)$。
+与朴素逐点实现相比，全部算子作用走 \texttt{roll}+\texttt{contract} 批量化，无 Python 层
+逐格点循环（推断的复杂度上界，未实测）。
+
+\subsection{C5 Perambulator 生成：Dirac 求逆与 V$^\dagger$SV}
+\label{sec:c5}
+
+\begin{algobox}
+\textbf{核心算法:} 对源时间片 $t_i$ 与每个本征矢 $e$，把 $V^\dagger$ 的第 $e$ 列作为点源
+（单旋量分量），以 QUDA 求解 $SV_e = M^{-1}V_e$（每源 $N_s=4$ 次求逆，或 MRHS 模式一次批量）；
+再收缩 $V^\dagger \cdot SV$ 得到 $\tau_e = V^\dagger SV_e$，逐本征矢填充 \eqref{eq:peram}。
+\end{algobox}
+
+\textbf{核心循环}（\texttt{lattice/generator/perambulator.py:169-208}）:
+\lstinputlisting[firstline=169,lastline=200]{/Users/zhangxin/EasyDistillation/lattice/generator/perambulator.py}
+
+\textbf{设计要点}（确证，代码注释与结构）:
+\begin{itemize}
+\item \textbf{$V^\dagger$ 放主机内存}（\texttt{perambulator.py:117-128}）: 本征矢转置共轭后存
+  host 再按需转 device，省设备显存——大 $N_e$（如 70）时的显存关键优化；
+\item \textbf{MRHS 批量}（\texttt{perambulator.py:172-183}）: 一次构造 $N_s$ 源的多源求逆
+  \texttt{invertMultiSrc}，减少求逆次数与同步开销（更耗显存，选项化）；
+\item \textbf{时间片独立}: 对每个 $t_i$ 单独求逆，逐时间片推进，天然适配流式计算
+  （配合 \texttt{Dispatch} 逐组态分发，见 C16）。
+\end{itemize}
+
+\textbf{收缩公式}（\texttt{perambulator.py:198-200}）:
+\begin{equation}\label{eq:vsb}
+\tau_{tijk}^{(e)} = \sum_{x,c} V^\dagger_{k\,e}(x,t)\, [SV]_{i j c}(x,t),
+\qquad \text{einsum: \texttt{"ketzyxa,etzyxija->tijk"}},
+\end{equation}
+其中 $k$ 为本征矢指标、$i,j$ 为旋量指标、$c$ 为色指标；输出 $\tau$ 尺寸 $[N_t, N_s, N_s, N_e, N_e]$。
+
+\begin{mapbox}
+\textbf{代码-物理映射:}
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{eigenvector\_dagger} & $V^\dagger$（$N_e\times N_t\times V\times N_c$） & 源侧本征矢；
+  \texttt{\nolinkurl{perambulator.py:117-128}} \\
+\texttt{dirac.invert} & $M^{-1}$ 求逆 & QUDA Dirac 算子；
+  \texttt{\nolinkurl{perambulator.py:192}} \\
+\texttt{SV} & $SV = M^{-1}V$ 中间量 & 求逆结果（$N_t N_s N_c$）；
+  \texttt{\nolinkurl{perambulator.py:101,192}} \\
+\texttt{VSV} & perambulator $\tau$ & \eqref{eq:peram}, \eqref{eq:vsb}；
+  \texttt{\nolinkurl{perambulator.py:102,198-200}} \\
+\texttt{mass, tol, maxiter} & Dirac 参数 & 质量/求解容差/迭代上限；
+  \texttt{\nolinkurl{perambulator.py:56-58}} \\
+\texttt{MRHS} & 多源批量开关 & 显存换时间的选项；
+  \texttt{\nolinkurl{perambulator.py:42-44,172-183}} \\
+\bottomrule
+\end{xltabular}
+
+\textbf{复杂度:} 每时间片 $N_e$ 次（或 MRHS 下 $N_e/N_s$ 次）Dirac 求逆，
+每次 $O(N_{\text{iter}} V N_c N_s)$；收缩每次 $O(V N_e N_s^2 N_c)$。总
+$O\big(N_t N_e N_{\text{iter}} V N_c N_s\big)$——求逆占主导（推断）。
+
+\subsection{C6 自动 Wick 收缩：符号化-图论双轨}
+\label{sec:c6}
+
+这是项目最具原创性的工程部分：用户仅以味结构（如 \texttt{"ud"}、\texttt{"uds"}）和动量/不可约
+表示声明强子，系统自动完成全部 Wick 收缩并输出可直接计算的收缩图。
+
+\subsubsection{符号化收缩（quark\_contract.py）}
+\textbf{算法原理:} 把每个强子展开为夸克/反夸克符号（\texttt{Qurak}，携带 flavor + tag + 时间片），
+按费米子场反对易的 Wick 定理递归配对：每次取第一个反夸克为源，枚举所有同味夸克为汇，
+插入传播子 $S^f(\text{sink}, \text{source})$ 并累计符号因子；递归直至耗尽（
+\texttt{lattice/quark\_contract.py:216-245}）:
+\lstinputlisting[firstline=216,lastline=245]{/Users/zhangxin/EasyDistillation/lattice/quark_contract.py}
+
+\textbf{符号因子的物理来源}（确证，可对照标准场论教材）: 配对跨越 $\delta = |i-j|-1$ 个中间
+算子时，每跨越一个产生 $-1$（费米子场反交换），故
+\begin{equation}\label{eq:wick}
+\begin{split}
+\text{符号} &= (-1)^{|i-j|-1}\ \text{（反夸克在右，\nolinkurl{i>j} 分支）},\\
+&= (-1)^{|i-j|}\ \text{（反夸克在左分支，见代码 \texttt{\nolinkurl{quark_contract.py:228-232}}）},
+\end{split}
+\end{equation}
+两分支一致（总幂次等于跨越算子数）。退化质量处理：\texttt{degenerate=True} 时 $u/d$ 统一标记为
+\texttt{q}（\texttt{quark\_contract.py:233-236}），自动折叠 $u$-$d$ 简并流形。
+
+\textbf{输出:} 每个收缩项记为传播子编号的邻接矩阵（强子为顶点、传播子为边权），
+打包为 \texttt{Diagram} 符号对象——物理表达式与收缩图完全同构。
+
+\subsubsection{图表示与自动 einsum 下标（QuarkDiagram）}
+\begin{algobox}
+\textbf{核心算法:} \texttt{QuarkDiagram.analyse}（\texttt{lattice/quark\_diagram.py:23-79}）对邻接矩阵
+做 BFS 连通分量分解，为每个传播子与顶点自动生成 opt\_einsum 下标（旋量字符集 \texttt{mnop...}
+与色字符集 \texttt{abcdef...}），拼接成 \texttt{subscripts} 字符串——把"画图"直接变成
+"一次 einsum 调用"。
+\end{algobox}
+\lstinputlisting[firstline=23,lastline=79]{/Users/zhangxin/EasyDistillation/lattice/quark_diagram.py}
+
+\textbf{多时间片收缩}（\texttt{quark\_diagram.py:233-258}）: 对传播子/顶点按时间片数组取值，
+非整数时间片自动加 \texttt{t} 轴前缀并输出 \texttt{->t}，一次批处理全部时间片
+（\texttt{compute\_diagrams\_multitime}），避免逐 $t$ Python 循环。
+
+\subsubsection{图化简（Diagram.simplify）}
+\begin{algobox}
+\textbf{核心算法:} \texttt{Diagram.simplify}（\texttt{quark\_diagram.py:330-553}）: BFS 求连通分量，
+将大图拆为独立子图乘积；顶点按（时间,类型）排序，同类型顶点遍历全部排列并取
+SHA-256 哈希最小者作为规范形式——实现"同一物理图唯一表示"，使重复子图可缓存复用。
+\end{algobox}
+核心效果（确证，\texttt{tests/test\_simplify.py} 六例覆盖）:
+\begin{itemize}
+\item 冗余顶点剔除、连通分量拆分（乘积化）、同构图归一（排列哈希最小化）；
+\item 传播子编号按序重排，确保哈希稳定跨运行；
+\item 化简失败时回退原图并告警（\texttt{quark\_diagram.py:651-657}），不中断计算。
+\end{itemize}
+
+\begin{mapbox}
+\textbf{代码-物理映射:}
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{Qurak(flavor,tag,anti)} & 夸克/反夸克场 $\psi_f,\bar\psi_f$ & 非对易符号；
+  \texttt{\nolinkurl{quark_contract.py:17-36}} \\
+\texttt{Propagator(flavor,src,snk)} & 传播子 $S^f(y,x)$ & Wick 收缩结果；
+  \texttt{\nolinkurl{quark_contract.py:39-61}} \\
+\texttt{HadronFlavorStructure} & 强子味结构 & 介子/重子/反重子三型；
+  \texttt{\nolinkurl{quark_contract.py:64-107}} \\
+\texttt{adjacency\_matrix} & 收缩图（Wick 图） & 顶点=强子，边=传播子编号；
+  \texttt{\nolinkurl{quark_diagram.py:15-21}} \\
+\texttt{subscripts} & einsum 收缩模式 & 旋量/色指标自动分配；
+  \texttt{\nolinkurl{quark_diagram.py:60-79}} \\
+\texttt{Diagram.simplify} & 图规范形 & 连通拆分+哈希最小化；
+  \texttt{\nolinkurl{quark_diagram.py:330-553}} \\
+\bottomrule
+\end{xltabular}
+
+\textbf{正确性与复杂度:} 收缩结果与标准手写 Wick 收缩逐项比对（\texttt{tests/test\_quark\_contract.py}，
+meson-meson / baryon-antibaryon / 退化 u-d 三例确证）；$n$ 对夸克的全收缩数为双阶乘
+$(2n-1)!!$，符号化枚举是指数级但物理上 $n\le 6$（强子数 $\le 6$），可接受；图化简的哈希归一
+使大计算（多源多算子矩阵元）中重复图只算一次（推断收益，未实测）。
+
+\subsection{C7 群论不可约表示框架：$O_h^D$ 小群约化}
+\label{sec:c7}
+
+\subsubsection{物理对象}
+\begin{physbox}
+\textbf{物理图像:} 单强子插值场按 $O_h^D$（立方双盖群，96 个元素：24 旋转 $\times$ 2（$2\pi$ 旋转）
+$\times$ 2（宇称））的不可约表示变换；运动强子按动量 $\mathbf p$ 的小群（stabilizer）不可约表示
+分类。双粒子系统取总动量静止系后按 $O_h^D$ 不可约表示 $\Lambda = A_1, A_2, E, T_1, T_2, G_1, G_2, H$
+分类，投影算子将裸算子组合投影到指定 $\Lambda$——这是两粒子谱分析的群论基础
+（参考: \url{https://arxiv.org/abs/1607.06738} eq.(4.11)，代码注释
+\texttt{lattice/symmetry/two\_particle.py:4-6}）。
+\end{physbox}
+
+\subsubsection{硬编码不可约表示库}
+\texttt{\nolinkurl{hardcoded_rep.py}}（11{,}613 行）预生成了 $O_h^D$ 全部不可约表示矩阵（含
+$O_h^D$ 自身 8 个不可约表示与全部小群 $Dic_4, Dic_2, Dic_3, C_4$ 的表示）以及群乘法表
+（\texttt{\nolinkurl{hardcoded_rep.py:104-120}} 的 \texttt{\nolinkurl{OhD_Multiply_table}}）。数据由
+\texttt{\nolinkurl{utils.generate_hardcoded_code}}（\texttt{\nolinkurl{lattice/symmetry/utils.py:30-46}}）等脚本生成，
+运行期零构造开销——这是"以生成期算力换运行期确定性"的典型工程决策。
+
+\textbf{小群约化}（\texttt{lattice/symmetry/gen\_hardcoded\_rep.py:226-245}）:
+对动量 $\mathbf p$ 的（小群不可约表示 $\rho$，$O_h^D$ 不可约表示 $D$），约化矩阵为
+\begin{equation}\label{eq:lg}
+R^{(p)}_{i\alpha} = \mathrm{norm}\Big[\sum_{g\in O_h^D} D_{i j}(g)\, \rho(g)\Big],\qquad
+\text{einsum: \texttt{"ij,kk->kji"} 遍历全部群元},
+\end{equation}
+其中 $\rho(g)$ 经 Wigner 旋转回参考动量系的对应群元：
+\begin{equation}\label{eq:wigner}
+W(g,\mathbf p) = R_f^{-1}\, g\, R_i,\qquad R_i\mathbf p_{\text{ref}} = \mathbf p,
+\end{equation}
+$R_i, R_f$ 由 \texttt{refRotateDict}（\texttt{group\_generator.py:288-364}）按动量查表。
+\texttt{HadronIrrepRow.transform}（\texttt{lattice/hadron\_irrep.py:132-140}）用
+\eqref{eq:wigner} 将强子插值场在任意旋转下变换，进而实现
+\texttt{expr\_little\_group\_projection}（\texttt{hadron\_irrep.py:178-195}）的群平均投影。
+
+\textbf{正确性论证:} 群元素由生成元 $c_{4y}, c_{4z}$ 的积穷举生成并验证乘法表闭环
+（\texttt{genMatrixGroupOhD}，\texttt{gen\_hardcoded\_rep.py:14-64}）；小群约化矩阵与
+"共线数组归一化"（\texttt{\nolinkurl{utils.check_and_normalize_arrays}}）逐列校验，非共线即报错
+——保证约化矩阵的线性正确性。
+
+\begin{mapbox}
+\textbf{代码-物理映射:}
+\end{mapbox}
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{OhD\_irreps/Dic*\_irreps} & $O_h^D$ 及各小群不可约表示 & 硬编码矩阵库；
+  \texttt{\nolinkurl{hardcoded_rep.py}} \\
+\texttt{OhD\_Multiply\_table} & 群乘法表 & 96 元闭环验证；
+  \texttt{\nolinkurl{hardcoded_rep.py:104-120}} \\
+\texttt{genLittleGroupIrrep} & 小群不可约表示 $\rho_{\mathbf p}$ & 按 $|\mathbf p|^2$ 选小群；
+  \texttt{\nolinkurl{gen_hardcoded_rep.py:162-223}} \\
+\texttt{wignerRotate} & Wigner 旋转 $W(g,\mathbf p)$ & \eqref{eq:wigner}；
+  \texttt{\nolinkurl{gen_hardcoded_rep.py:145-159}} \\
+\texttt{reductionToLittleGroup} & 约化矩阵 $R$ & \eqref{eq:lg}；
+  \texttt{\nolinkurl{gen_hardcoded_rep.py:226-245}} \\
+\texttt{HadronIrrepRow.transform} & 插值场变换 & 群元对强子场的作用；
+  \texttt{\nolinkurl{hadron_irrep.py:132-140}} \\
+\texttt{Fermion\_generator} & 自旋 1/2 表示生成元 & $c_{4y}, c_{4z}$ 显式矩阵；
+  \texttt{\nolinkurl{group_generator.py:5-23}} \\
+\bottomrule
+\end{xltabular}
+
+\textbf{复杂度:} 运行期约化一次 $O(96 \times d_\Lambda d_{\Lambda'})$ 次矩阵运算，群构造与校验
+全部离线完成——相对"运行期动态生成群表"（需乘法表构建 $O(96^2)$ 次矩阵乘）为显著常数优化
+（推断）。
+
+\subsection{C8 两点关联函数收缩}
+\label{sec:c8}
+
+\begin{algobox}
+\textbf{核心算法:} \texttt{twopoint}（\texttt{lattice/correlator/one\_particle.py:12-77}）对
+每个源时间片 $t_{\text{src}}$ 组装 $\tau(t_f,t_i)$ 与 $\tau_{\mathrm{bw}}=\gamma_5\tau^\dagger\gamma_5$，
+对每个算子组合执行一次六路张量收缩，直接给出 $C(t)$——即 \eqref{eq:twopoint} 的逐符号实现。
+\end{algobox}
+\lstinputlisting[firstline=53,lastline=72]{/Users/zhangxin/EasyDistillation/lattice/correlator/one_particle.py}
+
+\textbf{einsum 模式逐符号解释}（\texttt{one\_particle.py:64-72}）:
+\begin{equation}\label{eq:einsum2pt}
+C_{it} = \underbrace{\mathrm{Tr}}_{tijkabcd}\Big[
+\bar\tau_{tijab}\,\Phi_0^{x jk}\,\Phi_1^{x t b c}\, \tau_{tklcd}\,\gamma_{\text{src}}^{y l i}\,\Phi_1^{\dagger y a d}\Big]
+\;\longleftrightarrow\;\texttt{"tijab,xjk,xtbc,tklcd,yli,yad->t"},
+\end{equation}
+其中 $\bar\tau = \tau_{\mathrm{bw}}$（C1 之 \eqref{eq:twopoint}），$\Phi_0$ 为源侧顶点（含
+$\gamma_4\Phi^\dagger\gamma_4$ 共轭，见 \texttt{one\_particle.py:63} 的 \texttt{gamma\_src}），
+$\Phi_1$ 为汇侧顶点并按 $t_{\text{src}}$ 滚动平移（时间平移不变性的显式利用，
+\texttt{one\_particle.py:68}）。最终按源求和取平均并乘 $-1$（费米子圈符号，
+\texttt{one\_particle.py:74-77}），与 \eqref{eq:twopoint} 的负号一致。
+
+\textbf{变体族}（同构核心，复用同一 einsum 骨架）:
+\begin{itemize}
+\item \texttt{twopoint\_matrix}: 算子 $\times$ 算子矩阵元（关联矩阵）；
+\item \texttt{twopoint\_profile / twopoint\_indice}: 保留本征矢指标（$a,b$ 维）的轮廓函数，
+  用于谱密度/特征谱分析；
+\item \texttt{twopoint\_isoscalar}: 连通+断连（双圈）贡献，$N_f$ 因子折叠（味求和），
+  \texttt{\nolinkurl{one_particle.py:223-273}}；
+\item \texttt{\nolinkurl{twopoint_matrix_multi_mom}}: 多动量批处理（\texttt{\nolinkurl{one_particle.py:326-413}}）。
+\end{itemize}
+
+\textbf{复杂度:} 单算子组合单源一次收缩 $O(N_e^2 N_s^2 N_c^2)$（无空间维），
+总量 $O(N_{\text{op}}^2 N_t N_e^2 N_s^2 N_c^2)$——空间维 $V$ 在 elemental/perambulator 阶段已
+缩并，这是蒸馏法相对点源法的核心性能优势（推断，量级对比见第 3 节）。
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+解析 SU(3) 指数化 & 数值 \texttt{expm}（scipy）或迭代级数 & 闭式 $f_0,f_1,f_2$（\eqref{eq:f0}--\eqref{eq:f2}）
+  无迭代误差、可整体向量化、CUDA 友好；小 $w$ 级数 \eqref{eq:sinc} 消除奇点；四实现共享同一公式 \\
+拉普拉斯算子批量组装 & 逐格点循环 & \texttt{roll}+einsum 单次收缩；三种求解路径（纯 Python/QUDA/混合）可切换 \\
+自动 Wick 收缩 & 手写收缩代码 & 符号化生成 + 图规范形哈希归一，杜绝人工转录错误；
+  测试套件逐项比对（\texttt{tests/test\_quark\_contract.py}） \\
+自动 einsum 下标 & 手工编写收缩模式 & BFS 自动分配旋量/色指标，图即表达式，表达式即 einsum \\
+硬编码群论数据 & 运行期动态构造群表 & 11{,}613 行预生成不可约表示库，运行期零构造；
+  乘法表闭环校验保证正确性 \\
+本征矢相位归一化 & 忽略相位约定的实现 & \texttt{renorm\_phase} 保证跨组态一致性，蒸馏法数值前提 \\
+V$^\dagger$ 主机驻留 + MRHS & 全设备驻留 + 逐源求逆 & 显存/时间显式权衡，适配大 $N_e$（70 级）\\
+\bottomrule
+\end{tabularx}
+\caption{独特性评估（数据来源: 代码结构分析 + 单元测试，未做跨实现基准测试——标注为推断处除外）}
+\end{table}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+
+核心公式集中于第 2 节（\eqref{eq:laplace}--\eqref{eq:twopoint}、\eqref{eq:exp3}--\eqref{eq:sinc}、
+\eqref{eq:lg}--\eqref{eq:wigner}、\eqref{eq:einsum2pt}），此处补充两个代表性代码片段:
+（1）Stout 平滑的 $Q$ 组装与谱不变量计算（与 \eqref{eq:stoutQ}、\eqref{eq:c0c1} 对应）:
+\lstinputlisting[firstline=140,lastline=163]{/Users/zhangxin/EasyDistillation/lattice/generator/eigenvector.py}
+
+（2）小群约化矩阵的群平均投影（与 \eqref{eq:lg} 对应）:
+\lstinputlisting[firstline=226,lastline=245]{/Users/zhangxin/EasyDistillation/lattice/symmetry/gen_hardcoded_rep.py}
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\detokenize{lattice/generator/eigenvector.py:11-370}} & 仓库 & 拉普拉斯组装、stout 三实现、
+  三种本征求解路径（C2/C3） \\
+\texttt{\detokenize{lattice/generator/perambulator.py:146-209}} & 仓库 & perambulator 求逆+收缩（C5） \\
+\texttt{\detokenize{lattice/generator/elemental.py:279-338}} & 仓库 & \_nD 协变导数与导数链枚举（C4） \\
+\texttt{\detokenize{lattice/quark_contract.py:110-245}} & 仓库 & Wick 收缩符号化引擎（C6） \\
+\texttt{\detokenize{lattice/quark_diagram.py:15-553}} & 仓库 & 图表示、自动下标、化简（C6） \\
+\texttt{\detokenize{lattice/correlator/one_particle.py:12-413}} & 仓库 & 两点函数及其变体（C8） \\
+\texttt{\detokenize{lattice/symmetry/gen_hardcoded_rep.py:14-245}} & 仓库 & 群生成、Wigner 旋转、约化（C7） \\
+\texttt{\detokenize{lattice/symmetry/hardcoded_rep.py:1-11613}} & 仓库 & 硬编码不可约表示库（C7） \\
+\texttt{\detokenize{lattice/symmetry/group_generator.py:5-388}} & 仓库 & 生成元与参考动量表（C7） \\
+\texttt{\detokenize{tests/test_simplify.py:72-367}} & 仓库 & 图化简六例验证（C6） \\
+\texttt{\detokenize{tests/test_quark_contract.py:145-223}} & 仓库 & Wick 收缩验证（C6） \\
+\texttt{\detokenize{example/gen_two_particle_corr_mom.py:48-168}} & 仓库 & 双粒子关联函数端到端示例（C1/C8） \\
+\url{https://arxiv.org/abs/hep-lat/0311018} & 文献 & Morningstar--Peardon: stout 平滑（C3） \\
+\url{https://arxiv.org/abs/0905.2160} & 文献 & Peardon 等: 蒸馏法原始文献（C1） \\
+\url{https://arxiv.org/abs/1607.06738} & 文献 & 两粒子群论基（eq.(4.11)）（C7，代码注释所引） \\
+\bottomrule
+\end{xltabular}
+
+% ================= 6 结论 =================
+\section{结论}
+\begin{conclbox}
+穷尽剖析结论: 核心部分 17 项（\textcolor{accent}{8 深挖} / \textcolor{phys}{5 浅析} /
+\textcolor{warn}{4 排除}），计数闭合。最强竞争力排序:
+(1) \textcolor{algo}{解析 SU(3) 指数化}——蒸馏法工程中平滑算子的教科书级闭式实现，四后端一致；
+(2) \textcolor{algo}{符号化 Wick 收缩 + 图自动 einsum}——把物理表达式到数值收缩的人工环节
+全部自动化，图规范形保证可缓存；(3) \textcolor{phys}{硬编码 $O_h^D$ 群论库}——以 11{,}613 行
+生成数据换取运行期确定性与零构造开销。三者共同支撑"蒸馏法全流程从物理声明到数值结果"的
+端到端自动化，这是本仓库区别于通用线性代数库/单模块格点包的独特竞争力。
+\end{conclbox}
+
+\begin{warnbox}
+未验证/局限: (1) 复杂度结论均为代码结构推导（标注"推断"），仓库无基准测试数据可核验；
+(2) CUDA kernel（\texttt{stout\_smear.cu}）与 numpy 实现的逐符号一致性仅由同源公式保证，
+未见差分测试；(3) 硬编码群论库的生成脚本（\texttt{utils.generate\_hardcoded\_code}）在库中
+无复现入口，数据可信度依赖 `hardcoded\_rep.py` 头部的乘法表校验；(4) 双粒子基构造
+（C10，浅析）仅实现 $J\le 1$ 与 $p^2 \le 9$ 的动量壳，扩展需回归群论生成器；(5) 随机混合
+（blending）与噪声矢量（C13）的统计无偏性无方差分析文档。
+\end{warnbox}
+
+\end{document}

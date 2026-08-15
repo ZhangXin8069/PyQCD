@@ -1,0 +1,184 @@
+task:
+  name: D0_to_K-_3pt_vector_x
+  description: >
+    Three-point correlation function for D0 -> K- semi-leptonic decay via the
+    (c->s) vector current.  D0 meson (c anti-u, gamma_5 interpolator) at the
+    source (t=0), K- meson (s anti-u, gamma_5 interpolator) at the sink
+    (t=tseq=8).  Transition current is bar{s} gamma_x c (spatial x-direction
+    vector, i.e. gamma_1 in DeGrand-Rossi basis).  Point source at [0,0,0,0],
+    all momenta zero.  All propagator inversions use stout-smeared gauge links
+    (1 step, rho=0.125, ndim=4).  Only the three-point function is computed;
+    no two-point functions.
+
+    Sequential source follows the two-dagger convention:
+
+      eta_s^seq(x) = gamma_5 * S_u^dagger(x, t_f=8; 0)
+
+    constructed as a full-timeslice (wall-like) object spanning all spatial
+    points at t=8.  Overall sign convention: minus sign from the single
+    fermion loop in the connected Wick contraction.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: d0_to_K-_3pt_vx
+      type: meson_3pt
+      name: D0 to K- three-point function with vector current gamma_x
+
+  hadrons:
+    - id: D0_source
+      name: D0
+      type: meson
+      flavor: c_anti-u
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_5
+      subtype: source
+    - id: K-_sink
+      name: K-
+      type: meson
+      flavor: s_anti-u
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_5
+      subtype: sink
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+      sink:
+        id: sink_point
+        type: point
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+      sink:
+        id: sink_point
+        type: point
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: sequential
+        source_position: [all, all, all, 8]
+        source_momentum: [0, 0, 0]
+        sequential_source:
+          forward_propagator: prop_l
+          forward_propagator_dagger: true
+          sink_hadron: K-_sink
+          sink_time: 8
+          formula: "eta_s^seq(x) = gamma_5 * S_u^dagger(x, t_f; 0) [two-dagger convention, full timeslice at t=8]"
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+      sink:
+        id: sink_point_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: d0_to_K-_3pt_vx_meas
+      type: meson_3pt
+      propagator:
+        - prop_l
+        - prop_c
+        - prop_s_seq
+      observable: d0_to_K-_3pt_vx
+      source_hadron: D0_source
+      sink_hadron: K-_sink
+      current: bar{s}_gamma_x_c
+      source_time: 0
+      sink_time: 8
+      sign_convention: "overall minus sign from single fermion loop in connected Wick contraction"
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Compute only the three-point function; skip all two-point correlators."
+  - "Plain text output with no headers or extra formatting, saved to run directory."
+  - "All propagator inversions use stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4)."
+  - "Sequential source follows two-dagger convention: eta_s^seq(x) = gamma_5 * S_u^dagger(x, t_f; 0). Constructed as full-timeslice (wall-like) at t=8 spanning all spatial points — NOT a single point source."
+  - "Overall minus sign from single fermion loop; must be consistent with generate_einsum output convention."
+  - "All gamma matrices in DeGrand-Rossi Euclidean basis; gamma_x corresponds to gamma_1."
+  - "Note: no two-point functions computed; normalisation for form-factor extraction requires external 2pt data."
+  - "Note: stout smearing (rho=0.125, n_steps=1) is a light-quark choice; charm-quark signal may be suboptimal but is kept as specified by the user."

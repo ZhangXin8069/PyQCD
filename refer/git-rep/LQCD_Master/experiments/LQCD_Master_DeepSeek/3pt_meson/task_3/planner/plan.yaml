@@ -1,0 +1,265 @@
+task:
+  name: B_to_D_3pt_vector
+  description: >
+    Three-point correlation function for B- → D0 semileptonic decay via b→c vector
+    current. Source: B- meson (anti-u b) with γ5 interpolating operator ūγ5b at t=0.
+    Sink: D0 meson (anti-u c) with γ5 interpolating operator ūγ5c at tseq=8. Current:
+    c̄ γ_x b (spatial vector, x-direction) inserted at all intermediate times τ=1..7.
+    Zero momentum at source and sink (p_i = p_f = 0), zero momentum transfer (q = 0).
+    Point source at [0,0,0,0], stout-smeared gauge links (n=1, ρ=0.125, 4-dim) for
+    all inversions. Sequential source method with two-dagger convention. No 2pt
+    computed. Output raw C3(τ) to txt file.
+    PHYSICS WARNING: spatial vector current γ_x at zero recoil (q=0) vanishes
+    identically for a 0⁻→0⁻ pseudoscalar-to-pseudoscalar transition due to angular
+    momentum / parity selection rules. The three-point function is expected to be
+    consistent with zero modulo statistical noise. For a non-vanishing signal,
+    consider the temporal vector current γ_4 or inject non-zero momentum.
+  task_mode: standard
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+physics:
+  observables:
+  - id: B_to_D_3pt
+    type: meson_3pt
+    name: B- to D0 three-point function via b->c vector current
+  hadrons:
+  - id: B_meson_src
+    name: B-
+    type: meson
+    flavor: anti-u b
+    momentum:
+    - 0
+    - 0
+    - 0
+    interpolating_operator: gamma5
+    subtype: source
+    notes: >
+      Interpolating operator ūγ5b (anti-quark-first convention). Source creation
+      operator is the hermitian conjugate: O_B† = -b̄γ5u, which creates a b quark
+      and an anti-up quark from the vacuum at t=0.
+  - id: D_meson_snk
+    name: D0
+    type: meson
+    flavor: anti-u c
+    momentum:
+    - 0
+    - 0
+    - 0
+    interpolating_operator: gamma5
+    subtype: sink
+    notes: >
+      Interpolating operator ūγ5c (anti-quark-first convention). Sink annihilation
+      operator ūγ5c acts at t=tseq=8 and couples to the sequential source.
+  propagators:
+  - id: prop_l_fwd
+    quark_flavor: light
+    source:
+      source_type: point
+      source_position:
+      - 0
+      - 0
+      - 0
+      - 0
+      source_momentum:
+      - 0
+      - 0
+      - 0
+    gauge_field:
+      stout_link_smear:
+        enabled: true
+        parameters:
+          rho: 0.125
+          n_steps: 1
+          ndim: 4
+    solver:
+      id: solver_light
+      quark_mass: -0.277
+      clover_coefficient: 1.160920226
+      tolerance: 1.0e-12
+      maxiter: 20000
+      notes: >
+        Multigrid-accelerated CG for light quark (up/down). Acts as the spectator
+        quark: propagates from point source at t=0 to all spatial points at t=tseq=8,
+        where it enters the sequential source construction for the D0 sink.
+    sink:
+      id: sink_light_fwd
+      type: point
+  - id: prop_b_fwd
+    quark_flavor: custom
+    source:
+      source_type: point
+      source_position:
+      - 0
+      - 0
+      - 0
+      - 0
+      source_momentum:
+      - 0
+      - 0
+      - 0
+    gauge_field:
+      stout_link_smear:
+        enabled: true
+        parameters:
+          rho: 0.125
+          n_steps: 1
+          ndim: 4
+    solver:
+      id: solver_bottom
+      quark_mass: 1.5
+      clover_coefficient: 1.160920226
+      tolerance: 1.0e-12
+      maxiter: 20000
+      notes: >
+        Standard CG for bottom quark (m=1.5, treated relativistically). The active
+        b-quark propagates from the point source at t=0 to the current insertion at
+        t=τ, where it is annihilated by the c̄γ_x b current. Heavy quark, rapid
+        convergence expected.
+    sink:
+      id: sink_bottom_fwd
+      type: point
+  - id: prop_c_seq
+    quark_flavor: charm
+    source:
+      source_type: sequential
+      source_position:
+      - all
+      - all
+      - all
+      - 8
+      source_momentum:
+      - 0
+      - 0
+      - 0
+      notes: >
+        Sequential source constructed as a spatial WALL (sum over all spatial points)
+        at t=tseq=8 — NOT a point source. For each spatial point z at t=8, the source
+        value is built from the spectator light propagator prop_l_fwd(z,8) and the
+        D0 sink operator (γ5). Two-dagger convention: η_seq(z) = γ5 · [γ5 · S_l(z,8;0,0)]† · γ5.
+        The spatial sum over all z implements zero-momentum sink projection. If this
+        were a single-point sequential source, the correlator would be unprojected
+        and dominated by noise.
+    gauge_field:
+      stout_link_smear:
+        enabled: true
+        parameters:
+          rho: 0.125
+          n_steps: 1
+          ndim: 4
+    solver:
+      id: solver_charm_seq
+      quark_mass: 0.4159
+      clover_coefficient: 1.160920226
+      tolerance: 1.0e-12
+      maxiter: 20000
+      notes: >
+        Standard CG for charm sequential propagator. The sequential source at t=8
+        is inverted to obtain the charm propagator G_c_seq(y,τ) for all y,τ. This
+        propagator effectively runs backward in time from the sink (t=8) to the
+        current insertion (t=τ), where it meets the forward b-propagator via the
+        γ_x vertex.
+    sink:
+      id: sink_charm_seq
+      type: point
+measurement:
+  correlators:
+  - id: B_to_D_3pt_corr
+    type: meson_3pt
+    propagators:
+    - prop_l_fwd
+    - prop_b_fwd
+    - prop_c_seq
+    observable: B_to_D_3pt
+    source_hadron: B_meson_src
+    sink_hadron: D_meson_snk
+    current:
+      operator: \bar{c} \gamma_x b
+      gamma: gx
+      flavor_pair:
+      - charm
+      - bottom
+    sink_time: 8
+    momentum_transfer:
+    - 0
+    - 0
+    - 0
+    notes: >
+      Sequential source method for flavor-changing meson 3pt.
+
+      Wick contraction structure:
+        C3(τ) = Σ_{x,z} ⟨ū(x,8)γ5 c(x,8) · c̄(z,τ)γ_x b(z,τ) · (-b̄(0,0)γ5 u(0,0))⟩
+      Contracts to:
+        C3(τ) = -Σ_{x,z} Tr_spin,color[γ5 S_c(x;z) γ_x S_b(z;0) γ5 S_l(x;0)]
+      where S_l is the spectator light propagator, S_b the forward bottom propagator,
+      and S_c the charm propagator (implemented via sequential source).
+
+      Sequential source construction at t=tseq=8:
+        Sink block:  B(x) = γ5 · S_l(x,8; 0,0)
+        Seq source:  η_seq(x) = γ5 · B†(x) · γ5   (two-dagger convention)
+        Solve:       D_c · G_c_seq = η_seq
+
+      Final contraction at each τ=1..7:
+        C3(τ) = Σ_z Tr_spin,color[ G_c_seq(z,τ) · γ_x · S_b(z,τ; 0,0) ]
+
+      NOTE: If generate_einsum(type="meson_3pt", ...) is not implemented or does
+      not support flavor-changing sequential-source contractions, use the explicit
+      contraction formula above as a fallback. The meson 3pt sink block is
+      structurally simpler than the baryon case (one spectator propagator × γ5
+      rather than two forward propagators forming a diquark).
+
+      No 2pt function computed (per user request).
+
+      WARNING: γ_x at zero recoil (q=0, p_i=p_f=0) vanishes for 0⁻→0⁻. The resulting
+      C3(τ) is expected to be consistent with zero. For a non-vanishing signal,
+      switch to temporal vector current γ_4 or inject non-zero momentum.
+output:
+  format: txt
+  metadata: false
+  notes: >
+    Single .txt file in run directory: 7 space-separated floats (C3(τ=1) through
+    C3(τ=7)), no header or extra text. Real part of the correlator only.
+extras:
+- Sequential source is a spatial WALL at t=tseq=8, NOT a point source. Zero-momentum sink projection requires sum over all spatial points.
+- If generate_einsum lacks meson_3pt support, fall back to explicit contraction: C3(τ) = Σ_z Tr[G_c_seq(z,τ) · γ_x · S_b(z,τ; 0,0)] with spin+color trace.
+- γ_x at zero recoil (q=0) vanishes identically for 0⁻→0⁻ pseudoscalar transition. Expect signal consistent with zero. For physics, recommend γ_4 (temporal vector) or non-zero momentum.
+- Meson interpolator convention: anti-quark first (ūΓQ). Source creation operator O_B† = -b̄γ5u, sink annihilation operator O_D = ūγ5c.
+- Bottom quark mass 1.5 (lattice units) treated relativistically with standard CG; m_b ~ 2.8 GeV at a⁻¹ ≈ 1.88 GeV.
+- Stout smearing (n_steps=1, rho=0.125, ndim=4) applied to all gauge links before Dirac operator inversions.
+- Point source at [0,0,0,0] with no Gaussian/Wuppertal smearing on quark sources.
+- Only 3pt function computed; 2pt explicitly excluded per user instruction.
+- Charm sequential propagator uses charm mass 0.4159 from ensemble.

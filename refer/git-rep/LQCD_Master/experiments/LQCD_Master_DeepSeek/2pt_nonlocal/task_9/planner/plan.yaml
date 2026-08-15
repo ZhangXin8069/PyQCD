@@ -1,0 +1,153 @@
+task:
+  name: Dstar_nonlocal_2pt
+  description: |
+    Compute the nonlocal two-point correlation function of the vector D*+ meson (d_bar c)
+    with a Wilson-line shift applied to the charm quark propagator along the z-direction.
+    Separations range from 0 to 10 lattice units. The vector interpolating operators
+    gamma_x, gamma_y, gamma_z are used for the three polarizations and averaged.
+    A point source is placed at [0,0,0,0] with zero momentum.
+    Dirac inversions use stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4).
+    The Wilson line for the nonlocal shift is constructed from the original (unsmeared)
+    gauge links.
+    Periodic spatial boundary conditions are used for site-index wrapping and Wilson-line
+    products when x_z+Δ ≥ L_z=24: wrap x_z+Δ → (x_z+Δ) mod 24 and include the boundary-
+    crossing gauge link in the Wilson-line product.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: Dstar_nonlocal_2pt
+      type: meson_2pt
+      name: D*+ vector meson nonlocal two-point function
+
+  hadrons:
+    - id: Dstar_plus
+      name: D*+
+      type: meson
+      flavor: d_bar c
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_i
+      subtype: vector_nonlocal
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        solver_type: multigrid
+        multigrid_levels:
+        - [6, 6, 6, 3]
+        - [4, 4, 4, 6]
+      sink:
+        id: sink_l
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        solver_type: cg
+        notes: >
+          If CG fails to converge to 1e-12 on this configuration,
+          increase maxiter or switch to CGNE.
+      sink:
+        id: sink_c
+        type: point
+
+measurement:
+  correlators:
+    - id: Dstar_nonlocal_contr
+      type: meson_2pt
+      hadron: Dstar_plus
+      propagators: [prop_l, prop_c]
+      observable: Dstar_nonlocal_2pt
+      nonlocal:
+        enabled: true
+        direction: z
+        separations: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        apply_to: prop_c
+        wilson_line_gauge: original
+      gamma_polarizations: [gamma_x, gamma_y, gamma_z]
+      average_polarizations: true
+
+output:
+  format: txt
+  metadata: false
+  path: ./Dstar_nonlocal_2pt_result.txt
+
+extras:
+  - "Wilson line for nonlocal shift constructed from original (unsmeared) gauge links; periodic spatial wrapping applied when x_z+Δ ≥ 24"
+  - "Pre-processing step required: for each Δ, compute shifted charm propagator field W(x,x+ẑΔ;t)·S_c(x+ẑΔ,t;0,0) before performing the trace contraction with the light propagator"
+  - "Stout-smeared gauge links used only for Dirac inversions, not for the Wilson-line shift"
+  - "Three vector polarizations (gamma_x, gamma_y, gamma_z) averaged to improve statistics"
+  - "Output contains the real part of C(t,Δ) as space-separated floating-point values, one per line; imaginary part (numerical noise) is discarded"
+  - "Point source at single position [0,0,0,0] on configuration 10000"
+  - "Charm quark solver uses CG; if convergence stalls, increase maxiter or switch to CGNE"

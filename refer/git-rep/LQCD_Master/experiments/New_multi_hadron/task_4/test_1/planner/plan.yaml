@@ -1,0 +1,167 @@
+task:
+  name: three_baryon_local_9q_multihadron_2pt
+  description: Compute the zero-momentum combined three-baryon two-point correlator for the local 9-quark operator ((u^T Cgamma5 d) d) * ((u^T Cgamma5 d) u) * ((u^T Cgamma5 d) s), using single-term baryon operators only, per-baryon P_plus projection, and one non-factorized multi_hadron_2pt contraction.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: three_baryon_9q_2pt
+      type: multi_hadron_2pt
+      name: Combined three-baryon two-point function for a local 9-quark single-term baryon product operator
+
+  hadrons:
+    - id: baryon_n
+      name: neutron_single_term
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cgamma5 d) d
+      subtype: octet_single_term
+    - id: baryon_p
+      name: proton_single_term
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cgamma5 d) u
+      subtype: octet_single_term
+    - id: baryon_uds_single
+      name: uds_single_term
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cgamma5 d) s
+      subtype: single_term_uds
+    - id: three_baryon_operator
+      name: local_9q_three_baryon_operator
+      type: other
+      flavor: u4d4s1
+      momentum: [0, 0, 0]
+      interpolating_operator: ((u^T Cgamma5 d) d) * ((u^T Cgamma5 d) u) * ((u^T Cgamma5 d) s)
+      subtype: local_9q_multibaryon
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_point_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use one light-quark inversion from the common point source and reuse it for all u and d lines by isospin symmetry.
+      sink:
+        id: point_sink_l
+        type: point
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_point_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use one strange-quark inversion from the same point source for the single s line in the uds baryon block.
+      sink:
+        id: point_sink_s
+        type: point
+
+measurement:
+  correlators:
+    - id: multihadron_three_baryon_local_2pt
+      type: multi_hadron_2pt
+      propagator:
+        - prop_l_point
+        - prop_s_point
+      observable: three_baryon_9q_2pt
+      hadron_blocks:
+        - baryon_n
+        - baryon_p
+        - baryon_uds_single
+      source_operator: ((u^T Cgamma5 d) d) * ((u^T Cgamma5 d) u) * ((u^T Cgamma5 d) s)
+      sink_operator: ((u^T Cgamma5 d) d) * ((u^T Cgamma5 d) u) * ((u^T Cgamma5 d) s)
+      projector:
+        type: per_baryon_block
+        value: P_plus
+        expression: (1 + gamma4) / 2
+      contraction_policy: single_combined_multihadron_object
+      factorization: forbidden
+      momentum_projection:
+        total_momentum: [0, 0, 0]
+        baryon_block_momenta:
+          - [0, 0, 0]
+          - [0, 0, 0]
+          - [0, 0, 0]
+      implementation_notes: Construct one multi_hadron_2pt object containing the full Wick contraction of the complete local 9-quark source-sink operator. Do not replace it by a product of separate baryon 2pt correlators. Apply P_plus independently on each baryon block before assembling the full multi-hadron contraction.
+
+output:
+  format: other
+  filename: ./three_baryon_local_9q_multihadron_2pt.txt
+  metadata: true
+
+extras:
+  - save_plain_text_output
+  - launch_request_8_ranks_grid_1_1_2_4
+  - nonfactorized_multihadron_contraction
+  - per_baryon_P_plus_projection
+
+freeform_plan: |

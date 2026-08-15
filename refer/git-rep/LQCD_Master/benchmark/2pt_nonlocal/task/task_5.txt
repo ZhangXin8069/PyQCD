@@ -1,0 +1,7 @@
+Calculate the nonlocal two-point function of a rho meson with a nonlocal shift to a maximum separation of 10 in the z direction.
+Use the point source at position [0,0,0,0].
+Apply the nonlocal shift to the quark propagator, not the antiquark propagator.
+Use the original gauge field for the shift.
+Invert all propagators using stout-smeared gauge links with parameters (1, 0.125, 4).
+Use the vector interpolating operators gamma_x, gamma_y, and gamma_z for the three polarizations, and average them.
+Save the final result without any header or extra text to a txt file in the run directory.

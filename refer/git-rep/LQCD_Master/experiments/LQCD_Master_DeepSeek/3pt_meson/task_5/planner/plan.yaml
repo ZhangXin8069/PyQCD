@@ -1,0 +1,187 @@
+task:
+  name: B_to_pi_3pt
+  description: >
+    Three-point correlation function for B- -> pi- decay via (b->d) vector current.
+    Source: B- meson (anti-u b) with gamma_5 interpolator at t=0, point source [0,0,0,0].
+    Sink: pi- meson (anti-u d) with gamma_5 interpolator at t=tseq=8, zero momentum.
+    Current: \bar{d} gamma_x b (x-component of the vector current).
+    All propagators inverted with stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4).
+    Only the 3pt correlator is computed; no 2pt function.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: B_to_pi_3pt
+      type: meson_3pt
+      name: B- to pi- three-point function via vector current (gamma_x)
+
+  hadrons:
+    - id: B_minus_source
+      name: B_minus
+      type: meson
+      flavor: anti-u b
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_5
+      subtype: source
+    - id: pi_minus_sink
+      name: pi_minus
+      type: meson
+      flavor: anti-u d
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_5
+      subtype: sink
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 5000
+        notes: Multigrid solver for light quark forward propagator
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_b_fwd
+      quark_flavor: bottom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_solver_bottom
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 20000
+        convergence_check: true
+        abort_on_failure: true
+        notes: >
+          CG solver for bottom quark forward propagator. Heavy quark may converge
+          slowly; if residual does not reach tolerance within maxiter, flag the
+          configuration as failed and skip.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential
+        sink_time: 8
+        sink_momentum: [0, 0, 0]
+        spatial_sum: all
+        use_dagger: true
+        parent_propagator: prop_l_fwd
+        sink_hadron: pi_minus_sink
+        notes: >
+          Sequential source spans ALL spatial points at t=8 (NOT a single point).
+          Constructed from the conjugate transpose of prop_l_fwd at the sink time
+          slice, following the two-dagger convention:
+          B(x) = S_l(x, t_f; 0, 0)  (forward propagator at sink),
+          eta_seq(x) = gamma_5 B^dagger(x) gamma_5 = gamma_5 S_l^dagger(x, t_f; 0, 0) gamma_5.
+          The sink gamma_5 enters through this construction and cancels in the
+          final trace via gamma_5-hermiticity identities.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light_seq
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 5000
+        notes: Multigrid solver for light quark sequential propagator
+      sink:
+        id: sink_point_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: B_to_pi_3pt_corr
+      type: meson_3pt
+      propagator: prop_l_seq
+      observable: B_to_pi_3pt
+      current:
+        gamma: gamma_x
+        flavor_pair: [d, b]
+      forward_propagator: prop_b_fwd
+      source_hadron: B_minus_source
+      sink_hadron: pi_minus_sink
+      tseq: 8
+      tsrc: 0
+      notes: >
+        The three-point contraction carries an overall minus sign from the single
+        closed fermion loop. The code generator (generate_einsum, type="meson_3pt")
+        must handle this sign. If meson_3pt is not yet implemented in the generator,
+        fall back to the manual trace:
+        C3(tau) = -sum_{z} Tr[ G_l_seq(z, tau) gamma_x S_b(z, tau) ].
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Do not compute any two-point function; only the three-point correlator is required."
+  - "Output raw correlator values as plain text, one value per current-insertion time slice, with no header or metadata."
+  - "The three-point contraction has an overall minus sign from the single closed fermion loop; this is handled by the code generator."
+  - "Sequential source is constructed from S_l^dagger at the sink time slice t=8, spanning all spatial points (zero-momentum projection), following the two-dagger convention eta_seq = gamma_5 B^dagger gamma_5."
+  - "Bottom quark CG solver: check residual against tolerance (1e-10) after solve; if convergence fails, flag configuration and skip to avoid silent 3pt data corruption."
+  - "This is a single-configuration prototype (cfg 10000); statistical averaging over multiple configurations and source smearing would be needed for a physics-grade form factor extraction."

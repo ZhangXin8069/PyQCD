@@ -1,0 +1,123 @@
+task:
+  name: wilson_loop_R3_T2_xt_yt_zt_average
+  description: Compute the rectangular Wilson loop W(R=3,T=2), average equally over the XT, YT, and ZT planes, and write the final scalar result as plain text with no header or extra text to a txt file in the run directory.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wl_r3_t2_avg
+      type: wilsonloop
+      name: Rectangular Wilson loop W(R=3,T=2) averaged over XT, YT, and ZT planes
+
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - pure-gauge
+  - wilson-loop
+  - average-over-XT-YT-ZT
+  - plain-text-output
+  - rank0-write
+
+freeform_plan: |
+  Physics goal:
+  Measure the gauge-invariant rectangular Wilson loop W(R=3,T=2) using gauge links only, compute it separately in the XT, YT, and ZT planes, and report the equal-weight average of those three plane values. This is a pure-gauge observable: no quark propagators, Dirac solves, fermion inversions, or baryon/meson correlators enter the calculation.
+
+  Observable definition:
+  For each plane mu-T with mu in {X, Y, Z}, define the rectangular path
+  +mu,+mu,+mu,+T,+T,-mu,-mu,-mu,-T,-T.
+  At each lattice site x, evaluate the ordered product of gauge links around this closed loop, take ReTr divided by Nc=3, and average over all lattice sites. Denote the three normalized plane averages by
+  W_XT(3,2), W_YT(3,2), and W_ZT(3,2).
+  The reported observable is
+  W_avg(3,2) = [W_XT(3,2) + W_YT(3,2) + W_ZT(3,2)] / 3.
+
+  Scope and use of ensemble information:
+  The ensemble block is preserved exactly from the provided fixed configuration for consistency. However, for this pure-gauge measurement, fermion-specific entries there (such as quark masses, clover, multigrid, and fermionic temporal boundary conditions) are non-operative provenance only and must not affect execution logic. The Wilson-loop construction itself depends only on the gauge field and the lattice dimensions. Gauge-link periodicity is assumed in the loop construction.
+
+  Numerical implementation:
+  1. Initialize PyQUDA with lattice dimensions [24,24,24,72].
+  2. Preferred MPI execution mode: use process grid [1,1,1,4] as recorded in the ensemble block.
+  3. Allowed fallback execution mode: if running on a single rank, initialize with process grid [1,1,1,1] and use the same measurement logic without MPI gathering across ranks.
+  4. Load the gauge configuration from the provided cfg_path template for cfg 10000.
+  5. Move the gauge field to device memory.
+  6. Do not apply stout, APE, HYP, or Wilson-flow smearing; use the original gauge links directly, since the task requests W(R=3,T=2) and does not request smeared links.
+  7. Build the three loop paths exactly as:
+     - XT: [X, X, X, T, T, -X, -X, -X, -T, -T]
+     - YT: [Y, Y, Y, T, T, -Y, -Y, -Y, -T, -T]
+     - ZT: [Z, Z, Z, T, T, -Z, -Z, -Z, -T, -T]
+  8. Call gauge.loop() using exactly four outer groups as required by PyQUDA. Use, for example,
+     [[path_XT], [path_YT], [path_ZT], [path_XT]] with weights [1, 1, 1, 0].
+     The fourth group is dummy padding only and must carry zero weight.
+
+  Reduction and normalization chain:
+  For each of the first three returned loop fields corresponding to XT, YT, and ZT:
+  1. Transfer the LatticeLink field to host memory with getHost().
+  2. Reshape only for trace extraction to a flat list of Nc x Nc matrices, compute the per-site real trace, then restore/reshape that real per-site field to the exact local even-odd lattice layout required by core.gatherLattice:
+     local_shape = (2, Lt_local, Lz_local, Ly_local, Lx_local_over_2),
+     consistent with the active process grid.
+  3. If running with multiple MPI ranks, pass this lattice-shaped real field to core.gatherLattice(..., [-1, -1, -1, -1]) and sum the returned global field on rank 0.
+  4. If running on a single rank, sum the local lattice field directly with no MPI gather.
+  5. Normalize each plane result by total_sites * Nc, where total_sites = 24*24*24*72 and Nc=3.
+  6. Form the final average W_avg(3,2) = (W_XT + W_YT + W_ZT)/3.
+
+  Minimal correctness checks:
+  - Record W_XT, W_YT, and W_ZT in program variables before the final average.
+  - Verify that each plane value and the final average are finite numbers.
+  - Verify that the final normalized Wilson loop lies in the physically sensible range [-1, 1].
+  - These checks are for runtime validation only; they do not change the required output format.
+
+  Output convention:
+  - Write exactly one txt file in the run directory, defined operationally as the current working directory from which the job/script is launched.
+  - Write on rank 0 only in MPI mode.
+  - Use a deterministic filename in that directory: wilson_loop_R3_T2_avg_cfg10000.txt.
+  - The file content must be exactly one numeric line and nothing else: no header, no labels, no comments, no YAML, and no metadata block.
+  - Use fixed scientific notation for reproducibility, for example format "%.16e\n".
+
+  Engineering notes:
+  - This is intentionally a freeform pure-gauge task, so the hadrons/propagators/correlators sections remain empty.
+  - The task is a single-configuration measurement for cfg 10000 under the provided ensemble block, but the physics observable itself is the generic rectangular Wilson loop average over XT/YT/ZT.
+  - Rank-0-only writing avoids duplicate txt files in MPI runs.

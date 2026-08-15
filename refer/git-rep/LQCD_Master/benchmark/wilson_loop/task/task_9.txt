@@ -1,0 +1,5 @@
+Compute the rectangular Wilson loop W(R=3,T=3).
+Average over XT, YT, and ZT planes. 
+Pure-gauge measurement only: load gauge links and compute Wilson loops. No quark propagators, Dirac solvers, or fermion inversions.
+Do NOT apply any stout smearing or other gauge link smearing. Use the original unsmeared gauge links directly.
+Save the final result without any header or extra text to a txt file in the run directory.

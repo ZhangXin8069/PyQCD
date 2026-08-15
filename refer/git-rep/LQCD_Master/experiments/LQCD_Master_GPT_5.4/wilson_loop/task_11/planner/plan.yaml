@@ -1,0 +1,121 @@
+task:
+  name: wilson_loop_R4_T1_xt_yt_zt_average
+  description: Compute the rectangular Wilson loop W(R=4,T=1) from gauge links only, average over the XT, YT, and ZT planes, and save the final averaged value as plain text without header or extra text in the run directory.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wilson_loop_R4_T1
+      type: wilsonloop
+      name: Rectangular Wilson loop W(R=4,T=1) averaged over XT, YT, and ZT planes
+
+  hadrons: []
+
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - pure_gauge_only
+  - average_xt_yt_zt
+  - global_sum_then_normalize
+  - rank0_plain_text_output
+
+freeform_plan: |
+  Physical objective:
+  Measure the pure-gauge rectangular Wilson loop W(R=4,T=1) using only the loaded gauge links, and average the result over the XT, YT, and ZT planes. No quark propagators, Dirac solvers, source construction, or fermion inversions enter this task.
+
+  Gauge-only scope and relevance of ensemble metadata:
+  - The ensemble block is retained for configuration consistency and file location.
+  - This observable uses only the gauge field read from cfg_path.
+  - Fermion-specific ensemble entries such as quark masses, clover coefficient, multigrid setup, and fermion temporal boundary conditions are not used in the measurement itself.
+  - In particular, the listed temporal anti-periodic boundary condition is not an input to the Wilson-loop evaluation; only the gauge links on the periodic lattice are traversed to form a closed loop.
+
+  Observable definition:
+  For each spatial-temporal plane mu-T with mu in {X, Y, Z}, define the rectangular closed path of spatial extent R=4 and temporal extent T=1:
+    forward mu x4 -> forward T x1 -> backward mu x4 -> backward T x1.
+  For each plane, compute
+    W_muT(4,1) = (1 / (Nc * V)) * sum_x ReTr U_loop(x; mu,T; R=4,T=1),
+  where V is the total number of lattice sites and Nc is the number of colors obtained from the loaded gauge object.
+  The final requested observable is
+    W_avg(4,1) = (W_XT(4,1) + W_YT(4,1) + W_ZT(4,1)) / 3.
+
+  Numerical implementation steps:
+  1. Initialize the gauge-measurement runtime with lattice dimensions [24,24,24,72] and MPI process grid [1,1,1,4].
+  2. Read configuration 10000 from
+       /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+     with n_cfg=10000.
+  3. Move the gauge field to device memory if using PyQUDA GPU execution.
+  4. Do not apply link smearing; measure on the original loaded gauge links.
+  5. Obtain Nc from the loaded gauge object/library metadata rather than assuming it implicitly in prose.
+  6. Build the three active Wilson-loop paths exactly as:
+       path_XT = [X, X, X, X, T, -X, -X, -X, -X, -T]
+       path_YT = [Y, Y, Y, Y, T, -Y, -Y, -Y, -Y, -T]
+       path_ZT = [Z, Z, Z, Z, T, -Z, -Z, -Z, -Z, -T]
+  7. Pack the paths for gauge.loop() using exactly four outer groups as required by PyQUDA:
+       groups  = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+       weights = [1, 1, 1, 0]
+     Under this packing, returned groups 0, 1, and 2 are the active XT, YT, and ZT measurements respectively, while group 3 is a zero-weight padding entry and must not contribute to the final average.
+  8. For each active returned field i in {0,1,2}:
+       - transfer the field to host,
+       - reshape to (-1, Nc, Nc),
+       - compute the per-site real trace ReTr,
+       - form the local unnormalized sum S_i_local = sum_sites_local ReTr.
+     Do not first normalize to a local average.
+  9. Perform MPI reduction on these sums to obtain global unnormalized sums S_i_global for i in {0,1,2}. The mathematically correct normalization is then
+       W_i = S_i_global / (Nc * V),
+     with V = 24 * 24 * 24 * 72.
+     This avoids ambiguity associated with averaging per-rank local averages.
+  10. Form the final average
+        W_avg = (W_0 + W_1 + W_2) / 3,
+      where W_0, W_1, W_2 correspond to XT, YT, ZT respectively.
+  11. On MPI rank 0 only, write the final scalar to the run-directory file
+        wilson_loop_R4_T1_cfg10000.txt
+      as plain text containing exactly one floating-point number and a trailing newline. Scientific notation is allowed. No header, label, units, or additional text are permitted.
+
+  Output contract:
+  - Output file path: ./wilson_loop_R4_T1_cfg10000.txt
+  - Writer: rank 0 only
+  - File contents: one scalar value W_avg(4,1) serialized as plain numeric text, optionally in scientific notation, followed by a newline.
+
+  Minimal correctness checks:
+  - Verify only groups 0, 1, and 2 are used in the final average.
+  - Verify the zero-weight padded group 3 is ignored.
+  - Verify normalization uses the full lattice volume and Nc from the gauge object.
+  - Verify no fermion-related code path is initialized or called.

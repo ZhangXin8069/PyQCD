@@ -1,0 +1,140 @@
+task:
+  name: D_s_meson_2pt
+  description: >
+    Two-point correlation function of the D_s^+ meson (pseudoscalar, c \bar{s})
+    at zero momentum.  Uses a single point source at [0,0,0,0].  All Dirac inversions
+    employ stout-smeared gauge links with (n_steps=1, rho=0.125, ndim=4).
+    The final correlator C(t) = Tr[prop_s_dag @ prop_c] is written as a plain
+    text file (one value per time slice, no header).
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: ds_2pt
+      type: meson_2pt
+      name: D_s pseudoscalar two-point function
+
+  hadrons:
+    - id: ds_meson
+      name: D_s
+      type: meson
+      flavor: c anti-s
+      momentum: [0, 0, 0]
+      interpolating_operator: "\\bar{s} \\gamma_5 c"
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_s
+      quark_flavor: strange
+      role: antiquark
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_s
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      role: quark
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_c
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: ds_corr
+      type: meson_2pt
+      quark: prop_c
+      antiquark: prop_s
+      propagators: [prop_c, prop_s]
+      observable: ds_2pt
+      notes: >
+        The D_s^+ meson has quark content c \bar{s}: quark = charm (prop_c),
+        antiquark = strange (prop_s).  Wick contraction yields
+        C(t) = Tr[S_s(0;x) \gamma_5 S_c(x;0) \gamma_5].
+        Applying \gamma_5-hermiticity S_s(0;x) = \gamma_5 S_s^\dagger(x;0) \gamma_5
+        and cyclicity of the trace eliminates the \gamma_5 factors, giving
+        C(t) = Tr[prop_s^\dagger @ prop_c].
+        The dagger must be on the strange (antiquark) propagator, not the charm one.
+        The generate_einsum call should use quark='c', antiquark='s'.
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Single point source at [0,0,0,0]; correlator summed over sink spatial volume at each time slice."
+  - "Output: 72 floating-point values (one per time slice, t=0..71) written as plain text with no header."
+  - "Both propagators use the same stout-smeared gauge field (n_steps=1, rho=0.125, ndim=4)."
+  - "No disconnected diagrams (flavour non-singlet D_s^+)."
+  - "Contraction: Tr[prop_s_dag @ prop_c], with dagger on the antiquark (strange) propagator."

@@ -1,0 +1,6 @@
+Calculate the two-point function of an Omega_{cc} baryon (scc).
+Use the point source at position [0,0,0,0].
+Invert all propagators using stout-smeared gauge links with parameters (1, 0.125, 4).
+Use the Cg5(=C@gamma_5) for the sc diquark.
+Use the projector Tmat = (I + gamma_t) / 2, to extract the positive parity channel.
+Save the final result without any header or extra text to a txt file in the run directory.

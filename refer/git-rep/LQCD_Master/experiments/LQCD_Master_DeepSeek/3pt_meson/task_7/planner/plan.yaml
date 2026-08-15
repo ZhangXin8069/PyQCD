@@ -1,0 +1,198 @@
+task:
+  name: B_to_Kstar_3pt
+  description: >
+    Three-point correlation function for B- to K*- transition via b→s vector current.
+    Source: B- meson (anti-u, b) creation operator O_B⁻† placed at t=0 via
+    standard PyQUDA 3pt convention (interpolating_operator specifies the
+    annihilation operator; the executor automatically conjugates).
+    Sink: K*- meson (anti-u, s) annihilation operator with gamma_x at t=8.
+    Current insertion: bar{s} gamma_x b at intermediate Euclidean time tau.
+    Point source at [0,0,0,0] for all forward propagators, zero momentum.
+    Stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4).
+    Only the 3pt correlator is computed; no 2pt functions.
+    Sequential source for the strange quark is constructed at t_sink=8
+    from prop_l_fwd on the full spatial volume via the two-dagger convention.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num: ['10000']
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions: [24, 24, 24, 72]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: b_to_kstar_3pt
+      type: meson_3pt
+      name: B_to_Kstar_transition_3pt
+
+  hadrons:
+    - id: B_minus_src
+      name: B_minus_source
+      type: meson
+      flavor: anti-u_b
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_5
+      role: source
+      notes: >
+        gamma_5 specifies the annihilation operator O_B⁻ = anti-b gamma_5 u.
+        Per standard PyQUDA 3pt convention, the creation operator
+        O_B⁻† = -anti-u gamma_5 b is automatically placed at the source
+        time slice t=0. The flavor label 'anti-u_b' describes the
+        quark–antiquark content of the meson.
+    - id: Kstar_minus_snk
+      name: Kstar_minus_sink
+      type: meson
+      flavor: anti-u_s
+      momentum: [0, 0, 0]
+      interpolating_operator: gamma_x
+      role: sink
+      notes: >
+        gamma_x specifies the annihilation operator O_K*⁻ = anti-s gamma_x u
+        at the sink. The anti-u spectator quark contracts with the light
+        propagator from the source; the anti-s quark contracts with the
+        sequential strange propagator.
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_l
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: >
+          Light quark forward propagator with multigrid preconditioner.
+          Acts as the spectator anti-u quark from source to sink.
+      sink:
+        id: sink_l
+        type: point
+    - id: prop_b_fwd
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_b
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 50000
+        notes: >
+          Bottom quark forward propagator. Heavy mass am_b=1.5 with a≈0.105 fm
+          is at the limit of clover-fermion validity; discretisation errors
+          O((am)²)≈2.25 are significant. maxiter raised to 50000 to accommodate
+          slow CG convergence. A residual-norm check after each solve is
+          recommended to detect non-convergence.
+      sink:
+        id: sink_b
+        type: point
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_s_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: >
+          Strange quark SEQUENTIAL propagator — not a point source. Constructed
+          via the standard two-dagger convention: the sink block B is built
+          from prop_l_fwd evaluated on the full spatial volume at t_sink=8,
+          contracted with the K* sink operator gamma_x, and summed over all
+          spatial x (zero-momentum projection). The sequential source is
+          η = γ₅ B† γ₅, placed at t=0 on the full spatial volume. Solving
+          D_s G_seq = η yields the sequential propagator that carries the
+          strange quark from the effective sink to all current insertion
+          points (z,τ). This construction provides volume averaging over
+          the sink spatial position and is NOT a single-point sink.
+      sink:
+        id: sink_s_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: b_to_kstar_3pt_corr
+      type: meson_3pt
+      propagator: prop_s_seq
+      observable: b_to_kstar_3pt
+      source_hadron: B_minus_src
+      sink_hadron: Kstar_minus_snk
+      forward_propagators: [prop_l_fwd, prop_b_fwd]
+      current: "bar{s} gamma_x b"
+      current_gamma: gamma_x
+      t_sink: 8
+      contraction_method: generate_einsum
+      notes: >
+        Contraction performed by generate_einsum for meson_3pt with
+        pseudoscalar source (gamma_5), vector sink (gamma_x), and vector
+        current (gamma_x). The tool determines all spin-color contraction
+        signs automatically; no manual sign is specified. prop_l_fwd is
+        needed only for sequential-source construction and does not appear
+        in the final trace. The final trace contracts prop_s_seq (sequential,
+        strange) at (z,τ) with the current gamma_x and prop_b_fwd (bottom)
+        at (z,τ). Current insertion times τ = 1,…,7 exclude contact terms
+        at τ=0 and τ=t_sink=8.
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Sequential source for prop_s_seq is NOT a point source. It is constructed from prop_l_fwd on the full spatial volume at t=8 using the K* sink operator gamma_x and the two-dagger convention (η = γ₅ B† γ₅). After time translation the sequential source lives at t=0 on all spatial sites, giving volume-averaged sink statistics."
+  - "Source operator convention: the interpolating_operator field specifies the annihilation operator. The executor automatically places the creation operator O† at the source time slice (standard PyQUDA 3pt convention)."
+  - "Three-point correlator C_3(tau) computed for current insertion times tau = 1,...,7, excluding contact terms at tau=0 and tau=8."
+  - "No 2pt functions computed per explicit user request."
+  - "Result saved as plain text file with one C_3 value per line, no headers or metadata."
+  - "Stout smearing applied to all gauge links with rho=0.125, n_steps=1, ndim=4."
+  - "WARNING: Bottom quark mass am_b=1.5 (a≈0.105 fm) is at the edge of clover-fermion reliability. Discretisation errors O((am)²)≈2.25 are uncontrolled. For production use, consider a relativistic heavy-quark (Fermilab) action or NRQCD. maxiter raised to 50000 with recommended residual-norm check."
+  - "WARNING: Only one polarization (gamma_x) is computed for the K* sink and vector current, as requested. The standard practice averages over gamma_1, gamma_2, gamma_3 for better statistics and rotational-symmetry cross-checks."
+  - "Contraction sign is determined by generate_einsum tool at runtime; no manual sign specification is used in the plan."

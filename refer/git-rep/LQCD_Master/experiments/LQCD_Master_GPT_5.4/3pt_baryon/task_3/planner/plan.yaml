@@ -1,0 +1,281 @@
+task:
+  name: lambda_lambda_vector_ss_gamma_x_3pt_full
+  description: Compute the zero-momentum Lambda-to-Lambda three-point correlation function with the local strange vector current J_x = sbar gamma_x s using the Lambda interpolating operator epsilon^{abc}(u^{Ta} Cgamma5 d^b) s^c at both source and sink, the explicit positive-parity projector Tmat = (I + gamma_t)/2, point source at [0, 0, 0, 0], and source-sink separation tseq = 8. Use stout-smeared gauge links with parameters (n_steps=1, rho=0.125, ndim=4) for all valence inversions. Do not compute or save any standalone two-point function. Measure the full flavor-diagonal three-point function as connected plus disconnected contributions, while noting that for p_i = p_f = 0 with the unpolarized projector Tmat this gamma_x channel is a symmetry-suppressed rest-frame diagnostic correlator rather than a nonzero charge-like matrix element.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_lambda_ss_vec_x_3pt_full
+      type: baryon_3pt
+      name: Full Lambda to Lambda strange vector-current three-point function with gamma_x at zero momentum
+    - id: lambda_lambda_ss_vec_x_3pt_connected
+      type: baryon_3pt
+      name: Connected strange-line Lambda to Lambda three-point function with gamma_x
+    - id: lambda_lambda_ss_vec_x_3pt_disconnected
+      type: custom
+      name: Disconnected strange-loop contribution to Lambda to Lambda gamma_x three-point function
+
+  hadrons:
+    - id: lambda_src
+      name: Lambda
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} Cgamma5 d^b) s^c
+      subtype: octet_baryon
+    - id: lambda_snk
+      name: Lambda
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} Cgamma5 d^b) s^c
+      subtype: octet_baryon
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use xi_0=1.0, anisotropy=1.0, multigrid [[6,6,6,3],[4,4,4,6]], and anti-periodic temporal boundary condition.
+      sink:
+        id: sink_forward_light
+        type: point
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use the fixed-configuration strange valence mass m_s=-0.2356 together with xi_0=1.0, anisotropy=1.0, multigrid [[6,6,6,3],[4,4,4,6]], and anti-periodic temporal boundary condition.
+      sink:
+        id: sink_forward_strange
+        type: point
+    - id: prop_s_seq_t8
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential inversion on the strange line. Build the Lambda sink block from the two spectator light propagators and the explicit projector Tmat=(I+gamma_t)/2, apply the first dagger gamma5 B^dagger gamma5, construct the sequential12 source at tseq=8, invert with the strange Dirac operator on stout-smeared links, then apply the second dagger to obtain the final sequential strange propagator.
+      sink:
+        id: sink_seq_strange_t8
+        type: other
+    - id: prop_s_loop_stoch
+      quark_flavor: strange
+      source:
+        source_type: volume
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_loop
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Estimate the disconnected strange loop Tr[gamma_x S_s(x,x)] with stochastic volume-source inversions on the same stout-smeared valence operator. Use an unbiased noise estimator with dilution or a variance-reduction scheme appropriate to the available implementation. The loop is combined with the Lambda baryon two-point contraction internally to form the disconnected three-point contribution, but no standalone two-point correlator is saved.
+      sink:
+        id: sink_loop_strange_gamma_x
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_lambda_lambda_ss_gamma_x_t8_connected
+      type: baryon_3pt
+      propagator: prop_s_seq_t8
+      observable: lambda_lambda_ss_vec_x_3pt_connected
+      source_hadron: lambda_src
+      sink_hadron: lambda_snk
+      current:
+        flavor_structure: sbar gamma_x s
+        gamma: gamma_x
+        insertion_quark_line: strange
+      projector:
+        name: Tmat
+        expression: (I + gamma_t) / 2
+      kinematics:
+        source_momentum: [0, 0, 0]
+        sink_momentum: [0, 0, 0]
+        momentum_transfer: [0, 0, 0]
+        tseq: 8
+      contraction_strategy:
+        method: sequential_source
+        sequential_flavor: strange
+        spectator_propagators:
+          - prop_l_point
+          - prop_l_point
+        current_propagator: prop_s_point
+        implementation_notes:
+          - Use the Lambda source and sink flavor structure [u, d, s] with the current acting on the strange line only.
+          - Keep the sink projector explicit as Tmat=(I+gamma_t)/2 in the contraction algebra; do not reinterpret the observable as a spin-polarized form-factor extraction.
+          - Sum spatial sites at zero momentum and retain insertion times 1 through 7.
+          - This connected piece is only one part of the full flavor-diagonal sbar gamma_x s correlator.
+    - id: c3_lambda_lambda_ss_gamma_x_t8_disconnected
+      type: other
+      propagator: prop_s_loop_stoch
+      observable: lambda_lambda_ss_vec_x_3pt_disconnected
+      source_hadron: lambda_src
+      sink_hadron: lambda_snk
+      current:
+        flavor_structure: sbar gamma_x s
+        gamma: gamma_x
+        insertion_quark_line: disconnected_strange_loop
+      projector:
+        name: Tmat
+        expression: (I + gamma_t) / 2
+      kinematics:
+        source_momentum: [0, 0, 0]
+        sink_momentum: [0, 0, 0]
+        momentum_transfer: [0, 0, 0]
+        tseq: 8
+      contraction_strategy:
+        method: baryon_block_times_loop
+        baryon_block_propagators:
+          - prop_l_point
+          - prop_l_point
+          - prop_s_point
+        loop_propagator: prop_s_loop_stoch
+        implementation_notes:
+          - Form the Lambda two-point baryon block with the same source, sink operator, and Tmat projector, but use it only as an internal factor multiplying the strange loop insertion; do not output a separate two-point correlator.
+          - Estimate the local strange loop with gamma_x at all insertion times and contract it with the baryon block on each configuration.
+          - If an ensemble-average vacuum subtraction is implemented, subtract <Tr[gamma_x S_s(x,x)]> from the loop before combination; otherwise save the raw disconnected estimator and document that subtraction must be completed at analysis stage.
+          - Sum spatial sites at zero momentum and retain insertion times 1 through 7.
+    - id: c3_lambda_lambda_ss_gamma_x_t8_full
+      type: other
+      propagator: prop_s_seq_t8
+      observable: lambda_lambda_ss_vec_x_3pt_full
+      source_hadron: lambda_src
+      sink_hadron: lambda_snk
+      current:
+        flavor_structure: sbar gamma_x s
+        gamma: gamma_x
+        insertion_quark_line: full_strange_current
+      projector:
+        name: Tmat
+        expression: (I + gamma_t) / 2
+      kinematics:
+        source_momentum: [0, 0, 0]
+        sink_momentum: [0, 0, 0]
+        momentum_transfer: [0, 0, 0]
+        tseq: 8
+      contraction_strategy:
+        method: sum_connected_and_disconnected
+        components:
+          - c3_lambda_lambda_ss_gamma_x_t8_connected
+          - c3_lambda_lambda_ss_gamma_x_t8_disconnected
+        implementation_notes:
+          - The saved final correlator is the per-timeslice sum of the connected and disconnected contributions.
+          - Because p_i=p_f=0 and the projector is unpolarized positive parity only, this gamma_x correlator is expected to be symmetry-suppressed and should be interpreted as a diagnostic rest-frame three-point function, not as a nonzero strange charge extraction.
+
+output:
+  format: other
+  metadata: false
+  filename: c3_lambda_lambda_ss_gamma_x_tseq8_cfg10000.txt
+  layout:
+    columns:
+      - contribution_id
+      - t_seq
+      - t_ins
+      - real
+      - imag
+    contribution_encoding:
+      connected: 0
+      disconnected: 1
+      full: 2
+    header: false
+    directory: .
+
+extras:
+  - baryon_3pt
+  - connected_plus_disconnected
+  - zero_momentum
+  - positive_parity
+  - txt_output_only
+
+freeform_plan: |
+  Not used because this is a standard hadronic correlator task.

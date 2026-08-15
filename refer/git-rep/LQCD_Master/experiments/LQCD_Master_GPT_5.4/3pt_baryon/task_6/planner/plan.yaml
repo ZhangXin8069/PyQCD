@@ -1,0 +1,229 @@
+task:
+  name: Lambda_c_to_Lambda_vector_3pt
+  description: Compute the zero-spatial-momentum baryon three-point correlation function for the Lambda_c+ -> Lambda transition with source operator epsilon^{abc}(u^T Cgamma5 d)c, sink operator epsilon^{abc}(u^T Cgamma5 d)s, inserted vector current sbar gamma_x c, positive-parity sink projector Tmat = (I + gamma_t)/2, point source at [0, 0, 0, 0], tseq = 8, and stout-smeared gauge links for every valence inversion. Only the 3pt correlator is written to a plain txt file in the run directory. This setup has p_i = p_f = 0 and therefore zero spatial momentum transfer, but it does not imply zero four-momentum transfer because m_Lambda_c != m_Lambda.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  category: matrix_element
+  observables:
+    - id: lambda_c_lambda_c3_vx
+      type: baryon_3pt
+      name: Lambda_c_to_Lambda_vector_current_gamma_x_3pt
+      transition: Lambda_c+ -> Lambda
+      current: sbar gamma_x c
+      projector: P_plus
+      momentum_initial: [0, 0, 0]
+      momentum_final: [0, 0, 0]
+      momentum_transfer_spatial: [0, 0, 0]
+      kinematic_note: Spatial momentum transfer is zero, but the physical four-momentum transfer is not fixed to zero because the initial and final baryon masses differ.
+      tseq: 8
+      connected_only: true
+
+  hadrons:
+    - id: lambda_c_src
+      name: Lambda_c+
+      type: baryon
+      subtype: charmed_baryon
+      flavor: udc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} Cgamma5 d^b)c^c
+    - id: lambda_snk
+      name: Lambda
+      type: baryon
+      subtype: strange_baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} Cgamma5 d^b)s^c
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      propagator_kind: forward
+      role: spectator_u_and_d_lines
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Invert the light stout-smeared clover operator from the point source. The same forward light propagator is reused for both u and d spectator lines by isospin symmetry.
+      sink:
+        id: sink_all_to_all_from_point
+        type: point
+    - id: prop_c_fwd
+      quark_flavor: charm
+      propagator_kind: forward
+      role: current_incoming_line_from_Lambda_c_source
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use the same stout-smeared clover valence operator for the charm solve. Heavy-quark discretization and any charm tuning for this exact stout-smeared operator must be regarded as external assumptions; if they are not independently validated on this ensemble, the output is a smoke-test/debug correlator rather than a controlled physics result.
+      sink:
+        id: sink_all_to_all_from_point_charm
+        type: point
+    - id: prop_s_seq
+      quark_flavor: strange
+      propagator_kind: sequential
+      role: open_sink_leg_after_c_to_s_current
+      source:
+        source_type: sink_sequential_block
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      sequential_source:
+        sink_hadron: lambda_snk
+        sink_momentum: [0, 0, 0]
+        sink_projector: P_plus
+        sink_projector_matrix: (I + gamma_t) / 2
+        tseq: 8
+        open_leg_flavor: strange
+        sink_block_inputs:
+          - prop_l_fwd
+          - prop_l_fwd
+        sink_block_definition: Build the Lambda sink block on the full t = tseq timeslice using the two light spectator propagators, zero-momentum projection, and Tmat = (I + gamma_t) / 2 acting on the sink baryon spin index.
+        first_dagger_convention: gamma5_Bdag_gamma5
+        sequential_source_definition: eta_seq = source.sequential12(gamma5 B^dagger gamma5, tseq)
+        second_dagger_output: G_s_seq_dag
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Invert the strange stout-smeared clover operator on the fixed-sink sequential source. This is not a point-source inversion. The listed valence mass and cSW are assumed to define the same stout-smeared clover action used for the forward solves; if that tuning is not established for this ensemble, treat the result as executable but not production-quality.
+      sink:
+        id: sequential_sink_lambda_positive_parity
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_lambda_c_to_lambda_vx
+      type: baryon_3pt
+      propagator: prop_s_seq
+      propagators_used:
+        - prop_l_fwd
+        - prop_c_fwd
+        - prop_s_seq
+      observable: lambda_c_lambda_c3_vx
+      source_hadron: lambda_c_src
+      sink_hadron: lambda_snk
+      contraction_strategy: sequential_source
+      current_quark: charm
+      current_antiquark: strange
+      current_gamma: gamma_x
+      projector: P_plus
+      projector_matrix: (I + gamma_t) / 2
+      projector_application: Apply the positive-parity projector only in the sink block before the sequential inversion; the remaining open Dirac indices are closed in the final trace after the second dagger.
+      diquark_gamma_src: Cg5
+      diquark_gamma_snk: Cg5
+      c_gamma_src: I4
+      c_gamma_snk: I4
+      tseq: 8
+      source_position: [0, 0, 0, 0]
+      momentum_initial: [0, 0, 0]
+      momentum_final: [0, 0, 0]
+      momentum_transfer_spatial: [0, 0, 0]
+      insertion_time_range:
+        start: 1
+        stop: 7
+      implementation_notes:
+        - Build the Lambda sink block from two light forward propagators only; the strange quark is the open sink leg created by the current.
+        - Multiply the sink block by the zero-momentum phase and the sink projector Tmat = (I + gamma_t) / 2 at t = tseq.
+        - Apply the first dagger gamma5 B^dagger gamma5 before constructing the strange sequential source.
+        - Invert the strange Dirac operator on that fixed-sink sequential source.
+        - Apply the second dagger to obtain G_s_seq_dag with the standard two-dagger convention.
+        - Form the transition correlator as the spatial sum of Tr[G_s_seq_dag(z,0) gamma_x S_c(z,0)] at each insertion time.
+        - Write the correlator for t_ins = 1,...,7 only; do not generate or save any 2pt correlator.
+        - Even though no 2pt files are requested, require solver-residual checks for light, charm, and sequential strange solves and a basic nonzero/finite correlator sanity check on rank 0.
+        - With a single configuration and point source, treat the output as an executable correlator sample, not a statistically controlled matrix-element determination.
+
+output:
+  format: other
+  file_extension: txt
+  metadata: false
+  filename: lambda_c_to_lambda_c3_vx_cfg10000_tseq8.txt
+  location: run_directory
+  row_definition:
+    - t_seq
+    - t_ins
+    - real_part
+    - imag_part
+  header: none
+  extra_text: none
+
+extras:
+  - use generate_einsum with type baryon_3pt for the contraction code
+  - treat p_i = p_f = 0 as zero spatial momentum only, not zero four-momentum transfer
+  - save only rank-0 txt output
+
+freeform_plan: |
+  Not used because this is a standard hadronic three-point-function task.

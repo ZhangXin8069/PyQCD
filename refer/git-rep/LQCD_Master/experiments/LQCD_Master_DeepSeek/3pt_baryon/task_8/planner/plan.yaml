@@ -1,0 +1,236 @@
+task:
+  name: Lambda_b_to_Lambda_c_3pt
+  description: >
+    Three-point correlation function for Lambda_b → Lambda_c+ decay via b→c vector current.
+    Source operator: ε^{abc} (u^a Cγ₅ d^b) b^c for Lambda_b.
+    Sink operator: ε^{abc} (u^a Cγ₅ d^b) c^c for Lambda_c+.
+    Inserted current: \bar{c} γ_x b (spatial vector, x-direction).
+    Parity projector: T = (I + γ₄)/2 applied at the sink.
+    Point source at [0,0,0,0], zero momentum, sink timeslice t_seq=8.
+    Stout-smeared gauge links (n_step=1, ρ=0.125, ndim=4) used for all inversions.
+    Only the 3pt correlator is computed; no 2pt function.
+    NOTE: Exactly ONE Wick-contraction topology exists for this channel (unlike Λ→p).
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: Lambda_b_to_Lambda_c_Vx
+      type: baryon_3pt
+      name: Lambda_b_to_Lambda_c_vector_current_3pt
+      description: >
+        Three-point function C₃(τ) = ⟨Λ_c(t_f=8) | \bar{c} γ_x b (τ) | Λ_b(0)⟩
+        with positive-parity projector T = (I+γ₄)/2.
+        Exactly one Wick-contraction topology — the current's b and \bar{c}
+        each have unique partners at source (b) and sink (c).
+
+  hadrons:
+    - id: Lambda_b
+      name: Lambda_b
+      type: baryon
+      flavor: udb
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^a Cγ₅ d^b) b^c
+      diquark_gamma: Cg5
+      heavy_quark: b
+      subtype: source
+    - id: Lambda_c
+      name: Lambda_c_plus
+      type: baryon
+      flavor: udc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^a Cγ₅ d^b) c^c
+      diquark_gamma: Cg5
+      heavy_quark: c
+      subtype: sink
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        multigrid:
+          enabled: true
+          levels:
+            - block: [6, 6, 6, 3]
+            - block: [4, 4, 4, 6]
+        notes: Multigrid-accelerated solver for light quarks (u,d).
+      sink:
+        id: sink_point
+        type: point
+      notes: >
+        Forward light-quark propagator (u,d lines) from point source at t=0.
+        Used to construct the sequential source at the Λ_c sink (t=8).
+
+    - id: prop_b_fwd
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_bottom
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 20000
+        notes: Standard CG solver for bottom quark (multigrid ineffective at very large mass).
+      sink:
+        id: sink_point
+        type: point
+      notes: >
+        Forward bottom-quark propagator from point source at t=0.
+        Contracted directly with the sequential charm propagator and current insertion
+        in the final 3pt contraction — not used to build the sequential source.
+
+    - id: prop_c_seq
+      quark_flavor: charm
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+        sequential_source:
+          sink_hadron: Lambda_c
+          sink_timeslice: 8
+          sink_momentum: [0, 0, 0]
+          projector: (I + gamma_4) / 2
+          forward_propagators: [prop_l_fwd]
+          diquark_gamma: Cg5
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 15000
+        notes: CG solver for charm sequential propagator.
+      sink:
+        id: sink_point_seq
+        type: point
+      notes: >
+        Sequential charm-quark propagator G_c^seq solved from the Λ_c sink at t=8.
+        The sequential source η^seq = γ₅ B† γ₅ is constructed at the sink timeslice
+        using the forward light propagators (prop_l_fwd) contracted into the Λ_c sink
+        operator with projector T=(I+γ₄)/2. The source_position time coordinate [8]
+        reflects the sink timeslice where the sequential source lives.
+        WARNING: do NOT interpret the time coordinate as t=0 — the sequential
+        inversion runs backward from t=8 to the current insertion.
+
+measurement:
+  correlators:
+    - id: Lambda_b_to_Lambda_c_3pt_corr
+      type: baryon_3pt
+      propagator: prop_c_seq
+      observable: Lambda_b_to_Lambda_c_Vx
+      source_hadron: Lambda_b
+      sink_hadron: Lambda_c
+      current:
+        gamma: gamma_x
+        quark: b
+        antiquark: c
+        constructor: "Current('b','c','gamma1')"
+        description: >
+          \bar{c} γ_x b — vector current in the x-direction.
+          Encoded as Current('b','c','gamma1') following the convention
+          that Current(quark, antiquark, gamma) yields \bar{antiquark} γ quark.
+          Do NOT invert the flavor arguments — Current('c','b','gamma1') would
+          give the Hermitian conjugate \bar{b} γ_x c.
+      sink_timeslice: 8
+      source_timeslice: 0
+      projector: (I + gamma_4) / 2
+      forward_propagators: [prop_l_fwd, prop_b_fwd]
+      sequential_propagator: prop_c_seq
+      momentum_transfer: [0, 0, 0]
+      notes: >
+        Final contraction: C₃(τ) = Σ_z Tr[G_c^seq(z,τ) γ_x S_b(z,τ; 0,0)]
+        with projector T=(I+γ₄)/2 applied at the sink.
+        Current insertion time τ runs from 0 to 8.
+        G_c^seq(z,τ) is the sequential charm propagator from the sink at t=8
+        to the current insertion point (z,τ). S_b(z,τ; 0,0) is the forward
+        bottom propagator from the point source at t=0.
+
+        Wick-contraction topology: EXACTLY ONE — the current's b field
+        contracts with the unique b at the source, and \bar{c} contracts
+        with the unique c at the sink. Unlike the Λ→p case (where the
+        proton sink has two u quarks and the current contains \bar{u},
+        giving two topologies), here each quark flavor appears only once.
+
+output:
+  format: txt
+  metadata: false
+  filename: Lambda_b_to_Lambda_c_3pt_corr.txt
+  description: Raw 3pt correlator values, one per current insertion time τ, no header.
+
+extras:
+  - "No 2pt function computed."
+  - "Parity projector T = (I + gamma_4) / 2 applied at sink."
+  - "Current insertion: \bar{c} γ_x b (spatial vector, x-direction), encoded as Current('b','c','gamma1')."
+  - "Exactly ONE Wick-contraction topology (b↔b unique, c↔\bar{c} unique)."
+  - "Sequential source constructed at sink timeslice t=8 via two-dagger convention: η^seq = γ₅ B† γ₅."
+  - "All propagators inverted using stout-smeared links (1 step, ρ=0.125, 4-dim)."
+  - "Zero momentum transfer (q²=0). For full form-factor extraction, additional non-zero momenta are needed."

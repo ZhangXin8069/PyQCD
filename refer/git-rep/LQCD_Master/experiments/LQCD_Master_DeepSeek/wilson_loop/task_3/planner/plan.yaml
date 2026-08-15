@@ -1,0 +1,131 @@
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+task:
+  name: wilson_loop_rectangular_R2T1
+  description: Compute rectangular Wilson loop W(R=2,T=1) averaged over XT, YT, and ZT planes using unsmeared gauge links. Pure-gauge measurement only. Save the single numerical result to wl_R2T1_cfg10000.txt.
+  task_mode: freeform
+
+physics:
+  observables:
+    - id: wl_r2t1
+      type: wilsonloop
+      name: Rectangular Wilson loop W(R=2,T=1)
+
+  hadrons: []
+
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - No gauge link smearing applied; use original unsmeared gauge links directly
+  - Average over three spatial-temporal planes (XT, YT, ZT) for improved statistics
+  - Single configuration measurement (cfg 10000); single-value output to wl_R2T1_cfg10000.txt
+  - Fermion-only ensemble parameters (quark_mass, clover, multigrid) are irrelevant to this pure-gauge measurement and are not used
+
+freeform_plan: |
+  # Physics Objective
+
+  Compute the rectangular Wilson loop W(R=2, T=1) as a pure-gauge observable
+  directly from the gauge links, with no quark propagators, Dirac solvers, or
+  fermion inversions involved. The Wilson loop is defined as:
+
+    W_{munu}(R,T) = (1/N_c) Re Tr P[
+      forward mu (R) -> forward nu (T) -> backward mu (R) -> backward nu (T)
+    ]
+
+  with N_c = 3. The measurement is performed on a single gauge configuration
+  (cfg 10000) from the C24P29 ensemble: 24^3 x 72 lattice, beta = 6.20,
+  a = 0.1052 fm, periodic spatial BC and anti-periodic temporal BC.
+
+  Note: The ensemble block contains fermion-specific parameters (quark_mass,
+  clover, multigrid) that are irrelevant to this pure-gauge measurement.
+  They are retained for configuration provenance only and are not used.
+
+  # Planes to average
+
+  Three spatial-temporal planes are measured and averaged:
+    - XT plane: path = [X, X, T, -X, -X, -T]
+    - YT plane: path = [Y, Y, T, -Y, -Y, -T]
+    - ZT plane: path = [Z, Z, T, -Z, -Z, -T]
+
+  # Smearing policy
+
+  No stout, APE, HYP, or any other gauge link smearing is applied.
+  The original unsmeared gauge links are used directly.
+
+  # Computational steps
+
+  1. Initialize PyQUDA: core.init(grid_size=[1,1,1,4], latt_size=[24,24,24,72])
+  2. Load the gauge configuration via io.readChromaQIOGauge(cfg_path)
+  3. Transfer the gauge field to the GPU device
+  4. Construct path lists for XT, YT, and ZT planes with R=2, T=1
+  5. Call gauge.loop() with exactly 4 outer groups:
+     groups = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+     weights = [1, 1, 1, 0]
+     The fourth group is a dummy required by PyQUDA's API; its weight is zero.
+  6. For each of the first 3 result groups (i = 0,1,2):
+     - Transfer to CPU: U = res[i].getHost()
+     - Reshape: U.reshape(-1, N_c, N_c) with N_c = 3
+     - Compute per-site ReTr: np.trace(U, axis1=-2, axis2=-1).real
+     - Sum the three plane contributions and divide by 3 for the average
+  7. Reshape the averaged per-rank field for MPI gather.
+     The grid is [1,1,1,4] (4-way split in t), so each rank holds:
+       local_shape = (2, Lt//grid[3], Lz, Ly, Lx//grid[0]//2)
+                = (2, 72//4, 24, 24, 24//1//2)
+                = (2, 18, 24, 24, 12)
+     field = re_tr_avg.reshape(local_shape)
+  8. MPI gather: global_sum = core.gatherLattice(field, [-1,-1,-1,-1])
+     This sums all local contributions to rank 0.
+  9. On rank 0:
+     total_sites = 24 * 24 * 24 * 72 = 995328
+     W = float(global_sum.sum()) / (total_sites * N_c)
+  10. Write W as a single floating-point number to wl_R2T1_cfg10000.txt
+      in the current run directory, with no header, labels, or extra text.
+
+  # Output specification
+
+  File: wl_R2T1_cfg10000.txt
+  Content: a single line containing the computed Wilson loop value, e.g. "0.847362\n".
+  No metadata, no headers, no labels.

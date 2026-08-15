@@ -1,0 +1,41 @@
+workflow:
+  executor_static_check_rounds: 1
+  executor_dynamic_test_rounds: 1
+
+script:
+  shell: /bin/bash
+
+slurm:
+  partition: kshdexclu16
+  nodes: 1
+  gres: dcu:4
+  exclude: f17r3n00
+  ntasks_per_node: 4
+  ntasks_per_socket: 1
+  exclusive: true
+  array: "10000-10850:50"
+
+ensemble:
+  preset: C24P29
+  cfg_num: ["10000"]
+
+runtime:
+  module_purge: true
+  modules:
+    - apps/git/2.30.2
+    - compiler/cmake/3.23.3
+    - compiler/gnu/9.3.0
+    - compiler/intel/2017.5.239
+    - mpi/hpcx/2.11.0/intel-2017.5.239
+    - compiler/dtk/25.04.4
+  exports:
+    CUPY_INSTALL_USE_HIP: "1"
+    HCC_AMDGPU_TARGET: gfx906
+    CC: clang
+    CXX: clang++
+    HIPCXX: dcc
+    QUDA_PATH: /public/home/xywangsjtu/Config_PyQUDA/Build-USQCD-SciDAC/scidac/install/quda-mpi-gfx906
+  activate: source /public/home/xywangsjtu/Config_PyQUDA/zmh-2604/bin/activate
+  resource_path: ~/.cache
+  launch_mpi: mpirun
+  launch_python: python3

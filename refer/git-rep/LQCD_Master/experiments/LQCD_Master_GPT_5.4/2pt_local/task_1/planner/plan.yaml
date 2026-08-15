@@ -1,0 +1,94 @@
+task:
+  name: pion_local_2pt_ubar_g5_d_point_source_C24P29
+  description: Compute the zero-momentum local pseudoscalar meson two-point correlator built from the exact requested operator O(x)=\bar{u}(x) gamma_5 d(x), using a single point source at [0, 0, 0, 0]. Perform the light-quark inversion with the ensemble Clover valence operator on a stout-smeared copy of the gauge field with parameters n_steps=1, rho=0.125, ndim=4, and save the final correlator to a plain txt file in the run directory with no header or extra text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: pion_2pt_ubar_g5_d
+      type: meson_2pt
+      name: local pseudoscalar two-point correlator for O=\bar{u} gamma_5 d
+
+  hadrons:
+    - id: pion_ubar_d_channel
+      name: pion-like pseudoscalar meson in the exact \bar{u}d flavor channel
+      type: meson
+      flavor: anti-up down pseudoscalar bilinear
+      momentum: [0, 0, 0]
+      interpolating_operator: "O(x) = \\bar{u}(x) gamma_5 d(x), with O^dagger used at the source"
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_light_point_src
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_solver_stout
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Ensemble-consistent Clover valence solve on a stout-smeared gauge copy. Reuse one light propagator for both u and d lines only under the explicit assumption of degenerate light valence masses and identical boundary conditions on this ensemble; if that assumption is not valid, separate u and d solves are required. Verify solver convergence before contraction/output.
+      sink:
+        id: local_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: pion_2pt_measurement
+      type: meson_2pt
+      propagator: prop_light_point_src
+      observable: pion_2pt_ubar_g5_d
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - exact codegen mapping must use antiquark=u quark=d gamma_snk=gamma5 gamma_src=gamma5
+  - zero-momentum projection by spatial sum at sink
+  - write run-directory file pion_2pt_ubar_g5_d_cfg10000.txt with exactly columns t Re Im and no header
+  - only rank 0 writes output after solver convergence is checked
+
+freeform_plan: |

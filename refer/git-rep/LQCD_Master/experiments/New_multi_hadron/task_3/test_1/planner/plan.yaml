@@ -1,0 +1,148 @@
+task:
+  name: local_two_baryon_multihadron_2pt_point_src
+  description: Compute a single local combined two-baryon two-point correlator for the operator [epsilon^{abc}(u^{Ta} Cgamma_5 d^b) u^c][epsilon^{def}(u^{Td} Cgamma_5 d^e) s^f] at source and sink, using one multi_hadron_2pt contraction object with positive-parity projection applied separately to each baryon block.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: dibaryon_p_lambda_local_2pt
+      type: multi_hadron_2pt
+      name: Local proton-Lambda single-object two-baryon correlator at zero momentum
+
+  hadrons:
+    - id: proton_block
+      name: proton
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} Cgamma_5 d^b) u^c
+      subtype: single_term_local_block
+    - id: lambda_block
+      name: lambda_single_term
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} Cgamma_5 d^b) s^c
+      subtype: single_term_local_block
+    - id: two_baryon_operator
+      name: proton_times_lambda_single_site
+      type: other
+      flavor: uud_uds
+      momentum: [0, 0, 0]
+      interpolating_operator: '[epsilon^{abc}(u^{Ta} Cgamma_5 d^b) u^c][epsilon^{def}(u^{Td} Cgamma_5 d^e) s^f]'
+      subtype: local_two_baryon_product_operator
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Reuse this single forward light propagator for all u and d lines by isospin symmetry.
+      sink:
+        id: point_sink_l
+        type: point
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward strange propagator from the same point source and same stout-smeared gauge links.
+      sink:
+        id: point_sink_s
+        type: point
+
+measurement:
+  correlators:
+    - id: multihadron_proton_lambda_2pt
+      type: multi_hadron_2pt
+      propagator: prop_l_point
+      observable: dibaryon_p_lambda_local_2pt
+      source_operator: two_baryon_operator
+      sink_operator: two_baryon_operator
+      propagators_required:
+        - prop_l_point
+        - prop_s_point
+      baryon_blocks:
+        - baryon_id: proton_block
+          projector: P_plus
+          projector_expression: (1 + gamma_4)/2
+        - baryon_id: lambda_block
+          projector: P_plus
+          projector_expression: (1 + gamma_4)/2
+      contraction_layout:
+        single_object: true
+        factorized_product: false
+
+output:
+  format: other
+  metadata: true
+
+extras:
+  - Treat the explicit operator as a local 6-quark two-baryon operator despite the original 9-quark wording.
+  - Use one combined multi_hadron_2pt contraction, not a product of separate baryon 2pt correlators.
+  - Apply P_plus on each baryon block individually before forming the combined correlator.
+  - Run with 8 MPI ranks and grid_size [1, 1, 2, 4] on 2 nodes x 4 GPUs.
+  - Save the correlator as a plain text txt file in the run directory.
+
+freeform_plan: |

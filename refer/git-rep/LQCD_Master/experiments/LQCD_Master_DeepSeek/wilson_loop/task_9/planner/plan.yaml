@@ -1,0 +1,136 @@
+task:
+  name: wilson_loop_R3_T3_plane_averaged
+  description: >
+    Compute rectangular Wilson loop W(R=3,T=3) averaged over XT, YT, and ZT planes
+    using unsmeared gauge links. Pure-gauge measurement, no fermion propagators.
+    Result saved as a single float value to a plain text file.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wl_R3_T3
+      type: wilsonloop
+      name: Wilson loop W(R=3,T=3) plane-averaged
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators:
+    - id: wl_measurement
+      type: other
+      observable: wl_R3_T3
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Pure-gauge measurement: no quark propagators, Dirac solvers, or fermion inversions required."
+  - "No link smearing applied; unsmeared gauge links used directly."
+  - "Three-plane average (XT, YT, ZT) for improved statistics."
+  - "Single float written to output txt file with no header or extra text."
+
+freeform_plan: |
+  # Physics Objective
+  Compute the rectangular Wilson loop W(R=3, T=3) as a pure-gauge observable
+  to probe the static quark-antiquark potential at separation R=3a ≈ 0.316 fm
+  on the C24P29 ensemble (24^3×72, a≈0.1052 fm).
+
+  # Observable Definition
+  The Wilson loop is defined as:
+    W_{μν}(R,T) = (1/Nc) Re Tr P[∏ U_μ ... ∏ U_ν ... ∏ U_μ^† ... ∏ U_ν^† ...]
+  with the closed rectangular path:
+    R steps along μ → T steps along ν → R steps along -μ → T steps along -ν.
+
+  For R=3, T=3, compute on three spatial-temporal planes:
+    - XT plane: path = [X,X,X, T,T,T, -X,-X,-X, -T,-T,-T]
+    - YT plane: path = [Y,Y,Y, T,T,T, -Y,-Y,-Y, -T,-T,-T]
+    - ZT plane: path = [Z,Z,Z, T,T,T, -Z,-Z,-Z, -T,-T,-T]
+
+  Average the per-site ReTr over the three planes for better statistics.
+
+  # Required Imports
+  from pyquda_utils import core, io
+  from pyquda_utils.core import X, Y, Z, T
+
+  # Computational Strategy
+  1. Initialize PyQUDA with grid_size=[1,1,1,4] and latt_size=[24,24,24,72].
+  2. Load a single gauge configuration (cfg 10000) using io.readChromaQIOGauge().
+  3. Transfer gauge links to GPU via gauge.toDevice().
+  4. Do NOT apply any stout/APE/HYP smearing — use unsmeared links directly.
+  5. Construct the three Wilson loop paths as lists of direction constants.
+  6. Call gauge.loop() with exactly 4 groups. PyQUDA requires 4 outer groups
+     regardless of how many planes are active. Pad to 4 groups by repeating
+     one of the active paths with weight 0:
+       groups = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+       weights = [1, 1, 1, 0]
+     The 4th group (path_XT repeated) is a dummy — it is computed but excluded
+     from the average because its weight is 0.
+  7. For each of the first 3 active results (i=0,1,2), extract per-site ReTr:
+     - Transfer LatticeLink to host: U = res[i].getHost()
+     - Reshape to (N_sites, Nc, Nc): U_flat = U.reshape(-1, 3, 3)
+     - Compute trace over color, take real part: re_tr = np.trace(U_flat, axis1=-2, axis2=-1).real
+  8. Average the three per-site ReTr arrays element-wise:
+       re_tr_avg = (re_tr[0] + re_tr[1] + re_tr[2]) / 3.0
+  9. Perform MPI gather. Before calling core.gatherLattice(), reshape the
+     averaged per-site ReTr into the local lattice layout expected by PyQUDA:
+       grid = core.getGridSize()  # [1,1,1,4]
+       local_shape = (2, latt_size[3] // grid[3], latt_size[2],
+                      latt_size[1], (latt_size[0] // grid[0]) // 2)
+       # = (2, 72//4=18, 24, 24, (24//1)//2=12) = (2, 18, 24, 24, 12)
+       field = re_tr_avg.reshape(local_shape)
+       global_sum = core.gatherLattice(field, [-1, -1, -1, -1])
+     This shape is essential: (2, Lt_local, Lz, Ly, Lx_local//2) matches
+     PyQUDA's internal even-odd + local lattice layout. An incorrect shape
+     will cause a shape mismatch error or silently wrong global sum.
+  10. Compute global average on rank 0:
+        total_sites = latt_size[0] * latt_size[1] * latt_size[2] * latt_size[3]
+        W_val = float(global_sum.sum()) / (total_sites * Nc)
+  11. On rank 0, write the single float value to a plain text file
+      (e.g., "wl_R3_T3_result.txt") with no header or extra text.
+
+  # Physical Interpretation
+  At large T, -log<W(R,T)>/T → V(R), the static potential.
+  This single (R=3,T=3) measurement contributes one data point
+  toward extracting the potential V(R=3a) and the string tension.
+
+  # Output
+  A single plain text file containing one float (the plane-averaged W(R=3,T=3)).

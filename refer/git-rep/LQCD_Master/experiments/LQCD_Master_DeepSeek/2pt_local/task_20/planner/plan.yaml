@@ -1,0 +1,144 @@
+task:
+  name: omega_cc_two_point
+  description: >
+    Compute the two-point correlation function of the Ω_{cc} baryon (scc, JP=1/2+)
+    using a point source at [0,0,0,0] with stout-smeared gauge links
+    (n_steps=1, rho=0.125, ndim=4). The interpolating operator uses an sc diquark
+    with Cγ_5 (Cg5) structure; full antisymmetrization of the two identical
+    charm quarks is restored by the sum of direct and exchange Wick contractions.
+    The positive-parity channel is projected with Tmat = (1+γ_4)/2. Results are
+    saved to a plain text file without headers in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: omega_cc_mass
+      type: baryon_2pt
+      name: Omega_cc two-point correlator
+
+  hadrons:
+    - id: omega_cc
+      name: Omega_cc
+      type: baryon
+      flavor: scc
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (s^{Ta} C gamma_5 c^b) c^c"
+      subtype: positive_parity
+      diquark_structure: Cg5
+      diquark_flavors: [s, c]
+      spectator_flavor: c
+      projector: "(1 + gamma_4) / 2"
+
+  propagators:
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_s
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+      sink:
+        id: sink_point_s
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_c
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 4000
+      sink:
+        id: sink_point_c
+        type: point
+
+measurement:
+  correlators:
+    - id: omega_cc_2pt
+      type: baryon_2pt
+      propagators: [prop_s, prop_c]
+      quark_lines:
+        a: prop_s
+        b: prop_c
+        c: prop_c
+      observable: omega_cc_mass
+      hadron: omega_cc
+      einsum_type: baryon_2pt
+
+output:
+  format: txt
+  metadata: false
+  filename: omega_cc_2pt_cfg10000.txt
+
+extras:
+  - "Point source at a single space-time location yields one statistical sample per configuration"
+  - "Gaussian/Wuppertal source smearing (recommended for baryon spectroscopy per lqcd-physics-correlator skill) is not used; this may degrade ground-state overlap and statistical precision"
+  - "Stout smearing ρ=0.125 is marginally above the conventional range (0.08–0.12) but with only 1 step the over-smearing risk is negligible; kept per user specification"
+  - "Strange quark mass: -0.2356 from ensemble metadata; configuration filename uses ms=-0.2400 — verify against production κ value before running"
+  - "Charm solver: tolerance relaxed to 1e-10 and maxiter increased to 4000 because multigrid near-null-space structure is tuned for light/strange quarks and may stall on heavy charm"
+  - "sc-diquark operator ε^{abc}(s^{Ta}Cγ₅c^b)c^c: the direct+exchange Wick contraction sum restores overall antisymmetry of the two charm quarks; the cc-diquark form ε^{abc}(c^{Ta}Cγ₅c^b)s^c is an alternative with potentially better ground-state overlap"
+  - "Non-degenerate baryon quark-line mapping: line 'a' (strange)→prop_s; lines 'b','c' (charm)→prop_c — the standard proton (uud) template cannot be reused blindly"
+  - "Cg5 diquark (Cγ₅) produces a scalar diquark, yielding JP=1/2+ for Ω_{cc}; positive-parity projector (1+γ₄)/2 isolates the ground state"
+  - "Only one configuration (cfg 10000); multiple configurations require looping over cfg_num and accumulating statistics"

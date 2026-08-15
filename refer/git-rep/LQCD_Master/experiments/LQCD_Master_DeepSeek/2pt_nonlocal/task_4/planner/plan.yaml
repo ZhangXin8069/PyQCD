@@ -1,0 +1,167 @@
+task:
+  name: etac_nonlocal_2pt
+  description: >
+    Compute the nonlocal two-point correlation function of the η_c meson
+    with spatial separation z = 0 to 10 in the +z direction. The nonlocal
+    shift is applied to the charm quark (c) propagator via a straight Wilson
+    line built from the original unsmeared gauge links. The charm antiquark
+    (c̄) remains at the origin. A single point source at [0,0,0,0] is used.
+    Stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4) are used
+    exclusively for the Dirac inverter. The original gauge field is
+    deep-copied before smearing so that the Wilson line is constructed from
+    genuinely unsmeared links, not from the smeared field.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: etac_nonlocal_2pt
+      type: nonlocal_meson_2pt
+      name: "η_c nonlocal two-point function (z=0..10)"
+
+  hadrons:
+    - id: etac
+      name: "η_c"
+      type: meson
+      flavor: "charm-anticharm (c c̄)"
+      momentum: [0, 0, 0]
+      interpolating_operator: >
+        Sink (nonlocal, time t): O_snk(z,t) = c̄(0,t) γ_5 W(0,z;t) c(z,t);
+        Source (local, time 0):   O_src = c̄(0) γ_5 c(0)
+      subtype: "pseudoscalar, nonlocal sink — straight Wilson line on charm quark leg"
+
+  propagators:
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+        notes: >
+          Dual-gauge strategy — CRITICAL for correctness:
+          (1) After loading the gauge configuration, deep-copy the gauge
+              field to a separate variable gauge_original BEFORE any smearing.
+          (2) Apply gauge.stoutSmear(n_steps=1, rho=0.125, ndim=4) to the
+              active gauge field — this smeared field is used ONLY by the
+              Dirac operator during the CG inverter.
+          (3) Keep gauge_original on device (GPU) alongside the smeared
+              field; it will be used exclusively for building the straight
+              Wilson line W(0,z;t) in the measurement phase.
+          Failure to copy before smearing will cause the Wilson line to be
+          built from smeared links, violating the user instruction and
+          corrupting the bare quasi-DA.
+      solver:
+        id: charm_inverter
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1e-12
+        maxiter: 20000
+        notes: "CG inverter with two-level multigrid preconditioner; uses stout-smeared gauge links"
+      sink:
+        id: sink_nonlocal_z
+        type: other
+        notes: >
+          The forward charm propagator S_c(x; src=[0,0,0,0]) from a single
+          point-source inversion is reused for all z. At measurement time,
+          for each z the propagator data at spatial position (0,0,z,t) is
+          extracted (color-sink index contracted with the Wilson line).
+          No sink smearing is applied.
+
+measurement:
+  correlators:
+    - id: etac_nonlocal_corr
+      type: nonlocal_meson_2pt
+      propagator: prop_c
+      observable: etac_nonlocal_2pt
+      notes: >
+        For each z ∈ {0,1,…,10} and each time slice t ∈ [0,71]:
+
+        (1) Extract S_c(z,t) ≡ S_c(x=(0,0,z), t; src=[0,0,0,0]),
+            shape (Nc, Nc, 4, 4) ≡ (color_sink, color_src, spin_sink, spin_src).
+
+        (2) Extract S_c†(0,t) ≡ S_c†(x=(0,0,0), t; src=[0,0,0,0]), same shape.
+
+        (3) Construct the straight Wilson line from ORIGINAL unsmeared links:
+            W(0,z;t) = ∏_{k=0}^{z-1} U_z(x=0, y=0, z=k, t)
+            where U_z is the +z gauge link from gauge_original at each
+            intermediate site. W is an Nc×Nc color matrix. For z=0, W = I.
+
+        (4) Color-contract W with the left (sink) color index of S_c(z,t),
+            then perform a spin trace against S_c†(0,t):
+
+            C(z;t) = Σ_{α,β}  W^{ab} · S_c^{bc}_{αβ}(z,t) · S_c†^{ca}_{βα}(0,t)
+
+            where a,b,c are color indices and α,β are spin indices.
+
+            Equivalent einsum notation:
+              C(z;t) = einsum('ab, bcxy, cayx ->', W, S_c_z, S_c_dag_0)
+
+            The output is a complex scalar per (z,t). At z=0 (W=I) this
+            reduces to Tr_{spin,color}[S_c†(0,t) S_c(0,t)], the standard
+            local η_c two-point function.
+
+        NOTE: This is NOT a standard meson_2pt contraction (which would
+        compute Tr[S† S] with only gamma-matrix insertion). The nonlocal
+        type signals that a Wilson line color factor must be included.
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "nonlocal_shift_direction: +z [0,0,1]"
+  - "nonlocal_shift_range: z = 0 to 10 (inclusive, 11 values)"
+  - "nonlocal_shift_apply_to: charm quark (c) propagator only; antiquark (c̄) at origin"
+  - "wilson_line_gauge: original unsmeared links (gauge_original), straight path along +z"
+  - "wilson_line_construction: W(0,z;t) = ∏_{k=0}^{z-1} U_z(x=0,y=0,z=k,t) from gauge_original; path-ordered left-to-right"
+  - "gauge_copy_procedure: gauge_original = gauge.deep_copy() BEFORE gauge.stoutSmear(); keep both on GPU"
+  - "stout_smear_for_inverter_only: n_steps=1, rho=0.125, ndim=4; smeared links never touch Wilson line"
+  - "source_position: [0,0,0,0] (single point source)"
+  - "output_file: etac_nonlocal_2pt_z0-10.txt (raw complex numbers, no header)"
+  - "contraction_einsum: einsum('ab, bcxy, cayx ->', W, S_c_z, S_c_dag_0) — color contract then spin trace"
+  - "risk_gauge_mismatch: propagator lives in smeared gauge; Wilson line in original gauge — gauge covariance of product W·S_c is broken without gauge fixing; affects quasi-DA renormalization and matching"
+  - "risk_single_config: single point source on cfg 10000 → no statistical sampling; result dominated by single gauge fluctuation"

@@ -1,0 +1,151 @@
+task:
+  name: D0_to_Kst_minus_vector_3pt
+  description: Compute the D0 -> K*- meson three-point correlation function with source interpolator gamma_5, sink interpolator gamma_x, and transition current sbar gamma_x c at zero momentum using a point source at [0,0,0,0] and tseq = 8; use stout-smeared gauge links for all inversions and write the final correlator values to a plain txt file in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: d0_kst_vec_x_3pt
+      type: meson_3pt
+      name: D0_to_Kst_minus_vector_current_gamma_x
+
+  hadrons:
+    - id: d0_src
+      name: D0
+      type: meson
+      flavor: anti-u c
+      momentum: [0, 0, 0]
+      interpolating_operator: c_bar gamma_5 u
+      subtype: pseudoscalar
+    - id: kst_minus_snk
+      name: K*- 
+      type: meson
+      flavor: anti-u s
+      momentum: [0, 0, 0]
+      interpolating_operator: s_bar gamma_x u
+      subtype: vector
+
+  propagators:
+    - id: prop_light_u
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light_clover
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward spectator light propagator from the common source; use ensemble anti-periodic temporal boundary condition.
+      sink:
+        id: point_sink_light
+        type: point
+
+    - id: prop_charm_fwd
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm_clover
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward charm propagator from the source for the c quark in the D0.
+      sink:
+        id: point_sink_charm
+        type: point
+
+    - id: prop_strange_seq
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_strange_seq_clover
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Strange sequential propagator built from the K*- sink operator s_bar gamma_x u at tseq = 8 and zero sink momentum, using the forward light spectator line in the sequential source construction.
+      sink:
+        id: point_sink_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: corr_d0_to_kst_vec_x_3pt
+      type: meson_3pt
+      propagator: prop_strange_seq
+      observable: d0_kst_vec_x_3pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - no_2pt_measurement
+  - zero_source_and_sink_momentum
+  - sink_time_separation_8
+  - plain_txt_output_in_run_directory
+  - generate_mesonic_3pt_contraction_via_executor_toolchain
+
+freeform_plan: |

@@ -1,0 +1,121 @@
+task:
+  name: omega_c0_baryon_2pt_point_source
+  description: Compute a single-configuration zero-momentum two-point correlator for the singly charmed ssc baryon in the user-specified local operator channel epsilon^{abc}(s^{Ta} C gamma_x s^b)c^c, using a point source at [0, 0, 0, 0], stout-smeared links for all inversions with parameters (n_steps=1, rho=0.125, ndim=4), and the positive-parity projector Tmat=(I+gamma_t)/2. This run is a debug/smoke-test correlator generation on cfg 10000, not a production spectroscopy determination of the physical spectrum.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions: [24, 24, 24, 72]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: omega_c0_2pt
+      type: baryon_2pt
+      name: User-specified ssc baryon positive-parity two-point correlator in the Cg1 diquark channel
+
+  hadrons:
+    - id: omega_c0
+      name: Omega_c0
+      type: baryon
+      flavor: ssc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (s^{Ta} C gamma_x s^b) c^c, with source and sink both built from the same Cg1 diquark component and with Tmat=(I+gamma_t)/2 applied in the spin trace
+      subtype: singly charmed ssc baryon in a user-fixed vector-diquark component; positive-parity projected but not separately J=3/2 projected
+
+  propagators:
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_s_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Invert the strange propagator on the stout-smeared gauge links exactly as requested. Use the ensemble strange mass/clover inputs as fixed configuration values; this plan assumes the intended fermion operator is the same clover action evaluated on the stout-smeared links.
+      sink:
+        id: strange_point_sink
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_c_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Invert the charm propagator on the same stout-smeared gauge links. Keep the fermion-action inputs consistent with the fixed ensemble block and do not assume multigrid for charm unless the runtime stack explicitly supports and validates it.
+      sink:
+        id: charm_point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: omega_c0_baryon_2pt_measurement
+      type: baryon_2pt
+      propagator:
+        - prop_s
+        - prop_c
+      observable: omega_c0_2pt
+      flavor_structure: [s, s, c]
+      diquark_gamma: Cg1
+      spectator_gamma: I
+      parity_projector: (I+gamma_t)/2
+      momentum_projection: [0, 0, 0]
+      source_sink_operator_relation: same local operator at source and sink
+      contraction_strategy: Use a validated baryon 2pt contraction/einsum generator for the identical-flavor s,s,c case; do not hard-code topology signs by hand.
+      normalization: spatial sum over sink sites with no 1/V normalization unless the executor explicitly documents otherwise; save the traced projected correlator C(t) as computed.
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - This is a single-configuration single-source debug correlator, not a production mass calculation.
+  - Keep the user-requested Cg1 equals C@gamma_x component exactly; document that it is one vector-diquark polarization component and is not rotationally averaged.
+  - Positive-parity projection is applied, but no separate spin-3/2 removal is imposed in this task.
+  - Save rank-0 output in the run directory as plain txt columns t Re[C(t)] Im[C(t)] with no header or extra text.
+  - Use one stout-smeared gauge copy for both inversions and contract only after zero-momentum spatial summation.
+
+freeform_plan: |

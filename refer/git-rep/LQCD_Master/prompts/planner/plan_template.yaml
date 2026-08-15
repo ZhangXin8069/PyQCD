@@ -1,0 +1,65 @@
+task:
+  name: <task_name>
+  description: <task_description>
+  # task_mode: standard（默认，标准 hadrons/propagators/correlators 结构）
+  #          freeform（适用于不含标准链条的 LQCD 任务，如拓扑荷、Polyakov 圈等）
+  #          当 task_mode=freeform 时，请使用 freeform_plan 描述完整物理方案
+  task_mode: standard | freeform
+
+physics:
+  observables:
+    - id: <observable_id>
+      type: <meson_2pt|baryon_2pt|multi_hadron_2pt|meson_3pt|baryon_3pt|wilsonloop|custom>
+      name: <observable_name>
+
+  hadrons:
+    - id: <hadron_id>
+      name: <hadron_name>
+      type: <meson|baryon|other>
+      flavor: <optional_flavor_description>
+      momentum: [0, 0, 0]
+      interpolating_operator: <operator_expression>
+      subtype: <optional_subtype>
+
+  propagators:
+    - id: <propagator_id>
+      quark_flavor: <light|strange|charm|custom>
+      source:
+        source_type: <point|wall|volume|point_smear>
+        source_position: [x, y, z, t]
+        source_momentum: [px, py, pz]
+      gauge_field:
+        stout_link_smear:
+          enabled: <true|false>
+          parameters:
+            rho: <optional_value>
+            n_steps: <optional_value>
+            ndim: <optional_value>
+      solver:
+        id: <solver_id>
+        quark_mass: <value>
+        clover_coefficient: <value>
+        tolerance: <value>
+        maxiter: <value>
+        notes: <optional_solver_notes>
+      sink:
+        id: <sink_id>
+        type: <point|smeared|other>
+
+measurement:
+  correlators:
+    - id: <measurement_id>
+      type: <meson_2pt|baryon_2pt|multi_hadron_2pt|meson_3pt|baryon_3pt|other>
+      propagator: <propagator_id>
+      observable: <observable_id>
+
+output:
+  format: <npy|hdf5|other>
+  metadata: <true|false>
+
+extras: []
+
+# 【freeform 模式】仅当 task_mode=freeform 时启用
+# 用自由文本描述完整物理目标、计算步骤、数据输出
+freeform_plan: |
+  <物理目标、观测量、计算步骤等自由描述>

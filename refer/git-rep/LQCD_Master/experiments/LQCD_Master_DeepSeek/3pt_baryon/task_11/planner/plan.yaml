@@ -1,0 +1,210 @@
+task:
+  name: Xi_minus_to_Lambda_3pt_vector_gx
+  description: >
+    Three-point correlation function for Xi- to Lambda transition
+    with vector current (s→u, gamma_x).  Source hadron is Xi- (dss)
+    with operator ε^{abc} (d^{Ta} Cγ₅ s^{b}) s^{c}.  Sink hadron is
+    Lambda (uds) with operator ε^{abc} (u^{Ta} Cγ₅ d^{b}) s^{c}.
+    Inserted current is \bar{u} γ_x s.  Positive-parity projector
+    T = (1+γ₄)/2.  Point source at origin, zero momentum, sequential
+    wall source at t_seq=8 constructed from the sink operator with
+    zero-momentum projection (sum over all spatial x).  Stout-smeared
+    gauge links (1 step, ρ=0.125, 4-dim) used for all inversions.
+    Two-point function is not computed.  The Xi- source has two
+    strange quarks with distinct spin-color roles (s^{b} in the Cγ₅
+    diquark and s^{c} as spectator); both contraction topologies are
+    included in the sequential-source construction.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: xi2lam_v_gx
+      type: baryon_3pt
+      name: Xi_to_Lambda_vector_gamma_x
+
+  hadrons:
+    - id: Xi_minus_src
+      name: Xi_minus
+      type: baryon
+      flavor: dss
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (d^{Ta} C gamma_5 s^{b}) s^{c}"
+      subtype: source
+      notes: >
+        The two strange quarks occupy distinct spin-color roles:
+        s^{b} is inside the Cγ₅ diquark, s^{c} is the spectator with
+        no gamma projector.  Both Wick topologies — (i) s^{c}→sink ∧
+        s^{b}→current and (ii) s^{b}→sink ∧ s^{c}→current — must be
+        summed.  The sequential source B must accumulate B₁ + B₂ with
+        correct spin-index routing for the parity projector.
+    - id: Lambda_snk
+      name: Lambda
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^{b}) s^{c}"
+      subtype: sink
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 5000
+        notes: "Multigrid solver for light-quark forward propagator (d quark at source, reused for u & d at sink)."
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s_fwd
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_strange
+        quark_mass: -0.2400
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 5000
+        notes: >
+          Multigrid solver for strange-quark forward propagator.
+          Uses ms = -0.2400 matching the sea strange mass of the
+          C24P29 ensemble (cf. cfg_path beta6.20_mu-0.2770_ms-0.2400).
+          Unitarity requires valence mass = sea mass.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential_wall
+        source_time: 8
+        source_momentum: [0, 0, 0]
+        notes: >
+          Sequential wall source at t=8, constructed from the Lambda
+          sink operator with zero-momentum projection (sum over all
+          spatial x at the sink time slice).  Built via the two-dagger
+          convention: η^{seq} = γ₅ B^{†} γ₅, where B = B₁ + B₂ sums
+          both strange-quark contraction topologies at the Xi⁻ source
+          (spectator-s→sink and diquark-s→sink).  The sequential
+          propagator G_l^{seq} is the u-quark line connecting the
+          current to the sink.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light_seq
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 5000
+        notes: "Multigrid solver for light-quark sequential propagator (u quark)."
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: xi2lam_3pt_v_gx
+      type: baryon_3pt
+      propagator:
+        - prop_l_fwd
+        - prop_s_fwd
+        - prop_l_seq
+      observable: xi2lam_v_gx
+      source_hadron: Xi_minus_src
+      sink_hadron: Lambda_snk
+      current:
+        flavor_pair:
+          - u_bar
+          - s
+        gamma_structure: gamma_x
+      projector: "(I + gamma_4) / 2"
+      t_seq: 8
+      momentum_transfer: [0, 0, 0]
+      notes: >
+        Final contraction: C₃(τ) = Σ_z Tr[G_l^{seq}(z,τ) γ_x S_s(z,τ)]
+        evaluated for each τ = 0, 1, …, t_seq.  Both s-quark topologies
+        are already summed inside the sequential source B.
+
+output:
+  format: txt
+  metadata: false
+  description: >
+    Save C₃(τ) for τ = 0, 1, …, t_seq (=8) as a whitespace-separated
+    column (one value per line, 9 lines total) in a plain-text file
+    with no header and no metadata in the run directory.
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+extras:
+  - "Do NOT compute the two-point function."
+  - "Save C₃(τ) for τ = 0, 1, …, 8 as a whitespace-separated column in a plain-text file (no header, no metadata) in the run directory.  The file contains exactly 9 lines, one per τ."
+  - "All Dirac inversions use stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4)."
+  - "Sequential source built via the two-dagger convention: η^{seq} = γ₅ B^{†} γ₅.  B = B₁ + B₂ sums both strange-quark contraction topologies (spectator-s→sink and diquark-s→sink) with correct spin-index routing through the parity projector T = (1+γ₄)/2."
+  - "Valence strange-quark mass ms = -0.2400 matches the ensemble sea mass (cfg_path beta6.20_mu-0.2770_ms-0.2400_L24x72), ensuring unitarity of the three-point function."
+  - "Warning: single configuration (cfg 10000) with a single point source provides no statistical sampling.  This is a validation/debugging setup, not a production measurement."

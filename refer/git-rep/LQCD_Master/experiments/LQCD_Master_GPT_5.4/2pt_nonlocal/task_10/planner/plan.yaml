@@ -1,0 +1,188 @@
+task:
+  name: dsstar_nonlocal_vector_2pt_zshift
+  description: Compute the zero-momentum nonlocal two-point correlator of the vector D_s^* meson (sbar c) on ensemble C24P29 using a point source at [0,0,0,0]. The source operator is local and the sink operator is nonlocal with a straight +z displacement applied only to the charm field for separations z=0..10. The Wilson-line transport for the nonlocal shift is built from the original unsmeared gauge field, while all quark propagator inversions use stout-smeared links with parameters (n_steps=1, rho=0.125, ndim=4). Use gamma_x, gamma_y, and gamma_z polarizations and average them equally. Save the final correlator as plain numeric text with no header in the run directory. This single-configuration run is a debug/smoke-test measurement, not a physics-quality ensemble average.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: dsstar_nonlocal_vec_2pt
+      type: custom
+      name: Nonlocal zero-momentum D_s^* vector two-point function with mixed-link definition and +z sink displacement on the charm line only
+
+  hadrons:
+    - id: dsstar_vector
+      name: D_s^*
+      type: meson
+      flavor: sbar c
+      momentum: [0, 0, 0]
+      interpolating_operator: "Source operator: O_i^src(0)=cbar(0) gamma_i s(0). Sink operator: O_i^snk(z,t)=sum_x sbar(x,t) gamma_i W_orig(x,x+z zhat;t) c(x+z zhat,t), with i in {gamma_x,gamma_y,gamma_z}, z=0..10, and W_orig a straight Wilson line constructed from the original unsmeared gauge field at fixed sink time."
+      subtype: nonlocal_vector_meson
+
+  propagators:
+    - id: prop_s_point
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: wilson_clover_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Invert the strange propagator from the point source on stout-smeared links. Parameters are inherited from the provided ensemble setup and should be treated as provisional for this smoke test; require solver convergence checks before physics interpretation.
+      sink:
+        id: point_sink_s
+        type: point
+
+    - id: prop_c_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: wilson_clover_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Invert the charm propagator from the point source on stout-smeared links. This charm setup is accepted here as an inherited ensemble parameter choice for a debug run only; effective-mass and solver-convergence sanity checks are required before any physics use.
+      sink:
+        id: point_sink_c
+        type: point
+
+    - id: prop_c_shifted_z
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: false
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: shifted_from_charm_forward
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: No additional inversion. For each separation z=0..10 construct the gauge-covariantly shifted charm sink field S_c^shift(x,t;0)=W_orig(x,x+z zhat;t) S_c(x+z zhat,t;0) using the original unsmeared gauge field. This mixed-link definition is intentional and is the target observable, not an implementation accident.
+      sink:
+        id: zshift_sink_c
+        type: other
+
+measurement:
+  correlators:
+    - id: corr_dsstar_nonlocal_avg
+      type: other
+      propagator: prop_s_point
+      observable: dsstar_nonlocal_vec_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - measurement uses both prop_s_point and prop_c_shifted_z in one heavy-light nonlocal meson contraction
+  - contract C_i(z,t)=sum_x Tr[S_s(0;x,t) gamma_i W_orig(x,x+z zhat) S_c(x+z zhat,t;0) gamma_i] with gamma5-hermiticity used only to express backward lines if needed
+  - average the three polarizations after forming each zero-momentum correlator and store C_avg(z,t)=(C_x+C_y+C_z)/3
+  - keep all temporal separations t=0..71 and all nonlocal separations z=0..10 inclusive
+  - output file layout is one numeric row per z t ReC ImC with no header or comments
+  - use straight +z Wilson lines with periodic spatial wrap-around if indexing crosses the boundary even though z_max=10 is within Lz=24
+  - validate that z=0 reproduces the local D_s^* vector 2pt and that ImC is numerically consistent with zero within floating-point noise
+
+freeform_plan: |
+  This is a standard hadronic nonlocal meson two-point calculation, so the plan is expressed in the usual operator -> propagator -> correlator chain.
+
+  Target observable and exact convention:
+  Define the local source operator at x0=(0,0,0,0)
+    O_i^src(0) = cbar(0) gamma_i s(0),  i in {x,y,z},
+  and the nonlocal sink operator at Euclidean time t
+    O_i^snk(z,t) = sum_{vec x} sbar(vec x,t) gamma_i W_orig(vec x, vec x+z zhat; t) c(vec x+z zhat,t),
+  with integer separations z=0,1,...,10.
+  The Wilson line is a straight product of original unsmeared gauge links along +z at fixed sink time. The nonlocal shift is applied only to the charm field, exactly as requested. Zero momentum is implemented by the spatial sum over vec x with no Fourier phase.
+
+  Wick-contracted correlator:
+  For each polarization i=x,y,z and separation z, compute the connected heavy-light correlator
+    C_i(z,t) = sum_{vec x} < O_i^snk(z,t) O_i^src(0) >
+             = sum_{vec x} Tr[ S_s(0; x,t) gamma_i W_orig(x, x+z zhat; t) S_c(x+z zhat,t; 0) gamma_i ],
+  where S_s is the strange propagator and S_c is the charm propagator. Using gamma5-hermiticity one may rewrite the backward strange line in terms of the forward point-source propagator for implementation, but the stored observable is the correlator above. The nonlocal correlator is therefore fully closed by the propagator pair (prop_s_point, prop_c_shifted_z); it is not determined by the shifted charm line alone.
+
+  Mixed-link observable definition:
+  The observable intentionally mixes link choices:
+  - Dirac inversions use stout-smeared links with (n_steps=1, rho=0.125, ndim=4).
+  - The nonlocal Wilson-line displacement uses the original unsmeared gauge field.
+  This is a nonstandard but explicitly requested operator definition and should be documented as such when interpreting or comparing results across z.
+
+  Numerical workflow:
+  1. Load the original gauge configuration for cfg 10000.
+  2. Create a stout-smeared copy of the gauge field with n_steps=1, rho=0.125, ndim=4 for fermion inversions only.
+  3. Invert the strange and charm point-source propagators from source position [0,0,0,0] on the stout-smeared links.
+  4. For each z=0..10, build the straight Wilson line from the original unsmeared gauge field and construct the shifted charm sink field
+       S_c^shift(x,t;0;z) = W_orig(x,x+z zhat;t) S_c(x+z zhat,t;0).
+     No re-inversion is done for different z.
+  5. For each i in {gamma_x, gamma_y, gamma_z}, contract the local strange line with the shifted charm line to form C_i(z,t).
+  6. Perform the spatial sum for zero momentum for each polarization and separation.
+  7. Form the polarization average only after the individual zero-momentum correlators are computed:
+       C_avg(z,t) = (C_x(z,t) + C_y(z,t) + C_z(z,t)) / 3.
+  8. Keep the full time dependence t=0..71 for each z=0..10.
+  9. Save plain text only, with one row per datum in the fixed order
+       z  t  Re[C_avg(z,t)]  Im[C_avg(z,t)]
+     and no header, comments, or metadata.
+
+  Validation requirements for this run:
+  - z=0 must reproduce the local D_s^* vector two-point correlator computed with the same source, sink gamma structure, and inversion links.
+  - The three polarization channels should agree within expected cubic-symmetry breaking and numerical noise at zero momentum; inspect before averaging.
+  - The imaginary part should be consistent with zero up to numerical noise; keep it in the output anyway for debugging transparency.
+  - Check solver convergence residuals for both strange and charm solves. Since this is only one configuration, treat the result as a smoke test, not a physics measurement.

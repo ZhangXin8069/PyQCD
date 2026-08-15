@@ -1,0 +1,168 @@
+task:
+  name: xic_plus_baryon_2pt_point_source
+  description: Compute the zero-momentum two-point function of the Xi_c+ baryon with quark content usc from a point source at [0, 0, 0, 0], using the local interpolating operator with us diquark structure Cgamma5 and the positive-parity projector Tmat=(I+gamma_t)/2. Use stout-smeared gauge links in the Dirac inversions with parameters n_steps=1, rho=0.125, ndim=4, and save the projected correlator as plain text without header or extra text in the run directory. This single-configuration setup is treated as an executability/debug measurement, not a physics-quality spectroscopy run.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: xic_plus_2pt
+      type: baryon_2pt
+      name: Xi_c+ positive-parity two-point function
+
+  hadrons:
+    - id: xic_plus
+      name: Xi_c+
+      type: baryon
+      flavor: usc
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc}(u^{Ta} Cgamma5 s^b)c^c with sink spin projection Tmat=(I+gamma_t)/2
+      subtype: singly_charmed_baryon
+
+  propagators:
+    - id: prop_light
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: valence_light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the ensemble-matched valence clover operator on stout-smeared inversion links with anti-periodic temporal fermion boundary condition; no source or sink smearing.
+      sink:
+        id: point_sink_light
+        type: point
+
+    - id: prop_strange
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: valence_strange_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the ensemble-matched valence clover operator on stout-smeared inversion links with anti-periodic temporal fermion boundary condition; no source or sink smearing.
+      sink:
+        id: point_sink_strange
+        type: point
+
+    - id: prop_charm
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: valence_charm_solver
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use the ensemble-matched valence clover operator on stout-smeared inversion links with anti-periodic temporal fermion boundary condition. Charm mass/tuning is taken directly from the supplied ensemble parameters, so this run should be regarded as a correlator-generation check unless charm tuning for Xi_c spectroscopy has been independently validated.
+      sink:
+        id: point_sink_charm
+        type: point
+
+measurement:
+  correlators:
+    - id: xic_plus_baryon_2pt_measurement
+      type: baryon_2pt
+      propagator: prop_light
+      propagators:
+        light: prop_light
+        strange: prop_strange
+        charm: prop_charm
+      observable: xic_plus_2pt
+      hadron: xic_plus
+      flavor_order: [u, s, c]
+      contraction_structure:
+        baryon_type: uds_like_non_degenerate
+        diquark_pair: [u, s]
+        diquark_gamma: Cgamma5
+        exchange_topologies: two_u_attachments_not_applicable_use_single_us_pairing
+      momentum_projection:
+        sink_momentum: [0, 0, 0]
+        spatial_sum_at_sink: true
+      parity_projection:
+        projector: Tmat=(I+gamma_t)/2
+        apply_at: sink_trace
+      temporal_convention:
+        source_time: 0
+        save_all_sink_times: true
+      output_data:
+        values_per_timeslice: 2
+        columns: [real, imag]
+        rows: 72
+        description: one row per Euclidean sink time slice for the parity-projected zero-momentum correlator
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - Save one plain-text file per configuration in the run directory.
+  - Write exactly 72 rows with two numeric columns per row: real and imaginary parts.
+  - Do not write any header, label, or extra text.
+  - Use stout-smoothed links only for the Dirac inversions; do not introduce additional source or sink smearing.
+  - Treat cfg 10000 as a single-configuration debug/executability measurement.
+
+freeform_plan: |

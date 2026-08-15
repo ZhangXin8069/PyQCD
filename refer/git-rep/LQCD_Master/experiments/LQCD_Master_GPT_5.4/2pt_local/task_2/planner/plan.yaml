@@ -1,0 +1,126 @@
+task:
+  name: kaon_two_point_function
+  description: Compute the connected zero-momentum pseudoscalar kaon two-point correlator on ensemble C24P29 using point-source light and strange propagators from source position [0, 0, 0, 0]. Define the light and strange Dirac operators on the once-stout-smeared gauge field with parameters (n_steps=1, rho=0.125, ndim=4), and save the per-configuration correlator to a plain txt file in the run directory with no header or extra text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: kaon_2pt
+      type: meson_2pt
+      name: connected pseudoscalar kaon two-point correlator
+
+  hadrons:
+    - id: kaon
+      name: kaon
+      type: meson
+      flavor: pseudoscalar light-strange kaon represented as K using the operator lbar gamma5 s, where light denotes the degenerate u/d field; this fixes a connected kaon channel consistently without mixing K+ and K0 labels
+      momentum: [0, 0, 0]
+      interpolating_operator: qbar_light gamma5 q_strange
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_light_pt
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use the ensemble clover action parameters on the once-stout-smeared gauge field. The Dirac operator itself, not just the source construction, is defined on the smeared links. Rebuild or retune multigrid and QUDA tuning for this smeared operator instead of assuming unsmeared setup compatibility.
+      sink:
+        id: light_point_sink
+        type: point
+
+    - id: prop_strange_pt
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_solver
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use the ensemble clover action parameters on the once-stout-smeared gauge field. The Dirac operator itself, not just the source construction, is defined on the smeared links. Rebuild or retune multigrid and QUDA tuning for this smeared operator instead of assuming unsmeared setup compatibility.
+      sink:
+        id: strange_point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: kaon_2pt_local
+      type: meson_2pt
+      propagator:
+        - prop_light_pt
+        - prop_strange_pt
+      observable: kaon_2pt
+      definition: connected local-local pseudoscalar light-strange meson correlator built from the light and strange point-source propagators with gamma5 at source and sink and summed over all sink spatial sites to project zero momentum
+
+output:
+  format: other
+  metadata: false
+  filename: kaon_2pt_cfg10000.txt
+  location: run_directory
+  row_format: [t, Re, Im]
+  header: none
+
+extras:
+  - use local gamma5 interpolating operators at both source and sink
+  - build both light and strange propagators from spin-color point inversions at source [0,0,0,0]
+  - perform the zero-momentum projection by spatial summation over sink positions only
+  - treat this as a per-configuration measurement for cfg 10000 and write one txt file in the run directory
+
+freeform_plan: |
+  Not used because this is a standard hadronic correlator task.

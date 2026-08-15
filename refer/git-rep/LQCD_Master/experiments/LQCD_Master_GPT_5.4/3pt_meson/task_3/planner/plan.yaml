@@ -1,0 +1,152 @@
+task:
+  name: B_to_D_vector_3pt_point_tseq8
+  description: Compute the zero-momentum B- to D0 meson three-point correlation function with pseudoscalar source and sink operators and a b-to-c vector current insertion gamma_x, using a point source at [0,0,0,0], tseq=8, and stout-smeared gauge links for all inversions. Do not compute two-point functions. Write the final correlator values only to a plain txt file in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: b_to_d_vector_3pt
+      type: meson_3pt
+      name: B-_to_D0_vector_current_three_point
+
+  hadrons:
+    - id: B_minus_src
+      name: B-
+      type: meson
+      flavor: anti-u b
+      momentum: [0, 0, 0]
+      interpolating_operator: bar(u) gamma_5 b
+      subtype: pseudoscalar_heavy_light
+    - id: D0_snk
+      name: D0
+      type: meson
+      flavor: anti-u c
+      momentum: [0, 0, 0]
+      interpolating_operator: bar(u) gamma_5 c
+      subtype: pseudoscalar_heavy_light
+
+  propagators:
+    - id: prop_light_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward spectator anti-u line represented through the light-quark propagator; use the ensemble light mass and stout-smeared links for inversion.
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_bottom_fwd
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_bottom
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 20000
+        notes: Forward bottom propagator from the common point source entering the source B- interpolator and the inserted b-to-c current.
+      sink:
+        id: sink_point_bottom
+        type: point
+
+    - id: prop_charm_seq
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm_seq
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 12000
+        notes: Charm sequential propagator for fixed sink D0 with gamma_5 sink structure, zero sink momentum, and tseq=8; build the sequential source from the sink contraction with the forward light spectator propagator using the two-dagger convention.
+      sink:
+        id: sink_seq_D0
+        type: other
+
+measurement:
+  correlators:
+    - id: corr_B_to_D_vector_3pt
+      type: meson_3pt
+      propagator: prop_charm_seq
+      observable: b_to_d_vector_3pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - generate only the 3pt correlator, no 2pt measurements
+  - current insertion is bar(c) gamma_x b
+  - sink time separation fixed to 8
+  - use zero momentum at source, sink, and current projection
+  - save plain text numbers only in the run directory
+  - use stout-smeared links during all inversions
+
+freeform_plan: |

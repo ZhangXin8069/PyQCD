@@ -1,0 +1,253 @@
+task:
+  name: Lambda_b_to_Lambda_vector_3pt
+  description: >
+    Calculate the three-point correlation function for Lambda_b to Lambda
+    transition via (b->s) vector current J_x = s_bar gamma_x b.
+    Lambda_b source at t=0: epsilon^{abc} (u^{Ta} C gamma_5 d^b) b^c.
+    Lambda sink at t=8:    epsilon^{def} (u^{Td} C gamma_5 d^e) s^f.
+    Projector T = (I + gamma_4)/2 for positive-parity channel.
+    Point source at [0,0,0,0]; zero momentum; t_seq=8.
+    Stout-smeared gauge links: n_steps=1, rho=0.125, ndim=4.
+    Only the 3pt function is computed; no 2pt.
+    
+    CRITICAL TOPOLOGY NOTE: Lambda_b (udb) and Lambda (uds) each contain
+    exactly one u-quark and one d-quark.  Therefore the B-block for the
+    sequential source has only ONE contraction topology (no exchange term),
+    unlike Lambda->p where the two u-quarks at the sink produce two terms.
+    
+    PARTIALLY QUENCHED NOTE: The gauge configurations were generated with
+    sea strange mass ms=-0.2400 (as encoded in the filename).  The valence
+    strange quark uses the tuned value ms=-0.2356 that reproduces physical
+    strange-hadron masses.  This is standard partially-quenched practice.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: Lambda_b_to_Lambda_vector
+      type: baryon_3pt
+      name: "Lambda_b -> Lambda vector current 3pt correlator"
+
+  hadrons:
+    - id: Lambda_b
+      name: Lambda_b
+      type: baryon
+      flavor: udb
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) b^c"
+      subtype: source
+    - id: Lambda
+      name: Lambda
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{def} (u^{Td} C gamma_5 d^e) s^f"
+      subtype: sink
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_l
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "Light-quark solver with multigrid preconditioner.  Point source at origin, zero momentum."
+      sink:
+        id: sink_l
+        type: point
+      usage: >
+        This single forward light propagator is reused for BOTH spectator
+        contractions in the B block: the u-quark line S_l^{ad} and the
+        d-quark line S_l^{be}.  Isospin symmetry S_u = S_d = S_l applies.
+
+    - id: prop_b
+      quark_flavor: bottom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_b
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: >
+          Bottom-quark forward propagator connecting the Lambda_b source b-quark
+          to the b-quark in the current.  m_b=1.5 in lattice units corresponds
+          to ~2.8 GeV (a^-1 ~ 1.876 GeV), lighter than the physical bottom
+          (~4.18 GeV).  This is a Fermilab-type heavy-quark setup; the resulting
+          form factors carry a heavy-quark systematic that must be assessed
+          before phenomenological use.
+      sink:
+        id: sink_b
+        type: point
+
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+        sequential_source:
+          sink_hadron: Lambda
+          forward_propagators: [prop_l]
+          sink_time: 8
+          projector: "(I + gamma_4) / 2"
+          notes: >
+            B-block construction (SINGLE topology — Lambda has only one u and
+            one d, so no exchange term):
+            
+            B^{rf}_{sigma,rho}(0) = epsilon^{abc} epsilon^{def}
+              * (C gamma_5)_{alpha,beta} * (C gamma_5)_{alpha',beta'}
+              * T_{sigma,rho}
+              * S_{l,alpha,alpha'}^{ad}(x,0) * S_{l,beta,beta'}^{be}(x,0)
+            
+            where r = s-quark colour index (open for sequential source),
+            sigma = s-quark spin index (open), T = (1+gamma_4)/2,
+            and x is summed over spatial positions at t=8.
+            
+            Sequential source via two-dagger convention:
+              eta^{seq}(0) = gamma_5 * B^dagger(0) * gamma_5
+            
+            The b-quark does NOT enter B — it is connected through the
+            separate forward propagator prop_b in the final contraction.
+            
+            VALENCE STRANGE MASS: The solver uses ms=-0.2356 (tuned valence),
+            which differs from the sea strange mass ms=-0.2400 encoded in the
+            gauge-configuration filename.  This is a standard partially-quenched
+            setup: the sea strange is slightly off the physical point, and the
+            valence mass is tuned to reproduce physical Omega or eta_s masses.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_s_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: >
+          Strange-quark sequential propagator.  The sequential source is
+          constructed from the Lambda sink at t=8 and placed at t=0 via the
+          two-dagger convention.  Multigrid preconditioner applicable.
+          Valence ms = -0.2356 (tuned); sea ms = -0.2400.
+      sink:
+        id: sink_s_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: Lambda_b_to_Lambda_3pt
+      type: baryon_3pt
+      source_hadron: Lambda_b
+      sink_hadron: Lambda
+      current:
+        quark_pair: [strange, bottom]
+        gamma_structure: gamma_x
+        description: "J_x = s_bar gamma_x b  (vector current, flavour-changing b->s)"
+      projector: "(I + gamma_4) / 2"
+      t_seq: 8
+      propagators: [prop_l, prop_b, prop_s_seq]
+      observable: Lambda_b_to_Lambda_vector
+      contraction_description: >
+        After constructing the sequential source and solving prop_s_seq,
+        the 3pt correlator at each current insertion time tau is:
+        
+          C_3(tau) = sum_z Tr[ prop_s_seq(z, tau) * gamma_x * prop_b(z, tau) ]
+        
+        Both propagators live at the same (z, tau) — the sequential propagator
+        runs from the sequential source (t=0) to the current, and the forward
+        bottom propagator runs from the point source (t=0) to the current.
+        No momentum phase since all momenta are zero.
+        
+        SIGN VERIFICATION: the sign of C_3(tau) should be checked in the
+        large-tau limit against the expected sign for a positive-parity
+        Lambda_b -> Lambda transition with the (1+gamma_4)/2 projector.
+        An incorrect sign would invert the extracted vector form factor.
+        
+        The generated einsum code must be validated specifically for the
+        b->s flavour-changing baryon 3pt channel, as this differs from the
+        Lambda->p template (different spectator structure: 1u+1d vs 2u+1d).
+
+output:
+  format: txt
+  metadata: false
+  description: >
+    Raw 3pt correlator values C_3(tau) for tau = 0, ..., 72 written as
+    plain text (one value per line, no header) to a file in the run directory.
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+extras:
+  - "No 2pt function computed; 3pt only as requested"
+  - "Save raw correlator values to plain txt file in run directory with no header"
+  - "Stout smearing on gauge links: n_steps=1, rho=0.125, ndim=4 for all three inversions"
+  - "Point source at origin [0,0,0,0]; zero momentum throughout; t_seq=8"
+  - "Projector T = (I + gamma_4)/2 for positive-parity Lambda channel"
+  - "Sea strange mass ms=-0.2400 (from cfg filename); valence ms=-0.2356 (tuned, partially quenched)"
+  - "B-block has SINGLE topology (no exchange term): Lambda_b and Lambda each have exactly 1u+1d"
+  - "Forward light propagator prop_l reused for both u and d spectator contractions in B block"
+  - "Sequential source constructed from Lambda sink via two-dagger convention: eta_seq = gamma_5 B^dag gamma_5"
+  - "Sign of C_3(tau) must be verified at large tau to catch possible contraction-sign errors"
+  - "m_b=1.5 in lattice units (~2.8 GeV) is lighter than physical bottom; heavy-quark systematic applies"
+  - "Point source gives minimal statistics and poor ground-state overlap for heavy-light baryons; consider smeared sources for production"

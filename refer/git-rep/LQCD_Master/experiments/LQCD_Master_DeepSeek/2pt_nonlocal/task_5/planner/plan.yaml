@@ -1,0 +1,158 @@
+task:
+  name: rho_nonlocal_2pt
+  description: >
+    Compute the nonlocal two-point correlation function of the rho meson
+    (rho^+, isovector vector meson, quark content dbar-u) with a nonlocal
+    shift along the positive z-direction. The shift ranges from 0 to 10
+    lattice units and is applied to the quark (u-quark) propagator only.
+    The vector interpolating operators gamma_x, gamma_y, gamma_z are
+    computed and averaged for each polarization. Point source at [0,0,0,0].
+    Propagators are inverted using stout-smeared gauge links (1 step,
+    rho=0.125, 4D), while the nonlocal Wilson line is constructed from
+    the original unsmeared gauge links.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: rho_nonlocal_2pt
+      type: meson_2pt
+      name: rho_nonlocal_correlator
+
+  hadrons:
+    - id: rho_plus
+      name: rho_plus
+      type: meson
+      flavor: dbar_u
+      momentum: [0, 0, 0]
+      interpolating_operator: bar{d} gamma_i u
+      subtype: vector
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 1000
+        notes: multigrid solver with two-level preconditioner
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: rho_nonlocal_corr
+      type: meson_2pt
+      propagator: prop_l
+      observable: rho_nonlocal_2pt
+      nonlocal:
+        enabled: true
+        shift_applied_to: quark
+        direction: [0, 0, 1]
+        max_separation: 10
+        wilson_line:
+          gauge_field: original
+          convention: >
+            Forward product of U_z links along the +z direction:
+            W(x, x+z_hat) = U_z(x) * U_z(x+z_hat) * ... * U_z(x+(z-1)*z_hat),
+            constructed from the original (unsmeared) gauge links.
+            At z=0, W is the 3x3 identity matrix.
+            Gauge transformation: W(x, x+z_hat) -> Omega(x) * W(x, x+z_hat) * Omega^dagger(x+z_hat),
+            ensuring the nonlocal operator bar{d}(x) gamma_i W(x,x+z_hat) u(x+z_hat) is gauge invariant.
+          boundary_handling: >
+            All z-direction index arithmetic uses modulo L_s = 24, consistent
+            with periodic spatial boundary conditions. For sites where x_z + z
+            exceeds 23, the index wraps around and the Wilson line crosses the
+            periodic boundary using the boundary-crossing U_z link.
+      contraction_formula: >
+        For each separation z in [0, 1, ..., 10] and each polarization i in {x, y, z}:
+        C_i(z, t) = sum_x Re Tr_{color,spin}[ S_l^dagger(x,t) * (gamma_5 * gamma_i) * W(x, x+z_hat) * S_l(x+z_hat, t) * (gamma_i * gamma_5) ]
+        where S_l is the same point-source prop_l for both quark lines.
+        The Wilson line W(x, x+z_hat) is multiplied onto the color index of S_l(x+z_hat, t)
+        before the trace, transporting the color index from site x+z_hat back to site x,
+        so the full color-spin trace with S_l^dagger(x,t) is well-defined.
+        Final correlator: C(z, t) = (C_x + C_y + C_z) / 3.
+        At z=0 the Wilson line is the identity and the standard local rho correlator is recovered.
+      gamma_polarizations: [gamma_x, gamma_y, gamma_z]
+      propagator_usages:
+        - role: antiquark_dbar
+          shift_applied: false
+          note: Uses prop_l directly; the dbar line sink remains at position x.
+        - role: quark_u
+          shift_applied: true
+          note: >
+            Uses prop_l with the sink displaced by z in +z direction,
+            then multiplied by the Wilson line W(x, x+z_hat) on the color
+            index to enable a well-defined trace at site x.
+      mpi_gather: >
+        The process grid [1,1,1,4] partitions the temporal direction across
+        4 MPI ranks. After computing the per-(z,t) correlator locally on each
+        rank, perform an MPI reduction (sum) across all ranks to aggregate the
+        full t-sliced correlator on rank 0 before writing the output file.
+
+output:
+  format: txt
+  metadata: false
+  filename: rho_nonlocal_2pt.txt
+  description: >
+    Plain text file with columns: z t Re[C(z,t)], one line per (z,t) pair,
+    for z = 0, 1, ..., 10 and t = 0, 1, ..., 71. No header or extra text.
+    Saved to the run directory.
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+extras:
+  - "Nonlocal shift is applied at contraction time (not inversion time); prop_l is a standard point-source propagator solve on stout-smeared links"
+  - "Wilson line: forward product of U_z links from original (unsmeared) gauge field; z=0 recovers the local rho correlator as a consistency check"
+  - "Boundary handling: all z-direction index arithmetic uses modulo L_s=24 per periodic spatial boundary conditions; Wilson line crosses boundaries correctly"
+  - "MPI: 4 temporal ranks per process grid [1,1,1,4]; correlator t-slices are reduced (summed) to rank 0 before file output"
+  - "Output: plain text, no header; columns (z, t, Re[C]); saved to rho_nonlocal_2pt.txt in run directory"

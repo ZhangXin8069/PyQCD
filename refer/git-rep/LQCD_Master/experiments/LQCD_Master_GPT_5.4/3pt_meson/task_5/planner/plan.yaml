@@ -1,0 +1,208 @@
+task:
+  name: B_to_pi_vector_3pt_point_tseq8_raw
+  description: Compute the connected bare three-point correlation function for the flavor channel B- -> pi- with local current J_x = dbar gamma_x b, using gamma_5 interpolating operators for both mesons, a point source at [0,0,0,0], zero source and sink momentum, and sink-source separation tseq = 8. Use stout-smeared gauge links in every inversion and write the final per-tau correlator values to a plain txt file in the run directory without header or extra text. No 2pt functions are to be computed.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: b_to_pi_vec_x_3pt
+      type: meson_3pt
+      name: Connected bare meson three-point correlator C3_x(tau; tseq=8, p_src=0, p_snk=0) for B- -> pi-
+
+  hadrons:
+    - id: B_minus_src
+      name: B-
+      type: meson
+      flavor: anti-u b
+      momentum: [0, 0, 0]
+      interpolating_operator: ubar gamma_5 b
+      subtype: heavy_light_pseudoscalar
+    - id: pi_minus_snk
+      name: pi-
+      type: meson
+      flavor: anti-u d
+      momentum: [0, 0, 0]
+      interpolating_operator: ubar gamma_5 d
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward light propagator from the common source. With isospin symmetry this single light solve is reused for both spectator anti-u and final-state d via flavor degeneracy and gamma5-hermiticity in the connected B- -> pi- contraction.
+      sink:
+        id: point_sink_l
+        type: point
+
+    - id: prop_b_fwd
+      quark_flavor: custom
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: bottom_solver
+        quark_mass: 1.5
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: Forward heavy propagator for the b line from the source to the current. This uses the provided bottom mass in the same clover-style setup as requested, but should be treated as a formal bare correlator setup unless a validated heavy-quark tuning for this smeared-link action is supplied.
+      sink:
+        id: point_sink_b
+        type: point
+
+    - id: prop_l_seq_pi_tseq8
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_sequential_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Light sequential propagator through the pi- sink at fixed sink time tseq=8, zero sink momentum, and sink gamma structure gamma_5. The actual solver source is not an elementary point source; it is the sink-built sequential source assembled on time-slice t=8 from the pi- operator ubar gamma_5 d together with the forward spectator light propagator. The source_position marks the support time-slice of that sequential source field.
+      sink:
+        id: sequential_pi_sink
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_B_to_pi_vec_x_tau
+      type: meson_3pt
+      propagator: prop_l_seq_pi_tseq8
+      observable: b_to_pi_vec_x_3pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - save_as_plain_txt
+  - no_header_no_extra_text
+  - source_time_fixed_to_0
+  - sink_time_fixed_to_8
+  - tau_range_1_to_7
+  - output_columns_tau_re_im
+  - one_file_per_configuration_overwrite
+  - bare_unrenormalized_3pt_only
+  - do_not_compute_2pt
+
+freeform_plan: |
+  Physics target:
+  Compute only the connected Euclidean 3pt correlator for the requested flavor channel
+  B-(anti-u b) -> pi-(anti-u d) with local vector current J_x = dbar gamma_x b.
+  Both source and sink interpolators are pseudoscalar bilinears with gamma_5:
+    O_B = ubar gamma_5 b,
+    O_pi = ubar gamma_5 d.
+  This fixes the spectator antiquark to be anti-u, the transition line to be b -> d,
+  and the sink channel to pi- rather than pi+.
+
+  Correlator definition:
+    C3_x(tau, tseq=8) = sum_{x,y} < O_pi(y,8) J_x(x,tau) O_B^†(0) >
+  with zero momentum at source and sink. The measurement is saved as a function of the
+  insertion time tau only. To avoid endpoint contact terms, measure tau = 1,2,...,7.
+
+  Connected contraction strategy:
+  The connected meson 3pt contains:
+    1) one light spectator line shared between source and sink,
+    2) one heavy b line from source to current,
+    3) one light d line from current to sink.
+  Using isospin symmetry, u and d are both represented by the same light propagator mass.
+  A fixed-sink sequential-source method is used:
+    - solve forward light propagator from [0,0,0,0],
+    - solve forward b propagator from [0,0,0,0],
+    - build the sink sequential source on time-slice t=8 from the pi- sink operator and the
+      forward spectator light propagator, then invert the light Dirac operator once to obtain
+      the sequential propagator.
+  The final 3pt at each tau is obtained by contracting the light sequential propagator with
+  gamma_x and the forward b propagator over the current insertion site, with the spectator
+  already embedded in the sequential source construction.
+
+  Action / interpretation caveat:
+  All inversions use stout-smeared links with parameters (n_steps=1, rho=0.125, ndim=4), as requested.
+  The provided ensemble block includes a bottom mass entry and a clover coefficient; this plan therefore
+  executes exactly that requested bare correlator setup. However, without a validated heavy-quark tuning
+  and matching strategy for b at a = 0.1052 fm with this smeared-link valence operator, the output must
+  be interpreted as a formal raw correlator / smoke-test datum, not a precision B-physics result.
+
+  Current normalization caveat:
+  The local current is used as the bare lattice operator dbar gamma_x b. No renormalization factor
+  Z_V^{bd} or improvement terms are supplied here. Therefore the saved quantity is explicitly the bare,
+  unrenormalized lattice 3pt correlator, not a physical matrix element or form factor.
+
+  2pt omission caveat:
+  Per request, no B or pi two-point functions are computed. This means the run does not by itself support
+  validated extraction of overlaps, energies, ratio observables, or a physical semileptonic form factor.
+  The deliverable is raw 3pt data only.
+
+  Output contract:
+  For each configuration, write a single txt file in the run directory containing exactly seven lines,
+  one for each tau = 1..7, with three whitespace-separated columns:
+    tau  Re[C3_x(tau)]  Im[C3_x(tau)]
+  No header, no comments, no extra text. Use overwrite mode for the per-configuration file so the final
+  artifact is unambiguous. If multiple configurations are later added, produce one plain txt file per cfg.

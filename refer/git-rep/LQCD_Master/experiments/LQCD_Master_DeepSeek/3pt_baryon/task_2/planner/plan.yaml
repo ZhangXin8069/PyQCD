@@ -1,0 +1,162 @@
+task:
+  name: proton_axial_3pt
+  description: >
+    Compute the three-point correlation function for proton with axial current
+    insertion (u->u, gamma_1 gamma_5). Point source at [0,0,0,0], zero momentum,
+    sink time tseq=8, positive-parity projector (1+gamma_4)/2. Stout-smeared
+    gauge links (n_steps=1, rho=0.125, ndim=4) used for all inversions.
+    Only the 3pt function is computed; no 2pt is generated.
+    Connected-only approximation: disconnected u-quark-loop diagrams are
+    neglected (expected systematic at the few-percent level for g_A).
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions: [24, 24, 24, 72]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: gA_proton
+      type: baryon_3pt
+      name: "Proton axial charge from u-quark axial current three-point function (connected only)"
+
+  hadrons:
+    - id: proton_src
+      name: proton_source
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) u^c"
+      subtype: source
+
+    - id: proton_snk
+      name: proton_sink
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) u^c"
+      subtype: sink
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: multigrid_cg
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+        notes: "Stout-smeared gauge links (rho=0.125, n_steps=1, ndim=4) used for Dirac operator construction."
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+        tseq: 8
+        depends_on_forward: prop_l_fwd
+        sink_hadron_id: proton_snk
+        parity_projector: "(1 + gamma_4) / 2"
+        notes: >
+          Sequential source built by summing all FOUR contraction topologies
+          (2 sink u-quark choices × 2 source u-quark choices).
+          Topologies: sink u^a→current←source u^d, sink u^a→current←source u^f,
+          sink u^c→current←source u^d, sink u^c→current←source u^f.
+          All four are added algebraically into a single sequential source
+          vector before the Dirac inversion. Linearity of the CG solver
+          guarantees the final trace Tr[G_seq · Γ · S_l] recovers the
+          sum of all four contributions without cross-contamination.
+          This is the critical difference from the Lambda→proton case:
+          there is no unique strange quark at the source, so both source
+          u-quarks (diquark member u^d and spectator u^f) must be
+          enumerated explicitly.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: multigrid_cg
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        multigrid_levels:
+          - [6, 6, 6, 3]
+          - [4, 4, 4, 6]
+        notes: "Stout-smeared gauge links (rho=0.125, n_steps=1, ndim=4) used for Dirac operator construction."
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: proton_axial_3pt_corr
+      type: baryon_3pt
+      propagator_sequential: prop_l_seq
+      propagator_forward: prop_l_fwd
+      observable: gA_proton
+      current:
+        quark_flavor: "u->u"
+        gamma_structure: "gamma_1 gamma_5"
+      hadron_source: proton_src
+      hadron_sink: proton_snk
+      projector: "(1 + gamma_4) / 2"
+      tseq: 8
+      momentum_transfer: [0, 0, 0]
+
+output:
+  format: txt
+  metadata: false
+  output_file: "proton_axial_3pt_result.txt"
+  description: "Raw three-point correlator data C_3(tau) for tau=1..7 saved as space-separated values with no header."
+
+extras:
+  - "Connected-only approximation: disconnected u-quark-loop diagrams are neglected by design. For the proton axial charge g_A, disconnected contributions are expected at the few-percent level and constitute an unquantified systematic uncertainty in this calculation."
+  - "Four contraction topologies enumerated explicitly: (sink u^a vs u^c) × (source u^d vs u^f). All four are summed into a single sequential source vector. This is the key correction relative to the Lambda→proton template, which has only 2 sink-side topologies because the strange quark is unique at the source."
+  - "The generate_einsum tool MUST be invoked with the baryon_3pt mode for proton→proton with u→u current. The Lambda→proton baryon_3pt mode (which assumes a single unique source quark through the current) will produce only 2 of the 4 required topologies and is incorrect for this observable. Verify with the tool owner before execution."
+  - "No 2pt function is computed; only the 3pt correlator is evaluated."
+  - "Point source at a single spatial and temporal position [0,0,0,0]."
+  - "Stout link smearing (n_steps=1, rho=0.125, ndim=4) applied to gauge links before all Dirac operator inversions."
+  - "Multigrid solver with two levels: [6,6,6,3] and [4,4,4,6]."
+  - "Output is a plain txt file with one row per configuration containing C_3(tau) values for tau=1 through tau=7."

@@ -1,0 +1,48 @@
+The submitted test job failed during dynamic testing. Rewrite the implementation to fix the failing test run.
+
+Observed Slurm status:
+JobState=FAILED ExitCode=1:0
+
+Observed error:
+--------------------------------------------------------------------------
+MPI_ABORT was invoked on rank 0 in communicator MPI_COMM_WORLD
+with errorcode 1.
+
+NOTE: invoking MPI_ABORT causes Open MPI to kill all MPI processes.
+You may or may not see output from other processes, depending on
+exactly when Open MPI kills them.
+--------------------------------------------------------------------------
+
+Observed output:
+S
+GCR: Convergence at 24 iterations, L2 relative residual: iterated = 8.394589e-11, true = 8.394589e-11 (requested = 1.000000e-10)
+PyQUDA INFO: Time = 0.520 secs, Performance = 1326.176 GFLOPS
+GCR: Convergence at 24 iterations, L2 relative residual: iterated = 7.428290e-11, true = 7.428290e-11 (requested = 1.000000e-10)
+PyQUDA INFO: Time = 0.525 secs, Performance = 1313.282 GFLOPS
+GCR: Convergence at 25 iterations, L2 relative residual: iterated = 5.395760e-11, true = 5.395760e-11 (requested = 1.000000e-10)
+PyQUDA INFO: Time = 0.539 secs, Performance = 1335.618 GFLOPS
+GCR: Convergence at 24 iterations, L2 relative residual: iterated = 7.861792e-11, true = 7.861792e-11 (requested = 1.000000e-10)
+PyQUDA INFO: Time = 0.513 secs, Performance = 1345.359 GFLOPS
+GCR: Convergence at 25 iterations, L2 relative residual: iterated = 5.384504e-11, true = 5.384504e-11 (requested = 1.000000e-10)
+PyQUDA INFO: Time = 0.537 secs, Performance = 1339.637 GFLOPS
+GCR: Convergence at 24 iterations, L2 relative residual: iterated = 9.212421e-11, true = 9.212421e-11 (requested = 1.000000e-10)
+PyQUDA INFO: Time = 0.513 secs, Performance = 1344.058 GFLOPS
+GCR: Convergence at 25 iterations, L2 relative residual: iterated = 6.531986e-11, true = 6.531986e-11 (requested = 1.000000e-10)
+PyQUDA INFO: Time = 0.536 secs, Performance = 1343.215 GFLOPS
+GCR: Convergence at 24 iterations, L2 relative residual: iterated = 7.528217e-11, true = 7.528217e-11 (requested = 1.000000e-10)
+PyQUDA INFO: Time = 0.520 secs, Performance = 1326.386 GFLOPS
+GCR: Convergence at 24 iterations, L2 relative residual: iterated = 9.919519e-11, true = 9.919519e-11 (requested = 1.000000e-10)
+PyQUDA INFO: Time = 0.520 secs, Performance = 1326.187 GFLOPS
+ERROR: Unknown inner solver 12 (rank 1, host f15r3n17, solver.cpp:191 in std::shared_ptr<Solver> quda::Solver::createPreconditioner(const DiracMatrix &, const DiracMatrix &, const DiracMatrix &, const DiracMatrix &, SolverParam &, SolverParam &)())
+       last kernel called was (name=N4quda6CloverIdLi3EEE,volume=12x24x24x18,aux=GPU-offline,kernel_arg_threshold=0,vol=124416,parity=1,precision=8,Ns=4,Nc=3,order=0,N=2,n_rhs=1)
+       last tune param used was block=(256,1,1), grid=(486,1,1), shared_bytes=0, shared_carve_out=0, aux=(-1,-1,-1,-1)
+ERROR: Unknown inner solver 12 (rank 0, host f15r3n17, solver.cpp:191 in std::shared_ptr<Solver> quda::Solver::createPreconditioner(const DiracMatrix &, const DiracMatrix &, const DiracMatrix &, const DiracMatrix &, SolverParam &, SolverParam &)())
+       last kernel called was (name=N4quda6CloverIdLi3EEE,volume=12x24x24x18,aux=GPU-offline,kernel_arg_threshold=0,vol=124416,parity=1,precision=8,Ns=4,Nc=3,order=0,N=2,n_rhs=1)
+       last tune param used was block=(256,1,1), grid=(486,1,1), shared_bytes=0, shared_carve_out=0, aux=(-1,-1,-1,-1)
+ERROR: Unknown inner solver 12 (rank 2, host f15r3n17, solver.cpp:191 in std::shared_ptr<Solver> quda::Solver::createPreconditioner(const DiracMatrix &, const DiracMatrix &, const DiracMatrix &, const DiracMatrix &, SolverParam &, SolverParam &)())
+       last kernel called was (name=N4quda6CloverIdLi3EEE,volume=12x24x24x18,aux=GPU-offline,kernel_arg_threshold=0,vol=124416,parity=1,precision=8,Ns=4,Nc=3,order=0,N=2,n_rhs=1)
+       last tune param used was block=(256,1,1), grid=(486,1,1), shared_bytes=0, shared_carve_out=0, aux=(-1,-1,-1,-1)
+ERROR: Unknown inner solver 12 (rank 3, host f15r3n17, solver.cpp:191 in std::shared_ptr<Solver> quda::Solver::createPreconditioner(const DiracMatrix &, const DiracMatrix &, const DiracMatrix &, const DiracMatrix &, SolverParam &, SolverParam &)())
+       last kernel called was (name=N4quda6CloverIdLi3EEE,volume=12x24x24x18,aux=GPU-offline,kernel_arg_threshold=0,vol=124416,parity=1,precision=8,Ns=4,Nc=3,order=0,N=2,n_rhs=1)
+       last tune param used was block=(256,1,1), grid=(486,1,1), shared_bytes=0, shared_carve_out=0, aux=(-1,-1,-1,-1)
+Saving 1286 sets of cached parameters to /public/home/xywangsjtu/.cache/tunecache_error.tsv

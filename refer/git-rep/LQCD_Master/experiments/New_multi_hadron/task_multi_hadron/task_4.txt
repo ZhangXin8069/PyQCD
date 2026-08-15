@@ -1,0 +1,8 @@
+Use multi_hadron_2pt to compute the combined three-baryon two-point function for a local 9-quark operator. The combined interpolating operator at source and sink is:
+
+  O = (u^T Cg5 d) d  *  (u^T Cg5 d) u  *  (u^T Cg5 d) s
+
+Use single-term baryon operators only (no octet flavor combinations). Apply P_plus projector on each baryon block individually (per-baryon block projection, not composite-level). The contraction should be one multi-hadron 2pt object, NOT a product of separate baryon 2pt correlators.
+
+Use 8 MPI ranks with grid_size = [1, 1, 2, 4] (2 nodes × 4 GPUs).
+Use point source at [0,0,0,0] for all quark propagators. Use stout smeared gauge links with (n_steps=1, rho=0.125, ndim=4) for the inversions. Save the result to a txt file in the run directory.

@@ -1,0 +1,9 @@
+This revision keeps the requested correlator construction intact but tightens the physics scope and execution contract. The source baryon, proton sink, vector current \(\bar u\gamma_x b\), projector \((I+\gamma_t)/2\), point source at \([0,0,0,0]\), zero momentum, stout-link smearing \((1,0.125,4)\), and \(t_{seq}=8\) are all preserved exactly.
+
+The main correction is conceptual: with the fixed ensemble metadata provided here, the heavy line is treated only as a bare heavy-valence clover input for raw 3pt production, not as a validated bottom-quark formulation for precision \(\Lambda_b \to p\) physics. The plan now states that explicitly, instead of implying a controlled decay calculation. It also separates the light and heavy solver roles: the light forward and sequential solves follow the usual light-quark strategy, while the heavy forward solve is flagged as requiring its own validated solver configuration rather than blindly inheriting the light multigrid setup.
+
+Operationally, the workflow is the standard baryon sequential-source chain: compute one forward light propagator, one forward heavy \(b\)-line propagator, construct the proton sink block from two light lines, generate the light sequential source at \(t_{seq}=8\), solve the light sequential propagator, and perform the final contraction with \(\gamma_x\) and the heavy forward propagator. No 2pt functions are computed, matching the task.
+
+The output contract is now explicit and closed: write a single plain `.txt` file in the run directory, `./Lambda_b_to_proton_vector_3pt_cfg10000_tseq8.txt`, with no header and only the numeric columns `tseq, insertion_time, real_part, imaginary_part`.
+
+Because the plan uses one configuration and one source time only, it should be understood as a smoke-test or raw-data production step, not a statistically or systematically complete decay study.

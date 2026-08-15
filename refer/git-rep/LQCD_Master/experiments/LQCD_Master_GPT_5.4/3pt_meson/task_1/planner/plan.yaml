@@ -1,0 +1,153 @@
+task:
+  name: D0_to_Kminus_vector_current_3pt
+  description: Compute the bare connected D0 -> K- meson three-point correlation function with pseudoscalar source and sink interpolators O_D0=ubar gamma_5 c and O_Kminus=ubar gamma_5 s, and local vector-current insertion J_x=sbar gamma_x c. Use a point source at [0,0,0,0], project both source and sink hadrons to zero spatial momentum, fix the sink time at tseq=8, and produce only the 3pt correlator as plain-text output in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: d0_kminus_vecx_3pt
+      type: meson_3pt
+      name: D0_to_Kminus_vector_x_three_point_bare_connected
+
+  hadrons:
+    - id: d0_src
+      name: D0
+      type: meson
+      flavor: anti-u c
+      momentum: [0, 0, 0]
+      interpolating_operator: "O_D0(x)=ubar(x) gamma_5 c(x)"
+      subtype: pseudoscalar_heavy_light
+    - id: kminus_snk
+      name: K-
+      type: meson
+      flavor: anti-u s
+      momentum: [0, 0, 0]
+      interpolating_operator: "O_Kminus(x)=ubar(x) gamma_5 s(x)"
+      subtype: pseudoscalar_light_strange
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_fwd
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward light propagator from the source point. This is the spectator anti-u line used in the connected meson 3pt and also enters the fixed-sink sequential-source construction at the K- sink. Use the same stout-smeared links in the Dirac operator as for all other solves. Even-odd preconditioning is assumed; multigrid may be used for light solves if available.
+      sink:
+        id: point_sink
+        type: point
+
+    - id: prop_c_fwd
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm_fwd
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward charm propagator from the source point for the source-to-current leg. Use the same stout-smeared links consistently. Charm with this clover setup must be treated as an input assumption of the ensemble/tuning; no additional charm-action validation is performed in this production task. Multigrid is not assumed for charm unless explicitly supported.
+      sink:
+        id: point_sink
+        type: point
+
+    - id: prop_s_seq
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Fixed-sink strange sequential propagator for the sink meson K- at t_sink=8 and p_sink=(0,0,0). The sequential source is not a point source at t=8; it is built on the full sink time slice by summing over spatial sink sites with zero sink momentum and sink gamma_5 structure, contracted with the forward spectator light propagator according to the meson 3pt Wick contraction. Solve with the same stout-smeared Dirac operator used for forward propagators. Even-odd preconditioning is assumed.
+      sink:
+        id: sequential_sink
+        type: other
+
+measurement:
+  correlators:
+    - id: d0_to_kminus_vecx_3pt_measurement
+      type: meson_3pt
+      propagator: prop_s_seq
+      observable: d0_kminus_vecx_3pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - "Connected diagram only: spectator anti-u plus c->s current insertion; no disconnected contribution for this flavor structure."
+  - "Use the full meson 3pt chain: forward light propagator, forward charm propagator, and fixed-sink strange sequential propagator; do not replace the sequential source by a point inversion at t=8."
+  - "Both hadrons are projected to zero spatial momentum, so only spatial q=0; this is not zero four-momentum transfer because m_D != m_K."
+  - "Bare local current only: J_x(z)=sbar(z) gamma_x c(z); no Z_V renormalization, no improvement coefficients, and no form-factor extraction in this task."
+  - "Restrict insertion times to tau=1..7 for source at t=0 and sink at t=8, and save one row per tau as: tau ReC3 ImC3, with no header or extra text, to a txt file in the run directory."
+  - "Do not compute any 2pt correlators; instead perform only minimal internal checks such as insertion-time support and consistency of the sequential-source construction."
+
+freeform_plan: |
+  Not used because this is a standard meson three-point correlator task.

@@ -1,0 +1,254 @@
+task:
+  name: pion_nonlocal_2pt_diagonal_wilson_line
+  description: Compute the nonlocal charged-pion two-point correlator on the C24P29 ensemble using Coulomb-gauge-fixed input links, five body-diagonal wall-source light propagators, and a bilocal sink operator with recursively constructed averaged diagonal Wilson-line displacement in both + and - body-diagonal directions for z=0..12.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: pion_nonlocal_diag_wl_2pt
+      type: custom
+      name: Nonlocal pion two-point function with diagonal Wilson-line displacement
+
+  hadrons:
+    - id: pion_nonlocal
+      name: pion
+      type: meson
+      flavor: charged pion channel with degenerate light quarks
+      momentum: [0, 0, 0]
+      interpolating_operator: O_src(y)=dbar(y)·[gamma.gamma(7) @ gamma.gamma(15)]·u(y) from wall source at t=31; O_sink(x;z,dir)=dbar(x)·[gamma.gamma(15) @ gamma.gamma(7)]·W_diag_dir(x,x+z)·u(x+z) with dir in {plus_diag, minus_diag} and z=0..12 recursive averaged body-diagonal steps
+      subtype: nonlocal_meson_2pt_diagonal_wilson_line
+
+  propagators:
+    - id: prop_l_wall_p0
+      quark_flavor: light
+      source:
+        source_type: wall
+        source_position: [0, 0, 0, 31]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_wall_solver_bodydiag
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-6
+        maxiter: 1000
+        notes: Solve on a stout-smeared copy of the Coulomb-gauge-fixed configuration; use multigrid block [[4,4,4,4]] for this task, even though the ensemble defaults list broader preset values.
+      sink:
+        id: sink_field_for_nonlocal_transport
+        type: other
+
+    - id: prop_l_wall_pplus1
+      quark_flavor: light
+      source:
+        source_type: wall
+        source_position: [0, 0, 0, 31]
+        source_momentum: [1, 1, 1]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_wall_solver_bodydiag
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-6
+        maxiter: 1000
+        notes: Solve on a stout-smeared copy of the Coulomb-gauge-fixed configuration; use multigrid block [[4,4,4,4]] for this task, even though the ensemble defaults list broader preset values.
+      sink:
+        id: sink_field_for_nonlocal_transport
+        type: other
+
+    - id: prop_l_wall_pplus2
+      quark_flavor: light
+      source:
+        source_type: wall
+        source_position: [0, 0, 0, 31]
+        source_momentum: [2, 2, 2]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_wall_solver_bodydiag
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-6
+        maxiter: 1000
+        notes: Solve on a stout-smeared copy of the Coulomb-gauge-fixed configuration; use multigrid block [[4,4,4,4]] for this task, even though the ensemble defaults list broader preset values.
+      sink:
+        id: sink_field_for_nonlocal_transport
+        type: other
+
+    - id: prop_l_wall_pminus1
+      quark_flavor: light
+      source:
+        source_type: wall
+        source_position: [0, 0, 0, 31]
+        source_momentum: [-1, -1, -1]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_wall_solver_bodydiag
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-6
+        maxiter: 1000
+        notes: Solve on a stout-smeared copy of the Coulomb-gauge-fixed configuration; use multigrid block [[4,4,4,4]] for this task, even though the ensemble defaults list broader preset values.
+      sink:
+        id: sink_field_for_nonlocal_transport
+        type: other
+
+    - id: prop_l_wall_pminus2
+      quark_flavor: light
+      source:
+        source_type: wall
+        source_position: [0, 0, 0, 31]
+        source_momentum: [-2, -2, -2]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_wall_solver_bodydiag
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-6
+        maxiter: 1000
+        notes: Solve on a stout-smeared copy of the Coulomb-gauge-fixed configuration; use multigrid block [[4,4,4,4]] for this task, even though the ensemble defaults list broader preset values.
+      sink:
+        id: sink_field_for_nonlocal_transport
+        type: other
+
+measurement:
+  correlators:
+    - id: pion_nonlocal_diag_channel_P0
+      type: other
+      propagator: prop_l_wall_p0
+      observable: pion_nonlocal_diag_wl_2pt
+    - id: pion_nonlocal_diag_channel_P2
+      type: other
+      propagator: prop_l_wall_pplus1
+      observable: pion_nonlocal_diag_wl_2pt
+    - id: pion_nonlocal_diag_channel_P3_a
+      type: other
+      propagator: prop_l_wall_pplus1
+      observable: pion_nonlocal_diag_wl_2pt
+    - id: pion_nonlocal_diag_channel_P3_b
+      type: other
+      propagator: prop_l_wall_pplus2
+      observable: pion_nonlocal_diag_wl_2pt
+
+output:
+  format: npy
+  metadata: true
+
+extras:
+  - runtime_input_cfg_path_is_/public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/CoulombGaugeFixed/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{cfg}_hyp0_gfixed3.scidac
+  - use_same_coulomb_gauge_fixed_links_before_stout_for_covdev_transport
+  - inversion_solver_task_multigrid_is_[[4,4,4,4]]
+  - channel_pairs_are_(p0,p0),(pplus1,pminus1),(pplus1,pminus2),(pplus2,pminus1)
+  - sink_phases_are_(0,0,0),(-2,-2,-2),(-3,-3,-3),(-3,-3,-3)
+  - covdev_direction_mapping_use_plus_xyz_and_minus_xyz_library_constants_not_raw_456
+  - diagonal_step_is_average_of_6_axis_orderings_and_applied_recursively
+  - contraction_must_be_generated_as_nonlocal_meson_2pt_with_correct_hermitian_conjugate_structure
+  - output_data_shape_is_(4,2,13,1,1,72)
+  - save_full_dictionary_npy_with_complex_data_and_metadata
+
+freeform_plan: |
+  Standard correlator task in the custom nonlocal meson-2pt class.
+
+  Physics target:
+  Compute the charged-pion nonlocal two-point correlator with a local wall-source bilinear at t_src=31 and a bilocal sink bilinear displaced along the body diagonal. The source operator is O_src(y)=dbar(y) Gamma_src u(y) with Gamma_src = gamma.gamma(7) @ gamma.gamma(15). The sink operator is O_sink(x;z,dir)=dbar(x) Gamma_sink W_diag_dir(x,x+z) u(x+z) with Gamma_sink = gamma.gamma(15) @ gamma.gamma(7), direction dir in {plus_diag, minus_diag}, and z=0..12 diagonal steps.
+
+  Gauge handling:
+  1. Preserve the ensemble block as supplied for metadata consistency.
+  2. For the actual computation, load the Coulomb-gauge-fixed configuration from /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/CoulombGaugeFixed/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{cfg}_hyp0_gfixed3.scidac with cfg=10000.
+  3. Keep one unsmeared copy of these Coulomb-gauge-fixed links for Wilson-line/covDev transport.
+  4. Make a second copy and apply stoutSmear(1, 0.125, 4) for all five Dirac inversions.
+
+  Propagators:
+  1. Solve five light wall-source propagators from source position [0,0,0,31] with source momenta [0,0,0], [1,1,1], [2,2,2], [-1,-1,-1], and [-2,-2,-2].
+  2. Use mass=-0.2770, clover=1/0.951479**3=1.160920226, tolerance=1e-6, maxiter=1000.
+  3. Use task-specific multigrid=[[4,4,4,4]] for the inversion setup.
+
+  Nonlocal diagonal transport:
+  1. Define one positive diagonal step by averaging the 6 shortest covariant transports in axis orderings (x,y,z), (x,z,y), (y,x,z), (y,z,x), (z,x,y), (z,y,x).
+  2. Define one negative diagonal step by averaging the same 6 orderings built from the negative lattice directions -x, -y, -z.
+  3. Use explicit library direction constants for +x,+y,+z and -x,-y,-z; do not pass ambiguous raw labels such as 4,5,6 unless those are first mapped to the API constants.
+  4. For z=0 use the unshifted propagator.
+  5. For z>0 build the displaced field recursively: shifted(z,dir) = step_dir(shifted(z-1,dir)).
+  6. Do not enumerate all shortest paths of total length 3z and do not replace this rule by a standard straight-link implementation.
+
+  Channel assembly:
+  Construct four physical momentum channels from propagator pairs:
+  1. channel 0: shifted line prop_l_wall_p0, anti line prop_l_wall_p0, sink phase q=(0,0,0)
+  2. channel 1: shifted line prop_l_wall_pplus1, anti line prop_l_wall_pminus1, sink phase q=(-2,-2,-2)
+  3. channel 2: shifted line prop_l_wall_pplus1, anti line prop_l_wall_pminus2, sink phase q=(-3,-3,-3)
+  4. channel 3: shifted line prop_l_wall_pplus2, anti line prop_l_wall_pminus1, sink phase q=(-3,-3,-3)
+
+  Contraction contract:
+  1. Treat the observable as a nonlocal meson 2pt with one optionally covDev-displaced light-quark line and one anti-line light propagator.
+  2. Do not implement the anti-line by ad hoc elementwise complex conjugation alone. Instead, define the correlator through the source/sink operators and require the correlator-einsum generator to produce the correct Hermitian-conjugate spin-color structure for the wall-source nonlocal meson 2pt with Gamma_src and Gamma_sink as specified.
+  3. The generator input must therefore encode: meson-like nonlocal 2pt, quark flavor light/light, source gamma gamma.gamma(7) @ gamma.gamma(15), sink gamma gamma.gamma(15) @ gamma.gamma(7), one line displaced by the custom recursive diagonal covDev transport, spatial sum to time dependence only.
+  4. For each channel, shift direction, and z, multiply by the corresponding sink phase and sum over spatial sites to obtain a correlator indexed only by t.
+
+  Output:
+  Save one .npy dictionary with full metadata and complex data shaped (4, 2, 13, 1, 1, 72), with axes ordered as (momentum_channel, shift_direction, z_sep, gamma_sink, gamma_source, t). Include in metadata the runtime Coulomb-gauge-fixed path, source time 31, the five source momenta, channel definitions, gamma definitions, z_max=12, recursive diagonal-step rule, task-specific multigrid [[4,4,4,4]], stout-smearing parameters, and axis labels.

@@ -1,0 +1,111 @@
+task:
+  name: wilson_loop_R1_T4_xt_yt_zt_average
+  description: Compute the rectangular Wilson loop W(R=1,T=4) on gauge configuration 10000, average over XT, YT, and ZT planes, and save the final averaged value as plain text with no header or extra text.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wilson_loop_R1_T4
+      type: wilsonloop
+      name: Rectangular Wilson loop W(R=1,T=4) averaged over XT, YT, ZT
+
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - pure-gauge
+  - no-fermion-inversions
+  - txt-output
+  - plane-average-XT-YT-ZT
+
+freeform_plan: |
+  Physics category:
+  This is a pure-gauge observable, specifically a Wilson-loop measurement for the rectangular loop W(R=1,T=4). It is not a hadron spectroscopy or matrix-element task, so no hadron operators, propagators, Wick contractions, or Dirac inversions are involved.
+
+  Observable definition:
+  Measure the gauge-invariant rectangular Wilson loops of spatial extent R=1 and temporal extent T=4 in the XT, YT, and ZT planes:
+    W_XT(1,4), W_YT(1,4), W_ZT(1,4)
+  using
+    W_{mu,nu}(R,T) = (1/Nc) Re Tr P[U_mu^R U_nu^T U_mu^{\dagger R} U_nu^{\dagger T}]
+  with Nc = 3.
+  The final reported observable is the arithmetic average
+    W_avg(1,4) = (W_XT + W_YT + W_ZT) / 3.
+
+  Gauge-field input and runtime setup:
+  1. Initialize PyQUDA with lattice size [24, 24, 24, 72] and process grid [1, 1, 1, 4].
+  2. Load the gauge configuration from
+       /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_10000.lime
+  3. Move the gauge field to device memory.
+  4. Do not perform stout, APE, HYP, or Wilson-flow smearing unless explicitly requested later. Use the original gauge links.
+
+  Wilson-loop path construction:
+  Use the three rectangular paths:
+  - XT plane: [+X, +T, +T, +T, +T, -X, -T, -T, -T, -T]
+  - YT plane: [+Y, +T, +T, +T, +T, -Y, -T, -T, -T, -T]
+  - ZT plane: [+Z, +T, +T, +T, +T, -Z, -T, -T, -T, -T]
+  corresponding to R=1 and T=4.
+
+  PyQUDA execution detail:
+  PyQUDA gauge.loop() requires exactly 4 outer groups. Pack the three active paths into the first three groups and repeat one dummy path in the fourth group with zero weight, e.g.
+    groups = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+    weights = [1, 1, 1, 0]
+  Then extract each returned LatticeLink field to host memory, reshape to per-site Nc x Nc matrices, compute the real trace at each local site, and average separately for XT, YT, and ZT.
+
+  MPI reduction and normalization:
+  1. For each plane, form the local per-site ReTr field.
+  2. Use core.gatherLattice with the correct local even-odd shape to gather across ranks.
+  3. On rank 0, sum over all sites and divide by total_sites * Nc to obtain the normalized plane averages:
+       W_XT, W_YT, W_ZT.
+  4. Compute
+       W_avg = (W_XT + W_YT + W_ZT) / 3.
+
+  Output requirements:
+  1. Write exactly one numeric value, W_avg, to a txt file in the run directory.
+  2. The file must contain no header, labels, comments, or extra text.
+  3. Use a simple filename in the run directory such as:
+       wilson_loop_R1_T4_avg_cfg10000.txt
+  4. Only rank 0 writes the file.
+
+  Engineering choices made conservatively:
+  - Because the task is pure gauge, standard hadrons/propagators/correlators sections are intentionally left empty and the full executable physics plan is placed in freeform_plan.
+  - No link smearing is applied, because the user asked only for the Wilson loop measurement and did not request smearing.
+  - Only configuration 10000 is processed, exactly matching the provided ensemble block.
+  - The final saved result is the averaged XT/YT/ZT Wilson loop, not the individual plane components, because the user requested the final result only.

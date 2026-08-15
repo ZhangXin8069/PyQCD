@@ -1,0 +1,136 @@
+task:
+  name: wilson_loop_R2_T1_xt_yt_zt_average
+  description: Compute the rectangular Wilson loop W(R=2,T=1) on configuration 10000 of the C24P29 ensemble, using gauge links only, with translational averaging over all lattice sites and arithmetic averaging over the XT, YT, and ZT planes, then write the final scalar result to a deterministic plain txt file in the job launch directory.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wilson_loop_r2_t1
+      type: wilsonloop
+      name: Rectangular Wilson loop W(R=2,T=1), site-averaged in XT, YT, ZT and then plane-averaged
+
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - pure-gauge
+  - no-fermion-inversions
+  - translational-site-average
+  - deterministic-txt-output
+
+freeform_plan: |
+  Physics category:
+  - Pure-gauge observable measured directly from gauge links.
+  - This is a per-configuration utility measurement, not an ensemble-average physics analysis.
+  - No quark propagators, Dirac operators, solver setup, or fermion inversions are part of the computation.
+
+  Target observable:
+  - For each requested plane muT with mu in {X,Y,Z}, measure the translationally averaged rectangular Wilson loop
+      W_muT(R=2,T=1) = (1 / Nc / V) * sum_x Re Tr U_muT(x; R=2, T=1)
+    where V is the full four-volume and the sum runs over all lattice origins x.
+  - The final reported number is the arithmetic mean of the three plane-resolved values:
+      W_avg = [W_XT + W_YT + W_ZT] / 3.
+  - Only XT, YT, and ZT enter the final average.
+
+  Configuration handling:
+  - Use ensemble preset C24P29 and process only configuration 10000.
+  - Read the gauge field from
+      /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_10000.lime
+  - Lattice dimensions are [24, 24, 24, 72].
+  - MPI layout is fixed to process_grid = [1, 1, 1, 4].
+
+  Gauge-only implementation strategy:
+  - Initialize PyQUDA with latt_size = [24, 24, 24, 72] and grid_size = [1, 1, 1, 4].
+  - Load the gauge links with the gauge I/O reader and move them to device memory.
+  - Use the original unsmeared links exactly as stored; do not apply stout, APE, HYP, or Wilson flow.
+
+  Wilson-loop path construction:
+  - Build the three physical rectangular closed paths for R=2 and T=1:
+      XT: +X, +X, +T, -X, -X, -T
+      YT: +Y, +Y, +T, -Y, -Y, -T
+      ZT: +Z, +Z, +T, -Z, -Z, -T
+  - Because PyQUDA gauge.loop() requires exactly 4 outer groups, pack them as:
+      group 0 -> XT path
+      group 1 -> YT path
+      group 2 -> ZT path
+      group 3 -> padded duplicate or dummy path with zero weight
+    with weights [1, 1, 1, 0].
+  - The padded fourth group is API padding only and must not contribute to the physics result.
+  - In postprocessing, use only returned slots 0, 1, and 2 for XT, YT, and ZT respectively; ignore slot 3 completely.
+
+  Reduction and normalization contract:
+  - For each physical returned loop field separately:
+      1. transfer the lattice field to host memory,
+      2. reshape to per-site Nc x Nc matrices,
+      3. compute per-site ReTr,
+      4. reshape into the local lattice field shape expected by PyQUDA gather,
+      5. perform the global lattice gather/reduction across all MPI ranks,
+      6. on rank 0 only, sum over the gathered full-lattice field,
+      7. divide once by total_sites * Nc.
+  - This ordering is mandatory: global sum first, single normalization second.
+  - Do not normalize locally before the global reduction.
+  - This yields three correctly normalized plane values W_XT, W_YT, W_ZT.
+  - Then compute
+      W_avg = (W_XT + W_YT + W_ZT) / 3
+    on rank 0.
+
+  Translational averaging detail:
+  - The estimator is the average of the closed loop over all basepoints on the lattice, not a single loop at one origin.
+  - The site average is obtained from the full per-site field returned by gauge.loop().
+
+  Output contract:
+  - Define run directory operationally as the current working directory at job launch.
+  - Write exactly one file in that directory with deterministic name:
+      wilson_loop_R2_T1_avg.txt
+  - Only rank 0 may create this file, and only after successful global reduction and final averaging.
+  - All non-root ranks must write nothing.
+  - The file content must be exactly one scalar numeric value for W_avg, with no header, no label, no metadata, and no extra text; a trailing newline is allowed.
+
+  Execution notes:
+  - The implementation should be a single flat Python script.
+  - Hardcode the configuration number 10000, lattice size, process grid, loop size R=2 and T=1, and output filename.
+  - This task produces one per-configuration Wilson-loop value only. Any scientific statement about an ensemble expectation value or uncertainty would require additional configurations and separate statistical analysis.

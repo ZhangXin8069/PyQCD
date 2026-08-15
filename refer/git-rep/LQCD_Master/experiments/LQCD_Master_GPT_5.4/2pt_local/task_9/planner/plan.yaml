@@ -1,0 +1,121 @@
+task:
+  name: proton_two_point_function_point_source
+  description: Compute the proton two-point correlator in the positive-parity channel from a single light point-to-all propagator sourced at [0, 0, 0, 0], using stout-smeared gauge links for the inversion, and write the zero-momentum projected correlator to a plain txt file in the run directory with no header or extra text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: proton_2pt_positive_parity_p0
+      type: baryon_2pt
+      name: Zero-momentum proton two-point correlator with positive-parity projection
+
+  hadrons:
+    - id: proton
+      name: proton
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: epsilon^{abc} (u^{Ta} C gamma_5 d^b) u^c
+      subtype: positive_parity_projected_local_2pt
+
+  propagators:
+    - id: prop_l_point_src
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_stout_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-08
+        maxiter: 10000
+        notes: Use periodic spatial and anti-periodic temporal fermion boundary conditions. On this ensemble u and d are treated as degenerate light quarks (mu=md), so one light propagator object is reused for all three uud lines in the proton contraction. Strange and charm masses are ensemble metadata only and are not inverted in this task.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: proton_2pt_measurement
+      type: baryon_2pt
+      propagator: prop_l_point_src
+      observable: proton_2pt_positive_parity_p0
+      contraction:
+        baryon_operator: proton
+        projector: Tmat = (I + gamma_t) / 2
+        gamma_t_definition: gamma_4
+        wick_structure: standard proton baryon 2pt with two uud contraction topologies
+        momentum_projection: sum over all sink spatial sites at fixed t to obtain p = [0, 0, 0]
+        propagator_reuse: single light propagator reused for u, d, u lines by isospin symmetry
+      execution:
+        spatial_sum_required: true
+        mpi_gather_required: true
+        time_slices: all 72 sink times
+        expected_output_per_t: projected complex correlator C(t)
+      validation:
+        - Verify the projector is implemented with gamma_t = gamma_4.
+        - Verify the produced correlator is available for all t = 0,...,71 after spatial sum and MPI gather.
+        - Check that Im[C(t)] is consistent with zero within numerical precision.
+        - Check that the forward/backward baryon time dependence is nontrivial and consistent with anti-periodic fermion temporal boundary conditions.
+
+output:
+  format: other
+  metadata: false
+  filename: proton_2pt.txt
+  location: run_directory
+  text_layout:
+    header: none
+    columns:
+      - t
+      - Re_C_t
+      - Im_C_t
+    rows: one row per sink time slice after spatial summation and MPI gather
+
+extras:
+  - Zero momentum is taken as the intended interpretation of the unspecified proton 2pt task and is implemented by the sink spatial sum at each t.
+  - The calculation uses a local point-source and point-sink proton correlator because only the source was fixed by the task and no sink smearing was requested.
+  - This local baryon correlator is executable as requested but may have larger excited-state contamination than a smeared-sink design.
+  - Use the standard baryon 2pt contraction chain and executor-side generate_einsum for the proton channel.
+
+freeform_plan: |
+  Standard task mode is used because this is a hadron two-point correlator calculation following the usual hadron -> propagator -> correlator chain.

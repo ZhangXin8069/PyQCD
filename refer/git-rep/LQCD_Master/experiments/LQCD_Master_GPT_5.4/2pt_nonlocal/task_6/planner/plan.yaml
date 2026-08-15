@@ -1,0 +1,205 @@
+task:
+  name: Dplus_nonlocal_2pt_zmax10
+  description: Compute the single-configuration nonlocal two-point function of the D+ meson (anti-d c) with a straight Wilson-line displacement applied only to the charm-quark leg along +z for separations z=0..10, using a point source at [0, 0, 0, 0]. Use stout-smeared links for all Dirac inversions and the original unsmeared gauge field for the Wilson line. Save a plain-text numeric-only txt file in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: dplus_nonlocal_2pt
+      type: meson_2pt
+      name: Dplus nonlocal pseudoscalar two-point correlator with +z Wilson-line displacement on charm leg
+
+  hadrons:
+    - id: dplus_nonlocal
+      name: D+
+      type: meson
+      flavor: anti-d c
+      momentum: [0, 0, 0]
+      interpolating_operator: "Sink operator: O_D(z,t)=sum_x bar_d(x,t) gamma5 W(x,x+z*z_hat;U_orig) c(x+z*z_hat,t), with z=0..10 and W the straight ordered product of original unsmeared links along +z. Source operator: O_D^dagger(0)=bar_c(0) gamma5 d(0) at source point [0,0,0,0]."
+      subtype: nonlocal_meson_2pt
+
+  propagators:
+    - id: prop_light_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_stout
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Invert the light propagator on the stout-smeared gauge field. This propagator supplies the anti-d line through gamma5-hermiticity in the connected open-flavor D+ correlator.
+      sink:
+        id: sink_point_light
+        type: point
+
+    - id: prop_charm_point
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm_stout
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Invert the charm propagator on the stout-smeared gauge field from the same point source.
+      sink:
+        id: sink_point_charm
+        type: point
+
+    - id: prop_charm_shifted_z
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: false
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: shifted_from_charm_forward
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: No additional inversion. For each sink site x=(vec{x},t) and each z=0..10, construct the shifted charm propagator S_c_shift(x;0,z)=W(x,x+z*z_hat;U_orig) S_c(x+z*z_hat,0), where W is the ordered product U_z(x)U_z(x+z_hat)...U_z(x+(z-1)z_hat) built from the original unsmeared gauge field with periodic spatial wrap in the z coordinate. For z=0, W=1 and S_c_shift=S_c.
+      sink:
+        id: sink_shifted_charm
+        type: other
+
+measurement:
+  correlators:
+    - id: corr_dplus_nonlocal_zscan
+      type: meson_2pt
+      propagator: prop_charm_shifted_z
+      observable: dplus_nonlocal_2pt
+      contraction: "For each z=0..10 and sink time t, compute C(z,t)=sum_x Tr[ S_l^dagger(x,t;0) * S_c_shift(x,t;0,z) ]. This is equivalent to the connected contraction of < O_D(z,t) O_D^dagger(0) > with gamma5 at sink and source removed by gamma5-hermiticity of the light line. Use both prop_light_point and prop_charm_shifted_z in the implementation; no disconnected diagrams. Save the full complex correlator."
+      storage_layout: "Write exactly four whitespace-separated numeric columns per row: z  t  ReC  ImC, with z varying slowest and t varying fastest, i.e. rows ordered as (z=0,t=0..71), (z=1,t=0..71), ..., (z=10,t=0..71)."
+      sanity_check: "Verify that the z=0 correlator equals the local connected D-meson two-point function built from the same light and unshifted charm propagators up to numerical precision."
+      interpretation_note: "This is a single-configuration raw correlator measurement. Because the Dirac inversions use stout-smeared links while the Wilson line uses original links, the operator is a user-requested mixed-link nonlocal bilinear and should not be overinterpreted as a renormalized physical observable without further matching and systematic checks."
+
+output:
+  format: other
+  metadata: false
+  filename: dplus_nonlocal_2pt_cfg10000.txt
+
+extras:
+  - plain_text_output_only
+  - no_header
+  - save_in_run_directory
+  - z_separations_0_through_10
+  - original_gauge_for_wilson_line_shift
+  - stout_smeared_gauge_for_all_inversions
+  - single_configuration_raw_correlator
+
+freeform_plan: |
+  Standard hadronic nonlocal meson two-point task.
+
+  Physics target:
+  Compute the zero-momentum connected D+ nonlocal pseudoscalar correlator
+    C(z,t) = sum_x < [bar d(x,t) gamma5 W(x,x+z zhat;U_orig) c(x+z zhat,t)] [bar c(0) gamma5 d(0)] >
+  for integer separations z = 0,1,...,10 with source point x0=[0,0,0,0].
+
+  Fixed operator choice and convention:
+  - Because the request specifies a D+ nonlocal two-point function but no Dirac structure, use the standard pseudoscalar D-meson interpolating bilinear gamma5.
+  - Place the nonlocality at the sink, not the source, so that the requested 'apply the nonlocal shift to the quark propagator, not the antiquark propagator' is implemented directly on the charm line.
+  - The sink operator is bar d(x,t) gamma5 W(x,x+z zhat) c(x+z zhat,t).
+  - The source operator is local bar c(0) gamma5 d(0) at [0,0,0,0].
+  - The Wilson line orientation is from x to x+z zhat along +z only, with path ordering in the forward direction.
+  - For z=0, the Wilson line is the identity and the operator reduces to the local D correlator.
+
+  Exact contraction object:
+  - Only the connected open-flavor contraction contributes.
+  - Using gamma5-hermiticity on the light line,
+      C(z,t) = sum_x Tr[ S_l^dagger(x,t;0) S_c_shift(x,t;0,z) ],
+    where
+      S_c_shift(x,t;0,z) = W(x,x+z zhat;U_orig) S_c(x+z zhat,t;0).
+  - This quantity is generally complex for nonzero z on a single configuration, so store the full complex result as separate real and imaginary parts.
+
+  Gauge-link usage:
+  - Read the original gauge configuration for cfg 10000.
+  - Keep one untouched copy for constructing the Wilson line W.
+  - Build a separate stout-smeared copy with parameters n_steps=1, rho=0.125, ndim=4 for all Dirac inversions.
+  - This mixed-link definition is intentional because it is explicitly required by the task.
+
+  Numerical steps:
+  1. Load the original gauge field.
+  2. Duplicate it; leave one copy unsmeared for Wilson-line transport.
+  3. Apply stout smearing (1, 0.125, 4) to the inversion copy.
+  4. Invert the light propagator from source [0,0,0,0] on the stout-smeared gauge field.
+  5. Invert the charm propagator from source [0,0,0,0] on the stout-smeared gauge field.
+  6. For each z=0..10 and each sink spacetime point x=(vec{x},t), build
+       W(x,x+z zhat;U_orig) = product_{n=0}^{z-1} U_z(x+n zhat)
+     with periodic wrapping in the spatial z coordinate.
+  7. Form the shifted charm propagator
+       S_c_shift(x,t;0,z) = W(x,x+z zhat;U_orig) S_c(x+z zhat,t;0).
+  8. For each timeslice t, sum over all spatial x to obtain
+       C(z,t) = sum_x Tr[ S_l^dagger(x,t;0) S_c_shift(x,t;0,z) ].
+  9. Perform the sanity check that the z=0 result matches the local D correlator from unshifted charm.
+  10. Save the output to dplus_nonlocal_2pt_cfg10000.txt in the run directory.
+
+  Output format:
+  - Plain txt only, no header, no comments, no metadata.
+  - Exactly four whitespace-separated numeric columns per line:
+      z  t  ReC  ImC
+  - Ordering is fixed: z outer loop, t inner loop.
+
+  Scope / interpretation:
+  - This is a per-configuration raw correlator measurement on one source and one configuration, suitable as an implementation test or data-production primitive, not a statistically controlled physics determination.
+  - No disconnected diagrams are required for the open-flavor D+ channel.
+  - No claim of validated charm-physics accuracy is made beyond executing the requested measurement on the specified ensemble and action parameters.

@@ -1,0 +1,179 @@
+task:
+  name: k_to_pi_vector_current_3pt_point_tseq8
+  description: Compute the K- to pi- three-point correlation function with source K-(anti-u s), sink pi-(anti-u d), gamma5 interpolating operators at source and sink, and the local vector current dbar gamma_x s at zero momentum using a point source at [0,0,0,0] and source-sink separation tseq=8. Use stout-smeared gauge links for all inversions and save only the final 3pt correlator to a plain txt file in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: c3_k_to_pi_vx
+      type: meson_3pt
+      name: K- to pi- three-point correlator with vector current dbar gamma_x s
+
+  hadrons:
+    - id: kaon_src
+      name: K-
+      type: meson
+      flavor: anti-u s
+      momentum: [0, 0, 0]
+      interpolating_operator: ubar gamma_5 s
+      subtype: pseudoscalar
+    - id: pion_snk
+      name: pi-
+      type: meson
+      flavor: anti-u d
+      momentum: [0, 0, 0]
+      interpolating_operator: ubar gamma_5 d
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_l_spectator
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_forward
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator reused as the anti-u spectator line; solve on the stout-smeared gauge field with xi_0=1.0 and ensemble multigrid.
+      sink:
+        id: point_sink_l
+        type: point
+
+    - id: prop_s_forward
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_forward
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward strange propagator for the source quark line entering the s to d current insertion.
+      sink:
+        id: point_sink_s
+        type: point
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_sequential
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Sequential light propagator built from the pi- sink block with gamma5 sink operator, zero sink momentum, and tseq=8; one sequential inversion for this fixed sink setup.
+      sink:
+        id: sequential_sink_t8
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_measurement_k_to_pi_vx
+      type: meson_3pt
+      propagator: prop_l_seq
+      observable: c3_k_to_pi_vx
+      source_hadron: kaon_src
+      sink_hadron: pion_snk
+      additional_propagators:
+        - prop_l_spectator
+        - prop_s_forward
+      current:
+        operator: dbar gamma_x s
+        current_quark_flow:
+          incoming: strange
+          outgoing: light
+      kinematics:
+        source_momentum: [0, 0, 0]
+        sink_momentum: [0, 0, 0]
+        momentum_transfer: [0, 0, 0]
+        tseq: 8
+      contraction_strategy:
+        method: sequential_source
+        sink_interpolator: gamma_5
+        source_interpolator: gamma_5
+        notes: Generate the meson 3pt contraction with the toolchain using src_antiquark=u, src_quark=s, sink_antiquark=u, snk_quark=d, current_quark=s, current_antiquark=d, gamma_src=gamma5, gamma_snk=gamma5, gamma_cur=gamma_x, tseq=8. Do not compute any 2pt correlator in this task.
+
+output:
+  format: other
+  metadata: false
+  filename: c3_kminus_to_piminus_vx_cfg10000_tseq8.txt
+  layout: rows of tseq, t_ins, real_part, imag_part with no header and no extra text
+  directory: .
+
+extras:
+  - Use MPI with 4 ranks and process grid [1, 1, 1, 4].
+  - Initialize PyQUDA with anti-periodic temporal boundary conditions and anisotropy 1.0.
+  - Save only insertion times 1 through 7 for the final three-point correlator.
+
+freeform_plan: |
+  Not used because this is a standard hadronic three-point correlator task.

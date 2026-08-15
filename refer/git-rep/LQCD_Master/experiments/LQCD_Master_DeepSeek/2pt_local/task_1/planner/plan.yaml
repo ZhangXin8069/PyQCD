@@ -1,0 +1,136 @@
+task:
+  name: pion_2pt_point_source
+  description: >
+    Compute the pion two-point correlation function C(t) = Σ_x ⟨O_π(x,t) O_π^†(0,0)⟩
+    using the interpolating operator O_π = bar{u} γ_5 d, with a single point source
+    at [0,0,0,0] and zero momentum projection. The Dirac operator is constructed from
+    stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4). Output is a plain text
+    file with one correlator value per time slice and no headers.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: pion_2pt
+      type: meson_2pt
+      name: Pion two-point correlation function
+
+  hadrons:
+    - id: pion
+      name: pion
+      type: meson
+      flavor: u_bar d (pion channel)
+      momentum: [0, 0, 0]
+      interpolating_operator: "bar{u} gamma_5 d"
+      subtype: pseudoscalar
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+        source_color_spin: "all 12 components (spin 0..3, color 0..2) excited — standard point-source convention"
+        notes: >
+          The point source is a unit delta on all 12 spin×color components
+          at the single spacetime point [0,0,0,0]. This is the standard
+          convention in QUDA/PyQUDA. At the sink, Tr[S^† S] sums over
+          sink spin-color and implicitly over the 12 source components.
+          If a single spin-color component were used instead, the
+          correlator would be smaller by a factor of 12.
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_multigrid
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        multigrid:
+          enabled: true
+          levels:
+            - [6, 6, 6, 3]
+            - [4, 4, 4, 6]
+          smoother: MR
+          nu_pre: 4
+          nu_post: 4
+          coarse_solver: CG
+          coarse_solver_tolerance: 1.0e-1
+          coarse_solver_maxiter: 200
+          n_vec: 24
+        notes: >
+          Conjugate gradient solver with a two-level multigrid preconditioner
+          for the light-quark propagator inversion on stout-smeared gauge links.
+          Smoother: MR (Minimum Residual) with 4 pre-/post-smoothing steps per
+          level. Coarse-grid solver: CG with tolerance 1e-1 and max 200 iterations.
+          The near-null-space is spanned by 24 vectors per level (standard for
+          light quarks on a 24³×72 lattice).
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: pion_corr
+      type: meson_2pt
+      propagator: prop_l
+      observable: pion_2pt
+      notes: >
+        Wick contraction: Tr[prop_l^†(x,t) prop_l(x,t)] summed over spatial x
+        at each time slice. The single light propagator is reused for both u and d
+        quark lines because of isospin symmetry (m_u = m_d).
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Single point source at spacetime origin [0,0,0,0] on configuration 10000."
+  - "Point source excites all 12 spin×color components (standard convention)."
+  - "Stout link smearing: 1 step, rho=0.125, 4-dimensional smearing."
+  - "Both source and sink are unsmeared point operators (no Gaussian/Wuppertal smearing on quark fields)."
+  - "Output is a plain text file with one floating-point number per time slice (t=0..71), no header or metadata."
+  - "Zero-momentum projected correlator: C(t) = Σ_x Tr[prop_l^†(x,t) prop_l(x,t)]."

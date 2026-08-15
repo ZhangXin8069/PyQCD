@@ -1,0 +1,132 @@
+task:
+  name: three_baryon_local_9q_multihadron_2pt
+  description: Compute the zero-total-momentum Euclidean two-point correlator for one composite local nine-quark operator O(x) = N(x) P(x) N(x), with N = epsilon(a,b,c) * (u^T_a Cgamma5 d_b) * d_c and P = epsilon(a,b,c) * (u^T_a Cgamma5 d_b) * u_c, using multi_hadron_2pt as one fully combined 9-quark contraction object. Apply P_plus = (1 + gamma4) / 2 inside each baryon block before assembling the three-baryon operator, use a common local source coordinate and a common local sink coordinate for all nine quark fields, use point-source light propagators from [0, 0, 0, 0], use 1-step stout-smeared gauge links in the inversions, and save plain-text output in the run directory.
+  task_mode: standard
+  runtime:
+    mpi_ranks: 8
+    grid_size: [1, 1, 2, 4]
+    notes: Use this runtime geometry for the production run; treat the ensemble process-grid metadata as archive information for the stored ensemble, not as the measurement launch geometry.
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions: [24, 24, 24, 72]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: npn_local_9q_2pt
+      type: multi_hadron_2pt
+      name: Fully combined local n-p-n nine-quark two-point correlator with common source and sink coordinates
+
+  hadrons:
+    - id: neutron_block_left
+      name: neutron_block_left
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus * epsilon(a,b,c) * (u^T_a Cgamma5 d_b) * d_c
+      subtype: single_term_block_projected_before_assembly
+    - id: proton_block_middle
+      name: proton_block_middle
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus * epsilon(a,b,c) * (u^T_a Cgamma5 d_b) * u_c
+      subtype: single_term_block_projected_before_assembly
+    - id: neutron_block_right
+      name: neutron_block_right
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus * epsilon(a,b,c) * (u^T_a Cgamma5 d_b) * d_c
+      subtype: single_term_block_projected_before_assembly
+    - id: npn_local_9q_operator
+      name: local_npn_nine_quark_operator
+      type: other
+      flavor: uuu dddddd
+      momentum: [0, 0, 0]
+      interpolating_operator: '[P_plus*N_block](x) * [P_plus*P_block](x) * [P_plus*N_block](x) with all three baryon blocks evaluated at the same spacetime point x; source operator is the corresponding conjugate composite operator at the same common point 0'
+      subtype: composite_local_9q_single_object
+
+  propagators:
+    - id: prop_l_point_src
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_point_solver_stout1
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Reuse this light propagator for both u and d lines by isospin symmetry. The inversion must use the 1-step stout-smeared gauge links specified above. These mass and clover values are accepted only if they are the tuned valence parameters for the stout-smeared operator on this ensemble; otherwise replace them with the tuned stout-smeared pair before production.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: corr_npn_local_9q
+      type: multi_hadron_2pt
+      propagator: prop_l_point_src
+      observable: npn_local_9q_2pt
+      operator_object: npn_local_9q_operator
+      hadron_blocks: [neutron_block_left, proton_block_middle, neutron_block_right]
+      source_sink_structure: local_9q_to_local_9q_common_coordinate
+      projector_scheme: per_baryon_P_plus_before_composite_assembly
+      projector: P_plus = (1 + gamma4) / 2
+      total_momentum: [0, 0, 0]
+      momentum_projection_scope: composite_only
+      baryon_block_momenta_are_not_independent: true
+      contraction_policy: single_combined_multihadron_object
+      factorized_product: false
+      include_inter_block_wick_permutations: true
+      wick_contraction_scope: full_9q
+      exchange_requirements:
+        u_quarks: all_permutations_across_three_blocks
+        d_quarks: all_permutations_across_three_blocks
+      disconnected_diagrams: false
+      notes: Build one composite correlator C(t) = sum_x < O(x,t) Obar(0) > for the local nine-quark operator. Do not construct or multiply separate baryon two-point functions. Include all allowed cross-block exchange terms among the three u fields and six d fields generated by the full Wick contraction of the local 9-quark operator.
+
+output:
+  format: other
+  filename: three_baryon_local_9q_2pt.txt
+  metadata: true
+
+extras:
+  - save_plain_text_in_run_directory
+  - use_multi_hadron_2pt_single_object
+  - full_9q_cross_block_wick_contraction
+  - per_baryon_P_plus_before_assembly
+  - zero_total_momentum_single_spatial_sum
+
+freeform_plan: |
+  Not used because this is a standard multi-hadron correlator task.

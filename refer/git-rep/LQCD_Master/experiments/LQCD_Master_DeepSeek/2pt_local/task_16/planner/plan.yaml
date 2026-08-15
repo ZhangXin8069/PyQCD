@@ -1,0 +1,153 @@
+task:
+  name: xi_c0_2pt
+  description: "Two-point correlation function of Xi_c0 (dsc) baryon at zero momentum. Interpolating operator ε^{abc}(d^{Ta}Cγ₅ s^b)c^c with positive-parity projector (1+γ₄)/2. Point source at [0,0,0,0], stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4). Light/strange quarks use multigrid solver; charm quark uses CG (MG coarse-grid correction is ineffective for heavy quarks). Saves raw correlator as headerless plain text with post-contraction sanity check."
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: xi_c0_2pt
+      type: baryon_2pt
+      name: "Xi_c0 two-point correlation function"
+
+  hadrons:
+    - id: xi_c0
+      name: Xi_c0
+      type: baryon
+      flavor: dsc
+      momentum: [0, 0, 0]
+      interpolating_operator: "ε^{abc} (d^{Ta} Cγ₅ s^b) c^c"
+      subtype: Cg5_diquark
+      parity_projector: "(1 + γ₄) / 2"
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+        notes: "Multigrid solver (2-level: [6,6,6,3] → [4,4,4,6]) for light (d) quark. MG is effective here because light quarks have strong low-mode dominance."
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_solver_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 2000
+        notes: "Multigrid solver (2-level: [6,6,6,3] → [4,4,4,6]) for strange quark. Strange mass is sufficiently light for MG to remain effective."
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_solver_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 2000
+        notes: "CG solver for charm quark. MG is NOT used: the 2-level MG parameters [6,6,6,3]→[4,4,4,6] are tuned for near-critical light quarks and the coarse-grid correction becomes ineffective for heavy quarks (mass 0.4159) that lack low-mode dominance. Standard CG converges reliably for charm on a 24³×72 lattice with this tolerance."
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: xi_c0_corr
+      type: baryon_2pt
+      propagator: [prop_l, prop_s, prop_c]
+      observable: xi_c0_2pt
+      hadron: xi_c0
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "Diquark structure: Cg5 = Cγ₅ (charge conjugation matrix × γ₅) for the ds pair"
+  - "Positive-parity projector: Tmat = (1 + γ₄) / 2 applied in the spin trace"
+  - "Only one Wick contraction term: all three quark flavors (d, s, c) are distinct — no exchange diagram"
+  - "Propagator-to-quark-line mapping: prop_l → d (position a), prop_s → s (position b), prop_c → c (position c) in ε^{abc}(d^{Ta}Cγ₅s^b)c^c. This ordering must be passed to generate_einsum so that S_d, S_s, S_c are contracted into the correct quark lines."
+  - "Solver strategy: multigrid for light (d) and strange (s); CG for charm (c). The MG coarse-grid correction relies on low-mode dominance present only for near-critical quarks; using MG on charm would risk stagnation or non-convergence."
+  - "Pre-flight check: verify that generate_einsum(type='baryon_2pt') supports a distinct-flavor baryon with diquark='Cg5' and the flavor map {a:d, b:s, c:c}. If the tool does not natively support this, manually supply the einsum string and sign derived from the Wick contraction (only one term, positive sign)."
+  - "Post-contraction sanity check: before writing output, verify (1) C(t=0) > 0 and (2) |C(t)| decreases monotonically for t < T/2 (modulo statistical fluctuations at late t). If either check fails, abort with an error message instead of writing a corrupted headerless text file."
+  - "Output: plain text (.txt), one correlator value per time slice, no header or metadata, saved to the run directory"

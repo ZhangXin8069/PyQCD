@@ -1,0 +1,127 @@
+task:
+  name: Ds_meson_two_point_function
+  description: Compute the zero-momentum local two-point correlator for the D_s meson on configuration 10000, interpreting the unspecified 'D_s meson' request as the standard pseudoscalar channel with interpolating operator O_Ds = sbar gamma5 c, using a point source at [0, 0, 0, 0], with both strange and charm inversions performed using the full Wilson-clover Dirac operator built from one-step stout-smeared gauge links (rho=0.125, ndim=4), and save the per-configuration correlator as plain text in the run directory without header text.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: ds_2pt
+      type: meson_2pt
+      name: D_s pseudoscalar two-point correlator
+
+  hadrons:
+    - id: ds_meson
+      name: D_s
+      type: meson
+      flavor: c sbar
+      momentum: [0, 0, 0]
+      interpolating_operator: sbar gamma5 c
+      subtype: pseudoscalar_heavy_light
+
+  propagators:
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Full isotropic Wilson-clover solve with xi_0=1.0 and csw_t=csw_r=1.160920226, using the same one-step 4D stout-smeared links for both hopping and clover terms. Multigrid preconditioning may be used for the strange solve using the ensemble hierarchy.
+      sink:
+        id: local_sink_s
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Full isotropic Wilson-clover solve with xi_0=1.0 and csw_t=csw_r=1.160920226, using the same one-step 4D stout-smeared links for both hopping and clover terms. Use a standard non-multigrid clover solve for charm unless a charm-specific multigrid setup has been separately validated on this ensemble.
+      sink:
+        id: local_sink_c
+        type: point
+
+measurement:
+  correlators:
+    - id: corr_ds_local
+      type: meson_2pt
+      observable: ds_2pt
+      propagator: prop_c
+      antiquark_propagator: prop_s
+      quark_flavor: charm
+      antiquark_flavor: strange
+      gamma_source: gamma5
+      gamma_sink: gamma5
+      contraction: zero_momentum_local_heavy_light
+      definition: C_Ds(t) = sum_x Tr[S_s^†(x,0) S_c(x,0)] equivalent to the local gamma5-gamma5 heavy-light pseudoscalar contraction
+      scope: per_configuration_measurement
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - Interpret the unspecified D_s request as the standard local pseudoscalar channel sbar gamma5 c.
+  - Perform global spatial summation and MPI reduction before writing, and write only from rank 0.
+  - Save exactly Lt=72 rows in increasing t with columns t Re Im and no header to ./ds_2pt_cfg10000.txt.
+  - Check solver convergence for both propagators and verify the zero-momentum correlator imaginary part is numerically negligible.
+
+freeform_plan: |
+  Not used because this is a standard hadronic correlator task.

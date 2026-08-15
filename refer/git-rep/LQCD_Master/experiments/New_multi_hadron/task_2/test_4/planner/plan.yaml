@@ -1,0 +1,159 @@
+task:
+  name: local_three_baryon_9q_multihadron_2pt
+  description: Compute one genuine combined multi-hadron two-point correlator for a local nine-quark operator built from three single-term baryon blocks, with P_plus applied to each baryon block before assembling the full 9-quark source and sink operators, using a shared light-quark point-source propagator on stout-smeared gauge links.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: three_baryon_local_2pt
+      type: multi_hadron_2pt
+      name: local three-baryon nine-quark two-point function
+
+  hadrons:
+    - id: baryon_block_1
+      name: udd_single_term_block_1_projected
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus[(u^T Cgamma5 d) d]
+      subtype: single_term_local_baryon_with_embedded_P_plus_block_projection
+    - id: baryon_block_2
+      name: uud_single_term_block_2_projected
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus[(u^T Cgamma5 d) u]
+      subtype: single_term_local_baryon_with_embedded_P_plus_block_projection
+    - id: baryon_block_3
+      name: udd_single_term_block_3_projected
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: P_plus[(u^T Cgamma5 d) d]
+      subtype: single_term_local_baryon_with_embedded_P_plus_block_projection
+    - id: three_baryon_local_9q
+      name: combined_local_9q_three_baryon_operator
+      type: other
+      flavor: udd_uud_udd
+      momentum: [0, 0, 0]
+      interpolating_operator: (P_plus[(u^T Cgamma5 d) d]) * (P_plus[(u^T Cgamma5 d) u]) * (P_plus[(u^T Cgamma5 d) d])
+      subtype: local_multi_hadron_source_and_sink_built_from_three_preprojected_baryon_blocks
+
+  propagators:
+    - id: prop_l_point_src
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_clover_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Use one common light propagator for all u and d quark lines by isospin symmetry; apply inversions on the stout-smeared gauge links; temporal fermion boundary condition is anti-periodic.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: three_baryon_local_2pt_measurement
+      type: multi_hadron_2pt
+      propagator: prop_l_point_src
+      observable: three_baryon_local_2pt
+      operator_structure: one combined nine-quark source and sink operator assembled from three already P_plus-projected baryon blocks, not a product of separate baryon two-point correlators
+      baryon_blocks:
+        - baryon_block_1
+        - baryon_block_2
+        - baryon_block_3
+      momentum_projection:
+        total_momentum: [0, 0, 0]
+        baryon_block_momenta:
+          - [0, 0, 0]
+          - [0, 0, 0]
+          - [0, 0, 0]
+      spin_projection:
+        projector_definition: (1 + gamma4) / 2
+        projector_placement: apply inside each baryon block before forming the composite 9-quark operator
+        composite_level_projector: none
+      wick_contraction:
+        connected_only: true
+        flavor_symmetry: u_equals_d_equals_light
+        contraction_strategy: construct one multi_hadron_2pt contraction object spanning all nine quark fields with all allowed same-flavor permutations across the three baryon blocks, using the preprojected block definitions as the contraction inputs
+      statistics:
+        source_positions_per_configuration: 1
+        average_over_source_positions: false
+
+execution:
+  mpi_ranks: 8
+  grid_size: [1, 1, 2, 4]
+  launch_hint: mpirun -np 8 python run_multihadron_2pt.py
+  cfgs_per_run:
+    - '10000'
+  notes: Treat this execution block as the runtime source of truth for launcher and domain decomposition; the ensemble MPI fields are retained as fixed ensemble metadata.
+
+output:
+  format: other
+  metadata: true
+  filename: three_baryon_local_9q_cfg10000.txt
+  location: ./three_baryon_local_9q_cfg10000.txt
+  contents:
+    - correlator_real_imag_by_timeslice
+    - ensemble_and_solver_metadata
+    - operator_and_projection_metadata
+    - execution_layout_metadata
+
+extras:
+  - use_multi_hadron_2pt_generator
+  - embed_P_plus_in_each_baryon_block
+  - save_plain_text_in_run_directory
+
+freeform_plan: |
+  Not used because this is a standard multi-hadron correlator task.

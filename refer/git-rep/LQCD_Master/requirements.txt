@@ -1,0 +1,12 @@
+# Core
+openai>=1.0
+prompt_toolkit>=3.0
+pyyaml>=6.0
+
+# Numerical
+numpy>=1.24
+opt_einsum>=3.3
+
+# GPU backend — install the variant matching your CUDA / ROCm toolchain
+# cupy-cuda12x     # CUDA 12.x
+# cupy-rocm-5-0    # ROCm 5.x

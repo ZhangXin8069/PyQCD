@@ -1,0 +1,179 @@
+task:
+  name: xi_c_plus_baryon_2pt
+  description: >
+    Compute the zero-momentum two-point correlation function of the Xi_c+ (usc)
+    charmed baryon using a point source at [0,0,0,0], Cγ5 interpolating operator
+    for the us diquark, positive-parity projector P^+ = (1+γ_t)/2, and
+    stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4) for all
+    propagator inversions.  This is a validation run; a single point source
+    is used without Gaussian/Wuppertal smearing.
+  task_mode: standard
+
+physics:
+  observables:
+    - id: xi_c_2pt
+      type: baryon_2pt
+      name: Xi_c_plus two-point correlator
+
+  hadrons:
+    - id: xi_c_plus
+      name: Xi_c_plus
+      type: baryon
+      flavor: usc
+      momentum: [0, 0, 0]
+      interpolating_operator:
+        diquark_flavors: [u, s]
+        diquark_gamma: Cg5
+        spectator_flavor: c
+      parity_projector: P_plus
+      parity_projector_expr: (1 + gamma_t) / 2
+      subtype: positive_parity_ground_state
+
+  propagators:
+    - id: prop_l
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_clover_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: Multigrid solver with levels [6,6,6,3] and [4,4,4,6].  Point source only (validation run).
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_clover_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: Multigrid solver with levels [6,6,6,3] and [4,4,4,6].  Point source only (validation run).
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_clover_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 20000
+        notes: >
+          Primary: multigrid solver with levels [6,6,6,3] and [4,4,4,6].
+          WARNING — multigrid is optimised for light quarks and may stall or
+          fail to converge for the heavy charm quark (mass 0.4159).
+          FALLBACK: if the multigrid does not converge within maxiter=20000
+          at tolerance 1e-12, switch to a standard CG solver (same tolerance
+          and maxiter).  Verify with the C24P29 ensemble providers that the
+          multigrid levels have been validated for charm.
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: xi_c_2pt_meas
+      type: baryon_2pt
+      propagators: [prop_l, prop_s, prop_c]
+      observable: xi_c_2pt
+      hadron: xi_c_plus
+      diquark_gamma: Cg5
+      parity_projector: P_plus
+      momentum: [0, 0, 0]
+      contraction_topology: single
+      notes: >
+        All three quark flavors (u, s, c) are distinct, yielding exactly one
+        Wick contraction topology with no exchange term.  Use generate_einsum
+        tool with type=baryon_2pt to produce the contraction code.
+
+output:
+  format: txt
+  filename: xi_c_plus_2pt_cfg{n_cfg}.txt
+  metadata: false
+  header: false
+  notes: Plain correlator values per time slice, no headers or extra text.
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+extras:
+  - "Use generate_einsum(type=baryon_2pt) to produce the contraction code; all three quark flavors (u,s,c) are distinct so only one Wick topology (no exchange term)."
+  - "Positive-parity projector P_plus = (1 + gamma_t)/2 isolates the J^P = 1/2^+ ground state of Xi_c+."
+  - "Stout smearing (n_steps=1, rho=0.125, ndim=4) applied to gauge links before all three inversions."
+  - "Output written as bare numeric values per time slice to a .txt file in the run directory with no header."
+  - "RISK (charm solver): The multigrid levels [6,6,6,3]/[4,4,4,6] are calibrated for light quarks and may stall for the heavy charm quark (mass 0.4159).  Mitigation: if multigrid does not converge within maxiter=20000, fall back to a standard CG solver with the same tolerance 1e-12 and maxiter 20000.  Confirm with C24P29 ensemble providers whether these multigrid levels have been validated for charm."
+  - "RISK (point-source overlap): A point source without Gaussian/Wuppertal smearing gives poor ground-state overlap for baryons, leading to significant excited-state contamination at early and intermediate time slices.  The current setup is suitable only for a quick validation run.  For production-quality Xi_c+ spectroscopy, add Gaussian-smeared sources and compute both SS and SP (smeared-point) correlators."

@@ -1,0 +1,190 @@
+task:
+  name: Ds_to_phi_vector_3pt_connected
+  description: Compute the bare connected-only zero-spatial-momentum three-point correlation function for Ds+ -> phi using source meson flavor anti-s c, sink meson flavor anti-s s, source interpolator sbar * gamma_5 * c, sink interpolator sbar * gamma_x * s, and local vector current sbar * gamma_x * c, with a point source at [0, 0, 0, 0] and tseq = 8. This setup has p_i = p_f = [0,0,0], so it measures the correlator at zero spatial momentum transfer and q^2_max rather than q^2 = 0. Only the 3pt correlator is produced and written as plain txt in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: ds_to_phi_vx_3pt_conn
+      type: meson_3pt
+      name: Ds_to_phi_vector_current_gamma_x_three_point_connected
+
+  hadrons:
+    - id: ds_source
+      name: Ds_plus
+      type: meson
+      flavor: anti-s c
+      momentum: [0, 0, 0]
+      interpolating_operator: sbar * gamma_5 * c
+      subtype: pseudoscalar
+    - id: phi_sink
+      name: phi
+      type: meson
+      flavor: anti-s s
+      momentum: [0, 0, 0]
+      interpolating_operator: sbar * gamma_x * s
+      subtype: vector
+
+  propagators:
+    - id: prop_s_forward
+      quark_flavor: strange
+      role: spectator_forward_propagator
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward strange propagator from the point source. Used as the spectator anti-strange line shared by source Ds and sink phi in the connected topology. The Dirac operator is taken to use 1-step 4D stout-smeared links exactly as requested. Because the listed strange mass and clover coefficient are reused from the ensemble metadata rather than retuned for this stout-smeared valence operator, this should be treated as an exploratory bare-valence setup.
+      sink:
+        id: local_sink_s
+        type: point
+
+    - id: prop_c_forward
+      quark_flavor: charm
+      role: current_side_forward_propagator
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward charm propagator from the same point source. This is the line annihilated by the current sbar * gamma_x * c. The listed charm mass and clover coefficient are not separately validated here for the stout-smeared valence operator at this lattice spacing, so the result is suitable as a raw correlator measurement but not a precision charm-physics determination.
+      sink:
+        id: local_sink_c
+        type: point
+
+    - id: prop_s_sequential
+      quark_flavor: strange
+      role: sequential_sink_propagator
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      sequential_source:
+        hadron: phi_sink
+        tseq: 8
+        sink_momentum: [0, 0, 0]
+        sink_interpolating_operator: sbar * gamma_x * s
+        built_from:
+          - prop_s_forward
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_strange_seq
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Strange sequential propagator for the connected sink block at fixed sink gamma_x, zero sink momentum, and tseq = 8. Flavor flow for the connected contribution is O_phi(x)=sbar(x) gamma_x s(x), J(z)=sbar(z) gamma_x c(z), and O_Ds^dagger(0)=-cbar(0) gamma_5 s(0). Wick contraction gives one connected topology: the source strange contracts directly to the sink anti-strange as spectator, while the source charm propagates to the current and is converted there into a strange quark that propagates to the sink. The sequential inversion therefore uses the strange Dirac operator built from the phi sink block. The disconnected phi sink-loop topology is omitted by design in this connected-only plan.
+      sink:
+        id: seq_sink_phi_gx_t8
+        type: other
+
+measurement:
+  correlators:
+    - id: c3_ds_to_phi_vx_connected
+      type: meson_3pt
+      propagator: prop_s_sequential
+      propagators_used:
+        - prop_s_forward
+        - prop_c_forward
+        - prop_s_sequential
+      observable: ds_to_phi_vx_3pt_conn
+      source_hadron: ds_source
+      sink_hadron: phi_sink
+      current: sbar * gamma_x * c
+      tseq: 8
+      source_momentum: [0, 0, 0]
+      sink_momentum: [0, 0, 0]
+      spatial_momentum_transfer: [0, 0, 0]
+      kinematics_note: This is the rest-to-rest correlator, so the saved data correspond to zero spatial momentum transfer and physical q^2_max = (m_Ds - m_phi)^2, not q^2 = 0.
+      approximation: connected_only
+      disconnected_policy: Omit the disconnected contribution in which the phi sink operator forms an s-loop disconnected from the source-current line. This is an explicit approximation, acceptable only if the intended output is the connected bare 3pt correlator rather than the full flavor-singlet vector channel.
+      contraction_strategy: Use the standard meson sequential-source method for the connected topology with src_antiquark = s, src_quark = c, sink_antiquark = s, snk_quark = s, current_quark = c, current_antiquark = s, gamma_src = gamma5, gamma_snk = gamma_x, gamma_cur = gamma_x, and tseq = 8. The source operator is treated through O_Ds^dagger at t = 0, giving the usual source-side Dirac adjoint for the gamma_5 bilinear.
+      insertion_times:
+        saved_range: [1, 7]
+        policy: Save only tau = 1,...,tseq-1. Exclude contact terms at tau = 0 and tau = tseq. Do not save times outside the source-sink interval; after shifting the source to t = 0, only the forward window strictly between source and sink is written to file.
+      analysis_note: No 2pt correlators are computed in this task, so this output is a raw bare 3pt correlator without internal spectroscopy or overlap checks.
+
+output:
+  format: other
+  filename: ds_to_phi_3pt_cfg10000_tseq8.txt
+  metadata: false
+  layout: rows of [tseq, t_insert, real, imag] with no header and no extra text
+  destination: run directory
+
+extras:
+  - connected_only_phi_channel
+  - q2_max_rest_to_rest
+  - point_source_only
+  - no_2pt_measurement
+  - stout_smeared_valence_exploratory
+
+freeform_plan: |
+  Not used because this is a standard hadronic correlator task.

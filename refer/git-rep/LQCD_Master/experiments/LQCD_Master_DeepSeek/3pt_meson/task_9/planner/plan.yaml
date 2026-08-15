@@ -1,0 +1,209 @@
+task:
+  name: Ds_EM_3pt_charm_connected
+  description: >
+    Three-point correlation function for Ds+ electromagnetic transition
+    via charm-quark vector current (c->c), connected contribution only.
+    Ds+ meson (anti-s + c) at both source and sink with gamma_5 interpolating
+    operator. Current insertion: bar{c} gamma_x c. Point source at
+    origin, zero momentum, sequential source at t_seq=8.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+
+physics:
+  observables:
+    - id: ds_em_ff_conn
+      type: meson_3pt
+      name: "Ds+ electromagnetic form factor — charm connected contribution"
+
+  hadrons:
+    - id: Ds_source
+      name: Ds_plus_src
+      type: meson
+      flavor: "anti-s + c"
+      momentum: [0, 0, 0]
+      interpolating_operator: "gamma_5"
+      subtype: source
+    - id: Ds_sink
+      name: Ds_plus_snk
+      type: meson
+      flavor: "anti-s + c"
+      momentum: [0, 0, 0]
+      interpolating_operator: "gamma_5"
+      subtype: sink
+
+  propagators:
+    - id: prop_s
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 3000
+        notes: >
+          Strange quark forward propagator; CG on normal equations.
+          Point source is a spin-color Kronecker delta at the origin
+          (no gamma insertion). All operator gamma structures are
+          inserted in the sequential-source construction and the
+          final contraction via generate_einsum.
+      sink:
+        id: sink_s
+        type: point
+
+    - id: prop_c
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_charm
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 3000
+        notes: >
+          Charm quark forward propagator; CG on normal equations.
+          Point source is a spin-color Kronecker delta at the origin.
+      sink:
+        id: sink_c
+        type: point
+
+    - id: prop_c_seq
+      quark_flavor: charm
+      source:
+        source_type: wall
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: cg_charm_seq
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 3000
+        notes: >
+          Charm sequential propagator. Constructed via the two-dagger
+          sequential-source method:
+
+          Sink block: B(x) = gamma_5 * prop_s(x, t=8) * gamma_5.
+          This includes BOTH the sink gamma_5 (from O_Ds = bar{s} gamma_5 c)
+          AND the source gamma_5 (from O_Ds^dagger = -bar{c} gamma_5 s) acting
+          on the spectator strange-quark line.
+
+          Sequential source (two-dagger convention):
+          eta_seq(y) = gamma_5 * B^dagger(y) * gamma_5
+          placed at all spatial points y on time slice t=8 (wall source)
+          for zero-momentum sink projection.
+
+          The sequential propagator G_seq satisfies:
+          D_charm * G_seq = eta_seq.
+
+          Overall minus sign from O_Ds^dagger is included in the final
+          contraction via generate_einsum.
+      sink:
+        id: sink_c_seq
+        type: point
+
+measurement:
+  correlators:
+    - id: ds_3pt_conn_gammax
+      type: meson_3pt
+      propagator: prop_c_seq
+      observable: ds_em_ff_conn
+      notes: >
+        Connected three-point contraction for Ds+ EM form factor.
+        Source operator: O_Ds^dagger = -bar{c} gamma_5 s
+        Sink operator:  O_Ds        = bar{s} gamma_5 c
+        Current:        J_x         = bar{c} gamma_x c
+
+        Contraction derived via generate_einsum(type="meson_3pt",
+        source_op=gamma_5, sink_op=gamma_5, current=gamma_x,
+        active_quark=charm, spectator_quark=strange).
+
+        The sequential propagator G_seq (prop_c_seq) encodes both
+        source and sink gamma_5 insertions on the spectator line.
+        Contract G_seq(z,tau) with gamma_x and the forward charm
+        propagator prop_c(z,tau) at each current time tau = 0..8.
+
+        Zero sink momentum; no Fourier phase factor needed.
+        No disconnected contribution computed.
+
+output:
+  format: txt
+  metadata: false
+  notes: >
+    Save only the numerical values of C_3(tau) for tau = 0..8 to a txt
+    file in the run directory. Each line: tau  Re[C_3]  Im[C_3].
+    No header, no extra text.
+
+extras:
+  - "Connected diagram only; disconnected charm-loop contribution not computed."
+  - "Two-point function not computed (user requested 3pt only)."
+  - "Stout link smearing (1 step, rho=0.125, 4-dim) applied before all inversions."
+  - "Current insertion: vector gamma_x (spatial x-component of bar{c} gamma_mu c)."
+  - "All propagators use the same stout-smeared gauge field."
+  - "Sequential source constructed from prop_s with both source and sink gamma_5 on the spectator line (sink block = gamma_5 * prop_s * gamma_5), two-dagger convention, solved with charm action."
+  - "Forward point sources are spin-color Kronecker deltas; all operator gamma structures are inserted in the sequential-source construction and final contraction via generate_einsum."
+  - "Sequential source is a wall source spanning all spatial points at t=8 for correct zero-momentum sink projection."

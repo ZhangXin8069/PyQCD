@@ -1,0 +1,150 @@
+task:
+  name: local_two_baryon_six_quark_2pt
+  description: Compute one genuine local six-quark two-point correlator for the combined operator O=((u^T Cg5 d)d)((u^T Cg5 d)u), using a shared light point-source propagator, with P_plus applied separately to each baryon block before assembling the full multi-hadron contraction.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: obs_two_baryon_local_2pt
+      type: multi_hadron_2pt
+      name: local two-baryon six-quark two-point correlator
+
+  hadrons:
+    - id: hadron_n_like
+      name: neutron-like single-term baryon block
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cg5 d) d
+      subtype: single_term_local_baryon
+    - id: hadron_p_like
+      name: proton-like single-term baryon block
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cg5 d) u
+      subtype: single_term_local_baryon
+    - id: hadron_two_baryon
+      name: local two-baryon combined operator
+      type: other
+      flavor: udd x uud
+      momentum: [0, 0, 0]
+      interpolating_operator: ((u^T Cg5 d) d) ((u^T Cg5 d) u)
+      subtype: local_six_quark_operator
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: clover_light_point_solver
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Use one light-quark propagator object for all u and d lines by isospin symmetry; the stout-smeared links enter the clover Dirac operator used in the inversion.
+      sink:
+        id: sink_local_common_point
+        type: other
+
+measurement:
+  correlators:
+    - id: corr_two_baryon_local
+      type: multi_hadron_2pt
+      propagator: prop_l_point
+      observable: obs_two_baryon_local_2pt
+      operator_definition:
+        source_operator:
+          kind: local_six_quark
+          common_spatial_point: true
+          common_time_slice: true
+          baryon_blocks:
+            - block_id: hadron_n_like
+              order: 1
+              projector: P_plus
+              projector_application: per_baryon_block
+            - block_id: hadron_p_like
+              order: 2
+              projector: P_plus
+              projector_application: per_baryon_block
+        sink_operator:
+          kind: local_six_quark
+          common_spatial_point: true
+          common_time_slice: true
+          baryon_blocks:
+            - block_id: hadron_n_like
+              order: 1
+              projector: P_plus
+              projector_application: per_baryon_block
+            - block_id: hadron_p_like
+              order: 2
+              projector: P_plus
+              projector_application: per_baryon_block
+        contraction_strategy:
+          combined_object: true
+          factorized_product_forbidden: true
+          local_common_sink_point_before_sum: true
+          local_common_source_point: true
+        momentum_projection:
+          total_momentum: [0, 0, 0]
+          sink_spatial_sum: overall_only
+          independent_baryon_sums: false
+        codegen:
+          generator_path: multi_hadron_2pt
+          required_support: nonfactorized_local_six_quark_two_baryon
+          fallback_allowed: false
+
+output:
+  format: other
+  metadata: true
+
+extras:
+  - save plain text correlator file in run directory
+  - apply P_plus separately on each baryon block
+  - perform one combined six-quark contraction object
+  - use one common sink point before overall spatial sum
+  - require multi_hadron_2pt codegen support without factorization
+
+freeform_plan: |

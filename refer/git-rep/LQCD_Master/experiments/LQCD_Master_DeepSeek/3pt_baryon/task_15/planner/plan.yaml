@@ -1,0 +1,232 @@
+ensemble:
+  preset: C24P29
+  cfg_num:
+  - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+  - 24
+  - 24
+  - 24
+  - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+  - - 6
+    - 6
+    - 6
+    - 3
+  - - 4
+    - 4
+    - 4
+    - 6
+  mpi_num: 4
+  process_grid:
+  - 1
+  - 1
+  - 1
+  - 4
+task:
+  name: Xi_to_Lambda_axial_3pt
+  description: 'Compute the three-point correlation function for the Xi- to Lambda
+    transition mediated by the axial-vector current (s to u, gamma_1 gamma_5). Source
+    operator: Xi- = epsilon^{abc} (d^{aT} C gamma_5 s^b) s^c at t=0 (point source
+    at spatial origin). Sink operator: Lambda = epsilon^{def} (u^{dT} C gamma_5 d^e)
+    s^f at t_seq=8. Current insertion: J = bar{u} gamma_1 gamma_5 s. Positive-parity
+    projector: T = (1 + gamma_4) / 2 applied at the sink. All propagators computed
+    with stout-smeared gauge links (n_steps=1, rho=0.125, ndim=4). Point source at
+    origin, zero momentum, t_seq=8. CRITICAL: Source Xi- has two identical s quarks
+    (positions b,c) -- the sequential-source construction must include BOTH contraction
+    terms with relative minus sign from source-side antisymmetrization. See extras
+    for BaryonOp mapping and Wick-contraction details.'
+  task_mode: standard
+physics:
+  observables:
+  - id: xi_to_lambda_axial
+    type: baryon_3pt
+    name: Xi- to Lambda axial current three-point function
+  hadrons:
+  - id: xi_minus
+    name: Xi_minus
+    type: baryon
+    flavor: dss
+    momentum:
+    - 0
+    - 0
+    - 0
+    interpolating_operator: epsilon^{abc} (d^{aT} C gamma_5 s^b) s^c
+    baryon_op: BaryonOp('xi_minus', {a:'d', b:'s', c:'s'}, 'Cg5')
+    subtype: source
+  - id: lambda
+    name: Lambda
+    type: baryon
+    flavor: uds
+    momentum:
+    - 0
+    - 0
+    - 0
+    interpolating_operator: epsilon^{def} (u^{dT} C gamma_5 d^e) s^f
+    baryon_op: BaryonOp('lambda', {d:'u', e:'d', f:'s'}, 'Cg5')
+    subtype: sink
+  propagators:
+  - id: prop_l_fwd
+    quark_flavor: light
+    source:
+      source_type: point
+      source_position:
+      - 0
+      - 0
+      - 0
+      - 0
+      source_momentum:
+      - 0
+      - 0
+      - 0
+    gauge_field:
+      stout_link_smear:
+        enabled: true
+        parameters:
+          rho: 0.125
+          n_steps: 1
+          ndim: 4
+    solver:
+      id: solver_l
+      quark_mass: -0.277
+      clover_coefficient: 1.160920226
+      tolerance: 1.0e-12
+      maxiter: 20000
+      notes: CG solver with multigrid preconditioning for light quark
+    sink:
+      id: sink_point
+      type: point
+  - id: prop_s_fwd
+    quark_flavor: strange
+    source:
+      source_type: point
+      source_position:
+      - 0
+      - 0
+      - 0
+      - 0
+      source_momentum:
+      - 0
+      - 0
+      - 0
+    gauge_field:
+      stout_link_smear:
+        enabled: true
+        parameters:
+          rho: 0.125
+          n_steps: 1
+          ndim: 4
+    solver:
+      id: solver_s
+      quark_mass: -0.2356
+      clover_coefficient: 1.160920226
+      tolerance: 1.0e-12
+      maxiter: 20000
+      notes: CG solver with multigrid preconditioning for strange quark
+    sink:
+      id: sink_point
+      type: point
+  - id: prop_l_seq
+    quark_flavor: light
+    source:
+      source_type: sequential
+      source_position:
+      - 0
+      - 0
+      - 0
+      - 8
+      source_momentum:
+      - 0
+      - 0
+      - 0
+      notes: 'Sequential source is a FULL-SPATIAL-VOLUME object constructed at time
+        slice t=8 (NOT a point source). Spatial position [0,0,0] is placeholder --
+        the source occupies all (x,y,z) at t=8. Constructed from Lambda sink block
+        using forward prop_l and prop_s, with projector (1+gamma_4)/2. Two-dagger
+        convention: eta_seq = gamma_5 B^dagger gamma_5, then solve D_l G_seq = eta_seq.'
+    gauge_field:
+      stout_link_smear:
+        enabled: true
+        parameters:
+          rho: 0.125
+          n_steps: 1
+          ndim: 4
+    solver:
+      id: solver_l_seq
+      quark_mass: -0.277
+      clover_coefficient: 1.160920226
+      tolerance: 1.0e-12
+      maxiter: 20000
+      notes: Sequential propagator for the u-quark line connecting sink Lambda u(d)
+        to current ubar. The sequential source includes TWO antisymmetrized terms
+        from the two identical source-side s quarks -- see extras.
+    sink:
+      id: sink_point
+      type: point
+measurement:
+  correlators:
+  - id: c3_xi_to_lambda_axial
+    type: baryon_3pt
+    source_hadron: xi_minus
+    sink_hadron: lambda
+    current:
+      flavor_pair:
+      - s
+      - u
+      gamma_structure: gamma_1 gamma_5
+      type: axial_vector
+      current_op: Current('s', 'u', 'g1g5')
+    projector: (1 + gamma_4) / 2
+    forward_propagators:
+    - prop_l_fwd
+    - prop_s_fwd
+    sequential_propagator: prop_l_seq
+    t_seq: 8
+    observable: xi_to_lambda_axial
+output:
+  format: txt
+  metadata: false
+  description: Save C_3(tau) values for tau=1..7 as plain text, one value per line,
+    to a file in the run directory. No header or extra text.
+extras:
+- 'WICK CONTRACTION (source-side antisymmetrization): Xi- source has two identical
+  s quarks (positions b,c in epsilon^{abc}). The Wick contraction yields two terms
+  with OPPOSITE Fermi sign: (A) sink s -> source sbar^b, current s -> source sbar^c;
+  (B) sink s -> source sbar^c, current s -> source sbar^b. BOTH terms must be summed
+  with the relative minus sign in the sequential-source construction. This is structurally
+  different from the Lambda->proton reference where antisymmetrization is at the SINK.'
+- 'BaryonOp MAPPING: Source Xi- = BaryonOp(''xi_minus'', {a:''d'', b:''s'', c:''s''},
+  ''Cg5''); Sink Lambda = BaryonOp(''lambda'', {d:''u'', e:''d'', f:''s''}, ''Cg5'');
+  Current = Current(''s'', ''u'', ''g1g5''). The sequential propagator opens flavor
+  position d (the u quark) at the sink Lambda. Flavor index e (d quark) contracts
+  with forward prop_l; flavor index f (s quark) contracts with forward prop_s.'
+- 'SEQUENTIAL SOURCE: The sequential source is a full-spatial-volume object at t=8
+  (source_position=[0,0,0,8] indicates the time slice only; the source occupies all
+  x,y,z). It is NOT a point source. Constructed from the Lambda sink block by contracting
+  closed quark lines (d, s) with forward propagators, leaving the u line open for
+  the sequential solve.'
+- 'GAMMA CONVENTION: gamma_x = gamma_1 in DeGrand-Rossi basis. Current gamma structure
+  gamma_1*gamma_5 corresponds to axial-vector current in x-direction. Projector (1+gamma_4)/2
+  selects positive-parity channel (gamma_4 projects in DeGrand-Rossi basis).'
+- 'DIAGNOSTIC: After constructing the sequential source eta_seq, print its L2 norm
+  ||eta_seq|| to verify it is non-vanishing. Also compute and print a sample contraction
+  Tr[G_seq(z,tau) * gamma_1*gamma_5 * S_s(z,tau)] at tau=4 as a sanity check.'
+- 'CONTRACTION VERIFICATION: Before running the full code, verify that generate_einsum
+  supports the dss(Xi-)->uds(Lambda) topology with source-side antisymmetrization.
+  If the tool only handles Lambda->proton (sink-side antisymmetrization), the einsum
+  must be manually derived following the Wick-contraction steps documented above and
+  hardcoded.'
+- No two-point function is computed. Only the three-point correlator C_3(tau) for
+  tau=1..7 is saved.

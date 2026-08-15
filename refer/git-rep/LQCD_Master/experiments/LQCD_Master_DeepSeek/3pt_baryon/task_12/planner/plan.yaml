@@ -1,0 +1,162 @@
+task:
+  name: lambda_to_proton_axial_3pt
+  description: "Three-point correlation function for Lambda to proton weak decay with axial current insertion (s→u, gamma_x gamma_5). Point source at origin, zero momentum transfer, tseq=8, stout-smeared gauge links (n=1, rho=0.125, ndim=4). Only the 3pt function is computed; no 2pt needed."
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: lambda_p_axial_3pt
+      type: baryon_3pt
+      name: "Lambda to proton axial-vector three-point function"
+
+  hadrons:
+    - id: Lambda_src
+      name: Lambda
+      type: baryon
+      flavor: uds
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) s^c"
+      subtype: source
+    - id: proton_snk
+      name: proton
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: "epsilon^{abc} (u^{Ta} C gamma_5 d^b) u^c"
+      subtype: sink
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "multigrid solver for light quark forward propagator"
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_s_fwd
+      quark_flavor: strange
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_strange
+        quark_mass: -0.2356
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "multigrid solver for strange quark forward propagator"
+      sink:
+        id: sink_point
+        type: point
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 8]
+        spatial_extent: full
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: mg_light
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "multigrid solver for sequential light quark propagator. Sequential source constructed at t=8 from forward light propagators using the proton sink operator and projector T=(I+gamma_t)/2 via the two-dagger convention. The sequential source spans the FULL spatial volume (all x,y,z) on the t=8 time slice; the spatial coordinates in source_position are placeholders only."
+      sink:
+        id: sink_point
+        type: point
+
+measurement:
+  correlators:
+    - id: lambda_p_axial_3pt_meas
+      type: baryon_3pt
+      propagators:
+        - prop_l_seq
+        - prop_s_fwd
+      observable: lambda_p_axial_3pt
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - "tseq = 8 (sink time slice)"
+  - "parity projector: T = (I + gamma_t) / 2 (positive-parity channel)"
+  - "inserted current: bar{u} gamma_x gamma_5 s at all intermediate times tau between 0 and tseq"
+  - "momentum transfer q = p_src - p_snk = [0,0,0] (both at rest)"
+  - "no two-point function computed"
+  - "sequential source constructed via two-dagger convention from prop_l_fwd at tseq=8 with proton sink operator and projector (I+gamma_t)/2"
+  - "final 3pt correlator C3(tau) = sum_z Tr[G_l_seq(z,tau) gamma_x gamma_5 S_s(z,tau)] saved as plain text with no headers"
+  - "both prop_l_seq AND prop_s_fwd are required for the 3pt contraction; the measurement section lists both propagators explicitly"
+  - "sequential source spans full spatial volume at t=8 (spatial_extent: full), not a single point"

@@ -1,0 +1,163 @@
+task:
+  name: local_two_baryon_multihadron_2pt
+  description: Compute the zero-total-momentum local two-baryon two-point correlator from a single combined six-quark operator built from one neutron-like single-term baryon block and one proton-like single-term baryon block, using a genuine multi_hadron_2pt contraction object with per-baryon P_plus projection applied on each block before composition, a common light point-source propagator from [0, 0, 0, 0], and stout-smeared links in the light-quark inversions; write the timeslice correlator to a txt file in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: dibaryon_local_2pt
+      type: multi_hadron_2pt
+      name: Local six-quark neutron-proton combined two-baryon correlator
+
+  hadrons:
+    - id: neutron_block
+      name: neutron
+      type: baryon
+      flavor: udd
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cg5 d) d
+      subtype: single_term_local_baryon
+      spin_projector: P_plus
+    - id: proton_block
+      name: proton
+      type: baryon
+      flavor: uud
+      momentum: [0, 0, 0]
+      interpolating_operator: (u^T Cg5 d) u
+      subtype: single_term_local_baryon
+      spin_projector: P_plus
+    - id: two_baryon_source
+      name: local_neutron_proton_source
+      type: other
+      flavor: udduud
+      momentum: [0, 0, 0]
+      interpolating_operator: local_product(neutron_block, proton_block)
+      subtype: local_two_baryon_source
+      construction:
+        operator_type: multi_hadron_local
+        baryon_blocks:
+          - neutron_block
+          - proton_block
+        block_spin_projection: per_baryon
+        total_momentum: [0, 0, 0]
+        baryon_relative_momentum_projection: none
+    - id: two_baryon_sink
+      name: local_neutron_proton_sink
+      type: other
+      flavor: udduud
+      momentum: [0, 0, 0]
+      interpolating_operator: local_product(neutron_block, proton_block)
+      subtype: local_two_baryon_sink
+      construction:
+        operator_type: multi_hadron_local
+        baryon_blocks:
+          - neutron_block
+          - proton_block
+        block_spin_projection: per_baryon
+        total_momentum: [0, 0, 0]
+        baryon_relative_momentum_projection: none
+    - id: two_baryon_operator
+      name: local_neutron_proton_combined_operator
+      type: other
+      flavor: udduud
+      momentum: [0, 0, 0]
+      interpolating_operator: local_product((u^T Cg5 d) d, (u^T Cg5 d) u)
+      subtype: local_six_quark_two_baryon
+      source_operator: two_baryon_source
+      sink_operator: two_baryon_sink
+      contraction_strategy: combined_multi_hadron_single_object
+
+  propagators:
+    - id: prop_l_point
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_clover_mg
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Solve the light propagator on the stout-smeared gauge links and reuse the same propagator for all u and d lines via isospin symmetry S_u = S_d = S_l.
+      sink:
+        id: point_sink
+        type: point
+
+measurement:
+  correlators:
+    - id: dibaryon_local_2pt_measurement
+      type: multi_hadron_2pt
+      propagator: prop_l_point
+      observable: dibaryon_local_2pt
+      source_operator: two_baryon_source
+      sink_operator: two_baryon_sink
+      contraction_strategy: combined_multi_hadron_single_object
+      block_spin_projection: per_baryon_P_plus
+      total_momentum_projection: [0, 0, 0]
+      baryon_relative_momentum_projection: none
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      propagator_usage:
+        light_flavor_assignment:
+          u: prop_l_point
+          d: prop_l_point
+        include_all_exchange_contractions: true
+
+output:
+  format: txt
+  path: ./dibaryon_local_2pt.txt
+  metadata: true
+
+extras:
+  - Use one multi_hadron_2pt contraction object, not a product of baryon correlators.
+  - Keep both baryon blocks as single-term local operators with no octet flavor combinations.
+  - Apply P_plus on each baryon block before composing the two-baryon operator.
+  - Build the correlator from propagators solved on stout-smeared links consistently in inversion and measurement metadata.
+
+freeform_plan: |

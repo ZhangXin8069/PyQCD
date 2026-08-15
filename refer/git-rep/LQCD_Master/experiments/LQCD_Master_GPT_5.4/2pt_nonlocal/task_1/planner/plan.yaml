@@ -1,0 +1,174 @@
+task:
+  name: pion_nonlocal_2pt_zsep10_pointsrc
+  description: Compute the full bare Euclidean nonlocal pion two-point correlator C(z_sep,t) with a local source and a sink operator displaced along +z by integer separations z_sep=0..10. The source is a point source at [0, 0, 0, 0]. The nonlocal shift is applied only to the quark leg through a straight Wilson line built from the original unsmeared gauge field, while the antiquark leg remains local. All Dirac inversions use stout-smeared gauge links with parameters n_steps=1, rho=0.125, ndim=4. Save the final correlator values only, with no header or extra text, to a txt file in the run directory.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: pion_nonlocal_2pt
+      type: custom
+      name: bare nonlocal pion two-point correlator C(z_sep,t) with sink-side +z quark displacement
+
+  hadrons:
+    - id: pion_plus_nonlocal
+      name: pion
+      type: meson
+      flavor: u dbar, isovector pseudoscalar
+      momentum: [0, 0, 0]
+      interpolating_operator: "Sink operator: O_pi(z_sep,t)=sum_x dbar(x,t) gamma5 W_z(x,x+z_sep zhat;U_orig) u(x+z_sep zhat,t). Source operator: O_pi^dagger(0)=ubar(0) gamma5 d(0). Only the sink operator is nonlocal, and the displacement is carried by the quark leg only."
+      subtype: nonlocal_meson_2pt
+
+  propagators:
+    - id: prop_l_point_stout
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: light_clover_mg_eo
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: "Light clover inversion on the stout-smeared gauge field used by the fermion operator; reconstruct the exact 12x12 point-source propagator from the standard 12 spin-color solves. Use the same clover operator convention as the C24P29 ensemble, with stout smearing applied to the fermion links before Dirac/clover operator construction and even-odd preconditioning enabled if that is the ensemble-standard solver path. This is a single-configuration validation run on cfg 10000, not a production ensemble average. Implementation requires access to the full sink-site resolved propagator field S_l(x,t;0) after solve so that post-hoc sitewise z shifts and contractions can be applied."
+      sink:
+        id: point_sink_with_nonlocal_shifted_quark_leg
+        type: other
+
+measurement:
+  correlators:
+    - id: pion_nonlocal_zscan
+      type: other
+      propagator: prop_l_point_stout
+      observable: pion_nonlocal_2pt
+
+output:
+  format: other
+  metadata: false
+
+extras:
+  - use z separations 0 through 10 inclusive
+  - apply periodic spatial wrapping in the z direction for both shifted sink coordinates and Wilson-line products
+  - use the original unsmeared gauge field only for the Wilson-line transport in the nonlocal shift
+  - treat the measured quantity as a custom bare hybrid correlator because inversion links are stout smeared while the Wilson line is unsmeared
+  - write rows in z-major then t-major order with exactly four columns: z_sep t real imag
+  - require the z=0 correlator to match the local pion correlator from the same contraction pipeline up to numerical precision
+
+freeform_plan: |
+  Physical target and scope:
+  Compute the full Euclidean correlator C(z_sep,t) for one fixed source point and all sink times,
+
+    C(z_sep,t) = < O_pi(z_sep,t) O_pi^†(0) >,
+
+  with z_sep = 0,1,...,10 and t = 0,1,...,71.
+  The intended object is therefore the full bare two-dimensional dataset in separation and Euclidean time, not a fixed-time matrix element and not a source-and-sink nonlocal correlator. The source is local and the sink is nonlocal.
+
+  Operator definition:
+
+    O_pi(z_sep,t) = sum_x dbar(x,t) gamma5 W_z(x, x+z_sep zhat; U_orig) u(x+z_sep zhat,t),
+    O_pi^†(0) = ubar(0) gamma5 d(0),
+
+  where x=(vec{x},t), the source point is fixed at 0=[0,0,0,0], and W_z is the straight Wilson line along +z built from the original unsmeared gauge field U_orig. The nonlocal shift is applied only to the quark leg u, exactly as requested.
+
+  Wick contraction and code-level correlator form:
+  For the charged pion channel there is only one connected contraction. Writing the source explicitly at the origin,
+
+    C(z_sep,t)
+    = sum_x < dbar(x) gamma5 W_z(x,x+z zhat) u(x+z zhat) ubar(0) gamma5 d(0) >
+    = - sum_x Tr[ S_d(0;x) gamma5 W_z(x,x+z zhat) S_u(x+z zhat;0) gamma5 ].
+
+  Using isospin symmetry S_u = S_d = S_l and gamma5-hermiticity for the propagator computed from the stout-link fermion operator,
+
+    S_l(0;x) = gamma5 S_l^†(x;0) gamma5,
+
+  gives
+
+    C(z_sep,t)
+    = - sum_x Tr[ gamma5 S_l^†(x;0) gamma5 gamma5 W_z(x,x+z zhat) S_l(x+z zhat;0) gamma5 ]
+    = - sum_x Tr[ gamma5 S_l^†(x;0) W_z(x,x+z zhat) S_l(x+z zhat;0) gamma5 ]
+    = - sum_x Tr[ S_l^†(x;0) W_z(x,x+z zhat) S_l(x+z zhat;0) ],
+
+  where the last step uses cyclicity of the trace and gamma5^2=1, and W_z acts in color space so it commutes with the spin gamma structure. This justifies the production contraction. Define the shifted quark leg
+
+    S_l^shift(x,t;z_sep) = W_z(x,x+z_sep zhat;U_orig) S_l(x+z_sep zhat,t;0),
+
+  then the implemented estimator is
+
+    C(z_sep,t) = - sum_x Tr[ S_l(x,t;0)^† S_l^shift(x,t;z_sep) ].
+
+  The overall minus sign is part of the chosen pseudoscalar charged-pion convention and must be kept consistently in the implementation and in the z=0 validation check.
+
+  Important physics note about link choices:
+  This task intentionally mixes two gauge-link roles:
+  1. the propagator S_l is obtained from a clover Dirac operator built on stout-smeared links with parameters (n_steps=1, rho=0.125, ndim=4);
+  2. the Wilson line W_z is built from the original unsmeared gauge field.
+  This is user-mandated and should be documented in the script as a custom bare hybrid correlator. It is not the canonical same-action gauge-covariant nonlocal bilinear associated with the inversion operator.
+
+  Propagator requirement and feasibility:
+  Only one light propagator object is required in principle because both quark lines are light and the nonlocality is introduced by postprocessing at the sink. However, this is executable only if the software path exposes the full site-resolved propagator field S_l(x,t;0) for all spin-color components after the 12 standard point-source solves. Those 12 solves reconstruct the exact point-source propagator matrix; they are not a statistical average.
+
+  Spatial boundary convention:
+  The lattice has periodic spatial boundary conditions. For each sink site x and separation z_sep, the shifted coordinate x+z_sep zhat must be evaluated with periodic wrapping in z. The Wilson line is the ordered product of unsmeared links along the wrapped +z path from x to x+z_sep zhat, site by site. This convention is mandatory for separations near the boundary, including all sites with z coordinate greater than 23-z_sep.
+
+  Numerical workflow:
+  1. Initialize the C24P29 geometry and the process grid [1,1,1,4].
+  2. Load cfg 10000 from the specified path.
+  3. Keep one gauge copy unchanged as U_orig for Wilson-line construction.
+  4. Build a second gauge copy for the fermion operator and apply stout smearing with n_steps=1, rho=0.125, ndim=4 before constructing the clover Dirac operator.
+  5. Solve the light clover system from the point source at [0,0,0,0] for all 12 spin-color source vectors, using the ensemble-consistent clover normalization and the standard even-odd preconditioned multigrid-enabled solver path if available.
+  6. Assemble the exact full propagator S_l(x,t;0) from the 12 solves.
+  7. For each z_sep=0..10:
+     a. for every sink spatial site x on each time slice t, compute the wrapped endpoint x+z_sep zhat;
+     b. build the straight Wilson line W_z(x,x+z_sep zhat;U_orig) from the original unsmeared links;
+     c. construct S_l^shift(x,t;z_sep)=W_z(x,x+z_sep zhat) S_l(x+z_sep zhat,t;0);
+     d. contract C(z_sep,t) = - sum_x Tr[S_l(x,t;0)^† S_l^shift(x,t;z_sep)] over color and spin and sum over all spatial sink positions to project to zero momentum.
+  8. Perform an internal validation at z_sep=0 by checking that W=1 and the same pipeline reproduces the local pion correlator
+
+       C_local(t) = - sum_x Tr[S_l(x,t;0)^† S_l(x,t;0)]
+
+     up to numerical precision and the adopted sign convention.
+  9. Write the final result as plain text in the run directory with no header and no extra text, using an unambiguous fixed layout: one row per correlator value in z-major then t-major order, with exactly four whitespace-separated columns
+
+       z_sep   t   Re[C(z_sep,t)]   Im[C(z_sep,t)].
+
+  Run classification:
+  Because the ensemble section specifies only cfg 10000, this plan is explicitly a single-configuration validation/debug measurement. It is suitable for code verification and for checking the nonlocal contraction pipeline, not for statistically meaningful physics production. A production measurement would require a configuration list and ensemble averaging, which are outside the present task.

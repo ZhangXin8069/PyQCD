@@ -1,0 +1,10 @@
+{
+  "enabled_skills": ["lqcd-physics-correlator", "pyquda-gauge"],
+  "disabled_skills": [],
+  "stage_forced_skills":
+    { "planner": ["lqcd-physics-correlator","pyquda-gauge"], "executor": ["pyquda-tool","pyquda-gauge"] },
+  "skill_tools": {
+    "pyquda-tool": ["execute", "generate_einsum"],
+    "pyquda-gauge": ["execute"]
+  }
+}

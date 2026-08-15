@@ -1,0 +1,125 @@
+task:
+  name: wilson_loop_R2_T3_unsmeared
+  description: >
+    Compute rectangular Wilson loop W(R=2,T=3) averaged over XT, YT, ZT
+    spatial-temporal planes using unsmeared gauge links.  Pure-gauge
+    measurement — no quark propagators or fermion inversions.  Output a
+    single real scalar per configuration as plain text.
+  task_mode: freeform
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions:
+    - 24
+    - 24
+    - 24
+    - 72
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - - 6
+      - 6
+      - 6
+      - 3
+    - - 4
+      - 4
+      - 4
+      - 6
+  mpi_num: 4
+  process_grid:
+    - 1
+    - 1
+    - 1
+    - 4
+
+physics:
+  observables:
+    - id: wloop_r2t3
+      type: wilsonloop
+      name: rectangular_wilson_loop_R2_T3
+  hadrons: []
+  propagators: []
+
+measurement:
+  correlators: []
+
+output:
+  format: txt
+  metadata: false
+
+extras:
+  - No link smearing (stout/APE/HYP) is applied; raw unsmeared gauge links are used.
+  - Result is a single float (spatial + colour average over 3 planes) per configuration.
+  - PyQUDA gauge.loop() 4-group packing with weights [1,1,1,0] for XT, YT, ZT planes.
+  - MPI gather via core.gatherLattice to rank 0 before output.
+
+freeform_plan: |
+  Physics objective
+  -----------------
+  Measure the rectangular Wilson loop W(R=2, T=3) as a pure-gauge observable
+  directly from SU(3) gauge links.  The Wilson loop is defined as
+
+      W_{\mu\nu}(R,T) = (1/N_c) Re Tr P [ \prod U_\mu ... \prod U_\nu ...  ]
+
+  and is averaged over the three spatial-temporal planes XT, YT, ZT to gain
+  statistics:
+
+      W(R,T) = (1/3) [ W_XT(R,T) + W_YT(R,T) + W_ZT(R,T) ]
+
+  The result is further averaged over all spatial sites on the lattice.
+  No link smearing (stout, APE, HYP) is applied — the raw unsmeared gauge
+  links are used directly.
+
+  Path construction (R=2, T=3)
+  -----------------------------
+  - XT plane: [X, X, T, T, T, -X, -X, -T, -T, -T]
+  - YT plane: [Y, Y, T, T, T, -Y, -Y, -T, -T, -T]
+  - ZT plane: [Z, Z, T, T, T, -Z, -Z, -T, -T, -T]
+
+  Using PyQUDA gauge.loop(), the three paths are packed into four groups
+  (the 4th is a dummy with weight 0):
+      groups = [[path_XT], [path_YT], [path_ZT], [path_XT]]
+      weights = [1, 1, 1, 0]
+
+  Per-site extraction
+  -------------------
+  For each of the three active groups (i=0,1,2):
+    1. res[i].getHost() → CPU
+    2. reshape to (-1, Nc, Nc)
+    3. np.trace(..., axis1=-2, axis2=-1) → complex trace per site
+    4. .real → real part per site
+  Average the three plane contributions site-wise, then MPI-gather the
+  per-site sum to rank 0 using core.gatherLattice with target [-1,-1,-1,-1].
+
+  Final value
+  -----------
+      W = sum(rank0_gathered_field) / (total_sites * Nc)
+
+  where total_sites = Lx * Ly * Lz * Lt = 24 * 24 * 24 * 72 = 995328
+  and Nc = 3.
+
+  Run parameters
+  --------------
+  - Lattice: 24^3 × 72, β = 6.20, a ≈ 0.1052 fm
+  - MPI: 4 ranks in t-direction (process grid [1,1,1,4])
+  - Configurations: single cfg 10000
+  - Backend: PyQUDA with CuPy GPU
+
+  Output
+  ------
+  A single file "wilson_loop_R2_T3_cfg10000.txt" in the run directory
+  containing one line with the floating-point value of W(R=2,T=3) and
+  no header or extra text.

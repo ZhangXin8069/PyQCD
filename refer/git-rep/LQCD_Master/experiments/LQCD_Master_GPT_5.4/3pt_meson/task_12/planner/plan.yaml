@@ -1,0 +1,176 @@
+task:
+  name: D0_to_eta_u_vector_3pt
+  description: Compute only the connected meson three-point correlator for the transition from D0(anti-u c) at the source to the connected eta_u(anti-u u) sink through the local vector current J_x = ubar gamma_x c, using gamma5 interpolating operators at source and sink, point source at [0,0,0,0], zero momentum, and source-sink separation tseq = 8. This task intentionally produces the raw unnormalized connected 3pt correlator only; it does not compute any 2pt functions, does not include disconnected eta_u contributions, and therefore is not by itself a validated decay matrix element extraction. With both mesons at zero spatial momentum and a spatial vector current V_x, the target pseudoscalar-to-pseudoscalar matrix element is expected to vanish in the continuum up to lattice artifacts and statistical noise, but the requested correlator is still computed as specified.
+  task_mode: standard
+
+ensemble:
+  preset: C24P29
+  cfg_num:
+    - '10000'
+  cfg_path: /public/share/weiwang/clqcd/beta6.20_mu-0.2770_ms-0.2400_L24x72/Configurations/Original/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_{n_cfg}.lime
+  dimensions: [24, 24, 24, 72]
+  boundary_conditions:
+    spatial: periodic
+    temporal: anti-periodic
+  lattice_spacing: 0.1052
+  anisotropy: 1.0
+  quark_mass:
+    light: -0.277
+    strange: -0.2356
+    charm: 0.4159
+    bottom: 1.5
+  xi_0: 1.0
+  clover: 1.160920226
+  multigrid:
+    - [6, 6, 6, 3]
+    - [4, 4, 4, 6]
+  mpi_num: 4
+  process_grid: [1, 1, 1, 4]
+
+physics:
+  observables:
+    - id: c3_D0_eta_u_Vx
+      type: meson_3pt
+      name: D0_to_connected_eta_u_vector_current_x_three_point
+      definition_note: Connected three-point function only, with sink operator ubar gamma5 u interpreted as the connected eta_u component rather than the full flavor-diagonal channel.
+      kinematic_note: For pseudoscalar-to-pseudoscalar transition at p_i = p_f = 0 with spatial vector current V_x, the physical matrix element is symmetry-forced to vanish in the continuum; any signal should therefore be consistent with zero within noise and lattice artifacts.
+
+  hadrons:
+    - id: D0_src
+      name: D0
+      type: meson
+      flavor: anti-u c
+      momentum: [0, 0, 0]
+      interpolating_operator: ubar gamma5 c
+      subtype: pseudoscalar_heavy_light
+    - id: eta_u_snk
+      name: eta_u_connected
+      type: meson
+      flavor: anti-u u
+      momentum: [0, 0, 0]
+      interpolating_operator: ubar gamma5 u
+      subtype: pseudoscalar_connected_only
+
+  propagators:
+    - id: prop_l_fwd
+      quark_flavor: light
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light_forward
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Forward light propagator from the common point source for the spectator anti-u line. Uses stout-smeared links for inversion.
+      sink:
+        id: sink_point_light_forward
+        type: point
+
+    - id: prop_c_fwd
+      quark_flavor: charm
+      source:
+        source_type: point
+        source_position: [0, 0, 0, 0]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_charm_forward
+        quark_mass: 0.4159
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-12
+        maxiter: 10000
+        notes: Forward charm propagator from the same point source for the line struck by the current. This is executable with the ensemble clover setup, but charm discretization effects may be non-negligible at this lattice spacing unless this charm action/mass has been separately tuned and validated.
+      sink:
+        id: sink_point_charm_forward
+        type: point
+
+    - id: prop_l_seq
+      quark_flavor: light
+      source:
+        source_type: sequential
+        source_position: [0, 0, 0, 8]
+        source_momentum: [0, 0, 0]
+      gauge_field:
+        stout_link_smear:
+          enabled: true
+          parameters:
+            rho: 0.125
+            n_steps: 1
+            ndim: 4
+      solver:
+        id: solver_light_sequential
+        quark_mass: -0.277
+        clover_coefficient: 1.160920226
+        tolerance: 1.0e-10
+        maxiter: 10000
+        notes: Light sequential propagator for the meson 3pt function, constructed correctly from the eta_u sink gamma5 operator and the forward light spectator line on the full sink timeslice t = 8 at zero sink momentum, then inverted with source.sequential12-like workflow. It is not an ordinary point-source inversion at [0,0,0,8].
+      sink:
+        id: sink_mesonic_sequential_light
+        type: other
+
+measurement:
+  correlators:
+    - id: meas_c3_D0_eta_u_Vx_tseq8
+      type: meson_3pt
+      propagator: prop_l_seq
+      observable: c3_D0_eta_u_Vx
+      source_hadron: D0_src
+      sink_hadron: eta_u_snk
+      source_quark: charm
+      source_antiquark: light
+      sink_quark: light
+      sink_antiquark: light
+      current:
+        operator: ubar gamma_x c
+        current_gamma: gamma_x
+        current_quark_annihilated: charm
+        current_quark_created: light
+      tseq: 8
+      momentum:
+        p_src: [0, 0, 0]
+        p_snk: [0, 0, 0]
+        q: [0, 0, 0]
+      contraction_strategy: sequential_source
+      disconnected_diagrams: false
+      disconnected_note: This omission is intentional because the requested computation is restricted here to the connected eta_u component only; the full flavor-diagonal ubar u channel would additionally require disconnected contributions.
+      wick_structure: Connected meson 3pt with a light spectator anti-u line running source to sink, the current converting c to u, and a light sequential inversion fixed by the sink gamma5 operator and tseq = 8.
+      normalization_scope: Raw connected three-point correlator only; no 2pt normalization, no form-factor extraction, and no source-sink overlap validation are included in this task.
+      einsum_generation: Use generate_einsum with type meson_3pt, src_antiquark=u, src_quark=c, sink_antiquark=u, snk_quark=u, current_quark=c, current_antiquark=u, gamma_src=gamma5, gamma_snk=gamma5, gamma_cur=gamma_x, tseq=8.
+      save_window:
+        t_ins_start: 1
+        t_ins_end: 7
+
+output:
+  format: other
+  metadata: false
+  filename: D0_to_eta_u_Vx_3pt_cfg10000_tseq8.txt
+  layout: columns are tseq, t_ins, real_part, imag_part with no header and no extra text
+  location: run directory
+
+extras:
+  - standard_task_mode
+  - meson_sequential_source
+  - connected_eta_u_only
+  - zero_momentum_Vx_expected_zero
+  - point_source_at_origin
+  - stout_links_for_all_inversions
+  - no_2pt_requested
+
+freeform_plan: |
+  Not used because this is a standard hadronic correlator task.
