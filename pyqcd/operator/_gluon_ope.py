@@ -70,7 +70,7 @@ def plaquette_clover(g, mu: int, nu: int):
         F_{μν}，形状 (Nt,Nz,Ny,Nx,3,3)。
     """
     cp = get_backend()
-    e = cp.einsum
+    m = cp.matmul
     a_mu = 3 - mu   # 空间轴
     a_nu = 3 - nu
 
@@ -78,37 +78,36 @@ def plaquette_clover(g, mu: int, nu: int):
     g_rd = cp.roll(g, 1, axis=a_nu)
     g_ld = cp.roll(g_lu, 1, axis=a_nu)
 
-    # P1 = P_{μν}
-    p1 = e("tzyxab,tzyxbc->tzyxac", g[..., mu, :, :],
+    tr = (0, 1, 2, 3, 5, 4)  # 共轭转置（色指标 Hermitian 共轭）
+
+    # P1 = P_{μν}（einsum→cuBLAS matmul 等价改写，逐位一致）
+    p1 = m(g[..., mu, :, :],
            cp.roll(g, -1, axis=a_mu)[..., nu, :, :])
-    p1 = e("tzyxab,tzyxcb->tzyxac", p1,
-           cp.roll(g, -1, axis=a_nu)[..., mu, :, :].conj())
-    p1 = e("tzyxab,tzyxcb->tzyxac", p1, g[..., nu, :, :].conj())
+    p1 = m(p1, cp.roll(g, -1, axis=a_nu)[..., mu, :, :].conj()
+           .transpose(*tr))
+    p1 = m(p1, g[..., nu, :, :].conj().transpose(*tr))
 
     # P2 = P_{ν,-μ}
-    p2 = e("tzyxab,tzyxcb->tzyxac",
-           cp.roll(g_lu, -1, axis=a_mu)[..., nu, :, :],
-           cp.roll(g_lu, -1, axis=a_nu)[..., mu, :, :].conj())
-    p2 = e("tzyxab,tzyxcb->tzyxac", p2, g_lu[..., nu, :, :].conj())
-    p2 = e("tzyxab,tzyxbc->tzyxac", p2, g_lu[..., mu, :, :])
+    p2 = m(cp.roll(g_lu, -1, axis=a_mu)[..., nu, :, :],
+           cp.roll(g_lu, -1, axis=a_nu)[..., mu, :, :].conj()
+           .transpose(*tr))
+    p2 = m(p2, g_lu[..., nu, :, :].conj().transpose(*tr))
+    p2 = m(p2, g_lu[..., mu, :, :])
 
     # P3 = P_{-μ,-ν}
-    p3 = e("tzyxba,tzyxcb->tzyxac",
-           cp.roll(g_ld, -1, axis=a_nu)[..., mu, :, :].conj(),
-           g_ld[..., nu, :, :].conj())
-    p3 = e("tzyxab,tzyxbc->tzyxac", p3, g_ld[..., mu, :, :])
-    p3 = e("tzyxab,tzyxbc->tzyxac", p3,
-           cp.roll(g_ld, -1, axis=a_mu)[..., nu, :, :])
+    p3 = m(cp.roll(g_ld, -1, axis=a_nu)[..., mu, :, :].conj()
+           .transpose(*tr),
+           g_ld[..., nu, :, :].conj().transpose(*tr))
+    p3 = m(p3, g_ld[..., mu, :, :])
+    p3 = m(p3, cp.roll(g_ld, -1, axis=a_mu)[..., nu, :, :])
 
     # P4 = P_{-ν,μ}
-    p4 = e("tzyxba,tzyxbc->tzyxac", g_rd[..., nu, :, :].conj(),
+    p4 = m(g_rd[..., nu, :, :].conj().transpose(*tr),
            g_rd[..., mu, :, :])
-    p4 = e("tzyxab,tzyxbc->tzyxac", p4,
-           cp.roll(g_rd, -1, axis=a_mu)[..., nu, :, :])
-    p4 = e("tzyxab,tzyxcb->tzyxac", p4,
-           cp.roll(g_rd, -1, axis=a_nu)[..., mu, :, :].conj())
+    p4 = m(p4, cp.roll(g_rd, -1, axis=a_mu)[..., nu, :, :])
+    p4 = m(p4, cp.roll(g_rd, -1, axis=a_nu)[..., mu, :, :].conj()
+           .transpose(*tr))
 
-    tr = (0, 1, 2, 3, 5, 4)  # 共轭转置（色指标 Hermitian 共轭）
     ans = (p1 - p1.conj().transpose(*tr)
            + p2 - p2.conj().transpose(*tr)
            + p3 - p3.conj().transpose(*tr)
@@ -174,11 +173,11 @@ def gluon_ope_operator_z0(gauge, mu: int, nu: int, z_dir: int, delta_z: int,
         ope_t = cp.roll(F, -zi, axis=z_axis)
         for step in range(zi):
             U_conj = cp.roll(U_z, -(zi - 1 - step), axis=z_axis).conj()
-            ope_t = cp.einsum("...ab,...cb->...ac", ope_t, U_conj)
-        ope_t = cp.einsum("...ab,...bc->...ac", ope_t, F_tilde)
+            ope_t = cp.matmul(ope_t, U_conj.transpose(0, 1, 2, 3, 5, 4))
+        ope_t = cp.matmul(ope_t, F_tilde)
         for step in range(zi):
             U_fwd = cp.roll(U_z, -step, axis=z_axis)
-            ope_t = cp.einsum("...ab,...bc->...ac", ope_t, U_fwd)
+            ope_t = cp.matmul(ope_t, U_fwd)
 
         trace = cp.einsum("...aa->...", ope_t)
         ope[zi] = _to_cpu(cp.sum(trace, axis=spatial_axes)).real

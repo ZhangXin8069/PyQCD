@@ -169,8 +169,11 @@ def _tensorize(x):
     """Convert numpy arrays / cupy arrays / sequences to torch tensors.
 
     Scalars, strings and existing torch tensors pass through unchanged.
-    Complex input follows the global precision (``set_precision``);
-    Python lists of floats follow numpy semantics (float64).
+    - numpy arrays keep their explicit dtype (e.g. astype('complex64') is
+      respected — the global precision only applies to dtype-less input);
+    - Python sequences of complex follow the global precision
+      (``set_precision``); Python lists of floats follow numpy semantics
+      (float64).
     """
     if isinstance(x, torch.Tensor):
         return x
@@ -179,17 +182,26 @@ def _tensorize(x):
     if hasattr(x, 'get') and hasattr(x, 'shape') \
             and not isinstance(x, np.ndarray):     # cupy-style array
         x = x.get()
-    if isinstance(x, np.ndarray) or isinstance(x, (list, tuple)):
-        t = torch.as_tensor(x)
-        if torch.is_complex(t):
-            if t.dtype != _GLOBAL_COMPLEX_DTYPE:
+    if isinstance(x, np.ndarray):
+        t = torch.from_numpy(x)
+    elif isinstance(x, (list, tuple)):
+        if x and all(isinstance(e, (torch.Tensor, np.ndarray)) for e in x):
+            # list of tensors/ndarrays（如 [gamma(1), gamma(2), ...]）：
+            # 统一转 numpy 堆叠再入 torch（torch.as_tensor 不支持此形态）
+            arrs = [e.detach().cpu().numpy()
+                    if isinstance(e, torch.Tensor) else e for e in x]
+            t = torch.from_numpy(np.asarray(arrs))
+        else:
+            t = torch.as_tensor(x)
+            if torch.is_complex(t):
                 t = t.to(_GLOBAL_COMPLEX_DTYPE)
-        elif t.dtype == torch.float32 and not isinstance(x, np.ndarray):
-            t = t.to(torch.float64)
-        if _GLOBAL_DEVICE is not None:
-            t = t.to(_GLOBAL_DEVICE)
-        return t
-    return x
+            elif t.dtype == torch.float32:
+                t = t.to(torch.float64)
+    else:
+        return x
+    if _GLOBAL_DEVICE is not None:
+        t = t.to(_GLOBAL_DEVICE)
+    return t
 
 
 def _autoconv(fn):
@@ -286,7 +298,9 @@ def asarray(arr, dtype=None, device=None):
             (hasattr(arr, 'shape') and hasattr(arr, 'get')):
         t = _tensorize(arr)
     else:                                   # python scalar (e.g. 1j, 8.0)
-        t = torch.as_tensor(arr, device=_dev(device))
+        t = torch.as_tensor(arr)
+        if isinstance(arr, complex) or torch.is_complex(t):
+            t = t.to(_GLOBAL_COMPLEX_DTYPE)
     if dtype is not None:
         t = t.to(_resolve_dtype(dtype))
     t = t.to(_dev(device))

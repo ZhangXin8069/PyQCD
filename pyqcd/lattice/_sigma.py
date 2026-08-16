@@ -9,7 +9,8 @@ Adapted from lqcddb constant/sigma_matrix.py.
 """
 
 import numpy as np
-from ..tools._backend import get_backend
+from ..tools._backend import get_backend, get_backend_name
+from ..tools._torch_backend import complex_dtype
 
 # ── Pauli matrices in standard representation ──────────────────────
 
@@ -51,7 +52,11 @@ def sigma(i: int):
     matrices = {0: _s0, 1: _s1, 2: _s2, 3: _s3}
     if i not in matrices:
         raise ValueError(f"Invalid sigma index {i}. Must be 0..3.")
-    return backend.asarray(matrices[i])
+    t = backend.asarray(matrices[i])
+    if get_backend_name() == 'torch' and t.dtype.is_complex \
+            and t.dtype != complex_dtype():
+        t = t.to(complex_dtype())   # 跟随全局复数精度（与数据数组混合不报 dtype 错）
+    return t
 
 
 def Mom_times_sigma(Mom: list = None, upto4dim: bool = False):
