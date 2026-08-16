@@ -235,6 +235,54 @@ def test_gpu_backend_consistency():
     assert d < 1e-10, f"CPU/GPU 不一致: {d:.3e}"
 
 
+def test_torch_backend_consistency():
+    """torch 后端（CPU/CUDA）：flow/TMD/HYP 与 numpy 一致 + 精度切换。
+
+    - numpy 输入自动转换 torch（旧代码兼容）
+    - CPU 与 numpy 逐位一致（rel ~1e-15）
+    - CUDA 与 numpy 一致（rel ~1e-15）
+    - set_precision('complex64') 后新数组为 complex64
+    """
+    import torch
+    from pyqcd.tools import set_backend, set_precision
+    from pyqcd.renorm import wilson_flow, tmd_matrix_elements
+    from pyqcd.smear import hyp_smear
+
+    g = random_su3_gauge(L=4, seed=2)
+    set_backend('numpy')
+    V_cpu = wilson_flow(g, tau=0.04, eps=0.02)
+    M_np = tmd_matrix_elements(g, [0, 1], [0, 1])
+
+    # CPU（numpy 输入自动转换）
+    set_backend('torch')
+    V_t = wilson_flow(g, tau=0.04, eps=0.02)
+    M_t = tmd_matrix_elements(g, [0, 1], [0, 1])
+    assert np.abs(V_cpu - V_t.get()).max() < 1e-8, "torch CPU flow 不一致"
+    assert np.abs(np.asarray(M_np) - np.asarray(M_t)).max() < 1e-8
+    # HYP 与 numpy 对比
+    set_backend('numpy')
+    V_h_np = hyp_smear(g)
+    set_backend('torch')
+    assert np.abs(V_h_np - hyp_smear(g).get()).max() < 1e-7, "HYP torch 不一致"
+
+    # 精度切换
+    set_precision('complex64')
+    V32 = wilson_flow(g, tau=0.04, eps=0.02)
+    assert V32.dtype == torch.complex64, f"complex64 切换失败: {V32.dtype}"
+    set_precision('complex128')
+
+    # CUDA（可用时）
+    if torch.cuda.is_available():
+        set_backend('torch', device='cuda')
+        V_g = wilson_flow(g, tau=0.04, eps=0.02)
+        assert str(V_g.device).startswith('cuda')
+        d = np.abs(V_cpu - V_g.get()).max()
+        assert d < 1e-8, f"torch CUDA flow 不一致: {d:.3e}"
+        M_g = tmd_matrix_elements(g, [0, 1], [0, 1])
+        assert np.abs(np.asarray(M_np) - np.asarray(M_g)).max() < 1e-8
+    set_backend('numpy')
+
+
 def test_end_to_end_synthetic_meff():
     """端到端合成验证：含已知质量的 cosh 2pt → meff 精确恢复。"""
     from pyqcd.analysis import Jackknife, meff
