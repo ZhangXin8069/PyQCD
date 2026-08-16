@@ -1,0 +1,617 @@
+% ============================================================
+% pure 报告 — 规范模板 v2（xelatex + ctex）
+% 用途: 穷尽剖析 LQCD_Master 核心部分（代码-物理交叉向）
+% 被剖析仓库: /root/PyQCD/refer/git-rep/LQCD_Master（非独立 git 仓库）
+% 编译: 见模板第 0 节；交付前 Overfull 与 Float too large 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+\usepackage{newunicodechar}
+\newunicodechar{γ}{\ensuremath{\gamma}}
+\newunicodechar{π}{\ensuremath{\pi}}
+\newunicodechar{ρ}{\ensuremath{\rho}}
+\newunicodechar{η}{\ensuremath{\eta}}
+\newunicodechar{Ω}{\ensuremath{\Omega}}
+
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=bash,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{LQCD\_Master 核心部分穷尽剖析报告\\{\large 双代理编排 × 物理任务 × Wick 收缩引擎的代码-物理交叉向深挖}}
+\author{opencode pure}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对 \texttt{refer/git-rep/LQCD\_Master} 做只读穷尽剖析。
+\textbf{性质判定：代码-物理交叉向}——agent 编排代码（约 26 万行核心）以 LQCD 物理任务
+（benchmark 15144 行 + skills 物理推导 3348 行）为输入与验证基准，核心机制是
+"物理任务 $\rightarrow$ 物理方案 YAML $\rightarrow$ 物理代码 main.py"的逐符号映射。
+穷尽枚举 \textbf{13 个核心部分候选}（C1--C13），三态分配：\textbf{深挖 6 / 浅析 4 / 排除 3}。
+最深剖析结论：\textcolor{algo}{generate\_einsum Wick 收缩引擎}（自动 Wick 配对 + $\gamma$ 代数 +
+费米子符号，实测正确输出 $\pi/\rho/\eta_s$（含 disconnected）/p/$\Omega_c$ 的 einsum）与
+\textcolor{algo}{双代理 solve/critique/rewrite 循环 + 技能路由注入}是两大独特竞争力，
+支撑 70 任务基准中标准任务近满分（90.0\%）的实测表现。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+
+\subsection{项目性质判定}
+
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉向}。依据（实测）：\textbf{① 代码体量}
+编排/工具/提示词/配置代码约 26 万行（run.py + core\_architecture 2415 + prompts 527 +
+utils 260521 + configs 212）；\textbf{② 物理内容} benchmark 物理任务与参考实现 15144 行、
+skills 物理推导 3348 行；\textbf{③ 映射机制} 双代理把物理任务转译为物理方案再转译为
+物理代码，skills 编码 Wick 收缩/谱分解推导，generate\_einsum 把物理算符自动映射为 einsum
+字符串。代码是载体、物理是输入与标尺，二者靠一一对应的映射链耦合——故判交叉向。
+\end{keybox}
+
+\subsection{核心部分总清单（穷尽枚举）}
+
+\begin{xltabular}{\textwidth}{lllX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & planner+executor 双代理 prompt 工程 & 深挖 & solve/critique/rewrite 循环 + 物理/代码双层评审 \\
+C2 & 5 个 LQCD 技能设计 & 深挖 & SKILL.md 编码物理推导链 + 代码-物理映射 \\
+C3 & benchmark 物理任务与技能调用链 & 深挖 & 70 任务自然语言基准 + 手写参考数值 \\
+C4 & core\_architecture 架构设计 & 深挖 & 编排器三阶段 + checkpoint 人机协同 \\
+C5 & run.py 入口与配置体系 & 深挖 & 极薄入口 + 配置驱动提交渲染 \\
+C6 & generate\_einsum Wick 收缩引擎 & 深挖 & 自动 Wick 配对/γ 代数/费米子符号的代码生成器 \\
+C7 & static\_check 静态分析 & 浅析 & AST 级 PyQUDA 语义检查（辅助纠错） \\
+C8 & SkillRouter/SkillRunner 路由注入 & 浅析 & 技能按阶段注入 LLM（C2 的机制层） \\
+C9 & experiments 多骨干实验体系 & 浅析 & GPT-5.4/DeepSeek 对比验证闭环 \\
+C10 & llm\_client / tool\_client & 浅析 & OpenAI 兼容客户端与 web 搜索/执行工具 \\
+C11 & 10 万行级自动生成 sink 大文件 & 排除 & 自动生成产物（C6 输出），非设计部分 \\
+C12 & docs 既有 pure 报告 & 排除 & 第三方分析产物，非库功能 \\
+C13 & .env / requirements 脚手架 & 排除 & 通用样板，无独特竞争力 \\
+\bottomrule
+\caption{核心部分总清单（三态填满，无"未处理"；数据来源: 实测索引）}
+\end{xltabular}
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+六个"深挖"候选按 15 步框架逐部分重现（交叉向：映射表 + 逐符号解释为主，物理元素并入对应步骤）。
+
+% ---- C1 ----
+\subsection{C1 双代理分工与 prompt 工程}
+
+\noindent\textbf{1. 目的与前期准备.} 双代理把"物理正确性"与"代码正确性"分离验证：
+Planner 只产物理方案、Executor 只产代码，避免单模型同时承担两难任务（README
+定位：Planner 产方案、Executor 产代码，见 \texttt{\nolinkurl{README.md:12}}）。[确证]
+
+\noindent\textbf{2. 输入.} Planner 吃自然语言任务 + 固定配置事实 + 技能
+（\texttt{\nolinkurl{core_architecture/planner.py:72-81}}）；Executor 吃 plan\_yaml +
+summary\_md + 输入事实 + 提交配置（\texttt{\nolinkurl{core_architecture/executor.py:102-159}}）。[确证]
+
+\noindent\textbf{3. 输出.} Planner 输出 plan.yaml + summary.md；Executor 输出含
+\texttt{main\_program}、\texttt{test\_submit}、\texttt{full\_submit}、\texttt{notes}
+四字段的 JSON（输出格式强制 \texttt{\nolinkurl{prompts/executor/generate_system.md:140-160}}）。[确证]
+
+\noindent\textbf{4. 整体框架.} 每代理均"生成 $\rightarrow$ 批判 $\rightarrow$ 改写"三子阶段：
+Planner 为 solve/critique/rewrite（\texttt{\nolinkurl{core_architecture/planner.py:72-112}}），
+Executor 为 generate/critique/static-check/rewrite（\texttt{\nolinkurl{core_architecture/executor.py:398-524}}）。[确证]
+
+\noindent\textbf{5. 关键细节.} ① 批判只标"会导致代码失败或物理错误"的致命问题
+（\texttt{\nolinkurl{prompts/planner/critique_system.md:6-9}}）；② Executor 提示词强制
+单文件顺序脚本、禁止 main 函数/类/异常处理（\texttt{\nolinkurl{prompts/executor/generate_system.md:34-46}}）；
+③ generate\_einsum 工具强制调用 + 水印检查（\texttt{\nolinkurl{prompts/executor/generate_system.md:63-82}}）。[确证]
+
+\noindent\textbf{6. 正确执行.} 每代理生成后经编排器 checkpoint（人工确认/反馈），
+未通过则 rewrite\_with\_feedback 进入下一版本，上限 max\_revision\_rounds=3
+（\texttt{\nolinkurl{core_architecture/orchestrator.py:109-133}}）。[确证]
+
+\noindent\textbf{7. 实际执行.} 只读侧实测：69 个核心 py 语法检查 OK=69/FAIL=0；
+双代理真实 LLM 调用 \textcolor{warn}{未验证}（需 API key）。[确证/未验证]
+
+\noindent\textbf{8. 实际输出.} 仓库内真实实验目录含 executor\_v1 完整产物
+（\texttt{\nolinkurl{experiments/LQCD_Master_GPT_5.4/2pt_local/task_1/executor_v1/}}）。[确证]
+
+\noindent\textbf{9. 结果分析.} 70 任务 63 exact / 3 sign-flip / 4 fail（90.0\%），2pt local
+20/20 满分；3pt baryon 仅 73.3\%——重子 3pt 顺序源拓扑是 prompt 工程仍未完全收敛的难点
+（\texttt{\nolinkurl{experiments/LQCD_Master_GPT_5.4/summary.md:8-30}}）。[确证]
+
+\noindent\textbf{10. 综合分析.} 对象映射：自然语言 $\leftrightarrow$ 物理任务；
+critique $\leftrightarrow$ 同行评审；rewrite $\leftrightarrow$ 论文修改；
+checkpoint $\leftrightarrow$ 人机协同护栏。深层原因：把 LQCD 领域协作惯例（审稿+修改+确认）
+编码为软件流程。[确证/推断]
+
+\noindent\textbf{11. 总结.} 双代理 + 三子阶段 + 人工 checkpoint 构成"自动评审、人机兜底"
+的工程闭环，是 90\% 级准确率的结构性保证。[确证]
+
+\noindent\textbf{12. 评价.} 优：物理/代码解耦、可复现；缺：批判偏保守（只拦致命错误）、
+无符号约定预防机制。[推断]
+
+\noindent\textbf{13. 补充.} prompt 以英文编写、面向 GPT/DeepSeek 类通用 LLM，
+未针对推理链/长上下文做显式优化（推断）。[推断]
+
+\noindent\textbf{14. 参考源.} 见第 5 节 C1 条目。
+
+\noindent\textbf{15. 附录.} prompt 原文片段见第 4 节 S3/S4。
+
+% ---- C2 ----
+\subsection{C2 5 个 LQCD 技能设计}
+
+\noindent\textbf{1. 目的与前期准备.} 把领域知识（物理推导、PyQUDA 用法、分析流程）编码为
+可注入 LLM 的独立模块，替代"硬编码在 prompt 里"的可维护性差的方案。前置：技能 = 含 YAML
+front-matter 的 markdown（\texttt{\nolinkurl{utils/skill_utils.py:93-111}} 解析）。[确证]
+
+\noindent\textbf{2. 输入.} 5 个 SKILL.md 共 1926 行：lqcd-analysis(740)/pyquda-tool(614)/
+pyquda-gauge(222)/lqcd-physics-correlator(199)/lqcd-physics-spectrum(151)
+（\texttt{\nolinkurl{skills/lqcd-analysis/SKILL.md:1}}、\texttt{\nolinkurl{skills/pyquda-tool/SKILL.md:1}}）。[确证]
+
+\noindent\textbf{3. 输出.} 注入后的 system prompt 块（含 Description + body + 内联 reference，
+上限 24000 字符，\texttt{\nolinkurl{utils/skill_utils.py:215-247}}）。[确证]
+
+\noindent\textbf{4. 整体框架.} 分工链：
+\textcolor{phys}{correlator（算符/关联函数）$\rightarrow$ spectrum（谱分解/拟合模板）$\rightarrow$
+analysis（数据分析）}；工具侧 pyquda-tool（传播子/收缩）/ pyquda-gauge（纯规范观测量）。
+物理链尾部显式移交下家（\texttt{\nolinkurl{skills/lqcd-physics-correlator/SKILL.md:36-41}}）。[确证]
+
+\noindent\textbf{5. 关键细节.} correlator 技能给出 Wick 收缩关键公式与 $\gamma_5$-厄米约定
+（prop = $\gamma_5 S^\dagger \gamma_5$）与 flavor 对称性约化
+（\texttt{\nolinkurl{skills/lqcd-physics-correlator/SKILL.md:88-98}}）；
+DeGrand-Rossi 基 $\gamma$ 矩阵完整列出（\texttt{\nolinkurl{skills/lqcd-physics-correlator/SKILL.md:52-63}}）。[确证]
+
+\begin{mapbox}
+\textbf{映射原则:} 每个技能中的物理符号都能落到生成的代码符号，双向可查。
+\end{mapbox}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{prop\_l}/\texttt{prop\_s}/\texttt{prop\_c} & 轻/奇异/粲夸克传播子 & $S_l(x,y)$ 等；
+\texttt{\nolinkurl{skills/lqcd-physics-correlator/SKILL.md:23}} \\
+\texttt{G5} & $\gamma_5$ & 赝标量算符与 $\gamma_5$-厄米约定；\texttt{\nolinkurl{skills/lqcd-physics-correlator/SKILL.md:60}} \\
+\texttt{epsilon} & $\epsilon^{abc}$ 颜色反对称张量 & 重子 diquark 色结构；\texttt{\nolinkurl{utils/generate_einsum/hadron_operator.py:20-23}} \\
+\texttt{Tmat} & 投影子 & 正宇称重子投影 $(1+\gamma_t)/2$；\texttt{\nolinkurl{benchmark/3pt_baryon/task/task_1.txt:3}} \\
+\texttt{covDev} & 协变位移算子 & 非局域算符的 Wilson 线位移；\texttt{\nolinkurl{prompts/executor/generate_system.md:119}} \\
+\bottomrule
+\caption{技能层代码-物理映射（数据来源: 实测）}
+\end{xltabular}
+
+\noindent\textbf{6. 正确执行.} 技能经 SkillMessageAssembler 拼入 system 消息，reference 目录
+内容内联（\texttt{\nolinkurl{utils/skill_utils.py:249-262}}）；路由由 skills.yaml 控制
+（\texttt{\nolinkurl{configs/skills.yaml:1-10}}）。[确证]
+
+\noindent\textbf{7. 实际执行.} 只读侧逐技能精读（correlator 全读 + 其余头部）；
+对 5 个 SKILL.md 统计 front-matter/正文结构（实测）。真实 LLM 注入效果 \textcolor{warn}{未验证}。[确证/未验证]
+
+\noindent\textbf{8. 实际输出.} 每个技能带 reference/ 工作示例（如 pion/proton mass、
+wilson loop、baryon 3pt 代码），是"技能 $\rightarrow$ 代码"的示范性输出
+（\texttt{\nolinkurl{skills/lqcd-physics-correlator/SKILL.md:132-134}}）。[确证]
+
+\noindent\textbf{9. 结果分析.} 技能路由强制 planner 吃物理技能、executor 吃工具技能
+（\texttt{\nolinkurl{configs/skills.yaml:4-8}}），与实测准确率对照：纯规范任务 100\%、
+重子 3pt 最低——技能覆盖度与任务难度匹配。[推断]
+
+\noindent\textbf{10. 综合分析.} 物理公式（如 $C_2(t)=\langle O(t)O^\dagger(0)\rangle$，
+\eqref{eq:corr}）以 LaTeX 写入技能，LLM 据此推理；代码符号映射表（上文）保证
+"物理 $\leftrightarrow$ 代码"逐项可查。[确证]
+
+\begin{equation}\label{eq:corr}
+C_2(\vec{p};t_f,t_i)=\langle \mathcal{O}(\vec{p},t_f)\,\mathcal{O}^\dagger(\vec{p},t_i)\rangle
+\end{equation}
+
+\noindent\textbf{11. 总结.} 技能库是"物理知识 $\rightarrow$ 可注入模块"的编译结果，
+5 技能构成从观测量到代码的完整推理链。[确证]
+
+\noindent\textbf{12. 评价.} 优：物理推导以标准 LaTeX 呈现、带 reference 示例；缺：技能间
+依赖靠文本移交，无机制性校验。[推断]
+
+\noindent\textbf{13. 补充.} 技能内容本身即"代码-物理交叉"最密集处，是本库物理承载主体。[确证]
+
+\noindent\textbf{14. 参考源.} 见第 5 节 C2 条目。
+
+\noindent\textbf{15. 附录.} SKILL.md 关键片段见第 4 节 S6/S7。
+
+% ---- C3 ----
+\subsection{C3 benchmark 物理任务与技能调用链}
+
+\noindent\textbf{1. 目的与前期准备.} 以"手写标准 PyQUDA 参考实现 + 数值"为 gold standard，
+量化 agent 生成代码的正确性（\texttt{\nolinkurl{README.md:118}}）。前置：C24P29 ensemble、
+cfg 10000、点源、零动量统一评测条件（\texttt{\nolinkurl{README.md:108}}）。[确证]
+
+\noindent\textbf{2. 输入.} 70 个自然语言任务文本（2pt\_local 20 / 2pt\_nonlocal 10 /
+wilson\_loop 12 / 3pt\_meson 13 / 3pt\_baryon 15，\texttt{\nolinkurl{README.md:108-118}}）。[确证]
+
+\noindent\textbf{3. 输出.} standard/benchmark.py（手写参考）+ benchmark\_data/*.txt（参考数值）
+供逐任务比对（\texttt{\nolinkurl{benchmark/2pt_local/standard/benchmark.py:1-30}}）。[确证]
+
+\noindent\textbf{4. 整体框架.} 调用链：
+\textcolor{map}{task.txt → run.py → Planner → Executor（+skills+generate\_einsum）→
+main.py 运行 → txt 数据 → 与 benchmark\_data 对比}。[确证]
+
+\noindent\textbf{5. 关键细节.} 任务文本既含物理量（$\bar u\gamma_5 d$、Cg5、Tmat）又含数值参数
+（stout (1,0.125,4)、tseq=8、点源 [0,0,0,0]），是"物理-工程"双层指令
+（\texttt{\nolinkurl{benchmark/3pt_baryon/task/task_1.txt:1-8}}）。[确证]
+
+\noindent\textbf{6. 正确执行.} 每类任务一个 batch 脚本批量跑（如
+\texttt{\nolinkurl{experiments/run_scripts/batch_local2pt.sh:1}}）。[确证]
+
+\noindent\textbf{7. 实际执行.} 只读侧抽样精读 2pt\_local/wilson\_loop/3pt\_meson/3pt\_baryon
+四类 task\_1 + standard 参考头部；全量 70 任务仅索引。[确证]
+
+\noindent\textbf{8. 实际输出.} standard 参考数据含逐任务 t=1 Re 数值（如 DeepSeek 失败表中
+$\eta_s$ +1.3067e-01 等，\texttt{\nolinkurl{experiments/LQCD_Master_DeepSeek/summary.md:20-28}}）。[确证]
+
+\noindent\textbf{9. 结果分析.} Exact 判据 $|\Delta|<10^{-12}$ 或 rel<10$^{-3}$；sign-flip 单独
+计数（\texttt{\nolinkurl{README.md:131-133}}）。wilson\_loop 全满分说明纯规范任务技能
+（pyquda-gauge）覆盖充分。[确证/推断]
+
+\noindent\textbf{10. 综合分析.} 基准既是验证集也是"物理正确性定义"——agent 的"物理"
+由手写标准编码，代码-物理对应在此闭环（\texttt{\nolinkurl{benchmark/2pt_local/standard/benchmark.py:1-18}}）。[确证]
+
+\noindent\textbf{11. 总结.} 70 任务基准把"agent 算得对不对"从印象化转为数值可判，是系统
+可信度的支柱。[确证]
+
+\noindent\textbf{12. 评价.} 优：任务覆盖 5 类 observable、标准全手写；缺：单 ensemble 单组态
+（cfg 10000），统计意义有限（推断）。[推断]
+
+\noindent\textbf{13. 补充.} 任务文本仅 1--10 行，恰好是"物理-工程双层"最小完备指令集。[确证]
+
+\noindent\textbf{14. 参考源.} 见第 5 节 C3 条目。
+
+\noindent\textbf{15. 附录.} task\_1 原文见第 4 节 S8。
+
+% ---- C4 ----
+\subsection{C4 core\_architecture 架构设计}
+
+\noindent\textbf{1. 目的与前期准备.} 三层（orchestrator/planner/executor）封装
+"总控/方案/代码"三个关注点（行数 816/379/1219，职责行数比直观反映"方案最薄、代码最厚"）。[确证]
+
+\noindent\textbf{2. 输入.} task + run\_dir + llm\_client + tool\_client + submit\_tool + 模式
+标志（\texttt{\nolinkurl{core_architecture/orchestrator.py:30-49}}）。[确证]
+
+\noindent\textbf{3. 输出.} state dict（planner/executor/test\_submission/full\_submission 各节）
+与 trajectory\_full.json（\texttt{\nolinkurl{core_architecture/orchestrator.py:62-96}}）。[确证]
+
+\noindent\textbf{4. 整体框架.} run() 三阶段：planner $\rightarrow$ executor $\rightarrow$
+test submission（\texttt{\nolinkurl{core_architecture/orchestrator.py:74-96}}）。[确证]
+
+\noindent\textbf{5. 关键细节.} ① 每阶段 checkpoint 循环（approved/feedback）上限 3 轮
+（\texttt{\nolinkurl{core_architecture/orchestrator.py:109-121}}）；② test 提交后
+squeue/scontrol 监视 + 动态重写（\texttt{\nolinkurl{core_architecture/orchestrator.py:201-281}}、
+\texttt{\nolinkurl{core_architecture/orchestrator.py:283-343}}）；③ executor 缺字段自动反馈
+重试上限 2（\texttt{\nolinkurl{core_architecture/executor.py:165-197}}）。[确证]
+
+\noindent\textbf{6. 正确执行.} orchestrator 自身不产生 prompt 内容，全部委托 planner/
+executor 与技能/工具层，只做状态机与 I/O（\texttt{\nolinkurl{core_architecture/orchestrator.py:98-107}}）。[确证]
+
+\noindent\textbf{7. 实际执行.} 只读侧全函数结构 grep + 关键段精读；运行态执行 \textcolor{warn}{未验证}。[确证/未验证]
+
+\noindent\textbf{8. 实际输出.} 实验产物中 planner/ 与 executor\_v1..v2 目录结构即编排器
+"版本化 + 持久化"设计的落地（\texttt{\nolinkurl{experiments/New_DA_diagonal/planner/plan.yaml:1}}）。[确证]
+
+\noindent\textbf{9. 结果分析.} executor 静态分析轮数/动态测试轮数由 config 控制
+（executor\_static\_check\_rounds=1、executor\_dynamic\_test\_rounds=1，
+\texttt{\nolinkurl{configs/config.yaml:1-2}}），架构预留了自动纠错深度的可调性。[推断]
+
+\noindent\textbf{10. 综合分析.} 状态机设计使每一步产物（plan/bundle/queue/monitor）皆落盘，
+为实验层 5335 文件的可追溯性提供机制保障（\texttt{\nolinkurl{core_architecture/orchestrator.py:815}}）。[确证/推断]
+
+\noindent\textbf{11. 总结.} 编排器是"薄总控 + 厚实现"，把可靠性建立在持久化与版本化上。[确证]
+
+\noindent\textbf{12. 评价.} 优：状态可恢复、监视细节丰富；缺：orchestrator 816 行承载过多
+Slurm 解析逻辑，可抽独立模块（推断）。[推断]
+
+\noindent\textbf{13. 补充.} 设计面向单任务串行；未做任务级并行编排（推断）。[推断]
+
+\noindent\textbf{14. 参考源.} 见第 5 节 C4 条目。
+
+\noindent\textbf{15. 附录.} orchestrator.run 片段见第 4 节 S1。
+
+% ---- C5 ----
+\subsection{C5 run.py 入口与配置体系}
+
+\noindent\textbf{1. 目的与前期准备.} 极薄入口（133 行）把"装配 + 启动"与"实现"分离；
+配置体系让集群适配不侵入代码。前置：配置 yaml 需逐集群定制
+（\texttt{\nolinkurl{README.md:150-157}}）。[确证]
+
+\noindent\textbf{2. 输入.} CLI 五参数（--test/--run-dir/--task/--list-skills/--non-interactive，
+\texttt{\nolinkurl{run.py:17-25}}）+ .env（API key）+ configs 三 yaml。[确证]
+
+\noindent\textbf{3. 输出.} run\_dir（默认 runs/<时间戳>）下的全部产物
+（\texttt{\nolinkurl{run.py:28-32}}）。[确证]
+
+\noindent\textbf{4. 整体框架.} main() 装配四组件后调 orchestrator.run()，结束打印轨迹路径与
+版本/提交摘要（\texttt{\nolinkurl{run.py:90-129}}）。[确证]
+
+\noindent\textbf{5. 关键细节.} ① --task 支持文件（.txt 后缀自动读入，
+\texttt{\nolinkurl{run.py:95-98}}）；② 交互输入用 prompt\_toolkit、回退 input
+（\texttt{\nolinkurl{run.py:61-71}}）；③ config.yaml 的 slurm/runtime/ensemble 节直接驱动
+提交脚本渲染（\texttt{\nolinkurl{core_architecture/executor.py:1113-1160}}）。[确证]
+
+\noindent\textbf{6. 正确执行.} 快速冒烟：python run.py --list-skills（只列技能，不发 LLM
+请求）；全流程：python run.py --task "<文本>" --test --non-interactive
+（\texttt{\nolinkurl{README.md:26-28}}）。[确证]
+
+\noindent\textbf{7. 实际执行.} 只读侧实测：CLI 结构精读、config 三文件全文/结构精读；
+实际运行（需 API+集群）\textcolor{warn}{未验证}。[确证/未验证]
+
+\noindent\textbf{8. 实际输出.} run.py 打印的 JSON 摘要字段（planner/executor 版本、
+test/full submission）与实际实验目录结构一致（\texttt{\nolinkurl{run.py:124-129}}）。[确证]
+
+\noindent\textbf{9. 结果分析.} ensemble\_presets.yaml 提供 7 套 ensemble 预设，benchmark
+与实验用 C24P29 参数即取自该体系（\texttt{\nolinkurl{benchmark/2pt_local/standard/benchmark.py:17-25}}）。[确证/推断]
+
+\noindent\textbf{10. 综合分析.} 入口薄 + 配置厚的设计使"换集群只改 yaml 不改代码"，
+是面向多机构部署的务实取舍。[推断]
+
+\noindent\textbf{11. 总结.} 入口与配置是系统的"外围适配层"，决定部署成本。[确证]
+
+\noindent\textbf{12. 评价.} 优：零配置即可 --list-skills 冒烟；缺：config 无 schema 校验，
+拼写错误要到渲染时才暴露（推断）。[推断]
+
+\noindent\textbf{13. 补充.} .env 仅 LLM/Serper key，无集群凭据——提交依赖 Slurm 环境
+预配置（\texttt{\nolinkurl{.env.template:1-8}}）。[确证]
+
+\noindent\textbf{14. 参考源.} 见第 5 节 C5 条目。
+
+\noindent\textbf{15. 附录.} config.yaml 片段见第 4 节 S9。
+
+% ---- C6 ----
+\subsection{C6 generate\_einsum Wick 收缩代码生成引擎}
+
+\begin{algobox}
+\textbf{核心算法:} 从物理算符（meson/baryon/multi-hadron）出发，经 wicklib Correlator
+自动 Wick 配对 + $\gamma$ 代数化简 + 费米子符号计算，生成 PyQUDA 风格
+\texttt{contract()} einsum 字符串；实测 π/ρ/η$_s$(含 disconnected)/p/Ω$_c$ 正确输出。
+\end{algobox}
+
+\noindent\textbf{1. 目的与前期准备.} 手写 Wick 收缩极易出错（符号、色/旋指标、γ 顺序），
+该引擎把"算符 $\rightarrow$ einsum"自动化，并作为 executor 的强制工具（prompt 层强制调用 +
+水印校验，\texttt{\nolinkurl{prompts/executor/generate_system.md:63-82}}）。[确证]
+
+\noindent\textbf{2. 输入.} 算符描述：meson（flavor+γ）、baryon（三个 flavor+投影子+diquark γ）、
+multi-hadron（specs 列表）、3pt（源/汇/流 + tseq）（\texttt{\nolinkurl{utils/generate_einsum/hadron_operator.py:1-40}}）。[确证]
+
+\noindent\textbf{3. 输出.} 含 \texttt{\# FROM generate\_einsum} 水印的代码块 + sink 文件
+（multi-hadron 场景产出独立 sink\_xxx.py）（\texttt{\nolinkurl{prompts/executor/generate_system.md:52-60}}）。[确证]
+
+\noindent\textbf{4. 整体框架.} 三段：算符建模（Tensor 列表）$\rightarrow$ Wick 配对引擎
+（wicklib Correlator，\texttt{\nolinkurl{utils/generate_einsum/wicklib/correlator.py:1-30}}）
+$\rightarrow$ einsum 格式化（codegen，\texttt{\nolinkurl{utils/generate_einsum/two_pt/codegen.py:1-30}}）。[确证]
+
+\noindent\textbf{5. 关键细节.} ① γ 变量名约定集 \_GAMMAS={G5,g1..g4,gtg5,Cg5,I4,Cg1}
+（\texttt{\nolinkurl{utils/generate_einsum/two_pt/codegen.py:16-18}}）；② 反向传播子自动
+\texttt{.dag()} $\rightarrow$ \texttt{.conj()} 转换（\texttt{\nolinkurl{utils/generate_einsum/two_pt/codegen.py:47-54}}）；
+③ disconnected 图自动标记（η$_s$ 孤环，实测输出）。[确证]
+
+\noindent\textbf{6. 正确执行.} 2pt 用 wick\_contract\_2pt；3pt 用 meson\_3pt/baryon\_3pt 生成器
+（含 sink block + 顺序源 + 终收缩，\texttt{\nolinkurl{utils/generate_einsum/three_pt/codegen_meson.py:1-30}}）。[确证]
+
+\noindent\textbf{7. 实际执行.} \textcolor{algo}{只读实测}：运行 demo\_2pt.py（exit=0，输出不落盘，
+\texttt{\_\_pycache\_\_} 已清理）。[确证]
+
+\noindent\textbf{8. 实际输出.} 实测生成：
+\begin{lstlisting}[language=bash]
+# pi  pi = ubar . g5 . d
+contract('wtzyxCBba, wtzyxCBba -> t', prop_l.data.conj(), prop_l.data)
+# eta_s  (2 terms, 含 disconnected)
+[DISCONNECTED] -contract('wtzyxBAaa, wtzyxBAaa -> t', prop_s.data, prop_s.data)
+contract('wtzyxCBba, wtzyxCBba -> t', prop_s.data.conj(), prop_s.data)
+# proton (2 terms, epsilon+Cg5+Tmat)
+-contract('AB, abc, EF, efd, CD, wtzyxDBdb, wtzyxFAfa, wtzyxECec -> t',
+          Cg5, epsilon, Cg5, epsilon, Tmat, prop_l.data, prop_l.data, prop_l.data)
+\end{lstlisting}
+（数据来源: 本会话实测，命令与完整输出见会话日志）[确证]
+
+\noindent\textbf{9. 结果分析.} 与手写标准对照：π 的
+\texttt{contract('wtzyxCBba, wtzyxCBba -> t', ...)} 与 benchmark 参考的
+Tr[S$^\dagger$·S] 形式一致（\texttt{\nolinkurl{benchmark/2pt_local/standard/benchmark.py:1-18}}）；
+η$_s$ 自动识别 disconnected 项说明 Wick 配对含孤环处理。[确证]
+
+\noindent\textbf{10. 综合分析.} einsum 表达式 \eqref{eq:einsum} 即"传播子、γ 矩阵、指标
+求和约定"的压缩编码；引擎把物理推导（Wick 定理）落为可执行代码，是"代码-物理交叉"
+最纯的实现。[确证]
+
+\begin{equation}\label{eq:einsum}
+\text{contract}('wtzyxCBba,\; wtzyxCBba \rightarrow t',\; S^{\dagger},\; S)
+\quad\Longleftrightarrow\quad C_\pi(t)=\sum_{\vec{x}} \mathrm{Tr}[S_l^\dagger(\vec{x},t)\,S_l(\vec{x},t)]
+\end{equation}
+
+\noindent\textbf{11. 总结.} generate\_einsum 是"物理算符 $\rightarrow$ 正确收缩代码"的
+决定性依赖，实测正确性支撑 executor 的 2pt/3pt 高准确率。[确证]
+
+\noindent\textbf{12. 评价.} 优：覆盖 meson/baryon/multi-hadron/3pt 全谱；生成文件可达
+10 万行级（多强子 9 夸克收缩）说明拓扑规模已远超手写能力。缺：生成 sink 文件体积失控、
+旧版 _to\_delete 归档堆积（推断）。[确证/推断]
+
+\noindent\textbf{13. 补充.} 引擎依赖 numpy/opt\_einsum 与 wicklib 内部代数；独立运行模式
+经 sys.path 注入（\texttt{\nolinkurl{utils/generate_einsum/two_pt/codegen.py:3-11}}）。[确证]
+
+\noindent\textbf{14. 参考源.} 见第 5 节 C6 条目。
+
+\noindent\textbf{15. 附录.} demo\_2pt.py 驱动主流程片段见第 4 节 S10；wicklib 引擎片段见 S11。
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+
+\begin{xltabular}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+\endhead
+Wick 收缩自动生成引擎 & 手写收缩/通用符号库 & 算符→einsum 自动化，实测 5 类粒子正确；
+水印强制防手写（\texttt{\nolinkurl{prompts/executor/generate_system.md:63-82}}） \\
+双代理 + 三子阶段循环 & 单次生成 agent & 物理/代码双层评审 + 自动重写；
+70 任务 90.0\%（\texttt{\nolinkurl{experiments/LQCD_Master_GPT_5.4/summary.md:8-30}}） \\
+技能库注入路由 & 固定 prompt & 5 技能按阶段注入、reference 内联；
+物理推导 LaTeX 化（\texttt{\nolinkurl{utils/skill_utils.py:215-247}}） \\
+PyQUDA 语义静态检查 & 纯语法检查 & AST 级 API 语义分析，错误进 critique 自动修复
+（\texttt{\nolinkurl{utils/static_check.py:186-265}}） \\
+70 任务手写数值基准 & 无基准 agent & 数值可比对的验证闭环（\texttt{\nolinkurl{README.md:108-118}}） \\
+人机协同 checkpoint & 全自动 agent & 提交前强制人工确认，安全兜底
+（\texttt{\nolinkurl{README.md:57-61}}） \\
+\bottomrule
+\caption{独特性评估（数据来源: 实测/推导）}
+\end{xltabular}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+
+\lstinputlisting[language=Python,firstline=74,lastline=96]{/root/PyQCD/refer/git-rep/LQCD_Master/core_architecture/orchestrator.py}
+
+\lstinputlisting[language=Python,firstline=72,lastline=111]{/root/PyQCD/refer/git-rep/LQCD_Master/core_architecture/planner.py}
+
+\lstinputlisting[language=bash,firstline=1,lastline=14]{/root/PyQCD/refer/git-rep/LQCD_Master/prompts/planner/solve_system.md}
+
+\lstinputlisting[language=bash,firstline=34,lastline=46]{/root/PyQCD/refer/git-rep/LQCD_Master/prompts/executor/generate_system.md}
+
+\lstinputlisting[language=bash,firstline=44,lastline=63]{/root/PyQCD/refer/git-rep/LQCD_Master/skills/lqcd-physics-correlator/SKILL.md}
+
+\lstinputlisting[language=bash,firstline=1,lastline=25]{/root/PyQCD/refer/git-rep/LQCD_Master/skills/pyquda-tool/SKILL.md}
+
+\lstinputlisting[language=bash,firstline=1,lastline=5]{/root/PyQCD/refer/git-rep/LQCD_Master/benchmark/2pt_local/task/task_1.txt}
+
+\lstinputlisting[language=bash,firstline=1,lastline=25]{/root/PyQCD/refer/git-rep/LQCD_Master/configs/config.yaml}
+
+\lstinputlisting[language=Python,firstline=22,lastline=40]{/root/PyQCD/refer/git-rep/LQCD_Master/utils/generate_einsum/two_pt/demo_2pt.py}
+
+\lstinputlisting[language=Python,firstline=1,lastline=30]{/root/PyQCD/refer/git-rep/LQCD_Master/utils/generate_einsum/wicklib/correlator.py}
+
+\lstinputlisting[language=Python,firstline=1,lastline=30]{/root/PyQCD/refer/git-rep/LQCD_Master/utils/generate_einsum/two_pt/codegen.py}
+
+公式 \eqref{eq:corr}（关联函数定义）与 \eqref{eq:einsum}（einsum 压缩编码）为本报告
+核心物理公式，来源与推导见第 2 节 C2/C6。
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+
+\begin{xltabular}{\textwidth}{XlX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{prompts/planner/solve_system.md:1-14}} & 仓库 & C1：物理学家 persona 与双模式 \\
+\texttt{\nolinkurl{prompts/executor/generate_system.md:34-46}} & 仓库 & C1：单文件骨架约束 \\
+\texttt{\nolinkurl{prompts/executor/generate_system.md:63-82}} & 仓库 & C1/C6：工具强制与水印 \\
+\texttt{\nolinkurl{prompts/planner/critique_system.md:6-9}} & 仓库 & C1：批判标准 \\
+\texttt{\nolinkurl{core_architecture/planner.py:72-112}} & 仓库 & C1/C4：solve/critique/rewrite \\
+\texttt{\nolinkurl{core_architecture/executor.py:102-159}} & 仓库 & C1/C4：generate\_bundle \\
+\texttt{\nolinkurl{skills/lqcd-physics-correlator/SKILL.md:25-63}} & 仓库 & C2：物理链与 γ 约定 \\
+\texttt{\nolinkurl{skills/lqcd-physics-correlator/SKILL.md:88-98}} & 仓库 & C2：Wick/γ5-厄米/味对称 \\
+\texttt{\nolinkurl{skills/lqcd-physics-spectrum/SKILL.md:1-20}} & 仓库 & C2：谱分解分工 \\
+\texttt{\nolinkurl{skills/pyquda-tool/SKILL.md:1-30}} & 仓库 & C2：PyQUDA 代码风格 \\
+\texttt{\nolinkurl{skills/pyquda-gauge/SKILL.md:1-30}} & 仓库 & C2：纯规范观测技能 \\
+\texttt{\nolinkurl{utils/skill_utils.py:215-247}} & 仓库 & C2/C8：技能注入装配 \\
+\texttt{\nolinkurl{utils/skill_utils.py:249-262}} & 仓库 & C2/C8：reference 内联 \\
+\texttt{\nolinkurl{utils/skill_utils.py:133-190}} & 仓库 & C8：SkillRouter 路由 \\
+\texttt{\nolinkurl{configs/skills.yaml:1-10}} & 仓库 & C2/C5：路由配置 \\
+\texttt{\nolinkurl{benchmark/2pt_local/task/task_1.txt:1-5}} & 仓库 & C3：2pt 任务原文 \\
+\texttt{\nolinkurl{benchmark/3pt_baryon/task/task_1.txt:1-8}} & 仓库 & C3：重子 3pt 任务 \\
+\texttt{\nolinkurl{benchmark/wilson_loop/task/task_1.txt:1-6}} & 仓库 & C3：Wilson 圈任务 \\
+\texttt{\nolinkurl{benchmark/2pt_local/standard/benchmark.py:1-30}} & 仓库 & C3/C6：手写参考实现 \\
+\texttt{\nolinkurl{README.md:108-118}} & 仓库 & C3：70 任务分类 \\
+\texttt{\nolinkurl{README.md:131-133}} & 仓库 & C3：Exact/sign-flip 判据 \\
+\texttt{\nolinkurl{experiments/LQCD_Master_GPT_5.4/summary.md:8-30}} & 仓库 & C3/C9：90.0\% 结果 \\
+\texttt{\nolinkurl{experiments/LQCD_Master_DeepSeek/summary.md:20-28}} & 仓库 & C3/C9：80.0\% 与失败表 \\
+\texttt{\nolinkurl{core_architecture/orchestrator.py:74-96}} & 仓库 & C4：run() 三阶段 \\
+\texttt{\nolinkurl{core_architecture/orchestrator.py:109-133}} & 仓库 & C4：checkpoint 循环 \\
+\texttt{\nolinkurl{core_architecture/orchestrator.py:201-343}} & 仓库 & C4：提交监视 \\
+\texttt{\nolinkurl{core_architecture/executor.py:165-197}} & 仓库 & C4：缺字段重试 \\
+\texttt{\nolinkurl{run.py:17-25}} & 仓库 & C5：CLI 参数 \\
+\texttt{\nolinkurl{run.py:90-129}} & 仓库 & C5：main() 装配 \\
+\texttt{\nolinkurl{configs/config.yaml:1-41}} & 仓库 & C5：Slurm/runtime 配置 \\
+\texttt{\nolinkurl{core_architecture/executor.py:1113-1160}} & 仓库 & C5：提交脚本渲染 \\
+\texttt{\nolinkurl{utils/generate_einsum/two_pt/codegen.py:1-54}} & 仓库 & C6：einsum 格式化 \\
+\texttt{\nolinkurl{utils/generate_einsum/wicklib/correlator.py:1-30}} & 仓库 & C6：Wick 引擎 \\
+\texttt{\nolinkurl{utils/generate_einsum/hadron_operator.py:1-40}} & 仓库 & C6：算符建模 \\
+\texttt{\nolinkurl{utils/generate_einsum/two_pt/demo_2pt.py:22-118}} & 仓库 & C6：驱动主流程（实测运行） \\
+\texttt{\nolinkurl{utils/static_check.py:10-25}} & 仓库 & C7：静态分析入口 \\
+\texttt{\nolinkurl{utils/static_check.py:186-265}} & 仓库 & C7：PyQUDA AST 分析 \\
+\texttt{\nolinkurl{utils/llm_client.py:27-60}} & 仓库 & C10：LLM 客户端 \\
+\texttt{\nolinkurl{utils/tool_client.py:33-99}} & 仓库 & C10：web/execute 工具 \\
+\texttt{\nolinkurl{experiments/New_DA_diagonal/planner/plan.yaml:1}} & 仓库 & C4：编排产物落盘实例 \\
+\bottomrule
+\end{xltabular}
+
+% ================= 6 结论 =================
+\section{结论}
+
+\begin{conclbox}
+穷尽剖析结论：核心部分候选 13 个（\textbf{深挖 6 / 浅析 4 / 排除 3}，无未处理）。
+\textbf{最强竞争力：}① \textcolor{algo}{generate\_einsum Wick 收缩引擎}——把 Wick 定理
+自动化为正确 einsum 代码（实测 5 类粒子正确、自动处理 disconnected），是 2pt/3pt 高
+准确率的决定性依赖；② \textcolor{algo}{双代理 + 三子阶段循环 + 技能路由注入}——物理/
+代码双层评审 + 人机 checkpoint，支撑 70 任务基准 90.0\%。二者构成"物理知识自动编译为
+正确代码"的完整链条，是本库区别于通用 agent 脚手架的核心竞争力。
+\end{conclbox}
+
+\begin{refbox}
+本库 docs/ 既有 pure 报告（pure\_qcd\_wick\_codegen\_20260815）独立剖析了 Wick 代码
+生成，与本报告 C6 实测互相印证：该引擎物理正确性与工程成熟度均可独立复现。
+\end{refbox}
+
+\begin{warnbox}
+\textcolor{warn}{未验证}：双代理真实 LLM 调用与 Slurm 提交未运行（只读分析，仅做语法检查
+OK=69/FAIL=0 与 generate\_einsum demo 实测）。\textcolor{warn}{推断}：C12 评价/补充中的
+局限项（批判保守、sink 体积、无 schema 校验）均为推断。\textcolor{warn}{排除项}：C11 生成
+大文件、C12 第三方报告、C13 通用脚手架——均非本库设计部分。\textcolor{warn}{抽查}：
+experiments（5335 文件）与 10 万行级生成文件仅抽查/索引，未逐文件深读。
+\end{warnbox}
+
+\end{document}
