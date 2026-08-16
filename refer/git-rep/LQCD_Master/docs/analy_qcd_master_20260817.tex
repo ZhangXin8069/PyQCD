@@ -1,0 +1,580 @@
+% ============================================================
+% analy 报告 — 规范模板 v2（xelatex + ctex）
+% 用途: LQCD_Master 双代理编排库整体分析（三视角 + 双代理编排全流程 A 框架 15 步）
+% 被分析仓库: /root/PyQCD/refer/git-rep/LQCD_Master（非独立 git 仓库，被 PyQCD 主仓库跟踪）
+% 编译: 见模板第 0 节；交付前 Overfull 与 Float too large 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{struct}{HTML}{3B3B98}
+\definecolor{relation}{HTML}{0E7C7B}
+\definecolor{idea}{HTML}{B03A2E}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=relation}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{struct}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{struct!70!black}}{\thesubsubsection}{1em}{}
+
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{ideabox}{breakable,colback=idea!6,colframe=idea,title=项目思路}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=bash,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{struct},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{struct!60!black},
+}
+
+\title{LQCD\_Master 双代理编排库分析报告\\{\large 格点 QCD 自然语言到 GPU 计算的自动化 agent 编排体系}}
+\author{opencode analy}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对 \texttt{refer/git-rep/LQCD\_Master}（LQCD Master，下称"目标库"）做只读全库分析：
+\textbf{Planner（物理方案规划）与 Executor（代码生成）双代理}将自然语言物理任务翻译为可执行的
+PyQUDA 程序与 Slurm 提交脚本，并配 5 个 LQCD 领域技能与 70 项物理基准任务。全库 5600 个文件、
+约 185.6 万行（精确求和 1,855,830 行），按目录汇总计数 + 抽查比例饱和覆盖。
+三视角结论：\textcolor{struct}{主体结构}为"入口层 $\rightarrow$ 编排核心层 $\rightarrow$
+提示词/技能/工具/配置层 $\rightarrow$ 基准/实验层"八层组织；\textcolor{relation}{各部分关系}
+为"run.py 装配编排器 $\rightarrow$ planner/executor 消费 prompts+skills+configs $\rightarrow$
+submit\_tool 提交 Slurm"的依赖链；\textcolor{idea}{项目思路}是"人机协同 + 自动纠错 + 技能路由"
+三支柱的可复现科学计算管线。主题分析以"如何让 agent 自动算一个 2pt 关联函数"为实例，按
+\textbf{A 代码工作框架 15 步}重现双代理编排全流程。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 仓库概览 =================
+\section{仓库概览}
+
+目标库位于 \texttt{refer/git-rep/LQCD\_Master/}，英文 README 自称
+"Agentic Scientific Computing for Lattice QCD — Natural Language to GPU Computation"
+（\texttt{\nolinkurl{README.md:1-10}}）。它不是独立 git 仓库（无自带 \texttt{.git}），
+被 PyQCD 主仓库跟踪，故 git 历史反映主仓库而非本库自身——报告中 git 信息一律注明
+"非独立仓库"。
+
+\subsection{目录结构}
+
+\begin{lstlisting}[language=bash]
+LQCD_Master/
+|-- run.py                  # CLI 入口（133 行）
+|-- README.md               # 项目说明
+|-- requirements.txt        # openai/prompt_toolkit/pyyaml/numpy/opt_einsum
+|-- .env.template           # LLM API / Serper key 模板
+|-- core_architecture/      # 编排核心: orchestrator(816) planner(379) executor(1219)
+|-- prompts/                # 提示词: planner/(solve/critique/rewrite) executor/(generate/critique/rewrite)
+|-- skills/                 # 5 个 LQCD 技能 SKILL.md + reference/ 工作示例
+|-- utils/                  # llm_client / skill_utils / static_check / generate_einsum / ...
+|-- configs/                # config.yaml / ensemble_presets.yaml / skills.yaml
+|-- benchmark/              # 70 任务 + standard 手写 PyQUDA 参考实现
+|-- experiments/            # 多模型实验记录（GPT-5.4/DeepSeek/Claude_Code/多强子等）
+`-- docs/                   # 既有 pure 报告（纯 QCD Wick 代码生成，1 份 tex+pdf）
+\end{lstlisting}
+
+\subsection{规模统计与 git 信息}
+
+\begin{table}[htbp]\centering
+\begin{tabular}{ll}
+\toprule
+指标 & 实测值 \\
+\midrule
+文件总数 & 5600 \\
+总行数（全部文本精确求和） & 1,855,830 \\
+markdown 文档数 & 197 \\
+Python 文件数 & 356 \\
+Shell 脚本数 & 450 \\
+yaml 配置数 & 159 \\
+txt（任务/数据/日志） & 4432 \\
+独立 git 仓库 & 否（被 PyQCD 主仓库跟踪） \\
+\bottomrule
+\end{tabular}
+\caption{目标库实测统计（数据来源: find/wc 实测；git 信息: \texttt{git -C} 上溯至主仓库）}
+\end{table}
+
+按目录汇总（文件数 / 行数）：\texttt{benchmark} 153/15144、\texttt{configs} 3/212、
+\texttt{core\_architecture} 4/2415、\texttt{experiments} 5335/1572939、
+\texttt{prompts} 15/527、\texttt{skills} 12/3348、\texttt{utils} 71/260521、\texttt{docs} 2/386。
+其中 \texttt{experiments} 占文件与行数绝对多数（含 \texttt{New\_multi\_hadron} 下
+100,829 行级的生成型 \texttt{sink\_*\_2pt.py}，属于自动生成的 Wick 收缩大文件，仅索引）。
+参考知识库声明：本库内 \texttt{docs/}（2 文件，既有 \texttt{pure\_qcd\_wick\_codegen\_20260815}
+产物）已引入并仅索引；本库无 \texttt{books/refer/references} 等目录，未引入。
+
+% ================= 2 主体结构（核心目的一）=================
+\section{主体结构}
+
+本节回答"仓库是什么、如何分层"。按"入口 $\rightarrow$ 编排 $\rightarrow$ 知识/工具 $\rightarrow$
+基准/实验"八层组织，每层职责一句话。
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{struct}{层次} & 目录 & \textcolor{struct}{职责} \\
+\midrule
+\endhead
+入口层 & \texttt{run.py} & CLI 入口：解析参数、装配编排器并启动全流程 \\
+编排核心层 & \texttt{core\_architecture/} & PlannerAgent + ExecutorAgent + WorkflowOrchestrator 三体编排 \\
+提示词层 & \texttt{prompts/} & 按阶段（solve/generate/critique/rewrite）的 system/user prompt 模板 \\
+技能层 & \texttt{skills/} & 5 个 LQCD 领域技能 SKILL.md + reference 工作示例 \\
+工具层 & \texttt{utils/} & LLM 客户端、技能注册/路由、静态分析、Wick einsum 代码生成器 \\
+配置层 & \texttt{configs/} + \texttt{.env} & Slurm/ensemble/技能路由/LLM API 配置 \\
+基准层 & \texttt{benchmark/} & 70 项验证任务 + 手写标准参考实现与数值数据 \\
+实验层 & \texttt{experiments/} & 多 LLM 骨干实验记录与逐任务产物 \\
+\bottomrule
+\caption{主体结构分层（数据来源: 全库索引实测；行数见 \texttt{README.md:65-84} 项目结构节）}
+\end{xltabular}
+
+\subsection{入口层与编排核心层}
+
+入口层仅 \texttt{run.py} 一个文件（133 行），职责极简：解析 CLI、装配四个组件
+（LLM 客户端、内置工具、Slurm 提交工具、编排器）后调用
+\texttt{orchestrator.run()}（\texttt{\nolinkurl{run.py:90-117}}）。
+编排核心层三个类的职责划分清晰：\texttt{WorkflowOrchestrator}（816 行）负责阶段总控与
+Slurm 队列监视；\texttt{PlannerAgent}（379 行）负责物理方案；\texttt{ExecutorAgent}
+（1219 行）负责代码生成、静态分析与提交脚本渲染。行数之比 816:379:1219 直观反映
+"方案最薄、代码生成最厚"的职责分布。
+
+\subsection{提示词层与技能层}
+
+提示词层共 15 个文件、527 行，按 \texttt{planner/}（solve/critique/rewrite 三子阶段，各带
+system+user）与 \texttt{executor/}（generate/critique/rewrite）双代理对称组织，另含
+\texttt{plan\_template.yaml} 与每阶段 \texttt{skill\_routing.md}。技能层 5 个 SKILL.md 共
+1926 行：\texttt{lqcd-analysis}(740) > \texttt{pyquda-tool}(614) > \texttt{pyquda-gauge}(222) >
+\texttt{lqcd-physics-correlator}(199) > \texttt{lqcd-physics-spectrum}(151)。
+
+\subsection{工具层、配置层、基准层与实验层}
+
+工具层 \texttt{utils/}（71 文件）是代码量最大工程层，其中 \texttt{generate\_einsum/}
+（Wick 收缩 einsum 代码生成器）含 100,829 行级自动生成文件，是行数主要来源
+（\texttt{\nolinkurl{utils/generate_einsum/two_pt/sink_pnn_full.py:1}}）。
+配置层 3 个 yaml 共 212 行：\texttt{config.yaml}（Slurm/runtime）、
+\texttt{ensemble\_presets.yaml}（7 套 ensemble）、\texttt{skills.yaml}（技能路由）。
+基准层 70 任务分 5 类（\texttt{\nolinkurl{README.md:108-118}}）；实验层 5335 文件按
+"骨干模型 $\times$ 观测量类 $\times$ 任务号"组织。
+
+本节小结：八层结构以"编排核心"为轴，提示词/技能/工具/配置四层供其消费，基准与实验层
+作为验证闭环。下一节回答这些层之间如何连接。
+
+% ================= 3 各部分关系（核心目的二）=================
+\section{各部分关系}
+
+本节回答"各部分怎么连"。依赖主链：
+
+\begin{keybox}
+\textbf{依赖主链:} \textcolor{relation}{run.py → core\_architecture/orchestrator →
+(planner.py + executor.py) → prompts/ + skills/ + configs/ + utils/ →
+utils/submit\_tool → Slurm 集群 → experiments/ 产物}
+\end{keybox}
+
+\subsection{引用链：入口到编排核心}
+
+\texttt{run.py:90-93} 在 \texttt{main()} 中以 \texttt{from ... import ...} 延迟导入
+编排器与四个工具类（\texttt{WorkflowOrchestrator}/\texttt{LQCDLLMClient}/
+\texttt{BuiltinToolClient}/\texttt{SlurmSubmitTool}）。编排器构造时再装配
+\texttt{PlannerAgent} 与 \texttt{ExecutorAgent}
+（\texttt{\nolinkurl{core_architecture/orchestrator.py:50-60}}），
+形成 \textcolor{relation}{run.py → orchestrator → planner/executor} 引用链。
+
+\subsection{编排核心到知识/工具层}
+
+\subsection{双代理内部的提示词调用链}
+
+\begin{ideabox}
+\textbf{Planner 内链:} \texttt{planner.py} 的 \texttt{run()} 依序调
+\texttt{\_run\_stage("solve")} $\rightarrow$ \texttt{\_run\_stage("critique")}
+$\rightarrow$ \texttt{\_run\_stage("rewrite")}，每阶段 \texttt{\_load\_system\_prompt} 读
+\texttt{prompts/planner/} 对应模板（\texttt{\nolinkurl{core_architecture/planner.py:72-112}}、
+\texttt{\nolinkurl{core_architecture/planner.py:269-275}}）。
+\textbf{Executor 内链:} \texttt{executor.py} 的 \texttt{generate\_bundle} 依序走
+\texttt{\_run\_executor\_stage} $\rightarrow$ \texttt{\_run\_critique\_stage}
+$\rightarrow$ \texttt{\_run\_static\_analysis\_stage} $\rightarrow$
+\texttt{\_run\_rewriter\_stage}（\texttt{\nolinkurl{core_architecture/executor.py:102-159}}、
+\texttt{\nolinkurl{core_architecture/executor.py:428-524}}）。双代理均经
+\texttt{utils/skill\_utils.SkillRunner} 注入技能、经 \texttt{utils/llm\_client} 调用大模型。
+\end{ideabox}
+
+\subsection{技能路由的配置配对关系}
+
+\texttt{configs/skills.yaml:1-10} 声明 \texttt{enabled\_skills}、
+\texttt{stage\_forced\_skills}（planner 强制 \texttt{lqcd-physics-correlator}+
+\texttt{pyquda-gauge}，executor 强制 \texttt{pyquda-tool}+\texttt{pyquda-gauge}）与
+\texttt{skill\_tools}（技能→工具映射）。该配置被 \texttt{SkillRouter}
+（\texttt{\nolinkurl{utils/skill_utils.py:133-190}}）消费：\texttt{candidate\_skills} 依
+enabled/forced/disabled 三集合求候选，\texttt{tools\_for\_skills} 把技能映射为 OpenAI 工具。
+同一技能名同时出现在 skills 目录、skills.yaml 与 \texttt{prompts/*/skill\_routing.md}，
+三处构成"技能目录声明 $\leftrightarrow$ 路由配置 $\leftrightarrow$ 阶段路由指引"的配对三角（\textcolor{relation}{确证}）。
+
+\subsection{配置与提交脚本的生成链}
+
+\texttt{executor.\_render\_submit\_script}（\texttt{\nolinkurl{core_architecture/executor.py:1113-1160}}）
+从 \texttt{configs/config.yaml} 的 \texttt{script/slurm/runtime/ensemble} 四节渲染 sbatch 脚本：
+\texttt{\#SBATCH} 头、module load、exports、mpirun 启动行。\texttt{utils/config\_utils}
+的 \texttt{build\_prompt\_submit\_config\_yaml} 把配置拼进 prompt（
+\texttt{\nolinkurl{utils/config_utils.py:126-149}}）。形成
+\textcolor{relation}{config.yaml → submit 脚本渲染 → Slurm 提交} 生成链。
+
+\subsection{基准与实验的验证闭环}
+
+\texttt{benchmark/*/task/*.txt} 是自然语言任务，\texttt{benchmark/*/standard/benchmark.py}
+是手写 PyQUDA 参考实现（如 \texttt{\nolinkurl{benchmark/2pt_local/standard/benchmark.py:1-30}}
+定义 C24P29 ensemble 参数），\texttt{benchmark\_data/*.txt} 是参考数值。实验层
+\texttt{experiments/*/summary.md} 逐任务对比标准值与 agent 产物，形成
+\textcolor{relation}{task 文本 → agent 管线产物 → 与 standard benchmark 数据比对 → 准确率统计}
+验证闭环（\texttt{\nolinkurl{experiments/LQCD_Master_GPT_5.4/summary.md:8-30}}）。
+
+\subsection{演进关系}
+
+由于非独立 git 仓库，无法从 git 历史直接观察演进；从文件结构可推演演进痕迹
+（\textcolor{relation}{推断}）：\texttt{utils/generate\_einsum/three\_pt/\_to\_delete/}
+（旧版 codegen 归档）、\texttt{codegen\_mesonold.py}、\texttt{skills/pyquda-tool/SKILL\_old\_0605.md}
+（旧技能备份）、\texttt{experiments/} 下 \texttt{test1..test4} 与 \texttt{executor\_v1/v2}
+版本目录，表明"新版本并行保留 + 旧版归档"的演进管理惯例。
+
+本节小结：依赖关系呈"入口薄、核心厚、消费端多层"的扇形；技能路由与配置配对是
+\textcolor{relation}{数据驱动} 的关键机制。下一节回答为什么这样设计。
+
+% ================= 4 项目思路（核心目的三）=================
+\section{项目思路}
+
+本节回答"为什么长这样"。三支柱设计意图 + 演进脉络 + 典型工作流。
+
+\subsection{设计意图}
+
+\textbf{支柱一：人机协同（human in the loop）。} README 明示
+"Every stage has a checkpoint — the system never submits to the cluster without
+confirmation"（\texttt{\nolinkurl{README.md:57-61}}）。编排器在 planner 与 executor 两阶段后
+均有 \texttt{\_checkpoint\_planner}/\texttt{\_checkpoint\_executor} 人类确认点
+（\texttt{\nolinkurl{core_architecture/orchestrator.py:109-133}}、\texttt{\nolinkurl{core_architecture/orchestrator.py:160-199}}）。
+
+\textbf{支柱二：自动纠错（auto-debugging）。} 静态分析发现 errors 时 executor 自动重写，
+上限 \texttt{executor\_static\_check\_rounds}；warnings 不阻断
+（\texttt{\nolinkurl{README.md:59-61}}、\texttt{\nolinkurl{configs/config.yaml:1-2}}）。
+静态检查由 AST 驱动的 \texttt{utils/static\_check.py} 实现（\texttt{\nolinkurl{utils/static_check.py:10-25}}）。
+
+\textbf{支柱三：技能路由（skill routing）。} 领域知识按阶段相关性注入 LLM prompt
+（\texttt{\nolinkurl{README.md:61}}）。物理推导（lqcd-physics-*）进 planner，
+代码/工具（pyquda-*）进 executor，分工写入 \texttt{configs/skills.yaml:4-8}。
+
+\subsection{演进脉络}
+
+\textcolor{relation}{推断}（依据文件结构，非 git 历史）：从 \texttt{experiments/} 中
+\texttt{Claude\_Code\_GPT\_5.4/test1..test4}（早期探索）、\texttt{LQCD\_Master\_GPT\_5.4}（主
+验证）、\texttt{LQCD\_Master\_DeepSeek}（多骨干对照）到 \texttt{New\_DA\_diagonal}、
+\texttt{New\_multi\_hadron}（新物理任务扩展，含 p+n+$\Lambda$ 多强子 9 夸克收缩）可见
+"探索 $\rightarrow$ 全量验证 $\rightarrow$ 多骨干 $\rightarrow$ 新任务"的演进线。
+技能层 \texttt{SKILL\_old\_0605.md} 与 \texttt{generate\_einsum} 的 \texttt{\_to\_delete/}
+表明技能与代码生成器持续重构。
+
+\subsection{典型工作流}
+
+一次任务的工作流（以 2pt 关联函数为例，详见第 5 节）：自然语言任务
+$\rightarrow$ \texttt{run.py} 装配 $\rightarrow$ \textbf{Planner} solve/critique/rewrite 产出
+\texttt{plan.yaml}+\texttt{summary.md} $\rightarrow$ 人工 checkpoint $\rightarrow$ \textbf{Executor}
+generate（经 SkillRunner 注入技能、调 generate\_einsum 工具）+ critique + 静态分析 +
+rewrite 产出 \texttt{main.py}+提交脚本 $\rightarrow$ 人工 checkpoint $\rightarrow$ test 提交 +
+squeue/scontrol 监视 $\rightarrow$ full 提交 $\rightarrow$ 数据 txt 落盘。
+
+\begin{ideabox}
+\textbf{一句话思路:} 这个仓库把"格点 QCD 专家的物理推理 + 代码工程 + 集群运维"编码进
+\textbf{双代理 prompt 体系 + 技能库 + 工具链}，用人工 checkpoint 兜底，实现
+"自然语言 $\rightarrow$ GPU 计算"的可复现、可对照基准的自动化科研管线。
+\end{ideabox}
+
+% ================= 5 主题分析 =================
+\section{主题分析：LQCD\_Master 双代理编排全流程}
+
+主题为一项具体工作——"如何让 agent 自动算一个 2pt 关联函数"。判定为
+\textcolor{struct}{A 代码/软件工作}（对象以编排代码、prompt 模板、脚本为主），
+按 15 步框架完整组织；涉及物理推导的内容并入对应步骤。
+
+\subsection{A1 目的与前期准备}
+
+\textbf{为什么存在：}LQCD 计算脚本的编写长期依赖专家手写，门槛高、易错。该库将
+"自然语言物理任务 $\rightarrow$ 可执行 PyQUDA 程序 + Slurm 脚本" 的翻译工作自动化
+（\texttt{\nolinkurl{README.md:12}}）。\textbf{前置条件：}Python 3.10+、PyQUDA+QUDA、
+Slurm GPU 分区、OpenAI 兼容 LLM 端点（\texttt{\nolinkurl{README.md:160-167}}），
+API key 经 \texttt{.env} 提供（\texttt{\nolinkurl{.env.template:1-8}}）。
+\textbf{环境准备：}\texttt{pip install -r requirements.txt}、\texttt{cp .env.template .env}
+（\texttt{\nolinkurl{README.md:16-28}}）。[确证]
+
+\subsection{A2 输入是什么}
+
+三层输入：\textbf{① 任务文本}——命令行 \texttt{--task} 或交互输入
+（\texttt{\nolinkurl{run.py:19-24}}），也可直接吃基准任务文件
+（\texttt{\nolinkurl{benchmark/2pt_local/task/task_1.txt:1-5}}："Calculate the two-point
+function of a pion with the operator $\bar u \gamma_5 d$ ... point source at [0,0,0,0]
+... stout-smeared (1, 0.125, 4) ..."）；\textbf{② 配置}——\texttt{configs/config.yaml}
+（Slurm 分区/资源）、\texttt{ensemble\_presets.yaml}（C24P29 ensemble：latt\_size
+[24,24,24,72]、夸克质量、clover 系数，\texttt{\nolinkurl{benchmark/2pt_local/standard/benchmark.py:17-25}}）、
+\texttt{skills.yaml}；\textbf{③ 环境事实}——executor 会探测 cfg 文件存在性与 gauge 头
+（\texttt{\nolinkurl{core_architecture/executor.py:633-700}}）。[确证]
+
+\subsection{A3 输出应该是什么}
+
+\textbf{Planner 输出：}\texttt{plan.yaml}（标准字段 task/ensemble/physics/measurement/output，
+模板 \texttt{\nolinkurl{prompts/planner/plan_template.yaml:1-65}}）与 \texttt{summary.md}
+（物理目标/策略/合理性说明），落盘于 \texttt{run\_dir/planner/}
+（\texttt{\nolinkurl{core_architecture/planner.py:146-149}}）。
+\textbf{Executor 输出：}\texttt{main.py}（单文件顺序脚本）、\texttt{submit\_test.sh}、
+\texttt{submit\_full.sh}、\texttt{notes}，打包为 bundle（\texttt{\nolinkurl{core_architecture/executor.py:150-158}}）。
+\textbf{最终产物：}提交集群后逐 cfg 的 \texttt{*.txt} 数据文件与 \texttt{trajectory\_full.json}
+轨迹（\texttt{\nolinkurl{run.py:123}}）。[确证]
+
+\subsection{A4 整体框架}
+
+四层主流程（依赖链见第 3 节）：\textcolor{relation}{run.py → orchestrator.run() →
+\_run\_planner\_stage → \_run\_executor\_stage → \_run\_test\_submission\_stage}。
+编排器 \texttt{run()} 仅 23 行，三阶段串行（\texttt{\nolinkurl{core_architecture/orchestrator.py:74-96}}）：
+Planner 产出方案 $\rightarrow$ Executor 产出代码与提交脚本 $\rightarrow$（非 test 模式）
+test 提交 + 监视。文件组织上"编排核心薄、提示词/技能/工具厚"，主流程走向如下：
+
+\lstinputlisting[language=Python,firstline=74,lastline=96]{/root/PyQCD/refer/git-rep/LQCD_Master/core_architecture/orchestrator.py}
+
+\subsection{A5 关键细节}
+
+\textbf{细节一：Planner 三段式（solve$\rightarrow$critique$\rightarrow$rewrite）。} 先解、再自我批判、
+再改写，且批判只标"会导致代码失败或物理错误"的问题
+（\texttt{\nolinkurl{prompts/planner/critique_system.md:1-9}}）。\textbf{细节二：plan 覆盖校验。}
+\texttt{REQUIRED\_PLAN\_KEYS} 校验 plan\_yaml 是否含 task/ensemble/physics/measurement/output/extras
+（\texttt{\nolinkurl{core_architecture/planner.py:22-30}}、\texttt{\nolinkurl{core_architecture/planner.py:151-153}}）。
+\textbf{细节三：executor 静态分析三路。} python 语法/AST + PyQUDA API 语义 + shell 脚本
+（\texttt{\nolinkurl{utils/static_check.py:10-25}}）。\textbf{细节四：generate\_einsum 工具强制。}
+所有 2pt/3pt 收缩必须调工具生成，带 \texttt{\# FROM generate\_einsum} 水印供 critique 检查
+（\texttt{\nolinkurl{prompts/executor/generate_system.md:63-82}}）。\textbf{细节五：缺失字段自动反馈重试。}
+bundle 验证失败时自动构造反馈走 rewriter（上限 2 次，\texttt{\nolinkurl{core_architecture/executor.py:165-197}}）。
+\textbf{易错点：}禁止 main 函数/参数解析/类/异常处理，脚本须单文件顺序展开
+（\texttt{\nolinkurl{prompts/executor/generate_system.md:34-46}}）。[确证]
+
+\subsection{A6 任务如何正确执行}
+
+标准做法：\texttt{pip install -r requirements.txt}；\texttt{cp .env.template .env} 填
+key；然后 \texttt{python run.py --task "Calculate the pion two-point correlator" --test
+--non-interactive}（\texttt{\nolinkurl{README.md:16-28}}）。\texttt{--test} 只生成不提交，
+\texttt{--non-interactive} 跳过人工 checkpoint。基准复跑用
+\texttt{experiments/run\_scripts/batch\_local2pt.sh} 等批处理脚本（
+\texttt{\nolinkurl{experiments/run_scripts/batch_local2pt.sh:1}}）。[确证]
+
+\subsection{A7 实际执行情况}
+
+\textcolor{warn}{未验证}：真实端到端运行需 LLM API key 与 Slurm 集群，本分析为只读性质、
+未实际调用。只读侧实测：对库内 69 个核心/工具/配置 Python 文件做 \texttt{py\_compile}
+语法检查，\textbf{OK=69, FAIL=0}（命令与结果见会话日志）；目录/文件/行数统计
+（第 1.2 节）与 README 声明（70 任务、5 类 observable）逐项核对一致
+（\texttt{\nolinkurl{README.md:108-118}}）。[确证（语法检查）/ 未验证（端到端）]
+
+\subsection{A8 实际输出情况}
+
+引用仓库内真实实验产物目录（完整路径见第 7 节参考源清单）：
+内含 \texttt{main.py} 与三个提交脚本（\texttt{submit\_test.sh}、\texttt{submit\_full.sh}、
+\texttt{submit\_50.sh}）以及 401 个逐 cfg 的 pion 2pt 数据文件（命名
+\texttt{cfgNNNNN.txt}，cfg 10000--20050，步长 50）；\texttt{planner/} 下有
+\texttt{plan.yaml} 与 \texttt{summary.md}。[确证]
+
+\subsection{A9 结果分析}
+
+结合实验汇总文件（\texttt{experiments/LQCD\_Master\_GPT\_5.4/summary.md:8-30}）：70 任务
+63 个 Exact（$\lvert\Delta\rvert<10^{-12}$ 或 rel<10$^{-3}$）、3 个 sign flip（$\gamma_5$ 厄米相位
+约定，物理不受影响）、4 个失败，总准确率 90.0\%。2pt local 20/20 全对；3pt baryon 最低
+（10/15）。DeepSeek 骨干 80.0\%，失败集中在"代码未产生有效结果"（
+\texttt{\nolinkurl{experiments/LQCD_Master_DeepSeek/summary.md:8-30}}）。解读：agent 对
+\textbf{纯规范测量（wilson loop）}最稳（100\%），对\textbf{重子 3pt 顺序源}最不稳——与
+收缩拓扑复杂度成正比；数值符号约定是独立风险源。[确证]
+
+\subsection{A10 综合分析}
+
+\textbf{代码-对象映射：}自然语言任务 $\leftrightarrow$ 物理观测量；\texttt{plan.yaml}
+$\leftrightarrow$ 物理方案（算符/传播子/源-汇）；\texttt{main.py} $\leftrightarrow$ 单组态数据
+生产脚本；\texttt{submit\_*.sh} $\leftrightarrow$ 集群作业；\texttt{generate\_einsum} 工具
+$\leftrightarrow$ Wick 收缩自动生成；\texttt{static\_check} $\leftrightarrow$ 语法/API 语义审查。
+\textbf{深层原因：}双代理把"物理正确性"与"代码正确性"分离验证，避免一个模型同时承担
+两难任务；批判-改写循环模拟同行评审，比单次生成显著降低错误（对比实验 90\% vs 80\%
+体现骨干差异，\texttt{\nolinkurl{README.md:126-134}}）。[确证/推断]
+
+\subsection{A11 结尾总结}
+
+\begin{conclbox}
+双代理编排全流程是"规划（Planner solve/critique/rewrite）$\rightarrow$ 生成
+（Executor generate/critique/static-check/rewrite）$\rightarrow$ 提交监视（test→full）"
+的闭环，辅以技能路由、工具强制（generate\_einsum）与人工 checkpoint，将 70 项基准中的
+标准任务（2pt/wilson/3pt meson）做到 100\% 级别准确率，重子 3pt 与符号约定是主要短板。
+\end{conclbox}
+
+\subsection{A12 结尾评价}
+
+\textbf{优点：}物理与代码双层评审、可复现基准闭环、多骨干可对比、产物完整落盘
+（main.py/提交脚本/逐 cfg 数据/轨迹）。\textbf{可改进处：}批判标准偏保守（只标致命问题，
+\`{c} minor 统计注意项可能漏掉）；生成型大文件（10 万行级 sink）体积失控；符号翻转类
+错误仅靠后验比对发现，缺预防机制。[确证/推断]
+
+\subsection{A13 补充说明}
+
+\textbf{假设：}base 配置（partition/ensemble/QUDA 路径）须逐集群定制
+（\texttt{\nolinkurl{README.md:150-157}}）。\textbf{局限：}真实提交/运行未验证（只读分析）；
+非独立 git 仓库故演进脉络为推断；\texttt{experiments} 与生成大文件仅抽查比例覆盖
+（5335 文件，抽查 task\_1 全链 + summary 汇总，比例约 3\%）。[未验证/如实标注]
+
+\subsection{A14 参考源}
+
+本步证据汇总见第 7 节参考源清单；关键片段直引见第 6 节与 A4/A5 内嵌 lstinputlisting。
+
+\subsection{A15 附录与附件}
+
+\texttt{benchmark/2pt\_local/task/task\_1.txt}（任务原文，见第 6 节片段 5）与
+\texttt{configs/config.yaml}（Slurm 配置，见第 6 节片段 6）；完整产物清单见
+第 7 节参考源清单（真实产物目录条目）。
+
+% ================= 6 关键代码/文档片段 =================
+\section{关键代码/文档片段}
+
+全部片段用 \texttt{\textbackslash lstinputlisting} 直引原文件，每段 $\le$ 40 行。
+
+\subsection{入口装配}
+
+\lstinputlisting[language=Python,firstline=90,lastline=116]{/root/PyQCD/refer/git-rep/LQCD_Master/run.py}
+
+\subsection{Planner 三段式核心}
+
+\lstinputlisting[language=Python,firstline=72,lastline=111]{/root/PyQCD/refer/git-rep/LQCD_Master/core_architecture/planner.py}
+
+\subsection{技能注入（SkillMessageAssembler）}
+
+\lstinputlisting[language=Python,firstline=215,lastline=247]{/root/PyQCD/refer/git-rep/LQCD_Master/utils/skill_utils.py}
+
+\subsection{Executor 生成提示词（骨架约束）}
+
+\lstinputlisting[language=bash,firstline=34,lastline=46]{/root/PyQCD/refer/git-rep/LQCD_Master/prompts/executor/generate_system.md}
+
+\subsection{基准任务原文}
+
+\lstinputlisting[language=bash,firstline=1,lastline=5]{/root/PyQCD/refer/git-rep/LQCD_Master/benchmark/2pt_local/task/task_1.txt}
+
+\subsection{Slurm 配置}
+
+\lstinputlisting[language=bash,firstline=1,lastline=30]{/root/PyQCD/refer/git-rep/LQCD_Master/configs/config.yaml}
+
+\subsection{技能核心链（Wick 收缩）}
+
+\lstinputlisting[language=bash,firstline=25,lastline=41]{/root/PyQCD/refer/git-rep/LQCD_Master/skills/lqcd-physics-correlator/SKILL.md}
+
+\subsection{静态分析入口}
+
+\lstinputlisting[language=Python,firstline=10,lastline=25]{/root/PyQCD/refer/git-rep/LQCD_Master/utils/static_check.py}
+
+% ================= 7 参考源清单 =================
+\section{参考源清单}
+
+\begin{xltabular}{\textwidth}{XlX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{README.md:1-10}} & 仓库 & 项目定位：自然语言到 GPU 计算 \\
+\texttt{\nolinkurl{README.md:57-61}} & 仓库 & 三支柱设计决策（human-in-loop/auto-debug/skill routing） \\
+\texttt{\nolinkurl{README.md:108-118}} & 仓库 & 70 任务基准分类 \\
+\texttt{\nolinkurl{README.md:126-134}} & 仓库 & 实验对比：GPT-5.4 90.0\% vs DeepSeek 80.0\% \\
+\texttt{\nolinkurl{run.py:17-25}} & 仓库 & CLI 参数定义 \\
+\texttt{\nolinkurl{run.py:90-117}} & 仓库 & main() 组件装配与编排启动 \\
+\texttt{\nolinkurl{core_architecture/orchestrator.py:17-28}} & 仓库 & 终态 Slurm 状态集合 \\
+\texttt{\nolinkurl{core_architecture/orchestrator.py:74-96}} & 仓库 & run() 三阶段串行 \\
+\texttt{\nolinkurl{core_architecture/orchestrator.py:98-133}} & 仓库 & planner checkpoint/rewrite 循环 \\
+\texttt{\nolinkurl{core_architecture/orchestrator.py:160-199}} & 仓库 & executor checkpoint 循环 \\
+\texttt{\nolinkurl{core_architecture/orchestrator.py:201-281}} & 仓库 & test 提交与动态重写 \\
+\texttt{\nolinkurl{core_architecture/orchestrator.py:283-343}} & 仓库 & squeue/scontrol 队列监视 \\
+\texttt{\nolinkurl{core_architecture/planner.py:22-30}} & 仓库 & REQUIRED\_PLAN\_KEYS \\
+\texttt{\nolinkurl{core_architecture/planner.py:72-112}} & 仓库 & PlannerAgent.run solve/critique/rewrite \\
+\texttt{\nolinkurl{core_architecture/planner.py:146-153}} & 仓库 & 产物持久化与覆盖校验 \\
+\texttt{\nolinkurl{core_architecture/executor.py:102-159}} & 仓库 & generate\_bundle 主流程 \\
+\texttt{\nolinkurl{core_architecture/executor.py:165-197}} & 仓库 & 缺字段自动反馈重试 \\
+\texttt{\nolinkurl{core_architecture/executor.py:428-487}} & 仓库 & executor/critique/rewriter 子阶段 \\
+\texttt{\nolinkurl{core_architecture/executor.py:633-700}} & 仓库 & 输入事实采集（cfg 探测） \\
+\texttt{\nolinkurl{core_architecture/executor.py:1113-1160}} & 仓库 & 提交脚本渲染 \\
+\texttt{\nolinkurl{utils/skill_utils.py:133-190}} & 仓库 & SkillRouter 路由逻辑 \\
+\texttt{\nolinkurl{utils/skill_utils.py:215-247}} & 仓库 & SkillMessageAssembler 技能注入 \\
+\texttt{\nolinkurl{utils/skill_utils.py:319-465}} & 仓库 & ToolRegistry 工具实现 \\
+\texttt{\nolinkurl{utils/static_check.py:10-25}} & 仓库 & 三路静态分析入口 \\
+\texttt{\nolinkurl{utils/static_check.py:186-265}} & 仓库 & PyQUDA 调用 AST 分析 \\
+\texttt{\nolinkurl{utils/submit_tool.py:10-53}} & 仓库 & sbatch 提交与 job\_id 解析 \\
+\texttt{\nolinkurl{prompts/planner/solve_system.md:1-15}} & 仓库 & 物理学家 persona 与 standard/freeform 双模式 \\
+\texttt{\nolinkurl{prompts/planner/critique_system.md:1-9}} & 仓库 & 批判标准（只标致命问题） \\
+\texttt{\nolinkurl{prompts/executor/generate_system.md:34-46}} & 仓库 & 单文件顺序脚本约束 \\
+\texttt{\nolinkurl{prompts/executor/generate_system.md:63-82}} & 仓库 & generate\_einsum 强制与水印 \\
+\texttt{\nolinkurl{skills/lqcd-physics-correlator/SKILL.md:25-41}} & 仓库 & 可观测→传播子→einsum 链 \\
+\texttt{\nolinkurl{skills/pyquda-tool/SKILL.md:1-30}} & 仓库 & PyQUDA 代码生成技能 \\
+\texttt{\nolinkurl{configs/config.yaml:1-41}} & 仓库 & Slurm/runtime/ensemble 配置 \\
+\texttt{\nolinkurl{configs/skills.yaml:1-10}} & 仓库 & 技能路由配置 \\
+\texttt{\nolinkurl{benchmark/2pt_local/task/task_1.txt:1-5}} & 仓库 & 2pt pion 任务原文 \\
+\texttt{\nolinkurl{benchmark/2pt_local/standard/benchmark.py:1-30}} & 仓库 & 标准参考实现（C24P29 参数） \\
+\texttt{\nolinkurl{experiments/LQCD_Master_GPT_5.4/summary.md:8-30}} & 仓库 & 70 任务 90.0\% 结果 \\
+\texttt{\nolinkurl{experiments/LQCD_Master_DeepSeek/summary.md:8-30}} & 仓库 & 70 任务 80.0\% 结果 \\
+\texttt{\nolinkurl{experiments/LQCD_Master_GPT_5.4/2pt_local/task_1/executor_v1/}} & 仓库 & 真实产物（main.py+401 cfg txt） \\
+\texttt{\nolinkurl{experiments/run_scripts/batch_local2pt.sh:1}} & 仓库 & 基准批处理脚本 \\
+\texttt{\nolinkurl{docs/pure_qcd_wick_codegen_20260815.tex:1}} & 参考 & 既有 pure 报告（本库文档层） \\
+\bottomrule
+\end{xltabular}
+
+% ================= 8 结论与局限 =================
+\section{结论与局限}
+
+\begin{conclbox}
+\textbf{结构：}八层组织——入口(run.py)/编排核心(core\_architecture)/提示词(prompts)/
+技能(skills)/工具(utils)/配置(configs)/基准(benchmark)/实验(experiments)。
+\textbf{关系：}run.py→编排器→双代理→prompts+skills+configs+utils→submit\_tool→集群→
+experiments 的扇形依赖链，技能路由为数据驱动枢轴。\textbf{思路：}人机协同+自动纠错+
+技能路由三支柱，把专家物理推理与代码工程编码为可复现管线；双代理把物理正确性与代码
+正确性分离，批判-改写模拟同行评审。\textbf{主题结论：}agent 自动算 2pt 关联函数的全流程
+（A1–A15）已完整走通，70 任务中标准任务近满分，重子 3pt 与符号约定为短板。
+\end{conclbox}
+
+\begin{refbox}
+本库 \texttt{docs/} 既有 pure 报告（\texttt{pure\_qcd\_wick\_codegen\_20260815}）聚焦
+Wick 收缩代码生成器，与本文第 5 节 A5 中 generate\_einsum 工具强制一节互为旁证：
+该工具是 executor 正确生成 2pt/3pt 收缩代码的关键依赖。
+\end{refbox}
+
+\begin{warnbox}
+\textcolor{warn}{未验证}：真实端到端运行（LLM 调用 + Slurm 提交）未执行，仅做 69 个核心
+py 文件语法检查（OK=69/FAIL=0）。\textcolor{warn}{推断}：演进脉络基于文件结构推演
+（非独立 git 仓库，无本库自身历史）。\textcolor{warn}{抽查比例}：\texttt{experiments/}
+（5335 文件）按目录汇总 + task\_1 全链抽查，未逐文件精读；100,829 行级生成型
+\texttt{sink\_*\_2pt.py} 仅索引。参考知识库仅引入本库 \texttt{docs/}（2 文件）；
+本库无 \texttt{books/refer/references} 等外部参考目录。
+\end{warnbox}
+
+\end{document}
