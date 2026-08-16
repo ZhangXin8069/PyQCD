@@ -1,0 +1,704 @@
+% ============================================================
+% analy 报告 — 规范模板 v2（xelatex + ctex）
+% 主题: lamet-agent（LAMET 高统计测量自动化 agent 库）完整分析
+% 编译: xelatex 两遍；交付前 Overfull 与 Float too large 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+% ===== 色板（语义化；全文档同一颜色只表达同一类含义）=====
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{struct}{HTML}{3B3B98}
+\definecolor{relation}{HTML}{0E7C7B}
+\definecolor{idea}{HTML}{B03A2E}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=relation}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{struct}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{struct!70!black}}{\thesubsubsection}{1em}{}
+
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{ideabox}{breakable,colback=idea!6,colframe=idea,title=项目思路}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{struct},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{struct!60!black},
+}
+
+\title{\textbf{lamet-agent 仓库分析报告：\\ LaMET 高统计测量自动化 agent 的主体结构、各部分关系与项目思路}}
+\author{opencode analy}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对格点 QCD 自动化分析库 \texttt{lamet-agent}
+（位于 \texttt{/root/PyQCD/refer/git-rep/lamet-agent/}）进行完整只读分析。
+该库是 ``Lattice Measurement with high statistics'' 思想的 Python 实现：用 LLM agent 自动驱动
+LaMET（大动量有效理论）数据分析全流程（关联函数分析、重整化、傅里叶变换、微扰匹配、外推）。
+全库 98 个文件（78 Python + 13 Markdown + 2 JSONC + 5 其它），Python 46{,}153 行。
+报告从三视角展开：\textcolor{struct}{主体结构}（入口 \texttt{lamet\_agent/\_\_main\_\_.py} 与 \texttt{agent.py}、
+核心 \texttt{core/}+\texttt{planning/}+五阶段 \texttt{stages/}、知识库 \texttt{papers/lamet\_kb/}、
+示例 \texttt{examples/}、测试 \texttt{tests/}）；
+\textcolor{relation}{各部分关系}（\texttt{planning} 规划 $\to$ \texttt{stages} 执行 $\to$ \texttt{core} 测量基元 $\to$ 知识库支撑的依赖链）；
+\textcolor{idea}{项目思路}（把“关联函数分析与外推需要物理专家判断”的步骤委托给 agent，其余固定步骤软件自动化，
+见 \texttt{PLAN.md}）。主题分析按 \textbf{A 代码工作 15 步框架}（A1--A15）重现
+“agent 如何自动完成一次高统计测量”的完整流程。实测证据：CLI 帮助输出、manifest 校验、23/117/121 项单元测试通过，
+另有 48 项测试因 `examples/*.json` 可运行 manifest 未随本 checkout 提供而失败（如实记录）。
+产物 PDF 通过 Overfull 与 Float too large 双零校验。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 仓库概览 =================
+\section{仓库概览}
+
+\subsection{目录结构}
+
+\texttt{lamet-agent} 采用“根级包 + 子包分层”布局：入口文件在仓库根，核心逻辑分 \texttt{core/}（通用基元）、
+\texttt{planning/}（交互规划）、\texttt{stages/}（五阶段+评审）三组，知识库与示例并列在 \texttt{papers/}、\texttt{examples/} 下。
+实测目录树如下（数据来源: \texttt{find} 实测）：
+
+\begin{lstlisting}[language=bash]
+lamet-agent/
+|-- README.md / PLAN.md / PROJECT_LOG.md / pyproject.toml / .gitignore
+|-- docs/                 # 报告产物（analy_lamet_20260817 为本报告）
+|-- examples/
+|   |-- sample_manifest.jsonc / partial_sample_manifest.jsonc
+|   `-- fake_data/        # generate_fake_data.py / read_fake_data.py / utils.py
+|-- lamet_agent/
+|   |-- __main__.py / agent.py / manifest.py / manifest_params.py / kernels.py
+|   |-- core/             # data llm tools resampling prompting plotting reporting
+|   |   |                 # trace banner stages
+|   |-- planning/         # core.py agent.py questions.py render.py conversion.py
+|   `-- stages/           # correlator renorm fourier matching extrapolation review
+|-- lamet_literature/     # arxiv.py classify_arxiv.py inspirehep.py README
+|-- papers/
+|   |-- README.md / docs/ # lamet_rubric.md schema.md
+|   `-- lamet_kb/         # pipeline.py scoring.py storage.py arxiv.py settings.py
+`-- tests/unit/           # 21 个测试文件（460 个测试函数）
+\end{lstlisting}
+
+\subsection{规模统计与 git 信息}
+
+\begin{table}[htbp]\centering
+\begin{tabular}{ll}
+\toprule
+指标 & 实测值 \\
+\midrule
+总文件数 & 98（含 .tex/.pdf 先前 pure 产物 2 个） \\
+Python 文件数 & 78（\texttt{find} 实测，\texttt{\detokenize{46,153}} 行） \\
+Markdown 文档数 & 13（\texttt{\detokenize{3,050}} 行） \\
+JSONC 清单数 & 2（\texttt{sample\_manifest.jsonc}、\texttt{partial\_sample\_manifest.jsonc}） \\
+单元测试函数 & 460（\texttt{\detokenize{grep -c "def test_"}} 实测） \\
+stage 包数 & 6（correlator/renorm/fourier/matching/extrapolation/review） \\
+底层目录 & 20 \\
+提交数 & 该库\textbf{非独立 git 仓库}：被 PyQCD 主仓库跟踪，本目录相关提交 2 条 \\
+标签数 & 主仓库标签（沿用主仓库历史，不体现 lamet-agent 自身里程碑） \\
+\bottomrule
+\end{tabular}
+\caption{仓库实测统计（数据来源: find/wc/git 实测）}
+\end{table}
+
+\textbf{git 说明（确证）}：\texttt{\detokenize{git -C lamet-agent log}} 返回的是主仓库历史（HEAD 为
+\texttt{\detokenize{e953b47}}），本目录仅有两笔直接提交
+\texttt{\detokenize{2daadb3}}（2026-08-16）与 \texttt{\detokenize{4d84e9c}}（2026-08-16）。
+因此本报告以仓库内的 \texttt{PLAN.md}、\texttt{PROJECT\_LOG.md}、\texttt{README.md} 作为演进脉络主证据，
+git 历史只作辅助。
+
+\subsection{参考资料引入声明}
+
+按 analy 技能默认引入参考知识库：\texttt{examples/}（5 文件）作为示例层引入；
+\texttt{papers/docs/}（2 文件：\texttt{lamet\_rubric.md}、\texttt{schema.md}）作为知识库规范引入；
+\texttt{lamet\_literature/}（README + 3 脚本）作为文献标注子库引入。
+\texttt{docs/} 下已有先前 pure 产物 \texttt{pure\_core\_20260815.tex/pdf}，本报告只读不覆盖。
+
+% ================= 2 主体结构（核心目的一）=================
+\section{主体结构}
+
+\subsection{分层架构}
+
+lamet-agent 的主体按“入口层 → 核心层 → 知识库/示例/测试层”组织，核心层内部再分
+规划（planning）、执行管线（stages）、通用基元（core）三组。分层表如下：
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{struct}{层次} & 目录 & \textcolor{struct}{职责一句话} \\
+\midrule
+\endhead
+入口层 & \texttt{lamet\_agent/\_\_main\_\_.py} & CLI 入口：\texttt{validate}/\texttt{plan}/\texttt{run} 三命令，负责 manifest 解析、后端解析与 plan 回退（\texttt{\detokenize{__main__.py:111-276}}） \\
+入口层 & \texttt{lamet\_agent/agent.py} & agent 运行时：执行 \texttt{metadata.stages} 有序 stage，为每个 job 建独立 store 并驱动 LLM/工具循环（\texttt{\detokenize{agent.py:561-1012}}） \\
+核心层 & \texttt{lamet\_agent/planning/} & 交互式 manifest 规划：JSONC 宽松解析、确定性问题检查、LLM 驱动的 JSON Patch 候选编辑、quick/full 清单生成（\texttt{\detokenize{planning/core.py:160-175}}） \\
+核心层 & \texttt{lamet\_agent/stages/*/} & 五阶段执行管线 + review：每 stage 含 \texttt{functions.py}（工具+注册表）、\texttt{validation.py}、\texttt{prompts.md}、\texttt{reporting.py} \\
+核心层 & \texttt{lamet\_agent/core/} & 通用基元：数据容器（\texttt{data.py}）、LLM 后端（\texttt{llm.py}）、工具注册与参数准备（\texttt{tools.py}）、重采样（\texttt{resampling.py}）、提示组装（\texttt{prompting.py}）、作图（\texttt{plotting.py}） \\
+核心层 & \texttt{lamet\_agent/manifest.py} & job-DAG manifest 模式：Pydantic 模型 + 全库 id 唯一性/DAG/参数契约校验（\texttt{\detokenize{manifest.py:385-529}}） \\
+核心层 & \texttt{lamet\_agent/kernels.py} & NLO 匹配核库：\texttt{KERNEL\_REGISTRY} 注册核函数、\texttt{alphas\_nloop}、\texttt{build\_matching\_matrix}（\texttt{\detokenize{kernels.py:58-420}}） \\
+知识库层 & \texttt{papers/lamet\_kb/} & LaMET 文献知识库：arXiv 抓取管线、相关性打分、SQLite 存储（\texttt{\detokenize{lamet_kb/pipeline.py:26-60}}） \\
+知识库层 & \texttt{lamet\_literature/} & 文献标注：本地模型给 arXiv HTML 打结构化标签（\texttt{\detokenize{classify_arxiv.py}}） \\
+示例层 & \texttt{examples/} & 注释清单 \texttt{sample\_manifest.jsonc}、\texttt{fake\_data/} 假数据生成/读取 \\
+测试层 & \texttt{tests/unit/} & 21 个单元测试文件、460 个测试函数（\texttt{pytest} 实测） \\
+配置层 & \texttt{pyproject.toml} & 包元数据、可选依赖组（analysis/codex/literature）、console script \\
+\bottomrule
+\caption{主体结构分层（数据来源: 全库索引实测）}
+\end{xltabular}
+
+\subsection{主体结构小结}
+
+\textcolor{struct}{分层要点}：入口层极薄（只做解析与编排），全部数值工作下沉到 \texttt{stages/*/functions.py} 的工具函数，
+由 \texttt{core/tools.py} 的注册表统一暴露给 agent；\texttt{core/} 是纯 Python 的 LQCD 统计与分析基元，
+不依赖 LLM 逻辑即可单独复用；\texttt{planning/} 与 \texttt{stages/} 共享 \texttt{manifest.py}/\texttt{manifest\_params.py}
+的同一套模式与契约。下一节回答“各部分之间如何连接”。
+
+% ================= 3 各部分关系（核心目的二）=================
+\section{各部分关系}
+
+\subsection{依赖主链}
+
+\begin{keybox}
+\textbf{依赖主链:} \textcolor{relation}{\texttt{\detokenize{__main__.py -> agent.py -> core/{llm,tools,prompting}.py -> stages/*/functions.py -> core/{data,resampling}.py}}}
+\qquad 平行链：\texttt{\detokenize{planning/ -> manifest.py/manifest_params.py/core/tools.py}}
+\qquad 知识库支撑：\texttt{\detokenize{stages/review -> papers/lamet_kb (SQLite)}}
+\end{keybox}
+
+\begin{itemize}
+\item \textbf{入口→核心}：\texttt{\detokenize{__main__.py:332-344}} 调用 \texttt{run\_agent}；\texttt{run\_agent}
+在 \texttt{\detokenize{agent.py:611-614}} 遍历 \texttt{manifest.metadata.stages}，每个 stage 再遍历其 \texttt{jobs}。
+\item \textbf{stage 路由}：\texttt{core/stages.py} 维护 \texttt{STAGE\_TO\_PACKAGE} 映射
+（\texttt{\detokenize{core/stages.py:6-16}}），把 stage id 映射到 stage 包名；
+\texttt{core/tools.py} 的 \texttt{resolve\_stage\_tools}/\texttt{resolve\_job\_tools} 加载该包 \texttt{STAGE\_TOOLS}
+并做 job 级过滤（\texttt{\detokenize{core/tools.py:199-288}}）。
+\item \textbf{数据流}：correlator stage 产出裸矩阵元 \texttt{EnsembleData} NetCDF $\to$
+renorm 消费（\texttt{target}/\texttt{denominator}/\texttt{reference} 角色）$\to$
+fourier 消费（\texttt{input} 角色）$\to$ matching 消费（\texttt{quasi} 角色）$\to$
+extrapolation 消费（\texttt{lightcone} 角色）；\texttt{agent.py} 用 \texttt{outputs} 字典把 job id 关联到
+\texttt{store["output"]}（\texttt{\detokenize{agent.py:657-659}}）。
+\item \textbf{知识库支撑}：\texttt{stages/review/functions.py} 的 \texttt{write\_review\_from\_manifest}
+读 SQLite 检索文献并按 manifest 物理锚点加权排名（\texttt{\detokenize{review/functions.py:293-399}}）；
+\texttt{papers/lamet\_kb} 的 \texttt{harvest\_lamet} 管线负责填充该库（\texttt{\detokenize{lamet_kb/pipeline.py:26-60}}）。
+\item \textbf{planning 复用}：\texttt{planning/core.py} 的 \texttt{check\_manifest\_draft} 调 \texttt{AnalysisManifest.model\_validate}
+（\texttt{\detokenize{planning/core.py:842-843}}），\texttt{validate\_candidate\_payload} 复用严格校验
+（\texttt{\detokenize{planning/core.py:1534-1539}}），实现“同一模式、两处消费”。
+\end{itemize}
+
+\subsection{对象映射（代码符号 ↔ 物理/业务对象）}
+
+\begin{xltabular}{\textwidth}{lXl}
+\toprule
+\textcolor{relation}{代码符号} & \textcolor{relation}{对象概念} & 物理/业务含义 \\
+\midrule
+\endhead
+\texttt{CorrelatorInput} & 一条 2pt/3pt 关联函数数据集 & LQCD 两点/三点关联函数及其运动学（momentum/volume/tsep/bz/bT）\\
+\texttt{EnsembleData} & 重采样后的集合数据容器 & 每样本一个 \texttt{resample} 轴（bootstrap/jackknife/raw/gvar）+ 物理坐标（z 或 x）\\
+\texttt{pt3\_ratio\_fcn} & 3pt/2pt 比值模型 & $C_{3pt}(t,\tau)/C_{2pt}(t)$ 谱分解比值，含 $O_{ij}$ 矩阵元与能级 $E_n$\\
+\texttt{fit\_self\_renormalization\_factor} & 自重整化因子 $z_R$ 拟合 & $\ln M(z,a)$ 线性发散+对数发散+离散效应的拟合（\texttt{PLAN.md} 公式）\\
+\texttt{run\_fourier\_transform} & 坐标空间→动量空间傅里叶变换 & asymptotic extrapolation + 实部对称/虚部反对称 convention 的准分布重建\\
+\texttt{build\_matching\_matrix} & 微扰匹配矩阵 & LaMET 核 $\tilde{q}(x;P_z)\to q(x)$ 的列求和 plus 处方离散化\\
+\texttt{run\_extrapolation} & 连续极限/无穷体积/手征极限外推 & 对 $a^2$、$1/P_z$、$m_\pi$ 等外推项的多项式拟合\\
+\texttt{STAGE\_TOOLS} & stage 工具注册表 & agent 可调用的数值工具集合（inspect/tune/fit/apply/plot/report）\\
+\texttt{random\_seed} & 全局重采样种子 & 每个 bootstrap/jackknife 步骤的 RNG 种子（manifest 权威配置）\\
+\bottomrule
+\caption{对象映射表（数据来源: 源码与 README 实测）}
+\end{xltabular}
+
+\subsection{版本演进关系}
+
+\begin{itemize}
+\item \textbf{manifest 契约三次迁移}：初始“顶层 CLI+manifest+kernels”扁平布局（\texttt{\detokenize{PROJECT_LOG.md:5-17}}）
+$\to$ “core+五 stage 包”运行布局（\texttt{\detokenize{PROJECT_LOG.md:21-28}}）
+$\to$ “metadata+全局 inputs+每 stage defaults/jobs”的 job-DAG 契约（\texttt{\detokenize{PROJECT_LOG.md:343-349}}）。
+\item \textbf{correlator 工具 12→4 收敛}：2026-06-10 重写 \texttt{stages/correlator/functions.py}，
+把 12 个底层工具收敛为 \texttt{inspect\_correlator\_scale}/\texttt{tune\_ground\_state}/\texttt{tune\_bare\_matrix}/
+\texttt{fit\_bare\_matrix\_grid} 四个 agentic 工具（\texttt{\detokenize{PROJECT_LOG.md:273-281}}）。
+\item \textbf{提示词资源化}：2026-08-11 把各 stage 提示词移入 \texttt{prompts.md} Markdown 资源，
+\texttt{skills.py} 更名为 \texttt{validation.py}（\texttt{\detokenize{PROJECT_LOG.md:976-1005}}）。
+\item \textbf{包布局迁移}：\texttt{src/lamet\_agent/} 迁至根级 \texttt{lamet\_agent/}
+（\texttt{\detokenize{PROJECT_LOG.md:1009-1016}}）。
+\end{itemize}
+
+\subsection{各部分关系小结}
+
+\textcolor{relation}{关系要点}：三组核心模块共享 \texttt{manifest.py} 的 job-DAG 模式——
+\texttt{stages/} 消费它执行，\texttt{planning/} 消费它规划，\texttt{review/} 消费它做一致性检查；
+\verb|core/| 是唯一被三组共同依赖的基元层；知识库（\texttt{papers/lamet\_kb/}）只向 review 提供
+“背景文献”，不参与数值计算（\texttt{\detokenize{review/functions.py:503-516}} 中“literature 仅 background only”约束）。
+
+% ================= 4 项目思路（核心目的三）=================
+\section{项目思路}
+
+\subsection{设计意图}
+
+\texttt{PLAN.md} 明确点出设计动机：\emph{“关联函数分析和外推步骤需要物理学家的专业知识来设计分析策略，
+而其他步骤相对固定，可以通过软件工具自动化完成。因此，将这两个步骤委托给智能体可以显著提高分析效率”}
+（\texttt{\detokenize{PLAN.md:12}}）。由此形成三层分工：
+
+\begin{itemize}
+\item \textbf{智能决策层}（correlator analysis、extrapolation）：agent 依据数据特点选择拟合函数、拟合区间、
+贝叶斯先验、外推项组合（\texttt{\detokenize{PLAN.md:14-16}}、\texttt{\detokenize{PLAN.md:142-144}}）；
+\item \textbf{固定流程层}（renorm、fourier、matching）：相对固定的计算流程，agent 只负责“检查输入是否完整并稳定执行”，
+不自行决定物理方案（\texttt{\detokenize{PLAN.md:44}}、\texttt{\detokenize{PLAN.md:140}}）；
+\item \textbf{统计基础层}：全程保留重采样（bootstrap/jackknife）用于统计误差，并考虑不同方案的系统误差
+（\texttt{\detokenize{PLAN.md:16}}、\texttt{\detokenize{PLAN.md:144}}）。
+\end{itemize}
+
+\textbf{why 问到底}：为什么用 LLM agent 而不是传统脚本？因为关联函数分析的“策略选择空间”过大
+（multi-state joint fit / summation method / model averaging / GEVP 等，各有权衡，
+见 \texttt{\detokenize{PLAN.md:24-29}}），传统硬编码脚本无法覆盖；而 LLM 恰好擅长“根据证据选择策略”。
+因此 agent 的数值动作全部限制在 \texttt{STAGE\_TOOLS} 注册表内（\texttt{\detokenize{core/tools.py:199-204}}），
+LLM 只做“决策层”，不直接执行数值运算——这是“可控 agent”与“自由 agent”的边界设计。
+
+\subsection{演进脉络}
+
+\subsubsection{阶段划分（数据来源: PROJECT\_LOG.md 全文）}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{idea}{阶段} & 时间区间 & 关键演化 \\
+\midrule
+\endhead
+脚手架 & 2026-05-31 & 最小非 temp 项目脚手架，扁平布局（cli/manifest/kernels）\\
+五 stage 骨架 & 2026-06-01 & 拆出 \texttt{core/} 与五 stage 包 \\
+correlator 首个实作 & 2026-06-03 & 复制 LaMETLat 数值（read\_pt2/bootstrap/jackknife/pt2 fit）+ 新增 scan\_tmin/model\_average \\
+agent 循环成型 & 2026-06-03 & mock/external/deepseek 后端、工具执行循环、\texttt{core/tools.py}、JSON 总结 \\
+agentic 收敛 & 2026-06-10 & correlator 12 工具→4 工具，inspect→tune→fit 流程 \\
+NetCDF 中间产物 & 2026-06-18 & \texttt{EnsembleData.to\_netcdf/from\_netcdf}（xarray NETCDF4）\\
+job-DAG manifest & 2026-06-20 & metadata/inputs/stages 三块契约 + 每 job 独立 store \\
+全局重采样元数据 & 2026-07-01 & \texttt{random\_seed}/\texttt{bs\_samples}/\texttt{bin\_size}/\texttt{sample\_error\_mode}/\texttt{workers} 上移 metadata \\
+交互规划 & 2026-07-07 & \texttt{lamet-agent plan}：LLM 驱动 JSON Patch 候选编辑 + 确定性 guardrail \\
+自重整化 & 2026-07-08--18 & \texttt{self\_renormalization} 方案（fit $z_R$ + apply $H/(z_R Z_{\overline{MS}})$）\\
+HDF5 v2 契约 & 2026-07-15 & 标准 correlator HDF5 布局、操作符标签自由化、离散运动学权威化 \\
+提示词资源化 & 2026-08-11 & \texttt{prompts.md} Markdown + \texttt{skills.py→validation.py} \\
+文献标注 & 2026-08-13 & \texttt{classify\_arxiv.py} 本地模型给 128 篇 arXiv 打结构化标签 \\
+\bottomrule
+\caption{演进脉络表（数据来源: PROJECT\_LOG.md 实测）}
+\end{xltabular}
+
+\subsubsection{演进的内在逻辑}
+
+\textcolor{idea}{一条主线}：从“CLI 骨架”到“LLM 驱动的可规划分析 agent”，每一步都围绕
+\textbf{让 agent 更可控、让物理更可追溯} 两个目标。典型证据：
+(1) 全局重采样元数据上移 metadata，是为了让“统计配置单一来源、agent 不可越权修改”
+（\texttt{\detokenize{README.md:337-340}}）；
+(2) 严格 stage 参数契约（\texttt{manifest\_params.py}）拒绝未知键，是为了防 agent 拼错参数
+（\texttt{\detokenize{PROJECT_LOG.md:644-648}}）；
+(3) manifest 校验失败自动进入 plan 模式，是为了“校验失败也能借 LLM 修复，而非硬中断”
+（\texttt{\detokenize{PROJECT_LOG.md:1049-1060}}）。
+
+\subsection{典型工作流}
+
+\textbf{agent 如何自动完成一次高统计测量}（结合 \texttt{\detokenize{README.md:931-959}} 与实测）：
+
+\begin{enumerate}
+\item \textbf{准备}：用户编写 JSONC manifest（\texttt{examples/sample\_manifest.jsonc}），声明 metadata、
+输入关联函数、核函数、每 stage 的 defaults/jobs；
+\item \textbf{规划（可选）}：\texttt{lamet-agent plan draft.jsonc --backend api --model deepseek/deepseek-chat}
+（\texttt{\detokenize{README.md:592-595}}）让 LLM 补全/修复草稿，经 JSON Patch 候选校验后生成 quick/full manifest；
+\item \textbf{校验}：\texttt{lamet-agent validate} 执行 schema + DAG + 参数契约 + 路径检查
+（\texttt{\detokenize{__main__.py:111-135}}）；
+\item \textbf{运行}：\texttt{lamet-agent run manifest.json --backend api} 进入 \texttt{run\_agent}，
+按 \texttt{metadata.stages} 顺序执行；每 stage 每 job 建独立 store，静态提示一次性组装
+（\texttt{\detokenize{core/prompting.py:64-100}}），此后每轮把工具观察追加为新的 user turn；
+\item \textbf{工具循环}：LLM 每轮输出一个 JSON action（\texttt{call\_tool}/\texttt{request\_user\_input}/\texttt{finish}），
+\texttt{agent.py} 校验必需工具序列（\texttt{required\_job\_tool\_sequence}），\texttt{core/tools.py} 的
+\texttt{prepare\_tool\_args} 注入 manifest 路径/绘图路径/随机种子等参数（\texttt{\detokenize{core/tools.py:357-372}}）；
+\item \textbf{阶段产物}：每 stage 的终端工具把主数据放 \texttt{store["output"]}，随后写 NetCDF 工件与双语文档报告
+（correlator→renorm→fourier→matching→extrapolation 逐级手递，\texttt{\detokenize{agent.py:857-989}}）；
+\item \textbf{评审}：review 阶段读五个 stage 报告 + 文献背景，产出物理总结 + manifest 修改建议
+（\texttt{\detokenize{review/functions.py:578-585}}）。
+\end{enumerate}
+
+\begin{ideabox}
+\textcolor{idea}{项目思路一句话}：lamet-agent 把“需要物理专业判断的分析步骤”委托给 LLM agent，
+用 manifest job-DAG 做执行蓝图、用 \texttt{core/} 基元做数值底座、用 \texttt{planning/} 做安全护栏，
+最终把人工 LQCD 数据分析流程压缩为“一次 manifest 驱动的高统计测量自动化”。
+\end{ideabox}
+
+% ================= 5 主题分析 =================
+\section{主题分析：LAMET agent 测量全流程（A 代码工作 15 步框架）}
+
+本节按 analy 技能 A（代码/软件工作）15 步框架完整重现“agent 自动完成一次高统计测量”这一具体工作。
+判定为代码工作：对象是以 manifest 驱动的 agent 软件流程。
+
+\subsection{A1 目的与前期准备}
+
+\textbf{目的}：把 LaMET 数据分析（correlator analysis $\to$ renormalization $\to$ fourier $\to$ matching $\to$ extrapolation）
+自动化，让 agent 代替物理学家完成策略选择与数值执行（\texttt{\detokenize{PLAN.md:5-12}}）。
+
+\textbf{前置条件}：
+\begin{itemize}
+\item Python $\ge$ 3.10，安装可选依赖组：\texttt{pip install -e ".[dev,analysis]"}
+（analysis 含 gvar/lsqfit/scipy/h5py/matplotlib/xarray/netCDF4/mpmath，\texttt{\detokenize{pyproject.toml:20-28}}）；
+\item 标准 correlator HDF5 数据（2pt/3pt 布局见 \texttt{\detokenize{README.md:669-711}}），或可经 plan 模式转换；
+\item 可选：LLM API key（\texttt{api.key} 或 \texttt{DEEPSEEK\_API\_KEY}/\texttt{OPENAI\_API\_KEY}，\texttt{\detokenize{core/llm.py:44-55}}）。
+\end{itemize}
+
+实测确认：本机 \texttt{python3 -c "import lamet\_agent" } 成功（版本 0.1.0），analysis 依赖全部可导入。
+
+\subsection{A2 输入是什么}
+
+\textbf{主要输入}：manifest 文件（JSON/JSONC）。三块结构：
+\texttt{metadata}（run 级设置：run\_id/root\_directory/artifacts\_directory/target\_observable/parton/
+resample\_mode/random\_seed/stages 等，\texttt{\detokenize{manifest.py:71-96}}）、
+\texttt{inputs}（correlators/artifacts/kernels 三类源节点池，\texttt{\detokenize{manifest.py:355-360}}）、
+\texttt{stages}（每 stage 的 defaults + jobs 列表，\texttt{\detokenize{manifest.py:375-383}}）。
+
+\textbf{派生输入}：HDF5 关联函数文件（由 correlators[].data\_path 指向）、外部 NetCDF 工件（artifacts）、
+核函数文件（kernels[].kernel\_path，默认 \texttt{lamet\_agent/kernels.py}）。
+
+\textbf{示例}（\texttt{\detokenize{examples/sample_manifest.jsonc:28-45}} 片段直引）：
+
+\lstinputlisting[language=python,firstline=28,lastline=45]{/root/PyQCD/refer/git-rep/lamet-agent/examples/sample_manifest.jsonc}
+
+\subsection{A3 输出应该是什么}
+
+\begin{itemize}
+\item \textbf{中间产物}：每 stage 的 \texttt{EnsembleData} NetCDF 工件，路径
+\texttt{<artifacts\_directory>/<stage>/<job\_id>.nc}（\texttt{\detokenize{README.md:73-96}}）；
+\item \textbf{图表}：2pt fit-on-data、ratio 拟合带、重整化矩阵元、quasi 分布、外推/系统误差图（PDF/SVG）；
+\item \textbf{报告}：每 stage 双语文档报告（\texttt{ca\_report.md}/\texttt{renorm\_report.md}/\texttt{ft\_report.md}/...，
+见 \texttt{\detokenize{agent.py:857-989}}），review 阶段产出完整评审 Markdown；
+\item \textbf{最终结果}：光锥分布函数数组（\texttt{.npy} 或 NetCDF）+ 物理图 + 统计/系统误差。
+\end{itemize}
+
+\subsection{A4 整体框架}
+
+\textbf{模块组织与主流程}（结合 \texttt{\detokenize{agent.py:561-1012}} 实测）：
+
+\begin{keybox}
+主流程: \textcolor{relation}{\texttt{CLI run → validate → run\_agent → for stage in metadata.stages → for job in jobs →}}
+\qquad \textcolor{relation}{\texttt{hydrate artifacts → build static prompt → LLM/tool loop → store['output'] → stage report}}
+\end{keybox}
+
+\lstinputlisting[language=python,firstline=577,lastline=612]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/agent.py}
+
+\subsection{A5 关键细节}
+
+\textbf{关键函数与易错点}：
+
+\begin{itemize}
+\item \textbf{job store 隔离}：每 job 新建 \texttt{store} 字典，上游 job 输出按角色注入
+（\texttt{\detokenize{agent.py:623-635}}），下游引用缺失即抛错——防止“洞”进入下游 stage
+（\texttt{\detokenize{PROJECT_LOG.md:794-802}}）；
+\item \textbf{必需工具序列}：\texttt{required\_job\_tool\_sequence} 按 stage+job 角色给出必须依次成功的工具，
+agent 在序列完成前不得 finish（\texttt{\detokenize{agent.py:194-207}}、\texttt{\detokenize{core/tools.py:250-288}}）；
+\item \textbf{工具参数准备}：\texttt{prepare\_tool\_args} 从 manifest 注入路径/选择器/重采样种子，
+并把绘图路径改写进 stage 工件目录（\texttt{\detokenize{core/tools.py:357-372}}）；
+\item \textbf{重采样正确性}：\texttt{core/resampling.py} 提供共享 bootstrap indices 与 leave-one-out jackknife，
+要求 2pt/3pt 用同一组 indices 再构成比值（\texttt{\detokenize{PROJECT_LOG.md:268-271}}）；
+\item \textbf{复数 NetCDF}：\texttt{auto\_complex=True} 保证复数矩阵元直接 round-trip
+（\texttt{\detokenize{core/data.py:148-168}}）。
+\end{itemize}
+
+\lstinputlisting[language=python,firstline=63,lastline=81]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/core/resampling.py}
+
+\subsection{A6 任务如何正确执行}
+
+\textbf{正确命令序列}（数据来源: \texttt{\detokenize{README.md:575-595}} 实测）：
+
+\begin{lstlisting}[language=bash]
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev,analysis]"
+lamet-agent validate examples/sample_manifest.jsonc
+lamet-agent run examples/sample_manifest.jsonc --backend api --model deepseek/deepseek-chat --verbose
+# 或 plan 草稿：
+lamet-agent plan draft_manifest.jsonc --backend api --model deepseek/deepseek-chat
+# mock 冒烟（无 LLM）：
+lamet-agent run examples/sample_manifest.jsonc --backend mock
+\end{lstlisting}
+
+\textbf{执行要点}：manifest 的 \texttt{root\_directory} 必须解析到 lamet-agent checkout 根
+（\texttt{\detokenize{manifest.py:666-682}}）；数据/工件/核路径必须存在（除 artifacts 输出目录可后建）。
+
+\subsection{A7 实际执行情况}
+
+\textbf{实测命令与输出}（本次分析会话实测，记录于会话日志）：
+
+\begin{enumerate}
+\item \texttt{\detokenize{python3 -m lamet\_agent --help}}：成功，输出 \texttt{validate}/\texttt{plan}/\texttt{run}
+三个子命令及 CLI-first scaffold 说明（确证）；
+\item \texttt{\detokenize{python3 -m lamet\_agent validate examples/sample\_manifest.jsonc}}：
+\textbf{失败}——报 \texttt{\detokenize{inputs.correlators[0].data\_path does not exist}}，
+因样例清单指向的 \texttt{data\_pion\_pdf\_cg/...} 真实数据未随本 checkout 提供（确证，非代码缺陷）；
+\item \texttt{\detokenize{pytest}} 子集实测：
+  \begin{itemize}
+  \item \texttt{test\_stage\_core/test\_banner/test\_resampling/test\_io}：\textbf{23 passed}
+  （1.22s，确证）；
+  \item \texttt{test\_schemas/test\_validation/test\_stage\_core}：\textbf{117 passed}（0.71s，确证）；
+  \item \texttt{test\_agent + test\_planning}：\textbf{121 passed, 2 failed}（3.40s，确证）；
+  \item 其余 unit（排除 planning/correlator/fourier 三大件）：\textbf{276 passed, 48 failed}（12.79s，确证）。
+  \end{itemize}
+\end{enumerate}
+
+\textbf{失败原因归因}（确证）：48 项失败大多在 \texttt{test\_tools.py}/\texttt{test\_agent.py}，
+根因是测试直接加载 \texttt{examples/*.json}（如 \texttt{pion\_pdf\_cg\_manifest.json}、
+\texttt{pion\_da\_gi\_manifest.json}），而本 checkout 仅跟踪 \texttt{*.jsonc} 模板——
+可运行 manifest 未入库。这是“仓库快照不完整”，并非被测代码必然缺陷；
+\texttt{PROJECT\_LOG.md} 亦提示 2026-08-11 审计时“529-test audit leaves two failures”的历史状态。
+
+\subsection{A8 实际输出情况}
+
+\textbf{实测产物}：本次分析不执行真实数值 run（无真实数据），仅验证
+(1) 包可导入（\texttt{lamet\_agent 0.1.0}）；(2) CLI 可用；(3) 测试子集绿/红统计。
+\textbf{工程内声明的预期产物}（\texttt{\detokenize{README.md:73-96}}）：correlator 裸矩阵元
+\texttt{ca\_p5.nc}、重整化 \texttt{rn\_p5.nc}、傅里叶 \texttt{fourier\_result.nc}、
+匹配 \texttt{quasi\_pdf.nc}。这些为仓库声明输出，本次无数据未验证（\textcolor{warn}{未验证}）。
+
+\subsection{A9 结果分析}
+
+\textbf{结合实测解读}：
+\begin{itemize}
+\item 23/117 通过的两组测试覆盖数据容器、重采样、提示组装、schema 校验——说明\textbf{数值基元与模式层稳定}（确证）；
+\item \texttt{test\_agent} 的 2 项失败均为“加载缺失 manifest”路径错误（\texttt{\detokenize{ValueError: Manifest does not exist}}），
+非逻辑断言失败——说明 agent 循环逻辑本身在缺失数据下仍能按预期进入错误分支（确证）；
+\item 48 项失败集中于 \texttt{test\_tools.py} 的参数准备测试——这批测试依赖具体 example manifest 的参数值
+（\texttt{\detokenize{PROJECT_LOG.md:637}} 已提示“decoupled tool-preparation tests from mutable example-manifest parameter values”是维护方向）。
+\end{itemize}
+
+\textbf{结论分级}：数值基元稳定（确证）；agent 循环在缺失 manifest 时报错路径正确（确证）；
+完整真实 run 未执行，其物理正确性\textcolor{warn}{未验证}。
+
+\subsection{A10 综合分析}
+
+\textbf{与仓库整体联系}：A1--A9 覆盖了 \texttt{planning→manifest→agent→core→stages→artifacts} 的完整引用链，
+印证第二节“依赖主链”。\textbf{代码-对象映射}：\texttt{fit\_bare\_matrix\_grid} ↔ 从 3pt/2pt 比值提取裸矩阵元 $O_{00}$；
+\texttt{apply\_self\_renormalization} ↔ $H_R(z)=H_{bare}(z)/(z_R Z_{\overline{MS}}(z))$；
+\texttt{run\_fourier\_transform} ↔ 坐标空间矩阵元 $\tilde h(z,P_z)$ 到动量空间准分布。
+\textbf{深层原因}：为什么 agent 流程能成立？因为 LaMET 流程的五步具有“上游数值确定性”——
+每步输出是标准 NetCDF（\texttt{EnsembleData}），下游只消费该契约；LLM 的作用被限制在
+“选择策略”而非“改写数值”，所以 manifest 校验（\texttt{validate\_dag}）能兜底整个 DAG 的正确性。
+
+\subsection{A11 结尾总结}
+
+\begin{conclbox}
+“LAMET agent 测量全流程”是一条 \texttt{manifest（蓝图）→ planning（可交互规划）→ run\_agent（编排）→
+五 stage 工具循环（执行）→ NetCDF/报告（产物）→ review（评审）} 的闭环。
+其设计核心是“\textbf{LLM 决策 + 确定性数值 + 模式校验}”三者分工：
+LLM 只在注册表内选动作，数值全部走 \texttt{core/} 与 \texttt{stages/} 的确定性函数，
+manifest 的 schema/DAG/参数契约对每次变更都做严格校验。
+\end{conclbox}
+
+\subsection{A12 结尾评价}
+
+\textbf{优点}：(1) 数值与决策解耦，可离线测试 mock 后端与外部回放（\texttt{\detokenize{core/llm.py:417-431}}）；
+(2) job-DAG + 每 job 独立 store 让部分运行（resume）天然成立（\texttt{\detokenize{README.md:651-652}}）；
+(3) 中间产物 NetCDF 自描述，用户可逐 stage 检查。
+\textbf{缺点/可改进}：(1) 本 checkout 缺少可运行 example manifest，导致大量集成测试无法跑通——仓库应补齐
+\texttt{examples/*.json} 或把测试改为生成式清单；(2) LLM 每轮只出一个 action 的循环在长任务下
+token 消耗高，静态提示+增量观察的设计只能缓解不能根除（\texttt{\detokenize{PROJECT_LOG.md:86-89}}）；
+(3) review 依赖 LLM 文本输出，数值断言依赖 deterministic checks（\texttt{\detokenize{review/functions.py}}），
+二者一致性靠提示约束，缺乏形式化校验。
+
+\subsection{A13 补充说明}
+
+\textbf{假设/局限/未覆盖}：
+\begin{itemize}
+\item 未执行真实数值 run（无真实 LQCD 数据随仓库提供），A8 中物理产物清单为仓库声明（\textcolor{warn}{未验证}）；
+\item \texttt{examples/*.json} 可运行 manifest 未随本 checkout 提供（确证），真实跑通需向作者索取
+\texttt{data\_pion\_pdf\_cg/} 等数据或自行用 \texttt{fake\_data} 生成；
+\item 分布式/GPU 相关内容（\texttt{pyqcd.parallel} 等）不属于本库，本库为单机串行+可选多进程 workers。
+\end{itemize}
+
+\subsection{A14 参考源}
+
+本节全部证据已并入第 7 节参考源清单；核心引用：
+\texttt{\detokenize{PLAN.md:5-16}}、\texttt{\detokenize{README.md:931-959}}、
+\texttt{\detokenize{agent.py:561-1012}}、\texttt{\detokenize{core/tools.py:199-372}}、
+\texttt{\detokenize{core/resampling.py:63-195}}、\texttt{\detokenize{manifest.py:385-529}}、
+\texttt{\detokenize{examples/sample_manifest.jsonc:28-45}}、\texttt{\detokenize{pyproject.toml:10-28}}。
+
+\subsection{A15 附录与附件（如有）}
+
+无独立附件文件；实测命令与完整输出记录于会话日志 \texttt{.analy.\textless ts\textgreater.log}。
+仓库内可参考的补充资料：\texttt{README.md}（NetCDF 格式、manifest 语义、自重整化章节）、
+\texttt{PROJECT\_LOG.md}（逐日演进）。
+
+% ================= 6 关键代码/文档片段 =================
+\section{关键代码/文档片段}
+
+以下片段全部用 \lstinline|\lstinputlisting| 直引仓库原文件（每段 ≤40 行，行号实测）。
+
+\subsection{agent 工具循环（agent.py）}
+
+\lstinputlisting[language=python,firstline=183,lastline=218]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/agent.py}
+
+\subsection{manifest job-DAG 校验（manifest.py）}
+
+\lstinputlisting[language=python,firstline=428,lastline=456]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/manifest.py}
+
+\subsection{EnsembleData 数据容器（core/data.py）}
+
+\lstinputlisting[language=python,firstline=65,lastline=82]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/core/data.py}
+
+\subsection{LLM 提供商注册表（core/llm.py）}
+
+\lstinputlisting[language=python,firstline=44,lastline=56]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/core/llm.py}
+
+\subsection{3pt/2pt 比值谱分解模型（stages/correlator/functions.py）}
+
+\lstinputlisting[language=python,firstline=440,lastline=465]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/stages/correlator/functions.py}
+
+\subsection{自重整化拟合函数（stages/renorm/functions.py）}
+
+\lstinputlisting[language=python,firstline=792,lastline=806]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/stages/renorm/functions.py}
+
+\subsection{匹配矩阵构造（kernels.py）}
+
+\lstinputlisting[language=python,firstline=361,lastline=400]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/kernels.py}
+
+\subsection{规划工具目录（planning/agent.py）}
+
+\lstinputlisting[language=python,firstline=61,lastline=73]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/planning/agent.py}
+
+% ================= 7 参考源清单 =================
+\section{参考源清单}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{PLAN.md:5-12}} & 仓库 & 项目定位与设计动机（LaMET 五步流程、agent 分工）\\
+\texttt{\nolinkurl{PLAN.md:14-44}} & 仓库 & correlator/renorm 设计意图与策略选择自由度的讨论\\
+\texttt{\nolinkurl{PLAN.md:142-156}} & 仓库 & extrapolation 外推项与外推策略\\
+\texttt{\nolinkurl{README.md:1-29}} & 仓库 & 核心思想（manifest DAG）、五 stage 顺序\\
+\texttt{\nolinkurl{README.md:73-136}} & 仓库 & NetCDF 中间产物格式与读写\\
+\texttt{\nolinkurl{README.md:185-335}} & 仓库 & manifest 参数语义（fit\_scope/model\_average/normalization 等）\\
+\texttt{\nolinkurl{README.md:373-427}} & 仓库 & 自重整化公式与工作流\\
+\texttt{\nolinkurl{README.md:575-659}} & 仓库 & Quick Start 命令、plan 模式、部分运行\\
+\texttt{\nolinkurl{README.md:669-829}} & 仓库 & 标准 correlator HDF5 格式、CLI 后端用法\\
+\texttt{\nolinkurl{README.md:931-965}} & 仓库 & Agent Workflow 七步、Current Status\\
+\texttt{\nolinkurl{PROJECT_LOG.md:5-17}} & 仓库 & 脚手架初始化与扁平布局\\
+\texttt{\nolinkurl{PROJECT_LOG.md:21-49}} & 仓库 & core+五 stage 布局、correlator 首实作\\
+\texttt{\nolinkurl{PROJECT_LOG.md:273-281}} & 仓库 & correlator 12→4 工具 agentic 收敛\\
+\texttt{\nolinkurl{PROJECT_LOG.md:343-367}} & 仓库 & job-DAG manifest 迁移、NetCDF 手递\\
+\texttt{\nolinkurl{PROJECT_LOG.md:445-451}} & 仓库 & 全局重采样元数据\\
+\texttt{\nolinkurl{PROJECT_LOG.md:502-531}} & 仓库 & 交互规划与 LLM 规划循环\\
+\texttt{\nolinkurl{PROJECT_LOG.md:526-568}} & 仓库 & 自重整化方案演进\\
+\texttt{\nolinkurl{PROJECT_LOG.md:644-665}} & 仓库 & 严格 stage 参数契约、pointwise ratio\\
+\texttt{\nolinkurl{PROJECT_LOG.md:871-889}} & 仓库 & review 文献背景注入与锚定排名\\
+\texttt{\nolinkurl{PROJECT_LOG.md:976-1026}} & 仓库 & prompts.md 资源化、包布局迁移\\
+\texttt{\nolinkurl{PROJECT_LOG.md:1049-1078}} & 仓库 & run 校验失败 plan 回退、matching 网格警告\\
+\texttt{\nolinkurl{__main__.py:111-135}} & 仓库 & validate 命令实现\\
+\texttt{\nolinkurl{__main__.py:240-350}} & 仓库 & run 命令实现与后端解析\\
+\texttt{\nolinkurl{agent.py:183-284}} & 仓库 & LLM/工具循环（必需序列、action 分派）\\
+\texttt{\nolinkurl{agent.py:561-660}} & 仓库 & run\_agent 主循环、store 注入与输出登记\\
+\texttt{\nolinkurl{agent.py:857-989}} & 仓库 & 各 stage 报告/叠加图生成\\
+\texttt{\nolinkurl{manifest.py:47-68}} & 仓库 & 体积/动量解析、物理动量 GeV 推导\\
+\texttt{\nolinkurl{manifest.py:71-113}} & 仓库 & RunMetadata 模型与重采样约束\\
+\texttt{\nolinkurl{manifest.py:385-529}} & 仓库 & AnalysisManifest 模型与 DAG 校验\\
+\texttt{\nolinkurl{manifest.py:532-658}} & 仓库 & 运动学派生 derive\_job\_kinematics\\
+\texttt{\nolinkurl{manifest_params.py:31-43}} & 仓库 & 递归参数合并\\
+\texttt{\nolinkurl{manifest_params.py:46-80}} & 仓库 & STAGE\_PARAM\_CONTRACTS 注册表\\
+\texttt{\nolinkurl{core/data.py:23-51}} & 仓库 & EnsembleInfo 与动量格点换算\\
+\texttt{\nolinkurl{core/data.py:65-126}} & 仓库 & EnsembleData 构造与 xarray 构建\\
+\texttt{\nolinkurl{core/data.py:148-204}} & 仓库 & NetCDF 序列化/反序列化\\
+\texttt{\nolinkurl{core/resampling.py:52-81}} & 仓库 & bin/jackknife/bootstrap 实现\\
+\texttt{\nolinkurl{core/resampling.py:129-165}} & 仓库 & 共享 bootstrap indices、配置重采样\\
+\texttt{\nolinkurl{core/llm.py:16-55}} & 仓库 & ACTION\_SCHEMA、PROVIDERS 表\\
+\texttt{\nolinkurl{core/llm.py:504-546}} & 仓库 & make\_llm\_session 四后端路由\\
+\texttt{\nolinkurl{core/tools.py:199-288}} & 仓库 & 工具解析/必需序列/输入校验\\
+\texttt{\nolinkurl{core/tools.py:357-372}} & 仓库 & prepare\_tool\_args 参数注入\\
+\texttt{\nolinkurl{core/prompting.py:12-27}} & 仓库 & 系统提示与 action 输出格式\\
+\texttt{\nolinkurl{core/stages.py:1-16}} & 仓库 & stage id→包名映射\\
+\texttt{\nolinkurl{planning/core.py:121-174}} & 仓库 & JSONC 解析与宽松 manifest 加载\\
+\texttt{\nolinkurl{planning/core.py:642-867}} & 仓库 & 确定性草稿检查与严格校验复用\\
+\texttt{\nolinkurl{planning/agent.py:48-73}} & 仓库 & PLAN\_ACTION\_SCHEMA 与工具目录\\
+\texttt{\nolinkurl{planning/agent.py:1155-1200}} & 仓库 & run\_interactive\_plan 入口\\
+\texttt{\nolinkurl{stages/correlator/functions.py:440-465}} & 仓库 & 3pt/2pt 比值谱分解模型\\
+\texttt{\nolinkurl{stages/correlator/functions.py:5777-5781}} & 仓库 & correlator STAGE\_TOOLS 注册表\\
+\texttt{\nolinkurl{stages/renorm/functions.py:792-806}} & 仓库 & 自重整化 g(z) 拟合函数\\
+\texttt{\nolinkurl{stages/renorm/functions.py:1649-1657}} & 仓库 & renorm STAGE\_TOOLS 注册表\\
+\texttt{\nolinkurl{stages/fourier/functions.py:2709}} & 仓库 & run\_fourier\_transform 工具\\
+\texttt{\nolinkurl{stages/fourier/functions.py:3283-3290}} & 仓库 & fourier STAGE\_TOOLS 注册表\\
+\texttt{\nolinkurl{stages/matching/functions.py:899-905}} & 仓库 & matching STAGE\_TOOLS 注册表\\
+\texttt{\nolinkurl{stages/extrapolation/functions.py:148-227}} & 仓库 & run\_extrapolation 设计与外推项构造\\
+\texttt{\nolinkurl{stages/review/functions.py:293-399}} & 仓库 & 文献锚定排名\\
+\texttt{\nolinkurl{stages/review/functions.py:578-585}} & 仓库 & write\_review 工具\\
+\texttt{\nolinkurl{kernels.py:58-102}} & 仓库 & beta/alphas\_nloop 耦合运行\\
+\texttt{\nolinkurl{kernels.py:361-420}} & 仓库 & build\_matching\_matrix 列求和 plus 处方\\
+\texttt{\nolinkurl{kernels.py:681-760}} & 仓库 & 公有 quark 核函数族\\
+\texttt{\nolinkurl{examples/sample_manifest.jsonc:1-45}} & 仓库 & 注释清单设计说明与 metadata\\
+\texttt{\nolinkurl{examples/sample_manifest.jsonc:46-110}} & 仓库 & 输入关联函数/kernels 声明\\
+\texttt{\nolinkurl{examples/fake_data/generate_fake_data.py:24-40}} & 仓库 & 假数据规模/参数\\
+\texttt{\nolinkurl{examples/fake_data/utils.py:228-312}} & 仓库 & bin/bootstrap/jackknife 工具\\
+\texttt{\nolinkurl{papers/lamet_kb/pipeline.py:26-60}} & 仓库 & 知识库抓取管线\\
+\texttt{\nolinkurl{papers/lamet_kb/scoring.py:18-40}} & 仓库 & 打分归一化与词项匹配\\
+\texttt{\nolinkurl{papers/docs/lamet_rubric.md:1-25}} & 仓库 & core/secondary/irrelevant 标注规则\\
+\texttt{\nolinkurl{papers/README.md:1-30}} & 仓库 & 知识库使用说明\\
+\texttt{\nolinkurl{lamet_literature/README.md:1-30}} & 仓库 & 文献标注流程与标签语义\\
+\texttt{\nolinkurl{pyproject.toml:10-36}} & 仓库 & 依赖组与 console script\\
+\texttt{\nolinkurl{tests/unit/test_stage_core.py:20-33}} & 仓库 & 提示组装测试样例\\
+\bottomrule
+\end{xltabular}
+
+参考背景补充（类型=参考）：\texttt{refer/AGENTS.md}（PyQCD 主仓库参考说明，提供本库在 refer 下的背景）。
+未引入：无其它参考目录。
+
+% ================= 8 结论与局限 =================
+\section{结论与局限}
+
+\begin{conclbox}
+\textbf{三视角结论}：
+\textcolor{struct}{结构}——lamet-agent 是“入口薄、核心深、知识库独立”的三层仓库，
+入口（\texttt{\_\_main\_\_}/\texttt{agent}）只做编排，数值全在 \texttt{stages/*/functions.py} 与 \texttt{core/}。
+\textcolor{relation}{关系}——五 stage 通过 job-DAG 的 role-named inputs 串成数据链，
+planning 与 stages 共用 manifest 模式，review 单方向消费知识库文献背景。
+\textcolor{idea}{思路}——把 LaMET 分析中“需要物理判断”的两步委托给 LLM 决策、
+“相对固定”的三步软件化，再用 manifest 校验+必需工具序列保证“agent 自由决策不越界”。
+\textbf{主题结论}：agent 测量全流程 A1--A15 重现完毕，数值基元与模式层经 23/117/121 项测试实测稳定；
+因本 checkout 缺可运行 manifest，48 项依赖 example 的集成测试未通过（非逻辑缺陷）。
+\end{conclbox}
+
+\begin{refbox}
+\textcolor{reference}{旁证}：主仓库 \texttt{refer/AGENTS.md} 描述 refer 目录按贡献者组织参考代码，
+lamet-agent 作为 \texttt{git-rep/} 外来参考仓库被归档只读——其价值定位是“上游参考实现”，
+PyQCD 主仓库 \texttt{pyqcd/renorm} 的移植源是 \texttt{zengch}，而非本库（与本库无代码依赖）。
+\end{refbox}
+
+\begin{warnbox}
+\textbf{局限与风险}：
+\begin{itemize}
+\item 真实数值 run 未执行，物理产物正确性 \textcolor{warn}{未验证}（缺数据）；
+\item \texttt{examples/*.json} 可运行 manifest 未入库，\textcolor{warn}{未验证} run 全流程；
+\item review 阶段 LLM 文本输出与确定性检查的一致性仅靠提示约束；
+\item 本库非独立 git 仓库，git 历史不能独立反映 lamet-agent 演进，以 PROJECT\_LOG.md 为准。
+\end{itemize}
+\end{warnbox}
+
+\end{document}

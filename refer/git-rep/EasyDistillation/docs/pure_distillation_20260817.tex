@@ -1,0 +1,626 @@
+% ============================================================
+% pure 报告 — 规范模板 v2（xelatex + ctex）
+% 主题: EasyDistillation 蒸馏法格点 QCD 核心部分穷尽剖析
+% 编译: xelatex -interaction=nonstopmode -halt-on-error -file-line-error 两遍
+% 交付前 Overfull 与 Float too large 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+% 宏包顺序固定，不可调整（存在依赖：tcolorbox 依赖 xcolor 等）
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+% ===== 色板 =====
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+% ===== 全局防溢出设置 =====
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+% ===== 层次分明的标题 =====
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+% ===== 彩色标识框（均带 breakable 防跨页溢出）=====
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+% ===== 代码样式 =====
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{剖析主题：EasyDistillation 蒸馏法格点 QCD 核心部分穷尽剖析（代码-物理交叉向）}
+\author{opencode pure}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告对 \texttt{EasyDistillation}（格点 QCD 蒸馏法软件包）执行 pure 穷尽剖析。项目性质判定为
+\textbf{代码-物理交叉向}：核心层（generator/、quark\_contract.py、quark\_diagram.py、
+symmetry/、insertion/）为物理计算代码，每个关键符号都对应蒸馏法中的物理对象，独特性载体正是
+``代码符号 $\leftrightarrow$ 物理对象''的双向对应。穷尽枚举核心部分候选 14 项（C1--C14），
+三态分配：\textbf{深挖 5 / 浅析 8 / 排除 1}。五个深挖部分为：C1 自动 Wick 收缩、C2 拉普拉斯
+本征向量生成器（含 stout CUDA 核）、C3 ElementalGenerator、C4 强子不可约表示与小群投影、
+C5 PerambulatorGenerator，每部分均按 15 步全流程重现并给出代码-物理双向映射表。
+最强竞争力结论：以\textbf{邻接矩阵编码 Wick 收缩图并自动转 einsum} 的收缩引擎，
+配合群论自动枚举强子算符，是``手写收缩脚本''朴素实现难以企及的核心创新。实测：两个纯逻辑
+测试套件（19+8 例）本机通过；PyQUDA/GPU 数据路径未在本机验证。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+
+\subsection{项目性质判定}
+判定依据（实测统计）：\texttt{\nolinkurl{lattice/}} 41 个 \texttt{\nolinkurl{.py}} 全部为物理计算代码（张量收缩、
+群论、反演），文档 \texttt{\nolinkurl{README.md}}/\texttt{\nolinkurl{TODO.md}}/\texttt{\nolinkurl{doc/README.md}} 描述蒸馏法物理
+流程与数据形状，代码注释含大量物理量（\texttt{\nolinkurl{perambulator.py:16-49}} 的参数说明、
+\texttt{\nolinkurl{doc/README.md:3-65}} 的形状约定）。独特性载体为``符号 $\leftrightarrow$ 对象''对应
+而非纯算法复杂度或纯推导链，故判定为\textbf{代码-物理交叉向}。
+
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉向}（依据: 物理计算代码占比 $\approx$100\%、
+物理对象贯穿全部核心模块、独特载体=代码符号$\leftrightarrow$物理对象双向映射）
+\end{keybox}
+
+\subsection{核心部分总清单（穷尽枚举）}
+{\footnotesize\begin{xltabular}{\textwidth}{lXlX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态 & 独特性概述 \\
+\midrule
+\endhead
+C1 & 自动 Wick 收缩（\texttt{\nolinkurl{quark_contract.py}} + \texttt{\nolinkurl{quark_diagram.py}}） & 深挖 & 味结构符号代数 $\to$ 邻接矩阵 $\to$ einsum 收缩，全自动 \\
+C2 & 拉普拉斯本征向量生成器（\texttt{\nolinkurl{eigenvector.py}} + \texttt{\nolinkurl{stout_smear.cu}}） & 深挖 & scipy/cupyx/QUDA 三路径 + stout 平滑 CUDA 核 \\
+C3 & ElementalGenerator（\texttt{\nolinkurl{elemental.py}}） & 深挖 & 协变导数乘积规则展开 + 动量平面波投影 \\
+C4 & 强子不可约表示与小群投影（\texttt{hadron*.py} + \texttt{\nolinkurl{symmetry/}} + \texttt{\nolinkurl{insertion/}}） & 深挖 & O$_h^D$/小群不可约表示自动枚举算符 \\
+C5 & PerambulatorGenerator（\texttt{\nolinkurl{perambulator.py}}） & 深挖 & PyQUDA 反演 + $\gamma_5$-厄米性 + MPI 片切分 \\
+C6 & Diagram 化简与批量计算引擎（\texttt{\nolinkurl{quark_diagram.py}} simplify/calc\_diagram） & 浅析 & 图同构去重、连通分量拆分，支撑大规模收缩 \\
+C7 & MPI 任务分发与原子写（\texttt{\nolinkurl{dispatch.py}}） & 浅析 & 文件队列 + 原子锁的组态批处理 \\
+C8 & 惰性内存映射 IO（\texttt{\nolinkurl{filedata/}}） & 浅析 & mmap 按需切片 + 吞吐统计 \\
+C9 & 双粒子 JPC 算符（\texttt{\nolinkurl{symmetry/two_particle.py}}） & 浅析 & 球谐 + CG 系数构造 $J^{PC}$ 双粒子基 \\
+C10 & 费曼图绘制（\texttt{\nolinkurl{quark_draw.py}}） & 浅析 & 邻接矩阵 $\to$ 可视化 \\
+C11 & 噪声向量/广义与密度 perambulator（\texttt{\nolinkurl{noisevector.py}} 等） & 浅析 & 随机蒸馏与高模、$\gamma$-动量扩展反演 \\
+C12 & 后端抽象与数据预设（\texttt{\nolinkurl{backend.py}}, \texttt{\nolinkurl{preset.py}}, \texttt{\nolinkurl{data.py}}） & 浅析 & numpy/cupy 切换 + 四类数据形状预设 \\
+C13 & 物理常量与动量字典（\texttt{\nolinkurl{constant.py}}, \texttt{\nolinkurl{mom_dict.py}}） & 排除 & 纯查表常量，无独特性 \\
+C14 & 工程配置（README/TODO/LICENSE/requirements/.git*） & 排除 & 非核心代码 \\
+\bottomrule
+\caption{核心部分总清单（三态填满，数据来源: 全库穷尽枚举实测）}
+\end{xltabular}}
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+% ---------------- C1 ----------------
+\subsection{C1 自动 Wick 收缩（quark\_contract.py + quark\_diagram.py）}
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查，无孤儿符号。
+\end{mapbox}
+
+{\footnotesize\begin{xltabular}{\textwidth}{XlX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{Qurak(flavor, tag, anti)} & 场算符 $\psi_f(x)$ / $\bar\psi_f(x)$ & 带味的裸夸克符号（tag 携带强子序号与时间）；\texttt{\nolinkurl{quark_contract.py:17-36}} \\
+\texttt{Tag(tag, time)} & 时空/粒子标号 & tag//3=强子号、tag\%3=强子内夸克号、time=时间片；\texttt{\nolinkurl{quark_contract.py:12-14}} \\
+\texttt{Propagator} & 夸克传播子 $S^f$ & 符号 $S^f(\text{汇},\text{源})$；同位时标为 local；\texttt{\nolinkurl{quark_contract.py:39-61}} \\
+\texttt{HadronFlavorStructure} & 强子味结构 & 介子(2字)/重子(3字)/反重子(bar\{\})，baryon\_num $\in\{0,1,-1\}$；\texttt{\nolinkurl{quark_contract.py:64-107}} \\
+\texttt{\nolinkurl{_quark_contract}} & Wick 收缩 & 反夸克锚定 + 同位素夸克递归配对 + 交换符号；\texttt{\nolinkurl{quark_contract.py:216-245}} \\
+\texttt{\nolinkurl{adjacency_matrix}} & Wick 收缩图 & 顶点=强子、矩阵元=传播子编号（重子为 3$\times$3 子矩阵）；\texttt{\nolinkurl{quark_contract.py:179-208}} \\
+\texttt{\nolinkurl{QuarkDiagram.analyse}} & 图→张量网 & BFS 分解连通分量，分配自旋/色下标生成 einsum 式；\texttt{\nolinkurl{quark_diagram.py:15-79}} \\
+\texttt{\nolinkurl{compute_diagrams}} & 关联函数数值 & 各图逐项 einsum 求值；\texttt{\nolinkurl{quark_diagram.py:261-273}} \\
+\bottomrule
+\caption{C1 代码-物理双向映射（数据来源: 源码逐符号核验）}
+\end{xltabular}}
+
+\textbf{A1 目的与前期准备.} Wick 收缩是把强子关联函数 $\langle O_1O_2\cdots\rangle$ 按
+费曼拓扑展开为传播子乘积组合的运算，手写极易出错（交换符号、味匹配、简并）。该库把它
+抽象为``符号代数 + 图论''两层。前置条件：仅依赖 \texttt{sympy} 与 \texttt{numpy}
+（\texttt{\nolinkurl{requirements.txt:1-4}}）。
+
+\textbf{A2 输入.} 表达式（\texttt{HadronFlavorStructure} 的乘积）、粒子列表、简并开关
+\texttt{degenerate}（\texttt{\nolinkurl{quark_contract.py:110-124}}）。
+
+\textbf{A3 输出（应是什么）.} \texttt{Diagram} 的符号表达式（系数 + 邻接矩阵 + 时标 +
+传播子表），如 meson-meson 收缩得
+$\pm[\![\,0,1],[1,0]\,]$ 对角拓扑。
+
+\textbf{A4 整体框架.} 两步：\texttt{\nolinkurl{quark_contract}}（味→传播子符号与邻接矩阵，
+\texttt{\nolinkurl{quark_contract.py:125-213}}）$\to$ \texttt{QuarkDiagram}（邻接矩阵→einsum，
+\texttt{\nolinkurl{quark_diagram.py:15-79}}）$\to$ \texttt{\nolinkurl{compute_diagrams}}（求值）。
+
+\textbf{A5 关键细节.} 递归配对用``首个反夸克为锚''（:221-222）；简并 u/d 统一传播子味
+\texttt{"q"}（:233-236）；交换符号 $(-1)^{i-j}$（:225-232）；BFS 遍历避免重复处理
+（\texttt{\nolinkurl{quark_diagram.py:29-50}}）。
+
+\lstinputlisting[language=python,firstline=216,lastline=245]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/quark_contract.py}
+
+\textbf{A6 任务如何正确执行.} 调用 \texttt{quark\_contract(expr, particles, degenerate)}
+（\texttt{\nolinkurl{test_quark_contract.py:159,170,181}}）；数值阶段把结果代入
+\texttt{\nolinkurl{compute_diagrams}}。
+
+\textbf{A7 实际执行情况.} 本机实测 \texttt{\nolinkurl{test_quark_contract.py}}：Ran 19 tests, OK
+（记录于 \texttt{.pure.*.log}）。
+
+\textbf{A8 实际输出情况.} meson-meson（$\bar u d\times\bar d u$）收缩输出
+\texttt{-\url{...}q}，邻接矩阵 \texttt{[[1,0],[0,1]]}，与 \texttt{\nolinkurl{test_quark_contract.py:184}}
+断言一致。
+
+\textbf{A9 结果分析.} 19 例测试覆盖 tag 不可变性、简并、重子-反重子、传播子符号表示
+（\texttt{\nolinkurl{test_quark_contract.py:12-222}}），符号层自洽性验证通过。
+
+\textbf{A10 综合分析.} 该引擎是蒸馏法四阶段之后的核心抽象：物理上 Wick 收缩的
+``所有可能配对''即符号代数的``所有递归分支''，配对顺序产生置换符号，映射逐符号成立
+（见映射表）。
+
+\textbf{A11 结尾总结.} \textcolor{algo}{核心算法:} 递归 Wick 收缩 $\to$ 邻接矩阵 $\to$
+BFS 图分析 $\to$ einsum；正确性由 19 例符号测试保证。
+
+\textbf{A12 结尾评价.} 优点：全自动、可符号化简；缺点：符号代数分支数随粒子数指数增长
+（\textcolor{warn}{未验证}性能瓶颈），邻接矩阵仅存拓扑不存旋量组合细节。
+
+\textbf{A13 补充说明.} 大规模（>4 顶点）收缩的耗时与内存未实测；数值路径（含 perambulator）
+未在本机运行。
+
+\textbf{A14 参考源.} \texttt{\nolinkurl{quark_contract.py:110-245}}、\texttt{\nolinkurl{quark_diagram.py:15-79,261-273}}、
+\texttt{\nolinkurl{test_quark_contract.py:12-222}}。
+
+\textbf{A15 附录.} 实测命令与输出见 \texttt{\nolinkurl{.pure.2026-08-17-06-18-21.log}}。
+
+% ---------------- C2 ----------------
+\subsection{C2 拉普拉斯本征向量生成器（eigenvector.py + stout\_smear.cu）}
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查。
+\end{mapbox}
+
+{\footnotesize\begin{xltabular}{\textwidth}{XlX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{_Laplacian}} & 协变拉普拉斯 $-\nabla^2$ & 对角 6、plaquette 链求和（SA 求最小本征）；\texttt{\nolinkurl{eigenvector.py:11-26}} \\
+\texttt{\nolinkurl{backend.roll}} & 位移算子 $\hat T_\mu$ & 相邻格点平移（周期边界）；\texttt{\nolinkurl{eigenvector.py:19-24}} \\
+\texttt{eigsh(which="SA")} & 本征问题 $\nabla^2 v=\lambda v$ & 最低 $N_e$ 个本征解（升序排序）；\texttt{\nolinkurl{eigenvector.py:246-251}} \\
+\texttt{\nolinkurl{renorm_phase}} & 本征向量相位 & $v\to e^{-i\arg(v_1)}v$ 约定（本征向量相位不确定）；\texttt{\nolinkurl{eigenvector.py:254-256}} \\
+\texttt{\nolinkurl{project_SU3}} & 幺正化 & 迭代 $U\leftarrow\frac12(U+U^{-\dagger})$ 到 SU(3)；\texttt{\nolinkurl{eigenvector.py:55-65}} \\
+\texttt{\nolinkurl{stout_smear}} & stout 平滑 & 指数化 $U'_\mu=e^{iQ_\mu}U_\mu$ 降紫外噪声；\texttt{\nolinkurl{eigenvector.py:215-232}} \\
+\texttt{\nolinkurl{stout_smear.cu}} & GPU 平滑核 & 逐链接 staple + 矩阵指数；\texttt{\nolinkurl{stout_smear.cu:160-245}} \\
+\texttt{\nolinkurl{laplacian_quda}} & QUDA 本征求解 & TR-Lanczos + 可选切比雪夫加速；\texttt{\nolinkurl{eigenvector.py:259-312}} \\
+\bottomrule
+\caption{C2 代码-物理双向映射（数据来源: 源码逐符号核验）}
+\end{xltabular}}
+
+\textbf{A1 目的与前期准备.} 蒸馏基底需要三维空间拉普拉斯的最低 $N_e$ 本征向量；
+同时要平滑规范场以降低本征求解噪声。前置：规范场数据、numpy/scipy（CPU）或
+cupyx/QUDA（GPU）、PyQUDA（\texttt{\nolinkurl{eigenvector.py:203-213,259-262}}）。
+
+\textbf{A2 输入.} 格点尺寸 \texttt{\nolinkurl{latt_size}}、规范场 \texttt{GaugeField}、$N_e$、容差
+\texttt{tol}（\texttt{\nolinkurl{eigenvector.py:29-47}}）。
+
+\textbf{A3 输出.} 每时间片 \texttt{[Ne, Lz, Ly, Lx, Nc]} 本征向量 + 本征值
+（\texttt{\nolinkurl{eigenvector.py:257}}）。
+
+\textbf{A4 整体框架.} 三路径（\texttt{calc}, :356-370）：cupy+QUDA $\to$
+\texttt{\nolinkurl{laplacian_quda}}；cupy/numpy $\to$ \texttt{\nolinkurl{laplacian_cupy_numpy}}；QUDA 拉普拉斯
++cupyx 求解 $\to$ \texttt{\nolinkurl{laplacian_quda_scipy}}。平滑独立分发（:215-232）。
+
+\textbf{A5 关键细节.} 拉普拉斯用 \texttt{\nolinkurl{opt_einsum}} 实现
+\begin{equation}\label{eq:lap}
+  (-\nabla^2\psi)_a(x) = 6\psi_a(x) - \sum_{\mu=1}^{3}\big[U_\mu(x)\psi(x+\hat\mu) + U_\mu^\dagger(x-\hat\mu)\psi(x-\hat\mu)\big]_a
+\end{equation}
+即 \eqref{eq:lap}；对角项取 6（\texttt{\nolinkurl{eigenvector.py:16-17}}）；动量卷积用
+\texttt{roll}（:19-24）。stout 平滑指数化 $e^{iQ}$（\texttt{\nolinkurl{eigenvector.py:140-189}} 与
+CUDA 核 \texttt{\nolinkurl{stout_smear.cu:198-239}} 逐点一致）。
+
+\begin{physbox}
+\textbf{物理图像:} 拉普拉斯最低本征向量（低频模）近似``光滑夸克场分布''，作为蒸馏基底；
+stout 平滑把规范场变光滑，等价于剔除高动量（紫紫外）噪声，使低频模更稳定。
+\end{physbox}
+
+\textbf{A6 任务如何正确执行.} \texttt{load(key)} $\to$ \texttt{stout\_smear(nstep, rho)}
+$\to$ 逐 t 片 \texttt{calc(t)}（\texttt{\nolinkurl{test_eigenvector.py:44-50}}）。
+
+\textbf{A7 实际执行情况.} 本机无 QUDA（\texttt{\nolinkurl{libquda.so}} 缺失）且 LFS 数据未拉取，
+本征求解路径未运行；cupy 设备可用（1 GPU）。\textcolor{warn}{未验证}。
+
+\textbf{A8 实际输出情况.} 无数据相关输出；本机仅验证 \texttt{import lattice} 与逻辑测试。
+
+\textbf{A9 结果分析.} 求解残差/相位一致性测试（\texttt{\nolinkurl{test_eigenvector.py:25-36}}）依赖
+参考数据 \texttt{\nolinkurl{.eigenvector.ref.npy}}（LFS），本机未产生。
+
+\textbf{A10 综合分析.} 三路径共享同一 \texttt{calc} 接口（:356-370），工程上是
+``后端无关''设计；物理上 scipy/cupyx 与 QUDA 求解的差别仅在性能与多项式加速
+（:295-299 切比雪夫）。
+
+\textbf{A11 结尾总结.} \textcolor{algo}{核心算法:} \eqref{eq:lap} 的 LinearOperator +
+\texttt{eigsh(SA)} 三路径 + stout 平滑（NDArray/CUDA/QUDA）；GPU 数据路径本机\textcolor{warn}{未验证}。
+
+\textbf{A12 结尾评价.} 优点：三后端路径与平滑三实现可切换；缺点：CUDA 核仅实例化
+\texttt{double} 模板（\texttt{\nolinkurl{eigenvector.py:38-42}} 的 TODO），numpy/cupy 平滑代码三份重复。
+
+\textbf{A13 补充说明.} 本征求解的实际耗时/精度无基准数据；CUDA 核数值一致性未实测。
+
+\textbf{A14 参考源.} \texttt{\nolinkurl{eigenvector.py:11-26,234-257,356-370}}、
+\texttt{\nolinkurl{stout_smear.cu:160-245}}、\texttt{\nolinkurl{test_eigenvector.py:25-59}}。
+
+\textbf{A15 附录.} 无（GPU 路径未运行）。
+
+% ---------------- C3 ----------------
+\subsection{C3 ElementalGenerator 导数/动量因子构造（elemental.py）}
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查。
+\end{mapbox}
+
+{\footnotesize\begin{xltabular}{\textwidth}{XlX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{num_derivative}} & 导数组合数 & $(3^{n+1}-1)/2$（$n$ 阶全组合）；\texttt{\nolinkurl{elemental.py:48}} \\
+\texttt{derivative(n)} & 导数算符 $\tilde\nabla^n$ & 3 进制方向编码；\texttt{\nolinkurl{derivative.py:23-33}} \\
+\texttt{\nolinkurl{derivative_list}} & 导数组合集 & 0 阶到 $n$ 阶全部组合；\texttt{\nolinkurl{elemental.py:49}} \\
+\texttt{MomentumPhase} & 平面波 $e^{ip\cdot x}$ & 动量投影相位（含 cb2 棋盘化）；\texttt{\nolinkurl{phase.py:41-53}} \\
+\texttt{\nolinkurl{_nD}} & 协变位移 & $V_f=U_\mu(x)V(x+\hat\mu)-U^\dagger_\mu(x-\hat\mu)V(x-\hat\mu)$；\texttt{\nolinkurl{elemental.py:279-288}} \\
+\texttt{\nolinkurl{pick_left/right}} & 乘积规则展开 & $\tilde\nabla(AB)=(\tilde\nabla A)B+A(\tilde\nabla B)$ 的左右分配；\texttt{\nolinkurl{elemental.py:309-321}} \\
+\texttt{\nolinkurl{stocastic_coeff}} & 随机蒸馏系数 & 稀释（dilution）块对角系数；\texttt{\nolinkurl{elemental.py:71-95}} \\
+\bottomrule
+\caption{C3 代码-物理双向映射（数据来源: 源码逐符号核验）}
+\end{xltabular}}
+
+\textbf{A1 目的与前期准备.} Elemental $\Phi = V^\dagger \mathcal O V$ 是算符 $\mathcal O$
+在蒸馏空间的表示，导数/动量使算符携带量子数（角动量、动量）。前置：平滑规范场 + 本征向量。
+
+\textbf{A2 输入.} 规范场、本征向量、\texttt{\nolinkurl{num_nabla}}、\texttt{\nolinkurl{momentum_list}}、
+可选稀释（\texttt{\nolinkurl{elemental.py:16-26}}）。
+
+\textbf{A3 输出.} \texttt{[num\_deriv, num\_mom, Ne, Ne]} 张量
+（\texttt{\nolinkurl{elemental.py:56}}），即
+\begin{equation}\label{eq:ele}
+  \Phi^{(n)}_{jk}(p;t) = \sum_x e^{ip\cdot x}\, \big[\tilde\nabla^n V(x)\big]_{j,a}^\ast\, V(x)_{k,a}
+\end{equation}
+
+\textbf{A4 整体框架.} \texttt{calc(t)} 三层循环：本征向量装入（:297-298）$\to$
+导数组合循环（:299）$\to$ 动量循环（:322-337）。
+
+\textbf{A5 关键细节.} 乘积规则展开：对 $n$ 阶导数，把 $2^n$ 个子集分配为``右作用''/
+``左作用''，系数 $(-1)^{\#\text{右}}$（:309-321）。此写法替代注释掉的
+\texttt{\nolinkurl{num_nabla_right}} 组合写法（:301-308），等价但更紧凑。
+
+\lstinputlisting[language=python,firstline=297,lastline=336]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/generator/elemental.py}
+
+\textbf{A6 任务如何正确执行.} \texttt{load(key)} $\to$ 逐 t 片 \texttt{calc(t)}
+（\texttt{\nolinkurl{test_elemental.py:41-45}}）；结果与参考 \texttt{\nolinkurl{.elemental.npy}} 比对
+（:31-34）。
+
+\textbf{A7 实际执行情况.} 数据依赖 LFS（\texttt{\nolinkurl{weak_field.lime}} 为指针），本机未运行。
+\textcolor{warn}{未验证}。
+
+\textbf{A8 实际输出情况.} 无数据相关输出。
+
+\textbf{A9 结果分析.} 参考比对以 \texttt{res = \|data\_ref - data\|} 报告
+（\texttt{\nolinkurl{test_elemental.py:32-34}}），本机无法复核。
+
+\textbf{A10 综合分析.} \eqref{eq:ele} 中 $e^{ipx}$ 来自 \texttt{MomentumPhase}
+（\texttt{\nolinkurl{phase.py:41-46}}）；协变导数保证规范协变性，这是``物理上必需''而朴素实现
+（普通差分）容易漏掉的点。
+
+\textbf{A11 结尾总结.} \textcolor{algo}{核心算法:} 乘积规则展开 $2^n$ 子集分配 + 协变位移
+$U$-平移 + 动量相位投影的一次 einsum；正确性依赖参考数据（未在本机验证）。
+
+\textbf{A12 结尾评价.} 优点：导数阶数任意（$n<3$，README.md:18）；缺点：随机稀释分支
+（:61-95）与确定性分支代码未统一。
+
+\textbf{A13 补充说明.} 稀释/混合随机方法（blending）的统计无偏性未实测。
+
+\textbf{A14 参考源.} \texttt{\nolinkurl{elemental.py:48-56,279-338}}、\texttt{\nolinkurl{derivative.py:23-33}}、
+\texttt{\nolinkurl{phase.py:41-53}}、\texttt{\nolinkurl{test_elemental.py:23-48}}。
+
+\textbf{A15 附录.} 无。
+
+% ---------------- C4 ----------------
+\subsection{C4 强子不可约表示与小群投影（hadron*.py + symmetry/ + insertion/）}
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查。
+\end{mapbox}
+
+{\footnotesize\begin{xltabular}{\textwidth}{XlX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{OhD_generator}} & 双群 O$_h^D$ 不可约表示 & A$_1$..H 各不可约表示生成元；\texttt{\nolinkurl{group_generator.py:25-73}} \\
+\texttt{\nolinkurl{OD_irreps}} & O$_h^D$ 硬编码表 & 全群元矩阵（乘表 + 不可约表示）；\texttt{\nolinkurl{hardcoded_rep.py:10188}} \\
+\texttt{genLittleGroupIrrep} & 小群不可约表示 & 按 $p^2$ 选小群（Oh/Dic4/Dic2/Dic3/C4）；\texttt{\nolinkurl{gen_hardcoded_rep.py:162-223}} \\
+\texttt{wignerRotate} & Wigner 转动 & 旋转到参考动量再回代；\texttt{\nolinkurl{gen_hardcoded_rep.py:145-159}} \\
+\texttt{reductionToLittleGroup} & 不可约分解 & $\frac{d_\lambda}{|G|}\sum_g \Gamma^\lambda_{mm}(g)\,D(g)$ 投影；\texttt{\nolinkurl{gen_hardcoded_rep.py:226-245}} \\
+\texttt{Insertion} & 插入算符 & $\gamma$ $\otimes$ 导数 $\otimes$ 投影组合；\texttt{\nolinkurl{insertion/__init__.py:219-350}} \\
+\texttt{\nolinkurl{GammaName/DerivativeName}} & 强子量子数 & $\pi$($0^{-+}$)、$\rho$($1^{--}$) 等与 $\nabla,\mathbb{B},\mathbb{D},\mathbb{E}$；\texttt{\nolinkurl{gamma.py:103-112}}、\texttt{\nolinkurl{derivative.py:36-59}} \\
+\texttt{\nolinkurl{HadronIrrepRow.transform}} & 群元作用 & $\hat R(g)|p,i\rangle=\sum_j D^{l.g.}_{ji}(W_g)|R_g p,j\rangle$；\texttt{\nolinkurl{hadron_irrep.py:132-140}} \\
+\bottomrule
+\caption{C4 代码-物理双向映射（数据来源: 源码逐符号核验）}
+\end{xltabular}}
+
+\textbf{A1 目的与前期准备.} 强子插值算符必须携带确定量子数（$J^{PC}$、动量、不可约表示），
+格点群论把连续角动量离散为 O$_h^D$ 不可约表示。前置：sympy 群论工具链。
+
+\textbf{A2 输入.} $\gamma$ 组合、导数组合、投影不可约表示名、动量字典
+（\texttt{\nolinkurl{insertion/__init__.py:219-238}}）。
+
+\textbf{A3 输出.} \texttt{\nolinkurl{Insertion.rows}}（\texttt{DerivativeRepsRow} 列表，即
+``$\gamma$ $\times$ 导数组合''的算符行），可投影到小群（:255-267）。
+
+\textbf{A4 整体框架.} 三层：群生成元（\texttt{\nolinkurl{group_generator.py}}）$\to$ 硬编码不可约表示
+（\texttt{\nolinkurl{hardcoded_rep.py}}）$\to$ 小群投影与 Wigner 转动（\texttt{\nolinkurl{gen_hardcoded_rep.py}}）
+$\to$ 算符构造（\texttt{\nolinkurl{insertion/__init__.py}}）$\to$ 强子类（\texttt{\nolinkurl{hadron_irrep.py}}）。
+
+\textbf{A5 关键细节.} 小群不可约表示的投影公式
+\begin{equation}\label{eq:proj}
+  P^\lambda_{mm'} = \frac{d_\lambda}{|G|}\sum_{g\in G} \Gamma^\lambda_{mm'}(g)\, \hat R(g)
+\end{equation}
+实现于 \texttt{reductionToLittleGroup}（\texttt{\nolinkurl{gen_hardcoded_rep.py:226-245}}）与
+\texttt{\nolinkurl{expr_little_group_projection}}（\texttt{\nolinkurl{hadron_irrep.py:178-195}}）；
+旋转算符的 Wigner 矩阵查 \texttt{refRotateDict}（\texttt{\nolinkurl{group_generator.py:288-364}}）。
+
+\textbf{A6 任务如何正确执行.} 例 \texttt{\nolinkurl{gen_twopt.py:9-11}}：
+\texttt{Insertion(GammaName.PI, DerivativeName.IDEN, ProjectionName.A1, momDict)} 再
+\texttt{Operator}。
+
+\textbf{A7 实际执行情况.} 本机未执行 \texttt{\nolinkurl{test_mesonspetrum.py}}（需 LFS 数据）；
+群论模块逻辑测试含于 \texttt{\nolinkurl{test_simplify.py}}（已通过 8 例）。
+
+\textbf{A8 实际输出情况.} 无数据相关输出。
+
+\textbf{A9 结果分析.} 强子谱 2pt 有效质量测试（\texttt{\nolinkurl{test_mesonspetrum.py:44-65}}）依赖
+elemental/perambulator 数据，本机不可复现。
+
+\textbf{A10 综合分析.} 该模块是``物理量子数 → 代码算符''的直接映射：$\gamma$ 命名表
+（\texttt{\nolinkurl{gamma.py:103-112}}）把 $a_0,\pi,\rho,\ldots$ 映射到不可约表示/宇称/C-共轭/厄米性，
+导数命名表（\texttt{\nolinkurl{derivative.py:36-67}}）映射 $\nabla,\mathbb{B},\mathbb{D},\mathbb{E}$；
+物理上这些是 $J^{PC}$ 的格点实现。
+
+\textbf{A11 结尾总结.} \textcolor{algo}{核心算法:} \eqref{eq:proj} 小群投影 + Wigner 转动
++ 硬编码不可约表示查表，自动枚举确定 $J^{PC}$ 的算符行。
+
+\textbf{A12 结尾评价.} 优点：群论自动化（TODO.md:10 已完成）；缺点：硬编码表由脚本生成后
+体积巨大（11613 行）且部分动量（$p^2=5,6$）走运行时生成（\texttt{\nolinkurl{gen_hardcoded_rep.py:188-195}}）。
+
+\textbf{A13 补充说明.} 高动量 $p^2>6$ 未实现（:197 抛 \texttt{NotImplementedError}）。
+
+\textbf{A14 参考源.} \texttt{\nolinkurl{group_generator.py:25-73,288-364}}、
+\texttt{\nolinkurl{gen_hardcoded_rep.py:145-245}}、\texttt{\nolinkurl{hardcoded_rep.py:10188}}、
+\texttt{\nolinkurl{insertion/__init__.py:219-350}}、\texttt{\nolinkurl{hadron_irrep.py:132-195}}。
+
+\textbf{A15 附录.} 无。
+
+% ---------------- C5 ----------------
+\subsection{C5 PerambulatorGenerator（PyQUDA 反演）}
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查。
+\end{mapbox}
+
+{\footnotesize\begin{xltabular}{\textwidth}{XlX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{PerambulatorGenerator} & 蒸馏传播子生成器 & $\tau$ 的定义与反演参数；\texttt{\nolinkurl{perambulator.py:10-102}} \\
+\texttt{dirac} & Dirac 算符 $D$ & Clover 参数化（mass/tol/xi/clover/multigrid）；\texttt{\nolinkurl{perambulator.py:91-100}} \\
+\texttt{\nolinkurl{eigenvector_dagger}} & 源向量 $\bar v_j$ & cb2 棋盘化 + 共轭装载；\texttt{\nolinkurl{perambulator.py:117-128}} \\
+\texttt{\nolinkurl{dirac.invert}} & 反演 $D^{-1}$ & 求解 $D S V = V$（逐本征向量）；\texttt{\nolinkurl{perambulator.py:192}} \\
+\texttt{contract("...->tijk")} & 收缩 $\bar v SV$ & $\tau_{tijk}=\bar v_{etzyx} S_{...}$；\texttt{\nolinkurl{perambulator.py:198-200}} \\
+\texttt{\nolinkurl{grid_coord}} & MPI 子格坐标 & 片切分本征向量；\texttt{\nolinkurl{perambulator.py:111-125}} \\
+\texttt{MRHS} & 多右端项 & 一次反演多源（省时费显存）；\texttt{\nolinkurl{perambulator.py:172-183}} \\
+\bottomrule
+\caption{C5 代码-物理双向映射（数据来源: 源码逐符号核验）}
+\end{xltabular}}
+
+\textbf{A1 目的与前期准备.} perambulator 把夸克传播子压缩到蒸馏空间：$\tau(t_f,t_i) = 
+V^\dagger(t_f) D^{-1} V(t_i)$，是 2pt 收缩的核心量。前置：PyQUDA + QUDA
+（\texttt{\nolinkurl{perambulator.py:69-70}}）、cupy 后端（:77）。
+
+\textbf{A2 输入.} 规范场（stout 平滑后）、本征向量、Clover 质量/参数、\texttt{usedNe}、
+\texttt{MRHS}（\texttt{\nolinkurl{perambulator.py:51-68}}）。
+
+\textbf{A3 输出.} \texttt{[Lt, Ns, Ns, Ne, Ne]} 张量（\texttt{\nolinkurl{perambulator.py:102}}），
+即
+\begin{equation}\label{eq:tau}
+  \tau(t_f,t_i)^{SS'}_{jk} = \big[V(t_f)^\dagger\big]^{S}_{j}\, D^{-1}\, \big[V(t_i)\big]^{S'}_{k}
+\end{equation}
+
+\textbf{A4 整体框架.} \texttt{calc(t)}：逐本征向量 e（:169）$\to$ 逐自旋装载源
+（:185-192）$\to$ \texttt{\nolinkurl{dirac.invert}}（:192）$\to$ einsum 收缩进 \texttt{VSV}
+（:198-200）$\to$ 打印显存/耗时（:205-208）。
+
+\textbf{A5 关键细节.} 源装载按 MPI 片切分（:177-179 仅本地时间片写源）；
+反向传播子用 $\gamma_5$-厄米性（\texttt{\nolinkurl{one_particle.py:57}}）；\texttt{usedNe} 裁剪
+（:79-84）；cb2 棋盘化经 \texttt{\nolinkurl{core.cb2}}（:128）。
+
+\begin{lstlisting}[language=python,firstline=146,lastline=175]
+\end{lstlisting}
+
+\textbf{A6 任务如何正确执行.} \texttt{load(key)}（读 gauge + 本征向量）$\to$
+\texttt{stout\_smear(20, 0.1)} $\to$ 逐 t 片 \texttt{calc(t)} 并 roll 平移
+（\texttt{\nolinkurl{test_perambulator.py:61-66}}）。
+
+\textbf{A7 实际执行情况.} 本机 \texttt{import pyquda} 失败（\texttt{\nolinkurl{libquda.so}} 缺失），
+GPU 反演未运行。\textcolor{warn}{未验证}。
+
+\textbf{A8 实际输出情况.} 无数据相关输出。
+
+\textbf{A9 结果分析.} 测试以范数残差比对参考 perambulator（\texttt{\nolinkurl{test_perambulator.py:52-55}}），
+本机无法复核。
+
+\textbf{A10 综合分析.} \eqref{eq:tau} 中反演是唯一昂贵步骤（每源一次 \texttt{invert}）；
+MRHS 多右端项路径（:172-183）一次反演多个自旋源；片切分（:111-125）配合 MPI 网格
+（\texttt{\nolinkurl{test_perambulator_mpi.py:10-17}}）。
+
+\textbf{A11 结尾总结.} \textcolor{algo}{核心算法:} 蒸馏空间反演 $\tau=V^\dagger D^{-1}V$
++ $\gamma_5$-厄米反向传播子 + MPI 片切分；数值未在本机验证。
+
+\textbf{A12 结尾评价.} 优点：参数完整（Clover/multigrid/MRHS/各向异性 xi/nu）；缺点：
+强依赖 PyQUDA 版本（\texttt{\nolinkurl{backend.py:46-47}}），无 CPU 路径（:140-141 抛 NotImplemented）。
+
+\textbf{A13 补充说明.} multigrid 加速、MRHS 显存开销均无本机实测数据。
+
+\textbf{A14 参考源.} \texttt{\nolinkurl{perambulator.py:51-102,146-209}}、
+\texttt{\nolinkurl{test_perambulator.py:29-66}}、\texttt{\nolinkurl{test_perambulator_mpi.py:10-82}}、
+\texttt{\nolinkurl{backend.py:36-58}}。
+
+\textbf{A15 附录.} 无。
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+{\footnotesize\begin{xltabular}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+\endhead
+自动 Wick 收缩（C1） & 手写收缩脚本（逐拓扑写 einsum） & 味结构符号代数自动生成全部配对与置换符号；测试 19 例符号断言通过；邻接矩阵编码重子 3$\times$3 子结构 \\
+图→einsum 自动下标（C1） & 朴素实现（手工标下标） & BFS 连通分量分解 + 自旋/色下标自动分配（quark\_diagram.py:23-79），多连通分量图可拆分复用 \\
+本征向量三路径（C2） & 单一求解器 & scipy/cupyx/QUDA 三路径 + stout 三实现（NDArray/CUDA/QUDA），按设备自动选择 \\
+stout CUDA 核（C2） & 纯 numpy 平滑 & 逐链接独立并行（stout\_smear.cu:160-245），Lt 块并行；性能未实测 \\
+导数乘积规则展开（C3） & 朴素差分组合 & $2^n$ 左右分配 + 协变位移保持规范协变性；动量相位统一进 einsum \\
+群论自动算符（C4） & 手写算符清单 & 小群投影/Wigner 转动自动枚举确定 $J^{PC}$ 算符；硬编码不可约表示表一次生成 \\
+蒸馏空间反演（C5） & 全格点传播子 & $D^{-1}$ 只在蒸馏空间收缩，规模 $N_e\times N_e$；MPI 片切分 \\
+\bottomrule
+\caption{独特性评估（数据来源: 源码分析 + 本机 27 例测试，性能数值均未实测）}
+\end{xltabular}}
+
+\begin{warnbox}
+\textbf{竞争力局限：} 全部性能/数值优势为\textcolor{warn}{未验证}（本机缺 QUDA 与 LFS 数据）；
+对比基准为``朴素实现''的定性推断，无对照基准库的量化数字；自动收缩在顶点数增大时
+符号分支指数增长，未见剪枝策略。
+\end{warnbox}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+核心公式（编号）：
+\begin{equation}\label{eq:wick}
+  C(\{t\}) = \sum_{\text{Wick}}\; (-1)^{\sigma}\prod_f \tau^{f}_{j_1k_1}\cdots\;\times\;\Phi_{k_1j_2}\cdots
+\end{equation}
+即 \eqref{eq:wick}：关联函数 = 各 Wick 配对（符号 $(-1)^\sigma$）的传播子与 elemental 张量缩并，
+实现于 \texttt{\nolinkurl{quark_diagram.py:233-273}}。
+
+本征向量递归配对（C1 核心，\texttt{\nolinkurl{quark_contract.py:216-245}}）：
+\lstinputlisting[language=python,firstline=216,lastline=245]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/quark_contract.py}
+图→einsum（C1 核心，\texttt{\nolinkurl{quark_diagram.py:23-60}}）：
+\lstinputlisting[language=python,firstline=23,lastline=60]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/quark_diagram.py}
+拉普拉斯求解（C2 核心，\texttt{\nolinkurl{eigenvector.py:234-257}}）：
+\lstinputlisting[language=python,firstline=234,lastline=257]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/generator/eigenvector.py}
+stout CUDA 核主循环（C2，\texttt{\nolinkurl{stout_smear.cu:160-199}}）：
+\lstinputlisting[language=python,firstline=160,lastline=199]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/generator/stout_smear.cu}
+导数与动量相位（C3，\texttt{\nolinkurl{derivative.py:23-33}} 与 \texttt{\nolinkurl{phase.py:41-53}}）：
+\lstinputlisting[language=python,firstline=23,lastline=33]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/insertion/derivative.py}
+\lstinputlisting[language=python,firstline=41,lastline=53]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/insertion/phase.py}
+小群投影（C4 核心，\texttt{\nolinkurl{gen_hardcoded_rep.py:226-245}}）：
+\lstinputlisting[language=python,firstline=226,lastline=245]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/symmetry/gen_hardcoded_rep.py}
+perambulator 反演（C5 核心，\texttt{\nolinkurl{perambulator.py:146-175}}）：
+\lstinputlisting[language=python,firstline=146,lastline=175]{/root/PyQCD/refer/git-rep/EasyDistillation/lattice/generator/perambulator.py}
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+{\footnotesize\begin{xltabular}{\textwidth}{XlX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{quark_contract.py:110-213}} & 仓库 & C1 主收缩：味→传播子+邻接矩阵 \\
+\texttt{\nolinkurl{quark_contract.py:216-245}} & 仓库 & C1 递归配对收缩（符号/简并） \\
+\texttt{\nolinkurl{quark_diagram.py:15-79}} & 仓库 & C1 邻接矩阵→einsum 图分析 \\
+\texttt{\nolinkurl{quark_diagram.py:233-273}} & 仓库 & C1 关联函数数值求值 \\
+\texttt{\nolinkurl{quark_diagram.py:330-553}} & 仓库 & C6 图化简（连通分量拆分） \\
+\texttt{\nolinkurl{eigenvector.py:11-26}} & 仓库 & C2 拉普拉斯算符 \\
+\texttt{\nolinkurl{eigenvector.py:234-257}} & 仓库 & C2 scipy/cupyx 求解 \\
+\texttt{\nolinkurl{eigenvector.py:259-312}} & 仓库 & C2 QUDA 求解 \\
+\texttt{\nolinkurl{eigenvector.py:356-370}} & 仓库 & C2 路径分发 \\
+\texttt{\nolinkurl{stout_smear.cu:160-245}} & 仓库 & C2 stout CUDA 核 \\
+\texttt{\nolinkurl{elemental.py:279-338}} & 仓库 & C3 协变导数 + 动量投影 \\
+\texttt{\nolinkurl{derivative.py:23-33}} & 仓库 & C3 导数 3 进制编码 \\
+\texttt{\nolinkurl{phase.py:41-53}} & 仓库 & C3 动量平面波相位 \\
+\texttt{\nolinkurl{insertion/__init__.py:219-350}} & 仓库 & C4 Insertion 算符 + 小群投影 \\
+\texttt{\nolinkurl{group_generator.py:25-73}} & 仓库 & C4 O$_h^D$ 生成元 \\
+\texttt{\nolinkurl{gen_hardcoded_rep.py:145-245}} & 仓库 & C4 Wigner 转动 + 小群投影 \\
+\texttt{\nolinkurl{hardcoded_rep.py:10188}} & 仓库 & C4 硬编码不可约表示表 \\
+\texttt{\nolinkurl{hadron_irrep.py:132-195}} & 仓库 & C4 群元作用与投影 \\
+\texttt{\nolinkurl{perambulator.py:51-102}} & 仓库 & C5 构造与参数 \\
+\texttt{\nolinkurl{perambulator.py:146-209}} & 仓库 & C5 反演 + 收缩 \\
+\texttt{\nolinkurl{backend.py:36-58}} & 仓库 & PyQUDA 探测/版本约束 \\
+\texttt{\nolinkurl{test_quark_contract.py:12-222}} & 仓库 & C1 符号测试 19 例（本机通过） \\
+\texttt{\nolinkurl{test_simplify.py:72-367}} & 仓库 & C6 化简测试 8 例（本机通过） \\
+\texttt{\nolinkurl{test_eigenvector.py:25-59}} & 仓库 & C2 参考比对测试（LFS，未运行） \\
+\texttt{\nolinkurl{test_elemental.py:23-48}} & 仓库 & C3 参考比对测试（LFS，未运行） \\
+\texttt{\nolinkurl{test_perambulator.py:29-66}} & 仓库 & C5 参考比对测试（需 QUDA，未运行） \\
+\texttt{\nolinkurl{test_perambulator_mpi.py:10-82}} & 仓库 & C5 MPI 片切分测试（需 QUDA，未运行） \\
+\texttt{\nolinkurl{README.md:3-18}} & 仓库 & 定位：四阶段一站式 + PyQuda 依赖 \\
+\texttt{\nolinkurl{TODO.md:3-13}} & 仓库 & 功能路线图 \\
+\bottomrule
+\end{xltabular}}
+
+% ================= 6 结论 =================
+\section{结论}
+\begin{conclbox}
+\textbf{穷尽剖析结论：} 核心部分候选 14 项（C1--C14），三态分配为
+\textbf{5 深挖 / 8 浅析 / 1 排除}。最强竞争力是 \textbf{C1 自动 Wick 收缩引擎}：
+从强子味结构的符号代数出发，自动生成全部 Wick 配对、置换符号与传播子组合，并以
+邻接矩阵统一编码（介子/重子/反重子），再由 BFS 图分析自动翻译为 einsum 收缩表达式——
+这条``物理收缩 → 图 → 张量网''的自动化链是手写收缩脚本的朴素实现所不具备的。其次
+\textbf{C4 群论自动算符构造}（小群投影 + Wigner 转动 + 硬编码不可约表示）与
+\textbf{C2 三路径本征求解}（scipy/cupyx/QUDA + stout 三实现）构成完整的物理工作流支撑。
+\end{conclbox}
+\begin{warnbox}
+\textbf{未验证/局限：} ① 全部 GPU/QUDA 数值路径（C2/C5）与数据相关测试（C3）本机未运行
+（缺 \texttt{\nolinkurl{libquda.so}} 与 LFS 数据），竞争力中的性能数字无实测；② 排除项 C13/C14 为
+纯查表/工程配置；③ 浅析项 C6--C12 未进入 15 步深挖，各自依赖的最深实现见参考源表；
+④ 自动收缩的指数级分支在顶点数增大时的实际表现未评估。
+\end{warnbox}
+
+\end{document}
