@@ -265,11 +265,18 @@ def test_torch_backend_consistency():
     set_backend('torch')
     assert np.abs(V_h_np - hyp_smear(g).get()).max() < 1e-7, "HYP torch 不一致"
 
-    # 精度切换
+    # 精度语义：numpy 显式 dtype 被尊重；'complex' 简写/无 dtype 来源遵循全局精度
+    g64 = g.astype(np.complex64)
+    set_backend('torch')
+    V64 = wilson_flow(g64, tau=0.04, eps=0.02)
+    assert V64.dtype == torch.complex64, f"numpy c64 输入应保持: {V64.dtype}"
     set_precision('complex64')
-    V32 = wilson_flow(g, tau=0.04, eps=0.02)
-    assert V32.dtype == torch.complex64, f"complex64 切换失败: {V32.dtype}"
+    z64 = wilson_flow(g64, tau=0.04, eps=0.02)
+    assert z64.dtype == torch.complex64, f"complex64 切换失败: {z64.dtype}"
+    from pyqcd.tools import get_backend
+    assert get_backend().zeros((2, 2), dtype='complex').dtype == torch.complex64
     set_precision('complex128')
+    assert get_backend().zeros((2, 2), dtype='complex').dtype == torch.complex128
 
     # CUDA（可用时）
     if torch.cuda.is_available():

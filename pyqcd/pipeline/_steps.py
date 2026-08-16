@@ -26,6 +26,7 @@ import json
 import os
 import subprocess
 import time
+from collections import OrderedDict
 from datetime import datetime
 
 import numpy as np
@@ -291,16 +292,29 @@ def _real_sum(val):
     return float(np.real(np.sum(np.asarray(v).ravel())))
 
 
-def _load_peram_set(backend, peram_dir, conf_id, times, dtype, nev1=None):
+def _load_peram_set(backend, peram_dir, conf_id, times, dtype, nev1=None,
+                    cache=None, max_size=None):
+    """读取 peram 时间片集合（可选外部 cache 增量复用：滑动窗口只补新 t）。
+
+    cache 为 OrderedDict；超过 ``max_size`` 时淘汰最旧时间片，防止
+    全 NT 时间片驻留 GPU 显存（72×2×88MB ≈ 12.7GB 不可接受）。
+    """
+    from collections import OrderedDict
     if nev1 is None:
         nev1 = NEV
-    cache = {}
+    if cache is None:
+        cache = OrderedDict()
+    if max_size is None:
+        max_size = 2 * (T_SEP + 1) + 1
     for t in times:
         if t in cache:
+            cache.move_to_end(t)
             continue
         peram_cpu = readin_peram_time_slice(peram_dir, str(conf_id), t, NT, NEV)
         peram_t = backend.asarray(peram_cpu[:, :, :, :nev1, :nev1].astype(dtype))
         cache[t] = (peram_t, seq_peram(peram_t))
+        while len(cache) > max_size:
+            cache.popitem(last=False)
     return cache
 
 
@@ -450,11 +464,13 @@ def compute_3pt_for_config(conf_id, run_dir, logger, vertices,
     _info(logger, f"  3pt PJN: t_sep={t_sep}, Ntau={Ntau}, gamma_mu=4 components")
     t_start = time.perf_counter()
 
+    peram_cache = OrderedDict()
     for t_src in range(NT):
         t_sink = (t_src + t_sep) % NT
         need_times = sorted(set([t_src, t_sink] + [(t_src + tau) % NT
                                                    for tau in range(Ntau)]))
-        pc = _load_peram_set(backend, peram_dir, str(conf_id), need_times, dtype)
+        pc = _load_peram_set(backend, peram_dir, str(conf_id), need_times,
+                             dtype, cache=peram_cache)
         p_src, p_srcS = pc[t_src]
         p_snk, p_snkS = pc[t_sink]
 
@@ -568,13 +584,14 @@ def compute_4pt_for_config(conf_id, run_dir, logger, vertices,
                   f"Nev1={nev1}, mom={momenta}, src_step={src_step} "
                   f"({nsrc}/{NT} sources)")
     t_start = time.perf_counter()
+    peram_cache = OrderedDict()
 
     for t_src in sources:
         t_sink = (t_src + t_sep) % NT
         need_times = sorted(set([t_src, t_sink] + [(t_src + tau) % NT
                                                    for tau in range(Ntau)]))
         pc = _load_peram_set(backend, peram_dir, str(conf_id), need_times,
-                             dtype, nev1=nev1)
+                             dtype, nev1=nev1, cache=peram_cache)
         p_src, p_srcS = pc[t_src]
         p_snk, p_snkS = pc[t_sink]
 
@@ -644,7 +661,6 @@ def compute_4pt_for_config(conf_id, run_dir, logger, vertices,
     save_array(os.path.join(cdir, f'pjnnjnp_4pt_{conf_id}.npy'), acc, logger)
     _info(logger, f"  4pt PJNNJNp saved: shape={acc.shape}")
     return acc
-
 
 def step_4pt(config, run_dir, logger):
     set_backend(config.get('backend', 'cupy'),
