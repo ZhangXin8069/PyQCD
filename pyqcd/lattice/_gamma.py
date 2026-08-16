@@ -25,7 +25,8 @@ Adapted from lqcddb constant/gamma_matrix.py.
 """
 
 import numpy as np
-from ..tools._backend import get_backend
+from ..tools._backend import get_backend, get_backend_name
+from ..tools._torch_backend import complex_dtype
 
 # ── Define gamma matrices in numpy (constant, never changes) ────────
 
@@ -122,7 +123,11 @@ def gamma(i: int):
     backend = get_backend()
     if i not in _GAMMA_CACHE:
         raise ValueError(f"Invalid gamma index {i}. Must be 0..17.")
-    return backend.asarray(_GAMMA_CACHE[i])
+    t = backend.asarray(_GAMMA_CACHE[i])
+    if get_backend_name() == 'torch' and t.dtype.is_complex \
+            and t.dtype != complex_dtype():
+        t = t.to(complex_dtype())   # 跟随全局复数精度（与数据数组混合不报 dtype 错）
+    return t
 
 
 # ── Gamma properties: transpose sign for each gamma ─────────────────
