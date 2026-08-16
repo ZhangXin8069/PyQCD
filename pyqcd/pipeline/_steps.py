@@ -30,8 +30,13 @@ from datetime import datetime
 
 import numpy as np
 
-from ..tools import set_backend, get_backend
-from ..tools._io import readin_eigvecs_gpu, readin_peram_time_slice
+from ..tools import (
+    set_backend, get_backend, get_backend_name, set_precision,
+)
+from ..tools._io import (
+    readin_eigvecs_gpu, readin_peram_time_slice,
+    save_tensor_h5, load_tensor_h5,
+)
 from ..lattice import gamma
 from ..vertex import phase_exp_2pt, phase_exp_3pt, Mom_VdV_sink_t
 from ..contraction import (
@@ -99,11 +104,28 @@ def _timer(name, logger, fn, *args, **kw):
 
 
 def free_gpu_memory():
+    """释放 GPU 内存（cupy 内存池 / torch 缓存，按当前后端）。"""
+    if get_backend_name() == 'torch':
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
     if HAS_CUPY:
         _cp.get_default_memory_pool().free_all_blocks()
 
 
 def log_gpu_memory(logger, label: str = ''):
+    if get_backend_name() == 'torch':
+        try:
+            import torch
+            if torch.cuda.is_available():
+                free, total = torch.cuda.mem_get_info()
+                _info(logger, f"GPU memory{label}: used={(total - free)/2**20:.0f} MB, "
+                              f"free={free/2**20:.0f} MB, total={total/2**20:.0f} MB")
+                return
+        except Exception:
+            pass
     if HAS_CUPY:
         total, used = _cp.cuda.runtime.memGetInfo()
         _info(logger, f"GPU memory{label}: used={(total - used)/2**20:.0f} MB, "
@@ -113,15 +135,33 @@ def log_gpu_memory(logger, label: str = ''):
 
 
 def save_array(filepath, arr, logger=None):
-    """保存数组（GPU → CPU 转换后 .npy）。"""
-    b = get_backend()
-    asnumpy = getattr(b, 'asnumpy', None)
-    arr_np = asnumpy(arr) if asnumpy is not None else np.asarray(arr)
+    """保存数组（GPU → CPU 转换后 .h5；h5py 为唯一读写工具）。
+
+    兼容旧调用：传入 .npy 路径时自动改存 .h5；旧 .npy 产物的
+    读取由 ``_load_any`` 回退支持。
+    """
+    if filepath.endswith('.npy'):
+        filepath = filepath[:-4] + '.h5'
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    np.save(filepath, arr_np)
+    save_tensor_h5(arr, filepath)
+    arr_np = arr.get() if hasattr(arr, 'get') else np.asarray(arr)
     _info(logger, f"Saved {os.path.basename(filepath)} "
-                  f"shape={arr_np.shape} dtype={arr_np.dtype} "
+                  f"shape={np.shape(arr)} dtype={getattr(arr_np, 'dtype', '?')} "
                   f"({os.path.getsize(filepath)/1024:.1f} KB)")
+
+
+def _load_any(path_without_ext, dataset='data'):
+    """读取数组：优先 .h5（新格式），回退 .npy/.npz（旧产物兼容）。"""
+    h5p = path_without_ext + '.h5'
+    if os.path.exists(h5p):
+        return load_tensor_h5(h5p, dataset=dataset)
+    for ext, ds in (('.npy', None), ('.npz', 'ops')):
+        p = path_without_ext + ext
+        if os.path.exists(p):
+            if ext == '.npy':
+                return np.load(p)
+            return np.load(p)[ds]
+    raise FileNotFoundError(f"no data file for {path_without_ext}")
 
 
 def conf_data_dir(run_dir, conf_id):
@@ -169,6 +209,8 @@ def compute_vertices_for_config(conf_id, run_dir, logger,
                                 precision='complex64', recompute=False):
     """一个组态的 VdV/VVV（缓存命中则直接读取）。"""
     backend = get_backend()
+    if get_backend_name() == 'torch':
+        set_precision(precision)
     dtype = np.complex64 if precision == 'complex64' else np.complex128
 
     cdir = conf_data_dir(run_dir, conf_id)
@@ -230,7 +272,8 @@ def compute_vertices_for_config(conf_id, run_dir, logger,
 
 
 def step_vertex(config, run_dir, logger):
-    set_backend('cupy')
+    set_backend(config.get('backend', 'cupy'),
+                device=config.get('device'))
     for cid in config['conf_ids']:
         _timer(f"  Vertices conf={cid}", logger,
                compute_vertices_for_config, cid, run_dir, logger,
@@ -292,6 +335,8 @@ def _run_2pt(backend, sink_op, src_op, peram_t, peram_seq_t,
 def compute_2pt_for_config(conf_id, run_dir, logger, vertices,
                            precision=PRECISION, channels=('pp', 'pn', 'pion')):
     backend = get_backend()
+    if get_backend_name() == 'torch':
+        set_precision(precision)
     dtype = np.complex64 if precision == 'complex64' else np.complex128
     cdir = conf_data_dir(run_dir, conf_id)
 
@@ -357,7 +402,8 @@ def compute_2pt_for_config(conf_id, run_dir, logger, vertices,
 
 
 def step_2pt(config, run_dir, logger):
-    set_backend('cupy')
+    set_backend(config.get('backend', 'cupy'),
+                device=config.get('device'))
     for cid in config['conf_ids']:
         _info(logger, f"\n─── 2pt: conf {cid} ───")
         verts = _load_vertices_one(run_dir, cid)
@@ -383,6 +429,8 @@ def _run_3pt(backend, sink_op, src_op, curr_op, PR, VR, GR, Vindex, Gindex):
 def compute_3pt_for_config(conf_id, run_dir, logger, vertices,
                            precision=PRECISION, t_sep=T_SEP):
     backend = get_backend()
+    if get_backend_name() == 'torch':
+        set_precision(precision)
     dtype = np.complex64 if precision == 'complex64' else np.complex128
     cdir = conf_data_dir(run_dir, conf_id)
     Ntau = t_sep + 1
@@ -480,7 +528,8 @@ def compute_3pt_for_config(conf_id, run_dir, logger, vertices,
 
 
 def step_3pt(config, run_dir, logger):
-    set_backend('cupy')
+    set_backend(config.get('backend', 'cupy'),
+                device=config.get('device'))
     for cid in config['conf_ids']:
         _info(logger, f"\n─── 3pt PJN: conf {cid} ───")
         verts = _load_vertices_one(run_dir, cid)
@@ -496,6 +545,8 @@ def compute_4pt_for_config(conf_id, run_dir, logger, vertices,
                            nev1=FOURPT_NEV1, momenta=FOURPT_MOM,
                            src_step=FOURPT_SRC_STEP):
     backend = get_backend()
+    if get_backend_name() == 'torch':
+        set_precision(precision)
     dtype = np.complex64 if precision == 'complex64' else np.complex128
     cdir = conf_data_dir(run_dir, conf_id)
     Ntau = t_sep + 1
@@ -596,7 +647,8 @@ def compute_4pt_for_config(conf_id, run_dir, logger, vertices,
 
 
 def step_4pt(config, run_dir, logger):
-    set_backend('cupy')
+    set_backend(config.get('backend', 'cupy'),
+                device=config.get('device'))
     for cid in config['conf_ids']:
         _info(logger, f"\n─── 4pt PJNNJNp: conf {cid} ───")
         verts = _load_vertices_one(run_dir, cid)
@@ -640,17 +692,20 @@ def _validate_gauge(gauge, logger):
 def compute_ope_for_config(conf_id, run_dir, logger, precision='complex64',
                            delta_z=DELTA_Z, z_dir=Z_DIR,
                            components=OPE_COMPONENTS, recompute=False):
-    if not HAS_CUPY:
-        raise RuntimeError("OPE requires a CUDA GPU (cupy)")
+    if not HAS_CUPY and get_backend_name() != 'torch':
+        raise RuntimeError("OPE requires a GPU backend (torch/cupy)")
 
+    if get_backend_name() == 'torch':
+        set_precision(precision)
     dtype = np.complex64 if precision == 'complex64' else np.complex128
     cdir = conf_data_dir(run_dir, conf_id)
-    paths = {c: os.path.join(cdir, f'ops_mu{c[0]}_nu{c[1]}_dz{delta_z}_conf{conf_id}.npz')
+    paths = {c: os.path.join(cdir, f'ops_mu{c[0]}_nu{c[1]}_dz{delta_z}_conf{conf_id}')
              for c in components}
 
-    if all(os.path.exists(p) for p in paths.values()) and not recompute:
+    if all(any(os.path.exists(p + e) for e in ('.h5', '.npz'))
+           for p in paths.values()) and not recompute:
         _info(logger, f"  conf={conf_id}: loading cached OPE components")
-        ops = {c: np.load(paths[c])['ops'] for c in components}
+        ops = {c: _load_any(p, dataset='ops') for c, p in paths.items()}
         combined = -ops[(3, 0)] - ops[(3, 1)] + 2.0 * ops[(0, 1)]
         return {'components': ops, 'combined': combined}
 
@@ -661,7 +716,6 @@ def compute_ope_for_config(conf_id, run_dir, logger, precision='complex64',
     gauge_cpu, _t = _timer(f"  read gauge conf={conf_id}", logger,
                            read_gauge_lime, gauge_file, NT, NX)
     _validate_gauge(gauge_cpu, logger)
-    set_backend('cupy')
     backend = get_backend()
     gauge_gpu = backend.asarray(gauge_cpu.astype(dtype))
     del gauge_cpu
@@ -672,9 +726,7 @@ def compute_ope_for_config(conf_id, run_dir, logger, precision='complex64',
                         gluon_ope_operator_z0, gauge_gpu, mu, nu, z_dir,
                         delta_z, NT, NX, dtype)
         ops[(mu, nu)] = o
-        np.savez(paths[(mu, nu)], ops=o, mu=np.array(mu), nu=np.array(nu),
-                 delta_z=np.array(delta_z), conf_id=np.array(conf_id),
-                 shape=np.array(o.shape))
+        save_tensor_h5(o, paths[(mu, nu)])
         _info(logger, f"    saved ops_mu{mu}_nu{nu}: shape={o.shape}, "
                       f"|O|∈[{np.abs(o).min():.2e},{np.abs(o).max():.2e}]")
 
@@ -688,6 +740,7 @@ def compute_ope_for_config(conf_id, run_dir, logger, precision='complex64',
 
 
 def step_ope(config, run_dir, logger):
+    set_backend(config.get('backend', 'cupy'), device=config.get('device'))
     for cid in config['conf_ids']:
         _info(logger, f"\n─── OPE: conf {cid} ───")
         compute_ope_for_config(cid, run_dir, logger, config['precision'])
@@ -700,8 +753,8 @@ def step_ope(config, run_dir, logger):
 def _load_vertices_one(run_dir, cid):
     cdir = conf_data_dir(run_dir, cid)
     return {
-        'VdV': np.load(os.path.join(cdir, f'VdV_mom_{cid}.npy')),
-        'VVV': np.load(os.path.join(cdir, f'VVV_mom_{cid}.npy')),
+        'VdV': _load_any(os.path.join(cdir, f'VdV_mom_{cid}')),
+        'VVV': _load_any(os.path.join(cdir, f'VVV_mom_{cid}')),
     }
 
 
@@ -717,9 +770,10 @@ def load_2pt(run_dir, logger=None):
         cdir = os.path.join(data_dir, name)
         entry = {}
         for f in os.listdir(cdir):
-            if f.startswith('corr_') and f.endswith('.npy'):
-                key = f[5:].replace(f'_{cid}.npy', '')
-                entry[f'corr_{key}'] = np.load(os.path.join(cdir, f))
+            if f.startswith('corr_') and (f.endswith('.h5') or f.endswith('.npy')):
+                base = f[:-3] if f.endswith('.h5') else f[:-4]
+                key = base[5:].replace(f'_{cid}', '')
+                entry[f'corr_{key}'] = _load_any(os.path.join(cdir, base))
         if entry:
             corr[int(cid)] = entry
     _info(logger, f"Loaded 2pt correlators for {len(corr)} configs")
@@ -738,9 +792,11 @@ def load_3pt(run_dir, logger=None):
         cdir = os.path.join(data_dir, name)
         entry = {}
         for f in os.listdir(cdir):
-            if '_3pt_' in f and f.endswith('.npy') and 'pjnnjnp' not in f:
-                key = f[:-4].replace(f'_{cid}', '')
-                entry[key] = np.load(os.path.join(cdir, f))
+            if '_3pt_' in f and (f.endswith('.h5') or f.endswith('.npy')) \
+                    and 'pjnnjnp' not in f:
+                base = f[:-3] if f.endswith('.h5') else f[:-4]
+                key = base.replace(f'_{cid}', '')
+                entry[key] = _load_any(os.path.join(cdir, base))
         if entry:
             corr[int(cid)] = entry
     if corr:
@@ -758,9 +814,9 @@ def load_ope(run_dir, logger=None):
             continue
         cid = name[4:]
         cdir = os.path.join(data_dir, name)
-        comb = os.path.join(cdir, f'ope_combined_conf{cid}.npy')
-        if os.path.exists(comb):
-            ope[int(cid)] = {'combined': np.load(comb)}
+        comb = os.path.join(cdir, f'ope_combined_conf{cid}')
+        if os.path.exists(comb + '.h5') or os.path.exists(comb + '.npy'):
+            ope[int(cid)] = {'combined': _load_any(comb)}
     if ope:
         _info(logger, f"Loaded combined OPE for {len(ope)} configs")
     return ope
@@ -1348,9 +1404,11 @@ def run_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
                  conf_ids=None, run_dir=None, logger=print,
                  precision=PRECISION, nev1=None, channels=('pp', 'pn', 'pion'),
                  fourpt_nev1=None, fourpt_tsep=None, fourpt_mom=None,
-                 fourpt_src_step=None, t_sep=None, skip_missing=False):
+                 fourpt_src_step=None, t_sep=None, skip_missing=False,
+                 backend='cupy', device=None):
     """9 步管线调度（pyqcd 自包含实现，与 docker-v20260805 输出一致）。
 
+    backend: 'cupy'（默认，旧行为）或 'torch'（PyTorch，device='cuda' 走 GPU）。
     返回 dict: {'run_dir', 'timing', 'summary', 'meff', 'ratio_conn'}
     """
     conf_ids = list(conf_ids or CONF_IDS)
@@ -1359,6 +1417,8 @@ def run_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
         'Nev1': min(nev1, NEV) if nev1 else NEV1,
         'channels': tuple(channels),
         'conf_ids': conf_ids,
+        'backend': backend,
+        'device': device,
     }
     if fourpt_nev1:
         config['fourpt_nev1'] = fourpt_nev1

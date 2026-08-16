@@ -7,9 +7,11 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（17 项：γ基/Z_R/梯度流/TMD算符/匹配/混合/提取链/标度/HYP/τ极限/比值拟合/HYP-流一致/后端一致/端到端meff/求和规则/核心链/TMD-NLO匹配）
+python examples/pyqcd/conftest.py    # 全量测试（18 项：γ基/Z_R/梯度流/TMD算符/匹配/混合/提取链/标度/HYP/τ极限/比值拟合/HYP-流一致/后端一致/torch后端一致/端到端meff/求和规则/核心链/TMD-NLO匹配）
 python examples/pyqcd/verify_consistency.py   # 一致性验证（vs docker-v20260805 输出，A–E 全 0 差异）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
+python -m pyqcd.parallel --dry-run --confs 6250,6450   # MPI 并行规划预览（用户公式 N*a=n*b）
+mpirun -np N python -m pyqcd.parallel --confs ...      # MPI 元任务并行管线（N 由 plan_parallel 给出）
 bash logs/test0/run-local.sh        # ana_3dir 三方向差异分析+作图测试（test12 风格，17 项断言）
 bash logs/test0_ratio/run-local.sh  # 02_ratio 3pt/2pt 比值+拟合+图测试（18 项断言）
 bash logs/test0_anaratio/run-local.sh  # 03_ana_ratio 纯画图测试（25 项断言）
@@ -27,13 +29,29 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 
 | 目录 | 内容 |
 |---|---|
-| `pyqcd/` | 主包（lattice/tools/vertex/contraction/operator/analysis/renorm/pipeline/testing） |
+| `pyqcd/` | 主包（lattice/tools/vertex/contraction/operator/analysis/renorm/pipeline/testing/parallel） |
 | `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 |
-| `docs/` | 51 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） |
+| `docs/` | 52 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文）+ analy 报告 |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books）+ `git-rep/` 外来参考仓库（quda/PyQUDA/lamet-agent/EasyDistillation/LQCD_Master，只读、其 AGENTS.md 已归档） |
 | `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 + test6/ pyqcd 独立复现套件（.ref_run/ 存 refer 实跑真值，verify_04_repro.py 数值比对）+ test7/ 服务器正式工作版（100 组态，GPU V100，env.sh 启动，输入检查机制 + 实时进度日志） |
 | `cpp/` | C++ 后端占位 |
 | `.opencode/skills/` | 归集的 LQCD_Master 上游技能（lqcd-analysis 等 5 个，原位置保留） |
+
+## torch 后端 + h5 IO + MPI 并行（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
+
+- 后端：`set_backend('torch')`（别名 gpu/cuda）全面替换 numpy/cupy；numpy/cupy 输入自动转
+  torch（复数遵循全局精度）；`set_precision('complex64'|'complex128')` 精度切换；
+  `get_backend()` 返回 numpy-like 适配层（einsum/roll(axis=)/transpose 任意轴/take(axis=)/
+  linalg 等已包装）；torch.Tensor 补丁 transpose/astype/.T/repeat(axis=)/get/二元运算。
+- IO：管线产物一律 h5py 读写（`save_tensor_h5`/`load_tensor_h5`，numpy/torch/cupy 通用），
+  读取层 `_load_any` 优先 .h5、回退 .npy/.npz（旧产物兼容）。
+- 并行：`pyqcd.parallel.plan_parallel` 按用户公式 N*a=n*b（a=单元任务显存、b=单卡可用显存
+  80%、n=GPU 数）给出进程数 N、批次 X=m/N、每卡进程 Y=N/n；`run_parallel_pipeline` 元任务
+  （step,conf）round-robin 调度 + GPU 绑定（rank mod n）+ 每任务后自动释放
+  （empty_cache+gc）；analysis/plots/report 仅 rank 0（分析作图不并行）。
+- 实测：torch CPU 梯度流 2.7–4.8x（vs numpy，逐位一致 max|d|~1e-15）；CPU 自动 8 线程
+  （16 线程过并行慢 40%）；vertex conf6250 GPU 36s（峰值 176MB）、2pt 337s（峰值 570MB）；
+  本机 1 卡+内存紧张时公式自动收敛 N=1。
 
 ## 蒸馏管线一致性测试（examples/test0）
 
@@ -97,7 +115,7 @@ P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）
 ## 关键约定
 
 - 张量布局：gauge `(Nt,Nz,Ny,Nx,4,3,3)`；γ 矩阵 DeGrand-Rossi 基。
-- 后端：numpy/cupy 切换（`pyqcd.tools.set_backend`）。
+- 后端：numpy/cupy/torch 三后端（`pyqcd.tools.set_backend`；torch 详见上文小节）。
 - 编译：docs 与 logs 的 tex 一律 xelatex（中文）；`\quad` 后跟中文需空格。
 - 测试：无 pytest 框架依赖，examples/pyqcd/conftest.py 直接运行。
 - refer/ 只读参考：pyqcd 逻辑照抄但不 import。

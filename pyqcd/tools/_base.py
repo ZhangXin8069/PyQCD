@@ -72,12 +72,15 @@ def cached_contract(einsum_str: str, *tensors, optimize='auto'):
     in the Wick engine. Falls back to ``backend.einsum`` if opt_einsum is
     unavailable.
 
+    torch tensors (torch backend) bypass opt_einsum and use
+    ``torch.einsum`` directly (torch's own path optimizer applies).
+
     Parameters
     ----------
     einsum_str : str
         Einstein summation subscript string, e.g. ``'ab,bc->ac'``.
     *tensors : ndarray
-        Input arrays (numpy or cupy). Shapes, not values, form the key.
+        Input arrays (numpy, cupy or torch). Shapes, not values, form the key.
     optimize : str, bool, or list of str
         Path-optimization strategy. ``True`` tries a preset list and keeps
         the cheapest path.
@@ -91,6 +94,10 @@ def cached_contract(einsum_str: str, *tensors, optimize='auto'):
 
     backend = get_backend()
     shapes = tuple(t.shape for t in tensors)
+
+    # ── torch path: torch.einsum handles path optimization itself ──
+    if any(type(t).__module__.startswith('torch') for t in tensors):
+        return backend.einsum(einsum_str, *tensors)
 
     # ── Parse optimize → cache key (hot path: only builds the key) ──
     if isinstance(optimize, str):

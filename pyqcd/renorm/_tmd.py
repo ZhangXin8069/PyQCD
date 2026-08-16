@@ -34,12 +34,12 @@ import numpy as np
 
 from ..tools._backend import get_backend
 
-_asnumpy = getattr(get_backend(), 'asnumpy', None)
-
 
 def _to_cpu(x):
-    if _asnumpy is not None:
-        return _asnumpy(x)
+    """后端无关的 GPU→CPU 转换（运行时取后端，兼容 numpy/cupy/torch）。"""
+    asnumpy = getattr(get_backend(), 'asnumpy', None)
+    if asnumpy is not None:
+        return asnumpy(x)
     return np.asarray(x)
 from ..operator._gluon_ope import plaquette_clover, compute_dual_field_strength
 from ._gradient_flow import wilson_flow

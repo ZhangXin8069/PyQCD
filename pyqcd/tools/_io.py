@@ -6,6 +6,8 @@ Functions for reading lattice QCD binary data files:
 - ``readin_eigvecs``: Read Laplacian eigenvectors (binary float64 format)
 - ``readin_peram``: Read perambulator (propagator) data (binary float64 format)
 - ``safe_save``: Save numpy arrays with fallback paths
+- ``save_tensor_h5`` / ``load_tensor_h5``: h5py-based tensor persistence
+  (the canonical read/write tool; accepts numpy, cupy and torch arrays)
 
 Adapted from lqcddb io/write_date.py.
 
@@ -21,6 +23,8 @@ Binary Format Conventions
 import numpy as np
 import os
 from typing import Optional
+
+import h5py
 
 
 def readin_eigvecs(file_path: str, Nx: int):
@@ -60,7 +64,9 @@ def readin_eigvecs(file_path: str, Nx: int):
 def readin_eigvecs_gpu(file_path: str, Nx: int, Nev_use: int = None):
     """Read eigenvectors directly to GPU memory.
 
-    Same as ``readin_eigvecs`` but returns a cupy array.
+    Returns the array in the active backend: cupy when the backend is
+    'cupy', a torch tensor (on CUDA when available) when the backend is
+    'torch', else a numpy array.
     Requires cupy to be installed and the backend to be set to 'cupy'.
 
     Parameters
@@ -75,22 +81,33 @@ def readin_eigvecs_gpu(file_path: str, Nx: int, Nev_use: int = None):
 
     Returns
     -------
-    cupy.ndarray, shape (Nev_use, Nx*Nx*Nx, 3), dtype complex128
+    ndarray, shape (Nev_use, Nx*Nx*Nx, 3), dtype complex128
         Eigenvectors on GPU.
     """
-    import cupy as cp
+    from ._backend import get_backend_name, get_torch_device
 
-    with open(file_path, 'rb') as f:
-        eigvecs = np.fromfile(f, dtype='f8')
+    backend_name = get_backend_name()
+    if backend_name == 'torch':
+        return readin_eigvecs_tensor(
+            file_path, Nx, Nev_use, backend='torch',
+            device=get_torch_device())
+    if backend_name == 'cupy':
+        import cupy as cp
 
-    Nev_full = int(eigvecs.size / (Nx * Nx * Nx * 3 * 2))
-    eigvecs = eigvecs.reshape(Nev_full, Nx * Nx * Nx, 3, 2)
-    eigvecs = eigvecs[..., 0] + eigvecs[..., 1] * 1j
+        with open(file_path, 'rb') as f:
+            eigvecs = np.fromfile(f, dtype='f8')
 
-    if Nev_use is not None and Nev_use < Nev_full:
-        eigvecs = eigvecs[:Nev_use]
+        Nev_full = int(eigvecs.size / (Nx * Nx * Nx * 3 * 2))
+        eigvecs = eigvecs.reshape(Nev_full, Nx * Nx * Nx, 3, 2)
+        eigvecs = eigvecs[..., 0] + eigvecs[..., 1] * 1j
 
-    return cp.asarray(eigvecs)
+        if Nev_use is not None and Nev_use < Nev_full:
+            eigvecs = eigvecs[:Nev_use]
+
+        return cp.asarray(eigvecs)
+
+    return readin_eigvecs(file_path, Nx)[:Nev_use] if Nev_use is not None \
+        else readin_eigvecs(file_path, Nx)
 
 
 def readin_peram(peram_dir: str, conf_id: str, Nt: int,
@@ -309,3 +326,109 @@ def check_dir_path(save_path: str):
     if not path.exists():
         path.mkdir(parents=True, exist_ok=True)
         print(f'mkdir_save_path: {save_path}')
+
+
+# ═══════════════════════════════════════════════════════════════════
+# h5py tensor persistence (canonical read/write tool)
+# ═══════════════════════════════════════════════════════════════════
+
+def _to_numpy(arr):
+    """Convert torch/cupy arrays to numpy (CPU) for h5py storage."""
+    if hasattr(arr, 'detach'):          # torch.Tensor
+        return arr.detach().cpu().numpy()
+    if hasattr(arr, 'get'):             # cupy.ndarray
+        return arr.get()
+    return arr
+
+
+def save_tensor_h5(arr, file_path: str, dataset: str = 'data',
+                   verbose: bool = False):
+    """Save an array/tensor (numpy, cupy or torch) to an HDF5 file via h5py.
+
+    Each call opens its own file handle (with statement) so concurrent
+    calls from multiple MPI ranks / threads are safe.
+
+    Parameters
+    ----------
+    arr : ndarray or torch.Tensor
+        Array to persist. numpy dtypes are stored verbatim; torch complex
+        dtypes map to the matching numpy complex dtype.
+    file_path : str
+        Target HDF5 file path (``.h5`` appended if missing).
+    dataset : str
+        Dataset name inside the file (default ``'data'``).
+    """
+    file_path = str(file_path)
+    if not file_path.endswith('.h5'):
+        file_path = file_path + '.h5'
+    os.makedirs(os.path.dirname(file_path) or '.', exist_ok=True)
+    arr_np = _to_numpy(arr)
+    with h5py.File(file_path, 'w') as f:
+        f.create_dataset(dataset, data=arr_np)
+    if verbose:
+        print(f"save_tensor_h5: {np.shape(arr)} {getattr(arr_np, 'dtype', '?')} "
+              f"-> {file_path} (dataset='{dataset}')")
+
+
+def load_tensor_h5(file_path: str, dataset: str = 'data',
+                   backend='numpy', device=None, verbose: bool = False):
+    """Load a tensor from an HDF5 file (h5py).
+
+    Parameters
+    ----------
+    file_path : str
+        HDF5 file path.
+    dataset : str
+        Dataset name (default ``'data'``).
+    backend : str
+        Return type: ``'numpy'`` (default) or ``'torch'`` (tensor on
+        ``device``, default CPU).
+    device : optional
+        Target device for the torch backend.
+    verbose : bool
+
+    Returns
+    -------
+    ndarray or torch.Tensor
+        The stored array.
+    """
+    file_path = str(file_path)
+    if not file_path.endswith('.h5'):
+        file_path = file_path + '.h5'
+    with h5py.File(file_path, 'r') as f:
+        arr = f[dataset][...]
+    if backend == 'torch':
+        import torch
+        t = torch.from_numpy(arr)
+        if device is not None:
+            t = t.to(device)
+        if verbose:
+            print(f"load_tensor_h5: {arr.shape} {arr.dtype} "
+                  f"<- {file_path} (torch, device={device})")
+        return t
+    if verbose:
+        print(f"load_tensor_h5: {arr.shape} {arr.dtype} <- {file_path}")
+    return arr
+
+
+def readin_eigvecs_tensor(file_path: str, Nx: int, Nev_use=None,
+                          backend='numpy', device=None):
+    """Read Laplacian eigenvectors into the requested backend array.
+
+    Like ``readin_eigvecs_gpu`` but backend-agnostic: returns a torch
+    tensor (on ``device``) when backend='torch', a cupy array when
+    backend='cupy', else a numpy array.
+    """
+    eigvecs = readin_eigvecs(file_path, Nx)
+    if Nev_use is not None and Nev_use < eigvecs.shape[0]:
+        eigvecs = eigvecs[:Nev_use]
+    if backend == 'torch':
+        import torch
+        t = torch.from_numpy(eigvecs)
+        if device is not None:
+            t = t.to(device)
+        return t
+    if backend == 'cupy':
+        import cupy as cp
+        return cp.asarray(eigvecs)
+    return eigvecs
