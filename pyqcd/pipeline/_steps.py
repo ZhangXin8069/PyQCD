@@ -344,8 +344,9 @@ def compute_2pt_for_config(conf_id, run_dir, logger, vertices,
         if t_src % 12 == 0 or t_src == NT - 1:
             _info(logger, f"    t_src={t_src:3d}/{NT} "
                           f"elapsed={time.perf_counter()-t_start:.0f}s "
-                          f"pp0={acc['corr_pp_P0'][0]:.4e} "
-                          f"pi0={acc['corr_pion_P0'][0]:.4e}")
+                          + " ".join(
+                              f"{ch}0={acc[f'corr_{ch}_P0'][0]:.4e}"
+                              for ch in channels))
         del peram_t, peram_seq_t
 
     for key, arr in acc.items():

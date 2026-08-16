@@ -37,6 +37,13 @@ GPU_LINE=$(nvidia-smi --query-gpu=name,memory.total,driver_version \
                       --format=csv,noheader 2>/dev/null | head -1)
 echo "[gpu] ${GPU_LINE:-nvidia-smi 不可用（无 GPU 或未加载驱动）}"
 
+# 数据源提示（正式数据源 /public/group/lqcd：本地 10 组态 / 服务器 100+ 组态）
+if [ -n "${test7_BASELINE:-}" ] || [ -n "${TEST7_BASELINE:-}" ]; then
+  echo "[env] 数据源: ${test7_BASELINE:-$TEST7_BASELINE}"
+else
+  echo "[env] 数据源: 正式数据源 /public/group/lqcd（本地与服务器路径一致）"
+fi
+
 # --server：nohup 后台运行（正式跑；日志实时落盘，tail -f 调控）
 if [ "${1:-}" = "--server" ]; then
   nohup bash "$0" --inner >"$WORK/run-server-$TS.log" 2>&1 &
@@ -67,8 +74,8 @@ echo "版本目录: $VDIR"
 step "Step 0: 环境自检（含 GPU 探测 + 数据源 100 组态预检）"
 run 180 python "$MAIN" env
 
-step "Step 1: 检查 + 整理真实数据（100 组态，输入数据检查机制）"
-run 1800 python "$MAIN" makedata --outdir "$DATA_DIR"
+step "Step 1: 检查 + 自行计算 corr/ops + 整理（收缩管线：单组态约 20 分钟，10 组态约 3h，100 组态数小时至 1 天+）"
+run "${test7_MAKEDATA_TIMEOUT:-172800}" python "$MAIN" makedata --outdir "$DATA_DIR"
 
 step "Step 2: 全功能实战（02_ratio→03_ana_ratio→04_energy(P2/P0)→06_fh→05_ana3dir）"
 run 28800 python "$MAIN" run --data-root "$DATA_DIR" --outdir "$VDIR"
