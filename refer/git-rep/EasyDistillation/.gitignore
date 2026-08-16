@@ -10,6 +10,6 @@ logs
 *.tmp
 *.svg
 *.png
-*.pdf
+# *.pdf
 venv
 .venv
