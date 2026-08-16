@@ -44,7 +44,7 @@ lextab.py
 *.log
 *.svg
 *.png
-*.pdf
+# *.pdf
 data
 
 # Chroma files
