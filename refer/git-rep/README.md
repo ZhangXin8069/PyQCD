@@ -1,4 +1,3 @@
-# https://github.com/lattice/quda
 # https://github.com/CLQCD/PyQUDA
 # https://github.com/Greyyy-HJC/lamet-agent
 # https://github.com/IHEP-LQCD/EasyDistillation
