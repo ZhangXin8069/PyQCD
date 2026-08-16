@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """test7 —— pyqcd 全功能真实数据实战套件（服务器正式工作版，test12 风格单文件）。
 
-输入：docker 基线输出（路径形式不变：<BASELINE>/data/conf<cid>/{corr_pp_P{0,2},
-ops_mu*/nu*_dz24}），正式版组态 100 个（6250 起、间隔 200 → 6250..26050）；
+输入：正式数据源 `/public/group/lqcd/`（本地与服务器路径一致：本地 10 组态、
+服务器 100+ 组态；eigensystem/perambulators/configurations 三类原始数据，
+路径形式与 docker-v20260805/config.py 的 BASE_*_DIR 一致），SRC 由
+`--baseline` / `$test7_BASELINE` 覆盖；分析链输入 corr_pp/ops 由 makedata
+经 pyqcd 收缩管线**自行计算**（与 docker-v20260805 数值一致，test0 已验证
+237/237、conf6250 逐位 rel=0），组态默认扫描数据源实际数量；
+
 输入数据带检查机制（目录/文件存在性、形状、有限性，全部通过才继续）。
 实测全部分析功能链：02_ratio → 03_ana_ratio → 04_proton_energy →
 06_FH_bare_matele → 05_ana_3dir（独立实现，真实 ratio/corr2 驱动，
@@ -16,7 +21,7 @@ ops_mu*/nu*_dz24}），正式版组态 100 个（6250 起、间隔 200 → 6250.
 - 实时进度日志：所有输出带时间戳 + flush，步骤/组态级进度 + ETA，
   run-local.sh tee 落盘（--server 后台 nohup 模式），便于实时调控。
 
-数据适配（makedata）：docker 基线 corr_pp_P2 (Nt,) → huangcl 契约
+数据适配（makedata）：pyqcd 收缩管线计算的 corr_pp_P2 (Nt,) → huangcl 契约
 (Nt,Nt) 平移不变切片矩阵；ops_*.npz 原样（组合 −O30−O31+2·O01 已验证
 ≡ ope_combined）。整理到 input/ 后 pyqcd 各功能直接按参考布局读取。
 
@@ -46,8 +51,37 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, ROOT)
 
 WORKDIR = os.path.dirname(os.path.abspath(__file__))
-BASELINE = os.path.join(ROOT, 'examples', 'docker-v20260805', 'output',
-                        'output_20260802_120104')
+# 正式数据源（本地与服务器路径一致：本地 10 组态 / 服务器 100+ 组态）。
+# 布局（与 docker-v20260805/config.py 的 BASE_*_DIR 一致）：
+#   eigensystem/{ens}/{conf_id}/          eigvecs_t{t:03d}_{conf_id}  × Nt
+#   perambulators/{ens}/light/{conf_id}/  perams.{conf_id}.{d}.{t}    （d=0..3, t=0..Nt-1）
+#   configurations/CLOVER/{ens}/          {ens}_cfg_{conf_id}.lime
+DEFAULT_BASELINE = '/public/group/lqcd'
+
+
+def resolve_baseline(explicit=None):
+    """数据源目录解析（正式工作版）：--baseline > $test7_BASELINE >
+    $TEST7_BASELINE > 默认正式数据源 /public/group/lqcd（本地与服务器一致）。
+
+    正式工作不依赖测试基线；docker 基线仅可经 --baseline 显式指定用于本地回归。
+    """
+    if explicit:
+        return os.path.abspath(explicit)
+    for k in ('test7_BASELINE', 'TEST7_BASELINE'):
+        v = os.environ.get(k)
+        if v:
+            return os.path.abspath(v)
+    return DEFAULT_BASELINE
+
+
+def discover_conf_ids(src, ens):
+    """扫描数据源 eigensystem 目录得到实际组态号列表（本地 10 / 服务器 100+）。"""
+    d = os.path.join(src, 'eigensystem', ens)
+    if not os.path.isdir(d):
+        return []
+    return sorted(int(x) for x in os.listdir(d) if x.isdigit())
+
+
 # 正式版组态：起始组态号不变（6250），数量 100，编号间隔 200（docker 基线同形式）。
 CONF_START = 6250
 CONF_STEP = 200
@@ -209,38 +243,108 @@ def cmd_env(args):
     smi = ginfo['nvidia_smi'] or 'nvidia-smi 不可用'
     print(f"  [{'OK' if gpu_ok else 'WARN'}] GPU: {dev} {mem}GB | {smi}")
 
-    # 数据源：基线目录 + 正式版 100 组态预检（路径形式不变）
-    base_ok = os.path.isdir(BASELINE)
-    print(f"  [{'OK' if base_ok else 'MISSING'}] 基线输出目录: {BASELINE}")
-    n_found = 0
+    # 数据源：正式数据源 /public/group/lqcd（本地 10 组态 / 服务器 100+ 组态，
+    # 路径一致；--baseline/$test7_BASELINE 可覆盖）
+    baseline = resolve_baseline(args.baseline)
+    base_ok = os.path.isdir(baseline)
+    print(f"  [{'OK' if base_ok else 'MISSING'}] 数据源目录: {baseline}")
+    data_ok = False
     if base_ok:
-        n_found = sum(1 for cid in CONF_IDS
-                      if os.path.isdir(os.path.join(BASELINE, 'data', f'conf{cid}')))
-    data_ok = base_ok and n_found == len(CONF_IDS)
-    print(f"  [{'OK' if data_ok else 'MISSING'}] 组态数据 {n_found}/{len(CONF_IDS)}"
-          f"（正式版要求 {len(CONF_IDS)} 组态齐全: {CONF_IDS[0]}.."
-          f"{CONF_IDS[-1]} 间隔 {CONF_STEP}）")
+        conf_ids = discover_conf_ids(baseline, SYNTH['conf_name'])
+        n_ok, bad = check_lqcd_data(conf_ids, SYNTH, baseline, verbose=False)
+        data_ok = len(conf_ids) > 0 and n_ok == len(conf_ids)
+        print(f"  [{'OK' if data_ok else 'MISSING'}] 组态数据 {n_ok}/{len(conf_ids)}"
+              f"（数据源实际组态: {conf_ids[0] if conf_ids else '无'}.."
+              f"{conf_ids[-1] if conf_ids else ''}；本地 10 / 服务器 100+）")
+        for b in bad[:8]:
+            print(f"    [BAD] {b}")
+        if len(bad) > 8:
+            print(f"    ... 其余 {len(bad) - 8} 项略")
+        corr_ok = all(
+            os.path.isdir(os.path.join(baseline, 'data', f'conf{cid}'))
+            for cid in conf_ids)
+        print(f"  [{'OK' if corr_ok else 'WARN'}] 分析链输入 corr/ops"
+              f"（<SRC>/data/conf<cid>/）: "
+              f"{'存在' if corr_ok else '缺失（makedata 将经 pyqcd 收缩管线自行计算）'}")
     all_ok = all(st == 'OK' for _, st, _ in checks) and data_ok
     print(f"env check: {'PASS' if all_ok else 'FAIL'}"
-          f"（GPU 缺失为 WARN 不阻断；组态数据不齐为 FAIL）")
+          f"（GPU 缺失与 corr/ops 缺失为 WARN 不阻断；原始数据不齐为 FAIL）")
     sys.exit(0 if all_ok else 1)
 
 
 # ═══════════════════════════════════════════════════════════════════
-# makedata —— 输入数据检查机制 + 整理真实数据（docker 基线 → huangcl 契约布局）
+# makedata —— 正式数据源检查（/public/group/lqcd）+ 整理分析链输入
 # ═══════════════════════════════════════════════════════════════════
 
-def check_input_data(conf_ids, cfg, verbose=True):
-    """输入数据检查机制：每组态目录/文件存在性 + 形状 + 有限性。
+def check_lqcd_data(conf_ids, cfg, baseline, verbose=True):
+    """正式数据源三类原始数据组态齐全度检查（本地与服务器路径一致）：
 
-    路径形式不变（<BASELINE>/data/conf<cid>/）；逐项检查并记录，
+      eigensystem/{ens}/{conf_id}/          eigvecs_t{t:03d}_{conf_id}  × Nt
+      perambulators/{ens}/light/{conf_id}/  perams.{conf_id}.{d}.{t}（d=0..3, t=0..Nt-1）
+      configurations/CLOVER/{ens}/          {ens}_cfg_{conf_id}.lime
+
     返回 (n_ok, bad_list)。bad_list 空才允许继续 makedata。
     """
+    ens = cfg['conf_name']
+    Nt = cfg['Nt']
+    n_peram_src = 4  # light 传播子源数（实测 perams.{cid}.{d}.{t} 的 d=0..3）
+    bad = []
+    t0 = time.perf_counter()
+    for i, cid in enumerate(conf_ids):
+        ed = os.path.join(baseline, 'eigensystem', ens, str(cid))
+        if not os.path.isdir(ed):
+            bad.append(f'conf{cid}: eigensystem 目录缺失 {ed}')
+            continue
+        n_eig = sum(1 for f in os.listdir(ed)
+                    if f.startswith(f'eigvecs_t') and f.endswith(f'_{cid}'))
+        if n_eig < Nt:
+            bad.append(f'conf{cid}: eigvecs 不全 {n_eig}/{Nt}（需 eigvecs_t000..'
+                       f't{Nt - 1:03d}）')
+
+        pd = os.path.join(baseline, 'perambulators', ens, 'light', str(cid))
+        if not os.path.isdir(pd):
+            bad.append(f'conf{cid}: perambulators 目录缺失 {pd}')
+            continue
+        n_perm = sum(1 for f in os.listdir(pd)
+                     if f.startswith(f'perams.{cid}.'))
+        if n_perm < n_peram_src * Nt:
+            bad.append(f'conf{cid}: perams 不全 {n_perm}/{n_peram_src * Nt}'
+                       f'（需 d=0..{n_peram_src - 1} × t=0..{Nt - 1}）')
+
+        cf = os.path.join(baseline, 'configurations', 'CLOVER', ens,
+                          f'{ens}_cfg_{cid}.lime')
+        if not os.path.isfile(cf):
+            bad.append(f'conf{cid}: gauge 配置缺失 {cf}')
+
+        n = len(conf_ids)
+        if (i + 1) % 10 == 0 or i + 1 == n:
+            el = time.perf_counter() - t0
+            eta = el / (i + 1) * (n - i - 1)
+            tlog(f"原始数据检查 {i + 1}/{n} ({(i + 1) / n * 100:.0f}%) "
+                 f"已用 {el:.0f}s ETA {eta:.0f}s")
+    n_ok = len(conf_ids) - len(bad)
+    if verbose:
+        tlog(f"原始数据检查完成: 通过 {n_ok}/{len(conf_ids)}，"
+             f"异常 {len(bad)}（{'全部通过 ✓' if not bad else '详见下方'}）")
+        for b in bad[:20]:
+            print(f"  [BAD] {b}", flush=True)
+        if len(bad) > 20:
+            print(f"  ... 其余 {len(bad) - 20} 条异常略", flush=True)
+    return n_ok, bad
+
+
+def check_input_data(conf_ids, cfg, baseline=None, verbose=True):
+    """输入数据检查机制：每组态目录/文件存在性 + 形状 + 有限性。
+
+    路径形式不变（<SRC>/data/conf<cid>/，SRC 为数据源目录）；逐项检查并记录，
+    返回 (n_ok, bad_list)。bad_list 空才允许继续 makedata。
+    """
+    baseline = baseline or resolve_baseline()
     Nt, Nx = cfg['Nt'], cfg['Nx']
     bad = []
     t0 = time.perf_counter()
     for i, cid in enumerate(conf_ids):
-        src = os.path.join(BASELINE, 'data', f'conf{cid}')
+        src = os.path.join(baseline, 'data', f'conf{cid}')
         if not os.path.isdir(src):
             bad.append(f'conf{cid}: 目录缺失 {src}')
             continue
@@ -289,49 +393,98 @@ def check_input_data(conf_ids, cfg, verbose=True):
     return n_ok, bad
 
 
-def make_data(data_dir, cfg=None):
-    """先检查输入数据（100 组态齐全、形状与有限性），再整理为
-    pyqcd 分析功能的输入布局。
+def compute_corr_ops(conf_ids, work_root, logger=tlog):
+    """自行计算 corr_pp_P{0,2} 与 ops_mu{0,3}_nu{0,1}_dz24（pyqcd 收缩管线，
+    从 /public/group/lqcd/ 原始数据出发；与 docker-v20260805 数值一致，
+    examples/test0 已验证 237/237、conf6250 中间数据逐位 rel=0）。
 
-    2pt: corr_pp_P2 (Nt,) → 平移不变切片矩阵 C[sink,src] = C((sink−src) mod Nt)，
-         存为 {conf_name}/momsmear2z/{cid}/twopt_slice_pp_Px0Py0Pz2_*.npy。
+    产物布局 <work_root>/data/conf<cid>/（docker 基线形式）：
+      corr_pp_P{0,2}_{cid}.npy、ops_mu{0,3}_nu{0,1}_dz24_conf{cid}.npz。
+    返回 <work_root>（作为 check_input_data/make_data 的数据源）。
+    """
+    from pyqcd.pipeline import _steps as pl
+    from pyqcd.pipeline._config import PRECISION, NEV, NEV1
+    os.makedirs(work_root, exist_ok=True)
+    config = {'conf_ids': list(conf_ids),
+              'precision': PRECISION,
+              'Nev1': min(NEV1, NEV),
+              'channels': ('pp',)}
+    t0 = time.perf_counter()
+    pl.step_vertex(config, work_root, logger)
+    tlog(f"corr/ops 计算: vertex 完成（{time.perf_counter() - t0:.0f}s），"
+         f"2pt 开始")
+    pl.step_2pt(config, work_root, logger)
+    tlog(f"corr/ops 计算: 2pt 完成（{time.perf_counter() - t0:.0f}s），"
+         f"OPE 开始")
+    pl.step_ope(config, work_root, logger)
+    tlog(f"corr/ops 计算: OPE 完成（{time.perf_counter() - t0:.0f}s）")
+    return work_root
+
+
+def make_data(data_dir, cfg=None, baseline=None, calc_dir=None):
+    """先检查正式数据源（三类原始数据组态齐全），再自行计算分析链输入
+    corr/ops（pyqcd 收缩管线，与 docker-v20260805 数值一致），然后整理。
+
+    L1 正式数据源：eigensystem/perambulators/configurations 三类原始数据
+    （/public/group/lqcd，本地 10 / 服务器 100+ 组态，路径一致）。
+    L2 corr/ops 自行计算（不再要求预存收缩产物）。
+    L3 检查 + 整理为 pyqcd 分析功能输入布局。
+
+    2pt: corr_pp_P{0,Pz} (Nt,) → 平移不变切片矩阵 C[sink,src] = C((sink−src) mod Nt)，
+         存为 {conf_name}/momsmear2z/{cid}/twopt_slice_pp_Px0Py0Pz{0|2}_*.npy。
     OPE: ops_mu0_nu1/mu3_nu0/mu3_nu1 (Nz,Nt) 原样，
          存为 {conf_short}/zdir/{cid}/ops_mu{a}_nu{b}_dz24_conf{cid}.npz。
+    P0 2pt 一并整理（04b 质子质量步骤所需），使 run 阶段不再依赖数据源目录。
     """
+    baseline = baseline or resolve_baseline()
     cfg = dict(SYNTH, **(cfg or {}))
     conf_ids = cfg.get('conf_ids', CONF_IDS)
     Nt, Nx = cfg['Nt'], cfg['Nx']
-    mom = f"Px{cfg['Px']}Py{cfg['Py']}Pz{cfg['Pz']}"
     os.makedirs(data_dir, exist_ok=True)
 
-    n_ok, bad = check_input_data(conf_ids, cfg)
+    # L1 正式数据源：三类原始数据组态齐全度
+    n_ok, bad = check_lqcd_data(conf_ids, cfg, baseline)
+    if bad:
+        tlog(f"正式数据源检查未通过（{len(bad)} 项异常）：makedata 中止，"
+             f"请补齐原始数据后重试")
+        sys.exit(1)
+    tlog(f"原始数据检查通过 {n_ok}/{len(conf_ids)}")
+
+    # L2 corr/ops 自行计算（pyqcd 收缩管线，与 docker-v20260805 数值一致）
+    calc_root = calc_dir or os.path.abspath(data_dir) + '.calc'
+    src = compute_corr_ops(conf_ids, calc_root, logger=tlog)
+
+    # L3 检查 + 整理
+    n_ok, bad = check_input_data(conf_ids, cfg, baseline=src)
     if bad:
         tlog(f"输入数据检查未通过（{len(bad)} 项异常）：makedata 中止，"
              f"请补齐数据后重试")
         sys.exit(1)
 
-    meta = {'source': BASELINE, 'conf_ids': conf_ids,
-            'Nt': Nt, 'Nx': Nx, 'mom': mom, 'n_ope_files': 3}
+    meta = {'source': baseline, 'conf_ids': conf_ids,
+            'Nt': Nt, 'Nx': Nx, 'n_ope_files': 3}
     t0 = time.perf_counter()
     for i, cid in enumerate(conf_ids):
-        src = os.path.join(BASELINE, 'data', f'conf{cid}')
+        sdir = os.path.join(src, 'data', f'conf{cid}')
 
-        corr = np.load(os.path.join(src, f'corr_pp_P{cfg["Pz"]}_{cid}.npy'))
-        assert corr.shape == (Nt,), f'corr shape {corr.shape}'
-        full = np.empty((Nt, Nt), dtype=np.float64)
-        for src_t in range(Nt):
-            full[:, src_t] = corr[(np.arange(Nt) - src_t) % Nt]
-        d = os.path.join(data_dir, cfg['conf_name'], 'momsmear2z', str(cid))
-        os.makedirs(d, exist_ok=True)
-        np.save(os.path.join(
-            d, f'twopt_slice_pp_{mom}_eginphase2_Cg5g4_nopol_ss_conf{cid}.npy'),
-            full)
+        for pz in sorted({cfg['Pz'], 0}):
+            corr = np.load(os.path.join(sdir, f'corr_pp_P{pz}_{cid}.npy'))
+            assert corr.shape == (Nt,), f'corr shape {corr.shape}'
+            full = np.empty((Nt, Nt), dtype=np.float64)
+            for src_t in range(Nt):
+                full[:, src_t] = corr[(np.arange(Nt) - src_t) % Nt]
+            d = os.path.join(data_dir, cfg['conf_name'], 'momsmear2z', str(cid))
+            os.makedirs(d, exist_ok=True)
+            np.save(os.path.join(
+                d, f'twopt_slice_pp_Px{cfg["Px"]}Py{cfg["Py"]}Pz{pz}'
+                   f'_eginphase2_Cg5g4_nopol_ss_conf{cid}.npy'),
+                full)
 
         d = os.path.join(data_dir, cfg['conf_short'], 'zdir', str(cid))
         os.makedirs(d, exist_ok=True)
         for mu, nu in [(0, 1), (3, 0), (3, 1)]:
             ops = np.load(os.path.join(
-                src, f'ops_mu{mu}_nu{nu}_dz{Nx}_conf{cid}.npz'))['ops']
+                sdir, f'ops_mu{mu}_nu{nu}_dz{Nx}_conf{cid}.npz'))['ops']
             np.savez(os.path.join(
                 d, f'ops_mu{mu}_nu{nu}_dz{Nx}_conf{cid}.npz'), ops=ops)
 
@@ -349,14 +502,27 @@ def make_data(data_dir, cfg=None):
 
 def cmd_makedata(args):
     data_dir = args.outdir or DEFAULT_DATA_DIR
-    conf_ids = conf_ids_cfg(args.start, args.step, args.n_conf)
+    baseline = resolve_baseline(args.baseline)
+    if args.start is None and args.step is None and args.n_conf is None:
+        conf_ids = discover_conf_ids(baseline, SYNTH['conf_name'])
+        if not conf_ids:
+            tlog(f"数据源无 eigensystem/{SYNTH['conf_name']}/ 组态目录: {baseline}")
+            sys.exit(1)
+        tlog(f"makedata: 组态自适应（扫描数据源）{len(conf_ids)} 个"
+             f"（{conf_ids[0]}..{conf_ids[-1]}）")
+    else:
+        conf_ids = conf_ids_cfg(args.start if args.start is not None else CONF_START,
+                                args.step if args.step is not None else CONF_STEP,
+                                args.n_conf if args.n_conf is not None else N_CONF)
+        tlog(f"makedata: 组态显式指定 {len(conf_ids)} 个"
+             f"（{conf_ids[0]}..{conf_ids[-1]} 间隔 {args.step}）")
     cfg = {'conf_ids': conf_ids}
-    tlog(f"makedata: 组态 {len(conf_ids)} 个（{conf_ids[0]}..{conf_ids[-1]}"
-         f" 间隔 {args.step}），基线 {BASELINE}")
-    tp = make_data(data_dir, cfg)
+    tlog(f"makedata: 数据源 {baseline}")
+    tp = make_data(data_dir, cfg, baseline=baseline)
     print(f"真实数据整理 → {data_dir}")
     print(f"元信息     → {tp}")
-    print(f"组态: {len(conf_ids)} 个（corr_pp_P2 + ops×3 每组态，检查通过）")
+    print(f"组态: {len(conf_ids)} 个（corr_pp_P0/P{cfg.get('Pz', SYNTH['Pz'])}"
+          f" + ops×3 每组态，检查通过）")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -524,24 +690,12 @@ def run_05_ana3dir(data_root, run_dir, truth, logger):
 
 
 def run_04b_p0(data_root, run_dir, truth, logger):
-    """04 补充：P0（静止）质子能量实战——直接验证 meff≈1.12 GeV 物理结论。"""
+    """04 补充：P0（静止）质子能量实战——直接验证 meff≈1.12 GeV 物理结论。
+
+    数据源：makedata 已整理 P0 2pt 到 data_root（run 阶段不依赖数据源目录）。
+    """
     from pyqcd.analysis import EnergyParams, run_energy
     conf_ids = truth.get('conf_ids', CONF_IDS)
-    p0_root = os.path.join(run_dir, '_p0_input')
-    mom = "Px0Py0Pz0"
-    for cid in conf_ids:
-        c = np.load(os.path.join(BASELINE, 'data', f'conf{cid}',
-                                 f'corr_pp_P0_{cid}.npy'))
-        full = np.empty((truth['Nt'], truth['Nt']), dtype=np.float64)
-        for src_t in range(truth['Nt']):
-            full[:, src_t] = c[(np.arange(truth['Nt']) - src_t)
-                               % truth['Nt']]
-        d = os.path.join(p0_root, truth['conf_name'], 'momsmear2z', str(cid))
-        os.makedirs(d, exist_ok=True)
-        np.save(os.path.join(
-            d, f'twopt_slice_pp_{mom}_eginphase2_Cg5g4_nopol_ss_conf{cid}.npy'),
-            full)
-
     a, b = truth['energy_dt']
     params = EnergyParams(
         conf_short=truth['conf_short'], conf_name=truth['conf_name'],
@@ -552,10 +706,11 @@ def run_04b_p0(data_root, run_dir, truth, logger):
         p0={'c0': 0.6, 'c1': 0.6, 'E0': 1.5, 'dE': 0.4},
         dt_start=a, dt_end=b,
         xlim=[2.5, truth['dt_max'] - 0.5], ylim=[0.5, 2.0])
-    res = run_energy(p0_root, run_dir, params, jack=True, parts=(1, 1))
+    # 两步：先算 corr2（保留符号），取 |corr2| 后做 fit + 图（与 P2 同模式）
+    res = run_energy(data_root, run_dir, params, jack=True, parts=(1, 1))
     corr2_path = os.path.join(run_dir, truth['conf_short'], '_Pz0', '0_corr2.npy')
     np.save(corr2_path, np.abs(np.load(corr2_path)))
-    res = run_energy(p0_root, run_dir, params, jack=True, parts=(2, 3))
+    res = run_energy(data_root, run_dir, params, jack=True, parts=(2, 3))
     fit = res['fit']
     logger(f"04b P0: 质子质量 E0={fit['E0'].mean() * params.unit:.3f} GeV "
            f"(物理结论 meff≈1.12 GeV)")
@@ -759,9 +914,14 @@ def verify_run(run_dir, data_root, results, missing, verbose=True):
         os.path.join(conf, f"_Pz{truth['Pz']}", '0_corr2.npy'),
         os.path.join(conf, f"_Pz{truth['Pz']}", '1_fit_data.npz'),
         os.path.join(conf, f"_Pz{truth['Pz']}", 'eff_mass.png'),
+        os.path.join(conf, '_Pz0', 'eff_mass.png'),
         os.path.join(conf, 'ratio', 'hist_ratio_P2_z0_tsep6_tins3.png'),
         os.path.join(conf, 'corr2', 'hist_corr2_P2_tsep6.png'),
         os.path.join(conf, 'eff_mass', 'hist_eff_mass_P2_tsep6.png'),
+        os.path.join(conf, f"Pz{truth['Pz']}", 'cmp_c0.png'),
+        os.path.join(conf, f"Pz{truth['Pz']}", 'cmp_chi2.png'),
+        os.path.join(conf, 'P2', 'fh', 'z0.png'),
+        os.path.join(conf, 'P2', 'bestfit', 'z0.png'),
     ]
     for a, b, c in truth['fit_ranges']:
         fd = f"fit_Pz{truth['Pz']}_Nsam{Ns}_dtmax{truth['dt_max']}" \
@@ -776,19 +936,25 @@ def verify_run(run_dir, data_root, results, missing, verbose=True):
             missing.append(rel)
 
     # ---- B. 物理合理性：P2 meff 平台 ≈ E(P2) ≈ 1.56 GeV（与基线一致）----
-    corr2 = np.load(os.path.join(run_dir, conf, f"_Pz{truth['Pz']}",
-                                 '0_corr2.npy'))
     unit = truth['fm_to_GeV'] / truth['a_fm']
-    mass = np.log(np.abs(corr2[:, :-1])
-                  / np.roll(np.abs(corr2[:, :-1]), -1, axis=1)) * unit
-    mm = mass.mean(0)
-    plat = slice(6, 12)
-    m_plat = mm[plat].mean()
-    dev = abs(m_plat - 1.56)   # E(P2) 色散预期（基线 meff_proton_P2 平台）
+    corr2_path = os.path.join(run_dir, conf, f"_Pz{truth['Pz']}", '0_corr2.npy')
+    m_plat = float('nan')
     tol = 0.25
-    results.append({'item': 'B:meff_P2_platform', 'dev': float(dev),
-                    'tol': float(tol), 'pass': bool(dev < tol),
-                    'meff_P2_gev': float(m_plat)})
+    plat = slice(6, 12)
+    if os.path.exists(corr2_path):
+        corr2 = np.load(corr2_path)
+        mass = np.log(np.abs(corr2[:, :-1])
+                      / np.roll(np.abs(corr2[:, :-1]), -1, axis=1)) * unit
+        mm = mass.mean(0)
+        m_plat = mm[plat].mean()
+        dev = abs(m_plat - 1.56)   # E(P2) 色散预期（基线 meff_proton_P2 平台）
+        results.append({'item': 'B:meff_P2_platform', 'dev': float(dev),
+                        'tol': float(tol), 'pass': bool(dev < tol),
+                        'meff_P2_gev': float(m_plat)})
+    else:
+        missing.append(os.path.join(conf, f"_Pz{truth['Pz']}", '0_corr2.npy'))
+        results.append({'item': 'B:meff_P2_platform', 'pass': False,
+                        'note': 'corr2 缺失（04 步骤未成功）'})
 
     # ---- B2. 质子质量：P0 meff 平台 ≈ 1.12 GeV（docker 基线已验证结论）----
     from pyqcd.analysis import energy_model, cov_mat, sem as _sem
@@ -805,13 +971,18 @@ def verify_run(run_dir, data_root, results, missing, verbose=True):
                         'meff_P0_gev': float(m0_plat)})
 
     # ---- C. E0 恢复量级（GeV）：|E0·unit − meff 平台| < tol ----
-    fit = np.load(os.path.join(run_dir, conf, f"_Pz{truth['Pz']}",
-                               '1_fit_data.npz'))
-    E0_gev = fit['E0'].mean() * unit
-    dev = abs(E0_gev - m_plat)
-    results.append({'item': 'C:E0_matches_meff_plateau', 'dev': float(dev),
-                    'tol': float(tol), 'pass': bool(dev < tol),
-                    'E0_gev': float(E0_gev)})
+    fit_path = os.path.join(run_dir, conf, f"_Pz{truth['Pz']}", '1_fit_data.npz')
+    if os.path.exists(fit_path) and np.isfinite(m_plat):
+        fit = np.load(fit_path)
+        E0_gev = fit['E0'].mean() * unit
+        dev = abs(E0_gev - m_plat)
+        results.append({'item': 'C:E0_matches_meff_plateau', 'dev': float(dev),
+                        'tol': float(tol), 'pass': bool(dev < tol),
+                        'E0_gev': float(E0_gev)})
+    else:
+        missing.append(os.path.join(conf, f"_Pz{truth['Pz']}", '1_fit_data.npz'))
+        results.append({'item': 'C:E0_matches_meff_plateau', 'pass': False,
+                        'note': 'fit 缺失（04 步骤未成功）'})
 
     # ---- D. ratio fit 收敛：c0 有限且 |c0| < 2 ----
     c0_max = 0.0
@@ -831,6 +1002,13 @@ def verify_run(run_dir, data_root, results, missing, verbose=True):
                                 '06_FH', '05_ana_3dir'])
     results.append({'item': 'E:all_steps_logged', 'pass': bool(ok)})
 
+    # ---- F. 图表完整性：png 总数 ≥ 106（stab1 同步骤同参数实测 106 张；
+    #       test7 步骤/参数一致，组态数只影响 Nsam 文件名不影响图数）----
+    n_png = sum(1 for _, _, fs in os.walk(run_dir) for f in fs
+                if f.endswith('.png'))
+    results.append({'item': 'F:png_count_ge_106', 'n_png': int(n_png),
+                    'pass': bool(n_png >= 106)})
+
     if verbose:
         n_pass = sum(1 for r in results if r['pass'])
         print(f"一致项 {n_pass}/{len(results)}，失败 "
@@ -842,6 +1020,8 @@ def verify_run(run_dir, data_root, results, missing, verbose=True):
                       f"(tol {r['tol']:.4f})")
             elif 'max_c0' in r:
                 print(f"  {mark} {r['item']:36s} max_c0={r['max_c0']:.4f}")
+            elif 'n_png' in r:
+                print(f"  {mark} {r['item']:36s} n_png={r['n_png']} (≥106)")
             else:
                 print(f"  {mark} {r['item']}")
         for m in missing:
@@ -917,16 +1097,21 @@ def main():
     sub = ap.add_subparsers(dest='cmd', required=True)
 
     p = sub.add_parser('env')
+    p.add_argument('--baseline', default=None,
+                   help='数据源目录（默认 $test7_BASELINE > 正式数据源 /public/group/lqcd）')
     p.set_defaults(func=cmd_env)
 
     p = sub.add_parser('makedata')
     p.add_argument('--outdir', default=None)
-    p.add_argument('--start', type=int, default=CONF_START,
-                   help=f'起始组态号（默认 {CONF_START}，不变）')
-    p.add_argument('--step', type=int, default=CONF_STEP,
-                   help=f'组态编号间隔（默认 {CONF_STEP}）')
-    p.add_argument('--n-conf', type=int, default=N_CONF,
-                   help=f'组态数量（正式版默认 {N_CONF}；本地回归可传 10）')
+    p.add_argument('--baseline', default=None,
+                   help='数据源目录（默认 $test7_BASELINE > 正式数据源 /public/group/lqcd）')
+    p.add_argument('--start', type=int, default=None,
+                   help=f'起始组态号（默认扫描数据源实际组态；显式指定时按序列检查）')
+    p.add_argument('--step', type=int, default=None,
+                   help=f'组态编号间隔（默认扫描数据源实际组态）')
+    p.add_argument('--n-conf', type=int, default=None,
+                   help=f'组态数量（默认扫描数据源实际组态：本地 10 / 服务器 100+；'
+                        f'显式指定时数据缺失如实 FAIL）')
     p.set_defaults(func=cmd_makedata)
 
     p = sub.add_parser('run')
