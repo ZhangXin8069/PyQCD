@@ -344,7 +344,7 @@ $\to$ 逐 t 片 \texttt{calc(t)}（\texttt{\nolinkurl{test_eigenvector.py:44-50}
 
 \textbf{A8 实际输出情况.} 无数据相关输出。
 
-\textbf{A9 结果分析.} 参考比对以 \texttt{res = \|data\_ref - data\|} 报告
+\textbf{A9 结果分析.} 参考比对以 $res=\lVert data_{ref}-data\rVert$ 报告
 （\texttt{\nolinkurl{test_elemental.py:32-34}}），本机无法复核。
 
 \textbf{A10 综合分析.} \eqref{eq:ele} 中 $e^{ipx}$ 来自 \texttt{MomentumPhase}
@@ -409,9 +409,9 @@ $\to$ 算符构造（\texttt{\nolinkurl{insertion/__init__.py}}）$\to$ 强子�
 \texttt{\nolinkurl{expr_little_group_projection}}（\texttt{\nolinkurl{hadron_irrep.py:178-195}}）；
 旋转算符的 Wigner 矩阵查 \texttt{refRotateDict}（\texttt{\nolinkurl{group_generator.py:288-364}}）。
 
-\textbf{A6 任务如何正确执行.} 例 \texttt{\nolinkurl{gen_twopt.py:9-11}}：
-\texttt{Insertion(GammaName.PI, DerivativeName.IDEN, ProjectionName.A1, momDict)} 再
-\texttt{Operator}。
+\textbf{A6 任务如何正确执行.} 例 \texttt{\nolinkurl{gen_twopt.py:9-11}}：\\
+\texttt{Insertion(GammaName.PI, DerivativeName.IDEN,} \\
+\texttt{ProjectionName.A1, momDict)} 再 \texttt{Operator}。
 
 \textbf{A7 实际执行情况.} 本机未执行 \texttt{\nolinkurl{test_mesonspetrum.py}}（需 LFS 数据）；
 群论模块逻辑测试含于 \texttt{\nolinkurl{test_simplify.py}}（已通过 8 例）。

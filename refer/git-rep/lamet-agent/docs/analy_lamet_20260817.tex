@@ -204,22 +204,22 @@ lamet-agent 的主体按“入口层 → 核心层 → 知识库/示例/测试�
 （\texttt{\detokenize{core/stages.py:6-16}}），把 stage id 映射到 stage 包名；
 \texttt{core/tools.py} 的 \texttt{resolve\_stage\_tools}/\texttt{resolve\_job\_tools} 加载该包 \texttt{STAGE\_TOOLS}
 并做 job 级过滤（\texttt{\detokenize{core/tools.py:199-288}}）。
-\item \textbf{数据流}：correlator stage 产出裸矩阵元 \texttt{EnsembleData} NetCDF $\to$
-renorm 消费（\texttt{target}/\texttt{denominator}/\texttt{reference} 角色）$\to$
-fourier 消费（\texttt{input} 角色）$\to$ matching 消费（\texttt{quasi} 角色）$\to$
+\item \textbf{数据流}：correlator stage 产出裸矩阵元 \texttt{EnsembleData} NetCDF，再由
+renorm 消费（\texttt{\nolinkurl{target/denominator/reference}} 角色）、
+fourier 消费（\texttt{input} 角色）、matching 消费（\texttt{quasi} 角色）、
 extrapolation 消费（\texttt{lightcone} 角色）；\texttt{agent.py} 用 \texttt{outputs} 字典把 job id 关联到
-\texttt{store["output"]}（\texttt{\detokenize{agent.py:657-659}}）。
+\texttt{store["output"]}（\texttt{\nolinkurl{agent.py:657-659}}）。
 \item \textbf{知识库支撑}：\texttt{stages/review/functions.py} 的 \texttt{write\_review\_from\_manifest}
 读 SQLite 检索文献并按 manifest 物理锚点加权排名（\texttt{\detokenize{review/functions.py:293-399}}）；
 \texttt{papers/lamet\_kb} 的 \texttt{harvest\_lamet} 管线负责填充该库（\texttt{\detokenize{lamet_kb/pipeline.py:26-60}}）。
-\item \textbf{planning 复用}：\texttt{planning/core.py} 的 \texttt{check\_manifest\_draft} 调 \texttt{AnalysisManifest.model\_validate}
-（\texttt{\detokenize{planning/core.py:842-843}}），\texttt{validate\_candidate\_payload} 复用严格校验
-（\texttt{\detokenize{planning/core.py:1534-1539}}），实现“同一模式、两处消费”。
+\item \textbf{planning 复用}：\texttt{planning/core.py} 的 \texttt{check\_manifest\_draft} 调 \texttt{\nolinkurl{AnalysisManifest.model_validate}}
+（\texttt{\nolinkurl{planning/core.py:842-843}}），\texttt{validate\_candidate\_payload} 复用严格校验
+（\texttt{\nolinkurl{planning/core.py:1534-1539}}），实现“同一模式、两处消费”。
 \end{itemize}
 
 \subsection{对象映射（代码符号 ↔ 物理/业务对象）}
 
-\begin{xltabular}{\textwidth}{lXl}
+\begin{xltabular}{\textwidth}{lXX}
 \toprule
 \textcolor{relation}{代码符号} & \textcolor{relation}{对象概念} & 物理/业务含义 \\
 \midrule
@@ -227,7 +227,7 @@ extrapolation 消费（\texttt{lightcone} 角色）；\texttt{agent.py} 用 \tex
 \texttt{CorrelatorInput} & 一条 2pt/3pt 关联函数数据集 & LQCD 两点/三点关联函数及其运动学（momentum/volume/tsep/bz/bT）\\
 \texttt{EnsembleData} & 重采样后的集合数据容器 & 每样本一个 \texttt{resample} 轴（bootstrap/jackknife/raw/gvar）+ 物理坐标（z 或 x）\\
 \texttt{pt3\_ratio\_fcn} & 3pt/2pt 比值模型 & $C_{3pt}(t,\tau)/C_{2pt}(t)$ 谱分解比值，含 $O_{ij}$ 矩阵元与能级 $E_n$\\
-\texttt{fit\_self\_renormalization\_factor} & 自重整化因子 $z_R$ 拟合 & $\ln M(z,a)$ 线性发散+对数发散+离散效应的拟合（\texttt{PLAN.md} 公式）\\
+\texttt{\nolinkurl{fit_self_renormalization_factor}} & 自重整化因子 $z_R$ 拟合 & $\ln M(z,a)$ 线性发散+对数发散+离散效应的拟合（\texttt{PLAN.md} 公式）\\
 \texttt{run\_fourier\_transform} & 坐标空间→动量空间傅里叶变换 & asymptotic extrapolation + 实部对称/虚部反对称 convention 的准分布重建\\
 \texttt{build\_matching\_matrix} & 微扰匹配矩阵 & LaMET 核 $\tilde{q}(x;P_z)\to q(x)$ 的列求和 plus 处方离散化\\
 \texttt{run\_extrapolation} & 连续极限/无穷体积/手征极限外推 & 对 $a^2$、$1/P_z$、$m_\pi$ 等外推项的多项式拟合\\
@@ -299,7 +299,7 @@ agent 循环成型 & 2026-06-03 & mock/external/deepseek 后端、工具执行�
 agentic 收敛 & 2026-06-10 & correlator 12 工具→4 工具，inspect→tune→fit 流程 \\
 NetCDF 中间产物 & 2026-06-18 & \texttt{EnsembleData.to\_netcdf/from\_netcdf}（xarray NETCDF4）\\
 job-DAG manifest & 2026-06-20 & metadata/inputs/stages 三块契约 + 每 job 独立 store \\
-全局重采样元数据 & 2026-07-01 & \texttt{random\_seed}/\texttt{bs\_samples}/\texttt{bin\_size}/\texttt{sample\_error\_mode}/\texttt{workers} 上移 metadata \\
+全局重采样元数据 & 2026-07-01 & \texttt{\nolinkurl{random_seed/bs_samples/bin_size/sample_error_mode/workers}} 上移 metadata \\
 交互规划 & 2026-07-07 & \texttt{lamet-agent plan}：LLM 驱动 JSON Patch 候选编辑 + 确定性 guardrail \\
 自重整化 & 2026-07-08--18 & \texttt{self\_renormalization} 方案（fit $z_R$ + apply $H/(z_R Z_{\overline{MS}})$）\\
 HDF5 v2 契约 & 2026-07-15 & 标准 correlator HDF5 布局、操作符标签自由化、离散运动学权威化 \\
@@ -327,16 +327,16 @@ HDF5 v2 契约 & 2026-07-15 & 标准 correlator HDF5 布局、操作符标签自
 \begin{enumerate}
 \item \textbf{准备}：用户编写 JSONC manifest（\texttt{examples/sample\_manifest.jsonc}），声明 metadata、
 输入关联函数、核函数、每 stage 的 defaults/jobs；
-\item \textbf{规划（可选）}：\texttt{lamet-agent plan draft.jsonc --backend api --model deepseek/deepseek-chat}
-（\texttt{\detokenize{README.md:592-595}}）让 LLM 补全/修复草稿，经 JSON Patch 候选校验后生成 quick/full manifest；
+\item \textbf{规划（可选）}：\texttt{lamet-agent plan draft.jsonc}（完整参数见
+\texttt{\nolinkurl{README.md:592-595}}）让 LLM 补全/修复草稿，经 JSON Patch 候选校验后生成 quick/full manifest；
 \item \textbf{校验}：\texttt{lamet-agent validate} 执行 schema + DAG + 参数契约 + 路径检查
-（\texttt{\detokenize{__main__.py:111-135}}）；
+（\texttt{\nolinkurl{__main__.py:111-135}}）；
 \item \textbf{运行}：\texttt{lamet-agent run manifest.json --backend api} 进入 \texttt{run\_agent}，
 按 \texttt{metadata.stages} 顺序执行；每 stage 每 job 建独立 store，静态提示一次性组装
-（\texttt{\detokenize{core/prompting.py:64-100}}），此后每轮把工具观察追加为新的 user turn；
+（\texttt{\nolinkurl{core/prompting.py:64-100}}），此后每轮把工具观察追加为新的 user turn；
 \item \textbf{工具循环}：LLM 每轮输出一个 JSON action（\texttt{call\_tool}/\texttt{request\_user\_input}/\texttt{finish}），
-\texttt{agent.py} 校验必需工具序列（\texttt{required\_job\_tool\_sequence}），\texttt{core/tools.py} 的
-\texttt{prepare\_tool\_args} 注入 manifest 路径/绘图路径/随机种子等参数（\texttt{\detokenize{core/tools.py:357-372}}）；
+\texttt{agent.py} 校验必需工具序列（\texttt{\nolinkurl{required_job_tool_sequence}}），\texttt{core/tools.py} 的
+\texttt{\nolinkurl{prepare_tool_args}} 注入 manifest 路径/绘图路径/随机种子等参数（\texttt{\nolinkurl{core/tools.py:357-372}}）；
 \item \textbf{阶段产物}：每 stage 的终端工具把主数据放 \texttt{store["output"]}，随后写 NetCDF 工件与双语文档报告
 （correlator→renorm→fourier→matching→extrapolation 逐级手递，\texttt{\detokenize{agent.py:857-989}}）；
 \item \textbf{评审}：review 阶段读五个 stage 报告 + 文献背景，产出物理总结 + manifest 修改建议
@@ -373,10 +373,9 @@ HDF5 v2 契约 & 2026-07-15 & 标准 correlator HDF5 布局、操作符标签自
 \subsection{A2 输入是什么}
 
 \textbf{主要输入}：manifest 文件（JSON/JSONC）。三块结构：
-\texttt{metadata}（run 级设置：run\_id/root\_directory/artifacts\_directory/target\_observable/parton/
-resample\_mode/random\_seed/stages 等，\texttt{\detokenize{manifest.py:71-96}}）、
-\texttt{inputs}（correlators/artifacts/kernels 三类源节点池，\texttt{\detokenize{manifest.py:355-360}}）、
-\texttt{stages}（每 stage 的 defaults + jobs 列表，\texttt{\detokenize{manifest.py:375-383}}）。
+\texttt{metadata}（run 级设置：\texttt{\nolinkurl{run_id/root_directory/artifacts_directory/target_observable/parton/resample_mode/random_seed/stages}} 等，\texttt{\nolinkurl{manifest.py:71-96}}）、
+\texttt{inputs}（correlators/artifacts/kernels 三类源节点池，\texttt{\nolinkurl{manifest.py:355-360}}）、
+\texttt{stages}（每 stage 的 defaults + jobs 列表，\texttt{\nolinkurl{manifest.py:375-383}}）。
 
 \textbf{派生输入}：HDF5 关联函数文件（由 correlators[].data\_path 指向）、外部 NetCDF 工件（artifacts）、
 核函数文件（kernels[].kernel\_path，默认 \texttt{lamet\_agent/kernels.py}）。
@@ -389,10 +388,10 @@ resample\_mode/random\_seed/stages 等，\texttt{\detokenize{manifest.py:71-96}}
 
 \begin{itemize}
 \item \textbf{中间产物}：每 stage 的 \texttt{EnsembleData} NetCDF 工件，路径
-\texttt{<artifacts\_directory>/<stage>/<job\_id>.nc}（\texttt{\detokenize{README.md:73-96}}）；
+\texttt{\nolinkurl{<artifacts_directory>/<stage>/<job_id>.nc}}（\texttt{\nolinkurl{README.md:73-96}}）；
 \item \textbf{图表}：2pt fit-on-data、ratio 拟合带、重整化矩阵元、quasi 分布、外推/系统误差图（PDF/SVG）；
-\item \textbf{报告}：每 stage 双语文档报告（\texttt{ca\_report.md}/\texttt{renorm\_report.md}/\texttt{ft\_report.md}/...，
-见 \texttt{\detokenize{agent.py:857-989}}），review 阶段产出完整评审 Markdown；
+\item \textbf{报告}：每 stage 双语文档报告（\texttt{\nolinkurl{ca_report.md/renorm_report.md/ft_report.md/...}}，
+见 \texttt{\nolinkurl{agent.py:857-989}}），review 阶段产出完整评审 Markdown；
 \item \textbf{最终结果}：光锥分布函数数组（\texttt{.npy} 或 NetCDF）+ 物理图 + 统计/系统误差。
 \end{itemize}
 
@@ -442,8 +441,8 @@ lamet-agent plan draft_manifest.jsonc --backend api --model deepseek/deepseek-ch
 lamet-agent run examples/sample_manifest.jsonc --backend mock
 \end{lstlisting}
 
-\textbf{执行要点}：manifest 的 \texttt{root\_directory} 必须解析到 lamet-agent checkout 根
-（\texttt{\detokenize{manifest.py:666-682}}）；数据/工件/核路径必须存在（除 artifacts 输出目录可后建）。
+\textbf{执行要点}：manifest 的 \texttt{\nolinkurl{root_directory}} 必须解析到 lamet-agent checkout 根
+（\texttt{\nolinkurl{manifest.py:666-682}}）；数据/工件/核路径必须存在（除 artifacts 输出目录可后建）。
 
 \subsection{A7 实际执行情况}
 
@@ -452,9 +451,9 @@ lamet-agent run examples/sample_manifest.jsonc --backend mock
 \begin{enumerate}
 \item \texttt{\detokenize{python3 -m lamet\_agent --help}}：成功，输出 \texttt{validate}/\texttt{plan}/\texttt{run}
 三个子命令及 CLI-first scaffold 说明（确证）；
-\item \texttt{\detokenize{python3 -m lamet\_agent validate examples/sample\_manifest.jsonc}}：
-\textbf{失败}——报 \texttt{\detokenize{inputs.correlators[0].data\_path does not exist}}，
-因样例清单指向的 \texttt{data\_pion\_pdf\_cg/...} 真实数据未随本 checkout 提供（确证，非代码缺陷）；
+\item \texttt{\nolinkurl{python3 -m lamet_agent validate examples/sample_manifest.jsonc}}：
+\textbf{失败}——报 \texttt{\nolinkurl{inputs.correlators[0].data_path does not exist}}，
+因样例清单指向的 \texttt{\nolinkurl{data_pion_pdf_cg/...}} 真实数据未随本 checkout 提供（确证，非代码缺陷）；
 \item \texttt{\detokenize{pytest}} 子集实测：
   \begin{itemize}
   \item \texttt{test\_stage\_core/test\_banner/test\_resampling/test\_io}：\textbf{23 passed}
@@ -537,10 +536,10 @@ token 消耗高，静态提示+增量观察的设计只能缓解不能根除（\
 \subsection{A14 参考源}
 
 本节全部证据已并入第 7 节参考源清单；核心引用：
-\texttt{\detokenize{PLAN.md:5-16}}、\texttt{\detokenize{README.md:931-959}}、
-\texttt{\detokenize{agent.py:561-1012}}、\texttt{\detokenize{core/tools.py:199-372}}、
-\texttt{\detokenize{core/resampling.py:63-195}}、\texttt{\detokenize{manifest.py:385-529}}、
-\texttt{\detokenize{examples/sample_manifest.jsonc:28-45}}、\texttt{\detokenize{pyproject.toml:10-28}}。
+\texttt{\nolinkurl{PLAN.md:5-16}}、\texttt{\nolinkurl{README.md:931-959}}、
+\texttt{\nolinkurl{agent.py:561-1012}}、\texttt{\nolinkurl{core/tools.py:199-372}}、
+\texttt{\nolinkurl{core/resampling.py:63-195}}、\texttt{\nolinkurl{manifest.py:385-529}}、
+\texttt{\nolinkurl{examples/sample_manifest.jsonc:28-45}}、\texttt{\nolinkurl{pyproject.toml:10-28}}。
 
 \subsection{A15 附录与附件（如有）}
 
@@ -598,7 +597,7 @@ token 消耗高，静态提示+增量观察的设计只能缓解不能根除（\
 \texttt{\nolinkurl{PLAN.md:142-156}} & 仓库 & extrapolation 外推项与外推策略\\
 \texttt{\nolinkurl{README.md:1-29}} & 仓库 & 核心思想（manifest DAG）、五 stage 顺序\\
 \texttt{\nolinkurl{README.md:73-136}} & 仓库 & NetCDF 中间产物格式与读写\\
-\texttt{\nolinkurl{README.md:185-335}} & 仓库 & manifest 参数语义（fit\_scope/model\_average/normalization 等）\\
+\texttt{\nolinkurl{README.md:185-335}} & 仓库 & manifest 参数语义（\texttt{\nolinkurl{fit_scope/model_average/normalization}} 等）\\
 \texttt{\nolinkurl{README.md:373-427}} & 仓库 & 自重整化公式与工作流\\
 \texttt{\nolinkurl{README.md:575-659}} & 仓库 & Quick Start 命令、plan 模式、部分运行\\
 \texttt{\nolinkurl{README.md:669-829}} & 仓库 & 标准 correlator HDF5 格式、CLI 后端用法\\
