@@ -26,6 +26,16 @@ import numpy as np
 from ._disconnected import sem, resample, cov_mat, model_ratio
 from ._fitter import (FitParams, calc_chi2_dof, fit, fit_report_lines,
                       make_summary_table)
+from ..tools import get_backend
+
+
+def _xp_to_np(x):
+    """后端数组 → numpy（cupy/torch/numpy 兼容），供 resample/gvar 下游使用。"""
+    try:
+        return np.asarray(x)
+    except Exception:
+        import torch as _th
+        return _th.as_tensor(x).detach().cpu().numpy()
 
 
 @dataclass
@@ -131,12 +141,25 @@ def compute_ratio(data_root, sampa: SampleParams2pt, jack: bool,
         ope_shift = np.roll(_ope, shift=-ti, axis=1)
         _ope_rel[:, ti, :, :] = ope_shift[:, :sampa.dt_max, :]
 
-    _corr3 = np.zeros((sampa.Nconf, sampa.Nt, sampa.dt_max,
-                       sampa.dt_max, sampa.Nx), dtype=complex)
-    for _dt in range(sampa.dt_max):
-        for _dtau in range(_dt + 1):
-            _corr3[:, :, _dt, _dtau, :] = (
-                _ope_rel[:, :, _dtau, :] * _corr2_rel[:, :, _dt][:, :, None])
+    # C3 = C2×OPE（不相连因子化）：_corr3[Nconf,Nt,dt_max(_dt),dt_max(_dtau),Nx]，
+    # 仅 _dtau<=_dt 非零（与原双循环一致）。该中间数组在 Nconf=405 时约 4.5 GB，
+    # 是分析链唯一的大计算/内存热点：经 pyqcd 后端切换上 GPU。
+    #   - CPU(numpy)：保留原双循环（实测比全广播更快，避免 4.5GB 大广播分配开销）
+    #   - GPU(cupy/torch)：向量化单核广播（一次大核，远优于 400 次小核启动）
+    xp = get_backend()
+    if xp is np:
+        _corr3 = np.zeros((sampa.Nconf, sampa.Nt, sampa.dt_max,
+                           sampa.dt_max, sampa.Nx), dtype=complex)
+        for _dt in range(sampa.dt_max):
+            for _dtau in range(_dt + 1):
+                _corr3[:, :, _dt, _dtau, :] = (
+                    _ope_rel[:, :, _dtau, :] * _corr2_rel[:, :, _dt][:, :, None])
+    else:
+        mask = xp.tril(xp.ones((sampa.dt_max, sampa.dt_max)))  # 下三角：_dtau<=_dt
+        _corr3 = (xp.asarray(_ope_rel)[:, :, None, :, :]
+                  * xp.asarray(_corr2_rel)[:, :, :, None, None]) \
+            * mask[None, None, :, :, None]
+        _corr3 = _xp_to_np(_corr3)
 
     del _corr, _ope, _ope_30, _ope_31, _ope_01
     gc.collect()
