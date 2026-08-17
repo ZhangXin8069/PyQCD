@@ -48,6 +48,15 @@ PyQUDA（analy/pure_pyquda_20260817）、lamet-agent（analy/pure_lamet_20260817
 这些库非独立 git 仓库（由主仓库跟踪），报告内 git 信息注明"非独立仓库"；
 产物为新建文件，不修改库内既有内容。
 
+## 主仓库 PyQCD 自身 analy/pure 产物（docs/）
+
+主仓库 PyQCD 亦按相同约定（`analy_<slug>_<YYYYMMDD>.pdf` / `pure_<slug>_<YYYYMMDD>.pdf`、
+xelatex 两遍、Overfull=0 且 Float too large=0）产出全库级分析：
+`docs/analy_pyqcd_20260818.pdf`（全库结构 + 梯度流重整化胶子 TMD-PDF 物理链三视角分析）、
+`docs/pure_pyqcd_20260818.pdf`（核心部分穷尽剖析：C1 梯度流 RK3 / C2 胶子 TMD 算符 O 组合 /
+C3 Z\_R / C4 混合 / C5 NLO 匹配核 Z\_ij / C7 torch 后端，含代码-物理对象映射表）。
+两者均达成 Overfull=0、Float too large=0、Missing character=0（2026-08-18 生成）。
+
 ## torch 后端 + h5 IO + MPI 并行（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
 
 - 后端：`set_backend('torch')`（别名 gpu/cuda）全面替换 numpy/cupy；numpy/cupy 输入自动转

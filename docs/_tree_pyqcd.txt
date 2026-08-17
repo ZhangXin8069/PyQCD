@@ -1,0 +1,20 @@
+PyQCD/  (main repo /root/PyQCD, git: main @ 9f74beb)
++-- AGENTS.md  README.md  LICENSE  env.sh
++-- pyqcd/                  main package (91 .py excluding refer)
+    +-- lattice/           constants / gamma,sigma (DR basis)
+    +-- tools/             backend numpy/cupy/torch + h5 IO + einsum cache
+    +-- vertex/            VdV/VVV vertices + phase factors
+    +-- contraction/       auto-Wick / baryon operator / seqperam
+    +-- operator/          Clover Fmunu / dual Ftil / gluon OPE / TMD staple
+    +-- analysis/          jackknife/bootstrap/meff/ratio/disconnected/dispersion
+    +-- renorm/            * gradient flow / Z_R / hybrid / NLO match / extrap / TMD
+    +-- smear/             HYP smearing (flow alternative)
+    +-- pipeline/          9-step orchestration + tmd step
+    +-- testing/           integration tests
+    +-- parallel/          MPI planning + meta-task scheduling
++-- examples/              docker-v20260805 baseline + pyqcd demos/tests + test0
++-- docs/                  53 Chinese LaTeX notes + analy/pure reports
++-- logs/                  test0*/stab1/test6/test7 functional suites
++-- cpp/                   C++ backend placeholder
++-- refer/                 read-only references (zengch/donghx/.../git-rep/*)
++-- data/ output/ plots/ test_out/   runtime data / products / figures
