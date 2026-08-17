@@ -30,6 +30,7 @@ Memory is released automatically after each meta-task
 import gc
 import math
 import os
+import time
 
 from ._resources import detect_resources
 
@@ -179,6 +180,12 @@ def run_meta_task(step, conf_id, config, run_dir, logger):
                                config.get('precision', 'complex64'))
         del verts
     elif step == 'ope':
+        # 注意：必须显式设置 GPU 后端（step_ope 内部会做，但并行元任务直接调用
+        # compute_ope_for_config，需在此补齐 set_backend，否则退回 numpy/CPU 后端，
+        # OPE 将极其缓慢且不利用 GPU）。
+        from ..tools import set_backend
+        set_backend(config.get('backend', 'cupy'),
+                    device=config.get('device'))
         compute_ope_for_config(conf_id, run_dir, logger,
                                config.get('precision', 'complex64'))
     else:
@@ -268,7 +275,7 @@ def run_parallel_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
     for step in steps:
         if step not in parallel_steps:
             continue
-        t0 = __import__('time').perf_counter()
+        t0 = time.perf_counter()
         # round-robin: rank r handles confs[r::size]
         my_confs = conf_ids[rank::size]
         if logger is not None:
@@ -322,8 +329,11 @@ def main():
     ap.add_argument('--backend', default='torch', choices=['torch', 'cupy',
                                                            'numpy'])
     ap.add_argument('--device', default=None)
+    ap.add_argument('--n-gpu', type=int, default=None,
+                   help='强制使用的 GPU 数量（默认按 detect_resources 自动探测）；'
+                        '例如 2 表示用 2 卡并行，逐 rank 绑定 cuda:{rank%%n}')
     ap.add_argument('--a-mem-mb', type=float, default=None,
-                    help='VRAM per meta-task in MB (plan formula)')
+                   help='VRAM per meta-task in MB (plan formula)')
     ap.add_argument('--precision', default='complex64',
                     choices=['complex64', 'complex128'])
     ap.add_argument('--dry-run', action='store_true')
@@ -331,14 +341,16 @@ def main():
 
     confs = [int(x) for x in args.confs.split(',')] if args.confs else [6250]
     res = detect_resources()
-    plan = plan_parallel(len(confs), args.a_mem_mb, resources=res)
+    plan = plan_parallel(len(confs), args.a_mem_mb, resources=res,
+                         n_gpu=args.n_gpu)
     print(format_plan(plan))
     if args.dry_run:
         return
     run_parallel_pipeline(
         steps=tuple(args.steps), conf_ids=confs, run_dir=args.run_dir,
         precision=args.precision, backend=args.backend,
-        device=args.device, a_mem_mb=args.a_mem_mb, plan=plan)
+        device=args.device, a_mem_mb=args.a_mem_mb, plan=plan,
+        n_gpu=args.n_gpu)
 
 
 if __name__ == '__main__':
