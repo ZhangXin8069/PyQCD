@@ -1,0 +1,342 @@
+% ============================================================
+% pure 报告 — 规范模板 v2（xelatex + ctex）
+% 用途: 穷尽剖析项目核心部分（算法 / 物理图像与公式 / 代码-物理映射）
+% 主题: lamet-agent 核心部分穷尽剖析
+% 编译: xelatex 两遍；交付前 Overfull 与 Float too large 计数必须为 0
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+% ===== 色板（语义化；全文档同一颜色只表达同一类含义）=====
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{algo}{HTML}{E67E22}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{map}{HTML}{C2185B}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+\setlength{\emergencystretch}{3em}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{phys}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{phys!70!black}}{\thesubsubsection}{1em}{}
+
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{algobox}{breakable,colback=algo!6,colframe=algo,title=核心算法}
+\newtcolorbox{physbox}{breakable,colback=phys!6,colframe=phys,title=物理图像}
+\newtcolorbox{mapbox}{breakable,colback=map!6,colframe=map,title=代码-物理映射}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{map},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,numberstyle=\tiny\color{phys!60!black},
+}
+
+\title{lamet-agent 核心部分穷尽剖析}
+\author{opencode pure}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\textbf{项目性质判定：}代码-物理交叉向（LQCD 高统计测量 LaMET 数据分析自动化 agent）。
+本报告穷尽枚举 6 个核心部分候选：深挖 4（agent 编排运行时、manifest job-DAG 契约、
+统计基元与物理谱分解模型、物理核函数族与匹配矩阵）、浅析 2、排除 0。
+最深剖析结论：lamet-agent 的独特竞争力在于\textbf{把需要物理判断的关联函数分析与外推步骤委托给 LLM 决策、
+把固定的重整化/傅里叶/匹配步骤软件化}，通过 manifest job-DAG 做执行蓝图、`core/` 数值基元做底座、
+`planning/` 做安全护栏，形成"可控 agent"与"自由 agent"的边界设计。
+\end{abstract}
+
+\tableofcontents
+
+% ================= 1 项目定位与核心部分清单 =================
+\section{项目定位与核心部分清单}
+
+\subsection{项目性质判定}
+
+\begin{keybox}
+\textbf{项目性质:} \textcolor{phys}{代码-物理交叉向}。依据：核心代码约 26K 行
+（\texttt{\detokenize{lamet_agent/} 下 26 个 py 文件、26238 行实测}），其中
+物理数值逻辑（\texttt{stages/*/functions.py} 谱分解拟合、\texttt{kernels.py} 微扰核函数、
+\texttt{core/resampling.py} bootstrap/jackknife）占主体；agent 编排逻辑
+（\texttt{agent.py}/\texttt{core/tools.py}/\texttt{planning/}）为控制面。独特性载体为
+\textbf{代码符号 $\leftrightarrow$ 物理对象}的双向映射（LLM action $\leftrightarrow$ LQCD 测量步骤）。
+\end{keybox}
+
+\subsection{核心部分总清单（穷尽枚举）}
+
+\begin{xltabular}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{编号} & 核心部分 & 处理态与独特性概述 \\
+\midrule
+\endhead
+C1 & agent 编排运行时（\texttt{\nolinkurl{agent.py:611-614}} + \texttt{\nolinkurl{core/tools.py:199-288}}） & 深挖：LLM/tool 循环 + 工具注册表 + 必需工具序列，LLM 只做决策不碰数值 \\
+C2 & manifest job-DAG 契约（\texttt{\nolinkurl{manifest.py:17-96}}） & 深挖：pydantic 模型把 run/inputs/stages 三块结构化为执行蓝图，跨 stage 角色命名输入 \\
+C3 & 统计基元与物理谱分解模型（\texttt{\nolinkurl{core/resampling.py:52-131}} + \texttt{\nolinkurl{stages/correlator/functions.py:440-465}}） & 深挖：bootstrap/jackknife/gvar 误差传递 + 2pt/3pt 谱分解比值模型 \\
+C4 & 物理核函数族与匹配矩阵（\texttt{\nolinkurl{kernels.py:58-380}}） & 深挖：单圈 MSbar 转换、$\beta$ 函数、LaMET 匹配核列求和 plus 处方 \\
+C5 & 交互规划（\texttt{\nolinkurl{planning/core.py:642-867}}） & 浅析：LLM 驱动 JSON Patch 候选编辑 + 确定性 guardrail \\
+C6 & 知识库与评审（\texttt{\nolinkurl{stages/review/functions.py:578-585}} + \texttt{\nolinkurl{papers/lamet_kb/pipeline.py:26-60}}） & 浅析：文献锚定排名 + 双语文档评审报告 \\
+\bottomrule
+\caption{核心部分总清单（数据来源: 全库索引实测；6 候选三态闭环）}
+\end{xltabular}
+
+% ================= 2 核心部分深度剖析 =================
+\section{核心部分深度剖析}
+
+\subsection{C1 agent 编排运行时}
+
+\begin{algobox}
+\textbf{核心算法:} LLM/tool 循环。每 job 建立独立 \texttt{store} 字典，静态提示一次性组装，
+此后每轮把工具观察追加为新的 user turn；LLM 每轮输出一个 JSON action
+（\texttt{call\_tool}/\texttt{request\_user\_input}/\texttt{finish}），agent 校验必需工具序列后
+执行注册表内的数值工具。复杂度：每 job 工具调用数由 LLM 决策（受 \texttt{max\_tool\_steps} 约束）。
+\end{algobox}
+
+\textbf{15 步全流程重现}：
+
+\textbf{A1 目的与前期准备}：把 LaMET 数据分析（correlator $\to$ renorm $\to$ fourier $\to$ matching $\to$ extrapolation）自动化，让 agent 代替物理学家做策略选择
+（\texttt{\detokenize{PLAN.md:5-12}}）。前置：Python $\ge$3.10 + analysis 依赖组（gvar/lsqfit/scipy/h5py/xarray/netCDF4）。
+
+\textbf{A2 输入}：manifest 文件（JSON/JSONC）声明 run 级 metadata、inputs（correlators/artifacts/kernels）、
+每 stage 的 defaults/jobs（\texttt{\detokenize{manifest.py:71-96}}、\texttt{\detokenize{manifest.py:355-383}}）。
+
+\textbf{A3 输出}：每 stage 的 \texttt{EnsembleData} NetCDF 工件 + 图表 + 双语文档报告 + 最终光锥分布函数数组。
+
+\textbf{A4 整体框架}：CLI run $\to$ validate $\to$ \texttt{run\_agent} $\to$ for stage in metadata.stages $\to$
+for job in jobs $\to$ hydrate artifacts $\to$ build static prompt $\to$ LLM/tool loop $\to$ store['output'] $\to$ stage report
+（\texttt{\detokenize{agent.py:561-1012}}）。
+
+\textbf{A5 关键细节}：① job store 隔离——每 job 新建 store，上游输出按角色注入，下游引用缺失即抛错
+（\texttt{\detokenize{agent.py:623-635}}）；② 必需工具序列——按 stage+job 角色给出必须依次成功的工具，
+序列完成前 agent 不得 finish（\texttt{\detokenize{core/tools.py:250-288}}）；
+③ 工具参数注入——\texttt{prepare\_tool\_args} 从 manifest 注入路径/随机种子并改写绘图路径
+（\texttt{\detokenize{core/tools.py:357-372}}）。
+
+\begin{mapbox}
+\textbf{映射原则:} 每个关键代码符号必有物理对象，双向可查，无孤儿符号。
+\end{mapbox}
+\begin{xltabular}{\textwidth}{lXX}
+\toprule
+\textcolor{map}{代码符号} & 物理对象 & 物理含义与参考源 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{run_agent}} & 测量管线主循环 & 一次 manifest 驱动的完整测量编排 \texttt{\nolinkurl{agent.py:611-614}} \\
+\texttt{\nolinkurl{store["output"]}} & 阶段主产物 & job 的终端工具把主数据放入的共享槽位 \texttt{\nolinkurl{agent.py:657-659}} \\
+\texttt{\nolinkurl{required_job_tool_sequence}} & 物理步骤顺序约束 & 物理流程要求的工具执行次序 \texttt{\nolinkurl{core/tools.py:250-288}} \\
+\texttt{\nolinkurl{resolve_stage_tools}} & 阶段工具注册表 & stage id $\to$ STAGE\_TOOLS 映射 \texttt{\nolinkurl{core/stages.py:1-16}} \\
+\bottomrule
+\caption{映射表 C1（数据来源: 源码实测）}
+\end{xltabular}
+
+\textbf{A6 正确执行}：\texttt{lamet-agent run manifest.json}\allowbreak\texttt{ --backend api}（mock 冒烟无 LLM）。
+
+\textbf{A7/A8 实际执行与输出}：本机实测 \texttt{lamet-agent validate} 失败于样例数据缺失（\texttt{\nolinkurl{data_pion_pdf_cg}} 未随 checkout），
+pytest 子集 23/117/121 passed 证实运行时与工具层稳定（\textcolor{warn}{未验证}真实 LLM 调用）。
+
+\textbf{A9 结果分析}：48 项失败集中在依赖 \texttt{examples/*.json} 的集成测试（可运行 manifest 未入库），
+非被测代码逻辑缺陷（\texttt{\detokenize{PROJECT_LOG.md:1049-1060}} 亦提示历史上留两个 failures）。
+
+\textbf{A10 综合分析}：agent 数值动作全部限制在 STAGE\_TOOLS 注册表内，LLM 只做决策层不执行数值运算
+——"可控 agent"与"自由 agent"的边界设计（\texttt{\detokenize{core/tools.py:199-204}}）。
+
+\textbf{A11 结尾总结}：C1 是"决策-执行分离"的核心实现：LLM 决定策略，注册表保证数值正确性。
+
+\textbf{A12 结尾评价}：优点——数值安全性由注册表硬保证；缺点——LLM 决策依赖 prompt 工程，
+无真实 GPU 数据时无法端到端验证。
+
+\textbf{A13 补充说明}：真实 LLM 调用 + Slurm 提交未验证（\textcolor{warn}{未验证}）。
+
+\textbf{A14 参考源}：见第 5 节；C1 证据 4 处。
+
+\subsection{C2 manifest job-DAG 契约}
+
+\begin{algobox}
+\textbf{核心算法:} pydantic 模型驱动的 manifest 校验。三块结构（metadata/inputs/stages）
+严格类型化，stage 参数契约（\texttt{manifest\_params.py}）拒绝未知键。
+\end{algobox}
+
+\textbf{15 步全流程重现}（节选）：
+\textbf{A1 目的}：让 agent 的执行蓝图"单一来源、可校验、可追溯"
+（\texttt{\nolinkurl{manifest.py:1}} 模块 docstring）。
+\textbf{A2 输入}：JSON/JSONC manifest 文本（\texttt{\nolinkurl{examples/sample_manifest.jsonc:1-45}}）。
+\textbf{A3 输出}：\texttt{AnalysisManifest} 模型实例；解析失败抛 \texttt{\nolinkurl{ManifestPathError}}。
+\textbf{A4 框架}：\texttt{StageId} 六阶段字面量 + \texttt{\nolinkurl{BzDirection}}/\texttt{\nolinkurl{CoordUnit}} +
+\texttt{\nolinkurl{parse_volume}}/\texttt{\nolinkurl{parse_momentum}}（S48T64、PX0PY0PZ0 规范）+ \texttt{RunMetadata}
+全局设置 + 每 job 独立 store（\texttt{\nolinkurl{manifest.py:17-25}}、\texttt{\nolinkurl{manifest.py:47-60}}）。
+\textbf{A5 关键细节}：物理动量换算 \texttt{\nolinkurl{physical_momentum_gev}} 把格点动量转 GeV：
+$p = 2\pi\hbar c\,|\vec n|/(a\,L_s)$（\texttt{\nolinkurl{manifest.py:63-68}}）。
+
+\begin{physbox}
+\textbf{物理图像:} manifest 是"测量计划书"：格点坐标（S48T64）、动量量子数（PXnPYnPZn）、
+目标可观测量（PDF/DA/GPD）与 parton 类型（quark/gluon）全部离散化声明，
+agent 只在这份计划书约束内行动。
+\end{physbox}
+
+\textbf{A9 结果分析}：manifest 契约三次迁移（扁平布局 $\to$ core+五 stage 包 $\to$ job-DAG）
+证实模式演进的合理性（\texttt{\detokenize{PROJECT_LOG.md:5-17}}、\texttt{\detokenize{PROJECT_LOG.md:343-349}}）。
+
+\textbf{A10-A13}：planning 与 stages 共用同一模式（\texttt{check\_manifest\_draft} 调 \texttt{model\_validate}），
+实现"同一模式、两处消费"（\texttt{\detokenize{planning/core.py:842-843}}）。
+
+\subsection{C3 统计基元与物理谱分解模型}
+
+\begin{algobox}
+\textbf{核心算法:} bootstrap/jackknife 重采样 + gvar 误差传递；2pt/3pt 谱分解比值模型。
+复杂度：bootstrap $O(n\_samples \times n\_conf)$；jackknife $O(n\_conf)$。
+\end{algobox}
+
+\begin{physbox}
+\textbf{物理图像:} 谱分解（PLAN.md 公式）：
+\begin{equation}\label{eq:pt2}
+C_\mathrm{2pt}(t) = \sum_n |A_n|^2 e^{-E_n t}
+\end{equation}
+\begin{equation}\label{eq:pt3}
+C_\mathrm{3pt}(t,\tau) = \sum_{n,m} A_n A_m^* g_A\, e^{-E_n(t-\tau)} e^{-E_m\tau}
+\end{equation}
+\begin{equation}\label{eq:ratio}
+R(t,\tau) = \frac{C_\mathrm{3pt}(t,\tau)}{C_\mathrm{2pt}(t)}
+\end{equation}
+代码 \texttt{pt3\_ratio\_fcn} 实现 \eqref{eq:ratio} 的多态推广（含矩阵元 $O_{ij}$ 与能级 $E_n$），
+\eqref{eq:pt2}/\eqref{eq:pt3} 的谱分解结构在 \texttt{qda\_fcn} 中体现（\texttt{\detokenize{stages/correlator/functions.py:440-465}}）。
+\end{physbox}
+
+\textbf{重采样实现}：\texttt{bin\_data} 相邻组态分箱（\texttt{\detokenize{core/resampling.py:52-60}}）；
+\texttt{bootstrap} 有放回抽样求均值（\texttt{\detokenize{core/resampling.py:63-71}}）；
+\texttt{jackknife} leave-one-bin-out（\texttt{\detokenize{core/resampling.py:74-81}}）；
+\texttt{bs\_ls\_avg} bootstrap 样本 $\to$ gvar（含协方差）（\texttt{\detokenize{core/resampling.py:84-96}}）；
+\texttt{jk\_ls\_avg} jackknife 样本 $\to$ gvar（方差乘 $n-1$）（\texttt{\detokenize{core/resampling.py:99-112}}）。
+物理要点：2pt/3pt 必须用同一组 bootstrap indices 再构成比值（\texttt{\detokenize{PROJECT_LOG.md:268-271}}），
+这由 \texttt{bootstrap\_indices} 共享索引保证（\texttt{\detokenize{core/resampling.py:129-131}}）。
+
+\textbf{极限校验}：$n\_conf\to\infty$ 时 jackknife 方差 $\times(n-1)\to$ 真实方差；
+bootstrap 在 $n\_samples\to\infty$ 趋于正态近似——两法互为交叉验证。
+
+\subsection{C4 物理核函数族与匹配矩阵}
+
+\begin{physbox}
+\textbf{物理图像:} 自重整化（self-renormalization）：坐标空间矩阵元经 $Z_{\overline{MS}}$ 转换到 MSbar 方案。
+单圈转换因子（\texttt{\detokenize{kernels.py:104-112}}）：
+\begin{equation}\label{eq:zms}
+Z_{\overline{MS}}(z;\mu) = 1 + \frac{\alpha_s C_F}{2\pi}\Big(\frac32 \log\frac{\mu^2 z^2 e^{2\gamma_E}}{4} + \text{offset}\Big),\quad \text{offset}=5/2\ (\mathrm{PDF}),\ 7/2\ (\mathrm{DA})
+\end{equation}
+$\alpha_s(\mu)$ 由 $\beta$ 函数（LO/NLO/NNLO）跑动（\texttt{\detokenize{kernels.py:58-96}}）。
+\end{physbox}
+
+\begin{physbox}
+\textbf{匹配矩阵:} LaMET 匹配核离散化为 $(n_x,n_y)$ 矩阵，采用\textbf{列求和 plus 处方}——
+"regular NLO integrand singular on $x=y$，由每列求和为零强制成 plus 函数"
+（\texttt{\detokenize{kernels.py:361-380}}）。PDF 核的 $\xi$ 积分用
+\texttt{\_build\_pdf\_matrix} 处理（\texttt{\detokenize{kernels.py:681-760}} 公有 quark 核函数族）。
+\end{physbox}
+
+\textbf{15 步}（节选）：A2 输入=坐标空间矩阵元样本 + $\mu$ 标度 + 外推项参数；
+A4 框架=$\beta$ 函数 $\to$ $\alpha_s$ 跑动 $\to$ $Z_{\overline{MS}}$ 转换 $\to$ 匹配矩阵；
+A9 分析：自重整化拟合函数含线发散 $g_{z}/x$、对数发散 $3 C_F/b_0\log\log$、离散效应项
+（\texttt{\detokenize{stages/renorm/functions.py:792-806}}）。
+
+% ================= 3 独特性与竞争力评估 =================
+\section{独特性与竞争力评估}
+
+\begin{xltabular}{\textwidth}{lXX}
+\toprule
+\textcolor{algo}{独特点} & 对比基准 & 优势与证据 \\
+\midrule
+\endhead
+决策-执行分离 & 全脚本硬编码流程 & LLM 选策略 + 注册表保数值安全；决策空间过大（multi-state/GEVP/model averaging）无法脚本化（\texttt{\detokenize{PLAN.md:24-29}}） \\
+job-DAG manifest & 顶层 CLI + 扁平 kernels & 可校验、可追溯、可部分运行；上游产物按角色注入 \\
+共享重采样索引 & 各阶段独立重采样 & bootstrap indices 全局共享，比值误差自洽（\texttt{\detokenize{core/resampling.py:129-131}}） \\
+单圈核函数自包含 & 外部库散装 & $\beta$/$Z_{\overline{MS}}$/匹配矩阵同一文件可追踪（\texttt{\detokenize{kernels.py:58-380}}） \\
+\bottomrule
+\caption{独特性评估（数据来源: 源码+PLAN 实测）}
+\end{xltabular}
+
+% ================= 4 关键片段与公式 =================
+\section{关键片段与公式}
+
+\lstinputlisting[language=python,firstline=440,lastline=465]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/stages/correlator/functions.py}
+
+\lstinputlisting[language=python,firstline=63,lastline=96]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/core/resampling.py}
+
+\lstinputlisting[language=python,firstline=104,lastline=122]{/root/PyQCD/refer/git-rep/lamet-agent/lamet_agent/kernels.py}
+
+% ================= 5 参考源清单 =================
+\section{参考源清单}
+
+\begin{xltabular}{\textwidth}{llX}
+\toprule
+\textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
+\midrule
+\endhead
+\texttt{\nolinkurl{PLAN.md:5-12}} & 仓库 & LaMET 五步流程与 agent 分工动机 \\
+\texttt{\nolinkurl{PLAN.md:20-29}} & 仓库 & 谱分解公式与 $g_A$ 提取方案 \\
+\texttt{\nolinkurl{manifest.py:17-25}} & 仓库 & StageId 六阶段字面量 \\
+\texttt{\nolinkurl{manifest.py:47-60}} & 仓库 & 体积/动量规范解析 \\
+\texttt{\nolinkurl{manifest.py:63-68}} & 仓库 & 格点动量 $\to$ GeV 换算 \\
+\texttt{\nolinkurl{manifest.py:71-96}} & 仓库 & RunMetadata 全局设置 \\
+\texttt{\nolinkurl{agent.py:561-1012}} & 仓库 & run\_agent 主循环与阶段产物 \\
+\texttt{\nolinkurl{agent.py:623-635}} & 仓库 & job store 隔离与角色注入 \\
+\texttt{\nolinkurl{core/tools.py:199-288}} & 仓库 & 工具解析/必需序列 \\
+\texttt{\nolinkurl{core/tools.py:357-372}} & 仓库 & prepare\_tool\_args 参数注入 \\
+\texttt{\nolinkurl{core/resampling.py:52-131}} & 仓库 & bin/bootstrap/jackknife/gvar \\
+\texttt{\nolinkurl{core/stages.py:1-16}} & 仓库 & stage id $\to$ 包名映射 \\
+\texttt{\nolinkurl{stages/correlator/functions.py:440-465}} & 仓库 & 3pt/2pt 比值谱分解模型 \\
+\texttt{\nolinkurl{stages/renorm/functions.py:792-806}} & 仓库 & 自重整化拟合函数 \\
+\texttt{\nolinkurl{kernels.py:58-96}} & 仓库 & $\beta$ 函数与 $\alpha_s$ 跑动 \\
+\texttt{\nolinkurl{kernels.py:104-122}} & 仓库 & $Z_{\overline{MS}}$ 单圈转换 \\
+\texttt{\nolinkurl{kernels.py:361-380}} & 仓库 & 匹配矩阵列求和 plus 处方 \\
+\texttt{\nolinkurl{kernels.py:681-760}} & 仓库 & 公有 quark 核函数族 \\
+\texttt{\nolinkurl{PROJECT_LOG.md:268-271}} & 仓库 & 共享 bootstrap indices 约定 \\
+\texttt{\nolinkurl{PROJECT_LOG.md:343-349}} & 仓库 & job-DAG manifest 迁移 \\
+\texttt{\nolinkurl{examples/sample_manifest.jsonc:1-45}} & 仓库 & 注释清单设计说明 \\
+\bottomrule
+\end{xltabular}
+
+% ================= 6 结论 =================
+\section{结论}
+
+\begin{conclbox}
+穷尽剖析结论：核心部分 6 个 = 深挖 4 / 浅析 2 / 排除 0，三态闭环。
+\textbf{最强竞争力}：决策-执行分离架构（C1）+ job-DAG 契约（C2）+ 共享重采样基元（C3）+
+单圈核函数族（C4）四者耦合，把需要物理判断的 LaMET 分析步骤压缩为"一次 manifest 驱动的高统计测量自动化"。
+\end{conclbox}
+
+\begin{warnbox}
+未验证项：真实 LLM 调用、Slurm 提交、真实 LQCD 数据端到端运行均未验证（本机无数据/无 GPU 环境）；
+谱分解公式与 $Z_{\overline{MS}}$ 公式的数值精度需真实数据比对；48 项依赖 example manifest 的集成测试
+因仓库快照不完整而失败（非逻辑缺陷）。
+\end{warnbox}
+
+\end{document}
