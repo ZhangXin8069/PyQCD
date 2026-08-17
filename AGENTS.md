@@ -37,6 +37,17 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | `cpp/` | C++ 后端占位 |
 | `.opencode/skills/` | 归集的 LQCD_Master 上游技能（lqcd-analysis 等 5 个，原位置保留） |
 
+## 外来参考库分析产物（refer/git-rep/*/docs）
+
+对 `refer/git-rep/` 下 4 个外来软件库（EasyDistillation/LQCD_Master/PyQUDA/lamet-agent）
+执行 analy/pure 分析的产物约定：PDF+tex 各存放于对应库的 `docs/` 子目录，
+命名 `analy_<slug>_<YYYYMMDD>.pdf` / `pure_<slug>_<YYYYMMDD>.pdf`（slug 拼音/英文短词），
+编译要求 xelatex 两遍、Overfull=0 且 Float too large=0。已产出：
+EasyDistillation（analy/pure_distillation_20260817）、LQCD_Master（analy/pure_qcd_master_20260817）、
+PyQUDA（analy/pure_pyquda_20260817）、lamet-agent（analy/pure_lamet_20260817）。
+这些库非独立 git 仓库（由主仓库跟踪），报告内 git 信息注明"非独立仓库"；
+产物为新建文件，不修改库内既有内容。
+
 ## torch 后端 + h5 IO + MPI 并行（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
 
 - 后端：`set_backend('torch')`（别名 gpu/cuda）全面替换 numpy/cupy；numpy/cupy 输入自动转

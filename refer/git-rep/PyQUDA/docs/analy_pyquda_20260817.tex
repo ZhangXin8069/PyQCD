@@ -83,7 +83,7 @@
 以三视角（\textcolor{struct}{主体结构}、\textcolor{relation}{各部分关系}、
 \textcolor{idea}{项目思路}）掌握项目全貌，并以\textbf{“PyQUDA 传播子反演全流程”}为主题，
 按 A 代码工作 15 步框架逐项重现。核心结论：PyQUDA 以
-\texttt{\nolinkurl{pyquda_core/pyquda/src/quda.in.pyx}$\leftrightarrow$\detokenize{quda.h}} 的 Cython 绑定为
+\texttt{\nolinkurl{pyquda_core/pyquda/src/quda.in.pyx}$\leftrightarrow$\nolinkurl{quda.h}} 的 Cython 绑定为
 地基，\texttt{\nolinkurl{pyquda_comm}}（MPI 网格 + 张量后端 + 格点场数据类）为枢纽，
 \texttt{\nolinkurl{pyquda_utils}}/\texttt{\nolinkurl{pyquda_io}}/\texttt{\nolinkurl{pyquda_plugins}}
 为工具与插件，examples/tests 为工作流与验证；整体呈现
@@ -128,8 +128,8 @@ PyQUDA/
 文件总数 & 346 \\
 Python 文件数 & 146 \\
 C/C++ 头文件数 & 137（含 pycparser 捆绑的 fake\_libc 头） \\
-文档文件数 & 4（README.md ×2 + examples/README.md + 本库 docs/ 2 份报告） \\
-Python 总行数（core+io+plugins+utils+examples+tests） & 31\,829 \\
+文档文件数 & 4（README ×2 + examples + docs 报告） \\
+Python 总行数（主包+示例+测试） & 31\,829 \\
 提交数（主仓库视角） & —（非独立仓库，git log 反映主仓库） \\
 标签数（主仓库视角） & bug0/dev0–3 等（非本库标签） \\
 \bottomrule
@@ -144,9 +144,9 @@ Python 总行数（core+io+plugins+utils+examples+tests） & 31\,829 \\
 
 \begin{refbox}
 \textbf{参考背景}：PyQUDA 官方仓库为 \url{https://github.com/CLQCD/PyQUDA.git}，
-README 自述“Python wrapper for QUDA written in Cython”（\texttt{\detokenize{README.md:3}}），
+README 自述“Python wrapper for QUDA written in Cython”（\texttt{\nolinkurl{README.md:3}}），
 基于 QUDA \texttt{develop} 分支，兼容 \url{https://github.com/lattice/quda/pull/1489} 之后
-的任意 commit（\texttt{\detokenize{README.md:7}}）。本报告以当前 vendored 代码为唯一实证来源。
+的任意 commit（\texttt{\nolinkurl{README.md:7}}）。本报告以当前 vendored 代码为唯一实证来源。
 \end{refbox}
 
 上一节给出了仓库的目录骨架与规模，接下来回答“仓库如何分层组织”——即\textbf{主体结构}。
@@ -161,53 +161,53 @@ PyQUDA 按“入口—核心—公共层—工具—插件—示例—测试—�
 \textcolor{struct}{层次} & 目录 & \textcolor{struct}{职责} \\
 \midrule
 \endhead
-入口层 & \texttt{\detokenize{pyquda_core/pyquda/__init__.py}} &
+入口层 & \texttt{\nolinkurl{pyquda_core/pyquda/__init__.py}} &
 进程初始化总入口：\texttt{init()} 依次完成 MPI 网格、设备、QUDA 初始化
-（\texttt{\detokenize{pyquda_core/pyquda/__init__.py:99-188}}）\\
-入口层 & \texttt{\detokenize{pyquda_core/pyquda/__main__.py}} &
+（\texttt{\nolinkurl{pyquda_core/pyquda/__init__.py:99-188}}）\\
+入口层 & \texttt{\nolinkurl{pyquda_core/pyquda/__main__.py}} &
 CLI 入口 \texttt{python -m pyquda}：解析 grid/latt/backend 参数后执行用户脚本
-（\texttt{\detokenize{pyquda_core/pyquda/__main__.py:6-74}}）\\
-公共层 & \texttt{\detokenize{pyquda_core/pyquda_comm/__init__.py}} &
+（\texttt{\nolinkurl{pyquda_core/pyquda/__main__.py:6-74}}）\\
+公共层 & \texttt{\nolinkurl{pyquda_core/pyquda_comm/__init__.py}} &
 MPI 通信世界、GPU 网格划分（\texttt{getDefaultGrid} 按通信量最小化选型）、
-MPI-IO 读写、Logger（\texttt{\detokenize{pyquda_core/pyquda_comm/__init__.py:135-156,222-262,555-600}}）\\
-公共层 & \texttt{\detokenize{pyquda_core/pyquda_comm/field.py}} &
+MPI-IO 读写、Logger（\texttt{\nolinkurl{pyquda_core/pyquda_comm/__init__.py:135-156,222-262,555-600}}）\\
+公共层 & \texttt{\nolinkurl{pyquda_core/pyquda_comm/field.py}} &
 格点场数据类：\texttt{LatticeInfo / LatticeFermion / LatticeGauge / LatticePropagator}
-等，含奇偶（evenodd）分块与坐标映射（\texttt{\detokenize{pyquda_core/pyquda_comm/field.py:101-184,1209-1252}}）\\
-公共层 & \texttt{\detokenize{pyquda_core/pyquda_comm/array.py}} &
+等，含奇偶（evenodd）分块与坐标映射（\texttt{\nolinkurl{pyquda_core/pyquda_comm/field.py:101-184,1209-1252}}）\\
+公共层 & \texttt{\nolinkurl{pyquda_core/pyquda_comm/array.py}} &
 张量后端抽象：numpy/cupy/dpnp/torch 四后端统一接口
-（\texttt{\detokenize{pyquda_core/pyquda_comm/array.py:6-7,19-78}}）\\
-核心层 & \texttt{\detokenize{pyquda_core/pyquda/dirac/}} &
-Dirac 算符家族：\texttt{FermionDirac/StaggeredFermionDirac} 抽象基类 +
-\texttt{WilsonDirac/CloverWilsonDirac/StaggeredDirac/HISQDirac} 具体实现 +
-\texttt{general.py} 参数工厂（\texttt{\detokenize{pyquda_core/pyquda/dirac/abstract.py:150-405,general.py:253-475}}）\\
-核心层 & \texttt{\detokenize{pyquda_core/pyquda/action/}} &
+（\texttt{\nolinkurl{pyquda_core/pyquda_comm/array.py:6-7,19-78}}）\\
+核心层 & \texttt{\nolinkurl{pyquda_core/pyquda/dirac/}} &
+Dirac 算符家族：\texttt{\nolinkurl{FermionDirac/StaggeredFermionDirac}} 抽象基类 +
+\texttt{\nolinkurl{WilsonDirac/CloverWilsonDirac/StaggeredDirac/HISQDirac}} 具体实现 +
+\texttt{general.py} 参数工厂（\texttt{\nolinkurl{pyquda_core/pyquda/dirac/abstract.py:150-405,general.py:253-475}}）\\
+核心层 & \texttt{\nolinkurl{pyquda_core/pyquda/action/}} &
 HMC 作用量：\texttt{GaugeAction / CloverWilsonAction / HISQAction} 与有理逼近参数
-（\texttt{\detokenize{pyquda_core/pyquda/action/abstract.py:19-34}}）\\
-核心层 & \texttt{\detokenize{pyquda_core/pyquda/src/}} &
+（\texttt{\nolinkurl{pyquda_core/pyquda/action/abstract.py:19-34}}）\\
+核心层 & \texttt{\nolinkurl{pyquda_core/pyquda/src/}} &
 Cython 绑定：\texttt{quda.in.pyx}（约 70 个 QUDA 函数直绑）+ \texttt{quda.in.pxd}
-（\texttt{\detokenize{pyquda_core/pyquda/src/quda.in.pyx:187-476,quda.in.pxd:28-45}}）\\
-核心层 & \texttt{\detokenize{pyquda_core/pyquda/gamma.py}} &
+（\texttt{\nolinkurl{pyquda_core/pyquda/src/quda.in.pyx:187-476,quda.in.pxd:28-45}}）\\
+核心层 & \texttt{\nolinkurl{pyquda_core/pyquda/gamma.py}} &
 $\gamma$ 矩阵代数：DeGrand-Rossi/Dirac-Pauli 基、稀疏乘法、Projector
-（\texttt{\detokenize{pyquda_core/pyquda/gamma.py:28-73,215-313}}）\\
-工具层 & \texttt{\detokenize{pyquda_utils/}} &
+（\texttt{\nolinkurl{pyquda_core/pyquda/gamma.py:28-73,215-313}}）\\
+工具层 & \texttt{\nolinkurl{pyquda_utils/}} &
 \texttt{core.py}（invert 编排/gatherLattice/getDirac）、\texttt{source.py}（源构造）、
 \texttt{fft.py}（MPI 转置 FFT）、\texttt{hmc\_param.py}（参数库）等
-（\texttt{\detokenize{pyquda_utils/core.py:61-82,315-385,source.py:229-265}}）\\
-工具层 & \texttt{\detokenize{pyquda_io/}} &
-多格式 IO：Chroma(QIO)/ILDG/MILC/KYU/XQCD/NERSC/OpenQCD/NPY，带 SciDAC 校验和
-（\texttt{\detokenize{pyquda_io/__init__.py:1-55,chroma.py:10-68,io_utils.py:14-33}}）\\
-插件层 & \texttt{\detokenize{pyquda_plugins/}} &
+（\texttt{\nolinkurl{pyquda_utils/core.py:61-82,315-385,source.py:229-265}}）\\
+工具层 & \texttt{\nolinkurl{pyquda_io/}} &
+多格式 IO：\texttt{\nolinkurl{Chroma/ILDG/MILC/KYU/XQCD/NERSC/OpenQCD/NPY}}，带 SciDAC 校验和
+（\texttt{\nolinkurl{pyquda_io/__init__.py:1-55,chroma.py:10-68,io_utils.py:14-33}}）\\
+插件层 & \texttt{\nolinkurl{pyquda_plugins/}} &
 \texttt{pycontract}（收缩）与 \texttt{pygwu}（overlap 费米子）插件，及 pycparser
-自动代码生成器（\texttt{\detokenize{pyquda_plugins/plugin_pyx.py:232-281}}）\\
-示例层 & \texttt{\detokenize{examples/}} &
+自动代码生成器（\texttt{\nolinkurl{pyquda_plugins/plugin_pyx.py:232-281}}）\\
+示例层 & \texttt{\nolinkurl{examples/}} &
 端到端工作流：HMC、夸克传播子、$\pi$/$p$ 2pt、PCAC、色散
-（\texttt{\detokenize{examples/2_Quark_Propagator.py:1-39}}）\\
-测试层 & \texttt{\detokenize{tests/}} &
+（\texttt{\nolinkurl{examples/2_Quark_Propagator.py:1-39}}）\\
+测试层 & \texttt{\nolinkurl{tests/}} &
 以 weak\_field.lime 弱场 + Chroma 参考输出做逐位验证
-（\texttt{\detokenize{tests/test_clover.py:1-21,check_pyquda.py:1-31}}）\\
-构建层 & \texttt{\detokenize{pyquda_core/setup.py}} &
+（\texttt{\nolinkurl{tests/test_clover.py:1-21,check_pyquda.py:1-31}}）\\
+构建层 & \texttt{\nolinkurl{pyquda_core/setup.py}} &
 编译 \texttt{pyquda.quda / pyquda.malloc\_quda / pyquda\_comm.pointer} 扩展，
-链接 libquda（\texttt{\detokenize{pyquda_core/setup.py:8-55}}）\\
+链接 libquda（\texttt{\nolinkurl{pyquda_core/setup.py:8-55}}）\\
 \bottomrule
 \caption{主体结构分层（数据来源: 全库索引实测）}
 \end{xltabular}
@@ -227,25 +227,25 @@ $\gamma$ 矩阵代数：DeGrand-Rossi/Dirac-Pauli 基、稀疏乘法、Projector
 \textcolor{struct}{代码符号} & 对象概念 & 物理/工程含义与参考源 \\
 \midrule
 \endhead
-\texttt{\detokenize{LatticeInfo}} & 格点几何信息 & 晶格尺寸/奇偶/边界/各向异性；
+\texttt{\nolinkurl{LatticeInfo}} & 格点几何信息 & 晶格尺寸/奇偶/边界/各向异性；
 \texttt{\nolinkurl{pyquda_core/pyquda_comm/field.py:101-115}} \\
-\texttt{\detokenize{LatticeGauge}} & 规范场 $U_\mu(x)$ & 4+1 维 link 场，单位元初始化；
+\texttt{\nolinkurl{LatticeGauge}} & 规范场 $U_\mu(x)$ & 4+1 维 link 场，单位元初始化；
 \texttt{\nolinkurl{pyquda_core/pyquda_comm/field.py:1177-1188}} \\
-\texttt{\detokenize{LatticeFermion}} & 夸克场 $\psi(x)$ & 奇偶分块自旋-色旋量；
+\texttt{\nolinkurl{LatticeFermion}} & 夸克场 $\psi(x)$ & 奇偶分块自旋-色旋量；
 \texttt{\nolinkurl{pyquda_core/pyquda_comm/field.py:1209-1212}} \\
-\texttt{\detokenize{LatticePropagator}} & 夸克传播子 & $S(x,y)=\psi(y)\bar\psi(x)$ 的
+\texttt{\nolinkurl{LatticePropagator}} & 夸克传播子 & $S(x,y)=\psi(y)\bar\psi(x)$ 的
 4×4×3×3 分量组装（\texttt{setFermion}）；\texttt{\nolinkurl{pyquda_core/pyquda_comm/field.py:1219-1224}} \\
-\texttt{\detokenize{evenodd/lexico}} & 奇偶格点重排 & 棋盘格 checkerboard 分块 $\leftrightarrow$ 字典序；
+\texttt{\nolinkurl{evenodd/lexico}} & 奇偶格点重排 & 棋盘格 checkerboard 分块 $\leftrightarrow$ 字典序；
 \texttt{\nolinkurl{pyquda_core/pyquda_comm/field.py:117-161}} \\
-\texttt{\detokenize{invert}} & 线性求解 & 解 $(D+m)\psi=\eta$ 得传播子；
+\texttt{\nolinkurl{invert}} & 线性求解 & 解 $(D+m)\psi=\eta$ 得传播子；
 \texttt{\nolinkurl{pyquda_core/pyquda/dirac/abstract.py:212-216}} \\
-\texttt{\detokenize{kappa}} & 跳跃参数 & $\kappa=(2(m+1+\frac{N_d-1}{\xi}))^{-1}$；
+\texttt{\nolinkurl{kappa}} & 跳跃参数 & $\kappa=(2(m+1+\frac{N_d-1}{\xi}))^{-1}$；
 \texttt{\nolinkurl{pyquda_core/pyquda/dirac/wilson.py:19}} \\
-\texttt{\detokenize{wall/point}} & 源构造 & 墙源/点源注入右端项 $\eta$；
+\texttt{\nolinkurl{wall/point}} & 源构造 & 墙源/点源注入右端项 $\eta$；
 \texttt{\nolinkurl{pyquda_utils/source.py:25-66}} \\
-\texttt{\detokenize{stoutSmear}} & 链接平滑 & stout 迭代改进信噪比；
+\texttt{\nolinkurl{stoutSmear}} & 链接平滑 & stout 迭代改进信噪比；
 \texttt{\nolinkurl{pyquda_core/pyquda/field.py:224-235}} \\
-\texttt{\detokenize{gatherLattice}} & MPI 归并 & 子格点数据聚到根进程还原整格点；
+\texttt{\nolinkurl{gatherLattice}} & MPI 归并 & 子格点数据聚到根进程还原整格点；
 \texttt{\nolinkurl{pyquda_utils/core.py:315-385}} \\
 \bottomrule
 \caption{对象映射表（代码符号$\leftrightarrow$物理/工程对象，数据来源: 源码直读）}
@@ -277,10 +277,10 @@ pyquda\_comm → Cython 绑定(quda.in.pyx) → QUDA C++ API(quda.h)}}
   \item \textcolor{relation}{\texttt{pyquda\_plugins → pyquda\_utils}}：
         \texttt{\nolinkurl{pyquda_plugins/pycontract/__init__.py:5-9}} 引入
         \texttt{pyquda\_utils.gamma.Gamma} 与 \texttt{pyquda\_comm.field}；
-  \item \textcolor{relation}{\texttt{pyquda → pyquda\_comm}}：
+  \item \textcolor{relation}{\texttt{pyquda} $\rightarrow$ \texttt{pyquda\_comm}}：
         \texttt{\nolinkurl{pyquda_core/pyquda/field.py:8-31}} 全量 re-export
-        \texttt{pyquda\_comm.field}，并添加 \texttt{smear/flow/gauge fixing} 等高层方法；
-  \item \textcolor{relation}{\texttt{pyquda/dirac → src/quda.in.pyx → quda.h}}：
+        \texttt{\nolinkurl{pyquda_comm.field}} 并添加 smear/flow 等方法；
+  \item \textcolor{relation}{\texttt{pyquda/dirac $\rightarrow$ src/quda.in.pyx $\rightarrow$ quda.h}}：
         \texttt{\nolinkurl{pyquda_core/pyquda/dirac/abstract.py:14-27}} 从
         \texttt{..quda} 引入 \texttt{invertQuda/MatQuda/dslashQuda}；Cython 层
         \texttt{\nolinkurl{pyquda_core/pyquda/src/quda.in.pyx:13-14}} 以
@@ -302,8 +302,10 @@ pyquda\_comm → Cython 绑定(quda.in.pyx) → QUDA C++ API(quda.h)}}
 (4) 格点场数据类（\texttt{\nolinkurl{pyquda_core/pyquda_comm/field.py}}）——构成
 “进程→设备→内存→物理场”的完整抽象。
 
-各层协作形成一个典型调用：\textcolor{relation}{\texttt{examples → pyquda\_utils.core.invert
-→ pyquda.dirac.WilsonDirac.invert → (src/quda.in.pyx)invertQuda → QUDA}}。
+各层协作形成一个典型调用：
+\textcolor{relation}{\texttt{examples $\rightarrow$ \nolinkurl{pyquda_utils.core.invert}
+$\rightarrow$ \nolinkurl{pyquda.dirac.WilsonDirac.invert} $\rightarrow$
+\nolinkurl{src/quda.in.pyx:invertQuda} $\rightarrow$ QUDA}}。
 第 5 节将沿此链完整走一遍。
 
 关系节回答了“各部分怎么连”。接下来回答“为什么这样设计”——即\textbf{项目思路}。
@@ -316,18 +318,18 @@ pyquda\_comm → Cython 绑定(quda.in.pyx) → QUDA C++ API(quda.h)}}
   \item \textcolor{idea}{\textbf{用 Python 驱动 GPU 格点 QCD}}：README 开宗明义
         “Python wrapper for QUDA written in Cython”，“benefit from the optimized
         linear algebra library CuPy in Python based on CUDA”
-        （\texttt{\detokenize{README.md:3-5}}）——目的不是重实现，而是把 QUDA 的
+        （\texttt{\nolinkurl{README.md:3-5}}）——目的不是重实现，而是把 QUDA 的
         求解器/Dslash/多重网格以零拷贝方式暴露给 Python 生态；
-  \item \textcolor{idea}{\textbf{张量后端可插拔}}：\texttt{\detokenize{pyquda_core/pyquda_comm/array.py:6-7}}
+  \item \textcolor{idea}{\textbf{张量后端可插拔}}：\texttt{\nolinkurl{pyquda_core/pyquda_comm/array.py:6-7}}
         声明 \texttt{numpy/cupy/dpnp/torch} 四后端与 \texttt{cpu/cuda/hip/sycl} 目标，
         \texttt{backendDeviceAPI} 统一设备枚举与切换
-        （\texttt{\detokenize{pyquda_core/pyquda_comm/array.py:19-78}}）——面向
+        （\texttt{\nolinkurl{pyquda_core/pyquda_comm/array.py:19-78}}）——面向
         NVIDIA（CUDA）/AMD（HIP）/Intel（SYCL）全平台；
   \item \textcolor{idea}{\textbf{MPI 多卡一体}}：\texttt{initGrid} 内置
         \texttt{getDefaultGrid} 通信量最小化网格划分
-        （\texttt{\detokenize{pyquda_core/pyquda_comm/__init__.py:222-262}}），
+        （\texttt{\nolinkurl{pyquda_core/pyquda_comm/__init__.py:222-262}}），
         \texttt{initDevice} 按 hostname 自动分配 GPU
-        （\texttt{\detokenize{pyquda_core/pyquda_comm/__init__.py:376-426}}）——
+        （\texttt{\nolinkurl{pyquda_core/pyquda_comm/__init__.py:376-426}}）——
         用户写单进程代码即可透明跑多卡；
   \item \textcolor{idea}{\textbf{自动代码生成减维护}}：Cython 绑定与插件绑定均由
         pycparser 从 C 头自动生成（\texttt{\nolinkurl{pyquda_core/pyquda_pyx.py:140-448}}），
@@ -339,18 +341,18 @@ pyquda\_comm → Cython 绑定(quda.in.pyx) → QUDA C++ API(quda.h)}}
 的结构性迹象（\textcolor{relation}{推断}）：
 \begin{itemize}
   \item \textbf{通用层下沉}：\texttt{pyquda\_comm} 已是独立公共包，且 \texttt{pyquda/field.py}
-        以 re-export + 扩展方式叠加高层方法（\texttt{\detokenize{pyquda_core/pyquda/field.py:8-31}}），
+        以 re-export + 扩展方式叠加高层方法（\texttt{\nolinkurl{pyquda_core/pyquda/field.py:8-31}}），
         说明数据类曾经历“从 pyquda 抽出为 pyquda\_comm”的重构；
-  \item \textbf{后端扩展}：\texttt{BackendType} 含 dpnp/torch（\texttt{\detokenize{pyquda_core/pyquda_comm/array.py:6-7}}），
-        而 README 早期版本仅强调 CuPy（\texttt{\detokenize{README.md:5}}）——后端面持续扩宽；
+  \item \textbf{后端扩展}：\texttt{BackendType} 含 dpnp/torch（\texttt{\nolinkurl{pyquda_core/pyquda_comm/array.py:6-7}}），
+        而 README 早期版本仅强调 CuPy（\texttt{\nolinkurl{README.md:5}}）——后端面持续扩宽；
   \item \textbf{插件框架化}：\texttt{pyquda\_plugins} 提供通用头文件→Cython 插件生成器
-        （\texttt{\detokenize{pyquda_plugins/plugin_pyx.py:232-281}}），
+        （\texttt{\nolinkurl{pyquda_plugins/plugin_pyx.py:232-281}}），
         pycontract/pygwu 只是两个已实现插件——框架先行，插件后补。
 \end{itemize}
 
 \subsection{典型工作流}
 一次典型的“从 gauge 场到物理可观测量”工作流（以 \texttt{examples/3\_Pion\_Proton\_2pt.py}
-为蓝本，\texttt{\detokenize{examples/3_Pion_Proton_2pt.py:10-33}}）：
+为蓝本，\texttt{\nolinkurl{examples/3_Pion_Proton_2pt.py:10-33}}）：
 \begin{lstlisting}[language=bash]
  核心init -> LatticeInfo -> getDirac(质量/精度/多重网格)
  -> readChromaQIOGauge(gauge) -> stoutSmear(链接平滑)
@@ -378,36 +380,36 @@ pyquda\_comm → Cython 绑定(quda.in.pyx) → QUDA C++ API(quda.h)}}
 \textbf{为什么存在}：夸克传播子 $S(x,y)=M^{-1}(x,y)$（$M=D+m$ 为 Dirac 矩阵）是格点 QCD
 几乎所有物理量的原材料（2pt 关联函数、三点函数、核子谱等）。PyQUDA 提供一条
 “\texttt{source → invert → setFermion}”的传播子生产线
-（\texttt{\detokenize{pyquda_utils/core.py:61-82}}）。
+（\texttt{\nolinkurl{pyquda_utils/core.py:61-82}}）。
 
 \textbf{前置条件}：(1) 已编译 QUDA 并设 \texttt{QUDA\_PATH}
-（\texttt{\detokenize{README.md:46-52}}）；(2) 安装 \texttt{PyQUDA} 与
-\texttt{PyQUDA-Utils}（\texttt{\detokenize{pyproject.toml:15-17}}）；(3) 运行时依赖
-mpi4py/numpy（\texttt{\detokenize{pyquda_core/requirements.txt:1-2}}）与所选后端
-（cupy/torch/dpnp）。工作流起点是 \texttt{core.init}（\texttt{\detokenize{examples/2_Quark_Propagator.py:8}}）。
+（\texttt{\nolinkurl{README.md:46-52}}）；(2) 安装 \texttt{PyQUDA} 与
+\texttt{PyQUDA-Utils}（\texttt{\nolinkurl{pyproject.toml:15-17}}）；(3) 运行时依赖
+mpi4py/numpy（\texttt{\nolinkurl{pyquda_core/requirements.txt:1-2}}）与所选后端
+（cupy/torch/dpnp）。工作流起点是 \texttt{core.init}（\texttt{\nolinkurl{examples/2_Quark_Propagator.py:8}}）。
 
 \subsection{A2 输入是什么}
 \textbf{数据输入}：规范场配置文件（Chroma QIO 格式 \texttt{.lime}），例如示例中的
-\texttt{\detokenize{.../C24P29/..._L24x72_cfg_48000.lime}}
-（\texttt{\detokenize{examples/2_Quark_Propagator.py:12}}）。
+\texttt{\nolinkurl{.../C24P29/..._L24x72_cfg_48000.lime}}
+（\texttt{\nolinkurl{examples/2_Quark_Propagator.py:12}}）。
 \textbf{参数输入}：
 \begin{itemize}
   \item 几何：\texttt{LatticeInfo([24,24,24,72], -1, 1.0)}（尺寸/反周期 t 边界/各向异性）
-        （\texttt{\detokenize{examples/2_Quark_Propagator.py:9}}）；
+        （\texttt{\nolinkurl{examples/2_Quark_Propagator.py:9}}）；
   \item 物理参数：质量 \texttt{-0.2770}、精度 \texttt{1e-12}、迭代上限 \texttt{1000}、
         各向异性参数 \texttt{1.160920226}、多重网格块 \texttt{[[6,6,6,4],[4,4,4,9]]}
-        （\texttt{\detokenize{examples/2_Quark_Propagator.py:11}}）；
+        （\texttt{\nolinkurl{examples/2_Quark_Propagator.py:11}}）；
   \item MPI 网格：\texttt{core.init([1,1,1,2], ...)}（2 卡沿 t 切分）
-        （\texttt{\detokenize{examples/2_Quark_Propagator.py:8}}）。
+        （\texttt{\nolinkurl{examples/2_Quark_Propagator.py:8}}）。
 \end{itemize}
 \textbf{依赖输入}：QUDA 库、Cython 生成物（\texttt{quda.pyx} 由构建期生成，
-\texttt{\detokenize{pyquda_core/setup.py:8-10}}）。
+\texttt{\nolinkurl{pyquda_core/setup.py:8-10}}）。
 
 \subsection{A3 输出应该是什么}
 \textbf{预期产物}：夸克传播子 $S$（\texttt{LatticePropagator}，形状
 \texttt{(2,Lt,Lz,Ly,Lx/2,4,4,3,3)} 奇偶分块）与派生的 $\pi$ 介子 2pt 关联函数
-（\texttt{\detokenize{examples/2_Quark_Propagator.py:19-27}}），最终输出
-\texttt{pion\_2pt.svg} 对数坐标图（\texttt{\detokenize{examples/2_Quark_Propagator.py:30-39}}）。
+（\texttt{\nolinkurl{examples/2_Quark_Propagator.py:19-27}}），最终输出
+\texttt{pion\_2pt.svg} 对数坐标图（\texttt{\nolinkurl{examples/2_Quark_Propagator.py:30-39}}）。
 物理上 2pt $\propto e^{-m_\pi t}$，斜率给出 $\pi$ 质量。
 
 \subsection{A4 整体框架}
@@ -429,18 +431,18 @@ mpi4py/numpy（\texttt{\detokenize{pyquda_core/requirements.txt:1-2}}）与所�
 \begin{itemize}
   \item \texttt{core.invert(dirac, "wall", t\_src)}：按 $N_s\times N_c=12$ 个源分量分批
         （\texttt{mrhs} 路多重源），每次 \texttt{source.source} 构造源、\texttt{invertMultiSrcRestart}
-        反演、\texttt{propag.setFermion} 组装（\texttt{\detokenize{pyquda_utils/core.py:61-82}}）；
+        反演、\texttt{propag.setFermion} 组装（\texttt{\nolinkurl{pyquda_utils/core.py:61-82}}）；
   \item \texttt{FermionDirac.invertMultiSrc}：设 \texttt{num\_src} 后调
-        \texttt{invertMultiSrcQuda}（\texttt{\detokenize{pyquda_core/pyquda/dirac/abstract.py:247-260}}），
-        底层是 Cython 直绑（\texttt{\detokenize{pyquda_core/pyquda/src/quda.in.pyx:252-255}}）；
+        \texttt{invertMultiSrcQuda}（\texttt{\nolinkurl{pyquda_core/pyquda/dirac/abstract.py:247-260}}），
+        底层是 Cython 直绑（\texttt{\nolinkurl{pyquda_core/pyquda/src/quda.in.pyx:252-255}}）；
   \item 多重网格：\texttt{Multigrid} 实例持有 \texttt{QudaMultigridParam}，首次加载 gauge 时
         \texttt{new()} 建 MG 预条件器，后续 \texttt{update()} 仅薄更新
-        （\texttt{\detokenize{pyquda_core/pyquda/dirac/general.py:478-543}}）。
+        （\texttt{\nolinkurl{pyquda_core/pyquda/dirac/general.py:478-543}}）。
 \end{itemize}
-\textbf{易错点}：\texttt{kappa} 由质量换算（\texttt{\detokenize{pyquda_core/pyquda/dirac/wilson.py:19}}）；
+\textbf{易错点}：\texttt{kappa} 由质量换算（\texttt{\nolinkurl{pyquda_core/pyquda/dirac/wilson.py:19}}）；
 反周期 t 边界与各向异性需在 \texttt{loadGauge} 前对 gauge 副本生效
-（\texttt{\detokenize{pyquda_core/pyquda/dirac/general.py:568-580}}）；源位置需按
-\texttt{gt*Lt <= t < (gt+1)*Lt} 判断本地归属（\texttt{\detokenize{pyquda_utils/source.py:55-66}}）。
+（\texttt{\nolinkurl{pyquda_core/pyquda/dirac/general.py:568-580}}）；源位置需按
+\texttt{gt*Lt <= t < (gt+1)*Lt} 判断本地归属（\texttt{\nolinkurl{pyquda_utils/source.py:55-66}}）。
 
 \subsection{A6 任务如何正确执行}
 标准执行路径（正确做法）：
@@ -455,52 +457,53 @@ with dirac.useGauge(gauge):
     propag = core.invert(dirac, "wall", t_src)   # 退出上下文自动 freeGauge
 \end{lstlisting}
 \texttt{useGauge} 上下文管理器保证 gauge 的 load/free 配对，栈式管理多 gauge
-（\texttt{\detokenize{pyquda_core/pyquda/dirac/abstract.py:50-75,165-171}}）。
+（\texttt{\nolinkurl{pyquda_core/pyquda/dirac/abstract.py:50-75,165-171}}）。
 
 \subsection{A7 实际执行情况}
 \textcolor{warn}{未验证}：本环境无 QUDA 库与 GPU，无法实跑反演。作为替代，仓库自带
 \texttt{tests/} 以 \texttt{weak\_field.lime} 弱场配置验证同路径
-（\texttt{\detokenize{tests/check_pyquda.py:1-31}，\detokenize{tests/test_clover.py:7-17}}）：
-\texttt{core.init(None,[4,4,4,8]) → getClover → useGauge → core.invert(...,"point",[0,0,0,0])}，
-并同 Chroma 参考传播子逐位比对（\texttt{\detokenize{tests/test_clover.py:16-21}}）。
+（\texttt{\nolinkurl{tests/check_pyquda.py:1-31}，\nolinkurl{tests/test_clover.py:7-17}}）：
+\texttt{core.init(None,[4,4,4,8]) $\rightarrow$ getClover $\rightarrow$ useGauge
+$\rightarrow$ \nolinkurl{core.invert(...,"point",[0,0,0,0])}}，
+并同 Chroma 参考传播子逐位比对（\texttt{\nolinkurl{tests/test_clover.py:16-21}}）。
 该测试路径与本节 15 步框架的步骤 0–4 完全一致，\textcolor{relation}{推断}其可作为
 本工作流的可运行等价物。
 
 \subsection{A8 实际输出情况}
 \textcolor{warn}{未验证}：未实跑故无实测产物。仓库测试的输出形态可从代码推知：
 校验量 \texttt{(propagator - propagator\_chroma).norm2()**0.5}（残差范数，
-\texttt{\detokenize{tests/test_clover.py:21}}）；示例输出为 \texttt{pion\_2pt.svg} 与
-对数坐标质量图（\texttt{\detokenize{examples/2_Quark_Propagator.py:35-37}，
-\detokenize{examples/3_Pion_Proton_2pt.py:76-83}}）。
+\texttt{\nolinkurl{tests/test_clover.py:21}}）；示例输出为 \texttt{pion\_2pt.svg} 与
+对数坐标质量图（\texttt{\nolinkurl{examples/2_Quark_Propagator.py:35-37}，
+\nolinkurl{examples/3_Pion_Proton_2pt.py:76-83}}）。
 
 \subsection{A9 结果分析}
 \textcolor{warn}{未验证}：无本机实测图表。仓库的自校验逻辑提供了“结果合理”的判定标准：
-(1) 传播子与 Chroma 参考逐位一致（\texttt{\detokenize{tests/test_clover.py:21}}）；
-(2) 2pt 对数图应为直线（\texttt{\detokenize{examples/2_Quark_Propagator.py:35-37}}）；
-(3) 有效质量图在平台区取值稳定（\texttt{\detokenize{examples/3_Pion_Proton_2pt.py:80-83}}）。
+(1) 传播子与 Chroma 参考逐位一致（\texttt{\nolinkurl{tests/test_clover.py:21}}）；
+(2) 2pt 对数图应为直线（\texttt{\nolinkurl{examples/2_Quark_Propagator.py:35-37}}）；
+(3) 有效质量图在平台区取值稳定（\texttt{\nolinkurl{examples/3_Pion_Proton_2pt.py:80-83}}）。
 此外 \texttt{test\_io.py} 验证读写往返（IO 层），\texttt{test\_pycontract.py} 对比
-\texttt{opt\_einsum} 与插件收缩（\texttt{\detokenize{tests/test_io.py:1-47}，
-\detokenize{tests/test_pycontract.py:1-380}}）——这些构成了“全链正确性”的实测证据面。
+\texttt{opt\_einsum} 与插件收缩（\texttt{\nolinkurl{tests/test_io.py:1-47}，
+\nolinkurl{tests/test_pycontract.py:1-380}}）——这些构成了“全链正确性”的实测证据面。
 
 \subsection{A10 综合分析}
 \textbf{代码-对象映射}：本工作流中每个代码步骤对应一个物理动作：
 \begin{itemize}
   \item \texttt{source.wall} $\leftrightarrow$ 在 $t=t_{src}$ 平面置 $\eta=1$（夸克源）
-        （\texttt{\detokenize{pyquda_utils/source.py:55-66}}）；
+        （\texttt{\nolinkurl{pyquda_utils/source.py:55-66}}）；
   \item \texttt{dirac.invert(b)} $\leftrightarrow$ 求解 $M\psi=\eta$，即 $\psi=S\eta$
-        （\texttt{\detokenize{pyquda_core/pyquda/dirac/abstract.py:212-216}}）；
+        （\texttt{\nolinkurl{pyquda_core/pyquda/dirac/abstract.py:212-216}}）；
   \item \texttt{propag.setFermion(x, spin, color)} $\leftrightarrow$ 把 12 个源分量解拼成
-        $4\times 3$ 矩阵传播子（\texttt{\detokenize{pyquda_core/pyquda_comm/field.py:1219-1224}}）；
+        $4\times 3$ 矩阵传播子（\texttt{\nolinkurl{pyquda_core/pyquda_comm/field.py:1219-1224}}）；
   \item \texttt{contract("wtzyxjiba,wtzyxjiba->t", ...)} $\leftrightarrow$
         $\sum_{xyz,\alpha\beta,a} |S(x,t)|^2$ 求 $\pi$ 2pt
-        （\texttt{\detokenize{examples/2_Quark_Propagator.py:27}}）；
+        （\texttt{\nolinkurl{examples/2_Quark_Propagator.py:27}}）；
   \item \texttt{gatherLattice} $\leftrightarrow$ 多卡子格点沿 t 拼接为整格点 2pt
-        （\texttt{\detokenize{pyquda_utils/core.py:315-385}}）。
+        （\texttt{\nolinkurl{pyquda_utils/core.py:315-385}}）。
 \end{itemize}
 \textbf{深层原因}：反演之所以要“12 个源分量 + 多重源批量”，是因为 $S$ 是矩阵
 $M^{-1}$，其列由 12 个标准基源张成（$N_s\times N_c=4\times 3=12$）；
 批量求解由 QUDA \texttt{invertMultiSrcQuda} 一次调用完成多右端项
-（\texttt{\detokenize{pyquda_core/pyquda/src/quda.in.pyx:252-255}}），大幅摊薄开销。
+（\texttt{\nolinkurl{pyquda_core/pyquda/src/quda.in.pyx:252-255}}），大幅摊薄开销。
 
 \subsection{A11 结尾总结}
 \begin{conclbox}
@@ -515,7 +518,7 @@ $M^{-1}$，其列由 12 个标准基源张成（$N_s\times N_c=4\times 3=12$）�
 \textbf{优点}：接口极简（一行反演）、后端可插拔、MPI 透明、构建期自动生成 Cython 绑定。
 \textbf{可改进处}（\textcolor{relation}{推断}）：反演参数（精度/迭代上限/MG 块）需用户显式
 指定，缺少面向结果的自动容差策略；示例中 \texttt{t\_src} 全时间面逐点循环
-（\texttt{\detokenize{examples/2_Quark_Propagator.py:16}}）在资源上可进一步合并。
+（\texttt{\nolinkurl{examples/2_Quark_Propagator.py:16}}）在资源上可进一步合并。
 
 \subsection{A13 补充说明}
 \textcolor{warn}{未覆盖项}：A7/A8/A9 因无 QUDA/GPU 环境而\textbf{未实跑}，仅以仓库自测
@@ -638,7 +641,7 @@ vendored \texttt{pycparser}（~126 文件）与 QUDA 头文件（137 个 h）仅
 \texttt{\nolinkurl{examples/3_Pion_Proton_2pt.py:10-33}} & 仓库 & $\pi$/p 2pt 示例 \\
 \texttt{\nolinkurl{examples/1_Quenched_HMC.py:9-44}} & 仓库 & 淬火 HMC 示例 \\
 \texttt{\nolinkurl{tests/test_clover.py:1-21}} & 仓库 & Clover 反演对 Chroma 验证 \\
-\texttt{\nolinkurl{tests/check_pyquda.py:1-31}} & 仓库 & 测试基础设施（weak_field） \\
+\texttt{\nolinkurl{tests/check_pyquda.py:1-31}} & 仓库 & 测试基础设施（weak\_field） \\
 \texttt{\nolinkurl{docs/pure_pyquda_core_20260815.tex}} & 参考 & 前序 pure 报告（本库 docs/） \\
 \bottomrule
 \end{xltabular}
@@ -660,7 +663,7 @@ MPI 透明、绑定自动生成；
 
 \begin{refbox}
 \textbf{参考背景}：PyQUDA 官方 README 功能清单与本文档一一对应
-（\texttt{\detokenize{README.md:9-43}}）：本文档覆盖了其全部 6 类功能
+（\texttt{\nolinkurl{README.md:9-43}}）：本文档覆盖了其全部 6 类功能
 （多卡/IO/传播子/HMC/平滑/流），其中传播子与 IO 为 15 步框架主体。
 \end{refbox}
 
