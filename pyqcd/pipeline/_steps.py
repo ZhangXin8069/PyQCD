@@ -91,13 +91,13 @@ def _warn(logger, msg):
 
 def _timer(name, logger, fn, *args, **kw):
     """带计时地执行 fn(*args, **kw)，返回 (结果, 秒数)。"""
-    if HAS_CUPY:
+    if get_backend_name() == 'cupy':
         _cp.cuda.Stream.null.synchronize()
     t0 = time.perf_counter()
     try:
         res = fn(*args, **kw)
     finally:
-        if HAS_CUPY:
+        if get_backend_name() == 'cupy':
             _cp.cuda.Stream.null.synchronize()
     el = time.perf_counter() - t0
     _info(logger, f"{name}: {el:.3f} s")
@@ -112,8 +112,11 @@ def free_gpu_memory():
             torch.cuda.empty_cache()
         except Exception:
             pass
-    if HAS_CUPY:
-        _cp.get_default_memory_pool().free_all_blocks()
+    if get_backend_name() == 'cupy' and HAS_CUPY:
+        try:
+            _cp.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
 
 
 def log_gpu_memory(logger, label: str = ''):
@@ -127,10 +130,13 @@ def log_gpu_memory(logger, label: str = ''):
                 return
         except Exception:
             pass
-    if HAS_CUPY:
-        total, used = _cp.cuda.runtime.memGetInfo()
-        _info(logger, f"GPU memory{label}: used={(total - used)/2**20:.0f} MB, "
-                      f"free={used/2**20:.0f} MB, total={total/2**20:.0f} MB")
+    if get_backend_name() == 'cupy' and HAS_CUPY:
+        try:
+            total, used = _cp.cuda.runtime.memGetInfo()
+            _info(logger, f"GPU memory{label}: used={(total - used)/2**20:.0f} MB, "
+                          f"free={used/2**20:.0f} MB, total={total/2**20:.0f} MB")
+        except Exception:
+            pass
     else:
         _info(logger, f"GPU memory{label}: N/A")
 
@@ -721,7 +727,7 @@ def compute_ope_for_config(conf_id, run_dir, logger, precision='complex64',
     if all(any(os.path.exists(p + e) for e in ('.h5', '.npz'))
            for p in paths.values()) and not recompute:
         _info(logger, f"  conf={conf_id}: loading cached OPE components")
-        ops = {c: _load_any(p, dataset='ops') for c, p in paths.items()}
+        ops = {c: _load_any(p, dataset='data') for c, p in paths.items()}
         combined = -ops[(3, 0)] - ops[(3, 1)] + 2.0 * ops[(0, 1)]
         return {'components': ops, 'combined': combined}
 

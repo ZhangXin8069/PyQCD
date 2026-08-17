@@ -190,10 +190,19 @@ def gluon_ope_operator_z0(gauge, mu: int, nu: int, z_dir: int, delta_z: int,
 # ═══════════════════════════════════════════════════════════════════
 
 def _first_link_unitarity(raw: np.ndarray, Nc: int = 3) -> float:
-    """首 3×3 链接的幺正性偏差 |U·U† − I|。"""
+    """首 3×3 链接的幺正性偏差 |U·U† − I|。
+
+    对乱字节偏移（数据起点未对齐时）可能产生 inf/nan，这里用 errstate
+    抑制溢出告警并以 isfinite 兜底，避免刷屏、保证错偏移被正确拒绝。
+    """
     U = raw[:Nc * Nc * 2].reshape(Nc, Nc, 2)
     Uc = U[..., 0] + 1j * U[..., 1]
-    return float(np.abs(Uc @ Uc.conj().T - np.eye(Nc)).max())
+    with np.errstate(over='ignore', invalid='ignore'):
+        try:
+            dev = float(np.abs(Uc @ Uc.conj().T - np.eye(Nc)).max())
+        except (FloatingPointError, ValueError):
+            return float('inf')
+    return dev if np.isfinite(dev) else float('inf')
 
 
 def read_gauge_lime(filepath: str, Nt: int, Nx: int, Nc: int = 3) -> np.ndarray:
@@ -201,6 +210,11 @@ def read_gauge_lime(filepath: str, Nt: int, Nx: int, Nc: int = 3) -> np.ndarray:
 
     ILDG .lime 为大端 float64 + XML 头 + 尾部记录；扫描 ±16KB 窗口
     按幺正性定位数据起点。
+
+    优化：幺正性判定只需首链接（18 个 double = 144B）。先用微小探针定位
+    合法偏移，命中后才全量读取一次，避免每个候选偏移都读整份（≈573MB）
+    造成的 TB 级读盘与乱字节数据导致的 matmul 溢出告警。扫描顺序、阈值
+    与回退逻辑与原实现完全一致。
     """
     expected_elems = Nt * Nx * Nx * Nx * 4 * Nc * Nc * 2
     expected_bytes = expected_elems * 8
@@ -212,18 +226,28 @@ def read_gauge_lime(filepath: str, Nt: int, Nx: int, Nc: int = 3) -> np.ndarray:
             f.seek(off)
             return np.fromfile(f, dtype='>f8', count=expected_elems)
 
-    if 0 <= approx_off < file_size:
+    def _probe_unitarity(off: int) -> bool:
+        """仅读首链接（144B）判定偏移合法性。"""
+        if off < 0 or off + expected_bytes > file_size:
+            return False
+        with open(filepath, 'rb') as f:
+            f.seek(off)
+            head = np.fromfile(f, dtype='>f8', count=Nc * Nc * 2)
+        if head.size != Nc * Nc * 2:
+            return False
+        return _first_link_unitarity(head, Nc) < 1e-3
+
+    if 0 <= approx_off < file_size and _probe_unitarity(approx_off):
         raw = _read_at(approx_off)
         if raw.size == expected_elems and _first_link_unitarity(raw, Nc) < 1e-3:
             return _gauge_from_raw(raw, Nt, Nx, Nc)
 
     for delta in range(-16384, 16385, 8):
         off = approx_off + delta
-        if off < 0 or off + expected_bytes > file_size:
-            continue
-        raw = _read_at(off)
-        if raw.size == expected_elems and _first_link_unitarity(raw, Nc) < 1e-3:
-            return _gauge_from_raw(raw, Nt, Nx, Nc)
+        if _probe_unitarity(off):
+            raw = _read_at(off)
+            if raw.size == expected_elems and _first_link_unitarity(raw, Nc) < 1e-3:
+                return _gauge_from_raw(raw, Nt, Nx, Nc)
 
     raise ValueError(f"No valid gauge data found in {filepath} "
                      f"(size={file_size} bytes)")
