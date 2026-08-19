@@ -181,6 +181,27 @@ def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
     return out
 
 
+def tmd_matrix_elements_time(U, z_list, b_list, z_dir=2, b_dir=0, L=None):
+    """批量计算 O(z, b⊥) 逐时间片（空间求和保留 t 轴）：返回 (nz, nb, Nt)。
+
+    与 ``tmd_matrix_elements`` 的区别：不做时间片平均，保留每个 t 的
+    空间求和值——供 disconnected 3pt 因子化 C3 = C2(dt)·OPE(dtau, z, b)
+    使用（OPE(dtau, z, b) 需要逐时间片的算符矩阵元）。
+
+    Returns:
+        out: (nz, nb, Nt) 实数数组（每项为 Σ_{x,y,z} O(z,b⊥)(t)）。
+    """
+    cp = get_backend()
+    Nt = U.shape[0]
+    out = np.zeros((len(z_list), len(b_list), Nt), dtype=np.float64)
+    for i, z in enumerate(z_list):
+        for j, b in enumerate(b_list):
+            O = gluon_tmd_operator(U, z, b, z_dir, b_dir, L)
+            val = _to_cpu(cp.sum(O, axis=(1, 2, 3)))
+            out[i, j] = np.real(val)
+    return out
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 梯度流重整化流程
 # ═══════════════════════════════════════════════════════════════════

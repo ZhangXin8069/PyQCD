@@ -213,16 +213,26 @@ def _compute_vvv_single_t_gpu(ev_t_gpu, ph_gpu, Nx, Nev1):
 
 
 def compute_vertices_for_config(conf_id, run_dir, logger,
-                                precision='complex64', recompute=False):
-    """一个组态的 VdV/VVV（缓存命中则直接读取）。"""
+                                precision='complex64', recompute=False,
+                                mom_sink_vdv=None, mom_sink_vvv=None):
+    """一个组态的 VdV/VVV（缓存命中则直接读取）。
+
+    动量列表可自定义（默认用全局 MOM_SINK_VDV/MOM_SINK_VVV），
+    供 test9 等多动量物理链复用；缓存路径带动量指纹避免串数据。
+    """
     backend = get_backend()
     if get_backend_name() == 'torch':
         set_precision(precision)
     dtype = np.complex64 if precision == 'complex64' else np.complex128
 
+    mom_vdv = list(mom_sink_vdv) if mom_sink_vdv is not None else list(MOM_SINK_VDV)
+    mom_vvv = list(mom_sink_vvv) if mom_sink_vvv is not None else list(MOM_SINK_VVV)
+
     cdir = conf_data_dir(run_dir, conf_id)
-    vdv_path = os.path.join(cdir, f'VdV_mom_{conf_id}.npy')
-    vvv_path = os.path.join(cdir, f'VVV_mom_{conf_id}.npy')
+    mom_fp = f"mom{''.join(str(m[0])+str(m[1])+str(m[2]) for m in mom_vdv)}" \
+             if mom_sink_vdv is not None else 'mom'
+    vdv_path = os.path.join(cdir, f'VdV_{mom_fp}_{conf_id}.npy')
+    vvv_path = os.path.join(cdir, f'VVV_{mom_fp}_{conf_id}.npy')
 
     if os.path.exists(vdv_path) and os.path.exists(vvv_path) and not recompute:
         VdV = np.load(vdv_path)
@@ -232,22 +242,22 @@ def compute_vertices_for_config(conf_id, run_dir, logger,
         return {'VdV': VdV, 'VVV': VVV}
 
     _info(logger, f"  conf={conf_id}: computing vertices over {NT} time slices "
-                  f"(VdV {len(MOM_SINK_VDV)} mom, VVV {len(MOM_SINK_VVV)} mom, "
+                  f"(VdV {len(mom_vdv)} mom, VVV {len(mom_vvv)} mom, "
                   f"Nev={NEV}, Nev1={NEV1}, dtype={dtype.__name__})")
 
-    p2f = np.zeros((len(MOM_SINK_VDV), NX * NX * NX * 3), dtype=np.complex128)
-    for i, mom in enumerate(MOM_SINK_VDV):
+    p2f = np.zeros((len(mom_vdv), NX * NX * NX * 3), dtype=np.complex128)
+    for i, mom in enumerate(mom_vdv):
         _ph = phase_exp_2pt(NX, mom)
         _ph_np = _ph.get() if hasattr(_ph, 'get') else np.asarray(_ph)
         p2f[i] = _ph_np.reshape(-1)
     p2f_gpu = backend.asarray(p2f.astype(dtype))
     p3_list = []
-    for mom in MOM_SINK_VVV:
+    for mom in mom_vvv:
         _ph = phase_exp_3pt(NX, mom)
         p3_list.append(_ph.get() if hasattr(_ph, 'get') else np.asarray(_ph))
 
-    VdV = np.zeros((NT, len(MOM_SINK_VDV), NEV, NEV), dtype=dtype)
-    VVV = np.zeros((NT, len(MOM_SINK_VVV), NEV1, NEV1, NEV1), dtype=dtype)
+    VdV = np.zeros((NT, len(mom_vdv), NEV, NEV), dtype=dtype)
+    VVV = np.zeros((NT, len(mom_vvv), NEV1, NEV1, NEV1), dtype=dtype)
 
     t0 = time.perf_counter()
     for t in range(NT):
@@ -417,6 +427,88 @@ def compute_2pt_for_config(conf_id, run_dir, logger, vertices,
     for key, arr in acc.items():
         save_array(os.path.join(cdir, f'{key}_{conf_id}.npy'), arr, logger)
     _info(logger, f"  2pt saved: " + ", ".join(
+        f"{k}={v[0]:.3e}" for k, v in acc.items()))
+    return acc
+
+
+def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
+                                 momenta=((0, 0, 0), (0, 0, 2), (0, 0, 4)),
+                                 precision=PRECISION,
+                                 channels=('pp', 'pn', 'pion'),
+                                 v_kind='VVV'):
+    """多动量 2pt（test9 胶子 TMD 物理链用）：按 (pz,py,px) 列表逐动量计算。
+
+    momenta: 形如 [(pz,py,px), ...] 的动量列表（格点单位 2π/L）。
+    输出键：corr_{ch}_P{pz}{py}{px}（如 corr_pp_P000 / P200 / P400）。
+    顶点由 compute_vertices_for_config 的 mom_sink_vdv/vvv 提供对应索引。
+    """
+    backend = get_backend()
+    if get_backend_name() == 'torch':
+        set_precision(precision)
+    dtype = np.complex64 if precision == 'complex64' else np.complex128
+    cdir = conf_data_dir(run_dir, conf_id)
+
+    VdV = vertices['VdV']
+    VVV = vertices['VVV']
+    peram_dir = get_peram_dir(conf_id)
+    n_mom = len(momenta)
+    tags = [f'P{m[0]}{m[1]}{m[2]}' for m in momenta]
+
+    projector = backend.asarray((gamma(0) + gamma(4)) / 2.0, dtype=dtype)
+    g7 = backend.asarray(gamma(7), dtype=dtype)
+    g5 = backend.asarray(gamma(5), dtype=dtype)
+
+    op_cfg = {
+        'pp':   (PP_SINK, PP_SRC, g7, 'gamma_7'),
+        'pn':   (PN_SINK, PN_SRC, g7, 'gamma_7'),
+        'pion': (PION_SINK, PION_SRC, g5, 'gamma_5'),
+    }
+    op_cfg = {ch: op_cfg[ch] for ch in channels}
+
+    acc = {f'corr_{ch}_{tag}': np.zeros(NT, dtype=np.float64)
+           for ch in channels for tag in tags}
+    _info(logger, f"  2pt multi: channels={list(op_cfg.keys())}, "
+                  f"momenta={list(momenta)}, v_kind={v_kind}")
+    t_start = time.perf_counter()
+
+    for t_src in range(NT):
+        peram_cpu = readin_peram_time_slice(peram_dir, str(conf_id), t_src,
+                                            NT, NEV)
+        peram_t = backend.asarray(peram_cpu.astype(dtype))
+        peram_seq_t = seq_peram(peram_t)
+
+        for t_sink in range(NT):
+            dt = (t_sink - t_src + NT) % NT
+            for ch, (sink_op, src_op, gval, gname) in op_cfg.items():
+                for mi in range(n_mom):
+                    tag = tags[mi]
+                    if v_kind == 'VVV':
+                        v_src = backend.asarray(
+                            VVV[t_src, mi:mi + 1].conj(), dtype=dtype)
+                        v_sink = backend.asarray(
+                            VVV[t_sink, mi:mi + 1], dtype=dtype)
+                    else:
+                        v_src = backend.asarray(
+                            VdV[t_src, mi:mi + 1].conj(), dtype=dtype)
+                        v_sink = backend.asarray(
+                            VdV[t_sink, mi:mi + 1], dtype=dtype)
+                    val = _run_2pt(backend, sink_op, src_op,
+                                   peram_t, peram_seq_t,
+                                   t_src, t_sink, v_src, v_sink, v_kind,
+                                   gname, gval, projector)
+                    acc[f'corr_{ch}_{tag}'][dt] += val / NT
+
+        if t_src % 12 == 0 or t_src == NT - 1:
+            _info(logger, f"    t_src={t_src:3d}/{NT} "
+                          f"elapsed={time.perf_counter()-t_start:.0f}s "
+                          + " ".join(
+                              f"{ch}{tags[0]}={acc[f'corr_{ch}_{tags[0]}'][0]:.4e}"
+                              for ch in channels))
+        del peram_t, peram_seq_t
+
+    for key, arr in acc.items():
+        save_array(os.path.join(cdir, f'{key}_{conf_id}.npy'), arr, logger)
+    _info(logger, f"  2pt multi saved: " + ", ".join(
         f"{k}={v[0]:.3e}" for k, v in acc.items()))
     return acc
 
