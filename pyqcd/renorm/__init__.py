@@ -22,7 +22,8 @@ from ._gradient_flow import (
 )
 from ._tmd import (
     staple_wilson_line, M_mu_lambda_nu_rho, gluon_tmd_operator,
-    tmd_matrix_elements, gradient_flow_renormalized_tmd,
+    tmd_matrix_elements, tmd_matrix_elements_time,
+    gradient_flow_renormalized_tmd,
     self_renormalized_ratio, invariant_amplitude, collins_soper_kernel,
 )
 from ._tmdextract import (
@@ -49,7 +50,8 @@ __all__ = [
     "flow_action_density", "scale_setting_t0", "proj_su3",
     # TMD
     "staple_wilson_line", "M_mu_lambda_nu_rho", "gluon_tmd_operator",
-    "tmd_matrix_elements", "gradient_flow_renormalized_tmd",
+    "tmd_matrix_elements", "tmd_matrix_elements_time",
+    "gradient_flow_renormalized_tmd",
     "self_renormalized_ratio", "invariant_amplitude", "collins_soper_kernel",
     "quasi_tmd_pdf", "cs_kernel_from_ratio", "soft_function_intrinsic",
     "tmd_matching_hybrid", "sftx_gluon_matching_coeff",
