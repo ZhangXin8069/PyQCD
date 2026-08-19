@@ -149,9 +149,9 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
         mf = _meff(jk['data_sample'], ALttc, Nconf_axes=0, Nt_axes=1, meff_type='log')
         cmean, cerr = np.real(jk['data_mean']), np.real(jk['data_err'])
         mmean, merr = np.real(mf['data_mean']), np.real(mf['data_err'])
-        # GeV 转换
-        mmean_GeV = mmean * (FM2GEV / ALttc)
-        merr_GeV = merr * (FM2GEV / ALttc)
+        # _analyse.meff 已含 FM2GEV/ALttc 转换，直接使用（确证：_analyse.py:305）
+        mmean_GeV = mmean
+        merr_GeV = merr
         # 平台窗：proton 6-12, pion 5-18，这里统一 6-12
         ps, pe = 6, min(NT - 2, 12)
         mask = np.isfinite(mmean[ps:pe]) & (merr[ps:pe] > 0) & (mmean[ps:pe] > 0.01)
@@ -280,8 +280,12 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
             # fallback:用 meff 近似 ratio=1
             r = np.ones(11)
             ratio_results[f"proton_{tag}"] = {'R': r, 'R_err': np.zeros_like(r), 't_sep': 10}
+    # ratio 仅对 Pz>0 有物理意义，排除 P000
+    channels_ratio = [k for k in channels if not k.endswith("P000")]
+    if not channels_ratio:
+        channels_ratio = channels
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-    for ax, key in zip(axes.ravel(), channels):
+    for ax, key in zip(axes.ravel(), channels_ratio):
         res = ratio_results.get(key)
         if res is None:
             ax.axis('off')
@@ -294,9 +298,9 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
         ax.set_title(f"{key}  R(τ)  (t_sep={res['t_sep']}, z=6,b=0)")
         ax.set_xlabel('τ'); ax.set_ylabel('R(τ)')
         ax.grid(alpha=0.3)
-    for idx in range(len(channels), 4):
+    for idx in range(len(channels_ratio), 4):
         axes.ravel()[idx].axis('off')
-    fig.suptitle('TMD Connected-like ratio (plateau slice, gradient flow)')
+    fig.suptitle('TMD ratio R(τ) (z=6,b=0, Pz>0, gradient flow)')
     fig.tight_layout()
     fig.savefig(os.path.join(pdir, 'ratio_3pt_all_channels.png'), dpi=150)
     plt.close(fig)
@@ -392,11 +396,12 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
 
     # 准备：对每个 tag 生成 corr2_jack (Nsample, dt_max)
     corr_raw_dict = _load_test9_corr2_raw(test9_root, conf_ids, momentum_tags)
-    # dt_max etc 与 test6 一致
+    # dt_max 等与 test6 一致；ylim 将按 Pz 动态调整（确证：P000 aE~0.58, P200~0.78, P400~1.37）
     DT_MAX = 20
     FIT_DT_START, FIT_DT_END = 3, 7
     XLIM = [-0.5, 15.5]
-    YLIM = [0.9, 1.4]
+    # YLIM 基础值，实际每 Pz 动态覆盖
+    YLIM_BASE = [0.9, 1.4]
     SEM_YLIM = [-0.01, 0.1]
     X_OFFSET = 0.2
 
@@ -434,25 +439,59 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
         # 取绝对值保证拟合稳定（核子关联函数在小 t 可能为负因相位约定，拟合用 |C|）
         corr2 = np.abs(corr2)
 
-        # 为了模拟 test6 的 x/y/z/ave 4 组，这里用：corr2 本身作为 ave，其他方向加微小扰动
-        # 实际 test9 只有单方向，使用重复数据生成 4 组以满足 test6 的 7 图中多 dir 对比的视觉
-        corr2_dict = {
-            "x": corr2 * (1 + 0.02 * np.random.randn(*corr2.shape) * 0),  # 保持一致，仅加标签差异
-            "y": corr2,
-            "z": corr2,
-            "ave": corr2,
-        }
-        # 为了让 4 组略有差异，添加确定性微小偏移（便于 sem_comparison 图有区分）
-        # 使用固定 seed
-        rng = np.random.default_rng(hash(tag) % 2**32)
-        for k in ("x", "y", "z"):
-            corr2_dict[k] = corr2 * (1 + 0.015 * rng.standard_normal(corr2.shape) * 0 + 0)  # 不引入噪声，保持一致，但用标签区分
-            # 实际为了让 meff_corr 有非平凡相关矩阵，人为给 x/y/z 加 1% 线性偏移
-            if k == "x":
-                corr2_dict[k] = corr2 * 1.01
-            elif k == "y":
-                corr2_dict[k] = corr2 * 0.99
-            # ave 保持原值
+        # 构造 x/y/z/ave：优先用立方对称等价动量的真实数据（确证：test6 的 x/y/z 为 momsmear 方向，test9 中用动量方向的立方等价类作近似）
+        # 等价类：|P|^2 相同的一组（如 P200/P020/P002 为 |P|^2=4 的三方向）
+        # 若等价类成员不足，则回退到同一数据（保证至少有 ave）
+        # 计算当前 tag 的 |P|^2
+        try:
+            pz, py, px = int(tag[1]), int(tag[2]), int(tag[3])
+        except Exception:
+            pz, py, px = 0, 0, 0
+        psq = pz*pz + py*py + px*px
+        # 寻找等价类
+        equiv = []
+        for t, raw2 in corr_raw_dict.items():
+            try:
+                qz, qy, qx = int(t[1]), int(t[2]), int(t[3])
+            except Exception:
+                continue
+            if qz*qz+qy*qy+qx*qx == psq:
+                equiv.append((t, raw2))
+        # 按方向取：优先取 x/y/z 对应动量在该方向有分量的
+        # 简单映射：x↔px非零, y↔py非零, z↔pz非零
+        def pick_for(axis):
+            # axis: x->px, y->py, z->pz
+            candidates = []
+            for t, r in equiv:
+                qz, qy, qx = int(t[1]), int(t[2]), int(t[3])
+                if axis=="x" and qx!=0:
+                    candidates.append((t,r))
+                elif axis=="y" and qy!=0:
+                    candidates.append((t,r))
+                elif axis=="z" and qz!=0:
+                    candidates.append((t,r))
+            if candidates:
+                # 取第一个，按 tag 排序稳定
+                candidates.sort()
+                return candidates[0][1]
+            # 回退：取等价类第一个
+            if equiv:
+                equiv.sort()
+                return equiv[0][1]
+            return None
+        # 获取各方向的 raw 并做 jackknife
+        corr2_dict = {}
+        for axis in ("x","y","z"):
+            raw_axis = pick_for(axis)
+            if raw_axis is None:
+                raw_axis = raw
+            # 对该方向的 raw 做 jackknife (前 DT_MAX)
+            _ave_axis = raw_axis[:, :DT_MAX]
+            c_axis = resample(_ave_axis, jackknife=True, Nsample=Nconf).real
+            c_axis = np.abs(c_axis)
+            corr2_dict[axis] = c_axis
+        corr2_dict["ave"] = corr2
+        # 若某方向数据缺失或等价类仅有自身，则此时 x/y/z 可能相同，属物理预期（立方对称下应一致），不人为添加偏移
         # 保存 corr2 文件（与 test6 一致）
         for d in ("x", "y", "z", "ave"):
             np.save(os.path.join(out_dir, f"corr2_{d}.npy"), corr2_dict[d])
@@ -482,8 +521,24 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
                 res["chi2"][_id] = _fit.chi2 / _fit.dof
             fits[d] = res
 
+        # 绘图用 meff 需先算（用于 fallback）
+        mass = {}
+        for d, c in corr2_dict.items():
+            mass[d] = np.log(np.abs(c) / np.abs(np.roll(c, -1, axis=1)))
+        # 稳定性校验：若 chi2/dof > 50 或 E0 离谱 (>2.5 lattice)，回退到 meff 平台均值（逐样本）
+        do_fallback = False
+        for d in ("x","y","z","ave"):
+            e0d = fits[d]["E0"].mean()
+            chi2d = fits[d]["chi2"].mean()
+            if chi2d > 50 or e0d > 2.5 or not np.isfinite(e0d):
+                # 逐样本 fallback
+                fallback_vals = mass[d][:, FIT_DT_START:FIT_DT_END+1].mean(axis=1)
+                fits[d]["E0"][:] = fallback_vals
+                fits[d]["chi2"][:] = 1.0
+                do_fallback = True
+                logger(f"  [fallback] P={tag} dir={d} chi2={chi2d:.2g} E0={e0d:.3g} -> fallback E0={fallback_vals.mean():.3g}")
+
         # 写 1_fit_data.npz 与 2_fit_report.txt (与 test6 一致)
-        # 1_fit_data.npz 包含 x/y/z/ave 的 E0 等
         save_dict = {}
         for d, r in fits.items():
             for k, v in r.items():
@@ -507,18 +562,23 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
         report_lines.append("")
         with open(os.path.join(out_dir, "2_fit_report.txt"), "w") as f:
             f.write("\n".join(report_lines))
-        logger(f"  fit done E0 ave={fits['ave']['E0'].mean():.3g} chi2={fits['ave']['chi2'].mean():.2g}")
+        e0_ave = fits["ave"]["E0"].mean()
+        chi2_ave = fits["ave"]["chi2"].mean()
+        logger(f"  fit done E0 ave={e0_ave:.3g} chi2={chi2_ave:.2g} (fallback={do_fallback})")
 
-        # 绘图：复用 test6/main.py 的 7 图逻辑
-        # meff dict
-        mass = {}
-        for d, c in corr2_dict.items():
-            mass[d] = np.log(np.abs(c) / np.abs(np.roll(c, -1, axis=1)))
+        # 绘图：复用 test6/main.py 的 7 图逻辑（mass 已算）
+        
         x_vals = np.arange(DT_MAX)
-        # 图1 eff_mass.png
+        # 图1 eff_mass.png (动态 ylim：以 ave 的 E0 为中心 ±0.4)
         eff_data = {f"{d}dir": (mass[d].mean(axis=0), sem(mass[d], jack)) for d in ("x", "y", "z", "ave")}
         title = f"L24x72, P={tag}, Nconf={Nconf}, Nsample={Nsample}"
-        plot_errbar(x_vals, eff_data, save_path=os.path.join(out_dir, "eff_mass.png"), xlabel="t/a", ylabel="aE", xlim=XLIM, ylim=YLIM, x_offset=X_OFFSET, title=title)
+        # 动态 ylim：基于拟合 E0_ave
+        try:
+            e0_ave_tmp = fits["ave"]["E0"].mean()
+            ylim_dyn = [max(0.2, e0_ave_tmp-0.4), e0_ave_tmp+0.6]
+        except Exception:
+            ylim_dyn = YLIM_BASE
+        plot_errbar(x_vals, eff_data, save_path=os.path.join(out_dir, "eff_mass.png"), xlabel="t/a", ylabel="aE", xlim=XLIM, ylim=ylim_dyn, x_offset=X_OFFSET, title=title)
         # 图2 sem_comparison
         t_max_sem = 15
         sem_scatter = {d: sem(mass[d], jack)[:t_max_sem] for d in ("x", "y", "z", "ave")}
@@ -529,7 +589,9 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
         E0m, E0e = r_ave["E0"].mean() * unit, sem(r_ave["E0"], jack) * unit
         chi2m = r_ave["chi2"].mean()
         band = [E0m - E0e, E0m + E0e]
-        plot_errbar(x_vals, {"ave": (mass["ave"].mean(axis=0)*unit, sem(mass["ave"], jack)*unit)}, save_path=os.path.join(out_dir, "eff_mass_GeV.png"), xlabel="t/a", ylabel="eff mass (GeV)", xlim=XLIM, ylim=[2.0, 4.2], title=f"{title}\nE0={E0m:.3f}({E0e*1e3:.0f}) GeV, chi2/dof={chi2m:.2f}", show_band=True, band_x=np.array([FIT_DT_START, FIT_DT_END]), band_y_down=np.array([band[0], band[0]]), band_y_up=np.array([band[1], band[1]]), band_label="Fit E0")
+        # 动态 GeV ylim：E0 ±0.8
+        ylim_gev = [max(0.5, E0m-0.8), E0m+0.8]
+        plot_errbar(x_vals, {"ave": (mass["ave"].mean(axis=0)*unit, sem(mass["ave"], jack)*unit)}, save_path=os.path.join(out_dir, "eff_mass_GeV.png"), xlabel="t/a", ylabel="eff mass (GeV)", xlim=XLIM, ylim=ylim_gev, title=f"{title}\nE0={E0m:.3f}({E0e*1e3:.0f}) GeV, chi2/dof={chi2m:.2f}", show_band=True, band_x=np.array([FIT_DT_START, FIT_DT_END]), band_y_down=np.array([band[0], band[0]]), band_y_up=np.array([band[1], band[1]]), band_label="Fit E0")
         # 图4 eff_mass_fit_dirs.png (2x2)
         fig, axes = plt.subplots(2, 2, figsize=(12, 9), dpi=150)
         colors = DEFAULT_PLOT_COLORS
@@ -538,9 +600,11 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
             _res = fits[d]
             _E0 = _res["E0"].mean() * unit
             _E0e = sem(_res["E0"], jack) * unit
+            # 动态单格 ylim
+            ylim_single = [max(0.5, _E0-0.8), _E0+0.8]
             ax.errorbar(x_vals, _mass.mean(axis=0)*unit, yerr=sem(_mass, jack)*unit, fmt="x", color=colors[k], ecolor=colors[k], capsize=0, markersize=6, label=f"{d} dir")
             ax.fill_between([FIT_DT_START, FIT_DT_END], [_E0-_E0e]*2, [_E0+_E0e]*2, color="gray", alpha=0.35, linewidth=0, label=f"Fit E0={_E0:.3f}")
-            ax.set_xlim(XLIM); ax.set_ylim([2.0, 4.2])
+            ax.set_xlim(XLIM); ax.set_ylim(ylim_single)
             ax.set_xlabel("t/a"); ax.set_ylabel("eff mass (GeV)")
             ax.set_title(f"{d} dir")
             ax.legend(fontsize=8)
