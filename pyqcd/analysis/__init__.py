@@ -28,7 +28,8 @@ __all__ = ["Mom2GeV", "Jackknife", "Bootstrap", "meff", "ratio_3pt", "loop_tsrc"
     "EnergyParams", "energy_model", "compute_corr2", "energy_do_fit",
     "plot_eff_mass", "run_energy",
     "FHParams", "compute_fh", "fh_model", "plot_fh", "fh_do_fit",
-    "plot_para", "plot_para_cmp", "run_fh"]
+    "plot_para", "plot_para_cmp", "run_fh",
+    "generate_test0_style_plots", "generate_test6_style_plots"]
 
 Namespace.__module__ = "pyqcd.analysis"
 
@@ -73,4 +74,8 @@ from ._proton_energy import (
 from ._fh import (
     FHParams, compute_fh, fh_model, plot_fh, do_fit_and_report as fh_do_fit,
     plot_para, plot_para_cmp, run_fh,
+)
+from ._test9_extended import (
+    generate_test0_style_plots,
+    generate_test6_style_plots,
 )
