@@ -36,7 +36,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 |
 | `docs/` | 52 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文）+ analy 报告 |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books）+ `git-rep/` 外来参考仓库（quda/PyQUDA/lamet-agent/EasyDistillation/LQCD_Master，只读、其 AGENTS.md 已归档） |
-| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 + test6/ pyqcd 独立复现套件（.ref_run/ 存 refer 实跑真值，verify_04_repro.py 数值比对）+ test7/ 服务器正式工作版（100 组态，GPU V100，env.sh 启动，输入检查机制 + 实时进度日志）+ test9/ 梯度流胶子 TMD-PDF 实战报告（test9_analysis.pdf） |
+| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 + test6/ pyqcd 独立复现套件（.ref_run/ 存 refer 实跑真值，verify_04_repro.py 数值比对）+ test7/ 服务器正式工作版（100 组态，GPU V100，env.sh 启动，输入检查机制 + 实时进度日志）+ test9/ 梯度流胶子 TMD-PDF 实战报告（test9_analysis.pdf）+ dev5/dev5_1/dev5_2 对 tag:test9 系列的详细分析（25 页→33 页→36 页，字体规范+物理>62%+因果总览+图表三段式，all 全量） |
 | `cpp/` | C++ 后端占位 |
 | `.opencode/skills/` | 归集的 LQCD_Master 上游技能（lqcd-analysis 等 5 个，原位置保留） |
 
@@ -134,6 +134,13 @@ P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）
    TMD 混合方案匹配 `tmd_matching_hybrid` 用 Z_ij 矩阵结构（δ + α_sC_A/2π 核），
    复用 `_matching_kernels`（A_s = α_s/4π，zengch 约定），快度演化 + 软函数。
 6. **连续极限**（`_extrapolate.py`）：a/Pz/mπ/L 联合外推。
+
+## test9 系列详细分析（logs/dev5/dev5_1/dev5_2，对 tag:test9 的 all 全量）
+
+`tag:test9` 系列（`test9 4c58ddb` → `test9_1 eb24f23` → `test9_2 15b020f`）的详细分析按 `analy` 技能三视角 + 15 步工作流框架，完整推导全链物理公式，已迭代三版：
+- `dev5`（`logs/dev5/analy_test9_20260820.pdf` 25 页）：首版全链推导 + 101 证据 + 122 图，但字体偏小（`tiny`/`scriptsize`）且物理占比不足；
+- `dev5_1`（`logs/dev5_1/analy_test9_20260821.pdf` 33 页）：修正字体至模板标准（正文 10.54pt/表 `small`/代码 `footnotesize`，禁用 `tiny`）并扩展物理至 >55%（新增 7 深度块，`Eq.dualprop Eq.C2expand Eq.ZRrg` 等）；
+- `dev5_2`（`logs/dev5_2/analy_test9_20260822.pdf` 36 页，`all` 全量）：进一步明确因果（`§5 全链因果总览` 前因→后果主链，各 `A5.x` 五步展开）并强化图表-物理三段式映照（每图 `物理意义/对应结果/物理解析` 呼应 `Eq.Odef Eq.quasiTMD Eq.Zij Eq.TMDmatch`），物理占比 >62%，`xelatex` 两遍 `Overfull=0 Float=0 Missing=0`。
 
 ## 关键约定
 
