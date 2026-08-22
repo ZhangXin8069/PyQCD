@@ -33,6 +33,7 @@ from pyqcd.testing import (  # noqa: F401
     test_plot_tmd_pdf,
     test_pipeline_validate_and_2pt_resume,
     test_proton_energy_dirs,
+    test_round2_integrations,
 )
 
 

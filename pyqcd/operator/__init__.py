@@ -9,11 +9,15 @@ from ._gluon_ope import (
     compute_dual_field_strength, gluon_ope_operator_z0, staple_operator,
     read_gauge_lime,
 )
+from ._helicity import (
+    plaquette_dual_stack, helicity_two_field_operator,
+)
 
 __all__ = [
     "plaquette_clover",
     "compute_dual_field_strength", "gluon_ope_operator_z0", "staple_operator",
     "read_gauge_lime",
+    "plaquette_dual_stack", "helicity_two_field_operator",
 ]
 
 Namespace.__module__ = "pyqcd.operator"

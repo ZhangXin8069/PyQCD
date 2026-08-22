@@ -615,3 +615,83 @@ def test_proton_energy_dirs():
     px_params = EnergyParams(**{**p.__dict__, 'dir': 'x'})
     assert load_raw_corr(tmp, 7, px_params).shape == (8, 8)
     shutil.rmtree(tmp)
+
+
+def test_round2_integrations():
+    """第二轮整合：螺旋度双场强算符 / Ω 张量 / FH 自适应窗 / ASCII 读写。"""
+    import os
+    import shutil
+    import tempfile
+    from pyqcd.tools import set_backend
+    set_backend('numpy')
+
+    # ── H1: 螺旋度双场强算符（δz=0 与 Tr[F·F̃] 手算一致；平面/全和自洽）──
+    from pyqcd.operator import (plaquette_dual_stack,
+                                helicity_two_field_operator)
+    from pyqcd.operator._gluon_ope import plaquette_clover
+    g = random_su3_gauge(L=6, seed=4)
+    pla = {(m, n): np.asarray(plaquette_clover(g, m, n))
+           for m in range(4) for n in range(4) if m != n}
+    tilde = plaquette_dual_stack(pla)
+    o0 = np.asarray(helicity_two_field_operator(
+        g, pla, tilde, 2, 0, 3, 1, 3, 1, keep_plane=False))
+    ref = np.einsum('tzyxab,tzyxba->t', pla[(3, 1)], tilde[(3, 1)])
+    assert np.abs(o0 - ref).max() < 1e-10
+    op3 = np.asarray(helicity_two_field_operator(
+        g, pla, tilde, 2, 3, 3, 1, 3, 1, keep_plane=True))
+    ofull = np.asarray(helicity_two_field_operator(
+        g, pla, tilde, 2, 3, 3, 1, 3, 1, keep_plane=False))
+    om3 = np.asarray(helicity_two_field_operator(
+        g, pla, tilde, 2, 3, 3, 1, 3, 1, minus=True, keep_plane=True))
+    assert op3.shape == (6, 6, 6) and ofull.shape == (6,)
+    assert np.abs(op3.sum(axis=(1, 2)) - ofull).max() < 1e-8
+    assert np.isfinite(om3).all()
+
+    # ── R6: Ω 加速张量（结构断言；逐位对照原版见会话日志真值验证）──
+    from pyqcd.vertex import create_omega_accelerate
+    v = 24
+    w_exact = create_omega_accelerate(v, exact=v, dim=2)
+    assert w_exact.shape == (v, v) and np.abs(w_exact - 1).max() < 1e-12
+    w3 = create_omega_accelerate(v, exact=4, N_eigen=[6], N_sum=[6],
+                                 N_extract=[3], noise=2, dim=3)
+    assert w3.shape == (12,) * 3 and np.isfinite(w3).all()
+    wn = np.asarray(create_omega_accelerate(
+        v, N_eigen=[8], N_sum=[4], N_extract=[2], noise=4,
+        normal=True, dim=2))
+    assert np.abs(wn - wn.T).max() < 1e-12
+    try:
+        create_omega_accelerate(v, N_sum=[4])     # 契约外显式拒绝
+        raise AssertionError("仅 N_sum 应报错")
+    except ValueError:
+        pass
+
+    # ── R7: 常数窗闭式拟合 + χ² 驱动自适应滑窗 ──
+    rng = np.random.default_rng(7)
+    t_vals = np.array([6, 7, 8, 9, 10, 11])
+    delta = np.empty((12, len(t_vals), 40))
+    for z in range(12):
+        scale = 1 + 0.9 * max(z - 6, 0) * np.arange(len(t_vals)) / 6
+        delta[z] = np.exp(-0.08 * z) * (
+            1 + 0.02 * rng.standard_normal((len(t_vals), 40)) * scale[:, None])
+    from pyqcd.analysis import fit_constant_window, fh_adaptive_windows
+    f = fit_constant_window(delta[0][:5], kind='boot')
+    assert abs(f['c0'] - 1.0) < 0.02
+    recs = fh_adaptive_windows(delta, t_vals, 6, 11, chi2_limit=2.0,
+                               t_floor=6)
+    err = max(abs(r['fit']['c0'] - np.exp(-0.08 * r['z']))
+              / np.exp(-0.08 * r['z']) for r in recs)
+    assert err < 0.05, err
+
+    # ── R8: L.Liu ASCII 写读闭环（plain + .gz）──
+    from pyqcd.tools import write_data_ascii, read_data_ascii
+    tmp = tempfile.mkdtemp()
+    data = rng.standard_normal((3, 8)) + 1j * rng.standard_normal((3, 8))
+    p1 = os.path.join(tmp, 'a.dat')
+    p2 = os.path.join(tmp, 'b.dat.gz')
+    write_data_ascii(data, T=8, L=24, filename=p1)
+    write_data_ascii(data, T=8, L=24, filename=p2)
+    for p in (p1, p2):
+        back, meta = read_data_ascii(p)
+        assert meta['is_complex'] and meta['T'] == 8 and meta['L'] == 24
+        assert np.abs(back[:, :, 0] + 1j * back[:, :, 1] - data).max() < 1e-13
+    shutil.rmtree(tmp)
