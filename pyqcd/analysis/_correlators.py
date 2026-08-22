@@ -36,6 +36,9 @@ def run_meff_jackknife(corr_2pt_all, conf_ids, NT=72, ALttc=0.1053,
     ]
     results = {}
     for particle, mom, key in channels:
+        if key not in corr_2pt_all[conf_ids[0]]:
+            logger(f"{particle} {mom}: 输入缺少 {key} —— 跳过该通道")
+            continue
         ml = f"P{list(ANALYSIS_MOMENTA[particle].values())[0 if mom == 'P0' else 1]}"
         stack = np.stack([np.real(corr_2pt_all[cid][key]) for cid in conf_ids])
         jk = Jackknife(stack, Nconf_axes=0)
