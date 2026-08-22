@@ -61,7 +61,8 @@ def hR_lambda_fit_form(lambda_, l1_, a1_, lambda0_):
     return l1_ * lambda_ ** (-a1_) * np.exp(-lambda_ / lambda0_)
 
 
-def fit_hR_lambda(par_ini, lambda_range, lamb, hR_data):
+def fit_hR_lambda(par_ini, lambda_range, lamb, hR_data, cov_kind='diag',
+                  n_boot=200, seed=0):
     """在 [lam_min, lam_max] 区间拟合外推参数 (l1, a1, λ₀)。
 
     Args:
@@ -69,6 +70,10 @@ def fit_hR_lambda(par_ini, lambda_range, lamb, hR_data):
         lambda_range: (lam_min, lam_max)
         lamb:  λ 数组（fm 单位换算后的 λ）
         hR_data: hR(λ)（逐样本：shape (nz, nboot) 或 (nz,)）
+        cov_kind: 'diag' 对角方差（默认，向后兼容）；
+                  'boot' 全协方差（bootstrap 样本列，pinv 防奇异；
+                  照抄 zengch fit_hR_big_lambda_new.py 的
+                  covariance_matrix(·,'boot') 用法，复现其系统误差评估）。
     Returns:
         拟合参数 (l1, a1, lambda0)。
     """
@@ -77,19 +82,28 @@ def fit_hR_lambda(par_ini, lambda_range, lamb, hR_data):
     lamb_sel = lamb[mask]
     hR_sel = np.asarray(hR_data, dtype=float)[mask]
 
+    if cov_kind not in ('diag', 'boot'):
+        raise ValueError(f"未知 cov_kind: {cov_kind}")
     if hR_sel.ndim > 1:
-        mean = hR_sel.mean(axis=1)
-        std = hR_sel.std(axis=1)
+        data_mean = hR_sel.mean(axis=1)
+        if cov_kind == 'boot':
+            from ._zr import boot_covariance
+            c_inv = np.linalg.pinv(
+                boot_covariance(hR_sel, n_rep=n_boot, seed=seed))
+        else:
+            std = hR_sel.std(axis=1)
+            c_inv = np.diag(1.0 / np.maximum(std ** 2, 1e-30))
     else:
-        mean = hR_sel
-        std = np.ones_like(hR_sel)
-
-    c_inv = np.diag(1.0 / np.maximum(std ** 2, 1e-30))
+        if cov_kind == 'boot':
+            raise ValueError("cov_kind='boot' 需要逐样本二维输入 (nz, nsample)")
+        data_mean = hR_sel
+        c_inv = np.diag(1.0 / np.maximum(
+            np.ones_like(hR_sel) ** 2, 1e-30))
 
     def cost(par):
         l1_, a1_, lambda0_ = par
         th = hR_lambda_fit_form(lamb_sel, l1_, a1_, lambda0_)
-        del_h = th - mean
+        del_h = th - data_mean
         return del_h @ c_inv @ del_h / len(lamb_sel)
 
     from scipy.optimize import minimize

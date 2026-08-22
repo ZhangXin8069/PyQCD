@@ -23,6 +23,16 @@ from pyqcd.testing import (  # noqa: F401
     test_matching_sum_rule,
     test_core_chain_integrated,
     test_tmd_matching_nlo,
+    # 整合功能测试（~auto-all）
+    test_stout_smear,
+    test_eigvec_compress,
+    test_cg_coefficients,
+    test_hB_dataset_loader,
+    test_hybrid_boot_covariance,
+    test_tmd_plateau_and_cs_kernel,
+    test_plot_tmd_pdf,
+    test_pipeline_validate_and_2pt_resume,
+    test_proton_energy_dirs,
 )
 
 
