@@ -266,7 +266,10 @@ def run_wick_analysis(operator_groups, *,
                       ignore_dis=True,
                       verbose=True, max_detail=3,
                       Projection=False,
-                      Oindex=None):
+                      Oindex=None,
+                      optimize='auto',
+                      peram_registry=None, v_registry=None,
+                      gamma_registry=None):
     """Run Wick contraction analysis, returning a structured plan.
 
     Parameters
@@ -439,7 +442,38 @@ def run_wick_analysis(operator_groups, *,
                     if use_equivalence and (idx, di) in equiv_lookup:
                         rg, rd = equiv_lookup[(idx, di)]
                         eq_note = f'  ≡ group{rg} diag{rd}'
-                    _log(f'  Diag{di}: sign={s.real:+.1f} free={free}{eq_note}')
+                    cost_note = ''
+                    if None not in (peram_registry, v_registry,
+                                    gamma_registry):
+                        # FLOPs 诊断（照抄 lqcddb run_wick_analysis 的
+                        # cost_note 块：registry 形状 → 路径分析）
+                        try:
+                            _p_shapes = [peram_registry.resolve(
+                                p[2], p[4]).shape for p in w['peram'][di]]
+                            _v_names = _per_region_v_names(w['V'])
+                            _v_shapes = [v_registry.resolve(vn, vt).shape
+                                         for vn, vt in _v_names]
+                            _g_shapes = [gamma_registry.resolve(g[1]).shape
+                                         for g in w['gamma_pos']]
+                            _shapes = _p_shapes + _g_shapes + _v_shapes
+                            if Projection:
+                                _proj = gamma_registry.resolve('Projector')
+                                _shapes = _shapes + [_proj[0].shape,
+                                                     _proj[1].shape]
+                            nf, of, sp, li, opt_name = \
+                                _analyze_contraction_path(e, _shapes,
+                                                          optimize)
+                            cost_note = (
+                                f'  朴素 FLOP={_format_cost(nf)}'
+                                f'  优化 FLOP={_format_cost(of)}'
+                                f'  加速比={_format_cost(sp)}x'
+                                f'  中间最大张量数据={li / 1e9:.2f}GB(cpx)'
+                                f'  最优optimize={opt_name}')
+                        except Exception as _e:
+                            _log(f'    [FLOP分析失败] '
+                                 f'{type(_e).__name__}: {_e}')
+                    _log(f'  Diag{di}: sign={s.real:+.1f} '
+                         f'free={free}{eq_note}{cost_note}')
                     _log(f'    einsum: {e}')
                     shown_count += 1
 
@@ -759,3 +793,100 @@ class dynamic_contraction:
 
     def __getitem__(self, index):
         return self.plan[index]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 收缩路径 FLOPs 诊断（整合 lqcddb dynamic._analyze_contraction_path）
+# ═══════════════════════════════════════════════════════════════════
+
+def _format_cost(n):
+    """MAC 数 → 人类可读串（照抄 dynamic._format_cost）。"""
+    from decimal import Decimal
+    n = int(n)
+    if n >= 1e15:
+        return f"{format(Decimal(n), '.3e')}"
+    elif n >= 1e12:
+        return f'{n / 1e12:.2f}T'
+    elif n >= 1e9:
+        return f'{n / 1e9:.2f}G'
+    elif n >= 1e6:
+        return f'{n / 1e6:.2f}M'
+    elif n >= 1e3:
+        return f'{n / 1e3:.2f}K'
+    else:
+        return f'{n:.0f}'
+
+
+def _analyze_contraction_path(einsum_str, shapes, optimize='auto'):
+    """收缩路径朴素/优化 FLOPs 与最大中间张量（照抄 dynamic 同名函数）。
+
+    用 ``opt_einsum.contract_path`` 零内存占位符分析；朴素路径为顺序
+    左到右，优化路径按 cached_contract 的选优化器逻辑。仅当
+    optimize=True 时尝试 ['auto','greedy','optimal','dp'] 全集。
+
+    Returns:
+        (naive_flops, opt_flops, speedup, largest_intermediate_bytes,
+         opt_name)；失败返回 (0, 0, 1.0, 0, 'N/A')。
+        （对原版的唯一偏离：opt_einsum 缺失时亦返回该兜底而非 ImportError。）
+    """
+    try:
+        from opt_einsum import contract_path
+    except ImportError as _e:
+        _log(f'    [FLOP分析] opt_einsum 不可用: {_e}')
+        return 0, 0, 1.0, 0, 'N/A'
+    import numpy as np
+
+    n = len(shapes)
+    if n < 2:
+        return 0, 0, 1.0, 0, 'N/A'
+
+    placeholders = [
+        np.broadcast_to(np.empty((), dtype=np.float64), s)
+        for s in shapes
+    ]
+
+    try:
+        _, naive_info = contract_path(
+            einsum_str, *placeholders,
+            optimize=[(0, 1)] * (n - 1))
+        naive_flops = int(naive_info.opt_cost)
+    except Exception as _e:
+        _log(f'    [FLOP naive path 失败] {type(_e).__name__}: {_e}')
+        naive_flops = 0
+
+    if isinstance(optimize, str):
+        candidate_opts = [optimize]
+    elif optimize is True:
+        candidate_opts = ['auto', 'greedy', 'optimal', 'dp']
+    elif isinstance(optimize, list):
+        candidate_opts = optimize
+    else:
+        candidate_opts = ['auto']
+
+    best_path_info = None
+    best_cost = (float('inf'), float('inf'))
+    best_opt_name = 'N/A'
+
+    for opt in candidate_opts:
+        try:
+            _, path_info = contract_path(
+                einsum_str, *placeholders, optimize=opt)
+            cost = (int(path_info.opt_cost),
+                    int(path_info.largest_intermediate))
+            if cost < best_cost:
+                best_cost = cost
+                best_path_info = path_info
+                best_opt_name = opt
+        except Exception as _e:
+            _log(f'    [FLOP optimize={opt} 失败] {type(_e).__name__}: {_e}')
+            continue
+
+    if best_path_info is None:
+        return naive_flops, 0, 1.0, 0, 'N/A'
+
+    opt_flops = int(best_path_info.opt_cost)
+    largest_intermediate = int(best_path_info.largest_intermediate)
+    speedup = naive_flops / max(opt_flops, 1)
+    li_bytes = largest_intermediate * 16   # complex128
+
+    return naive_flops, opt_flops, speedup, li_bytes, best_opt_name

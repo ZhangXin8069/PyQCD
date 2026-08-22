@@ -208,3 +208,75 @@ def check_input_arrays(data_root, spec, verbose=True,
         if len(bad) > 20:
             print(f"  ... 其余 {len(bad) - 20} 条异常略", flush=True)
     return n_ok, bad
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 模板组合式存在性+大小一致性守卫（整合 lqcddb io/write_date.py）
+# ═══════════════════════════════════════════════════════════════════
+
+def check_files_existence(path_templates, **kwargs):
+    """检查占位符替换后所有模板文件的存在性与大小一致性
+    （照抄 lqcddb io/write_date.check_files_existence）。
+
+    以第一个全存在组合的各文件大小为基准，后续同种文件大小不一致者
+    记为 corrupted（存储错误），与 missing 一并归入缺失返回。
+
+    Args:
+        path_templates: 含 '<name>' 占位符的路径模板列表，
+            如 ['<exp>/<run>/file']。
+        **kwargs: 占位符名 → 取值列表（求笛卡尔积）。
+    Returns:
+        (existing, bad)：existing 为正常组合列表（单占位符时直接存取值，
+        多占位符时存 dict）；bad = missing + corrupted。
+    """
+    import itertools
+
+    if not kwargs:
+        raise ValueError("至少需要提供一个占位符参数，例如 run_id=[...]")
+
+    placeholders = list(kwargs.keys())
+    value_lists = [kwargs[p] for p in placeholders]
+
+    existing, missing, corrupted = [], [], []
+
+    def _resolve_paths(combo):
+        if len(placeholders) == 1:
+            mapping = {f"<{p}>": str(combo) for p in placeholders}
+        else:
+            mapping = {f"<{p}>": str(combo[p]) for p in placeholders}
+        paths = []
+        for template in path_templates:
+            fp = template
+            for tag, val in mapping.items():
+                fp = fp.replace(tag, val)
+            paths.append(fp)
+        return paths
+
+    def _make_combo(values):
+        if len(placeholders) == 1:
+            return values[0]
+        return dict(zip(placeholders, values))
+
+    reference_sizes = []
+    for values in itertools.product(*value_lists):
+        combo = _make_combo(values)
+        paths = _resolve_paths(combo)
+
+        if not all(os.path.exists(fp) for fp in paths):
+            missing.append(combo)
+            continue
+
+        if not reference_sizes:
+            reference_sizes = [os.path.getsize(fp) for fp in paths]
+            existing.append(combo)
+        else:
+            if all(os.path.getsize(fp) == reference_sizes[i]
+                   for i, fp in enumerate(paths)):
+                existing.append(combo)
+            else:
+                corrupted.append(combo)
+
+    print(f"文件正常且存在 (len={len(existing)}): {existing}")
+    print(f"文件异常但存在 (len={len(corrupted)}): {corrupted}")
+    print(f"文件不存在 (len={len(missing)}): {missing}")
+    return existing, missing + corrupted

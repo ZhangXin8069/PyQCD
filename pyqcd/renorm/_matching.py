@@ -114,20 +114,58 @@ def A_s_run(mu, Lambda_QCD=0.23, nf=3.0):
 # ratio 方案胶子匹配核（matching_cc.py）
 # ═══════════════════════════════════════════════════════════════════
 
-def C(ksi, m, r):
-    """比值方案匹配核（zengch matching_cc.py 原版 C(ξ,m,r)）。"""
-    return 2.0 * ksi / (1.0 - ksi) * (m / (2.0 * r)) ** 2.0 * (
-        (2.0 * ksi - 1.0) * (1.0 - ksi) * np.log((ksi - 1.0) ** 2.0 / ksi ** 2.0)
-        + 2.0 * (ksi - 1.0) - 2.0 * np.log(ksi / (1.0 - ksi)) - 2.0)
+def C(ksi, m, r, alpha_s=0.296, cf=None):
+    """比值方案夸克匹配核（matching_cc.py 原版 C(ξ,m,r) 三分区）。
+
+    ξ>1、0<ξ<1、ξ<0 三分区 + 共同 Si 项，α_s·C_F/(2π) 归一。
+    原版全局 Cf 未定义（调用即 NameError），此处默认取 _const.CF；
+    原版固定 α_s=0.296（源注释 #change!）。
+    """
+    from ._const import CF
+    cf = CF if cf is None else cf
+    ksi = np.asarray(ksi, dtype=float)
+    m_abs = np.abs(np.asarray(m, dtype=float))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        k_gt1 = ((1.0 + ksi ** 2.0) / (1.0 - ksi) * np.log(ksi / (ksi - 1.0))
+                 + 1.0)
+        k_mid = ((1.0 + ksi ** 2.0) / (1.0 - ksi)
+                 * (-np.log(r ** 2.0) + np.log(4.0 * ksi * (1.0 - ksi)) - 1.0)
+                 + 1.0)
+        k_neg = (-(1.0 + ksi ** 2.0) / (1.0 - ksi) * np.log(-ksi / (1.0 - ksi))
+                 - 1.0)
+        si_term = 3.0 * Si((1.0 - ksi) * m_abs) / (np.pi * (1.0 - ksi))
+        ker = np.where(ksi > 1.0, k_gt1,
+                       np.where((ksi > 0.0) & (ksi < 1.0), k_mid,
+                                np.where(ksi < 0.0, k_neg, np.nan))) + si_term
+    out = alpha_s * cf * ker / (2.0 * np.pi)
+    return out[()] if np.ndim(out) == 0 else out
 
 
-def C_gluon_ratio(ksi, m, r):
-    """胶子 ratio 方案匹配核（协变组合）。
+def C_gluon_ratio(ksi, m, r, alpha_s=0.296):
+    """胶子 ratio 方案匹配核（协变组合，matching_cc.py 原版三分区+Si 项）。
 
-    m: (|x|·Z_s·a·pz)/GeVfm，r: μ/(|x|·pz)。
+    m: (|x|·Z_s·a·pz)/GeVfm，r: μ/(|x|·pz)；α_s·C_A/(2π) 归一，
+    原版固定 α_s=0.296、C_A=3。三分区结构与 _matching_kernels 的
+    g_1/g_2/g_3 同型，另加共同 5/6·(−1/|1−ξ|+2Si/π(1−ξ)) 截断项。
     """
     ksi = np.asarray(ksi, dtype=float)
-    res = np.zeros_like(ksi)
-    mask = (ksi > 1.0)
-    res[mask] = C(ksi[mask], m, r)
-    return res
+    m_abs = np.abs(np.asarray(m, dtype=float))
+    poly_hi = ((11.0 - 28.0 * ksi + 18.0 * ksi ** 2.0 - 12.0 * ksi ** 3.0)
+               / (6.0 * (1.0 - ksi)))
+    pref = 2.0 * (1.0 - ksi + ksi ** 2.0) ** 2.0 / (1.0 - ksi)
+    poly_lo = ((15.0 - 56.0 * ksi + 102.0 * ksi ** 2.0
+                - 96.0 * ksi ** 3.0 + 48.0 * ksi ** 4.0)
+               / (6.0 * (1.0 - ksi)))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        k_gt1 = pref * np.log(ksi / (ksi - 1.0)) + poly_hi
+        k_mid = (pref * (-np.log(np.square(r) / 4.0)
+                         + np.log(ksi * (1.0 - ksi))) - poly_lo)
+        k_neg = -pref * np.log(ksi / (ksi - 1.0)) - poly_hi
+        ker = np.where(ksi > 1.0, k_gt1,
+                       np.where((ksi > 0.0) & (ksi < 1.0), k_mid,
+                                np.where(ksi < 0.0, k_neg, np.nan)))
+        ker = ker + 5.0 / 6.0 * (
+            -1.0 / np.abs(1.0 - ksi)
+            + 2.0 * Si((1.0 - ksi) * m_abs) / (np.pi * (1.0 - ksi)))
+    out = alpha_s * CA * ker / (2.0 * np.pi)
+    return out[()] if np.ndim(out) == 0 else out

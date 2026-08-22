@@ -505,3 +505,56 @@ def read_data_ascii(filename):
     data = body.reshape(nsamples, T, -1)
     return data, {'nsamples': nsamples, 'T': T,
                   'is_complex': bool(is_cx), 'L': L, 'version': _ver}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 预计算顶点积二进制 reader（整合 huangcl/98_tools input_output.py）
+# ═══════════════════════════════════════════════════════════════════
+
+def readin_vdv_all(vdv_dir: str, nev: int, nev1: int, Nt: int,
+                   conf_id, Px: int = 0, Py: int = 0, Pz: int = 0):
+    """读取 V†V 预计算顶点积二进制（照抄 input_output.readin_VdV_all）。
+
+    文件 ``<dir>/VdaggerV.Px%dPy%dPz%d.conf%s``：f8 交错 [re,im]，
+    (Nt, Nev, Nev, 2) → complex，截断到前 Nev1 模。
+    """
+    with open("%s/VdaggerV.Px%dPy%dPz%d.conf%s"
+              % (vdv_dir, Px, Py, Pz, conf_id), "rb") as f:
+        vdv = np.fromfile(f, dtype="f8")
+    vdv = vdv.reshape(Nt, nev, nev, 2)
+    vdv = vdv[..., 0] + vdv[..., 1] * 1j
+    return np.array(vdv[:, 0:nev1, 0:nev1])
+
+
+def readin_vvv_all(vvv_dir: str, nev1: int, Nt: int, conf_id,
+                   Px: int = 0, Py: int = 0, Pz: int = 0):
+    """读取逐时间片 VVV 三夸克顶点积二进制（照抄 readin_VVV_all）。
+
+    文件 ``<dir>/VVV.t%03i.Px%iPy%iPz%i.conf%s``；每片的 Nev 由
+    文件大小自探测（cbrt(size/2)），截断到 Nev1。
+    """
+    vvv = np.zeros((Nt, nev1, nev1, nev1), dtype=complex)
+    for t in range(Nt):
+        with open("%s/VVV.t%03i.Px%iPy%iPz%i.conf%s"
+                  % (vvv_dir, t, Px, Py, Pz, conf_id), "rb") as f:
+            temp = np.fromfile(f, dtype="f8")
+        nev = int(round(np.cbrt(temp.size / 2)))
+        temp = temp.reshape(nev, nev, nev, 2)
+        temp = temp[..., 0] + temp[..., 1] * 1j
+        vvv[t] = temp[0:nev1, 0:nev1, 0:nev1]
+    return vvv
+
+
+def readin_vvv(vvv_dir: str, nev: int, nev1: int, Nt: int, conf_id,
+               Px: int = 0, Py: int = 0, Pz: int = 0):
+    """读取整块 VVV 二进制（照抄 readin_VVV）。
+
+    文件 ``<dir>/VVV.Px%iPy%iPz%i.conf%s``：(Nt, Nev, Nev, Nev, 2)
+    → complex，截断到 Nev1。
+    """
+    with open("%s/VVV.Px%iPy%iPz%i.conf%s"
+              % (vvv_dir, Px, Py, Pz, conf_id), "rb") as f:
+        vvv = np.fromfile(f, dtype="f8")
+    vvv = vvv.reshape(Nt, nev, nev, nev, 2)
+    vvv = vvv[..., 0] + vvv[..., 1] * 1j
+    return vvv[:, 0:nev1, 0:nev1, 0:nev1]

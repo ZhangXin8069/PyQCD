@@ -10,9 +10,11 @@ from ._config import (
 from ._runner import make_run_dir, step_env, step_tmd, run_pipeline
 from ._validate import (
     progress_log, ProgressLog, check_raw_data, check_input_arrays,
+    check_files_existence,
 )
 
 __all__ = [
+    "check_files_existence",
     "ENSEMBLE", "NX", "NY", "NZ", "NT", "ALttc", "A_INV", "FM2GEV", "CONF_IDS",
     "NEV", "NEV1", "MOM_SINK_VDV", "MOM_SINK_VVV", "DELTA_Z", "Z_DIR",
     "OPE_COMPONENTS", "PRECISION", "T_SEP", "T_SEP_3PT",

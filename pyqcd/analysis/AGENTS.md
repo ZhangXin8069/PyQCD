@@ -26,3 +26,5 @@ c0 裸矩阵元提取（`_ratio_fit.py`，zengch 逻辑移植）、
   run_ratio2pt/run_bare_matrix 支持 parts=(start,end) 断点续跑。
 - 测试：`bash logs/test0_ratio|test0_anaratio|test0_bare|test0_energy|test0_fh/run-local.sh`
   （test12 风格：makedata 合成物理可解析数据 → verify 断言产物/形状/参数恢复）。
+`_analyse.py` 增 dis_connect disconnected 矩阵元构造（PFF/PDF）与分组聚合基元
+mean/sum_over_array_of_list（take+stack 等价实现）。

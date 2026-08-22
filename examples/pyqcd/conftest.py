@@ -34,6 +34,19 @@ from pyqcd.testing import (  # noqa: F401
     test_pipeline_validate_and_2pt_resume,
     test_proton_energy_dirs,
     test_round2_integrations,
+    # 第三轮整合测试（~auto-all 第三遍清查 20260822）
+    test_matching_ratio_kernels,
+    test_quasi_pdf_gluon_sin_transform,
+    test_gluon_ope_directions_and_ff,
+    test_parity_boundary_projection,
+    test_zr_sample_refit_loop,
+    test_extrapolate_boot_fit,
+    test_group_aggregate_and_disconnect,
+    test_check_files_existence_guard,
+    test_wickplot_and_flop_analysis,
+    test_vertex_product_readers,
+    test_env_snapshot,
+    test_cmp_primitives,
 )
 
 

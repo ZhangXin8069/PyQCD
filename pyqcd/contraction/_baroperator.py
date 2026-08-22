@@ -327,3 +327,37 @@ def diquark_symmetry(gamma_expr: str):
     if gamma_expr not in DIQUARK_TRANSPOSE_SIGN:
         raise ValueError(f"{gamma_expr} is not a diquark structure")
     return DIQUARK_TRANSPOSE_SIGN[gamma_expr]
+
+
+def parity_and_boundary(contrac_nucl_matrix, Nt: int):
+    """双宇称投影 + 反周期边界符号翻转（照抄 zhangxin workflow
+    ``apply_parity_and_boundary``，源出 donghx 2pt 代码）。
+
+    P± = ½(γ₀ ± γ₄)（DR 基 gamma(0)=identity、gamma(4)=temporal）；
+    收缩矩阵按 "li,...il->..." 收缩后得 pp/pm 两组投影关联。
+    反周期时间边界约定：t_sink < t_source 时 pp 翻号，
+    t_sink > t_source 时 pm 翻号。
+
+    Args:
+        contrac_nucl_matrix: (..., t_sink, t_source, i, l) 收缩矩阵
+            （末两轴为自旋指标 i,l；支持批量前置维）。
+        Nt: 时间格点数。
+    Returns:
+        (pp, pm)，形状 (..., Nt, Nt)。
+    """
+    from ..tools._backend import get_backend
+
+    cp = get_backend()
+    matrix_pplus = 0.5 * (gamma(0) + gamma(4))
+    matrix_pminus = 0.5 * (gamma(0) - gamma(4))
+
+    pp = cp.einsum("li,...il->...", matrix_pplus, contrac_nucl_matrix)
+    pm = cp.einsum("li,...il->...", matrix_pminus, contrac_nucl_matrix)
+
+    t_sink = np.arange(Nt).reshape(Nt, 1)
+    t_source = np.arange(Nt).reshape(1, Nt)
+    sign_pp = np.where(t_sink < t_source, -1.0, 1.0)
+    sign_pm = np.where(t_sink > t_source, -1.0, 1.0)
+    pp = pp * sign_pp
+    pm = pm * sign_pm
+    return pp, pm

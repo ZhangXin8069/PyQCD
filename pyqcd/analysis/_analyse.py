@@ -682,3 +682,149 @@ def solve_gevp(C, t0):
         C_eigvecs[..., t] = backend.asarray(eigenvectors)
 
     return C_GEVP, C_eigvecs
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 分组聚合基元 + disconnected 矩阵元构造（整合 lqcddb analyse.py）
+# ═══════════════════════════════════════════════════════════════════
+
+def mean_over_array_of_list(arr, axes, groupings):
+    """按指标分组沿指定轴求均值（照抄 lqcddb analyse.mean_over_array_of_list）。
+
+    Args:
+        arr: 任意形状输入数组。
+        axes: 待聚合轴（0 起）。
+        groupings: 每轴一组"组列表"，每组为该轴原指标的列表；
+            全部指标须恰好覆盖一次。聚合后该轴长度 = 组数。
+    Returns:
+        形状为原形状、各聚合轴缩为对应组数的数组。
+    """
+    backend = get_backend()
+    arr = backend.asarray(arr)
+
+    if len(axes) != len(groupings):
+        raise ValueError("axes and groupings must have same length")
+
+    for ax, groups in zip(axes, groupings):
+        if ax < 0 or ax >= arr.ndim:
+            raise ValueError(f"axis {ax} out of range")
+        all_idx = set()
+        for g in groups:
+            for i in g:
+                if i < 0 or i >= arr.shape[ax]:
+                    raise ValueError(f"index {i} out of range on axis {ax}")
+                if i in all_idx:
+                    raise ValueError(f"duplicate index {i} on axis {ax}")
+                all_idx.add(i)
+        if len(all_idx) != arr.shape[ax]:
+            missing = set(range(arr.shape[ax])) - all_idx
+            raise ValueError(f"axis {ax}: indices {missing} not covered")
+
+    for ax, groups in zip(axes, groupings):
+        # 原版为 sort+reduceat 分块归并；pyqcd 后端适配层无 reduceat，
+        # 改为逐组 take+归约再 stack——分组次序与结果语义等价。
+        red = [backend.mean(backend.take(arr, list(g), axis=ax), axis=ax)
+               for g in groups]
+        arr = backend.stack(red, axis=ax)
+    return arr
+
+
+def sum_over_array_of_list(arr, axes, groupings):
+    """按指标分组沿指定轴求和（照抄 lqcddb analyse.sum_over_array_of_list）。
+
+    与 :func:`mean_over_array_of_list` 同构，仅不做组内除法。
+    """
+    backend = get_backend()
+    arr = backend.asarray(arr)
+
+    if len(axes) != len(groupings):
+        raise ValueError("axes and groupings must have same length")
+    for ax, groups in zip(axes, groupings):
+        if ax < 0 or ax >= arr.ndim:
+            raise ValueError(f"axis {ax} out of range")
+        all_idx = set()
+        for g in groups:
+            for i in g:
+                if i < 0 or i >= arr.shape[ax]:
+                    raise ValueError(f"index {i} out of range on axis {ax}")
+                if i in all_idx:
+                    raise ValueError(f"duplicate index {i} on axis {ax}")
+                all_idx.add(i)
+        if len(all_idx) != arr.shape[ax]:
+            missing = set(range(arr.shape[ax])) - all_idx
+            raise ValueError(f"axis {ax}: indices {missing} not covered")
+
+    for ax, groups in zip(axes, groupings):
+        red = [backend.sum(backend.take(arr, list(g), axis=ax), axis=ax)
+               for g in groups]
+        arr = backend.stack(red, axis=ax)
+    return arr
+
+
+def dis_connect(data_2pt_sample, data_bubble_sample, Nconf_axes: int,
+                t_src_axes: int, t_sink_axes: int, tsep: int,
+                dtype: str = 'PDF'):
+    """2pt×bubble 时间滚移构造 disconnected 矩阵元（照抄 lqcddb
+    analyse.dis_connect；PFF/PDF 两模式）。
+
+    对每个 t_src：2pt 连通部分沿 sink 轴滚 −t 对齐源点，bubble 沿 src 轴滚
+    −t 对齐；取 sink=tsep 处乘积并对 src 求和。PFF 模式另加交换项并装配到
+    [0..tsep]∪[tsep..2·tsep] 窗口。
+
+    Args:
+        data_2pt_sample: (Nconf, ..., t_src, t_sink, ...) 2pt 样本。
+        data_bubble_sample: 同形状 bubble 样本。
+        Nconf_axes/t_src_axes/t_sink_axes: 对应轴编号。
+        tsep: 源-插算符分离。
+        dtype: 'PDF'（单乘积全窗）或 'PFF'（对称双乘积分段窗）。
+    """
+    backend = get_backend()
+
+    data_2pt_bubble_matrix = backend.zeros_like(data_2pt_sample)
+    _data_2pt_mu_nu = data_2pt_sample - backend.mean(
+        data_2pt_sample, axis=Nconf_axes, keepdims=True)
+
+    _data_bubble = backend.zeros_like(data_2pt_sample)
+    data_bubble_mean = backend.mean(data_bubble_sample, axis=Nconf_axes,
+                                    keepdims=True)
+    Nt = data_2pt_bubble_matrix.shape[t_src_axes]
+
+    # 原版第二 assign 直接把整卷动数组塞入单 t 切片目标
+    # （其 assign 内部 reshape 在 Nt>1 时必形状失配——潜在 bug）；
+    # 按其"沿 src 轴滚 −t 对齐"意图补全 t 切片选取，使算术可运行。
+    bub_conn = data_bubble_sample - data_bubble_mean
+
+    for t in range(Nt):
+        ArraySlicer(_data_2pt_mu_nu).assign(
+            dims=[t_src_axes], indices=[[t]],
+            values=backend.roll(
+                ArraySlicer(_data_2pt_mu_nu).slice(dims=[t_src_axes],
+                                                   indices=[[t]]),
+                -t, axis=t_sink_axes))
+        ArraySlicer(_data_bubble).assign(
+            dims=[t_src_axes], indices=[[t]],
+            values=ArraySlicer(backend.roll(bub_conn, -t,
+                                            axis=t_src_axes)).slice(
+                dims=[t_src_axes], indices=[[t]]))
+
+    data_2pt_bubble_1 = (ArraySlicer(_data_2pt_mu_nu).slice(
+        dims=[t_sink_axes], indices=[[tsep]]) * _data_bubble)
+
+    if dtype == 'PFF':
+        data_2pt_bubble_2 = (ArraySlicer(_data_bubble).slice(
+            dims=[t_sink_axes], indices=[[tsep]]) * _data_2pt_mu_nu)
+        ArraySlicer(data_2pt_bubble_matrix).assign(
+            dims=[t_sink_axes],
+            indices=[[x for x in range(tsep + 1)]],
+            values=ArraySlicer(data_2pt_bubble_1).slice(
+                dims=[t_sink_axes], indices=[[x for x in range(tsep + 1)]]))
+        ArraySlicer(data_2pt_bubble_matrix).assign(
+            dims=[t_sink_axes],
+            indices=[[x for x in range(tsep, 2 * tsep + 1)]],
+            values=ArraySlicer(data_2pt_bubble_2).slice(
+                dims=[t_sink_axes],
+                indices=[[x for x in range(tsep, 2 * tsep + 1)]]))
+    else:
+        data_2pt_bubble_matrix[:] = data_2pt_bubble_1
+
+    return backend.sum(data_2pt_bubble_matrix, axis=t_src_axes, keepdims=True)

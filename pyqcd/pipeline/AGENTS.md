@@ -5,3 +5,5 @@
 齐全度 / check_input_arrays 形状+有限性校验 / ProgressLog+tlog ETA 进度日志）。
 step_2pt 支持组态级断点续跑（corr_{ch}_{P0,P2} 全存在即跳过；recompute_2pt=True
 强制重算）。
+模板占位符组合式文件守卫 `check_files_existence(templates, **占位符取值列表)`
+（笛卡尔积存在性 + 以首个全存在组合为基准的大小一致性，异常大小归 corrupted）。
