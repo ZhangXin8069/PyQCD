@@ -296,3 +296,130 @@ def _to_numpy_dtype(arr):
     """后端数组 → numpy dtype（构造宿主侧容器用）。"""
     a = np.asarray(arr.get() if hasattr(arr, 'get') else arr)
     return a.dtype
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Ω 加速张量（蒸馏重子收缩的方差压缩权重，lqcddb create_omega_accelerate）
+# ═══════════════════════════════════════════════════════════════════
+
+def create_omega_accelerate(n_voxel, exact=0, N_eigen=None, N_sum=None,
+                            N_extract=None, noise=0, conserved=False,
+                            normal=False, dim=2):
+    """构建 Ω 权重张量（任意 dim=2/3 维，exact+块压缩+噪声三段分区）。
+
+    照抄 refer/sush lqcddb vertex.py::create_omega_accelerate 的语义
+    （不 import 来源）：把用于收缩的 Nev = Σev_sum 个向量按
+    [exact] + 压缩块 + noise 分区，Ω[a₁,…,a_dim] 给出逐分区的
+    方差压缩权重 w_i^{(j)} = (space_i − j)/(sum_i − j)
+    （part i 同时出现在 j 个维度时的重叠修正；conserved 模式退化为
+    space_i/sum_i 无对角修正）。exact-only 时 Ω ≡ 1（无压缩无修正）。
+
+    Args:
+        n_voxel: 单向量的体素数 V = Nz·Ny·Nx·Nc。
+        exact: 精确保留的本征矢数量。
+        N_eigen/N_sum/N_extract: 各块压缩前/后数量与每子块抽取数
+                （给出 N_eigen 时按 N_sum/N_extract 展开为子块列表，
+                与 V1/V2/V3/V4 压缩方案的输出分组一一对应）；
+                不做块压缩时传 None 并直接给 N_sum=[各块输出数]。
+        noise: 噪声向量数量。
+        conserved: 守恒模式（权重恒为 space/sum，dim 强制 2）。
+        normal: dim=2 时逐行归一化并对称化下三角。
+        dim: 输出张量维度（2 或 3）。
+    Returns:
+        复数 Ω 张量 (Nev,)*dim（Nev = exact + Σ子块输出 + noise）。
+    """
+    from itertools import combinations
+    cp = get_backend()
+    if conserved:
+        dim = 2
+    n_eigen = list(N_eigen) if N_eigen else []
+    n_sum_in = list(N_sum) if N_sum else []
+
+    # 子块展开：每块按 N_sum/N_extract 切成若干 sum=N_extract 的子块。
+    # 契约与原版一致：块压缩必须给全 (N_eigen, N_sum, N_extract) 三元组——
+    # 原版对"仅 N_sum"输入直接越界崩溃（实跑验证），此处显式拒绝。
+    tran_n_sum, tran_n_eigen = [], []
+    if n_sum_in and not n_eigen:
+        raise ValueError("块压缩须同时提供 N_eigen/N_sum/N_extract "
+                         "（原版对仅 N_sum 未定义）")
+    if n_eigen:
+        for ne, ns in zip(n_eigen, n_sum_in):
+            nex = N_extract[len(tran_n_sum)] if N_extract else 1
+            ngrp = int(round(ns / nex))
+            if abs(ns / nex - ngrp) > 1e-9:
+                raise ValueError(
+                    f"N_sum={ns} 不能被 N_extract={nex} 整除")
+            per = ne / ngrp
+            if abs(per - round(per)) > 1e-9:
+                raise ValueError(
+                    f"块大小 {ne} 不能均分为 {ngrp} 子块")
+            for _ in range(ngrp):
+                tran_n_sum.append(nex)
+                tran_n_eigen.append(int(round(per)))
+    else:
+        tran_n_sum, tran_n_eigen = n_sum_in, n_sum_in
+
+    ev_space = [x for x in ([exact] + tran_n_eigen
+                            + [n_voxel - (exact + sum(tran_n_eigen))])
+                if x != 0]
+    ev_sum = [x for x in ([exact] + tran_n_sum + [noise]) if x != 0]
+    len_space = len(ev_sum)
+    nev = sum(ev_sum)
+
+    slices = [slice(sum(ev_sum[:i]), sum(ev_sum[:i + 1]))
+              for i in range(len_space)]
+    weights = np.empty((len_space, dim), dtype=float)
+    for i in range(len_space):
+        for j in range(dim):
+            # 守卫：sum_i ≤ j 的退化分区（原版会除零崩溃）——
+            # 分母下限取 1，语义为"对角重叠修正饱和"
+            if conserved:
+                weights[i, j] = (ev_space[i]) / (ev_sum[i])
+            else:
+                weights[i, j] = ((ev_space[i] - j)
+                                 / max(ev_sum[i] - j, 1))
+
+    if dim <= 3:
+        all_pos = np.unique(np.asarray(
+            list(combinations(range(dim * len_space), dim)))
+            % len_space, axis=0)
+    else:
+        raise ValueError("仅支持 dim≤3（原版 4D 分支未纳入）")
+
+    omega = np.empty([nev] * dim, dtype=float)
+    for pos in all_pos:
+        used = [0] * len_space
+        for j in pos:
+            used[j] += 1
+        position = [slices[p] for p in pos]
+        w = 1.0
+        for si in range(len_space):
+            w *= float(np.prod(weights[si, :used[si]]))
+        omega[tuple(position)] = w
+        # 同一分区出现在多维度时的对角重叠降权（非守恒模式）
+        grid = np.ogrid[[slice(0, s.stop - s.start)
+                         for s in position]]
+        for extra in range(1, len_space):
+            for i in range(used[extra] - 1):
+                dims_of_part = np.argwhere(pos == extra).reshape(-1)
+                if conserved:
+                    break
+                for j in list(combinations(dims_of_part.tolist(), 2 + i)):
+                    sub = omega[tuple(position)]
+                    w_bool = np.ones(tuple(s.stop - s.start
+                                           for s in position), dtype=bool)
+                    w_diag = w
+                    for k in range(len(j) - 1):
+                        w_bool &= (grid[j[k]] == grid[j[k + 1]])
+                        w_diag /= weights[extra, used[extra] - k - 1]
+                    sub[w_bool] = w_diag
+
+    omega_t = cp.asarray(omega)
+    if normal and dim == 2:
+        for i in range(nev):
+            row = omega[i]
+            omega[i] = row * nev / row.sum()
+        tril = np.tril_indices(nev, -1)
+        omega.T[tril] = omega[tril]
+        return cp.asarray(omega.astype(complex))
+    return omega_t.astype(complex)

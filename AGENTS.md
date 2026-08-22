@@ -7,7 +7,7 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（27 项：18 物理/链路项 + 9 整合功能项 stout/本征模压缩/CG/hB-loader/boot协方差/plateau+CS核/PDF成图/数据守卫+2pt续跑/方向能量链）
+python examples/pyqcd/conftest.py    # 全量测试（28 项：18 物理/链路项 + 10 整合功能项 stout/本征模压缩+Ω张量/CG/hB-loader/boot协方差/plateau+CS核/PDF成图/数据守卫+2pt续跑/方向能量链/第二轮helicity+FH窗+ASCII）
 python examples/pyqcd/verify_consistency.py   # 一致性验证（vs docker-v20260805 输出，A–E 全 0 差异）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
 python -m pyqcd.parallel --dry-run --confs 6250,6450   # MPI 并行规划预览（用户公式 N*a=n*b）
@@ -137,7 +137,8 @@ P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）
 
 ## 参考代码整合（~auto-all 20260822，logs/examples/refer → pyqcd）
 
-12 项整合（照抄逻辑、自包含、不 import 来源；各附测试）：
+16 项整合，两轮完成（照抄逻辑、自包含、不 import 来源；各附测试；
+第二轮 R6 经原版实跑真值逐位对照验证——有效契约 7 用例 max|d|=0）：
 
 | # | 来源 | 功能 | 落点 |
 |---|---|---|---|
@@ -153,6 +154,10 @@ P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）
 | L2 | logs/test7/test8 | 数据守卫：原始数据齐全度+输入数组校验+ETA 日志 | `pyqcd/pipeline/_validate.py` |
 | L3 | logs/test6 | 能量链方向感知（动量置换 dir 参数，z 向后兼容） | `pyqcd/analysis/_proton_energy` + `_bare_matrix.dir_momentum` |
 | L4 | logs/test7 | tlog 时间戳+ETA 进度日志 | `pyqcd/pipeline._validate.ProgressLog/progress_log` |
+| H1(二轮) | refer/donghx Operator.py | 螺旋度 ΔG 双场强 Wilson 线算符 F·W†·F̃·W（±z 支、平面/全和求和） | `pyqcd/operator/_helicity.py` |
+| R6(二轮) | refer/sush lqcddb vertex.py | Ω 加速张量（exact/块/noise 分区权重，dim=2/3，conserved/normal） | `pyqcd/vertex._eigcompress.create_omega_accelerate` |
+| R7(二轮) | refer/zengch fit_ratio_FH_new | FH 常数闭式协方差拟合 + χ² 驱动逐 z 自适应 t_sep 窗 | `pyqcd/analysis._ratio_fit.fit_constant_window/fh_adaptive_windows` |
+| R8(二轮) | refer/donghx input_output_4_cupy | L.Liu ASCII 关联函数读写对（.gz 自动压缩） | `pyqcd/tools._io.write_data_ascii/read_data_ascii` |
 
 跳过（记录理由）：IOG reader（依赖 iog.so 二进制）、Chroma XML 生成器与
 SIDIS-DY 唯象层（依赖库外 evolution 模块）、contractadviser（性能顾问非物理）、
