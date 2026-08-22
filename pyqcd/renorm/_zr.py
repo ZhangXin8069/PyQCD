@@ -279,3 +279,63 @@ def fit_ZR(par_ini, datasets, mu_, use_iminuit=True):
     res = minimize(cost, par_ini, method='Nelder-Mead',
                    options={'maxiter': 5000, 'xatol': 1e-6})
     return res.x
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 逐样本重拟合环（整合 zengch fit_zr_new.fit_ZR 的 bootstrap 样本循环）
+# ═══════════════════════════════════════════════════════════════════
+
+_ZR_PAR_NAMES = ('k', 'd', 'm0', 'm2', 'Lambda_QCD',
+                 'g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'g7', 'g8',
+                 'g9', 'g10', 'g11', 'g12', 'g13', 'g14', 'f1', 'f2')
+
+
+def fit_ZR_samples(par_ini, dataset_samples, mu_, use_iminuit=True):
+    """Z_R 参数误差的逐样本重拟合环（照抄 zengch fit_zr_new.fit_ZR 样本循环）。
+
+    对每个 bootstrap/jackknife 样本 i：以各系综 loghB 矩阵的第 i 列为
+    "均值"数据重跑全局拟合，收集参数分布 → 均值±std（原版逐行写 CSV）。
+    协方差 c_inv 与原版一致地跨样本固定（由全体样本的 std 构建后传入）。
+
+    Args:
+        par_ini: 参数初值（长度 ≥ 21）。
+        dataset_samples: [dict(z, loghB=(nz,n_rep) 样本矩阵, c_inv, a), ...]
+            n_rep 取各系综的最小列数（原版取第一系综列数，此处更稳健）。
+        mu_: 重整化标度（GeV）。
+    Returns:
+        list[dict]：每样本一行（sample_i, k, d, m0, m2, Lambda_QCD,
+        g1..g14, f1, f2, chi2）；单个样本拟合失败记 NaN 并告警继续
+        （对原版行为的唯一偏离，防单坏样本中断整环）。
+    """
+    n_rep = min(ds['loghB'].shape[1] for ds in dataset_samples)
+    rows = []
+    for i in range(n_rep):
+        datasets_i = [dict(z=ds['z'], loghB=ds['loghB'][:, i],
+                           c_inv=ds['c_inv'], a=ds['a'])
+                      for ds in dataset_samples]
+        try:
+            par_fit = fit_ZR(par_ini, datasets_i, mu_,
+                             use_iminuit=use_iminuit)
+            chi2 = cost_function_all(par_fit, datasets_i, mu_)
+        except Exception as exc:  # noqa: BLE001 —— 单坏样本不中断整环
+            print(f"[fit_ZR_samples] sample {i} failed: {exc}")
+            par_fit = np.full(len(_ZR_PAR_NAMES), np.nan)
+            chi2 = np.nan
+        row = {"sample_i": i}
+        row.update({name: float(val)
+                    for name, val in zip(_ZR_PAR_NAMES, par_fit)})
+        row["chi2"] = float(chi2) if np.isfinite(chi2) else np.nan
+        rows.append(row)
+    return rows
+
+
+def summarize_ZR_samples(rows):
+    """逐样本拟合结果的参数分布汇总（mean/std；原版以 CSV 供人工统计）。"""
+    keys = [k for k in rows[0].keys() if k != "sample_i"]
+    summary = {}
+    for key in keys:
+        vals = np.array([r[key] for r in rows], dtype=float)
+        vals = vals[np.isfinite(vals)]
+        summary[key] = (float(np.mean(vals)) if vals.size else np.nan,
+                        float(np.std(vals)) if vals.size else np.nan)
+    return summary

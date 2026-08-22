@@ -133,56 +133,161 @@ def compute_dual_field_strength(F_dict: dict, mu: int, nu: int):
 
 
 def gluon_ope_operator_z0(gauge, mu: int, nu: int, z_dir: int, delta_z: int,
-                          Nt: int, Nx: int, compute_dtype=None):
-    """O_{μν}(z)（z = 0..delta_z-1，全部时间片）。
+                          Nt: int, Nx: int, compute_dtype=None, *,
+                          mu2: int | None = None, nu2: int | None = None,
+                          direction: int = 1):
+    """O_{μν;μ₂ν₂}(z)（z = 0..delta_z-1，全部时间片）。
 
-    返回 (delta_z, Nt) 复数数组（CPU）。照抄 compute_ope.py 的 donghx roll
-    Wilson 线算法。
+    默认 F_{μν}(z)·W†·F̃_{μν}(0)·W（+z Wilson 线，照抄 compute_ope.py 的
+    donghx roll 算法）。扩展参数（照抄 zhangxin workflow / Operator.py）：
+
+    - ``mu2/nu2``：F̃ 插入的独立 Lorentz 对（gauge_fix_helicity 交叉混合，
+      如 (3,0;2,1)）；默认与 (mu, nu) 相同。
+    - ``direction=-1``：负 z 方向 Wilson 线变体
+      （Operator.py ``operators_new_z0_mz_mu2``：F(−z)·W(−z→0)·F̃(0)·W†）。
+
+    返回 (delta_z, Nt) 数组；同对 +z 保持原版实数行为，交叉对或 −z 为复数。
     """
     cp = get_backend()
     if compute_dtype is None:
         compute_dtype = gauge.dtype
     if mu == nu:
         return np.zeros((delta_z, Nt), dtype=compute_dtype)
+    if mu2 is None:
+        mu2 = mu
+    if nu2 is None:
+        nu2 = nu
 
     z_axis = 3 - z_dir   # Wilson 线方向的空间轴
+    cross = (mu2 != mu) or (nu2 != nu)
+    complex_out = bool(cross or direction < 0)
 
-    need_pairs = {(mu, nu)}
-    for rho in range(4):
-        for sigma in range(4):
-            if abs(_TENSOR4[mu, nu, rho, sigma]) > 1e-10 and rho != sigma:
-                need_pairs.add((rho, sigma))
+    need_pairs = {(mu, nu), (mu2, nu2)}
+    for a, b in ((mu, nu), (mu2, nu2)):
+        for rho in range(4):
+            for sigma in range(4):
+                if abs(_TENSOR4[a, b, rho, sigma]) > 1e-10 and rho != sigma:
+                    need_pairs.add((rho, sigma))
 
     F_dict = {pair: plaquette_clover(gauge, pair[0], pair[1])
               for pair in need_pairs}
     F = F_dict[(mu, nu)]
-    F_tilde = compute_dual_field_strength(F_dict, mu, nu)
+    F_tilde = compute_dual_field_strength(F_dict, mu2, nu2)
     del F_dict
 
     U_z = gauge[..., z_dir, :, :]   # (Nt,Nz,Ny,Nx,3,3)
 
     spatial_axes = (1, 2, 3)
-    ope = np.zeros((delta_z, Nt), dtype=np.float64)
+    out_dtype = np.complex128 if complex_out else np.float64
+    ope = np.zeros((delta_z, Nt), dtype=out_dtype)
+
+    def _store(zi, arr_cpu):
+        ope[zi] = arr_cpu if complex_out else arr_cpu.real
 
     for zi in range(delta_z):
         if zi == 0:
             ope_t = cp.einsum("tzyxab,tzyxba->tzyx", F, F_tilde)
-            ope[0] = _to_cpu(cp.sum(ope_t, axis=spatial_axes)).real
+            _store(0, _to_cpu(cp.sum(ope_t, axis=spatial_axes)))
             continue
 
-        ope_t = cp.roll(F, -zi, axis=z_axis)
-        for step in range(zi):
-            U_conj = cp.roll(U_z, -(zi - 1 - step), axis=z_axis).conj()
-            ope_t = cp.matmul(ope_t, U_conj.transpose(0, 1, 2, 3, 5, 4))
-        ope_t = cp.matmul(ope_t, F_tilde)
-        for step in range(zi):
-            U_fwd = cp.roll(U_z, -step, axis=z_axis)
-            ope_t = cp.matmul(ope_t, U_fwd)
+        if direction > 0:
+            # +z：F(+z)·U† 链 → F̃(0) → U 链（compute_ope.py 原算法）
+            ope_t = cp.roll(F, -zi, axis=z_axis)
+            for step in range(zi):
+                U_conj = cp.roll(U_z, -(zi - 1 - step), axis=z_axis).conj()
+                ope_t = cp.matmul(ope_t, U_conj.transpose(0, 1, 2, 3, 5, 4))
+            ope_t = cp.matmul(ope_t, F_tilde)
+            for step in range(zi):
+                U_fwd = cp.roll(U_z, -step, axis=z_axis)
+                ope_t = cp.matmul(ope_t, U_fwd)
+        else:
+            # −z（operators_new_z0_mz_mu2）：F(−z)·U 链 → F̃(0) → U† 链
+            ope_t = cp.roll(F, zi, axis=z_axis)
+            for step in range(zi):
+                U_k = cp.roll(U_z, zi - step, axis=z_axis)
+                ope_t = cp.matmul(ope_t, U_k)
+            ope_t = cp.matmul(ope_t, F_tilde)
+            for step in range(zi):
+                Uc_k = cp.roll(U_z, step + 1, axis=z_axis).conj()
+                ope_t = cp.matmul(ope_t, Uc_k.transpose(0, 1, 2, 3, 5, 4))
 
         trace = cp.einsum("...aa->...", ope_t)
-        ope[zi] = _to_cpu(cp.sum(trace, axis=spatial_axes)).real
+        _store(zi, _to_cpu(cp.sum(trace, axis=spatial_axes)))
 
     return ope.astype(compute_dtype)
+
+
+def gluon_ff_operator_z0(gauge, mu: int, nu: int, delta_z: int,
+                         Nt: int, Nx: int, *, mu2: int | None = None,
+                         nu2: int | None = None, direction: int = 1):
+    """固定规范（无 Wilson 线）FF 关联（照抄 Operator.py operators_FF_z0/_mz）。
+
+    F_{μν}(±z·ẑ) 与 F̃_{μ₂ν₂}(0) 逐点收缩后全空间求和；无 Wilson 线，
+    仅适用于已固定规范（Coulomb/Landau）的系综——规范协变算符的
+    系统误差对照通道。z 方向按参考实现硬编码。
+
+    返回 (delta_z, Nt) 复数数组。
+    """
+    cp = get_backend()
+    if mu2 is None:
+        mu2 = mu
+    if nu2 is None:
+        nu2 = nu
+    z_axis = 3 - 2   # 参考实现硬编码 z_dir=2
+
+    need_pairs = {(mu, nu), (mu2, nu2)}
+    for a, b in ((mu, nu), (mu2, nu2)):
+        for rho in range(4):
+            for sigma in range(4):
+                if abs(_TENSOR4[a, b, rho, sigma]) > 1e-10 and rho != sigma:
+                    need_pairs.add((rho, sigma))
+    F_dict = {pair: plaquette_clover(gauge, pair[0], pair[1])
+              for pair in need_pairs}
+    F = F_dict[(mu, nu)]
+    F_tilde = compute_dual_field_strength(F_dict, mu2, nu2)
+    del F_dict
+
+    out = np.zeros((delta_z, Nt), dtype=np.complex128)
+    for zi in range(delta_z):
+        ope_t = cp.roll(F, -direction * zi, axis=z_axis)
+        ope_t = cp.matmul(ope_t, F_tilde)
+        trace = cp.einsum("...aa->...", ope_t)
+        out[zi] = _to_cpu(cp.sum(trace, axis=(1, 2, 3)))
+    return out
+
+
+def get_ope_lorentz_pairs(zdir: int, mode: str = "unpol"):
+    """OPE 计算的 (mu, nu, mu2, nu2) Lorentz 指派表（照抄 zhangxin workflow
+    get_ope_lorentz_pairs，源自 donghx Calc_ope_* 的 rank 分派）。
+
+    Args:
+        zdir: Wilson 线方向（0=x, 1=y, 2=z）。
+        mode: "unpol" / "helicity"（同表，后者用对偶叠）、
+              "gauge_fix_unpol"（3 对）、"gauge_fix_helicity"（4 对交叉混合）。
+    """
+    if mode in ("unpol", "helicity"):
+        pairs = [
+            (3, (zdir + 1) % 3, 3, (zdir + 1) % 3),
+            (3, (zdir + 2) % 3, 3, (zdir + 2) % 3),
+            ((zdir + 1) % 3, (zdir + 2) % 3,
+             (zdir + 1) % 3, (zdir + 2) % 3),
+        ]
+    elif mode == "gauge_fix_unpol":
+        pairs = [
+            (3, 0, 3, 0),   # F_{t,x}
+            (3, 1, 3, 1),   # F_{t,y}
+            (0, 1, 0, 1),   # F_{x,y}
+        ]
+    elif mode == "gauge_fix_helicity":
+        pairs = [
+            (3, 0, 2, 1),
+            (3, 1, 0, 2),
+            (3, 2, 0, 1),
+            (0, 1, 3, 2),
+        ]
+    else:
+        raise ValueError(f"Unknown OPE mode: {mode}")
+    return pairs
 
 
 # ═══════════════════════════════════════════════════════════════════

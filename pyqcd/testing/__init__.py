@@ -695,3 +695,379 @@ def test_round2_integrations():
         assert meta['is_complex'] and meta['T'] == 8 and meta['L'] == 24
         assert np.abs(back[:, :, 0] + 1j * back[:, :, 1] - data).max() < 1e-13
     shutil.rmtree(tmp)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# NaN 感知回归比对原语（整合 examples/test0/main.py 的 _rel_maxdiff/_cmp_one）
+# ═══════════════════════════════════════════════════════════════════
+
+def rel_maxdiff(a, b):
+    """逐元素相对差的最大值（分母为 |b| 的 norm，避免除零）。
+
+    NaN 处理：要求两边 NaN 位置完全相同；只对非 NaN 位置计算相对差
+    （如 meff 噪声尾区的 NaN 属物理预期，基线同位置亦有 NaN）。
+    形状不一致或 NaN 位置不一致返回 inf；双全空返回 0.0。
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if a.shape != b.shape:
+        return float('inf')
+    mask = np.isnan(a) | np.isnan(b)
+    if mask.any():
+        if not np.array_equal(np.isnan(a), np.isnan(b)):
+            return float('inf')
+        a = a[~mask]
+        b = b[~mask]
+        if a.size == 0:
+            return 0.0
+    denom = np.linalg.norm(b)
+    if denom == 0:
+        return float(np.linalg.norm(a))
+    return float(np.linalg.norm(a - b) / denom)
+
+
+def cmp_one(name, a, b, tol, results):
+    """单项回归比对：追加 {item, rel_diff, tol, pass, shape_a/b} 到 results，
+    返回是否通过（照抄 test0/main.py _cmp_one）。"""
+    d = rel_maxdiff(a, b)
+    ok = d < tol
+    results.append({'item': name, 'rel_diff': d, 'tol': tol, 'pass': ok,
+                    'shape_a': list(np.shape(a)),
+                    'shape_b': list(np.shape(b))})
+    return ok
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 第三轮整合测试（~auto-all 20260822 第三遍清查）
+# ═══════════════════════════════════════════════════════════════════
+
+def test_matching_ratio_kernels():
+    """B1: ratio 方案匹配核 C/C_gluon_ratio 三分区+Si 项（对照 matching_cc 原式）。"""
+    from scipy.special import sici as _sici
+    from pyqcd.renorm import C as C_q, C_gluon_ratio, Si
+
+    def Si_ref(x):
+        return _sici(x)[0]
+
+    def C_ref(ksi, m, r):
+        if ksi > 1:
+            ker = ((1 + ksi**2) / (1 - ksi) * np.log(ksi / (ksi - 1)) + 1)
+        elif ksi > 0 and ksi < 1:
+            ker = ((1 + ksi**2) / (1 - ksi)
+                   * (-np.log(r**2) + np.log(4 * ksi * (1 - ksi)) - 1) + 1)
+        else:
+            ker = (-(1 + ksi**2) / (1 - ksi) * np.log(-ksi / (1 - ksi)) - 1)
+        return (0.296 * (4.0 / 3.0) / (2 * np.pi)
+                * (ker + 3 * Si_ref((1 - ksi) * abs(m)) / (np.pi * (1 - ksi))))
+
+    def Cg_ref(ksi, m, r):
+        p2 = 2 * (1 - ksi + ksi**2)**2 / (1 - ksi)
+        hi = (11 - 28 * ksi + 18 * ksi**2 - 12 * ksi**3) / (6 * (1 - ksi))
+        lo = ((15 - 56 * ksi + 102 * ksi**2 - 96 * ksi**3 + 48 * ksi**4)
+              / (6 * (1 - ksi)))
+        if ksi > 1:
+            ker = p2 * np.log(ksi / (ksi - 1)) + hi
+        elif ksi > 0 and ksi < 1:
+            ker = p2 * (-np.log(r**2 / 4) + np.log(ksi * (1 - ksi))) - lo
+        else:
+            ker = -p2 * np.log(ksi / (ksi - 1)) - hi
+        ker += 5 / 6 * (-1 / abs(1 - ksi)
+                        + 2 * Si_ref((1 - ksi) * abs(m)) / (np.pi * (1 - ksi)))
+        return 0.296 * 3.0 / (2 * np.pi) * ker
+
+    for xi in (-0.7, -0.05, 0.13, 0.5, 0.9, 1.7, 3.2):
+        m, r = 0.8, 1.5
+        assert abs(C_q(xi, m, r) - C_ref(xi, m, r)) < 1e-12
+        assert abs(C_gluon_ratio(xi, m, r) - Cg_ref(xi, m, r)) < 1e-12
+    # 标量/向量一致
+    xs = np.array([-0.5, 0.4, 2.0])
+    v = C_gluon_ratio(xs, 0.8, 1.5)
+    assert v.shape == (3,) and all(
+        abs(v[i] - C_gluon_ratio(xs[i], 0.8, 1.5)) < 1e-15 for i in range(3))
+
+
+def test_quasi_pdf_gluon_sin_transform():
+    """B2: collinear 准 PDF sin 变换——解析核 + x→0 保护。
+
+    取 h(z)=z·e^{−αz}（α=10 GeV⁻¹，衰减长 0.1 GeV⁻¹ ≪ z_max），
+    ∫₀^∞ z e^{−αz} sin(βz) dz = 2αβ/(α²+β²)²。
+    """
+    from pyqcd.renorm import quasi_pdf_gluon
+    z_fm = np.linspace(0.0005, 0.60, 800)
+    pz = 2.0
+    xs = np.array([0.0, 0.05, 0.25, 0.8, -0.5])
+    alpha = 10.0                       # 衰减率 GeV^-1
+    z_gev = z_fm / 0.197327
+    h = z_gev * np.exp(-alpha * z_gev)
+    _, g = quasi_pdf_gluon(h, z_fm, pz, x_grid=xs)
+    assert g[0] == 0.0                 # x→0 保护置 0（原版行为）
+    for i, x in enumerate(xs[1:], start=1):
+        beta = x * pz
+        exact = (2 * pz / x) * 2 * alpha * beta / (alpha**2 + beta**2)**2
+        # 截断/梯形误差 ~ e^{-α·zmax}=e^{-30}，可忽略
+        assert abs(g[i] - exact) < 1e-4 * max(abs(exact), 1.0), \
+            (x, g[i], exact)
+
+
+def test_gluon_ope_directions_and_ff():
+    """B3: OPE ±z Wilson 线、固定规范 FF 算符与 Lorentz 指派表。"""
+    from pyqcd.operator import (gluon_ope_operator_z0, gluon_ff_operator_z0,
+                                get_ope_lorentz_pairs)
+    g = random_su3_gauge(L=4, seed=11)
+    o_plus = gluon_ope_operator_z0(g, 0, 1, 2, 2, 4, 4)
+    o_minus = gluon_ope_operator_z0(g, 0, 1, 2, 2, 4, 4, direction=-1)
+    assert o_plus.shape == o_minus.shape == (2, 4)
+    assert np.allclose(o_plus[0], o_minus[0])          # zi=0 同点收缩
+    cross = gluon_ope_operator_z0(g, 3, 0, 2, 2, 4, 4, mu2=2, nu2=1)
+    assert np.iscomplexobj(cross) and np.all(np.isfinite(cross.view(float)))
+    ff = gluon_ff_operator_z0(g, 3, 0, 3, 4, 4, mu2=2, nu2=1)
+    ffm = gluon_ff_operator_z0(g, 3, 0, 3, 4, 4, mu2=2, nu2=1, direction=-1)
+    assert ff.dtype == np.complex128 and np.allclose(ff[0], ffm[0])
+    assert get_ope_lorentz_pairs(2, "unpol") == [
+        (3, 0, 3, 0), (3, 1, 3, 1), (0, 1, 0, 1)]
+    assert get_ope_lorentz_pairs(2, "helicity") == [
+        (3, 0, 3, 0), (3, 1, 3, 1), (0, 1, 0, 1)]
+    assert get_ope_lorentz_pairs(2, "gauge_fix_unpol") == [
+        (3, 0, 3, 0), (3, 1, 3, 1), (0, 1, 0, 1)]
+    assert get_ope_lorentz_pairs(2, "gauge_fix_helicity") == [
+        (3, 0, 2, 1), (3, 1, 0, 2), (3, 2, 0, 1), (0, 1, 3, 2)]
+    try:
+        get_ope_lorentz_pairs(2, "bad")
+        raise AssertionError("should have raised")
+    except ValueError:
+        pass
+
+
+def test_parity_boundary_projection():
+    """B4: 双宇称投影 + 反周期边界符号翻转 vs 手工循环。"""
+    from pyqcd.contraction import parity_and_boundary
+    from pyqcd.lattice import gamma
+    rng = np.random.default_rng(7)
+    Nt = 5
+    C = rng.normal(size=(Nt, Nt, 4, 4)) + 1j * rng.normal(size=(Nt, Nt, 4, 4))
+    pp, pm = parity_and_boundary(C, Nt)
+    Pp = 0.5 * (gamma(0) + gamma(4))
+    Pm = 0.5 * (gamma(0) - gamma(4))
+    pp_ref = np.einsum("li,yxil->yx", Pp, C)
+    pm_ref = np.einsum("li,yxil->yx", Pm, C)
+    for ts in range(Nt):
+        for tt in range(Nt):
+            if tt < ts:
+                pp_ref[tt, ts] *= -1.0
+            if tt > ts:
+                pm_ref[tt, ts] *= -1.0
+    assert np.allclose(pp, pp_ref) and np.allclose(pm, pm_ref)
+
+
+def test_zr_sample_refit_loop():
+    """B5: Z_R 逐样本重拟合环的机制与有限性。
+
+    本环境无 iminuit，scipy 回退无边界约束会游走出参数化有效域
+    （log(aΛ) 失效）——故只断言机制（行数/键/汇总）与有限性，
+    不赌非线性收敛。
+    """
+    from pyqcd.renorm import fit_ZR_samples, summarize_ZR_samples, th_hB
+    rng = np.random.default_rng(3)
+    mu_ = 2.0
+    par_true = np.array([0.30, 0.20, 1.0, 0.05, 0.28]
+                        + [0.02 * (i + 1) for i in range(14)] + [0.0, 0.0])
+    z_fm = np.linspace(0.05, 0.45, 5)
+    fm2gev = 1.0 / 0.1973
+    dss = []
+    for a_fm in (0.105, 0.085):
+        a = a_fm * fm2gev
+        hb = th_hB(z_fm * fm2gev, a, mu_, par_true[:19], par_true[19:])
+        M = hb[:, None].repeat(3, axis=1)
+        dss.append(dict(z=z_fm * fm2gev, loghB=M,
+                        c_inv=np.linalg.inv(np.diag(np.full(len(z_fm), .02**2))),
+                        a=a))
+    with np.errstate(all='ignore'):
+        rows = fit_ZR_samples(par_true, dss, mu_)
+    keys = {'sample_i', 'k', 'd', 'm0', 'm2', 'Lambda_QCD', 'f1', 'f2', 'chi2'}
+    assert len(rows) == 3 and keys <= set(rows[0].keys())
+    assert all(f"g{i}" in rows[0] for i in range(1, 15))
+    core = ['k', 'd', 'm0', 'm2']
+    for r in rows:
+        assert all(np.isfinite(r[k]) for k in core), r
+    summ = summarize_ZR_samples(rows)
+    assert set(summ.keys()) >= keys - {'sample_i'}
+    mean_k, std_k = summ['k']
+    assert np.isfinite(mean_k) and std_k == abs(std_k)
+
+
+def test_extrapolate_boot_fit():
+    """B6: 协方差加权外推拟合——连续极限截距恢复 + 回退路径。"""
+    from pyqcd.renorm import fit_hR_PDF_extrap_boot, hR_form
+    rng = np.random.default_rng(11)
+    nx, nrep = 3, 20
+    xx = np.linspace(0.1, 0.45, nx)
+    true_par = [0.5, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    ens = []
+    for a_, L in ((0.53, 24), (0.40, 32), (0.32, 48), (0.27, 64)):
+        ens.append((a_, 6, 0.30, L))
+        ens.append((a_, 8, 0.30, L))
+    rows = []
+    for a_, pz_, mpi, L in ens:
+        val = float(hR_form((a_, pz_, mpi, L), true_par))
+        rows.append(dict(x=xx, hR=val + 0.01 * rng.standard_normal((nx, nrep)),
+                         a=a_, pz=pz_, mpi=mpi, L=L))
+    xg, m, s, S = fit_hR_PDF_extrap_boot(rows, return_samples=True)
+    assert S.shape == (nrep, nx) and np.all(np.isfinite(S))
+    # xg0 是连续极限截距：应恢复真值 0.5（fx·a² 被外推掉）
+    assert np.all(np.isfinite(m)) and np.allclose(m, 0.5, atol=4 * np.mean(s))
+    # 秩亏协方差回退（n_rep=2 → Cholesky 失败 → 单位阵）
+    mk = lambda sl: [dict(x=xx, hR=r['hR'][:, sl],
+                          **{k: r[k] for k in ('a', 'pz', 'mpi', 'L')})
+                     for r in rows]
+    _, m2, s2 = fit_hR_PDF_extrap_boot(mk(slice(0, 2)))
+    assert np.all(np.isfinite(m2))
+    _, m3, s3 = fit_hR_PDF_extrap_boot(mk(0))
+    assert np.all(np.isnan(s3))                    # 单样本无带宽
+
+
+def test_group_aggregate_and_disconnect():
+    """B7: 分组聚合基元 + disconnected 矩阵元构造（PDF/PFF 双模式）。"""
+    from pyqcd.analysis import (mean_over_array_of_list,
+                                sum_over_array_of_list, dis_connect)
+    rng = np.random.default_rng(5)
+    a = rng.normal(size=(2, 3, 4))
+    axes, groupings = (1, 2), ([[0, 2], [1]], [[0, 3], [1, 2]])
+    m_ref = np.zeros((2, 2, 2))
+    s_ref = np.zeros((2, 2, 2))
+    for i in range(2):
+        for gi, g1 in enumerate(groupings[0]):
+            for gj, g2 in enumerate(groupings[1]):
+                blk = a[np.ix_([i], g1, g2)]
+                m_ref[i, gi, gj] = blk.mean()
+                s_ref[i, gi, gj] = blk.sum()
+    assert np.allclose(mean_over_array_of_list(a, axes, groupings), m_ref)
+    assert np.allclose(sum_over_array_of_list(a, axes, groupings), s_ref)
+    try:
+        mean_over_array_of_list(a, (1,), ([[0], [0]]))
+        raise AssertionError("duplicate index not caught")
+    except ValueError:
+        pass
+
+    Nc, Nt, tsep = 3, 6, 2
+    C2 = rng.normal(size=(Nc, Nt, Nt))
+    BB = rng.normal(size=(Nc, Nt, Nt))
+    mu = C2 - C2.mean(axis=0, keepdims=True)
+    bub = BB - BB.mean(axis=0, keepdims=True)
+    mu_r = np.zeros_like(mu)
+    bub_r = np.zeros_like(bub)
+    for t in range(Nt):
+        mu_r[:, t, :] = np.roll(mu[:, t, :], -t, axis=1)
+        bub_r[:, t, :] = np.roll(bub, -t, axis=1)[:, t, :]
+    term1 = mu_r[:, :, tsep:tsep + 1] * bub_r
+    got_pdf = dis_connect(C2, BB, 0, 1, 2, tsep, dtype='PDF').squeeze()
+    assert np.allclose(got_pdf, term1.sum(axis=1).squeeze())
+    got_pff = dis_connect(C2, BB, 0, 1, 2, tsep, dtype='PFF').squeeze()
+    mat = np.zeros_like(C2)
+    mat[:, :, :tsep + 1] = term1[:, :, :tsep + 1]
+    term2 = bub_r[:, :, tsep:tsep + 1] * mu_r
+    mat[:, :, tsep:2 * tsep + 1] = term2[:, :, tsep:2 * tsep + 1]
+    assert np.allclose(got_pff, mat.sum(axis=1).squeeze())
+
+
+def test_check_files_existence_guard(tmpdir=None):
+    """B8: 模板组合式存在性+大小一致性守卫（正常/损坏/缺失三态）。"""
+    import os
+    import tempfile
+    from pyqcd.pipeline import check_files_existence
+    d = tempfile.mkdtemp()
+    for r in range(3):
+        os.makedirs(f"{d}/{r}", exist_ok=True)
+        with open(f"{d}/{r}/f.dat", "w") as f:
+            f.write("x" * (10 if r < 2 else 99))     # run2 大小异常
+    existing, bad = check_files_existence([f"{d}/<run>/f.dat"], run=[0, 1, 2])
+    assert existing == [0, 1] and bad == [2]
+    e2, b2 = check_files_existence([f"{d}/<r>/missing.dat"], r=[0, 1])
+    assert e2 == [] and b2 == [0, 1]
+    try:
+        check_files_existence(["x"])
+        raise AssertionError("empty kwargs should raise")
+    except ValueError:
+        pass
+
+
+def test_wickplot_and_flop_analysis():
+    """B9: Wick 缩并图可视化 + 收缩路径 FLOPs 诊断。"""
+    import matplotlib
+    matplotlib.use('AGG')
+    from pyqcd.contraction._dynamic import (_analyze_contraction_path,
+                                            _format_cost, run_wick_analysis)
+    from pyqcd.contraction import wick_contraction, plot_figure_wick
+    nf, of, sp, li, name = _analyze_contraction_path(
+        'ab,bc->ac', [(1000, 1000)] * 2, optimize=True)
+    assert nf > 0 and of <= nf and li > 0 and name in ('auto', 'greedy',
+                                                       'optimal', 'dp')
+    assert _format_cost(1_234_567_890) == '1.23G'
+    plan = run_wick_analysis([(['|'], ['|'])], Cpt='2pt', verbose=False)
+    assert len(plan) >= 1                          # 默认路径无 FLOP 注记不崩
+    sink_ops = ['|', 'd', 'u', 'gamma_7', 'd', '|', '|', 'u^d', 'gamma_5',
+                'd', '|']
+    src_ops = ['|', 'u^d', 'gamma_7', 'd^d', 'd^d', '|', '|', 'd^d',
+               'gamma_5', 'u', '|']
+    w = wick_contraction(sink_operators=sink_ops, source_operators=src_ops,
+                         Cpt='2pt', curr_operators=[],
+                         Pindex=['p'], Vindex=['v'], Gindex=['g'])
+    fig, _ax = plot_figure_wick(w, diagram_index=0, Cpt='2pt')
+    assert fig is not None
+
+
+def test_vertex_product_readers():
+    """B10: V†V/VVV 预计算顶点积二进制 reader 往返。"""
+    import tempfile
+    from pyqcd.tools import readin_vdv_all, readin_vvv_all, readin_vvv
+    d = tempfile.mkdtemp()
+    Nt, Nev, Nev1 = 4, 6, 3
+    rng = np.random.default_rng(2)
+    ref = rng.normal(size=(Nt, Nev, Nev)) + 1j * rng.normal(size=(Nt, Nev, Nev))
+    buf = np.zeros((Nt, Nev, Nev, 2))
+    buf[..., 0] = ref.real
+    buf[..., 1] = ref.imag
+    buf.tofile(f"{d}/VdaggerV.Px0Py0Pz0.conf77")
+    got = readin_vdv_all(d, Nev, Nev1, Nt, 77)
+    assert got.dtype == complex and np.allclose(got, ref[:, :Nev1, :Nev1])
+    refv = (rng.normal(size=(Nt, Nev, Nev, Nev))
+            + 1j * rng.normal(size=(Nt, Nev, Nev, Nev)))
+    for t in range(Nt):
+        b = np.zeros((Nev, Nev, Nev, 2))
+        b[..., 0] = refv[t].real
+        b[..., 1] = refv[t].imag
+        b.tofile(f"{d}/VVV.t{t:03d}.Px0Py0Pz0.conf77")
+    gv = readin_vvv_all(d, Nev1, Nt, 77)
+    assert np.allclose(gv, refv[:, :Nev1, :Nev1, :Nev1])
+    b = np.zeros((Nt, Nev, Nev, Nev, 2))
+    b[..., 0] = refv.real
+    b[..., 1] = refv.imag
+    b.tofile(f"{d}/VVV.Px0Py0Pz0.conf77")
+    assert np.allclose(readin_vvv(d, Nev, Nev1, Nt, 77),
+                       refv[:, :Nev1, :Nev1, :Nev1])
+
+
+def test_env_snapshot():
+    """E4: 运行环境快照 env.json。"""
+    import json
+    import tempfile
+    from pyqcd.tools import dump_env
+    path = tempfile.mkdtemp() + "/sub/env.json"
+    info = dump_env(path)
+    on_disk = json.load(open(path))
+    assert info['numpy'] and info['git_branch'] not in ('', None)
+    assert on_disk['hostname'] == info['hostname']
+
+
+def test_cmp_primitives():
+    """E5: NaN 感知回归比对原语。"""
+    from pyqcd.testing import rel_maxdiff, cmp_one
+    a = np.array([1.0, 2.0, np.nan])
+    b = a * (1 + 1e-12)
+    b[2] = np.nan
+    assert rel_maxdiff(a, b) < 1e-9
+    assert rel_maxdiff(a, np.array([1., 2., 3.])) == float('inf')
+    assert rel_maxdiff(a.reshape(3, 1), a) == float('inf')
+    assert rel_maxdiff(np.array([np.nan]), np.array([np.nan])) == 0.0
+    res = []
+    ok = cmp_one("x", a, b, 1e-6, res)
+    assert ok and res[0]['pass'] and res[0]['shape_a'] == [3]

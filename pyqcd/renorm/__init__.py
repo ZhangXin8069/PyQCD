@@ -13,12 +13,13 @@ from ._ensembles import (
 from ._zr import (
     Z_MS, th_hB, th_ZR, cost_function, cost_function_all, fit_ZR,
     build_hB_dataset, boot_covariance, make_zr_dataset,
+    fit_ZR_samples, summarize_ZR_samples,
 )
 from ._hybrid import (
     hR_z_Pz, hR_lambda_fit_form, fit_hR_lambda, hR_lambda, hR_x,
 )
-from ._matching import hR_PDF, C_gluon_ratio, Si
-from ._extrapolate import hR_form, build_fit_data, fit_hR_PDF_extrap
+from ._matching import hR_PDF, C_gluon_ratio, C, Si
+from ._extrapolate import hR_form, build_fit_data, fit_hR_PDF_extrap, fit_hR_PDF_extrap_boot
 from ._gradient_flow import (
     wilson_flow, wilson_flow_step, flow_derivative, staple_6,
     flow_action_density, scale_setting_t0, proj_su3,
@@ -30,7 +31,7 @@ from ._tmd import (
     self_renormalized_ratio, invariant_amplitude, collins_soper_kernel,
 )
 from ._tmdextract import (
-    quasi_tmd_pdf, cs_kernel_from_ratio, cs_kernel_two_momentum,
+    quasi_tmd_pdf, quasi_pdf_gluon, cs_kernel_from_ratio, cs_kernel_two_momentum,
     soft_function_intrinsic, tmd_matching_hybrid, sftx_gluon_matching_coeff,
     sftx_energy_density_t0,
 )
@@ -43,12 +44,14 @@ __all__ = [
     # 自重整化
     "Z_MS", "th_hB", "th_ZR", "cost_function", "cost_function_all", "fit_ZR",
     "build_hB_dataset", "boot_covariance", "make_zr_dataset",
+    "fit_ZR_samples", "summarize_ZR_samples",
     # 混合方案
     "hR_z_Pz", "hR_lambda_fit_form", "fit_hR_lambda", "hR_lambda", "hR_x",
     # 匹配
-    "hR_PDF", "C_gluon_ratio", "Si",
+    "hR_PDF", "C_gluon_ratio", "C", "Si",
     # 外推
     "hR_form", "build_fit_data", "fit_hR_PDF_extrap",
+    "fit_hR_PDF_extrap_boot",
     # 梯度流
     "wilson_flow", "wilson_flow_step", "flow_derivative", "staple_6",
     "flow_action_density", "scale_setting_t0", "proj_su3",
@@ -57,7 +60,7 @@ __all__ = [
     "tmd_matrix_elements", "tmd_matrix_elements_time",
     "gradient_flow_renormalized_tmd",
     "self_renormalized_ratio", "invariant_amplitude", "collins_soper_kernel",
-    "quasi_tmd_pdf", "cs_kernel_from_ratio", "soft_function_intrinsic",
+    "quasi_tmd_pdf", "quasi_pdf_gluon", "cs_kernel_from_ratio", "soft_function_intrinsic",
     "tmd_matching_hybrid", "sftx_gluon_matching_coeff",
     "sftx_energy_density_t0", "cs_kernel_two_momentum",
 ]

@@ -72,6 +72,40 @@ def quasi_tmd_pdf(hR_z, z_grid, b_perp, pz_gev, p_t=None, x_grid=None,
     return x_grid, out
 
 
+def quasi_pdf_gluon(h_z, z_grid, pz_gev, x_grid=None):
+    """collinear 胶子准 PDF（sin 变换通道，照抄 zhangxin
+    gluon_pdf_full_workflow.fourier_transform_to_quasi_pdf）。
+
+        g̃(x, Pz) = (2Pz/x)·∫₀^{z_max} dz h(z, Pz)·sin(x·Pz·z)
+
+    反对称部分（非极化胶子 collinear 准 PDF）用 sin 变换；x≈0 保护置 0
+    （原版 abs(x)<1e-15 分支）。与 ``quasi_tmd_pdf`` 的 cos 变换（TMD
+    约定、b⊥ 依赖）互补：b⊥ 积分极限下的交叉校验通道。
+
+    Args:
+        h_z: 坐标空间矩阵元 h(z, Pz)，形状 (nz,)（实部参与积分）。
+        z_grid: z 网格（fm，内部转 GeV⁻¹）。
+        pz_gev: Pz（GeV）。
+        x_grid: Bjorken x 网格（默认 −1.5..1.5，256 点）。
+    Returns:
+        (x_grid, g̃(x)) 形状 (nx,)。
+    """
+    h = np.asarray(h_z, dtype=float).real
+    z = np.asarray(z_grid, dtype=float) / fm_to_GeV   # fm → GeV⁻¹
+    if x_grid is None:
+        x_grid = np.linspace(-1.5, 1.5, 256)
+    x_grid = np.asarray(x_grid, dtype=float)
+
+    small = np.abs(x_grid) < 1e-15
+    xv = np.where(small, 1.0, x_grid)                 # 防除零，末尾回填 0
+    integrand = h[None, :] * np.sin(np.outer(xv, pz_gev * z))
+    trapz = getattr(np, "trapz", None) or np.trapezoid   # numpy 2.x 兼容
+    integral = trapz(integrand, z, axis=1)            # 梯形法则（原版 np.trapz）
+    out = (2.0 * pz_gev / xv) * integral
+    out[small] = 0.0
+    return x_grid, out
+
+
 def cs_kernel_from_ratio(hR_pz1, hR_pz2, pz1, pz2):
     """CS 核提取（LPC 2020 比值法）。
 

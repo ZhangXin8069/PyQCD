@@ -7,7 +7,7 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（28 项：18 物理/链路项 + 10 整合功能项 stout/本征模压缩+Ω张量/CG/hB-loader/boot协方差/plateau+CS核/PDF成图/数据守卫+2pt续跑/方向能量链/第二轮helicity+FH窗+ASCII）
+python examples/pyqcd/conftest.py    # 全量测试（40 项：18 物理/链路项 + 22 整合功能项 stout/本征模压缩+Ω张量/CG/hB-loader/boot协方差/plateau+CS核/PDF成图/数据守卫+2pt续跑/方向能量链/第二轮helicity+FH窗+ASCII/第三轮匹配核修正+sin准PDF+OPE±z+宇称投影+ZR样本环+boot外推+dis_connect+模板守卫+Wick图+FLOPs诊断+VVV读取+env快照+比对原语）
 python examples/pyqcd/verify_consistency.py   # 一致性验证（vs docker-v20260805 输出，A–E 全 0 差异）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
 python -m pyqcd.parallel --dry-run --confs 6250,6450   # MPI 并行规划预览（用户公式 N*a=n*b）
@@ -137,8 +137,12 @@ P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）
 
 ## 参考代码整合（~auto-all 20260822，logs/examples/refer → pyqcd）
 
-16 项整合，两轮完成（照抄逻辑、自包含、不 import 来源；各附测试；
+30 项整合，三轮完成（照抄逻辑、自包含、不 import 来源；各附测试；
 第二轮 R6 经原版实跑真值逐位对照验证——有效契约 7 用例 max|d|=0）：
+第三轮（~auto-all 第三遍清查，B 系列+E 系列，12 项落地 + 1 项判定已在位）
+含 1 处既有误植修复（`_matching.C/C_gluon_ratio` 三分区+Si 项对照
+matching_cc.py 重写）、2 处原版潜在 bug 的可运行化补全
+（lqcddb dis_connect 第二 assign 形状失配 / 其 C() 全局 Cf 未定义）。
 
 | # | 来源 | 功能 | 落点 |
 |---|---|---|---|
@@ -158,10 +162,31 @@ P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）
 | R6(二轮) | refer/sush lqcddb vertex.py | Ω 加速张量（exact/块/noise 分区权重，dim=2/3，conserved/normal） | `pyqcd/vertex._eigcompress.create_omega_accelerate` |
 | R7(二轮) | refer/zengch fit_ratio_FH_new | FH 常数闭式协方差拟合 + χ² 驱动逐 z 自适应 t_sep 窗 | `pyqcd/analysis._ratio_fit.fit_constant_window/fh_adaptive_windows` |
 | R8(二轮) | refer/donghx input_output_4_cupy | L.Liu ASCII 关联函数读写对（.gz 自动压缩） | `pyqcd/tools._io.write_data_ascii/read_data_ascii` |
+| B1(三轮) | refer/zengch matching_cc.py | **修复** `_matching.C/C_gluon_ratio` 误植（忠实三分区+5/6·Si 项，α_s·C_F/C_A/(2π) 归一） | `pyqcd/renorm._matching` |
+| B2(三轮) | refer/zhangxin gluon_pdf_full_workflow:1086 | collinear 胶子准 PDF sin 变换 g̃=(2Pz/x)∫h·sin(xPz z)（x→0 保护），与 cos 型 quasi-TMD 互补 | `pyqcd/renorm._tmdextract.quasi_pdf_gluon` |
+| B3(三轮) | refer/zhangxin gluon_pdf_workflow / Operator.py | OPE −z Wilson 线变体 + 固定规范 FF 算符（无 Wilson 线，±z、交叉 μ₂ν₂ 对）+ Lorentz 指派表（unpol/helicity/gauge_fix×2） | `pyqcd/operator._gluon_ope`（gluon_ope_operator_z0 扩展 mu2/nu2/direction + gluon_ff_operator_z0 + get_ope_lorentz_pairs） |
+| B4(三轮) | refer/zhangxin workflow apply_parity_and_boundary | 双宇称投影 P±=½(γ₀±γ₄) + 反周期边界符号翻转（pp: t_sink<t_src；pm: t_sink>t_src） | `pyqcd/contraction._baroperator.parity_and_boundary` |
+| B5(三轮) | refer/zengch fit_zr_new.fit_ZR 样本循环 | Z_R 参数误差逐样本重拟合环 + mean/std 汇总（单坏样本 NaN 不中断） | `pyqcd/renorm._zr.fit_ZR_samples/summarize_ZR_samples` |
+| B6(三轮) | refer/zengch fit_pz_a_extrapolatiing | 连续极限外推协方差加权（Cholesky 白化+lstsq，非正定回退单位阵）+ 逐样本误差带（固定 lx/hx/bx/cx，仅 xg0/fx/dx/kx 自由）；批量化优于原版逐样本 Minuit | `pyqcd/renorm._extrapolate.fit_hR_PDF_extrap_boot` |
+| B7(三轮) | refer/sush lqcddb analyse.py | dis_connect disconnected 矩阵元（PFF/PDF）+ 分组聚合基元（take+stack 语义等价实现，适配层无 reduceat）；修正原版第二 assign 形状失配 | `pyqcd/analysis._analyse` |
+| B8(三轮) | refer/sush lqcddb io/write_date.py | 模板占位符组合式文件存在性+大小一致性守卫（corrupted 归类） | `pyqcd/pipeline._validate.check_files_existence` |
+| B9(三轮) | refer/sush lqcddb autowick/dynamic | Wick 缩并图 QC 可视化（复杂度自适应）+ 收缩路径 FLOPs/加速比/最大中间张量诊断（run_wick_analysis 增 registry/optimize 可选参） | `pyqcd/contraction._wickplot.plot_figure_wick` + `_dynamic._analyze_contraction_path/_format_cost` |
+| B10(三轮) | refer/huangcl 98_tools input_output.py | V†V/VVV 预计算顶点积二进制 reader（f8 交错复数，Nev 自探测+截断 Nev1） | `pyqcd/tools._io.readin_vdv_all/readin_vvv_all/readin_vvv` |
+| E4(三轮) | examples/test0/main.py dump_env | 运行环境快照 env.json（git/包版本/xelatex/GPU/cmdline） | `pyqcd/tools._env.dump_env` |
+| E5(三轮) | examples/test0/main.py _rel_maxdiff/_cmp_one | NaN 感知回归比对原语（NaN 位置须一致；分母 \|b\| norm 防除零） | `pyqcd.testing.rel_maxdiff/cmp_one` |
+
+判定已在位（第三轮清查结论，零改动）：`_fitter.fit` 的 debug/debugNfit/NaN
+填充与 `cov_mat` 条件数返回（B11，子代理报告有误）；docker utils 文件日志
+工厂 setup_logging/print_banner/log_exception（与仓库 print/tlog 日志约定
+冲突，ProgressLog 已覆盖）；mpi_init 域分解搬运层 get_mpi_data/TScatter
+（范式不同于 pyqcd.parallel 元任务调度，预留未来）。
 
 跳过（记录理由）：IOG reader（依赖 iog.so 二进制）、Chroma XML 生成器与
-SIDIS-DY 唯象层（依赖库外 evolution 模块）、contractadviser（性能顾问非物理）、
-helicity ΔG 下游链（研究方向未启动，算符层已覆盖）、下载/打包脚本（运维类）。
+SIDIS-DY 唯象层（依赖库外 evolution 模块）、contractadviser（性能顾问非物理，
+其核心思想已由 B9 轻量内嵌）、helicity ΔG 下游链（研究方向未启动，算符层已覆盖）、
+下载/打包脚本与 donghx Calc_*/2pt_proton_* 一次性驱动壳（核心算法均已覆盖）、
+zengch/huangcl 各 _new 旧版变体、sush function_contraction 扁平旧包
+（lqcddb 早期版，全被取代）。
 torch 适配层补齐 numpy-like 函数（cos/sin/arccos/isnan/clip/maximum 标量/
 argwhere/identity/append/random）。test9 示例已改为消费 pyqcd API
 （删除内嵌 `_plateau_c0`/CS 核内联/`plot_pdf` 共 ~115 行重复实现）。
