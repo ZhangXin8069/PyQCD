@@ -2,9 +2,11 @@ from argparse import Namespace
 """统计分析：Jackknife / Bootstrap 重采样、有效质量、3pt 比率。"""
 from ._analyse import (
     Mom2GeV, Jackknife, Bootstrap, meff, ratio_3pt, loop_tsrc, solve_gevp,
+    mean_over_array_of_list, sum_over_array_of_list, dis_connect,
 )
 
-__all__ = ["Mom2GeV", "Jackknife", "Bootstrap", "meff", "ratio_3pt", "loop_tsrc", "solve_gevp",
+__all__ = [
+    "mean_over_array_of_list", "sum_over_array_of_list", "dis_connect","Mom2GeV", "Jackknife", "Bootstrap", "meff", "ratio_3pt", "loop_tsrc", "solve_gevp",
     "sem", "resample", "cov_mat", "model_ratio", "run_disconnected_ratio",
     "run_disconnected_tmd_ratio", "plot_tmd_c0", "plot_tmd_ratio",
     "run_meff_jackknife", "run_3pt_ratio",

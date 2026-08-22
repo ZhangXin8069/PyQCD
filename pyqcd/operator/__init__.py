@@ -6,7 +6,8 @@ from argparse import Namespace
 """
 from ._gluon_ope import (
     plaquette_clover,
-    compute_dual_field_strength, gluon_ope_operator_z0, staple_operator,
+    compute_dual_field_strength, gluon_ope_operator_z0, gluon_ff_operator_z0,
+    get_ope_lorentz_pairs, staple_operator,
     read_gauge_lime,
 )
 from ._helicity import (
@@ -15,7 +16,8 @@ from ._helicity import (
 
 __all__ = [
     "plaquette_clover",
-    "compute_dual_field_strength", "gluon_ope_operator_z0", "staple_operator",
+    "compute_dual_field_strength", "gluon_ope_operator_z0",
+    "gluon_ff_operator_z0", "get_ope_lorentz_pairs", "staple_operator",
     "read_gauge_lime",
     "plaquette_dual_stack", "helicity_two_field_operator",
 ]

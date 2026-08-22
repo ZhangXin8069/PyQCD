@@ -5,14 +5,17 @@ from argparse import Namespace
 from ._autowick import wick_contraction, identify_equivalent_diagrams
 from ._baroperator import (
     split_hadrons, classify_structure, conjugate_operator, dagger_quark,
+    parity_and_boundary,
 )
 from ._seqperam import seq_peram
+from ._wickplot import plot_figure_wick
 from ._dynamic import PeramRegistry, VRegistry, GammaRegistry, dynamic_contraction, clear_plan_cache
 
 __all__ = [
     "wick_contraction", "identify_equivalent_diagrams",
     "split_hadrons", "classify_structure", "conjugate_operator", "dagger_quark",
-    "seq_peram",
+    "parity_and_boundary",
+    "seq_peram", "plot_figure_wick",
     "PeramRegistry", "VRegistry", "GammaRegistry", "dynamic_contraction",
     "clear_plan_cache",
 ]
