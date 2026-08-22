@@ -27,7 +27,12 @@ from ._fitter import fit_report_lines, make_summary_table
 
 @dataclass
 class EnergyParams:
-    """04 参数。"""
+    """04 参数。
+
+    dir: 方向（'z' 默认；'x'/'y' 时按 dir_momentum 置换动量并读
+         momsmear{Pz}{dir} 子目录——test6 三方向能量链整合项，
+         消除驱动层自行置换的重复实现）。
+    """
 
     conf_short: str
     conf_name: str
@@ -41,6 +46,7 @@ class EnergyParams:
     dt_max: int
     a: float = 0.1053            # 格距 (fm)
     fm_to_GeV: float = 0.197
+    dir: str = 'z'
     p0: dict = field(default_factory=lambda: {
         "c0": 0.6, "c1": 0.6, "E0": 1.5, "dE": 0.4})
     dt_start: int = 6
@@ -57,12 +63,20 @@ class EnergyParams:
         """格点能 → GeV。"""
         return self.fm_to_GeV / self.a
 
+    @property
+    def mom_tag(self):
+        """当前方向的动量标签 (Px,Py,Pz)（dir_momentum 置换）。"""
+        from ._bare_matrix import dir_momentum
+        return dir_momentum(self.Px, self.Py, self.Pz, self.dir)
+
 
 def load_raw_corr(data_root, conf_id, params: EnergyParams) -> np.ndarray:
-    """读取单组态 2pt 切片 (Nt, Nt)。"""
-    mom = f"Px{params.Px}Py{params.Py}Pz{params.Pz}"
+    """读取单组态 2pt 切片 (Nt, Nt)（方向感知：momsmear{Pz}{dir}）。"""
+    Px, Py, Pz = params.mom_tag
+    mom = f"Px{Px}Py{Py}Pz{Pz}"
     return np.load(os.path.join(
-        data_root, params.conf_name, "momsmear2z", str(conf_id),
+        data_root, params.conf_name, f"momsmear{params.Pz}{params.dir}",
+        str(conf_id),
         f"twopt_slice_pp_{mom}_eginphase2_Cg5g4_nopol_ss_conf{conf_id}.npy"))
 
 
@@ -209,8 +223,9 @@ def plot_eff_mass(corr2: np.ndarray, fit_result: dict, params: EnergyParams,
                     label="Fit E0")
 
     E0_str = f"{E0_mean:.3f}({E0_err * 1e3:.0f})"
+    Px, Py, Pz = params.mom_tag
     ax.set_title(
-        f"P=({params.Px},{params.Py},{params.Pz}), E0={E0_str}, "
+        f"P=({Px},{Py},{Pz}) [{params.dir}], E0={E0_str}, "
         f"chi2={chi2_mean:.2f}", fontsize=12)
     ax.set_xlim(params.xlim[0], params.xlim[1])
     ax.set_ylim(params.ylim[0], params.ylim[1])
@@ -234,8 +249,14 @@ def plot_eff_mass(corr2: np.ndarray, fit_result: dict, params: EnergyParams,
 
 def run_energy(data_root, out_root, params: EnergyParams, jack: bool = True,
                parts=(1, 3), verbose=True) -> dict:
-    """04 全链：compute corr2 → fit → eff_mass 图。"""
-    out_dir = os.path.join(out_root, params.conf_short, f"_Pz{params.Pz}")
+    """04 全链：compute corr2 → fit → eff_mass 图（方向感知）。
+
+    out_dir：dir='z' 时保持 `_Pz{Pz}`（向后兼容）；非 z 方向追加
+    `_{dir}` 后缀以区分三方向产物。
+    """
+    suffix = f"_{params.dir}" if params.dir != 'z' else ""
+    out_dir = os.path.join(out_root, params.conf_short,
+                           f"_Pz{params.Pz}{suffix}")
     os.makedirs(out_dir, exist_ok=True)
     result = {}
 

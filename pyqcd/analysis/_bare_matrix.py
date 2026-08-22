@@ -27,19 +27,33 @@ from ._fitter import FitParams
 from ._ratio2pt import (PlotParamsRatio, SampleParams2pt, compute_ratio,
                         do_fit_and_report, load_raw, plot_ratio_fits)
 
-def _dir_spec(sampa: SampleParams2pt, dir: str):
-    """各方向: (动量置换 (Px,Py,Pz), OPE 组合 (mu1,nu1), 数据子目录名)。
+def dir_momentum(Px, Py, Pz, dir):
+    """方向动量置换约定（公开助手，test6/repro_04 整合项）。
 
-    动量置换约定（参考 code_bare_matrix.py）:
-        x: (Pz, Px, Py)；y: (Py, Pz, Px)；z: (Px, Py, Pz)。
+    x: (Pz, Px, Py)；y: (Py, Pz, Px)；z: (Px, Py, Pz)
+    （与 _dir_spec 及 refer/huangcl code_bare_matrix.py 一致）。
+    """
+    if dir == 'x':
+        return Pz, Px, Py
+    if dir == 'y':
+        return Py, Pz, Px
+    if dir == 'z':
+        return Px, Py, Pz
+    raise ValueError(f"unknown dir: {dir}")
+
+
+def _dir_spec(sampa: SampleParams2pt, dir: str):
+    """    各方向: (动量置换 (Px,Py,Pz), OPE 组合 (mu1,nu1), 数据子目录名)。
+
+    动量置换约定见 dir_momentum（公开助手）。
     """
     Px, Py, Pz = sampa.Px, sampa.Py, sampa.Pz
     if dir == 'x':
-        return (Pz, Px, Py), (1, 2), 'xdir'
+        return dir_momentum(Px, Py, Pz, 'x'), (1, 2), 'xdir'
     if dir == 'y':
-        return (Py, Pz, Px), (2, 0), 'ydir'
+        return dir_momentum(Px, Py, Pz, 'y'), (2, 0), 'ydir'
     if dir == 'z':
-        return (Px, Py, Pz), (0, 1), 'zdir'
+        return dir_momentum(Px, Py, Pz, 'z'), (0, 1), 'zdir'
     raise ValueError(f"unknown dir: {dir}")
 
 

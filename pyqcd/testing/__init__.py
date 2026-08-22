@@ -335,3 +335,283 @@ def test_core_chain_integrated():
     lam, hR = hR_z_Pz(z_fm, 4, M, M, zs=0.3, zr_fit=zr, conf='L24x72')
     assert np.all(np.isfinite(hR))
     assert abs(hR[0] - 1.0) < 1e-8, "短距比值应自归一"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 整合功能测试（~auto-all：logs/examples/refer 代码整合验证）
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _smooth_gauge(L=6, amp=0.01, seed=11):
+    """近平场（冷场+微扰后 SU(3) 投影）——涂抹类功能的物理性测试场。
+
+    stout 无显式重投影（约定输入为 SU(3) 规范组态，与真实蒸馏数据一致），
+    故微扰后须经 smear.proj_su3（SVD 极分解）投影保证严格幺正。
+    注意 renorm.proj_su3 仅做 det 归一（适用于本已幺正的流输出），不适用。
+    """
+    from pyqcd.smear import proj_su3
+    g = np.zeros((L, L, L, L, 4, 3, 3), dtype=complex)
+    for d in range(4):
+        g[..., d, :, :] = np.eye(3)
+    rng = np.random.default_rng(seed)
+    noisy = g + amp * (rng.standard_normal(g.shape)
+                       + 1j * rng.standard_normal(g.shape))
+    return np.asarray(proj_su3(noisy))
+
+
+def test_stout_smear():
+    """Stout 涂抹：SU(3) 保持 + 平滑场作用量下降 + 平场不动 + 时间链不变。"""
+    from pyqcd.smear import stout_smear
+    from pyqcd.renorm import flow_action_density
+
+    flat = np.zeros((4, 4, 4, 4, 4, 3, 3), dtype=complex)
+    for d in range(4):
+        flat[..., d, :, :] = np.eye(3)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        vf = stout_smear(flat, nstep=1, rho=0.1)
+    assert np.isfinite(vf).all() and np.abs(vf - flat).max() < 1e-12
+
+    g = _smooth_gauge(L=6)
+    v = stout_smear(g, nstep=2, rho=0.12)
+    dev = np.abs(v[0, 0, 0, 0, 0] @ v[0, 0, 0, 0, 0].conj().T
+                 - np.eye(3)).max()
+    assert dev < 1e-10, f"SU(3) 保持失败: {dev}"
+    e0 = flow_action_density(g).mean()
+    e1 = flow_action_density(v).mean()
+    assert e1 < e0, f"平滑场应作用量下降: {e0} -> {e1}"
+    assert np.abs(v[..., 3, :, :] - g[..., 3, :, :]).max() < 1e-14, \
+        "时间方向链接不应被涂抹"
+
+
+def test_eigvec_compress():
+    """本征模压缩：V1 保正交归一、V2 可复现子集抽取、V3/V4 正交投影。"""
+    from pyqcd.vertex import (
+        check_orthonormal, compress_matrix_V1, compress_matrix_V2,
+        compress_matrix_V3, compress_matrix_V4, create_noise,
+    )
+    rng = np.random.default_rng(0)
+    nev, shape = 16, (2, 2, 2, 3)
+    a = rng.standard_normal((nev, int(np.prod(shape)))) \
+        + 1j * rng.standard_normal((nev, int(np.prod(shape))))
+    q, _ = np.linalg.qr(a.T)
+    vecs = (q.T).reshape((nev,) + shape)
+
+    assert check_orthonormal(compress_matrix_V1(vecs, 4, 'I'))
+    assert check_orthonormal(compress_matrix_V1(vecs, 4, 'B'))
+    c2a = compress_matrix_V2(vecs, 4, 2, 'I', seed=7)
+    assert np.abs(np.asarray(c2a) - np.asarray(
+        compress_matrix_V2(vecs, 4, 2, 'I', seed=7))).max() == 0
+    flat_in = vecs.reshape(nev, -1)
+    flat_out = np.asarray(c2a).reshape(4, -1)
+    hits = sum(any(np.abs(flat_out[k] - flat_in[j]).max() < 1e-12
+                   for j in range(nev)) for k in range(4))
+    assert hits == 4, "V2 输出应为输入成员"
+    assert check_orthonormal(compress_matrix_V3(vecs, 4, 2, 'I', seed=3))
+    assert check_orthonormal(compress_matrix_V4(vecs, 4, 2, 'B', seed=3))
+    noisy = create_noise(vecs[:4], 3, seed=5)
+    assert noisy.shape == (7,) + shape and check_orthonormal(noisy)
+
+
+def test_cg_coefficients():
+    """SU(2) CG：已知值、Condon–Shortley 符号、幺正性、combine/decompose。"""
+    from pyqcd.lattice import cg_coefficient, SU2combine, SU2decompose
+
+    assert abs(cg_coefficient(.5, .5, .5, .5, 1, 1) - 1) < 1e-13
+    assert abs(cg_coefficient(.5, .5, .5, -.5, 1, 0) - np.sqrt(.5)) < 1e-13
+    assert abs(cg_coefficient(.5, -.5, .5, .5, 0, 0) + np.sqrt(.5)) < 1e-13
+    assert cg_coefficient(.5, .5, .5, .5, 0, 0) == 0          # M 不守恒
+    assert cg_coefficient(.5, .5, .5, -.5, .5, 0) == 0        # 禁戒耦合
+    for j in (0, 1):                                          # 幺正性
+        s = sum(abs(cg_coefficient(.5, m1, .5, m2, j, 0)) ** 2
+                for m1 in (-.5, .5) for m2 in (-.5, .5))
+        if s:
+            assert abs(s - 1) < 1e-12
+    d = SU2decompose([.5, .5], [0., 0.])
+    assert abs(d[(.5, -.5)] - np.sqrt(.5)) < 1e-13
+    d3 = SU2decompose([.5] * 3, [1.5, 1.5], [1.])
+    assert abs(d3[(.5, .5, .5)] - 1) < 1e-13
+    try:
+        SU2decompose([.5] * 3, [1.5, 1.5])
+        raise AssertionError("N>2 无 intermediate_Js 应报错")
+    except ValueError:
+        pass
+
+
+def test_hB_dataset_loader():
+    """hB/FH loader：z₀ 归一化 + 插值 + 数据集组装进 Z_R 代价函数。"""
+    from pyqcd.renorm import (
+        build_hB_dataset, make_zr_dataset, cost_function_all,
+    )
+    rng = np.random.default_rng(3)
+    z_fm = np.arange(20) * 0.1053
+    ns = 50
+    c0 = np.exp(-z_fm[:, None] / 0.35) \
+        * (1 + 0.01 * rng.standard_normal((20, ns)))
+    ds = build_hB_dataset(c0, z_fm)
+    assert ds['hB'].shape == (18, ns)
+    assert np.allclose(ds['hB_o'][0], 1.0)
+    assert np.all(np.diff(np.log(ds['hB']).mean(axis=1)) < 0)
+
+    dsets = []
+    for tau in (0.35, 0.45):
+        c = np.exp(-z_fm[:, None] / tau) \
+            * (1 + 0.01 * rng.standard_normal((20, ns)))
+        dd = build_hB_dataset(c, z_fm)
+        dsets.append(make_zr_dataset(dd['loghB'], dd['z'], 0.1053 / 0.197,
+                                     kind='boot', seed=11))
+    chi2 = cost_function_all([2.0, 0.5, 0.1, 0.0, 0.25] + [0.05] * 14
+                             + [0.0, 0.0], dsets, 2.0)
+    assert np.isfinite(chi2) and chi2 > 0
+
+
+def test_hybrid_boot_covariance():
+    """混合 λ 外推拟合：diag/boot 协方差均恢复真值，旧签名向后兼容。"""
+    from pyqcd.renorm import fit_hR_lambda
+    lam = np.linspace(0.5, 6.0, 12)
+    truth = (1.2, 1.7, 4.0)
+    clean = truth[0] * lam ** (-truth[1]) * np.exp(-lam / truth[2])
+    samp = clean[:, None] \
+        + 0.002 * np.random.default_rng(5).standard_normal((12, 60))
+    for kw in ({}, {'cov_kind': 'boot'}):
+        p = fit_hR_lambda([1.0, 1.5, 3.5], (0.8, 6.0), lam, samp, **kw)
+        assert all(abs(a - b) / b < 0.08 for a, b in zip(p, truth)), (kw, p)
+
+
+def test_tmd_plateau_and_cs_kernel():
+    """plateau_c0 手算一致；CS 核两动量幂律恢复 + clip 保护。"""
+    from pyqcd.analysis import plateau_c0
+    from pyqcd.renorm import cs_kernel_two_momentum
+    rng = np.random.default_rng(0)
+    ratio = rng.standard_normal((5, 20, 20, 3, 2))
+    got = plateau_c0(ratio)
+    ref = np.zeros((5, 3, 2))
+    npts = 0
+    for dt in range(7, 11):
+        for dtau in range(3, dt - 3 + 1):
+            ref += ratio[:, dt, dtau]
+            npts += 1
+    assert np.abs(got - ref / npts).max() < 1e-14
+
+    k_true = np.array([0.1, -0.2, 0.35])
+    z = np.arange(4)[:, None]
+    pz1, pz2 = 0.697, 1.394
+    c02 = np.exp(-z / 0.3) * (1 + k_true[None, :] * z)
+    c01 = c02 * (pz1 / pz2) ** k_true[None, :]
+    k_rec = cs_kernel_two_momentum(c01, c02, pz1, pz2, z_ref=1)
+    assert abs(k_rec.ravel()[1] - k_true[1]) < 1e-12
+    bad = c02.copy()
+    bad[1] *= 1e12
+    assert np.abs(cs_kernel_two_momentum(bad, c02, pz1, pz2)).max() <= 3.0
+
+
+def test_plot_tmd_pdf():
+    """TMD-PDF 链成图：4 张 png 齐全且非空。"""
+    import os
+    import tempfile
+    from pyqcd.analysis import plot_tmd_pdf
+    x = np.linspace(0.05, 0.95, 40)
+    xg = np.exp(-(x - 0.3) ** 2 / 0.02)[:, None] * np.array([[1.0, 0.8]])
+    out = tempfile.mkdtemp()
+    files = plot_tmd_pdf(x, xg, 0.9 * xg, [0.1, 0.2],
+                         np.array([0.1, -0.2]), 'P200', out)
+    names = sorted(os.path.basename(f) for f in files)
+    assert names == ['cs_kernel.png', 'matched_tmd_pdf.png',
+                     'quasi_tmd_pdf.png', 'tmd_pdf_vs_b.png']
+    assert all(os.path.getsize(f) > 1000 for f in files)
+
+
+def test_pipeline_validate_and_2pt_resume():
+    """数据守卫（形状/NaN/缺失）+ 原始数据齐全度 + 2pt 断点续跑判据。"""
+    import os
+    import shutil
+    import tempfile
+    from pyqcd.pipeline import (
+        check_input_arrays, check_raw_data, ProgressLog,
+    )
+    from pyqcd.pipeline import _steps
+
+    root = tempfile.mkdtemp()
+    d1 = os.path.join(root, 'conf100')
+    os.makedirs(d1)
+    rng = np.random.default_rng(0)
+    spec_items = [
+        {'name': 'corr_pp_P0_{cid}', 'shape': (72,)},
+        {'name': 'ops_mu0_nu1_dz24_{cid}', 'ext': '.npz',
+         'dataset': 'ops', 'shape': (24, 72)},
+    ]
+    spec = {'conf_ids': [100], 'items': spec_items}
+    np.save(os.path.join(d1, 'corr_pp_P0_100.npy'),
+            rng.standard_normal(72))
+    np.savez(os.path.join(d1, 'ops_mu0_nu1_dz24_100.npz'),
+             ops=rng.standard_normal((24, 72)))
+    n_ok, bad = check_input_arrays(root, spec, verbose=False)
+    assert n_ok == 1 and not bad
+    np.save(os.path.join(d1, 'corr_pp_P0_100.npy'),
+            np.where(np.arange(72) < 1, np.nan, 0.0))
+    n_ok, bad = check_input_arrays(root, spec, verbose=False)
+    assert n_ok == 0 and any('有限=False' in b for b in bad)
+    shutil.rmtree(root)
+
+    base = tempfile.mkdtemp()
+    ens, nt, cid = 'ENS', 4, 200
+    ed = os.path.join(base, 'eigensystem', ens, str(cid))
+    os.makedirs(ed)
+    for t in range(nt):
+        open(os.path.join(ed, f'eigvecs_t{t:03d}_{cid}'), 'w').close()
+    pdir = os.path.join(base, 'perambulators', ens, 'light', str(cid))
+    os.makedirs(pdir)
+    for dd in range(4):
+        for t in range(nt):
+            open(os.path.join(pdir, f'perams.{cid}.{dd}.{t}'), 'w').close()
+    cf = os.path.join(base, 'configurations', 'CLOVER', ens)
+    os.makedirs(cf)
+    open(os.path.join(cf, f'{ens}_cfg_{cid}.lime'), 'w').close()
+    n_ok, bad = check_raw_data([cid], base, ens, nt=nt, verbose=False)
+    assert n_ok == 1 and not bad
+    os.remove(os.path.join(ed, f'eigvecs_t003_{cid}'))
+    n_ok, bad = check_raw_data([cid], base, ens, nt=nt, verbose=False)
+    assert n_ok == 0 and any('eigvecs 不全 3/4' in b for b in bad)
+    shutil.rmtree(base)
+
+    run_dir = tempfile.mkdtemp()
+    cdir = _steps.conf_data_dir(run_dir, 111)
+    for ch in ('pp', 'pn', 'pion'):
+        for mom in ('P0', 'P2'):
+            np.save(os.path.join(cdir, f'corr_{ch}_{mom}_111.npy'),
+                    np.zeros(72))
+    assert _steps._2pt_all_present(cdir, 111, ('pp', 'pn', 'pion'))
+    os.remove(os.path.join(cdir, 'corr_pp_P0_111.npy'))
+    assert not _steps._2pt_all_present(cdir, 111, ('pp', 'pn', 'pion'))
+    shutil.rmtree(run_dir)
+    ProgressLog(10, label='t').step(5)
+
+
+def test_proton_energy_dirs():
+    """能量链方向感知：动量置换约定 + 路径构造（z 向后兼容、x/y 置换）。"""
+    import os
+    import shutil
+    import tempfile
+    from pyqcd.analysis._bare_matrix import dir_momentum
+    from pyqcd.analysis._proton_energy import EnergyParams, load_raw_corr
+
+    assert dir_momentum(0, 0, 6, 'x') == (6, 0, 0)
+    assert dir_momentum(0, 0, 6, 'y') == (0, 6, 0)
+    assert dir_momentum(0, 0, 6, 'z') == (0, 0, 6)
+    p = EnergyParams(conf_short='L24x72', conf_name='ENS',
+                     conf_ids=[7], Nt=8, Nx=4, Px=0, Py=0, Pz=2,
+                     Nsample=4, dt_max=5)
+    assert p.mom_tag == (0, 0, 2)
+    tmp = tempfile.mkdtemp()
+    rng = np.random.default_rng(0)
+    for sub, tag in (('momsmear2z', 'Px0Py0Pz2'),
+                     ('momsmear2x', 'Px2Py0Pz0')):
+        os.makedirs(os.path.join(tmp, 'ENS', sub, '7'))
+        np.save(os.path.join(tmp, 'ENS', sub, '7',
+                             f'twopt_slice_pp_{tag}_eginphase2_Cg5g4'
+                             f'_nopol_ss_conf7.npy'),
+                rng.standard_normal((8, 8))
+                + 1j * rng.standard_normal((8, 8)))
+    assert load_raw_corr(tmp, 7, p).shape == (8, 8)
+    px_params = EnergyParams(**{**p.__dict__, 'dir': 'x'})
+    assert load_raw_corr(tmp, 7, px_params).shape == (8, 8)
+    shutil.rmtree(tmp)

@@ -152,6 +152,97 @@ def cost_function_all(par_set, datasets, mu_):
     return chi2_sum / dof
 
 
+# ═══════════════════════════════════════════════════════════════════
+# hB/FH 数据预处理 loader（整合 zengch hB_data_FeynmenHellman_new.py）
+# ═══════════════════════════════════════════════════════════════════
+
+def build_hB_dataset(c0_zx, z_fm, z_grid_new=None):
+    """ratio c0(z) 数据 → z₀ 归一化 + 线性插值 hB 数据集。
+
+    照抄 zengch hB_data_FeynmenHellman_new.py 的语义（去集群路径依赖）：
+        1) hB_o_zn = c0(z) 原始（未归一化）
+        2) hB_o    = c0 / c0(z=0)                     （z₀ 归一化）
+        3) 线性插值到目标 z 网格 → hB、loghB
+
+    Args:
+        c0_zx: (nz, nsample) 或 (nz,)——FH 比值拟合的 c0(z)（逐样本）。
+        z_fm:  与 c0_zx 第一维对应的 z 网格（fm）。
+        z_grid_new: 目标插值网格（fm）；默认 arange(0.15, 1.05, 0.05)
+                    （L48x144 类小体积系综可传至 0.95，同原版约定）。
+    Returns:
+        dict(z, loghB, hB, z_o, hB_o, hB_o_zn)——形状 (nz_new, nsample)
+        或 (nz_new,)（跟随输入维数）。
+    """
+    from scipy.interpolate import interp1d
+
+    hb_zn = np.atleast_2d(np.asarray(c0_zx, dtype=float))
+    if hb_zn.shape[0] == 1 and np.ndim(c0_zx) == 1:
+        hb_zn = hb_zn.T                      # (1, nz) 边角：按 (nz,) 处理
+    z_o = np.asarray(z_fm, dtype=float)
+    if hb_zn.shape[0] != len(z_o):
+        raise ValueError(f"c0 首维 {hb_zn.shape[0]} 与 z 网格 {len(z_o)} 不一致")
+
+    hb_o = hb_zn / hb_zn[0:1, :]             # z₀ 归一化
+    if z_grid_new is None:
+        z_grid_new = np.arange(0.15, 1.0 + 0.05, 0.05)
+    interp = interp1d(z_o, hb_o, kind='linear', axis=0,
+                      bounds_error=False, fill_value='extrapolate')
+    hb_new = interp(np.asarray(z_grid_new, dtype=float))
+
+    squeeze = np.ndim(c0_zx) == 1
+    if squeeze:
+        hb_new = hb_new[:, 0]
+        return {'z': np.asarray(z_grid_new), 'loghB': np.log(hb_new),
+                'hB': hb_new, 'z_o': z_o, 'hB_o': hb_o[:, 0],
+                'hB_o_zn': hb_zn[:, 0]}
+    return {'z': np.asarray(z_grid_new), 'loghB': np.log(hb_new),
+            'hB': hb_new, 'z_o': z_o, 'hB_o': hb_o, 'hB_o_zn': hb_zn}
+
+
+def boot_covariance(samples, n_rep=200, seed=0):
+    """自助重采样协方差（照抄 zengch tool.covariance_matrix(·,'boot') 语义）。
+
+    Args:
+        samples: (n_point, n_sample)——逐 bootstrap/jackknife 样本。
+        n_rep: 重采样次数（对样本轴有放回抽取）。
+        seed: 可复现种子。
+    Returns:
+        (n_point, n_point) 协方差矩阵。
+    """
+    s = np.asarray(samples, dtype=float)
+    rng = np.random.default_rng(seed)
+    n_pt, n_sam = s.shape
+    idx = rng.integers(0, n_sam, size=(n_rep, n_sam))
+    replicates = s[:, idx].mean(axis=1).T          # (n_rep, n_point)
+    return np.cov(replicates, rowvar=False)
+
+
+def make_zr_dataset(loghB_samples, z_fm, a_gev_inv, kind='boot',
+                    n_rep=200, seed=0):
+    """组装 fit_ZR / cost_function_all 所需数据集 dict。
+
+    Args:
+        loghB_samples: (nz, nsample)——归一化 log hB 的逐样本数组
+                       （build_hB_dataset 输出的 loghB）。
+        z_fm: z 网格（fm，与第一维对应）。
+        a_gev_inv: 格距（GeV⁻¹，a_fm/fm_to_GeV）。
+        kind: 'boot' 自助协方差（pinv 防奇异）/ 'diag' 对角方差。
+    Returns:
+        dict(z, loghB(均值), c_inv, a)——直接可入 datasets 列表。
+    """
+    s = np.atleast_2d(np.asarray(loghB_samples, dtype=float))
+    z_ = np.asarray(z_fm, dtype=float)
+    if kind == 'boot':
+        cov = boot_covariance(s, n_rep=n_rep, seed=seed)
+        c_inv = np.linalg.pinv(cov)
+    elif kind == 'diag':
+        var = s.var(axis=1)
+        c_inv = np.diag(1.0 / np.maximum(var, 1e-30))
+    else:
+        raise ValueError(f"未知 kind: {kind}")
+    return {'z': z_, 'loghB': s.mean(axis=1), 'c_inv': c_inv, 'a': a_gev_inv}
+
+
 def fit_ZR(par_ini, datasets, mu_, use_iminuit=True):
     """全局拟合 Z_R 参数（iminuit 或 scipy 回退）。
 

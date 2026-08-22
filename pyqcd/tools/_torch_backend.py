@@ -629,6 +629,73 @@ def argmin(x, axis=None):
     return torch.argmin(x, dim=axis)
 
 
+@_autoconv
+def cos(x):
+    return torch.cos(x)
+
+
+@_autoconv
+def sin(x):
+    return torch.sin(x)
+
+
+@_autoconv
+def arccos(x):
+    return torch.acos(x)
+
+
+@_autoconv
+def isnan(x):
+    return torch.isnan(x)
+
+
+@_autoconv
+def clip(x, a_min=None, a_max=None):
+    return torch.clamp(x, min=a_min, max=a_max)
+
+
+@_autoconv
+def maximum(x, y):
+    """逐元素最大值（numpy 语义：y 可为标量）。"""
+    if not isinstance(y, torch.Tensor):
+        y = torch.as_tensor(y, dtype=x.dtype if x.is_floating_point()
+                            or x.is_complex() else None, device=x.device)
+    return torch.maximum(x, y)
+
+
+@_autoconv
+def argwhere(x):
+    return torch.argwhere(x)
+
+
+@_autoconv
+def identity(n, dtype=None):
+    return torch.eye(int(n), dtype=_resolve_dtype(dtype))
+
+
+@_autoconv
+def append(arr, values, axis=None):
+    if axis is None:
+        return torch.cat((arr.reshape(-1), values.reshape(-1)), dim=0)
+    return torch.cat((arr, values), dim=axis)
+
+
+def random_random(size=None):
+    """[0,1) 均匀随机（numpy.random.random 语义），遵循全局精度/device。"""
+    shape = size if isinstance(size, (tuple, list)) else \
+        (size,) if size is not None else ()
+    r = torch.rand(shape, device=get_device(), dtype=torch.float64)
+    return r.to(_resolve_dtype('complex128')).real
+
+
+class _Random:
+    """numpy.random.random 兼容入口（仅 random；可复现性由调用方管理）。"""
+    random = staticmethod(random_random)
+
+
+random = _Random()
+
+
 def asnumpy(x):
     """Convert torch tensor (any device) to numpy array (CPU)."""
     if isinstance(x, torch.Tensor):

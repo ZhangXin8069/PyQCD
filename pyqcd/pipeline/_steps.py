@@ -513,17 +513,41 @@ def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
     return acc
 
 
+def _2pt_all_present(cdir, conf_id, channels):
+    """组态 2pt 产物齐全性检查（.h5 优先，回退 .npy）——断点续跑判据。"""
+    for ch in channels:
+        for mom in ('P0', 'P2'):
+            base = os.path.join(cdir, f'corr_{ch}_{mom}_{conf_id}')
+            if not (os.path.exists(base + '.h5') or os.path.exists(base + '.npy')):
+                return False
+    return True
+
+
 def step_2pt(config, run_dir, logger):
     set_backend(config.get('backend', 'cupy'),
                 device=config.get('device'))
+    channels = config.get('channels', ('pp', 'pn', 'pion'))
+    recompute = config.get('recompute_2pt', False)
+    n_hit = 0
     for cid in config['conf_ids']:
         _info(logger, f"\n─── 2pt: conf {cid} ───")
+        # 断点续跑（整合 logs/test8）：该组态 corr_{ch}_{P0,P2} 全存在则跳过
+        # （vertex/OPE 缓存由 pyqcd 内部处理，2pt 级此前缺失——服务器长跑
+        #   中断后重跑可跳过已完成组态，节省数小时）
+        if not recompute and _2pt_all_present(
+                conf_data_dir(run_dir, cid), cid, channels):
+            _info(logger, f"  conf={cid}: 2pt 缓存命中，跳过"
+                          "（recompute_2pt=True 强制重算）")
+            n_hit += 1
+            continue
         verts = _load_vertices_one(run_dir, cid)
         _timer(f"  2pt conf={cid}", logger, compute_2pt_for_config,
                cid, run_dir, logger, verts, config['precision'],
-               config.get('channels', ('pp', 'pn', 'pion')))
+               channels)
         del verts
         free_gpu_memory()
+    if n_hit == len(config['conf_ids']) and n_hit > 0:
+        _info(logger, f"2pt 全部缓存命中（{n_hit}/{n_hit}），无需重算")
 
 
 def _run_3pt(backend, sink_op, src_op, curr_op, PR, VR, GR, Vindex, Gindex):

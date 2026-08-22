@@ -91,6 +91,39 @@ def cs_kernel_from_ratio(hR_pz1, hR_pz2, pz1, pz2):
     return np.log(np.maximum(ratio, 1e-30)) / np.log(pz1 / pz2)
 
 
+def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
+                           k_clip=(-3.0, 3.0)):
+    """两动量 c0 比值 CS 核提取——工程封装（整合 test9 示例内联实现）。
+
+    与 cs_kernel_from_ratio 的差异：
+        1) 直接吃裸 c0(z,b)（未经 z₀ 归一化，避免归一点噪声放大）；
+        2) z_ref 可选参考 z 索引（默认 1：z=0 处 c0≡1 无信息，
+           z=1 为最低含 Wilson 线信息的分离）；
+        3) k_clip 数值保护：噪声使 |K| 越界时截断
+           （CS 核物理量级 |K| ≲ O(1) GeV²·fm² 量级，|K|>3 视为噪声）。
+
+    Args:
+        c01/c02: 两动量裸矩阵元 (nz, nb) 或 (nb,)（同 z 网格）。
+        pz1_gev/pz2_gev: 两动量（GeV）。
+        z_ref: 参考 z 行索引（负数按 Python 惯例回绕）。
+        k_clip: (K_min, K_max) 截断区间；None 则不截断。
+    Returns:
+        K(b⊥) 数组（沿所选 z 行）。
+    """
+    a = np.asarray(c01, dtype=float)
+    b_ = np.asarray(c02, dtype=float)
+    if a.ndim == 1:
+        a, b_ = a[None, :], b_[None, :]
+    if a.shape != b_.shape:
+        raise ValueError(f"c01/c02 形状不一致: {a.shape} vs {b_.shape}")
+    z_ref = int(z_ref if z_ref >= 0 else len(a) + z_ref)
+    if not (0 <= z_ref < len(a)):
+        raise ValueError(f"z_ref={z_ref} 超出 z 维 [0, {len(a)-1}]")
+    ratio = a[z_ref] / b_[z_ref]
+    k = np.log(np.maximum(ratio, 1e-30)) / np.log(pz1_gev / pz2_gev)
+    return np.clip(k, *k_clip) if k_clip is not None else k
+
+
 def soft_function_intrinsic(R_square, b_perp, mu=2.0):
     """内禀软函数 S_I(b⊥, μ)（从平方比值矩阵元提取的框架）。
 

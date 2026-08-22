@@ -8,6 +8,9 @@ from ._config import (
     PJN_SINK, PJN_CURR, PJN_SRC,
 )
 from ._runner import make_run_dir, step_env, step_tmd, run_pipeline
+from ._validate import (
+    progress_log, ProgressLog, check_raw_data, check_input_arrays,
+)
 
 __all__ = [
     "ENSEMBLE", "NX", "NY", "NZ", "NT", "ALttc", "A_INV", "FM2GEV", "CONF_IDS",
@@ -17,6 +20,7 @@ __all__ = [
     "NEUTRON_SINK", "NEUTRON_SRC", "PP_SINK", "PP_SRC", "PN_SINK", "PN_SRC",
     "PJN_SINK", "PJN_CURR", "PJN_SRC",
     "make_run_dir", "step_env", "step_tmd", "run_pipeline",
+    "progress_log", "ProgressLog", "check_raw_data", "check_input_arrays",
 ]
 
 Namespace.__module__ = "pyqcd.pipeline"
