@@ -10,7 +10,10 @@ from ._const import CA, CF, gammaE, pi, alpha_s, A_s, b0
 from ._ensembles import (
     fm_to_GeV, a_len_set, Nl_set, pion_mass_set, MPI_PHYSICAL, pz_to_gev,
 )
-from ._zr import Z_MS, th_hB, th_ZR, cost_function, cost_function_all, fit_ZR
+from ._zr import (
+    Z_MS, th_hB, th_ZR, cost_function, cost_function_all, fit_ZR,
+    build_hB_dataset, boot_covariance, make_zr_dataset,
+)
 from ._hybrid import (
     hR_z_Pz, hR_lambda_fit_form, fit_hR_lambda, hR_lambda, hR_x,
 )
@@ -27,8 +30,8 @@ from ._tmd import (
     self_renormalized_ratio, invariant_amplitude, collins_soper_kernel,
 )
 from ._tmdextract import (
-    quasi_tmd_pdf, cs_kernel_from_ratio, soft_function_intrinsic,
-    tmd_matching_hybrid, sftx_gluon_matching_coeff,
+    quasi_tmd_pdf, cs_kernel_from_ratio, cs_kernel_two_momentum,
+    soft_function_intrinsic, tmd_matching_hybrid, sftx_gluon_matching_coeff,
     sftx_energy_density_t0,
 )
 
@@ -39,6 +42,7 @@ __all__ = [
     "fm_to_GeV", "a_len_set", "Nl_set", "pion_mass_set", "MPI_PHYSICAL", "pz_to_gev",
     # 自重整化
     "Z_MS", "th_hB", "th_ZR", "cost_function", "cost_function_all", "fit_ZR",
+    "build_hB_dataset", "boot_covariance", "make_zr_dataset",
     # 混合方案
     "hR_z_Pz", "hR_lambda_fit_form", "fit_hR_lambda", "hR_lambda", "hR_x",
     # 匹配
@@ -55,7 +59,7 @@ __all__ = [
     "self_renormalized_ratio", "invariant_amplitude", "collins_soper_kernel",
     "quasi_tmd_pdf", "cs_kernel_from_ratio", "soft_function_intrinsic",
     "tmd_matching_hybrid", "sftx_gluon_matching_coeff",
-    "sftx_energy_density_t0",
+    "sftx_energy_density_t0", "cs_kernel_two_momentum",
 ]
 
 Namespace.__module__ = "pyqcd.renorm"

@@ -149,24 +149,6 @@ def main():
     run_analysis(conf_ids, momenta, run_dir, logger, args)
 
 
-def _plateau_c0(ratio, dt_max=20, dt_start=7, dt_end=10, cut=6):
-    """fit 窗口内 ratio 的 plateau 均值（Nsample, nz, nb），抗奇异协方差。
-
-    与 _tmd_ratio 的 x_coor 一致：dt∈[dt_start,dt_end]，dtau∈[front, dt-back]。
-    """
-    r = np.asarray(ratio)
-    Nsample, D, _, nz, nb = r.shape
-    front = cut // 2
-    back = cut - front
-    out = np.zeros((Nsample, nz, nb))
-    npts = 0
-    for dt in range(dt_start, dt_end + 1):
-        for dtau in range(front, dt - back + 1):
-            out += r[:, dt, dtau, :, :]
-            npts += 1
-    return out / max(npts, 1)
-
-
 def run_analysis(conf_ids, momenta, run_dir, logger, args):
     from pyqcd.analysis import (
         run_disconnected_tmd_ratio, plot_tmd_c0, plot_tmd_ratio,
@@ -208,11 +190,8 @@ def run_analysis(conf_ids, momenta, run_dir, logger, args):
                              f'c0_mean_{tag}.npy'), c0.mean(0))
         np.save(os.path.join(run_dir, 'analysis', 'tmd_ratio',
                              f'c0_err_{tag}.npy'), sem(c0, True))
-        # 另存 plateau-mean 版本（fit 窗口内 ratio 均值，抗奇异协方差）
-        ratio = np.asarray(res['proton']['ratio'])
-        c0p = _plateau_c0(ratio, dt_max=20, dt_start=7, dt_end=10, cut=6)
-        np.save(os.path.join(run_dir, 'analysis', 'tmd_ratio',
-                             f'c0_plateau_{tag}.npy'), c0p)
+        # plateau-mean 版本已由 run_disconnected_tmd_ratio 直接产出
+        # （pyqcd.analysis.plateau_c0，fit 窗口内 ratio 均值，抗奇异协方差）
 
     # ── 阶段 4：自重整化 + 匹配 → TMD-PDF ──────────────────────────
     run_tmd_pdf_chain(conf_ids, run_dir, logger, args)
@@ -261,20 +240,20 @@ def run_tmd_pdf_chain(conf_ids, run_dir, logger, args):
     x, xg = quasi_tmd_pdf(hR, z_grid, b_grid, pz_gev=pz_gev,
                           x_grid=x_grid, z_max=z_grid[-1])
 
-    # CS 核（两动量比值，若有）：用 z=1 处原始 c0 比值（避免 z=0 归一）
+    # CS 核（两动量比值，若有）：pyqcd.renorm.cs_kernel_two_momentum
+    # （z_ref=1 起始 + clamp 数值保护，整合自本示例原内联实现）
     K = None
     if len(hR_store) >= 2:
         tags2 = [t for t in pz_cands if t in hR_store]
         p1 = int(tags2[0][1]) if len(tags2[0]) == 4 else 2
         p2 = int(tags2[1][1]) if len(tags2[1]) == 4 else 2
         if p1 != p2:
-            c01 = np.load(os.path.join(an_dir, f'c0_plateau_{tags2[0]}.npy')).mean(0)
-            c02 = np.load(os.path.join(an_dir, f'c0_plateau_{tags2[1]}.npy')).mean(0)
-            z_ref = 1 if c01.shape[0] > 1 else 0
-            K = np.log(np.maximum(c01[z_ref] / c02[z_ref], 1e-30)) \
-                / np.log(pz_to_gev(p1, conf) / pz_to_gev(p2, conf))
-            # 数值保护：噪声使 |K| 过大时 clamp（CS 核物理量级 |K|≲O(1) fm²）
-            K = np.clip(K, -3.0, 3.0)
+            from pyqcd.renorm import cs_kernel_two_momentum
+            c01 = np.load(os.path.join(an_dir, f'c0_plateau_{tags2[0]}.npy'))
+            c02 = np.load(os.path.join(an_dir, f'c0_plateau_{tags2[1]}.npy'))
+            K = cs_kernel_two_momentum(c01.mean(0), c02.mean(0),
+                                       pz_to_gev(p1, conf), pz_to_gev(p2, conf),
+                                       z_ref=1, k_clip=(-3.0, 3.0))
 
     # NLO 匹配 → 光锥 TMD-PDF x·g(x, b⊥)
     xm, xg_match = tmd_matching_hybrid(
@@ -292,78 +271,8 @@ def run_tmd_pdf_chain(conf_ids, run_dir, logger, args):
     np.save(os.path.join(an_dir, 'b_grid_fm.npy'), b_grid)
     np.save(os.path.join(an_dir, 'z_grid_fm.npy'), z_grid)
 
-    plot_pdf(an_dir, x, xg, xg_match, b_grid, K, main_tag, logger)
-
-
-def plot_pdf(an_dir, x, xg, xg_match, b_grid, K, main_tag, logger):
-    """TMD-PDF 图表：准 PDF、匹配后 PDF、CS 核。"""
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    # 准 TMD-PDF x·g̃(x, b⊥)
-    xg = np.asarray(xg)
-    nb = xg.shape[1] if xg.ndim > 1 else 1
-    ncol = 2
-    nrow = (nb + 1) // 2
-    fig, axes = plt.subplots(nrow, ncol, figsize=(12, 3.5 * nrow), squeeze=False)
-    for b in range(nb):
-        ax = axes[b // ncol][b % ncol]
-        ax.plot(x, xg[:, b] if xg.ndim > 1 else xg, 'o-', ms=3)
-        ax.axhline(0, color='gray', lw=0.8)
-        ax.set_xlabel('x'); ax.set_ylabel(r'$x\tilde{g}(x,b_\perp)$')
-        ax.set_title(f'quasi TMD-PDF, b⊥={b_grid[b]:.3f} fm')
-        ax.grid(alpha=0.3)
-    for b in range(nb, nrow * ncol):
-        axes[b // ncol][b % ncol].axis('off')
-    fig.suptitle(f'{main_tag}: gradient-flow quasi gluon TMD-PDF')
-    fig.tight_layout()
-    fig.savefig(os.path.join(an_dir, 'quasi_tmd_pdf.png'), dpi=150)
-    plt.close(fig)
-
-    # 匹配后 TMD-PDF（对比准 PDF）
-    xg_match = np.asarray(xg_match)
-    fig, axes = plt.subplots(nrow, ncol, figsize=(12, 3.5 * nrow), squeeze=False)
-    for b in range(nb):
-        ax = axes[b // ncol][b % ncol]
-        ax.plot(x, xg[:, b] if xg.ndim > 1 else xg, 'o-', ms=3, label='quasi')
-        ax.plot(x, xg_match[:, b] if xg_match.ndim > 1 else xg_match,
-                's-', ms=3, label='NLO matched')
-        ax.axhline(0, color='gray', lw=0.8)
-        ax.set_xlabel('x'); ax.set_ylabel(r'$xg(x,b_\perp)$')
-        ax.set_title(f'b⊥={b_grid[b]:.3f} fm')
-        ax.legend(fontsize=8); ax.grid(alpha=0.3)
-    for b in range(nb, nrow * ncol):
-        axes[b // ncol][b % ncol].axis('off')
-    fig.suptitle(f'{main_tag}: NLO-matched gluon TMD-PDF')
-    fig.tight_layout()
-    fig.savefig(os.path.join(an_dir, 'matched_tmd_pdf.png'), dpi=150)
-    plt.close(fig)
-
-    # 所有 b 叠加（准 + 匹配）
-    fig, ax = plt.subplots(figsize=(8, 5))
-    for b in range(nb):
-        ax.plot(x, xg_match[:, b] if xg_match.ndim > 1 else xg_match,
-                '-', lw=1.2, label=f'b⊥={b_grid[b]:.3f} fm')
-    ax.axhline(0, color='gray', lw=0.8)
-    ax.set_xlabel('x'); ax.set_ylabel(r'$xg(x,b_\perp)$')
-    ax.set_title(f'{main_tag}: gluon TMD-PDF vs b⊥ (NLO matched)')
-    ax.legend(fontsize=8); ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(os.path.join(an_dir, 'tmd_pdf_vs_b.png'), dpi=150)
-    plt.close(fig)
-
-    if K is not None:
-        fig, ax = plt.subplots(figsize=(7, 5))
-        ax.errorbar(b_grid, K, fmt='o-', capsize=3)
-        ax.set_xlabel(r'$b_\perp$ [fm]'); ax.set_ylabel(r'$K(b_\perp)$')
-        ax.set_title('Collins-Soper kernel (two-momentum ratio)')
-        ax.grid(alpha=0.3)
-        fig.tight_layout()
-        fig.savefig(os.path.join(an_dir, 'cs_kernel.png'), dpi=150)
-        plt.close(fig)
-
-    logger(f"  TMD-PDF 图表 -> {an_dir}")
+    from pyqcd.analysis import plot_tmd_pdf
+    plot_tmd_pdf(x, xg, xg_match, b_grid, K, main_tag, an_dir, logger)
 
 
 def write_summary(run_dir, conf_ids, momenta, logger):

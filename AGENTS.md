@@ -7,7 +7,7 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（18 项：γ基/Z_R/梯度流/TMD算符/匹配/混合/提取链/标度/HYP/τ极限/比值拟合/HYP-流一致/后端一致/torch后端一致/端到端meff/求和规则/核心链/TMD-NLO匹配）
+python examples/pyqcd/conftest.py    # 全量测试（27 项：18 物理/链路项 + 9 整合功能项 stout/本征模压缩/CG/hB-loader/boot协方差/plateau+CS核/PDF成图/数据守卫+2pt续跑/方向能量链）
 python examples/pyqcd/verify_consistency.py   # 一致性验证（vs docker-v20260805 输出，A–E 全 0 差异）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
 python -m pyqcd.parallel --dry-run --confs 6250,6450   # MPI 并行规划预览（用户公式 N*a=n*b）
@@ -134,6 +134,32 @@ P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）
    TMD 混合方案匹配 `tmd_matching_hybrid` 用 Z_ij 矩阵结构（δ + α_sC_A/2π 核），
    复用 `_matching_kernels`（A_s = α_s/4π，zengch 约定），快度演化 + 软函数。
 6. **连续极限**（`_extrapolate.py`）：a/Pz/mπ/L 联合外推。
+
+## 参考代码整合（~auto-all 20260822，logs/examples/refer → pyqcd）
+
+12 项整合（照抄逻辑、自包含、不 import 来源；各附测试）：
+
+| # | 来源 | 功能 | 落点 |
+|---|---|---|---|
+| R1 | refer/sush lqcddb `smear_gauge.py` | Stout 涂抹（nstep=20,ρ=0.12 对齐真实系综） | `pyqcd/smear/_stout.py` |
+| R2 | refer/sush lqcddb `eigvectors/vector.py` | 本征模压缩 V1–V4+噪声/GS/正交检查（seed 可复现） | `pyqcd/vertex/_eigcompress.py` |
+| R3 | refer/sush lqcddb `cg_coeff.py` | SU(2) CG 系数（Racah 纯 Python，无 sympy） | `pyqcd/lattice/_cg.py` |
+| R4 | refer/zengch `hB_data_FeynmenHellman_new.py` | hB 数据 z₀ 归一化+插值 loader + boot 协方差 | `pyqcd/renorm/_zr.py`（build_hB_dataset/boot_covariance/make_zr_dataset） |
+| R5 | refer/zengch `fit_hR_big_lambda_new.py` | λ 外推拟合 boot 全协方差选项 | `pyqcd/renorm/_hybrid.fit_hR_lambda(cov_kind='boot')` |
+| E1 | examples/pyqcd test9 示例 | `_plateau_c0` plateau 均值（抗奇异协方差） | `pyqcd/analysis/_tmd_ratio.plateau_c0`（run_disconnected_tmd_ratio 直接产出 c0_plateau） |
+| E2 | examples/pyqcd test9 示例 | CS 核两动量提取工程封装（z_ref+clamp） | `pyqcd/renorm/_tmdextract.cs_kernel_two_momentum` |
+| E3 | examples/pyqcd test9 示例 | TMD-PDF 链成图 4 张 | `pyqcd/analysis/_tmd_ratio.plot_tmd_pdf` |
+| L1 | logs/test8 | 2pt 组态级断点续跑（corr 齐全即跳过） | `pyqcd/pipeline/_steps.step_2pt`（recompute_2pt 强制重算） |
+| L2 | logs/test7/test8 | 数据守卫：原始数据齐全度+输入数组校验+ETA 日志 | `pyqcd/pipeline/_validate.py` |
+| L3 | logs/test6 | 能量链方向感知（动量置换 dir 参数，z 向后兼容） | `pyqcd/analysis/_proton_energy` + `_bare_matrix.dir_momentum` |
+| L4 | logs/test7 | tlog 时间戳+ETA 进度日志 | `pyqcd/pipeline._validate.ProgressLog/progress_log` |
+
+跳过（记录理由）：IOG reader（依赖 iog.so 二进制）、Chroma XML 生成器与
+SIDIS-DY 唯象层（依赖库外 evolution 模块）、contractadviser（性能顾问非物理）、
+helicity ΔG 下游链（研究方向未启动，算符层已覆盖）、下载/打包脚本（运维类）。
+torch 适配层补齐 numpy-like 函数（cos/sin/arccos/isnan/clip/maximum 标量/
+argwhere/identity/append/random）。test9 示例已改为消费 pyqcd API
+（删除内嵌 `_plateau_c0`/CS 核内联/`plot_pdf` 共 ~115 行重复实现）。
 
 ## test9 系列详细分析（logs/dev5/dev5_1/dev5_2，对 tag:test9 的 all 全量）
 

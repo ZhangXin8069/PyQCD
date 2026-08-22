@@ -38,6 +38,7 @@ from ._disconnected import (
 )
 from ._tmd_ratio import (
     run_disconnected_tmd_ratio, plot_tmd_c0, plot_tmd_ratio,
+    plateau_c0, plot_tmd_pdf,
 )
 from ._correlators import run_meff_jackknife, run_3pt_ratio
 from ._dispersion import th_E0, fit_dispersion, dispersion_check, pz_to_gev_lattice

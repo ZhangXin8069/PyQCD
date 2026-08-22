@@ -120,6 +120,9 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
                 'c1': np.zeros((1, nz, nb)),
                 'dE': np.zeros((1, nz, nb)),
                 'chi2': np.zeros((1, nz, nb)), 'x_coor': [],
+                'c0_plateau': plateau_c0(ratio, dt_max=dt_max,
+                                         dt_start=dt_start,
+                                         dt_end=dt_end, cut=cut),
             }
             continue
 
@@ -184,12 +187,18 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
             f.write(report)
         np.savez(os.path.join(out_dir, f'0_fit_data_{momentum}.npz'),
                  c0=para_c0, c1=para_c1, dE=para_dE, chi2=chi2)
-        logger(f"  Saved ratio + fit to {out_dir} "
+        # plateau 均值版（fit 窗口内直接平均，抗奇异协方差；test9 整合项）
+        c0_plateau = plateau_c0(ratio, dt_max=dt_max, dt_start=dt_start,
+                                dt_end=dt_end, cut=cut)
+        np.save(os.path.join(out_dir, f'c0_plateau_{momentum}.npy'),
+                c0_plateau)
+        logger(f"  Saved ratio + fit + c0_plateau to {out_dir} "
                f"({time.perf_counter()-t0_fit:.1f}s)")
 
         ch_results[had_name] = {
             'ratio': ratio, 'c0': para_c0, 'c1': para_c1,
             'dE': para_dE, 'chi2': chi2, 'x_coor': x_coor,
+            'c0_plateau': c0_plateau,
         }
 
     return ch_results
@@ -244,6 +253,131 @@ def plot_tmd_c0(ch_results, run_dir, momentum, logger=print,
             plt.close(fig)
 
     logger(f"  TMD c0 plots saved to {out_dir}")
+
+
+def plateau_c0(ratio, dt_max=20, dt_start=7, dt_end=10, cut=6):
+    """fit 窗口内 ratio 的 plateau 均值 → c0(z,b)（抗奇异协方差）。
+
+    整合自 examples/pyqcd/test9_gluon_tmd_nucleon.py::_plateau_c0：
+    与 run_disconnected_tmd_ratio 的 x_coor 窗口一致
+    （dt∈[dt_start,dt_end]，dtau∈[front,dt-back]），窗口内直接平均。
+    10 组态统计下比 lsqfit 逐样本拟合更稳健（协方差奇异的绕行方案）。
+
+    Args:
+        ratio: (Nsample, dt_max, dtau_max, nz, nb)——不相连比值数组。
+    Returns:
+        (Nsample, nz, nb) plateau 均值。
+    """
+    r = np.asarray(ratio)
+    Nsample, _, _, nz, nb = r.shape
+    front = cut // 2
+    back = cut - front
+    out = np.zeros((Nsample, nz, nb))
+    npts = 0
+    for dt in range(dt_start, min(dt_end, r.shape[1] - 1) + 1):
+        for dtau in range(front, dt - back + 1):
+            out += r[:, dt, dtau, :, :]
+            npts += 1
+    return out / max(npts, 1)
+
+
+def plot_tmd_pdf(x_grid, xg_quasi, xg_matched, b_grid_fm, cs_kernel,
+                 tag, out_dir, logger=print):
+    """TMD-PDF 链成图（整合自 test9 示例 plot_pdf）。
+
+    产出：quasi_tmd_pdf.png / matched_tmd_pdf.png / tmd_pdf_vs_b.png /
+    cs_kernel.png（cs_kernel 非 None 时）。
+
+    Args:
+        x_grid: x 网格。
+        xg_quasi: 准 TMD-PDF x·g̃(x, b⊥)，(nx, nb) 或 (nx,)。
+        xg_matched: NLO 匹配后 x·g(x, b⊥)。
+        b_grid_fm: b⊥ 网格（fm，标记用）。
+        cs_kernel: K(b⊥) 数组或 None。
+        tag: 动量标签（图题）。
+        out_dir: 输出目录。
+    Returns:
+        生成的 png 路径列表。
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    os.makedirs(out_dir, exist_ok=True)
+    xg = np.asarray(xg_quasi)
+    xgm = np.asarray(xg_matched)
+    if xg.ndim == 1:
+        xg = xg[:, None]
+    if xgm.ndim == 1:
+        xgm = xgm[:, None]
+    nb = xg.shape[1]
+    ncol = 2
+    nrow = (nb + 1) // 2
+    saved = []
+
+    # 准 TMD-PDF x·g̃(x, b⊥)
+    fig, axes = plt.subplots(nrow, ncol, figsize=(12, 3.5 * nrow),
+                             squeeze=False)
+    for b in range(nb):
+        ax = axes[b // ncol][b % ncol]
+        ax.plot(x_grid, xg[:, b], 'o-', ms=3)
+        ax.axhline(0, color='gray', lw=0.8)
+        ax.set_xlabel('x'); ax.set_ylabel(r'$x\tilde{g}(x,b_\perp)$')
+        ax.set_title(f'quasi TMD-PDF, b={b_grid_fm[b]:.3f} fm')
+        ax.grid(alpha=0.3)
+    for b in range(nb, nrow * ncol):
+        axes[b // ncol][b % ncol].axis('off')
+    fig.suptitle(f'{tag}: gradient-flow quasi gluon TMD-PDF')
+    fig.tight_layout()
+    p = os.path.join(out_dir, 'quasi_tmd_pdf.png')
+    fig.savefig(p, dpi=150); plt.close(fig); saved.append(p)
+
+    # 匹配前后对比
+    fig, axes = plt.subplots(nrow, ncol, figsize=(12, 3.5 * nrow),
+                             squeeze=False)
+    for b in range(nb):
+        ax = axes[b // ncol][b % ncol]
+        ax.plot(x_grid, xg[:, b], 'o-', ms=3, label='quasi')
+        ax.plot(x_grid, xgm[:, b], 's-', ms=3, label='NLO matched')
+        ax.axhline(0, color='gray', lw=0.8)
+        ax.set_xlabel('x'); ax.set_ylabel(r'$xg(x,b_\perp)$')
+        ax.set_title(f'b={b_grid_fm[b]:.3f} fm')
+        ax.legend(fontsize=8); ax.grid(alpha=0.3)
+    for b in range(nb, nrow * ncol):
+        axes[b // ncol][b % ncol].axis('off')
+    fig.suptitle(f'{tag}: NLO-matched gluon TMD-PDF')
+    fig.tight_layout()
+    p = os.path.join(out_dir, 'matched_tmd_pdf.png')
+    fig.savefig(p, dpi=150); plt.close(fig); saved.append(p)
+
+    # 所有 b 叠加
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for b in range(nb):
+        ax.plot(x_grid, xgm[:, b], '-', lw=1.2,
+                label=f'b={b_grid_fm[b]:.3f} fm')
+    ax.axhline(0, color='gray', lw=0.8)
+    ax.set_xlabel('x'); ax.set_ylabel(r'$xg(x,b_\perp)$')
+    ax.set_title(f'{tag}: gluon TMD-PDF vs b-perp (NLO matched)')
+    ax.legend(fontsize=8); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    p = os.path.join(out_dir, 'tmd_pdf_vs_b.png')
+    fig.savefig(p, dpi=150); plt.close(fig); saved.append(p)
+
+    # CS 核
+    if cs_kernel is not None:
+        K = np.asarray(cs_kernel, dtype=float).ravel()
+        fig, ax = plt.subplots(figsize=(7, 5))
+        ax.errorbar(b_grid_fm[:len(K)], K, fmt='o-', capsize=3)
+        ax.set_xlabel(r'$b_\perp$ [fm]')
+        ax.set_ylabel(r'$K(b_\perp)$')
+        ax.set_title('Collins-Soper kernel (two-momentum ratio)')
+        ax.grid(alpha=0.3)
+        fig.tight_layout()
+        p = os.path.join(out_dir, 'cs_kernel.png')
+        fig.savefig(p, dpi=150); plt.close(fig); saved.append(p)
+
+    logger(f"  TMD-PDF plots -> {out_dir} ({len(saved)} files)")
+    return saved
 
 
 def plot_tmd_ratio(ch_results, run_dir, momentum, logger=print,
