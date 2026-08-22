@@ -25,6 +25,8 @@ python examples/pyqcd/test9_gluon_tmd_nucleon.py --only-plot --conf-ids ... # te
 python examples/pyqcd/test9_verify.py [run_dir]  # test9 物理链自洽断言（A 梯度流/E递减/unitarity、B 2pt 谱线、C TMD OPE、D 分析、E PDF）
 python examples/pyqcd/dev6/main.py               # dev6 基于 tag-test8 收缩产物（405 组态，只读）补齐 test0/test6 同类型图表（CPU 秒级）
 python examples/pyqcd/dev6/verify_dev6.py examples/pyqcd/dev6/v202608221540   # dev6 断言门（22 项：齐全性/形状/物理自洽）
+python examples/pyqcd/dev7/main.py               # dev7 dev6 收敛迭代（262 组态实际存在扫描 + Part C 02_ratio 链补齐 ratio_3pt 型图）
+python examples/pyqcd/dev7/verify_dev7.py examples/pyqcd/dev7/v202608230624   # dev7 断言门（38 项：齐全性/形状/02链产物/物理自洽/跨运行一致）
 bash examples/test0/run-local.sh    # 蒸馏管线一致性测试（调用 pyqcd 复现 docker-v20260805 全量输出）
 python examples/test0/main.py verify --run-dir examples/test0/v<ts>   # 一致性验证（A–E 项）
 cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，两遍）
@@ -35,7 +37,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | 目录 | 内容 |
 |---|---|
 | `pyqcd/` | 主包（lattice/tools/vertex/contraction/operator/analysis/renorm/pipeline/testing/parallel） |
-| `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 + `pyqcd/dev6/` 同型图表补充套件（405 组态实战） |
+| `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 + `pyqcd/dev6/`、`pyqcd/dev7/` 同型图表补充/收敛套件（405→262 组态实战） |
 | `docs/` | 52 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文）+ analy 报告 |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books）+ `git-rep/` 外来参考仓库（quda/PyQUDA/lamet-agent/EasyDistillation/LQCD_Master，只读、其 AGENTS.md 已归档） |
 | `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 + test6/ pyqcd 独立复现套件（.ref_run/ 存 refer 实跑真值，verify_04_repro.py 数值比对）+ test7/ 服务器正式工作版（100 组态，GPU V100，env.sh 启动，输入检查机制 + 实时进度日志）+ test9/ 梯度流胶子 TMD-PDF 实战报告（test9_analysis.pdf）+ dev5/dev5_1/dev5_2 对 tag:test9 系列的详细分析（25 页→33 页→36 页，字体规范+物理>62%+因果总览+图表三段式，all 全量） |
@@ -215,6 +217,22 @@ E0(P2)=1.491(52)/1.5477(27) GeV（色散预期 1.510，偏差 -1.2%/+2.5%）；
 verify_dev6 22 断言全绿；analy 报告 docs/analy_dev6_20260822.pdf（27 页
 Overfull=0/Float=0/Missing=0）。pyqcd 最小修改：
 `_correlators.run_meff_jackknife` 缺失通道跳过守卫（完整数据行为不变）。
+
+## dev7 同型图表收敛迭代（examples/pyqcd/dev7，20260823）
+
+dev6 的 ~auto-all 收敛迭代，两项实质收敛：(1) **组态实际存在扫描**——数据目录自
+dev6 运行后由外部删减（405 → 262，全树 mtime ≤20260818），scan 按五文件齐备
+（corr_pp_P0/P2 + ops 三分量）判据如实计数，不假设网格；(2) **补齐 ratio_3pt 型图**
+——输入 ops_*(Nz,Nt)+corr_pp 正是 pyqcd 02_ratio 链输入类型，Part C 照抄
+test8 makedata 切片整理 + run_02_ratio 配置：staging（切片矩阵 C[sink,src]=
+C((sink−src) mod Nt) + ops 符号链接）→ run_ratio2pt(Pz=2,dt_max=20,三代表窗
+(6,11,2)/(7,11,3)/(9,11,4)) → ratio_3pt_all_channels.png（disconnected OPE/2pt
+真空扣除比值 R(τ)，z∈{0,2,4,6}@t_sep=10；非连通 3pt，图题明注）。实测：262 组态
+4m35s、峰值 8.7 GB；E0(P0)=1.143(A)/1.092(13)(B)、E0(P2)=1.551(A)/1.515(42)(B)
+GeV，与 dev6 跨运行互差 5/3 MeV、色散偏差 3.1%；c0(z≤4)≈0±0.03（与零一致，
+disconnected 通道需更多统计）；小样本（--debug）下 c0 被先验主导属预期。
+verify_dev7 38 断言全绿（含 vs dev6 跨运行一致性 D 组）；analy 报告
+docs/analy_dev7_20260823.pdf（29 页 Overfull=0/Float=0/Missing=0）。
 
 ## 关键约定
 

@@ -144,6 +144,10 @@ def main(run_dir):
               f" GeV, |d|={d * 1e3:.0f} MeV")
 
     # D. 与 dev6 基线运行的跨一致性（组态集 405->262 后的漂移检查）
+    # dev6 summary json 被 .gitignore（*.json）——数值固化于此作为回退；
+    # 本地文件存在时以文件为准。
+    ref_e0 = {"proton_P0": 1.1473901702295601,
+              "proton_P2": 1.5477404566750945}   # A 型 E0 [GeV]
     ref_path = os.path.normpath(os.path.join(here, "..", "dev6",
                                              "v202608221540",
                                              "analysis_summary.json"))
@@ -151,14 +155,15 @@ def main(run_dir):
         with open(ref_path) as f:
             ref = json.load(f)
         for ch in CHANNELS:
-            e_now = pa[f"proton_{ch}"]["E0_GeV"]
-            e_ref = ref["part_a"][f"proton_{ch}"]["E0_GeV"]
-            d = abs(e_now - e_ref)
-            check(f"xrun:E0_{ch}_vs_dev6", d < 0.10,
-                  f"dev7={e_now:.3f} vs dev6={e_ref:.3f} GeV, "
-                  f"|d|={d * 1e3:.0f} MeV (<100 MeV)")
-    else:
-        check("xrun:dev6_ref_present", False, f"缺参考 {ref_path}")
+            ref_e0[f"proton_{ch}"] = ref["part_a"][f"proton_{ch}"]["E0_GeV"]
+    for ch in CHANNELS:
+        e_now = pa[f"proton_{ch}"]["E0_GeV"]
+        e_ref = ref_e0[f"proton_{ch}"]
+        d = abs(e_now - e_ref)
+        check(f"xrun:E0_{ch}_vs_dev6", d < 0.10,
+              f"dev7={e_now:.3f} vs dev6={e_ref:.3f} GeV, "
+              f"|d|={d * 1e3:.0f} MeV (<100 MeV)"
+              + ("" if os.path.isfile(ref_path) else " [内置参考值]"))
 
     print("=" * 60)
     if FAILS:
