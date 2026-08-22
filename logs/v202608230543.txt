@@ -1,0 +1,3862 @@
+.
+├── conf10000
+│   ├── corr_pp_P0_10000.npy
+│   ├── corr_pp_P2_10000.npy
+│   ├── VdV_mom_10000.npy
+│   └── VVV_mom_10000.npy
+├── conf10050
+│   ├── corr_pp_P0_10050.npy
+│   ├── corr_pp_P2_10050.npy
+│   ├── ope_combined_conf10050.h5
+│   ├── ops_mu0_nu1_dz24_conf10050.h5
+│   ├── ops_mu0_nu1_dz24_conf10050.npz
+│   ├── ops_mu3_nu0_dz24_conf10050.h5
+│   ├── ops_mu3_nu0_dz24_conf10050.npz
+│   ├── ops_mu3_nu1_dz24_conf10050.h5
+│   ├── ops_mu3_nu1_dz24_conf10050.npz
+│   ├── VdV_mom_10050.npy
+│   └── VVV_mom_10050.npy
+├── conf10100
+│   ├── corr_pp_P0_10100.npy
+│   ├── corr_pp_P2_10100.npy
+│   ├── VdV_mom_10100.npy
+│   └── VVV_mom_10100.npy
+├── conf10150
+│   ├── corr_pp_P0_10150.npy
+│   ├── corr_pp_P2_10150.npy
+│   ├── ope_combined_conf10150.h5
+│   ├── ops_mu0_nu1_dz24_conf10150.h5
+│   ├── ops_mu0_nu1_dz24_conf10150.npz
+│   ├── ops_mu3_nu0_dz24_conf10150.h5
+│   ├── ops_mu3_nu0_dz24_conf10150.npz
+│   ├── ops_mu3_nu1_dz24_conf10150.h5
+│   ├── ops_mu3_nu1_dz24_conf10150.npz
+│   ├── VdV_mom_10150.npy
+│   └── VVV_mom_10150.npy
+├── conf10200
+│   ├── corr_pp_P0_10200.npy
+│   ├── corr_pp_P2_10200.npy
+│   ├── VdV_mom_10200.npy
+│   └── VVV_mom_10200.npy
+├── conf10250
+│   ├── corr_pp_P0_10250.npy
+│   ├── corr_pp_P2_10250.npy
+│   ├── ope_combined_conf10250.h5
+│   ├── ops_mu0_nu1_dz24_conf10250.h5
+│   ├── ops_mu0_nu1_dz24_conf10250.npz
+│   ├── ops_mu3_nu0_dz24_conf10250.h5
+│   ├── ops_mu3_nu0_dz24_conf10250.npz
+│   ├── ops_mu3_nu1_dz24_conf10250.h5
+│   ├── ops_mu3_nu1_dz24_conf10250.npz
+│   ├── VdV_mom_10250.npy
+│   └── VVV_mom_10250.npy
+├── conf10300
+│   ├── corr_pp_P0_10300.npy
+│   ├── corr_pp_P2_10300.npy
+│   ├── VdV_mom_10300.npy
+│   └── VVV_mom_10300.npy
+├── conf10350
+│   ├── corr_pp_P0_10350.npy
+│   ├── corr_pp_P2_10350.npy
+│   ├── ope_combined_conf10350.h5
+│   ├── ops_mu0_nu1_dz24_conf10350.h5
+│   ├── ops_mu0_nu1_dz24_conf10350.npz
+│   ├── ops_mu3_nu0_dz24_conf10350.h5
+│   ├── ops_mu3_nu0_dz24_conf10350.npz
+│   ├── ops_mu3_nu1_dz24_conf10350.h5
+│   ├── ops_mu3_nu1_dz24_conf10350.npz
+│   ├── VdV_mom_10350.npy
+│   └── VVV_mom_10350.npy
+├── conf10400
+│   ├── corr_pp_P0_10400.npy
+│   ├── corr_pp_P2_10400.npy
+│   ├── VdV_mom_10400.npy
+│   └── VVV_mom_10400.npy
+├── conf10450
+│   ├── corr_pp_P0_10450.npy
+│   ├── corr_pp_P2_10450.npy
+│   ├── ope_combined_conf10450.h5
+│   ├── ops_mu0_nu1_dz24_conf10450.h5
+│   ├── ops_mu0_nu1_dz24_conf10450.npz
+│   ├── ops_mu3_nu0_dz24_conf10450.h5
+│   ├── ops_mu3_nu0_dz24_conf10450.npz
+│   ├── ops_mu3_nu1_dz24_conf10450.h5
+│   ├── ops_mu3_nu1_dz24_conf10450.npz
+│   ├── VdV_mom_10450.npy
+│   └── VVV_mom_10450.npy
+├── conf10500
+│   ├── corr_pp_P0_10500.npy
+│   ├── corr_pp_P2_10500.npy
+│   ├── VdV_mom_10500.npy
+│   └── VVV_mom_10500.npy
+├── conf10550
+│   ├── corr_pp_P0_10550.npy
+│   ├── corr_pp_P2_10550.npy
+│   ├── ope_combined_conf10550.h5
+│   ├── ops_mu0_nu1_dz24_conf10550.h5
+│   ├── ops_mu0_nu1_dz24_conf10550.npz
+│   ├── ops_mu3_nu0_dz24_conf10550.h5
+│   ├── ops_mu3_nu0_dz24_conf10550.npz
+│   ├── ops_mu3_nu1_dz24_conf10550.h5
+│   ├── ops_mu3_nu1_dz24_conf10550.npz
+│   ├── VdV_mom_10550.npy
+│   └── VVV_mom_10550.npy
+├── conf10600
+│   ├── corr_pp_P0_10600.npy
+│   ├── corr_pp_P2_10600.npy
+│   ├── VdV_mom_10600.npy
+│   └── VVV_mom_10600.npy
+├── conf10650
+│   ├── corr_pp_P0_10650.npy
+│   ├── corr_pp_P2_10650.npy
+│   ├── ope_combined_conf10650.h5
+│   ├── ops_mu0_nu1_dz24_conf10650.h5
+│   ├── ops_mu0_nu1_dz24_conf10650.npz
+│   ├── ops_mu3_nu0_dz24_conf10650.h5
+│   ├── ops_mu3_nu0_dz24_conf10650.npz
+│   ├── ops_mu3_nu1_dz24_conf10650.h5
+│   ├── ops_mu3_nu1_dz24_conf10650.npz
+│   ├── VdV_mom_10650.npy
+│   └── VVV_mom_10650.npy
+├── conf10700
+│   ├── corr_pp_P0_10700.npy
+│   ├── corr_pp_P2_10700.npy
+│   ├── VdV_mom_10700.npy
+│   └── VVV_mom_10700.npy
+├── conf10750
+│   ├── corr_pp_P0_10750.npy
+│   ├── corr_pp_P2_10750.npy
+│   ├── ope_combined_conf10750.h5
+│   ├── ops_mu0_nu1_dz24_conf10750.h5
+│   ├── ops_mu0_nu1_dz24_conf10750.npz
+│   ├── ops_mu3_nu0_dz24_conf10750.h5
+│   ├── ops_mu3_nu0_dz24_conf10750.npz
+│   ├── ops_mu3_nu1_dz24_conf10750.h5
+│   ├── ops_mu3_nu1_dz24_conf10750.npz
+│   ├── VdV_mom_10750.npy
+│   └── VVV_mom_10750.npy
+├── conf10800
+│   ├── corr_pp_P0_10800.npy
+│   ├── corr_pp_P2_10800.npy
+│   ├── VdV_mom_10800.npy
+│   └── VVV_mom_10800.npy
+├── conf10850
+│   ├── corr_pp_P0_10850.npy
+│   ├── corr_pp_P2_10850.npy
+│   ├── ope_combined_conf10850.h5
+│   ├── ops_mu0_nu1_dz24_conf10850.h5
+│   ├── ops_mu0_nu1_dz24_conf10850.npz
+│   ├── ops_mu3_nu0_dz24_conf10850.h5
+│   ├── ops_mu3_nu0_dz24_conf10850.npz
+│   ├── ops_mu3_nu1_dz24_conf10850.h5
+│   ├── ops_mu3_nu1_dz24_conf10850.npz
+│   ├── VdV_mom_10850.npy
+│   └── VVV_mom_10850.npy
+├── conf10900
+│   ├── corr_pp_P0_10900.npy
+│   ├── corr_pp_P2_10900.npy
+│   ├── VdV_mom_10900.npy
+│   └── VVV_mom_10900.npy
+├── conf10950
+│   ├── corr_pp_P0_10950.npy
+│   ├── corr_pp_P2_10950.npy
+│   ├── ope_combined_conf10950.h5
+│   ├── ops_mu0_nu1_dz24_conf10950.h5
+│   ├── ops_mu0_nu1_dz24_conf10950.npz
+│   ├── ops_mu3_nu0_dz24_conf10950.h5
+│   ├── ops_mu3_nu0_dz24_conf10950.npz
+│   ├── ops_mu3_nu1_dz24_conf10950.h5
+│   ├── ops_mu3_nu1_dz24_conf10950.npz
+│   ├── VdV_mom_10950.npy
+│   └── VVV_mom_10950.npy
+├── conf11000
+│   ├── corr_pp_P0_11000.npy
+│   ├── corr_pp_P2_11000.npy
+│   ├── VdV_mom_11000.npy
+│   └── VVV_mom_11000.npy
+├── conf11050
+│   ├── corr_pp_P0_11050.npy
+│   ├── corr_pp_P2_11050.npy
+│   ├── ope_combined_conf11050.h5
+│   ├── ops_mu0_nu1_dz24_conf11050.h5
+│   ├── ops_mu0_nu1_dz24_conf11050.npz
+│   ├── ops_mu3_nu0_dz24_conf11050.h5
+│   ├── ops_mu3_nu0_dz24_conf11050.npz
+│   ├── ops_mu3_nu1_dz24_conf11050.h5
+│   ├── ops_mu3_nu1_dz24_conf11050.npz
+│   ├── VdV_mom_11050.npy
+│   └── VVV_mom_11050.npy
+├── conf11100
+│   ├── corr_pp_P0_11100.npy
+│   ├── corr_pp_P2_11100.npy
+│   ├── VdV_mom_11100.npy
+│   └── VVV_mom_11100.npy
+├── conf11150
+│   ├── corr_pp_P0_11150.npy
+│   ├── corr_pp_P2_11150.npy
+│   ├── ope_combined_conf11150.h5
+│   ├── ops_mu0_nu1_dz24_conf11150.h5
+│   ├── ops_mu0_nu1_dz24_conf11150.npz
+│   ├── ops_mu3_nu0_dz24_conf11150.h5
+│   ├── ops_mu3_nu0_dz24_conf11150.npz
+│   ├── ops_mu3_nu1_dz24_conf11150.h5
+│   ├── ops_mu3_nu1_dz24_conf11150.npz
+│   ├── VdV_mom_11150.npy
+│   └── VVV_mom_11150.npy
+├── conf11200
+│   ├── corr_pp_P0_11200.npy
+│   ├── corr_pp_P2_11200.npy
+│   ├── VdV_mom_11200.npy
+│   └── VVV_mom_11200.npy
+├── conf11250
+│   ├── corr_pp_P0_11250.npy
+│   ├── corr_pp_P2_11250.npy
+│   ├── ope_combined_conf11250.h5
+│   ├── ops_mu0_nu1_dz24_conf11250.h5
+│   ├── ops_mu0_nu1_dz24_conf11250.npz
+│   ├── ops_mu3_nu0_dz24_conf11250.h5
+│   ├── ops_mu3_nu0_dz24_conf11250.npz
+│   ├── ops_mu3_nu1_dz24_conf11250.h5
+│   ├── ops_mu3_nu1_dz24_conf11250.npz
+│   ├── VdV_mom_11250.npy
+│   └── VVV_mom_11250.npy
+├── conf11300
+│   ├── corr_pp_P0_11300.npy
+│   ├── corr_pp_P2_11300.npy
+│   ├── VdV_mom_11300.npy
+│   └── VVV_mom_11300.npy
+├── conf11350
+│   ├── corr_pp_P0_11350.npy
+│   ├── corr_pp_P2_11350.npy
+│   ├── ope_combined_conf11350.h5
+│   ├── ops_mu0_nu1_dz24_conf11350.h5
+│   ├── ops_mu0_nu1_dz24_conf11350.npz
+│   ├── ops_mu3_nu0_dz24_conf11350.h5
+│   ├── ops_mu3_nu0_dz24_conf11350.npz
+│   ├── ops_mu3_nu1_dz24_conf11350.h5
+│   ├── ops_mu3_nu1_dz24_conf11350.npz
+│   ├── VdV_mom_11350.npy
+│   └── VVV_mom_11350.npy
+├── conf11400
+│   ├── corr_pp_P0_11400.npy
+│   ├── corr_pp_P2_11400.npy
+│   ├── VdV_mom_11400.npy
+│   └── VVV_mom_11400.npy
+├── conf11450
+│   ├── corr_pp_P0_11450.npy
+│   ├── corr_pp_P2_11450.npy
+│   ├── ope_combined_conf11450.h5
+│   ├── ops_mu0_nu1_dz24_conf11450.h5
+│   ├── ops_mu0_nu1_dz24_conf11450.npz
+│   ├── ops_mu3_nu0_dz24_conf11450.h5
+│   ├── ops_mu3_nu0_dz24_conf11450.npz
+│   ├── ops_mu3_nu1_dz24_conf11450.h5
+│   ├── ops_mu3_nu1_dz24_conf11450.npz
+│   ├── VdV_mom_11450.npy
+│   └── VVV_mom_11450.npy
+├── conf11500
+│   ├── corr_pp_P0_11500.npy
+│   ├── corr_pp_P2_11500.npy
+│   ├── VdV_mom_11500.npy
+│   └── VVV_mom_11500.npy
+├── conf11550
+│   ├── corr_pp_P0_11550.npy
+│   ├── corr_pp_P2_11550.npy
+│   ├── ope_combined_conf11550.h5
+│   ├── ops_mu0_nu1_dz24_conf11550.h5
+│   ├── ops_mu0_nu1_dz24_conf11550.npz
+│   ├── ops_mu3_nu0_dz24_conf11550.h5
+│   ├── ops_mu3_nu0_dz24_conf11550.npz
+│   ├── ops_mu3_nu1_dz24_conf11550.h5
+│   ├── ops_mu3_nu1_dz24_conf11550.npz
+│   ├── VdV_mom_11550.npy
+│   └── VVV_mom_11550.npy
+├── conf11600
+│   ├── corr_pp_P0_11600.npy
+│   ├── corr_pp_P2_11600.npy
+│   ├── VdV_mom_11600.npy
+│   └── VVV_mom_11600.npy
+├── conf11650
+│   ├── corr_pp_P0_11650.npy
+│   ├── corr_pp_P2_11650.npy
+│   ├── ope_combined_conf11650.h5
+│   ├── ops_mu0_nu1_dz24_conf11650.h5
+│   ├── ops_mu0_nu1_dz24_conf11650.npz
+│   ├── ops_mu3_nu0_dz24_conf11650.h5
+│   ├── ops_mu3_nu0_dz24_conf11650.npz
+│   ├── ops_mu3_nu1_dz24_conf11650.h5
+│   ├── ops_mu3_nu1_dz24_conf11650.npz
+│   ├── VdV_mom_11650.npy
+│   └── VVV_mom_11650.npy
+├── conf11700
+│   ├── corr_pp_P0_11700.npy
+│   ├── corr_pp_P2_11700.npy
+│   ├── VdV_mom_11700.npy
+│   └── VVV_mom_11700.npy
+├── conf11750
+│   ├── corr_pp_P0_11750.npy
+│   ├── corr_pp_P2_11750.npy
+│   ├── ope_combined_conf11750.h5
+│   ├── ops_mu0_nu1_dz24_conf11750.h5
+│   ├── ops_mu0_nu1_dz24_conf11750.npz
+│   ├── ops_mu3_nu0_dz24_conf11750.h5
+│   ├── ops_mu3_nu0_dz24_conf11750.npz
+│   ├── ops_mu3_nu1_dz24_conf11750.h5
+│   ├── ops_mu3_nu1_dz24_conf11750.npz
+│   ├── VdV_mom_11750.npy
+│   └── VVV_mom_11750.npy
+├── conf11800
+│   ├── corr_pp_P0_11800.npy
+│   ├── corr_pp_P2_11800.npy
+│   ├── VdV_mom_11800.npy
+│   └── VVV_mom_11800.npy
+├── conf11850
+│   ├── corr_pp_P0_11850.npy
+│   ├── corr_pp_P2_11850.npy
+│   ├── ope_combined_conf11850.h5
+│   ├── ops_mu0_nu1_dz24_conf11850.h5
+│   ├── ops_mu0_nu1_dz24_conf11850.npz
+│   ├── ops_mu3_nu0_dz24_conf11850.h5
+│   ├── ops_mu3_nu0_dz24_conf11850.npz
+│   ├── ops_mu3_nu1_dz24_conf11850.h5
+│   ├── ops_mu3_nu1_dz24_conf11850.npz
+│   ├── VdV_mom_11850.npy
+│   └── VVV_mom_11850.npy
+├── conf11900
+│   ├── corr_pp_P0_11900.npy
+│   ├── corr_pp_P2_11900.npy
+│   ├── VdV_mom_11900.npy
+│   └── VVV_mom_11900.npy
+├── conf11950
+│   ├── corr_pp_P0_11950.npy
+│   ├── corr_pp_P2_11950.npy
+│   ├── ope_combined_conf11950.h5
+│   ├── ops_mu0_nu1_dz24_conf11950.h5
+│   ├── ops_mu0_nu1_dz24_conf11950.npz
+│   ├── ops_mu3_nu0_dz24_conf11950.h5
+│   ├── ops_mu3_nu0_dz24_conf11950.npz
+│   ├── ops_mu3_nu1_dz24_conf11950.h5
+│   ├── ops_mu3_nu1_dz24_conf11950.npz
+│   ├── VdV_mom_11950.npy
+│   └── VVV_mom_11950.npy
+├── conf12000
+│   ├── corr_pp_P0_12000.npy
+│   ├── corr_pp_P2_12000.npy
+│   ├── VdV_mom_12000.npy
+│   └── VVV_mom_12000.npy
+├── conf12050
+│   ├── corr_pp_P0_12050.npy
+│   ├── corr_pp_P2_12050.npy
+│   ├── ope_combined_conf12050.h5
+│   ├── ops_mu0_nu1_dz24_conf12050.h5
+│   ├── ops_mu0_nu1_dz24_conf12050.npz
+│   ├── ops_mu3_nu0_dz24_conf12050.h5
+│   ├── ops_mu3_nu0_dz24_conf12050.npz
+│   ├── ops_mu3_nu1_dz24_conf12050.h5
+│   ├── ops_mu3_nu1_dz24_conf12050.npz
+│   ├── VdV_mom_12050.npy
+│   └── VVV_mom_12050.npy
+├── conf12100
+│   ├── corr_pp_P0_12100.npy
+│   ├── corr_pp_P2_12100.npy
+│   ├── VdV_mom_12100.npy
+│   └── VVV_mom_12100.npy
+├── conf12150
+│   ├── corr_pp_P0_12150.npy
+│   ├── corr_pp_P2_12150.npy
+│   ├── ope_combined_conf12150.h5
+│   ├── ops_mu0_nu1_dz24_conf12150.h5
+│   ├── ops_mu0_nu1_dz24_conf12150.npz
+│   ├── ops_mu3_nu0_dz24_conf12150.h5
+│   ├── ops_mu3_nu0_dz24_conf12150.npz
+│   ├── ops_mu3_nu1_dz24_conf12150.h5
+│   ├── ops_mu3_nu1_dz24_conf12150.npz
+│   ├── VdV_mom_12150.npy
+│   └── VVV_mom_12150.npy
+├── conf12200
+│   ├── corr_pp_P0_12200.npy
+│   ├── corr_pp_P2_12200.npy
+│   ├── VdV_mom_12200.npy
+│   └── VVV_mom_12200.npy
+├── conf12250
+│   ├── corr_pp_P0_12250.npy
+│   ├── corr_pp_P2_12250.npy
+│   ├── ope_combined_conf12250.h5
+│   ├── ops_mu0_nu1_dz24_conf12250.h5
+│   ├── ops_mu0_nu1_dz24_conf12250.npz
+│   ├── ops_mu3_nu0_dz24_conf12250.h5
+│   ├── ops_mu3_nu0_dz24_conf12250.npz
+│   ├── ops_mu3_nu1_dz24_conf12250.h5
+│   ├── ops_mu3_nu1_dz24_conf12250.npz
+│   ├── VdV_mom_12250.npy
+│   └── VVV_mom_12250.npy
+├── conf12350
+│   ├── corr_pp_P0_12350.npy
+│   ├── corr_pp_P2_12350.npy
+│   ├── VdV_mom_12350.npy
+│   └── VVV_mom_12350.npy
+├── conf12400
+│   ├── corr_pp_P0_12400.npy
+│   ├── corr_pp_P2_12400.npy
+│   ├── ope_combined_conf12400.h5
+│   ├── ops_mu0_nu1_dz24_conf12400.h5
+│   ├── ops_mu0_nu1_dz24_conf12400.npz
+│   ├── ops_mu3_nu0_dz24_conf12400.h5
+│   ├── ops_mu3_nu0_dz24_conf12400.npz
+│   ├── ops_mu3_nu1_dz24_conf12400.h5
+│   ├── ops_mu3_nu1_dz24_conf12400.npz
+│   ├── VdV_mom_12400.npy
+│   └── VVV_mom_12400.npy
+├── conf12450
+│   ├── corr_pp_P0_12450.npy
+│   ├── corr_pp_P2_12450.npy
+│   ├── VdV_mom_12450.npy
+│   └── VVV_mom_12450.npy
+├── conf12500
+│   ├── corr_pp_P0_12500.npy
+│   ├── corr_pp_P2_12500.npy
+│   ├── ope_combined_conf12500.h5
+│   ├── ops_mu0_nu1_dz24_conf12500.h5
+│   ├── ops_mu0_nu1_dz24_conf12500.npz
+│   ├── ops_mu3_nu0_dz24_conf12500.h5
+│   ├── ops_mu3_nu0_dz24_conf12500.npz
+│   ├── ops_mu3_nu1_dz24_conf12500.h5
+│   ├── ops_mu3_nu1_dz24_conf12500.npz
+│   ├── VdV_mom_12500.npy
+│   └── VVV_mom_12500.npy
+├── conf12550
+│   ├── corr_pp_P0_12550.npy
+│   ├── corr_pp_P2_12550.npy
+│   ├── VdV_mom_12550.npy
+│   └── VVV_mom_12550.npy
+├── conf12600
+│   ├── corr_pp_P0_12600.npy
+│   ├── corr_pp_P2_12600.npy
+│   ├── ope_combined_conf12600.h5
+│   ├── ops_mu0_nu1_dz24_conf12600.h5
+│   ├── ops_mu0_nu1_dz24_conf12600.npz
+│   ├── ops_mu3_nu0_dz24_conf12600.h5
+│   ├── ops_mu3_nu0_dz24_conf12600.npz
+│   ├── ops_mu3_nu1_dz24_conf12600.h5
+│   ├── ops_mu3_nu1_dz24_conf12600.npz
+│   ├── VdV_mom_12600.npy
+│   └── VVV_mom_12600.npy
+├── conf12650
+│   ├── corr_pp_P0_12650.npy
+│   ├── corr_pp_P2_12650.npy
+│   ├── VdV_mom_12650.npy
+│   └── VVV_mom_12650.npy
+├── conf12700
+│   ├── corr_pp_P0_12700.npy
+│   ├── corr_pp_P2_12700.npy
+│   ├── ope_combined_conf12700.h5
+│   ├── ops_mu0_nu1_dz24_conf12700.h5
+│   ├── ops_mu0_nu1_dz24_conf12700.npz
+│   ├── ops_mu3_nu0_dz24_conf12700.h5
+│   ├── ops_mu3_nu0_dz24_conf12700.npz
+│   ├── ops_mu3_nu1_dz24_conf12700.h5
+│   ├── ops_mu3_nu1_dz24_conf12700.npz
+│   ├── VdV_mom_12700.npy
+│   └── VVV_mom_12700.npy
+├── conf12750
+│   ├── corr_pp_P0_12750.npy
+│   ├── corr_pp_P2_12750.npy
+│   ├── VdV_mom_12750.npy
+│   └── VVV_mom_12750.npy
+├── conf12800
+│   ├── corr_pp_P0_12800.npy
+│   ├── corr_pp_P2_12800.npy
+│   ├── ope_combined_conf12800.h5
+│   ├── ops_mu0_nu1_dz24_conf12800.h5
+│   ├── ops_mu0_nu1_dz24_conf12800.npz
+│   ├── ops_mu3_nu0_dz24_conf12800.h5
+│   ├── ops_mu3_nu0_dz24_conf12800.npz
+│   ├── ops_mu3_nu1_dz24_conf12800.h5
+│   ├── ops_mu3_nu1_dz24_conf12800.npz
+│   ├── VdV_mom_12800.npy
+│   └── VVV_mom_12800.npy
+├── conf12850
+│   ├── corr_pp_P0_12850.npy
+│   ├── corr_pp_P2_12850.npy
+│   ├── VdV_mom_12850.npy
+│   └── VVV_mom_12850.npy
+├── conf12900
+│   ├── corr_pp_P0_12900.npy
+│   ├── corr_pp_P2_12900.npy
+│   ├── ope_combined_conf12900.h5
+│   ├── ops_mu0_nu1_dz24_conf12900.h5
+│   ├── ops_mu0_nu1_dz24_conf12900.npz
+│   ├── ops_mu3_nu0_dz24_conf12900.h5
+│   ├── ops_mu3_nu0_dz24_conf12900.npz
+│   ├── ops_mu3_nu1_dz24_conf12900.h5
+│   ├── ops_mu3_nu1_dz24_conf12900.npz
+│   ├── VdV_mom_12900.npy
+│   └── VVV_mom_12900.npy
+├── conf12950
+│   ├── corr_pp_P0_12950.npy
+│   ├── corr_pp_P2_12950.npy
+│   ├── VdV_mom_12950.npy
+│   └── VVV_mom_12950.npy
+├── conf13000
+│   ├── corr_pp_P0_13000.npy
+│   ├── corr_pp_P2_13000.npy
+│   ├── ope_combined_conf13000.h5
+│   ├── ops_mu0_nu1_dz24_conf13000.h5
+│   ├── ops_mu0_nu1_dz24_conf13000.npz
+│   ├── ops_mu3_nu0_dz24_conf13000.h5
+│   ├── ops_mu3_nu0_dz24_conf13000.npz
+│   ├── ops_mu3_nu1_dz24_conf13000.h5
+│   ├── ops_mu3_nu1_dz24_conf13000.npz
+│   ├── VdV_mom_13000.npy
+│   └── VVV_mom_13000.npy
+├── conf13050
+│   ├── corr_pp_P0_13050.npy
+│   ├── corr_pp_P2_13050.npy
+│   ├── VdV_mom_13050.npy
+│   └── VVV_mom_13050.npy
+├── conf13100
+│   ├── corr_pp_P0_13100.npy
+│   ├── corr_pp_P2_13100.npy
+│   ├── ope_combined_conf13100.h5
+│   ├── ops_mu0_nu1_dz24_conf13100.h5
+│   ├── ops_mu0_nu1_dz24_conf13100.npz
+│   ├── ops_mu3_nu0_dz24_conf13100.h5
+│   ├── ops_mu3_nu0_dz24_conf13100.npz
+│   ├── ops_mu3_nu1_dz24_conf13100.h5
+│   ├── ops_mu3_nu1_dz24_conf13100.npz
+│   ├── VdV_mom_13100.npy
+│   └── VVV_mom_13100.npy
+├── conf13150
+│   ├── corr_pp_P0_13150.npy
+│   ├── corr_pp_P2_13150.npy
+│   ├── VdV_mom_13150.npy
+│   └── VVV_mom_13150.npy
+├── conf13200
+│   ├── corr_pp_P0_13200.npy
+│   ├── corr_pp_P2_13200.npy
+│   ├── ope_combined_conf13200.h5
+│   ├── ops_mu0_nu1_dz24_conf13200.h5
+│   ├── ops_mu0_nu1_dz24_conf13200.npz
+│   ├── ops_mu3_nu0_dz24_conf13200.h5
+│   ├── ops_mu3_nu0_dz24_conf13200.npz
+│   ├── ops_mu3_nu1_dz24_conf13200.h5
+│   ├── ops_mu3_nu1_dz24_conf13200.npz
+│   ├── VdV_mom_13200.npy
+│   └── VVV_mom_13200.npy
+├── conf13250
+│   ├── corr_pp_P0_13250.npy
+│   ├── corr_pp_P2_13250.npy
+│   ├── VdV_mom_13250.npy
+│   └── VVV_mom_13250.npy
+├── conf13300
+│   ├── corr_pp_P0_13300.npy
+│   ├── corr_pp_P2_13300.npy
+│   ├── ope_combined_conf13300.h5
+│   ├── ops_mu0_nu1_dz24_conf13300.h5
+│   ├── ops_mu0_nu1_dz24_conf13300.npz
+│   ├── ops_mu3_nu0_dz24_conf13300.h5
+│   ├── ops_mu3_nu0_dz24_conf13300.npz
+│   ├── ops_mu3_nu1_dz24_conf13300.h5
+│   ├── ops_mu3_nu1_dz24_conf13300.npz
+│   ├── VdV_mom_13300.npy
+│   └── VVV_mom_13300.npy
+├── conf13350
+│   ├── corr_pp_P0_13350.npy
+│   ├── corr_pp_P2_13350.npy
+│   ├── VdV_mom_13350.npy
+│   └── VVV_mom_13350.npy
+├── conf13400
+│   ├── corr_pp_P0_13400.npy
+│   ├── corr_pp_P2_13400.npy
+│   ├── ope_combined_conf13400.h5
+│   ├── ops_mu0_nu1_dz24_conf13400.h5
+│   ├── ops_mu0_nu1_dz24_conf13400.npz
+│   ├── ops_mu3_nu0_dz24_conf13400.h5
+│   ├── ops_mu3_nu0_dz24_conf13400.npz
+│   ├── ops_mu3_nu1_dz24_conf13400.h5
+│   ├── ops_mu3_nu1_dz24_conf13400.npz
+│   ├── VdV_mom_13400.npy
+│   └── VVV_mom_13400.npy
+├── conf13450
+│   ├── corr_pp_P0_13450.npy
+│   ├── corr_pp_P2_13450.npy
+│   ├── VdV_mom_13450.npy
+│   └── VVV_mom_13450.npy
+├── conf13500
+│   ├── corr_pp_P0_13500.npy
+│   ├── corr_pp_P2_13500.npy
+│   ├── ope_combined_conf13500.h5
+│   ├── ops_mu0_nu1_dz24_conf13500.h5
+│   ├── ops_mu0_nu1_dz24_conf13500.npz
+│   ├── ops_mu3_nu0_dz24_conf13500.h5
+│   ├── ops_mu3_nu0_dz24_conf13500.npz
+│   ├── ops_mu3_nu1_dz24_conf13500.h5
+│   ├── ops_mu3_nu1_dz24_conf13500.npz
+│   ├── VdV_mom_13500.npy
+│   └── VVV_mom_13500.npy
+├── conf13550
+│   ├── corr_pp_P0_13550.npy
+│   ├── corr_pp_P2_13550.npy
+│   ├── VdV_mom_13550.npy
+│   └── VVV_mom_13550.npy
+├── conf13600
+│   ├── corr_pp_P0_13600.npy
+│   ├── corr_pp_P2_13600.npy
+│   ├── ope_combined_conf13600.h5
+│   ├── ops_mu0_nu1_dz24_conf13600.h5
+│   ├── ops_mu0_nu1_dz24_conf13600.npz
+│   ├── ops_mu3_nu0_dz24_conf13600.h5
+│   ├── ops_mu3_nu0_dz24_conf13600.npz
+│   ├── ops_mu3_nu1_dz24_conf13600.h5
+│   ├── ops_mu3_nu1_dz24_conf13600.npz
+│   ├── VdV_mom_13600.npy
+│   └── VVV_mom_13600.npy
+├── conf13650
+│   ├── corr_pp_P0_13650.npy
+│   ├── corr_pp_P2_13650.npy
+│   ├── VdV_mom_13650.npy
+│   └── VVV_mom_13650.npy
+├── conf13700
+│   ├── corr_pp_P0_13700.npy
+│   ├── corr_pp_P2_13700.npy
+│   ├── ope_combined_conf13700.h5
+│   ├── ops_mu0_nu1_dz24_conf13700.h5
+│   ├── ops_mu0_nu1_dz24_conf13700.npz
+│   ├── ops_mu3_nu0_dz24_conf13700.h5
+│   ├── ops_mu3_nu0_dz24_conf13700.npz
+│   ├── ops_mu3_nu1_dz24_conf13700.h5
+│   ├── ops_mu3_nu1_dz24_conf13700.npz
+│   ├── VdV_mom_13700.npy
+│   └── VVV_mom_13700.npy
+├── conf13750
+│   ├── corr_pp_P0_13750.npy
+│   ├── corr_pp_P2_13750.npy
+│   ├── VdV_mom_13750.npy
+│   └── VVV_mom_13750.npy
+├── conf13800
+│   ├── corr_pp_P0_13800.npy
+│   ├── corr_pp_P2_13800.npy
+│   ├── ope_combined_conf13800.h5
+│   ├── ops_mu0_nu1_dz24_conf13800.h5
+│   ├── ops_mu0_nu1_dz24_conf13800.npz
+│   ├── ops_mu3_nu0_dz24_conf13800.h5
+│   ├── ops_mu3_nu0_dz24_conf13800.npz
+│   ├── ops_mu3_nu1_dz24_conf13800.h5
+│   ├── ops_mu3_nu1_dz24_conf13800.npz
+│   ├── VdV_mom_13800.npy
+│   └── VVV_mom_13800.npy
+├── conf13850
+│   ├── corr_pp_P0_13850.npy
+│   ├── corr_pp_P2_13850.npy
+│   ├── VdV_mom_13850.npy
+│   └── VVV_mom_13850.npy
+├── conf13900
+│   ├── corr_pp_P0_13900.npy
+│   ├── corr_pp_P2_13900.npy
+│   ├── ope_combined_conf13900.h5
+│   ├── ops_mu0_nu1_dz24_conf13900.h5
+│   ├── ops_mu0_nu1_dz24_conf13900.npz
+│   ├── ops_mu3_nu0_dz24_conf13900.h5
+│   ├── ops_mu3_nu0_dz24_conf13900.npz
+│   ├── ops_mu3_nu1_dz24_conf13900.h5
+│   ├── ops_mu3_nu1_dz24_conf13900.npz
+│   ├── VdV_mom_13900.npy
+│   └── VVV_mom_13900.npy
+├── conf13950
+│   ├── corr_pp_P0_13950.npy
+│   ├── corr_pp_P2_13950.npy
+│   ├── VdV_mom_13950.npy
+│   └── VVV_mom_13950.npy
+├── conf14000
+│   ├── corr_pp_P0_14000.npy
+│   ├── corr_pp_P2_14000.npy
+│   ├── ope_combined_conf14000.h5
+│   ├── ops_mu0_nu1_dz24_conf14000.h5
+│   ├── ops_mu0_nu1_dz24_conf14000.npz
+│   ├── ops_mu3_nu0_dz24_conf14000.h5
+│   ├── ops_mu3_nu0_dz24_conf14000.npz
+│   ├── ops_mu3_nu1_dz24_conf14000.h5
+│   ├── ops_mu3_nu1_dz24_conf14000.npz
+│   ├── VdV_mom_14000.npy
+│   └── VVV_mom_14000.npy
+├── conf14050
+│   ├── corr_pp_P0_14050.npy
+│   ├── corr_pp_P2_14050.npy
+│   ├── VdV_mom_14050.npy
+│   └── VVV_mom_14050.npy
+├── conf14100
+│   ├── corr_pp_P0_14100.npy
+│   ├── corr_pp_P2_14100.npy
+│   ├── ope_combined_conf14100.h5
+│   ├── ops_mu0_nu1_dz24_conf14100.h5
+│   ├── ops_mu0_nu1_dz24_conf14100.npz
+│   ├── ops_mu3_nu0_dz24_conf14100.h5
+│   ├── ops_mu3_nu0_dz24_conf14100.npz
+│   ├── ops_mu3_nu1_dz24_conf14100.h5
+│   ├── ops_mu3_nu1_dz24_conf14100.npz
+│   ├── VdV_mom_14100.npy
+│   └── VVV_mom_14100.npy
+├── conf14150
+│   ├── corr_pp_P0_14150.npy
+│   ├── corr_pp_P2_14150.npy
+│   ├── VdV_mom_14150.npy
+│   └── VVV_mom_14150.npy
+├── conf14200
+│   ├── corr_pp_P0_14200.npy
+│   ├── corr_pp_P2_14200.npy
+│   ├── ope_combined_conf14200.h5
+│   ├── ops_mu0_nu1_dz24_conf14200.h5
+│   ├── ops_mu0_nu1_dz24_conf14200.npz
+│   ├── ops_mu3_nu0_dz24_conf14200.h5
+│   ├── ops_mu3_nu0_dz24_conf14200.npz
+│   ├── ops_mu3_nu1_dz24_conf14200.h5
+│   ├── ops_mu3_nu1_dz24_conf14200.npz
+│   ├── VdV_mom_14200.npy
+│   └── VVV_mom_14200.npy
+├── conf14250
+│   ├── corr_pp_P0_14250.npy
+│   ├── corr_pp_P2_14250.npy
+│   ├── VdV_mom_14250.npy
+│   └── VVV_mom_14250.npy
+├── conf14300
+│   ├── corr_pp_P0_14300.npy
+│   ├── corr_pp_P2_14300.npy
+│   ├── ope_combined_conf14300.h5
+│   ├── ops_mu0_nu1_dz24_conf14300.h5
+│   ├── ops_mu0_nu1_dz24_conf14300.npz
+│   ├── ops_mu3_nu0_dz24_conf14300.h5
+│   ├── ops_mu3_nu0_dz24_conf14300.npz
+│   ├── ops_mu3_nu1_dz24_conf14300.h5
+│   ├── ops_mu3_nu1_dz24_conf14300.npz
+│   ├── VdV_mom_14300.npy
+│   └── VVV_mom_14300.npy
+├── conf14350
+│   ├── corr_pp_P0_14350.npy
+│   ├── corr_pp_P2_14350.npy
+│   ├── VdV_mom_14350.npy
+│   └── VVV_mom_14350.npy
+├── conf14400
+│   ├── corr_pp_P0_14400.npy
+│   ├── corr_pp_P2_14400.npy
+│   ├── ope_combined_conf14400.h5
+│   ├── ops_mu0_nu1_dz24_conf14400.h5
+│   ├── ops_mu0_nu1_dz24_conf14400.npz
+│   ├── ops_mu3_nu0_dz24_conf14400.h5
+│   ├── ops_mu3_nu0_dz24_conf14400.npz
+│   ├── ops_mu3_nu1_dz24_conf14400.h5
+│   ├── ops_mu3_nu1_dz24_conf14400.npz
+│   ├── VdV_mom_14400.npy
+│   └── VVV_mom_14400.npy
+├── conf14450
+│   ├── corr_pp_P0_14450.npy
+│   ├── corr_pp_P2_14450.npy
+│   ├── VdV_mom_14450.npy
+│   └── VVV_mom_14450.npy
+├── conf14500
+│   ├── corr_pp_P0_14500.npy
+│   ├── corr_pp_P2_14500.npy
+│   ├── ope_combined_conf14500.h5
+│   ├── ops_mu0_nu1_dz24_conf14500.h5
+│   ├── ops_mu0_nu1_dz24_conf14500.npz
+│   ├── ops_mu3_nu0_dz24_conf14500.h5
+│   ├── ops_mu3_nu0_dz24_conf14500.npz
+│   ├── ops_mu3_nu1_dz24_conf14500.h5
+│   ├── ops_mu3_nu1_dz24_conf14500.npz
+│   ├── VdV_mom_14500.npy
+│   └── VVV_mom_14500.npy
+├── conf14550
+│   ├── corr_pp_P0_14550.npy
+│   ├── corr_pp_P2_14550.npy
+│   ├── VdV_mom_14550.npy
+│   └── VVV_mom_14550.npy
+├── conf14600
+│   ├── corr_pp_P0_14600.npy
+│   ├── corr_pp_P2_14600.npy
+│   ├── ope_combined_conf14600.h5
+│   ├── ops_mu0_nu1_dz24_conf14600.h5
+│   ├── ops_mu0_nu1_dz24_conf14600.npz
+│   ├── ops_mu3_nu0_dz24_conf14600.h5
+│   ├── ops_mu3_nu0_dz24_conf14600.npz
+│   ├── ops_mu3_nu1_dz24_conf14600.h5
+│   ├── ops_mu3_nu1_dz24_conf14600.npz
+│   ├── VdV_mom_14600.npy
+│   └── VVV_mom_14600.npy
+├── conf14650
+│   ├── corr_pp_P0_14650.npy
+│   ├── corr_pp_P2_14650.npy
+│   ├── VdV_mom_14650.npy
+│   └── VVV_mom_14650.npy
+├── conf14700
+│   ├── corr_pp_P0_14700.npy
+│   ├── corr_pp_P2_14700.npy
+│   ├── ope_combined_conf14700.h5
+│   ├── ops_mu0_nu1_dz24_conf14700.h5
+│   ├── ops_mu0_nu1_dz24_conf14700.npz
+│   ├── ops_mu3_nu0_dz24_conf14700.h5
+│   ├── ops_mu3_nu0_dz24_conf14700.npz
+│   ├── ops_mu3_nu1_dz24_conf14700.h5
+│   ├── ops_mu3_nu1_dz24_conf14700.npz
+│   ├── VdV_mom_14700.npy
+│   └── VVV_mom_14700.npy
+├── conf14750
+│   ├── corr_pp_P0_14750.npy
+│   ├── corr_pp_P2_14750.npy
+│   ├── VdV_mom_14750.npy
+│   └── VVV_mom_14750.npy
+├── conf14800
+│   ├── corr_pp_P0_14800.npy
+│   ├── corr_pp_P2_14800.npy
+│   ├── ope_combined_conf14800.h5
+│   ├── ops_mu0_nu1_dz24_conf14800.h5
+│   ├── ops_mu0_nu1_dz24_conf14800.npz
+│   ├── ops_mu3_nu0_dz24_conf14800.h5
+│   ├── ops_mu3_nu0_dz24_conf14800.npz
+│   ├── ops_mu3_nu1_dz24_conf14800.h5
+│   ├── ops_mu3_nu1_dz24_conf14800.npz
+│   ├── VdV_mom_14800.npy
+│   └── VVV_mom_14800.npy
+├── conf14850
+│   ├── corr_pp_P0_14850.npy
+│   ├── corr_pp_P2_14850.npy
+│   ├── VdV_mom_14850.npy
+│   └── VVV_mom_14850.npy
+├── conf14900
+│   ├── corr_pp_P0_14900.npy
+│   ├── corr_pp_P2_14900.npy
+│   ├── ope_combined_conf14900.h5
+│   ├── ops_mu0_nu1_dz24_conf14900.h5
+│   ├── ops_mu0_nu1_dz24_conf14900.npz
+│   ├── ops_mu3_nu0_dz24_conf14900.h5
+│   ├── ops_mu3_nu0_dz24_conf14900.npz
+│   ├── ops_mu3_nu1_dz24_conf14900.h5
+│   ├── ops_mu3_nu1_dz24_conf14900.npz
+│   ├── VdV_mom_14900.npy
+│   └── VVV_mom_14900.npy
+├── conf14950
+│   ├── corr_pp_P0_14950.npy
+│   ├── corr_pp_P2_14950.npy
+│   ├── VdV_mom_14950.npy
+│   └── VVV_mom_14950.npy
+├── conf15000
+│   ├── corr_pp_P0_15000.npy
+│   ├── corr_pp_P2_15000.npy
+│   ├── ope_combined_conf15000.h5
+│   ├── ops_mu0_nu1_dz24_conf15000.h5
+│   ├── ops_mu0_nu1_dz24_conf15000.npz
+│   ├── ops_mu3_nu0_dz24_conf15000.h5
+│   ├── ops_mu3_nu0_dz24_conf15000.npz
+│   ├── ops_mu3_nu1_dz24_conf15000.h5
+│   ├── ops_mu3_nu1_dz24_conf15000.npz
+│   ├── VdV_mom_15000.npy
+│   └── VVV_mom_15000.npy
+├── conf15050
+│   ├── corr_pp_P0_15050.npy
+│   ├── corr_pp_P2_15050.npy
+│   ├── VdV_mom_15050.npy
+│   └── VVV_mom_15050.npy
+├── conf15100
+│   ├── corr_pp_P0_15100.npy
+│   ├── corr_pp_P2_15100.npy
+│   ├── ope_combined_conf15100.h5
+│   ├── ops_mu0_nu1_dz24_conf15100.h5
+│   ├── ops_mu0_nu1_dz24_conf15100.npz
+│   ├── ops_mu3_nu0_dz24_conf15100.h5
+│   ├── ops_mu3_nu0_dz24_conf15100.npz
+│   ├── ops_mu3_nu1_dz24_conf15100.h5
+│   ├── ops_mu3_nu1_dz24_conf15100.npz
+│   ├── VdV_mom_15100.npy
+│   └── VVV_mom_15100.npy
+├── conf15150
+│   ├── corr_pp_P0_15150.npy
+│   ├── corr_pp_P2_15150.npy
+│   ├── VdV_mom_15150.npy
+│   └── VVV_mom_15150.npy
+├── conf15200
+│   ├── corr_pp_P0_15200.npy
+│   ├── corr_pp_P2_15200.npy
+│   ├── ope_combined_conf15200.h5
+│   ├── ops_mu0_nu1_dz24_conf15200.h5
+│   ├── ops_mu0_nu1_dz24_conf15200.npz
+│   ├── ops_mu3_nu0_dz24_conf15200.h5
+│   ├── ops_mu3_nu0_dz24_conf15200.npz
+│   ├── ops_mu3_nu1_dz24_conf15200.h5
+│   ├── ops_mu3_nu1_dz24_conf15200.npz
+│   ├── VdV_mom_15200.npy
+│   └── VVV_mom_15200.npy
+├── conf15250
+│   ├── corr_pp_P0_15250.npy
+│   ├── corr_pp_P2_15250.npy
+│   ├── VdV_mom_15250.npy
+│   └── VVV_mom_15250.npy
+├── conf15300
+│   ├── corr_pp_P0_15300.npy
+│   ├── corr_pp_P2_15300.npy
+│   ├── ope_combined_conf15300.h5
+│   ├── ops_mu0_nu1_dz24_conf15300.h5
+│   ├── ops_mu0_nu1_dz24_conf15300.npz
+│   ├── ops_mu3_nu0_dz24_conf15300.h5
+│   ├── ops_mu3_nu0_dz24_conf15300.npz
+│   ├── ops_mu3_nu1_dz24_conf15300.h5
+│   ├── ops_mu3_nu1_dz24_conf15300.npz
+│   ├── VdV_mom_15300.npy
+│   └── VVV_mom_15300.npy
+├── conf15350
+│   ├── corr_pp_P0_15350.npy
+│   ├── corr_pp_P2_15350.npy
+│   ├── VdV_mom_15350.npy
+│   └── VVV_mom_15350.npy
+├── conf15400
+│   ├── corr_pp_P0_15400.npy
+│   ├── corr_pp_P2_15400.npy
+│   ├── ope_combined_conf15400.h5
+│   ├── ops_mu0_nu1_dz24_conf15400.h5
+│   ├── ops_mu0_nu1_dz24_conf15400.npz
+│   ├── ops_mu3_nu0_dz24_conf15400.h5
+│   ├── ops_mu3_nu0_dz24_conf15400.npz
+│   ├── ops_mu3_nu1_dz24_conf15400.h5
+│   ├── ops_mu3_nu1_dz24_conf15400.npz
+│   ├── VdV_mom_15400.npy
+│   └── VVV_mom_15400.npy
+├── conf15450
+│   ├── corr_pp_P0_15450.npy
+│   ├── corr_pp_P2_15450.npy
+│   ├── VdV_mom_15450.npy
+│   └── VVV_mom_15450.npy
+├── conf15500
+│   ├── corr_pp_P0_15500.npy
+│   ├── corr_pp_P2_15500.npy
+│   ├── ope_combined_conf15500.h5
+│   ├── ops_mu0_nu1_dz24_conf15500.h5
+│   ├── ops_mu0_nu1_dz24_conf15500.npz
+│   ├── ops_mu3_nu0_dz24_conf15500.h5
+│   ├── ops_mu3_nu0_dz24_conf15500.npz
+│   ├── ops_mu3_nu1_dz24_conf15500.h5
+│   ├── ops_mu3_nu1_dz24_conf15500.npz
+│   ├── VdV_mom_15500.npy
+│   └── VVV_mom_15500.npy
+├── conf15550
+│   ├── corr_pp_P0_15550.npy
+│   ├── corr_pp_P2_15550.npy
+│   ├── VdV_mom_15550.npy
+│   └── VVV_mom_15550.npy
+├── conf15600
+│   ├── corr_pp_P0_15600.npy
+│   ├── corr_pp_P2_15600.npy
+│   ├── ope_combined_conf15600.h5
+│   ├── ops_mu0_nu1_dz24_conf15600.h5
+│   ├── ops_mu0_nu1_dz24_conf15600.npz
+│   ├── ops_mu3_nu0_dz24_conf15600.h5
+│   ├── ops_mu3_nu0_dz24_conf15600.npz
+│   ├── ops_mu3_nu1_dz24_conf15600.h5
+│   ├── ops_mu3_nu1_dz24_conf15600.npz
+│   ├── VdV_mom_15600.npy
+│   └── VVV_mom_15600.npy
+├── conf15650
+│   ├── corr_pp_P0_15650.npy
+│   ├── corr_pp_P2_15650.npy
+│   ├── VdV_mom_15650.npy
+│   └── VVV_mom_15650.npy
+├── conf15700
+│   ├── corr_pp_P0_15700.npy
+│   ├── corr_pp_P2_15700.npy
+│   ├── ope_combined_conf15700.h5
+│   ├── ops_mu0_nu1_dz24_conf15700.h5
+│   ├── ops_mu0_nu1_dz24_conf15700.npz
+│   ├── ops_mu3_nu0_dz24_conf15700.h5
+│   ├── ops_mu3_nu0_dz24_conf15700.npz
+│   ├── ops_mu3_nu1_dz24_conf15700.h5
+│   ├── ops_mu3_nu1_dz24_conf15700.npz
+│   ├── VdV_mom_15700.npy
+│   └── VVV_mom_15700.npy
+├── conf15750
+│   ├── corr_pp_P0_15750.npy
+│   ├── corr_pp_P2_15750.npy
+│   ├── VdV_mom_15750.npy
+│   └── VVV_mom_15750.npy
+├── conf15800
+│   ├── corr_pp_P0_15800.npy
+│   ├── corr_pp_P2_15800.npy
+│   ├── ope_combined_conf15800.h5
+│   ├── ops_mu0_nu1_dz24_conf15800.h5
+│   ├── ops_mu0_nu1_dz24_conf15800.npz
+│   ├── ops_mu3_nu0_dz24_conf15800.h5
+│   ├── ops_mu3_nu0_dz24_conf15800.npz
+│   ├── ops_mu3_nu1_dz24_conf15800.h5
+│   ├── ops_mu3_nu1_dz24_conf15800.npz
+│   ├── VdV_mom_15800.npy
+│   └── VVV_mom_15800.npy
+├── conf15850
+│   ├── corr_pp_P0_15850.npy
+│   ├── corr_pp_P2_15850.npy
+│   ├── VdV_mom_15850.npy
+│   └── VVV_mom_15850.npy
+├── conf15900
+│   ├── corr_pp_P0_15900.npy
+│   ├── corr_pp_P2_15900.npy
+│   ├── ope_combined_conf15900.h5
+│   ├── ops_mu0_nu1_dz24_conf15900.h5
+│   ├── ops_mu0_nu1_dz24_conf15900.npz
+│   ├── ops_mu3_nu0_dz24_conf15900.h5
+│   ├── ops_mu3_nu0_dz24_conf15900.npz
+│   ├── ops_mu3_nu1_dz24_conf15900.h5
+│   ├── ops_mu3_nu1_dz24_conf15900.npz
+│   ├── VdV_mom_15900.npy
+│   └── VVV_mom_15900.npy
+├── conf15950
+│   ├── corr_pp_P0_15950.npy
+│   ├── corr_pp_P2_15950.npy
+│   ├── VdV_mom_15950.npy
+│   └── VVV_mom_15950.npy
+├── conf16000
+│   ├── corr_pp_P0_16000.npy
+│   ├── corr_pp_P2_16000.npy
+│   ├── ope_combined_conf16000.h5
+│   ├── ops_mu0_nu1_dz24_conf16000.h5
+│   ├── ops_mu0_nu1_dz24_conf16000.npz
+│   ├── ops_mu3_nu0_dz24_conf16000.h5
+│   ├── ops_mu3_nu0_dz24_conf16000.npz
+│   ├── ops_mu3_nu1_dz24_conf16000.h5
+│   ├── ops_mu3_nu1_dz24_conf16000.npz
+│   ├── VdV_mom_16000.npy
+│   └── VVV_mom_16000.npy
+├── conf16050
+│   ├── corr_pp_P0_16050.npy
+│   ├── corr_pp_P2_16050.npy
+│   ├── VdV_mom_16050.npy
+│   └── VVV_mom_16050.npy
+├── conf16100
+│   ├── corr_pp_P0_16100.npy
+│   ├── corr_pp_P2_16100.npy
+│   ├── ope_combined_conf16100.h5
+│   ├── ops_mu0_nu1_dz24_conf16100.h5
+│   ├── ops_mu0_nu1_dz24_conf16100.npz
+│   ├── ops_mu3_nu0_dz24_conf16100.h5
+│   ├── ops_mu3_nu0_dz24_conf16100.npz
+│   ├── ops_mu3_nu1_dz24_conf16100.h5
+│   ├── ops_mu3_nu1_dz24_conf16100.npz
+│   ├── VdV_mom_16100.npy
+│   └── VVV_mom_16100.npy
+├── conf16150
+│   ├── corr_pp_P0_16150.npy
+│   ├── corr_pp_P2_16150.npy
+│   ├── VdV_mom_16150.npy
+│   └── VVV_mom_16150.npy
+├── conf16200
+│   ├── corr_pp_P0_16200.npy
+│   ├── corr_pp_P2_16200.npy
+│   ├── ope_combined_conf16200.h5
+│   ├── ops_mu0_nu1_dz24_conf16200.h5
+│   ├── ops_mu0_nu1_dz24_conf16200.npz
+│   ├── ops_mu3_nu0_dz24_conf16200.h5
+│   ├── ops_mu3_nu0_dz24_conf16200.npz
+│   ├── ops_mu3_nu1_dz24_conf16200.h5
+│   ├── ops_mu3_nu1_dz24_conf16200.npz
+│   ├── VdV_mom_16200.npy
+│   └── VVV_mom_16200.npy
+├── conf16250
+│   ├── corr_pp_P0_16250.npy
+│   ├── corr_pp_P2_16250.npy
+│   ├── VdV_mom_16250.npy
+│   └── VVV_mom_16250.npy
+├── conf16300
+│   ├── corr_pp_P0_16300.npy
+│   ├── corr_pp_P2_16300.npy
+│   ├── ope_combined_conf16300.h5
+│   ├── ops_mu0_nu1_dz24_conf16300.h5
+│   ├── ops_mu0_nu1_dz24_conf16300.npz
+│   ├── ops_mu3_nu0_dz24_conf16300.h5
+│   ├── ops_mu3_nu0_dz24_conf16300.npz
+│   ├── ops_mu3_nu1_dz24_conf16300.h5
+│   ├── ops_mu3_nu1_dz24_conf16300.npz
+│   ├── VdV_mom_16300.npy
+│   └── VVV_mom_16300.npy
+├── conf16350
+│   ├── corr_pp_P0_16350.npy
+│   ├── corr_pp_P2_16350.npy
+│   ├── VdV_mom_16350.npy
+│   └── VVV_mom_16350.npy
+├── conf16400
+│   ├── corr_pp_P0_16400.npy
+│   ├── corr_pp_P2_16400.npy
+│   ├── ope_combined_conf16400.h5
+│   ├── ops_mu0_nu1_dz24_conf16400.h5
+│   ├── ops_mu0_nu1_dz24_conf16400.npz
+│   ├── ops_mu3_nu0_dz24_conf16400.h5
+│   ├── ops_mu3_nu0_dz24_conf16400.npz
+│   ├── ops_mu3_nu1_dz24_conf16400.h5
+│   ├── ops_mu3_nu1_dz24_conf16400.npz
+│   ├── VdV_mom_16400.npy
+│   └── VVV_mom_16400.npy
+├── conf16450
+│   ├── corr_pp_P0_16450.npy
+│   ├── corr_pp_P2_16450.npy
+│   ├── VdV_mom_16450.npy
+│   └── VVV_mom_16450.npy
+├── conf16500
+│   ├── corr_pp_P0_16500.npy
+│   ├── corr_pp_P2_16500.npy
+│   ├── ope_combined_conf16500.h5
+│   ├── ops_mu0_nu1_dz24_conf16500.h5
+│   ├── ops_mu0_nu1_dz24_conf16500.npz
+│   ├── ops_mu3_nu0_dz24_conf16500.h5
+│   ├── ops_mu3_nu0_dz24_conf16500.npz
+│   ├── ops_mu3_nu1_dz24_conf16500.h5
+│   ├── ops_mu3_nu1_dz24_conf16500.npz
+│   ├── VdV_mom_16500.npy
+│   └── VVV_mom_16500.npy
+├── conf16550
+│   ├── corr_pp_P0_16550.npy
+│   ├── corr_pp_P2_16550.npy
+│   ├── VdV_mom_16550.npy
+│   └── VVV_mom_16550.npy
+├── conf16600
+│   ├── corr_pp_P0_16600.npy
+│   ├── corr_pp_P2_16600.npy
+│   ├── ope_combined_conf16600.h5
+│   ├── ops_mu0_nu1_dz24_conf16600.h5
+│   ├── ops_mu0_nu1_dz24_conf16600.npz
+│   ├── ops_mu3_nu0_dz24_conf16600.h5
+│   ├── ops_mu3_nu0_dz24_conf16600.npz
+│   ├── ops_mu3_nu1_dz24_conf16600.h5
+│   ├── ops_mu3_nu1_dz24_conf16600.npz
+│   ├── VdV_mom_16600.npy
+│   └── VVV_mom_16600.npy
+├── conf16650
+│   ├── corr_pp_P0_16650.npy
+│   ├── corr_pp_P2_16650.npy
+│   ├── VdV_mom_16650.npy
+│   └── VVV_mom_16650.npy
+├── conf16700
+│   ├── corr_pp_P0_16700.npy
+│   ├── corr_pp_P2_16700.npy
+│   ├── ope_combined_conf16700.h5
+│   ├── ops_mu0_nu1_dz24_conf16700.h5
+│   ├── ops_mu0_nu1_dz24_conf16700.npz
+│   ├── ops_mu3_nu0_dz24_conf16700.h5
+│   ├── ops_mu3_nu0_dz24_conf16700.npz
+│   ├── ops_mu3_nu1_dz24_conf16700.h5
+│   ├── ops_mu3_nu1_dz24_conf16700.npz
+│   ├── VdV_mom_16700.npy
+│   └── VVV_mom_16700.npy
+├── conf16750
+│   ├── corr_pp_P0_16750.npy
+│   ├── corr_pp_P2_16750.npy
+│   ├── VdV_mom_16750.npy
+│   └── VVV_mom_16750.npy
+├── conf16800
+│   ├── corr_pp_P0_16800.npy
+│   ├── corr_pp_P2_16800.npy
+│   ├── ope_combined_conf16800.h5
+│   ├── ops_mu0_nu1_dz24_conf16800.h5
+│   ├── ops_mu0_nu1_dz24_conf16800.npz
+│   ├── ops_mu3_nu0_dz24_conf16800.h5
+│   ├── ops_mu3_nu0_dz24_conf16800.npz
+│   ├── ops_mu3_nu1_dz24_conf16800.h5
+│   ├── ops_mu3_nu1_dz24_conf16800.npz
+│   ├── VdV_mom_16800.npy
+│   └── VVV_mom_16800.npy
+├── conf16850
+│   ├── corr_pp_P0_16850.npy
+│   ├── corr_pp_P2_16850.npy
+│   ├── VdV_mom_16850.npy
+│   └── VVV_mom_16850.npy
+├── conf16900
+│   ├── corr_pp_P0_16900.npy
+│   ├── corr_pp_P2_16900.npy
+│   ├── ope_combined_conf16900.h5
+│   ├── ops_mu0_nu1_dz24_conf16900.h5
+│   ├── ops_mu0_nu1_dz24_conf16900.npz
+│   ├── ops_mu3_nu0_dz24_conf16900.h5
+│   ├── ops_mu3_nu0_dz24_conf16900.npz
+│   ├── ops_mu3_nu1_dz24_conf16900.h5
+│   ├── ops_mu3_nu1_dz24_conf16900.npz
+│   ├── VdV_mom_16900.npy
+│   └── VVV_mom_16900.npy
+├── conf16950
+│   ├── corr_pp_P0_16950.npy
+│   ├── corr_pp_P2_16950.npy
+│   ├── VdV_mom_16950.npy
+│   └── VVV_mom_16950.npy
+├── conf17000
+│   ├── corr_pp_P0_17000.npy
+│   ├── corr_pp_P2_17000.npy
+│   ├── ope_combined_conf17000.h5
+│   ├── ops_mu0_nu1_dz24_conf17000.h5
+│   ├── ops_mu0_nu1_dz24_conf17000.npz
+│   ├── ops_mu3_nu0_dz24_conf17000.h5
+│   ├── ops_mu3_nu0_dz24_conf17000.npz
+│   ├── ops_mu3_nu1_dz24_conf17000.h5
+│   ├── ops_mu3_nu1_dz24_conf17000.npz
+│   ├── VdV_mom_17000.npy
+│   └── VVV_mom_17000.npy
+├── conf17050
+│   ├── corr_pp_P0_17050.npy
+│   ├── corr_pp_P2_17050.npy
+│   ├── VdV_mom_17050.npy
+│   └── VVV_mom_17050.npy
+├── conf17100
+│   ├── corr_pp_P0_17100.npy
+│   ├── corr_pp_P2_17100.npy
+│   ├── ope_combined_conf17100.h5
+│   ├── ops_mu0_nu1_dz24_conf17100.h5
+│   ├── ops_mu0_nu1_dz24_conf17100.npz
+│   ├── ops_mu3_nu0_dz24_conf17100.h5
+│   ├── ops_mu3_nu0_dz24_conf17100.npz
+│   ├── ops_mu3_nu1_dz24_conf17100.h5
+│   ├── ops_mu3_nu1_dz24_conf17100.npz
+│   ├── VdV_mom_17100.npy
+│   └── VVV_mom_17100.npy
+├── conf17150
+│   ├── corr_pp_P0_17150.npy
+│   ├── corr_pp_P2_17150.npy
+│   ├── VdV_mom_17150.npy
+│   └── VVV_mom_17150.npy
+├── conf17200
+│   ├── corr_pp_P0_17200.npy
+│   ├── corr_pp_P2_17200.npy
+│   ├── ope_combined_conf17200.h5
+│   ├── ops_mu0_nu1_dz24_conf17200.h5
+│   ├── ops_mu0_nu1_dz24_conf17200.npz
+│   ├── ops_mu3_nu0_dz24_conf17200.h5
+│   ├── ops_mu3_nu0_dz24_conf17200.npz
+│   ├── ops_mu3_nu1_dz24_conf17200.h5
+│   ├── ops_mu3_nu1_dz24_conf17200.npz
+│   ├── VdV_mom_17200.npy
+│   └── VVV_mom_17200.npy
+├── conf17250
+│   ├── corr_pp_P0_17250.npy
+│   ├── corr_pp_P2_17250.npy
+│   ├── VdV_mom_17250.npy
+│   └── VVV_mom_17250.npy
+├── conf17300
+│   ├── corr_pp_P0_17300.npy
+│   ├── corr_pp_P2_17300.npy
+│   ├── ope_combined_conf17300.h5
+│   ├── ops_mu0_nu1_dz24_conf17300.h5
+│   ├── ops_mu0_nu1_dz24_conf17300.npz
+│   ├── ops_mu3_nu0_dz24_conf17300.h5
+│   ├── ops_mu3_nu0_dz24_conf17300.npz
+│   ├── ops_mu3_nu1_dz24_conf17300.h5
+│   ├── ops_mu3_nu1_dz24_conf17300.npz
+│   ├── VdV_mom_17300.npy
+│   └── VVV_mom_17300.npy
+├── conf17350
+│   ├── corr_pp_P0_17350.npy
+│   ├── corr_pp_P2_17350.npy
+│   ├── VdV_mom_17350.npy
+│   └── VVV_mom_17350.npy
+├── conf17400
+│   ├── corr_pp_P0_17400.npy
+│   ├── corr_pp_P2_17400.npy
+│   ├── ope_combined_conf17400.h5
+│   ├── ops_mu0_nu1_dz24_conf17400.h5
+│   ├── ops_mu0_nu1_dz24_conf17400.npz
+│   ├── ops_mu3_nu0_dz24_conf17400.h5
+│   ├── ops_mu3_nu0_dz24_conf17400.npz
+│   ├── ops_mu3_nu1_dz24_conf17400.h5
+│   ├── ops_mu3_nu1_dz24_conf17400.npz
+│   ├── VdV_mom_17400.npy
+│   └── VVV_mom_17400.npy
+├── conf17450
+│   ├── corr_pp_P0_17450.npy
+│   ├── corr_pp_P2_17450.npy
+│   ├── VdV_mom_17450.npy
+│   └── VVV_mom_17450.npy
+├── conf17500
+│   ├── corr_pp_P0_17500.npy
+│   ├── corr_pp_P2_17500.npy
+│   ├── ope_combined_conf17500.h5
+│   ├── ops_mu0_nu1_dz24_conf17500.h5
+│   ├── ops_mu0_nu1_dz24_conf17500.npz
+│   ├── ops_mu3_nu0_dz24_conf17500.h5
+│   ├── ops_mu3_nu0_dz24_conf17500.npz
+│   ├── ops_mu3_nu1_dz24_conf17500.h5
+│   ├── ops_mu3_nu1_dz24_conf17500.npz
+│   ├── VdV_mom_17500.npy
+│   └── VVV_mom_17500.npy
+├── conf17550
+│   ├── corr_pp_P0_17550.npy
+│   ├── corr_pp_P2_17550.npy
+│   ├── VdV_mom_17550.npy
+│   └── VVV_mom_17550.npy
+├── conf17600
+│   ├── corr_pp_P0_17600.npy
+│   ├── corr_pp_P2_17600.npy
+│   ├── ope_combined_conf17600.h5
+│   ├── ops_mu0_nu1_dz24_conf17600.h5
+│   ├── ops_mu0_nu1_dz24_conf17600.npz
+│   ├── ops_mu3_nu0_dz24_conf17600.h5
+│   ├── ops_mu3_nu0_dz24_conf17600.npz
+│   ├── ops_mu3_nu1_dz24_conf17600.h5
+│   ├── ops_mu3_nu1_dz24_conf17600.npz
+│   ├── VdV_mom_17600.npy
+│   └── VVV_mom_17600.npy
+├── conf17650
+│   ├── corr_pp_P0_17650.npy
+│   ├── corr_pp_P2_17650.npy
+│   ├── VdV_mom_17650.npy
+│   └── VVV_mom_17650.npy
+├── conf17700
+│   ├── corr_pp_P0_17700.npy
+│   ├── corr_pp_P2_17700.npy
+│   ├── ope_combined_conf17700.h5
+│   ├── ops_mu0_nu1_dz24_conf17700.h5
+│   ├── ops_mu0_nu1_dz24_conf17700.npz
+│   ├── ops_mu3_nu0_dz24_conf17700.h5
+│   ├── ops_mu3_nu0_dz24_conf17700.npz
+│   ├── ops_mu3_nu1_dz24_conf17700.h5
+│   ├── ops_mu3_nu1_dz24_conf17700.npz
+│   ├── VdV_mom_17700.npy
+│   └── VVV_mom_17700.npy
+├── conf17750
+│   ├── corr_pp_P0_17750.npy
+│   ├── corr_pp_P2_17750.npy
+│   ├── VdV_mom_17750.npy
+│   └── VVV_mom_17750.npy
+├── conf17800
+│   ├── corr_pp_P0_17800.npy
+│   ├── corr_pp_P2_17800.npy
+│   ├── ope_combined_conf17800.h5
+│   ├── ops_mu0_nu1_dz24_conf17800.h5
+│   ├── ops_mu0_nu1_dz24_conf17800.npz
+│   ├── ops_mu3_nu0_dz24_conf17800.h5
+│   ├── ops_mu3_nu0_dz24_conf17800.npz
+│   ├── ops_mu3_nu1_dz24_conf17800.h5
+│   ├── ops_mu3_nu1_dz24_conf17800.npz
+│   ├── VdV_mom_17800.npy
+│   └── VVV_mom_17800.npy
+├── conf17850
+│   ├── corr_pp_P0_17850.npy
+│   ├── corr_pp_P2_17850.npy
+│   ├── VdV_mom_17850.npy
+│   └── VVV_mom_17850.npy
+├── conf17900
+│   ├── corr_pp_P0_17900.npy
+│   ├── corr_pp_P2_17900.npy
+│   ├── ope_combined_conf17900.h5
+│   ├── ops_mu0_nu1_dz24_conf17900.h5
+│   ├── ops_mu0_nu1_dz24_conf17900.npz
+│   ├── ops_mu3_nu0_dz24_conf17900.h5
+│   ├── ops_mu3_nu0_dz24_conf17900.npz
+│   ├── ops_mu3_nu1_dz24_conf17900.h5
+│   ├── ops_mu3_nu1_dz24_conf17900.npz
+│   ├── VdV_mom_17900.npy
+│   └── VVV_mom_17900.npy
+├── conf17950
+│   ├── corr_pp_P0_17950.npy
+│   ├── corr_pp_P2_17950.npy
+│   ├── VdV_mom_17950.npy
+│   └── VVV_mom_17950.npy
+├── conf18000
+│   ├── corr_pp_P0_18000.npy
+│   ├── corr_pp_P2_18000.npy
+│   ├── ope_combined_conf18000.h5
+│   ├── ops_mu0_nu1_dz24_conf18000.h5
+│   ├── ops_mu0_nu1_dz24_conf18000.npz
+│   ├── ops_mu3_nu0_dz24_conf18000.h5
+│   ├── ops_mu3_nu0_dz24_conf18000.npz
+│   ├── ops_mu3_nu1_dz24_conf18000.h5
+│   ├── ops_mu3_nu1_dz24_conf18000.npz
+│   ├── VdV_mom_18000.npy
+│   └── VVV_mom_18000.npy
+├── conf18050
+│   ├── corr_pp_P0_18050.npy
+│   ├── corr_pp_P2_18050.npy
+│   ├── VdV_mom_18050.npy
+│   └── VVV_mom_18050.npy
+├── conf18100
+│   ├── corr_pp_P0_18100.npy
+│   ├── corr_pp_P2_18100.npy
+│   ├── ope_combined_conf18100.h5
+│   ├── ops_mu0_nu1_dz24_conf18100.h5
+│   ├── ops_mu0_nu1_dz24_conf18100.npz
+│   ├── ops_mu3_nu0_dz24_conf18100.h5
+│   ├── ops_mu3_nu0_dz24_conf18100.npz
+│   ├── ops_mu3_nu1_dz24_conf18100.h5
+│   ├── ops_mu3_nu1_dz24_conf18100.npz
+│   ├── VdV_mom_18100.npy
+│   └── VVV_mom_18100.npy
+├── conf18150
+│   ├── corr_pp_P0_18150.npy
+│   ├── corr_pp_P2_18150.npy
+│   ├── VdV_mom_18150.npy
+│   └── VVV_mom_18150.npy
+├── conf18200
+│   ├── corr_pp_P0_18200.npy
+│   ├── corr_pp_P2_18200.npy
+│   ├── ope_combined_conf18200.h5
+│   ├── ops_mu0_nu1_dz24_conf18200.h5
+│   ├── ops_mu0_nu1_dz24_conf18200.npz
+│   ├── ops_mu3_nu0_dz24_conf18200.h5
+│   ├── ops_mu3_nu0_dz24_conf18200.npz
+│   ├── ops_mu3_nu1_dz24_conf18200.h5
+│   ├── ops_mu3_nu1_dz24_conf18200.npz
+│   ├── VdV_mom_18200.npy
+│   └── VVV_mom_18200.npy
+├── conf18250
+│   ├── corr_pp_P0_18250.npy
+│   ├── corr_pp_P2_18250.npy
+│   ├── VdV_mom_18250.npy
+│   └── VVV_mom_18250.npy
+├── conf18300
+│   ├── corr_pp_P0_18300.npy
+│   ├── corr_pp_P2_18300.npy
+│   ├── ope_combined_conf18300.h5
+│   ├── ops_mu0_nu1_dz24_conf18300.h5
+│   ├── ops_mu0_nu1_dz24_conf18300.npz
+│   ├── ops_mu3_nu0_dz24_conf18300.h5
+│   ├── ops_mu3_nu0_dz24_conf18300.npz
+│   ├── ops_mu3_nu1_dz24_conf18300.h5
+│   ├── ops_mu3_nu1_dz24_conf18300.npz
+│   ├── VdV_mom_18300.npy
+│   └── VVV_mom_18300.npy
+├── conf18350
+│   ├── corr_pp_P0_18350.npy
+│   ├── corr_pp_P2_18350.npy
+│   ├── VdV_mom_18350.npy
+│   └── VVV_mom_18350.npy
+├── conf18400
+│   ├── corr_pp_P0_18400.npy
+│   ├── corr_pp_P2_18400.npy
+│   ├── ope_combined_conf18400.h5
+│   ├── ops_mu0_nu1_dz24_conf18400.h5
+│   ├── ops_mu0_nu1_dz24_conf18400.npz
+│   ├── ops_mu3_nu0_dz24_conf18400.h5
+│   ├── ops_mu3_nu0_dz24_conf18400.npz
+│   ├── ops_mu3_nu1_dz24_conf18400.h5
+│   ├── ops_mu3_nu1_dz24_conf18400.npz
+│   ├── VdV_mom_18400.npy
+│   └── VVV_mom_18400.npy
+├── conf18450
+│   ├── corr_pp_P0_18450.npy
+│   ├── corr_pp_P2_18450.npy
+│   ├── VdV_mom_18450.npy
+│   └── VVV_mom_18450.npy
+├── conf18500
+│   ├── corr_pp_P0_18500.npy
+│   ├── corr_pp_P2_18500.npy
+│   ├── ope_combined_conf18500.h5
+│   ├── ops_mu0_nu1_dz24_conf18500.h5
+│   ├── ops_mu0_nu1_dz24_conf18500.npz
+│   ├── ops_mu3_nu0_dz24_conf18500.h5
+│   ├── ops_mu3_nu0_dz24_conf18500.npz
+│   ├── ops_mu3_nu1_dz24_conf18500.h5
+│   ├── ops_mu3_nu1_dz24_conf18500.npz
+│   ├── VdV_mom_18500.npy
+│   └── VVV_mom_18500.npy
+├── conf18550
+│   ├── corr_pp_P0_18550.npy
+│   ├── corr_pp_P2_18550.npy
+│   ├── VdV_mom_18550.npy
+│   └── VVV_mom_18550.npy
+├── conf18600
+│   ├── corr_pp_P0_18600.npy
+│   ├── corr_pp_P2_18600.npy
+│   ├── ope_combined_conf18600.h5
+│   ├── ops_mu0_nu1_dz24_conf18600.h5
+│   ├── ops_mu0_nu1_dz24_conf18600.npz
+│   ├── ops_mu3_nu0_dz24_conf18600.h5
+│   ├── ops_mu3_nu0_dz24_conf18600.npz
+│   ├── ops_mu3_nu1_dz24_conf18600.h5
+│   ├── ops_mu3_nu1_dz24_conf18600.npz
+│   ├── VdV_mom_18600.npy
+│   └── VVV_mom_18600.npy
+├── conf18650
+│   ├── corr_pp_P0_18650.npy
+│   ├── corr_pp_P2_18650.npy
+│   ├── VdV_mom_18650.npy
+│   └── VVV_mom_18650.npy
+├── conf18700
+│   ├── corr_pp_P0_18700.npy
+│   ├── corr_pp_P2_18700.npy
+│   ├── ope_combined_conf18700.h5
+│   ├── ops_mu0_nu1_dz24_conf18700.h5
+│   ├── ops_mu0_nu1_dz24_conf18700.npz
+│   ├── ops_mu3_nu0_dz24_conf18700.h5
+│   ├── ops_mu3_nu0_dz24_conf18700.npz
+│   ├── ops_mu3_nu1_dz24_conf18700.h5
+│   ├── ops_mu3_nu1_dz24_conf18700.npz
+│   ├── VdV_mom_18700.npy
+│   └── VVV_mom_18700.npy
+├── conf18750
+│   ├── corr_pp_P0_18750.npy
+│   ├── corr_pp_P2_18750.npy
+│   ├── VdV_mom_18750.npy
+│   └── VVV_mom_18750.npy
+├── conf18800
+│   ├── corr_pp_P0_18800.npy
+│   ├── corr_pp_P2_18800.npy
+│   ├── ope_combined_conf18800.h5
+│   ├── ops_mu0_nu1_dz24_conf18800.h5
+│   ├── ops_mu0_nu1_dz24_conf18800.npz
+│   ├── ops_mu3_nu0_dz24_conf18800.h5
+│   ├── ops_mu3_nu0_dz24_conf18800.npz
+│   ├── ops_mu3_nu1_dz24_conf18800.h5
+│   ├── ops_mu3_nu1_dz24_conf18800.npz
+│   ├── VdV_mom_18800.npy
+│   └── VVV_mom_18800.npy
+├── conf18850
+│   ├── corr_pp_P0_18850.npy
+│   ├── corr_pp_P2_18850.npy
+│   ├── VdV_mom_18850.npy
+│   └── VVV_mom_18850.npy
+├── conf18900
+│   ├── corr_pp_P0_18900.npy
+│   ├── corr_pp_P2_18900.npy
+│   ├── ope_combined_conf18900.h5
+│   ├── ops_mu0_nu1_dz24_conf18900.h5
+│   ├── ops_mu0_nu1_dz24_conf18900.npz
+│   ├── ops_mu3_nu0_dz24_conf18900.h5
+│   ├── ops_mu3_nu0_dz24_conf18900.npz
+│   ├── ops_mu3_nu1_dz24_conf18900.h5
+│   ├── ops_mu3_nu1_dz24_conf18900.npz
+│   ├── VdV_mom_18900.npy
+│   └── VVV_mom_18900.npy
+├── conf18950
+│   ├── corr_pp_P0_18950.npy
+│   ├── corr_pp_P2_18950.npy
+│   ├── VdV_mom_18950.npy
+│   └── VVV_mom_18950.npy
+├── conf19000
+│   ├── corr_pp_P0_19000.npy
+│   ├── corr_pp_P2_19000.npy
+│   ├── ope_combined_conf19000.h5
+│   ├── ops_mu0_nu1_dz24_conf19000.h5
+│   ├── ops_mu0_nu1_dz24_conf19000.npz
+│   ├── ops_mu3_nu0_dz24_conf19000.h5
+│   ├── ops_mu3_nu0_dz24_conf19000.npz
+│   ├── ops_mu3_nu1_dz24_conf19000.h5
+│   ├── ops_mu3_nu1_dz24_conf19000.npz
+│   ├── VdV_mom_19000.npy
+│   └── VVV_mom_19000.npy
+├── conf19050
+│   ├── corr_pp_P0_19050.npy
+│   ├── corr_pp_P2_19050.npy
+│   ├── VdV_mom_19050.npy
+│   └── VVV_mom_19050.npy
+├── conf19100
+│   ├── corr_pp_P0_19100.npy
+│   ├── corr_pp_P2_19100.npy
+│   ├── ope_combined_conf19100.h5
+│   ├── ops_mu0_nu1_dz24_conf19100.h5
+│   ├── ops_mu0_nu1_dz24_conf19100.npz
+│   ├── ops_mu3_nu0_dz24_conf19100.h5
+│   ├── ops_mu3_nu0_dz24_conf19100.npz
+│   ├── ops_mu3_nu1_dz24_conf19100.h5
+│   ├── ops_mu3_nu1_dz24_conf19100.npz
+│   ├── VdV_mom_19100.npy
+│   └── VVV_mom_19100.npy
+├── conf19150
+│   ├── corr_pp_P0_19150.npy
+│   ├── corr_pp_P2_19150.npy
+│   ├── VdV_mom_19150.npy
+│   └── VVV_mom_19150.npy
+├── conf19200
+│   ├── corr_pp_P0_19200.npy
+│   ├── corr_pp_P2_19200.npy
+│   ├── ope_combined_conf19200.h5
+│   ├── ops_mu0_nu1_dz24_conf19200.h5
+│   ├── ops_mu0_nu1_dz24_conf19200.npz
+│   ├── ops_mu3_nu0_dz24_conf19200.h5
+│   ├── ops_mu3_nu0_dz24_conf19200.npz
+│   ├── ops_mu3_nu1_dz24_conf19200.h5
+│   ├── ops_mu3_nu1_dz24_conf19200.npz
+│   ├── VdV_mom_19200.npy
+│   └── VVV_mom_19200.npy
+├── conf19250
+│   ├── corr_pp_P0_19250.npy
+│   ├── corr_pp_P2_19250.npy
+│   ├── VdV_mom_19250.npy
+│   └── VVV_mom_19250.npy
+├── conf19300
+│   ├── corr_pp_P0_19300.npy
+│   ├── corr_pp_P2_19300.npy
+│   ├── ope_combined_conf19300.h5
+│   ├── ops_mu0_nu1_dz24_conf19300.h5
+│   ├── ops_mu0_nu1_dz24_conf19300.npz
+│   ├── ops_mu3_nu0_dz24_conf19300.h5
+│   ├── ops_mu3_nu0_dz24_conf19300.npz
+│   ├── ops_mu3_nu1_dz24_conf19300.h5
+│   ├── ops_mu3_nu1_dz24_conf19300.npz
+│   ├── VdV_mom_19300.npy
+│   └── VVV_mom_19300.npy
+├── conf19350
+│   ├── corr_pp_P0_19350.npy
+│   ├── corr_pp_P2_19350.npy
+│   ├── VdV_mom_19350.npy
+│   └── VVV_mom_19350.npy
+├── conf19400
+│   ├── corr_pp_P0_19400.npy
+│   ├── corr_pp_P2_19400.npy
+│   ├── ope_combined_conf19400.h5
+│   ├── ops_mu0_nu1_dz24_conf19400.h5
+│   ├── ops_mu0_nu1_dz24_conf19400.npz
+│   ├── ops_mu3_nu0_dz24_conf19400.h5
+│   ├── ops_mu3_nu0_dz24_conf19400.npz
+│   ├── ops_mu3_nu1_dz24_conf19400.h5
+│   ├── ops_mu3_nu1_dz24_conf19400.npz
+│   ├── VdV_mom_19400.npy
+│   └── VVV_mom_19400.npy
+├── conf19450
+│   ├── corr_pp_P0_19450.npy
+│   ├── corr_pp_P2_19450.npy
+│   ├── VdV_mom_19450.npy
+│   └── VVV_mom_19450.npy
+├── conf19500
+│   ├── corr_pp_P0_19500.npy
+│   ├── corr_pp_P2_19500.npy
+│   ├── ope_combined_conf19500.h5
+│   ├── ops_mu0_nu1_dz24_conf19500.h5
+│   ├── ops_mu0_nu1_dz24_conf19500.npz
+│   ├── ops_mu3_nu0_dz24_conf19500.h5
+│   ├── ops_mu3_nu0_dz24_conf19500.npz
+│   ├── ops_mu3_nu1_dz24_conf19500.h5
+│   ├── ops_mu3_nu1_dz24_conf19500.npz
+│   ├── VdV_mom_19500.npy
+│   └── VVV_mom_19500.npy
+├── conf19550
+│   ├── corr_pp_P0_19550.npy
+│   ├── corr_pp_P2_19550.npy
+│   ├── VdV_mom_19550.npy
+│   └── VVV_mom_19550.npy
+├── conf19600
+│   ├── corr_pp_P0_19600.npy
+│   ├── corr_pp_P2_19600.npy
+│   ├── ope_combined_conf19600.h5
+│   ├── ops_mu0_nu1_dz24_conf19600.h5
+│   ├── ops_mu0_nu1_dz24_conf19600.npz
+│   ├── ops_mu3_nu0_dz24_conf19600.h5
+│   ├── ops_mu3_nu0_dz24_conf19600.npz
+│   ├── ops_mu3_nu1_dz24_conf19600.h5
+│   ├── ops_mu3_nu1_dz24_conf19600.npz
+│   ├── VdV_mom_19600.npy
+│   └── VVV_mom_19600.npy
+├── conf19650
+│   ├── corr_pp_P0_19650.npy
+│   ├── corr_pp_P2_19650.npy
+│   ├── VdV_mom_19650.npy
+│   └── VVV_mom_19650.npy
+├── conf19700
+│   ├── corr_pp_P0_19700.npy
+│   ├── corr_pp_P2_19700.npy
+│   ├── ope_combined_conf19700.h5
+│   ├── ops_mu0_nu1_dz24_conf19700.h5
+│   ├── ops_mu0_nu1_dz24_conf19700.npz
+│   ├── ops_mu3_nu0_dz24_conf19700.h5
+│   ├── ops_mu3_nu0_dz24_conf19700.npz
+│   ├── ops_mu3_nu1_dz24_conf19700.h5
+│   ├── ops_mu3_nu1_dz24_conf19700.npz
+│   ├── VdV_mom_19700.npy
+│   └── VVV_mom_19700.npy
+├── conf19750
+│   ├── corr_pp_P0_19750.npy
+│   ├── corr_pp_P2_19750.npy
+│   ├── VdV_mom_19750.npy
+│   └── VVV_mom_19750.npy
+├── conf19800
+│   ├── corr_pp_P0_19800.npy
+│   ├── corr_pp_P2_19800.npy
+│   ├── ope_combined_conf19800.h5
+│   ├── ops_mu0_nu1_dz24_conf19800.h5
+│   ├── ops_mu0_nu1_dz24_conf19800.npz
+│   ├── ops_mu3_nu0_dz24_conf19800.h5
+│   ├── ops_mu3_nu0_dz24_conf19800.npz
+│   ├── ops_mu3_nu1_dz24_conf19800.h5
+│   ├── ops_mu3_nu1_dz24_conf19800.npz
+│   ├── VdV_mom_19800.npy
+│   └── VVV_mom_19800.npy
+├── conf19850
+│   ├── corr_pp_P0_19850.npy
+│   ├── corr_pp_P2_19850.npy
+│   ├── VdV_mom_19850.npy
+│   └── VVV_mom_19850.npy
+├── conf19900
+│   ├── corr_pp_P0_19900.npy
+│   ├── corr_pp_P2_19900.npy
+│   ├── ope_combined_conf19900.h5
+│   ├── ops_mu0_nu1_dz24_conf19900.h5
+│   ├── ops_mu0_nu1_dz24_conf19900.npz
+│   ├── ops_mu3_nu0_dz24_conf19900.h5
+│   ├── ops_mu3_nu0_dz24_conf19900.npz
+│   ├── ops_mu3_nu1_dz24_conf19900.h5
+│   ├── ops_mu3_nu1_dz24_conf19900.npz
+│   ├── VdV_mom_19900.npy
+│   └── VVV_mom_19900.npy
+├── conf19950
+│   ├── corr_pp_P0_19950.npy
+│   ├── corr_pp_P2_19950.npy
+│   ├── VdV_mom_19950.npy
+│   └── VVV_mom_19950.npy
+├── conf20000
+│   ├── corr_pp_P0_20000.npy
+│   ├── corr_pp_P2_20000.npy
+│   ├── ope_combined_conf20000.h5
+│   ├── ops_mu0_nu1_dz24_conf20000.h5
+│   ├── ops_mu0_nu1_dz24_conf20000.npz
+│   ├── ops_mu3_nu0_dz24_conf20000.h5
+│   ├── ops_mu3_nu0_dz24_conf20000.npz
+│   ├── ops_mu3_nu1_dz24_conf20000.h5
+│   ├── ops_mu3_nu1_dz24_conf20000.npz
+│   ├── VdV_mom_20000.npy
+│   └── VVV_mom_20000.npy
+├── conf20050
+│   ├── corr_pp_P0_20050.npy
+│   ├── corr_pp_P2_20050.npy
+│   ├── VdV_mom_20050.npy
+│   └── VVV_mom_20050.npy
+├── conf20100
+│   ├── corr_pp_P0_20100.npy
+│   ├── corr_pp_P2_20100.npy
+│   ├── ope_combined_conf20100.h5
+│   ├── ops_mu0_nu1_dz24_conf20100.h5
+│   ├── ops_mu0_nu1_dz24_conf20100.npz
+│   ├── ops_mu3_nu0_dz24_conf20100.h5
+│   ├── ops_mu3_nu0_dz24_conf20100.npz
+│   ├── ops_mu3_nu1_dz24_conf20100.h5
+│   ├── ops_mu3_nu1_dz24_conf20100.npz
+│   ├── VdV_mom_20100.npy
+│   └── VVV_mom_20100.npy
+├── conf20150
+│   ├── corr_pp_P0_20150.npy
+│   ├── corr_pp_P2_20150.npy
+│   ├── VdV_mom_20150.npy
+│   └── VVV_mom_20150.npy
+├── conf20200
+│   ├── corr_pp_P0_20200.npy
+│   ├── corr_pp_P2_20200.npy
+│   ├── ope_combined_conf20200.h5
+│   ├── ops_mu0_nu1_dz24_conf20200.h5
+│   ├── ops_mu0_nu1_dz24_conf20200.npz
+│   ├── ops_mu3_nu0_dz24_conf20200.h5
+│   ├── ops_mu3_nu0_dz24_conf20200.npz
+│   ├── ops_mu3_nu1_dz24_conf20200.h5
+│   ├── ops_mu3_nu1_dz24_conf20200.npz
+│   ├── VdV_mom_20200.npy
+│   └── VVV_mom_20200.npy
+├── conf20250
+│   ├── corr_pp_P0_20250.npy
+│   ├── corr_pp_P2_20250.npy
+│   ├── VdV_mom_20250.npy
+│   └── VVV_mom_20250.npy
+├── conf20300
+│   ├── corr_pp_P0_20300.npy
+│   ├── corr_pp_P2_20300.npy
+│   ├── ope_combined_conf20300.h5
+│   ├── ops_mu0_nu1_dz24_conf20300.h5
+│   ├── ops_mu0_nu1_dz24_conf20300.npz
+│   ├── ops_mu3_nu0_dz24_conf20300.h5
+│   ├── ops_mu3_nu0_dz24_conf20300.npz
+│   ├── ops_mu3_nu1_dz24_conf20300.h5
+│   ├── ops_mu3_nu1_dz24_conf20300.npz
+│   ├── VdV_mom_20300.npy
+│   └── VVV_mom_20300.npy
+├── conf20350
+│   ├── corr_pp_P0_20350.npy
+│   ├── corr_pp_P2_20350.npy
+│   ├── VdV_mom_20350.npy
+│   └── VVV_mom_20350.npy
+├── conf20400
+│   ├── corr_pp_P0_20400.npy
+│   ├── corr_pp_P2_20400.npy
+│   ├── ope_combined_conf20400.h5
+│   ├── ops_mu0_nu1_dz24_conf20400.h5
+│   ├── ops_mu0_nu1_dz24_conf20400.npz
+│   ├── ops_mu3_nu0_dz24_conf20400.h5
+│   ├── ops_mu3_nu0_dz24_conf20400.npz
+│   ├── ops_mu3_nu1_dz24_conf20400.h5
+│   ├── ops_mu3_nu1_dz24_conf20400.npz
+│   ├── VdV_mom_20400.npy
+│   └── VVV_mom_20400.npy
+├── conf20450
+│   ├── corr_pp_P0_20450.npy
+│   ├── corr_pp_P2_20450.npy
+│   ├── VdV_mom_20450.npy
+│   └── VVV_mom_20450.npy
+├── conf20500
+│   ├── corr_pp_P0_20500.npy
+│   ├── corr_pp_P2_20500.npy
+│   ├── ope_combined_conf20500.h5
+│   ├── ops_mu0_nu1_dz24_conf20500.h5
+│   ├── ops_mu0_nu1_dz24_conf20500.npz
+│   ├── ops_mu3_nu0_dz24_conf20500.h5
+│   ├── ops_mu3_nu0_dz24_conf20500.npz
+│   ├── ops_mu3_nu1_dz24_conf20500.h5
+│   ├── ops_mu3_nu1_dz24_conf20500.npz
+│   ├── VdV_mom_20500.npy
+│   └── VVV_mom_20500.npy
+├── conf20550
+│   ├── corr_pp_P0_20550.npy
+│   ├── corr_pp_P2_20550.npy
+│   ├── VdV_mom_20550.npy
+│   └── VVV_mom_20550.npy
+├── conf20600
+│   ├── corr_pp_P0_20600.npy
+│   ├── corr_pp_P2_20600.npy
+│   ├── ope_combined_conf20600.h5
+│   ├── ops_mu0_nu1_dz24_conf20600.h5
+│   ├── ops_mu0_nu1_dz24_conf20600.npz
+│   ├── ops_mu3_nu0_dz24_conf20600.h5
+│   ├── ops_mu3_nu0_dz24_conf20600.npz
+│   ├── ops_mu3_nu1_dz24_conf20600.h5
+│   ├── ops_mu3_nu1_dz24_conf20600.npz
+│   ├── VdV_mom_20600.npy
+│   └── VVV_mom_20600.npy
+├── conf20650
+│   ├── corr_pp_P0_20650.npy
+│   ├── corr_pp_P2_20650.npy
+│   ├── VdV_mom_20650.npy
+│   └── VVV_mom_20650.npy
+├── conf20700
+│   ├── corr_pp_P0_20700.npy
+│   ├── corr_pp_P2_20700.npy
+│   ├── ope_combined_conf20700.h5
+│   ├── ops_mu0_nu1_dz24_conf20700.h5
+│   ├── ops_mu0_nu1_dz24_conf20700.npz
+│   ├── ops_mu3_nu0_dz24_conf20700.h5
+│   ├── ops_mu3_nu0_dz24_conf20700.npz
+│   ├── ops_mu3_nu1_dz24_conf20700.h5
+│   ├── ops_mu3_nu1_dz24_conf20700.npz
+│   ├── VdV_mom_20700.npy
+│   └── VVV_mom_20700.npy
+├── conf20750
+│   ├── corr_pp_P0_20750.npy
+│   ├── corr_pp_P2_20750.npy
+│   ├── VdV_mom_20750.npy
+│   └── VVV_mom_20750.npy
+├── conf20800
+│   ├── corr_pp_P0_20800.npy
+│   ├── corr_pp_P2_20800.npy
+│   ├── ope_combined_conf20800.h5
+│   ├── ops_mu0_nu1_dz24_conf20800.h5
+│   ├── ops_mu0_nu1_dz24_conf20800.npz
+│   ├── ops_mu3_nu0_dz24_conf20800.h5
+│   ├── ops_mu3_nu0_dz24_conf20800.npz
+│   ├── ops_mu3_nu1_dz24_conf20800.h5
+│   ├── ops_mu3_nu1_dz24_conf20800.npz
+│   ├── VdV_mom_20800.npy
+│   └── VVV_mom_20800.npy
+├── conf20850
+│   ├── corr_pp_P0_20850.npy
+│   ├── corr_pp_P2_20850.npy
+│   ├── VdV_mom_20850.npy
+│   └── VVV_mom_20850.npy
+├── conf20900
+│   ├── corr_pp_P0_20900.npy
+│   ├── corr_pp_P2_20900.npy
+│   ├── ope_combined_conf20900.h5
+│   ├── ops_mu0_nu1_dz24_conf20900.h5
+│   ├── ops_mu0_nu1_dz24_conf20900.npz
+│   ├── ops_mu3_nu0_dz24_conf20900.h5
+│   ├── ops_mu3_nu0_dz24_conf20900.npz
+│   ├── ops_mu3_nu1_dz24_conf20900.h5
+│   ├── ops_mu3_nu1_dz24_conf20900.npz
+│   ├── VdV_mom_20900.npy
+│   └── VVV_mom_20900.npy
+├── conf20950
+│   ├── corr_pp_P0_20950.npy
+│   ├── corr_pp_P2_20950.npy
+│   ├── VdV_mom_20950.npy
+│   └── VVV_mom_20950.npy
+├── conf21000
+│   ├── corr_pp_P0_21000.npy
+│   ├── corr_pp_P2_21000.npy
+│   ├── ope_combined_conf21000.h5
+│   ├── ops_mu0_nu1_dz24_conf21000.h5
+│   ├── ops_mu0_nu1_dz24_conf21000.npz
+│   ├── ops_mu3_nu0_dz24_conf21000.h5
+│   ├── ops_mu3_nu0_dz24_conf21000.npz
+│   ├── ops_mu3_nu1_dz24_conf21000.h5
+│   ├── ops_mu3_nu1_dz24_conf21000.npz
+│   ├── VdV_mom_21000.npy
+│   └── VVV_mom_21000.npy
+├── conf21050
+│   ├── corr_pp_P0_21050.npy
+│   ├── corr_pp_P2_21050.npy
+│   ├── VdV_mom_21050.npy
+│   └── VVV_mom_21050.npy
+├── conf21100
+│   ├── corr_pp_P0_21100.npy
+│   ├── corr_pp_P2_21100.npy
+│   ├── ope_combined_conf21100.h5
+│   ├── ops_mu0_nu1_dz24_conf21100.h5
+│   ├── ops_mu0_nu1_dz24_conf21100.npz
+│   ├── ops_mu3_nu0_dz24_conf21100.h5
+│   ├── ops_mu3_nu0_dz24_conf21100.npz
+│   ├── ops_mu3_nu1_dz24_conf21100.h5
+│   ├── ops_mu3_nu1_dz24_conf21100.npz
+│   ├── VdV_mom_21100.npy
+│   └── VVV_mom_21100.npy
+├── conf21150
+│   ├── corr_pp_P0_21150.npy
+│   ├── corr_pp_P2_21150.npy
+│   ├── VdV_mom_21150.npy
+│   └── VVV_mom_21150.npy
+├── conf21200
+│   ├── corr_pp_P0_21200.npy
+│   ├── corr_pp_P2_21200.npy
+│   ├── ope_combined_conf21200.h5
+│   ├── ops_mu0_nu1_dz24_conf21200.h5
+│   ├── ops_mu0_nu1_dz24_conf21200.npz
+│   ├── ops_mu3_nu0_dz24_conf21200.h5
+│   ├── ops_mu3_nu0_dz24_conf21200.npz
+│   ├── ops_mu3_nu1_dz24_conf21200.h5
+│   ├── ops_mu3_nu1_dz24_conf21200.npz
+│   ├── VdV_mom_21200.npy
+│   └── VVV_mom_21200.npy
+├── conf21250
+│   ├── corr_pp_P0_21250.npy
+│   ├── corr_pp_P2_21250.npy
+│   ├── VdV_mom_21250.npy
+│   └── VVV_mom_21250.npy
+├── conf21300
+│   ├── corr_pp_P0_21300.npy
+│   ├── corr_pp_P2_21300.npy
+│   ├── ope_combined_conf21300.h5
+│   ├── ops_mu0_nu1_dz24_conf21300.h5
+│   ├── ops_mu0_nu1_dz24_conf21300.npz
+│   ├── ops_mu3_nu0_dz24_conf21300.h5
+│   ├── ops_mu3_nu0_dz24_conf21300.npz
+│   ├── ops_mu3_nu1_dz24_conf21300.h5
+│   ├── ops_mu3_nu1_dz24_conf21300.npz
+│   ├── VdV_mom_21300.npy
+│   └── VVV_mom_21300.npy
+├── conf21350
+│   ├── corr_pp_P0_21350.npy
+│   ├── corr_pp_P2_21350.npy
+│   ├── VdV_mom_21350.npy
+│   └── VVV_mom_21350.npy
+├── conf21400
+│   ├── corr_pp_P0_21400.npy
+│   ├── corr_pp_P2_21400.npy
+│   ├── ope_combined_conf21400.h5
+│   ├── ops_mu0_nu1_dz24_conf21400.h5
+│   ├── ops_mu0_nu1_dz24_conf21400.npz
+│   ├── ops_mu3_nu0_dz24_conf21400.h5
+│   ├── ops_mu3_nu0_dz24_conf21400.npz
+│   ├── ops_mu3_nu1_dz24_conf21400.h5
+│   ├── ops_mu3_nu1_dz24_conf21400.npz
+│   ├── VdV_mom_21400.npy
+│   └── VVV_mom_21400.npy
+├── conf21450
+│   ├── corr_pp_P0_21450.npy
+│   ├── corr_pp_P2_21450.npy
+│   ├── VdV_mom_21450.npy
+│   └── VVV_mom_21450.npy
+├── conf21500
+│   ├── corr_pp_P0_21500.npy
+│   ├── corr_pp_P2_21500.npy
+│   ├── ope_combined_conf21500.h5
+│   ├── ops_mu0_nu1_dz24_conf21500.h5
+│   ├── ops_mu0_nu1_dz24_conf21500.npz
+│   ├── ops_mu3_nu0_dz24_conf21500.h5
+│   ├── ops_mu3_nu0_dz24_conf21500.npz
+│   ├── ops_mu3_nu1_dz24_conf21500.h5
+│   ├── ops_mu3_nu1_dz24_conf21500.npz
+│   ├── VdV_mom_21500.npy
+│   └── VVV_mom_21500.npy
+├── conf21550
+│   ├── corr_pp_P0_21550.npy
+│   ├── corr_pp_P2_21550.npy
+│   ├── VdV_mom_21550.npy
+│   └── VVV_mom_21550.npy
+├── conf21600
+│   ├── corr_pp_P0_21600.npy
+│   ├── corr_pp_P2_21600.npy
+│   ├── ope_combined_conf21600.h5
+│   ├── ops_mu0_nu1_dz24_conf21600.h5
+│   ├── ops_mu0_nu1_dz24_conf21600.npz
+│   ├── ops_mu3_nu0_dz24_conf21600.h5
+│   ├── ops_mu3_nu0_dz24_conf21600.npz
+│   ├── ops_mu3_nu1_dz24_conf21600.h5
+│   ├── ops_mu3_nu1_dz24_conf21600.npz
+│   ├── VdV_mom_21600.npy
+│   └── VVV_mom_21600.npy
+├── conf21650
+│   ├── corr_pp_P0_21650.npy
+│   ├── corr_pp_P2_21650.npy
+│   ├── VdV_mom_21650.npy
+│   └── VVV_mom_21650.npy
+├── conf21700
+│   ├── corr_pp_P0_21700.npy
+│   ├── corr_pp_P2_21700.npy
+│   ├── ope_combined_conf21700.h5
+│   ├── ops_mu0_nu1_dz24_conf21700.h5
+│   ├── ops_mu0_nu1_dz24_conf21700.npz
+│   ├── ops_mu3_nu0_dz24_conf21700.h5
+│   ├── ops_mu3_nu0_dz24_conf21700.npz
+│   ├── ops_mu3_nu1_dz24_conf21700.h5
+│   ├── ops_mu3_nu1_dz24_conf21700.npz
+│   ├── VdV_mom_21700.npy
+│   └── VVV_mom_21700.npy
+├── conf21750
+│   ├── corr_pp_P0_21750.npy
+│   ├── corr_pp_P2_21750.npy
+│   ├── VdV_mom_21750.npy
+│   └── VVV_mom_21750.npy
+├── conf21800
+│   ├── corr_pp_P0_21800.npy
+│   ├── corr_pp_P2_21800.npy
+│   ├── ope_combined_conf21800.h5
+│   ├── ops_mu0_nu1_dz24_conf21800.h5
+│   ├── ops_mu0_nu1_dz24_conf21800.npz
+│   ├── ops_mu3_nu0_dz24_conf21800.h5
+│   ├── ops_mu3_nu0_dz24_conf21800.npz
+│   ├── ops_mu3_nu1_dz24_conf21800.h5
+│   ├── ops_mu3_nu1_dz24_conf21800.npz
+│   ├── VdV_mom_21800.npy
+│   └── VVV_mom_21800.npy
+├── conf21850
+│   ├── corr_pp_P0_21850.npy
+│   ├── corr_pp_P2_21850.npy
+│   ├── VdV_mom_21850.npy
+│   └── VVV_mom_21850.npy
+├── conf21900
+│   ├── corr_pp_P0_21900.npy
+│   ├── corr_pp_P2_21900.npy
+│   ├── ope_combined_conf21900.h5
+│   ├── ops_mu0_nu1_dz24_conf21900.h5
+│   ├── ops_mu0_nu1_dz24_conf21900.npz
+│   ├── ops_mu3_nu0_dz24_conf21900.h5
+│   ├── ops_mu3_nu0_dz24_conf21900.npz
+│   ├── ops_mu3_nu1_dz24_conf21900.h5
+│   ├── ops_mu3_nu1_dz24_conf21900.npz
+│   ├── VdV_mom_21900.npy
+│   └── VVV_mom_21900.npy
+├── conf21950
+│   ├── corr_pp_P0_21950.npy
+│   ├── corr_pp_P2_21950.npy
+│   ├── VdV_mom_21950.npy
+│   └── VVV_mom_21950.npy
+├── conf22000
+│   ├── corr_pp_P0_22000.npy
+│   ├── corr_pp_P2_22000.npy
+│   ├── ope_combined_conf22000.h5
+│   ├── ops_mu0_nu1_dz24_conf22000.h5
+│   ├── ops_mu0_nu1_dz24_conf22000.npz
+│   ├── ops_mu3_nu0_dz24_conf22000.h5
+│   ├── ops_mu3_nu0_dz24_conf22000.npz
+│   ├── ops_mu3_nu1_dz24_conf22000.h5
+│   ├── ops_mu3_nu1_dz24_conf22000.npz
+│   ├── VdV_mom_22000.npy
+│   └── VVV_mom_22000.npy
+├── conf22050
+│   ├── corr_pp_P0_22050.npy
+│   ├── corr_pp_P2_22050.npy
+│   ├── VdV_mom_22050.npy
+│   └── VVV_mom_22050.npy
+├── conf22100
+│   ├── corr_pp_P0_22100.npy
+│   ├── corr_pp_P2_22100.npy
+│   ├── ope_combined_conf22100.h5
+│   ├── ops_mu0_nu1_dz24_conf22100.h5
+│   ├── ops_mu0_nu1_dz24_conf22100.npz
+│   ├── ops_mu3_nu0_dz24_conf22100.h5
+│   ├── ops_mu3_nu0_dz24_conf22100.npz
+│   ├── ops_mu3_nu1_dz24_conf22100.h5
+│   ├── ops_mu3_nu1_dz24_conf22100.npz
+│   ├── VdV_mom_22100.npy
+│   └── VVV_mom_22100.npy
+├── conf22150
+│   ├── corr_pp_P0_22150.npy
+│   ├── corr_pp_P2_22150.npy
+│   ├── VdV_mom_22150.npy
+│   └── VVV_mom_22150.npy
+├── conf22200
+│   ├── corr_pp_P0_22200.npy
+│   ├── corr_pp_P2_22200.npy
+│   ├── ope_combined_conf22200.h5
+│   ├── ops_mu0_nu1_dz24_conf22200.h5
+│   ├── ops_mu0_nu1_dz24_conf22200.npz
+│   ├── ops_mu3_nu0_dz24_conf22200.h5
+│   ├── ops_mu3_nu0_dz24_conf22200.npz
+│   ├── ops_mu3_nu1_dz24_conf22200.h5
+│   ├── ops_mu3_nu1_dz24_conf22200.npz
+│   ├── VdV_mom_22200.npy
+│   └── VVV_mom_22200.npy
+├── conf22250
+│   ├── corr_pp_P0_22250.npy
+│   ├── corr_pp_P2_22250.npy
+│   ├── VdV_mom_22250.npy
+│   └── VVV_mom_22250.npy
+├── conf22300
+│   ├── corr_pp_P0_22300.npy
+│   ├── corr_pp_P2_22300.npy
+│   ├── ope_combined_conf22300.h5
+│   ├── ops_mu0_nu1_dz24_conf22300.h5
+│   ├── ops_mu0_nu1_dz24_conf22300.npz
+│   ├── ops_mu3_nu0_dz24_conf22300.h5
+│   ├── ops_mu3_nu0_dz24_conf22300.npz
+│   ├── ops_mu3_nu1_dz24_conf22300.h5
+│   ├── ops_mu3_nu1_dz24_conf22300.npz
+│   ├── VdV_mom_22300.npy
+│   └── VVV_mom_22300.npy
+├── conf22350
+│   ├── corr_pp_P0_22350.npy
+│   ├── corr_pp_P2_22350.npy
+│   ├── VdV_mom_22350.npy
+│   └── VVV_mom_22350.npy
+├── conf22400
+│   ├── corr_pp_P0_22400.npy
+│   ├── corr_pp_P2_22400.npy
+│   ├── ope_combined_conf22400.h5
+│   ├── ops_mu0_nu1_dz24_conf22400.h5
+│   ├── ops_mu0_nu1_dz24_conf22400.npz
+│   ├── ops_mu3_nu0_dz24_conf22400.h5
+│   ├── ops_mu3_nu0_dz24_conf22400.npz
+│   ├── ops_mu3_nu1_dz24_conf22400.h5
+│   ├── ops_mu3_nu1_dz24_conf22400.npz
+│   ├── VdV_mom_22400.npy
+│   └── VVV_mom_22400.npy
+├── conf22450
+│   ├── corr_pp_P0_22450.npy
+│   ├── corr_pp_P2_22450.npy
+│   ├── VdV_mom_22450.npy
+│   └── VVV_mom_22450.npy
+├── conf22500
+│   ├── corr_pp_P0_22500.npy
+│   ├── corr_pp_P2_22500.npy
+│   ├── ope_combined_conf22500.h5
+│   ├── ops_mu0_nu1_dz24_conf22500.h5
+│   ├── ops_mu0_nu1_dz24_conf22500.npz
+│   ├── ops_mu3_nu0_dz24_conf22500.h5
+│   ├── ops_mu3_nu0_dz24_conf22500.npz
+│   ├── ops_mu3_nu1_dz24_conf22500.h5
+│   ├── ops_mu3_nu1_dz24_conf22500.npz
+│   ├── VdV_mom_22500.npy
+│   └── VVV_mom_22500.npy
+├── conf22550
+│   ├── corr_pp_P0_22550.npy
+│   ├── corr_pp_P2_22550.npy
+│   ├── VdV_mom_22550.npy
+│   └── VVV_mom_22550.npy
+├── conf22600
+│   ├── corr_pp_P0_22600.npy
+│   ├── corr_pp_P2_22600.npy
+│   ├── ope_combined_conf22600.h5
+│   ├── ops_mu0_nu1_dz24_conf22600.h5
+│   ├── ops_mu0_nu1_dz24_conf22600.npz
+│   ├── ops_mu3_nu0_dz24_conf22600.h5
+│   ├── ops_mu3_nu0_dz24_conf22600.npz
+│   ├── ops_mu3_nu1_dz24_conf22600.h5
+│   ├── ops_mu3_nu1_dz24_conf22600.npz
+│   ├── VdV_mom_22600.npy
+│   └── VVV_mom_22600.npy
+├── conf22650
+│   ├── corr_pp_P0_22650.npy
+│   ├── corr_pp_P2_22650.npy
+│   ├── VdV_mom_22650.npy
+│   └── VVV_mom_22650.npy
+├── conf22700
+│   ├── corr_pp_P0_22700.npy
+│   ├── corr_pp_P2_22700.npy
+│   ├── ope_combined_conf22700.h5
+│   ├── ops_mu0_nu1_dz24_conf22700.h5
+│   ├── ops_mu0_nu1_dz24_conf22700.npz
+│   ├── ops_mu3_nu0_dz24_conf22700.h5
+│   ├── ops_mu3_nu0_dz24_conf22700.npz
+│   ├── ops_mu3_nu1_dz24_conf22700.h5
+│   ├── ops_mu3_nu1_dz24_conf22700.npz
+│   ├── VdV_mom_22700.npy
+│   └── VVV_mom_22700.npy
+├── conf22750
+│   ├── corr_pp_P0_22750.npy
+│   ├── corr_pp_P2_22750.npy
+│   ├── VdV_mom_22750.npy
+│   └── VVV_mom_22750.npy
+├── conf22800
+│   ├── corr_pp_P0_22800.npy
+│   ├── corr_pp_P2_22800.npy
+│   ├── ope_combined_conf22800.h5
+│   ├── ops_mu0_nu1_dz24_conf22800.h5
+│   ├── ops_mu0_nu1_dz24_conf22800.npz
+│   ├── ops_mu3_nu0_dz24_conf22800.h5
+│   ├── ops_mu3_nu0_dz24_conf22800.npz
+│   ├── ops_mu3_nu1_dz24_conf22800.h5
+│   ├── ops_mu3_nu1_dz24_conf22800.npz
+│   ├── VdV_mom_22800.npy
+│   └── VVV_mom_22800.npy
+├── conf22850
+│   ├── corr_pp_P0_22850.npy
+│   ├── corr_pp_P2_22850.npy
+│   ├── VdV_mom_22850.npy
+│   └── VVV_mom_22850.npy
+├── conf22900
+│   ├── corr_pp_P0_22900.npy
+│   ├── corr_pp_P2_22900.npy
+│   ├── ope_combined_conf22900.h5
+│   ├── ops_mu0_nu1_dz24_conf22900.h5
+│   ├── ops_mu0_nu1_dz24_conf22900.npz
+│   ├── ops_mu3_nu0_dz24_conf22900.h5
+│   ├── ops_mu3_nu0_dz24_conf22900.npz
+│   ├── ops_mu3_nu1_dz24_conf22900.h5
+│   ├── ops_mu3_nu1_dz24_conf22900.npz
+│   ├── VdV_mom_22900.npy
+│   └── VVV_mom_22900.npy
+├── conf22950
+│   ├── corr_pp_P0_22950.npy
+│   ├── corr_pp_P2_22950.npy
+│   ├── VdV_mom_22950.npy
+│   └── VVV_mom_22950.npy
+├── conf23000
+│   ├── corr_pp_P0_23000.npy
+│   ├── corr_pp_P2_23000.npy
+│   ├── ope_combined_conf23000.h5
+│   ├── ops_mu0_nu1_dz24_conf23000.h5
+│   ├── ops_mu0_nu1_dz24_conf23000.npz
+│   ├── ops_mu3_nu0_dz24_conf23000.h5
+│   ├── ops_mu3_nu0_dz24_conf23000.npz
+│   ├── ops_mu3_nu1_dz24_conf23000.h5
+│   ├── ops_mu3_nu1_dz24_conf23000.npz
+│   ├── VdV_mom_23000.npy
+│   └── VVV_mom_23000.npy
+├── conf23050
+│   ├── corr_pp_P0_23050.npy
+│   ├── corr_pp_P2_23050.npy
+│   ├── VdV_mom_23050.npy
+│   └── VVV_mom_23050.npy
+├── conf23100
+│   ├── corr_pp_P0_23100.npy
+│   ├── corr_pp_P2_23100.npy
+│   ├── ope_combined_conf23100.h5
+│   ├── ops_mu0_nu1_dz24_conf23100.h5
+│   ├── ops_mu0_nu1_dz24_conf23100.npz
+│   ├── ops_mu3_nu0_dz24_conf23100.h5
+│   ├── ops_mu3_nu0_dz24_conf23100.npz
+│   ├── ops_mu3_nu1_dz24_conf23100.h5
+│   ├── ops_mu3_nu1_dz24_conf23100.npz
+│   ├── VdV_mom_23100.npy
+│   └── VVV_mom_23100.npy
+├── conf23150
+│   ├── corr_pp_P0_23150.npy
+│   ├── corr_pp_P2_23150.npy
+│   ├── VdV_mom_23150.npy
+│   └── VVV_mom_23150.npy
+├── conf23200
+│   ├── corr_pp_P0_23200.npy
+│   ├── corr_pp_P2_23200.npy
+│   ├── ope_combined_conf23200.h5
+│   ├── ops_mu0_nu1_dz24_conf23200.h5
+│   ├── ops_mu0_nu1_dz24_conf23200.npz
+│   ├── ops_mu3_nu0_dz24_conf23200.h5
+│   ├── ops_mu3_nu0_dz24_conf23200.npz
+│   ├── ops_mu3_nu1_dz24_conf23200.h5
+│   ├── ops_mu3_nu1_dz24_conf23200.npz
+│   ├── VdV_mom_23200.npy
+│   └── VVV_mom_23200.npy
+├── conf23250
+│   ├── corr_pp_P0_23250.npy
+│   ├── corr_pp_P2_23250.npy
+│   ├── VdV_mom_23250.npy
+│   └── VVV_mom_23250.npy
+├── conf23300
+│   ├── corr_pp_P0_23300.npy
+│   ├── corr_pp_P2_23300.npy
+│   ├── ope_combined_conf23300.h5
+│   ├── ops_mu0_nu1_dz24_conf23300.h5
+│   ├── ops_mu0_nu1_dz24_conf23300.npz
+│   ├── ops_mu3_nu0_dz24_conf23300.h5
+│   ├── ops_mu3_nu0_dz24_conf23300.npz
+│   ├── ops_mu3_nu1_dz24_conf23300.h5
+│   ├── ops_mu3_nu1_dz24_conf23300.npz
+│   ├── VdV_mom_23300.npy
+│   └── VVV_mom_23300.npy
+├── conf23350
+│   ├── corr_pp_P0_23350.npy
+│   ├── corr_pp_P2_23350.npy
+│   ├── VdV_mom_23350.npy
+│   └── VVV_mom_23350.npy
+├── conf23400
+│   ├── corr_pp_P0_23400.npy
+│   ├── corr_pp_P2_23400.npy
+│   ├── ope_combined_conf23400.h5
+│   ├── ops_mu0_nu1_dz24_conf23400.h5
+│   ├── ops_mu0_nu1_dz24_conf23400.npz
+│   ├── ops_mu3_nu0_dz24_conf23400.h5
+│   ├── ops_mu3_nu0_dz24_conf23400.npz
+│   ├── ops_mu3_nu1_dz24_conf23400.h5
+│   ├── ops_mu3_nu1_dz24_conf23400.npz
+│   ├── VdV_mom_23400.npy
+│   └── VVV_mom_23400.npy
+├── conf23450
+│   ├── corr_pp_P0_23450.npy
+│   ├── corr_pp_P2_23450.npy
+│   ├── VdV_mom_23450.npy
+│   └── VVV_mom_23450.npy
+├── conf23500
+│   ├── corr_pp_P0_23500.npy
+│   ├── corr_pp_P2_23500.npy
+│   ├── ope_combined_conf23500.h5
+│   ├── ops_mu0_nu1_dz24_conf23500.h5
+│   ├── ops_mu0_nu1_dz24_conf23500.npz
+│   ├── ops_mu3_nu0_dz24_conf23500.h5
+│   ├── ops_mu3_nu0_dz24_conf23500.npz
+│   ├── ops_mu3_nu1_dz24_conf23500.h5
+│   ├── ops_mu3_nu1_dz24_conf23500.npz
+│   ├── VdV_mom_23500.npy
+│   └── VVV_mom_23500.npy
+├── conf23550
+│   ├── corr_pp_P0_23550.npy
+│   ├── corr_pp_P2_23550.npy
+│   ├── VdV_mom_23550.npy
+│   └── VVV_mom_23550.npy
+├── conf23600
+│   ├── corr_pp_P0_23600.npy
+│   ├── corr_pp_P2_23600.npy
+│   ├── ope_combined_conf23600.h5
+│   ├── ops_mu0_nu1_dz24_conf23600.h5
+│   ├── ops_mu0_nu1_dz24_conf23600.npz
+│   ├── ops_mu3_nu0_dz24_conf23600.h5
+│   ├── ops_mu3_nu0_dz24_conf23600.npz
+│   ├── ops_mu3_nu1_dz24_conf23600.h5
+│   ├── ops_mu3_nu1_dz24_conf23600.npz
+│   ├── VdV_mom_23600.npy
+│   └── VVV_mom_23600.npy
+├── conf23650
+│   ├── corr_pp_P0_23650.npy
+│   ├── corr_pp_P2_23650.npy
+│   ├── VdV_mom_23650.npy
+│   └── VVV_mom_23650.npy
+├── conf23700
+│   ├── corr_pp_P0_23700.npy
+│   ├── corr_pp_P2_23700.npy
+│   ├── ope_combined_conf23700.h5
+│   ├── ops_mu0_nu1_dz24_conf23700.h5
+│   ├── ops_mu0_nu1_dz24_conf23700.npz
+│   ├── ops_mu3_nu0_dz24_conf23700.h5
+│   ├── ops_mu3_nu0_dz24_conf23700.npz
+│   ├── ops_mu3_nu1_dz24_conf23700.h5
+│   ├── ops_mu3_nu1_dz24_conf23700.npz
+│   ├── VdV_mom_23700.npy
+│   └── VVV_mom_23700.npy
+├── conf23750
+│   ├── corr_pp_P0_23750.npy
+│   ├── corr_pp_P2_23750.npy
+│   ├── VdV_mom_23750.npy
+│   └── VVV_mom_23750.npy
+├── conf23800
+│   ├── corr_pp_P0_23800.npy
+│   ├── corr_pp_P2_23800.npy
+│   ├── ope_combined_conf23800.h5
+│   ├── ops_mu0_nu1_dz24_conf23800.h5
+│   ├── ops_mu0_nu1_dz24_conf23800.npz
+│   ├── ops_mu3_nu0_dz24_conf23800.h5
+│   ├── ops_mu3_nu0_dz24_conf23800.npz
+│   ├── ops_mu3_nu1_dz24_conf23800.h5
+│   ├── ops_mu3_nu1_dz24_conf23800.npz
+│   ├── VdV_mom_23800.npy
+│   └── VVV_mom_23800.npy
+├── conf23850
+│   ├── corr_pp_P0_23850.npy
+│   ├── corr_pp_P2_23850.npy
+│   ├── VdV_mom_23850.npy
+│   └── VVV_mom_23850.npy
+├── conf23900
+│   ├── corr_pp_P0_23900.npy
+│   ├── corr_pp_P2_23900.npy
+│   ├── ope_combined_conf23900.h5
+│   ├── ops_mu0_nu1_dz24_conf23900.h5
+│   ├── ops_mu0_nu1_dz24_conf23900.npz
+│   ├── ops_mu3_nu0_dz24_conf23900.h5
+│   ├── ops_mu3_nu0_dz24_conf23900.npz
+│   ├── ops_mu3_nu1_dz24_conf23900.h5
+│   ├── ops_mu3_nu1_dz24_conf23900.npz
+│   ├── VdV_mom_23900.npy
+│   └── VVV_mom_23900.npy
+├── conf23950
+│   ├── corr_pp_P0_23950.npy
+│   ├── corr_pp_P2_23950.npy
+│   ├── VdV_mom_23950.npy
+│   └── VVV_mom_23950.npy
+├── conf24000
+│   ├── corr_pp_P0_24000.npy
+│   ├── corr_pp_P2_24000.npy
+│   ├── ope_combined_conf24000.h5
+│   ├── ops_mu0_nu1_dz24_conf24000.h5
+│   ├── ops_mu0_nu1_dz24_conf24000.npz
+│   ├── ops_mu3_nu0_dz24_conf24000.h5
+│   ├── ops_mu3_nu0_dz24_conf24000.npz
+│   ├── ops_mu3_nu1_dz24_conf24000.h5
+│   ├── ops_mu3_nu1_dz24_conf24000.npz
+│   ├── VdV_mom_24000.npy
+│   └── VVV_mom_24000.npy
+├── conf24050
+│   ├── corr_pp_P0_24050.npy
+│   ├── corr_pp_P2_24050.npy
+│   ├── VdV_mom_24050.npy
+│   └── VVV_mom_24050.npy
+├── conf24100
+│   ├── corr_pp_P0_24100.npy
+│   ├── corr_pp_P2_24100.npy
+│   ├── ope_combined_conf24100.h5
+│   ├── ops_mu0_nu1_dz24_conf24100.h5
+│   ├── ops_mu0_nu1_dz24_conf24100.npz
+│   ├── ops_mu3_nu0_dz24_conf24100.h5
+│   ├── ops_mu3_nu0_dz24_conf24100.npz
+│   ├── ops_mu3_nu1_dz24_conf24100.h5
+│   ├── ops_mu3_nu1_dz24_conf24100.npz
+│   ├── VdV_mom_24100.npy
+│   └── VVV_mom_24100.npy
+├── conf24150
+│   ├── corr_pp_P0_24150.npy
+│   ├── corr_pp_P2_24150.npy
+│   ├── VdV_mom_24150.npy
+│   └── VVV_mom_24150.npy
+├── conf24200
+│   ├── corr_pp_P0_24200.npy
+│   ├── corr_pp_P2_24200.npy
+│   ├── ope_combined_conf24200.h5
+│   ├── ops_mu0_nu1_dz24_conf24200.h5
+│   ├── ops_mu0_nu1_dz24_conf24200.npz
+│   ├── ops_mu3_nu0_dz24_conf24200.h5
+│   ├── ops_mu3_nu0_dz24_conf24200.npz
+│   ├── ops_mu3_nu1_dz24_conf24200.h5
+│   ├── ops_mu3_nu1_dz24_conf24200.npz
+│   ├── VdV_mom_24200.npy
+│   └── VVV_mom_24200.npy
+├── conf24250
+│   ├── corr_pp_P0_24250.npy
+│   ├── corr_pp_P2_24250.npy
+│   ├── VdV_mom_24250.npy
+│   └── VVV_mom_24250.npy
+├── conf24300
+│   ├── corr_pp_P0_24300.npy
+│   ├── corr_pp_P2_24300.npy
+│   ├── ope_combined_conf24300.h5
+│   ├── ops_mu0_nu1_dz24_conf24300.h5
+│   ├── ops_mu0_nu1_dz24_conf24300.npz
+│   ├── ops_mu3_nu0_dz24_conf24300.h5
+│   ├── ops_mu3_nu0_dz24_conf24300.npz
+│   ├── ops_mu3_nu1_dz24_conf24300.h5
+│   ├── ops_mu3_nu1_dz24_conf24300.npz
+│   ├── VdV_mom_24300.npy
+│   └── VVV_mom_24300.npy
+├── conf4050
+│   ├── corr_pp_P0_4050.npy
+│   ├── corr_pp_P2_4050.npy
+│   ├── ope_combined_conf4050.h5
+│   ├── ops_mu0_nu1_dz24_conf4050.h5
+│   ├── ops_mu0_nu1_dz24_conf4050.npz
+│   ├── ops_mu3_nu0_dz24_conf4050.h5
+│   ├── ops_mu3_nu0_dz24_conf4050.npz
+│   ├── ops_mu3_nu1_dz24_conf4050.h5
+│   ├── ops_mu3_nu1_dz24_conf4050.npz
+│   ├── VdV_mom_4050.npy
+│   └── VVV_mom_4050.npy
+├── conf4100
+│   ├── corr_pp_P0_4100.npy
+│   ├── corr_pp_P2_4100.npy
+│   ├── ope_combined_conf4100.h5
+│   ├── ops_mu0_nu1_dz24_conf4100.h5
+│   ├── ops_mu0_nu1_dz24_conf4100.npz
+│   ├── ops_mu3_nu0_dz24_conf4100.h5
+│   ├── ops_mu3_nu0_dz24_conf4100.npz
+│   ├── ops_mu3_nu1_dz24_conf4100.h5
+│   ├── ops_mu3_nu1_dz24_conf4100.npz
+│   ├── VdV_mom_4100.npy
+│   └── VVV_mom_4100.npy
+├── conf4150
+│   ├── corr_pp_P0_4150.npy
+│   ├── corr_pp_P2_4150.npy
+│   ├── ope_combined_conf4150.h5
+│   ├── ops_mu0_nu1_dz24_conf4150.h5
+│   ├── ops_mu0_nu1_dz24_conf4150.npz
+│   ├── ops_mu3_nu0_dz24_conf4150.h5
+│   ├── ops_mu3_nu0_dz24_conf4150.npz
+│   ├── ops_mu3_nu1_dz24_conf4150.h5
+│   ├── ops_mu3_nu1_dz24_conf4150.npz
+│   ├── VdV_mom_4150.npy
+│   └── VVV_mom_4150.npy
+├── conf4200
+│   ├── corr_pp_P0_4200.npy
+│   ├── corr_pp_P2_4200.npy
+│   ├── ope_combined_conf4200.h5
+│   ├── ops_mu0_nu1_dz24_conf4200.h5
+│   ├── ops_mu0_nu1_dz24_conf4200.npz
+│   ├── ops_mu3_nu0_dz24_conf4200.h5
+│   ├── ops_mu3_nu0_dz24_conf4200.npz
+│   ├── ops_mu3_nu1_dz24_conf4200.h5
+│   ├── ops_mu3_nu1_dz24_conf4200.npz
+│   ├── VdV_mom_4200.npy
+│   └── VVV_mom_4200.npy
+├── conf4250
+│   ├── corr_pp_P0_4250.npy
+│   ├── corr_pp_P2_4250.npy
+│   ├── ope_combined_conf4250.h5
+│   ├── ops_mu0_nu1_dz24_conf4250.h5
+│   ├── ops_mu0_nu1_dz24_conf4250.npz
+│   ├── ops_mu3_nu0_dz24_conf4250.h5
+│   ├── ops_mu3_nu0_dz24_conf4250.npz
+│   ├── ops_mu3_nu1_dz24_conf4250.h5
+│   ├── ops_mu3_nu1_dz24_conf4250.npz
+│   ├── VdV_mom_4250.npy
+│   └── VVV_mom_4250.npy
+├── conf4300
+│   ├── corr_pp_P0_4300.npy
+│   ├── corr_pp_P2_4300.npy
+│   ├── ope_combined_conf4300.h5
+│   ├── ops_mu0_nu1_dz24_conf4300.h5
+│   ├── ops_mu0_nu1_dz24_conf4300.npz
+│   ├── ops_mu3_nu0_dz24_conf4300.h5
+│   ├── ops_mu3_nu0_dz24_conf4300.npz
+│   ├── ops_mu3_nu1_dz24_conf4300.h5
+│   ├── ops_mu3_nu1_dz24_conf4300.npz
+│   ├── VdV_mom_4300.npy
+│   └── VVV_mom_4300.npy
+├── conf4350
+│   ├── corr_pp_P0_4350.npy
+│   ├── corr_pp_P2_4350.npy
+│   ├── ope_combined_conf4350.h5
+│   ├── ops_mu0_nu1_dz24_conf4350.h5
+│   ├── ops_mu0_nu1_dz24_conf4350.npz
+│   ├── ops_mu3_nu0_dz24_conf4350.h5
+│   ├── ops_mu3_nu0_dz24_conf4350.npz
+│   ├── ops_mu3_nu1_dz24_conf4350.h5
+│   ├── ops_mu3_nu1_dz24_conf4350.npz
+│   ├── VdV_mom_4350.npy
+│   └── VVV_mom_4350.npy
+├── conf4400
+│   ├── corr_pp_P0_4400.npy
+│   ├── corr_pp_P2_4400.npy
+│   ├── ope_combined_conf4400.h5
+│   ├── ops_mu0_nu1_dz24_conf4400.h5
+│   ├── ops_mu0_nu1_dz24_conf4400.npz
+│   ├── ops_mu3_nu0_dz24_conf4400.h5
+│   ├── ops_mu3_nu0_dz24_conf4400.npz
+│   ├── ops_mu3_nu1_dz24_conf4400.h5
+│   ├── ops_mu3_nu1_dz24_conf4400.npz
+│   ├── VdV_mom_4400.npy
+│   └── VVV_mom_4400.npy
+├── conf4450
+│   ├── corr_pp_P0_4450.npy
+│   ├── corr_pp_P2_4450.npy
+│   ├── ope_combined_conf4450.h5
+│   ├── ops_mu0_nu1_dz24_conf4450.h5
+│   ├── ops_mu0_nu1_dz24_conf4450.npz
+│   ├── ops_mu3_nu0_dz24_conf4450.h5
+│   ├── ops_mu3_nu0_dz24_conf4450.npz
+│   ├── ops_mu3_nu1_dz24_conf4450.h5
+│   ├── ops_mu3_nu1_dz24_conf4450.npz
+│   ├── VdV_mom_4450.npy
+│   └── VVV_mom_4450.npy
+├── conf4500
+│   ├── corr_pp_P0_4500.npy
+│   ├── corr_pp_P2_4500.npy
+│   ├── ope_combined_conf4500.h5
+│   ├── ops_mu0_nu1_dz24_conf4500.h5
+│   ├── ops_mu0_nu1_dz24_conf4500.npz
+│   ├── ops_mu3_nu0_dz24_conf4500.h5
+│   ├── ops_mu3_nu0_dz24_conf4500.npz
+│   ├── ops_mu3_nu1_dz24_conf4500.h5
+│   ├── ops_mu3_nu1_dz24_conf4500.npz
+│   ├── VdV_mom_4500.npy
+│   └── VVV_mom_4500.npy
+├── conf4550
+│   ├── corr_pp_P0_4550.npy
+│   ├── corr_pp_P2_4550.npy
+│   ├── ope_combined_conf4550.h5
+│   ├── ops_mu0_nu1_dz24_conf4550.h5
+│   ├── ops_mu0_nu1_dz24_conf4550.npz
+│   ├── ops_mu3_nu0_dz24_conf4550.h5
+│   ├── ops_mu3_nu0_dz24_conf4550.npz
+│   ├── ops_mu3_nu1_dz24_conf4550.h5
+│   ├── ops_mu3_nu1_dz24_conf4550.npz
+│   ├── VdV_mom_4550.npy
+│   └── VVV_mom_4550.npy
+├── conf4600
+│   ├── corr_pp_P0_4600.npy
+│   ├── corr_pp_P2_4600.npy
+│   ├── ope_combined_conf4600.h5
+│   ├── ops_mu0_nu1_dz24_conf4600.h5
+│   ├── ops_mu0_nu1_dz24_conf4600.npz
+│   ├── ops_mu3_nu0_dz24_conf4600.h5
+│   ├── ops_mu3_nu0_dz24_conf4600.npz
+│   ├── ops_mu3_nu1_dz24_conf4600.h5
+│   ├── ops_mu3_nu1_dz24_conf4600.npz
+│   ├── VdV_mom_4600.npy
+│   └── VVV_mom_4600.npy
+├── conf4650
+│   ├── corr_pp_P0_4650.npy
+│   ├── corr_pp_P2_4650.npy
+│   ├── ope_combined_conf4650.h5
+│   ├── ops_mu0_nu1_dz24_conf4650.h5
+│   ├── ops_mu0_nu1_dz24_conf4650.npz
+│   ├── ops_mu3_nu0_dz24_conf4650.h5
+│   ├── ops_mu3_nu0_dz24_conf4650.npz
+│   ├── ops_mu3_nu1_dz24_conf4650.h5
+│   ├── ops_mu3_nu1_dz24_conf4650.npz
+│   ├── VdV_mom_4650.npy
+│   └── VVV_mom_4650.npy
+├── conf4700
+│   ├── corr_pp_P0_4700.npy
+│   ├── corr_pp_P2_4700.npy
+│   ├── ope_combined_conf4700.h5
+│   ├── ops_mu0_nu1_dz24_conf4700.h5
+│   ├── ops_mu0_nu1_dz24_conf4700.npz
+│   ├── ops_mu3_nu0_dz24_conf4700.h5
+│   ├── ops_mu3_nu0_dz24_conf4700.npz
+│   ├── ops_mu3_nu1_dz24_conf4700.h5
+│   ├── ops_mu3_nu1_dz24_conf4700.npz
+│   ├── VdV_mom_4700.npy
+│   └── VVV_mom_4700.npy
+├── conf4750
+│   ├── corr_pp_P0_4750.npy
+│   ├── corr_pp_P2_4750.npy
+│   ├── ope_combined_conf4750.h5
+│   ├── ops_mu0_nu1_dz24_conf4750.h5
+│   ├── ops_mu0_nu1_dz24_conf4750.npz
+│   ├── ops_mu3_nu0_dz24_conf4750.h5
+│   ├── ops_mu3_nu0_dz24_conf4750.npz
+│   ├── ops_mu3_nu1_dz24_conf4750.h5
+│   ├── ops_mu3_nu1_dz24_conf4750.npz
+│   ├── VdV_mom_4750.npy
+│   └── VVV_mom_4750.npy
+├── conf4800
+│   ├── corr_pp_P0_4800.npy
+│   ├── corr_pp_P2_4800.npy
+│   ├── ope_combined_conf4800.h5
+│   ├── ops_mu0_nu1_dz24_conf4800.h5
+│   ├── ops_mu0_nu1_dz24_conf4800.npz
+│   ├── ops_mu3_nu0_dz24_conf4800.h5
+│   ├── ops_mu3_nu0_dz24_conf4800.npz
+│   ├── ops_mu3_nu1_dz24_conf4800.h5
+│   ├── ops_mu3_nu1_dz24_conf4800.npz
+│   ├── VdV_mom_4800.npy
+│   └── VVV_mom_4800.npy
+├── conf4850
+│   ├── corr_pp_P0_4850.npy
+│   ├── corr_pp_P2_4850.npy
+│   ├── ope_combined_conf4850.h5
+│   ├── ops_mu0_nu1_dz24_conf4850.h5
+│   ├── ops_mu0_nu1_dz24_conf4850.npz
+│   ├── ops_mu3_nu0_dz24_conf4850.h5
+│   ├── ops_mu3_nu0_dz24_conf4850.npz
+│   ├── ops_mu3_nu1_dz24_conf4850.h5
+│   ├── ops_mu3_nu1_dz24_conf4850.npz
+│   ├── VdV_mom_4850.npy
+│   └── VVV_mom_4850.npy
+├── conf4900
+│   ├── corr_pp_P0_4900.npy
+│   ├── corr_pp_P2_4900.npy
+│   ├── ope_combined_conf4900.h5
+│   ├── ops_mu0_nu1_dz24_conf4900.h5
+│   ├── ops_mu0_nu1_dz24_conf4900.npz
+│   ├── ops_mu3_nu0_dz24_conf4900.h5
+│   ├── ops_mu3_nu0_dz24_conf4900.npz
+│   ├── ops_mu3_nu1_dz24_conf4900.h5
+│   ├── ops_mu3_nu1_dz24_conf4900.npz
+│   ├── VdV_mom_4900.npy
+│   └── VVV_mom_4900.npy
+├── conf4950
+│   ├── corr_pp_P0_4950.npy
+│   ├── corr_pp_P2_4950.npy
+│   ├── ope_combined_conf4950.h5
+│   ├── ops_mu0_nu1_dz24_conf4950.h5
+│   ├── ops_mu0_nu1_dz24_conf4950.npz
+│   ├── ops_mu3_nu0_dz24_conf4950.h5
+│   ├── ops_mu3_nu0_dz24_conf4950.npz
+│   ├── ops_mu3_nu1_dz24_conf4950.h5
+│   ├── ops_mu3_nu1_dz24_conf4950.npz
+│   ├── VdV_mom_4950.npy
+│   └── VVV_mom_4950.npy
+├── conf5000
+│   ├── corr_pp_P0_5000.npy
+│   ├── corr_pp_P2_5000.npy
+│   ├── ope_combined_conf5000.h5
+│   ├── ops_mu0_nu1_dz24_conf5000.h5
+│   ├── ops_mu0_nu1_dz24_conf5000.npz
+│   ├── ops_mu3_nu0_dz24_conf5000.h5
+│   ├── ops_mu3_nu0_dz24_conf5000.npz
+│   ├── ops_mu3_nu1_dz24_conf5000.h5
+│   ├── ops_mu3_nu1_dz24_conf5000.npz
+│   ├── VdV_mom_5000.npy
+│   └── VVV_mom_5000.npy
+├── conf5050
+│   ├── corr_pp_P0_5050.npy
+│   ├── corr_pp_P2_5050.npy
+│   ├── ope_combined_conf5050.h5
+│   ├── ops_mu0_nu1_dz24_conf5050.h5
+│   ├── ops_mu0_nu1_dz24_conf5050.npz
+│   ├── ops_mu3_nu0_dz24_conf5050.h5
+│   ├── ops_mu3_nu0_dz24_conf5050.npz
+│   ├── ops_mu3_nu1_dz24_conf5050.h5
+│   ├── ops_mu3_nu1_dz24_conf5050.npz
+│   ├── VdV_mom_5050.npy
+│   └── VVV_mom_5050.npy
+├── conf5100
+│   ├── corr_pp_P0_5100.npy
+│   ├── corr_pp_P2_5100.npy
+│   ├── ope_combined_conf5100.h5
+│   ├── ops_mu0_nu1_dz24_conf5100.h5
+│   ├── ops_mu0_nu1_dz24_conf5100.npz
+│   ├── ops_mu3_nu0_dz24_conf5100.h5
+│   ├── ops_mu3_nu0_dz24_conf5100.npz
+│   ├── ops_mu3_nu1_dz24_conf5100.h5
+│   ├── ops_mu3_nu1_dz24_conf5100.npz
+│   ├── VdV_mom_5100.npy
+│   └── VVV_mom_5100.npy
+├── conf5150
+│   ├── corr_pp_P0_5150.npy
+│   ├── corr_pp_P2_5150.npy
+│   ├── ope_combined_conf5150.h5
+│   ├── ops_mu0_nu1_dz24_conf5150.h5
+│   ├── ops_mu0_nu1_dz24_conf5150.npz
+│   ├── ops_mu3_nu0_dz24_conf5150.h5
+│   ├── ops_mu3_nu0_dz24_conf5150.npz
+│   ├── ops_mu3_nu1_dz24_conf5150.h5
+│   ├── ops_mu3_nu1_dz24_conf5150.npz
+│   ├── VdV_mom_5150.npy
+│   └── VVV_mom_5150.npy
+├── conf5200
+│   ├── corr_pp_P0_5200.npy
+│   ├── corr_pp_P2_5200.npy
+│   ├── ope_combined_conf5200.h5
+│   ├── ops_mu0_nu1_dz24_conf5200.h5
+│   ├── ops_mu0_nu1_dz24_conf5200.npz
+│   ├── ops_mu3_nu0_dz24_conf5200.h5
+│   ├── ops_mu3_nu0_dz24_conf5200.npz
+│   ├── ops_mu3_nu1_dz24_conf5200.h5
+│   ├── ops_mu3_nu1_dz24_conf5200.npz
+│   ├── VdV_mom_5200.npy
+│   └── VVV_mom_5200.npy
+├── conf5250
+│   ├── corr_pp_P0_5250.npy
+│   ├── corr_pp_P2_5250.npy
+│   ├── ope_combined_conf5250.h5
+│   ├── ops_mu0_nu1_dz24_conf5250.h5
+│   ├── ops_mu0_nu1_dz24_conf5250.npz
+│   ├── ops_mu3_nu0_dz24_conf5250.h5
+│   ├── ops_mu3_nu0_dz24_conf5250.npz
+│   ├── ops_mu3_nu1_dz24_conf5250.h5
+│   ├── ops_mu3_nu1_dz24_conf5250.npz
+│   ├── VdV_mom_5250.npy
+│   └── VVV_mom_5250.npy
+├── conf5300
+│   ├── corr_pp_P0_5300.npy
+│   ├── corr_pp_P2_5300.npy
+│   ├── ope_combined_conf5300.h5
+│   ├── ops_mu0_nu1_dz24_conf5300.h5
+│   ├── ops_mu0_nu1_dz24_conf5300.npz
+│   ├── ops_mu3_nu0_dz24_conf5300.h5
+│   ├── ops_mu3_nu0_dz24_conf5300.npz
+│   ├── ops_mu3_nu1_dz24_conf5300.h5
+│   ├── ops_mu3_nu1_dz24_conf5300.npz
+│   ├── VdV_mom_5300.npy
+│   └── VVV_mom_5300.npy
+├── conf5350
+│   ├── corr_pp_P0_5350.npy
+│   ├── corr_pp_P2_5350.npy
+│   ├── ope_combined_conf5350.h5
+│   ├── ops_mu0_nu1_dz24_conf5350.h5
+│   ├── ops_mu0_nu1_dz24_conf5350.npz
+│   ├── ops_mu3_nu0_dz24_conf5350.h5
+│   ├── ops_mu3_nu0_dz24_conf5350.npz
+│   ├── ops_mu3_nu1_dz24_conf5350.h5
+│   ├── ops_mu3_nu1_dz24_conf5350.npz
+│   ├── VdV_mom_5350.npy
+│   └── VVV_mom_5350.npy
+├── conf5400
+│   ├── corr_pp_P0_5400.npy
+│   ├── corr_pp_P2_5400.npy
+│   ├── ope_combined_conf5400.h5
+│   ├── ops_mu0_nu1_dz24_conf5400.h5
+│   ├── ops_mu0_nu1_dz24_conf5400.npz
+│   ├── ops_mu3_nu0_dz24_conf5400.h5
+│   ├── ops_mu3_nu0_dz24_conf5400.npz
+│   ├── ops_mu3_nu1_dz24_conf5400.h5
+│   ├── ops_mu3_nu1_dz24_conf5400.npz
+│   ├── VdV_mom_5400.npy
+│   └── VVV_mom_5400.npy
+├── conf5450
+│   ├── corr_pp_P0_5450.npy
+│   ├── corr_pp_P2_5450.npy
+│   ├── ope_combined_conf5450.h5
+│   ├── ops_mu0_nu1_dz24_conf5450.h5
+│   ├── ops_mu0_nu1_dz24_conf5450.npz
+│   ├── ops_mu3_nu0_dz24_conf5450.h5
+│   ├── ops_mu3_nu0_dz24_conf5450.npz
+│   ├── ops_mu3_nu1_dz24_conf5450.h5
+│   ├── ops_mu3_nu1_dz24_conf5450.npz
+│   ├── VdV_mom_5450.npy
+│   └── VVV_mom_5450.npy
+├── conf5500
+│   ├── corr_pp_P0_5500.npy
+│   ├── corr_pp_P2_5500.npy
+│   ├── ope_combined_conf5500.h5
+│   ├── ops_mu0_nu1_dz24_conf5500.h5
+│   ├── ops_mu0_nu1_dz24_conf5500.npz
+│   ├── ops_mu3_nu0_dz24_conf5500.h5
+│   ├── ops_mu3_nu0_dz24_conf5500.npz
+│   ├── ops_mu3_nu1_dz24_conf5500.h5
+│   ├── ops_mu3_nu1_dz24_conf5500.npz
+│   ├── VdV_mom_5500.npy
+│   └── VVV_mom_5500.npy
+├── conf5550
+│   ├── corr_pp_P0_5550.npy
+│   ├── corr_pp_P2_5550.npy
+│   ├── ope_combined_conf5550.h5
+│   ├── ops_mu0_nu1_dz24_conf5550.h5
+│   ├── ops_mu0_nu1_dz24_conf5550.npz
+│   ├── ops_mu3_nu0_dz24_conf5550.h5
+│   ├── ops_mu3_nu0_dz24_conf5550.npz
+│   ├── ops_mu3_nu1_dz24_conf5550.h5
+│   ├── ops_mu3_nu1_dz24_conf5550.npz
+│   ├── VdV_mom_5550.npy
+│   └── VVV_mom_5550.npy
+├── conf5600
+│   ├── corr_pp_P0_5600.npy
+│   ├── corr_pp_P2_5600.npy
+│   ├── ope_combined_conf5600.h5
+│   ├── ops_mu0_nu1_dz24_conf5600.h5
+│   ├── ops_mu0_nu1_dz24_conf5600.npz
+│   ├── ops_mu3_nu0_dz24_conf5600.h5
+│   ├── ops_mu3_nu0_dz24_conf5600.npz
+│   ├── ops_mu3_nu1_dz24_conf5600.h5
+│   ├── ops_mu3_nu1_dz24_conf5600.npz
+│   ├── VdV_mom_5600.npy
+│   └── VVV_mom_5600.npy
+├── conf5650
+│   ├── corr_pp_P0_5650.npy
+│   ├── corr_pp_P2_5650.npy
+│   ├── ope_combined_conf5650.h5
+│   ├── ops_mu0_nu1_dz24_conf5650.h5
+│   ├── ops_mu0_nu1_dz24_conf5650.npz
+│   ├── ops_mu3_nu0_dz24_conf5650.h5
+│   ├── ops_mu3_nu0_dz24_conf5650.npz
+│   ├── ops_mu3_nu1_dz24_conf5650.h5
+│   ├── ops_mu3_nu1_dz24_conf5650.npz
+│   ├── VdV_mom_5650.npy
+│   └── VVV_mom_5650.npy
+├── conf5700
+│   ├── corr_pp_P0_5700.npy
+│   ├── corr_pp_P2_5700.npy
+│   ├── ope_combined_conf5700.h5
+│   ├── ops_mu0_nu1_dz24_conf5700.h5
+│   ├── ops_mu0_nu1_dz24_conf5700.npz
+│   ├── ops_mu3_nu0_dz24_conf5700.h5
+│   ├── ops_mu3_nu0_dz24_conf5700.npz
+│   ├── ops_mu3_nu1_dz24_conf5700.h5
+│   ├── ops_mu3_nu1_dz24_conf5700.npz
+│   ├── VdV_mom_5700.npy
+│   └── VVV_mom_5700.npy
+├── conf5750
+│   ├── corr_pp_P0_5750.npy
+│   ├── corr_pp_P2_5750.npy
+│   ├── ope_combined_conf5750.h5
+│   ├── ops_mu0_nu1_dz24_conf5750.h5
+│   ├── ops_mu0_nu1_dz24_conf5750.npz
+│   ├── ops_mu3_nu0_dz24_conf5750.h5
+│   ├── ops_mu3_nu0_dz24_conf5750.npz
+│   ├── ops_mu3_nu1_dz24_conf5750.h5
+│   ├── ops_mu3_nu1_dz24_conf5750.npz
+│   ├── VdV_mom_5750.npy
+│   └── VVV_mom_5750.npy
+├── conf5800
+│   ├── corr_pp_P0_5800.npy
+│   ├── corr_pp_P2_5800.npy
+│   ├── ope_combined_conf5800.h5
+│   ├── ops_mu0_nu1_dz24_conf5800.h5
+│   ├── ops_mu0_nu1_dz24_conf5800.npz
+│   ├── ops_mu3_nu0_dz24_conf5800.h5
+│   ├── ops_mu3_nu0_dz24_conf5800.npz
+│   ├── ops_mu3_nu1_dz24_conf5800.h5
+│   ├── ops_mu3_nu1_dz24_conf5800.npz
+│   ├── VdV_mom_5800.npy
+│   └── VVV_mom_5800.npy
+├── conf5850
+│   ├── corr_pp_P0_5850.npy
+│   ├── corr_pp_P2_5850.npy
+│   ├── ope_combined_conf5850.h5
+│   ├── ops_mu0_nu1_dz24_conf5850.h5
+│   ├── ops_mu0_nu1_dz24_conf5850.npz
+│   ├── ops_mu3_nu0_dz24_conf5850.h5
+│   ├── ops_mu3_nu0_dz24_conf5850.npz
+│   ├── ops_mu3_nu1_dz24_conf5850.h5
+│   ├── ops_mu3_nu1_dz24_conf5850.npz
+│   ├── VdV_mom_5850.npy
+│   └── VVV_mom_5850.npy
+├── conf5900
+│   ├── corr_pp_P0_5900.npy
+│   ├── corr_pp_P2_5900.npy
+│   ├── ope_combined_conf5900.h5
+│   ├── ops_mu0_nu1_dz24_conf5900.h5
+│   ├── ops_mu0_nu1_dz24_conf5900.npz
+│   ├── ops_mu3_nu0_dz24_conf5900.h5
+│   ├── ops_mu3_nu0_dz24_conf5900.npz
+│   ├── ops_mu3_nu1_dz24_conf5900.h5
+│   ├── ops_mu3_nu1_dz24_conf5900.npz
+│   ├── VdV_mom_5900.npy
+│   └── VVV_mom_5900.npy
+├── conf5950
+│   ├── corr_pp_P0_5950.npy
+│   ├── corr_pp_P2_5950.npy
+│   ├── ope_combined_conf5950.h5
+│   ├── ops_mu0_nu1_dz24_conf5950.h5
+│   ├── ops_mu0_nu1_dz24_conf5950.npz
+│   ├── ops_mu3_nu0_dz24_conf5950.h5
+│   ├── ops_mu3_nu0_dz24_conf5950.npz
+│   ├── ops_mu3_nu1_dz24_conf5950.h5
+│   ├── ops_mu3_nu1_dz24_conf5950.npz
+│   ├── VdV_mom_5950.npy
+│   └── VVV_mom_5950.npy
+├── conf6000
+│   ├── corr_pp_P0_6000.npy
+│   ├── corr_pp_P2_6000.npy
+│   ├── ope_combined_conf6000.h5
+│   ├── ops_mu0_nu1_dz24_conf6000.h5
+│   ├── ops_mu0_nu1_dz24_conf6000.npz
+│   ├── ops_mu3_nu0_dz24_conf6000.h5
+│   ├── ops_mu3_nu0_dz24_conf6000.npz
+│   ├── ops_mu3_nu1_dz24_conf6000.h5
+│   ├── ops_mu3_nu1_dz24_conf6000.npz
+│   ├── VdV_mom_6000.npy
+│   └── VVV_mom_6000.npy
+├── conf6050
+│   ├── corr_pp_P0_6050.npy
+│   ├── corr_pp_P2_6050.npy
+│   ├── ope_combined_conf6050.h5
+│   ├── ops_mu0_nu1_dz24_conf6050.h5
+│   ├── ops_mu0_nu1_dz24_conf6050.npz
+│   ├── ops_mu3_nu0_dz24_conf6050.h5
+│   ├── ops_mu3_nu0_dz24_conf6050.npz
+│   ├── ops_mu3_nu1_dz24_conf6050.h5
+│   ├── ops_mu3_nu1_dz24_conf6050.npz
+│   ├── VdV_mom_6050.npy
+│   └── VVV_mom_6050.npy
+├── conf6100
+│   ├── corr_pp_P0_6100.npy
+│   ├── corr_pp_P2_6100.npy
+│   ├── ope_combined_conf6100.h5
+│   ├── ops_mu0_nu1_dz24_conf6100.h5
+│   ├── ops_mu0_nu1_dz24_conf6100.npz
+│   ├── ops_mu3_nu0_dz24_conf6100.h5
+│   ├── ops_mu3_nu0_dz24_conf6100.npz
+│   ├── ops_mu3_nu1_dz24_conf6100.h5
+│   ├── ops_mu3_nu1_dz24_conf6100.npz
+│   ├── VdV_mom_6100.npy
+│   └── VVV_mom_6100.npy
+├── conf6150
+│   ├── corr_pp_P0_6150.npy
+│   ├── corr_pp_P2_6150.npy
+│   ├── ope_combined_conf6150.h5
+│   ├── ops_mu0_nu1_dz24_conf6150.h5
+│   ├── ops_mu0_nu1_dz24_conf6150.npz
+│   ├── ops_mu3_nu0_dz24_conf6150.h5
+│   ├── ops_mu3_nu0_dz24_conf6150.npz
+│   ├── ops_mu3_nu1_dz24_conf6150.h5
+│   ├── ops_mu3_nu1_dz24_conf6150.npz
+│   ├── VdV_mom_6150.npy
+│   └── VVV_mom_6150.npy
+├── conf6200
+│   ├── corr_pp_P0_6200.npy
+│   ├── corr_pp_P2_6200.npy
+│   ├── ope_combined_conf6200.h5
+│   ├── ops_mu0_nu1_dz24_conf6200.h5
+│   ├── ops_mu0_nu1_dz24_conf6200.npz
+│   ├── ops_mu3_nu0_dz24_conf6200.h5
+│   ├── ops_mu3_nu0_dz24_conf6200.npz
+│   ├── ops_mu3_nu1_dz24_conf6200.h5
+│   ├── ops_mu3_nu1_dz24_conf6200.npz
+│   ├── VdV_mom_6200.npy
+│   └── VVV_mom_6200.npy
+├── conf6250
+│   ├── corr_pp_P0_6250.npy
+│   ├── corr_pp_P2_6250.npy
+│   ├── ope_combined_conf6250.h5
+│   ├── ops_mu0_nu1_dz24_conf6250.h5
+│   ├── ops_mu0_nu1_dz24_conf6250.npz
+│   ├── ops_mu3_nu0_dz24_conf6250.h5
+│   ├── ops_mu3_nu0_dz24_conf6250.npz
+│   ├── ops_mu3_nu1_dz24_conf6250.h5
+│   ├── ops_mu3_nu1_dz24_conf6250.npz
+│   ├── VdV_mom_6250.npy
+│   └── VVV_mom_6250.npy
+├── conf6300
+│   ├── corr_pp_P0_6300.npy
+│   ├── corr_pp_P2_6300.npy
+│   ├── ope_combined_conf6300.h5
+│   ├── ops_mu0_nu1_dz24_conf6300.h5
+│   ├── ops_mu0_nu1_dz24_conf6300.npz
+│   ├── ops_mu3_nu0_dz24_conf6300.h5
+│   ├── ops_mu3_nu0_dz24_conf6300.npz
+│   ├── ops_mu3_nu1_dz24_conf6300.h5
+│   ├── ops_mu3_nu1_dz24_conf6300.npz
+│   ├── VdV_mom_6300.npy
+│   └── VVV_mom_6300.npy
+├── conf6350
+│   ├── corr_pp_P0_6350.npy
+│   ├── corr_pp_P2_6350.npy
+│   ├── ope_combined_conf6350.h5
+│   ├── ops_mu0_nu1_dz24_conf6350.h5
+│   ├── ops_mu0_nu1_dz24_conf6350.npz
+│   ├── ops_mu3_nu0_dz24_conf6350.h5
+│   ├── ops_mu3_nu0_dz24_conf6350.npz
+│   ├── ops_mu3_nu1_dz24_conf6350.h5
+│   ├── ops_mu3_nu1_dz24_conf6350.npz
+│   ├── VdV_mom_6350.npy
+│   └── VVV_mom_6350.npy
+├── conf6400
+│   ├── corr_pp_P0_6400.npy
+│   ├── corr_pp_P2_6400.npy
+│   ├── ope_combined_conf6400.h5
+│   ├── ops_mu0_nu1_dz24_conf6400.h5
+│   ├── ops_mu0_nu1_dz24_conf6400.npz
+│   ├── ops_mu3_nu0_dz24_conf6400.h5
+│   ├── ops_mu3_nu0_dz24_conf6400.npz
+│   ├── ops_mu3_nu1_dz24_conf6400.h5
+│   ├── ops_mu3_nu1_dz24_conf6400.npz
+│   ├── VdV_mom_6400.npy
+│   └── VVV_mom_6400.npy
+├── conf6450
+│   ├── corr_pp_P0_6450.npy
+│   ├── corr_pp_P2_6450.npy
+│   ├── ope_combined_conf6450.h5
+│   ├── ops_mu0_nu1_dz24_conf6450.h5
+│   ├── ops_mu0_nu1_dz24_conf6450.npz
+│   ├── ops_mu3_nu0_dz24_conf6450.h5
+│   ├── ops_mu3_nu0_dz24_conf6450.npz
+│   ├── ops_mu3_nu1_dz24_conf6450.h5
+│   ├── ops_mu3_nu1_dz24_conf6450.npz
+│   ├── VdV_mom_6450.npy
+│   └── VVV_mom_6450.npy
+├── conf6500
+│   ├── corr_pp_P0_6500.npy
+│   ├── corr_pp_P2_6500.npy
+│   ├── ope_combined_conf6500.h5
+│   ├── ops_mu0_nu1_dz24_conf6500.h5
+│   ├── ops_mu0_nu1_dz24_conf6500.npz
+│   ├── ops_mu3_nu0_dz24_conf6500.h5
+│   ├── ops_mu3_nu0_dz24_conf6500.npz
+│   ├── ops_mu3_nu1_dz24_conf6500.h5
+│   ├── ops_mu3_nu1_dz24_conf6500.npz
+│   ├── VdV_mom_6500.npy
+│   └── VVV_mom_6500.npy
+├── conf6550
+│   ├── corr_pp_P0_6550.npy
+│   ├── corr_pp_P2_6550.npy
+│   ├── ope_combined_conf6550.h5
+│   ├── ops_mu0_nu1_dz24_conf6550.h5
+│   ├── ops_mu0_nu1_dz24_conf6550.npz
+│   ├── ops_mu3_nu0_dz24_conf6550.h5
+│   ├── ops_mu3_nu0_dz24_conf6550.npz
+│   ├── ops_mu3_nu1_dz24_conf6550.h5
+│   ├── ops_mu3_nu1_dz24_conf6550.npz
+│   ├── VdV_mom_6550.npy
+│   └── VVV_mom_6550.npy
+├── conf6600
+│   ├── corr_pp_P0_6600.npy
+│   ├── corr_pp_P2_6600.npy
+│   ├── ope_combined_conf6600.h5
+│   ├── ops_mu0_nu1_dz24_conf6600.h5
+│   ├── ops_mu0_nu1_dz24_conf6600.npz
+│   ├── ops_mu3_nu0_dz24_conf6600.h5
+│   ├── ops_mu3_nu0_dz24_conf6600.npz
+│   ├── ops_mu3_nu1_dz24_conf6600.h5
+│   ├── ops_mu3_nu1_dz24_conf6600.npz
+│   ├── VdV_mom_6600.npy
+│   └── VVV_mom_6600.npy
+├── conf6650
+│   ├── corr_pp_P0_6650.npy
+│   ├── corr_pp_P2_6650.npy
+│   ├── ope_combined_conf6650.h5
+│   ├── ops_mu0_nu1_dz24_conf6650.h5
+│   ├── ops_mu0_nu1_dz24_conf6650.npz
+│   ├── ops_mu3_nu0_dz24_conf6650.h5
+│   ├── ops_mu3_nu0_dz24_conf6650.npz
+│   ├── ops_mu3_nu1_dz24_conf6650.h5
+│   ├── ops_mu3_nu1_dz24_conf6650.npz
+│   ├── VdV_mom_6650.npy
+│   └── VVV_mom_6650.npy
+├── conf6700
+│   ├── corr_pp_P0_6700.npy
+│   ├── corr_pp_P2_6700.npy
+│   ├── ope_combined_conf6700.h5
+│   ├── ops_mu0_nu1_dz24_conf6700.h5
+│   ├── ops_mu0_nu1_dz24_conf6700.npz
+│   ├── ops_mu3_nu0_dz24_conf6700.h5
+│   ├── ops_mu3_nu0_dz24_conf6700.npz
+│   ├── ops_mu3_nu1_dz24_conf6700.h5
+│   ├── ops_mu3_nu1_dz24_conf6700.npz
+│   ├── VdV_mom_6700.npy
+│   └── VVV_mom_6700.npy
+├── conf6750
+│   ├── corr_pp_P0_6750.npy
+│   ├── corr_pp_P2_6750.npy
+│   ├── ope_combined_conf6750.h5
+│   ├── ops_mu0_nu1_dz24_conf6750.h5
+│   ├── ops_mu0_nu1_dz24_conf6750.npz
+│   ├── ops_mu3_nu0_dz24_conf6750.h5
+│   ├── ops_mu3_nu0_dz24_conf6750.npz
+│   ├── ops_mu3_nu1_dz24_conf6750.h5
+│   ├── ops_mu3_nu1_dz24_conf6750.npz
+│   ├── VdV_mom_6750.npy
+│   └── VVV_mom_6750.npy
+├── conf6800
+│   ├── corr_pp_P0_6800.npy
+│   ├── corr_pp_P2_6800.npy
+│   ├── ope_combined_conf6800.h5
+│   ├── ops_mu0_nu1_dz24_conf6800.h5
+│   ├── ops_mu0_nu1_dz24_conf6800.npz
+│   ├── ops_mu3_nu0_dz24_conf6800.h5
+│   ├── ops_mu3_nu0_dz24_conf6800.npz
+│   ├── ops_mu3_nu1_dz24_conf6800.h5
+│   ├── ops_mu3_nu1_dz24_conf6800.npz
+│   ├── VdV_mom_6800.npy
+│   └── VVV_mom_6800.npy
+├── conf6850
+│   ├── corr_pp_P0_6850.npy
+│   ├── corr_pp_P2_6850.npy
+│   ├── ope_combined_conf6850.h5
+│   ├── ops_mu0_nu1_dz24_conf6850.h5
+│   ├── ops_mu0_nu1_dz24_conf6850.npz
+│   ├── ops_mu3_nu0_dz24_conf6850.h5
+│   ├── ops_mu3_nu0_dz24_conf6850.npz
+│   ├── ops_mu3_nu1_dz24_conf6850.h5
+│   ├── ops_mu3_nu1_dz24_conf6850.npz
+│   ├── VdV_mom_6850.npy
+│   └── VVV_mom_6850.npy
+├── conf6900
+│   ├── corr_pp_P0_6900.npy
+│   ├── corr_pp_P2_6900.npy
+│   ├── ope_combined_conf6900.h5
+│   ├── ops_mu0_nu1_dz24_conf6900.h5
+│   ├── ops_mu0_nu1_dz24_conf6900.npz
+│   ├── ops_mu3_nu0_dz24_conf6900.h5
+│   ├── ops_mu3_nu0_dz24_conf6900.npz
+│   ├── ops_mu3_nu1_dz24_conf6900.h5
+│   ├── ops_mu3_nu1_dz24_conf6900.npz
+│   ├── VdV_mom_6900.npy
+│   └── VVV_mom_6900.npy
+├── conf6950
+│   ├── corr_pp_P0_6950.npy
+│   ├── corr_pp_P2_6950.npy
+│   ├── ope_combined_conf6950.h5
+│   ├── ops_mu0_nu1_dz24_conf6950.h5
+│   ├── ops_mu0_nu1_dz24_conf6950.npz
+│   ├── ops_mu3_nu0_dz24_conf6950.h5
+│   ├── ops_mu3_nu0_dz24_conf6950.npz
+│   ├── ops_mu3_nu1_dz24_conf6950.h5
+│   ├── ops_mu3_nu1_dz24_conf6950.npz
+│   ├── VdV_mom_6950.npy
+│   └── VVV_mom_6950.npy
+├── conf7000
+│   ├── corr_pp_P0_7000.npy
+│   ├── corr_pp_P2_7000.npy
+│   ├── ope_combined_conf7000.h5
+│   ├── ops_mu0_nu1_dz24_conf7000.h5
+│   ├── ops_mu0_nu1_dz24_conf7000.npz
+│   ├── ops_mu3_nu0_dz24_conf7000.h5
+│   ├── ops_mu3_nu0_dz24_conf7000.npz
+│   ├── ops_mu3_nu1_dz24_conf7000.h5
+│   ├── ops_mu3_nu1_dz24_conf7000.npz
+│   ├── VdV_mom_7000.npy
+│   └── VVV_mom_7000.npy
+├── conf7050
+│   ├── corr_pp_P0_7050.npy
+│   ├── corr_pp_P2_7050.npy
+│   ├── ope_combined_conf7050.h5
+│   ├── ops_mu0_nu1_dz24_conf7050.h5
+│   ├── ops_mu0_nu1_dz24_conf7050.npz
+│   ├── ops_mu3_nu0_dz24_conf7050.h5
+│   ├── ops_mu3_nu0_dz24_conf7050.npz
+│   ├── ops_mu3_nu1_dz24_conf7050.h5
+│   ├── ops_mu3_nu1_dz24_conf7050.npz
+│   ├── VdV_mom_7050.npy
+│   └── VVV_mom_7050.npy
+├── conf7100
+│   ├── corr_pp_P0_7100.npy
+│   ├── corr_pp_P2_7100.npy
+│   ├── ope_combined_conf7100.h5
+│   ├── ops_mu0_nu1_dz24_conf7100.h5
+│   ├── ops_mu0_nu1_dz24_conf7100.npz
+│   ├── ops_mu3_nu0_dz24_conf7100.h5
+│   ├── ops_mu3_nu0_dz24_conf7100.npz
+│   ├── ops_mu3_nu1_dz24_conf7100.h5
+│   ├── ops_mu3_nu1_dz24_conf7100.npz
+│   ├── VdV_mom_7100.npy
+│   └── VVV_mom_7100.npy
+├── conf7150
+│   ├── corr_pp_P0_7150.npy
+│   ├── corr_pp_P2_7150.npy
+│   ├── ope_combined_conf7150.h5
+│   ├── ops_mu0_nu1_dz24_conf7150.h5
+│   ├── ops_mu0_nu1_dz24_conf7150.npz
+│   ├── ops_mu3_nu0_dz24_conf7150.h5
+│   ├── ops_mu3_nu0_dz24_conf7150.npz
+│   ├── ops_mu3_nu1_dz24_conf7150.h5
+│   ├── ops_mu3_nu1_dz24_conf7150.npz
+│   ├── VdV_mom_7150.npy
+│   └── VVV_mom_7150.npy
+├── conf7200
+│   ├── corr_pp_P0_7200.npy
+│   ├── corr_pp_P2_7200.npy
+│   ├── ope_combined_conf7200.h5
+│   ├── ops_mu0_nu1_dz24_conf7200.h5
+│   ├── ops_mu0_nu1_dz24_conf7200.npz
+│   ├── ops_mu3_nu0_dz24_conf7200.h5
+│   ├── ops_mu3_nu0_dz24_conf7200.npz
+│   ├── ops_mu3_nu1_dz24_conf7200.h5
+│   ├── ops_mu3_nu1_dz24_conf7200.npz
+│   ├── VdV_mom_7200.npy
+│   └── VVV_mom_7200.npy
+├── conf7250
+│   ├── corr_pp_P0_7250.npy
+│   ├── corr_pp_P2_7250.npy
+│   ├── ope_combined_conf7250.h5
+│   ├── ops_mu0_nu1_dz24_conf7250.h5
+│   ├── ops_mu0_nu1_dz24_conf7250.npz
+│   ├── ops_mu3_nu0_dz24_conf7250.h5
+│   ├── ops_mu3_nu0_dz24_conf7250.npz
+│   ├── ops_mu3_nu1_dz24_conf7250.h5
+│   ├── ops_mu3_nu1_dz24_conf7250.npz
+│   ├── VdV_mom_7250.npy
+│   └── VVV_mom_7250.npy
+├── conf7300
+│   ├── corr_pp_P0_7300.npy
+│   ├── corr_pp_P2_7300.npy
+│   ├── ope_combined_conf7300.h5
+│   ├── ops_mu0_nu1_dz24_conf7300.h5
+│   ├── ops_mu0_nu1_dz24_conf7300.npz
+│   ├── ops_mu3_nu0_dz24_conf7300.h5
+│   ├── ops_mu3_nu0_dz24_conf7300.npz
+│   ├── ops_mu3_nu1_dz24_conf7300.h5
+│   ├── ops_mu3_nu1_dz24_conf7300.npz
+│   ├── VdV_mom_7300.npy
+│   └── VVV_mom_7300.npy
+├── conf7350
+│   ├── corr_pp_P0_7350.npy
+│   ├── corr_pp_P2_7350.npy
+│   ├── ope_combined_conf7350.h5
+│   ├── ops_mu0_nu1_dz24_conf7350.h5
+│   ├── ops_mu0_nu1_dz24_conf7350.npz
+│   ├── ops_mu3_nu0_dz24_conf7350.h5
+│   ├── ops_mu3_nu0_dz24_conf7350.npz
+│   ├── ops_mu3_nu1_dz24_conf7350.h5
+│   ├── ops_mu3_nu1_dz24_conf7350.npz
+│   ├── VdV_mom_7350.npy
+│   └── VVV_mom_7350.npy
+├── conf7400
+│   ├── corr_pp_P0_7400.npy
+│   ├── corr_pp_P2_7400.npy
+│   ├── ope_combined_conf7400.h5
+│   ├── ops_mu0_nu1_dz24_conf7400.h5
+│   ├── ops_mu0_nu1_dz24_conf7400.npz
+│   ├── ops_mu3_nu0_dz24_conf7400.h5
+│   ├── ops_mu3_nu0_dz24_conf7400.npz
+│   ├── ops_mu3_nu1_dz24_conf7400.h5
+│   ├── ops_mu3_nu1_dz24_conf7400.npz
+│   ├── VdV_mom_7400.npy
+│   └── VVV_mom_7400.npy
+├── conf7450
+│   ├── corr_pp_P0_7450.npy
+│   ├── corr_pp_P2_7450.npy
+│   ├── ope_combined_conf7450.h5
+│   ├── ops_mu0_nu1_dz24_conf7450.h5
+│   ├── ops_mu0_nu1_dz24_conf7450.npz
+│   ├── ops_mu3_nu0_dz24_conf7450.h5
+│   ├── ops_mu3_nu0_dz24_conf7450.npz
+│   ├── ops_mu3_nu1_dz24_conf7450.h5
+│   ├── ops_mu3_nu1_dz24_conf7450.npz
+│   ├── VdV_mom_7450.npy
+│   └── VVV_mom_7450.npy
+├── conf7500
+│   ├── corr_pp_P0_7500.npy
+│   ├── corr_pp_P2_7500.npy
+│   ├── ope_combined_conf7500.h5
+│   ├── ops_mu0_nu1_dz24_conf7500.h5
+│   ├── ops_mu0_nu1_dz24_conf7500.npz
+│   ├── ops_mu3_nu0_dz24_conf7500.h5
+│   ├── ops_mu3_nu0_dz24_conf7500.npz
+│   ├── ops_mu3_nu1_dz24_conf7500.h5
+│   ├── ops_mu3_nu1_dz24_conf7500.npz
+│   ├── VdV_mom_7500.npy
+│   └── VVV_mom_7500.npy
+├── conf7550
+│   ├── corr_pp_P0_7550.npy
+│   ├── corr_pp_P2_7550.npy
+│   ├── ope_combined_conf7550.h5
+│   ├── ops_mu0_nu1_dz24_conf7550.h5
+│   ├── ops_mu0_nu1_dz24_conf7550.npz
+│   ├── ops_mu3_nu0_dz24_conf7550.h5
+│   ├── ops_mu3_nu0_dz24_conf7550.npz
+│   ├── ops_mu3_nu1_dz24_conf7550.h5
+│   ├── ops_mu3_nu1_dz24_conf7550.npz
+│   ├── VdV_mom_7550.npy
+│   └── VVV_mom_7550.npy
+├── conf7600
+│   ├── corr_pp_P0_7600.npy
+│   ├── corr_pp_P2_7600.npy
+│   ├── ope_combined_conf7600.h5
+│   ├── ops_mu0_nu1_dz24_conf7600.h5
+│   ├── ops_mu0_nu1_dz24_conf7600.npz
+│   ├── ops_mu3_nu0_dz24_conf7600.h5
+│   ├── ops_mu3_nu0_dz24_conf7600.npz
+│   ├── ops_mu3_nu1_dz24_conf7600.h5
+│   ├── ops_mu3_nu1_dz24_conf7600.npz
+│   ├── VdV_mom_7600.npy
+│   └── VVV_mom_7600.npy
+├── conf7650
+│   ├── corr_pp_P0_7650.npy
+│   ├── corr_pp_P2_7650.npy
+│   ├── ope_combined_conf7650.h5
+│   ├── ops_mu0_nu1_dz24_conf7650.h5
+│   ├── ops_mu0_nu1_dz24_conf7650.npz
+│   ├── ops_mu3_nu0_dz24_conf7650.h5
+│   ├── ops_mu3_nu0_dz24_conf7650.npz
+│   ├── ops_mu3_nu1_dz24_conf7650.h5
+│   ├── ops_mu3_nu1_dz24_conf7650.npz
+│   ├── VdV_mom_7650.npy
+│   └── VVV_mom_7650.npy
+├── conf7700
+│   ├── corr_pp_P0_7700.npy
+│   ├── corr_pp_P2_7700.npy
+│   ├── ope_combined_conf7700.h5
+│   ├── ops_mu0_nu1_dz24_conf7700.h5
+│   ├── ops_mu0_nu1_dz24_conf7700.npz
+│   ├── ops_mu3_nu0_dz24_conf7700.h5
+│   ├── ops_mu3_nu0_dz24_conf7700.npz
+│   ├── ops_mu3_nu1_dz24_conf7700.h5
+│   ├── ops_mu3_nu1_dz24_conf7700.npz
+│   ├── VdV_mom_7700.npy
+│   └── VVV_mom_7700.npy
+├── conf7750
+│   ├── corr_pp_P0_7750.npy
+│   ├── corr_pp_P2_7750.npy
+│   ├── ope_combined_conf7750.h5
+│   ├── ops_mu0_nu1_dz24_conf7750.h5
+│   ├── ops_mu0_nu1_dz24_conf7750.npz
+│   ├── ops_mu3_nu0_dz24_conf7750.h5
+│   ├── ops_mu3_nu0_dz24_conf7750.npz
+│   ├── ops_mu3_nu1_dz24_conf7750.h5
+│   ├── ops_mu3_nu1_dz24_conf7750.npz
+│   ├── VdV_mom_7750.npy
+│   └── VVV_mom_7750.npy
+├── conf7800
+│   ├── corr_pp_P0_7800.npy
+│   ├── corr_pp_P2_7800.npy
+│   ├── ope_combined_conf7800.h5
+│   ├── ops_mu0_nu1_dz24_conf7800.h5
+│   ├── ops_mu0_nu1_dz24_conf7800.npz
+│   ├── ops_mu3_nu0_dz24_conf7800.h5
+│   ├── ops_mu3_nu0_dz24_conf7800.npz
+│   ├── ops_mu3_nu1_dz24_conf7800.h5
+│   ├── ops_mu3_nu1_dz24_conf7800.npz
+│   ├── VdV_mom_7800.npy
+│   └── VVV_mom_7800.npy
+├── conf7850
+│   ├── corr_pp_P0_7850.npy
+│   ├── corr_pp_P2_7850.npy
+│   ├── ope_combined_conf7850.h5
+│   ├── ops_mu0_nu1_dz24_conf7850.h5
+│   ├── ops_mu0_nu1_dz24_conf7850.npz
+│   ├── ops_mu3_nu0_dz24_conf7850.h5
+│   ├── ops_mu3_nu0_dz24_conf7850.npz
+│   ├── ops_mu3_nu1_dz24_conf7850.h5
+│   ├── ops_mu3_nu1_dz24_conf7850.npz
+│   ├── VdV_mom_7850.npy
+│   └── VVV_mom_7850.npy
+├── conf7900
+│   ├── corr_pp_P0_7900.npy
+│   ├── corr_pp_P2_7900.npy
+│   ├── ope_combined_conf7900.h5
+│   ├── ops_mu0_nu1_dz24_conf7900.h5
+│   ├── ops_mu0_nu1_dz24_conf7900.npz
+│   ├── ops_mu3_nu0_dz24_conf7900.h5
+│   ├── ops_mu3_nu0_dz24_conf7900.npz
+│   ├── ops_mu3_nu1_dz24_conf7900.h5
+│   ├── ops_mu3_nu1_dz24_conf7900.npz
+│   ├── VdV_mom_7900.npy
+│   └── VVV_mom_7900.npy
+├── conf7950
+│   ├── corr_pp_P0_7950.npy
+│   ├── corr_pp_P2_7950.npy
+│   ├── ope_combined_conf7950.h5
+│   ├── ops_mu0_nu1_dz24_conf7950.h5
+│   ├── ops_mu0_nu1_dz24_conf7950.npz
+│   ├── ops_mu3_nu0_dz24_conf7950.h5
+│   ├── ops_mu3_nu0_dz24_conf7950.npz
+│   ├── ops_mu3_nu1_dz24_conf7950.h5
+│   ├── ops_mu3_nu1_dz24_conf7950.npz
+│   ├── VdV_mom_7950.npy
+│   └── VVV_mom_7950.npy
+├── conf8000
+│   ├── corr_pp_P0_8000.npy
+│   ├── corr_pp_P2_8000.npy
+│   ├── ope_combined_conf8000.h5
+│   ├── ops_mu0_nu1_dz24_conf8000.h5
+│   ├── ops_mu0_nu1_dz24_conf8000.npz
+│   ├── ops_mu3_nu0_dz24_conf8000.h5
+│   ├── ops_mu3_nu0_dz24_conf8000.npz
+│   ├── ops_mu3_nu1_dz24_conf8000.h5
+│   ├── ops_mu3_nu1_dz24_conf8000.npz
+│   ├── VdV_mom_8000.npy
+│   └── VVV_mom_8000.npy
+├── conf8050
+│   ├── corr_pp_P0_8050.npy
+│   ├── corr_pp_P2_8050.npy
+│   ├── ope_combined_conf8050.h5
+│   ├── ops_mu0_nu1_dz24_conf8050.h5
+│   ├── ops_mu0_nu1_dz24_conf8050.npz
+│   ├── ops_mu3_nu0_dz24_conf8050.h5
+│   ├── ops_mu3_nu0_dz24_conf8050.npz
+│   ├── ops_mu3_nu1_dz24_conf8050.h5
+│   ├── ops_mu3_nu1_dz24_conf8050.npz
+│   ├── VdV_mom_8050.npy
+│   └── VVV_mom_8050.npy
+├── conf8100
+│   ├── corr_pp_P0_8100.npy
+│   ├── corr_pp_P2_8100.npy
+│   ├── ope_combined_conf8100.h5
+│   ├── ops_mu0_nu1_dz24_conf8100.h5
+│   ├── ops_mu0_nu1_dz24_conf8100.npz
+│   ├── ops_mu3_nu0_dz24_conf8100.h5
+│   ├── ops_mu3_nu0_dz24_conf8100.npz
+│   ├── ops_mu3_nu1_dz24_conf8100.h5
+│   ├── ops_mu3_nu1_dz24_conf8100.npz
+│   ├── VdV_mom_8100.npy
+│   └── VVV_mom_8100.npy
+├── conf8150
+│   ├── corr_pp_P0_8150.npy
+│   ├── corr_pp_P2_8150.npy
+│   ├── ope_combined_conf8150.h5
+│   ├── ops_mu0_nu1_dz24_conf8150.h5
+│   ├── ops_mu0_nu1_dz24_conf8150.npz
+│   ├── ops_mu3_nu0_dz24_conf8150.h5
+│   ├── ops_mu3_nu0_dz24_conf8150.npz
+│   ├── ops_mu3_nu1_dz24_conf8150.h5
+│   ├── ops_mu3_nu1_dz24_conf8150.npz
+│   ├── VdV_mom_8150.npy
+│   └── VVV_mom_8150.npy
+├── conf8200
+│   ├── corr_pp_P0_8200.npy
+│   ├── corr_pp_P2_8200.npy
+│   ├── ope_combined_conf8200.h5
+│   ├── ops_mu0_nu1_dz24_conf8200.h5
+│   ├── ops_mu0_nu1_dz24_conf8200.npz
+│   ├── ops_mu3_nu0_dz24_conf8200.h5
+│   ├── ops_mu3_nu0_dz24_conf8200.npz
+│   ├── ops_mu3_nu1_dz24_conf8200.h5
+│   ├── ops_mu3_nu1_dz24_conf8200.npz
+│   ├── VdV_mom_8200.npy
+│   └── VVV_mom_8200.npy
+├── conf8250
+│   ├── corr_pp_P0_8250.npy
+│   ├── corr_pp_P2_8250.npy
+│   ├── ope_combined_conf8250.h5
+│   ├── ops_mu0_nu1_dz24_conf8250.h5
+│   ├── ops_mu0_nu1_dz24_conf8250.npz
+│   ├── ops_mu3_nu0_dz24_conf8250.h5
+│   ├── ops_mu3_nu0_dz24_conf8250.npz
+│   ├── ops_mu3_nu1_dz24_conf8250.h5
+│   ├── ops_mu3_nu1_dz24_conf8250.npz
+│   ├── VdV_mom_8250.npy
+│   └── VVV_mom_8250.npy
+├── conf8300
+│   ├── corr_pp_P0_8300.npy
+│   ├── corr_pp_P2_8300.npy
+│   ├── ope_combined_conf8300.h5
+│   ├── ops_mu0_nu1_dz24_conf8300.h5
+│   ├── ops_mu0_nu1_dz24_conf8300.npz
+│   ├── ops_mu3_nu0_dz24_conf8300.h5
+│   ├── ops_mu3_nu0_dz24_conf8300.npz
+│   ├── ops_mu3_nu1_dz24_conf8300.h5
+│   ├── ops_mu3_nu1_dz24_conf8300.npz
+│   ├── VdV_mom_8300.npy
+│   └── VVV_mom_8300.npy
+├── conf8350
+│   ├── corr_pp_P0_8350.npy
+│   ├── corr_pp_P2_8350.npy
+│   ├── ope_combined_conf8350.h5
+│   ├── ops_mu0_nu1_dz24_conf8350.h5
+│   ├── ops_mu0_nu1_dz24_conf8350.npz
+│   ├── ops_mu3_nu0_dz24_conf8350.h5
+│   ├── ops_mu3_nu0_dz24_conf8350.npz
+│   ├── ops_mu3_nu1_dz24_conf8350.h5
+│   ├── ops_mu3_nu1_dz24_conf8350.npz
+│   ├── VdV_mom_8350.npy
+│   └── VVV_mom_8350.npy
+├── conf8400
+│   ├── corr_pp_P0_8400.npy
+│   ├── corr_pp_P2_8400.npy
+│   ├── ope_combined_conf8400.h5
+│   ├── ops_mu0_nu1_dz24_conf8400.h5
+│   ├── ops_mu0_nu1_dz24_conf8400.npz
+│   ├── ops_mu3_nu0_dz24_conf8400.h5
+│   ├── ops_mu3_nu0_dz24_conf8400.npz
+│   ├── ops_mu3_nu1_dz24_conf8400.h5
+│   ├── ops_mu3_nu1_dz24_conf8400.npz
+│   ├── VdV_mom_8400.npy
+│   └── VVV_mom_8400.npy
+├── conf8450
+│   ├── corr_pp_P0_8450.npy
+│   ├── corr_pp_P2_8450.npy
+│   ├── ope_combined_conf8450.h5
+│   ├── ops_mu0_nu1_dz24_conf8450.h5
+│   ├── ops_mu0_nu1_dz24_conf8450.npz
+│   ├── ops_mu3_nu0_dz24_conf8450.h5
+│   ├── ops_mu3_nu0_dz24_conf8450.npz
+│   ├── ops_mu3_nu1_dz24_conf8450.h5
+│   ├── ops_mu3_nu1_dz24_conf8450.npz
+│   ├── VdV_mom_8450.npy
+│   └── VVV_mom_8450.npy
+├── conf8500
+│   ├── corr_pp_P0_8500.npy
+│   ├── corr_pp_P2_8500.npy
+│   ├── ope_combined_conf8500.h5
+│   ├── ops_mu0_nu1_dz24_conf8500.h5
+│   ├── ops_mu0_nu1_dz24_conf8500.npz
+│   ├── ops_mu3_nu0_dz24_conf8500.h5
+│   ├── ops_mu3_nu0_dz24_conf8500.npz
+│   ├── ops_mu3_nu1_dz24_conf8500.h5
+│   ├── ops_mu3_nu1_dz24_conf8500.npz
+│   ├── VdV_mom_8500.npy
+│   └── VVV_mom_8500.npy
+├── conf8550
+│   ├── corr_pp_P0_8550.npy
+│   ├── corr_pp_P2_8550.npy
+│   ├── ope_combined_conf8550.h5
+│   ├── ops_mu0_nu1_dz24_conf8550.h5
+│   ├── ops_mu0_nu1_dz24_conf8550.npz
+│   ├── ops_mu3_nu0_dz24_conf8550.h5
+│   ├── ops_mu3_nu0_dz24_conf8550.npz
+│   ├── ops_mu3_nu1_dz24_conf8550.h5
+│   ├── ops_mu3_nu1_dz24_conf8550.npz
+│   ├── VdV_mom_8550.npy
+│   └── VVV_mom_8550.npy
+├── conf8600
+│   ├── corr_pp_P0_8600.npy
+│   ├── corr_pp_P2_8600.npy
+│   ├── ope_combined_conf8600.h5
+│   ├── ops_mu0_nu1_dz24_conf8600.h5
+│   ├── ops_mu0_nu1_dz24_conf8600.npz
+│   ├── ops_mu3_nu0_dz24_conf8600.h5
+│   ├── ops_mu3_nu0_dz24_conf8600.npz
+│   ├── ops_mu3_nu1_dz24_conf8600.h5
+│   ├── ops_mu3_nu1_dz24_conf8600.npz
+│   ├── VdV_mom_8600.npy
+│   └── VVV_mom_8600.npy
+├── conf8650
+│   ├── corr_pp_P0_8650.npy
+│   ├── corr_pp_P2_8650.npy
+│   ├── ope_combined_conf8650.h5
+│   ├── ops_mu0_nu1_dz24_conf8650.h5
+│   ├── ops_mu0_nu1_dz24_conf8650.npz
+│   ├── ops_mu3_nu0_dz24_conf8650.h5
+│   ├── ops_mu3_nu0_dz24_conf8650.npz
+│   ├── ops_mu3_nu1_dz24_conf8650.h5
+│   ├── ops_mu3_nu1_dz24_conf8650.npz
+│   ├── VdV_mom_8650.npy
+│   └── VVV_mom_8650.npy
+├── conf8700
+│   ├── corr_pp_P0_8700.npy
+│   ├── corr_pp_P2_8700.npy
+│   ├── ope_combined_conf8700.h5
+│   ├── ops_mu0_nu1_dz24_conf8700.h5
+│   ├── ops_mu0_nu1_dz24_conf8700.npz
+│   ├── ops_mu3_nu0_dz24_conf8700.h5
+│   ├── ops_mu3_nu0_dz24_conf8700.npz
+│   ├── ops_mu3_nu1_dz24_conf8700.h5
+│   ├── ops_mu3_nu1_dz24_conf8700.npz
+│   ├── VdV_mom_8700.npy
+│   └── VVV_mom_8700.npy
+├── conf8750
+│   ├── corr_pp_P0_8750.npy
+│   ├── corr_pp_P2_8750.npy
+│   ├── ope_combined_conf8750.h5
+│   ├── ops_mu0_nu1_dz24_conf8750.h5
+│   ├── ops_mu0_nu1_dz24_conf8750.npz
+│   ├── ops_mu3_nu0_dz24_conf8750.h5
+│   ├── ops_mu3_nu0_dz24_conf8750.npz
+│   ├── ops_mu3_nu1_dz24_conf8750.h5
+│   ├── ops_mu3_nu1_dz24_conf8750.npz
+│   ├── VdV_mom_8750.npy
+│   └── VVV_mom_8750.npy
+├── conf8800
+│   ├── corr_pp_P0_8800.npy
+│   ├── corr_pp_P2_8800.npy
+│   ├── ope_combined_conf8800.h5
+│   ├── ops_mu0_nu1_dz24_conf8800.h5
+│   ├── ops_mu0_nu1_dz24_conf8800.npz
+│   ├── ops_mu3_nu0_dz24_conf8800.h5
+│   ├── ops_mu3_nu0_dz24_conf8800.npz
+│   ├── ops_mu3_nu1_dz24_conf8800.h5
+│   ├── ops_mu3_nu1_dz24_conf8800.npz
+│   ├── VdV_mom_8800.npy
+│   └── VVV_mom_8800.npy
+├── conf8850
+│   ├── corr_pp_P0_8850.npy
+│   ├── corr_pp_P2_8850.npy
+│   ├── ope_combined_conf8850.h5
+│   ├── ops_mu0_nu1_dz24_conf8850.h5
+│   ├── ops_mu0_nu1_dz24_conf8850.npz
+│   ├── ops_mu3_nu0_dz24_conf8850.h5
+│   ├── ops_mu3_nu0_dz24_conf8850.npz
+│   ├── ops_mu3_nu1_dz24_conf8850.h5
+│   ├── ops_mu3_nu1_dz24_conf8850.npz
+│   ├── VdV_mom_8850.npy
+│   └── VVV_mom_8850.npy
+├── conf8900
+│   ├── corr_pp_P0_8900.npy
+│   ├── corr_pp_P2_8900.npy
+│   ├── ope_combined_conf8900.h5
+│   ├── ops_mu0_nu1_dz24_conf8900.h5
+│   ├── ops_mu0_nu1_dz24_conf8900.npz
+│   ├── ops_mu3_nu0_dz24_conf8900.h5
+│   ├── ops_mu3_nu0_dz24_conf8900.npz
+│   ├── ops_mu3_nu1_dz24_conf8900.h5
+│   ├── ops_mu3_nu1_dz24_conf8900.npz
+│   ├── VdV_mom_8900.npy
+│   └── VVV_mom_8900.npy
+├── conf8950
+│   ├── corr_pp_P0_8950.npy
+│   ├── corr_pp_P2_8950.npy
+│   ├── ope_combined_conf8950.h5
+│   ├── ops_mu0_nu1_dz24_conf8950.h5
+│   ├── ops_mu0_nu1_dz24_conf8950.npz
+│   ├── ops_mu3_nu0_dz24_conf8950.h5
+│   ├── ops_mu3_nu0_dz24_conf8950.npz
+│   ├── ops_mu3_nu1_dz24_conf8950.h5
+│   ├── ops_mu3_nu1_dz24_conf8950.npz
+│   ├── VdV_mom_8950.npy
+│   └── VVV_mom_8950.npy
+├── conf9000
+│   ├── corr_pp_P0_9000.npy
+│   ├── corr_pp_P2_9000.npy
+│   ├── ope_combined_conf9000.h5
+│   ├── ops_mu0_nu1_dz24_conf9000.h5
+│   ├── ops_mu0_nu1_dz24_conf9000.npz
+│   ├── ops_mu3_nu0_dz24_conf9000.h5
+│   ├── ops_mu3_nu0_dz24_conf9000.npz
+│   ├── ops_mu3_nu1_dz24_conf9000.h5
+│   ├── ops_mu3_nu1_dz24_conf9000.npz
+│   ├── VdV_mom_9000.npy
+│   └── VVV_mom_9000.npy
+├── conf9050
+│   ├── corr_pp_P0_9050.npy
+│   ├── corr_pp_P2_9050.npy
+│   ├── ope_combined_conf9050.h5
+│   ├── ops_mu0_nu1_dz24_conf9050.h5
+│   ├── ops_mu0_nu1_dz24_conf9050.npz
+│   ├── ops_mu3_nu0_dz24_conf9050.h5
+│   ├── ops_mu3_nu0_dz24_conf9050.npz
+│   ├── ops_mu3_nu1_dz24_conf9050.h5
+│   ├── ops_mu3_nu1_dz24_conf9050.npz
+│   ├── VdV_mom_9050.npy
+│   └── VVV_mom_9050.npy
+├── conf9100
+│   ├── corr_pp_P0_9100.npy
+│   ├── corr_pp_P2_9100.npy
+│   ├── ope_combined_conf9100.h5
+│   ├── ops_mu0_nu1_dz24_conf9100.h5
+│   ├── ops_mu0_nu1_dz24_conf9100.npz
+│   ├── ops_mu3_nu0_dz24_conf9100.h5
+│   ├── ops_mu3_nu0_dz24_conf9100.npz
+│   ├── ops_mu3_nu1_dz24_conf9100.h5
+│   ├── ops_mu3_nu1_dz24_conf9100.npz
+│   ├── VdV_mom_9100.npy
+│   └── VVV_mom_9100.npy
+├── conf9150
+│   ├── corr_pp_P0_9150.npy
+│   ├── corr_pp_P2_9150.npy
+│   ├── ope_combined_conf9150.h5
+│   ├── ops_mu0_nu1_dz24_conf9150.h5
+│   ├── ops_mu0_nu1_dz24_conf9150.npz
+│   ├── ops_mu3_nu0_dz24_conf9150.h5
+│   ├── ops_mu3_nu0_dz24_conf9150.npz
+│   ├── ops_mu3_nu1_dz24_conf9150.h5
+│   ├── ops_mu3_nu1_dz24_conf9150.npz
+│   ├── VdV_mom_9150.npy
+│   └── VVV_mom_9150.npy
+├── conf9200
+│   ├── corr_pp_P0_9200.npy
+│   ├── corr_pp_P2_9200.npy
+│   ├── ope_combined_conf9200.h5
+│   ├── ops_mu0_nu1_dz24_conf9200.h5
+│   ├── ops_mu0_nu1_dz24_conf9200.npz
+│   ├── ops_mu3_nu0_dz24_conf9200.h5
+│   ├── ops_mu3_nu0_dz24_conf9200.npz
+│   ├── ops_mu3_nu1_dz24_conf9200.h5
+│   ├── ops_mu3_nu1_dz24_conf9200.npz
+│   ├── VdV_mom_9200.npy
+│   └── VVV_mom_9200.npy
+├── conf9250
+│   ├── corr_pp_P0_9250.npy
+│   ├── corr_pp_P2_9250.npy
+│   ├── ope_combined_conf9250.h5
+│   ├── ops_mu0_nu1_dz24_conf9250.h5
+│   ├── ops_mu0_nu1_dz24_conf9250.npz
+│   ├── ops_mu3_nu0_dz24_conf9250.h5
+│   ├── ops_mu3_nu0_dz24_conf9250.npz
+│   ├── ops_mu3_nu1_dz24_conf9250.h5
+│   ├── ops_mu3_nu1_dz24_conf9250.npz
+│   ├── VdV_mom_9250.npy
+│   └── VVV_mom_9250.npy
+├── conf9300
+│   ├── corr_pp_P0_9300.npy
+│   ├── corr_pp_P2_9300.npy
+│   ├── ope_combined_conf9300.h5
+│   ├── ops_mu0_nu1_dz24_conf9300.h5
+│   ├── ops_mu0_nu1_dz24_conf9300.npz
+│   ├── ops_mu3_nu0_dz24_conf9300.h5
+│   ├── ops_mu3_nu0_dz24_conf9300.npz
+│   ├── ops_mu3_nu1_dz24_conf9300.h5
+│   ├── ops_mu3_nu1_dz24_conf9300.npz
+│   ├── VdV_mom_9300.npy
+│   └── VVV_mom_9300.npy
+├── conf9350
+│   ├── corr_pp_P0_9350.npy
+│   ├── corr_pp_P2_9350.npy
+│   ├── ope_combined_conf9350.h5
+│   ├── ops_mu0_nu1_dz24_conf9350.h5
+│   ├── ops_mu0_nu1_dz24_conf9350.npz
+│   ├── ops_mu3_nu0_dz24_conf9350.h5
+│   ├── ops_mu3_nu0_dz24_conf9350.npz
+│   ├── ops_mu3_nu1_dz24_conf9350.h5
+│   ├── ops_mu3_nu1_dz24_conf9350.npz
+│   ├── VdV_mom_9350.npy
+│   └── VVV_mom_9350.npy
+├── conf9400
+│   ├── corr_pp_P0_9400.npy
+│   ├── corr_pp_P2_9400.npy
+│   ├── ope_combined_conf9400.h5
+│   ├── ops_mu0_nu1_dz24_conf9400.h5
+│   ├── ops_mu0_nu1_dz24_conf9400.npz
+│   ├── ops_mu3_nu0_dz24_conf9400.h5
+│   ├── ops_mu3_nu0_dz24_conf9400.npz
+│   ├── ops_mu3_nu1_dz24_conf9400.h5
+│   ├── ops_mu3_nu1_dz24_conf9400.npz
+│   ├── VdV_mom_9400.npy
+│   └── VVV_mom_9400.npy
+├── conf9450
+│   ├── corr_pp_P0_9450.npy
+│   ├── corr_pp_P2_9450.npy
+│   ├── ope_combined_conf9450.h5
+│   ├── ops_mu0_nu1_dz24_conf9450.h5
+│   ├── ops_mu0_nu1_dz24_conf9450.npz
+│   ├── ops_mu3_nu0_dz24_conf9450.h5
+│   ├── ops_mu3_nu0_dz24_conf9450.npz
+│   ├── ops_mu3_nu1_dz24_conf9450.h5
+│   ├── ops_mu3_nu1_dz24_conf9450.npz
+│   ├── VdV_mom_9450.npy
+│   └── VVV_mom_9450.npy
+├── conf9500
+│   ├── corr_pp_P0_9500.npy
+│   ├── corr_pp_P2_9500.npy
+│   ├── ope_combined_conf9500.h5
+│   ├── ops_mu0_nu1_dz24_conf9500.h5
+│   ├── ops_mu0_nu1_dz24_conf9500.npz
+│   ├── ops_mu3_nu0_dz24_conf9500.h5
+│   ├── ops_mu3_nu0_dz24_conf9500.npz
+│   ├── ops_mu3_nu1_dz24_conf9500.h5
+│   ├── ops_mu3_nu1_dz24_conf9500.npz
+│   ├── VdV_mom_9500.npy
+│   └── VVV_mom_9500.npy
+├── conf9550
+│   ├── corr_pp_P0_9550.npy
+│   ├── corr_pp_P2_9550.npy
+│   ├── ope_combined_conf9550.h5
+│   ├── ops_mu0_nu1_dz24_conf9550.h5
+│   ├── ops_mu0_nu1_dz24_conf9550.npz
+│   ├── ops_mu3_nu0_dz24_conf9550.h5
+│   ├── ops_mu3_nu0_dz24_conf9550.npz
+│   ├── ops_mu3_nu1_dz24_conf9550.h5
+│   ├── ops_mu3_nu1_dz24_conf9550.npz
+│   ├── VdV_mom_9550.npy
+│   └── VVV_mom_9550.npy
+├── conf9600
+│   ├── corr_pp_P0_9600.npy
+│   ├── corr_pp_P2_9600.npy
+│   ├── ope_combined_conf9600.h5
+│   ├── ops_mu0_nu1_dz24_conf9600.h5
+│   ├── ops_mu0_nu1_dz24_conf9600.npz
+│   ├── ops_mu3_nu0_dz24_conf9600.h5
+│   ├── ops_mu3_nu0_dz24_conf9600.npz
+│   ├── ops_mu3_nu1_dz24_conf9600.h5
+│   ├── ops_mu3_nu1_dz24_conf9600.npz
+│   ├── VdV_mom_9600.npy
+│   └── VVV_mom_9600.npy
+├── conf9650
+│   ├── corr_pp_P0_9650.npy
+│   ├── corr_pp_P2_9650.npy
+│   ├── ope_combined_conf9650.h5
+│   ├── ops_mu0_nu1_dz24_conf9650.h5
+│   ├── ops_mu0_nu1_dz24_conf9650.npz
+│   ├── ops_mu3_nu0_dz24_conf9650.h5
+│   ├── ops_mu3_nu0_dz24_conf9650.npz
+│   ├── ops_mu3_nu1_dz24_conf9650.h5
+│   ├── ops_mu3_nu1_dz24_conf9650.npz
+│   ├── VdV_mom_9650.npy
+│   └── VVV_mom_9650.npy
+├── conf9700
+│   ├── corr_pp_P0_9700.npy
+│   ├── corr_pp_P2_9700.npy
+│   ├── ope_combined_conf9700.h5
+│   ├── ops_mu0_nu1_dz24_conf9700.h5
+│   ├── ops_mu0_nu1_dz24_conf9700.npz
+│   ├── ops_mu3_nu0_dz24_conf9700.h5
+│   ├── ops_mu3_nu0_dz24_conf9700.npz
+│   ├── ops_mu3_nu1_dz24_conf9700.h5
+│   ├── ops_mu3_nu1_dz24_conf9700.npz
+│   ├── VdV_mom_9700.npy
+│   └── VVV_mom_9700.npy
+├── conf9750
+│   ├── corr_pp_P0_9750.npy
+│   ├── corr_pp_P2_9750.npy
+│   ├── ope_combined_conf9750.h5
+│   ├── ops_mu0_nu1_dz24_conf9750.h5
+│   ├── ops_mu0_nu1_dz24_conf9750.npz
+│   ├── ops_mu3_nu0_dz24_conf9750.h5
+│   ├── ops_mu3_nu0_dz24_conf9750.npz
+│   ├── ops_mu3_nu1_dz24_conf9750.h5
+│   ├── ops_mu3_nu1_dz24_conf9750.npz
+│   ├── VdV_mom_9750.npy
+│   └── VVV_mom_9750.npy
+├── conf9800
+│   ├── corr_pp_P0_9800.npy
+│   ├── corr_pp_P2_9800.npy
+│   ├── ope_combined_conf9800.h5
+│   ├── ops_mu0_nu1_dz24_conf9800.h5
+│   ├── ops_mu0_nu1_dz24_conf9800.npz
+│   ├── ops_mu3_nu0_dz24_conf9800.h5
+│   ├── ops_mu3_nu0_dz24_conf9800.npz
+│   ├── ops_mu3_nu1_dz24_conf9800.h5
+│   ├── ops_mu3_nu1_dz24_conf9800.npz
+│   ├── VdV_mom_9800.npy
+│   └── VVV_mom_9800.npy
+├── conf9850
+│   ├── corr_pp_P0_9850.npy
+│   ├── corr_pp_P2_9850.npy
+│   ├── ope_combined_conf9850.h5
+│   ├── ops_mu0_nu1_dz24_conf9850.h5
+│   ├── ops_mu0_nu1_dz24_conf9850.npz
+│   ├── ops_mu3_nu0_dz24_conf9850.h5
+│   ├── ops_mu3_nu0_dz24_conf9850.npz
+│   ├── ops_mu3_nu1_dz24_conf9850.h5
+│   ├── ops_mu3_nu1_dz24_conf9850.npz
+│   ├── VdV_mom_9850.npy
+│   └── VVV_mom_9850.npy
+├── conf9900
+│   ├── corr_pp_P0_9900.npy
+│   ├── corr_pp_P2_9900.npy
+│   ├── ope_combined_conf9900.h5
+│   ├── ops_mu0_nu1_dz24_conf9900.h5
+│   ├── ops_mu0_nu1_dz24_conf9900.npz
+│   ├── ops_mu3_nu0_dz24_conf9900.h5
+│   ├── ops_mu3_nu0_dz24_conf9900.npz
+│   ├── ops_mu3_nu1_dz24_conf9900.h5
+│   ├── ops_mu3_nu1_dz24_conf9900.npz
+│   ├── VdV_mom_9900.npy
+│   └── VVV_mom_9900.npy
+└── conf9950
+    ├── corr_pp_P0_9950.npy
+    ├── corr_pp_P2_9950.npy
+    ├── ope_combined_conf9950.h5
+    ├── ops_mu0_nu1_dz24_conf9950.h5
+    ├── ops_mu0_nu1_dz24_conf9950.npz
+    ├── ops_mu3_nu0_dz24_conf9950.h5
+    ├── ops_mu3_nu0_dz24_conf9950.npz
+    ├── ops_mu3_nu1_dz24_conf9950.h5
+    ├── ops_mu3_nu1_dz24_conf9950.npz
+    ├── VdV_mom_9950.npy
+    └── VVV_mom_9950.npy
+
+405 directories, 3454 files
