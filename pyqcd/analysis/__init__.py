@@ -42,7 +42,8 @@ from ._tmd_ratio import (
 )
 from ._correlators import run_meff_jackknife, run_3pt_ratio
 from ._dispersion import th_E0, fit_dispersion, dispersion_check, pz_to_gev_lattice
-from ._ratio_fit import R_model, covariance_matrix_inv, fit_ratio
+from ._ratio_fit import (R_model, covariance_matrix_inv, fit_ratio,
+                         fit_constant_window, fh_adaptive_windows)
 from ._ana_3dir import (
     AnaParams, DirParams, load_ratio, load_corr2, compute_eff_mass,
     normalized_cov, plot_histogram, plot_ratio_histogram, plot_corr2_histogram,

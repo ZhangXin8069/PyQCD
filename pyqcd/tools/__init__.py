@@ -10,6 +10,7 @@ from ._io import (
     readin_peram, readin_peram_time_slice,
     safe_save, check_dir_path,
     save_tensor_h5, load_tensor_h5,
+    write_data_ascii, read_data_ascii,
 )
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "readin_peram", "readin_peram_time_slice",
     "safe_save", "check_dir_path",
     "save_tensor_h5", "load_tensor_h5",
+    "write_data_ascii", "read_data_ascii",
 ]
 
 Namespace.__module__ = "pyqcd.tools"

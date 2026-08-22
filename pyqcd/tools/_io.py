@@ -20,6 +20,8 @@ Binary Format Conventions
   concatenated then reshaped as (4, Nt, Nev, 4, Nev, 2) → (Nt, 4, 4, Nev, Nev)
 """
 
+import gzip
+
 import numpy as np
 import os
 from typing import Optional
@@ -432,3 +434,74 @@ def readin_eigvecs_tensor(file_path: str, Nx: int, Nev_use=None,
         import cupy as cp
         return cp.asarray(eigvecs)
     return eigvecs
+
+
+# ═══════════════════════════════════════════════════════════════════
+# L.Liu ASCII 关联函数格式读写（整合 donghx write_data_ascii + 读入端）
+# ═══════════════════════════════════════════════════════════════════
+
+def write_data_ascii(data, T, L, filename, is_complex=True, verbose=False):
+    """L.Liu 格式 ASCII 写出（照抄 donghx input_output_4_cupy.write_data_ascii）。
+
+    首行头 "nsamples T is_cx L 1"；每行 = 时间计数(i%T) + 实部 [+ 虚部]；
+    filename 以 .gz 结尾时自动 gzip 压缩（原版 savetxt 的 .gz 分支语义）。
+
+    Args:
+        data: (nsamples, T, …) 或 (nsamples, T·k) 数组；一维按单样本处理。
+        T: 时间长度。 L: 空间格点数。
+        is_complex: 复数写出（实/虚两列）。
+    """
+    data = np.asarray(data)
+    if data.ndim == 1:
+        data = data[None, :]
+    nsamples = data.shape[0]
+    flat = data.reshape(nsamples * T, -1)
+    counter = (np.arange(flat.shape[0]) % T)[:, None]
+    head = f"{nsamples} {T} {int(is_complex)} {L} 1"
+    _dir = os.path.dirname(filename)
+    if _dir and not os.path.exists(_dir):
+        os.makedirs(_dir)
+    if os.path.isfile(filename):
+        if verbose:
+            print(filename + " already exists, overwriting...")
+    fh = gzip.open(filename, "wb") if filename.endswith(".gz") \
+        else open(filename, "wb")
+    try:
+        if is_complex:
+            block = np.concatenate((counter, flat.real, flat.imag), axis=1)
+            np.savetxt(fh, block, header=head, comments="",
+                       fmt=["%i", "%.32e", "%.32e"])
+        else:
+            block = np.concatenate(
+                (counter, np.real(flat)), axis=1)
+            np.savetxt(fh, block, header=head, comments="",
+                       fmt=["%i", "%.32e"])
+    finally:
+        fh.close()
+    if verbose:
+        print(f"saved {filename} ({nsamples} samples x T={T}, "
+              f"{'complex' if is_complex else 'real'})")
+
+
+def read_data_ascii(filename):
+    """L.Liu 格式 ASCII 读入（与 write_data_ascii 配对的解析端）。
+
+    Returns:
+        (data, meta)：data 形状 (nsamples, T, k)——is_cx 时 k=2 为
+        实/虚两列（复数组 (nsamples,T,k/2) 更直观，此处保持列结构并附
+        meta['is_complex']）；meta 含 nsamples/T/is_complex/L/version。
+        .gz 自动解压。
+    """
+    opener = gzip.open if filename.endswith(".gz") else open
+    with opener(filename, "rt") as f:
+        tokens = f.readline().split()
+        nsamples, T, is_cx, L, _ver = map(int, tokens[:5])
+        cols = [line.split() for line in f if line.strip()]
+    arr = np.asarray(cols, dtype=float)
+    if arr.shape[0] != nsamples * T:
+        raise ValueError(f"行数 {arr.shape[0]} != nsamples·T="
+                         f"{nsamples * T}")
+    body = arr[:, 1:]
+    data = body.reshape(nsamples, T, -1)
+    return data, {'nsamples': nsamples, 'T': T,
+                  'is_complex': bool(is_cx), 'L': L, 'version': _ver}
