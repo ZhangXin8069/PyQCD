@@ -84,12 +84,28 @@ def fit_ratio(data_for_fit, resam_type='boot'):
      ratio_samples_fit_, z_list_, _t_sep_list_, _n_remove_) = data_for_fit
     c_inv = covariance_matrix_inv(ratio_samples_fit_, resam_type)
 
+    # 均值初始化 + χ²>2 换初值重试（对照原版 fit_ratio→fit_ratio_mean 链，
+    # scipy 等价实现：取两轮初值中 χ² 更优者作为逐样本拟合起点）
+    y_mean = np.asarray(ratio_mean_set_, dtype=float)
+    par_ini = _fit_one(y_mean, z_set_, tsep_set_, ti_sep_set_, z_list_, c_inv)
+    del_mean = y_mean - R_model(z_set_, tsep_set_, ti_sep_set_,
+                                z_list_, *par_ini)
+    chi2_best = float(del_mean @ c_inv @ del_mean)
+    if chi2_best / len(z_set_) > 2.0:
+        alt = _fit_one(y_mean, z_set_, tsep_set_, ti_sep_set_, z_list_,
+                       c_inv, par_ini=[0.5, -1.5, 0.0, 0.5, -1.5, 0.0,
+                                       1.02788])
+        del_alt = y_mean - R_model(z_set_, tsep_set_, ti_sep_set_,
+                                   z_list_, *alt)
+        if float(del_alt @ c_inv @ del_alt) < chi2_best:
+            par_ini = alt
+
     n_samples = ratio_samples_fit_.shape[1]
     fits = np.zeros((n_samples, 7))
     for sample_i in range(n_samples):
         y = ratio_samples_fit_[:, sample_i]
         fits[sample_i] = _fit_one(y, z_set_, tsep_set_, ti_sep_set_,
-                                  z_list_, c_inv)
+                                  z_list_, c_inv, par_ini=list(par_ini))
 
     mean = fits.mean(axis=0)
     err = fits.std(axis=0)
