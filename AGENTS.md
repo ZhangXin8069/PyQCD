@@ -63,6 +63,11 @@ xelatex 两遍、Overfull=0 且 Float too large=0）产出全库级分析：
 `docs/pure_pyqcd_20260818.pdf`（核心部分穷尽剖析：C1 梯度流 RK3 / C2 胶子 TMD 算符 O 组合 /
 C3 Z\_R / C4 混合 / C5 NLO 匹配核 Z\_ij / C7 torch 后端，含代码-物理对象映射表）。
 两者均达成 Overfull=0、Float too large=0、Missing character=0（2026-08-18 生成）。
+新增：`docs/analy_physics_chain_20260824.pdf`（物理理论全链专项：B15 框架完整公式链
+流方程 RK3 → Clover/对偶场强 → O 组合 → 不相连比值 c0 → Z_R/混合 → 准 TMD-PDF
+cos/sin 双通道 → NLO 匹配 Z_ij+CS 核+SFTX → 连续极限外推，含 25 项代码-对象映射表、
+22 处 lstinputlisting 直引；Overfull=0、Float=0、Missing=0；等宽字体换 DejaVu Sans Mono
+以覆盖 docstring 希腊字母/⊏/⊥ 等符号，2026-08-24 生成）。
 
 ## torch 后端 + h5 IO + MPI 并行（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
 
