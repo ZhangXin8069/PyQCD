@@ -77,7 +77,8 @@ def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3):
     xx = np.asarray(xx, dtype=float)
     dx = xx[1] - xx[0]
 
-    alpha_s = A_s_run(mu_)
+    # A_s ≡ α_s/(4π)（zengch 惯例），×4π 还原真耦合（对照 matching_new.py: alpha_s=A_s*4π）
+    alpha_s = A_s_run(mu_) * 4.0 * pi
     a_len = a_len_set[conf]
     Nl = Nl_set[conf]
     Pz_GeV = pz_to_gev(Pz_, conf)

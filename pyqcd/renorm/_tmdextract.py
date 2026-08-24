@@ -211,8 +211,9 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
 
     dx = x[1] - x[0]
     lambda_s = lambda_s_fm / fm_to_GeV * pz_gev
-    # 与 _matching.hR_PDF 同构的耦合系数惯例：A_s = α_s/(4π)（zengch 约定）
-    alpha_s = A_s_run(mu)
+    # 与 _matching.hR_PDF 同构：A_s ≡ α_s/(4π)，×4π 还原真耦合
+    # （zengch 端 matching*.py 均为 alpha_s = A_s(mu)*4π）
+    alpha_s = A_s_run(mu) * 4.0 * pi
 
     # 匹配核矩阵：g_ij = g_xy(x_i / y_j)（1 圈硬核，含主值奇点）
     cxi = x[:, None] / y[None, :]
