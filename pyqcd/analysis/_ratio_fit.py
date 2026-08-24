@@ -93,6 +93,9 @@ def fit_ratio(data_for_fit, resam_type='boot'):
 
     mean = fits.mean(axis=0)
     err = fits.std(axis=0)
+    if resam_type == 'jack':
+        # jackknife 误差重标定 std×√(n−1)（原版 fit_ratio.py 同款）
+        err = err * np.sqrt(n_samples - 1)
     keys = ['c0_z0', 'c1_z0', 'c2_z0', 'c0_z1', 'c1_z1', 'c2_z1', 'deltaE']
     return {k: mean[i] for i, k in enumerate(keys)} | \
         {f'{k}_err': err[i] for i, k in enumerate(keys)}

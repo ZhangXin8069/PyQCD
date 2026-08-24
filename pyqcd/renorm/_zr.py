@@ -27,7 +27,8 @@ def Z_MS(z_gev, mu):
 
     Z_MS = 1 + α_s·C_A/(4π)·[ (5/3)·ln( z²μ² / (4e^{−2γ_E}) ) + 3 ]
     """
-    alpha_s = A_s_run(mu)
+    # A_s ≡ α_s/(4π)（zengch 惯例），×4π 还原真耦合（对照 fit_zr_new.py: alpha_s=A_s*4π）
+    alpha_s = A_s_run(mu) * 4.0 * np.pi
     return 1.0 + alpha_s * CA / (4.0 * np.pi) * (
         5.0 / 3.0 * np.log((z_gev ** 2 * mu ** 2) / (4.0 * np.exp(-2.0 * gammaE))) + 3
     )
