@@ -26,6 +26,7 @@ part_end=2
 # ==================================
 
 code="code_02_ratio"
+# code="code_ratio_P0"
 log="_${code}.log"
 
 . /public/home/huangcl/act_venv.sh

@@ -1,6 +1,6 @@
 import sys
-sys.path.append('/public/group/imp/zengch/LQCD/input_file')
-sys.path.append('/public/group/imp/zengch/LQCD/tool')
+sys.path.append('/public/home/zengch/LQCD/input_file')
+sys.path.append('/public/home/zengch/LQCD/tool')
 sys.path.append('/public/home/zengch/All_TMD_dependence')
 import pandas as pd
 import numpy as np
@@ -13,17 +13,15 @@ from tool import *
 from constant import CA, CF, gammaE, pi, A_s
 import pdb # 用于调试代码 pdb.set_trace()
 from hB_data import load_hB_data, hB_data, a_len_set, fm_to_GeV # fm / fm_to_GeV = GeV^{-1}
-from hB_data_FeynmenHellman import load_hB_data_FeynmenHellman
  # 拟合的参数化形式
 
-this_path = '/public/group/imp/zengch/LQCD/renorma'
+this_path = '/public/home/zengch/LQCD/renorma'
 
 
-data_L24x72 = load_hB_data_FeynmenHellman('L24x72_pz0',  3, 7, 13)
-data_L32x64 = load_hB_data_FeynmenHellman('L32x64_pz0', 3, 8, 14)
-data_L32x96 = load_hB_data_FeynmenHellman('L32x96_pz0',  4, 8, 14)
-data_L36x108 = load_hB_data_FeynmenHellman('L36x108_pz0',  4, 9, 15)  
-data_L48x144 = load_hB_data_FeynmenHellman('L48x144_dhx0_pz0',  6, 12, 18)
+data_L24x72       = load_hB_data('L24x72_pz0',  3 , 6,  16)
+data_L32x64       = load_hB_data('L32x64_pz0',  3 , 7,  16)
+data_L32x96       = load_hB_data('L32x96_pz0',  3 , 8,  18)
+data_L48x144       = load_hB_data('L48x144_pz0', 4 , 12, 20)
 
 def Z_MS(z_GeV_, mu_):   #z GeV^{-1} , mu GeV
 
@@ -47,12 +45,11 @@ def th_hB(z_, a_, mu_, par_g_set, f_set):
     返回:
         计算结果，形状与z_set_new相同
     """
-    z_set_new    = np.arange(0.15, 1.0 + 0.05, 0.05) # 对z 进行插值计算的点
+    #z_set_new    = np.arange(0.15, 1.0 + 0.05, 0.05) # 对z 进行插值计算的点
 
-
-    # 严格检查z_是否完全等于z_set_new
-    if not np.array_equal(z_, z_set_new[:len(z_)]):
-        raise ValueError("z_ must be exactly equal to the predefined z_set_new array")
+    ## 严格检查z_是否完全等于z_set_new
+    #if not np.array_equal(z_, z_set_new):
+    #    raise ValueError("z_ must be exactly equal to the predefined z_set_new array")
     
     z_set_new = z_
 
@@ -67,7 +64,6 @@ def th_hB(z_, a_, mu_, par_g_set, f_set):
 
     z_set_new_GeV = z_set_new / fm_to_GeV # 将z 的单位换算成 GeV^{-1}
 
-    #pdb.set_trace()
     #pert_NLO = Z_MS(z_set_new_GeV, mu_) 
 
     def B(z_i):
@@ -109,7 +105,11 @@ def th_hB(z_, a_, mu_, par_g_set, f_set):
 
 def th_ZR(z_, a_, mu_, k, d, m0, Lamda_QCD, f_set):
    
-    z_set_new    = z_ 
+    z_set_new = z_ # 对z 进行插值计算的点
+
+    # 严格检查z_是否完全等于z_set_new
+    #if not np.array_equal(z_, z_set_new):
+    #    raise ValueError("z_ must be exactly equal to the predefined z_set_new array")
     
     # 解包参数
 
@@ -124,7 +124,6 @@ def th_ZR(z_, a_, mu_, k, d, m0, Lamda_QCD, f_set):
     log_hB =  (k * z_set_new_GeV) / (a_ * np.log(a_ * Lamda_QCD))
     log_hB += 5. * CA / (3. * b0) * np.log(np.log(1./(a_ * Lamda_QCD)) / np.log(mu_/ Lamda_QCD))
     log_hB += np.log(   (1. + d / np.log(a_ * Lamda_QCD)) **2.   ) / 2. + m0 * z_set_new_GeV
-    #pdb.set_trace()
     log_hB +=  f_set[:len(z_)] * a_ ** 2.
 
     #pdb.set_trace()
@@ -159,13 +158,6 @@ def fit_ZR_mean(par_ini):
     #c_inv_L32x96      = covariance_matrix_inv(hB_L32x96, 'boot')
     c_inv_L32x96      = np.linalg.inv(np.diag(hB_std_L32x96**2.))
 
-    hB_L36x108         = data_L36x108['loghB']
-    z_L36x108          = data_L36x108['z']
-    hB_mean_L36x108    = np.mean(hB_L36x108, axis=1)
-    hB_std_L36x108     = np.std(hB_L36x108, axis=1)
-    #c_inv_L36x108     = covariance_matrix_inv(hB_L36x108, 'boot')
-    c_inv_L36x108     = np.linalg.inv(np.diag(hB_std_L36x108**2.))
-
     hB_L48x144         = data_L48x144['loghB']
     z_L48x144          = data_L48x144['z']
     hB_mean_L48x144    = np.mean(hB_L48x144, axis=1)
@@ -174,7 +166,9 @@ def fit_ZR_mean(par_ini):
     c_inv_L48x144      = np.linalg.inv(np.diag(hB_std_L48x144**2.))
 
 
-    
+    data_num = len(z_L24x72)
+
+    #visualize_matrix_num( c_inv_L24x72,   'cov_yes')
 
     #pdb.set_trace()
 
@@ -199,23 +193,22 @@ def fit_ZR_mean(par_ini):
         return mean_chi2
     
     def cost_function_all(par_set):
-            
-        chi2_L24x72  = cost_function(z_L24x72,   hB_mean_L24x72,  c_inv_L24x72,  a_len_set['L24x72'],  mu, par_set)
-        chi2_L32x64  = cost_function(z_L32x64,   hB_mean_L32x64,  c_inv_L32x64,  a_len_set['L32x64'],  mu, par_set)
-        chi2_L32x96  = cost_function(z_L32x96,   hB_mean_L32x96,  c_inv_L32x96,  a_len_set['L32x96'],  mu, par_set)
-        chi2_L36x108 = cost_function(z_L36x108,  hB_mean_L36x108, c_inv_L36x108, a_len_set['L36x108'], mu, par_set)
+        
+        chi2_L24x72  = cost_function(z_L24x72,   hB_mean_L24x72, c_inv_L24x72,   a_len_set['L24x72'],  mu, par_set)
+        chi2_L32x64  = cost_function(z_L32x64,   hB_mean_L32x64, c_inv_L32x64,   a_len_set['L32x64'],  mu, par_set)
+        chi2_L32x96  = cost_function(z_L32x96,   hB_mean_L32x96, c_inv_L32x96,   a_len_set['L32x96'],  mu, par_set)
         chi2_L48x144 = cost_function(z_L48x144,  hB_mean_L48x144, c_inv_L48x144, a_len_set['L48x144'], mu, par_set)
-        #return chi2_L24x72  
+        #return chi2_L32x96
         n1 = len(z_L24x72)
         n2 = len(z_L32x64)
         n3 = len(z_L32x96)
-        n4 = len(z_L36x108)
-        n5 = len(z_L48x144)
-    
-        dof = n1 + n2 + n3 + n4 + n5
-        #dof = n1 + n2 + n3 
-        return ( chi2_L24x72 * n1 + chi2_L32x64 * n2 + chi2_L32x96 * n3  + chi2_L36x108 * n4 + chi2_L48x144 * n5) / dof
-        #return ( chi2_L24x72 * n1 + chi2_L32x64 * n2 + chi2_L32x96 * n3) / dof
+        n4 = len(z_L48x144)
+       
+        dof = n1 + n2 + n3 #+ n4 # - len(par_set)  
+       
+        #return ( chi2_L24x72 * n1 + chi2_L32x64 * n2 + chi2_L32x96 * n3 +  chi2_L48x144 * n4) / dof
+        return ( chi2_L24x72 * n1 + chi2_L32x64 * n2 + chi2_L32x96 * n3) / dof
+        #return ( chi2_L24x72 + chi2_L32x64 + chi2_L32x96) / 3.
 
 
     
@@ -235,9 +228,9 @@ def fit_ZR_mean(par_ini):
     m.limits["m0"] = (None, None)  
     m.limits["Lamda_QCD"] = (0, None) 
 
-    #m.fixed['f1',   'f2', 'f3', 'f4', 'f5',
-    #        'f6',  'f7',  'f8',  'f9', 'f10', 'f11', 'f12',
-    #        'f13',  'f14', 'f15', 'f16', 'f17', 'f18']= True
+    m.fixed['f1',   'f2', 'f3', 'f4', 'f5',
+            'f6',  'f7',  'f8',  'f9', 'f10', 'f11', 'f12',
+            'f13',  'f14', 'f15', 'f16', 'f17', 'f18']= True
     
             
     
@@ -279,13 +272,6 @@ def fit_ZR(par_ini):
     #c_inv_L32x96      = covariance_matrix_inv(hB_L32x96, 'boot')
     c_inv_L32x96      = np.linalg.inv(np.diag(hB_std_L32x96**2.))
 
-    hB_L36x108         = data_L36x108['loghB']
-    z_L36x108          = data_L36x108['z']
-    hB_mean_L36x108    = np.mean(hB_L36x108, axis=1)
-    hB_std_L36x108     = np.std(hB_L36x108, axis=1)
-    #c_inv_L36x108     = covariance_matrix_inv(hB_L36x108, 'boot')
-    c_inv_L36x108     = np.linalg.inv(np.diag(hB_std_L36x108**2.))
-
     hB_L48x144         = data_L48x144['loghB']
     z_L48x144          = data_L48x144['z']
     hB_mean_L48x144    = np.mean(hB_L48x144, axis=1)
@@ -323,18 +309,15 @@ def fit_ZR(par_ini):
             chi2_L24x72  = cost_function(z_L24x72,   hB_L24x72[:,i],  c_inv_L24x72,  a_len_set['L24x72'],  mu, par_set)
             chi2_L32x64  = cost_function(z_L32x64,   hB_L32x64[:,i],  c_inv_L32x64,  a_len_set['L32x64'],  mu, par_set)
             chi2_L32x96  = cost_function(z_L32x96,   hB_L32x96[:,i],  c_inv_L32x96,  a_len_set['L32x96'],  mu, par_set)
-            chi2_L36x108 = cost_function(z_L36x108,  hB_L36x108[:,i], c_inv_L36x108, a_len_set['L36x108'], mu, par_set)
             chi2_L48x144 = cost_function(z_L48x144,  hB_L48x144[:,i], c_inv_L48x144, a_len_set['L48x144'], mu, par_set)
             #return chi2_L24x72  
             n1 = len(z_L24x72)
             n2 = len(z_L32x64)
             n3 = len(z_L32x96)
-            n4 = len(z_L36x108)
-            n5 = len(z_L48x144)
+            n4 = len(z_L48x144)
        
-            dof = n1 + n2 + n3 + n4 + n5
-            #dof = n1 + n2 + n3 
-            return ( chi2_L24x72 * n1 + chi2_L32x64 * n2 + chi2_L32x96 * n3  + chi2_L36x108 * n4 + chi2_L48x144 * n5) / dof
+            dof = n1 + n2 + n3 + n4
+            return ( chi2_L24x72 * n1 + chi2_L32x64 * n2 + chi2_L32x96 * n3 + chi2_L48x144 * n4) / dof
             #return ( chi2_L24x72 * n1 + chi2_L32x64 * n2 + chi2_L32x96 * n3) / dof
 
 
@@ -355,9 +338,9 @@ def fit_ZR(par_ini):
         m.limits["m0"] = (None, None)  
         m.limits["Lamda_QCD"] = (0, None) 
 
-        m.fixed['f1',   'f2', 'f3', 'f4', 'f5',
-            'f6',  'f7',  'f8',  'f9', 'f10', 'f11', 'f12',
-            'f13',  'f14', 'f15', 'f16', 'f17', 'f18']= True
+        #m.fixed['f1',   'f2', 'f3', 'f4', 'f5',
+        #    'f6',  'f7',  'f8',  'f9', 'f10', 'f11', 'f12',
+        #    'f13',  'f14', 'f15', 'f16', 'f17', 'f18']= True
         
                 
         
@@ -381,8 +364,7 @@ def fit_ZR(par_ini):
 
         # 保存拟合结果到 CSV 文件
         fit_results = pd.DataFrame(fit_results_list)
-        #fit_results.to_csv(f"{this_path}/result/ZR_fit_result/ZR_a5_FeynmenHellman_f2all.csv", index=False)
-        fit_results.to_csv(f"{this_path}/result/ZR_fit_result/ZR_a5_FeynmenHellman_new_test.csv", index=False)
+        fit_results.to_csv(f"{this_path}/result/ZR_fit_result/ZR_new_a4_plus.csv", index=False)
     
     return m.values
 
@@ -422,8 +404,8 @@ if __name__ == "__main__":
 
     #print(par_ini)
 
-    #fit_ZR_mean(par_ini)
-    fit_ZR(par_ini)
+    fit_ZR_mean(par_ini)
+    #fit_ZR(par_ini)
 
 
 

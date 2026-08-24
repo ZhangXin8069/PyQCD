@@ -1,6 +1,6 @@
 import sys
-sys.path.append('/public/group/imp/zengch/LQCD/input_file')
-sys.path.append('/public/group/imp/zengch/LQCD/tool')
+sys.path.append('/public/home/zengch/LQCD/input_file')
+sys.path.append('/public/home/zengch/LQCD/tool')
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -9,89 +9,78 @@ import pandas as pd
 #from  input_file_L24x72 import *   # pt = 0
 #from  input_file_L32x64 import *   # pt = 0
 #from  input_file_L32x96 import *   # pt = 0
-#from  input_file_L48x144_dhx0 import *   #pt = 0 
+#from  input_file_L48x144 import *   #pt = 0 
 #from  input_file_L36x108 import *   #pt = 0
-#from  input_file_L32x64_C32P29 import * # pt =  0 
-#from  input_file_L48x96_F48P30 import * # pt =  0  
-
-
-#from  input_file_L48x96_C48P14 import * # 
 #from  input_file_L24x72_dhx import * # pt =  2 3 4 5 6
-#from  input_file_L32x64_C32P23 import * # pt =  2 3 4 5 6 
-#from  input_file_L32x64_C32P23m3 import * # pt =  3 4 5 6 7 8
+from  input_file_L32x64_C32P23 import * # pt =  2 3 4 5 6
 #from  input_file_L24x72_dhx_m import * # pt =  2 3 4 5 6
-#from  input_file_L32x64_C32P29_pt import * # pt = 2 3 4 5 6
-#from  input_file_L32x64_dhx import *  # pt =  2 3 4 5 6
+#from  input_file_L32x64_dhx import * # pt =  2 3 4 5 6
 #from  input_file_L32x96_dhx import * # pt =  2 3 4 5 6
 #from  input_file_L48x144_dhx import * # pt =  2 3 4 5 6
-from input_file_L36x108_G36P29_pt import * # pt = 2 3 4 5 6
  
 import glob
 import time
 import pdb # pdb.set_trace()
 
-this_path = '/public/group/imp/zengch/LQCD/renorma'
+this_path = '/public/home/zengch/LQCD/renorma'
 
 
 
 def test_len(test_conf=None):
-    dir_test = ['x', 'y', 'z']
-    for itest in range(3):
-        print(dir_test[itest])
-        file_path_2pt = glob.glob(twopt_list[itest])
-        file_path_ops = glob.glob(ope_list[itest])
-        #pdb.set_trace()
-        #pdb.set_trace()
-        # 提取配置编号的函数
-        def extract_conf_number_2pt(file_path):
-            return int(file_path.split(".npy")[0].split("conf")[-1])
-            #return int(file_path.split(".npz")[0].split("conf")[-1])
+    file_path_2pt = glob.glob(twopt_list[0])
+    file_path_ops = glob.glob(ope_list[0])
+    #pdb.set_trace()
+    #pdb.set_trace()
+    # 提取配置编号的函数
+    def extract_conf_number_2pt(file_path):
+        return int(file_path.split(".npy")[0].split("conf")[-1])
+        #return int(file_path.split(".npz")[0].split("conf")[-1])
 
-        def extract_conf_number_ops(file_path):
-            return int(file_path.split(".npz")[0].split("conf")[-1])
+    def extract_conf_number_ops(file_path):
+        return int(file_path.split(".npz")[0].split("conf")[-1])
 
-        # 提取所有配置编号
-        confs_2pt = set(extract_conf_number_2pt(path) for path in file_path_2pt)
-        confs_ops = set(extract_conf_number_ops(path) for path in file_path_ops)
+    # 提取所有配置编号
+    confs_2pt = set(extract_conf_number_2pt(path) for path in file_path_2pt)
+    confs_ops = set(extract_conf_number_ops(path) for path in file_path_ops)
 
-        print(f"2pt文件数量: {len(confs_2pt)}, ops文件数量: {len(confs_ops)}")
+    print(f"2pt文件数量: {len(confs_2pt)}, ops文件数量: {len(confs_ops)}")
 
-        # 找出只在2pt中存在的配置编号
-        only_in_2pt = confs_2pt - confs_ops
-        # 找出只在ops中存在的配置编号
-        only_in_ops = confs_ops - confs_2pt
-        # 找出共有的配置编号
-        common_confs = confs_2pt & confs_ops
+    # 找出只在2pt中存在的配置编号
+    only_in_2pt = confs_2pt - confs_ops
+    # 找出只在ops中存在的配置编号
+    only_in_ops = confs_ops - confs_2pt
+    # 找出共有的配置编号
+    common_confs = confs_2pt & confs_ops
 
-        if only_in_2pt:
-            print(f"只在2pt中存在的配置编号: {sorted(only_in_2pt)}")
-        else:
-            print("没有只在2pt中存在的配置编号")
+    if only_in_2pt:
+        print(f"只在2pt中存在的配置编号: {sorted(only_in_2pt)}")
+    else:
+        print("没有只在2pt中存在的配置编号")
 
-        if only_in_ops:
-            print(f"只在ops中存在的配置编号: {sorted(only_in_ops)}")
-        else:
-            print("没有只在ops中存在的配置编号")
+    if only_in_ops:
+        print(f"只在ops中存在的配置编号: {sorted(only_in_ops)}")
+    else:
+        print("没有只在ops中存在的配置编号")
 
-        print(f"共有的配置编号数量: {len(common_confs)}")
+    print(f"共有的配置编号数量: {len(common_confs)}")
+    
+    # 新增的查询功能
+    if test_conf is not None:
+        in_2pt = test_conf in confs_2pt
+        in_ops = test_conf in confs_ops
         
-        # 新增的查询功能
-        if test_conf is not None:
-            in_2pt = test_conf in confs_2pt
-            in_ops = test_conf in confs_ops
-            
-            print(f"\n查询结果 - 配置编号 {test_conf}:")
-            print(f"  在2pt文件中: {'存在' if in_2pt else '不存在'}")
-            print(f"  在ops文件中: {'存在' if in_ops else '不存在'}")
-            
-            if in_2pt and in_ops:
-                print("  状态: 两个文件中都存在")
-            elif in_2pt:
-                print("  状态: 只在2pt文件中存在")
-            elif in_ops:
-                print("  状态: 只在ops文件中存在")
-            else:
-                print("  状态: 两个文件中都不存在")
+        print(f"\n查询结果 - 配置编号 {test_conf}:")
+        print(f"  在2pt文件中: {'存在' if in_2pt else '不存在'}")
+        print(f"  在ops文件中: {'存在' if in_ops else '不存在'}")
+        
+        if in_2pt and in_ops:
+            print("  状态: 两个文件中都存在")
+        elif in_2pt:
+            print("  状态: 只在2pt文件中存在")
+        elif in_ops:
+            print("  状态: 只在ops文件中存在")
+        else:
+            print("  状态: 两个文件中都不存在")
     
     return 0
 
@@ -117,12 +106,8 @@ class C2pt:
 
             # dhx 代码
             #...................................
-            exclude_list = []          # 改为整数列表，精确匹配编号
-            min_number = 0 # 这个数也会被排除
-            file_path = [path for path in file_path 
-                        if (num := int(path.split(".npy")[0].split("conf")[-1])) > min_number 
-                        and num not in exclude_list]
-           
+            # 过滤掉包含 "14950" 的文件路径:dhz 代码中Pz = 0 的没有 14950 #只有24x72
+            #file_path = [path for path in file_path if "14950" not in path]
             sort_file_path = sorted(file_path, key=lambda x: int(x.split(".npy")[0].split("conf")[-1])) # for dhx code
             #...................................
             
@@ -136,15 +121,13 @@ class C2pt:
                 '''
 
                 # filename 是npy 文件时：
-                #pdb.set_trace()
+                
                 f = np.load(filename)
-                #pdb.set_trace()
-                #print(filename)
                 ndir_data.append(f.T)
                    
             
             #print(ndir)
-            ndir_data = np.array(ndir_data)
+            #ndir_data = np.array(ndir_data)
             self.data.append(ndir_data)
             #pdb.set_trace()
             
@@ -195,23 +178,15 @@ class C3pt:
             
         
             #pdb.set_trace()
-            # 过滤掉包含 "14950" 的文件路径
-            #file_path = [path for path in file_path if "10040" not in path]
-            exclude_list = []          # 改为整数列表，精确匹配编号
-            min_number = 0 # 这个数也会被排除
-            file_path = [path for path in file_path 
-                        if (num := int(path.split(".npz")[0].split("conf")[-1])) > min_number 
-                        and num not in exclude_list]
-            sort_file_path = sorted(file_path, key=lambda x: int(x.split(".npz")[0].split("conf")[-1]))
 
+            sort_file_path = sorted(file_path, key=lambda x: int(x.split(".npz")[0].split("conf")[-1]))
 
             for filename in sort_file_path:
                 
                    
                 with np.load(filename) as f:
-                    #print(f['ops'][:z_max].shape)
-                    #pdb.set_trace()
-                    ndir_data.append(f['ops'][:z_max])
+                    #print(f['ops'][2,4])
+                    ndir_data.append(f['ops'])
 
             
             ndir_data = np.array(ndir_data)
@@ -383,15 +358,13 @@ def Ratio(z: int, t_sep: int, ti_sep: int,  c2pt, c3pt) -> tuple:
     """
     # 加载数据
     
-    
+    N_conf = c2pt.shape[0]
    
     
     # 计算每个组态的比值
-    #ratio_samples = [ 
-    #    c3pt[i, z, t_sep , ti_sep] / c2pt[i, t_sep ] for i in range(N_conf)
-    #]
-    
-    ratio_samples =  c3pt[:, z, t_sep , ti_sep] / c2pt[:, t_sep ] 
+    ratio_samples = [ 
+        c3pt[i, z, t_sep , ti_sep] / c2pt[i, t_sep ] for i in range(N_conf)
+    ]
     
     # 计算统计量
     n = len(ratio_samples)
@@ -414,9 +387,6 @@ def Ratio_data(save_path=f'{this_path}/result/Ratio_data/Ratio_data_{input_name}
 
     c2pt_load = load_C2pt_deltat()
     c3pt_load = load_C3pt_deltat()
-
-    #c2pt_load = load_C2pt_deltat(f'{this_path}/result/delta_matrix/L48x96_F48P30_pz0_2pt_deltat_matrix.npy')
-    #c3pt_load = load_C3pt_deltat(f'{this_path}/result/delta_matrix/L48x96_F48P30_pz0_3pt_deltat_matrix.npy')
 
     ratio_samples = []
     ratio_data = []
@@ -461,8 +431,7 @@ if __name__ == "__main__":
 
     # 看两点关联函数的样子
     #a = C2pt().data
-    #print(a.shape)
-    #visualize_matrix(np.mean(a, axis=1)[0], name = 'two_point/two_point_L32x64_C32P23_mean')
+    #visualize_matrix(a[0, 0], name = 'two_point/two_point_L48x144_dhx')
     #pdb.set_trace()  
 
     # 看三点关联函数的样子
@@ -474,9 +443,9 @@ if __name__ == "__main__":
     
     # 初始化
     
-    c2pt = C2pt_deltat()
-    c3pt = C3pt_deltat()
-    Ratio_data()
+    #c2pt = C2pt_deltat()
+    #c3pt = C3pt_deltat()
+    #Ratio_data()
 
     # 载入数据
     #a = load_C2pt_deltat()
@@ -494,10 +463,11 @@ if __name__ == "__main__":
     # data:    [z, t_sep, ti_sep, mean, std]
     # samples: [samples0, samples1, ..., samples1N]
 
-    #a = load_Ratio_data()
+    a = load_Ratio_data()
     
-    #print(np.shape(a['data']))
-    #print(np.shape(a['samples']))
+    #pdb.set_trace()
+    print(np.shape(a['data']))
+    print(np.shape(a['samples']))
 
     #pdb.set_trace()
 

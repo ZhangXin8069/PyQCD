@@ -1,0 +1,518 @@
+========================================================================
+  Fit Report, dt7_10, nex=2
+========================================================================
+  model : FH(t) = c0
+  fitpa : FitParams(p0={'c0': 0.6}, prior={'c0': 0.65(10)}, dt_start=np.int64(7), dt_end=10, svdcut=1e-06, nex=2)
+========================================================================
+
+  z = 0: condition number = 298
+Least Squares Fit:
+  chi2/dof [dof] = 2.5 [4]    Q = 0.041    logGBF = 1.6353
+
+Parameters:
+             c0   0.649 (16)     [  0.65 (10) ]  
+
+Fit:
+     x[k]          y[k]     f(x[k],p)
+-------------------------------------
+        7    0.649 (16)    0.649 (16)  
+        8    0.701 (32)    0.649 (16)  *
+        9    0.647 (81)    0.649 (16)  
+       10     0.24 (21)    0.649 (16)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 1: condition number = 297
+Least Squares Fit:
+  chi2/dof [dof] = 2.6 [4]    Q = 0.036    logGBF = 1.6403
+
+Parameters:
+             c0   0.618 (15)     [  0.65 (10) ]  
+
+Fit:
+     x[k]          y[k]     f(x[k],p)
+-------------------------------------
+        7    0.617 (15)    0.618 (15)  
+        8    0.666 (30)    0.618 (15)  *
+        9    0.614 (77)    0.618 (15)  
+       10     0.22 (20)    0.618 (15)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 2: condition number = 292
+Least Squares Fit:
+  chi2/dof [dof] = 2.9 [4]    Q = 0.019    logGBF = 1.3736
+
+Parameters:
+             c0   0.536 (13)     [  0.65 (10) ]  *
+
+Fit:
+     x[k]          y[k]     f(x[k],p)
+-------------------------------------
+        7    0.533 (13)    0.536 (13)  
+        8    0.573 (26)    0.536 (13)  *
+        9    0.520 (65)    0.536 (13)  
+       10     0.17 (17)    0.536 (13)  **
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 3: condition number = 285
+Least Squares Fit:
+  chi2/dof [dof] = 3.9 [4]    Q = 0.0036    logGBF = 0.081412
+
+Parameters:
+             c0   0.428 (11)     [  0.65 (10) ]  **
+
+Fit:
+     x[k]          y[k]     f(x[k],p)
+-------------------------------------
+        7    0.424 (11)    0.428 (11)  
+        8    0.453 (21)    0.428 (11)  *
+        9    0.397 (52)    0.428 (11)  
+       10     0.09 (14)    0.428 (11)  **
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 4: condition number = 280
+Least Squares Fit:
+  chi2/dof [dof] = 5.3 [4]    Q = 0.00027    logGBF = -2.1882
+
+Parameters:
+             c0   0.3203 (89)     [  0.65 (10) ]  ***
+
+Fit:
+     x[k]           y[k]      f(x[k],p)
+---------------------------------------
+        7    0.3161 (90)    0.3203 (89)  
+        8     0.334 (18)    0.3203 (89)  
+        9     0.279 (42)    0.3203 (89)  *
+       10      0.02 (11)    0.3203 (89)  **
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 5: condition number = 276
+Least Squares Fit:
+  chi2/dof [dof] = 6.8 [4]    Q = 1.9e-05    logGBF = -4.6522
+
+Parameters:
+             c0   0.2271 (76)     [  0.65 (10) ]  ****
+
+Fit:
+     x[k]           y[k]      f(x[k],p)
+---------------------------------------
+        7    0.2234 (76)    0.2271 (76)  
+        8     0.233 (15)    0.2271 (76)  
+        9     0.182 (36)    0.2271 (76)  *
+       10    -0.036 (98)    0.2271 (76)  **
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 6: condition number = 274
+Least Squares Fit:
+  chi2/dof [dof] = 7.9 [4]    Q = 2.1e-06    logGBF = -6.775
+
+Parameters:
+             c0   0.1543 (68)     [  0.65 (10) ]  ****
+
+Fit:
+     x[k]           y[k]      f(x[k],p)
+---------------------------------------
+        7    0.1511 (68)    0.1543 (68)  
+        8     0.156 (14)    0.1543 (68)  
+        9     0.114 (33)    0.1543 (68)  *
+       10    -0.068 (89)    0.1543 (68)  **
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 7: condition number = 272
+Least Squares Fit:
+  chi2/dof [dof] = 8.9 [4]    Q = 3.5e-07    logGBF = -8.508
+
+Parameters:
+             c0   0.1010 (63)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]           y[k]      f(x[k],p)
+---------------------------------------
+        7    0.0984 (63)    0.1010 (63)  
+        8     0.101 (13)    0.1010 (63)  
+        9     0.068 (31)    0.1010 (63)  *
+       10    -0.081 (82)    0.1010 (63)  **
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 8: condition number = 267
+Least Squares Fit:
+  chi2/dof [dof] = 9.7 [4]    Q = 8.2e-08    logGBF = -9.8697
+
+Parameters:
+             c0   0.0641 (59)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]           y[k]      f(x[k],p)
+---------------------------------------
+        7    0.0620 (60)    0.0641 (59)  
+        8     0.064 (12)    0.0641 (59)  
+        9     0.039 (30)    0.0641 (59)  
+       10    -0.086 (76)    0.0641 (59)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 9: condition number = 265
+Least Squares Fit:
+  chi2/dof [dof] = 10 [4]    Q = 3e-08    logGBF = -10.786
+
+Parameters:
+             c0   0.0396 (56)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]           y[k]      f(x[k],p)
+---------------------------------------
+        7    0.0378 (57)    0.0396 (56)  
+        8     0.040 (12)    0.0396 (56)  
+        9     0.021 (28)    0.0396 (56)  
+       10    -0.086 (71)    0.0396 (56)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 10: condition number = 275
+Least Squares Fit:
+  chi2/dof [dof] = 10 [4]    Q = 2e-08    logGBF = -11.078
+
+Parameters:
+             c0   0.0236 (53)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]           y[k]      f(x[k],p)
+---------------------------------------
+        7    0.0222 (54)    0.0236 (53)  
+        8     0.023 (11)    0.0236 (53)  
+        9     0.011 (28)    0.0236 (53)  
+       10    -0.074 (68)    0.0236 (53)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 11: condition number = 298
+Least Squares Fit:
+  chi2/dof [dof] = 10 [4]    Q = 2.2e-08    logGBF = -10.878
+
+Parameters:
+             c0   0.0136 (50)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]           y[k]      f(x[k],p)
+---------------------------------------
+        7    0.0122 (51)    0.0136 (50)  
+        8     0.012 (11)    0.0136 (50)  
+        9     0.007 (26)    0.0136 (50)  
+       10    -0.046 (68)    0.0136 (50)  
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 12: condition number = 328
+Least Squares Fit:
+  chi2/dof [dof] = 10 [4]    Q = 2.1e-08    logGBF = -10.818
+
+Parameters:
+             c0   0.0076 (48)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]           y[k]      f(x[k],p)
+---------------------------------------
+        7    0.0061 (49)    0.0076 (48)  
+        8     0.004 (10)    0.0076 (48)  
+        9     0.008 (25)    0.0076 (48)  
+       10    -0.004 (67)    0.0076 (48)  
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 13: condition number = 344
+Least Squares Fit:
+  chi2/dof [dof] = 11 [4]    Q = 1.1e-08    logGBF = -11.399
+
+Parameters:
+             c0   0.0044 (45)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]            y[k]      f(x[k],p)
+----------------------------------------
+        7     0.0027 (46)    0.0044 (45)  
+        8    -0.0018 (97)    0.0044 (45)  
+        9      0.013 (24)    0.0044 (45)  
+       10      0.039 (65)    0.0044 (45)  
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 14: condition number = 335
+Least Squares Fit:
+  chi2/dof [dof] = 11 [4]    Q = 3.1e-09    logGBF = -12.506
+
+Parameters:
+             c0   0.0031 (43)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]            y[k]      f(x[k],p)
+----------------------------------------
+        7     0.0013 (44)    0.0031 (43)  
+        8    -0.0050 (92)    0.0031 (43)  
+        9      0.019 (22)    0.0031 (43)  
+       10      0.075 (62)    0.0031 (43)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 15: condition number = 310
+Least Squares Fit:
+  chi2/dof [dof] = 12 [4]    Q = 9.9e-10    logGBF = -13.528
+
+Parameters:
+             c0   0.0026 (42)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]            y[k]      f(x[k],p)
+----------------------------------------
+        7     0.0011 (42)    0.0026 (42)  
+        8    -0.0069 (87)    0.0026 (42)  *
+        9      0.021 (21)    0.0026 (42)  
+       10      0.095 (57)    0.0026 (42)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 16: condition number = 291
+Least Squares Fit:
+  chi2/dof [dof] = 12 [4]    Q = 5.6e-10    logGBF = -13.969
+
+Parameters:
+             c0   0.0026 (40)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]            y[k]      f(x[k],p)
+----------------------------------------
+        7     0.0013 (41)    0.0026 (40)  
+        8    -0.0084 (84)    0.0026 (40)  *
+        9      0.019 (21)    0.0026 (40)  
+       10      0.099 (54)    0.0026 (40)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 17: condition number = 286
+Least Squares Fit:
+  chi2/dof [dof] = 12 [4]    Q = 5.5e-10    logGBF = -13.899
+
+Parameters:
+             c0   0.0029 (40)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]            y[k]      f(x[k],p)
+----------------------------------------
+        7     0.0014 (40)    0.0029 (40)  
+        8    -0.0101 (83)    0.0029 (40)  *
+        9      0.011 (20)    0.0029 (40)  
+       10      0.089 (52)    0.0029 (40)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 18: condition number = 293
+Least Squares Fit:
+  chi2/dof [dof] = 12 [4]    Q = 6.1e-10    logGBF = -13.765
+
+Parameters:
+             c0   0.0033 (39)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]             y[k]      f(x[k],p)
+-----------------------------------------
+        7      0.0015 (39)    0.0033 (39)  
+        8     -0.0119 (82)    0.0033 (39)  *
+        9    -0.0005 (202)    0.0033 (39)  
+       10       0.070 (51)    0.0033 (39)  *
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 19: condition number = 302
+Least Squares Fit:
+  chi2/dof [dof] = 12 [4]    Q = 5.9e-10    logGBF = -13.828
+
+Parameters:
+             c0   0.0032 (38)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]            y[k]      f(x[k],p)
+----------------------------------------
+        7     0.0013 (39)    0.0032 (38)  
+        8    -0.0133 (81)    0.0032 (38)  **
+        9     -0.014 (21)    0.0032 (38)  
+       10      0.047 (51)    0.0032 (38)  
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 20: condition number = 307
+Least Squares Fit:
+  chi2/dof [dof] = 12 [4]    Q = 6.4e-10    logGBF = -13.806
+
+Parameters:
+             c0   0.0025 (38)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]            y[k]      f(x[k],p)
+----------------------------------------
+        7     0.0007 (38)    0.0025 (38)  
+        8    -0.0136 (80)    0.0025 (38)  **
+        9     -0.027 (22)    0.0025 (38)  *
+       10      0.024 (51)    0.0025 (38)  
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 21: condition number = 299
+Least Squares Fit:
+  chi2/dof [dof] = 12 [4]    Q = 9.9e-10    logGBF = -13.427
+
+Parameters:
+             c0   0.0015 (38)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]              y[k]      f(x[k],p)
+------------------------------------------
+        7    -0.00005 (379)    0.0015 (38)  
+        8      -0.0126 (78)    0.0015 (38)  *
+        9       -0.038 (24)    0.0015 (38)  *
+       10        0.004 (51)    0.0015 (38)  
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 22: condition number = 277
+Least Squares Fit:
+  chi2/dof [dof] = 12 [4]    Q = 1.5e-09    logGBF = -13.076
+
+Parameters:
+             c0   0.0006 (39)     [  0.65 (10) ]  *****
+
+Fit:
+     x[k]            y[k]      f(x[k],p)
+----------------------------------------
+        7    -0.0010 (39)    0.0006 (39)  
+        8    -0.0106 (78)    0.0006 (39)  *
+        9     -0.048 (25)    0.0006 (39)  *
+       10     -0.014 (51)    0.0006 (39)  
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 2/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+  z = 23: condition number = 251
+Least Squares Fit:
+  chi2/dof [dof] = 12 [4]    Q = 1.1e-09    logGBF = -13.39
+
+Parameters:
+             c0   -0.0001 (40)      [  0.65 (10) ]  *****
+
+Fit:
+     x[k]            y[k]       f(x[k],p)
+-----------------------------------------
+        7    -0.0022 (40)    -0.0001 (40)  
+        8    -0.0093 (78)    -0.0001 (40)  *
+        9     -0.059 (26)    -0.0001 (40)  **
+       10     -0.034 (50)    -0.0001 (40)  
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08,1e-10*,1e-10)    (itns/time = 3/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+========================================================================
+  Summary Table, dt7_10, nex=2
+========================================================================
++----+-----------+----------+
+| z  |     c0    | chi2/dof |
++----+-----------+----------+
+| 0  | 0.671(16) |    3     |
+| 1  | 0.639(15) |   2.9    |
+| 2  | 0.554(13) |   2.6    |
+| 3  | 0.443(11) |   2.2    |
+| 4  |  0.332(9) |   1.8    |
+| 5  |  0.237(8) |   1.6    |
+| 6  |  0.163(7) |   1.5    |
+| 7  |  0.109(6) |   1.4    |
+| 8  |  0.072(6) |   1.4    |
+| 9  |  0.047(6) |   1.4    |
+| 10 |  0.031(5) |   1.3    |
+| 11 |  0.020(5) |   1.3    |
+| 12 |  0.013(5) |   1.3    |
+| 13 |  0.009(5) |   1.2    |
+| 14 |  0.006(4) |   1.2    |
+| 15 |  0.005(4) |   1.1    |
+| 16 |  0.006(4) |   1.1    |
+| 17 |  0.007(4) |   1.3    |
+| 18 |  0.008(4) |   1.7    |
+| 19 |  0.008(4) |   2.1    |
+| 20 |  0.008(4) |   2.4    |
+| 21 |  0.007(4) |   2.4    |
+| 22 |  0.006(4) |   2.3    |
+| 23 |  0.005(4) |   2.2    |
++----+-----------+----------+
