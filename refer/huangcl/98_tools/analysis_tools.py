@@ -116,14 +116,14 @@ def sem(data: np.ndarray, jackknife: bool = False) -> np.ndarray:
     return error
 
 
-def resample(corr: np.ndarray, Nsample: int, jackknife: bool = False, ) -> np.ndarray:
+def resample(conf_data: np.ndarray, Nsample: int, jackknife: bool = False, ) -> np.ndarray:
     """
-    对 corr 进行重采样. 
+    对组态数据进行重采样.
 
     Parameters
     ----------
-    corr : np.ndarray
-        原始数据, axis=0 为 conf 维度. 
+    conf_data : np.ndarray
+        组态数据, axis=0 为 conf 维度.
     jackknife : bool
         True 表示 jackknife, False 表示 bootstrap. 
     Nsample : int
@@ -135,22 +135,22 @@ def resample(corr: np.ndarray, Nsample: int, jackknife: bool = False, ) -> np.nd
         重采样后的数组, axis=0 为 sample 维度. 
     """
     seed = 0
-    n_conf = corr.shape[0]
+    n_conf = conf_data.shape[0]
     if jackknife:
-        re_corr = (n_conf * corr.mean(0) - corr) / (n_conf - 1)
+        return (n_conf * conf_data.mean(0) - conf_data) / (n_conf - 1)
     else:
         rng = np.random.default_rng(seed=seed)
         idx = rng.integers(0, n_conf, size=(Nsample, n_conf))
         # 矩阵乘法加速 bootstrap:
         #   构建计数矩阵 counts[s,k] = conf k 在样本 s 中出现次数
-        #   re_corr = (1/n_conf) * counts @ corr.reshape(n_conf, -1)
+        #   re_corr = (1/n_conf) * counts @ conf_data.reshape(n_conf, -1)
         # 一次 BLAS 运算完成所有样本均值, 比 Python 循环快 10-20 倍.
         counts = np.zeros((Nsample, n_conf), dtype=np.float64)
         np.add.at(counts, (np.arange(Nsample)[:, None], idx), 1.0)
-        corr_flat = corr.reshape(n_conf, -1)
-        re_corr_flat = (1.0 / n_conf) * (counts @ corr_flat)
-        re_corr = re_corr_flat.reshape(Nsample, *corr.shape[1:])
-    return re_corr
+        # conf_data_flat = conf_data.reshape(n_conf, -1)  # 展平 conf 之后的维度, 便于矩阵乘法
+        # re_corr_flat = (1.0 / n_conf) * (counts @ conf_data_flat)  # 一次 BLAS 运算完成所有样本均值, 比 Python 循环快 10-20 倍
+        # re_corr = re_corr_flat.reshape(Nsample, *conf_data.shape[1:])  # 恢复原始形状
+        return (1.0 / n_conf) * (counts @ conf_data.reshape(n_conf, -1)).reshape(Nsample, *conf_data.shape[1:])
 
 
 def calc_cov(arr: np.ndarray, jackknife: bool = False) -> Tuple[np.ndarray, float]:
@@ -586,7 +586,7 @@ def plot_scatter(
 
     # 水平参考线
     if show_hline:
-        _hline_color = hline_color if hline_color is not None else plot_colors[0]
+        _hline_color = hline_color if hline_color is not None else plot_colors[-1]
         ax.axhline(y=hline_y, color=_hline_color, linestyle=hline_style,
                    linewidth=hline_width, label=hline_label)
 
@@ -596,7 +596,7 @@ def plot_scatter(
                           (n - 1) * x_offset / 2, n)
 
     for i, label in enumerate(labels):
-        color = plot_colors[(i + 1) % len(plot_colors)]
+        color = plot_colors[i % len(plot_colors)]
         ax.scatter(np.asarray(x) + offsets[i], y_data[label],
                    marker="x", color=color, s=40,
                    linewidths=1.5, label=label, zorder=3)

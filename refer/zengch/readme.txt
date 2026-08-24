@@ -7,11 +7,11 @@ hB_data.py                 :插值得到 用于下一步 重整因子Z 拟合的
 
 fit_zr.py                  :拟合Pz = 0 的c0 得到重整因子Z------------------------   ZR_fit_result  (重整化因子Z的拟合结果)
 
-fit_hR_big_lambda.py       :对重整化后的准PDF作lambda外推并作傅里叶变换---------------    hR_x            (准PDF)
+fit_hR_big_lambda.py   :对重整化后的准PDF作lambda外推并作傅里叶变换---------------    hR_x            (准PDF)
 
 matching.py                :将准PDF 转化为光锥PDF--------------------------------   hR_PDF          (光锥PDF)
 
-fit_pz_a_extrapolatiing.py :将得到的光锥PDF做格距和动量外推------------------------   hR_res
+
 
 
 fit_2pt.py                 : 读取 2pt 数据， 拟合得到E0 --------------------------   par_2pt 

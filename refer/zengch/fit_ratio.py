@@ -1,6 +1,6 @@
 import sys
-sys.path.append('/public/group/imp/zengch/LQCD/input_file')
-sys.path.append('/public/group/imp/zengch/LQCD/tool')
+sys.path.append('/public/home/zengch/LQCD/input_file')
+sys.path.append('/public/home/zengch/LQCD/tool')
 
 import pandas as pd
 import numpy as np
@@ -18,7 +18,7 @@ import pdb # 用于调试代码 pdb.set_trace()
 start_time = time.time()
 
 #data_name_test = 'L32x96_dhx_pz5'
-data_name_test = 'L24x72_dhxmeang1_pz2'
+data_name_test = 'L32x64_C32P23_pz3'
 #data_name_test = 'L32x64_pz0'
 #data_name_test = 'L48x144_pz0'
 #data_name = 'L32x96'
@@ -333,7 +333,7 @@ if __name__ == "__main__":
 
     star = time.time()
     #t_sep_list = [12, 13, 14,15, 16, 17, 18, 19, 20, 21, 22, 23] 
-    t_sep_list = [7, 8, 9, 10, 11, 12, 13] 
+    t_sep_list = [8, 9, 10, 11, 12] 
     n_remove =  3
     
     

@@ -78,16 +78,17 @@ def hB_data(conf, Pz_, exn, tsep_star, tsep_end):
 
     hb_z_set_new_log = np.log(hb_z_set_new)
     
-    
+   
     np.savez(save_path, 
              z = z_set_new,                  # 插值以后的 z (fm)
              loghB = hb_z_set_new_log,       # 插值以后的 loghB  已归一化
              hB = hb_z_set_new,              # 插值以后的 hB     已归一化
              z_o= z_set,                     # 原本的 z (fm)
-             hB_o = hb_z_set,                # 原本的 hB      已归一化
-             hB_o_zn = hb_z_set_zn)          # 原本的 hB      未归一化
-    
+             hB_o = hb_z_set,                # 原本的 loghB      已归一化
+             hB_o_zn = hb_z_set_zn)          # 原本的 hB         已归一化
     #pdb.set_trace()
+   
+
     return  z_set_new, hb_z_set_new # z fm
 
 def load_hB_data(data_name, exn, tsep_star, tsep_end):
