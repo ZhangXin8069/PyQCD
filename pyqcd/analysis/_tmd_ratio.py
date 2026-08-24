@@ -58,12 +58,16 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
 
     Nconf = len(conf_ids)
     Nsample = max(Nconf, 1)
-    # jackknife 需 ≥14 组态（数据点 Ndata≈14，样本数必须 ≥ Ndata 才满秩）；
-# 小样本用 bootstrap（Nsample=200 满秩协方差，svdcut 下拟合稳定）
+    # 重采样方式选择：delete-one jackknife 需样本数显著大于数据点数；
+    # 小样本用 bootstrap（Nsample=200 满秩协方差，svdcut 下拟合稳定）。
+    # 守卫：Nconf<2 禁用 jackknife（n−1=0 除零 → 全 NaN；且 Ndata_est 在
+    # cut>窗口长时为负会使不等式恒真）
     Ndata_est = (dt_end - dt_start + 1) * ((dt_end - dt_start + 1) - cut + 1)
-    jack = Nconf > Ndata_est
+    jack = (Nconf >= 2) and (Nconf > Ndata_est)
     if not jack:
         Nsample = 200   # bootstrap 重采样 200 次（协方差满秩）
+    if Nconf < 2:
+        Nsample = 1     # 单组态：重采样无统计意义，走下方直通分支
     out_dir = os.path.join(run_dir, 'analysis', 'tmd_ratio')
     os.makedirs(out_dir, exist_ok=True)
 
@@ -100,9 +104,13 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
                     _ope_rel[:, :, _dtau, :, :]
                     * _corr2_rel[:, :, _dt][:, :, None, None])
 
-        corr2 = resample(_corr2_rel, jack, Nsample)
-        ope = resample(_ope_rel, jack, Nsample)
-        corr3 = resample(_corr3, jack, Nsample)
+        if Nconf < 2:
+            # 单组态直通：不重采样（bootstrap 复制亦无意义），保形状 (1, ...)
+            corr2, ope, corr3 = _corr2_rel, _ope_rel, _corr3
+        else:
+            corr2 = resample(_corr2_rel, jack, Nsample)
+            ope = resample(_ope_rel, jack, Nsample)
+            corr3 = resample(_corr3, jack, Nsample)
 
         # 真空扣除 + ratio
         corr3_disc = corr3 - corr2[:, :, :, None, None, None] * ope[:, :, None, :, :, :]
