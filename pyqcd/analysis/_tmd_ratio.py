@@ -60,9 +60,12 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
     Nsample = max(Nconf, 1)
     # 重采样方式选择：delete-one jackknife 需样本数显著大于数据点数；
     # 小样本用 bootstrap（Nsample=200 满秩协方差，svdcut 下拟合稳定）。
-    # 守卫：Nconf<2 禁用 jackknife（n−1=0 除零 → 全 NaN；且 Ndata_est 在
-    # cut>窗口长时为负会使不等式恒真）
-    Ndata_est = (dt_end - dt_start + 1) * ((dt_end - dt_start + 1) - cut + 1)
+    # 守卫：Nconf<2 禁用 jackknife（n−1=0 除零 → 全 NaN）
+    front_remove = cut // 2
+    back_remove = cut - front_remove
+    # 真实数据点计数（与下方 x_coor 同式）：Σ_dt max(dt−front−back+1, 0)
+    Ndata_est = sum(max(dt - front_remove - back_remove + 1, 0)
+                    for dt in range(dt_start, dt_end + 1))
     jack = (Nconf >= 2) and (Nconf > Ndata_est)
     if not jack:
         Nsample = 200   # bootstrap 重采样 200 次（协方差满秩）
@@ -134,9 +137,7 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
             }
             continue
 
-        # 逐 (z,b) 相关拟合
-        front_remove = cut // 2
-        back_remove = cut - front_remove
+        # 逐 (z,b) 相关拟合（front/back_remove 已在重采样选择处计算）
         x_coor = [(dt, dtau)
                   for dt in range(dt_start, dt_end + 1)
                   for dtau in range(front_remove, dt - back_remove + 1)]
