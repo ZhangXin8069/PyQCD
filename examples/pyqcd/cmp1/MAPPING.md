@@ -40,7 +40,7 @@
 | meff cosh clamp | pyqcd 加 arccosh 定义域保护 | 有意增强；log 支路不受影响 |
 | dis_connect PFF | ref 装配依赖 reshape 平坦重解释副作用 | pyqcd 按文档意图实现，实测差异登记 |
 | F̃ 约定 | ref plaquette_clover_all_tilde 与 compute_dual_field_strength 轴序/符号存在固定线性关系 | D04 以候选关系判定锁定；下游 D05/D07 数值传导→optim/backlog |
-| stout 逐位 | 生产形状 (dir,z,y,x,t,c,c) 7D 喂入已修正（此前单例 t 假轴致 nu=0 staple 滚动失效）；修正后默认去迹路径仍存 rel≈0.385 结构性差异，staple/f 系数应用层的逐步插桩定位需独立会话预算 | S10 结构性登记 backlog（含 NaN 域外传播现象记录）；性质校验由 conftest 保证 |
+| stout 逐位 | 生产形状 (dir,z,y,x,t,c,c) 7D 喂入已修正（此前单例 t 假轴致 nu=0 staple 滚动失效）；修正后默认去迹路径仍存 rel≈0.385 结构性差异，staple/f 系数应用层的逐步插桩定位需独立会话预算 | S10 结构性登记 backlog。插桩新证据：①opt_einsum 对角返回可写视图→ref 迹扣除实际生效（此前'未去迹'结论撤回）；②不去迹路径 |c0|>c0_max 占 31%→NaN 必然；③ref 在其布局下 roll 轴映射依赖其生产调用栈的确切输入排布——本机无法唯一复原，故 S10 闭合需集群环境取证 |
 | unpol F·F(S09) | rel≈2.33：U† 链 roll 方向疑异 | second_insert 接口已落地；backlog |
 | MPI 层 25 项 / contractadviser 完整版 | 范式不同（pyqcd.parallel 元任务）／Roofline 顾问 | 维持既有判定：替代性覆盖，不移植；核心 FLOPs 诊断已内嵌(B9) |
 | inner_product | ref 逐点 (Nc,Nc) 外积 vs pyqcd Nc 内积 | 语义分歧登记 |
