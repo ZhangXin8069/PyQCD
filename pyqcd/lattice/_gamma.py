@@ -184,3 +184,84 @@ def tran_indx_to_gamma(indx):
     indx_flat = indx.reshape(-1)
     _gamma_stack = _np.asarray([gamma(int(x)) for x in indx_flat])
     return _gamma_stack.reshape(indx_shape + [4, 4])
+
+
+def gamma_index(g):
+    """γ 矩阵稀疏分解 (value,row,col)（照抄 sush gamma_matrix.gamma_index）。
+
+    Args:
+        g: (4,4) γ 矩阵。
+    Returns:
+        value (4,) complex、row (4,) int、col (4,) int——非零元按行主序，
+        不足 4 个时尾部补零。
+    """
+    value = np.zeros((4), dtype=complex)
+    row = np.zeros((4), dtype=int)
+    col = np.zeros((4), dtype=int)
+    count = 0
+    for i in range(4):
+        for j in range(4):
+            if np.abs(g[i, j]) != 0.0:
+                value[count] = g[i, j]
+                row[count] = i
+                col[count] = j
+                count += 1
+    return value, row, col
+
+
+def PFF_Mom_to_gamma_new(Mom, allow_t: bool = False):
+    """PFF 投影的 γ 指标组合表（照抄 sush gamma_matrix.PFF_Mom_to_gamma_new）。
+
+    Args:
+        Mom: 动量列表 [[pz,py,px], ...]。
+        allow_t: False 用 3 维 Levi-Civita；True 前置时间分量 1 后用 4 维。
+    Returns:
+        (gamma_indx_list_matrix, 其 γ 矩阵, gamma_indx_list_all, 其 γ 矩阵)。
+    """
+    from itertools import combinations
+
+    from . import _cg  # noqa: F401  占位保持模块依赖显式
+    from ..tools._base import levi_civita_tensor
+
+    gamma_indx_list_matrix = [[[]]]
+
+    if allow_t is False:
+        lc_tensor = levi_civita_tensor(3)
+        Mom_list = [x[::-1] for x in Mom]
+    else:
+        lc_tensor = levi_civita_tensor(4)
+        Mom_list = [([1] + x)[::-1] for x in Mom]
+
+    if Mom_list == [[0, 0, 0]]:
+        gamma_indx_list_matrix = np.asarray(
+            [[[x, y] for x in range(1, 5) for y in range(1, 5)]])
+    else:
+        for _Mom in Mom_list:
+            k = [x_indx for x_indx, x in enumerate(_Mom) if x != 0]
+
+            for l in np.asarray(list(combinations(k, lc_tensor.ndim - 2))):
+                gamma_indx_list = [[]]
+                if lc_tensor.ndim - 2 == 1:
+                    gamma_indx_matrix = lc_tensor[..., l[0]]
+                elif lc_tensor.ndim - 2 == 2:
+                    gamma_indx_matrix = lc_tensor[..., l[0], l[1]]
+
+                gamma_indx = np.argwhere(gamma_indx_matrix != 0) + 1
+                for i in list(gamma_indx):
+                    i = [int(x) for x in i]
+                    gamma_indx_list += [i]
+
+                gamma_indx_list_matrix += [gamma_indx_list[1:]]
+
+        n_comb = len(list(combinations(k, lc_tensor.ndim - 2)))
+        gamma_indx_list_matrix = np.asarray(
+            gamma_indx_list_matrix[1:]).reshape(-1, n_comb * 2, 2)
+
+    gamma_indx_list_all = np.asarray(
+        [[x for x in [1, 2, 3, 4] if x in gamma_indx_list_matrix[y]]
+         for y in range(len(Mom))])
+
+    return (gamma_indx_list_matrix,
+            tran_indx_to_gamma(gamma_indx_list_matrix),
+            gamma_indx_list_all,
+            tran_indx_to_gamma(gamma_indx_list_all))

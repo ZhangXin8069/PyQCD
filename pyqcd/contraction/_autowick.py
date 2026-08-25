@@ -529,7 +529,7 @@ def identify_equivalent_diagrams(*dicts):
         Each sublist is an equivalence class: [(dict_idx, diag_idx, coeff), ...]
         where coeff = result_sign * variant_swap_sign.
     """
-    from .baroperator import GAMMA_PROPERTIES
+    from ._baroperator import GAMMA_PROPERTIES
 
     data = []
     diag_meta = []

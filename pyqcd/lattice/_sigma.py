@@ -74,7 +74,7 @@ def Mom_times_sigma(Mom: list = None, upto4dim: bool = False):
     ndarray, shape (..., 2, 2) or (..., 4, 4)
         p·σ matrix.
     """
-    from .base_functions import cached_contract
+    from ..tools._base import cached_contract
 
     if Mom is None:
         Mom = [0, 0, 0]
@@ -100,5 +100,36 @@ def Mom_times_sigma(Mom: list = None, upto4dim: bool = False):
         expanded[..., :2, :2] = result
         expanded[..., 2:, 2:] = result
         return expanded
+
+    return result
+
+
+def Mom_cross_sigma(Mom=None, upto4dim: bool = False):
+    """P×σ 叉积矩阵 [Z,Y,X] 分量（照抄 sush sigma_matrix.Mom_cross_sigma）。
+
+    Args:
+        Mom: (...,3) 动量，分量序 [Z,Y,X]。
+        upto4dim: True 时每个 2×2 块对角嵌入为 4×4。
+    Returns:
+        (...,3,2,2) 或 (...,3,4,4)。
+    """
+    backend = get_backend()
+    from ..tools._base import cached_contract, levi_civita_tensor
+
+    if Mom is None:
+        Mom = [0, 0, 0]
+    sigma_array = backend.asarray([sigma(3), sigma(2), sigma(1)])
+    levi = levi_civita_tensor(3)
+
+    PSigma = cached_contract('...j,kbc,ijk->...ibc',
+                             backend.asarray(Mom), sigma_array, levi)
+
+    if upto4dim:
+        PSigma_shape = PSigma.shape[:-2] + (4, 4)
+        result = backend.zeros(PSigma_shape, dtype=PSigma.dtype)
+        result[..., :, :2, :2] = PSigma
+        result[..., :, 2:, 2:] = PSigma
+    else:
+        result = PSigma
 
     return result
