@@ -135,7 +135,8 @@ def compute_dual_field_strength(F_dict: dict, mu: int, nu: int):
 def gluon_ope_operator_z0(gauge, mu: int, nu: int, z_dir: int, delta_z: int,
                           Nt: int, Nx: int, compute_dtype=None, *,
                           mu2: int | None = None, nu2: int | None = None,
-                          direction: int = 1):
+                          direction: int = 1,
+                          second_insert: str = "Ftilde"):
     """O_{μν;μ₂ν₂}(z)（z = 0..delta_z-1，全部时间片）。
 
     默认 F_{μν}(z)·W†·F̃_{μν}(0)·W（+z Wilson 线，照抄 compute_ope.py 的
@@ -173,6 +174,9 @@ def gluon_ope_operator_z0(gauge, mu: int, nu: int, z_dir: int, delta_z: int,
               for pair in need_pairs}
     F = F_dict[(mu, nu)]
     F_tilde = compute_dual_field_strength(F_dict, mu2, nu2)
+    if second_insert == "F":
+        # donghx Calc_ope_unpol 通道：第二插入为 F（非对偶）
+        F_tilde = F_dict[(mu2, nu2)]
     del F_dict
 
     U_z = gauge[..., z_dir, :, :]   # (Nt,Nz,Ny,Nx,3,3)
