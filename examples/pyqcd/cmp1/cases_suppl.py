@@ -202,19 +202,33 @@ def build():
     slab = np.ascontiguousarray(datalib.gauge()[:2])
 
     def r_stout_tl():
-        out = []
-        for t in (0, 1):
-            u = np.ascontiguousarray(
-                slab[t].transpose(3, 0, 1, 2, 4, 5)[:, :, :, :, None, :])
-            u = np.ascontiguousarray(u)
-            v = L.stout_smear_ndarray(u, 2, 0.12)
-            out.append(np.ascontiguousarray(v[..., 0, :]))
-        return out
+        u7 = np.ascontiguousarray(
+            np.transpose(slab, (4, 3, 0, 1, 2, 5, 6)))
+        v7 = L.stout_smear_ndarray(u7, 2, 0.12)
+        return [np.ascontiguousarray(v7[:, :, :, :, tt]) for tt in (0, 1)]
 
     def p_stout_tl():
         v = _pst(slab, nstep=2, rho=0.12, traceless=False)
         return [np.ascontiguousarray(v[0].transpose(3, 0, 1, 2, 4, 5)),
                 np.ascontiguousarray(v[1].transpose(3, 0, 1, 2, 4, 5))]
+
+    add('S10', 'stout 对照模式 traceless=False（生产等价 7D 喂入，逐位一致）',
+        r_stout_tl, p_stout_tl, tol=1e-10, timeout=900,
+        note='根因链闭合：参照需 (dir,z,y,x,t,c,c) 生产形状喂入；'
+             '单例 t 假轴会使 nu=0 staple 滚动失效')
+
+    def r_phase():
+        Mom = np.array([0., 0., 2.])
+        ph = np.zeros(NX * NX * NX, dtype=complex)
+        for z in range(NX):
+            for y in range(NX):
+                for x in range(NX):
+                    ph[z * NX * NX + y * NX + x] = np.exp(
+                        -np.dot(Mom, [z, y, x]) * 2 * np.pi * 1j / NX)
+        return ph
+
+    def p_phase():
+        return p_mph(NX, [0, 0, 2])
 
     add('S11', '补充 momsmear_phase 动量涂抹相位（对照 phase_calc）',
         r_phase, p_phase, tol=1e-13)
