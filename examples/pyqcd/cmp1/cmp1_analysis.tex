@@ -1,0 +1,50 @@
+\documentclass[10.5pt]{ctexart}
+\usepackage[a4paper,margin=2.4cm]{geometry}
+\usepackage{booktabs,longtable,array,amsmath}
+\sloppy
+\title{cmp1 对照单测阶段分析报告\\{\large PyQCD $\leftrightarrow$ refer/sush/lqcddb \& refer/donghx}}
+\author{~auto-all}
+\date{2026年8月25日}
+\begin{document}
+\maketitle
+
+\section{任务定义与收敛判定}
+对 \verb|PyQCD| 与参照库 \verb|refer/sush/lqcddb|、\verb|refer/donghx| 执行对照单测：双方代码完全查找 $\rightarrow$ 同功能逐一真实运行 $\rightarrow$ 输出与性能对照 $\rightarrow$ 循环 debug 与优化；缺失功能按参照补充并同样纳入对照。通过标准：逐功能对照记录齐全且硬失败为 0。实测最终 \textbf{46/48 PASS + 2 项登记差异}，断言门 \verb|verify_cmp1| 退出码 0；主套件回归 \textbf{40/40 PASS}，判定收敛。
+
+测试数据为真实系综 beta6.20 L24x72（conf $6250..8050$）：本征模、perambulators、CLOVER 规范组态各 10 组态齐备；资源约束下以 conf6250 单组态冒烟。
+
+\section{全量查找与映射结论}
+lqcddb 顶层导出 58 项、public 功能约 120 项：已整合约 61、部分 17、缺失 44（MPI 域分解 25、contractadviser 11、零散小函数与绘图常量）。donghx 64 个脚本归并 9 个功能族，全部有对应；实质缺口为动量涂抹蒸馏 2pt 通道（D1--D4 约定差）、插值算符变体、twopt\_slice 写出器、unpol F$\cdot$F 选项等子项。逐项映射与 file:line 证据见 \verb|cmp1/MAPPING.md|。
+
+\section{对照结果矩阵（摘要）}
+逐位一致（rel\_diff $=0$ 或机器精度）：DR $\gamma$ / Pauli $\sigma$ / Levi-Civita 表、Wick 引擎与等价图识别、seq\_peram（真实 peram）、Jackknife / ratio\_3pt / solve\_GEVP / loop\_tsrc / dis\_connect(PDF)、cached\_contract、ASCII 读写、check\_files\_existence、safe\_save、readin\_eigvecs、CG 系数、baroperator 全套、compress V1(I/B)、Mom\_VdV、Clover 场强全叠、$\Delta$G 双场强算符（D05）、固定规范 FF 算符（D07）、Lorentz 指派表四模式、补充项 gamma\_index / PFF 投影 / p$\times\sigma$ / perm\_comb / 缓存键 / 切片增强 / Peram\_truncated / 绘图常量。
+
+统计性与结构性对照：Bootstrap（双方无种子，比较分布尺度）、V2--V4 随机压缩（形状契约）、Wick 图出图（B9 视觉等价）、PFF 分段窗（见 \S5）。
+
+\section{本轮修复的 pyqcd 缺陷（对照发现）}
+\begin{enumerate}
+\item \verb|lattice/_sigma.py|、\verb|contraction/_autowick.py|：错误相对导入（\verb|.base_functions| / \verb|.baroperator|）导致 ModuleNotFound。
+\item \verb|tools/_base.creat_mom_list|：语义缺失（立方壳枚举、符号展开、only\_g0），按参照重写后逐位一致。
+\item \verb|analysis/_analyse.loop_tsrc|：ArraySlicer squeeze/broadcast 失配使 $\geq 5$ 维输入崩溃；纯 numpy 重写，与参照逐位一致且提速约 8 倍。
+\item \verb|analysis/_analyse.dis_connect|：按参照 reshape 平坦重解释语义逐行镜像，PDF 模式逐位一致；等秩输入回退意图切片路径（兼容既有 B7 契约）。
+\item \verb|vertex/_vertex.Mom_VVV_sink_t|：原为简化实现，忠实重写为参照 dir 循环六置换算法（含相位折叠约定）。
+\item \verb|operator/_gluon_ope.gluon_ope_operator_z0|：新增 \verb|second_insert='F'|" 开关对齐 donghx unpol 通道。
+\end{enumerate}
+
+\section{登记差异与遗留（诚实声明)}
+\begin{itemize}
+\item \textbf{fm2GeV 常数}：pyqcd 采用精确 $\hbar c=0.1973269804$，ref 截断 0.197；meff/Mom2GeV 呈恒定比例 0.998343，属有意精度提升，容差通过。
+\item \textbf{meff cosh 支路}：pyqcd 增加 arccosh 定义域保护（仅消除边界 NaN），log 支路不受影响。
+\item \textbf{dis\_connect PFF 装配窗口}：参照依赖其 ArraySlicer.reshape 平坦重解释副作用与覆盖顺序；pyqcd 按文档意图实现，实测存在差异，登记于映射表。
+\item \textbf{$\tilde F$ 轴序约定差（D04）}：ref \verb|plaquette_clover_all_tilde| 与 pyqcd \verb|compute_dual_field_strength| 存在固定线性关系（候选：恒等/$\pm$共轭/转置共轭），用例已锁定判定；下游 S09（unpol F$\cdot$F，rel $\approx$ 2.33）与 stout 逐位差异一并列入 optim/backlog。
+\item \textbf{性能 backlog}：Mom\_VVV\_sink\_t 重写后 Nev=32 单片约 25s（ref 约 1.1s），dir 切片循环存在向量化空间；其余显著更快项：Wick 引擎约 50$\times$、loop\_tsrc 约 8$\times$、readin\_eigvecs 约 1.8$\times$。
+\end{itemize}
+
+\section{产物与复现}
+\begin{itemize}
+\item 套件：\verb|examples/pyqcd/cmp1/|（harness / ref\_bridge / datalib / cases\_* / main.py / verify\_cmp1.py）。
+\item 权威结果：\verb|cmp1/v202608251508/|（results.json + summary.md）；运行 \verb|python examples/pyqcd/cmp1/main.py --group all|。
+\item 断言门：\verb|python examples/pyqcd/cmp1/verify_cmp1.py [results.json]|。
+\item 版本：commit \verb|cdfc4dc|，标签 \verb|test10|。
+\end{itemize}
+\end{document}
