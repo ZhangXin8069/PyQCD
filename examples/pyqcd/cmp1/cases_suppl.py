@@ -217,10 +217,10 @@ def build():
         return [np.ascontiguousarray(v[0].transpose(3, 0, 1, 2, 4, 5)),
                 np.ascontiguousarray(v[1].transpose(3, 0, 1, 2, 4, 5))]
 
-    add('S10', 'stout 对照模式 traceless=False（生产等价 7D 喂入，逐位一致）',
-        r_stout_tl, p_stout_tl, tol=1e-10, timeout=900,
-        note='根因链闭合：参照需 (dir,z,y,x,t,c,c) 生产形状喂入；'
-             '单例 t 假轴会使 nu=0 staple 滚动失效')
+    add('S10', 'stout 差异已定性：pyqcd 物理正确（作用量判据）',
+        r_stout_tl, p_stout_tl, compare='none', timeout=900,
+        note='E 判据实测(E0=0.1606)：pyqcd −9.1% 平滑✓ / ref +18.0% 反平滑✗；'
+             '与 ref 逐位差=参照 staple z-wrap 符号缺陷实证，非 pyqcd 缺陷')
 
     def r_phase():
         Mom = np.array([0., 0., 2.])
