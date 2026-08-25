@@ -14,6 +14,7 @@ from ref_bridge import load_lqcddb, load_donghx
 import datalib
 
 SEED = 20260825
+NX = datalib.NX
 
 
 def build():
@@ -190,5 +191,101 @@ def build():
 
     add('S09', '补充 unpol 第二插入=F 选项（对照 donghx pla,pla 通道）',
         r_unpol_ff, p_unpol_ff, tol=1e-9, compare=_unpol_cmp, timeout=900)
+
+
+    # ---- 第二轮补充：动量涂抹通道三件套 ----
+    from pyqcd.vertex._vertex import momsmear_phase as p_mph
+    from pyqcd.analysis._analyse import twopt_slice_boundary as p_tsb
+    from pyqcd.lattice._gamma import proton_interpolator as p_pint
+    from pyqcd.smear import stout_smear as _pst
+
+    slab = np.ascontiguousarray(datalib.gauge()[:2])
+
+    def r_stout_tl():
+        out = []
+        for t in (0, 1):
+            u = np.ascontiguousarray(
+                slab[t].transpose(3, 0, 1, 2, 4, 5)[:, :, :, :, None, :])
+            u = np.ascontiguousarray(u)
+            v = L.stout_smear_ndarray(u, 2, 0.12)
+            out.append(np.ascontiguousarray(v[..., 0, :]))
+        return out
+
+    def p_stout_tl():
+        v = _pst(slab, nstep=2, rho=0.12, traceless=False)
+        return [np.ascontiguousarray(v[0].transpose(3, 0, 1, 2, 4, 5)),
+                np.ascontiguousarray(v[1].transpose(3, 0, 1, 2, 4, 5))]
+
+    add('S10', 'stout 对照模式 traceless=False 逐位复现参照',
+        r_stout_tl, p_stout_tl, tol=1e-10, timeout=900,
+        note='根因：ref 迹扣除作用于被丢弃临时数组；pyqcd 默认仍去迹')
+
+    def r_phase():
+        # donghx phase_calc 公式逐点复刻（Pos=(z,y,x)，平坦序 zNx²+yNx+x）
+        Mom = np.array([0., 0., 2.])
+        ph = np.zeros(NX * NX * NX, dtype=complex)
+        for z in range(NX):
+            for y in range(NX):
+                for x in range(NX):
+                    ph[z * NX * NX + y * NX + x] = np.exp(
+                        -np.dot(Mom, [z, y, x]) * 2 * np.pi * 1j / NX)
+        return ph
+
+    def p_phase():
+        return p_mph(NX, [0, 0, 2])
+
+    add('S11', '补充 momsmear_phase 动量涂抹相位（对照 phase_calc）',
+        r_phase, p_phase, tol=1e-13)
+
+    rng2 = np.random.default_rng(SEED + 7)
+    pp0 = rng2.normal(size=(NX, NX)) + 1j * rng2.normal(size=(NX, NX))
+    pm0 = rng2.normal(size=(NX, NX)) + 1j * rng2.normal(size=(NX, NX))
+    ref_pp, ref_pm = pp0.copy(), pm0.copy()
+
+    def r_slice():
+        a, b = ref_pp.copy(), ref_pm.copy()
+        for ts in range(NX):
+            for tk in range(NX):
+                if tk < ts:
+                    a[tk, ts] *= -1
+                if tk > ts:
+                    b[tk, ts] *= -1
+        return a, b
+
+    def p_slice():
+        return p_tsb(pp0.copy(), pm0.copy())
+
+    add('S12', '补充 twopt_slice_boundary 边界符号翻转（pp/pm）',
+        r_slice, p_slice, tol=0.0)
+
+    def r_interp():
+        g3, g4, g7 = (L.gamma(3), L.gamma(4), L.gamma(7))
+        return {
+            'Cg5': (g7, g7),
+            'Cg5g3': (g7 @ g3, g7 @ g3),
+            'Cg5g4': (g7 @ g4, g7 @ g4),
+            'offdiag01': (g7 @ g3, g7),
+            'offdiag02': (g7 @ g4, g7),
+            'offdiag12': (g7 @ g3, g7 @ g4),
+        }
+
+    def p_interp():
+        return {k: tuple(np.asarray(x) for x in p_pint(k))
+                for k in ('Cg5', 'Cg5g3', 'Cg5g4',
+                          'offdiag01', 'offdiag02', 'offdiag12')}
+
+    def _interp_cmp(a, b):
+        if set(a) != set(b):
+            return float('inf')
+        worst = 0.0
+        for k in a:
+            for x, y in zip(a[k], b[k]):
+                x = np.asarray(x)
+                worst = max(worst, float(np.linalg.norm(x - y)
+                                         / max(np.linalg.norm(y), 1e-300)))
+        return worst
+
+    add('S13', '补充质子插值算符表（六变体，照抄 donghx 切换块）',
+        r_interp, p_interp, compare=_interp_cmp)
 
     return cases

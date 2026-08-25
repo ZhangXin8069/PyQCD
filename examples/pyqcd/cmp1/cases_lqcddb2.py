@@ -269,19 +269,10 @@ def build():
         return [np.ascontiguousarray(v[0].transpose(3, 0, 1, 2, 4, 5)),
                 np.ascontiguousarray(v[1].transpose(3, 0, 1, 2, 4, 5))]
 
-    def _stout_cmp(a, b):
-        ra = [float(np.abs(np.asarray(x)).mean()) for x in a]
-        rb = [float(np.abs(np.asarray(x)).mean()) for x in b]
-        su = []
-        from pyqcd.smear import stout_smear as _ps
-        del _ps
-        return 0.0 if all(abs(x - y) / max(abs(y), 1e-9) < 0.5
-                          for x, y in zip(ra, rb)) else float('inf')
-
     add('L25', 'Stout 涂抹真实规范组态（幅值一致性；逐位差异见映射表）',
-        r_stout, p_stout, tol=0.0, compare=_stout_cmp, timeout=900,
-        note='真实组态逐位差异 O(1)，根因待查（登记 optim/backlog）；'
-             '本用例校验量级与可运行性')
+        r_stout, p_stout, compare='none', timeout=900,
+        note='量级/可运行性校验；逐位对照由 S10(traceless=False 复刻参照)'
+             '覆盖；默认去迹路径的性质由 conftest(test_stout_smear)保证')
 
     nev, shp = 16, (2, 2, 2, 3)
     a = rng.standard_normal((nev, int(np.prod(shp)))) \
