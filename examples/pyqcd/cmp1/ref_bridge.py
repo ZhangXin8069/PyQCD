@@ -33,10 +33,21 @@ def load_donghx(filename, func_names=None):
                 return True
         return False
 
+    SAFE = {'range', 'len', 'set', 'list', 'enumerate', 'zip', 'float',
+            'int', 'abs', 'sorted', 'min', 'max', 'sum', 'dict', 'tuple',
+            'print'}
+
     def is_pure(node):
-        return not any(isinstance(n, ast.Call) or
-                       (isinstance(n, ast.Attribute) and n.attr == 'argv')
-                       for n in ast.walk(node))
+        # 允许安全内建调用（表构建循环）；排除 IO/argv/未知函数调用
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call):
+                f = n.func
+                name = getattr(f, 'id', None) or getattr(f, 'attr', '') or ''
+                if name not in SAFE:
+                    return False
+            elif isinstance(n, ast.Attribute) and n.attr == 'argv':
+                return False
+        return True
 
     body = []
     for node in tree.body:

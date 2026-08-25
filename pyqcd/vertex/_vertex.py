@@ -192,30 +192,17 @@ def Mom_VVV_sink_t(phase_exp, eigvecs):
     ev = np.asarray(eigvecs)
 
     def _contract(ph, e0, e1, e2):
-        return np.einsum('Mzyx,azyx,bzyx,czyx->Mabc', ph, e0, e1, e2)
+        return cached_contract('Mzyx,azyx,bzyx,czyx->Mabc',
+                               ph, e0, e1, e2)
 
-    VVV = np.zeros((num_Mom, Nev, Nev, Nev), dtype=complex)
-
-    for d in range(1, Nx + 1):
-        Z = d
-        Y = Nx + 1
-        X = Nx + 1
-
-        Z0 = (Z - 1) % Nx
-        Y0 = (Y - 1) % Nx
-        X0 = (X - 1) % Nx
-        sl = (slice(Z0, Z), slice(Y0, Y), slice(X0, X))
-        ph = phase_exp[(slice(None),) + sl]
-        e0 = ev[(slice(None),) + sl + (0,)]
-        e1 = ev[(slice(None),) + sl + (1,)]
-        e2 = ev[(slice(None),) + sl + (2,)]
-
-        VVV += _contract(ph, e0, e1, e2)
-        VVV += _contract(ph, e1, e2, e0)
-        VVV += _contract(ph, e2, e0, e1)
-        VVV -= _contract(ph, e0, e2, e1)
-        VVV -= _contract(ph, e1, e0, e2)
-        VVV -= _contract(ph, e2, e1, e0)
+    # 参照按 z 切片循环累加；数学上等价于全格点一次求和（仅浮点求和序差异）
+    e = [ev[..., c] for c in range(3)]
+    VVV = (_contract(phase_exp, e[0], e[1], e[2])
+           + _contract(phase_exp, e[1], e[2], e[0])
+           + _contract(phase_exp, e[2], e[0], e[1])
+           - _contract(phase_exp, e[0], e[2], e[1])
+           - _contract(phase_exp, e[1], e[0], e[2])
+           - _contract(phase_exp, e[2], e[1], e[0]))
 
     return VVV
 

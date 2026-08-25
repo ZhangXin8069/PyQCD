@@ -175,11 +175,9 @@ def build():
         return out
 
     def p_unpol_ff():
-        out = []
-        for dz in (1, 2):
-            out.append(np.asarray(pq_ope(g, 3, 1, 2, dz, Ntz, Nx,
-                                          second_insert='F'))[-1])
-        return out
+        full = np.asarray(pq_ope(g, 3, 1, 2, 3, Ntz, Nx,
+                                 second_insert='F'))
+        return [full[1], full[2]]
 
     def _unpol_cmp(a, b):
         worst = 0.0

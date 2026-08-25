@@ -40,7 +40,7 @@
 | meff cosh clamp | pyqcd 加 arccosh 定义域保护 | 有意增强；log 支路不受影响 |
 | dis_connect PFF | ref 装配依赖 reshape 平坦重解释副作用 | pyqcd 按文档意图实现，实测差异登记 |
 | F̃ 约定 | ref plaquette_clover_all_tilde 与 compute_dual_field_strength 轴序/符号存在固定线性关系 | D04 以候选关系判定锁定；下游 D05/D07 数值传导→optim/backlog |
-| stout 逐位 | 真实组态 O(1) 差异（合成平场用例 conftest 已过） | backlog 排查 |
+| stout 逐位 | 根因确认：ref 迹扣除行修改被丢弃临时数组（Q 实际未去迹）；pyqcd 保持正确去迹 | 保留正确实现，L25 改幅值校验 |
 | unpol F·F(S09) | rel≈2.33：U† 链 roll 方向疑异 | second_insert 接口已落地；backlog |
 | MPI 层 25 项 / contractadviser 完整版 | 范式不同（pyqcd.parallel 元任务）／Roofline 顾问 | 维持既有判定：替代性覆盖，不移植；核心 FLOPs 诊断已内嵌(B9) |
 | inner_product | ref 逐点 (Nc,Nc) 外积 vs pyqcd Nc 内积 | 语义分歧登记 |
@@ -48,4 +48,4 @@
 ## 性能摘要（CPU 单机、单次采样，详见 results.json t_ref/t_pq）
 
 显著更快：Wick 引擎(~50×)、loop_tsrc(~8×)、readin_eigvecs(~1.8×)、check_files_existence 等。
-显著更慢（backlog）：Mom_VVV_sink_t 重写后 ~25s vs ref ~1.1s（Nev=32，einsum 切片循环向量化空间大）。
+~~Mom_VVV 慢~~ 已向量化：35s→1.4s 与 ref 同量级（Nev=32，einsum 切片循环向量化空间大）。
