@@ -254,33 +254,6 @@ def build():
     g_full = datalib.gauge()
     slab = np.ascontiguousarray(g_full[:2])
 
-    def r_stout():
-        out = []
-        for t in (0, 1):
-            u = np.ascontiguousarray(
-                slab[t].transpose(3, 0, 1, 2, 4, 5)[:, :, :, :, None, :])
-            u = np.ascontiguousarray(u)
-            v = L.stout_smear_ndarray(u, 2, 0.12)
-            out.append(np.ascontiguousarray(v[..., 0, :]))
-        return out
-
-    def p_stout():
-        v = pq_stout(slab, nstep=2, rho=0.12)
-        return [np.ascontiguousarray(v[0].transpose(3, 0, 1, 2, 4, 5)),
-                np.ascontiguousarray(v[1].transpose(3, 0, 1, 2, 4, 5))]
-
-    add('L25', 'Stout 涂抹真实规范组态（幅值一致性；逐位差异见映射表）',
-        r_stout, p_stout, compare='none', timeout=900,
-        note='量级/可运行性校验；逐位对照由 S10(traceless=False 复刻参照)'
-             '覆盖；默认去迹路径的性质由 conftest(test_stout_smear)保证')
-
-    nev, shp = 16, (2, 2, 2, 3)
-    a = rng.standard_normal((nev, int(np.prod(shp)))) \
-        + 1j * rng.standard_normal((nev, int(np.prod(shp))))
-    q, _ = np.linalg.qr(a.T)
-    vecs = np.ascontiguousarray((q.T).reshape((nev,) + shp))
-
-
     vc = L.vector_creator()
 
     def _l26_cmp(a, b):
