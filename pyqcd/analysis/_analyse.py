@@ -551,63 +551,41 @@ def loop_tsrc(data, indx: list = None, Boundary_Conditions: str = 'Periodic',
 
     backend = get_backend()
     type_cupy = type(data).__module__.startswith('cupy')
+    data_np = data.get() if type_cupy else np.array(data)
 
-    if type_cupy:
-        data_np = data.get()
-    else:
-        data_np = data.copy()
+    nd = data_np.ndim
+    a0, a1 = indx[0] % nd, indx[1] % nd
+    Nt = data_np.shape[a0]
+    if data_np.shape[a1] != Nt:
+        raise ValueError('data[indx] must have the same size')
 
-    data_shape = data_np.shape
-    Nt = data_shape[indx[0]]
-    data_looped = np.zeros_like(np.sum(data_np, axis=indx[0], keepdims=True))
-
-    if Ctype == '2pt':
-        if Boundary_Conditions == 'Antiperiodic':
-            for tsrc in range(Nt):
-                for tsink in range(Nt):
-                    slicer = ArraySlicer(data_np)
-                    if tsink < tsrc:
-                        data_np = slicer.assign(
-                            dims=[indx[0], indx[1]],
-                            indices=[[tsrc], [tsink]],
-                            values=-1.0 * slicer.slice(
-                                dims=indx, indices=[[tsrc], [tsink]]))
-
+    if Ctype == '3pt':
+        sign = -1.0 if Boundary_Conditions == 'Antiperiodic' else 1.0
+        tail = [slice(None)] * nd
+        tail[a0] = slice(Nt - t_sep, Nt)
+        data_np[tuple(tail)] *= sign
+    elif Boundary_Conditions == 'Antiperiodic':
         for tsrc in range(Nt):
             for tsink in range(Nt):
-                slicer_out = ArraySlicer(data_looped)
-                slicer_in = ArraySlicer(data_np)
-                data_looped = slicer_out.assign(
-                    dims=[indx[1]],
-                    indices=[(tsink - tsrc + Nt) % Nt],
-                    values=slicer_in.slice(
-                        dims=indx, indices=[[tsrc], [tsink]])
-                    + slicer_out.slice(
-                        dims=[indx[1]],
-                        indices=[(tsink - tsrc + Nt) % Nt]))
+                if tsink < tsrc:
+                    idx = [slice(None)] * nd
+                    idx[a0] = tsrc
+                    idx[a1] = tsink
+                    data_np[tuple(idx)] *= -1.0
 
-    elif Ctype == '3pt':
-        sign_3pt = -1.0 if Boundary_Conditions == 'Antiperiodic' else 1.0
-        slicer = ArraySlicer(data_np)
-        data_np = slicer.assign(
-            dims=[indx[0]],
-            indices=[[x for x in range(Nt - t_sep, Nt)]],
-            values=sign_3pt * slicer.slice(
-                dims=[indx[0]],
-                indices=[[x for x in range(Nt - t_sep, Nt)]]))
-
-        for tsrc in range(Nt):
-            for tsink in range(Nt):
-                slicer_out = ArraySlicer(data_looped)
-                slicer_in = ArraySlicer(data_np)
-                data_looped = slicer_out.assign(
-                    dims=[indx[1]],
-                    indices=[(tsink - tsrc + Nt) % Nt],
-                    values=slicer_in.slice(
-                        dims=indx, indices=[[tsrc], [tsink]])
-                    + slicer_out.slice(
-                        dims=[indx[1]],
-                        indices=[(tsink - tsrc + Nt) % Nt]))
+    data_looped = np.zeros([(1 if i == a0 else (Nt if i == a1 else d))
+                            for i, d in enumerate(data_np.shape)])
+    for tsrc in range(Nt):
+        for tsink in range(Nt):
+            dt = (tsink - tsrc + Nt) % Nt
+            sel = [slice(None)] * nd
+            sel[a0] = tsrc
+            sel[a1] = tsink
+            vin = np.expand_dims(data_np[tuple(sel)],
+                                 a0 - (a1 < a0))
+            tgt = [slice(None)] * nd
+            tgt[a1] = dt
+            data_looped[tuple(tgt)] += vin
 
     if type_cupy:
         return backend.asarray(data_looped)
@@ -780,51 +758,59 @@ def dis_connect(data_2pt_sample, data_bubble_sample, Nconf_axes: int,
     """
     backend = get_backend()
 
-    data_2pt_bubble_matrix = backend.zeros_like(data_2pt_sample)
-    _data_2pt_mu_nu = data_2pt_sample - backend.mean(
-        data_2pt_sample, axis=Nconf_axes, keepdims=True)
+    nd = data_2pt_sample.ndim
+    a_s = t_src_axes % nd
+    a_k = t_sink_axes % nd
+    Nt = data_2pt_sample.shape[a_s]
 
-    _data_bubble = backend.zeros_like(data_2pt_sample)
-    data_bubble_mean = backend.mean(data_bubble_sample, axis=Nconf_axes,
-                                    keepdims=True)
-    Nt = data_2pt_bubble_matrix.shape[t_src_axes]
+    m2p = np.array(data_2pt_sample)
+    m2p = m2p - m2p.mean(axis=Nconf_axes, keepdims=True)
+    bubc = np.array(data_bubble_sample)
+    bubc = bubc - bubc.mean(axis=Nconf_axes, keepdims=True)
 
-    # 原版第二 assign 直接把整卷动数组塞入单 t 切片目标
-    # （其 assign 内部 reshape 在 Nt>1 时必形状失配——潜在 bug）；
-    # 按其"沿 src 轴滚 −t 对齐"意图补全 t 切片选取，使算术可运行。
-    bub_conn = data_bubble_sample - data_bubble_mean
-
+    out2 = np.zeros_like(m2p)
+    outb = np.zeros_like(m2p)
+    kshift = a_k - (a_k > a_s)
+    a_s_bub = t_src_axes % bubc.ndim
     for t in range(Nt):
-        ArraySlicer(_data_2pt_mu_nu).assign(
-            dims=[t_src_axes], indices=[[t]],
-            values=backend.roll(
-                ArraySlicer(_data_2pt_mu_nu).slice(dims=[t_src_axes],
-                                                   indices=[[t]]),
-                -t, axis=t_sink_axes))
-        ArraySlicer(_data_bubble).assign(
-            dims=[t_src_axes], indices=[[t]],
-            values=ArraySlicer(backend.roll(bub_conn, -t,
-                                            axis=t_src_axes)).slice(
-                dims=[t_src_axes], indices=[[t]]))
+        sel = [slice(None)] * nd
+        sel[a_s] = t
+        blk = m2p[tuple(sel)]
+        out2[tuple(sel)] = np.roll(blk, -t, axis=kshift)
+        slot = outb[tuple(sel)]
+        val = np.roll(bubc, -t, axis=a_s_bub)
+        if val.shape == slot.shape:
+            # 参照语义：等尺寸时平坦重解释（C 序）
+            outb[tuple(sel)] = val.reshape(slot.shape)
+        else:
+            # 等秩输入（bubble 与 2pt 同形）：按意图取对齐后同位切片
+            outb[tuple(sel)] = val[tuple(sel)]
+    del m2p, bubc
 
-    data_2pt_bubble_1 = (ArraySlicer(_data_2pt_mu_nu).slice(
-        dims=[t_sink_axes], indices=[[tsep]]) * _data_bubble)
+    ksel = [slice(None)] * nd
+    ksel[a_k] = [tsep]
+    term1 = out2[tuple(ksel)] * outb
 
+    matrix = np.zeros_like(outb)
     if dtype == 'PFF':
-        data_2pt_bubble_2 = (ArraySlicer(_data_bubble).slice(
-            dims=[t_sink_axes], indices=[[tsep]]) * _data_2pt_mu_nu)
-        ArraySlicer(data_2pt_bubble_matrix).assign(
-            dims=[t_sink_axes],
-            indices=[[x for x in range(tsep + 1)]],
-            values=ArraySlicer(data_2pt_bubble_1).slice(
-                dims=[t_sink_axes], indices=[[x for x in range(tsep + 1)]]))
-        ArraySlicer(data_2pt_bubble_matrix).assign(
-            dims=[t_sink_axes],
-            indices=[[x for x in range(tsep, 2 * tsep + 1)]],
-            values=ArraySlicer(data_2pt_bubble_2).slice(
-                dims=[t_sink_axes],
-                indices=[[x for x in range(tsep, 2 * tsep + 1)]]))
+        term2 = outb[tuple(ksel)] * out2
+        fid = [slice(None)] * nd
+        fid[a_k] = list(range(tsep + 1))
+        bid = [slice(None)] * nd
+        bid[a_k] = list(range(tsep, min(2 * tsep + 1, Nt)))
+        matrix[tuple(fid)] = term1[tuple(fid)]
+        matrix[tuple(bid)] = term2[tuple(bid)]
     else:
-        data_2pt_bubble_matrix[:] = data_2pt_bubble_1
+        matrix[:] = term1
+
+    del out2, outb
+    return matrix.sum(axis=a_s, keepdims=True)
 
     return backend.sum(data_2pt_bubble_matrix, axis=t_src_axes, keepdims=True)
+
+
+plot_analyse_marker = ['s', '*', '+', 'x', 'p', 'h', 'v', 'X', 'D', 'P',
+                       'H', 'o']
+plot_analyse_color = ['#3498DB', '#ff7f0e', '#2ECC71', '#E74C3C',
+                      '#9467bd', '#8c564b', '#CB4335', '#e377c2',
+                      '#7f7f7f', '#F1C40F', '#17becf', '#2ca02c']

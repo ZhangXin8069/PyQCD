@@ -177,6 +177,11 @@ def clear_cache():
     """Clear the compiled-expression cache (e.g. after a plan change)."""
     _expr_cache.clear()
 
+def get_cache_keys():
+    """返回 cached_contract 当前缓存键列表（对照 sush base_functions 补齐）。"""
+    return list(_expr_cache.keys())
+
+
 
 # ═══════════════════════════════════════════════════════════════════
 # ArraySlicer — Multi-dimensional slicing with assignment
@@ -236,7 +241,7 @@ class ArraySlicer:
             result = backend.take(result, ind, axis=d)
         return result
 
-    def assign(self, dims, indices, values):
+    def assign(self, dims, indices, values, keep_dims=None):
         """Assign values to a sub-array at specified dimension indices.
 
         Parameters
@@ -247,6 +252,9 @@ class ArraySlicer:
             For each dim, a list of indices to write to.
         values : ndarray
             Values to assign. Shape must match the sliced region.
+        keep_dims : list of int, optional
+            照抄参考语义：给出时按目标形状将 values 中未列入 keep_dims
+            （含负号约定）的维度压缩为 1 后广播写入。
 
         Returns
         -------
@@ -256,8 +264,53 @@ class ArraySlicer:
         idx = [slice(None)] * self.arr.ndim
         for d, ind in zip(dims, indices):
             idx[d] = ind
-        self.arr[tuple(idx)] = values
+        if keep_dims:
+            tgt = self.arr[tuple(idx)]
+            newshape = [x if (x_indx in keep_dims
+                             or x_indx - self.arr.ndim in keep_dims)
+                        else 1
+                        for x_indx, x in enumerate(tgt.shape)]
+            self.arr[tuple(idx)] = _np.asarray(values).reshape(newshape)
+        else:
+            self.arr[tuple(idx)] = values
         return self.arr
+
+    def get_slices(self, dims, indices):
+        """照抄参考：构建 np.ix_ 索引网格（支持负维号与 int/list/slice）。"""
+        arr_shape = self.arr.shape
+        if len(dims) != len(indices):
+            raise ValueError('Dimension and index lists must have the same '
+                             'length')
+        slices = [list(range(x)) for x in arr_shape]
+        for dim, idx in zip(dims, indices):
+            dim = dim % self.arr.ndim
+            if isinstance(idx, (list, _np.ndarray)):
+                slices[dim] = idx
+            elif isinstance(idx, int):
+                slices[dim] = [idx]
+            elif idx == slice(None):
+                pass
+            elif isinstance(idx, range):
+                slices[dim] = list(idx)
+            elif isinstance(idx, slice):
+                start = idx.start if idx.start is not None else 0
+                stop = idx.stop if idx.stop is not None else arr_shape[dim]
+                step = idx.step if idx.step is not None else 1
+                slices[dim] = list(range(start, stop, step))
+            else:
+                raise ValueError(f'Unsupported index type: {type(idx)}')
+        return _np.ix_(*slices)
+
+    def get_slice_shape(self, dims, indices):
+        """目标切片形状（经 np.ix_ 语义）。"""
+        slices = self.get_slices(dims, indices)
+        dummy = _np.zeros(self.arr.shape)
+        return dummy[slices].shape
+
+    def get_info(self):
+        """数组基本信息。"""
+        return {'shape': self.arr.shape, 'ndim': self.arr.ndim,
+                'dtype': self.arr.dtype}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -297,60 +350,69 @@ def levi_civita_tensor(ndim: int = 3):
 # Momentum List Generation
 # ═══════════════════════════════════════════════════════════════════
 
-def creat_mom_list(Mom: list = None, fix_Q2: bool = False):
-    """Generate momentum triples [pz, py, px] for a given Q² shell.
+def creat_mom_list(Mom=None, fix_Q2: bool = False,
+                   only_g0: bool = False):
+    """Generate momentum triples [pz, py, px]（对照 sush base_functions 忠实移植）.
 
-    Generates all permutations with sign flips of the base momentum,
-    removing duplicates.
-
-    Parameters
-    ----------
-    Mom : list of int, optional
-        Base momentum [pz, py, px]. Default [0, 0, 0].
-    fix_Q2 : bool
-        If True, only include momenta with the same Q² (sum of squares).
-        Default False (include all sign-flipped permutations).
+    对每个输入动量：在 [min, max] 立方内枚举全部格点，再做非零分量符号
+    全展开；fix_Q2=True 时仅保留 sum(x²)==Q² 的壳层；only_g0=True 时仅保留
+    全非负分量子集。支持平铺 [pz,py,px]、嵌套 [[..],..] 与 ndarray 输入。
 
     Returns
     -------
     list of list of int
-        All unique momentum triples satisfying the constraints.
-
-    Examples
-    --------
-    >>> creat_mom_list([0, 0, 1])
-    [[0, 0, 1], [0, -1, 0], [1, 0, 0], ...]
+        sorted 后的全部动量三元组。
     """
-    import numpy as np
+    import itertools
 
     if Mom is None:
         Mom = [0, 0, 0]
 
-    if all(m == 0 for m in Mom):
-        return [[0, 0, 0]]
+    def _add_negative_signs(lst):
+        nonzero_indices = [i for i, val in enumerate(lst) if val != 0]
+        result = []
+        for signs in itertools.product([1, -1],
+                                       repeat=len(nonzero_indices)):
+            new_list = lst.copy()
+            for idx, sign in zip(nonzero_indices, signs):
+                new_list[idx] = lst[idx] * sign
+            result.append(new_list)
+        return result
 
-    Q2 = sum(m**2 for m in Mom)
+    if 'array' in str(type(Mom)):
+        Mom = Mom.tolist()
 
-    # Generate all sign-flipped permutations
-    mom_list = []
-    from itertools import permutations, product
+    if type(Mom[0]) == list:
+        _num = len(Mom)
+    else:
+        _num = 1
+        Mom = [Mom]
 
-    # All permutations of the absolute values
-    abs_vals = [abs(m) for m in Mom]
-    for perm in set(permutations(abs_vals)):
-        # All sign combinations for non-zero components
-        signs = []
-        for val in perm:
-            if val == 0:
-                signs.append([0])
+    Mom_list_all = []
+
+    for k in range(_num):
+        _Mom = Mom[k]
+
+        min_Mom = min(_Mom)
+        max_Mom = max(_Mom)
+
+        len_Mom = max_Mom - min_Mom + 1
+
+        Q2 = sum(x ** 2 for x in _Mom)
+
+        for j in range(len_Mom ** 3):
+            Mom_list = [(j // (len_Mom ** 2)) % len_Mom + min_Mom,
+                        (j // (len_Mom ** 1)) % len_Mom + min_Mom,
+                        (j // (len_Mom ** 0)) % len_Mom + min_Mom]
+            Mom_list = _add_negative_signs(Mom_list)
+
+            if fix_Q2:
+                Mom_list_all += [m for m in Mom_list
+                                 if Q2 == sum(x ** 2 for x in m)]
             else:
-                signs.append([-val, val])
-        for sign_combo in product(*signs):
-            mom_triple = list(sign_combo)
-            if mom_triple not in mom_list:
-                if not fix_Q2 or sum(m**2 for m in mom_triple) == Q2:
-                    mom_list.append(mom_triple)
+                Mom_list_all += Mom_list
 
-    # Sort: by Q², then by pz, py, px
-    mom_list.sort(key=lambda x: (sum(i**2 for i in x), x[0], x[1], x[2]))
-    return mom_list
+    if only_g0:
+        return sorted([x for x in Mom_list_all if all(y >= 0 for y in x)])
+
+    return sorted(Mom_list_all)

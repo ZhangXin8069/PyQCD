@@ -182,37 +182,40 @@ def Mom_VVV_sink_t(phase_exp, eigvecs):
     """
     backend = get_backend()
 
-    Nev = eigvecs.shape[0]
-    Nx = eigvecs.shape[1]  # assuming isotropic
+    Nev, Nz, Ny, Nx = eigvecs.shape[:4]
 
-    # Ensure all inputs are backend arrays (cupy or numpy)
     eigvecs = backend.asarray(eigvecs)
-    phase_exp = backend.asarray(phase_exp)
+    # 照抄 lqcddb vertex.Mom_VVV_sink_t：phase 折叠为 (-1,Nz,Ny,Nx)
+    phase_exp = np.asarray(phase_exp).reshape(-1, Nz, Ny, Nx)
+    num_Mom = phase_exp.shape[0]
 
-    # Flatten spatial indices: (Nev, Nx³, Nc)
-    eigvecs_flat = eigvecs.reshape(Nev, Nx**3, Nc)
+    ev = np.asarray(eigvecs)
 
-    # Phase factor: (Nx³,) — already backend array
-    phase = phase_exp.reshape(-1)  # (Nx³,)
+    def _contract(ph, e0, e1, e2):
+        return np.einsum('Mzyx,azyx,bzyx,czyx->Mabc', ph, e0, e1, e2)
 
-    # Levi-Civita tensor for SU(3) color: ε_{abc}
-    # Build from numpy then convert to avoid element-wise assignment issues
-    import numpy as np
-    lc_np = np.zeros((3, 3, 3), dtype=np.complex128)
-    lc_np[0, 1, 2] = 1.0
-    lc_np[1, 2, 0] = 1.0
-    lc_np[2, 0, 1] = 1.0
-    lc_np[0, 2, 1] = -1.0
-    lc_np[1, 0, 2] = -1.0
-    lc_np[2, 1, 0] = -1.0
-    levi_civita = backend.asarray(lc_np)
+    VVV = np.zeros((num_Mom, Nev, Nev, Nev), dtype=complex)
 
-    # V_{mnl}(p) = Σ_{x,a,b,c} e^{-ipx} ε_{abc} φ_m^a(x) φ_n^b(x) φ_l^c(x)
-    VVV = cached_contract(
-        'x,abc,mxa,nxb,lxc->mnl',
-        phase, levi_civita,
-        eigvecs_flat, eigvecs_flat, eigvecs_flat
-    )
+    for d in range(1, Nx + 1):
+        Z = d
+        Y = Nx + 1
+        X = Nx + 1
+
+        Z0 = (Z - 1) % Nx
+        Y0 = (Y - 1) % Nx
+        X0 = (X - 1) % Nx
+        sl = (slice(Z0, Z), slice(Y0, Y), slice(X0, X))
+        ph = phase_exp[(slice(None),) + sl]
+        e0 = ev[(slice(None),) + sl + (0,)]
+        e1 = ev[(slice(None),) + sl + (1,)]
+        e2 = ev[(slice(None),) + sl + (2,)]
+
+        VVV += _contract(ph, e0, e1, e2)
+        VVV += _contract(ph, e1, e2, e0)
+        VVV += _contract(ph, e2, e0, e1)
+        VVV -= _contract(ph, e0, e2, e1)
+        VVV -= _contract(ph, e1, e0, e2)
+        VVV -= _contract(ph, e2, e1, e0)
 
     return VVV
 
@@ -388,3 +391,19 @@ def sink2src(sink, dtype='VdV'):
         return backend.asarray(sink).conj()
     else:
         raise ValueError(f"Unknown dtype: {dtype}")
+
+
+def perm_comb(N, M=1, dtype='perm', renormal=False):
+    """排列/组合数（照抄 sush vertex_creator.perm_comb，类方法转函数）。"""
+    import numpy as _npx
+
+    if (renormal is False and M >= 0) or (renormal is True and M >= 1):
+        if dtype == 'perm':
+            return float(_npx.prod([N - x for x in range(len([N] * M))]))
+        if dtype == 'comb':
+            return float(
+                _npx.prod([N - x for x in range(len([N] * M))])
+                / _npx.prod([x for x in range(1, M + 1, 1)]))
+    if M <= 0 and renormal is True:
+        return perm_comb(N=N, M=1, dtype=dtype, renormal=False)
+    raise ValueError('mistake')

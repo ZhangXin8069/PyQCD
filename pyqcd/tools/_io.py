@@ -558,3 +558,9 @@ def readin_vvv(vvv_dir: str, nev: int, nev1: int, Nt: int, conf_id,
     vvv = vvv.reshape(Nt, nev, nev, nev, 2)
     vvv = vvv[..., 0] + vvv[..., 1] * 1j
     return vvv[:, 0:nev1, 0:nev1, 0:nev1]
+
+
+def peram_truncated(peram):
+    """截断 perambulator 前 2 个 d_source/t 来源维度（照抄 donghx
+    input_output_4_cupy.Peram_truncated）。"""
+    return peram[:, 0:2, 0:2, :, :]
