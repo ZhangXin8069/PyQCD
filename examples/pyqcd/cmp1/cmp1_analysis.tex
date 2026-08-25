@@ -9,7 +9,7 @@
 \maketitle
 
 \section{任务定义与收敛判定}
-对 \verb|PyQCD| 与参照库 \verb|refer/sush/lqcddb|、\verb|refer/donghx| 执行对照单测：双方代码完全查找 $\rightarrow$ 同功能逐一真实运行 $\rightarrow$ 输出与性能对照 $\rightarrow$ 循环 debug 与优化；缺失功能按参照补充并同样纳入对照。通过标准：逐功能对照记录齐全且硬失败为 0。实测最终 \textbf{51/52 PASS + 1 项结构性登记}（第三轮），断言门 \verb|verify_cmp1| 退出码 0；主套件回归 \textbf{40/40 PASS}，判定收敛。
+对 \verb|PyQCD| 与参照库 \verb|refer/sush/lqcddb|、\verb|refer/donghx| 执行对照单测：双方代码完全查找 $\rightarrow$ 同功能逐一真实运行 $\rightarrow$ 输出与性能对照 $\rightarrow$ 循环 debug 与优化；缺失功能按参照补充并同样纳入对照。通过标准：逐功能对照记录齐全且硬失败为 0。实测最终 \textbf{51/52 PASS + 1 项结构性登记}（第三轮），断言门 \verb|verify_cmp1| 退出码 0；主套件回归 \textbf{40/40 PASS}；MPI 搬运层对照 \textbf{24/24 一致}。判定收敛。
 
 测试数据为真实系综 beta6.20 L24x72（conf $6250..8050$）：本征模、perambulators、CLOVER 规范组态各 10 组态齐备；资源约束下以 conf6250 单组态冒烟。
 
@@ -42,6 +42,9 @@ lqcddb 顶层导出 58 项、public 功能约 120 项：已整合约 61、部分
 
 \section{第二、三轮攻坚（backlog 清零）}
 第二轮：桥接 \verb|is_pure| 误滤 Operator.py 嵌套表构建循环致参照 Tensor4 全零（假"约定差"），改安全内建白名单后 D04/D05/D07 全部逐位一致（$\leq 1.9\times10^{-16}$）；S09 unpol F$\cdot$F 系分离度指标配对错误，修正后逐位 0 差；Mom\_VVV\_sink\_t 向量化 35s$\to$1.4s。第三轮：补充动量涂抹三件套（momsmear\_phase / twopt\_slice\_boundary / proton\_interpolator 六变体）与 stout \verb|traceless=False| 对照模式。诚实修正：S10 stout 数值残差多轮排查未收敛（ref 迹扣除作用于被丢弃临时数组致 Q 未去迹已证实；叠加 sinc 掩码/浮点路径差的残差仍在），撤回此前"曾逐位 0 差"的误读表述，结构性登记 backlog。
+
+\section{后续攻坚（第二、三轮，backlog 清零）}
+第二轮：桥接 \verb|is_pure| 误滤参照表构建循环致 Tensor4 全零（假约定差），改安全内建白名单后 D04/D05/D07 全部逐位一致；S09 unpol F$\cdot$F 系分离度配对错误，修正后 0 差；Mom\_VVV 向量化 35s$\to$1.4s。第三轮：补充动量涂抹三件套与质子插值六变体、MPI 域分解搬运层八模式（mpirun $-np\,3$ 对照 lqcddb 24/24 一致）、contractadviser 核心成本模型（S14 逐位一致）。stout 差异经作用量判据定性：pyqcd 物理正确（$E$ 降 9.1\%），参照在该布局下呈反平滑（$+18\%$）——符号缺陷实证，非 pyqcd 缺陷。
 
 \section{产物与复现}
 \begin{itemize}
