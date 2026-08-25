@@ -289,4 +289,46 @@ def build():
     add('S13', '补充质子插值算符表（六变体，照抄 donghx 切换块）',
         r_interp, p_interp, compare=_interp_cmp)
 
+    # ---- 第三轮补充：contractadviser 核心成本模型 ----
+    from pyqcd.contraction._contract_adviser import (
+        parse_subscript as p_parse, estimate_cost as p_cost,
+        HardwareSpec as P_HW)
+
+    def r_adv():
+        from lqcddb.contraction.contractadviser import (
+            parse_subscript as r_parse, estimate_cost as r_cost)
+        out = []
+        for sub, shp in [('Mabc,Nabc->MN', [(4, 3, 24, 2), (4, 3, 24, 2)]),
+                         ('ij,jk->ik', [(16, 32), (32, 16)]),
+                         ('ab,bc,cd->ad', [(8, 8)] * 3)]:
+            pr = r_parse(sub, [tuple(x) for x in shp])
+            c = r_cost(pr)
+            out.append((c.total_flops, c.total_read_bytes,
+                        c.total_write_bytes, c.output_size))
+        return out
+
+    def p_adv():
+        out = []
+        for sub, shp in [('Mabc,Nabc->MN', [(4, 3, 24, 2), (4, 3, 24, 2)]),
+                         ('ij,jk->ik', [(16, 32), (32, 16)]),
+                         ('ab,bc,cd->ad', [(8, 8)] * 3)]:
+            pp = p_parse(sub, [tuple(x) for x in shp])
+            c = p_cost(pp)
+            out.append((c.total_flops, c.total_read_bytes,
+                        c.total_write_bytes, c.output_size))
+        return out
+
+    def _adv_cmp(a, b):
+        worst = 0.0
+        for ta, tb in zip(a, b):
+            for x, y in zip(ta, tb):
+                worst = max(worst, abs(float(x) - float(y))
+                            / max(abs(float(y)), 1e-300))
+        return worst
+
+    add('S14', '补充 contractadviser 成本模型核心(解析+估算)',
+        r_adv, p_adv, tol=1e-12, compare=_adv_cmp,
+        note='部分移植：Roofline 带宽/切分建议层未移植(登记)；'
+             '缓存抖动模型已含')
+
     return cases
