@@ -254,6 +254,12 @@ def build():
     g_full = datalib.gauge()
     slab = np.ascontiguousarray(g_full[:2])
 
+    rng26 = np.random.default_rng(SEED + 3)
+    nev, shp = 16, (2, 2, 2, 3)
+    a = rng26.standard_normal((nev, 24)) + 1j * rng26.standard_normal((nev, 24))
+    q, _ = np.linalg.qr(a.T)
+    vecs = np.ascontiguousarray(q.T.reshape((nev,) + shp))
+
     vc = L.vector_creator()
 
     def _l26_cmp(a, b):

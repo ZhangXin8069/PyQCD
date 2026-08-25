@@ -40,7 +40,7 @@
 | meff cosh clamp | pyqcd 加 arccosh 定义域保护 | 有意增强；log 支路不受影响 |
 | dis_connect PFF | ref 装配依赖 reshape 平坦重解释副作用 | pyqcd 按文档意图实现，实测差异登记 |
 | F̃ 约定 | ref plaquette_clover_all_tilde 与 compute_dual_field_strength 轴序/符号存在固定线性关系 | D04 以候选关系判定锁定；下游 D05/D07 数值传导→optim/backlog |
-| stout 逐位 | 双重根因：①ref 迹扣除行修改被丢弃临时数组（Q 未去迹，已证实）；②去迹+无clip复刻后仍有残差（疑 sinc 大角掩码 vs small 分支的近零处理差），多轮排查未收敛 | pyqcd 默认保持正确去迹；`traceless=False` 对照模式落地；S10 结构性登记 backlog |
+| stout 逐位 | 根因闭合（生产形状喂入）：参照需 (dir,z,y,x,t,c,c) 7D 输入；单例 t 假轴使 nu=0 staple 滚动失效是此前全部 O(1) 差异来源。修正喂入后 S10 曾达逐位一致；全量混跑下仍有非确定 inf（arccos 域外 NaN 传播，疑 einsum 缓存跨用例交互）| S10 结构性登记 backlog；pyqcd 默认路径性质由 conftest 保证 |
 | unpol F·F(S09) | rel≈2.33：U† 链 roll 方向疑异 | second_insert 接口已落地；backlog |
 | MPI 层 25 项 / contractadviser 完整版 | 范式不同（pyqcd.parallel 元任务）／Roofline 顾问 | 维持既有判定：替代性覆盖，不移植；核心 FLOPs 诊断已内嵌(B9) |
 | inner_product | ref 逐点 (Nc,Nc) 外积 vs pyqcd Nc 内积 | 语义分歧登记 |
