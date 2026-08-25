@@ -48,7 +48,8 @@ def _staple_pair(U, mu, nu):
     return t1 + t2
 
 
-def stout_smear(gauge, nstep=20, rho=0.12, verbose=False, logger=None):
+def stout_smear(gauge, nstep=20, rho=0.12, verbose=False, logger=None,
+                traceless=True):
     """Stout 规范链接涂抹（空间三方向，时间方向保持）。
 
     Args:
@@ -79,8 +80,11 @@ def stout_smear(gauge, nstep=20, rho=0.12, verbose=False, logger=None):
             # Ω = ρ·C·U† → Q 厄米无迹
             Om = rho * e("...ab,...cb->...ac", acc, U[..., mu, :, :].conj())
             Q = 0.5j * (Om.conj().swapaxes(-1, -2) - Om)
-            tr = e("...aa->...", Q)
-            Q = Q - eye * (tr / Nc)[..., None, None]
+            if traceless:
+                tr = e("...aa->...", Q)
+                Q = Q - eye * (tr / Nc)[..., None, None]
+            # traceless=False：复刻 sush 参照行为（其迹扣除行作用于被丢弃的
+            # 临时数组，Q 实际保留迹）——仅用于对照单测逐位复现
 
             # SU(3) Cayley–Hamilton：exp(iQ) = f0 I + f1 Q + f2 Q²
             # （Q≈0 的 `small` 格点处 f_denom=inf×0 产生 nan，随后被
@@ -93,8 +97,10 @@ def stout_smear(gauge, nstep=20, rho=0.12, verbose=False, logger=None):
                 c0_max = 2.0 * (c1 / 3.0) ** 1.5
                 parity = cp.asarray(c0 < 0)
                 c0_abs = cp.abs(c0)
-                theta = cp.arccos(
-                    cp.clip(c0_abs / cp.maximum(c0_max, 1e-300), 0.0, 1.0))
+                ratio = c0_abs / cp.maximum(c0_max, 1e-300)
+                if traceless:
+                    ratio = cp.clip(ratio, 0.0, 1.0)
+                theta = cp.arccos(ratio)
                 u = cp.sqrt(c1 / 3.0) * cp.cos(theta / 3.0)
                 w = cp.sqrt(c1) * cp.sin(theta / 3.0)
                 u_sq, w_sq = u ** 2, w ** 2
