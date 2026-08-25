@@ -202,12 +202,17 @@ def build():
     slab = np.ascontiguousarray(datalib.gauge()[:2])
 
     def r_stout_tl():
+        import lqcddb as _Lq
+        from pyqcd.tools._base import clear_cache as _cc
+        _cc(); _Lq.clear_cache()
         u7 = np.ascontiguousarray(
             np.transpose(slab, (4, 3, 0, 1, 2, 5, 6)))
         v7 = L.stout_smear_ndarray(u7, 2, 0.12)
         return [np.ascontiguousarray(v7[:, :, :, :, tt]) for tt in (0, 1)]
 
     def p_stout_tl():
+        from pyqcd.tools._base import clear_cache as _cc2
+        _cc2()
         v = _pst(slab, nstep=2, rho=0.12, traceless=False)
         return [np.ascontiguousarray(v[0].transpose(3, 0, 1, 2, 4, 5)),
                 np.ascontiguousarray(v[1].transpose(3, 0, 1, 2, 4, 5))]
