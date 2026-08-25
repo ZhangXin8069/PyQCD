@@ -814,3 +814,16 @@ plot_analyse_marker = ['s', '*', '+', 'x', 'p', 'h', 'v', 'X', 'D', 'P',
 plot_analyse_color = ['#3498DB', '#ff7f0e', '#2ECC71', '#E74C3C',
                       '#9467bd', '#8c564b', '#CB4335', '#e377c2',
                       '#7f7f7f', '#F1C40F', '#17becf', '#2ca02c']
+
+
+def twopt_slice_boundary(pp, pm):
+    """twopt_slice (Nt,Nt) 边界符号翻转（照抄 donghx 2pt_proton_* 装配段）：
+    pp 在 t_sink<t_source 处取负；pm 在 t_sink>t_source 处取负。原地修改。"""
+    nt = pp.shape[0]
+    for t_source in range(nt):
+        for t_sink in range(nt):
+            if t_sink < t_source:
+                pp[t_sink, t_source] *= -1.0
+            if t_sink > t_source:
+                pm[t_sink, t_source] *= -1.0
+    return pp, pm

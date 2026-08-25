@@ -265,3 +265,23 @@ def PFF_Mom_to_gamma_new(Mom, allow_t: bool = False):
             tran_indx_to_gamma(gamma_indx_list_matrix),
             gamma_indx_list_all,
             tran_indx_to_gamma(gamma_indx_list_all))
+
+
+def proton_interpolator(variant: str = "Cg5"):
+    """质子插值算符对 (Γ_src, Γ_sink)（照抄 donghx 2pt_proton_* L105--138）。
+
+    variant ∈ {Cg5, Cg5g3, Cg5g4, offdiag01, offdiag02, offdiag12}；
+    γ 编号沿用 DR 组合表（gamma(7)=Cγ5 类比 donghx gamma(7)）。
+    """
+    g3, g4, g7 = gamma(3), gamma(4), gamma(7)
+    table = {
+        "Cg5": (g7, g7),
+        "Cg5g3": (g7 @ g3, g7 @ g3),
+        "Cg5g4": (g7 @ g4, g7 @ g4),
+        "offdiag01": (g7 @ g3, g7),
+        "offdiag02": (g7 @ g4, g7),
+        "offdiag12": (g7 @ g3, g7 @ g4),
+    }
+    if variant not in table:
+        raise ValueError(f"unknown interpolator variant: {variant}")
+    return table[variant]

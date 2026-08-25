@@ -394,3 +394,13 @@ def perm_comb(N, M=1, dtype='perm', renormal=False):
     if M <= 0 and renormal is True:
         return perm_comb(N=N, M=1, dtype=dtype, renormal=False)
     raise ValueError('mistake')
+
+
+def momsmear_phase(Nx: int, Mom):
+    """动量涂抹相位 e^{-i2π Mom·Pos/Nx}，Pos=(z,y,x)，平坦序 z·Nx²+y·Nx+x
+    （照抄 donghx 2pt_proton_* phase_calc，torch→numpy）。"""
+    Mom = np.asarray(Mom, dtype=float)
+    z, y, x = np.indices((Nx, Nx, Nx))
+    pos_dot = (z * Mom[0] + y * Mom[1] + x * Mom[2]).ravel()
+    flat = np.exp(-2j * np.pi * pos_dot / Nx)
+    return np.ascontiguousarray(flat)
