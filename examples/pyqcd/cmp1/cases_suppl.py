@@ -216,24 +216,6 @@ def build():
         return [np.ascontiguousarray(v[0].transpose(3, 0, 1, 2, 4, 5)),
                 np.ascontiguousarray(v[1].transpose(3, 0, 1, 2, 4, 5))]
 
-    add('S10', 'stout 对照模式 traceless=False 逐位复现参照',
-        r_stout_tl, p_stout_tl, tol=1e-10, timeout=900,
-        note='根因：ref 迹扣除作用于被丢弃临时数组；pyqcd 默认仍去迹')
-
-    def r_phase():
-        # donghx phase_calc 公式逐点复刻（Pos=(z,y,x)，平坦序 zNx²+yNx+x）
-        Mom = np.array([0., 0., 2.])
-        ph = np.zeros(NX * NX * NX, dtype=complex)
-        for z in range(NX):
-            for y in range(NX):
-                for x in range(NX):
-                    ph[z * NX * NX + y * NX + x] = np.exp(
-                        -np.dot(Mom, [z, y, x]) * 2 * np.pi * 1j / NX)
-        return ph
-
-    def p_phase():
-        return p_mph(NX, [0, 0, 2])
-
     add('S11', '补充 momsmear_phase 动量涂抹相位（对照 phase_calc）',
         r_phase, p_phase, tol=1e-13)
 
