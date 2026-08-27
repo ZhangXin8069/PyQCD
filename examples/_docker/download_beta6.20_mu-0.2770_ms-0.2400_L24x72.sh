@@ -3,11 +3,11 @@
 # Download SNSC data for snsc-v20260726 validation pipeline
 #
 # Usage:
-#   bash download_data.sh              # interactive, confirm each download
-#   bash download_data.sh --dry-run    # show what would be downloaded
-#   bash download_data.sh --yes        # skip confirmation, download all
+#   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72.sh              # interactive
+#   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72.sh --dry-run    # preview
+#   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72.sh --yes        # no prompts
 #
-# Data: L24x72 ensemble, confs 6250/6450/6650, Nev=100, Pz=-2
+# Data: L24x72 ensemble, confs 4150/6250/6450/6650, Nev=100, Pz=-2
 #=============================================================================
 
 set -euo pipefail
@@ -28,13 +28,87 @@ SSH_OPTS="-p ${SSH_PORT} -l ${SSH_USER} ${SSH_CTL_OPTS}"
 SCP_OPTS="${SSH_CTL_OPTS} -P ${SSH_PORT}"
 
 # --- Conf IDs ---
-CONF_IDS=(6250 6450 6650)
+CONF_IDS=(4150 6250 6450 6650)
 
 # --- File lists ---
 EIGENSYSTEM_BASE="/public/group/lqcd/eigensystem/beta6.20_mu-0.2770_ms-0.2400_L24x72"
 
 PERAMBULATOR_BASE="/public/group/lqcd/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light"
 GAUGE_CONFIG_BASE="/public/group/lqcd/configurations/CLOVER/beta6.20_mu-0.2770_ms-0.2400_L24x72"
+
+# --- Additional files and directories ---
+# These entries are kept as absolute paths so the local tree mirrors the
+# remote /public/group/lqcd tree, matching the original downloader behavior.
+DONGHX_BASE="/public/group/lqcd/donghx"
+
+HYP_SMEAR_FILES=(
+    "${DONGHX_BASE}/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_3D_1times/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents"
+    "${DONGHX_BASE}/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_3D_3times/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents"
+    "${DONGHX_BASE}/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_3D_5times/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents"
+    "${DONGHX_BASE}/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_4D_10times_new/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents"
+)
+
+DONGHX_WORK_DIRS=(
+    "${DONGHX_BASE}/2pt_cpu"
+    "${DONGHX_BASE}/2pt_cpu_momsmear"
+    "${DONGHX_BASE}/2pt_dcu"
+    "${DONGHX_BASE}/2pt_dcu_cupy"
+    "${DONGHX_BASE}/2pt_diffpol"
+    "${DONGHX_BASE}/2pt_gpu_2026"
+    "${DONGHX_BASE}/2pt_gpu_new"
+    "${DONGHX_BASE}/2pt_Result"
+    "${DONGHX_BASE}/Eigvec_code"
+    "${DONGHX_BASE}/Eigvec_result"
+    "${DONGHX_BASE}/Contraction"
+)
+
+TMD_OPE_RESULT_DIRS=(
+    "${DONGHX_BASE}/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/xdir/4150"
+    "${DONGHX_BASE}/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/ydir/4150"
+    "${DONGHX_BASE}/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/zdir/4150"
+)
+
+TMD_OPE_FILES=(
+    "${DONGHX_BASE}/Ope_Gluon/TMD_Ope_Gluon/Calc_ope_unpol_new2.py"
+    "${DONGHX_BASE}/Ope_Gluon/TMD_Ope_Gluon/Calc_ope_unpol_new.py"
+    "${DONGHX_BASE}/Ope_Gluon/TMD_Ope_Gluon/Operator.py"
+    "${DONGHX_BASE}/Ope_Gluon/TMD_Ope_Gluon/Submit"
+    "${DONGHX_BASE}/Ope_Gluon/TMD_Ope_Gluon/input"
+)
+
+HPY_OPE_RESULT_DIRS=(
+    "${DONGHX_BASE}/Ope_Gluon/Result_hpy_4D_10times/L24x72/Disc_Ratio"
+    # The supplied list contains this identical xdir/4150 path four times;
+    # transfer it once because repeated entries cannot add distinct data.
+    "${DONGHX_BASE}/Ope_Gluon/Result_hpy_4D_10times/L24x72/xdir/4150"
+)
+
+HPY_OPE_FILES=(
+    "${DONGHX_BASE}/Ope_Gluon/Calc_helicity_mpi.py"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_ope_2604"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_ope_gauge_fix_helicity.py"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_ope_gauge_fix_unpol.py"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_ope_gpu"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_ope_helicity_new.py"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_ope_helicity.py"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_ope_helicity_test.py"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_ope_unpol_new.py"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_ope_unpol.py"
+    "${DONGHX_BASE}/Ope_Gluon/Calc_pla.py"
+)
+
+PERAM_WORK_DIRS=(
+    "${DONGHX_BASE}/Peram_code_2505"
+    "${DONGHX_BASE}/Peram_mpi"
+    "${DONGHX_BASE}/Peram_result"
+)
+
+CLUSTER_WORK_DIRS=(
+    "${DONGHX_BASE}/Cluster_Decomposition/Check_fft/Zhongsy"
+    "${DONGHX_BASE}/Ope_Gluon/ForZhong"
+    "${DONGHX_BASE}/Cluster_Decomposition/Test_sink_cpu"
+    "${DONGHX_BASE}/Cluster_Decomposition/Zhongsy"
+)
 
 # --- Detect transfer tool ---
 TRANSFER_TOOL=""
@@ -299,7 +373,7 @@ if ! $DRY_RUN; then
 fi
 
 # ---- Step 1: Eigen system ----
-log_step "Step 1/4: Eigenvectors & Eigenvalues (per-configuration)"
+log_step "Step 1/8: Eigenvectors & Eigenvalues (per-configuration)"
 
 for conf_id in "${CONF_IDS[@]}"; do
     eigen_dir="${EIGENSYSTEM_BASE}/${conf_id}"
@@ -309,7 +383,7 @@ for conf_id in "${CONF_IDS[@]}"; do
 done
 
 # ---- Step 2: Perambulators ----
-log_step "Step 2/4: Perambulators (mom_smear=-2, Pz=-2)"
+log_step "Step 2/8: Perambulators (mom_smear=-2, Pz=-2)"
 
 for conf_id in "${CONF_IDS[@]}"; do
     peram_dir="${PERAMBULATOR_BASE}/${conf_id}"
@@ -319,7 +393,7 @@ for conf_id in "${CONF_IDS[@]}"; do
 done
 
 # ---- Step 3: Gauge configurations ----
-log_step "Step 3/4: Gauge Configurations (.lime ILDG format)"
+log_step "Step 3/8: Gauge Configurations (.lime ILDG format)"
 
 for conf_id in "${CONF_IDS[@]}"; do
     gauge_file="${GAUGE_CONFIG_BASE}/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_${conf_id}.lime"
@@ -328,8 +402,68 @@ for conf_id in "${CONF_IDS[@]}"; do
     download_file "${gauge_file}"
 done
 
-# ---- Step 4: Summary ----
-log_step "Step 4/4: Summary"
+# ---- Step 4: HYP-smearing metadata ----
+log_step "Step 4/8: HYP-smearing metadata (.lime.contents)"
+
+for file_path in "${HYP_SMEAR_FILES[@]}"; do
+    echo ""
+    log_info "HYP file: ${file_path}"
+    download_file "${file_path}"
+done
+
+# ---- Step 5: Existing 2pt/eigenvector/contraction work trees ----
+log_step "Step 5/8: 2pt, eigenvector & contraction work trees"
+
+for dir_path in "${DONGHX_WORK_DIRS[@]}"; do
+    echo ""
+    log_info "Work directory: ${dir_path}/"
+    download_dir "${dir_path}"
+done
+
+# ---- Step 6: TMD OPE results and source files ----
+log_step "Step 6/8: TMD OPE results & source files"
+
+for dir_path in "${TMD_OPE_RESULT_DIRS[@]}"; do
+    echo ""
+    log_info "TMD OPE result: ${dir_path}/"
+    download_dir "${dir_path}"
+done
+
+for file_path in "${TMD_OPE_FILES[@]}"; do
+    echo ""
+    log_info "TMD OPE file: ${file_path}"
+    download_file "${file_path}"
+done
+
+# ---- Step 7: Additional OPE, perambulator and cluster-decomposition data ----
+log_step "Step 7/8: Additional OPE, perambulator & cluster data"
+
+for dir_path in "${HPY_OPE_RESULT_DIRS[@]}"; do
+    echo ""
+    log_info "HYP OPE result: ${dir_path}/"
+    download_dir "${dir_path}"
+done
+
+for file_path in "${HPY_OPE_FILES[@]}"; do
+    echo ""
+    log_info "OPE source file: ${file_path}"
+    download_file "${file_path}"
+done
+
+for dir_path in "${PERAM_WORK_DIRS[@]}"; do
+    echo ""
+    log_info "Perambulator work directory: ${dir_path}/"
+    download_dir "${dir_path}"
+done
+
+for dir_path in "${CLUSTER_WORK_DIRS[@]}"; do
+    echo ""
+    log_info "Cluster-decomposition directory: ${dir_path}/"
+    download_dir "${dir_path}"
+done
+
+# ---- Step 8: Summary ----
+log_step "Step 8/8: Summary"
 
 echo ""
 echo "Expected local file tree:"
@@ -350,6 +484,16 @@ echo "      └── beta6.20_..._L24x72/"
 for conf_id in "${CONF_IDS[@]}"; do
 echo "          ├── beta6.20_..._cfg_${conf_id}.lime"
 done
+echo ""
+echo "  Additional requested data:"
+echo "    HYP-smear files:              ${#HYP_SMEAR_FILES[@]}"
+echo "    2pt/eigenvector work dirs:    ${#DONGHX_WORK_DIRS[@]}"
+echo "    TMD OPE result dirs:           ${#TMD_OPE_RESULT_DIRS[@]}"
+echo "    TMD OPE source files:          ${#TMD_OPE_FILES[@]}"
+echo "    HYP OPE result dirs:           ${#HPY_OPE_RESULT_DIRS[@]}"
+echo "    OPE source files:              ${#HPY_OPE_FILES[@]}"
+echo "    Perambulator work dirs:        ${#PERAM_WORK_DIRS[@]}"
+echo "    Cluster-decomposition dirs:    ${#CLUSTER_WORK_DIRS[@]}"
 
 echo ""
 echo "============================================================================="
