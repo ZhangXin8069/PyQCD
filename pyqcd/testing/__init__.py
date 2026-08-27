@@ -25,6 +25,24 @@ def test_gamma_basis():
     assert np.allclose(g7, -g7.conj().T, atol=1e-10)
 
 
+def test_gevp_preserves_complex_hermitian_data():
+    """GEVP 应保留复 Hermitian 关联矩阵的本征值与本征向量。"""
+    from scipy.linalg import eigh
+    from pyqcd.analysis import solve_gevp
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    c0 = np.eye(2, dtype=complex)
+    c1 = np.array([[1.0, 0.4 + 0.3j],
+                   [0.4 - 0.3j, 2.0]], dtype=complex)
+    corr = np.stack([c0, c1], axis=2)
+
+    expected = eigh(c1, c0)[0][::-1]  # t>=t0 的返回顺序为降序
+    got, vec = solve_gevp(corr, t0=0)
+    assert np.allclose(np.asarray(got[:, 1]), expected, atol=1e-12)
+    assert np.max(np.abs(np.asarray(vec[..., 1]).imag)) > 1e-8
+
+
 def test_zr_parametrization():
     """Z_R 参数化：z=0 处有限、随 z 增大指数衰减（线性发散主导）。"""
     from pyqcd.renorm import th_ZR, th_hB
