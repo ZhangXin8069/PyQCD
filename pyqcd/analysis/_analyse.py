@@ -630,14 +630,16 @@ def solve_gevp(C, t0):
     if t0 < 0 or t0 >= Nt:
         raise ValueError(f"t0={t0} out of range [0, {Nt-1}]")
 
-    # Symmetrize
-    C_real = ((C.conj().transpose(1, 0, 2) + C) / 2).real
+    # Hermitianize without discarding valid complex off-diagonal elements.
+    C_hermitian = (C.conj().transpose(1, 0, 2) + C) / 2
 
     # Convert to numpy for scipy
-    C_np = C_real.get() if hasattr(C_real, 'get') else C_real
+    C_np = (C_hermitian.get() if hasattr(C_hermitian, 'get')
+            else C_hermitian)
 
     C_GEVP = backend.zeros((N, Nt))
-    C_eigvecs = backend.zeros((N, N, Nt), dtype=float)
+    eigvec_dtype = np.complex128 if np.iscomplexobj(C_np) else float
+    C_eigvecs = backend.zeros((N, N, Nt), dtype=eigvec_dtype)
 
     for t in range(Nt):
         eigenvalues, eigenvectors = eigh(C_np[..., t], C_np[..., t0])
