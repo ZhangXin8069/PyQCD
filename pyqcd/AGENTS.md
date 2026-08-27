@@ -37,8 +37,8 @@
   流时间物理约定 τ=3a²（NieMiera 2025）。
 - 重整化：z 单位 fm（内部转 GeV⁻¹ 用 fm_to_GeV=0.197）；μ=2 GeV 默认。
 - 日志：`print` + `verbose` 参数；管线产物写 logs/（gitignore 豁免）。
-- 测试：`python examples/pyqcd/conftest.py`（16 项）；一致性验证：
-  `python examples/pyqcd/verify_consistency.py`（A–E 五组对照，全部 0 差异）。
+- 测试：`python examples/pyqcd/conftest.py`（41 项）；一致性验证：
+  `python examples/pyqcd/verify_consistency.py`（参考产物完整时 A–E 五组对照全部 0 差异；缺失时明确退出 2）。
 
 ## 反模式（勿重复）
 
