@@ -51,31 +51,78 @@ def R_model(z_, tsep_, ti_, z_list_, c0_z0, c1_z0, c2_z0,
     return res
 
 
-def _fit_one(y, z_set, tsep_set, ti_set, z_list, c_inv, par_ini=None):
-    """单组数据（均值或单样本）最小二乘拟合。"""
+def _whitener(c_inv):
+    """返回 W，使 ``W.T @ W`` 等于协方差逆矩阵。"""
+    c_inv = np.asarray(c_inv, dtype=float)
+    try:
+        return np.linalg.cholesky(c_inv).T
+    except np.linalg.LinAlgError:
+        # 允许轻微非对称/半正定的数值协方差；负特征值仍拒绝。
+        sym = (c_inv + c_inv.T) / 2.0
+        eigval, eigvec = np.linalg.eigh(sym)
+        scale = max(float(np.max(np.abs(eigval))), 1.0)
+        if np.min(eigval) < -1e-10 * scale:
+            raise
+        return np.sqrt(np.maximum(eigval, 0.0))[:, None] * eigvec.T
+
+
+def _fit_one(y, z_set, tsep_set, ti_set, z_list, c_inv, par_ini=None,
+             optimizer='least_squares', whitener=None):
+    """单组数据（均值或单样本）最小二乘拟合。
+
+    ``least_squares`` 通过协方差白化直接最小化同一个全协方差 χ²；
+    ``nelder-mead`` 保留旧实现，便于回归对照和不定协方差的兼容。
+    """
     if par_ini is None:
         par_ini = [0.5, -0.2, 0.0, 0.5, -0.2, 0.0, 0.3]
-    data_num = len(z_set)
 
-    def cost(par):
-        (c0_z0, c1_z0, c2_z0, c0_z1, c1_z1, c2_z1, deltaE) = par
-        th = R_model(z_set, tsep_set, ti_set, z_list,
-                     c0_z0, c1_z0, c2_z0, c0_z1, c1_z1, c2_z1, deltaE)
-        del_r = y - th
-        return float(del_r.T @ c_inv @ del_r / data_num)
+    if optimizer == 'nelder-mead':
+        data_num = len(z_set)
 
-    from scipy.optimize import minimize
-    res = minimize(cost, par_ini, method='Nelder-Mead',
-                   options={'maxiter': 20000, 'xatol': 1e-8})
+        def cost(par):
+            (c0_z0, c1_z0, c2_z0, c0_z1, c1_z1, c2_z1, deltaE) = par
+            th = R_model(z_set, tsep_set, ti_set, z_list,
+                         c0_z0, c1_z0, c2_z0, c0_z1, c1_z1, c2_z1,
+                         deltaE)
+            del_r = y - th
+            return float(del_r.T @ c_inv @ del_r / data_num)
+
+        from scipy.optimize import minimize
+        res = minimize(cost, par_ini, method='Nelder-Mead',
+                       options={'maxiter': 20000, 'xatol': 1e-8})
+        return res.x
+
+    if optimizer != 'least_squares':
+        raise ValueError("optimizer must be 'least_squares' or 'nelder-mead'")
+
+    if whitener is None:
+        whitener = _whitener(c_inv)
+
+    y = np.asarray(y, dtype=float)
+
+    def residual(par):
+        th = R_model(z_set, tsep_set, ti_set, z_list, *par)
+        return whitener @ (y - th)
+
+    from scipy.optimize import least_squares
+    res = least_squares(
+        residual, np.asarray(par_ini, dtype=float), method='trf',
+        max_nfev=2000, xtol=1e-10, ftol=1e-10, gtol=1e-10)
+    if not res.success or not np.all(np.isfinite(res.x)):
+        # 保留旧路径作为极端数据/数值退化时的安全回退。
+        return _fit_one(y, z_set, tsep_set, ti_set, z_list, c_inv,
+                        par_ini=par_ini, optimizer='nelder-mead')
     return res.x
 
 
-def fit_ratio(data_for_fit, resam_type='boot'):
+def fit_ratio(data_for_fit, resam_type='boot', optimizer='least_squares'):
     """逐样本拟合比值，提取 c0(z₀)/c0(z₁) 与 deltaE。
 
     Args:
         data_for_fit: (z_set, tsep_set, ti_set, ratio_mean, err,
                        ratio_samples, z_list, t_sep_list, n_remove)
+        resam_type: 'boot' or 'jack' covariance convention.
+        optimizer: 'least_squares' (default) or 'nelder-mead' compatibility path.
     Returns:
         dict: {c0_z0, c1_z0, c2_z0, c0_z1, c1_z1, c2_z1, deltaE,
                c0_z0_err, c0_z1_err, deltaE_err}（逐样本均值与误差）
@@ -83,18 +130,21 @@ def fit_ratio(data_for_fit, resam_type='boot'):
     (z_set_, tsep_set_, ti_sep_set_, ratio_mean_set_, err_set,
      ratio_samples_fit_, z_list_, _t_sep_list_, _n_remove_) = data_for_fit
     c_inv = covariance_matrix_inv(ratio_samples_fit_, resam_type)
+    whitener = _whitener(c_inv) if optimizer == 'least_squares' else None
 
     # 均值初始化 + χ²>2 换初值重试（对照原版 fit_ratio→fit_ratio_mean 链，
     # scipy 等价实现：取两轮初值中 χ² 更优者作为逐样本拟合起点）
     y_mean = np.asarray(ratio_mean_set_, dtype=float)
-    par_ini = _fit_one(y_mean, z_set_, tsep_set_, ti_sep_set_, z_list_, c_inv)
+    par_ini = _fit_one(y_mean, z_set_, tsep_set_, ti_sep_set_, z_list_, c_inv,
+                       optimizer=optimizer, whitener=whitener)
     del_mean = y_mean - R_model(z_set_, tsep_set_, ti_sep_set_,
                                 z_list_, *par_ini)
     chi2_best = float(del_mean @ c_inv @ del_mean)
     if chi2_best / len(z_set_) > 2.0:
         alt = _fit_one(y_mean, z_set_, tsep_set_, ti_sep_set_, z_list_,
                        c_inv, par_ini=[0.5, -1.5, 0.0, 0.5, -1.5, 0.0,
-                                       1.02788])
+                                       1.02788], optimizer=optimizer,
+                       whitener=whitener)
         del_alt = y_mean - R_model(z_set_, tsep_set_, ti_sep_set_,
                                    z_list_, *alt)
         if float(del_alt @ c_inv @ del_alt) < chi2_best:
@@ -105,7 +155,8 @@ def fit_ratio(data_for_fit, resam_type='boot'):
     for sample_i in range(n_samples):
         y = ratio_samples_fit_[:, sample_i]
         fits[sample_i] = _fit_one(y, z_set_, tsep_set_, ti_sep_set_,
-                                  z_list_, c_inv, par_ini=list(par_ini))
+                                  z_list_, c_inv, par_ini=list(par_ini),
+                                  optimizer=optimizer, whitener=whitener)
 
     mean = fits.mean(axis=0)
     err = fits.std(axis=0)
