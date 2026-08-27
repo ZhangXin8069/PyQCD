@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from pyqcd.testing import (  # noqa: F401
     test_gamma_basis,
+    test_gevp_preserves_complex_hermitian_data,
     test_zr_parametrization,
     test_gradient_flow_su3_and_dissipation,
     test_tmd_operator_runs,
