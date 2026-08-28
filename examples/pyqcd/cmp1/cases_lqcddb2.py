@@ -147,9 +147,12 @@ def build():
         d2 = float(np.abs(wa - wb).max() / max(np.abs(wb).max(), 1e-300))
         return max(d1, d2)
 
-    add('L20', 'solve_gevp 广义本征值/矢量逐位一致（B-正交基）',
+    add('L20', 'solve_gevp 广义本征值/矢量逐位一致（复输入差异已判定）',
         lambda: L.solve_gevp(Ct, 2), lambda: pg_g(Ct, 2),
-        tol=1e-9, compare=_gevp_cmp)
+        tol=1e-9, compare=_gevp_cmp,
+        note='复 Hermitian 输入上 ref 在 Hermitian 化后执行 .real，丢弃虚部；'
+             'PyQCD 保留复数。独立 GEVP 残差：PyQCD 对复矩阵约 1e-15，'
+             'ref 对复矩阵约 1e-1；纯实投影双方逐位一致，登记为参考语义差异')
 
     arr = rng.normal(size=(10, 4))
     groups = [[0, 1], [2, 3], [4], [5], [6], [7], [8], [9]]
