@@ -405,8 +405,8 @@
         C_3(\mathrm dt,\mathrm d\tau,z,b)&=C_2(\mathrm dt)\,\mathrm{OPE}(\mathrm d\tau,z,b),\\
         C_3^{\rm disc}&=C_3-C_2\langle\mathrm{OPE}\rangle_0,\\
         R&=\left\langle C_3^{\rm disc}/C_2\right\rangle_{t_i},\\
-        R&=c_0+c_1e^{-\Delta E\,\mathrm d\tau}
-        +c_1e^{-\Delta E(\mathrm dt-\mathrm d\tau)}.
+        R&=c_0+c_1e^{-\Delta E\,\mathrm d\tau}\\[-0.2em]
+        &\quad+c_1e^{-\Delta E(\mathrm dt-\mathrm d\tau)}.
       \end{align*}
       \begin{block}{极限校验}
         当插入点远离源/汇，指数激发态项应衰减，\(R\to c_0\)。
@@ -415,7 +415,7 @@
     \end{column}
     \begin{column}{0.46\textwidth}
       \scriptsize
-      \begin{tabularx}{\linewidth}{@{}X@{}}
+      \begin{tabularx}{0.94\linewidth}{@{}X@{}}
         输入：\(C_2\) 与 flowed OPE \((n_z,n_b,N_t)\)\\
         \quad 构造相对时间数组\\
         \quad \(C_3\gets C_2\times\mathrm{OPE}\)（当前因子化实现）\\
@@ -429,12 +429,9 @@
       \end{tabularx}
     \end{column}
   \end{columns}
-  \vfill
-  \begin{beamercolorbox}[wd=0.98\textwidth,sep=0.25em,rounded=true]{block body}
-    \scriptsize\textbf{实现钩子：}\nolinkurl{run_ratio2pt} 先做真空扣除 ratio，再逐 \((z,b_\perp)\)
-    拟合；关键数组和重采样语句收录于附录。
-  \end{beamercolorbox}
-  \source{代码：\nolinkurl{pyqcd/analysis/_tmd_ratio.py:31-213}；模型：\nolinkurl{pyqcd/analysis/_disconnected.py:23-61}；归档：\nolinkurl{.../tmd_ratio/1_fit_report_P200.txt:1-14}。}
+  \vspace{0.08em}
+  {\scriptsize\textbf{实现钩子：}\nolinkurl{run_ratio2pt} 先做真空扣除 ratio，再逐 \((z,b_\perp)\) 拟合；关键数组见附录。\par}
+  \source{代码：\nolinkurl{pyqcd/analysis/_tmd_ratio.py}；模型：\nolinkurl{pyqcd/analysis/_disconnected.py}；归档：\nolinkurl{.../tmd_ratio/1_fit_report_P200.txt}。}
 \end{frame}
 
 \begin{frame}[t]{重整化分两条路径：test9 使用 z=0 比值，完整 Z\_R/混合模块另有入口}
