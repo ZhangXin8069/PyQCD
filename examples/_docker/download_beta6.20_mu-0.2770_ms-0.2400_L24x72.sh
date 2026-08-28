@@ -41,7 +41,7 @@ GAUGE_CONFIG_BASE="/public/group/lqcd/configurations/CLOVER/beta6.20_mu-0.2770_m
 # remote /public/group/lqcd tree, matching the original downloader behavior.
 DONGHX_BASE="/public/group/lqcd/donghx"
 
-HYP_SMEAR_FILES=(
+HYP_SMEAR_DIRS=(
     "${DONGHX_BASE}/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_3D_1times/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents"
     "${DONGHX_BASE}/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_3D_3times/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents"
     "${DONGHX_BASE}/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_3D_5times/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents"
@@ -402,13 +402,13 @@ for conf_id in "${CONF_IDS[@]}"; do
     download_file "${gauge_file}"
 done
 
-# ---- Step 4: HYP-smearing metadata ----
-log_step "Step 4/8: HYP-smearing metadata (.lime.contents)"
+# ---- Step 4: HYP-smearing metadata directories ----
+log_step "Step 4/8: HYP-smearing metadata directories (.lime.contents)"
 
-for file_path in "${HYP_SMEAR_FILES[@]}"; do
+for dir_path in "${HYP_SMEAR_DIRS[@]}"; do
     echo ""
-    log_info "HYP file: ${file_path}"
-    download_file "${file_path}"
+    log_info "HYP directory: ${dir_path}/"
+    download_dir "${dir_path}"
 done
 
 # ---- Step 5: Existing 2pt/eigenvector/contraction work trees ----
@@ -486,7 +486,7 @@ echo "          ├── beta6.20_..._cfg_${conf_id}.lime"
 done
 echo ""
 echo "  Additional requested data:"
-echo "    HYP-smear files:              ${#HYP_SMEAR_FILES[@]}"
+echo "    HYP-smear directories:        ${#HYP_SMEAR_DIRS[@]}"
 echo "    2pt/eigenvector work dirs:    ${#DONGHX_WORK_DIRS[@]}"
 echo "    TMD OPE result dirs:           ${#TMD_OPE_RESULT_DIRS[@]}"
 echo "    TMD OPE source files:          ${#TMD_OPE_FILES[@]}"

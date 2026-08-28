@@ -241,7 +241,7 @@
     \(0.197\,\mathrm{GeV\,fm}\) 得 \(\mathrm{GeV}^{-1}\)。SFTX 的 \(\ln(\mu^2t)\) 要用 \(\mathrm{GeV}^{-2}\)。
   \end{beamercolorbox}
   \vspace{-0.12em}
-  \vspace{-0.12em}
+  \vspace{-0.20em}
   \source{参数：\nolinkurl{pyqcd/pipeline/_config.py}；实战：\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py}。}
 \end{frame}
 
@@ -284,7 +284,7 @@
       \end{tabularx}
     \end{column}
   \end{columns}
-  \vspace{-0.08em}
+  \vspace{-0.14em}
   \source{实现：\nolinkurl{pyqcd/renorm/_gradient_flow.py}；参考：Lüscher 2010、MyQCD 梯度流章节。}
 \end{frame}
 
@@ -548,8 +548,9 @@
     \begin{column}{0.48\textwidth}
       {\small\begin{equation*}
         \begin{aligned}
-          f(x;a,P_z,m_\pi,L)={}&xg_0(x)+f_xa^2+l_xa^4\\
-          &+h_xa^2P_z^2+\frac{d_x}{P_z^2}+\frac{b_x}{P_z}\\
+          f(x;a,P_z,m_\pi,L)={}&xg_0(x)+f_xa^2\\
+          &\quad +l_xa^4+h_xa^2P_z^2\\
+          &\quad +\frac{d_x}{P_z^2}+\frac{b_x}{P_z}\\
           &+k_x(m_\pi^2-m_{\pi,\rm phy}^2)+c_xe^{-La m_\pi}.
         \end{aligned}
       \end{equation*}}
