@@ -465,7 +465,7 @@
       \end{block}
       \begin{block}{混合方案}
         \(z<z_s\) 用 \(h_B(z,P_z)/h_B(z,0)\)；\(z\ge z_s\) 用
-        \(h_B/Z_R\) 乘 \(\eta_s\)，再以
+        \(h_B/Z_R\) 乘 \(\eta_s\)，再作
         \(l_1\lambda^{-a_1}e^{-\lambda/\lambda_0}\) 外推。
       \end{block}
     \end{column}
@@ -490,7 +490,7 @@
     \textbf{极限检查：}\(b_\perp\to0\) 时 TMD 应与相应共线 convention 可比；
     \(P_z\) 增大时 LaMET 幂修正应减小。代码通过有限性/形状测试，尚未由当前工作树中的多组态原始数据建立连续极限曲线。
   \end{beamercolorbox}
-  \source{实现：\nolinkurl{pyqcd/renorm/_tmdextract.py:30-158}、\nolinkurl{pyqcd/renorm/_hybrid.py:59-153}；辅助参考的 CS 比值：\nolinkurl{/root/MyQCD/refer/papers/TMD_Soft_Function_LaMET_latex/chapters/section02.tex:67-81}。}
+  \source{实现：\nolinkurl{pyqcd/renorm/_tmdextract.py}、\nolinkurl{pyqcd/renorm/_hybrid.py}；CS 参考见附录 C。}
 \end{frame}
 
 \begin{frame}[t]{NLO 匹配与 SFTX：微扰核、软因子和快度演化不能混为一个系数}
@@ -501,8 +501,8 @@
         \begin{align*}
           x\widetilde g(x,b)&=\int\frac{\dd y}{|y|}
           C^{\rm hybrid}\!\left(\frac{x}{y},\lambda_s,\frac{\mu}{yP_z}\right)
-          \frac{y g(y,b)}{\sqrt{S_I(b,\mu)}}
-          e^{\frac12\ln(\zeta_z/\zeta)K(b)},\\
+          \frac{y g(y,b)}{\sqrt{S_I(b,\mu)}}\\[-0.2em]
+          &\quad\times e^{\frac12\ln(\zeta_z/\zeta)K(b)},\\
           C^{\rm hybrid}(\xi)&=\delta(1-\xi)
           +\frac{\alpha_s C_A}{2\pi}g(\xi,y).
         \end{align*}
@@ -516,7 +516,7 @@
     \end{column}
     \begin{column}{0.47\textwidth}
       \scriptsize
-      \begin{tabularx}{\linewidth}{@{}p{1.25cm}X@{}}
+      \begin{tabularx}{0.94\linewidth}{@{}p{1.25cm}X@{}}
         \toprule
         层次 & 代码职责/物理含义\\
         \midrule
@@ -534,7 +534,7 @@
       \end{beamercolorbox}
     \end{column}
   \end{columns}
-  \source{匹配：\nolinkurl{pyqcd/renorm/_matching.py}、\nolinkurl{pyqcd/renorm/_tmdextract.py}；SFTX 同文件；软因子参考见附录 C。}
+  \source{匹配：\nolinkurl{pyqcd/renorm/_matching.py}、\nolinkurl{pyqcd/renorm/_tmdextract.py}；SFTX 同文件；参考见附录 C。}
 \end{frame}
 
 \begin{frame}[t]{连续极限入口：把离散、有限动量、手征和体积效应写进同一设计矩阵}
@@ -555,7 +555,7 @@
     \end{column}
     \begin{column}{0.48\textwidth}
       \footnotesize
-      \begin{tabular}{@{}l@{}}
+      \begin{tabularx}{0.94\linewidth}{@{}X@{}}
         输入：多系综 \((x,h_R,a,P_z,m_\pi,L)\) 与 boot 样本\\
         \quad 逐 \(x\) 构造 8 项设计行并做 Cholesky 白化\\
         \quad 非正定时回退单位权重并记录\\
@@ -564,7 +564,7 @@
         \textbf{退化检查：}\\
         \quad 数据点少于自由参数：输出 NaN，不伪造极限\\
         \quad 协方差非正定：记录回退，而非静默改权重\\
-      \end{tabular}
+      \end{tabularx}
     \end{column}
   \end{columns}
   \vspace{0.08em}
@@ -572,7 +572,7 @@
     \scriptsize\unverified\ 该入口有合成数据测试；当前 test9 仅在单一 \(L24\times72\) 系综上生成 PDF，
     不能称为已完成的 \(a/P_z/m_\pi/L\) 联合连续极限。
   \end{beamercolorbox}
-  \source{模型：\nolinkurl{pyqcd/renorm/_extrapolate.py}；测试：\texttt{test\_extrapolate\_boot\_fit}；编排：\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py}。}
+  \source{模型：\nolinkurl{pyqcd/renorm/_extrapolate.py}；测试：\texttt{test\_extrapolate\_boot\_fit}。}
 \end{frame}
 
 \begin{frame}[t]{工程实现：后端、IO、缓存和形状守卫把物理算法变成可回放管线}
