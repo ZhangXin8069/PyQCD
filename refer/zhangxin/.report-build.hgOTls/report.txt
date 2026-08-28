@@ -1,0 +1,444 @@
+       zhangxin 格点 QCD 算法实现
+从 Clover 场强、蒸馏收缩到胶子 quasi-PDF 的物理—代码映射
+
+
+              代码—物理交叉审阅
+
+          PyQCD / lattice-pdf：refer/zhangxin
+
+
+               2026 年 8 月 28 日
+主链已经可读、可运行；物理闭环仍需补齐重整化与匹配
+
+
+确证 已实现                       确证 局部证据                        未验证 物理结论
+两套工作流共享 Fµν 、                12 个 Python 文件可解析；             Fourier 中明确忽略重整化；
+Wilson 线、VVV、Wick 收          小格点上两套实现的场强、                   匹配核仍是 LO 占位。当
+缩、宇称投影；生产版提                  对偶、OPE、相位逐项                    前目录没有生产输入，未
+供 CuPy/MPI/CLI。              max |∆| = 0。                   宣称真实 PDF 数值。
+
+
+  当前判断         代码层已形成“规范场 → 算子 → 强子 → 准分布”的骨架，但只能
+               把最终 PDF 称为算法输出接口，不能称为已完成的物理结果。
+  下一项验收        在真实多组态数据上闭合组态级 Jackknife，并补入与方案一致的重整
+               化、NLO 匹配及连续性/归一化检验。
+
+来源：代码：gluon_pdf_full_workflow.py:1-30,1144-1223；本次合成校验输出。
+
+
+
+代码—物理解析                             zhangxin 格点 QCD 实现                   2/18
+目标不是“画一条曲线”，而是把非局域胶子矩阵元变成可审计输出
+
+                                                        验收层    必须保持            代码证据
+物理问题                                                                      e为
+                                                        对称性    Fµν 反对称；F       DR/ε 构造
+LaMET 用有限空间动量 Pz 的等时非局域矩阵元逼                                    Hodge 对偶；
+近光锥分布：                                                         P2± = P±
+                                                        规范结构   非局域两端由          OPE 六步循环
+h(z, Pz ) = ⟨P| O(z) |P⟩,   g̃(x, Pz ) −−−−→ g(x, µ).          W(z ← 0)、
+                                     Pz →∞
+                                                               W(0 ← z) 连接
+                                                        统计结构   组态删除、plateau、   Jackknife/ratio
+z 是 Wilson 线长度；x 是 Fourier 共轭的动量分数。
+                                                               协方差与误差可追溯
+                                                        数值边界   P = 0、零场强、      合成极限测试
+                                                               x = 0、Nev 截断不
+                                                               崩溃
+                                                        物理闭环   重整化、匹配、真实       未验证
+                                                               系综和归一化可复现
+来源：数组与目标：gluon_pdf_full_workflow.py:5-22,65-131；生产张量约定：gluon_pdf_workflow.py:468-480。
+
+
+
+
+代码—物理解析                                         zhangxin 格点 QCD 实现                               3/18
+五个计算层把输入组织成可定位的中间量，而不是黑箱调用
+
+ 层            输入 → 处理 → 输出             物理对象                            主要落点
+ 1. 规范场       ILDG 二进制 → 复数链           SU(3) 平行输运                      read_gauge_config
+              接 Uµ (x)
+ 2. 胶子算子                         e
+              plaquette → Clover/F     O(z)                            plaquette_clover,
+              → Wilson 线迹                                              operators_new_z0_mu2
+ 3. 强子源汇      本征矢 + perambulator       C2 (tsnk , tsrc )               compute_VVV,
+              → VVV/Wick                                               run_proton_2pt
+ 4. 矩阵元       C3 /C2 或 OPE 时间平         h(z, Pz )                       extract_matrix_
+              均 → plateau/JK                                           element
+                   sin      Cgg
+ 5. 重构        h(z) −−→ e
+                       g(x) −−→ g(x)   准 PDF / 光锥 PDF 接口               fourier_transform_to_
+                                                                       quasi_pdf
+
+         规范链接            Clover +       VVV +              h(z, Pz )          eg
+          Uµ             Wilson 线      Wick + P±           +统计                /g
+
+来源：流程编排：gluon_pdf_full_workflow.py:1293-1301,1688-1735；图为代码依赖关系示意。
+
+
+代码—物理解析                                zhangxin 格点 QCD 实现                                  4/18
+Clover 场强把局部 Wilson 环的反厄米部分映射为连续场强
+
+
+
+                Pµν (x) = Uµ (x)Uν (x + µ̂)U†µ (x + ν̂)U†ν (x),
+                            i X                        eµν = 1 εµνρσ Fρσ .
+                Fµν (x) = −           (Pp − P†p ),     F
+                            8                                   2
+                              p∈clover
+
+
+
+                                           伪代码（示意）                            代码—物理动作
+物理检查
+                                           Input: Uµ (x), (µ, ν)              读入带颜色矩阵的链接场
+Uµ = 1 时每个 plaquette 为单位元，                 Initialize: Q ← 0                  四个定向叶的和
+                     e = 0。代码              P1 , . . . , P4 ← 四个定向 plaquette   Pµν , Pν,−µ , P−µ,−ν , P−ν,µ
+反厄米部分为零，故 F = F                                    P
+                                           Q ← 4i=1 (Pi − P†i )               反厄米投影
+在 a = 1, g0 = 1 下省略显式 1/(a2 g0 )           Fµν ← −iQ/8                        场强输出；重复所有指标
+归一化，物理归一化需在后续方案中                                                              对
+                                           e←ε·F
+                                           F                                  Hodge 对偶，供
+确认。                                                                           helicity/算子组合使用
+来源：实现：gluon_pdf_full_workflow.py:290-329,332-461,490-514；确证 零场强与对偶反对称性合成测试。
+
+代码—物理解析                                  zhangxin 格点 QCD 实现                                          5/18
+Wilson 线把两个不同位置的场强接成规范协变的非局域算子
+
+
+                      h                               i                        Y
+                                                                               z−1
+                                      eµ ν (0)W(0 ← z) ,
+   Oµν,µ2 ν2 (z) = Trc Fµν (z)W(z ← 0)F                          W(0 → z) =          Uz (k).
+                                        2 2
+                                                                               k=0
+
+
+  单列伪代码（z 方向）                                   规范/数值含义
+  Input: U, F, F,e δz , µν, µ2 ν2               指定端点和 Lorentz 结构
+  Fz ← roll(Fµν , −δz )                         把场强从 0 平移到 z
+  for k = δz − 1, . . . , 0 : Fz ← Fz U†z (k)   构造 W(z ← 0)
+  Fz ← Fz Feµ ν (0)                             在源点插入第二个场强
+              2 2
+  for k = 0, . . . , δz − 1 : Fz ← Fz Uz (k)    构造 W(0 ← z)
+  s(t, x) ← Tr
+             Pc Fz                              颜色迹消去开放颜色指标
+  O(t, z) ← x s(t, x)                           空间求和，保留时间与长度
+  Output: O ∈ CNt ×Nz                           可供矩阵元提取的坐标空间数据
+
+来源：实现：gluon_pdf_full_workflow.py:521-652；生产模式：gluon_pdf_workflow.py:659-816,1222-1302。
+代码—物理解析                                  zhangxin 格点 QCD 实现                                    6/18
+OPE 的模式与变体决定使用哪一种物理算子
+
+模式/函数           算子输入                   适用范围与输出
+                                                              必须统一的接口
+unpol           pla_tilde=pla          生产版非极化 F W F W
+                                       组合                     单脚本协调器的“unpolarized”实
+helicity        pla_tilde=Hodge(pla)   含对偶场强的螺旋度通                   e
+                                                              现直接传入 F，而生产版由     mode
+                                       道
+new_z0_mu2_xy   保留两个横向坐标               输出 (Nt , Nx , Nx )，面   切换。两者不能只因数值函数同
+                                       向横向分辨
+FF_z0           无 Wilson 线，            仅规范固定条件下的廉
+                                                              形就视为物理通道相同。
+                z_dir = 2              价变体
+                                                              边界
+                                                              operators_FF_z0 没有 Wilson 线
+                                                              且硬编码 z 方向；误用于未规范
+                                                              固定的组态会破坏规范不变性。
+来源：生产模式：gluon_pdf_workflow.py:659-816,978-1025,1222-1302；单脚本通道：
+gluon_pdf_full_workflow.py:1369-1426。
+
+
+
+
+代码—物理解析                                       zhangxin 格点 QCD 实现                       7/18
+Distillation 将三夸克空间结构压缩到 Laplace 本征子空间
+
+             X                                         单列伪代码                         代码—物理动作
+Φabc (P) =       e−iP·x εijk via (x)vjb (x)vkc (x).
+             x                                         Input: vai (x), P, Nev        每个时间片的本征矢
+                                                                                     与动量
+                                                       ϕ(x) ← e−iP·x                 动量投影/动量涂抹
+对象映射                                                                                 相位
+vai ：颜色 i 的 Laplace 本征矢；a, b, c：截                      Φ←0                           子空间三指标张量
+断本征模；τ ：本征子空间中的夸克传播                                    for each x-layer :            控制中间张量显存
+子；Φ：带动量投影的 baryon block。                                  Φ += + (012 + 120 + 201)   εijk 偶排列
+                                                          Φ −= (021 + 102 + 210)     εijk 奇排列
+                                                                          3
+                                                       Output: Φ(t) ∈ CNev           供强子 Wick 收缩复
+显存策略                                                                                 用
+x 按 x-层切片，单层累加六个颜色置换；
+计算量的主张来自代码结构，真实吞吐
+未在本目录测量。
+来源：实现：gluon_pdf_full_workflow.py:659-784；GPU/分片版：gluon_pdf_workflow.py:825-933；确证 VVV 对照显
+式六置换的误差为 7.994 × 10−15 。
+
+代码—物理解析                                               zhangxin 格点 QCD 实现                       8/18
+质子两点函数由直接图减交换图，并用宇称与反周期边界收尾
+
+                                                         单列伪代码                           代码—物理动作
+ C2 = Φsnk τ (Γτ Γ) τ Φ∗src − Φsnk τ (Γτ Γ) τ Φ∗src ,
+      |        {z         } |          {z         }
+               direct                exchange
+                                                         Input: Φ(t), τ (t, t0 ), Γ      读入 VVV 与
+                                                                                         perambulator
+      P± =
+             1
+               (γ0 ± γ4 ),     C±
+                                2 = P± : C2 .
+                                                         K ← Γτ Γ                        Dirac 插值结构夹
+             2                                                                           层
+                                                         D ← contract(Φ, τ, K, τ, Φ∗ )   直接费曼图
+物理图像                                                     X ← contract(Φ, τ, K, τ, Φ∗ )   交换指标配对
+                                                         CDirac
+                                                           2    ←D−X                     费米反对易符号
+εijk 负责重子颜色反对称；Wick 定理产生费米子
+交换负号；重子含三个费米场，时间反周期边界
+                                                         C±2 ← P± : C2
+                                                                      Dirac
+                                                                                         正/负宇称投影
+使 backward 方向与另一宇称分量关联。                                  tsnk < tsrc ⇒ C+
+                                                                        2 ← −C2
+                                                                                 +
+                                                                                         pp 反周期符号
+                                                         tsnk > tsrc ⇒ C2 ← −C−
+                                                                        −
+                                                                                 2       pm 反周期符号，
+                                                                                         输出 (Nt , Nt )
+来源：Wick：gluon_pdf_full_workflow.py:787-846；投影/边界：gluon_pdf_workflow.py:936-970；协调器：
+gluon_pdf_full_workflow.py:1478-1522。
+
+
+
+
+代码—物理解析                                             zhangxin 格点 QCD 实现                             9/18
+统计层的职责是隔离激发态与组态涨落，而不是替代物理重整化
+
+                                                             单列伪代码                              代码—物理动作
+           S − xi                 N−1 X           2
+ θ̄(i) =          ,       2
+                         σJK =          θ̄(i) − θ̄ .         Input: C3 , C2 , {configs}, tsep   组态级关联函数
+           N−1                     N  i                      shift/fold if enabled              利用平移/时间反演对称性
+                                                             R ← C3 /C2 (tsep )                 消去源汇归一化因子
+                C3 (τ, tsep )                                choose τ plateau                   降低激发态污染，窗口需
+R(τ, tsep ) =                 ,    h(z, Pz ) ≃ plateauτ R.
+                 C2 (tsep )                                                                     扫描
+                                                             R̄ ← mean over plateau             得到每个 z 的矩阵元估计
+                                                             R̄(i) ←
+                                                                   qdelete config  i            组态 Jackknife
+                                                                            P
+谱学辅助                                                         σ ← (N − 1) (R̄(i) − R̄)2 /N       统计误差
+对 pion/介子分析，include.py 提供 log 或 cosh 有                       Output: h(z), σh (z), cov          进入 Fourier；尚未重整化
+效质量；
+meff = a−1 arccosh[(C(t + 1) + C(t − 1))/(2C(t))]，
+再乘 0.1973 GeV fm/a。
+来源：Jackknife：gluon_pdf_full_workflow.py:1230-1286；ratio/拟合：gluon_pdf_full_workflow.py:979-1083；分析
+框架：include.py:234-327。
+
+
+
+
+代码—物理解析                                                  zhangxin 格点 QCD 实现                                 10/18
+sin Fourier 给出准 PDF 接口；当前匹配实现只能作为占位诊断
+
+                                          Z zmax
+                                    2Pz                                              2πnz
+                     e
+                     g(x, Pz ) =                   dz h(z, Pz ) sin(xPz z),   Pz =        .
+                                     x     0                                          L
+  单列伪代码                                 数值含义与边界
+  Input: hz , z_values, Pz , x_values   格距单位坐标与动量
+  for x ∈ x_values iterate:             逐个动量分数评估
+    x=0⇒e      g(x) = 0                 代码保护除零；不等于物理小 x 解
+    Ix ← trapz[Re h(z) sin(xPz z)]      梯形积分、截断于 zmax
+    e
+    g(x) ← (2Pz /x)Ix                   反对称通道输出
+  matching kernel Cgg ← δ(1 − ξ)        文档明确为 LO 占位
+  g←e   g − (αs /2π) Cgg ⊗ e g          当前网格实现对 αs > 0 仍会改值
+  Output: x, e g, g                     物理可信度依赖重整化/NLO/连续极限
+
+
+未验证 关键限制
+Fourier 注释明确忽略重整化；匹配函数仅在 ξ = 1 返回 1，不是完整 NLO 分布核。合成常数诊断：αs = 0
+差异为 0；αs = 0.2 最大差异为 6.366 × 10−2 。
+来源：实现：gluon_pdf_full_workflow.py:979-1031,1086-1137,1144-1223；诊断为本次合成输入。
+代码—物理解析                                  zhangxin 格点 QCD 实现                                   11/18
+生产版把物理分解映射到后端、MPI 粒度和可复用 CLI
+
+  参 数/系 综 预 设                                  工程接口         实现含义
+    β, L, m, P
+                                               2pt          VVV + perambulator + Wick + 投影
+     get_xp                                    ope          读规范场，算 Clover/OPE，支持 ±z、
+ CuPy 或 NumPy                                               横向保留
+                                               pla          只预计算 plaquette，便于复用
+     Lorentz 对                                 full         顺序运行 OPE 与 2pt；不等于多组态物
+   i mod Nrank                                              理后处理
+                                               6 个系综预设      封装 Nt , Nx , Nev 、动量涂抹与路径模板
+      .npy                                     双后端          asarray/to_numpy/synchronize/free_
+    中间产物                                                    memory_pool
+
+
+
+物理—并行对齐                                        可维护性判断
+非极化/螺旋度主路径各有 3 个 Lorentz 对；生                  “EXACT copy”注释帮助追溯来源；但两套实现仍需持续
+                                               做数值回归，并将后端转换、输入头部和几何尺寸校验显
+产版按 rank 取模分发，计算单元是独立算子                        式化。
+分量，不需要在算子循环中交换场数据。
+来源：后端：gluon_pdf_workflow.py:27-100；系综：gluon_pdf_workflow.py:107-164；MPI/CLI：
+gluon_pdf_workflow.py:978-1025,1230-1567。
+
+
+代码—物理解析                                zhangxin 格点 QCD 实现                                  12/18
+形状契约是最重要的接口：每个数组都对应一个物理对象
+
+ 代码对象             数组形状                                物理对象                  证据
+ gauge            (Nt , N3x , 4, 3, 3)                Uµ (x)，SU(3) 颜色平行输运   ...:853-880
+ F_all            (4, 4, Nt , N3x , 3, 3)             所有 Lorentz 分量 Fµν     ...:464-487
+ ops              (Nt , Nz ) 或 (Nt , Nx , Nx , Nz )   Wilson 线连接的 O(t, z)   ...:639-652; 生产版：
+                                                                            ...:1275-1302
+ VVV_all          (Nt , N3ev1 )                       动量投影的三夸克块 Φabc        ...:1467-1476
+ peram            (Nt , 4, 4, Nev1 , Nev1 )           蒸馏子空间传播子 τ            ...:921-972
+ C2               (Nt , Nt )                          源汇时间矩阵，已投影/边界修正       ...:1508-1522
+ h_z, quasi_pdf   (Nz ), (Nx )                        坐标空间矩阵元与准分布           ...:1528-1612
+
+
+
+接口风险
+形状文档写的是立方空间格点；读取器将三个空间方向都用同一个 Nx 。若推广到各向异性 (Nx , Ny , Nz )，必须先改形状契
+约与平移轴校验。
+
+来源：形状与读取：gluon_pdf_full_workflow.py:853-972；生产 OPE 输出：
+gluon_pdf_workflow.py:705-743,1275-1319。
+
+
+
+
+代码—物理解析                                               zhangxin 格点 QCD 实现                        13/18
+本次核验确认局部代数与双实现一致，但没有越过真实数据边界
+
+ 核验项                 实测结果                                         状态/解释
+ Python 语法           AST 解析 12 个文件，status=PASS                    确证 接口可载入
+ DR γ 代数             平方、反对易、γ5 定义、P± 投影误差均 0.000 × 100            确证 对称性层
+ Levi–Civita         形状 (4, 4, 4, 4)，非零 24 个，反对称误差 0              确证 对偶索引层
+ 零场强极限               单位规范场：max |F| = max |F|   e =0               确证 退化极限
+ 双实现交叉               随机 23 × 2 输入：field/dual/OPE/phase 最大差异全为 0   确证 数值实现一致
+ VVV 六置换             对照显式颜色置换：最大差异 7.994 × 10−15                  确证 收缩结构
+ Jackknife/Fourier   示例均值 2.5、误差 0.645497；x = 0 输出 0              确证 边界接口
+ CLI                 full/production 的 --help 返回码均 0              确证 可发现性
+ 真实系综端到端             当前目录没有规范场、本征矢、perambulator 生产输入              未验证 未运行物理结果
+
+
+证据等级说明
+合成校验只能证明数组形状、代数与实现路径；它不能证明离散化误差、组态统计、重整化常数、匹配核或 Pz → ∞ 极
+限。报告不把这些局部通过项升级为 PDF 物理结论。
+
+来源：命令：本次会话中的 Python AST/合成校验与 CLI help；代码入口：
+gluon_pdf_full_workflow.py:138-287,659-846,1086-1286。
+
+
+
+
+代码—物理解析                                   zhangxin 格点 QCD 实现               14/18
+下一轮优先补“可证伪的物理闭环”，再扩大生产规模
+
+ 优先级     当前风险                       可验收动作                      通过标准
+   1     重整化因子未进入 Fourier；匹配        固定方案、尺度和 Z 后重跑多组           hR 、e
+                                                                   gR 、g 链可追溯
+         核是 LO/离散占位                 态
+   2     单脚本 run_full_pipeline 实际   按组态落盘并在重采样前后核对             组态删除样本数与输入一致
+         只读单组态；nconf 不能替代加          形状
+         载循环
+   3     单脚本“unpolarized”路径传入       统一 Lorentz/dual 语义并做参考     unpol/helicity 通道定义逐项一
+         e
+         F，生产版按     mode 分开         数据回归                       致
+   4     本征矢文档称有 64 字节头部，           用真实文件头/尺寸做 reader 单        错误输入明确失败，不静默错位
+         但读取从文件开头开始；立方格             测
+         点假设未校验
+   5     IOG 依赖 cwd 下的 iog.so；      在目标 HPC 做最小 1 conf 烟测      IOG/ILDG/输出文件可读且日志
+         Chroma/Slurm 路径是集群特定                                  闭合
+
+
+建议决策
+先冻结当前局部算法接口，优先完成第 1–3 项物理闭环；之后再按 Pz 、格距、体积和组态数扩展。截止日期和计算资源
+需求当前未验证，需由课题组另行确定。
+
+来源：风险证据：gluon_pdf_full_workflow.py:883-918,1101,1144-1223,1655-1735；模式差异：
+gluon_pdf_workflow.py:1222-1269。
+代码—物理解析                               zhangxin 格点 QCD 实现                           15/18
+阶段结论：实现骨架可信，物理结果暂不应越过证据边界
+
+
+主张                  证据                        含义
+该目录实现了从 ILDG 规范     两套实现核心张量在小格点              可进入真实多组态数据阶
+链接、Clover 场强、非局域    上逐项一致；DR/对偶/零             段，但最终 PDF 结论必须
+Wilson 线 OPE，到蒸馏质   场强/VVV/边界接口均有合            等待重整化、NLO 匹配、
+子 2pt 与准 PDF 接口的完   成校验；CLI 可发现。              多组态统计和物理回归全部
+整算法骨架。                                        闭合。
+
+
+                e → O(z) → C2 → h(z) → e
+       规范场 → F, F                      g(x)
+
+          下一验收门：真实系综 + 重整化方案 + 匹配核 + 连续性检验。
+来源：综合：本报告前述代码证据与本次合成校验；不包含真实 PDF 数值结论。
+
+
+代码—物理解析                  zhangxin 格点 QCD 实现              16/18
+     附录 A：OPE 核心循环的原文件直引（1/2）
+
+     端点平移与反向连接                                              源点插入与正向连接
+
+1       # Step 1: 将 F_{μν} 平移到 z = delta_z 处            1    # Step 3: 在 z=0 处插入 F   ̃_{μ2, ν2}(0)
+2       ope = np.roll(F_all[mu, nu], -delta_z, axis=3 - 2    ope = contract(
+         z_dir)                                         3        "tzyxab, tzyxbc -> tzyxac",
+3                                                       4        ope,
+4       # Step 2: 从 z 到 0 的 Wilson 线 (即 U_z 的共轭)5                F_tilde_all[mu2, nu2],
+5       #   W(z→0) = Π_{k=dz-1}^{0} U_z^†(k)         6       )
+6       for dz_step in range(delta_z):               7
+7           shift_amount = -(delta_z - 1 - dz_step)  8       # Step 4: 从 0 到 z 的 Wilson 线 (U_z 正向)
+8           ope = contract(                          9       #   W(0→z) = Π_{k=0}^{dz-1} U_z(k)
+9               "tzyxab, tzyxcb -> tzyxac",         10       for dz_step in range(delta_z):
+10              ope,
+
+
+
+
+     阅读要点
+     第一段的共轭链接实现 W(z ← 0)，第二段先插入源点场强再累乘正向链接；后续的颜色
+     迹和空间求和见原文件 607–613 行。
+     来源：原文件直引：gluon_pdf_full_workflow.py:573-597；不是手抄伪代码。
+     代码—物理解析                               zhangxin 格点 QCD 实现                                        17/18
+    附录 B：VVV/Wick 与匹配占位的原文件证据（2/2）
+
+    VVV 的偶/奇颜色置换                                               匹配核的明确占位声明
+1      # ε_{ijk} 收缩: 六个置换，符号由排列奇偶性决定                       1   def matching_kernel_gg_lo(
+2      # 三项正号 (偶排列: 012, 120, 201):                        2       xi: float,
+3      VVV += contract(                                    3       mu_over_Pz: float = 1.0,
+4          "x, ax, bx, cx -> abc",  # ε_{012} = +1         4   ) -> float:
+5          phase_slice,                                    5       """
+6          eig_slice[:, :, 0],      # v^a_0                6       胶子 quasi-PDF 到光锥 PDF 的 LO 匹配核。
+7          eig_slice[:, :, 1],      # v^b_1                7
+8          eig_slice[:, :, 2],      # v^c_2                8      在 LO (leading order):
+9      )                                                   9         C_{gg}(ξ, μ/P_z) = δ(1 - ξ) + O(α_s)
+                                                          10
+                                                          11      此处返回 identity 部分的值。
+1      # 三项负号 (奇排列: 021, 102, 210):                       12      完整的 NLO 匹配核需要更多微扰计算，此处为占位符。
+2      VVV -= contract(
+3          "x, ax, bx, cx -> abc",    # ε_{021} = -1
+4          phase_slice,
+5          eig_slice[:, :, 0],
+6          eig_slice[:, :, 2],
+7          eig_slice[:, :, 1],
+8      )
+
+
+
+    物理解释： VVV 六项完整展开颜色 εijk ；匹配注释将 NLO 标为“需更多微扰计算”，因此本页是接口证据，不是 NLO
+    结果。
+    来源：原文件直引：gluon_pdf_full_workflow.py:737-770,1144-1155。
+
+
+    代码—物理解析                                            zhangxin 格点 QCD 实现                                   18/18
+

@@ -1,0 +1,866 @@
+% ============================================================
+% EasyDistillation 蒸馏算法实现：代码与格点 QCD 物理
+% 编译：xelatex 两遍；交付前 Overfull=0, Float too large=0
+% 本稿是 16:9 横板技术报告，不使用主体浮动 table/figure。
+%
+% 版式账本（生成前固定）：
+% S01 标题；S02 结论卡；S03 问题/判据；S04 物理定义表；
+% S05 总流程框图；S06--S12 本征模、stout、elemental、perambulator；
+% S13--S18 随机扩展、算符、Wick、图收缩、两点函数；
+% S19--S20 验证；S21 风险；S22--S23 API；S24 结论；S25 下一步；
+% A01--A03 代码证据、形状复杂度、文献与术语。
+% 高风险对象：长公式、单列表高度、代码 listing、TikZ 节点和页脚。
+% ============================================================
+\documentclass[UTF8,aspectratio=169,11pt]{ctexbeamer}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\definecolor{primary}{HTML}{17365D}
+\definecolor{accent}{HTML}{1F77B4}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{warning}{HTML}{C55A11}
+\definecolor{muted}{HTML}{5B6573}
+\definecolor{panel}{HTML}{F4F7FA}
+\definecolor{linegray}{HTML}{CBD5E1}
+\definecolor{good}{HTML}{EAF5EE}
+\definecolor{warnbg}{HTML}{FFF4E8}
+
+\setbeamersize{text margin left=0.55cm,text margin right=0.55cm}
+\setlength{\emergencystretch}{2em}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{blocks}[rounded][shadow=false]
+\setbeamercolor{normal text}{fg=black!86,bg=white}
+\setbeamercolor{structure}{fg=primary}
+\setbeamercolor{frametitle}{fg=primary,bg=white}
+\setbeamercolor{block title}{fg=primary,bg=panel}
+\setbeamercolor{block body}{fg=black!86,bg=panel}
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamerfont{normal text}{size=\normalsize}
+\setbeamertemplate{frametitle}{%
+  \vskip0.12cm\insertframetitle\par\vskip0.08cm}
+\setbeamertemplate{footline}{%
+  \hbox{\begin{beamercolorbox}[wd=\paperwidth,ht=2.3ex,dp=0.9ex,
+    leftskip=0.55cm,rightskip=0.55cm]{author in head/foot}%
+    \scriptsize\color{muted}\insertshortauthor\hfill
+    \insertshorttitle\hfill\insertframenumber/\inserttotalframenumber
+  \end{beamercolorbox}}}
+
+\newcommand{\source}[1]{%
+  \vspace{0.06em}\par{\raggedright\scriptsize\color{muted}来源：#1\par}}
+\newcommand{\verified}{\textcolor{evidence}{确证}}
+\newcommand{\inferred}{\textcolor{accent}{推断}}
+\newcommand{\unverified}{\textcolor{warning}{未验证}}
+\newcommand{\codepath}[1]{\nolinkurl{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\tikzset{
+  flow/.style={draw=accent,fill=accent!8,rounded corners=2pt,align=center,
+    minimum height=0.72cm,text width=2.55cm,font=\small},
+  state/.style={draw=primary,fill=primary!7,rounded corners=2pt,align=center,
+    minimum height=0.62cm,text width=2.55cm,font=\small},
+  decision/.style={draw=warning,fill=warning!10,diamond,aspect=2,align=center,
+    inner sep=1.5pt,font=\small},
+  arrow/.style={-{Latex[length=2mm]},draw=primary,semithick},
+  relation/.style={-{Latex[length=1.7mm]},draw=muted,thin,dashed},
+  labelstyle/.style={font=\scriptsize,inner sep=1.5pt,fill=white,text=muted}
+}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  backgroundcolor=\color{panel},frame=single,
+  breaklines=true,breakatwhitespace=false,keepspaces=true,
+  columns=flexible,firstnumber=auto,
+  keywordstyle=\color{primary}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{accent},
+  numbers=left,numberstyle=\tiny\color{muted}
+}
+
+\title[EasyDistillation]{EasyDistillation 的蒸馏算法实现\\[-0.2em]
+  \large 从空间低本征模到可计算关联函数}
+\author[代码与物理审阅]{代码与物理审阅}
+\institute{PyQCD / \codepath{refer/git-rep/EasyDistillation}}
+\date{2026 年 8 月 28 日}
+
+\begin{document}
+
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+\begin{frame}[t]{结论先行：主链已经闭合，数值反演端仍有两个环境边界}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.31\textwidth}
+      \begin{block}{已实现}
+        \small
+        规范场加载与空间低模；\\
+        stout 平滑与梯度/动量 elemental；\\
+        perambulator 接口；\\
+        SymPy Wick 图到 `einsum` 收缩；\\
+        单粒子两点函数与多粒子扩展。
+      \end{block}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \begin{block}{直接证据}
+        \small
+        纯符号契约测试 19 项、图化简测试 8 项均通过；\\
+        恒等场低模残差最大约
+        $6.66\times10^{-16}$；\\
+        synthetic elemental / 两点函数输出有限。
+      \end{block}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \begin{block}{当前判断}
+        \small
+        低维表示与收缩逻辑可审计；\\
+        \textcolor{warning}{风险：}QUDA 检查在当前环境因 `backend` 参数不兼容失败；\\
+        stout 零场分支出现 $0/0$，真实系综链暂不宣称已验证。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \vspace{0.16cm}
+  \begin{center}
+    \colorbox{good}{\parbox{0.91\linewidth}{\centering
+      \textbf{本报告主张：}蒸馏的核心不是“把传播子变小”这一句口号，
+      而是以规范协变低模投影把空间自由度压到 $N_e$ 维，
+      再让每个强子收缩成为可缓存、可复用的低维张量。}}
+  \end{center}
+  \source{代码范围：\codepath{lattice/generator/}、\codepath{lattice/quark_contract.py}、\codepath{lattice/quark_diagram.py}；本轮现场测试记录。}
+\end{frame}
+
+\begin{frame}[t]{问题与验收标准：保留红外结构，同时让 Wick 收缩可计算}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.47\textwidth}
+      \begin{block}{格点 QCD 目标}
+        \small
+        在固定规范场 $U$ 上，给定强子插值算符 $\mathcal O$，计算
+        \[
+          C(t)=\langle\mathcal O(t)\,\overline{\mathcal O}(0)\rangle_U,
+          \qquad S=D^{-1}.
+        \]
+        难点是空间体积 $L^3$、颜色 $N_c=3$、Dirac 自旋和多夸克置换共同产生的高维收缩。
+      \end{block}
+      \begin{block}{物理假设}
+        \small
+        低本征值的空间协变拉普拉斯模主要承载平滑、低动量结构；
+        高模截断带来的系统误差必须由 $N_e$、体积和算符通道的收敛测试控制。
+      \end{block}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}L{0.25\linewidth}Y@{}}
+        \toprule
+        验收层 & 必须回答的问题 \\
+        \midrule
+        数学 & 拉普拉斯是否规范协变、低模是否按本征值排序？ \\
+        数据 & $V$、$\Phi$、$\tau$ 的 shape 与轴语义是否一致？ \\
+        收缩 & 费米子置换符号、简并味和图拓扑是否保留？ \\
+        数值 & `einsum` 输出是否有限，极限场是否不产生伪信号？ \\
+        工程 & CPU/GPU 后端、文件格式和 QUDA 依赖是否说清？ \\
+        物理 & 两点函数是否可进一步取谱、动量和不可约表示？ \\
+        \bottomrule
+      \end{tabularx}
+      \vspace{0.15cm}
+    \end{column}
+  \end{columns}
+  \source{设计依据：\codepath{README.md:3--25}；数据形状：\codepath{doc/README.md:5--64}。}
+\end{frame}
+
+\begin{frame}[t]{物理定义：空间协变拉普拉斯给出规范协变的低模子空间}
+  \centering
+  \textbf{公式链：定义 $\to$ 对称性 $\to$ 截断 $\to$ 投影}
+  \vspace{0.08cm}
+  \begin{tabular}{@{}l@{}}
+    $\displaystyle (-\widetilde\Delta)_{\boldsymbol x\boldsymbol y}(t)
+      =6\,\delta_{\boldsymbol x\boldsymbol y}
+      -\sum_{k=1}^{3}\left[U_k(\boldsymbol x,t)\,\delta_{\boldsymbol x+\hat k,\boldsymbol y}
+      +U_k^\dagger(\boldsymbol x-\hat k,t)\,\delta_{\boldsymbol x-\hat k,\boldsymbol y}\right]
+      \quad \text{（三维空间、}N_c=3\text{）}$ \\
+    $\displaystyle (-\widetilde\Delta)V_e=\lambda_eV_e,\qquad
+      \lambda_0\le\lambda_1\le\cdots\le\lambda_{N_e-1}
+      \quad \text{（取最低 }N_e\text{ 个模）}$ \\
+    $\displaystyle U_k(x)\mapsto G(x)U_k(x)G^\dagger(x+\hat k),\qquad
+      V_e(x)\mapsto G(x)V_e(x)
+      \quad \text{（规范变换）}$ \\
+    $\displaystyle \Box(t)=V(t)V^\dagger(t),\qquad
+      \widetilde q(t)=\Box(t)q(t)
+      \quad \text{（有限秩蒸馏投影）}$ \\
+    $\displaystyle \Box(t)\mapsto G(t)\Box(t)G^\dagger(t),\qquad
+      \widetilde q(t)\mapsto G(t)\widetilde q(t)
+      \quad \text{（物理量保持规范协变）}$ \\
+    $\displaystyle V^\dagger(t)V(t)=I_{N_e},\qquad
+      \Box^2=\Box,\quad \Box^\dagger=\Box
+      \quad \text{（理想完整正交低模的投影性质）}$ \\
+    $\displaystyle N_e\ll 3L^3\ \Longrightarrow\quad
+      \text{空间收缩维数下降，但误差由 }N_e\text{ 收敛而非凭空消失}$
+  \end{tabular}
+  \vspace{0.1cm}
+  \begin{block}{代码对应}
+    \small
+    \texttt{\_Laplacian} 将输入 reshape 为 $(L_z,L_y,L_x,N_c,\cdot)$，用前向链接、后向
+    $U^\dagger$ 和周期 `roll` 组成上述六项；`eigsh(..., which="SA")` 求最低谱。
+  \end{block}
+  \source{实现：\codepath{lattice/generator/eigenvector.py:11--26,234--257}；物理公式为代码算子的数学展开。}
+\end{frame}
+
+\begin{frame}[t]{总流程：规范场只在入口出现，后续主计算在低维空间完成}
+  \centering
+  \begin{tikzpicture}[node distance=0.42cm and 0.24cm]
+    \node[flow] (u) {规范场 $U_\mu$\\输入文件/配置};
+    \node[flow,right=of u] (v) {低模 $V(t)$\\$(-\widetilde\Delta)V=V\Lambda$};
+    \node[flow,right=of v] (low) {低维对象\\$\Phi=V^\dagger\mathcal O V$\\$\tau=V^\dagger D^{-1}V$};
+    \node[flow,right=of low] (c) {Wick 图与\\$\mathrm{einsum}$\\$C(t)$};
+    \draw[arrow] (u) -- node[above=1.5pt,labelstyle]{smear / load} (v);
+    \draw[arrow] (v) -- node[above=1.5pt,labelstyle]{project} (low);
+    \draw[arrow] (low) -- node[above=1.5pt,labelstyle]{contract} (c);
+    \draw[relation] (c.south) |- ++(0,-0.55) -| node[below=1.5pt,labelstyle]{谱、动量、不可约表示} (low.south);
+  \end{tikzpicture}
+  \vspace{0.22cm}
+  \begin{tabularx}{0.96\linewidth}{@{}L{0.20\linewidth}Y Y@{}}
+    \toprule
+    对象 & 代码中的主轴/形状 & 物理含义 \\
+    \midrule
+    规范场 & 输入约定 $[t,z,y,x,\mu,c,c]$，加载后转为方向优先 & 平行移动与局域规范结构 \\
+    本征模 & $V[t,e,z,y,x,c]$ & 空间低能子空间的基 \\
+    Elemental & $\Phi[d,p,e,f]$（逐 $t$ 生成） & 算符在低模空间的矩阵元 \\
+    Perambulator & $\tau[t_{\rm src},\Delta t,\alpha,\beta,e,f]$ & Dirac 传播在低模空间的核 \\
+    关联函数 & $C[\text{operator},t]$ 或矩阵 & 强子通道的可观测输入 \\
+    \bottomrule
+  \end{tabularx}
+  \source{导出接口：\codepath{lattice/generator/__init__.py:1--7}、\codepath{lattice/__init__.py:14--31}；形状：\codepath{lattice/preset.py:16--31}。}
+\end{frame}
+
+\begin{frame}[t]{阶段 1/5：本征模生成器把每个时间片变成可复用的低模基}
+  \centering
+  \textbf{伪代码：EigenvectorGenerator.calc(t)}
+  \vspace{0.08cm}
+  \begin{tabular}{@{}l@{}}
+    $\text{输入：规范场 }U[\mu,t,\boldsymbol x,c,c],\;N_e,\;\text{容差 }\varepsilon$ \\
+    $\text{加载：把文件轴转为 }[\mu,t,z,y,x,c,c]\text{，释放原始缓存}$ \\
+    $\text{可选预处理：对三条空间方向做 stout 平滑，或转入 QUDA 路径}$ \\
+    $\text{构造线性算子： }F\mapsto(-\widetilde\Delta)F\text{，边界通过周期 roll 实现}$ \\
+    $\text{求解： }(\lambda_e,V_e)_{e=0}^{N_e-1}\gets\operatorname{eigsh}(-\widetilde\Delta,\text{SA},\varepsilon)$ \\
+    $\text{排序：按 }\lambda_e\text{ 升序重排本征值和本征矢}$ \\
+    $\text{相位固定：若启用，则 }V_e\gets e^{-i\arg V_e(x_0)}V_e$ \\
+    $\text{校验：检查本征方程残差、正交性以及输出是否为有限数}$ \\
+    $\text{输出： }V[t,e,z,y,x,c]\text{ 与 }\lambda[t,e]$ \\
+  \end{tabular}
+  \vspace{0.04cm}
+  \begin{block}{为什么相位固定不改变物理？}
+    \small
+    非简并本征矢可乘任意 $U(1)$ 相位；代码固定每个模在参考格点的相位，
+    只消除跨配置/跨后端的表示歧义。真正应比较的是投影量、正交关系和相位不变量。
+  \end{block}
+  \source{实现：\codepath{lattice/generator/eigenvector.py:29--65,234--257,356--370}；表格为实现逻辑的可读抽象。}
+\end{frame}
+
+\begin{frame}[t]{阶段 1/5 的代码证据：CPU/GPU 求解接口清楚，但后端能力必须分层验证}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.56\textwidth}
+      \lstinputlisting[firstline=242,lastline=251]{../lattice/generator/eigenvector.py}
+    \end{column}
+    \begin{column}{0.40\textwidth}
+      \begin{block}{实现事实}
+        \small
+        `LinearOperator` 只需提供 `matvec/matmat`，
+        因而不显式存储 $3L^3\times3L^3$ 矩阵；
+        NumPy 使用 `scipy.sparse.linalg`，CuPy 使用 `cupyx.scipy.sparse.linalg`。
+      \end{block}
+      \begin{block}{本轮极限检查}
+        \small
+        对合成恒等规范场、$L_x=L_y=L_z=2$、$N_e=3$：
+        输出形状为 $(3,2,2,2,3)$，最低本征值的绝对值最大约
+        $6.66\times10^{-16}$。\\[0.1em]
+        \textcolor{evidence}{这是合成算子检查，不是真实系综谱结果。}
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{代码直引：\codepath{lattice/generator/eigenvector.py:242--257}；本轮现场合成恒等场测试。}
+\end{frame}
+
+\begin{frame}[t]{阶段 2/5：stout 平滑以 SU(3) 解析指数化抑制紫外噪声}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.57\textwidth}
+      \centering
+      \textbf{单列算法：一轮 stout 更新}
+      \vspace{0.06cm}
+      \begin{tabular}{@{}l@{}}
+        $\text{输入：空间链接 }U_\mu,\;\rho,\;\mu=1,2,3$ \\
+        $\text{累加： }\Omega_\mu\gets\sum_{\nu\ne\mu}(\text{前向 staple}+\text{后向 staple})$ \\
+        $\text{投影： }Q_\mu\gets\frac{i}{2}(\Omega_\mu U_\mu^\dagger-(\Omega_\mu U_\mu^\dagger)^\dagger)
+          -\frac{1}{3}\operatorname{Tr}(\cdots)I$ \\
+        $\text{SU(3) 指数： }e^{Q_\mu}=f_0I+f_1Q_\mu+f_2Q_\mu^2$ \\
+        $\text{数值稳定： }\operatorname{sinc}(w)=\sin(w)/w\text{ 在小 }w\text{ 区间用级数}$ \\
+        $\text{更新： }U_\mu\gets e^{Q_\mu}U_\mu$ \\
+        $\text{重复：执行 }n_{\rm step}\text{ 次；时间方向按约定忽略}$ \\
+      \end{tabular}
+    \end{column}
+    \begin{column}{0.39\textwidth}
+      \begin{block}{物理作用}
+        \small
+        stout 是局域、解析的链接平滑：减少短程格点噪声，
+        同时保持链接的群结构，改善低模和强子算符的信噪比。
+        $\rho$ 与步数改变的是紫外滤波尺度，不能与连续物理结论混为一谈。
+      \end{block}
+      \begin{alertblock}{已发现边界}
+        \small
+        恒等链接满足 $Q=0$，代码随后计算
+        $c_{0,\max}=2(c_1/3)^{3/2}=0$ 并出现 $0/0$；
+        一次平滑的有限性检查失败。应补零 $Q$ 分支后再纳入真实链。
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+  \source{实现：\codepath{lattice/generator/eigenvector.py:67--232}；stout 物理背景可参见 Morningstar--Peardon (2004)。}
+\end{frame}
+
+\begin{frame}[t]{阶段 3/5：Elemental 把导数、动量和低模投影合成为 $N_e\times N_e$ 矩阵}
+  \centering
+  \begin{align*}
+    \nabla_k V(\boldsymbol x)&=U_k(\boldsymbol x)V(\boldsymbol x+\hat k)
+      -U_k^\dagger(\boldsymbol x-\hat k)V(\boldsymbol x-\hat k),\\
+    \Phi^{(d,p)}_{ef}(t)&=\sum_{\boldsymbol x}e^{i\boldsymbol p\cdot\boldsymbol x}
+      \left[\nabla_{d_L}V_e(\boldsymbol x,t)\right]^\dagger
+      \left[\nabla_{d_R}V_f(\boldsymbol x,t)\right].
+  \end{align*}
+  \vspace{-0.04cm}
+  \begin{tabular}{@{}l@{}}
+    $\text{输入： }V(t),\;U_k(t),\;\text{导数序列 }d,\;\boldsymbol p$ \\
+    $\text{枚举：对 }d\text{ 的每个位置做左右切分，共 }2^{|d|}\text{ 个分配}$ \\
+    $\text{左端：按逆序施加 }\nabla_{d_L}\text{；右端：按顺序施加 }\nabla_{d_R}$ \\
+    $\text{符号：每个右端导数贡献 }(-1)\text{，对应离散左/右导数约定}$ \\
+    $\text{动量： }e^{i\boldsymbol p\cdot\boldsymbol x},\quad p_k=2\pi n_k/L_k$ \\
+    $\text{收缩： }\Phi^{(d,p)}_{ef}=\operatorname{contract}(\text{phase},V_e^\ast,V_f)$ \\
+    $\text{输出：逐时间片的 }[N_d,N_p,N_e,N_e]\text{ 低维矩阵}$ \\
+  \end{tabular}
+  \vspace{0.02cm}
+  \begin{center}
+    \small\textcolor{muted}{$U_k=I$ 时为中心差分，$p=0$ 时相位为 1；低模基变换与 perambulator 相消，故 $C(t)$ 规范不变。}
+  \end{center}
+  \source{实现：\codepath{lattice/generator/elemental.py:116--147,268--338}、\codepath{lattice/insertion/phase.py:6--52}。}
+\end{frame}
+
+\begin{frame}[t]{阶段 3/5 的数据契约：导数编号、动量相位与算符组合可独立复用}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.54\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}L{0.40\linewidth}Y@{}}
+        \toprule
+        代码状态 & 语义与边界 \\
+        \midrule
+        \texttt{num\_derivative} & $(3^{n_\nabla+1}-1)/2$；$n_\nabla=0,1,2$ 时分别为 $1,4,13$。 \\
+        \texttt{derivative\_list} & 用三进制编号展开 $dx,dy,dz$ 序列；不是连续微分算子本身。 \\
+        \texttt{\_VPV} & 形状 $(N_d,N_p,N_e,N_e)$，每个时间片原地填充。 \\
+        \texttt{MomentumPhase} & 同时生成 lexicographic 与 even--odd checkerboard 版本。 \\
+        \texttt{Operator.parts} & 每个 gamma 通道保存 $(\text{系数},d,p)$ 元组，可跨算符缓存。 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      \begin{block}{合成证据}
+        \small
+        取 $L=(2,2,2,4)$、$N_e=1$、两种动量的 elemental 合成检查：
+        输出形状 $(4,2,1,1)$，所有元素为有限数。
+      \end{block}
+      \begin{block}{可扩展点}
+        \small
+        \texttt{is\_blending=True} 时按 dilution 分块构造随机系数矩阵，
+        让未计算的低模对以统计方式补偿；这改变方差模型，
+        不能只用确定性 elemental 的误差标准评价。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{实现：\codepath{lattice/generator/elemental.py:16--105,326--338}、\codepath{lattice/insertion/__init__.py:115--187}；本轮现场合成 elemental 测试。}
+\end{frame}
+
+\begin{frame}[t]{阶段 4/5：Perambulator 是 Dirac 传播子在低模空间的压缩核}
+  \centering
+  \begin{align*}
+    \tau_{\alpha\beta}^{ef}(t,t')
+      &=\sum_{\boldsymbol x,\boldsymbol y}V_e^\dagger(\boldsymbol x,t)
+        \left[D^{-1}\right]_{\alpha\beta}(\boldsymbol x,t;\boldsymbol y,t')
+        V_f(\boldsymbol y,t'),\\
+    S_{\rm dist}(t,t')&=V(t)\,\tau(t,t')\,V^\dagger(t').
+  \end{align*}
+  \vspace{-0.05cm}
+  \begin{tabular}{@{}l@{}}
+    $\text{输入：规范场、低模 }V,\;D(m,\xi,c_t,c_r),\;\text{边界 }t_{\rm bnd}=\pm1$ \\
+    $\text{初始化：为每个低模 }e\text{ 和自旋源 }s\text{ 构造源向量 }V_{e,s}(t_{\rm src})$ \\
+    $\text{求解： }X_{e,s}=D^{-1}V_{e,s}\quad(\text{QUDA Dirac inversion})$ \\
+    $\text{压缩： }\tau^{ef}\gets V_e^\dagger X_f\quad\text{并保留时间/Dirac/低模轴}$ \\
+    $\text{可选：MRHS 一次处理多自旋源，减少调用次数但增加显存}$ \\
+    $\text{重复：遍历源时间和低模；按源时间滚动为 }\Delta t\text{ 约定}$ \\
+    $\text{输出： }\tau[t_{\rm src},\Delta t,\alpha,\beta,e,f]$ \\
+  \end{tabular}
+  \vspace{0.02cm}
+  \begin{center}
+    \small\textcolor{muted}{规模：$N_t\times N_e\times N_s$ 个基础 RHS；反演仍承受 $L^3L_t$ 体积成本，低维化主要惠及后续强子收缩。}
+  \end{center}
+  \source{实现：\codepath{lattice/generator/perambulator.py:146--209}；定义为低模投影的 Dirac 传播子。}
+\end{frame}
+
+\begin{frame}[t]{阶段 4/5 的工程边界：反演与低维收缩必须分开验收}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.54\textwidth}
+      \lstinputlisting[firstline=169,lastline=181]{../lattice/generator/perambulator.py}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}L{0.32\linewidth}Y@{}}
+        \toprule
+        层 & 当前实现/验收含义 \\
+        \midrule
+        后端 & \texttt{PeramGenerator} 断言 CuPy；NumPy 路径显式 \texttt{NotImplementedError}。 \\
+        反演 & \texttt{dirac.invert}，可选 \texttt{invertMultiSrc}。 \\
+        收缩 & \texttt{contract(...->tijk)} 生成低模核。 \\
+        输出 & 内部 $(L_t,N_s,N_s,N_e,N_e)$；测试按源时间 roll 成 $[L_t,L_t,N_s,N_s,N_e,N_e]$。 \\
+        当前状态 & \texttt{check\_QUDA()} 因当前 \texttt{pyquda.init} 不接受 `backend` 关键字而失败。 \\
+        \bottomrule
+      \end{tabularx}
+      \vspace{0cm}
+    \end{column}
+  \end{columns}
+  \vspace{-0.02cm}
+  \source{代码直引：\codepath{lattice/generator/perambulator.py:169--202}；失败证据：本轮执行 \texttt{check\_QUDA()}。}
+\end{frame}
+
+\begin{frame}[t]{阶段 4/5 扩展：随机 dilution、广义和 density perambulator 共享同一投影思想}
+  \centering
+  \begin{tabular}{@{}l@{}}
+    $\text{低模分块： }\{0,\ldots,N_e-1\}=\bigsqcup_a E_a,
+      \qquad \eta_a=V_{E_a}\,R_a$ \\
+    $\text{完全块： }|E_a|=|R_a|\Rightarrow\text{ 保留该块全部低模信息}$ \\
+    $\text{单噪声块： }|R_a|=1\Rightarrow R_a\text{ 使用逐时间 }U(1)\text{ 随机相位}$ \\
+    $\text{多噪声块： }R_a\text{ 由每个时间片的复高斯矩阵 QR 正交化得到}$ \\
+    $\text{扩展：高模正交补、带 }\Gamma/p\text{ 的广义核和固定 }\tau\text{ 的 density 核见下表}$ \\
+  \end{tabular}
+  \vspace{0.12cm}
+  \begin{tabularx}{0.96\linewidth}{@{}L{0.22\linewidth}Y Y@{}}
+    \toprule
+    模块 & 代码状态 & 物理/统计代价 \\
+    \midrule
+    \texttt{Noisevector} & seed、dilution、highmode；生成随机源基 & 降低反演/存储压力，但引入随机方差 \\
+    \texttt{GenPeram.} & gamma、动量、双端源/汇；使用 pinned host/CUDA stream & 直接生成带插入的低维核，显存和同步更复杂 \\
+    \texttt{DensityPeram.} & 固定 $\tau$，重排 checkerboard 输出 & 适合局域密度，但轴语义必须与下游一致 \\
+    \bottomrule
+  \end{tabularx}
+  \source{实现：\codepath{lattice/generator/noisevector.py:11--110}、\codepath{lattice/generator/generalized_perambulator.py:77--184}、\codepath{lattice/generator/density_perambulator.py:78--176}。}
+\end{frame}
+
+\begin{frame}[t]{阶段 5/5：算符层把 Dirac 结构、空间导数、动量和晶格对称性显式编码}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.51\textwidth}
+      \centering
+      \begin{tabular}{@{}l@{}}
+        $\displaystyle \mathcal O_{\Gamma,d,p}
+          =\sum_{\boldsymbol x}e^{i\boldsymbol p\cdot\boldsymbol x}
+            \bar q(\boldsymbol x)\,\Gamma\,\nabla_d q(\boldsymbol x)$ \\
+        $\displaystyle \Phi_{\mathcal O}(t)=V^\dagger(t)\,\mathcal O(t)\,V(t)$ \\
+        $\displaystyle \mathcal O_{\rm irrep}
+          =\sum_j R_{ij}(\boldsymbol p)\,\mathcal O_j$ \\
+      \end{tabular}
+      \vspace{0.12cm}
+      \begin{block}{代码数据结构}
+        \small
+        `Operator.parts` 交替保存 gamma 索引与
+        \texttt{[(coeff, derivative\_idx, momentum\_idx),...]}；
+        \texttt{get\_elemental\_data} 对同一 $(d,p)$ 做缓存并合并系数。
+      \end{block}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}L{0.34\linewidth}Y@{}}
+        \toprule
+        代码步骤 & 对称性内容 \\
+        \midrule
+        gamma scheme & $\Gamma$ 的 parity、$C$、hermiticity 和小群表示 \\
+        derivative scheme & $1,\nabla,\mathbb B,\mathbb D,\mathbb E$ 及其量子数 \\
+        little group & 对非零动量按总动量的小群约化 \\
+        parity / row & 区分不可约表示的行与宇称分支 \\
+        sign convention & gamma 复合与离散导数符号在构造时统一 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \vspace{0.02cm}
+  \begin{center}
+    \small\textcolor{muted}{晶格只保留离散旋转群；先投影到 $O_h^D$ 或动量 little group 的不可约表示，再进入 Wick 收缩。}
+  \end{center}
+  \source{实现：\codepath{lattice/insertion/__init__.py:115--290}、\codepath{lattice/insertion/derivative.py:23--124}、\codepath{lattice/hadron_irrep.py:85--195}。}
+\end{frame}
+
+\begin{frame}[t]{Wick 收缩 1/2：先做费米子代数，再生成图拓扑}
+  \centering
+  \begin{tabular}{@{}l@{}}
+    $\text{输入： }\text{SymPy 强子味结构表达式 }F(\bar q,q),\quad\text{粒子/顶点列表}$ \\
+    $\text{展开：将幂写成乘积，并按加法项、乘法因子逐项处理}$ \\
+    $\text{标记：为每个强子分配 }\operatorname{Tag}(\text{hadron id}\times3+\text{quark id},t)$ \\
+    $\text{配对：寻找同味的反夸克--夸克对，生成 }S^f(\text{sink},\text{source})$ \\
+    $\text{费米符号：交换配对位置时累加 }(-1)^{\text{跨越的 Grassmann 数}}$ \\
+    $\text{简并味：若启用，则 }u,d\mapsto q\text{，合并等价传播子通道}$ \\
+    $\text{编码：将传播子索引写入顶点邻接矩阵；介子是标量边，重子是 }3\times3\text{ 块}$ \\
+    $\text{输出：带系数的 }\mathrm{Diagram}(\text{QuarkDiagram},\text{time},\text{vertices},\text{propagators})$ \\
+  \end{tabular}
+  \vspace{0.04cm}
+  \begin{align*}
+    C_U(t)&=\sum_{\pi\in S_{N_q}}\operatorname{sgn}(\pi)\,
+      \mathcal V_{\rm sink}\,\prod_{i=1}^{N_q}S_{f_i}(x_i,y_{\pi(i)})\,\mathcal V_{\rm src},\\
+    \text{代码不变量：}&\quad \text{每一条边都有唯一传播子标签，每个图保留原始时间与顶点身份。}
+  \end{align*}
+  \source{实现：\codepath{lattice/quark_contract.py:12--63,110--245}；物理式为 Wick 定理在代码对象上的抽象。}
+\end{frame}
+
+\begin{frame}[t]{Wick 收缩 2/2：邻接矩阵被编译为 opt\_einsum 的指标网络}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \centering
+      \begin{tikzpicture}[node distance=0.48cm and 0.55cm]
+        \node[state] (flavor) {味结构\\$\bar q q$ 与符号};
+        \node[state,below=of flavor] (graph) {邻接矩阵\\QuarkDiagram};
+        \node[state,below=of graph] (idx) {指标分配\\颜色/Dirac/低模};
+        \node[state,below=of idx] (einsum) {`contract`\\张量值};
+        \draw[arrow] (flavor) -- (graph);
+        \draw[arrow] (graph) -- (idx);
+        \draw[arrow] (idx) -- (einsum);
+        \draw[relation] (einsum.east) -- ++(0.65,0) |- node[right=1.5pt,labelstyle]{数值复用} (graph.east);
+      \end{tikzpicture}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \centering
+      \textbf{单列编译逻辑}
+      \vspace{0.06cm}
+      \begin{tabularx}{\linewidth}{@{}Y@{}}
+        $\text{扫描：BFS 找相连顶点/独立分量}$ \\
+        $\text{边：为传播子分配 }m,a\text{ 指标对}$ \\
+        $\text{点：拼接顶点入/出指标}$ \\
+        $\text{字符串：生成 operand 下标}$ \\
+        $\text{计算：调用 }\operatorname{opt\_einsum.contract}$ \\
+        $\text{合并：乘分量并恢复系数}$ \\
+      \end{tabularx}
+      \vspace{0.1cm}
+      \begin{block}{图化简的物理无损性}
+        \small
+        \texttt{Diagram.simplify} 删除无边顶点、稳定排序并拆分不连通分量；表示改变，但 Wick 多项式不变。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{实现：\codepath{lattice/quark_diagram.py:15--79,233--273,330--553}；图为结构示意。}
+\end{frame}
+
+\begin{frame}[t]{两点函数：elemental 与 perambulator 在低模空间闭合成 $C(t)$}
+  \centering
+  \begin{align*}
+    C(t)&=-\sum_{\text{source }t_0}\operatorname{Tr}_{\rm spin,color,ev}
+      \left[\tau^\dagger(t,t_0)\,\Phi_{\rm snk}(t)\,\tau(t,t_0)
+      \,\Phi_{\rm src}^\dagger(t_0)\right],\\
+    \tau^\dagger&=\gamma_5\,\tau^\ast\,\gamma_5
+      \quad\text{（代码中的 gamma(15) 共轭关系）}.
+  \end{align*}
+  \vspace{-0.03cm}
+  \begin{tabular}{@{}l@{}}
+    $\text{输入：算符列表 }\{\mathcal O_i\},\;\Phi_i,\;\tau,\;\text{源时间集合},\;L_t$ \\
+    $\text{预取：get\_elemental\_data 合并同一 }(d,p)\text{ 并限制到 usedNe}$ \\
+    $\text{每源时间：取 }\tau(t_0,\Delta t)\text{，构造 }\tau^\dagger\text{，滚动 sink elemental}$ \\
+    $\text{每算符：按 }\texttt{tijab,xjk,xtbc,tklcd,yli,yad->t}\text{ 收缩所有低模/Dirac 指标}$ \\
+    $\text{平均：对源时间求 mean，并按约定乘负号}$ \\
+    $\text{输出： }[N_{\rm op},L_t]\text{；若不平均则保留源时间轴}$ \\
+  \end{tabular}
+  \vspace{0.02cm}
+  \begin{center}
+    \small\textcolor{muted}{$N_e=1$ 时低模指标退化为标量，$p=0$ 时无空间相位；合成两点输出 $(1,2)$ 且全有限。}
+  \end{center}
+  \source{实现：\codepath{lattice/correlator/one_particle.py:12--77}、\codepath{lattice/data.py:7--33}；本轮现场合成两点测试。}
+\end{frame}
+
+\begin{frame}[t]{多粒子与非连通通道：同一低维接口覆盖 connected/disconnected 结构}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.51\textwidth}
+      \centering
+      \begin{tabular}{@{}l@{}}
+        $\text{二点矩阵： }C_{ij}(t)\text{ 对源/汇算符取 }i,j$ \\
+        $\text{同标量味： }C_{\rm iso}=-C_{\rm conn}+N_f C_{\rm disc}$ \\
+        $\text{闭环： }L_{\rm src}=\operatorname{Tr}(\tau_0\Gamma_{\rm src}\Phi^\dagger)$ \\
+        $\text{闭环： }L_{\rm snk}=\operatorname{Tr}(\tau_0\Phi_{\rm snk}\Phi_{\rm src})$ \\
+        $\text{非连通： }C_{\rm disc}(t_0,t)=L_{\rm src}(t_0)L_{\rm snk}(t)$ \\
+        $\text{平移：按 }t_0\text{ roll 第二时间轴，再源平均}$ \\
+      \end{tabular}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}L{0.35\linewidth}Y@{}}
+        \toprule
+        接口 & 产物/用途 \\
+        \midrule
+        \texttt{2pt\_matrix} & $N_{\rm op}\times N_{\rm op}$ 相关矩阵，适合变分分析 \\
+        \texttt{isoscalar} & 连通 + 非连通，要求完整时间片 \\
+        \texttt{profile} & 保留 $\Delta t$ 与低模索引，诊断 profile \\
+        \texttt{multi\_mom} & 多动量插入的矩阵通道 \\
+        \texttt{multitime} & 支持时间数组输出，适合四点/多粒子 \\
+        \bottomrule
+      \end{tabularx}
+      \vspace{0.02cm}
+      \small\textcolor{muted}{统计提示：非连通项是两个环的乘积，方差通常更大；结构可生成不等于误差已受控。}
+    \end{column}
+  \end{columns}
+  \source{实现：\codepath{lattice/correlator/one_particle.py:182--323}、\codepath{lattice/quark_diagram.py:233--273}。}
+\end{frame}
+
+\begin{frame}[t]{验证结果 1/2：纯逻辑与合成低模链已通过}
+  \centering
+  \small
+  \begin{tabularx}{0.96\linewidth}{@{}L{0.25\linewidth}L{0.17\linewidth}Y L{0.13\linewidth}@{}}
+    \toprule
+    验证项 & 设置 & 观测 & 状态 \\
+    \midrule
+    味结构与 Wick 符号 & \texttt{unittest} & 19 项测试全部通过 & \verified \\
+    图化简与分量拆分 & \texttt{unittest} & 8 项测试全部通过 & \verified \\
+    包导入/依赖 & \texttt{import lattice} & 4 个核心依赖可导入；版本已记录为 2.1.2/1.14.1/1.14.0/3.4.0 & \verified \\
+    恒等场拉普拉斯 & $L=(2,2,2,4),N_e=3$ & 输出 $(3,2,2,2,3)$；$|\lambda_0|_{\max}\approx6.66\times10^{-16}$ & \verified \\
+    合成 elemental & $N_e=1,N_p=2$ & 输出 $(4,2,1,1)$，全有限 & \verified \\
+    合成两点函数 & 一算符、两时间点 & 输出 $(1,2)$，全有限 & \verified \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.16cm}
+  \begin{center}
+    \colorbox{good}{\parbox{0.88\linewidth}{\centering
+      \textbf{已闭环：}低模求解、elemental 形状/有限性、Wick 符号和合成两点收缩。}}
+  \end{center}
+  \source{现场测试汇总；测试源：\codepath{tests/test_quark_contract.py}、\codepath{tests/test_simplify.py}、\codepath{tests/test_eigenvector.py}、\codepath{tests/test_elemental.py}。}
+\end{frame}
+
+\begin{frame}[t]{验证结果 2/2：真实反演与理想平滑点仍未闭环}
+  \centering
+  \small
+  \begin{tabularx}{0.96\linewidth}{@{}L{0.25\linewidth}L{0.20\linewidth}Y L{0.13\linewidth}@{}}
+    \toprule
+    边界项 & 设置 & 现场观测 & 状态 \\
+    \midrule
+    QUDA 检查 & \texttt{check\_QUDA()} & \texttt{init()} 不接受 \texttt{backend=} 关键字，反演入口未启动 & \unverified \\
+    stout 恒等场 & 一步、$\rho$ 有限 & 理想 $Q=0$ 点出现 NaN；当前有限性检查为 \texttt{False} & \unverified \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.2cm}
+  \begin{center}
+    \colorbox{warnbg}{\parbox{0.88\linewidth}{\centering
+      \textbf{判定边界：}现有证据支持低维实现逻辑，不支持真实配置上的 perambulator、谱质量或物理误差结论。}}
+  \end{center}
+  \vspace{0.08cm}
+  \begin{block}{下一轮验收}
+    \small
+    对齐 PyQUDA 版本后重跑小格点；为 $Q=0$ 增加稳定分支，并用恒等场、弱场和随机 SU(3) 回归。
+  \end{block}
+  \source{失败证据：本轮执行 \texttt{check\_QUDA()} 与恒等场 stout 合成检查。}
+\end{frame}
+
+\begin{frame}[t]{关键风险：四类问题分别对应不同的修复/验收动作}
+  \centering
+  \small
+  \begin{tabularx}{0.98\linewidth}{@{}L{0.18\linewidth}L{0.25\linewidth}Y L{0.24\linewidth}@{}}
+    \toprule
+    风险 & 代码证据 & 物理/工程影响 & 下一动作 \\
+    \midrule
+    stout 零场 & $c_{0,\max}=0$ 时出现 $0/0$ & 理想固定点被 NaN 污染；平滑链暂不可信 & 加 $Q=0$ 分支；回归恒等/弱场/随机 SU(3) \\
+    QUDA 漂移 & \texttt{pyquda.init} 不接受 \texttt{backend=} & 反演/perambulator 入口未启动 & 对齐 API 与版本；重跑小格点 \\
+    高层占位 & \texttt{calc\_diagram} 返回 \texttt{Symbol} & 不是已完成的数值管线 & 走 \texttt{compute\_diagrams}；补映射测试 \\
+    数据缺失 & 无 `.lime/.npy/.peram` 样本 & 无法报告谱、质量和配置级误差 & 接入可追溯小系综，做 shape/残差回归 \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.12cm}
+  \begin{alertblock}{优先级}
+    \small
+    $Q=0$ 稳定分支 \(\to\) QUDA API \(\to\) 真实小系综；完成前不讨论谱结果。高层占位同步补映射测试。
+  \end{alertblock}
+  \source{证据：\codepath{lattice/generator/eigenvector.py:94--109}、\codepath{lattice/backend.py:36--58}、\codepath{lattice/quark_diagram.py:923--929}；本轮故障复现。}
+\end{frame}
+
+\begin{frame}[t]{可复现 API 1/2：从输入元数据到两点函数的最小工作流}
+  \centering
+  \small
+  \begin{tabularx}{0.96\linewidth}{@{}Y@{}}
+    $\text{声明： lattice size、文件 shape/dtype、}N_e\text{、backend 和边界条件}$ \\
+    $\text{加载： }\texttt{GaugeFieldIldg}\to U,\quad\texttt{EigenvectorNpy}\to V$ \\
+    $\text{加载： }\texttt{ElementalNpy}\to\Phi,\quad\texttt{PerambulatorNpy}\to\tau$ \\
+    $\text{生成： }\texttt{EigenvectorGenerator}\to V,\quad\texttt{ElementalGenerator}\to\Phi$ \\
+    $\text{生成： }\texttt{PerambulatorGenerator}\to\tau$ \\
+    $\text{构造： }\texttt{Insertion}\to\texttt{Operator}\to\Phi_{\mathcal O}$ \\
+    $\text{收缩： }\texttt{twopoint}\text{ 或 }\texttt{compute\_diagrams\_multitime}$ \\
+    $\text{检查： shape}\;\to\;\text{finite}\;\to\;\text{残差/正交}\;\to\;\text{源时间平移}\;\to\;\text{谱拟合}$ \\
+    $\text{输出： }C(t),\ C_{ij}(t),\ \text{日志、版本和参数快照}$ \\
+  \end{tabularx}
+  \vspace{0.14cm}
+  \begin{block}{最小状态快照}
+    \small
+    同一配置必须同时记录代码版本、backend、$L$、$N_e$、smearing $(n,\rho)$、Dirac 参数、文件 shape/dtype、源时间和残差。
+  \end{block}
+  \source{API/流程依据：\codepath{example/gen_twopt.py:1--16,19--50}；示例数据路径未在本轮执行。}
+\end{frame}
+
+\begin{frame}[t]{可复现 API 2/2：示例代码展示调用顺序，但输入路径尚未执行}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.53\textwidth}
+      \lstinputlisting[firstline=1,lastline=4]{../example/gen_twopt.py}
+      \vspace{0.08cm}
+      \lstinputlisting[firstline=40,lastline=47]{../example/gen_twopt.py}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \begin{block}{接口事实}
+        \small
+        示例先设 backend，再构造 insertion/operator 与文件元数据，最后调用 \texttt{twopoint}；路径来自示例机环境。
+      \end{block}
+      \begin{alertblock}{当前边界}
+        \small
+        代码调用顺序可追溯，但真实文件未提供，不能把该示例当作本轮实测输入。
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+  \source{代码直引：\codepath{example/gen_twopt.py:1--4,40--47}；本轮未执行示例数据路径。}
+\end{frame}
+
+\begin{frame}[t]{阶段结论与下一步：先建立数值可信度，再扩大物理通道}
+  \centering
+  \small
+  \begin{tabularx}{0.96\linewidth}{@{}L{0.22\linewidth}L{0.22\linewidth}Y L{0.23\linewidth}@{}}
+    \toprule
+    结论层 & 证据 & 当前影响 & 可验收下一步 \\
+    \midrule
+    低模定义 & 残差 $\sim10^{-16}$ & 协变结构方向正确 & 随机 SU(3) 复核正交/残差并扫 $N_e$ \\
+    算符投影 & elemental shape/finite 通过 & 导数与动量进入低维矩阵 & 做平面波、$p=0$、$U=I$ 对照 \\
+    Wick 层 & 19 + 8 项逻辑测试通过 & 符号与图化简可回归 & 增加重子/多粒子/非连通小张量 \\
+    反演层 & QUDA 入口失败 & 暂无真实 perambulator & 对齐 API；完成 $2^3\times4$ 小格点反演 \\
+    平滑层 & 恒等 stout 出现 NaN & 低模链有污染风险 & 加 $Q=0$ 分支；回归 SU(3) 酉性 \\
+    物理层 & 尚无真实配置谱 & 不报告谱质量与误差 & 接入小系综，扫 $C(t)$/effective mass/$N_e$ \\
+    \bottomrule
+  \end{tabularx}
+  \source{阶段判定来自本轮代码审阅与现场合成测试；不含未提供的真实系综结果。}
+\end{frame}
+
+\begin{frame}[t]{下一步：先补齐可复核输入，再扩展到真实物理谱}
+  \centering
+  \small
+  \begin{tabularx}{0.92\linewidth}{@{}L{0.24\linewidth}Y L{0.26\linewidth}@{}}
+    \toprule
+    顺序 & 可验收动作 & 产物/判据 \\
+    \midrule
+    1 & 为 stout 增加 $Q=0$ 稳定分支 & 恒等场、弱场、随机 SU(3) 均有限且保持酉性 \\
+    2 & 对齐当前 PyQUDA API 与版本 & $2^3\times4$ 小格点完成 $D^{-1}$/perambulator \\
+    3 & 接入可公开复核的 QIO/NumPy 小样本 & shape、dtype、残差、源时间平移均有记录 \\
+    4 & 扫描 $N_e$、smearing 和算符通道 & $C(t)$、effective mass、误差与收敛曲线 \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.2cm}
+  \begin{alertblock}{需要提供的单项资源}
+    \small
+    一个小型配置样本及匹配的 PyQUDA 版本；输入到位后，报告才能从“实现审阅”升级为“真实系综物理结果”。
+  \end{alertblock}
+  \source{计划依据：本轮代码审阅、合成测试和失败边界；不把未提供输入当作实测结果。}
+\end{frame}
+
+\appendix
+
+\begin{frame}[t]{附录 A：代码—物理对象映射表（便于逐行追溯）}
+  \centering
+  \scriptsize
+  \begin{tabularx}{0.98\linewidth}{@{}L{0.23\linewidth}L{0.26\linewidth}Y L{0.19\linewidth}@{}}
+    \toprule
+    物理对象 & 实现入口 & 关键动作 & 证据行 \\
+    \midrule
+    $-\widetilde\Delta$ & \texttt{EigenvectorGen.\_Laplacian} & 六个空间邻居、$U/U^\dagger$、周期 roll & \codepath{eigenvector.py:11--26} \\
+    $V_e,\lambda_e$ & \texttt{laplacian\_cupy\_numpy} & LinearOperator + SA eigsh + 排序/相位 & \codepath{eigenvector.py:234--257} \\
+    stout $e^QU$ & \texttt{\_stout\_smear\_ndarray} & staple、traceless anti-Hermitian、$f_0I+f_1Q+f_2Q^2$ & \codepath{eigenvector.py:123--190} \\
+    $\Phi=V^\dagger\mathcal O V$ & \texttt{ElementalGenerator.calc} & 导数左右切分、相位、einsum & \codepath{elemental.py:326--338} \\
+    $\tau=V^\dagger D^{-1}V$ & \texttt{PerambulatorGenerator.calc} & RHS 反演、低模回投影 & \codepath{perambulator.py:146--209} \\
+    Wick 置换 & \texttt{quark\_contract} & 味匹配、Grassmann 符号、邻接矩阵 & \codepath{quark_contract.py:110--245} \\
+    指标网络 & \texttt{QuarkDiagram.analyse} & 连通分量、下标字符串 & \codepath{quark_diagram.py:15--79} \\
+    图化简 & \texttt{Diagram.simplify} & 删除冗余、排序、拆乘积 & \codepath{quark_diagram.py:330--553} \\
+    $C(t)$ & \texttt{twopoint} & gamma5 共轭、两次低模收缩、源平均 & \codepath{one_particle.py:12--77} \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{-0.08cm}
+  \source{路径均相对于当前仓库根：\codepath{/root/PyQCD/refer/git-rep/EasyDistillation}。}
+\end{frame}
+
+\begin{frame}[t]{附录 B：张量轴、复杂度与内存的审计要点}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.50\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}L{0.31\linewidth}Y@{}}
+        \toprule
+        数据 & 约定 \\
+        \midrule
+        GaugeField & 文件常见 $[L_t,L_z,L_y,L_x,N_d,N_c,N_c]$；生成器内部方向优先 \\
+        Eigenvector & $[L_t,N_e,L_z,L_y,L_x,N_c]$ \\
+        Elemental & 逐 $t$ 为 $[N_d,N_p,N_e,N_e]$；保存时可转为 $[N_d,N_p,L_t,N_e,N_e]$ \\
+        Perambulator & 测试约定 $[L_t,L_t,N_s,N_s,N_e,N_e]$ \\
+        低维收缩 & 颜色/空间求和已被预先压入 $\Phi$ 与 $\tau$ \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+    \begin{column}{0.46\textwidth}
+      \centering
+      \small
+      \begin{tabularx}{\linewidth}{@{}Y@{}}
+        拉普拉斯 matvec：$O(L^3N_c^2)$，不显式存矩阵 \\
+        Elemental：$O(2^{|d|}L^3N_e^2)$，作用于每个 $(d,p,t)$ \\
+        反演：$N_tN_eN_s$ 个基础 RHS，MRHS 改变调用形态 \\
+        强子收缩：由 $N_e$ 指标网络和 \texttt{opt\_einsum} 路径决定 \\
+        存储收益：空间传播子不以 $(3L^3)^2$ 显式进入强子阶段 \\
+      \end{tabularx}
+      \vspace{0.12cm}
+      \begin{alertblock}{不要混淆两种复杂度}
+        \small
+        蒸馏降低的是后续收缩的空间维度；
+        它不会自动消除 Dirac 求逆的体积成本，且过小的 $N_e$ 会造成截断系统误差。
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+  \source{shape：\codepath{lattice/preset.py}、\codepath{README.md}；复杂度由实现循环与指标规模推出。}
+\end{frame}
+
+\begin{frame}[t]{附录 C：术语、参考文献与本报告的证据边界}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.53\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}L{0.27\linewidth}Y@{}}
+        \toprule
+        术语 & 本报告中的含义 \\
+        \midrule
+        distillation & 以空间协变拉普拉斯低模构造有限秩投影 $\Box=VV^\dagger$ \\
+        elemental & 强子算符在低模空间的矩阵元 $V^\dagger\mathcal O V$ \\
+        perambulator & Dirac 传播子在低模空间的矩阵核 $V^\dagger D^{-1}V$ \\
+        Wick diagram & 味/费米子配对确定的传播子拓扑和指标网络 \\
+        little group & 固定晶格动量后保持该动量的离散旋转子群 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \small
+      \textbf{参考文献}
+      \begin{enumerate}
+        \item M. Peardon et al.,\\
+          \emph{A Novel method for the study of hadronic resonances in lattice QCD},\\
+          Phys. Rev. D 80, 054506 (2009).
+        \item C. Morningstar and M. Peardon,\\
+          \emph{Analytic smearing of SU(3) link variables in lattice QCD},\\
+          Phys. Rev. D 69, 054501 (2004).
+      \end{enumerate}
+      \vspace{0.05cm}
+      \begin{alertblock}{边界声明}
+        \small
+        本稿没有把占位入口、未运行的真实输入或文献中的一般性质冒充为本仓库的实测结果。
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+  \source{项目说明：\codepath{README.md}；实现与测试来源见附录 A。}
+\end{frame}
+
+\end{document}

@@ -1,0 +1,675 @@
+% ============================================================
+% donghx 格点 QCD 算法实现 — 物理与代码联合报告
+% 编译：xelatex 两遍；16:9 横板；主体算法采用单列 tabular 行式表达
+% 本报告只使用当前目录代码与已有文档的可追溯证据，不填入未运行的数值结果。
+% ============================================================
+\documentclass[UTF8,aspectratio=169,11pt]{ctexbeamer}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+\definecolor{primary}{HTML}{17365D}
+\definecolor{accent}{HTML}{1F77B4}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{warning}{HTML}{C55A11}
+\definecolor{muted}{HTML}{5B6573}
+\definecolor{panel}{HTML}{F4F7FA}
+\definecolor{linegray}{HTML}{CBD5E1}
+\definecolor{good}{HTML}{EAF5EE}
+\definecolor{warnbg}{HTML}{FFF4E8}
+
+\setbeamersize{text margin left=0.55cm,text margin right=0.55cm}
+\setlength{\emergencystretch}{2em}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{blocks}[rounded][shadow=false]
+\setbeamercolor{normal text}{fg=black!86,bg=white}
+\setbeamercolor{structure}{fg=primary}
+\setbeamercolor{frametitle}{fg=primary,bg=white}
+\setbeamercolor{block title}{fg=primary,bg=panel}
+\setbeamercolor{block body}{fg=black!86,bg=panel}
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamerfont{normal text}{size=\normalsize}
+\setbeamertemplate{frametitle}{%
+  \vskip0.12cm\insertframetitle\par\vskip0.08cm}
+\setbeamertemplate{footline}{%
+  \hbox{\begin{beamercolorbox}[wd=\paperwidth,ht=2.3ex,dp=0.9ex,
+    leftskip=0.55cm,rightskip=0.55cm]{author in head/foot}%
+    \scriptsize\color{muted}\insertshortauthor\hfill
+    \insertshorttitle\hfill\insertframenumber/\inserttotalframenumber
+  \end{beamercolorbox}}}
+
+\newcommand{\source}[1]{%
+  \vspace{0.04em}\par{\raggedright\scriptsize\color{muted}来源：#1\par}}
+\newcommand{\verified}{\textcolor{evidence}{\textbf{确证}}}
+\newcommand{\inferred}{\textcolor{accent}{\textbf{推断}}}
+\newcommand{\unverified}{\textcolor{warning}{\textbf{未验证}}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\rowlabel}[1]{\textcolor{primary}{\textbf{#1}}}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  backgroundcolor=\color{panel},frame=single,
+  breaklines=true,breakatwhitespace=false,keepspaces=true,
+  columns=flexible,firstnumber=auto,
+  keywordstyle=\color{primary}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{accent},
+  numbers=left,numberstyle=\tiny\color{muted}
+}
+
+\title[donghx 格点 QCD 算法]{donghx 格点 QCD 算法实现}
+\subtitle{从非连通胶子 OPE 到动量涂抹蒸馏质子 2pt}
+\author[代码—物理联合审阅]{代码—物理联合审阅}
+\institute{PyQCD / refer/donghx}
+\date{2026 年 8 月 28 日}
+
+\begin{document}
+
+% S01
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+% S02
+\begin{frame}[t]{本阶段的核心判断：代码已形成两条可复用的底层计算链}
+  \begin{center}
+    \small
+    \begin{tabularx}{0.96\textwidth}{@{}>{\raggedright\arraybackslash}p{0.18\linewidth}
+      >{\raggedright\arraybackslash}p{0.34\linewidth}
+      >{\raggedright\arraybackslash}X@{}}
+      \toprule
+      状态 & 已确认的实现 & 对物理目标的意义 \\
+      \midrule
+      \verified\ 算法骨架
+        & 规范场读入、Clover 场强、Wilson 线、颜色迹/空间求和
+        & 可计算非定域胶子算符 $\mathcal O(z)$，并保留 $\pm z$ 变体。 \\
+      \verified\ 2pt 链
+        & 本征矢量 + 动量相位 + perambulator + VVV + 两项 Wick 缩并
+        & 为高动量核子态提供 $C_2(t,\vec P)$，作为断连三点链的核子因子。 \\
+      \verified\ 工程策略
+        & CuPy、\code{opt_einsum}、按 $t_{\rm source}$ 读入、$x$ 向分块
+        & 把 $N_{\rm ev}^3$ 中间张量的显存压力转化为可管理的循环。 \\
+      \unverified\ 数值结论
+        & 当前工作区没有外部 ILDG、eigenvector、perambulator 数据
+        & 本报告验证代码结构与语义；不宣称质量、矩阵元或 PDF 数值已复现。 \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \vspace{0.08cm}
+  \begin{block}{需要保持的物理边界}
+    “$C_3\simeq C_2\times\mathrm{OPE}$” 是代码组织上的两路估计量分离；
+    真正的断连矩阵元仍需在组态集合上做相关平均、真空扣除和归一化。
+  \end{block}
+  \source{\code{docs/AGENTS.md}；\code{docs/donghx_code_analysis.tex:119--189}；
+  当前目录输入数据缺失为本次检查实测。}
+\end{frame}
+
+% S03
+\begin{frame}[t]{物理目标：格点非定域矩阵元通过 LaMET 连接胶子 PDF}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.55\textwidth}
+      \begin{block}{物理定义}
+        \begin{align}
+          \widetilde h(z,P_z)
+          &= \frac{\langle P|\mathcal O_{\mu\nu;\rho\sigma}(z)|P\rangle}
+                  {\langle P|P\rangle}, \\
+          \mathcal O_{\mu\nu;\rho\sigma}(z)
+          &= F_{\mu\nu}(0)\,U(0,z\hat n)\,
+             F_{\rho\sigma}(z\hat n)\,U(z\hat n,0), \\
+          \widetilde g(x,P_z)
+          &= \int_{-\infty}^{\infty}\frac{dz}{2\pi}
+             e^{ixP_z z}\widetilde h(z,P_z).
+        \end{align}
+      \end{block}
+      \begin{block}{极限与量纲检查}
+        $z=0$ 时 Wilson 线退化为单位元；$a\to0$ 时 Clover 场强应趋近连续
+        $F_{\mu\nu}$；$P_z$ 越大，LaMET 的幂修正应按
+        $\Lambda_{\rm QCD}^2/P_z^2$ 抑制。
+      \end{block}
+    \end{column}
+    \begin{column}{0.41\textwidth}
+      \begin{tabular}{@{}l@{}}
+        \rowlabel{代码对象与物理对象} \\[0.08cm]
+        \code{gauge[t,z,y,x,mu,a,b]} \\
+        \quad $\longleftrightarrow U_\mu(x)$ \\[0.05cm]
+        \code{pla[mu,nu,t,z,y,x,a,b]} \\
+        \quad $\longleftrightarrow F_{\mu\nu}(x)$ \\[0.05cm]
+        \code{operators_new_z0_mu2(...)} \\
+        \quad $\longleftrightarrow F\,U^\dagger\,\widetilde F\,U$ \\[0.05cm]
+        \code{ops[t,dz]} \\
+        \quad $\longleftrightarrow$ 时间片上的空间和 \\[0.05cm]
+        \code{twopt_slice_pp[ts,ti]} \\
+        \quad $\longleftrightarrow C_2^{P^+}(t_s,t_i)$
+      \end{tabular}
+      \source{\code{docs/donghx_code_analysis.tex:119--189}；
+      \code{Operator.py:48--184,339--368}。}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% S04
+\begin{frame}[t]{总流程：同一规范组态分叉为 OPE 分支与核子 2pt 分支}
+  \begin{center}
+    \small
+    \begin{tabularx}{0.95\textwidth}{@{}>{\raggedright\arraybackslash}p{0.19\linewidth}
+      >{\centering\arraybackslash}p{0.06\linewidth}
+      >{\raggedright\arraybackslash}X@{}}
+      \toprule
+      阶段 & & 计算状态与物理接口 \\
+      \midrule
+      输入
+        & $\Downarrow$
+        & ILDG 原始规范场 $\to$ 复数张量
+          \code{[Nt,Nx,Nx,Nx,4,3,3]}。 \\
+      OPE 分支
+        & $\Longrightarrow$
+        & 四叶草 $P_{\mu\nu}\to F_{\mu\nu}$；对偶张量
+          $\widetilde F_{\mu\nu}=\frac12\epsilon_{\mu\nu\rho\sigma}F_{\rho\sigma}$；
+          Wilson 线连接 $\pm z$ 两端。 \\
+      2pt 分支
+        & $\Longrightarrow$
+        & 低模 $v^{(k)}$ 乘动量相位；读取 $\tau$ 与 VVV；
+          颜色、Dirac、本征模指标做费米子反对称缩并。 \\
+      断连接口
+        & $\Downarrow$
+        & 组态级 $O_{\rm gluon}(z,t)$ 与 $C_2(t,\vec P)$
+          进入同一统计分析；必须保留协方差与真空扣除。 \\
+      下游物理
+        & $\Downarrow$
+        & $\widetilde h(z,P_z)\to$ Fourier/quasi-PDF $\to$ 匹配；
+          该目录只直接覆盖前端算符与核子 2pt。 \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \source{流程为代码依赖关系示意；\code{Calc_ope_unpol.py:94--136}；
+  \code{2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py:172--236,349--447}。}
+\end{frame}
+
+% S05
+\begin{frame}[t]{Clover 场强：四个定向 plaquette 把局部规范几何变成 $F_{\mu\nu}$}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.54\textwidth}
+      \begin{block}{连续定义与离散实现}
+        \begin{align}
+          P_{\mu\nu}(x)
+          &=U_\mu(x)U_\nu(x+\hat\mu)
+            U_\mu^\dagger(x+\hat\nu)U_\nu^\dagger(x),\\
+          Q_{\mu\nu}
+          &=P_{\mu\nu}+P_{\nu,-\mu}
+            +P_{-\mu,-\nu}+P_{-\nu,\mu},\\
+          F_{\mu\nu}^{\rm clover}
+          &\propto -i\,[Q_{\mu\nu}-Q_{\mu\nu}^\dagger].
+        \end{align}
+        四叶草的中心对称性抵消一阶方向误差；代码以数组滚动实现周期边界。
+      \end{block}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      \begin{tabular}{@{}l@{}}
+        \rowlabel{Clover 算法（实现语义）} \\[0.08cm]
+        $\text{Input: }U[t,z,y,x,\mu,a,b]$ \\[0.03cm]
+        $\text{Place four shifted views of }U$ \\[0.03cm]
+        \quad $P_{\mu\nu},P_{\nu,-\mu},P_{-\mu,-\nu},
+        P_{-\nu,\mu}$ \\[0.03cm]
+        $\text{Build }Q_{\mu\nu}-Q_{\mu\nu}^{\dagger}$ \\[0.03cm]
+        $\text{Return }-i(Q-Q^\dagger)/8$ \\[0.03cm]
+        $\text{for }\mu,\nu=0,\ldots,3\text{; set }\mu=\nu\text{ to zero}$ \\[0.03cm]
+        $\widetilde F_{\mu\nu}
+        =\frac12\epsilon_{\mu\nu\rho\sigma}F_{\rho\sigma}$ \\[0.03cm]
+        $\text{Output: }[4,4,N_t,N_x,N_x,N_x,3,3]$
+      \end{tabular}
+    \end{column}
+  \end{columns}
+  \vspace{0.10cm}
+  \begin{block}{实现边界}
+    \verified\ 四个方向的反厄米组合与 $\epsilon_{\mu\nu\rho\sigma}$ 张量有代码证据；
+    \unverified\ 连续公式中的显式无迹投影在 \code{Operator.py:150--160} 未单独出现，
+    因而不能仅凭函数名宣称代码已完成 $SU(3)$ traceless 投影。
+  \end{block}
+  \source{\code{Operator.py:77--184}；\code{Calc_pla.py:29--52}；
+  物理公式参照 \code{docs/donghx_code_analysis.tex:271--485}。}
+\end{frame}
+
+% S06
+\begin{frame}[t]{非定域 OPE：两条反向 Wilson 线把两端场强闭合成规范不变量}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.47\textwidth}
+      \begin{tabular}{@{}l@{}}
+        \rowlabel{算符构造伪代码（单列行式）} \\[0.08cm]
+        $\text{Input: }U,\;P_{\mu\nu},\;\widetilde P_{\mu_2\nu_2},
+        \delta z,\hat n$ \\[0.04cm]
+        $\text{Initialize: }A\gets\mathrm{roll}(P_{\mu\nu},-\delta z,\hat n)$ \\[0.04cm]
+        \quad $k=0,\ldots,\delta z-1:
+        \;A\gets A\,U_{\hat n}^{\dagger}(\delta z-1-k)$ \\[0.04cm]
+        $\text{Insert: }A\gets A\,\widetilde P_{\mu_2\nu_2}(0)$ \\[0.04cm]
+        \quad $\text{for }k=0,\ldots,\delta z-1:
+        \;A\gets A\,U_{\hat n}(k)$ \\[0.04cm]
+        $\text{Trace: }s(t,\vec x)\gets\mathrm{Tr}_{c}A$ \\[0.04cm]
+        $\text{Sum: }O(t,\delta z)\gets\sum_{\vec x}s(t,\vec x)$ \\[0.04cm]
+        $\text{Output: }O\in\mathbb C^{N_t}$
+      \end{tabular}
+      \source{伪代码对应 \code{Operator.py:339--368}；
+      $\hat n$ 由 \code{zdir} 选择。}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \begin{block}{物理对应}
+        \[
+          \begin{aligned}
+          O_{\mu\nu;\mu_2\nu_2}(z)
+          &=\sum_{\vec x}\mathrm{Tr}_{c}\bigl[
+          U^\dagger F_{\mu\nu}(z)U\widetilde F_{\mu_2\nu_2}(0)\bigr].
+          \end{aligned}
+        \]
+        代码中的 \code{np.roll} 是格点平移，\code{einsum} 是颜色矩阵乘法；
+        最后的颜色迹和横向空间求和把矩阵对象变成每个时间片的标量。
+      \end{block}
+      \begin{block}{不变量检查}
+        $\delta z=0$：两段 Wilson 线循环为空，退化为局部场强乘积；
+        $U^\dagger U=1$：规范变换因子在颜色迹中闭合；
+        方向翻转：负向函数改变平移与链路方向。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{\code{Operator.py:339--399}。}
+\end{frame}
+
+% S07
+\begin{frame}[t]{Lorentz 分量与 MPI：并行切分的是物理指标，不是同一算符的重复计算}
+  \small
+  \begin{center}
+    \begin{tabularx}{0.95\textwidth}{@{}>{\raggedright\arraybackslash}p{0.14\linewidth}
+      >{\centering\arraybackslash}p{0.17\linewidth}
+      >{\raggedright\arraybackslash}X
+      >{\raggedright\arraybackslash}p{0.27\linewidth}@{}}
+      \toprule
+      MPI rank & 指标 $(\mu,\nu)$ & $z\parallel\hat n$ 时的物理分量 & 输出/用途 \\
+      \midrule
+      0 & $(3,z+1)$ & $F_{t x}$ 或 $F_{t y}$：电场型分量
+        & unpol/helicity 的第一路 \\
+      1 & $(3,z+2)$ & 另一电场型分量
+        & 与 rank 0 形成横向对称配对 \\
+      2 & $(z+1,z+2)$ & $F_{xy}$：空间磁场型分量
+        & 补齐第三个独立分量 \\
+      \midrule
+      \multicolumn{4}{l}{\code{Calc_ope_unpol.py}：传入 $(P,P)$，得到 $FUFU^\dagger$ 型算符。}\\
+      \multicolumn{4}{l}{\code{Calc_ope_helicity.py}：传入 $(P,\widetilde P)$，同时保存 $+z$ 与 $-z$。}\\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \vspace{0.12cm}
+  \begin{tabular}{@{}l@{}}
+    $\text{for each rank }r\in\{0,1,2\}:\quad
+      (\mu,\nu,\mu_2,\nu_2)\gets\text{rank-specific assignment}$ \\
+    $\quad \text{read }U\;\longrightarrow\;P\;(\longrightarrow\widetilde P)
+      \;\longrightarrow\;\{O(t,\delta z)\}_{\delta z=0}^{\delta z_{\max}-1}
+      \;\longrightarrow\;\texttt{npy}$ \\
+    $\text{Boundary branch: }\texttt{link\_dir}\in\{\texttt{x,y,z}\}
+      \;\Longrightarrow\; \hat n\in\{\hat x,\hat y,\hat z\}$
+  \end{tabular}
+  \vspace{0.08cm}
+  \unverified\ 三分量的下游归一化、统计权重与最终物理投影不在本目录中。
+  \source{\code{Calc_ope_unpol.py:53--136}；
+  \code{Calc_ope_helicity.py:50--142}。}
+\end{frame}
+
+% S08
+\begin{frame}[t]{Distillation + momentum smearing：低模子空间承载可控的高动量核子态}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.51\textwidth}
+      \begin{block}{物理展开}
+        \[
+          \begin{aligned}
+          S(x,y)&\simeq\sum_{k,l=1}^{N_{\rm ev}}
+          v^{(k)}(x)\,\tau^{(k,l)}(t_x,t_y)\\
+          &\quad\times v^{(l)\dagger}(y),\\
+          v_{\rm mom}^{(k)}(x)&=e^{-i\boldsymbol\zeta\cdot\boldsymbol x}v^{(k)}(x).
+          \end{aligned}
+        \]
+        $N_{\rm ev}$ 控制空间 Laplacian 低模截断；相位把源/汇波函数的 overlap
+        推向目标动量，而不直接改变规范场。
+      \end{block}
+      \begin{block}{量纲与极限}
+        $\boldsymbol\zeta=\boldsymbol 0$ 恢复普通 distillation；
+        相位指数无量纲，代码用 $2\pi/N_x$ 将格点动量整数映射为物理相位。
+      \end{block}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \begin{tabular}{@{}l@{}}
+        \rowlabel{读入与涂抹伪代码} \\[0.08cm]
+        $\text{Read raw f8 eigenvectors}$ \\[0.03cm]
+        $\text{Infer }N_{\rm ev}\text{ from file size}$ \\[0.03cm]
+        $\text{reshape}\to[N_{\rm ev},N_x^3,3]$ \\[0.03cm]
+        $\text{complexify: }r+i\,q$ \\[0.03cm]
+        $\text{truncate}\to[N_{\rm ev1},N_x^3,3]$ \\[0.03cm]
+        $\text{phase}[x]\gets
+        \exp[-2\pi i\,\vec p_{\rm smear}\!\cdot\!\vec x/N_x]$ \\[0.03cm]
+        $\text{einsum: }v_{\rm mom}[v,x,a]=v[v,x,a]\,
+        \text{phase}[x]$ \\[0.03cm]
+        $\text{Output: GPU eigenvectors}$
+      \end{tabular}
+      \source{\code{2pt_Cg5gmu...gpu.py:152--186}；完整文件名见附录。}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% S09
+\begin{frame}[t]{VVV 与 Wick 缩并：三夸克颜色反对称性落到两项五张量 contraction}
+  \small
+  \begin{center}
+    \begin{tabularx}{0.95\textwidth}{@{}>{\raggedright\arraybackslash}p{0.18\linewidth}
+      >{\raggedright\arraybackslash}X
+      >{\raggedright\arraybackslash}p{0.27\linewidth}@{}}
+      \toprule
+      对象 & 代码动作 & 物理含义 \\
+      \midrule
+      VVV
+        & 对三个颜色列做 $3!$ 个排列，符号为
+          $(+,+,+,-,-,-)$，逐 $x$ 块累加
+        & $\epsilon^{abc}$ 的颜色反对称质子插值结构，并带动量相位。 \\
+      中间传播子
+        & \code{CG5peram_u = contract(...)}
+        & $\gamma_5$ 厄米关系/插值矩阵作用后的 perambulator。 \\
+      直接项
+        & \code{"abc,gjad,gjbe,ilcf,def->il"}
+        & 三条传播线与源/汇 VVV 完成颜色、模、Dirac 缩并。 \\
+      交换项
+        & \code{"abc,glaf,gjbe,ijcd,def->il"}，前面减号
+        & 费米子反对易与两条同味夸克交换的 Wick 拓扑。 \\
+      输出
+        & $C_{il}(t_s,t_i)$，再与 $\Gamma_\pm$ 缩并
+        & 先得到 Dirac 矩阵，再选择正/负宇称通道。 \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \source{\code{2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py:244--318,356--387}；
+  重子插值物理式参照 \code{docs/pure_gluon_ope_distillation_20260815.tex:296--368}。}
+\end{frame}
+
+% S10
+\begin{frame}[t]{DR $\gamma$ 矩阵、宇称投影与反周期边界必须保持同一约定}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.49\textwidth}
+      \begin{tabular}{@{}l@{}}
+        \rowlabel{Dirac 约定} \\[0.08cm]
+        $\gamma_0=\mathbf 1,\qquad
+        \{\gamma_\mu,\gamma_\nu\}=2\delta_{\mu\nu}$ \\[0.04cm]
+        $\gamma_5=\mathrm{diag}(1,1,-1,-1)$ \\[0.04cm]
+        $\gamma_7=\gamma_3\gamma_1$ \\[0.04cm]
+        \code{element="_Cg5g4"}:\\
+        $\quad I_1= \gamma_7\gamma_4,\quad I_2=\gamma_7\gamma_4$ \\[0.04cm]
+        $\text{插值作用：}\quad
+        \tau\mapsto I_1\,\tau\,I_2$
+      \end{tabular}
+      \source{\code{gamma_matrix_cupy_DR.py:6--106}；
+      \code{2pt_Cg5gmu...gpu.py:120--147}。}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \begin{tabular}{@{}l@{}}
+        \rowlabel{宇称与边界算法} \\[0.08cm]
+        $P_\pm=\frac12(1\pm\gamma_4)$ \\[0.04cm]
+        $\text{Build }C_{il}(t_s,t_i)$ \\[0.04cm]
+        $C_{+}\gets P_+^{\,li}C_{il},\qquad
+          C_{-}\gets P_-^{\,li}C_{il}$ \\[0.04cm]
+        $\text{if }t_s<t_i:\quad C_+(t_s,t_i)\gets-C_+(t_s,t_i)$ \\[0.04cm]
+        $\text{if }t_s>t_i:\quad C_-(t_s,t_i)\gets-C_-(t_s,t_i)$ \\[0.04cm]
+        $\text{then save }C_+\text{ (当前脚本)}$ \\[0.04cm]
+        $\text{物理：三夸克反周期}$\\[-0.01cm]
+        $\text{使 backward 态带反宇称结构}$
+      \end{tabular}
+      \source{\code{2pt_Cg5gmu...gpu.py:100--108,408--447}；
+      反周期符号代码位于 \code{:414--425}。}
+    \end{column}
+  \end{columns}
+  \vspace{0.12cm}
+  \begin{block}{边界极限}
+    若忽略绕回项，$t_s-t_i\ll N_t$ 时正宇称通道近似
+    $C_2^{+}(t)\sim A_+e^{-E_+t}$；当时间间隔接近 $N_t$，不能把 backward
+    反宇称贡献误当普通激发态。
+  \end{block}
+\end{frame}
+
+% S11
+\begin{frame}[t]{GPU/I/O：优化峰值显存而不改变物理收缩}
+  \small
+  \begin{center}
+    \begin{tabularx}{0.95\textwidth}{@{}>{\raggedright\arraybackslash}p{0.19\linewidth}
+      >{\raggedright\arraybackslash}p{0.34\linewidth}
+      >{\raggedright\arraybackslash}X@{}}
+      \toprule
+      策略 & 实现 & 保持/改变的对象 \\
+      \midrule
+      后端
+        & \code{cupy} 数组 + \code{opt_einsum.contract}
+        & 保持 einsum 指标语义；把矩阵运算放到 GPU。 \\
+      按源时间读入
+        & 对每个 $t_{\rm source}$ 读取四个自旋文件
+        & 峰值只承载当前源时间的 $\tau$，输出仍是完整
+          $[N_t,N_t,4,4]$。 \\
+      空间分块
+        & VVV 的 \code{xi} 循环每次取 $N_x^2$ 个点
+        & 结果逐块累加，避免一次生成过大的 $N_{\rm ev}^3N_x^3$ 中间量。 \\
+      显存回收
+        & \code{free_all_blocks()} + \code{synchronize()}
+        & 释放缓存并确保异步 GPU 工作完成；不改变收缩公式。 \\
+      原始 I/O
+        & f8 实部/虚部交错；按文件大小反推 $N_{\rm ev}$
+        & 兼容现有无元数据文件，但尺寸/端序错误会静默污染张量。 \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \vspace{0.12cm}
+  \begin{tabular}{@{}l@{}}
+    $\text{raw bytes}\;\longrightarrow\;
+    \text{reshape}\;\longrightarrow\;
+    \text{complexify}\;\longrightarrow\;
+    \text{truncate }N_{\rm ev1}\;\longrightarrow\;\text{GPU contraction}$ \\
+    $\text{validation invariant: }\quad
+    \text{element count}=
+    2\times(\text{all declared dimensions})
+    \quad\land\quad
+    \text{complex dtype is explicit}$
+  \end{tabular}
+  \source{\code{input_output_4_cupy.py:17--66,105--199}；
+  \code{2pt_gpu.py:250--307,391--392}。}
+\end{frame}
+
+% S12
+\begin{frame}[t]{代码证据：驱动脚本把参数、方向、循环与落盘路径串起来}
+  \small
+  \lstset{basicstyle=\ttfamily\tiny}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{OPE 驱动（直接引用）}
+        \lstinputlisting[firstline=56,lastline=64]{../Calc_ope_unpol.py}
+      \end{block}
+      \source{\code{Calc_ope_unpol.py:56--64}；
+      \code{link_dir} 映射到 Wilson 线方向。}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{block}{2pt 关键输出（直接引用）}
+        \lstinputlisting[firstline=414,lastline=424]{../2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py}
+      \end{block}
+      \source{\code{2pt_gpu.py:414--424}；
+      先投影，再处理边界，再保存。}
+    \end{column}
+  \end{columns}
+  \vspace{0.10cm}
+  \begin{block}{解释}
+    这两段分别证明：OPE 方向是显式输入并写入分方向目录；2pt 不是单个时间序列，
+    而是先生成 $(t_s,t_i)$ 矩阵，再进行宇称投影与边界符号处理。代码片段是源文件直引，
+    不是手抄伪代码。
+  \end{block}
+\end{frame}
+
+% S13
+\begin{frame}[t]{验证与风险：结构可读不等于数值链已闭合}
+  \footnotesize
+  \begin{center}
+    \begin{tabularx}{0.95\textwidth}{@{}>{\raggedright\arraybackslash}p{0.21\linewidth}
+      >{\raggedright\arraybackslash}p{0.27\linewidth}
+      >{\raggedright\arraybackslash}X@{}}
+      \toprule
+      检查层级 & 当前证据 & 尚需执行的验证 \\
+      \midrule
+      语法/接口
+        & 入口函数、张量 reshape、输出命名可静态追踪
+        & 在目标环境执行 Python AST/语法检查与最小数组单元测试。 \\
+      规范几何
+        & Clover 四方向、$\epsilon$ 对偶、$U^\dagger$ 链路均有实现
+        & 用单位规范场、单个非平凡 plaquette 检查 $F_{\mu\nu}=-F_{\nu\mu}$、
+          $z=0$ 退化和方向翻转。 \\
+      群论/Dirac
+        & DR $\gamma$ 矩阵、$P_\pm$、两项 Wick 结构可追踪
+        & 数值检查 $\{\gamma_\mu,\gamma_\nu\}$、$\gamma_5$ 厄米关系、
+          projector 幂等性与正交性。 \\
+      统计物理
+        & 代码已分别保存 OPE 与 $C_2$
+        & 真实组态上完成 ensemble covariance、真空扣除、$c_0$/
+          矩阵元平台与归一化。 \\
+      生产性能
+        & 有分块、按源读入和 GPU 内存回收策略
+        & 在真实设备记录峰值显存、耗时、MPI 负载均衡；本次没有硬件运行证据。 \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \vspace{0.10cm}
+  \begin{block}{最重要的风险排序}
+    \rowlabel{R1} 无元数据原始二进制的 reshape/端序错误；
+    \rowlabel{R2} Clover 实现未显式无迹投影；
+    \rowlabel{R3} unpolarized 驱动中负方向数组的落盘被注释；
+    \rowlabel{R4} 当前目录缺少真实数据，不能把静态审阅升级为数值正确性结论。
+  \end{block}
+  \source{\code{Operator.py:150--184}；
+  \code{Calc_ope_unpol.py:116--141}；
+  \code{input_output_4_cupy.py:44--66}。}
+\end{frame}
+
+% S14
+\begin{frame}[t]{阶段结论：底层算法链可交接，但下游物理闭环仍需数据验证}
+  \small
+  \begin{center}
+    \begin{tabularx}{0.95\textwidth}{@{}>{\raggedright\arraybackslash}p{0.20\linewidth}
+      >{\raggedright\arraybackslash}p{0.37\linewidth}
+      >{\raggedright\arraybackslash}X@{}}
+      \toprule
+      主张 & 证据 & 置信度与影响 \\
+      \midrule
+      OPE 算法结构成立
+        & Clover $\to$ Wilson 线 $\to$ 颜色迹/空间和，
+          正负方向与指标变体已编码
+        & \verified\ 代码结构确证；可作为 OPE 计算模块交接。 \\
+      2pt 算法结构成立
+        & momentum-smearing distillation $\to$ VVV/peram
+          $\to$ direct-exchange $\to P_\pm$
+        & \verified\ 缩并路径确证；谱质量仍需实数拟合。 \\
+      断连分解可用于组织流水线
+        & OPE 与核子 2pt 使用独立输出文件/目录
+        & \inferred\ 工程分解合理；组态统计组合不是乘法捷径。 \\
+      最终胶子 PDF 已得到
+        & 当前没有输入数据与下游 Fourier/匹配运行证据
+        & \unverified\ 不作此结论；需补齐真实数据链。 \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \vspace{0.12cm}
+  \begin{tabular}{@{}l@{}}
+    $\text{交接接口：}\quad
+    \{O_{\mu\nu;\rho\sigma}(t,z),\;C_2^{\pm}(t_s,t_i,\vec P)\}
+    \;\longrightarrow\;\text{ensemble analysis}$ \\
+    $\text{验收门：}\quad
+    \text{shape}\;\land\;\text{symmetry}\;\land\;\text{boundary}\;\land\;
+    \text{covariance}\;\land\;\text{physical plateau}$
+  \end{tabular}
+  \source{综合 \code{Operator.py}、\code{Calc_ope_*.py}、
+  \code{2pt_proton_Cg5gmu_*.py}；当前目录无生产数据输入。}
+\end{frame}
+
+% S15
+\appendix
+\begin{frame}[t]{附录 A：关键函数—物理对象映射表}
+  \begin{center}
+    \scriptsize
+    \begin{tabularx}{0.95\textwidth}{@{}>{\raggedright\arraybackslash}p{0.31\linewidth}
+      >{\raggedright\arraybackslash}p{0.29\linewidth}
+      >{\raggedright\arraybackslash}X@{}}
+      \toprule
+      代码入口 & 张量/输出 & 物理角色 \\
+      \midrule
+      \code{plaquette_clover_new}
+        & $[N_t,N_x,N_x,N_x,3,3]$
+        & 局部 Clover 反厄米场强构造。 \\
+      \code{plaquette_clover_all_new}
+        & $[4,4,N_t,N_x,N_x,N_x,3,3]$
+        & 遍历全部 Lorentz 指标，$\mu=\nu$ 置零。 \\
+      \code{plaquette_clover_all_tilde}
+        & 同形状
+        & Levi--Civita 对偶张量。 \\
+      \code{operators_new_z0_mu2}
+        & $\mathbb C^{N_t}$
+        & 任意 $(\mu_2,\nu_2)$ 的正方向非定域 OPE。 \\
+      \code{operators_new_z0_mz_mu2}
+        & $\mathbb C^{N_t}$
+        & 负方向 Wilson 线变体。 \\
+      \code{readin_eigvecs}
+        & $[N_{\rm ev1},N_x^3,3]$
+        & 空间 Laplacian 低模与动量涂抹。 \\
+      \code{readin_peram}
+        & $[N_t,4,4,N_{\rm ev1},N_{\rm ev1}]$
+        & Dirac$\times$distillation 子空间传播子。 \\
+      \code{VVV_Calc_cupy}
+        & $[N_t,N_{\rm ev1},N_{\rm ev1},N_{\rm ev1}]$
+        & 三夸克颜色反对称顶点。 \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \source{\code{Operator.py:48--184,339--460}；
+  \code{2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py:172--318}。}
+\end{frame}
+
+% S16
+\begin{frame}[t]{附录 B：建议的最小数值验收顺序}
+  \begin{center}
+    \begin{tabular}{@{}l@{}}
+      \rowlabel{Step 1 — 输入守卫} \quad
+      构造小格点 raw f8，检查端序、实虚交错与 reshape 元素数 \\[0.06cm]
+      \rowlabel{Step 2 — 规范几何} \quad
+      $U_\mu=\mathbf 1\;\Longrightarrow\;F_{\mu\nu}=0,\;
+      U^\dagger U=\mathbf 1\;\Longrightarrow\;$ Wilson 闭合稳定 \\[0.06cm]
+      \rowlabel{Step 3 — Dirac/群论} \quad
+      $\gamma_\mu^\dagger=\gamma_\mu,\;
+      \{\gamma_\mu,\gamma_\nu\}=2\delta_{\mu\nu},\;
+      P_\pm^2=P_\pm,\;P_+P_-=0$ \\[0.06cm]
+      \rowlabel{Step 4 — OPE 边界} \quad
+      $\delta z=0,\;\delta z=1,\;+\hat n,\;-\hat n$
+      四个退化/方向用例逐项对照 \\[0.06cm]
+      \rowlabel{Step 5 — 2pt 收缩} \quad
+      小 $N_{\rm ev}$ 与显式循环结果对照 direct-exchange einsum \\[0.06cm]
+      \rowlabel{Step 6 — 统计闭环} \quad
+      \text{多组态上真空扣除、协方差、宇称通道和时间平台检查} \\[0.06cm]
+      \rowlabel{Step 7 — 物理下游} \quad
+      $\widetilde h(z,P_z)\to\widetilde g(x,P_z)\to g(x,\mu)$，记录匹配核与系统误差
+    \end{tabular}
+  \end{center}
+  \vspace{0.14cm}
+  \begin{block}{下一阶段可验收产物}
+    一个可公开复现的单组态 smoke test、一个多组态协方差报告、一个
+    Clover 无迹投影决策（修复或证明无需修复），以及 OPE$\times$2pt 到
+    $\widetilde h$ 的明确归一化接口。
+  \end{block}
+  \source{验收顺序由本报告的物理不变量与代码接口推导；
+  具体运行路径见 \code{donghx_code_analysis.tex}，算法段 119--1365。}
+\end{frame}
+
+\end{document}

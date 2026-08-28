@@ -1,0 +1,463 @@
+       Sush 格点 QCD 算法实现
+从蒸馏本征矢到强子关联函数：物理图像、张量路径与可验证边界
+
+
+  基于 refer/sush/lqcddb 源码的物理—代码联合审阅
+
+
+
+            2026 年 8 月 28 日
+结论先行：代码已经把“手工易错链”压成了可执行对象
+主结论                  lqcddb 的核心不是通用线性代数库，而是把格点 QCD 的算符、
+                     Wick 图、蒸馏顶点和统计观测量直接映射为 Python 张量对象。
+已确认                  DR 基四个欧氏方向满足 γµ2 = 1、{γµ , γν } = 0（本次合成测试最
+                     大误差均为 0）；pion 1 图、质子 2 图、动态收缩、重采样与 GEVP
+                     冒烟均可运行。
+物理含义                 蒸馏投影将空间自由度压缩到低模子空间；Wick 展开负责费米反
+                     对称性；VVV/VDV 负责颜色与空间投影；C2 /C3 分析最终回到能
+                     谱和矩阵元。
+当前边界                 没有把真实系综、GPU 多进程或全体 4pt 大规模耗时当作已验证
+                     结果；恒等规范场 Stout 固定点目前会产生 NaN，需修复后才能
+                     宣称边界稳健。
+
+给导师/同行的判断
+当前最值得保留的架构是“算符字符串 → 符号计划 → 注册张量 → 缓存 einsum”；下
+一阶段优先补齐物理边界测试，再做真实系综基准。
+来源：源码范围：lqcddb/src/lqcddb；本次合成冒烟命令与输出见第 11 页。
+问题与验收标准：把格点 QCD 链分成可检查的不变量
+
+ 层次                   需要回答的物理问题                      代码验收信号
+
+ 表示                   低模投影是否保持颜色/自旋指标的可追踪 shape、正交归一、γ 代数与动量相位
+                      性？
+ 符号                   所有合法 Wick 配对是否枚举且符号正确？ 味道守恒、配对数、(−1)Ninv 、einsum 字
+                                             符串
+ 数值                   每一张图是否能落到实际张量？         Peram/V/Gamma 注册完整，输入维度可
+                                             诊断
+ 统计                   从关联函数能否定义可解释观测量？       Jackknife、meff 、GEVP、C3 /C2 比值
+ 扩展                   大张量是否可在设备/进程间搬运？       numpy/cupy、缓存路径、MPI 时间片、
+                                             I/O 格式
+
+
+ 本报告的证据等级
+ 已测              本次会话刚刚运行的数值/接口测试或源码直接行为。
+ 推断              从代码公式、对称性、量纲或极限推出，但尚未由真实系综验证。
+ 未验证             需要真实数据、多 GPU/MPI 或更大算符规模才能回答。
+ 来源：工作约束：当前 AGENTS.md 只允许新脚本、图和输出进入 test/；因此本稿产物也放在该目录。
+物理起点：欧氏关联函数被投影到蒸馏低模空间
+                              ∑                                                   对象      源码/形状语义
+                 C2 (t) =             hΩ|O(⃗x, t)O† (⃗0, 0)|Ωi,
+                               ⃗x                                                 ξ (k)   (Nev,Nz,Ny,Nx,Nc)；空间低模
+                              ∑                                                   τ       (Nt,Nt,4,4,Nev,Nev)；自旋/低
+         C3 (tsep , τ ) =             hΩ|Of (⃗x, tsep )J(⃗y, τ )O†i (⃗0, 0)|Ωi,           模
+                              ⃗x,⃗y
+                                                                                  VDV     空间重叠；动量相位
+      −∇ (t) ξ
+         2       (k)
+                       (t) = λk (t)ξ (k) (t),                                     VVV     颜色 ϵabc 与空间求和
+                  □(t) = V(t)V† (t),                                              单位      a 与 fm2GeV/a：格点能量 → GeV
+
+             τ (t, t′ ) = V† (t)D−1 (t, t′ )V(t′ ).
+
+
+
+
+物理图像
+在大时间分离，C2 的指数衰减由基态能量主导；
+三点函数在 0  τ  tsep 时给出矩阵元。蒸馏并
+不改变目标观测量，而是把空间传播问题限制在
+Nev 个低模组成的子空间。
+来源：物理公式对应已有分析文档 docs/lqcddb_analysis.tex:68--153；I/O 形状与约定见 lqcddb/src/lqcddb/io/write_date.py:6--36、
+lqcddb/src/lqcddb/eigvectors/vertex.py:595--638。
+总工作流：每一层都把物理对象变成下一层的显式状态
+
+        Input: Uµ (x), ξ (k) (t), D−1 , Osink , Osrc , J, a, 边界条件
+          ↓ 读取与后端选择：numpy/cupy；保持(t,⃗x, spin, color, ev) 约定
+        Initialize: □ = VV† , τ = V† D−1 V, γ, ϵabc , 动量相位
+          ↓ 顶点层：构造 VDV/VVV；必要时加入规范链或Ω 权重
+        Symbolic plan: O 7−→ 味道平衡 7−→ Wick 配对 7−→ (−1)Ninv 7−→ einsum
+          ↓ 注册表按时间标签解析 peram/V/γ，先验证后收缩
+                                         ∑
+        Numerical contraction: C = diagrams cd einsumd (τ, γ, V)
+          ↓ 源时间平均、Jackknife/Bootstrap、协方差与边界处理
+        Output: E0 , meff , GEVP 能级, R3/2 , 可追溯的 shape/误差/图表证据
+
+工程判断
+物理层与代码层的接口不是“传一个黑箱关联函数”，而是显式暴露低模指标、时间标
+签、外部动量指标和投影指标；这使错误可以在数值收缩前被定位。
+来源：包入口懒加载映射：lqcddb/src/lqcddb/__init__.py:21--150；主线 API：README.md:1354--1447。
+自旋与共轭：先固定约定，才能解释投影与符号
+
+
+                                                 Algorithm. Operator conjugation and sequential peram
+代码对象             物理约定                            Input: [ |, q1 , Γ1 , . . . , qn , | ], τ
+                                                 classify n = 2 ⇒ meson; n = 3 ⇒ baryon; else generic
+gamma(0)   单位矩阵 I（不是时间                              reverse gamma chain: (Γ1 Γ2 )H = ΓH       H
+                                                                                           2 Γ1
+           方向）                                      apply H/T/C signs and diquark (CΓ)T = ηΓ (CΓ)
+gamma(1-4) 四个欧氏方向，γµ2 = I                           toggle q ↔ qd ，重排夸克，返回总符号
+                                                 for a sequential line: τ ← γ5 τ † γ5
+gamma(5)   γ5 ；用于手征/时序共轭                         Output: O† , τseq , 可用于源/流反向传播
+C          γ4 γ2 ，电荷共轭矩阵
+           2 (I ± γ4 )，由
+           1
+P±
+           gamma(0),gamma(4) 构
+           成
+来源：矩阵定义：constant/gamma_matrix.py:5--110；H/T/C 与重子共轭：contraction/baroperator.py:13--209；γ5 变换：
+contraction/seqperam.py:1--5。
+本征矢与 Ω：压缩必须同时满足维度和正交约束
+
+Algorithm. Low-mode algebra and accelerated distillation weights
+Input: Ξ ∈ CNev ×V , Nev , Nsum , Nextract , 分块方案
+check: ΞΞ† ≈ I √ (NaN/零模/归一化/正交性)
+normal: ξi ← ξi / ξi† ξi
+                                       √
+V1: 按 block 或 interlace 求和，除以 Nev /Nsum
+V2: 每块随机抽取 eigenvectors，形成低成本子空间
+V3: 用 Gram–Schmidt 正交随机组合；可选择相邻/交错布局
+V4: 正交随机或ZN 权重；仅 orthnormal 模式强制再检查
+construct Ωi1 ...id : exact ⊕ block ⊕ noise，按占用次数给权重
+  if conserved then d ← 2; if d = 2 且 normal then 行归一并对称化
+                                 ′       ′
+Output: Ξcompressed , Ω ∈ CNev ×···×Nev
+
+边界条件的物理解释
+低模压缩降低空间自由度，但不能任意合并线性组合：归一化控制投影权重，正交性控
+制不同蒸馏态的独立性；Ω 则把 exact/block/noise 的统计权重显式编码。
+来源：本征矢代数与四种压缩：eigvectors/vector.py:14--163,166--444；Ω 权重与守恒模式：eigvectors/vertex.py:127--326。
+顶点构造：颜色、动量、规范平行输运在同一张量路径中闭合
+
+                                                      Algorithm. VDV/VVV and link branches
+                    ∑            †
+    VVDV
+     mn (p, t) =         e−ip·x ξm (x, t)ξn (x, t),   Input: Ξ(t), p, Uµ , link_dir, link_max
+                    ⃗x                                phase: e−2πi(pz z+py y+px x)/Nx
+                    ∑                                 if no link: all momenta at once
+    VVVV
+     klm (p, t) =        e−ip·x ϵabc ξka ξlb ξm
+                                              c
+                                                ,
+                    ⃗x
+                                                         via 'VN,mV,nV->mNn'
+                    ∑           †                     if conserved/time: Ξ† Ut Ξt+1
+         Vlink
+          mn =           e−ipx ξm (x)U(x, x + ∆)
+                                                         and Ξ†t+1 U†t Ξ
+                    ⃗x
+                                                      if spatial link: roll Ξ，逐步乘U
+                ξn (x + ∆).
+                                                         构造正/负位移路径；各方向平均
+                                                      VVV: ϵabc 的六项带符号组合，遍历空间体积
+                                                      Output: momentum/link/eigen tensor for registry
+
+极限检查
+当 p = 0 且 ξ 正交归一，无码链
+VDV 退化为重叠矩阵 δmn ；VVV 的
+颜色反对称性由 ϵabc 实现。
+来源：顶点实现：eigvectors/vertex.py:328--638（相位、VDV/VVV、规范链）。
+Wick 自动生成：从算符 DSL 到带符号 einsum
+
+   Table. Pseudocode for wick_contraction
+   Input: Osink , Osrc , J, Cpt ∈ {bubble, 2pt, 3pt, 4pt}, optional prefixes
+   if Cpt = 2pt then J ← [ ]
+   normalize: ensure each operator begins/ends with |；extract global numeric coeﬀicient
+   expand wildcard: q → {u, d, s, c, b, t}, l → {u, d}，take Cartesian products
+   for each flavor substitution do:
+      count Nfq , Nfq̄ ; if Nfq 6= Nfq̄ then skip this substitution
+      group by flavor; enumerate every permutation of the anti-quark list
+      form all cross-flavor products of one-to-one pairings
+      assign index pairs ab, cd, ef, . . . to every quark/anti-quark field
+      compute Ninv from field positions; set sign = (−1)Ninv × coeﬀicient
+      label intervals as tsink, tsrc, tcur0, . . . according to | boundaries
+      insert gamma indices, create VDV for two fields and VVV for three fields
+      build peram, γ, V inputs and lhs → free indices
+   end for
+   Output: {peram, γ_pos, V, result_sign, result_indx, result_name}
+
+ 来源：直接实现：contraction/autowick.py:6--63,156--224,235--449；费米符号是场位置逆序数，不是事后拟合参数。
+Wick 的等价图与物理符号：减少冗余但不丢掉相对相位
+
+ Table. Equivalence reduction
+ Input: {Di }，每图的 peram 配对与 gamma 位置               质子例：最小物理检查
+ for each Γ position: make swap/no-swap variants   取汇端 uud、源端 ūūd̄ 与 Cγ5 二夸克结构：
+    use (CΓ)T or ΓT sign for swaps
+ hash variants; Union–Find merge classes
+                                                               结果         本次输出
+ BFS from canonical graph; propagate coeﬀicients
+    ∑
+ if    i ci = 0, skip contraction                              Wick 图数     2
+ Output: canonical diagram + all relative signs                sign     (−1, +1)
+                                                               等价类（该配置）    2
+
+                                                   这与两个相同 u 味的置换自由度相符；是否进一步等价取
+                                                   决于 gamma 位置和跨输入图结构。
+
+                                                   关键风险
+                                                   通配符不是“任意代入后都有效”：源码先做逐味平衡，再
+                                                   丢弃不成闭合费米配对的方案。
+ 来源：等价图实现：contraction/autowick.py:454--631；质子/通配符数值输出来自本次 python -B 冒烟。
+动态收缩：符号计划与数值张量通过三张注册表解耦
+
+
+   Table. Pseudocode for dynamic_contraction
+   Input: {(Osink , Osrc , J)}, PeramRegistry, VRegistry, GammaRegistry
+   register: (flavor, [tq , tq̄ ]) 7→ τ ; (V_name, t) 7→ V; Γ_name 7→ Γ
+   plan key: (O, Cpt , prefixes, equivalence, ignore_dis, Projection, Oindex)
+   if key cached then return plan
+   run wick_contraction，collect all peram/gamma/V names and shape metadata
+      if any peram has tq = tq̄ then mark disconnected；默认ignore_dis = True
+   if use_equivalence then Union–Find/BFS produce canonical plan entries
+   validate: resolve every peram/V/gamma before any numerical contraction
+                                     ∑
+   calculate(entry): ctotal = d∈class cd
+      if |ctotal | < 10 −12   then return 0
+      resolve tensors; optionally rewrite Oindex and append two-sided Projector
+      check tensor count = einsum comma segments; execute cached contraction
+   calculate_all: sum every canonical result and return complete correlator tensor
+
+来源：计划与过滤：contraction/dynamic.py:576--1069；张量解析/投影/收缩：dynamic.py:1076--1195；注册表：dynamic.py:88--324,1252--1458。
+缓存与投影：数值效率必须服从指标语义
+
+
+Table. Pseudocode for cached tensor contraction
+Input: s = einsum string, T1 , . . . , Tn , optimize                          Cproj = Psink C Psrc ,
+key ← (s, (shape(Ti ))i , optimize key)                                                1
+if expression cache hit then return expression(T1 , . . . , Tn )                P± =     (I ± γ4 ),
+                                                                                       2
+validate: count/rank/shared dimensions; broadcast-1
+                                                                      default output = XY + external labels,
+create zero-memory broadcast placeholders
+                                                                     explicit Oindex ⇒ projective labels may be
+try {auto, greedy, optimal, dp}; minimize FLOPs/peak
+compile contract expression and cache it                                              internally summed.
+Output: contract(s, T1 , . . . , Tn )
+
+
+                                                                   为什么这是物理相关的工程设计？
+                                                                   einsum 右端的自由指标就是关联函数的外部动量、流
+                                                                   或自旋轴；缓存键包含 shape，避免把同一符号表达式
+                                                                   错误复用到不同低模维度。投影的汇/源两侧不应在字
+                                                                   符串层面混为一谈。
+来源：缓存与形状守卫：base/base_functions.py:244--441；双侧投影：contraction/dynamic.py:364--425,1166--1194。
+统计观测量：从组态样本到能量、能级与矩阵元
+
+
+算法                       实现公式/状态更新                                                     物理解释与边界
+                                 ∑                        √
+Jackknife                x(k) = ( i xi − xk )/(N − 1)；σ = N − 1 std(x(k) )；可沿          保 留 组 态 相 关 的 重 采 样 结 构；
+                         指定轴构造外积协方差                                                    N > 1 是必要条件
+Bootstrap                第 0 样本是全体均值，其余 N − 1 个样本对 M 个组态有                              随机数未在接口中固定 seed；严
+                         放回抽样                                                          格复现需调用方控制后端 RNG
+mlog
+ eff                     aEeff = log[C(t)/C(t + 1)]；Eeff 乘 0.197/a 转 GeV               大 t 平台趋向基态；源码要求实
+                                                                                       数 sample
+GEVP                     C(t)vn = λn (t, t0 )C(t0 )vn ；λn ∼ e−En (t−t0 )               先厄米化并取实部；需要 C(t0 )
+                                               √                                       正定且 t > t0 的物理窗口
+                                                   CI2 (tsep −τ )CF      F
+                                                                  2 (τ )C2 (tsep )
+三点比值                     R = C3 /CF2 (tsep )                                           在噪声下对根号负值截断为 0，
+                                                   CF             I      I
+                                                     2 (tsep −τ )C2 (τ )C2 (tsep )
+                                                                                       并最终取实部；这是数值保护而
+                                                                                       非新的物理定律
+来源：Jackknife/Bootstrap：analyse/analyse.py:325--518；有效质量：analyse.py:521--569；ratio/GEVP：analyse.py:631--888。
+并行、I/O 与规范场平滑：把大规模计算的边界显式化
+
+
+ 模块                     实现状态                                         物理/工程判据
+
+ 后端                     全局           set_backend； 数 组 经              后端状态非线程安全；GPU 路径需实机验证
+                        get_backend
+ MPI                    网 格 [Gx , Gy , Gz , Gt ]； 时 间 片 按            轮询保证时间索引可逆；非整除轴走 TScatter，通信结果
+                        t mod size 轮询；支持 Gather/S-                   仍需 shape 检查
+                        catter/TScatter/Transport
+ I/O                    eigenvec 二进制重组为复数；peram                      文件布局是外部数据契约；读取成功不等于规范/端序/组
+                        为 (ts , tk , ds , dk , evs , evk )；ASCII 输   态物理正确
+                        出含 (Nsample , T, complex, L, 1) 头
+ Stout                  空间链迭代：staple → Q ∈ su(3) →                   应保持 SU(3) 幺正性；恒等场是固定点的极端检验
+                        exp(Q)U；时间方向不更新
+ Roofline               I = FLOPs/Bytes；比较计算峰值与                      是规划模型，不是运行时间实测；硬件预设与实际 kernel
+                        有效带宽并给切分建议                                   利用率需分开表述
+ 来源：后端：base/backend.py:1--31；MPI：base/mpi_init.py:160--199,346--356,432--487,889--1010；I/O：io/write_date.py:6--36,38--72；
+ Stout：base/smear_gauge.py:5--74；Roofline：contraction/contractadviser.py:1--15,1271--1293。
+本次可复现实测：接口链通过，但不是系综物理结果
+检查                                   输出                   解释
+
+DR γ square / anticommutator         0.0/0.0              四个欧氏方向的代数约定自洽
+pion 合法共轭源                           1 图；sign = −1        味道平衡与单一介子配对通过
+proton 合法共轭源                         2 图；sign = (−1, +1) 两个同味 u 置换被显式枚举
+vector / VDV / VVV                   True；(1, 3, 3)；      正交检查、顶点输出形状和有限体积颜色和通过
+                                     (1, 3, 3, 3)
+Ω 合法配置                               (7, 7)；全为有限数         Nsum = 4, Nextract = 2, d = 2 满足实现约束
+dynamic 2pt                          missing = []； 结 果 三注册表解析、计划、缓存 einsum 均走通
+                                     shape (2, 2)
+统计/谱                                 JK (5, 4)；BS (8, 4)； 重采样与广义本征值接口可运行
+                                     GEVP (2, 5)
+合成指数                                 meff = 0.788 GeV     输入 e−0.4t 、a = 0.1 fm，0.4 × 0.197/0.1 的量
+                                                          纲转换正确
+形状守卫                                 错配输入抛出 ValueEr- 错误在收缩前暴露而非静默广播
+                                     ror
+
+复现条件
+PYTHONPATH=lqcddb/src python -B；numpy 2.1.2、scipy 1.14.1、opt_einsum 3.4.0、cupy 14.0.1、mpi4py 4.1.1；
+数据均为本次命令内生成的合成数组。
+来源：本次会话运行的单进程合成冒烟；未读取外部系综数据，因此不声称质量谱、矩阵元或 GPU 加速已被真实数据确认。
+风险与修复优先级：哪些是文档契约，哪些是数值稳定性
+优先级                  证据与根因                                   状态                    建议验收
+
+高                    README 的 pion 示例把汇/源都写                  未验证需文档修正              为每个公开算符示例添加“先
+                     成 ud γ5 d；源码逐味计数后返回空字                                         厄米共轭”的可执行测试。
+                     典。改用 conjugate_operator 得到源
+                     端 dd γ5 u 才生成 1 图。
+高                    恒 等 规 范 场 是 Stout 的 物 理 固 定             已复现风险                 在零 Q 或零分母分支直接令更
+                     点， 但       smear_gauge.py:31     计算                           新为恒等，验证 SU(3) 幺正
+                     arccos(c0 /c0,max ) 时 c0,max = 0，本次                           性。
+                     输出 NaN。
+中                    ratio_3pt        对 根 号 内 负 数 用          推断数值保护                在结果中记录被截断比例，并
+                     maximum(...,0)，再取实部。                                          区分噪声异常与物理负谱。
+中                    Bootstrap 使用后端随机抽样，默认不传                 推断复现风险                将 RNG 状态/seed 纳入实验
+                     seed。                                                         环境快照，报告误差时保留抽
+                                                                                   样配置。
+低                    Roofline 的复杂度、硬件峰值和最大中间 未验证未测                                 对同一 einsum 记录 wall time、
+                     量是模型/产品规格；尚未做真实 kernel                                        峰值显存和模型预测的偏差。
+                     benchmark。
+
+范围声明
+本报告只审阅和记录，没有直接修复以上问题；这样不会把“报告发现”与“实现已修复”混淆。
+来源：README 算符示例：lqcddb/README.md:61--160；算符共轭：baroperator.py:186--254；Stout：smear_gauge.py:22--73；ratio：
+analyse.py:709--717,773--800。
+阶段结论与下一步：先守住物理不变量，再扩展算力规模
+
+已经完成的认识                                     下一阶段可验收产物
+物理结构         蒸馏投影、peram、                    P0 文档契 修正 pion/proton 示例，并以
+             VDV/VVV、Wick、C2 /C3            约      共轭算符自动生成源端。
+             的对象关系已闭合。                      P1 稳定性 Stout 零 Q 固定点、NaN、
+算法结构         符号计划、等价图、注册                           SU(3) 幺正性和边界链测试。
+             表、缓存收缩和统计层边界                   P2 物理结 选定真实组态，比较 C2 平
+             清楚。                            果      台、色散关系、C3 /C2 平台
+证据结构         代数、shape、接口 guard                     与协方差。
+             与合成谱的最小链已实测。                   P3 性能  同一收缩路径的
+                                                   CPU/GPU/MPI 计时、峰值
+                                                   显存与 Roofline 偏差表。
+
+决策建议：批准“物理边界测试 → 小规模真实系综 → 性能基准”的顺序；在三项证据
+        齐全前，不把当前包标记为生产级物理结果生成器。
+来源：当前判断依据：源码审阅 + 本次合成冒烟；真实系综、全 MPI、多强子 4pt 规模和 wall-time 基准仍为未验证。
+附录 A1：费米符号计算的源码证据（直引）
+
+1       def compute_fermion_sign(contraction_pairs: list) -> int:
+2           """
+3           计算 Wick 收缩的 Fermi 子符号。
+4
+5           核心思路：
+6           1. 将所有被收缩的场按其在算符字符串中的位置排序。
+7           2. 按排序后的顺序排列收缩对索引。
+8           3. 计算逆序数 → 符号 = (-1)^逆序数。
+9           """
+10          indexed_positions = []
+11          for pair_idx, pair in enumerate(contraction_pairs):
+12              quark_op_pos = pair[0]
+13              antiq_op_pos = pair[1]
+14              indexed_positions.append((quark_op_pos, pair_idx))
+15              indexed_positions.append((antiq_op_pos, pair_idx))
+16
+17          pair_indices = [x[0] for x in indexed_positions]
+18          return (-1) ** count_inversions(pair_indices)
+     来源：直接引用 contraction/autowick.py:156--173；伪代码是结构压缩，源码片段保留实际实现。
+附录 A2：合法配对生成的源码证据（直引）
+
+def generate_valid_contractions(quark_pos: list) -> tuple:
+    """
+    按夸克味分组，为每味生成所有合法的一一配对（完美匹配），
+    再取各味之间的笛卡尔积组合。
+    返回 (所有合法收缩图列表, 收缩图总数)
+    """
+    flavor_quarks = {}
+    flavor_antiquarks = {}
+
+    for pos, qtype, label in quark_pos:
+        if '^d' in qtype:
+            base_flavor = qtype.replace('^d', '')
+            flavor_antiquarks.setdefault(base_flavor, []).append((pos, qtype, label))
+        else:
+            flavor_quarks.setdefault(qtype, []).append((pos, qtype, label))
+
+    flavor_matchings = []
+    for flavor in sorted(set(list(flavor_quarks.keys()) + list(flavor_antiquarks.keys()))):
+        qs = flavor_quarks.get(flavor, [])
+        aqs = flavor_antiquarks.get(flavor, [])
+
+        if len(qs) != len(aqs):
+            raise ValueError(
+                f"Flavor '{flavor}' quark count({len(qs)}) "
+
+
+
+
+  来源：直接引用 contraction/autowick.py:175--198；逐味平衡与笛卡尔积逻辑可由源码核查。
+附录 B1：缓存入口的源码证据（直引）
+1 def   cached_contract(
+2       einsum_str: str,
+3       *tensors,
+4       optimize: Union[str, bool, List[str]] = 'auto'
+5 ):
+6       """
+7       执行带缓存的张量收缩，支持自动择优。
+8
+9       Parameters
+10      ----------
+11      einsum_str : str
+12          收缩字符串，例如 'ab,bc->ac'。
+13      tensors : array_like
+14          参与收缩的张量。
+15      optimize : str, bool, or list of str
+16          - 字符串：直接使用该策略。
+17          - True：自动尝试预定义策略列表，选择代价最低者。
+18          - 字符串列表：手动指定候选策略列表。
+19
+20      Returns
+21      -------
+22      result : array_like
+     来源：直接引用 base/base_functions.py:347--368；缓存键的构造逻辑保留在源码片段中。
+附录 B2：缓存收缩的源码证据（直引）
+1           收缩结果。
+2       """
+3       from opt_einsum import contract_expression, contract_path
+4
+5       shapes = tuple(t.shape for t in tensors)
+6
+7       # ---- 解析 optimize → opt_key（热路径，只为构造缓存键） ----
+8       if isinstance(optimize, str):
+9           opt_key = optimize
+10      elif optimize is True:
+11          opt_key = _AUTO_OPTIMIZERS
+12      elif isinstance(optimize, list):
+13          opt_key = tuple(optimize)
+14      else:
+15          raise TypeError(
+16              f"optimize 参数类型应为 str, bool 或 list，收到 {type(optimize)}"
+17          )
+18
+19      key = (einsum_str, shapes, opt_key)
+20      expr = _expr_cache.get(key)
+21      if expr is not None:
+22          return expr(*tensors)
+     来源：直接引用 base/base_functions.py:369--390；收缩表达式的缓存复用可由源码核查。
+附录 B3：重采样样本计算的源码证据（直引）
+
+
+
+
+1       # 1. 所有组态的 Jackknife 样本（去掉第 k 个组态的均值）
+2       data_sum = backend.sum(data, axis=Nconf_axes, keepdims=True)
+3       data_sample = -(data - data_sum) / (Nconf - 1)
+4
+5       if only_sample:
+6           return {'data_sample': data_sample}
+7
+8       # 2. 均值与标准误差
+9       data_mean = backend.mean(data, axis=Nconf_axes)
+10      data_err = backend.sqrt(Nconf - 1) * backend.std(data_sample, axis=Nconf_axes)
+     来源：直接引用 analyse/analyse.py:354--364；统计样本的计算路径可由源码核查。
+
