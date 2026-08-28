@@ -1,0 +1,596 @@
+% ============================================================
+% 黄 CL 格点 QCD 算法实现（结合物理）——16:9 Beamer 汇报
+% 编译：xelatex 两遍；交付闸门：Overfull=0, Float too large=0,
+% Missing character=0；主体不使用 table/figure 浮动体。
+% ============================================================
+\documentclass[UTF8,aspectratio=169,11pt]{ctexbeamer}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{hyperref}
+
+% ===== 版式账本（每个 frame 一条结论；预计 19 页） =====
+% F01 标题；F02 结论；F03 问题/判据；F04 总览；F05--F06 OPE；
+% F07--F08 蒸馏 2pt；F09--F10 比值；F11 比值结果；F12 能量；
+% F13 方向诊断；F14--F15 FH；F16 边界/扩展；F17 下一步；
+% F18 附录代码证据；F19 附录参数与来源。主体页 min_font_pt=11，
+% 来源/代码脚注为 scriptsize；所有长表在语义边界拆分。
+
+% ===== 色板：颜色只增强层次，不承载唯一信息 =====
+\definecolor{primary}{HTML}{17365D}
+\definecolor{accent}{HTML}{1F77B4}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{warning}{HTML}{C55A11}
+\definecolor{muted}{HTML}{5B6573}
+\definecolor{panel}{HTML}{F4F7FA}
+\definecolor{linegray}{HTML}{CBD5E1}
+\definecolor{good}{HTML}{EAF5EE}
+\definecolor{warnbg}{HTML}{FFF4E8}
+
+\setbeamersize{text margin left=0.55cm,text margin right=0.55cm}
+\setlength{\emergencystretch}{2em}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{blocks}[rounded][shadow=false]
+\setbeamercolor{normal text}{fg=black!86,bg=white}
+\setbeamercolor{structure}{fg=primary}
+\setbeamercolor{frametitle}{fg=primary,bg=white}
+\setbeamercolor{block title}{fg=primary,bg=panel}
+\setbeamercolor{block body}{fg=black!86,bg=panel}
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamerfont{normal text}{size=\normalsize}
+\setbeamertemplate{frametitle}{\vskip0.12cm\insertframetitle\par\vskip0.08cm}
+\setbeamertemplate{footline}{%
+  \hbox{\begin{beamercolorbox}[wd=\paperwidth,ht=2.3ex,dp=0.9ex,
+    leftskip=0.55cm,rightskip=0.55cm]{author in head/foot}%
+    \scriptsize\color{muted}\insertshortauthor\hfill
+    \insertshorttitle\hfill\insertframenumber/\inserttotalframenumber
+  \end{beamercolorbox}}}
+
+\newcommand{\source}[1]{%
+  \vspace{0.08em}\par{\raggedright\scriptsize\color{muted}来源：#1\par}}
+\newcommand{\verified}{\textcolor{evidence}{确证}}
+\newcommand{\inferred}{\textcolor{accent}{推断}}
+\newcommand{\unverified}{\textcolor{warning}{未验证}}
+\newcommand{\codepath}[1]{\nolinkurl{#1}}
+\newcommand{\key}[1]{\textcolor{primary}{\bfseries #1}}
+
+\tikzset{
+  flow/.style={draw=accent,fill=accent!8,rounded corners=2pt,align=center,
+    minimum height=0.72cm,text width=2.28cm,font=\small},
+  state/.style={draw=primary,fill=primary!7,rounded corners=2pt,align=center,
+    minimum height=0.72cm,text width=2.55cm,font=\small},
+  decision/.style={draw=warning,fill=warning!10,diamond,aspect=2,align=center,
+    inner sep=1.5pt,font=\small},
+  arrow/.style={-{Latex[length=2mm]},draw=primary,semithick},
+  relation/.style={-{Latex[length=1.7mm]},draw=muted,thin,dashed},
+  labelstyle/.style={font=\scriptsize,inner sep=1.5pt,fill=white,text=muted}
+}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  backgroundcolor=\color{panel},frame=single,
+  breaklines=true,breakatwhitespace=false,keepspaces=true,
+  columns=flexible,firstnumber=auto,
+  keywordstyle=\color{primary}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{accent},
+  numbers=left,numberstyle=\scriptsize\color{muted}
+}
+
+\title[黄 CL 格点 QCD]{黄 CL 的格点 QCD 算法实现\\物理链、GPU 实现与可验证结果}
+\author[黄 CL]{黄 CL}
+\institute{PyQCD / \codepath{refer/huangcl}}
+\date{2026 年 8 月 28 日}
+
+\begin{document}
+
+% F01：标题页
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+% F02：结论先行
+\begin{frame}[t]{当前实现已闭合“裸算符—核子—比值—能量”主链，但尚未完成重整化}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.30\textwidth}
+      \begin{block}{已完成 \verified}
+        \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X@{}}
+          Clover $F_{\mu\nu}$ 与对偶场强\\
+          非定域 Wilson 线 OPE\\
+          蒸馏质子 2pt 与宇称/边界处理\\
+          断连扣除比值、协方差拟合\\
+          能量、方向诊断与 FH 扩展
+        \end{tabularx}
+      \end{block}
+    \end{column}
+    \begin{column}{0.30\textwidth}
+      \begin{block}{最强实测证据 \verified}
+        \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X@{}}
+          $N_{\rm conf}=200$，jackknife\\
+          $c_0(z=0)=0.654(76)$\\
+          $c_0(z=4)=0.329(39)$\\
+          $c_0(z=8)=0.054(20)$\\
+          $E_0=1.440(15)\ \mathrm{GeV}$
+        \end{tabularx}
+      \end{block}
+    \end{column}
+    \begin{column}{0.30\textwidth}
+      \begin{block}{当前判断与决策}
+        \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X@{}}
+          短距信号与大 $z$ 衰减可见；\\
+          2pt 能量在 $t/a=6\!:\!12$ 稳定；\\
+          统计/窗口系统误差仍需压低。\\[0.2em]
+          \textbf{建议：}先固定数据契约，\\
+          再接入 $Z_R$、混合与匹配核。
+        \end{tabularx}
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{结果：比值与能量 TXT 报告，完整索引见附录 B；重整化为未验证扩展。}
+\end{frame}
+
+% F03：问题与判据
+\begin{frame}[t]{研究问题被拆成四个可验收的物理—软件接口}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.44\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X@{}}
+        \textbf{输入：}规范场 $U_\mu(x)$、本征矢、perambulator、VVV。\\
+        \textbf{目标：}从非定域胶子算符提取核子中的裸矩阵元。\\
+        \textbf{约束：}Euclidean 格点、$N_c=3$、DR gamma 基、反周期时间边界。\\
+        \textbf{最小闭环：}算符正确、收缩正确、统计可追溯、量纲可检查。\\
+        \textbf{边界：}当前结果是 bare；$Z_R$、mixing、matching 尚未接入主链。
+      \end{tabularx}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.20\linewidth}X@{}}
+        \toprule
+        接口 & 验收判据 \\
+        \midrule
+        OPE & $F_{\mu\nu}$ 反厄米组合、$\widetilde F$ 定义、$z=0$ 退化正确 \\
+        2pt & $P_\pm$ 宇称投影、动量相位、Wick 两项与边界翻转一致 \\
+        比值 & 真空扣除、$\tau$ 窗口、协方差与 $\chi^2/\mathrm{dof}$ 可复核 \\
+        能量 & $E_{\rm eff}$ 平台与两态 $E_0$ 拟合、单位换算可追溯 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{接口：四个模块源码；判据为本报告的物理审计标准。}
+\end{frame}
+
+% F04：总览工作流，单列行表格
+\begin{frame}[t]{总览：每一步都把物理对象、数组状态和验证量同时向下游传递}
+  \centering
+  \small
+  \begin{tabular}{@{}l@{}}
+    $\text{Input: } U_\mu(x),\ V(t),\ \tau(t,t_0),\ VVV(t),\ N_{\rm conf}$ \\
+    $\text{Step 0: } U_\mu\ \longrightarrow\ P_{\mu\nu}\ \longrightarrow\ F_{\mu\nu}^{\rm clov},\widetilde F_{\mu\nu}$ \\
+    $\quad \text{沿指定 }z\text{ 方向插入 Wilson 线，输出 } O(t,z)\in\mathbb C^{N_t\times N_z}$ \\
+    $\text{Step 1: } V,\tau,VVV\ \longrightarrow\ C_{2}(t_{\rm sink},t_{\rm src})\ \longrightarrow\ C_2(\Delta t,\mathbf p)$ \\
+    $\quad \text{GPU: 相位加权本征矢、VVV 缩并、perambulator 缩并；校验 }P_\pm\text{ 与边界符号}$ \\
+    $\text{Step 2: } (C_2,O)\ \longrightarrow\ C_3-C_2\langle O\rangle\ \longrightarrow\ R(\Delta t,\tau,z)$ \\
+    $\quad \text{jackknife/协方差/先验拟合，输出 }c_0(z),\ \Delta E(z),\ \chi^2/\mathrm{dof}$ \\
+    $\text{Step 4: } C_2(\Delta t)\ \longrightarrow\ E_{\rm eff}(t),\ E_0\ \longrightarrow\text{物理单位}$ \\
+    $\text{Output: }\{O, C_2, R, c_0, E_0\}\ +\text{源码行号、结果文件和误差说明}$
+  \end{tabular}
+  \source{主线：\codepath{00_contract} $\to$ \codepath{01_proton_contract} $\to$ \codepath{02_ratio} $\to$ \codepath{04_proton_energy}；Step 3 在该流水线中跳过。}
+\end{frame}
+
+% F05：物理核心公式
+\begin{frame}[t]{OPE 的物理核心是“局域场强—平行移动—非局域迹”的规范协变组合}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{align*}
+        F_{\mu\nu}^{\rm clov}(x)
+        &\propto -\frac{i}{8}\sum_{q=1}^{4}
+        \left(P^{(q)}_{\mu\nu}(x)-P^{(q)\dagger}_{\mu\nu}(x)\right),\\
+        \widetilde F_{\mu\nu}(x)
+        &=\frac12\epsilon_{\mu\nu\rho\sigma}F_{\rho\sigma}(x),\\
+        M^{\mu\nu;\rho\sigma}(z)
+        &=\sum_{\boldsymbol x}\operatorname{Tr}\!\Bigl[
+        F_{\mu\nu}(x+z\hat{\ell})W_z^\dagger\\
+        &\qquad\widetilde F_{\rho\sigma}(x)W_z\Bigr],\\
+        O_{\rm code}(z)
+        &=-M^{30;30}(z)-M^{31;31}(z)\\
+        &\quad+2M^{01;01}(z).
+      \end{align*}
+      \par\vspace{0em}\footnotesize\textbf{检查：}反厄米化保证共轭；$W_z$ 连接两端；$z=0$ 时 $W_z=1$；格点归一化待重整化补齐。
+    \end{column}
+    \begin{column}{0.41\textwidth}
+      \small
+      \begin{tabularx}{0.98\linewidth}{@{}>{\raggedright\arraybackslash}X@{}}
+        $\text{Input: }U_\mu(x)\in SU(3),\quad \ell=\texttt{link\_dir}$ \\
+        $\text{Build: 四个平移 plaquette}\to F_{\mu\nu}^{\rm clov}$ \\
+        $\text{Dual: }\widetilde F=\tfrac12\epsilon F\text{（代码 Tensor4）}$ \\
+        $\text{Transport: }F(x+z\hat\ell)\xrightarrow{W_z^\dagger}\widetilde F(x)\xrightarrow{W_z}$ \\
+        $\text{Trace: }\operatorname{Tr}_{c}\text{ 与空间求和}$ \\
+        $\text{Output: }O(t,z)\in\mathbb C^{N_t\times\Delta z}$
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{Operator.py 行 77--184、339--368；比值组合行 286--287。}
+\end{frame}
+
+% F06：OPE 实现与数据布局
+\begin{frame}[t]{OPE 实现把“方向分工”与“张量布局”显式写进状态转移}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.43\textwidth}
+      \lstinputlisting[firstline=177,lastline=184]{../00_contract/00_code/Operator.py}
+      \source{直引：\codepath{00_contract/00_code/Operator.py:177--184}。}
+    \end{column}
+    \begin{column}{0.51\textwidth}
+      \small
+      \begin{tabularx}{0.98\linewidth}{@{}>{\raggedright\arraybackslash}X@{}}
+        $\text{Read: }\texttt{>f8}\text{ 交错复数}\to(N_t,N_x,N_x,N_x,4,3,3,2)$ \\
+        $\text{Select: }\texttt{link\_dir}=x,y,z\ \to\ zdir=0,1,2$ \\
+        $\text{MPI rank 0: }(\mu,\nu)=(3,zdir+1)$ \\
+        $\text{MPI rank 1: }(\mu,\nu)=(3,zdir+2)$ \\
+        $\text{MPI rank 2: }(\mu,\nu)=(zdir+1,zdir+2)$ \\
+        $\text{Loop: }d_z=0,\ldots,\Delta z-1\text{，每次做 Wilson 线与迹}$ \\
+        $\text{Output: }\texttt{ops\_mu*\_nu*\_dz*\_conf*.npy}\in\mathbb C^{N_t\times\Delta z}$ \\
+        \textbf{校验：}rank 0--2 覆盖三类分量；脚本是指标拆分，不是四维域分解。
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{MPI/输出：Calc\_ope\_unpol.py:53--133；GPU 用于质子 2pt。}
+\end{frame}
+
+% F07：蒸馏 2pt 数据路径
+\begin{frame}[t]{蒸馏把全格点夸克传播压缩为本征子空间，代价转移到可控的矩阵缩并}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.46\textwidth}
+      \begin{align*}
+        \Box(t)&=V(t)V^\dagger(t),\\
+        \tau(t,t_0)&=V^\dagger(t)D^{-1}V(t_0),\\
+        \Phi_{abc}(t,\mathbf p)&=\sum_{\boldsymbol x}e^{-i\mathbf p\cdot\boldsymbol x}
+        \epsilon_{ijk}V_i^aV_j^bV_k^c.
+      \end{align*}
+      \begin{block}{压缩与量纲}
+        $V$ 的颜色维为 3，perambulator 保留时间、Dirac 与本征模指标；$N_{\rm ev1}$ 越小越省内存，但可能丢失短距/高动量结构。
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X@{}}
+        $\text{Input: }\texttt{eigvecs\_t***},\ \texttt{perams.*},\ \texttt{VVV.*}$ \\
+        $\text{Phase: }e^{-2\pi i\,\mathbf{Mom}\cdot\mathbf{Pos}/N_x}$ \\
+        $\text{Read }V:\ (N_{\rm ev},N_x^3,3)\to(N_{\rm ev1},N_x^3,3)$ \\
+        $\text{Read VVV}:\ (N_{\rm ev},N_{\rm ev},N_{\rm ev},2)\to\mathbb C^{N_{\rm ev1}^3}$ \\
+        $\text{Read peram}:\ (4,N_t,N_{\rm ev},4,N_{\rm ev},2)\to\mathbb C^{N_t\times4\times4\times N_{\rm ev1}^2}$ \\
+        $\text{Output: }C_{2,\,\text{matrix}}(t_{\rm sink},t_{\rm src})$
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{2pt GPU 脚本：154--236；蒸馏对象解释。}
+\end{frame}
+
+% F08：Wick、宇称和边界
+\begin{frame}[t]{2pt 的正确性不只在缩并：Wick 符号、宇称投影和反周期边界必须成套检查}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{align*}
+        C_2&=C_{\rm Wick}^{(1)}-C_{\rm Wick}^{(2)},\\
+        P_+&=\frac12(\gamma_0+\gamma_4),\qquad
+        P_- =\frac12(\gamma_0-\gamma_4),\\
+        C_2(t)&\xrightarrow{\text{反周期}}
+        \begin{cases}
+        -C_2(t),&t_{\rm sink}<t_{\rm src}\quad(P_+),\\
+        -C_2(t),&t_{\rm sink}>t_{\rm src}\quad(P_-).
+        \end{cases}
+      \end{align*}
+      \begin{block}{极限检查}
+        $\mathbf p=0$ 时相位为 1；$t_{\rm sink}=t_{\rm src}$ 不应被错误套用跨边界符号；正、负宇称的翻转条件相反。
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \lstinputlisting[firstline=408,lastline=409]{../00_contract/00_code/2pt_proton_Cg5gmu_L32x64_mom2_xdir_gpu.py}
+      \source{直引：2pt\_proton\_...\_gpu.py:408--409；两项 Wick 缩并见 :373--387。}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% F09：统计与比值伪代码
+\begin{frame}[t]{比值步骤把“真空扣除”放在重采样之后，避免把相关性误当成物理信号}
+  \centering
+  \small
+  \begin{tabular}{@{}l@{}}
+    $\text{Input: }C_2^{(k)}(t_{\rm sink},t_{\rm src}),\ O^{(k)}(\tau,z),\quad k=1,\ldots,N_{\rm conf}$ \\
+    $\text{Build: }O=2O_{01}-O_{30}-O_{31},\quad t=t_{\rm sink}-t_{\rm src}\text{（周期平移）}$ \\
+    $\text{Construct: }C_3^{(k)}(t,\tau,z)=O^{(k)}(\tau,z)C_2^{(k)}(t)$ \\
+    $\text{Resample: }\widehat X_i=\frac{N\bar X-X_i}{N-1}\quad\text{(jackknife)}$ \\
+    $\text{Subtract: }C_3^{\rm sub}=\widehat C_3-\widehat C_2\,\widehat O$ \\
+    $\text{Normalize: }R(t,\tau,z)=\left\langle C_3^{\rm sub}/\widehat C_2\right\rangle_{t_{\rm src}}$ \\
+    $\text{Fit: }R(t,\tau,z)=c_0(z)+c_1(z)\left[e^{-\Delta E\tau}+e^{-\Delta E(t-\tau)}\right]$ \\
+    $\text{Output: }R\in\mathbb R^{N_{\rm sample}\times t\times\tau\times z},\quad c_0(z),\chi^2/\mathrm{dof}$
+  \end{tabular}
+  \source{实现：\codepath{02_ratio/code.py:258--346,373--425}；统计基元：\codepath{98_tools/analysis_tools.py:97--183}。}
+\end{frame}
+
+% F10：拟合模型与统计诊断
+\begin{frame}[t]{拟合窗口和协方差决定“平台”可信度：先保留激发态，再用窗口稳定性做判断}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.49\textwidth}
+      \begin{align*}
+        R(t,\tau,z)&=c_0+c_1e^{-\Delta E\tau}+c_1e^{-\Delta E(t-\tau)},\\
+        \chi^2&=(y-f)^T C^{-1}(y-f),\\
+        \mathrm{dof}&=N_{\rm data}-N_{\rm par},\\
+        \mathrm{SEM}_{\rm JK}&=\sqrt{N-1}\,\operatorname{std}(x_i).
+      \end{align*}
+      \begin{block}{为什么不能只看单点}
+        $\tau$ 与 $t-\tau$ 两端都携带激发态污染；$C$ 的条件数可达 $10^4\!:\!10^5$，因此必须同时报告协方差、拟合窗口和 $\chi^2/\mathrm{dof}$。
+      \end{block}
+    \end{column}
+    \begin{column}{0.47\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.26\linewidth}X@{}}
+        \toprule
+        代码状态 & 物理含义 \\
+        \midrule
+        $t\in[7,11]$ & 牺牲早期点，降低激发态污染 \\
+        $\mathrm{nex}=2$ & 去掉插入端两端点，增加可用性/稳定性权衡 \\
+        prior & 对 $c_0,c_1,\Delta E$ 的弱约束，不等于数据替代 \\
+        jackknife & 统计误差；窗口差异另作系统误差候选 \\
+        \bottomrule
+      \end{tabularx}
+      \begin{block}{状态标识}
+        \verified：目录内 TXT 可复核；\inferred：短距衰减符合激发态项；\unverified：连续极限与重整化后物理量。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{代码：\codepath{02_ratio/code.py:354--425}；协方差/条件数：\codepath{98_tools/analysis_tools.py:156--246}。}
+\end{frame}
+
+% F11：比值结果
+\begin{frame}[t]{比值结果显示短距矩阵元明显、长距信号接近零；大 $z$ 的误差/窗口仍是瓶颈}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.62\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.52\textheight,keepaspectratio]{../02_ratio/1_result/L24x72/fit_Pz2_Nsam200_dtmax20_tsep7_11_nex2/ratio.png}
+      \source{实测图：\codepath{02_ratio/1_result/L24x72/fit_Pz2_Nsam200_dtmax20_tsep7_11_nex2/ratio.png}。}
+    \end{column}
+    \begin{column}{0.34\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}lccX@{}}
+        \toprule
+        $z$ & $c_0$ & $\chi^2/\mathrm{dof}$ & 判断 \\
+        \midrule
+        0 & $0.654(76)$ & 1.2 & 短距信号 \\
+        4 & $0.329(39)$ & 1.3 & 仍可分辨 \\
+        8 & $0.054(20)$ & 0.94 & 接近零 \\
+        12 & $-0.008(20)$ & 0.77 & 与零相容 \\
+        20 & $0.015(16)$ & 2.5 & 需更多统计 \\
+        \bottomrule
+      \end{tabularx}
+      \vspace{0.12em}
+      \footnotesize\textbf{设置：} $P=(0,0,2)$；$N_{\rm conf}=N_{\rm sample}=200$；jackknife；$t_{\rm sep}=7\!:\!11$；$\mathrm{nex}=2$。
+    \end{column}
+  \end{columns}
+  \source{数值以同目录 1\_fit\_report.txt 的 Summary Table 为准；图题/详细块有小幅汇总差异，详见风险页。}
+\end{frame}
+
+% F12：能量算法与结果
+\begin{frame}[t]{2pt 能量链在同一协方差拟合上给出 $E_0=1.440(15)\ \mathrm{GeV}$}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.51\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.49\textheight,keepaspectratio]{../04_proton_energy/1_result/L24x72/_Pz2/eff_mass.png}
+      \source{实测图：Pz2/eff\_mass.png。}
+    \end{column}
+    \begin{column}{0.41\textwidth}
+      \begin{align*}
+        C_2(t)&=A_0e^{-E_0t}\left(1+A_1e^{-\Delta E t}\right),\\
+        aE_{\rm eff}(t)&=\log\frac{C_2(t)}{C_2(t+1)},\\
+        E_0[\mathrm{GeV}]&=(aE_0)\frac{0.197}{0.1053}.
+      \end{align*}
+      \small
+      \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.42\linewidth}X@{}}
+        \toprule
+        量 & 实测 \\
+        \midrule
+        拟合窗 & $t/a=6\!:\!12$ \\
+        $aE_0$ & $0.7698(72)$ \\
+        $E_0$ & $1.440(15)\ \mathrm{GeV}$ \\
+        $\chi^2/\mathrm{dof}$ & 0.46（报告） \\
+        条件数 & $2.01\times10^3$ \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{模型：04 proton energy 脚本行 225--278、350--415；数值：Pz2/2 fit report。}
+\end{frame}
+
+% F13：方向诊断
+\begin{frame}[t]{三方向有效质量在 $0.806\!:\!0.807$ 附近重合，支持方向平均前的各向同性检查}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.60\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.60\textheight,keepaspectratio]{../05_ana_3dir_diff_sem/1_result/L24x72/eff_mass/hist_eff_mass_P2_tsep6.png}
+      \source{实测诊断图：P2,tsep6 的 eff mass。}
+    \end{column}
+    \begin{column}{0.32\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X@{}}
+        $x\text{-dir}:\ 0.806(0.000712)$\\
+        $y\text{-dir}:\ 0.807(0.000718)$\\
+        $z\text{-dir}:\ 0.807(0.000695)$
+      \end{tabularx}
+      \begin{block}{诊断逻辑}
+        \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}X@{}}
+          读取 $x/y/z/ave$ 四通道；\\
+          $m_{\rm eff}(t)=\log[C(t)/C(t+1)]$；\\
+          固定 $(P_z,t_{\rm sep})$ 比较方向分布；\\
+          方向差异显著时，停止平均并回查\\
+          链路方向、坐标排列或边界符号。
+        \end{tabularx}
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{方向诊断脚本行 211--344；图注 $N=3000$。}
+\end{frame}
+
+% F14：FH 算法
+\begin{frame}[t]{FH 变换把插入时间求和的斜率信息转为更适合平台拟合的差分量}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.53\textwidth}
+      \begin{align*}
+        T_n(t,z)&=\sum_{\tau=n}^{t-n}R(t,\tau,z),\\
+        FH_n(t,z)&=T_n(t+1,z)-T_n(t,z)\\
+        &=\sum_{\tau=n}^{t+1-n}R(t+1,\tau,z)
+        -\sum_{\tau=n}^{t-n}R(t,\tau,z).
+      \end{align*}
+      \begin{block}{边界与模型}
+        $t\le 2n$ 的点无意义；代码从 $2n$ 后计算。$P=4$ 使用 $n=2$、$t=7\!:\!10$ 的常数模型 $FH(t)=c_0$。
+      \end{block}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \small
+      \begin{tabular}{@{}l@{}}
+        $\text{Input: }R\in\mathbb R^{N_{\rm sample}\times t\times\tau\times z}$ \\
+        $\text{Average: }R\text{ 的六个方向 }\pm x,\pm y,\pm z$ \\
+        $\text{Trim: }\tau=n,\ldots,t-n$ \\
+        $\text{Sum: }T_n(t)=\sum_\tau R(t,\tau)$ \\
+        $\text{Difference: }FH_n(t)=T_n(t)-T_n(t-1)$ \\
+        $\text{Fit: }FH_n(t,z)\to c_0(z)$ \\
+        $\text{Output: }FH\text{ 数组、误差条、}c_0(z)$
+      \end{tabular}
+    \end{column}
+  \end{columns}
+  \source{实现：05\_FH\_bare\_matele/1\_preprocess\_FH.py:125--156；一体脚本:216--288。}
+\end{frame}
+
+% F15：FH 结果
+\begin{frame}[t]{FH 的 $c_0(z)$ 也随 $z$ 衰减，但拟合窗口变化显示出明确的系统误差风险}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.60\textwidth}
+      \centering
+      \includegraphics[width=\linewidth,height=0.59\textheight,keepaspectratio]{../06_FH_bare_matele/1_result/L24x72/P4/fit_nex2/dt7_10/c0.png}
+      \source{实测图：\codepath{06_FH_bare_matele/1_result/L24x72/P4/fit_nex2/dt7_10/c0.png}。}
+    \end{column}
+    \begin{column}{0.36\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}lccX@{}}
+        \toprule
+        $z$ & $c_0$ & $\chi^2/\mathrm{dof}$ & 状态 \\
+        \midrule
+        0 & $0.602(19)$ & 2.4 & 短距 \\
+        4 & $0.247(12)$ & 0.3 & 可拟合 \\
+        8 & $0.0235(91)$ & 1.2 & 近零 \\
+        \bottomrule
+      \end{tabularx}
+      \vspace{0.2em}
+      \begin{block}{解释}
+        这是裸量、无 $Z_R$；不同窗（例如 $t=6\!:\!10$、$8\!:\!10$）给出的 $c_0$ 差异应作为窗口系统误差候选，而非随意择优。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{数值：P4/fit\_nex2/dt7\_10/report\_dt7\_10.txt；模型：2\_fit\_FH.py:86--141,159--179。}
+\end{frame}
+
+% F16：当前边界与历史扩展
+\begin{frame}[t]{当前代码的可信边界清楚：算法链已可复核，物理 PDF 还差重整化与连续极限}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.47\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.30\linewidth}X@{}}
+        \toprule
+        层次 & 当前状态 \\
+        \midrule
+        裸 OPE & \verified：Clover、$\widetilde F$、Wilson 线与迹 \\
+        核子 2pt & \verified：蒸馏、Wick、宇称、边界、动量 \\
+        比值/FH & \verified：重采样、扣除、协方差拟合 \\
+        重整化 & \unverified：$Z_R$、混合矩阵未进入本生产路径 \\
+        matching & \unverified：NLO 核、CS/SFTX、PDF 尚未由本目录结果验证 \\
+        连续极限 & \unverified：$a,P_z,m_\pi,L$ 联合外推未开展 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+    \begin{column}{0.47\textwidth}
+      \small
+      \begin{tabular}{@{}l@{}}
+        $\text{历史/参考扩展: }\texttt{99\_ref\_code}$ \\
+        $\text{Bare }h_R(z)\xrightarrow{Z_R,\,mixing}h_R^{\rm ren}(z)$ \\
+        $\xrightarrow{\text{Fourier}}\widetilde f_g(x,P_z)$ \\
+        $\xrightarrow{Z_{ij},\,\text{CS/SFTX}}f_g(x,\mu,\zeta)$ \\
+        $\xrightarrow{a\to0,\,P_z\to\infty}\text{物理 PDF}$
+      \end{tabular}
+      \begin{block}{原则}
+        参考目录可用于设计算法接口，但不能把“存在参考实现”写成“当前四步管线已验证”。下一阶段需先定义输入/输出与单位，再用独立合成或实测对照锁定每一层。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{当前证据：本目录四步源码与结果；历史链仅作接口路线图，标为未验证。}
+\end{frame}
+
+% F17：风险与下一步
+\begin{frame}[t]{下一步应优先消除统计与数据契约风险，再扩大物理解释范围}
+  \centering
+  \small
+  \begin{tabularx}{0.96\textwidth}{@{}>{\raggedright\arraybackslash}p{0.21\linewidth}>{\raggedright\arraybackslash}p{0.22\linewidth}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{0.20\linewidth}@{}}
+    \toprule
+    优先级 & 风险/问题 & 可验收动作与产物 & 通过标准 \\
+    \midrule
+    1 & 图题与 TXT 汇总存在小数覆盖差异 & 固化 run manifest；重跑 $P=2$ 比值与能量 & 数值、图题、参数一致 \\
+    2 & $C$ 条件数高，大 $z/t$ 误差大 & 增加源/组态；比较 full/diag covariance、窗口、$\mathrm{nex}$ & 误差下降，窗漂移量化 \\
+    3 & OPE 指标拆分成本未测 & 记录 rank、峰值内存、$\Delta z$、方向 profiling & 每方向有实测成本 \\
+    4 & 裸量到 PDF 缺 $Z_R$/matching & 先用合成数据恢复注入量，再跑实测 & 重整化链逐层通过 \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.35em}
+  \begin{block}{建议的导师决策}
+    先批准“增加统计 + 固化数据契约”；重整化输入未定义前，不把当前 $c_0$ 直接命名为胶子 PDF。
+  \end{block}
+  \source{风险依据：比值/能量结果、协方差条件数、02\_ratio/code.py:408--425；动作是计划。}
+\end{frame}
+
+\appendix
+
+% F18：附录代码证据
+\begin{frame}[t]{附录 A：关键代码证据（直引，避免手写伪代码替代实现）}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.49\textwidth}
+      \textbf{比值扣除与归一化}
+      \lstinputlisting[firstline=327,lastline=335]{../02_ratio/code.py}
+      \source{\codepath{02_ratio/code.py:327--335}。}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \textbf{能量模型与有效质量}
+      \lstinputlisting[firstline=225,lastline=231]{../04_proton_energy/code.py}
+      \source{04\_proton\_energy/code.py:225--231；有效质量见 :350--357。}
+    \end{column}
+  \end{columns}
+  \vspace{0.08em}
+  \footnotesize\textbf{阅读提示：}主体公式是源代码状态转移的物理抽象；代码片段只承担数组运算的直接证据。
+\end{frame}
+
+% F19：附录参数和来源总表
+\begin{frame}[t]{附录 B：参数、结果与源码索引}
+  \small
+  \begin{tabularx}{0.96\textwidth}{@{}>{\raggedright\arraybackslash}p{0.17\linewidth}>{\raggedright\arraybackslash}p{0.49\linewidth}>{\raggedright\arraybackslash\footnotesize}p{0.23\linewidth}@{}}
+    \toprule
+    模块 & 核心参数/结果 & 直接来源 \\
+    \midrule
+    OPE & $N_t=72$、$N_x=24$；$\Delta z$ 循环；三 rank 指标分工 & Operator.py:77--184；Calc\_ope\_unpol.py:53--133 \\
+    2pt & $P=(0,0,2)$；$N_{\rm conf}=200$；$N_{\rm ev1}$ 截断；$P_\pm$ & 2pt\_...\_gpu.py:102--236,349--447 \\
+    比值 & $t=7\!:\!11$、$\mathrm{nex}=2$；$c_0(0)=0.654(76)$；$c_0(8)=0.054(20)$ & 1\_fit\_report.txt \\
+    能量 & $t=6\!:\!12$；$aE_0=0.7698(72)$；$E_0=1.440(15)\ \mathrm{GeV}$ & 2\_fit\_report.txt \\
+    FH & $P=4$；$n=2$；$t=7\!:\!10$；$c_0(0)=0.602(19)$ & report\_dt7\_10.txt \\
+    统计 & jackknife SEM、协方差、$\chi^2$ 与条件数 & analysis tools，97--246 \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.25em}
+  \begin{block}{总括}
+    已形成“物理对象—数组—统计—结果文件”的回查链；下一阶段补齐重整化、匹配和连续极限。
+  \end{block}
+  \source{本页为源码与当前结果文件的索引；所有数值均标注状态和直接路径。}
+\end{frame}
+
+\end{document}

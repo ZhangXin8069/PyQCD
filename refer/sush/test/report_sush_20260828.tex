@@ -1,0 +1,558 @@
+\documentclass[UTF8,aspectratio=169,11pt]{ctexbeamer}
+
+% 本稿是 refer/sush 的展示层报告；所有源代码保持只读。
+\usepackage{amsmath,amssymb,booktabs,tabularx,array,listings,xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc}
+\usepackage{hyperref}
+
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{phys}{HTML}{6C3483}
+\definecolor{algo}{HTML}{B45F06}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{warn}{HTML}{A04000}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{softblue}{HTML}{EAF2F8}
+\definecolor{softpurple}{HTML}{F5EEF8}
+\definecolor{softgreen}{HTML}{EAF7EE}
+\definecolor{softorange}{HTML}{FDF2E9}
+
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=phys}
+\setbeamertemplate{navigation symbols}{}
+\setbeamersize{text margin left=7mm,text margin right=7mm}
+\setlength{\tabcolsep}{3.5pt}
+\renewcommand{\arraystretch}{1.12}
+\setbeamerfont{frametitle}{series=\bfseries,size=\large}
+\setbeamercolor{frametitle}{fg=accent}
+\setbeamercolor{structure}{fg=accent}
+\setbeamercolor{normal text}{fg=black!88}
+\setbeamercolor{block title}{fg=white,bg=accent}
+\setbeamercolor{block body}{bg=softblue}
+\setbeamercolor{alertblock title}{fg=white,bg=warn}
+\setbeamercolor{alertblock body}{bg=softorange}
+\setbeamercolor{exampleblock title}{fg=white,bg=evidence}
+\setbeamercolor{exampleblock body}{bg=softgreen}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\src}[1]{\par\vspace{0.5mm}{\tiny\color{black!55}\raggedright 来源：#1\par}}
+\newcommand{\ok}{\textcolor{evidence}{\textbf{已测}}}
+\newcommand{\infer}{\textcolor{phys}{\textbf{推断}}}
+\newcommand{\unverified}{\textcolor{warn}{\textbf{未验证}}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\R}{\mathcal{R}}
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{black!50}\itshape,
+  stringstyle=\color{phys},
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!18},
+  numbers=left,
+  numberstyle=\tiny\color{black!45},
+  numbersep=4pt,
+  breaklines=true,
+  breakatwhitespace=false,
+  keepspaces=true,
+  showstringspaces=false,
+  columns=flexible,
+  literate={≠}{{$\ne$}}1,
+  aboveskip=2pt,
+  belowskip=2pt
+}
+
+\title{\textbf{Sush 格点 QCD 算法实现}}
+\subtitle{从蒸馏本征矢到强子关联函数：物理图像、张量路径与可验证边界}
+\author{基于 \code{refer/sush/lqcddb} 源码的物理—代码联合审阅}
+\date{2026 年 8 月 28 日}
+
+\begin{document}
+
+% -----------------------------------------------------------------
+\begin{frame}
+  \titlepage
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{结论先行：代码已经把“手工易错链”压成了可执行对象}
+\begin{tabularx}{\linewidth}{@{}p{0.22\linewidth}Y@{}}
+\toprule
+\textcolor{accent}{主结论} & \textbf{lqcddb 的核心不是通用线性代数库，而是把格点 QCD 的算符、Wick 图、蒸馏顶点和统计观测量直接映射为 Python 张量对象。} \\
+\midrule
+\textcolor{evidence}{已确认} & DR 基四个欧氏方向满足 $\gamma_\mu^2=1$、$\{\gamma_\mu,\gamma_\nu\}=0$（本次合成测试最大误差均为 $0$）；pion 1 图、质子 2 图、动态收缩、重采样与 GEVP 冒烟均可运行。 \\
+\textcolor{phys}{物理含义} & 蒸馏投影将空间自由度压缩到低模子空间；Wick 展开负责费米反对称性；VVV/VDV 负责颜色与空间投影；$C_2/C_3$ 分析最终回到能谱和矩阵元。 \\
+\textcolor{warn}{当前边界} & 没有把真实系综、GPU 多进程或全体 $4$pt 大规模耗时当作已验证结果；恒等规范场 Stout 固定点目前会产生 NaN，需修复后才能宣称边界稳健。 \\
+\bottomrule
+\end{tabularx}
+
+\begin{alertblock}{给导师/同行的判断}
+当前最值得保留的架构是“算符字符串 $\to$ 符号计划 $\to$ 注册张量 $\to$ 缓存 einsum”；下一阶段优先补齐物理边界测试，再做真实系综基准。
+\end{alertblock}
+\src{源码范围：\code{lqcddb/src/lqcddb}；本次合成冒烟命令与输出见第 15 页。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{问题与验收标准：把格点 QCD 链分成可检查的不变量}
+\begingroup\scriptsize
+\begin{tabularx}{\linewidth}{@{}p{0.24\linewidth}Y Y@{}}
+\toprule
+\textbf{层次} & \textbf{需要回答的物理问题} & \textbf{代码验收信号} \\
+\midrule
+表示 & 低模投影是否保持颜色/自旋指标的可追踪性？ & shape、正交归一、$\gamma$ 代数与动量相位 \\
+符号 & 所有合法 Wick 配对是否枚举且符号正确？ & 味道守恒、配对数、$(-1)^{N_{\rm inv}}$、einsum 字符串 \\
+数值 & 每一张图是否能落到实际张量？ & Peram/V/Gamma 注册完整，输入维度可诊断 \\
+统计 & 从关联函数能否定义可解释观测量？ & Jackknife、$m_{\rm eff}$、GEVP、$C_3/C_2$ 比值 \\
+扩展 & 大张量是否可在设备/进程间搬运？ & numpy/cupy、缓存路径、MPI 时间片、I/O 格式 \\
+\bottomrule
+\end{tabularx}
+
+\vspace{2mm}
+\begin{exampleblock}{本报告的证据等级}
+\begin{tabularx}{\linewidth}{@{}p{0.18\linewidth}Y@{}}
+\ok & 本次会话刚刚运行的数值/接口测试或源码直接行为。 \\
+\infer & 从代码公式、对称性、量纲或极限推出，但尚未由真实系综验证。 \\
+\unverified & 需要真实数据、多 GPU/MPI 或更大算符规模才能回答。 \\
+\end{tabularx}
+\end{exampleblock}
+\endgroup
+\src{工作约束：当前 \code{AGENTS.md} 只允许新脚本、图和输出进入 \code{test/}；因此本稿产物也放在该目录。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{物理起点：欧氏关联函数被投影到蒸馏低模空间}
+\begin{columns}[T,totalwidth=\linewidth]
+\begin{column}{0.57\linewidth}
+\begingroup\scriptsize
+\begin{align*}
+ C_2(t)&=\sum_{\vec x}\langle\Omega|O(\vec x,t)O^\dagger(\vec0,0)|\Omega\rangle,\\
+ C_3(t_{\rm sep},\tau)&=\sum_{\vec x,\vec y}\langle\Omega|O_f(\vec x,t_{\rm sep})J(\vec y,\tau)O_i^\dagger(\vec0,0)|\Omega\rangle,\\
+ -\nabla^2(t)\,\xi^{(k)}(t)&=\lambda_k(t)\xi^{(k)}(t),\\
+ \square(t)&=V(t)V^\dagger(t),\\
+ \tau(t,t')&=V^\dagger(t)D^{-1}(t,t')V(t').
+\end{align*}
+\endgroup
+\begin{block}{物理图像}
+在大时间分离，$C_2$ 的指数衰减由基态能量主导；三点函数在 $0\ll\tau\ll t_{\rm sep}$ 时给出矩阵元。蒸馏并不改变目标观测量，而是把空间传播问题限制在 $N_{\rm ev}$ 个低模组成的子空间。
+\end{block}
+\end{column}
+\begin{column}{0.41\linewidth}
+\begingroup\scriptsize
+\begin{tabularx}{\linewidth}{@{}p{0.25\linewidth}Y@{}}
+\toprule
+\textbf{对象} & \textbf{源码/形状语义} \\
+\midrule
+$\xi^{(k)}$ & \code{(Nev,Nz,Ny,Nx,Nc)}；空间低模 \\
+$\tau$ & \code{(Nt,Nt,4,4,Nev,Nev)}；自旋/低模 \\
+VDV & 空间重叠；动量相位 \\
+VVV & 颜色 $\epsilon_{abc}$ 与空间求和 \\
+单位 & $a$ 与 \code{fm2GeV/a}：格点能量 $\to$ GeV \\
+\bottomrule
+\end{tabularx}
+\endgroup
+\end{column}
+\end{columns}
+\src{物理公式对应已有分析文档 \code{docs/lqcddb_analysis.tex:68--153}；I/O 形状与约定见 \code{lqcddb/src/lqcddb/io/write_date.py:6--36}、\code{lqcddb/src/lqcddb/eigvectors/vertex.py:595--638}。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{总工作流：每一层都把物理对象变成下一层的显式状态}
+\begin{center}
+\begin{tabular}{@{}l@{}}
+\textbf{Input: } $U_\mu(x),\;\xi^{(k)}(t),\;D^{-1},\;O_{\rm sink},O_{\rm src},J,\;a,\;\text{边界条件}$ \\
+\quad $\downarrow\quad\text{读取与后端选择：numpy/cupy；保持 }(t,\vec x,\text{spin},\text{color},\text{ev})\text{ 约定}$ \\
+\textbf{Initialize: } $\square=VV^\dagger,\;\tau=V^\dagger D^{-1}V,\;\gamma,\;\epsilon_{abc},\;\text{动量相位}$ \\
+\quad $\downarrow\quad\text{顶点层：构造 VDV/VVV；必要时加入规范链或 }\Omega\text{ 权重}$ \\
+\textbf{Symbolic plan: } $O\longmapsto\text{味道平衡}\longmapsto\text{Wick 配对}\longmapsto(-1)^{N_{\rm inv}}\longmapsto\text{einsum}$ \\
+\quad $\downarrow\quad\text{注册表按时间标签解析 peram/V/} \gamma\text{，先验证后收缩}$ \\
+\textbf{Numerical contraction: } $C=\sum_{\rm diagrams}c_d\,\operatorname{einsum}_d(\tau,\gamma,V)$ \\
+\quad $\downarrow\quad\text{源时间平均、Jackknife/Bootstrap、协方差与边界处理}$ \\
+\textbf{Output: } $E_0,\;m_{\rm eff},\;\text{GEVP 能级},\;R_{3/2},\;\text{可追溯的 shape/误差/图表证据}$
+\end{tabular}
+\end{center}
+\begin{alertblock}{工程判断}
+物理层与代码层的接口不是“传一个黑箱关联函数”，而是显式暴露低模指标、时间标签、外部动量指标和投影指标；这使错误可以在数值收缩前被定位。
+\end{alertblock}
+\src{包入口懒加载映射：\code{lqcddb/src/lqcddb/__init__.py:21--150}；主线 API：\code{README.md:1354--1447}。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{自旋与共轭：先固定约定，才能解释投影与符号}
+\begin{columns}[T,totalwidth=\linewidth]
+\begin{column}{0.43\linewidth}
+\begin{tabularx}{\linewidth}{@{}p{0.33\linewidth}Y@{}}
+\toprule
+\textbf{代码对象} & \textbf{物理约定} \\
+\midrule
+\code{gamma(0)} & 单位矩阵 $I$（不是时间方向） \\
+\code{gamma(1-4)} & 四个欧氏方向，$\gamma_\mu^2=I$ \\
+\code{gamma(5)} & $\gamma_5$；用于手征/时序共轭 \\
+$C$ & $\gamma_4\gamma_2$，电荷共轭矩阵 \\
+$P_\pm$ & $\frac12(I\pm\gamma_4)$，由 \code{gamma(0),gamma(4)} 构成 \\
+\bottomrule
+\end{tabularx}
+\end{column}
+\begin{column}{0.55\linewidth}
+\begingroup\scriptsize
+\begin{tabular}{@{}p{\linewidth}@{}}
+\textbf{Algorithm. Operator conjugation and sequential peram} \\
+\hline
+$\text{Input: }[\,|,q_1,\Gamma_1,\ldots,q_n,|\,],\;\tau$ \\
+$\text{classify }n=2\Rightarrow\text{meson};\;n=3\Rightarrow\text{baryon};\;\text{else generic}$ \\
+$\quad\text{reverse gamma chain: }(\Gamma_1\Gamma_2)^H=\Gamma_2^H\Gamma_1^H$ \\
+$\quad\text{apply }H/T/C\text{ signs and diquark }(C\Gamma)^T=\eta_\Gamma(C\Gamma)$ \\
+$\quad\text{toggle }q\leftrightarrow q^d\text{，重排夸克，返回总符号}$ \\
+$\text{for a sequential line: }\tau\leftarrow\gamma_5\tau^\dagger\gamma_5$ \\
+$\text{Output: }O^\dagger,\;\tau_{\rm seq},\;\text{可用于源/流反向传播}$
+\end{tabular}
+\endgroup
+\end{column}
+\end{columns}
+\src{矩阵定义：\code{constant/gamma_matrix.py:5--110}；$H/T/C$ 与重子共轭：\code{contraction/baroperator.py:13--209}；$\gamma_5$ 变换：\code{contraction/seqperam.py:1--5}。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{本征矢与 $\Omega$：压缩必须同时满足维度和正交约束}
+\begingroup\scriptsize
+\begin{tabular}{@{}p{0.94\linewidth}@{}}
+\textbf{Algorithm. Low-mode algebra and accelerated distillation weights} \\
+\hline
+$\text{Input: }\Xi\in\mathbb C^{N_{\rm ev}\times V},\;N_{\rm ev},N_{\rm sum},N_{\rm extract},\text{ 分块方案}$ \\
+$\text{check: }\Xi\Xi^\dagger\approx I\quad(\text{NaN/零模/归一化/正交性})$ \\
+$\text{normal: }\xi_i\leftarrow\xi_i/\sqrt{\xi_i^\dagger\xi_i}$ \\
+$\text{V1: }\text{按 block 或 interlace 求和，除以 }\sqrt{N_{\rm ev}/N_{\rm sum}}$ \\
+$\text{V2: }\text{每块随机抽取 eigenvectors，形成低成本子空间}$ \\
+$\text{V3: }\text{用 Gram--Schmidt 正交随机组合；可选择相邻/交错布局}$ \\
+$\text{V4: }\text{正交随机或 }Z_N\text{ 权重；仅 orthonormal 模式强制再检查}$ \\
+$\text{construct }\Omega_{i_1\ldots i_d}:\text{ exact}\oplus\text{block}\oplus\text{noise，按占用次数给权重}$ \\
+$\quad\text{if conserved then }d\leftarrow2;\quad\text{if }d=2\text{ 且 normal then 行归一并对称化}$ \\
+$\text{Output: }\Xi_{\rm compressed},\;\Omega\in\mathbb C^{N_{\rm ev}'\times\cdots\times N_{\rm ev}'}$
+\end{tabular}
+\endgroup
+
+\begin{exampleblock}{边界条件的物理解释}
+低模压缩降低空间自由度，但不能任意合并线性组合：归一化控制投影权重，正交性控制不同蒸馏态的独立性；$\Omega$ 则把 exact/block/noise 的统计权重显式编码。
+\end{exampleblock}
+\src{本征矢代数与四种压缩：\code{eigvectors/vector.py:14--163,166--444}；$\Omega$ 权重与守恒模式：\code{eigvectors/vertex.py:127--326}。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{顶点构造：颜色、动量、规范平行输运在同一张量路径中闭合}
+\begin{columns}[T,totalwidth=\linewidth]
+\begin{column}{0.43\linewidth}
+\begingroup\scriptsize
+\begin{align*}
+ V^{\rm VDV}_{mn}(p,t)&=\sum_{\vec x}e^{-ip\cdot x}\xi_m^\dagger(x,t)\xi_n(x,t),\\
+ V^{\rm VVV}_{klm}(p,t)&=\sum_{\vec x}e^{-ip\cdot x}\epsilon^{abc}
+ \xi_k^a\xi_l^b\xi_m^c,\\
+ V^{\rm link}_{mn}&=\sum_{\vec x}e^{-ipx}\xi_m^\dagger(x)U(x,x+\Delta)\\
+ &\quad\xi_n(x+\Delta).
+\end{align*}
+\endgroup
+\begin{block}{极限检查}
+当 $p=0$ 且 $\xi$ 正交归一，无码链 VDV 退化为重叠矩阵 $\delta_{mn}$；VVV 的颜色反对称性由 $\epsilon^{abc}$ 实现。
+\end{block}
+\end{column}
+\begin{column}{0.55\linewidth}
+\begingroup\scriptsize
+\begin{tabular}{@{}p{\linewidth}@{}}
+\textbf{Algorithm. VDV/VVV and link branches} \\
+\hline
+$\text{Input: }\Xi(t),\;p,\;U_\mu,\;\text{link\_dir},\;\text{link\_max}$ \\
+$\text{phase: }e^{-2\pi i(p_z z+p_y y+p_x x)/N_x}$ \\
+$\text{if no link: all momenta at once}$ \\
+$\quad\text{via }\code{'VN,mV,nV->mNn'}$ \\
+$\text{if conserved/time: }\Xi^\dagger U_t\Xi_{t+1}$ \\
+$\quad\text{and }\Xi_{t+1}^\dagger U_t^\dagger\Xi$ \\
+$\text{if spatial link: roll }\Xi\text{，逐步乘 }U$ \\
+$\quad\text{构造正/负位移路径；各方向平均}$ \\
+$\text{VVV: }\epsilon_{abc}\text{ 的六项带符号组合，遍历空间体积}$ \\
+$\text{Output: momentum/link/eigen tensor for registry}$
+\end{tabular}
+\endgroup
+\end{column}
+\end{columns}
+\src{顶点实现：\code{eigvectors/vertex.py:328--638}（相位、VDV/VVV、规范链）。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{Wick 自动生成：从算符 DSL 到带符号 einsum}
+\begin{center}
+\begingroup\scriptsize
+\begin{tabular}{@{}p{0.94\linewidth}@{}}
+\textbf{Table. Pseudocode for \code{wick_contraction}} \\
+\hline
+$\text{Input: }O_{\rm sink},O_{\rm src},J,\;C_{\rm pt}\in\{\text{bubble},2\text{pt},3\text{pt},4\text{pt}\},\;\text{optional prefixes}$ \\
+$\text{if }C_{\rm pt}=2\text{pt}\text{ then }J\leftarrow[\,]$ \\
+$\text{normalize: }\text{ensure each operator begins/ends with }|\text{；extract global numeric coefficient}$ \\
+$\text{expand wildcard: }q\to\{u,d,s,c,b,t\},\;l\to\{u,d\}\text{，take Cartesian products}$ \\
+$\text{for each flavor substitution do:}$ \\
+$\quad\text{count }N_q^f,N_{\bar q}^f;\;\text{if }N_q^f\ne N_{\bar q}^f\text{ then skip this substitution}$ \\
+$\quad\text{group by flavor; enumerate every permutation of the anti-quark list}$ \\
+$\quad\text{form all cross-flavor products of one-to-one pairings}$ \\
+$\quad\text{assign index pairs }ab,cd,ef,\ldots\text{ to every quark/anti-quark field}$ \\
+$\quad\text{compute }N_{\rm inv}\text{ from field positions; set }\text{sign}=(-1)^{N_{\rm inv}}\times\text{coefficient}$ \\
+$\quad\text{label intervals as }\text{tsink},\text{tsrc},\text{tcur0},\ldots\text{ according to }|\text{ boundaries}$ \\
+$\quad\text{insert gamma indices, create VDV for two fields and VVV for three fields}$ \\
+$\quad\text{build }\text{peram},\gamma,V\text{ inputs and }\text{lhs}\to\text{free indices}$ \\
+$\text{end for}$ \\
+$\text{Output: }\{\text{peram},\gamma\_\text{pos},V,\text{result\_sign},\text{result\_indx},\text{result\_name}\}$
+\end{tabular}
+\endgroup
+\end{center}
+\src{直接实现：\code{contraction/autowick.py:6--63,156--224,235--449}；费米符号是场位置逆序数，不是事后拟合参数。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{Wick 的等价图与物理符号：减少冗余但不丢掉相对相位}
+\begin{columns}[T,totalwidth=\linewidth]
+\begin{column}{0.47\linewidth}
+\begingroup\scriptsize
+\begin{tabular}{@{}p{\linewidth}@{}}
+\textbf{Table. Equivalence reduction} \\
+\hline
+$\text{Input: }\{D_i\}\text{，每图的 peram 配对与 gamma 位置}$ \\
+$\text{for each }\Gamma\text{ position: make swap/no-swap variants}$ \\
+$\quad\text{use }(C\Gamma)^T\text{ or }\Gamma^T\text{ sign for swaps}$ \\
+$\text{hash variants; Union--Find merge classes}$ \\
+$\text{BFS from canonical graph; propagate coefficients}$ \\
+$\text{if }\sum_i c_i=0\text{, skip contraction}$ \\
+$\text{Output: canonical diagram + all relative signs}$
+\end{tabular}
+\endgroup
+\end{column}
+\begin{column}{0.49\linewidth}
+\begingroup\scriptsize
+\begin{block}{质子例：最小物理检查}
+取汇端 $uud$、源端 $\bar u\bar u\bar d$ 与 $C\gamma_5$ 二夸克结构：
+\begin{center}
+\begin{tabular}{@{}lc@{}}
+\toprule
+结果 & 本次输出 \\
+\midrule
+Wick 图数 & 2 \\
+\text{sign} & $(-1,+1)$ \\
+等价类（该配置） & 2 \\
+\bottomrule
+\end{tabular}
+\end{center}
+这与两个相同 $u$ 味的置换自由度相符；是否进一步等价取决于 gamma 位置和跨输入图结构。
+\end{block}
+\begin{alertblock}{关键风险}
+通配符不是“任意代入后都有效”：源码先做逐味平衡，再丢弃不成闭合费米配对的方案。
+\end{alertblock}
+\endgroup
+\end{column}
+\end{columns}
+\src{等价图实现：\code{contraction/autowick.py:454--631}；质子/通配符数值输出来自本次 \code{python -B} 冒烟。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{动态收缩：符号计划与数值张量通过三张注册表解耦}
+\begin{center}
+\begingroup\scriptsize
+\begin{tabular}{@{}p{0.94\linewidth}@{}}
+\textbf{Table. Pseudocode for \code{dynamic_contraction}} \\
+\hline
+$\text{Input: }\{(O_{\rm sink},O_{\rm src},J)\},\;\text{PeramRegistry},\text{VRegistry},\text{GammaRegistry}$ \\
+$\text{register: }(\text{flavor},[t_q,t_{\bar q}])\mapsto\tau;\;(V\_\text{name},t)\mapsto V;\;\Gamma\_\text{name}\mapsto\Gamma$ \\
+$\text{plan key: }(O,C_{\rm pt},\text{prefixes},\text{equivalence},\text{ignore\_dis},\text{Projection},Oindex)$ \\
+$\text{if key cached then return plan}$ \\
+$\text{run }\code{wick_contraction}\text{，collect all peram/gamma/V names and shape metadata}$ \\
+$\quad\text{if any peram has }t_q=t_{\bar q}\text{ then mark disconnected；默认 }\text{ignore\_dis}=\text{True}$ \\
+$\text{if use\_equivalence then Union--Find/BFS produce canonical plan entries}$ \\
+$\text{validate: resolve every peram/V/gamma before any numerical contraction}$ \\
+$\text{calculate(entry): }c_{\rm total}=\sum_{d\in\text{class}}c_d$ \\
+$\quad\text{if }|c_{\rm total}|<10^{-12}\text{ then return }0$ \\
+$\quad\text{resolve tensors; optionally rewrite }Oindex\text{ and append two-sided Projector}$ \\
+$\quad\text{check tensor count = einsum comma segments; execute cached contraction}$ \\
+$\text{calculate\_all: sum every canonical result and return complete correlator tensor}$
+\end{tabular}
+\endgroup
+\end{center}
+\src{计划与过滤：\code{contraction/dynamic.py:576--1069}；张量解析/投影/收缩：\code{dynamic.py:1076--1195}；注册表：\code{dynamic.py:88--324,1252--1458}。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{缓存与投影：数值效率必须服从指标语义}
+\begin{columns}[T,totalwidth=\linewidth]
+\begin{column}{0.50\linewidth}
+\begingroup\scriptsize
+\begin{tabular}{@{}p{\linewidth}@{}}
+\textbf{Table. Pseudocode for cached tensor contraction} \\
+\hline
+$\text{Input: }s=\texttt{einsum string},\;T_1,\ldots,T_n,\;\text{optimize}$ \\
+$\text{key}\leftarrow(s,(\text{shape}(T_i))_i,\text{optimize key})$ \\
+$\text{if expression cache hit then return expression}(T_1,\ldots,T_n)$ \\
+$\text{validate: count/rank/shared dimensions; broadcast-1}$ \\
+$\text{create zero-memory broadcast placeholders}$ \\
+$\text{try }\{\text{auto},\text{greedy},\text{optimal},\text{dp}\};\text{ minimize FLOPs/peak}$ \\
+$\text{compile contract expression and cache it}$ \\
+$\text{Output: }\operatorname{contract}(s,T_1,\ldots,T_n)$
+\end{tabular}
+\endgroup
+\end{column}
+\begin{column}{0.46\linewidth}
+\begingroup\scriptsize
+\begin{align*}
+ C_{\rm proj}&=P_{\rm sink}\,C\,P_{\rm src},\\
+ P_\pm&=\frac12(I\pm\gamma_4),\\
+ \text{default output}&=XY+\text{external labels},\\
+ \text{explicit }Oindex&\Rightarrow\text{projective labels may be}\notag\\
+ &\quad\text{internally summed}.
+\end{align*}
+\begin{block}{为什么这是物理相关的工程设计？}
+einsum 右端的自由指标就是关联函数的外部动量、流或自旋轴；缓存键包含 shape，避免把同一符号表达式错误复用到不同低模维度。投影的汇/源两侧不应在字符串层面混为一谈。
+\end{block}
+\endgroup
+\end{column}
+\end{columns}
+\src{缓存与形状守卫：\code{base/base_functions.py:244--441}；双侧投影：\code{contraction/dynamic.py:364--425,1166--1194}。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{统计观测量：从组态样本到能量、能级与矩阵元}
+\begingroup\scriptsize
+\begin{tabularx}{\linewidth}{@{}p{0.20\linewidth}Y p{0.27\linewidth}@{}}
+\toprule
+\textbf{算法} & \textbf{实现公式/状态更新} & \textbf{物理解释与边界} \\
+\midrule
+Jackknife & $x_{(k)}=(\sum_i x_i-x_k)/(N-1)$；$\sigma=\sqrt{N-1}\,\mathrm{std}(x_{(k)})$；可沿指定轴构造外积协方差 & 保留组态相关的重采样结构；$N>1$ 是必要条件 \\
+Bootstrap & 第 0 样本是全体均值，其余 $N-1$ 个样本对 $M$ 个组态有放回抽样 & 随机数未在接口中固定 seed；严格复现需调用方控制后端 RNG \\
+$m_{\rm eff}^{\log}$ & $aE_{\rm eff}=\log[C(t)/C(t+1)]$；$E_{\rm eff}$ 乘 $0.197/a$ 转 GeV & 大 $t$ 平台趋向基态；源码要求实数 sample \\
+GEVP & $C(t)v_n=\lambda_n(t,t_0)C(t_0)v_n$；$\lambda_n\sim e^{-E_n(t-t_0)}$ & 先厄米化并取实部；需要 $C(t_0)$ 正定且 $t>t_0$ 的物理窗口 \\
+三点比值 & $R=C_3/C_2^F(t_{\rm sep})\sqrt{\frac{C_2^I(t_{\rm sep}-\tau)C_2^F(\tau)C_2^F(t_{\rm sep})}{C_2^F(t_{\rm sep}-\tau)C_2^I(\tau)C_2^I(t_{\rm sep})}}$ & 在噪声下对根号负值截断为 0，并最终取实部；这是数值保护而非新的物理定律 \\
+\bottomrule
+\end{tabularx}
+\endgroup
+\src{Jackknife/Bootstrap：\code{analyse/analyse.py:325--518}；有效质量：\code{analyse.py:521--569}；ratio/GEVP：\code{analyse.py:631--888}。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{并行、I/O 与规范场平滑：把大规模计算的边界显式化}
+\begingroup\scriptsize
+\begin{tabularx}{\linewidth}{@{}p{0.18\linewidth}p{0.30\linewidth}Y@{}}
+\toprule
+\textbf{模块} & \textbf{实现状态} & \textbf{物理/工程判据} \\
+\midrule
+后端 & 全局 \code{set_backend}；数组经 \code{get_backend} & 后端状态非线程安全；GPU 路径需实机验证 \\
+MPI & 网格 $[G_x,G_y,G_z,G_t]$；时间片按 $t\bmod\text{size}$ 轮询；支持 Gather/Scatter/TScatter/Transport & 轮询保证时间索引可逆；非整除轴走 TScatter，通信结果仍需 shape 检查 \\
+I/O & eigenvec 二进制重组为复数；peram 为 $(t_s,t_k,d_s,d_k,ev_s,ev_k)$；ASCII 输出含 $(N_{\rm sample},T,\text{complex},L,1)$ 头 & 文件布局是外部数据契约；读取成功不等于规范/端序/组态物理正确 \\
+Stout & 空间链迭代：staple $\to Q\in\mathfrak{su}(3)\to\exp(Q)U$；时间方向不更新 & 应保持 SU(3) 幺正性；恒等场是固定点的极端检验 \\
+Roofline & $I=\text{FLOPs}/\text{Bytes}$；比较计算峰值与有效带宽并给切分建议 & 是规划模型，不是运行时间实测；硬件预设与实际 kernel 利用率需分开表述 \\
+\bottomrule
+\end{tabularx}
+\endgroup
+\src{后端：\code{base/backend.py:1--31}；MPI：\code{base/mpi_init.py:160--199,346--356,432--487,889--1010}；I/O：\code{io/write_date.py:6--36,38--72}；Stout：\code{base/smear_gauge.py:5--74}；Roofline：\code{contraction/contractadviser.py:1--15,1271--1293}。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{本次可复现实测：接口链通过，但不是系综物理结果}
+\begingroup\scriptsize
+\begin{tabularx}{\linewidth}{@{}p{0.36\linewidth}p{0.20\linewidth}Y@{}}
+\toprule
+\textbf{检查} & \textbf{输出} & \textbf{解释} \\
+\midrule
+DR $\gamma$ square / anticommutator & $0.0 / 0.0$ & 四个欧氏方向的代数约定自洽 \\
+pion 合法共轭源 & 1 图；sign $=-1$ & 味道平衡与单一介子配对通过 \\
+proton 合法共轭源 & 2 图；sign $=(-1,+1)$ & 两个同味 $u$ 置换被显式枚举 \\
+vector / VDV / VVV & \code{True}；$(1,3,3)$；$(1,3,3,3)$ & 正交检查、顶点输出形状和有限体积颜色和通过 \\
+$\Omega$ 合法配置 & $(7,7)$；全为有限数 & $N_{\rm sum}=4,N_{\rm extract}=2,d=2$ 满足实现约束 \\
+dynamic 2pt & missing $=[]$；结果 shape $(2,2)$ & 三注册表解析、计划、缓存 einsum 均走通 \\
+统计/谱 & JK $(5,4)$；BS $(8,4)$；GEVP $(2,5)$ & 重采样与广义本征值接口可运行 \\
+合成指数 & $m_{\rm eff}=0.788$ GeV & 输入 $e^{-0.4t}$、$a=0.1$ fm，$0.4\times0.197/0.1$ 的量纲转换正确 \\
+形状守卫 & 错配输入抛出 ValueError & 错误在收缩前暴露而非静默广播 \\
+\bottomrule
+\end{tabularx}
+\begin{exampleblock}{复现条件}
+\code{PYTHONPATH=lqcddb/src python -B}；numpy 2.1.2、scipy 1.14.1、opt\_einsum 3.4.0、cupy 14.0.1、mpi4py 4.1.1；数据均为本次命令内生成的合成数组。
+\end{exampleblock}
+\endgroup
+\src{本次会话运行的单进程合成冒烟；未读取外部系综数据，因此不声称质量谱、矩阵元或 GPU 加速已被真实数据确认。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{风险与修复优先级：哪些是文档契约，哪些是数值稳定性}
+\begingroup\scriptsize
+\begin{tabularx}{\linewidth}{@{}p{0.17\linewidth}p{0.34\linewidth}p{0.18\linewidth}Y@{}}
+\toprule
+\textbf{优先级} & \textbf{证据与根因} & \textbf{状态} & \textbf{建议验收} \\
+\midrule
+高 & README 的 pion 示例把汇/源都写成 $u^d\,\gamma_5\,d$；源码逐味计数后返回空字典。改用 \code{conjugate_operator} 得到源端 $d^d\,\gamma_5\,u$ 才生成 1 图。 & \unverified{需文档修正} & 为每个公开算符示例添加“先厄米共轭”的可执行测试。 \\
+高 & 恒等规范场是 Stout 的物理固定点，但 \code{smear_gauge.py:31} 计算 $\arccos(c_0/c_{0,\max})$ 时 $c_{0,\max}=0$，本次输出 NaN。 & \textcolor{warn}{已复现风险} & 在零 $Q$ 或零分母分支直接令更新为恒等，验证 SU(3) 幺正性。 \\
+中 & \code{ratio_3pt} 对根号内负数用 \code{maximum(...,0)}，再取实部。 & \infer{数值保护} & 在结果中记录被截断比例，并区分噪声异常与物理负谱。 \\
+中 & Bootstrap 使用后端随机抽样，默认不传 seed。 & \infer{复现风险} & 将 RNG 状态/seed 纳入实验环境快照，报告误差时保留抽样配置。 \\
+低 & Roofline 的复杂度、硬件峰值和最大中间量是模型/产品规格；尚未做真实 kernel benchmark。 & \unverified{未测} & 对同一 einsum 记录 wall time、峰值显存和模型预测的偏差。 \\
+\bottomrule
+\end{tabularx}
+\begin{alertblock}{范围声明}
+本报告只审阅和记录，没有直接修复以上问题；这样不会把“报告发现”与“实现已修复”混淆。
+\end{alertblock}
+\endgroup
+\src{README 算符示例：\code{lqcddb/README.md:61--160}；算符共轭：\code{baroperator.py:186--254}；Stout：\code{smear_gauge.py:22--73}；ratio：\code{analyse.py:709--717,773--800}。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}{阶段结论与下一步：先守住物理不变量，再扩展算力规模}
+\begin{columns}[T,totalwidth=\linewidth]
+\begin{column}{0.48\linewidth}
+\begin{exampleblock}{已经完成的认识}
+\begin{tabularx}{\linewidth}{@{}p{0.30\linewidth}Y@{}}
+物理结构 & 蒸馏投影、peram、VDV/VVV、Wick、$C_2/C_3$ 的对象关系已闭合。 \\
+算法结构 & 符号计划、等价图、注册表、缓存收缩和统计层边界清楚。 \\
+证据结构 & 代数、shape、接口 guard 与合成谱的最小链已实测。 \\
+\end{tabularx}
+\end{exampleblock}
+\end{column}
+\begin{column}{0.48\linewidth}
+\begin{alertblock}{下一阶段可验收产物}
+\begin{tabularx}{\linewidth}{@{}p{0.27\linewidth}Y@{}}
+P0 文档契约 & 修正 pion/proton 示例，并以共轭算符自动生成源端。 \\
+P1 稳定性 & Stout 零 $Q$ 固定点、NaN、SU(3) 幺正性和边界链测试。 \\
+P2 物理结果 & 选定真实组态，比较 $C_2$ 平台、色散关系、$C_3/C_2$ 平台与协方差。 \\
+P3 性能 & 同一收缩路径的 CPU/GPU/MPI 计时、峰值显存与 Roofline 偏差表。 \\
+\end{tabularx}
+\end{alertblock}
+\end{column}
+\end{columns}
+\vspace{2mm}
+\begin{center}
+\textbf{决策建议：}批准“物理边界测试 → 小规模真实系综 → 性能基准”的顺序；在三项证据齐全前，不把当前包标记为生产级物理结果生成器。
+\end{center}
+\src{当前判断依据：源码审阅 + 本次合成冒烟；真实系综、全 MPI、多强子 $4$pt 规模和 wall-time 基准仍为未验证。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\appendix
+\begin{frame}[fragile]{附录 A1：费米符号计算的源码证据（直引）}
+\lstinputlisting[firstline=156,lastline=173]{../lqcddb/src/lqcddb/contraction/autowick.py}
+\src{直接引用 \code{contraction/autowick.py:156--173}；伪代码是结构压缩，源码片段保留实际实现。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}[fragile]{附录 A2：合法配对生成的源码证据（直引）}
+{\lstset{basicstyle=\ttfamily\tiny}\lstinputlisting[firstline=175,lastline=198]{../lqcddb/src/lqcddb/contraction/autowick.py}}
+\src{直接引用 \code{contraction/autowick.py:175--198}；逐味平衡与笛卡尔积逻辑可由源码核查。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}[fragile]{附录 B1：缓存入口的源码证据（直引）}
+\lstinputlisting[firstline=347,lastline=368]{../lqcddb/src/lqcddb/base/base_functions.py}
+\src{直接引用 \code{base/base_functions.py:347--368}；缓存键的构造逻辑保留在源码片段中。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}[fragile]{附录 B2：缓存收缩的源码证据（直引）}
+\lstinputlisting[firstline=369,lastline=390]{../lqcddb/src/lqcddb/base/base_functions.py}
+\src{直接引用 \code{base/base_functions.py:369--390}；收缩表达式的缓存复用可由源码核查。}
+\end{frame}
+
+% -----------------------------------------------------------------
+\begin{frame}[fragile]{附录 B3：重采样样本计算的源码证据（直引）}
+\lstinputlisting[firstline=354,lastline=364]{../lqcddb/src/lqcddb/analyse/analyse.py}
+\src{直接引用 \code{analyse/analyse.py:354--364}；统计样本的计算路径可由源码核查。}
+\end{frame}
+
+\end{document}
