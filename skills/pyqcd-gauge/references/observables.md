@@ -35,6 +35,11 @@ result = gauge.loop([[path_xt], [path_yt], [path_zt], [path_xt]], [1, 1, 1, 0])
 对象不能直接 `trace`：转 host 后 reshape 为 `(...,Nc,Nc)`，再取 `Re Tr`。
 
 ```python
+import numpy as np
+from pyquda_utils import core
+
+i = 0       # XT；1/2 分别对应 YT/ZT
+Nc = 3      # SU(3)
 matrix = result[i].getHost().reshape(-1, Nc, Nc)
 re_tr = np.trace(matrix, axis1=-2, axis2=-1).real
 global_sum = core.gatherLattice(re_tr, [-1, -1, -1, -1])
