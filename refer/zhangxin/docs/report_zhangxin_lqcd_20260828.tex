@@ -1,0 +1,632 @@
+% ============================================================
+% zhangxin 格点 QCD 算法实现 — 物理 + 代码展示
+% 编译：xelatex 两遍；交付前 Overfull=0, Float too large=0
+% ============================================================
+\documentclass[UTF8,aspectratio=169,11pt]{ctexbeamer}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{hyperref}
+\setmonofont{DejaVu Sans Mono}[Scale=MatchLowercase]
+
+\definecolor{primary}{HTML}{17365D}
+\definecolor{accent}{HTML}{1F77B4}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{warning}{HTML}{C55A11}
+\definecolor{muted}{HTML}{5B6573}
+\definecolor{panel}{HTML}{F4F7FA}
+\definecolor{linegray}{HTML}{CBD5E1}
+\definecolor{good}{HTML}{EAF5EE}
+\definecolor{warnbg}{HTML}{FFF4E8}
+
+\setbeamersize{text margin left=0.55cm,text margin right=0.55cm}
+\setlength{\emergencystretch}{2em}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{blocks}[rounded][shadow=false]
+\setbeamercolor{normal text}{fg=black!86,bg=white}
+\setbeamercolor{structure}{fg=primary}
+\setbeamercolor{frametitle}{fg=primary,bg=white}
+\setbeamercolor{block title}{fg=primary,bg=panel}
+\setbeamercolor{block body}{fg=black!86,bg=panel}
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+\setbeamerfont{normal text}{size=\normalsize}
+\setbeamertemplate{frametitle}{\vskip0.12cm\insertframetitle\par\vskip0.08cm}
+\setbeamertemplate{footline}{%
+  \hbox{\begin{beamercolorbox}[wd=\paperwidth,ht=2.3ex,dp=0.9ex,
+    leftskip=0.55cm,rightskip=0.55cm]{author in head/foot}%
+    \scriptsize\color{muted}\insertshortauthor\hfill
+    \insertshorttitle\hfill\insertframenumber/\inserttotalframenumber
+  \end{beamercolorbox}}}
+
+\newcommand{\source}[1]{%
+  \vspace{0.06em}\par{\raggedright\scriptsize\color{muted}来源：#1\par}}
+\newcommand{\verified}{\textcolor{evidence}{确证}}
+\newcommand{\inferred}{\textcolor{accent}{推断}}
+\newcommand{\unverified}{\textcolor{warning}{未验证}}
+\newcommand{\codepath}[1]{\nolinkurl{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  backgroundcolor=\color{panel},frame=single,
+  breaklines=true,breakatwhitespace=false,keepspaces=true,
+  columns=flexible,firstnumber=auto,
+  keywordstyle=\color{primary}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{accent},
+  numbers=left,numberstyle=\tiny\color{muted},
+  literate={γ}{{$\gamma$}}1 {μ}{{$\mu$}}1 {ν}{{$\nu$}}1
+            {ε}{{$\varepsilon$}}1 {ξ}{{$\xi$}}1 {α}{{$\alpha$}}1
+            {δ}{{$\delta$}}1
+}
+
+\tikzset{
+  flow/.style={draw=accent,fill=accent!8,rounded corners=2pt,align=center,
+    minimum height=0.66cm,text width=2.05cm,font=\small},
+  state/.style={draw=primary,fill=primary!7,rounded corners=2pt,align=center,
+    minimum height=0.62cm,text width=2.45cm,font=\small},
+  decision/.style={draw=warning,fill=warning!10,diamond,aspect=2,align=center,
+    inner sep=1.5pt,font=\small},
+  arrow/.style={-{Latex[length=2mm]},draw=primary,semithick},
+  relation/.style={-{Latex[length=1.7mm]},draw=muted,thin,dashed},
+  labelstyle/.style={font=\scriptsize,inner sep=1.5pt,fill=white,text=muted}
+}
+
+\title[zhangxin 格点 QCD 实现]{zhangxin 格点 QCD 算法实现}
+\subtitle{从 Clover 场强、蒸馏收缩到胶子 quasi-PDF 的物理—代码映射}
+\author[代码—物理解析]{代码—物理交叉审阅}
+\institute{PyQCD / lattice-pdf：\codepath{refer/zhangxin}}
+\date{2026 年 8 月 28 日}
+
+\begin{document}
+
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+% S1：结论先行
+\begin{frame}[t]{主链已经可读、可运行；物理闭环仍需补齐重整化与匹配}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.30\textwidth}
+      \begin{block}{\verified\ 已实现}
+        两套工作流共享
+        \(F_{\mu\nu}\)、Wilson 线、VVV、Wick 收缩、宇称投影；生产版提供
+        CuPy/MPI/CLI。
+      \end{block}
+    \end{column}
+    \begin{column}{0.30\textwidth}
+      \begin{block}{\verified\ 局部证据}
+        12 个 Python 文件可解析；小格点上两套实现的场强、对偶、OPE、相位逐项
+        \(\max|\Delta|=0\)。
+      \end{block}
+    \end{column}
+    \begin{column}{0.30\textwidth}
+      \begin{block}{\unverified\ 物理结论}
+        Fourier 中明确忽略重整化；匹配核仍是 LO 占位。当前目录没有生产输入，
+        未宣称真实 PDF 数值。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \vspace{0.18cm}
+  \begin{center}
+    \begin{tabularx}{0.94\textwidth}{@{}lY@{}}
+      \toprule
+      当前判断 & 代码层已形成“规范场 \(\to\) 算子 \(\to\) 强子 \(\to\) 准分布”的骨架，
+      但只能把最终 PDF 称为\textbf{算法输出接口}，不能称为已完成的物理结果。\\
+      下一项验收 & 在真实多组态数据上闭合组态级 Jackknife，并补入与方案一致的重整化、
+      NLO 匹配及连续性/归一化检验。\\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \source{代码：\codepath{gluon_pdf_full_workflow.py:1-30,1144-1223}；本次合成校验输出。}
+\end{frame}
+
+% S2：目标与判据
+\begin{frame}[t]{目标不是“画一条曲线”，而是把非局域胶子矩阵元变成可审计输出}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{block}{物理问题}
+        \footnotesize
+        LaMET 用有限空间动量 \(P_z\) 的等时非局域矩阵元逼近光锥分布：
+        \[
+          h(z,P_z)=\langle P|\,O(z)\,|P\rangle,
+          \qquad \tilde g(x,P_z)\ \xrightarrow[P_z\to\infty]{}\ g(x,\mu).
+        \]
+        \(z\) 是 Wilson 线长度；\(x\) 是 Fourier 共轭的动量分数。
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \scriptsize
+      \begin{tabularx}{\linewidth}{@{}lYY@{}}
+        \toprule
+        验收层 & 必须保持 & 代码证据 \\
+        \midrule
+        对称性 & \(F_{\mu\nu}\) 反对称；\(\widetilde F\) 为 Hodge 对偶；\(P_\pm^2=P_\pm\) & DR/\(\varepsilon\) 构造 \\
+        规范结构 & 非局域两端由 \(W(z\leftarrow0)\)、\(W(0\leftarrow z)\) 连接 & OPE 六步循环 \\
+        统计结构 & 组态删除、plateau、协方差与误差可追溯 & Jackknife/ratio \\
+        数值边界 & \(P=0\)、零场强、\(x=0\)、\(N_{\rm ev}\) 截断不崩溃 & 合成极限测试 \\
+        物理闭环 & 重整化、匹配、真实系综和归一化可复现 & \unverified \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{数组与目标：\codepath{gluon_pdf_full_workflow.py:5-22,65-131}；生产张量约定：\codepath{gluon_pdf_workflow.py:468-480}。}
+\end{frame}
+
+% S3：总览流程
+\begin{frame}[t]{五个计算层把输入组织成可定位的中间量，而不是黑箱调用}
+  \centering
+  \small
+  \begin{tabularx}{0.96\textwidth}{@{}lYlY@{}}
+    \toprule
+    层 & 输入 \(\to\) 处理 \(\to\) 输出 & 物理对象 & 主要落点 \\
+    \midrule
+    1. 规范场 & ILDG 二进制 \(\to\) 复数链接 \(U_\mu(x)\) & \(SU(3)\) 平行输运 & \codepath{read_gauge_config} \\
+    2. 胶子算子 & plaquette \(\to\) Clover/\(\widetilde F\) \(\to\) Wilson 线迹 & \(O(z)\) & \codepath{plaquette_clover}, \codepath{operators_new_z0_mu2} \\
+    3. 强子源汇 & 本征矢 \(+\) perambulator \(\to\) VVV/Wick & \(C_2(t_{\rm snk},t_{\rm src})\) & \codepath{compute_VVV}, \codepath{run_proton_2pt} \\
+    4. 矩阵元 & \(C_3/C_2\) 或 OPE 时间平均 \(\to\) plateau/JK & \(h(z,P_z)\) & \codepath{extract_matrix_element} \\
+    5. 重构 & \(h(z)\xrightarrow{\sin}\widetilde g(x)\xrightarrow{C_{gg}}g(x)\) & 准 PDF / 光锥 PDF 接口 & \codepath{fourier_transform_to_quasi_pdf} \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.22cm}
+  \begin{tikzpicture}[node distance=0.26cm and 0.22cm]
+    \node[flow] (a) {规范链接\\\(U_\mu\)};
+    \node[flow,right=of a] (b) {Clover +\\Wilson 线};
+    \node[flow,right=of b] (c) {VVV +\\Wick + \(P_\pm\)};
+    \node[flow,right=of c] (d) {\(h(z,P_z)\)\\+ 统计};
+    \node[flow,right=of d] (e) {\(\widetilde g\)\\/ \(g\)};
+    \draw[arrow] (a) -- (b);
+    \draw[arrow] (b) -- (c);
+    \draw[arrow] (c) -- (d);
+    \draw[arrow] (d) -- (e);
+  \end{tikzpicture}
+  \source{流程编排：\codepath{gluon_pdf_full_workflow.py:1293-1301,1688-1735}；图为代码依赖关系示意。}
+\end{frame}
+
+% S4：Clover
+\begin{frame}[t]{Clover 场强把局部 Wilson 环的反厄米部分映射为连续场强}
+  \begin{align*}
+    P_{\mu\nu}(x)&=U_\mu(x)U_\nu(x+\hat\mu)U_\mu^\dagger(x+\hat\nu)U_\nu^\dagger(x),\\
+    F_{\mu\nu}(x)&=-\frac{i}{8}\sum_{p\in\rm clover}(P_p-P_p^\dagger),\qquad
+    \widetilde F_{\mu\nu}=\frac12\varepsilon_{\mu\nu\rho\sigma}F^{\rho\sigma}.
+  \end{align*}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.43\textwidth}
+      \begin{block}{物理检查}
+        \(U_\mu=1\) 时每个 plaquette 为单位元，反厄米部分为零，故
+        \(F=\widetilde F=0\)。代码在 \(a=1,g_0=1\) 下省略显式
+        \(1/(a^2g_0)\) 归一化，物理归一化需在后续方案中确认。
+      \end{block}
+    \end{column}
+    \begin{column}{0.53\textwidth}
+      \scriptsize
+      \begin{tabularx}{\linewidth}{@{}lY@{}}
+        \toprule
+        伪代码（示意） & 代码—物理动作 \\
+        \midrule
+        \(\text{Input: }U_\mu(x),\ (\mu,\nu)\) & 读入带颜色矩阵的链接场 \\
+        \(\text{Initialize: }Q\gets0\) & 四个定向叶的和 \\
+        \(P_1,\ldots,P_4\gets\) 四个定向 plaquette & {\tiny \(P_{\mu\nu},P_{\nu,-\mu},P_{-\mu,-\nu},P_{-\nu,\mu}\)} \\
+        \(Q\gets\sum_{i=1}^4(P_i-P_i^\dagger)\) & 反厄米投影 \\
+        \(F_{\mu\nu}\gets-iQ/8\) & 场强输出；重复所有指标对 \\
+        \(\widetilde F\gets\varepsilon\cdot F\) & Hodge 对偶，供 helicity/算子组合使用 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{实现：\codepath{gluon_pdf_full_workflow.py:290-329,332-461,490-514}；\verified\ 零场强与对偶反对称性合成测试。}
+\end{frame}
+
+% S5：OPE
+\begin{frame}[t]{Wilson 线把两个不同位置的场强接成规范协变的非局域算子}
+  \begin{equation*}
+    O_{\mu\nu,\mu_2\nu_2}(z)=
+    \operatorname{Tr}_c\!\left[
+      F_{\mu\nu}(z)W(z\leftarrow0)
+      \widetilde F_{\mu_2\nu_2}(0)W(0\leftarrow z)
+    \right],
+    \qquad
+    W(0\to z)=\prod_{k=0}^{z-1}U_z(k).
+  \end{equation*}
+  \begin{center}
+    \small
+    \begin{tabularx}{0.94\textwidth}{@{}lY@{}}
+      \toprule
+      单列伪代码（\(z\) 方向） & 规范/数值含义 \\
+      \midrule
+      \(\text{Input: }U,F,\widetilde F,\delta_z,\mu\nu,\mu_2\nu_2\) & 指定端点和 Lorentz 结构 \\
+      \(F_z\gets\operatorname{roll}(F_{\mu\nu},-\delta_z)\) & 把场强从 0 平移到 \(z\) \\
+      \(\text{for }k=\delta_z-1,\ldots,0:\quad F_z\gets F_zU_z^\dagger(k)\) & 构造 \(W(z\leftarrow0)\) \\
+      \(F_z\gets F_z\widetilde F_{\mu_2\nu_2}(0)\) & 在源点插入第二个场强 \\
+      \(\text{for }k=0,\ldots,\delta_z-1:\quad F_z\gets F_zU_z(k)\) & 构造 \(W(0\leftarrow z)\) \\
+      \(s(t,\mathbf x)\gets\operatorname{Tr}_c F_z\) & 颜色迹消去开放颜色指标 \\
+      \(O(t,z)\gets\sum_{\mathbf x}s(t,\mathbf x)\) & 空间求和，保留时间与长度 \\
+      \(\text{Output: }O\in\mathbb C^{N_t\times N_z}\) & 可供矩阵元提取的坐标空间数据 \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \source{实现：\codepath{gluon_pdf_full_workflow.py:521-652}；生产模式：\codepath{gluon_pdf_workflow.py:659-816,1222-1302}。}
+\end{frame}
+
+% S6：distillation
+\begin{frame}[t]{OPE 的模式与变体决定使用哪一种物理算子}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.56\textwidth}
+      \scriptsize
+      \begin{tabularx}{\linewidth}{@{}lYY@{}}
+        \toprule
+        模式/函数 & 算子输入 & 适用范围与输出 \\
+        \midrule
+        \codepath{unpol} & \(\texttt{pla\_tilde=pla}\) & 生产版非极化 \(F\,W\,F\,W\) 组合 \\
+        \codepath{helicity} & \(\texttt{pla\_tilde=Hodge(pla)}\) & 含对偶场强的螺旋度通道 \\
+        \codepath{new_z0_mu2_xy} & 保留两个横向坐标 & 输出 \((N_t,N_x,N_x)\)，面向横向分辨 \\
+        \codepath{FF_z0} & 无 Wilson 线，\(z\_dir=2\) & 仅规范固定条件下的廉价变体 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+    \begin{column}{0.38\textwidth}
+      \begin{block}{必须统一的接口}
+        单脚本协调器的“unpolarized”实现直接传入 \(\widetilde F\)，而生产版由
+        \codepath{mode} 切换。两者不能只因数值函数同形就视为物理通道相同。
+      \end{block}
+      \begin{block}{边界}
+        \codepath{operators_FF_z0} 没有 Wilson 线且硬编码 z 方向；误用于未规范固定的组态会破坏规范不变性。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{生产模式：\codepath{gluon_pdf_workflow.py:659-816,978-1025,1222-1302}；单脚本通道：\codepath{gluon_pdf_full_workflow.py:1369-1426}。}
+\end{frame}
+
+% S7：distillation
+\begin{frame}[t]{Distillation 将三夸克空间结构压缩到 Laplace 本征子空间}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.42\textwidth}
+      \small
+      \begin{equation*}
+        \Phi_{abc}(P)=\sum_{\mathbf x}e^{-iP\cdot x}
+        \varepsilon_{ijk}v_i^{\,a}(\mathbf x)v_j^{\,b}(\mathbf x)v_k^{\,c}(\mathbf x).
+      \end{equation*}
+      \begin{block}{对象映射}
+        \(v_i^a\)：颜色 \(i\) 的 Laplace 本征矢；
+        \(a,b,c\)：截断本征模；
+        \(\tau\)：本征子空间中的夸克传播子；
+        \(\Phi\)：带动量投影的 baryon block。
+      \end{block}
+      \begin{block}{显存策略}
+        \(\mathbf x\) 按 \(x\)-层切片，单层累加六个颜色置换；
+        计算量的主张来自代码结构，真实吞吐未在本目录测量。
+      \end{block}
+    \end{column}
+    \begin{column}{0.54\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}lY@{}}
+        \toprule
+        单列伪代码 & 代码—物理动作 \\
+        \midrule
+        \(\text{Input: }v^a_i(\mathbf x),P,N_{\rm ev}\) & 每个时间片的本征矢与动量 \\
+        \(\phi(\mathbf x)\gets e^{-iP\cdot x}\) & 动量投影/动量涂抹相位 \\
+        \(\Phi\gets0\) & 子空间三指标张量 \\
+        \(\text{for each }x\text{-layer}:\) & 控制中间张量显存 \\
+        \quad \(\Phi\mathrel{+}=+\,(012+120+201)\) & \(\varepsilon_{ijk}\) 偶排列 \\
+        \quad \(\Phi\mathrel{-}=\ \,(021+102+210)\) & \(\varepsilon_{ijk}\) 奇排列 \\
+        \(\text{Output: }\Phi(t)\in\mathbb C^{N_{\rm ev}^3}\) & 供强子 Wick 收缩复用 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{实现：\codepath{gluon_pdf_full_workflow.py:659-784}；GPU/分片版：\codepath{gluon_pdf_workflow.py:825-933}；\verified\ VVV 对照显式六置换的误差为 \(7.994\times10^{-15}\)。}
+\end{frame}
+
+% S7：Wick + parity
+\begin{frame}[t]{质子两点函数由直接图减交换图，并用宇称与反周期边界收尾}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.46\textwidth}
+      \footnotesize
+      \begin{equation*}
+        C_2=\underbrace{\Phi_{\rm snk}\,\tau\,(\Gamma\tau\Gamma)\,\tau\,\Phi_{\rm src}^*}_{\rm direct}
+        -\underbrace{\Phi_{\rm snk}\,\tau\,(\Gamma\tau\Gamma)\,\tau\,\Phi_{\rm src}^*}_{\rm exchange},
+      \end{equation*}
+      \begin{equation*}
+        P_\pm=\frac{1}{2}(\gamma_0\pm\gamma_4),\qquad
+        C_2^{\pm}=P_\pm:C_2.
+      \end{equation*}
+      \begin{block}{物理图像}
+        \(\varepsilon_{ijk}\) 负责重子颜色反对称；Wick 定理产生费米子交换负号；
+        重子含三个费米场，时间反周期边界使 backward 方向与另一宇称分量关联。
+      \end{block}
+    \end{column}
+    \begin{column}{0.50\textwidth}
+      \small
+      \begin{tabularx}{\linewidth}{@{}lY@{}}
+        \toprule
+        单列伪代码 & 代码—物理动作 \\
+        \midrule
+        \(\text{Input: }\Phi(t),\tau(t,t_0),\Gamma\) & 读入 VVV 与 perambulator \\
+        \(K\gets\Gamma\tau\Gamma\) & Dirac 插值结构夹层 \\
+        \(D\gets\operatorname{contract}(\Phi,\tau,K,\tau,\Phi^*)\) & 直接费曼图 \\
+        \(X\gets\operatorname{contract}(\Phi,\tau,K,\tau,\Phi^*)\) & 交换指标配对 \\
+        \(C_2^{\rm Dirac}\gets D-X\) & 费米反对易符号 \\
+        \(C_2^\pm\gets P_\pm:C_2^{\rm Dirac}\) & 正/负宇称投影 \\
+        \(t_{\rm snk}<t_{\rm src}\Rightarrow C_2^+\gets-C_2^+\) & pp 反周期符号 \\
+        \(t_{\rm snk}>t_{\rm src}\Rightarrow C_2^-\gets-C_2^-\) & pm 反周期符号，输出 \((N_t,N_t)\) \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{Wick：\codepath{gluon_pdf_full_workflow.py:787-846}；投影/边界：\codepath{gluon_pdf_workflow.py:936-970}；协调器：\codepath{gluon_pdf_full_workflow.py:1478-1522}。}
+\end{frame}
+
+% S8：统计
+\begin{frame}[t]{统计层的职责是隔离激发态与组态涨落，而不是替代物理重整化}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.44\textwidth}
+      \scriptsize
+      \begin{equation*}
+        \bar\theta_{(i)}=\frac{S-x_i}{N-1},\qquad
+        \sigma_{\rm JK}^2=\frac{N-1}{N}
+        \sum_i\left(\bar\theta_{(i)}-\bar\theta\right)^2.
+      \end{equation*}
+      \begin{equation*}
+        R(\tau,t_{\rm sep})=\frac{C_3(\tau,t_{\rm sep})}{C_2(t_{\rm sep})},\qquad
+        h(z,P_z)\simeq\operatorname{plateau}_{\tau}R.
+      \end{equation*}
+      \begin{block}{谱学辅助}
+        对 pion/介子分析，\codepath{include.py} 提供 log 或 cosh 有效质量；
+        {\scriptsize \(m_{\rm eff}=a^{-1}\operatorname{arccosh}[(C(t+1)+C(t-1))/(2C(t))]\)}，
+        再乘 \(0.1973\,\mathrm{GeV\,fm}/a\)。
+      \end{block}
+    \end{column}
+    \begin{column}{0.52\textwidth}
+      \scriptsize
+      \begin{tabularx}{\linewidth}{@{}lY@{}}
+        \toprule
+        单列伪代码 & 代码—物理动作 \\
+        \midrule
+        \(\text{Input: }C_3,C_2,\{\text{configs}\},t_{\rm sep}\) & 组态级关联函数 \\
+        \(\text{shift/fold if enabled}\) & 利用平移/时间反演对称性 \\
+        \(R\gets C_3/C_2(t_{\rm sep})\) & 消去源汇归一化因子 \\
+        \(\text{choose }\tau\text{ plateau}\) & 降低激发态污染，窗口需扫描 \\
+        \(\bar R\gets\text{mean over plateau}\) & 得到每个 \(z\) 的矩阵元估计 \\
+        \(\bar R_{(i)}\gets\text{delete config }i\) & 组态 Jackknife \\
+        \(\sigma\gets\sqrt{(N-1)\sum(\bar R_{(i)}-\bar R)^2/N}\) & 统计误差 \\
+        \(\text{Output: }h(z),\sigma_h(z),\operatorname{cov}\) & 进入 Fourier；尚未重整化 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+  \source{Jackknife：\codepath{gluon_pdf_full_workflow.py:1230-1286}；ratio/拟合：\codepath{gluon_pdf_full_workflow.py:979-1083}；分析框架：\codepath{include.py:234-327}。}
+\end{frame}
+
+% S9：Fourier + matching
+\begin{frame}[t]{sin Fourier 给出准 PDF 接口；当前匹配实现只能作为占位诊断}
+  \begin{equation*}
+    \widetilde g(x,P_z)=\frac{2P_z}{x}\int_0^{z_{\max}}
+    dz\,h(z,P_z)\sin(xP_z z),
+    \qquad P_z=\frac{2\pi n_z}{L}.
+  \end{equation*}
+  \begin{center}
+    \scriptsize
+    \begin{tabularx}{0.94\textwidth}{@{}lY@{}}
+      \toprule
+      单列伪代码 & 数值含义与边界 \\
+      \midrule
+      \(\text{Input: }h_z,z\_values,P_z,x\_values\) & 格距单位坐标与动量 \\
+      \(\text{for }x\in x\_values\text{ iterate:}\) & 逐个动量分数评估 \\
+      \quad \(x=0\Rightarrow \widetilde g(x)=0\) & 代码保护除零；不等于物理小 \(x\) 解 \\
+      \quad \(I_x\gets\operatorname{trapz}[\operatorname{Re}h(z)\sin(xP_z z)]\) & 梯形积分、截断于 \(z_{\max}\) \\
+      \quad \(\widetilde g(x)\gets(2P_z/x)I_x\) & 反对称通道输出 \\
+      \(\text{matching kernel }C_{gg}\gets\delta(1-\xi)\) & 文档明确为 LO 占位 \\
+      \(g\gets\widetilde g-(\alpha_s/2\pi)\,C_{gg}\otimes\widetilde g\) & 当前网格实现对 \(\alpha_s>0\) 仍会改值 \\
+      \(\text{Output: }x,\widetilde g,g\) & 物理可信度依赖重整化/NLO/连续极限 \\
+      \bottomrule
+    \end{tabularx}
+  \end{center}
+  \begin{block}{\unverified\ 关键限制}
+    \footnotesize
+    Fourier 注释明确忽略重整化；匹配函数仅在 \(\xi=1\) 返回 1，不是完整 NLO 分布核。
+    合成常数诊断：\(\alpha_s=0\) 差异为 0；\(\alpha_s=0.2\) 最大差异为 \(6.366\times10^{-2}\)。
+  \end{block}
+  \source{实现：\codepath{gluon_pdf_full_workflow.py:979-1031,1086-1137,1144-1223}；诊断为本次合成输入。}
+\end{frame}
+
+% S10：生产工程
+\begin{frame}[t]{生产版把物理分解映射到后端、MPI 粒度和可复用 CLI}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \small
+      \begin{tikzpicture}[node distance=0.18cm and 0.18cm]
+        \node[state,font=\scriptsize,minimum height=0.50cm] (in) {参数/系综预设\\\(\beta,L,m,P\)};
+        \node[state,font=\scriptsize,minimum height=0.50cm,below=of in] (backend) {\codepath{get_xp}\\CuPy 或 NumPy};
+        \node[state,font=\scriptsize,minimum height=0.50cm,below=of backend] (mpi) {Lorentz 对\\\(i\bmod N_{\rm rank}\)};
+        \node[state,font=\scriptsize,minimum height=0.50cm,below=of mpi] (out) {\codepath{.npy}\\中间产物};
+        \draw[arrow] (in) -- (backend);
+        \draw[arrow] (backend) -- (mpi);
+        \draw[arrow] (mpi) -- (out);
+      \end{tikzpicture}
+      \begin{block}{物理—并行对齐}
+        非极化/螺旋度主路径各有 3 个 Lorentz 对；生产版按 rank 取模分发，
+        计算单元是独立算子分量，不需要在算子循环中交换场数据。
+      \end{block}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \scriptsize
+      \begin{tabularx}{\linewidth}{@{}lY@{}}
+        \toprule
+        工程接口 & 实现含义 \\
+        \midrule
+        \codepath{2pt} & VVV + perambulator + Wick + 投影 \\
+        \codepath{ope} & 读规范场，算 Clover/OPE，支持 \(\pm z\)、横向保留 \\
+        \codepath{pla} & 只预计算 plaquette，便于复用 \\
+        \codepath{full} & 顺序运行 OPE 与 2pt；不等于多组态物理后处理 \\
+        6 个系综预设 & 封装 \(N_t,N_x,N_{\rm ev}\)、动量涂抹与路径模板 \\
+        双后端 & \codepath{asarray/to_numpy/synchronize/free_memory_pool} \\
+        \bottomrule
+      \end{tabularx}
+      \begin{block}{可维护性判断}
+        “EXACT copy” 注释帮助追溯来源；但两套实现仍需持续做数值回归，
+        并将后端转换、输入头部和几何尺寸校验显式化。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \source{后端：\codepath{gluon_pdf_workflow.py:27-100}；系综：\codepath{gluon_pdf_workflow.py:107-164}；MPI/CLI：\codepath{gluon_pdf_workflow.py:978-1025,1230-1567}。}
+\end{frame}
+
+% S11：代码—物理映射
+\begin{frame}[t]{形状契约是最重要的接口：每个数组都对应一个物理对象}
+  \centering
+  \scriptsize
+  \begin{tabularx}{0.96\textwidth}{@{}lYlY@{}}
+    \toprule
+    代码对象 & 数组形状 & 物理对象 & 证据 \\
+    \midrule
+    \codepath{gauge} & \((N_t,N_x^3,4,3,3)\) & \(U_\mu(x)\)，SU(3) 颜色平行输运 & \codepath{...:853-880} \\
+    \codepath{F_all} & \((4,4,N_t,N_x^3,3,3)\) & 所有 Lorentz 分量 \(F_{\mu\nu}\) & \codepath{...:464-487} \\
+    \codepath{ops} & \((N_t,N_z)\) 或 \((N_t,N_x,N_x,N_z)\) & Wilson 线连接的 \(O(t,z)\) & \codepath{...:639-652}; 生产版：\codepath{...:1275-1302} \\
+    \codepath{VVV\_all} & \((N_t,N_{\rm ev1}^3)\) & 动量投影的三夸克块 \(\Phi_{abc}\) & \codepath{...:1467-1476} \\
+    \codepath{peram} & \((N_t,4,4,N_{\rm ev1},N_{\rm ev1})\) & 蒸馏子空间传播子 \(\tau\) & \codepath{...:921-972} \\
+    \codepath{C2} & \((N_t,N_t)\) & 源汇时间矩阵，已投影/边界修正 & \codepath{...:1508-1522} \\
+    \codepath{h\_z}, \codepath{quasi\_pdf} & \((N_z)\), \((N_x)\) & 坐标空间矩阵元与准分布 & \codepath{...:1528-1612} \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.18cm}
+  \begin{block}{接口风险}
+    形状文档写的是立方空间格点；读取器将三个空间方向都用同一个 \(N_x\)。
+    若推广到各向异性 \((N_x,N_y,N_z)\)，必须先改形状契约与平移轴校验。
+  \end{block}
+  \source{形状与读取：\codepath{gluon_pdf_full_workflow.py:853-972}；生产 OPE 输出：\codepath{gluon_pdf_workflow.py:705-743,1275-1319}。}
+\end{frame}
+
+% S12：验证
+\begin{frame}[t]{本次核验确认局部代数与双实现一致，但没有越过真实数据边界}
+  \centering
+  \scriptsize
+  \begin{tabularx}{0.96\textwidth}{@{}lYl@{}}
+    \toprule
+    核验项 & 实测结果 & 状态/解释 \\
+    \midrule
+    Python 语法 & AST 解析 12 个文件，\codepath{status=PASS} & \verified\ 接口可载入 \\
+    DR \(\gamma\) 代数 & 平方、反对易、\(\gamma_5\) 定义、\(P_\pm\) 投影误差均 \(0.000\times10^0\) & \verified\ 对称性层 \\
+    Levi–Civita & 形状 \((4,4,4,4)\)，非零 24 个，反对称误差 0 & \verified\ 对偶索引层 \\
+    零场强极限 & 单位规范场：\(\max|F|=\max|\widetilde F|=0\) & \verified\ 退化极限 \\
+    双实现交叉 & 随机 \(2^3\times2\) 输入：field/dual/OPE/phase 最大差异全为 0 & \verified\ 数值实现一致 \\
+    VVV 六置换 & 对照显式颜色置换：最大差异 \(7.994\times10^{-15}\) & \verified\ 收缩结构 \\
+    Jackknife/Fourier & 示例均值 2.5、误差 0.645497；\(x=0\) 输出 0 & \verified\ 边界接口 \\
+    CLI & full/production 的 \codepath{--help} 返回码均 0 & \verified\ 可发现性 \\
+    真实系综端到端 & 当前目录没有规范场、本征矢、perambulator 生产输入 & \unverified\ 未运行物理结果 \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.18cm}
+  \begin{block}{证据等级说明}
+    合成校验只能证明数组形状、代数与实现路径；它不能证明离散化误差、组态统计、
+    重整化常数、匹配核或 \(P_z\to\infty\) 极限。报告不把这些局部通过项升级为 PDF 物理结论。
+  \end{block}
+  \source{命令：本次会话中的 Python AST/合成校验与 CLI help；代码入口：\codepath{gluon_pdf_full_workflow.py:138-287,659-846,1086-1286}。}
+\end{frame}
+
+% S13：风险与下一步
+\begin{frame}[t]{下一轮优先补“可证伪的物理闭环”，再扩大生产规模}
+  \centering
+  \scriptsize
+  \begin{tabularx}{0.96\textwidth}{@{}>{\centering\arraybackslash}p{0.06\textwidth}YYY@{}}
+    \toprule
+    优先级 & 当前风险 & 可验收动作 & 通过标准 \\
+    \midrule
+    1 & 重整化因子未进入 Fourier；匹配核是 LO/离散占位 & 固定方案、尺度和 \(Z\) 后重跑多组态 & \(h_R\)、\(\widetilde g_R\)、\(g\) 链可追溯 \\
+    2 & 单脚本 \codepath{run_full_pipeline} 实际只读单组态；\(n_{\rm conf}\) 不能替代加载循环 & 按组态落盘并在重采样前后核对形状 & 组态删除样本数与输入一致 \\
+    3 & 单脚本“unpolarized”路径传入 \(\widetilde F\)，生产版按 mode 分开 & 统一 Lorentz/dual 语义并做参考数据回归 & unpol/helicity 通道定义逐项一致 \\
+    4 & 本征矢文档称有 64 字节头部，但读取从文件开头开始；立方格点假设未校验 & 用真实文件头/尺寸做 reader 单测 & 错误输入明确失败，不静默错位 \\
+    5 & IOG 依赖 cwd 下的 \codepath{iog.so}；Chroma/Slurm 路径是集群特定 & 在目标 HPC 做最小 1 conf 烟测 & IOG/ILDG/输出文件可读且日志闭合 \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.18cm}
+  \begin{block}{建议决策}
+    先冻结当前局部算法接口，优先完成第 1–3 项物理闭环；之后再按 \(P_z\)、格距、体积和组态数
+    扩展。截止日期和计算资源需求当前\unverified，需由课题组另行确定。
+  \end{block}
+  \source{风险证据：\codepath{gluon_pdf_full_workflow.py:883-918,1101,1144-1223,1655-1735}；模式差异：\codepath{gluon_pdf_workflow.py:1222-1269}。}
+\end{frame}
+
+% S14：总结
+\begin{frame}[t]{阶段结论：实现骨架可信，物理结果暂不应越过证据边界}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.31\textwidth}
+      \begin{block}{主张}
+        该目录实现了从 ILDG 规范链接、Clover 场强、非局域 Wilson 线 OPE，到
+        蒸馏质子 2pt 与准 PDF 接口的完整算法骨架。
+      \end{block}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \begin{block}{证据}
+        两套实现核心张量在小格点上逐项一致；DR/对偶/零场强/VVV/边界接口均有
+        合成校验；CLI 可发现。
+      \end{block}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \begin{block}{含义}
+        可进入真实多组态数据阶段，但最终 PDF 结论必须等待重整化、NLO 匹配、
+        多组态统计和物理回归全部闭合。
+      \end{block}
+    \end{column}
+  \end{columns}
+  \vspace{0.35cm}
+  \begin{center}
+    \Large
+    \textcolor{primary}{\(\text{规范场}\ \to\ F,\widetilde F\ \to\ O(z)\ \to\ C_2\ \to\ h(z)\ \to\ \widetilde g(x)\)}
+  \end{center}
+  \vspace{0.25cm}
+  \begin{center}
+    \textcolor{warning}{\textbf{下一验收门：真实系综 + 重整化方案 + 匹配核 + 连续性检验。}}
+  \end{center}
+  \source{综合：本报告前述代码证据与本次合成校验；不包含真实 PDF 数值结论。}
+\end{frame}
+
+\appendix
+
+% A1：代码证据
+\begin{frame}[t]{附录 A：OPE 核心循环的原文件直引（1/2）}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.49\textwidth}
+      \scriptsize\textbf{端点平移与反向连接}
+      \lstinputlisting[firstline=573,lastline=582]{/root/PyQCD/refer/zhangxin/gluon_pdf_full_workflow.py}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \scriptsize\textbf{源点插入与正向连接}
+      \lstinputlisting[firstline=588,lastline=597]{/root/PyQCD/refer/zhangxin/gluon_pdf_full_workflow.py}
+    \end{column}
+  \end{columns}
+  \vspace{0.12cm}
+  \begin{block}{阅读要点}
+    第一段的共轭链接实现 \(W(z\leftarrow0)\)，第二段先插入源点场强再累乘正向链接；
+    后续的颜色迹和空间求和见原文件 607–613 行。
+  \end{block}
+  \source{原文件直引：\codepath{gluon_pdf_full_workflow.py:573-597}；不是手抄伪代码。}
+\end{frame}
+
+\begin{frame}[t]{附录 B：VVV/Wick 与匹配占位的原文件证据（2/2）}
+  \lstset{basicstyle=\ttfamily\tiny,numberstyle=\tiny}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.49\textwidth}
+      \scriptsize\textbf{VVV 的偶/奇颜色置换}
+      \lstinputlisting[firstline=737,lastline=745]{/root/PyQCD/refer/zhangxin/gluon_pdf_full_workflow.py}
+      \lstinputlisting[firstline=761,lastline=768]{/root/PyQCD/refer/zhangxin/gluon_pdf_full_workflow.py}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \scriptsize\textbf{匹配核的明确占位声明}
+      \lstinputlisting[firstline=1144,lastline=1155]{/root/PyQCD/refer/zhangxin/gluon_pdf_full_workflow.py}
+    \end{column}
+  \end{columns}
+  \vspace{0.04cm}
+  {\scriptsize\textbf{物理解释：} VVV 六项完整展开颜色 \(\varepsilon_{ijk}\)；
+  匹配注释将 NLO 标为“需更多微扰计算”，因此本页是接口证据，不是 NLO 结果。\par}
+  \source{原文件直引：\codepath{gluon_pdf_full_workflow.py:737-770,1144-1155}。}
+\end{frame}
+
+\end{document}
