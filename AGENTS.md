@@ -68,6 +68,11 @@ C3 Z\_R / C4 混合 / C5 NLO 匹配核 Z\_ij / C7 torch 后端，含代码-物�
 cos/sin 双通道 → NLO 匹配 Z_ij+CS 核+SFTX → 连续极限外推，含 25 项代码-对象映射表、
 22 处 lstinputlisting 直引；Overfull=0、Float=0、Missing=0；等宽字体换 DejaVu Sans Mono
 以覆盖 docstring 希腊字母/⊏/⊥ 等符号，2026-08-24 生成）。
+新增：`docs/report_gluon_tmd_gradient_flow_20260828.tex/.pdf`（中文 16:9 梯度流重整化
+核子胶子 TMD-PDF 算法—物理报告，22 页；覆盖 RK3、Clover/对偶场强、staple/OPE、
+断连 ratio、z=0 比值与 Z_R/混合入口、Fourier/CS/NLO/SFTX、连续极限、工程链及
+MyQCD 对照；双遍 XeLaTeX，Overfull=0、Float too large=0、Missing character=0；
+单一系综与完整物理闭环缺口已明确标注，2026-08-28 生成）。
 
 ## torch 后端 + h5 IO + MPI 并行（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
 
