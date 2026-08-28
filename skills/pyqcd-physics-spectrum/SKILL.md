@@ -1,92 +1,104 @@
 ---
 name: pyqcd-physics-spectrum
 description: |
-  格点 QCD 谱学推理技能：从关联函数定义出发推导其谱分解——完备关系、重叠因子、
-  backward 态结构、拟合函数模板（供 pyqcd-analysis 使用）。假定算符与关联函数
-  已由 pyqcd-physics-correlator 确定。触发于：谱分解、激发态污染、两点/三点
-  拟合模型、backward 传播态、"该用什么拟合函数"。
+  Use when a lattice-QCD task needs a spectral decomposition, finite-time backward
+  states, excited-state model, two- or three-point fit template, or a decision about
+  which energy or overlap parameters are identifiable; use pyqcd-physics-correlator
+  for operator/Wick definitions and pyqcd-statistics for fit execution.
 metadata:
   openclaw:
     emoji: 🎼
 ---
 
-# pyqcd-physics-spectrum — 关联函数 → 谱分解 → 拟合模板
+# pyqcd-physics-spectrum — 谱分解与拟合模板
 
 ## 目的与边界
 
-给定可观测量（质量、衰减常数、形状因子……），推导链条
-**关联函数 → 谱 → 拟合函数**，使下游分析（pyqcd-analysis）明确拟合模型。
-算符/关联函数未定时先用 `pyqcd-physics-correlator`。
+本技能把已经确定的关联函数变成“态、能量、重叠因子和拟合模型”。它不重新定义
+内插算符、Wick 缩并、传播子求解或重采样算法：前者交给
+`pyqcd-physics-correlator`，后者分别交给 `pyqcd-propagator`、`pyqcd-statistics`。
+时间轴、γ 矩阵、边界和符号以 `pyqcd-conventions` 为准。
 
-## 谱分解
+## 谱分解的最小推导
 
-### 完备关系
+采用有限体积相对论归一化
 
-内插算符 $\mathcal{O}$ 与携带 $J^{PC}$ 的**全部**本征态耦合：
-$\langle 0|\mathcal{O}|n,\vec{p}\rangle = Z_n(\vec{p})$。
-有限体积 $V=L^3$、相对论归一 $\langle n,\vec{p}|m,\vec{q}\rangle = 2E_n V\delta_{\vec p\vec q}\delta_{nm}$ 下：
+\[
+\langle n,\vec p|m,\vec q\rangle=2E_nV\,\delta_{nm}\delta_{\vec p\vec q},
+\qquad
+\langle0|\mathcal O|n,\vec p\rangle=Z_n(\vec p).
+\]
 
-$$\mathbf{1} = |0\rangle\langle 0| + \sum_{n\ge1}\sum_{\vec{p}}
-\frac{1}{2E_n(\vec{p})V}|n,\vec{p}\rangle\langle n,\vec{p}|.$$
+插入完备关系后，长时间两点函数为
 
-### 两点函数
+\[
+C_2(\vec p,t)=\sum_n A_n(\vec p)e^{-E_n(\vec p)t},
+\qquad A_n=\frac{|Z_n|^2}{2E_n},
+\]
 
-$T\to\infty$：$C_2(\vec{p};t)=\sum_n \frac{|Z_n|^2}{2E_n}e^{-E_n t}$。
+其中归一化因子可以吸收进 $Z_n$，但必须在交接表说明。有限时间方向 $T$ 时，不能
+把 backward 项默认删除：
 
-有限 $T$ 出现 backward 项，符号由**复合态**边界条件决定：
-
-- **介子**（两反周期夸克 → 有效周期 BC）：$C_2^\text{meson}(t)=\sum_n A_n(e^{-E_nt}+e^{-E_n(T-t)})$
-- **重子**（三反周期夸克 → 反周期；$P^+=(1+\gamma_4)/2$ 投影下 backward 为负宇称伙伴）：
-  $$C_2^{P^+}(t)=\sum_n A_n^+e^{-E_n^+t}-\sum_n A_n^-e^{-E_n^-(T-t)}$$
-
-拟合振幅 $A_n\equiv|Z_n|^2/(2E_n)$（归一化因子吸收进 $Z_n$），物理态恒正。
-
-**关键物理**：smear 源提升 $|Z_0|$ 相对 $|Z_{n\ge1}|$，有效质量平台更干净；
-激发态污染正比于 $(A_1/A_0)e^{-\Delta E\,t}$，$\Delta E=E_1-E_0$。
-
-### 三点函数
-
-流插入时刻 $\tau$（$0<\tau<t_\text{sep}$），两侧各插完备关系：
-
-$$C_3(\tau,t_\text{sep})=\sum_{n,m}\frac{Z_n^f(Z_m^i)^*}{4E_nE_m}
-\langle n|J|m\rangle e^{-E_n(t_\text{sep}-\tau)}e^{-E_m\tau}.$$
-
-系数**因子化**：汇重叠 × 矩阵元 × 源重叠，且 $Z_n$ 与两点函数**相同**——
-这是 C₂+C₃ 联合拟合的基础：$C_2$ 定 $E_n,Z_n$；$C_3$ 共享它们定
-$\mathcal{M}_{nm}$；物理目标为 $\mathcal{M}_{00}$。
-
-热效应：$t_\text{sep}\ll T$ 时三点函数 backward 项指数压低可忽略；
-$t_\text{sep}$ 与 $T$ 可比时须入模型。
-
-### 谱分解 → 分析交接表
-
-| 关联函数 | 拟合函数 | 自由参数 |
+| 通道 | 最小模型 | 物理解释 |
 |---|---|---|
-| $C_2^\text{meson}(t)$ | $\sum_n A_n(e^{-E_nt}+e^{-E_n(T-t)})$ | $\{E_n,A_n\}$ |
-| $C_2^{P^+\text{baryon}}(t)$ | $\sum_n A_n^+e^{-E_n^+t}-\sum_n A_n^-e^{-E_n^-(T-t)}$ | $\{E_n^\pm,A_n^\pm\}$ |
-| $C_3(\tau,t_\text{sep})$ | $\sum_{n,m}B_{nm}e^{-E_n(t_\text{sep}-\tau)}e^{-E_m\tau}$ | $\{E_n,B_{nm}\}$，$B_{nm}\propto Z_n\mathcal{M}_{nm}Z_m$ |
+| 介子 | $\sum_n A_n[e^{-E_nt}+e^{-E_n(T-t)}]$ | 偶数夸克的有效周期边界 |
+| 重子 $P^+$ | $\sum_n A_n^+e^{-E_n^+t}-\sum_n A_n^-e^{-E_n^-(T-t)}$ | 奇数夸克的反周期边界；backward 为反宇称伙伴 |
 
-分析端用能量差参数化 $E_n=\sum_{k=0}^n\Delta E_k\ (\Delta E_k>0)$ 保证态序
-（实现要点见 pyqcd-analysis；lsqfit 封装在 `pyqcd/analysis/_fitter.py`）。
+重叠因子不是装饰：smear 源的目标是增大 $|Z_0|/|Z_1|$，而首个激发态污染量级为
+$(A_1/A_0)e^{-\Delta E t}$。
+
+## 三点函数模型
+
+对 $0<\tau<t_{\rm sep}$ 两侧插入完备关系：
+
+\[
+C_3(\tau,t_{\rm sep})=
+\sum_{n,m}B_{nm}e^{-E_n^f(t_{\rm sep}-\tau)}e^{-E_m^i\tau},
+\]
+
+\[
+B_{nm}=\frac{Z_n^f\,\langle n|J|m\rangle\,(Z_m^i)^*}{4E_n^fE_m^i}.
+\]
+
+因此 C₂+C₃ 联合拟合应共享 $E_n$ 和 $Z_n$，把基态矩阵元留作独立参数；不得把
+三点振幅直接当作矩阵元。若 $t_{\rm sep}\ll T$，热 backward 项可以作为已声明的
+近似；接近 $T$ 时必须扩展模型。
+
+## 给分析层的交接表
+
+| 输入 | 拟合函数 | 至少记录 |
+|---|---|---|
+| 介子 C₂ | cosh 型 | $T$、$\{E_n,A_n\}$、状态数 |
+| 重子投影 C₂ | forward − backward 反宇称 | $T$、投影、$\{E_n^\pm,A_n^\pm\}$ |
+| C₃ | 双指数或联合多态模型 | $t_{\rm sep}$、$\tau$ 范围、共享的 $E,Z$、$B_{nm}$ |
+| 有效质量/能量 | 由上面模型导出的诊断量 | 定义、时间窗、单位和边界处理 |
+
+优先用能量差参数化
+$E_n=E_0+\sum_{k=1}^n\Delta E_k$，并以正参数（如 log 参数化）保持能级顺序。
+拟合窗口、协方差和 SVD 由 `pyqcd-statistics` 记录，具体入口由
+`pyqcd-analysis` 实现。
 
 ## 工作流程
 
-1. 确认算符与关联函数已定（缺则转 pyqcd-physics-correlator）；
-2. 按复合态边界条件选模板（介子 cosh / 重子 forward−backward 反宇称）；
-3. 插完备关系推导谱式，输出「交接表」给 pyqcd-analysis
-   （拟合函数 + 自由参数集 + 能量差参数化约定）。
+1. 检查上游是否已给出算符、源汇顺序、投影、$T$ 和 Fourier 约定；缺项先回到
+   `pyqcd-physics-correlator`。
+2. 按复合态的夸克数和投影选择周期/反周期模板，明确是否保留 backward 态。
+3. 插入完备关系，列出能量、重叠和矩阵元的依赖关系；做量纲和 $t\to0/T/2$ 极限检查。
+4. 输出拟合函数、自由参数、先验/约束、拟合窗口和未覆盖热项，交给
+   `pyqcd-analysis` 与 `pyqcd-statistics`。
 
 ## 常见陷阱
 
-1. **周期 vs 反周期 BC**：复合态 BC 由夸克数决定（介子 cosh 型、重子 backward
-   反宇称）——选错模板会把负宇称态当激发态拟合。PyQCD 实现参照：
-   `pyqcd/contraction/_baroperator.parity_and_boundary`。
-2. **振幅符号**：$A_n$ 对物理态恒正但数值拟合中不约束符号时，
-   先验宽（如 gvar(0,10)）+ 能量 log 参数化防盆地跳变。
-3. **dev6/test6 先例**：窗口内 C<0（相位残留 π）时采用全局符号 sgn·C 后再拟合，
-   物理结果不变、拟合收敛性显著改善。
+| 现象 | 处理 |
+|---|---|
+| 把重子 backward 当普通激发态 | 保留反宇称项，核对 `parity_and_boundary` 与投影 |
+| 拟合振幅符号跳变 | 检查 Fourier/算符整体相位；不要凭“应为正”强改数据 |
+| $C<0$ 导致拟合盆地跳变 | 记录全局相位并对所有相关数据一致处理，之后复核物理符号 |
+| 三点振幅被直接解释为矩阵元 | 除去两侧 $Z$ 和归一化，或做 C₂+C₃ 联合拟合 |
+| 窗口能拟合但参数由先验主导 | 查看 posterior/prior、相邻窗口和协方差条件数，状态降级 |
 
-## 与其他技能配合
+## 交接
 
-- 上游算符/缩并 → `pyqcd-physics-correlator`；拟合落地（gvar/lsqfit/SVD cut/
-  t_min 扫描/色散）→ `pyqcd-analysis`；传播子生产 → `pyqcd-propagator`。
+交付“谱式、状态/边界解释、参数化、可拟合轴和未建模项”。拟合与画图用
+`pyqcd-analysis`，重采样和相关拟合用 `pyqcd-statistics`；若算符或缩并尚未固定，
+停止在 `pyqcd-physics-correlator`，不要用谱式补猜输入。
