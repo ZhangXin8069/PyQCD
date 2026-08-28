@@ -1,71 +1,90 @@
 ---
 name: pyqcd-pipeline
 description: |
-  PyQCD 蒸馏管线技能：run_pipeline 九步全流程（env→vertex→2pt→ope→3pt→4pt→
-  analysis→plots→report）的运行、一致性验证（vs docker-v20260805 基线）、
-  组态级断点续跑、数据守卫（齐全度/大小一致性/输入校验）、ETA 进度日志与
-  env 快照。触发于："跑管线"、"蒸馏管线"、"一致性测试"、"复现 docker 基线"、
-  "断点续跑"、"数据检查"、"跑 examples/test0"。
+  Use when running or validating the PyQCD distillation pipeline, reproducing the
+  docker baseline, resuming configuration-level jobs, checking input/output guards,
+  collecting ETA or environment snapshots, or coordinating examples/test0 and test9;
+  use pyqcd-infra for backend/MPI details and pyqcd-analysis for product analysis.
 metadata:
   openclaw:
     emoji: 🏭
 ---
 
-# pyqcd-pipeline — 蒸馏管线运行与验证
+# pyqcd-pipeline — 管线编排与可复现运行
 
 ## 目的与边界
 
-调用 `pyqcd.pipeline.run_pipeline` 复现成功实例基线
-`examples/docker-v20260805/output/output_20260802_120104` 的全量结果
-（10 组态 9 步）。编排代码放 examples/test0/main.py（只含测试/编排，
-计算全部委托 `pyqcd/pipeline/_steps.py`——照抄 docker 逻辑、自包含）。
+本技能负责编排已经实现的计算步骤、输入检查、断点续跑和结果验证，不在入口中重写
+物理算法、统计估计或后端适配。管线实现位于 `pyqcd/pipeline/_steps.py`，示例/回归
+编排位于 `examples/test0/main.py`；分析、绘图和报告分别转交
+`pyqcd-analysis`、`pyqcd-docs`。
 
-## 管线九步与命令
+按需读取：
+
+| 任务 | Reference |
+|---|---|
+| 运行、重跑、基线一致性和结果归档 | [`references/runbook.md`](references/runbook.md) |
+| 输入/输出守卫、进度和环境快照 | [`references/guards-and-metadata.md`](references/guards-and-metadata.md) |
+
+## 九步管线
 
 ```text
 env → vertex → 2pt → ope → 3pt → 4pt → analysis → plots → report
 ```
 
+| 阶段 | 主要产物 | 责任边界 |
+|---|---|---|
+| env | `env.json` | 记录 git、依赖、XeLaTeX、GPU、命令行 |
+| vertex/2pt/ope/3pt/4pt | 组态级中间数据 | 计算委托 `pyqcd.pipeline`，逐步检查 shape |
+| analysis/plots | JSON、拟合、图表 | 由 `pyqcd-analysis` 的统计契约解释 |
+| report | `.tex/.pdf` | 由 `pyqcd-docs` 完成双遍编译和版式验收 |
+
+## 常用入口
+
 ```bash
-python examples/test0/main.py run --conf-ids 6250        # 冒烟（Nconf<2 时 disconnected 拟合自动跳过，统计无意义）
-bash examples/test0/run-local.sh                         # 全量（~3-5h）
-python examples/test0/main.py verify --run-dir examples/test0/v<ts>   # 一致性验证 A–E
+python examples/test0/main.py run --conf-ids 6250
+bash examples/test0/run-local.sh
+python examples/test0/main.py verify --run-dir examples/test0/v<ts>
+python examples/pyqcd/verify_consistency.py
+python examples/pyqcd/test9_gluon_tmd_nucleon.py --smoke
+python examples/pyqcd/test9_verify.py <run_dir>
 ```
 
-## 关键约定
+冒烟只证明链路、形状或受控断言；`Nconf<2` 时 disconnected 统计没有物理意义。全量
+一致性必须与声明的 docker-v20260805 参考产物比较，不能把文件存在当作数值一致。
 
-- **版本目录**：中间数据+图表+LaTeX 报告完整保存于 `examples/test0/v<YYYYMMDDHHMM>/`
-  （test12 约定）；产物 IO 一律 h5py（save_tensor_h5/load_tensor_h5，见 pyqcd-infra）。
-- **一致性容差**：中间数据 rel<1e-6；分析结果 rel<1e-8。verify 按组态数自适应
-  （Nconf=10 时 B/C/D 统计量严格比对）。已验证：conf6250 中间数据逐位一致
-  （rel=0.000e+00），全量 237/237 PASS。
-- **断点续跑**（L1）：2pt 组态级——corr 齐全即跳过该组态；
-  强制重算用 recompute_2pt=True。
-- **数据守卫**（L2/B8）：`pyqcd.pipeline._validate` ——原始数据齐全度检查、
-  输入数组校验、模板占位符组合式文件存在性+大小一致性守卫
-  （check_files_existence，corrupted 归类）。
-- **进度日志**（L4）：`ProgressLog/progress_log` —— tlog 时间戳 + ETA。
-- **环境快照**（E4）：`pyqcd.tools._env.dump_env` → env.json
-  （git/包版本/xelatex/GPU/cmdline），每 run 必存。
+## 推荐流程
 
-## 工作流程
+1. 运行前：解析组态集合和输入模板，执行数据守卫，保存 `env.json`；记录后端、精度、
+   进程/设备映射和目标输出目录。
+2. 运行中：按 `(step, conf)` 记录开始/结束、耗时和 ETA；组态级产物齐全时按断点语义
+   跳过，`recompute_2pt=True` 才强制重算。
+3. 运行后：逐步核对产物、shape、元数据和退出码；使用 verify 对照基线，区分中间数据
+   误差与分析结果误差。
+4. 只有输入守卫、计算步骤和验证都通过，才进入报告；失败项保留 raw/intermediate
+   及摘要，禁止用空文件或默认值掩盖失败。
 
-1. 运行前：dump_env 存档 → 数据守卫检查输入齐全度（不齐早停并报缺清单）。
-2. 运行中：progress_log 记步时与 ETA；中断后按断点续跑语义重启（已完成组态自动跳过）。
-3. 运行后：verify 对照基线（A–E）；汇总 summary/timing/verify JSON 入 v<ts>/。
-4. 失败处理见下表；回归通过后再进入 analysis/plots/report 步。
+## 验收标准
 
-## 错误处理
-
-| 场景 | 处理 |
+| 层级 | 证据 |
 |---|---|
-| 输入文件缺失/损坏 | check_files_existence 报清单后早停，不半途崩 |
-| 中间量与基线超差 | 先查后端/精度是否一致（set_backend/set_precision，见 pyqcd-infra）再查改动 |
-| Nconf<2 统计步骤 | disconnected 拟合自动跳过属预期，冒烟模式勿比统计量 |
-| 单组态失败 | 断点续跑重跑该组态；连续 3 组态同点失败 → 查共性根因（debug 纪律） |
+| 冒烟 | 指定组态完成、产物 shape 正确、统计限制已标注 |
+| 回归 | 基线比较的容差、NaN 位置、组态数和 PASS 数可复现 |
+| 真实运行 | 输入守卫、逐组态日志、环境快照、摘要和错误清单齐全 |
+| TMD 链 | 另过 `pyqcd-tmd-chain`/`pyqcd-tmd-algorithm` 的物理门，不以管线成功替代物理验证 |
 
-## 与其他技能配合
+## 常见故障
 
-- 并行加速（元任务调度/GPU 绑定）→ `pyqcd-infra`（plan_parallel/run_parallel_pipeline）；
-- 分析步细节 → `pyqcd-analysis`；物理链正确性 → `pyqcd-tmd-chain`；
-- 报告产物 → `pyqcd-docs`。
+| 现象 | 处理 |
+|---|---|
+| 输入缺失/损坏 | 由守卫列出具体文件和大小，修复输入后只重跑受影响组态 |
+| 中间量超差 | 先比对 backend/precision、版本和输入，再定位首个超差阶段 |
+| 单组态失败 | 保留日志并断点重跑；连续同点失败时停止扩散，查共性根因 |
+| 统计步骤报奇异 | 转 `pyqcd-statistics` 检查 `Ncfg`、协方差和 SVD，不能静默换估计量 |
+| 并行 OOM | 转 `pyqcd-infra` 按显存公式重新 dry-run，不删任务集合 |
+
+## 交接
+
+向分析层交付输入清单、组态索引、产物路径、shape、退出码、日志和验证摘要；向报告层
+交付已核实的图表/JSON/源码证据。后端与 MPI → `pyqcd-infra`，物理链 →
+`pyqcd-tmd-chain`，文档 → `pyqcd-docs`。

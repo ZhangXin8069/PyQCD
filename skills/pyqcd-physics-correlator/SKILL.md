@@ -64,7 +64,7 @@ S_f(x,y)=\gamma_5 S_f^\dagger(y,x)\gamma_5,
 \]
 
 不得因数组数值相等就抹掉味标签；味单态或胶子 loop 的 disconnected 必须单列，不能
-用 charged pion 的 connected 结构代替。若依赖 $gamma_5$ 厄米性省求逆，必须把
+用 charged pion 的 connected 结构代替。若依赖 $\gamma_5$ 厄米性省求逆，必须把
 转置、共轭和源汇方向写入交接表。
 
 ### 4. 输出传播子需求表
@@ -98,6 +98,16 @@ propagator 和 $Γ$ 收缩。PyQUDA 上下文、轴序和伪代码见
 | 非连通 | 随机体积源 | 估计全空间 loop |
 | 形状因子/3pt | 顺序源或随机估计 | 固定 sink 后控制求逆成本 |
 
+## 推导例文
+
+以下文件是物理推导例文，不是运行时依赖；新任务仍须按本入口重新核对约定：
+
+| 例文 | 覆盖内容 |
+|---|---|
+| [`reference/pion_mass.md`](reference/pion_mass.md)、[`reference/rho_mass.md`](reference/rho_mass.md) | 介子双线性、dagger、connected 2pt |
+| [`reference/proton_mass.md`](reference/proton_mass.md) | 重子宇称投影与两类轻味缩并 |
+| [`reference/Lambda_proton_formfactor.md`](reference/Lambda_proton_formfactor.md) | flavor-changing 三点和顺序源推导 |
+
 ## 常见物理边界与自检
 
 - 介子和重子的时间边界不同；重子 backward 是反宇称伙伴，具体模板转
@@ -105,7 +115,7 @@ propagator 和 $Γ$ 收缩。PyQUDA 上下文、轴序和伪代码见
 - P2 的相位负号或算符整体符号必须保留到分析层；先做独立极限核对，不能凭正值修正。
 - einsum 中每个重复指标应恰好收缩两次，输出自由指标必须与关联函数轴序一致；需要
   自动 Wick 时仍要人工核对 flavor、符号、gamma 转置和 connected topology。
-- 在进入求解器前用极端情形检查：局部算符的零位移极限、简并味替换、$gamma_5$
+- 在进入求解器前用极端情形检查：局部算符的零位移极限、简并味替换、$\gamma_5$
   厄米性和已知零动量通道；任何未决符号都在交接表标为假设。
 
 ## 交接

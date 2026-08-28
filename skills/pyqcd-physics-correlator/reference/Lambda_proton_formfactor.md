@@ -8,8 +8,8 @@
 The interpolating operators for $\Lambda$ and proton:
 
 $$
- \mathcal{O}_{\Lambda} = \epsilon^{abc} (u^{Ta} C\gamma_5 d^b) s^c 
- \mathcal{O}_{p} = \epsilon^{abc} (u^{Ta} C\gamma_5 d^b) u^c 
+ \mathcal{O}_{\Lambda} = \epsilon^{abc} (u^{Ta} C\gamma_5 d^b) s^c
+ \mathcal{O}_{p} = \epsilon^{abc} (u^{Ta} C\gamma_5 d^b) u^c
 $$
 
 Relevant weak currents (vector + axial):
@@ -108,4 +108,3 @@ For the $\Lambda \rightarrow p$ three-point function, the required propagators a
 With a point source, the estimator takes the form:
 
  $C_{3,\Gamma}^\mu(\vec{p}_f,\vec{p}_i; t_f,\tau,0) \approx \sum_{\vec{z}} e^{+i\vec{q}\cdot\vec{z}} \mathrm{Tr}\!\left[ G_{l,\text{seq}(\vec{p}_f,t_f,T)}(\vec{z},\tau;\vec{x}_0,0)\, \gamma_\mu \Gamma\, S_{s,\text{point}(\vec{x}_0,0)}(\vec{z},\tau) \right] $
-

@@ -20,7 +20,8 @@ metadata:
 `pyqcd-physics-correlator`、`pyqcd-physics-spectrum` 和 `pyqcd-analysis`。
 
 API 细节见 [`references/solver.md`](references/solver.md)；顺序源和协变位移见
-[`references/sequential-and-covdev.md`](references/sequential-and-covdev.md)。
+[`references/sequential-and-covdev.md`](references/sequential-and-covdev.md)；完整的重子三点
+外围模板见 [`reference/baryon_3pt_code.md`](reference/baryon_3pt_code.md)。
 
 ## 求解前契约
 
