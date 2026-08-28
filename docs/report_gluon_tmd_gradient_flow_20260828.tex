@@ -220,7 +220,7 @@
 
 \begin{frame}[t]{可复现设置：当前 test9 将格点、动量、流时间和横向网格显式化}
   \footnotesize
-  \renewcommand{\arraystretch}{0.72}
+  \renewcommand{\arraystretch}{0.68}
   \begin{tabularx}{0.98\textwidth}{@{}p{0.13\textwidth}Yp{0.22\textwidth}Y@{}}
     \toprule
     项目 & 当前实现/实战设置 & 物理含义 & 来源\\
@@ -236,10 +236,12 @@
     \bottomrule
   \end{tabularx}
   \vspace{0.08em}
-  \begin{beamercolorbox}[wd=0.98\textwidth,sep=0.18em,rounded=true]{block body}
+  \begin{beamercolorbox}[wd=0.98\textwidth,sep=0.10em,rounded=true]{block body}
     \scriptsize\textbf{量纲：}\(z,b_\perp\) 先是格点整数；进入准 PDF 转为 fm，再除以
     \(0.197\,\mathrm{GeV\,fm}\) 得 \(\mathrm{GeV}^{-1}\)。SFTX 的 \(\ln(\mu^2t)\) 要用 \(\mathrm{GeV}^{-2}\)。
   \end{beamercolorbox}
+  \vspace{-0.12em}
+  \vspace{-0.12em}
   \source{参数：\nolinkurl{pyqcd/pipeline/_config.py}；实战：\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py}。}
 \end{frame}
 
@@ -252,8 +254,8 @@
           \partial_t B_\mu(t,x)&=D_\nu G_{\nu\mu}(t,x),
           &B_\mu(0,x)&=A_\mu(x),\\
           Z(V)&=P_{\rm ah}[\Omega_\mu V_\mu^\dagger],\\[-0.2em]
-          P_{\rm ah}[M]&=\frac{M-M^\dagger}{2}
-          -\frac{\Tr(M-M^\dagger)}{2N_c}\mathbf1.
+          P_{\rm ah}[M]&=\frac{M-M^\dagger}{2}\\[-0.2em]
+          &\quad-\frac{\Tr(M-M^\dagger)}{2N_c}\mathbf1.
         \end{align*}
         \(\Omega_\mu\) 是其余三个方向正反 6 个 staple 之和；
         \(Z\in\mathfrak{su}(3)\) 保持群流形更新。
@@ -282,6 +284,7 @@
       \end{tabularx}
     \end{column}
   \end{columns}
+  \vspace{-0.08em}
   \source{实现：\nolinkurl{pyqcd/renorm/_gradient_flow.py}；参考：Lüscher 2010、MyQCD 梯度流章节。}
 \end{frame}
 
@@ -368,8 +371,12 @@
         &\quad\times U_\perp((z{+}L)\hat z+b,(z{+}L)\hat z)\\[-0.2em]
         &\quad\times U_z((z{+}L)\hat z,z\hat z),\\
         M^{\mu\lambda;\nu\rho}&=\sum_{\boldsymbol x}
-        \Tr\!\left[F^{\mu\lambda}(x+z\hat z+b)W_{\rm st}
-        F^{\nu\rho}(x)W_{\rm st}^\dagger\right],\\
+        \Tr\!\left[
+          \begin{aligned}
+            F^{\mu\lambda}(x+z\hat z+b)W_{\rm st}\\[-0.2em]
+            &\quad{}\cdot F^{\nu\rho}(x)W_{\rm st}^\dagger
+          \end{aligned}
+        \right],\\
         O(z,b)&=M^{tx;tx}+M^{ty;ty}-2M^{xy;xy}.
       \end{align*}
       \begin{block}{为什么是这三个分量}
@@ -429,15 +436,15 @@
       \end{tabularx}
     \end{column}
   \end{columns}
-  \vspace{0.08em}
+  \vspace{0.02em}
   {\scriptsize\textbf{实现钩子：}\nolinkurl{run_ratio2pt} 先做真空扣除 ratio，再逐 \((z,b_\perp)\) 拟合；关键数组见附录。\par}
-  \source{代码：\nolinkurl{pyqcd/analysis/_tmd_ratio.py}；模型：\nolinkurl{pyqcd/analysis/_disconnected.py}；归档：\nolinkurl{.../tmd_ratio/1_fit_report_P200.txt}。}
+  \source{代码：\nolinkurl{pyqcd/analysis/_tmd_ratio.py}；模型：\nolinkurl{pyqcd/analysis/_disconnected.py}；归档：\nolinkurl{test9/tmd_ratio/1_fit_report_P200.txt}。}
 \end{frame}
 
 \begin{frame}[t]{重整化分两条路径：test9 使用 z=0 比值，完整 Z\_R/混合模块另有入口}
   \begin{columns}[T,totalwidth=\textwidth]
     \begin{column}{0.48\textwidth}
-      \footnotesize
+      \scriptsize
       \begin{block}{当前 test9 端到端路径}
         \begin{equation*}
           h_R(z,b;P_z)=\frac{c_0(z,b;P_z)}{c_0(0,b;P_z)}.
@@ -451,7 +458,7 @@
       \end{block}
     \end{column}
     \begin{column}{0.48\textwidth}
-      \footnotesize
+      \scriptsize
       \begin{block}{完整方案模块}
         \begin{align*}
           \ln Z_R={}&k\frac{z}{a\ln(a\Lambda)}\\[-0.2em]
@@ -465,12 +472,11 @@
       \end{block}
       \begin{block}{混合方案}
         \(z<z_s\) 用 \(h_B(z,P_z)/h_B(z,0)\)；\(z\ge z_s\) 用
-        \(h_B/Z_R\) 乘 \(\eta_s\)，再作
-        \(l_1\lambda^{-a_1}e^{-\lambda/\lambda_0}\) 外推。
+        \(h_B/Z_R\) 乘 \(\eta_s\)，再作 \(l_1\lambda^{-a_1}e^{-\lambda/\lambda_0}\) 外推。
       \end{block}
     \end{column}
   \end{columns}
-  \source{入口：\nolinkurl{pyqcd/pipeline/_tmd9.py}；\(Z_R\)：\nolinkurl{pyqcd/renorm/_zr.py}；混合：\nolinkurl{pyqcd/renorm/_hybrid.py}。}
+  \source{入口：\nolinkurl{pyqcd/pipeline/_tmd9.py}；\(Z_R\)/混合：\nolinkurl{pyqcd/renorm/}。}
 \end{frame}
 
 \begin{frame}[t]{准 TMD、正弦交叉通道与 CS 核：Fourier 之前必须固定 convention}
@@ -544,7 +550,8 @@
         \begin{aligned}
           f(x;a,P_z,m_\pi,L)={}&xg_0(x)+f_xa^2+l_xa^4\\
           &+h_xa^2P_z^2+\frac{d_x}{P_z^2}+\frac{b_x}{P_z}\\
-          &+k_x(m_\pi^2-m_{\pi,\rm phy}^2)+c_xe^{-La m_\pi}.
+          &+k_x(m_\pi^2-m_{\pi,\rm phy}^2)\\[-0.2em]
+          &\quad+c_xe^{-La m_\pi}.
         \end{aligned}
       \end{equation*}
       \begin{block}{物理分解}
