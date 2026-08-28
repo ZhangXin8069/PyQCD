@@ -16,6 +16,7 @@ PyQCD 专属领域技能库。每个技能一个子目录，含 `SKILL.md`（fro
 | `pyqcd-gauge` | 纯规范观测量：Wilson/Polyakov 圈、拓扑荷、Wilson flow、链接涂抹 | "Wilson 圈"/"拓扑荷"/"Wilson flow" |
 | `pyqcd-analysis` | 数据分析功能链与统计方法论：02_ratio→06_FH→ana_3dir、gvar/lsqfit/SVD/色散 | "分析关联器"/"拟合数据"/"有效质量"/"ratio 图" |
 | `pyqcd-tmd-chain` | 核心物理链六步：梯度流→O 组合→c0→Z_R/混合→准 TMD+NLO 匹配→连续极限 | "梯度流"/"胶子 TMD"/"Z_R"/"匹配核"/test9 |
+| `pyqcd-tmd-algorithm` | 物理到实现的 TMD 算法契约：流化场强/staple→软与断连矩阵元→重整化/CS/匹配→验证门 | "TMD 算法"/"算法实现"/"staple"/"软因子"/"断连 TMD" |
 | `pyqcd-pipeline` | 蒸馏管线九步运行/一致性验证/断点续跑/数据守卫/env 快照 | "跑管线"/"一致性测试"/examples/test0 |
 | `pyqcd-infra` | torch 后端/h5-ASCII-VdV-VVV IO/MPI 并行显存公式 N·a=n·b | "切后端"/"h5 读写"/"MPI 并行" |
 | `pyqcd-docs` | 中文 LaTeX 编译三零验收/字体规范/analy-pure 报告产物约定/报告范式 | "写文档"/"出报告"/xelatex |
@@ -33,7 +34,10 @@ pyqcd-physics-spectrum    pyqcd-pipeline ◄── pyqcd-infra（后端/IO/并�
         ▼                       ▼
    pyqcd-analysis ◄──── pyqcd-tmd-chain          （统计纪律 ← 物理链）
         │                       │
-        └──────────► pyqcd-docs ◄─────────┘        （成文交验）
+        └──────────► pyqcd-tmd-algorithm ◄── pyqcd-pipeline/infra
+                                │
+                                ▼
+                           pyqcd-docs             （成文交验）
 ```
 
 ## 统一范式
