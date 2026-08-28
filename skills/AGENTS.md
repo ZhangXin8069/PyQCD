@@ -62,7 +62,8 @@ pyqcd-conventions ────────────────────�
 ## 执行与验证约定
 
 - 多步骤任务先列 TODO，完成一个子步骤立即更新；本库无 pytest 依赖，结构检查优先使用
-  官方 `quick_validate.py`。
+  官方 `/root/.codex/skills/.system/skill-creator/scripts/quick_validate.py`（逐个
+  `pyqcd-*` 目录运行）。
 - 证据以当前源码、命令输出、数值断言和产物为准；引用 API 或文件前先核实存在性。
 - 修改技能时使用最小范围、保留既有物理边界，不 import `refer/` 或 `examples/` 作为运行依赖。
 - 入口文档目标小于 500 行；格式变更后检查 fenced block、路径、名称、表格和 README 一致性。
