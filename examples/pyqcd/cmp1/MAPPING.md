@@ -39,6 +39,7 @@
 | fm2GeV | pyqcd=0.1973269804(ħc)，ref=0.197 | 有意精度提升；meff/Mom2GeV 呈恒定比例 0.998343，容差通过 |
 | meff cosh clamp | pyqcd 加 arccosh 定义域保护 | 有意增强；log 支路不受影响 |
 | dis_connect PFF | ref 装配依赖 reshape 平坦重解释副作用 | pyqcd 按文档意图实现，实测差异登记 |
+| GEVP 复数输入 | ref 在 Hermitian 化后执行 `.real`，丢弃复关联矩阵的虚部；pyqcd 保留复数 | 纯实输入逐位一致；复数输入以独立 GEVP 残差判定 pyqcd 正确，L20 登记为参考语义差异 |
 | F̃ 约定 | ref plaquette_clover_all_tilde 与 compute_dual_field_strength 轴序/符号存在固定线性关系 | D04 以候选关系判定锁定；下游 D05/D07 数值传导→optim/backlog |
 | stout 逐位 | 生产形状 (dir,z,y,x,t,c,c) 7D 喂入已修正（此前单例 t 假轴致 nu=0 staple 滚动失效）；修正后默认去迹路径仍存 rel≈0.385 结构性差异，staple/f 系数应用层的逐步插桩定位需独立会话预算 | S10 结构性登记 backlog。插桩新证据（第三层，Q 矩阵级）：生产布局下 ΔQ(rel)=3.15，首分歧位于 z=23 卷绕边界的 staple 项且呈符号反转——已由作用量判据定性：ref 该符号致反平滑(+18%)，pyqcd 物理正确(−9.1%)，差异=参照符号缺陷实证；①opt_einsum 对角返回可写视图→ref 迹扣除实际生效（此前'未去迹'结论撤回）；②不去迹路径 |c0|>c0_max 占 31%→NaN 必然；③ref 在其布局下 roll 轴映射依赖其生产调用栈的确切输入排布——本机无法唯一复原，故 S10 已定性关闭（pyqcd 正确，登记备查）|
 | unpol F·F(S09) | rel≈2.33：U† 链 roll 方向疑异 | second_insert 接口已落地；backlog |
