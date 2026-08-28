@@ -10,7 +10,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # 允许非 pass 的白名单（结构性/统计性/登记差异项）
-WHITELIST_STRUCTURAL = {'L17', 'L22b', 'L28', 'L30', 'D08',
+WHITELIST_STRUCTURAL = {'L17', 'L20', 'L22b', 'L28', 'L30', 'D08',
                         'S10'}
 # 数值分歧已登记 MAPPING.md optim/backlog 的项（不要求 note 字段）
 WHITELIST_REGISTERED = {'S09', 'D04'}

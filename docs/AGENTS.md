@@ -29,3 +29,7 @@ cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelate
 - 文本模式数学符号需 `$...$` 包裹（如 `$\pi$介子`）；`\quad` 后跟中文须空格。
 - 依赖宏包：ctexart/beamer、amsmath、physics、slashed、natbib（无 biblatex）。
 - 新文档放入本目录并登记到上方表格。
+
+## 对照测试报告
+
+- `report_cmp1_4150_20260828.tex/.pdf`：基于真实组态 4150 的 PyQCD 与 lqcddb/donghx 功能对照报告；16:9 横板、16 页，含 L20 复数 GEVP 差异判定、HYP 输入守卫、验证命令与未验证边界（2026-08-28）。
