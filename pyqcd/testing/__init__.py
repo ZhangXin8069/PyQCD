@@ -463,6 +463,21 @@ def test_eigvec_compress():
     assert noisy.shape == (7,) + shape and check_orthonormal(noisy)
 
 
+def test_inner_product_returns_cross_gram_matrix():
+    """本征模集合内积返回 (N_init,N_test) 交叉 Gram 矩阵。"""
+    from pyqcd.vertex._eigcompress import inner_product
+
+    init = np.array([[1 + 1j, 2], [3, 4 - 1j]])
+    test = np.array([[2, -1j], [1 + 2j, 3]])
+    expected = np.einsum('iv,jv->ij', init.conj(), test)
+
+    got = np.asarray(inner_product(init, test))
+    assert got.shape == (2, 2)
+    np.testing.assert_allclose(got, expected)
+    np.testing.assert_allclose(
+        np.asarray(inner_product(init, test, mode='abs')), np.abs(expected) ** 2)
+
+
 def test_cg_coefficients():
     """SU(2) CG：已知值、Condon–Shortley 符号、幺正性、combine/decompose。"""
     from pyqcd.lattice import cg_coefficient, SU2combine, SU2decompose

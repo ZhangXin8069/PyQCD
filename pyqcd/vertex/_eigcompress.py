@@ -48,16 +48,17 @@ def _flatten_vol(vectors):
 
 
 def inner_product(init_vector, test_vector, mode=''):
-    """体积分内积 C_n = Σ_v init_n(v)* · test(v)（沿第 0 轴批量）。
+    """计算两组向量的交叉 Gram 矩阵 C_ij = Σ_v init_i(v)* · test_j(v)。
 
-    mode='' 返回复内积；mode='abs' 返回 |C|²。
+    mode='' 返回形状 ``(N_init, N_test)`` 的复内积矩阵；mode='abs' 返回
+    其逐元素模平方。
     """
     cp = get_backend()
     a, _ = _flatten_vol(cp.asarray(init_vector))
     b, _ = _flatten_vol(cp.asarray(test_vector))
     if a.shape[1] != b.shape[1]:
         raise ValueError(f"体积不一致: {a.shape[1]} vs {b.shape[1]}")
-    c = cp.einsum('nv,nv->n', a.conj(), b)
+    c = cp.einsum('iv,jv->ij', a.conj(), b)
     if mode == '':
         return c
     if mode == 'abs':
