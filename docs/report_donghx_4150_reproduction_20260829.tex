@@ -67,7 +67,7 @@
 }
 
 \title[4150 donghx 复现]{donghx 格点 QCD 算法的 PyQCD 复现}
-\subtitle{组态 4150：eigvec / VdV / VVV / 2pt / OPE 的真实对照与下游边界}
+\subtitle{组态 4150：eigvec / VdV / VVV / 2pt / HYP-OPE 的真实对照与下游边界}
 \author[Codex]{Codex / PyQCD}
 \institute{格点 QCD：蒸馏、质子相关函数与胶子算符}
 \date{2026 年 8 月 29 日}
@@ -84,14 +84,16 @@
   \end{center}
 \end{frame}
 
-\begin{frame}[t]{结论先行：低层七项与两种 2pt 投影均通过，完整链仍有明确边界}
+\begin{frame}[t]{结论先行：低层七项、4D10 HYP-OPE 与两种 2pt 投影均通过，完整链仍有边界}
   \begin{columns}[T,totalwidth=\textwidth]
     \begin{column}{0.30\textwidth}
       \begin{block}{低层对象}
         \centering\Large\textcolor{evidence}{7/7}\par\normalsize
-        eigvec、phase、VdV、VVV、Clover、dual、OPE
+        eigvec、phase、VdV、VVV、Clover、dual、OPE；\newline
+        4D10 HYP 三方向 9/9
       \end{block}
-      \small 相对差为 $0$ 或 $1.4\times10^{-15}$ 量级。
+    \small 低层相对差为 $0$ 或 $1.4\times10^{-15}$ 量级；\newline
+    HYP-OPE 最大相对差 $3.31\times10^{-15}$。
     \end{column}
     \begin{column}{0.30\textwidth}
       \begin{block}{费米子 2pt}
@@ -112,9 +114,7 @@
   \colorbox{good}{\parbox{0.94\linewidth}{\centering
     \verified\ 生产侧的 donghx 两项质子缩并已补入 \codepath{pyqcd/contraction/_donghx.py}；
     \inferred\ 复现结论限于当前可读输入和明确时间对。}}
-  \source{实测：\codepath{examples/pyqcd/cmp1/v202608291500_lowlevel/results.json}；
-  \codepath{examples/pyqcd/cmp1/v202608291710_fermion_cg5g4/results.json}；
-  \codepath{logs/donghx_4150_20260829/summary.md}}
+  \source{结果索引：\codepath{logs/donghx_4150_20260829/summary.md}}
 \end{frame}
 
 \begin{frame}[t]{任务与输入：同一组态驱动参考公式和 PyQCD 生产实现}
@@ -128,7 +128,7 @@
     Clover 规范场 & raw，573439152 B & Operator.py 可读 & 两时间片全张量\\
     eigvec & 72 个时间片，约 4.78 GB & Calc\_VVV.py 同式读取 & f8 交错复数、形状\\
     light peram & 288 个文件，约 13.27 GB & 用户给定路径存在 & $4\times4\times100\times100$\\
-    HYP 3D(1/3/5)、4D(10) & 各 7 个 LIME record & 存在；本轮未重算 & 资产盘点\\
+    HYP 3D(1/3/5)、4D(10) & 各 7 个 LIME record & 4D10 已重算；3D 已运行 & 记录读取、OPE 形状与幺正性\\
     2pt Result & 322 个文件，含 Cg5/Cg5g4 & 4150 可配对 & 选定时间对相对差\\
     TMD OPE Result & x/y/z 共 58 个文件；有横向位移 & 与直线 OPE 分开 & 不混合比较\\
     \bottomrule
@@ -218,7 +218,7 @@
   \source{参考：\codepath{Operator.py:150--184}；实现：\codepath{operator/_gluon_ope.py:63--133}；结果：\codepath{lowlevel/results.json}}
 \end{frame}
 
-\begin{frame}[t]{直线 Wilson 线 OPE（2/2）：几何与正负 $z$ 分支必须独立}
+\begin{frame}[t]{直线 Wilson 线 OPE（对偶通道）：几何与正负 $z$ 分支必须独立}
   \footnotesize
   \begin{align*}
     M_{\mu\nu;\rho\sigma}(z)&=\sum_{\boldsymbol x}\operatorname{Tr}\!\left[
@@ -239,6 +239,39 @@
     $z=0,1$、两个时间片的直线 OPE 相对差为 $1.36\times10^{-15}$；该数值不代表横向 staple 已验证。
   \end{block}
   \source{参考：\codepath{Operator.py:339--399}；实现：\codepath{operator/_gluon_ope.py:135--221}；结果：\codepath{lowlevel/results.json}}
+\end{frame}
+
+\begin{frame}[t]{HYP 规范场与非极化直线 OPE：4D10 三方向 9/9 对照}
+  \footnotesize
+  对用户提供的 HYP payload，先读取
+  \codepath{msg02.rec04.ildg-binary-data} 为
+  $U\in\mathbb C^{72\times24^3\times4\times3\times3}$，再计算
+  \begin{align*}
+    M^{(F)}_{\mu\nu;\mu\nu}(z)&=\sum_{\boldsymbol x}\operatorname{Tr}\!\left[
+      F_{\mu\nu}(x+z\hat d)W^\dagger(0\!\to\!z)F_{\mu\nu}(x)W(0\!\to\!z)\right].
+  \end{align*}
+  这里第二场强是 $F$ 而不是 $\widetilde F$；表中逐项比较参考的
+  \codepath{ops_mu_nu} Lorentz 通道。参考 TMD 成品取 $\Delta_\perp=0$ 截面，
+  因此只证明直线几何的非极化通道；最终 $O^{(F)}$ 投影需在下游另行组合。
+  \vspace{0.10em}
+  \setlength{\tabcolsep}{3pt}
+  \renewcommand{\arraystretch}{1.02}
+  \begin{tabular}{@{}l r l r r l@{}}
+    \toprule
+    方向 & 通道数 & 输出形状 & 最大相对 L2 & 最大 $|\Delta|$ & 状态\\
+    \midrule
+    $x$ & 3 & $(72,9)$ & $3.30\times10^{-15}$ & $5.69\times10^{-13}$ & \verified\\
+    $y$ & 3 & $(72,9)$ & $3.31\times10^{-15}$ & $5.69\times10^{-13}$ & \verified\\
+    $z$ & 3 & $(72,12)$ & $7.50\times10^{-17}$ & $5.69\times10^{-14}$ & \verified\\
+    \bottomrule
+  \end{tabular}
+  \vspace{0.08em}
+  \begin{block}{HYP 输入门}
+    规范场形状为 $(72,24,24,24,4,3,3)$、dtype 为 c128，最大 $|UU^\dagger-I|$ 为
+    $1.11\times10^{-15}$；9 个通道全部通过，runner 退出码为 0。
+    3D(1/3/5) 各运行 3 个 z 向通道，但没有同 smear 参考，均诚实记为 \unverified。
+  \end{block}
+  \source{实现：\codepath{cmp1/run_4150_hyp_ope.py:121--189}；reader：\codepath{operator/_gluon_ope.py:317--391}；结果：\codepath{cmp1/v20260829_hyp_ope_xyz/results.json}、\codepath{logs/donghx_4150_20260829/summary.md}}
 \end{frame}
 
 \begin{frame}[t]{质子 2pt：peram 轴序与两项颜色 epsilon 缩并被显式复现}
@@ -350,13 +383,14 @@
     无 momentum smear & 标准 light peram + eigvec；$Cg5/Cg5g4$、$P=0$ 的 35 对通过。 & \verified\\
     无 momentum smear 的方向/大小 & $P_z=1,2,5$、$P_x=1$、$P_y=1$；按参考 dtype 给容差。 & \verified\\
     momentum smear $\pm2x/\pm2y/\pm2z$ & 参考有结果，但需独立 smeared peram；本轮只有标准 light peram。 & \unverified\\
-    gauge smear & HYP record 存在；尚未完成 record $\to$ PyQCD link $\to$ Clover/OPE。 & \unverified\\
+    gauge smear：4D10 & record $\to$ PyQCD link $\to$ Clover/OPE 已运行；$x/y/z$ 共 9 通道逐项通过。 & \verified\\
+    gauge smear：3D(1/3/5) & 各运行 $z$ 向 3 通道；同 smear 参考成品缺失，不能给数值一致结论。 & \unverified\\
     \bottomrule
   \end{tabularx}
   \begin{block}{物理含义}
     smearing 改变输入链：momentum 同时改变 phase/peram；gauge 必须在同一 HYP link 上重算 Clover/OPE。
   \end{block}
-  \source{参考：\codepath{2pt_proton...mom2_xdir_dcu.py:57--180}；资产：\codepath{cmp1/v202608291424/manifest.json}}
+  \source{参考：\codepath{2pt_proton...mom2_xdir_dcu.py:57--180}；HYP 结果：\codepath{cmp1/v20260829_hyp_ope_xyz/results.json}；资产：\codepath{cmp1/v202608291424/manifest.json}}
 \end{frame}
 
 \begin{frame}[t]{3pt、ratio、barematrix：接口可审阅，但缺少可配对的 4150 样本}
@@ -383,16 +417,16 @@
     \toprule
     层级 & 本轮可追溯事实 & 判定\\
     \midrule
-    直线低层 & $O(z)$ 的 Clover、对偶场强、Wilson 线和两个 $z$ 点已对照；相对差 $1.36\times10^{-15}$。 & \verified\\
-    参考 TMD 几何 & 成品含横向 $\Delta x/\Delta y$ staple；不是本轮直线 $z$ 算符的同一输入。 & \unverified\\
+    直线低层（对偶） & $O(z)$ 的 Clover、对偶场强、Wilson 线和两个 $z$ 点已对照；相对差 $1.36\times10^{-15}$。 & \verified\\
+    4D10 非极化直线截面 & x/y/z 共 9 通道与参考成品的 $\Delta_\perp=0$ 截面通过；最大相对差 $3.31\times10^{-15}$。 & \verified\\
+    参考 TMD 几何 & 成品还含非零横向 $\Delta x/\Delta y$ staple；本轮只取零横向截面，非零 $b_\perp$ 仍未验证。 & \unverified\\
     完整 TMD-PDF & 还需 $b_\perp$、soft/rapidity 减除、匹配及 $a/P_z/m_\pi/L$ 多尺度外推。 & \unverified\\
     \bottomrule
   \end{tabularx}
-  \vspace{0.12em}
   \begin{block}{物理判断}
     只把同一 gauge、同一几何、同一样本的结果放入 ratio；本轮证据停在直线 OPE 低层，不宣称完整 TMD-PDF。
   \end{block}
-  \source{直线结果：\codepath{cmp1/v202608291500_lowlevel/results.json}；参考 TMD 资产：\codepath{cmp1/v202608291424/manifest.json}}
+  \source{结果索引：\codepath{logs/donghx_4150_20260829/summary.md}}
 \end{frame}
 
 \begin{frame}[t]{本轮 debug 与优化：差异来自输入/命名/证据等级，而非数值算法漂移}
@@ -427,11 +461,12 @@
     runner 契约 & \codepath{verify_4150_fermion_runner.py} & PASS 7/7\\
     低层真实 & \codepath{v202608291500_lowlevel/results.json} & 7 pass\\
     2pt 真实 & \codepath{v202608291710_fermion_cg5g4/results.json} & 2 pass + 1 unverified\\
+    HYP-OPE 真实 & \codepath{v20260829_hyp_ope_xyz/results.json} & 9 pass；3D 运行但无配对参考\\
     \bottomrule
   \end{tabularx}
   \vspace{0.10em}
   \begin{block}{主回归}
-    \texttt{python}\,\codepath{examples/pyqcd/conftest.py}：41 passed，0 failed；编译验收仍要求两遍 XeLaTeX、零溢出且页数闭合。
+    \texttt{python}\,\codepath{examples/pyqcd/conftest.py}：42 passed，0 failed；编译验收仍要求两遍 XeLaTeX、零溢出且页数闭合。
   \end{block}
   \source{证据索引：\codepath{logs/donghx_4150_20260829/summary.md}；产物：\codepath{examples/pyqcd/cmp1/}}
 \end{frame}
@@ -449,6 +484,7 @@
     eigvec/phase & \codepath{Calc_VVV.py:28--59} & \codepath{tools/_io.py:32--64}；\codepath{vertex/_vertex.py:28--106}\\
     VdV/VVV & \codepath{Calc_VVV.py:62--136} & \codepath{vertex/_vertex.py:113--207}\\
     Clover/dual & \codepath{Operator.py:150--184} & \codepath{operator/_gluon_ope.py:63--133}\\
+    HYP/LIME reader & ILDG \codepath{msg02.rec04.ildg-binary-data} & \codepath{operator/_gluon_ope.py:317--391}\\
     peram 轴序 & \codepath{2pt_proton...new_cpu.py:193--224} & \codepath{tools/_io.py:115--223}\\
     2pt 缩并 & \codepath{2pt_proton...new_cpu.py:346--381} & \codepath{contraction/_donghx.py:85--151}\\
     投影/边界 & \codepath{2pt_proton...new_cpu.py:418--465} & \codepath{contraction/_baroperator.py:332--365}\\
@@ -504,7 +540,7 @@
     任务 & 前置输入 & 产物/判据 & 当前阻塞\\
     \midrule
     3pt/ratio & 顺序源、插入时间、OPE 样本 & raw $C_3/C_2$、真空扣除、拟合表、barematrix & 外部目录无法配对\\
-    HYP/OPE & record 可读的 link 适配 & 各 3D/4D smear 的 Clover、OPE、几何元数据 & 本轮只盘点资产\\
+    HYP/OPE & record 可读的 link 适配 & 4D10 三方向 9/9；3D(1/3/5) 各有真实 z 向运行元数据 & 3D 同 smear 参考成品缺失\\
     TMD & $z,b_\perp,\tau$、soft/rapidity/matching、多尺度数据 & 软因子、匹配、连续极限闭环 & 进阶项，当前不宣称完成\\
     \bottomrule
   \end{tabularx}

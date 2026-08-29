@@ -314,17 +314,40 @@ def _first_link_unitarity(raw: np.ndarray, Nc: int = 3) -> float:
     return dev if np.isfinite(dev) else float('inf')
 
 
+def _resolve_ildg_binary_record(filepath):
+    """Resolve an ILDG file or an extracted ``.lime.contents`` directory.
+
+    ``lime_contents`` stores the payload as the canonical
+    ``msg02.rec04.ildg-binary-data`` record.  Keep the resolution explicit so
+    an unrelated file in the directory can never be selected silently.
+    """
+    filepath = os.fspath(filepath)
+    if not os.path.isdir(filepath):
+        return filepath
+    record = os.path.join(filepath, "msg02.rec04.ildg-binary-data")
+    if os.path.isfile(record):
+        return record
+    raise ValueError(
+        f"ILDG contents directory has no msg02.rec04.ildg-binary-data: "
+        f"{filepath}"
+    )
+
+
 def read_gauge_lime(filepath: str, Nt: int, Nx: int, Nc: int = 3) -> np.ndarray:
     """读 .lime 规范组态 → complex128 (Nt,Nx,Nx,Nx,4,Nc,Nc)。
 
     ILDG .lime 为大端 float64 + XML 头 + 尾部记录；扫描 ±16KB 窗口
     按幺正性定位数据起点。
 
+    ``filepath`` 也可以是解包后的 ``.lime.contents`` 目录；此时读取其
+    标准 ``msg02.rec04.ildg-binary-data`` 记录。
+
     优化：幺正性判定只需首链接（18 个 double = 144B）。先用微小探针定位
     合法偏移，命中后才全量读取一次，避免每个候选偏移都读整份（≈573MB）
     造成的 TB 级读盘与乱字节数据导致的 matmul 溢出告警。扫描顺序、阈值
     与回退逻辑与原实现完全一致。
     """
+    filepath = _resolve_ildg_binary_record(filepath)
     expected_elems = Nt * Nx * Nx * Nx * 4 * Nc * Nc * 2
     expected_bytes = expected_elems * 8
     file_size = os.path.getsize(filepath)

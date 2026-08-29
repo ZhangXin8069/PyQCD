@@ -7,7 +7,7 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（41 项：19 物理/链路项 + 22 整合功能项 stout/本征模压缩+Ω张量/CG/hB-loader/boot协方差/plateau+CS核/PDF成图/数据守卫+2pt续跑/方向能量链/第二轮helicity+FH窗+ASCII/第三轮匹配核修正+sin准PDF+OPE±z+宇称投影+ZR样本环+boot外推+dis_connect+模板守卫+Wick图+FLOPs诊断+VVV读取+env快照+比对原语）
+python examples/pyqcd/conftest.py    # 全量测试（42 项：19 物理/链路项 + 23 整合功能项 stout/本征模压缩+Ω张量/CG/hB-loader/boot协方差/plateau+CS核/PDF成图/数据守卫+2pt续跑/方向能量链/第二轮helicity+FH窗+ASCII/第三轮匹配核修正+sin准PDF+OPE±z+宇称投影+ZR样本环+boot外推+dis_connect+模板守卫+Wick图+FLOPs诊断+VVV读取+env快照+比对原语+目录型LIME reader）
 python examples/pyqcd/verify_consistency.py   # 一致性验证（参考产物完整时 vs docker-v20260805，A–E 全 0 差异；缺失时明确退出2）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
 python -m pyqcd.parallel --dry-run --confs 6250,6450   # MPI 并行规划预览（用户公式 N*a=n*b）

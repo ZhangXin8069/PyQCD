@@ -48,6 +48,7 @@ from pyqcd.testing import (  # noqa: F401
     test_vertex_product_readers,
     test_env_snapshot,
     test_cmp_primitives,
+    test_read_gauge_lime_accepts_contents_directory,
 )
 
 
