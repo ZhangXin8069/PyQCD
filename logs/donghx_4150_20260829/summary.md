@@ -119,7 +119,41 @@ examples/pyqcd/cmp1/v20260829_hyp_ope_3d5_z/
 其中每个 `contract` 输出形状为 `(72,72,4,4)`，每个 `nopol_pp` 输出形状为
 `(72,72)`；`Cg5g4` 的 c64 参考采用 `tol=1e-5`，最大误差仍在容差内。上述
 矩阵只证明无 momentum smear 的 2pt 中间/投影对象；`momsmear±2{x,y,z}` 仍需
-独立 smeared perambulator，不能由标准 perambulator 推断。
+独立 smeared perambulator，不能由标准 perambulator 推断。对已有 momentum-smear
+最终成品，另有独立的输出级投影检查，见下节。
+
+## momentum-smear 最终输出级检查
+
+检查入口：`examples/pyqcd/cmp1/inspect_4150_momsmear.py`；结果：
+`examples/pyqcd/cmp1/v20260829193527_momsmear/results.json`。
+
+参考可见的计算顺序是：固定 $q=\pm2\hat d$ 相位乘到低模 → 以输出动量 $P$ 逐时间构造
+VVV → 读取四个 source-Dirac 文件组成 peram → 两项质子颜色 epsilon 缩并 →
+$P_+=\frac12(\gamma_0+\gamma_4)$ 投影 → 对反周期边界应用 $t_s<t_0$ 的负号，最后
+保存 `contract` 与 `nopol_ss`。本检查只复算最后两步的输出关系，不把普通 light
+perambulator 代替独立 momentum-smeared perambulator。
+
+| 根目录 | 相位 | 动量覆盖 | 文件数 | 动量组 | projection pass | 最大 rel L2 |
+|---|---|---|---:|---:|---:|---:|
+| `momsmear-2x` | $-2\hat x$ | $P_x=-2\ldots-6$ | 25 | 5 | 5/5 | 5.20e-8 |
+| `momsmear-2y` | $-2\hat y$ | $P_y=-2\ldots-6$ | 25 | 5 | 5/5 | 5.28e-8 |
+| `momsmear-2z` | $-2\hat z$ | $P_z=-2\ldots-6$ | 25 | 5 | 5/5 | 5.85e-8 |
+| `momsmear2x` | $+2\hat x$ | $P_x=2\ldots6$ | 25 | 5 | 5/5 | 4.63e-8 |
+| `momsmear2z` | $+2\hat z$ | $P_z=0,2\ldots6$ | 27 | 6 | 6/6 | 5.01e-8 |
+
+合计 127 个文件、26 个动量组，26/26 通过；所有 `contract`/`nopol_ss` 为
+`(72,72,4,4)`/`(72,72)`，最大相对 L2 为 `5.86e-8`，最大绝对差为
+`7.57e-10`，c64 容差为 `5e-6`。这证明输出文件的投影和边界实现自洽，不能升级
+为 PyQCD 使用独立 smeared peram 重算并与参考 raw VVV/peram 一致。
+
+## 3pt、ratio、barematrix 配对盘点
+
+在用户明确给出的对照根目录中，`2pt_Result/.../4150` 的匹配文件是
+`twopt_slice_*` 2pt 数组；`Contraction` 目录是 `Wick_contraction.py` 与 Wick 图
+PDF；TMD OPE 目录是 x/y/z 方向的 `ops_*` 数组。没有发现同时具备组态 4150、同一
+动量/方向、同一 OPE 几何和插入时间元数据的 raw 3pt 数组，也没有可一一配对的
+ratio/barematrix 数值成品；`Result_hpy_4D_10times` 当前不存在。因此本轮不运行
+或生成这些下游的伪比较，状态保持 `unverified`。
 
 ## 本轮断言
 
@@ -129,6 +163,7 @@ verify_4150_lowlevel: PASS 3/3
 verify_4150_fermion: PASS 3/3
 verify_4150_fermion_runner: PASS 12/12
 verify_4150_hyp_ope_runner: PASS 3/3
+verify_4150_momsmear: PASS 4/4
 ```
 
 完整主回归和报告编译结果见最终交付说明；本文件只记录可追溯数值，不把未运行的
@@ -143,4 +178,5 @@ verify_4150_lowlevel.py: PASS 3/3
 verify_4150_fermion.py: PASS 3/3
 verify_4150_fermion_runner.py: PASS 12/12
 verify_4150_hyp_ope_runner.py: PASS 3/3
+verify_4150_momsmear.py: PASS 4/4
 ```
