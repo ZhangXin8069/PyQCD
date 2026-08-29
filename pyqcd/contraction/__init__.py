@@ -8,6 +8,7 @@ from ._baroperator import (
     parity_and_boundary,
 )
 from ._seqperam import seq_peram
+from ._donghx import contract_donghx_2pt_pair
 from ._wickplot import plot_figure_wick
 from ._dynamic import PeramRegistry, VRegistry, GammaRegistry, dynamic_contraction, clear_plan_cache
 
@@ -15,7 +16,7 @@ __all__ = [
     "wick_contraction", "identify_equivalent_diagrams",
     "split_hadrons", "classify_structure", "conjugate_operator", "dagger_quark",
     "parity_and_boundary",
-    "seq_peram", "plot_figure_wick",
+    "seq_peram", "contract_donghx_2pt_pair", "plot_figure_wick",
     "PeramRegistry", "VRegistry", "GammaRegistry", "dynamic_contraction",
     "clear_plan_cache",
 ]
