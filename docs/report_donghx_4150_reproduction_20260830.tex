@@ -67,7 +67,7 @@
 }
 
 \title[4150 donghx 复现]{donghx 格点 QCD 算法的 PyQCD 复现}
-\subtitle{组态 4150：eigvec / VdV / VVV / 2pt（含 momsmear0）/ HYP-OPE 的真实对照与下游边界}
+\subtitle{组态 4150：eigvec / VdV / VVV / 2pt（含 momsmear0 与 effmass 聚合）/ HYP-OPE 的真实对照与下游边界}
 \author[Codex]{Codex / PyQCD}
 \institute{格点 QCD：蒸馏、质子相关函数与胶子算符}
 \date{2026 年 8 月 30 日}
@@ -429,6 +429,36 @@
   \source{检查器：\codepath{cmp1/inspect_4150_momsmear.py:89--131}；结果：\codepath{cmp1/v202608300150_4150_2pt_inventory/results.json}}
 \end{frame}
 
+\begin{frame}[t]{effmass 聚合 2pt：4150 是第 2 个样本，25 个动量行逐数组闭合}
+  \footnotesize
+  聚合序列为 $4050+50k$，因此 $4150\Rightarrow k=2$。检查器逐行定位样本：
+  raw 项直接比较 $(t_{\rm sink},t_{\rm source})$ 矩阵；\codepath{twoptall} 项先按
+  $(t_{\rm sink}-t_{\rm source})\bmod72$ 汇总，再与参考矩阵比较。
+  \setlength{\tabcolsep}{3pt}
+  \renewcommand{\arraystretch}{1.00}
+  \begin{tabular}{@{}l l r r r l@{}}
+    \toprule
+    聚合资产 & 形状 & 动量行 & 最大相对差 & 4150 索引（命中/行数） & 状态\\
+    \midrule
+    raw $+2z$ & $(5,879,72,72)$ & 5 & $0$ & $2\;(5/5)$ & \verified\\
+    raw $-2z$ & $(5,879,72,72)$ & 5 & $0$ & $2\;(5/5)$ & \verified\\
+    raw momsmear0 $Cg5g4$ & $(4,878,72,72)$ & 4 & $0$ & $2\;(4/4)$ & \verified\\
+    \codepath{twoptall} $+2z$ & $(5,879,72)$ & 5 & $2.58\times10^{-16}$ & $2\;(5/5)$ & \verified\\
+    \codepath{twoptall} momsmear0 & $(4,878,72)$ & 4 & $7.12\times10^{-18}$ & $2\;(4/4)$ & \verified\\
+    \codepath{twoptall} $P_z=0$, $Cg5$ & $(1,879,72)$ & 1 & $3.94\times10^{-17}$ & $2\;(1/1)$ & \verified\\
+    \codepath{twoptall} $P_z=0$, $Cg5g4$ & $(1,876,72)$ & 1 & $1.87\times10^{-17}$ & $2\;(1/1)$ & \verified\\
+    \bottomrule
+  \end{tabular}
+  \vspace{0.06em}
+  \begin{block}{判定与边界}
+    7/7 个聚合资产、25/25 个动量行通过；raw 矩阵逐位相等，\codepath{twoptall}
+    最大相对差 $2.58\times10^{-16}$。complex64 的汇总先升宽到 complex128。
+    这闭合了聚合样本与 4150 成品的对应关系，不证明独立 smeared peram、逐时间
+    VVV 或 3pt/ratio/barematrix 输入链已可见。
+  \end{block}
+  \source{检查器：\codepath{cmp1/inspect_4150_effmass.py}；结果：\codepath{cmp1/v202608301600_4150_effmass_aggregate/results.json}；受控测试：\codepath{cmp1/verify_4150_effmass.py}}
+\end{frame}
+
 \begin{frame}[t]{非零 momentum-smear：5 个根目录、26 个动量组、投影 26/26}
   \scriptsize
   momentum smear 先在低模上乘固定方向的相位 $s_q$，再以输出动量 $P$ 构造三低模顶点：
@@ -570,6 +600,7 @@
     2pt 真实 & \codepath{v202608300145_cg5g4/results.json}；\codepath{v202608300146_cg5} & 各 2 pass + 1 unverified\\
     2pt 输出级库存 & \codepath{v202608300150_4150_2pt_inventory/results.json} & 58/58 pass；7 根目录；上游 peram 未验证\\
     2pt 断言门 & \codepath{verify_4150_momsmear.py} & PASS 5/5\\
+    effmass 聚合样本门 & \codepath{verify_4150_effmass.py}；\codepath{inspect_4150_effmass.py} & PASS 3/3；7/7 资产、25 行\\
     cmp1 总门 & \codepath{verify_cmp1.py} & 51/52；白名单 1；硬失败 0\\
     \bottomrule
   \end{tabularx}
