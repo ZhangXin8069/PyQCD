@@ -262,29 +262,31 @@ def build():
     a = rng26.standard_normal((nev, 24)) + 1j * rng26.standard_normal((nev, 24))
     q, _ = np.linalg.qr(a.T)
     vecs = np.ascontiguousarray(q.T.reshape((nev,) + shp))
+    ip_init = np.ascontiguousarray(vecs[:2] + 0.2 * vecs[2:4])
+    ip_test = np.ascontiguousarray(vecs[2:5] + 0.1 * vecs[:3])
 
     vc = L.vector_creator()
 
     def _l26_cmp(a, b):
         worst = 0.0
-        for i in (0, 1):
+        for i in (0, 1, 2):
             x, y = np.asarray(a[i]), np.asarray(b[i])
             if x.shape != y.shape:
                 return float('inf')
             worst = max(worst, float(np.linalg.norm(x - y)
                                      / max(np.linalg.norm(y), 1e-300)))
-        return 0.0 if bool(a[2]) == bool(b[2]) else float('inf')
+        return max(worst, 0.0 if bool(a[3]) == bool(b[3]) else float('inf'))
 
-    add('L26', '本征模基元 check/normal/orthnormal（check 按布尔）',
+    add('L26', '本征模基元 inner/check/normal/orthnormal',
         lambda: [vc.normal(vecs[:4].copy()),
                  vc.orthnormal(vecs[:4], vecs[4]),
+                 vc.inner_product(ip_init, ip_test),
                  bool(vc.check(vecs, dtype='find'))],
         lambda: [pq_norm(vecs[:4].copy()),
                  pq_orth(vecs[:4], vecs[4]),
+                 np.asarray(pq_ip(ip_init, ip_test)),
                  bool(pq_chk(vecs))],
-        tol=1e-11, compare=_l26_cmp,
-        note='inner_product 语义分歧：ref 逐点 (Nc,Nc) 外积阵 vs pyqcd Nc 维'
-             '内积，登记映射表')
+        tol=1e-11, compare=_l26_cmp)
 
     add('L27', 'compress V1 求和压缩 I/B（参数映射后逐位）',
         lambda: [vc.compress_matrix_V1(vecs, [16], [4], ct) for ct in 'IB'],

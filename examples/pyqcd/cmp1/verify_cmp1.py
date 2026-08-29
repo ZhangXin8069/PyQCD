@@ -13,15 +13,42 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WHITELIST_STRUCTURAL = {'L17', 'L20', 'L22b', 'L28', 'L30', 'D08',
                         'S10'}
 # 数值分歧已登记 MAPPING.md optim/backlog 的项（不要求 note 字段）
-WHITELIST_REGISTERED = {'S09', 'D04'}
+WHITELIST_REGISTERED = {'D04'}
 # 数值分歧已登记 optim/backlog 的项：要求 status=diff 且已附 note
-WHITELIST_DIFF_NOTE = {'L25', 'S09'}
+WHITELIST_DIFF_NOTE = {'L25'}
+
+
+def _is_cmp1_results(value):
+    """识别 cmp1 主套件结果，排除单项 runner 的 JSON。"""
+    return (isinstance(value, list) and
+            all(isinstance(item, dict) and 'id' in item and 'status' in item
+                for item in value))
+
+
+def _default_results_path():
+    """选择最近的完整 cmp1 结果，避免被单项证据目录遮蔽。"""
+    paths = sorted(glob.glob(os.path.join(HERE, 'v*', 'results.json')))
+    valid = []
+    for path in paths:
+        try:
+            with open(path) as stream:
+                value = json.load(stream)
+        except (OSError, ValueError, TypeError):
+            continue
+        if _is_cmp1_results(value):
+            valid.append((path, len(value)))
+    if not valid:
+        raise FileNotFoundError(f'未找到 cmp1 主套件结果: {HERE}/v*/results.json')
+    complete = [item for item in valid if item[1] >= 40]
+    return (complete or valid)[-1][0]
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else sorted(
-        glob.glob(os.path.join(HERE, 'v*', 'results.json')))[-1]
-    results = json.load(open(path))
+    path = sys.argv[1] if len(sys.argv) > 1 else _default_results_path()
+    with open(path) as stream:
+        results = json.load(stream)
+    if not _is_cmp1_results(results):
+        raise SystemExit(f'结果文件不是 cmp1 主套件列表: {path}')
     fails = []
     for r in results:
         st, cid = r['status'], r['id']
