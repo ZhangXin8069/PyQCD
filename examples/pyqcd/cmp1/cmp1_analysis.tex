@@ -14,7 +14,7 @@
 主套件同时覆盖合成数据、参考代码和用户指定真实输入；本轮真实 conf4150 的本征模、light perambulator、CLOVER 规范场、HYP-OPE 与 momentum-smear 输出级证据集中列于第 4150 节。独立 momentum-smeared perambulator、3pt/barematrix 原始输入缺失的部分不宣称已重算。
 
 \section{全量查找与映射结论}
-lqcddb 顶层导出 58 项、public 功能约 120 项：已整合约 61、部分 17、缺失 44（MPI 域分解 25、contractadviser 11、零散小函数与绘图常量）。donghx 64 个脚本归并 9 个功能族，全部有对应；当前实质缺口为独立 momentum-smeared perambulator 驱动的 2pt 通道、插值算符变体与 twopt\_slice 写出器等子项。逐项映射与 file:line 证据见 \verb|cmp1/MAPPING.md|。
+lqcddb 顶层导出 58 项、public 功能约 120 项：已整合约 61、部分 17、缺失 44（MPI 域分解 25、contractadviser 11、零散小函数与绘图常量）。donghx 64 个脚本归并 9 个功能族，全部有对应；当前实质缺口为独立 momentum-smeared perambulator 驱动的 raw VVV/2pt 输入链与 twopt\_slice 写出器等子项。逐项映射与 file:line 证据见 \verb|cmp1/MAPPING.md|。
 
 \section{对照结果矩阵（摘要）}
 逐位一致（rel\_diff $=0$ 或机器精度）：DR $\gamma$ / Pauli $\sigma$ / Levi-Civita 表、Wick 引擎与等价图识别、seq\_peram（真实 peram）、Jackknife / ratio\_3pt / solve\_GEVP / loop\_tsrc / dis\_connect(PDF)、cached\_contract、ASCII 读写、check\_files\_existence、safe\_save、readin\_eigvecs、CG 系数、baroperator 全套、inner/check/normal/orthnormal、compress V1(I/B)、Mom\_VdV、Clover 场强全叠、$\Delta$G 双场强算符（D05）、固定规范 FF 算符（D07）、unpol $F\cdot F$ 开关（S09）、Lorentz 指派表四模式、补充项 gamma\_index / PFF 投影 / p$\times\sigma$ / perm\_comb / 缓存键 / 切片增强 / Peram\_truncated / 绘图常量。
@@ -52,7 +52,7 @@ lqcddb 顶层导出 58 项、public 功能约 120 项：已整合约 61、部分
 
 \verb|hpy_4D_10times_new| 的 ILDG 载荷读取为 $(72,24,24,24,4,3,3)$ 的 complex128 规范场，最大幺正性偏差 $1.11\times10^{-15}$。PyQCD 实时计算 x/y/z 三方向共 9 个 HYP-OPE 通道，与参考 4150 成品的零横向位移切片全部通过：最大相对 L2 误差 $3.30\times10^{-15}$，最大绝对误差 $5.69\times10^{-13}$（z 向通道相对误差约 $7.5\times10^{-17}$）。证据摘要见 \verb|cmp1/v202608301200_hyp_ope/summary.md|。
 
-4150 的 donghx 2pt 成品还可直接读取五个 momentum-smear 根目录，共 26 个动量组、232 个数组；全部 contract/nopol 投影检查通过（complex64 组相对 L2 约 $4.2$--$5.9\times10^{-8}$，complex128 组为机器精度）。证据摘要见 \verb|cmp1/v202608301200_4150_inventory/summary.md|。但用户指定的三个独立 momentum-smeared perambulator 候选目录当前均不存在，因此这些 momentum-smear 结果只作为输出级参考，不能宣称已由普通 peram 重算。
+4150 的 donghx 2pt 成品还可直接读取七个选定根目录，共 58 个动量组、232 个已解析数组；其中五个为非零 momentum-smear，另两个为 \verb|momsmear0| 输出配置。全部 contract/nopol 投影检查通过，最大相对 L2 为 $8.29\times10^{-7}$、最大绝对差为 $1.98\times10^{-9}$，仍低于 complex64 的 $5\times10^{-6}$ 容差；\verb|momsmear0_Cg5| 的无后缀文件被检查器记录为隐式变体，不从目录名猜测。证据摘要见 \verb|cmp1/v202608300150_4150_2pt_inventory/summary.md|。此外，PyQCD 使用标准 light peram 对 \verb|momsmear0_Cg5g4| 与 \verb|momsmear0_Cg5| 的 $P=0$ 各计算 35 个时间对，contract 相对差分别为 $3.50\times10^{-15}$、$2.29\times10^{-15}$，nopol 相对差分别为 $1.27\times10^{-15}$、$1.53\times10^{-15}$；逐时间 VVV 参考仍缺失，runner 整体状态保持未验证。用户指定的三个独立 momentum-smeared perambulator 候选目录当前均不存在，因此非零 momentum-smear 结果只作为输出级参考，不能宣称已由普通 peram 重算。
 
 \section{产物与复现}
 \begin{itemize}

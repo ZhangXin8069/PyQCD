@@ -19,7 +19,7 @@ python examples/pyqcd/cmp1/verify_manifest_4150.py
 | eigenvectors/4150 | 存在，72 个文件，4777574400 bytes |
 | light perambulators/4150 | 存在，288 个文件，13271040000 bytes |
 | HYP 3D 1/3/5 次、4D 10 次 | 均存在，各 7 个记录文件，约 573 MB；4D10 已完成三方向 OPE 对照 |
-| 2pt_Result 系综目录 | 存在，322 个文件；含 `momsmear0_Cg5` 与 `momsmear0_Cg5g4` |
+| 2pt_Result 系综目录 | 存在，322 个文件；本轮选定 7 个 4150 根目录（另有 `effmass` 汇总未纳入逐数组检查） |
 | TMD OPE x/y/z 结果 | 存在，58 个文件；含横向位移参数，未与本轮直线 OPE 混合比较 |
 | `Result_hpy_4D_10times` | 当前路径不存在 |
 | `Peram_code_2505`、`Peram_mpi`、`Peram_result` | 当前用户给定路径不存在 |
@@ -86,8 +86,8 @@ examples/pyqcd/cmp1/v20260829_hyp_ope_3d5_z/
 
 ## 费米子 2pt 真实对照
 
-主结果：`examples/pyqcd/cmp1/v202608291710_fermion_cg5g4/`；
-`Cg5` 结果：`examples/pyqcd/cmp1/v202608291705_fermion_cg5/`。
+主结果：`examples/pyqcd/cmp1/v202608300145_cg5g4/`；
+`Cg5` 结果：`examples/pyqcd/cmp1/v202608300146_cg5/`。
 主结果为 `Nev=100`、`t_source=0`、`Delta t=2..36` 的 35 个时间对；其余动量
 配置取 `Delta t=2`，且均复用经过形状/dtype 校验的本地 VVV 缓存。
 
@@ -125,7 +125,7 @@ examples/pyqcd/cmp1/v20260829_hyp_ope_3d5_z/
 ## momentum-smear 最终输出级检查
 
 检查入口：`examples/pyqcd/cmp1/inspect_4150_momsmear.py`；结果：
-`examples/pyqcd/cmp1/v20260829193527_momsmear/results.json`。
+`examples/pyqcd/cmp1/v202608300150_4150_2pt_inventory/results.json`。
 
 参考可见的计算顺序是：固定 $q=\pm2\hat d$ 相位乘到低模 → 以输出动量 $P$ 逐时间构造
 VVV → 读取四个 source-Dirac 文件组成 peram → 两项质子颜色 epsilon 缩并 →
@@ -146,6 +146,19 @@ perambulator 代替独立 momentum-smeared perambulator。
 `7.57e-10`，c64 容差为 `5e-6`。这证明输出文件的投影和边界实现自洽，不能升级
 为 PyQCD 使用独立 smeared peram 重算并与参考 raw VVV/peram 一致。
 
+本轮又纳入两个 `momsmear0` 根目录（其文件名无算符后缀，检查器以
+`variant=implicit` 保留事实，不从目录名猜测物理变体）：
+
+| 根目录 | 相位 | 动量覆盖 | 文件数 | 动量组 | projection pass | 最大 rel L2 |
+|---|---|---|---:|---:|---:|---:|
+| `momsmear0_Cg5` | 0 | $P_z=0\ldots5$、$P_y/P_x=1\ldots5$ | 47 | 16 | 16/16 | 0 |
+| `momsmear0_Cg5g4` | 0 | $P_z=0\ldots5$、$P_y/P_x=1\ldots5$ | 58 | 16 | 16/16 | 8.29e-7 |
+
+七个根目录合计 232 个已解析数组、58 个动量组，`contract → P+ → 反周期边界 →
+nopol` 为 58/58；全体最大相对 L2 为 `8.29e-7`，最大绝对差为 `1.98e-9`，仍在
+complex64 的 `5e-6` 容差内。`momsmear0` 只表示输出配置；三个独立 momentum-smeared
+perambulator 候选目录仍不存在。
+
 ## 3pt、ratio、barematrix 配对盘点
 
 在用户明确给出的对照根目录中，`2pt_Result/.../4150` 的匹配文件是
@@ -163,13 +176,13 @@ verify_4150_lowlevel: PASS 3/3
 verify_4150_fermion: PASS 3/3
 verify_4150_fermion_runner: PASS 12/12
 verify_4150_hyp_ope_runner: PASS 3/3
-verify_4150_momsmear: PASS 4/4
+verify_4150_momsmear: PASS 5/5
 ```
 
 完整主回归和报告编译结果见最终交付说明；本文件只记录可追溯数值，不把未运行的
 3pt、ratio、barematrix 或完整 TMD 链写成通过。
 
-## 最终回归（2026-08-29）
+## 最终回归（2026-08-30）
 
 ```text
 python examples/pyqcd/conftest.py: 42 passed, 0 failed

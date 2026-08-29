@@ -1,8 +1,9 @@
-"""检查 donghx 4150 momentum-smear 2pt 成品的结构和投影关系。
+"""检查 donghx 4150 2pt 成品的结构和投影关系。
 
-本模块只消费参考目录中的 ``.npy`` 成品，不生成或替代 momentum-smeared
-perambulator。它的数值检查范围是输出级：验证 ``contract`` 经 DR 基正宇称投影
-及反周期边界符号后得到 ``nopol_ss``，并记录所有文件的 shape/dtype/有限性。
+本模块只消费参考目录中的 ``.npy`` 成品，不生成或替代任何 perambulator。它的
+数值检查范围是输出级：验证 ``contract`` 经 DR 基正宇称投影及反周期边界符号后
+得到 ``nopol_ss``，并记录所有文件的 shape/dtype/有限性。既覆盖非零动量涂抹，
+也覆盖 ``momsmear0`` 的隐式算符文件名。
 """
 
 from __future__ import annotations
@@ -38,6 +39,14 @@ DEFAULT_ROOTS = {
         "/public/group/lqcd/donghx/2pt_Result/"
         "beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150"
     ),
+    "momsmear0_Cg5": Path(
+        "/public/group/lqcd/donghx/2pt_Result/"
+        "beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5/4150"
+    ),
+    "momsmear0_Cg5g4": Path(
+        "/public/group/lqcd/donghx/2pt_Result/"
+        "beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150"
+    ),
 }
 
 # 这些是用户本轮明确给出的独立 momentum-smeared perambulator 候选根目录。
@@ -52,7 +61,8 @@ _OUTPUT_RE = re.compile(
     r"^twopt_slice_pp_"
     r"Px(?P<px>-?\d+)Py(?P<py>-?\d+)Pz(?P<pz>-?\d+)"
     r"_eginphase(?P<phase>-?\d+)"
-    r"_(?P<variant>[A-Za-z0-9]+)_"
+    r"(?:_(?P<variant>[A-Za-z0-9]+))?"
+    r"_"
     r"(?P<kind>contract|nopol_ss|pol\d+_ss)"
     rf"_conf{CONF_ID}\.npy$"
 )
@@ -61,8 +71,8 @@ _OUTPUT_RE = re.compile(
 def parse_output_filename(name: str) -> dict | None:
     """解析 4150 参考输出名，返回 ``(Pz,Py,Px)`` 顺序的动量。
 
-    ``None`` 表示该文件不是本检查器支持的 4150 Cg5g4 输出；调用方会把它
-    记录为未解析文件，而不会猜测其物理含义。
+    ``variant='implicit'`` 表示参考文件名没有显式算符后缀；调用方保留这一
+    信息而不从目录名猜测其物理含义。``None`` 表示不支持的文件。
     """
     match = _OUTPUT_RE.fullmatch(str(name))
     if match is None:
@@ -74,7 +84,7 @@ def parse_output_filename(name: str) -> dict | None:
             int(match.group("px")),
         ],
         "phase": int(match.group("phase")),
-        "variant": match.group("variant"),
+        "variant": match.group("variant") or "implicit",
         "kind": match.group("kind"),
     }
 
@@ -247,7 +257,7 @@ def inspect_roots(roots: dict[str, str | Path] | None = None) -> dict:
     """检查多个根目录并附上独立 smeared perambulator 的状态。"""
     selected = DEFAULT_ROOTS if roots is None else roots
     reports = {
-        "schema": "pyqcd.donghx4150.momsmear-output.v1",
+        "schema": "pyqcd.donghx4150.2pt-output.v2",
         "conf_id": CONF_ID,
         "independent_smeared_perambulator": _peram_status(),
         "roots": {
@@ -259,10 +269,11 @@ def inspect_roots(roots: dict[str, str | Path] | None = None) -> dict:
 
 def _summary(report: dict) -> str:
     lines = [
-        "# 4150 momentum-smear 最终 2pt 输出级检查",
+        "# 4150 2pt 最终输出级检查",
         "",
         "本检查只验证参考成品的结构及 `contract → P+ → 反周期边界 → nopol`；",
-        "不把普通 light perambulator 当作独立 momentum-smeared perambulator。",
+        "不把普通 light perambulator 当作独立 momentum-smeared perambulator；"
+        "`momsmear0` 仅表示参考输出配置，不据此推断存在独立涂抹 perambulator。",
         "",
         "| 根目录 | 文件数 | 动量组数 | projection pass | diff/unverified | 未解析 `.npy` |",
         "|---|---:|---:|---:|---:|---:|",
