@@ -1,0 +1,1029 @@
+{
+  "schema": "pyqcd.donghx4150.effmass-aggregate.v1",
+  "conf_id": "4150",
+  "expected_sample_index": 2,
+  "conf_sequence_basis": "4050 + 50*k; 4150 => k=2",
+  "assets": [
+    {
+      "label": "raw +2z momentum-smear",
+      "kind": "matrix",
+      "aggregate": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear2_Cg5g4/Res_2pt.npy",
+      "reference_root": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150",
+      "expected_sample_index": 2,
+      "rows": [
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "row": 0,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            2
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz2_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "row": 1,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            3
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz3_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "row": 2,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            4
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz4_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "row": 3,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            5
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz5_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 5e-06,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex64",
+          "row": 4,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            6
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz6_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 41600,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex64",
+            "finite": true
+          },
+          "expected_index_match": true
+        }
+      ],
+      "aggregate_meta": {
+        "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear2_Cg5g4/Res_2pt.npy",
+        "bytes": 364539008,
+        "shape": [
+          5,
+          879,
+          72,
+          72
+        ],
+        "dtype": "complex128",
+        "finite": true
+      },
+      "status": "pass"
+    },
+    {
+      "label": "raw -2z momentum-smear",
+      "kind": "matrix",
+      "aggregate": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear2_Cg5g4/Res_2pt_mp.npy",
+      "reference_root": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear-2z/4150",
+      "expected_sample_index": 2,
+      "rows": [
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 5e-06,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex64",
+          "reference_dtype": "complex64",
+          "row": 0,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            -2
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear-2z/4150/twopt_slice_pp_Px0Py0Pz-2_eginphase-2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 41600,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex64",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 5e-06,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex64",
+          "reference_dtype": "complex64",
+          "row": 1,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            -3
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear-2z/4150/twopt_slice_pp_Px0Py0Pz-3_eginphase-2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 41600,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex64",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 5e-06,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex64",
+          "reference_dtype": "complex64",
+          "row": 2,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            -4
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear-2z/4150/twopt_slice_pp_Px0Py0Pz-4_eginphase-2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 41600,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex64",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 5e-06,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex64",
+          "reference_dtype": "complex64",
+          "row": 3,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            -5
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear-2z/4150/twopt_slice_pp_Px0Py0Pz-5_eginphase-2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 41600,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex64",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 5e-06,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex64",
+          "reference_dtype": "complex64",
+          "row": 4,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            -6
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear-2z/4150/twopt_slice_pp_Px0Py0Pz-6_eginphase-2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 41600,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex64",
+            "finite": true
+          },
+          "expected_index_match": true
+        }
+      ],
+      "aggregate_meta": {
+        "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear2_Cg5g4/Res_2pt_mp.npy",
+        "bytes": 182269568,
+        "shape": [
+          5,
+          879,
+          72,
+          72
+        ],
+        "dtype": "complex64",
+        "finite": true
+      },
+      "status": "pass"
+    },
+    {
+      "label": "raw momentum-smear0 Cg5g4",
+      "kind": "matrix",
+      "aggregate": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear0_Cg5g4/Res_2pt_momsmear0_Cg5g4.npy",
+      "reference_root": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150",
+      "expected_sample_index": 2,
+      "rows": [
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 1e-12,
+          "sample_count": 878,
+          "aggregate_shape": [
+            878,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "row": 0,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            2
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150/twopt_slice_pp_Px0Py0Pz2_eginphase0_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 1e-12,
+          "sample_count": 878,
+          "aggregate_shape": [
+            878,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "row": 1,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            3
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150/twopt_slice_pp_Px0Py0Pz3_eginphase0_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 1e-12,
+          "sample_count": 878,
+          "aggregate_shape": [
+            878,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "row": 2,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            4
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150/twopt_slice_pp_Px0Py0Pz4_eginphase0_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 1e-12,
+          "sample_count": 878,
+          "aggregate_shape": [
+            878,
+            72,
+            72
+          ],
+          "reference_shape": [
+            72,
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "row": 3,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            5
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150/twopt_slice_pp_Px0Py0Pz5_eginphase0_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        }
+      ],
+      "aggregate_meta": {
+        "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear0_Cg5g4/Res_2pt_momsmear0_Cg5g4.npy",
+        "bytes": 291299456,
+        "shape": [
+          4,
+          878,
+          72,
+          72
+        ],
+        "dtype": "complex128",
+        "finite": true
+      },
+      "status": "pass"
+    },
+    {
+      "label": "twoptall +2z momentum-smear",
+      "kind": "time",
+      "aggregate": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear2_Cg5g4_Disperion/twoptall.npy",
+      "reference_root": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150",
+      "expected_sample_index": 2,
+      "rows": [
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 1.7491487368618805e-17,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 0,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            2
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz2_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 1.4506934108261335e-17,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 1,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            3
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz3_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 6.394130732847178e-18,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 2,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            4
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz4_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 2.581541837559979e-16,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 3,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            5
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz5_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 0.0,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 4,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            6
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear2z/4150/twopt_slice_pp_Px0Py0Pz6_eginphase2_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 41600,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex64",
+            "finite": true
+          },
+          "expected_index_match": true
+        }
+      ],
+      "aggregate_meta": {
+        "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear2_Cg5g4_Disperion/twoptall.npy",
+        "bytes": 5063168,
+        "shape": [
+          5,
+          879,
+          72
+        ],
+        "dtype": "complex128",
+        "finite": true
+      },
+      "status": "pass"
+    },
+    {
+      "label": "twoptall momentum-smear0 Cg5g4",
+      "kind": "time",
+      "aggregate": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear0_Cg5g4_Disperion/twoptall_zdir.npy",
+      "reference_root": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150",
+      "expected_sample_index": 2,
+      "rows": [
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 7.118475510778114e-18,
+          "tolerance": 1e-12,
+          "sample_count": 878,
+          "aggregate_shape": [
+            878,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 0,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            2
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150/twopt_slice_pp_Px0Py0Pz2_eginphase0_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 2.414784554954293e-18,
+          "tolerance": 1e-12,
+          "sample_count": 878,
+          "aggregate_shape": [
+            878,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 1,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            3
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150/twopt_slice_pp_Px0Py0Pz3_eginphase0_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 2.795695662685674e-19,
+          "tolerance": 1e-12,
+          "sample_count": 878,
+          "aggregate_shape": [
+            878,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 2,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            4
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150/twopt_slice_pp_Px0Py0Pz4_eginphase0_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        },
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 2.9751549112884235e-19,
+          "tolerance": 1e-12,
+          "sample_count": 878,
+          "aggregate_shape": [
+            878,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 3,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            5
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150/twopt_slice_pp_Px0Py0Pz5_eginphase0_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        }
+      ],
+      "aggregate_meta": {
+        "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/momsmear0_Cg5g4_Disperion/twoptall_zdir.npy",
+        "bytes": 4045952,
+        "shape": [
+          4,
+          878,
+          72
+        ],
+        "dtype": "complex128",
+        "finite": true
+      },
+      "status": "pass"
+    },
+    {
+      "label": "twoptall Pz0 Cg5",
+      "kind": "time",
+      "aggregate": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/Pz0_Cg5_Cg5g4/twoptall_Cg5.npy",
+      "reference_root": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5/4150",
+      "expected_sample_index": 2,
+      "rows": [
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 3.9351072710108534e-17,
+          "tolerance": 1e-12,
+          "sample_count": 879,
+          "aggregate_shape": [
+            879,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 0,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            0
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5/4150/twopt_slice_pp_Px0Py0Pz0_eginphase0_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        }
+      ],
+      "aggregate_meta": {
+        "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/Pz0_Cg5_Cg5g4/twoptall_Cg5.npy",
+        "bytes": 1012736,
+        "shape": [
+          1,
+          879,
+          72
+        ],
+        "dtype": "complex128",
+        "finite": true
+      },
+      "status": "pass"
+    },
+    {
+      "label": "twoptall Pz0 Cg5g4",
+      "kind": "time",
+      "aggregate": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/Pz0_Cg5_Cg5g4/twoptall_Cg5g4.npy",
+      "reference_root": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150",
+      "expected_sample_index": 2,
+      "rows": [
+        {
+          "status": "pass",
+          "best_index": 2,
+          "rel_l2": 1.865770167513139e-17,
+          "tolerance": 1e-12,
+          "sample_count": 876,
+          "aggregate_shape": [
+            876,
+            72
+          ],
+          "reference_shape": [
+            72
+          ],
+          "aggregate_dtype": "complex128",
+          "reference_dtype": "complex128",
+          "reference_operation": "sum[(t_sink-t_source) mod Nt]",
+          "row": 0,
+          "momentum_pxpyzp": [
+            0,
+            0,
+            0
+          ],
+          "reference": {
+            "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/momsmear0_Cg5g4/4150/twopt_slice_pp_Px0Py0Pz0_eginphase0_Cg5g4_nopol_ss_conf4150.npy",
+            "bytes": 83072,
+            "shape": [
+              72,
+              72
+            ],
+            "dtype": "complex128",
+            "finite": true
+          },
+          "expected_index_match": true
+        }
+      ],
+      "aggregate_meta": {
+        "path": "/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/effmass/Pz0_Cg5_Cg5g4/twoptall_Cg5g4.npy",
+        "bytes": 1009280,
+        "shape": [
+          1,
+          876,
+          72
+        ],
+        "dtype": "complex128",
+        "finite": true
+      },
+      "status": "pass"
+    }
+  ],
+  "summary": {
+    "assets": 7,
+    "pass": 7,
+    "diff": 0,
+    "unverified": 0,
+    "rows": 25
+  }
+}

@@ -19,7 +19,7 @@ python examples/pyqcd/cmp1/verify_manifest_4150.py
 | eigenvectors/4150 | 存在，72 个文件，4777574400 bytes |
 | light perambulators/4150 | 存在，288 个文件，13271040000 bytes |
 | HYP 3D 1/3/5 次、4D 10 次 | 均存在，各 7 个记录文件，约 573 MB；4D10 已完成三方向 OPE 对照 |
-| 2pt_Result 系综目录 | 存在，322 个文件；本轮选定 7 个 4150 根目录（另有 `effmass` 汇总未纳入逐数组检查） |
+| 2pt_Result 系综目录 | 存在，322 个文件；本轮选定 7 个 4150 根目录；另有 `effmass` 聚合数组 7 项、25 个动量行已逐数组检查 |
 | TMD OPE x/y/z 结果 | 存在，58 个文件；含横向位移参数，未与本轮直线 OPE 混合比较 |
 | `Result_hpy_4D_10times` | 当前路径不存在 |
 | `Peram_code_2505`、`Peram_mpi`、`Peram_result` | 当前用户给定路径不存在 |
@@ -159,6 +159,34 @@ nopol` 为 58/58；全体最大相对 L2 为 `8.29e-7`，最大绝对差为 `1.9
 complex64 的 `5e-6` 容差内。`momsmear0` 只表示输出配置；三个独立 momentum-smeared
 perambulator 候选目录仍不存在。
 
+## effmass 聚合 2pt：4150 样本索引与逐数组对应
+
+本轮新增检查器：`examples/pyqcd/cmp1/inspect_4150_effmass.py`，受控测试为
+`examples/pyqcd/cmp1/verify_4150_effmass.py`。参考聚合脚本的组态序列是
+`4050 + 50*k`，所以组态 4150 对应聚合索引 `k=2`。检查器不只比较形状：对 raw
+`Res_2pt*.npy` 逐矩阵定位 4150 行；对 `twoptall*.npy` 先按
+`(t_sink - t_source) mod 72` 汇总可见 4150 的 `(72,72)` 矩阵，再比较聚合行。
+complex64 输入的时间汇总先升宽为 complex128，避免累加精度造成假差异。
+
+结果：`examples/pyqcd/cmp1/v202608301600_4150_effmass_aggregate/results.json`，
+摘要：`examples/pyqcd/cmp1/v202608301600_4150_effmass_aggregate/summary.md`。
+
+| 聚合资产 | 形状 | 动量行 | 最大相对差 | 4150 索引（命中/行数） | 状态 |
+|---|---|---:|---:|---:|---|
+| raw `+2z` momentum-smear | `(5,879,72,72)` | 5 | `0` | `2`（5/5） | pass |
+| raw `-2z` momentum-smear | `(5,879,72,72)` | 5 | `0` | `2`（5/5） | pass |
+| raw `momsmear0 Cg5g4` | `(4,878,72,72)` | 4 | `0` | `2`（4/4） | pass |
+| `twoptall +2z` | `(5,879,72)` | 5 | `2.58e-16` | `2`（5/5） | pass |
+| `twoptall momsmear0 Cg5g4` | `(4,878,72)` | 4 | `7.12e-18` | `2`（4/4） | pass |
+| `twoptall Pz0 Cg5` | `(1,879,72)` | 1 | `3.94e-17` | `2`（1/1） | pass |
+| `twoptall Pz0 Cg5g4` | `(1,876,72)` | 1 | `1.87e-17` | `2`（1/1） | pass |
+
+受控测试 `verify_4150_effmass: PASS 3/3`，真实检查
+`inspect_4150_effmass: assets=7 pass=7 diff=0 unverified=0 rows=25`。
+raw 矩阵行均为逐位相等；`twoptall` 最大相对差为 `2.58e-16`。这闭合了可见
+effmass 聚合数组与 4150 单组态 2pt 成品的样本对应关系，但仍不等同于独立
+momentum-smeared perambulator、逐时间 VVV 或 3pt/ratio/barematrix 的输入级复现。
+
 ## 3pt、ratio、barematrix 配对盘点
 
 在用户明确给出的对照根目录中，`2pt_Result/.../4150` 的匹配文件是
@@ -177,6 +205,8 @@ verify_4150_fermion: PASS 3/3
 verify_4150_fermion_runner: PASS 12/12
 verify_4150_hyp_ope_runner: PASS 3/3
 verify_4150_momsmear: PASS 5/5
+verify_4150_effmass: PASS 3/3
+inspect_4150_effmass: assets=7 pass=7 diff=0 unverified=0 rows=25
 ```
 
 完整主回归和报告编译结果见最终交付说明；本文件只记录可追溯数值，不把未运行的
@@ -191,5 +221,16 @@ verify_4150_lowlevel.py: PASS 3/3
 verify_4150_fermion.py: PASS 3/3
 verify_4150_fermion_runner.py: PASS 12/12
 verify_4150_hyp_ope_runner.py: PASS 3/3
-verify_4150_momsmear.py: PASS 4/4
+verify_4150_momsmear.py: PASS 5/5
+verify_4150_effmass.py: PASS 3/3
+inspect_4150_effmass.py: assets=7 pass=7 diff=0 unverified=0 rows=25
 ```
+
+## 报告验收（2026-08-30）
+
+`docs/report_donghx_4150_reproduction_20260830.tex` 已用 XeLaTeX 编译两遍，并对全部
+渲染页完成视觉检查。正式 PDF 为
+`docs/report_donghx_4150_reproduction_20260830.pdf`：26 页，16:9，页尺寸
+`453.54 x 255.12 pt`；`Overfull=0`、`Float too large=0`、`Missing character=0`、
+`Underfull=0`；`pages_actual=26` 与 `pages_rendered=26`。新增的 effmass 聚合页、
+验收页、来源行和页脚均未见遮挡、裁切或越出安全区。
