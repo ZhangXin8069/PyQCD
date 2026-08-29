@@ -33,3 +33,4 @@ cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelate
 ## 对照测试报告
 
 - `report_cmp1_4150_20260828.tex/.pdf`：基于真实组态 4150 的 PyQCD 与 lqcddb/donghx 功能对照报告；16:9 横板、16 页，含 L20 复数 GEVP 差异判定、HYP 输入守卫、验证命令与未验证边界（2026-08-28）。
+- `report_donghx_4150_reproduction_20260829.tex/.pdf`：基于真实组态 4150 的 donghx/PyQCD eigvec、VdV、VVV、Clover/dual/OPE 与质子 2pt 复现报告；明确 Cg5/Cg5g4、动量方向/大小、smear 输入边界及 3pt/ratio/barematrix 未验证项（2026-08-29）。
