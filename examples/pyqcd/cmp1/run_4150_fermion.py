@@ -82,9 +82,26 @@ def _read_eigenvectors(eig_root: Path, config: FermionConfig, t: int):
         raise ValueError(
             f"eigenvector Nev={eig.shape[0]} 小于要求 Nev={config.nev}: {path}"
         )
-    return np.ascontiguousarray(
-        eig[:config.nev].reshape(config.nev, config.nx, config.nx, config.nx, 3)
-    )
+    eig = eig[:config.nev].reshape(config.nev, config.nx, config.nx, config.nx, 3)
+    return _apply_momentum_smear(eig, config)
+
+
+def _apply_momentum_smear(eig, config: FermionConfig):
+    """按 donghx 约定对每个 eigenvector 色分量施加空间相位。"""
+    value = np.asarray(eig)
+    expected = (config.nx, config.nx, config.nx, 3)
+    if value.ndim != 5 or value.shape[1:] != expected:
+        raise ValueError(
+            f"eigenvector shape must be (Nev,{config.nx},{config.nx},"
+            f"{config.nx},3), got {value.shape}"
+        )
+    if config.momentum_smear == 0:
+        return np.ascontiguousarray(value)
+    from pyqcd.vertex import momsmear_phase
+
+    phase = momsmear_phase(config.nx, config.momentum_smear_vector)
+    phase = phase.reshape(config.nx, config.nx, config.nx)
+    return np.ascontiguousarray(value * phase[None, ..., None])
 
 
 def _compute_vvv(eig_root: Path, config: FermionConfig, t: int):
@@ -93,6 +110,16 @@ def _compute_vvv(eig_root: Path, config: FermionConfig, t: int):
     eig = _read_eigenvectors(eig_root, config, t)
     phase = phase_exp_3pt(config.nx, list(config.momentum))
     return np.ascontiguousarray(_numpy(Mom_VVV_sink_t(phase, eig))[0])
+
+
+def _vvv_cache_filename(config: FermionConfig, times: tuple[int, ...]) -> str:
+    """构造不会混用普通/动量涂抹输入的 VVV 缓存文件名。"""
+    name = (f"vvv_Px{config.momentum[2]}Py{config.momentum[1]}"
+            f"Pz{config.momentum[0]}")
+    if config.momentum_smear != 0:
+        name += (f"_smear{config.momentum_smear_dir}{config.momentum_smear}"
+                 f"_phase{config.momentum_smear_phase}")
+    return f"{name}_Nev{config.nev}_t{times[0]}-{times[-1]}.npy"
 
 
 def _load_vvv_cache(cache_path: Path, config: FermionConfig,
@@ -152,6 +179,22 @@ def _read_peram(peram_root: Path, config: FermionConfig, t_source: int):
     return _numpy(readin_peram_time_slice(
         str(path), config.conf_id, t_source, config.nt, config.nev
     ))
+
+
+def _select_peram_root(config: FermionConfig, peram_root: Path,
+                       momentum_peram_root: Path | None) -> Path:
+    """选择 perambulator 输入；动量涂抹不得静默复用普通输入。"""
+    ordinary = Path(peram_root).resolve()
+    if config.momentum_smear == 0:
+        return ordinary
+    if momentum_peram_root is None:
+        raise ValueError(
+            "非零 momentum_smear 必须显式提供独立 momentum perambulator 根目录"
+        )
+    selected = Path(momentum_peram_root).resolve()
+    if selected == ordinary:
+        raise ValueError("momentum perambulator 根目录必须与普通 perambulator 独立")
+    return selected
 
 
 def _project_sparse(contract, config: FermionConfig):
@@ -238,20 +281,22 @@ def _save_json(path: Path, value: dict):
 
 
 def run_real(config: FermionConfig, outdir: Path, *, eig_root=DEFAULT_EIG_ROOT,
-             peram_root=DEFAULT_PERAM_ROOT,
+             peram_root=DEFAULT_PERAM_ROOT, momentum_peram_root=None,
              reference_dir=DEFAULT_REFERENCE_DIR, vvv_cache=None) -> tuple[Path, dict]:
     """运行一条真实 peram+VVV+2pt 链并保存稀疏时间对。"""
     _set_numpy_backend()
     eig_root = Path(eig_root)
     peram_root = Path(peram_root)
+    peram_root = _select_peram_root(config, peram_root, momentum_peram_root)
+    if not peram_root.is_dir():
+        raise FileNotFoundError(
+            f"perambulator 根目录不存在或不可读: {peram_root}"
+        )
     reference_dir = Path(reference_dir)
     pairs = selected_pairs(config)
     times = required_vvv_times(config)
     if vvv_cache is None:
-        vvv_cache = ROOT / "data" / "cmp1_4150" / (
-            f"vvv_Px{config.momentum[2]}Py{config.momentum[1]}Pz{config.momentum[0]}"
-            f"_Nev{config.nev}_t{times[0]}-{times[-1]}.npy"
-        )
+        vvv_cache = ROOT / "data" / "cmp1_4150" / _vvv_cache_filename(config, times)
     vvv, vvv_record = _write_vvv_cache(eig_root, config, times, Path(vvv_cache))
     vvv_index = {t: i for i, t in enumerate(times)}
 
@@ -295,6 +340,9 @@ def run_real(config: FermionConfig, outdir: Path, *, eig_root=DEFAULT_EIG_ROOT,
             "nx": config.nx, "nt": config.nt, "nev": config.nev,
             "momentum_pzyx": list(config.momentum),
             "momentum_smear": config.momentum_smear,
+            "momentum_smear_dir": config.momentum_smear_dir,
+            "momentum_smear_phase": config.momentum_smear_phase,
+            "momentum_smear_phase_pzyx": list(config.momentum_smear_vector),
             "variant": config.variant,
             "t_sources": list(config.t_sources),
             "delta_t": [config.delta_t_min, config.delta_t_max],
@@ -379,6 +427,10 @@ def main(argv=None):
     parser.add_argument("--pz", type=int, default=0)
     parser.add_argument("--py", type=int, default=0)
     parser.add_argument("--px", type=int, default=0)
+    parser.add_argument("--momentum-smear", type=int, default=0)
+    parser.add_argument("--momentum-smear-dir", choices=("x", "y", "z"), default=None)
+    parser.add_argument("--momentum-smear-phase", type=int, default=None)
+    parser.add_argument("--momentum-peram-root", default="")
     parser.add_argument("--variant", default="Cg5g4")
     parser.add_argument("--t-source", type=int, action="append", default=None)
     parser.add_argument("--delta-t-min", type=int, default=2)
@@ -394,6 +446,9 @@ def main(argv=None):
     config = FermionConfig(
         conf_id=args.conf, nev=args.nev,
         momentum=(args.pz, args.py, args.px), variant=args.variant,
+        momentum_smear=args.momentum_smear,
+        momentum_smear_dir=args.momentum_smear_dir,
+        momentum_smear_phase=args.momentum_smear_phase,
         t_sources=tuple(args.t_source or (0,)),
         delta_t_min=args.delta_t_min, delta_t_max=args.delta_t_max,
     )
@@ -402,6 +457,7 @@ def main(argv=None):
     )
     path, record = run_real(
         config, outdir, eig_root=args.eig_root, peram_root=args.peram_root,
+        momentum_peram_root=args.momentum_peram_root or None,
         reference_dir=args.reference_dir,
         vvv_cache=args.vvv_cache or None,
     )
