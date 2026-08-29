@@ -16,6 +16,14 @@ NX, NT = 24, 72
 _memo = {}
 
 
+def configure(conf=CONF, cache_dir=CACHE):
+    """Select a configuration for a comparison run and clear stale arrays."""
+    global CONF, CACHE
+    CONF = int(conf)
+    CACHE = str(cache_dir)
+    _memo.clear()
+
+
 def eigvecs(conf=CONF, t=0):
     key = ('eig', conf, t)
     if key not in _memo:
