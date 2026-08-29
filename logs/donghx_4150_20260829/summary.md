@@ -18,7 +18,7 @@ python examples/pyqcd/cmp1/verify_manifest_4150.py
 | Clover 规范场 | 存在，573439152 bytes |
 | eigenvectors/4150 | 存在，72 个文件，4777574400 bytes |
 | light perambulators/4150 | 存在，288 个文件，13271040000 bytes |
-| HYP 3D 1/3/5 次、4D 10 次 | 均存在，各 7 个记录文件，约 573 MB |
+| HYP 3D 1/3/5 次、4D 10 次 | 均存在，各 7 个记录文件，约 573 MB；4D10 已完成三方向 OPE 对照 |
 | 2pt_Result 系综目录 | 存在，322 个文件；含 `momsmear0_Cg5` 与 `momsmear0_Cg5g4` |
 | TMD OPE x/y/z 结果 | 存在，58 个文件；含横向位移参数，未与本轮直线 OPE 混合比较 |
 | `Result_hpy_4D_10times` | 当前路径不存在 |
@@ -40,6 +40,49 @@ python examples/pyqcd/cmp1/verify_manifest_4150.py
 
 比较基准是同一 4150 规范场上独立重写的 donghx 参考公式；这七项不等同于
 “外部逐时间 VVV 文件”对照。
+
+## HYP 规范场与非极化 OPE 真实对照
+
+运行入口：
+
+```text
+python examples/pyqcd/cmp1/run_4150_hyp_ope.py --smear 4d10 --directions x,y,z --outdir examples/pyqcd/cmp1/v20260829_hyp_ope_xyz
+python examples/pyqcd/cmp1/run_4150_hyp_ope.py --smear 3d1 --directions z --outdir examples/pyqcd/cmp1/v20260829_hyp_ope_3d1_z
+python examples/pyqcd/cmp1/run_4150_hyp_ope.py --smear 3d3 --directions z --outdir examples/pyqcd/cmp1/v20260829_hyp_ope_3d3_z
+python examples/pyqcd/cmp1/run_4150_hyp_ope.py --smear 3d5 --directions z --outdir examples/pyqcd/cmp1/v20260829_hyp_ope_3d5_z
+```
+
+输入是各 `.lime.contents/msg02.rec04.ildg-binary-data`，读取后为
+`(Nt,Nz,Ny,Nx,4,3,3)=(72,24,24,24,4,3,3)` 的 `complex128` 规范场；
+`4d10` 的最大链接幺正性偏差为 `1.11e-15`。比较调用
+`gluon_ope_operator_z0(..., second_insert="F")`，即 donghx 非极化
+`F\,W\,F\,W` 通道；参考 TMD 成品只取横向位移为零的直线截面，不能据此宣称
+非零横向 staple 已验证。
+
+### 4D HYP 10 次：三方向 9 个通道
+
+结果：`examples/pyqcd/cmp1/v20260829_hyp_ope_xyz/results.json`，摘要：
+`examples/pyqcd/cmp1/v20260829_hyp_ope_xyz/summary.md`。
+
+| 方向 | 通道数 | 输出形状 | 最大相对 L2 | 最大绝对差 | 状态 |
+|---|---:|---|---:|---:|---|
+| x | 3 | `(72,9)` | `3.30e-15` | `5.69e-13` | pass |
+| y | 3 | `(72,9)` | `3.31e-15` | `5.69e-13` | pass |
+| z | 3 | `(72,12)` | `7.50e-17` | `5.69e-14` | pass |
+
+9/9 通道均为 `pass`，整体 runner 退出码为 0。
+
+### 3D HYP 1/3/5 次：真实运行但无可配对参考成品
+
+三次 z 向运行均成功构造并计算 3 个通道，输出形状均为 `(72,12)`，规范场均为
+`complex128` 且最大幺正性偏差为 `1.11e-15`；由于用户给出的参考 OPE 成品只属于
+`4d10`，三个结果按设计记为 `unverified`，runner 退出码均为 2。结果目录分别为：
+
+```text
+examples/pyqcd/cmp1/v20260829_hyp_ope_3d1_z/
+examples/pyqcd/cmp1/v20260829_hyp_ope_3d3_z/
+examples/pyqcd/cmp1/v20260829_hyp_ope_3d5_z/
+```
 
 ## 费米子 2pt 真实对照
 
@@ -69,6 +112,7 @@ verify_manifest_4150: PASS 4/4
 verify_4150_lowlevel: PASS 3/3
 verify_4150_fermion: PASS 3/3
 verify_4150_fermion_runner: PASS 7/7
+verify_4150_hyp_ope_runner: PASS 3/3
 ```
 
 完整主回归和报告编译结果见最终交付说明；本文件只记录可追溯数值，不把未运行的
@@ -77,9 +121,10 @@ verify_4150_fermion_runner: PASS 7/7
 ## 最终回归（2026-08-29）
 
 ```text
-python examples/pyqcd/conftest.py: 41 passed, 0 failed
+python examples/pyqcd/conftest.py: 42 passed, 0 failed
 verify_manifest_4150.py: PASS 4/4
 verify_4150_lowlevel.py: PASS 3/3
 verify_4150_fermion.py: PASS 3/3
 verify_4150_fermion_runner.py: PASS 7/7
+verify_4150_hyp_ope_runner.py: PASS 3/3
 ```

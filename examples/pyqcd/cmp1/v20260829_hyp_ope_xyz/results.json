@@ -1,0 +1,268 @@
+{
+  "schema": "pyqcd.donghx4150.hyp_ope.v1",
+  "conf_id": "4150",
+  "smear": "4d10",
+  "input": "/public/group/lqcd/donghx/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_4D_10times_new/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents/msg02.rec04.ildg-binary-data",
+  "gauge": {
+    "shape": [
+      72,
+      24,
+      24,
+      24,
+      4,
+      3,
+      3
+    ],
+    "dtype": "complex128",
+    "finite": true,
+    "max_unitarity_deviation": 1.1102230246251565e-15
+  },
+  "channels": [
+    {
+      "direction": "x",
+      "mu": 1,
+      "nu": 2,
+      "delta_z": 9,
+      "seconds": 23.0597,
+      "actual_shape": [
+        72,
+        9
+      ],
+      "shape": [
+        72,
+        9
+      ],
+      "tolerance": 1e-10,
+      "status": "pass",
+      "reference_shape": [
+        72,
+        9
+      ],
+      "reference_norm": 2026.8562548596306,
+      "actual_norm": 2026.8562548596242,
+      "rel_l2": 3.2884528663383166e-15,
+      "max_abs": 5.684342155931462e-13,
+      "evidence": "confirmed",
+      "reference_path": "/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/xdir/4150/ops_mu1_nu2_zmax22_dx9_dy8_conf4150_new.npy"
+    },
+    {
+      "direction": "x",
+      "mu": 3,
+      "nu": 1,
+      "delta_z": 9,
+      "seconds": 23.2799,
+      "actual_shape": [
+        72,
+        9
+      ],
+      "shape": [
+        72,
+        9
+      ],
+      "tolerance": 1e-10,
+      "status": "pass",
+      "reference_shape": [
+        72,
+        9
+      ],
+      "reference_norm": 1993.647936879915,
+      "actual_norm": 1993.6479368799087,
+      "rel_l2": 3.2865649642010628e-15,
+      "max_abs": 5.684342002302258e-13,
+      "evidence": "confirmed",
+      "reference_path": "/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/xdir/4150/ops_mu3_nu1_zmax22_dx9_dy8_conf4150_new.npy"
+    },
+    {
+      "direction": "x",
+      "mu": 3,
+      "nu": 2,
+      "delta_z": 9,
+      "seconds": 23.3698,
+      "actual_shape": [
+        72,
+        9
+      ],
+      "shape": [
+        72,
+        9
+      ],
+      "tolerance": 1e-10,
+      "status": "pass",
+      "reference_shape": [
+        72,
+        9
+      ],
+      "reference_norm": 1974.4539805630573,
+      "actual_norm": 1974.4539805630511,
+      "rel_l2": 3.292151138102472e-15,
+      "max_abs": 5.684345599325948e-13,
+      "evidence": "confirmed",
+      "reference_path": "/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/xdir/4150/ops_mu3_nu2_zmax22_dx9_dy8_conf4150_new.npy"
+    },
+    {
+      "direction": "y",
+      "mu": 2,
+      "nu": 0,
+      "delta_z": 9,
+      "seconds": 23.2881,
+      "actual_shape": [
+        72,
+        9
+      ],
+      "shape": [
+        72,
+        9
+      ],
+      "tolerance": 1e-10,
+      "status": "pass",
+      "reference_shape": [
+        72,
+        9
+      ],
+      "reference_norm": 1996.9968541612318,
+      "actual_norm": 1996.9968541612247,
+      "rel_l2": 3.292774736549267e-15,
+      "max_abs": 5.684343088719136e-13,
+      "evidence": "confirmed",
+      "reference_path": "/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/ydir/4150/ops_mu2_nu0_zmax22_dy9_dx8_conf4150_new.npy"
+    },
+    {
+      "direction": "y",
+      "mu": 3,
+      "nu": 0,
+      "delta_z": 9,
+      "seconds": 22.8156,
+      "actual_shape": [
+        72,
+        9
+      ],
+      "shape": [
+        72,
+        9
+      ],
+      "tolerance": 1e-10,
+      "status": "pass",
+      "reference_shape": [
+        72,
+        9
+      ],
+      "reference_norm": 1998.3569092100213,
+      "actual_norm": 1998.3569092100142,
+      "rel_l2": 3.2943999853960662e-15,
+      "max_abs": 5.684344308977369e-13,
+      "evidence": "confirmed",
+      "reference_path": "/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/ydir/4150/ops_mu3_nu0_zmax22_dy9_dx8_conf4150_new.npy"
+    },
+    {
+      "direction": "y",
+      "mu": 3,
+      "nu": 2,
+      "delta_z": 9,
+      "seconds": 23.0865,
+      "actual_shape": [
+        72,
+        9
+      ],
+      "shape": [
+        72,
+        9
+      ],
+      "tolerance": 1e-10,
+      "status": "pass",
+      "reference_shape": [
+        72,
+        9
+      ],
+      "reference_norm": 1970.8295328651818,
+      "actual_norm": 1970.8295328651755,
+      "rel_l2": 3.3044570450265876e-15,
+      "max_abs": 5.400125370117382e-13,
+      "evidence": "confirmed",
+      "reference_path": "/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/ydir/4150/ops_mu3_nu2_zmax22_dy9_dx8_conf4150_new.npy"
+    },
+    {
+      "direction": "z",
+      "mu": 0,
+      "nu": 1,
+      "delta_z": 12,
+      "seconds": 33.015,
+      "actual_shape": [
+        72,
+        12
+      ],
+      "shape": [
+        72,
+        12
+      ],
+      "tolerance": 1e-10,
+      "status": "pass",
+      "reference_shape": [
+        72,
+        12
+      ],
+      "reference_norm": 2054.9610750564875,
+      "actual_norm": 2054.961075056487,
+      "rel_l2": 7.34034791845255e-17,
+      "max_abs": 2.842207227735498e-14,
+      "evidence": "confirmed",
+      "reference_path": "/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/zdir/4150/ops_mu0_nu1_dz12_dx5_conf4150.npy"
+    },
+    {
+      "direction": "z",
+      "mu": 3,
+      "nu": 0,
+      "delta_z": 12,
+      "seconds": 33.0066,
+      "actual_shape": [
+        72,
+        12
+      ],
+      "shape": [
+        72,
+        12
+      ],
+      "tolerance": 1e-10,
+      "status": "pass",
+      "reference_shape": [
+        72,
+        12
+      ],
+      "reference_norm": 1998.6046532008625,
+      "actual_norm": 1998.6046532008627,
+      "rel_l2": 7.494698555550355e-17,
+      "max_abs": 5.684342392358842e-14,
+      "evidence": "confirmed",
+      "reference_path": "/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/zdir/4150/ops_mu3_nu0_dz12_dx5_conf4150.npy"
+    },
+    {
+      "direction": "z",
+      "mu": 3,
+      "nu": 1,
+      "delta_z": 12,
+      "seconds": 32.1937,
+      "actual_shape": [
+        72,
+        12
+      ],
+      "shape": [
+        72,
+        12
+      ],
+      "tolerance": 1e-10,
+      "status": "pass",
+      "reference_shape": [
+        72,
+        12
+      ],
+      "reference_norm": 1996.1468510922184,
+      "actual_norm": 1996.1468510922184,
+      "rel_l2": 7.354754822189171e-17,
+      "max_abs": 2.8421785661038845e-14,
+      "evidence": "confirmed",
+      "reference_path": "/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72/zdir/4150/ops_mu3_nu1_dz12_dx5_conf4150.npy"
+    }
+  ],
+  "status": "pass",
+  "evidence": "confirmed",
+  "seconds": 238.6013
+}

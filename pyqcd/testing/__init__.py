@@ -87,6 +87,29 @@ def test_tmd_operator_runs():
     assert np.all(np.isfinite(M))
 
 
+def test_read_gauge_lime_accepts_contents_directory():
+    """.lime.contents 目录应解析到标准 ILDG binary record。"""
+    from pathlib import Path
+    import tempfile
+
+    from pyqcd.operator import read_gauge_lime
+
+    with tempfile.TemporaryDirectory() as directory:
+        contents = Path(directory) / "cfg.lime.contents"
+        contents.mkdir()
+        raw = np.zeros((1, 1, 1, 1, 4, 3, 3, 2), dtype=">f8")
+        diagonal = np.arange(3)
+        raw[..., diagonal, diagonal, 0] = 1.0
+        record = contents / "msg02.rec04.ildg-binary-data"
+        raw.tofile(record)
+
+        gauge = read_gauge_lime(contents, 1, 1)
+
+    assert gauge.shape == (1, 1, 1, 1, 4, 3, 3)
+    assert gauge.dtype == np.complex128
+    assert np.allclose(gauge, np.eye(3, dtype=complex)[None, None, None, None, None])
+
+
 def test_matching_kernel():
     """NLO 匹配核 hR_PDF：Pz 增大时接近单位变换。"""
     from pyqcd.renorm import hR_PDF
