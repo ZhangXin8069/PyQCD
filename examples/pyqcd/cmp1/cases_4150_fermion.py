@@ -22,6 +22,8 @@ class FermionConfig:
     nev: int = 100
     momentum: tuple[int, int, int] = (0, 0, 0)  # (Pz, Py, Px)
     momentum_smear: int = 0
+    momentum_smear_dir: str | None = None  # x/y/z；参考输出标签的方向
+    momentum_smear_phase: int | None = None  # 实际 eigenvector 相位动量
     variant: str = "Cg5g4"
     t_sources: tuple[int, ...] = (0,)
     delta_t_min: int = 2
@@ -34,6 +36,26 @@ class FermionConfig:
             raise ValueError("nx、nt、nev 必须为正数")
         if len(self.momentum) != 3:
             raise ValueError("momentum 必须按 (Pz, Py, Px) 给出三分量")
+        if self.momentum_smear_dir is not None:
+            direction = str(self.momentum_smear_dir).lower()
+            if direction not in {"x", "y", "z"}:
+                raise ValueError("momentum_smear_dir 必须是 x、y 或 z (direction)")
+            object.__setattr__(self, "momentum_smear_dir", direction)
+        if self.momentum_smear == 0:
+            if self.momentum_smear_phase not in (None, 0):
+                raise ValueError("未涂抹时 momentum_smear_phase 必须为 0")
+            object.__setattr__(self, "momentum_smear_phase", 0)
+        else:
+            if self.momentum_smear_dir is None:
+                raise ValueError(
+                    "非零 momentum_smear 必须给出 momentum_smear_dir (direction)"
+                )
+            phase = (-int(self.momentum_smear)
+                     if self.momentum_smear_phase is None
+                     else int(self.momentum_smear_phase))
+            if phase == 0:
+                raise ValueError("非零 momentum_smear 的实际相位不能为 0")
+            object.__setattr__(self, "momentum_smear_phase", phase)
         if not 0 <= self.delta_t_min <= self.delta_t_max < self.nt:
             raise ValueError("delta_t 必须满足 0 <= min <= max < nt")
         sources = tuple(sorted(set(int(t) for t in self.t_sources)))
@@ -41,6 +63,21 @@ class FermionConfig:
             raise ValueError("t_sources 必须是 [0, nt) 内的非空时间片集合")
         object.__setattr__(self, "conf_id", str(self.conf_id))
         object.__setattr__(self, "t_sources", sources)
+
+    @property
+    def momentum_smear_vector(self) -> tuple[int, int, int]:
+        """返回参考代码使用的实际相位动量，分量顺序为 ``(Pz, Py, Px)``。
+
+        donghx 的 ``momsmear+q`` 输出标签对应 eigenvector 相位 ``-q``；
+        例如 ``momsmear2x`` 使用 ``(0, 0, -2)``，而 ``momsmear-2z``
+        使用 ``(2, 0, 0)``。
+        """
+        if self.momentum_smear == 0:
+            return (0, 0, 0)
+        axis = {"z": 0, "y": 1, "x": 2}[self.momentum_smear_dir]
+        vector = [0, 0, 0]
+        vector[axis] = int(self.momentum_smear_phase)
+        return tuple(vector)
 
 
 def selected_pairs(config: FermionConfig) -> tuple[tuple[int, int, int], ...]:

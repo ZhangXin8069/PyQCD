@@ -130,6 +130,72 @@ def test_cg5_reference_name_has_no_redundant_suffix():
     assert "eginphase0_Cg5g4_contract" in cg5g4["contract"].name
 
 
+def test_nonzero_momentum_smear_requires_direction():
+    """非零动量涂抹不能在缺失空间方向时退化为未涂抹。"""
+    from cases_4150_fermion import FermionConfig
+
+    try:
+        FermionConfig(momentum_smear=2)
+    except ValueError as exc:
+        assert "direction" in str(exc)
+    else:
+        raise AssertionError("nonzero momentum_smear must require a direction")
+
+
+def test_momentum_smear_vector_matches_donghx_sign_convention():
+    """2x/−2z 的相位向量按参考代码使用 ``phase=-mom_smear``。"""
+    from cases_4150_fermion import FermionConfig
+
+    assert FermionConfig(momentum_smear=2, momentum_smear_dir="x").momentum_smear_vector == (0, 0, -2)
+    assert FermionConfig(momentum_smear=-2, momentum_smear_dir="z").momentum_smear_vector == (2, 0, 0)
+    assert FermionConfig().momentum_smear_vector == (0, 0, 0)
+
+
+def test_momentum_smear_applies_phase_to_each_eigenvector():
+    """VVV 输入 eigenvector 的每个色分量都应乘空间相位。"""
+    from cases_4150_fermion import FermionConfig
+    from run_4150_fermion import _apply_momentum_smear
+
+    config = FermionConfig(nx=4, momentum_smear=2, momentum_smear_dir="x")
+    eig = np.ones((1, 4, 4, 4, 3), dtype=np.complex128)
+    got = _apply_momentum_smear(eig, config)
+    expected = np.exp(1j * np.pi * np.arange(4))
+    assert np.allclose(got[0, 0, 0, :, 0], expected)
+    assert np.allclose(got[0, ..., 1], got[0, ..., 0])
+
+
+def test_momentum_smear_requires_explicit_independent_peram_root():
+    """非零涂抹必须显式传入独立 perambulator 根目录。"""
+    from cases_4150_fermion import FermionConfig
+    from run_4150_fermion import _select_peram_root
+
+    config = FermionConfig(nx=2, momentum_smear=2, momentum_smear_dir="x")
+    try:
+        _select_peram_root(config, Path("/ordinary/peram"), None)
+    except ValueError as exc:
+        assert "独立" in str(exc)
+    else:
+        raise AssertionError("momentum-smear run must require a separate peram root")
+
+
+def test_momentum_smear_cache_namespace_is_distinct():
+    """普通与动量涂抹 VVV 缓存不得共享文件名。"""
+    from cases_4150_fermion import FermionConfig
+    from run_4150_fermion import _vvv_cache_filename
+
+    ordinary = _vvv_cache_filename(FermionConfig(), (0, 1))
+    smeared = _vvv_cache_filename(
+        FermionConfig(momentum_smear=2, momentum_smear_dir="x"), (0, 1)
+    )
+    smeared_override = _vvv_cache_filename(
+        FermionConfig(momentum_smear=2, momentum_smear_dir="x",
+                      momentum_smear_phase=2), (0, 1)
+    )
+    assert ordinary != smeared
+    assert "smearx2_phase-2" in smeared
+    assert smeared != smeared_override
+
+
 def run():
     tests = [
         test_runner_file_exists,
@@ -139,6 +205,11 @@ def run():
         test_overall_status_downgrades_unverified_comparison,
         test_vvv_cache_reuse_checks_shape_and_dtype,
         test_cg5_reference_name_has_no_redundant_suffix,
+        test_nonzero_momentum_smear_requires_direction,
+        test_momentum_smear_vector_matches_donghx_sign_convention,
+        test_momentum_smear_applies_phase_to_each_eigenvector,
+        test_momentum_smear_requires_explicit_independent_peram_root,
+        test_momentum_smear_cache_namespace_is_distinct,
     ]
     for test in tests:
         test()

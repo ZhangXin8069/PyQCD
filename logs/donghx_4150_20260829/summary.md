@@ -88,8 +88,8 @@ examples/pyqcd/cmp1/v20260829_hyp_ope_3d5_z/
 
 主结果：`examples/pyqcd/cmp1/v202608291710_fermion_cg5g4/`；
 `Cg5` 结果：`examples/pyqcd/cmp1/v202608291705_fermion_cg5/`。
-两者均为 `Nev=100`、`t_source=0`、`Delta t=2..36` 的 35 个时间对，且复用
-同一经过形状/dtype 校验的本地 VVV 缓存。
+主结果为 `Nev=100`、`t_source=0`、`Delta t=2..36` 的 35 个时间对；其余动量
+配置取 `Delta t=2`，且均复用经过形状/dtype 校验的本地 VVV 缓存。
 
 | 通道/动量 | contract 相对差 | nopol 相对差 | 参考精度 |
 |---|---:|---:|---|
@@ -105,13 +105,29 @@ examples/pyqcd/cmp1/v20260829_hyp_ope_3d5_z/
 参考结果目录没有可直接读取的逐时间 `VVV.t*.Px*Py*Pz*` 中间文件。因此整体状态
 必须是 `unverified`，但已有 contract/nopol 数值比较仍为 `pass`。
 
+### 无 momentum smear 的方向/大小矩阵
+
+在同一组态、同一标准 light perambulator 上，按 `P=(Pz,Py,Px)` 分别覆盖
+`Pz=0..5`、`Py=1..5`、`Px=1..5`。每个非零动量取 `Delta t=2`；`Cg5g4` 的
+`P=0` 另取 `Delta t=2..36` 的 35 对。结果由各版本目录的 `results.json` 汇总：
+
+| 变体 | 动量配置数 | 选定时间对 | contract/nopol | 参考 dtype | 最大 contract 相对差 | 最大 nopol 相对差 |
+|---|---:|---:|---|---|---:|---:|
+| `Cg5g4` | 16 | 50 | 16/16 pass | c128 12，c64 4 | 2.6388e-6 | 1.5445e-6 |
+| `Cg5` | 16 | 16 | 16/16 pass | c128 16 | 3.0761e-15 | 1.7189e-15 |
+
+其中每个 `contract` 输出形状为 `(72,72,4,4)`，每个 `nopol_pp` 输出形状为
+`(72,72)`；`Cg5g4` 的 c64 参考采用 `tol=1e-5`，最大误差仍在容差内。上述
+矩阵只证明无 momentum smear 的 2pt 中间/投影对象；`momsmear±2{x,y,z}` 仍需
+独立 smeared perambulator，不能由标准 perambulator 推断。
+
 ## 本轮断言
 
 ```text
 verify_manifest_4150: PASS 4/4
 verify_4150_lowlevel: PASS 3/3
 verify_4150_fermion: PASS 3/3
-verify_4150_fermion_runner: PASS 7/7
+verify_4150_fermion_runner: PASS 12/12
 verify_4150_hyp_ope_runner: PASS 3/3
 ```
 
@@ -125,6 +141,6 @@ python examples/pyqcd/conftest.py: 42 passed, 0 failed
 verify_manifest_4150.py: PASS 4/4
 verify_4150_lowlevel.py: PASS 3/3
 verify_4150_fermion.py: PASS 3/3
-verify_4150_fermion_runner.py: PASS 7/7
+verify_4150_fermion_runner.py: PASS 12/12
 verify_4150_hyp_ope_runner.py: PASS 3/3
 ```

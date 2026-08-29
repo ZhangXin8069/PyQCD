@@ -373,6 +373,31 @@
   \source{主结果：\codepath{cmp1/v202608291710_fermion_cg5g4/results.json}；Cg5：\codepath{cmp1/v202608291705_fermion_cg5/results.json}；索引：\codepath{logs/donghx_4150_20260829/summary.md}}
 \end{frame}
 
+\begin{frame}[t]{2pt 方向矩阵：两种算符各 16 个无 momentum smear 配置均通过}
+  \footnotesize
+  \renewcommand{\arraystretch}{1.08}
+  \begin{tabularx}{0.96\textwidth}{@{}L Y r Y Y@{}}
+    \toprule
+    变体 & 覆盖的 $P=(P_z,P_y,P_x)$ & 配置数 & 输出形状与对象通过数 & 参考精度；最大相对差\\
+    \midrule
+    $Cg5g4$ & $P_z=0\ldots5$；$P_y=1\ldots5$；$P_x=1\ldots5$ & 16 &
+      $contract:(72,72,4,4)$、$nopol:(72,72)$；各 16/16 &
+      c128 12、c64 4；$2.64\times10^{-6}$ / $1.54\times10^{-6}$\\
+    $Cg5$ & 同上 & 16 &
+      $contract:(72,72,4,4)$、$nopol:(72,72)$；各 16/16 &
+      c128 16；$3.08\times10^{-15}$ / $1.72\times10^{-15}$\\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.12em}
+  \begin{block}{解释与边界}
+    $Cg5g4$ 的 $P=0$ 额外计算 $\Delta t=2\ldots36$ 共 35 对，其余配置取
+    $\Delta t=2$；$Cg5$ 的 16 个配置均取一个时间对。c64 参考使用
+    $\mathrm{tol}=10^{-5}$，因此所有 32 个配置的 contract/nopol 均在对应容差内。
+    由于逐时间 VVV 成品仍缺失，每个 runner 的整体状态仍为 \unverified。
+  \end{block}
+  \source{汇总：\codepath{logs/donghx_4150_20260829/summary.md}；逐配置结果：\codepath{examples/pyqcd/cmp1/v20260829*fermion*/results.json}}
+\end{frame}
+
 \begin{frame}[t]{smear 与动量边界：本轮能闭合的范围和不能越过的输入缺口}
   \footnotesize
   \renewcommand{\arraystretch}{1.00}
@@ -380,13 +405,14 @@
     \toprule
     分支 & 当前事实 & 判定\\
     \midrule
-    无 momentum smear & 标准 light peram + eigvec；$Cg5/Cg5g4$、$P=0$ 的 35 对通过。 & \verified\\
-    无 momentum smear 的方向/大小 & $P_z=1,2,5$、$P_x=1$、$P_y=1$；按参考 dtype 给容差。 & \verified\\
+    无 momentum smear & 标准 light peram + eigvec；$Cg5/Cg5g4$ 各 16 个动量配置的 contract/nopol 均通过。 & \verified\\
+    无 momentum smear 的方向/大小 & 覆盖 $P_z=0\ldots5$、$P_y=1\ldots5$、$P_x=1\ldots5$；$Cg5g4$ 的 $P=0$ 另有 35 对。 & \verified\\
     momentum smear $\pm2x/\pm2y/\pm2z$ & 参考有结果，但需独立 smeared peram；本轮只有标准 light peram。 & \unverified\\
     gauge smear：4D10 & record $\to$ PyQCD link $\to$ Clover/OPE 已运行；$x/y/z$ 共 9 通道逐项通过。 & \verified\\
     gauge smear：3D(1/3/5) & 各运行 $z$ 向 3 通道；同 smear 参考成品缺失，不能给数值一致结论。 & \unverified\\
     \bottomrule
   \end{tabularx}
+  \vspace{-0.65em}
   \begin{block}{物理含义}
     smearing 改变输入链：momentum 同时改变 phase/peram；gauge 必须在同一 HYP link 上重算 Clover/OPE。
   \end{block}
@@ -436,7 +462,7 @@
     \toprule
     发现 & 处理 & 证据\\
     \midrule
-    VVV 缓存 & 校验 shape/dtype 后复用 $(N_t,N_{\rm ev}^3)$ 的 c128 缓存。 & runner 7/7；日志有 reuse。\\
+    VVV 缓存 & 校验 shape/dtype 后复用 $(N_t,N_{\rm ev}^3)$ 的 c128 缓存；文件名包含 smear 相位。 & runner 12/12；日志有 reuse。\\
     Cg5 命名 & 为不带 \codepath{_Cg5} 后缀的参考文件增加显式分支。 & Cg5 35 对通过。\\
     参考 VVV 缺失 & 不伪造比较；记录为 ref 缺失并整体降级。 & 状态正确为 \unverified。\\
     复数精度 & c128 逐位；Px/Py 为 c64，采用 $10^{-5}$ 容差。 & 单时间对均在容差内。\\
@@ -458,7 +484,7 @@
     资产 & \codepath{verify_manifest_4150.py} & PASS 4/4\\
     低层受控契约 & \codepath{verify_4150_lowlevel.py} & PASS 3/3\\
     2pt 受控契约 & \codepath{verify_4150_fermion.py} & PASS 3/3\\
-    runner 契约 & \codepath{verify_4150_fermion_runner.py} & PASS 7/7\\
+    runner 契约 & \codepath{verify_4150_fermion_runner.py} & PASS 12/12\\
     低层真实 & \codepath{v202608291500_lowlevel/results.json} & 7 pass\\
     2pt 真实 & \codepath{v202608291710_fermion_cg5g4/results.json} & 2 pass + 1 unverified\\
     HYP-OPE 真实 & \codepath{v20260829_hyp_ope_xyz/results.json} & 9 pass；3D 运行但无配对参考\\
@@ -521,7 +547,7 @@
     \toprule
     任务 & 前置输入 & 产物/判据 & 当前阻塞\\
     \midrule
-    2pt 变体矩阵 & momentum-smeared peram；HYP link & 各 smear/方向/大小独立 JSON；contract/nopol 在 dtype 容差内 & 未给出 smeared peram\\
+    2pt 动量涂抹变体 & momentum-smeared peram；HYP link & 各 smear/方向/大小独立 JSON；contract/nopol 在 dtype 容差内 & 未给出 smeared peram\\
     VVV 成品闭环 & 参考 \codepath{VVV.t*.Px*Py*Pz*} 或等价文件 & 逐时间 VVV 相对差；状态不再 unverified & 结果目录未见该文件\\
     \bottomrule
   \end{tabularx}
