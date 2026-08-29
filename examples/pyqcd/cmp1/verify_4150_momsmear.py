@@ -63,6 +63,21 @@ def test_parse_momsmear_filename_preserves_direction_and_phase():
     }
 
 
+def test_parse_implicit_variant_filename_without_guessing_operator():
+    """momsmear0_Cg5 的无后缀文件应可解析但保留隐式变体。"""
+    from inspect_4150_momsmear import parse_output_filename
+
+    parsed = parse_output_filename(
+        "twopt_slice_pp_Px0Py0Pz0_eginphase0_contract_conf4150.npy"
+    )
+    assert parsed == {
+        "momentum": [0, 0, 0],
+        "phase": 0,
+        "variant": "implicit",
+        "kind": "contract",
+    }
+
+
 def test_projected_nopol_uses_pplus_and_antiperiodic_boundary_sign():
     from inspect_4150_momsmear import compare_contract_nopol
 
@@ -110,6 +125,7 @@ def test_inspect_directory_rejects_malformed_or_foreign_files():
 def run() -> None:
     tests = [
         test_parse_momsmear_filename_preserves_direction_and_phase,
+        test_parse_implicit_variant_filename_without_guessing_operator,
         test_projected_nopol_uses_pplus_and_antiperiodic_boundary_sign,
         test_inspect_directory_groups_optional_polarizations_and_checks_projection,
         test_inspect_directory_rejects_malformed_or_foreign_files,
