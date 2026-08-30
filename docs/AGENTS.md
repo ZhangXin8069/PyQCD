@@ -35,3 +35,4 @@ cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelate
 - `report_cmp1_4150_20260828.tex/.pdf`：基于真实组态 4150 的 PyQCD 与 lqcddb/donghx 功能对照报告；16:9 横板、16 页，含 L20 复数 GEVP 差异判定、HYP 输入守卫、验证命令与未验证边界（2026-08-28）。
 - `report_donghx_4150_reproduction_20260829.tex/.pdf`：基于真实组态 4150 的 donghx/PyQCD eigvec、VdV、VVV、Clover/dual/OPE 与质子 2pt 复现报告；明确 Cg5/Cg5g4、动量方向/大小、smear 输入边界及 3pt/ratio/barematrix 未验证项（2026-08-29）。
 - `report_donghx_4150_reproduction_20260830.tex/.pdf`：在上一版基础上纳入 7 个 4150 2pt 成品根目录、58 个动量组、`momsmear0` 隐式命名检查及 Cg5/Cg5g4 各 35 个真实时间对；保留独立 smeared peram、逐时间 VVV 与下游 3pt/ratio/barematrix 的未验证边界（2026-08-30）。
+- `report_donghx_pyqcd_compare_20260830.tex/.pdf`：简要汇总组态 4150 的已通过 dhx/PyQCD 低层、4D10 HYP-OPE、质子 2pt、正宇称投影与 effmass 聚合对照；表格列出数据路径、物理公式、PyQCD 函数/参数和相对误差（2026-08-30）。
