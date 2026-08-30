@@ -67,7 +67,7 @@
 }
 
 \title[4150 donghx 复现]{donghx 格点 QCD 算法的 PyQCD 复现}
-\subtitle{组态 4150：eigvec / VdV / VVV / 2pt（含 momsmear0 与 effmass 聚合）/ HYP-OPE 的真实对照与下游边界}
+\subtitle{组态 4150：eigvec / VdV / VVV / 2pt（含 momsmear0、极化与 effmass 聚合）/ HYP-OPE 的真实对照与下游边界}
 \author[Codex]{Codex / PyQCD}
 \institute{格点 QCD：蒸馏、质子相关函数与胶子算符}
 \date{2026 年 8 月 30 日}
@@ -90,7 +90,7 @@
       \begin{block}{低层对象}
         \centering\Large\textcolor{evidence}{7/7}\par\normalsize
         eigvec、phase、VdV、VVV、Clover、dual、OPE；\newline
-        4D10 HYP 三方向 9/9；2pt 输出级投影 58/58
+        4D10 HYP 三方向 9/9；2pt nopol 投影 58/58
       \end{block}
     \footnotesize 低层相对差为 $0$ 或 $1.4\times10^{-15}$ 量级；\newline
     HYP-OPE 最大相对差 $3.31\times10^{-15}$。
@@ -98,7 +98,7 @@
     \begin{column}{0.30\textwidth}
       \begin{block}{费米子 2pt}
         \centering\Large\textcolor{evidence}{2\text{pt}+58}\par\normalsize
-        $Cg5g4$ 与 $Cg5$；7 个 4150 成品根目录
+        $Cg5g4$ 与 $Cg5$；7 个 4150 成品根目录；极化输出 74/116 标准通过
       \end{block}
       \footnotesize 标准 peram 主对照取 $t_{\rm source}=0$、$\Delta t=2\ldots36$。
     \end{column}
@@ -426,7 +426,7 @@
   \end{block}
   \colorbox{warnbg}{\parbox{0.94\linewidth}{\centering
     \codepath{momsmear0} 只表示参考输出配置；独立 smeared peram 与逐时间 VVV 仍为 \unverified。}}
-  \source{检查器：\codepath{cmp1/inspect_4150_momsmear.py:89--131}；结果：\codepath{cmp1/v202608300150_4150_2pt_inventory/results.json}}
+  \source{检查器：\codepath{cmp1/inspect_4150_momsmear.py:99--202,331--374}；结果：\codepath{cmp1/v20260830123306_4150_2pt_polar/results.json}}
 \end{frame}
 
 \begin{frame}[t]{effmass 聚合 2pt：4150 是第 2 个样本，25 个动量行逐数组闭合}
@@ -459,7 +459,7 @@
   \source{检查器：\codepath{cmp1/inspect_4150_effmass.py}；结果：\codepath{cmp1/v202608301600_4150_effmass_aggregate/results.json}；受控测试：\codepath{cmp1/verify_4150_effmass.py}}
 \end{frame}
 
-\begin{frame}[t]{非零 momentum-smear：5 个根目录、26 个动量组、投影 26/26}
+\begin{frame}[t]{非零 momentum-smear：5 个根目录、26 个动量组、nopol 投影 26/26}
   \scriptsize
   momentum smear 先在低模上乘固定方向的相位 $s_q$，再以输出动量 $P$ 构造三低模顶点：
   \begin{align*}
@@ -488,7 +488,41 @@
     complex64 容差为 $5\times10^{-6}$。这里只核验参考成品的 contract--投影关系；
     独立 smeared peram 驱动的 raw VVV/peram 对照仍为 \unverified。
   \end{block}
-  \source{数据与检查：\codepath{cmp1/v202608300150_4150_2pt_inventory/summary.md}；参考算法见附录映射表}
+  \source{数据与检查：\codepath{cmp1/v20260830123306_4150_2pt_polar/summary.md}；参考算法见附录映射表}
+\end{frame}
+
+\begin{frame}[t]{极化输出级对照：标准 $li$、旧 $il$ 变体与一个异常槽位}
+  \scriptsize
+  对每个方向 $d=1,2,3$，参考代码先构造
+  $\mathcal P_d=P_+(i\gamma_d\gamma_5)$，其中
+  $P_+=\frac12(\gamma_0+\gamma_4)$；标准输出级收缩为
+  \[
+    C^{\rm pol}_{yx}=\begin{cases}
+      \displaystyle\sum_{i,l}(\mathcal P_d)_{li}C_{yxil},&y\ge x,\\
+      \displaystyle-\sum_{i,l}(\mathcal P_d)_{li}C_{yxil},&y<x.
+    \end{cases}
+    \qquad\Longleftrightarrow\qquad
+    \texttt{einsum("li,yxil->yx", projector, contract)}.
+  \]
+  \setlength{\tabcolsep}{3pt}
+  \renewcommand{\arraystretch}{1.00}
+  \begin{tabularx}{0.96\textwidth}{@{}L r Y@{}}
+    \toprule
+    标准 $li$ 状态 & 数量 & 解释\\
+    \midrule
+    \verified & 74 & 116 个实际存在的极化数组中，标准投影相符。\\
+    \unverified & 58 & 极化文件缺失；不能当作失败或通过。\\
+    标准差异、旧 $il$ 通过 & 41 & 与 \codepath{L24x72_diffpol.py:121--129} 的转置轴变体相符，仅作诊断。\\
+    标准/旧 $il$ 均差异 & 1 & \codepath{momsmear2x}，$P=(P_z,P_y,P_x)=(0,0,6)$，$Cg5g4/pol15$。\\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.08em}
+  \begin{block}{异常与判定语义}
+    异常槽位成品范数约 $3.30\times10^{-9}$，两种轴序的最大绝对差约
+    $1.25\times10^{-4}$；相对 L2 约 $1.51\times10^5$ 受近零分母支配。
+    对应 `contract` $\to$ `nopol` 仍通过。标准通过数不把旧 $il$ 命中或缺失数组计入。
+  \end{block}
+  \source{参考：\codepath{refer/donghx/2pt_diffpol/L24x72_diffpol.py:54--78,121--129}；结果：\codepath{cmp1/v20260830123306_4150_2pt_polar/results.json}；摘要：\codepath{cmp1/v20260830123306_4150_2pt_polar/summary.md}}
 \end{frame}
 
 \begin{frame}[t]{smear 与动量边界：本轮能闭合的范围和不能越过的输入缺口}
@@ -500,16 +534,16 @@
     \midrule
     无 momentum smear & 标准 light peram + eigvec；$Cg5/Cg5g4$ 各 16 个动量配置的 contract/nopol 均通过。 & \verified\\
     无 momentum smear 的方向/大小 & 覆盖 $P_z=0\ldots5$、$P_y=1\ldots5$、$P_x=1\ldots5$；$Cg5g4$ 的 $P=0$ 另有 35 对。 & \verified\\
-    momentum smear $\pm2x/\pm2y/\pm2z$ & 5 根目录、26 组；contract--nopol 26/26；独立 peram/raw VVV 缺失。 & 输出级 \verified；输入链 \unverified\\
+    momentum smear $\pm2x/\pm2y/\pm2z$ & 5 根、26 组；nopol 26/26；标准 $li$ 49/75，diff 26、缺 3；独立 peram/VVV 缺失。 & 输出级 \verified；输入链 \unverified\\
     gauge smear：4D10 & record $\to$ PyQCD link $\to$ Clover/OPE 已运行；$x/y/z$ 共 9 通道逐项通过。 & \verified\\
     gauge smear：3D(1/3/5) & 各运行 $z$ 向 3 通道；同 smear 参考成品缺失，不能给数值一致结论。 & \unverified\\
     \bottomrule
   \end{tabularx}
-  \vspace{-0.65em}
+  \vspace{-1.35em}
   \begin{block}{物理含义}
     smearing 改变输入链：momentum 同时改变 phase/peram；gauge 必须在同一 HYP link 上重算 Clover/OPE。
   \end{block}
-  \source{参考：\codepath{2pt_proton...mom2_xdir_dcu.py:57--180}；HYP 结果：\codepath{cmp1/v20260829_hyp_ope_xyz/results.json}；资产：\codepath{cmp1/v202608291424/manifest.json}}
+  \source{参考：\codepath{2pt_proton...mom2_xdir_dcu.py:57--180}；索引：\codepath{logs/donghx_4150_20260829/summary.md}}
 \end{frame}
 
 \begin{frame}[t]{3pt、ratio、barematrix：接口可审阅，但缺少可配对的 4150 样本}
@@ -585,7 +619,7 @@
   \vspace{0.10em}
   \begin{block}{主回归}
     \texttt{python}\,\codepath{examples/pyqcd/conftest.py}：42 passed，0 failed。
-    报告自身还需两遍 XeLaTeX、零溢出和逐页渲染闭合。
+    本报告已完成两遍 XeLaTeX、三类零诊断和 27/27 页渲染检查。
   \end{block}
   \source{证据索引：\codepath{logs/donghx_4150_20260829/summary.md}；产物：\codepath{examples/pyqcd/cmp1/}}
 \end{frame}
@@ -597,21 +631,20 @@
     \toprule
     层级 & 命令/产物 & 结果\\
     \midrule
-    2pt 真实 & \codepath{v202608300145_cg5g4/results.json}；\codepath{v202608300146_cg5} & 各 2 pass + 1 unverified\\
-    2pt 输出级库存 & \codepath{v202608300150_4150_2pt_inventory/results.json} & 58/58 pass；7 根目录；上游 peram 未验证\\
-    2pt 断言门 & \codepath{verify_4150_momsmear.py} & PASS 5/5\\
+    2pt 真实 & \codepath{v202608300145_cg5g4}；\codepath{v202608300146_cg5} & 各 2 pass + 1 unverified\\
+    2pt 输出级库存 & \codepath{v20260830123306_4150_2pt_polar/results.json} & nopol 58/58；极化 $74/116$ pass、42 diff、58 缺失\\
+    2pt 断言门 & \codepath{verify_4150_momsmear.py} & PASS 7/7\\
     effmass 聚合样本门 & \codepath{verify_4150_effmass.py}；\codepath{inspect_4150_effmass.py} & PASS 3/3；7/7 资产、25 行\\
     cmp1 总门 & \codepath{verify_cmp1.py} & 51/52；白名单 1；硬失败 0\\
     \bottomrule
   \end{tabularx}
-  \vspace{0.10em}
+  \vspace{-0.65em}
   \begin{block}{状态语义}
-    两次 $P=0$ 实跑的 contract/nopol 都在机器精度通过；第三项逐时间 VVV 因参考文件缺失保持
-    \unverified。库存检查只证明成品的投影与边界关系，不证明独立 momentum-smeared peram 输入链。
+    两次 $P=0$ 实跑的 contract/nopol 在机器精度通过；逐时间 VVV 因参考缺失为
+    \unverified。库存检查识别出 41 个旧 $il$ 转置命中和 1 个两轴序均不符的近零极化槽位；
+    独立 momentum-smeared peram 输入链仍未验证。
   \end{block}
-  \source{新鲜命令：三个断言门与 \codepath{inspect_4150_momsmear.py} 均退出 0；具体数值见
-    \codepath{cmp1/v202608300145_cg5g4/summary.md}、\codepath{cmp1/v202608300146_cg5/summary.md}、
-    \codepath{cmp1/v202608300150_4150_2pt_inventory/summary.md}}
+  \source{命令：\codepath{verify_4150_momsmear.py} exit 0；库存 JSON/摘要：\codepath{cmp1/v20260830123306_4150_2pt_polar/}；检查器 exit 2 为预期差异。}
 \end{frame}
 
 \appendix
@@ -631,7 +664,8 @@
     peram 轴序 & \codepath{2pt_proton...new_cpu.py:193--224} & \codepath{tools/_io.py:115--223}\\
     2pt 缩并 & \codepath{2pt_proton...new_cpu.py:346--381} & \codepath{contraction/_donghx.py:85--151}\\
     投影/边界 & \codepath{2pt_proton...new_cpu.py:418--465} & \codepath{contraction/_baroperator.py:332--365}\\
-    momentum-smear 输出投影 & \codepath{2pt_gpu_new/2pt_proton...mom2...dcu.py:338--440} & \codepath{cmp1/inspect_4150_momsmear.py:89--131}\\
+    momentum-smear 输出投影 & \codepath{2pt_gpu_new/2pt_proton...mom2...dcu.py:338--440} & \codepath{cmp1/inspect_4150_momsmear.py:99--202,331--374}\\
+    极化投影/轴序诊断 & \codepath{2pt_diffpol/L24x72_diffpol.py:54--78,121--129} & \codepath{cmp1/inspect_4150_momsmear.py:104--202}\\
     \bottomrule
   \end{tabularx}
   \source{参考：\codepath{refer/donghx}；实现：\codepath{pyqcd/}；本表列出本轮直接使用的入口}
