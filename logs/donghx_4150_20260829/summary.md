@@ -125,7 +125,8 @@ examples/pyqcd/cmp1/v20260829_hyp_ope_3d5_z/
 ## momentum-smear 最终输出级检查
 
 检查入口：`examples/pyqcd/cmp1/inspect_4150_momsmear.py`；结果：
-`examples/pyqcd/cmp1/v202608300150_4150_2pt_inventory/results.json`。
+`examples/pyqcd/cmp1/v20260830123306_4150_2pt_polar/results.json`；本次检查器因发现
+标准极化差异而按约定退出 `2`，不是读取或运行错误。
 
 参考可见的计算顺序是：固定 $q=\pm2\hat d$ 相位乘到低模 → 以输出动量 $P$ 逐时间构造
 VVV → 读取四个 source-Dirac 文件组成 peram → 两项质子颜色 epsilon 缩并 →
@@ -158,6 +159,46 @@ perambulator 代替独立 momentum-smeared perambulator。
 nopol` 为 58/58；全体最大相对 L2 为 `8.29e-7`，最大绝对差为 `1.98e-9`，仍在
 complex64 的 `5e-6` 容差内。`momsmear0` 只表示输出配置；三个独立 momentum-smeared
 perambulator 候选目录仍不存在。
+
+### 极化输出级检查：标准 `li` 与参考旧 `il` 变体分开记账
+
+参考极化矩阵由 `P_+ (i gamma_d gamma5)` 构造，其中
+`d=1,2,3` 分别对应 `pol15/pol25/pol35`。标准收缩是：
+
+```text
+einsum("li,yxil->yx", projector, contract)
+```
+
+然后沿用 `t_sink < t_source` 的反周期负号。参考
+`refer/donghx/2pt_diffpol/L24x72_diffpol.py:121-129` 的极化输出使用
+`einsum("il,yxil->yx", ...)`；它是转置轴变体，不能替代标准 `li`。
+
+本次对 7 个根目录的 174 个极化槽位逐项检查：
+
+| 标准 `li` 状态 | 数量 | 解释 |
+|---|---:|---|
+| `pass` | 74 | 116 个实际存在的极化数组中，标准投影相符 |
+| `diff` 且旧 `il` `pass` | 41 | 与参考旧转置实现相符，只作为诊断，不升级为标准通过 |
+| `diff` 且旧 `il` 也 `diff` | 1 | `momsmear2x`，`P=(Pz,Py,Px)=(0,0,6)`，`Cg5g4/pol15` |
+| `unverified` | 58 | 极化文件缺失，不能当作失败或通过 |
+
+异常槽位的 `pol15` 输出范数约为 `3.30e-9`；标准 `li` 与旧 `il` 均给出
+`max_abs=1.25e-4` 的不符，故相对 L2（以成品范数作分母）达到约 `1.51e5`，
+该相对数值受近零分母支配。对应 `contract → nopol` 仍通过，异常只归属于该
+极化成品槽位。各根目录的极化计数如下：
+
+| 根目录 | 动量组 | `li`: pass/diff/unverified |
+|---|---:|---:|
+| `momsmear-2x` | 5 | 10/5/0 |
+| `momsmear-2y` | 5 | 10/5/0 |
+| `momsmear-2z` | 5 | 10/5/0 |
+| `momsmear2x` | 5 | 9/6/0 |
+| `momsmear2z` | 6 | 10/5/3 |
+| `momsmear0_Cg5` | 16 | 15/0/33 |
+| `momsmear0_Cg5g4` | 16 | 10/16/22 |
+
+这一步闭合了参考成品的极化/边界输出级事实，并暴露了参考实现的轴序分支；
+它不等同于 PyQCD 已用独立 momentum-smeared perambulator 重算 raw VVV。
 
 ## effmass 聚合 2pt：4150 样本索引与逐数组对应
 
@@ -204,7 +245,7 @@ verify_4150_lowlevel: PASS 3/3
 verify_4150_fermion: PASS 3/3
 verify_4150_fermion_runner: PASS 12/12
 verify_4150_hyp_ope_runner: PASS 3/3
-verify_4150_momsmear: PASS 5/5
+verify_4150_momsmear: PASS 7/7
 verify_4150_effmass: PASS 3/3
 inspect_4150_effmass: assets=7 pass=7 diff=0 unverified=0 rows=25
 ```
@@ -221,7 +262,8 @@ verify_4150_lowlevel.py: PASS 3/3
 verify_4150_fermion.py: PASS 3/3
 verify_4150_fermion_runner.py: PASS 12/12
 verify_4150_hyp_ope_runner.py: PASS 3/3
-verify_4150_momsmear.py: PASS 5/5
+verify_4150_momsmear.py: PASS 7/7
+inspect_4150_momsmear.py: roots=7 groups=58 nopol pass=58 diff=0; polar pass=74 diff=42 unverified=58; exit=2 (预期)
 verify_4150_effmass.py: PASS 3/3
 inspect_4150_effmass.py: assets=7 pass=7 diff=0 unverified=0 rows=25
 ```
@@ -230,7 +272,7 @@ inspect_4150_effmass.py: assets=7 pass=7 diff=0 unverified=0 rows=25
 
 `docs/report_donghx_4150_reproduction_20260830.tex` 已用 XeLaTeX 编译两遍，并对全部
 渲染页完成视觉检查。正式 PDF 为
-`docs/report_donghx_4150_reproduction_20260830.pdf`：26 页，16:9，页尺寸
+`docs/report_donghx_4150_reproduction_20260830.pdf`：27 页，16:9，页尺寸
 `453.54 x 255.12 pt`；`Overfull=0`、`Float too large=0`、`Missing character=0`、
-`Underfull=0`；`pages_actual=26` 与 `pages_rendered=26`。新增的 effmass 聚合页、
-验收页、来源行和页脚均未见遮挡、裁切或越出安全区。
+`Underfull=0`；`pages_actual=27` 与 `pages_rendered=27`。新增的极化对照页、effmass
+聚合页、验收页、来源行和页脚均未见遮挡、裁切或越出安全区。
