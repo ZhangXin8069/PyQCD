@@ -67,52 +67,53 @@ def staple_wilson_line(U, z, b_perp, z_dir=2, b_dir=0, L=None):
     """
     cp = get_backend()
     if L is None:
-        L = z
-    z_axis = 1 + z_dir
-    b_axis = 1 + b_dir
+        L = abs(z)
+    if z_dir not in (0, 1, 2) or b_dir not in (0, 1, 2):
+        raise ValueError("z_dir 和 b_dir 必须是空间方向 0=x, 1=y, 2=z")
+    if z_dir == b_dir:
+        raise ValueError("staple 的纵向与横向方向必须不同")
+    if L < 0:
+        raise ValueError("staple 臂长 L 必须非负")
 
-    U_z = U[..., z_dir, :, :]   # (Nt,Nz,Ny,Nx,3,3)
-    U_b = U[..., b_dir, :, :]
-
-    # U_z((z+L)n̂_z, z n̂_z)：从 z n̂_z 到 (z+L)n̂_z 沿 +z
-    W = cp.eye(3, dtype=U.dtype)[None, None, None, None, ...].repeat(
-        U.shape[0], axis=0).repeat(U.shape[1], axis=1).repeat(
-        U.shape[2], axis=2).repeat(U.shape[3], axis=3)
-    W = _path_product(U_z, z_axis, 0, z + L, W, forward=True)
-
-    # U_⊥((z+L)n̂_z + b⊥, (z+L)n̂_z)：在 z+L 位置横向 +b⊥
-    W = _path_product(U_b, b_axis, z + L, z + L, W, forward=True,
-                      offset_axis=z_axis)
-
-    # U_z†((z+L)n̂_z + b⊥, b⊥)：在横向位置沿 −z 从 z+L 回到 0
-    W = _path_product(U_z, z_axis, 0, z + L, W, forward=False,
-                      offset_axis=b_axis)
+    # Zhang et al. (2022) Eq. (12):
+    #   eta1 = -s L zhat,
+    #   eta2 = s b bhat - L zhat,
+    #   eta3 = b bhat + [-L + s(L+z)] zhat.
+    # 因而 W 从 x 连到 x + b*bhat + z*zhat，按顺序走三段
+    # -L zhat -> b bhat -> (L+z) zhat。
+    nc = U.shape[-1]
+    W = cp.broadcast_to(cp.eye(nc, dtype=U.dtype), U.shape[:4] + (nc, nc))
+    displacement = [0, 0, 0]
+    for direction, signed_length in (
+            (z_dir, -L), (b_dir, b_perp), (z_dir, L + z)):
+        W = _path_product(U, W, direction, signed_length, displacement)
 
     return W
 
 
-def _path_product(U_dir, axis, start, end, W, forward=True, offset_axis=None):
-    """沿 axis 从 start 到 end 的链接乘积（逐格点 roll 实现）。
-
-    Args:
-        U_dir: 方向链接场 (Nt,Nz,Ny,Nx,3,3)。
-        axis: 移动轴。
-        start/end: 起点/终点位置（格点单位，在 offset_axis 上平移的基坐标）。
-        W: 已有累积矩阵（逐格点）。
-        forward: True 乘 U，False 乘 U†。
-        offset_axis: 附加平移轴（横向位移所在轴）。
-    """
+def _shift_spatial(field, displacement):
+    """返回 ``field(x + displacement)``；方向序为 x,y,z。"""
     cp = get_backend()
-    step = 1 if forward else -1
-    for k in range(start, end, step if forward else -1):
-        # 需要 k 在 offset_axis 上的平移量
-        shift = 0 if offset_axis is None else k
-        U_k = cp.roll(U_dir, -shift, axis=offset_axis) if shift else U_dir
-        if forward:
-            W = cp.einsum("...ab,...bc->...ac", W, U_k)
+    shifted = field
+    for direction, offset in enumerate(displacement):
+        if offset:
+            shifted = cp.roll(shifted, -offset, axis=3 - direction)
+    return shifted
+
+
+def _path_product(U, W, direction, signed_length, displacement):
+    """从当前位移沿一个有向空间段累乘链接，并原位更新位移。"""
+    cp = get_backend()
+    step = 1 if signed_length >= 0 else -1
+    for _ in range(abs(signed_length)):
+        if step > 0:
+            link = _shift_spatial(U[..., direction, :, :], displacement)
+            displacement[direction] += 1
         else:
-            W = cp.einsum("...ab,...cb->...ac", W, U_k.conj())
-        W = cp.roll(W, -step, axis=axis)
+            displacement[direction] -= 1
+            link = _shift_spatial(U[..., direction, :, :], displacement)
+            link = cp.swapaxes(link.conj(), -1, -2)
+        W = cp.einsum("...ab,...bc->...ac", W, link)
     return W
 
 
@@ -135,17 +136,16 @@ def M_mu_lambda_nu_rho(U, mu, lam, nu, rho, z, b_perp, z_dir=2, b_dir=0,
 
     W = staple_wilson_line(U, z, b_perp, z_dir, b_dir, L)
 
-    # F^{νρ}(x) · W_⊏†：在 x 处
-    t1 = cp.einsum("...ab,...bc->...ac", F_nu, W.conj().transpose(0, 1, 2, 3, 5, 4))
-    # W_⊏ · F^{μλ}(x + z n̂_z + b⊥)
-    z_axis = 1 + z_dir
-    b_axis = 1 + b_dir
-    F_mu_shift = cp.roll(F_mu, -z, axis=z_axis)
-    if b_dir != z_dir:
-        F_mu_shift = cp.roll(F_mu_shift, -b_perp, axis=b_axis)
-    t2 = cp.einsum("...ab,...bc->...ac", W, F_mu_shift)
+    endpoint = [0, 0, 0]
+    endpoint[z_dir] += z
+    endpoint[b_dir] += b_perp
+    F_mu_shift = _shift_spatial(F_mu, endpoint)
+    W_dagger = cp.swapaxes(W.conj(), -1, -2)
 
-    # 色迹（逐格点）：Tr[ F_nu·W†·W·F_mu ] = Tr[ t1·t2 ]
+    # W 从 x 连到 x+z+b，故闭合颜色指标为
+    # Tr[F_nu(x) W(x,x+z+b) F_mu(x+z+b) W†(x,x+z+b)]。
+    t1 = cp.einsum("...ab,...bc->...ac", F_nu, W)
+    t2 = cp.einsum("...ab,...bc->...ac", F_mu_shift, W_dagger)
     return cp.einsum("...ab,...ba->...", t1, t2)
 
 
@@ -155,9 +155,10 @@ def gluon_tmd_operator(U, z, b_perp, z_dir=2, b_dir=0, L=None):
     Returns:
         逐格点 O 值，形状 (Nt,Nz,Ny,Nx)。
     """
-    M_txtx = M_mu_lambda_nu_rho(U, 0, 1, 0, 1, z, b_perp, z_dir, b_dir, L)
-    M_tyty = M_mu_lambda_nu_rho(U, 0, 2, 0, 2, z, b_perp, z_dir, b_dir, L)
-    M_xyxy = M_mu_lambda_nu_rho(U, 1, 2, 1, 2, z, b_perp, z_dir, b_dir, L)
+    # Lorentz 方向沿用组态链接顺序 0=x, 1=y, 2=z, 3=t。
+    M_txtx = M_mu_lambda_nu_rho(U, 3, 0, 3, 0, z, b_perp, z_dir, b_dir, L)
+    M_tyty = M_mu_lambda_nu_rho(U, 3, 1, 3, 1, z, b_perp, z_dir, b_dir, L)
+    M_xyxy = M_mu_lambda_nu_rho(U, 0, 1, 0, 1, z, b_perp, z_dir, b_dir, L)
     return M_txtx + M_tyty - 2.0 * M_xyxy
 
 
