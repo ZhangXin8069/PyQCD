@@ -41,6 +41,7 @@
 \newcommand{\codepath}[1]{\nolinkurl{#1}}
 \newcommand{\verified}{\textcolor{evidence}{通过}}
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
 \newcolumntype{L}{>{\raggedright\arraybackslash}p{0.18\textwidth}}
 \newcolumntype{M}{>{\raggedright\arraybackslash}p{0.27\textwidth}}
 
@@ -64,8 +65,9 @@
 \end{frame}
 
 \begin{frame}[t]{结论先行：本报告列出的五类已测条目均通过}
-  \small
-  \begin{tabularx}{0.96\textwidth}{@{}l c c Y@{}}
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{0.96\textwidth}{@{}P{0.27\textwidth} c P{0.16\textwidth} Y@{}}
     \toprule
     对照对象 & 通过数 & 最大相对 $L_2$ 误差 & 由结果文件直接支持的判断 \\
     \midrule
@@ -84,7 +86,7 @@
   \vspace{0.16em}
   \colorbox{good}{\parbox{0.94\linewidth}{\centering
     \verified\ 误差定义、数据路径、函数入口和输入参数均在后续页面给出；表中只保留已实际运行且通过的条目。}}
-  \source{结果索引：\codepath{logs/donghx_4150_20260829/summary.md}；各项 JSON 证据见第 4--8 页。}
+  \source{结果索引：\codepath{logs/donghx_4150_20260829/summary.md}；各项 JSON 证据见后续结果页。}
 \end{frame}
 
 \begin{frame}[t]{统一比较量与物理对象：从空间投影到关联函数}
@@ -153,8 +155,8 @@
   \source{参考重写与参数：\codepath{examples/pyqcd/cmp1/cases_4150_lowlevel.py:34--278}；结果：\codepath{examples/pyqcd/cmp1/v202608291500_lowlevel/results.json}。}
 \end{frame}
 
-\begin{frame}[t]{4D10 HYP--OPE：三方向 9 个直线截面均通过}
-  \footnotesize
+\begin{frame}[t]{4D10 HYP--OPE（1/2）：三方向 9 个直线截面均通过}
+  \small
   \begin{align*}
     O^{FF}_{\mu\nu}(z)&=\sum_{\vec x}{\rm tr}\!
       [F_{\mu\nu}(x+z\hat d)W^\dagger(x+z\hat d\!\to\!x)
@@ -170,20 +172,36 @@
     $z$ & $(0,1),(3,0),(3,1)$ & $12$ & $(72,12)$ & $7.495\times10^{-17}$ & $5.68\times10^{-14}$ \\
     \bottomrule
   \end{tabularx}
-  \vspace{0.12em}
-  \begin{block}{PyQCD 输入与入口}
-    \codepath{read_gauge_lime(HYP_RECORDS["4d10"],Nt=72,Nx=24)}；
-    对每个通道调用 \codepath{gluon_ope_operator_z0(gauge,mu,nu,z_dir,delta_z,72,24,second_insert="F")}。
-    规范场最大幺正性偏差为 $1.11\times10^{-15}$。
+  \vspace{0.16em}
+  \begin{block}{物理判断}
+    横向位移 $\Delta_\perp=0$ 时，三条 Wilson 方向的直线胶子双场强算符在 9 个已测通道上与 dhx 成品一致；规范场最大幺正性偏差为 $1.11\times10^{-15}$。
   \end{block}
-  \begin{block}{数据路径}
-    HYP 输入：\codepath{/public/group/lqcd/donghx/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_4D_10times_new/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents/msg02.rec04.ildg-binary-data}；\newline
-    dhx OPE 根目录：\codepath{/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72}。
+  \source{结果：\codepath{examples/pyqcd/cmp1/v20260829_hyp_ope_xyz/results.json}；通道定义见 \codepath{examples/pyqcd/cmp1/run_4150_hyp_ope.py}。}
+\end{frame}
+
+\begin{frame}[t]{4D10 HYP--OPE（2/2）：入口、参数与原始数据路径可复现}
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \begin{tabularx}{0.96\textwidth}{@{}P{0.22\textwidth}Y@{}}
+    \toprule
+    项目 & PyQCD 入口与输入参数 \\
+    \midrule
+    规范场读入 & \codepath{read_gauge_lime(HYP_RECORDS["4d10"],Nt=72,Nx=24)} \\
+    OPE 调用 & \codepath{gluon_ope_operator_z0(gauge,mu,nu,z_dir,delta_z,72,24,second_insert="F")}；三方向逐通道计算，$\Delta_\perp=0$ \\
+    参考通道 & $x:(1,2),(3,1),(3,2)$；$y:(2,0),(3,0),(3,2)$；$z:(0,1),(3,0),(3,1)$ \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.18em}
+  \begin{block}{输入数据路径（续行属于同一路径）}
+    \scriptsize
+    HYP：\codepath{/public/group/lqcd/donghx/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_4D_10times_new/}\newline
+    \hspace*{2.7em}\codepath{beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents/msg02.rec04.ildg-binary-data}\\
+    dhx OPE 根：\codepath{/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72}
   \end{block}
   \source{入口与通道映射：\codepath{examples/pyqcd/cmp1/run_4150_hyp_ope.py:22--180}；结果：\codepath{examples/pyqcd/cmp1/v20260829_hyp_ope_xyz/results.json}。}
 \end{frame}
 
-\begin{frame}[t]{质子 2pt 直接比较：35 个时间对上的 $Cg5g4/Cg5$ 输出一致}
+\begin{frame}[t]{质子 2pt 直接比较（1/2）：两种插值在 35 个时间对上同链计算}
   \footnotesize
   \begin{align*}
     C_2(\vec p;t_s,t_0)&=\langle O_p(\vec p,t_s)\,\bar O_p(\vec p,t_0)\rangle,\\
@@ -191,36 +209,52 @@
     \quad P^+=\tfrac12(\gamma_0+\gamma_4),\\
     s_{++}(t_s,t_0)&=\begin{cases}-1,&t_s<t_0,\\+1,&t_s\ge t_0.\end{cases}
   \end{align*}
-  \begin{tabularx}{0.96\textwidth}{@{}l l l l Y@{}}
+  \begin{tabularx}{0.96\textwidth}{@{}P{0.15\textwidth} P{0.19\textwidth} P{0.22\textwidth} P{0.22\textwidth} Y@{}}
     \toprule
     变体 & $N_x,N_t,N_{ev}$ & $P_{zyx}$、涂抹 & 时间参数 & PyQCD 处理链 \\
     \midrule
     $Cg5g4$ & $24,72,100$ & $(0,0,0)$，$0$ & $t_0=0$，$\Delta t=2\ldots36$（35 对） &
-      \codepath{readin_eigvecs}; \codepath{Mom_VVV_sink_t};\newline
-      \texttt{readin\_peram\_time\_slice(...,0,72,100)};\\
-      \texttt{contract\_donghx\_2pt\_pair(...,variant=Cg5g4)};\\
-      \texttt{parity\_and\_boundary(...,72)} \\
+      低模顶点、peram 读取、2pt 缩并、$P_+$ 投影与边界符号 \\
     $Cg5$ & $24,72,100$ & $(0,0,0)$，$0$ & 同上 &
-      同一链，\texttt{variant=Cg5} \\
+      同一链，仅替换插值为 $Cg5$ \\
     \bottomrule
   \end{tabularx}
-  \vspace{0.12em}
-  \begin{tabularx}{0.96\textwidth}{@{}l l l r@{}}
+  \vspace{0.16em}
+  \begin{tabularx}{0.96\textwidth}{@{}P{0.22\textwidth}Y@{}}
     \toprule
-    输出对象 & 形状/dtype & 参考目录 & $\varepsilon_{\rm rel}$ \\
+    处理阶段 & PyQCD 函数与输入参数 \\
     \midrule
-    $Cg5g4$ contract & $(72,72,4,4)$/complex128 & \codepath{.../momsmear0_Cg5g4/4150} & $3.50\times10^{-15}$ \\
-    $Cg5g4$ nopol_pp & $(72,72)$/complex128 & 同上 & $1.27\times10^{-15}$ \\
-    $Cg5$ contract & $(72,72,4,4)$/complex128 & \codepath{.../momsmear0_Cg5/4150} & $2.29\times10^{-15}$ \\
-    $Cg5$ nopol_pp & $(72,72)$/complex128 & 同上 & $1.53\times10^{-15}$ \\
+    低模与动量 & \codepath{readin_eigvecs(path,Nx=24)}；\codepath{Mom_VVV_sink_t(...)}，$Nev=4$ \\
+    peram 输入 & \codepath{readin_peram_time_slice(...,t0=0,Nt=72,Nev=100)} \\
+    缩并与投影 & \codepath{contract_donghx_2pt_pair(...,variant=Cg5g4/Cg5)}；\codepath{parity_and_boundary(...,Nt=72)} \\
     \bottomrule
   \end{tabularx}
-  \begin{block}{数据路径}
-    eigvec：\codepath{/public/group/lqcd/eigensystem/beta6.20_mu-0.2770_ms-0.2400_L24x72/4150}；
-    peram：\codepath{/public/group/lqcd/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light/4150}；\newline
-    dhx 参考根：\codepath{/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72}。
+  \source{配置与链：\codepath{examples/pyqcd/cmp1/cases_4150_fermion.py}、\codepath{examples/pyqcd/cmp1/run_4150_fermion.py}。}
+\end{frame}
+
+\begin{frame}[t]{质子 2pt 直接比较（2/2）：contract 与投影成品均与 dhx 一致}
+  \small
+  \begin{tabularx}{0.96\textwidth}{@{}P{0.25\textwidth} P{0.26\textwidth} Y P{0.17\textwidth}@{}}
+    \toprule
+    输出对象 & 形状/dtype & dhx 参考目录（相对共同根） & $\varepsilon_{\rm rel}$ \\
+    \midrule
+    $Cg5g4$ contract & $(72,72,4,4)$/complex128 & \codepath{momsmear0_Cg5g4/4150} & $3.50\times10^{-15}$ \\
+    $Cg5g4$ nopol\_pp & $(72,72)$/complex128 & \codepath{momsmear0_Cg5g4/4150} & $1.27\times10^{-15}$ \\
+    $Cg5$ contract & $(72,72,4,4)$/complex128 & \codepath{momsmear0_Cg5/4150} & $2.29\times10^{-15}$ \\
+    $Cg5$ nopol\_pp & $(72,72)$/complex128 & \codepath{momsmear0_Cg5/4150} & $1.53\times10^{-15}$ \\
+    \bottomrule
+  \end{tabularx}
+  \vspace{0.22em}
+  \begin{block}{实际数据路径}
+    \scriptsize
+    eigvec：\codepath{/public/group/lqcd/eigensystem/beta6.20_mu-0.2770_ms-0.2400_L24x72/4150}\\
+    peram：\codepath{/public/group/lqcd/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light/4150}\\
+    dhx 参考根：\codepath{/public/group/lqcd/donghx/2pt_Result/beta6.20_mu-0.2770_ms-0.2400_L24x72}
   \end{block}
-  \source{配置/时间对：\codepath{examples/pyqcd/cmp1/cases_4150_fermion.py:15--153}；链：\codepath{examples/pyqcd/cmp1/run_4150_fermion.py:76--370}；结果：\codepath{v202608300145_cg5g4/results.json}、\codepath{v202608300146_cg5/results.json}。}
+  \begin{block}{比较范围}
+    $Cg5g4$、$Cg5$ 各取 $t_0=0$、$\Delta t=2\ldots36$ 的 35 个时间对；本页只呈现直接数组对照，不外推到未测试下游量。
+  \end{block}
+  \source{结果：\codepath{examples/pyqcd/cmp1/v202608300145_cg5g4/results.json}、\codepath{examples/pyqcd/cmp1/v202608300146_cg5/results.json}。}
 \end{frame}
 
 \begin{frame}[t]{2pt 成品输出级检查：58 个 $nopol\_ss$ 投影关系均通过}
