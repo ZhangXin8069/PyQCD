@@ -16,6 +16,116 @@ def random_su3_gauge(L=6, seed=42):
     return g
 
 
+def _manual_staple_wilson_line(gauge, z, b_perp, z_dir, b_dir, L):
+    """逐点参考实现：0 -> -L z -> b-L z -> b+z。"""
+    lattice_shape = gauge.shape[:4]
+    out = np.empty(lattice_shape + (3, 3), dtype=gauge.dtype)
+    path = ((z_dir, -L), (b_dir, b_perp), (z_dir, L + z))
+
+    for base in np.ndindex(*lattice_shape):
+        pos = list(base)
+        transporter = np.eye(3, dtype=gauge.dtype)
+        for direction, signed_length in path:
+            axis = 3 - direction
+            sign = 1 if signed_length >= 0 else -1
+            for _ in range(abs(signed_length)):
+                if sign > 0:
+                    link = gauge[tuple(pos)][direction]
+                    pos[axis] = (pos[axis] + 1) % lattice_shape[axis]
+                else:
+                    pos[axis] = (pos[axis] - 1) % lattice_shape[axis]
+                    link = gauge[tuple(pos)][direction].conj().T
+                transporter = transporter @ link
+        out[base] = transporter
+    return out
+
+
+def _gauge_transform(gauge, site_transform):
+    """U_mu(x) -> G(x) U_mu(x) G^dagger(x+mu)。"""
+    transformed = np.empty_like(gauge)
+    for direction in range(4):
+        axis = 3 - direction
+        at_neighbor = np.roll(site_transform, -1, axis=axis)
+        transformed[..., direction, :, :] = (
+            site_transform @ gauge[..., direction, :, :]
+            @ at_neighbor.conj().swapaxes(-1, -2)
+        )
+    return transformed
+
+
+def test_tmd_staple_matches_explicit_three_segment_path():
+    """staple 必须逐链复现 -L z、b_perp、(L+z) z 三段路径。"""
+    from pyqcd.renorm import staple_wilson_line
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=3, seed=101)
+    expected = _manual_staple_wilson_line(
+        gauge, z=1, b_perp=1, z_dir=2, b_dir=0, L=2)
+    got = staple_wilson_line(
+        gauge, z=1, b_perp=1, z_dir=2, b_dir=0, L=2)
+    err = np.max(np.abs(got - expected))
+    assert err < 1e-12, f"staple 三段路径错误: max|d|={err:.3e}"
+
+
+def test_tmd_staple_is_gauge_covariant():
+    """连接 x 与 x+z*zdir+b*bdir 的 transporter 必须规范协变。"""
+    from pyqcd.renorm import staple_wilson_line
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=3, seed=102)
+    site_transform = random_su3_gauge(L=3, seed=202)[..., 0, :, :]
+    transformed = _gauge_transform(gauge, site_transform)
+
+    W = staple_wilson_line(
+        gauge, z=1, b_perp=1, z_dir=2, b_dir=0, L=2)
+    W_transformed = staple_wilson_line(
+        transformed, z=1, b_perp=1, z_dir=2, b_dir=0, L=2)
+    at_endpoint = np.roll(site_transform, -1, axis=3 - 2)
+    at_endpoint = np.roll(at_endpoint, -1, axis=3 - 0)
+    expected = site_transform @ W @ at_endpoint.conj().swapaxes(-1, -2)
+    err = np.max(np.abs(W_transformed - expected))
+    assert err < 1e-11, f"staple 规范协变性破坏: max|d|={err:.3e}"
+
+
+def test_tmd_matrix_element_is_gauge_invariant():
+    """Tr[F(0) W F(b,z) W^dagger] 在局域 SU(3) 变换下必须不变。"""
+    from pyqcd.renorm import M_mu_lambda_nu_rho
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=3, seed=103)
+    site_transform = random_su3_gauge(L=3, seed=203)[..., 0, :, :]
+    transformed = _gauge_transform(gauge, site_transform)
+
+    original = M_mu_lambda_nu_rho(
+        gauge, 3, 0, 3, 0, z=1, b_perp=1, z_dir=2, b_dir=0, L=2)
+    rotated = M_mu_lambda_nu_rho(
+        transformed, 3, 0, 3, 0, z=1, b_perp=1,
+        z_dir=2, b_dir=0, L=2)
+    err = np.max(np.abs(rotated - original))
+    assert err < 1e-10, f"TMD 矩阵元规范不变性破坏: max|d|={err:.3e}"
+
+
+def test_tmd_operator_uses_tx_ty_xy_lorentz_pairs():
+    """本库 0=x,1=y,2=z,3=t；非极化组合必须使用 tx、ty、xy。"""
+    from pyqcd.renorm import M_mu_lambda_nu_rho, gluon_tmd_operator
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=3, seed=104)
+    kwargs = dict(z=1, b_perp=1, z_dir=2, b_dir=0, L=2)
+    expected = (
+        M_mu_lambda_nu_rho(gauge, 3, 0, 3, 0, **kwargs)
+        + M_mu_lambda_nu_rho(gauge, 3, 1, 3, 1, **kwargs)
+        - 2.0 * M_mu_lambda_nu_rho(gauge, 0, 1, 0, 1, **kwargs)
+    )
+    got = gluon_tmd_operator(gauge, **kwargs)
+    err = np.max(np.abs(got - expected))
+    assert err < 1e-12, f"TMD Lorentz 组合错误: max|d|={err:.3e}"
+
+
 def test_gamma_basis():
     """DR 基 γ 矩阵：γ₅² = I、γ_7 = γ₃γ₁ 反厄米。"""
     from pyqcd.lattice import gamma

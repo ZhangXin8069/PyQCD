@@ -438,9 +438,10 @@ def take(x, indices, axis=None):
     return torch.index_select(x, axis, ind)
 
 
-@_autoconv
 def broadcast_to(x, shape):
-    return torch.broadcast_to(x, shape)
+    # ``shape`` 是元数据而非数组；通用自动转换会把位置参数 tuple
+    # 变成 Tensor，torch.broadcast_to 因而拒绝。这里只转换数据参数。
+    return torch.broadcast_to(_tensorize(x), tuple(int(n) for n in shape))
 
 
 @_autoconv
