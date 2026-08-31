@@ -40,7 +40,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, ROOT)
 
 from pyqcd.pipeline._tmd9 import (
-    MOMENTA_Z, MOMENTA_ALL, momentum_tag, z_direction_momenta,
+    MOMENTA_Z, MOMENTA_ALL, momentum_tag, parse_momentum_tag,
     compute_vertices_multi, compute_2pt_multi, compute_tmd_ope_time,
     load_multi_2pt, load_tmd_ope_all, self_renormalize,
 )
@@ -55,6 +55,7 @@ LOG_ROOT = os.path.join(ROOT, 'logs', 'test9')
 # TMD 算符参数（格点单位）
 Z_LIST = list(range(0, 13))          # z ∈ 0..12（Wilson 线纵向分离）
 B_LIST = [0, 1, 2, 3, 4]             # b⊥ ∈ 0..4（横向位移）
+STAPLE_LENGTH = max(abs(z) for z in Z_LIST)  # 全 z 扫描共享的固定臂长
 TAU = 3.0                            # τ=3a² → 格点流时间 t=3
 EPS = 0.05                           # RK3 步长（Luescher ≤0.05 保证 O(ε³)，60 步）
 
@@ -68,12 +69,14 @@ def parse_args():
     ap.add_argument('--smoke', action='store_true',
                     help='冒烟：单组态(6250) 单动量(P200)')
     ap.add_argument('--smoke-mom', type=str, default='P200',
-                    help='冒烟动量标签（默认 P200）')
+                    help='冒烟动量标签（默认 P200；多位/负分量如 P10_-2_0）')
     ap.add_argument('--skip-2pt', action='store_true', help='跳过蒸馏 2pt')
     ap.add_argument('--skip-ope', action='store_true', help='跳过梯度流 TMD 算符')
     ap.add_argument('--backend', default='torch', choices=['torch', 'numpy'])
     ap.add_argument('--precision', default='complex64',
                     choices=['complex64', 'complex128'])
+    ap.add_argument('--staple-length', type=int, default=STAPLE_LENGTH,
+                    help='所有 z 共享的 staple 臂长（格点单位，默认 12）')
     ap.add_argument('--out', default=None, help='输出目录（默认 examples/pyqcd/test9）')
     ap.add_argument('--only-plot', action='store_true',
                     help='仅从已有数据重新出图+分析')
@@ -81,36 +84,41 @@ def parse_args():
     return ap.parse_args()
 
 
+def select_run_scope(args):
+    """把 CLI 选择规范化为组态列表和唯一有序动量列表。"""
+    if args.smoke:
+        return [6250], [parse_momentum_tag(args.smoke_mom)]
+    if args.conf_ids:
+        conf_ids = [int(value) for value in args.conf_ids.split(',')]
+    else:
+        conf_ids = list(DEFAULT_CONF_IDS)
+    momenta = MOMENTA_Z if args.momenta in ('A', 'Z') else MOMENTA_ALL
+    return conf_ids, list(momenta)
+
+
 def main():
     args = parse_args()
     out_dir = args.out or OUT_ROOT
     log_dir = LOG_ROOT
-    os.makedirs(out_dir, exist_ok=True)
-    os.makedirs(log_dir, exist_ok=True)
 
     logger = lambda *a: print(*a)
 
-    if args.smoke:
-        conf_ids = [6250]
-        momenta = z_direction_momenta(pz_list=(0, 2))
-    elif args.conf_ids:
-        conf_ids = [int(x) for x in args.conf_ids.split(',')]
-        momenta = MOMENTA_Z if args.momenta in ('A', 'Z') else MOMENTA_ALL
-    else:
-        conf_ids = DEFAULT_CONF_IDS
-        momenta = MOMENTA_Z if args.momenta in ('A', 'Z') else MOMENTA_ALL
+    conf_ids, momenta = select_run_scope(args)
 
     mom_tags = [momentum_tag(m) for m in momenta]
     logger(f"=== test9 梯度流核子胶子 TMD-PDF ===")
     logger(f"  组态: {conf_ids}")
     logger(f"  动量: {list(momenta)} ({mom_tags})")
-    logger(f"  z_list={Z_LIST}, b_list={B_LIST}, tau={TAU}")
+    logger(f"  z_list={Z_LIST}, b_list={B_LIST}, "
+           f"staple_length={args.staple_length}, tau={TAU}")
     logger(f"  输出: {out_dir}")
     logger(f"  backend={args.backend}, precision={args.precision}")
 
     if args.dry_run:
         return
 
+    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
     set_backend(args.backend, device='cuda:0' if args.backend == 'torch' else None)
 
     run_dir = out_dir
@@ -140,7 +148,8 @@ def main():
             res = compute_tmd_ope_time(
                 cid, run_dir, logger, Z_LIST, B_LIST,
                 tau=TAU, eps=EPS, precision=args.precision,
-                gauge_flow_dir=flow_dir)
+                gauge_flow_dir=flow_dir,
+                staple_length=args.staple_length)
             logger(f"  TMD OPE conf={cid} done in {time.perf_counter()-t0:.0f}s")
     else:
         logger("跳过梯度流 TMD 算符（--skip-ope）")
@@ -156,9 +165,13 @@ def run_analysis(conf_ids, momenta, run_dir, logger, args):
     from pyqcd.pipeline._tmd9 import load_tmd_ope_all
 
     mom_tags = [momentum_tag(m) for m in momenta]
-    corr2 = load_multi_2pt(run_dir, conf_ids, mom_tags, channels=('pp',),
-                           logger=logger)
-    ope = load_tmd_ope_all(run_dir, conf_ids, Z_LIST, B_LIST, logger=logger)
+    corr2 = load_multi_2pt(
+        run_dir, conf_ids, mom_tags, channels=('pp',), logger=logger,
+        momenta=momenta, precision=args.precision)
+    ope = load_tmd_ope_all(
+        run_dir, conf_ids, Z_LIST, B_LIST, logger=logger,
+        staple_length=args.staple_length,
+        tau=TAU, eps=EPS, precision=args.precision)
 
     results = {}
     for tag in mom_tags:
@@ -194,47 +207,97 @@ def run_analysis(conf_ids, momenta, run_dir, logger, args):
         # （pyqcd.analysis.plateau_c0，fit 窗口内 ratio 均值，抗奇异协方差）
 
     # ── 阶段 4：自重整化 + 匹配 → TMD-PDF ──────────────────────────
-    run_tmd_pdf_chain(conf_ids, run_dir, logger, args)
+    run_tmd_pdf_chain(conf_ids, run_dir, logger, args, momenta=momenta)
     write_summary(run_dir, conf_ids, momenta, logger)
 
 
-def run_tmd_pdf_chain(conf_ids, run_dir, logger, args):
+def load_verified_plateau_inputs(analysis_dir, momenta, logger=print):
+    """读取有状态、逐样本、纯纵向正动量 plateau，拒绝伪 fallback。"""
+    analysis_dir = os.fspath(analysis_dir)
+    verified = {}
+
+    def log(message):
+        if logger is not None:
+            logger(message)
+
+    for momentum in momenta:
+        tag = momentum_tag(momentum)
+        pz, py, px = parse_momentum_tag(tag)
+        if pz <= 0 or py != 0 or px != 0:
+            log(f"  [warn] {tag} is not a positive longitudinal momentum; "
+                "PDF input unavailable")
+            continue
+        data_path = os.path.join(analysis_dir, f'c0_plateau_{tag}.npy')
+        status_path = os.path.join(
+            analysis_dir, f'c0_plateau_status_{tag}.npz')
+        if not os.path.isfile(data_path):
+            log(f"  [warn] {tag} plateau data unavailable")
+            continue
+        if not os.path.isfile(status_path):
+            log(f"  [warn] {tag} plateau status unavailable; "
+                "numeric-only legacy data is not a verified PDF input")
+            continue
+        try:
+            with np.load(status_path, allow_pickle=False) as metadata:
+                if 'plateau_status' not in metadata.files:
+                    raise ValueError('missing plateau_status')
+                status = str(metadata['plateau_status'])
+            c0 = np.load(data_path, allow_pickle=False)
+        except (OSError, ValueError, KeyError) as exc:
+            log(f"  [warn] {tag} plateau artifact unavailable: {exc}")
+            continue
+        if status != 'identifiable':
+            log(f"  [warn] {tag} plateau status={status}; PDF input unavailable")
+            continue
+        c0 = np.asarray(c0)
+        if (c0.ndim != 3 or c0.shape[0] < 2
+                or c0.shape[1] < 1 or c0.shape[2] < 1):
+            log(f"  [warn] {tag} plateau sample shape must be "
+                f"(Nsample>=2,nz>=1,nb>=1), got {c0.shape}")
+            continue
+        if not np.isfinite(c0).all() or np.any(c0[:, 0, :] == 0):
+            log(f"  [warn] {tag} plateau samples are nonfinite or have "
+                "zero z=0 normalization")
+            continue
+        hR, _ = self_renormalize(c0)
+        if not np.isfinite(hR).all():
+            log(f"  [warn] {tag} renormalized plateau is nonfinite")
+            continue
+        verified[tag] = {
+            'c0': c0,
+            'hR': hR.mean(0),
+            'pz_lattice': pz,
+            'status': status,
+        }
+    return verified
+
+
+def run_tmd_pdf_chain(conf_ids, run_dir, logger, args, *, momenta=None):
     """从 c0(z,b,Pz) 走自重整化/混合 → 准 TMD-PDF → NLO 匹配 → 光锥 TMD-PDF。"""
     from pyqcd.renorm import (
         quasi_tmd_pdf, cs_kernel_from_ratio, tmd_matching_hybrid,
         pz_to_gev, fm_to_GeV, a_len_set,
     )
-    from pyqcd.pipeline._tmd9 import momentum_tag
-
     an_dir = os.path.join(run_dir, 'analysis', 'tmd_ratio')
     os.makedirs(an_dir, exist_ok=True)
 
-    # 取 P200 与 P400（若存在）做 CS 核
-    pz_cands = ['P200', 'P400']
-    hR_store = {}
-    for tag in pz_cands:
-        p_path = os.path.join(an_dir, f'c0_plateau_{tag}.npy')
-        if not os.path.exists(p_path):
-            p_path = os.path.join(an_dir, f'c0_mean_{tag}.npy')
-        if not os.path.exists(p_path):
-            continue
-        c0 = np.load(p_path)               # (Nsample, nz, nb)
-        hR, _ = self_renormalize(c0)       # 逐样本归一
-        hR_store[tag] = hR.mean(0)         # 均值作为物理输入
+    if momenta is None:
+        momenta = MOMENTA_Z
+    hR_store = load_verified_plateau_inputs(an_dir, momenta, logger=logger)
 
-    # 准 TMD-PDF（用 P200；若只有 P400 则用 P400）
-    main_tag = 'P200' if 'P200' in hR_store else ('P400' if 'P400' in hR_store else None)
-    if main_tag is None:
-        logger("  [warn] 无可用的 Pz>0 矩阵元，跳过 PDF 链")
+    # 保持请求顺序选择主 Pz；CS 核在前两个不同的正纵向动量间构造。
+    if not hR_store:
+        logger("  [warn] 无有状态的 Pz>0 逐样本矩阵元，跳过 PDF 链")
         return
+    main_tag = next(iter(hR_store))
 
     conf = 'L24x72'
-    pz_lattice = int(main_tag[1]) if len(main_tag) == 4 else 2
+    pz_lattice = hR_store[main_tag]['pz_lattice']
     pz_gev = pz_to_gev(pz_lattice, conf)
     z_grid = np.array(Z_LIST) * (a_len_set[conf] * fm_to_GeV)   # fm
     b_grid = np.array(B_LIST) * (a_len_set[conf] * fm_to_GeV)   # fm
 
-    hR = hR_store[main_tag]              # (nz, nb)
+    hR = hR_store[main_tag]['hR']        # (nz, nb)
     # 准 TMD-PDF：x·g̃(x, b⊥, Pz)
     x_grid = np.linspace(0.02, 0.98, 128)
     x, xg = quasi_tmd_pdf(hR, z_grid, b_grid, pz_gev=pz_gev,
@@ -244,13 +307,13 @@ def run_tmd_pdf_chain(conf_ids, run_dir, logger, args):
     # （z_ref=1 起始 + clamp 数值保护，整合自本示例原内联实现）
     K = None
     if len(hR_store) >= 2:
-        tags2 = [t for t in pz_cands if t in hR_store]
-        p1 = int(tags2[0][1]) if len(tags2[0]) == 4 else 2
-        p2 = int(tags2[1][1]) if len(tags2[1]) == 4 else 2
+        tags2 = list(hR_store)[:2]
+        p1 = hR_store[tags2[0]]['pz_lattice']
+        p2 = hR_store[tags2[1]]['pz_lattice']
         if p1 != p2:
             from pyqcd.renorm import cs_kernel_two_momentum
-            c01 = np.load(os.path.join(an_dir, f'c0_plateau_{tags2[0]}.npy'))
-            c02 = np.load(os.path.join(an_dir, f'c0_plateau_{tags2[1]}.npy'))
+            c01 = hR_store[tags2[0]]['c0']
+            c02 = hR_store[tags2[1]]['c0']
             K = cs_kernel_two_momentum(c01.mean(0), c02.mean(0),
                                        pz_to_gev(p1, conf), pz_to_gev(p2, conf),
                                        z_ref=1, k_clip=(-3.0, 3.0))
@@ -270,6 +333,13 @@ def run_tmd_pdf_chain(conf_ids, run_dir, logger, args):
         np.save(os.path.join(an_dir, 'cs_kernel_bgrid.npy'), b_grid)
     np.save(os.path.join(an_dir, 'b_grid_fm.npy'), b_grid)
     np.save(os.path.join(an_dir, 'z_grid_fm.npy'), z_grid)
+    np.savez(
+        os.path.join(an_dir, 'pdf_chain_input_status.npz'),
+        momentum_tag=np.asarray(main_tag),
+        pz_lattice=np.asarray(pz_lattice, dtype=np.int64),
+        input_status=np.asarray(hR_store[main_tag]['status']),
+        n_verified_momenta=np.asarray(len(hR_store), dtype=np.int64),
+    )
 
     from pyqcd.analysis import plot_tmd_pdf
     plot_tmd_pdf(x, xg, xg_match, b_grid, K, main_tag, an_dir, logger)

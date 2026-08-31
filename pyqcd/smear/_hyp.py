@@ -1,17 +1,18 @@
 """
-HYP 涂抹（Hasenbusch 2001）——梯度流/线性发散抑制的备选方案
-============================================================
+HYP 涂抹（Hasenfratz--Knechtli 2001）
+=======================================
 
-理论文档（refer/papers/gluon_tmd_gradient_flow_continuum.tex）对比了 HYP5
-涂抹与 Wilson flow：两者定性一致。本模块实现完整 HYP 三级迭代
-（Hasenbusch 2001 精确公式，带 (μ,ν) 对结构）：
+标准四维 HYP 使用三级排除方向结构：
 
-    级别 3：V_μν^{(3)} = proj[(1−α₃)U_μ + (α₃/6)Σ_{ρ≠μ,ν} S(U; μ,ρ)]
-    级别 2：V_μν^{(2)} = proj[(1−α₂)V_μν^{(3)} + (α₂/6)Σ_{ρ≠μ,ν} S(V^{(3)}; μ,ρ)]
-    级别 1：V_μ^{(1)}  = proj[(1−α₁)V_μμ̄^{(2)} + (α₁/4)Σ_{ν≠μ} S(V^{(2)}; μ,ν)]
+    bar V_{mu;nu rho} = Proj[(1-alpha3) U_mu
+                              + alpha3/2 sum_{+-eta != mu,nu,rho} staple]
+    tilde V_{mu;nu}   = Proj[(1-alpha2) U_mu
+                              + alpha2/4 sum_{+-rho != mu,nu} staple(bar V)]
+    V_mu              = Proj[(1-alpha1) U_mu
+                              + alpha1/6 sum_{+-nu != mu} staple(tilde V)]
 
-S(·; μ,ρ) 为 (μ,ρ) staple：V_ρμ(x)·V_μρ(x+ρ̂)·V_ρμ†(x+μ̂) + 反向。
-标准参数 α₁=0.75, α₂=0.6, α₃=0.3。
+每一层都以原始 ``U_mu`` 为基链接；标准参数为
+``(alpha1, alpha2, alpha3) = (0.75, 0.6, 0.3)``。
 """
 from __future__ import annotations
 
@@ -33,63 +34,32 @@ def proj_su3(A):
     return P * (det ** (-1.0 / 3.0))[..., None, None]
 
 
-def _staple_munu(V, mu, nu, U_dir=None):
-    """(μ,ν) 对级 staple：用链接场 V[μ,ν]（第二指标随方向变化的 fat link）。
-
-    S(x;μ,ν) = V_νμ(x)·V_μν(x+ν̂)·V_νμ†(x+μ̂)
-             + V_νμ†(x−ν̂)·V_μν(x−ν̂)·V_νμ(x−ν̂+μ̂)
-    其中 V 为 (…, 4, 4, 3, 3) 数组（V[..., μ, ν] = 方向 μ、对指标 ν 的链接）。
-    当 U_dir 提供时使用其 (μ,ν) 切片（级别 3 用原始 U 的 (μ,ρ) 形式）。
-    """
+def _staple_pair(side, middle, mu, nu):
+    """由 ``side``(nu 向) 与 ``middle``(mu 向) 构造正负 nu staple。"""
     cp = get_backend()
     e = cp.einsum
-    if U_dir is not None:
-        def G(a, b):
-            return U_dir[..., a, :, :] if a == b else U_dir[..., a, :, :]
-        Vnm = U_dir[..., nu, :, :]          # U_ν（级别 3：原始链接）
-        Vmu = U_dir[..., mu, :, :]          # U_μ
-    else:
-        Vnm = V[..., nu, mu, :, :]          # V_νμ
-        Vmu = V[..., mu, nu, :, :]          # V_μν
     a_mu, a_nu = 3 - mu, 3 - nu
 
-    # 正向：V_νμ(x)·V_μν(x+ν̂)·V_νμ†(x+μ̂)
-    t1 = e("...ab,...bc->...ac", Vnm, cp.roll(Vmu, -1, axis=a_nu))
-    t1 = e("...ab,...cb->...ac", t1, cp.roll(Vnm, -1, axis=a_mu).conj())
-    # 反向：V_νμ†(x−ν̂)·V_μν(x−ν̂)·V_νμ(x−ν̂+μ̂)
-    t2 = e("...ab,...cb->...ac", cp.roll(Vnm, 1, axis=a_nu).conj(),
-           cp.roll(Vmu, 1, axis=a_nu))
+    # 正向：side(x) middle(x+nu) side^dagger(x+mu)
+    t1 = e("...ab,...bc->...ac", side, cp.roll(middle, -1, axis=a_nu))
+    t1 = e("...ab,...cb->...ac", t1,
+           cp.roll(side, -1, axis=a_mu).conj())
+    # 反向：side^dagger(x-nu) middle(x-nu) side(x-nu+mu)
+    side_back = cp.roll(side, 1, axis=a_nu)
+    t2 = e("...ba,...bc->...ac", side_back.conj(),
+           cp.roll(middle, 1, axis=a_nu))
     t2 = e("...ab,...bc->...ac", t2,
-           cp.roll(cp.roll(Vnm, 1, axis=a_nu), -1, axis=a_mu))
+           cp.roll(side_back, -1, axis=a_mu))
     return t1 + t2
 
 
-def _staple_rho(V, mu, nu, rho):
-    """级别 3/2 的 ρ 求和项：S(V; μ, ρ)（ρ≠μ,ν）。
-
-    三项链接：V_ρμ(x)·V_μρ(x+ρ̂)·V_ρμ†(x+μ̂) + 反向。
-    级别 3 时 V = U（原始），V[a,b] 退化为 U_a。
-    """
-    cp = get_backend()
-    e = cp.einsum
-    a_mu, a_rho = 3 - mu, 3 - rho
-    if V.ndim == 7:   # 原始链接 (…,4,3,3)
-        Vrm = V[..., rho, :, :]
-        Vmr = V[..., mu, :, :]
-    else:             # 对级链接 (…,4,4,3,3)
-        Vrm = V[..., rho, mu, :, :]
-        Vmr = V[..., mu, rho, :, :]
-    t1 = e("...ab,...bc->...ac", Vrm, cp.roll(Vmr, -1, axis=a_rho))
-    t1 = e("...ab,...cb->...ac", t1, cp.roll(Vrm, -1, axis=a_mu).conj())
-    t2 = e("...ab,...cb->...ac", cp.roll(Vrm, 1, axis=a_rho).conj(),
-           cp.roll(Vmr, 1, axis=a_rho))
-    t2 = e("...ab,...bc->...ac", t2,
-           cp.roll(cp.roll(Vrm, 1, axis=a_rho), -1, axis=a_mu))
-    return t1 + t2
+def _v3_key(direction, excluded_a, excluded_b):
+    """V3 对两个排除方向对称，使用规范化字典键避免稠密空槽。"""
+    return (direction,) + tuple(sorted((excluded_a, excluded_b)))
 
 
 def hyp_smear(U, alpha1=0.75, alpha2=0.6, alpha3=0.3):
-    """标准 HYP 涂抹（完整 (μ,ν) 对结构，Hasenbusch 参数）。
+    """标准四维 HYP 涂抹（完整三级排除方向结构）。
 
     Args:
         U: 规范场 (Nt,Nz,Ny,Nx,4,3,3)。
@@ -97,47 +67,66 @@ def hyp_smear(U, alpha1=0.75, alpha2=0.6, alpha3=0.3):
         涂抹后的规范场 V1 (Nt,Nz,Ny,Nx,4,3,3)（SU(3) 保持）。
     """
     cp = get_backend()
+    U = cp.asarray(U)
     Nd = 4
-    # 级别 3：V3[μ,ν] = proj[(1−α3)U_μ + (α3/6)Σ_{ρ≠μ,ν} S(U; μ,ρ)]
-    V3 = cp.zeros(U.shape[:-2] + (Nd, 3, 3), dtype=U.dtype)
+
+    if alpha1 == 0.0:
+        # 零操作仍返回独立结果，保持“输入不被修改/输出可安全持有”的
+        # 所有权契约；避免下游原地写输出时反向污染原始规范场。
+        return U + cp.zeros_like(U)
+
+    # 第 3 层：bar V_{mu;nu rho}。每组排除方向只剩一个 eta，含正反两项。
+    V3 = {}
+    if alpha2 != 0.0 and alpha3 != 0.0:
+        for mu in range(Nd):
+            others = [direction for direction in range(Nd) if direction != mu]
+            for i, nu in enumerate(others):
+                for rho in others[i + 1:]:
+                    eta = next(direction for direction in range(Nd)
+                               if direction not in (mu, nu, rho))
+                    staples = _staple_pair(
+                        U[..., eta, :, :], U[..., mu, :, :], mu, eta)
+                    V3[_v3_key(mu, nu, rho)] = proj_su3(
+                        (1.0 - alpha3) * U[..., mu, :, :]
+                        + (alpha3 / 2.0) * staples)
+
+    def v3(direction, excluded_a, excluded_b):
+        if alpha3 == 0.0:
+            return U[..., direction, :, :]
+        return V3[_v3_key(direction, excluded_a, excluded_b)]
+
+    # 第 2 层：tilde V_{mu;nu}，rho 遍历另两个方向（共四个正反 staple）。
+    V2 = {}
     for mu in range(Nd):
         for nu in range(Nd):
             if nu == mu:
+                continue
+            if alpha2 == 0.0:
+                V2[(mu, nu)] = U[..., mu, :, :]
                 continue
             acc = None
             for rho in range(Nd):
                 if rho == mu or rho == nu:
                     continue
-                s = _staple_rho(U, mu, nu, rho)
-                acc = s if acc is None else acc + s
-            V3[..., mu, nu, :, :] = proj_su3(
-                (1.0 - alpha3) * U[..., mu, :, :] + (alpha3 / 6.0) * acc)
+                staples = _staple_pair(
+                    v3(rho, nu, mu), v3(mu, rho, nu), mu, rho)
+                acc = staples if acc is None else acc + staples
+            V2[(mu, nu)] = proj_su3(
+                (1.0 - alpha2) * U[..., mu, :, :]
+                + (alpha2 / 4.0) * acc)
+    del V3
 
-    # 级别 2：V2[μ,ν] = proj[(1−α2)V3[μ,ν] + (α2/6)Σ_{ρ≠μ,ν} S(V3; μ,ρ)]
-    V2 = cp.zeros_like(V3)
-    for mu in range(Nd):
-        for nu in range(Nd):
-            if nu == mu:
-                continue
-            acc = None
-            for rho in range(Nd):
-                if rho == mu or rho == nu:
-                    continue
-                s = _staple_rho(V3, mu, nu, rho)
-                acc = s if acc is None else acc + s
-            V2[..., mu, nu, :, :] = proj_su3(
-                (1.0 - alpha2) * V3[..., mu, nu, :, :] + (alpha2 / 6.0) * acc)
-
-    # 级别 1：V1[μ] = proj[(1−α1)V2[μ,ν₀] + (α1/4)Σ_{ν≠μ} S(V2; μ,ν)]
+    # 第 1 层：V_mu，nu 遍历其余三个方向（共六个正反 staple）。
     V1 = cp.zeros_like(U)
     for mu in range(Nd):
-        nu0 = (mu + 1) % Nd
         acc = None
         for nu in range(Nd):
             if nu == mu:
                 continue
-            s = _staple_rho(V2, mu, nu, nu)   # 级别 1 staple 用 V2[μ,ν]
-            acc = s if acc is None else acc + s
+            staples = _staple_pair(
+                V2[(nu, mu)], V2[(mu, nu)], mu, nu)
+            acc = staples if acc is None else acc + staples
         V1[..., mu, :, :] = proj_su3(
-            (1.0 - alpha1) * V2[..., mu, nu0, :, :] + (alpha1 / 4.0) * acc)
+            (1.0 - alpha1) * U[..., mu, :, :]
+            + (alpha1 / 6.0) * acc)
     return V1

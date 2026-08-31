@@ -132,7 +132,7 @@ def create_noise(vectors_init, n_extra, dtype='complex', seed=None):
         z = rng.uniform(-1.0, 1.0, (n, v_total))
         if dtype == 'complex':
             z = z + 1j * rng.uniform(-1.0, 1.0, (n, v_total))
-        t = cp.asarray(z)
+        t = cp.asarray(z, dtype=cur.dtype)
         return normalize(t)
 
     for _ in range(int(n_extra)):
@@ -274,7 +274,7 @@ def _compress_projection(eigenvectors, N_sum, N_extract, Ctype, scheme,
         block = vecs[list(grp)]
         v_flat, _ = _flatten_vol(block)
         rows = _random_rows(len(grp), N_extract, scheme, rng)
-        proj = cp.asarray(rows) @ v_flat          # (N_extract, V)
+        proj = cp.asarray(rows, dtype=vecs.dtype) @ v_flat  # (N_extract, V)
         proj = proj.reshape(N_extract, *vecs.shape[1:])
         out[pos:pos + N_extract] = proj.get() if hasattr(proj, 'get') \
             else np.asarray(proj)
@@ -286,10 +286,12 @@ def _compress_projection(eigenvectors, N_sum, N_extract, Ctype, scheme,
         gram = g @ g.conj().T
         off_err = np.abs(gram - np.diag(np.diag(gram))).max()
         norm_err = np.abs(np.diag(gram) - 1.0).max()
-        if off_err > 1e-8 or norm_err > 1e-8:
+        real_dtype = np.empty((), dtype=g.dtype).real.dtype
+        tolerance = max(1e-8, 16 * np.finfo(real_dtype).eps)
+        if off_err > tolerance or norm_err > tolerance:
             raise RuntimeError(
                 f"compress 投影失去正交归一: off={off_err:.2g} "
-                f"norm={norm_err:.2g}")
+                f"norm={norm_err:.2g} tol={tolerance:.2g}")
     return result
 
 
@@ -320,72 +322,106 @@ def create_omega_accelerate(n_voxel, exact=0, N_eigen=None, N_sum=None,
         exact: 精确保留的本征矢数量。
         N_eigen/N_sum/N_extract: 各块压缩前/后数量与每子块抽取数
                 （给出 N_eigen 时按 N_sum/N_extract 展开为子块列表，
-                与 V1/V2/V3/V4 压缩方案的输出分组一一对应）；
-                不做块压缩时传 None 并直接给 N_sum=[各块输出数]。
+                与 V1/V2/V3/V4 压缩方案的输出分组一一对应）；三者须
+                等长且元素为正整数，不做块压缩时三者均传 None。
         noise: 噪声向量数量。
         conserved: 守恒模式（权重恒为 space/sum，dim 强制 2）。
-        normal: dim=2 时逐行归一化并对称化下三角。
+        normal: dim=2 时以 DΩD 对称平衡到每行和均为 Nev。
         dim: 输出张量维度（2 或 3）。
     Returns:
         复数 Ω 张量 (Nev,)*dim（Nev = exact + Σ子块输出 + noise）。
     """
     from itertools import combinations
     cp = get_backend()
+
+    def _is_integer(value):
+        return (isinstance(value, (int, np.integer))
+                and not isinstance(value, (bool, np.bool_)))
+
+    def _positive_integer_list(name, values):
+        if values is None:
+            return []
+        try:
+            result = list(values)
+        except TypeError as exc:
+            raise ValueError(f"{name} 须为正整数列表") from exc
+        if any(not _is_integer(value) or value <= 0 for value in result):
+            raise ValueError(f"{name} 的元素须均为正整数")
+        return result
+
+    if not _is_integer(n_voxel) or n_voxel <= 0:
+        raise ValueError("n_voxel 须为正整数")
+    if not _is_integer(exact) or exact < 0:
+        raise ValueError("exact 须为非负整数")
+    if not _is_integer(noise) or noise < 0:
+        raise ValueError("noise 须为非负整数")
+    if not _is_integer(dim) or dim not in (2, 3):
+        raise ValueError("dim 仅支持 2 或 3")
     if conserved:
         dim = 2
-    n_eigen = list(N_eigen) if N_eigen else []
-    n_sum_in = list(N_sum) if N_sum else []
+    n_eigen = _positive_integer_list("N_eigen", N_eigen)
+    n_sum_in = _positive_integer_list("N_sum", N_sum)
+    n_extract = _positive_integer_list("N_extract", N_extract)
+    if len({len(n_eigen), len(n_sum_in), len(n_extract)}) != 1:
+        raise ValueError("N_eigen/N_sum/N_extract 须为等长列表")
+    if exact + sum(n_eigen) > n_voxel:
+        raise ValueError("exact 与 N_eigen 总量不得超过 n_voxel")
 
     # 子块展开：每块按 N_sum/N_extract 切成若干 sum=N_extract 的子块。
     # 契约与原版一致：块压缩必须给全 (N_eigen, N_sum, N_extract) 三元组——
     # 原版对"仅 N_sum"输入直接越界崩溃（实跑验证），此处显式拒绝。
     tran_n_sum, tran_n_eigen = [], []
-    if n_sum_in and not n_eigen:
-        raise ValueError("块压缩须同时提供 N_eigen/N_sum/N_extract "
-                         "（原版对仅 N_sum 未定义）")
     if n_eigen:
-        for ne, ns in zip(n_eigen, n_sum_in):
-            nex = N_extract[len(tran_n_sum)] if N_extract else 1
-            ngrp = int(round(ns / nex))
-            if abs(ns / nex - ngrp) > 1e-9:
+        for block_index, (ne, ns) in enumerate(zip(n_eigen, n_sum_in)):
+            nex = n_extract[block_index]
+            if ns % nex:
                 raise ValueError(
                     f"N_sum={ns} 不能被 N_extract={nex} 整除")
-            per = ne / ngrp
-            if abs(per - round(per)) > 1e-9:
+            ngrp = ns // nex
+            if ne % ngrp:
                 raise ValueError(
                     f"块大小 {ne} 不能均分为 {ngrp} 子块")
+            per = ne // ngrp
+            if nex > per:
+                raise ValueError(
+                    f"N_extract={nex} 超过子块可抽样空间 {per}")
             for _ in range(ngrp):
                 tran_n_sum.append(nex)
-                tran_n_eigen.append(int(round(per)))
+                tran_n_eigen.append(per)
     else:
         tran_n_sum, tran_n_eigen = n_sum_in, n_sum_in
 
+    residual_space = n_voxel - (exact + sum(tran_n_eigen))
+    if noise > residual_space:
+        raise ValueError(
+            f"noise={noise} 超过剩余可抽样空间 {residual_space}")
     ev_space = [x for x in ([exact] + tran_n_eigen
-                            + [n_voxel - (exact + sum(tran_n_eigen))])
+                            + [residual_space])
                 if x != 0]
     ev_sum = [x for x in ([exact] + tran_n_sum + [noise]) if x != 0]
     len_space = len(ev_sum)
     nev = sum(ev_sum)
+    if nev == 0:
+        raise ValueError("至少须选择一个 exact、压缩或 noise 向量")
 
     slices = [slice(sum(ev_sum[:i]), sum(ev_sum[:i + 1]))
               for i in range(len_space)]
     weights = np.empty((len_space, dim), dtype=float)
     for i in range(len_space):
         for j in range(dim):
-            # 守卫：sum_i ≤ j 的退化分区（原版会除零崩溃）——
-            # 分母下限取 1，语义为"对角重叠修正饱和"
             if conserved:
                 weights[i, j] = (ev_space[i]) / (ev_sum[i])
+            elif j >= ev_sum[i]:
+                # n 个输出标签至多产生 n 个不同指标；j≥n 的高阶
+                # 无放回因子不会对应可实现元素，取乘法中性元避免 0/0。
+                weights[i, j] = 1.0
             else:
                 weights[i, j] = ((ev_space[i] - j)
-                                 / max(ev_sum[i] - j, 1))
+                                 / (ev_sum[i] - j))
 
-    if dim <= 3:
-        all_pos = np.unique(np.asarray(
-            list(combinations(range(dim * len_space), dim)))
-            % len_space, axis=0)
-    else:
-        raise ValueError("仅支持 dim≤3（原版 4D 分支未纳入）")
+    all_pos = np.unique(np.asarray(
+        list(combinations(range(dim * len_space), dim)))
+        % len_space, axis=0)
 
     omega = np.empty([nev] * dim, dtype=float)
     for pos in all_pos:
@@ -400,7 +436,8 @@ def create_omega_accelerate(n_voxel, exact=0, N_eigen=None, N_sum=None,
         # 同一分区出现在多维度时的对角重叠降权（非守恒模式）
         grid = np.ogrid[[slice(0, s.stop - s.start)
                          for s in position]]
-        for extra in range(1, len_space):
+        # part 0 仅在 exact>0 时是精确分区；否则同样需要对角重叠修正。
+        for extra in range(1 if exact else 0, len_space):
             for i in range(used[extra] - 1):
                 dims_of_part = np.argwhere(pos == extra).reshape(-1)
                 if conserved:
@@ -415,12 +452,42 @@ def create_omega_accelerate(n_voxel, exact=0, N_eigen=None, N_sum=None,
                         w_diag /= weights[extra, used[extra] - k - 1]
                     sub[w_bool] = w_diag
 
-    omega_t = cp.asarray(omega)
     if normal and dim == 2:
-        for i in range(nev):
-            row = omega[i]
-            omega[i] = row * nev / row.sum()
-        tril = np.tril_indices(nev, -1)
-        omega.T[tril] = omega[tril]
-        return cp.asarray(omega.astype(complex))
-    return omega_t.astype(complex)
+        if not np.isfinite(omega).all() or not np.all(omega > 0.0):
+            raise RuntimeError("DΩD 对称平衡要求 Ω 为有限正权矩阵")
+        symmetry_error = float(np.max(np.abs(omega - omega.T)))
+        balance_tolerance = 1e-13 * max(1, nev)
+        if symmetry_error > balance_tolerance:
+            raise RuntimeError(
+                f"DΩD 对称平衡要求 Ω 对称: max|d|={symmetry_error:.3e}")
+
+        scale = np.ones(nev, dtype=float)
+        max_iterations = 10000
+        for iteration in range(1, max_iterations + 1):
+            row_sums = scale * (omega @ scale)
+            if (not np.isfinite(row_sums).all()
+                    or not np.all(row_sums > 0.0)):
+                raise RuntimeError("DΩD 对称平衡产生非有限或非正行和")
+            max_row_error = float(np.max(np.abs(row_sums - nev)))
+            if max_row_error <= balance_tolerance:
+                break
+            scale *= np.sqrt(nev / row_sums)
+            if not np.isfinite(scale).all() or not np.all(scale > 0.0):
+                raise RuntimeError("DΩD 对称平衡产生非有限或非正缩放")
+        else:
+            raise RuntimeError(
+                "DΩD 对称平衡未在 "
+                f"{max_iterations} 次内收敛: max_row_error="
+                f"{max_row_error:.3e}")
+
+        omega = scale[:, None] * omega * scale[None, :]
+        final_row_error = float(np.max(np.abs(omega.sum(axis=1) - nev)))
+        final_symmetry_error = float(np.max(np.abs(omega - omega.T)))
+        if (not np.isfinite(omega).all() or not np.all(omega > 0.0)
+                or final_row_error > balance_tolerance
+                or final_symmetry_error > balance_tolerance):
+            raise RuntimeError(
+                "DΩD 对称平衡后验检查失败: "
+                f"row={final_row_error:.3e}, "
+                f"sym={final_symmetry_error:.3e}, iter={iteration}")
+    return cp.asarray(omega).astype(complex)

@@ -20,8 +20,9 @@
     V_{t+ε} = exp( 3ε/4·Z(W₂) − 8ε/9·Z(W₁) + 17ε/36·Z(W₀) ) · W₂
 
 本模块为梯度流重整化（Monahan–Orginos 2017；NieMiera et al. 2025 采用
-τ = 3a² 的 Wilson flow 涂抹）提供数值引擎：输出流时间 t 处的流规范场 V_t，
-供胶子算符（场强张量 + Wilson 线）与核子胶子 TMD-PDF 矩阵元计算使用。
+物理流时间 ``t=3a²``）提供数值引擎。数值接口参数为无量纲
+``tau=t/a²``，故该方案传 ``tau=3``；输出流场供胶子算符（场强张量 +
+Wilson 线）与核子胶子 TMD-PDF 矩阵元计算使用。
 """
 from __future__ import annotations
 
@@ -94,7 +95,7 @@ def staple_6(U):
             t1 = e("...ab,...cb->...ac", t1,
                    Rp[a_mu][..., nu, :, :].conj())
             # U_μ(x,−ν)：U_ν†(x−ν̂)·U_μ(x−ν̂)·U_ν(x−ν̂+μ̂)
-            t2 = e("...ab,...cb->...ac",
+            t2 = e("...ba,...bc->...ac",
                    Rm[a_nu][..., nu, :, :].conj(),
                    Rm[a_nu][..., mu, :, :])
             t2 = e("...ab,...bc->...ac", t2,
@@ -140,37 +141,103 @@ def wilson_flow(U, tau, eps=0.01, n_steps=None, verbose=False):
 
     Args:
         U: 初始规范场 (Nt,Nz,Ny,Nx,4,3,3)。
-        tau: 目标流时间（格点单位：t = tau/a²）。
-        eps: RK3 步长（默认 0.01，Luescher 建议 ε ≲ 0.05 保证 O(ε³) 精度）。
-        n_steps: 步数（默认 tau/eps 取整）。
+        tau: 无量纲目标流时间 ``t/a²``。
+        eps: RK3 最大步长（默认 0.01，Luescher 建议 ε ≲ 0.05）。
+        n_steps: 显式步数；提供时覆盖由 ``eps`` 推导的步数。
     Returns:
         流规范场 V_tau（与 U 同形状同 dtype）。
     """
+    def _finite_real(name, value):
+        if (isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, float, np.integer, np.floating))
+                or not np.isfinite(value)):
+            raise ValueError(f"{name} 必须是有限实标量，收到 {value!r}")
+        return float(value)
+
+    tau = _finite_real("tau", tau)
+    eps = _finite_real("eps", eps)
+    if tau < 0.0:
+        raise ValueError(f"tau 必须非负，收到 {tau}")
+    if eps <= 0.0:
+        raise ValueError(f"eps 必须为正，收到 {eps}")
+    if n_steps is not None and (
+            isinstance(n_steps, (bool, np.bool_))
+            or not isinstance(n_steps, (int, np.integer))
+            or n_steps <= 0):
+        raise ValueError(f"n_steps 必须为正整数，收到 {n_steps!r}")
+    if tau == 0.0:
+        return U
     if n_steps is None:
-        n_steps = max(int(round(tau / eps)), 1)
+        n_steps = int(np.ceil(tau / eps))
+
+    step_size = tau / n_steps
     V = U
     for k in range(n_steps):
-        V = wilson_flow_step(V, eps)
+        V = wilson_flow_step(V, step_size)
         if verbose and (k % 10 == 0 or k == n_steps - 1):
-            print(f"[wilson_flow] step {k + 1}/{n_steps}, t = {(k + 1) * eps:.4f}")
+            print(f"[wilson_flow] step {k + 1}/{n_steps}, "
+                  f"t = {(k + 1) * step_size:.4f}")
     return V
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 流的观测量：E(t) = ¼ G²_{μν}（SFTX 与尺度设定用）
+# 流的观测量：Wilson plaquette 作用量与 E(t) = ¼ G²_{μν}
 # ═══════════════════════════════════════════════════════════════════
 
+def wilson_action_density(U):
+    """逐格点 Wilson plaquette 作用量密度（六个 ``mu<nu`` 平面平均）。
+
+    返回
+
+        ``s_W(x) = (1/6) sum_{mu<nu} [1 - Re Tr P_munu(x) / Nc]``。
+
+    该量与 ``flow_action_density`` 的 Clover ``G^2`` 离散不同；Wilson flow
+    的下降性应使用前者判定，尤其不能要求粗糙随机场上的 Clover 观测量
+    在有限流时间逐点或整体严格单调。
+    """
+    cp = get_backend()
+    nc = U.shape[-1]
+    density = cp.zeros(U.shape[:4], dtype=U.real.dtype)
+    n_planes = 0
+    for mu in range(4):
+        for nu in range(mu + 1, 4):
+            a_mu, a_nu = 3 - mu, 3 - nu
+            u_mu = U[..., mu, :, :]
+            u_nu = U[..., nu, :, :]
+            plaquette = (
+                u_mu
+                @ cp.roll(u_nu, -1, axis=a_mu)
+                @ cp.roll(u_mu, -1, axis=a_nu).conj().swapaxes(-1, -2)
+                @ u_nu.conj().swapaxes(-1, -2)
+            )
+            density = density + (
+                1.0 - cp.einsum("...aa->...", plaquette).real / nc)
+            n_planes += 1
+    return density / n_planes
+
+
 def flow_action_density(U):
-    """E(t,x) = ¼ G_{μν}^a G_{μν}^a（用 Clover 场强张量近似）。"""
+    """E(t,x) = ¼ G_{μν}^a G_{μν}^a（用 Clover 场强张量近似）。
+
+    采用 Hermitian 生成元 ``Tr(T^a T^b)=δ^{ab}/2``。利用
+    ``F_{νμ}=-F_{μν}``，标准归一化等价于
+
+        E = Σ_{μ<ν} Tr[F_{μν} F_{μν}]。
+
+    四叶 ``-i(Q-Q†)/8`` 在有限格距下可能含高阶单位阵分量；能量密度
+    使用其 SU(3) 无迹部分，Clover 算符本身的既有约定保持不变。
+    """
     cp = get_backend()
     E = None
     from ..operator._gluon_ope import plaquette_clover
     for mu in range(4):
         for nu in range(mu + 1, 4):
             F = plaquette_clover(U, mu, nu)
-            term = cp.einsum("...ab,...ba->...", F, F.conj()).real
+            tr_F = cp.einsum("...aa->...", F)
+            F = F - (tr_F / 3.0)[..., None, None] * cp.eye(3, dtype=F.dtype)
+            term = cp.einsum("...ab,...ba->...", F, F).real
             E = term if E is None else E + term
-    return 0.25 * E
+    return E
 
 
 def scale_setting_t0(U, target=0.3, tau_min=0.01, tau_max=2.0,

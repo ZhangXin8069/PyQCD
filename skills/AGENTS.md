@@ -8,14 +8,14 @@
 
 | 技能 | 单一职责 | 典型触发 |
 |---|---|---|
-| `pyqcd-conventions` | γ、轴序、单位、边界、符号、元数据和证据状态 | 约定冲突、shape/单位/符号不明 |
-| `pyqcd-physics-correlator` | 观测量 → 算符 → 关联函数 → Wick → 传播子清单 → einsum | 算符、2pt/3pt、Wick、矩阵元 |
-| `pyqcd-physics-spectrum` | 关联函数 → 谱分解 → 能量/重叠/拟合模板 | backward 态、激发态、谱式 |
+| `pyqcd-conventions` | γ、轴序、单位、边界、Fourier/basis 符号、元数据和证据状态 | 约定冲突、shape/单位/符号不明 |
+| `pyqcd-physics-correlator` | 观测量 → 算符 → 关联函数 → Wick → 传播子/蒸馏交接 → einsum | 算符、2pt/3pt、Wick、VdV/VVV、矩阵元 |
+| `pyqcd-physics-spectrum` | 权威定义关联函数 → 谱分解 → 能量/重叠/拟合模板 | backward 态、激发态、谱式 |
 | `pyqcd-propagator` | PyQUDA 组态、Dirac 求解、源、顺序源和 covDev | 求传播子、求逆、顺序源 |
 | `pyqcd-gauge` | 纯规范路径、Wilson/Polyakov 圈、拓扑、流和涂抹 | 只有规范链接的观测量 |
 | `pyqcd-statistics` | 重采样、协方差、SVD、窗口和统计诊断 | jackknife/bootstrap、相关拟合 |
-| `pyqcd-analysis` | 已有数据的分析、物理量提取和图表 | ratio、有效质量、E0、FH、c0 |
-| `pyqcd-infra` | backend、精度、I/O、MPI 元任务和显存规划 | torch、HDF5、ASCII、VdV/VVV、OOM |
+| `pyqcd-analysis` | 已有数据的分析运行、物理量提取和图表；不定义谱模型或统计纪律 | ratio、有效质量、E0、FH、c0 |
+| `pyqcd-infra` | backend、设备/精度、I/O、MPI 元任务和显存规划 | torch、HDF5、ASCII、VdV/VVV、OOM |
 | `pyqcd-pipeline` | 九步运行编排、守卫、断点续跑和一致性验证 | test0、test9、基线复现 |
 | `pyqcd-tmd-chain` | 梯度流胶子 TMD-PDF 的端到端导航 | 全链规划、阶段关系、状态判断 |
 | `pyqcd-tmd-algorithm` | TMD 几何、重整化、匹配、外推和物理验证门 | 算法实现、staple、soft、CS、匹配 |
@@ -39,7 +39,7 @@ pyqcd-conventions ────────────────────�
 ```
 
 读图规则：`conventions` 是共享先验；`correlator` 决定物理对象，`propagator` 生产数据，
-`spectrum/statistics/analysis` 解释数据；`gauge` 提供纯规范基础，`tmd-chain` 导航全链，
+`spectrum` 定义谱模型，`statistics` 定义统计门，`analysis` 调用并呈现数据；`gauge` 提供纯规范基础，`tmd-chain` 导航全链，
 `tmd-algorithm` 承担 TMD 的实现和验收细节；`infra` 只提供平台底座，`pipeline` 只编排，
 `docs` 只成文交验。
 

@@ -53,6 +53,109 @@ def _gauge_transform(gauge, site_transform):
     return transformed
 
 
+def _link_covariance_error(smear_or_flow, gauge, site_transform):
+    """返回 S[U^G] 与 G S[U] G^dagger(x+mu) 的最大偏差。"""
+    transformed_input = _gauge_transform(gauge, site_transform)
+    expected = _gauge_transform(smear_or_flow(gauge), site_transform)
+    actual = smear_or_flow(transformed_input)
+    return float(np.max(np.abs(actual - expected)))
+
+
+def _wilson_action_density(gauge):
+    """手工计算每个 mu<nu 平面的 1-ReTr(P_mu_nu)/3 平均。"""
+    total = 0.0
+    for mu in range(4):
+        for nu in range(mu + 1, 4):
+            a_mu, a_nu = 3 - mu, 3 - nu
+            plaquette = (
+                gauge[..., mu, :, :]
+                @ np.roll(gauge, -1, axis=a_mu)[..., nu, :, :]
+                @ np.roll(gauge, -1, axis=a_nu)[..., mu, :, :]
+                .conj().swapaxes(-1, -2)
+                @ gauge[..., nu, :, :].conj().swapaxes(-1, -2)
+            )
+            total += np.mean(
+                1.0 - np.trace(plaquette, axis1=-2, axis2=-1).real / 3.0)
+    return float(total / 6.0)
+
+
+def _swap_lattice_directions(gauge, first, second):
+    """同时交换坐标轴和 link 方向标签（该变换自逆）。"""
+    swapped = np.swapaxes(gauge, 3 - first, 3 - second)
+    order = list(range(4))
+    order[first], order[second] = order[second], order[first]
+    return swapped[..., order, :, :]
+
+
+def _reference_staple_pair(side, middle, mu, nu):
+    """由独立 side/middle 链接构造正负 nu 两个 staple。"""
+    a_mu, a_nu = 3 - mu, 3 - nu
+    forward = (
+        side
+        @ np.roll(middle, -1, axis=a_nu)
+        @ np.roll(side, -1, axis=a_mu).conj().swapaxes(-1, -2)
+    )
+    side_back = np.roll(side, 1, axis=a_nu)
+    backward = (
+        side_back.conj().swapaxes(-1, -2)
+        @ np.roll(middle, 1, axis=a_nu)
+        @ np.roll(side_back, -1, axis=a_mu)
+    )
+    return forward + backward
+
+
+def _reference_project_su3(field):
+    """测试侧极分解投影，不调用 HYP 的生产 helper。"""
+    left, _singular, right_h = np.linalg.svd(field)
+    unitary = left @ right_h
+    determinant = np.linalg.det(unitary)
+    return unitary * (determinant ** (-1.0 / 3.0))[..., None, None]
+
+
+def _reference_ape(gauge, alpha):
+    """四维 APE：每条 link 使用其余三方向的六个 staple。"""
+    out = np.empty_like(gauge)
+    for mu in range(4):
+        staples = sum(
+            (_reference_staple_pair(
+                gauge[..., nu, :, :], gauge[..., mu, :, :], mu, nu)
+             for nu in range(4) if nu != mu),
+            start=np.zeros_like(gauge[..., mu, :, :]),
+        )
+        out[..., mu, :, :] = _reference_project_su3(
+            (1.0 - alpha) * gauge[..., mu, :, :] + alpha * staples / 6.0)
+    return out
+
+
+def _reference_tmd_operator(gauge, z, b_perp, z_dir, b_dir, L):
+    """测试侧 TMD 颜色迹：手写路径、端点平移和 Lorentz 组合。"""
+    from pyqcd.operator._gluon_ope import plaquette_clover
+
+    wilson_line = _manual_staple_wilson_line(
+        gauge, z, b_perp, z_dir, b_dir, L)
+    wilson_dagger = wilson_line.conj().swapaxes(-1, -2)
+    endpoint = [0, 0, 0]
+    endpoint[z_dir] += z
+    endpoint[b_dir] += b_perp
+
+    operator = np.zeros(gauge.shape[:4], dtype=gauge.dtype)
+    for coefficient, mu, nu in (
+            (1.0, 3, 0), (1.0, 3, 1), (-2.0, 0, 1)):
+        field = np.asarray(plaquette_clover(gauge, mu, nu))
+        nc = field.shape[-1]
+        trace = np.trace(field, axis1=-2, axis2=-1)
+        field = field - (
+            trace[..., None, None] * np.eye(nc, dtype=field.dtype) / nc)
+        shifted = field
+        for direction, offset in enumerate(endpoint):
+            if offset:
+                shifted = np.roll(shifted, -offset, axis=3 - direction)
+        closed = field @ wilson_line @ shifted @ wilson_dagger
+        operator += coefficient * np.trace(
+            closed, axis1=-2, axis2=-1)
+    return operator
+
+
 def test_tmd_staple_matches_explicit_three_segment_path():
     """staple 必须逐链复现 -L z、b_perp、(L+z) z 三段路径。"""
     from pyqcd.renorm import staple_wilson_line
@@ -126,6 +229,73 @@ def test_tmd_operator_uses_tx_ty_xy_lorentz_pairs():
     assert err < 1e-12, f"TMD Lorentz 组合错误: max|d|={err:.3e}"
 
 
+def test_tmd_batch_reuses_clover_fields_and_staples():
+    """批量 TMD 不得随 (z,b) 重算不变 Clover，也不得按通道重建 staple。"""
+    from unittest.mock import patch
+
+    import pyqcd.renorm._tmd as tmd
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=222)
+    z_list, b_list = [0, 1], [0, 1]
+    expected = np.empty((2, 2, gauge.shape[0]))
+    for i, z in enumerate(z_list):
+        for j, b_perp in enumerate(b_list):
+            operator = _reference_tmd_operator(
+                gauge, z, b_perp, z_dir=2, b_dir=0, L=1)
+            expected[i, j] = np.real(np.sum(operator, axis=(1, 2, 3)))
+
+    with patch.object(tmd, 'plaquette_clover',
+                      wraps=tmd.plaquette_clover) as clover_spy, \
+            patch.object(tmd, 'staple_wilson_line',
+                         wraps=tmd.staple_wilson_line) as staple_spy:
+        actual = tmd.tmd_matrix_elements_time(
+            gauge, z_list, b_list, z_dir=2, b_dir=0, L=1)
+
+    assert np.allclose(actual, expected, atol=1e-12, rtol=1e-12)
+    assert clover_spy.call_count == 3, \
+        f"三个固定 Lorentz 场只应构造一次，实际 {clover_spy.call_count}"
+    assert staple_spy.call_count == len(z_list) * len(b_list), \
+        f"每个 (z,b) 只应构造一条 staple，实际 {staple_spy.call_count}"
+
+    with patch.object(tmd, 'plaquette_clover',
+                      wraps=tmd.plaquette_clover) as clover_spy, \
+            patch.object(tmd, 'staple_wilson_line',
+                         wraps=tmd.staple_wilson_line) as staple_spy:
+        averaged = tmd.tmd_matrix_elements(
+            gauge, z_list, b_list, z_dir=2, b_dir=0, L=1)
+
+    assert np.allclose(averaged, expected.mean(axis=-1),
+                       atol=1e-12, rtol=1e-12)
+    assert clover_spy.call_count == 3
+    assert staple_spy.call_count == len(z_list) * len(b_list)
+
+
+def test_tmd_empty_batch_skips_geometry_work():
+    """空 z/b 网格必须零计算返回，不能分配三个整格点 Clover 场。"""
+    from unittest.mock import patch
+
+    import pyqcd.renorm._tmd as tmd
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=223)
+    with patch.object(tmd, 'plaquette_clover',
+                      wraps=tmd.plaquette_clover) as clover_spy, \
+            patch.object(tmd, 'staple_wilson_line',
+                         wraps=tmd.staple_wilson_line) as staple_spy:
+        averaged = tmd.tmd_matrix_elements(gauge, [], [0], L=1)
+        timed = tmd.tmd_matrix_elements_time(gauge, [0], [], L=1)
+
+    assert averaged.shape == (0, 1)
+    assert timed.shape == (1, 0, gauge.shape[0])
+    assert clover_spy.call_count == 0, \
+        f"空网格不应构造 Clover，实际 {clover_spy.call_count}"
+    assert staple_spy.call_count == 0, \
+        f"空网格不应构造 staple，实际 {staple_spy.call_count}"
+
+
 def test_gamma_basis():
     """DR 基 γ 矩阵：γ₅² = I、γ_7 = γ₃γ₁ 反厄米。"""
     from pyqcd.lattice import gamma
@@ -167,18 +337,104 @@ def test_zr_parametrization():
 
 
 def test_gradient_flow_su3_and_dissipation():
-    """梯度流：SU(3) 幺正保持 + 作用量密度递减。"""
-    from pyqcd.renorm import wilson_flow, flow_action_density
+    """梯度流：SU(3) 幺正保持 + Wilson plaquette 作用量递减。"""
+    from pyqcd.renorm import wilson_action_density, wilson_flow
     from pyqcd.tools import set_backend
     set_backend('numpy')
 
     g = random_su3_gauge(L=4, seed=7)
-    E0 = flow_action_density(g).mean()
+    S0 = _wilson_action_density(g)
+    np.testing.assert_allclose(
+        np.asarray(wilson_action_density(g)).mean(), S0,
+        rtol=2e-14, atol=2e-14)
     V = wilson_flow(g, tau=0.1, eps=0.05)
     dev = np.abs(V[0, 0, 0, 0, 0] @ V[0, 0, 0, 0, 0].conj().T - np.eye(3)).max()
-    E1 = flow_action_density(V).mean()
+    S1 = _wilson_action_density(V)
+    np.testing.assert_allclose(
+        np.asarray(wilson_action_density(V)).mean(), S1,
+        rtol=2e-14, atol=2e-14)
     assert dev < 1e-6, f"SU(3) 保持失败: dev={dev}"
-    assert E1 < E0, f"作用量密度应递减: {E0} -> {E1}"
+    assert S1 < S0, f"Wilson 作用量应递减: {S0} -> {S1}"
+
+
+def test_wilson_flow_is_gauge_covariant():
+    """Wilson flow 的每条输出链接必须保持局域 SU(3) 端点协变。"""
+    from pyqcd.renorm import wilson_flow
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=211)
+    site_transform = random_su3_gauge(L=2, seed=311)[..., 0, :, :]
+    error = _link_covariance_error(
+        lambda field: wilson_flow(field, tau=0.02, eps=0.02),
+        gauge, site_transform)
+    assert error < 1e-10, f"Wilson flow 规范协变性破坏: max|d|={error:.3e}"
+
+
+def test_wilson_flow_zero_time_is_identity():
+    """tau=0 不得暗中执行一个 eps 步。"""
+    from pyqcd.renorm import wilson_flow
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=216)
+    flowed = wilson_flow(gauge, tau=0.0, eps=0.01)
+    assert np.array_equal(flowed, gauge), \
+        f"tau=0 必须恒等: max|d|={np.max(np.abs(flowed - gauge)):.3e}"
+
+
+def test_wilson_flow_hits_requested_time():
+    """非整倍数 tau/eps 必须用缩放步长精确到达 tau。"""
+    from pyqcd.renorm import wilson_flow
+    from pyqcd.renorm._gradient_flow import wilson_flow_step
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=217)
+    expected = gauge
+    for _ in range(3):
+        expected = wilson_flow_step(expected, 0.025 / 3.0)
+    flowed = wilson_flow(gauge, tau=0.025, eps=0.01)
+    error = float(np.max(np.abs(flowed - expected)))
+    assert error < 1e-12, f"实际 flow 时间不等于 tau: max|d|={error:.3e}"
+
+
+def test_wilson_flow_rejects_invalid_time_controls():
+    """流时间、最大步长和显式步数必须在入口完成有限性/类型检查。"""
+    from pyqcd.renorm import wilson_flow
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=218)
+    with np.testing.assert_raises(ValueError):
+        wilson_flow(gauge, tau=-0.01, eps=0.01)
+    with np.testing.assert_raises(ValueError):
+        wilson_flow(gauge, tau=0.01, eps=0.0)
+    for tau in (np.nan, np.inf, -np.inf, True):
+        with np.testing.assert_raises_regex(ValueError, "tau.*有限实标量"):
+            wilson_flow(gauge, tau=tau, eps=0.01)
+    for eps in (np.nan, np.inf, -np.inf, True):
+        with np.testing.assert_raises_regex(ValueError, "eps.*有限实标量"):
+            wilson_flow(gauge, tau=0.01, eps=eps)
+    for n_steps in (0, -1, 1.5, True):
+        with np.testing.assert_raises_regex(ValueError, "n_steps.*正整数"):
+            wilson_flow(gauge, tau=0.0, eps=0.01, n_steps=n_steps)
+
+
+def test_flow_action_density_is_gauge_invariant_and_nonnegative():
+    """Tr(F^2) 必须逐点规范不变且非负。"""
+    from pyqcd.renorm import flow_action_density
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=214)
+    site_transform = random_su3_gauge(L=2, seed=314)[..., 0, :, :]
+    original = flow_action_density(gauge)
+    transformed = flow_action_density(_gauge_transform(gauge, site_transform))
+    error = float(np.max(np.abs(transformed - original)))
+    assert error < 1e-10, f"流作用量密度规范不变性破坏: max|d|={error:.3e}"
+    assert float(np.min(original)) >= -1e-12, \
+        f"流作用量密度应非负: min(E)={float(np.min(original)):.3e}"
 
 
 def test_tmd_operator_runs():
@@ -261,9 +517,10 @@ def test_tmd_extraction_chain():
     assert np.all(np.isfinite(xg))
     K = cs_kernel_from_ratio(hr, hr * 1.1, 2.5, 2.0)
     assert np.all(np.isfinite(K))
-    al, c = sftx_gluon_matching_coeff(0.1, 2.0)
+    al, c = sftx_gluon_matching_coeff(mu=2.0, t_gev_m2=0.1)
     assert np.isfinite(al) and np.isfinite(c)
-    assert np.all(np.isfinite(sftx_energy_density_t0(1.0, 0.1, 2.0)))
+    assert np.all(np.isfinite(sftx_energy_density_t0(
+        1.0, mu=2.0, t_gev_m2=0.1)))
 
 
 def test_tmd_matching_nlo():
@@ -317,15 +574,69 @@ def test_scale_setting_flow_behavior():
 
 
 def test_hyp_smear():
-    """HYP 涂抹：SU(3) 保持 + 作用量密度平滑化（降低）。"""
+    """HYP 涂抹：SU(3) 保持 + Wilson plaquette 作用量降低。"""
     from pyqcd.smear import hyp_smear
-    from pyqcd.renorm import flow_action_density
+    from pyqcd.tools import set_backend
+    set_backend('numpy')
     g = random_su3_gauge(L=6, seed=2)
     V = hyp_smear(g)
     dev = np.abs(V[0, 0, 0, 0, 0] @ V[0, 0, 0, 0, 0].conj().T - np.eye(3)).max()
     assert dev < 1e-10, f"SU(3) 保持失败: {dev}"
-    E0, E1 = flow_action_density(g).mean(), flow_action_density(V).mean()
-    assert E1 < E0, f"HYP 应平滑化（E 降低）: {E0} -> {E1}"
+    S0, S1 = _wilson_action_density(g), _wilson_action_density(V)
+    assert S1 < S0, f"HYP 应降低 Wilson 作用量: {S0} -> {S1}"
+
+
+def test_hyp_smear_is_gauge_covariant():
+    """HYP 的每条输出链接必须保持局域 SU(3) 端点协变。"""
+    from pyqcd.smear import hyp_smear
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=212)
+    site_transform = random_su3_gauge(L=2, seed=312)[..., 0, :, :]
+    error = _link_covariance_error(hyp_smear, gauge, site_transform)
+    assert error < 1e-10, f"HYP 规范协变性破坏: max|d|={error:.3e}"
+
+
+def test_hyp_zero_outer_weight_returns_input():
+    """α1=0 数值回到 U，但返回值仍须独立，不能把输入别名交给下游。"""
+    from pyqcd.smear import hyp_smear
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=219)
+    smeared = hyp_smear(gauge, alpha1=0.0, alpha2=0.6, alpha3=0.3)
+    error = float(np.max(np.abs(smeared - gauge)))
+    assert error < 1e-12, f"α1=0 未回到原链接: max|d|={error:.3e}"
+    assert not np.shares_memory(smeared, gauge), "HYP 零操作不得返回输入别名"
+
+
+def test_hyp_reduces_to_ape_when_inner_weights_zero():
+    """α2=α3=0 时 HYP 必须退化为使用六 staple 的四维 APE。"""
+    from pyqcd.smear import hyp_smear
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=220)
+    alpha = 0.41
+    expected = _reference_ape(gauge, alpha)
+    actual = hyp_smear(gauge, alpha1=alpha, alpha2=0.0, alpha3=0.0)
+    error = float(np.max(np.abs(actual - expected)))
+    assert error < 1e-11, f"HYP 的 APE 退化极限错误: max|d|={error:.3e}"
+
+
+def test_hyp_is_hypercubic_under_axis_relabeling():
+    """交换 x/y 坐标和方向标签后，HYP 结果必须同样重标记。"""
+    from pyqcd.smear import hyp_smear
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=221)
+    expected = hyp_smear(gauge)
+    permuted = _swap_lattice_directions(gauge, 0, 1)
+    actual = _swap_lattice_directions(hyp_smear(permuted), 0, 1)
+    error = float(np.max(np.abs(actual - expected)))
+    assert error < 1e-10, f"HYP 超立方对称性破坏: max|d|={error:.3e}"
 
 
 def test_gradient_flow_tau_limit():
@@ -360,19 +671,6 @@ def test_ratio_fit_extraction():
     assert abs(res['deltaE'] - 1.2) < 0.1
 
 
-def test_hyp_vs_flow_consistent():
-    """HYP 涂抹与 Wilson flow 定性一致（理论文档对比项）：O(z) 高度相关。"""
-    from pyqcd.smear import hyp_smear
-    from pyqcd.renorm import wilson_flow, tmd_matrix_elements
-    g = random_su3_gauge(L=4, seed=7)
-    Vh = hyp_smear(g)
-    Vf = wilson_flow(g, tau=0.05, eps=0.05)
-    Mh = tmd_matrix_elements(Vh, [1, 2, 3], [0])[:, 0]
-    Mf = tmd_matrix_elements(Vf, [1, 2, 3], [0])[:, 0]
-    c = np.corrcoef(Mh, Mf)[0, 1]
-    assert c > 0.9, f"HYP 与 flow 应定性一致（r={c:.3f}）"
-
-
 def test_gpu_backend_consistency():
     """GPU(cupy) 后端：flow 结果与 CPU 一致（无 cupy 时跳过）。"""
     try:
@@ -380,15 +678,18 @@ def test_gpu_backend_consistency():
     except ImportError:
         return
     from pyqcd.tools import set_backend
-    from pyqcd.renorm import wilson_flow
+    from pyqcd.renorm import wilson_action_density, wilson_flow
     g = random_su3_gauge(L=4, seed=2)
     set_backend('numpy')
     V_cpu = wilson_flow(g, tau=0.04, eps=0.02)
+    S_cpu = np.asarray(wilson_action_density(g))
     set_backend('cupy')
     V_gpu = cp.asnumpy(wilson_flow(cp.asarray(g), tau=0.04, eps=0.02))
+    S_gpu = cp.asnumpy(wilson_action_density(cp.asarray(g)))
     set_backend('numpy')
     d = np.abs(V_cpu - V_gpu).max()
     assert d < 1e-10, f"CPU/GPU 不一致: {d:.3e}"
+    assert np.abs(S_cpu - S_gpu).max() < 1e-12, "Wilson 作用量 CPU/GPU 不一致"
 
 
 def test_torch_backend_consistency():
@@ -401,20 +702,26 @@ def test_torch_backend_consistency():
     """
     import torch
     from pyqcd.tools import set_backend, set_precision
-    from pyqcd.renorm import wilson_flow, tmd_matrix_elements
+    from pyqcd.renorm import (
+        tmd_matrix_elements, wilson_action_density, wilson_flow,
+    )
     from pyqcd.smear import hyp_smear
 
     g = random_su3_gauge(L=4, seed=2)
     set_backend('numpy')
     V_cpu = wilson_flow(g, tau=0.04, eps=0.02)
     M_np = tmd_matrix_elements(g, [0, 1], [0, 1])
+    S_np = np.asarray(wilson_action_density(g))
 
     # CPU（numpy 输入自动转换）
     set_backend('torch')
     V_t = wilson_flow(g, tau=0.04, eps=0.02)
     M_t = tmd_matrix_elements(g, [0, 1], [0, 1])
+    S_t = wilson_action_density(g)
     assert np.abs(V_cpu - V_t.get()).max() < 1e-8, "torch CPU flow 不一致"
     assert np.abs(np.asarray(M_np) - np.asarray(M_t)).max() < 1e-8
+    assert np.abs(S_np - S_t.get()).max() < 1e-12, \
+        "Wilson 作用量 numpy/torch 不一致"
     # HYP 与 numpy 对比
     set_backend('numpy')
     V_h_np = hyp_smear(g)
@@ -483,13 +790,13 @@ def test_matching_sum_rule():
 
 
 def test_core_chain_integrated():
-    """核心目标链整合：梯度流(τ=3a²)→TMD→混合方案→Z_R 全链自洽。"""
+    """核心目标链整合：梯度流(t/a²=3)→TMD→混合方案→Z_R 全链自洽。"""
     from pyqcd.renorm import (
         wilson_flow, tmd_matrix_elements, hR_z_Pz, th_ZR,
     )
     g = random_su3_gauge(L=4, seed=6)
-    tau = 3.0 * (0.1053 * 0.197) ** 2
-    V = wilson_flow(g, tau=tau, eps=0.01)
+    tau = 3.0
+    V = wilson_flow(g, tau=tau, eps=0.05)
     M = tmd_matrix_elements(V, list(range(6)), [0])[:, 0]
     z_fm = np.array(range(6)) * 0.1053
     zr = th_ZR(z_fm, 0.1053 / 0.197, 2.0, 0.5, 0.1, 0.0, 0.0, 0.25, (0.0, 0.0))
@@ -521,9 +828,17 @@ def _smooth_gauge(L=6, amp=0.01, seed=11):
 
 
 def test_stout_smear():
-    """Stout 涂抹：SU(3) 保持 + 平滑场作用量下降 + 平场不动 + 时间链不变。"""
+    """Stout：SU(3) 保持 + Wilson 作用量下降 + 平场/时间链约束。"""
     from pyqcd.smear import stout_smear
-    from pyqcd.renorm import flow_action_density
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+
+    alias_probe = random_su3_gauge(L=2, seed=222)
+    no_op = stout_smear(alias_probe, nstep=0)
+    assert np.array_equal(no_op, alias_probe)
+    assert not np.shares_memory(no_op, alias_probe), \
+        "Stout 零步不得返回输入别名"
 
     flat = np.zeros((4, 4, 4, 4, 4, 3, 3), dtype=complex)
     for d in range(4):
@@ -537,11 +852,25 @@ def test_stout_smear():
     dev = np.abs(v[0, 0, 0, 0, 0] @ v[0, 0, 0, 0, 0].conj().T
                  - np.eye(3)).max()
     assert dev < 1e-10, f"SU(3) 保持失败: {dev}"
-    e0 = flow_action_density(g).mean()
-    e1 = flow_action_density(v).mean()
-    assert e1 < e0, f"平滑场应作用量下降: {e0} -> {e1}"
+    s0 = _wilson_action_density(g)
+    s1 = _wilson_action_density(v)
+    assert s1 < s0, f"平滑场应降低 Wilson 作用量: {s0} -> {s1}"
     assert np.abs(v[..., 3, :, :] - g[..., 3, :, :]).max() < 1e-14, \
         "时间方向链接不应被涂抹"
+
+
+def test_stout_smear_is_gauge_covariant():
+    """Stout 的每条输出链接必须保持局域 SU(3) 端点协变。"""
+    from pyqcd.smear import stout_smear
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = random_su3_gauge(L=2, seed=213)
+    site_transform = random_su3_gauge(L=2, seed=313)[..., 0, :, :]
+    error = _link_covariance_error(
+        lambda field: stout_smear(field, nstep=1, rho=0.12),
+        gauge, site_transform)
+    assert error < 1e-10, f"Stout 规范协变性破坏: max|d|={error:.3e}"
 
 
 def test_eigvec_compress():
@@ -696,6 +1025,446 @@ def test_plot_tmd_pdf():
     assert all(os.path.getsize(f) > 1000 for f in files)
 
 
+def test_pipeline_tmd_uses_dimensionless_flow_time():
+    """物理 t=3a² 必须以 tau=t/a²=3 传给 flow，并在产物中标明约定。"""
+    import json
+    import tempfile
+    from unittest.mock import patch
+
+    from pyqcd.pipeline._steps import run_pipeline
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    gauge = np.zeros((1, 1, 1, 1, 4, 3, 3), dtype=complex)
+    for direction in range(4):
+        gauge[..., direction, :, :] = np.eye(3)
+
+    def fake_tmd(field, tau, z_list, b_list, **_kwargs):
+        del field
+        return np.zeros((len(z_list), len(b_list))) + tau
+
+    with tempfile.TemporaryDirectory() as run_dir:
+        with patch('pyqcd.operator.read_gauge_lime', return_value=gauge), \
+                patch('pyqcd.renorm._tmd.gradient_flow_renormalized_tmd',
+                      side_effect=fake_tmd):
+            run_pipeline(steps=('tmd',), conf_ids=[1], run_dir=run_dir,
+                         logger=lambda _message: None, backend='numpy')
+        with open(f'{run_dir}/tmd_gluon_flow.json', encoding='utf-8') as handle:
+            payload = json.load(handle)
+
+    assert payload['tau'] == 3.0, \
+        f"tau=3a^2 应传 t/a^2=3，收到 {payload['tau']}"
+    assert payload['tau_units'] == 'dimensionless'
+    assert payload['tau_convention'] == 't/a^2'
+    assert payload['flow_eps'] == 0.01
+
+
+def test_parallel_mpi_default_run_dir_is_broadcast():
+    """MPI 默认输出目录必须由 rank 0 生成一次并广播给所有 rank。"""
+    from unittest.mock import patch
+
+    import pyqcd.parallel._mpi as mpi
+
+    shared = {'run_dir': None}
+
+    class FakeComm:
+        def __init__(self, rank):
+            self.rank = rank
+            self.sent = []
+
+        def bcast(self, value, root=0):
+            assert root == 0
+            self.sent.append(value)
+            if self.rank == root:
+                shared['run_dir'] = value
+            return shared['run_dir']
+
+        def Barrier(self):
+            return None
+
+    plan = {'n_gpu': 0, 'N': 2, 'm': 1, 'X': 1}
+    results = []
+    comms = [FakeComm(0), FakeComm(1)]
+    for rank, comm in enumerate(comms):
+        with patch.object(mpi, 'get_mpi_context',
+                          return_value=(comm, rank, 2)), \
+                patch.object(mpi.os, 'makedirs') as makedirs_spy, \
+                patch('pyqcd.pipeline._steps.dump_config_snapshot'):
+            result, _ = mpi.run_parallel_pipeline(
+                steps=(), conf_ids=[6250], run_dir=None, logger=None,
+                backend='numpy', plan=plan, resources={'provided': True})
+        results.append(result)
+        created = {call.args[0] for call in makedirs_spy.call_args_list}
+        expected = {
+            mpi.os.path.join(result['run_dir'], directory)
+            for directory in ('data', 'analysis', 'plots')
+        }
+        assert expected <= created
+
+    assert results[0]['run_dir'] == results[1]['run_dir']
+    assert mpi.os.path.basename(results[0]['run_dir']).startswith('output_')
+    assert comms[0].sent == [results[0]['run_dir']]
+    assert comms[1].sent == [None]
+
+
+def test_parallel_plan_does_not_report_unknown_memory_as_zero():
+    """未提供单任务显存时必须报告未知，而非伪造 a=0 MB/task。"""
+    from pyqcd.parallel import format_plan, plan_parallel
+
+    resources = {
+        'n_gpu': 1,
+        'gpu_vram_mb': 8192.0,
+        'gpu_usable_mb': 6553.0,
+        'cpu_threads': 8,
+        'mem_total_mb': 32768.0,
+        'mem_avail_mb': 32768.0,
+    }
+    default_plan = plan_parallel(2, None, resources=resources)
+    default_text = format_plan(default_plan)
+    assert 'a=not provided' in default_text
+    assert 'a=0 MB/task' not in default_text
+
+    measured_plan = plan_parallel(2, 512.0, resources=resources)
+    measured_text = format_plan(measured_plan)
+    assert 'a=512 MB/task' in measured_text
+
+
+def _projection_test_registries(seed, pion=False):
+    """Nev=2 三时间区随机张量；只供重子投影独立参考测试使用。"""
+    from pyqcd.contraction import PeramRegistry, VRegistry, GammaRegistry
+    from pyqcd.lattice import gamma
+
+    rng = np.random.default_rng(seed)
+    rand = lambda shape: (rng.standard_normal(shape)
+                          + 1j * rng.standard_normal(shape))
+    nev = 2
+    peram = PeramRegistry()
+    for sink in ('tsrc', 'tsink', 'tcur0'):
+        for source in ('tsrc', 'tsink', 'tcur0'):
+            peram.register('light', (sink, source),
+                           rand((4, 4, nev, nev)))
+
+    vertex = VRegistry()
+    if pion:
+        for time_label in ('tsrc', 'tcur0', 'tsink'):
+            vertex.register('VDV_0', time_label, rand((1, nev, nev)))
+    else:
+        vertex.register('VVV_0', 'tsrc', rand((1, nev, nev, nev)))
+        vertex.register('VDV_0', 'tcur0', rand((1, nev, nev)))
+        vertex.register('VVV_0', 'tsink', rand((1, nev, nev, nev)))
+
+    projector = np.asarray((gamma(0) + gamma(4)) / 2.0)
+    gammas = GammaRegistry()
+    gammas.register('gamma_7', np.asarray(gamma(7)))
+    gammas.register('gamma_5', np.asarray(gamma(5)))
+    gammas.register('gamma_mu',
+                    np.asarray([gamma(1), gamma(2), gamma(3), gamma(4)]))
+    gammas.register('Projector', (projector, projector))
+    return peram, vertex, gammas, projector
+
+
+def test_pipeline_baryon_2pt_uses_trace_projection():
+    """质子 2pt 必须复现 refer 的两张显式 Wick 图和 Tr(P_+ C)。"""
+    from pyqcd.lattice import gamma
+    from pyqcd.pipeline import _steps
+    from pyqcd.tools import get_backend, set_backend
+
+    set_backend('numpy')
+    rng = np.random.default_rng(4102)
+    rand = lambda shape: (rng.standard_normal(shape)
+                          + 1j * rng.standard_normal(shape))
+    nev = 2
+    peram = rand((2, 4, 4, nev, nev))
+    peram_seq = rand((2, 4, 4, nev, nev))
+    vertex_src = rand((1, nev, nev, nev))
+    vertex_sink = rand((1, nev, nev, nev))
+    g7 = np.asarray(gamma(7))
+    projector = np.asarray((gamma(0) + gamma(4)) / 2.0)
+
+    actual = _steps._run_2pt(
+        get_backend(), _steps.PP_SINK, _steps.PP_SRC,
+        peram, peram_seq, 0, 1, vertex_src, vertex_sink, 'VVV',
+        'gamma_7', g7, projector)
+
+    p = peram[1]
+    direct = np.einsum(
+        'eofp,ambn,cgdh,ce,mo,Mbdf,Mnph,ga->M',
+        p, p, p, g7, g7, vertex_sink, vertex_src, projector,
+        optimize=True)
+    exchange = np.einsum(
+        'eofp,agbh,cmdn,ce,mo,Mbdf,Mnph,ga->M',
+        p, p, p, g7, g7, vertex_sink, vertex_src, projector,
+        optimize=True)
+    expected = np.real((direct - exchange)[0])
+    assert np.allclose(actual, expected, rtol=1e-12, atol=1e-10), \
+        f"2pt 未执行 Tr(P_+ C): actual={actual}, expected={expected}"
+
+
+def test_pipeline_baryon_3pt_traces_spin_and_preserves_current():
+    """质子 3pt 必须收缩两个重子自旋轴并保留四个 current 分量。"""
+    from pyqcd.contraction import dynamic_contraction
+    from pyqcd.pipeline import _steps
+    from pyqcd.tools import get_backend, set_backend
+
+    set_backend('numpy')
+    peram, vertex, gammas, projector = _projection_test_registries(4103)
+    operators = [(_steps.PJN_SINK, _steps.PJN_SRC, _steps.PJN_CURR)]
+    raw = dynamic_contraction(
+        operators, peram_registry=peram, v_registry=vertex,
+        gamma_registry=gammas, Cpt='3pt', Vindex=['M', 'M', 'M'],
+        Gindex=['', 'G', ''], use_equivalence=False, ignore_dis=False,
+        Projection=False, verbose=False).calculate_all()
+    raw = np.asarray(raw)
+    assert raw.shape == (4, 4, 4, 1)
+    expected = np.einsum('akGM,ka->GM', raw, projector,
+                         optimize=True)[:, 0]
+
+    actual = _steps._run_3pt(
+        get_backend(), _steps.PJN_SINK, _steps.PJN_SRC, _steps.PJN_CURR,
+        peram, vertex, gammas, ['M', 'M', 'M'], ['', 'G', ''])
+    assert actual.shape == (4,), \
+        f"3pt 应只返回四个 current 分量，实际 shape={actual.shape}"
+    assert np.allclose(actual, expected, rtol=1e-12, atol=1e-9)
+
+
+def test_pipeline_pjnnjnp_4pt_traces_spin_and_preserves_current():
+    """当前 PJNNJNP 三时间区 4pt 必须输出手写 Tr(P_+ C_G) 四分量。"""
+    from unittest.mock import patch
+
+    from pyqcd.contraction import (
+        PeramRegistry, VRegistry, GammaRegistry, dynamic_contraction,
+    )
+    from pyqcd.lattice import gamma
+    from pyqcd.pipeline import _steps
+    from pyqcd.tools import set_backend
+
+    set_backend('numpy')
+    rng = np.random.default_rng(4104)
+    rand = lambda shape: (rng.standard_normal(shape)
+                          + 1j * rng.standard_normal(shape))
+    nev = 2
+    peram = rand((1, 4, 4, nev, nev))
+    peram_seq = rand((1, 4, 4, nev, nev))
+    vertices = {
+        'VVV': rand((1, 1, nev, nev, nev)),
+        'VdV': rand((1, 1, nev, nev)),
+    }
+
+    with patch.object(_steps, 'NT', 1), \
+            patch.object(_steps, 'conf_data_dir', return_value='/unused'), \
+            patch.object(_steps, 'get_peram_dir', return_value='/unused'), \
+            patch.object(_steps, '_load_peram_set',
+                         return_value={0: (peram, peram_seq)}), \
+            patch.object(_steps, 'save_array'):
+        actual = _steps.compute_4pt_for_config(
+            1, '/unused', None, vertices, precision='complex128',
+            t_sep=0, nev1=nev, momenta=(0,), src_step=1)
+
+    p, q = peram[0], peram_seq[0]
+    peram_registry = PeramRegistry()
+    peram_registry.register('light', ('tsink', 'tsrc'), p)
+    peram_registry.register('light', ('tcur0', 'tsrc'), p)
+    peram_registry.register('light', ('tsrc', 'tsrc'), p)
+    peram_registry.register('light', ('tsink', 'tcur0'), p)
+    peram_registry.register('light', ('tcur0', 'tcur0'), p)
+    peram_registry.register('light', ('tsrc', 'tcur0'), p)
+    peram_registry.register('light', ('tcur0', 'tsink'), p)
+    peram_registry.register('light', ('tsink', 'tsink'), p)
+    peram_registry.register('light', ('tsrc', 'tsink'), q)
+    peram_registry.register('light', ('tsrc', 'tcur0'), q)
+    peram_registry.register('light', ('tcur0', 'tsink'), q)
+    peram_registry.register('light', ('tsink', 'tcur0'), q)
+
+    vertex_registry = VRegistry()
+    vertex_registry.register('VVV_0', 'tsink', vertices['VVV'][0, 0:1])
+    vertex_registry.register('VDV_0', 'tcur0', vertices['VdV'][0, 0:1])
+    vertex_registry.register('VVV_0', 'tsrc',
+                             vertices['VVV'][0, 0:1].conj())
+    vertex_registry.register('VDV_0', 'tsrc',
+                             vertices['VdV'][0, 0:1].conj())
+
+    projector = np.asarray((gamma(0) + gamma(4)) / 2.0)
+    gamma_registry = GammaRegistry()
+    gamma_registry.register('gamma_7', np.asarray(gamma(7)))
+    gamma_registry.register('gamma_5', np.asarray(gamma(5)))
+    gamma_registry.register(
+        'gamma_mu', np.asarray([gamma(1), gamma(2), gamma(3), gamma(4)]))
+    gamma_registry.register('Projector', (projector, projector))
+    raw = dynamic_contraction(
+        [(_steps.PJNNJNP_SINK, _steps.PJNNJNP_SRC,
+          _steps.PJNNJNP_CURR)],
+        peram_registry=peram_registry, v_registry=vertex_registry,
+        gamma_registry=gamma_registry, Cpt='3pt',
+        Vindex=['M', 'M', 'M', 'M'], Gindex=['', 'G', '', ''],
+        use_equivalence=False, ignore_dis=False,
+        Projection=False, verbose=False).calculate_all()
+    raw = np.asarray(raw)
+    assert raw.shape == (4, 4, 4, 1)
+    expected = np.real(np.einsum(
+        'akGM,ka->GM', raw, projector, optimize=True)[:, 0])
+    assert np.allclose(actual[0, 0], expected, rtol=1e-12, atol=1e-8)
+
+
+def test_pipeline_pion_projection_controls_are_unchanged():
+    """π 2pt/3pt 无自由重子自旋轴，显式 Oindex 不得改变数值。"""
+    from pyqcd.contraction import (
+        PeramRegistry, VRegistry, GammaRegistry, dynamic_contraction,
+    )
+    from pyqcd.lattice import gamma
+    from pyqcd.pipeline import _steps
+    from pyqcd.tools import get_backend, set_backend
+
+    set_backend('numpy')
+    rng = np.random.default_rng(4105)
+    rand = lambda shape: (rng.standard_normal(shape)
+                          + 1j * rng.standard_normal(shape))
+    nev = 2
+    peram = rand((2, 4, 4, nev, nev))
+    peram_seq = rand((2, 4, 4, nev, nev))
+    vertex_src = rand((1, nev, nev))
+    vertex_sink = rand((1, nev, nev))
+    g5 = np.asarray(gamma(5))
+    projector = np.asarray((gamma(0) + gamma(4)) / 2.0)
+    actual_2pt = _steps._run_2pt(
+        get_backend(), _steps.PION_SINK, _steps.PION_SRC,
+        peram, peram_seq, 0, 1, vertex_src, vertex_sink, 'VDV',
+        'gamma_5', g5, projector)
+
+    pr = PeramRegistry(); vr = VRegistry(); gr = GammaRegistry()
+    pr.register('light', ('tsrc', 'tsrc'), peram[0])
+    pr.register('light', ('tsink', 'tsrc'), peram[1])
+    pr.register('light', ('tsrc', 'tsink'), peram_seq[1])
+    vr.register('VDV_0', 'tsrc', vertex_src)
+    vr.register('VDV_0', 'tsink', vertex_sink)
+    gr.register('gamma_5', g5)
+    gr.register('Projector', (projector, projector))
+    raw_2pt = dynamic_contraction(
+        [(_steps.PION_SINK, _steps.PION_SRC)],
+        peram_registry=pr, v_registry=vr, gamma_registry=gr,
+        Cpt='2pt', Vindex=['M', 'M'], use_equivalence=False,
+        ignore_dis=False, Projection=False, verbose=False).calculate_all()
+    assert np.allclose(actual_2pt, np.real(np.asarray(raw_2pt)[0]),
+                       rtol=1e-12, atol=1e-10)
+
+    pr, vr, gr, _projector = _projection_test_registries(4106, pion=True)
+    raw_3pt = dynamic_contraction(
+        [(_steps.PION3_SINK, _steps.PION3_SRC, _steps.PION3_CURR)],
+        peram_registry=pr, v_registry=vr, gamma_registry=gr,
+        Cpt='3pt', Vindex=['M', 'M', 'M'], Gindex=['', 'G', ''],
+        use_equivalence=False, ignore_dis=False,
+        Projection=False, verbose=False).calculate_all()
+    actual_3pt = _steps._run_3pt(
+        get_backend(), _steps.PION3_SINK, _steps.PION3_SRC,
+        _steps.PION3_CURR, pr, vr, gr,
+        ['M', 'M', 'M'], ['', 'G', ''])
+    assert actual_3pt.shape == (4,)
+    assert np.allclose(actual_3pt, np.asarray(raw_3pt)[:, 0],
+                       rtol=1e-12, atol=1e-9)
+
+
+def test_pipeline_projection_rejects_uncontracted_spin_shapes():
+    """调用方必须拒绝仍含两个自由自旋轴的 dynamic 输出。"""
+    from unittest.mock import patch
+
+    from pyqcd.lattice import gamma
+    from pyqcd.pipeline import _steps
+    from pyqcd.tools import get_backend, set_backend
+
+    class FakeContraction:
+        def __init__(self, value):
+            self.value = value
+
+        def calculate_all(self):
+            return self.value
+
+    set_backend('numpy')
+    projector = np.asarray((gamma(0) + gamma(4)) / 2.0)
+    dummy_peram = np.zeros((1, 4, 4, 2, 2), dtype=complex)
+    dummy_vvv = np.zeros((1, 2, 2, 2), dtype=complex)
+    failures = []
+    with patch.object(
+            _steps, 'dynamic_contraction',
+            return_value=FakeContraction(np.zeros((4, 4, 1)))):
+        try:
+            _steps._run_2pt(
+                get_backend(), _steps.PP_SINK, _steps.PP_SRC,
+                dummy_peram, dummy_peram, 0, 0, dummy_vvv, dummy_vvv,
+                'VVV', 'gamma_7', np.asarray(gamma(7)), projector)
+        except ValueError:
+            pass
+        else:
+            failures.append('2pt')
+
+    with patch.object(
+            _steps, 'dynamic_contraction',
+            return_value=FakeContraction(np.zeros((4, 4, 4, 1)))):
+        try:
+            _steps._run_3pt(
+                get_backend(), _steps.PJN_SINK, _steps.PJN_SRC,
+                _steps.PJN_CURR, None, None, None,
+                ['M', 'M', 'M'], ['', 'G', ''])
+        except ValueError:
+            pass
+        else:
+            failures.append('3pt')
+
+    dummy_vertices = {
+        'VVV': np.zeros((1, 1, 2, 2, 2), dtype=complex),
+        'VdV': np.zeros((1, 1, 2, 2), dtype=complex),
+    }
+    with patch.object(_steps, 'NT', 1), \
+            patch.object(_steps, 'conf_data_dir', return_value='/unused'), \
+            patch.object(_steps, 'get_peram_dir', return_value='/unused'), \
+            patch.object(_steps, '_load_peram_set',
+                         return_value={0: (dummy_peram, dummy_peram)}), \
+            patch.object(_steps, 'save_array'), \
+            patch.object(
+                _steps, 'dynamic_contraction',
+                return_value=FakeContraction(np.zeros((4, 4, 4, 1)))):
+        try:
+            _steps.compute_4pt_for_config(
+                1, '/unused', None, dummy_vertices,
+                precision='complex128', t_sep=0, nev1=2,
+                momenta=(0,), src_step=1)
+        except ValueError:
+            pass
+        else:
+            failures.append('4pt')
+    assert not failures, f"未拒绝自由自旋输出: {failures}"
+
+
+def test_pipeline_2pt_only_swallows_known_forbidden_neutron_channel():
+    """注册/数据 KeyError 不得被误报为 pn 物理零；仅已知禁戒通道可返回 0。"""
+    from unittest.mock import patch
+
+    from pyqcd.lattice import gamma
+    from pyqcd.pipeline import _steps
+    from pyqcd.tools import get_backend, set_backend
+
+    set_backend('numpy')
+    dummy_peram = np.zeros((1, 4, 4, 2, 2), dtype=complex)
+    dummy_vertex = np.zeros((1, 2, 2, 2), dtype=complex)
+    projector = np.asarray((gamma(0) + gamma(4)) / 2.0)
+
+    with patch.object(_steps, 'dynamic_contraction',
+                      side_effect=KeyError('missing pp registry')):
+        with np.testing.assert_raises_regex(KeyError, 'missing pp registry'):
+            _steps._run_2pt(
+                get_backend(), _steps.PP_SINK, _steps.PP_SRC,
+                dummy_peram, dummy_peram, 0, 0,
+                dummy_vertex, dummy_vertex, 'VVV', 'gamma_7',
+                np.asarray(gamma(7)), projector)
+
+    with patch.object(_steps, 'dynamic_contraction') as contraction:
+        value = _steps._run_2pt(
+            get_backend(), _steps.PN_SINK, _steps.PN_SRC,
+            dummy_peram, dummy_peram, 0, 0,
+            dummy_vertex, dummy_vertex, 'VVV', 'gamma_7',
+            np.asarray(gamma(7)), projector)
+    assert value == 0.0
+    contraction.assert_not_called()
+
+
 def test_pipeline_validate_and_2pt_resume():
     """数据守卫（形状/NaN/缺失）+ 原始数据齐全度 + 2pt 断点续跑判据。"""
     import os
@@ -791,6 +1560,187 @@ def test_proton_energy_dirs():
     px_params = EnergyParams(**{**p.__dict__, 'dir': 'x'})
     assert load_raw_corr(tmp, 7, px_params).shape == (8, 8)
     shutil.rmtree(tmp)
+
+
+def test_omega_uses_extract_count_per_input_block():
+    """每个输入块必须使用自己的 N_extract，不能用已展开子块数索引。"""
+    from pyqcd.tools import set_backend
+    from pyqcd.vertex import create_omega_accelerate
+
+    set_backend('numpy')
+    try:
+        omega = np.asarray(create_omega_accelerate(
+            20, exact=0, N_eigen=[8, 12], N_sum=[4, 6],
+            N_extract=[2, 3], dim=2))
+    except IndexError as exc:
+        raise AssertionError("展开首块后不得越界读取第二块 N_extract") from exc
+
+    assert omega.shape == (10, 10)
+    assert np.isfinite(omega).all()
+
+
+def test_omega_dim2_single_sampled_block_weights():
+    """S=8 抽 n=4 时，二阶同块权重必须是逆包含概率。"""
+    from pyqcd.tools import set_backend
+    from pyqcd.vertex import create_omega_accelerate
+
+    set_backend('numpy')
+    omega = np.asarray(create_omega_accelerate(
+        8, exact=0, N_eigen=[8], N_sum=[4], N_extract=[4],
+        dim=2)).real
+    diagonal = np.diag(omega)
+    off_diagonal = omega[~np.eye(4, dtype=bool)]
+
+    assert np.allclose(diagonal, 2.0, atol=1e-12, rtol=0.0), \
+        f"同索引权重应为 S/n=2，实际 {diagonal}"
+    assert np.allclose(off_diagonal, 14.0 / 3.0,
+                       atol=1e-12, rtol=0.0), \
+        f"异索引权重应为 S(S-1)/(n(n-1))=14/3，实际 {off_diagonal}"
+
+
+def test_omega_dim3_single_sampled_block_weights():
+    """三阶权重必须按三个索引中不同取值的数量修正包含概率。"""
+    from pyqcd.tools import set_backend
+    from pyqcd.vertex import create_omega_accelerate
+
+    set_backend('numpy')
+    omega = np.asarray(create_omega_accelerate(
+        8, exact=0, N_eigen=[8], N_sum=[4], N_extract=[4],
+        dim=3)).real
+
+    assert abs(omega[0, 0, 0] - 2.0) < 1e-12
+    assert abs(omega[0, 0, 1] - 14.0 / 3.0) < 1e-12
+    assert abs(omega[0, 1, 2] - 14.0) < 1e-12
+
+
+def test_omega_rejects_invalid_partition_contract():
+    """分区列表必须等长且为正整数，抽样数不得超过物理空间。"""
+    from pyqcd.tools import set_backend
+    from pyqcd.vertex import create_omega_accelerate
+
+    set_backend('numpy')
+    invalid_cases = (
+        ('列表长度不一致', dict(
+            n_voxel=8, N_eigen=[4, 4], N_sum=[2],
+            N_extract=[1, 1])),
+        ('N_eigen 非整数', dict(
+            n_voxel=4, N_eigen=[4.0], N_sum=[2], N_extract=[1])),
+        ('N_eigen 非正', dict(
+            n_voxel=4, N_eigen=[0], N_sum=[1], N_extract=[1])),
+        ('N_sum 非正', dict(
+            n_voxel=4, N_eigen=[4], N_sum=[0], N_extract=[1])),
+        ('N_extract 非正', dict(
+            n_voxel=4, N_eigen=[4], N_sum=[2], N_extract=[0])),
+        ('块内超采样', dict(
+            n_voxel=2, N_eigen=[2], N_sum=[4], N_extract=[2])),
+        ('噪声超出剩余空间', dict(
+            n_voxel=4, N_eigen=[2], N_sum=[1],
+            N_extract=[1], noise=3)),
+        ('物理块总量超出体素空间', dict(
+            n_voxel=4, exact=1, N_eigen=[4], N_sum=[2],
+            N_extract=[1])),
+        ('dim 不受支持', dict(n_voxel=2, exact=2, dim=1)),
+    )
+    for label, kwargs in invalid_cases:
+        try:
+            create_omega_accelerate(**kwargs)
+        except ValueError:
+            continue
+        raise AssertionError(f'{label} 必须显式拒绝: {kwargs}')
+
+
+def test_omega_n1_dim3_matches_hand_inclusion_probabilities():
+    """n=1 高阶重复指标只需一阶包含概率 S/n，不得计算 0/0。"""
+    from pyqcd.tools import set_backend
+    from pyqcd.vertex import create_omega_accelerate
+
+    set_backend('numpy')
+    # 三分区依次为 exact(S=n=1)、block(S=2,n=1)、noise(S=3,n=1)。
+    omega = np.asarray(create_omega_accelerate(
+        6, exact=1, N_eigen=[2], N_sum=[1], N_extract=[1],
+        noise=1, dim=3)).real
+    selected = np.array([
+        omega[0, 0, 0],  # 1
+        omega[1, 1, 1],  # 2
+        omega[2, 2, 2],  # 3
+        omega[0, 1, 2],  # 1*2*3
+        omega[1, 1, 2],  # 2*3（block 重复仍只抽中一个不同指标）
+        omega[1, 2, 2],  # 2*3（noise 重复同理）
+    ])
+    expected = np.array([1.0, 2.0, 3.0, 6.0, 6.0, 6.0])
+
+    assert np.isfinite(omega).all(), 'n=1 的可实现重复指标权重必须有限'
+    error = float(np.max(np.abs(selected - expected)))
+    assert error < 1e-12, \
+        f'n=1 三阶逆包含概率错误: max|d|={error:.3e}'
+
+
+def test_omega_normal_uses_symmetric_row_sum_balancing():
+    """normal=True 必须以 DΩD 同时保持对称与每行和 Nev。"""
+    from pyqcd.tools import set_backend
+    from pyqcd.vertex import create_omega_accelerate
+
+    set_backend('numpy')
+    # 原始 Ω=[[1,2],[2,2]]。DΩD 的行和为 2 时可手解如下。
+    diagonal = 2.0 * (np.sqrt(2.0) - 1.0)
+    off_diagonal = 4.0 - 2.0 * np.sqrt(2.0)
+    expected = np.array([[diagonal, off_diagonal],
+                         [off_diagonal, diagonal]])
+    omega = np.asarray(create_omega_accelerate(
+        3, exact=1, noise=1, normal=True, dim=2)).real
+
+    assert np.isfinite(omega).all() and np.all(omega > 0.0)
+    error = float(np.max(np.abs(omega - expected)))
+    row_error = float(np.max(np.abs(omega.sum(axis=1) - 2.0)))
+    symmetry_error = float(np.max(np.abs(omega - omega.T)))
+    assert error < 1e-12, f'DΩD 手算矩阵错误: max|d|={error:.3e}'
+    assert row_error < 1e-12, f'归一化后行和不统一: max|d|={row_error:.3e}'
+    assert symmetry_error < 1e-12, \
+        f'归一化后矩阵不对称: max|d|={symmetry_error:.3e}'
+
+
+def test_omega_exact0_multiblock_dim2_hand_weights():
+    """exact=0 多子块的二阶同块/跨块权重须由分区包含概率决定。"""
+    from pyqcd.tools import set_backend
+    from pyqcd.vertex import create_omega_accelerate
+
+    set_backend('numpy')
+    # 展开为三个相同的 (S=4,n=2) 子块，索引范围 0:2、2:4、4:6。
+    omega = np.asarray(create_omega_accelerate(
+        12, exact=0, N_eigen=[4, 8], N_sum=[2, 4],
+        N_extract=[2, 2], dim=2)).real
+    selected = np.array([
+        omega[0, 0],  # S/n = 2
+        omega[0, 1],  # S(S-1)/(n(n-1)) = 6
+        omega[0, 2],  # (S/n)^2 = 4
+        omega[2, 4],  # 两个不同子块，仍为 4
+    ])
+    expected = np.array([2.0, 6.0, 4.0, 4.0])
+    error = float(np.max(np.abs(selected - expected)))
+    assert error < 1e-12, \
+        f'exact=0 多块二阶权重错误: max|d|={error:.3e}'
+
+
+def test_omega_exact0_multiblock_dim3_hand_weights():
+    """exact=0 多子块三阶权重须区分同指标、同分区和跨分区。"""
+    from pyqcd.tools import set_backend
+    from pyqcd.vertex import create_omega_accelerate
+
+    set_backend('numpy')
+    omega = np.asarray(create_omega_accelerate(
+        12, exact=0, N_eigen=[4, 8], N_sum=[2, 4],
+        N_extract=[2, 2], dim=3)).real
+    selected = np.array([
+        omega[0, 0, 0],  # 2
+        omega[0, 0, 1],  # 同分区两个不同指标：6
+        omega[0, 0, 2],  # 同指标权重 2 * 跨块权重 2 = 4
+        omega[0, 1, 2],  # 同分区异指标 6 * 跨块 2 = 12
+        omega[0, 2, 4],  # 三个子块各 S/n=2：8
+    ])
+    expected = np.array([2.0, 6.0, 4.0, 12.0, 8.0])
+    error = float(np.max(np.abs(selected - expected)))
+    assert error < 1e-12, \
+        f'exact=0 多块三阶权重错误: max|d|={error:.3e}'
 
 
 def test_round2_integrations():
@@ -968,6 +1918,8 @@ def test_quasi_pdf_gluon_sin_transform():
     取 h(z)=z·e^{−αz}（α=10 GeV⁻¹，衰减长 0.1 GeV⁻¹ ≪ z_max），
     ∫₀^∞ z e^{−αz} sin(βz) dz = 2αβ/(α²+β²)²。
     """
+    import warnings
+
     from pyqcd.renorm import quasi_pdf_gluon
     z_fm = np.linspace(0.0005, 0.60, 800)
     pz = 2.0
@@ -975,7 +1927,9 @@ def test_quasi_pdf_gluon_sin_transform():
     alpha = 10.0                       # 衰减率 GeV^-1
     z_gev = z_fm / 0.197327
     h = z_gev * np.exp(-alpha * z_gev)
-    _, g = quasi_pdf_gluon(h, z_fm, pz, x_grid=xs)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        _, g = quasi_pdf_gluon(h, z_fm, pz, x_grid=xs)
     assert g[0] == 0.0                 # x→0 保护置 0（原版行为）
     for i, x in enumerate(xs[1:], start=1):
         beta = x * pz
@@ -1078,10 +2032,15 @@ def test_extrapolate_boot_fit():
     nx, nrep = 3, 20
     xx = np.linspace(0.1, 0.45, nx)
     true_par = [0.5, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # 四自由参数路径为 (xg0, fx, dx, kx)。m_pi 固定时 kx 列与
+    # 截距列共线，只能得到 rank=3；使用独立的多 m_pi 夹具，确保该回归
+    # 真正检验可辨识的连续极限，而不是依赖最小范数伪解。
+    mpi_values = iter((0.24, 0.31, 0.29, 0.37,
+                       0.35, 0.26, 0.41, 0.33))
     ens = []
     for a_, L in ((0.53, 24), (0.40, 32), (0.32, 48), (0.27, 64)):
-        ens.append((a_, 6, 0.30, L))
-        ens.append((a_, 8, 0.30, L))
+        ens.append((a_, 6, next(mpi_values), L))
+        ens.append((a_, 8, next(mpi_values), L))
     rows = []
     for a_, pz_, mpi, L in ens:
         val = float(hR_form((a_, pz_, mpi, L), true_par))
@@ -1247,3 +2206,368 @@ def test_cmp_primitives():
     res = []
     ok = cmp_one("x", a, b, 1e-6, res)
     assert ok and res[0]['pass'] and res[0]['shape_a'] == [3]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 独立契约模块的中心入口（惰性导入，避免测试夹具循环依赖）
+# ═══════════════════════════════════════════════════════════════════
+
+def _run_unittest_contract(test_case):
+    """运行一个 unittest.TestCase，并把失败稳定转换为中心入口断言。"""
+    import unittest
+
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(test_case)
+    result = unittest.TestResult()
+    suite.run(result)
+    if not result.wasSuccessful():
+        details = [f"{test}: {traceback_text}"
+                   for test, traceback_text in result.failures + result.errors]
+        raise AssertionError("\n".join(details))
+
+
+def test_flow_action_density_weak_field_normalization():
+    """弱 Abelian T3/T8 oracle 锁定 E 的标准归一化与 SU(3) 去迹。"""
+    from ._flow_normalization import FlowActionDensityNormalizationTest
+
+    _run_unittest_contract(FlowActionDensityNormalizationTest)
+
+
+def test_gauge_observables_contracts():
+    """Wilson/Polyakov/Clover/拓扑量的路径、SU(3) 与后端契约。"""
+    from ._gauge_observables_contract import GaugeObservablesContract
+
+    _run_unittest_contract(GaugeObservablesContract)
+
+
+def test_vertex_product_binary_contracts():
+    """VdV/VVV 端序、尺寸、截断与 memmap reader 契约。"""
+    from ._io_binary_contract import VertexProductBinaryContractTests
+
+    _run_unittest_contract(VertexProductBinaryContractTests)
+
+
+def test_momentum_smearing_contracts():
+    """蒸馏本征矢 Fourier 相位的布局、精度、后端与不变量契约。"""
+    from ._momentum_smearing_contract import MomentumSmearingContract
+
+    _run_unittest_contract(MomentumSmearingContract)
+
+
+def test_eigcompress_dtype_contracts():
+    """本征模压缩随机路径须保持 complex64/128 dtype 与 seed 语义。"""
+    from ._eigcompress_dtype_contract import EigcompressDtypeContract
+
+    _run_unittest_contract(EigcompressDtypeContract)
+
+
+def test_staple_operator_public_contracts():
+    """公开 staple_operator 的路径、端点、规范性与局部极限。"""
+    from ._operator_staple_contract import StapleOperatorContract
+
+    _run_unittest_contract(StapleOperatorContract)
+
+
+def test_tmd_su3_geometry_contracts():
+    """TMD bilocal 必须逐点去迹、方向协变并严格校验空间标签。"""
+    from ._tmd_su3_geometry_contract import TmdSu3GeometryContract
+
+    _run_unittest_contract(TmdSu3GeometryContract)
+
+
+def test_correlated_fit_identifiability_guards():
+    """复协方差、统计边界及 ratio/P2 可辨识性统一契约。"""
+    from ._fit_identifiability_contract import (
+        BuiltinAnalyticJacobianContractTests, CovarianceRankContractTests,
+        FiniteInputContractTests, FitAdapterContractTests,
+        IdentifiableFitRegressionTests, LowSampleFitContractTests,
+    )
+    from ._fit_status_propagation_contract import (
+        DisconnectedStatusPropagationContractTests,
+        EnergyStatusPropagationContractTests,
+        FHStatusPropagationContractTests,
+        FitStatusClassifierContractTests,
+        RatioStatusPropagationContractTests,
+        Test9ExtendedStatusPropagationContractTests,
+        TmdStatusPropagationContractTests,
+    )
+    from ._statistics_edge_contract import (
+        CovarianceRoundoffContractTests, HermitianStatisticsContractTests,
+        FitWindowValidationTests, PlateauContractTests,
+        SingleConfigurationContractTests,
+    )
+
+    _run_unittest_contract(CovarianceRankContractTests)
+    _run_unittest_contract(FitAdapterContractTests)
+    _run_unittest_contract(FiniteInputContractTests)
+    _run_unittest_contract(BuiltinAnalyticJacobianContractTests)
+    _run_unittest_contract(LowSampleFitContractTests)
+    _run_unittest_contract(IdentifiableFitRegressionTests)
+    _run_unittest_contract(FitStatusClassifierContractTests)
+    _run_unittest_contract(RatioStatusPropagationContractTests)
+    _run_unittest_contract(FHStatusPropagationContractTests)
+    _run_unittest_contract(EnergyStatusPropagationContractTests)
+    _run_unittest_contract(DisconnectedStatusPropagationContractTests)
+    _run_unittest_contract(TmdStatusPropagationContractTests)
+    _run_unittest_contract(Test9ExtendedStatusPropagationContractTests)
+    _run_unittest_contract(HermitianStatisticsContractTests)
+    _run_unittest_contract(SingleConfigurationContractTests)
+    _run_unittest_contract(CovarianceRoundoffContractTests)
+    _run_unittest_contract(PlateauContractTests)
+    _run_unittest_contract(FitWindowValidationTests)
+
+
+def test_bootstrap_resampling_contracts():
+    """任意样本轴、分块 RNG、dtype 和 NumPy/CuPy/Torch 契约。"""
+    from ._bootstrap_resampling_contract import (
+        BootstrapResamplingContractTests,
+    )
+
+    _run_unittest_contract(BootstrapResamplingContractTests)
+
+
+def test_field_strength_cache_contracts():
+    """OPE Clover 反对称、缓存所有权、复用和失败清理契约。"""
+    import unittest
+    from . import _field_strength_cache_contract as contract
+
+    tests = [
+        getattr(contract, name)
+        for name in sorted(dir(contract))
+        if name.startswith("test_") and callable(getattr(contract, name))
+    ]
+    if not tests:
+        raise AssertionError("field-strength cache contract has no tests")
+    for test in tests:
+        try:
+            test()
+        except unittest.SkipTest:
+            # 可选后端缺失不应阻断其余 CPU/所有权契约。
+            continue
+
+
+def test_ope_channel_contracts():
+    """直线 OPE 通道身份、legacy 数值、方向、元数据与规范性契约。"""
+    from ._ope_channel_contract import OPEChannelContractTests
+
+    _run_unittest_contract(OPEChannelContractTests)
+
+
+def test_quasi_tmd_fourier_contracts():
+    """准 TMD 的 fm 截断、积分收敛及实/复 dtype 契约。"""
+    from ._quasi_tmd_fourier_contract import QuasiTmdFourierContract
+
+    _run_unittest_contract(QuasiTmdFourierContract)
+
+
+def test_continuum_extrapolation_identifiability_contracts():
+    """四/八参数连续外推必须在拟合前通过设计秩与 dof 门。"""
+    from ._extrapolate_identifiability_contract import (
+        ExtrapolateIdentifiabilityContractTests,
+    )
+
+    _run_unittest_contract(ExtrapolateIdentifiabilityContractTests)
+
+
+def test_fh_adaptive_window_contracts():
+    """FH 窗口须滑动至 chi2 达标或显式报告耗尽。"""
+    from ._fh_window_contract import FHAdaptiveWindowContractTests
+
+    _run_unittest_contract(FHAdaptiveWindowContractTests)
+
+
+def test_matching_grid_contracts():
+    """当前 NLO 离散匹配须拒绝零节点并保持弱耦合恒等极限。"""
+    from ._matching_grid_contract import MatchingGridContract
+
+    _run_unittest_contract(MatchingGridContract)
+
+
+def test_dispersion_identifiability_contracts():
+    """三参数色散拟合须满秩；dof=0 可估计但不可检验拟合优度。"""
+    from ._dispersion_identifiability_contract import (
+        DispersionIdentifiabilityContractTests,
+    )
+
+    _run_unittest_contract(DispersionIdentifiabilityContractTests)
+
+
+def test_step_tmd_single_flow_contract():
+    """step_tmd 单次流化及 TMD OPE regulator 缓存契约。"""
+    from ._tmd_runner_contract import (
+        test_step_tmd_reuses_one_flowed_gauge,
+        test_tmd_ope_cache_distinguishes_fixed_staple_length,
+    )
+
+    test_step_tmd_reuses_one_flowed_gauge()
+    test_tmd_ope_cache_distinguishes_fixed_staple_length()
+
+
+def test_sftx_flow_time_units_contracts():
+    """SFTX 必须显式区分无量纲 tau 与物理 GeV^-2 流时间。"""
+    from ._sftx_units_contract import SftxUnitsContract
+
+    _run_unittest_contract(SftxUnitsContract)
+
+
+def test_tmd9_hybrid_renormalization_contracts():
+    """test9 长距分支必须显式消费 Z_R 并匹配已验证混合公式。"""
+    from ._tmd9_hybrid_contract import Tmd9HybridContract
+
+    _run_unittest_contract(Tmd9HybridContract)
+
+
+def test_pipeline_persistence_contracts():
+    """目录副作用、preflight/env、原子保存、2pt 缓存和强制重算契约。"""
+    from ._pipeline_persistence_contract import TESTS
+
+    for test in TESTS:
+        test()
+
+
+def test_pipeline_runtime_failure_contracts():
+    """异常传播/清理、HDF5 恢复、顶点缓存键与阶段 ETA 的运行时契约。"""
+    from ._pipeline_runtime_contract import (
+        test_timer_preserves_primary_failure_when_cupy_post_sync_fails,
+        test_timer_propagates_post_sync_failure_after_success,
+        test_timer_preserves_primary_failure_when_torch_cuda_post_sync_fails,
+        test_timer_propagates_torch_cuda_post_sync_failure_after_success,
+        test_timer_does_not_synchronize_torch_cpu,
+        test_4pt_dynamic_failure_is_raised_before_output_is_saved,
+        test_meta_task_cpu_success_cleans_without_importing_torch,
+        test_meta_task_failure_propagates_after_cleanup,
+        test_parallel_setup_applies_backend_before_vertex_compute,
+        test_mpi_launcher_does_not_silently_fallback_without_mpi4py,
+        test_serial_pipeline_base_exception_cleans_and_propagates,
+        test_vertex_cache_reads_canonical_h5_without_recompute,
+        test_vertex_cache_rejects_wrong_shape_dtype_finite_and_schema,
+        test_vertex_cache_key_distinguishes_vdv_and_vvv_momenta,
+        test_plot_recovery_reads_canonical_h5_analysis,
+        test_report_reads_canonical_h5_analysis_and_correlators,
+        test_report_real_xelatex_template_has_no_hard_gate_diagnostics,
+        test_build_tex_missing_or_empty_plateau_uses_explanatory_placeholder,
+        test_report_first_xelatex_failure_raises_even_with_stale_pdf,
+        test_report_second_xelatex_failure_raises_after_first_success,
+        test_report_successful_passes_require_a_new_pdf,
+        test_report_rejects_latex_diagnostics_from_each_pass_source,
+        test_runner_records_stage_eta_after_each_configuration,
+    )
+
+    test_timer_preserves_primary_failure_when_cupy_post_sync_fails()
+    test_timer_propagates_post_sync_failure_after_success()
+    test_timer_preserves_primary_failure_when_torch_cuda_post_sync_fails()
+    test_timer_propagates_torch_cuda_post_sync_failure_after_success()
+    test_timer_does_not_synchronize_torch_cpu()
+    test_4pt_dynamic_failure_is_raised_before_output_is_saved()
+    test_meta_task_cpu_success_cleans_without_importing_torch()
+    test_meta_task_failure_propagates_after_cleanup()
+    test_parallel_setup_applies_backend_before_vertex_compute()
+    test_mpi_launcher_does_not_silently_fallback_without_mpi4py()
+    test_serial_pipeline_base_exception_cleans_and_propagates()
+    test_vertex_cache_reads_canonical_h5_without_recompute()
+    test_vertex_cache_rejects_wrong_shape_dtype_finite_and_schema()
+    test_vertex_cache_key_distinguishes_vdv_and_vvv_momenta()
+    test_plot_recovery_reads_canonical_h5_analysis()
+    test_report_reads_canonical_h5_analysis_and_correlators()
+    test_report_real_xelatex_template_has_no_hard_gate_diagnostics()
+    test_build_tex_missing_or_empty_plateau_uses_explanatory_placeholder()
+    test_report_first_xelatex_failure_raises_even_with_stale_pdf()
+    test_report_second_xelatex_failure_raises_after_first_success()
+    test_report_successful_passes_require_a_new_pdf()
+    test_report_rejects_latex_diagnostics_from_each_pass_source()
+    test_runner_records_stage_eta_after_each_configuration()
+
+
+def test_stout_torch_cuda_device_contract():
+    """Stout 的 Torch CUDA 计算必须全程同设备并匹配 NumPy。"""
+    from ._stout_backend_contract import (
+        test_stout_torch_cuda_stays_on_device_and_matches_numpy,
+    )
+
+    test_stout_torch_cuda_stays_on_device_and_matches_numpy()
+
+
+def test_pjn_3pt_explicit_wick_oracle():
+    """PJN 3pt 与四张手写 Wick 图逐式一致。"""
+    from ._baryon_explicit_oracles import (
+        test_pjn_3pt_matches_four_explicit_wick_contractions,
+    )
+
+    metrics = test_pjn_3pt_matches_four_explicit_wick_contractions()
+    assert metrics['max_rel_error'] < 2e-12
+
+
+def test_mpi_run_directory_contracts():
+    """串行/MPI 默认目录须跨作业唯一、作业内一致，显式路径不变。"""
+    from ._mpi_run_dir_contract import (
+        test_default_run_dirs_are_unique_across_independent_jobs_in_same_second,
+        test_default_run_tag_rejects_path_components_before_writing,
+        test_explicit_run_dir_is_broadcast_unchanged,
+        test_mpi_default_run_dir_uses_dynamic_pipeline_output_root,
+        test_rank_zero_default_run_dir_is_broadcast_within_one_job,
+        test_runner_default_run_dirs_are_unique_within_same_second,
+        test_steps_default_run_dirs_are_unique_within_same_second,
+    )
+
+    test_default_run_dirs_are_unique_across_independent_jobs_in_same_second()
+    test_default_run_tag_rejects_path_components_before_writing()
+    test_rank_zero_default_run_dir_is_broadcast_within_one_job()
+    test_mpi_default_run_dir_uses_dynamic_pipeline_output_root()
+    test_explicit_run_dir_is_broadcast_unchanged()
+    test_runner_default_run_dirs_are_unique_within_same_second()
+    test_steps_default_run_dirs_are_unique_within_same_second()
+
+
+def test_parallel_mpi_reliability_contracts():
+    """MPI preflight、env、2pt 续跑和 best-effort 清理契约。"""
+    from ._mpi_reliability_contract import (
+        test_cli_recompute_2pt_flag_is_forwarded,
+        test_collective_preflight_rejects_plan_size_mismatch,
+        test_collective_preflight_rejects_tmd_and_unknown_steps,
+        test_env_step_reaches_rank_zero_report_with_serial_fields,
+        test_mpi_2pt_cache_skips_unless_recompute_is_true,
+        test_parallel_driver_propagates_recompute_2pt_to_meta_tasks,
+        test_run_meta_task_cleanup_is_best_effort_after_success,
+        test_run_meta_task_preserves_primary_baseexception_during_cleanup,
+        test_run_meta_task_preserves_primary_exception_during_cleanup,
+        test_serial_fallback_real_pipeline_recomputes_when_override_is_true,
+        test_serial_fallback_real_pipeline_reuses_cache_when_recompute_is_false,
+        test_serial_fallback_propagates_recompute_override,
+    )
+
+    tests = (
+        test_collective_preflight_rejects_tmd_and_unknown_steps,
+        test_collective_preflight_rejects_plan_size_mismatch,
+        test_env_step_reaches_rank_zero_report_with_serial_fields,
+        test_run_meta_task_preserves_primary_exception_during_cleanup,
+        test_run_meta_task_preserves_primary_baseexception_during_cleanup,
+        test_run_meta_task_cleanup_is_best_effort_after_success,
+        test_mpi_2pt_cache_skips_unless_recompute_is_true,
+        test_parallel_driver_propagates_recompute_2pt_to_meta_tasks,
+        test_serial_fallback_propagates_recompute_override,
+        test_serial_fallback_real_pipeline_reuses_cache_when_recompute_is_false,
+        test_serial_fallback_real_pipeline_recomputes_when_override_is_true,
+        test_cli_recompute_2pt_flag_is_forwarded,
+    )
+    for test in tests:
+        test()
+
+
+def test_parallel_mpi_collective_failure_contracts():
+    """真实双 rank 的目录、初始化、元任务和后处理异常均须同步退出。"""
+    from ._mpi_failure_contract import (
+        test_missing_mpi_prerequisites_raise_skiptest,
+        test_mpi_collective_failure_contracts,
+        test_standalone_main_reports_skip_without_pass,
+    )
+
+    test_missing_mpi_prerequisites_raise_skiptest()
+    test_standalone_main_reports_skip_without_pass()
+    test_mpi_collective_failure_contracts()
+
+
+def test_parallel_mpi_planning_contracts():
+    """MPI 计划、绑定、CLI preflight 与空组态语义契约。"""
+    from ._mpi_planning_contract import TESTS
+
+    for test in TESTS:
+        test()

@@ -13,6 +13,14 @@ xelatex -interaction=nonstopmode <document>.tex
 若项目已有报告构建脚本，优先调用脚本并记录命令；不要为了验证在源目录生成未登记
 的缓存、图片或辅助文件。中文文档不用 `pdflatex` 替代 XeLaTeX。
 
+### 报告管线的运行时硬门
+
+对 `pyqcd/pipeline/_steps.py::step_report`，上述通用验收之外还必须满足：
+
+- 两遍必须是实际 `xelatex` 调用，且每一遍 `returncode == 0`；启动失败或任一遍非零都失败，不能用模拟调用或旧结果替代。
+- 编译前已有的 `physics_report.pdf` 不能单独证明成功。成功要求 PDF 存在且相对编译前文件签名发生变化；签名包含 `mtime_ns`，因此未更新 `mtime` 的 stale PDF 必须失败。
+- 三类诊断在任一遍的捕获 `stdout`、`stderr` 或该遍 `physics_report.log` 中出现，都必须失败；不能只检查最后一份日志。
+
 ## 日志硬闸门
 
 两遍日志都必须逐项确认：

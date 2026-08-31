@@ -35,23 +35,78 @@ $$C_\rho(\vec{p}; t,0) \approx \frac{1}{3}\sum_i\sum_{\vec{x}} e^{-i \vec{p} \cd
 For wall source propagator
 $$C_\rho(\vec{p}; t,0) \approx \frac{1}{3}\sum_i\sum_{\vec{x}} e^{-i \vec{p} \cdot \vec{x}} \text{Tr}[ S_{l,\text{wall}(-\vec{p}_2,0)}^\dagger(\vec{x},t) (\gamma_5 \gamma_i) S_{l,\text{wall}(\vec{p}_1,0)}(\vec{x},t) (\gamma_i \gamma_5) ]$$
 
-**Step 5 — Einsum** (⚠️ call generate_einsum, do NOT write contract by hand):
+**Step 5 — Current PyQCD distillation runtime**:
 
-Call `generate_einsum(type="meson_2pt", quark="u", antiquark="d", gamma="g1")`
-from the Executor. The tool returns a complete code block ("code" key).
+PyQCD does not expose an `Executor.generate_einsum` API, and the point/wall `prop_l`
+formula above must not be passed to the distillation engine without an explicit layout
+adapter.  The supported contraction path uses perambulators plus `VDV` vertices.  This
+self-contained smoke example exercises the current public API and averages the three
+spatial polarizations:
 
-For rho, average over gamma1, gamma2, gamma3:
 ```python
-base_code = ...  # from generate_einsum(type="meson_2pt", ..., gamma="g1")
-# Repeat for g2, g3 and average
-twopt = 0
-gamma_g = gamma.gamma
-for idx in [1, 2, 3]:
-    # Replace gamma_g(1) with gamma_g(idx) in the code
-    code = spec['args'].copy()
-    # (the args already have the gamma expression; replace g1 -> g{idx})
-    twopt += eval(code)
-twopt /= 3
+import numpy as np
+
+from pyqcd.contraction import (
+    GammaRegistry,
+    PeramRegistry,
+    VRegistry,
+    conjugate_operator,
+    dynamic_contraction,
+    seq_peram,
+)
+from pyqcd.lattice import gamma
+from pyqcd.tools import set_backend
+
+set_backend("numpy")
+rng = np.random.default_rng(20260831)
+nev = 2
+
+
+def rand(shape):
+    return rng.normal(size=shape) + 1j * rng.normal(size=shape)
+
+
+# One fixed (tsink,tsrc) pair; production code loads the matching perambulator.
+peram = rand((4, 4, nev, nev))
+perams = PeramRegistry()
+perams.register("light", ("tsink", "tsrc"), peram)
+perams.register("light", ("tsrc", "tsink"), seq_peram(peram))
+
+# Each VDV has one momentum slot M.  Production data must retain its momentum metadata.
+vertices = VRegistry()
+vertices.register("VDV_0", "tsink", rand((1, nev, nev)))
+vertices.register("VDV_0", "tsrc", rand((1, nev, nev)).conj())
+
+gammas = GammaRegistry()
+for i in (1, 2, 3):
+    gammas.register(f"gamma_{i}", gamma(i))
+
+components = []
+for i in (1, 2, 3):
+    sink = ["|", "d^d", f"gamma_{i}", "u", "|"]
+    source = conjugate_operator(sink)
+    assert source[0] == -1.0  # spatial-gamma Dirac conjugation sign
+
+    contraction = dynamic_contraction(
+        [(sink, source)],
+        peram_registry=perams,
+        v_registry=vertices,
+        gamma_registry=gammas,
+        Cpt="2pt",
+        Vindex=["M", "M"],
+        Oindex="M",
+        ignore_dis=False,
+        Projection=False,
+        verbose=False,
+    )
+    component = np.asarray(contraction.calculate_all())
+    assert len(contraction) == 1 and component.shape == (1,)
+    components.append(component)
+
+rho_2pt = np.mean(np.stack(components, axis=0), axis=0)
+assert rho_2pt.shape == (1,) and np.isfinite(rho_2pt).all()
 ```
 
-For wall source propagator, replace `prop_l` with the wall propagator variable in the code.
+The random tensors only verify API wiring.  A physical result requires matched
+perambulator/`VDV` provenance, source/sink times, momentum/Fourier conventions, ensemble
+averaging, and the finite-time spectral analysis defined by `pyqcd-physics-spectrum`.

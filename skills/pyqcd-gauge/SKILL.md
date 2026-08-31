@@ -34,8 +34,8 @@ metadata:
 | 对象 | 必须明确 |
 |---|---|
 | 链接与路径 | 方向轴、前进/回程顺序、格点周期绕回、表示和迹归一化 |
-| 观测量 | `R,T`、平面、起点平均、是否取 `Re Tr`、拓扑定义 |
-| 流/涂抹 | raw 输入、流时间或迭代数、步长、参数、是否需要保留原场 |
+| 观测量 | `R,T`、平面、起点平均、是否取 `Re Tr`、Polyakov 中心复相位、Clover 是否去迹及拓扑定义 |
+| 流/涂抹 | raw 输入、无量纲流时间 $\tau=t/a^2$ 或迭代数、步长、参数、是否需要保留原场 |
 | 输出 | 组态 ID、shape/轴、单位、dtype/backend、HDF5 属性和归约方式 |
 
 量纲检查：Wilson 圈本身无量纲；由 $-\log W/T$ 得到的势仍是格点单位，换成 GeV
@@ -46,8 +46,15 @@ metadata:
 
 1. **选择对象**：确认任务没有传播子；固定路径、平面、参数和归一化。
 2. **读入 raw 场**：初始化 backend/MPI、读规范场、检查 shape 与近似 SU(3) 幺正性；
-   raw 场需要被保留时，任何原地涂抹前先 copy。
-3. **计算局部对象**：逐起点/方向生成路径或 plaquette，保持颜色矩阵直到完成迹；
+   PyQCD 的 HYP/Stout 所有参数路径均返回独立结果且不原地改写输入，包括零参数退化
+   路径；无需为防止 smear 输出回写 raw 而预先 copy。若转入 PyQUDA 或其他可能原地
+   改写的生产 API，按其 API 契约显式 copy。
+3. **计算局部对象**：优先使用已验证的 `pyqcd.gauge` 公开入口；逐起点/方向
+   生成路径或 plaquette，保持颜色矩阵直到完成迹；标准纯规范 Clover 与拓扑量
+   默认 `traceless=True`，只有复现历史 OPE 离散量时才显式选 `False`。
+   公开观测量只接受 `float32/float64/complex64/complex128`；已存在的 Torch Tensor
+   以其输入 device/dtype 为准，不得被全局默认 device 搬运。逐入口的实/复输出映射见
+   [`observables.md`](references/observables.md)。
    流和涂抹分别记录中间场，不把 stout 迭代当作 Wilson flow 时间。
 4. **全局归约**：按局部布局调用已核实的 `gatherLattice`，上下文外完成归约；root
    负责写文件，保存路径和参数元数据。
@@ -59,6 +66,8 @@ metadata:
 - 路径乘积按从左到右的物理行走顺序书写；退回段使用明确的逆链接，不能只翻转
   数组顺序。
 - `Re Tr/N_c`、全体积平均和单个起点值是不同估计量，输出中必须区分。
+- Polyakov 圈一般为复数；不得默认取实部而丢弃 SU(3) 中心相位。拓扑总荷
+  `sum_x q(x)` 与体积平均 `mean_x q(x)` 也必须用不同入口。
 - `E(τ)` 与 `τ²E(τ)` 的单调性取决于定义；先写公式和离散化，再判断趋势。
 - 流化只提供 UV 平滑，不自动等价于 TMD 的 rapidity subtraction 或完整重整化。
 
@@ -69,11 +78,12 @@ metadata:
 | `gauge.loop` 参数数量报错 | 按当前 API 检查外层路径组；需要时以零权重补齐，但不伪造观测量 |
 | 把 GPU 链接当标量 | 先转 host、恢复矩阵 shape，再做颜色迹 |
 | MPI 归约形状不符 | 记录本地 parity/tzyx 布局，按 `gatherLattice` 契约传维度 |
-| 涂抹后无法复核原场 | raw copy 后再原地 smear，并为两者写不同标签 |
+| 涂抹后无法复核原场 | HYP/Stout 输出与输入独立；分别持有并标记 raw/smeared，不要误称 API 原地修改 |
 | 流能量趋势“错误” | 核对 `E`、`τ²E`、流步长和定义，不能凭经验翻符号 |
 
 ## 交接
 
 输出规范对象的公式、路径/离散参数、shape、归约证据和状态。TMD 场强与 staple 几何
-交给 `pyqcd-tmd-algorithm`；批量和文件格式交给 `pyqcd-pipeline` / `pyqcd-infra`；
+的阶段导航交给 `pyqcd-tmd-chain`，具体算符/缓存/物理验收交给
+`pyqcd-tmd-algorithm`；批量和文件格式交给 `pyqcd-pipeline` / `pyqcd-infra`；
 数据统计交给 `pyqcd-statistics`，报告交给 `pyqcd-docs`。

@@ -32,7 +32,7 @@ __all__ = [
     "zeros_like", "ones_like", "empty_like", "eye", "arange", "linspace",
     "einsum", "roll", "transpose", "swapaxes", "meshgrid", "stack",
     "concatenate", "take", "broadcast_to", "flip", "expand_dims",
-    "squeeze", "reshape", "matmul", "dot", "vdot", "diag", "trace",
+    "squeeze", "reshape", "matmul", "dot", "vdot", "diag", "tril", "trace",
     "abs", "real", "imag", "conj", "exp", "sqrt", "log", "where",
     "isfinite", "allclose", "amax", "amin", "max", "min", "sum", "mean",
     "std", "var", "argmax", "argmin", "asnumpy", "astype", "pi",
@@ -486,6 +486,18 @@ def vdot(x, y):
 @_autoconv
 def diag(x, k=0):
     return torch.diag(x, diagonal=k)
+
+
+@_autoconv
+def tril(x, k=0, diagonal=None):
+    """Return the lower triangle without changing dtype or device.
+
+    ``k`` follows NumPy's name and ``diagonal`` is accepted as the matching
+    PyTorch spelling.
+    """
+    if diagonal is not None:
+        k = diagonal
+    return torch.tril(x, diagonal=k)
 
 
 @_autoconv

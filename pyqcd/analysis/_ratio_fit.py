@@ -183,17 +183,78 @@ def fit_constant_window(c0_zt, kind='boot', seed=0):
         c0_zt: (n_tsep, n_sample) 窗口内比值数据（逐重采样样本）。
         kind: 'boot'|'jack'（covariance_matrix_inv 语义）。
     Returns:
-        dict(c0, c0_std(逐样本散布), chi2, chi2_nocov, n_data)。
+        dict(c0, c0_std(逐样本散布), chi2, chi2_nocov, c0_samples,
+        n_data, n_sample, fit_status, fit_reason, sample_rank,
+        effective_rank)。
     """
-    d = np.atleast_2d(np.asarray(c0_zt, dtype=float))
-    if d.shape[0] > d.shape[1]:          # 允许 (n_sample, n_tsep) 转置输入
-        if np.ndim(c0_zt) == 2 and d.shape[1] >= 2:
-            d = d.T
-    n = d.shape[0]
-    c_inv = covariance_matrix_inv(d, resam_type='boot' if kind == 'boot'
-                                  else 'jack')
+    d = np.asarray(c0_zt, dtype=float)
+    if d.ndim != 2:
+        raise ValueError("c0_zt 必须为 (n_tsep, n_sample) 二维数组")
+    if d.shape[0] < 2 or d.shape[1] < 2:
+        raise ValueError("常数拟合至少需要 2 个 t_sep 和 2 个样本")
+    if not np.isfinite(d).all():
+        raise ValueError("c0_zt 必须全部有限")
+
+    n, n_sample = d.shape
+    resam_type = 'boot' if kind == 'boot' else 'jack'
+
+    def _failure(reason, sample_rank, effective_rank):
+        return {
+            'c0': np.nan,
+            'c0_std': np.nan,
+            'chi2': np.nan,
+            'chi2_nocov': np.nan,
+            'c0_samples': np.full(n_sample, np.nan),
+            'n_data': int(n),
+            'n_sample': int(n_sample),
+            'fit_status': 'statistically_unidentifiable',
+            'fit_reason': str(reason),
+            'sample_rank': int(sample_rank),
+            'effective_rank': int(effective_rank),
+        }
+
+    # The sample covariance is formed before attempting the inverse so that a
+    # singular sample axis is reported as a statistical failure, rather than
+    # leaking ``LinAlgError`` or being silently replaced by a pseudoinverse.
+    centered = d - d.mean(axis=1, keepdims=True)
+    covariance = centered @ centered.T / n_sample
+    if resam_type == 'jack':
+        covariance *= n_sample - 1
+
+    try:
+        from ._fitter import covariance_effective_rank, covariance_sample_rank
+        sample_rank = int(covariance_sample_rank(covariance))
+        effective_rank = int(covariance_effective_rank(covariance, None))
+    except (np.linalg.LinAlgError, ValueError) as error:
+        return _failure(
+            f"sample covariance rank could not be established: {error}",
+            0, 0)
+
+    if sample_rank < n or effective_rank < n:
+        return _failure(
+            f"sample covariance rank={sample_rank}, effective rank="
+            f"{effective_rank}; full rank {n} is required for the constant "
+            "covariance inverse",
+            sample_rank, effective_rank)
+
+    try:
+        c_inv = covariance_matrix_inv(d, resam_type=resam_type)
+    except np.linalg.LinAlgError as error:
+        return _failure(
+            f"constant covariance inverse is unavailable: {error}",
+            sample_rank, effective_rank)
+    if not np.isfinite(c_inv).all():
+        return _failure(
+            "constant covariance inverse contains non-finite values",
+            sample_rank, effective_rank)
+
     ones = np.ones(n)
     denom = ones @ c_inv @ ones
+    if not np.isfinite(denom) or denom == 0.0:
+        return _failure(
+            "constant covariance inverse has an invalid constant-model "
+            "normalization",
+            sample_rank, effective_rank)
     c0 = (ones @ c_inv @ d.mean(axis=1)) / denom
     r = d.mean(axis=1) - c0
     chi2 = float(r @ c_inv @ r) / max(n - 1, 1)
@@ -203,9 +264,17 @@ def fit_constant_window(c0_zt, kind='boot', seed=0):
     per = c_inv @ d                       # (n, nsam)
     num = ones @ per                      # (nsam,)
     c0_samples = num / denom
+    values = (c0, chi2, chi2_nocov, c0_samples)
+    if not all(np.isfinite(value).all() for value in values):
+        return _failure(
+            "constant covariance fit produced non-finite values",
+            sample_rank, effective_rank)
     return {'c0': float(c0), 'c0_std': float(np.std(c0_samples)),
             'chi2': chi2, 'chi2_nocov': chi2_nocov,
-            'c0_samples': c0_samples, 'n_data': int(n)}
+            'c0_samples': c0_samples, 'n_data': int(n),
+            'n_sample': int(n_sample), 'fit_status': 'identifiable',
+            'fit_reason': 'identifiable', 'sample_rank': sample_rank,
+            'effective_rank': effective_rank}
 
 
 def fh_adaptive_windows(delta, t_sep_vals, t_do0, t_up0, chi2_limit=1.5,
@@ -213,58 +282,114 @@ def fh_adaptive_windows(delta, t_sep_vals, t_do0, t_up0, chi2_limit=1.5,
                         verbose=False, logger=print):
     """χ² 上限驱动的逐 z 自适应 t_sep 窗口滑动（c0_vs_z_FeynmenHellman 语义）。
 
-    每 z 从上一 z 收敛窗起步：χ² 超限则右移（+1，下界保护 t_floor，
-    对应原版 tis≥nr·2 的约束）；未超限则尝试左移一步收紧（仍超限即回退）。
+    每 z 从上一 z 收敛窗起步：窗口宽度取初始窗包含的 t_sep 点数，χ² 超限则
+    按严格递增的真实 t_sep 索引右移；未超限则按索引尝试左移一步收紧
+    （下界保护 t_floor，仍超限即回退）。
     小 z（< z_direct=6）直接沿用初始窗（原版约定：z≤5 不滑窗）。
 
     Args:
         delta: (nz, n_tsep, n_sample) 比值数据。
-        t_sep_vals: (n_tsep,) 真实 t_sep 值（与第二维对应）。
+        t_sep_vals: (n_tsep,) 严格递增且无重复的真实 t_sep 值
+            （与第二维逐项对应）。
         t_do0/t_up0: 初始窗口 [下, 上]（含端点，按 t_sep_vals 取值）。
         chi2_limit: 右移触发的 χ² 上限。
         t_floor: 窗口下界（None 时取 min(t_sep_vals)）。
     Returns:
-        records: [{'z', 't_do', 't_up', 'fit'(fit_constant_window dict)}]
+        records: [{'z', 't_do', 't_up', 'fit'(fit_constant_window dict),
+                  'status'('chi2_accepted'|'chi2_exceeded'|fit status),
+                  'fit_status', 'fit_reason'}]
     """
     delta = np.asarray(delta, dtype=float)
     t_vals = np.asarray(t_sep_vals, dtype=int)
+    if delta.ndim != 3:
+        raise ValueError("delta 必须为 (nz, n_tsep, n_sample) 三维数组")
+    if t_vals.ndim != 1 or np.any(np.diff(t_vals) <= 0):
+        raise ValueError("t_sep_vals must be one-dimensional and strictly increasing")
+    if delta.shape[1] != t_vals.size:
+        raise ValueError(
+            "delta 的 t_sep 轴必须与 t_sep_vals 长度一致")
+    if not np.isfinite(delta).all():
+        raise ValueError("delta 必须全部有限")
     t_floor = int(t_floor) if t_floor is not None else int(t_vals.min())
     z_total = delta.shape[0] if z_max is None else min(z_max,
                                                        delta.shape[0])
     records = []
-    last_do, last_up = int(t_do0), int(t_up0)
+    initial = np.flatnonzero((t_vals >= t_do0) & (t_vals <= t_up0))
+    if initial.size < 2:
+        raise ValueError(
+            f"初始窗口 [{t_do0},{t_up0}] 内不足 2 个 t_sep")
+    window_size = int(initial.size)
+    last_start = int(initial[0])
 
-    def _fit(z, do, up):
-        mask = (t_vals >= do) & (t_vals <= up)
-        if mask.sum() < 2:
-            raise ValueError(f"z={z}: 窗口 [{do},{up}] 内不足 2 个 t_sep")
-        return fit_constant_window(delta[z][mask], kind=kind, seed=seed)
+    def _bounds(start):
+        return (int(t_vals[start]),
+                int(t_vals[start + window_size - 1]))
+
+    def _fit(z, start):
+        return fit_constant_window(
+            delta[z, start:start + window_size], kind=kind, seed=seed)
+
+    def _fit_is_usable(fit):
+        return (fit.get('fit_status') in ('identifiable', 'prior_constrained')
+                and np.isfinite(fit.get('chi2', np.nan)))
 
     for z in range(z_total):
-        do, up = last_do, last_up
-        fit = _fit(z, do, up)
+        start = last_start
+        do, up = _bounds(start)
+        fit = _fit(z, start)
+        fit_status = str(fit.get('fit_status', 'unavailable'))
+        if not _fit_is_usable(fit):
+            status = fit_status
+            records.append({
+                'z': z, 't_do': do, 't_up': up, 'fit': fit,
+                'status': status, 'fit_status': fit_status,
+                'fit_reason': str(fit.get(
+                    'fit_reason', 'fit status is unavailable')),
+            })
+            if verbose:
+                logger(f"z={z}: window=[{do},{up}] status={status} "
+                       f"reason={fit.get('fit_reason', 'unavailable')}")
+            last_start = start
+            continue
         if z >= 6:                        # 小 z 直接用初始/继承窗
-            # 右移直至达标或达继承起点保护
-            while fit['chi2'] > chi2_limit and do + 1 < t_vals.max():
-                do, up = do + 1, up + 1
-                fit = _fit(z, do, up)
-                if do == last_do and fit['chi2'] > chi2_limit:
-                    break                 # 已回到继承窗仍超限 → 保持
-                if do >= last_do and fit['chi2'] > chi2_limit:
+            # 按真实 t_sep 索引右移；固定点数确保稀疏网格中的每个候选都合法。
+            while fit['chi2'] > chi2_limit:
+                next_start = start + 1
+                if next_start + window_size > t_vals.size:
+                    break
+                start = next_start
+                do, up = _bounds(start)
+                fit = _fit(z, start)
+                if not _fit_is_usable(fit):
                     break
             # 未超限则尝试左移一步收紧（超限回退）
-            if fit['chi2'] <= chi2_limit and do - 1 >= t_floor \
-                    and (t_vals >= do - 1).any() and (t_vals <= up - 1).sum() >= 2:
-                try:
-                    trial = _fit(z, do - 1, up - 1)
-                except ValueError:
-                    trial = None
-                if trial is not None and trial['chi2'] <= chi2_limit:
-                    do, up, fit = do - 1, up - 1, trial
-        records.append({'z': z, 't_do': do, 't_up': up, 'fit': fit})
+            if _fit_is_usable(fit) and fit['chi2'] <= chi2_limit \
+                    and start > 0 \
+                    and t_vals[start - 1] >= t_floor:
+                trial_start = start - 1
+                trial = _fit(z, trial_start)
+                if (_fit_is_usable(trial)
+                        and trial['chi2'] <= chi2_limit):
+                    start = trial_start
+                    do, up = _bounds(start)
+                    fit = trial
+        fit_status = str(fit.get('fit_status', 'unavailable'))
+        if not _fit_is_usable(fit):
+            status = fit_status
+        else:
+            status = ('chi2_accepted' if fit['chi2'] <= chi2_limit
+                  else 'chi2_exceeded')
+        records.append({'z': z, 't_do': do, 't_up': up, 'fit': fit,
+                        'status': status, 'fit_status': fit_status,
+                        'fit_reason': str(fit.get(
+                            'fit_reason', 'fit status is unavailable'))})
         if verbose:
-            logger(f"z={z}: window=[{do},{up}] "
-                   f"c0={fit['c0']:.4g}±{fit['c0_std']:.2g} "
-                   f"chi2={fit['chi2']:.3g}")
-        last_do, last_up = do, up
+            if _fit_is_usable(fit):
+                logger(f"z={z}: window=[{do},{up}] "
+                       f"c0={fit['c0']:.4g}±{fit['c0_std']:.2g} "
+                       f"chi2={fit['chi2']:.3g} status={status}")
+            else:
+                logger(f"z={z}: window=[{do},{up}] status={status} "
+                       f"reason={fit.get('fit_reason', 'unavailable')}")
+        last_start = start
     return records
