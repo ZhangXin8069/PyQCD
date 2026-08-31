@@ -32,41 +32,92 @@ def quasi_tmd_pdf(hR_z, z_grid, b_perp, pz_gev, p_t=None, x_grid=None,
     """准 TMD-PDF（Eq.:quasi_tmd）。
 
     Args:
-        hR_z: 重整化矩阵元 hR(z, b⊥, Pz)，形状 (nz, nb) 或 (nz,)。
-        z_grid: z 网格（fm）。
+        hR_z: 正半轴重整化矩阵元 hR(z, b⊥, Pz)，形状 (nz, nb)
+            或 (nz,)；负半轴按 hR(-z)=hR(z)* 作 Hermitian 延拓。
+        z_grid: 非负 z 网格（fm）。
         b_perp: b⊥ 网格（fm）。
         pz_gev: Pz（GeV）。
         p_t: 核子能量分量 Pt（GeV）；None 时取 √(M²+Pz²)，M=0.94。
-        x_grid: x 网格（默认 −1.5..1.5，128 点）。
-        z_max: 积分截断 z（默认 z_grid[-1] 外推点，用 λ 外推）。
+        x_grid: x 网格（默认 −1.5..1.5，256 点）。
+        n_pts: 在输入 z 支撑上作均匀细化后的积分点数（至少 2）。
+        z_max: 积分截断 z（fm；默认 z_grid 的最大值）。
     Returns:
         (x_grid, xg(x, b⊥))。
     """
-    hR_z = np.asarray(hR_z, dtype=float)
-    z = np.asarray(z_grid, dtype=float) / fm_to_GeV   # fm → GeV⁻¹
+    hR_z = np.asarray(hR_z)
+    input_is_real = not np.iscomplexobj(hR_z)
+    z_fm = np.asarray(z_grid, dtype=float)
     if hR_z.ndim == 1:
         hR_z = hR_z[:, None]
+    if z_fm.ndim != 1 or len(z_fm) < 2:
+        raise ValueError("z_grid 必须是一维且至少含两个点")
+    if hR_z.ndim != 2 or hR_z.shape[0] != len(z_fm):
+        raise ValueError("hR_z 的 z 维必须与 z_grid 一致")
+    if not (np.all(np.isfinite(z_fm)) and np.all(np.isfinite(hR_z))):
+        raise ValueError("hR_z 与 z_grid 必须有限")
+    if not (isinstance(n_pts, (int, np.integer)) and not isinstance(n_pts, bool)
+            and n_pts >= 2):
+        raise ValueError("n_pts 必须是至少为 2 的整数")
+
+    order = np.argsort(z_fm)
+    z_fm = z_fm[order]
+    hR_z = hR_z[order]
+    if np.any(np.diff(z_fm) <= 0.0):
+        raise ValueError("z_grid 不能含重复点")
+    if z_fm[0] < 0.0:
+        raise ValueError(
+            "quasi_tmd_pdf 接收非负 z 半轴；负半轴由 Hermitian 延拓生成")
 
     if x_grid is None:
         x_grid = np.linspace(-1.5, 1.5, 256)
+    x_grid = np.asarray(x_grid, dtype=float)
     if z_max is None:
-        z_max = z[-1]
+        z_max_fm = z_fm[-1]
+    else:
+        z_max_fm = float(z_max)
+        if not np.isfinite(z_max_fm):
+            raise ValueError("z_max 必须是有限的 fm 长度")
+    if z_max_fm < z_fm[0]:
+        raise ValueError("z_max 不能小于 z_grid 的最小 fm 值")
+    z_upper_fm = min(z_max_fm, z_fm[-1])
 
     if p_t is None:
         M_N = 0.94
         p_t = np.sqrt(M_N ** 2 + pz_gev ** 2)
     norm = (pz_gev ** 2) / (p_t ** 2)
 
-    # 余弦傅里叶（hR 为实）：∫dz cos(x·z·Pz)·hR(z)
-    mask = z <= z_max
-    zz = z[mask]
-    hr = hR_z[mask]
-    dz = zz[1] - zz[0] if len(zz) > 1 else 1.0
+    # 接口截断始终在 fm 完成；仅在积分网格确定后统一换算 GeV^-1。
+    z_int_fm = np.linspace(z_fm[0], z_upper_fm, n_pts)
+    hr_dtype = np.result_type(hR_z.dtype, np.float64)
+    hr = np.empty((n_pts, hR_z.shape[1]), dtype=hr_dtype)
+    for b_index in range(hR_z.shape[1]):
+        if input_is_real:
+            hr[:, b_index] = np.interp(
+                z_int_fm, z_fm, hR_z[:, b_index])
+        else:
+            hr[:, b_index] = (
+                np.interp(z_int_fm, z_fm, hR_z[:, b_index].real)
+                + 1j * np.interp(
+                    z_int_fm, z_fm, hR_z[:, b_index].imag))
+    zz = z_int_fm / fm_to_GeV
 
-    out = np.empty((len(x_grid), hr.shape[1]))
-    for j in range(hr.shape[1]):
-        integrand = np.cos(np.outer(x_grid, zz * pz_gev)) @ (hr[:, j] * dz)
-        out[:, j] = integrand / (2.0 * pi * pz_gev) / norm
+    # 正半轴数据按 h(-z)=h(z)* 延拓：
+    # ∫_{-L}^{L} dz exp(-ikz)h(z)
+    #   = 2∫_0^L dz [cos(kz) Re h(z) + sin(kz) Im h(z)]。
+    phase = np.multiply.outer(x_grid, zz * pz_gev)
+    sine = np.sin(phase) if not input_is_real else None
+    np.cos(phase, out=phase)
+    dz = np.diff(zz)
+    weights = np.empty_like(zz)
+    weights[0] = 0.5 * dz[0]
+    weights[-1] = 0.5 * dz[-1]
+    weights[1:-1] = 0.5 * (dz[:-1] + dz[1:])
+    hr *= weights[:, None]
+    integral = phase @ hr.real
+    if sine is not None:
+        integral += sine @ hr.imag
+    integral *= 2.0
+    out = integral / (2.0 * pi * pz_gev) / norm
     if hR_z.shape[1] == 1:
         out = out[:, 0]
     return x_grid, out
@@ -99,8 +150,10 @@ def quasi_pdf_gluon(h_z, z_grid, pz_gev, x_grid=None):
     small = np.abs(x_grid) < 1e-15
     xv = np.where(small, 1.0, x_grid)                 # 防除零，末尾回填 0
     integrand = h[None, :] * np.sin(np.outer(xv, pz_gev * z))
-    trapz = getattr(np, "trapz", None) or np.trapezoid   # numpy 2.x 兼容
-    integral = trapz(integrand, z, axis=1)            # 梯形法则（原版 np.trapz）
+    trapezoid = getattr(np, "trapezoid", None)
+    if trapezoid is None:                              # NumPy < 1.20
+        trapezoid = np.trapz
+    integral = trapezoid(integrand, z, axis=1)         # 与原版梯形法等价
     out = (2.0 * pz_gev / xv) * integral
     out[small] = 0.0
     return x_grid, out
@@ -203,7 +256,7 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
     y = x if y_grid is None else np.asarray(y_grid, dtype=float)
     if len(y) != len(x):
         raise ValueError("TMD 匹配矩阵结构要求 y 网格与 x 网格同维")
-    yg = np.asarray(x_tmd, dtype=float)
+    yg = np.asarray(x_tmd)
     if yg.ndim == 1:
         yg = yg[:, None]
     nb = yg.shape[1]
@@ -235,7 +288,8 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
     S = np.asarray(soft_factor, dtype=float).ravel()
     rap = np.exp(0.5 * np.log((2.0 * pz_gev) ** 2 / (2.0 * pz_scale) ** 2) * K)
 
-    out = np.empty((n, nb))
+    out = np.empty((n, nb), dtype=np.result_type(yg.dtype, z_inv.dtype,
+                                                  rap.dtype, S.dtype))
     for j in range(nb):
         v = yg[:, j] * rap[j % rap.size] / np.sqrt(S[j % S.size])
         out[:, j] = z_inv @ v
@@ -252,7 +306,38 @@ def _alpha_s(mu, Lambda_QCD=0.23, nf=3.0):
 # SFTX：小流时展开匹配系数（梯度流 → MS-bar，1 圈）
 # ═══════════════════════════════════════════════════════════════════
 
-def sftx_gluon_matching_coeff(t, mu, Lambda_QCD=0.23, nf=3.0):
+_HBARC_GEV_FM = 0.1973269804
+
+
+def flow_time_gev_m2(tau, a_fm):
+    """把 ``tau=t/a^2`` 与 ``a[fm]`` 换成物理流时间 ``t[GeV^-2]``。"""
+    tau = float(tau)
+    a_fm = float(a_fm)
+    if not (np.isfinite(tau) and tau > 0.0):
+        raise ValueError('tau 必须是有限正数')
+    if not (np.isfinite(a_fm) and a_fm > 0.0):
+        raise ValueError('a_fm 必须是有限正数')
+    return tau * (a_fm / _HBARC_GEV_FM) ** 2
+
+
+def _resolve_sftx_flow_time(t_gev_m2, tau, a_fm):
+    explicit = t_gev_m2 is not None
+    lattice = tau is not None or a_fm is not None
+    if explicit == lattice:
+        raise ValueError(
+            '须且只能提供 t_gev_m2，或同时提供 tau 与 a_fm')
+    if explicit:
+        t_gev_m2 = float(t_gev_m2)
+        if not (np.isfinite(t_gev_m2) and t_gev_m2 > 0.0):
+            raise ValueError('t_gev_m2 必须是有限正数')
+        return t_gev_m2
+    if tau is None or a_fm is None:
+        raise ValueError('tau 与 a_fm 必须同时提供')
+    return flow_time_gev_m2(tau, a_fm)
+
+
+def sftx_gluon_matching_coeff(*, mu, t_gev_m2=None, tau=None, a_fm=None,
+                               Lambda_QCD=0.23, nf=3.0):
     """胶子算符的 SFTX 1 圈匹配系数（Suzuki 2013 / Mereghetti 2022）。
 
     O_MS(μ) = [1 + α_s(μ)/(4π)·c(t,μ)]·O_flow(t)
@@ -262,11 +347,13 @@ def sftx_gluon_matching_coeff(t, mu, Lambda_QCD=0.23, nf=3.0):
     （胶子能量动量张量/双线性算符的 1 圈 SFTX 常数项，Suzuki 2013）。
 
     Args:
-        t: 流时间（格点单位 t = τ/a²，物理单位需乘 a²）。
         mu: MS-bar 标度（GeV）。
+        t_gev_m2: 物理流时间（GeV⁻²）。
+        tau/a_fm: 或提供无量纲 ``tau=t/a²`` 与格距（fm），内部严格换算。
     Returns:
         (alpha_s/(4π), c(t,μ))——匹配系数。
     """
+    t = _resolve_sftx_flow_time(t_gev_m2, tau, a_fm)
     al4pi = _alpha_s(mu, Lambda_QCD, nf) / (4.0 * np.pi)
     b0_ = b0(nf)
     # 1 圈 SFTX：O_MS(μ) = O_flow(t)·[1 + α_s/(4π)·(2b₀·ln(2μ²t) + 2b₀·γ_E)]
@@ -274,12 +361,15 @@ def sftx_gluon_matching_coeff(t, mu, Lambda_QCD=0.23, nf=3.0):
     return al4pi, c
 
 
-def sftx_energy_density_t0(E_t, t, mu, Lambda_QCD=0.23, nf=3.0):
+def sftx_energy_density_t0(E_t, *, mu, t_gev_m2=None, tau=None, a_fm=None,
+                           Lambda_QCD=0.23, nf=3.0):
     """⟨E(t)⟩ 的 SFTX → MS-bar ⟨¼F²⟩(μ)（Suzuki 2013）。
 
     ⟨E(t)⟩ = 3(N²−1)/(16π²t²)·[1 + α_s/(4π)·(2b₀·ln(2μ²t) + c₂)]·(1 + O(t·⟨F²⟩/Nc))
 
     此处实现 ⟨¼F²⟩_MS = E(t)/[1 + α_s/(4π)·c(t)] 的 1 圈反解。
     """
-    al4pi, c = sftx_gluon_matching_coeff(t, mu, Lambda_QCD, nf)
+    al4pi, c = sftx_gluon_matching_coeff(
+        mu=mu, t_gev_m2=t_gev_m2, tau=tau, a_fm=a_fm,
+        Lambda_QCD=Lambda_QCD, nf=nf)
     return np.asarray(E_t) / (1.0 + al4pi * c)

@@ -60,31 +60,39 @@ def gpu_info():
 
     Returns
     -------
-    (n_gpu, vram_per_gpu_mb, usable_vram_mb) or (0, 0, 0) if none.
+    ``(n_gpu, vram_per_gpu_mb, usable_vram_mb)``; known absence is
+    ``(0, 0, 0)``, while failure of every detector is ``(None, None, None)``.
     usable_vram = 0.8 * per-GPU VRAM (user convention: b = 80% of card).
     """
+    torch_reported_zero = False
     try:
         import torch
-        if torch.cuda.is_available():
-            n = torch.cuda.device_count()
+        n = int(torch.cuda.device_count())
+        if n > 0 and torch.cuda.is_available():
             vram = torch.cuda.get_device_properties(0).total_memory // 2**20
             return n, vram, int(0.8 * vram)
+        torch_reported_zero = n == 0
     except Exception:
         pass
     try:  # nvidia-smi fallback
         import subprocess
-        out = subprocess.run(
+        completed = subprocess.run(
             ['nvidia-smi', '--query-gpu=memory.total',
              '--format=csv,noheader,nounits'],
-            capture_output=True, text=True, timeout=10).stdout
-        vals = [int(x) for x in out.split()]
+            capture_output=True, text=True, timeout=10)
+        if completed.returncode != 0:
+            raise RuntimeError('nvidia-smi resource probe failed')
+        vals = [int(x) for x in completed.stdout.split()]
         if vals:
             n = len(vals)
             vram = vals[0]
             return n, vram, int(0.8 * vram)
+        return 0, 0, 0
     except Exception:
         pass
-    return 0, 0, 0
+    if torch_reported_zero:
+        return 0, 0, 0
+    return None, None, None
 
 
 def free_disk_mb(path='.'):

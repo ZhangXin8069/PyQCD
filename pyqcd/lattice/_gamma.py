@@ -5,12 +5,13 @@ DeGrand-Rossi Gamma Matrices
 Gamma matrices in the DeGrand-Rossi (DR, chiral-variant) basis.
 Provides ``gamma(i)`` for i=0..17, plus utility functions.
 
-The DR basis has the property:
-    γ₀ = diag(1, 1, -1, -1)
-    γ₅ = γ₁γ₂γ₃γ₄ (in Euclidean metric)
+In this API ``gamma(0)`` is the identity sentinel, not an additional
+Euclidean Dirac matrix.  The temporal matrix is ``gamma(4)`` and
+``gamma(5) = gamma(1) gamma(2) gamma(3) gamma(4)``; in this DR basis
+``gamma(5) = diag(1, 1, -1, -1)``.
 
 Gamma index reference:
-    0:  identity (γ₀/γ₄ in Minkowski → Euclidean)
+    0:  identity I (used in projectors such as (I+γ₄)/2)
     1-4: γ₁, γ₂, γ₃, γ₄ (spatial + temporal)
     5:  γ₅ = γ₁γ₂γ₃γ₄
     6:  γ₂γ₃ = -γ₁γ₄γ₅

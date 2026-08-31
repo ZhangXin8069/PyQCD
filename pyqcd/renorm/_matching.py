@@ -65,7 +65,7 @@ def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3):
     """NLO 匹配：hR_PDF = Z⁻¹·hR_0（胶子，非极化）。
 
     Args:
-        xx: x 网格（含负值，向量）
+        xx: x 网格（含负值，向量；精确零节点不支持）
         Pz_: 格点单位动量
         conf: 系综名
         hR_tilde_data: hR(x) 数组（与 xx 同形）
@@ -75,6 +75,11 @@ def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3):
         hR_PDF（光锥 PDF 匹配结果）。
     """
     xx = np.asarray(xx, dtype=float)
+    if np.any(xx == 0.0):
+        raise ValueError(
+            "matching x grid contains an exact zero node; use an "
+            "avoid-zero grid because this discretization has no "
+            "validated principal-value prescription")
     dx = xx[1] - xx[0]
 
     # A_s ≡ α_s/(4π)（zengch 惯例），×4π 还原真耦合（对照 matching_new.py: alpha_s=A_s*4π）

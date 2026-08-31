@@ -23,7 +23,8 @@ from scipy.linalg import expm
 
 from pyqcd.tools import set_backend
 from pyqcd.renorm import (
-    wilson_flow, flow_action_density, gluon_tmd_operator,
+    wilson_flow, wilson_action_density, flow_action_density,
+    gluon_tmd_operator,
     self_renormalized_ratio,
 )
 from pyqcd.operator import gluon_ope_operator_z0
@@ -51,22 +52,32 @@ def main():
     U = random_su3_gauge(L)
     print(f"随机 SU(3) 规范场: {U.shape}")
 
-    # ── 梯度流：τ = 3a²（NieMiera et al. 2025 方案）──
+    # ── 梯度流：演示取短流时间；物理 t=3a² 方案对应无量纲 tau=3 ──
     tau = 0.1
     V = wilson_flow(U, tau=tau, eps=0.05)
+    S_in = wilson_action_density(U).mean()
+    S_out = wilson_action_density(V).mean()
     E_in, E_out = flow_action_density(U).mean(), flow_action_density(V).mean()
-    print(f"Wilson flow: τ = {tau}, E(t): {E_in:.4f} → {E_out:.4f} (递减=正确)")
+    if not S_out < S_in:
+        raise RuntimeError(
+            f"Wilson flow 未降低 plaquette 作用量: {S_in} -> {S_out}")
+    print(f"Wilson flow: tau = {tau}, <s_W>: "
+          f"{S_in:.4f} -> {S_out:.4f} (递减)")
+    print(f"Clover <E(t)>: {E_in:.4f} -> {E_out:.4f} "
+          "(粗糙随机场上不作为单调性判据)")
 
     # ── 胶子 TMD 算符 O(z, b⊥) ──
     z_list = [0, 2, 4]
     b_list = [0, 2, 4]
-    O = gluon_tmd_operator(V, z=2, b_perp=2)
+    staple_length = max(abs(z) for z in z_list)
+    O = gluon_tmd_operator(
+        V, z=2, b_perp=2, L=staple_length)
     print(f"TMD 算符 O(z=2, b⊥=2) 逐格点（前 4×4）:")
     print(np.round(np.real(O[:4, :4, 0, 0]), 3))
 
     # ── 自重整化比值（Z_R 方案）──
     from pyqcd.renorm import tmd_matrix_elements
-    M = tmd_matrix_elements(V, z_list, b_list)
+    M = tmd_matrix_elements(V, z_list, b_list, L=staple_length)
     ratio = self_renormalized_ratio(M, M, z_s=0)
     print("O(z, b⊥) 矩阵元 (z × b⊥):")
     print(np.round(M, 4))
@@ -77,13 +88,14 @@ def main():
     O_ope = gluon_ope_operator_z0(V, 0, 1, 2, 4, L, L)
     print(f"共线 OPE O_01(z)（对照）: {np.round(O_ope[:4, 0], 4)}")
 
-    # ── TMD 提取链：准 TMD-PDF + CS 核（完整物理链）──
+    # ── TMD 提取接口链：准 TMD-PDF + CS 核（合成演示，不是物理闭环）──
     from pyqcd.renorm import (
         quasi_tmd_pdf, cs_kernel_from_ratio, sftx_gluon_matching_coeff,
     )
     # 用流场矩阵元（z 依赖）构造准 TMD-PDF（演示：z 网格 → x 空间）
     z_grid = np.linspace(0.1, 1.0, 32)
-    M_z = tmd_matrix_elements(V, [0, 1, 2], [0])   # (nz, nb=1)
+    M_z = tmd_matrix_elements(
+        V, [0, 1, 2], [0], L=staple_length)   # (nz, nb=1)
     # 外推/插值到 z_grid（演示用线性插值）
     z_data = np.array([0, 1, 2]) * 0.1053
     hr = np.interp(z_grid, z_data, M_z[:, 0])[:, None]
@@ -93,10 +105,12 @@ def main():
     # CS 核（两动量比值，演示）
     K = cs_kernel_from_ratio(hr * 1.0, hr * 1.1, 2.5, 2.0)
     print(f"CS 核 K(b⊥)（演示）: {np.round(K, 4)}")
-    al, c = sftx_gluon_matching_coeff(0.1, 2.0)
+    al, c = sftx_gluon_matching_coeff(
+        mu=2.0, tau=tau, a_fm=0.1053)
     print(f"SFTX 匹配系数: α_s/4π={al:.4f}, c(t,μ)={c:.4f}")
 
-    print("\n完成：梯度流 → TMD staple 算符 → 自重整化 → 准TMD-PDF/CS核/SFTX 全链跑通。")
+    print("\n完成：梯度流 → TMD staple 算符 → 自重整化 → "
+          "准TMD-PDF/CS核/SFTX 接口自洽演示（非真实物理闭环）。")
 
 
 if __name__ == '__main__':

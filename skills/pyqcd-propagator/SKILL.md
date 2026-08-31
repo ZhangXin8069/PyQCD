@@ -42,7 +42,8 @@ API 细节见 [`references/solver.md`](references/solver.md)；顺序源和协�
 
 1. **初始化**：通过 `core.getMPIComm/getMPIRank/getMPISize` 确认 rank；先
    `core.init(...)`，再创建 `LatticeInfo`，并设定时间边界 `t_boundary=-1`。
-2. **读场**：从实际格式读入规范场并 `toDevice()`；若要 stout/其他涂抹，先复制
+2. **读场**：从实际格式读入规范场并 `toDevice()`；PyQCD 的 HYP/Stout API 返回与输入
+   独立的 smeared 对象；若进入 PyQUDA 或其他可能原地改写的传播子生产 API，先复制
    `gauge_raw`，分别保留 raw 与 smeared 对象。
 3. **建算子**：按质量、Clover 系数、容差和 multigrid 配置 Wilson/Clover Dirac
    算子；把所有求逆放入同一 `useGauge` 上下文。
@@ -58,7 +59,7 @@ API 细节见 [`references/solver.md`](references/solver.md)；顺序源和协�
 | 风险 | 强制措施 |
 |---|---|
 | PyQUDA 局部布局与 PyQCD 全局布局混用 | 每次调用前标注 parity、tzyx、spin/color 轴，并在 gather 前核对形状 |
-| smear 改写 raw 场 | `gauge_stout = gauge_raw.copy()`；raw 仅作 Wilson 线/covDev |
+| smear 改写 raw 场 | PyQCD HYP/Stout 返回独立对象；传给 PyQUDA 或其他可能原地改写的生产 API 前显式 `gauge_work = gauge_raw.copy()`；raw 仅作 Wilson 线/covDev |
 | 归约 API 猜错 | 不调用不存在的 `core.allreduce`；使用已核实的 `gatherLattice` |
 | 上下文死锁或场串用 | 求逆与 covDev 的 `use()` 不嵌套，gather 在上下文外 |
 | 结果无从复现 | 保存组态、源、参数、后端、MPI 映射、seed、命令、版本和 residual |

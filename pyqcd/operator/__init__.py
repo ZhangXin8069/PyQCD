@@ -5,20 +5,22 @@ from argparse import Namespace
 并扩展提供 ``staple`` 型 Wilson 线算符（TMD 用，b_⊥ 方向位移）。
 """
 from ._gluon_ope import (
-    plaquette_clover,
-    compute_dual_field_strength, gluon_ope_operator_z0, gluon_ff_operator_z0,
+    FieldStrengthCache, OPEChannelSpec, plaquette_clover,
+    compute_dual_field_strength, gluon_ope_operator_z0, gluon_ope_channel,
+    gluon_ff_operator_z0,
     get_ope_lorentz_pairs, staple_operator,
-    read_gauge_lime,
+    read_gauge_lime, resolve_ildg_binary_record,
 )
 from ._helicity import (
     plaquette_dual_stack, helicity_two_field_operator,
 )
 
 __all__ = [
-    "plaquette_clover",
+    "FieldStrengthCache", "OPEChannelSpec", "plaquette_clover",
     "compute_dual_field_strength", "gluon_ope_operator_z0",
+    "gluon_ope_channel",
     "gluon_ff_operator_z0", "get_ope_lorentz_pairs", "staple_operator",
-    "read_gauge_lime",
+    "read_gauge_lime", "resolve_ildg_binary_record",
     "plaquette_dual_stack", "helicity_two_field_operator",
 ]
 

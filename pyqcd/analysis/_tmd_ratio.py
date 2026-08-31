@@ -25,7 +25,54 @@ import time
 
 import numpy as np
 
-from ._disconnected import sem, resample, cov_mat, model_ratio
+from ._disconnected import (aggregate_fit_statuses, fit_status_from_samples,
+                            model_ratio, model_ratio_jacobian, resample, sem)
+
+
+def _plateau_points(ratio, dt_max, dt_start, dt_end, cut):
+    front = cut // 2
+    back = cut - front
+    dt_stop = min(dt_end, dt_max - 1, ratio.shape[1] - 1)
+    points = []
+    for dt in range(dt_start, dt_stop + 1):
+        dtau_stop = min(dt - back, ratio.shape[2] - 1)
+        points.extend((dt, dtau) for dtau in range(front, dtau_stop + 1))
+    return points
+
+
+def _aggregate_status(status_by_channel):
+    return aggregate_fit_statuses(np.asarray(status_by_channel).ravel())[0]
+
+
+def _plateau_status_metadata(
+        ratio, c0_plateau, dt_max, dt_start, dt_end, cut):
+    status = np.full(
+        c0_plateau.shape[1:],
+        "statistically_unidentifiable",
+        dtype="<U32",
+    )
+    sample_rank = np.zeros(c0_plateau.shape[1:], dtype=np.int64)
+    reason = np.full(c0_plateau.shape[1:], "", dtype="<U128")
+
+    if c0_plateau.shape[0] < 2:
+        reason[...] = (
+            f"Nsample={c0_plateau.shape[0]} cannot identify plateau variance"
+        )
+    elif not _plateau_points(ratio, dt_max, dt_start, dt_end, cut):
+        reason[...] = "empty plateau window"
+    else:
+        identifiable = np.all(np.isfinite(c0_plateau), axis=0)
+        status[identifiable] = "identifiable"
+        sample_rank[identifiable] = 1
+        reason[identifiable] = "identifiable"
+        reason[~identifiable] = "plateau sample has no fluctuating mode"
+
+    return {
+        "plateau_status": np.asarray(_aggregate_status(status)),
+        "plateau_status_by_channel": status,
+        "plateau_sample_rank": sample_rank,
+        "plateau_reason": reason,
+    }
 
 
 def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
@@ -50,8 +97,8 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
         ch_results: {hadron: {'ratio', 'c0', 'c1', 'dE', 'chi2', 'x_coor'}}
             c0/c1/dE/chi2 形状 (Nsample, nz, nb)。
     """
-    import lsqfit
-    import gvar as gv
+    from ._fitter import (FitParams, covariance_effective_rank,
+                          covariance_sample_rank, fit, fit_identifiability)
 
     if p0 is None:
         p0 = {"c0": 0.6, "c1": -2, "dE": 1}
@@ -120,20 +167,86 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
         eps = 1e-30
         ratio = np.mean(corr3_disc / (corr2[:, :, :, None, None, None] + eps), axis=1)
         ratio = ratio.real   # (Nsample, dt, dtau, nz, nb)
+        if Nconf < 2:
+            ratio = np.full(ratio.shape, np.nan, dtype=np.float64)
         np.save(os.path.join(out_dir, f'ratio_{had_name}_{momentum}.npy'), ratio)
 
         # 逐 (z,b) 相关拟合（Nconf<2 时跳过——协方差奇异，统计无意义）
         if Nconf < 2:
-            logger(f"  Nconf={Nconf} < 2：跳过 (z,b) 拟合（统计无意义），"
-                   f"仅保存 ratio")
+            fit_reason = (
+                f"Nconf={Nconf} cannot support delete-one jackknife covariance"
+            )
+            required_rank = len(p0)
+            fit_status_by_channel = np.full(
+                (nz, nb), "statistically_unidentifiable", dtype="<U32")
+            effective_rank_by_channel = np.zeros(
+                (nz, nb), dtype=np.int64)
+            sample_rank_by_channel = np.zeros((nz, nb), dtype=np.int64)
+            required_rank_by_channel = np.full(
+                (nz, nb), required_rank, dtype=np.int64)
+            fit_reason_by_channel = np.full(
+                (nz, nb), fit_reason, dtype="<U128")
+            para_c0 = np.full((1, nz, nb), np.nan)
+            para_c1 = np.full((1, nz, nb), np.nan)
+            para_dE = np.full((1, nz, nb), np.nan)
+            chi2 = np.full((1, nz, nb), np.nan)
+            c0_plateau = np.full((1, nz, nb), np.nan)
+            report_lines = [
+                "=" * 70,
+                f"  TMD Fit Report: {had_name}, {momentum}, Nconf={Nconf}",
+                "=" * 70,
+                "fit status = statistically_unidentifiable",
+                "effective covariance rank = 0",
+                "sample covariance rank = 0",
+                f"required parameter rank = {required_rank}",
+                f"fit skipped: {fit_reason}",
+                "",
+            ]
+            with open(os.path.join(
+                    out_dir, f'1_fit_report_{momentum}.txt'), 'w') as f:
+                f.write("\n".join(report_lines))
+            np.savez(
+                os.path.join(out_dir, f'0_fit_data_{momentum}.npz'),
+                c0=para_c0,
+                c1=para_c1,
+                dE=para_dE,
+                chi2=chi2,
+                fit_status=np.asarray("statistically_unidentifiable"),
+                effective_rank=np.asarray(0, dtype=np.int64),
+                sample_rank=np.asarray(0, dtype=np.int64),
+                required_rank=np.asarray(required_rank, dtype=np.int64),
+                fit_reason=np.asarray(fit_reason),
+                fit_status_by_channel=fit_status_by_channel,
+                effective_rank_by_channel=effective_rank_by_channel,
+                sample_rank_by_channel=sample_rank_by_channel,
+                required_rank_by_channel=required_rank_by_channel,
+                fit_reason_by_channel=fit_reason_by_channel,
+            )
+            np.save(
+                os.path.join(out_dir, f'c0_plateau_{momentum}.npy'),
+                c0_plateau,
+            )
+            plateau_metadata = _plateau_status_metadata(
+                ratio, c0_plateau, dt_max, dt_start, dt_end, cut)
+            np.savez(
+                os.path.join(
+                    out_dir, f'c0_plateau_status_{momentum}.npz'),
+                **plateau_metadata,
+            )
+            logger(f"  fit skipped: {fit_reason}; saved NaN fit artifacts")
             ch_results[had_name] = {
-                'ratio': ratio, 'c0': np.zeros((1, nz, nb)),
-                'c1': np.zeros((1, nz, nb)),
-                'dE': np.zeros((1, nz, nb)),
-                'chi2': np.zeros((1, nz, nb)), 'x_coor': [],
-                'c0_plateau': plateau_c0(ratio, dt_max=dt_max,
-                                         dt_start=dt_start,
-                                         dt_end=dt_end, cut=cut),
+                'ratio': ratio, 'c0': para_c0, 'c1': para_c1,
+                'dE': para_dE, 'chi2': chi2, 'x_coor': [],
+                'c0_plateau': c0_plateau,
+                'fit_status': 'statistically_unidentifiable',
+                'plateau_status': str(plateau_metadata['plateau_status']),
+                'effective_rank': 0, 'sample_rank': 0,
+                'required_rank': required_rank, 'fit_reason': fit_reason,
+                'fit_status_by_channel': fit_status_by_channel,
+                'effective_rank_by_channel': effective_rank_by_channel,
+                'sample_rank_by_channel': sample_rank_by_channel,
+                'required_rank_by_channel': required_rank_by_channel,
+                'fit_reason_by_channel': fit_reason_by_channel,
             }
             continue
 
@@ -143,10 +256,17 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
                   for dtau in range(front_remove, dt - back_remove + 1)]
         Ndata = len(x_coor)
 
-        para_c0 = np.zeros((Nsample, nz, nb))
-        para_c1 = np.zeros((Nsample, nz, nb))
-        para_dE = np.zeros((Nsample, nz, nb))
-        chi2 = np.zeros((Nsample, nz, nb))
+        para_c0 = np.full((Nsample, nz, nb), np.nan)
+        para_c1 = np.full((Nsample, nz, nb), np.nan)
+        para_dE = np.full((Nsample, nz, nb), np.nan)
+        chi2 = np.full((Nsample, nz, nb), np.nan)
+        fit_status_by_channel = np.full(
+            (nz, nb), "statistically_unidentifiable", dtype="<U32")
+        effective_rank_by_channel = np.zeros((nz, nb), dtype=np.int64)
+        sample_rank_by_channel = np.zeros((nz, nb), dtype=np.int64)
+        required_rank_by_channel = np.full(
+            (nz, nb), len(p0), dtype=np.int64)
+        fit_reason_by_channel = np.full((nz, nb), "", dtype="<U128")
 
         report_lines = [
             "=" * 70,
@@ -161,46 +281,99 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
         ]
 
         t0_fit = time.perf_counter()
+        fitpa = FitParams(
+            p0=dict(p0), dt_start=dt_start, dt_end=dt_end,
+            svdcut=1.0e-6, jacobian=model_ratio_jacobian)
         for _z in range(nz):
             for _b in range(nb):
                 sub_sample = np.zeros((Nsample, Ndata))
                 for i, (dt, dtau) in enumerate(x_coor):
                     sub_sample[:, i] = ratio[:, dt, dtau, _z, _b]
-                cov, cond = cov_mat(sub_sample, jack)
-                report_lines += [f"z={_z} b={_b} cond={cond:.3g}", "-" * 56, ""]
+                _fit_result, cov, cond, _last_fit = fit(
+                    sub_sample, x_coor, model_ratio, fitpa,
+                    jackknife=jack)
+                effective_rank = covariance_effective_rank(
+                    cov, svdcut=fitpa.svdcut)
+                sample_rank = covariance_sample_rank(cov)
+                required_rank = len(p0)
+                gate_ok, gate_reason = fit_identifiability(
+                    Ndata, required_rank, effective_rank,
+                    sample_rank=sample_rank)
+                fit_status, fit_reason, _ = fit_status_from_samples(
+                    _fit_result, _last_fit,
+                    failure_reason=None if gate_ok else gate_reason)
+                fit_status_by_channel[_z, _b] = fit_status
+                effective_rank_by_channel[_z, _b] = effective_rank
+                sample_rank_by_channel[_z, _b] = sample_rank
+                fit_reason_by_channel[_z, _b] = fit_reason
+                para_c0[:, _z, _b] = _fit_result["c0"]
+                para_c1[:, _z, _b] = _fit_result["c1"]
+                para_dE[:, _z, _b] = _fit_result["dE"]
+                chi2[:, _z, _b] = _fit_result["chi2"]
+                report_lines += [
+                    f"z={_z} b={_b} cond={cond:.3g}", "-" * 56,
+                    f"fit status = {fit_status}",
+                    f"effective covariance rank = {effective_rank}",
+                    f"sample covariance rank = {sample_rank}",
+                    f"required parameter rank = {required_rank}", "",
+                ]
 
-                for _id in range(Nsample):
-                    y_coor = gv.gvar(sub_sample[_id], cov)
-                    # 条件数过大时回退对角近似（协方差奇异，参考代码预留选项）
-                    if cond > 1e8 or not np.isfinite(cond):
-                        y_coor = gv.gvar(sub_sample[_id], np.diag(np.diag(cov)))
-                        svd = 1e-6
-                    else:
-                        svd = 1e-6
-                    _fit = lsqfit.nonlinear_fit(data=(x_coor, y_coor), p0=p0,
-                                                fcn=model_ratio, svdcut=svd)
-                    para_c0[_id, _z, _b] = _fit.pmean["c0"]
-                    para_c1[_id, _z, _b] = _fit.pmean["c1"]
-                    para_dE[_id, _z, _b] = _fit.pmean["dE"]
-                    chi2[_id, _z, _b] = _fit.chi2 / _fit.dof
-                if _id == Nsample - 1:
-                    report_lines.append(_fit.format(maxline=True))
-                    report_lines += ["", ""]
+                if fit_status not in ("identifiable", "prior_constrained"):
+                    report_lines += [f"fit skipped: {fit_reason}", ""]
+                    logger(
+                        f"  z={_z} b={_b}: fit skipped "
+                        f"({fit_reason})")
+                    continue
 
-                logger(f"  z={_z} b={_b}: c0={para_c0[:, _z, _b].mean():.4g} ± "
-                       f"{sem(para_c0[:, _z, _b], jack):.4g}  "
-                       f"chi2/dof={chi2[:, _z, _b].mean():.2g}")
+                if _last_fit is not None:
+                    report_lines.append(_last_fit.format(maxline=True))
+                report_lines += ["", ""]
 
+                finite = np.isfinite(para_c0[:, _z, _b])
+                if np.any(finite):
+                    values = para_c0[finite, _z, _b]
+                    error = sem(values, jack) if values.size > 1 else np.nan
+                    logger(
+                        f"  z={_z} b={_b}: c0={values.mean():.4g} ± "
+                        f"{error:.4g}  status={fit_status}")
+
+        fit_status, fit_reason = aggregate_fit_statuses(
+            fit_status_by_channel.ravel(), fit_reason_by_channel.ravel())
+        report_lines.insert(
+            7, f"fit status = {fit_status}; fit reason = {fit_reason}")
         report = "\n".join(report_lines)
         with open(os.path.join(out_dir, f'1_fit_report_{momentum}.txt'), 'w') as f:
             f.write(report)
-        np.savez(os.path.join(out_dir, f'0_fit_data_{momentum}.npz'),
-                 c0=para_c0, c1=para_c1, dE=para_dE, chi2=chi2)
+        np.savez(
+            os.path.join(out_dir, f'0_fit_data_{momentum}.npz'),
+            c0=para_c0,
+            c1=para_c1,
+            dE=para_dE,
+            chi2=chi2,
+            fit_status=np.asarray(fit_status),
+            fit_status_by_channel=fit_status_by_channel,
+            effective_rank=np.asarray(
+                np.min(effective_rank_by_channel), dtype=np.int64),
+            effective_rank_by_channel=effective_rank_by_channel,
+            sample_rank=np.asarray(
+                np.min(sample_rank_by_channel), dtype=np.int64),
+            sample_rank_by_channel=sample_rank_by_channel,
+            required_rank=np.asarray(len(p0), dtype=np.int64),
+            required_rank_by_channel=required_rank_by_channel,
+            fit_reason=np.asarray(fit_reason),
+            fit_reason_by_channel=fit_reason_by_channel,
+        )
         # plateau 均值版（fit 窗口内直接平均，抗奇异协方差；test9 整合项）
         c0_plateau = plateau_c0(ratio, dt_max=dt_max, dt_start=dt_start,
                                 dt_end=dt_end, cut=cut)
         np.save(os.path.join(out_dir, f'c0_plateau_{momentum}.npy'),
                 c0_plateau)
+        plateau_metadata = _plateau_status_metadata(
+            ratio, c0_plateau, dt_max, dt_start, dt_end, cut)
+        np.savez(
+            os.path.join(out_dir, f'c0_plateau_status_{momentum}.npz'),
+            **plateau_metadata,
+        )
         logger(f"  Saved ratio + fit + c0_plateau to {out_dir} "
                f"({time.perf_counter()-t0_fit:.1f}s)")
 
@@ -208,6 +381,17 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
             'ratio': ratio, 'c0': para_c0, 'c1': para_c1,
             'dE': para_dE, 'chi2': chi2, 'x_coor': x_coor,
             'c0_plateau': c0_plateau,
+            'fit_status': fit_status,
+            'fit_status_by_channel': fit_status_by_channel,
+            'effective_rank_by_channel': effective_rank_by_channel,
+            'sample_rank_by_channel': sample_rank_by_channel,
+            'required_rank_by_channel': required_rank_by_channel,
+            'fit_reason_by_channel': fit_reason_by_channel,
+            'plateau_status': str(plateau_metadata['plateau_status']),
+            'plateau_status_by_channel': (
+                plateau_metadata['plateau_status_by_channel']),
+            'plateau_sample_rank': plateau_metadata['plateau_sample_rank'],
+            'plateau_reason': plateau_metadata['plateau_reason'],
         }
 
     return ch_results
@@ -279,15 +463,21 @@ def plateau_c0(ratio, dt_max=20, dt_start=7, dt_end=10, cut=6):
     """
     r = np.asarray(ratio)
     Nsample, _, _, nz, nb = r.shape
-    front = cut // 2
-    back = cut - front
-    out = np.zeros((Nsample, nz, nb))
-    npts = 0
-    for dt in range(dt_start, min(dt_end, r.shape[1] - 1) + 1):
-        for dtau in range(front, dt - back + 1):
-            out += r[:, dt, dtau, :, :]
-            npts += 1
-    return out / max(npts, 1)
+    dtype = np.result_type(r.dtype, np.float64)
+    if Nsample < 2:
+        return np.full((Nsample, nz, nb), np.nan, dtype=dtype)
+    points = _plateau_points(r, dt_max, dt_start, dt_end, cut)
+    if not points:
+        return np.full((Nsample, nz, nb), np.nan, dtype=dtype)
+
+    window = np.stack([r[:, dt, dtau, :, :] for dt, dtau in points], axis=1)
+    out = np.mean(window, axis=1, dtype=dtype)
+    flat = out.reshape(Nsample, -1)
+    finite = np.all(np.isfinite(flat), axis=0)
+    centered = flat - np.mean(flat, axis=0)
+    fluctuating = np.sum(np.abs(centered) ** 2, axis=0) > 0.0
+    flat[:, ~(finite & fluctuating)] = np.nan
+    return out
 
 
 def plot_tmd_pdf(x_grid, xg_quasi, xg_matched, b_grid_fm, cs_kernel,

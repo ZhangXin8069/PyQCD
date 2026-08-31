@@ -21,8 +21,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from ._disconnected import sem, resample, cov_mat
-from ._fitter import fit_report_lines, make_summary_table
+from ._disconnected import (cov_mat, fit_status_from_samples,
+                            resample, sem)
+from ._fitter import (FitParams, covariance_effective_rank,
+                      covariance_sample_rank, fit, fit_identifiability,
+                      fit_report_lines, make_summary_table)
 
 
 @dataclass
@@ -49,6 +52,7 @@ class EnergyParams:
     dir: str = 'z'
     p0: dict = field(default_factory=lambda: {
         "c0": 0.6, "c1": 0.6, "E0": 1.5, "dE": 0.4})
+    model_selection: str = "aicc"
     dt_start: int = 6
     dt_end: int = 12
     xlim: list = field(default_factory=lambda: [2.5, 19.5])
@@ -113,21 +117,109 @@ def energy_model(x, p):
     return p["c0"] * np.exp(-p["E0"] * dt) * (1 + p["c1"] * np.exp(-p["dE"] * dt))
 
 
+def energy_model_jacobian(x, p):
+    """Closed-form real-parameter Jacobian of :func:`energy_model`."""
+    dt = np.asarray(x, dtype=np.float64)
+    ground = np.exp(-p["E0"] * dt)
+    excited = np.exp(-p["dE"] * dt)
+    corr = p["c0"] * ground * (1.0 + p["c1"] * excited)
+    return {
+        "c0": ground * (1.0 + p["c1"] * excited),
+        "c1": p["c0"] * ground * excited,
+        "E0": -dt * corr,
+        "dE": -dt * p["c0"] * p["c1"] * ground * excited,
+    }
+
+
+def one_state_energy_model(x, p):
+    """Single-state candidate ``C(t)=c0*exp(-E0*t)``."""
+    dt = np.asarray(x, dtype=np.float64)
+    return p["c0"] * np.exp(-p["E0"] * dt)
+
+
+def one_state_energy_model_jacobian(x, p):
+    """Closed-form Jacobian of :func:`one_state_energy_model`."""
+    dt = np.asarray(x, dtype=np.float64)
+    exponential = np.exp(-p["E0"] * dt)
+    corr = p["c0"] * exponential
+    return {"c0": exponential, "E0": -dt * corr}
+
+
+def _aicc_from_reduced_chi2(reduced_chi2, dof, n_observations, n_params):
+    """Return per-sample AICc without treating resample count as ``n``."""
+    reduced_chi2 = np.asarray(reduced_chi2, dtype=np.float64)
+    result = np.full(reduced_chi2.shape, np.nan, dtype=np.float64)
+    denominator = int(n_observations) - int(n_params) - 1
+    if denominator <= 0 or dof <= 0:
+        return result
+    finite = np.isfinite(reduced_chi2)
+    result[finite] = (
+        reduced_chi2[finite] * float(dof)
+        + 2.0 * float(n_params)
+        + 2.0 * float(n_params) * (float(n_params) + 1.0)
+        / float(denominator)
+    )
+    return result
+
+
+def _akaike_weights(aicc_one, aicc_two):
+    """Return normalized per-sample Akaike weights for two candidates."""
+    one = np.asarray(aicc_one, dtype=np.float64)
+    two = np.asarray(aicc_two, dtype=np.float64)
+    if one.shape != two.shape:
+        raise ValueError("AICc candidate arrays must have the same shape")
+    weight_one = np.full(one.shape, np.nan, dtype=np.float64)
+    weight_two = np.full(two.shape, np.nan, dtype=np.float64)
+    finite_one = np.isfinite(one)
+    finite_two = np.isfinite(two)
+    only_one = finite_one & ~finite_two
+    only_two = finite_two & ~finite_one
+    weight_one[only_one], weight_two[only_one] = 1.0, 0.0
+    weight_one[only_two], weight_two[only_two] = 0.0, 1.0
+    both = finite_one & finite_two
+    if np.any(both):
+        minimum = np.minimum(one[both], two[both])
+        raw_one = np.exp(-0.5 * (one[both] - minimum))
+        raw_two = np.exp(-0.5 * (two[both] - minimum))
+        normalization = raw_one + raw_two
+        weight_one[both] = raw_one / normalization
+        weight_two[both] = raw_two / normalization
+    return weight_one, weight_two
+
+
+def _finite_median(values):
+    values = np.asarray(values, dtype=np.float64)
+    finite = values[np.isfinite(values)]
+    return float(np.median(finite)) if finite.size else np.inf
+
+
 def do_fit(corr2: np.ndarray, params: EnergyParams, out_dir: str, jack: bool,
            verbose=True) -> dict:
     """逐样本 lsqfit 拟合（p0，svdcut=1e-6）→ 1_fit_data.npz + 2_fit_report.txt。"""
     if verbose:
         print("==================== do_fit start ====================")
 
-    import gvar as gv
-    import lsqfit
-
+    corr2 = np.asarray(corr2)
+    if corr2.ndim != 2:
+        raise ValueError("corr2 必须为 (Nsample, dt) 二维数组")
+    if corr2.shape[0] != params.Nsample:
+        raise ValueError("corr2 的样本轴必须等于 params.Nsample")
+    for name, value in (("dt_start", params.dt_start),
+                        ("dt_end", params.dt_end)):
+        if (isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, np.integer))):
+            raise ValueError(f"{name} 必须是非布尔整数")
+    if params.dt_start < 0 or params.dt_end < params.dt_start:
+        raise ValueError("须满足 0 <= dt_start <= dt_end")
+    if params.dt_end >= corr2.shape[1]:
+        raise ValueError("dt_end 超出 corr2 的 dt 轴")
     x_coor = list(range(params.dt_start, params.dt_end + 1))
     Ndata = len(x_coor)
     param_names = list(params.p0.keys())
 
-    fit_result = {name: np.zeros(params.Nsample) for name in param_names}
-    fit_result["chi2"] = np.zeros(params.Nsample)
+    fit_result = {name: np.full(params.Nsample, np.nan)
+                  for name in param_names}
+    fit_result["chi2"] = np.full(params.Nsample, np.nan)
 
     report_lines = fit_report_lines(
         f"Fit Report  : {params.conf_short}", {
@@ -140,48 +232,289 @@ def do_fit(corr2: np.ndarray, params: EnergyParams, out_dir: str, jack: bool,
     for i, dt in enumerate(x_coor):
         sub_sample[:, i] = corr2[:, dt]
 
-    cov, cond = cov_mat(sub_sample, jack)
+    if params.model_selection not in ("aicc", "two_state"):
+        raise ValueError("model_selection must be 'aicc' or 'two_state'")
+    expected_params = {"c0", "c1", "E0", "dE"}
+    if set(param_names) != expected_params:
+        raise ValueError(
+            "energy p0 must contain exactly c0, c1, E0, and dE")
 
-    for _id in range(params.Nsample):
-        y_coor = gv.gvar(sub_sample[_id], cov)
-        _fit = lsqfit.nonlinear_fit(data=(x_coor, y_coor), p0=params.p0,
-                                    fcn=energy_model, svdcut=1e-6)
-        for name in param_names:
-            fit_result[name][_id] = _fit.pmean[name]
-        fit_result["chi2"][_id] = _fit.chi2 / _fit.dof
+    two_state_required_rank = len(param_names)
+    two_state_fitpa = FitParams(
+        p0=params.p0,
+        dt_start=params.dt_start,
+        dt_end=params.dt_end,
+        svdcut=1.0e-6,
+        jacobian=energy_model_jacobian,
+    )
+    one_state_fitpa = FitParams(
+        p0={"c0": params.p0["c0"], "E0": params.p0["E0"]},
+        dt_start=params.dt_start,
+        dt_end=params.dt_end,
+        svdcut=two_state_fitpa.svdcut,
+        jacobian=one_state_energy_model_jacobian,
+    )
+    one_state_required_rank = len(one_state_fitpa.p0)
+    selected_model = "unavailable"
+    ground_state_status = "statistically_unidentifiable"
+    excited_state_status = "statistically_unidentifiable"
+    two_state_fit_status = "statistically_unidentifiable"
+    one_state_fit_status = "statistically_unidentifiable"
+    aicc_one_state = np.full(params.Nsample, np.nan)
+    aicc_two_state = np.full(params.Nsample, np.nan)
+    weight_one_state = np.full(params.Nsample, np.nan)
+    weight_two_state = np.full(params.Nsample, np.nan)
+    median_one = np.inf
+    median_two = np.inf
+    one_state_reason = "one-state fit was not attempted"
+    two_state_reason = "two-state fit was not attempted"
+    if jack and params.Nconf < 2:
+        cov = np.zeros((Ndata, Ndata), dtype=np.float64)
+        cond = np.inf
+        effective_rank = 0
+        sample_rank = 0
+        fit_reason = (
+            f"Nconf={params.Nconf} cannot support delete-one jackknife "
+            "covariance")
+        fit_status, fit_reason, _ = fit_status_from_samples(
+            fit_result, None, failure_reason=fit_reason)
+        one_state_reason = fit_reason
+        two_state_reason = fit_reason
+        _fit = None
+    else:
+        two_state_result, cov, cond, two_state_fit = fit(
+            sub_sample, x_coor, energy_model, two_state_fitpa,
+            jackknife=jack)
+        effective_rank = covariance_effective_rank(
+            cov, two_state_fitpa.svdcut)
+        sample_rank = covariance_sample_rank(cov)
+        two_gate_ok, two_gate_reason = fit_identifiability(
+            Ndata, two_state_required_rank, effective_rank,
+            sample_rank=sample_rank)
+        two_state_fit_status, two_state_reason, _ = fit_status_from_samples(
+            two_state_result, two_state_fit,
+            failure_reason=None if two_gate_ok else two_gate_reason)
+
+        one_state_result, one_cov, _, one_state_fit = fit(
+            sub_sample, x_coor, one_state_energy_model,
+            one_state_fitpa, jackknife=jack)
+        if not np.allclose(one_cov, cov, rtol=0.0, atol=0.0):
+            raise RuntimeError("one- and two-state fits must share covariance")
+        one_gate_ok, one_gate_reason = fit_identifiability(
+            Ndata, one_state_required_rank, effective_rank,
+            sample_rank=sample_rank)
+        one_state_fit_status, one_state_reason, _ = fit_status_from_samples(
+            one_state_result, one_state_fit,
+            failure_reason=None if one_gate_ok else one_gate_reason)
+
+        two_dof = effective_rank - two_state_required_rank
+        one_dof = effective_rank - one_state_required_rank
+        aicc_two_state = _aicc_from_reduced_chi2(
+            two_state_result["chi2"], two_dof, Ndata,
+            two_state_required_rank)
+        aicc_one_state = _aicc_from_reduced_chi2(
+            one_state_result["chi2"], one_dof, Ndata,
+            one_state_required_rank)
+        weight_one_state, weight_two_state = _akaike_weights(
+            aicc_one_state, aicc_two_state)
+        median_one = _finite_median(aicc_one_state)
+        median_two = _finite_median(aicc_two_state)
+
+        if params.model_selection == "two_state":
+            selected_model = "two_state" if np.isfinite(median_two) else "unavailable"
+        elif median_one < median_two:
+            selected_model = "one_state"
+        elif median_two < median_one:
+            selected_model = "two_state"
+        elif np.isfinite(median_one):
+            selected_model = "ambiguous"
+
+        if selected_model == "one_state":
+            fit_result["c0"][:] = one_state_result["c0"]
+            fit_result["E0"][:] = one_state_result["E0"]
+            fit_result["chi2"][:] = one_state_result["chi2"]
+            fit_status = one_state_fit_status
+            fit_reason = (
+                "AICc selected one_state; excited-state amplitude and gap "
+                "are not supported by this window"
+            )
+            ground_state_status = one_state_fit_status
+            excited_state_status = "practically_unidentifiable"
+            _fit = one_state_fit
+            if two_state_fit_status in (
+                    "identifiable", "prior_constrained",
+                    "practically_unidentifiable"):
+                two_state_fit_status = "practically_unidentifiable"
+                two_state_reason = fit_reason
+        elif selected_model == "two_state":
+            for name in param_names + ["chi2"]:
+                fit_result[name][:] = two_state_result[name]
+            fit_status = two_state_fit_status
+            fit_reason = two_state_reason
+            ground_state_status = two_state_fit_status
+            excited_state_status = two_state_fit_status
+            _fit = two_state_fit
+        elif selected_model == "ambiguous":
+            fit_status = "practically_unidentifiable"
+            fit_reason = "one- and two-state AICc medians are exactly tied"
+            ground_state_status = one_state_fit_status
+            excited_state_status = "practically_unidentifiable"
+            _fit = None
+        else:
+            fit_status = "statistically_unidentifiable"
+            fit_reason = (
+                "neither one- nor two-state candidate has finite AICc; "
+                f"one_state={one_state_reason}; two_state={two_state_reason}"
+            )
+            _fit = None
 
     if verbose:
-        for name in param_names:
-            print(f"{name} = {fit_result[name].mean():.3g} "
-                  f"+- {sem(fit_result[name], jack):.3g}")
-        print(f"chi2 = {fit_result['chi2'].mean():.3g}")
+        print(f"fit status = {fit_status} ({fit_reason})")
+        if fit_status in ("identifiable", "prior_constrained"):
+            for name in param_names:
+                if np.isfinite(fit_result[name]).all():
+                    print(f"{name} = {fit_result[name].mean():.3g} "
+                          f"+- {sem(fit_result[name], jack):.3g}")
+                else:
+                    print(f"{name} = unavailable ({excited_state_status})")
+            print(f"chi2 = {fit_result['chi2'].mean():.3g}")
+        print(f"two_state_fit_status = {two_state_fit_status} "
+              f"({two_state_reason})")
         print(f"fit time: ...")
 
     report_lines.append("-" * 72)
     report_lines.append(f"condition number = {cond:.3g}")
+    report_lines.append(f"fit status = {fit_status}")
+    report_lines.append(f"fit reason = {fit_reason}")
+    report_lines.append(f"AICc selected model = {selected_model}")
+    report_lines.append(
+        f"AICc median one-state = {_finite_median(aicc_one_state):.6g}")
+    report_lines.append(
+        f"AICc median two-state = {_finite_median(aicc_two_state):.6g}")
+    report_lines.append(f"ground-state status = {ground_state_status}")
+    report_lines.append(f"excited-state status = {excited_state_status}")
+    report_lines.append(f"two-state fit status = {two_state_fit_status}")
+    report_lines.append(f"two-state fit reason = {two_state_reason}")
+    report_lines.append(f"effective covariance rank = {effective_rank}")
+    report_lines.append(f"sample covariance rank = {sample_rank}")
+    selected_required_rank = (
+        one_state_required_rank if selected_model == "one_state"
+        else two_state_required_rank)
+    report_lines.append(f"required parameter rank = {selected_required_rank}")
+    report_lines.append(
+        f"candidate parameter ranks = one:{one_state_required_rank}, "
+        f"two:{two_state_required_rank}")
+    if fit_status not in ("identifiable", "prior_constrained"):
+        report_lines.append(f"fit skipped: {fit_reason}")
     report_lines.append("")
-    report_lines.append(_fit.format(maxline=True))
+    if _fit is not None:
+        report_lines.append(_fit.format(maxline=True))
     report_lines.append("")
 
     report_lines.append("=" * 72)
     report_lines.append("  Summary Table")
     report_lines.append("=" * 72)
     row = []
-    for name in param_names:
-        row.append(f"{fit_result[name].mean():.3f}"
-                   f"({sem(fit_result[name], jack) * 1e3:.0f})")
-    row.append(f"{fit_result['chi2'].mean():.2g}")
+    if fit_status in ("identifiable", "prior_constrained"):
+        for name in param_names:
+            if np.isfinite(fit_result[name]).all():
+                row.append(f"{fit_result[name].mean():.3f}"
+                           f"({sem(fit_result[name], jack) * 1e3:.0f})")
+            else:
+                row.append("N/A")
+        row.append(f"{fit_result['chi2'].mean():.2g}")
+    else:
+        row.extend(["N/A"] * (len(param_names) + 1))
     report_lines.append(make_summary_table(param_names + ["chi2/dof"], [row]))
     report_lines.append("")
 
+    parameter_status_by_name = {
+        "c0": ground_state_status,
+        "c1": excited_state_status,
+        "E0": ground_state_status,
+        "dE": excited_state_status,
+    }
+    parameter_reason_by_name = {
+        "c0": fit_reason,
+        "E0": fit_reason,
+        "c1": (
+            "selected one-state model has no resolved excited amplitude"
+            if selected_model == "one_state" else fit_reason
+        ),
+        "dE": (
+            "selected one-state model has no resolved excited-state gap"
+            if selected_model == "one_state" else fit_reason
+        ),
+    }
+    fit_result.update({
+        "status_schema_version": np.asarray(2, dtype=np.int64),
+        "fit_status": fit_status,
+        "fit_reason": fit_reason,
+        "selected_model": selected_model,
+        "one_state_fit_status": one_state_fit_status,
+        "two_state_fit_status": two_state_fit_status,
+        "one_state_fit_reason": one_state_reason if not (
+            jack and params.Nconf < 2) else fit_reason,
+        "two_state_fit_reason": two_state_reason if not (
+            jack and params.Nconf < 2) else fit_reason,
+        "ground_state_status": ground_state_status,
+        "excited_state_status": excited_state_status,
+        "parameter_names": np.asarray(param_names),
+        "parameter_status": np.asarray([
+            parameter_status_by_name[name] for name in param_names
+        ]),
+        "parameter_reason": np.asarray([
+            parameter_reason_by_name[name] for name in param_names
+        ]),
+        "aicc_n_observations": np.asarray(Ndata, dtype=np.int64),
+        "aicc_one_state": np.asarray(median_one, dtype=np.float64),
+        "aicc_two_state": np.asarray(median_two, dtype=np.float64),
+        "aicc_one_state_samples": aicc_one_state,
+        "aicc_two_state_samples": aicc_two_state,
+        "akaike_weight_one_state": weight_one_state,
+        "akaike_weight_two_state": weight_two_state,
+        "condition_number": np.asarray(cond, dtype=np.float64),
+        "effective_rank": np.asarray(effective_rank, dtype=np.int64),
+        "sample_rank": np.asarray(sample_rank, dtype=np.int64),
+        "required_rank": np.asarray(selected_required_rank, dtype=np.int64),
+        "one_state_required_rank": np.asarray(
+            one_state_required_rank, dtype=np.int64),
+        "two_state_required_rank": np.asarray(
+            two_state_required_rank, dtype=np.int64),
+    })
     with open(os.path.join(out_dir, "2_fit_report.txt"), "w") as f:
         f.write("\n".join(report_lines))
-    np.savez(os.path.join(out_dir, "1_fit_data.npz"), **fit_result)
+    np.savez(
+        os.path.join(out_dir, "1_fit_data.npz"),
+        **fit_result,
+    )
     if verbose:
         print(f"report saved to {out_dir}/2_fit_report.txt")
         print(f"fit result saved to {out_dir}/1_fit_data.npz")
         print("==================== do_fit end ====================")
     return fit_result
+
+
+def _fit_status_text(fit_result):
+    """读取中心拟合状态；旧 numeric-only 结果不推断为可辨识。"""
+    value = fit_result.get("fit_status")
+    if value is None:
+        return "unavailable"
+    value = np.asarray(value).reshape(-1)
+    if value.size != 1:
+        return "unavailable"
+    return str(value[0])
+
+
+def _fit_reason_text(fit_result):
+    """读取中心拟合原因，兼容旧 numeric-only 产物。"""
+    value = fit_result.get("fit_reason")
+    if value is None:
+        return "central fit status is unavailable"
+    value = np.asarray(value).reshape(-1)
+    if value.size != 1:
+        return "central fit status is unavailable"
+    return str(value[0])
 
 
 def plot_eff_mass(corr2: np.ndarray, fit_result: dict, params: EnergyParams,
@@ -198,14 +531,21 @@ def plot_eff_mass(corr2: np.ndarray, fit_result: dict, params: EnergyParams,
 
     para_E0 = fit_result["E0"] * params.unit
     chi2 = fit_result["chi2"]
+    fit_status = _fit_status_text(fit_result)
 
     mass = np.log(corr2 / np.roll(corr2, shift=-1, axis=1)) * params.unit
     mass_mean = mass.mean(0)
     mass_err = sem(mass, jack)
 
-    E0_mean = para_E0.mean(0)
-    E0_err = sem(para_E0, jack)
-    chi2_mean = chi2.mean(0)
+    fit_valid = (fit_status in ("identifiable", "prior_constrained")
+                 and np.isfinite(para_E0).all()
+                 and np.isfinite(chi2).all())
+    if fit_valid:
+        E0_mean = para_E0.mean(0)
+        E0_err = sem(para_E0, jack)
+        chi2_mean = chi2.mean(0)
+    else:
+        E0_mean = E0_err = chi2_mean = np.nan
 
     band_down = E0_mean - E0_err
     band_up = E0_mean + E0_err
@@ -218,19 +558,27 @@ def plot_eff_mass(corr2: np.ndarray, fit_result: dict, params: EnergyParams,
                 markersize=7, markeredgewidth=1.8, linewidth=1.2, zorder=3)
 
     x_band = np.array([params.dt_start, params.dt_end])
-    ax.fill_between(x_band, [band_down, band_down], [band_up, band_up],
-                    color="gray", alpha=0.35, linewidth=0, zorder=1,
-                    label="Fit E0")
-
-    E0_str = f"{E0_mean:.3f}({E0_err * 1e3:.0f})"
     Px, Py, Pz = params.mom_tag
-    ax.set_title(
-        f"P=({Px},{Py},{Pz}) [{params.dir}], E0={E0_str}, "
-        f"chi2={chi2_mean:.2f}", fontsize=12)
+    if fit_valid:
+        ax.fill_between(x_band, [band_down, band_down], [band_up, band_up],
+                        color="gray", alpha=0.35, linewidth=0, zorder=1,
+                        label="Fit E0")
+        E0_str = f"{E0_mean:.3f}({E0_err * 1e3:.0f})"
+        title = (f"P=({Px},{Py},{Pz}) [{params.dir}], E0={E0_str}, "
+                 f"chi2={chi2_mean:.2f} [{fit_status}]")
+    else:
+        title = (f"P=({Px},{Py},{Pz}) [{params.dir}], "
+                 f"fit={fit_status}")
+        ax.text(0.5, 0.08, f"fit unavailable: {_fit_reason_text(fit_result)}",
+                transform=ax.transAxes, ha="center", va="bottom",
+                fontsize=9, color="darkred")
+    ax.set_title(title, fontsize=12)
     ax.set_xlim(params.xlim[0], params.xlim[1])
     ax.set_ylim(params.ylim[0], params.ylim[1])
     ax.set_box_aspect(3 / 4)
-    ax.legend(loc="upper right", fontsize=8)
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(handles, labels, loc="upper right", fontsize=8)
 
     fig.supxlabel("t/a", fontsize=16)
     fig.supylabel("eff mass (GeV)", fontsize=16)

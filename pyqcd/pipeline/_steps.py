@@ -7,14 +7,14 @@ compute_ope/analyze/report/run_pipeline 编排逻辑（成功实例基线），
 但所有计算调用 pyqcd 子包（lattice/tools/vertex/contraction/operator/
 analysis），自包含、不 import examples/。
 
-步骤与输出与基线完全一致：
+步骤与逻辑输出沿用基线；张量新产物统一为 `.h5`，读取时兼容旧 `.npy/.npz`：
 
-    data/conf{id}/VdV_mom_{id}.npy, VVV_mom_{id}.npy
-    data/conf{id}/corr_{ch}_{P0|P2}_{id}.npy
-    data/conf{id}/ops_mu{mu}_nu{nu}_dz{dz}_conf{id}.npz, ope_combined_conf{id}.npy
-    data/conf{id}/{proton|pion}_{P0|P2}_3pt_{id}.npy, pjnnjnp_4pt_{id}.npy
-    data/analysis/{meff|corr}_{had}_{mom}_{mean|err}.npy
-    data/analysis/ratio_{had}_{mom}_{mean|err}.npy
+    data/conf{id}/VdV_mom_{id}.h5, VVV_mom_{id}.h5
+    data/conf{id}/corr_{ch}_{P0|P2}_{id}.h5
+    data/conf{id}/ops_mu{mu}_nu{nu}_dz{dz}_conf{id}.h5, ope_combined_conf{id}.h5
+    data/conf{id}/{proton|pion}_{P0|P2}_3pt_{id}.h5, pjnnjnp_4pt_{id}.h5
+    data/analysis/{meff|corr}_{had}_{mom}_{mean|err}.h5
+    data/analysis/ratio_{had}_{mom}_{mean|err}.h5
     analysis/disconnected/{ratio,0_fit_data,1_fit_report,c0/chi2/ratio png}
     plots/{meff_all_channels,correlators_all_channels,ratio_3pt_all_channels}.png
     physics_report.tex/pdf（xelatex 两遍）
@@ -22,17 +22,22 @@ analysis），自包含、不 import examples/。
 """
 from __future__ import annotations
 
+import gc
+import hashlib
 import json
 import os
+import re
 import subprocess
+import tempfile
 import time
 from collections import OrderedDict
 from datetime import datetime
 
+import h5py
 import numpy as np
 
 from ..tools import (
-    set_backend, get_backend, get_backend_name, set_precision,
+    dump_env, set_backend, get_backend, get_backend_name, set_precision,
 )
 from ..tools._io import (
     readin_eigvecs_gpu, readin_peram_time_slice,
@@ -45,10 +50,13 @@ from ..contraction import (
     clear_plan_cache, seq_peram,
 )
 from ..operator import (
-    read_gauge_lime, gluon_ope_operator_z0, plaquette_clover,
+    read_gauge_lime, gluon_ope_operator_z0, gluon_ope_channel,
+    FieldStrengthCache, OPEChannelSpec, plaquette_clover,
+    resolve_ildg_binary_record,
 )
+from . import _config as _pipeline_config
 from ._config import (
-    NT, NX, NEV, NEV1, ALttc, FM2GEV, CONF_IDS, PRECISION,
+    NT, NX, NEV, NEV1, ALttc, CONF_IDS, PRECISION,
     MOM_SINK_VDV, MOM_SINK_VVV, ANALYSIS_MOMENTA,
     PP_SINK, PP_SRC, PN_SINK, PN_SRC, PION_SINK, PION_SRC,
     PJN_SINK, PJN_SRC, PJN_CURR, PION3_SINK, PION3_SRC, PION3_CURR,
@@ -57,6 +65,8 @@ from ._config import (
     T_SEP, T_SEP_3PT, DELTA_Z, Z_DIR, OPE_COMPONENTS,
     get_eigen_path, get_peram_dir, get_gauge_path,
 )
+from ._run_dir import reserve_unique_run_dir
+from ._validate import ProgressLog
 
 try:  # GPU 内存探测（仅 try/except，遵守 pyqcd 反模式约定）
     import cupy as _cp
@@ -80,6 +90,23 @@ def _info(logger, msg):
         logger(msg)
 
 
+def _momentum_tag(momentum):
+    """边界明确的三分量动量标签；保留常用单数字 ``P200``。"""
+    try:
+        components = tuple(momentum)
+    except TypeError as exc:
+        raise ValueError("momentum 必须恰含三个整数") from exc
+    if (len(components) != 3
+            or any(isinstance(value, (bool, np.bool_))
+                   or not isinstance(value, (int, np.integer))
+                   for value in components)):
+        raise ValueError("momentum 必须恰含三个非布尔整数")
+    components = tuple(int(value) for value in components)
+    if all(0 <= value <= 9 for value in components):
+        return "P" + "".join(str(value) for value in components)
+    return "P" + "_".join(str(value) for value in components)
+
+
 def _warn(logger, msg):
     if logger is None:
         return
@@ -89,16 +116,39 @@ def _warn(logger, msg):
         logger(f"[warn] {msg}")
 
 
+def _backend_synchronizer():
+    """Capture the configured GPU backend's synchronization callback."""
+    backend_name = get_backend_name()
+    if backend_name == 'cupy':
+        return _cp.cuda.Stream.null.synchronize
+    if backend_name == 'torch':
+        backend = get_backend()
+        device = backend.get_device()
+        if device is not None and str(device).startswith('cuda'):
+            return lambda: backend.torch.cuda.synchronize(device)
+    return None
+
+
 def _timer(name, logger, fn, *args, **kw):
     """带计时地执行 fn(*args, **kw)，返回 (结果, 秒数)。"""
-    if get_backend_name() == 'cupy':
-        _cp.cuda.Stream.null.synchronize()
+    synchronize = _backend_synchronizer()
+    if synchronize is not None:
+        synchronize()
     t0 = time.perf_counter()
     try:
         res = fn(*args, **kw)
-    finally:
-        if get_backend_name() == 'cupy':
-            _cp.cuda.Stream.null.synchronize()
+    except BaseException:
+        if synchronize is not None:
+            try:
+                synchronize()
+            except BaseException:
+                # 保留计算/用户中断作为主异常；后同步仅属清理路径。
+                pass
+        raise
+    else:
+        # 计算成功时，同步失败意味着结果尚未可靠完成，必须上抛。
+        if synchronize is not None:
+            synchronize()
     el = time.perf_counter() - t0
     _info(logger, f"{name}: {el:.3f} s")
     return res, el
@@ -141,24 +191,436 @@ def log_gpu_memory(logger, label: str = ''):
         _info(logger, f"GPU memory{label}: N/A")
 
 
-def save_array(filepath, arr, logger=None):
+_STRICT_CONTRACT_JSON_ATTR = "pyqcd_cache_contract_json"
+_STRICT_CONTRACT_SHA_ATTR = "pyqcd_cache_contract_sha256"
+_OPE_PAYLOAD_SHA_ATTR = "pyqcd_ope_payload_sha256"
+
+_OPE_METADATA_SCHEMA = "1"
+_OPE_METADATA_SCHEMA_ATTR = "pyqcd_ope_metadata_schema"
+_OPE_CHANNEL_SPECS_ATTR = "pyqcd_ope_channel_specs_json"
+_OPE_COMBINED_SPEC_ATTR = "pyqcd_ope_combined_spec_json"
+_OPE_CHANNEL_FIELDS = frozenset((
+    "mode", "mu", "nu", "mu2", "nu2", "z_dir", "second_insert",
+    "direction", "sum_kind", "normalization", "output_projection",
+    "field_projection"))
+_OPE_COMBINED_FIELDS = frozenset((
+    "mode", "components", "coefficients", "z_dir", "second_insert",
+    "direction", "sum_kind", "normalization", "output_projection",
+    "field_projection"))
+_OPE_SHARED_FIELDS = (
+    "mode", "z_dir", "second_insert", "direction", "sum_kind",
+    "normalization", "output_projection", "field_projection")
+
+
+def _strict_contract_payload(contract):
+    return json.dumps(
+        contract, sort_keys=True, separators=(',', ':'),
+        ensure_ascii=True, allow_nan=False)
+
+
+def _strict_contract_attrs(contract):
+    payload = _strict_contract_payload(contract)
+    return {
+        _STRICT_CONTRACT_JSON_ATTR: payload,
+        _STRICT_CONTRACT_SHA_ATTR: hashlib.sha256(
+            payload.encode('utf-8')).hexdigest(),
+    }
+
+
+def _ope_payload_sha256(array):
+    """Hash an OPE payload using its canonical C-order byte representation."""
+    if hasattr(array, 'detach'):
+        array = array.detach().cpu().numpy()
+    elif hasattr(array, 'get') and callable(array.get):
+        array = array.get()
+    array = np.ascontiguousarray(np.asarray(array))
+    return hashlib.sha256(array.tobytes(order='C')).hexdigest()
+
+
+def _ope_payload_attrs(array):
+    """Return the OPE-only payload integrity attribute."""
+    return {_OPE_PAYLOAD_SHA_ATTR: _ope_payload_sha256(array)}
+
+
+def _strict_attr_text(value):
+    if isinstance(value, (bytes, np.bytes_)):
+        return bytes(value).decode('utf-8')
+    if isinstance(value, (str, np.str_)):
+        return str(value)
+    return value if isinstance(value, str) else None
+
+
+def _ope_metadata_attrs(channel_metadata, combined_spec):
+    """Encode OPE channel identity as canonical JSON HDF5 attributes."""
+    return {
+        _OPE_METADATA_SCHEMA_ATTR: _OPE_METADATA_SCHEMA,
+        _OPE_CHANNEL_SPECS_ATTR: _strict_contract_payload(channel_metadata),
+        _OPE_COMBINED_SPEC_ATTR: _strict_contract_payload(combined_spec),
+    }
+
+
+def _validate_ope_metadata_payloads(channel_text, combined_text):
+    """Validate and decode the complete OPE metadata contract.
+
+    Validation is deliberately independent of filenames, array shapes, and
+    the current pipeline defaults.  A valid payload must describe one
+    internally consistent insertion family; in particular a combined
+    contract cannot mix F and Ftilde channel metadata.
+    """
+    if not isinstance(channel_text, str) or not isinstance(combined_text, str):
+        raise ValueError("OPE metadata JSON attrs 必须是 UTF-8 字符串")
+    try:
+        channel_payload = json.loads(channel_text)
+        combined_payload = json.loads(combined_text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("OPE metadata JSON 不可解析") from exc
+
+    if channel_text != _strict_contract_payload(channel_payload):
+        raise ValueError("channel_specs JSON 不是 canonical JSON")
+    if combined_text != _strict_contract_payload(combined_payload):
+        raise ValueError("combined_spec JSON 不是 canonical JSON")
+    if (not isinstance(channel_payload, list) or not channel_payload
+            or any(not isinstance(item, dict) for item in channel_payload)):
+        raise ValueError("channel_specs 必须是非空对象列表")
+    if (not isinstance(combined_payload, dict)
+            or set(combined_payload) != _OPE_COMBINED_FIELDS):
+        raise ValueError("combined_spec 字段集合不完整或含未知字段")
+
+    specs = []
+    for item in channel_payload:
+        if set(item) != _OPE_CHANNEL_FIELDS:
+            raise ValueError("channel spec 字段集合不完整或含未知字段")
+        try:
+            spec = OPEChannelSpec(**item)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("channel spec 未通过 OPEChannelSpec 校验") from exc
+        if spec.to_dict() != item:
+            raise ValueError("channel spec 规范化后与 JSON 不一致")
+        specs.append(spec)
+
+    components = combined_payload["components"]
+    coefficients = combined_payload["coefficients"]
+    if (not isinstance(components, list)
+            or len(components) != len(specs)
+            or not isinstance(coefficients, list)
+            or len(coefficients) != len(specs)):
+        raise ValueError("combined_spec components/coefficients 长度不一致")
+
+    component_pairs = []
+    for component in components:
+        if (not isinstance(component, list) or len(component) != 2
+                or any(isinstance(value, (bool, np.bool_))
+                       or not isinstance(value, (int, np.integer))
+                       for value in component)):
+            raise ValueError("combined_spec components 必须是二元整数列表")
+        component_pairs.append(tuple(int(value) for value in component))
+    spec_pairs = [(spec.mu, spec.nu) for spec in specs]
+    if (len(set(component_pairs)) != len(component_pairs)
+            or len(set(spec_pairs)) != len(spec_pairs)
+            or set(component_pairs) != set(spec_pairs)):
+        raise ValueError("combined_spec components 与 channel_specs 不一致")
+
+    for coefficient in coefficients:
+        if (isinstance(coefficient, (bool, np.bool_))
+                or not isinstance(coefficient, (int, float, np.integer,
+                                                np.floating))
+                or not np.isfinite(coefficient)):
+            raise ValueError("combined_spec coefficients 必须是有限实数")
+
+    first = specs[0]
+    try:
+        # Reuse the public channel validator for all combined shared fields,
+        # including strict bool rejection and mode/insertion consistency.
+        OPEChannelSpec(
+            mode=combined_payload["mode"], mu=first.mu, nu=first.nu,
+            mu2=first.mu2, nu2=first.nu2,
+            z_dir=combined_payload["z_dir"],
+            second_insert=combined_payload["second_insert"],
+            direction=combined_payload["direction"],
+            sum_kind=combined_payload["sum_kind"],
+            normalization=combined_payload["normalization"],
+            output_projection=combined_payload["output_projection"],
+            field_projection=combined_payload["field_projection"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("combined_spec 共享字段未通过 OPEChannelSpec 校验") \
+            from exc
+    for spec in specs:
+        for field in _OPE_SHARED_FIELDS:
+            if getattr(spec, field) != combined_payload[field]:
+                raise ValueError(
+                    f"combined_spec 与 channel_specs 的 {field} 不一致")
+
+    return [spec.to_dict() for spec in specs], combined_payload
+
+
+def _strict_array(value, name, spec):
+    """验证 strict cache 的完整数组边界，不执行隐式 dtype 转换。"""
+    if hasattr(value, 'detach'):
+        value = value.detach().cpu().numpy()
+    elif hasattr(value, 'get') and callable(value.get):
+        value = value.get()
+    array = np.asarray(value)
+    expected_shape = tuple(spec['shape'])
+    expected_dtype = np.dtype(spec['dtype'])
+    if array.shape != expected_shape:
+        raise ValueError(
+            f"{name} shape 契约不匹配: expected {expected_shape}, "
+            f"got {array.shape}")
+    if array.dtype != expected_dtype:
+        raise ValueError(
+            f"{name} dtype 契约不匹配: expected {expected_dtype}, "
+            f"got {array.dtype}")
+    try:
+        finite = _array_all_finite(array)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} 不能执行有限性检查: {exc}") from exc
+    if not finite:
+        raise ValueError(f"{name} 必须全部有限，不能含 NaN 或 Inf")
+    return array
+
+
+def _array_all_finite(array):
+    """等价于 ``isfinite(...).all()``，但限制大型张量临时布尔内存。"""
+    array = np.asarray(array)
+    if array.ndim == 0:
+        return bool(np.isfinite(array))
+    for index in range(array.shape[0]):
+        if not np.isfinite(array[index]).all():
+            return False
+    return True
+
+
+def _load_strict_cache_spec(spec, payload_sha_attr=None):
+    """只读加载单个 canonical HDF5；可在同一次读取中校验 payload。"""
+    path = os.fspath(spec['path'])
+    if not os.path.isfile(path):
+        return None, 'canonical 文件不存在'
+    expected_attrs = _strict_contract_attrs(spec['contract'])
+    try:
+        with h5py.File(path, 'r') as handle:
+            payload = _strict_attr_text(
+                handle.attrs.get(_STRICT_CONTRACT_JSON_ATTR))
+            digest = _strict_attr_text(
+                handle.attrs.get(_STRICT_CONTRACT_SHA_ATTR))
+            if payload is None or digest is None:
+                return None, '缺少完整物理契约元数据'
+            actual_digest = hashlib.sha256(
+                payload.encode('utf-8')).hexdigest()
+            if digest != actual_digest:
+                return None, 'HDF5 契约 SHA-256 与 JSON 不一致'
+            if (payload != expected_attrs[_STRICT_CONTRACT_JSON_ATTR]
+                    or digest != expected_attrs[_STRICT_CONTRACT_SHA_ATTR]):
+                return None, 'HDF5 物理契约与请求不一致'
+            if set(handle.keys()) != {'data'}:
+                return None, 'HDF5 顶层数据集必须只有 data'
+            dataset = handle['data']
+            if not isinstance(dataset, h5py.Dataset):
+                return None, 'HDF5 data 不是数据集'
+            if tuple(dataset.shape) != tuple(spec['shape']):
+                return None, 'data 完整 shape 不匹配'
+            if dataset.dtype != np.dtype(spec['dtype']):
+                return None, 'data dtype 不匹配'
+            array = dataset[...]
+            try:
+                finite = _array_all_finite(array)
+            except (TypeError, ValueError) as exc:
+                return None, f'data 不能执行有限性检查: {exc}'
+            if not finite:
+                return None, 'data 含 NaN 或 Inf'
+            if payload_sha_attr is not None:
+                payload_digest = _strict_attr_text(
+                    handle.attrs.get(payload_sha_attr))
+                if payload_digest is None:
+                    return None, f'缺少 payload SHA-256 属性 {payload_sha_attr}'
+                actual_payload_digest = _ope_payload_sha256(array)
+                if payload_digest != actual_payload_digest:
+                    return None, 'data payload SHA-256 不匹配'
+            return array, None
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        return None, f'HDF5 不可读: {exc}'
+
+
+def _load_strict_cache_mapping(specs, logger, payload_sha_attr=None):
+    """仅当一组 canonical artifact 全部匹配时返回。"""
+    loaded = {}
+    for name, spec in specs.items():
+        array, reason = _load_strict_cache_spec(
+            spec, payload_sha_attr=payload_sha_attr)
+        if array is None:
+            _info(logger, f"  ignored incompatible strict cache: "
+                          f"{spec['path']} ({reason})")
+            return None
+        loaded[name] = array
+    return loaded
+
+
+def save_array(filepath, arr, logger=None, attrs=None):
     """保存数组（GPU → CPU 转换后 .h5；h5py 为唯一读写工具）。
 
     兼容旧调用：传入 .npy 路径时自动改存 .h5；旧 .npy 产物的
     读取由 ``_load_any`` 回退支持。
     """
-    if filepath.endswith('.npy'):
-        filepath = filepath[:-4] + '.h5'
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    save_tensor_h5(arr, filepath)
+    filepath = os.fspath(filepath)
+    if filepath.endswith(('.npy', '.npz')):
+        filepath = filepath.rsplit('.', 1)[0] + '.h5'
+    elif not filepath.endswith('.h5'):
+        filepath += '.h5'
+    directory = os.path.dirname(filepath) or '.'
+    os.makedirs(directory, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+            dir=directory, prefix=f'.{os.path.basename(filepath)}.',
+            suffix='.tmp.h5', delete=False) as temporary:
+        temporary_path = temporary.name
+    try:
+        save_tensor_h5(arr, temporary_path)
+        if attrs is not None:
+            with h5py.File(temporary_path, 'r+') as handle:
+                if set(handle.keys()) != {'data'}:
+                    raise ValueError(
+                        "strict HDF5 顶层数据集必须只有 data")
+                if not isinstance(handle['data'], h5py.Dataset):
+                    raise ValueError("strict HDF5 data 必须是 Dataset")
+                for key, value in dict(attrs).items():
+                    handle.attrs[str(key)] = value
+                handle.flush()
+        os.replace(temporary_path, filepath)
+    finally:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            # 临时文件清理是 best-effort，不能覆盖写入或发布异常。
+            pass
     arr_np = arr.get() if hasattr(arr, 'get') else np.asarray(arr)
     _info(logger, f"Saved {os.path.basename(filepath)} "
                   f"shape={np.shape(arr)} dtype={getattr(arr_np, 'dtype', '?')} "
                   f"({os.path.getsize(filepath)/1024:.1f} KB)")
 
 
+def _array_stem(path):
+    """去掉受支持的数组后缀，统一生产者与兼容读取器的路径语义。"""
+    path = os.fspath(path)
+    for ext in ('.h5', '.npy', '.npz'):
+        if path.endswith(ext):
+            return path[:-len(ext)]
+    return path
+
+
+def _existing_array_path(path_without_ext):
+    """Return the preferred existing array path for a stem, if any."""
+    stem = _array_stem(path_without_ext)
+    for ext in ('.h5', '.npy', '.npz'):
+        path = stem + ext
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _array_exists(path):
+    """规范 HDF5 或旧 NumPy 产物是否存在。"""
+    stem = _array_stem(path)
+    return any(os.path.exists(stem + ext) for ext in ('.h5', '.npy', '.npz'))
+
+
+def _read_ope_metadata(path_without_ext):
+    """Read OPE identity only from a complete, validated HDF5 attr set.
+
+    Legacy NumPy/NPZ files and HDF5 files without all three OPE attrs remain
+    readable as arrays, but they are never assigned the current default
+    channel semantics.
+    """
+    h5_path = _array_stem(path_without_ext) + '.h5'
+    if not os.path.isfile(h5_path):
+        return 'missing', None
+    try:
+        with h5py.File(h5_path, 'r') as handle:
+            present = tuple(
+                key in handle.attrs for key in (
+                    _OPE_METADATA_SCHEMA_ATTR,
+                    _OPE_CHANNEL_SPECS_ATTR,
+                    _OPE_COMBINED_SPEC_ATTR))
+            schema = _strict_attr_text(
+                handle.attrs.get(_OPE_METADATA_SCHEMA_ATTR))
+            channel_text = _strict_attr_text(
+                handle.attrs.get(_OPE_CHANNEL_SPECS_ATTR))
+            combined_text = _strict_attr_text(
+                handle.attrs.get(_OPE_COMBINED_SPEC_ATTR))
+    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
+        return 'invalid', None
+
+    if not any(present):
+        return 'missing', None
+    if (not all(present) or schema != _OPE_METADATA_SCHEMA
+            or channel_text is None or combined_text is None):
+        return 'invalid', None
+    try:
+        metadata = _validate_ope_metadata_payloads(
+            channel_text, combined_text)
+    except (TypeError, ValueError, UnicodeError):
+        return 'invalid', None
+    return 'validated', metadata
+
+
+def _read_ope_source_identity_status(path_without_ext, conf_id):
+    """Classify current-source freshness for a canonical combined OPE.
+
+    This is a provenance snapshot for ``load_ope`` rather than a cache-hit
+    decision.  Legacy artifacts have no strict contract and therefore report
+    ``missing``; a source recorded without positive stat evidence reports
+    ``unverified``.  Callers must not interpret the result as a lock or a
+    byte-level immutability guarantee.
+    """
+    h5_path = _array_stem(path_without_ext) + '.h5'
+    if not os.path.isfile(h5_path):
+        return 'missing'
+    try:
+        with h5py.File(h5_path, 'r') as handle:
+            present = tuple(
+                key in handle.attrs for key in (
+                    _STRICT_CONTRACT_JSON_ATTR,
+                    _STRICT_CONTRACT_SHA_ATTR))
+            payload = _strict_attr_text(
+                handle.attrs.get(_STRICT_CONTRACT_JSON_ATTR))
+            digest = _strict_attr_text(
+                handle.attrs.get(_STRICT_CONTRACT_SHA_ATTR))
+    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
+        return 'invalid'
+
+    if not any(present):
+        return 'missing'
+    if not all(present) or payload is None or digest is None:
+        return 'invalid'
+    if hashlib.sha256(payload.encode('utf-8')).hexdigest() != digest:
+        return 'invalid'
+    try:
+        contract = json.loads(payload)
+        canonical = _strict_contract_payload(contract)
+    except (TypeError, ValueError, UnicodeError):
+        return 'invalid'
+    if (not isinstance(contract, dict) or payload != canonical
+            or contract.get('artifact') != 'ope_combined'
+            or contract.get('conf_id') != int(conf_id)):
+        return 'invalid'
+
+    source = contract.get('gauge_source')
+    if (not isinstance(source, dict)
+            or not isinstance(source.get('path'), str)
+            or not isinstance(source.get('stat_available'), bool)):
+        return 'invalid'
+    if not source['stat_available']:
+        return 'unverified'
+    try:
+        current_path = _canonical_gauge_input(get_gauge_path(int(conf_id)))
+        current = _gauge_source_identity(current_path)
+    except (KeyError, OSError, TypeError, ValueError):
+        return 'unavailable'
+    if not current.get('stat_available', False):
+        return 'unavailable'
+    return 'validated' if current == source else 'stale'
+
+
 def _load_any(path_without_ext, dataset='data'):
     """读取数组：优先 .h5（新格式），回退 .npy/.npz（旧产物兼容）。"""
+    path_without_ext = _array_stem(path_without_ext)
     h5p = path_without_ext + '.h5'
     if os.path.exists(h5p):
         return load_tensor_h5(h5p, dataset=dataset)
@@ -169,6 +631,46 @@ def _load_any(path_without_ext, dataset='data'):
                 return np.load(p)
             return np.load(p)[ds]
     raise FileNotFoundError(f"no data file for {path_without_ext}")
+
+
+def _load_exact_cache_array(path_without_ext, expected_shape,
+                            expected_dtype):
+    """读取 resume artifact，并严格核验 schema/shape/dtype/finite。"""
+    stem = _array_stem(path_without_ext)
+    h5_path = stem + '.h5'
+    npy_path = stem + '.npy'
+    try:
+        if os.path.exists(h5_path):
+            with h5py.File(h5_path, 'r') as handle:
+                if set(handle.keys()) != {'data'}:
+                    return None, 'HDF5 顶层数据集必须只有 data'
+                dataset = handle['data']
+                if not isinstance(dataset, h5py.Dataset):
+                    return None, 'HDF5 data 不是 Dataset'
+                if tuple(dataset.shape) != tuple(expected_shape):
+                    return None, 'data shape 不匹配'
+                if dataset.dtype != np.dtype(expected_dtype):
+                    return None, 'data dtype 不匹配'
+                array = dataset[...]
+        elif os.path.exists(npy_path):
+            array = np.load(npy_path, allow_pickle=False)
+        else:
+            return None, 'artifact 不存在'
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        return None, f'artifact 不可读: {exc}'
+
+    array = np.asarray(array)
+    if array.shape != tuple(expected_shape):
+        return None, 'array shape 不匹配'
+    if array.dtype != np.dtype(expected_dtype):
+        return None, 'array dtype 不匹配'
+    try:
+        finite = _array_all_finite(array)
+    except (TypeError, ValueError) as exc:
+        return None, f'array 不能执行有限性检查: {exc}'
+    if not finite:
+        return None, 'array 含 NaN 或 Inf'
+    return array, None
 
 
 def conf_data_dir(run_dir, conf_id):
@@ -212,14 +714,34 @@ def _compute_vvv_single_t_gpu(ev_t_gpu, ph_gpu, Nx, Nev1):
     return VVV_t
 
 
+def _vertex_momentum_fingerprint(mom_vdv, mom_vvv):
+    """为两类顶点的完整动量集合生成边界明确、可读的缓存键。"""
+    def encode(momenta):
+        return '-'.join(
+            'p' + '_'.join(str(component) for component in momentum)
+            for momentum in momenta
+        ) or 'none'
+
+    return f"vdv-{encode(mom_vdv)}__vvv-{encode(mom_vvv)}"
+
+
 def compute_vertices_for_config(conf_id, run_dir, logger,
                                 precision='complex64', recompute=False,
-                                mom_sink_vdv=None, mom_sink_vvv=None):
+                                mom_sink_vdv=None, mom_sink_vvv=None,
+                                strict_cache=None):
     """一个组态的 VdV/VVV（缓存命中则直接读取）。
 
     动量列表可自定义（默认用全局 MOM_SINK_VDV/MOM_SINK_VVV），
     供 test9 等多动量物理链复用；缓存路径带动量指纹避免串数据。
     """
+    if strict_cache is not None and not recompute:
+        cached = _load_strict_cache_mapping(strict_cache, logger)
+        if cached is not None:
+            _info(logger, f"  conf={conf_id}: loaded strict cached vertices "
+                          f"VdV{cached['VdV'].shape} "
+                          f"VVV{cached['VVV'].shape}")
+            return cached
+
     backend = get_backend()
     if get_backend_name() == 'torch':
         set_precision(precision)
@@ -229,17 +751,23 @@ def compute_vertices_for_config(conf_id, run_dir, logger,
     mom_vvv = list(mom_sink_vvv) if mom_sink_vvv is not None else list(MOM_SINK_VVV)
 
     cdir = conf_data_dir(run_dir, conf_id)
-    mom_fp = f"mom{''.join(str(m[0])+str(m[1])+str(m[2]) for m in mom_vdv)}" \
-             if mom_sink_vdv is not None else 'mom'
-    vdv_path = os.path.join(cdir, f'VdV_{mom_fp}_{conf_id}.npy')
-    vvv_path = os.path.join(cdir, f'VVV_{mom_fp}_{conf_id}.npy')
+    mom_fp = _vertex_momentum_fingerprint(mom_vdv, mom_vvv) \
+        if mom_sink_vdv is not None or mom_sink_vvv is not None else 'mom'
+    vdv_path = os.path.join(cdir, f'VdV_{mom_fp}_{conf_id}')
+    vvv_path = os.path.join(cdir, f'VVV_{mom_fp}_{conf_id}')
 
-    if os.path.exists(vdv_path) and os.path.exists(vvv_path) and not recompute:
-        VdV = np.load(vdv_path)
-        VVV = np.load(vvv_path)
-        _info(logger, f"  conf={conf_id}: loaded cached vertices "
-                      f"VdV{VdV.shape} VVV{VVV.shape}")
-        return {'VdV': VdV, 'VVV': VVV}
+    if (strict_cache is None and _array_exists(vdv_path)
+            and _array_exists(vvv_path) and not recompute):
+        VdV, vdv_reason = _load_exact_cache_array(
+            vdv_path, (NT, len(mom_vdv), NEV, NEV), dtype)
+        VVV, vvv_reason = _load_exact_cache_array(
+            vvv_path, (NT, len(mom_vvv), NEV1, NEV1, NEV1), dtype)
+        if VdV is not None and VVV is not None:
+            _info(logger, f"  conf={conf_id}: loaded cached vertices "
+                          f"VdV{VdV.shape} VVV{VVV.shape}")
+            return {'VdV': VdV, 'VVV': VVV}
+        _info(logger, f"  conf={conf_id}: ignored incompatible vertex cache "
+                      f"(VdV: {vdv_reason}; VVV: {vvv_reason})")
 
     _info(logger, f"  conf={conf_id}: computing vertices over {NT} time slices "
                   f"(VdV {len(mom_vdv)} mom, VVV {len(mom_vvv)} mom, "
@@ -276,26 +804,40 @@ def compute_vertices_for_config(conf_id, run_dir, logger,
     free_gpu_memory()
     log_gpu_memory(logger, " after vertices")
 
+    if strict_cache is not None:
+        VdV = _strict_array(VdV, 'VdV', strict_cache['VdV'])
+        VVV = _strict_array(VVV, 'VVV', strict_cache['VVV'])
+
     diag = np.abs(np.diag(VdV[0, 0])).real
     _info(logger, f"    VdV(P=0,t=0) diagonal: [{diag.min():.3f}, {diag.max():.3f}]  "
                   f"(≈1 ⇒ orthonormal)")
     _info(logger, f"    VVV(P=0,t=0) |v|: [{np.abs(VVV[0,0]).min():.3e}, "
                   f"{np.abs(VVV[0,0]).max():.3e}]")
 
-    save_array(vdv_path, VdV, logger)
-    save_array(vvv_path, VVV, logger)
+    if strict_cache is None:
+        save_array(vdv_path, VdV, logger)
+        save_array(vvv_path, VVV, logger)
+    else:
+        save_array(
+            strict_cache['VdV']['path'], VdV, logger,
+            attrs=_strict_contract_attrs(strict_cache['VdV']['contract']))
+        save_array(
+            strict_cache['VVV']['path'], VVV, logger,
+            attrs=_strict_contract_attrs(strict_cache['VVV']['contract']))
     _info(logger, f"    Saved VdV{VdV.shape} VVV{VVV.shape} for conf={conf_id}")
     return {'VdV': VdV, 'VVV': VVV}
 
 
-def step_vertex(config, run_dir, logger):
+def step_vertex(config, run_dir, logger, progress=None):
     set_backend(config.get('backend', 'cupy'),
                 device=config.get('device'))
     for cid in config['conf_ids']:
+        started = time.perf_counter()
         _timer(f"  Vertices conf={cid}", logger,
                compute_vertices_for_config, cid, run_dir, logger,
                config['precision'], False)
         free_gpu_memory()
+        _record_stage_completion(progress, 'vertex', cid, started)
     _info(logger, f"Vertices computed & saved for {len(config['conf_ids'])} configs")
 
 
@@ -303,9 +845,15 @@ def step_vertex(config, run_dir, logger):
 # Step 2/4/5 — 2pt / 3pt / 4pt 关联函数（照抄 compute_contraction.py）
 # ═══════════════════════════════════════════════════════════════════
 
-def _real_sum(val):
+def _contraction_array(val, expected_shape, label):
+    """将收缩结果转为 NumPy，并严格核验调用方约定的自由指标。"""
     v = val.get() if hasattr(val, 'get') else val
-    return float(np.real(np.sum(np.asarray(v).ravel())))
+    arr = np.asarray(v)
+    if arr.shape != expected_shape:
+        raise ValueError(
+            f"{label} contraction expected shape {expected_shape}, "
+            f"got {arr.shape}")
+    return arr
 
 
 def _load_peram_set(backend, peram_dir, conf_id, times, dtype, nev1=None,
@@ -337,6 +885,11 @@ def _load_peram_set(backend, peram_dir, conf_id, times, dtype, nev1=None,
 def _run_2pt(backend, sink_op, src_op, peram_t, peram_seq_t,
              t_src, t_sink, v_src, v_sink, v_kind, gamma_name, gamma_val,
              projector, Vindex=('M', 'M')):
+    # p(uud) 与 n(udd) 的两点交叉通道由味守恒严格为零；在构造动态
+    # Wick 缩并前显式裁决，避免把注册表或实现中的任意 KeyError 误报为物理零。
+    if sink_op == PN_SINK and src_op == PN_SRC:
+        return 0.0
+
     PR = PeramRegistry(); VR = VRegistry(); GR = GammaRegistry()
     GR.register(gamma_name, gamma_val)
     GR.register('Projector', (projector, projector))
@@ -349,17 +902,15 @@ def _run_2pt(backend, sink_op, src_op, peram_t, peram_seq_t,
     PR.register('light', ('tsrc', 'tsrc'), peram_t[t_src])
     PR.register('light', ('tsink', 'tsrc'), peram_t[t_sink])
     PR.register('light', ('tsrc', 'tsink'), peram_seq_t[t_sink])
-    try:
-        dc = dynamic_contraction(
-            [(sink_op, src_op)],
-            peram_registry=PR, v_registry=VR, gamma_registry=GR,
-            Cpt='2pt', Vindex=list(Vindex),
-            use_equivalence=False, ignore_dis=False,
-            Projection=True, verbose=False)
-        return _real_sum(dc.calculate_all())
-    except KeyError:
-        # 味禁戒通道（pn）：无有效 Wick 图，恒为零（物理正确）。
-        return 0.0
+    dc = dynamic_contraction(
+        [(sink_op, src_op)],
+        peram_registry=PR, v_registry=VR, gamma_registry=GR,
+        Cpt='2pt', Vindex=list(Vindex),
+        use_equivalence=False, ignore_dis=False,
+        Projection=True, Oindex='M', verbose=False)
+    value = _contraction_array(
+        dc.calculate_all(), (1,), "2pt Oindex='M'")
+    return float(np.real(value[0]))
 
 
 def compute_2pt_for_config(conf_id, run_dir, logger, vertices,
@@ -435,13 +986,22 @@ def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
                                  momenta=((0, 0, 0), (0, 0, 2), (0, 0, 4)),
                                  precision=PRECISION,
                                  channels=('pp', 'pn', 'pion'),
-                                 v_kind='VVV'):
+                                 v_kind='VVV', strict_cache=None,
+                                 recompute=False):
     """多动量 2pt（test9 胶子 TMD 物理链用）：按 (pz,py,px) 列表逐动量计算。
 
     momenta: 形如 [(pz,py,px), ...] 的动量列表（格点单位 2π/L）。
-    输出键：corr_{ch}_P{pz}{py}{px}（如 corr_pp_P000 / P200 / P400）。
+    输出键：单数字分量保持 corr_pp_P000/P200/P400；多位或负分量
+    使用边界明确格式（如 corr_pp_P10_-2_0）。
     顶点由 compute_vertices_for_config 的 mom_sink_vdv/vvv 提供对应索引。
     """
+    if strict_cache is not None and not recompute:
+        cached = _load_strict_cache_mapping(strict_cache, logger)
+        if cached is not None:
+            _info(logger, f"  conf={conf_id}: loaded strict cached multi-2pt "
+                          f"({len(cached)} artifacts)")
+            return cached
+
     backend = get_backend()
     if get_backend_name() == 'torch':
         set_precision(precision)
@@ -452,7 +1012,7 @@ def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
     VVV = vertices['VVV']
     peram_dir = get_peram_dir(conf_id)
     n_mom = len(momenta)
-    tags = [f'P{m[0]}{m[1]}{m[2]}' for m in momenta]
+    tags = [_momentum_tag(momentum) for momentum in momenta]
 
     projector = backend.asarray((gamma(0) + gamma(4)) / 2.0, dtype=dtype)
     g7 = backend.asarray(gamma(7), dtype=dtype)
@@ -506,30 +1066,49 @@ def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
                               for ch in channels))
         del peram_t, peram_seq_t
 
+    if strict_cache is not None:
+        if set(acc) != set(strict_cache):
+            raise ValueError(
+                "multi-2pt strict cache keys 与计算输出不一致")
+        acc = {
+            key: _strict_array(array, key, strict_cache[key])
+            for key, array in acc.items()
+        }
+
     for key, arr in acc.items():
-        save_array(os.path.join(cdir, f'{key}_{conf_id}.npy'), arr, logger)
+        if strict_cache is None:
+            save_array(
+                os.path.join(cdir, f'{key}_{conf_id}.npy'), arr, logger)
+        else:
+            spec = strict_cache[key]
+            save_array(
+                spec['path'], arr, logger,
+                attrs=_strict_contract_attrs(spec['contract']))
     _info(logger, f"  2pt multi saved: " + ", ".join(
         f"{k}={v[0]:.3e}" for k, v in acc.items()))
     return acc
 
 
 def _2pt_all_present(cdir, conf_id, channels):
-    """组态 2pt 产物齐全性检查（.h5 优先，回退 .npy）——断点续跑判据。"""
+    """仅当每个 2pt 产物满足精确 float64/schema 契约才命中。"""
     for ch in channels:
         for mom in ('P0', 'P2'):
             base = os.path.join(cdir, f'corr_{ch}_{mom}_{conf_id}')
-            if not (os.path.exists(base + '.h5') or os.path.exists(base + '.npy')):
+            arr, _reason = _load_exact_cache_array(
+                base, (NT,), np.float64)
+            if arr is None:
                 return False
     return True
 
 
-def step_2pt(config, run_dir, logger):
+def step_2pt(config, run_dir, logger, progress=None):
     set_backend(config.get('backend', 'cupy'),
                 device=config.get('device'))
     channels = config.get('channels', ('pp', 'pn', 'pion'))
     recompute = config.get('recompute_2pt', False)
     n_hit = 0
     for cid in config['conf_ids']:
+        started = time.perf_counter()
         _info(logger, f"\n─── 2pt: conf {cid} ───")
         # 断点续跑（整合 logs/test8）：该组态 corr_{ch}_{P0,P2} 全存在则跳过
         # （vertex/OPE 缓存由 pyqcd 内部处理，2pt 级此前缺失——服务器长跑
@@ -539,6 +1118,7 @@ def step_2pt(config, run_dir, logger):
             _info(logger, f"  conf={cid}: 2pt 缓存命中，跳过"
                           "（recompute_2pt=True 强制重算）")
             n_hit += 1
+            _record_stage_completion(progress, '2pt', cid, started)
             continue
         verts = _load_vertices_one(run_dir, cid)
         _timer(f"  2pt conf={cid}", logger, compute_2pt_for_config,
@@ -546,6 +1126,7 @@ def step_2pt(config, run_dir, logger):
                channels)
         del verts
         free_gpu_memory()
+        _record_stage_completion(progress, '2pt', cid, started)
     if n_hit == len(config['conf_ids']) and n_hit > 0:
         _info(logger, f"2pt 全部缓存命中（{n_hit}/{n_hit}），无需重算")
 
@@ -556,10 +1137,10 @@ def _run_3pt(backend, sink_op, src_op, curr_op, PR, VR, GR, Vindex, Gindex):
         peram_registry=PR, v_registry=VR, gamma_registry=GR,
         Cpt='3pt', Vindex=list(Vindex), Gindex=list(Gindex),
         use_equivalence=False, ignore_dis=False,
-        Projection=True, verbose=False)
-    r = dc.calculate_all()
-    v = r.get() if hasattr(r, 'get') else r
-    return np.asarray(v).ravel()
+        Projection=True, Oindex='GM', verbose=False)
+    value = _contraction_array(
+        dc.calculate_all(), (4, 1), "3pt Oindex='GM'")
+    return value[:, 0]
 
 
 def compute_3pt_for_config(conf_id, run_dir, logger, vertices,
@@ -633,8 +1214,7 @@ def compute_3pt_for_config(conf_id, run_dir, logger, vertices,
                             backend.asarray(VVV[t_sink, mi:mi + 1], dtype=dtype))
                 vn = _run_3pt(backend, PJN_SINK, PJN_SRC, PJN_CURR,
                               PR, VR, GRp, ['M', 'M', 'M'], ['', 'G', ''])
-                acc[f'proton_{mom_tag}'][tau, :min(4, len(vn))] += \
-                    np.real(vn[:min(4, len(vn))]) / NT
+                acc[f'proton_{mom_tag}'][tau] += np.real(vn) / NT
 
             for mi, mom_tag in enumerate(('P0', 'P2')):
                 VR = VRegistry()
@@ -646,8 +1226,7 @@ def compute_3pt_for_config(conf_id, run_dir, logger, vertices,
                             backend.asarray(VdV[t_sink, mi:mi + 1], dtype=dtype))
                 vn = _run_3pt(backend, PION3_SINK, PION3_SRC, PION3_CURR,
                               PR, VR, GRpi, ['M', 'M', 'M'], ['', 'G', ''])
-                acc[f'pion_{mom_tag}'][tau, :min(4, len(vn))] += \
-                    np.real(vn[:min(4, len(vn))]) / NT
+                acc[f'pion_{mom_tag}'][tau] += np.real(vn) / NT
 
             del p_cur, p_curS
 
@@ -665,10 +1244,11 @@ def compute_3pt_for_config(conf_id, run_dir, logger, vertices,
     return acc
 
 
-def step_3pt(config, run_dir, logger):
+def step_3pt(config, run_dir, logger, progress=None):
     set_backend(config.get('backend', 'cupy'),
                 device=config.get('device'))
     for cid in config['conf_ids']:
+        started = time.perf_counter()
         _info(logger, f"\n─── 3pt PJN: conf {cid} ───")
         verts = _load_vertices_one(run_dir, cid)
         _timer(f"  3pt conf={cid}", logger, compute_3pt_for_config,
@@ -676,6 +1256,7 @@ def step_3pt(config, run_dir, logger):
                config.get('t_sep', T_SEP))
         del verts
         free_gpu_memory()
+        _record_stage_completion(progress, '3pt', cid, started)
 
 
 def compute_4pt_for_config(conf_id, run_dir, logger, vertices,
@@ -761,16 +1342,11 @@ def compute_4pt_for_config(conf_id, run_dir, logger, vertices,
                     Cpt='3pt', Vindex=['M', 'M', 'M', 'M'],
                     Gindex=['', 'G', '', ''],
                     use_equivalence=False, ignore_dis=False,
-                    Projection=True, verbose=False)
-                try:
-                    r = dc.calculate_all()
-                except Exception as e:
-                    _warn(logger, f"  4pt contraction failed at "
-                                  f"(t_src={t_src},tau={tau},mom={mi}): {e}")
-                    continue
-                v = r.get() if hasattr(r, 'get') else r
-                vn = np.asarray(v).ravel()
-                acc[tau, imi, :min(4, len(vn))] += np.real(vn[:min(4, len(vn))]) / nsrc
+                    Projection=True, Oindex='GM', verbose=False)
+                r = dc.calculate_all()
+                value = _contraction_array(
+                    r, (4, 1), "4pt Oindex='GM'")
+                acc[tau, imi] += np.real(value[:, 0]) / nsrc
 
             del p_cur, p_curS
 
@@ -784,10 +1360,11 @@ def compute_4pt_for_config(conf_id, run_dir, logger, vertices,
     _info(logger, f"  4pt PJNNJNp saved: shape={acc.shape}")
     return acc
 
-def step_4pt(config, run_dir, logger):
+def step_4pt(config, run_dir, logger, progress=None):
     set_backend(config.get('backend', 'cupy'),
                 device=config.get('device'))
     for cid in config['conf_ids']:
+        started = time.perf_counter()
         _info(logger, f"\n─── 4pt PJNNJNp: conf {cid} ───")
         verts = _load_vertices_one(run_dir, cid)
         _timer(f"  4pt conf={cid}", logger, compute_4pt_for_config,
@@ -798,6 +1375,7 @@ def step_4pt(config, run_dir, logger):
                config.get('fourpt_src_step', FOURPT_SRC_STEP))
         del verts
         free_gpu_memory()
+        _record_stage_completion(progress, '4pt', cid, started)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -827,61 +1405,389 @@ def _validate_gauge(gauge, logger):
                   f"plaq_trace_re={np.real(np.mean(plaq)):.6f}")
 
 
+_LEGACY_OPE_COMBINATION = (
+    ((3, 0), -1.0),
+    ((3, 1), -1.0),
+    ((0, 1), 2.0),
+)
+_OPE_CACHE_SCHEMA = "pyqcd-ope-cache-v2"
+_OPE_ALGORITHM_VERSION = "docker-v20260805-legacy-dual-v2-payload-sha256"
+
+
+def _legacy_ope_channel_spec(component, z_dir):
+    """Build the exact docker-v20260805 channel contract for one component."""
+    try:
+        mu, nu = tuple(component)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("OPE component 必须是二元 Lorentz 对") from exc
+    return OPEChannelSpec(
+        mode="legacy_dual",
+        mu=mu,
+        nu=nu,
+        mu2=mu,
+        nu2=nu,
+        z_dir=z_dir,
+        second_insert="Ftilde",
+        direction=1,
+        sum_kind="full",
+        normalization="bare_spatial_sum",
+        output_projection="real",
+        field_projection="legacy_untraced")
+
+
+def _legacy_ope_metadata(channel_specs, z_dir):
+    """Return JSON-safe metadata for component and combined legacy OPE."""
+    combined = {
+        "mode": "legacy_dual",
+        "components": [list(component) for component, _ in
+                        _LEGACY_OPE_COMBINATION],
+        "coefficients": [coefficient for _, coefficient in
+                         _LEGACY_OPE_COMBINATION],
+        "z_dir": int(z_dir),
+        "second_insert": "Ftilde",
+        "direction": 1,
+        "sum_kind": "full",
+        "normalization": "bare_spatial_sum",
+        "output_projection": "real",
+        "field_projection": "legacy_untraced",
+    }
+    return [spec.to_dict() for spec in channel_specs], combined
+
+
+def _validate_legacy_ope_request(precision, delta_z, components):
+    """Canonicalize the docker-compatible OPE request before any cache IO."""
+    if precision not in ('complex64', 'complex128'):
+        raise ValueError("precision 必须是 'complex64' 或 'complex128'")
+    if (isinstance(delta_z, (bool, np.bool_))
+            or not isinstance(delta_z, (int, np.integer))
+            or int(delta_z) <= 0):
+        raise ValueError("delta_z 必须是正的非布尔整数")
+    try:
+        normalized = tuple(tuple(component) for component in components)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("components 必须是 Lorentz 对序列") from exc
+    expected = tuple(component for component, _ in _LEGACY_OPE_COMBINATION)
+    if (len(normalized) != len(expected)
+            or any(len(component) != 2 for component in normalized)
+            or len(set(normalized)) != len(normalized)
+            or set(normalized) != set(expected)):
+        raise ValueError(
+            "legacy OPE components 必须恰为 (3,0)、(3,1)、(0,1)")
+    return str(precision), int(delta_z), normalized
+
+
+def _gauge_source_identity(path):
+    """Return a cheap conservative identity for the immutable gauge input.
+
+    Full-file hashing would add an avoidable multi-GB read to every cache
+    probe.  The shared ILDG resolver first maps a ``.lime.contents``
+    directory to its real binary record.  Resolved path plus stat identity
+    makes replacement or mutation a cache miss; when the source is
+    unavailable, it is never eligible for a strict cache hit.
+    """
+    try:
+        resolved = resolve_ildg_binary_record(path)
+    except (OSError, TypeError, ValueError):
+        try:
+            resolved = os.path.realpath(
+                os.path.abspath(os.fsdecode(os.fspath(path))))
+        except (OSError, TypeError, ValueError):
+            resolved = str(path)
+        return {'path': resolved, 'stat_available': False}
+    identity = {'path': resolved, 'stat_available': False}
+    try:
+        stat = os.stat(resolved)
+    except OSError:
+        return identity
+    identity.update({
+        'stat_available': True,
+        'device': int(stat.st_dev),
+        'inode': int(stat.st_ino),
+        'size': int(stat.st_size),
+        'mtime_ns': int(stat.st_mtime_ns),
+        'ctime_ns': int(stat.st_ctime_ns),
+    })
+    return identity
+
+
+def _canonical_gauge_input(path):
+    """Pass the same resolved record to the reader when it is available."""
+    try:
+        return resolve_ildg_binary_record(path)
+    except (OSError, TypeError, ValueError):
+        return os.fspath(path)
+
+
+def _assert_gauge_source_unchanged(expected, path, phase):
+    """Raise before publication when the source stat identity changed."""
+    current = _gauge_source_identity(path)
+    if current != expected:
+        raise RuntimeError(
+            "OPE gauge source changed during "
+            f"{phase} (stat identity mismatch): "
+            f"expected={expected!r}, current={current!r}")
+
+
+def _combine_legacy_ope(ops):
+    """Apply the exact docker ``-O30-O31+2O01`` linear combination."""
+    expected = {component for component, _ in _LEGACY_OPE_COMBINATION}
+    if set(ops) != expected:
+        raise ValueError("legacy OPE 分量集合不完整或含未知通道")
+    combined = None
+    for component, coefficient in _LEGACY_OPE_COMBINATION:
+        term = coefficient * ops[component]
+        combined = term if combined is None else combined + term
+    return combined
+
+
+def _ope_cache_specs(conf_id, paths, combined_path, precision, delta_z,
+                     z_dir, channel_metadata, combined_spec, gauge_file):
+    """Build strict component/combined artifact contracts for one request."""
+    shape = (int(delta_z), int(NT))
+    common = {
+        'schema': _OPE_CACHE_SCHEMA,
+        'algorithm_version': _OPE_ALGORITHM_VERSION,
+        'conf_id': int(conf_id),
+        'delta_z': int(delta_z),
+        'z_dir': int(z_dir),
+        'lattice': {'nt': int(NT), 'nx': int(NX)},
+        'precision': precision,
+        'compute_dtype': precision,
+        'output_dtype': np.dtype(precision).name,
+        'shape': list(shape),
+        'gauge_source': _gauge_source_identity(gauge_file),
+        'channel_specs': channel_metadata,
+        'combined_spec': combined_spec,
+    }
+    specs = {}
+    component_contracts = []
+    for component, channel_spec in zip(paths, channel_metadata):
+        mu, nu = component
+        contract = dict(common)
+        contract.update({
+            'artifact': 'ope_component',
+            'component': [int(mu), int(nu)],
+            'channel_spec': channel_spec,
+        })
+        key = f'component_{mu}_{nu}'
+        specs[key] = {
+            'path': _array_stem(paths[component]) + '.h5',
+            'shape': shape,
+            'dtype': np.dtype(precision),
+            'contract': contract,
+        }
+        component_contracts.append({
+            'component': [int(mu), int(nu)],
+            'contract_sha256': hashlib.sha256(
+                _strict_contract_payload(contract).encode('utf-8')).hexdigest(),
+        })
+    combined_contract = dict(common)
+    combined_contract.update({
+        'artifact': 'ope_combined',
+        'component_contracts': component_contracts,
+    })
+    specs['combined'] = {
+        'path': _array_stem(combined_path) + '.h5',
+        'shape': shape,
+        'dtype': np.dtype(precision),
+        'contract': combined_contract,
+    }
+    return specs
+
+
+def _load_strict_ope_cache(specs, components, channel_metadata,
+                           combined_spec, logger):
+    """Load a complete OPE set and verify metadata plus linear consistency."""
+    gauge_source = specs['combined']['contract']['gauge_source']
+    if (not isinstance(gauge_source, dict)
+            or not gauge_source.get('stat_available', False)):
+        _info(logger, "  ignored strict OPE cache: gauge source identity "
+                      "cannot be stat-validated")
+        return None
+    cached = _load_strict_cache_mapping(
+        specs, logger, payload_sha_attr=_OPE_PAYLOAD_SHA_ATTR)
+    if cached is None:
+        return None
+    if _gauge_source_identity(gauge_source['path']) != gauge_source:
+        _info(logger, "  ignored strict OPE cache: gauge source identity "
+              "changed while loading cache")
+        return None
+    metadata_status, cached_metadata = _read_ope_metadata(
+        specs['combined']['path'])
+    if (metadata_status != 'validated'
+            or cached_metadata != (channel_metadata, combined_spec)):
+        _info(logger, "  ignored incompatible strict OPE cache: "
+                      "combined channel metadata mismatch")
+        return None
+    ops = {
+        component: cached[f'component_{component[0]}_{component[1]}']
+        for component in components
+    }
+    recombined = _combine_legacy_ope(ops)
+    if not np.array_equal(recombined, cached['combined']):
+        _info(logger, "  ignored incompatible strict OPE cache: "
+              "combined data differs from cached components")
+        return None
+    if _gauge_source_identity(gauge_source['path']) != gauge_source:
+        _info(logger, "  ignored strict OPE cache: gauge source identity "
+              "changed before cache return")
+        return None
+    return {
+        'components': ops,
+        'combined': recombined,
+        'metadata_status': 'validated',
+        'channel_specs': channel_metadata,
+        'combined_spec': combined_spec,
+    }
+
+
+def _publish_ope_artifacts(artifacts, source_identity, gauge_file, logger):
+    """Stage a complete OPE set, recheck the source, then publish each file."""
+    _assert_gauge_source_unchanged(
+        source_identity, gauge_file, "OPE computation before cache publish")
+    staged = []
+    try:
+        for final_path, array, attrs in artifacts:
+            final_path = os.fspath(final_path)
+            directory = os.path.dirname(final_path) or '.'
+            os.makedirs(directory, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                    dir=directory, prefix=f'.{os.path.basename(final_path)}.',
+                    suffix='.stage.h5', delete=False) as temporary:
+                staged_path = temporary.name
+            staged.append((staged_path, final_path))
+            save_array(staged_path, array, logger, attrs=attrs)
+
+        _assert_gauge_source_unchanged(
+            source_identity, gauge_file, "OPE cache staging before publish")
+        for staged_path, final_path in staged:
+            os.replace(staged_path, final_path)
+        _assert_gauge_source_unchanged(
+            source_identity, gauge_file, "OPE cache publication completion")
+    finally:
+        for staged_path, _final_path in staged:
+            try:
+                os.unlink(staged_path)
+            except BaseException:
+                # staging 清理不得覆盖 source-race 或写入主异常。
+                pass
+
+
 def compute_ope_for_config(conf_id, run_dir, logger, precision='complex64',
                            delta_z=DELTA_Z, z_dir=Z_DIR,
                            components=OPE_COMPONENTS, recompute=False):
+    precision, delta_z, components = _validate_legacy_ope_request(
+        precision, delta_z, components)
     if not HAS_CUPY and get_backend_name() != 'torch':
         raise RuntimeError("OPE requires a GPU backend (torch/cupy)")
 
     if get_backend_name() == 'torch':
         set_precision(precision)
-    dtype = np.complex64 if precision == 'complex64' else np.complex128
+    dtype = np.dtype(precision).type
     cdir = conf_data_dir(run_dir, conf_id)
+    channel_specs = tuple(
+        _legacy_ope_channel_spec(component, z_dir)
+        for component in components)
+    channel_metadata, combined_spec = _legacy_ope_metadata(
+        channel_specs, z_dir)
     paths = {c: os.path.join(cdir, f'ops_mu{c[0]}_nu{c[1]}_dz{delta_z}_conf{conf_id}')
              for c in components}
+    combined_path = os.path.join(
+        cdir, f'ope_combined_conf{conf_id}')
+    gauge_file = _canonical_gauge_input(get_gauge_path(conf_id))
+    strict_cache = _ope_cache_specs(
+        conf_id, paths, combined_path, precision, delta_z, z_dir,
+        channel_metadata, combined_spec, gauge_file)
+    if not recompute:
+        cached = _load_strict_ope_cache(
+            strict_cache, components, channel_metadata, combined_spec, logger)
+        if cached is not None:
+            _info(logger, f"  conf={conf_id}: loaded complete strict OPE cache")
+            return cached
 
-    if all(any(os.path.exists(p + e) for e in ('.h5', '.npz'))
-           for p in paths.values()) and not recompute:
-        _info(logger, f"  conf={conf_id}: loading cached OPE components")
-        ops = {c: _load_any(p, dataset='data') for c, p in paths.items()}
-        combined = -ops[(3, 0)] - ops[(3, 1)] + 2.0 * ops[(0, 1)]
-        return {'components': ops, 'combined': combined}
-
-    gauge_file = get_gauge_path(conf_id)
     _info(logger, f"  conf={conf_id}: OPE from {gauge_file} "
                   f"(dz={delta_z}, z_dir={z_dir}, {precision})")
 
-    gauge_cpu, _t = _timer(f"  read gauge conf={conf_id}", logger,
-                           read_gauge_lime, gauge_file, NT, NX)
-    _validate_gauge(gauge_cpu, logger)
-    backend = get_backend()
-    gauge_gpu = backend.asarray(gauge_cpu.astype(dtype))
-    del gauge_cpu
-
     ops = {}
-    for mu, nu in components:
-        o, _t2 = _timer(f"  OPE mu={mu},nu={nu} conf={conf_id}", logger,
-                        gluon_ope_operator_z0, gauge_gpu, mu, nu, z_dir,
-                        delta_z, NT, NX, dtype)
-        ops[(mu, nu)] = o
-        save_tensor_h5(o, paths[(mu, nu)])
-        _info(logger, f"    saved ops_mu{mu}_nu{nu}: shape={o.shape}, "
-                      f"|O|∈[{np.abs(o).min():.2e},{np.abs(o).max():.2e}]")
-
-    combined = -ops[(3, 0)] - ops[(3, 1)] + 2.0 * ops[(0, 1)]
-    save_array(os.path.join(cdir, f'ope_combined_conf{conf_id}.npy'),
-               combined, logger)
-
-    free_gpu_memory()
+    pending_artifacts = []
+    gauge_cpu = None
+    gauge_gpu = None
+    field_strength_cache = None
+    source_identity = _gauge_source_identity(gauge_file)
+    try:
+        gauge_cpu, _t = _timer(f"  read gauge conf={conf_id}", logger,
+                               read_gauge_lime, gauge_file, NT, NX)
+        _assert_gauge_source_unchanged(
+            source_identity, gauge_file, "fresh gauge reader")
+        _validate_gauge(gauge_cpu, logger)
+        _assert_gauge_source_unchanged(
+            source_identity, gauge_file, "fresh gauge validation")
+        backend = get_backend()
+        gauge_gpu = backend.asarray(gauge_cpu.astype(dtype))
+        gauge_cpu = None
+        field_strength_cache = FieldStrengthCache(
+            gauge_gpu, gauge_immutable=True, max_entries=2)
+        for spec in channel_specs:
+            mu, nu = spec.mu, spec.nu
+            o, _t2 = _timer(f"  OPE mu={mu},nu={nu} conf={conf_id}", logger,
+                            gluon_ope_channel, gauge_gpu, spec,
+                            delta_z, NT, NX, dtype,
+                            field_strength_cache=field_strength_cache,
+                            _operator=gluon_ope_operator_z0)
+            cache_spec = strict_cache[f'component_{mu}_{nu}']
+            o = _strict_array(o, f'OPE component ({mu},{nu})', cache_spec)
+            ops[(mu, nu)] = o
+            component_attrs = _strict_contract_attrs(cache_spec['contract'])
+            component_attrs.update(_ope_payload_attrs(o))
+            pending_artifacts.append(
+                (cache_spec['path'], o, component_attrs))
+            _info(logger, f"    prepared ops_mu{mu}_nu{nu}: shape={o.shape}, "
+                          f"|O|∈[{np.abs(o).min():.2e},{np.abs(o).max():.2e}]")
+        combined_cache = strict_cache['combined']
+        combined = _strict_array(
+            _combine_legacy_ope(ops), 'combined OPE', combined_cache)
+        combined_attrs = _strict_contract_attrs(combined_cache['contract'])
+        combined_attrs.update(
+            _ope_metadata_attrs(channel_metadata, combined_spec))
+        combined_attrs.update(_ope_payload_attrs(combined))
+        pending_artifacts.append(
+            (combined_cache['path'], combined, combined_attrs))
+        _publish_ope_artifacts(
+            pending_artifacts, source_identity, gauge_file, logger)
+        for spec in channel_specs:
+            mu, nu = spec.mu, spec.nu
+            _info(logger, f"    saved ops_mu{mu}_nu{nu}")
+    finally:
+        try:
+            if field_strength_cache is not None:
+                field_strength_cache.clear()
+        except BaseException:
+            # 清理必须是 best-effort，不能覆盖 OPE/save 的原始异常。
+            pass
+        field_strength_cache = None
+        gauge_gpu = None
+        gauge_cpu = None
+        try:
+            free_gpu_memory()
+        except BaseException:
+            pass
     log_gpu_memory(logger, " after OPE")
-    return {'components': ops, 'combined': combined}
+    return {
+        'components': ops,
+        'combined': combined,
+        'metadata_status': 'validated',
+        'channel_specs': channel_metadata,
+        'combined_spec': combined_spec,
+    }
 
 
-def step_ope(config, run_dir, logger):
+def step_ope(config, run_dir, logger, progress=None):
     set_backend(config.get('backend', 'cupy'), device=config.get('device'))
     for cid in config['conf_ids']:
+        started = time.perf_counter()
         _info(logger, f"\n─── OPE: conf {cid} ───")
         compute_ope_for_config(cid, run_dir, logger, config['precision'])
+        _record_stage_completion(progress, 'ope', cid, started)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -954,7 +1860,26 @@ def load_ope(run_dir, logger=None):
         cdir = os.path.join(data_dir, name)
         comb = os.path.join(cdir, f'ope_combined_conf{cid}')
         if os.path.exists(comb + '.h5') or os.path.exists(comb + '.npy'):
-            ope[int(cid)] = {'combined': _load_any(comb)}
+            entry = {
+                'combined': _load_any(comb),
+            }
+            metadata_status, metadata = _read_ope_metadata(comb)
+            metadata_valid = metadata_status == 'validated'
+            source_status = _read_ope_source_identity_status(comb, int(cid))
+            entry['source_identity_status'] = source_status
+            if (metadata_status == 'validated'
+                    and source_status in ('stale', 'unavailable')):
+                metadata_status = 'stale'
+                _warn(
+                    logger,
+                    f"conf={cid}: canonical OPE gauge source identity is "
+                    f"stale ({source_status}); loading the historical "
+                    "combined artifact without treating it as a cache hit")
+            entry['metadata_status'] = metadata_status
+            if metadata_valid:
+                entry['channel_specs'] = metadata[0]
+                entry['combined_spec'] = metadata[1]
+            ope[int(cid)] = entry
     if ope:
         _info(logger, f"Loaded combined OPE for {len(ope)} configs")
     return ope
@@ -1121,10 +2046,10 @@ def step_plots(config, run_dir, logger, meff_res=None, ratio_conn=None):
         meff_res = {}
         for particle, mom in [('proton', 'P0'), ('proton', 'P2'),
                               ('pion', 'P0'), ('pion', 'P2')]:
-            fm = os.path.join(an_dir, f'meff_{particle}_{mom}_mean.npy')
-            fe = os.path.join(an_dir, f'meff_{particle}_{mom}_err.npy')
-            if os.path.exists(fm):
-                m = np.load(fm); e = np.load(fe)
+            fm = os.path.join(an_dir, f'meff_{particle}_{mom}_mean')
+            fe = os.path.join(an_dir, f'meff_{particle}_{mom}_err')
+            if _array_exists(fm) and _array_exists(fe):
+                m = _load_any(fm); e = _load_any(fe)
                 ps, pe = (4, min(NT - 2, 14)) if particle == 'proton' \
                     else (5, min(NT - 2, 18))
                 mask = np.isfinite(m[ps:pe]) & (e[ps:pe] > 0) & (m[ps:pe] > 0.01)
@@ -1134,10 +2059,10 @@ def step_plots(config, run_dir, logger, meff_res=None, ratio_conn=None):
                     'E0': float(np.sum(m[ps:pe][mask] * w) / np.sum(w)),
                     'E0_err': float(1 / np.sqrt(np.sum(w))),
                     'E_exp': 1.0 if particle == 'proton' else 0.30,
-                    'corr_mean': np.load(os.path.join(
-                        an_dir, f'corr_{particle}_{mom}_mean.npy')),
-                    'corr_err': np.load(os.path.join(
-                        an_dir, f'corr_{particle}_{mom}_err.npy')),
+                    'corr_mean': _load_any(os.path.join(
+                        an_dir, f'corr_{particle}_{mom}_mean')),
+                    'corr_err': _load_any(os.path.join(
+                        an_dir, f'corr_{particle}_{mom}_err')),
                 }
     plot_meff_results(meff_res, run_dir, logger)
     plot_correlators(meff_res, run_dir, logger)
@@ -1161,6 +2086,60 @@ def _fmt(v, e):
     return f'{v:.3f} ± {e:.3f}'
 
 
+_LATEX_DIAGNOSTICS = (
+    ('Overfull', re.compile(r'Overfull')),
+    ('Float too large', re.compile(r'Float too large')),
+    ('Missing character', re.compile(r'Missing character')),
+)
+_LATEX_OUTPUT_TAIL = 4000
+
+
+def _latex_text(value):
+    """将 subprocess 输出安全转换为可扫描文本。"""
+    if value is None:
+        return ''
+    if isinstance(value, bytes):
+        return value.decode('utf-8', errors='replace')
+    return str(value)
+
+
+def _latex_tail(value):
+    text = _latex_text(value)
+    return text[-_LATEX_OUTPUT_TAIL:] if text else '<empty>'
+
+
+def _report_log_contents(path):
+    """读取本遍生成的 log；首次编译尚未创建 log 属正常情况。"""
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as log:
+            return log.read()
+    except FileNotFoundError:
+        return ''
+
+
+def _report_file_signature(path):
+    """返回文件身份/时间快照，用于拒绝沿用旧 PDF。"""
+    try:
+        stat = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _report_plateau_cell(meff):
+    """返回平台表格单元格及点数，缺平台时不构造数值区间。"""
+    plateau = meff.get('plateau')
+    try:
+        if plateau is None or len(plateau) != 2:
+            raise ValueError
+        ps, pe = plateau
+        if not bool(np.isfinite(ps) and np.isfinite(pe) and pe > ps):
+            raise ValueError
+    except (TypeError, ValueError):
+        return '无平台数据', '—'
+    return f'$[{ps},{pe}]$', meff.get('npts', '—')
+
+
 def build_tex(summary, run_dir, meff_vals, connected_ratio, disconn,
               conf_corrs):
     conf_ids = summary.get('conf_ids', CONF_IDS)
@@ -1171,10 +2150,10 @@ def build_tex(summary, run_dir, meff_vals, connected_ratio, disconn,
     for had, mom in _CHANNELS:
         m = meff_vals.get(f'{had}_{mom}', {})
         e0 = m.get('E0'); e0e = m.get('E0_err'); ee = m.get('E_exp')
-        ps, pe = m.get('plateau', (0, 0)); npts = m.get('npts', 0)
+        plateau_cell, npts = _report_plateau_cell(m)
         meff_rows.append(
             f"    {had} & $P={{{mom}}}$ & {_fmt(e0, e0e)} & {_fmt(ee, None)}"
-            f" & $[{ps},{pe}]$ & {npts} \\\\")
+            f" & {plateau_cell} & {npts} \\\\")
 
     ratio_rows = []
     for had, mom in _CHANNELS:
@@ -1280,7 +2259,7 @@ def build_tex(summary, run_dir, meff_vals, connected_ratio, disconn,
 \newpage
 
 \section{引言}
-LaMET (Large Momentum Effective Theory) 通过计算大动量下的准分布(quasi-distribution)
+LaMET (Large Momentum Effective Theory) 计算大动量下的准分布 (quasi-distribution)
 关联函数并做微扰匹配，得到光锥 parton 分布函数。胶子 PDF 涉及不相连(disconnected)图，
 其中三点函数可分解为质子两点函数与胶子算符 (OPE) 两部分的乘积。本报告由 test0 套件
 调用 pyqcd 包实现（逻辑照抄成功实例 docker-v20260805，自包含）。
@@ -1489,11 +2468,11 @@ def step_report(config, run_dir, logger, meff_res, timing, env=None):
 
     connected_ratio = {}
     for had, mom in _CHANNELS:
-        fm = os.path.join(an_dir, f'ratio_{had}_{mom}_mean.npy')
-        fe = os.path.join(an_dir, f'ratio_{had}_{mom}_err.npy')
-        if os.path.exists(fm):
-            connected_ratio[f'{had}_{mom}'] = {'R': np.load(fm),
-                                               'R_err': np.load(fe)}
+        fm = os.path.join(an_dir, f'ratio_{had}_{mom}_mean')
+        fe = os.path.join(an_dir, f'ratio_{had}_{mom}_err')
+        if _array_exists(fm) and _array_exists(fe):
+            connected_ratio[f'{had}_{mom}'] = {'R': _load_any(fm),
+                                               'R_err': _load_any(fe)}
 
     disconn = {}
     disc_dir = os.path.join(run_dir, 'analysis', 'disconnected')
@@ -1508,9 +2487,10 @@ def step_report(config, run_dir, logger, meff_res, timing, env=None):
         cdir = os.path.join(run_dir, 'data', f'conf{cid}')
         entry = {}
         for f in os.listdir(cdir) if os.path.isdir(cdir) else []:
-            if f.startswith('corr_') and f.endswith('.npy'):
-                key = f[5:-4]
-                entry[key] = np.load(os.path.join(cdir, f))
+            if f.startswith('corr_') and f.endswith(('.h5', '.npy')):
+                base = _array_stem(f)
+                key = base[5:]
+                entry[key] = _load_any(os.path.join(cdir, base))
         if entry:
             conf_corrs[cid] = entry
 
@@ -1521,15 +2501,59 @@ def step_report(config, run_dir, logger, meff_res, timing, env=None):
         f.write(tex)
     _info(logger, f"Wrote {tex_path}")
 
-    for i in range(2):
-        subprocess.run(['xelatex', '-interaction=nonstopmode',
-                        '-halt-on-error', 'physics_report.tex'],
-                       cwd=run_dir, capture_output=True)
     pdf = os.path.join(run_dir, 'physics_report.pdf')
-    if not os.path.exists(pdf):
-        _warn(logger, "WARNING: PDF not produced — check xelatex output")
-    else:
-        _info(logger, f"PDF: {pdf}")
+    pdf_before = _report_file_signature(pdf)
+    log_path = os.path.join(run_dir, 'physics_report.log')
+    latex_outputs = []
+    command = ['xelatex', '-interaction=nonstopmode',
+               '-halt-on-error', 'physics_report.tex']
+    for pass_number in (1, 2):
+        try:
+            completed = subprocess.run(
+                command, cwd=run_dir, capture_output=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"XeLaTeX pass {pass_number} could not start; "
+                f"stdout tail: <empty>; stderr tail: <empty>; "
+                f"log tail: {_latex_tail(_report_log_contents(log_path))}") \
+                from exc
+
+        stdout = _latex_text(getattr(completed, 'stdout', None))
+        stderr = _latex_text(getattr(completed, 'stderr', None))
+        log_contents = _report_log_contents(log_path)
+        latex_outputs.append({
+            'stdout': stdout,
+            'stderr': stderr,
+            'physics_report.log': log_contents,
+        })
+        returncode = getattr(completed, 'returncode', None)
+        _info(logger, f"XeLaTeX pass {pass_number}: returncode={returncode}")
+        if returncode != 0:
+            raise RuntimeError(
+                f"XeLaTeX pass {pass_number} failed "
+                f"(returncode={returncode}); "
+                f"stdout tail: {_latex_tail(stdout)}; "
+                f"stderr tail: {_latex_tail(stderr)}; "
+                f"log tail: {_latex_tail(log_contents)}")
+
+    for pass_number, outputs in enumerate(latex_outputs, 1):
+        for source, text in outputs.items():
+            for diagnostic, pattern in _LATEX_DIAGNOSTICS:
+                if pattern.search(text):
+                    raise RuntimeError(
+                        f"XeLaTeX pass {pass_number} reported {diagnostic} "
+                        f"in {source}; output tail: {_latex_tail(text)}")
+
+    if not os.path.isfile(pdf):
+        raise RuntimeError(
+            "XeLaTeX completed two passes but physics_report.pdf "
+            "was not produced")
+    if (pdf_before is not None
+            and _report_file_signature(pdf) == pdf_before):
+        raise RuntimeError(
+            "XeLaTeX completed two passes but physics_report.pdf "
+            "was not newly produced")
+    _info(logger, f"PDF: {pdf}")
     return summary
 
 
@@ -1537,19 +2561,133 @@ def step_report(config, run_dir, logger, meff_res, timing, env=None):
 # 调度（照抄 run_pipeline.py main 循环）
 # ═══════════════════════════════════════════════════════════════════
 
+_PROGRESS_STEPS = frozenset(('vertex', '2pt', 'ope', '3pt', '4pt'))
+
+
+def _run_preflight_hook(hook, config, steps):
+    """运行显式输入守卫，并返回可 JSON 序列化的状态记录。
+
+    ``run_pipeline`` 的默认路径不推断任何外部数据布局；只有调用方传入
+    hook 时才执行输入检查。hook 的稳定调用契约是
+    ``hook(config, steps) -> (n_ok, bad_list)``。
+    """
+    if hook is None:
+        return {
+            'requested': False,
+            'status': 'not_requested',
+            'n_ok': None,
+            'bad_list': [],
+        }
+    if not callable(hook):
+        raise TypeError('preflight/input_guard 必须是可调用对象或 None')
+
+    result = hook(config, steps)
+    if not isinstance(result, (tuple, list)) or len(result) != 2:
+        raise TypeError(
+            'preflight/input_guard 必须返回 (n_ok, bad_list)')
+    n_ok, bad = result
+    try:
+        n_ok = int(n_ok)
+    except (TypeError, ValueError) as exc:
+        raise TypeError('preflight n_ok 必须是整数') from exc
+    if n_ok < 0:
+        raise ValueError('preflight n_ok 不能为负数')
+
+    if bad is None:
+        bad_list = []
+    elif isinstance(bad, (str, bytes)):
+        bad_list = [bad.decode('utf-8', errors='replace')
+                    if isinstance(bad, bytes) else bad]
+    else:
+        try:
+            bad_list = list(bad)
+        except TypeError as exc:
+            raise TypeError('preflight bad_list 必须是可迭代对象') from exc
+        bad_list = [str(item) for item in bad_list]
+
+    if bad_list:
+        preview = '; '.join(bad_list[:8])
+        if len(bad_list) > 8:
+            preview += f'; ...（另有 {len(bad_list) - 8} 项）'
+        raise RuntimeError(
+            f'pipeline preflight failed: n_ok={n_ok}; '
+            f'bad_list[{len(bad_list)}]={preview}')
+
+    return {
+        'requested': True,
+        'status': 'passed',
+        'n_ok': n_ok,
+        'bad_list': [],
+    }
+
+
+def _dump_pipeline_env(config, run_dir, conf_ids):
+    """调用公共环境快照器并补充本次运行的非机密身份字段。"""
+    path = os.path.join(run_dir, 'env.json')
+    info = dump_env(path)
+    if info is None:
+        info = {}
+    if not isinstance(info, dict):
+        raise TypeError('dump_env 必须返回 dict 或 None')
+    info = dict(info)
+    identity = {
+        'conf_ids': list(conf_ids),
+        'precision': config['precision'],
+        'backend': config.get('backend'),
+        'device': config.get('device'),
+        'NT': int(NT),
+        'NX': int(NX),
+        # 保留旧快照使用的小写字段，便于旧报告读取。
+        'nt': int(NT),
+        'nx': int(NX),
+        'gauge_dir': os.path.dirname(get_gauge_path(conf_ids[0])),
+    }
+    info.update(identity)
+    with open(path, 'w', encoding='utf-8') as handle:
+        json.dump(info, handle, indent=2, ensure_ascii=False, default=str)
+    return info
+
+
+def _new_stage_progress(step, config, logger):
+    """为一个计算阶段建立 logger 适配后的逐组态 ETA 记录器。"""
+    return ProgressLog(
+        len(config['conf_ids']), label=f'stage={step}', every=1,
+        logger=lambda message: _info(logger, message))
+
+
+def _record_stage_completion(progress, step, conf_id, started):
+    """在组态成功完成后写入阶段、组态、耗时和 ETA。"""
+    if progress is None:
+        return
+    elapsed = time.perf_counter() - started
+    progress.step(extra=f'step={step} conf={conf_id} '
+                  f'elapsed={elapsed:.3f}s')
+
 def run_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
                         'analysis', 'plots', 'report'),
                  conf_ids=None, run_dir=None, logger=print,
                  precision=PRECISION, nev1=None, channels=('pp', 'pn', 'pion'),
                  fourpt_nev1=None, fourpt_tsep=None, fourpt_mom=None,
                  fourpt_src_step=None, t_sep=None, skip_missing=False,
-                 backend='cupy', device=None):
+                 backend='cupy', device=None, recompute_2pt=False,
+                 preflight=None, input_guard=None):
     """9 步管线调度（pyqcd 自包含实现，与 docker-v20260805 输出一致）。
 
     backend: 'cupy'（默认，旧行为）或 'torch'（PyTorch，device='cuda' 走 GPU）。
-    返回 dict: {'run_dir', 'timing', 'summary', 'meff', 'ratio_conn'}
+    preflight/input_guard: 可选输入守卫，调用为
+        ``hook(config, steps) -> (n_ok, bad_list)``；未传入时不访问外部数据。
+    返回 dict: {'run_dir', 'timing', 'summary', 'meff', 'ratio_conn', 'env'}
     """
-    conf_ids = list(conf_ids or CONF_IDS)
+    steps = tuple(steps)
+    if preflight is not None and input_guard is not None:
+        raise ValueError('preflight 与 input_guard 只能指定一个')
+    guard = preflight if preflight is not None else input_guard
+    if conf_ids is None:
+        conf_ids = list(CONF_IDS)
+    else:
+        conf_ids = list(conf_ids)
+        if not conf_ids:
+            raise ValueError('conf_ids must not be empty')
     config = {
         'precision': precision,
         'Nev1': min(nev1, NEV) if nev1 else NEV1,
@@ -1557,6 +2695,7 @@ def run_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
         'conf_ids': conf_ids,
         'backend': backend,
         'device': device,
+        'recompute_2pt': recompute_2pt,
     }
     if fourpt_nev1:
         config['fourpt_nev1'] = fourpt_nev1
@@ -1569,10 +2708,12 @@ def run_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
     if t_sep:
         config['t_sep'] = t_sep
 
+    # 这是唯一的入口前置检查点：在 reserve_unique_run_dir、mkdir、JSON
+    # 快照等任何持久化副作用之前执行。默认 guard=None 不猜测数据布局。
+    config['preflight'] = _run_preflight_hook(guard, config, steps)
+
     if run_dir is None:
-        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        run_dir = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), 'output', f'output_{stamp}')
+        run_dir = reserve_unique_run_dir(_pipeline_config.OUTPUT_DIR)
     for d in ['data', 'analysis', 'plots']:
         os.makedirs(os.path.join(run_dir, d), exist_ok=True)
     _info(logger, f"Run directory: {run_dir}")
@@ -1587,22 +2728,23 @@ def run_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
         for step in steps:
             t0 = time.perf_counter()
             if step == 'env':
-                env = {
-                    'conf_ids': conf_ids, 'precision': config['precision'],
-                    'nx': NX, 'nt': NT,
-                    'gauge_dir': os.path.dirname(get_gauge_path(conf_ids[0])),
-                }
+                env = _dump_pipeline_env(config, run_dir, conf_ids)
                 _info(logger, f"env: {env}")
             elif step == 'vertex':
-                step_vertex(config, run_dir, logger)
+                step_vertex(config, run_dir, logger,
+                            progress=_new_stage_progress(step, config, logger))
             elif step == '2pt':
-                step_2pt(config, run_dir, logger)
+                step_2pt(config, run_dir, logger,
+                         progress=_new_stage_progress(step, config, logger))
             elif step == 'ope':
-                step_ope(config, run_dir, logger)
+                step_ope(config, run_dir, logger,
+                         progress=_new_stage_progress(step, config, logger))
             elif step == '3pt':
-                step_3pt(config, run_dir, logger)
+                step_3pt(config, run_dir, logger,
+                         progress=_new_stage_progress(step, config, logger))
             elif step == '4pt':
-                step_4pt(config, run_dir, logger)
+                step_4pt(config, run_dir, logger,
+                         progress=_new_stage_progress(step, config, logger))
             elif step == 'analysis':
                 analysis = step_analysis(config, run_dir, logger)
                 meff_res = analysis['meff']
@@ -1618,13 +2760,24 @@ def run_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
                 from ..operator import read_gauge_lime as _rgl
                 gauge = _rgl(get_gauge_path(conf_ids[0]), NT, NX)
                 if gauge is not None:
-                    tau = 3.0 * (ALttc * FM2GEV) ** 2
+                    tau = 3.0  # 数值接口使用 t/a^2；方案为物理 tau=3a^2
+                    z_values = list(range(DELTA_Z))
+                    b_values = list(range(0, 6))
+                    staple_length = max(abs(z) for z in z_values)
                     O = gradient_flow_renormalized_tmd(
-                        gauge, tau, list(range(DELTA_Z)), list(range(0, 6)))
+                        gauge, tau, z_values, b_values,
+                        L=staple_length)
                     with open(os.path.join(run_dir, 'tmd_gluon_flow.json'),
                               'w') as f:
-                        json.dump({'tau': tau,
-                                   'O_shape': list(np.shape(O))}, f)
+                        json.dump({
+                            'tau': tau,
+                            'tau_units': 'dimensionless',
+                            'tau_convention': 't/a^2',
+                            'physical_flow_time': 'tau*a^2',
+                            'flow_eps': 0.01,
+                            'staple_length': staple_length,
+                            'O_shape': list(np.shape(O)),
+                        }, f)
             elif skip_missing:
                 _warn(logger, f"step '{step}' unknown — skipped")
             else:
@@ -1639,5 +2792,15 @@ def run_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
         _info(logger, f"PIPELINE FAILED: {e}")
         _info(logger, traceback.format_exc())
         raise
+    finally:
+        # 资源回收是 best-effort；清理异常不得覆盖原始计算异常或用户中断。
+        try:
+            free_gpu_memory()
+        except BaseException:
+            pass
+        try:
+            gc.collect()
+        except BaseException:
+            pass
     return {'run_dir': run_dir, 'timing': timing, 'summary': summary,
-            'meff': meff_res, 'ratio_conn': ratio_conn}
+            'meff': meff_res, 'ratio_conn': ratio_conn, 'env': env}

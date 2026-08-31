@@ -23,8 +23,22 @@ from pathlib import Path
 
 import numpy as np
 
-from ._disconnected import sem, resample, cov_mat
+from ._disconnected import (
+    aggregate_fit_statuses,
+    cov_mat,
+    fit_status_from_samples,
+    resample,
+    sem,
+)
+from ._fitter import (
+    FitParams,
+    covariance_effective_rank,
+    covariance_sample_rank,
+    fit,
+    fit_identifiability,
+)
 from ._plots import DEFAULT_PLOT_COLORS, plot_errbar, plot_scatter, get_peak_memory_gb
+from ._proton_energy import energy_model, energy_model_jacobian
 from ..pipeline._config import NT, NX, ALttc, FM2GEV, ENSEMBLE
 
 
@@ -113,7 +127,8 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
     """在 out_root/plots 下生成 3 张 test0 风格图 + test0 analysis/disconnected 风格图.
 
     test9 的 nucleon 2pt 替代 pion/proton 双强子；动量标签作为 channel。
-    ratio 图使用 TMD ratio 的 plateau 均值 (z=6,b=0) 的 R 时间依赖近似。
+    ratio 图只消费已有 TMD ratio artifact 的真实 R(τ)；缺失时显式跳过。
+    c0/chi2 图还要求同一 central fit artifact 带有可接受的显式状态。
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -251,11 +266,10 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
     logger(f"  Saved {os.path.join(pdir, 'correlators_all_channels.png')}")
 
     # --- ratio_3pt_all_channels.png ---
-    # 使用 TMD ratio 的 plateau 均值近似 R(tau)
-    # 从 analysis/tmd_ratio/ratio_proton_<tag>.npy 读取 (Nsample, dt, dtau, nz, nb)
-    # 取 z=6,b=0 的 R(τ) 曲线
-    import glob
+    # 使用已有 TMD ratio 的 R(tau)；缺失时必须显式跳过，不能用 R=1
+    # 冒充数据。数组约定为 (Nsample, dt, dtau, nz, nb)。
     ratio_results = {}
+    unavailable_ratio_tags = []
     for tag in momentum_tags:
         p = os.path.join(test9_root, "analysis", "tmd_ratio", f"ratio_proton_{tag}.npy")
         # also try analysis_b
@@ -263,48 +277,62 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
             p2 = os.path.join(test9_root, "analysis_b", "tmd_ratio", f"ratio_proton_{tag}.npy")
             if os.path.exists(p2):
                 p = p2
-        if os.path.exists(p):
-            arr = np.load(p)  # (Nsample, 20,20,13,5) or (10,...)
-            # 取均值
+        if not os.path.exists(p):
+            unavailable_ratio_tags.append((
+                tag, "TMD ratio artifact is missing"))
+            continue
+        try:
+            arr = np.asarray(np.load(p))
+            if (arr.ndim != 5 or arr.shape[0] == 0
+                    or not np.isfinite(arr).all()):
+                raise ValueError("invalid shape or non-finite values")
             rm = arr.mean(axis=0)  # (dt, dtau, nz, nb)
-            # 选 dt=10 (t_sep) 的 tau 切片
             dt = 10 if rm.shape[0] > 10 else rm.shape[0] - 1
             nz = rm.shape[2]
+            if dt < 0 or nz == 0 or rm.shape[3] == 0:
+                raise ValueError("empty TMD ratio axes")
             z_pick = 6 if nz > 6 else nz // 2
-            # b=0
-            r = rm[dt, :dt+1, z_pick, 0]
-            # 计算误差
-            re = sem(arr[:, dt, :dt+1, z_pick, 0], jackknife=True) if arr.shape[0] > 1 else np.zeros_like(r)
-            ratio_results[f"proton_{tag}"] = {'R': r, 'R_err': re, 't_sep': dt}
-        else:
-            # fallback:用 meff 近似 ratio=1
-            r = np.ones(11)
-            ratio_results[f"proton_{tag}"] = {'R': r, 'R_err': np.zeros_like(r), 't_sep': 10}
-    # ratio 仅对 Pz>0 有物理意义，排除 P000
-    channels_ratio = [k for k in channels if not k.endswith("P000")]
+            r = rm[dt, :dt + 1, z_pick, 0]
+            re = (sem(arr[:, dt, :dt + 1, z_pick, 0], jackknife=True)
+                  if arr.shape[0] > 1 else np.zeros_like(r))
+            ratio_results[f"proton_{tag}"] = {
+                'R': r, 'R_err': re, 't_sep': dt}
+        except (OSError, ValueError, IndexError) as error:
+            unavailable_ratio_tags.append(
+                (tag, f"TMD ratio unavailable: {error}"))
+
+    # ratio 仅对 Pz>0 有物理意义，排除 P000。只有至少一个真实 ratio
+    # channel 时才生成图；全缺失时不产生看似真实的常数图。
+    channels_ratio = [
+        key for key in channels
+        if key in ratio_results and not key.endswith("P000")
+    ]
     if not channels_ratio:
-        channels_ratio = channels
-    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-    for ax, key in zip(axes.ravel(), channels_ratio):
-        res = ratio_results.get(key)
-        if res is None:
-            ax.axis('off')
-            continue
-        r, e = res['R'], res['R_err']
-        tau = np.arange(len(r))
-        ax.errorbar(tau, r, yerr=e, fmt='o', ms=4, capsize=2)
-        ax.axhline(0, color='gray', lw=0.8)
-        ax.axhline(1, color='k', ls='--', lw=0.8)
-        ax.set_title(f"{key}  R(τ)  (t_sep={res['t_sep']}, z=6,b=0)")
-        ax.set_xlabel('τ'); ax.set_ylabel('R(τ)')
-        ax.grid(alpha=0.3)
-    for idx in range(len(channels_ratio), 4):
-        axes.ravel()[idx].axis('off')
-    fig.suptitle('TMD ratio R(τ) (z=6,b=0, Pz>0, gradient flow)')
-    fig.tight_layout()
-    fig.savefig(os.path.join(pdir, 'ratio_3pt_all_channels.png'), dpi=150)
-    plt.close(fig)
-    logger(f"  Saved {os.path.join(pdir, 'ratio_3pt_all_channels.png')}")
+        channels_ratio = [key for key in channels if key in ratio_results]
+    if channels_ratio:
+        fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+        for ax, key in zip(axes.ravel(), channels_ratio):
+            res = ratio_results[key]
+            r, e = res['R'], res['R_err']
+            tau = np.arange(len(r))
+            ax.errorbar(tau, r, yerr=e, fmt='o', ms=4, capsize=2)
+            ax.axhline(0, color='gray', lw=0.8)
+            ax.axhline(1, color='k', ls='--', lw=0.8)
+            ax.set_title(
+                f"{key}  R(τ)  (t_sep={res['t_sep']}, z=6,b=0)")
+            ax.set_xlabel('τ'); ax.set_ylabel('R(τ)')
+            ax.grid(alpha=0.3)
+        for idx in range(len(channels_ratio), 4):
+            axes.ravel()[idx].axis('off')
+        fig.suptitle('TMD ratio R(τ) (z=6,b=0, Pz>0, gradient flow)')
+        fig.tight_layout()
+        fig.savefig(os.path.join(pdir, 'ratio_3pt_all_channels.png'), dpi=150)
+        plt.close(fig)
+        logger(f"  Saved {os.path.join(pdir, 'ratio_3pt_all_channels.png')}")
+    else:
+        logger("  ratio_3pt_all_channels.png skipped: TMD ratio unavailable")
+    for tag, reason in unavailable_ratio_tags:
+        logger(f"  ratio channel {tag} skipped: unavailable ({reason})")
 
     # --- analysis/disconnected 风格的 3 图（c0/chi2/ratio） ---
     # 直接复用 TMD ratio 的 c0 信息生成类似 test0 的 plots
@@ -316,54 +344,105 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
         c0_path = os.path.join(test9_root, "analysis", "tmd_ratio", f"c0_mean_{tag}.npy")
         if not os.path.exists(c0_path):
             c0_path = os.path.join(test9_root, "analysis_b", "tmd_ratio", f"c0_mean_{tag}.npy")
-        if os.path.exists(c0_path):
-            c0 = np.load(c0_path)  # (nz, nb)
-            # 取 b=0 切片作 c0(z)
-            c0_slice = c0[:, 0] if c0.ndim == 2 else c0
-            z_list = np.arange(len(c0_slice))
-            fig, ax = plt.subplots(figsize=(7, 5))
-            # 误差：从 c0_err 读
-            err_path = c0_path.replace("c0_mean", "c0_err")
-            if os.path.exists(err_path):
-                ce = np.load(err_path)
-                ce = ce[:, 0] if ce.ndim == 2 else ce
-            else:
-                ce = np.zeros_like(c0_slice)
-            ax.errorbar(z_list, c0_slice, yerr=ce, fmt='x-', label='c0(z)')
-            ax.axhline(0, color='gray', lw=0.8)
-            ax.set_xlabel('z'); ax.set_ylabel('c0')
-            ax.set_title(f'proton {tag}: c0 vs z (TMD disconnected)')
-            ax.legend(); ax.grid(alpha=0.3)
-            fig.tight_layout()
-            fig.savefig(os.path.join(adir, f'c0_proton_{tag}.png'), dpi=150)
-            plt.close(fig)
-            # chi2 用 fit_report 中的平均 chi2 替代，生成示例
-            fig, ax = plt.subplots(figsize=(7, 5))
-            # 尝试读 chi2
-            fit_npz = os.path.join(test9_root, "analysis", "tmd_ratio", f"0_fit_data_{tag}.npz")
-            if not os.path.exists(fit_npz):
-                fit_npz = os.path.join(test9_root, "analysis_b", "tmd_ratio", f"0_fit_data_{tag}.npz")
-            if os.path.exists(fit_npz):
-                d = np.load(fit_npz)
-                chi2 = d['chi2'].mean(axis=0)  # (nz, nb)
+        fit_npz = os.path.join(
+            test9_root, "analysis", "tmd_ratio", f"0_fit_data_{tag}.npz")
+        if not os.path.exists(fit_npz):
+            fit_npz = os.path.join(
+                test9_root, "analysis_b", "tmd_ratio",
+                f"0_fit_data_{tag}.npz")
+
+        fit_data = None
+        fit_status = "unavailable"
+        fit_reason = "central fit artifact or explicit fit_status is missing"
+        if os.path.exists(fit_npz):
+            try:
+                fit_data = np.load(fit_npz)
+                status_value = fit_data.get("fit_status")
+                if status_value is not None:
+                    status_value = np.asarray(status_value).reshape(-1)
+                    if status_value.size == 1:
+                        fit_status = str(status_value[0])
+                        reason_value = fit_data.get("fit_reason", "")
+                        fit_reason = str(np.asarray(reason_value))
+                    else:
+                        fit_reason = "central fit_status is not scalar"
+            except (OSError, ValueError) as error:
+                fit_reason = f"central fit artifact is unreadable: {error}"
+
+        if fit_status not in ("identifiable", "prior_constrained"):
+            logger(f"  {tag} c0/chi2 skipped: fit status unavailable "
+                   f"({fit_reason})")
+            if fit_data is not None:
+                fit_data.close()
+            continue
+        if not os.path.exists(c0_path):
+            logger(f"  {tag} c0 skipped: c0_mean artifact is unavailable")
+            if fit_data is not None:
+                fit_data.close()
+            continue
+
+        c0 = np.asarray(np.load(c0_path))  # (nz, nb)
+        if c0.size == 0 or not np.isfinite(c0).all():
+            logger(f"  {tag} c0 skipped: c0_mean is unavailable/non-finite")
+            if fit_data is not None:
+                fit_data.close()
+            continue
+        # 取 b=0 切片作 c0(z)，并明确标注这是 central fit 通过状态门后的结果。
+        c0_slice = c0[:, 0] if c0.ndim == 2 else c0
+        z_list = np.arange(len(c0_slice))
+        fig, ax = plt.subplots(figsize=(7, 5))
+        err_path = c0_path.replace("c0_mean", "c0_err")
+        if os.path.exists(err_path):
+            ce = np.asarray(np.load(err_path))
+            ce = ce[:, 0] if ce.ndim == 2 else ce
+        else:
+            ce = np.zeros_like(c0_slice)
+        ax.errorbar(z_list, c0_slice, yerr=ce, fmt='x-', label='c0(z)')
+        ax.axhline(0, color='gray', lw=0.8)
+        ax.set_xlabel('z'); ax.set_ylabel('c0')
+        ax.set_title(f'proton {tag}: c0 vs z (central {fit_status})')
+        ax.legend(); ax.grid(alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(os.path.join(adir, f'c0_proton_{tag}.png'), dpi=150)
+        plt.close(fig)
+
+        # chi2 只能来自同一 central fit artifact；缺失或非有限时跳过。
+        if fit_data is not None and "chi2" in fit_data.files:
+            chi2 = np.asarray(fit_data["chi2"])
+            if (chi2.ndim >= 2 and chi2.shape[0] > 0
+                    and np.isfinite(chi2).all()):
+                chi2 = chi2.mean(axis=0)  # (nz, nb)
                 chi2_slice = chi2[:, 0] if chi2.ndim == 2 else chi2
+                fig, ax = plt.subplots(figsize=(7, 5))
+                ax.scatter(z_list, chi2_slice, s=30)
+                ax.axhline(1.0, color='orange', ls='--')
+                ax.set_xlabel('z'); ax.set_ylabel('chi2/dof')
+                ax.set_ylim(0, 2)
+                ax.set_title(
+                    f'proton {tag}: chi2/dof vs z ({fit_status})')
+                ax.grid(alpha=0.3)
+                fig.tight_layout()
+                fig.savefig(
+                    os.path.join(adir, f'chi2_proton_{tag}.png'), dpi=150)
+                plt.close(fig)
             else:
-                chi2_slice = np.ones_like(z_list) * 0.8
-            ax.scatter(z_list, chi2_slice, s=30)
-            ax.axhline(1.0, color='orange', ls='--')
-            ax.set_xlabel('z'); ax.set_ylabel('chi2/dof'); ax.set_ylim(0, 2)
-            ax.set_title(f'proton {tag}: chi2/dof vs z')
-            ax.grid(alpha=0.3)
-            fig.tight_layout()
-            fig.savefig(os.path.join(adir, f'chi2_proton_{tag}.png'), dpi=150)
-            plt.close(fig)
-            # ratio 图已在 TMD 目录有，此处复制一份命名为 ratio_proton.png
-            ratio_src = os.path.join(test9_root, "analysis", "tmd_ratio", f"ratio_proton_{tag}.png")
-            if not os.path.exists(ratio_src):
-                ratio_src = os.path.join(test9_root, "analysis_b", "tmd_ratio", f"ratio_proton_{tag}.png")
-            if os.path.exists(ratio_src):
-                import shutil
-                shutil.copy(ratio_src, os.path.join(adir, f'ratio_proton_{tag}.png'))
+                logger(f"  {tag} chi2 skipped: chi2 artifact is unavailable")
+        else:
+            logger(f"  {tag} chi2 skipped: chi2 artifact is unavailable")
+
+        # ratio 图已在 TMD 目录有，此处仅复制真实存在的图。
+        ratio_src = os.path.join(
+            test9_root, "analysis", "tmd_ratio",
+            f"ratio_proton_{tag}.png")
+        if not os.path.exists(ratio_src):
+            ratio_src = os.path.join(
+                test9_root, "analysis_b", "tmd_ratio",
+                f"ratio_proton_{tag}.png")
+        if os.path.exists(ratio_src):
+            import shutil
+            shutil.copy(ratio_src, os.path.join(adir, f'ratio_proton_{tag}.png'))
+        if fit_data is not None:
+            fit_data.close()
     # 为了完全对齐 test0 的 analysis/disconnected 命名，生成一份 ratio_proton.png / c0_proton.png 的汇总
     # 若已生成带 tag 的，复制 P200 的作为汇总
     for base in ['c0_proton', 'chi2_proton', 'ratio_proton']:
@@ -405,11 +484,6 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
     SEM_YLIM = [-0.01, 0.1]
     X_OFFSET = 0.2
 
-    # 拟合模型同 _proton_energy.energy_model
-    def energy_model(x, p):
-        dt = np.asarray(x, dtype=np.float64)
-        return p["c0"] * np.exp(-p["E0"] * dt) * (1 + p["c1"] * np.exp(-p["dE"] * dt))
-
     # 为每个 tag 单独生成目录
     for tag, raw in corr_raw_dict.items():
         # 解析 Pz：用 tag 第二字符数值作为 Pz；对于多维动量如 P022 -> 取第一个非零？此处统一取 tag[1]
@@ -435,7 +509,11 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
         # raw 已是 per-conf C(t) (Nconf, NT)；直接 jackknife 并截取前 DT_MAX，与 test6/main.py 的 ti 平均后等价（test9 已平均）
         # 若 raw 来自 2pt 已是平移平均结果，此处简化：直接 resample
         _corr2_ave = raw[:, :DT_MAX]  # (Nconf, DT_MAX) 取前 DT_MAX 时间片
-        corr2 = resample(_corr2_ave, jackknife=True, Nsample=Nsample).real  # (Nsample, DT_MAX)
+        if Nconf < 2:
+            corr2 = _corr2_ave.copy().real
+        else:
+            corr2 = resample(
+                _corr2_ave, jackknife=True, Nsample=Nsample).real
         # 取绝对值保证拟合稳定（核子关联函数在小 t 可能为负因相位约定，拟合用 |C|）
         corr2 = np.abs(corr2)
 
@@ -487,7 +565,11 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
                 raw_axis = raw
             # 对该方向的 raw 做 jackknife (前 DT_MAX)
             _ave_axis = raw_axis[:, :DT_MAX]
-            c_axis = resample(_ave_axis, jackknife=True, Nsample=Nconf).real
+            if Nconf < 2:
+                c_axis = _ave_axis.copy().real
+            else:
+                c_axis = resample(
+                    _ave_axis, jackknife=True, Nsample=Nconf).real
             c_axis = np.abs(c_axis)
             corr2_dict[axis] = c_axis
         corr2_dict["ave"] = corr2
@@ -497,81 +579,158 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
             np.save(os.path.join(out_dir, f"corr2_{d}.npy"), corr2_dict[d])
 
         # 拟合
-        # 使用与 test6 相同的 dt 窗 [3,7]
+        # 使用与 test6 相同的 dt 窗 [3,7]。拟合必须经过 central fit，
+        # 由其逐样本 finite mask 与数值模型 Jacobian 状态决定是否可辨识。
         x_coor = list(range(FIT_DT_START, FIT_DT_END + 1))
         Ndata = len(x_coor)
-        # 对 ave 做拟合得到 E0，用于 GEV 图
-        import gvar as gv, lsqfit
         p0 = {"c0": 0.6, "c1": 0.6, "E0": 1.5, "dE": 0.4}
+        fitpa = FitParams(
+            p0=p0,
+            dt_start=FIT_DT_START,
+            dt_end=FIT_DT_END,
+            svdcut=1.0e-6,
+            jacobian=energy_model_jacobian,
+        )
         fits = {}
         conds = {}
+        statuses = {}
+        effective_ranks = {}
+        sample_ranks = {}
+        fit_reasons = {}
         for d in ("x", "y", "z", "ave"):
             sub = np.zeros((Nsample, Ndata))
             for i, dt in enumerate(x_coor):
                 sub[:, i] = corr2_dict[d][:, dt]
-            cov, cond = cov_mat(sub, jack)
+            has_prior = fitpa.prior is not None and len(fitpa.prior) > 0
+            if jack and Nconf < 2:
+                # 单组态边界在严格 fit 前处理：不能把没有 jackknife
+                # covariance 的输入送进 central fit，也不能用自身数值冒充结果。
+                res = {k: np.full(Nsample, np.nan) for k in p0}
+                res["chi2"] = np.full(Nsample, np.nan)
+                cov = np.zeros((Ndata, Ndata), dtype=np.float64)
+                cond = np.inf
+                effective_rank = 0
+                sample_rank = 0
+                fit_reason = (
+                    f"Nconf={Nconf} cannot support delete-one jackknife "
+                    "covariance"
+                )
+                status, fit_reason, _ = fit_status_from_samples(
+                    res, None, has_prior=has_prior,
+                    failure_reason=fit_reason)
+            else:
+                res, cov, cond, last_fit = fit(
+                    sub,
+                    x_coor,
+                    energy_model,
+                    fitpa,
+                    jackknife=jack,
+                )
+                effective_rank = covariance_effective_rank(
+                    cov, svdcut=fitpa.svdcut)
+                sample_rank = covariance_sample_rank(cov)
+                gate_ok, gate_reason = fit_identifiability(
+                    Ndata,
+                    len(p0),
+                    effective_rank,
+                    sample_rank=sample_rank,
+                    has_prior=has_prior,
+                )
+                status, fit_reason, _ = fit_status_from_samples(
+                    res,
+                    last_fit,
+                    has_prior=has_prior,
+                    failure_reason=None if gate_ok else gate_reason,
+                )
             conds[d] = cond
-            res = {k: np.zeros(Nsample) for k in p0}
-            res["chi2"] = np.zeros(Nsample)
-            for _id in range(Nsample):
-                y_coor = gv.gvar(sub[_id], cov)
-                _fit = lsqfit.nonlinear_fit(data=(x_coor, y_coor), p0=p0, fcn=energy_model, svdcut=1e-6)
-                for name in p0:
-                    res[name][_id] = _fit.pmean[name]
-                res["chi2"][_id] = _fit.chi2 / _fit.dof
             fits[d] = res
-
-        # 绘图用 meff 需先算（用于 fallback）
-        mass = {}
-        for d, c in corr2_dict.items():
-            mass[d] = np.log(np.abs(c) / np.abs(np.roll(c, -1, axis=1)))
-        # 稳定性校验：若 chi2/dof > 50 或 E0 离谱 (>2.5 lattice)，回退到 meff 平台均值（逐样本）
-        do_fallback = False
-        for d in ("x","y","z","ave"):
-            e0d = fits[d]["E0"].mean()
-            chi2d = fits[d]["chi2"].mean()
-            if chi2d > 50 or e0d > 2.5 or not np.isfinite(e0d):
-                # 逐样本 fallback
-                fallback_vals = mass[d][:, FIT_DT_START:FIT_DT_END+1].mean(axis=1)
-                fits[d]["E0"][:] = fallback_vals
-                fits[d]["chi2"][:] = 1.0
-                do_fallback = True
-                logger(f"  [fallback] P={tag} dir={d} chi2={chi2d:.2g} E0={e0d:.3g} -> fallback E0={fallback_vals.mean():.3g}")
+            statuses[d] = status
+            effective_ranks[d] = effective_rank
+            sample_ranks[d] = sample_rank
+            fit_reasons[d] = fit_reason
 
         # 写 1_fit_data.npz 与 2_fit_report.txt (与 test6 一致)
         save_dict = {}
         for d, r in fits.items():
             for k, v in r.items():
                 save_dict[f"{k}_{d}"] = v
+            save_dict[f"fit_status_{d}"] = np.asarray(statuses[d])
+            save_dict[f"effective_rank_{d}"] = np.asarray(
+                effective_ranks[d], dtype=np.int64)
+            save_dict[f"sample_rank_{d}"] = np.asarray(
+                sample_ranks[d], dtype=np.int64)
+            save_dict[f"required_rank_{d}"] = np.asarray(
+                len(p0), dtype=np.int64)
+            save_dict[f"fit_reason_{d}"] = np.asarray(fit_reasons[d])
+        fit_status, fit_reason = aggregate_fit_statuses(
+            statuses.values(), fit_reasons.values())
+        save_dict.update({
+            "fit_status": np.asarray(fit_status),
+            "effective_rank": np.asarray(
+                min(effective_ranks.values()), dtype=np.int64),
+            "sample_rank": np.asarray(
+                min(sample_ranks.values()), dtype=np.int64),
+            "required_rank": np.asarray(len(p0), dtype=np.int64),
+            "fit_reason": np.asarray(fit_reason),
+        })
         np.savez(os.path.join(out_dir, "1_fit_data.npz"), **save_dict)
         # 报告
-        report_lines = fit_report_lines(f"Fit Report  : L24x72 Pz{pz_val} ({tag})", {"dt range": f"[{FIT_DT_START}, {FIT_DT_END}]", "Nsample": Nsample, "jackknife": jack})
+        report_lines = fit_report_lines(
+            f"Fit Report  : L24x72 Pz{pz_val} ({tag})",
+            {
+                "dt range": f"[{FIT_DT_START}, {FIT_DT_END}]",
+                "Nconf": Nconf,
+                "Nsample": Nsample,
+                "jackknife": jack,
+            },
+        )
         rows = []
         for d in ("x", "y", "z", "ave"):
             r = fits[d]
             report_lines.append("-" * 72)
             report_lines.append(f"dir = {d}, condition number = {conds[d]:.3g}")
+            report_lines.append(f"fit status = {statuses[d]}")
+            report_lines.append(
+                f"effective covariance rank = {effective_ranks[d]}")
+            report_lines.append(
+                f"sample covariance rank = {sample_ranks[d]}")
+            report_lines.append(f"required parameter rank = {len(p0)}")
+            if statuses[d] not in ("identifiable", "prior_constrained"):
+                report_lines.append(f"fit skipped: {fit_reasons[d]}")
+                report_lines.append("")
+                continue
             report_lines.append("")
             report_lines.append(f"  {d}  c0={r['c0'].mean():.3g}({sem(r['c0'], jack)*1e3:.0f})  E0={r['E0'].mean():.3g}({sem(r['E0'], jack)*1e3:.0f})  chi2/dof={r['chi2'].mean():.2g}")
             report_lines.append("")
-            rows.append([f"{d}", f"{r['E0'].mean():.3f}({sem(r['E0'], jack)*1e3:.0f})", f"{r['E0'].mean()* (FM2GEV/ALttc):.3f}({sem(r['E0'], jack)*(FM2GEV/ALttc)*1e3:.0f})", f"{r['c0'].mean():.3f}({sem(r['c0'], jack)*1e3:.0f})", f"{r['chi2'].mean():.2g}"])
+            rows.append([f"{d}", f"{r['E0'].mean():.3f}({sem(r['E0'], jack)*1e3:.0f})", f"{r['E0'].mean()* (FM2GEV/ALttc):.3f}({sem(r['E0'], jack)*(FM2GEV/ALttc)*1e3:.0f})", f"{r['c0'].mean():.3f}({sem(r['c0'], jack)*1e3:.0f})", f"{r['chi2'].mean():.2g}", statuses[d]])
         report_lines.append("=" * 72)
         report_lines.append("  Summary Table (E0 in lattice & GeV)")
         report_lines.append("=" * 72)
-        report_lines.append(make_summary_table(["dir", "E0(a^-1)", "E0(GeV)", "c0", "chi2/dof"], rows))
+        report_lines.append(make_summary_table(["dir", "E0(a^-1)", "E0(GeV)", "c0", "chi2/dof", "status"], rows))
         report_lines.append("")
         with open(os.path.join(out_dir, "2_fit_report.txt"), "w") as f:
             f.write("\n".join(report_lines))
+        if fit_status not in ("identifiable", "prior_constrained"):
+            logger(
+                f"  fit status={fit_status}; saved NaN/status artifacts "
+                f"without substituting plateau diagnostics")
+            continue
+
+        # 绘图使用拟合结果；统计不可辨识或拟合失败时已在上方落盘并跳过。
+        mass = {}
+        for d, c in corr2_dict.items():
+            mass[d] = np.log(np.abs(c) / np.abs(np.roll(c, -1, axis=1)))
         e0_ave = fits["ave"]["E0"].mean()
         chi2_ave = fits["ave"]["chi2"].mean()
-        logger(f"  fit done E0 ave={e0_ave:.3g} chi2={chi2_ave:.2g} (fallback={do_fallback})")
+        logger(f"  fit done E0 ave={e0_ave:.3g} chi2={chi2_ave:.2g}")
 
         # 绘图：复用 test6/main.py 的 7 图逻辑（mass 已算）
         
         x_vals = np.arange(DT_MAX)
         # 图1 eff_mass.png (动态 ylim：以 ave 的 E0 为中心 ±0.4)
         eff_data = {f"{d}dir": (mass[d].mean(axis=0), sem(mass[d], jack)) for d in ("x", "y", "z", "ave")}
-        title = f"L24x72, P={tag}, Nconf={Nconf}, Nsample={Nsample}"
+        title = (f"L24x72, P={tag}, Nconf={Nconf}, Nsample={Nsample}, "
+                 f"fit={fit_status}")
         # 动态 ylim：基于拟合 E0_ave
         try:
             e0_ave_tmp = fits["ave"]["E0"].mean()

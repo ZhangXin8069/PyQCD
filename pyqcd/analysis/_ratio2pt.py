@@ -19,13 +19,16 @@ from __future__ import annotations
 import gc
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
-from ._disconnected import sem, resample, cov_mat, model_ratio
-from ._fitter import (FitParams, calc_chi2_dof, fit, fit_report_lines,
-                      make_summary_table)
+from ._disconnected import (aggregate_fit_statuses, cov_mat,
+                            fit_status_from_samples, model_ratio,
+                            model_ratio_jacobian, resample, sem)
+from ._fitter import (FitParams, covariance_effective_rank,
+                      covariance_sample_rank, fit, fit_identifiability,
+                      fit_report_lines, make_summary_table)
 from ..tools import get_backend
 
 
@@ -130,6 +133,16 @@ def compute_ratio(data_root, sampa: SampleParams2pt, jack: bool,
         print("2pt shape:", _corr.shape)
         print("ope shape:", _ope_01.shape)
 
+    if jack and sampa.Nconf < 2:
+        if verbose:
+            print("Nconf<2: delete-one jackknife is statistically unidentifiable")
+            print("==================== compute ratio end ====================")
+        return np.full(
+            (sampa.Nconf, sampa.dt_max, sampa.dt_max, sampa.Nx),
+            np.nan,
+            dtype=np.float64,
+        )
+
     _ope = ope_combine(_ope_01, _ope_30, _ope_31)   # (Nconf, tau, z)
 
     _corr2_rel = np.zeros((sampa.Nconf, sampa.Nt, sampa.dt_max), dtype=complex)
@@ -195,6 +208,17 @@ def fit_dir_name(sampa: SampleParams2pt, fitpa: FitParams, tag: str = "fit") -> 
 
 def fit_x_coor(fitpa: FitParams) -> list:
     """拟合坐标 (dt, dtau) 列表：dtau ∈ [nex, dt−nex]。"""
+    for name, value in (("dt_start", fitpa.dt_start),
+                        ("dt_end", fitpa.dt_end), ("nex", fitpa.nex)):
+        if (isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, np.integer))):
+            raise ValueError(f"{name} 必须是非布尔整数")
+    if fitpa.dt_start < 0 or fitpa.dt_end < fitpa.dt_start:
+        raise ValueError("须满足 0 <= dt_start <= dt_end")
+    if fitpa.nex < 0:
+        raise ValueError("nex 必须非负")
+    if fitpa.dt_start < 2 * fitpa.nex:
+        raise ValueError("dt_start 必须满足 dt_start >= 2*nex")
     return [(dt, dtau)
             for dt in range(fitpa.dt_start, fitpa.dt_end + 1)
             for dtau in range(fitpa.nex, dt - fitpa.nex + 1)]
@@ -206,18 +230,41 @@ def do_fit_and_report(ratio, fitpa: FitParams, sampa: SampleParams2pt,
 
     Returns
     -------
-    fit_result : {c0, c1, dE, chi2}，各 (Nsample, Nx)。
+    fit_result : 数值结果以及 ``fit_status``/``fit_reason`` 和秩诊断元数据。
     """
     if verbose:
         print("==================== do_fit start ====================")
 
+    ratio = np.asarray(ratio)
+    if ratio.ndim != 4:
+        raise ValueError("ratio 必须为 (Nsample, dt, dtau, z) 四维数组")
+    if ratio.shape[0] != sampa.Nsample:
+        raise ValueError("ratio 的样本轴必须等于 sampa.Nsample")
+    if ratio.shape[3] < sampa.Nx:
+        raise ValueError("ratio 的 z 轴短于 sampa.Nx")
     x_coor = fit_x_coor(fitpa)
+    if fitpa.dt_end >= ratio.shape[1]:
+        raise ValueError("dt_end 超出 ratio 的 dt 轴")
+    if any(dtau < 0 or dtau >= ratio.shape[2]
+           for _dt, dtau in x_coor):
+        raise ValueError("拟合窗口的 dtau 超出 ratio 轴范围")
     Ndata = len(x_coor)
     param_names = list(fitpa.p0.keys())
 
-    all_fit_result = {name: np.zeros((sampa.Nsample, sampa.Nx))
+    all_fit_result = {name: np.full((sampa.Nsample, sampa.Nx), np.nan)
                       for name in param_names + ["chi2"]}
     all_cond = np.zeros(sampa.Nx)
+    fit_status_by_z = ["statistically_unidentifiable"] * sampa.Nx
+    # Keep reasons as Python strings until serialization so a future
+    # practical-identifiability diagnostic is not silently truncated.
+    fit_reason_by_z = [""] * sampa.Nx
+    effective_rank_by_z = np.zeros(sampa.Nx, dtype=np.int64)
+    sample_rank_by_z = np.zeros(sampa.Nx, dtype=np.int64)
+    required_rank = len(param_names)
+    model_fitpa = (
+        fitpa if fitpa.jacobian is not None
+        else replace(fitpa, jacobian=model_ratio_jacobian)
+    )
 
     report_lines = fit_report_lines(
         f"Fit Report: {sampa.conf_short}", {
@@ -233,23 +280,69 @@ def do_fit_and_report(ratio, fitpa: FitParams, sampa: SampleParams2pt,
         for i, (dt, dtau) in enumerate(x_coor):
             sub_sample[:, i] = ratio[:, dt, dtau, _z]
 
-        _fit_result, _cov, _cond, _last_fit = fit(
-            sub_sample, x_coor, model_ratio, fitpa, jack)
+        has_prior = fitpa.prior is not None and len(fitpa.prior) > 0
+        _fit_result = {
+            name: np.full(sampa.Nsample, np.nan)
+            for name in param_names + ["chi2"]
+        }
+        if jack and sampa.Nconf < 2:
+            # ``compute_ratio`` intentionally emits NaN for this statistical
+            # boundary.  Preserve that status artifact without passing an
+            # intentionally non-finite sample through the strict fit API.
+            _cov = np.zeros((Ndata, Ndata), dtype=np.float64)
+            _cond = np.inf
+            _last_fit = None
+            effective_rank = 0
+            sample_rank = 0
+            fit_reason = (
+                f"Nconf={sampa.Nconf} cannot support delete-one "
+                "jackknife covariance"
+            )
+            fit_status, fit_reason, _ = fit_status_from_samples(
+                _fit_result, _last_fit, has_prior=has_prior,
+                failure_reason=fit_reason)
+        else:
+            _fit_result, _cov, _cond, _last_fit = fit(
+                sub_sample, x_coor, model_ratio, model_fitpa, jack)
+            effective_rank = covariance_effective_rank(_cov, fitpa.svdcut)
+            sample_rank = covariance_sample_rank(_cov)
+            gate_ok, gate_reason = fit_identifiability(
+                Ndata, required_rank, effective_rank,
+                sample_rank=sample_rank, has_prior=has_prior)
+            fit_status, fit_reason, _ = fit_status_from_samples(
+                _fit_result, _last_fit, has_prior=has_prior,
+                failure_reason=None if gate_ok else gate_reason)
         for name in param_names + ["chi2"]:
             all_fit_result[name][:, _z] = _fit_result[name]
         all_cond[_z] = _cond
+        fit_status_by_z[_z] = fit_status
+        fit_reason_by_z[_z] = fit_reason
+        effective_rank_by_z[_z] = effective_rank
+        sample_rank_by_z[_z] = sample_rank
 
         if verbose:
             print(f"z={_z}")
-            for name in param_names:
-                print(f"{name} = {all_fit_result[name][:, _z].mean():.3g} "
-                      f"+- {sem(all_fit_result[name][:, _z], jack):.3g}")
-            print(f"chi2 = {all_fit_result['chi2'][:, _z].mean():.3g}")
+            if fit_status in ("identifiable", "prior_constrained"):
+                for name in param_names:
+                    print(f"{name} = {all_fit_result[name][:, _z].mean():.3g} "
+                          f"+- {sem(all_fit_result[name][:, _z], jack):.3g}")
+                print(f"chi2 = {all_fit_result['chi2'][:, _z].mean():.3g}")
+            else:
+                print(f"fit status = {fit_status} "
+                      f"({fit_reason})")
             print(f"fit z = {_z}, time: {time.perf_counter() - t0_fit:.2f}s\n")
 
         report_lines.append(f"z = {_z}")
         report_lines.append("-" * 72)
         report_lines.append(f"condition number = {_cond:.3g}")
+        report_lines.append(
+            f"fit status = {fit_status}")
+        report_lines.append(
+            f"effective covariance rank = {effective_rank}")
+        report_lines.append(f"sample covariance rank = {sample_rank}")
+        report_lines.append(f"required parameter rank = {required_rank}")
+        if fit_status not in ("identifiable", "prior_constrained"):
+            report_lines.append(f"fit skipped: {fit_reason}")
         report_lines.append("")
         if _last_fit is not None:
             report_lines.append(_last_fit.format(maxline=True))
@@ -262,24 +355,81 @@ def do_fit_and_report(ratio, fitpa: FitParams, sampa: SampleParams2pt,
     summary_rows = []
     for _z in range(sampa.Nx):
         row = [str(_z)]
-        for name in param_names:
-            mean = all_fit_result[name][:, _z].mean()
-            err = sem(all_fit_result[name][:, _z], jack)
-            row.append(f"{mean:.3f}({err * 1e3:.0f})")
-        row.append(f"{all_fit_result['chi2'][:, _z].mean():.2g}")
+        valid = (fit_status_by_z[_z] in ("identifiable", "prior_constrained")
+                 and np.isfinite(all_fit_result["chi2"][:, _z]).all())
+        if valid:
+            for name in param_names:
+                mean = all_fit_result[name][:, _z].mean()
+                err = sem(all_fit_result[name][:, _z], jack)
+                row.append(f"{mean:.3f}({err * 1e3:.0f})")
+            row.append(f"{all_fit_result['chi2'][:, _z].mean():.2g}")
+        else:
+            row.extend(["N/A"] * (len(param_names) + 1))
         summary_rows.append(row)
     report_lines.append(make_summary_table(
         ["z"] + param_names + ["chi2/dof"], summary_rows))
     report_lines.append("")
 
+    aggregate_status, aggregate_reason = aggregate_fit_statuses(
+        fit_status_by_z, fit_reason_by_z)
+    report_lines.insert(5, f"  fit status      : {aggregate_status}")
+    report_lines.insert(6, f"  fit reason      : {aggregate_reason}")
+    fit_metadata = {
+        "fit_status": aggregate_status,
+        "fit_status_by_z": np.asarray(fit_status_by_z),
+        "fit_reason": aggregate_reason,
+        "fit_reason_by_z": np.asarray(fit_reason_by_z),
+        "condition_number": all_cond,
+        "effective_rank": effective_rank_by_z,
+        "sample_rank": sample_rank_by_z,
+        "required_rank": np.asarray(required_rank, dtype=np.int64),
+    }
+    all_fit_result.update(fit_metadata)
     with open(os.path.join(fit_dir, "1_fit_report.txt"), "w") as f:
         f.write("\n".join(report_lines))
-    np.savez(os.path.join(fit_dir, "0_fit_data.npz"), **all_fit_result)
+    np.savez(
+        os.path.join(fit_dir, "0_fit_data.npz"),
+        **all_fit_result,
+    )
     if verbose:
         print(f"report saved to {fit_dir}/1_fit_report.txt")
         print(f"fit result saved to {fit_dir}/0_fit_data.npz")
         print("==================== do_fit end ====================")
     return all_fit_result
+
+
+def _fit_status_by_z(fit_result, nz):
+    """读取拟合状态；旧 numeric-only 产物显式标为 unavailable。"""
+    status_by_z = fit_result.get("fit_status_by_z")
+    if status_by_z is not None:
+        status_by_z = np.asarray(status_by_z).reshape(-1)
+        if status_by_z.size == nz:
+            return status_by_z.astype(str)
+        return np.full(nz, "unavailable", dtype="<U32")
+
+    aggregate = fit_result.get("fit_status")
+    if aggregate is None:
+        return np.full(nz, "unavailable", dtype="<U32")
+    aggregate = np.asarray(aggregate).reshape(-1)
+    if aggregate.size != 1:
+        return np.full(nz, "unavailable", dtype="<U32")
+    return np.full(nz, str(aggregate[0]), dtype="<U32")
+
+
+def _fit_reason_for_z(fit_result, z):
+    """返回指定 z 的状态原因，兼容旧 numeric-only 结果。"""
+    reasons = fit_result.get("fit_reason_by_z")
+    if reasons is not None:
+        reasons = np.asarray(reasons).reshape(-1)
+        if z < reasons.size and str(reasons[z]):
+            return str(reasons[z])
+    reason = fit_result.get("fit_reason")
+    if reason is None:
+        return "central fit status is unavailable"
+    reason = np.asarray(reason).reshape(-1)
+    if reason.size != 1:
+        return "central fit status is unavailable"
+    return str(reason[0])
 
 
 def plot_ratio_fits(ratio, fit_result, sampa: SampleParams2pt,
@@ -304,9 +454,21 @@ def plot_ratio_fits(ratio, fit_result, sampa: SampleParams2pt,
     chi2 = fit_result["chi2"]
     ratio_mean = ratio.mean(0)
     ratio_err = sem(ratio, jack)
-    c0_mean = para_c0.mean(0)
-    c0_err = sem(para_c0, jack)
-    chi2_mean = chi2.mean(0)
+    status_by_z = _fit_status_by_z(fit_result, para_c0.shape[1])
+    unique_status = np.unique(status_by_z)
+    fit_status_label = (str(unique_status[0]) if unique_status.size == 1
+                        else "mixed")
+    status_valid = np.isin(status_by_z, ["identifiable", "prior_constrained"])
+    valid_z = (status_valid
+               & np.isfinite(para_c0).all(axis=0)
+               & np.isfinite(chi2).all(axis=0))
+    c0_mean = np.full(para_c0.shape[1], np.nan)
+    c0_err = np.full(para_c0.shape[1], np.nan)
+    chi2_mean = np.full(chi2.shape[1], np.nan)
+    if np.any(valid_z):
+        c0_mean[valid_z] = para_c0[:, valid_z].mean(0)
+        c0_err[valid_z] = sem(para_c0[:, valid_z], jack)
+        chi2_mean[valid_z] = chi2[:, valid_z].mean(0)
 
     n_z = len(plotpa.z_list)
     n_cols = 3
@@ -332,13 +494,21 @@ def plot_ratio_fits(ratio, fit_result, sampa: SampleParams2pt,
                         zorder=3, label=f"dt={dt}")
 
         x_band = np.array(plotpa.xlim)
-        ax.fill_between(x_band, [band_down, band_down], [band_up, band_up],
-                        color="gray", alpha=0.35, linewidth=0, zorder=1,
-                        label="Fit c0")
-
-        c0_str = f"{para_c0[:, _z].mean():.3f}({sem(para_c0[:, _z], jack) * 1e3:.0f})"
-        ax.set_title(f"z={_z}, c0={c0_str}, chi2={chi2_mean[_z]:.2f}",
-                     fontsize=12)
+        if valid_z[_z]:
+            ax.fill_between(x_band, [band_down, band_down], [band_up, band_up],
+                            color="gray", alpha=0.35, linewidth=0, zorder=1,
+                            label="Fit c0")
+            c0_str = (f"{para_c0[:, _z].mean():.3f}"
+                      f"({sem(para_c0[:, _z], jack) * 1e3:.0f})")
+            title = (f"z={_z}, c0={c0_str}, chi2={chi2_mean[_z]:.2f}"
+                     f" [{status_by_z[_z]}]")
+        else:
+            title = f"z={_z}, fit={status_by_z[_z]}"
+            ax.text(0.5, 0.08,
+                    f"fit unavailable: {_fit_reason_for_z(fit_result, _z)}",
+                    transform=ax.transAxes, ha="center", va="bottom",
+                    fontsize=8, color="darkred")
+        ax.set_title(title, fontsize=12)
         ax.set_xlim(plotpa.xlim[0], plotpa.xlim[1])
         ax.set_ylim(plotpa.ylim[0], plotpa.ylim[1])
         ax.set_box_aspect(3 / 4)
@@ -363,7 +533,8 @@ def plot_ratio_fits(ratio, fit_result, sampa: SampleParams2pt,
     z_vals = np.arange(sampa.Nx)
     title = (f"Unpolarized, P({sampa.Px},{sampa.Py},{sampa.Pz}), "
              f"Nconf={sampa.Nconf}, Nsample = {sampa.Nsample}\n"
-             f"fit: tsep = [{fitpa.dt_start}, {fitpa.dt_end}], nex = {fitpa.nex}")
+             f"fit: tsep = [{fitpa.dt_start}, {fitpa.dt_end}], nex = {fitpa.nex}\n"
+             f"fit status = {fit_status_label}")
     saved.append(os.path.join(out_dir, "c0.png"))
     plot_single_errbar(z_vals, c0_mean, c0_err, saved[-1],
                        xlabel="z", ylabel="c0",

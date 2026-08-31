@@ -214,7 +214,9 @@ if core.getMPIRank() == 0:
     np.save(out_path, C3_window)
 ```
 
-For HDF5 with metadata, use the full output pattern (see Step 8 in pyquda-tool/SKILL.md).
+For HDF5 with metadata, follow the [`pyqcd-infra` I/O reference](../../pyqcd-infra/references/io.md);
+for atomic pipeline completion and resume semantics, follow the
+[`pyqcd-pipeline` runbook](../../pyqcd-pipeline/references/runbook.md).
 
 ---
 

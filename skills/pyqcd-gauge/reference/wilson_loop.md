@@ -23,8 +23,11 @@ Path (starting at $x$):
 3. $R$ steps backward along $\mu$
 4. $T$ steps backward along $\nu$
 
-returns to $x$. $\frac{1}{N_c}\text{Re}\,\text{Tr}$ gives a real normalization;
-the trace is real for SU($N_c$) since the loop is closed.
+returns to $x$. $\frac{1}{N_c}\text{Re}\,\text{Tr}$ is real by construction.
+Closure makes $\text{Tr}\,U_C$ gauge invariant, but it does not make the trace real:
+for SU(3), a single oriented loop generally has a complex trace, while reversing the
+path gives $\text{Tr}(U_C^{-1})=\text{Tr}(U_C)^*$. Taking `Re Tr` is therefore an
+explicit observable projection, not a consequence of path closure.
 
 ### 1.2 Static potential and area law
 

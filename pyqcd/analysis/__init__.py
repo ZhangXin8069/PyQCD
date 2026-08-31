@@ -19,8 +19,9 @@ __all__ = [
     "plot_single_errbar", "plot_single_chi2",
     "plot_multi_errbars", "plot_multi_chi2", "plot_multi_scatter",
     "get_peak_memory_gb",
-    "FitParams", "calc_chi2", "calc_chi2_dof", "fit", "make_summary_table",
-    "fit_report_lines",
+    "FitParams", "covariance_sample_rank", "covariance_effective_rank",
+    "fit_identifiability", "calc_chi2", "calc_chi2_dof", "fit",
+    "make_summary_table", "fit_report_lines",
     "SampleParams2pt", "PlotParamsRatio", "ope_combine", "compute_ratio",
     "ratio_file_name", "fit_dir_name", "fit_x_coor", "do_fit_and_report",
     "plot_ratio_fits", "run_ratio2pt",
@@ -58,7 +59,8 @@ from ._plots import (
     get_peak_memory_gb,
 )
 from ._fitter import (
-    FitParams, calc_chi2, calc_chi2_dof, fit, make_summary_table,
+    FitParams, covariance_sample_rank, covariance_effective_rank,
+    fit_identifiability, calc_chi2, calc_chi2_dof, fit, make_summary_table,
     fit_report_lines,
 )
 from ._ratio2pt import (

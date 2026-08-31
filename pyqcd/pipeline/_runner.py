@@ -18,22 +18,20 @@ from __future__ import annotations
 
 import json
 import os
-import time
 
+from . import _config as _pipeline_config
 from ._config import (
     CONF_IDS, NEV, NEV1, PRECISION, NT, NX, ALttc, FM2GEV, T_SEP,
-    DELTA_Z, Z_DIR, OPE_COMPONENTS, OUTPUT_DIR, LOGS_DIR, PLOTS_DIR,
+    DELTA_Z, Z_DIR, OPE_COMPONENTS, LOGS_DIR, PLOTS_DIR,
     get_gauge_path,
 )
 from ._steps import run_pipeline as _run_pipeline_full
+from ._run_dir import reserve_unique_run_dir
 
 
 def make_run_dir(tag: str = None) -> str:
-    """创建本轮输出目录 output/output_YYYYMMDD_HHMMSS。"""
-    stamp = time.strftime('%Y%m%d_%H%M%S')
-    run_dir = os.path.join(OUTPUT_DIR, f'output_{stamp}')
-    if tag:
-        run_dir = f"{run_dir}_{tag}"
+    """原子创建本轮唯一输出目录并初始化标准子目录。"""
+    run_dir = reserve_unique_run_dir(_pipeline_config.OUTPUT_DIR, tag=tag)
     os.makedirs(os.path.join(run_dir, 'data'), exist_ok=True)
     os.makedirs(os.path.join(run_dir, 'plots'), exist_ok=True)
     os.makedirs(os.path.join(run_dir, 'analysis'), exist_ok=True)
@@ -57,18 +55,31 @@ def step_env(conf_ids=CONF_IDS):
 
 
 def step_tmd(config, run_dir, gauge, tau, z_list, b_list,
-             z_dir=Z_DIR, eps=0.01):
+             z_dir=Z_DIR, eps=0.01, staple_length=None,
+             color_normalization='fundamental_trace'):
     """梯度流重整化胶子 TMD-PDF 矩阵元（核心目标）。"""
-    from ..renorm._tmd import gradient_flow_renormalized_tmd
-    from ..renorm._gradient_flow import flow_action_density
+    from ..renorm._gradient_flow import flow_action_density, wilson_flow
+    from ..renorm._tmd import tmd_matrix_elements
+    from ._tmd9 import _resolve_staple_length
 
-    out = gradient_flow_renormalized_tmd(
-        gauge, tau, z_list, b_list, z_dir=z_dir, b_dir=0, eps=eps)
-    from ..renorm._gradient_flow import wilson_flow
+    # Wilson flow 是本步骤的主导成本；同一流场同时供 TMD 与 t²E 使用。
+    staple_length = _resolve_staple_length(z_list, staple_length)
     V = wilson_flow(gauge, tau, eps=eps)
+    out = tmd_matrix_elements(
+        V, z_list, b_list, z_dir=z_dir, b_dir=0, L=staple_length,
+        color_normalization=color_normalization)
     t2E = tau ** 2 * flow_action_density(V).mean()
-    result = {'O_z_b': out.tolist(), 'tau': tau, 't2E': float(t2E),
-              'z_list': z_list, 'b_list': b_list}
+    result = {
+        'O_z_b': out.tolist(),
+        'tau': tau,
+        'tau_convention': 't/a^2',
+        'flow_eps': eps,
+        't2E': float(t2E),
+        'z_list': z_list,
+        'b_list': b_list,
+        'staple_length': staple_length,
+        'color_normalization': color_normalization,
+    }
     with open(os.path.join(run_dir, 'tmd_gluon_flow.json'), 'w') as f:
         json.dump(result, f, indent=2)
     return out

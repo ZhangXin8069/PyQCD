@@ -7,18 +7,18 @@
 
 | Skill 目录 | 创建者 | 功能 | 最近一次更改时间 | 入口 |
 |---|---|---|---|---|
-| [`pyqcd-analysis/`](pyqcd-analysis/) | `root` | 从已有组态数据提取质量、能量、矩阵元、ratio、c0、有效质量和图表。 | `2026-08-28 13:11:33 +08:00` | [`SKILL.md`](pyqcd-analysis/SKILL.md) |
-| [`pyqcd-conventions/`](pyqcd-conventions/) | `root` | 统一 γ 矩阵、轴序、单位、边界、符号、复数和结果状态契约。 | `2026-08-28 13:02:26 +08:00` | [`SKILL.md`](pyqcd-conventions/SKILL.md) |
-| [`pyqcd-docs/`](pyqcd-docs/) | `root` | 编写和验收中文 LaTeX、analy/pure 报告及 PDF 版式与源码证据。 | `2026-08-28 13:26:26 +08:00` | [`SKILL.md`](pyqcd-docs/SKILL.md) |
-| [`pyqcd-gauge/`](pyqcd-gauge/) | `root` | 计算 Wilson/Polyakov 圈、静态势、拓扑荷、Wilson flow 和链接涂抹。 | `2026-08-28 13:36:44 +08:00` | [`SKILL.md`](pyqcd-gauge/SKILL.md) |
-| [`pyqcd-infra/`](pyqcd-infra/) | `root` | 处理 numpy/cupy/torch 后端、HDF5/ASCII/VdV/VVV I/O、MPI 与显存规划。 | `2026-08-28 13:05:00 +08:00` | [`SKILL.md`](pyqcd-infra/SKILL.md) |
-| [`pyqcd-physics-correlator/`](pyqcd-physics-correlator/) | `root` | 将观测量推导为内插算符、关联函数、Wick 缩并、传播子清单和 einsum。 | `2026-08-28 13:38:10 +08:00` | [`SKILL.md`](pyqcd-physics-correlator/SKILL.md) |
-| [`pyqcd-physics-spectrum/`](pyqcd-physics-spectrum/) | `root` | 推导谱分解、重叠因子、backward 态和两点/三点拟合模板。 | `2026-08-28 13:21:16 +08:00` | [`SKILL.md`](pyqcd-physics-spectrum/SKILL.md) |
-| [`pyqcd-pipeline/`](pyqcd-pipeline/) | `root` | 编排蒸馏管线、基线一致性、断点续跑、数据守卫、进度和环境快照。 | `2026-08-28 13:27:35 +08:00` | [`SKILL.md`](pyqcd-pipeline/SKILL.md) |
-| [`pyqcd-propagator/`](pyqcd-propagator/) | `root` | 用 PyQUDA 求解 Wilson/Clover 传播子、顺序源和协变非局部位移。 | `2026-08-28 13:36:44 +08:00` | [`SKILL.md`](pyqcd-propagator/SKILL.md) |
-| [`pyqcd-statistics/`](pyqcd-statistics/) | `root` | 统一 jackknife/bootstrap、协方差、SVD、拟合窗口和统计诊断纪律。 | `2026-08-28 13:03:02 +08:00` | [`SKILL.md`](pyqcd-statistics/SKILL.md) |
-| [`pyqcd-tmd-algorithm/`](pyqcd-tmd-algorithm/) | `root` | 约束梯度流核子胶子 TMD 的几何、重整化、匹配、外推和验证门。 | `2026-08-28 13:10:43 +08:00` | [`SKILL.md`](pyqcd-tmd-algorithm/SKILL.md) |
-| [`pyqcd-tmd-chain/`](pyqcd-tmd-chain/) | `root` | 导航梯度流、OPE、断连、Z_R/混合、Fourier/CS/匹配到连续极限全链。 | `2026-08-28 13:28:26 +08:00` | [`SKILL.md`](pyqcd-tmd-chain/SKILL.md) |
+| [`pyqcd-analysis/`](pyqcd-analysis/) | `root` | 运行已有数据的物理量提取和图表；统计纪律与谱模型分别由专门技能定义。 | `2026-08-31 10:42:08 +08:00` | [`SKILL.md`](pyqcd-analysis/SKILL.md) |
+| [`pyqcd-conventions/`](pyqcd-conventions/) | `root` | 统一 γ 矩阵、轴序、单位、边界、Fourier/basis 符号、复数和结果状态契约。 | `2026-08-31 08:47:37 +08:00` | [`SKILL.md`](pyqcd-conventions/SKILL.md) |
+| [`pyqcd-docs/`](pyqcd-docs/) | `root` | 编写和验收中文 LaTeX、analy/pure 报告及 PDF 版式与源码证据。 | `2026-08-31 10:15:20 +08:00` | [`SKILL.md`](pyqcd-docs/SKILL.md) |
+| [`pyqcd-gauge/`](pyqcd-gauge/) | `root` | 计算 Wilson/Polyakov 圈、静态势、拓扑荷、Wilson flow 和链接涂抹。 | `2026-08-31 10:52:42 +08:00` | [`SKILL.md`](pyqcd-gauge/SKILL.md) |
+| [`pyqcd-infra/`](pyqcd-infra/) | `root` | 处理 numpy/cupy/torch 后端、GPU 计时、HDF5/ASCII/VdV/VVV I/O、MPI 与显存规划。 | `2026-08-31 10:15:20 +08:00` | [`SKILL.md`](pyqcd-infra/SKILL.md) |
+| [`pyqcd-physics-correlator/`](pyqcd-physics-correlator/) | `root` | 将观测量推导为算符、关联函数、Wick、蒸馏 basis/传播子交接和 einsum。 | `2026-08-31 10:58:25 +08:00` | [`SKILL.md`](pyqcd-physics-correlator/SKILL.md) |
+| [`pyqcd-physics-spectrum/`](pyqcd-physics-spectrum/) | `root` | 权威定义谱分解、色散似然、backward 态和两点/三点拟合模板。 | `2026-08-31 09:11:23 +08:00` | [`SKILL.md`](pyqcd-physics-spectrum/SKILL.md) |
+| [`pyqcd-pipeline/`](pyqcd-pipeline/) | `root` | 编排蒸馏管线、严格 OPE artifact contract、GPU 完成计时、原子持久化、断点续跑、守卫和环境快照。 | `2026-08-31 10:46:26 +08:00` | [`SKILL.md`](pyqcd-pipeline/SKILL.md) |
+| [`pyqcd-propagator/`](pyqcd-propagator/) | `root` | 用 PyQUDA 求解 Wilson/Clover 传播子、顺序源和协变非局部位移。 | `2026-08-31 02:27:30 +08:00` | [`SKILL.md`](pyqcd-propagator/SKILL.md) |
+| [`pyqcd-statistics/`](pyqcd-statistics/) | `root` | 统一 jackknife/bootstrap、协方差、模型 Jacobian 可辨识性、拟合窗口和统计诊断纪律。 | `2026-08-31 09:11:23 +08:00` | [`SKILL.md`](pyqcd-statistics/SKILL.md) |
+| [`pyqcd-tmd-algorithm/`](pyqcd-tmd-algorithm/) | `root` | 约束梯度流核子胶子 TMD 的几何、重整化、匹配、外推、缓存和验证门。 | `2026-08-31 06:44:19 +08:00` | [`SKILL.md`](pyqcd-tmd-algorithm/SKILL.md) |
+| [`pyqcd-tmd-chain/`](pyqcd-tmd-chain/) | `root` | 导航梯度流、OPE、断连、Z_R/混合、Fourier/CS/匹配到连续极限全链。 | `2026-08-31 02:27:30 +08:00` | [`SKILL.md`](pyqcd-tmd-chain/SKILL.md) |
 
 ## 维护边界
 

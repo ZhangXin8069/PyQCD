@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import operator
 import time
 
 import numpy as np
@@ -22,33 +23,402 @@ import numpy as np
 
 def sem(data, jackknife=True):
     """样本轴（axis 0）均值的标准误。"""
-    error = data.std(0)
+    data = _as_resample_array(data)
+    if data.ndim == 0:
+        raise ValueError("sem expects a sample axis")
+    is_torch = type(data).__module__.split(".", 1)[0] == "torch"
+    if is_torch:
+        import torch
+        dtype = data.dtype
+        if not (dtype.is_floating_point or dtype.is_complex):
+            data = data.to(dtype=torch.float64)
+    n_sample = data.shape[0]
+    if n_sample == 0:
+        raise ValueError("sem requires at least one sample")
+    if n_sample < 2:
+        error = (data.std(0, correction=0) if is_torch
+                 else data.std(0))
+        output = _empty_resample_like(error, error.shape)
+        output[...] = np.nan
+        return output
+    error = (data.std(0, correction=0) if is_torch
+             else data.std(0))
     if jackknife:
-        error = error * np.sqrt(data.shape[0] - 1)
+        error = error * np.sqrt(n_sample - 1)
     return error
 
 
-def resample(corr, jackknife=True, Nsample=None, seed=0):
-    """Delete-one jackknife（或 bootstrap）重采样：样本轴移到 axis 0。"""
-    n_conf = corr.shape[0]
+def _normalize_resample_axis(axis, ndim):
+    """Return a validated non-negative sample axis."""
+    if isinstance(axis, (bool, np.bool_)):
+        raise TypeError("axis must be an integer, not bool")
+    try:
+        axis = operator.index(axis)
+    except TypeError as error:
+        raise TypeError("axis must be an integer") from error
+    if axis < -ndim or axis >= ndim:
+        raise ValueError(
+            f"axis {axis} is out of bounds for an array of dimension {ndim}")
+    return axis % ndim
+
+
+def _positive_resample_integer(value, name):
+    """Validate a positive integer option without accepting bool values."""
+    if isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must be a positive integer")
+    try:
+        value = operator.index(value)
+    except TypeError as error:
+        raise TypeError(f"{name} must be a positive integer") from error
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
+_DEFAULT_RESAMPLE_SEED = object()
+
+
+def _as_resample_array(data):
+    """Keep array backends while accepting ordinary array-like input."""
+    if (hasattr(data, "ndim") and hasattr(data, "shape")
+            and hasattr(data, "mean")):
+        return data
+    return np.asarray(data)
+
+
+def _promote_bool_observable(data):
+    """Promote Bernoulli observables before backend resampling arithmetic."""
+    if type(data).__module__.split(".", 1)[0] == "torch":
+        import torch
+        if data.dtype == torch.bool:
+            return data.to(dtype=torch.float64)
+        return data
+    if isinstance(data, np.ndarray) and data.dtype == np.bool_:
+        return data.astype(np.float64, copy=False)
+    return data
+
+
+def _resample_mean(data, axis):
+    """Compute a mean while giving Torch integer inputs a NaN-capable dtype."""
+    if type(data).__module__.split(".", 1)[0] == "torch":
+        import torch
+        dtype = data.dtype
+        if not (dtype.is_floating_point or dtype.is_complex):
+            return data.mean(axis, dtype=torch.float64)
+    return data.mean(axis)
+
+
+def _move_resample_axis_to_front(data, axis):
+    """Move one sample axis without forcing a non-NumPy backend to host."""
+    if axis == 0:
+        return data
+    order = (axis,) + tuple(index for index in range(data.ndim)
+                            if index != axis)
+    movedim = getattr(data, "movedim", None)
+    if movedim is not None:
+        return movedim(axis, 0)
+    return data.transpose(order)
+
+
+def _empty_resample_like(reference, shape):
+    """Allocate an output on the backend and device of ``reference``."""
+    if isinstance(reference, (np.ndarray, np.generic)):
+        return np.empty(shape, dtype=reference.dtype)
+    new_empty = getattr(reference, "new_empty", None)
+    if new_empty is not None:
+        return new_empty(shape)
+    try:
+        return type(reference)(shape, dtype=reference.dtype)
+    except (TypeError, ValueError) as error:
+        raise TypeError(
+            "resample cannot allocate an output for this array backend"
+        ) from error
+
+
+def _resample_indices_for_array(data, indices):
+    """Place Torch advanced-index arrays on the data device."""
+    if type(data).__module__.split(".", 1)[0] == "torch":
+        import torch
+        return data.new_tensor(indices, dtype=torch.long)
+    return indices
+
+
+def resample(corr, jackknife=True, Nsample=None,
+             seed=_DEFAULT_RESAMPLE_SEED, axis=0,
+             chunk_size=None, rng=None):
+    """Delete-one jackknife or bootstrap samples.
+
+    ``axis`` identifies the configuration axis.  Bootstrap output always has
+    its resample axis first; non-sample axes retain their original order.
+    Bootstrap index generation can be bounded with ``chunk_size``.  A supplied
+    ``numpy.random.Generator`` is consumed directly and is never reseeded.
+    """
+    seed_is_explicit = seed is not _DEFAULT_RESAMPLE_SEED
+    if not seed_is_explicit:
+        seed = 0
+
+    corr = _promote_bool_observable(_as_resample_array(corr))
+    if corr.ndim == 0:
+        raise ValueError("resampling expects an array with a sample axis")
+    axis = _normalize_resample_axis(axis, corr.ndim)
+
+    if rng is not None and not isinstance(rng, np.random.Generator):
+        raise TypeError("rng must be a numpy.random.Generator")
+    if chunk_size is not None:
+        chunk_size = _positive_resample_integer(chunk_size, "chunk_size")
+
+    sample_first = _move_resample_axis_to_front(corr, axis)
+    n_conf = sample_first.shape[0]
+    if n_conf == 0:
+        raise ValueError("resampling requires at least one configuration")
+
     if jackknife:
-        return (n_conf * corr.mean(0) - corr) / (n_conf - 1)
-    rng = np.random.default_rng(seed=seed)
-    idx = rng.integers(0, n_conf, size=(Nsample, n_conf))
-    return corr[idx].mean(1)
+        if chunk_size is not None:
+            raise ValueError("chunk_size is only valid for bootstrap")
+        if rng is not None:
+            raise ValueError("rng is only valid for bootstrap")
+        if n_conf < 2:
+            mean = _resample_mean(sample_first, 0)
+            output = _empty_resample_like(mean, sample_first.shape)
+            output[...] = np.nan
+            return output
+        return (n_conf * _resample_mean(sample_first, 0) - sample_first) / (
+            n_conf - 1)
+
+    if Nsample is not None:
+        Nsample = _positive_resample_integer(Nsample, "Nsample")
+    if Nsample is None:
+        raise ValueError("bootstrap resampling requires Nsample")
+    if rng is not None and seed_is_explicit:
+        raise ValueError("seed cannot be combined with an explicit rng")
+    if rng is None:
+        rng = np.random.default_rng(seed=seed)
+    if chunk_size is None:
+        chunk_size = Nsample
+
+    output = None
+    for start in range(0, Nsample, chunk_size):
+        stop = min(start + chunk_size, Nsample)
+        indices = rng.integers(
+            0, n_conf, size=(stop - start, n_conf))
+        indices = _resample_indices_for_array(sample_first, indices)
+        batch = _resample_mean(sample_first[indices], 1)
+        if output is None:
+            output = _empty_resample_like(
+                batch, (Nsample,) + tuple(batch.shape[1:]))
+        output[start:stop] = batch
+        del indices
+        del batch
+    return output
+
+
+def _repair_covariance_roundoff(cov):
+    """Validate covariance on correlation scale and symmetrize roundoff.
+
+    Roundoff-sized negative eigenvalues are accepted as a dense
+    representation artifact but are not lifted here.  Statistical SVD
+    regulation belongs to the fit layer; changing the numerical null space at
+    covariance construction time would destroy exact covariance kernels.
+    """
+    matrix = np.asarray(cov)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("cov must be a square matrix")
+    if not np.isfinite(matrix).all():
+        raise ValueError("cov must contain only finite values")
+    matrix = np.asarray(matrix, dtype=np.result_type(matrix.dtype, np.float64))
+    original = matrix
+    matrix_scale = float(np.max(np.abs(matrix), initial=0.0))
+    hermitian_tolerance = (
+        matrix_scale * max(matrix.shape[0], 1) * np.finfo(np.float64).eps
+    )
+    if np.max(
+            np.abs(matrix - matrix.conj().T), initial=0.0
+    ) > hermitian_tolerance:
+        raise ValueError("cov must be Hermitian")
+    matrix = (matrix + matrix.conj().T) * 0.5
+    diagonal = np.real_if_close(np.diag(matrix))
+    if np.iscomplexobj(diagonal):
+        raise ValueError("cov diagonal must be real")
+    diagonal = np.asarray(diagonal, dtype=np.float64)
+    if np.any(diagonal < 0.0):
+        raise ValueError("cov diagonal must be non-negative")
+
+    active = diagonal > 0.0
+    inactive = ~active
+    if np.any(inactive) and (
+            np.any(original[inactive, :] != 0.0)
+            or np.any(original[:, inactive] != 0.0)):
+        raise ValueError("cov must be positive semidefinite")
+    if not np.any(active):
+        return np.real_if_close(matrix)
+
+    std = np.sqrt(diagonal[active])
+    corr = matrix[np.ix_(active, active)] / std[:, None] / std[None, :]
+    corr = (corr + corr.conj().T) * 0.5
+    eigval = np.linalg.eigvalsh(corr)
+    largest = max(float(eigval[-1]), 0.0)
+    tolerance = largest * corr.shape[0] * np.finfo(np.float64).eps
+    if eigval[0] < -tolerance:
+        raise ValueError("cov must be positive semidefinite")
+    return np.real_if_close(matrix)
 
 
 def cov_mat(arr, jackknife=True):
     """Jackknife 协方差（均值）与特征值条件数。"""
-    diff = arr - arr.mean(0)
+    arr = np.asarray(arr)
+    if arr.ndim != 2:
+        raise ValueError("cov_mat expects a two-dimensional sample matrix")
+    if arr.shape[1] == 0:
+        raise ValueError("cov_mat requires at least one feature column")
     n = arr.shape[0]
+    if n < 2:
+        dtype = np.result_type(arr.dtype, np.float64)
+        return np.zeros((arr.shape[1], arr.shape[1]), dtype=dtype), np.inf
+    diff = arr - arr.mean(0)
     if jackknife:
-        cov = np.matmul(diff.T, diff) / n * (n - 1)
+        cov = np.matmul(diff.T, diff.conj()) / n * (n - 1)
     else:
-        cov = np.matmul(diff.T, diff) / n
+        cov = np.matmul(diff.T, diff.conj()) / n
+    cov = _repair_covariance_roundoff(cov)
     eig = np.linalg.eigvalsh(cov)
-    cond = eig[-1] / eig[0] if eig[0] > 0 else np.inf
+    rank_tolerance = max(float(eig[-1]), 0.0) * eig.size * np.finfo(np.float64).eps
+    cond = eig[-1] / eig[0] if eig[0] > rank_tolerance else np.inf
     return cov, cond
+
+
+def fit_status_from_samples(fit_result, last_fit=None, has_prior=False,
+                            failure_reason=None):
+    """Classify a central-fit result from its complete sample finite mask.
+
+    Product layers must not infer identifiability from a finite-looking point
+    estimate alone.  ``fit`` annotates the last successful solver result with
+    ``pyqcd_fit_status``; this helper combines that annotation with the finite
+    mask of every parameter and ``chi2`` sample.  The returned mask is useful
+    to callers that need to keep the original sample axis while suppressing
+    invalid summaries and plot bands.
+
+    Returns
+    -------
+    status, reason, finite_mask
+        ``status`` is one of ``identifiable``, ``prior_constrained``,
+        ``practically_unidentifiable``, ``partially_identifiable`` or
+        ``statistically_unidentifiable``.
+    """
+    if not fit_result:
+        raise ValueError("fit_result must contain parameter and chi2 arrays")
+
+    arrays = []
+    n_sample = None
+    for name, values in fit_result.items():
+        array = np.asarray(values)
+        if array.ndim != 1:
+            raise ValueError(f"fit result {name} must be a one-dimensional array")
+        if n_sample is None:
+            n_sample = array.shape[0]
+        elif array.shape[0] != n_sample:
+            raise ValueError("fit result arrays must share the sample axis")
+        arrays.append(array)
+
+    if n_sample == 0:
+        raise ValueError("fit result must contain at least one sample")
+
+    finite_mask = np.ones(n_sample, dtype=bool)
+    for array in arrays:
+        try:
+            finite_mask &= np.isfinite(array)
+        except TypeError as error:
+            raise ValueError("fit result arrays must be numeric") from error
+
+    n_finite = int(np.count_nonzero(finite_mask))
+    last_status = getattr(last_fit, "pyqcd_fit_status", None)
+    annotated_reason = getattr(last_fit, "pyqcd_fit_reason", None)
+
+    def _explicit_reason(default):
+        # An explicit practical-identifiability annotation is more specific
+        # than a generic covariance gate reason; retain it verbatim.
+        for candidate in (annotated_reason, failure_reason):
+            if candidate is not None and str(candidate):
+                return str(candidate)
+        return default
+
+    if n_finite == 0:
+        status = "statistically_unidentifiable"
+        reason = failure_reason or (
+            "all fit samples failed: model Jacobian/covariance did not "
+            "establish identifiability")
+        if "model Jacobian" not in reason and "covariance" not in reason:
+            reason += "; model Jacobian/covariance did not establish identifiability"
+        return status, reason, finite_mask
+
+    if n_finite < n_sample:
+        return (
+            "partially_identifiable",
+            f"{n_finite}/{n_sample} fit samples have finite parameters and chi2; "
+            "remaining samples failed the model Jacobian/covariance status gate",
+            finite_mask,
+        )
+
+    if last_status == "practically_unidentifiable":
+        return (
+            "practically_unidentifiable",
+            _explicit_reason(
+                "central fit marked practically_unidentifiable; data "
+                "identifiability is not established"),
+            finite_mask,
+        )
+
+    if has_prior or last_status == "prior_constrained":
+        return (
+            "prior_constrained",
+            "prior_constrained: data identifiability is not established",
+            finite_mask,
+        )
+
+    if last_status == "identifiable":
+        return "identifiable", "identifiable", finite_mask
+
+    return (
+        "statistically_unidentifiable",
+        failure_reason or (
+            "finite fit samples lack central pyqcd_fit_status=identifiable; "
+            "model Jacobian/covariance identifiability is unproven"),
+        finite_mask,
+    )
+
+
+def aggregate_fit_statuses(statuses, reasons=()):
+    """Aggregate independent product channels without upgrading evidence."""
+    statuses = [str(status) for status in statuses]
+    if not statuses:
+        raise ValueError("at least one fit status is required")
+    if all(status == "identifiable" for status in statuses):
+        status = "identifiable"
+    elif all(status == "prior_constrained" for status in statuses):
+        status = "prior_constrained"
+    elif all(status == "practically_unidentifiable" for status in statuses):
+        status = "practically_unidentifiable"
+    elif all(status == "statistically_unidentifiable" for status in statuses):
+        status = "statistically_unidentifiable"
+    else:
+        status = "partially_identifiable"
+    unique_reasons = list(dict.fromkeys(str(reason) for reason in reasons
+                                        if str(reason)))
+    if status == "identifiable":
+        reason = "identifiable"
+    elif status == "prior_constrained":
+        reason = "prior_constrained: data identifiability is not established"
+    elif status == "practically_unidentifiable":
+        reason = "; ".join(unique_reasons) or (
+            "practical identifiability was not established")
+    elif status == "statistically_unidentifiable":
+        reason = "; ".join(unique_reasons) or (
+            "all channels failed: model Jacobian/covariance did not "
+            "establish identifiability")
+    else:
+        reason = "; ".join(unique_reasons) or (
+            "some channels passed and some failed the model "
+            "Jacobian/covariance status gate")
+    return status, reason
 
 
 def model_ratio(x, p):
@@ -58,6 +428,20 @@ def model_ratio(x, p):
     return (np.ones(len(x)) * p["c0"]
             + p["c1"] * np.exp(-p["dE"] * dtau)
             + p["c1"] * np.exp(-p["dE"] * (dt - dtau)))
+
+
+def model_ratio_jacobian(x, p):
+    """Closed-form real-parameter Jacobian of :func:`model_ratio`."""
+    dt = np.asarray([point[0] for point in x], dtype=np.float64)
+    dtau = np.asarray([point[1] for point in x], dtype=np.float64)
+    left = np.exp(-p["dE"] * dtau)
+    right_dt = dt - dtau
+    right = np.exp(-p["dE"] * right_dt)
+    return {
+        "c0": np.ones(dt.shape, dtype=np.float64),
+        "c1": left + right,
+        "dE": -p["c1"] * (dtau * left + right_dt * right),
+    }
 
 
 def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=print,
@@ -76,8 +460,8 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
     Returns:
         ch_results: {hadron: {'ratio': ..., 'c0': ..., 'c1': ..., 'dE': ..., 'chi2': ...}}
     """
-    import lsqfit
-    import gvar as gv
+    from ._fitter import (FitParams, covariance_effective_rank,
+                          covariance_sample_rank, fit, fit_identifiability)
 
     if p0 is None:
         p0 = {"c0": 0.6, "c1": -2, "dE": 1}
@@ -90,6 +474,7 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
 
     channels = [('proton', 'corr_pp', 'proton'), ('pion', 'corr_pion', 'pion')]
     ch_results = {}
+    channel_reports = {}
 
     for ch_key, k2, had_name in channels:
         logger(f"\n  Channel: {had_name} at Pz=2")
@@ -141,10 +526,20 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
                   for dtau in range(front_remove, dt - back_remove + 1)]
         Ndata = len(x_coor)
 
-        para_c0 = np.zeros((Nsample, NX))
-        para_c1 = np.zeros((Nsample, NX))
-        para_dE = np.zeros((Nsample, NX))
-        chi2 = np.zeros((Nsample, NX))
+        para_c0 = np.full((Nsample, NX), np.nan)
+        para_c1 = np.full((Nsample, NX), np.nan)
+        para_dE = np.full((Nsample, NX), np.nan)
+        chi2 = np.full((Nsample, NX), np.nan)
+        fit_status_by_z = ["statistically_unidentifiable"] * NX
+        # Serialize reasons only after all z points are classified; this
+        # avoids truncating future practical-identifiability explanations.
+        fit_reason_by_z = [""] * NX
+        effective_rank_by_z = np.zeros(NX, dtype=np.int64)
+        sample_rank_by_z = np.zeros(NX, dtype=np.int64)
+        required_rank = len(p0)
+        fitpa = FitParams(
+            p0=dict(p0), dt_start=dt_start, dt_end=dt_end,
+            svdcut=1.0e-6, jacobian=model_ratio_jacobian)
 
         report_lines = [
             "=" * 70,
@@ -161,34 +556,171 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
             sub_sample = np.zeros((Nsample, Ndata))
             for i, (dt, dtau) in enumerate(x_coor):
                 sub_sample[:, i] = ratio[:, dt, dtau, _z]
-            cov, cond = cov_mat(sub_sample, jack)
+            _fit_result = {
+                name: np.full(Nsample, np.nan)
+                for name in list(p0) + ["chi2"]
+            }
+            if Nconf < 2:
+                cov = np.zeros((Ndata, Ndata), dtype=np.float64)
+                cond = np.inf
+                effective_rank = 0
+                sample_rank = 0
+                _last_fit = None
+                gate_reason = (
+                    f"Nconf={Nconf} cannot support delete-one jackknife "
+                    "covariance")
+                fit_status, fit_reason, _ = fit_status_from_samples(
+                    _fit_result, _last_fit, failure_reason=gate_reason)
+            else:
+                _fit_result, cov, cond, _last_fit = fit(
+                    sub_sample, x_coor, model_ratio, fitpa,
+                    jackknife=jack)
+                effective_rank = covariance_effective_rank(
+                    cov, svdcut=fitpa.svdcut)
+                sample_rank = covariance_sample_rank(cov)
+                gate_ok, gate_reason = fit_identifiability(
+                    Ndata, required_rank, effective_rank,
+                    sample_rank=sample_rank)
+                fit_status, fit_reason, _ = fit_status_from_samples(
+                    _fit_result, _last_fit,
+                    failure_reason=None if gate_ok else gate_reason)
+            para_c0[:, _z] = _fit_result["c0"]
+            para_c1[:, _z] = _fit_result["c1"]
+            para_dE[:, _z] = _fit_result["dE"]
+            chi2[:, _z] = _fit_result["chi2"]
+            fit_status_by_z[_z] = fit_status
+            fit_reason_by_z[_z] = fit_reason
+            effective_rank_by_z[_z] = effective_rank
+            sample_rank_by_z[_z] = sample_rank
             report_lines += [f"z = {_z}", "-" * 56,
-                             f"condition number = {cond:.3g}", ""]
+                             f"condition number = {cond:.3g}",
+                             f"fit status = {fit_status}",
+                             f"effective covariance rank = {effective_rank}",
+                             f"sample covariance rank = {sample_rank}",
+                             f"required parameter rank = {required_rank}", ""]
 
-            for _id in range(Nsample):
-                y_coor = gv.gvar(sub_sample[_id], cov)
-                _fit = lsqfit.nonlinear_fit(data=(x_coor, y_coor), p0=p0,
-                                            fcn=model_ratio, svdcut=1e-6)
-                para_c0[_id, _z] = _fit.pmean["c0"]
-                para_c1[_id, _z] = _fit.pmean["c1"]
-                para_dE[_id, _z] = _fit.pmean["dE"]
-                chi2[_id, _z] = _fit.chi2 / _fit.dof
-            if _id == Nsample - 1:
-                report_lines.append(_fit.format(maxline=True))
+            if fit_status not in ("identifiable", "prior_constrained"):
+                report_lines += [f"fit skipped: {fit_reason}", ""]
+                continue
+
+            if _last_fit is not None:
+                report_lines.append(_last_fit.format(maxline=True))
 
             report_lines += ["", ""]
 
-        report = "\n".join(report_lines)
-        with open(os.path.join(out_dir, '1_fit_report.txt'), 'w') as f:
-            f.write(report)
-        np.savez(os.path.join(out_dir, '0_fit_data.npz'),
-                 c0=para_c0, c1=para_c1, dE=para_dE, chi2=chi2)
-        logger(f"  Saved ratio + fit to {out_dir}")
-
+        channel_fit_status, channel_fit_reason = aggregate_fit_statuses(
+            fit_status_by_z, fit_reason_by_z)
         ch_results[had_name] = {
             'ratio': ratio, 'c0': para_c0, 'c1': para_c1,
             'dE': para_dE, 'chi2': chi2,
+            'fit_status': channel_fit_status,
+            'fit_status_by_z': fit_status_by_z,
+            'fit_reason': channel_fit_reason,
+            'fit_reason_by_z': np.asarray(fit_reason_by_z),
+            'effective_rank_by_z': effective_rank_by_z,
+            'sample_rank_by_z': sample_rank_by_z,
+            'required_rank': required_rank,
         }
+        channel_reports[had_name] = report_lines
+
+    # 两个 channel 必须在独立产物中保存；aggregate 只在循环结束后生成一次，
+    # 从而不会被后续 pion 迭代覆盖 proton 的结果或报告。
+    channel_statuses = [result['fit_status'] for result in ch_results.values()]
+    channel_reasons = [result['fit_reason'] for result in ch_results.values()]
+    aggregate_status, aggregate_reason = aggregate_fit_statuses(
+        channel_statuses, channel_reasons)
+    channel_names = list(ch_results)
+    channel_status_array = np.asarray(channel_statuses)
+    channel_reason_array = np.asarray(channel_reasons)
+    effective_rank_array = np.asarray(
+        [ch_results[name]['effective_rank_by_z'].min()
+         for name in channel_names], dtype=np.int64)
+    sample_rank_array = np.asarray(
+        [ch_results[name]['sample_rank_by_z'].min()
+         for name in channel_names], dtype=np.int64)
+
+    aggregate_report_lines = [
+        "=" * 70,
+        "  Disconnected Aggregate Fit Report",
+        "=" * 70,
+        f"  aggregate fit status = {aggregate_status}",
+        f"  aggregate fit reason = {aggregate_reason}",
+        f"  channels = {', '.join(channel_names)}",
+        "=" * 70, "",
+    ]
+    aggregate_payload = {
+        "fit_status": np.asarray(aggregate_status),
+        "fit_reason": np.asarray(aggregate_reason),
+        "fit_status_by_channel": channel_status_array,
+        "fit_reason_by_channel": channel_reason_array,
+        "effective_rank_by_channel": effective_rank_array,
+        "sample_rank_by_channel": sample_rank_array,
+        "required_rank": np.asarray(required_rank, dtype=np.int64),
+        "channel_names": np.asarray(channel_names, dtype="<U32"),
+    }
+    for had_name in channel_names:
+        result = ch_results[had_name]
+        aggregate_report_lines += [
+            f"channel = {had_name}", "-" * 56,
+            f"fit status = {result['fit_status']}",
+            f"fit reason = {result['fit_reason']}", "",
+            "effective covariance rank = "
+            f"{result['effective_rank_by_z'].min()} (minimum over z)",
+            "sample covariance rank = "
+            f"{result['sample_rank_by_z'].min()} (minimum over z)",
+            f"required parameter rank = {required_rank}", "",
+        ]
+        for name in ("c0", "c1", "dE", "chi2"):
+            aggregate_payload[f"{name}_{had_name}"] = result[name]
+
+        # Keep the historical unqualified keys as an explicitly documented
+        # proton view for pipeline/report readers that predate channel files.
+        if had_name == "proton":
+            for name in ("c0", "c1", "dE", "chi2"):
+                aggregate_payload[name] = result[name]
+            aggregate_payload["fit_status_by_z"] = result["fit_status_by_z"]
+            aggregate_payload["fit_reason_by_z"] = result["fit_reason_by_z"]
+            aggregate_payload["effective_rank"] = result[
+                "effective_rank_by_z"]
+            aggregate_payload["sample_rank"] = result["sample_rank_by_z"]
+            aggregate_payload["legacy_channel"] = np.asarray("proton")
+
+        channel_payload = {
+            name: result[name] for name in ("c0", "c1", "dE", "chi2")
+        }
+        channel_payload.update({
+            "fit_status": np.asarray(result["fit_status"]),
+            "fit_status_by_z": result["fit_status_by_z"],
+            "fit_reason": np.asarray(result["fit_reason"]),
+            "fit_reason_by_z": result["fit_reason_by_z"],
+            "effective_rank": result["effective_rank_by_z"],
+            "sample_rank": result["sample_rank_by_z"],
+            "required_rank": np.asarray(required_rank, dtype=np.int64),
+            "channel": np.asarray(had_name),
+        })
+        data_path = os.path.join(out_dir, f"0_fit_data_{had_name}.npz")
+        report_path = os.path.join(out_dir, f"1_fit_report_{had_name}.txt")
+        np.savez(data_path, **channel_payload)
+        channel_report = list(channel_reports[had_name])
+        channel_report += [
+            f"aggregate fit status = {aggregate_status}",
+            f"aggregate fit reason = {aggregate_reason}", "",
+        ]
+        with open(report_path, "w") as f:
+            f.write("\n".join(channel_report))
+        result["fit_data_path"] = data_path
+        result["fit_report_path"] = report_path
+        result["aggregate_fit_status"] = aggregate_status
+        result["aggregate_fit_reason"] = aggregate_reason
+
+    aggregate_payload["effective_rank"] = np.asarray(
+        effective_rank_array.min(), dtype=np.int64)
+    aggregate_payload["sample_rank"] = np.asarray(
+        sample_rank_array.min(), dtype=np.int64)
+    np.savez(os.path.join(out_dir, "0_fit_data.npz"), **aggregate_payload)
+    with open(os.path.join(out_dir, "1_fit_report.txt"), "w") as f:
+        f.write("\n".join(aggregate_report_lines))
+    logger(f"  Saved per-channel ratio + fit and aggregate status to {out_dir}")
 
     # ── 绘图（code_1.py 风格：ratio/c0/chi2，与 analyze.py 一致）──
     import matplotlib
@@ -204,6 +736,14 @@ def _plot_disconnected(had_name, res, out_dir, logger=print):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+
+    fit_status = str(res.get("fit_status", "unavailable"))
+    if fit_status not in ("identifiable", "prior_constrained"):
+        logger(
+            f"  {had_name} fit plots skipped: status={fit_status}; "
+            f"reason={res.get('fit_reason', 'fit status unavailable')}"
+        )
+        return
 
     ratio = res['ratio']              # (Nsample, dt, dtau, z)
     para_c0, para_c1 = res['c0'], res['c1']
@@ -252,7 +792,10 @@ def _plot_disconnected(had_name, res, out_dir, logger=print):
             ax.errorbar(xv, yv, yerr=ye, fmt='x', capsize=0, label=f'dt={dt}')
         ax.set_xlabel('tau - t_sep/2'); ax.set_ylabel('R')
         ax.set_title(f'z={z}, c0={para_c0[:, z].mean():.3f}')
-        ax.legend(fontsize=8); ax.grid(alpha=0.3)
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(handles, labels, fontsize=8)
+        ax.grid(alpha=0.3)
     fig.suptitle(f'{had_name}: Disconnected ratio R(dt,dtau,z), Pz=2')
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, f'ratio_{had_name}.png'), dpi=150)

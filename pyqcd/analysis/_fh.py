@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
-from ._disconnected import sem
+from ._disconnected import (aggregate_fit_statuses, fit_status_from_samples,
+                            sem)
 from ._fitter import (FitParams, fit, fit_report_lines, make_summary_table)
 from ._plots import plot_errbar, plot_scatter
 
@@ -85,6 +86,14 @@ def fh_model(t, p):
     return p["c0"] * np.ones_like(np.asarray(t, dtype=np.float64))
 
 
+def fh_model_jacobian(t, p):
+    """Closed-form real-parameter Jacobian of :func:`fh_model`."""
+    del p
+    return {
+        "c0": np.ones_like(np.asarray(t, dtype=np.float64)),
+    }
+
+
 def plot_fh(all_fh: dict, save_dir: str, params: FHParams,
             c0_data: dict = None, band_t_range: tuple = None,
             verbose=True) -> list:
@@ -141,15 +150,24 @@ def do_fit_and_report(fh: np.ndarray, save_dir: str, fitpa: FitParams,
     param_names = list(fitpa.p0.keys())
     window_tag = f"dt{dt_start}_{dt_end}"
     t_vals = np.arange(dt_start, dt_end + 1, dtype=int)
+    model_fitpa = (
+        fitpa if fitpa.jacobian is not None
+        else replace(fitpa, jacobian=fh_model_jacobian)
+    )
 
     Nfit = min(debugsample, Nsample) if debug else Nsample
     if verbose:
         print(f"\n    fitting window: t = [{dt_start}, {dt_end}], "
               f"Nfit = {Nfit}/{Nsample}")
 
-    all_fit_result = {name: np.zeros((Nfit, Nz))
+    all_fit_result = {name: np.full((Nfit, Nz), np.nan)
                       for name in param_names + ["chi2"]}
     all_cond = np.zeros(Nz)
+    fit_status_by_z = np.full(
+        Nz, "statistically_unidentifiable", dtype="<U32")
+    fit_reason_by_z = np.full(Nz, "", dtype="<U256")
+    effective_rank_by_z = np.zeros(Nz, dtype=np.int64)
+    sample_rank_by_z = np.zeros(Nz, dtype=np.int64)
 
     lines = fit_report_lines(
         f"Fit Report, {window_tag}, nex={fitpa.nex}", {
@@ -162,16 +180,30 @@ def do_fit_and_report(fh: np.ndarray, save_dir: str, fitpa: FitParams,
         y_data = fh[:, t_vals, _iz]
 
         _fit_result, _cov, _cond, _last_fit = fit(
-            y_coor=y_data, x_coor=t_vals, model=fh_model, fitpa=fitpa,
+            y_coor=y_data, x_coor=t_vals, model=fh_model, fitpa=model_fitpa,
             jackknife=False, debug=debug, debugNfit=debugsample)
+        fit_status, fit_reason, _finite_mask = fit_status_from_samples(
+            _fit_result, _last_fit,
+            has_prior=fitpa.prior is not None and len(fitpa.prior) > 0)
         if verbose:
             print(f"z = {_iz}, time = {time.perf_counter() - _tz:.2f}s")
 
         for name in param_names + ["chi2"]:
             all_fit_result[name][:, _iz] = _fit_result[name][:Nfit]
         all_cond[_iz] = _cond
+        fit_status_by_z[_iz] = fit_status
+        fit_reason_by_z[_iz] = fit_reason
+        from ._fitter import covariance_effective_rank, covariance_sample_rank
+        effective_rank_by_z[_iz] = covariance_effective_rank(
+            _cov, fitpa.svdcut)
+        sample_rank_by_z[_iz] = covariance_sample_rank(_cov)
 
         lines.append(f"  z = {_iz}: condition number = {_cond:.3g}")
+        lines.append(f"  fit status = {fit_status}")
+        lines.append(f"  effective covariance rank = {effective_rank_by_z[_iz]}")
+        lines.append(f"  sample covariance rank = {sample_rank_by_z[_iz]}")
+        if fit_status not in ("identifiable", "prior_constrained"):
+            lines.append(f"  fit skipped: {fit_reason}")
         if _last_fit is not None:
             lines.append(_last_fit.format(maxline=True))
         lines.append("")
@@ -182,23 +214,123 @@ def do_fit_and_report(fh: np.ndarray, save_dir: str, fitpa: FitParams,
     summary_rows = []
     for _iz in range(Nz):
         row = [str(_iz)]
-        for name in param_names:
-            mean = all_fit_result[name][:, _iz].mean()
-            err = sem(all_fit_result[name][:, _iz], False)
-            row.append(f"{mean:.3f}({err * 1e3:.0f})")
-        row.append(f"{all_fit_result['chi2'][:, _iz].mean():.2g}")
+        valid = (fit_status_by_z[_iz] in ("identifiable", "prior_constrained")
+                 and all(np.isfinite(all_fit_result[name][:, _iz]).all()
+                         for name in param_names + ["chi2"]))
+        if valid:
+            for name in param_names:
+                mean = all_fit_result[name][:, _iz].mean()
+                err = sem(all_fit_result[name][:, _iz], False)
+                row.append(f"{mean:.3f}({err * 1e3:.0f})")
+            row.append(f"{all_fit_result['chi2'][:, _iz].mean():.2g}")
+        else:
+            row.extend(["N/A"] * (len(param_names) + 1))
         summary_rows.append(row)
     lines.append(make_summary_table(["z"] + param_names + ["chi2/dof"],
                                     summary_rows))
     lines.append("")
 
+    aggregate_status, aggregate_reason = aggregate_fit_statuses(
+        fit_status_by_z, fit_reason_by_z)
+    lines.insert(6, f"  fit status      : {aggregate_status}")
+    lines.insert(7, f"  fit reason      : {aggregate_reason}")
     with open(os.path.join(save_dir, f"report_{window_tag}.txt"), "w") as f:
         f.write("\n".join(lines))
     np.savez(os.path.join(save_dir, f"fit_{window_tag}.npz"),
-             **all_fit_result)
+             **all_fit_result,
+             fit_status=np.asarray(aggregate_status),
+             fit_status_by_z=fit_status_by_z,
+             fit_reason=np.asarray(aggregate_reason),
+             fit_reason_by_z=fit_reason_by_z,
+             condition_number=all_cond,
+             effective_rank=effective_rank_by_z,
+             sample_rank=sample_rank_by_z)
     if verbose:
         print(f"    report saved to: {save_dir}/report_{window_tag}.txt")
         print(f"    fit result saved to: {save_dir}/fit_{window_tag}.npz")
+
+
+_PLOT_FIT_STATUSES = frozenset(("identifiable", "prior_constrained"))
+
+
+def _mapping_value(mapping, name):
+    """Read a field from a dict-like result without inventing defaults."""
+    try:
+        value = mapping.get(name)
+    except AttributeError:
+        try:
+            value = mapping[name]
+        except (KeyError, IndexError, TypeError):
+            return None
+    except (KeyError, IndexError, TypeError):
+        return None
+    return value
+
+
+def _status_by_z(fit_result, nz):
+    """Return strict per-z statuses; absent or malformed metadata is invalid."""
+    raw = _mapping_value(fit_result, "fit_status_by_z")
+    if raw is None:
+        return np.full(nz, "unavailable", dtype=object), \
+            "fit_status_by_z is missing"
+    try:
+        raw = np.asarray(raw)
+    except (TypeError, ValueError):
+        return np.full(nz, "unavailable", dtype=object), \
+            "fit_status_by_z is not an array"
+    if raw.ndim != 1 or raw.size != nz:
+        return np.full(nz, "unavailable", dtype=object), \
+            f"fit_status_by_z shape {raw.shape} does not match ({nz},)"
+
+    statuses = np.full(nz, "unavailable", dtype=object)
+    for iz, value in enumerate(raw):
+        if isinstance(value, (bytes, np.bytes_)):
+            value = value.decode("utf-8", errors="replace")
+        else:
+            value = str(value)
+        if value in _PLOT_FIT_STATUSES:
+            statuses[iz] = value
+    if not np.any(np.isin(statuses, list(_PLOT_FIT_STATUSES))):
+        return statuses, "fit_status_by_z has no explicit usable status"
+    return statuses, "fit_status_by_z contains unavailable or unknown z statuses"
+
+
+def _valid_fit_z(fit_result, param_names, nz):
+    """Mask z columns with explicit status and complete finite fit arrays."""
+    statuses, status_reason = _status_by_z(fit_result, nz)
+    valid = np.isin(statuses, list(_PLOT_FIT_STATUSES))
+    sample_size = None
+    for name in list(param_names) + ["chi2"]:
+        value = _mapping_value(fit_result, name)
+        if value is None:
+            return np.zeros(nz, dtype=bool), f"fit field {name} is missing"
+        try:
+            array = np.asarray(value)
+        except (TypeError, ValueError):
+            return np.zeros(nz, dtype=bool), f"fit field {name} is invalid"
+        if array.ndim != 2 or array.shape[1] != nz:
+            return (np.zeros(nz, dtype=bool),
+                    f"fit field {name} shape {array.shape} is not "
+                    f"(n_sample, {nz})")
+        if sample_size is None:
+            sample_size = array.shape[0]
+        elif array.shape[0] != sample_size:
+            return (np.zeros(nz, dtype=bool),
+                    "fit fields do not share the sample axis")
+        try:
+            valid &= np.isfinite(array).all(axis=0)
+        except TypeError:
+            return np.zeros(nz, dtype=bool), f"fit field {name} is non-numeric"
+    if sample_size == 0:
+        return np.zeros(nz, dtype=bool), "fit fields have no samples"
+    if not np.any(valid):
+        return valid, status_reason
+    return valid, status_reason
+
+
+def _log_plot_skip(path, reason, verbose):
+    if verbose:
+        print(f"    skip plot: {path} (fit status unavailable: {reason})")
 
 
 def plot_para(all_fit_result: dict, save_dir: str, fitpa: FitParams,
@@ -206,13 +338,36 @@ def plot_para(all_fit_result: dict, save_dir: str, fitpa: FitParams,
     """单窗口参数 vs z：参数 errorbar 图 + chi2 散点图。"""
     saved = []
     param_names = list(fitpa.p0.keys())
-    Nz = all_fit_result[param_names[0]].shape[1]
+    if not param_names:
+        _log_plot_skip(save_dir, "no fit parameters", verbose)
+        return saved
+    first = _mapping_value(all_fit_result, param_names[0])
+    try:
+        first = np.asarray(first)
+    except (TypeError, ValueError):
+        first = np.empty(0)
+    if first.ndim != 2:
+        _log_plot_skip(save_dir, "fit parameter shape is invalid", verbose)
+        return saved
+    Nz = first.shape[1]
     z_vals = np.arange(Nz)
+    status_valid, status_reason = _valid_fit_z(
+        all_fit_result, param_names, Nz)
 
     for _name in param_names:
-        _arr = all_fit_result[_name]
+        _arr = np.asarray(_mapping_value(all_fit_result, _name))
+        if not np.any(status_valid):
+            sp = os.path.join(save_dir, f"{_name}.png")
+            _log_plot_skip(sp, status_reason, verbose)
+            continue
+        means = np.full(Nz, np.nan)
+        errors = np.full(Nz, np.nan)
+        for _iz in range(Nz):
+            if status_valid[_iz]:
+                means[_iz] = _arr[:, _iz].mean()
+                errors[_iz] = sem(_arr[:, _iz], jackknife=False)
         sp = os.path.join(save_dir, f"{_name}.png")
-        plot_errbar(z_vals, {_name: (_arr.mean(0), sem(_arr, jackknife=False))},
+        plot_errbar(z_vals, {_name: (means, errors)},
                     sp, xlabel="z", ylabel=_name,
                     xlim=params.para_xlim, ylim=params.param_ylim.get(_name),
                     title=f"{params.conf_short}, P={params.P}, "
@@ -220,9 +375,18 @@ def plot_para(all_fit_result: dict, save_dir: str, fitpa: FitParams,
                     x_offset=0.3, figsize=(10, 6), dpi=150)
         saved.append(sp)
 
-    _chi2_arr = all_fit_result["chi2"]
+    _chi2_arr = _mapping_value(all_fit_result, "chi2")
+    if _chi2_arr is None or not np.any(status_valid):
+        sp = os.path.join(save_dir, "chi2.png")
+        _log_plot_skip(sp, status_reason, verbose)
+        return saved
+    _chi2_arr = np.asarray(_chi2_arr)
+    chi2_mean = np.full(Nz, np.nan)
+    for _iz in range(Nz):
+        if status_valid[_iz]:
+            chi2_mean[_iz] = _chi2_arr[:, _iz].mean()
     sp = os.path.join(save_dir, "chi2.png")
-    plot_scatter(z_vals, {"chi2/dof": _chi2_arr.mean(0)}, sp,
+    plot_scatter(z_vals, {"chi2/dof": chi2_mean}, sp,
                  xlabel="z", ylabel="chi2/dof",
                  xlim=params.para_xlim, ylim=[0, 2],
                  title=f"{params.conf_short}, P={params.P}, "
@@ -237,21 +401,66 @@ def plot_para_cmp(fit_data: dict, save_dir: str, params: FHParams,
                   fitpa_list, verbose=True) -> list:
     """多窗口参数对比图：不同拟合窗口叠加（z 按 z_step 抽样）。"""
     saved = []
+    if not fitpa_list or not fit_data:
+        _log_plot_skip(save_dir, "no fit windows", verbose)
+        return saved
     param_names = list(fitpa_list[0].p0.keys())
 
-    _first_tag = next(iter(fit_data.keys()))
-    Nz = fit_data[_first_tag][param_names[0]].shape[1]
+    Nz = None
+    for _fitpa in fitpa_list:
+        _tag = f"dt{_fitpa.dt_start}_{_fitpa.dt_end}"
+        entry = _mapping_value(fit_data, _tag)
+        first = _mapping_value(entry, param_names[0]) \
+            if entry is not None else None
+        try:
+            first = np.asarray(first)
+        except (TypeError, ValueError):
+            continue
+        if first.ndim == 2:
+            Nz = first.shape[1]
+            break
+    if Nz is None:
+        _log_plot_skip(save_dir, "fit parameter shapes are invalid", verbose)
+        return saved
     z_vals = np.arange(Nz)[::params.z_step]
+    window_data = {}
+    for _fitpa in fitpa_list:
+        _tag = f"dt{_fitpa.dt_start}_{_fitpa.dt_end}"
+        entry = _mapping_value(fit_data, _tag)
+        if entry is None:
+            window_data[_tag] = (None, "fit window result is missing")
+        else:
+            window_data[_tag] = _valid_fit_z(entry, param_names, Nz)
 
     for _name in param_names:
         _data = {}
         for _fitpa in fitpa_list:
             _tag = f"dt{_fitpa.dt_start}_{_fitpa.dt_end}"
-            _arr = fit_data[_tag][_name]
-            _data[f"dt: {_fitpa.dt_start}~{_fitpa.dt_end}"] = (
-                _arr.mean(0)[::params.z_step],
-                sem(_arr, jackknife=False)[::params.z_step])
+            entry = _mapping_value(fit_data, _tag)
+            valid_z, _reason = window_data[_tag]
+            if entry is None or not np.any(valid_z[::params.z_step]):
+                continue
+            _arr = np.asarray(_mapping_value(entry, _name))
+            means = np.full(Nz, np.nan)
+            errors = np.full(Nz, np.nan)
+            for _iz in range(Nz):
+                if valid_z[_iz]:
+                    values = _arr[:, _iz]
+                    means[_iz] = values.mean()
+                    errors[_iz] = sem(values, jackknife=False)
+            sampled_mean = means[::params.z_step]
+            if np.isfinite(sampled_mean).any():
+                _data[f"dt: {_fitpa.dt_start}~{_fitpa.dt_end}"] = (
+                    sampled_mean, errors[::params.z_step])
         sp = os.path.join(save_dir, f"{_name}.png")
+        if not _data:
+            _log_plot_skip(
+                sp,
+                "no z has explicit identifiable/prior_constrained status "
+                "and finite values",
+                verbose,
+            )
+            continue
         plot_errbar(z_vals, _data, sp, xlabel="z", ylabel=_name,
                     xlim=params.para_xlim, ylim=params.param_ylim.get(_name),
                     title=f"{params.conf_short}, P={params.P}, {_name}",
@@ -261,9 +470,28 @@ def plot_para_cmp(fit_data: dict, save_dir: str, params: FHParams,
     _chi2_data = {}
     for _fitpa in fitpa_list:
         _tag = f"dt{_fitpa.dt_start}_{_fitpa.dt_end}"
-        _chi2_data[f"dt: {_fitpa.dt_start}~{_fitpa.dt_end}"] = (
-            fit_data[_tag]["chi2"].mean(0)[::params.z_step])
+        entry = _mapping_value(fit_data, _tag)
+        valid_z, _reason = window_data[_tag]
+        if entry is None or not np.any(valid_z[::params.z_step]):
+            continue
+        _arr = np.asarray(_mapping_value(entry, "chi2"))
+        means = np.full(Nz, np.nan)
+        for _iz in range(Nz):
+            if valid_z[_iz]:
+                means[_iz] = _arr[:, _iz].mean()
+        sampled_mean = means[::params.z_step]
+        if np.isfinite(sampled_mean).any():
+            _chi2_data[f"dt: {_fitpa.dt_start}~{_fitpa.dt_end}"] = (
+                sampled_mean)
     sp = os.path.join(save_dir, "chi2.png")
+    if not _chi2_data:
+        _log_plot_skip(
+            sp,
+            "no z has explicit identifiable/prior_constrained status "
+            "and finite values",
+            verbose,
+        )
+        return saved
     plot_scatter(z_vals, _chi2_data, sp, xlabel="z", ylabel="chi2/dof",
                  xlim=params.para_xlim, ylim=[0, 2],
                  title=f"{params.conf_short}, P={params.P}, chi2/dof",
@@ -325,8 +553,11 @@ def run_fh(data_root, out_root, params: FHParams, fitpa_list,
         fit_data = {}
         for _fitpa in fitpa_list:
             _tag = f"dt{_fitpa.dt_start}_{_fitpa.dt_end}"
-            fit_data[_tag] = np.load(os.path.join(
-                _fit_dir, _tag, f"fit_{_tag}.npz"))
+            with np.load(os.path.join(
+                    _fit_dir, _tag, f"fit_{_tag}.npz")) as _fit_file:
+                fit_data[_tag] = {
+                    _name: _fit_file[_name] for _name in _fit_file.files
+                }
 
         for _fitpa in fitpa_list:
             _tag = f"dt{_fitpa.dt_start}_{_fitpa.dt_end}"
@@ -340,18 +571,40 @@ def run_fh(data_root, out_root, params: FHParams, fitpa_list,
         if bestfit_params:
             _bf = bestfit_params
             _bf_tag = f"dt{_bf['dt_start']}_{_bf['dt_end']}"
-            _bf_fh = np.load(os.path.join(
-                out_dir, "fh", f"FH_nex{_bf['nex']}.npy"))
-            _bf_c0 = np.load(os.path.join(
-                _fit_dir, _bf_tag, f"fit_{_bf_tag}.npz"))["c0"]
             _c0_data = {}
-            for _iz in params.z_list:
-                if _iz < _bf_c0.shape[1]:
-                    _c0_data[_iz] = (_bf_c0[:, _iz].mean(),
-                                     sem(_bf_c0[:, _iz], jackknife=False))
-            result["saved"] += plot_fh(
-                {_bf["nex"]: _bf_fh}, os.path.join(out_dir, "bestfit"),
-                params, c0_data=_c0_data,
-                band_t_range=(_bf["dt_start"], _bf["dt_end"]),
-                verbose=verbose)
+            _bf_path = os.path.join(
+                _fit_dir, _bf_tag, f"fit_{_bf_tag}.npz")
+            _bestfit_reason = "fit status is unavailable"
+            try:
+                with np.load(_bf_path) as _bf_fit:
+                    _bf_c0 = np.asarray(_mapping_value(_bf_fit, "c0"))
+                    if _bf_c0.ndim != 2:
+                        _bestfit_reason = "c0 shape is invalid"
+                    else:
+                        _valid_z, _bestfit_reason = _valid_fit_z(
+                            _bf_fit, ["c0"], _bf_c0.shape[1])
+                        for _iz in params.z_list:
+                            if _iz < _bf_c0.shape[1] and _valid_z[_iz]:
+                                _mean = _bf_c0[:, _iz].mean()
+                                _error = sem(_bf_c0[:, _iz],
+                                             jackknife=False)
+                                if np.isfinite(_mean) and np.isfinite(_error):
+                                    _c0_data[_iz] = (_mean, _error)
+            except (OSError, KeyError, TypeError, ValueError):
+                _bestfit_reason = "bestfit NPZ state is missing or malformed"
+
+            if not _c0_data:
+                _log_plot_skip(
+                    os.path.join(out_dir, "bestfit"),
+                    _bestfit_reason,
+                    verbose,
+                )
+            else:
+                _bf_fh = np.load(os.path.join(
+                    out_dir, "fh", f"FH_nex{_bf['nex']}.npy"))
+                result["saved"] += plot_fh(
+                    {_bf["nex"]: _bf_fh}, os.path.join(out_dir, "bestfit"),
+                    params, c0_data=_c0_data,
+                    band_t_range=(_bf["dt_start"], _bf["dt_end"]),
+                    verbose=verbose)
     return result

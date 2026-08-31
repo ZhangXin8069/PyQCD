@@ -10,10 +10,11 @@
 2. 基础表示格点实现（Eq.:staple_wilson, Eq.:M_fund_tmd）：
        W_⊏(z, b⊥) = U_z†((z+L)n̂_z + b⊥, b⊥)·U_⊥((z+L)n̂_z+b⊥, (z+L)n̂_z)
                      ·U_z((z+L)n̂_z, z n̂_z)
-       M = Σ_x Tr[ F(x + z n̂_z + b⊥)·W_⊏·F(x)·W_⊏† ]
+       M(x) = Tr[ F(x)·W_⊏(x,y)·F(y)·W_⊏†(x,y) ],
+       y = x + z n̂_z + b⊥
 
-3. 可乘性重整化组合（Eq.:O_mult_tmd）：
-       O(z, b⊥) = M^{tx;tx} + M^{ty;ty} − 2·M^{xy;xy}
+3. 可乘性重整化组合（Eq.:O_mult_tmd）：令 i,j 为 z_dir 之外的两个空间方向，
+       O(z, b⊥) = M^{ti;ti} + M^{tj;tj} − 2·M^{ij;ij}
    该组合的一圈 UV 反常量纲使整体（至少一圈水平）乘法可重整化；
    共线极限 b⊥→0 约化为胶子准 PDF 算符。
 
@@ -22,7 +23,7 @@
        −M_pp(ν, b⊥) = ½ ∫₋₁¹ dx e^{−ixν} x·g(x, b⊥)
 
 5. 梯度流重整化：先用 Wilson flow（_gradient_flow.wilson_flow）把规范场
-   演化到流时间 τ（物理单位固定，如 τ = 3a²），再计算上述算符——
+   演化到无量纲流时间 ``tau=t/a²``（如物理 ``t=3a²`` 对应 ``tau=3``），再计算上述算符——
    Monahan–Orginos 2017 / NieMiera et al. 2025 的自重整化方案。
 
 6. b⊥ 依赖的软函数 / Collins–Soper 核：TMD 重整化需软函数 S(b⊥)，
@@ -49,6 +50,24 @@ from ._gradient_flow import wilson_flow
 # 基础表示 staple Wilson 线
 # ═══════════════════════════════════════════════════════════════════
 
+def _validate_spatial_directions(z_dir, b_dir):
+    """校验并规范化 TMD 的纵向/横向空间方向。"""
+    directions = []
+    for name, value in (("z_dir", z_dir), ("b_dir", b_dir)):
+        if (isinstance(value, (bool, np.bool_))
+                or not isinstance(value, (int, np.integer))):
+            raise ValueError(
+                f"{name} 必须是非布尔空间整数 0=x, 1=y, 2=z")
+        value = int(value)
+        if value not in (0, 1, 2):
+            raise ValueError(
+                f"{name} 必须是空间方向 0=x, 1=y, 2=z")
+        directions.append(value)
+    if directions[0] == directions[1]:
+        raise ValueError("staple 的纵向与横向方向必须不同")
+    return tuple(directions)
+
+
 def staple_wilson_line(U, z, b_perp, z_dir=2, b_dir=0, L=None):
     """构造 staple Wilson 线 W_⊏(z, b⊥)（Eq.:staple_wilson）。
 
@@ -66,12 +85,9 @@ def staple_wilson_line(U, z, b_perp, z_dir=2, b_dir=0, L=None):
         W_⊏，形状 (Nt,Nz,Ny,Nx,3,3)，逐格点（x 为起点）。
     """
     cp = get_backend()
+    z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
     if L is None:
         L = abs(z)
-    if z_dir not in (0, 1, 2) or b_dir not in (0, 1, 2):
-        raise ValueError("z_dir 和 b_dir 必须是空间方向 0=x, 1=y, 2=z")
-    if z_dir == b_dir:
-        raise ValueError("staple 的纵向与横向方向必须不同")
     if L < 0:
         raise ValueError("staple 臂长 L 必须非负")
 
@@ -122,12 +138,16 @@ def _path_product(U, W, direction, signed_length, displacement):
 # ═══════════════════════════════════════════════════════════════════
 
 def M_mu_lambda_nu_rho(U, mu, lam, nu, rho, z, b_perp, z_dir=2, b_dir=0,
-                       L=None, compute_dtype=None):
+                       L=None, compute_dtype=None,
+                       color_normalization='fundamental_trace'):
     """M^{μλ;νρ}(z, b⊥)（Eq.:M_fund_tmd）：逐格点色迹（未空间求和）。
 
-    M = Σ_x Tr[ F^{μλ}(x + z n̂_z + b⊥) · W_⊏(z, b⊥) · F^{νρ}(x) · W_⊏†(z, b⊥) ]
+    对 ``y=x+z n̂_z+b⊥``，返回
+    ``Tr[F^{νρ}(x) W_⊏(x,y) F^{μλ}(y) W_⊏†(x,y)]``；调用方按需再对
+    空间或时空求和。这个顺序显式保留两个端点，Wilson 线不能相邻抵消。
     """
     cp = get_backend()
+    z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
     if compute_dtype is None:
         compute_dtype = U.dtype
 
@@ -135,6 +155,30 @@ def M_mu_lambda_nu_rho(U, mu, lam, nu, rho, z, b_perp, z_dir=2, b_dir=0,
     F_nu = plaquette_clover(U, nu, rho)
 
     W = staple_wilson_line(U, z, b_perp, z_dir, b_dir, L)
+
+    return _matrix_element_from_fields(
+        F_mu, F_nu, W, z, b_perp, z_dir, b_dir,
+        color_normalization=color_normalization)
+
+
+def _color_normalization_factor(color_normalization):
+    """基础迹约定与标准伴随分量约定之间的显式因子。"""
+    factors = {'fundamental_trace': 1.0, 'adjoint': 2.0}
+    try:
+        return factors[color_normalization]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            "color_normalization 必须是 'fundamental_trace' 或 'adjoint'") \
+            from exc
+
+
+def _matrix_element_from_fields(F_mu, F_nu, W, z, b_perp, z_dir, b_dir,
+                                color_normalization='fundamental_trace'):
+    """逐点投影 Clover 到 su(Nc)，再闭合双场强颜色迹。"""
+    cp = get_backend()
+    z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
+    F_mu = _traceless_color_field(F_mu)
+    F_nu = _traceless_color_field(F_nu)
 
     endpoint = [0, 0, 0]
     endpoint[z_dir] += z
@@ -146,34 +190,85 @@ def M_mu_lambda_nu_rho(U, mu, lam, nu, rho, z, b_perp, z_dir=2, b_dir=0,
     # Tr[F_nu(x) W(x,x+z+b) F_mu(x+z+b) W†(x,x+z+b)]。
     t1 = cp.einsum("...ab,...bc->...ac", F_nu, W)
     t2 = cp.einsum("...ab,...bc->...ac", F_mu_shift, W_dagger)
-    return cp.einsum("...ab,...ba->...", t1, t2)
+    fundamental_trace = cp.einsum("...ab,...ba->...", t1, t2)
+    return (_color_normalization_factor(color_normalization)
+            * fundamental_trace)
 
 
-def gluon_tmd_operator(U, z, b_perp, z_dir=2, b_dir=0, L=None):
-    """可乘性重整化组合 O(z, b⊥) = M^{tx;tx} + M^{ty;ty} − 2M^{xy;xy}（Eq.:O_mult_tmd）。
+def _traceless_color_field(field):
+    """逐格点投影 ``field`` 到 su(Nc) 的 traceless 色矩阵部分。"""
+    cp = get_backend()
+    nc = field.shape[-1]
+    trace = cp.einsum("...aa->...", field)
+    identity = cp.eye(nc, dtype=field.dtype)
+    return field - trace[..., None, None] * identity / nc
+
+
+def _tmd_clover_fields(U, z_dir, b_dir):
+    """返回纵向 ``z_dir`` 对应的两个 transverse 场与平面场。"""
+    z_dir, _ = _validate_spatial_directions(z_dir, b_dir)
+    i, j = (direction for direction in (0, 1, 2)
+            if direction != z_dir)
+    return (
+        plaquette_clover(U, 3, i),
+        plaquette_clover(U, 3, j),
+        plaquette_clover(U, i, j),
+    )
+
+
+def _gluon_tmd_operator_from_fields(
+        fields, W, z, b_perp, z_dir, b_dir,
+        color_normalization='fundamental_trace'):
+    """复用 transverse Clover 场与单条 staple 计算非极化 TMD 组合。"""
+    F_ti, F_tj, F_ij = fields
+    M_titi = _matrix_element_from_fields(
+        F_ti, F_ti, W, z, b_perp, z_dir, b_dir, color_normalization)
+    M_tjtj = _matrix_element_from_fields(
+        F_tj, F_tj, W, z, b_perp, z_dir, b_dir, color_normalization)
+    M_ijij = _matrix_element_from_fields(
+        F_ij, F_ij, W, z, b_perp, z_dir, b_dir, color_normalization)
+    return M_titi + M_tjtj - 2.0 * M_ijij
+
+
+def gluon_tmd_operator(U, z, b_perp, z_dir=2, b_dir=0, L=None,
+                       color_normalization='fundamental_trace'):
+    """可乘性组合 O = M^{ti;ti} + M^{tj;tj} − 2M^{ij;ij}。
+
+    ``i,j`` 动态取 ``z_dir`` 之外的两个空间方向；``z_dir=2`` 时即历史
+    ``tx/ty/xy`` 组合（Eq.:O_mult_tmd）。
 
     Returns:
         逐格点 O 值，形状 (Nt,Nz,Ny,Nx)。
     """
     # Lorentz 方向沿用组态链接顺序 0=x, 1=y, 2=z, 3=t。
-    M_txtx = M_mu_lambda_nu_rho(U, 3, 0, 3, 0, z, b_perp, z_dir, b_dir, L)
-    M_tyty = M_mu_lambda_nu_rho(U, 3, 1, 3, 1, z, b_perp, z_dir, b_dir, L)
-    M_xyxy = M_mu_lambda_nu_rho(U, 0, 1, 0, 1, z, b_perp, z_dir, b_dir, L)
-    return M_txtx + M_tyty - 2.0 * M_xyxy
+    z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
+    fields = _tmd_clover_fields(U, z_dir, b_dir)
+    W = staple_wilson_line(U, z, b_perp, z_dir, b_dir, L)
+    return _gluon_tmd_operator_from_fields(
+        fields, W, z, b_perp, z_dir, b_dir, color_normalization)
 
 
 def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
-                        spatial_sum=True):
+                        spatial_sum=True,
+                        color_normalization='fundamental_trace'):
     """批量计算 O(z, b⊥)：返回 (nz, nb) 实数数组（逐 t 时间片均分后求和）。
 
-    胶子 TMD 组合 O = M^{tx;tx} + M^{ty;ty} − 2M^{xy;xy} 为实数值
-    （每项 M 的虚部在色迹 + 空间求和后归零）。
+    胶子 TMD transverse 组合 O = M^{ti;ti} + M^{tj;tj} − 2M^{ij;ij} 为实数值
+    （每项 M 的虚部在色迹 + 空间求和后归零）。同一批次必须共享固定
+    staple 臂长；``L=None`` 时统一取 ``max(abs(z_list))``。
     """
     cp = get_backend()
+    z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
     out = np.zeros((len(z_list), len(b_list)), dtype=np.float64)
+    if len(z_list) == 0 or len(b_list) == 0:
+        return out
+    batch_L = max(abs(z) for z in z_list) if L is None else L
+    fields = _tmd_clover_fields(U, z_dir, b_dir)
     for i, z in enumerate(z_list):
         for j, b in enumerate(b_list):
-            O = gluon_tmd_operator(U, z, b, z_dir, b_dir, L)
+            W = staple_wilson_line(U, z, b, z_dir, b_dir, batch_L)
+            O = _gluon_tmd_operator_from_fields(
+                fields, W, z, b, z_dir, b_dir, color_normalization)
             if spatial_sum:
                 val = _to_cpu(cp.sum(O, axis=(1, 2, 3)))
             else:
@@ -182,7 +277,9 @@ def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
     return out
 
 
-def tmd_matrix_elements_time(U, z_list, b_list, z_dir=2, b_dir=0, L=None):
+def tmd_matrix_elements_time(
+        U, z_list, b_list, z_dir=2, b_dir=0, L=None,
+        color_normalization='fundamental_trace'):
     """批量计算 O(z, b⊥) 逐时间片（空间求和保留 t 轴）：返回 (nz, nb, Nt)。
 
     与 ``tmd_matrix_elements`` 的区别：不做时间片平均，保留每个 t 的
@@ -193,11 +290,18 @@ def tmd_matrix_elements_time(U, z_list, b_list, z_dir=2, b_dir=0, L=None):
         out: (nz, nb, Nt) 实数数组（每项为 Σ_{x,y,z} O(z,b⊥)(t)）。
     """
     cp = get_backend()
+    z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
     Nt = U.shape[0]
     out = np.zeros((len(z_list), len(b_list), Nt), dtype=np.float64)
+    if len(z_list) == 0 or len(b_list) == 0:
+        return out
+    batch_L = max(abs(z) for z in z_list) if L is None else L
+    fields = _tmd_clover_fields(U, z_dir, b_dir)
     for i, z in enumerate(z_list):
         for j, b in enumerate(b_list):
-            O = gluon_tmd_operator(U, z, b, z_dir, b_dir, L)
+            W = staple_wilson_line(U, z, b, z_dir, b_dir, batch_L)
+            O = _gluon_tmd_operator_from_fields(
+                fields, W, z, b, z_dir, b_dir, color_normalization)
             val = _to_cpu(cp.sum(O, axis=(1, 2, 3)))
             out[i, j] = np.real(val)
     return out
@@ -208,18 +312,22 @@ def tmd_matrix_elements_time(U, z_list, b_list, z_dir=2, b_dir=0, L=None):
 # ═══════════════════════════════════════════════════════════════════
 
 def gradient_flow_renormalized_tmd(U, tau, z_list, b_list, z_dir=2, b_dir=0,
-                                   L=None, eps=0.01):
+                                   L=None, eps=0.01,
+                                   color_normalization='fundamental_trace'):
     """梯度流重整化的 TMD 矩阵元（Monahan–Orginos 2017 方案）。
 
     Args:
         U: 初始规范场。
-        tau: 流时间（格点单位；NieMiera 2025 用 τ = 3a²）。
+        tau: 无量纲流时间 ``t/a²``；NieMiera 方案的 ``t=3a²`` 传 3。
         z_list/b_list: 纵向/横向位移列表。
     Returns:
         O(z, b⊥) 矩阵（形状 (nz, nb)）。
     """
+    z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
     V = wilson_flow(U, tau, eps=eps)
-    return tmd_matrix_elements(V, z_list, b_list, z_dir, b_dir, L)
+    return tmd_matrix_elements(
+        V, z_list, b_list, z_dir, b_dir, L,
+        color_normalization=color_normalization)
 
 
 def self_renormalized_ratio(O_z, O_z0, z_s=2):

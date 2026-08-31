@@ -122,9 +122,6 @@ PLOTS_DIR = os.path.join(_PROJECT_ROOT, 'plots')
 LOGS_DIR = os.path.join(_PROJECT_ROOT, 'logs')
 OUTPUT_DIR = os.path.join(_PROJECT_ROOT, 'output')
 
-for _d in [DATA_DIR, PLOTS_DIR, LOGS_DIR, OUTPUT_DIR]:
-    os.makedirs(_d, exist_ok=True)
-
 
 def get_eigen_path(conf_id, t):
     return f"{EIGEN_DIR}/{conf_id}/eigvecs_t{t:03d}_{conf_id}"

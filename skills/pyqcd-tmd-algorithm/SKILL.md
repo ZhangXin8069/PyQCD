@@ -3,9 +3,10 @@ name: pyqcd-tmd-algorithm
 description: |
   Use when implementing, porting, debugging, or validating PyQCD's gradient-flow
   renormalized nucleon gluon TMD-PDF algorithm, especially flowed Clover fields,
-  finite staple geometry, disconnected matrix elements, soft/rapidity layers,
-  Collins–Soper evolution, matching, or continuum-limit tests; keep quasi-PDF
-  prototypes distinct from a complete TMD result.
+  explicit straight-line OPE channel identities, finite staple geometry,
+  disconnected matrix elements, soft/rapidity layers, Collins–Soper evolution,
+  matching, or continuum-limit tests; keep quasi-PDF prototypes distinct from a
+  complete TMD result.
 metadata:
   openclaw:
     emoji: 🧬
@@ -56,13 +57,15 @@ validation。
 ## Step 0：先写算法契约
 
 配置或元数据必须先固定：通道与 Lorentz 投影、纵向/横向轴、`z`、`b_perp`、独立
-`staple_length`、`tau`、`Pz`、`mu`、`zeta`、表示、匹配阶数和 Fourier 约定。当前
+`staple_length`、无量纲 `tau=t/a²`、`Pz`、`mu`、`zeta`、表示、匹配阶数和 Fourier 约定。当前
 `b_perp/b_dir` 只覆盖一个横向轴；完整二维 TMD 需显式支持
 `b_perp=(b_x,b_y)` 与旋转对称性对照。中心几何与锚定几何不能混用，复数不能在证明
 对称性前取实部或强行偶化。
 
 每个产物记录 `a_fm`、格点体积、`tau`、流步长、`Pz_gev`、`z`、`b_perp`、`staple_length`、
 方向、表示、Lorentz 通道、`mu`、`zeta`、阶数、seed、重采样、cov/SVD、命令行和代码版本。
+若使用 test9 的持久缓存，还必须记录完整 canonical JSON、其 SHA-256 和 HDF5 属性；缓存
+身份不能只由可读文件名或数组 shape 推断，详见 validation reference。
 
 未指定扫描时，用 `b_perp=0`/非零横向向量、两个 `Pz`、两个有限 `ell`、两个邻近 `tau`
 组成 smoke 矩阵；它只暴露几何/统计问题，不代表物理结果，且所有格点共享组态索引。
@@ -72,15 +75,21 @@ validation。
 每一步只消费上一步已通过的对象：
 
 1. 输入：验证规范场形状、边界、SU(3) 近似幺正性和元数据。
-2. 流化：从同一 `U` 计算并缓存各 `V_tau`，记录步长收敛和流能量判据。
-3. 算符：在同一 `V_tau` 上构造 `F/F_tilde`、有限 staple 和 Lorentz 分量，先保留复数。
+2. 流化：每个 `tau` 都从同一原始 `U` 独立流化；核心数值调用不隐式跨调用缓存。
+   `pipeline.step_tmd` 对一个 `tau` 只流化一次，并让 TMD 与 `t²E` 复用同一 `V_tau`；
+   test9 的 `flow_gauge_for_config` 是另行显式校验身份的持久缓存，不得与调用内复用混称。
+3. 算符：令 `i,j` 为 `z_dir` 之外的两个空间方向；一次
+   `tmd_matrix_elements(_time)` 调用只预计算 `F_ti/F_tj/F_ij`，并在颜色闭合前把
+   两端 Clover 场逐点投影到无迹部分。每个 `(z,b)` 只构造一条 staple 并复用于三项；
+   该复用不跨调用，复数在最终有依据的投影前保留。
 4. 软因子：独立计算同表示、同几何、同流时间的真空对象。
 5. 外态：保存逐组态 `C2`、`Lg`、`C2*Lg`，做真空扣除和多个 `t_sep` 平台。
 6. 统计：对 `z/b/ell/tau/±z/Pz` 使用共享索引的 block-jackknife/bootstrap。
 7. 重整化：按明确方案应用 soft、短距比值、Z_R/混合和流到 MS 的系数。
 8. 提取：按已证明的偶奇性质做 cos/sin 或复 Fourier，再用两动量提取 CS/匹配。
 9. 外推：检查 `ell`、`tau→0`、`Pz→∞`、`a→0`、体积和拟合窗，分离统计/系统误差。
-10. 归档：HDF5/JSON 保存数组、维度、单位、参数、seed、命令、版本和每个门的结果。
+10. 归档：HDF5/JSON 保存数组、维度、单位、参数、seed、命令、版本和每个门的结果；
+    test9 持久缓存按 canonical JSON + SHA-256 + HDF5 metadata 规则发布。
 
 ## 完整链的停止条件
 
