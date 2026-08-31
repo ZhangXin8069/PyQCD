@@ -1,0 +1,51 @@
+========================================================================
+  Fit Report  : L24x72
+========================================================================
+  dt range      : [6, 11]
+  Nsample       : 40
+  jackknife     : False
+========================================================================
+
+------------------------------------------------------------------------
+condition number = 1.27e+07
+fit status = identifiable
+AICc selected model = one_state
+AICc median one-state = 14.5086
+AICc median two-state = 52.1985
+ground-state status = identifiable
+excited-state status = practically_unidentifiable
+effective covariance rank = 6
+sample covariance rank = 6
+required parameter rank = 2
+candidate parameter ranks = one:2, two:4
+
+Least Squares Fit (no prior):
+  chi2/dof [dof] = 1.5 [4]    Q = 0.2
+
+Parameters:
+             c0    1.0106 (70)      [  0.6 ± inf ]  
+             E0   1.09979 (12)      [  1.5 ± inf ]  
+
+Fit:
+     x[k]              y[k]         f(x[k],p)
+---------------------------------------------
+        6     0.001369 (10)    0.0013766 (98)  
+        7    0.0004566 (34)    0.0004583 (33)  
+        8    0.0001519 (12)    0.0001526 (11)  
+        9     5.056(38)e-05     5.080(36)e-05  
+       10     1.684(13)e-05     1.692(12)e-05  
+       11     5.605(43)e-06     5.632(41)e-06  
+
+Settings:
+  svdcut/n = 1e-06/0    tol = (1e-08*,1e-10,1e-10)    (itns/time = 19/0.0s)
+  fitter = scipy_least_squares    method = trf
+
+
+========================================================================
+  Summary Table
+========================================================================
++----------+-----+----------+-----+----------+
+|    c0    |  c1 |    E0    |  dE | chi2/dof |
++----------+-----+----------+-----+----------+
+| 1.008(7) | N/A | 1.100(0) | N/A |   1.9    |
++----------+-----+----------+-----+----------+

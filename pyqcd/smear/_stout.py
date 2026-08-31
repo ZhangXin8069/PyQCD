@@ -41,7 +41,7 @@ def _staple_pair(U, mu, nu):
     t1 = e("...ab,...bc->...ac", Un, cp.roll(Um, -1, axis=a_nu))
     t1 = e("...ab,...cb->...ac", t1, cp.roll(Un, -1, axis=a_mu).conj())
     # 反向：U_ν†(x−ν̂)·U_μ(x−ν̂)·U_ν(x−ν̂+μ̂)
-    t2 = e("...ab,...cb->...ac", cp.roll(Un, 1, axis=a_nu).conj(),
+    t2 = e("...ba,...bc->...ac", cp.roll(Un, 1, axis=a_nu).conj(),
            cp.roll(Um, 1, axis=a_nu))
     t2 = e("...ab,...bc->...ac", t2,
            cp.roll(cp.roll(Un, 1, axis=a_nu), -1, axis=a_mu))
@@ -65,7 +65,13 @@ def stout_smear(gauge, nstep=20, rho=0.12, verbose=False, logger=None,
     e = cp.einsum
     log = logger or print
     U = cp.asarray(gauge)
-    eye = cp.identity(Nc, dtype=U.dtype)
+    if (isinstance(nstep, (bool, np.bool_))
+            or not isinstance(nstep, (int, np.integer))
+            or nstep < 0):
+        raise ValueError(f"nstep 必须为非负整数，收到 {nstep!r}")
+    if nstep == 0:
+        return U + cp.zeros_like(U)
+    eye = cp.eye(Nc, dtype=U.dtype)
 
     for step in range(nstep):
         U_new = cp.zeros_like(U)

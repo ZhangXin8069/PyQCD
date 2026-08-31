@@ -13,7 +13,8 @@ Adapted from lqcddb io/write_date.py.
 
 Binary Format Conventions
 -------------------------
-- All data is stored as float64 (double precision) in big-endian byte order
+- Existing readers retain their format-specific byte-order conventions;
+  VdV/VVV readers default to native byte order and accept an explicit order
 - Complex numbers are stored as interleaved [real, imag] pairs
 - Eigenvector file: (Nev, Nx³, Nc, 2) float64 → (Nev, Nx³, Nc) complex128
 - Perambulator file: per time source, 4 Dirac source index files,
@@ -511,53 +512,207 @@ def read_data_ascii(filename):
 # 预计算顶点积二进制 reader（整合 huangcl/98_tools input_output.py）
 # ═══════════════════════════════════════════════════════════════════
 
+_VERTEX_F8_DTYPES = {
+    "native": np.dtype("=f8"),
+    "little": np.dtype("<f8"),
+    "big": np.dtype(">f8"),
+}
+
+
+def _vertex_positive_int(name, value):
+    """Validate a positive integer binary-layout parameter."""
+    if (isinstance(value, (bool, np.bool_))
+            or not isinstance(value, (int, np.integer))):
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
+    value = int(value)
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value}")
+    return value
+
+
+def _vertex_momentum(name, value):
+    """Validate one signed integer lattice-momentum component."""
+    if (isinstance(value, (bool, np.bool_))
+            or not isinstance(value, (int, np.integer))):
+        raise ValueError(f"{name} must be an integer, got {value!r}")
+    return int(value)
+
+
+def _vertex_float_dtype(byteorder):
+    """Return the explicit float64 dtype for a supported byte order."""
+    try:
+        return _VERTEX_F8_DTYPES[byteorder]
+    except (KeyError, TypeError):
+        allowed = ", ".join(_VERTEX_F8_DTYPES)
+        raise ValueError(
+            f"byteorder must be one of {allowed}; got {byteorder!r}") \
+            from None
+
+
+def _vertex_complex_count(path):
+    """Validate f8 pair alignment and return the complex-element count."""
+    size = os.path.getsize(path)
+    if size % 8:
+        raise ValueError(
+            f"{path}: file size {size} is not a multiple of 8 bytes "
+            "for float64 elements")
+    if size % 16:
+        raise ValueError(
+            f"{path}: file size {size} does not contain a complete "
+            "complex f8 pair [real, imag]")
+    return size // 16
+
+
+def _vertex_exact_root(value, power):
+    """Return the exact positive integer root, or ``None``."""
+    if value <= 0:
+        return None
+    low, high = 1, value
+    while low <= high:
+        candidate = (low + high) // 2
+        powered = candidate ** power
+        if powered == value:
+            return candidate
+        if powered < value:
+            low = candidate + 1
+        else:
+            high = candidate - 1
+    return None
+
+
+def _vertex_infer_nev(path, Nt, power):
+    """Infer an exact Nev from a validated file size and tensor rank."""
+    complex_count = _vertex_complex_count(path)
+    if complex_count % Nt:
+        raise ValueError(
+            f"{path}: cannot infer Nev because {complex_count} complex "
+            f"elements are not divisible by Nt={Nt}")
+    per_time = complex_count // Nt
+    nev = _vertex_exact_root(per_time, power)
+    if nev is None:
+        raise ValueError(
+            f"{path}: cannot infer Nev because {per_time} complex elements "
+            f"per time slice are not an exact power {power}")
+    return nev
+
+
+def _vertex_read_prefix(path, dtype, full_shape, prefix_shape, out=None):
+    """Copy a complex prefix from a validated interleaved-f8 memmap."""
+    pairs = np.memmap(
+        path, dtype=dtype, mode="r", shape=tuple(full_shape) + (2,))
+    selected = None
+    try:
+        selected = pairs[
+            tuple(slice(0, extent) for extent in prefix_shape)
+            + (slice(None),)]
+        if out is None:
+            out = np.empty(prefix_shape, dtype=np.complex128)
+        out.real[...] = selected[..., 0]
+        out.imag[...] = selected[..., 1]
+        return out
+    finally:
+        del selected
+        pairs._mmap.close()
+
+
 def readin_vdv_all(vdv_dir: str, nev: int, nev1: int, Nt: int,
-                   conf_id, Px: int = 0, Py: int = 0, Pz: int = 0):
-    """读取 V†V 预计算顶点积二进制（照抄 input_output.readin_VdV_all）。
+                   conf_id, Px: int = 0, Py: int = 0, Pz: int = 0,
+                   byteorder: str = "native"):
+    """读取 V†V 预计算顶点积二进制。
+
+    布局兼容 ``input_output.readin_VdV_all``。
 
     文件 ``<dir>/VdaggerV.Px%dPy%dPz%d.conf%s``：f8 交错 [re,im]，
     (Nt, Nev, Nev, 2) → complex，截断到前 Nev1 模。
+
+    ``byteorder`` 仅接受 ``native``（默认）、``little``、``big``。
+    默认保留参考 reader 的本机端序行为；真实文件端序尚未验证。
     """
-    with open("%s/VdaggerV.Px%dPy%dPz%d.conf%s"
-              % (vdv_dir, Px, Py, Pz, conf_id), "rb") as f:
-        vdv = np.fromfile(f, dtype="f8")
-    vdv = vdv.reshape(Nt, nev, nev, 2)
-    vdv = vdv[..., 0] + vdv[..., 1] * 1j
-    return np.array(vdv[:, 0:nev1, 0:nev1])
+    nev = _vertex_positive_int("Nev", nev)
+    nev1 = _vertex_positive_int("nev1", nev1)
+    Nt = _vertex_positive_int("Nt", Nt)
+    if nev1 > nev:
+        raise ValueError(f"nev1={nev1} must not exceed Nev={nev}")
+    Px = _vertex_momentum("Px", Px)
+    Py = _vertex_momentum("Py", Py)
+    Pz = _vertex_momentum("Pz", Pz)
+    dtype = _vertex_float_dtype(byteorder)
+    path = os.path.join(
+        os.fspath(vdv_dir),
+        "VdaggerV.Px%dPy%dPz%d.conf%s" % (Px, Py, Pz, conf_id))
+    inferred_nev = _vertex_infer_nev(path, Nt, power=2)
+    if inferred_nev != nev:
+        raise ValueError(
+            f"{path}: file size implies Nev={inferred_nev}, "
+            f"but requested Nev={nev}")
+    return _vertex_read_prefix(
+        path, dtype, (Nt, nev, nev), (Nt, nev1, nev1))
 
 
 def readin_vvv_all(vvv_dir: str, nev1: int, Nt: int, conf_id,
-                   Px: int = 0, Py: int = 0, Pz: int = 0):
-    """读取逐时间片 VVV 三夸克顶点积二进制（照抄 readin_VVV_all）。
+                   Px: int = 0, Py: int = 0, Pz: int = 0,
+                   byteorder: str = "native"):
+    """读取逐时间片 VVV 三夸克顶点积二进制（兼容 readin_VVV_all）。
 
     文件 ``<dir>/VVV.t%03i.Px%iPy%iPz%i.conf%s``；每片的 Nev 由
-    文件大小自探测（cbrt(size/2)），截断到 Nev1。
+    文件大小精确自探测，截断到 Nev1。``byteorder`` 仅接受
+    ``native``（默认）、``little``、``big``；真实文件端序尚未验证。
     """
-    vvv = np.zeros((Nt, nev1, nev1, nev1), dtype=complex)
+    nev1 = _vertex_positive_int("nev1", nev1)
+    Nt = _vertex_positive_int("Nt", Nt)
+    Px = _vertex_momentum("Px", Px)
+    Py = _vertex_momentum("Py", Py)
+    Pz = _vertex_momentum("Pz", Pz)
+    dtype = _vertex_float_dtype(byteorder)
+    files = []
     for t in range(Nt):
-        with open("%s/VVV.t%03i.Px%iPy%iPz%i.conf%s"
-                  % (vvv_dir, t, Px, Py, Pz, conf_id), "rb") as f:
-            temp = np.fromfile(f, dtype="f8")
-        nev = int(round(np.cbrt(temp.size / 2)))
-        temp = temp.reshape(nev, nev, nev, 2)
-        temp = temp[..., 0] + temp[..., 1] * 1j
-        vvv[t] = temp[0:nev1, 0:nev1, 0:nev1]
+        path = os.path.join(
+            os.fspath(vvv_dir),
+            "VVV.t%03i.Px%iPy%iPz%i.conf%s"
+            % (t, Px, Py, Pz, conf_id))
+        nev = _vertex_infer_nev(path, Nt=1, power=3)
+        if nev1 > nev:
+            raise ValueError(
+                f"{path}: nev1={nev1} must not exceed inferred Nev={nev}")
+        files.append((path, nev))
+
+    vvv = np.empty((Nt, nev1, nev1, nev1), dtype=np.complex128)
+    for t, (path, nev) in enumerate(files):
+        _vertex_read_prefix(
+            path, dtype, (nev, nev, nev), (nev1, nev1, nev1),
+            out=vvv[t])
     return vvv
 
 
 def readin_vvv(vvv_dir: str, nev: int, nev1: int, Nt: int, conf_id,
-               Px: int = 0, Py: int = 0, Pz: int = 0):
-    """读取整块 VVV 二进制（照抄 readin_VVV）。
+               Px: int = 0, Py: int = 0, Pz: int = 0,
+               byteorder: str = "native"):
+    """读取整块 VVV 二进制（兼容 readin_VVV）。
 
     文件 ``<dir>/VVV.Px%iPy%iPz%i.conf%s``：(Nt, Nev, Nev, Nev, 2)
-    → complex，截断到 Nev1。
+    → complex，截断到 Nev1。``byteorder`` 仅接受 ``native``（默认）、
+    ``little``、``big``；真实文件端序尚未验证。
     """
-    with open("%s/VVV.Px%iPy%iPz%i.conf%s"
-              % (vvv_dir, Px, Py, Pz, conf_id), "rb") as f:
-        vvv = np.fromfile(f, dtype="f8")
-    vvv = vvv.reshape(Nt, nev, nev, nev, 2)
-    vvv = vvv[..., 0] + vvv[..., 1] * 1j
-    return vvv[:, 0:nev1, 0:nev1, 0:nev1]
+    nev = _vertex_positive_int("Nev", nev)
+    nev1 = _vertex_positive_int("nev1", nev1)
+    Nt = _vertex_positive_int("Nt", Nt)
+    if nev1 > nev:
+        raise ValueError(f"nev1={nev1} must not exceed Nev={nev}")
+    Px = _vertex_momentum("Px", Px)
+    Py = _vertex_momentum("Py", Py)
+    Pz = _vertex_momentum("Pz", Pz)
+    dtype = _vertex_float_dtype(byteorder)
+    path = os.path.join(
+        os.fspath(vvv_dir),
+        "VVV.Px%iPy%iPz%i.conf%s" % (Px, Py, Pz, conf_id))
+    inferred_nev = _vertex_infer_nev(path, Nt, power=3)
+    if inferred_nev != nev:
+        raise ValueError(
+            f"{path}: file size implies Nev={inferred_nev}, "
+            f"but requested Nev={nev}")
+    return _vertex_read_prefix(
+        path, dtype, (Nt, nev, nev, nev),
+        (Nt, nev1, nev1, nev1))
 
 
 def peram_truncated(peram):

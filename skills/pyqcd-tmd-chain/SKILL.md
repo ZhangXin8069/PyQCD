@@ -16,7 +16,9 @@ metadata:
 
 本技能是 PyQCD 核心物理链的路线图：说明每一阶段为何存在、消费什么、产出什么以及
 何时可以进入下一阶段。它不复制算符几何、重整化公式或验证细节；实现契约统一放在
-`pyqcd-tmd-algorithm` 及其 `references/`，统计执行放在 `pyqcd-statistics`。
+`pyqcd-tmd-algorithm` 及其 `references/`，统计执行放在 `pyqcd-statistics`。test9 持久
+cache 的细节唯一见
+[`pyqcd-tmd-algorithm/references/validation.md`](../pyqcd-tmd-algorithm/references/validation.md)。
 
 目标量是梯度流方案下核子胶子 TMD-PDF：
 
@@ -40,13 +42,14 @@ quasi-PDF 或原型。
 | 5. 提取/匹配 | `renorm/_tmdextract.py`、`_matching.py` | `h_R` → cos/sin quasi、CS、matched PDF | 两个 `Pz`、Fourier 偶奇、`α_s→0` 单位核 |
 | 6. 连续极限 | `renorm/_extrapolate.py` | 多 `a/Pz/tau/ell` → 外推和误差带 | 协方差/系统窗/有限体积与拟合稳定性 |
 
-常用算符组合为
+令 `i,j` 为 `z_dir` 之外的两个空间方向，常用算符组合为
 
 \[
-O=M^{tx;tx}+M^{ty;ty}-2M^{xy;xy},
+O=M^{ti;ti}+M^{tj;tj}-2M^{ij;ij},
 \]
 
-但它不是完整张量混合矩阵的替代。`gluon_ope_operator_z0`、固定规范 FF、螺旋度
+其中 `z_dir=2` 时才简写为 `tx/ty/xy`。该组合不是完整张量混合矩阵的替代。
+`gluon_ope_operator_z0`、固定规范 FF、螺旋度
 算符、sin 型共线准 PDF 和 CS 两动量接口都是有明确边界的变体，不能互相冒充完整
 TMD 结果。
 
@@ -54,8 +57,10 @@ TMD 结果。
 
 1. 先按 `pyqcd-conventions` 固定轴、单位、符号、边界和元数据，再读
    `pyqcd-tmd-algorithm` 的 geometry reference。
-2. 同一 raw 组态生成并缓存各 `V_tau`，再在同流时间上构造场强、路径和 Lorentz 分量；
-   先保留复数，不提前取实部或强行偶化。
+2. 各无量纲 `tau=t/a²` 都从同一 raw 组态独立生成 `V_tau`；核心算符 API 只做调用内
+   复用。test9 若启用持久 cache，先读
+   [`validation reference`](../pyqcd-tmd-algorithm/references/validation.md) 判定身份，再
+   在同一 `V_tau` 上构造场强、路径和 Lorentz 分量，先保留复数，不提前取实部或强行偶化。
 3. 外态阶段保留逐组态 `C2`、loop 和 `C2*loop`，在重采样后做断连真空扣除；统计细节
    转 `pyqcd-statistics`。
 4. 通过几何/外态门后才应用 soft、`Z_R`/hybrid、Fourier、CS 和匹配；每一步保存中间量
@@ -73,7 +78,7 @@ python examples/pyqcd/test9_verify.py <run_dir>
 
 smoke/demo 只验证链路或形状；`test9_verify.py` 的 A–E 通过也不能替代真实非零横向
 几何、soft/rapidity 和多尺度系统扫描。运行编排转 `pyqcd-pipeline`，后端/文件转
-`pyqcd-infra`。
+`pyqcd-infra`；持久 cache 不在本入口定义规则。
 
 ## 状态与降级措辞
 

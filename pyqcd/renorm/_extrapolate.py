@@ -13,6 +13,49 @@ import numpy as np
 from ._ensembles import a_len_set, Nl_set, pion_mass_set, MPI_PHYSICAL
 
 
+def _validate_extrap_rows(rows, *, bootstrap):
+    """Validate ensemble rows before any design or linear-algebra operation."""
+    if not isinstance(rows, (list, tuple)) or len(rows) == 0:
+        raise ValueError("rows 必须是非空系综数据列表")
+    replica_count = None
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"row {row_index} 必须是 dict")
+        missing = [name for name in ('x', 'hR', 'a', 'pz', 'mpi', 'L')
+                   if name not in row]
+        if missing:
+            raise ValueError(f"row {row_index} 缺少字段 {missing}")
+        x_values = np.asarray(row['x'], dtype=float)
+        if x_values.ndim != 1 or x_values.size == 0 \
+                or not np.isfinite(x_values).all():
+            raise ValueError(f"row {row_index} x 必须是一维有限非空数组")
+        hR = np.asarray(row['hR'])
+        valid_ndim = hR.ndim in ((1, 2) if bootstrap else (1,))
+        if not valid_ndim or hR.shape[0] != x_values.size:
+            shape = '(nx, n_rep)' if bootstrap else '(nx,)'
+            raise ValueError(f"row {row_index} hR 必须为 {shape} 且匹配 x")
+        if hR.size == 0 or not np.isfinite(hR).all():
+            raise ValueError(f"row {row_index} hR 必须全部有限")
+        if bootstrap:
+            n_rep = hR.shape[1] if hR.ndim == 2 else 1
+            if n_rep == 0:
+                raise ValueError(f"row {row_index} replica 轴不得为空")
+            if replica_count is None:
+                replica_count = n_rep
+            elif n_rep != replica_count:
+                raise ValueError(
+                    f"row {row_index} replica 数 {n_rep} 与 "
+                    f"首行 {replica_count} 不一致")
+        for name in ('a', 'pz', 'mpi', 'L'):
+            value = row[name]
+            if (isinstance(value, (bool, np.bool_))
+                    or not np.isscalar(value)
+                    or not np.isfinite(value)):
+                raise ValueError(f"row {row_index} {name} 必须是有限实标量")
+        if float(row['pz']) == 0.0:
+            raise ValueError(f"row {row_index} pz 不得为零")
+
+
 def hR_form(var, par):
     """外推形式（在固定 x 处对 a, Pz, mπ, L 做线性拟合）。
 
@@ -61,9 +104,12 @@ def fit_hR_PDF_extrap(rows, x_grid=None, fitter='lm', max_x=1.0):
     Returns:
         (x_grid, xg0(x), 外推误差带 std(x))。
     """
+    _validate_extrap_rows(rows, bootstrap=False)
     if x_grid is None:
         x_grid = rows[0]['x']
     x_grid = np.asarray(x_grid, dtype=float)
+    if x_grid.ndim != 1 or not np.isfinite(x_grid).all():
+        raise ValueError("x_grid 必须是一维有限数组")
     mask_x = (x_grid >= 0) & (x_grid <= max_x)
     x_grid = x_grid[mask_x]
 
@@ -79,24 +125,12 @@ def fit_hR_PDF_extrap(rows, x_grid=None, fitter='lm', max_x=1.0):
             j = idx[0]
             hR_val = np.atleast_1d(r['hR'])[j]
             var = (r['a'], r['pz'], r['mpi'], r['L'])
-            # 8 参数线性模型：构造设计矩阵行 [1, a², a⁴, a²pz², 1/pz², 1/pz, mπ²-mπ,phy², e^{-L·a·mπ}]
-            a_, pz_, mpi, L_ = var
-            row = np.array([
-                1.0,
-                a_ ** 2, a_ ** 4, a_ ** 2 * pz_ ** 2,
-                pz_ ** -2, pz_ ** -1,
-                mpi ** 2 - MPI_PHYSICAL ** 2,
-                np.exp(-L_ * a_ * mpi),
-            ])
-            A_rows.append(row)
+            A_rows.append(_extrap_design_row(*var))
             b_vec.append(hR_val)
 
-        if len(A_rows) < 8:
-            xg0[i] = np.nan
-            xg0_std[i] = np.nan
-            continue
-
-        A = np.array(A_rows)
+        A = np.asarray(A_rows, dtype=float).reshape(-1, len(_EXTRAP_PAR_NAMES))
+        _require_extrap_identifiable(
+            A, len(_EXTRAP_PAR_NAMES), x_val, "fit_hR_PDF_extrap")
         b = np.array(b_vec)
         coef, *_ = np.linalg.lstsq(A, b, rcond=None)
         resid = b - A @ coef
@@ -124,6 +158,19 @@ _EXTRAP_PAR_NAMES = ('xg0', 'fx', 'lx', 'hx', 'dx', 'bx', 'kx', 'cx')
 _EXTRAP_FREE_IDX = (0, 1, 4, 6)   # 原版 Minuit fixed lx/hx/bx/cx → 仅 xg0/fx/dx/kx 自由
 
 
+def _require_extrap_identifiable(A, n_params, x_val, fit_name):
+    """Reject a rank-deficient or exactly determined extrapolation design."""
+    n_data = A.shape[0]
+    design_rank = int(np.linalg.matrix_rank(A))
+    data_dof = n_data - n_params
+    if design_rank < n_params or data_dof <= 0:
+        raise ValueError(
+            f"{fit_name} statistically unidentifiable at x={x_val:.6g}: "
+            f"design rank={design_rank}, required rank={n_params}; "
+            f"data dof={data_dof} must be positive "
+            f"(Ndata={n_data}, Nparam={n_params})")
+
+
 def fit_hR_PDF_extrap_boot(rows, x_grid=None, max_x=1.0,
                            return_samples=False):
     """协方差加权 + 逐样本误差带的联合外推拟合
@@ -146,9 +193,12 @@ def fit_hR_PDF_extrap_boot(rows, x_grid=None, max_x=1.0,
     Returns:
         (x_grid, xg0_mean(nx), xg0_std(nx)[, samples])。
     """
+    _validate_extrap_rows(rows, bootstrap=True)
     if x_grid is None:
         x_grid = rows[0]['x']
     x_grid = np.asarray(x_grid, dtype=float)
+    if x_grid.ndim != 1 or not np.isfinite(x_grid).all():
+        raise ValueError("x_grid 必须是一维有限数组")
     mask_x = (x_grid >= 0) & (x_grid <= max_x)
     x_grid = x_grid[mask_x]
 
@@ -168,10 +218,12 @@ def fit_hR_PDF_extrap_boot(rows, x_grid=None, max_x=1.0,
             var = (r['a'], r['pz'], r['mpi'], r['L'])
             A_rows.append(_extrap_design_row(*var))
             B_rows.append(hR_j[j])
-        if len(A_rows) < n_free:
-            per_x.append(None)
-            continue
-        per_x.append((np.array(A_rows), np.array(B_rows)))
+        A = np.asarray(A_rows, dtype=float).reshape(
+            -1, len(_EXTRAP_PAR_NAMES))
+        _require_extrap_identifiable(
+            A[:, _EXTRAP_FREE_IDX], n_free, x_val,
+            "fit_hR_PDF_extrap_boot")
+        per_x.append((A, np.array(B_rows)))
 
     n_x = len(x_grid)
     used = [pack[1] for pack in per_x if pack is not None]

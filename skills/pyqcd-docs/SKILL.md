@@ -49,7 +49,10 @@ PDF 版式验收。它不生产规范场、传播子、统计结果或 TMD 数�
    不把截图堆成结论。
 4. **编译**：在目标 `docs/` 或报告目录运行 XeLaTeX 两遍；不要用 pdflatex 代替中文编译。
 5. **验收**：检查 `Overfull=0`、`Float too large=0`、`Missing character=0`，再核对页数、
-   全页渲染、安全区、裁切、遮挡和图表可读性；失败就回到 tex 修复并重编。
+   全页渲染、安全区、裁切、遮挡和图表可读性；失败就回到 tex 修复并重编。若由
+   `pyqcd/pipeline/_steps.py::step_report` 生成，还必须遵守
+   [`report-structure.md`](references/report-structure.md) 的缺失平台语义，以及
+   [`latex-validation.md`](references/latex-validation.md) 的真实编译返回码和 PDF 新鲜度契约。
 6. **归档**：按命名约定保存 `.tex/.pdf` 和必要的验证日志，更新对应管理文档；不修改
    外来参考库的既有内容。
 

@@ -7,15 +7,15 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（42 项：19 物理/链路项 + 23 整合功能项 stout/本征模压缩+Ω张量/CG/hB-loader/boot协方差/plateau+CS核/PDF成图/数据守卫+2pt续跑/方向能量链/第二轮helicity+FH窗+ASCII/第三轮匹配核修正+sin准PDF+OPE±z+宇称投影+ZR样本环+boot外推+dis_connect+模板守卫+Wick图+FLOPs诊断+VVV读取+env快照+比对原语+目录型LIME reader）
+python examples/pyqcd/conftest.py    # 全量测试（物理/链路、整合功能，以及 SU(3) 几何/流归一化/HYP 协变/统计可辨识/二进制 IO/MPI 目录/持久化/管线异常等；实际计数以命令输出为准）
 python examples/pyqcd/verify_consistency.py   # 一致性验证（参考产物完整时 vs docker-v20260805，A–E 全 0 差异；缺失时明确退出2）
 python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
 python -m pyqcd.parallel --dry-run --confs 6250,6450   # MPI 并行规划预览（用户公式 N*a=n*b）
 mpirun -np N python -m pyqcd.parallel --confs ...      # MPI 元任务并行管线（N 由 plan_parallel 给出）
 bash logs/test0/run-local.sh        # ana_3dir 三方向差异分析+作图测试（test12 风格，17 项断言）
-bash logs/test0_ratio/run-local.sh  # 02_ratio 3pt/2pt 比值+拟合+图测试（18 项断言）
+bash logs/test0_ratio/run-local.sh  # 02_ratio 3pt/2pt 比值+拟合+图测试（22 项断言）
 bash logs/test0_anaratio/run-local.sh  # 03_ana_ratio 纯画图测试（25 项断言）
-bash logs/test0_bare/run-local.sh   # 03_bare_matrix 三方向裸矩阵元测试（18 项断言）
+bash logs/test0_bare/run-local.sh   # 03_bare_matrix 三方向裸矩阵元测试（22 项断言）
 bash logs/test0_energy/run-local.sh # 04_proton_energy 有效能量测试（8 项断言）
 bash logs/test0_fh/run-local.sh     # 06_FH_bare_matele FH 变换测试（38 项断言）
 bash logs/stab1/run-local.sh        # 全功能真实数据实战（docker 基线 10 组态，45 项断言 + 106 图 + 报告）
@@ -116,9 +116,9 @@ MyQCD 对照；双遍 XeLaTeX，Overfull=0、Float too large=0、Missing charact
 |---|---|---|---|
 | `_plots.py` | 图表工具全集：plot_errbar/scatter/hist + single/multi 封装 + 10 色 | — | 各套件共用 |
 | `_fitter.py` | calc_chi2(_dof)/fit（lsqfit 封装）/FitParams/ASCII 报告表 | — | 各套件共用 |
-| `_ratio2pt.py` | 02_ratio：2pt+OPE → 真空扣除 ratio → 逐 z 拟合 → ratio/c0/chi2 图 | `run_ratio2pt` | logs/test0_ratio（18 项） |
+| `_ratio2pt.py` | 02_ratio：2pt+OPE → 真空扣除 ratio → 逐 z 拟合 → ratio/c0/chi2 图 | `run_ratio2pt` | logs/test0_ratio（22 项） |
 | `_ana_ratio.py` | 03_ana_ratio：纯画图（单 fit 图+对比图+nofit 图） | `ana_ratio_plot_all` | logs/test0_anaratio（25 项） |
-| `_bare_matrix.py` | 03_bare_matrix：三方向 ratio+平均+拟合+图 | `run_bare_matrix` | logs/test0_bare（18 项） |
+| `_bare_matrix.py` | 03_bare_matrix：三方向 ratio+平均+拟合+图 | `run_bare_matrix` | logs/test0_bare（22 项） |
 | `_proton_energy.py` | 04：corr2 + E0 拟合 + eff_mass 图（GeV） | `run_energy` | logs/test0_energy（8 项） |
 | `_fh.py` | 06：6 方向 ratio 平均 → FH 变换 → 常数拟合 → FH/参数/对比图 | `run_fh` | logs/test0_fh（38 项） |
 
