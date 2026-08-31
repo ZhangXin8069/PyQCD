@@ -369,7 +369,8 @@ def invariant_amplitude(M_pp, x_grid, b_perp):
         ν_grid = np.linspace(0, 2 * np.pi * nν, nν)
 
     dν = ν_grid[1] - ν_grid[0]
-    out = np.zeros((len(x_grid),) + (1,) if M_pp.ndim == 1 else (nb,))
+    out = np.zeros((len(x_grid), 1) if M_pp.ndim == 1
+                   else (len(x_grid), nb))
     for i, x in enumerate(x_grid):
         cos_mat = np.cos(np.outer(x, ν_grid))  # (nx, nν)
         if M_pp.ndim == 1:
