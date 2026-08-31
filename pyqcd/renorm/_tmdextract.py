@@ -67,6 +67,8 @@ def quasi_tmd_pdf(hR_z, z_grid, b_perp, pz_gev, p_t=None, x_grid=None,
     if z_fm[0] < 0.0:
         raise ValueError(
             "quasi_tmd_pdf 接收非负 z 半轴；负半轴由 Hermitian 延拓生成")
+    if z_fm[0] != 0.0:
+        raise ValueError("quasi_tmd_pdf 的 z_grid 必须从 z=0 开始")
 
     if x_grid is None:
         x_grid = np.linspace(-1.5, 1.5, 256)
@@ -143,6 +145,10 @@ def quasi_pdf_gluon(h_z, z_grid, pz_gev, x_grid=None):
     """
     h = np.asarray(h_z, dtype=float).real
     z = np.asarray(z_grid, dtype=float) / fm_to_GeV   # fm → GeV⁻¹
+    if z.ndim != 1 or z.size < 2:
+        raise ValueError("z_grid 必须是一维且至少含两个点")
+    if z[0] != 0.0:
+        raise ValueError("quasi_pdf_gluon 的 z_grid 必须从 z=0 开始")
     if x_grid is None:
         x_grid = np.linspace(-1.5, 1.5, 256)
     x_grid = np.asarray(x_grid, dtype=float)

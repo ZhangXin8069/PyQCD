@@ -510,7 +510,7 @@ def test_tmd_extraction_chain():
         quasi_tmd_pdf, cs_kernel_from_ratio, sftx_gluon_matching_coeff,
         sftx_energy_density_t0,
     )
-    z = np.linspace(0.1, 1.0, 32)
+    z = np.linspace(0.0, 1.0, 33)
     hr = np.exp(-z / 0.3)[:, None] * np.array([1.0, 0.8])[None, :]
     x, xg = quasi_tmd_pdf(hr, z, [0.2, 0.4], 2.0)
     assert xg.shape == (256, 2)
@@ -1921,7 +1921,7 @@ def test_quasi_pdf_gluon_sin_transform():
     import warnings
 
     from pyqcd.renorm import quasi_pdf_gluon
-    z_fm = np.linspace(0.0005, 0.60, 800)
+    z_fm = np.linspace(0.0, 0.60, 801)
     pz = 2.0
     xs = np.array([0.0, 0.05, 0.25, 0.8, -0.5])
     alpha = 10.0                       # 衰减率 GeV^-1
@@ -2355,8 +2355,10 @@ def test_ope_channel_contracts():
 def test_quasi_tmd_fourier_contracts():
     """准 TMD 的 fm 截断、积分收敛及实/复 dtype 契约。"""
     from ._quasi_tmd_fourier_contract import QuasiTmdFourierContract
+    from ._tmd_public_contract import InvariantAmplitudeContract
 
     _run_unittest_contract(QuasiTmdFourierContract)
+    _run_unittest_contract(InvariantAmplitudeContract)
 
 
 def test_continuum_extrapolation_identifiability_contracts():

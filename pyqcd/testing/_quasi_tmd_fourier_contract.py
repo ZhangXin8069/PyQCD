@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from pyqcd.renorm import quasi_tmd_pdf, tmd_matching_hybrid
+from pyqcd.renorm import quasi_pdf_gluon, quasi_tmd_pdf, tmd_matching_hybrid
 
 
 FM_TO_GEV = 0.197
@@ -48,6 +48,20 @@ class QuasiTmdFourierContract(unittest.TestCase):
         self.x = np.array([-0.6, 0.0, 0.37, 0.91])
         self.pz = 2.3
         self.p_t = 2.7
+
+    def test_quasi_tmd_rejects_nonzero_start_instead_of_truncating_integral(self):
+        """积分公式从 z=0 开始，非零起点必须显式失败。"""
+        with self.assertRaisesRegex(ValueError, r"z.?=.?0"):
+            quasi_tmd_pdf(
+                np.ones((2, 1)), np.array([0.2, 0.4]), [0.1],
+                self.pz, p_t=self.p_t, x_grid=np.array([0.3]), n_pts=17)
+
+    def test_quasi_pdf_gluon_rejects_nonzero_start_instead_of_truncating_integral(self):
+        """sin 变换同样不得从非零首点开始积分。"""
+        with self.assertRaisesRegex(ValueError, r"z.?=.?0"):
+            quasi_pdf_gluon(
+                np.ones(2), np.array([0.2, 0.4]), self.pz,
+                x_grid=np.array([0.3]))
 
     def test_positive_half_axis_matches_literal_hermitian_full_axis(self):
         """漏掉 Hermitian 延拓的倍数或 sine 通道都会破坏全轴变换。"""
