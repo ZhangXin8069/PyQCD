@@ -32,23 +32,94 @@ def covariance_matrix_inv(samples, resam_type='boot'):
     return np.linalg.inv(cov)
 
 
+def _ratio_fit_design(z_, tsep_, ti_, z_list_):
+    """预计算比值拟合所需的掩码和时间差。"""
+    z_arr = np.asarray(z_)
+    tsep_arr = np.asarray(tsep_, dtype=float)
+    ti_arr = np.asarray(ti_, dtype=float)
+    z_list = tuple(z_list_)
+    if len(z_list) < 2:
+        raise ValueError('z_list 至少需要两个取值')
+
+    mask0 = (z_arr == z_list[0])
+    mask1 = (z_arr == z_list[1])
+    if not np.all(mask0 | mask1):
+        raise ValueError(f'z 只允许 {z_list[0]} 或 {z_list[1]}')
+
+    return {
+        'z': z_arr,
+        'tsep': tsep_arr,
+        'ti': ti_arr,
+        'dt': tsep_arr - ti_arr,
+        'mask0': mask0,
+        'mask1': mask1,
+        'z_list': z_list,
+    }
+
+
+def _ratio_model_from_design(par, design):
+    """按预计算设计评估 R 模型。"""
+    (c0_z0, c1_z0, c2_z0,
+     c0_z1, c1_z1, c2_z1,
+     deltaE) = np.asarray(par, dtype=float)
+    res = np.zeros_like(np.asarray(design['ti'], dtype=float))
+    exp_dt = np.exp(-deltaE * design['dt'])
+    exp_ti = np.exp(-deltaE * design['ti'])
+    exp_tsep = np.exp(-deltaE * design['tsep'])
+
+    mask0 = design['mask0']
+    if np.any(mask0):
+        res[mask0] = (c0_z0
+                      + c1_z0 * (exp_dt[mask0] + exp_ti[mask0])
+                      + c2_z0 * exp_tsep[mask0])
+
+    mask1 = design['mask1']
+    if np.any(mask1):
+        res[mask1] = (c0_z1
+                      + c1_z1 * (exp_dt[mask1] + exp_ti[mask1])
+                      + c2_z1 * exp_tsep[mask1])
+    return res
+
+
+def _ratio_model_jacobian(par, design):
+    """R 模型对参数的解析雅可比（未加白化）。"""
+    (c0_z0, c1_z0, c2_z0,
+     c0_z1, c1_z1, c2_z1,
+     deltaE) = np.asarray(par, dtype=float)
+    n_data = int(np.asarray(design['ti']).size)
+    jac = np.zeros((n_data, 7), dtype=float)
+    exp_dt = np.exp(-deltaE * design['dt'])
+    exp_ti = np.exp(-deltaE * design['ti'])
+    exp_tsep = np.exp(-deltaE * design['tsep'])
+
+    mask0 = design['mask0']
+    if np.any(mask0):
+        jac[mask0, 0] = 1.0
+        jac[mask0, 1] = exp_dt[mask0] + exp_ti[mask0]
+        jac[mask0, 2] = exp_tsep[mask0]
+        jac[mask0, 6] = -(
+            c1_z0 * design['dt'][mask0] * exp_dt[mask0]
+            + c1_z0 * design['ti'][mask0] * exp_ti[mask0]
+            + c2_z0 * design['tsep'][mask0] * exp_tsep[mask0])
+
+    mask1 = design['mask1']
+    if np.any(mask1):
+        jac[mask1, 3] = 1.0
+        jac[mask1, 4] = exp_dt[mask1] + exp_ti[mask1]
+        jac[mask1, 5] = exp_tsep[mask1]
+        jac[mask1, 6] = -(
+            c1_z1 * design['dt'][mask1] * exp_dt[mask1]
+            + c1_z1 * design['ti'][mask1] * exp_ti[mask1]
+            + c2_z1 * design['tsep'][mask1] * exp_tsep[mask1])
+    return jac
+
+
 def R_model(z_, tsep_, ti_, z_list_, c0_z0, c1_z0, c2_z0,
             c0_z1, c1_z1, c2_z1, deltaE):
     """比值模型（zengch 公式）。"""
-    res = np.zeros_like(np.asarray(ti_, dtype=float))
-    mask_z0 = (np.asarray(z_) == z_list_[0])
-    res[mask_z0] = (c0_z0
-                    + c1_z0 * np.exp(-deltaE * (tsep_[mask_z0] - ti_[mask_z0]))
-                    + c1_z0 * np.exp(-deltaE * ti_[mask_z0])
-                    + c2_z0 * np.exp(-deltaE * tsep_[mask_z0]))
-    mask_z1 = (np.asarray(z_) == z_list_[1])
-    res[mask_z1] = (c0_z1
-                    + c1_z1 * np.exp(-deltaE * (tsep_[mask_z1] - ti_[mask_z1]))
-                    + c1_z1 * np.exp(-deltaE * ti_[mask_z1])
-                    + c2_z1 * np.exp(-deltaE * tsep_[mask_z1]))
-    if not np.all(mask_z0 | mask_z1):
-        raise ValueError(f'z 只允许 {z_list_[0]} 或 {z_list_[1]}')
-    return res
+    design = _ratio_fit_design(z_, tsep_, ti_, z_list_)
+    return _ratio_model_from_design(
+        [c0_z0, c1_z0, c2_z0, c0_z1, c1_z1, c2_z1, deltaE], design)
 
 
 def _whitener(c_inv):
@@ -67,7 +138,7 @@ def _whitener(c_inv):
 
 
 def _fit_one(y, z_set, tsep_set, ti_set, z_list, c_inv, par_ini=None,
-             optimizer='least_squares', whitener=None):
+             optimizer='least_squares', whitener=None, design=None):
     """单组数据（均值或单样本）最小二乘拟合。
 
     ``least_squares`` 通过协方差白化直接最小化同一个全协方差 χ²；
@@ -75,15 +146,14 @@ def _fit_one(y, z_set, tsep_set, ti_set, z_list, c_inv, par_ini=None,
     """
     if par_ini is None:
         par_ini = [0.5, -0.2, 0.0, 0.5, -0.2, 0.0, 0.3]
+    if design is None:
+        design = _ratio_fit_design(z_set, tsep_set, ti_set, z_list)
 
     if optimizer == 'nelder-mead':
-        data_num = len(z_set)
+        data_num = len(design['z'])
 
         def cost(par):
-            (c0_z0, c1_z0, c2_z0, c0_z1, c1_z1, c2_z1, deltaE) = par
-            th = R_model(z_set, tsep_set, ti_set, z_list,
-                         c0_z0, c1_z0, c2_z0, c0_z1, c1_z1, c2_z1,
-                         deltaE)
+            th = _ratio_model_from_design(par, design)
             del_r = y - th
             return float(del_r.T @ c_inv @ del_r / data_num)
 
@@ -101,17 +171,21 @@ def _fit_one(y, z_set, tsep_set, ti_set, z_list, c_inv, par_ini=None,
     y = np.asarray(y, dtype=float)
 
     def residual(par):
-        th = R_model(z_set, tsep_set, ti_set, z_list, *par)
+        th = _ratio_model_from_design(par, design)
         return whitener @ (y - th)
+
+    def jacobian(par):
+        return -(whitener @ _ratio_model_jacobian(par, design))
 
     from scipy.optimize import least_squares
     res = least_squares(
-        residual, np.asarray(par_ini, dtype=float), method='trf',
+        residual, np.asarray(par_ini, dtype=float), jac=jacobian, method='trf',
         max_nfev=2000, xtol=1e-10, ftol=1e-10, gtol=1e-10)
     if not res.success or not np.all(np.isfinite(res.x)):
         # 保留旧路径作为极端数据/数值退化时的安全回退。
         return _fit_one(y, z_set, tsep_set, ti_set, z_list, c_inv,
-                        par_ini=par_ini, optimizer='nelder-mead')
+                        par_ini=par_ini, optimizer='nelder-mead',
+                        design=design)
     return res.x
 
 
@@ -129,6 +203,7 @@ def fit_ratio(data_for_fit, resam_type='boot', optimizer='least_squares'):
     """
     (z_set_, tsep_set_, ti_sep_set_, ratio_mean_set_, err_set,
      ratio_samples_fit_, z_list_, _t_sep_list_, _n_remove_) = data_for_fit
+    design = _ratio_fit_design(z_set_, tsep_set_, ti_sep_set_, z_list_)
     c_inv = covariance_matrix_inv(ratio_samples_fit_, resam_type)
     whitener = _whitener(c_inv) if optimizer == 'least_squares' else None
 
@@ -136,17 +211,16 @@ def fit_ratio(data_for_fit, resam_type='boot', optimizer='least_squares'):
     # scipy 等价实现：取两轮初值中 χ² 更优者作为逐样本拟合起点）
     y_mean = np.asarray(ratio_mean_set_, dtype=float)
     par_ini = _fit_one(y_mean, z_set_, tsep_set_, ti_sep_set_, z_list_, c_inv,
-                       optimizer=optimizer, whitener=whitener)
-    del_mean = y_mean - R_model(z_set_, tsep_set_, ti_sep_set_,
-                                z_list_, *par_ini)
+                       optimizer=optimizer, whitener=whitener,
+                       design=design)
+    del_mean = y_mean - _ratio_model_from_design(par_ini, design)
     chi2_best = float(del_mean @ c_inv @ del_mean)
     if chi2_best / len(z_set_) > 2.0:
         alt = _fit_one(y_mean, z_set_, tsep_set_, ti_sep_set_, z_list_,
                        c_inv, par_ini=[0.5, -1.5, 0.0, 0.5, -1.5, 0.0,
                                        1.02788], optimizer=optimizer,
-                       whitener=whitener)
-        del_alt = y_mean - R_model(z_set_, tsep_set_, ti_sep_set_,
-                                   z_list_, *alt)
+                       whitener=whitener, design=design)
+        del_alt = y_mean - _ratio_model_from_design(alt, design)
         if float(del_alt @ c_inv @ del_alt) < chi2_best:
             par_ini = alt
 
@@ -156,7 +230,8 @@ def fit_ratio(data_for_fit, resam_type='boot', optimizer='least_squares'):
         y = ratio_samples_fit_[:, sample_i]
         fits[sample_i] = _fit_one(y, z_set_, tsep_set_, ti_sep_set_,
                                   z_list_, c_inv, par_ini=list(par_ini),
-                                  optimizer=optimizer, whitener=whitener)
+                                  optimizer=optimizer, whitener=whitener,
+                                  design=design)
 
     mean = fits.mean(axis=0)
     err = fits.std(axis=0)
