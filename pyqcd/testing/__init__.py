@@ -671,6 +671,33 @@ def test_ratio_fit_extraction():
     assert abs(res['deltaE'] - 1.2) < 0.1
 
 
+def test_ratio_fit_analytic_jacobian_matches_central_difference():
+    """R 模型的解析雅可比必须匹配中心差分，并覆盖 z=0/1 两支。"""
+    from pyqcd.analysis import R_model
+    from pyqcd.analysis._ratio_fit import _ratio_fit_design, _ratio_model_jacobian
+
+    z_list = [0, 1]
+    z_set = np.array([0, 0, 0, 1, 1, 1])
+    tsep = np.array([8, 10, 12, 8, 10, 12])
+    ti = np.array([1, 3, 5, 1, 3, 5])
+    pars = np.array([0.6, -0.3, 0.1, 0.3, -0.2, 0.05, 1.2], dtype=float)
+
+    design = _ratio_fit_design(z_set, tsep, ti, z_list)
+    jac = _ratio_model_jacobian(pars, design)
+
+    eps = 1e-7
+    fd = np.empty_like(jac)
+    for i in range(pars.size):
+        step = np.zeros_like(pars)
+        step[i] = eps
+        hi = R_model(z_set, tsep, ti, z_list, *(pars + step))
+        lo = R_model(z_set, tsep, ti, z_list, *(pars - step))
+        fd[:, i] = (hi - lo) / (2.0 * eps)
+
+    error = float(np.max(np.abs(jac - fd)))
+    assert error < 1e-8, f"解析雅可比与中心差分不一致: max|d|={error:.3e}"
+
+
 def test_gpu_backend_consistency():
     """GPU(cupy) 后端：flow 结果与 CPU 一致（无 cupy 时跳过）。"""
     try:
