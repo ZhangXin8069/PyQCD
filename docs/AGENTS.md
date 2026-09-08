@@ -1,6 +1,7 @@
 # AGENTS.md — docs
 
-格点 QCD 中文 LaTeX 笔记（51 篇，xelatex 编译；文件名统一为中文）。
+格点 QCD 中文 LaTeX 笔记（51 篇；另有 12 篇分析/报告 TeX，共 63 个，
+均使用 xelatex 编译）。
 
 ## 文件
 
@@ -15,7 +16,8 @@
 | 仓库/工作流 | `PyQCD仓库结构与核心物理链解析.tex`、`理论解析与工作流.tex`、`构造胶子准算符.tex`、`格点上计算胶子准算符.tex` |
 | 分析与专题 | `质子自旋危机解析.tex`、`格点QCD中的胶子极化.tex`、`格点QCD中的部分子分布函数.tex` |
 
-完整清单：`ls docs/*.tex`（51 篇）；`*.aux/*.log/*.out/*.nav/*.snm/*.toc` 为编译产物（gitignore）。
+完整清单：中文笔记 51 篇、分析/报告 TeX 12 篇，共 63 个
+`docs/*.tex`；`*.aux/*.log/*.out/*.nav/*.snm/*.toc` 为编译产物（gitignore）。
 
 ## 编译
 
@@ -38,3 +40,7 @@ cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelate
 - `report_donghx_pyqcd_compare_20260830.tex/.pdf`：简要汇总组态 4150 的已通过 dhx/PyQCD 低层、4D10 HYP-OPE、质子 2pt、正宇称投影与 effmass 聚合对照；表格列出数据路径、物理公式、PyQCD 函数/参数和相对误差（2026-08-30）。
 - `report_donghx_pyqcd_compare_20260830_2.tex/.pdf`：同一对照结果的单一分页巨大表格版；仅保留已测试条目（2026-08-30）。
 - `report_donghx_pyqcd_compare_20260830_2.csv`：对应巨大表格的 UTF-8 CSV；34 条已通过记录，含路径、公式、PyQCD 参数与相对误差（2026-08-30）。
+- `report_gradient_flow_gluonpdf_pyqcd_20260909.tex/.pdf`：donghx
+  Gradient_Flow_GluonPDF 与 PyQCD 的 Wilson flow、Clover/dual、schema-v2
+  OPE、复数 disconnected ratio、一圈 GF-to-quasi 转换的算法审计与修正报告；
+  17 页，Overfull=0、Float too large=0、Missing character=0（2026-09-09）。

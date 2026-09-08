@@ -26,6 +26,11 @@ from ._gradient_flow import (
     wilson_flow, wilson_flow_step, flow_derivative, staple_6,
     wilson_action_density, flow_action_density, scale_setting_t0, proj_su3,
 )
+from ._gradient_flow_quasi import (
+    GEV_FM, FLOW_TO_QUASI_SCHEMA, coefficients,
+    gradient_flow_to_quasi_coefficients, match_one,
+    match_gradient_flow_ope_to_quasi,
+)
 from ._tmd import (
     staple_wilson_line, M_mu_lambda_nu_rho, gluon_tmd_operator,
     tmd_matrix_elements, tmd_matrix_elements_time,
@@ -66,6 +71,9 @@ __all__ = [
     "wilson_flow", "wilson_flow_step", "flow_derivative", "staple_6",
     "wilson_action_density", "flow_action_density", "scale_setting_t0",
     "proj_su3",
+    "GEV_FM", "FLOW_TO_QUASI_SCHEMA", "coefficients",
+    "gradient_flow_to_quasi_coefficients", "match_one",
+    "match_gradient_flow_ope_to_quasi",
     # TMD
     "staple_wilson_line", "M_mu_lambda_nu_rho", "gluon_tmd_operator",
     "tmd_matrix_elements", "tmd_matrix_elements_time",

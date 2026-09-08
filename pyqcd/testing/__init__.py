@@ -2394,6 +2394,13 @@ def test_flow_action_density_weak_field_normalization():
     _run_unittest_contract(FlowActionDensityNormalizationTest)
 
 
+def test_gradient_flow_gluon_reference_contracts():
+    """donghx schema-v2 直线 OPE 与复数 disconnected ratio 契约。"""
+    from ._gradient_flow_gluon_contract import GradientFlowGluonContract
+
+    _run_unittest_contract(GradientFlowGluonContract)
+
+
 def test_gauge_observables_contracts():
     """Wilson/Polyakov/Clover/拓扑量的路径、SU(3) 与后端契约。"""
     from ._gauge_observables_contract import GaugeObservablesContract
