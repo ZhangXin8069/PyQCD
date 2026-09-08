@@ -8,6 +8,7 @@ from ._config import (
     PJN_SINK, PJN_CURR, PJN_SRC,
 )
 from ._runner import make_run_dir, step_env, step_tmd, run_pipeline
+from ._gradient_flow_gluon import run_gradient_flow_gluon_ope
 from ._validate import (
     progress_log, ProgressLog, check_raw_data, check_input_arrays,
     check_files_existence,
@@ -22,6 +23,7 @@ __all__ = [
     "NEUTRON_SINK", "NEUTRON_SRC", "PP_SINK", "PP_SRC", "PN_SINK", "PN_SRC",
     "PJN_SINK", "PJN_CURR", "PJN_SRC",
     "make_run_dir", "step_env", "step_tmd", "run_pipeline",
+    "run_gradient_flow_gluon_ope",
     "progress_log", "ProgressLog", "check_raw_data", "check_input_arrays",
 ]
 
