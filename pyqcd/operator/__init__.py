@@ -14,6 +14,19 @@ from ._gluon_ope import (
 from ._helicity import (
     plaquette_dual_stack, helicity_two_field_operator,
 )
+from ._gradient_flow_gluon_ope import (
+    OPE_SCHEMA as GRADIENT_FLOW_OPE_SCHEMA,
+    OPE_STATUS as GRADIENT_FLOW_OPE_STATUS,
+    FIELD_PROJECTIONS as GRADIENT_FLOW_FIELD_PROJECTIONS,
+    CHANNELS as GRADIENT_FLOW_CHANNELS,
+    ORIENTATIONS as GRADIENT_FLOW_ORIENTATIONS,
+    COMPONENTS as GRADIENT_FLOW_COMPONENTS,
+    OPE_AXES as GRADIENT_FLOW_OPE_AXES,
+    flowed_gluon_ope, gradient_flow_gluon_ope,
+    validate_gradient_flow_gluon_ope,
+    select_gradient_flow_gluon_component,
+    save_gradient_flow_gluon_ope, load_gradient_flow_gluon_ope,
+)
 
 __all__ = [
     "FieldStrengthCache", "OPEChannelSpec", "plaquette_clover",
@@ -22,6 +35,13 @@ __all__ = [
     "gluon_ff_operator_z0", "get_ope_lorentz_pairs", "staple_operator",
     "read_gauge_lime", "resolve_ildg_binary_record",
     "plaquette_dual_stack", "helicity_two_field_operator",
+    "GRADIENT_FLOW_OPE_SCHEMA", "GRADIENT_FLOW_OPE_STATUS",
+    "GRADIENT_FLOW_FIELD_PROJECTIONS", "GRADIENT_FLOW_CHANNELS",
+    "GRADIENT_FLOW_ORIENTATIONS", "GRADIENT_FLOW_COMPONENTS",
+    "GRADIENT_FLOW_OPE_AXES", "flowed_gluon_ope",
+    "gradient_flow_gluon_ope", "validate_gradient_flow_gluon_ope",
+    "select_gradient_flow_gluon_component",
+    "save_gradient_flow_gluon_ope", "load_gradient_flow_gluon_ope",
 ]
 
 Namespace.__module__ = "pyqcd.operator"

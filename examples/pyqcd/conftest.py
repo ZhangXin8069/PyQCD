@@ -16,6 +16,7 @@ from pyqcd.testing import (  # noqa: F401
     test_gauge_observables_contracts,
     test_flow_action_density_is_gauge_invariant_and_nonnegative,
     test_flow_action_density_weak_field_normalization,
+    test_gradient_flow_gluon_reference_contracts,
     test_tmd_operator_runs,
     test_tmd_staple_matches_explicit_three_segment_path,
     test_tmd_staple_is_gauge_covariant,
