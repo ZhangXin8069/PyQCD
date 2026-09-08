@@ -523,6 +523,13 @@ def test_tmd_extraction_chain():
         1.0, mu=2.0, t_gev_m2=0.1)))
 
 
+def test_tmd_soft_factor_ze_contracts():
+    """Z_E / sqrt(Z_E) / rapidity subtraction / SDR 公共契约。"""
+    from ._tmd_soft_factor_ze_contract import TmdSoftFactorZeContract
+
+    _run_unittest_contract(TmdSoftFactorZeContract)
+
+
 def test_tmd_matching_nlo():
     """TMD 混合方案 1 圈匹配：Z⁻¹ 还原输入、快度/软因子生效、形状正确。"""
     from pyqcd.renorm import tmd_matching_hybrid
@@ -994,6 +1001,134 @@ def test_hB_dataset_loader():
     chi2 = cost_function_all([2.0, 0.5, 0.1, 0.0, 0.25] + [0.05] * 14
                              + [0.0, 0.0], dsets, 2.0)
     assert np.isfinite(chi2) and chi2 > 0
+
+
+def _zr_dataset_contract_fixture():
+    """ZR 新旧输入契约共用的小型合成夹具。"""
+    from pyqcd.renorm import (
+        ZRDataset, build_hB_dataset, make_zr_dataset, prepare_zr_dataset,
+    )
+
+    rng = np.random.default_rng(13)
+    mu_ = 2.0
+    z_fm = np.arange(20) * 0.1053
+    par_true = np.array([0.30, 0.20, 1.0, 0.05, 0.28]
+                        + [0.02 * (i + 1) for i in range(14)] + [0.0, 0.0])
+
+    dsets = []
+    prepared = []
+    for tau, a_fm, seed in ((0.35, 0.105, 11), (0.45, 0.085, 12)):
+        ns = 50
+        c0 = np.exp(-z_fm[:, None] / tau) \
+            * (1 + 0.01 * rng.standard_normal((20, ns)))
+        ds = build_hB_dataset(c0, z_fm)
+        a = a_fm / 0.1973
+        samples = ds['loghB'][:, :4]
+        old = make_zr_dataset(samples, ds['z'], a, kind='diag',
+                              n_rep=24, seed=seed)
+        new = prepare_zr_dataset(samples, ds['z'], a, kind='diag',
+                                 n_rep=24, seed=seed)
+        assert isinstance(new, ZRDataset)
+        np.testing.assert_allclose(new.loghB, old['loghB'])
+        np.testing.assert_allclose(new.c_inv, old['c_inv'])
+        assert new.n_sample == 4 and new.n_point == len(ds['z'])
+        assert new.sample_view(0).loghB.shape == new.loghB.shape
+        dsets.append(old)
+        prepared.append(new)
+
+    return par_true, mu_, dsets, prepared
+
+
+def _fake_zr_minimize(fun, x0, method=None, options=None):  # noqa: ARG001
+    from types import SimpleNamespace
+
+    x0 = np.asarray(x0, dtype=float)
+    value = fun(x0)
+    assert np.isfinite(value)
+    return SimpleNamespace(
+        x=x0, fun=value, success=True, status=0, nfev=1, nit=1,
+        message="fake scipy.optimize.minimize")
+
+
+def test_zr_dataset_object_api():
+    """ZRDataset：一次性缓存均值/协方差，并保持旧 dict 语义兼容。"""
+    from unittest.mock import patch
+
+    from pyqcd.renorm import (
+        ZRDataset, cost_function_all, fit_ZR_samples, prepare_zr_dataset,
+        prepare_zr_datasets, summarize_ZR_samples,
+    )
+    from pyqcd.renorm import fit_ZR
+
+    par_true, mu_, dsets, prepared = _zr_dataset_contract_fixture()
+
+    # 字段齐全性 + round-trip。
+    assert set(ZRDataset.__dataclass_fields__) == {
+        'z', 'loghB', 'c_inv', 'a', 'loghB_samples', 'cov', 'kind'}
+    assert set(prepared[0].as_dict()) == {'z', 'loghB', 'c_inv', 'a'}
+    assert set(prepared[0].as_dict(include_cache=True)) == {
+        'z', 'loghB', 'c_inv', 'a', 'loghB_samples', 'cov', 'kind'}
+    assert prepare_zr_dataset(prepared[0]) is prepared[0]
+    cached = prepared[0].as_dict(include_cache=True)
+    rt = prepare_zr_dataset(cached)
+    np.testing.assert_allclose(rt.as_dict(include_cache=True)['loghB'],
+                               cached['loghB'])
+    np.testing.assert_allclose(rt.as_dict(include_cache=True)['c_inv'],
+                               cached['c_inv'])
+    np.testing.assert_allclose(rt.as_dict(include_cache=True)['loghB_samples'],
+                               cached['loghB_samples'])
+    np.testing.assert_allclose(rt.as_dict(include_cache=True)['cov'],
+                               cached['cov'])
+    assert rt.kind == prepared[0].kind
+
+    mixed = prepare_zr_datasets([dsets[0], prepared[1]])
+    assert all(isinstance(ds, ZRDataset) for ds in mixed)
+    assert mixed[1] is prepared[1]
+    assert prepare_zr_datasets(prepared)[0] is prepared[0]
+
+    par_test = [0.30, 0.20, 1.0, 0.05, 0.28] + [0.02 * (i + 1) for i in range(14)] + [0.0, 0.0]
+    chi2_dict = cost_function_all(par_test, dsets, mu_)
+    chi2_obj = cost_function_all(par_test, prepared, mu_)
+    assert np.isfinite(chi2_dict) and np.isfinite(chi2_obj)
+    np.testing.assert_allclose(chi2_dict, chi2_obj)
+
+    with np.errstate(all='ignore'), \
+            patch('scipy.optimize.minimize', side_effect=_fake_zr_minimize):
+        fit_dict = fit_ZR(par_test, dsets, mu_, use_iminuit=False)
+        fit_obj = fit_ZR(par_test, prepared, mu_, use_iminuit=False)
+        np.testing.assert_allclose(fit_dict, fit_obj)
+        np.testing.assert_allclose(fit_dict, par_test)
+
+        cached_dsets = [ds.as_dict(include_cache=True) for ds in prepared]
+        rows_dict = fit_ZR_samples(
+            par_true, cached_dsets, mu_, use_iminuit=False)
+        rows_obj = fit_ZR_samples(par_true, prepared, mu_, use_iminuit=False)
+    assert rows_dict == rows_obj
+
+    rows = rows_obj
+    assert len(rows) == 4
+    assert all(row["sample_i"] == i for i, row in enumerate(rows))
+    summ = summarize_ZR_samples(rows)
+    assert "chi2" in summ and np.isfinite(summ["chi2"][0])
+
+
+def test_zr_dataset_object_reuses_prepared_inputs():
+    """已经准备好的 ZRDataset 不应在 fit 路径里被重复准备。"""
+    from unittest.mock import patch
+
+    from pyqcd.renorm import fit_ZR, fit_ZR_samples
+    from pyqcd.renorm import _zr as zr
+
+    par_true, mu_, dsets, prepared = _zr_dataset_contract_fixture()
+
+    with np.errstate(all='ignore'), \
+            patch.object(zr, 'prepare_zr_dataset', wraps=zr.prepare_zr_dataset) \
+            as prepare_spy, \
+            patch('scipy.optimize.minimize', side_effect=_fake_zr_minimize):
+        fit_ZR(par_true, prepared, mu_, use_iminuit=False)
+        fit_ZR_samples(par_true, prepared, mu_, use_iminuit=False)
+
+    assert prepare_spy.call_count == 4
 
 
 def test_hybrid_boot_covariance():

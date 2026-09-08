@@ -13,7 +13,8 @@ from ._ensembles import (
 )
 from ._zr import (
     Z_MS, th_hB, th_ZR, cost_function, cost_function_all, fit_ZR,
-    build_hB_dataset, boot_covariance, make_zr_dataset,
+    ZRDataset, build_hB_dataset, boot_covariance, prepare_zr_dataset,
+    prepare_zr_datasets, make_zr_dataset,
     fit_ZR_samples, summarize_ZR_samples,
 )
 from ._hybrid import (
@@ -30,11 +31,18 @@ from ._tmd import (
     tmd_matrix_elements, tmd_matrix_elements_time,
     gradient_flow_renormalized_tmd,
     self_renormalized_ratio, invariant_amplitude, collins_soper_kernel,
+    scan_staple_length, fit_staple_plateau,
 )
 from ._tmdextract import (
     quasi_tmd_pdf, quasi_pdf_gluon, cs_kernel_from_ratio, cs_kernel_two_momentum,
     soft_function_intrinsic, tmd_matching_hybrid, sftx_gluon_matching_coeff,
     sftx_energy_density_t0, flow_time_gev_m2,
+)
+from ._soft import (
+    Z_E, sqrt_Z_E, rapidity_subtraction,
+    msbar_tmd_reference_matrix_element,
+    short_distance_renormalization_factor, sdr_renormalized_tmd,
+    soft_factor_rectangle, soft_subtraction_factor, soft_subtraction,
 )
 
 __all__ = [
@@ -44,7 +52,8 @@ __all__ = [
     "fm_to_GeV", "a_len_set", "Nl_set", "pion_mass_set", "MPI_PHYSICAL", "pz_to_gev",
     # 自重整化
     "Z_MS", "th_hB", "th_ZR", "cost_function", "cost_function_all", "fit_ZR",
-    "build_hB_dataset", "boot_covariance", "make_zr_dataset",
+    "ZRDataset", "build_hB_dataset", "boot_covariance",
+    "prepare_zr_dataset", "prepare_zr_datasets", "make_zr_dataset",
     "fit_ZR_samples", "summarize_ZR_samples",
     # 混合方案
     "hR_z_Pz", "hR_lambda_fit_form", "fit_hR_lambda", "hR_lambda", "hR_x",
@@ -62,9 +71,15 @@ __all__ = [
     "tmd_matrix_elements", "tmd_matrix_elements_time",
     "gradient_flow_renormalized_tmd",
     "self_renormalized_ratio", "invariant_amplitude", "collins_soper_kernel",
+    "scan_staple_length", "fit_staple_plateau",
     "quasi_tmd_pdf", "quasi_pdf_gluon", "cs_kernel_from_ratio", "soft_function_intrinsic",
     "tmd_matching_hybrid", "sftx_gluon_matching_coeff",
     "sftx_energy_density_t0", "flow_time_gev_m2", "cs_kernel_two_momentum",
+    # 矩形 Wilson 圈软因子 / rapidity subtraction
+    "Z_E", "sqrt_Z_E", "rapidity_subtraction",
+    "msbar_tmd_reference_matrix_element",
+    "short_distance_renormalization_factor", "sdr_renormalized_tmd",
+    "soft_factor_rectangle", "soft_subtraction_factor", "soft_subtraction",
 ]
 
 Namespace.__module__ = "pyqcd.renorm"
