@@ -34,6 +34,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..tools._backend import get_backend
+from ..analysis._ratio_fit import fit_constant_window
 
 
 def _to_cpu(x):
@@ -413,3 +414,237 @@ def collins_soper_kernel(R_b, b_list, z_list, pz_gev):
         gamma[j] = coef[0]
         gamma_err[j] = np.sqrt(np.sum(res ** 2) / max(len(ln_pz) - 2, 1))
     return gamma, gamma_err
+
+
+# ═══════════════════════════════════════════════════════════════════
+# staple 长度扫描与 L→∞ 平台外推
+# ═══════════════════════════════════════════════════════════════════
+
+def _staple_plateau_failure(reason, n_L, n_sample, L_values=None,
+                            window=None):
+    """构造可解释的 staple 平台拟合失败结果。"""
+    L_values = np.asarray([] if L_values is None else L_values)
+    return {
+        'c0': np.nan,
+        'c0_std': np.nan,
+        'chi2': np.nan,
+        'chi2_nocov': np.nan,
+        'c0_samples': np.full(int(max(n_sample, 0)), np.nan, dtype=float),
+        'n_data': int(max(n_L, 0)),
+        'n_sample': int(max(n_sample, 0)),
+        'fit_status': 'statistically_unidentifiable',
+        'fit_reason': str(reason),
+        'sample_rank': 0,
+        'effective_rank': 0,
+        'plateau': np.nan,
+        'plateau_std': np.nan,
+        'plateau_samples': np.full(int(max(n_sample, 0)), np.nan,
+                                   dtype=float),
+        'L_window': np.asarray(L_values, dtype=float),
+        'L_window_bounds': None if window is None else tuple(window),
+        'n_L_window': int(np.asarray(L_values).size),
+    }
+
+
+def _normalize_staple_scan(L_values, values=None, *, measure_fn=None,
+                           measure_args=(), measure_kwargs=None,
+                           axis=0, sort=True):
+    """把 staple 扫描输入规整为 ``(L_values, values)``。"""
+    if measure_kwargs is None:
+        measure_kwargs = {}
+
+    L_arr = np.asarray(L_values)
+    if L_arr.ndim != 1:
+        raise ValueError("L_values 必须是一维数组")
+    if L_arr.size == 0:
+        raise ValueError("L_values 不能为空")
+    if not np.issubdtype(L_arr.dtype, np.number):
+        raise ValueError("L_values 必须是数值数组")
+    if np.iscomplexobj(L_arr):
+        raise ValueError("L_values 不能是复数数组")
+    if not np.isfinite(L_arr).all():
+        raise ValueError("L_values 必须全部有限")
+
+    if measure_fn is not None and values is not None:
+        raise ValueError("measure_fn 与 values 不能同时提供")
+
+    if measure_fn is not None:
+        try:
+            stacked = [measure_fn(L, *measure_args, **measure_kwargs)
+                       for L in L_arr]
+        except Exception as exc:
+            raise ValueError(
+                f"measure_fn 在 staple 扫描中失败: {exc}") from exc
+        try:
+            values_arr = np.stack(stacked, axis=0)
+        except ValueError as exc:
+            raise ValueError(
+                "measure_fn 在不同 L 上返回了不一致的形状") from exc
+    else:
+        if values is None:
+            raise ValueError("values 与 measure_fn 至少需要提供一个")
+        values_arr = np.asarray(values)
+        if values_arr.ndim == 0:
+            if L_arr.size != 1:
+                raise ValueError(
+                    "标量 values 只允许与单个 L_values 配对")
+            values_arr = values_arr.reshape(1)
+        else:
+            if not isinstance(axis, (int, np.integer)):
+                raise ValueError("axis 必须是整数")
+            axis = int(axis)
+            if axis < -values_arr.ndim or axis >= values_arr.ndim:
+                raise ValueError("axis 超出 values 的维度范围")
+            values_arr = np.moveaxis(values_arr, axis, 0)
+
+    if values_arr.shape[0] != L_arr.size:
+        raise ValueError(
+            "values 的 staple 轴长度必须与 L_values 长度一致")
+
+    if sort:
+        order = np.argsort(L_arr, kind='stable')
+        L_arr = L_arr[order]
+        values_arr = values_arr[order]
+        if np.any(np.diff(L_arr) == 0):
+            raise ValueError("L_values 不能含有重复项")
+    elif np.any(np.diff(L_arr) <= 0):
+        raise ValueError("L_values 必须严格递增，或启用 sort=True")
+
+    return L_arr, values_arr
+
+
+def scan_staple_length(L_values, values=None, *, measure_fn=None,
+                       measure_args=(), measure_kwargs=None,
+                       axis=0, sort=True):
+    """规范化或计算 staple 长度扫描数据。
+
+    两种用法：
+        1. 直接传入预计算 ``values``，其中 staple 轴由 ``axis`` 指定；
+        2. 传入 ``measure_fn(L, *measure_args, **measure_kwargs)``，对每个
+           L 自动计算并堆叠扫描结果。
+
+    Args:
+        L_values: 一维 staple 臂长列表。
+        values: 预计算扫描值；若使用 ``measure_fn`` 则应为 ``None``。
+        measure_fn: 可调用对象，逐个 L 评估并返回标量或数组。
+        axis: ``values`` 中对应 L 轴的位置；会被移动到最前面。
+        sort: 是否按 L 升序排序并同步重排 values。
+    Returns:
+        dict:
+            - ``L_values``: 形状 ``(n_L,)``。
+            - ``values``: 形状 ``(n_L, ...)``。
+            - ``n_L``: 扫描点数。
+            - ``value_shape``: 单个 L 上的值形状。
+    """
+    L_arr, values_arr = _normalize_staple_scan(
+        L_values, values, measure_fn=measure_fn,
+        measure_args=measure_args, measure_kwargs=measure_kwargs,
+        axis=axis, sort=sort)
+    return {
+        'L_values': L_arr,
+        'values': values_arr,
+        'n_L': int(L_arr.size),
+        'value_shape': tuple(values_arr.shape[1:]),
+        'sorted': bool(sort),
+    }
+
+
+def fit_staple_plateau(scan_or_values, L_values=None, *, window=None,
+                       kind='boot', seed=0, axis=0, sort=True):
+    """对 staple 长度扫描做常数平台拟合，取 ``L→∞`` 外推值。
+
+    Args:
+        scan_or_values: ``scan_staple_length`` 返回的字典，或原始扫描数组。
+        L_values: 当 ``scan_or_values`` 为数组时提供的一维 L 列表。
+        window: ``(L_min, L_max)`` 的闭区间；``None`` 时使用全扫描。
+        kind: ``'boot'`` 或 ``'jack'``，传给 ``fit_constant_window``。
+        seed: 传给 ``fit_constant_window`` 的随机种子。
+        axis: 数组输入时对应 L 轴的位置。
+        sort: 数组输入时是否按 L 升序排序。
+
+    Returns:
+        与 ``fit_constant_window`` 风格一致的字典，并额外包含：
+            - ``plateau`` / ``plateau_std`` / ``plateau_samples`` 别名；
+            - ``L_window``：参与拟合的 L 值；
+            - ``L_window_bounds``：窗口端点；
+            - ``n_L_window``：窗口内点数。
+    """
+    if kind not in ('boot', 'jack'):
+        raise ValueError("kind 必须是 'boot' 或 'jack'")
+
+    if isinstance(scan_or_values, dict):
+        if L_values is not None:
+            raise ValueError("scan 字典输入时不应再额外提供 L_values")
+        if 'L_values' not in scan_or_values or 'values' not in scan_or_values:
+            raise ValueError("scan 字典必须包含 'L_values' 和 'values'")
+        L_arr = np.asarray(scan_or_values['L_values'])
+        values_arr = np.asarray(scan_or_values['values'])
+    else:
+        if L_values is None:
+            raise ValueError("数组输入时必须提供 L_values")
+        L_arr, values_arr = _normalize_staple_scan(
+            L_values, scan_or_values, axis=axis, sort=sort)
+
+    if values_arr.ndim == 1:
+        values_arr = values_arr[:, None]
+    if values_arr.ndim != 2:
+        raise ValueError(
+            "fit_staple_plateau 仅支持形状 (n_L, n_sample) 的扫描数组")
+    if L_arr.ndim != 1 or L_arr.size != values_arr.shape[0]:
+        raise ValueError("L_values 与 values 的 staple 轴长度不一致")
+    if np.iscomplexobj(L_arr):
+        raise ValueError("L_values 不能是复数数组")
+
+    if not np.isfinite(L_arr).all():
+        raise ValueError("L_values 必须全部有限")
+
+    if window is None:
+        mask = np.ones(L_arr.shape, dtype=bool)
+        window_bounds = None
+    else:
+        if len(window) != 2:
+            raise ValueError("window 必须是 (L_min, L_max) 二元组")
+        lo, hi = window
+        lo = -np.inf if lo is None else float(lo)
+        hi = np.inf if hi is None else float(hi)
+        if not np.isfinite(lo) and lo != -np.inf:
+            raise ValueError("window 下界必须是有限数或 None")
+        if not np.isfinite(hi) and hi != np.inf:
+            raise ValueError("window 上界必须是有限数或 None")
+        if lo > hi:
+            raise ValueError("window 下界不能大于上界")
+        mask = (L_arr >= lo) & (L_arr <= hi)
+        window_bounds = (None if lo == -np.inf else lo,
+                         None if hi == np.inf else hi)
+
+    L_window = L_arr[mask]
+    values_window = values_arr[mask]
+    if np.iscomplexobj(values_window):
+        imag_max = float(np.max(np.abs(np.imag(values_window))))
+        if imag_max > 1e-12:
+            return _staple_plateau_failure(
+                f"staple scan window 包含复数值（最大虚部 {imag_max:.3g}）",
+                L_window.size, values_window.shape[1], L_window, window_bounds)
+        values_window = np.real(values_window)
+    values_window = np.asarray(values_window, dtype=float)
+    if L_window.size < 2:
+        return _staple_plateau_failure(
+            "staple plateau fit 至少需要 2 个 L 点",
+            L_window.size, values_window.shape[1], L_window, window_bounds)
+    if values_window.shape[1] < 2:
+        return _staple_plateau_failure(
+            "staple plateau fit 至少需要 2 个样本",
+            L_window.size, values_window.shape[1], L_window, window_bounds)
+    if not np.isfinite(values_window).all():
+        return _staple_plateau_failure(
+            "staple scan window 包含非有限值",
+            L_window.size, values_window.shape[1], L_window, window_bounds)
+
+    fit = fit_constant_window(values_window, kind=kind, seed=seed)
+    fit['plateau'] = fit['c0']
+    fit['plateau_std'] = fit['c0_std']
+    fit['plateau_samples'] = fit['c0_samples']
+    fit['L_window'] = L_window
+    fit['L_window_bounds'] = window_bounds
+    fit['n_L_window'] = int(L_window.size)
+    return fit
