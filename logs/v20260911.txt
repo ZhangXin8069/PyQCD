@@ -1,0 +1,12 @@
+下面未提到的部分的补充参考为{${HOME}/PyQCD/logs/v2026***.txt};
+本次任务的工作目录为{${HOME}/PyQCD/docs};
+本次任务的工作对象为{工作目录中的{理论解析与工作流-v20260911.tex}}(根据[{${HOME}/PyQCD/docs},{${HOME}/PyQCD/pyqcd},{${HOME}/PyQCD/refer/donghx/Gradient_Flow_GluonPDF}]中所有代码与文档构建的全新的且已验证的版本,验证简报参考本库的git:tag:message);
+本次任务的对照目录为{${HOME}/PyQCD/docs};
+本次任务的对照对象为{对照目录中的{理论解析与工作流.tex}}(过时且未验证的版本);
+本次任务的工作目标为[{充分理解{对照对象}的文档叙事逻辑},{套用上述的理解(需要先优化),继续以{基于梯度流的质子中的胶子TMD-PDF}为主线,编写{理论解析与工作流-v20260911}(根据[{${HOME}/PyQCD/docs},{${HOME}/PyQCD/pyqcd},{${HOME}/PyQCD/refer/donghx/Gradient_Flow_GluonPDF}]中所有代码与文档构建的全新的且已验证的版本,验证简报参考本库的git:tag:message)}];
+本次任务的默认数据读写目录为{${HOME}/PyQCD/data};
+本次任务的任务量较大,但不允许省略任务内容;
+本次任务的性质为[理解,编写文档(核心)],非必要不改动无关文件;
+本次任务的权限较高,所有改动在git-commit后自动提交到git远程,包括最终的git-tag,并确保其中标注的{message}的信息详实且格式规范;
+如果在本次任务中发现{工作对象}中存在其他的必要的[debug项,优化项,补充项],可以自行改动本库代码;
+上述任务全部完成后~diff~init~tag:stab;
