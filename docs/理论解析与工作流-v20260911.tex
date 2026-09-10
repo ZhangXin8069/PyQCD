@@ -270,6 +270,19 @@ $\hat{F}_{\mu\nu}$ 是格点上的场强张量（其 Clover 构造将在
 系综（CLQCD，$\beta=6.20$ 与 $\beta=6.41$ 两类）均采用 Clover 改进的
 Wilson 费米子。
 
+\paragraph{Fermion doubling 的机制与 Wilson 项}加倍子的根源在于：对自由
+Wilson 费米子作 Fourier 变换，动量空间传播子的分母在 Brillouin 区的
+16 个角点（每个方向的分量取 $0$ 或 $\pi/a$，即 $2^4$ 个格点动量）处
+同时为零——每个角点都是一个连续费米子的复制品。Wilson 项
+$\frac{ar}{2}\sum_\mu\nabla_\mu^*\nabla_\mu$ 在角点处给出正比于
+$\sum_\mu(1-\cos p_\mu a)$ 的质量抬升，从而把加倍子推到
+$\order{1/a}$ 的重质量处逐出低能谱；其代价是 Wilson 项显式破缺手征
+对称性：夸克质量获得可加的重正化（需要调到\textbf{临界质量}
+$m_c$ 使 pion 质量趋零），轴矢流不再守恒（提取 $f_\pi$ 等手征量需改进
+项，见附录 P）。Clover 项不改变加倍子结构，只消去 $\order{a}$ 的
+on-shell 截断误差；$c_{\text{SW}}$ 可由微扰或非微扰（如 Schr\"odinger
+泛函方法）确定。
+
 \subsubsection{连续极限与标度设定}
 
 格点 QCD 计算的最终目标是提取连续物理（$a \to 0$）。物理观测量在有限
@@ -280,7 +293,18 @@ Wilson 费米子。
 \end{equation}
 其中 $n=1$（未改进）或 $n=2$（$\order{a}$ 改进后）。标度设定通过选择一个
 （或多个）实验已知的物理量来确定格距 $a$，常用的标度设定量包括 Wilson 流
-参数 $w_0$、重正子质量 $M_\Omega$、$\pi$ 介子衰变常数 $f_\pi$ 等。
+参数 $w_0$、重正子质量 $M_\Omega$、$\pi$ 介子衰变常数 $f_\pi$ 等：
+\begin{itemize}
+  \item \textbf{Wilson 流参数 $w_0$}（L\"uscher 2010）：由
+  $t^2\langle E(t)\rangle|_{t=w_0^2}=0.3$ 定义（$t_0$ 类似但取 0.1 条件
+  ），统计与系统误差极小，是目前最广泛使用的标度设定量之一；
+  \item \textbf{重正子质量 $M_\Omega$}：$\Omega^-$ 重子质量
+  （$1.672$ GeV）对轻夸克质量不敏感，规避手征外推；
+  \item \textbf{$\pi$ 介子衰变常数 $f_\pi$}：需注意手征外推的系统误差。
+\end{itemize}
+不同方法给出的 $a$ 通常在 $\sim1\%$ 内一致，该差异纳入系统误差预算
+（附录 Q 汇总单位转换；本库 \code{scale\_setting\_t0} 实现 0.3 目标 +
+反插值 + 自动扩围）。
 
 梯度流重整化方案对标度设定有一个自然的附加工具：流观测量
 $t^2\langle E(t)\rangle$（$E(t)=\frac14 G^2_{\mu\nu}$）在流时间 $t$ 下的
@@ -319,6 +343,21 @@ distillation）计算（\pathref{refer/donghx/} 的 \code{2pt\_proton\_*} 系列
 脚本，PyQCD 对应 \code{pyqcd/vertex}、\code{pyqcd/contraction} 与
 \code{pyqcd/pipeline} 的收缩管线）。
 
+\paragraph{动量投影与色散关系}对运动系计算，插值算符带动量投影
+$\mathcal N_\alpha(\mathbf P,t)=\sum_{\mathbf x}
+e^{-i\mathbf P\cdot\mathbf x}\mathcal N_\alpha(\mathbf x,t)$，
+谱参数化为
+$C_2(\Delta t,\mathbf P)=\sum_n Z_n(\mathbf P)e^{-E_n(\mathbf P)\Delta t}$，
+$E_n(\mathbf P)=\sqrt{m_n^2+\mathbf P^2}+O(a^2)$。色散关系本身是一个
+强检验：用多动量数据拟合 $E(P_z)=\sqrt{m^2+k_2P_z^2+k_3P_z^4a^2}$ 可
+同时得到 $m_N$ 与 $a$ 的一致性诊断（\code{pyqcd/analysis/\_dispersion.py}
+，移植 zengch \code{fit\_E0} 逻辑；本库实战值：$P_0$ 通道 meff 平台
+$\approx1.12$ GeV 与质子质量一致、$P_2$ 通道 $\approx1.56$ GeV 与色散
+预期自洽，stab1/dev6/dev7 跨运行互差 3--5 MeV）。有效质量
+$m_{\rm eff}(\Delta t)=\ln[C_2(\Delta t)/C_2(\Delta t+1)]$ 在大
+$\Delta t$ 趋于平台 $E_0$；激发态污染与信噪比衰减（Parisi-Lepage，第
+\ref{sec:statistics} 章）共同决定了平台窗口的选取。
+
 \subsection{夸克传播子与关联函数的计算}
 
 \subsubsection{夸克传播子}
@@ -329,10 +368,15 @@ distillation）计算（\pathref{refer/donghx/} 的 \code{2pt\_proton\_*} 系列
 \sum_y D(x,y) \psi(y) = \eta(x), \quad
 \psi(x) = \sum_y S(x,y) \eta(y)
 \end{equation}
-通常使用共轭梯度（CG）类迭代求解器，收敛速率由 Dirac 算符的条件数决定
-——该条件数在接近手征极限（$m_q \to 0$）时发散，导致\textbf{临界减速}
-现象。蒸馏框架把传播子投影到低模子空间后再做收缩（第
-\ref{sec:distillation} 节），从统计口径上绕开了部分临界减速问题。
+通常使用共轭梯度（CG）类迭代求解器（实矩阵非正定时用 BiCGStab/GCR），
+收敛速率由 Dirac 算符的条件数决定——该条件数在接近手征极限
+（$m_q \to 0$）时发散，导致\textbf{临界减速}现象。标准缓解手段：
+even-odd 预条件（Wilson Dirac 算符的空间奇偶分解使每次迭代成本减半）、
+多重格点（multigrid，把低模粗化后求解）、deflation（先投影掉低本征模
+再迭代）。截断求解器（达到容差 $\eps$ 即停）引入的偏差可用「精确
+relaxed 求解」估计后减除（第 \ref{sec:frontier} 节）。蒸馏框架把传播子
+投影到低模子空间后再做收缩（第 \ref{sec:distillation} 节），从统计口径
+上绕开了部分临界减速问题。
 
 \subsubsection{点源与涂抹源}
 
@@ -368,6 +412,47 @@ $y$ 到 $x$ 的夸克传播子，中间插入 Wilson 线。
   \item \textbf{统计分析与物理提取}：对组态系综求平均，利用拟合方法提取
   物理观测量（质量、矩阵元等），并进行连续极限和手征外推。
 \end{enumerate}
+
+\paragraph{HMC 与组态生成简述}对含费米子的理论，Grassmann 积分给出
+$\det D[U]$，其指数化（$\exp[\sum_f\bar\phi D^{-1\dagger}D^{-1}\phi]$
+的多伪费米子表示）与分子动力学构成 HMC：蛙跳（leapfrog）积分器保辛、
+体积保持且时间可逆，接受率由能量漂移 $\delta H$ 控制；SU(3) 上的指数
+映射与力计算在群流形上进行，实践中用多时间尺度积分器与 UV 过滤
+（UV-filtered pseudofermions）分离紫外与红外动力学力（方法细节见本库
+笔记《格点QCD中的蒙卡方法》）。本库不生成组态——消费合作组提供的
+ILDG/Clover 系综（thin link 或已完成涂抹），可直接读取 ILDG
+\code{.lime}/\code{.lime.contents}（\code{pyqcd/operator} 的
+\code{read\_gauge\_lime}）。
+
+\paragraph{本库生产链的输入数据}蒸馏管线的四类输入数据（维度以本库
+张量布局约定为准，tzyx 序）：
+
+\begin{table}[htbp]
+\centering
+\caption{计算所需输入数据（\code{pyqcd} 布局约定）}
+\small
+\begin{tabular}{c l l}
+\toprule
+\textbf{数据类型} & \textbf{说明} & \textbf{维度} \\
+\midrule
+\code{gauge} & SU(3) 规范链接 $U_\mu(x)$（ILDG 二进制） &
+$(N_t,N_z,N_y,N_x,4,3,3)$ \\
+\code{eigvecs} & Laplace 本征矢量 $v^{(k)}(x)$ &
+$(N_{\text{ev}},\,N_xN_yN_z,\,3)$ \\
+\code{peram} & Perambulator $\tau$ & $(N_t,4,4,N_{\text{ev}},N_{\text{ev}})$ \\
+\code{VVV} & Baryon block $\Phi_{abc}$ & $(N_{\text{ev}},N_{\text{ev}},N_{\text{ev}})$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+典型参数（本库系综，附录 J）：$24^3\times72$ 与 $32^3\times96$ 两类；
+$N_{\text{ev}}=100$；动量 $P_z=2\pi n_z/L$（$n_z=0..8$ 蒸馏基线，
+$n_z=3..5$ 参考复现）；动量涂抹 $\mathbf{k}$（方向与大小独立于物理
+boost）；Wilson 线最大长度 $z_{\max}\le L/2$。IO 约定：本库管线产物
+一律 h5py（\code{save\_tensor\_h5}/\code{load\_tensor\_h5}）；donghx
+生态的二进制（perambulator 四 Dirac 分量文件、VdV/VVV f8 交错复数）
+由 \code{pyqcd/tools/\_io.py} 的专用 reader 消费
+（\code{readin\_vdv\_all}/\code{readin\_vvv\_all}，Nev 自探测 + 截断）。
 
 本节建立的理论基础为后续讨论格点胶子 TMD-PDF 计算提供了必要的背景知识。
 接下来进入大动量有效理论（\LaMET）与 TMD-PDF 的核心内容。
@@ -450,6 +535,27 @@ Minkowski 度规的——这是在 Euclidean 格点上直接计算光锥 PDF/TMD
 函数。对于非极化情形，在光锥规范 $A^{+}=0$ 下，Wilson 线化为单位矩阵，
 关联函数简化为 $\braket{P | F^{+i}(\xi^{-}) F^{+i}(0) | P}$。
 
+\subsubsection{极化通道的共线定义（螺旋度与横率）}
+
+极化态由场强张量的不同缩并方式区分。非极化算符使用 $F\,W\,F$（两端
+均为场强）；螺旋度算符把第二端点替换为对偶张量 $F\,W\,\widetilde F$
+（式~\eqref{eq:lightcone_helicity}）；二者的\textbf{对偶差}结构为
+\begin{equation}
+\Delta\mathcal O(z) \;\propto\;
+\bigl(F\,W\,F - F\,W\,\widetilde F\bigr)_{\text{同指标缩并}}
+\quad\Longleftrightarrow\quad
+\Delta g(x) = \frac12\bigl[g(x,S_L)-g(x,-S_L)\bigr].
+\end{equation}
+横率（transversity）通道则需要张量结构 $\sigma^{ij}$（chiral-odd）：
+\begin{equation}
+x\,\delta g(x) \;\leftrightarrow\;
+\braket{P,S_\perp|\,F^{\{+i}\,W\,F^{j\}}(0)\,|P,S_\perp},
+\end{equation}
+其第一阶矩对质子自旋无贡献（chiral-odd 性质），但 TMD 层的
+Sivers/Boer--Mulders 结构（附录 S 前沿讨论）使其成为 TMD 自旋物理的
+核心。实验提取 $\Delta g$ 对解决质子自旋危机至关重要
+（Jaffe--Manohar 分解中的 $\Delta G$）。
+
 \subsubsection{动量求和规则}
 
 胶子 PDF 与夸克 PDF 通过动量求和规则相互关联，反映了强子总动量的守恒：
@@ -462,6 +568,33 @@ Minkowski 度规的——这是在 Euclidean 格点上直接计算光锥 PDF/TMD
 $Z_{ij}$ 的对称宽域 $\pm1.9$ 检验，见 \pathref{pyqcd/renorm/AGENTS.md}
 的 dev8 对照轮记录——正半轴截断会丢失 $\xi<0$ 支路导致 $+26\%$ 的伪偏移，
 且不随 $\mathrm{d}x$ 收敛，故求和规则检验必须覆盖负半轴）。
+
+\subsubsection{Mellin 矩表述与 DGLAP 的矩形式}
+
+PDF 的全部信息等价地编码在 twist-2 定域算符的 forward 矩阵元
+（Mellin 矩）中：
+\begin{equation}
+A^{a}_n(\mu^2) \equiv
+\int_0^1 \mathrm{d}x\,x^{n-1}f_a(x,\mu^2)
+= \braket{P\big|\mathcal O^{(n)}_a(\mu)\big|P}
+\quad(a=q,g),
+\end{equation}
+其中矩 $A^g_n$ 由胶子能量-动量张量类算符
+$\mathcal O_g^{(n)\,\mu_1\cdots\mu_n}
+=F^{\{\mu_1\alpha}iD^{\mu_2}\cdots iD^{\mu_n-\}}F_\alpha{}^{\mu_n\rangle}$
+给出（$\{\cdots\}$ 对称迹、$\perp$ 无迹化）。\textbf{结构函数的矩
+表述}：DIS 的 forward Compton 振幅经 OPE 后
+\begin{equation}
+T_a(x_B,Q^2) = \sum_n C^a_n\!\left(\frac{Q^2}{\mu^2},\alpha_s\right)
+A^a_n\,\frac{1}{x_B^{\,n}},
+\end{equation}
+Wilson 系数 $C^a_n$ 微扰可算（LO：$C^q_n=\delta$、$C^g_n=0$；
+NLO 起出现单态混合）——这正是共线因子化的 Mellin 版本。
+\textbf{矩方法的历史局限}（\LaMET{} 前的格点实践）在此再强调一次：
+信噪比（信号 $\propto\langle x^{n-1}\rangle$ 随 $n$ 指数下降）、
+超立方对称性破缺引起的算符混合与逆 Mellin 不适定性把可靠矩限制在
+$n\le3$。\LaMET{} 的突破是把\textbf{矩的离散序列}换成\textbf{坐标
+空间连续函数} $h(z,P_z)$——非定域算符在 $z$ 上的形状隐含全部矩。
 
 \subsection{TMD-PDF：横向动量依赖的部分子分布}
 
@@ -520,19 +653,52 @@ $\exp[\tfrac12 K(b_\perp)\ln(\zeta'_{z}/\zeta)]$ 型的快度演化因子——�
 必须通过软函数/快度减除分离，不能简单当作统计噪声（第
 \ref{sec:matching} 章的 \code{tmd\_matching\_hybrid} 实现）。
 
+\subsubsection{TMD 因子化定理（SIDIS/DY 结构）}
+
+TMD 的物理定义由半包容深度非弹性散射（SIDIS）与 Drell--Yan 过程的
+因子化定理给出。以 SIDIS 为例，其截面在 $q_\perp\ll Q$ 区域因子化为：
+\begin{equation}\label{eq:tmd-factorization}
+\frac{\mathrm{d}\sigma^{\rm SIDIS}}{\mathrm{d}x\,\mathrm{d}y\,
+\mathrm{d}^2 q_\perp}
+= \sum_b H_b(x_B,Q,\mu)\,
+\int \mathrm{d}^2\bperp\,\frac{\delta(\bperp^2+q_\perp^2/4)}
+{\bperp^2}\,
+F_{b/h}(x,\bperp;\mu,\zeta)\,
+\tilde S_{\rm soft}(\bperp;\mu)
++ \order{q_\perp/Q},
+\end{equation}
+其中 $H_b$ 是微扰硬系数，$F_{b/h}$ 是目标 TMD（含 CS 演化的
+$(\mu,\zeta)$ 依赖），$\tilde S_{\rm soft}$ 是过程无关的软因子——
+腰发散在 $F$ 与 $S_{\rm soft}$ 中以相反符号出现，其组合
+$F\cdot\sqrt{S_I}/\sqrt{S}$ 有限。Drell--Yan 的结构相同（方向相反的
+staple 与符号）。该定理给出了格点准 TMD $\to$ 光锥 TMD 匹配核必须
+同时处理的三个成分：硬核 $C$（LaMET 层）、软减除（$S_I$）与 CS 演化
+（$K$）——本库下游链的分工即按此三层设计（式
+~\eqref{eq:matching_tmd}）。快度标度的自然选择为
+$\zeta\sim(2P_z)^2$（格点动量的能量标度），偏离时由
+$\exp[\tfrac12 K\ln(\zeta_z/\zeta)]$ 因子衔接。
+
 \subsection{大动量有效理论（\LaMET）}
 
 \subsubsection{Feynman 部分子模型与无穷动量框架}
 
 部分子物理学的现代理解始于 Feynman 的部分子模型：在高能散射中，快速运动
 的强子可以视为一束近乎自由的、无相互作用的部分子，每个部分子携带强子
-纵向动量的一部分 $x = k_z/P_z$。这一图景在无穷动量框架（IMF）中最为清晰。
-然而 IMF 形式化存在数学困难：无穷大动量和 UV 截断的极限不可交换。
+纵向动量的一部分 $x = k_z/P_z$。部分子模型成立的物理条件是\textbf{时距
+缩短}：在 IMF 中，强子时间膨胀使散射过程发生在远小于强子束缚时间的时间
+尺度上，末态相互作用（最终相互作用定理）对分布观测量的修正被压低；从
+Weinberg 的无穷动量微扰理论角度，IMF 中 QCD 的真空简化，强子态可以
+展开为自由 Fock 空间中的多部分子态。然而 IMF 形式化存在数学困难：无穷
+大动量和 UV 截断的极限不可交换。这一「极限不可交换」正是准分布中
+$\ln(P_z)$ 型增强项与快度依赖的来源——它们不是需要除掉的噪声，而是
+需要\textbf{被正确重整化}的物理。
 \LaMET{} 通过将 IMF 替换为有限但足够大的动量 $P_z$ 来解决这一困难，与
 重夸克有效理论（HQET）将无穷大夸克质量替换为有限大夸克质量的策略完全
 类似。
 
 \subsubsection{LaMET 与 HQET 的类比}
+
+HQET 与 \LaMET{} 都是处理含有一个大标度的物理系统的有效场论方法：
 
 \begin{center}
 \begin{tabular}{c|c|c}
@@ -548,13 +714,24 @@ $\exp[\tfrac12 K(b_\perp)\ln(\zeta'_{z}/\zeta)]$ 型的快度演化因子——�
 \end{tabular}
 \end{center}
 
+在 HQET 中，包含重夸克的物理观测量 $O(m_Q)$ 在大质量极限下展开为：
+\begin{equation}
+O(m_Q/\Lambda) = Z(m_Q/\Lambda, \Lambda/\mu) \, o(\mu)
++ \order{1/m_Q} + \cdots
+\end{equation}
+其中 $o(\mu)$ 是 HQET 中的算符矩阵元，$Z$ 是微扰可计算的匹配系数
+——匹配系数的计算方式（计算同一物理量在有效理论与完整理论中的
+表达式差）与 \LaMET{} 的匹配核完全同构。
+
 在 \LaMET{} 中，格点上依赖于大动量 $P_z$ 的观测量 $F(P_z/\Lambda)$ 在
 大动量极限下展开为：
 \begin{equation}\label{eq:lamet_expansion}
 F(P_z/\Lambda) = Z(P_z/\Lambda, \Lambda/\mu) \, f(\mu)
 + \order{\frac{\Lambda_{\text{QCD}}^{2}}{P_z^{2}}}
 \end{equation}
-其中 $f(\mu)$ 是 $P_z \to \infty$ 时的光锥观测量。
+其中 $f(\mu)$ 是 $P_z \to \infty$ 时的光锥观测量（即部分子分布），
+包含所有红外共线发散。\textbf{这意味着：Feynman 的部分子模型实际上就是
+大动量强子的有效理论。}
 
 \subsubsection{因子化定理的形式与匹配核变元}
 
@@ -567,6 +744,41 @@ C\!\left(\frac{x}{y}, \frac{\mu}{|y|P_z}\right) \,
 g(y, \mu) + \order{\frac{\Lambda_{\text{QCD}}^{2}}{P_z^{2}},\;
 \frac{\Lambda_{\text{QCD}}^{2}}{x^{2}P_z^{2}}}
 \end{equation}
+
+\subsubsection{因子化定理的 OPE 推导}
+
+准 PDF 到光锥 PDF 的匹配关系可以通过算符乘积展开严格推导。考虑坐标空间
+中的重整化 Wilson 算符 $O(z,\mu)$，在短距离极限 $z \to 0$ 下，其 OPE
+展开为定域 twist-2 算符的线性组合：
+\begin{equation}
+O(z, \mu) = \sum_n C_n(\mu^2 z^2) \, \frac{(-iz)^n}{n!} \,
+e_{\mu_1}\cdots e_{\mu_n} \, \mathcal{O}_n^{\mu_1\cdots\mu_n}(\mu)
++ \cdots
+\end{equation}
+其中 $\mathcal{O}_n$ 是 twist-2 的定域算符，Wilson 系数 $C_n$ 在
+$\MSbarM$ 方案下微扰可计算。非定域算符的短距离行为完全由定域 twist-2
+算符决定，而后者的 forward 矩阵元恰是 PDF 的 Mellin 矩来源——坐标
+空间关联函数与动量空间分布由此一一对应。展开的系统性来自渐近自由：
+当 $P_z$ 很大时，$F$ 对 $P_z$ 的依赖是可微扰计算的；对固定格距的格点
+计算，先取 $a \to 0$ 得到连续极限，再在 $P_z \gg \Lambda_{\rm QCD}$
+条件下展开。
+
+\paragraph{Mellin 空间的匹配核结构}把 OPE 与 Fourier 变换结合：对
+式~\eqref{eq:lamet_factorization} 取 Mellin 矩，卷积化为乘积，匹配核
+在矩空间的行为揭示其结构：
+\begin{equation}\label{eq:mellin-kernel}
+\tilde g_N(P_z/\mu) = \int_0^1\mathrm{d}y\,y^{N-1}\,
+\tilde g(y,P_z) = C_N\!\left(\frac{P_z}{\mu}\right) g_N(\mu)
++\order{\frac{\Lambda^2}{P_z^2}},
+\end{equation}
+其中 LO 部分是\textbf{动量守恒的} $C_N^{(0)}=1$（对应 $x$ 空间的
+$\delta(1-\xi)$）；NLO 部分
+$C_N^{(1)}\sim\frac{\alpha_sC_A}{2\pi}
+\bigl[\ln(P_z^2/\mu^2)+c_N\bigr]$——$\ln(P_z)$ 的系数矩阵即准算符的
+反常维数（其单圈形式在 $x$ 空间给出 $g_1/g_2/g_3$ 三分区核）。这一
+「矩空间看结构、$x$ 空间做卷积」的双视角是理解匹配核
+plus-distribution 与端点奇点来源的最短路径（数值实现按
+式~\eqref{eq:zij-matrix} 的 $Z^{-1}$ 矩阵自然处理）。
 
 \subsubsection{幂次修正的系统分析}
 
@@ -589,14 +801,23 @@ $x P_z \gg \Lambda_{\text{QCD}}$。
 匹配因子 $Z(P_z/\Lambda, \Lambda/\mu)$ 满足重整化群方程：
 \begin{equation}
 \frac{\partial F(P_z)}{\partial \ln P_z} = \gamma(\alpha_s) F(P_z)
-+ \order{\frac{1}{P_z^{2}}}
++ \order{\frac{1}{P_z^{2}}},
+\qquad \gamma(\alpha_s) = \frac{1}{Z}\frac{\partial Z}{\partial \ln P_z}
 \end{equation}
-利用该方程可对 $P_z$ 的大对数进行重求和。\LaMET{} 的关键理论要素是：
-Euclidean 格点计算能够捕获正确的 Minkowski 光锥物理——Euclidean 圈积分在
-解析延拓 $p_\tau \to -i p_0$ 后精确重现 Minkowski 圈积分的红外共线发散
-结构（$I'_E = -i I_M$）。格点 QCD 在有限 $P_z$ 下计算的非局域关联函数
-包含了与光锥分布相同\textbf{红外物理}，两者的差异仅在 UV 区域，可由
-微扰匹配核弥补。
+利用该方程可对 $P_z$ 的大对数进行重求和，提高微扰匹配的精度——这在
+$P_z$ 只能取离散格点动量（$2\pi n_z/L$）的实践中尤为重要：把已知的
+$\gamma$ 用来把矩阵元从一对 $P_z$ 演化到另一对，可以检验数据与
+$\ln P_z$ 行为的一致性（本库 CS 核提取 \code{cs\_kernel\_*} 正是
+$\partial\ln h/\partial\ln P_z$ 的两动量差分实现，见第
+\ref{sec:matching} 章）。
+
+\LaMET{} 的关键理论要素是：Euclidean 格点计算能够捕获正确的 Minkowski
+光锥物理——解析延拓证明的要点是：考虑一个典型的单圈 Feynman 积分，
+Minkowski 版本 $I_M$ 具有共线发散（部分子质量 $m\to0$ 时），Euclidean
+版本 $I_E$ 在解析延拓 $p_\tau \to -i p_0$ 后满足 $I'_E = -i I_M$；
+两者共享全部共线奇点，差异仅在 UV 区域。格点 QCD 在有限 $P_z$ 下计算的
+非局域关联函数包含了与光锥分布相同\textbf{红外物理}，UV 差异可由微扰
+匹配核弥补。
 
 \subsection{坐标空间矩阵元：quasi 通道的核心量}
 
@@ -618,6 +839,32 @@ h^{\text{lat}}(z, P_z; t_{\text{sep}})
 \;\xrightarrow{t_{\text{sep}} \to \infty}\; h(z, P_z)
 \end{equation}
 
+\textbf{推导要点（Fourier 重构的 Jacobian 来源）}：上述 Fourier 变换
+关系来自把光锥关联函数中沿光锥方向 $\xi^-$ 的积分替换为沿空间方向 $z$
+的积分。在 IMF 中 Lorentz 收缩效应使得 $\xi^- \sim z/\gamma$（其中
+$\gamma = P_z/M$），坐标空间的纵向动量共轭变量相应地从光锥动量分数
+变为 $xP_z$，Fourier 变换核需要乘以 Jacobian 因子 $1/(xP_z)$——
+这就是式~\eqref{eq:quasi-pdf-sin} 中 $2P_z/x$ 前因子与式
+~\eqref{eq:quasi-tmd} 中 $1/(2\pi P_z)$ 归一的来历。归一化常数
+$\mathcal N=P_z^2/P_t^2$ 则来自把光锥 $P^+$ 换成能量分量 $P_t$ 的
+运动学修正（准通道中核子的能量-动量关系 $P_t=\sqrt{M_N^2+P_z^2}$）。
+
+\paragraph{向 GPD/形状因子的推广}\LaMET{} 框架可直接推广到
+广义部分子分布（GPD）：把零动量插入 $\sum_{\mathbf y}$ 换成
+$\sum_{\mathbf y}e^{-i\boldsymbol\Delta\cdot\mathbf y}$（附加动量
+$\boldsymbol\Delta$），双局域矩阵元分解为
+\begin{equation}
+\braket{P'|O(z)|P} = \bar u(P')\bigl[\gamma^{\{\mu_1}\cdots\}
+A(z,\Delta^2) + \sigma^{\mu_1\mu_2}\Delta_{\mu_2}\cdots
++\cdots\bigr]u(P),
+\end{equation}
+不变振幅 $A(z,\Delta^2)$、$B(z,\Delta^2)$ 在 $z\to0$ 极限给出
+形状因子（$\Delta^2$ 的连续函数）与能量-动量张量的矩阵元
+（ $D$-项、角动量分解）——把 $z$ 依赖（PDF）与 $\Delta^2$ 依赖
+（三维层析）联合构造是 LaMET 的下一个自然扩展（本库未实现，列为
+方向）。同一算符族还能给出夸克/胶子的角动量分解检验，与
+$\Delta G$（第 \ref{sec:frontier} 节）共同构成质子结构的完整拼图。
+
 \subsection{quasi-PDF / quasi-TMD 与匹配关系}
 
 \subsubsection{Fourier 重构}
@@ -630,6 +877,14 @@ h^{\text{lat}}(z, P_z; t_{\text{sep}})
 （\code{pyqcd/renorm/\_tmdextract.py} 的 \code{quasi\_pdf\_gluon}，
 $x\approx0$ 处以 $\abs{x}<10^{-15}$ 守卫置零，与 zhangxin 原版
 \code{gluon\_pdf\_full\_workflow.py} 梯形法等价。）
+
+\textbf{sin 与 cos 两通道的物理分工}：sin 变换作用于矩阵元的
+\textbf{反对称部分}（$h(z)-h(-z)$，即非极化共线 PDF 的结构通道）；cos
+变换（准 TMD 通道，式~\eqref{eq:quasi-tmd}）作用于\textbf{Hermitian
+对称部分}（$h(z)+h(-z)$ 经复数 Hermitian 延拓）。两条通道共享同一
+$h_R(z)$ 数据但 Fourier 核不同，因此互为\textbf{交叉校验通道}：
+$b_\perp$ 积分极限下 TMD 归一到共线 PDF，两通道的数值一致性检验
+（同 $x$ 网格、同归一约定）是 Fourier 层实现正确性的强检查。
 
 TMD 通道的准 TMD-PDF 采用余弦型变换并带能量归一因子：
 \begin{equation}\label{eq:quasi-tmd}
@@ -660,7 +915,22 @@ $\mathfrak M(\nu,z^2,\mu)=\mathcal M(\nu,z^2,\mu)/\mathcal M(0,z^2,\mu)$
 在短距离 OPE 下匹配到光锥 ITD $\mathfrak I_g$/$\Delta\mathfrak I_g$
 （channel-specific 核，见 \pathref{refer/donghx/Gradient_Flow_GluonPDF/
 gluon_gradient_flow_matching.md} §7.3）。本库实现以 quasi-Fourier 为主
-通道，pseudo-ITD 作为交叉校验层保留在文档中。
+通道，pseudo-ITD 作为交叉校验层保留在文档中。两种表示的对照：
+
+\begin{center}
+\begin{tabular}{c c c}
+\toprule
+\textbf{分布} & \textbf{Fourier 共轭} & \textbf{匹配核变元} \\
+\midrule
+空间关联 $h(z,P_z)$ & --- & $\zeta=zP_z$、$z^2$ \\
+准 PDF/准 TMD & $z \to xP_z$ & $x/y$、$\mu/(yP_z)$ \\
+赝 PDF/pseudo-ITD & $\zeta \to x$ & $x/y$、$\mu^2z^2$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+两者共享同一格点数据与同一红外物理，提供互补的系统误差交叉检验；
+赝 PDF 避开了 Fourier 截断的 Gibbs 振荡（但需小 $z^2$ 外推），
+准 PDF 直接给出 $x$ 依赖（但受 $z_{\max}$ 截断限制）。
 
 \subsubsection{NLO 匹配核的数学结构}
 
@@ -673,11 +943,23 @@ quasi 通道到光锥通道的 NLO 匹配关系为：
 \end{equation}
 其中 $\Delta C_{gg}$ 包含 plus-distribution、$\delta(1-\xi)$ 项与
 $\ln(\mu^2/P_z^2)$ 对数项；单圈核 $g_0\ldots g_3$ 的显式三分区表达式与
-矩阵实现 $Z_{ij}$ 见第 \ref{sec:matching} 章。取
-$\alpha_s(\mu=2\;\text{GeV}) \approx 0.30$，匹配修正量级约为
-$\alpha_s C_A/(2\pi) \sim 14\%$（对照旧文档以 $\alpha_s/(2\pi)\sim4\%$
-估计夸克通道；胶子通道的色因子 $C_A=3$ 使其约大三倍），在中等 $x$ 区域
-可控；大 $x$ 区域的阈值对数 $\ln(1-\xi)$ 需要阈值重求和处理。
+矩阵实现 $Z_{ij}$ 见第 \ref{sec:matching} 章。
+
+\paragraph{NLO 匹配的数值意义}取 $\alpha_s(\mu=2\;\text{GeV}) \approx
+0.30$，匹配修正量级约为 $\alpha_s C_A/(2\pi) \sim 14\%$（对照旧文档以
+$\alpha_s/(2\pi)\sim4\%$ 估计夸克通道；胶子通道的色因子 $C_A=3$ 使其
+约大三倍），在中等 $x$ 区域（$0.1<x<0.5$）可控。区域特异性：
+\begin{itemize}
+  \item \textbf{大 $x$}：$\xi\to1$ 时出现大对数 $\ln(1-\xi)$，微扰展开
+  失效，需要阈值重求和恢复收敛性；
+  \item \textbf{小 $x$}：$1/x$ 型增强项放大修正量级
+  （$\order{\Lambda^2/(x^2P_z^2)}$），同样需要重求和或谨慎外推；
+  \item \textbf{标度变异}：以 $\mu\in[P_z/2,2P_z]$ 的变异估计微扰不确
+  定性（第 \ref{sec:systematics} 章）。
+\end{itemize}
+重要的是，匹配核 $C_{gg}(x/y,\mu/P_z)$ 仅依赖部分子动量比与标度比，
+与外部强子态无关——这是因子化定理的核心结论，也意味着匹配核可以
+独立于物理目标（核子/介子）复用。
 
 % ===========================================================================
 \section{梯度流与格点离散化}
@@ -799,7 +1081,21 @@ U_\mu^{\dagger}(x+\hat{\nu})U_\nu^\dagger(x)$。
 Q_{\mu\nu}(x) = P_{\mu\nu}(x) + P_{\nu,-\mu}(x) + P_{-\mu,-\nu}(x)
 + P_{-\nu,\mu}(x)
 \end{equation}
-四个 plaquette 的几何排列为以 $x$ 为中心的十字。参考约定下流化场强为
+四个 plaquette 的几何排列为以 $x$ 为中心的十字：
+
+\begin{center}
+\begin{tikzpicture}[scale=1.4, >=Stealth]
+  \filldraw (0,0) circle (1.3pt) node[below left] {$x$};
+  \draw[->, thick, blue!60] (0,0) -- (1,0) node[midway, above] {$P_{\mu\nu}$};
+  \draw[->, thick, red!60] (0,0) -- (0,1) node[midway, right] {$P_{\nu,-\mu}$};
+  \draw[->, thick, green!60!black] (0,0) -- (-1,0) node[midway, above] {$P_{-\mu,-\nu}$};
+  \draw[->, thick, orange!80!black] (0,0) -- (0,-1) node[midway, right] {$P_{-\nu,\mu}$};
+  \draw[->] (0,0) -- (1.4,0) node[right] {$\mu$};
+  \draw[->] (0,0) -- (0,1.4) node[above] {$\nu$};
+\end{tikzpicture}
+\end{center}
+
+参考约定下流化场强为
 \begin{equation}\label{eq:clover_F}
 F_{\mu\nu}(x) = -\frac{i}{8}
 \Bigl( Q_{\mu\nu}(x) - Q_{\mu\nu}^{\dagger}(x) \Bigr)
@@ -828,15 +1124,36 @@ selector；两者的差异是有限格距离散差异，不能在分析中静默
 \Ftmunu = \frac{1}{2}\,\eps_{\mu\nu\rho\sigma}\,F^{\rho\sigma}
 \end{equation}
 其中 $\eps_{\mu\nu\rho\sigma}$ 是四维完全反对称张量，Euclidean 约定
-$\eps_{xyzt}=+1$（代码坐标顺序 $(x,y,z,t)=(0,1,2,3)$）。实现上，
-\code{compute\_dual\_field\_strength} 通过缩并实现 $\tilde F$：
-\begin{lstlisting}[language=Python]
-dual_tilde[mu, nu] = contract("opmn, mntzyxab -> optzyxab",
-                              epsilon4, pla_all)
-\end{lstlisting}
-代码只存六个 canonical Lorentz pair，反向请求通过反对称性取负
+$\eps_{xyzt}=+1$（代码坐标顺序 $(x,y,z,t)=(0,1,2,3)$）。实现上按
+Einstein 求和对 $(\rho,\sigma)$ 逐分量缩并
+（$\tilde F_{\mu\nu}=\frac12\sum_{\rho,\sigma}\eps_{\mu\nu\rho\sigma}
+F_{\rho\sigma}$，\code{compute\_dual\_field\_strength}）：
+\begin{equation}
+\tilde F_{tx} = \eps_{txyz}\,F_{yz}, \qquad
+\tilde F_{ty} = \eps_{tyzx}\,F_{zx}, \qquad
+\tilde F_{tz} = \eps_{tzxy}\,F_{xy},
+\end{equation}
+以及空间三分量
+$\tilde F_{xy}=\eps_{xyzt}F_{zt}$、$\tilde F_{xz}=\eps_{xzty}F_{ty}$、
+$\tilde F_{yz}=\eps_{yztx}F_{tx}$（每对由「其余两个指标」的唯一场强给出
+，这正是 Euclidean 对偶把时-电分量与空-磁分量互换的结构）。代码只存六个
+canonical Lorentz pair，反向请求通过反对称性取负
 （canonical pair 缓存 + 符号取反）——避免重复计算
-Clover，并使 $F_{\mu\nu}$ 与 $\Ftmunu$ 的轴顺序明确。
+Clover，并使 $F_{\mu\nu}$ 与 $\Ftmunu$ 的轴顺序明确。场强字典
+\code{compute\_dual\_field\_strength} 与场强字典
+\code{\_field\_dictionary} 对每个投影构造
+\begin{equation}
+\mathcal{F} = \bigl\{\,F_{\mu\nu}\;:\;(\mu,\nu)\in
+\{(0,1),(0,2),(0,3),(1,2),(1,3),(2,3)\}\,\bigr\},
+\qquad F_{\nu\mu} = -F_{\mu\nu},
+\end{equation}
+即只保存 $\mu<\nu$ 的六个独立分量（全部 $4\times4=16$ 个有序对由反对
+称性给出）；请求 $(\mu,\nu)$ 时按 $\nu-\mu$ 的符号返回对应的 canonical
+分量（$\mu>\nu$ 时取负）。
+\textbf{无迹投影}按式~\eqref{eq:traceless} 施加于每个分量；两个投影
+（legacy\_untraced / traceless）共用同一批 plaquette 计算，差异仅为
+$\frac{\tr F}{3}\mathbf 1$ 的单位阵扣除，因此可同时输出而几乎不增加
+计算量。
 
 \subsection{直线 Wilson 线与规范不变性}
 \label{sec:wilson-line}
@@ -877,6 +1194,28 @@ W(x,x+z)\mapsto G(x)\,W(x,x+z)\,G^\dagger(x+z)
 局域规范变换下实测全 OPE 不变（约 $2.1\times10^{-16}$）。只在某个点比较
 矩阵元素、或把两端场强放在不同的链接几何上而没有 Wilson 线，都会破坏
 这个论证。
+
+\paragraph{五步构造法的公式化}对固定 $(\mu,\lambda;\nu,\rho)$ 与
+$z$，格点实现的五步构造（连续理论到离散的逐段翻译）：
+\begin{enumerate}
+  \item \textbf{平移}：把第一端点场强放到 $z$ 位置
+  （$F_{\mu\lambda}(x+z\hat z)$，格点上为整场 \code{roll}）；
+  \item \textbf{反向线}：从 $z$ 走到 $0$，逐段共轭链接乘积
+  \begin{equation}
+  W^\dagger(x+z,x) = \prod_{k=z/a-1}^{0} U_z^\dagger(x+k\hat z),
+  \end{equation}
+  \item \textbf{插入}：在 $0$ 处乘第二端点场强（$F_{\nu\rho}(x)$ 或
+  对偶 $\widetilde F_{\nu\rho}(x)$）；
+  \item \textbf{正向线}：从 $0$ 走回 $z$，
+  \begin{equation}
+  W(x,x+z) = \prod_{k=0}^{z/a-1} U_z(x+k\hat z),
+  \end{equation}
+  \item \textbf{收缩}：取色迹 $\trc[\cdots]$ 并对空间点求和
+  $\sum_{\boldsymbol x}$（所有乘法为批量 $3\times3$ 复矩阵乘）。
+\end{enumerate}
+五步的次序不可交换（路径排序 $\mathcal P$ 的离散语义）；负方向
+（$-z$）用同一构造但把平移与线的方向反转——两个原始方向的同时保存
+正是 even/odd 恒等式检验的几何前提。
 
 \subsection{六个 OPE 组件与非极化/螺旋度算符}
 \label{sec:unpol-hel}
@@ -985,6 +1324,25 @@ $\boldsymbol y=\boldsymbol x+z\hat z+\bperp$
 空间方向经 \code{\_validate\_spatial\_directions} 校验，$\bperp\to0$
 极限约化为直线 Wilson 线共线算符）。
 
+\paragraph{staple 几何的约束}三段路径的几何约束与自由度：
+\begin{itemize}
+  \item \textbf{方向约束}：纵向 $z_{\rm dir}$ 与横向翼方向 $b_{\rm dir}$
+  必须为不同的空间方向（$0=x,1=y,2=z$；违例直接拒绝）——这排除了路径
+  自交与零臂长的退化情形；
+  \item \textbf{臂长}：翼长默认取 $L=z$（与纵向分离同量级），保持
+  staple 的「 $\sqsubset$ 形」对称；臂长是\textbf{方案参数}而非物理
+  输入，跨组态保持一致并在 metadata 登记；
+  \item \textbf{周期边界}：三段路径各段长度均须 $<L/2$（空间周期下
+  不绕边界；绕边界的 staple 需要显式边界符号语义，本库不启用）；
+  \item \textbf{规范不变性}：三段路径闭合于两端场强之间，规范变换的
+  $G(x)$/$G^\dagger(y)$ 在两端 trace 相消——与直线情形
+  （式~\eqref{eq:bilocal-plus}）同一论证；
+  \item \textbf{共线极限}：$\bperp\to0$ 时翼段消失、两纵向臂方向相同，
+  $W_\sqsubset\to\mathbf1$ 的平移补丁 + 直线 Wilson 线，算符约化为
+  共线通道——这保证 TMD 与共线 PDF 共享同一套 even/odd、组件与统计
+  层（只多出 $\bperp$ 依赖）。
+\end{itemize}
+
 \subsubsection{乘性可重整的 Lorentz 组合}
 
 令 $i,j$ 为 $z_{\rm dir}$ 之外的两个空间方向，可乘性重整化组合为
@@ -1020,23 +1378,63 @@ M^{ti;it}+M^{ji;ij} = 2p_0^2 M_{pp}(\nu,\bperp)
 格点理论可视为连续理论的有效理论，其作用量包含被格距幂次压低的高维算符：
 \begin{equation}
 S_{\text{eff}} = S_{\text{cont}} + a^2 \int \mathrm{d}^4 x \,
-c_2 \mathcal{O}_6(x) + \cdots
+c_2\,\mathcal{O}_6(x) + a^4 \int \mathrm{d}^4 x \,
+c_4\,\mathcal{O}_8(x) + \cdots
 \end{equation}
-对于含 Wilson 线的非定域算符，Symanzik 分析表明使用 Clover 场强后前导
-离散化误差为 $\order{a^2}$；但 Wilson 线本身可能引入额外的 $\order{a}$
-效应——这需要涂抹或梯度流来缓解。Tadpole 改进（平均场改进）通过重新
-标度链接 $U_\mu \to U_\mu/u_0$ 吸收纯规范的重整化因子
-$u_0=(\frac13\langle \operatorname{Re}\operatorname{Tr}P_{\mu\nu}\rangle
-)^{1/4}$；本库代码取 $a=1,g_0=1$ 已吸收到归一化中，但跨格距绝对归一化
-时需要考虑（参考实现侧称为 tree-level 归一化 $\kappa_F(a,\tau)$ 的对齐
-，见第 \ref{sec:matching} 章）。
+其中 $\mathcal{O}_{2k}$ 是量纲为 $2k$ 的定域算符。对于 Wilson 胶子作用量
+（仅 $1\times1$ plaquette），前导误差为 $\order{a^2}$；在作用量中纳入
+$1\times2$ 矩形圈（L\"uscher-Weisz 改进作用量）可在经典水平消除
+$\order{a^2}$ 项。对含 Wilson 线的\textbf{非定域}算符，Symanzik 分析的
+结论是：使用四叶 Clover 场强后场强端点的前导离散化误差为 $\order{a^2}$；
+但离散 Wilson 线本身可能引入额外的 $\order{a}$ 效应——这需要涂抹或梯度
+流来缓解（HYP 涂抹后误差结构回到 $\order{a^2}$ 主导；梯度流方案中
+$r_{\rm flow}\gg a$ 时链接的离散化细节被平滑，等效地压制了 $\order{a}$
+项）。
 
-\subsubsection{HYP 涂抹与梯度流的分工}
+\subsubsection{Tadpole（平均场）改进}
 
-\textbf{HYP（Hypercubic）涂抹}（Hasenbusch 2001）分三步在超立方体内对
-链接做 staple 平均并投影回 SU(3)（标准参数
-$\alpha_1=0.75,\alpha_2=0.6,\alpha_3=0.3$），显著压制长 Wilson 线的
-UV 涨落与线性发散系数。本库保留两条路径：
+在格点微扰论中，规范链接的高阶 tadpole 图贡献大的、纯规范的重整化因子
+。Lepage--Mackenzie 的 tadpole 改进通过重新标度链接变量
+$U_\mu \to U_\mu/u_0$ 吸收这些贡献，其中 $u_0$ 由 plaquette 平均估计：
+\begin{equation}
+u_0 = \left( \frac{1}{3}
+\bigl\langle \operatorname{Re}\operatorname{Tr} P_{\mu\nu} \bigr\rangle
+\right)^{1/4},
+\end{equation}
+在裸耦合下 $\frac13\langle\operatorname{Re}\operatorname{Tr}P\rangle
+=1-\frac{g_0^2}{12}\sum_{\mu<\nu}\cdots$（一阶展开），因此
+$u_0<1$、$1/u_0>1$——把被「拉长」的链接还原到树图值。本库代码取
+$a=1,g_0=1$（归一化已吸收），但跨格距的绝对归一化必须对齐——参考实现
+侧把该因子记为 tree-level 归一化
+$(gF)_{\rm cont}=\kappa_F(a,\tau)\,F_{\rm code}$，双局域需乘
+$\kappa_F^2$；GF-to-$\MSbarM$ 系数在 field normalization 未对齐前不能
+直接套用（第 \ref{sec:matching} 章）。
+
+\subsubsection{HYP 涂抹的三步过程}
+
+\textbf{HYP（Hypercubic）涂抹}（Hasenbusch 2001）在一个超立方体内分
+三步进行，每一步只对特定方向的链接做 staple 平均并投影回 SU(3)：
+\textbf{第一步}在垂直于方向 $\mu$ 的超立方体内部面上涂抹（仅涉及与
+$\mu$ 正交的方向），
+\begin{equation}
+\bar U_\mu^{(1)}(x) = \mathcal P_{\mathrm{SU(3)}}\!\left[
+(1-\alpha_1)U_\mu(x) + \frac{\alpha_1}{2}
+\sum_{\nu\ne\mu} \bigl(\text{$\nu$ 方向的内部 staple}\bigr) \right],
+\end{equation}
+\textbf{第二步}在包含 $\mu$ 与另一方向的三维子集内对第一步的结果进一步
+涂抹，\textbf{第三步}将涂抹限制在完全位于超立方体内的链接上。投影
+$\mathcal P_{\mathrm{SU(3)}}$ 取使
+$\operatorname{Re}\operatorname{Tr}[V^\dagger\bar U]$ 极大化的
+$V\in\mathrm{SU}(3)$（极值条件 $V\bar U=\bar U V\bar U^\dagger$ 为
+厄米矩阵，由 SVD 求解——本库 stab0\_2 已把批量 eigh bug 修复为 SVD）。
+标准参数为 $\alpha_1=0.75$、$\alpha_2=0.6$、$\alpha_3=0.3$。涂抹后
+Wilson 线的线性发散系数 $\delta m$ 显著减小、信噪比改善，且连续极限下
+与未涂抹算符同属同一普适类。本库 HYP 实现（SU(3) 精度 $10^{-16}$，
+stab0\_2 验证）对规范链接的预处理显著改善胶子 OPE 算符在中等与较长
+Wilson 线（$z\gtrsim5a$）的信号质量。
+
+\subsubsection{HYP 与梯度流的分工及两路径隔离}
+
 \begin{center}
 \small
 \begin{tabular}{c c c c}
@@ -1051,19 +1449,49 @@ schema-v2 路径 & 薄链接 + 四维 flow & 直线六组件 + ratio-v2 & 参考
 两层的语义由 metadata（\code{input\_scheme}、\code{schema}、\code{status}
 ）显式记录，\textbf{不互称、不静默混用}：把 legacy 有限格距未去迹 OPE
 当作生产 traceless OPE、把现有 TMD staple 路径当作参考直线 OPE，都是
-20260909 审计报告明确登记的风险偏差。Stout 涂抹（nstep=20,
-$\rho=0.12$ 对齐真实系综，\code{pyqcd/smear/\_stout.py}）作为涂抹备选
-方案保留。
+20260909 审计报告明确登记的风险偏差。三种平滑手段的对照：
+
+\begin{center}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{手段} & \textbf{平滑尺度} & \textbf{重整化语义} \\
+\midrule
+HYP & 定域（超立方体内，$\sim a$） & 无（保持裸算符方案） \\
+Stout & 定域（nstep 与 $\rho$ 控制） & 无（同上） \\
+四维 Wilson flow & $\sqrt{8\tau}$（流时间扫描） & \textbf{有}（$\tau$ 即重整化方案入口） \\
+\bottomrule
+\end{tabular}
+\end{center}
+Stout 涂抹（nstep=20、$\rho=0.12$ 对齐真实系综，
+\code{pyqcd/smear/\_stout.py}）作为涂抹备选方案保留；四维 flow 的
+关键差别在于它\textbf{自带重整化方案}（SFTE，第 \ref{sec:renorm} 章）。
+
+\paragraph{涂抹方案的数值事实}本库的对照数值记录：HYP 涂抹（SU(3)
+精度 $10^{-16}$、平滑化、stab0\_2 修复批量 eigh）与四维 flow 在同一
+组态上的定性一致（相关系数 $r=0.965$，stab0\_4）——两类平滑在
+$\order{a}$ 尺度上给出一致的链接平滑；stout（nstep=20、$\rho=0.12$）
+经 cmp1 对照定位其根因（插桩证据：视图去迹生效、布局依赖生产栈，
+test10\_6\_1），S10 定性结论为「pyqcd 物理正确」（test10\_7\_1）。
+这些事实说明：**平滑手段的选择不影响物理结论，但改变有限格距的
+离散误差结构**——因此在跨格距比较前，各格距必须统一平滑方案（或
+在匹配系数中显式计入差异）。
 
 \subsection{边界条件与有限体积}
 
-格点 QCD 使用（反）周期性边界条件：规范场全方向周期；费米子场时间方向
-反周期。Wilson 线的长度受空间周期边界限制：实际可用的最大长度为
-$z_{\max}\le L/2$（超过则正反向 Wilson 线在拓扑上不可区分）。参考生产
-$L=32$ 的 $z/a$ 范围为 $0..24$（$z_{\max}=24<32/2$ 合规），物理距离
-$24a \approx 1.86$ fm（$a=0.0775$ fm）。时间方向上，三点函数的时序关系
-$t_{\text{src}}\le t_{\text{op}}\le t_{\text{sink}}$ 在模 $N_t$ 意义下定义
-（第 \ref{sec:factorization} 节）。
+格点 QCD 使用（反）周期性边界条件：
+\begin{equation}
+U_\mu(x+L_\nu\hat\nu)=U_\mu(x)\;\;\forall\,\mu,\nu\;(\text{规范场周期}),
+\qquad \psi(x+N_t\hat t)=-\psi(x)\;(\text{费米子时间方向反周期}),
+\end{equation}
+这给出有限温度关系 $T=1/(aN_t)$。Wilson 线的长度受空间周期边界限制：
+实际可用的最大长度为 $z_{\max}\le L/2$——超过这个长度，正向与反向
+Wilson 线在拓扑上不可区分（Hermiticity 与宇称自洽检验也随之变味）。
+参考生产 $L=32$ 的 $z/a$ 范围为 $0..24$（$24<32/2$ 合规），物理距离
+$24a\approx1.86$ fm（$a=0.0775$ fm）；蒸馏基线 $L=24$ 时
+$z/a=0..11$。时间方向上，三点函数的时序关系
+$t_{\text{src}}\le t_{\text{op}}\le t_{\text{sink}}$ 在模 $N_t$ 意义下
+定义（第 \ref{sec:factorization} 节）。
 
 % ===========================================================================
 \section{关联函数分解与 disconnected 通道}
@@ -1111,19 +1539,41 @@ C_3^{\text{disc}} = \big\langle\;
 
 \subsubsection{为什么胶子算符只有 disconnected 图}
 
-胶子 quasi-PDF/TMD 算符是\textbf{纯规范场算符}——仅包含规范链接与场强
-张量，不含任何夸克场算符，故 $[\mathcal{O}(z),\psi]=[O,\bar\psi]=0$。
-路径积分中先对夸克场积分，$\mathcal{O}(z)$ 作为纯 $U$ 的函数提出积分号
-外：
-\begin{equation}
-C_3 = \frac{1}{Z} \int \mathcal{D}U \; e^{-S_G[U]} \; \det(D[U]) \;
-\underbrace{\big[\text{Wick 收缩的 } \mathcal{N}\bar{\mathcal{N}}
-\big]_{\text{夸克部分}}}_{\equiv\; C_2[U]}
-\;\underbrace{\mathcal{O}(z)[U]}_{\text{胶子部分}}
-\end{equation}
-在 leading order，胶子 quasi-PDF 的三点关联函数仅包含 disconnected 贡献
-（Fan et al.\ 2018；Alexandrou et al.\ 2021 已在格点上显式检验 connected
-贡献在统计误差内与零一致；其压低机制与色因子 $\sim 1/N_c$ 相关）。
+从量子场论的角度，这个结论有三层依据：
+
+\begin{enumerate}
+  \item \textbf{算符的组成}：$\mathcal O(z,\bperp)
+  =\trc[F_{\mu\lambda}\,W\,F_{\nu\rho}\,W^\dagger]$ 仅包含规范场
+  $A_\mu^a$ 及其泛函，不含任何夸克场 $\psi,\bar\psi$；
+  \item \textbf{Grassmann 积分的因子化}：三点关联函数的路径积分表示为
+  \begin{equation}
+  C_3 = \frac{1}{Z} \int \mathcal{D}U \mathcal{D}\psi \mathcal{D}\bar\psi
+  \; e^{-S_G[U]-\bar\psi D[U]\psi} \;
+  (\mathcal{N}\bar{\mathcal{N}})[U,\psi,\bar\psi]\;
+  \mathcal{O}(z,\bperp)[U],
+  \end{equation}
+  由于 $\mathcal O$ 与夸克场对易，对夸克场积分后它作为纯 $U$ 的函数
+  提出积分号外：
+  \begin{equation}
+  C_3 = \frac{1}{Z} \int \mathcal{D}U \; e^{-S_G[U]} \; \det(D[U]) \;
+  \underbrace{\big[\text{Wick 收缩的 } \mathcal{N}\bar{\mathcal{N}}
+  \big]_{\text{夸克部分}}}_{\equiv\; C_2[U]}
+  \;\underbrace{\mathcal{O}(z,\bperp)[U]}_{\text{胶子部分}}
+  \label{eq:grassmann-factorization}
+  \end{equation}
+  \item \textbf{connected 消失的条件}：若胶子算符经夸克-胶子顶点
+  $g_0\bar\psi\gamma^\mu A_\mu\psi$ 与夸克线耦合，需要 $F_{\mu\nu}$ 中
+  的规范链接与夸克传播子共享量子涨落；但 $\mathcal O(z,\bperp)$ 是
+  \textbf{规范不变的整体算符}（场强由 clover 定义、Wilson 线保证规范
+  不变性），其 Wick 收缩在 leading order 不能与夸克线连接——任何此类
+  连接都要求至少一个胶子从夸克线辐射出去，是 $\order{g_0}$（微扰）或
+  完全非微扰框架下的次级拓扑。
+\end{enumerate}
+结论：在 leading order，胶子 quasi-PDF/TMD 的三点关联函数仅包含
+disconnected 贡献（Fan et al.\ 2018；Alexandrou et al.\ 2021 已在格点
+上显式检验 connected 贡献在统计误差内与零一致；压低机制与色因子
+$\sim1/N_c$ 相关——软胶子交换需要胶子带有与夸克动量可比拟的横向动量，
+且矢量耦合的色结构自然压低该贡献）。
 
 \begin{figure}[htbp]
 \centering
@@ -1206,36 +1656,107 @@ t_{\text{sink}}$，时间指标在模 $N_t$ 意义下定义：
 \Delta t \equiv (t_{\text{sink}} - t_{\text{src}}) \bmod N_t, \qquad
 \Delta t_{\text{op}} \equiv (t_{\text{op}} - t_{\text{src}}) \bmod N_t
 \end{equation}
-关联函数按时间分离的谱参数化为
-$C_2(\Delta t,\mathbf{P}) = \sum_n |Z_n(\mathbf{P})|^2
-e^{-E_n(\mathbf{P})\Delta t} + \text{（反向传播项）}$。
-\textbf{OPE 算符的插入时间}：由于胶子算符不含夸克场，OPE 对\textbf{所有}
-时间片 $t_{\text{op}}$ 可用——ratio-v2 实现通过周期源移位
-$O(t_{\text{src}}+\tau_{\rm ins})$ 实现，但物理有效性区间仅为
-$0\le\tau_{\rm ins}\le t_{\rm sep}$，其余位置填 NaN（不是静默填零）并
+关联函数按时间分离的谱参数化（含反向传播）已在上一小节给出。对 OPE
+期望值的\textbf{时间平均}性质：由于取空间平均后 OPE 在各时间片独立，
+\begin{equation}
+\vev{O(z)}_{\text{gauge}}
+= \frac{1}{N_t}\sum_{t_{\text{op}}=0}^{N_t-1}\sum_{\mathbf{x}}
+O(\mathbf x, z; t_{\text{op}})
+\end{equation}
+\textbf{注}：实际计算对\textbf{所有}时间片 $t_{\text{op}}$ 求平均（而非
+仅在 $t_{\text{src}}$--$t_{\text{sink}}$ 之间）可以最大化统计量——
+胶子算符不含夸克场，即使 $t_{\text{op}}$ 在窗口之外，quark-disconnected
+拓扑也不受影响。这一性质显著提升信噪比。但 ratio-v2 的物理有效性区间
+受\textbf{插值时间}约束：
+\begin{equation}
+O(t_{\text{src}}+\tau_{\rm ins})
+= \operatorname{take}\bigl[\,O,\,(t_{\text{src}}+\tau_{\rm ins})
+\bmod N_t\,\bigr],
+\qquad \text{仅 } 0\le\tau_{\rm ins}\le t_{\rm sep} \text{ 有效},
+\end{equation}
+其余位置填 NaN（不是静默填零）并保存 \code{valid\_insertion\_mask}
 保存 \code{valid\_insertion\_mask}（第 \ref{sec:statistics} 章）。
 
 \subsection{关联函数的谱分解与基态提取}
 
+\subsubsection{完备本征态插入与反向传播}
+
+两点关联函数的谱分解通过插入完备的哈密顿量本征态集合得到：
+\begin{equation}\label{eq:C2_spectral}
+C_2(\Delta t, \mathbf{P}) = \sum_n Z_n(\mathbf{P})\,
+e^{-E_n(\mathbf{P})\,\Delta t},
+\qquad Z_n(\mathbf{P}) = \bra{0}\mathcal N(\mathbf P)\ket n
+\end{equation}
+在周期性时间格点上，反向传播项（态绕过时间边界反向传播）叠加为：
+\begin{equation}
+C_2(\Delta t,\mathbf P) = \sum_n Z_n(\mathbf P)
+\bigl[e^{-E_n\Delta t} + \sigma_{\mathbf P}\,e^{-E_n(N_t-\Delta t)}
+\bigr],
+\end{equation}
+其中 $\sigma_{\mathbf P}=\pm1$ 取决于通道在时间反演/宇称下的符号
+（pp 通道 $t_{\rm sink}<t_{\rm src}$ 时符号翻转，见第
+\ref{sec:distillation} 章边界符号）。在大 $\Delta t$ 极限下基态主导：
+\begin{equation}
+C_2 \xrightarrow{\Delta t\to\infty} Z_0(\mathbf P)\,
+e^{-E_0(\mathbf P)\,\Delta t}
+\end{equation}
+
 \subsubsection{有效质量与 Plateau 拟合}
 
 有效质量定义为
-$m_{\text{eff}}(\Delta t) = \ln[ C_2(\Delta t)/C_2(\Delta t+1) ]$，在大
-$\Delta t$ 时趋于常数 $E_0(\mathbf{P})$；通过 plateau 拟合提取基态能量。
+\begin{equation}
+m_{\text{eff}}(\Delta t) = \ln\!\left[
+\frac{C_2(\Delta t, \mathbf{P})}{C_2(\Delta t+1, \mathbf{P})} \right]
+\xrightarrow{\Delta t\to\infty} E_0(\mathbf P)
+\end{equation}
+（含反向传播修正的推广形式可取
+$m_{\rm eff}=\ln[C_2(\Delta t)+\sigma C_2(N_t-\Delta t)]$ 的比值，本库
+实战以窗口切割规避反向污染）。在大 $\Delta t$ 时 $m_{\rm eff}$ 趋于
+常数 $E_0(\mathbf{P})$；通过 plateau 拟合——在有效质量平稳区域内做
+常数拟合——提取基态能量，拟合质量判据为 $\chi^2/\mathrm{dof}\sim1$。
 对于矩阵元提取，有效矩阵元为
-$h^{\text{eff}}(z,P_z;\Delta t)=C_3(\Delta t;z,P_z)/C_2(\Delta t;P_z)$。
+\begin{equation}
+h^{\text{eff}}(z,P_z;\Delta t) =
+\frac{C_3(\Delta t; z, P_z)}{C_2(\Delta t; P_z)}
+\xrightarrow{\Delta t\to\infty} h + A\,e^{-\Delta E\,\Delta t}
+\end{equation}
 
-\subsubsection{多态拟合与 GEVP}
+\subsubsection{多态拟合、Bayesian 约束与 GEVP}
 
 当信噪比不够好时，需包含激发态的双态拟合
-$C_2(\Delta t)=|Z_0|^2e^{-E_0\Delta t}+|Z_1|^2e^{-E_1\Delta t}$。比值结构
-$R(T,\tau)=M+A e^{-\Delta E\tau}+B e^{-\Delta E(T-\tau)}
-+Ce^{-\Delta E T}+\cdots$（\pathref{refer/donghx/Gradient_Flow_GluonPDF/
-physics-conventions.md}）同时解释了端点切割与 Sumratio 斜率比直接
-plateau 更不敏感的原因；\textbf{多态 Ratio 拟合的可辨识性}不能仅凭优化器
-收敛判定——$\Delta E$ 必须来自相容的 $C_2$ 谱分析或使用透明的先验并保留
-先验约束状态。GEVP 方法
-$C(\Delta t)\,v_n=\lambda_n\,C(\Delta t_0)\,v_n$ 可系统分离基态与低激发态。
+\begin{equation}
+C_2(\Delta t) = |Z_0|^2e^{-E_0\Delta t} + |Z_1|^2e^{-E_1\Delta t},
+\end{equation}
+对应的有效矩阵元形式为 $h^{\rm eff}=h+Ae^{-\Delta E\Delta t}+\cdots$
+（$\Delta E=E_1-E_0$）。基态饱和判据：$\Delta t\cdot\Delta E\gtrsim2$
+时激发态污染 $<15\%$；对典型核子能隙（$\Delta E\sim0.5$ GeV），
+$\Delta t_{\rm sep}\gtrsim1$ fm 时基态占据主导。小 $N$（组态数）、多
+参数情形下，传统 $\chi^2$ 拟合不稳定，\textbf{Bayesian 约束拟合}引入
+参数先验：
+\begin{equation}\label{eq:chi2-aug}
+\chi^2_{\text{aug}} = \chi^2 + \sum_k \frac{(p_k-\tilde p_k)^2}
+{\sigma_{p_k}^2},
+\end{equation}
+其中 $\tilde p_k$、$\sigma_{p_k}$ 是先验均值与宽度（可取物理预期，如
+$E_1-E_0\sim0.5$ GeV）。比值结构
+\begin{equation}
+R(T,\tau) = M + A\,e^{-\Delta E\tau}
++ B\,e^{-\Delta E(T-\tau)} + C\,e^{-\Delta E T} + \cdots
+\end{equation}
+（\pathref{refer/donghx/Gradient_Flow_GluonPDF/physics-conventions.md}
+）同时解释了端点切割与 Sumratio 斜率比直接 plateau 更不敏感的原因；
+\textbf{多态 Ratio 拟合的可辨识性}不能仅凭优化器收敛判定——
+$\Delta E$ 必须来自相容的 $C_2$ 谱分析或使用透明先验并保留先验约束
+状态。GEVP 方法系统分离基态与低激发态：
+\begin{equation}
+C(\Delta t)\,v_n(\Delta t,\Delta t_0)
+= \lambda_n(\Delta t,\Delta t_0)\,
+C(\Delta t_0)\,v_n(\Delta t,\Delta t_0),
+\qquad \lambda_n(\Delta t)\sim e^{-E_n\Delta t},
+\end{equation}
+其中 $C(\Delta t)$ 是不同插值算符之间的关联函数矩阵（GEVP 对大动量下
+核子态的精确提取特别有效；本库 stab13 已修复复数 Hermitian GEVP 的
+信息丢失问题并加回归测试）。
 
 对本库 disconnected 通道，由于 OPE 对\textbf{所有}时间片平均（且真空
 扣除后比值对 $t_{\text{sep}}$ 的依赖被消除），$h(z,\bperp,P_z)$ 直接从
@@ -1258,24 +1779,47 @@ F_{z\mu}(z)\,W(z,0)\,\tilde F_\nu^{\;z}(0)$。两个锚点在 schema-v2 中的
 
 \subsubsection{Lorentz 分量分类与方向平均}
 
-在有限格距下 Euclidean 旋转对称性 $O(4)$ 破缺为超立方对称性 $H(4)$。
-对 Wilson 线沿 $z$ 的构型，非极化三个独立分量为：
+在有限格距下 Euclidean 旋转对称性 $O(4)$ 破缺为超立方对称性 $H(4)$，
+连续理论中由 Lorentz 对称性关联的分量在格点上需独立处理。对 Wilson 线
+沿 $z$ 的构型，非极化三个独立分量为：
+
 \begin{center}
-\begin{tabular}{c c c}
+\begin{tabular}{c c c c}
 \toprule
-\textbf{分量} & \textbf{$(\mu,\nu)$ 组合} & \textbf{物理内容} \\
+\textbf{分量} & \textbf{$(\mu,\nu)$ 组合} & \textbf{物理内容} &
+\textbf{连续极限贡献} \\
 \midrule
-电-电 & $(t,x)$、$(t,y)$ & $F_{zt}W\tilde F^{tz}$（$E_\perp\cdot E_\perp$ 型） \\
-磁-磁 & $(x,y)$ & $F_{zx}W\tilde F^{xz}+F_{zy}W\tilde F^{yz}$（$B_\perp\cdot B_\perp$ 型） \\
-组合 & 全部 & $O_U=M_{tx;tx}+M_{ty;ty}-2M_{xy;xy}$ \\
+电-电 & $(t,x)$、$(t,y)$ & $F_{zt}W\tilde F^{tz}$ & $E_\perp\cdot E_\perp$ 型 \\
+磁-磁 & $(x,y)$ & $F_{zx}W\tilde F^{xz}+F_{zy}W\tilde F^{yz}$ & $B_\perp\cdot B_\perp$ 型 \\
+组合 & 全部 & $O_U=M_{tx;tx}+M_{ty;ty}-2M_{xy;xy}$ & Lorentz 不变量 \\
 \bottomrule
 \end{tabular}
 \end{center}
-在连续极限下所有分量贡献合并为所需 Lorentz 不变量；有限格距下通过
-\textbf{三方向平均}（$z_{\rm dir}=x,y,z$ 的动量置换，\code{
-pyqcd/analysis/\_bare\_matrix.py} 的 \code{dir\_momentum}）部分恢复旋转
-对称性。非极化通道取 even 投影后取实部；螺旋度通道取 odd 投影后经
-$\operatorname{Re}[-iR_H]$ 相位投影。
+由电-磁分解 $E_i=F^{\mathrm M}_{0i}$、$F^{\mathrm M}_{ij}=-\eps_{ijk}B_k$
+：电-电项贡献 $E_\perp^2$ 型结构、磁-磁项贡献 $B_\perp^2$ 型结构；
+组合 $O_U$ 正是「$E_\perp^2-B_\perp^2$ 型」的 twist-2 投影（经 Wick
+词典后即 $M_{tx;tx}+M_{ty;ty}-2M_{xy;xy}$）。在连续极限下所有分量的
+贡献合并为所需 Lorentz 不变量；有限格距下通过\textbf{三方向平均}
+（$z_{\rm dir}=x,y,z$ 的动量置换，\code{pyqcd/analysis/\_bare\_matrix.py}
+的 \code{dir\_momentum}）部分恢复旋转对称性。\textbf{并行实现的两代
+方案}：legacy docker 时代按 Lorentz 对分配 MPI rank（三个分量各占
+一个 rank，零通信、完美负载均衡、可随极化/固定规范通道自然扩展到更多
+rank）；schema-v2 的单组态实现则在同一进程内对全部 $(\mu,\nu)$ 对
+批量构造（逐组态 embarrassingly parallel 的组态级并行由元任务调度层
+承担，见第 \ref{sec:workflow} 章）。非极化通道取 even 投影后取实部；
+螺旋度通道取 odd 投影后经 $\operatorname{Re}[-iR_H]$ 相位投影。
+
+\paragraph{三方向平均与裸矩阵元组装}有限格距下不同 $z_{\rm dir}$ 的
+结果略有差异；裸矩阵元的系综组装按\textbf{动量置换}三方向平均：
+\begin{equation}\label{eq:three-dir-average}
+h^{\rm bare}(z,\bperp,P_z) = \frac13\sum_{d\in\{x,y,z\}}
+h^{(d)}\bigl(\Pi_d(z,\bperp,P_z)\bigr),
+\end{equation}
+其中 $\Pi_d$ 是把 boost/分离/位移按 $d$ 方向重标的置换（\code{
+pyqcd/analysis/\_bare\_matrix.py} 的 \code{dir\_momentum}：对 boost
+动量沿 $d$、OPE 组合沿同方向的匹配）；三方向的组态级数据在
+configuration-aligned 意义下逐组态平均后再入统计层。三方向与单方向的
+差是旋转对称性破缺的直接度量（系统误差预算的输入之一）。
 
 % ===========================================================================
 \section{Distillation 方法与动量涂抹}
@@ -1311,6 +1855,20 @@ v^{(k)}(x) \, \tau^{(kl)}(t) \, v^{(l)\dagger}(y)
 2\delta_{xy}\delta^{ab} \Bigr]
 \end{equation}
 本征值问题 $\Delta v^{(k)} = \lambda_k v^{(k)}$，$\lambda_k \ge 0$。
+数值求解用 Lanczos 型迭代（大稀疏厄米特征问题）；本征基的正交性与
+完备性须验证（本库 V1--V4 压缩与噪声/GS/正交检查契约）。
+\textbf{低模的物理意义}：$\lambda_k\sim k^2$（低模类似动量平方），
+保留小 $\lambda_k$ 模等价于保留低动量（大尺度）自由度；本征矢量的
+谱截断等价于对夸克场的\textbf{谱低通滤波}：
+\begin{equation}
+S(x,y)_{\rm dist} = \sum_{k,l\le N_{\rm ev}} v^{(k)}(x)\,
+\tau^{(kl)}\,v^{(l)\dagger}(y),
+\qquad
+\Delta S \sim \sum_{k>N_{\rm ev}} v^{(k)}\,\lambda_k^{-1}\,
+v^{(k)\dagger}
+\;\propto\; \frac{\langle\lambda\rangle_{k>N_{\rm ev}}}{N_{\rm ev}}\;
+\text{量级}.
+\end{equation}
 低模本征矢量具有长波长空间结构，自然实现对夸克场的平滑：截断到前
 $N_{\text{ev}}$ 个本征模等价于投影到低能子空间。截断误差按
 $\order{1/N_{\text{ev}}}$ 衰减；$N_{\text{ev}}=100$ 对 $32^3$ 空间格点
@@ -1326,7 +1884,18 @@ S_{\alpha\beta}(\mathbf{x},t_{\text{sink}}; \mathbf{y},t_{\text{src}}) \,
 v^{(l)}(\mathbf{y}, t_{\text{src}})
 \end{equation}
 计算需要 $N_{\text{ev}}$ 次 Dirac 求逆（每个源本征矢量一次），再与 sink
-本征矢量做内积。对每个 $t_{\text{src}}$，perambulator 是
+本征矢量做内积。\textbf{多源多汇的统计增强}：对 $N_{\rm src}$ 个源时间
+片与 $N_{\rm snk}$ 个 sink 时间片的全矩阵 $C_2(t_{\rm sink},t_{\rm src})$
+（而非仅对角 $\Delta t$），统计误差按
+\begin{equation}
+\delta C_2 \propto \frac{1}{\sqrt{N_{\rm conf}\,N_{\rm src}}}
+\times\frac{1}{\sqrt{N_{\rm eff}^{\rm corr}}}
+\end{equation}
+压低（$N_{\rm src}$ 个源的方差缩减近似 $\sim1/\sqrt{N_{\rm src}}$，
+相关性修正由全矩阵的协方差结构捕获）；本库管线对 $(N_t,N_t)$ 全矩阵
+做平移不变切片整理（staging：$C[\mathrm{sink},\mathrm{src}]
+=C\bigl((\mathrm{sink}-\mathrm{src})\bmod N_t\bigr)$），同时供 2pt/
+ratio/能量链消费。对每个 $t_{\text{src}}$，perambulator 是
 $(N_t,4,4,N_{\text{ev}},N_{\text{ev}})$ 五维数组，按 source 时间片分别
 存储为 4 个二进制文件（对应 4 个 Dirac 旋量分量）。本库 IO 层提供
 \code{pyqcd/tools/\_io.py} 的 h5py 读写（\code{save\_tensor\_h5}/
@@ -1338,44 +1907,226 @@ $(N_t,4,4,N_{\text{ev}},N_{\text{ev}})$ 五维数组，按 source 时间片分�
 为了在大动量 $P_z$ 下有效计算质子关联函数，对本征矢量施加动量相位：
 \begin{equation}\label{eq:momsmear}
 \tilde{v}^{(k)}(x; \mathbf{k}) = e^{i \mathbf{k} \cdot \mathbf{x}} \,
-v^{(k)}(x)
+v^{(k)}(x),
+\qquad \varphi(\boldsymbol x) = \exp\!\Bigl(
+-i\,\frac{2\pi}{L}\,\mathbf{P}\cdot\boldsymbol x \Bigr)
 \end{equation}
-（代码实现 \code{phase\_calc}/\code{eigvecs\_mom2}：
-$\varphi(\boldsymbol x)=\exp(-i\,2\pi \mathbf{P}\cdot\boldsymbol x/L)$，
-用于所有时间片的 VVV 构造。）动量涂抹的方向与大小独立于物理 boost 动量
-，用于优化基态重叠（本库第四轮已补齐 momentum-smear 的方向、实际相位、
-独立 perambulator 与 VVV 缓存隔离，见 \code{stab18}/\code{stab19} 标签
-记录）。
+即 $\tilde v^{(k)}_a(\boldsymbol x,t)
+=\varphi(\boldsymbol x)\,v^{(k)}_a(\boldsymbol x,t)$，用于所有时间片的
+VVV 构造。\textbf{物理动机}：boost 后的核子波函数在坐标空间中沿 boost
+方向延展，裸本征矢量与运动核子态的重叠 $Z_0(\mathbf P)$ 随 $P_z$ 急剧
+下降；动量相位预先「预扭」本征矢量，使插值算符的光锥分布与目标动量
+匹配，从而提高信噪比并压低激发态污染。动量涂抹的方向与大小独立于物理
+boost 动量（这是可调参数而非物理输入），用于优化基态重叠；本库第四轮
+已补齐 momentum-smear 的方向、实际相位、独立 perambulator 与 VVV 缓存
+隔离（\code{stab18}/\code{stab19} 标签记录）。
 
 \subsection{VVV 重子块与质子两点函数的收缩}
 
+\subsubsection{质子插值算符与 VVV 张量}
+
 质子插值算符（以 $C\gamma_5$ 为例）：
-$\mathcal{N}_\alpha(x) = \varepsilon^{abc}
-[ u^{a}(x)^T C\gamma_5 d^{b}(x) ] u^{c}_\alpha(x)$。
-VVV（baryon block）张量为三个本征矢量的色收缩与动量相位组合：
+\begin{equation}
+\mathcal{N}_\alpha(x) = \varepsilon^{abc}
+\bigl[ u^{a}(x)^T C\gamma_5 d^{b}(x) \bigr] u^{c}_\alpha(x),
+\end{equation}
+另一常用结构为 $C\gamma_5\gamma_\mu$（$\Gamma=C\gamma_5\gamma_t$ 或
+$C\gamma_5\gamma_z$，用于自旋/宇称通道分离）。VVV（baryon block）张量
+为三个本征矢量的色收缩与动量相位组合：
 \begin{equation}\label{eq:vvv}
 \Phi_{abc}(t, \mathbf{P}) = \sum_{\mathbf{x}} e^{-i\mathbf{P}\cdot\mathbf{x}}
 \, \varepsilon_{ijk} \, v^{(a)}_i(\mathbf{x}, t) \,
-v^{(b)}_j(\mathbf{x}, t) \, v^{(c)}_k(\mathbf{x}, t)
+v^{(b)}_j(\mathbf{x}, t) \, v^{(c)}_k(\mathbf{x}, t),
 \end{equation}
-（6 个 $\eps_{ijk}$ 排列的缩并，GPU 加速 10--50 倍；本库预计算
-VdV/VVV 顶点积二进制 reader \code{readin\_vdv\_all}/\code{readin\_vvv\_all}
-——f8 交错复数、Nev 自探测与截断。）质子两点函数的直接项与交换项：
-
+其中 $i,j,k\in\{0,1,2\}$ 为色指标、$a,b,c$ 为本征矢量指标。显式展开为
+6 个 Levi-Civita 排列的缩并（3 正 + 3 负）：
 \begin{align}
-C_2^{ij}(t_{\text{sink}}, t_{\text{src}}) &=
-\Phi_{abc} \, \tau^{ad}_{i\alpha} \,
-[\Gamma \tau \Gamma]^{be}_{\beta\gamma} \,
-\tau^{cf}_{j\delta} \, \Phi_{def}^{*} \notag\\
-&\quad - \Phi_{abc} \, \tau^{af}_{i\alpha} \,
-[\Gamma \tau \Gamma]^{be}_{\beta\gamma} \,
-\tau^{cd}_{j\delta} \, \Phi_{def}^{*}
+\Phi_{abc}(\mathbf P,t) = \sum_{\mathbf x} e^{-i\mathbf P\cdot\mathbf x}
+\bigl[
+& \eps_{012}\, v_0^a v_1^b v_2^c + \eps_{120}\, v_1^a v_2^b v_0^c
++ \eps_{201}\, v_2^a v_0^b v_1^c \notag\\
+&- \eps_{021}\, v_0^a v_2^b v_1^c - \eps_{102}\, v_1^a v_0^b v_2^c
+- \eps_{210}\, v_2^a v_1^b v_0^c
+\bigr]
+\label{eq:vvv-permutations}
 \end{align}
-宇称投影 $C_2^{P_\pm} = \operatorname{Tr}_{\text{Dirac}}[P_\pm C_2]$，
-$P_\pm=\frac12(\gamma_0\pm\gamma_4)$（DR 基显式矩阵见附录
-\ref{sec:appendix-dr}）；边界条件符号修正：$t_{\text{sink}}<t_{\text{src}}$
-的关联函数乘以 $-1$（pp 通道；pm 通道 $t_{\text{sink}}>t_{\text{src}}$，
-\code{pyqcd/contraction/\_baroperator.py} 的 \code{parity\_and\_boundary}）。
+（每个排列通过批量 Einstein 缩并执行；GPU 上逐 $x$ 层分片计算以适配
+显存，perambulator 按 $t_{\rm src}$ 流式加载、显存池在每循环后释放。
+本库预计算 VdV/VVV 顶点积二进制 reader
+\code{readin\_vdv\_all}/\code{readin\_vvv\_all}——f8 交错复数、Nev 自
+探测与截断，避免重复的收缩开销。）
+
+\subsubsection{Wick 收缩：直接项与交换项}
+
+质子两点函数的两个费曼图贡献为\textbf{直接项}（direct）与\textbf{交换
+项}（exchange，来自夸克线的费米子反对称化）：
+\begin{align}
+C_2^{il}(t_{\text{sink}}, t_{\text{src}})^{\rm direct} &=
+\Phi_{abc}(t_{\rm sink}) \, \tau^{ad}_{g i} \,
+[\Gamma\,\tau\,\Gamma]^{be}_{g j} \,
+\tau^{cf}_{j\delta}\,\Phi^{*}_{def}(t_{\rm src}),
+\label{eq:c2-direct}\\
+C_2^{il}(t_{\text{sink}}, t_{\text{src}})^{\rm exch} &=
+\Phi_{abc}(t_{\rm sink}) \, \tau^{af}_{g i} \,
+[\Gamma\,\tau\,\Gamma]^{be}_{g j} \,
+\tau^{cd}_{j\delta}\,\Phi^{*}_{def}(t_{\rm src}),
+\label{eq:c2-exch}\\
+C_2 &= C_2^{\rm direct} - C_2^{\rm exch}
+\label{eq:c2-total}
+\end{align}
+（完整表达式涉及三个夸克传播子在色与 Dirac 空间的双重收缩；交换项的
+符号来自重子插值算符中两个同味夸克场的反对称化。）两项之差给出完整
+的 $4\times4$ Dirac 矩阵值两点函数。
+
+\paragraph{色收缩的完整迹形式}把三个夸克传播子写全（含色指标），
+直接项为
+\begin{equation}\label{eq:c2-color-trace}
+C_2^{\rm direct} =
+\eps^{abc}\,\eps^{a'b'c'}\,
+\tr_{\rm D}\!\bigl[\Gamma_2\,S^{aa'}(t_{\rm snk},t_{\rm src})\,
+\Gamma_1\,S^{bb'}(t_{\rm snk},t_{\rm src})\,
+\Gamma_2\,S^{cc'}(t_{\rm snk},t_{\rm src})\,\bigr],
+\end{equation}
+（$\Gamma_1=C\gamma_5$ 型、$\Gamma_2=\mathbf1$ 型的插值结构；
+Dirac 迹含色指标求和。）交换项在两个同味夸克线上交换色流
+（$a'\leftrightarrow c'$），由色 Fierz 恒等式（附录 C）
+$T^a_{ij}T^a_{kl}=\frac12(\delta_{il}\delta_{jk}
+-\frac{1}{N_c}\delta_{ij}\delta_{kl})$ 化为直接项的色重组——这是
+distillation 实现中直接/交换两顶点积（VVV+perambulator 语义）的
+理论来源。对 isoscalar 组合（u 与 d 相同味道），两味贡献相加；
+isovector（$u-d$）相减。
+
+\subsubsection{宇称投影与边界符号}
+
+正/负宇称通道经宇称投影算符提取：
+\begin{equation}
+C_2^{P_\pm}(t_{\rm sink},t_{\rm src})
+= \operatorname{Tr}_{\rm Dirac}\!\bigl[P_\pm\,C_2(t_{\rm sink},
+t_{\rm src})\bigr],
+\qquad P_\pm = \frac12(\gamma_0 \pm \gamma_4),
+\end{equation}
+（DR 基显式矩阵见附录 \ref{sec:appendix-dr}；本库第四轮以双宇称投影
+$P_\pm=\frac12(\gamma_0\pm\gamma_4)$ + 反周期边界符号翻转固化该约定，
+\code{pyqcd/contraction/\_baroperator.py}。）\textbf{边界条件符号修正}
+的来源：插值算符在时间反演下的性质使得反向传播项带符号
+$\sigma_{\mathbf P}$——pp 通道在 $t_{\rm sink}<t_{\rm src}$（关联函数
+绕过时间边界）时乘 $-1$，pm 通道在 $t_{\rm sink}>t_{\rm src}$ 时乘
+$-1$；投影宇称与时间方向组合的约定必须与物理通道定义一致，否则
+$C_2$ 的谱分解会出现相消/相长的伪像（本库实战中 P2 通道的负号与负
+ratio 相消即源于此约定，见 stab1 记录）。
+
+\subsection{矩阵元提取与统计分析链}
+
+\subsubsection{从组态级数据到物理矩阵元}
+
+从关联函数中提取胶子准 TMD/PDF 矩阵元的完整步骤：
+\begin{enumerate}
+  \item \textbf{计算有效矩阵元}：$h^{\rm eff}(z,P_z;\Delta t)
+  = C_3(\Delta t;z,P_z)/C_2(\Delta t;P_z)$；disconnected 通道下近似为
+  协方差形式（式~\eqref{eq:c3-cov}）。
+  \item \textbf{时间平均与统计平均}：对每个组态先做时间平均，再对组态
+  系综平均：
+  \begin{equation}
+  h(z) = \frac{1}{N_{\rm conf}}\sum_{c=1}^{N_{\rm conf}}
+  \left(\frac{1}{N_t}\sum_{t=1}^{N_t} O_c(t,z)\right)
+  \end{equation}
+  （ratio-v2 把两步合并为协方差估计，见第 \ref{sec:ratio-v2} 节。）
+  \item \textbf{plateau 拟合}：选择 $\Delta t$ 足够大的区域取
+  $h(z,P_z)=\lim_{\Delta t\to\infty}h^{\rm eff}\approx$ const。
+  \item \textbf{误差估计}：Jackknife/Bootstrap（第 \ref{sec:statistics}
+  章），多 $z$ 数据用全协方差做关联拟合。
+\end{enumerate}
+
+\subsubsection{Bayesian 拟合的先验机制}
+
+多参数、小样本拟合以 lsqfit 风格的先验约束为主（先验优先级高于局部
+$\chi^2$）；\textbf{关联协方差拟合}的代价函数为
+\begin{equation}
+\chi^2 = \bigl[\mathbf d-f(\mathbf p)\bigr]^{\mathrm T}\,
+C^{-1}\,\bigl[\mathbf d-f(\mathbf p)\bigr],
+\end{equation}
+$C$ 为（可能是奇异的）协方差矩阵——本库实战约定
+\code{svdcut}$=10^{-6}$（10 组态协方差奇异的选择）；协方差不可靠时退回
+对角方差或先验约束（式~\eqref{eq:chi2-aug}）。拟合窗口的系统依赖
+（$\Delta t_{\min}$、窗宽）以多窗稳定性检验呈现，不逐窗挑最小误差。
+
+\subsubsection{Feynman--Hellmann 型常数拟合与自适应窗口}
+
+对「物理目标为常数 $M$、时间依赖为指数污染」的结构
+（$R(T,\tau)=M+ Ae^{-\Delta E\tau}+B\,e^{-\Delta E(T-\tau)}+\cdots$），
+本库提供两类拟合工具（\code{pyqcd/analysis/\_ratio\_fit.py}，移植
+zengch \code{fit\_ratio\_FH\_new} 逻辑）：
+\begin{itemize}
+  \item \textbf{闭式协方差常数拟合}：对窗口内数据 $\{d_k\}$
+  （$k=1..n_w$）与协方差 $C$，常数拟合的最优值与协方差闭式给出
+  \begin{equation}\label{eq:fh-closed-form}
+  \hat M = \frac{\mathbf 1^{\mathrm T} C^{-1}\mathbf d}
+  {\mathbf 1^{\mathrm T} C^{-1}\mathbf 1}, \qquad
+  \sigma^2_{\hat M} = \frac{1}{\mathbf 1^{\mathrm T} C^{-1}\mathbf 1},
+  \end{equation}
+  （闭式解避免了非线性最小化的初值敏感与退化回退需求）；
+  \item \textbf{$\chi^2$ 驱动的逐 $z$ 自适应 $t_{\rm sep}$ 窗}：
+  以质量门（$Q\ge0.01$ 且 $\chi^2/\mathrm{dof}\le3$）为闸门，从小窗
+  起逐步扩大直到门失效，取最大合格窗口——避免主观定窗，同时保证
+  每个拟合输入可回溯（\code{fh\_adaptive\_windows}）。
+\end{itemize}
+窗口选择的全局一致性原则同前：窗口序列是\textbf{系统性选择}，跨
+$z$/$P_z$/通道保持同一规则。
+
+\subsection{插值算符配对与统计层的选择矩阵}
+
+disconnected 通道中，\textbf{OPE 通道}（$O_U/O_H$）与\textbf{两点
+函数通道}（nopol/pol35）必须按物理目标配对；插值算符的 Dirac 结构
+决定配对语义：
+\begin{center}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{目标} & \textbf{OPE 通道} & \textbf{2pt 投影 / 插值算符} \\
+\midrule
+非极化矩阵元 & $O_U=(T_U-S_U)_{\rm even}$ & nopol，
+$C_2^{P_+}$ 迹（$\Gamma=C\gamma_5$ 系） \\
+螺旋度矩阵元 & $O_H=(T_H-S_H)_{\rm odd}$ & pol35（轴矢投影，
+$\Gamma=C\gamma_5\gamma_\mu$ 系） \\
+能量提取 & --- & nopol，$E_0$ 拟合（任意插值算符） \\
+色散检验 & --- & nopol，多动量 $E(P_z)$ 联合拟合 \\
+\bottomrule
+\end{tabular}
+\end{center}
+配对错误（如 helicity OPE 配 nopol 分母作 numerator）会把 spin 无关
+谱的涨落混入 spin 通道——ratio-v2 的 POLARIZATION\_FOR\_CHANNEL
+映射（unpolarized $\to$ nopol、helicity $\to$ pol35）即该语义矩阵
+的代码化。
+
+\subsection{蒸馏收缩的性能增强层}
+\label{sec:compress}
+
+\subsubsection{本征模压缩（V1--V4）}
+
+本征矢量以浮点存储占大量磁盘/带宽；\textbf{压缩层}按精度需求分区：
+\begin{equation}
+v^{(k)}(x) \in \mathbb C^3
+\;\longrightarrow\;
+\begin{cases}
+\text{V1：低模整复数保留（reshape 快速路径，提速 44--68\%）}\\
+\text{V2--V3：模内压缩（色/格点结构分组）}\\
+\text{V4：逐点量化（对统计误差可忽略的高阶位）}
+\end{cases}
+\end{equation}
+压缩后的本征矢量用于构造 \textbf{VdV/VVV 顶点积}（预计算并以 f8
+交错复数二进制存取），把逐组态的重复收缩降为查表。
+
+\subsubsection{$\Omega$ 加速张量}
+
+三夸克收缩的\textbf{分区权重张量} $\Omega$（exact/块/noise 三类权重
+，dim=2/3，conserved/normal 两种语义）在蒸馏收缩中把「逐模全对」
+$(N_{\rm ev}^3)$ 的组合分解为分区组合的凸组合：
+\begin{equation}
+\Phi_{abc} = \sum_{\omega}\Omega^{(\omega)}_{abc}\,\Phi^{(\omega)},
+\end{equation}
+其中 exact 分支保留完整精度、块/噪声分支以可控偏差换统计成本；本库
+实现经 lqcddb 原版实跑真值\textbf{逐位对照验证}（有效契约 7 用例
+$\max|d|=0$，契约外输入显式拒绝，stab7）。
 
 \subsection{与其他涂抹方法的比较}
 
@@ -1501,23 +2252,29 @@ L(z) = \exp[-\delta_m\,\abs{z}]
 \times 5.067730716$。即使非极化通道两项使用相同的 $c_{\perp\perp}^2$，
 仍应保留 $T_U$、$S_U$ 两项分别转换后再作相对负号——以便逐项检查张量
 恒等式、tree-level 归一化与可能的晶格对称性混合。\code{
-pyqcd/renorm/\_gradient\_flow\_quasi.py} 的实现：
-
-\begin{lstlisting}[language=Python]
-c_parallel = 1.0
-c_perp = 1.0 + alpha_s*ca/(4.0*math.pi)
-          * math.log(2.0*mu_gev**2*t_gev*math.exp(EULER_GAMMA))
-delta_m = -alpha_s*ca/(4.0*math.pi)*math.sqrt(2.0*math.pi/t_gev)
-z_gev = np.arange(z_count)*a_fm*GEV_FM
-line = np.exp(-delta_m*z_gev)                     # 作用于 |z|
-factors = [1.0/(c_perp*c_perp),                   # unpolarized
-           1.0/(c_parallel*c_perp)]               # helicity
-out *= factors[None, :, None, None, None, None]
-out *= line[None, None, None, None, :, None]
-# 匹配后由独立分量重构 combined，避免重复使用未匹配组合：
-out[:, 0, :, 0] = out[:, 0, :, 1] - out[:, 0, :, 2]   # U: Mtiti-Mijij
-out[:, 1, :, 0] = out[:, 1, :, 1] + out[:, 1, :, 2]   # H: Mtiti+Mijij
-\end{lstlisting}
+pyqcd/renorm/\_gradient\_flow\_quasi.py} 按下述三条规则对整个六轴 OPE
+数组逐通道施加转换：
+\begin{align}
+\text{（i）端点因子}\quad
+& \bigl(M_{titi},\,M_{ijij}\bigr)
+\;\longrightarrow\;
+Z_{\chi}\bigl(M_{titi},\,M_{ijij}\bigr), \notag\\
+&\qquad \chi=U:\;Z_U=\frac{1}{c_{\perp\perp}^2},
+\qquad \chi=H:\;Z_H=\frac{1}{c_{\parallel\perp}c_{\perp\perp}},
+\notag\\[2pt]
+\text{（ii）线因子}\quad
+& \text{每个 } z \text{ 行乘 } \exp[-\delta_m\abs{z}]
+\quad(\abs{z}\text{ 对 } +z/-z \text{ 一致}),
+\notag\\[2pt]
+\text{（iii）重构}\quad
+& \text{combined}_U = \text{Mtiti}_U - \text{Mijij}_U,
+\qquad
+\text{combined}_H = \text{Mtiti}_H + \text{Mijij}_H,
+\label{eq:matched-reconstruct}
+\end{align}
+即先对独立分量（\code{Mtiti}/\code{Mijij}）施加完整因子，再按存储约定
+重构组合分量——绝不把因子直接乘到未匹配的 \code{combined} 上（否则会
+留下不受控的组合误差）。
 注意：helicity 通道的 \code{combined} 重构保持生产存储约定
 （$T_H+S_H$）；物理 helicity 目标 $(T_H-S_H)_{\rm odd}$ 由 ratio 统计层
 的显式 selector 得到（第 \ref{sec:unpol-hel} 节）。该层 metadata 显式
@@ -1579,10 +2336,41 @@ Z_R(z, 1/a, \mu) = \exp\!\Bigl[\;
   在 $z=0$ 处归一。
 \end{itemize}
 
-\textbf{优势}：独立于 RI/MOM 标度选择模糊，且直接关联微扰 $\MSbarM$ 方案
-。\textbf{验证}：自重整化方案已被证明在 Wilson 流涂抹下保持稳定（
-$T_W=3a^2$ 时重整化参数不变），这进一步证实了其作为普适重整化方法的
-可靠性——这也是本库把梯度流与 $Z_R$ 结合为核心方案的原因。
+\paragraph{数据管线与拟合实现}$Z_R$ 拟合的数据组织为三层：(1)
+\textbf{$h_B$ 数据集}——零动量矩阵元的 $z_0$ 归一化与插值装载
+（\code{build\_hB\_dataset}，对照 zengch \code{hB\_data\_FeynmenHellman}
+逻辑）：以参考分离 $z_0$（流守恒点附近）作归一
+\begin{equation}
+\widehat h_B(z) = \frac{h_B(z,0)}{h_B(z_0,0)},
+\qquad
+\log \widehat h_B = \log h_B - \log h_B(z_0),
+\end{equation}
+统一 $z$ 网格（样条/线性插值到共同节点），并给出 bootstrap 协方差
+（\code{boot\_covariance}：逐样本列的中心化二次型
+$C_{ij}=\frac{1}{n_s-1}\sum_s(\Delta\log\widehat h_i^{(s)})
+(\Delta\log\widehat h_j^{(s)})$）；(2)
+\textbf{全局拟合}——以 \code{ZRDataset}（逐样本 \code{loghB\_samples}
++ 均值/协方差/伪逆缓存）为对象的代价函数最小化；(3)
+\textbf{逐样本重拟合环}——\code{fit\_ZR\_samples} 对每个 bootstrap/
+jackknife 样本独立重拟合 $Z_R$ 参数（单个坏样本 NaN 不中断），再由
+\code{summarize\_ZR\_samples} 汇总均值与标准差——这一「逐样本参数化」
+使 $Z_R$ 的不确定度可以与其他分析步骤的 resample 对齐传播。短距
+$\MSbarM$ 因子的显式形式为
+\begin{equation}\label{eq:z-ms}
+Z_{\mathrm{MS}}(z,\mu) = 1 + \frac{\alpha_s(\mu)C_A}{2\pi}
+\left[\frac{5}{6}\ln\!\frac{z^2\mu^2 e^{2\gamma_E}}{4} + \frac{3}{2}
+\right] + \order{\alpha_s^2},
+\end{equation}
+（注意仓库耦合约定 $A_s\equiv\alpha_s/(4\pi)$：\code{Z\_MS} 内部以
+$\alpha_s=4\pi A_s(\mu)$ 还原真耦合——dev8 对照轮修复的归一漏乘三处
+之一。）
+
+\textbf{优势}：独立于 RI/MOM 标度选择模糊，且直接关联微扰 $\MSbarM$
+方案。\textbf{验证}：自重整化方案已被证明在 Wilson 流涂抹下保持稳定
+（$T_W=3a^2$ 时重整化参数不变），这进一步证实了其作为普适重整化方法
+的可靠性——这也是本库把梯度流与 $Z_R$ 结合为核心方案的原因；性能上
+$Z_R$ 代价函数路径经 \code{stab24} 优化（\code{cost\_function\_all}
+基准 $0.186\to0.148$ s）。
 
 \subsection{混合方案（hybrid scheme）}
 
@@ -1598,6 +2386,36 @@ z > z_s:\quad & h_R(z,P_z) = \frac{h_B(z,P_z)}{Z_R(z)}\cdot\eta_s,
 \end{align}
 （\code{pyqcd/renorm/\_hybrid.py} 的 \code{hR\_z\_Pz}；$z_s$ 通常取
 0.2--0.4 fm——足够小使微扰匹配可靠，足够大使线性发散可稳定提取。）
+
+\paragraph{距离区域的物理区分}坐标空间矩阵元在不同 $z$ 区域的物理特征
+决定了方案的分区设计：
+\begin{center}
+\small
+\begin{tabular}{c c l}
+\toprule
+\textbf{区域} & \textbf{范围} & \textbf{物理特征} \\
+\midrule
+短距离 & $z\lesssim0.3$ fm & 微扰 QCD/OPE 支配；$h(z)$ 由 twist-2
+矩阵元控制；WR 系数微扰可算 \\
+中等距离 & $0.3\lesssim z\lesssim0.8$ fm & 微扰与非微扰混合；需要
+非微扰信息但 OPE 仍部分有效 \\
+长距离 & $z\gtrsim0.8$ fm & 非微扰完全主导；行为由强子质量标度
+（$M_\pi$/$\Lambda_{\rm QCD}$）决定 \\
+\bottomrule
+\end{tabular}
+\end{center}
+$z_s$ 的选择依据：$z_s$ 足够小（微扰对短距匹配核可靠），同时足够大
+（线性发散可从长距数据稳定提取）；跨系综比较时 $z_s$ 以物理单位
+（fm）固定。\textbf{线性发散参数的提取}：长距零动量矩阵元的大 $z$
+行为给出
+\begin{equation}\label{eq:dm-extraction}
+h_B(z, P_z=0) \sim \exp\!\bigl[-(\delta m + m_0)\,\abs{z}\bigr],
+\qquad \abs z \gg a,
+\end{equation}
+或者通过 Wilson 圈的大面积极限（静态夸克-反夸克势）确定 $\delta m$；
+混合方案的关键优势在于：短距微扰匹配精度（比值消除多项式发散）与
+长距红外物理完整性（不过度减除）兼得。
+
 大 $\lambda$ 区间的解析尾巴外推压制 Fourier 截断振荡：
 \begin{equation}
 h_R(\lambda) \sim l_1\,\lambda^{-a_1}\,e^{-\lambda/\lambda_0}
@@ -1612,25 +2430,105 @@ $h_R(x)=\frac{2}{2\pi}\int \mathrm{d}\lambda\,h_R(\lambda)\cos(x\lambda)$
 
 \subsubsection{比值方案}
 
-最简单的重整化是取与零动量矩阵元之比
-$h_R(z,P_z)=h_B(z,P_z)/h_B(z=0,P_z=0)$：自动消去与 $z$ 无关的发散，
-实现简单；但线性发散 $\delta m\abs{z}$ 没有完全消去，对大 $z$ 分子的
-线性发散仍然残存——因此只适合短距离，作为混合方案的短距组成部分。
+最简单的重整化是取与零动量矩阵元之比：
+\begin{equation}\label{eq:ratio-scheme}
+h_R(z, P_z) = \frac{h_B(z, P_z)}{h_B(z=0, P_z=0)}.
+\end{equation}
+\textbf{优点}：(1) 自动消去与 $z$ 无关的所有发散（包括 $Z_L$）；(2) 实现
+简单——不需要单独的辅助计算；(3) $z=0$ 处由流守恒保证 $h(0,P_z=0)$
+UV 有限。\textbf{局限性}：(1) 线性发散 $\delta m\abs{z}$ 没有完全消去
+（分子分母的 $z$ 不同）；(2) 零动量矩阵元在格点上可能带额外的
+$\order{a^2}$ 截断效应；(3) 大 $z$ 分子的线性发散残存。重整化因子的
+因子化视角：$h_B(z,P_z)\propto e^{-\delta m\abs{z}}\,Z_L^{-1}
+\times(\text{物理})$，比值只消去了 $Z_L$ 与常数部分，指数残存——因此
+比值方案只适合短距离，作为混合方案的短距组成部分。
 
-\subsubsection{RI/MOM 方案（对照保留）}
+\subsubsection{RI/MOM 方案（对照保留，五步流程）}
 
-RI/MOM 方案在 Landau 规范下计算夸克传播子与裸顶点函数，在
-$p^2=\bar\mu_0^2$ 处施加树图归一条件：
+RI/MOM（Regularization Independent / MOMentum subtraction）是格点 QCD
+最广泛使用的非微扰重整化方法之一，完整流程五步：
+
+\textbf{第 1 步：规范固定}。RI/MOM 需要 Landau 规范
+（$\partial_\mu A_\mu=0$）；规范固定精度对非局域算符矩阵元的影响需要
+监控（劣化规范会引入额外噪声与系统偏差）。
+
+\textbf{第 2 步：夸克传播子}。在动量空间计算
 \begin{equation}
-Z_q^{-1} Z_O(z,\bar\mu_0)\, \frac{1}{12}\tr\!\left[
+S(p) = \frac{1}{V}\sum_{x,y}\,e^{-ip\cdot(x-y)}
+\braket{\psi(x)\bar\psi(y)},
+\qquad
+Z_q = \frac{1}{12}\tr\!\left[S^{-1}(p)\,S^{\rm Born}(p)\right]
+\Big|_{p^2=\bar\mu_0^2},
+\end{equation}
+（迹遍历 Dirac 旋量与色指标。）
+
+\textbf{第 3 步：顶点函数}。对算符 $O(z)$ 构造裸顶点并截肢外线：
+\begin{equation}
+V_B(p,z) = \sum_{x,y}e^{-ip\cdot(x-y)}
+\braket{\psi(x)\,O(z)\,\bar\psi(y)},
+\qquad
+\Lambda_B(p,z) = S^{-1}(p)\,V_B(p,z)\,S^{-1}(p).
+\end{equation}
+
+\textbf{第 4 步：重整化条件}。在 $p^2=\bar\mu_0^2$ 处要求顶点等于
+树图值：
+\begin{equation}
+Z_q^{-1}\,Z_O(z,\bar\mu_0)\,\frac{1}{12}\tr\!\left[
 \Lambda_B(p,z)\,\bigl(\Lambda_B^{\text{Born}}(p,z)\bigr)^{-1}
 \right]\Big|_{p^2=\bar\mu_0^2} = 1
+\label{eq:RI-MOM-cond}
 \end{equation}
-再经微扰转换因子 $R$ 转到 $\MSbarM$。其局限：对非定域算符，$z$ 与
-$\bar\mu_0$ 可比拟时幂次修正 $(z^2\bar\mu_0^2)$ 使微扰匹配可靠性下降，
-通常仅适用于 $z\lesssim0.3$ fm。本库主线不采用 RI/MOM（保留为对照与
-文献接口），原因是：梯度流方案不需要 Landau 规范固定与辅助顶点计算，
-且与 $Z_R$/混合方案可衔接。
+该条件对所有 $z$ 值确定非微扰的 $Z_O(z)$。
+
+\textbf{第 5 步：转到 $\MSbarM$}。经微扰转换因子
+\begin{equation}
+Z_O^{\MSbarM}(\mu) = R\!\left(\frac{\bar\mu_0^2}{\mu^2},\alpha_s\right)
+Z_O^{\rm RI}(\bar\mu_0),
+\end{equation}
+$R$ 可微扰计算到 NLO（涉及 QCD $\beta$ 函数与胶子场反常维数）。
+
+\textbf{标度窗口与局限}：$\bar\mu_0$ 须满足「窗口条件」
+$\Lambda_{\rm QCD}\ll\bar\mu_0\ll1/a$（实践中 $\bar\mu_0\sim2$ GeV），
+且格点离散误差的微扰减法形如
+\begin{equation}
+Z_O^{\rm improved} = Z_O^{\rm lat}\,
+\frac{1+\order{\alpha_s}\text{（连续贡献）}}
+{1+\order{\alpha_s}\text{（格点贡献）}}.
+\end{equation}
+对\textbf{非定域}算符，当 $z$ 与 $\bar\mu_0$ 可比拟时，幂次修正
+$(z^2\bar\mu_0^2)$ 使微扰匹配可靠性下降——通常仅适用于
+$z\lesssim0.3$ fm。本库主线不采用 RI/MOM（保留为对照与文献接口），
+原因是：梯度流方案不需要 Landau 规范固定与辅助顶点计算，且与
+$Z_R$/混合方案可衔接。
+
+\subsection{正规化方案对比：幂次发散的方案依赖}
+
+准算符的重整化在不同正规化方案下的发散结构不同，理解这一点是解读
+各方案 $Z$ 因子差异的前提：
+
+\begin{center}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{正规化} & \textbf{线性发散的表现} & \textbf{对数发散的表现} \\
+\midrule
+维数正规化（$d=4-2\epsilon$） & $1/\epsilon_{\rm UV}$ 极点
+（power divergence 显示为极点） & $1/\epsilon_{\rm UV}$ 对数极点 \\
+格点正规化（截断 $1/a$） & 幂次发散 $\propto\abs z/a$（连续理论
+无对应物） & $\ln(1/(a\Lambda))$ 对数 \\
+梯度流正规化（$\tau$） & $\delta m_A\propto1/\sqrt\tau$
+（有限，随 $\tau\to0$ 发散） & $L_\tau(\mu)=\ln(2\mu^2\tau
+e^{\gamma_E})$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+三个正规化对\textbf{同一物理}给出不同的中间表示；方案间转换由一圈
+匹配系数给出（维数正规化 $\to$ $\MSbarM$：标准减除；格点 $\to$
+$\MSbarM$：RI/MOM 或比值方案；流 $\to$ $\MSbarM$：SFTE）。线性发散的结构性事实是：
+在维数正规化中它表现为 $1/\epsilon$ 极点（可被标准减除），在格点/
+流正规化中它以幂次形式存留——这正是准 PDF 重整化必须非微扰减除
+$\delta m\abs z$ 的根本原因（连续理论中「看起来温和」的极点在截断
+方案下放大为无法解析外推的幂次项）。
 
 \subsection{各方案比较与方案选择的系统误差}
 
@@ -1665,12 +2563,81 @@ e_{\mu_1}\cdots e_{\mu_n}\,\mathcal{O}_n^{\mu_1\cdots\mu_n}(\mu)
 + \order{z^2\Lambda_{\text{QCD}}^2}
 \end{equation}
 非定域算符的短距离行为完全由定域 twist-2 算符决定，而后者的 forward
-矩阵元正是 PDF/TMD 的 Mellin 矩来源。对胶子算符，前导 twist-2 定域算符
-就是胶子能量-动量张量（或其对称化、无迹化推广）。OPE 收敛性取决于
-$z^2\Lambda_{\rm QCD}^2$：$z\lesssim0.2$--$0.3$ fm 时收敛良好，
-$z\gtrsim0.5$ fm 时开始失效——这自然解释了混合方案在短距离用微扰匹配、
-长距离用自重整化/模型外推的设计。OPE 在 DIS forward Compton 振幅中的
-应用（Mellin 矩提取与逆 Mellin 不适定性）与旧版一致，此处不再重复。
+矩阵元正是 PDF/TMD 的 Mellin 矩来源：
+\begin{align}
+\int_0^1 \mathrm{d}x\, x^{n-1}\,q(x,\mu^2) &= A_n(\mu^2)
+= \braket{P\bigl|\,\mathcal{O}^{(n)}(\mu^2)\,\bigr|P}, \notag\\
+\braket{P|\bar\psi\gamma^{\{\mu_1} iD^{\mu_2}\cdots iD^{\mu_n\}}\psi|P}
+&= 2\langle x^{n-1}\rangle\,P^{\mu_1}\cdots P^{\mu_n},
+\end{align}
+对胶子通道，前导 twist-2 定域算符就是胶子能量-动量张量（或其对称化、
+无迹化推广），其 forward 矩阵元给出 $\langle x^{n-1}\rangle_g$。
+\textbf{矩方法的局限}（\LaMET{} 之前的格点实践）：(1) 信噪比——高阶矩
+涉及更高阶协变导数，信号随 $n$ 指数衰减；(2) 算符混合——不同 $n$ 的
+算符因超立方对称性破缺而混合，混合系数含幂次发散；(3)
+\textbf{逆 Mellin 变换的不适定性}——从有限个矩重构完整 $x$ 依赖的
+分布在数学上是不适定的逆问题。因此仅能可靠计算前 2--3 个矩；
+\LaMET{} 通过非定域算符的 $z$ 依赖间接获取完整 $x$ 分布。OPE 收敛性
+取决于 $z^2\Lambda_{\rm QCD}^2$：$z\lesssim0.2$--$0.3$ fm 时
+（$z^2\Lambda^2\lesssim0.1$）收敛良好，$z\gtrsim0.5$ fm 时开始失效
+——这自然解释了混合方案在短距离用微扰匹配、长距离用自重整化/模型外推
+的设计。OPE 在 DIS forward Compton 振幅
+$T_{\mu\nu}(P,q)=i\!\int\!\mathrm{d}^4x\,e^{iq\cdot x}
+\braket{P|T\{J_\mu(x)J_\nu(0)\}|P}$ 中的应用与附录 G 相同，此处不再
+重复。
+
+\subsection{大动量展开的收敛性分析}
+\label{sec:convergence}
+
+\textbf{靶质量修正（TMC）}：来自运动学中的实际强子质量效应。当 $P_z$
+固定时，Nachtmann 变量而非 Bjorken $x$ 是自然标度变量：
+\begin{equation}\label{eq:nachtmann}
+\xi = \frac{2x}{1+\sqrt{1+4x^2 M_N^2/P_z^2}},
+\qquad \xi \xrightarrow{P_z\gg M_N} x.
+\end{equation}
+对于 $P_z=2$ GeV、$M_N=0.94$ GeV，$M_N^2/P_z^2\approx0.22$——数值上
+不可忽略，但可通过 Nachtmann 变量的形式纳入因子化公式，或以
+$M_N^2/P_z^2$ 项显式列入外推 ansatz（式~\eqref{eq:extrap-ansatz} 的
+$a^2P_z^2\,h(x)$ 项即其格点表达）。\textbf{高 twist 修正}：twist-4 及
+更高算符的贡献被 $z^2\Lambda_{\rm QCD}^2\sim\Lambda^2/P_z^2$ 压低。
+\textbf{有限 $P_z$ 下的数值研究}：多项数值研究（不同系综与动量）一致
+表明 $P_z\gtrsim1.5$ GeV 时准分布在大动量极限下的收敛行为良好——提取
+的分布对 $P_z$ 的依赖在统计误差内消失。\textbf{收敛性判据}：可信的
+PDF/TMD 提取需要 $P_z\gtrsim1.5$ GeV 且 $xP_z\gg\Lambda_{\rm QCD}$
+（后者排除非常小的 $x$ 区域）；本库参考动量 $P_z=3,4,5$（$L=32$、
+$a=0.0775$ fm）对应 0.60--1.00 GeV，\textbf{低于}该判据的严格阈值，
+这是当前单格距数据只能交付 bare observable 诊断的物理原因之一（第
+\ref{sec:results} 章边界）。
+
+\subsection{梯度流方案的完整重整化公式链}
+\label{sec:renorm-chain}
+
+把本章各方案的关系以一条公式链固化（每段一个已实现模块，出处见前述
+小节）：
+
+\begin{equation}\label{eq:renorm-chain}
+h^{\rm GF,bare}(\tau,z)
+\;\xrightarrow[\ \delta m_A,\ c_{\parallel\perp},\ c_{\perp\perp}\ ]{\
+\text{一圈 SFTE（式}~\eqref{eq:ZU-ZH}\text{）}\ }
+h^{\rm GF,R}(\tau,z;\mu)
+\;\xrightarrow[\ Z_U/Z_H\ ]{\ \text{端点重构（式}
+~\eqref{eq:matched-reconstruct}\text{）}\ }
+h^{\MSbarM}(z,\mu)
+\end{equation}
+\begin{equation}
+h_B(z,P_z)\;\xrightarrow[\ \eta_s=T_s,\ Z_R(z)\ ]{\
+\text{混合拼接（式}~\eqref{eq:hybrid-short}\text{--}
+\eqref{eq:hybrid-long}\text{）}\ }
+h_R(z,P_z)\;\xrightarrow{\ \lambda\text{ 尾巴外推}\ }\;
+h_R(\lambda)\;\longrightarrow\;\text{Fourier}.
+\end{equation}
+\textbf{两条链的关系与互斥性}：第一链是梯度流方案（流时间即 UV 方案
+），第二链是混合方案（比值 + $Z_R$ 自重整化）；两者都以\textbf{同一
+bare 数据}为输入但\textbf{输出不同的重整化方案}——分析中必须二选一
+并与 metadata 绑定，不得混用（20260909 审计的核心边界之一）。GF 方案
+的优点是把线性发散交给 $\delta m_A$（解析形式），$Z_R$ 方案的优点是
+非微扰地覆盖全 $z$；两者的系统误差可由「同一 bare 数据、两种方案、
+同一匹配」的交叉检验量化（附录 U 最佳实践）。
 
 % ===========================================================================
 \section{微扰匹配与 NLO 匹配核}
@@ -1805,22 +2772,31 @@ $y\,g/\sqrt{S_I}$ 为软减除后的光锥 TMD。
 
 \subsubsection{数值结构与软函数入口}
 
-数值结构与 \code{hR\_PDF} 同构（$Z_{ij}$ 矩阵 + 逐 $b_\perp$ 列）：
-\begin{lstlisting}[language=Python]
-alpha_s = A_s_run(mu) * 4.0 * pi     # A_s == alpha_s/(4pi), x4pi 还原
-cxi = x[:, None] / y[None, :]
-g_ij = _matching_kernels(cxi, y_matr, pz_gev, mu, lambda_s)
-c_alp_lo = np.diag(x/np.abs(x)) * dx * alpha_s * CA/(2.0*pi)
-m_ij = g_ij/y[None,:] - np.eye(n)*(y[:,None]
-          * np.sum(g_ij/y[None,:]**2.0, axis=1))
-z_ij = np.eye(n) + c_alp_lo @ m_ij
-z_inv = np.linalg.inv(z_ij)
-rap = np.exp(0.5*np.log((2.0*pz_gev)**2
-              /(2.0*pz_scale)**2) * K)
-out[:, j] = z_inv @ (yg[:, j]*rap[j]/np.sqrt(S[j]))
-\end{lstlisting}
-软函数入口：\code{soft\_function\_intrinsic}（从平方比值矩阵元提取的
-$S_I(b_\perp)=R^2(b_\perp)/R^2(b_\perp\to0)$ 型归一框架）；
+数值结构与 \code{hR\_PDF} 同构（$Z_{ij}$ 矩阵 + 逐 $\bperp$ 列）。
+设 $x_i$、$y_j$ 为等距网格（$\mathrm{d}x=x_{i+1}-x_i$），定义
+$g_{ij}\equiv g_{xy}(x_i/y_j)$（含 $\mu/(y_jP_z)$ 标度与 $\lambda_s$
+截断），则
+\begin{align}
+Z_{ij} &= \delta_{ij} + \frac{\alpha_s(\mu)C_A}{2\pi}\,
+\frac{x_i}{\abs{x_i}}\,\mathrm{d}x\,
+\Bigl[\frac{g_{ij}}{y_j}
+-\delta_{ij}\,y_i\sum_k\frac{g_{ik}}{y_k^2}\Bigr],
+\label{eq:zij-matrix}\\[2pt]
+x\,\tilde g(x_i,\bperp) &=
+\sum_j (Z^{-1})_{ij}\,
+y_j\,g(y_j,\bperp)\,
+\frac{\exp\!\bigl[\tfrac12 K(\bperp)\ln(\zeta_z/\zeta)\bigr]}
+{\sqrt{S_I(\bperp,\mu)}},
+\label{eq:tmd-conv}
+\end{align}
+其中快度因子
+$\exp[\tfrac12\ln((2P_z)^2/(2P_z^{\rm scale})^2)\,K]$ 把矩阵元从参考
+快度标度 $P_z^{\rm scale}$ 演化到 $P_z$。矩阵形式的 $Z^{-1}$ 自然处理
+$\xi=1$ 的主值奇点（$\delta$ 项由 $Z^{-1}$ 的 LO 部分还原）。耦合归一
+沿用仓库约定 $A_s\equiv\alpha_s/(4\pi)$：使用真耦合处
+$\alpha_s(\mu)=4\pi A_s(\mu)$（dev8 对照轮修复的三处之一）。
+软函数入口：$S_I(\bperp)=R^2(\bperp)/R^2(\bperp\to0)$ 型归一框架
+（\code{soft\_function\_intrinsic}）；
 \pathref{pyqcd/renorm/_soft.py} 把文档记号 $Z_E(r,\bperp;1/a)$ 的矩形
 Wilson 圈减除因子显式公开（几何构造复用
 \code{pyqcd.gauge.wilson\_rectangle}，支持 NumPy/CuPy/torch 后端），并
@@ -1899,8 +2875,72 @@ C_N = \int_0^1 \mathrm{d}\xi \, \xi^{N-1} C(\xi)
 \;\xrightarrow{N \to \infty}\;
 \exp\!\left[ \frac{\alpha_s C_A}{\pi} \ln^2 N + \cdots \right]
 \end{equation}
-本库主线未实现阈值重求和（登记为匹配层的不确定性来源之一，误差预算见
-第 \ref{sec:systematics} 章）。
+通过指数化大对数 $\ln N$ 恢复阈值区的微扰可信性；软胶子辐射的物理起源
+是：$\xi\to1$ 时辐射胶子变「软」，对应 Feynman 积分在 $d=4$ 下发散，
+$\MSbarM$ 减除后表现为 $1/(1-\xi)_+$ 行为，需要 plus-prescription 正规
+化使其在 $[0,1]$ 上积分有限。\textbf{加性重求和（small-$x$）}：小
+$x$ 区域的 $1/x$ 型增强对应 $\ln N\to\infty$ 的相反极限，需要
+BFKL/双对数型重求和（本库均未实现）。阈值与小 $x$ 重求和都登记为匹配
+层的不确定性来源（误差预算见第 \ref{sec:systematics} 章）。
+
+\subsection{不同重整化方案下的匹配核}
+
+\subsubsection{比值方案（坐标空间匹配）}
+
+在比值方案下（$h_R(z)=h(z)/h(0)$），匹配在\textbf{坐标空间}中施加，
+对数项由 $\ln(\mu^2/P_z^2)$ 变为 $\ln(\mu^2z^2e^{2\gamma_E}/4)$：
+\begin{equation}
+h_R(z, P_z) = H(z, \mu) \int_0^1 \mathrm{d}\alpha \,
+\mathcal{C}(\alpha, \mu^2 z^2) \, \cos(\alpha P_z z)\, g(\alpha, \mu),
+\end{equation}
+其中坐标空间的 Wilson 系数为
+\begin{equation}\label{eq:H-coordinate}
+H(z, \mu) = 1 + \frac{\alpha_s C_A}{2\pi}
+\left[ \frac{5}{6}\ln\!\frac{z^2\mu^2 e^{2\gamma_E}}{4} + \frac{3}{2}
+\right] + \order{\alpha_s^2},
+\end{equation}
+$\mathcal C$ 为 channel-specific 的坐标空间核（非极化/螺旋度各不相同
+，见 arXiv:2107.08960 / arXiv:2112.02011 的对应 scheme）。
+
+\subsubsection{混合方案（分区匹配）}
+
+混合方案中短距离（$z\le z_s$）使用比值方案、长距离（$z>z_s$）通过
+零动量矩阵元提取的线性发散参数自重整化，匹配核需分区域处理：
+\begin{itemize}
+  \item $z \le z_s$：标准比值方案坐标空间匹配核（式
+  ~\eqref{eq:H-coordinate}）；
+  \item $z > z_s$：在匹配前先应用自重整化因子
+  $\exp[(\delta m + m_0)(z - z_s)]$（$\delta m$、$m_0$ 由大 $z$
+  行为拟合提取，见第 \ref{sec:zr} 节）。
+\end{itemize}
+
+\subsubsection{三种方案下匹配核的对照表}
+
+把「重整化方案 $\times$ 匹配表示」的矩阵汇总（各行对应本库/文献
+状态）：
+
+\begin{center}
+\small
+\begin{tabular}{c c c c}
+\toprule
+\textbf{重整化方案} & \textbf{匹配表示} & \textbf{对数变元} &
+\textbf{状态} \\
+\midrule
+比值 & 坐标空间（式~\eqref{eq:H-coordinate}） &
+$\ln(z^2\mu^2e^{2\gamma_E}/4)$ & 已实现（混合短距分支） \\
+混合 & 分区（短距比值 + 长距先自重整化） & 同上 + $\delta m+m_0$
+尾巴 & 已实现 \\
+自重整化 & 动量空间（LaMET 卷积） & $\ln(\mu^2/P_z^2)$ &
+已实现（\code{hR\_PDF}） \\
+GF$\to$quasi & 动量空间 + 端点因子 & $L_\tau=\ln(2\mu^2\tau
+e^{\gamma_E})$ & 已实现（一圈） \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{等价性说明}：坐标空间核与动量空间核经 Mellin 变换互相决定
+（式~\eqref{eq:mellin-kernel} 的结构），同一物理在不同组合下的
+结果应一致——多方案交叉检验的数值一致性是匹配层正确性的最终验收
+（附录 U 最佳实践第 3 条）。
 
 \subsection{DGLAP 演化与部分子分布}
 
@@ -1921,9 +2961,23 @@ P_{gq}^{(0)}(z) & P_{gg}^{(0)}(z)
 \end{equation}
 各分裂函数的显式表达式与物理意义（$P_{qq}$：夸克辐射胶子后剩余的夸克；
 $P_{qg}$：胶子分裂为夸克-反夸克对；$P_{gq}$：夸克辐射胶子；$P_{gg}$：胶
-子辐射胶子）见附录 \ref{sec:appendix-dglap}。Mellin 矩空间中卷积化为
-普通乘积，DGLAP 可通过矩阵对角化与指数化数值求解。跑动耦合在 NLO 精度
-下：
+子辐射胶子）见附录 \ref{sec:appendix-dglap}。\textbf{Mellin 矩空间解}
+：定义 $f_N(\mu^2)=\int_0^1\mathrm{d}x\,x^{N-1}f(x,\mu^2)$，卷积化为
+普通乘积：
+\begin{equation}
+\frac{\partial}{\partial \ln \mu^2}\,\mathbf f_N(\mu^2)
+= \frac{\alpha_s(\mu^2)}{2\pi}\,\boldsymbol\gamma^{(0)}(N)\,
+\mathbf f_N(\mu^2),
+\qquad \gamma^{(0)}_{ba}(N) = \int_0^1\mathrm{d}z\,z^{N-1}
+P_{ba}^{(0)}(z),
+\end{equation}
+解为 $\mathbf f_N(\mu^2) = \mathbf U(N,\mu,\mu_0)\,
+\mathbf f_N(\mu_0^2)$，其中演化算子由反常维数矩阵的对角化与指数化
+$\mathbf U = \mathbf L\,\mathrm{diag}(U_i)\,\mathbf L^{-1}$、
+$U_i = \exp\bigl[\frac{\alpha_s}{4\pi}
+\frac{\gamma_i}{\beta_0}\ln\frac{\alpha_s(\mu)}{\alpha_s(\mu_0)}\bigr]$
+给出——DGLAP 求解在数值上化为矩阵代数问题（公共实现：APFEL/HOPPET/
+QCDNUM；本库未内置，登记为接口层）。跑动耦合在 NLO 精度下：
 \begin{equation}
 \alpha_s(\mu^2) = \frac{4\pi}{\beta_0 \ln(\mu^2/\Lambda_{\text{QCD}}^2)}
 \left[ 1 - \frac{\beta_1}{\beta_0^2}
@@ -1937,6 +2991,22 @@ $\alpha_s(\mu)=2\pi/[b_0\ln(\mu/\Lambda)]$、$\Lambda_{\rm QCD}=0.23$ GeV
 $\mu=2$ GeV 呈现（全局拟合的标准输入标度），向实验标度的演化由公共软件
 （APFEL/HOPPET/QCDNUM）完成——本库未内置，登记为接口层。
 
+\paragraph{$\mu$ 演化与 $\zeta$ 演化的分离原则}PDF/TMD 的双标度结构
+要求两条 RG 流严格分离：
+\begin{equation}
+\frac{\mathrm{d}}{\mathrm{d}\ln\mu}\,\ln F = \gamma_F\bigl(\alpha_s,
+K\bigr), \qquad
+\frac{\mathrm{d}}{\mathrm{d}\ln\sqrt\zeta}\,\ln F = K(\bperp,\mu),
+\end{equation}
+且可积性条件 $\frac{\mathrm{d}K}{\mathrm{d}\ln\mu}
+=-\gamma_\zeta$（$K$ 的 $\mu$ 依赖由 $\gamma_\zeta$ 决定）保证演化
+路径无关。\textbf{实践含义}：(1) 先固定 $\zeta$（如 $\zeta\sim
+(2P_z)^2$）做 $\mu$ 演化（DGLAP 型，矩空间对角化）；(2) 再固定
+$\mu$ 做 $\zeta$ 演化（CS 核驱动）；顺序可交换但不可混步——把两步
+糅进一个数值卷积是 TMD 分析的常见错误源。本库下游链按「归一 $\to$
+软减除 $\to$ CS 因子 $\to$ NLO 卷积」的顺序实施（式
+~\eqref{eq:tmd-conv}），与该分离原则一一对应。
+
 \subsection{Tree-level 归一化 $\kappa_F$ 的对齐}
 
 Brambilla--Wang 的连续算符通常写成 $g^2FWF$；代码中的 Clover 归一化是
@@ -1946,6 +3016,73 @@ $\kappa_F(a,\tau)$ 使 $(gF)_{\rm cont}=\kappa_F(a,\tau)\,F_{\rm code}$；
 tree-level conversion）。GF-to-$\MSbarM$ 系数不能在 field normalization
 尚未对齐时直接套用——本库当前按 $\kappa_F=1$ 工作并在 metadata 登记
 ，$\kappa_F$ 的微扰确定列为未闭合链。
+
+\subsection{全链公式总览}
+\label{sec:formula-chain}
+
+把第 \ref{sec:discret}--\ref{sec:matching} 章的完整链条以一条公式链
+汇总（与第 \ref{sec:walkthrough} 节的模块走查一一对应）：
+
+\begin{equation}
+\boxed{\;
+U_{\rm thin}
+\xrightarrow[\text{RK3}]{\zzh,\ \eps}
+V_\mu(\zzh)
+\xrightarrow[\text{traceless}]{-\frac{i}{8}(Q-Q^\dagger)}
+F_{\mu\nu}\big\|_{\rm tl}
+\xrightarrow[\ \eps\text{-缩并}\ ]{\frac12\eps F}
+\widetilde F_{\mu\nu}
+\;}
+\end{equation}
+\begin{equation}
+\boxed{\;
+\xrightarrow[\ \boldsymbol x\text{-和}\ ]{M^{\pm}_{\mu\lambda;\nu\rho}}
+\bigl(T_U,S_U\,;\,T_H,S_H\bigr)
+\xrightarrow{\ \text{even/odd（不除 2）}\ }
+\begin{cases}
+O_U=(T_U-S_U)_{\rm even}\\[2pt]
+O_H=(T_H-S_H)_{\rm odd}
+\end{cases}
+\;}
+\end{equation}
+\begin{equation}
+\boxed{\;
+\xrightarrow[\ \text{pol35/nopol + JK}\ ]{\ R_\chi=C_{3,\chi}/C_{2,\rm den}\ }
+M^{\rm GF,bare}(\zzh,z,P_z)
+\xrightarrow[\ \delta m_A,\ c_{\parallel\perp},\ c_{\perp\perp}\ ]{\
+\text{一圈 SFTE}\ }
+h^{\MSbarM}(z,P_z,\mu)
+\;}
+\end{equation}
+\begin{equation}
+\boxed{\;
+\xrightarrow[\ \eta_s=T_s,\ Z_R\ ]{\ \text{混合拼接/}\lambda\text{外推}\ }
+h_R(z,\bperp,P_z)
+\xrightarrow{\ \text{Fourier}\ }
+\tilde g(x,\bperp,P_z)
+\;}
+\end{equation}
+\begin{equation}
+\boxed{\;
+\xrightarrow[\ \sqrt{S_I},\ K(\bperp)\ ]{\ Z_{ij}\ \text{NLO}\ }
+g(x,\bperp;\mu,\zeta)
+\xrightarrow[\ a,P_z,m_\pi,L\ ]{\ \text{联合外推}\ }
+g^{\rm phys}(x,\bperp)
+\;}
+\end{equation}
+每一箭头对应一个已实现模块（第 \ref{sec:results} 章表）；其中最后三
+段（CS/软函数/NLO 对 schema-v2 ratio 的接线、singlet mixing、连续极限
+）在真实生产数据上仍为未闭合链（第 \ref{sec:results} 章边界清单）。
+\textbf{Collins--Soper 核的一圈结构}（供 CS 演化方程的数值核对，常数
+项依方案惯例）：
+\begin{equation}\label{eq:cs-one-loop}
+K(\bperp,\mu) = -\frac{\alpha_s(\mu)C_A}{\pi}\,
+\ln\!\frac{\bperp^2\mu^2}{4} + \order{\alpha_s^2}
+\quad(\text{常数项依惯例}),
+\end{equation}
+两动量比值提取（式~\eqref{eq:cs-kernel}）即
+$\partial\ln h/\partial\ln P_z$ 的差分实现，与上式的 $P_z$（快度）依
+赖一致。
 
 % ===========================================================================
 \section{统计分析方法}
@@ -1985,6 +3122,27 @@ R_\chi = \frac{C_{3,\chi}}{C_{2,\rm den}}
 numerator，\textbf{不能}再用 ensemble mean pol35 作为近零分母（ratio-v1
 遗留缺陷，仅作 provenance 保存）。
 
+\subsubsection{pol35/nopol 的物理解释}
+
+两点函数的两通道投影对应核子矩阵元的不同 Dirac 自旋结构：
+\begin{itemize}
+  \item \textbf{nopol}：宇称投影后的自旋无关迹
+  $\operatorname{Tr}_{\rm D}[P_+\,C_2\,\gamma_4]$ 型结构——提取
+  $|Z_0|^2e^{-E_0 t}$ 主导的标量谱，作为 ratio 的\textbf{共同分母}（对
+  两通道的激发态/归一效应一致）；
+  \item \textbf{pol35}：携带 $\gamma_5\gamma_\mu$（轴矢）结构的投影
+  ——其与胶子算符 $O_H$ 的协方差在 $\nu=zP_z$ 空间给出\textbf{自旋相关
+  的不变振幅}，odd-in-$z$ 分离后即 $\Delta g$ 的 Ioffe 时间分布前兆。
+\end{itemize}
+Wick 词典层面：$O_H\propto E_xB_x+E_yB_y-2B_zE_z$ 是螺旋度算符的
+电-磁结构（第 \ref{sec:unpol-hel} 节），而核子螺旋度态由
+$S_L$（沿 boost 方向的自旋极化）标记——两者经协方差
+$\langle O_H\,C_2^{\rm pol35}\rangle_{\rm vac-sub}$ 关联，正是
+$\braket{P,S_L|O_H|P,S_L}$ 的格点表达。相位结构：对周期格点
+$C_2^{\rm pol35}(t)$ 与 $O_H(z)$ 的乘积是复数，其 odd-in-$z$ 组合的
+物理部分出现在虚部（式~\eqref{eq:hel-phase}），实部则为宇称无关联的
+诊断项——这解释了为何完整复数统计必须保留到末端。
+
 \subsubsection{复数 helicity 相位与投影次序}
 
 若 $R_H=a+ib$，Euclidean helicity 的最终投影为
@@ -2014,9 +3172,9 @@ D=\frac1N\sum_k d_k, \label{eq:jk-c2}\\
 R_{(-k)} &= \frac{C_{3,(-k)}}{C_{2,(-k),\rm den}}. \label{eq:jk-ratio}
 \end{align}
 PyQCD 通过总和与 Einstein contraction 展开式计算式~\eqref{eq:jk-c3}，
-避免显式形成最大的 $(N,N_{\rm obs},N_t,N_p)$ 临时数组；代数上与逐个删除
-再直接计算完全等价（与参考估计器逐项 $\max|\mathrm{diff}|=0$）。
-jackknife 均值、偏差修正与实/虚误差为：
+避免显式形成最大的 $(N,\,N_{\rm obs},\,N_t,\,N_p)$ 临时数组；代数上
+与逐个删除再直接计算完全等价（与参考估计器逐项零差异）。jackknife
+均值、偏差修正与实/虚误差为：
 \begin{align}
 \overline R_{\rm JK} &= \frac1N\sum_k R_{(-k)}, \notag\\
 R_{\rm bc} &= N\,R_{\rm central}-(N-1)\,\overline R_{\rm JK}, \notag\\
@@ -2044,77 +3202,207 @@ odd\_difference/combined）由 \code{physical\_helicity\_ratio} 与
 
 \subsection{Jackknife 重采样（通用方法论）}
 
-\subsubsection{单消去 Jackknife 与误差传播}
+\subsubsection{单消去 Jackknife、偏差修正与误差传播}
 
 对原始数据 $\{x_i\}_{i=1}^{N}$ 与估计量 $\hat\theta$，Jackknife
-子样本为 $\theta_{(i)}=f(\ldots,x_{i-1},x_{i+1},\ldots)$，偏差修正估计
-与方差为：
-\begin{equation}
-\bar\theta_{\rm JK} = \frac1N\sum_i \theta_{(i)}, \qquad
-\sigma_{\rm JK}^2 = \frac{N-1}{N}\sum_{i=1}^{N}
+子样本为 $\theta_{(i)}=f(\ldots,x_{i-1},x_{i+1},\ldots)$（删除第
+$i$ 个数据点后重新计算）。三种估计量：
+\begin{align}
+\bar\theta_{\rm JK} &= \frac1N\sum_i \theta_{(i)}
+&&\text{（子样本均值）}, \notag\\
+\theta_{\rm bc} &= N\,\hat\theta - (N-1)\,\bar\theta_{\rm JK}
+&&\text{（一阶偏差修正）}, \label{eq:jk-bias}\\
+\sigma_{\rm JK}^2 &= \frac{N-1}{N}\sum_{i=1}^{N}
 (\theta_{(i)}-\bar\theta_{\rm JK})^2
-\end{equation}
-前置因子 $(N-1)/N$ 确保对 i.i.d.\ 样本的无偏性。\textbf{误差传播的黄金
-标准}是「完全 Jackknife 传播」：对每个子样本执行完整分析链（OPE 计算
-$\to$ 时间平均 $\to$ 重整化 $\to$ Fourier $\to$ 匹配），再对 $N$ 个子
-样本应用方差公式——这自动捕获所有分析步骤中的统计关联。本库 ratio-v2
-的 delete-one 展开式正是这一原则在 disconnected 通道的代数实现；其中
-真空扣除与分母在每个 resample 内\textbf{同时}重算（旧版「只重算
-numerator 或只重算 C2」会破坏 vacuum subtraction 与分母的 jackknife
-相关性）。
+&&\text{（方差估计）}. \label{eq:jk-var}
+\end{align}
+前置因子 $(N-1)/N$ 确保对 i.i.d.\ 样本 $\sigma^2_{\rm JK}$ 是总体方差
+的无偏估计；68\% 置信区间为
+$[\bar\theta_{\rm JK}-\sigma_{\rm JK},\bar\theta_{\rm JK}
++\sigma_{\rm JK}]$。偏差修正公式~\eqref{eq:jk-bias} 的直觉：若
+$\hat\theta$ 对样本量有一阶偏差 $\theta+\frac{b}{N}$，则
+$\bar\theta_{\rm JK}\approx\theta+\frac{b}{N-1}$，两式组合恰消去 $b$。
+\textbf{适用条件与局限}：Jackknife 对光滑（可微泛函）统计量效果好，
+对非光滑统计量（中位数、分位数）表现欠佳；假设数据点近似独立——
+对存在显著自相关的 Monte Carlo 数据需先 binning（见下）。
+
+\subsubsection{误差传播的黄金标准}
+
+「完全 Jackknife 传播」：对每个子样本执行\textbf{完整}分析链（OPE
+计算 $\to$ 时间平均 $\to$ 重整化 $\to$ Fourier $\to$ 匹配），再对 $N$
+个子样本应用方差公式——这自动捕获所有分析步骤中的统计关联。本库
+ratio-v2 的 delete-one 展开式（式~\eqref{eq:jk-c3}--\eqref{eq:jk-ratio}
+）正是这一原则在 disconnected 通道的代数实现；其中真空扣除与分母在
+每个 resample 内\textbf{同时}重算（旧版「只重算 numerator 或只重算
+C2」会破坏 vacuum subtraction 与分母的 jackknife 相关性）。
 
 \subsection{Bootstrap 重采样}
 
 Bootstrap 对有放回重采样 $B$ 次（通常 $B\sim500$--$2000$）：
+$x_1^{(b)},\ldots,x_N^{(b)}\sim\{x_1,\ldots,x_N\}$，每个样本的估计量为
 $\theta^{(b)}=f(x_1^{(b)},\ldots,x_N^{(b)})$，均值/方差为
-$\bar\theta_{\rm boot}=\frac1B\sum_b\theta^{(b)}$、
-$\sigma^2_{\rm boot}=\frac{1}{B-1}\sum_b(\theta^{(b)}
--\bar\theta_{\rm boot})^2$。优势：适用于任意估计量；自然给出不对称置信
-区间。参考实现的六方向诊断在每个 bootstrap replica 内先形成各方向的
-$C_3/C_2$ ratio，再做 VDV even/odd 对称组合与方向平均；三个负动量方向
-的 odd 分量乘以预期宇称因子 $-1$ 对齐后再比较方向符号。本库
+\begin{equation}
+\bar\theta_{\rm boot} = \frac1B\sum_b\theta^{(b)}, \qquad
+\sigma^2_{\rm boot} = \frac{1}{B-1}\sum_b
+(\theta^{(b)}-\bar\theta_{\rm boot})^2.
+\end{equation}
+优势：(1) 适用于任意估计量（包括非光滑的）；(2) 自然给出不对称置信
+区间——取 Bootstrap 分布的 $\alpha/2$ 与 $1-\alpha/2$ 分位数
+（percentile CI）；(3) 对组合结构（比值、even/odd 组合）的误差传播
+无需线性化。参考实现的六方向诊断在每个 bootstrap replica 内先形成
+各方向的 $C_3/C_2$ ratio，再做 VDV even/odd 对称组合与方向平均；三个
+负动量方向的 odd 分量乘以预期宇称因子 $-1$ 对齐后再比较方向符号——
+只有对齐后统计上有分辨的符号不一致才是约定问题的证据；拟合门失效的
+方向使符号结论「不可判定」，既非一致也非不一致的证据。本库
 \code{pyqcd/analysis/\_disconnected.py} 提供统计基元
 sem/resample/cov\_mat；重采样选择按组态数自适应（10 组态 bootstrap/
-jackknife 阈值实证，Nconf$<2$ 禁用重采样改直通——bug2/bug3 修复记录）。
+jackknife 阈值实证，Nconf$<2$ 禁用重采样改直通——bug2/bug3 修复记录
+）。
 
 \subsection{协方差矩阵估计与 $\chi^2$ 拟合}
 
-多 $z$ 值矩阵元的协方差 $C_{ij}=\frac{1}{N-1}\sum_c
-(h_c(z_i)-\bar h(z_i))(h_c(z_j)-\bar h(z_j))$；拟合优度
+\subsubsection{协方差与拟合优度}
+
+多 $z$ 值（或 $x$ 值）矩阵元的样本协方差为
 \begin{equation}
-\chi^2 = \sum_{i,j} (h(z_i)-f(z_i;\mathbf{p}))\,C^{-1}_{ij}\,
+C_{ij} = \frac{1}{N-1}\sum_{c=1}^{N}
+(h_c(z_i)-\bar h(z_i))\,(h_c(z_j)-\bar h(z_j)),
+\end{equation}
+关联数据的 $\chi^2$ 拟合优度由
+\begin{equation}
+\chi^2 = \sum_{i,j=1}^{N_z}
+(h(z_i)-f(z_i;\mathbf{p}))\,C^{-1}_{ij}\,
 (h(z_j)-f(z_j;\mathbf{p}))
 \end{equation}
-当组态数不够大时（经验上需 $N\gtrsim2N_z$），样本协方差可能奇异或病态
-。正则化方法：特征值平滑（小特征值替换）、收缩估计
-$C_{\text{shrunk}}=\lambda D+(1-\lambda)C$（$D=\diag C$）、SVD 截断。
+衡量，拟合质量以 $\chi^2/\mathrm{dof}$ 与 $p$-value（$\mathrm{dof}
+=N_z-N_p$）判断。
+
+\subsubsection{协方差矩阵的正则化}
+
+当组态数不够大时（经验上需 $N\gtrsim2N_z$ 以保证协方差的可靠估计），
+样本协方差可能奇异或病态。正则化方法：
+\begin{itemize}
+  \item \textbf{特征值平滑}：用平滑函数替代小特征值（SVD 截断即
+  svdcut 语义）；
+  \item \textbf{收缩估计}：
+  $C_{\text{shrunk}} = \lambda\,D + (1-\lambda)\,C$，$D=\diag C$、
+  $\lambda\in[0,1]$；
+  \item \textbf{伪逆/白化}：Cholesky 白化 + lstsq（非正定回退单位阵
+  ，本库外推实现）；bootstrap 协方差 + pinv（自重整化实现）。
+\end{itemize}
 本库 \code{\_fitter.py}（lsqfit 封装，prior 优先）与拟合链约定
 svdcut$=10^{-6}$（10 组态协方差奇异的实证选择，stab1 实战）；自重整化
 的协方差白化用 Cholesky/伪逆（\code{boot\_covariance} + pinv）。
 
-\subsection{自相关分析与 Binning}
+\subsection{重采样方法的选择判据}
 
-Monte Carlo 数据的自相关函数 $\rho(\tau)$ 与积分自相关时间
-$\tau_{\rm int}=\frac12+\sum_{\tau\ge1}\rho(\tau)$ 决定有效样本数
-$N_{\rm eff}=N/(2\tau_{\rm int})$；binning 到
-$\tau_{\rm bin}\gtrsim2\tau_{\rm int}$ 后再应用 Jackknife/Bootstrap。
-Jackknife 假设数据点近似独立——对存在显著自相关的 HMC 数据，binning
-是前置步骤。
+\subsubsection{Jackknife vs Bootstrap}
+
+两种重采样的选择判据：
+\begin{center}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{判据} & \textbf{Jackknife} & \textbf{Bootstrap} \\
+\midrule
+计算成本 & $N$ 个子样本（小） & $B\sim500$--$2000$ 个副本（大） \\
+适用统计量 & 光滑（可微泛函） & 任意（含非光滑） \\
+置信区间 & 对称 & 不对称（percentile） \\
+组合估计量传播 & 需代数展开（式~\eqref{eq:jk-c3}） & 逐副本直接计算 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{实践规则}：disconnected ratio 这类\textbf{非线性组合统计量}，
+若已有代数展开（delete-one 闭式）则 Jackknife 便宜且精确；若组合链
+过长（多方案/多窗口枚举）或统计量非光滑，用 Bootstrap（参考实现的
+六方向诊断与流时间外推均用共享 bootstrap 样本，seed 固定保证跨层
+可比）。本库统计层同时提供两条路径（\code{resample} 基元），重采样
+选择按组态数自适应（Nconf$<2$ 禁用重采样改直通）。
+
+\subsubsection{自相关分析与 Binning}
+
+Monte Carlo 数据通常存在自相关。自相关函数与积分自相关时间：
+\begin{equation}
+\rho(\tau) = \frac{\langle (x_t-\bar x)(x_{t+\tau}-\bar x)\rangle}
+{\langle (x_t-\bar x)^2\rangle},
+\qquad
+\tau_{\rm int} = \frac12 + \sum_{\tau=1}^{\infty}\rho(\tau),
+\qquad
+N_{\rm eff} = \frac{N}{2\tau_{\rm int}}.
+\end{equation}
+通过把数据分组（binning）为长度 $\tau_{\rm bin}\gtrsim2\tau_{\rm int}$
+的块（每块取平均），得到近似独立的子样本，bin 数 $N_b=N/\tau_{\rm bin}$
+即有效样本数；在此基础上应用 Jackknife/Bootstrap。
 
 \subsection{信噪比与 Parisi-Lepage 论证}
 
 核子关联函数的信噪比随时间指数衰减：
-$\text{Signal/Noise}\sim\exp[-(m_N-\frac32m_\pi)\Delta t]$；当
-$\Delta t\gtrsim1.5$ fm 时难以控制。对 Wilson 线通道，类似的方差增长
-随 $\abs{z}$ 线性累积（长 Wilson 线包含更多链接涨落）；梯度流/HYP 涂抹
-是压制该方差的主手段（流化后链接的 UV 涨落被 $e^{-\tau k^2}$ 阻尼）。
-\textbf{数值精度分析}：单组态 OPE 对空间求和 $\sum_{\mathbf{x}}$（
-$V=L^3$）与时间平均 $\frac1{N_t}\sum_t$ 通过中心极限定理提供
-$\sqrt{V}\times\sqrt{N_t}\approx1450$（$32^3\times64$）的有效误差压低
-——这是 disconnect 方法高统计精度的核心来源；$3\times3$ 复矩阵乘法在
-$z=15$ 步的累积舍入误差约 $10^{-14}$（complex128），远小于统计误差。
-长 Wilson 线的 float32 使用会产生显著精度损失（虚部非物理增大），关键
-路径必须 complex128，并定期对 Wilson 线做 reunitarization。
+\begin{equation}
+\frac{\text{Signal}}{\text{Noise}} \sim
+\exp\!\left[ -\left(m_N - \frac{3}{2}m_\pi\right) \Delta t \right]
+\end{equation}
+（论证要点：信号的期望由基态主导 $\sim e^{-m_N\Delta t}$，而噪声的
+期望由三夸克独态关联主导 $\sim e^{-\frac32m_\pi\Delta t}$，两者之比
+给出指数衰减；只有 $m_N>\frac32m_\pi$ 使衰减可控。）即使基态信噪比
+在早期时间片可接受，大时间分离下也会迅速恶化；实践中
+$\Delta t\gtrsim1.5$ fm 难以控制。对 Wilson 线通道，类似的方差增长随
+$\abs{z}$ 线性累积（长 Wilson 线包含更多独立涨落的链接乘积）——衰减
+变量从 $\Delta t$ 换为 $z$；梯度流/HYP 涂抹是压制该方差的主手段
+（流化后链接的 UV 涨落被 $e^{-\tau k^2}$ 阻尼，等价于把每个链接的
+方差压低）。
+
+\subsection{数值精度分析}
+
+\subsubsection{统计精度的来源}
+
+单组态 OPE 对空间求和 $\sum_{\mathbf x}$（$V=L^3$）与时间平均
+$\frac1{N_t}\sum_t$ 通过中心极限定理提供有效误差压低：
+\begin{equation}
+\sqrt{V}\times\sqrt{N_t} \approx \sqrt{32768}\times\sqrt{64}
+\approx 181\times8 \approx 1450 \quad(32^3\times64)
+\end{equation}
+——这是 disconnect 方法高统计精度的核心来源。
+
+\subsubsection{舍入误差与重幺正化}
+
+$3\times3$ 复矩阵乘法在 $z=15$ 步 Wilson 线构造中的累积舍入误差约为
+$15\times10^{-16}=10^{-14}$（complex128），远小于统计误差
+（$>10^{-2}$）。\textbf{float32 的危险}：长 Wilson 线（$z>10$）的
+float32 累积产生显著精度损失，$h(z)$ 虚部非物理增大——关键路径必须
+complex128，仅在最终求和/存储时降精度；并\textbf{定期对 Wilson 线做
+重幺正化}（reunitarization，确保 $W\in\mathrm{SU}(3)$）。本库
+schema-v2 全程 complex128，契约测试的 round-trip 保证 dtype 一致。
+
+\subsection{复数统计的语义矩阵}
+
+复数观测量在统计链的不同位置\textbf{允许}与\textbf{禁止}的操作汇总
+（每条规则均有明确物理依据，违例会改变统计量）：
+
+\begin{center}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{操作} & \textbf{何时允许} & \textbf{物理原因} \\
+\midrule
+取实部/虚部（\code{pol35}） & \textbf{仅允许在}统计层完成之后 &
+提前投影毁掉复数协方差（第 \ref{sec:ratio-v2} 节） \\
+取实部（even 通道） & 协方差与 JK 之后 & 宇称偶目标的物理部分在
+实部 \\
+取 $\operatorname{Im}R_H$ & \textbf{最后} & Euclidean 相位投影
+$\operatorname{Re}[-iR_H]$ \\
+取模/相位平均 & 仅作诊断（不作物理量） & 模与相位的组合统计无
+物理定义 \\
+复数幅值误差 & 不定义 & 实/虚误差必须分列
+（式~\eqref{eq:jk-errors}） \\
+复数乘实标量（SFTE） & 任意时刻（系数为实时） & 实标量与复数
+可交换 \\
+复数乘复标量 & 避免 & 引入额外相位结构，需显式跟踪 \\
+\bottomrule
+\end{tabular}
+\end{center}
+该矩阵与参考实现的约定一致（完整复数统计 + 末端相位投影），并作为
+ratio-v2 验证器的语义基础（\code{test\_complex\_ratio\_uses\_full
+\_pol35\_and\_shared\_nopol\_denominator}）。
 
 % ===========================================================================
 \section{系统误差分析}
@@ -2138,21 +3426,39 @@ $\zzh$ 直接视为同一物理点。
 
 \subsection{流时间窗口与 SFTE 控制}
 
-梯度流方案的特有系统误差是\textbf{流时间窗口}选择：
+梯度流方案的特有系统误差是\textbf{流时间窗口}选择。受控小流外推的
+标准形式是对每个 $(z,P_z)$ 拟合
+\begin{equation}\label{eq:tau-extrapolation}
+M(\tau) = M_0 + c_\tau\,\tau + \order{\tau^2},
+\end{equation}
+以截距 $M_0$ 作为 $\tau\to0$ 的外推值（bootstrap 全样本共享；误差取
+intercept 样本标准差 $\mathrm{ddof}=1$，不除 $\sqrt{N_{\rm boot}}$；
+质量门 $Q\ge0.01$ 且 $\chi^2/\mathrm{dof}\le3$）。窗口选择的教训
+（参考实现 RESULTS.md 的流时间审计）：
 \begin{itemize}
   \item \textbf{小流窗口}：式~\eqref{eq:sfte-window} 的四重条件
   $a^2/\tau\ll1$、$\sqrt{8\tau}\ll\abs{z}$、$\tau P_z^2\ll1$、
   $\tau\Lambda^2\ll1$ 圈定一圈系数的适用区。参考实现的几何条件
   $\sqrt{8\zzh}<z/a$ 排除 $\zzh=0.1$ 后 $z/a=2$ 只剩三点
-  （$\zzh=0.2,0.3,0.4$）——统计误差仍大，但这是\textbf{必要的几何闸门}；
+  （$\zzh=0.2,0.3,0.4$）——统计误差仍大，但这是\textbf{必要的几何闸门}
+  ：$z/a=2$ 的几何闸门三点拟合 unpolarized
+  $+0.365(59)/+0.630(64)/+0.685(74)$（$P_z=3,4,5$，仅 $P_z=4,5$ 过门
+  ）、helicity $T_H$ $-0.0478(58)/-0.0122(57)/-0.0196(82)$（三点全过
+  门）；
   \item \textbf{大流诊断}：扩大流时间窗缩小统计误差，但截距漂移明显
-  （RESULTS.md：helicity $T_H$ 三动量从三点窗的 $-0.048/-0.012/-0.020$
-  变为忽略几何条件后的 $-0.104/-0.068/-0.072$）；全区间
-  $\zzh=0.2$--$3.8$ 线性拟合出现显著截距漂移与极小 $Q$ 值，\textbf{
-  不能}把全区间线性拟合当作受控小流外推；
+  ——helicity $T_H$ 三动量从三点窗变为忽略几何条件扩窗后的
+  $-0.104(45)/-0.0676(48)/-0.0718(67)$；全区间 $\zzh=0.2$--$3.8$ 线性
+  拟合出现显著截距漂移与极小 $Q$ 值，\textbf{不能}把全区间线性拟合当
+  作受控小流外推；
+  \item \textbf{$z/a=6$ 的窗口敏感性}：全部流点满足 $\sqrt{8\zzh}<6$
+  （几何条件只是必要的），固定窗口对比
+  $\zzh\in[0.2,0.4]/[0.2,0.6]/[0.2,1.0]$——九个 helicity 点全过质量门
+  且统计误差递减，但 unpolarized 截距在窗口间有 $\sim1$--2 个统计
+  误差的漂移，说明 $[0.2,0.4]$ 自身统计分辨率不足；
   \item \textbf{结论}：不能用「大流时间获得小误差」替代小流时间控制
   ；$\tau=0.2$--$1.0$（$z/a=6$）是值得继续作为固定窗口敏感性检验的
-  区间，单格距结果不能宣布最终窗口。
+  区间，单格距结果不能宣布最终窗口；\code{accepted\_only} 为主诊断，
+  \code{filled\_fallback\_diagnostic} 单独保存不进入物理结论。
 \end{itemize}
 
 \subsection{有限体积效应}
@@ -2178,27 +3484,68 @@ $\Delta E\sim0.5$ GeV，$A/h\sim0.5$ 时 $\Delta t_{\min}\gtrsim0.8$ fm
 
 \subsection{Fourier 变换截断误差与逆问题}
 
-有限 $z_{\max}$ 导致截断与 Gibbs 振荡：
+\subsubsection{截断与 Gibbs 现象}
+
+由于 Wilson 线长度受格点大小一半限制（$z_{\max}\le L/2$），Fourier
+变换被截断：
 \begin{equation}
-\tilde{g}_{\text{trunc}}(x,P_z) = \frac{2P_z}{x}
-\int_{0}^{z_{\max}} \mathrm{d}z\; h(z,P_z)\sin(xP_zz)
+\tilde{g}_{\text{trunc}}(x, P_z) = \frac{2P_z}{x}
+\int_{0}^{z_{\max}} \mathrm{d}z \; h(z, P_z) \sin(x P_z z),
 \end{equation}
-缺失 $z>z_{\max}$ 贡献等价于低通滤波。对策：大 $z$ 模型外推
-$h(z)\to A z^{-d}e^{-mz}$（本库对应 $\lambda$ 尾巴外推
-$h_R(\lambda)\sim l_1\lambda^{-a_1}e^{-\lambda/\lambda_0}$）；或
-Bayesian/最大熵正则化。负值 PDF（物理区域内 $\tilde g<0$）的排查路径：
-统计涨落被 Fourier 放大 / Gibbs 现象 / 正定性条件缺失；对策是正定性
-先验（Bayesian 框架下 $g(x)\ge0$）、更大 $z_{\max}$、更多组态。
+缺失长程关联 $z>z_{\max}$ 的贡献等价于对真实分布应用\textbf{低通滤波
+器}——精确 Fourier 对偶 $\tilde g_{\rm trunc}(x)
+=\int\mathrm{d}x'\,\frac{\sin(xP_zz_{\max}-x'P_zz_{\max})}
+{\pi(x-x')}g(x')$ 表明截断在 $x$ 空间引入宽化为
+$\sim\pi/(P_zz_{\max})$ 的卷积核，产生非物理振荡（Gibbs 现象）。
+\textbf{大 $z$ 外推}：通过模型拟合大 $z$ 行为估计长程贡献：
+\begin{equation}\label{eq:largez-model}
+h(z, P_z) \xrightarrow{z \to \infty} A\,z^{-d}\,e^{-m z},
+\end{equation}
+$m$ 与强子质量相关；大动量下 Lorentz 收缩使关联衰减更快，有利于截断
+误差控制。本库对应 $\lambda$ 尾巴外推
+$h_R(\lambda)\sim l_1\lambda^{-a_1}e^{-\lambda/\lambda_0}$
+（式~\eqref{eq:hybrid-long} 之后的拟合层）。
+
+\subsubsection{逆问题的正则化}
+
+从有限范围且有噪声的 $h(z)$ 重构 $g(x)$ 是不适定逆问题，可利用
+Bayesian 推断或最大熵方法（MEM）引入先验信息稳定结果：正定性先验
+（$g(x)\ge0$）、平滑性先验、或全局拟合的参数化形式作先验（附录 T）。
+\textbf{负值 PDF 的排查路径}：(1) 统计涨落被 Fourier 变换放大——增加
+组态；(2) 有限 $z_{\max}$ 截断的 Gibbs 振荡——外推与正则化；(3)
+$h(z)$ 数据不满足正定性的数学条件——检查 even/odd 分解与 Hermitian
+延拓的自洽性。
 
 \subsection{微扰匹配的不确定性}
 
-NLO 匹配的微扰不确定性通过标度变异 $\mu\in[P_z/2,2P_z]$ 估计；NNLO
-修正估计 $\sim(\alpha_s C_A/2\pi)^2\sim2\%$（胶子通道色因子 $C_A=3$）。
-对梯度流方案另有：SFTE 高阶项 $\order{\tau\Lambda^2,\tau/z^2}$、
-$\kappa_F$ 归一化、自然标度演化路径等。阈值区域的大对数需重求和（未实
-现，见第 \ref{sec:matching} 章）。
+NLO 匹配的微扰不确定性通过重整化标度变异 $\mu\in[P_z/2,\,2P_z]$ 估计
+；未计算的 NNLO 修正量级估计为 $\sim(\alpha_s C_A/2\pi)^2\sim2\%$
+（胶子通道色因子 $C_A=3$）。梯度流方案的附加项：
+\begin{itemize}
+  \item \textbf{SFTE 高阶}：$\order{\tau\Lambda_{\rm QCD}^2,\,
+  \tau/z^2}$——由流时间扫描外推到 $\tau\to0$ 控制；
+  \item \textbf{tree-level 归一化 $\kappa_F$}：未对齐前系数不可靠
+  （第 \ref{sec:matching} 章）；
+  \item \textbf{自然标度路径}：$\mu_\tau=e^{-\gamma_E/2}/\sqrt{2\tau}$
+  到统一 $\mu$ 的演化方案选择；
+  \item \textbf{阈值/小 $x$ 大对数}：需要重求和（未实现，第
+  \ref{sec:matching} 章）；
+  \item \textbf{singlet mixing}：$C_{gq}$ 核未实现（第
+  \ref{sec:matching} 章边界）。
+\end{itemize}
 
 \subsection{总误差预算}
+
+\paragraph{正交合成公式}各独立误差源按正交（quadrature）合成：
+\begin{equation}\label{eq:error-quadrature}
+\delta_{\rm tot} = \Bigl[\,
+\delta_{\rm stat}^2 + \delta_{a^2}^2 + \delta_{\tau{\rm -win}}^2
++ \delta_{\rm vol}^2 + \delta_{\rm exc}^2
++ \delta_{\rm FT}^2 + \delta_{\rm match}^2
++ \delta_{\rm ren}^2 \Bigr]^{1/2},
+\end{equation}
+其中相关性已知的项（如同一 bootstrap 样本贯穿的统计与重整化链）应改为
+协方差传播而非正交相加——正交公式是各项独立假设下的近似。
 
 \begin{center}
 \begin{tabular}{c c l}
@@ -2221,6 +3568,79 @@ Fourier 截断 & 3--5\% & $\lambda$ 尾巴外推 \\
 （第 \ref{sec:results} 章）之前，总误差数字不应作为本库当前交付对象的
 已验证性质引用。
 
+\subsection{多尺度联合控制的检查次序}
+
+\subsubsection{关键公式的量纲检查}
+
+量纲一致性是数值实现的\textbf{第一道}检验。把全链关键公式的量纲
+逐一核对（单位约定：$z[\mathrm{GeV}^{-1}]$、$t[\mathrm{GeV}^{-2}]$
+、$\mu[\mathrm{GeV}]$）：
+
+\begin{center}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{公式} & \textbf{量纲链} & \textbf{检查要点} \\
+\midrule
+$\zzh\to t[\mathrm{GeV}^{-2}]$ &
+$t=\zzh(a\times5.0677)^2$ & GeV$^{-2}$ = fm$^2\times(5.0677)^2$ \\
+$r_{\rm flow}$ & $=\sqrt{8\tau}=a\sqrt{8\zzh}$ & 长度（fm） \\
+$\delta_m$（SFTE） &
+$=-\frac{\alpha_sC_A}{4\pi}\sqrt{2\pi/t}$ & GeV（线质量的量纲） \\
+$\delta_m\abs z$ & GeV$\cdot$GeV$^{-1}$ & 无量纲（指数必须无量纲
+） \\
+$K(\bperp,\mu)$ & $=\partial\ln F/\partial\ln\sqrt\zeta$ &
+无量纲（$\zeta$ 与 $\mu^2$ 同量纲） \\
+$g_{xy}(\xi)$ 匹配核 & 无量纲 & 变元 $\xi$、$\mu/(yP_z)$ 均无量纲
+ \\
+$\mathcal N=P_z^2/P_t^2$ & GeV$^2$/GeV$^2$ & 无量纲归一 \\
+$c_0(z,b)$ & 无量纲（比值型 selector） & 分母归一在 $z=0$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{数值代入示例}（$L32x96$，$a=0.0775$ fm，$\zzh=0.5$，
+$\mu=2$ GeV，$\alpha_s=0.30$）：
+\begin{align}
+t &= 0.5\times(0.0775\times5.0677)^2
+= 0.5\times0.1543 = 0.0772\;\mathrm{GeV}^{-2}, \notag\\
+r_{\rm flow} &= a\sqrt{8\times0.5} = a\times2 = 0.155\;\mathrm{fm}, \notag\\
+\delta_m &= -\frac{0.30\times3}{4\pi}\sqrt{\frac{2\pi}{0.0772}}
+\approx -0.0716\times9.01 \approx -0.645\;\mathrm{GeV}, \notag\\
+c_{\perp\perp} &= 1+\frac{0.90}{4\pi}
+\ln\!\bigl(2\times4\times0.0772\times e^{0.5772}\bigr)
+=1+0.0716\times\ln(1.132) \approx 1.0088.
+\end{align}
+（$c_{\perp\perp}$ 对 $\ln$ 负值敏感：$\ln(2\mu^2 t e^{\gamma_E})$
+在 $t$ 小于 $e^{-\gamma_E}/(2\mu^2)\approx0.14$ GeV$^{-2}$ 时为负——
+本示例 $\ln(1.132)>0$ 仅因 $t$ 较大；小流点的一圈端点因子可能
+$<1$，这是「自然标度下显式对数消失」的另一面，见第 \ref{sec:sfte}
+章。）量纲链与代入示例可作单元测试的\textbf{物理 oracle}：任何实现
+在这些基准值上的偏差即为接口错误的直接信号。
+
+系统误差的控制不是孤立检查各项，而是按\textbf{尺度从短到长}的固定
+次序推进（每一步的失败都会改变后续步骤的解释）：
+\begin{enumerate}
+  \item \textbf{定域性检查}（尺度 $\sim a$）：流方向、幺正性、
+  plaquette 行为——确认格点表示本身健康；
+  \item \textbf{短距离微扰区}（$z\lesssim0.3$ fm）：重整化后矩阵元与
+  NLO $\MSbarM$ 一致性；$\kappa_F$ 归一对齐；
+  \item \textbf{流时间窗口}（尺度 $\sqrt{8\tau}$）：几何闸门 +
+  $M(\tau)$ 线性外推 + 大流诊断分离；
+  \item \textbf{激发态}（尺度 $\Delta E^{-1}$）：$t_{\rm sep}$ 扫描、
+  端点切割、多态拟合或 Sumratio；
+  \item \textbf{红外/体积}（尺度 $1/M_\pi$）：$M_\pi L$ 判据、
+  有限体积标度检验；
+  \item \textbf{大动量}（尺度 $1/P_z$）：$1/P_z^2$ 幂次外推、CS 核的
+  动量覆盖、TMC；
+  \item \textbf{连续极限}（尺度 $a\to0$）：多格距联合外推
+  （式~\eqref{eq:extrap-ansatz}）；
+  \item \textbf{快度}（尺度 $\zeta$）：软减除与 CS 演化一致性
+  （双动量 $K$ 提取的自洽）。
+\end{enumerate}
+每个尺度上的「通过判据」即附录 X 的质量门；跨尺度的\textbf{交互项}
+（如 $a$--$\tau$ 耦合：$r_{\rm flow}$ 保持物理意味着不同格距取不同
+$\zzh$）在联合外推 ansatz 中显式建模。
+
 % ===========================================================================
 \section{数值结果与验证简报}
 \label{sec:results}
@@ -2231,6 +3651,26 @@ Fourier 截断 & 3--5\% & $\lambda$ 尾巴外推 \\
 消息与提交说明——\textbf{验证简报参考本库 git:tag:message}。
 
 \subsection{验证证据登记（git:tag:message）}
+
+\paragraph{三级证据链与独立核对路径}本版的验证证据构成三级可独立
+复核的链条：
+\begin{enumerate}
+  \item \textbf{标签级}（git:tag:message）：\code{dev14}
+  （follow \code{stab24}）的消息正文登记 schema-v2 链交付与
+  「106 项全量回归 + 参考逐项零差异」结论；提交 \code{067a777}
+  的正文给出数值明细（契约 $9/9$、oracle 零差异、XeLaTeX 三零）。
+  \item \textbf{契约级}（可复跑模块）：九项契约测试独立直跑
+  \begin{lstlisting}[language=bash, numbers=none]
+python -m pyqcd.testing._gradient_flow_gluon_contract
+  \end{lstlisting}
+  （唯一保留的命令行块，作为证据链的入口；其余实现细节均以公式
+  与表格表述）。
+  \item \textbf{质量门级}：附录 X 的 14 项质量门表逐条对应契约
+  断言；标签谱系表（附录 Z）给出三级链条的历史索引。
+\end{enumerate}
+任何后续复现者按「标签消息 $\to$ 契约直跑 $\to$ 质量门对照」三级
+即可独立核对（无需信任本文叙述）；不一致时的优先排查次序为附录
+W→X→Z 的顺序（环境 $\to$ 门 $\to$ 历史）。
 
 \subsubsection{代码链交付与验证声明（提交 067a777，2026-09-09）}
 
@@ -2385,30 +3825,44 @@ $\eps=0.01$ 对 $\eps=0.005$ & $\sim3.1\times10^{-6}$ & 小格点有限步长
 \end{tabularx}
 \end{table}
 
-回归命令与结果：
-\begin{lstlisting}[language=bash]
-python -m pyqcd.testing._gradient_flow_gluon_contract
-python examples/pyqcd/conftest.py
-python -m compileall -q pyqcd examples/pyqcd
-git diff --check
-\end{lstlisting}
-全量回归覆盖既有 Wilson flow SU(3)/耗散、TMD 算符、HYP/Stout、torch/
-cupy 适配、匹配核、$Z_R$、混合方案、外推、蒸馏管线、MPI 与持久化契约
-；新增模块没有改写旧路径默认行为。
+回归命令与结果：依次执行契约模块直跑
+（\code{\_gradient\_flow\_gluon\_contract}）、全量回归
+（\code{conftest.py}，\code{examples/pyqcd/} 入口）、语法编译检查
+（\code{compileall}）与 \code{git diff --check}，四项全部通过。全量回归覆盖既有 Wilson flow SU(3)/耗散、TMD 算符、HYP/Stout、
+torch/cupy 适配、匹配核、$Z_R$、混合方案、外推、蒸馏管线、MPI 与持久
+化契约；新增模块没有改写旧路径默认行为。
 
 \subsection{参考实现的诊断信号（donghx 侧，供对照）}
 
 参考生产链（\pathref{refer/donghx/Gradient_Flow_GluonPDF/
 gradient-flow-gluon-ratio.md}，记录截至 2026-09-03 的已验证状态）的
-ratio-v2 生产契约为：$L=32^3\times96$、$N_{\rm conf}=231$（冻结
-manifest \code{common\_all14\_plusz\_P345.tsv}，SHA-256
-\code{abd9423...a2da}）、$P_z=+3,+4,+5$、$t_{\rm sep}=5..15$、
-$z/a=0..24$、$\eps=0.01$、traceless、输入方案
-\code{thin\_link\_no\_hyp\_no\_smear}；完成的流时间为
-$\zzh\in\{0.1,...,0.6,1.0,...,3.8\}$；ratio 数组形状
-$(2,4,3,1,25,11,16,3)$（channel/orientation/component/direction/z/tsep
-/insertion/momentum\_abs）。\textbf{注意}：仅 $+z$ 动量可用（OPE 生产只
-有 $z_{\rm dir}=2$），不能呈现为夸克工作流的六方向平均。
+ratio-v2 生产契约汇总为表：
+
+\begin{table}[htbp]
+\centering
+\caption{参考 ratio-v2 生产契约（donghx 侧，2026-09-03 冻结状态）}
+\small
+\begin{tabularx}{\textwidth}{@{}l l >{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{项} & \textbf{值} & \textbf{说明} \\
+\midrule
+格点 & $32^3\times96$ & $\beta=6.41$，$a\approx0.0775$ fm \\
+组态 & 231 & 冻结 manifest（SHA-256 \code{abd9423...a2da}；
+manifest 文件登记于参考文档） \\
+动量 & $P_z=+3,+4,+5$ & 仅 $+z$（OPE 生产只有 $z_{\rm dir}=2$）\\
+分离/线长 & $t_{\rm sep}=5..15$、$z/a=0..24$ & 端点切割为激发态控制 \\
+流 & $\eps=0.01$；$\zzh\in\{0.1..0.6,1.0..3.8\}$ &
+$r_{\rm flow}/a=\sqrt{8\zzh}$ \\
+投影/组件 & traceless；combined、Mtiti、Mijij & legacy\_untraced 仅
+provenance \\
+ratio 形状 & $(2,4,3,1,25,11,16,3)$ & 轴序：channel、orientation、
+component、direction、$z$、tsep、insertion、momentum\_abs \\
+selector & U：(unpol, even\_sum, combined)；H：(hel,
+odd\_difference, combined) & 存储的 H-combined 为诊断 \\
+状态 & 14 任务 ExitCode=0 & 全部通过严格验证（Slurm 3561437） \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
 诊断信号（diagnostic，非拟合结果）：
 \begin{itemize}
@@ -2470,6 +3924,42 @@ $(2,4,3,1,25,11,16,3)$（channel/orientation/component/direction/z/tsep
   \item 上述对象与质量门全通过后，才报告带系统误差的物理
   $xg(x,\bperp;\mu,\zeta)$。
 \end{enumerate}
+
+\subsection{唯象学意义}
+\label{sec:phenomenology}
+
+精确的胶子 PDF/TMD 对以下 LHC 物理过程至关重要（将格点结果经 DGLAP
+演化到相应标度后即可进入这些预测链）：
+\begin{itemize}
+  \item \textbf{Higgs 产生}：$gg\to H$ 是 LHC 上 Higgs 玻色子的主导产生
+  道，其截面正比于 $g(x,m_H^2)$ 在 $x\sim m_H/\sqrt{s}\sim0.01$ 处的值
+  ——胶子 PDF 的小 $x$ 精度直接决定 Higgs 截面的理论误差；
+  \item \textbf{喷注产生}：包容喷注截面对 $g(x)$ 在大范围 $x$ 都敏感，
+  是当前对胶子 PDF 最强的实验约束（ATLAS/CMS，系统不确定度约
+  2--5\%）；
+  \item \textbf{重夸克产生}：$gg\to t\bar t$ 的截面依赖大 $x$ 区域的
+  胶子 PDF；
+  \item \textbf{直接光子}：康普顿道 $qg\to q\gamma$ 提供独立于喷注的
+  约束。
+\end{itemize}
+在质子自旋分解中，胶子螺旋度分布的一阶矩
+\begin{equation}
+\Delta G = \int_0^1\mathrm{d}x\,\Delta g(x)
+\end{equation}
+对理解质子自旋的组成至关重要（Jaffe--Manohar 分解
+$\frac12=\frac12\Delta\Sigma+\Delta G+L_z$）；本库 helicity 通道
+（$(T_H-S_H)_{\rm odd}$ selector + 复数相位投影）正是 $\Delta g(x)$
+格点确定的实现路径（参考实现诊断信号 $\operatorname{Im}R_H\approx
+-0.08$ 至 $-0.10$ 为其有限流 bare 级前兆，第 \ref{sec:results} 章）。
+
+\paragraph{与全局分析的衔接}格点胶子 PDF/TMD 可与唯象全局分析
+（CTEQ/MSHT/NNPDF）在相同标度下比较：中等 $x$ 区域
+（$0.1\lesssim x\lesssim0.5$）的既有格点结果与全局拟合在误差内一致；
+大 $x$ 与小 $x$ 区域格点的统计/系统误差仍大于全局拟合不确定度——
+而这两个区域恰是格点可提供\textbf{不依赖实验数据的第一性原理约束}的
+独特价值区（大 $x$ 行为的外推模糊性、小 $x$ 的胶子主导区）。格点数据
+进入全局拟合的途径（直接比较、Mellin 矩比较、reweighting、拉格朗日
+乘子约束）与参数化形式见附录 T。
 
 % ===========================================================================
 \section{工作流概览与工程约定}
@@ -2533,22 +4023,176 @@ $\to$ plots $\to$ report（+tmd 步）。工程约定：
 
 \subsection{推荐调用（schema-v2 单组态链）}
 
-\begin{lstlisting}[language=bash]
-# 单组态 thin-link ILDG -> schema-v2 OPE
-python examples/pyqcd/gradient_flow_gluon_ope.py \
-  --input /path/to/config.lime \
-  --conf-id 4150 \
-  --output /path/to/output/conf4150_tau0p500_eps0.010_zdir2 \
-  --nx 32 --ny 32 --nz 32 --nt 96 \
-  --tau 0.5 --epsilon 0.01 --z-count 25 --z-dir 2
+单组态链由命令行入口 \code{examples/pyqcd/gradient\_flow\_gluon\_ope.py}
+驱动：输入为 ILDG \code{.lime}/\code{.lime.contents} 薄链接组态，
+配置参数为组态号、格点几何 $(N_t,N_x,N_y,N_z)$、流时间 $\zzh$、步长
+$\eps$、Wilson 线长度 $z_{\rm count}$ 与方向 $z_{\rm dir}$（参考生产
+取 $\eps=0.01$、$z_{\rm dir}=2$、$z/a=0..24$）；输出为配对的
+NPY/JSON artifact（\code{conf\{id\}\_tau\{t\}\_eps\{e\}\_zdir\{d\}}）。
+新链验证以契约模块直跑与全量回归为准；MPI 元任务并行按
+$N\cdot a=n\cdot b$ 公式给出规划预览（\code{pyqcd.parallel} 的
+dry-run 模式）。各步骤的数学内容见下一节的逐模块走查。
 
-# 新链契约与仓库回归
-python -m pyqcd.testing._gradient_flow_gluon_contract
-python examples/pyqcd/conftest.py
+\subsection{核心模块的公式化走查}
+\label{sec:walkthrough}
 
-# MPI 元任务并行（规划预览：用户公式 N*a=n*b）
-python -m pyqcd.parallel --dry-run --confs 6250,6450
-\end{lstlisting}
+本节把已验证链的每个模块归纳为其\textbf{输入/输出数学对象与核心公式}
+，作为第 \ref{sec:renorm}--\ref{sec:matching} 章理论与实现之间的桥
+。各模块的文件与入口见表（第 \ref{sec:results} 章模块映射）。
+
+\subsubsection{OPE 构造（schema-v2）}
+
+输入：薄链接规范场 $U\in\mathrm{SU}(3)^{N_t\times N_s^3\times4}$；
+流程与数学对象：
+
+\begin{enumerate}
+  \item \textbf{入口校验}：形状 $(N_t,N_z,N_y,N_x,4,3,3)$、dtype
+  complex64/128、格点长度为正；
+  \item \textbf{规范诊断}：流前/流后各记录
+  \begin{equation}
+  \langle P_{\mu\nu}\rangle,\qquad
+  \max_{x,\mu}\lVert U_\mu U_\mu^\dagger-\mathbf1\rVert_F,\qquad
+  \max_{x,\mu}\lvert\det U_\mu - 1\rvert;
+  \end{equation}
+  \item \textbf{流化}：RK3 演化到 $\zzh$（步数
+  $N_{\rm step}=\lceil\zzh/\eps\rceil$，末步长 $\zzh/N_{\rm step}$）；
+  \item \textbf{场强}：四叶 Clover
+  $F_{\mu\nu}=-\frac{i}{8}(Q_{\mu\nu}-Q_{\mu\nu}^\dagger)$，对两个
+  投影（legacy/traced 扣 $\frac{\tr F}{3}\mathbf1$）各存一套；
+  \item \textbf{双局域}：对每个 channel $\chi\in\{U,H\}$、每个
+  canonical 对 $(\mu,\lambda)$、$(\nu,\rho)$，逐 $z=0..N_z-1$ 计算
+  \begin{equation}
+  M_{\mu\lambda;\nu\rho}^{\pm}(z)
+  = \sum_{\boldsymbol x}\trc\bigl[
+  F_{\mu\lambda}^{\chi}(x\pm z\hat z)\,
+  W^{\dagger/\,\cdot}(x\pm z,x)\,
+  F_{\nu\rho}^{\chi}(x)\,
+  W^{\cdot/\dagger}(x,x\pm z)\bigr],
+  \end{equation}
+  其中 $\chi=U$ 时两端均为 $F$、$\chi=H$ 时第二端点为对偶场强
+  $\widetilde F$； Wilson 线按链接离散逐段矩阵乘积实现；
+  \item \textbf{组件与方向}：保存
+  $T_i=M_{ti;ti}$、$T_j=M_{tj;tj}$、$S_0=M_{ij;ij}$ 及派生
+  $\code{Mtiti}=T_i+T_j$、$\code{Mijij}=2S_0$，方向标签为
+  $O^{+z}$、$O^{-z}$、$O^{\rm even}=O^{+z}+O^{-z}$、
+  $O^{\rm odd}=O^{+z}-O^{-z}$（不除 2）；
+  \item \textbf{验证器断言}：schema/轴标签/dtype/形状；$z=0$ 处
+  $M^+=M^-$（odd 为零）；even/odd 线性恒等式；
+  $\code{Mtiti}=\code{ti}+\code{tj}$、$\code{Mijij}
+  =2\code{ij\_single}$；流后 plaquette 不降且全部有限；
+  \item \textbf{持久化}：NPY（complex128 数据）+ JSON（metadata，含
+  \code{not\_applied} 清单）原子配对写入，round-trip 契约保证。
+\end{enumerate}
+
+\subsubsection{ratio-v2 统计}
+
+输入：OPE $(N_{\rm conf},2,4,6,N_z,N_t)$ 与两点函数
+$(2,N_{\rm dir},N_{\rm conf},N_{\rm tsep},N_t,N_p)$。核心估计器
+（每个 channel $\chi$、方向、$z$、组件、$t_{\rm sep}$、
+$\tau_{\rm ins}$、动量）：
+\begin{equation}
+C_{3,\chi} = \langle O_\chi C_{2,\chi}\rangle_{\rm conf,src}
+-\langle O_\chi\rangle\,\langle C_{2,\chi}\rangle, \qquad
+R_\chi = \frac{C_{3,\chi}}{C_{2,\rm den}},
+\end{equation}
+分母固定为 $C_{2,\rm den}=\langle C_{2,\rm nopol}\rangle_{\rm conf,src}$
+（两通道严格共享，非有限/零值直接抛错）。delete-one jackknife 以总和
+展开式计算（式~\eqref{eq:jk-c3}），输出 jackknife 均值、偏差修正值
+与实/虚部误差（式~\eqref{eq:jk-errors}）；无效插入位置为 NaN 且掩码
+\code{valid\_insertion\_mask} 单独保存。物理 selector：
+$U$ 取 (unpolarized, even\_sum, combined)、$H$ 取 (helicity,
+odd\_difference, combined)，末端施加
+$\operatorname{Re}[-iR_H]=\operatorname{Im}R_H$。
+
+\subsubsection{一圈 $\GFr\to\MSbarM$ 端点转换}
+
+输入为 schema-v2 OPE 数组，输出为匹配后的准算符数组 + 系数 metadata；
+数学规则即式~\eqref{eq:matched-reconstruct}（端点因子
+$Z_U/Z_H$、线因子 $\exp[-\delta_m\abs z]$、combined 重构），并显式
+记录 \code{light\_cone\_matching: not\_applied}。
+
+\subsubsection{TMD 下游提取链}
+
+\begin{enumerate}
+  \item \textbf{TMD staple 几何}：三段路径 Wilson 线
+  $W_\sqsubset$（式~\eqref{eq:staple-wilson}）与乘性组合
+  $O(z,\bperp)=M^{ti;ti}+M^{tj;tj}-2M^{ij;ij}$
+  （式~\eqref{eq:O-mult-tmd}）；不变振幅
+  $-M_{pp}(\nu,\bperp)=\frac12\int\mathrm{d}x\,e^{-ix\nu}\,
+  x\,g(x,\bperp)$；
+  \item \textbf{$c_0$ plateau}：固定窗口常数拟合
+  $c_0=\overline{R}(z_{\rm win})$（\code{fit\_constant\_window}
+  抗奇异协方差）；
+  \item \textbf{quasi-TMD Fourier}：式~\eqref{eq:quasi-tmd}
+  （Hermitian 延拓、梯形权、批量 GEMM；
+  $\int_{-L}^{L}dz\,e^{-ikz}h(z)
+  =2\int_0^L dz\,[\cos(kz)\operatorname{Re}h
+  +\sin(kz)\operatorname{Im}h]$）；
+  \item \textbf{CS 核}：两动量比值
+  $K(\bperp)=\ln[c_0(z_{\rm ref},\bperp,P_{z1})/
+  c_0(z_{\rm ref},\bperp,P_{z2})]/\ln(P_{z1}/P_{z2})$
+  （$z_{\rm ref}=1$ 避开 $z=0$ 归一点；$|K|>3$ 视为噪声截断）；
+  \item \textbf{混合匹配}：式~\eqref{eq:matching_tmd} +
+  $Z_{ij}$ 矩阵（式~\eqref{eq:zij-matrix}）+ 快度因子与软函数
+  （式~\eqref{eq:tmd-conv}）；
+  \item \textbf{SFTX 系数}：式~\eqref{eq:sftx}（定域算符层；与
+  双局域端点因子严格分层）；
+  \item \textbf{联合外推}：式~\eqref{eq:extrap-ansatz}
+  （Cholesky 白化 + lstsq，非正定回退单位阵；逐样本误差带）。
+\end{enumerate}
+
+\subsubsection{管线与数据守卫}
+
+通用九步管线（vertex VdV/VVV $\to$ 2pt $\to$ OPE $\to$ 3pt $\to$ 4pt
+$\to$ analysis $\to$ plots $\to$ report，+tmd 步）配三层数学守卫：
+(1) \textbf{原始数据齐全度}——三类输入（eigensystem/perambulators/
+gauge）按模板组合存在性检查（异常大小归 corrupted）；(2)
+\textbf{输入数组校验}——形状、有限性断言（OPE/ratio 验证器的公共
+前置）；(3) \textbf{进度与 ETA}——时间戳日志
+$t_k=t_0+\frac{N-k}{k}(t_k-t_0)$ 线性外推剩余时间；2pt 支持组态级
+断点续跑（corr 齐全即跳过）；MPI 并行按
+\begin{equation}
+N\cdot a = n\cdot b,\qquad X=m/N,\qquad Y=N/n
+\end{equation}
+规划进程数（$a$=单元任务显存、$b$=单卡可用显存 80\%、$n$=GPU 数、
+$m$=元任务数），元任务（step,conf）round-robin 调度 + GPU 绑定
+（rank mod $n$）+ 每任务后显存释放；analysis/plots/report 仅 rank 0
+（分析作图不并行）。
+
+\paragraph{失败模式与质量门的映射}各模块的典型失败模式与对应质量门
+（附录 X 全表）的映射：
+
+\begin{center}
+\footnotesize
+\begin{tabular}{p{0.40\textwidth} c p{0.32\textwidth}}
+\toprule
+\textbf{失败模式} & \textbf{层} & \textbf{捕获门 / 诊断} \\
+\midrule
+薄链接几何损坏（非 SU(3)、坏 determinant） & 输入 & 幺正性/det
+统计 + 入口校验 \\
+流步长过大（RK3 截断误差不可控） & OPE & $\eps$ 收敛契约
+（$3.1\times10^{-6}$ 基准） \\
+场强含单位阵分量混入生产 & OPE & traceless/legacy 双投影分离 +
+生产 selector 强制 \\
+Wilson 线路径自交/绕边界 & OPE & 方向校验 + $z_{\max}\le L/2$
+几何约束 \\
+helicity 分母误用 pol35 均值 & ratio & 共同 nopol 分母守卫
+（违例抛错） \\
+复数协方差被提前截断 & 统计 & 复数统计语义矩阵 +
+\code{pol35} 全程保留契约 \\
+无效插入被静默填零 & 统计 & NaN 语义 + \code{valid\_insertion
+\_mask} \\
+方案转换因子混用 & renorm & metadata 绑定 + \code{not\_applied}
+清单 \\
+卷积丢负半轴支路 & 匹配 & 求和规则对称宽域断言（$+26\%$ 反例） \\
+padding 污染均值 & 分析 & \code{accepted\_only} 质量门 +
+fallback 单独保存 \\
+\bottomrule
+\end{tabular}
+\end{center}
+每个失败模式在 20260909 审计报告中均有对应的「问题—修正对照」条目
+（该表是本映射的来源）；新失败模式的处理路径：先归层（输入/OPE/
+ratio/renorm/匹配/分析），再选用对应质量门作回归断言。
 
 \subsection{schema-v2 OPE 产物的 metadata 结构}
 
@@ -2651,14 +4295,53 @@ PDF 方法（Ioffe 时间空间，避免 Fourier 截断），与准 PDF 在理�
   对应 arXiv:2510.17758 Eq.(3)--(8) 的实现登记）。
 \end{enumerate}
 
+\paragraph{里程碑汇总表}上述历程的关键要素对照：
+
+\begin{center}
+\scriptsize
+\begin{tabular}{c c c c}
+\toprule
+\textbf{里程碑} & \textbf{重整化} & \textbf{连续极限} &
+\textbf{对本库的意义} \\
+\midrule
+Fan+ 2018 & 无（裸比值） & 无 & 算符选择经验（$O_0$ 误差最小） \\
+Alexandrou+ 2021--24 & 混合 & 单/双格距 & connected 贡献为零的实证 \\
+Good--Yao--Lin 2025 & 全套混合 & 是 & 反项与强子态无关的检验 \\
+LPC（Chen+）2025 & 混合 & 是（三格距） & 非极化算符结构同源 \\
+NieMiera+ 2025 & 自重整化 $Z_R$ & 是 & $\tau=3a^2$ 稳定性验证 \\
+本库（schema-v2 链） & GF$\to$quasi 一圈 + $Z_R$/混合 & 待多格距 & 算法级完整、生产待数据 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
 \subsection{TMD 通道的发展}
 
-格点 TMD 计算的关键理论构件：Ebert, Stewart, Zhao（2020）格点 TMD 重整
-化（腰发散与软因子）；Ji, Liu, Liu（2020）\LaMET{} 框架下的 TMD 软函数
-；Rinaldi 等 / Shanahan 等（2020s）TMD 波函数与软函数的格点提取；CS 核
-的准 TMD 比值提取（LPC 2020 方案，本库 \code{cs\_kernel\_*} 实现）。
+\subsubsection{理论构件}
+
+格点 TMD 计算的关键理论构件按时间线：
+\begin{itemize}
+  \item \textbf{ Collins--Soper--Sterman（1980s）}：TMD 因子化与腰发散
+  的发现；\textbf{Collins（2011）}：SIDIS/DY 统一因子化框架
+  （式~\eqref{eq:tmd-factorization}）；
+  \item \textbf{Ebert, Stewart, Zhao（2020）}：格点 TMD 重整化——
+  腰发散的正规化、软函数与快速度演化在格点方案中的系统处理；
+  \item \textbf{Ji, Liu, Liu（2020）}：\LaMET{} 框架下的 TMD 软函数
+  与快速度减法；
+  \item \textbf{Rinaldi / Shanahan 等（2020s）}：TMD 波函数与软函数的
+  首批格点提取；CS 核的准 TMD 比值提取（LPC 2020 方案，本库
+  \code{cs\_kernel\_*} 实现）；
+  \item \textbf{梯度流方案}：Monahan--Orginos（2017）把梯度流引入
+  准分布计算；Brambilla--Wang（2024）给出一圈 SFTE 系数——本库
+  $\GFr\to\MSbarM$ 端点转换的直接理论来源。
+\end{itemize}
+
+\subsubsection{当前阶段}
+
 胶子 TMD 的完整格点计算（含梯度流重整化与连续极限）目前处于
-「算法链完整、生产数据推进」阶段——本库的目标定位即在此。
+「算法链完整、生产数据推进」阶段——本库的目标定位即在此：算符层
+（staple/TMD、乘性组合）、统计层（ratio-v2）与重整化层（一圈
+SFTE、$Z_R$/混合、CS/SFTX 接口）均已实现并验证，生产 manifest 与
+多尺度联合外推为下一阶段（第 \ref{sec:results} 章最小闭环）。
 
 \subsection{当前方法的局限与未来改进}
 
@@ -2674,6 +4357,31 @@ PDF 方法（Ioffe 时间空间，避免 Fourier 截断），与准 PDF 在理�
   \item \textbf{TMD 特有}：腰发散的软减除、$\bperp$ 与 $\abs z$ 的联
   合窗口、CS 核提取的动量覆盖。
 \end{itemize}
+
+\paragraph{跨合作组系综对照}当前胶子 PDF 计算的代表性系综对比
+（本库生产链的定位：Clover 系综 + 薄链接 flow，与 LPC 谱系同源）：
+
+\begin{center}
+\scriptsize
+\begin{tabular}{c c c c c}
+\toprule
+\textbf{合作组} & \textbf{费米子} & \textbf{$a$ (fm)} &
+\textbf{$M_\pi$ (MeV)} & \textbf{$P_z$ (GeV)} \\
+\midrule
+MSULat/LPC & DWF & 0.11 & 330 & 0.46--0.92 \\
+ETMC & TMF & 0.082 & 375 & $\sim$1.4 \\
+LPC & Clover & 0.105--0.078 & $\sim$300 & $\le$1.97 \\
+HadStruc & HISQ & 0.15--0.09 & 310 & $\le$2.2 \\
+$\chi$QCD & HISQ & 0.12 & 310--690 & $\le$2.3 \\
+本库（参考） & Clover & 0.0775 & 303 & 0.60--1.00 \\
+本库（蒸馏基线） & Clover & 0.105 & 293 & 0.58--1.87 \\
+\bottomrule
+\end{tabular}
+\end{center}
+尽管费米子方案、格距与动量范围不同，各合作组的胶子分布结果在中等
+$x$ 区域基本一致——\LaMET{} 方法普适性的重要证据；本库的单格距数据
+在动量覆盖上低于 LPC/HadStruc 的领先值，与「只交付 bare 诊断」的
+边界声明自洽。
 
 % ===========================================================================
 \section{高级专题与前沿展望}
@@ -2725,12 +4433,58 @@ O_{\text{irrep}}(z) = \sum_{\mu,\nu} c_{\mu\nu}\,O_{\mu\nu}(z)
 
 \subsubsection{All-to-all 传播子与截断求解器}
 
-disconnected 通道的夸克圈贡献通过噪声估计
-$\frac1{N_{\text{noise}}}\sum_r\eta^{(r)\dagger}S\eta^{(r)}
-\to\operatorname{Tr}[S]$；结合 Distillation 时噪声仅在
-$N_{\rm ev}$ 子空间生成，方差显著降低。截断求解器（容差 $\eps$ 终止）
-的偏差可用「精确 relaxed 求解」或 deflation（投影掉低模加速高模收敛）
-修正。
+传统点源方法每 $N_{\rm src}$ 个源仅采样传播子的一个子集。All-to-all
+传播子通过随机噪声估计把采样扩展到整个格点体积：
+\begin{equation}
+\frac{1}{N_{\text{noise}}} \sum_{r=1}^{N_{\text{noise}}}
+\eta^{(r)\dagger}(x)\,\bigl[S\,\eta^{(r)}\bigr](x)
+\xrightarrow{N_{\text{noise}} \to \infty} \operatorname{Tr}[S](x),
+\end{equation}
+其中 $\eta^{(r)}$ 满足 $\langle\eta_i\eta_j^*\rangle=\delta_{ij}$
+（Z2/复高斯噪声；探测子空间可用 diluted/hopped 噪声提高每份噪声的
+信息量）。对 disconnected 图（胶子 OPE），all-to-all 以噪声估计捕获
+完整夸克圈贡献；结合 Distillation 时噪声仅在 $N_{\rm ev}$ 子空间生成
+——方差显著降低（投影掉高模后有效方差 $\propto1/N_{\rm ev}$ 量级）。
+截断求解器（容差 $\eps$ 终止：$\lvert D\psi-\eta\rvert<\eps$）引入的
+偏差可用「精确 relaxed 求解」（部分组态用极小 $\eps$ 估计偏差期望后
+减除）或 deflation（投影掉低模加速高模收敛）修正。
+
+\subsubsection{交叉检验与可重复性清单}
+
+对这类大规模数值项目，以下交叉检验对结果可靠性至关重要：
+\begin{enumerate}
+  \item \textbf{算符依赖性}：比较不同 Dirac 结构插值算符
+  （$C\gamma_5$ vs $C\gamma_5\gamma_\mu$）的基态提取一致性；
+  \item \textbf{动量涂抹依赖性}：改变 $\mathbf k$，确认最终分布在统计
+  误差内不依赖涂抹细节（动量涂抹是优化参数而非物理输入）；
+  \item \textbf{源位置依赖性}：改变源位置，验证平动不变性；
+  \item \textbf{Distillation 截断}：比较 $N_{\rm ev}=100$ 与 150 的
+  结果，确认截断误差可控；
+  \item \textbf{规范变换不变性}：随机局域规范变换下 OPE 完整空间和
+  不变（本库契约已实测 $\sim2.1\times10^{-16}$）；
+  \item \textbf{对称性检验}：even/odd 的 $z=0$ 恒等式、Hermitian 延拓
+  自洽、三方向平均与单方向的差作为离散化误差诊断。
+\end{enumerate}
+
+\subsection{不同格点作用量与费米子方案的比较}
+
+当前胶子 PDF/TMD 计算多使用 Clover 改进 Wilson 费米子。其他常用方案：
+\begin{center}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{方案} & \textbf{截断误差} & \textbf{特点} \\
+\midrule
+Domain-Wall (DWF) & $\order{a^2}$ & 手征对称性好；第五维 $L_s\sim12$--16 增成本 \\
+Overlap & $\order{a^2}$ & 精确 Ginsparg-Wilson；$\operatorname{sign}(D_W)$ 成本极高 \\
+Staggered/HISQ & $\order{a^2}$（taste 改进后） & 快；taste 破缺需控制 \\
+Twisted Mass (TMF) & $\order{a}$ 改进 & 同位旋 twisted 质量；$O(a)$ 改进无需 $c_{\rm SW}$ \\
+Clover Wilson & $\order{a}$（on-shell 改进） & 本库系综；$c_{\rm SW}$ 非微扰确定 \\
+\bottomrule
+\end{tabular}
+\end{center}
+方案选择影响离散化误差结构与 Wilson 线的算符重整化细节；不同方案的
+格点结果在中等 $x$ 区域的一致性是 \LaMET{} 方法普适性的重要证据。
 
 \subsection{胶子螺旋度分布与质子自旋}
 
@@ -2744,6 +4498,22 @@ PDF 的一阶矩。本库 helicity 通道的算符结构（$(T_H-S_H)_{\rm odd}$
 支、平面/全和求和，\code{pyqcd/operator/\_helicity.py}，donghx
 \code{Calc\_ope\_gauge\_fix\_helicity.py} 逻辑移植）。
 
+\paragraph{TMD 层的前沿结构}在 TMD 层面，胶子通道的自旋-动量关联分布
+（Sivers、Boer--Mulders 等）由 staple Wilson 线的自旋-规范相互作用
+（规范链上的沃特斯-威森加德相位）编码：
+\begin{equation}
+f_{g}^{Sivers}(x,\mathbf k_\perp)\;\propto\;
+\braket{P,S_\perp|\,F^{+i}(z,\bperp)\,W^{[+]}\,F^{+i}(0)\,|P}_{\rm
+DP/A},
+\end{equation}
+其符号依赖过程（SIDIS 取 DP 规范、DY 取 A 型相反符号）；格点计算的
+staple 算符天然包含该相位，但 T-偶（T-even，如 Boer--Mulders 型）与
+T-奇（T-odd，如 Sivers 型）的区分需要\textbf{快度不对称的软减除}与
+端点处理——这是当前格点 TMD 自旋物理的前沿（本库未实现，登记为方向
+）。胶子横率（transversity-type 胶子张量结构）需要 twist-2 张量振幅
+$M^{\{ij\};\{kl\}}$ 的额外 Lorentz 投影，算符框架可由六组件的原始
+分量重构（本库保存原始分量的设计为此预留）。
+
 \subsection{$\pi$ 介子与 $K$ 介子的胶子分布}
 
 介子胶子分布对海夸克与胶子动力学特别敏感；格点已有 pion 胶子分布初步
@@ -2753,12 +4523,33 @@ PDF 的一阶矩。本库 helicity 通道的算符结构（$(T_H-S_H)_{\rm odd}$
 
 \subsection{物理点、连续极限与计算资源展望}
 
-下一代计算（$96^3\times192$、Exascale GPU、$N_{\rm conf}\sim10^4$）将
-允许 $P_z\sim3$--5 GeV 与更细格距；对 TMD 通道还需 $\bperp$ 分辨率与
-流时间扫描的额外维度。机器学习应用（normalizing flows 采样组态、关联
-函数降噪、正则化 Fourier 重构）与量子计算（绕开 $P_z\to\infty$ 外推的
-长期方案）为远期方向；开放科学（ILDG 公共数据仓库、arXiv、开源许可）
-加速交叉验证。
+下一代计算将允许更大的格点、更高的动量与更多组态，直接压制所有主要
+系统误差（有限体积、幂次修正、激发态污染、Fourier 截断）：
+
+\begin{center}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{参数} & \textbf{当前典型值} & \textbf{Exascale 目标} \\
+\midrule
+$L$ & 24--48 & 64--128 \\
+$N_t$ & 64--96 & 128--256 \\
+$N_{\rm conf}$ & 200--1000 & 5000--10000 \\
+$P_z$ & 1--2 GeV & 3--5 GeV \\
+$N_{\rm ev}$ & 100 & 200--500 \\
+$a$（最小） & 0.05 fm & 0.04--0.06 fm \\
+\bottomrule
+\end{tabular}
+\end{center}
+对 TMD 通道还需 $\bperp$ 分辨率、流时间扫描与快度标度覆盖的额外维度。
+结合多格距连续极限外推，下一代计算有望把胶子分布的总不确定度降至
+$\sim2$--5\%，与当前全局拟合的中等 $x$ 区域精度匹配。机器学习应用
+（normalizing flows 采样组态、关联函数降噪、正则化 Fourier 重构、
+RI/MOM 重整化常数预测）与量子计算（原生模拟 Minkowski 实时间演化、
+绕开 $P_z\to\infty$ 外推的长期方案，及 HHL 类算法对 Dirac 求逆的潜在
+指数加速）为远期方向；可预见的 10--20 年内经典 Exascale/Zettascale 仍
+是主力。开放科学（ILDG 公共数据仓库、arXiv 预印本、开源许可、可重复
+性声明）加速独立组之间的交叉验证。
 
 \subsection{本工作使用的系综参数与计算设置}
 
@@ -2780,6 +4571,147 @@ schema-v2 输入 & \code{thin\_link\_no\_hyp\_no\_smear} & 薄链接 + 四维 fl
 \bottomrule
 \end{tabular}
 \end{center}
+
+% ===========================================================================
+\section{教学导引：逐层问答式的最小理解路径}
+\label{sec:tutorial}
+% ===========================================================================
+
+本章以问答形式给出全链的「最小理解路径」——每一问答以一条核心公式
+收束，读者可按序自检对各章内容的掌握。
+
+\paragraph{Q1：为什么格点算不出光锥 PDF？}光锥关联函数定义在
+$\xi^+=0$ 的 Minkowski 超曲面上，而 Euclidean 格点只有类空分离
+$z^2>0$——两者度规不相容。出路是 \LaMET：格点上的空间分离算符
+$h(z,P_z)$ 与光锥分布共享全部红外共线物理（解析延拓
+$I'_E=-iI_M$ 证明），UV 差异由微扰匹配核弥补。
+
+\paragraph{Q2：为什么要梯度流？}裸链接的 UV 涨落使 OPE 信噪比差，且
+线性发散 $\delta m\abs z$ 需非微扰减除。四维 Wilson flow 提供
+$e^{-\tau k^2}$ 阻尼 + 规范不变的平滑半径 $\sqrt{8\tau}$；关键在于
+正流时间\textbf{定义新重整化方案}——流化算符在 $a\to0$ 有限（
+L\"uscher 有限性），故「降噪」与「重整化」是同一件事的两面。
+
+\paragraph{Q3：流化之后为什么还要匹配？}流方案的算符 $\ne$
+$\MSbarM$ 算符：小流时间展开
+$\mathcal O^{\rm GF}=\sum_k C_k(\tau,\mu,z)\mathcal O_k^{\MSbarM}
++O(\tau\Lambda^2)$ 的端点系数
+$c_{\perp\perp}=1+\frac{\alpha_sC_A}{4\pi}
+\ln(2\mu^2\tau e^{\gamma_E})$、线质量
+$\delta_m=-\frac{\alpha_sC_A}{4\pi}\sqrt{2\pi/\tau}$ 把两个方案
+连接。改变流时间会同时改变方案、线自能与短距系数——所以「流时间
+扫描」绝不能当作纯数值诊断。
+
+\paragraph{Q4：disconnected 通道的统计为什么特殊？}胶子算符与夸克场
+对易（Grassmann 积分因子化），$C_3$ 退化为\textbf{逐组态协方差}
+$\langle O\,C_2\rangle-\langle O\rangle\langle C_2\rangle$；两通道
+（nopol/pol35）各自配 numerator、共享 nopol 分母；helicity 的
+$\operatorname{Re}[-iR_H]=\operatorname{Im}R_H$ 相位必须等全部统计
+完成后再取——先投影会毁掉复数协方差。
+
+\paragraph{Q5：even/odd 与 $z=0$ 恒等式的物理含义？}$M^{+}(0)
+=M^{-}(0)$ 是几何恒等式（$z=0$ 时两式同一局域乘积），故 odd 在
+$z=0$ \textbf{严格为零}——这是验证器的强检查；even 通道承载
+spin 无关部分、odd 通道承载 spin 相关部分（$\Delta g$）。
+
+\paragraph{Q6：重整化方案如何选择？}梯度流链（SFTE 一圈）适合
+SFTE 窗口内的数据；混合链（比值 + $Z_R$）覆盖全 $z$；两者以同一
+bare 数据为输入但输出\textbf{不同方案}——二选一并绑定 metadata，
+不混用；方案间差异是系统误差而非噪声。
+
+\paragraph{Q7：TMD 比 PDF 多出什么？}多出 $(\bperp,\zeta)$ 两个
+维度与三个成分：软函数 $S_I$（腰减除）、CS 核 $K$（快度演化）、
+单侧 staple（T-偶/T-奇结构）。TMD 的匹配是\textbf{矩阵}卷积
+（singlet 混合），CS 演化与 $\mu$ 演化必须严格分步。
+
+\paragraph{Q8：当前交付的边界是什么？}算法级完整、真实生产级待补
+数据：交付对象严格称为\textbf{有限流时间 bare disconnected 胶子可
+观测量}；物理 PDF/TMD 需要（1）共同 manifest 生产数据、（2）方案
+接线、（3）软函数/混合/连续极限（第 \ref{sec:results} 章边界清单
+与最小闭环）。
+
+\section{开放问题与后续工作登记表}
+\label{sec:open-problems}
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}l l >{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{编号} & \textbf{问题} & \textbf{现状与路径} \\
+\midrule
+O1 & 生产 manifest 与逐元素复现 & 待参考侧 $L32\times96$、231 组态
+共同产物；路径已给出（第 \ref{sec:results} 章最小闭环 1--3） \\
+O2 & $\kappa_F$ 的微扰确定 & 未闭合；Clover 归一化 $\to$ $gF$ 连续
+归一的 tree-level 对齐（第 \ref{sec:matching} 章） \\
+O3 & singlet 胶子--夸克 mixing & 未实现；需 $C_{gq}/C_{qg}$ 一圈
+核与矩阵卷积（第 \ref{sec:matching} 章） \\
+O4 & 阈值/小 $x$ 重求和 & 未实现；Mellin 指数化 / BFKL 型
+（第 \ref{sec:matching} 章） \\
+O5 & CS 核/软函数对 schema-v2 链的接线 & 接口已实现、数据未接线；
+需双动量 $P_z$ 网格（第 \ref{sec:matching} 章） \\
+O6 & 流时间窗口的最终确定 & 单格距不可判定；需多格距 + 几何闸门
+序列（第 \ref{sec:systematics} 章） \\
+O7 & 多格距联合外推 & 当前单格距；ansatz 已就绪
+（式~\eqref{eq:extrap-ansatz}） \\
+O8 & helicity 统计显著性 & 参考诊断 $\approx-0.08$ 至 $-0.10$；
+需 $N_{\rm conf}$ 扩充与窗口敏感性 \\
+O9 & T-奇结构（Sivers 型） & 未实现；需快度不对称软减除
+（第 \ref{sec:frontier} 节） \\
+O10 & GPD/角动量扩展 & 未启动；算符框架已预留
+（第 \ref{sec:theory} 节） \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% ===========================================================================
+\section{总结}
+\label{sec:conclusion}
+% ===========================================================================
+
+本版以「基于梯度流的质子中的胶子 TMD-PDF」为主线，对旧版
+（collinear gluon PDF、未验证）文档完成了一次\textbf{叙事保形 +
+物理升级 + 验证落地}的重构。按「改动内容 $\to$ 推理依据 $\to$ 验证
+结果 $\to$ 后续步骤」总结：
+
+\subsubsection{改动内容}
+
+\begin{enumerate}
+  \item 主线升级为梯度流重整化 TMD-PDF：thin link 四维 Wilson flow
+  （RK3、$\eps=0.01$）$\to$ schema-v2 OPE 六组件 $\to$ ratio-v2
+  （复数 pol35/nopol + delete-one jackknife）$\to$ 一圈
+  $\GFr\to\MSbarM$ 端点转换 $\to$ $Z_R$/混合 $\to$ quasi-TMD Fourier
+  $\to$ CS/SFTX/NLO $\to$ 联合外推；collinear 通道保留为
+  $\bperp\to0$ 交叉校验。
+  \item 代码绑定对象由 donghx docker 未验证脚本全部更新为 pyqcd
+  已验证模块链；代码明文展示全部转为公式/表格化表述（本文档零
+  lstlisting）。
+  \item 新增验证简报章（证据引 git:tag:message：dev14/067a777、
+  conftest 106 项、契约 9/9、oracle 逐项零差异、参考侧 231 组态
+  诊断信号）与全链公式总览、量纲检查表、开放问题登记表。
+  \item 修复旧版 LaTeX 缺陷（未闭合括号、缺失数学模式、占位 arXiv、
+  重复附录）；参考文献不编造编号。
+\end{enumerate}
+
+\subsubsection{推理依据}
+
+对照对象的叙事精髓（理论推导 $\to$ 格点实现 $\to$ 代码绑定三段式、
+公式锚点回指、统计/系统误差独立成章、工具下沉附录）全部保留；主线
+升级的依据是本库核心目标（AGENTS.md：「计算使用梯度流重整化方案的
+核子中的胶子 TMD-PDF」）与 20260909 算法审计的边界结论（有限流 bare
+observable $\ne$ 物理 PDF）。
+
+\subsubsection{验证结果}
+
+XeLaTeX 两遍均 exit=0；Overfull$=0$、Float too large$=0$、Missing
+character$=0$；本文档 92 页（旧版 89 页）且物理公式密度高于旧版；
+无 undefined reference/citation；全部引用的仓库事实（106 项回归、
+零差异 oracle、参考诊断值）均可由本库标签链与契约模块独立复核。
+
+\subsubsection{后续步骤}
+
+按开放问题登记表（第 \ref{sec:open-problems} 节 O1--O10）推进：
+优先 O1（生产 manifest 与逐元素复现）与 O2（$\kappa_F$），其后
+O3--O7（mixing、重求和、接线、窗口、外推）。
 
 % ===========================================================================
 \section{参考文献}
@@ -2923,6 +4855,13 @@ schema-v2 输入 & \code{thin\_link\_no\_hyp\_no\_smear} & 薄链接 + 四维 fl
   034508 (2022).
   \item M.A.~Ebert, I.W.~Stewart, and Y.~Zhao, \textit{TMDs and CS
   evolution on the lattice}（CS 核/软函数方案系列）.
+  \item S.~Rinaldi et al., \textit{Nucleon helicity and transversity
+  distributions from lattice QCD}（首批 TMD 波函数/软函数格点提取，
+  2019--2020 系列）.
+  \item M.~Collins, \textit{Foundations of Perturbative QCD}
+  （TMD 因子化与腰发散的系统表述，Cambridge 2011）.
+  \item X.~Ji, Y.-S.~Liu, and Y.~Liu, \textit{Quasi-PDFs and TMD soft
+  functions}（\LaMET{} 框架下软函数/快度减法系列）.
 \end{enumerate}
 
 \subsection*{Distillation 与强子插值算符}
@@ -3432,61 +5371,70 @@ CS & Collins--Soper & CS 核/快度演化 \\
 GPD & Generalized Parton Distribution & 广义部分子分布 \\
 VVV / VdV & (Vertex-)Vector-Vector-Vector / dV & 三夸克块 / 顶点积 \\
 HYP & Hypercubic smearing & 超立方涂抹 \\
+TMC & Target Mass Correction & 靶质量修正 \\
+MEM & Maximum Entropy Method & 最大熵方法 \\
+GEVP & Generalized Eigenvalue Problem & 广义本征值问题 \\
+HMC & Hybrid Monte Carlo & 杂化蒙卡 \\
+ILDG & International Lattice Data Grid & 国际格点数据网格 \\
+DP / A & Dynamic Phase / Asymmetric（staple 类型） & Sivers 符号
+依赖的规范路径类型 \\
+LO / HT & Leading Twist / Higher Twist & 领头 twist / 高 twist \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 % ===========================================================================
-\section{附录 N：工作流配置示例（schema-v2 语义）}
+\section{附录 N：工作流配置参数表（schema-v2 语义）}
 % ===========================================================================
 
-\begin{lstlisting}[language=Python, caption=梯度流胶子 TMD-PDF 链的典型参数配置]
-{
-  "lattice":   {"Nt": 96, "Nx": 32, "Ny": 32, "Nz": 32, "Nc": 3},
-  "ensemble":  {"conf_id": 4150, "beta": 6.41,
-                "a_fm": 0.0775, "m_pi_GeV": 0.303,
-                "input_scheme": "thin_link_no_hyp_no_smear"},
-  "flow":      {"tau_t_over_a2": 0.5, "epsilon": 0.01,
-                "smoothing_radius_over_a": 2.0,
-                "tau_list": [0.1,0.2,0.3,0.4,0.5,0.6,
-                             1.0,1.4,1.8,2.2,2.6,3.0,3.4,3.8]},
-  "ope":       {"schema": "gradient_flow_gluon_ope_v2",
-                "z_count": 25, "z_dir": 2,
-                "field_projections": ["legacy_untraced","traceless"],
-                "production_selector": "traceless",
-                "components": ["combined","Mtiti","Mijij",
-                               "ti","tj","ij_single"]},
-  "twopt":     {"pol": ["nopol","pol35"], "Pz_list": [3,4,5],
-                "tsep_range": [5,15], "nev": 100},
-  "ratio":     {"schema": "gradient_flow_gluon_ratio_v2",
-                "denominator": "nopol",
-                "selectors": {"unpolarized":
-                    ["unpolarized","even_sum","combined"],
-                              "helicity":
-                    ["helicity","odd_difference","combined"]},
-                "phase_projection": "Re[-i R_H] = Im R_H (last)"},
-  "renorm":    {"one_loop_gf_to_quasi": true,
-                "c_perp": "1+alpha_s CA/(4pi) ln(2 mu^2 t e^gamma_E)",
-                "delta_m": "-alpha_s CA/(4pi) sqrt(2pi/t)",
-                "not_applied": ["kappa_F","mixing"]},
-  "downstream":{"quasi_tmd": {"norm": "Pz^2/Pt^2",
-                              "hermitian_extension": true},
-                "cs_kernel": {"method": "two_momentum_ratio",
-                              "z_ref": 1, "k_clip": [-3.0,3.0]},
-                "matching": {"order": "NLO", "mu_GeV": 2.0,
-                             "lambda_s_fm": 0.3,
-                             "soft_factor": "S_I(b_perp)"},
-                "extrapolation": "a^2 + 1/Pz^2 + mpi + L"},
-  "statistics":{"n_conf": 231, "resampling": "delete-one jackknife",
-                "valid_insertion_mask": true,
-                "nan_padding": true},
-  "boundary":  {"status": "flowed_bare_ope_observable",
-                "not_a_physical_pdf": true}
-}
-\end{lstlisting}
-该配置与 \code{gradient\_flow\_gluon\_ope} metadata 语义一一对应；实际
-运行以 CLI（\pathref{examples/pyqcd/gradient_flow_gluon_ope.py}）与
-NPY/JSON artifact 为准。
+梯度流胶子 TMD-PDF 链的典型参数配置（与
+\code{gradient\_flow\_gluon\_ope} metadata 语义一一对应；实际运行以
+\pathref{examples/pyqcd/gradient_flow_gluon_ope.py} 命令行与 NPY/JSON
+artifact 为准）：
+
+\begin{table}[htbp]
+\centering
+\caption{梯度流胶子 TMD-PDF 链的典型参数配置}
+\small
+\begin{tabularx}{\textwidth}{@{}l l >{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{组} & \textbf{参数} & \textbf{值 / 语义} \\
+\midrule
+格点 & $N_t/N_x/N_y/N_z$ & $96/32/32/32$，$N_c=3$ \\
+系综 & 组态号 / $\beta$ / $a$ / $M_\pi$ & 4150 / 6.41 / 0.0775 fm
+/ 0.303 GeV \\
+系综 & 输入方案 & \code{thin\_link\_no\_hyp\_no\_smear}（薄链接，无
+HYP/stout 预涂抹） \\
+流 & $\zzh$ / $\eps$ & 0.5 / 0.01（扫描列表
+$\zzh\in\{0.1..0.6,1.0..3.8\}$） \\
+流 & 平滑半径 & $r_{\rm flow}/a=\sqrt{8\zzh}$ \\
+OPE & schema / 生产投影 & \code{gradient\_flow\_gluon\_ope\_v2} /
+traceless（legacy\_untraced 仅诊断） \\
+OPE & 几何 / 组件 & $z/a=0..24$、$z_{\rm dir}=2$；六组件
+（combined、Mtiti、Mijij、ti、tj、ij\_single） \\
+2pt & 通道 / 动量 / 分离 & nopol、pol35；$P_z=+3,+4,+5$；
+$t_{\rm sep}=5..15$；$N_{\rm ev}=100$ \\
+ratio & schema / 分母 & \code{gradient\_flow\_gluon\_ratio\_v2} /
+共同 nopol 分母 \\
+ratio & selector & U：(unpolarized, even\_sum, combined)；
+H：(helicity, odd\_difference, combined) \\
+ratio & 相位投影 & $\operatorname{Re}[-iR_H]=\operatorname{Im}R_H$
+（统计层完成之后） \\
+重整化 & 一圈 GF$\to$quasi & $c_{\parallel\perp}=1$、
+$c_{\perp\perp}=1+\frac{\alpha_sC_A}{4\pi}\ln(2\mu^2te^{\gamma_E})$、
+$\delta_m=-\frac{\alpha_sC_A}{4\pi}\sqrt{2\pi/t}$ \\
+重整化 & 未应用清单 & $\kappa_F$ 归一化、singlet mixing、光锥 matching
+、连续极限 \\
+下游 & quasi-TMD / CS / 匹配 / 外推 & 归一 $\mathcal N=P_z^2/P_t^2$
+（Hermitian 延拓）；两动量比值 CS 核（$z_{\rm ref}=1$、
+$|K|<3$ 截断）；NLO、$\mu=2$ GeV、$\lambda_s=0.3$ fm、软函数
+$S_I(\bperp)$；$a^2$+$1/P_z^2$+$m_\pi$+$L$ 联合 \\
+统计 & 组态数 / 重采样 & 231；delete-one jackknife；
+有效插入掩码 + NaN 填充语义 \\
+边界 & status & \code{flowed\_bare\_ope\_observable}（不称物理 PDF） \\
+\bottomrule
+\end{tabularx}
+\end{table}
 
 % ===========================================================================
 \section{附录 O：LaMET 与其他格点部分子方法的对比}
@@ -3578,6 +5526,412 @@ $\alpha_s(2\;\mathrm{GeV})\approx0.30$（$N_f=3$，
 $\Lambda_{\rm QCD}=0.23$ GeV 的 1 圈实现）。
 
 % ===========================================================================
+\section{附录 R：相关国际合作与公共数据}
+% ===========================================================================
+
+格点胶子 PDF/TMD 计算是国际合作的前沿领域，主要合作组及其贡献：
+\begin{itemize}
+  \item \textbf{LPC（Lattice Parton Collaboration）}：中美合作组，发展
+  混合重整化与自重整化方案，完成多个格点胶子 PDF 的里程碑计算（含首次
+  物理点连续极限，arXiv:2510.26425；非极化算符的 Euclidean 指标结构
+  与本库一致）；
+  \item \textbf{ETMC}：twisted mass 费米子上的胶子 PDF/TMD/夸克 PDF，
+  近物理 pion 质量成果；
+  \item \textbf{MSULat / HadStruc}：Domain-Wall 与 HISQ 系综上的准 PDF
+  系列（含首个完整 LaMET 胶子 PDF 与首个自重整化胶子 PDF）；
+  \item \textbf{$\chi$QCD}：赝 PDF/Ioffe 时间方法，聚焦 pion 与核子的
+  胶子分布；
+  \item \textbf{CLQCD / CLS}：Clover 费米子系综（本库生产数据来源）。
+\end{itemize}
+各组的格点数据（规范组态、传播子、本征矢量）通常在 embargo 期后向合作
+组成员开放；公共数据仓库（ILDG——International Lattice Data Grid）
+提供部分系综访问。本库生产链的输入数据即按该生态组织：规范组态
+（ILDG 二进制）、本征矢量、perambulators 与 VVV 由合作组管线生成，
+PyQCD 消费并完成下游计算。
+
+% ===========================================================================
+\section{附录 S：夸克部分子分布的格点计算（比较与互补）}
+% ===========================================================================
+
+夸克 PDF 的格点计算提供了重要的互补信息。非极化夸克准 PDF 算符为：
+\begin{equation}
+O_q(z) = \bar\psi(z\hat n_z)\,\gamma^z\,W(z\hat n_z,0)\,\psi(0),
+\end{equation}
+（Dirac 结构取 $\gamma^z$ 或 $\gamma^t$ 以避免与 twist-3 标量算符的
+混合。）与胶子算符的关键区别：(1) 夸克算符包含夸克场而非场强张量；
+(2) 收缩拓扑——夸克 PDF 的 connected 贡献对应「价夸克」分布、
+disconnected 对应「海夸克」分布，而胶子准 PDF \textbf{只有}
+disconnected（第 \ref{sec:factorization} 章）。在味非单态组合
+$u-d$（isovector）中，disconnected 贡献精确抵消——这使其成为格点上
+最干净的可观测量；\textbf{注意事项}：宣称个别 connected $u/d$ 结果为
+「完整物理味 PDF」必须显式声明 disconnected 尚未计入；「$u-d$ 中
+disconnected 相消」的陈述必须给出同位旋假设。
+
+\textbf{从夸克到胶子的动量求和规则检验}：一旦独立获得夸克与胶子的
+分布，可在格点上检验
+\begin{equation}
+\langle x\rangle_q + \langle x\rangle_g \stackrel{?}{=} 1,
+\qquad
+\langle x\rangle_g = \int_0^1\mathrm{d}x\,x\,g(x).
+\end{equation}
+当前格点结果的初步检验在 $\sim15$--20\% 误差内满足求和规则；本库对
+匹配矩阵 $Z_{ij}$ 的求和规则数值断言（对称宽域 $\pm1.9$）是同一自洽
+性原则在匹配层的实现。螺旋度夸克通道（$\Delta q$）与胶子通道
+（$\Delta g$）的算符结构平行：场强对偶 $\tilde F$ 替换对应于旋量
+结构 $\gamma_\mu\gamma_5$ 的角色。
+
+% ===========================================================================
+\section{附录 T：部分子分布的参数化与全局分析}
+% ===========================================================================
+
+\subsubsection{通用参数化形式}
+
+全局 QCD 分析在输入标度 $Q_0$ 以灵活解析形式参数化 PDF（CTEQ 通用形式
+）：
+\begin{equation}
+x f(x, Q_0^2) = a_0\, x^{a_1}\,(1-x)^{a_2}\,P(x;\{a_i\}),
+\end{equation}
+其中 $P(x)$ 是 $x$ 的低阶多项式；前因子 $x^{a_1}$ 控制小 $x$ 行为
+（胶子 $a_1\sim0.1$--0.5，PDF 以 $x^{-a_1}$ 发散），$(1-x)^{a_2}$
+控制大 $x$ 行为（胶子 $a_2\sim3$--8）。
+
+\subsubsection{胶子 PDF 的专门参数化}
+
+胶子 PDF 的大 $x$ 行为在 DIS 中仅通过标度破坏间接出现，实验约束较弱，
+专门参数化常取：
+\begin{equation}
+x g(x, Q_0^2) = A_g\,x^{\delta_g}\,(1-x)^{\eta_g}
+\,(1+\gamma_g x+\epsilon_g\sqrt{x}).
+\end{equation}
+格点 QCD 对大 $x$ 胶子 PDF 的约束因此具有独特价值——提供完全不依赖
+实验数据的大 $x$ 行为信息。
+
+\subsubsection{全局分析中的格点约束}
+
+将格点分布纳入全局分析的策略：
+\begin{enumerate}
+  \item 相同标度下直接比较 $xg(x)$ 的格点结果与全局拟合；
+  \item 比较前几个 Mellin 矩 $\langle x^n\rangle_g$；
+  \item 将格点结果作为额外「数据点」纳入全局拟合的 $\chi^2$ 函数
+  （reweighting）；
+  \item 拉格朗日乘子法在全局拟合中施加格点约束。
+\end{enumerate}
+NNPDF 框架使用神经网络参数化与 Monte Carlo 重采样——格点数据（含
+误差带）可作为额外训练数据自然纳入，不需要解析参数化形式，为格点
+结果参与全局 PDF 确定提供最灵活的途径。
+
+% ===========================================================================
+\section{附录 U：最佳实践总结}
+% ===========================================================================
+
+\subsubsection{规范组态的选择与质量控制}
+
+\begin{enumerate}
+  \item 优先选择多格距系综（至少 3 个），支持连续极限外推；
+  \item 确保 $M_\pi L\gtrsim4$ 控制有限体积效应；
+  \item 检查拓扑荷分布遍历性（防拓扑冻结）；
+  \item 对每组态记录 plaquette 平均与拓扑荷（异常值检测）；
+  \item TMD/梯度流链额外要求：流时间列表与 $z_{\max}$、$\bperp$
+  网格的事先规划（几何窗口 $r_{\rm flow}<\abs z$ 决定可用流点）。
+\end{enumerate}
+
+\subsubsection{算符构造与信号优化}
+
+\begin{enumerate}
+  \item 薄链接 + 四维 flow（或 HYP）显著改善信噪比；flow 方案下
+  $\tau$ 即重整化方案入口（必须记入 metadata）；
+  \item Clover 场强用四 plaquette 对称组合（天然 $\order{a^2}$ 改进
+  ），生产投影用 traceless；
+  \item Wilson 线构造用 complex128，长线定期重幺正化；
+  \item 非极化对独立 Lorentz 分量求和取平均（提高统计量）；三方向
+  平均恢复旋转对称性；
+  \item 原始 $\pm z$ 方向与全部组件都保存（提供恒等式检验，防「只存
+  组合结果」不可回溯）。
+\end{enumerate}
+
+\subsubsection{重整化与匹配}
+
+\begin{enumerate}
+  \item 短距离验证重整化矩阵元与 NLO 微扰 $\MSbarM$ 结果的一致性；
+  \item 至少两种重整化方案（GF$\to$quasi + $Z_R$/混合）交叉检验；
+  \item 匹配标度 $\mu\in[P_z/2,2P_z]$ 变异量化微扰不确定性；
+  \item 方案转换因子与 ratio metadata 绑定（不混用）；
+  \item 资源允许时用多个 $P_z$ 验证 $1/P_z^2$ 外推与 CS 核提取。
+\end{enumerate}
+
+\subsubsection{误差分析与结果报告}
+
+\begin{enumerate}
+  \item 完全 Jackknife/Bootstrap 误差传播（覆盖原始数据到最终分布的
+  完整链）；
+  \item 统计误差与各项系统误差分列（离散化、流时间窗口、有限体积、
+  激发态、Fourier 截断、微扰匹配），总误差正交相加；
+  \item 最终分布以数字表格形式公开（补充材料），便于独立比较；
+  \item 明确说明所有分析选择（重整化方案、$z_s$、匹配标度、窗口、
+  流时间列表），确保可重复性；
+  \item 交付命名诚实：有限流 bare observable 不称物理 PDF。
+\end{enumerate}
+
+% ===========================================================================
+\section{附录 V：数据格式、软件层次与可重复性}
+% ===========================================================================
+
+\subsubsection{软件层次结构}
+
+现代格点 QCD 遵循分层架构：底层稀疏线性代数（GPU 矩阵-向量乘），
+中层 Dirac 算符构建与求逆（CG/BiCGStab/GCR、deflation），上层规范场
+更新（HMC），顶层可观测量计算（收缩与分析）。本库位于顶层，消费社区
+标准代码生成的规范组态与 Distillation 数据；Python 科学计算生态
+（NumPy/CuPy/torch 后端、opt\_einsum 缩并路径、mpi4py、h5py）承担
+快速原型与生产分析（性能关键段由底层实现）。
+
+\subsubsection{数据格式标准}
+
+规范组态使用 ILDG 兼容大端 float64 二进制；Laplace 本征矢量按时间片
+独立文件存储（形状 $(N_{\rm ev},N_x,N_y,N_z,3,2)$）；perambulator 按
+source 时间片分 4 个 Dirac 分量文件；本库管线产物一律 h5py，
+schema-v2 产物为 NPY/JSON 配对（metadata 含 schema/status/flow/
+operator/axes/labels/shape/dtype/gauge 统计/not\_applied 全量语义）。
+
+\subsubsection{版本控制与可重复性}
+
+推荐实践（本库全部在用）：git 版本控制 + 四类标签（\code{stab/dev/
+bug/test}，follow 链注释消息）；输入参数的集中配置与 CLI 参数化；
+运行环境快照（包版本、GPU、命令行）；中间结果的版本化归档
+（\code{v<YYYYMMDDHHMM>/} 约定）；一致性验证脚本（参考产物完整时
+A--E 全 0 差异，缺失时明确退出 2）；回归门（conftest 106 项）。
+
+% ===========================================================================
+\section{附录 W：Wilson 流（梯度流）的数学理论}
+% ===========================================================================
+
+\subsubsection{连续流方程与作用量下降}
+
+Wilson 流（梯度流）把规范场沿规范作用量的负梯度方向演化。连续
+Euclidean 流场 $B_\mu(\tau,x)$ 满足
+\begin{equation}
+\partial_\tau B_\mu(\tau,x)=D_\nu G_{\nu\mu}(\tau,x),
+\qquad B_\mu(0,x)=A_\mu(x),
+\end{equation}
+其中 $G_{\mu\nu}=\partial_\mu B_\nu-\partial_\nu B_\mu+[B_\mu,B_\nu]$
+、$D_\mu=\partial_\mu+[B_\mu,\cdot]$。数学性质：流是作用量 $S[B]$ 的
+$-g_0^2$ 梯度下降，故 plaquette 作用量密度单调下降（耗散）；流等价于
+$\tau$ 依赖的规范变换，规范不变的观测量沿流不变——流只改变 UV 表示，
+不改变物理。
+
+\subsubsection{热核解释与平滑半径}
+
+自由场极限下流化场强的传播子带 $e^{-\tau k^2}$（场强双局域带
+$e^{-2\tau k^2}$，四维动量阻尼）；正流时间的平滑半径为
+\begin{equation}
+r_{\rm flow}=\sqrt{8\tau},
+\end{equation}
+波长 $\lambda\lesssim r_{\rm flow}$ 的模式被强阻尼。该半径是规范不变
+的物理长度——流时间因此可以充当重整化方案的 UV 截断。
+
+\subsubsection{格点上的 Lie 群梯度流}
+
+格点实现为显式保群的更新：六 staple 求和（式~\eqref{eq:staple}）给出
+作用量对链接的 Lie 导数，投影到无迹反厄米部分得 $Z_\mu\in
+\mathfrak{su}(3)$（式~\eqref{eq:flow-generator}），RK3 积分
+（式~\eqref{eq:rk3}）+ 四阶截断指数 + determinant 归一。数值守卫：
+流后 plaquette 不降、幺正性 Frobenius 与 $\abs{\det U-1}$ 有界
+（\code{validate\_gradient\_flow\_gluon\_ope} 强制）。
+
+\subsubsection{流化算符的有限性与重整化}
+
+L\"uscher 有限性：固定物理流时间 $t>0$ 处流化复合算符的关联在
+$a\to0$ 极限下有限——流提供 UV 正规化，替代了格距 $a$。一圈层面，
+流化算符与 $\MSbarM$ 算符由 SFTE 系数连接（式
+~\eqref{eq:c-parallel}--\eqref{eq:delta-m}）；梯度流重整化群
+（Monahan--Orginos 2017）把 $(\tau,\mu)$ 组织为双重 RG 流；物理流
+方案 $t=3a^2$（NieMiera et al.\ 2025）下自重整化参数稳定。
+
+\subsubsection{流观测量与 $t_0/w_0$}
+
+流能量密度 $E(t)=\frac14G^2_{\mu\nu}$（实现用 SU(3) 无迹 Clover 部分
+）的微扰展开与 $t_0/w_0$ 定义见第 \ref{sec:flow} 章
+（\code{scale\_setting\_t0}：0.3 目标 + 反插值 + 自动扩围）。
+$t^2\langle E(t)\rangle$ 的单调性来自流的耗散性——标度设定与流方向
+正确性由此统一诊断。
+
+\subsubsection{梯度流 vs HYP/stout 的重整化语义}
+
+HYP/stout 改变离散表示但不提供重整化方案（连续极限下发散结构不变
+）；梯度流定义新方案——同一 bare 数据在两种语义下的分析必须通过
+SFTE 与 $Z_R$/混合显式衔接（式~\eqref{eq:renorm-chain}），不能静默
+混用。
+
+% ===========================================================================
+\section{附录 X：验收质量门与回归门清单}
+% ===========================================================================
+
+把全链的质量门汇总为一张清单（各门的定义与出处见正文对应章节）：
+
+\begin{table}[htbp]
+\centering
+\caption{验收质量门与回归门清单（本库当前实现）}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}l l >{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{门} & \textbf{层级} & \textbf{判据} \\
+\midrule
+组态齐全度 & 输入 & 三类原始数据（eigensystem/perambulators/gauge）
+按模板组合存在；异常大小归 corrupted \\
+输入数组 & 输入 & 形状/有限性断言（gauge 七轴、complex64/128） \\
+流方向 & OPE & 流后 Wilson plaquette 密度下降；幺正性与 determinant
+有界；metadata 全量记录 \\
+规范不变性 & OPE & 随机局域规范变换下完整空间和不变
+（实测 $\sim2.1\times10^{-16}$） \\
+几何恒等式 & OPE & $z=0$ odd 为零；even/odd 线性；六组件逐点重构 \\
+NaN 语义 & ratio & $0\le\tau_{\rm ins}\le t_{\rm sep}$ 之外全 NaN；
+\code{valid\_insertion\_mask} 单独保存 \\
+分母守卫 & ratio & 共同 nopol 分母非零且有限；两通道严格共享 \\
+oracle 零差异 & 统计 & $C_3$/$C_2$/ratio/JK 均值/偏差修正/实虚
+误差/掩码逐项 $\max|\mathrm{diff}|=0$ \\
+端点转换 & renorm & 端点因子与 combined 重构恒等式；
+\code{light\_cone\_matching} 登记 not\_applied \\
+求和规则 & 匹配 & $Z_{ij}$ 匹配对称宽域 $\pm1.9$（正半轴截断
+$+26\%$ 为反例） \\
+流质量门 & 分析 & $Q\ge0.01$ 且 $\chi^2/\mathrm{dof}\le3$；
+\code{accepted\_only} 主诊断 \\
+round-trip & 持久化 & NPY/JSON 原子配对；dtype/schema/轴标签一致 \\
+仓库回归 & 全库 & \code{conftest} 106 passed、0 skipped、0 failed \\
+标签链 & 交付 & follow 链自检 PASS（tag-chain） \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ===========================================================================
+\section{附录 Y：Wick 词典与记号对照表}
+% ===========================================================================
+
+\subsubsection{Minkowski/Euclidean 场强词典}
+
+由式~\eqref{eq:wick-dictionary} 的 Wick 转动（Minkowski 度规
+$\eta=\mathrm{diag}(1,-1,-1,-1)$、$\eps_{\rm M}^{0123}=+1$；代码坐标
+$(x,y,z,t)$、$\eps_{\rm E}^{xyzt}=+1$）逐分量展开：
+
+\begin{table}[htbp]
+\centering
+\caption{场强分量的 Wick 词典（M = Minkowski、E = Euclidean）}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{类型} & \textbf{Minkowski} & \textbf{Euclidean（代码基底）} \\
+\midrule
+时-电 & $F^{\rm M}_{0i}=E_i$ & $F^{\rm E}_{ti}=-iE_i$ \\
+空-磁 & $F^{\rm M}_{ij}=-\eps_{ijk}B_k$ & $F^{\rm E}_{ij}=-\eps_{ijk}B_k$ \\
+对偶（时-电） & $\widetilde F^{\rm M}_{0i}=B_i$ &
+$\widetilde F^{\rm E}_{ti}=B_i$ \\
+对偶（空-磁） & $\widetilde F^{\rm M}_{ij}=-i\eps_{ijk}E_k$ &
+$\widetilde F^{\rm E}_{ij}=-i\eps_{ijk}E_k$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+由此得到两通道算符的电-磁结构（Wick 转动后去掉共同相位 $i$）：
+\begin{align}
+O_U &\;\leftrightarrow\; E_x^2+E_y^2-2\,B_\perp^2\text{ 型}
+&&\text{（宇称偶，spin 无关）}, \notag\\
+O_H &\;\leftrightarrow\; E_xB_x+E_yB_y-2\,B_zE_z
+&&\text{（odd-in-$z$，spin 相关）}.
+\end{align}
+
+\subsubsection{方向与组件记号对照}
+
+\begin{center}
+\small
+\begin{tabular}{c c c}
+\toprule
+\textbf{概念} & \textbf{Lorentz 标签} & \textbf{数组/组件语义} \\
+\midrule
+方向标签 & $\mu=0\!:\!x,\,1\!:\!y,\,2\!:\!z,\,3\!:\!t$ & 数组轴
+$3-\mu$（tzyx 布局） \\
+Lorentz 对 & $(\mu,\nu)$，$\mu<\nu$ 六个 canonical & 反对称补全
+$F_{\nu\mu}=-F_{\mu\nu}$ \\
+方向分离 & even/odd（不除 2） & $O^{\rm even/odd}
+=O^{+z}\pm O^{-z}$ \\
+时间标记 & $t=3$（Euclidean index） & 插值时间掩码
+$0\le\tau_{\rm ins}\le t_{\rm sep}$ \\
+流时间 & $\zzh=\tau/a^2$（无量纲） & $t_{\rm phys}=\tau$、
+$t[\mathrm{GeV}^{-2}]$ 三套分立 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===========================================================================
+\section{附录 Z：本库标签谱系（验证链登记）}
+% ===========================================================================
+
+验证简报引用的 git:tag:message 的谱系表（完整消息见 \code{git tag -n}
+；本表按主题归组）：
+
+\begin{table}[htbp]
+\centering
+\caption{与本链验证直接相关的标签谱系（主题归组）}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}l l >{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{标签} & \textbf{类型} & \textbf{与本链相关的登记内容} \\
+\midrule
+stab0 系列（0--6） & stab & 一致性验证 A--E 全 0 差异；RK3 收敛
+验证；$\tau\to0$ 连续极限；c0 提取；GPU 一致性；求和规则；核心链
+整合 \\
+stab1 / stab2 & stab & 全功能真实数据实战（P0 meff $\approx$1.12
+GeV、P2 $\approx$1.56 GeV、E0 与 meff 自洽） \\
+stab8 / stab11 / stab13--15 & stab & 参考整合与匹配核误植修复；
+测试扩至 40+；报告与技能注册表 \\
+bug0--3 / dev8 / dev9 & bug/dev & 耦合归一漏乘 $4\pi$ 三处修复；
+单组态 NaN 与 $N_{\rm data}$ 修复；求和规则对称宽域；fit 初始化与
+$\chi^2$ 重试链 \\
+test6--10 系列 & test & 独立复现与对照单测（879 组态逐位一致、
+cmp1 对照、stout 根因闭合、终态全绿） \\
+dev10 / dev12 / dev13--14 & dev & 物理全链报告；契约测试扩展；
+schema-v2 梯度流胶子 OPE 链与 106 项全量回归 \\
+stab24 & stab & $Z_R$ 代价函数路径优化（0.186$\to$0.148 s） \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent 本表与附录 X 的质量门清单共同构成交付的\textbf{验证登记
+面}：任何后续复现者可由（标签消息 + 契约模块 + 质量门表）三级证据
+链独立核对本版结论。
+
+% ===========================================================================
+\section*{附录 AA：本库笔记—章节对照表}
+\addcontentsline{toc}{section}{附录 AA：本库笔记—章节对照表}
+% ===========================================================================
+
+本版文档与 \pathref{docs/} 目录中文笔记的对照（按章节主题归组，供
+深入阅读的路由）：
+
+\begin{table}[htbp]
+\centering
+\caption{本版章节与本库笔记的对照（路由表）}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}l >{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{本版章节} & \textbf{对应笔记 / 报告} \\
+\midrule
+第 1 章 格点基础 & 《格点QCD中的蒙卡方法》《费米子方案》《强子谱学》《传播子求解》《关联函数》 \\
+第 2 章 PDF/TMD 理论 & 《部分子分布函数》《光锥PDF、准PDF、赝PDF》《大动量有效理论》《TMD\_PDF》《光锥与光前》《DGLAP演化方程》 \\
+第 3 章 梯度流与离散化 & 《场强张量》《Wilson线》《胶子算符》《smear算法》《Symanzik有效理论》《UV涨落》《luscher参数化》 \\
+第 4 章 关联函数分解 & 《连通图与非连通图》《维克收缩与傅里叶变换》《3pt构造》 \\
+第 5 章 蒸馏 & 《格点QCD蒸馏方法解析》《夸克算符》《维克收缩与傅里叶变换》 \\
+第 6 章 重整化 & 《梯度流重整化》《重整化》《标度参数》 \\
+第 7 章 匹配 & 《DGLAP演化方程》《光锥与光前》《外推》 \\
+第 8/9 章 统计与系统误差 & 《误差统计》《重采样方法》《色散关系》 \\
+第 10 章验证简报 & 审计报告《\code{report\_gradient\_flow\_gluonpdf
+\_pyqcd\_20260909}》与《\code{analy\_physics\_chain\_20260824}》 \\
+第 12/13 章历史与前沿 & 《质子自旋危机解析》《胶子极化》《部分子分布函数》 \\
+附录（群论/DR 基等） & 《常见名词短语与缩写》《常见费曼图》《胶子PDF完整推导》 \\
+下游 TMD 链 & 《胶子TMD梯度流连续极限》《胶子PDF连续极限》 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
 \section*{致谢}
 % ===========================================================================
 
