@@ -1,6 +1,6 @@
 # AGENTS.md — docs
 
-格点 QCD 中文 LaTeX 笔记（52 篇；另有 12 篇分析/报告 TeX，共 64 个，
+格点 QCD 中文 LaTeX 笔记（53 篇；另有 12 篇分析/报告 TeX，共 65 个，
 均使用 xelatex 编译）。
 
 ## 文件
@@ -14,9 +14,10 @@
 | 格点技术 | `格点QCD中的Wilson线.tex`、`格点QCD中的场强张量.tex`、`格点QCD中的胶子算符.tex`、`格点QCD中的smear算法.tex`、`格点QCD蒸馏方法解析.tex` |
 | 方法学 | `格点QCD中的外推.tex`、`格点QCD中的误差统计.tex`、`格点QCD中的重采样方法.tex`、`格点QCD中的蒙卡方法.tex` |
 | 仓库/工作流 | `PyQCD仓库结构与核心物理链解析.tex`、`理论解析与工作流.tex`（过时未验证版）、`理论解析与工作流-v20260911.tex`（梯度流重整化 TMD-PDF 已验证版，100 页/5957 行，XeLaTeX 两遍三零，零明文代码）、`构造胶子准算符.tex`、`格点上计算胶子准算符.tex` |
+| 谱学/变分方法 | `格点QCD中的GEVP.tex`（GEVP 的数学结构、物理内涵与本库实现解剖；7 组实测实验、2 张配图、24 页，XeLaTeX 两遍 Overfull=0 Float=0 Missing=0） |
 | 分析与专题 | `质子自旋危机解析.tex`、`格点QCD中的胶子极化.tex`、`格点QCD中的部分子分布函数.tex` |
 
-完整清单：中文笔记 52 篇、分析/报告 TeX 12 篇，共 64 个
+完整清单：中文笔记 53 篇、分析/报告 TeX 12 篇，共 65 个
 `docs/*.tex`；`*.aux/*.log/*.out/*.nav/*.snm/*.toc` 为编译产物（gitignore）。
 
 ## 编译

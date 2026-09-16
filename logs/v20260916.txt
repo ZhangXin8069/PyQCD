@@ -1,0 +1,1 @@
+参考本库所有文档与代码，解析{格点QCD中的GEVP}，附上参考源，使用latex输出pdf文档到文件夹{${HOME}/PyQCD/docs}。
