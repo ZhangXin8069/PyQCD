@@ -36,7 +36,7 @@
 
 本文从四个层次系统解析 GEVP：\textbf{数学结构}（§\ref{sec:math}）——广义本征值问题的可解性、谱表示 $C(t)=Z D(t) Z^\dagg$ 导出的精确对角化结构、Cholesky 化归的数值稳定性、本征向量的 $B$-正交几何；\textbf{物理内涵}（§\ref{sec:physics}）——变分原理给出的能量上界、截断态空间下本征值的精确性命题、修正项的 $t_0$ 压低机制；\textbf{本库实现}（§\ref{sec:impl}）——\code{pyqcd.analysis.solve\_gevp} 的逐行解剖、复数 Hermitian 信息的保留、本征向量归一化约定的实测发现、\code{meff} 接口的真实语义；\textbf{工程实践}（§\ref{sec:practice}）——变分基的构造、蒸馏的协同、下游应用与陷阱清单。
 
-本文的\textbf{核心增量}是把教材中的定性论断转化为可复现的定量证据。基于本库生产代码 \code{solve\_gevp} 的七组数值实验（脚本 \cfile{tmp/gevp_doc_20260916/verify_gevp.py}）确立了三个此前只以定性形式存在的结论：
+本文的\textbf{核心增量}是把教材中的定性论断转化为可复现的定量证据。基于本库生产代码 \code{solve\_gevp} 的七组数值实验（脚本 \cfile{examples/pyqcd/gevp_verify.py}）确立了三个此前只以定性形式存在的结论：
 
 \textbf{(i) 收敛速度的定量对比}——在 $N=3$ 算符、6 个物理态的解析谱模型中，GEVP 基态有效质量在 $2\le t\le10$ 上的平均偏差为 $4.57\times10^{-3}$~GeV，而直接对角化为 $7.98\times10^{-2}$~GeV，\textbf{改善 17.5 倍}；
 
@@ -746,9 +746,9 @@ GEVP 在格点QCD中的地位可以用一句话概括：\textbf{它是把``算�
 \begin{center}
 \begin{tabular}{ll}
 \toprule
-脚本 & \cfile{tmp/gevp_doc_20260916/verify_gevp.py}（相对仓库根） \\
-绘图 & \cfile{tmp/gevp_doc_20260916/make_figures.py} \\
-运行 & \code{cd /root/PyQCD \&\& python} \cfile{tmp/gevp_doc_20260916/verify_gevp.py} \\
+实测 & \cfile{examples/pyqcd/gevp_verify.py}（七组实验，输出本文全部表格数值） \\
+绘图 & \cfile{examples/pyqcd/gevp_make_figures.py}（生成两张配图） \\
+运行 & \code{cd /root/PyQCD \&\& python} \cfile{examples/pyqcd/gevp_verify.py} \\
 环境 & Python 3.10、NumPy 2.1.2、SciPy 1.14.1、Matplotlib 3.10.9 \\
 \bottomrule
 \end{tabular}
@@ -899,8 +899,8 @@ Phys.\ Rev.\ D \textbf{103}, 034502 (2021), arXiv:2009.10691.
 
 \bibitem{verifyScript}
 本文配套实测脚本，
-\cfile{tmp/gevp_doc_20260916/verify_gevp.py}（七组实验）与
-\cfile{tmp/gevp_doc_20260916/make_figures.py}（配图）。
+\cfile{examples/pyqcd/gevp_verify.py}（七组实验）与
+\cfile{examples/pyqcd/gevp_make_figures.py}（配图）。
 \\\textbf{[来源:} 本库\textbf{]}
 ——本文所有表格与图的数值来源，可在本库环境直接重跑复现（附录 \ref{app:verify}）。
 
