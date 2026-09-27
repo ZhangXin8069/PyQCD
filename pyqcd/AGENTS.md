@@ -2,7 +2,7 @@
 
 **PyQCD 主包**：格点 QCD 蒸馏管线 + 胶子 OPE + 梯度流重整化 TMD-PDF 计算库。
 架构参考 /root/PyQCU（子包 + `_` 前缀私有模块 + 显式 re-export），
-内容照抄自 examples/docker-v20260805（成功实例）与 refer/（逻辑参考，不 import）。
+内容照抄自冻结蒸馏基线与 `refer/`（逻辑参考，不 import）。
 
 ## 核心目标
 
@@ -26,7 +26,7 @@
 | `analysis/_ratio_fit.py` | c0 裸矩阵元提取（R 模型逐样本拟合） | zengch fit_ratio 逻辑 |
 | `renorm/` | ★ 自重整化 Z_R、混合方案、NLO 匹配、外推、梯度流、TMD 提取 | refer/zengch 逻辑移植 + 理论文档新写 |
 | `pipeline/` | 集中配置 + 9 步管线调度（+tmd 步） | config.py/run_pipeline.py |
-| `testing/` | 集成测试函数（examples/pyqcd/conftest.py 入口） | 新写 |
+| `testing/` | 原 `examples/` 的契约测试、回归、示例、基线与历史快照 | 迁移整理 |
 
 ## 关键约定
 
@@ -37,11 +37,12 @@
   流时间物理约定 τ=3a²（NieMiera 2025）。
 - 重整化：z 单位 fm（内部转 GeV⁻¹ 用 fm_to_GeV=0.197）；μ=2 GeV 默认。
 - 日志：`print` + `verbose` 参数；管线产物写 logs/（gitignore 豁免）。
-- 测试：`python examples/pyqcd/conftest.py`（41 项）；一致性验证：
-  `python examples/pyqcd/verify_consistency.py`（参考产物完整时 A–E 五组对照全部 0 差异；缺失时明确退出 2）。
+- 测试：`python -m pyqcd.testing`；一致性验证：
+  `python -m pyqcd.testing.regression.consistency`。
 
 ## 反模式（勿重复）
 
-- 不 import refer/ 或 examples/ 代码——逻辑照抄，自包含实现。
+- 生产代码不 import `refer/` 或 `pyqcd.testing`。
 - 不做逐点 for 循环求逆/矩阵运算（批量 einsum）。
-- 不改动 refer/（第三方参考）；examples/docker-v20260805 为成功实例基线。
+- 不改动 `refer/`；冻结基线位于
+  `pyqcd/testing/regression/baselines/legacy_pipeline/`。

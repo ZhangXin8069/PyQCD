@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import builtins
 import os
+import shutil
 import subprocess
 import tempfile
+import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -539,6 +541,17 @@ def test_report_reads_canonical_h5_analysis_and_correlators():
 
 def test_report_real_xelatex_template_has_no_hard_gate_diagnostics():
     """最小有限输入须经过真实 build_tex 与两遍 XeLaTeX 硬门。"""
+    if shutil.which("xelatex") is None:
+        raise unittest.SkipTest("xelatex is unavailable")
+    probe = subprocess.run(
+        ["kpsewhich", "physics.sty"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode != 0 or not probe.stdout.strip():
+        raise unittest.SkipTest("LaTeX package physics.sty is unavailable")
+
     from pyqcd.pipeline import _steps as steps
 
     channels = (

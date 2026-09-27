@@ -65,7 +65,8 @@ pyqcd-conventions ────────────────────�
   官方 `/root/.codex/skills/.system/skill-creator/scripts/quick_validate.py`（逐个
   `pyqcd-*` 目录运行）。
 - 证据以当前源码、命令输出、数值断言和产物为准；引用 API 或文件前先核实存在性。
-- 修改技能时使用最小范围、保留既有物理边界，不 import `refer/` 或 `examples/` 作为运行依赖。
+- 修改技能时使用最小范围、保留既有物理边界；生产代码不得把 `refer/` 或
+  `pyqcd.testing` 作为运行依赖。
 - 入口文档目标小于 500 行；格式变更后检查 fenced block、路径、名称、表格和 README 一致性。
 - 长任务日志使用当前工作目录的 `.X.<YYYY-MM-DD-HH-MM-SS>.log`，确认不入库；报告编译
   产物按 `pyqcd-docs` 规范验收。

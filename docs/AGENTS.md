@@ -1,7 +1,8 @@
 # AGENTS.md — docs
 
 格点 QCD 中文 LaTeX 笔记（53 篇；另有 12 篇分析/报告 TeX，共 65 个，
-均使用 xelatex 编译）。
+均使用 xelatex 编译）。原 `logs/**` 中的 PDF/TeX/Markdown 现统一归档于
+`docs/from-logs/`，并保留原相对路径。
 
 ## 文件
 
@@ -17,8 +18,12 @@
 | 谱学/变分方法 | `格点QCD中的GEVP.tex`（GEVP 的数学结构、物理内涵与本库实现解剖；7 组实测实验、2 张配图、24 页，XeLaTeX 两遍 Overfull=0 Float=0 Missing=0） |
 | 分析与专题 | `质子自旋危机解析.tex`、`格点QCD中的胶子极化.tex`、`格点QCD中的部分子分布函数.tex` |
 
-完整清单：中文笔记 53 篇、分析/报告 TeX 12 篇，共 65 个
-`docs/*.tex`；`*.aux/*.log/*.out/*.nav/*.snm/*.toc` 为编译产物（gitignore）。
+完整清单：原 `docs/*.tex` 65 篇，加 `docs/from-logs/**` 迁移的 10 篇 TeX，
+共 75 篇；`*.aux/*.log/*.out/*.nav/*.snm/*.toc` 为编译产物（gitignore）。
+
+`examples/` 目录已于 2026-09-27 整体迁移到 `pyqcd/testing/`；历史报告中的旧
+路径映射见 `docs/EXAMPLES_MIGRATION_20260927.md` 与
+`pyqcd/testing/MIGRATION.md`。
 
 ## 编译
 
@@ -40,7 +45,7 @@ cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelate
 - `report_donghx_4150_reproduction_20260830.tex/.pdf`：在上一版基础上纳入 7 个 4150 2pt 成品根目录、58 个动量组、`momsmear0` 隐式命名检查及 Cg5/Cg5g4 各 35 个真实时间对；保留独立 smeared peram、逐时间 VVV 与下游 3pt/ratio/barematrix 的未验证边界（2026-08-30）。
 - `report_donghx_pyqcd_compare_20260830.tex/.pdf`：简要汇总组态 4150 的已通过 dhx/PyQCD 低层、4D10 HYP-OPE、质子 2pt、正宇称投影与 effmass 聚合对照；表格列出数据路径、物理公式、PyQCD 函数/参数和相对误差（2026-08-30）。
 - `report_donghx_pyqcd_compare_20260830_2.tex/.pdf`：同一对照结果的单一分页巨大表格版；仅保留已测试条目（2026-08-30）。
-- `report_donghx_pyqcd_compare_20260830_2.csv`：对应巨大表格的 UTF-8 CSV；34 条已通过记录，含路径、公式、PyQCD 参数与相对误差（2026-08-30）。
+- `data/from-docs/docs/report_donghx_pyqcd_compare_20260830_2.csv`：对应巨大表格的 UTF-8 CSV；34 条已通过记录。
 - `report_gradient_flow_gluonpdf_pyqcd_20260909.tex/.pdf`：donghx
   Gradient_Flow_GluonPDF 与 PyQCD 的 Wilson flow、Clover/dual、schema-v2
   OPE、复数 disconnected ratio、一圈 GF-to-quasi 转换的算法审计与修正报告；

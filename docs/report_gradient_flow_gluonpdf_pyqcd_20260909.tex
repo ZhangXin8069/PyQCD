@@ -756,7 +756,7 @@ thin link $\to$ Wilson flow $\to$ schema-v2 OPE；保存/加载和严格验证 \
 \codeurl{run_gradient_flow_gluon_ope} &
 ILDG \code{.lime}/\code{.lime.contents} 读取和单组态 artifact 驱动 \\
 \midrule
-\pathref{examples/pyqcd/gradient\_flow\_gluon\_ope.py} &
+\pathref{pyqcd/testing/tmd/gradient\_flow\_ope.py} &
 命令行入口 &
 将实际 reader、流、OPE 和配对 NPY/JSON 输出串联 \\
 \bottomrule
@@ -866,8 +866,8 @@ $\epsilon=0.01$ 对 $\epsilon=0.005$ &
 执行命令：
 \begin{lstlisting}[language=bash]
 python -m pyqcd.testing._gradient_flow_gluon_contract
-python examples/pyqcd/conftest.py
-python -m compileall -q pyqcd examples/pyqcd
+python -m pyqcd.testing
+python -m compileall -q pyqcd
 git diff --check
 \end{lstlisting}
 
@@ -975,17 +975,17 @@ $L32\times96$、$231$ 组态 OPE/2pt 生产产品，所以交付等级是
   \item \pathref{pyqcd/analysis/\_gradient\_flow\_ratio.py}；
   \item \pathref{pyqcd/renorm/\_gradient\_flow\_quasi.py}；
   \item \pathref{pyqcd/pipeline/\_gradient\_flow\_gluon.py}；
-  \item \pathref{examples/pyqcd/gradient\_flow\_gluon\_ope.py}；
+  \item \pathref{pyqcd/testing/tmd/gradient\_flow\_ope.py}；
   \item \pathref{pyqcd/testing/\_gradient\_flow\_gluon\_contract.py}；
   \item 相应的 \code{\_\_init\_\_.py} 导出和
-        \pathref{examples/pyqcd/conftest.py} 测试调度。
+        \pathref{pyqcd/testing/conftest.py} 测试调度。
 \end{itemize}
 
 \subsection{推荐调用}
 
 \begin{lstlisting}[language=bash]
 # 单组态 thin-link ILDG -> schema-v2 OPE
-python examples/pyqcd/gradient_flow_gluon_ope.py \
+python -m pyqcd.testing.tmd.gradient_flow_ope \
   --input /path/to/config.lime \
   --conf-id 4150 \
   --output /path/to/output/conf4150_tau0p500_eps0.010_zdir2 \
@@ -994,7 +994,7 @@ python examples/pyqcd/gradient_flow_gluon_ope.py \
 
 # 新链契约与仓库回归
 python -m pyqcd.testing._gradient_flow_gluon_contract
-python examples/pyqcd/conftest.py
+python -m pyqcd.testing
 \end{lstlisting}
 
 \subsection{参考与工作对象的关键路径}

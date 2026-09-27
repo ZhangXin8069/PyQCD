@@ -1,5 +1,5 @@
 """
-管线集中配置（照抄 examples/docker-v20260805/config.py，路径归整到 PyQCD）。
+管线集中配置（照抄冻结蒸馏基线 `config.py`，路径归整到 PyQCD）。
 
 系综：beta6.20_mu-0.2770_ms-0.2400_L24x72（24³×72, a≈0.1053 fm, a⁻¹≈1.874 GeV）。
 """

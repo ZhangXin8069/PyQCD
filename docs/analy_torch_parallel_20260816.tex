@@ -206,8 +206,8 @@ X=m/N 批次、Y=N/n 每卡进程数。
 \end{itemize}
 
 \subsubsection{A4 整体框架}
-三层实现：① 适配层（\texttt{\nolinkurl{_torch_backend.py}}）提供 numpy-like API
-并自动转换输入；② IO 层（\texttt{\nolinkurl{_io.py}}）h5 读写；③ 并行层
+三层实现：(1) 适配层（\texttt{\nolinkurl{_torch_backend.py}}）提供 numpy-like API
+并自动转换输入；(2) IO 层（\texttt{\nolinkurl{_io.py}}）h5 读写；(3) 并行层
 （\texttt{\nolinkurl{parallel/}}）资源规划 + 元任务调度。计算模块零修改（继续经
 get\_backend 使用后端）。
 
@@ -235,7 +235,7 @@ torch.cuda.empty\_cache() + gc.collect() 自动释放
 
 \subsubsection{A6 任务如何正确执行}
 \begin{verbatim}
-python examples/pyqcd/conftest.py              # 18 项全量测试
+python -m pyqcd.testing                       # 全量测试
 mpirun -np 2 python3 /tmp/opencode/smoke_sched.py <run>   # MPI 冒烟
 python -m pyqcd.parallel --dry-run --confs 6250,6450      # 并行规划预览
 \end{verbatim}
@@ -400,18 +400,18 @@ def run_meta_task(step, conf_id, config, run_dir, logger):
 \textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
 \midrule
 \endhead
-\texttt{\nolinkurl{\nolinkurl{pyqcd/tools/_torch_backend.py:168-208}}} & 仓库 & \_tensorize/\_autoconv：输入自动转换与签名适配 \\
-\texttt{\nolinkurl{\nolinkurl{pyqcd/tools/_torch_backend.py:210-260}}} & 仓库 & Tensor 方法补丁（transpose/astype/T/repeat/get + 二元运算） \\
-\texttt{\nolinkurl{\nolinkurl{pyqcd/tools/_backend.py:27-84}}} & 仓库 & set\_backend 三后端 + CPU 线程自动调优 \\
-\texttt{\nolinkurl{\nolinkurl{pyqcd/tools/_io.py:344-410}}} & 仓库 & save/load\_tensor\_h5（h5py 唯一读写） \\
-\texttt{\nolinkurl{\nolinkurl{pyqcd/parallel/_mpi.py:55-133}}} & 仓库 & plan\_parallel 用户公式 N$a$=n$b$ \\
-\texttt{\nolinkurl{\nolinkurl{pyqcd/parallel/_mpi.py:152-188}}} & 仓库 & run\_meta\_task 元任务执行 + 自动释放 \\
-\texttt{\nolinkurl{\nolinkurl{pyqcd/parallel/_mpi.py:198-310}}} & 仓库 & run\_parallel\_pipeline 并行调度（round-robin + GPU 绑定） \\
-\texttt{\nolinkurl{\nolinkurl{pyqcd/pipeline/_steps.py:137-165}}} & 仓库 & save\_array h5 化 + \_load\_any 双格式回退 \\
-\texttt{\nolinkurl{\nolinkurl{pyqcd/pipeline/_steps.py:210-212}}} & 仓库 & torch 后端精度联动 \\
-\texttt{\nolinkurl{\nolinkurl{pyqcd/testing/__init__.py:238-283}}} & 仓库 & test\_torch\_backend\_consistency 三态一致性测试 \\
-\texttt{\nolinkurl{\nolinkurl{pyqcu/cann/__init__.py:1-5}}} & 参考 & PyQCU torch 兼容层模式（本项目参考） \\
-\texttt{\nolinkurl{\nolinkurl{pyqcu/tools/_io.py:165-193}}} & 参考 & PyQCU save/load\_tensor\_h5 模式（本项目参考） \\
+\texttt{\nolinkurl{pyqcd/tools/_torch_backend.py:168-208}} & 仓库 & \_tensorize/\_autoconv：输入自动转换与签名适配 \\
+\texttt{\nolinkurl{pyqcd/tools/_torch_backend.py:210-260}} & 仓库 & Tensor 方法补丁（transpose/astype/T/repeat/get + 二元运算） \\
+\texttt{\nolinkurl{pyqcd/tools/_backend.py:27-84}} & 仓库 & set\_backend 三后端 + CPU 线程自动调优 \\
+\texttt{\nolinkurl{pyqcd/tools/_io.py:344-410}} & 仓库 & save/load\_tensor\_h5（h5py 唯一读写） \\
+\texttt{\nolinkurl{pyqcd/parallel/_mpi.py:55-133}} & 仓库 & plan\_parallel 用户公式 N$a$=n$b$ \\
+\texttt{\nolinkurl{pyqcd/parallel/_mpi.py:152-188}} & 仓库 & run\_meta\_task 元任务执行 + 自动释放 \\
+\texttt{\nolinkurl{pyqcd/parallel/_mpi.py:198-310}} & 仓库 & run\_parallel\_pipeline 并行调度（round-robin + GPU 绑定） \\
+\texttt{\nolinkurl{pyqcd/pipeline/_steps.py:137-165}} & 仓库 & save\_array h5 化 + \_load\_any 双格式回退 \\
+\texttt{\nolinkurl{pyqcd/pipeline/_steps.py:210-212}} & 仓库 & torch 后端精度联动 \\
+\texttt{\nolinkurl{pyqcd/testing/__init__.py:238-283}} & 仓库 & test\_torch\_backend\_consistency 三态一致性测试 \\
+\texttt{\nolinkurl{pyqcu/cann/__init__.py:1-5}} & 参考 & PyQCU torch 兼容层模式（本项目参考） \\
+\texttt{\nolinkurl{pyqcu/tools/_io.py:165-193}} & 参考 & PyQCU save/load\_tensor\_h5 模式（本项目参考） \\
 \bottomrule
 \end{xltabular}
 
@@ -436,7 +436,7 @@ PyQCD 的元任务级并行是其 4D 网格域分解之外的第二种并行粒�
 \textcolor{warn}{未验证}：真实数据全步骤 MPI 并行（本机内存不足，以合成
 任务验证调度一致）；docker 基线 B--E 对照（基线文件缺失）；GPU 梯度流
 kernel 融合（收益 <5\% 阈值未做）。遗留建议：在内存充足的 GPU 服务器上
-以 mpirun -np N 重跑 logs/test0 套件做全尺寸验证。
+以 mpirun -np N 重跑 data/from-logs/logs/test0 套件做全尺寸验证。
 \end{warnbox}
 
 \end{document}

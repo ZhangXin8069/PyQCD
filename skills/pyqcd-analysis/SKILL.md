@@ -26,13 +26,13 @@ metadata:
 | fit/χ²/dof/ASCII 表 | `pyqcd.analysis._fitter` | 各分析套件共用 |
 | 色散检验/拟合 | `_dispersion.dispersion_check`、`fit_dispersion` | `python -B -m pyqcd.testing._dispersion_identifiability_contract` |
 | sem/resample/covariance | `pyqcd.analysis._disconnected` | `pyqcd-statistics` 规定契约 |
-| 3pt/2pt 真空扣除 + 逐 z 拟合 | `_ratio2pt.run_ratio2pt` | `bash logs/test0_ratio/run-local.sh` |
-| 单 fit/对比/nofit 图 | `_ana_ratio.ana_ratio_plot_all` | `bash logs/test0_anaratio/run-local.sh`（25 项） |
-| 三方向裸矩阵元 | `_bare_matrix.run_bare_matrix` | `bash logs/test0_bare/run-local.sh` |
-| 有效能量 E0 | `_proton_energy.run_energy` | `bash logs/test0_energy/run-local.sh`（8 项）/ test6 |
-| FH 变换与常数窗 | `_fh.run_fh` | `bash logs/test0_fh/run-local.sh`（38 项） |
-| 三方向差异与直方图 | `_ana_3dir.analyze_3dir` | `bash logs/test0/run-local.sh` |
-| disconnected TMD/c0 | `_tmd_ratio.run_disconnected_tmd_ratio`、`plateau_c0`、`plot_tmd_*` | `python examples/pyqcd/test9_gluon_tmd_nucleon.py --only-plot --conf-ids 6250` |
+| 3pt/2pt 真空扣除 + 逐 z 拟合 | `_ratio2pt.run_ratio2pt` | `bash data/from-logs/logs/test0_ratio/run-local.sh` |
+| 单 fit/对比/nofit 图 | `_ana_ratio.ana_ratio_plot_all` | `bash data/from-logs/logs/test0_anaratio/run-local.sh`（25 项） |
+| 三方向裸矩阵元 | `_bare_matrix.run_bare_matrix` | `bash data/from-logs/logs/test0_bare/run-local.sh` |
+| 有效能量 E0 | `_proton_energy.run_energy` | `bash data/from-logs/logs/test0_energy/run-local.sh`（8 项）/ test6 |
+| FH 变换与常数窗 | `_fh.run_fh` | `bash data/from-logs/logs/test0_fh/run-local.sh`（38 项） |
+| 三方向差异与直方图 | `_ana_3dir.analyze_3dir` | `bash data/from-logs/logs/test0/run-local.sh` |
+| disconnected TMD/c0 | `_tmd_ratio.run_disconnected_tmd_ratio`、`plateau_c0`、`plot_tmd_*` | `python -m pyqcd.testing.tmd.pdf_workflow --only-plot --conf-ids 6250` |
 
 常用三方向数据结构：
 `<root>/<conf>/Pz<Pz>/{x,y,z,ave}_dir/ratio.npy` 与 `corr2_{dir}.npy`。

@@ -451,7 +451,7 @@ def plot_tmd_c0(ch_results, run_dir, momentum, logger=print,
 def plateau_c0(ratio, dt_max=20, dt_start=7, dt_end=10, cut=6):
     """fit 窗口内 ratio 的 plateau 均值 → c0(z,b)（抗奇异协方差）。
 
-    整合自 examples/pyqcd/test9_gluon_tmd_nucleon.py::_plateau_c0：
+    整合自原 TMD 工作流的 plateau 均值实现：
     与 run_disconnected_tmd_ratio 的 x_coor 窗口一致
     （dt∈[dt_start,dt_end]，dtau∈[front,dt-back]），窗口内直接平均。
     10 组态统计下比 lsqfit 逐样本拟合更稳健（协方差奇异的绕行方案）。

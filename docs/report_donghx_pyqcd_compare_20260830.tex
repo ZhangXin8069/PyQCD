@@ -152,7 +152,7 @@
     eigvec：\codepath{/public/group/lqcd/eigensystem/beta6.20_mu-0.2770_ms-0.2400_L24x72/4150/eigvecs_t000_4150}；\newline
     规范场入口：\codepath{/public/group/lqcd/configurations/CLOVER/beta6.20_mu-0.2770_ms-0.2400_L24x72/beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime}。
   \end{block}
-  \source{参考重写与参数：\codepath{examples/pyqcd/cmp1/cases_4150_lowlevel.py:34--278}；结果：\codepath{examples/pyqcd/cmp1/v202608291500_lowlevel/results.json}。}
+  \source{参考重写与参数：\codepath{pyqcd/testing/comparisons/donghx/cases_4150_lowlevel.py:34--278}；结果：\codepath{pyqcd/testing/comparisons/artifacts/v202608291500_lowlevel/results.json}。}
 \end{frame}
 
 \begin{frame}[t]{4D10 HYP--OPE（1/2）：三方向 9 个直线截面均通过}
@@ -175,7 +175,7 @@
   \par\vspace{0.08em}
   {\scriptsize
   \textbf{物理判断：} $\Delta_\perp=0$ 时 9 个已测通道均与 dhx 成品一致；规范场最大幺正性偏差为 $1.11\times10^{-15}$。\par}
-  \source{结果：\codepath{examples/pyqcd/cmp1/v20260829_hyp_ope_xyz/results.json}；通道定义见 \codepath{examples/pyqcd/cmp1/run_4150_hyp_ope.py}。}
+  \source{结果：\codepath{pyqcd/testing/comparisons/artifacts/v20260829_hyp_ope_xyz/results.json}；通道定义见 \codepath{pyqcd/testing/comparisons/donghx/run_4150_hyp_ope.py}。}
 \end{frame}
 
 \begin{frame}[t]{4D10 HYP--OPE（2/2）：入口、参数与原始数据路径可复现}
@@ -190,14 +190,14 @@
     参考通道 & $x:(1,2),(3,1),(3,2)$；$y:(2,0),(3,0),(3,2)$；$z:(0,1),(3,0),(3,1)$ \\
     \bottomrule
   \end{tabularx}
-  \vspace{0.18em}
+  \vspace{-0.45em}
   \begin{block}{输入数据路径（续行属于同一路径）}
     \scriptsize
     HYP：\codepath{/public/group/lqcd/donghx/Hpysmear_beta6.20_mu-0.2770_ms-0.2400_L24x72/hpy_4D_10times_new/}\newline
     \hspace*{2.7em}\codepath{beta6.20_mu-0.2770_ms-0.2400_L24x72_cfg_4150.lime.contents/msg02.rec04.ildg-binary-data}\\
     dhx OPE 根：\codepath{/public/group/lqcd/donghx/Ope_Gluon/TMD_Ope_Gluon/Result/beta6.20_mu-0.2770_ms-0.2400_L24x72}
   \end{block}
-  \source{入口与通道映射：\codepath{examples/pyqcd/cmp1/run_4150_hyp_ope.py:22--180}；结果：\codepath{examples/pyqcd/cmp1/v20260829_hyp_ope_xyz/results.json}。}
+  \source{入口与通道映射：\codepath{pyqcd/testing/comparisons/donghx/run_4150_hyp_ope.py:22--180}；结果：\codepath{pyqcd/testing/comparisons/artifacts/v20260829_hyp_ope_xyz/results.json}。}
 \end{frame}
 
 \begin{frame}[t]{质子 2pt 直接比较（1/2）：两种插值在 35 个时间对上同链计算}
@@ -230,7 +230,7 @@
     \bottomrule
   \end{tabularx}
   \vspace{-0.65em}
-  \source{代码证据：\texttt{cases\_4150\_fermion.py}、\texttt{run\_4150\_fermion.py}（均在 \codepath{examples/pyqcd/cmp1}）。}
+  \source{代码证据：\texttt{cases\_4150\_fermion.py}、\texttt{run\_4150\_fermion.py}（均在 \codepath{pyqcd/testing/comparisons/donghx}）。}
 \end{frame}
 
 \begin{frame}[t]{质子 2pt 直接比较（2/2）：contract 与投影成品均与 dhx 一致}
@@ -282,7 +282,7 @@
   \textbf{PyQCD 检查：}\codepath{compare_contract_nopol(contract,nopol)}；
   $P^+=\frac12(\gamma_0+\gamma_4)$，$N_t=72$，complex64 容差 $5\times10^{-6}$；
   $58/58$ 通过，最大 $\varepsilon_{\rm rel}=8.291\times10^{-7}$，最大绝对差 $1.98\times10^{-9}$。\par}
-  \source{数据根沿用上一页 dhx 2pt 共同根；实现：\codepath{examples/pyqcd/cmp1/inspect_4150_momsmear.py}；结果路径见末页证据索引。}
+  \source{数据根沿用上一页 dhx 2pt 共同根；实现：\codepath{pyqcd/testing/comparisons/donghx/inspect_4150_momsmear.py}；结果路径见末页证据索引。}
 \end{frame}
 
 \begin{frame}[t]{effmass 聚合检查（1/2）：7 个资产的 4150 行均定位到索引 $k=2$}
@@ -307,7 +307,7 @@
   \par\vspace{0.12em}
   {\scriptsize
   \textbf{物理用途：}时间平移汇总得到 $C_2(\Delta t)$，是有效质量/色散分析的输入；本页仅验证组态行与汇总数组的对应关系。\par}
-  \source{结果：\codepath{examples/pyqcd/cmp1/v202608301600_4150_effmass_aggregate/results.json}。}
+  \source{结果：\codepath{pyqcd/testing/comparisons/artifacts/v202608301600_4150_effmass_aggregate/results.json}。}
 \end{frame}
 
 \begin{frame}[t]{effmass 聚合检查（2/2）：入口参数与 dhx 聚合根}
@@ -332,7 +332,7 @@
     \scriptsize
     该项验证的是 $C_2(\Delta t)$ 的组态行与时间平移汇总索引；不把数组一致性扩写为未测的质量拟合结论。
   \end{block}
-  \source{实现：\codepath{examples/pyqcd/cmp1/inspect_4150_effmass.py}；结果索引见上一页与末页证据表。}
+  \source{实现：\codepath{pyqcd/testing/comparisons/donghx/inspect_4150_effmass.py}；结果索引见上一页与末页证据表。}
 \end{frame}
 
 \begin{frame}[t]{证据索引：报告中的每个数值都可回到本地 JSON 与复核命令}
@@ -342,11 +342,11 @@
     \toprule
     复核项 & 本次命令输出 & 本地结果文件 \\
     \midrule
-    低层结构/受控契约 & \texttt{verify\_4150\_lowlevel: PASS 3/3} & \codepath{examples/pyqcd/cmp1/v202608291500_lowlevel/results.json} \\
-    HYP--OPE runner 契约 & \texttt{verify\_4150\_hyp\_ope\_runner: PASS 3/3} & \codepath{examples/pyqcd/cmp1/v20260829_hyp_ope_xyz/results.json} \\
-    费米子 runner 契约 & \texttt{verify\_4150\_fermion\_runner: PASS 12/12} & \codepath{examples/pyqcd/cmp1/v202608300145_cg5g4/results.json}、\codepath{examples/pyqcd/cmp1/v202608300146_cg5/results.json} \\
-    2pt 输出检查契约 & \texttt{verify\_4150\_momsmear: PASS 7/7} & \codepath{examples/pyqcd/cmp1/v20260830123306_4150_2pt_polar/results.json} \\
-    effmass 检查契约 & \texttt{verify\_4150\_effmass: PASS 3/3} & \codepath{examples/pyqcd/cmp1/v202608301600_4150_effmass_aggregate/results.json} \\
+   低层结构/受控契约 & \texttt{verify\_4150\_lowlevel: PASS 3/3} & \codepath{pyqcd/testing/comparisons/artifacts/v202608291500_lowlevel/results.json} \\
+    HYP--OPE runner 契约 & \texttt{verify\_4150\_hyp\_ope\_runner: PASS 3/3} & \codepath{pyqcd/testing/comparisons/artifacts/v20260829_hyp_ope_xyz/results.json} \\
+    费米子 runner 契约 & \texttt{verify\_4150\_fermion\_runner: PASS 12/12} & \codepath{pyqcd/testing/comparisons/artifacts/v202608300145_cg5g4/results.json}、\codepath{pyqcd/testing/comparisons/artifacts/v202608300146_cg5/results.json} \\
+    2pt 输出检查契约 & \texttt{verify\_4150\_momsmear: PASS 7/7} & \codepath{pyqcd/testing/comparisons/artifacts/v20260830123306_4150_2pt_polar/results.json} \\
+    effmass 检查契约 & \texttt{verify\_4150\_effmass: PASS 3/3} & \codepath{pyqcd/testing/comparisons/artifacts/v202608301600_4150_effmass_aggregate/results.json} \\
     资产盘点 & \texttt{verify\_manifest\_4150: PASS 4/4} & \codepath{logs/donghx_4150_20260829/summary.md} \\
     \bottomrule
   \end{tabularx}

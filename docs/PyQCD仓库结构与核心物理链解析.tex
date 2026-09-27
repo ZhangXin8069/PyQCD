@@ -1,10 +1,11 @@
 \documentclass[12pt,a4paper]{ctexart}
 \usepackage[top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm]{geometry}
-\usepackage{amsmath,amssymb,amsthm,physics}
+\usepackage{amsmath,amssymb,amsthm}
 \usepackage{graphicx,float,booktabs,array,caption,multirow}
 \usepackage{hyperref,xcolor,enumitem,mathtools}
 \usepackage[numbers,sort&compress]{natbib}
 \hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\setmonofont{DejaVu Sans Mono}
 
 \title{\heiti PyQCD 仓库结构与核心物理链解析}
 \author{基于 /root/PyQCD 全库只读分析}
@@ -24,14 +25,16 @@
 
 \begin{table}[H]
 \centering
-\begin{tabular}{ll}
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.43\textwidth}>{\raggedright\arraybackslash}p{0.51\textwidth}}
 \toprule
 路径 & 内容 \\
 \midrule
 --- & --- \\
 \texttt{pyqcd/} & 主包：lattice/tools/vertex/contraction/operator/analysis/renorm/pipeline/testing \\
-\texttt{examples/docker-v20260805/} & 成功实例基线：全量蒸馏 GPU 管线（10 组态） \\
-\texttt{examples/pyqcd/} & 规范化示例与测试（conftest.py，6 项测试） \\
+\path{pyqcd/testing/regression/}\newline
+\path{baselines/legacy_pipeline/} & 冻结蒸馏基线 \\
+\texttt{pyqcd/testing/} & 契约、回归、示例与历史快照统一入口 \\
 \texttt{refer/papers/} & 47 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文） \\
 \texttt{refer/} & 只读参考代码（zengch/donghx/huangcl/sush/zhangxin）+ 101 篇文献 \\
 \texttt{logs/stab0/} & stab0 归档（stab2\_1 已改名 stab0 并重编译） \\
@@ -43,7 +46,7 @@
 计算使用\textbf{梯度流重整化方案}的核子中的胶子 TMD-PDF。计算链：
 
 \begin{enumerate}
-  \item 裸矩阵元：蒸馏 2pt（质子/π）+ 胶子 OPE 算符
+  \item 裸矩阵元：蒸馏 2pt（质子/$\pi$）+ 胶子 OPE 算符
         （Clover 场强 $F_{\mu\nu}$、对偶 $\tilde F$、staple Wilson 线）；
   \item 梯度流涂抹：Wilson flow（Luescher 2010）RK3 积分，$\tau = 3a^2$
         （Monahan--Orginos 2017 / NieMiera 2025）；
@@ -57,7 +60,7 @@
 
 \begin{table}[H]
 \centering
-\begin{tabular}{lll}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.17\textwidth}>{\raggedright\arraybackslash}p{0.47\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}}
 \toprule
 子包 & 功能 & 来源 \\
 \midrule
@@ -77,11 +80,11 @@
 
 在 $4^4$ 随机 SU(3) 组态上验证：Wilson flow 作用量密度单调递减，
 链接幺正性偏差 $< 10^{-6}$；OPE 与 TMD staple 算符均可运行并给出实数结果
-（examples/pyqcd/conftest.py 6 项测试全绿）。
+（\texttt{python -m pyqcd.testing} 全绿）。
 
 \section{一致性验证（vs output\_20260802\_120104）}
 
-验证脚本 examples/pyqcd/verify\_consistency.py 五组对照全部通过（逐位 0 差异）：
+验证脚本 \path{pyqcd/testing/regression/consistency.py} 五组对照全部通过：
 
 \begin{itemize}
   \item A. 函数级：$\gamma$ 矩阵、相位因子、VdV 顶点、Jackknife、meff、
@@ -100,7 +103,7 @@
         Wick 收缩（质子 2pt）、顺序传播子 seq\_peram、完整 OPE 算符三分量；
   \item 优化：staple\_6 向量化（整场 roll 预计算复用，1.5--1.8$\times$ 加速，
         数学逐位一致）；梯度流 RK3 收敛 $O(\varepsilon^3)$ 验证；
-  \item 新增：\texttt{pyqcd/analysis/\_dispersion.py} 色散关系拟合
+  \item 新增：\path{pyqcd/analysis/_dispersion.py} 色散关系拟合
         $E(P_z) = \sqrt{m^2 + k_2 P_z^2 + k_3 P_z^4 a^2}$（合成数据精确恢复）。
 \end{itemize}
 
@@ -108,9 +111,9 @@
 
 \begin{itemize}
   \item 尺度设定与流时间行为：$t^2\langle E(t)\rangle$ 单调递增（物理正确），
-        t₀ 反插值（修复插值方向 bug）；
+        $t_0$ 反插值（修复插值方向 bug）；
   \item 新增 \texttt{pyqcd/smear/\_hyp.py}：完整 HYP 涂抹（Hasenbusch 2001
-        三级 (μ,ν) 对结构，$\alpha_1{=}0.75, \alpha_2{=}0.6, \alpha_3{=}0.3$）；
+        三级 $(\mu,\nu)$ 对结构，$\alpha_1{=}0.75, \alpha_2{=}0.6, \alpha_3{=}0.3$）；
         SU(3) 保持 $10^{-16}$，作用量平滑化验证通过；
   \item debug 修复：numpy 批量 eigh 特征向量相位不一致 → SVD 极分解；
         V3 数组形状多加方向维；scale\_setting\_t0 插值方向。
@@ -131,7 +134,7 @@
 \section{新增功能（本轮）}
 
 \begin{itemize}
-  \item \texttt{pyqcd/analysis/\_disconnected.py}：不相连胶子 ratio + 逐 z 相关拟合
+  \item \path{pyqcd/analysis/_disconnected.py}：不相连胶子 ratio + 逐 z 相关拟合
         （code\_1.py 算法自包含移植，lsqfit 实现）；
   \item \texttt{pyqcd/analysis/\_correlators.py}：meff/3pt 比值分析编排 API；
   \item \texttt{pyqcd/renorm/\_tmdextract.py}：准 TMD-PDF 傅里叶变换、

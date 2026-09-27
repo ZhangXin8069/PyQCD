@@ -1,5 +1,8 @@
 # donghx 4150 格点 QCD 算法复现与对照设计
 
+> 迁移提示（2026-09-27）：本文中的 `examples/pyqcd/cmp1` 现对应
+> `pyqcd/testing/comparisons`；旧命令仅保留为历史设计记录。
+
 ## 目标
 
 在 `/root/PyQCD` 中完整梳理并尽可能复现 `/root/PyQCD/refer/donghx` 的格点 QCD

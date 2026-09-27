@@ -6,7 +6,7 @@
 
 ## 产物
 - `analy_test9_20260822.tex`（901 行，59186 字节）与 `analy_test9_20260822.pdf`（36 页，1.3MB，`xelatex` 两遍，`Overfull=0` `Float too large=0` `Missing=0`）
-- 编译：`cd /root/PyQCD/logs/dev5_2 && xelatex -interaction=nonstopmode -halt-on-error -file-line-error analy_test9_20260822.tex`（两遍）
+- 编译：`cd /root/PyQCD/docs/from-logs/logs/dev5_2 && xelatex -interaction=nonstopmode -halt-on-error -file-line-error analy_test9_20260822.tex`（两遍）
 - 报告标题：`tag test9 系列全量分析（all）：梯度流重整化核子胶子 TMD-PDF 工作流与全链物理公式因果推导及图表深度映照`，日期 2026-08-22，`logs/dev5_2 专题`
 
 ## 核心改进（vs dev5_1）

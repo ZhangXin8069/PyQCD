@@ -10,9 +10,12 @@ PyQCD/  (main repo /root/PyQCD, git: main @ 9f74beb)
     +-- renorm/            * gradient flow / Z_R / hybrid / NLO match / extrap / TMD
     +-- smear/             HYP smearing (flow alternative)
     +-- pipeline/          9-step orchestration + tmd step
-    +-- testing/           integration tests
+    +-- testing/           contract/regression tests + demos + artifacts
+        +-- regression/    distillation / GEVP / frozen baselines
+        +-- tmd/           gradient-flow gluon TMD-PDF workflow
+        +-- spectrum/      effective-mass and ratio workflows
+        +-- comparisons/   donghx / lqcddb / supplementary comparisons
     +-- parallel/          MPI planning + meta-task scheduling
-+-- examples/              docker-v20260805 baseline + pyqcd demos/tests + test0
 +-- docs/                  53 Chinese LaTeX notes + analy/pure reports
 +-- logs/                  test0*/stab1/test6/test7 functional suites
 +-- cpp/                   C++ backend placeholder

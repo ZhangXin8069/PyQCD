@@ -1,5 +1,8 @@
 # donghx 4150 格点 QCD 复现与对照 Implementation Plan
 
+> 迁移提示（2026-09-27）：本文中的 `examples/pyqcd/cmp1` 现对应
+> `pyqcd/testing/comparisons`；旧命令仅保留为历史执行记录。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 以组态 4150 为核心，逐层复现并验证 donghx 的 eigvec、VVV/VdV、2pt、OPE、3pt、ratio 与 barematrix 算法，生成中文证据报告并完成授权的 Git 交付。
