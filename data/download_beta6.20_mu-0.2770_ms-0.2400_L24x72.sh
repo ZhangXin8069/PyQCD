@@ -1,1 +1,0 @@
-../examples/_docker/download_beta6.20_mu-0.2770_ms-0.2400_L24x72.sh
