@@ -21,6 +21,12 @@
 | `pyqcd-tmd-algorithm` | TMD 几何、重整化、匹配、外推和物理验证门 | 算法实现、staple、soft、CS、匹配 |
 | `pyqcd-docs` | 中文 LaTeX、源码证据、PDF 和报告验收 | analy、pure、xelatex、版式 |
 
+## 运维技能注册表
+
+| 技能 | 单一职责 | 典型触发 |
+|---|---|---|
+| `form` | PyQCD 仓库命名、目录、交付格式、具名例外与本地审计 | form、格式治理、命名/目录规范、仓库规范化 |
+
 ## 调用链
 
 ```text
@@ -45,7 +51,7 @@ pyqcd-conventions ────────────────────�
 
 ## 统一入口规范
 
-每个直接技能的 `SKILL.md` 必须包含：
+每个直接领域技能的 `SKILL.md` 必须包含：
 
 1. YAML frontmatter：`name` 与目录一致，`description` 以 `Use when...` 开头，只写触发
    条件，名称使用小写字母/数字/连字符；
@@ -54,6 +60,9 @@ pyqcd-conventions ────────────────────�
 4. 常见错误或验收门；
 5. 与相邻技能的交接；
 6. 超过约 100 行的 API、公式或长例文下沉到本技能 `references/`，入口只保留索引。
+
+`form` 是本地运维技能，仍须保留可触发 frontmatter、目的边界、工作流、验收门、
+错误处理和交接章节；其规则以根 `AGENTS.md` 的“form 格式约定”为准。
 
 共同内容只保留一个权威来源：轴序/单位/边界/证据状态写入 `pyqcd-conventions`，
 重采样/协方差/拟合纪律写入 `pyqcd-statistics`，后端/I/O/MPI 写入 `pyqcd-infra`。
@@ -73,10 +82,13 @@ pyqcd-conventions ────────────────────�
 
 ## 所有权与只读边界
 
-本文件和根 [`README.md`](README.md) 仅登记直接 `pyqcd-*` 技能。`sush/AGENTS.md`、
-`sush/README.md` 及 `sush/lqcddb` 属于 `sush`，本任务只读借鉴，不修改、不重命名、不
-更新创建者或目录条目。外来参考代码同样保持只读；需要吸收时在 PyQCD 自有技能中
-自包含改写并注明验证边界。
+本文件和根 [`README.md`](README.md) 登记 `pyqcd-*` 领域技能，并单列 `form` 运维
+技能。`sush/AGENTS.md`、`sush/README.md` 及 `sush/lqcddb` 属于 `sush`，本任务只读
+借鉴，不修改、不重命名、不更新创建者或目录条目。外来参考代码同样保持只读；需要
+吸收时在 PyQCD 自有技能中自包含改写并注明验证边界。
+
+`skills/form/` 是本库维护的运维技能，不受 `pyqcd-*` 物理领域注册表约束，但必须与
+根 `AGENTS.md` 的“form 格式约定”同步。
 
 ## 维护清单
 
@@ -86,3 +98,4 @@ pyqcd-conventions ────────────────────�
 - 本文件的注册表和调用链（只有职责或关系变化时更新对应行）；
 - 新增 `references/` 的相对链接与文件存在性；
 - 官方入口校验、Markdown 结构检查、`git diff --check` 和未跟踪文件清单。
+- 修改 `skills/form/` 时同步检查根 `AGENTS.md`、本文件、发现目录和本地审计包装器。
