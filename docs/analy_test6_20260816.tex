@@ -80,7 +80,7 @@
 \maketitle
 
 \begin{abstract}
-本报告分析 \texttt{logs/test6} 复现链：调用本库 \texttt{pyqcd} 独立复现
+本报告分析 \texttt{data/from-logs/logs/test6} 复现链：调用本库 \texttt{pyqcd} 独立复现
 \texttt{refer/huangcl/04\_proton\_energy/code\_proton\_energy.py}（三方向质子
 2pt → corr2 → 有效能量提取），不 import 也不照抄示例代码。分析范围覆盖
 复现脚本、验证脚本、参考脚本与复用模块共 12 个文件（精读 4、浏览 6、仅索引 2）。
@@ -100,7 +100,7 @@ $\sqrt{m^2+p^2}\approx3.14$ GeV 吻合；③ 图片由原 2 张扩展至 7 张
 \subsection{目录结构}
 本报告聚焦 \textcolor{struct}{test6 工作区}与其上下游，涉及目录：
 \begin{itemize}
-  \item \texttt{logs/test6/} —— 复现工作区（main.py / run-local.sh / verify\_04\_repro.py / 1\_result / .ref\_run）
+  \item \texttt{data/from-logs/logs/test6/} —— 复现工作区（main.py / run-local.sh / verify\_04\_repro.py / 1\_result / .ref\_run）
   \item \texttt{refer/huangcl/04\_proton\_energy/} —— 参考脚本（code\_proton\_energy.py 307 行、code.py 510 行）
   \item \texttt{refer/huangcl/98\_tools/} —— refer 脚本依赖的通用工具
   \item \texttt{pyqcd/analysis/} —— 复现复用的统计/图表/报告模块
@@ -131,11 +131,11 @@ test6 工作区按职责分五层：
 \toprule
 \textcolor{struct}{层次} & 路径 & \textcolor{struct}{职责} \\
 \midrule
-入口层 & \texttt{logs/test6/run-local.sh} & 一键全链：环境自检→复现→比对→物理断言 \\
-实现层 & \texttt{logs/test6/main.py} & 独立复现：corr2 计算、平台拟合、7 图+报告 \\
-验证层 & \texttt{logs/test6/verify\_04\_repro.py} & 数值比对：refer 实跑真值 vs 复现产物 \\
-真值层 & \texttt{logs/test6/.ref\_run/} & refer 脚本原样实跑产物（比对基准） \\
-产物层 & \texttt{logs/test6/1\_result/L24x72/Pz6/} & corr2 npy / 图 png / 拟合报告 \\
+入口层 & \texttt{data/from-logs/logs/test6/run-local.sh} & 一键全链：环境自检→复现→比对→物理断言 \\
+实现层 & \texttt{data/from-logs/logs/test6/main.py} & 独立复现：corr2 计算、平台拟合、7 图+报告 \\
+验证层 & \texttt{data/from-logs/logs/test6/verify\_04\_repro.py} & 数值比对：refer 实跑真值 vs 复现产物 \\
+真值层 & \texttt{data/from-logs/logs/test6/.ref\_run/} & refer 脚本原样实跑产物（比对基准） \\
+产物层 & \texttt{data/from-logs/logs/test6/1\_result/L24x72/Pz6/} & corr2 npy / 图 png / 拟合报告 \\
 \bottomrule
 \end{tabularx}
 \caption{test6 工作区主体结构分层（数据来源: 全库索引实测）}
@@ -173,7 +173,7 @@ test6 工作区按职责分五层：
 git e46b84c（2026-08-16）确立了复现+比对框架；本会话在其上补齐
 图片扩展（2→7 张）、物理断言（12 项）与一键入口 run-local.sh。
 \subsection{典型工作流}
-\texttt{bash logs/test6/run-local.sh}：环境自检 → 全链复现（~2 分钟）→
+\texttt{bash data/from-logs/logs/test6/run-local.sh}：环境自检 → 全链复现（~2 分钟）→
 数值比对 → 物理断言 → 产物清单；全程无人值守。
 \begin{ideabox}
 \textcolor{idea}{test6 的思路：以"原样实跑真值"为锚，独立实现的复现才有
@@ -220,7 +220,7 @@ z  & 1.637(6)  & 3.063(11) & 1.7  & 6.3e3 \\
 ave & 1.640(5) & 3.069(9)  & 2.4  & 1.4e7 \\
 \bottomrule
 \end{tabular}
-\caption{平台拟合结果（数据来源: logs/test6/1\_result/L24x72/Pz6/2\_fit\_report.txt 实测）}
+\caption{平台拟合结果（数据来源: data/from-logs/logs/test6/1\_result/L24x72/Pz6/2\_fit\_report.txt 实测）}
 \end{table}
 
 色散预期：$p=P_z\frac{2\pi}{L}\frac1a=6\times\frac{2\pi}{24}\times1.871
@@ -246,11 +246,11 @@ $<$0.1 a$^{-1}$、meff 平台落在 Pz6 预期 [1.3,1.8]）。
 % ================= 6 关键代码/文档片段 =================
 \section{关键代码/文档片段}
 \textbf{片段 1：独立实现的 corr2 计算（main.py:126-177，与 refer 行为一致）}
-\lstinputlisting[firstline=126,lastline=177]{/public/home/zhangxin/PyQCD/logs/test6/main.py}
+\lstinputlisting[firstline=126,lastline=177]{/root/PyQCD/data/from-logs/logs/test6/main.py}
 \textbf{片段 2：参考脚本同功能段（code\_proton\_energy.py:196-204）}
 \lstinputlisting[firstline=196,lastline=204]{/public/home/zhangxin/PyQCD/refer/huangcl/04_proton_energy/code_proton_energy.py}
 \textbf{片段 3：比对判据（verify\_04\_repro.py:50-64）}
-\lstinputlisting[firstline=50,lastline=64]{/public/home/zhangxin/PyQCD/logs/test6/verify_04_repro.py}
+\lstinputlisting[firstline=50,lastline=64]{/root/PyQCD/data/from-logs/logs/test6/verify_04_repro.py}
 
 % ================= 7 参考源清单 =================
 \section{参考源清单}
@@ -259,11 +259,11 @@ $<$0.1 a$^{-1}$、meff 平台落在 Pz6 预期 [1.3,1.8]）。
 \textcolor{evidence}{参考源} & 类型 & 内容/作用 \\
 \midrule
 \endhead
-\texttt{\nolinkurl{logs/test6/main.py:126-177}} & 仓库 & compute\_corr2：加载→roll→ti 平均→jackknife \\
-\texttt{\nolinkurl{logs/test6/main.py:200-232}} & 仓库 & do\_fit：逐样本 lsqfit 平台拟合（svdcut=1e-6） \\
-\texttt{\nolinkurl{logs/test6/main.py:295-431}} & 仓库 & plot\_part3：7 张扩展图 \\
-\texttt{\nolinkurl{logs/test6/verify_04_repro.py:21-64}} & 仓库 & 数值比对：3$\times$SEM 判据与 NaN 模式 \\
-\texttt{\nolinkurl{logs/test6/run-local.sh:1-78}} & 仓库 & 一键全链入口 + 12 项物理断言 \\
+\texttt{\nolinkurl{data/from-logs/logs/test6/main.py:126-177}} & 仓库 & compute\_corr2：加载→roll→ti 平均→jackknife \\
+\texttt{\nolinkurl{data/from-logs/logs/test6/main.py:200-232}} & 仓库 & do\_fit：逐样本 lsqfit 平台拟合（svdcut=1e-6） \\
+\texttt{\nolinkurl{data/from-logs/logs/test6/main.py:295-431}} & 仓库 & plot\_part3：7 张扩展图 \\
+\texttt{\nolinkurl{data/from-logs/logs/test6/verify_04_repro.py:21-64}} & 仓库 & 数值比对：3$\times$SEM 判据与 NaN 模式 \\
+\texttt{\nolinkurl{data/from-logs/logs/test6/run-local.sh:1-78}} & 仓库 & 一键全链入口 + 12 项物理断言 \\
 \texttt{\nolinkurl{refer/huangcl/04_proton_energy/code_proton_energy.py:157-213}} & 参考 & 参考实现：三方向 corr2 计算 \\
 \texttt{\nolinkurl{refer/huangcl/04_proton_energy/code_proton_energy.py:262-302}} & 参考 & 参考实现：eff\_mass/sem 图 \\
 \texttt{\nolinkurl{refer/huangcl/04_proton_energy/code.py:234-337}} & 参考 & E0 平台拟合与报告（扩展来源） \\

@@ -71,9 +71,9 @@ TMD 结果。
 ## 现有示例与验收入口
 
 ```bash
-python examples/pyqcd/tmd_gradient_flow_demo.py
-python examples/pyqcd/test9_gluon_tmd_nucleon.py --smoke
-python examples/pyqcd/test9_verify.py <run_dir>
+python -m pyqcd.testing.demos.tmd_gradient_flow
+python -m pyqcd.testing.tmd.pdf_workflow --smoke
+python -m pyqcd.testing.tmd.verify_pdf_workflow <run_dir>
 ```
 
 smoke/demo 只验证链路或形状；`test9_verify.py` 的 A–E 通过也不能替代真实非零横向

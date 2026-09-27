@@ -27,7 +27,8 @@ f_{g/N}^{[\Gamma]}(x,\boldsymbol b_\perp;\mu,\zeta)
 `pyqcd-tmd-chain` 的六步总览；纯算符/关联函数推导转 `pyqcd-physics-correlator`，
 纯谱式转 `pyqcd-physics-spectrum`，统计执行转 `pyqcd-statistics`。
 
-参考代码只用于理解；实现必须留在 PyQCD 内，不得 import `refer/` 或 `examples/`。
+参考代码只用于理解；实现必须留在 PyQCD 生产包内，不得反向依赖 `refer/` 或
+`pyqcd.testing`。
 
 ## 按需参考
 
