@@ -4,7 +4,7 @@ description: |
   Use when running or validating the PyQCD distillation pipeline, reproducing the
   docker baseline, resuming configuration-level jobs, checking input/output guards
   or runtime cleanup, collecting ETA or environment snapshots, or coordinating
-  examples/test0 and test9; use pyqcd-infra for backend/MPI details,
+  the distillation and TMD regression suites; use pyqcd-infra for backend/MPI details,
   pyqcd-analysis for product outputs, and pyqcd-statistics for statistical
   contracts.
 metadata:
@@ -18,8 +18,8 @@ metadata:
 
 本技能负责编排已经实现的计算步骤、输入检查、断点续跑、持久化和结果验证，不在入口
 中重写物理算法、统计估计或后端适配。管线实现位于 `pyqcd/pipeline/_steps.py`，示例/回归
-编排位于 `examples/test0/main.py`；分析/绘图产品转交 `pyqcd-analysis`，统计契约转交
-`pyqcd-statistics`，报告转交 `pyqcd-docs`。
+编排位于 `pyqcd/testing/regression/distillation/main.py`；分析/绘图产品转交
+`pyqcd-analysis`，统计契约转交 `pyqcd-statistics`，报告转交 `pyqcd-docs`。
 
 按需读取：
 
@@ -44,12 +44,12 @@ env → vertex → 2pt → ope → 3pt → 4pt → analysis → plots → report
 ## 常用入口
 
 ```bash
-python examples/test0/main.py run --conf-ids 6250
-bash examples/test0/run-local.sh
-python examples/test0/main.py verify --run-dir examples/test0/v<ts>
-python examples/pyqcd/verify_consistency.py
-python examples/pyqcd/test9_gluon_tmd_nucleon.py --smoke
-python examples/pyqcd/test9_verify.py <run_dir>
+python -m pyqcd.testing.regression.distillation.main run --conf-ids 6250
+bash pyqcd/testing/regression/distillation/run-local.sh
+python -m pyqcd.testing.regression.distillation.main verify --run-dir <run>
+python -m pyqcd.testing.regression.consistency
+python -m pyqcd.testing.tmd.pdf_workflow --smoke
+python -m pyqcd.testing.tmd.verify_pdf_workflow <run_dir>
 python -B -m pyqcd.testing._ope_channel_contract
 python -B -m pyqcd.testing._field_strength_cache_contract
 python -B -m pyqcd.testing._pipeline_runtime_contract

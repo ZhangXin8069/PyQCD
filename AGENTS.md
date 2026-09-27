@@ -7,28 +7,28 @@
 
 ```bash
 source ./env.sh                      # 环境（若存在）
-python examples/pyqcd/conftest.py    # 全量测试（物理/链路、整合功能，以及 SU(3) 几何/流归一化/HYP 协变/统计可辨识/二进制 IO/MPI 目录/持久化/管线异常等；实际计数以命令输出为准）
-python examples/pyqcd/verify_consistency.py   # 一致性验证（参考产物完整时 vs docker-v20260805，A–E 全 0 差异；缺失时明确退出2）
-python examples/pyqcd/tmd_gradient_flow_demo.py   # 梯度流 TMD 全链示例
+python -m pyqcd.testing   # 全量测试（物理/链路、整合功能及回归契约；实际计数以命令输出为准）
+python -m pyqcd.testing.regression.consistency   # 冻结蒸馏基线一致性验证
+python -m pyqcd.testing.demos.tmd_gradient_flow   # 梯度流 TMD 全链示例
 python -m pyqcd.parallel --dry-run --confs 6250,6450   # MPI 并行规划预览（用户公式 N*a=n*b）
 mpirun -np N python -m pyqcd.parallel --confs ...      # MPI 元任务并行管线（N 由 plan_parallel 给出）
-bash logs/test0/run-local.sh        # ana_3dir 三方向差异分析+作图测试（test12 风格，17 项断言）
-bash logs/test0_ratio/run-local.sh  # 02_ratio 3pt/2pt 比值+拟合+图测试（22 项断言）
-bash logs/test0_anaratio/run-local.sh  # 03_ana_ratio 纯画图测试（25 项断言）
-bash logs/test0_bare/run-local.sh   # 03_bare_matrix 三方向裸矩阵元测试（22 项断言）
-bash logs/test0_energy/run-local.sh # 04_proton_energy 有效能量测试（8 项断言）
-bash logs/test0_fh/run-local.sh     # 06_FH_bare_matele FH 变换测试（38 项断言）
-bash logs/stab1/run-local.sh        # 全功能真实数据实战（docker 基线 10 组态，45 项断言 + 106 图 + 报告）
-bash logs/test6/run-local.sh        # pyqcd 独立复现 04_proton_energy（879 组态三方向，逐位一致 + 7 图 + 12 断言）
-python examples/pyqcd/test9_gluon_tmd_nucleon.py --smoke   # test9 梯度流胶子 TMD-PDF 冒烟（1 组态 1 动量）
-python examples/pyqcd/test9_gluon_tmd_nucleon.py --only-plot --conf-ids ... # test9 仅分析出图（复用已算数据）
-python examples/pyqcd/test9_verify.py [run_dir]  # test9 物理链自洽断言（A 梯度流/E递减/unitarity、B 2pt 谱线、C TMD OPE、D 分析、E PDF）
-python examples/pyqcd/dev6/main.py               # dev6 基于 tag-test8 收缩产物（405 组态，只读）补齐 test0/test6 同类型图表（CPU 秒级）
-python examples/pyqcd/dev6/verify_dev6.py examples/pyqcd/dev6/v202608221540   # dev6 断言门（22 项：齐全性/形状/物理自洽）
-python examples/pyqcd/dev7/main.py               # dev7 dev6 收敛迭代（262 组态实际存在扫描 + Part C 02_ratio 链补齐 ratio_3pt 型图）
-python examples/pyqcd/dev7/verify_dev7.py examples/pyqcd/dev7/v202608230624   # dev7 断言门（38 项：齐全性/形状/02链产物/物理自洽/跨运行一致）
-bash examples/test0/run-local.sh    # 蒸馏管线一致性测试（调用 pyqcd 复现 docker-v20260805 全量输出）
-python examples/test0/main.py verify --run-dir examples/test0/v<ts>   # 一致性验证（A–E 项）
+bash data/from-logs/logs/test0/run-local.sh        # ana_3dir 三方向差异分析+作图测试（17 项断言）
+bash data/from-logs/logs/test0_ratio/run-local.sh  # 02_ratio 比值+拟合+图测试（22 项断言）
+bash data/from-logs/logs/test0_anaratio/run-local.sh  # 03_ana_ratio 纯画图测试（25 项断言）
+bash data/from-logs/logs/test0_bare/run-local.sh   # 03_bare_matrix 裸矩阵元测试（22 项断言）
+bash data/from-logs/logs/test0_energy/run-local.sh # 04_proton_energy 有效能量测试（8 项断言）
+bash data/from-logs/logs/test0_fh/run-local.sh     # 06_FH_bare_matele FH 变换测试（38 项断言）
+bash data/from-logs/logs/stab1/run-local.sh        # 全功能真实数据实战（45 项断言 + 106 图 + 报告）
+bash data/from-logs/logs/test6/run-local.sh        # pyqcd 独立复现 04_proton_energy（逐位一致 + 7 图 + 12 断言）
+python -m pyqcd.testing.tmd.pdf_workflow --smoke   # TMD-PDF 冒烟（1 组态 1 动量）
+python -m pyqcd.testing.tmd.pdf_workflow --only-plot --conf-ids ... # 仅分析出图
+python -m pyqcd.testing.tmd.verify_pdf_workflow [run_dir]  # TMD-PDF 物理链自洽断言
+python -m pyqcd.testing.spectrum.effective_mass   # 有效质量/谱学补充图
+python -m pyqcd.testing.spectrum.verify_effective_mass <run_dir>
+python -m pyqcd.testing.spectrum.effective_mass_ratio   # 有效质量 + ratio 链
+python -m pyqcd.testing.spectrum.verify_effective_mass_ratio <run_dir>
+bash pyqcd/testing/regression/distillation/run-local.sh   # 蒸馏管线一致性测试
+python -m pyqcd.testing.regression.distillation.main verify --run-dir <run>
 cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，两遍）
 ```
 
@@ -37,10 +37,11 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | 目录 | 内容 |
 |---|---|
 | `pyqcd/` | 主包（lattice/tools/vertex/contraction/operator/analysis/renorm/pipeline/testing/parallel） |
-| `examples/` | 成功实例（docker-v20260805 基线）+ pyqcd 规范示例/测试 + `test0/` 蒸馏管线一致性套件 + `pyqcd/dev6/`、`pyqcd/dev7/` 同型图表补充/收敛套件（405→262 组态实战） |
-| `docs/` | 52 篇中文 LaTeX 笔记（xelatex 编译，文件名统一中文）+ analy 报告 |
+| `pyqcd/testing/` | 原 `examples/` 的统一归属：契约/回归、示例、冻结基线、TMD/谱学工作流与历史运行快照 |
+| `docs/` | 中文 LaTeX 笔记（xelatex 编译）+ analy 报告；`from-logs/` 归档原日志树中的 PDF/TeX/Markdown |
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books）+ `git-rep/` 外来参考仓库（quda/PyQUDA/lamet-agent/EasyDistillation/LQCD_Master，只读、其 AGENTS.md 已归档） |
-| `logs/` | 按 tag 归档产物（stab0/ 等）+ test0/ 与 test0_*/ 数据分析功能测试套件（test12 风格）+ stab1/ 全功能真实数据实战套件 + test6/ pyqcd 独立复现套件（.ref_run/ 存 refer 实跑真值，verify_04_repro.py 数值比对）+ test7/ 服务器正式工作版（100 组态，GPU V100，env.sh 启动，输入检查机制 + 实时进度日志）+ test9/ 梯度流胶子 TMD-PDF 实战报告（test9_analysis.pdf）+ dev5/dev5_1/dev5_2 对 tag:test9 系列的详细分析（25 页→33 页→36 页，字体规范+物理>62%+因果总览+图表三段式，all 全量） |
+| `logs/` | 纯日志归档：各运行目录中的 `.txt/.json/.log/.tsv` 等文本记录；按原来源层级保留 |
+| `data/` | 数据、图像、安装与运行脚本；`from-logs/` 保留原 `logs/**` 相对路径，`from-docs/` 保留原 `docs/**` 相对路径 |
 | `cpp/` | C++ 后端占位 |
 | `.opencode/skills/` | 归集的 LQCD_Master 上游技能（lqcd-analysis 等 5 个，原位置保留） |
 
@@ -90,15 +91,17 @@ MyQCD 对照；双遍 XeLaTeX，Overfull=0、Float too large=0、Missing charact
   （16 线程过并行慢 40%）；vertex conf6250 GPU 36s（峰值 176MB）、2pt 337s（峰值 570MB）；
   本机 1 卡+内存紧张时公式自动收敛 N=1。
 
-## 蒸馏管线一致性测试（examples/test0）
+## 蒸馏管线一致性测试（`pyqcd.testing.regression.distillation`）
 
-调用 pyqcd 包复现成功实例 `examples/docker-v20260805/output/output_20260802_120104`
+调用 pyqcd 包复现冻结基线
+`pyqcd/testing/regression/baselines/legacy_pipeline/output/output_20260802_120104`
 的全量结果（10 组态 9 步：vertex→2pt→ope→3pt→4pt→analysis→plots→report）：
-中间数据 + 图表 + LaTeX 报告完整保存于版本目录 `examples/test0/v<YYYYMMDDHHMM>/`
+中间数据 + 图表 + LaTeX 报告完整保存于
+`pyqcd/testing/regression/distillation/artifacts/run_<YYYYMMDDHHMM>/`
 （test12 约定），逐项数值一致。`main.py` 只含测试/编排代码（计算委托
 `pyqcd.pipeline.run_pipeline`，实现于 `pyqcd/pipeline/_steps.py`，照抄 docker 逻辑自包含）。
-冒烟：`python examples/test0/main.py run --conf-ids 6250`（Nconf<2 时 disconnected
-拟合自动跳过，统计无意义）；全量：`bash examples/test0/run-local.sh`（~3-5h）。
+冒烟：`python -m pyqcd.testing.regression.distillation.main run --conf-ids 6250`。
+全量：`bash pyqcd/testing/regression/distillation/run-local.sh`（约 3-5h）。
 一致性容差：中间数据 rel<1e-6、分析结果 rel<1e-8；verify 按组态数自适应
 （Nconf=10 时 B/C/D 统计量严格比对）。已验证：conf6250 中间数据逐位一致
 （rel=0.000e+00），全量 237/237 PASS。
@@ -116,17 +119,17 @@ MyQCD 对照；双遍 XeLaTeX，Overfull=0、Float too large=0、Missing charact
 |---|---|---|---|
 | `_plots.py` | 图表工具全集：plot_errbar/scatter/hist + single/multi 封装 + 10 色 | — | 各套件共用 |
 | `_fitter.py` | calc_chi2(_dof)/fit（lsqfit 封装）/FitParams/ASCII 报告表 | — | 各套件共用 |
-| `_ratio2pt.py` | 02_ratio：2pt+OPE → 真空扣除 ratio → 逐 z 拟合 → ratio/c0/chi2 图 | `run_ratio2pt` | logs/test0_ratio（22 项） |
-| `_ana_ratio.py` | 03_ana_ratio：纯画图（单 fit 图+对比图+nofit 图） | `ana_ratio_plot_all` | logs/test0_anaratio（25 项） |
-| `_bare_matrix.py` | 03_bare_matrix：三方向 ratio+平均+拟合+图 | `run_bare_matrix` | logs/test0_bare（22 项） |
-| `_proton_energy.py` | 04：corr2 + E0 拟合 + eff_mass 图（GeV） | `run_energy` | logs/test0_energy（8 项） |
-| `_fh.py` | 06：6 方向 ratio 平均 → FH 变换 → 常数拟合 → FH/参数/对比图 | `run_fh` | logs/test0_fh（38 项） |
+| `_ratio2pt.py` | 02_ratio：2pt+OPE → 真空扣除 ratio → 逐 z 拟合 → ratio/c0/chi2 图 | `run_ratio2pt` | data/from-logs/logs/test0_ratio（22 项） |
+| `_ana_ratio.py` | 03_ana_ratio：纯画图（单 fit 图+对比图+nofit 图） | `ana_ratio_plot_all` | data/from-logs/logs/test0_anaratio（25 项） |
+| `_bare_matrix.py` | 03_bare_matrix：三方向 ratio+平均+拟合+图 | `run_bare_matrix` | data/from-logs/logs/test0_bare（22 项） |
+| `_proton_energy.py` | 04：corr2 + E0 拟合 + eff_mass 图（GeV） | `run_energy` | data/from-logs/logs/test0_energy（8 项） |
+| `_fh.py` | 06：6 方向 ratio 平均 → FH 变换 → 常数拟合 → FH/参数/对比图 | `run_fh` | data/from-logs/logs/test0_fh（38 项） |
 
 统计基元 sem/resample/cov_mat 复用 `_disconnected.py`；各套件合成数据
 （物理可解析：meff/E0/c0 精确恢复）经 makedata 生成，verify 断言
 产物存在性 + 解析形状 + 参数恢复。
 
-## 全功能真实数据实战（logs/stab1）
+## 全功能真实数据实战（data/from-logs/logs/stab1）
 
 docker-v20260805 基线（10 组态真实数据）驱动全部分析功能链实战：
 02_ratio → 03_ana_ratio → 04_proton_energy（P2/P0）→ 06_FH → 05_ana_3dir
@@ -134,7 +137,7 @@ docker-v20260805 基线（10 组态真实数据）驱动全部分析功能链实
 P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）。
 物理断言：P0 meff 平台 ≈ 1.12 GeV（质子质量，已验证结论）、P2 ≈ 1.56 GeV
 （色散）、E0 与 meff 平台一致；拟合用 svdcut=1e-6（10 组态协方差奇异）。
-分析报告：logs/stab1/docs/stab1_analysis.pdf（代码+物理+日志+交叉四视角）。
+分析报告：docs/from-logs/logs/stab1/docs/stab1_analysis.pdf（代码+物理+日志+交叉四视角）。
 
 ## 核心物理链（pyqcd/renorm）
 
@@ -149,7 +152,7 @@ P2 2pt 带 phase 负号（ratio 负/负相消自洽，能量提取取 |corr2|）
    复用 `_matching_kernels`（A_s = α_s/4π，zengch 约定），快度演化 + 软函数。
 6. **连续极限**（`_extrapolate.py`）：a/Pz/mπ/L 联合外推。
 
-## 参考代码整合（~auto-all 20260822，logs/examples/refer → pyqcd）
+## 参考代码整合（~auto-all 20260822，历史参考 → pyqcd）
 
 30 项整合，三轮完成（照抄逻辑、自包含、不 import 来源；各附测试；
 第二轮 R6 经原版实跑真值逐位对照验证——有效契约 7 用例 max|d|=0）：
@@ -165,13 +168,13 @@ matching_cc.py 重写）、2 处原版潜在 bug 的可运行化补全
 | R3 | refer/sush lqcddb `cg_coeff.py` | SU(2) CG 系数（Racah 纯 Python，无 sympy） | `pyqcd/lattice/_cg.py` |
 | R4 | refer/zengch `hB_data_FeynmenHellman_new.py` | hB 数据 z₀ 归一化+插值 loader + boot 协方差 | `pyqcd/renorm/_zr.py`（build_hB_dataset/boot_covariance/make_zr_dataset） |
 | R5 | refer/zengch `fit_hR_big_lambda_new.py` | λ 外推拟合 boot 全协方差选项 | `pyqcd/renorm/_hybrid.fit_hR_lambda(cov_kind='boot')` |
-| E1 | examples/pyqcd test9 示例 | `_plateau_c0` plateau 均值（抗奇异协方差） | `pyqcd/analysis/_tmd_ratio.plateau_c0`（run_disconnected_tmd_ratio 直接产出 c0_plateau） |
-| E2 | examples/pyqcd test9 示例 | CS 核两动量提取工程封装（z_ref+clamp） | `pyqcd/renorm/_tmdextract.cs_kernel_two_momentum` |
-| E3 | examples/pyqcd test9 示例 | TMD-PDF 链成图 4 张 | `pyqcd/analysis/_tmd_ratio.plot_tmd_pdf` |
-| L1 | logs/test8 | 2pt 组态级断点续跑（corr 齐全即跳过） | `pyqcd/pipeline/_steps.step_2pt`（recompute_2pt 强制重算） |
-| L2 | logs/test7/test8 | 数据守卫：原始数据齐全度+输入数组校验+ETA 日志 | `pyqcd/pipeline/_validate.py` |
-| L3 | logs/test6 | 能量链方向感知（动量置换 dir 参数，z 向后兼容） | `pyqcd/analysis/_proton_energy` + `_bare_matrix.dir_momentum` |
-| L4 | logs/test7 | tlog 时间戳+ETA 进度日志 | `pyqcd/pipeline._validate.ProgressLog/progress_log` |
+| E1 | TMD 工作流 | `_plateau_c0` plateau 均值（抗奇异协方差） | `pyqcd/analysis/_tmd_ratio.plateau_c0`（run_disconnected_tmd_ratio 直接产出 c0_plateau） |
+| E2 | TMD 工作流 | CS 核两动量提取工程封装（z_ref+clamp） | `pyqcd/renorm/_tmdextract.cs_kernel_two_momentum` |
+| E3 | TMD 工作流 | TMD-PDF 链成图 4 张 | `pyqcd/analysis/_tmd_ratio.plot_tmd_pdf` |
+| L1 | data/from-logs/logs/test8 | 2pt 组态级断点续跑（corr 齐全即跳过） | `pyqcd/pipeline/_steps.step_2pt`（recompute_2pt 强制重算） |
+| L2 | data/from-logs/logs/test7/test8 | 数据守卫：原始数据齐全度+输入数组校验+ETA 日志 | `pyqcd/pipeline/_validate.py` |
+| L3 | data/from-logs/logs/test6 | 能量链方向感知（动量置换 dir 参数，z 向后兼容） | `pyqcd/analysis/_proton_energy` + `_bare_matrix.dir_momentum` |
+| L4 | data/from-logs/logs/test7 | tlog 时间戳+ETA 进度日志 | `pyqcd/pipeline._validate.ProgressLog/progress_log` |
 | H1(二轮) | refer/donghx Operator.py | 螺旋度 ΔG 双场强 Wilson 线算符 F·W†·F̃·W（±z 支、平面/全和求和） | `pyqcd/operator/_helicity.py` |
 | R6(二轮) | refer/sush lqcddb vertex.py | Ω 加速张量（exact/块/noise 分区权重，dim=2/3，conserved/normal） | `pyqcd/vertex._eigcompress.create_omega_accelerate` |
 | R7(二轮) | refer/zengch fit_ratio_FH_new | FH 常数闭式协方差拟合 + χ² 驱动逐 z 自适应 t_sep 窗 | `pyqcd/analysis._ratio_fit.fit_constant_window/fh_adaptive_windows` |
@@ -186,8 +189,8 @@ matching_cc.py 重写）、2 处原版潜在 bug 的可运行化补全
 | B8(三轮) | refer/sush lqcddb io/write_date.py | 模板占位符组合式文件存在性+大小一致性守卫（corrupted 归类） | `pyqcd/pipeline._validate.check_files_existence` |
 | B9(三轮) | refer/sush lqcddb autowick/dynamic | Wick 缩并图 QC 可视化（复杂度自适应）+ 收缩路径 FLOPs/加速比/最大中间张量诊断（run_wick_analysis 增 registry/optimize 可选参） | `pyqcd/contraction._wickplot.plot_figure_wick` + `_dynamic._analyze_contraction_path/_format_cost` |
 | B10(三轮) | refer/huangcl 98_tools input_output.py | V†V/VVV 预计算顶点积二进制 reader（f8 交错复数，Nev 自探测+截断 Nev1） | `pyqcd/tools._io.readin_vdv_all/readin_vvv_all/readin_vvv` |
-| E4(三轮) | examples/test0/main.py dump_env | 运行环境快照 env.json（git/包版本/xelatex/GPU/cmdline） | `pyqcd/tools._env.dump_env` |
-| E5(三轮) | examples/test0/main.py _rel_maxdiff/_cmp_one | NaN 感知回归比对原语（NaN 位置须一致；分母 \|b\| norm 防除零） | `pyqcd.testing.rel_maxdiff/cmp_one` |
+| E4(三轮) | 蒸馏回归 `dump_env` | 运行环境快照 env.json（git/包版本/xelatex/GPU/cmdline） | `pyqcd/tools._env.dump_env` |
+| E5(三轮) | 蒸馏回归比对原语 | NaN 感知回归比对原语（NaN 位置须一致；分母 \|b\| norm 防除零） | `pyqcd.testing.rel_maxdiff/cmp_one` |
 
 判定已在位（第三轮清查结论，零改动）：`_fitter.fit` 的 debug/debugNfit/NaN
 填充与 `cov_mat` 条件数返回（B11，子代理报告有误）；docker utils 文件日志
@@ -205,19 +208,18 @@ torch 适配层补齐 numpy-like 函数（cos/sin/arccos/isnan/clip/maximum 标�
 argwhere/identity/append/random）。test9 示例已改为消费 pyqcd API
 （删除内嵌 `_plateau_c0`/CS 核内联/`plot_pdf` 共 ~115 行重复实现）。
 
-## test9 系列详细分析（logs/dev5/dev5_1/dev5_2，对 tag:test9 的 all 全量）
+## test9 系列详细分析（docs/from-logs/logs/dev5 等，对 tag:test9 的 all 全量）
 
 `tag:test9` 系列（`test9 4c58ddb` → `test9_1 eb24f23` → `test9_2 15b020f`）的详细分析按 `analy` 技能三视角 + 15 步工作流框架，完整推导全链物理公式，已迭代三版：
-- `dev5`（`logs/dev5/analy_test9_20260820.pdf` 25 页）：首版全链推导 + 101 证据 + 122 图，但字体偏小（`tiny`/`scriptsize`）且物理占比不足；
-- `dev5_1`（`logs/dev5_1/analy_test9_20260821.pdf` 33 页）：修正字体至模板标准（正文 10.54pt/表 `small`/代码 `footnotesize`，禁用 `tiny`）并扩展物理至 >55%（新增 7 深度块，`Eq.dualprop Eq.C2expand Eq.ZRrg` 等）；
-- `dev5_2`（`logs/dev5_2/analy_test9_20260822.pdf` 36 页，`all` 全量）：进一步明确因果（`§5 全链因果总览` 前因→后果主链，各 `A5.x` 五步展开）并强化图表-物理三段式映照（每图 `物理意义/对应结果/物理解析` 呼应 `Eq.Odef Eq.quasiTMD Eq.Zij Eq.TMDmatch`），物理占比 >62%，`xelatex` 两遍 `Overfull=0 Float=0 Missing=0`。
+- `dev5`（`docs/from-logs/logs/dev5/analy_test9_20260820.pdf`）：首版全链推导 + 101 证据 + 122 图；
+- `dev5_1`（`docs/from-logs/logs/dev5_1/analy_test9_20260821.pdf`）：修正字体并扩展物理至 >55%；
+- `dev5_2`（`docs/from-logs/logs/dev5_2/analy_test9_20260822.pdf`）：明确因果总览与图表-物理三段式映照，物理占比 >62%。
 
-## dev6 同型图表补充（examples/pyqcd/dev6，20260822）
+## 有效质量谱图工作流（20260822）
 
 输入为 `${HOME}/data/beta6.20_mu-0.2770_ms-0.2400_L24x72`（tag-test8 管线产物，
 405 组态 corr_pp_P0/P2 + VdV/VVV；只读、不消费 VVV）。main.py 调 pyqcd.analysis
-补齐与 examples/test0/v202608150750/plots 及 logs/test6/1_result/L24x72/Pz6
-相同类型的全部图表：B 型 7 图（P0/P2 双通道替代 x/y/z/ave）+ A 型 docker 栅格
+补齐历史谱学图型：B 型 7 图（P0/P2 双通道替代 x/y/z/ave）+ A 型 docker 栅格
 2 图（pion 面板留白注明）；ratio_3pt 因输入无 perambulators/3pt 数据缺席并在
 summary/verify/报告三处注明。B 型拟合照抄 test6（4 参数形状模型逐样本 lsqfit
 svdcut=1e-6，窗 [6,12]，unit=0.197/a）；关键修复：两通道窗口内 C<0（相位残留
@@ -228,7 +230,7 @@ verify_dev6 22 断言全绿；analy 报告 docs/analy_dev6_20260822.pdf（27 页
 Overfull=0/Float=0/Missing=0）。pyqcd 最小修改：
 `_correlators.run_meff_jackknife` 缺失通道跳过守卫（完整数据行为不变）。
 
-## dev7 同型图表收敛迭代（examples/pyqcd/dev7，20260823）
+## 有效质量 + ratio 链工作流（20260823）
 
 dev6 的 ~auto-all 收敛迭代，两项实质收敛：(1) **组态实际存在扫描**——数据目录自
 dev6 运行后由外部删减（405 → 262，全树 mtime ≤20260818），scan 按五文件齐备
@@ -249,11 +251,11 @@ docs/analy_dev7_20260823.pdf（29 页 Overfull=0/Float=0/Missing=0）。
 - 张量布局：gauge `(Nt,Nz,Ny,Nx,4,3,3)`；γ 矩阵 DeGrand-Rossi 基。
 - 后端：numpy/cupy/torch 三后端（`pyqcd.tools.set_backend`；torch 详见上文小节）。
 - 编译：docs 与 logs 的 tex 一律 xelatex（中文）；`\quad` 后跟中文需空格。
-- 测试：无 pytest 框架依赖，examples/pyqcd/conftest.py 直接运行。
+- 测试：无 pytest 框架依赖，`python -m pyqcd.testing` 直接运行。
 - refer/ 只读参考：pyqcd 逻辑照抄但不 import。
 - git tag 约定：stab<N>/dev<N>/bug<N>/test<N>（当前 stab1）。
 
 ## 反模式
 
-- 不 import refer/、不 import examples/（照抄逻辑，自包含）。
+- 生产代码不 import `refer/` 或 `pyqcd.testing`；迁移代码位于测试包内。
 - 不修改 refer/ 与成功实例基线的"已验证物理结论"（pn 2pt=0、meff≈1.12 GeV 等）。

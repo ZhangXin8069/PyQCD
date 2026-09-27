@@ -21,8 +21,8 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_SOURCE = PROJECT_ROOT / "pyqcd" / "pipeline" / "_config.py"
-TEST9_SOURCE = (
-    PROJECT_ROOT / "examples" / "pyqcd" / "test9_gluon_tmd_nucleon.py"
+TMD_WORKFLOW_SOURCE = (
+    PROJECT_ROOT / "pyqcd" / "testing" / "tmd" / "pdf_workflow.py"
 )
 EXPECTED_NT = 72
 CHANNELS = ("pp", "pn", "pion")
@@ -98,42 +98,31 @@ def test_parallel_cli_dry_run_does_not_create_output_trees():
         assert created == [], f"parallel dry-run created directories: {created}"
 
 
-def test_test9_dry_run_does_not_create_output_trees():
-    """test9 dry-run must report its plan without creating its default roots."""
+def test_tmd_workflow_dry_run_does_not_create_output_trees():
+    """The TMD dry-run must report its plan without creating output trees."""
     with tempfile.TemporaryDirectory() as tmp:
         isolated_root = Path(tmp)
-        (isolated_root / "pyqcd").symlink_to(
-            PROJECT_ROOT / "pyqcd", target_is_directory=True)
-        script_dir = isolated_root / "examples" / "pyqcd"
-        script_dir.mkdir(parents=True)
-        script = script_dir / TEST9_SOURCE.name
-        script.symlink_to(TEST9_SOURCE)
+        output = isolated_root / "not-created"
 
         completed = subprocess.run(
-            [sys.executable, os.fspath(script), "--dry-run"],
-            cwd=isolated_root,
-            env=_isolated_env(isolated_root),
+            [sys.executable, "-m", "pyqcd.testing.tmd.pdf_workflow",
+             "--dry-run", "--out", os.fspath(output)],
+            cwd=PROJECT_ROOT,
+            env=_isolated_env(PROJECT_ROOT),
             text=True,
             capture_output=True,
         )
         _assert_subprocess_ok(completed)
 
-        targets = (
-            isolated_root / "data",
-            isolated_root / "plots",
-            isolated_root / "logs",
-            isolated_root / "output",
-            script_dir / "test9",
+        assert not output.exists(), (
+            f"TMD dry-run created output directory: {output}"
         )
-        created = [os.fspath(path.relative_to(isolated_root))
-                   for path in targets if path.exists()]
-        assert created == [], f"test9 dry-run created directories: {created}"
 
 
-def test_test9_analysis_forwards_tmd_cache_identity():
+def test_tmd_workflow_analysis_forwards_tmd_cache_identity():
     """Analysis must request the exact flow cache produced by computation."""
     spec = importlib.util.spec_from_file_location(
-        "pipeline_persistence_test9", TEST9_SOURCE)
+        "pipeline_persistence_tmd", TMD_WORKFLOW_SOURCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -199,10 +188,10 @@ def test_test9_analysis_forwards_tmd_cache_identity():
     }
 
 
-def test_test9_smoke_uses_exactly_the_requested_single_momentum():
+def test_tmd_workflow_smoke_uses_exactly_the_requested_single_momentum():
     """公开 --smoke-mom 不能是无效参数，smoke 必须只选择一个动量。"""
     spec = importlib.util.spec_from_file_location(
-        "pipeline_persistence_test9_scope", TEST9_SOURCE)
+        "pipeline_persistence_tmd_scope", TMD_WORKFLOW_SOURCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -214,10 +203,10 @@ def test_test9_smoke_uses_exactly_the_requested_single_momentum():
     assert momenta == [(10, -2, 0)]
 
 
-def test_test9_pdf_inputs_require_longitudinal_verified_sample_plateaux():
+def test_tmd_workflow_pdf_inputs_require_longitudinal_verified_samples():
     """PDF 链不得消费无状态二维均值或带横向动量的伪输入。"""
     spec = importlib.util.spec_from_file_location(
-        "pipeline_persistence_test9_pdf", TEST9_SOURCE)
+        "pipeline_persistence_tmd_pdf", TMD_WORKFLOW_SOURCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -1250,10 +1239,10 @@ def test_run_pipeline_without_env_step_does_not_fake_snapshot():
 TESTS = (
     test_config_import_does_not_create_output_trees,
     test_parallel_cli_dry_run_does_not_create_output_trees,
-    test_test9_dry_run_does_not_create_output_trees,
-    test_test9_analysis_forwards_tmd_cache_identity,
-    test_test9_smoke_uses_exactly_the_requested_single_momentum,
-    test_test9_pdf_inputs_require_longitudinal_verified_sample_plateaux,
+    test_tmd_workflow_dry_run_does_not_create_output_trees,
+    test_tmd_workflow_analysis_forwards_tmd_cache_identity,
+    test_tmd_workflow_smoke_uses_exactly_the_requested_single_momentum,
+    test_tmd_workflow_pdf_inputs_require_longitudinal_verified_samples,
     test_runner_default_root_tracks_config_output_dir,
     test_direct_serial_default_root_tracks_config_output_dir,
     test_single_rank_parallel_fallback_tracks_config_output_dir,

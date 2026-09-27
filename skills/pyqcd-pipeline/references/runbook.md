@@ -3,16 +3,17 @@
 ## 基线与输出目录
 
 默认一致性基线是
-`examples/docker-v20260805/output/output_20260802_120104`。每次运行使用独立的
-`examples/test0/v<YYYYMMDDHHMM>/` 目录，不能覆盖基线或另一轮运行。记录实际组态列表，
+`pyqcd/testing/regression/baselines/legacy_pipeline/output/output_20260802_120104`。
+每次运行使用独立的 `pyqcd/testing/regression/distillation/artifacts/run_<timestamp>/`
+目录，不能覆盖基线或另一轮运行。记录实际组态列表，
 不要把预期网格当作存在性证明。
 
 ## 冒烟到全量
 
 ```bash
-python examples/test0/main.py run --conf-ids 6250
-bash examples/test0/run-local.sh
-python examples/test0/main.py verify --run-dir examples/test0/v<ts>
+python -m pyqcd.testing.regression.distillation.main run --conf-ids 6250
+bash pyqcd/testing/regression/distillation/run-local.sh
+python -m pyqcd.testing.regression.distillation.main verify --run-dir <run>
 ```
 
 冒烟适合检查导入、单组态路径和文件格式；它不能验证 ensemble 统计。全量回归至少保存

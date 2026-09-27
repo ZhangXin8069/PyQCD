@@ -2,10 +2,10 @@
 9 步管线计算编排（pyqcd/pipeline/_steps）
 ==========================================
 
-照抄 examples/docker-v20260805 的 compute_vertex/compute_contraction/
+照抄冻结蒸馏基线的 compute_vertex/compute_contraction/
 compute_ope/analyze/report/run_pipeline 编排逻辑（成功实例基线），
 但所有计算调用 pyqcd 子包（lattice/tools/vertex/contraction/operator/
-analysis），自包含、不 import examples/。
+analysis），自包含且不反向依赖测试包。
 
 步骤与逻辑输出沿用基线；张量新产物统一为 `.h5`，读取时兼容旧 `.npy/.npz`：
 
@@ -1110,7 +1110,7 @@ def step_2pt(config, run_dir, logger, progress=None):
     for cid in config['conf_ids']:
         started = time.perf_counter()
         _info(logger, f"\n─── 2pt: conf {cid} ───")
-        # 断点续跑（整合 logs/test8）：该组态 corr_{ch}_{P0,P2} 全存在则跳过
+        # 断点续跑（整合 data/from-logs/logs/test8）：该组态 corr_{ch}_{P0,P2} 全存在则跳过
         # （vertex/OPE 缓存由 pyqcd 内部处理，2pt 级此前缺失——服务器长跑
         #   中断后重跑可跳过已完成组态，节省数小时）
         if not recompute and _2pt_all_present(
@@ -2248,7 +2248,7 @@ def build_tex(summary, run_dir, meff_vals, connected_ratio, disconn,
 本报告基于格点QCD蒸馏(Distillation)框架，在GPU (CUDA) 上实现了完整的关联函数计算管线：
 顶点函数($VdV$/$VVV$)、Wick收缩分析、动态收缩、以及两点($pp$/$pn$)、OPE、三点($PJN$)、
 四点($PJNNJNp$)关联函数，并进行Jackknife/有效质量/三点比值($ratio_{3p}$)统计分析。
-本运行由 examples/test0 调用 pyqcd 包完成（与成功实例 docker-v20260805 逐项一致）。
+本运行由 `pyqcd.testing.regression.distillation` 调用 pyqcd 包完成。
 计算使用CLQCD合作组的规范组态
 ($\beta=6.20$, $24^3\times72$, $a\approx0.1053\;\fm$, $\apm\approx1.874\;\gev$)，
 共 """ + str(len(conf_ids)) + r""" 个组态（""" + ', '.join(map(str, conf_ids)) + r"""），

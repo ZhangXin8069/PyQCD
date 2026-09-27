@@ -24,18 +24,18 @@
 ## 运行
 
 ```bash
-bash logs/test7/run.sh                 # 正式后台运行入口（≡ bash ./run-local.sh --server）
-bash logs/test7/run-local.sh            # 前台一键全链（100 组态正式版）
-bash logs/test7/run-local.sh --server   # nohup 后台正式跑
-bash logs/test7/run-local.sh --dry-run  # 演练（仅打印命令）
-python logs/test7/main.py env                      # 环境/GPU/数据源自检
-python logs/test7/main.py makedata                # 检查 + 整理 → input/
-python logs/test7/main.py makedata --n-conf 10    # 本地回归（10 组态）
-python logs/test7/main.py run --outdir <v<ts>>    # 全功能实战
-python logs/test7/main.py run --steps 02_ratio    # 单步骤（调控/断点）
-python logs/test7/main.py verify --run-dir <v<ts>># 断言（产物 + 物理合理性）
-python logs/test7/main.py check  --run-dir <v<ts>># 断言门（exit 0/1）
-python logs/test7/main.py collect --run-dir <v<ts>># 产物清单
+bash data/from-logs/logs/test7/run.sh                 # 正式后台运行入口（≡ bash ./run-local.sh --server）
+bash data/from-logs/logs/test7/run-local.sh            # 前台一键全链（100 组态正式版）
+bash data/from-logs/logs/test7/run-local.sh --server   # nohup 后台正式跑
+bash data/from-logs/logs/test7/run-local.sh --dry-run  # 演练（仅打印命令）
+python data/from-logs/logs/test7/main.py env                      # 环境/GPU/数据源自检
+python data/from-logs/logs/test7/main.py makedata                # 检查 + 整理 → input/
+python data/from-logs/logs/test7/main.py makedata --n-conf 10    # 本地回归（10 组态）
+python data/from-logs/logs/test7/main.py run --outdir <v<ts>>    # 全功能实战
+python data/from-logs/logs/test7/main.py run --steps 02_ratio    # 单步骤（调控/断点）
+python data/from-logs/logs/test7/main.py verify --run-dir <v<ts>># 断言（产物 + 物理合理性）
+python data/from-logs/logs/test7/main.py check  --run-dir <v<ts>># 断言门（exit 0/1）
+python data/from-logs/logs/test7/main.py collect --run-dir <v<ts>># 产物清单
 ```
 
 ## 数据源（正式数据源 /public/group/lqcd，本地与服务器路径一致）
@@ -62,7 +62,7 @@ python logs/test7/main.py collect --run-dir <v<ts>># 产物清单
 
 ## 约定
 
-- **版本目录**：`logs/test7/v<YYYYMMDDHHMM>/`（test12 约定），`--outdir` >
+- **版本目录**：`data/from-logs/logs/test7/v<YYYYMMDDHHMM>/`（test12 约定），`--outdir` >
   `$test7_OUTDIR` > `v<ts>/`。
 - **数据适配**（makedata）：基线 `corr_pp_P{0,2}` (Nt,) → 平移不变切片矩阵
   (Nt,Nt)；`ops_mu0_nu1/mu3_nu0/mu3_nu1` (Nz,Nt) 原样（组合

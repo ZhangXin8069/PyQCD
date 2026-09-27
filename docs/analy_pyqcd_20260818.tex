@@ -87,9 +87,10 @@
 % ================= 1 仓库概览 =================
 \section{仓库概览}
 \subsection{目录结构}
-仓库顶层以 \texttt{pyqcd/} 主包为核心，\texttt{examples/} 提供成功实例基线与规范测试，
+仓库顶层以 \texttt{pyqcd/} 主包为核心，测试、回归和冻结基线统一位于
+\texttt{pyqcd/testing/}，
 \texttt{docs/} 存放中文 LaTeX 笔记与报告，\texttt{logs/} 为各功能测试套件，\texttt{refer/} 为只读参考库。
-\lstinputlisting[language=bash]{/root/PyQCD/docs/_tree_pyqcd.txt}
+\lstinputlisting[language=bash]{_tree_pyqcd.txt}
 
 \subsection{规模统计与 git 信息}
 \begin{table}[htbp]\centering
@@ -122,7 +123,7 @@ docs 内 tex 篇数 & 53 \\
 \textcolor{struct}{层次} & 目录 & \textcolor{struct}{职责} \\
 \midrule
 \endhead
-入口层 & \texttt{examples/} & 成功实例基线 docker-v20260805 + pyqcd 规范示例/测试 + test0 蒸馏一致性套件 \\
+入口层 & \texttt{pyqcd/testing/} & 冻结蒸馏基线 + 回归/示例 + 蒸馏一致性套件 \\
 核心层 & \texttt{pyqcd/renorm/} & * 梯度流/\textsubscript{Z\_R}/混合/NLO 匹配/外推/TMD 提取（理论核心） \\
 核心层 & \texttt{pyqcd/operator/} & Clover 场强 F、对偶 F̃、胶子 OPE 算符、TMD staple 扩展 \\
 核心层 & \texttt{pyqcd/analysis/} & Jackknife/Bootstrap/meff/ratio/disconnected/色散拟合 \\
@@ -170,8 +171,8 @@ git 历史显示近期以 tag \texttt{stab1}（全功能真实数据实战）→
 表明工程重心从「单点复现」走向「规模化并行实战」。torch 后端为后期新增（实测 CPU 梯度流 2.7–4.8x 加速）。
 
 \subsection{典型工作流}
-一次典型任务：\nolinkurl{python examples/pyqcd/conftest.py} 跑全量 18 项单测；
-或 \nolinkurl{bash examples/test0/run-local.sh} 蒸馏管线一致性全量复现；
+一次典型任务：\nolinkurl{python -m pyqcd.testing} 跑全量单测；
+或 \nolinkurl{bash pyqcd/testing/regression/distillation/run-local.sh} 复现蒸馏一致性；
 规模化则 \nolinkurl{python -m pyqcd.parallel --confs ...} 经 MPI 调度。
 \begin{ideabox}
 本仓库「先有成功实例与参考，再自包含重写并套测试保护网」的组织方式，
@@ -215,11 +216,12 @@ Z_{ij} &= \delta_{ij} + \frac{\alpha_s C_A}{2\pi}\,dx\,\frac{x}{|x|} \notag\\
 易错点：色迹维度、roll 轴序、复数 dtype 一致性——由后端适配层统一保证。
 
 \subsection{A6 任务如何正确执行}
-步骤/命令：\textcolor{evidence}{\nolinkurl{python examples/pyqcd/conftest.py}}（单测链验证）；
-\textcolor{evidence}{\nolinkurl{python examples/pyqcd/verify_consistency.py}}（A–E 一致性）。
+步骤/命令：\textcolor{evidence}{\nolinkurl{python -m pyqcd.testing}}（单测链验证）；
+\textcolor{evidence}{\nolinkurl{python -m pyqcd.testing.regression.consistency}}（A–E 一致性）。
 
 \subsection{A7 实际执行情况}
-蒸馏管线一致性测试：\nolinkurl{bash examples/test0/run-local.sh} 复现 docker 基线全量 9 步；
+蒸馏管线一致性测试：
+\nolinkurl{bash pyqcd/testing/regression/distillation/run-local.sh} 复现基线全量 9 步；
 一致性验证 \nolinkurl{verify\_consistency.py} 对 A–E 五组对照全部 0 差异（\textcolor{evidence}{\nolinkurl{AGENTS.md:11}}）。
 
 \subsection{A8 实际输出情况}
@@ -252,7 +254,7 @@ gauge 链接 $\leftrightarrow$ 规范场、M 矩阵 $\leftrightarrow$ 非定域�
 本步证据见第 7 节参考源清单（\texttt{\_gradient\_flow.py}/\_tmd.py/\_matching.py/AGENTS.md 等）。
 
 \subsection{A15 附录与附件}
-原始日志见 \texttt{logs/test0/}、\texttt{logs/stab1/}、\texttt{logs/test6/} 各 run-local 输出。
+原始日志与运行脚本见 \texttt{data/from-logs/logs/test0/}、\texttt{data/from-logs/logs/stab1/}、\texttt{data/from-logs/logs/test6/}。
 
 % ================= 6 关键代码/文档片段 =================
 \section{关键代码/文档片段}

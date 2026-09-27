@@ -9,19 +9,19 @@
 ## 运行
 
 ```bash
-bash logs/test6/run-local.sh       # 一键：环境自检 → 全链 → 数值比对 → 物理断言
+bash data/from-logs/logs/test6/run-local.sh       # 一键：环境自检 → 全链 → 数值比对 → 物理断言
 ```
 
 ## 结构
 
 | 文件 | 内容 |
 |---|---|
-| `main.py` | 全链（compute → fit → plot，--debug/--parts/--conf-ids 可选） |
-| `verify_04_repro.py` | 数值比对（vs `.ref_run/` refer 实跑真值） |
-| `run-local.sh` | 一键运行（含 Step 0 环境自检与 Step 3 物理断言） |
-| `.ref_run/` | refer 实跑真值（verify 比对基准） |
-| `1_result/L24x72/Pz6/` | 产物（corr2_*.npy + 7 图 + 2_fit_report.txt + 1_fit_data.npz） |
-| `docs/` | LaTeX 报告（analy_test6_report_20260816.tex/pdf） |
+| `data/from-logs/logs/test6/main.py` | 全链（compute → fit → plot，--debug/--parts/--conf-ids 可选） |
+| `data/from-logs/logs/test6/verify_04_repro.py` | 数值比对（vs `.ref_run/` refer 实跑真值） |
+| `data/from-logs/logs/test6/run-local.sh` | 一键运行（含 Step 0 环境自检与 Step 3 物理断言） |
+| `data/from-logs/logs/test6/.ref_run/` | refer 实跑真值（verify 比对基准） |
+| `data/from-logs/logs/test6/1_result/L24x72/Pz6/` | 产物（corr2_*.npy + 7 图 + 2_fit_report.txt + 1_fit_data.npz） |
+| `docs/from-logs/logs/test6/docs/` | LaTeX 报告（analy_test6_report_20260816.tex/pdf） |
 
 ## 约定
 

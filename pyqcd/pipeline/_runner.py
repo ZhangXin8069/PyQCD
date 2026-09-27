@@ -1,6 +1,6 @@
 """管线：蒸馏计算 + 胶子 OPE + 统计分析 + 梯度流重整化 TMD 的 9 步调度。
 
-编排实现见 ``_steps.py``（照抄 examples/docker-v20260805 成功实例逻辑、
+编排实现见 ``_steps.py``（照抄冻结蒸馏基线逻辑、
 自包含调用 pyqcd 子包）；本模块提供向后兼容的调度入口：
 
     1. env     环境检查
@@ -90,7 +90,7 @@ def run_pipeline(steps=('env', 'vertex', '2pt', 'ope', '3pt', '4pt',
                  conf_ids=None, run_dir=None, logger=print, **kw):
     """9 步（+tmd）管线调度，委托 _steps.run_pipeline 完整实现。
 
-    与 examples/docker-v20260805/run_pipeline.py 输出结构一致；
+    与冻结蒸馏基线 run_pipeline.py 输出结构一致；
     计算全部调用 pyqcd 子包（自包含）。返回 dict:
     {'run_dir', 'timing', 'summary', 'meff', 'ratio_conn'}。
     """

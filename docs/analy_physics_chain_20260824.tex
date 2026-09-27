@@ -98,7 +98,7 @@ $\lambda$ 外推与傅里叶变换得准 TMD-PDF $\to$ NLO 匹配核 $Z_{ij}$ �
 
 \subsection{目录结构}
 PyQCD 为格点 QCD 研究仓库（lattice-pdf 迁移），根目录分层为：主包 \texttt{pyqcd/}、
-成功实例与测试 \texttt{examples/}、中文理论笔记 \texttt{docs/}、参考代码与文献
+回归测试与冻结基线 \texttt{pyqcd/testing/}、中文理论笔记 \texttt{docs/}、参考代码与文献
 \texttt{refer/}、产物归档 \texttt{logs/}，以及 C++ 占位 \texttt{cpp/}。
 仓库用途在根 AGENTS.md 中一句话声明：``计算使用梯度流重整化方案的核子中的胶子
 TMD-PDF''（\texttt{\nolinkurl{AGENTS.md:3-4}}）。
@@ -148,7 +148,7 @@ git 提交数 / 标签数 & 79 / 43 \\
 管线层 & \texttt{pyqcd/pipeline/} & 集中配置 + 九步管线调度 + test9 物理链编排（\_tmd9）+ 数据守卫 \\
 并行层 & \texttt{pyqcd/parallel/} & MPI 元任务调度（用户公式 $N a = n b$ 显存规划） \\
 测试层 & \texttt{pyqcd/testing/} & 回归比对原语（NaN 感知 rel\_maxdiff/cmp\_one） \\
-入口层 & \texttt{examples/pyqcd/} & conftest 全量测试、test9 驱动与 verify A--E、tmd\_gradient\_flow\_demo \\
+入口层 & \texttt{pyqcd/testing/} & 中心全量测试、TMD 驱动与 verify、梯度流示例 \\
 文档层 & \texttt{docs/} & 55 篇中文 LaTeX 理论笔记 + analy/pure 分析报告 \\
 参考层 & \texttt{refer/} & zengch/donghx/huangcl/sush/zhangxin 参考代码 + papers/books 文献库（只读） \\
 \bottomrule
@@ -197,7 +197,7 @@ import 依赖方向与之一致，逐条列出（模块路径用可断行 URL �
 
 常数与系综表（\texttt{\nolinkurl{_const.py}} 与
 \texttt{\nolinkurl{_ensembles.py}}）为被所有重整化模块共享的叶子节点。
-反模式约束``不 import refer/、不 import examples/''保证了依赖严格单向向下
+反模式约束``生产代码不 import refer/ 或 pyqcd.testing''保证了依赖严格单向向下
 （根 \texttt{\nolinkurl{AGENTS.md}} 反模式节）。
 
 与外部知识的关系：docs 理论笔记（如``格点QCD中的梯度流重整化''``胶子TMD梯度流连续极限''
@@ -233,7 +233,7 @@ $\to$ bug1--3 清算验证债。每一次结构变化都对应一个已验证物
 
 \subsection{典型工作流}
 一次完整计算走遍全部层次（test9 驱动，确证：
-\texttt{\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py:12-20}}）：
+\texttt{\nolinkurl{pyqcd/testing/tmd/pdf_workflow.py:12-20}}）：
 读组态 $\to$ 多动量蒸馏 2pt $\to$ Wilson flow $\to$ flowed gauge 上逐时间片 TMD 算符
 $\to$ 不相连比值拟合 $\to$ 自重整化 $\to$ 准 TMD-PDF $\to$ NLO 匹配 $\to$
 图表与 JSON 汇总 $\to$ verify A--E 断言门。
@@ -297,7 +297,7 @@ $b_0=11-\frac{2}{3}N_f$，$\Lambda=0.23$ GeV，$N_f=3$
 \end{enumerate}
 配套的自洽性判据应成立：流能量密度 $E(t)$ 单调递减、$z=0$ 归一 $h_R(0)=1$、
 $b_\perp\to0$ 共线极限、匹配后求和规则守恒（verify A--E 即此四级断言的实现，
-确证：\texttt{\nolinkurl{examples/pyqcd/test9_verify.py:29-165}} 五个测试函数）。
+确证：\texttt{\nolinkurl{pyqcd/testing/tmd/verify_pdf_workflow.py:29-165}} 五个测试函数）。
 
 \subsection{B4 整体推理框架}
 推理主线是一条五段式因果链，每段的输出恰为下一段的输入：
@@ -363,7 +363,7 @@ $\varepsilon\le0.05$ 保证精度（确证：
 $t^2\langle E(t)\rangle|_{t=t_0}=0.3$（确证：
 \texttt{\nolinkurl{pyqcd/renorm/_gradient_flow.py:163-200}}）。
 物理上 $E(t)$ 是 $t$ 的单调递减函数（扩散耗散），这构成 verify A 组断言
-（确证：\texttt{\nolinkurl{examples/pyqcd/test9_verify.py:29-57}}）。
+（确证：\texttt{\nolinkurl{pyqcd/testing/tmd/verify_pdf_workflow.py:29-57}}）。
 小流时展开（SFTX，Suzuki 2013 / Mereghetti 2022）给出 flowed 算符到
 $\overline{\mathrm{MS}}$ 的一圈匹配：
 \begin{equation}
@@ -637,7 +637,7 @@ plots $\to$ report，及 tmd 步 \texttt{\nolinkurl{pyqcd/pipeline/_runner.py:59
 （标注为\textcolor{relation}{推断--文档级证据}，未在本会话复跑）：
 test9 冒烟（1 组态 1 动量）与全量（10 组态 $\times$ 动量集合 A，
 $z\in[0,12]$、$b_\perp\in[0,4]$、$\tau=3$）均 PASS
-（确证存在性：\texttt{\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py:42-60}}
+（确证存在性：\texttt{\nolinkurl{pyqcd/testing/tmd/pdf_workflow.py:42-60}}
 参数区与 \texttt{logs/test9/test9\_analysis.pdf} 实测存在于文件系统）；
 verify A--E 断言门全 PASS 与 conftest 40/40 见提交 40199bf/19121fe/e248c84
 信息（确证：git log 实测引用）；
@@ -839,7 +839,7 @@ $\tau=3a^2$ 流方案、$P_z\le$ 数 GeV 的 LaMET 适用区。
 \lstinputlisting[firstline=216,lastline=224]{/root/PyQCD/pyqcd/pipeline/_tmd9.py}
 
 \subsection{test9 链参数区}
-\lstinputlisting[firstline=44,lastline=60]{/root/PyQCD/examples/pyqcd/test9_gluon_tmd_nucleon.py}
+\lstinputlisting[firstline=44,lastline=60]{../pyqcd/testing/tmd/pdf_workflow.py}
 
 % ================= 7 图表清单 =================
 \section{本次大任务产物与图表清单}
@@ -928,8 +928,8 @@ L3 & \texttt{\nolinkurl{.agent.2026-08-24-20-14-12.list}} & 用户输入原文�
 \texttt{\nolinkurl{pyqcd/pipeline/_tmd9.py:216-248}} & 仓库 & 自重整化与混合接口 \\
 \texttt{\nolinkurl{pyqcd/lattice/_constants.py:26-33}} & 仓库 & $\beta$6.20 系综格距 \\
 \texttt{\nolinkurl{pyqcd/smear/_stout.py:1-24}} & 仓库 & stout 涂抹公式与 nstep=20/$\rho$=0.12 约定 \\
-\texttt{\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py:12-60}} & 仓库 & test9 链路说明与参数 \\
-\texttt{\nolinkurl{examples/pyqcd/test9_verify.py:29-165}} & 仓库 & verify A--E 断言门 \\
+\texttt{\nolinkurl{pyqcd/testing/tmd/pdf_workflow.py:12-60}} & 仓库 & TMD 链路说明与参数 \\
+\texttt{\nolinkurl{pyqcd/testing/tmd/verify_pdf_workflow.py:29-165}} & 仓库 & verify A--E 断言门 \\
 \texttt{docs/格点QCD中的TMD\_PDF.tex} 等 55 篇 & 参考 & 中文理论笔记（推导底稿，标题级索引） \\
 \texttt{\nolinkurl{refer/papers/Quasi_parton_distributions_and_the_gradient_flow_Monahan_Orginos_2017.pdf}} & 参考 & $\tau$ 方案方法出处 \\
 \texttt{\nolinkurl{refer/papers/First_Self-Renormalized_Gluon_PDF_of_Nucleon_from_Large-Momentum_Effective_Theory_in_the_Continuum_Limit.pdf}} & 参考 & $Z_R$ 方案（arXiv:2510.17758）出处 \\

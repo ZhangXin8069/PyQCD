@@ -9,6 +9,16 @@ import warnings
 import numpy as np
 
 
+def _import_gvar():
+    """Import the optional gvar dependency or skip the calling contract."""
+    try:
+        import gvar
+    except ImportError as exc:
+        raise unittest.SkipTest(
+            "optional dependency gvar is unavailable") from exc
+    return gvar
+
+
 class CovarianceRankContractTests(unittest.TestCase):
     @staticmethod
     def _near_singular_correlation():
@@ -26,7 +36,7 @@ class CovarianceRankContractTests(unittest.TestCase):
 
     def test_negative_svdcut_keeps_mode_exactly_at_cutoff_like_gvar(self):
         """Changing the retained comparison from >= to > must fail this test."""
-        import gvar as gv
+        gv = _import_gvar()
         from pyqcd.analysis._fitter import (
             calc_chi2,
             covariance_effective_rank,
@@ -70,7 +80,7 @@ class CovarianceRankContractTests(unittest.TestCase):
             covariance_sample_rank(self._near_singular_correlation()), 3)
 
     def test_calc_chi2_matches_gvar_positive_svd_regularization(self):
-        import gvar as gv
+        gv = _import_gvar()
         from pyqcd.analysis._fitter import calc_chi2
 
         cov = self._near_singular_correlation()
@@ -125,6 +135,10 @@ class CovarianceRankContractTests(unittest.TestCase):
 
 
 class FitAdapterContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        _import_gvar()
+
     @staticmethod
     def _linear_model(x, p):
         return p["a"] + p["b"] * np.asarray(x)
@@ -158,7 +172,7 @@ class FitAdapterContractTests(unittest.TestCase):
             self.assertTrue(np.isnan(values).all())
 
     def test_prior_and_p0_parameter_keys_must_match(self):
-        import gvar as gv
+        gv = _import_gvar()
         from pyqcd.analysis._fitter import FitParams, fit
 
         rng = np.random.default_rng(104)
@@ -172,7 +186,7 @@ class FitAdapterContractTests(unittest.TestCase):
             fit(samples, np.arange(4), self._linear_model, params)
 
     def test_prior_fit_reports_lsqfit_chi2_per_dof(self):
-        import gvar as gv
+        gv = _import_gvar()
         from pyqcd.analysis._fitter import FitParams, fit
 
         rng = np.random.default_rng(105)
@@ -965,7 +979,7 @@ class LowSampleFitContractTests(unittest.TestCase):
         self.assertIn("effective covariance rank", report)
 
     def test_tmd_identifiable_fit_keeps_full_hermitian_covariance(self):
-        import gvar as gv
+        gv = _import_gvar()
 
         from pyqcd.analysis._tmd_ratio import run_disconnected_tmd_ratio
 

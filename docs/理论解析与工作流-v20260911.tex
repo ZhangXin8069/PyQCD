@@ -3827,7 +3827,7 @@ $\eps=0.01$ 对 $\eps=0.005$ & $\sim3.1\times10^{-6}$ & 小格点有限步长
 
 回归命令与结果：依次执行契约模块直跑
 （\code{\_gradient\_flow\_gluon\_contract}）、全量回归
-（\code{conftest.py}，\code{examples/pyqcd/} 入口）、语法编译检查
+（\code{conftest.py}，\code{pyqcd/testing/} 入口）、语法编译检查
 （\code{compileall}）与 \code{git diff --check}，四项全部通过。全量回归覆盖既有 Wilson flow SU(3)/耗散、TMD 算符、HYP/Stout、
 torch/cupy 适配、匹配核、$Z_R$、混合方案、外推、蒸馏管线、MPI 与持久
 化契约；新增模块没有改写旧路径默认行为。
@@ -4016,14 +4016,14 @@ $\to$ plots $\to$ report（+tmd 步）。工程约定：
   \item \textbf{数据守卫}：\code{\_validate.py} 的原始数据齐全度/输入
   数组校验/ETA 进度日志 + 模板占位符组合式文件守卫；
   \item \textbf{回归门}：\code{conftest.py}
-  （\code{examples/pyqcd/} 入口，当前 106 项）+ 一致性验证
+  （\code{python -m pyqcd.testing}，当前全量回归）+ 一致性验证
   \code{verify\_consistency.py}（参考产物完整时 A--E 五组全
   0 差异，缺失时明确退出 2）。
 \end{itemize}
 
 \subsection{推荐调用（schema-v2 单组态链）}
 
-单组态链由命令行入口 \code{examples/pyqcd/gradient\_flow\_gluon\_ope.py}
+单组态链由命令行入口 \code{pyqcd/testing/tmd/gradient\_flow\_ope.py}
 驱动：输入为 ILDG \code{.lime}/\code{.lime.contents} 薄链接组态，
 配置参数为组态号、格点几何 $(N_t,N_x,N_y,N_z)$、流时间 $\zzh$、步长
 $\eps$、Wilson 线长度 $z_{\rm count}$ 与方向 $z_{\rm dir}$（参考生产
@@ -4228,7 +4228,7 @@ NLO 匹配 & \pathref{pyqcd/renorm/_matching.py} & 三分区核 + $Z_{ij}$ \\
 TMD 下游 & \pathref{pyqcd/renorm/_tmdextract.py} & quasi-TMD/CS/SFTX 匹配 \\
 外推 & \pathref{pyqcd/renorm/_extrapolate.py} & $a,P_z,m_\pi,L$ 联合 \\
 管线 & \pathref{pyqcd/pipeline/_gradient_flow_gluon.py} & ILDG 单组态驱动 \\
-CLI & \pathref{examples/pyqcd/gradient_flow_gluon_ope.py} & 命令行入口 \\
+CLI & \pathref{pyqcd/testing/tmd/gradient_flow_ope.py} & 命令行入口 \\
 契约 & \pathref{pyqcd/testing/_gradient_flow_gluon_contract.py} & 九项独立测试 \\
 参考实现 & \pathref{refer/donghx/Gradient_Flow_GluonPDF/} & 约定文档 + 生产/验证脚本 \\
 审计报告 & \pathref{docs/report_gradient_flow_gluonpdf_pyqcd_20260909.tex} & 算法审计与对照 \\
@@ -5389,7 +5389,7 @@ LO / HT & Leading Twist / Higher Twist & 领头 twist / 高 twist \\
 
 梯度流胶子 TMD-PDF 链的典型参数配置（与
 \code{gradient\_flow\_gluon\_ope} metadata 语义一一对应；实际运行以
-\pathref{examples/pyqcd/gradient_flow_gluon_ope.py} 命令行与 NPY/JSON
+\pathref{pyqcd/testing/tmd/gradient_flow_ope.py} 命令行与 NPY/JSON
 artifact 为准）：
 
 \begin{table}[htbp]

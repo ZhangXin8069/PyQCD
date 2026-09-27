@@ -1,3 +1,31 @@
 # AGENTS.md — pyqcd/testing
 
-集成测试函数（42 项 = 19 物理/链路项 + 23 整合功能项：一、二轮 stout/eigvec+Ω/CG/hB-loader/boot协方差/plateau+CS核/PDF成图/守卫+续跑/方向能量链/helicity/FH窗/L.Liu ASCII + 三轮匹配核修正/sin准PDF/OPE±z+FF+Lorentz表/宇称投影/ZR样本环/boot外推/分组聚合+dis_connect/模板守卫/Wick图+FLOPs诊断/VdV-VVV读取/env快照/比对原语/目录型LIME reader），直接定义于 `__init__.py`，由 examples/pyqcd/conftest.py 导入调度。运行：`python examples/pyqcd/conftest.py`。
+`pyqcd/testing` 统一承载契约测试、回归测试、可执行示例、参考基线及历史验证产物。
+生产模块不得反向导入本目录。
+
+## 目录约定
+
+| 路径 | 内容 |
+|---|---|
+| `__init__.py`, `conftest.py`, `__main__.py` | 中心测试登记与执行入口 |
+| `demos/` | 自包含可运行示例 |
+| `regression/` | 蒸馏、GEVP、冻结基线一致性回归 |
+| `tmd/` | 梯度流胶子 TMD-PDF 工作流与运行快照 |
+| `spectrum/` | 有效质量、谱学与 ratio 工作流 |
+| `comparisons/` | 外部参考对照，按 `donghx`、`lqcddb` 来源分类 |
+
+- 可执行代码按功能命名，不保留 `devN`、`testN`、`cmpN` 等历史 tag 目录名。
+- 运行快照置于对应 `artifacts/`，只保留时间戳或 `initial_run`、`extended_run`、
+  `final_run` 等语义名。
+- 冻结基线代码不得改写其物理结论；适配层与新增测试放入包内相应功能目录。
+
+## 运行
+
+```bash
+python -m pyqcd.testing
+python -m pyqcd.testing.tmd.pdf_workflow --dry-run
+python -m pyqcd.testing.regression.distillation.main --help
+python -m pyqcd.testing.comparisons.main --help
+```
+
+完整迁移映射见 `MIGRATION.md`。

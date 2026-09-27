@@ -11,19 +11,19 @@
 ## 运行
 
 ```bash
-python logs/test0/main.py env                        # 环境自检
-python logs/test0/main.py makedata                   # 合成数据（含 truth.json）→ input/
-python logs/test0/main.py run --data-root logs/test0/input   # 分析+作图 → v<ts>/
-python logs/test0/main.py verify --run-dir <v<ts>>   # 断言（存在性+数值自洽+物理自洽）
-python logs/test0/main.py check  --run-dir <v<ts>>   # 断言门（exit 0/1）
-python logs/test0/main.py collect --run-dir <v<ts>>  # 产物清单
-bash logs/test0/run-local.sh                         # 一键：env→makedata→run→verify→check→collect
-TEST0_DATA_DIR=/tmp/xx bash logs/test0/run-local.sh  # 自定义数据目录
+python data/from-logs/logs/test0/main.py env                        # 环境自检
+python data/from-logs/logs/test0/main.py makedata                   # 合成数据（含 truth.json）→ input/
+python data/from-logs/logs/test0/main.py run --data-root data/from-logs/logs/test0/input   # 分析+作图 → v<ts>/
+python data/from-logs/logs/test0/main.py verify --run-dir <v<ts>>   # 断言（存在性+数值自洽+物理自洽）
+python data/from-logs/logs/test0/main.py check  --run-dir <v<ts>>   # 断言门（exit 0/1）
+python data/from-logs/logs/test0/main.py collect --run-dir <v<ts>>  # 产物清单
+bash data/from-logs/logs/test0/run-local.sh                         # 一键：env→makedata→run→verify→check→collect
+TEST0_DATA_DIR=/tmp/xx bash data/from-logs/logs/test0/run-local.sh  # 自定义数据目录
 ```
 
 ## 约定
 
-- **版本目录**：`logs/test0/v<YYYYMMDDHHMM>/`（test12 约定），一次运行一个版本目录，
+- **版本目录**：`data/from-logs/logs/test0/v<YYYYMMDDHHMM>/`（test12 约定），一次运行一个版本目录，
   `--outdir` > `$TEST0_OUTDIR` > `v<ts>/` 优先级；产物互不覆盖，跨环境可直接 diff/叠图。
 - **main.py 只含测试/编排代码**：分析+作图全部委托 `pyqcd.analysis.analyze_3dir`，
   无核心计算逻辑。

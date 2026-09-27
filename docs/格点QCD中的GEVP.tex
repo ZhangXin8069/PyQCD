@@ -1,6 +1,6 @@
 \documentclass[12pt,a4paper]{ctexart}
 \usepackage[top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm]{geometry}
-\usepackage{amsmath,amssymb,amsthm,physics}
+\usepackage{amsmath,amssymb,amsthm}
 \usepackage{graphicx,float,booktabs,array,caption,multirow}
 \usepackage{hyperref,xcolor,enumitem,mathtools}
 \usepackage[numbers,sort&compress]{natbib}
@@ -36,7 +36,7 @@
 
 本文从四个层次系统解析 GEVP：\textbf{数学结构}（§\ref{sec:math}）——广义本征值问题的可解性、谱表示 $C(t)=Z D(t) Z^\dagg$ 导出的精确对角化结构、Cholesky 化归的数值稳定性、本征向量的 $B$-正交几何；\textbf{物理内涵}（§\ref{sec:physics}）——变分原理给出的能量上界、截断态空间下本征值的精确性命题、修正项的 $t_0$ 压低机制；\textbf{本库实现}（§\ref{sec:impl}）——\code{pyqcd.analysis.solve\_gevp} 的逐行解剖、复数 Hermitian 信息的保留、本征向量归一化约定的实测发现、\code{meff} 接口的真实语义；\textbf{工程实践}（§\ref{sec:practice}）——变分基的构造、蒸馏的协同、下游应用与陷阱清单。
 
-本文的\textbf{核心增量}是把教材中的定性论断转化为可复现的定量证据。基于本库生产代码 \code{solve\_gevp} 的七组数值实验（脚本 \cfile{examples/pyqcd/gevp_verify.py}）确立了三个此前只以定性形式存在的结论：
+本文的\textbf{核心增量}是把教材中的定性论断转化为可复现的定量证据。基于本库生产代码 \code{solve\_gevp} 的七组数值实验（脚本 \cfile{pyqcd/testing/regression/gevp/verify.py}）确立了三个此前只以定性形式存在的结论：
 
 \textbf{(i) 收敛速度的定量对比}——在 $N=3$ 算符、6 个物理态的解析谱模型中，GEVP 基态有效质量在 $2\le t\le10$ 上的平均偏差为 $4.57\times10^{-3}$~GeV，而直接对角化为 $7.98\times10^{-2}$~GeV，\textbf{改善 17.5 倍}；
 
@@ -432,7 +432,8 @@ E_n^{\rm eff}(t) = \frac{1}{a}\ln\frac{\lambda_n(t,t_0)}{\lambda_n(t,t_0+1)} .
 本库的 GEVP 求解器位于 \cfile{pyqcd/analysis/_analyse.py:599--664}，并通过 \cfile{pyqcd/analysis/__init__.py:4} 导出为 \code{pyqcd.analysis.solve\_gevp}。其接口为：
 
 \begin{center}
-\begin{tabular}{ll}
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.10\textwidth}>{\raggedright\arraybackslash}p{0.84\textwidth}}
 \toprule
 输入 & \code{C}: 关联矩阵，形状 \code{(N, N, Nt)}；\code{t0}: 参考时间片 \\
 输出 & \code{eigenvalues}: \code{(N, Nt)}；\code{eigenvectors}: \code{(N, N, Nt)} \\
@@ -462,7 +463,7 @@ E_n^{\rm eff}(t) = \frac{1}{a}\ln\frac{\lambda_n(t,t_0)}{\lambda_n(t,t_0+1)} .
 
 格点关联矩阵在什么情况下是复的？当算符基包含动量投影、非平凡 Dirac 结构或 Wilson 线时，$Z_{ik}$ 可以是复数，使 $C_{ij}(t)$ 成为复 Hermitian 矩阵。此时本征向量\textbf{可以有非零虚部}，而本征值仍为实数（Hermitian 性保证）。
 
-本库与参考实现在此处有一个\textbf{语义分岔}，已由对照测试 L20 完整记录（用例目录 \cfile{examples/pyqcd/cmp1}，运行摘要 \cfile{examples/pyqcd/cmp1/v202608300112/summary.md}，报告 \docCross{report\_cmp1\_4150\_20260828.pdf}）：
+本库与参考实现在此处有一个\textbf{语义分岔}，已由对照测试 L20 完整记录（用例目录 \cfile{pyqcd/testing/comparisons}，运行摘要 \cfile{pyqcd/testing/comparisons/artifacts/v202608300112/summary.md}，报告 \docCross{report\_cmp1\_4150\_20260828.pdf}）：
 
 \begin{table}[htbp]
 \centering
@@ -746,9 +747,9 @@ GEVP 在格点QCD中的地位可以用一句话概括：\textbf{它是把``算�
 \begin{center}
 \begin{tabular}{ll}
 \toprule
-实测 & \cfile{examples/pyqcd/gevp_verify.py}（七组实验，输出本文全部表格数值） \\
-绘图 & \cfile{examples/pyqcd/gevp_make_figures.py}（生成两张配图） \\
-运行 & \code{cd /root/PyQCD \&\& python} \cfile{examples/pyqcd/gevp_verify.py} \\
+实测 & \cfile{pyqcd/testing/regression/gevp/verify.py}（七组实验，输出本文全部表格数值） \\
+绘图 & \cfile{pyqcd/testing/regression/gevp/make_figures.py}（生成两张配图） \\
+运行 & \code{python -m pyqcd.testing.regression.gevp.verify} \\
 环境 & Python 3.10、NumPy 2.1.2、SciPy 1.14.1、Matplotlib 3.10.9 \\
 \bottomrule
 \end{tabular}
@@ -780,7 +781,7 @@ C_{ij}(t) = \sum_{k=1}^{M} Z_{ik} Z_{jk}\, e^{-E_k t},
 $N=3$ 个算符，$Z$ 由固定种子的正态随机数叠加对角占优结构生成（种子 \code{20260916}），格距取 $a=0.1$~fm、$\hbar c = 0.1973269804$~GeV$\cdot$fm。
 
 \begin{remark}[未验证项]
-本文的数值结论限于上述无噪声解析模型。以下内容\textbf{未经实测}，仅依文献与代码审读给出：(i) 真实组态数据上的 $t_0$ 最优值；(ii) $N$ 较大（$\gtrsim20$，蒸馏基规模）时的条件数行为与正则化策略；(iii) 带统计噪声时态追踪判据的误判率。本库对照测试中的 L20 数据（\cfile{examples/pyqcd/cmp1/v202608300112/summary.md}）来自真实计算流程，但用于接口对照而非物理收敛性分析。
+本文的数值结论限于上述无噪声解析模型。以下内容\textbf{未经实测}，仅依文献与代码审读给出：(i) 真实组态数据上的 $t_0$ 最优值；(ii) $N$ 较大（$\gtrsim20$，蒸馏基规模）时的条件数行为与正则化策略；(iii) 带统计噪声时态追踪判据的误判率。本库对照测试中的 L20 数据（\cfile{pyqcd/testing/comparisons/artifacts/v202608300112/summary.md}）来自真实计算流程，但用于接口对照而非物理收敛性分析。
 \end{remark}
 
 %==========================================================================
@@ -886,9 +887,9 @@ Phys.\ Rev.\ D \textbf{103}, 034502 (2021), arXiv:2009.10691.
 \bibitem{cmp1Report}
 本库对照测试报告《PyQCD 与 lqcddb/donghx 功能对照》，
 \cfile{docs/report_cmp1_4150_20260828.tex}、\cfile{docs/report_cmp1_4150_20260828.pdf}（L20 复 GEVP 差异判定）；
-用例定义 \cfile{examples/pyqcd/cmp1/cases_lqcddb2.py:150--155}；
-运行摘要 \cfile{examples/pyqcd/cmp1/v202608300112/summary.md}。
-\\\textbf{[来源:} 本库 \texttt{docs/}、\texttt{examples/}\textbf{]}
+用例定义 \cfile{pyqcd/testing/comparisons/lqcddb/cases_lqcddb2.py:150--155}；
+运行摘要 \cfile{pyqcd/testing/comparisons/artifacts/v202608300112/summary.md}。
+\\\textbf{[来源:} 本库 \texttt{docs/}、\texttt{pyqcd/testing/}\textbf{]}
 ——本文 §\ref{subsec:l20} 的实测数据（残差 $1.02\times10^{-15}$ 与 $1.17\times10^{-1}$、纯实投影逐位一致）出自该对照。
 
 \bibitem{pipelineSteps}
@@ -899,8 +900,8 @@ Phys.\ Rev.\ D \textbf{103}, 034502 (2021), arXiv:2009.10691.
 
 \bibitem{verifyScript}
 本文配套实测脚本，
-\cfile{examples/pyqcd/gevp_verify.py}（七组实验）与
-\cfile{examples/pyqcd/gevp_make_figures.py}（配图）。
+\cfile{pyqcd/testing/regression/gevp/verify.py}（七组实验）与
+\cfile{pyqcd/testing/regression/gevp/make_figures.py}（配图）。
 \\\textbf{[来源:} 本库\textbf{]}
 ——本文所有表格与图的数值来源，可在本库环境直接重跑复现（附录 \ref{app:verify}）。
 

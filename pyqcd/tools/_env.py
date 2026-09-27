@@ -1,4 +1,4 @@
-"""运行环境快照（整合 examples/test0/main.py 的 dump_env，test12 env.json 约定）。
+"""运行环境快照（整合蒸馏回归入口的 dump_env 约定）。
 
 记录时间/主机/Python/关键包版本/xelatex/git 状态/GPU 信息/命令行，
 供长跑产物自证可复现环境。纯标准库 + 可选探测，任何缺失项记 None/'n/a'。

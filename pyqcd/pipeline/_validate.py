@@ -2,7 +2,7 @@
 管线数据守卫：原始数据齐全度 / 输入数组校验 / ETA 进度日志
 ============================================================
 
-整合 logs/test7、logs/test8 的工程化前置检查（照抄其逻辑，
+整合 data/from-logs/logs/test7、data/from-logs/logs/test8 的工程化前置检查（照抄其逻辑，
 泛化为路径与形状参数化版本；不 import logs/）：
 
     - check_raw_data：三类蒸馏原始数据（eigensystem / perambulators /

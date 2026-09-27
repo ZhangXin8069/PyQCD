@@ -115,7 +115,7 @@
     \colorbox{good}{\parbox{0.90\linewidth}{\centering
       当前无需修改 PyQCD 的 GEVP 生产实现；严格逐位兼容与物理正确性应作为两个明确契约。}}
   \end{center}
-  \source{实测：\texttt{examples/pyqcd/cmp1/v202608281517/results.json}；\texttt{verify\_cmp1.py} 退出码 0}
+  \source{实测：\texttt{pyqcd/testing/comparisons/artifacts/v202608281517/results.json}；\texttt{verify.py} 退出码 0}
 \end{frame}
 
 \begin{frame}[t]{任务边界：以 4150 原始输入驱动可复现对照}
@@ -165,7 +165,7 @@
     工程层 & \texttt{cmp1} 产物版本化；主回归 41/41；外部缺失目录不伪造。\\
     \bottomrule
   \end{tabularx}
-  \source{流程：\texttt{examples/pyqcd/cmp1/main.py}、\texttt{harness.py}、\texttt{verify\_cmp1.py}}
+  \source{流程：\texttt{pyqcd/testing/comparisons/main.py}、\texttt{common/harness.py}、\texttt{verify.py}}
 \end{frame}
 
 \begin{frame}[t]{L20 差异来源：参考实现把复 GEVP 投影成了实 GEVP}
@@ -343,7 +343,7 @@
   \begin{block}{原则}
     生产代码保留物理正确的复数 GEVP；对照 harness 单独保留参考侧行为和差异值。
   \end{block}
-  \source{映射：\texttt{examples/pyqcd/cmp1/MAPPING.md}；门控：\texttt{examples/pyqcd/cmp1/verify\_cmp1.py:12--18}}
+  \source{映射：\texttt{pyqcd/testing/comparisons/README.md}；门控：\texttt{pyqcd/testing/comparisons/verify.py:12--18}}
 \end{frame}
 
 \begin{frame}[t]{性能证据：小函数加速明显，重路径需按后端单独优化}
@@ -410,7 +410,7 @@
     \midrule
     L20 聚焦对照 & \texttt{python cmp1/main.py --group lqcddb --only L20} & diff 已登记\\
     cmp1 断言门 & \texttt{python cmp1/verify\_cmp1.py .../results.json} & exit 0\\
-    全套主回归 & \texttt{python examples/pyqcd/conftest.py} & 41 passed, 0 failed\\
+    全套主回归 & \texttt{python -m pyqcd.testing} & 中心回归全部登记\\
     对照结果 & \texttt{cmp1/v202608281517/} & results.json + summary.md\\
     映射与差异 & \texttt{cmp1/MAPPING.md} & L20 已登记\\
     计划 & \texttt{plans/cmp1-4150.md} & 本轮范围与验收\\

@@ -16,7 +16,8 @@ test9 梯度流重整化核子胶子 TMD-PDF 物理链（pyqcd 核心模块）
     9. NLO 匹配 → 光锥 TMD-PDF x·g(x,b⊥) + CS 核
 
 本模块只放"物理链计算"函数（数据读取、算符、统计、重整化），
-顶层编排（配置/目录/CLI/并行）在 examples/pyqcd/test9_gluon_tmd_nucleon.py。
+顶层编排（配置/目录/CLI/并行）在
+`pyqcd/testing/tmd/pdf_workflow.py`。
 """
 from __future__ import annotations
 

@@ -2,7 +2,7 @@
 
 该文件故意不修改 ``pyqcd.testing.__init__``；由上层测试控制器按需注册。
 测试夹具只使用 NumPy 自己生成确定性的 SU(3) 链接，因此不依赖 refer/、
-examples/ 或外部二进制。
+历史示例树或外部二进制。
 """
 from __future__ import annotations
 

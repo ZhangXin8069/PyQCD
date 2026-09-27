@@ -218,7 +218,9 @@ python -B -m pyqcd.testing._field_strength_cache_contract
 ```
 
 complex128 小格点的独立 `z=0` 与非零 `+z` oracle 使用 `atol=2e-13`；完整 docker
-中间张量仍按 `examples/docker-v20260805/output/output_20260802_120104` 的一致性门
+中间张量仍按冻结蒸馏基线
+`pyqcd/testing/regression/baselines/legacy_pipeline/output/output_20260802_120104`
+的一致性门
 检查。函数级 OPE 与 docker 实现使用最大绝对差 `<1e-10`；磁盘中间量使用
 
 \[
@@ -233,9 +235,9 @@ shape 和 NaN 位置必须完全相同；不同时令 `d=inf`，两边全 NaN �
 固定执行：
 
 ```bash
-python examples/pyqcd/verify_consistency.py \
-  --run-dir examples/docker-v20260805/output/output_20260802_120104
-python examples/test0/main.py verify --run-dir <candidate-run> \
+python -m pyqcd.testing.regression.consistency \
+  --run-dir pyqcd/testing/regression/baselines/legacy_pipeline/output/output_20260802_120104
+python -m pyqcd.testing.regression.distillation.main verify --run-dir <candidate-run> \
   --conf-ids 6250,6450,6650,6850,7050,7250,7450,7650,7850,8050
 ```
 

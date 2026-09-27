@@ -147,7 +147,7 @@
     \textbf{本报告的结论边界：}PyQCD 已提供一条可复现、可测试的算法骨架；
     “实现了计算链”不等于“已经得到统计可靠的物理 TMD-PDF”。
   \end{beamercolorbox}
-  \source{代码：\nolinkurl{pyqcd/renorm/}、\nolinkurl{pyqcd/operator/}、\nolinkurl{pyqcd/analysis/}；实测：\nolinkurl{examples/pyqcd/conftest.py}。}
+  \source{代码：\nolinkurl{pyqcd/renorm/}、\nolinkurl{pyqcd/operator/}、\nolinkurl{pyqcd/analysis/}；实测：\nolinkurl{python -m pyqcd.testing}。}
 \end{frame}
 
 \begin{frame}[t]{研究对象与验收标准：TMD 比准 PDF 多一个横向坐标尺度}
@@ -215,7 +215,7 @@
     \node[flow,right=of p] (g) {匹配/外推\\\(g_0\)};
     \foreach \a/\b in {u/f,f/o,o/r,r/p,p/g}{\draw[arrow] (\a) -- (\b);}
   \end{tikzpicture}
-  \source{编排：\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py:84-301}；核心链：\nolinkurl{pyqcd/pipeline/_tmd9.py:1-224}。流程图为实现依赖关系示意。}
+  \source{编排：\nolinkurl{pyqcd/testing/tmd/pdf_workflow.py:84-301}；核心链：\nolinkurl{pyqcd/pipeline/_tmd9.py:1-224}。流程图为实现依赖关系示意。}
 \end{frame}
 
 \begin{frame}[t]{可复现设置：当前 test9 将格点、动量、流时间和横向网格显式化}
@@ -242,7 +242,7 @@
   \end{beamercolorbox}
   \vspace{-0.12em}
   \vspace{-0.20em}
-  \source{参数：\nolinkurl{pyqcd/pipeline/_config.py}；实战：\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py}。}
+  \source{参数：\nolinkurl{pyqcd/pipeline/_config.py}；实战：\nolinkurl{pyqcd/testing/tmd/pdf_workflow.py}。}
 \end{frame}
 
 \begin{frame}[t]{梯度流：用规范作用量的下降方向抹平 UV，但流时间不是自由常数}
@@ -359,7 +359,7 @@
       \end{beamercolorbox}
     \end{column}
   \end{columns}
-  \source{实现：\nolinkurl{pyqcd/operator/_gluon_ope.py}；测试：\nolinkurl{examples/pyqcd/conftest.py}。}
+  \source{实现：\nolinkurl{pyqcd/operator/_gluon_ope.py}；测试：\nolinkurl{pyqcd/testing/conftest.py}。}
 \end{frame}
 
 \begin{frame}[t]{TMD 算符：横向分离必须由 staple Wilson 线承载规范协变性}
@@ -621,7 +621,7 @@
     匹配 & 分区核、对称求和、TMD NLO、sin 准 PDF & PASS & 回归与边界保护\\
     统计 & ratio 拟合、plateau、CS、协方差回退 & PASS & 样本 + 形状契约\\
     工程 & torch/numpy、H5/环境、文件守卫、绘图 & PASS & 集成测试\\
-    总体 & \nolinkurl{python examples/pyqcd/conftest.py} & \textbf{41 passed, 0 failed} & 本次会话实测\\
+    总体 & \nolinkurl{python -m pyqcd.testing} & 全量测试 & 本次会话实测\\
     \bottomrule
   \end{tabularx}
   \vspace{0.1em}
@@ -629,16 +629,16 @@
     \scriptsize\textbf{推理边界：}“有限、形状正确、合成真值恢复”不能推出
     10 组态真实胶子 TMD 的信噪比、scheme 一致性或连续极限已收敛。
   \end{beamercolorbox}
-  \source{实测：\texttt{python examples/pyqcd/conftest.py}，退出码 0；测试登记：\nolinkurl{examples/pyqcd/conftest.py}。}
+  \source{实测：\texttt{python -m pyqcd.testing}；测试登记：\nolinkurl{pyqcd/testing/conftest.py}。}
 \end{frame}
 
 \begin{frame}[t]{归档图表：链路能落盘，但当前 \(c_0\) 统计应被视为风险信号}
   \begin{columns}[T,totalwidth=\textwidth]
     \begin{column}{0.48\textwidth}
-      \includegraphics[width=\linewidth,height=0.28\textheight,keepaspectratio]{../examples/pyqcd/test9/analysis/tmd_ratio/c0_tmd_heatmap_proton_P200.png}
+      \includegraphics[width=\linewidth,height=0.28\textheight,keepaspectratio]{../pyqcd/testing/tmd/artifacts/initial_run/analysis/tmd_ratio/c0_tmd_heatmap_proton_P200.png}
     \end{column}
     \begin{column}{0.48\textwidth}
-      \includegraphics[width=\linewidth,height=0.28\textheight,keepaspectratio]{../examples/pyqcd/test9/analysis/tmd_ratio/matched_tmd_pdf.png}
+      \includegraphics[width=\linewidth,height=0.28\textheight,keepaspectratio]{../pyqcd/testing/tmd/artifacts/initial_run/analysis/tmd_ratio/matched_tmd_pdf.png}
     \end{column}
   \end{columns}
   \source{归档图：\nolinkurl{.../tmd_ratio/c0_tmd_heatmap_proton_P200.png}、\nolinkurl{.../tmd_ratio/matched_tmd_pdf.png}。}
@@ -694,7 +694,7 @@
     \scriptsize\textbf{需决策：}非极化先行或加入 helicity；软因子表示及归一；
     多组态、多动量重跑的 GPU/存储额度。日程未给出，故不虚构截止日期。
   \end{beamercolorbox}
-  \source{依据：模块缺口与 MyQCD 软函数/CS 对照；入口：\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py}。}
+  \source{依据：模块缺口与 MyQCD 软函数/CS 对照；入口：\nolinkurl{pyqcd/testing/tmd/pdf_workflow.py}。}
 \end{frame}
 
 \appendix
@@ -755,7 +755,7 @@
       \end{block}
     \end{column}
   \end{columns}
-  \source{直引：\nolinkurl{pyqcd/renorm/_tmdextract.py}；参数：\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py}。}
+  \source{直引：\nolinkurl{pyqcd/renorm/_tmdextract.py}；参数：\nolinkurl{pyqcd/testing/tmd/pdf_workflow.py}。}
 \end{frame}
 
 \begin{frame}[t]{附录 C：来源与验证索引}
@@ -772,9 +772,9 @@
     C5 & \nolinkurl{pyqcd/renorm/_zr.py:25-342}、\nolinkurl{pyqcd/renorm/_hybrid.py:21-153}：\(Z_R\)/混合/样本环。\\
     C6 & \nolinkurl{pyqcd/renorm/_tmdextract.py:30-285}、\nolinkurl{pyqcd/renorm/_matching.py:20-172}：Fourier、CS、NLO/SFTX。\\
     C7 & \nolinkurl{pyqcd/renorm/_extrapolate.py:16-223}：连续极限设计矩阵与 boot WLS。\\
-    C8 & \nolinkurl{pyqcd/pipeline/_tmd9.py:47-274}、\nolinkurl{examples/pyqcd/test9_gluon_tmd_nucleon.py:84-301}：端到端编排。\\
-    T1 & 本次实测：\texttt{python examples/pyqcd/conftest.py}，退出码 0，\textbf{41 passed, 0 failed}。\\
-    T2 & 本次实测：\texttt{python examples/pyqcd/tmd\_gradient\_flow\_demo.py}，随机 \(SU(3)\) 场 \(E:0.1908\to0.1904\)，全链输出有限。\\
+    C8 & \nolinkurl{pyqcd/pipeline/_tmd9.py:47-274}、\nolinkurl{pyqcd/testing/tmd/pdf_workflow.py:84-301}：端到端编排。\\
+    T1 & 本次实测：\texttt{python -m pyqcd.testing}。\\
+    T2 & 本次实测：\texttt{python -m pyqcd.testing.demos.tmd\_gradient\_flow}。\\
     R1 & \nolinkurl{/root/MyQCD/refer/papers/TMD_Soft_Function_LaMET_latex/chapters/section02.tex:19-81}：staple/软因子/CS 参考。\\
     R2 & \nolinkurl{/root/MyQCD/refer/papers/Chiral_Symmetry_YM_Gradient_Flow_latex/chapters/section02.tex:24-42}：梯度流参考。\\
     \bottomrule

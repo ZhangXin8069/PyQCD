@@ -2,7 +2,7 @@
 连通关联函数分析编排：meff 与 3pt/2pt 比值（analyze.py 逻辑规范化）
 ====================================================================
 
-等价实现 examples/docker-v20260805/analyze.py 的 Analysis 1/2：
+等价实现冻结蒸馏基线 analyze.py 的 Analysis 1/2：
 
     1. Jackknife 有效质量（cosh/log 型，平台窗 + 误差加权平均 + fallback 窗）
     2. 连通 3pt/2pt 比值 R(τ)（γ₃ 分量，ratio_3pt）

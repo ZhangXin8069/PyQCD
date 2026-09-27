@@ -347,7 +347,7 @@
     低层差异均低于各自 $10^{-9}$--$10^{-14}$ 容差；时间是 CPU 单次函数计时，不能直接当作跨后端性能结论。
     OPE 这里对照的是同一规范场上的参考公式重写，外部 TMD staple 成品另行标记。
   \end{block}
-  \source{\codepath{examples/pyqcd/cmp1/v202608291500_lowlevel/results.json}；命令：\texttt{python}\,\codepath{examples/pyqcd/cmp1/run_4150_lowlevel.py --conf 4150 --outdir ...}}
+  \source{\codepath{pyqcd/testing/comparisons/artifacts/v202608291500_lowlevel/results.json}；命令：\texttt{python -m pyqcd.testing.comparisons.donghx.run\_4150\_lowlevel --conf 4150 --outdir ...}}
 \end{frame}
 
 \begin{frame}[t]{2pt 真实结果：Cg5g4 与 Cg5 都与可配对的 4150 成品一致}
@@ -396,7 +396,7 @@
     $\mathrm{tol}=10^{-5}$，因此所有 32 个配置的 contract/nopol 均在对应容差内。
     由于逐时间 VVV 成品仍缺失，每个 runner 的整体状态仍为 \unverified。
   \end{block}
-  \source{汇总：\codepath{logs/donghx_4150_20260829/summary.md}；逐配置结果：\codepath{examples/pyqcd/cmp1/v20260829*fermion*/results.json}}
+  \source{汇总：\codepath{logs/donghx_4150_20260829/summary.md}；逐配置结果：\codepath{pyqcd/testing/comparisons/artifacts/v20260829*fermion*/results.json}}
 \end{frame}
 
 \begin{frame}[t]{momentum-smear 2pt 输出级：5 个根目录、26 个动量组、投影 26/26}
@@ -528,9 +528,9 @@
   \end{tabularx}
   \vspace{0.10em}
   \begin{block}{主回归}
-    \texttt{python}\,\codepath{examples/pyqcd/conftest.py}：42 passed，0 failed；编译验收仍要求两遍 XeLaTeX、零溢出且页数闭合。
+    \texttt{python -m pyqcd.testing}：中心回归入口；编译验收要求两遍 XeLaTeX。
   \end{block}
-  \source{证据索引：\codepath{logs/donghx_4150_20260829/summary.md}；产物：\codepath{examples/pyqcd/cmp1/}}
+  \source{证据索引：\codepath{logs/donghx_4150_20260829/summary.md}；产物：\codepath{pyqcd/testing/comparisons/}}
 \end{frame}
 
 \appendix

@@ -6,10 +6,11 @@ test9 扩展图表：补充与 test0/plots 和 test6/1_result 相同类型的所
   （基于 test9 的 nucleon 2pt 与 TMD ratio，复用 pipeline._steps 的绘图风格）
 
 - test6 style: 1_result/L24x72/Pz*/ 下 7 图 + fit 报告
-  （基于 test9 的 per-momentum 2pt jackknife，复用 logs/test6/main.py 的 7 图逻辑）
+  （基于 TMD per-momentum 2pt jackknife，复用历史 test6 的 7 图逻辑）
 
-输入：已有的 test9 产物（examples/pyqcd/test9/data + analysis/tmd_ratio）
-输出：指定 out_root 下的新图表（若 out_root==test9 则原地补充，否则独立目录 test9_1）
+输入：已有的 TMD-PDF 产物
+（`pyqcd/testing/tmd/artifacts/initial_run/data` 与 `analysis/tmd_ratio`）
+输出：指定 out_root 下的新图表。
 
 统计：sem/resample/cov_mat 复用 _disconnected；拟合复用 _proton_energy.energy_model；
 图表复用 _plots.DEFAULT_PLOT_COLORS / plot_errbar / plot_scatter。

@@ -8,18 +8,18 @@
 ## 运行
 
 ```bash
-python logs/stab1/main.py env                      # 环境与数据源自检
-python logs/stab1/main.py makedata                 # 整理真实数据 → input/
-python logs/stab1/main.py run --outdir <v<ts>>     # 全功能实战 → 版本目录
-python logs/stab1/main.py verify --run-dir <v<ts>> # 断言（产物 + 物理合理性）
-python logs/stab1/main.py check  --run-dir <v<ts>> # 断言门（exit 0/1）
-python logs/stab1/main.py collect --run-dir <v<ts>># 产物清单
-bash logs/stab1/run-local.sh                       # 一键全链
+python data/from-logs/logs/stab1/main.py env                      # 环境与数据源自检
+python data/from-logs/logs/stab1/main.py makedata                 # 整理真实数据 → input/
+python data/from-logs/logs/stab1/main.py run --outdir <v<ts>>     # 全功能实战 → 版本目录
+python data/from-logs/logs/stab1/main.py verify --run-dir <v<ts>> # 断言（产物 + 物理合理性）
+python data/from-logs/logs/stab1/main.py check  --run-dir <v<ts>> # 断言门（exit 0/1）
+python data/from-logs/logs/stab1/main.py collect --run-dir <v<ts>># 产物清单
+bash data/from-logs/logs/stab1/run-local.sh                       # 一键全链
 ```
 
 ## 约定
 
-- **版本目录**：`logs/stab1/v<YYYYMMDDHHMM>/`（test12 约定），`--outdir` >
+- **版本目录**：`data/from-logs/logs/stab1/v<YYYYMMDDHHMM>/`（test12 约定），`--outdir` >
   `$STAB1_OUTDIR` > `v<ts>/`。
 - **数据适配**（makedata）：docker 基线 `corr_pp_P{0,2}` (Nt,) → 平移不变
   切片矩阵 (Nt,Nt)；`ops_mu0_nu1/mu3_nu0/mu3_nu1` (Nz,Nt) 原样

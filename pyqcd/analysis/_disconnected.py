@@ -2,7 +2,7 @@
 不相连胶子 ratio 分析（code_1.py 算法移植，自包含）
 =====================================================
 
-移植 examples/docker-v20260805/analyze.py 的 code_1.py 风格分析：
+移植冻结蒸馏基线 analyze.py 的 code_1.py 风格分析：
 
     C3(dt, dtau, z) = C2(dt) · OPE(dtau, z)         （不相连因子化）
     C3_disc = C3 − C2·⟨OPE⟩                         （真空扣除）

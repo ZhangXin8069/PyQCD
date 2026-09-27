@@ -840,7 +840,7 @@ def test_core_chain_integrated():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 整合功能测试（~auto-all：logs/examples/refer 代码整合验证）
+# 整合功能测试（历史参考代码整合验证）
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -1986,7 +1986,7 @@ def test_round2_integrations():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# NaN 感知回归比对原语（整合 examples/test0/main.py 的 _rel_maxdiff/_cmp_one）
+# NaN 感知回归比对原语（整合蒸馏回归入口的 _rel_maxdiff/_cmp_one）
 # ═══════════════════════════════════════════════════════════════════
 
 def rel_maxdiff(a, b):
@@ -2449,6 +2449,7 @@ def test_correlated_fit_identifiability_guards():
         BuiltinAnalyticJacobianContractTests, CovarianceRankContractTests,
         FiniteInputContractTests, FitAdapterContractTests,
         IdentifiableFitRegressionTests, LowSampleFitContractTests,
+        _import_gvar,
     )
     from ._fit_status_propagation_contract import (
         DisconnectedStatusPropagationContractTests,
@@ -2465,6 +2466,7 @@ def test_correlated_fit_identifiability_guards():
         SingleConfigurationContractTests,
     )
 
+    _import_gvar()
     _run_unittest_contract(CovarianceRankContractTests)
     _run_unittest_contract(FitAdapterContractTests)
     _run_unittest_contract(FiniteInputContractTests)
@@ -2580,11 +2582,11 @@ def test_sftx_flow_time_units_contracts():
     _run_unittest_contract(SftxUnitsContract)
 
 
-def test_tmd9_hybrid_renormalization_contracts():
-    """test9 长距分支必须显式消费 Z_R 并匹配已验证混合公式。"""
-    from ._tmd9_hybrid_contract import Tmd9HybridContract
+def test_tmd_hybrid_renormalization_contracts():
+    """TMD 长距分支必须显式消费 Z_R 并匹配已验证混合公式。"""
+    from ._tmd_hybrid_contract import TmdHybridContract
 
-    _run_unittest_contract(Tmd9HybridContract)
+    _run_unittest_contract(TmdHybridContract)
 
 
 def test_pipeline_persistence_contracts():
