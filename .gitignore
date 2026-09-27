@@ -92,7 +92,8 @@ scripts/
 #   1) 新增语言产物 → 追加到对应编号分节；没有则新建编号分节并更新本索引；
 #   2) 注释一律独占一行（gitignore 不支持行尾注释）；
 #   3) [04]/[16] 的激进模式为本仓库历史约定，复制到其他项目前须逐条甄别；
-#   4) 每次改动后必须验证：git ls-files -ci --exclude-standard 应为空（零误伤）。
+#   4) 每次改动后必须验证历史归档例外之外为零误伤：
+#      git ls-files -ci --exclude-standard -- . ':!refer/**' ':!data/**'
 # 来源参考：github/gitignore 官方模板（Python/Java/PHP/C++/Node/Rust/Global 等）
 # ==== [01] 通用临时与备份文件 ====
 # vim 交换文件族（*.swp / *.swo / *.swn 均被 *.sw* 覆盖）
@@ -432,3 +433,8 @@ _minted*/
 .codex
 .claude
 .pdfcheck.*
+
+# --- 仓库自有格式治理脚本 ---
+# 根级 scripts/ 默认视为临时目录；仅放行经过审查的本地 form 脚本。
+!skills/form/scripts/
+!skills/form/scripts/**

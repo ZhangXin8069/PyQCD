@@ -42,8 +42,45 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | `refer/` | 参考代码/文献（zengch/donghx/huangcl/sush/zhangxin/papers/books）+ `git-rep/` 外来参考仓库（quda/PyQUDA/lamet-agent/EasyDistillation/LQCD_Master，只读、其 AGENTS.md 已归档） |
 | `logs/` | 纯日志归档：各运行目录中的 `.txt/.json/.log/.tsv` 等文本记录；按原来源层级保留 |
 | `data/` | 数据、图像、安装与运行脚本；`from-logs/` 保留原 `logs/**` 相对路径，`from-docs/` 保留原 `docs/**` 相对路径 |
-| `cpp/` | C++ 后端占位 |
-| `.opencode/skills/` | 归集的 LQCD_Master 上游技能（lqcd-analysis 等 5 个，原位置保留） |
+| `skills/` | PyQCD 领域技能、运维技能及归档的上游参考技能 |
+
+## form 格式约定
+
+- 库类型：complex；主导语言：Python，辅助语言：Bash、LaTeX；无现行 C++ 源码树。
+- 文件命名：Python 模块全小写下划线，私有模块前缀 `_`；Bash 脚本全小写下划线；
+  LaTeX/Markdown 使用内容或领域名称。
+- 函数命名：Python 公共接口与内部函数使用 `snake_case`，私有函数前缀 `_`；
+  Bash 内部函数前缀 `_`，入口函数使用 `snake_case`。
+- 兼容命名例外：基线 `811900c` 已有的数学符号名（如 `th_E0`、`A_s`、`SU2combine`）
+  和上游兼容入口（如 `Jackknife`、`Bootstrap`、`isGridInitialized`）保留原名；
+  新增非数学、非兼容接口仍使用 `snake_case`。
+- 变量命名：普通变量使用 `snake_case`；模块级不可变常量使用全大写下划线；
+  数学量、坐标和标准缩写保留 `Nt/Nz/Pz/QCD/HDF5` 等正式写法。
+- 对象命名：Python 类型使用大驼峰；私有类型前缀 `_`。
+- 顶层目录白名单：`pyqcd/`（生产包）、`data/`（历史数据、图像和运行脚本）、
+  `docs/`（任务文档和图片）、`logs/`（纯文本运行记录）、`refer/`（只读外部参考）、
+  `skills/`（项目技能）。
+- 测试入口：`python -m pyqcd.testing`；复杂库新测试统一放入 `pyqcd/testing/`。
+- 功能复现：`python -m pyqcd.testing`，以及改动涉及的模块级测试或主入口冒烟。
+- 文档/日志/数据：`docs/` 允许 `md/tex/pdf` 和图片；`logs/` 允许
+  `log/json/tsv/csv/txt`；`data/` 保留历史数据、图像、脚本及 `from-docs/`、
+  `from-logs/` 归档，不按通用空数据目录规则清理。
+- 审计入口：`skills/form/scripts/form-audit.sh`；该包装器只豁免下文具名例外，
+  任何其他命名、目录或交付格式发现均失败。
+- Git 交付：只暂存本任务文件，禁止 `git add -A`；提交消息写明原因、改动和验证；
+  普通推送，禁止 force push 或改写已推送标签。
+- 本地例外 1：`data/**` 是已验证历史数据和运行归档，允许跟踪数据、图片、脚本和
+  说明文件；受用途与历史可复现性约束，不因通用 `data/` 空目录规则删除。
+- 本地例外 2：`logs/**/AGENTS.md` 是嵌套目录治理文件，允许与 `logs/` 文本记录共存。
+- 本地例外 3：`docs/.gitignore` 是文档局部忽略元数据；`docs/_tree_pyqcd.txt` 是
+  `analy_pyqcd_20260818.tex` 通过 `\lstinputlisting` 直接引用的代码树附件。
+- 本地例外 4：冻结基线
+  `pyqcd/testing/regression/baselines/docker_support/{download,pack}_beta6.20_mu-0.2770_ms-0.2400_L24x72*.sh`
+  的路径包含不可变系综标识与格点符号 `L24x72`，保持原名称以复现外部数据接口。
+- 本地例外 5：基线 `811900c` 的既有 Python 符号允许数学符号和上游兼容拼写；
+  它不授权新增普通函数使用驼峰或大小写混排。
+- 本地例外 6：`refer/**` 与 `data/**` 中已跟踪但被局部 `.gitignore` 匹配的历史
+  资料保持原状；验证忽略规则时须显式排除这两个归档树。
 
 ## 外来参考库分析产物（refer/git-rep/*/docs）
 
@@ -253,7 +290,7 @@ docs/analy_dev7_20260823.pdf（29 页 Overfull=0/Float=0/Missing=0）。
 - 编译：docs 与 logs 的 tex 一律 xelatex（中文）；`\quad` 后跟中文需空格。
 - 测试：无 pytest 框架依赖，`python -m pyqcd.testing` 直接运行。
 - refer/ 只读参考：pyqcd 逻辑照抄但不 import。
-- git tag 约定：stab<N>/dev<N>/bug<N>/test<N>（当前 stab1）。
+- git tag 约定：stab<N>/dev<N>/bug<N>/test<N>（当前 dev15；form 治理完成后为 dev16）。
 
 ## 反模式
 

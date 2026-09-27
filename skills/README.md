@@ -20,10 +20,17 @@
 | [`pyqcd-tmd-algorithm/`](pyqcd-tmd-algorithm/) | `root` | 约束梯度流核子胶子 TMD 的几何、重整化、匹配、外推、缓存和验证门。 | `2026-08-31 06:44:19 +08:00` | [`SKILL.md`](pyqcd-tmd-algorithm/SKILL.md) |
 | [`pyqcd-tmd-chain/`](pyqcd-tmd-chain/) | `root` | 导航梯度流、OPE、断连、Z_R/混合、Fourier/CS/匹配到连续极限全链。 | `2026-08-31 02:27:30 +08:00` | [`SKILL.md`](pyqcd-tmd-chain/SKILL.md) |
 
+## 运维技能
+
+| Skill 目录 | 创建者 | 功能 | 最近一次更改时间 | 入口 |
+|---|---|---|---|---|
+| [`form/`](form/) | `root` | 审计并维护 PyQCD 命名、目录、交付格式、具名例外和本地验证入口。 | `2026-09-28 04:24:32 +08:00` | [`SKILL.md`](form/SKILL.md) |
+
 ## 维护边界
 
 - 表中 12 个 `pyqcd-*` 目录及其 reference 由当前用户 `root` 维护；新增或更新入口时同步
   更新本表。
+- `form/` 由当前用户 `root` 维护，是仓库运维技能，不属于上述 12 个物理领域技能。
 - [`sush/README.md`](sush/README.md) 单独管理 `sush/lqcddb`；其创建者为 `sush`，本目录
   只读借鉴，不在本表转移或冒领所有权。
-- 共享规范与调用关系见 [`AGENTS.md`](AGENTS.md)；本 README 是直接技能的发现目录。
+- 共享规范与调用关系见 [`AGENTS.md`](AGENTS.md)；本 README 是技能发现目录。

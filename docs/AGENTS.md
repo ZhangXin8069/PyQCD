@@ -38,6 +38,11 @@ cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelate
 - 依赖宏包：ctexart/beamer、amsmath、physics、slashed、natbib（无 biblatex）。
 - 新文档放入本目录并登记到上方表格。
 
+## 格式治理
+
+- `form_pyqcd_20260928.md`：记录 PyQCD 命名/目录/归档边界审计、具名例外、本地
+  `form` 审计入口和整改前后功能复现证据。
+
 ## 对照测试报告
 
 - `report_cmp1_4150_20260828.tex/.pdf`：基于真实组态 4150 的 PyQCD 与 lqcddb/donghx 功能对照报告；16:9 横板、16 页，含 L20 复数 GEVP 差异判定、HYP 输入守卫、验证命令与未验证边界（2026-08-28）。
