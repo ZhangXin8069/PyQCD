@@ -1,6 +1,6 @@
 # AGENTS.md — docs
 
-格点 QCD 中文 LaTeX 笔记（53 篇；另有 12 篇分析/报告 TeX，共 65 个，
+格点 QCD 中文 LaTeX 笔记（53 篇；另有 13 篇分析/报告 TeX，共 66 个，
 均使用 xelatex 编译）。原 `logs/**` 中的 PDF/TeX/Markdown 现统一归档于
 `docs/from-logs/`，并保留原相对路径。
 
@@ -17,9 +17,10 @@
 | 仓库/工作流 | `PyQCD仓库结构与核心物理链解析.tex`、`理论解析与工作流.tex`（过时未验证版）、`理论解析与工作流-v20260911.tex`（梯度流重整化 TMD-PDF 已验证版，100 页/5957 行，XeLaTeX 两遍三零，零明文代码）、`构造胶子准算符.tex`、`格点上计算胶子准算符.tex` |
 | 谱学/变分方法 | `格点QCD中的GEVP.tex`（GEVP 的数学结构、物理内涵与本库实现解剖；7 组实测实验、2 张配图、24 页，XeLaTeX 两遍 Overfull=0 Float=0 Missing=0） |
 | 分析与专题 | `质子自旋危机解析.tex`、`格点QCD中的胶子极化.tex`、`格点QCD中的部分子分布函数.tex` |
+| GPD 专题 | `analy_gpd_20260928.tex/.pdf`（全库 GPD 文档、参考代码与生产链审计；21 页，XeLaTeX 两遍 Overfull=0 Float=0 Missing=0） |
 
-完整清单：原 `docs/*.tex` 65 篇，加 `docs/from-logs/**` 迁移的 10 篇 TeX，
-共 75 篇；`*.aux/*.log/*.out/*.nav/*.snm/*.toc` 为编译产物（gitignore）。
+完整清单：原 `docs/*.tex` 66 篇，加 `docs/from-logs/**` 迁移的 10 篇 TeX，
+共 76 篇；`*.aux/*.log/*.out/*.nav/*.snm/*.toc` 为编译产物（gitignore）。
 
 `examples/` 目录已于 2026-09-27 整体迁移到 `pyqcd/testing/`；历史报告中的旧
 路径映射见 `docs/EXAMPLES_MIGRATION_20260927.md` 与
