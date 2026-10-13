@@ -1,0 +1,785 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=2.35cm]{geometry}
+\usepackage{amsmath,amssymb,bm,mathtools}
+\usepackage{booktabs,array,longtable}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  citecolor=blue!55!black,
+  urlcolor=blue!65!black
+]{hyperref}
+
+\numberwithin{equation}{section}
+\allowdisplaybreaks[2]
+\setlength{\jot}{5pt}
+\setlist[itemize]{leftmargin=1.7em,itemsep=0.25em,topsep=0.35em}
+\setlist[enumerate]{leftmargin=1.8em,itemsep=0.25em,topsep=0.35em}
+\renewcommand{\arraystretch}{1.15}
+\sloppy
+
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\MSbar}{\overline{\mathrm{MS}}}
+\newcommand{\cO}{\mathcal{O}}
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\Pslash}{\!\not\! P}
+\newcommand{\nslash}{\!\not\! n}
+\newcommand{\qtilde}{\widetilde q}
+\newcommand{\gtilde}{\widetilde{\Delta q}}
+\newcommand{\htilde}{\widetilde{\delta q}}
+\newcommand{\avg}[1]{\left\langle #1\right\rangle}
+
+\title{\textbf{Quark Unpolarized, Helicity, and Transversity PDFs}\
+\large Theory and the Current Connected Lattice-QCD Calculation}
+\author{Hongxin Dong}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note summarizes the unpolarized, helicity, and transversity quark
+parton distribution functions (PDFs), their Euclidean quasi-PDF operators,
+and the connected lattice calculation currently implemented for the
+$24^3\!\times72$, $32^3\!\times64$, and $32^3\!\times96$ ensembles.  The
+calculation constructs projected three-point functions, forms a directional
+$C_3/C_2$ ratio inside each bootstrap replica, applies displacement even/odd
+symmetrization, aligns the six momentum directions, and extracts bare
+coordinate-space matrix elements with a correlated summed-ratio fit.  The
+current products are tested bare matrix elements.  They are not yet
+renormalized and matched light-cone PDFs.  In particular, the transversity
+relative-sign convention remains pending external validation.
+\end{abstract}
+
+\tableofcontents
+
+\section{Scope and present status}
+
+At leading twist a spin-$1/2$ hadron has three collinear quark PDFs:
+the unpolarized distribution $f_1^q$, the helicity distribution $g_1^q$,
+and the transversity distribution $h_1^q$.  The first two are chiral even.
+Transversity is chiral odd and therefore cannot appear alone in inclusive
+deep-inelastic scattering; it needs another chiral-odd object
+\cite{ArtruMekhfi1990,JaffeJi1992,Collins2011}.
+
+The present lattice workflow computes connected nucleon matrix elements of
+equal-time spatial bilocals.  It includes
+\begin{itemize}
+  \item the three channels unpolarized, helicity, and transversity;
+  \item the flavor combinations $u$, $d$, and $u-d$;
+  \item three ensembles, six nonzero-momentum directions, and both
+        displacement orientations;
+  \item $1500$ shared configuration-bootstrap replicas with seed $1115$;
+  \item a post-ratio six-direction average and a correlated summed-ratio fit.
+\end{itemize}
+The output consists of bare matrix elements $M(z,P)$ in a code-defined
+Euclidean convention.  A physical PDF additionally requires operator
+renormalization and mixing control, a continuum-compatible scheme, LaMET
+matching, a Fourier reconstruction, large-momentum and continuum studies,
+finite-volume checks, and disconnected diagrams when the target flavor
+combination requires them \cite{Ji2013,Xiong2014,Izubuchi2018,
+CichyConstantinou2019}.
+
+\section{Light-cone definitions}
+
+\subsection{Kinematics and gauge links}
+
+Let $P^\mu$ be the hadron momentum, $S^\mu$ its covariant spin, and $n^\mu$
+a lightlike vector with $n^2=0$ and $P\cdot n\neq0$.  The straight Wilson line
+between $0$ and $\lambda n$ is
+\begin{equation}
+  W(0,\lambda n)
+  =\mathcal P\exp\left[
+    \ii g\int_0^\lambda \dd\eta\, n\cdot A(\eta n)
+  \right].
+  \label{eq:lightlike-link}
+\end{equation}
+It is required for gauge invariance.  We use relativistically normalized
+states; a different state normalization changes common prefactors but not
+the spin decomposition below.
+
+\subsection{Unpolarized PDF}
+
+The leading-twist vector correlator defines
+\begin{equation}
+  f_1^q(x,\mu)
+  =\frac{1}{4\pi}
+   \int_{-\infty}^{\infty}\dd\lambda\,
+   e^{-\ii x\lambda P\cdot n}
+   \avg{P,S|\bar q(0)\nslash W(0,\lambda n)q(\lambda n)|P,S}_{\mu}.
+  \label{eq:f1-definition}
+\end{equation}
+After averaging the hadron spin, $f_1^q(x)$ is the number-density difference
+appropriate to the light-front definition.  For $x>0$ it describes quarks;
+negative $x$ encodes antiquarks.
+
+\subsection{Helicity PDF}
+
+For longitudinal polarization $S_L$,
+\begin{equation}
+  g_1^q(x,\mu)
+  =\frac{1}{4\pi\,S\cdot n}
+   \int_{-\infty}^{\infty}\dd\lambda\,
+   e^{-\ii x\lambda P\cdot n}
+   \avg{P,S_L|\bar q(0)\nslash\gamma_5
+   W(0,\lambda n)q(\lambda n)|P,S_L}_{\mu}.
+  \label{eq:g1-definition}
+\end{equation}
+It measures the difference between quarks with helicity parallel and
+antiparallel to a longitudinally polarized hadron.
+
+\subsection{Transversity PDF}
+
+Choose a transverse direction $j$ and transverse hadron spin $S_T^j$.
+The tensor correlator defines
+\begin{equation}
+  h_1^q(x,\mu)
+  =\frac{1}{4\pi\,S_T^j P\cdot n}
+   \int_{-\infty}^{\infty}\dd\lambda\,
+   e^{-\ii x\lambda P\cdot n}
+   \avg{P,S_T|\bar q(0)\,
+   \ii\sigma^{j\nu}\gamma_5 n_\nu
+   W(0,\lambda n)q(\lambda n)|P,S_T}_{\mu}.
+  \label{eq:h1-definition}
+\end{equation}
+This distribution measures transverse-spin alignment.  Its first moment is
+the tensor charge, subject to the stated flavor and renormalization scheme.
+Positivity gives the Soffer bound
+\begin{equation}
+  |h_1^q(x)|\leq\frac{1}{2}\left[f_1^q(x)+g_1^q(x)\right]
+  \label{eq:soffer}
+\end{equation}
+for consistently defined renormalized PDFs.
+
+\subsection{Negative \texorpdfstring{$x$}{x} and quark--antiquark combinations}
+
+A common extension from $x>0$ to $x<0$ is
+\begin{equation}
+  f_1^q(-x)=-f_1^{\bar q}(x),\qquad
+  g_1^q(-x)=+g_1^{\bar q}(x),\qquad
+  h_1^q(-x)=-h_1^{\bar q}(x),
+  \qquad x>0.
+  \label{eq:negative-x}
+\end{equation}
+These signs determine which quark--antiquark combination enters the real and
+imaginary parts of a coordinate-space matrix element.  They do not authorize
+changing the sign of measured lattice data; the operator and Fourier
+conventions must first be fixed.
+
+\section{Euclidean quasi-PDF operators}
+
+\subsection{Equal-time spatial bilocals}
+
+Lightlike separations cannot be inserted directly in a Euclidean Monte Carlo
+calculation.  LaMET replaces them with an equal-time spatial bilocal in a
+hadron carrying a large momentum \cite{Ji2013}.  For a spatial unit vector
+$\hat{\bm e}_i$ and signed separation $z$,
+\begin{align}
+  \cO_{\Gamma_i}^{q}(z,x)
+  &=\bar q(x)\Gamma_i
+    W_i(x,x+z\hat{\bm e}_i)q(x+z\hat{\bm e}_i),
+  \\
+  W_i(x,x+z\hat{\bm e}_i)
+  &=\prod_{n=0}^{|z|/a-1}
+    U_{\operatorname{sgn}(z)i}
+    \bigl(x+n a\operatorname{sgn}(z)\hat{\bm e}_i\bigr).
+  \label{eq:euclidean-bilocal}
+\end{align}
+The continuum notation hides the link-by-link path ordering in the second
+line.  The hadron matrix element is
+\begin{equation}
+  h_{\Gamma_i}^q(z,P_i)
+  =\avg{N(P_i,S)|\cO_{\Gamma_i}^q(z,0)|N(P_i,S)}.
+  \label{eq:coordinate-me}
+\end{equation}
+
+The present implementation uses the DeGrand--Rossi Euclidean basis,
+$\gamma_5=\gamma_1\gamma_2\gamma_3\gamma_4$, with Hermitian Euclidean gamma
+matrices.  For momentum along $i\in\{x,y,z\}$, its channel map is
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Channel & Bilocal Dirac structure & Nucleon projector label & Applied phase\\
+\midrule
+Unpolarized & $\gamma_4$ & \texttt{nopol} & $1$\\
+Helicity & $\gamma_5\gamma_i$ & \texttt{pol}$i$\texttt{5} & $-\ii$\\
+Transversity 1 & $\gamma_4\gamma_j\gamma_5$, $j\perp i$ & \texttt{pol}$j$\texttt{5} & $+\ii$\\
+Transversity 2 & $\gamma_4\gamma_k\gamma_5$, $k\perp i,j$ & \texttt{pol}$k$\texttt{5} & $+\ii$\\
+\bottomrule
+\end{tabular}
+\end{center}
+The two transverse components are averaged with configured factors
+$(s_1,s_2)=(+1,+1)$.  The Clifford-algebra identity relating the Euclidean
+tensor and axial notation is tested.  However, the relative sign between the
+legacy external \texttt{sigij} definition and the present
+$\gamma_4\gamma_j\gamma_5$ convention is not fixed by that algebra test.
+The transversity result therefore remains
+\texttt{pending\_external\_physics\_confirmation}.
+
+\subsection{Quasi-distributions and matching}
+
+With one explicit Fourier convention,
+\begin{align}
+  \qtilde(x,P_i)
+  &=\int_{-\infty}^{\infty}\frac{\dd z}{4\pi}
+    e^{-\ii xP_i z}\,h_{\gamma_4}(z,P_i),
+  \\
+  \gtilde(x,P_i)
+  &=\int_{-\infty}^{\infty}\frac{\dd z}{4\pi}
+    e^{-\ii xP_i z}\,h_{\gamma_5\gamma_i}(z,P_i),
+  \\
+  \htilde(x,P_i)
+  &=\int_{-\infty}^{\infty}\frac{\dd z}{4\pi}
+    e^{-\ii xP_i z}\,h_{T}(z,P_i).
+  \label{eq:quasi-fourier}
+\end{align}
+After renormalization in a specified scheme $R$, LaMET factorization has the
+schematic form
+\begin{equation}
+  \widetilde F_R(x,P_i,\mu_R)
+  =\int_{-1}^{1}\frac{\dd y}{|y|}\,
+   C_F\!\left(\frac{x}{y},\frac{\mu_R}{|y|P_i},
+   \frac{\mu}{|y|P_i}\right)F(y,\mu)
+   +\cO\!\left(\frac{\Lambda_{\rm QCD}^2}{P_i^2},
+   \frac{M_N^2}{P_i^2}\right).
+  \label{eq:lamet-factorization}
+\end{equation}
+Here $F$ denotes $f_1$, $g_1$, or $h_1$, and the kernel is channel and scheme
+dependent \cite{Xiong2014,Izubuchi2018}.  Equation~\eqref{eq:lamet-factorization}
+is not applied in the current bare-matrix-element workflow.
+
+\section{Two- and three-point functions}
+
+\subsection{Definitions}
+
+Let the source be at $t_s$, the sink at $t_s+T$, and the current at
+$t_s+\tau$.  For forward kinematics,
+\begin{align}
+  C_2(\bm P,T;\Pi)
+  &=\sum_{\bm x}e^{-\ii\bm P\cdot(\bm x-\bm x_s)}
+    \Pi_{\alpha\beta}
+    \avg{N_\beta(\bm x,t_s+T)\bar N_\alpha(\bm x_s,t_s)},
+  \\
+  C_{3,\Gamma}^{q}(\bm P,T,\tau,z;\Pi)
+  &=\sum_{\bm x,\bm y}e^{-\ii\bm P\cdot(\bm x-\bm x_s)}
+    \Pi_{\alpha\beta}
+    \avg{N_\beta(\bm x,t_s+T)
+    \cO_\Gamma^q(z,\bm y,t_s+\tau)
+    \bar N_\alpha(\bm x_s,t_s)}.
+  \label{eq:c2-c3}
+\end{align}
+The calculation keeps only $\tau=0,\ldots,T$.  It does not store the complete
+$(t_s,t_{\rm sink})$ plane.  Source positions are averaged before the
+configuration bootstrap.
+
+\subsection{Spectral decomposition}
+
+Insert energy eigenstates with the quantum numbers of the nucleon:
+\begin{align}
+  C_2(\bm P,T)
+  &=\sum_n |Z_n(\bm P)|^2 e^{-E_n(\bm P)T}A_{2,n},
+  \\
+  C_3(\bm P,T,\tau,z)
+  &=\sum_{m,n}Z_m Z_n^*
+    e^{-E_m(T-\tau)}e^{-E_n\tau}
+    A_{3,mn}(z,\bm P).
+  \label{eq:spectral-decomposition}
+\end{align}
+For $\tau\gg a$ and $T-\tau\gg a$, excited states are exponentially
+suppressed.  In forward kinematics the ground-state overlap and Euclidean
+time exponential cancel in a consistently projected ratio,
+\begin{equation}
+  R_\Gamma^q(T,\tau,z,\bm P)
+  =\frac{C_{3,\Gamma}^{q}(\bm P,T,\tau,z)}
+         {C_2(\bm P,T)}
+  \longrightarrow \mathcal K_\Gamma(\bm P)h_\Gamma^q(z,\bm P).
+  \label{eq:ratio-ground-state}
+\end{equation}
+The factor $\mathcal K_\Gamma$ contains the chosen state normalization,
+projector, and kinematic convention.  The present fit returns the corresponding
+bare amplitude; it does not silently divide by an assumed continuum factor.
+
+\subsection{Connected flavor structure}
+
+The current is inserted on a valence quark line.  The stored connected
+contractions give
+\begin{equation}
+  C_3^{u-d}=C_3^u-C_3^d,
+  \qquad C_3^{u+d}=C_3^u+C_3^d.
+  \label{eq:flavor-combinations}
+\end{equation}
+In the isospin limit, disconnected light-quark loops cancel in $u-d$.
+They do not generally cancel for $u$, $d$, or $u+d$.  Consequently, the
+individual-flavor results in this note are connected contributions, not full
+flavor PDFs.
+
+\section{Momentum directions and cubic averaging}
+
+\subsection{Direction labels}
+
+For each nonzero momentum magnitude the implementation keeps
+\begin{equation}
+  d\in\{+z,+y,+x,-z,-y,-x\}.
+  \label{eq:direction-list}
+\end{equation}
+The spatial bilocal and its Dirac structure are rotated with the momentum
+axis.  Thus a $+x$ sample uses $P_x>0$ and an $x$-directed displacement;
+it is not a $z$-directed operator relabeled after the calculation.  In the
+continuum all six measurements are related by rotations and parity.  On a
+cubic lattice their differences diagnose discretization, operator, or sign
+problems and also provide statistically correlated measurements.
+
+At zero momentum the signs $+\bm 0$ and $-\bm 0$ are identical.  Only the
+three axis labels $+z,+y,+x$ are used, and the three negative slots are marked
+invalid rather than duplicated.
+
+\subsection{Why the ratio is formed before the direction average}
+
+Let $N_d$ and $D_d$ denote the bootstrapped directional $C_3$ and $C_2$.
+In general,
+\begin{equation}
+  \frac{1}{N_d}\sum_d\frac{N_d}{D_d}
+  \neq
+  \frac{\sum_d N_d}{\sum_d D_d}.
+  \label{eq:noncommuting-average}
+\end{equation}
+The two estimators coincide only under special conditions, for example when
+all $D_d$ are equal.  The implemented estimator follows the left-hand side.
+It preserves the physical meaning of a directional $C_3/C_2$ ratio and avoids
+giving a direction an implicit weight through the magnitude of its $C_2$.
+
+No bad direction is silently dropped.  For a given $(|P|,T)$ every registered
+direction must pass the denominator finite-value, signal-to-noise, and
+low-quantile gates.  Otherwise the averaged point is masked.
+
+\section{Displacement reversal and even/odd components}
+
+\subsection{Hermiticity relation}
+
+For a straight-link bilocal, Hermitian conjugation reverses the path:
+\begin{equation}
+  \cO_\Gamma(z)^\dagger
+  =\bar q(z)\,\gamma_4\Gamma^\dagger\gamma_4
+   W(z,0)q(0).
+  \label{eq:operator-dagger}
+\end{equation}
+After translation and with the channel-dependent Euclidean phase included,
+the target forward-matrix-element relation is of the form
+\begin{equation}
+  H(-z,P)=H(z,P)^*.
+  \label{eq:hermiticity-target}
+\end{equation}
+The exact prefactor before phase correction depends on $\Gamma$.  This is why
+the channel phases $1$, $-\ii$, and $+\ii$ are applied before the symmetry
+test.
+
+Let the two stored VDV branches be $H_+(z,P)$ and $H_-(z,P)$, where the labels
+refer to the two displacement orientations.  The implemented combinations are
+\begin{align}
+  H_{\rm even}(z,P)
+  &=\frac{H_+(z,P)+H_-(z,P)}{2},
+  \\
+  H_{\rm odd}(z,P)
+  &=\frac{H_-(z,P)-H_+(z,P)}{2}.
+  \label{eq:vdv-even-odd}
+\end{align}
+If Eq.~\eqref{eq:hermiticity-target} holds exactly, $H_{\rm even}$ is real and
+even in $z$, while $H_{\rm odd}$ is purely imaginary and odd in $z$:
+\begin{equation}
+  H_{\rm even}=\operatorname{Re}H_+,
+  \qquad
+  H_{\rm odd}=-\ii\operatorname{Im}H_+.
+  \label{eq:even-real-odd-imag}
+\end{equation}
+The fit therefore uses the even real part and odd imaginary part as two
+independent components.  They are never added to each other.
+
+\subsection{Momentum reversal}
+
+Under simultaneous reversal of the momentum direction used to define the
+oriented operator, the even component is aligned without a sign and the odd
+component is aligned with one minus sign.  Define
+\begin{equation}
+  s_d=\begin{cases}
+  +1,&d=+z,+y,+x,\\
+  -1,&d=-z,-y,-x.
+  \end{cases}
+  \label{eq:odd-direction-sign}
+\end{equation}
+For one bootstrap replica $b$, the production averages are
+\begin{align}
+  \overline R_{b,\rm even}
+  &=\frac{1}{N_{\rm dir}}\sum_{d\in\mathcal D_P}
+    \frac{1}{2}\left[
+      \frac{C^+_{3,b,d}}{C_{2,b,d}}
+     +\frac{C^-_{3,b,d}}{C_{2,b,d}}
+    \right],
+  \\
+  \overline R_{b,\rm odd}
+  &=\frac{1}{N_{\rm dir}}\sum_{d\in\mathcal D_P}s_d
+    \frac{1}{2}\left[
+      \frac{C^-_{3,b,d}}{C_{2,b,d}}
+     -\frac{C^+_{3,b,d}}{C_{2,b,d}}
+    \right].
+  \label{eq:production-direction-average}
+\end{align}
+Here $N_{\rm dir}=6$ for $|P|>0$ and $N_{\rm dir}=3$ at $P=0$.  A statistically
+resolved sign disagreement after this parity alignment indicates a convention
+or operator problem.  A noisy sample consistent with zero is inconclusive,
+not evidence for a sign error.
+
+\subsection{Connection to cosine and sine transforms}
+
+Write a renormalized coordinate-space distribution schematically as
+\begin{equation}
+  H(\nu)=\int_{-1}^{1}\dd x\,e^{\ii x\nu}F(x),
+  \qquad \nu=zP.
+  \label{eq:ioffe-transform}
+\end{equation}
+Then
+\begin{align}
+  \operatorname{Re}H(\nu)
+  &=\int_0^1\dd x\,\cos(x\nu)[F(x)+F(-x)],
+  \\
+  \operatorname{Im}H(\nu)
+  &=\int_0^1\dd x\,\sin(x\nu)[F(x)-F(-x)].
+  \label{eq:cosine-sine}
+\end{align}
+Combining this result with Eq.~\eqref{eq:negative-x} gives
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Channel & even/real cosine combination & odd/imaginary sine combination\\
+\midrule
+Unpolarized & $q-\bar q$ & $q+\bar q$\\
+Helicity & $\Delta q+\Delta\bar q$ & $\Delta q-\Delta\bar q$\\
+Transversity & $\delta q-\delta\bar q$ & $\delta q+\delta\bar q$\\
+\bottomrule
+\end{tabular}
+\end{center}
+This table assumes the Fourier and negative-$x$ conventions stated above.
+Renormalization and matching can mix or rescale structures, so the table is a
+symmetry interpretation, not a substitute for the full matching calculation.
+
+\section{Bootstrap estimator}
+
+\subsection{Shared configuration resampling}
+
+For an ensemble with $N_{\rm cfg}$ configurations, replica $b$ contains
+$N_{\rm cfg}$ draws with replacement.  If $n_{bc}$ is the multiplicity of
+configuration $c$, define
+\begin{equation}
+  w_{bc}=\frac{n_{bc}}{N_{\rm cfg}},
+  \qquad \sum_c w_{bc}=1.
+  \label{eq:bootstrap-weights}
+\end{equation}
+The directional correlators in replica $b$ are
+\begin{equation}
+  C_{k,b,d}=\sum_{c=1}^{N_{\rm cfg}}w_{bc}C_{k,c,d},
+  \qquad k=2,3.
+  \label{eq:bootstrap-linear}
+\end{equation}
+All channels, flavors, separations, source--sink distances, and directions in
+one ensemble use exactly the same $(1500,N_{\rm cfg})$ index array.  This is
+essential for correlated differences such as $u-d$ and for covariance fits
+\cite{EfronTibshirani1993}.
+
+The central estimator uses the ordinary configuration mean.  Bootstrap
+replicas estimate covariance and statistical uncertainty; the number of
+replicas does not create new gauge-field information.
+
+\subsection{Denominator safety}
+
+For every directional $C_2$ the workflow records the bootstrap mean, noise,
+signal-to-noise ratio, a low absolute quantile, its ratio to the median, and a
+finite-value mask.  A numerical denominator floor prevents division by a
+bootstrap sample consistent with zero.  Invalid points are stored as NaN and
+are propagated into the fit.  They are not zero filled and are not repaired by
+outlier clipping.
+
+\section{Summed-ratio extraction of the bare matrix element}
+
+\subsection{Derivation}
+
+Choose insertion cuts $L$ and $R$ and sum only
+$\tau=L,\ldots,T-R$:
+\begin{equation}
+  S(T,z,P)=\sum_{\tau=L}^{T-R}R(T,\tau,z,P),
+  \qquad N_T=T-L-R+1.
+  \label{eq:summed-ratio}
+\end{equation}
+Using the spectral form in Eq.~\eqref{eq:spectral-decomposition}, the
+ground-state term is independent of $\tau$ and therefore contributes
+$N_T M(z,P)$.  Terms with one excited state form finite geometric sums.  At
+large $T$ this gives
+\begin{equation}
+  S(T,z,P)=B(z,P)+M(z,P)N_T
+  +\cO(e^{-\Delta E T}),
+  \label{eq:summation-fit}
+\end{equation}
+where $B$ absorbs endpoint-independent constants.  The slope $M$ is the bare
+matrix element in the implemented ratio convention \cite{Bulava2012}.
+
+\subsection{Correlated fit}
+
+For the vector of summed ratios $\bm S$ and the linear design matrix
+$X_T=(1,N_T)$, the generalized least-squares estimator is
+\begin{equation}
+  \widehat{\bm\beta}
+  =(X^T\Sigma^{-1}X)^{-1}X^T\Sigma^{-1}\bm S,
+  \qquad \bm\beta=(B,M)^T.
+  \label{eq:gls}
+\end{equation}
+The covariance is estimated from the shared bootstrap samples.  The code uses
+Schaefer--Strimmer shrinkage of the correlation matrix toward the identity,
+followed by an SVD-stabilized inverse with cut $10^{-12}$
+\cite{SchaeferStrimmer2005}.  It records the raw covariance rank, condition
+number, retained eigenmodes, $\chi^2/{\rm dof}$, $Q$ value, and bootstrap
+success fraction.  A finite fitted slope is not automatically accepted.
+
+The quality gates are
+\begin{equation}
+  Q\geq0.05,\qquad
+  \chi^2/{\rm dof}\leq3,
+  \qquad f_{\rm boot}\geq0.90.
+  \label{eq:fit-gates}
+\end{equation}
+The pre-registered primary window must pass, and at least two candidate
+windows must pass.  The window systematic is the equal-weight RMS of accepted
+alternate slopes about the primary slope.  Statistical and window errors are
+stored separately and combined in quadrature.
+
+\subsection{Pre-registered windows}
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Ensemble & Primary window & Candidate $T$ endpoints & Endpoint cuts\\
+\midrule
+$24^3\times72$ & $T=5\text{--}9$, $L=R=2$ & $5\text{--}8,9,10$ & $L=R=1,2$\\
+$32^3\times64$ & $T=6\text{--}9$, $L=R=2$ & $6\text{--}8,9,10$ & $L=R=1,2$\\
+$32^3\times96$ & $T=7\text{--}10$, $L=R=2$ & $7\text{--}9,10,11$ & $L=R=1,2$\\
+\bottomrule
+\end{tabular}
+\end{center}
+These are analysis defaults, not a claim that excited-state systematics are
+closed.  Publication-quality results still require physical review of the
+windows and comparison with explicit multi-state analyses.
+
+\section{Concrete production calculation}
+
+\subsection{Ensembles and axes}
+
+The present connected calculation uses
+\begin{center}
+\begin{tabular}{llllll}
+\toprule
+Ensemble & $N_{\rm cfg}$ & $N_{\rm ev}$ & $T/a$ & $|P|$ labels & $z/a$\\
+\midrule
+$24^3\times72$ & 199 & 150 & $2\text{--}12$ & $0,3,4,5,6$ & $0\text{--}15$\\
+$32^3\times64$ & 425 & 200 & $5\text{--}10$ & $0,3,4,5,6$ & $0\text{--}20$\\
+$32^3\times96$ & 194 & 200 & $5\text{--}12$ & $0,3,4,5,6$ & $0\text{--}20$\\
+\bottomrule
+\end{tabular}
+\end{center}
+The integers $|P|$ are stored momentum labels.  Conversion to physical
+momentum requires the ensemble spatial extent and lattice spacing:
+\begin{equation}
+  P_i=\frac{2\pi n_i}{L_i a}.
+  \label{eq:lattice-momentum}
+\end{equation}
+No physical lattice spacing is assumed in the current products.
+
+The projected C3 axis contract is
+\begin{equation}
+  (N_{\rm cfg},\;2_{\rm VDV},\;N_{|P|},\;6_{\rm dir},\;
+  N_z,\;N_T,\;N_\tau),
+  \label{eq:c3-axes}
+\end{equation}
+and the final compact ratio axis contract is
+\begin{equation}
+  (1500_{\rm boot},\;N_{|P|},\;N_z,\;N_T,\;N_\tau).
+  \label{eq:ratio-axes}
+\end{equation}
+The common $\tau$ axis ends at the largest selected $T$.  A mask specifies
+the physical region $0\leq\tau\leq T$; padding is NaN, not zero.
+
+\subsection{Algorithm}
+
+For each ensemble and channel the production calculation is:
+\begin{enumerate}
+  \item Read every projected C3 and its SHA256 completion record.  Reject a
+        missing file, a metadata mismatch, or a content-hash mismatch.
+  \item Contract the current-spin indices with the channel gamma matrix and
+        select the associated nucleon projector.  Apply the channel phase.
+  \item Keep VDV minus/plus branches and all momentum directions separate.
+        Construct $u$, $d$, or $u-d$ at the configuration level.
+  \item Generate one shared bootstrap index array with
+        $(N_{\rm boot},N_{\rm cfg})=(1500,N_{\rm cfg})$ and seed $1115$.
+  \item Bootstrap directional C3 and C2, divide direction by direction, form
+        Eqs.~\eqref{eq:vdv-even-odd} and \eqref{eq:production-direction-average},
+        and apply the common validity mask.
+  \item Build the summed ratio for every registered fit window.  Fit even-real
+        and odd-imaginary components independently with Eq.~\eqref{eq:gls}.
+  \item Save central values, all bootstrap slopes, statistical and window
+        errors, fit diagnostics, input hashes, code/config hashes, and status.
+\end{enumerate}
+
+This produced $54$ ratio files and $27$ bare-fit files.  All $27$ bare-fit
+products contain accepted points and have verified completion hashes.  The
+strict all-direction denominator gate masked the following kinematics:
+\begin{itemize}
+  \item $24^3\times72$: $(|P|,T)=(4,10\text{--}12)$,
+        $(5,9\text{--}12)$, and $(6,8\text{--}12)$;
+  \item $32^3\times64$: $(6,10)$;
+  \item $32^3\times96$: $(5,12)$ and $(6,11\text{--}12)$.
+\end{itemize}
+Other kinematics remain available; masked points do not enter any fit.
+
+\subsection{Representative bare results}
+
+Table~\ref{tab:representative-results} gives a reproducibility snapshot for
+the connected $u-d$ channel at the stored labels $|P|=3$ and $z/a=4$.  The
+uncertainty is the quadrature sum of the bootstrap statistical error and the
+accepted-window RMS.  A dash means that the pre-registered final quality gate
+did not accept that component.  These values are bare, dimensionless,
+code-convention amplitudes; they are not renormalized PDFs.
+
+\begin{table}[htbp]
+\centering
+\caption{Representative connected $u-d$ bare matrix elements at stored
+$|P|=3$ and $z/a=4$.  Parentheses denote the total uncertainty.}
+\label{tab:representative-results}
+\begin{tabular}{llll}
+\toprule
+Ensemble & Channel & even real & odd imaginary\\
+\midrule
+$24^3\times72$ & unpolarized & $0.4762(58)$ & ---\\
+                 & helicity & $0.5849(142)$ & $-0.5410(40)$\\
+                 & transversity & --- & $-0.5430(28)$\\
+\addlinespace
+$32^3\times64$ & unpolarized & $0.5945(22)$ & $-0.3228(38)$\\
+                 & helicity & --- & $-0.4666(30)$\\
+                 & transversity & --- & ---\\
+\addlinespace
+$32^3\times96$ & unpolarized & $0.6112(24)$ & $-0.3279(39)$\\
+                 & helicity & --- & $-0.4862(42)$\\
+                 & transversity & $0.6964(51)$ & $-0.4864(28)$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The table should not be used for an ensemble comparison until the lattice
+spacings, quark masses, physical momenta, normalization, renormalization, and
+finite-volume differences are included.
+
+\section{Validation and known limitations}
+
+\subsection{Checks already implemented}
+
+The current workflow has the following evidence:
+\begin{itemize}
+  \item DeGrand--Rossi Clifford algebra and
+        $\gamma_5=\gamma_1\gamma_2\gamma_3\gamma_4$ tests;
+  \item explicit current-spin contraction tests and labeled VDV-axis tests;
+  \item complete momentum-group checks for all configured directions;
+  \item a numerical oracle proving that post-ratio direction averaging differs
+        from pre-ratio averaging when directional denominators differ;
+  \item an odd-momentum sign-alignment test and a bad-direction whole-group
+        rejection test;
+  \item exact flavor-token matching, so $u$ cannot match an $u-d$ file;
+  \item deterministic shared bootstrap-index checks and output SHA256 checks;
+  \item $17$ ratio-pipeline and $15$ bare-fit unit tests passing.
+\end{itemize}
+
+\subsection{Work required before a physical PDF claim}
+
+The following steps remain:
+\begin{enumerate}
+  \item Validate the external transversity tensor/sign convention.  Until this
+        is done, transversity is diagnostic even when a fit passes.
+  \item Determine the nonlocal-operator renormalization, including the Wilson
+        line power divergence and any lattice-action-dependent operator mixing
+        \cite{ConstantinouPanagopoulos2017,Ishikawa2017,Chen2018}.
+  \item Convert all ensembles to common physical $z$, $P$, and Ioffe time
+        $\nu=zP$ using verified lattice spacings.
+  \item Add disconnected contractions for full individual-flavor and isoscalar
+        distributions.  The connected $u-d$ channel is cleaner in the isospin
+        limit.
+  \item Study excited states with alternative windows and multi-state fits,
+        and perform finite-volume, lattice-spacing, quark-mass, and momentum
+        power-correction analyses.
+  \item Reconstruct the finite-$z$ Fourier transform with a declared method and
+        quantify truncation and discretization effects.
+  \item Apply channel-specific LaMET matching and evolution to a common
+        $\MSbar$ scale.  Only then compare with phenomenological PDFs
+        \cite{Alexandrou2018,Lin2018,CichyConstantinou2019}.
+\end{enumerate}
+
+\section{Summary}
+
+The unpolarized, helicity, and transversity PDFs are defined by vector, axial,
+and tensor light-cone bilocals.  Their Euclidean quasi-PDF counterparts use
+equal-time straight spatial links in a moving nucleon.  The present connected
+lattice workflow correctly retains complex data, forms directional ratios
+inside shared bootstrap replicas, separates displacement even-real and
+odd-imaginary components, aligns the odd component under momentum reversal,
+and averages all cubic directions only after division.  A correlated
+summed-ratio slope then yields the bare coordinate-space matrix element.
+
+The result is a reproducible and statistically guarded input to a PDF analysis,
+not the final PDF.  Renormalization, disconnected contributions where needed,
+physical-scale alignment, continuum and finite-volume studies, Fourier
+reconstruction, LaMET matching, and external transversity-sign validation are
+the next mandatory layers.
+
+\appendix
+
+\section{Compact formula map}
+
+\begin{longtable}{p{0.26\textwidth}p{0.67\textwidth}}
+\toprule
+Object & Implemented or required formula\\
+\midrule
+\endfirsthead
+\toprule
+Object & Implemented or required formula\\
+\midrule
+\endhead
+Bootstrap C3/C2 &
+$R_{b,d}^{\pm}=\bigl(\sum_cw_{bc}C_{3,c,d}^{\pm}\bigr)/
+\bigl(\sum_cw_{bc}C_{2,c,d}\bigr)$\\
+VDV even & $R_{b,d}^{\rm even}=(R_{b,d}^{+}+R_{b,d}^{-})/2$\\
+VDV odd & $R_{b,d}^{\rm odd}=(R_{b,d}^{-}-R_{b,d}^{+})/2$\\
+Direction average &
+$\overline R_{b}^{\rm even}=N_{\rm dir}^{-1}\sum_dR_{b,d}^{\rm even}$,
+$\overline R_{b}^{\rm odd}=N_{\rm dir}^{-1}\sum_ds_dR_{b,d}^{\rm odd}$\\
+Summed ratio & $S(T)=\sum_{\tau=L}^{T-R}\overline R(T,\tau)$\\
+Bare matrix element & $S(T)=B+M(T-L-R+1)$\\
+Ioffe time & $\nu=zP$\\
+Quasi-PDF & $\widetilde F(x,P)=\int \dd z\,e^{-\ii xPz}H(z,P)/(4\pi)$\\
+Physical PDF & renormalization $+$ Fourier reconstruction $+$ LaMET matching
+$+$ power/continuum/volume control\\
+\bottomrule
+\end{longtable}
+
+\section{Minimum metadata for each result}
+
+A reusable product should preserve the ensemble volume, lattice spacing when
+known, configuration list, channel and flavor, gamma and projector labels,
+Fourier sign, momentum vector and direction, displacement orientation,
+$T$ and $\tau$ axes, complex dtype, bootstrap indices and seed, denominator
+diagnostics, covariance prescription and SVD cut, fit windows, fit quality,
+input hashes, code/configuration hashes, and a validation status.  The current
+ratio and bare-fit products contain these items except for physical lattice
+spacings and a validated external transversity convention.
+
+\bibliographystyle{unsrtnat}
+\bibliography{reference}
+
+\end{document}
