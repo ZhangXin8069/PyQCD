@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quark PDF Bare Matrix"
+  short_description: "Fit and audit quark-PDF bare matrix elements"
+  default_prompt: "Use $quark-pdf-bare-matrix to fit and validate bootstrap quark-PDF bare matrix elements."

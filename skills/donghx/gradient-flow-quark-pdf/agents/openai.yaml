@@ -1,0 +1,7 @@
+interface:
+  display_name: "Gradient_flow_quark_PDF"
+  short_description: "四维梯度流夸克 quasi-PDF 生产、SFTE 与 matching"
+  default_prompt: "Use $gradient-flow-quark-pdf to audit this gradient-flowed quark quasi-PDF calculation and identify the next validated step."
+
+policy:
+  allow_implicit_invocation: true
