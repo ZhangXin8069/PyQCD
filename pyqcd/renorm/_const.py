@@ -23,7 +23,26 @@ def alpha_s(mu: float, Lambda_QCD: float = 0.23, nf: float = Nf) -> float:
 
     α_s(μ) = 2π / [b0 ln(μ/Λ_QCD)]
     """
-    return 2.0 * np.pi / (b0(nf) * np.log(mu / Lambda_QCD))
+    if any(isinstance(value, (bool, np.bool_))
+           for value in (mu, Lambda_QCD, nf)):
+        raise ValueError("mu、Lambda_QCD 与 nf 不得为布尔值")
+    try:
+        mu = float(mu)
+        Lambda_QCD = float(Lambda_QCD)
+        nf = float(nf)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "mu、Lambda_QCD 与 nf 必须是实数值") from exc
+    if not np.isfinite(mu) or mu <= 0.0:
+        raise ValueError("mu 必须是有限正数")
+    if not np.isfinite(Lambda_QCD) or Lambda_QCD <= 0.0:
+        raise ValueError("Lambda_QCD 必须是有限正数")
+    if mu <= Lambda_QCD:
+        raise ValueError("alpha_s 的一圈定义域要求 mu > Lambda_QCD")
+    b0_value = b0(nf)
+    if not np.isfinite(b0_value) or b0_value <= 0.0:
+        raise ValueError("alpha_s 的定义域要求 b0(nf) > 0")
+    return 2.0 * np.pi / (b0_value * np.log(mu / Lambda_QCD))
 
 
 def A_s(mu: float, Lambda_QCD: float = 0.23, nf: float = Nf) -> float:

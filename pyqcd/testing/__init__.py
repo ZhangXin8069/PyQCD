@@ -297,12 +297,23 @@ def test_tmd_empty_batch_skips_geometry_work():
 
 
 def test_gamma_basis():
-    """DR 基 γ 矩阵：γ₅² = I、γ_7 = γ₃γ₁ 反厄米。"""
-    from pyqcd.lattice import gamma
+    """DR 基 γ 矩阵与公开转置属性表保持一致。"""
+    from pyqcd.lattice import GAMMA_PROPERTIES, gamma
     g5 = gamma(5)
     assert np.allclose(g5 @ g5, np.eye(4), atol=1e-10)
     g7 = gamma(7)
     assert np.allclose(g7, -g7.conj().T, atol=1e-10)
+    for i in range(1, 18):
+        matrix = np.asarray(gamma(i))
+        if np.allclose(matrix.T, matrix, rtol=0.0, atol=0.0):
+            expected = 1
+        elif np.allclose(matrix.T, -matrix, rtol=0.0, atol=0.0):
+            expected = -1
+        else:
+            raise AssertionError(f"gamma_{i} has no transpose parity")
+        actual = GAMMA_PROPERTIES[f"gamma_{i}"]["T"][0]
+        assert actual == expected, \
+            f"gamma_{i} transpose sign: expected {expected}, got {actual}"
 
 
 def test_gevp_preserves_complex_hermitian_data():
@@ -2744,3 +2755,63 @@ def test_parallel_mpi_planning_contracts():
 
     for test in TESTS:
         test()
+
+
+def test_renorm_numerical_guards_contracts():
+    """重整化复数、定义域、CS 比值、网格与协方差失败路径。"""
+    from ._renorm_numerical_guards_contract import (
+        CouplingDomainContract,
+        ExtrapolateCovarianceContract,
+        HybridComplexContract,
+        KernelInvalidRatioContract,
+        MatchingGridContract,
+        TmdImaginaryResidualContract,
+        ZRCovarianceAndSummaryContract,
+    )
+
+    _run_unittest_contract(HybridComplexContract)
+    _run_unittest_contract(CouplingDomainContract)
+    _run_unittest_contract(KernelInvalidRatioContract)
+    _run_unittest_contract(MatchingGridContract)
+    _run_unittest_contract(TmdImaginaryResidualContract)
+    _run_unittest_contract(ZRCovarianceAndSummaryContract)
+    _run_unittest_contract(ExtrapolateCovarianceContract)
+
+
+def test_gradient_flow_quasi_policy_contracts():
+    """小流局域点、物理窗口和 helicity 通道必须显式分流。"""
+    from ._gradient_flow_quasi_policy_contract import (
+        GradientFlowQuasiPolicyContract,
+    )
+
+    _run_unittest_contract(GradientFlowQuasiPolicyContract)
+
+
+def test_analysis_safety_contracts():
+    """Pz 标签、ratio 轴、复 meff、等价图和 helicity 参数安全门。"""
+    from ._analysis_safety_contract import (
+        AnalysisInputSafetyContractTests,
+        HelicityArgumentSafetyContractTests,
+        RatioAxisSafetyContractTests,
+        Test9MomentumSafetyContractTests,
+        WickEquivalenceSafetyContractTests,
+    )
+
+    _run_unittest_contract(Test9MomentumSafetyContractTests)
+    _run_unittest_contract(RatioAxisSafetyContractTests)
+    _run_unittest_contract(AnalysisInputSafetyContractTests)
+    _run_unittest_contract(WickEquivalenceSafetyContractTests)
+    _run_unittest_contract(HelicityArgumentSafetyContractTests)
+
+
+def test_infra_safety_contracts():
+    """ASCII counter、legacy noise 枚举和 MPI 判定分类契约。"""
+    from ._infra_safety_contract import (
+        AsciiCounterSafetyContract,
+        EigcompressSchemeSafetyContract,
+        MpiContractTimingSafetyContract,
+    )
+
+    _run_unittest_contract(AsciiCounterSafetyContract)
+    _run_unittest_contract(EigcompressSchemeSafetyContract)
+    _run_unittest_contract(MpiContractTimingSafetyContract)

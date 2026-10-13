@@ -262,6 +262,9 @@ def fit_constant_window(c0_zt, kind='boot', seed=0):
         n_data, n_sample, fit_status, fit_reason, sample_rank,
         effective_rank)。
     """
+    if kind not in ('boot', 'jack'):
+        raise ValueError("kind must be either 'boot' or 'jack'")
+
     d = np.asarray(c0_zt, dtype=float)
     if d.ndim != 2:
         raise ValueError("c0_zt 必须为 (n_tsep, n_sample) 二维数组")
@@ -271,7 +274,7 @@ def fit_constant_window(c0_zt, kind='boot', seed=0):
         raise ValueError("c0_zt 必须全部有限")
 
     n, n_sample = d.shape
-    resam_type = 'boot' if kind == 'boot' else 'jack'
+    resam_type = kind
 
     def _failure(reason, sample_rank, effective_rank):
         return {

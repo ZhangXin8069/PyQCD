@@ -33,15 +33,23 @@ def hR_z_Pz(z_, Pz_, hR_pz, hR_0, zs, zr_fit, conf):
         (λ, hR(λ))，λ = z_GeV · Pz_GeV。
     """
     z_ = np.asarray(z_, dtype=float)
-    hR_pz = np.asarray(hR_pz, dtype=float)
-    hR_0 = np.asarray(hR_0, dtype=float)
-    zr_fit = np.asarray(zr_fit, dtype=float)
+    hR_pz_raw = np.asarray(hR_pz)
+    hR_0_raw = np.asarray(hR_0)
+    zr_fit_raw = np.asarray(zr_fit)
+    raw_dtype = np.result_type(
+        hR_pz_raw.dtype, hR_0_raw.dtype, zr_fit_raw.dtype)
+    value_dtype = (
+        raw_dtype if np.issubdtype(raw_dtype, np.complexfloating)
+        else np.float64)
+    hR_pz = np.asarray(hR_pz_raw, dtype=value_dtype)
+    hR_0 = np.asarray(hR_0_raw, dtype=value_dtype)
+    zr_fit = np.asarray(zr_fit_raw, dtype=value_dtype)
 
     pz_gev = pz_to_gev(Pz_, conf)
     z_gev = z_ / fm_to_GeV
     lambda_ = z_gev * pz_gev
 
-    res = np.zeros_like(hR_pz, dtype=float)
+    res = np.zeros_like(hR_pz, dtype=value_dtype)
     mask = z_ < zs
 
     if hR_pz.ndim == 1:
@@ -80,7 +88,12 @@ def fit_hR_lambda(par_ini, lambda_range, lamb, hR_data, cov_kind='diag',
     lam_min, lam_max = lambda_range
     mask = (lamb >= lam_min) & (lamb <= lam_max)
     lamb_sel = lamb[mask]
-    hR_sel = np.asarray(hR_data, dtype=float)[mask]
+    hR_raw = np.asarray(hR_data)
+    if np.iscomplexobj(hR_raw):
+        raise ValueError(
+            "fit_hR_lambda requires real-valued hR_data; "
+            "complex channels must be fitted separately")
+    hR_sel = np.asarray(hR_raw, dtype=float)[mask]
 
     if cov_kind not in ('diag', 'boot'):
         raise ValueError(f"未知 cov_kind: {cov_kind}")
@@ -124,10 +137,20 @@ def hR_lambda(lambda_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
     interp = interp1d(lambda_data, hR_data, kind='linear', axis=0,
                       bounds_error=False, fill_value='extrapolate')
 
-    res = np.where(lambda_ <= lambda_extra_,
-                   interp(lambda_),
-                   hR_lambda_fit_form(lambda_, l1_fit_, a1_fit_, lambda0_fit_))
-    return res
+    if np.ndim(lambda_) == 0:
+        if float(lambda_) <= float(lambda_extra_):
+            return interp(lambda_)
+        return hR_lambda_fit_form(
+            lambda_, l1_fit_, a1_fit_, lambda0_fit_)
+
+    lambda_array = np.asarray(lambda_)
+    result = np.asarray(interp(lambda_array))
+    tail = lambda_array > lambda_extra_
+    if np.any(tail):
+        result = np.array(result, copy=True)
+        result[tail] = hR_lambda_fit_form(
+            lambda_array[tail], l1_fit_, a1_fit_, lambda0_fit_)
+    return result
 
 
 def hR_x(x_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
@@ -143,11 +166,23 @@ def hR_x(x_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
 
     hr = hR_lambda(lam, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
                    zs, z_data, hR_pz, hR_0, zr_fit, conf)
+    input_dtype = np.result_type(
+        np.asarray(hR_pz).dtype,
+        np.asarray(hR_0).dtype,
+        np.asarray(zr_fit).dtype,
+    )
+    out_dtype = (
+        input_dtype if np.issubdtype(input_dtype, np.complexfloating)
+        else np.float64)
     if hr.ndim > 1:
         # 逐样本余弦变换
-        out = np.empty((len(x_), hr.shape[1]))
+        out = np.empty(
+            (len(x_), hr.shape[1]),
+            dtype=out_dtype)
         for j in range(hr.shape[1]):
             out[:, j] = (2.0 / (2.0 * pi)) * dlam * (
                 hr[:, j] @ np.cos(np.outer(x_, lam).T))
         return out
-    return (2.0 / (2.0 * pi)) * dlam * (hr @ np.cos(np.outer(x_, lam).T))
+    out = (2.0 / (2.0 * pi)) * dlam * (
+        hr @ np.cos(np.outer(x_, lam).T))
+    return np.asarray(out, dtype=out_dtype)

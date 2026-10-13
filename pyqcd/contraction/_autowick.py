@@ -479,7 +479,7 @@ def _find_connected_groups(four_dim_list):
     key_to_groups = defaultdict(list)
     for group_idx, group in enumerate(four_dim_list):
         for item in group:
-            key = tuple(tuple(sublist) for sublist in item)
+            key = _freeze_equivalence_value(item)
             key_to_groups[key].append(group_idx)
 
     for groups in key_to_groups.values():
@@ -507,9 +507,64 @@ def _generate_all_swaps(original, swap_pairs):
             if do_swap:
                 mapping[a] = b
                 mapping[b] = a
-        transformed = [[mapping.get(x, x) for x in sub] for sub in original]
+        transformed = [[
+            mapping.get(x, x) if isinstance(x, (int, np.integer)) else x
+            for x in sub
+        ] for sub in original]
         results.append(transformed)
     return results
+
+
+def _freeze_equivalence_value(value):
+    """Convert nested diagram metadata to a hashable, exact signature."""
+    if isinstance(value, dict):
+        return tuple(
+            (key, _freeze_equivalence_value(item))
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_equivalence_value(item) for item in value)
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _equivalence_proof_signature(_dicts, diag_idx, peram_entry):
+    """Build the complete diagram identity used before merging coefficients."""
+    required = (
+        'operators', 'sink_operators', 'source_operators', 'curr_operators',
+        'quark_pos', 'sep_pos', 'gamma_pos', 'V', 'peram',
+        'result_indx', 'result_name', 'result_sign',
+    )
+    missing = [name for name in required if name not in _dicts]
+    if missing:
+        raise ValueError(
+            "diagram equivalence proof requires complete wick results; "
+            f"missing fields: {missing}")
+    lengths = {
+        name: len(_dicts[name])
+        for name in ('peram', 'result_indx', 'result_name', 'result_sign')
+    }
+    if len(set(lengths.values())) != 1:
+        raise ValueError(
+            "diagram equivalence proof requires matching per-diagram fields: "
+            f"{lengths}")
+    if not 0 <= diag_idx < lengths['peram']:
+        raise IndexError(f"diagram index {diag_idx} out of range")
+
+    return _freeze_equivalence_value((
+        _dicts['operators'],
+        _dicts['sink_operators'],
+        _dicts['source_operators'],
+        _dicts['curr_operators'],
+        _dicts['quark_pos'],
+        _dicts['sep_pos'],
+        _dicts['gamma_pos'],
+        _dicts['V'],
+        _dicts['result_indx'][diag_idx],
+        _dicts['result_name'][diag_idx],
+        peram_entry,
+    ))
 
 
 def identify_equivalent_diagrams(*dicts):
@@ -544,13 +599,18 @@ def identify_equivalent_diagrams(*dicts):
             t_sign = GAMMA_PROPERTIES[gname]["T"][0]
             swap_signs.append(-t_sign)
 
-        peram = [[y[:2] + [y[2].replace('d', 'u')] for y in x]
+        peram = [[y[:2] + [y[2].replace('d', 'u')] + list(y[3:])
+                  for y in x]
                  for x in _dicts['peram']]
 
         for diag_idx, peram_entry in enumerate(peram):
             variants = _generate_all_swaps(peram_entry, change_quark_pos)
             sorted_variants = [sorted(v, key=lambda x: x[0]) for v in variants]
-            data.append(sorted_variants)
+            data.append([
+                _equivalence_proof_signature(
+                    _dicts, diag_idx, variant)
+                for variant in sorted_variants
+            ])
 
             n = len(change_quark_pos)
             variant_signs = []
@@ -570,7 +630,7 @@ def identify_equivalent_diagrams(*dicts):
     variant_to_diags = {}
     for diag_idx, variants in enumerate(data):
         for v_idx, variant in enumerate(variants):
-            key = tuple(tuple(sublist) for sublist in variant)
+            key = _freeze_equivalence_value(variant)
             variant_to_diags.setdefault(key, []).append((diag_idx, v_idx))
 
     equivalent_diagrams = []
@@ -590,7 +650,7 @@ def identify_equivalent_diagrams(*dicts):
             cur_d_idx, cur_diag, cur_rs, cur_vs_list = diag_meta[cur]
 
             for v_cur, variant in enumerate(data[cur]):
-                key = tuple(tuple(sublist) for sublist in variant)
+                key = _freeze_equivalence_value(variant)
                 for neighbor, v_neighbor in variant_to_diags.get(key, []):
                     if neighbor == cur or neighbor not in group_set or neighbor in coeffs:
                         continue

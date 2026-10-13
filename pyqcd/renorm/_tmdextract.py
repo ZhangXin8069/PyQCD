@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from ._const import CA, CF, gammaE, pi, b0
+from ._const import CA, CF, gammaE, pi, b0, alpha_s as _alpha_s_const
 from ._ensembles import fm_to_GeV
-from ._matching import _matching_kernels, A_s_run
+from ._matching import (
+    _matching_kernels, _validate_uniform_grid, A_s_run,
+)
 
 
 def quasi_tmd_pdf(hR_z, z_grid, b_perp, pz_gev, p_t=None, x_grid=None,
@@ -165,6 +167,34 @@ def quasi_pdf_gluon(h_z, z_grid, pz_gev, x_grid=None):
     return x_grid, out
 
 
+def _positive_finite_scalar(value, name):
+    """Validate a strictly positive finite scalar."""
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} 必须是有限正数，不得为布尔值")
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} 必须是有限正数") from exc
+    if not np.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} 必须是有限正数")
+    return value
+
+
+def _finite_real_array(values, name):
+    """Validate finite real data without silently discarding an imaginary part."""
+    raw = np.asarray(values)
+    if raw.dtype.kind == 'b':
+        raise ValueError(f"{name} 必须是实数数组，不得为布尔数组")
+    if np.iscomplexobj(raw):
+        if np.any(np.imag(raw) != 0.0):
+            raise ValueError(f"{name} 必须是实数值，不能静默丢弃虚部")
+        raw = np.real(raw)
+    result = np.asarray(raw, dtype=float)
+    if not np.isfinite(result).all():
+        raise ValueError(f"{name} 必须全部有限")
+    return result
+
+
 def cs_kernel_from_ratio(hR_pz1, hR_pz2, pz1, pz2):
     """CS 核提取（LPC 2020 比值法）。
 
@@ -176,12 +206,25 @@ def cs_kernel_from_ratio(hR_pz1, hR_pz2, pz1, pz2):
     Returns:
         K(b⊥) 数组（沿 z=0 提取；若 z 维首点噪声大可用 z=z₀ 索引）。
     """
-    h1 = np.asarray(hR_pz1, dtype=float)
-    h2 = np.asarray(hR_pz2, dtype=float)
+    h1 = _finite_real_array(hR_pz1, "hR_pz1")
+    h2 = _finite_real_array(hR_pz2, "hR_pz2")
+    if h1.shape != h2.shape:
+        raise ValueError(f"hR_pz1/hR_pz2 形状不一致: {h1.shape} vs {h2.shape}")
     if h1.ndim == 1:
         h1, h2 = h1[:, None], h2[:, None]
+    elif h1.ndim != 2:
+        raise ValueError("hR_pz1/hR_pz2 必须是一维或二维数组")
+    if h1.shape[0] == 0:
+        raise ValueError("hR_pz1/hR_pz2 的 z 轴不得为空")
+    pz1 = _positive_finite_scalar(pz1, "pz1")
+    pz2 = _positive_finite_scalar(pz2, "pz2")
+    if pz1 == pz2:
+        raise ValueError("pz1 与 pz2 必须不同")
     ratio = h1[0] / h2[0]           # z=0 处（b⊥ 依赖保留）
-    return np.log(np.maximum(ratio, 1e-30)) / np.log(pz1 / pz2)
+    if not np.isfinite(ratio).all() or np.any(ratio <= 0.0):
+        raise ValueError(
+            "CS kernel requires a finite strictly positive hR ratio")
+    return np.log(ratio) / np.log(pz1 / pz2)
 
 
 def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
@@ -203,17 +246,35 @@ def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
     Returns:
         K(b⊥) 数组（沿所选 z 行）。
     """
-    a = np.asarray(c01, dtype=float)
-    b_ = np.asarray(c02, dtype=float)
+    a = _finite_real_array(c01, "c01")
+    b_ = _finite_real_array(c02, "c02")
     if a.ndim == 1:
         a, b_ = a[None, :], b_[None, :]
+    elif a.ndim != 2 or b_.ndim != 2:
+        raise ValueError("c01/c02 必须是一维或二维数组")
     if a.shape != b_.shape:
         raise ValueError(f"c01/c02 形状不一致: {a.shape} vs {b_.shape}")
+    if a.shape[0] == 0:
+        raise ValueError("c01/c02 的 z 轴不得为空")
+    pz1_gev = _positive_finite_scalar(pz1_gev, "pz1_gev")
+    pz2_gev = _positive_finite_scalar(pz2_gev, "pz2_gev")
+    if pz1_gev == pz2_gev:
+        raise ValueError("pz1_gev 与 pz2_gev 必须不同")
     z_ref = int(z_ref if z_ref >= 0 else len(a) + z_ref)
     if not (0 <= z_ref < len(a)):
         raise ValueError(f"z_ref={z_ref} 超出 z 维 [0, {len(a)-1}]")
     ratio = a[z_ref] / b_[z_ref]
-    k = np.log(np.maximum(ratio, 1e-30)) / np.log(pz1_gev / pz2_gev)
+    if not np.isfinite(ratio).all() or np.any(ratio <= 0.0):
+        raise ValueError(
+            "CS kernel requires a finite strictly positive c0 ratio")
+    if k_clip is not None:
+        if len(k_clip) != 2:
+            raise ValueError("k_clip 必须是 (K_min, K_max) 二元组或 None")
+        lo, hi = (float(k_clip[0]), float(k_clip[1]))
+        if not (np.isfinite(lo) and np.isfinite(hi) and lo < hi):
+            raise ValueError("k_clip 边界必须是有限数且 K_min < K_max")
+        k_clip = (lo, hi)
+    k = np.log(ratio) / np.log(pz1_gev / pz2_gev)
     return np.clip(k, *k_clip) if k_clip is not None else k
 
 
@@ -258,15 +319,28 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
     Returns:
         (x_grid, x·g̃(x, b⊥))——1 圈匹配。
     """
-    x = np.asarray(x_grid, dtype=float)
-    y = x if y_grid is None else np.asarray(y_grid, dtype=float)
+    x = _validate_uniform_grid(x_grid, "x_grid")
+    y = (x if y_grid is None
+         else _validate_uniform_grid(y_grid, "y_grid"))
     if len(y) != len(x):
         raise ValueError("TMD 匹配矩阵结构要求 y 网格与 x 网格同维")
+    if x_tmd is None:
+        raise ValueError("x_tmd 不得为 None")
     yg = np.asarray(x_tmd)
+    if yg.ndim not in (1, 2):
+        raise ValueError("x_tmd 必须是一维或二维数组")
     if yg.ndim == 1:
         yg = yg[:, None]
+    if yg.shape[0] != len(x) or yg.shape[1] == 0:
+        raise ValueError("x_tmd 的 y 轴必须与 x/y 网格一致且不得为空")
+    if not np.isfinite(yg).all():
+        raise ValueError("x_tmd 必须全部有限")
     nb = yg.shape[1]
     n = len(x)
+    mu = _positive_finite_scalar(mu, "mu")
+    pz_gev = _positive_finite_scalar(pz_gev, "pz_gev")
+    pz_scale = _positive_finite_scalar(pz_scale, "pz_scale")
+    lambda_s_fm = _positive_finite_scalar(lambda_s_fm, "lambda_s_fm")
 
     dx = x[1] - x[0]
     lambda_s = lambda_s_fm / fm_to_GeV * pz_gev
@@ -287,12 +361,34 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
             - np.eye(n) * (y[:, None]
                            * np.sum(g_ij / y[None, :] ** 2.0, axis=1)))
     z_ij = np.eye(n) + c_alp_lo @ m_ij
-    z_inv = np.linalg.inv(z_ij)
+    if not np.isfinite(z_ij).all():
+        raise ValueError("TMD 匹配矩阵含非有限值")
+    try:
+        z_condition = float(np.linalg.cond(z_ij))
+    except np.linalg.LinAlgError as exc:
+        raise ValueError(
+            "TMD matching matrix is singular/奇异，无法数值求逆") from exc
+    if (not np.isfinite(z_condition)
+            or z_condition > 1.0 / np.finfo(float).eps):
+        raise ValueError(
+            "TMD matching matrix is singular/奇异或数值不可逆 "
+            f"(condition={z_condition:g})")
+    try:
+        z_inv = np.linalg.inv(z_ij)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError(
+            "TMD matching matrix is singular/奇异，无法数值求逆") from exc
 
     # 快度演化因子与软函数（逐 b⊥）
-    K = np.asarray(cs_kernel, dtype=float).ravel()
-    S = np.asarray(soft_factor, dtype=float).ravel()
+    K = _finite_real_array(cs_kernel, "cs_kernel").ravel()
+    S = _finite_real_array(soft_factor, "soft_factor").ravel()
+    if K.size == 0 or S.size == 0:
+        raise ValueError("cs_kernel 与 soft_factor 不得为空")
+    if np.any(S <= 0.0):
+        raise ValueError("soft_factor 必须严格为正")
     rap = np.exp(0.5 * np.log((2.0 * pz_gev) ** 2 / (2.0 * pz_scale) ** 2) * K)
+    if not np.isfinite(rap).all():
+        raise ValueError("快度演化因子含非有限值")
 
     out = np.empty((n, nb), dtype=np.result_type(yg.dtype, z_inv.dtype,
                                                   rap.dtype, S.dtype))
@@ -305,7 +401,7 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
 
 
 def _alpha_s(mu, Lambda_QCD=0.23, nf=3.0):
-    return 2.0 * np.pi / (b0(nf) * np.log(mu / Lambda_QCD))
+    return _alpha_s_const(mu, Lambda_QCD, nf)
 
 
 # ═══════════════════════════════════════════════════════════════════
