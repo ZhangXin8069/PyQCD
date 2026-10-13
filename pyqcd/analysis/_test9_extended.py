@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import gc
+import re
 import time
 from pathlib import Path
 
@@ -43,6 +44,20 @@ from ._proton_energy import energy_model, energy_model_jacobian
 from ..pipeline._config import NT, NX, ALttc, FM2GEV, ENSEMBLE
 
 
+_MOMENTUM_TAG_RE = re.compile(r"P([0-9])([0-9])([0-9])\Z")
+
+
+def _parse_momentum_tag(tag):
+    """Parse an exact ``Pxyz`` momentum label or fail closed."""
+    if not isinstance(tag, str):
+        raise TypeError(f"momentum tag must be a string, got {type(tag).__name__}")
+    match = _MOMENTUM_TAG_RE.fullmatch(tag)
+    if match is None:
+        raise ValueError(
+            f"invalid momentum tag {tag!r}; expected an exact Pxyz label")
+    return tuple(int(component) for component in match.groups())
+
+
 # ---------------------------------------------------------------------
 # 辅助：读取 test9 的 per-conf per-momentum 2pt (Nt,) 为 jackknife 预备
 # ---------------------------------------------------------------------
@@ -50,6 +65,8 @@ from ..pipeline._config import NT, NX, ALttc, FM2GEV, ENSEMBLE
 def _load_test9_corr2_raw(test9_root: str, conf_ids, momentum_tags):
     """读取 test9/data/conf*/corr_pp_<tag>_<cid>.h5 → {tag: stacked (Nconf, Nt)}."""
     from ..tools._io import load_tensor_h5
+    for tag in momentum_tags:
+        _parse_momentum_tag(tag)
     data = {}
     for tag in momentum_tags:
         stack = []
@@ -180,10 +197,7 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
         # 期望能量（色散）：m0=1.0 GeV 近似
         # 若 tag==P000 则 E_exp= m0, 否则 sqrt(m0^2 + p^2)
         # 解析 Pz：tag like P200 -> pz=2
-        try:
-            pz = int(tag[1])
-        except Exception:
-            pz = 0
+        pz = _parse_momentum_tag(tag)[0]
         p_phys = (2 * np.pi * pz / NX) * (FM2GEV / ALttc)
         E_exp = np.sqrt(1.0**2 + p_phys**2) if pz != 0 else 1.0
         meff_results[f"proton_{tag}"] = {
@@ -464,7 +478,7 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
 
     out_base 为 test9_1 根目录（包含 1_result）。
     每个 Pz 对应一个 momentum_tag 的 pz 值 (P000->0, P200->2, P400->4, P020->2 等需解析)
-    为保持与 test6 的 Pz6 目录名一致，额外生成 Pz6 目录（取 P200 数据近似）。
+    仅生成输入标签真实对应的 Pz 目录；Pz6 缺失时绝不复制其他动量冒充。
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -473,9 +487,20 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
 
     base_out = os.path.join(out_base, "1_result", "L24x72")
     os.makedirs(base_out, exist_ok=True)
+    parsed_tags = {tag: _parse_momentum_tag(tag) for tag in momentum_tags}
 
     # 准备：对每个 tag 生成 corr2_jack (Nsample, dt_max)
     corr_raw_dict = _load_test9_corr2_raw(test9_root, conf_ids, momentum_tags)
+    missing_tags = [tag for tag in momentum_tags if tag not in corr_raw_dict]
+    if missing_tags:
+        pz6_missing = [
+            tag for tag in missing_tags if parsed_tags[tag][0] == 6]
+        if pz6_missing:
+            raise FileNotFoundError(
+                "Pz6 momentum data is missing for "
+                f"{pz6_missing}; refusing to copy another momentum")
+        raise FileNotFoundError(
+            f"no correlation data found for momentum tag(s): {missing_tags}")
     # dt_max 等与 test6 一致；ylim 将按 Pz 动态调整（确证：P000 aE~0.58, P200~0.78, P400~1.37）
     DT_MAX = 20
     FIT_DT_START, FIT_DT_END = 3, 7
@@ -487,12 +512,8 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
 
     # 为每个 tag 单独生成目录
     for tag, raw in corr_raw_dict.items():
-        # 解析 Pz：用 tag 第二字符数值作为 Pz；对于多维动量如 P022 -> 取第一个非零？此处统一取 tag[1]
-        # 保持与 test9 定义：Pxyz 其中 x=Pz? 在 test9, momentum_tag 定义为 f'P{mom[0]}{mom[1]}{mom[2]}' 其中 mom[0]=pz
-        try:
-            pz_val = int(tag[1])
-        except Exception:
-            pz_val = 0
+        # 保持与 test9 定义：Pxyz 的 x 分量是 Pz。
+        pz_val = _parse_momentum_tag(tag)[0]
         out_dir = os.path.join(base_out, f"Pz{pz_val}")
         # 若已存在同 Pz 多 tag (如 P200 和 P020 都是 Pz2 但不同方向)，则加后缀以区分
         # 策略：若 out_dir 存在且已有 corr2 文件，创建 PzX_Y 后缀
@@ -522,18 +543,12 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
         # 等价类：|P|^2 相同的一组（如 P200/P020/P002 为 |P|^2=4 的三方向）
         # 若等价类成员不足，则回退到同一数据（保证至少有 ave）
         # 计算当前 tag 的 |P|^2
-        try:
-            pz, py, px = int(tag[1]), int(tag[2]), int(tag[3])
-        except Exception:
-            pz, py, px = 0, 0, 0
+        pz, py, px = _parse_momentum_tag(tag)
         psq = pz*pz + py*py + px*px
         # 寻找等价类
         equiv = []
         for t, raw2 in corr_raw_dict.items():
-            try:
-                qz, qy, qx = int(t[1]), int(t[2]), int(t[3])
-            except Exception:
-                continue
+            qz, qy, qx = _parse_momentum_tag(t)
             if qz*qz+qy*qy+qx*qx == psq:
                 equiv.append((t, raw2))
         # 按方向取：优先取 x/y/z 对应动量在该方向有分量的
@@ -835,22 +850,12 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
         lines.append("PASS")
         Path(os.path.join(out_dir, "verify_report.txt")).write_text("\n".join(lines)+"\n")
         logger(f"  7 plots + reports -> {out_dir}")
-    # 额外：若没有 Pz6，复制一个 Pz2 的作为 Pz6 以完全对齐 reference 目录名
+    requested_pz6 = any(parsed[0] == 6 for parsed in parsed_tags.values())
     pz6_dir = os.path.join(base_out, "Pz6")
-    if not os.path.exists(pz6_dir):
-        # 选 Pz2 或第一个存在的
-        src = None
-        for cand in [os.path.join(base_out, "Pz2"), os.path.join(base_out, "Pz4")]:
-            if os.path.exists(cand):
-                src = cand
-                break
-        if src is None:
-            # 找任意 Pz*
-            import glob
-            cands = glob.glob(os.path.join(base_out, "Pz*"))
-            if cands:
-                src = cands[0]
-        if src:
-            import shutil
-            shutil.copytree(src, pz6_dir)
-            logger(f"  [extra] copied {src} -> {pz6_dir} to match reference Pz6 name")
+    if requested_pz6 and not os.path.exists(pz6_dir):
+        raise FileNotFoundError(
+            "Pz6 was requested but no Pz6 output was generated")
+    if not requested_pz6:
+        logger(
+            "  Pz6 missing: no Pz6 momentum was requested; "
+            "refusing to copy another momentum")

@@ -40,6 +40,32 @@ $$C_p(\vec{p}; t,0) \approx -\sum_{\vec{x}} e^{-i \vec{p} \cdot \vec{x}} \epsilo
   [ S_{l,\text{point}(\vec{x}_0,0)\,\alpha\alpha'}^{aa'}(\vec{x},t) S_{l,\text{point}(\vec{x}_0,0)\,\beta\beta'}^{bb'}(\vec{x},t) S_{l,\text{point}(\vec{x}_0,0)\,\gamma\gamma'}^{cc'}(\vec{x},t) \\
   + S_{l,\text{point}(\vec{x}_0,0)\,\alpha\gamma'}^{aa'}(\vec{x},t) S_{l,\text{point}(\vec{x}_0,0)\,\beta\beta'}^{bb'}(\vec{x},t) S_{l,\text{point}(\vec{x}_0,0)\,\gamma\alpha'}^{cc'}(\vec{x},t) ]$$
 
-**Step 5 — Einsum** (⚠️ call generate_einsum, do NOT write contract by hand):
-Call `generate_einsum(type="baryon_2pt")` from the Executor.
-The tool returns a complete code block ("code" key). Do NOT write these contractions by hand.
+**Step 5 — Explicit einsum**:
+
+PyQCD 没有 code-generation contraction API。下面给出与该推导对应的显式 contraction；
+它假设 `prop_l.data` 的轴序是
+`(w,t,z,y,x,spin_sink,spin_src,color_sink,color_src)`。先在小数组上检查指标闭合、
+重子置换号和 \(\gamma\) 转置，再把字符串接入生产脚本：
+
+```python
+from opt_einsum import contract
+
+Cg5 = C @ gamma_5
+twopt = 0
+twopt += contract(
+    "wtzyx,abc,def,ij,kl,mn,"
+    "wtzyxikad,wtzyxjlbe,wtzyxnmcf,li->t",
+    phase, epsilon, epsilon, Cg5, Cg5, P_plus,
+    prop_l.data, prop_l.data, prop_l.data,
+)
+twopt += contract(
+    "wtzyx,abc,def,ij,kl,mn,"
+    "wtzyximad,wtzyxjlbe,wtzyxnkcf,li->t",
+    phase, epsilon, epsilon, Cg5, Cg5, P_plus,
+    prop_l.data, prop_l.data, prop_l.data,
+)
+```
+
+两个 contraction 的 color/epsilon 指标和第二个 exchange 项的 spin/color 标签必须逐项
+复核；整体符号还取决于算符归一化和矩阵转置约定。蒸馏或 perambulator 生产应使用
+当前 `pyqcd.contraction.dynamic_contraction` 路径，不要把本段直接当作通用生成器。

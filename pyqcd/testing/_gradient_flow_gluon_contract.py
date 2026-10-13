@@ -175,6 +175,7 @@ class GradientFlowGluonContract(unittest.TestCase):
 
     def test_flow_to_quasi_matches_reference_component_factors(self):
         from pyqcd.renorm import coefficients, match_one
+        from pyqcd.renorm._gradient_flow_quasi import FLOW_TO_QUASI_STATUS
 
         array = np.zeros((1, 2, 4, 6, 3, 1), dtype=np.complex128)
         array[0, 0, 0, 1, :, 0] = 2.0
@@ -188,20 +189,21 @@ class GradientFlowGluonContract(unittest.TestCase):
         line = np.exp(
             -delta_m * np.arange(3) * 0.0775 * 5.067730716
         )
+        self.assertTrue(np.isnan(matched[0, 0, 0, 1, 0, 0]))
         np.testing.assert_allclose(
-            matched[0, 0, 0, 1, :, 0],
-            2.0 * line / (c_perp * c_perp),
+            matched[0, 0, 0, 1, 1:, 0],
+            2.0 * line[1:] / (c_perp * c_perp),
             rtol=0, atol=2e-14,
         )
         np.testing.assert_allclose(
-            matched[0, 0, 0, 0, :, 0],
-            matched[0, 0, 0, 1, :, 0]
-            - matched[0, 0, 0, 2, :, 0],
+            matched[0, 0, 0, 0, 1:, 0],
+            matched[0, 0, 0, 1, 1:, 0]
+            - matched[0, 0, 0, 2, 1:, 0],
             rtol=0, atol=2e-14,
         )
-        self.assertEqual(
-            metadata["status"], "flow_to_MSbar_quasi_operator_one_loop"
-        )
+        self.assertEqual(metadata["status"], FLOW_TO_QUASI_STATUS)
+        self.assertEqual(metadata["z0_status"], "nan_fail_closed")
+        self.assertFalse(metadata["physical_acceptance"])
         self.assertTrue(np.isfinite([
             metadata["c_parallel_perp"],
             metadata["c_perp_perp"],
@@ -218,9 +220,12 @@ class GradientFlowGluonContract(unittest.TestCase):
             1.0 / metadata_h["c_perp_perp"],
         )
         np.testing.assert_allclose(
-            matched_h[0, 1, 0, 0, :, 0],
-            3.0 * line / metadata_h["c_perp_perp"],
+            matched_h[0, 1, 0, 0, 1:, 0],
+            line[1:] / metadata_h["c_perp_perp"],
             rtol=0, atol=2e-14,
+        )
+        self.assertEqual(
+            metadata_h["helicity_status"], "physical_T_minus_S"
         )
 
     def test_complex_ratio_uses_full_pol35_and_shared_nopol_denominator(self):

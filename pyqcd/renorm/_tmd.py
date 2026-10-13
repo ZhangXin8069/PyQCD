@@ -43,6 +43,24 @@ def _to_cpu(x):
     if asnumpy is not None:
         return asnumpy(x)
     return np.asarray(x)
+
+
+def _checked_real_part(values, context, rtol=1.0e-12, atol=1.0e-14):
+    """Return the real part after rejecting a material imaginary residual."""
+    raw = np.asarray(values)
+    if not np.isfinite(raw).all():
+        raise ValueError(f"{context} contains non-finite values")
+    if not np.iscomplexobj(raw):
+        return raw
+    imag_max = float(np.max(np.abs(raw.imag)))
+    scale = max(1.0, float(np.max(np.abs(raw.real))))
+    if imag_max > atol + rtol * scale:
+        raise ValueError(
+            f"{context} contains a material imaginary residual "
+            f"(max|Im|={imag_max:.3g}, scale={scale:.3g})")
+    return raw.real
+
+
 from ..operator._gluon_ope import plaquette_clover, compute_dual_field_strength
 from ._gradient_flow import wilson_flow
 
@@ -274,7 +292,8 @@ def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
                 val = _to_cpu(cp.sum(O, axis=(1, 2, 3)))
             else:
                 val = _to_cpu(O)
-            out[i, j] = np.real(np.mean(val))  # 时间片平均
+            out[i, j] = _checked_real_part(
+                np.mean(val), "tmd_matrix_elements output")
     return out
 
 
@@ -304,7 +323,8 @@ def tmd_matrix_elements_time(
             O = _gluon_tmd_operator_from_fields(
                 fields, W, z, b, z_dir, b_dir, color_normalization)
             val = _to_cpu(cp.sum(O, axis=(1, 2, 3)))
-            out[i, j] = np.real(val)
+            out[i, j] = _checked_real_part(
+                val, "tmd_matrix_elements_time output")
     return out
 
 

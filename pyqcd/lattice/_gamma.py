@@ -131,27 +131,22 @@ def gamma(i: int):
     return t
 
 
+def _transpose_sign(matrix):
+    """Return the transpose parity of a Hermitian or anti-Hermitian matrix."""
+    transposed = np.asarray(matrix).T
+    if np.allclose(transposed, matrix, rtol=0.0, atol=0.0):
+        return 1
+    if np.allclose(transposed, -matrix, rtol=0.0, atol=0.0):
+        return -1
+    raise ValueError("gamma matrix is neither symmetric nor antisymmetric")
+
+
 # ── Gamma properties: transpose sign for each gamma ─────────────────
-# T_sign: +1 if Γ^T = +Γ, -1 if Γ^T = -Γ
-# Used by wick contraction and equivalent diagram identification.
+# Computed from the canonical matrices to keep this public table synchronized
+# with the actual DeGrand-Rossi basis.
 GAMMA_PROPERTIES = {
-    'gamma_1':  {'T': (+1,)},
-    'gamma_2':  {'T': (+1,)},
-    'gamma_3':  {'T': (+1,)},
-    'gamma_4':  {'T': (+1,)},
-    'gamma_5':  {'T': (+1,)},
-    'gamma_6':  {'T': (-1,)},   # γ₂γ₃ is antisymmetric
-    'gamma_7':  {'T': (-1,)},   # γ₃γ₁ is antisymmetric
-    'gamma_8':  {'T': (-1,)},   # γ₁γ₂ is antisymmetric
-    'gamma_9':  {'T': (-1,)},   # γ₁γ₄ is antisymmetric
-    'gamma_10': {'T': (-1,)},   # γ₂γ₄ is antisymmetric
-    'gamma_11': {'T': (-1,)},   # γ₃γ₄ is antisymmetric
-    'gamma_12': {'T': (+1,)},   # γ₁γ₅ = γ₅γ₁
-    'gamma_13': {'T': (+1,)},   # γ₂γ₅
-    'gamma_14': {'T': (+1,)},   # γ₃γ₅
-    'gamma_15': {'T': (+1,)},   # γ₄γ₅
-    'gamma_16': {'T': (+1,)},   # parity projector
-    'gamma_17': {'T': (+1,)},   # parity projector
+    f'gamma_{i}': {'T': (_transpose_sign(_GAMMA_CACHE[i]),)}
+    for i in range(1, 18)
 }
 
 

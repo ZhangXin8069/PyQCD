@@ -109,6 +109,10 @@ from pyqcd.testing import (  # noqa: F401
     test_env_snapshot,
     test_cmp_primitives,
     test_read_gauge_lime_accepts_contents_directory,
+    test_renorm_numerical_guards_contracts,
+    test_gradient_flow_quasi_policy_contracts,
+    test_analysis_safety_contracts,
+    test_infra_safety_contracts,
 )
 
 

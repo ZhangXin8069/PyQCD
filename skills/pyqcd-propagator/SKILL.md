@@ -85,3 +85,6 @@ API 细节见 [`references/solver.md`](references/solver.md)；顺序源和协�
 传播子清单与 Wick 结构 → `pyqcd-physics-correlator`；谱模型 →
 `pyqcd-physics-spectrum`；统计/拟合 → `pyqcd-statistics`；后端、HDF5、ASCII、VdV/VVV
 和 MPI → `pyqcd-infra`；纯规范场 → `pyqcd-gauge`；批量运行 → `pyqcd-pipeline`。
+link-phased Wuppertal 动量涂抹与 sequential one-smear → `pyqcd-momentum-smear`；
+blended all-to-all basis/perambulator → `pyqcd-blending`；HISQ 四旋量恢复 →
+`pyqcd-hisq-recover`。

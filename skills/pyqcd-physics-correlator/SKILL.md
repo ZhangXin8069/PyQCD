@@ -47,11 +47,14 @@ C_2(\vec p;t_f,t_i)=\langle O(\vec p,t_f)O^\dagger(\vec p,t_i)\rangle,
 \[
 C_3(\vec q;t_f,t_i,\tau)=
 \langle O_{snk}(\vec p_f,t_f)J(\vec q,\tau)O^\dagger_{src}(\vec p_i,t_i)\rangle,
-\quad\vec q=\vec p_i-\vec p_f.
+\quad\vec q=\vec p_f-\vec p_i.
 \]
 
 写清 Fourier 符号、投影、归一化、时间边界和每一轴的意义；能量依赖交给
-`pyqcd-physics-spectrum`。
+`pyqcd-physics-spectrum`。若 sink 使用 \(e^{-i\vec p_f\cdot x}\)、source dagger
+产生 \(e^{+i\vec p_i\cdot y}\)，insertion 相位应对应
+\(e^{-i\vec q\cdot x}\)，其中 \(\vec q=\vec p_f-\vec p_i\)；必须从三段完整相位
+推导，不能只按 helper 名称选正负号。
 
 ### 3. Wick 缩并与拓扑
 
@@ -135,6 +138,12 @@ VdV 的一条共轭腿和一条非共轭腿时相位抵消；VVV 的三条非共
 propagator 和 $Γ$ 收缩。PyQUDA 上下文、轴序和伪代码见
 [`pyqcd-propagator/references/sequential-and-covdev.md`](../pyqcd-propagator/references/sequential-and-covdev.md)。
 
+**Sequential dagger owner 必须显式指定**：PyQUDA `source.sequential12(B,t_seq)`
+只从汇块 `B` 选取 sink time slice，不执行 `gamma5 B† gamma5`、转置或动量相位。
+第一次 dagger、顺序源求逆、第二次 dagger 与 current-side 收缩分别在哪里发生，必须在
+交接表中逐项写出；只看到一个名为 `sequential` 的 helper 不能证明相位和自由度已经
+正确共轭。
+
 ## 源策略
 
 | 场景 | 默认建议 | 原因 |
@@ -144,6 +153,9 @@ propagator 和 $Γ$ 收缩。PyQUDA 上下文、轴序和伪代码见
 | 重子谱 | smear 或 smeared-point | 压低激发态污染 |
 | 非连通 | 随机体积源 | 估计全空间 loop |
 | 形状因子/3pt | 顺序源或随机估计 | 固定 sink 后控制求逆成本 |
+
+point/wall/volume、wall 动量分裂、shifted propagator 与 Wilson line 的逐项定义和
+验收边界见 [`references/source-estimators.md`](references/source-estimators.md)。
 
 ## 推导例文
 
@@ -173,3 +185,7 @@ propagator 和 $Γ$ 收缩。PyQUDA 上下文、轴序和伪代码见
 并附轴序、单位、边界和验证证据。传播子落地用 `pyqcd-propagator`，谱模板用
 `pyqcd-physics-spectrum`，重采样和拟合用 `pyqcd-statistics`，数据产品用
 `pyqcd-analysis`，纯规范对象用 `pyqcd-gauge`。
+
+boosted-hadron 增强内插算符与 Euclidean `gamma_±` 转交
+`pyqcd-enhanced-interpolator`；LapH/Wick/perambulator/GEVP/MPI 的蒸馏安全链转交
+`pyqcd-distillation`；顺序源端点涂抹转交 `pyqcd-momentum-smear`。

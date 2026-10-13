@@ -37,11 +37,11 @@ $$C_\rho(\vec{p}; t,0) \approx \frac{1}{3}\sum_i\sum_{\vec{x}} e^{-i \vec{p} \cd
 
 **Step 5 — Current PyQCD distillation runtime**:
 
-PyQCD does not expose an `Executor.generate_einsum` API, and the point/wall `prop_l`
-formula above must not be passed to the distillation engine without an explicit layout
-adapter.  The supported contraction path uses perambulators plus `VDV` vertices.  This
-self-contained smoke example exercises the current public API and averages the three
-spatial polarizations:
+PyQCD has no code-generation contraction API, and the point/wall `prop_l` formula above
+must not be passed to the distillation engine without an explicit layout adapter. The
+supported contraction path uses perambulators plus `VDV` vertices. This self-contained
+smoke example exercises the current public API and averages the three spatial
+polarizations:
 
 ```python
 import numpy as np

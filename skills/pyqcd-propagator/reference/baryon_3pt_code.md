@@ -1,10 +1,10 @@
 # Baryon 3pt — Sequential Source Workflow Reference
 
 This file describes the **sequential source method** for baryon 3pt correlators.
-It is a **complete, runnable template** matching the generate_einsum output.
-Einsum strings for each specific operator combination come from generate_einsum;
-this file shows the surrounding framework (setup, gamma definitions, inversions,
-final contraction, save).
+It is a **complete, runnable template** with explicit einsum strings for the
+\(\Lambda\to p\) operator shown below. The strings are part of the physical
+contract and must be re-derived or independently checked when the operator,
+flavor assignment, gamma structure, or index order changes.
 
 ---
 
@@ -136,18 +136,17 @@ For non-zero momentum, use `phase_v2.MomentumPhase(latt_info).getPhase(...)`.
 
 ### 8. Sink block B(x)
 
-Einsum strings are obtained by calling `generate_einsum(type="baryon_3pt")`
-**at generation time**. The returned strings are Python string literals
-that get pasted directly into the `contract()` calls — no placeholders,
-no direct Python import of codegen modules in the runtime script — always use the generate_einsum tool.
+The contraction labels below are explicit literals for this fixed
+\(\Lambda\to p\), \(J=\bar u\gamma_1s\), \(T=\gamma_1\) case. PyQCD does
+not expose a code-generation contraction API. Before adapting them, close every
+spin/color index on a small array and check the fermion permutation sign.
 
 For $\Lambda \to p$ with $J = \bar u \gamma_1 s$ and $T = \gamma_1$:
 
 ```python
-# The einsum strings below are the ACTUAL result of:
-#   result = baryon_3pt_sink('Lambda', 'proton', 's', 'u', 'gamma1')
-#   topo0['einsum'] = "wtzyx, ijk, lmn, AB, GH, ID, wtzyxAGil, wtzyxBHjm -> wtzyxIDnk"
-#   topo1['einsum'] = "wtzyx, ijk, lmn, AB, GH, ID, wtzyxDGkl, wtzyxBHjm -> wtzyxIAni"
+# Fixed contraction labels for this operator combination:
+# topo0: "wtzyx,ijk,lmn,AB,GH,ID,wtzyxAGil,wtzyxBHjm->wtzyxIDnk"
+# topo1: "wtzyx,ijk,lmn,AB,GH,ID,wtzyxDGkl,wtzyxBHjm->wtzyxIAni"
 B = core.LatticePropagator(latt_info)
 B.data = (
     + 1 * contract(
@@ -220,11 +219,13 @@ for atomic pipeline completion and resume semantics, follow the
 
 ---
 
-## Einsum generation
+## Einsum ownership
 
-Always generate the sink block einsum strings using `generate_einsum(type="baryon_3pt")` from the Executor. The tool returns a complete code block ("code" key). Do NOT import codegen modules directly.
-
-The einsum strings in this reference are for the specific $\Lambda\to p$ case.
+The contraction literals in this reference are fixed for the specific
+\(\Lambda\to p\) case. There is no current Executor/codegen call to obtain them.
+For a new process, derive the sink block from its interpolating operators and
+Wick contractions, then record the operator definition, gamma basis, transpose
+convention, propagator assignment, and index-closure oracle alongside the code.
 
 ---
 
@@ -236,7 +237,7 @@ The einsum strings in this reference are for the specific $\Lambda\to p$ case.
 | `getPhase()` without `.data` | Always append `.data` |
 | gamma matrix on CPU | `cp.asarray(..., dtype=cp.complex128)` |
 | `gatherLattice` on CuPy array | `array.arrayAsNumpy()` first |
-| Epsilon/propagator label mismatch | Generate via generate_einsum tool |
+| Epsilon/propagator label mismatch | Re-derive and hand-check every repeated/free index against the correlator formula |
 | `gatherLattice` result used on non-root rank | Guard with `if core.getMPIRank() == 0:` |
 
 ---

@@ -13,7 +13,8 @@
     - compress_matrix_V1：求和压缩（组内求和 ÷√组大小，保正交归一）；
     - compress_matrix_V2：随机抽取压缩（组内无放回抽取 N_extract 个本征模）；
     - compress_matrix_V3：随机正交投影压缩（orthonormal 随机基）；
-    - compress_matrix_V4：V3 的噪声策略可切换版（'orthnormal' | 'Z_N'）。
+    - compress_matrix_V4：V3 的噪声策略可切换版（'orthnormal' |
+      legacy diagnostic 'Z_2'…'Z_8'）。
 
 分组约定：Ctype='I' 交错流（indices j::N_sum）/ 'B' 连续块（均分切分），
 与 lqcddb reshape 语义一致。用途：Nev → N_sum 降维直接降低顶点/2pt 步
@@ -24,7 +25,7 @@
       死代码修复为真实断言；
     - 随机性统一由 numpy Generator（seed 可复现、跨后端一致）生成后转换，
       不依赖全局 backend.random；V2 的 while-去重循环等价改写为
-      rng.choice(replace=False)；Z_N 取值表向量化等价采样；
+      rng.choice(replace=False)；legacy Z_n 取值表向量化等价采样；
     - 输出 dtype 跟随输入（保留 complex64 显存收益），不再硬编码 <c16。
 """
 from __future__ import annotations
@@ -209,14 +210,18 @@ _ZN_VALUES = np.array([1.0 + 0j, -1.0 + 0j, 1j, -1j,
                        np.sqrt(2) - 1j * np.sqrt(2),
                        -np.sqrt(2) + 1j * np.sqrt(2),
                        -np.sqrt(2) - 1j * np.sqrt(2)], dtype=complex)
+_LEGACY_ZN_ROOTS = {
+    f'Z_{n_root}': n_root for n_root in range(2, len(_ZN_VALUES) + 1)
+}
 
 
 def _random_rows(v_dim, k, scheme, rng):
     """k × v_dim 随机行矩阵。
 
     'orthnormal'：均匀复随机行经 Gram–Schmidt 正交归一；
-    'Z_N'（N=2..8）：lqcddb 相位取值表逐元素采样（含 √2 半径相位点、
-    不做行归一，输出一般不正交——沿用原版约定）。
+    'Z_2'…'Z_8'：lqcddb legacy 相位取值表逐元素采样（含 √2 半径相位点、
+    不做行归一，输出一般不正交）。该路径仅供诊断，不承诺单位模或正交性；
+    文档占位符 ``'Z_N'`` 不是合法字面量，必须写成显式整数。
     """
     if scheme == 'orthnormal':
         def rand_unit_row():
@@ -231,10 +236,12 @@ def _random_rows(v_dim, k, scheme, rng):
             z = z - (rows.conj() @ z).ravel() @ rows
             rows = np.vstack([rows, (z / np.linalg.norm(z))[None, :]])
         return rows
-    if scheme.startswith('Z_'):
-        n_root = min(int(scheme[2:]), len(_ZN_VALUES))
+    if isinstance(scheme, str) and scheme in _LEGACY_ZN_ROOTS:
+        n_root = _LEGACY_ZN_ROOTS[scheme]
         return _ZN_VALUES[rng.integers(0, n_root, (k, v_dim))]
-    raise ValueError(f"未知噪声方案: {scheme}")
+    raise ValueError(
+        f"未知噪声方案: {scheme!r}; random_type 仅接受 'orthnormal' 或 "
+        "legacy diagnostic 'Z_2'..'Z_8'（字面量 'Z_N' 无效）")
 
 
 def compress_matrix_V3(eigenvectors, N_sum, N_extract, Ctype='I', seed=None,
@@ -249,9 +256,15 @@ def compress_matrix_V3(eigenvectors, N_sum, N_extract, Ctype='I', seed=None,
 
 def compress_matrix_V4(eigenvectors, N_sum, N_extract, Ctype='I', seed=None,
                        random_type='orthnormal', check=None):
-    """V3 噪声策略可切换版：random_type='orthnormal' | 'Z_N'。
+    """V3 噪声策略可切换版。
 
-    check 默认仅在 orthnormal 下开启（Z_N 行不归一，Gram 校验无意义）。
+    Args:
+        random_type: ``'orthnormal'`` 为生产路径；``'Z_2'``…``'Z_8'``
+            是 lqcddb legacy 相位表诊断路径。legacy 行不归一，输出一般
+            不正交，不能作为正交压缩结果使用；``'Z_N'`` 只是文档占位符，
+            会被显式拒绝。
+        check: ``None`` 时仅对 orthnormal 自动校验。legacy Z_n 传
+            ``check=True`` 会执行正交归一检查并在预期不满足时抛错。
     """
     do_check = (random_type == 'orthnormal') if check is None else check
     return _compress_projection(eigenvectors, N_sum, N_extract, Ctype,

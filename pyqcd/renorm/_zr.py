@@ -402,8 +402,12 @@ def prepare_zr_dataset(dataset_or_loghB_samples, z_fm=None, a_gev_inv=None,
         c_inv = np.linalg.pinv(cov)
     elif kind == 'diag':
         var = s.var(axis=1)
+        if not np.isfinite(var).all() or np.any(var <= 0.0):
+            raise ValueError(
+                "diag covariance requires finite positive sample variance; "
+                "exact zero variance is not replaced by a numerical floor")
         cov = np.diag(var)
-        c_inv = np.diag(1.0 / np.maximum(var, 1e-30))
+        c_inv = np.diag(1.0 / var)
     else:
         raise ValueError(f"未知 kind: {kind}")
     return ZRDataset(
@@ -597,14 +601,53 @@ def fit_ZR_samples(par_ini, dataset_samples, mu_, use_iminuit=True):
 
 
 def summarize_ZR_samples(rows):
-    """逐样本拟合结果的参数分布汇总（mean/std；原版以 CSV 供人工统计）。"""
-    keys = [k for k in rows[0].keys() if k != "sample_i"]
+    """逐样本拟合结果的参数分布汇总（mean/std；原版以 CSV 供人工统计）。
+
+    除历史参数字典外，额外返回 total/usable 行数和 finite 计数，使调用方
+    能区分“全样本可用”“部分样本失败”和“空输入”。
+    """
+    rows = list(rows)
+    if not rows:
+        return {
+            "n_rows": 0,
+            "n_usable": 0,
+            "usable": False,
+            "status": "empty",
+            "finite_counts": {},
+        }
+    if any(not isinstance(row, Mapping) for row in rows):
+        raise TypeError("ZR sample rows must be mappings")
+
+    keys = []
+    for row in rows:
+        for key in row:
+            if key != "sample_i" and key not in keys:
+                keys.append(key)
     summary = {}
+    finite_counts = {}
     for key in keys:
-        vals = np.array([r[key] for r in rows], dtype=float)
+        vals = np.array([r.get(key, np.nan) for r in rows], dtype=float)
         vals = vals[np.isfinite(vals)]
+        finite_counts[key] = int(vals.size)
         summary[key] = (float(np.mean(vals)) if vals.size else np.nan,
                         float(np.std(vals)) if vals.size else np.nan)
+    n_usable = sum(
+        all(np.isfinite(float(row.get(key, np.nan))) for key in keys)
+        for row in rows
+    )
+    if n_usable == len(rows):
+        status = "usable"
+    elif n_usable:
+        status = "partial"
+    else:
+        status = "unusable"
+    summary.update({
+        "n_rows": int(len(rows)),
+        "n_usable": int(n_usable),
+        "usable": bool(n_usable == len(rows)),
+        "status": status,
+        "finite_counts": finite_counts,
+    })
     return summary
 
 

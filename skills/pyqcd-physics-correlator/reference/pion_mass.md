@@ -45,9 +45,32 @@ $$C_\pi(\vec{p}; t,0) \approx \sum_{\vec{x}} e^{-i \vec{p} \cdot \vec{x}} \text{
 For wall source propagator
 $$C_\pi(\vec{p}; t,0) \approx \sum_{\vec{x}} e^{-i \vec{p} \cdot \vec{x}} \text{Tr}[ S_{l,\text{wall}(-\vec{p}_2,0)}^\dagger(\vec{x},t) S_{l,\text{wall}(\vec{p}_1,0)}(\vec{x},t) ]$$
 
-**Step 5 — Einsum** (⚠️ call generate_einsum, do NOT write contract by hand):
+**Step 5 — Explicit einsum**:
 
-Call `generate_einsum(type="meson_2pt", quark="u", antiquark="d", gamma="g5")`
-from the Executor. The tool returns a complete code block ("code" key).
+PyQCD 没有 code-generation contraction API。下面的显式公式限定于
+`prop_l.data` 的轴序 `(w,t,z,y,x,spin_sink,spin_src,color_sink,color_src)`；
+`.conj()` 与标签 `jiba` 一起完成源端共轭/转置。生产代码必须先用真实 layout 做
+小数组形状和零位移 oracle，再接入批量链路。
 
-For wall source, just replace the propagator variable name in the returned code.
+Point source:
+
+```python
+from opt_einsum import contract
+
+twopt = contract(
+    "wtzyx,wtzyxjiba,wtzyxjiba->t",
+    phase, prop_l.data.conj(), prop_l.data,
+)
+```
+
+Wall source 使用两条分别带 \(\vec p_1\) 与 \(-\vec p_2\) 源相位的传播子：
+
+```python
+twopt = contract(
+    "wtzyx,wtzyxjiba,wtzyxjiba->t",
+    phase, prop_l_np2.data.conj(), prop_l_p1.data,
+)
+```
+
+`phase` 是 sink 动量投影，wall 的两个源相位和动量分裂必须按
+[`source-estimators`](../references/source-estimators.md) 另行固定。

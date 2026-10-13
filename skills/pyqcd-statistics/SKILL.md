@@ -127,3 +127,6 @@ AICc、Fisher 信息、profile likelihood 和重采样稳定性在本技能中�
 
 如果 posterior 仍接近 prior、窗口间漂移大或结果依赖单个坏样本，状态降级为“测试通过”
 或“未验证”，不要把它写成真实物理结论。
+
+裸矩阵元的 physical `Tmin`、Sumratio-difference AIC、complete bootstrap coverage 与
+quality/fallback 双 envelope 的专门契约转交 `pyqcd-bare-matrix`。

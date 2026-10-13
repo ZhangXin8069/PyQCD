@@ -19,6 +19,17 @@
 | `pyqcd-pipeline` | 九步运行编排、守卫、断点续跑和一致性验证 | test0、test9、基线复现 |
 | `pyqcd-tmd-chain` | 梯度流胶子 TMD-PDF 的端到端导航 | 全链规划、阶段关系、状态判断 |
 | `pyqcd-tmd-algorithm` | TMD 几何、重整化、匹配、外推和物理验证门 | 算法实现、staple、soft、CS、匹配 |
+| `pyqcd-momentum-smear` | link-phased Wuppertal、source/sink/sequential one-smear 与相位链 | momentum smearing、boosted source、S-to-S/S-to-P |
+| `pyqcd-blending` | 低模加 stochastic complement 的 blended all-to-all 估计量 | blending、elemental、projected perambulator、n_ev/n_st |
+| `pyqcd-enhanced-interpolator` | boosted-hadron 增强内插、Euclidean conjugation 与局部缩并 | kinematic enhancement、gamma_plus、enhanced diquark |
+| `pyqcd-hisq-recover` | staggered/HISQ 到 naive 四旋量存储的 spin lift | HISQ recover、Omega(x)、full-grid、MPI parity |
+| `pyqcd-ri-renorm` | RI/SMOM 动量学、双腿截肢与 raw bilinear factors | RI projection、amputated vertex、Zq/ZA/ZV |
+| `pyqcd-quark-renorm` | RI-to-MSbar conversion、running 与 profile provenance | quark conversion、anomalous dimension、MSbar running |
+| `pyqcd-gluon-renorm` | bare/gauge-fixed/renormalized 胶子观测量分界 | gluon renormalization、Clover、EMT、K_mu |
+| `pyqcd-helicity-renorm` | explicit-only legacy helicity/EMT matching 审计 | helicity matching、R12/R21、coupled running |
+| `pyqcd-quark-pdf` | 连通夸克梯度流准 PDF 全链导航 | 4D flow、ringed normalization、SFTE、quark matching |
+| `pyqcd-bare-matrix` | physical Tmin、AIC、bootstrap coverage 与 fallback 契约 | bare matrix、Sumratio、AIC、fit fallback |
+| `pyqcd-distillation` | LapH/Wick/perambulator/GEVP/MPI/I/O 安全链 | distillation、lqcddb、perambulator、Wick audit |
 | `pyqcd-docs` | 中文 LaTeX、源码证据、PDF 和报告验收 | analy、pure、xelatex、版式 |
 
 ## 运维技能注册表
@@ -30,24 +41,37 @@
 ## 调用链
 
 ```text
-pyqcd-conventions ─────────────────────────────────────────────┐
-       │                                                       │
-       ├→ pyqcd-physics-correlator → pyqcd-propagator ────────┤
-       │             └→ pyqcd-physics-spectrum                │
-       │                         └→ pyqcd-statistics           │
-       ├→ pyqcd-gauge → pyqcd-tmd-chain → pyqcd-tmd-algorithm ─┤
-       │                                                       │
-       └───────────────────────→ pyqcd-analysis ←─────────────┤
-                                  ↑             ↑              │
-                         pyqcd-statistics   pyqcd-pipeline ← pyqcd-infra
-                                  │             │
-                                  └─────────────┴→ pyqcd-docs
+pyqcd-conventions
+  |
+  +-- pyqcd-physics-correlator
+  |     +-- pyqcd-enhanced-interpolator
+  |     +-- pyqcd-distillation
+  |     +-- pyqcd-propagator
+  |     |     +-- pyqcd-momentum-smear
+  |     |     +-- pyqcd-blending
+  |     |     +-- pyqcd-hisq-recover
+  |     +-- pyqcd-physics-spectrum
+  |
+  +-- pyqcd-gauge
+  |     +-- pyqcd-gluon-renorm
+  |     +-- pyqcd-tmd-chain -> pyqcd-tmd-algorithm
+  |
+  +-- pyqcd-ri-renorm -> pyqcd-quark-renorm
+  +-- pyqcd-helicity-renorm
+  +-- pyqcd-quark-pdf
+
+pyqcd-analysis <- pyqcd-statistics <- pyqcd-bare-matrix
+pyqcd-pipeline <- pyqcd-infra
+pyqcd-analysis / pyqcd-tmd-chain / pyqcd-pipeline -> pyqcd-docs
 ```
 
 读图规则：`conventions` 是共享先验；`correlator` 决定物理对象，`propagator` 生产数据，
 `spectrum` 定义谱模型，`statistics` 定义统计门，`analysis` 调用并呈现数据；`gauge` 提供纯规范基础，`tmd-chain` 导航全链，
-`tmd-algorithm` 承担 TMD 的实现和验收细节；`infra` 只提供平台底座，`pipeline` 只编排，
-`docs` 只成文交验。
+`tmd-algorithm` 承担 TMD 的实现和验收细节；`momentum-smear`、`blending`、
+`enhanced-interpolator`、`hisq-recover`、`distillation` 分别承担专用生产/缩并契约；
+`ri-renorm`/`quark-renorm`/`gluon-renorm`/`helicity-renorm` 只承担各自重整化层，
+不互相替代；`quark-pdf` 导航连通夸克梯度流链，`bare-matrix` 承担裸矩阵元拟合门；
+`infra` 只提供平台底座，`pipeline` 只编排，`docs` 只成文交验。
 
 ## 统一入口规范
 
@@ -82,10 +106,11 @@ pyqcd-conventions ────────────────────�
 
 ## 所有权与只读边界
 
-本文件和根 [`README.md`](README.md) 登记 `pyqcd-*` 领域技能，并单列 `form` 运维
-技能。`sush/AGENTS.md`、`sush/README.md` 及 `sush/lqcddb` 属于 `sush`，本任务只读
+本文件和根 [`README.md`](README.md) 登记 23 个 `pyqcd-*` 领域技能，并单列 `form`
+运维技能。`LQCD_Skills/` 是外部 submodule；`donghx/`、`sush/` 及其中的
+`sush/AGENTS.md`、`sush/README.md`、`sush/lqcddb` 均属于对应外部来源。本库只读
 借鉴，不修改、不重命名、不更新创建者或目录条目。外来参考代码同样保持只读；需要
-吸收时在 PyQCD 自有技能中自包含改写并注明验证边界。
+吸收时在 PyQCD 自有技能中自包含改写并注明来源提交、验证证据和未决边界。
 
 `skills/form/` 是本库维护的运维技能，不受 `pyqcd-*` 物理领域注册表约束，但必须与
 根 `AGENTS.md` 的“form 格式约定”同步。
