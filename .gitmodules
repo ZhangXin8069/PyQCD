@@ -1,0 +1,3 @@
+[submodule "skills/LQCD_Skills"]
+	path = skills/LQCD_Skills
+	url = https://github.com/AI4LGT/LQCD_Skills
