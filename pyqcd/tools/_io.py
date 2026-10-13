@@ -502,6 +502,16 @@ def read_data_ascii(filename):
     if arr.shape[0] != nsamples * T:
         raise ValueError(f"行数 {arr.shape[0]} != nsamples·T="
                          f"{nsamples * T}")
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        raise ValueError(
+            f"数据体须包含 counter 和至少一个数据列，实际 shape={arr.shape}")
+    expected_counter = np.arange(nsamples * T) % T
+    counter_mismatch = np.flatnonzero(arr[:, 0] != expected_counter)
+    if counter_mismatch.size:
+        row = int(counter_mismatch[0])
+        raise ValueError(
+            f"counter 不匹配: 行 {row} (sample={row // T}, t={row % T}) "
+            f"读到 {arr[row, 0]:g}, 期望 {expected_counter[row]}")
     body = arr[:, 1:]
     data = body.reshape(nsamples, T, -1)
     return data, {'nsamples': nsamples, 'T': T,

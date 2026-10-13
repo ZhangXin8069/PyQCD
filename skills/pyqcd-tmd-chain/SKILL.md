@@ -96,4 +96,6 @@ smoke/demo 只验证链路或形状；`test9_verify.py` 的 A–E 通过也不�
 
 几何/算法/物理门 → `pyqcd-tmd-algorithm`；规范流和涂抹 → `pyqcd-gauge`；核子算符与
 缩并 → `pyqcd-physics-correlator`；统计 → `pyqcd-statistics`；批量运行 →
-`pyqcd-pipeline`；结果报告 → `pyqcd-docs`。
+`pyqcd-pipeline`；结果报告 → `pyqcd-docs`。连通夸克梯度流准 PDF 链 →
+`pyqcd-quark-pdf`；bare/gauge-fixed gluon 交接 → `pyqcd-gluon-renorm`；显式 legacy
+helicity/EMT matching 审计 → `pyqcd-helicity-renorm`。

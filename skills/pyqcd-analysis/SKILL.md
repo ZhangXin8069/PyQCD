@@ -18,6 +18,13 @@ metadata:
 本技能不生成规范场、传播子或物理算符；统计估计量、协方差和 SVD 纪律交给
 `pyqcd-statistics`，谱式交给 `pyqcd-physics-spectrum`。
 
+## 按需参考
+
+- 逐组态时间平移、APBC 边界符号、介子 fold/重子不 fold 和有效质量定义：
+  [`references/preprocessing.md`](references/preprocessing.md)。
+- `ratio_3pt` 已实现入口、summation 与 C2+C3 联合拟合的真实状态：
+  [`references/three-point-methods.md`](references/three-point-methods.md)。
+
 ## 模块地图
 
 | 需求 | 入口 | 回归入口 |
@@ -33,6 +40,8 @@ metadata:
 | FH 变换与常数窗 | `_fh.run_fh` | `bash data/from-logs/logs/test0_fh/run-local.sh`（38 项） |
 | 三方向差异与直方图 | `_ana_3dir.analyze_3dir` | `bash data/from-logs/logs/test0/run-local.sh` |
 | disconnected TMD/c0 | `_tmd_ratio.run_disconnected_tmd_ratio`、`plateau_c0`、`plot_tmd_*` | `python -m pyqcd.testing.tmd.pdf_workflow --only-plot --conf-ids 6250` |
+| 连通 3pt/2pt ratio | `_correlators.run_3pt_ratio`、`_analyse.ratio_3pt` | `pyqcd.pipeline._steps.step_analysis` |
+| 02_ratio 生产链（OPE/2pt） | `_ratio2pt.run_ratio2pt` | `bash data/from-logs/logs/test0_ratio/run-local.sh`（22 项） |
 
 常用三方向数据结构：
 `<root>/<conf>/Pz<Pz>/{x,y,z,ave}_dir/ratio.npy` 与 `corr2_{dir}.npy`。
@@ -40,8 +49,9 @@ metadata:
 ## 分析数据流
 
 1. **选择入口**：先按上表定位已有功能；只有没有对应入口时才写新分析脚本。
-2. **整理时间轴**：按组态自身 `t_src` 平移；介子可逐组态折叠，重子 `P^+` 不折叠
-   （backward 是反宇称伙伴）。
+2. **整理时间轴**：按组态自身 `t_src` 逐组态平移，并显式处理跨 APBC 边界的符号；
+   介子可逐组态折叠，重子 `P^+` 不折叠（backward 是反宇称伙伴）。详细契约见
+   [`references/preprocessing.md`](references/preprocessing.md)。
 3. **交给统计层**：按 `pyqcd-statistics` 对齐索引、生成重采样、估计协方差并记录
    `Ncfg/seed/SVD/window`；不要在图表脚本里悄悄改估计量。
 4. **拟合与诊断**：读取 `pyqcd-physics-spectrum` 的模板，报告窗口、χ²/dof、Q、
@@ -53,11 +63,15 @@ metadata:
 
 ### 矩阵元
 
-| 方法 | 目标与适用范围 |
+| 方法 | 当前状态与入口 |
 |---|---|
-| ratio plateau | $R=C_3/C_2$（零动量弹性时根号因子为 1）；快速首看或单一 `t_sep` |
-| summation | $S(t_{sep})=\sum_\tau R$ 的斜率；多 `t_sep` 时减轻激发态污染 |
-| C₂+C₃ 联合二态 | 共享 $E_n,Z_n$，以 $B_{nm}=Z_n M_{nm}Z_m$ 拟合；高精度场景 |
+| ratio plateau | **已实现**：`_analyse.ratio_3pt` 是数值基元，`_correlators.run_3pt_ratio` 与 `pipeline._steps.step_analysis` 是现有连通 3pt/2pt 入口；零动量弹性时根号因子为 1 |
+| 02_ratio 生产链 | **已实现**：`_ratio2pt.run_ratio2pt` 完成 OPE/2pt 比值、逐 `z` 拟合与 `c0/chi2` 图 |
+| summation | **仅模板，未落地**：没有 PyQCD 公共实现或生产入口；不得把公式写成现有 API |
+| C₂+C₃ 联合二态 | **仅谱式模板，未落地**：共享 $E_n,Z_n$ 的定义见 `pyqcd-physics-spectrum`，PyQCD 尚无该联合拟合生产入口 |
+
+实现状态、公式和入口的逐项说明见
+[`references/three-point-methods.md`](references/three-point-methods.md)。
 
 ### 色散入口与真实数据先例
 
@@ -77,3 +91,7 @@ metadata:
 合成数据应恢复解析 `meff/E0/c0`；真实数据应提供输入形状、组态数、窗口、统计证据、
 输出清单和未覆盖项。TMD 结果还要交给 `pyqcd-tmd-chain` / `pyqcd-tmd-algorithm`，
 报告成文交给 `pyqcd-docs`，批量运行交给 `pyqcd-pipeline`。
+
+连通裸矩阵元的 physical `Tmin`、Ratio/Sumratio、AIC 与逐 replica fallback 契约转交
+`pyqcd-bare-matrix`；连通夸克梯度流准 PDF 的 4D flow、ringed normalization 与
+SFTE 转交 `pyqcd-quark-pdf`。

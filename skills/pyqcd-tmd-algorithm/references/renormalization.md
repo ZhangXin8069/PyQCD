@@ -5,6 +5,69 @@
 任务进入核子外态、disconnected 真空扣除、软/快度方案、自重整化、Fourier、Collins–
 Soper 核、NLO 匹配或连续极限时读取。本文件承接 `geometry.md` 已通过的算符对象。
 
+## `_gradient_flow_quasi`：finite-flow endpoint conversion
+
+`pyqcd.renorm._gradient_flow_quasi`（公开别名
+`match_gradient_flow_ope_to_quasi`、`gradient_flow_to_quasi_coefficients`）当前只做
+**one-loop finite-flow bare OPE → MS-bar quasi-operator endpoint conversion**。它不执行
+LaMET/PDF matching、软因子、rapidity evolution、Collins–Soper 核或连续极限；metadata
+固定写 `light_cone_matching="not_applied"`。
+
+输入/输出轴固定为
+
+\[
+(\text{field\_projection},\text{channel},\text{z\_orientation},
+ \text{component},z,t),
+\]
+
+并按
+
+\[
+t=a^2\tau,\qquad
+c_\parallel=1,\qquad
+c_\perp=1+\frac{\alpha_s C_A}{4\pi}
+\log\!\left(2\mu^2t e^{\gamma_E}\right),
+\]
+
+\[
+\delta m=-\frac{\alpha_s C_A}{4\pi}\sqrt{\frac{2\pi}{t}},
+\]
+
+\[
+Z_U(z)=\frac{e^{-\delta m|z|}}{c_\perp^2},\qquad
+Z_H(z)=\frac{e^{-\delta m|z|}}{c_\parallel c_\perp}
+\]
+
+施加端点转换。`tau/a_fm/mu_gev/alpha_s` 必须有限且满足源码正性约束。
+
+### `z=0`、window 与 `kappa_F`
+
+| 参数/边界 | 当前行为 |
+|---|---|
+| `z0_policy="nan"`（默认） | `z=0` 输出 `NaN`，状态 `nan_fail_closed`；非局域 endpoint 公式在 Wilson line 退化时不适用 |
+| `z0_policy="reject"` | 输入含 `z=0` 时直接拒绝 |
+| `z0_policy="spin2_local"` | 仅对 unpolarized 的 `Mtiti-Mijij` 应用局域 spin-2 转换；其它局域分量保持不可判定/NaN |
+| `z0_policy="legacy_endpoint"` | 仅用于显式复现旧端点因子，属于 diagnostic opt-in，不能声明 `physical_acceptance` |
+| `window_mask` | 可为 `(z,)` 或完整六轴布尔 mask；False 位置输出 `NaN` |
+| `kappa_F` | 可选有限正数，按 `kappa_F**2` 作用；未提供时不表示 `kappa_F=1`，metadata 明记绝对场归一化未完成 |
+
+`physical_acceptance=True` 的门限是：显式 `kappa_F`、显式且全 True 的
+`window_mask`、`helicity_mode="helicity_physical"`，且不得使用 legacy `z=0` 因子。
+它只说明这些输入条件满足，不把转换升级为完整 TMD 方案或真实数据物理结果。
+
+### Helicity 组合与状态
+
+默认 `helicity_mode="helicity_physical"` 构造
+`Mtiti-Mijij = T_H-S_H`，即 physical minus；旧资料常用的
+`legacy_plus_combined` 构造 `Mtiti+Mijij`，只能作为显式 diagnostic。channel 端点因子
+分别为 \(Z_U,Z_H\)，combined 分量会由更新后的 `Mtiti/Mijij` 重新构造。
+
+metadata `status` 当前为
+`flow_to_MSbar_quasi_scheme_conversion_diagnostic`，
+`scheme_conversion` 区分是否提供 `kappa_F`；这仍不是“方案闭合”。报告必须把
+one-loop endpoint conversion、绝对场归一化、window validity 和 physical acceptance
+分开，不能仅凭有限输出值宣称完成核子胶子 TMD 重整化。
+
 ## 核子外态与 disconnected
 
 对每个组态保留核子两点 `C2`、独立胶子 loop `Lg` 和逐组态积：

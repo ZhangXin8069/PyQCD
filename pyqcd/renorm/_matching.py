@@ -17,6 +17,28 @@ from ._const import CA, pi
 from ._ensembles import fm_to_GeV, a_len_set, Nl_set, pz_to_gev
 
 
+def _validate_uniform_grid(grid, name):
+    """Return a finite, strictly increasing, uniformly spaced real grid."""
+    raw = np.asarray(grid)
+    if np.iscomplexobj(raw):
+        raise ValueError(f"{name} must be real")
+    values = np.asarray(raw, dtype=float)
+    if values.ndim != 1 or values.size < 2:
+        raise ValueError(f"{name} must be a one-dimensional grid with >= 2 nodes")
+    if not np.isfinite(values).all():
+        raise ValueError(f"{name} must contain only finite values")
+    if np.any(values == 0.0):
+        raise ValueError(
+            f"{name} contains an exact zero node; use an avoid-zero grid")
+    spacing = np.diff(values)
+    if np.any(spacing <= 0.0):
+        raise ValueError(f"{name} must be strictly increasing")
+    if not np.allclose(
+            spacing, spacing[0], rtol=1.0e-10, atol=1.0e-14):
+        raise ValueError(f"{name} must be uniformly spaced")
+    return values
+
+
 def Si(x_):
     """正弦积分函数 Si(x)。"""
     return sici(x_)[0]
@@ -74,12 +96,12 @@ def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3):
     Returns:
         hR_PDF（光锥 PDF 匹配结果）。
     """
-    xx = np.asarray(xx, dtype=float)
-    if np.any(xx == 0.0):
+    xx = _validate_uniform_grid(xx, "matching x grid")
+    hR_tilde_data = np.asarray(hR_tilde_data)
+    if hR_tilde_data.shape != xx.shape:
         raise ValueError(
-            "matching x grid contains an exact zero node; use an "
-            "avoid-zero grid because this discretization has no "
-            "validated principal-value prescription")
+            f"hR_tilde_data shape {hR_tilde_data.shape} "
+            f"does not match x grid {xx.shape}")
     dx = xx[1] - xx[0]
 
     # A_s ≡ α_s/(4π)（zengch 惯例），×4π 还原真耦合（对照 matching_new.py: alpha_s=A_s*4π）

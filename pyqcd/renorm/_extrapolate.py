@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 from ._ensembles import a_len_set, Nl_set, pion_mass_set, MPI_PHYSICAL
@@ -180,7 +182,7 @@ def fit_hR_PDF_extrap_boot(rows, x_grid=None, max_x=1.0,
     的三点差异，均忠实原版：
       1. 每个 x 点用全体样本的协方差逆加权（原版 covariance_matrix(·,'boot')
          后取逆；奇异时回退单位阵——原版打印"单位矩阵"但实际保留未逆矩阵，
-         此处按其注释意图实现真回退并记录偏离）；
+         此处按其注释意图实现真回退，并发出 RuntimeWarning 显式报告）；
       2. 固定 lx/hx/bx/cx=0，仅 xg0/fx/dx/kx 自由（原版 Minuit fixed 约定）；
          线性模型下闭式 WLS 与 MIGRAD 同一估计量，故用正规方程实现；
       3. 逐样本循环拟合 → 参数与 χ² 样本分布 → xg0(x) 误差带。
@@ -254,8 +256,10 @@ def fit_hR_PDF_extrap_boot(rows, x_grid=None, max_x=1.0,
             Bw = np.linalg.solve(L, B)            # 逐样本列批量白化
             bw = np.linalg.solve(L, b_mean)
         except np.linalg.LinAlgError:
-            print(f"[fit_hR_PDF_extrap_boot] x={x_grid[i]:.3f} "
-                  "协方差非正定，回退单位阵")
+            warnings.warn(
+                f"fit_hR_PDF_extrap_boot: x={x_grid[i]:.3f} covariance is "
+                "not positive definite; falling back to identity weights",
+                RuntimeWarning, stacklevel=2)
             Aw = A[:, _EXTRAP_FREE_IDX]
             Bw, bw = B, b_mean
 

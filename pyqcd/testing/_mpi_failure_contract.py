@@ -2,8 +2,11 @@
 
 逐场景运行示例::
 
-    timeout 6s mpirun --allow-run-as-root -np 2 \
+    mpirun --allow-run-as-root -np 2 \
         python -m pyqcd.testing._mpi_failure_contract run-dir
+
+外层契约使用有界 Python 等待；超时与契约失败分别报告，不依赖
+``timeout(1)`` 的固定墙钟退出码。
 """
 from __future__ import annotations
 
@@ -15,7 +18,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import time
 import unittest
 from unittest.mock import patch
 
@@ -49,6 +51,7 @@ _EXPECTED = {
                   'plan process count N=3 does not match communicator size=2'),
 }
 _SUCCESS_SCENARIOS = ('step-barrier', 'final-barrier')
+_MPI_SCENARIO_TIMEOUT_SECONDS = 30.0
 
 
 class _BarrierFaultProxy:
@@ -169,11 +172,6 @@ def _run_scenario(scenario: str) -> None:
         except BaseException as exc:  # contract inspects rank boundary
             observed = f'{type(exc).__name__}: {exc}'
 
-    if scenario == 'setup' and observed == 'OSError: setup boom':
-        # Keep the failed rank alive so the pre-fix peer remains visibly
-        # blocked in its next production collective until the outer timeout.
-        time.sleep(30)
-
     all_observed = comm.allgather(observed)
     if scenario in _SUCCESS_SCENARIOS:
         assert all(message is None for message in all_observed), \
@@ -193,6 +191,49 @@ def _run_scenario(scenario: str) -> None:
         print(f'PASS {scenario}: {all_observed[0]}', flush=True)
 
 
+def _timeout_output(exc):
+    """Decode partial output attached to ``subprocess.TimeoutExpired``."""
+    chunks = []
+    for stream in (exc.stdout, exc.stderr):
+        if stream is None:
+            continue
+        if isinstance(stream, bytes):
+            stream = stream.decode(errors='replace')
+        chunks.append(str(stream))
+    return ''.join(chunks)
+
+
+def _run_scenario_process(scenario: str, timeout=None):
+    """Run one real MPI scenario with a bounded wait for process completion."""
+    if timeout is None:
+        timeout = _MPI_SCENARIO_TIMEOUT_SECONDS
+    project_root = Path(__file__).resolve().parents[2]
+    command = [sys.executable, '-m',
+               'pyqcd.testing._mpi_failure_contract', scenario]
+    if getattr(os, 'geteuid', lambda: -1)() == 0:
+        command = ['mpirun', '--allow-run-as-root', '-np', '2'] + command
+    else:
+        command = ['mpirun', '-np', '2'] + command
+
+    try:
+        completed = subprocess.run(
+            command, cwd=project_root, capture_output=True, text=True,
+            timeout=float(timeout))
+    except subprocess.TimeoutExpired as exc:
+        partial = _timeout_output(exc)
+        raise AssertionError(
+            f"MPI {scenario} TIMEOUT after {float(timeout):g}s; "
+            "contract completion was not observed:\n"
+            f"{partial}") from exc
+
+    combined = completed.stdout + completed.stderr
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"MPI {scenario} CONTRACT FAILURE rc={completed.returncode}:\n"
+            f"{combined}")
+    return completed, combined
+
+
 def test_mpi_collective_failure_contracts() -> None:
     """从普通测试进程启动真实双 rank，确保四类异常不会永久阻塞。"""
     missing = []
@@ -200,30 +241,16 @@ def test_mpi_collective_failure_contracts() -> None:
         missing.append('mpi4py')
     if shutil.which('mpirun') is None:
         missing.append('mpirun')
-    if shutil.which('timeout') is None:
-        missing.append('timeout')
     if missing:
         raise unittest.SkipTest(
             'MPI collective failure contract requires: '
             + ', '.join(missing))
 
-    project_root = Path(__file__).resolve().parents[2]
     scenarios = tuple(_EXPECTED) + _SUCCESS_SCENARIOS
     for scenario in scenarios:
         fragments = _EXPECTED.get(
             scenario, (f'PASS {scenario}: no naked Barrier call',))
-        command = ['timeout', '8s', 'mpirun']
-        if getattr(os, 'geteuid', lambda: -1)() == 0:
-            command.append('--allow-run-as-root')
-        command.extend([
-            '-np', '2', sys.executable, '-m',
-            'pyqcd.testing._mpi_failure_contract', scenario,
-        ])
-        completed = subprocess.run(
-            command, cwd=project_root, capture_output=True, text=True)
-        combined = completed.stdout + completed.stderr
-        assert completed.returncode == 0, \
-            f"MPI {scenario} contract failed rc={completed.returncode}:\n{combined}"
+        _completed, combined = _run_scenario_process(scenario)
         for fragment in fragments:
             assert fragment in combined, \
                 f"MPI {scenario} missing {fragment!r}:\n{combined}"
@@ -232,12 +259,8 @@ def test_mpi_collective_failure_contracts() -> None:
 def test_missing_mpi_prerequisites_raise_skiptest() -> None:
     """Each absent launcher dependency is an explicit skip, never a pass."""
     cases = (
-        ('mpi4py', None, {'mpirun': '/usr/bin/mpirun',
-                          'timeout': '/usr/bin/timeout'}),
-        ('mpirun', object(), {'mpirun': None,
-                              'timeout': '/usr/bin/timeout'}),
-        ('timeout', object(), {'mpirun': '/usr/bin/mpirun',
-                              'timeout': None}),
+        ('mpi4py', None, {'mpirun': '/usr/bin/mpirun'}),
+        ('mpirun', object(), {'mpirun': None}),
     )
     for expected, mpi4py_spec, executables in cases:
         with patch.object(importlib.util, 'find_spec',

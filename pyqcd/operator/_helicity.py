@@ -77,10 +77,17 @@ def helicity_two_field_operator(gauge, pla, pla_tilde, z_dir, delta_z,
     """
     cp = get_backend()
     e = cp.einsum
+    if isinstance(delta_z, (bool, np.bool_)) or not isinstance(
+            delta_z, (int, np.integer)):
+        raise TypeError("delta_z must be a non-boolean integer")
+    delta_z = int(delta_z)
+    if delta_z < 0:
+        raise ValueError("delta_z must be >= 0")
+    if not isinstance(minus, (bool, np.bool_)):
+        raise TypeError("minus must be a boolean")
+    minus = bool(minus)
     if z_dir not in (0, 1, 2):
         raise ValueError(f"z_dir 须为 0/1/2（x/y/z），收到 {z_dir}")
-    if delta_z < 0:
-        raise ValueError("delta_z 须 ≥ 0")
     a_z = 3 - z_dir
 
     F1 = cp.asarray(pla_t if pla_t is not None else pla[(mu, nu)])

@@ -24,13 +24,40 @@ metadata:
 |---|---|---|
 | 规范场 | `gauge (Nt,Nz,Ny,Nx,4,3,3)`，语义轴为 `(t,z,y,x,dir,color,color)`；链接/Lorentz 方向标签 `0=x,1=y,2=z,3=t` | 空间链接方向 `d=0,1,2` 映射到数组坐标轴 `3-d`；不要把方向标签、数组轴号和 PyQUDA 局部布局混用 |
 | PyQUDA 局部场 | `[parity,Lt,Lz,Ly,Lx//2]`；含传播子时追加 `[spin_snk,spin_src,color_snk,color_src]` | 进入 `gatherLattice` 前确认局部 tzyx 维度 |
-| γ 矩阵 | DeGrand–Rossi；`γ_5=γ_1γ_2γ_3γ_4`、`γ_0=I`、`C=γ_2γ_4` | 这是 `gamma(i)` 的矩阵编号，不是上述链接/Lorentz 方向标签；correlator、propagator 和参考推导必须使用同一基 |
+| γ 矩阵 | DeGrand–Rossi；`γ_5=γ_1γ_2γ_3γ_4`、`γ_0=I`、`C=γ_2γ_4`；PyQUDA 的 `pyquda_utils.gamma.gamma(n)` 另用 bit encoding `1/2/4/8 -> γ_1/γ_2/γ_3/γ_4`，`15 -> γ_5` | PyQCD `gamma(i)` 与 PyQUDA `gamma.gamma(n)` 是两套编号：PyQUDA `gamma.gamma(4)` 是 `γ_3`，不是 PyQCD 的 temporal `gamma(4)=γ_4`；不得与 lattice 方向标签 `0=x,1=y,2=z,3=t` 混用 |
 | 时间边界 | 夸克时间方向反周期；偶数夸克复合态有效周期，奇数夸克态有效反周期 | 重子 backward 项的负宇称伙伴不能当普通激发态删除 |
 | 动量 | 先写 Fourier 符号和存储方向，再生成相位 | `+p`/`-p`、源/汇顺序必须在元数据中可见 |
 | 蒸馏 basis 相位 | `E (Nev,Lz,Ly,Lx,Nc)`；`p_basis=(pz,py,px)`；展平位置为 `z*Ly*Lx+y*Lx+x`；`u_p=exp[-i*2*pi*(pz*z/Lz+py*y/Ly+px*x/Lx)]` | `p_basis` 与顶点 Fourier 动量 `q_sink` 是两个独立字段；同 basis 的 VdV 相位抵消，VVV 有三条非共轭腿而带 `u_p^3`；传播子必须匹配源/汇 basis |
 | 梯度流时间 | 流 API 的 `tau=t/a^2` 无量纲，物理流时间为 `t=a^2*tau`；工程参数 `tau=3` 即 `t=3a^2` | API 参数仍传 `3`，禁止写成 `3*(a*0.197)^2`；物理单位换算只用于结果解释 |
 | 单位 | 格点整数、fm、GeV、GeV(^{-1}) 分开记录；Ioffe 时间 `z*Pz` 无量纲 | `quasi_tmd_pdf` 的 `z_grid` 与 `z_max` 都是 fm：先在 fm 上截断/细化，再除以 `fm_to_GeV` 进入 Fourier 相位；显式 `z_max=max(z_grid)` 必须与默认值等价 |
 | 结果状态 | `实现存在` → `测试通过` → `方案闭合` → `真实数据验证` | 只能使用证据支持的最高状态 |
+
+PyQUDA 的 `pyquda_utils.gamma.gamma(n)` 使用四个 bit 的乘积编码：
+
+```python
+# bit weights: gamma_1=1, gamma_2=2, gamma_3=4, gamma_4=8
+G1 = gamma.gamma(1)
+G2 = gamma.gamma(2)
+G3 = gamma.gamma(4)   # PyQUDA 编号中的 gamma_3
+G4 = gamma.gamma(8)
+G5 = gamma.gamma(15)  # gamma_1 @ gamma_2 @ gamma_3 @ gamma_4
+```
+
+DR 基中 \(\gamma_1,\gamma_3\) 的转置号必须从实际矩阵计算；不得维护“全 +1”的手写
+转置表，也不得把矩阵编号和 lattice 方向标签 `0=x,1=y,2=z,3=t` 混用：
+
+```python
+G = np.asarray(gamma.gamma(bit))
+if np.allclose(G.T, G):
+    transpose_sign = +1
+elif np.allclose(G.T, -G):
+    transpose_sign = -1
+else:
+    raise AssertionError("该矩阵不是纯对称/反对称，需按完整分量处理")
+```
+
+当前 DR 矩阵实现中 \(\gamma_1,\gamma_3\) 为反对称，但代码仍应从矩阵源计算该符号；
+历史资料中的“所有 DR gamma 转置均为 +1”表是错误的，不能复制到收缩或顺序源推导。
 
 ## 复数、符号与投影
 

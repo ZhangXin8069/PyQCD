@@ -87,3 +87,7 @@ metadata:
 的阶段导航交给 `pyqcd-tmd-chain`，具体算符/缓存/物理验收交给
 `pyqcd-tmd-algorithm`；批量和文件格式交给 `pyqcd-pipeline` / `pyqcd-infra`；
 数据统计交给 `pyqcd-statistics`，报告交给 `pyqcd-docs`。
+
+bare、gauge-fixed 与 renormalized 胶子观测量、Clover/dual、Fourier half-link、
+EMT/topological-current provenance 转交 `pyqcd-gluon-renorm`；quark bilinear
+RI/SMOM 与 MS-bar conversion 分别转交 `pyqcd-ri-renorm` / `pyqcd-quark-renorm`。

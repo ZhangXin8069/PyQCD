@@ -251,7 +251,7 @@ def Bootstrap(data, Nconf_axes=0, only_sample=False, cov_axes=None,
 # ═══════════════════════════════════════════════════════════════════
 
 def meff(data_sample, alttc, Nconf_axes: int = 0, Nt_axes: int = 1,
-         meff_type: str = 'log'):
+         meff_type: str = 'log', projection=None):
     """Compute effective mass from correlation function jackknife samples.
 
     Parameters
@@ -266,6 +266,9 @@ def meff(data_sample, alttc, Nconf_axes: int = 0, Nt_axes: int = 1,
         Time axis (default 1).
     meff_type : {'log', 'cosh', 'GEVP'}
         Effective mass formula.
+    projection : {None, 'abs', 'real', 'imag'}
+        Explicit complex-to-real projection. Complex input is rejected when
+        this is None; real input is left unchanged.
 
     Returns
     -------
@@ -280,9 +283,15 @@ def meff(data_sample, alttc, Nconf_axes: int = 0, Nt_axes: int = 1,
         import numpy as _np
         backend = _np
 
-    if data_sample.dtype not in (np.float64, np.float32):
-        # Convert to real if complex
-        data_sample = backend.abs(data_sample)
+    if projection not in (None, 'abs', 'real', 'imag'):
+        raise ValueError(
+            "projection must be one of None, 'abs', 'real', or 'imag'")
+    if np.iscomplexobj(data_sample):
+        if projection is None:
+            raise ValueError(
+                "meff received complex data; pass projection='abs', "
+                "'real', or 'imag' explicitly")
+        data_sample = getattr(backend, projection)(data_sample)
 
     Nconf = data_sample.shape[Nconf_axes]
     Nt = data_sample.shape[Nt_axes]
@@ -358,6 +367,21 @@ def meff(data_sample, alttc, Nconf_axes: int = 0, Nt_axes: int = 1,
 # 3pt/2pt Ratio
 # ═══════════════════════════════════════════════════════════════════
 
+def _move_axis_values(values, source_axis, target_axis):
+    """Move one array axis while preserving every other axis' order."""
+    ndim = values.ndim
+    source_axis %= ndim
+    target_axis %= ndim
+    if source_axis == target_axis:
+        return values
+    order = list(range(ndim))
+    moved_axis = order.pop(source_axis)
+    order.insert(target_axis, moved_axis)
+    backend = get_backend() if type(values).__module__.startswith('cupy') \
+        else np
+    return backend.transpose(values, order)
+
+
 def ratio_3pt(data_3pt_sample, data_2ptI_sample, data_2ptF_sample=None,
               t_sep=12, Nconf_axes=0,
               tau_axes=-1, t_sink_axes=-1,
@@ -431,6 +455,10 @@ def ratio_3pt(data_3pt_sample, data_2ptI_sample, data_2ptF_sample=None,
             dims=[t_sink_axes], indices=[list(idx_tshift)])
         C2I_tsep_minus_tau = ArraySlicer(data_2ptI_sample).slice(
             dims=[t_sink_axes], indices=[list(idx_tshift)])
+        C2F_tsep_minus_tau = _move_axis_values(
+            C2F_tsep_minus_tau, t_sink_axes, tau_axes)
+        C2I_tsep_minus_tau = _move_axis_values(
+            C2I_tsep_minus_tau, t_sink_axes, tau_axes)
 
         C2F_tsep = data_2ptF_sample.take(t_sep, axis=t_sink_axes)
         C2F_tsep = backend.expand_dims(C2F_tsep, axis=tau_axes)
@@ -443,6 +471,8 @@ def ratio_3pt(data_3pt_sample, data_2ptI_sample, data_2ptF_sample=None,
             dims=[t_sink_axes], indices=[list(C2F_tau_idx)])
         C2I_at_tau = ArraySlicer(data_2ptI_sample).slice(
             dims=[t_sink_axes], indices=[list(C2F_tau_idx)])
+        C2F_at_tau = _move_axis_values(C2F_at_tau, t_sink_axes, tau_axes)
+        C2I_at_tau = _move_axis_values(C2I_at_tau, t_sink_axes, tau_axes)
 
         num = C2I_tsep_minus_tau * C2F_at_tau * C2F_tsep
         den = C2F_tsep_minus_tau * C2I_at_tau * C2I_tsep
@@ -480,9 +510,11 @@ def ratio_3pt(data_3pt_sample, data_2ptI_sample, data_2ptF_sample=None,
             C2F_tau_src = data_2ptF_sample.take(t_src, axis=t_src_axes)
             C2F_tau = ArraySlicer(C2F_tau_src).slice(
                 dims=[_sink], indices=[list(t_ops)])
+            C2F_tau = _move_axis_values(C2F_tau, _sink, _tau)
             C2F_tshift_src = data_2ptF_sample.take(t_src, axis=t_src_axes)
             C2F_tshift = ArraySlicer(C2F_tshift_src).slice(
                 dims=[_sink], indices=[list(t_diffs)])
+            C2F_tshift = _move_axis_values(C2F_tshift, _sink, _tau)
 
             C2I_tsep = data_2ptI_sample.take(t_src, axis=t_src_axes)
             C2I_tsep = C2I_tsep.take(t_sep_time, axis=_sink)
@@ -490,9 +522,11 @@ def ratio_3pt(data_3pt_sample, data_2ptI_sample, data_2ptF_sample=None,
             C2I_tau_src = data_2ptI_sample.take(t_src, axis=t_src_axes)
             C2I_tau = ArraySlicer(C2I_tau_src).slice(
                 dims=[_sink], indices=[list(t_ops)])
+            C2I_tau = _move_axis_values(C2I_tau, _sink, _tau)
             C2I_tshift_src = data_2ptI_sample.take(t_src, axis=t_src_axes)
             C2I_tshift = ArraySlicer(C2I_tshift_src).slice(
                 dims=[_sink], indices=[list(t_diffs)])
+            C2I_tshift = _move_axis_values(C2I_tshift, _sink, _tau)
 
             num = C2I_tshift * C2F_tau * C2F_tsep
             den = C2F_tshift * C2I_tau * C2I_tsep
