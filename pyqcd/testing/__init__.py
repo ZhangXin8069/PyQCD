@@ -2468,7 +2468,7 @@ def test_correlated_fit_identifiability_guards():
         FHStatusPropagationContractTests,
         FitStatusClassifierContractTests,
         RatioStatusPropagationContractTests,
-        Test9ExtendedStatusPropagationContractTests,
+        ExtendedPlotsStatusPropagationContractTests,
         TmdStatusPropagationContractTests,
     )
     from ._statistics_edge_contract import (
@@ -2490,7 +2490,7 @@ def test_correlated_fit_identifiability_guards():
     _run_unittest_contract(EnergyStatusPropagationContractTests)
     _run_unittest_contract(DisconnectedStatusPropagationContractTests)
     _run_unittest_contract(TmdStatusPropagationContractTests)
-    _run_unittest_contract(Test9ExtendedStatusPropagationContractTests)
+    _run_unittest_contract(ExtendedPlotsStatusPropagationContractTests)
     _run_unittest_contract(HermitianStatisticsContractTests)
     _run_unittest_contract(SingleConfigurationContractTests)
     _run_unittest_contract(CovarianceRoundoffContractTests)
@@ -2793,11 +2793,11 @@ def test_analysis_safety_contracts():
         AnalysisInputSafetyContractTests,
         HelicityArgumentSafetyContractTests,
         RatioAxisSafetyContractTests,
-        Test9MomentumSafetyContractTests,
+        ExtendedPlotsMomentumSafetyContractTests,
         WickEquivalenceSafetyContractTests,
     )
 
-    _run_unittest_contract(Test9MomentumSafetyContractTests)
+    _run_unittest_contract(ExtendedPlotsMomentumSafetyContractTests)
     _run_unittest_contract(RatioAxisSafetyContractTests)
     _run_unittest_contract(AnalysisInputSafetyContractTests)
     _run_unittest_contract(WickEquivalenceSafetyContractTests)

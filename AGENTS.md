@@ -44,7 +44,10 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 | `data/` | 数据、图像、安装与运行脚本；`from-logs/` 保留原 `logs/**` 相对路径，`from-docs/` 保留原 `docs/**` 相对路径 |
 | `skills/` | PyQCD 领域技能、运维技能及归档的上游参考技能 |
 
+<!-- form-skill:start -->
 ## form 格式约定
+
+> 目标库原有明确约定与本节通用规则冲突时，以原有约定为准；用户明确指令优先于二者。
 
 - 库类型：complex；主导语言：Python，辅助语言：Bash、LaTeX；无现行 C++ 源码树。
 - 文件命名：Python 模块全小写下划线，私有模块前缀 `_`；Bash 脚本全小写下划线；
@@ -57,6 +60,8 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 - 变量命名：普通变量使用 `snake_case`；模块级不可变常量使用全大写下划线；
   数学量、坐标和标准缩写保留 `Nt/Nz/Pz/QCD/HDF5` 等正式写法。
 - 对象命名：Python 类型使用大驼峰；私有类型前缀 `_`。
+- 名称质量与标签边界：名称须清晰、简短且语义完整；Git 标签名只可作版本引用，
+  不得进入新增路径、对象、函数、变量、类型、字段、测试标识或配置键。
 - 顶层目录白名单：`pyqcd/`（生产包）、`data/`（历史数据、图像和运行脚本）、
   `docs/`（任务文档和图片）、`logs/`（纯文本运行记录）、`refer/`（只读外部参考）、
   `skills/`（项目技能）。
@@ -65,10 +70,13 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 - 文档/日志/数据：`docs/` 允许 `md/tex/pdf` 和图片；`logs/` 允许
   `log/json/tsv/csv/txt`；`data/` 保留历史数据、图像、脚本及 `from-docs/`、
   `from-logs/` 归档，不按通用空数据目录规则清理。
-- 审计入口：`skills/form/scripts/form-audit.sh`；该包装器只豁免下文具名例外，
+- 审计入口：`skills/form/scripts/form-audit.sh`；该包装器只豁免下列具名例外，
   任何其他命名、目录或交付格式发现均失败。
 - Git 交付：只暂存本任务文件，禁止 `git add -A`；提交消息写明原因、改动和验证；
   普通推送，禁止 force push 或改写已推送标签。
+- Git 大文件：除用户明确要求外，禁止提交单个大于 `10,000,000` 字节的文件；
+  每批暂存后运行 `/root/configure/skills/form/scripts/form-large-files-check.sh`，
+  命中时停止提交并提醒用户。
 - 本地例外 1：`data/**` 是已验证历史数据和运行归档，允许跟踪数据、图片、脚本和
   说明文件；受用途与历史可复现性约束，不因通用 `data/` 空目录规则删除。
 - 本地例外 2：`logs/**/AGENTS.md` 是嵌套目录治理文件，允许与 `logs/` 文本记录共存。
@@ -81,6 +89,11 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
   它不授权新增普通函数使用驼峰或大小写混排。
 - 本地例外 6：`refer/**` 与 `data/**` 中已跟踪但被局部 `.gitignore` 匹配的历史
   资料保持原状；验证忽略规则时须显式排除这两个归档树。
+- 本地例外 7：`docs/from-logs/**`、`logs/**` 和 `data/from-logs/**` 是原日志/报告的
+  只读历史证据，路径中的 tag 形目录名只作版本定位，允许精确保留；不得据此新增同类路径。
+- 本地例外 8：`pyqcd/testing/tmd/artifacts/*/docs/analy_test9_*` 是与二进制 PDF 成对的
+  冻结产物，为保持 TeX/PDF 一致性允许保留，并由本地包装器逐路径豁免。
+<!-- form-skill:end -->
 
 ## 外来参考库分析产物（refer/git-rep/*/docs）
 
