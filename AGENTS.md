@@ -52,6 +52,8 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 - 库类型：complex；主导语言：Python，辅助语言：Bash、LaTeX；无现行 C++ 源码树。
 - 文件命名：Python 模块全小写下划线，私有模块前缀 `_`；Bash 脚本全小写下划线；
   LaTeX/Markdown 使用内容或领域名称。
+- Agent 指令唯一名称：`AGENTS.md`；`AGENT.md` 不是兼容别名。同目录并存时，
+  必须先完整合并有效内容并去重到 `AGENTS.md`，再删除 `AGENT.md`，并同步全部现行引用。
 - 函数命名：Python 公共接口与内部函数使用 `snake_case`，私有函数前缀 `_`；
   Bash 内部函数前缀 `_`，入口函数使用 `snake_case`。
 - 兼容命名例外：基线 `811900c` 已有的数学符号名（如 `th_E0`、`A_s`、`SU2combine`）
