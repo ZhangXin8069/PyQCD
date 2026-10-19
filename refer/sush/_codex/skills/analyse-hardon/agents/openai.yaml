@@ -1,0 +1,4 @@
+interface:
+  display_name: "强子分析"
+  short_description: "使用 lqcddb 分析强子关联函数"
+  default_prompt: "使用 $analyse-hardon 为这些 lqcddb 关联函数构建清晰的误差棒图，并进行逐组态拟合分析。"

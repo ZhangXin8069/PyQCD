@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fit Bare Matrix Elements"
+  short_description: "Fit quark-PDF bare matrix elements with AIC"
+  default_prompt: "Use $fit-bare to fit the current quark-PDF bare matrix elements with the default Sumratio-difference AIC workflow."
