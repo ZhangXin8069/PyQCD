@@ -26,7 +26,77 @@ import time
 import numpy as np
 
 from ._disconnected import (aggregate_fit_statuses, fit_status_from_samples,
-                            model_ratio, model_ratio_jacobian, resample, sem)
+                            model_ratio, model_ratio_jacobian,
+                            _relative_correlator, resample, sem)
+
+
+_RATIO_ESTIMATORS = frozenset(("ensemble", "configuration_ratio"))
+
+
+def _disconnected_ratio(corr2, ope, corr3, *, estimator="ensemble"):
+    """Vacuum-subtract factorized C3 and form the TMD ratio.
+
+    The reference estimator first averages ``C2*O - C2*<O>`` and the
+    denominator ``C2`` over the source axis, then divides. The legacy
+    configuration-by-configuration ratio is retained only as an explicit
+    reproduction option.
+    """
+    if estimator not in _RATIO_ESTIMATORS:
+        raise ValueError(
+            f"ratio_estimator 必须来自 {sorted(_RATIO_ESTIMATORS)!r}")
+
+    c2 = np.asarray(corr2)
+    op = np.asarray(ope)
+    c3 = np.asarray(corr3)
+    if c2.ndim != 3:
+        raise ValueError("corr2 必须具有 (sample,source,dt) 三轴")
+    if op.ndim != 5:
+        raise ValueError("ope 必须具有 (sample,source,dtau,nz,nb) 五轴")
+    if c3.ndim != 6:
+        raise ValueError(
+            "corr3 必须具有 (sample,source,dt,dtau,nz,nb) 六轴")
+    nsample, nsource, ndt = c2.shape
+    if nsample < 1 or nsource < 1 or ndt < 1:
+        raise ValueError("corr2 的 sample/source/dt 轴必须非空")
+    if op.shape[:2] != (nsample, nsource):
+        raise ValueError("corr2 与 ope 的 sample/source 轴不一致")
+    if c3.shape != (nsample, nsource, ndt) + op.shape[2:]:
+        raise ValueError("corr2/ope/corr3 的 dt 或 observable 轴不一致")
+
+    dtype = np.result_type(c2.dtype, op.dtype, c3.dtype, np.float64)
+    c2 = c2.astype(dtype, copy=False)
+    op = op.astype(dtype, copy=False)
+    c3 = c3.astype(dtype, copy=False)
+    denominator_real = np.real(c2)
+
+    if estimator == "ensemble":
+        c2_source = np.mean(c2, axis=1)
+        ope_source = np.mean(op, axis=1)
+        c3_source = np.mean(c3, axis=1)
+        numerator = (
+            c3_source
+            - c2_source[:, :, None, None, None]
+            * ope_source[:, None, :, :, :]
+        )
+        denominator = np.mean(denominator_real, axis=1)
+        expanded = denominator[:, :, None, None, None]
+        if (not np.isfinite(numerator).all()
+                or not np.isfinite(expanded).all()
+                or np.any(expanded == 0)):
+            raise FloatingPointError(
+                "ensemble TMD ratio has non-finite or zero mean C2")
+        return numerator / expanded
+
+    disconnected = (
+        c3 - c2[:, :, :, None, None, None] * op[:, :, None, :, :, :]
+    )
+    expanded = denominator_real[:, :, :, None, None, None]
+    if (not np.isfinite(disconnected).all()
+            or not np.isfinite(expanded).all()
+            or np.any(expanded == 0)):
+        raise FloatingPointError(
+            "configuration TMD ratio has non-finite or zero C2")
+    return np.mean(disconnected / expanded, axis=1)
 
 
 def _plateau_points(ratio, dt_max, dt_start, dt_end, cut):
@@ -80,7 +150,7 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
                                NT=72, nz=24, nb=1,
                                dt_max=20, dt_start=7, dt_end=10,
                                cut=6, p0=None, momentum='P200',
-                               z_s=0):
+                               z_s=0, ratio_estimator='ensemble'):
     """不相连胶子 TMD ratio + 逐 (z,b) 拟合（code_1.py 算法，b⊥ 扩展）。
 
     Args:
@@ -93,6 +163,8 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
         nb:           b⊥ 维长度。
         momentum:     动量标签（'P200' 等，用于命名输出文件）。
         z_s:          比值参考 z 索引（保留参数，备用）。
+        ratio_estimator: ``"ensemble"``（默认，先平均 C3/C2 再相除）或
+                       ``"configuration_ratio"``（仅复现历史逐样本比值）。
     Returns:
         ch_results: {hadron: {'ratio', 'c0', 'c1', 'dE', 'chi2', 'x_coor'}}
             c0/c1/dE/chi2 形状 (Nsample, nz, nb)。
@@ -129,20 +201,14 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
 
         key2 = f'{k2}_{momentum}'
         _corr = np.stack([np.real(corr_2pt_all[cid][key2]) for cid in conf_ids])
-        full = np.zeros((Nconf, NT, NT), dtype=np.float64)
-        for ti in range(NT):
-            full[:, :, ti] = np.roll(_corr, -ti, axis=1)
-
         # OPE tmd: (Nconf, nz, nb, Nt) → (Nconf, tau, z, b)
         _ope = np.stack([np.real(ope_all[cid]['tmd']) for cid in conf_ids])
         _ope = _ope.transpose(0, 3, 1, 2)   # (Nconf, Nt, nz, nb)
 
         # 相对时间构造
-        _corr2_rel = np.zeros((Nconf, NT, dt_max), dtype=np.float64)
+        _corr2_rel = _relative_correlator(_corr, dt_max)
         _ope_rel = np.zeros((Nconf, NT, dt_max, nz, nb), dtype=np.float64)
         for ti in range(NT):
-            corr2_shift = np.roll(full[:, :, ti], -ti, axis=1)
-            _corr2_rel[:, ti, :] = corr2_shift[:, :dt_max]
             ope_shift = np.roll(_ope, -ti, axis=1)
             _ope_rel[:, ti, :, :, :] = ope_shift[:, :dt_max, :, :]
 
@@ -162,11 +228,14 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
             ope = resample(_ope_rel, jack, Nsample)
             corr3 = resample(_corr3, jack, Nsample)
 
-        # 真空扣除 + ratio
-        corr3_disc = corr3 - corr2[:, :, :, None, None, None] * ope[:, :, None, :, :, :]
-        eps = 1e-30
-        ratio = np.mean(corr3_disc / (corr2[:, :, :, None, None, None] + eps), axis=1)
-        ratio = ratio.real   # (Nsample, dt, dtau, nz, nb)
+        # 真空扣除 + ratio：同一样本内先对 source 平均，再相除。
+        ratio = _disconnected_ratio(
+            corr2, ope, corr3, estimator=ratio_estimator)
+        if np.iscomplexobj(ratio):
+            if np.max(np.abs(ratio.imag)) > 1e-12:
+                raise FloatingPointError(
+                    "TMD ratio acquired a material imaginary residual")
+            ratio = ratio.real
         if Nconf < 2:
             ratio = np.full(ratio.shape, np.nan, dtype=np.float64)
         np.save(os.path.join(out_dir, f'ratio_{had_name}_{momentum}.npy'), ratio)
@@ -221,6 +290,9 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
                 sample_rank_by_channel=sample_rank_by_channel,
                 required_rank_by_channel=required_rank_by_channel,
                 fit_reason_by_channel=fit_reason_by_channel,
+                ratio_estimator=np.asarray(ratio_estimator),
+                resampling_kind=np.asarray("none"),
+                Nsample=np.asarray(Nsample, dtype=np.int64),
             )
             np.save(
                 os.path.join(out_dir, f'c0_plateau_{momentum}.npy'),
@@ -247,6 +319,9 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
                 'sample_rank_by_channel': sample_rank_by_channel,
                 'required_rank_by_channel': required_rank_by_channel,
                 'fit_reason_by_channel': fit_reason_by_channel,
+                'ratio_estimator': ratio_estimator,
+                'resampling_kind': 'none',
+                'Nsample': Nsample,
             }
             continue
 
@@ -362,6 +437,10 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
             required_rank_by_channel=required_rank_by_channel,
             fit_reason=np.asarray(fit_reason),
             fit_reason_by_channel=fit_reason_by_channel,
+            ratio_estimator=np.asarray(ratio_estimator),
+            resampling_kind=np.asarray(
+                "jackknife" if jack else "bootstrap"),
+            Nsample=np.asarray(Nsample, dtype=np.int64),
         )
         # plateau 均值版（fit 窗口内直接平均，抗奇异协方差；test9 整合项）
         c0_plateau = plateau_c0(ratio, dt_max=dt_max, dt_start=dt_start,
@@ -392,6 +471,9 @@ def run_disconnected_tmd_ratio(corr_2pt_all, ope_all, conf_ids,
                 plateau_metadata['plateau_status_by_channel']),
             'plateau_sample_rank': plateau_metadata['plateau_sample_rank'],
             'plateau_reason': plateau_metadata['plateau_reason'],
+            'ratio_estimator': ratio_estimator,
+            'resampling_kind': "jackknife" if jack else "bootstrap",
+            'Nsample': Nsample,
         }
 
     return ch_results
@@ -409,7 +491,8 @@ def plot_tmd_c0(ch_results, run_dir, momentum, logger=print,
 
     for had_name, res in ch_results.items():
         c0 = res['c0']               # (Nsample, nz, nb)
-        c0m = c0.mean(0); c0e = sem(c0, True)
+        jackknife = res.get('resampling_kind') == 'jackknife'
+        c0m = c0.mean(0); c0e = sem(c0, jackknife)
         z = np.arange(nz)
 
         # 逐 b 面板
@@ -589,7 +672,8 @@ def plot_tmd_ratio(ch_results, run_dir, momentum, logger=print,
     out_dir = os.path.join(run_dir, 'analysis', 'tmd_ratio')
     for had_name, res in ch_results.items():
         ratio = res['ratio']     # (Nsample, dt, dtau, nz, nb)
-        rm = ratio.mean(0); re_ = sem(ratio, True)
+        jackknife = res.get('resampling_kind') == 'jackknife'
+        rm = ratio.mean(0); re_ = sem(ratio, jackknife)
         zs = [0, max(0, nz // 4), max(0, nz // 2), max(0, nz - 1)]
         bs = list(range(min(nb, 2)))
         fig, axes = plt.subplots(len(bs), len(zs),

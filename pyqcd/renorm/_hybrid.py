@@ -85,33 +85,58 @@ def fit_hR_lambda(par_ini, lambda_range, lamb, hR_data, cov_kind='diag',
     Returns:
         拟合参数 (l1, a1, lambda0)。
     """
-    lam_min, lam_max = lambda_range
+    lamb = np.asarray(lamb, dtype=float)
+    if lamb.ndim != 1 or not np.isfinite(lamb).all():
+        raise ValueError("lamb 必须是一维有限数组")
+    if len(lambda_range) != 2:
+        raise ValueError("lambda_range 必须是 (lam_min, lam_max)")
+    lam_min, lam_max = (float(value) for value in lambda_range)
+    if not np.isfinite(lam_min) or not np.isfinite(lam_max) or lam_min > lam_max:
+        raise ValueError("lambda_range 必须有限且 lam_min <= lam_max")
     mask = (lamb >= lam_min) & (lamb <= lam_max)
     lamb_sel = lamb[mask]
+    if lamb_sel.size < 4:
+        raise ValueError("fit_hR_lambda 至少需要 4 个 λ 节点")
+    if np.any(lamb_sel <= 0.0):
+        raise ValueError("fit_hR_lambda 的拟合节点必须为正 λ")
     hR_raw = np.asarray(hR_data)
     if np.iscomplexobj(hR_raw):
         raise ValueError(
             "fit_hR_lambda requires real-valued hR_data; "
             "complex channels must be fitted separately")
     hR_sel = np.asarray(hR_raw, dtype=float)[mask]
+    if hR_sel.ndim not in (1, 2) or hR_sel.shape[0] != lamb_sel.size:
+        raise ValueError("hR_data 必须与 lamb 等长，形状为 (nλ,) 或 (nλ,nsample)")
+    if not np.isfinite(hR_sel).all():
+        raise ValueError("hR_data 必须全部有限")
 
     if cov_kind not in ('diag', 'boot'):
         raise ValueError(f"未知 cov_kind: {cov_kind}")
     if hR_sel.ndim > 1:
+        if hR_sel.shape[1] < 2:
+            raise ValueError("hR_data 样本轴至少需要 2 个 replica")
         data_mean = hR_sel.mean(axis=1)
         if cov_kind == 'boot':
             from ._zr import boot_covariance
-            c_inv = np.linalg.pinv(
-                boot_covariance(hR_sel, n_rep=n_boot, seed=seed))
+            covariance = boot_covariance(hR_sel, n_rep=n_boot, seed=seed)
+            if (not np.isfinite(covariance).all()
+                    or np.linalg.matrix_rank(covariance) < 3):
+                raise ValueError("bootstrap 协方差秩不足以识别 3 个参数")
+            c_inv = np.linalg.pinv(covariance)
         else:
-            std = hR_sel.std(axis=1)
-            c_inv = np.diag(1.0 / np.maximum(std ** 2, 1e-30))
+            std = hR_sel.std(axis=1, ddof=1)
+            if not np.isfinite(std).all() or np.any(std <= 0.0):
+                raise ValueError("diag 协方差要求每个 λ 的正有限样本方差")
+            c_inv = np.diag(1.0 / std ** 2)
     else:
         if cov_kind == 'boot':
             raise ValueError("cov_kind='boot' 需要逐样本二维输入 (nz, nsample)")
         data_mean = hR_sel
-        c_inv = np.diag(1.0 / np.maximum(
-            np.ones_like(hR_sel) ** 2, 1e-30))
+        c_inv = np.eye(lamb_sel.size)
+
+    par_ini = np.asarray(par_ini, dtype=float)
+    if par_ini.shape != (3,) or not np.isfinite(par_ini).all():
+        raise ValueError("par_ini 必须是 3 个有限实数")
 
     def cost(par):
         l1_, a1_, lambda0_ = par
@@ -122,6 +147,23 @@ def fit_hR_lambda(par_ini, lambda_range, lamb, hR_data, cov_kind='diag',
     from scipy.optimize import minimize
     res = minimize(cost, par_ini, method='Nelder-Mead',
                    options={'maxiter': 5000, 'xatol': 1e-6})
+    if (not res.success or not np.isfinite(res.fun)
+            or not np.isfinite(res.x).all() or res.x[2] <= 0.0):
+        raise ValueError(f"fit_hR_lambda 优化失败: {res.message}")
+    l1_fit, a1_fit, lambda0_fit = res.x
+    base = lamb_sel ** (-a1_fit) * np.exp(-lamb_sel / lambda0_fit)
+    jacobian = np.column_stack((
+        base,
+        -np.log(lamb_sel) * l1_fit * base,
+        l1_fit * base * lamb_sel / lambda0_fit ** 2.0,
+    ))
+    eigenvalues, eigenvectors = np.linalg.eigh((c_inv + c_inv.T) / 2.0)
+    if np.any(eigenvalues < -1e-10 * max(eigenvalues[-1], 1.0)):
+        raise ValueError("fit_hR_lambda 协方差权重不是半正定")
+    square_root = (
+        np.sqrt(np.maximum(eigenvalues, 0.0))[:, None] * eigenvectors.T)
+    if np.linalg.matrix_rank(square_root @ jacobian) < 3:
+        raise ValueError("fit_hR_lambda 模型 Jacobian 秩不足以识别 3 个参数")
     return res.x
 
 

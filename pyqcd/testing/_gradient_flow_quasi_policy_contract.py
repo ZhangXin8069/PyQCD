@@ -223,11 +223,21 @@ class GradientFlowQuasiPolicyContract(unittest.TestCase):
                 window_mask=np.ones(3, dtype=bool),
                 physical_acceptance=True,
             )
+        with self.assertRaisesRegex(
+                ValueError, "absolute_normalization_validated"):
+            _match(
+                array,
+                window_mask=np.ones(3, dtype=bool),
+                kappa_F=1.25,
+                physical_acceptance=True,
+            )
 
         matched, metadata = _match(
             array,
             window_mask=np.ones(3, dtype=bool),
             kappa_F=1.25,
+            absolute_normalization_validated=True,
+            normalization_provenance="independent tree-level oracle test",
             physical_acceptance=True,
         )
         factor_u, _, line = _endpoint_factors()
@@ -239,6 +249,9 @@ class GradientFlowQuasiPolicyContract(unittest.TestCase):
         )
         self.assertEqual(metadata["physical_acceptance"], True)
         self.assertEqual(metadata["window_valid"], True)
+        self.assertTrue(
+            metadata["scheme_conversion_details"][
+                "absolute_field_normalization_complete"])
 
 
 if __name__ == "__main__":

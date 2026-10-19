@@ -18,7 +18,7 @@ def main():
     parser.add_argument("--nt", required=True, type=int)
     parser.add_argument("--tau", required=True, type=float)
     parser.add_argument("--epsilon", default=0.01, type=float)
-    parser.add_argument("--z-count", default=25, type=int)
+    parser.add_argument("--z-count", default=None, type=int)
     parser.add_argument("--z-dir", default=2, type=int)
     args = parser.parse_args()
 

@@ -63,6 +63,17 @@ class QuasiTmdFourierContract(unittest.TestCase):
                 np.ones(2), np.array([0.2, 0.4]), self.pz,
                 x_grid=np.array([0.3]))
 
+    def test_quasi_pdf_gluon_rejects_silent_imaginary_drop_and_shape_mismatch(self):
+        """sin 型入口不得静默取实部，且 h/z 必须一一对应。"""
+        z = np.array([0.0, 0.1, 0.2])
+        complex_h = np.ones(3, dtype=complex) * (1.0 + 0.2j)
+        with self.assertRaisesRegex(ValueError, "实数|虚部"):
+            quasi_pdf_gluon(
+                complex_h, z, self.pz, x_grid=np.array([0.3]))
+        with self.assertRaisesRegex(ValueError, "z_grid|形状"):
+            quasi_pdf_gluon(
+                np.ones(2), z, self.pz, x_grid=np.array([0.3]))
+
     def test_positive_half_axis_matches_literal_hermitian_full_axis(self):
         """漏掉 Hermitian 延拓的倍数或 sine 通道都会破坏全轴变换。"""
         z_positive = np.linspace(0.0, 0.8, 17)

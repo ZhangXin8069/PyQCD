@@ -31,3 +31,11 @@
 - 关键内容: 清理现行标签形代码标识符，登记历史归档例外，完整回归 110 项通过
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## reference-review-20261020 - final - 2026-10-20 03:27:57 +0800
+- 主任务: 审查新增参考文档与代码并合并修正
+- 日志文件: logs/v2026102003.txt
+- 文件大小: 6063 bytes
+- 触发原因: 任务完成
+- 关键内容: 修复 TMD ratio、NLO matching、Fourier 归一化及 fail-closed 数值门；全量 110 项通过；一致性验证因缺失大体积参考产物未执行
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
