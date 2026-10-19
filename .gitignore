@@ -75,6 +75,7 @@ docs/background.png
 # ==== 临时工作目录 ====
 tmp/
 scripts/
+pyqcd/testing/tmd/artifacts/work/
 # ---- 追加自 lib/_gitignore 模板 (gadd-ignore.sh)：逐行精确匹配去重补加，分节含义见该模板 ----
 # ============================================================================
 # configure 仓库通用 .gitignore

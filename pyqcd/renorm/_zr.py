@@ -316,27 +316,51 @@ def build_hB_dataset(c0_zx, z_fm, z_grid_new=None):
     """
     from scipy.interpolate import interp1d
 
-    hb_zn = np.atleast_2d(np.asarray(c0_zx, dtype=float))
-    if hb_zn.shape[0] == 1 and np.ndim(c0_zx) == 1:
+    c0_raw = np.asarray(c0_zx, dtype=float)
+    if c0_raw.ndim not in (1, 2):
+        raise ValueError("c0_zx 必须是一维或 (nz,nsample) 二维数组")
+    hb_zn = np.atleast_2d(c0_raw)
+    if hb_zn.shape[0] == 1 and c0_raw.ndim == 1:
         hb_zn = hb_zn.T                      # (1, nz) 边角：按 (nz,) 处理
+    if hb_zn.shape[1] == 0:
+        raise ValueError("c0_zx 的 replica 轴不得为空")
     z_o = np.asarray(z_fm, dtype=float)
+    if z_o.ndim != 1 or not np.isfinite(z_o).all():
+        raise ValueError("z_fm 必须是一维有限数组")
     if hb_zn.shape[0] != len(z_o):
         raise ValueError(f"c0 首维 {hb_zn.shape[0]} 与 z 网格 {len(z_o)} 不一致")
+    if z_o.size == 0 or z_o[0] != 0.0:
+        raise ValueError("build_hB_dataset 需要 z_fm[0] == 0 以执行 z₀ 归一化")
+    if np.any(np.diff(z_o) <= 0.0):
+        raise ValueError("z_fm 必须严格递增")
+    if not np.isfinite(hb_zn).all():
+        raise ValueError("c0_zx 必须全部有限")
 
     hb_o = hb_zn / hb_zn[0:1, :]             # z₀ 归一化
+    if not np.isfinite(hb_o).all():
+        raise ValueError("z=0 归一化分母不得为零或非有限")
     if z_grid_new is None:
         z_grid_new = np.arange(0.15, 1.0 + 0.05, 0.05)
+    target_grid = np.asarray(z_grid_new, dtype=float)
+    if target_grid.ndim != 1 or target_grid.size == 0:
+        raise ValueError("z_grid_new 必须是非空一维数组")
+    if (not np.isfinite(target_grid).all()
+            or np.any(target_grid < 0.0)
+            or np.any(np.diff(target_grid) <= 0.0)):
+        raise ValueError("z_grid_new 必须是非负、有限且严格递增的一维网格")
     interp = interp1d(z_o, hb_o, kind='linear', axis=0,
                       bounds_error=False, fill_value='extrapolate')
-    hb_new = interp(np.asarray(z_grid_new, dtype=float))
+    hb_new = interp(target_grid)
+    if not np.isfinite(hb_new).all() or np.any(hb_new <= 0.0):
+        raise ValueError("插值后的 hB 必须为有限正数")
 
     squeeze = np.ndim(c0_zx) == 1
     if squeeze:
         hb_new = hb_new[:, 0]
-        return {'z': np.asarray(z_grid_new), 'loghB': np.log(hb_new),
+        return {'z': target_grid, 'loghB': np.log(hb_new),
                 'hB': hb_new, 'z_o': z_o, 'hB_o': hb_o[:, 0],
                 'hB_o_zn': hb_zn[:, 0]}
-    return {'z': np.asarray(z_grid_new), 'loghB': np.log(hb_new),
+    return {'z': target_grid, 'loghB': np.log(hb_new),
             'hB': hb_new, 'z_o': z_o, 'hB_o': hb_o, 'hB_o_zn': hb_zn}
 
 

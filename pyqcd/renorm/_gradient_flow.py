@@ -169,6 +169,9 @@ def wilson_flow(U, tau, eps=0.01, n_steps=None, verbose=False):
         return U
     if n_steps is None:
         n_steps = int(np.ceil(tau / eps))
+    elif tau / n_steps > eps:
+        raise ValueError(
+            f"n_steps={n_steps} 使实际步长 {tau / n_steps:g} 超过 eps={eps:g}")
 
     step_size = tau / n_steps
     V = U

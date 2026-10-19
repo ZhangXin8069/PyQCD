@@ -25,7 +25,7 @@ import numpy as np
 from ._const import CA, CF, gammaE, pi, b0, alpha_s as _alpha_s_const
 from ._ensembles import fm_to_GeV
 from ._matching import (
-    _matching_kernels, _validate_uniform_grid, A_s_run,
+    _matching_matrix, _validate_uniform_grid, A_s_run,
 )
 
 
@@ -145,15 +145,24 @@ def quasi_pdf_gluon(h_z, z_grid, pz_gev, x_grid=None):
     Returns:
         (x_grid, g̃(x)) 形状 (nx,)。
     """
-    h = np.asarray(h_z, dtype=float).real
-    z = np.asarray(z_grid, dtype=float) / fm_to_GeV   # fm → GeV⁻¹
-    if z.ndim != 1 or z.size < 2:
+    h = _finite_real_array(h_z, "h_z")
+    z_fm = np.asarray(z_grid, dtype=float)
+    if z_fm.ndim != 1 or z_fm.size < 2:
         raise ValueError("z_grid 必须是一维且至少含两个点")
-    if z[0] != 0.0:
+    if h.shape != z_fm.shape:
+        raise ValueError(
+            f"h_z 与 z_grid 形状必须一致: {h.shape} vs {z_fm.shape}")
+    if not np.isfinite(z_fm).all() or np.any(np.diff(z_fm) <= 0.0):
+        raise ValueError("z_grid 必须全部有限且严格递增")
+    if z_fm[0] != 0.0:
         raise ValueError("quasi_pdf_gluon 的 z_grid 必须从 z=0 开始")
+    pz_gev = _positive_finite_scalar(pz_gev, "pz_gev")
+    z = z_fm / fm_to_GeV                              # fm → GeV⁻¹
     if x_grid is None:
         x_grid = np.linspace(-1.5, 1.5, 256)
     x_grid = np.asarray(x_grid, dtype=float)
+    if x_grid.ndim != 1 or x_grid.size == 0 or not np.isfinite(x_grid).all():
+        raise ValueError("x_grid 必须是非空有限一维数组")
 
     small = np.abs(x_grid) < 1e-15
     xv = np.where(small, 1.0, x_grid)                 # 防除零，末尾回填 0
@@ -228,21 +237,21 @@ def cs_kernel_from_ratio(hR_pz1, hR_pz2, pz1, pz2):
 
 
 def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
-                           k_clip=(-3.0, 3.0)):
+                           k_clip=None):
     """两动量 c0 比值 CS 核提取——工程封装（整合 test9 示例内联实现）。
 
     与 cs_kernel_from_ratio 的差异：
         1) 直接吃裸 c0(z,b)（未经 z₀ 归一化，避免归一点噪声放大）；
         2) z_ref 可选参考 z 索引（默认 1：z=0 处 c0≡1 无信息，
            z=1 为最低含 Wilson 线信息的分离）；
-        3) k_clip 数值保护：噪声使 |K| 越界时截断
-           （CS 核物理量级 |K| ≲ O(1) GeV²·fm² 量级，|K|>3 视为噪声）。
+        3) ``k_clip`` 仅在调用方显式要求时截断；默认保留原始核并让异常值
+           暴露出来，不能用隐式 clip 把噪声伪装成有限物理结果。
 
     Args:
         c01/c02: 两动量裸矩阵元 (nz, nb) 或 (nb,)（同 z 网格）。
         pz1_gev/pz2_gev: 两动量（GeV）。
         z_ref: 参考 z 行索引（负数按 Python 惯例回绕）。
-        k_clip: (K_min, K_max) 截断区间；None 则不截断。
+        k_clip: 可选 (K_min, K_max) 显式截断区间；默认不截断。
     Returns:
         K(b⊥) 数组（沿所选 z 行）。
     """
@@ -289,8 +298,9 @@ def soft_function_intrinsic(R_square, b_perp, mu=2.0):
 
 
 def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
-                        cs_kernel=0.0, soft_factor=1.0, pz_scale=2.0,
-                        x_tmd=None, lambda_s_fm=0.3):
+                        cs_kernel=None, soft_factor=None, pz_scale=2.0,
+                        x_tmd=None, lambda_s_fm=0.3,
+                        return_metadata=False):
     """混合方案 TMD 匹配（Eq.:matching_tmd 的离散实现，1 圈核）。
 
     x·g̃(x, b⊥) = ∫(dy/|y|)·C^hybrid(x/y, λs, μ/(yPz))
@@ -300,10 +310,9 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
     g_xy 复用 _matching._matching_kernels 的胶子核 g_0..g_3（ξ<0/0<ξ<1/ξ>1
     分区 + g_0 的 Si 项，含 μ/(yPz) 标度与 λ_s 截断）。
 
-    数值结构：Z_ij = δ_ij + (α_s C_A/2π)·dx·(x/|x|)·[g_ij/y_j
-    − δ_ij·y_i·Σ_k(g_ik/y_k²)]，x·g̃ = Z⁻¹·[y·g/√S_I·e^{½ln(ζz/ζ)K}]
-    ——与 _matching.hR_PDF 同构（矩阵形式自然处理 ξ=1 主值奇点，
-    δ 项由 Z⁻¹ 的 LO 部分还原，匹配求和规则经 test_matching_sum_rule 验证）。
+    数值结构：离散卷积 ``K`` 包含 ξ 三分区核和固定的 ``y=x`` counterterm，
+    严格按一圈作 ``q - α_s C_A/(2π) K q``；不做矩阵逆，也不把已修正量
+    再次送入非截断乘积。
 
     Args:
         x_grid: 输出 x 网格（(0,1)）。
@@ -311,13 +320,16 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
         b_perp: b⊥（fm，标记用）。
         mu: 匹配标度（GeV）。
         pz_gev: Pz（GeV）。
-        cs_kernel: K(b⊥)（标量或数组）。
-        soft_factor: √S_I(b⊥)（标量或数组）。
+        cs_kernel: 必填 K(b⊥)（标量或数组）。未测量时必须显式提供 0
+            并把结果标为 proxy，不能依赖函数默认值。
+        soft_factor: 必填 √S_I(b⊥)（标量或数组）。未测量时必须显式提供 1
+            并把结果标为 proxy。
         pz_scale: 参考快度标度 ζ 对应的动量（GeV）。
         x_tmd: 输入光锥 TMD y·g(y, b⊥)（数组，与 y_grid 同形）。
         lambda_s_fm: 大 λ 截断（fm，默认 0.3，同 _matching.hR_PDF）。
+        return_metadata: 为 True 时额外返回匹配状态字典。
     Returns:
-        (x_grid, x·g̃(x, b⊥))——1 圈匹配。
+        ``(x_grid, x·g̃(x,b⊥))``；``return_metadata=True`` 时再附状态字典。
     """
     x = _validate_uniform_grid(x_grid, "x_grid")
     y = (x if y_grid is None
@@ -341,62 +353,60 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
     pz_gev = _positive_finite_scalar(pz_gev, "pz_gev")
     pz_scale = _positive_finite_scalar(pz_scale, "pz_scale")
     lambda_s_fm = _positive_finite_scalar(lambda_s_fm, "lambda_s_fm")
+    if cs_kernel is None:
+        raise ValueError("cs_kernel 必须显式提供；proxy 使用 0 也要写明")
+    if soft_factor is None:
+        raise ValueError("soft_factor 必须显式提供；proxy 使用 1 也要写明")
 
-    dx = x[1] - x[0]
     lambda_s = lambda_s_fm / fm_to_GeV * pz_gev
     # 与 _matching.hR_PDF 同构：A_s ≡ α_s/(4π)，×4π 还原真耦合
     # （zengch 端 matching*.py 均为 alpha_s = A_s(mu)*4π）
     alpha_s = A_s_run(mu) * 4.0 * pi
 
-    # 匹配核矩阵：g_ij = g_xy(x_i / y_j)（1 圈硬核，含主值奇点）
-    cxi = x[:, None] / y[None, :]
-    g_ij = _matching_kernels(cxi, np.broadcast_to(y[None, :], cxi.shape),
-                             pz_gev, mu, lambda_s)
-
-    # Z_ij 结构（与 _matching.hR_PDF 同构）：
-    #   c_alp_lo = diag(x/|x|)·dx·α_s C_A/(2π)
-    #   m_ij     = g_ij/y_j − δ_ij·y_i·Σ_k(g_ik/y_k²)
-    c_alp_lo = np.diag(x / np.abs(x)) * dx * alpha_s * CA / (2.0 * pi)
-    m_ij = (g_ij / y[None, :]
-            - np.eye(n) * (y[:, None]
-                           * np.sum(g_ij / y[None, :] ** 2.0, axis=1)))
-    z_ij = np.eye(n) + c_alp_lo @ m_ij
-    if not np.isfinite(z_ij).all():
-        raise ValueError("TMD 匹配矩阵含非有限值")
-    try:
-        z_condition = float(np.linalg.cond(z_ij))
-    except np.linalg.LinAlgError as exc:
-        raise ValueError(
-            "TMD matching matrix is singular/奇异，无法数值求逆") from exc
-    if (not np.isfinite(z_condition)
-            or z_condition > 1.0 / np.finfo(float).eps):
-        raise ValueError(
-            "TMD matching matrix is singular/奇异或数值不可逆 "
-            f"(condition={z_condition:g})")
-    try:
-        z_inv = np.linalg.inv(z_ij)
-    except np.linalg.LinAlgError as exc:
-        raise ValueError(
-            "TMD matching matrix is singular/奇异，无法数值求逆") from exc
+    matrix = _matching_matrix(y, x, pz_gev, mu, lambda_s)
+    coupling = alpha_s * CA / (2.0 * pi)
 
     # 快度演化因子与软函数（逐 b⊥）
     K = _finite_real_array(cs_kernel, "cs_kernel").ravel()
     S = _finite_real_array(soft_factor, "soft_factor").ravel()
     if K.size == 0 or S.size == 0:
         raise ValueError("cs_kernel 与 soft_factor 不得为空")
+    if K.size not in (1, nb):
+        raise ValueError(
+            f"cs_kernel length must be 1 or b-axis length {nb}; got {K.size}")
+    if S.size not in (1, nb):
+        raise ValueError(
+            f"soft_factor length must be 1 or b-axis length {nb}; got {S.size}")
+    K = np.broadcast_to(K, (nb,))
+    S = np.broadcast_to(S, (nb,))
     if np.any(S <= 0.0):
         raise ValueError("soft_factor 必须严格为正")
     rap = np.exp(0.5 * np.log((2.0 * pz_gev) ** 2 / (2.0 * pz_scale) ** 2) * K)
     if not np.isfinite(rap).all():
         raise ValueError("快度演化因子含非有限值")
 
-    out = np.empty((n, nb), dtype=np.result_type(yg.dtype, z_inv.dtype,
+    out = np.empty((n, nb), dtype=np.result_type(yg.dtype, matrix.dtype,
                                                   rap.dtype, S.dtype))
     for j in range(nb):
-        v = yg[:, j] * rap[j % rap.size] / np.sqrt(S[j % S.size])
-        out[:, j] = z_inv @ v
+        v = yg[:, j] * rap[j] / np.sqrt(S[j])
+        out[:, j] = v - coupling * (matrix @ v)
     if nb == 1:
         out = out[:, 0]
+    if return_metadata:
+        proxy_terms = []
+        if np.all(K == 0.0):
+            proxy_terms.append("cs_kernel_zero")
+        if np.all(S == 1.0):
+            proxy_terms.append("soft_factor_one")
+        metadata = {
+            "status": "one_loop_hybrid_matching_diagnostic",
+            "cs_kernel": "explicit_input",
+            "soft_factor": "explicit_input",
+            "proxy_terms": proxy_terms,
+            "physical_acceptance": False,
+            "light_cone_matching": "applied_in_fixed_one_loop_form",
+        }
+        return x, out, metadata
     return x, out
 
 

@@ -218,7 +218,7 @@ def _component_set(gauge, fields, channel, z_dir, z_count):
     )
 
 
-def flowed_gluon_ope(gauge, z_count=25, z_dir=2,
+def flowed_gluon_ope(gauge, z_count=None, z_dir=2,
                      field_projections=FIELD_PROJECTIONS):
     """在给定 gauge 上计算参考 schema-v2 OPE，不执行梯度流。
 
@@ -233,8 +233,14 @@ def flowed_gluon_ope(gauge, z_count=25, z_dir=2,
         ``(field_projection, channel, orientation, component, z, t)``。
     """
     gauge = _validate_gauge(gauge)
-    z_count = _nonnegative_int("z_count", z_count, minimum=1)
     z_dir = _spatial_direction("z_dir", z_dir)
+    extent = int(gauge.shape[3 - z_dir])
+    if z_count is None:
+        z_count = extent
+    z_count = _nonnegative_int("z_count", z_count, minimum=1)
+    if z_count > extent:
+        raise ValueError(
+            f"z_count={z_count} 超过 z_dir={z_dir} 的周期长度 {extent}")
     projections = tuple(field_projections)
     if not projections:
         raise ValueError("field_projections 不能为空")
@@ -286,7 +292,7 @@ def _gauge_stats(gauge):
     }
 
 
-def gradient_flow_gluon_ope(gauge, tau, epsilon=0.01, z_count=25,
+def gradient_flow_gluon_ope(gauge, tau, epsilon=0.01, z_count=None,
                             z_dir=2, conf_id=None, n_steps=None,
                             field_projections=FIELD_PROJECTIONS):
     """thin-link gauge -> Wilson flow -> schema-v2 OPE。
@@ -303,6 +309,10 @@ def gradient_flow_gluon_ope(gauge, tau, epsilon=0.01, z_count=25,
         raise ValueError("epsilon 必须为正")
     if n_steps is not None:
         n_steps = _nonnegative_int("n_steps", n_steps, minimum=1)
+        if tau / n_steps > epsilon:
+            raise ValueError(
+                f"n_steps={n_steps} 使实际步长 {tau / n_steps:g} "
+                f"超过 epsilon={epsilon:g}")
 
     raw_stats = _gauge_stats(gauge)
     from ..renorm._gradient_flow import wilson_flow

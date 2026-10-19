@@ -139,7 +139,10 @@ def _broadcast_window_mask(window_mask, shape):
 
 def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
               z0_policy="nan", helicity_mode="helicity_physical",
-              window_mask=None, kappa_F=None, physical_acceptance=False,
+              window_mask=None, kappa_F=None,
+              absolute_normalization_validated=False,
+              normalization_provenance=None,
+              physical_acceptance=False,
               legacy_z0=False, legacy_plus_combined=False):
     """对一个 schema-v2 OPE 数组施加显式 policy 的一圈转换。
 
@@ -152,8 +155,10 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
             ``"legacy_plus_combined"`` 显式生成旧的 ``Mtiti+Mijij``。
         window_mask: 可选布尔 ``(z,)`` 或完整六轴 mask；False 位置输出 NaN。
         kappa_F: 可选有限正数。提供后按 ``kappa_F**2`` 作用于 bilocal。
-        physical_acceptance: 仅当 kappa_F、全 True 窗口、physical helicity
-            且未使用 legacy z=0 时为 True；显式请求不满足条件时抛错。
+        absolute_normalization_validated: 独立验证 kappa_F 后才可设为 True。
+        normalization_provenance: 绝对归一化验证来源的非空说明。
+        physical_acceptance: 仅当已验证 kappa_F、全 True 窗口、physical
+            helicity 且未使用 legacy z=0 时为 True；不满足时抛错。
         legacy_z0: ``z0_policy="legacy_endpoint"`` 的显式布尔别名。
         legacy_plus_combined: ``helicity_mode="legacy_plus_combined"`` 的
             显式布尔别名。
@@ -186,7 +191,12 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
         helicity_mode = "legacy_plus_combined"
     if not isinstance(physical_acceptance, (bool, np.bool_)):
         raise ValueError("physical_acceptance 必须是布尔值")
+    if not isinstance(
+            absolute_normalization_validated, (bool, np.bool_)):
+        raise ValueError("absolute_normalization_validated 必须是布尔值")
     physical_acceptance = bool(physical_acceptance)
+    absolute_normalization_validated = bool(
+        absolute_normalization_validated)
 
     array = np.asarray(arr, dtype=np.complex128)
     if array.ndim != 6:
@@ -228,6 +238,14 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
         if z0_policy == "legacy_endpoint":
             raise ValueError(
                 "legacy z=0 endpoint factor 不能声明 physical_acceptance")
+        if not absolute_normalization_validated:
+            raise ValueError(
+                "physical_acceptance=True 要求独立验证 "
+                "absolute_normalization_validated=True")
+        if (not isinstance(normalization_provenance, str)
+                or not normalization_provenance.strip()):
+            raise ValueError(
+                "physical_acceptance=True 要求非空 normalization_provenance")
 
     c_parallel, c_perp, delta_m, t_gev = coefficients(
         tau, a_fm, mu_gev, alpha_s, ca
@@ -298,7 +316,14 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
             "order": "one_loop",
             "kappa_F": None if kappa_F is None else float(kappa_F),
             "kappa_F_provided": kappa_F is not None,
-            "absolute_field_normalization_complete": kappa_F is not None,
+            "absolute_normalization_validated": (
+                absolute_normalization_validated),
+            "normalization_provenance": normalization_provenance,
+            "absolute_field_normalization_complete": bool(
+                kappa_F is not None
+                and absolute_normalization_validated
+                and isinstance(normalization_provenance, str)
+                and normalization_provenance.strip()),
             "z0_policy": z0_policy,
             "helicity_mode": helicity_mode,
             "light_cone_matching": "not_applied",
@@ -316,6 +341,8 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
         "acceptance": {
             "accepted": physical_acceptance,
             "requires_kappa_F": True,
+            "requires_validated_absolute_normalization": True,
+            "requires_normalization_provenance": True,
             "requires_all_true_window_mask": True,
             "requires_helicity_physical": True,
             "legacy_z0_accepted": False,

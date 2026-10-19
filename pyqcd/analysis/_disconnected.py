@@ -21,6 +21,25 @@ import time
 import numpy as np
 
 
+def _relative_correlator(correlator, dt_max):
+    """Build C2(t_sink-t_source) without applying the source shift twice."""
+    values = np.asarray(correlator)
+    if values.ndim != 2:
+        raise ValueError("correlator 必须具有 (configuration,time) 两轴")
+    if values.shape[1] == 0 or dt_max <= 0:
+        raise ValueError("correlator 时间轴和 dt_max 必须非空")
+    if dt_max > values.shape[1]:
+        raise ValueError("dt_max 不得超过 correlator 时间长度")
+    relative = np.empty(
+        (values.shape[0], values.shape[1], dt_max),
+        dtype=values.dtype,
+    )
+    for source in range(values.shape[1]):
+        relative[:, source, :] = np.roll(
+            values, -source, axis=1)[:, :dt_max]
+    return relative
+
+
 def sem(data, jackknife=True):
     """样本轴（axis 0）均值的标准误。"""
     data = _as_resample_array(data)
@@ -482,20 +501,14 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
         # 平移不变 2pt：C(t_sink, t_src) = C((t_sink − t_src) mod Nt)
         key2 = f'{k2}_P{target_momentum[-1]}'
         _corr = np.stack([np.real(corr_2pt_all[cid][key2]) for cid in conf_ids])
-        full = np.zeros((Nconf, NT, NT), dtype=np.float64)
-        for ti in range(NT):
-            full[:, :, ti] = np.roll(_corr, -ti, axis=1)
-
         # OPE combined：(Nconf, Nz, Nt) → (Nconf, tau, z)
         _ope = np.stack([np.real(ope_all[cid]['combined']) for cid in conf_ids])
         _ope = _ope.transpose(0, 2, 1)
 
         # 相对时间构造
-        _corr2_rel = np.zeros((Nconf, NT, dt_max), dtype=np.float64)
+        _corr2_rel = _relative_correlator(_corr, dt_max)
         _ope_rel = np.zeros((Nconf, NT, dt_max, NX), dtype=np.float64)
         for ti in range(NT):
-            corr2_shift = np.roll(full[:, :, ti], -ti, axis=1)
-            _corr2_rel[:, ti, :] = corr2_shift[:, :dt_max]
             ope_shift = np.roll(_ope, -ti, axis=1)
             _ope_rel[:, ti, :, :] = ope_shift[:, :dt_max, :]
 

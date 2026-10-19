@@ -173,6 +173,23 @@ class GradientFlowGluonContract(unittest.TestCase):
         )
         self.assertLess(relative, 1e-4)
 
+    def test_periodic_z_count_cannot_wrap_past_lattice_extent(self):
+        """z_count 不得超过对应周期方向长度，避免静默回绕到同一格点。"""
+        from pyqcd.operator import flowed_gluon_ope
+
+        with self.assertRaisesRegex(ValueError, "z_count.*周期长度"):
+            flowed_gluon_ope(
+                _near_identity_su3(seed=7318), z_count=3, z_dir=2)
+
+    def test_explicit_steps_cannot_exceed_requested_epsilon(self):
+        """n_steps 覆盖不得把 RK3 实际步长放大到 epsilon 之上。"""
+        from pyqcd.operator import gradient_flow_gluon_ope
+
+        with self.assertRaisesRegex(ValueError, "实际步长.*超过"):
+            gradient_flow_gluon_ope(
+                _near_identity_su3(seed=7319),
+                tau=0.1, epsilon=0.01, n_steps=1, z_count=1)
+
     def test_flow_to_quasi_matches_reference_component_factors(self):
         from pyqcd.renorm import coefficients, match_one
         from pyqcd.renorm._gradient_flow_quasi import FLOW_TO_QUASI_STATUS
@@ -248,8 +265,16 @@ class GradientFlowGluonContract(unittest.TestCase):
         np.testing.assert_allclose(got[0], c3, rtol=0, atol=3e-14)
         np.testing.assert_allclose(got[1], c2, rtol=0, atol=3e-14)
         np.testing.assert_allclose(
-            got[0] / got[1][None, :], c3 / c2[None, :],
+            got[0] / got[1].real[None, :],
+            c3 / c2.real[None, :],
             rtol=0, atol=3e-14,
+        )
+        complex_division = c3 / c2[None, :]
+        self.assertGreater(
+            float(np.max(np.abs(
+                c3 / c2.real[None, :] - complex_division))),
+            1e-5,
+            "C2 非零虚部未区分 Re(C2) 分母与复数除法",
         )
         wrong = covariance_ratio_estimator(
             operator, pol35.imag, True, denominator_correlator=nopol

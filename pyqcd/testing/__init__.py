@@ -542,8 +542,10 @@ def test_tmd_soft_factor_ze_contracts():
 
 
 def test_tmd_matching_nlo():
-    """TMD 混合方案 1 圈匹配：Z⁻¹ 还原输入、快度/软因子生效、形状正确。"""
+    """TMD 混合方案 1 圈卷积匹配、快度/软因子生效且形状正确。"""
     from pyqcd.renorm import tmd_matching_hybrid
+    from pyqcd.renorm._matching import A_s_run, _matching_matrix
+    from pyqcd.renorm._ensembles import fm_to_GeV
     x = np.linspace(0.05, 0.95, 48)
     yg = x * np.exp(-x / 0.3)         # 物理输入 y·g(y)（y→0 衰减）
     # 1) δ 项主导的形状自洽：cs=0, S=1 → 输出非负、与输入同量级。
@@ -554,9 +556,12 @@ def test_tmd_matching_nlo():
                                    cs_kernel=0.0, soft_factor=1.0, x_tmd=yg)
     assert x_o.shape == x.shape
     assert np.all(np.isfinite(out))
-    assert np.all(out >= -1e-12)
-    dev_l2 = np.linalg.norm(out - yg) / np.linalg.norm(yg)
-    assert dev_l2 < 0.7, f"NLO 重塑过大: L2 相对偏差 {dev_l2:.3f}"
+    matrix = _matching_matrix(
+        x, x, pz_gev=2.0, mu=2.0,
+        lambda_s=.3 / fm_to_GeV * 2.0)
+    coupling = A_s_run(2.0) * 4.0 * np.pi * 3.0 / (2.0 * np.pi)
+    np.testing.assert_allclose(
+        out, yg - coupling * (matrix @ yg), rtol=0.0, atol=1e-14)
     # 2) 快度演化因子：pz_scale≠pz → 输出 × exp[½ln((2Pz)²/(2ζ)²)K]
     _, out_rap = tmd_matching_hybrid(x, b_perp=[0.2], mu=2.0, pz_gev=2.0,
                                      cs_kernel=0.1, soft_factor=1.0,
@@ -819,19 +824,71 @@ def test_end_to_end_synthetic_meff():
 
 
 def test_matching_sum_rule():
-    """NLO 匹配求和规则：∫hR_PDF ≈ ∫hR_tilde（对称宽域，O(αs) 修正内守恒）。
-
-    积分域取参考实现的对称型网格（matching_new 的 y 积分域为 ±y_inf）：
-    正半轴截断会丢失 ξ<0 支路贡献（实测 +26% 且不随 dx 收敛，属域截断
-    非离散误差）；对称 ±1.9 域实测比值 0.957（2026-08-24 真耦合下）。
-    """
+    """hR_PDF 必须复现显式 plus-subtraction 卷积。"""
     from pyqcd.renorm import hR_PDF
-    xx = np.linspace(-1.9, 1.9, 592)
+    from pyqcd.renorm._matching import A_s_run, _matching_kernels
+    from pyqcd.renorm._ensembles import fm_to_GeV, pz_to_gev
+
+    xx = np.linspace(-1.8, 1.8, 38)
     h0 = np.exp(-(xx - 0.4) ** 2 / 0.05)
     out = hR_PDF(xx, Pz_=4, conf='L24x72', hR_tilde_data=h0, mu_=2.0)
-    dx = xx[1] - xx[0]
-    ratio = np.sum(out) * dx / (np.sum(h0) * dx)
-    assert 0.92 < ratio < 1.08, f"求和规则破坏: {ratio:.4f}"
+
+    pz = pz_to_gev(4, 'L24x72')
+    mu = 2.0
+    lambda_s = 0.3 / fm_to_GeV * pz
+    nodes, weights = np.polynomial.legendre.leggauss(48)
+    reference_matrix = np.zeros((len(xx), len(xx)))
+    for row, x_value in enumerate(xx):
+        bounds = np.array([
+            -50.0, -10.0, -5.0, -2.0, -1.0, 0.0, 1.0, 2.0,
+            5.0, 10.0, 50.0, x_value / xx[0], x_value / xx[-1],
+        ])
+        for delta in (
+                1.0e-6, 1.0e-4, 1.0e-3, 1.0e-2, 0.05, 0.1, 0.25, 0.5):
+            bounds = np.r_[
+                bounds, -delta, delta, 1.0 - delta, 1.0 + delta]
+        bounds = np.unique(bounds)
+        left, right = bounds[:-1, None], bounds[1:, None]
+        xi = (
+            (right - left) * nodes / 2.0
+            + (right + left) / 2.0
+        ).ravel()
+        wi = ((right - left) * weights / 2.0).ravel()
+        target = x_value / xi
+        left_index = np.searchsorted(xx, target, side='right') - 1
+        left_index = np.clip(left_index, 0, len(xx) - 2)
+        right_weight = (
+            (target - xx[left_index])
+            / (xx[left_index + 1] - xx[left_index])
+        )
+        valid = (target >= xx[0]) & (target <= xx[-1])
+        coefficient = (
+            wi[valid]
+            * _matching_kernels(
+                xi[valid], target[valid], pz, mu, lambda_s)
+            / np.abs(xi[valid])
+        )
+        np.add.at(reference_matrix[row], left_index[valid],
+                  coefficient * (1.0 - right_weight[valid]))
+        np.add.at(reference_matrix[row], left_index[valid] + 1,
+                  coefficient * right_weight[valid])
+        fixed = _matching_kernels(
+            xi, np.full_like(xi, abs(x_value)), pz, mu, lambda_s)
+        centre_index = np.searchsorted(xx, x_value, side='right') - 1
+        centre_index = int(np.clip(centre_index, 0, len(xx) - 2))
+        centre_weight = (
+            (x_value - xx[centre_index])
+            / (xx[centre_index + 1] - xx[centre_index])
+        )
+        subtraction = -float(np.sum(wi * fixed))
+        reference_matrix[row, centre_index] += (
+            subtraction * (1.0 - centre_weight))
+        reference_matrix[row, centre_index + 1] += (
+            subtraction * centre_weight)
+    alpha_s = A_s_run(mu) * 4.0 * np.pi
+    coupling = alpha_s * 3.0 / (2.0 * np.pi)
+    expected = h0 - coupling * (reference_matrix @ h0)
+    np.testing.assert_allclose(out, expected, rtol=0.0, atol=2e-14)
 
 
 def test_core_chain_integrated():
@@ -1001,6 +1058,25 @@ def test_hB_dataset_loader():
     assert ds['hB'].shape == (18, ns)
     assert np.allclose(ds['hB_o'][0], 1.0)
     assert np.all(np.diff(np.log(ds['hB']).mean(axis=1)) < 0)
+    try:
+        build_hB_dataset(c0, z_fm + 0.1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("非零首节点不得被静默当作 z=0")
+    for bad_target in (0.5, []):
+        try:
+            build_hB_dataset(c0, z_fm, z_grid_new=bad_target)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("非一维或空目标网格必须拒绝")
+    try:
+        build_hB_dataset(np.empty((20, 0)), z_fm)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("空 replica 轴必须拒绝")
 
     dsets = []
     for tau in (0.35, 0.45):
@@ -1156,7 +1232,7 @@ def test_hybrid_boot_covariance():
 
 
 def test_tmd_plateau_and_cs_kernel():
-    """plateau_c0 手算一致；CS 核两动量幂律恢复 + clip 保护。"""
+    """plateau_c0 手算一致；CS 核幂律恢复且 clip 仅在显式请求时生效。"""
     from pyqcd.analysis import plateau_c0
     from pyqcd.renorm import cs_kernel_two_momentum
     rng = np.random.default_rng(0)
@@ -1179,7 +1255,8 @@ def test_tmd_plateau_and_cs_kernel():
     assert abs(k_rec.ravel()[1] - k_true[1]) < 1e-12
     bad = c02.copy()
     bad[1] *= 1e12
-    assert np.abs(cs_kernel_two_momentum(bad, c02, pz1, pz2)).max() <= 3.0
+    assert np.abs(cs_kernel_two_momentum(
+        bad, c02, pz1, pz2, k_clip=(-3.0, 3.0))).max() <= 3.0
 
 
 def test_plot_tmd_pdf():

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 import warnings
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -46,6 +47,30 @@ class HybridComplexContract(unittest.TestCase):
                 [1.0, 1.0, 2.0], (0.5, 3.0), lam,
                 np.ones(8, dtype=np.complex128) * (1.0 + 0.25j),
                 cov_kind="diag")
+
+    def test_lambda_fit_requires_identifiability_and_successful_optimization(self):
+        """三点参数拟合不得接受两点窗口、零方差或失败优化。"""
+        from pyqcd.renorm import fit_hR_lambda
+
+        with self.assertRaisesRegex(ValueError, "4 个"):
+            fit_hR_lambda(
+                [1.0, 1.0, 2.0], (0.5, 1.0),
+                np.array([0.5, 1.0]), np.array([1.0, 0.5]))
+
+        lam = np.linspace(0.5, 3.0, 8)
+        with self.assertRaisesRegex(ValueError, "方差"):
+            fit_hR_lambda(
+                [1.0, 1.0, 2.0], (0.5, 3.0), lam,
+                np.ones((8, 4)))
+
+        failed = SimpleNamespace(
+            success=False, fun=1.0, x=np.array([1.0, 1.0, 2.0]),
+            message="forced optimizer failure")
+        with patch("scipy.optimize.minimize", return_value=failed):
+            with self.assertRaisesRegex(ValueError, "优化失败"):
+                fit_hR_lambda(
+                    [1.0, 1.0, 2.0], (0.5, 3.0), lam,
+                    np.exp(-lam))
 
     def test_complex64_hybrid_outputs_are_not_silently_upcast(self):
         from pyqcd.renorm import hR_x
@@ -147,30 +172,63 @@ class KernelInvalidRatioContract(unittest.TestCase):
                 np.array([[True]]), np.array([[1.0]]),
                 4.0, 2.0, z_ref=0)
 
-    def test_zero_node_and_singular_matching_matrix_fail_closed(self):
+    def test_zero_node_matching_input_fails_closed(self):
         x_zero = np.array([0.0, 0.2, 0.4])
         with self.assertRaisesRegex(ValueError, "zero|avoid"):
             tmd_matching_hybrid(
                 x_zero, pz_gev=2.0, pz_scale=2.0, cs_kernel=0.0,
                 soft_factor=1.0, x_tmd=np.ones(3))
 
-        x = np.array([0.2, 0.4])
-        alpha = 0.32
-        t = (x[1] - x[0]) * alpha * 3.0 / (2.0 * np.pi)
-        g_singular = np.array([
-            [1.0, x[1] ** 2 / (t * x[0])],
-            [0.0, 1.0],
+    def test_b_perp_auxiliary_arrays_require_exact_or_scalar_length(self):
+        """cs_kernel/soft_factor 的长度不得通过取模循环错配 b⊥。"""
+        x = np.array([0.2, 0.4, 0.6])
+        x_tmd = np.column_stack([
+            np.exp(-x),
+            np.exp(-1.2 * x),
+            np.exp(-0.8 * x),
         ])
-        with patch(
-                "pyqcd.renorm._tmdextract.A_s_run",
-                return_value=alpha / (4.0 * np.pi)), \
-                patch(
-                    "pyqcd.renorm._tmdextract._matching_kernels",
-                    return_value=g_singular):
-            with self.assertRaisesRegex(ValueError, "singular|singularity"):
-                tmd_matching_hybrid(
-                    x, pz_gev=2.0, pz_scale=2.0, cs_kernel=0.0,
-                    soft_factor=1.0, x_tmd=np.ones(2))
+
+        for keyword, values in (
+                ("cs_kernel", np.array([0.0, 0.5])),
+                ("soft_factor", np.array([1.0, 4.0]))):
+            with self.subTest(keyword=keyword):
+                arguments = {
+                    "pz_gev": 2.0,
+                    "pz_scale": 2.0,
+                    "cs_kernel": 0.0,
+                    "soft_factor": 1.0,
+                    "x_tmd": x_tmd,
+                }
+                arguments[keyword] = values
+                with self.assertRaisesRegex(
+                        ValueError, rf"{keyword}.*(length|长度|broadcast|广播)"):
+                    tmd_matching_hybrid(x, **arguments)
+
+    def test_proxy_terms_must_be_explicit_and_clipping_is_opt_in(self):
+        """未测量 K/S 不得由默认值冒充，CS clip 也不能静默发生。"""
+        x = np.array([0.2, 0.4, 0.6])
+        with self.assertRaisesRegex(ValueError, "cs_kernel.*显式"):
+            tmd_matching_hybrid(
+                x, pz_gev=2.0, pz_scale=2.0, x_tmd=np.exp(-x))
+        _, _, proxy_metadata = tmd_matching_hybrid(
+            x, pz_gev=2.0, pz_scale=2.0, cs_kernel=0.0,
+            soft_factor=1.0, x_tmd=np.exp(-x), return_metadata=True)
+        self.assertFalse(proxy_metadata["physical_acceptance"])
+        self.assertEqual(
+            proxy_metadata["proxy_terms"],
+            ["cs_kernel_zero", "soft_factor_one"],
+        )
+
+        z = np.arange(3)[:, None]
+        c02 = np.exp(-z / 0.3)
+        c01 = c02 * 2.0 ** (5.0 * z)
+        np.testing.assert_allclose(
+            cs_kernel_two_momentum(c01, c02, 4.0, 2.0, z_ref=1),
+            np.array([5.0]), rtol=0.0, atol=1e-14)
+        np.testing.assert_allclose(
+            cs_kernel_two_momentum(
+                c01, c02, 4.0, 2.0, z_ref=1, k_clip=(-3.0, 3.0)),
+            np.array([3.0]), rtol=0.0, atol=1e-14)
 
 
 class MatchingGridContract(unittest.TestCase):
@@ -227,6 +285,43 @@ class TmdImaginaryResidualContract(unittest.TestCase):
                 _tmd.tmd_matrix_elements(gauge, [0], [0], L=0)
             with self.assertRaisesRegex(ValueError, "imaginary|imag"):
                 _tmd.tmd_matrix_elements_time(gauge, [0], [0], L=0)
+
+    def test_time_average_cannot_hide_opposite_imaginary_residuals(self):
+        """逐时间片显著虚部不得因平均相消而被接受。"""
+        gauge = np.zeros((2, 1, 1, 1, 4, 3, 3), dtype=np.complex128)
+        value = np.full(
+            (2, 1, 1, 1), 1.0 + 0.1j, dtype=np.complex128)
+        value[1] = 1.0 - 0.1j
+        with patch(
+                "pyqcd.renorm._tmd._tmd_clover_fields",
+                return_value=(None, None, None)), \
+                patch(
+                    "pyqcd.renorm._tmd._gluon_tmd_operator_from_fields",
+                    return_value=value):
+            with self.assertRaisesRegex(ValueError, "imaginary|imag"):
+                _tmd.tmd_matrix_elements(gauge, [0], [0], L=0)
+
+    def test_complex64_roundoff_threshold_is_not_complex128_strict(self):
+        """complex64 的舍入虚部可接受，显著虚部仍必须拒绝。"""
+        gauge = np.zeros((2, 1, 1, 1, 4, 3, 3), dtype=np.complex64)
+        roundoff = self._complex_value(1.25 + 5.0e-6j).astype(np.complex64)
+        material = self._complex_value(1.25 + 1.0e-2j).astype(np.complex64)
+        with patch(
+                "pyqcd.renorm._tmd._tmd_clover_fields",
+                return_value=(None, None, None)), \
+                patch(
+                    "pyqcd.renorm._tmd._gluon_tmd_operator_from_fields",
+                    return_value=roundoff):
+            accepted = _tmd.tmd_matrix_elements(gauge, [0], [0], L=0)
+        np.testing.assert_allclose(accepted, 10.0, rtol=0.0, atol=1e-5)
+        with patch(
+                "pyqcd.renorm._tmd._tmd_clover_fields",
+                return_value=(None, None, None)), \
+                patch(
+                    "pyqcd.renorm._tmd._gluon_tmd_operator_from_fields",
+                    return_value=material):
+            with self.assertRaisesRegex(ValueError, "imaginary|imag"):
+                _tmd.tmd_matrix_elements(gauge, [0], [0], L=0)
 
 
 class ZRCovarianceAndSummaryContract(unittest.TestCase):

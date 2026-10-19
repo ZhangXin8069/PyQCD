@@ -396,6 +396,62 @@ class SingleConfigurationContractTests(unittest.TestCase):
         self.assertIn("sample covariance rank = 0", report)
         self.assertIn("Nconf=1", report)
 
+    def test_tmd_ensemble_ratio_averages_before_dividing(self):
+        """TMD 默认估计量必须是 mean(C3_disc)/mean(C2)，不是逐点比值均值。"""
+        from pyqcd.analysis._tmd_ratio import _disconnected_ratio
+
+        corr2 = np.array([[[1.0], [3.0]]], dtype=np.float64)
+        ope = np.empty((1, 2, 1, 1, 1), dtype=np.float64)
+        ope[0, :, 0, 0, 0] = np.array([2.0, 5.0])
+        corr3 = np.empty((1, 2, 1, 1, 1, 1), dtype=np.float64)
+        corr3[0, :, 0, 0, 0, 0] = np.array([6.0, 12.0])
+
+        ensemble = _disconnected_ratio(
+            corr2, ope, corr3, estimator="ensemble")
+        legacy = _disconnected_ratio(
+            corr2, ope, corr3, estimator="configuration_ratio")
+
+        self.assertEqual(ensemble.shape, (1, 1, 1, 1, 1))
+        self.assertAlmostEqual(float(ensemble[0, 0, 0, 0, 0]), 1.0)
+        self.assertAlmostEqual(float(legacy[0, 0, 0, 0, 0]), 1.5)
+
+    def test_tmd_correlator_source_shift_is_applied_once(self):
+        """C2(t_sink-t_source) 不得在 full 构造和切片时重复平移。"""
+        from pyqcd.analysis._tmd_ratio import _relative_correlator
+
+        correlator = np.arange(8, dtype=np.float64)[None, :]
+        actual = _relative_correlator(correlator, dt_max=4)
+
+        np.testing.assert_array_equal(actual[0, 3], [3.0, 4.0, 5.0, 6.0])
+        np.testing.assert_array_equal(actual[0, 6], [6.0, 7.0, 0.0, 1.0])
+
+    def test_tmd_result_reports_bootstrap_for_small_configuration_sets(self):
+        """小样本走 bootstrap 时，下游不得按 jackknife 缩放误差。"""
+        from pyqcd.analysis._tmd_ratio import run_disconnected_tmd_ratio
+
+        t = np.arange(8, dtype=np.float64)
+        corr_2pt = {}
+        ope = {}
+        for cid, phase in ((11, 0.0), (22, 0.08)):
+            corr_2pt[cid] = {
+                "corr_pp_P200": np.exp(
+                    -0.22 * t + phase * np.cos(0.4 * t)) + 0.01,
+            }
+            ope[cid] = {
+                "tmd": np.sin(0.3 * t + phase)[None, None, :],
+            }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_disconnected_tmd_ratio(
+                corr_2pt, ope, [11, 22], tmpdir,
+                logger=lambda _message: None,
+                NT=8, nz=1, nb=1,
+                dt_max=5, dt_start=2, dt_end=4, cut=2,
+                momentum="P200",
+            )["proton"]
+
+        self.assertEqual(result["resampling_kind"], "bootstrap")
+        self.assertEqual(result["Nsample"], 200)
+
     def test_extended_plots_single_configuration_skips_direct_energy_fit(self):
         from pyqcd.analysis._extended_plots import generate_energy_style_plots
 

@@ -3,7 +3,8 @@ NLO 匹配：准 PDF → 光锥 PDF（移植 zengch matching.py / matching_cc.py
 
 胶子单圈匹配核（LO 非定域算符 → NLO 光锥 PDF）：
     g_1 (ξ<0)、g_2 (0<ξ<1)、g_3 (ξ>1) 与 g_0（Si 函数 + λ_s 截断项）。
-    Z_ij = δ_ij + (α_s C_A/2π)·M_ij，hR_PDF = Z⁻¹·hR_0。
+    hR_PDF = hR_0 − (α_s C_A/2π)·K·hR_0，其中 K 使用显式
+    plus-subtraction；固定一圈阶数不通过矩阵逆引入高阶项。
 
 matching_cc.py 的 ``C_gluon_ratio`` 为协变组合（ratio 方案）匹配核，
 用于梯度流重整化矩阵元的匹配（TMD 情形需 b_⊥ 依赖，见 _tmd.py）。
@@ -14,7 +15,7 @@ import numpy as np
 from scipy.special import sici
 
 from ._const import CA, pi
-from ._ensembles import fm_to_GeV, a_len_set, Nl_set, pz_to_gev
+from ._ensembles import fm_to_GeV, pz_to_gev
 
 
 def _validate_uniform_grid(grid, name):
@@ -77,14 +78,107 @@ def _matching_kernels(cxi, y_matr, Pz_GeV, mu_, lambda_s):
     mask_3 = (cxi > 1)
 
     g_xy = np.zeros_like(cxi)
-    g_xy[mask_1] = -g_0(cxi[mask_1], y_matr[mask_1]) - g_1(cxi[mask_1], y_matr[mask_1])
+    g_xy[mask_1] = g_0(cxi[mask_1], y_matr[mask_1]) + g_1(
+        cxi[mask_1], y_matr[mask_1])
     g_xy[mask_2] = g_0(cxi[mask_2], y_matr[mask_2]) + g_2(cxi[mask_2], y_matr[mask_2])
     g_xy[mask_3] = g_0(cxi[mask_3], y_matr[mask_3]) + g_3(cxi[mask_3], y_matr[mask_3])
     return g_xy
 
 
+def _linear_interpolation_weights(grid, target):
+    """Return bracketing indices/weights and a support mask for ``target``."""
+    values = np.asarray(grid, dtype=float)
+    targets = np.asarray(target, dtype=float)
+    if values.ndim != 1 or values.size < 2:
+        raise ValueError("interpolation grid must be one-dimensional")
+    left = np.searchsorted(values, targets, side="right") - 1
+    left = np.clip(left, 0, len(values) - 2)
+    weight_right = (
+        (targets - values[left]) / (values[left + 1] - values[left]))
+    valid = (targets >= values[0]) & (targets <= values[-1])
+    return left, 1.0 - weight_right, weight_right, valid
+
+
+def _matching_quadrature(limit, order, extra=()):
+    """Reference plus-prescription quadrature with endpoint refinement."""
+    if limit <= 0.0 or order < 2:
+        raise ValueError("matching quadrature requires limit>0 and order>=2")
+    bounds = [-limit, limit, -10.0, -5.0, -2.0, -1.0, 0.0,
+              1.0, 2.0, 5.0, 10.0]
+    bounds.extend(float(value) for value in extra)
+    for delta in (1.0e-6, 1.0e-4, 1.0e-3, 1.0e-2, 0.05, 0.1, 0.25, 0.5):
+        bounds.extend((-delta, delta, 1.0 - delta, 1.0 + delta))
+    bounds = np.unique([
+        value for value in bounds if -limit <= value <= limit])
+    nodes, weights = np.polynomial.legendre.leggauss(order)
+    left = bounds[:-1, None]
+    right = bounds[1:, None]
+    return (
+        ((right - left) * nodes / 2.0 + (right + left) / 2.0).ravel(),
+        ((right - left) * weights / 2.0).ravel(),
+    )
+
+
+def _matching_matrix(y_grid, x_grid, pz_gev, mu, lambda_s,
+                     xi_max=50.0, quadrature_order=48):
+    """Discrete ``K_xy`` with the reference plus subtraction at ``y=x``.
+
+    ``K`` implements
+
+        K f(x) = ∫ dξ [R(ξ,|x/ξ|Pz) f(x/ξ)/|ξ|
+                       - R(ξ,|x|Pz) f(x)].
+
+    It is applied as ``f = h - alpha_s C_A/(2π) K h`` at fixed one-loop
+    order; no matrix inversion is taken.
+    """
+    x = _validate_uniform_grid(x_grid, "matching x grid")
+    y = _validate_uniform_grid(y_grid, "matching y grid")
+    pz_gev = float(pz_gev)
+    mu = float(mu)
+    lambda_s = float(lambda_s)
+    if not np.isfinite(pz_gev) or pz_gev <= 0.0:
+        raise ValueError("pz_gev must be finite and positive")
+    if not np.isfinite(mu) or mu <= 0.0:
+        raise ValueError("mu must be finite and positive")
+    if not np.isfinite(lambda_s) or lambda_s < 0.0:
+        raise ValueError("lambda_s must be finite and nonnegative")
+
+    matrix = np.zeros((len(x), len(y)), dtype=float)
+    for row, x_value in enumerate(x):
+        xi, weights = _matching_quadrature(
+            xi_max, quadrature_order,
+            extra=(x_value / y[0], x_value / y[-1]))
+        target = x_value / xi
+        index, left_weight, right_weight, valid = (
+            _linear_interpolation_weights(y, target))
+        coefficient = (
+            weights[valid]
+            * _matching_kernels(
+                xi[valid], target[valid], pz_gev, mu, lambda_s)
+            / np.abs(xi[valid])
+        )
+        np.add.at(
+            matrix[row], index[valid], coefficient * left_weight[valid])
+        np.add.at(
+            matrix[row], index[valid] + 1,
+            coefficient * right_weight[valid])
+
+        fixed = _matching_kernels(
+            xi, np.full_like(xi, abs(x_value)), pz_gev, mu, lambda_s)
+        subtraction = -float(np.sum(weights * fixed))
+        centre, centre_left, centre_right, in_support = (
+            _linear_interpolation_weights(y, np.array([x_value])))
+        if not in_support[0]:
+            raise ValueError("matching output lies outside y-grid support")
+        matrix[row, centre[0]] += subtraction * centre_left[0]
+        matrix[row, centre[0] + 1] += subtraction * centre_right[0]
+    if not np.isfinite(matrix).all():
+        raise ValueError("matching matrix contains non-finite values")
+    return matrix
+
+
 def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3):
-    """NLO 匹配：hR_PDF = Z⁻¹·hR_0（胶子，非极化）。
+    """NLO 胶子准 PDF 的显式一圈 plus-subtraction 匹配。
 
     Args:
         xx: x 网格（含负值，向量；精确零节点不支持）
@@ -104,33 +198,15 @@ def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3):
             f"does not match x grid {xx.shape}")
     dx = xx[1] - xx[0]
 
-    # A_s ≡ α_s/(4π)（zengch 惯例），×4π 还原真耦合（对照 matching_new.py: alpha_s=A_s*4π）
+    # A_s ≡ α_s/(4π)（zengch 惯例），×4π 还原真耦合。
     alpha_s = A_s_run(mu_) * 4.0 * pi
-    a_len = a_len_set[conf]
-    Nl = Nl_set[conf]
     Pz_GeV = pz_to_gev(Pz_, conf)
     lambda_s = lambda_s_fm / fm_to_GeV * Pz_GeV
 
     yy = xx
-    n_len = len(xx)
-    x_col = xx[:, None]
-    y_col = yy[None, :]
-    x_matr = np.tile(x_col, (1, n_len))
-    y_matr = np.tile(y_col, (n_len, 1))
-    cxi = x_matr / y_matr
-
-    g_xy = _matching_kernels(cxi, y_matr, Pz_GeV, mu_, lambda_s)
-    g_ij = g_xy
-
-    delta_ij = np.eye(n_len)
-    dx_matr = np.diag(xx / np.abs(xx)) * dx
-
-    c_alp_lo = dx_matr * alpha_s * CA / 2.0 / pi
-    m_alp_lo = g_ij / y_matr - delta_ij * y_matr * np.sum(
-        g_ij / (y_matr ** 2.0), axis=1)
-    z_ij = delta_ij + c_alp_lo @ m_alp_lo
-
-    return np.linalg.inv(z_ij) @ hR_tilde_data
+    matrix = _matching_matrix(yy, xx, Pz_GeV, mu_, lambda_s)
+    coupling = alpha_s * CA / (2.0 * pi)
+    return hR_tilde_data - coupling * (matrix @ hR_tilde_data)
 
 
 def A_s_run(mu, Lambda_QCD=0.23, nf=3.0):

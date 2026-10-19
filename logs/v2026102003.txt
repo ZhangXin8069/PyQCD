@@ -1,0 +1,62 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-20 03:27:57 +0800
+批次: reference-review-20261020
+主任务: 审查新增参考文档与代码并合并修正
+触发原因: 任务完成
+摘要: 修复 TMD ratio、NLO matching、Fourier 归一化及 fail-closed 数值门；全量 110 项通过；一致性验证因缺失大体积参考产物未执行
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 审查范围与候选资料
+- 目标: 审查最新新增的 PyQCD 参考文档与代码，识别物理、数值和工程错误，并将有证据支持的内容合入生产实现。
+- 命令/操作: 盘点最近提交与 diff；重点只读审查 `refer/donghx/_Gradient_Flow_GluonPDF`、`refer/donghx/_codex/Markdown` 及当前 `pyqcd/operator`、`pyqcd/renorm`、`pyqcd/analysis`、`pyqcd/testing` 对应实现。
+- 关键输出: 识别出 TMD 源时间双平移、逐 source 真空减除、复数 C2 分母、NLO 负 ξ 核符号、旧 Z^-1 匹配结构、Fourier 因子 2、隐式 Ioffe 网格、proxy 默认值、b⊥ 数组循环复用等问题。
+- 退出码: 0
+- 证据与判断: 每个问题均由独立解析夹具或与新增参考实现的数值对照复现；未修改 `refer/`。
+
+### S2 — 生产代码修正
+- 目标: 最小化修改并保持既有 API 兼容路径。
+- 命令/操作: 修改 `_disconnected.py`、`_tmd_ratio.py`、`_gradient_flow_ratio.py`、`_matching.py`、`_tmd.py`、`_tmdextract.py`、`_hybrid.py`、`_zr.py`、`_gradient_flow.py`、`_gradient_flow_quasi.py`、`_gradient_flow_gluon_ope.py` 及对应 pipeline/测试。
+- 关键输出: C2 源移位只做一次；TMD 默认估计量为 source 平均后的 `mean(OC)-mean(O)mean(C)` 再除 `Re(C2)`；NLO 采用与参考一致的显式 plus-subtraction 卷积；Fourier 使用显式非负 Ioffe 网格与 `-2/pi`；proxy、kappa_F、z_count、n_steps、拟合秩和 z=0 归一化均 fail-closed。
+- 退出码: 0
+- 证据与判断: `hR_PDF` 与参考 v2 `build_kernel` 的最大绝对核差 `6.821e-13`；负、中、大于 1 三区核逐点一致。
+
+### S3 — 测试与回归
+- 目标: 证明修正没有破坏既有物理链和工程契约。
+- 命令/操作: 运行 `python -m pyqcd.testing`、梯度流 TMD 演示、TMD 冒烟、`compileall`、`git diff --check`，并检查参考实现轻量单测。
+- 关键输出: 全量 `110 passed, 0 skipped, 0 failed`；TMD 演示完成；TMD 冒烟完成，单组态按设计标记 `statistically_unidentifiable` 并拒绝 PDF 链；`compileall` 与 diff 检查通过。
+- 退出码: 0
+- 证据与判断: 参考轻量测试中 `test_lambda_fourier_quasi_no_z0_v1`、`test_replica_selection_minerror_v3`、`test_extrapolate_unpolarized_tau_ge1_correlated_v2`、`test_lambda_fourier_quasi_matching_v2` 通过；`test_gluon_flow_to_quasi.py` 被 unittest 发现为 0 项，暴露参考测试发现缺口。
+
+## 验证与证据
+- 测试/检查: `python -m pyqcd.testing`
+- 结果: 110 passed, 0 skipped, 0 failed
+- 未验证项: 冻结蒸馏一致性命令因本地缺少 128 个生成参考文件而无法执行 B–E；未伪造结果，直接用 `--run-dir` 也缺少完整产物。
+
+## 变更与产物
+- 文件: `.gitignore`、`pyqcd/analysis/_disconnected.py`、`pyqcd/analysis/_gradient_flow_ratio.py`、`pyqcd/analysis/_tmd_ratio.py`、`pyqcd/operator/_gradient_flow_gluon_ope.py`、`pyqcd/pipeline/_gradient_flow_gluon.py`、`pyqcd/renorm/_gradient_flow.py`、`pyqcd/renorm/_gradient_flow_quasi.py`、`pyqcd/renorm/_hybrid.py`、`pyqcd/renorm/_matching.py`、`pyqcd/renorm/_tmd.py`、`pyqcd/renorm/_tmdextract.py`、`pyqcd/renorm/_zr.py` 及对应 `pyqcd/testing` 契约。
+- 产物: TMD 冒烟缓存位于忽略目录 `pyqcd/testing/tmd/artifacts/work/`；未提交、未推送。
+- 未改动范围: `refer/` 参考资料只读；未修改或删除历史成功基线。
+
+## 风险、限制与下一步
+- 风险: 单格距、gg-only、proxy K/S、soft factor、流时间外推和连续极限仍未由本次单元回归解决。
+- 阻塞: 冻结蒸馏一致性基线缺少大体积生成文件。
+- 下一步: 在完整 10+ 组态数据上运行带 `--run-dir` 的 TMD verify，并补独立非零 z OPE oracle 到测试入口。
+
+## 用户输入指令
+分析新增的参考文档与代码,并寻找其中可能存在的错误,然后将有参考意义的内容合并到本库,并进行优化与正确性检验
+
+## Agent 全文报告
+--- report begin ---
+状态：finished
+
+改动内容：已将新增参考资料中可证据化的物理链约定合入 `pyqcd`，并修正多处实际错误：TMD C2 source 时间只平移一次；默认 ratio 使用 source/ensemble 平均后的真空减除并除以 `Re(C2)`；bootstrap/jackknife 误差路由区分；NLO 负 `ξ` 核、显式 plus-subtraction 卷积与 `tmd_matching_hybrid` 同步；Fourier 使用显式非负 Ioffe 网格和 `-2/pi` 完整实轴归一化；proxy K/S、`kappa_F` 绝对归一化、周期 `z_count`、RK3 步长、拟合秩和 `z=0` 归一化均改为失败关闭；补充了对应契约测试。
+
+推理依据：新增文档明确以 `mean(C3_disc)/mean(C2)`、`Re(C2)` 分母、局部/非局域 `z=0` 分界、完整实轴 Fourier 因子 2 和显式 matching 卷积为准；实现与参考 `build_kernel` 的核矩阵最大绝对差为 `6.821e-13`。未把“数值有限”误写成“物理结果已验收”。
+
+验证结果：`python -m pyqcd.testing` 为 `110 passed, 0 skipped, 0 failed`；`python -m pyqcd.testing.demos.tmd_gradient_flow` 通过；当前代码的 `python -m pyqcd.testing.tmd.pdf_workflow --smoke` 完成，单组态按设计输出不可辨识而非伪拟合；`compileall` 和 `git diff --check` 通过。冻结蒸馏一致性验证因本地缺少 128 个生成参考文件而 blocked，不是代码测试失败。
+
+后续步骤：在完整运行目录上执行 `python -m pyqcd.testing.tmd.verify_pdf_workflow <run_dir>`，并补入独立非零 `z` 的 OPE oracle；当前仍有单格距、gg-only、soft/rapidity proxy、流时间外推和连续极限未验证。未提交、未推送。
+
+--- report end ---

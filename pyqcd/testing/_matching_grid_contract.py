@@ -73,6 +73,34 @@ class MatchingGridContract(unittest.TestCase):
         ]
         self.assertEqual(runtime_warnings, [])
 
+    def test_negative_xi_branch_has_common_plus_g0(self):
+        """xi<0 必须使用 +g0+g1，而不是把共同 g0 和 g1 一起反号。"""
+        from pyqcd.renorm._matching import Si, _matching_kernels
+
+        xi = np.array([-3.2, -0.7, -0.01])
+        y = np.array([1.0, 1.2, 0.8])
+        pz = 2.3
+        mu = 2.0
+        lambda_s = 0.8
+        polynomial = (
+            11.0 - 28.0 * xi + 18.0 * xi ** 2.0 - 12.0 * xi ** 3.0
+        )
+        g1 = (
+            -2.0 * (1.0 - xi + xi ** 2.0) ** 2.0
+            / (1.0 - xi) * np.log(xi / (xi - 1.0))
+            - polynomial / (6.0 * (1.0 - xi))
+        )
+        g0 = 5.0 / 6.0 * (
+            -1.0 / np.abs(1.0 - xi)
+            + 2.0 * Si((1.0 - xi) * np.abs(y) * lambda_s)
+            / (np.pi * (1.0 - xi))
+        )
+        expected = g0 + g1
+        actual = _matching_kernels(
+            xi[:, None], y[:, None], pz, mu, lambda_s)[:, 0]
+
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=1e-14)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -98,8 +98,11 @@ def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
         - o_times_c_mean_source / (nconf * nconf)
     )
     c2_central = np.mean(sum_denominator, axis=0) / nconf
-    if np.any(~np.isfinite(c2_central)) or np.any(c2_central == 0.0):
-        raise FloatingPointError("ratio denominator C2 contains zero/non-finite value")
+    c2_central_real = np.real(c2_central)
+    if (np.any(~np.isfinite(c2_central_real))
+            or np.any(c2_central_real == 0.0)):
+        raise FloatingPointError(
+            "ratio denominator Re(C2) contains zero/non-finite value")
 
     shape = c3_central.shape
     nan_complex = np.full(shape, np.nan + 1j * np.nan, dtype=np.complex128)
@@ -133,13 +136,19 @@ def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
         np.mean(sum_denominator, axis=0)[None, :]
         - np.mean(denominator, axis=1)
     ) / nminus
-    if np.any(~np.isfinite(c2_jackknife)) or np.any(c2_jackknife == 0.0):
+    c2_jackknife_real = np.real(c2_jackknife)
+    if (np.any(~np.isfinite(c2_jackknife_real))
+            or np.any(c2_jackknife_real == 0.0)):
         raise FloatingPointError(
-            "delete-one ratio denominator contains zero/non-finite value")
-    ratio_jackknife = c3_jackknife / c2_jackknife[:, None, :]
+            "delete-one ratio denominator Re(C2) contains zero/non-finite value")
+    ratio_jackknife = (
+        c3_jackknife / c2_jackknife_real[:, None, :]
+    )
     jk_mean = np.mean(ratio_jackknife, axis=0)
-    jk_bias_corrected = nconf * (c3_central / c2_central[None, :]) \
+    jk_bias_corrected = (
+        nconf * (c3_central / c2_central_real[None, :])
         - nminus * jk_mean
+    )
     prefactor = nminus / nconf
     error_real = np.sqrt(
         prefactor * np.sum(
@@ -258,7 +267,7 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
                         slice(None), dt_index, insertion, slice(None),
                     )
                     c3[target] = c3_one.reshape(shape)
-                    central_ratio = c3_one / c2_one[None, :]
+                    central_ratio = c3_one / np.real(c2_one)[None, :]
                     ratio[target] = central_ratio.reshape(shape)
                     jk_mean[target] = mean_one.reshape(shape)
                     jk_bias[target] = bias_one.reshape(shape)
@@ -412,7 +421,8 @@ def validate_gradient_flow_ratio_results(results, *, nconf=None):
             errors[1][expanded_valid] < 0.0):
         raise ValueError("jackknife 误差不能为负")
 
-    denominator = c2[0][None, None, None, :, None, :, None, :]
+    denominator = np.real(
+        c2[0][None, None, None, :, None, :, None, :])
     expected_ratio = c3 / denominator
     if not np.allclose(
             ratio[expanded_valid], expected_ratio[expanded_valid],

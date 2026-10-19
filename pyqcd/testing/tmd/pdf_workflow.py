@@ -188,7 +188,7 @@ def run_analysis(conf_ids, momenta, run_dir, logger, args):
             corr2, ope, conf_ids, run_dir, logger=logger,
             NT=72, nz=len(Z_LIST), nb=len(B_LIST),
             dt_max=20, dt_start=7, dt_end=10, cut=6,
-            momentum=tag)
+            momentum=tag, ratio_estimator="ensemble")
         plot_tmd_c0(res, run_dir, tag, logger=logger,
                     nz=len(Z_LIST), nb=len(B_LIST))
         plot_tmd_ratio(res, run_dir, tag, logger=logger,
@@ -200,10 +200,11 @@ def run_analysis(conf_ids, momenta, run_dir, logger, args):
         # 保存均值/误差（用 plateau 均值：10 组态统计下比 lsqfit 更稳健）
         c0 = np.asarray(res['proton']['c0'])
         from pyqcd.analysis import sem
+        jackknife = res['proton'].get('resampling_kind') == 'jackknife'
         np.save(os.path.join(run_dir, 'analysis', 'tmd_ratio',
                              f'c0_mean_{tag}.npy'), c0.mean(0))
         np.save(os.path.join(run_dir, 'analysis', 'tmd_ratio',
-                             f'c0_err_{tag}.npy'), sem(c0, True))
+                             f'c0_err_{tag}.npy'), sem(c0, jackknife))
         # plateau-mean 版本已由 run_disconnected_tmd_ratio 直接产出
         # （pyqcd.analysis.plateau_c0，fit 窗口内 ratio 均值，抗奇异协方差）
 
@@ -320,11 +321,11 @@ def run_tmd_pdf_chain(conf_ids, run_dir, logger, args, *, momenta=None):
                                        z_ref=1, k_clip=(-3.0, 3.0))
 
     # NLO 匹配 → 光锥 TMD-PDF x·g(x, b⊥)
-    xm, xg_match = tmd_matching_hybrid(
+    xm, xg_match, matching_metadata = tmd_matching_hybrid(
         x_grid, b_perp=b_grid, mu=2.0, pz_gev=pz_gev,
         cs_kernel=(K if K is not None else 0.0),
         soft_factor=1.0, x_tmd=xg,
-        lambda_s_fm=0.3)
+        lambda_s_fm=0.3, return_metadata=True)
 
     np.save(os.path.join(an_dir, 'quasi_tmd_pdf_x.npy'), x)
     np.save(os.path.join(an_dir, 'quasi_tmd_pdf_xg.npy'), xg)
@@ -332,6 +333,10 @@ def run_tmd_pdf_chain(conf_ids, run_dir, logger, args, *, momenta=None):
     if K is not None:
         np.save(os.path.join(an_dir, 'cs_kernel_b.npy'), K)
         np.save(os.path.join(an_dir, 'cs_kernel_bgrid.npy'), b_grid)
+    with open(os.path.join(an_dir, 'matching_status.json'), 'w',
+              encoding='utf-8') as stream:
+        json.dump(matching_metadata, stream, indent=2)
+        stream.write('\n')
     np.save(os.path.join(an_dir, 'b_grid_fm.npy'), b_grid)
     np.save(os.path.join(an_dir, 'z_grid_fm.npy'), z_grid)
     np.savez(

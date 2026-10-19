@@ -52,6 +52,9 @@ def _checked_real_part(values, context, rtol=1.0e-12, atol=1.0e-14):
         raise ValueError(f"{context} contains non-finite values")
     if not np.iscomplexobj(raw):
         return raw
+    if raw.dtype == np.dtype("complex64"):
+        rtol = max(float(rtol), 1.0e-5)
+        atol = max(float(atol), 1.0e-6)
     imag_max = float(np.max(np.abs(raw.imag)))
     scale = max(1.0, float(np.max(np.abs(raw.real))))
     if imag_max > atol + rtol * scale:
@@ -292,8 +295,9 @@ def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
                 val = _to_cpu(cp.sum(O, axis=(1, 2, 3)))
             else:
                 val = _to_cpu(O)
-            out[i, j] = _checked_real_part(
-                np.mean(val), "tmd_matrix_elements output")
+            checked = _checked_real_part(
+                val, "tmd_matrix_elements output")
+            out[i, j] = np.mean(checked)
     return out
 
 
@@ -368,39 +372,61 @@ def self_renormalized_ratio(O_z, O_z0, z_s=2):
 # 不变振幅与 CS 核
 # ═══════════════════════════════════════════════════════════════════
 
-def invariant_amplitude(M_pp, x_grid, b_perp):
+def invariant_amplitude(M_pp, x_grid, b_perp, nu_grid=None):
     """从不变振幅 M_pp(ν, b⊥) 傅里叶变换到胶子 TMD-PDF x·g(x, b⊥)（Eq.:Mpp_PDF_tmd）。
 
     −M_pp(ν, b⊥) = ½ ∫₋₁¹ dx e^{−ixν} x·g(x, b⊥)
-    → x·g(x, b⊥) = −(1/π)·∫₀^∞ dν cos(xν)·2·Re[M_pp(ν,b⊥)]  （实部，奇偶性）
+    → x·g(x, b⊥) = −(2/π)·∫₀^∞ dν cos(xν)·Re[M_pp(ν,b⊥)]
+
+    ``nu_grid`` 是实际 Ioffe-time 节点，必须与 ``M_pp`` 的 ν 轴一一对应。
+    函数不猜测“单位动量”或周期长度，省略时直接失败。
 
     Args:
         M_pp: 不变振幅（随 Ioffe 时间 ν 变化的数组，或 (nν, nb) 矩阵）。
         x_grid: x 网格（(0,1)）。
         b_perp: b⊥ 网格（用于维度标记，不参与计算）。
+        nu_grid: 必填一维、严格递增的 Ioffe-time 节点。
     Returns:
         xg(x, b⊥) 数组（形状 (len(x_grid), nb) 或 (len(x_grid),)）。
     """
-    M_pp = np.asarray(M_pp, dtype=complex)
-    if M_pp.ndim == 1:
-        nν = len(M_pp)
-        ν_grid = np.linspace(0, 2 * np.pi * nν, nν)  # Ioffe 时间网格
-    else:
-        nν, nb = M_pp.shape
-        ν_grid = np.linspace(0, 2 * np.pi * nν, nν)
+    matrix = np.asarray(M_pp)
+    if matrix.ndim not in (1, 2):
+        raise ValueError("M_pp 必须是一维 ν 数组或 (nν,nb) 二维数组")
+    n_nu = matrix.shape[0]
+    if n_nu < 2:
+        raise ValueError("invariant_amplitude 至少需要两个 Ioffe-time 节点")
+    if not np.isfinite(matrix).all():
+        raise ValueError("M_pp 必须全部有限")
 
-    dν = ν_grid[1] - ν_grid[0]
-    out = np.zeros((len(x_grid), 1) if M_pp.ndim == 1
-                   else (len(x_grid), nb))
-    for i, x in enumerate(x_grid):
-        cos_mat = np.cos(np.outer(x, ν_grid))  # (nx, nν)
-        if M_pp.ndim == 1:
-            out[i, 0] = -(1.0 / np.pi) * dν * np.sum(cos_mat * (-M_pp).real)
-        else:
-            for j in range(nb):
-                out[i, j] = -(1.0 / np.pi) * dν * np.sum(
-                    cos_mat * (-M_pp[:, j]).real)
-    return out[..., 0] if M_pp.ndim == 1 else out
+    x_values = np.asarray(x_grid, dtype=float)
+    if x_values.ndim != 1 or x_values.size == 0:
+        raise ValueError("x_grid 必须是非空一维数组")
+    if not np.isfinite(x_values).all():
+        raise ValueError("x_grid 必须全部有限")
+
+    if nu_grid is None:
+        raise ValueError("nu_grid 必须显式提供，不能猜测 Ioffe-time 网格")
+    nu_values = np.asarray(nu_grid, dtype=float)
+    if nu_values.ndim != 1 or nu_values.size != n_nu:
+        raise ValueError(
+            "nu_grid 必须是一维且与 M_pp 的 ν 轴等长")
+    if not np.isfinite(nu_values).all() or np.any(np.diff(nu_values) <= 0):
+        raise ValueError("nu_grid 必须有限且严格递增")
+    if nu_values[0] != 0.0 or np.any(nu_values < 0.0):
+        raise ValueError("invariant_amplitude 的 nu_grid 必须是非负半轴且从 0 开始")
+
+    cosine = np.cos(np.outer(x_values, nu_values))
+    trapezoid = getattr(np, "trapezoid", None)
+    if trapezoid is None:
+        trapezoid = np.trapz
+    if matrix.ndim == 1:
+        integral = trapezoid(
+            cosine * matrix.real[None, :], nu_values, axis=1)
+        return -(2.0 / np.pi) * integral
+
+    integrand = cosine[:, :, None] * matrix.real[None, :, :]
+    return -(2.0 / np.pi) * trapezoid(
+        integrand, nu_values, axis=1)
 
 
 def collins_soper_kernel(R_b, b_list, z_list, pz_gev):

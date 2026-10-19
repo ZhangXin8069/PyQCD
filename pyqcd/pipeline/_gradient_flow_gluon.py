@@ -12,7 +12,7 @@ from ..operator._gradient_flow_gluon_ope import (
 
 def run_gradient_flow_gluon_ope(
         input_path, output_base, *, nt, nx, tau, conf_id=None,
-        epsilon=0.01, z_count=25, z_dir=2, logger=print):
+        epsilon=0.01, z_count=None, z_dir=2, logger=print):
     """读取一个 ILDG 组态并生成配对 schema-v2 ``.npy/.json``。
 
     当前 ILDG reader 与参考生产程序一样面向各向同性空间格点；
