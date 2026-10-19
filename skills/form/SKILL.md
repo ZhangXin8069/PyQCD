@@ -55,6 +55,10 @@ metadata:
 - 基线 `811900c` 中承载数学含义或上游兼容性的 Python 符号保留原拼写。
 - 冻结基线中的 dataset slug 脚本名保留 `L24x72` 等物理标识，不把文件名小写化。
 - `refer/**` 与 `data/**` 中已跟踪且命中局部忽略规则的历史资料保持原状。
+- `docs/from-logs/**`、`logs/**` 和 `data/from-logs/**` 是原日志/报告的只读历史证据，
+  路径中的 tag 形目录名只作版本定位，允许精确保留；不得据此新增同类路径。
+- `pyqcd/testing/tmd/artifacts/*/docs/analy_test9_*` 是与二进制 PDF 成对的冻结产物，
+  为保持 TeX/PDF 一致性允许保留，并由本地包装器逐路径豁免。
 
 除上述条件外，新增例外必须先写入根 `AGENTS.md` 并在审计包装器中按精确路径登记。
 

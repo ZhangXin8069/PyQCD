@@ -396,18 +396,18 @@ class SingleConfigurationContractTests(unittest.TestCase):
         self.assertIn("sample covariance rank = 0", report)
         self.assertIn("Nconf=1", report)
 
-    def test_test9_extended_single_configuration_skips_direct_energy_fit(self):
-        from pyqcd.analysis._test9_extended import generate_test6_style_plots
+    def test_extended_plots_single_configuration_skips_direct_energy_fit(self):
+        from pyqcd.analysis._extended_plots import generate_energy_style_plots
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            data_dir = root / "test9" / "data" / "conf11"
+            data_dir = root / "tmd_run" / "data" / "conf11"
             data_dir.mkdir(parents=True)
             corr = np.exp(-0.25 * np.arange(72, dtype=np.float64)) + 0.01
             np.save(data_dir / "corr_pp_P200_11.npy", corr)
 
-            generate_test6_style_plots(
-                root / "test9",
+            generate_energy_style_plots(
+                root / "tmd_run",
                 root / "out",
                 [11],
                 ["P200"],
@@ -429,8 +429,8 @@ class SingleConfigurationContractTests(unittest.TestCase):
         self.assertIn("sample covariance rank = 0", report)
         self.assertIn("Nconf=1", report)
 
-    def test_test9_extended_two_to_four_configs_skip_direct_fit(self):
-        from pyqcd.analysis._test9_extended import generate_test6_style_plots
+    def test_extended_plots_two_to_four_configs_skip_direct_fit(self):
+        from pyqcd.analysis._extended_plots import generate_energy_style_plots
 
         for nconf in range(2, 5):
             with self.subTest(nconf=nconf), tempfile.TemporaryDirectory() as tmpdir:
@@ -438,7 +438,7 @@ class SingleConfigurationContractTests(unittest.TestCase):
                 conf_ids = list(range(11, 11 + nconf))
                 t = np.arange(72, dtype=np.float64)
                 for offset, conf_id in enumerate(conf_ids):
-                    data_dir = root / "test9" / "data" / f"conf{conf_id}"
+                    data_dir = root / "tmd_run" / "data" / f"conf{conf_id}"
                     data_dir.mkdir(parents=True)
                     corr = (
                         np.exp(-(0.25 + 0.003 * offset) * t)
@@ -451,8 +451,8 @@ class SingleConfigurationContractTests(unittest.TestCase):
                         "lsqfit.nonlinear_fit",
                         side_effect=AssertionError(
                             "Nconf=2..4 must fail the rank gate before lsqfit")):
-                    generate_test6_style_plots(
-                        root / "test9",
+                    generate_energy_style_plots(
+                        root / "tmd_run",
                         root / "out",
                         conf_ids,
                         ["P200"],

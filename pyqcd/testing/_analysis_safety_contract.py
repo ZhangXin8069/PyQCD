@@ -10,7 +10,7 @@ import unittest
 import numpy as np
 
 
-class Test9MomentumSafetyContractTests(unittest.TestCase):
+class ExtendedPlotsMomentumSafetyContractTests(unittest.TestCase):
     @staticmethod
     def _write_corr(root: Path, conf_ids):
         t = np.arange(72, dtype=np.float64)
@@ -21,13 +21,13 @@ class Test9MomentumSafetyContractTests(unittest.TestCase):
             np.save(data_dir / f"corr_pp_P200_{conf_id}.npy", corr)
 
     def test_missing_pz6_is_not_copied_from_another_momentum(self):
-        from pyqcd.analysis._test9_extended import generate_test6_style_plots
+        from pyqcd.analysis._extended_plots import generate_energy_style_plots
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir) / "test9"
+            root = Path(tmpdir) / "tmd_run"
             self._write_corr(root, [11, 12])
             messages = []
-            generate_test6_style_plots(
+            generate_energy_style_plots(
                 root,
                 Path(tmpdir) / "out",
                 [11, 12],
@@ -43,13 +43,13 @@ class Test9MomentumSafetyContractTests(unittest.TestCase):
                 for message in messages))
 
     def test_explicit_missing_pz6_raises_without_fabricating_output(self):
-        from pyqcd.analysis._test9_extended import generate_test6_style_plots
+        from pyqcd.analysis._extended_plots import generate_energy_style_plots
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             with self.assertRaisesRegex(FileNotFoundError, "Pz6.*missing"):
-                generate_test6_style_plots(
-                    root / "test9",
+                generate_energy_style_plots(
+                    root / "tmd_run",
                     root / "out",
                     [11],
                     ["P600"],
@@ -59,13 +59,13 @@ class Test9MomentumSafetyContractTests(unittest.TestCase):
                 (root / "out" / "1_result" / "L24x72" / "Pz6").exists())
 
     def test_invalid_momentum_label_fails_instead_of_becoming_pz0(self):
-        from pyqcd.analysis._test9_extended import generate_test6_style_plots
+        from pyqcd.analysis._extended_plots import generate_energy_style_plots
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             with self.assertRaisesRegex(ValueError, "invalid momentum tag"):
-                generate_test6_style_plots(
-                    root / "test9",
+                generate_energy_style_plots(
+                    root / "tmd_run",
                     root / "out",
                     [11],
                     ["Pz2"],

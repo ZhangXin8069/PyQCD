@@ -62,8 +62,8 @@ def _parse_momentum_tag(tag):
 # 辅助：读取 test9 的 per-conf per-momentum 2pt (Nt,) 为 jackknife 预备
 # ---------------------------------------------------------------------
 
-def _load_test9_corr2_raw(test9_root: str, conf_ids, momentum_tags):
-    """读取 test9/data/conf*/corr_pp_<tag>_<cid>.h5 → {tag: stacked (Nconf, Nt)}."""
+def _load_corr2_raw(tmd_root: str, conf_ids, momentum_tags):
+    """Read ``data/conf*/corr_pp_<tag>_<cid>.h5`` into stacked samples."""
     from ..tools._io import load_tensor_h5
     for tag in momentum_tags:
         _parse_momentum_tag(tag)
@@ -72,7 +72,7 @@ def _load_test9_corr2_raw(test9_root: str, conf_ids, momentum_tags):
         stack = []
         missing = 0
         for cid in conf_ids:
-            p = os.path.join(test9_root, "data", f"conf{cid}", f"corr_pp_{tag}_{cid}.h5")
+            p = os.path.join(tmd_root, "data", f"conf{cid}", f"corr_pp_{tag}_{cid}.h5")
             if os.path.exists(p):
                 arr = load_tensor_h5(p)
                 # load_tensor_h5 may return torch tensor; convert
@@ -92,7 +92,7 @@ def _load_test9_corr2_raw(test9_root: str, conf_ids, momentum_tags):
                 stack.append(arr)
             else:
                 # try npy fallback
-                p2 = os.path.join(test9_root, "data", f"conf{cid}", f"corr_pp_{tag}_{cid}.npy")
+                p2 = os.path.join(tmd_root, "data", f"conf{cid}", f"corr_pp_{tag}_{cid}.npy")
                 if os.path.exists(p2):
                     arr = np.load(p2).real.ravel()
                     tmp = np.zeros(NT)
@@ -141,7 +141,8 @@ def _meff_from_corr2(corr2_jack):
 # test0 style: 3 图 (correlators / meff / ratio_3pt) 适配 test9
 # ---------------------------------------------------------------------
 
-def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentum_tags, logger=print):
+def generate_correlator_style_plots(
+        tmd_root: str, out_root: str, conf_ids, momentum_tags, logger=print):
     """在 out_root/plots 下生成 3 张 test0 风格图 + test0 analysis/disconnected 风格图.
 
     test9 的 nucleon 2pt 替代 pion/proton 双强子；动量标签作为 channel。
@@ -159,7 +160,7 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
     os.makedirs(adir, exist_ok=True)
 
     # 1) 加载 corr 并做 jackknife 得到 meff/corr 均值/误差
-    corr_raw_dict = _load_test9_corr2_raw(test9_root, conf_ids, momentum_tags)
+    corr_raw_dict = _load_corr2_raw(tmd_root, conf_ids, momentum_tags)
     if not corr_raw_dict:
         logger("[ERROR] 无 corr 数据，无法生成 test0 style plots")
         return
@@ -286,10 +287,10 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
     ratio_results = {}
     unavailable_ratio_tags = []
     for tag in momentum_tags:
-        p = os.path.join(test9_root, "analysis", "tmd_ratio", f"ratio_proton_{tag}.npy")
+        p = os.path.join(tmd_root, "analysis", "tmd_ratio", f"ratio_proton_{tag}.npy")
         # also try analysis_b
         if not os.path.exists(p):
-            p2 = os.path.join(test9_root, "analysis_b", "tmd_ratio", f"ratio_proton_{tag}.npy")
+            p2 = os.path.join(tmd_root, "analysis_b", "tmd_ratio", f"ratio_proton_{tag}.npy")
             if os.path.exists(p2):
                 p = p2
         if not os.path.exists(p):
@@ -356,14 +357,14 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
     if not cand_tags:
         cand_tags = momentum_tags[:2]
     for tag in cand_tags[:2]:
-        c0_path = os.path.join(test9_root, "analysis", "tmd_ratio", f"c0_mean_{tag}.npy")
+        c0_path = os.path.join(tmd_root, "analysis", "tmd_ratio", f"c0_mean_{tag}.npy")
         if not os.path.exists(c0_path):
-            c0_path = os.path.join(test9_root, "analysis_b", "tmd_ratio", f"c0_mean_{tag}.npy")
+            c0_path = os.path.join(tmd_root, "analysis_b", "tmd_ratio", f"c0_mean_{tag}.npy")
         fit_npz = os.path.join(
-            test9_root, "analysis", "tmd_ratio", f"0_fit_data_{tag}.npz")
+            tmd_root, "analysis", "tmd_ratio", f"0_fit_data_{tag}.npz")
         if not os.path.exists(fit_npz):
             fit_npz = os.path.join(
-                test9_root, "analysis_b", "tmd_ratio",
+                tmd_root, "analysis_b", "tmd_ratio",
                 f"0_fit_data_{tag}.npz")
 
         fit_data = None
@@ -447,11 +448,11 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
 
         # ratio 图已在 TMD 目录有，此处仅复制真实存在的图。
         ratio_src = os.path.join(
-            test9_root, "analysis", "tmd_ratio",
+            tmd_root, "analysis", "tmd_ratio",
             f"ratio_proton_{tag}.png")
         if not os.path.exists(ratio_src):
             ratio_src = os.path.join(
-                test9_root, "analysis_b", "tmd_ratio",
+                tmd_root, "analysis_b", "tmd_ratio",
                 f"ratio_proton_{tag}.png")
         if os.path.exists(ratio_src):
             import shutil
@@ -473,7 +474,8 @@ def generate_test0_style_plots(test9_root: str, out_root: str, conf_ids, momentu
 # test6 style: per-Pz 7 图 + 拟合报告
 # ---------------------------------------------------------------------
 
-def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentum_tags, logger=print):
+def generate_energy_style_plots(
+        tmd_root: str, out_base: str, conf_ids, momentum_tags, logger=print):
     """在 out_base/1_result/L24x72/Pz*/ 下为每个动量生成 7 图 + 报告，复用 test6/main.py 逻辑.
 
     out_base 为 test9_1 根目录（包含 1_result）。
@@ -490,7 +492,7 @@ def generate_test6_style_plots(test9_root: str, out_base: str, conf_ids, momentu
     parsed_tags = {tag: _parse_momentum_tag(tag) for tag in momentum_tags}
 
     # 准备：对每个 tag 生成 corr2_jack (Nsample, dt_max)
-    corr_raw_dict = _load_test9_corr2_raw(test9_root, conf_ids, momentum_tags)
+    corr_raw_dict = _load_corr2_raw(tmd_root, conf_ids, momentum_tags)
     missing_tags = [tag for tag in momentum_tags if tag not in corr_raw_dict]
     if missing_tags:
         pz6_missing = [

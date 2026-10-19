@@ -1,0 +1,100 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-20 01:21:15 +0800
+批次: pyqcd-form-20261020
+主任务: PyQCD 2026-10-20 form 整改与功能复现
+触发原因: 任务完成
+摘要: 清理现行标签形代码标识符，登记历史归档例外，完整回归 110 项通过
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 基线审计与例外裁决
+- 目标: 区分 PyQCD 的真实格式冲突与历史归档例外。
+- 命令/操作: 执行全局与本地 form 审计，读取根 AGENTS、本地 form 技能、测试入口、标签与远端状态。
+- 关键输出: 初始包装器 `unexpected findings=166`；其中 980 个 data finding 和大部分 tag 形路径属于已批准历史归档。
+- 退出码: 初始严格包装器 1；分类裁决完成。
+- 证据与判断: 保留历史数据与只读日志/报告，现行代码标识符和失效软链接进入整改。
+
+### S2 — 代码、文档与软链接整改
+- 目标: 清除现行路径和符号中的版本标签，同时保持历史产物可复现。
+- 命令/操作: 将 `_test9_extended.py` 重命名为 `_extended_plots.py`，同步函数、导出、入口和契约测试名称；重命名当前 test6 文档；删除 9 个无引用失效外部软链接；同步根 AGENTS 与本地包装器例外。
+- 关键输出: 旧模块名、旧函数名和旧测试类名在当前 `pyqcd/**` 中清零。
+- 退出码: 0。
+- 证据与判断: 历史 `docs/from-logs`、`logs`、`data/from-logs` 和冻结 TeX/PDF 成对产物按精确规则保留。
+
+### S3 — 功能复现
+- 目标: 证明重命名未改变行为。
+- 命令/操作: 运行改动前全量测试、受影响的三个契约模块、扩展图表入口、改动后全量测试、compileall、严格审计和标签链检查。
+- 关键输出: 基线 `110 passed`；定向 `59 tests OK`；最终 `110 passed, 0 skipped, 0 failed`；严格审计 `registered exceptions=1148 unexpected=0`。
+- 退出码: 均为 0。
+- 证据与判断: 功能行为与测试覆盖保持一致，旧符号引用只在冻结历史 TeX 中作为版本证据出现。
+
+### S4 — 交付准备
+- 目标: 确认改动范围、恢复方式和 Git 门禁。
+- 命令/操作: 执行 `git diff --check`、同步器 `--check`、标签链检查并核对任务文档。
+- 关键输出: 无空白错误；AGENTS 托管块已是最新；88 个历史标签链与远端对象通过。
+- 退出码: 0。
+- 证据与判断: 可进入逐文件暂存、大文件闸门、提交和普通推送。
+
+## 验证与证据
+- 改动前 `python -m pyqcd.testing`: `110 passed, 0 skipped, 0 failed`。
+- `python -m unittest pyqcd.testing._analysis_safety_contract pyqcd.testing._fit_status_propagation_contract pyqcd.testing._statistics_edge_contract`: `Ran 59 tests ... OK`。
+- `python -m pyqcd.testing.tmd.extended_plots --help`: exit 0。
+- 改动后 `python -m pyqcd.testing`: `110 passed, 0 skipped, 0 failed`。
+- `skills/form/scripts/form-audit.sh`: `registered exceptions=1148 unexpected=0`。
+- `python -m compileall -q pyqcd`: exit 0。
+- `git diff --check`: exit 0。
+- `tag-chain.sh --check --remote origin`: 88 个标签通过。
+- 未验证项: 无本轮要求内未执行项；协方差非正定警告走既有回退路径且全量测试通过。
+
+## 变更与产物
+- 重命名: `pyqcd/analysis/_test9_extended.py` → `pyqcd/analysis/_extended_plots.py`。
+- 重命名: `docs/analy_test6_20260816.tex` → `docs/analy_proton_energy_20260816.tex`。
+- 更新: `pyqcd/analysis/__init__.py`、`pyqcd/testing/__init__.py`、TMD 扩展图表入口和三个契约测试模块。
+- 更新: 根 `AGENTS.md`、`skills/form/SKILL.md`、`skills/form/scripts/form-audit.sh`。
+- 删除: 9 个无引用的失效 `skills/donghx/QCD3` 外部标签形软链接。
+- 新增: `docs/form_pyqcd_20261020.md` 与本 final 日志。
+
+## 风险、限制与下一步
+- 风险: 历史数据的 tag 形目录名仍存在，但仅限已登记只读归档，不应用于新增路径或标识符。
+- 限制: 冻结 TeX/PDF 成对产物为保持一致性未改写。
+- 阻塞: 无。
+- 下一步: 将本任务文件逐个暂存，运行大文件闸门后提交、普通推送并创建 `dev18`。
+
+## 用户输入指令
+~form [PyQCU,MyQCD,PyQCD,configure]
+
+## Agent 全文报告
+--- report begin ---
+status: finished
+
+**结果**
+- PyQCD 的 166 个初始未登记 finding 已收敛为 `unexpected=0`。
+- 980 个历史 data finding、历史日志/报告路径和冻结 TeX/PDF 成对产物通过根规则与本地包装器精确登记，不删除历史证据。
+- 现行代码的 `_test9_extended` 模块及相关 test 形函数、变量、类和测试标识已改为语义名称。
+- 9 个无引用失效外部软链接已删除，可由 Git 恢复。
+
+**验证证据**
+- 改动前和改动后全量测试均通过：`110 passed, 0 skipped, 0 failed`。
+- 受影响契约测试：59 项通过。
+- 扩展图表入口 `--help`、`compileall`、`git diff --check` 与标签链检查通过。
+- 严格审计：`registered exceptions=1148 unexpected=0`。
+
+**改动文件**
+- `AGENTS.md`
+- `docs/analy_proton_energy_20260816.tex`
+- `docs/form_pyqcd_20261020.md`
+- `pyqcd/analysis/_extended_plots.py`
+- `pyqcd/analysis/__init__.py`
+- `pyqcd/testing/__init__.py`
+- `pyqcd/testing/_analysis_safety_contract.py`
+- `pyqcd/testing/_fit_status_propagation_contract.py`
+- `pyqcd/testing/_statistics_edge_contract.py`
+- `pyqcd/testing/tmd/extended_plots.py`
+- `skills/form/SKILL.md`
+- `skills/form/scripts/form-audit.sh`
+- 9 个 `skills/donghx/QCD3` 失效软链接删除
+
+**后续**
+- 逐文件暂存后执行大文件闸门、提交、推送 `main` 并创建 `dev18`。
+--- report end ---

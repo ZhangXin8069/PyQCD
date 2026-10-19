@@ -18,3 +18,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## pyqcd-form-20261020 - final - 2026-10-20 01:21:15 +0800
+- 主任务: PyQCD 2026-10-20 form 整改与功能复现
+- 日志文件: logs/v2026102001-3.txt
+- 文件大小: 5660 bytes
+- 触发原因: 任务完成
+- 关键内容: 清理现行标签形代码标识符，登记历史归档例外，完整回归 110 项通过
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+

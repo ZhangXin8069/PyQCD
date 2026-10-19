@@ -658,7 +658,7 @@ class TmdStatusPropagationContractTests(unittest.TestCase):
         self.assertIn("model Jacobian/covariance", report)
 
 
-def _write_test9_corr(root, conf_ids, seed=904):
+def _write_corr_samples(root, conf_ids, seed=904):
     rng = np.random.default_rng(seed)
     t = np.arange(72, dtype=np.float64)
     for offset, cid in enumerate(conf_ids):
@@ -670,18 +670,18 @@ def _write_test9_corr(root, conf_ids, seed=904):
         np.save(data_dir / f"corr_pp_P200_{cid}.npy", corr)
 
 
-class Test9ExtendedStatusPropagationContractTests(unittest.TestCase):
-    def test_test9_extended_rejects_finite_degenerate_energy_solution(self):
-        from pyqcd.analysis._test9_extended import generate_test6_style_plots
+class ExtendedPlotsStatusPropagationContractTests(unittest.TestCase):
+    def test_extended_plots_reject_finite_degenerate_energy_solution(self):
+        from pyqcd.analysis._extended_plots import generate_energy_style_plots
 
         conf_ids = list(range(100, 108))
         with tempfile.TemporaryDirectory() as tmpdir:
-            test9_root = Path(tmpdir) / "test9"
-            _write_test9_corr(test9_root, conf_ids)
+            tmd_root = Path(tmpdir) / "tmd_run"
+            _write_corr_samples(tmd_root, conf_ids)
             with patch("lsqfit.nonlinear_fit",
                        side_effect=_finite_degenerate_solver):
-                generate_test6_style_plots(
-                    str(test9_root), str(Path(tmpdir) / "out"),
+                generate_energy_style_plots(
+                    str(tmd_root), str(Path(tmpdir) / "out"),
                     conf_ids, ["P200"], logger=lambda _message: None)
             out_dir = Path(tmpdir) / "out" / "1_result" / "L24x72" / "Pz2"
             saved = np.load(out_dir / "1_fit_data.npz")
@@ -697,32 +697,34 @@ class Test9ExtendedStatusPropagationContractTests(unittest.TestCase):
                 self.assertTrue(np.isnan(saved[f"{name}_{direction}"]).all())
         self.assertIn("statistically_unidentifiable", report)
 
-    def test_test9_solver_program_error_is_not_fit_failed_status(self):
-        from pyqcd.analysis._test9_extended import generate_test6_style_plots
+    def test_extended_plots_preserve_solver_program_errors(self):
+        from pyqcd.analysis._extended_plots import generate_energy_style_plots
 
         conf_ids = list(range(120, 128))
         with tempfile.TemporaryDirectory() as tmpdir:
-            test9_root = Path(tmpdir) / "test9"
-            _write_test9_corr(test9_root, conf_ids, seed=905)
+            tmd_root = Path(tmpdir) / "tmd_run"
+            _write_corr_samples(tmd_root, conf_ids, seed=905)
             with patch("lsqfit.nonlinear_fit",
                        side_effect=RuntimeError("solver programming error")):
                 with self.assertRaisesRegex(RuntimeError,
                                             "solver programming error"):
-                    generate_test6_style_plots(
-                        str(test9_root), str(Path(tmpdir) / "out"),
+                    generate_energy_style_plots(
+                        str(tmd_root), str(Path(tmpdir) / "out"),
                         conf_ids, ["P200"], logger=lambda _message: None)
 
-    def test_test9_missing_tmd_ratio_skips_ratio_figure(self):
-        from pyqcd.analysis._test9_extended import generate_test0_style_plots
+    def test_extended_plots_missing_ratio_skips_ratio_figure(self):
+        from pyqcd.analysis._extended_plots import (
+            generate_correlator_style_plots,
+        )
 
         conf_ids = list(range(140, 148))
         messages = []
         with tempfile.TemporaryDirectory() as tmpdir:
-            test9_root = Path(tmpdir) / "test9"
-            _write_test9_corr(test9_root, conf_ids, seed=906)
+            tmd_root = Path(tmpdir) / "tmd_run"
+            _write_corr_samples(tmd_root, conf_ids, seed=906)
             out_root = Path(tmpdir) / "out"
-            generate_test0_style_plots(
-                str(test9_root), str(out_root), conf_ids, ["P200"],
+            generate_correlator_style_plots(
+                str(tmd_root), str(out_root), conf_ids, ["P200"],
                 logger=messages.append)
             ratio_plot = out_root / "plots" / "ratio_3pt_all_channels.png"
 
@@ -730,15 +732,17 @@ class Test9ExtendedStatusPropagationContractTests(unittest.TestCase):
         self.assertTrue(any("ratio" in msg and "unavailable" in msg
                             for msg in messages))
 
-    def test_test9_missing_fit_status_skips_c0_and_chi2_figures(self):
-        from pyqcd.analysis._test9_extended import generate_test0_style_plots
+    def test_extended_plots_missing_fit_status_skips_derived_figures(self):
+        from pyqcd.analysis._extended_plots import (
+            generate_correlator_style_plots,
+        )
 
         conf_ids = list(range(150, 158))
         messages = []
         with tempfile.TemporaryDirectory() as tmpdir:
-            test9_root = Path(tmpdir) / "test9"
-            _write_test9_corr(test9_root, conf_ids, seed=907)
-            tmd_dir = test9_root / "analysis" / "tmd_ratio"
+            tmd_root = Path(tmpdir) / "tmd_run"
+            _write_corr_samples(tmd_root, conf_ids, seed=907)
+            tmd_dir = tmd_root / "analysis" / "tmd_ratio"
             tmd_dir.mkdir(parents=True)
             np.save(
                 tmd_dir / "ratio_proton_P200.npy",
@@ -756,8 +760,8 @@ class Test9ExtendedStatusPropagationContractTests(unittest.TestCase):
                 chi2=np.ones((len(conf_ids), 13, 1)),
             )
             out_root = Path(tmpdir) / "out"
-            generate_test0_style_plots(
-                str(test9_root), str(out_root), conf_ids, ["P200"],
+            generate_correlator_style_plots(
+                str(tmd_root), str(out_root), conf_ids, ["P200"],
                 logger=messages.append)
             adir = out_root / "analysis" / "disconnected"
 
@@ -766,8 +770,8 @@ class Test9ExtendedStatusPropagationContractTests(unittest.TestCase):
         self.assertTrue(any("fit status" in msg and "unavailable" in msg
                             for msg in messages))
 
-    def test_test9_all_prior_constrained_directions_are_aggregated_and_plotted(self):
-        from pyqcd.analysis._test9_extended import generate_test6_style_plots
+    def test_extended_plots_aggregate_prior_constrained_directions(self):
+        from pyqcd.analysis._extended_plots import generate_energy_style_plots
 
         conf_ids = list(range(160, 168))
 
@@ -783,13 +787,13 @@ class Test9ExtendedStatusPropagationContractTests(unittest.TestCase):
                     np.eye(5), 1.0, _PriorFit())
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            test9_root = Path(tmpdir) / "test9"
-            _write_test9_corr(test9_root, conf_ids, seed=908)
+            tmd_root = Path(tmpdir) / "tmd_run"
+            _write_corr_samples(tmd_root, conf_ids, seed=908)
             out_root = Path(tmpdir) / "out"
-            with patch("pyqcd.analysis._test9_extended.fit",
+            with patch("pyqcd.analysis._extended_plots.fit",
                        side_effect=fake_prior_fit):
-                generate_test6_style_plots(
-                    str(test9_root), str(out_root), conf_ids, ["P200"],
+                generate_energy_style_plots(
+                    str(tmd_root), str(out_root), conf_ids, ["P200"],
                     logger=lambda _message: None)
             out_dir = out_root / "1_result" / "L24x72" / "Pz2"
             saved = np.load(out_dir / "1_fit_data.npz")

@@ -16,10 +16,13 @@ import argparse
 import os
 from pathlib import Path
 
-from pyqcd.analysis import generate_test0_style_plots, generate_test6_style_plots
+from pyqcd.analysis import (
+    generate_correlator_style_plots,
+    generate_energy_style_plots,
+)
 
 DEFAULT_CONF_IDS = [6250, 6450, 6650, 6850, 7050, 7250, 7450, 7650, 7850, 8050]
-# 尝试从 test9 的 tmd_summary.json 自动推断 momenta
+# 尝试从 TMD 运行的 tmd_summary.json 自动推断 momenta
 def infer_momenta(tmd_root: Path):
     for cand in [tmd_root / "analysis" / "tmd_summary.json",
                  tmd_root / "analysis_b" / "tmd_summary.json"]:
@@ -80,17 +83,17 @@ def main():
         all_tags = ["P000", "P200", "P400"]
     print(f"momentum_tags={all_tags}")
 
-    # 额外：若 test9_root/analysis_b 存在，临时将 analysis_b 内容合并到 analysis 以便统一读取
+    # 额外：若 tmd_root/analysis_b 存在，临时将 analysis_b 内容合并到 analysis 以便统一读取
     # generate functions 会自动尝试 analysis_b 备用路径，无需物理复制
 
     logger = lambda *a: print(*a)
-    print("\n=== 生成 test0 风格 3 图 ===")
-    generate_test0_style_plots(str(tmd_root), str(out_root), conf_ids,
-                               all_tags, logger=logger)
+    print("\n=== 生成关联函数风格 3 图 ===")
+    generate_correlator_style_plots(
+        str(tmd_root), str(out_root), conf_ids, all_tags, logger=logger)
 
-    print("\n=== 生成 test6 风格 7 图 per Pz ===")
-    generate_test6_style_plots(str(tmd_root), str(out_root), conf_ids,
-                               all_tags, logger=logger)
+    print("\n=== 生成能量风格 7 图 per Pz ===")
+    generate_energy_style_plots(
+        str(tmd_root), str(out_root), conf_ids, all_tags, logger=logger)
 
     # 额外：复制 tmd_ratio 原有图表到本目录以便一站式查看（不重复计算）
     import shutil
