@@ -1,0 +1,72 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-20 01:03:46 +0800
+批次: 20261020-git-slimming
+主任务: Git 历史大文件与 LFS 清理
+触发原因: 任务完成
+摘要: 删除12个大文件及全部LFS历史内容，重写并同步main与88个标签；Gitee服务端GC待网页触发
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 远程历史大文件审计
+- 目标: 找出 Gitee `origin` 全部远程引用可达且大于 10 MiB 的文件。
+- 命令/操作: `git rev-list --objects --all` + `git cat-file --batch-check`；核对 1 个远程分支和 88 个远程标签。
+- 关键输出: 12 个唯一 Blob，合计 218498225 bytes（208.38 MiB），均存在于原 `origin/main`。
+- 退出码: 0
+- 证据与判断: 当前树与全部历史的大对象集合一致，历史中无额外的大文件版本。
+
+### S2 — 历史与 LFS 清理
+- 目标: 从本地和远程历史永久移除已确认的 12 个大文件及全部 LFS 相关内容。
+- 命令/操作: `git filter-repo --invert-paths` 分阶段移除 12 个大文件、历史别名、3 个 LFS 指针文件和 LFS `.gitattributes`；随后执行定向 reflog expire 与 `git gc --prune=now`。
+- 关键输出: 本地 pack 从 533.87 MiB 降至 397.23 MiB；可达对象中大于 10 MiB 的数量为 0；`git lfs ls-files --all` 为 0；两个 stash 保留且不含目标路径。
+- 退出码: 0
+- 证据与判断: 12 个原 Blob OID 均不可读；目标路径在全部引用及 stash 中消失；本地 LFS 钩子、配置和非空缓存均已移除。
+
+### S3 — 远程原子强制更新
+- 目标: 将重写后的 `main` 与 88 个标签原子更新到 Gitee。
+- 命令/操作: 对全部旧远程 ref 使用 `--force-with-lease`，执行 `git push --atomic`；随后 `git fetch --prune --force --tags origin` 并逐 OID 核对。
+- 关键输出: 新 HEAD 为 `385d684cf2d92108e3efc45160a3d256efff7e12`；远程与本地 `main`、88 个标签完全一致。
+- 退出码: 0
+- 证据与判断: 远程引用层已不再包含大文件或 LFS 指针。
+
+### S4 — 功能验证
+- 目标: 确认历史清理未破坏生产功能。
+- 命令/操作: `python -m pyqcd.testing`；失败项 `test_infra_safety_contracts` 单独重跑。
+- 关键输出: 全量测试 109 passed、1 failed；唯一失败为 MPI setup 15 秒超时，单独重跑通过。
+- 退出码: 全量 1；定向 0
+- 证据与判断: 未发现与 Git/LFS 清理相关的功能回归；该失败判定为环境性偶发超时，但仍如实保留全量测试的非全绿结果。
+
+## 验证与证据
+- 测试/检查: Git ref OID 对比、`git fsck --full`、历史大对象扫描、LFS 扫描、stash 扫描、全量测试。
+- 结果: 本地与远程引用一致；无大于 10 MiB 的可达 Blob；无 LFS 跟踪项；stash 保留；本地 pack 为 397.23 MiB。
+- 未验证项: Gitee 服务端物理 GC 无法通过 Git CLI 触发。推送时服务端报告 repo size 1084.238MB，超过 1024MB 配额，并给出设置页 GC 入口。
+
+## 变更与产物
+- 文件: 12 个大于 10 MiB 文件、3 个 LFS 指针文件、1 个历史 LFS `.gitattributes` 已从全部分支、标签和 stash 历史移除。
+- 产物: 重写后的本地仓库与 Gitee 远程引用；新 `main` 为 `385d684cf2d92108e3efc45160a3d256efff7e12`。
+- 未改动范围: pyqcd 生产代码未改动；两个用户 stash 内容保留（去除被删除路径）。
+
+## 风险、限制与下一步
+- 风险: 所有历史提交和标签哈希已改变；其他协作者必须重新克隆或重置，不能合并旧历史。
+- 阻塞: Gitee 旧不可达对象尚未物理回收，服务端仓库大小仍可能显示超过配额。
+- 下一步: 使用仓库所有者登录 Gitee，打开 `https://gitee.com/zhangxin8069/PyQCD/settings#git-gc` 执行 Repository GC；该操作只能在与 Gitee 账号绑定的网页会话中完成。
+
+## 用户输入指令
+给出本git库已经提交到远程的所有大于10MB的文件,给用户审核并经过用户确认后将这些文件从本地和远程git永久删除以此给本git库瘦身
+确认
+删去LFS相关内容
+
+## Agent 全文报告
+--- report begin ---
+任务：列出远程历史中所有大于 10 MiB 的文件，经确认后从本地和远程 Git 历史永久删除，同时按后续指令删除 LFS 相关内容。
+
+审计发现 12 个唯一大文件 Blob，合计 218,498,225 字节（约 208.38 MiB），均存在于原远程 `main`。已通过 `git filter-repo` 从全部分支、标签和 stash 历史中删除这些路径，并额外删除同一 22.52 MiB 文件的历史别名。随后删除 3 个 LFS 指针文件、历史 LFS `.gitattributes`、仓库级 LFS 钩子与配置，并清空 LFS 缓存内容。
+
+本地结果：原 pack 533.87 MiB 降至 397.23 MiB；12 个旧 Blob OID 均不可读；所有引用可达对象中大于 10 MiB 的 Blob 数量为 0；`git lfs ls-files --all` 为 0；两个 stash 均保留且不含目标路径。新本地 `main` 与远程 `origin/main` 均为 `385d684cf2d92108e3efc45160a3d256efff7e12`，88 个标签也逐 OID 一致。
+
+远程已通过原子强制推送完成引用层更新。Gitee 推送响应报告服务端仓库账面大小为 1084.238MB，超过 1024MB 配额，说明旧不可达对象仍需服务端 GC。Git CLI 无法代替账号网页会话触发该 GC；仓库所有者需在 `https://gitee.com/zhangxin8069/PyQCD/settings#git-gc` 执行 Repository GC，之后服务端存储和配额才会实际回落。
+
+验证：`python -m pyqcd.testing` 首轮为 109 passed、1 failed；唯一失败是既有 MPI setup 合约 15 秒超时，单独重跑通过。未发现与本次 Git/LFS 清理相关的功能回归。全量测试并非一次全绿，该环境性超时已如实记录。临时 pre-filter bundle、URL 暂存文件和 filter-repo 映射已删除。
+
+最终状态：远程逻辑历史清理 finished，服务端物理 GC 仍 blocked，需在 Gitee 设置页执行一次 Repository GC。
+--- report end ---
