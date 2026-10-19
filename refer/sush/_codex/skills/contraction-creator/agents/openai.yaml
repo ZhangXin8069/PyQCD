@@ -1,0 +1,4 @@
+interface:
+  display_name: "收缩程序构建器"
+  short_description: "生成固定模块的动态收缩程序"
+  default_prompt: "使用 $contraction-creator 先从动态计划推导变量，再填写 NA800 两点或三点模板的 M0 到 M8 模块并报告计时。"

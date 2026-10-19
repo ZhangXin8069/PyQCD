@@ -35,7 +35,7 @@
 \title{\textbf{Gradient-Flowed Quark and Gluon Quasi-PDFs in Lattice QCD}\\
 \large Theory, Distillation, and the \(32^3\times96\) Implementations}
 \author{Hongxin Dong}
-\date{9 October 2026}
+\date{15 October 2026}
 
 \begin{document}
 \maketitle
@@ -81,6 +81,10 @@ connected \(u,d,u-d\) flavors under the unvalidated \(Z_\chi=1\) assumption.
 Section~\ref{sec:results-october} records these results, their source files,
 and the frequent quark tail-fit boundary hits. Numerical completion does
 not establish controlled physical PDFs.
+Section~\ref{sec:blending-oct15} adds the Blending weight audit and the
+completed ten-configuration L32x64 temporal-window tests. The subsequent
+user-selected scheme B is isolated from the frozen historical scheme A;
+implementation regression is not a proof of stochastic unbiasedness.
 \end{abstract}
 
 \tableofcontents
@@ -1453,9 +1457,12 @@ Eq.~\eqref{eq:lattice-free-kernel}.
 
 The current QUDA source implements the forward gauge--fermion flow algorithm
 of Appendix~D of Ref.~\cite{Luscher2013}.  Let \(V_0\) and \(\chi_0\) denote
-the gauge and fermion fields at the beginning of one step, and define
+the gauge and fermion fields at the beginning of one step. Here
+\(\tau=\tf/a^2\), \(\epsilon=\Delta\tau\) and
+\(L[V]=a^2\Delta_V\) are dimensionless; the following stages use
+\(\partial_\tau\chi=L[V]\chi\). Define
 \begin{equation}
-  k_0=\Delta[V_0]\chi_0.
+  k_0=L[V_0]\chi_0.
 \end{equation}
 The first fermion and gauge stages are
 \begin{align}
@@ -1471,7 +1478,7 @@ The first fermion and gauge stages are
 where \(\mathcal Z[V]\) is the anti-Hermitian Wilson gauge-force generator
 constructed from the staples.  Next set
 \begin{equation}
-  k_1=\Delta[V_1]\chi_1
+  k_1=L[V_1]\chi_1
 \end{equation}
 and update
 \begin{align}
@@ -1491,7 +1498,7 @@ and update
 \end{align}
 The final stage uses
 \begin{equation}
-  k_2=\Delta[V_2]\chi_2
+  k_2=L[V_2]\chi_2
 \end{equation}
 and gives
 \begin{align}
@@ -1525,13 +1532,13 @@ The QUDA temporary arrays correspond directly to these equations:
   & Current solution \(\chi_0\), then \(\chi_1\), and finally
     \(\chi_{\rm new}\) \\
   \texttt{f\_temp0}
-  & First derivative \(k_0=\Delta[V_0]\chi_0\) \\
+  & First derivative \(k_0=L[V_0]\chi_0\) \\
   \texttt{f\_temp1}
   & First stage \(\chi_1\), then reused for
-    \(k_1=\Delta[V_1]\chi_1\) \\
+    \(k_1=L[V_1]\chi_1\) \\
   \texttt{f\_temp2}
   & Second stage \(\chi_2\), then reused for
-    \(k_2=\Delta[V_2]\chi_2\) \\
+    \(k_2=L[V_2]\chi_2\) \\
   \texttt{f\_temp4}
   & Scratch output of \texttt{ApplyLaplace} \\
   \texttt{gin}, \texttt{gout}, \texttt{gaugeTemp}
@@ -1547,7 +1554,7 @@ field.  Denote this linear map by
 \begin{equation}
   \chi_{n+1}=\mathcal R_\epsilon[V_n]\chi_n.
 \end{equation}
-After \(N=\tf/\epsilon\) steps, QUDA has applied
+After \(N=\tau/\epsilon=\tf/(a^2\epsilon)\) steps, QUDA has applied
 \begin{equation}
   K_{\epsilon,N}[V_0]
   =
@@ -1818,11 +1825,12 @@ were generated, the current \(N_v=400\) source range takes only the first 200
 of them after the 100 exact and 100 compressed vectors.  Accordingly the
 two-index weight used by the correlator has \(N_{\rm noise}=200\).
 
-Schmidt orthogonalization establishes
+Schmidt orthogonalization targets
 \begin{equation}
   V^\dagger V=\mathbf 1_{400},
 \end{equation}
-but it does not establish the sample-wise completeness relation
+which must still be checked on the actual input files; this note does not
+claim a complete Gram audit of all files. It does not establish the sample-wise completeness relation
 \(VV^\dagger=\mathbf 1_{32^3N_c}\).  If a spectral sector has full dimension
 \(D_r\) and contains \(n_r\) sampled orthonormal vectors, its first-moment
 completeness estimator is schematically
@@ -1837,7 +1845,9 @@ under the assumed noise ensemble.  Repeated indices require joint inclusion
 weights rather than a product of independent one-index factors.  The current
 \(\omega_{mn}\) implements the corresponding two-index sector-size and
 same-index corrections and is checked against the reference connected-diagram
-code.
+code. This describes the historical unified-table scheme A. The subsequent
+scheme B distinguishes equal and unequal original source times; the
+definitions and validation limits are in Section~\ref{sec:blending-oct15}.
 
 It is therefore appropriate to call the coordinate-space object a
 \emph{stochastic reconstruction of the conventional propagator}, rather than
@@ -1860,6 +1870,11 @@ independent noise sets.  The factorized contraction preserves the original
 index structure and is therefore the production definition.
 
 \subsection{Flowed all-time basis}
+
+In the older equations below, \(\tau\) labels an original lattice source
+time, not flow time. In Section~\ref{sec:blending-oct15} this label is
+renamed \(\sigma\), reserving \(\tau=\tf/a^2\) for flow time. The cache
+directory \path{basis/tauNNN/} still uses the older source-time spelling.
 
 Embed a time-slice eigenvector in four dimensions,
 \begin{equation}
@@ -1931,7 +1946,7 @@ For example,
 \begin{center}
 \path{thin_tf0p50000000_eps0p01000000_tw4_Nv400_dz21}
 \end{center}
-identifies \(\tf/a^2=0.5\), \(\epsilon/a^2=0.01\), \(w=4\), 400 current
+identifies \(\tf/a^2=0.5\), \(\epsilon=\Delta(\tf/a^2)=0.01\), \(w=4\), 400 current
 modes and 21 stored separation lengths.
 The ``thin'' prefix is a scheme identifier: the LIME gauge field is read
 without HYP pre-smearing.  A cache made from HYP links must not be silently
@@ -1991,9 +2006,11 @@ with axes
   =(2,N_z,N_v,N_v).
   \label{eq:code-vertex-shape}
 \end{equation}
-The stochastic two-index factor \(\omega_{mn}\) from
+In historical scheme A, the stochastic two-index factor \(\omega_{mn}\) from
 Eq.~\eqref{eq:stochastic-coordinate-propagator} is multiplied into this
-vertex before it is saved.  The spin matrix \(\Gamma\) is deliberately not
+vertex before it is saved. Scheme B instead uses the source-time-dependent
+table in Eq.~\eqref{eq:scheme-B-oct15}, once at the same location.
+The spin matrix \(\Gamma\) is deliberately not
 contracted here.  Open current-spin indices appear in the C3 product after
 combining this spin-independent vertex with the spinful perambulators; the
 same vertex then feeds unpolarized, helicity, and transversity projections.
@@ -3668,7 +3685,7 @@ a controlled continuum window.
   & Canonical thin-link 4D Wilson gauge flow and 4D covariant fermion flow
     through QUDA \texttt{performGFlowQuda} \\
   Flow parameters
-  & \(\tf/a^2=0.5\), \(\epsilon/a^2=0.01\), \(N_{\rm step}=50\), and
+  & \(\tf/a^2=0.5\), \(\epsilon=0.01\), \(N_{\rm step}=50\), and
     \(\rflow/a=\sqrt{8\tf/a^2}=2\) \\
   Temporal boundary condition
   & Anti-periodic fermion kernel; its temporal center phase is removed before
@@ -3730,7 +3747,7 @@ norm for source slice \(\tau\) as
     \sum_{t=0}^{N_t-1}\|\Phi_{\tau}^{(\tf)}(t)\|^2}.
   \label{eq:discarded-norm}
 \end{equation}
-For configuration 10000, \(\tf/a^2=0.5\), \(\epsilon/a^2=0.01\), and a
+For configuration 10000, \(\tf/a^2=0.5\), \(\epsilon=0.01\), and a
 four-mode pilot, the observed discarded fractions were
 \begin{center}
 \begin{tabular}{ccc}
@@ -4517,6 +4534,405 @@ an unpolarized kernel by assumption.
 Only additional spacings and a demonstrated hierarchy can turn the
 present fixed-spacing diagnostics into controlled continuum PDFs.
 \clearpage
+
+\section{Blending weights, all-time construction and temporal-window tests}
+\label{sec:blending-oct15}
+
+This section records the audit completed on 15 October 2026. It separates
+an estimator definition, an implementation regression and a physical
+validation. The historical production estimator is called A. The user has
+subsequently selected B for future C3 calculations; its implementation and
+window test are isolated successors. No all-current, all-separation,
+all-flow B production rerun has been submitted as part of this documentation
+update. Existing fits, flow conversions and reconstructed PDFs remain
+historical A products unless explicitly regenerated and labelled otherwise.
+
+\subsection{Time labels, sampling identity and weights}
+
+We use \(\tf\) for physical flow time,
+\(\tau=\tf/a^2\) for dimensionless flow time,
+\(\epsilon=\Delta\tau\), \(\sigma\) for an original basis time, and
+\(t_J\) for the output/current time. Thus \path{basis/tau000/} means
+\(\sigma=0\), not zero flow. A sampled vector is identified by the full
+label \((\sigma,r,m)\): original time, spectral sector and saved slot.
+Equal slot numbers at different original times are not the same
+four-dimensional input vector.
+
+For a sector of dimension \(d_r\) with \(n_r\) retained vectors, the
+one-index weight is \(w_{\sigma m}=d_r/n_r\). Under the conditional model
+of a uniform subset without replacement from the same orthonormal frame,
+the second-order table is
+\begin{equation}
+ \omega^{(2)}_{mn}=
+ \begin{cases}
+ d_r/n_r,&m=n\text{ in sector }r,\\
+ d_r(d_r-1)/[n_r(n_r-1)],&m\ne n\text{ in the same sector }r,\\
+ (d_r/n_r)(d_s/n_s),&m\in r,\ n\in s\text{ independent sectors}.
+ \end{cases}
+ \label{eq:omega-second-oct15}
+\end{equation}
+The first and second cases encode different inclusion probabilities.
+They must not be replaced by the square root of the diagonal table to
+manufacture a one-index factor.
+
+The two source-time prescriptions are
+\begin{align}
+ \Omega^A_{(\sigma_a,m),(\sigma_b,n)}&=\omega^{(2)}_{mn},\\
+ \Omega^B_{(\sigma_a,m),(\sigma_b,n)}&=
+ \begin{cases}
+ \omega^{(2)}_{mn},&\sigma_a=\sigma_b\pmod {N_t},\\
+ w_{\sigma_a m}w_{\sigma_b n},&\sigma_a\ne\sigma_b\pmod {N_t}.
+ \end{cases}
+ \label{eq:scheme-B-oct15}
+\end{align}
+Flow is a deterministic map on the already sampled columns at fixed gauge
+field. It does not resample them; neither loss of norm nor a nontrivial
+flowed Gram matrix changes the original inclusion probabilities.
+Both prescriptions are independent of \(\tf\), \(t_J\), and separation
+at fixed sampling rule. B depends on the equality of the \emph{original}
+times, not on the output time.
+
+For L32x64 the exact sector has \((d,n)=(100,100)\); ten compressed
+subsectors have \(n=10\) each, with dimensions
+\begin{equation}
+ (d_1,\ldots,d_{10})=(50,50,100,100,200,200,350,350,550,550).
+\end{equation}
+The high sector has \((d,n)=(95704,200)\), so its first weight is
+478.52. The full space is \(32^3N_c=98304\), but only 400 columns are
+retained. Source/sink VVV uses the first 200 columns, including compressed
+random columns; these are not 200 exact modes. L32x96 uses different sector
+dimensions, so its weight table cannot be copied numerically.
+
+\subsection{What is proved conditionally, and what is not proved}
+
+For two independent source-time frames, suppose every random slot in one
+sector satisfies \(\mathbb E R_{\sigma m}=P_\sigma/d\), and let the
+coefficient \(M\) be independent of these draws. Then
+\begin{equation}
+ \mathbb E\sum_{m,n}C_{mn}R_{\sigma_a m}M R_{\sigma_b n}
+ =\frac{\sum_{m,n}C_{mn}}{d^2}P_{\sigma_a}MP_{\sigma_b}.
+\end{equation}
+Both A and B have the required table sum:
+\begin{equation}
+ \sum_{m,n}\omega^{(2)}_{mn}
+ =n\frac dn+n(n-1)\frac{d(d-1)}{n(n-1)}=d^2
+ =\sum_{m,n}w_mw_n.
+\end{equation}
+Thus a difference between individual cross-time table entries does not by
+itself prove a bias in A: under these assumptions the complete mode sums
+can have the same mean and different finite-sample values or variances.
+For example, \(d=50,n=10\) gives A diagonal 5, off-diagonal
+\(27.222\ldots\), and B entries 25; both tables sum to 2500.
+Exact sectors require a deterministic complete sum instead of a random
+slot assumption.
+
+The complete baryon coefficient also contains source/sink VVV, spectators
+and other lines which may share noise, especially when original current
+times coincide with source or sink. The actual frozen generator, seeds,
+slot moments and higher joint-noise moments are therefore \textbf{still
+to be confirmed}. Choosing B is not a proof of its full-baryon
+unbiasedness. Zero-flow and factorization regressions cannot establish
+this missing stochastic statement. A measured A/B difference is neither
+a bias estimate nor a final PDF systematic uncertainty.
+
+The completed A/B audit is in
+\nolinkurl{quark_l32x64_omega_compare_20261014/} below the project root
+\path{/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/}.
+It contains ten configurations and four current times per configuration.
+Equal-time blocks and their Wick terms agree exactly; A reproduces the
+old production with relative \(L^2\) error about \(9.1\times10^{-15}\).
+Total C3 relative A/B differences range from 1.3827--2.4865\% for \(u\)
+and 1.7738--3.3757\% for \(d\) in the tested cases. All 40 cases pass
+implementation/completeness checks. The corrected CPU summary job
+3851153 completed after the earlier environment-startup failure; the
+failure was not a GPU numerical failure.
+
+\subsection{From the four-dimensional flow to basis and vertex}
+
+The continuum equations and their kernel interpretation are
+\begin{align}
+ \partial_{\tf} B_\mu&=D_\nu G_{\nu\mu},&
+ \partial_{\tf}\chi&=\Delta_{B(\tf)}\chi,\\
+ K(\tf)&=\mathcal P_f\exp\!\left(\int_0^{\tf}\dd s\,
+       \Delta_{B(s)}\right),&
+ \Phi&=K\mathcal V.
+\end{align}
+The input embedding and its matrix shape are
+\begin{equation}
+ \eta_{\sigma n}(x)=\delta_{x_4,\sigma}V_n(\bm x;\sigma),\qquad
+ \mathcal V\in\mathbb C^{(N_tN_s^3N_c)\times(N_tN_v)}.
+\end{equation}
+Spin is an identity factor suppressed here. Embedding adds zero entries,
+not independent columns; hence there are \(N_tN_v\), not
+\(N_tN_s^3N_c\), input columns. The implementation evaluates \(K\mathcal V\)
+and does not build dense \(K\), solve the full spectrum, or project the
+evolution back to 400 dimensions at every step.
+
+The dimensionless lattice Laplacian is
+\begin{equation}
+ (L_U\phi)(x)=\sum_{\mu=1}^4\bigl[
+ U_\mu(x)\phi(x+\hat\mu)+U_\mu^\dagger(x-\hat\mu)
+ \phi(x-\hat\mu)\bigr]-8\phi(x).
+\end{equation}
+The coupled RK3 stages are given in
+Section~\ref{sec:pyquda-gflow}, with \(\epsilon=\Delta(\tf/a^2)\),
+\(N_{\rm step}=\tau/\epsilon\) and each Laplacian using its matching
+intermediate gauge. There is no mass term or Dirac solve. The heat map is
+not unitary: even if \(\mathcal V^\dagger\mathcal V=I\), its flowed
+Gram matrix is \(\mathcal V^\dagger K^\dagger K\mathcal V\), not generally
+\(I\). Neither a Gram inverse nor keeping only Q from a QR decomposition
+is part of this algorithm.
+
+The implementation order is as follows.
+\begin{enumerate}
+ \item Validate the original basis/perambulator identity, sector ordering
+ and unsmeared LIME gauge. The historical basis filename's HYP label does
+ not change the thin-link starting field of the flowed operator.
+ \item Embed each \(\sigma\). Pack four separate input columns into four
+ spin lanes, possible because the Laplacian is spin diagonal. A batch of
+ 32 columns uses eight Wilson spinors; 400 columns require 13 batches,
+ the last containing 16 columns. Separate spin lanes mean no spin mixing,
+ not statistical independence of the input columns. This packing is not resampling.
+ \item Evolve on the full four-dimensional lattice, with fermion temporal
+ antiperiodicity and a common gauge trajectory for both endpoints and
+ their Wilson line. Remove the auxiliary fermion center phase from the
+ gauge saved for the operator. Multi-flow checkpoints continue the full
+ resident field, never a truncated saved slice.
+ \item Unpack all output times, accumulate full norm diagnostics, then
+ retain the selected slices. A basis slice has shape
+ \((400,32,32,32,3)\), complex64; gauge links are complex128. Coordinate
+ storage is \((t,z,y,x)\), link directions are \((x,y,z,t)\).
+ \item At fixed \(t_J\), enumerate all retained ordered source-time pairs
+ and construct both signed straight Wilson chains. Compute
+ \begin{equation}
+ J(t_J;\sigma_a,\sigma_b;z)
+ =\mathcal V_{\sigma_a}^\dagger K^\dagger
+    \mathcal O(t_J,z;B)K\mathcal V_{\sigma_b},\qquad
+ \widetilde J=\Omega^B\odot J.
+ \end{equation}
+ Geometry has shape \((2,21,400,400)\): sign, separation 0--20, left
+ mode, right mode. Apply the Hadamard table exactly once after geometry;
+ do not weight basis or add a second table at C3 read time. The current
+ spin matrix \(\Gamma\) is applied later.
+ \item Combine \(\widetilde J\) with ordinary perambulators and unflowed
+ source/sink VVV, using complex128 accumulation and the unchanged six
+ Wick terms. The factorization
+ \texttt{tuSLnp,tambn->uSLpamb} sums one original time first and retains
+ the other; it is a finite-sum reordering, not another sampling step.
+ The external antiperiodic sign is \(-1\) if
+ \(t_{\rm src}+t_{\rm sep}\ge N_t\).
+\end{enumerate}
+The two time sums arise from the two endpoints. Reduce time labels modulo
+\(N_t\), deduplicate, and enumerate ordered pairs. Equal-time pairs appear
+once, reversed unequal pairs are distinct. There is no division by
+\(N_t\) or the number of window pairs and no extra factor \(1/2\).
+
+\subsection{Full integration versus finite temporal storage}
+
+Define periodic distance
+\(d_{N_t}(t_J,\sigma)=\min_{k\in\mathbb Z}|t_J-\sigma+kN_t|\).
+Full flow is solved first. Each input-time block has its own output
+projector, \(\Phi_{\sigma,w}=M_{\sigma,w}\Phi_\sigma\), keeping
+\(d_{N_t}(t_J,\sigma)\le w\). Concatenate these blocks to define
+\(\Phi_w\); this is not a single common output-time projector applied
+to all input columns. For \(E=\Phi-\Phi_w\), the aggregate diagnostic is
+\begin{equation}
+ f_{\rm discard}=\frac{\|E\|_F^2}{\|\Phi\|_F^2},\qquad
+ \frac{\|E\|_F}{\|\Phi\|_F}=\sqrt{f_{\rm discard}}.
+ \label{eq:window-tail-oct15}
+\end{equation}
+Aggregation is over modes, space, color and all output times for
+\emph{each configuration and each original time}, not an ensemble or
+bootstrap average. A \(10^{-6}\) squared-norm gate is a \(10^{-3}\)
+amplitude-norm scale, not a \(10^{-6}\) C3 error bound.
+For the assembled geometric operator,
+\begin{align}
+ J-J_w&=\Phi_w^\dagger\mathcal O E+E^\dagger\mathcal O\Phi_w
+        +E^\dagger\mathcal O E,\\
+ \|J-J_w\|_F&\le\|\mathcal O\|_2
+       \bigl(2\|\Phi_w\|_F\|E\|_F+\|E\|_F^2\bigr).
+ \label{eq:window-bound-oct15}
+\end{align}
+This absolute bound does not give a relative bound on a selected output
+time, mode, weighted vertex or contracted C3: weights, perambulators and
+cancellations still matter. A local Gaussian free heat kernel motivates
+checking a finite window, but does not replace a paired C3 test.
+Discarded norms cannot recover missing complex amplitudes. One must not
+renormalize weights to compensate for a missing tail.
+
+\subsection{Completed L32x64 scheme-B window experiment}
+
+The isolated experiment is
+\nolinkurl{quark_l32x64_schemeB_window_20261015/} below the project root.
+Its frozen \texttt{manifest.json} uses configurations
+10000, 10040, \ldots, 10360, \(a=0.0897\,\mathrm{fm}\),
+\(\tau=0.5\), \(\epsilon=0.01\), 50 steps,
+\(t_J=0,16,32,63\), \(t_{\rm sep}=7a=0.6279\,\mathrm{fm}\),
+and insertion offset \(dt=3\). Integer momenta are 3, 4, 5 in the
+z direction, separations 0--20 with both signs, four nucleon
+polarizations, full open \(4\times4\) current spin and all six Wick terms.
+
+The test integrates all 400 columns at the 40 required original times
+per configuration over the full 64-time lattice. It stores only the
+52 required \((\sigma,t_J)\) slices, about 15.24 GiB per configuration,
+while norm diagnostics still cover all output times. All windows 4, 5, 6
+use this same complete response. Its selected-output cache schema is not
+a standard complete production-basis schema.
+
+All ten configurations and 40 cases pass, with no missing products.
+The 360 overlapping old/new \(w=4\) basis slices and C2 agree exactly.
+The largest relative \(L^2\) regression errors are
+\(4.744\times10^{-15}\) for B total C3 and
+\(9.327\times10^{-15}\) for ordered-block Wick terms.
+The physical-data factorized-versus-explicit contraction check at
+configuration 10000, \(t_J=0\), covers all three windows and has maximum
+\(5.449\times10^{-15}\).
+
+\begin{table}[htbp]
+ \centering
+ \caption{Maximum discarded squared-norm fractions over tested
+ configurations and original times. The one-body weighted norm is an
+ auxiliary first-weight diagnostic, not the full B-weighted C3.}
+ \label{tab:window-norm-oct15}
+ \begin{tabular}{rcccc}
+ \toprule
+ \(w\) & Aggregate & Per-mode max & Weighted one-body & Sector max\\
+ \midrule
+ 4 & \(2.78755\,10^{-8}\) & \(5.86455\,10^{-8}\)
+   & \(4.65347\,10^{-8}\) & \(5.77024\,10^{-8}\)\\
+ 5 & \(1.59311\,10^{-10}\) & \(3.89139\,10^{-10}\)
+   & \(2.98558\,10^{-10}\) & \(3.82405\,10^{-10}\)\\
+ 6 & \(6.75419\,10^{-13}\) & \(1.90064\,10^{-12}\)
+   & \(1.41614\,10^{-12}\) & \(1.86526\,10^{-12}\)\\
+ \bottomrule
+ \end{tabular}
+\end{table}
+\begin{table}[htbp]
+ \centering
+ \caption{Largest relative Frobenius change of total complex C3 among
+ the 40 cases, at fixed scheme B. Entries are percentages, not fractions.}
+ \label{tab:window-c3-oct15}
+ \begin{tabular}{rccc}
+ \toprule
+ Window pair & \(u\) & \(d\) & \(u-d\)\\
+ \midrule
+ \(4\to5\)&0.0126696\%&0.0146414\%&0.0134355\%\\
+ \(5\to6\)&0.00080954\%&0.00093124\%&0.00082711\%\\
+ \(4\to6\)&0.0130625\%&0.0149632\%&0.0137709\%\\
+ \bottomrule
+ \end{tabular}
+\end{table}
+
+For the open-spin ratio diagnostic the order is: form complex
+\(C_3/\operatorname{Re}C_{2,\mathrm{nopol}}\) in each configuration/case,
+average four cases \emph{inside} each configuration, then compute real
+and imaginary means and SEM across ten configurations. Four current times
+are not 40 independent configurations. No new bootstrap, physical
+\(\Gamma\) projection or bare-element fit is performed in this test.
+For \(w=4\to6\), the norm of the mean ratio shift divided by the norm
+of the baseline SEM ranges from \(1.60718\times10^{-4}\) to
+\(4.71277\times10^{-4}\) across flavors and momenta. This is descriptive,
+not a pointwise significance or covariance test.
+
+At the tested statistical precision these results support \(w=4\) for
+B pilot production in this restricted range. \(w=6\) is still a finite
+window, not an exact full-time C3 reference. This is not an approval of
+all flow times, source/sink separations, physical channels or L32x96.
+
+\begin{figure}[htbp]
+ \centering
+ \includegraphics[width=\linewidth]{figures/basis_tail_diagnostics.pdf}
+ \caption{Full-integration norm diagnostics for windows 4, 5 and 6.
+ The gate applies to the aggregate squared norm only. Input is the
+ existing experiment's \texttt{summary/basis\_tail\_metrics.csv}.}
+ \label{fig:window-norm-oct15}
+\end{figure}
+\begin{figure}[htbp]
+ \centering
+ \includegraphics[width=\linewidth]{figures/C3_window_convergence.pdf}
+ \caption{Paired complex C3 convergence at fixed B for \(u,d,u-d\).
+ Every pair uses identical basis, gauge, perambulators and noise;
+ it does not mix A/B variation with temporal truncation.}
+ \label{fig:window-c3-oct15}
+\end{figure}
+\begin{figure}[htbp]
+ \centering
+ \includegraphics[width=\linewidth]{figures/paired_open_ratio_window_shift.pdf}
+ \caption{Norm of paired mean open-spin ratio change relative to a
+ baseline SEM norm. This global diagnostic is neither a projected
+ physical PDF ratio nor a pointwise significance measure.}
+ \label{fig:window-ratio-oct15}
+\end{figure}
+\clearpage
+
+\subsection{Code, data contract and concrete next steps}
+
+All following paths are relative to the B experiment root above.
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.43\textwidth}
+                  >{\raggedright\arraybackslash}p{0.48\textwidth}}
+ \toprule
+ Entry or product & Role / contract\\
+ \midrule
+ \endhead
+ \path{reference/flow_common_l32x64.py} &
+ \texttt{first\_order\_weights}, \texttt{create\_time\_pair\_omega},
+ source-time reduction and geometric vertex.\\
+ \path{reference/generate_flowed_vertex_l32x64.py} &
+ Standard B generator; \texttt{vertex\_schemeB} cache, schema
+ \nolinkurl{generalized_flowed_vertex_l32x64_schemeB_v1}.\\
+ \path{generate_selected_basis.py}, \path{compare_windows.py} &
+ Full-grid integration/selected output for this test; paired
+ window reconstruction and Wick/factorization regression.\\
+ \path{summary/report.json}, \path{results/<conf>/tJ###/receipt.json} &
+ PASS, limits, regressions and missing-product audit.\\
+ \path{summary/paired_window_samples.npz} &
+ Paired C3/C2, ratios, real/imaginary SEM and per-conf differences.\\
+ \path{summary/C3_window_metrics.csv},
+ \path{summary/basis_tail_metrics.csv} &
+ All case-by-case C3 changes and norm diagnostics.\\
+ \path{run_B_from_cache.py},
+ \path{run_B_from_cache_na800_sug.slurm} &
+ Prepared full-current B entry, not yet submitted in bulk; requires
+ explicit \texttt{B\_CONF} and standard complete basis/gauge.\\
+ \bottomrule
+\end{longtable}
+The single-case arrays are in
+\path{results/<conf>/tJ###/window_comparison.npz}.
+\texttt{c3\_by\_window\_flavor} has shape
+\((3,2,2,4,3,21,4,4)\): window, flavor \((u,d)\), sign, nucleon
+polarization, momentum, separation and open spins \((m,o)\).
+\texttt{signed\_wick\_by\_window} has shape
+\((3,6,2,4,3,21,4,4)\), with signs already included;
+\texttt{signed\_wick\_by\_radius} has leading radius length 7;
+\texttt{c2\_common} has shape \((4,3)\).
+\(u-d\) is constructed using the same paired arrays in the summary.
+
+CPU gate 3851836, GPU pilot 3851837\_0, remaining GPU array
+3851838\_1--9 and CPU summary 3851839 all completed with exit 0:0.
+GPU times were approximately 30:42--32:42; the final CPU summary took
+1:03. Frozen-source hashes and 40 NPZ primary-array headers passed
+the recorded audit. Logs contain no numerical failures; locale and font
+cache messages are not physics diagnostics.
+To regenerate only the existing CPU summary, submit
+\texttt{sbatch --parsable summarize\_cpu.slurm} from this experiment
+directory; do not rerun GPU flow just for plotting.
+
+Standard B C3 will be saved separately under
+\path{C3_schemeB/<flow-tag>/Nev_200/<conf>/}, with
+\texttt{flow\_weight\_scheme} and
+\texttt{flow\_weight\_applied\_count=1} metadata.
+Retain basis/gauge and final C2/C3; vertex/VVV can be rebuilt in job-local
+scratch and removed there. GPU jobs use \texttt{na800-sug} and reservation
+\texttt{donghx\_223}; analysis/fit jobs use CPU compute nodes, not login
+nodes. No new physics job was submitted by this documentation update.
+
+Next, trace the actual random generator/seed and full baryon moments;
+project the paired window samples with the frozen physical spin
+conventions; extend the test to other flows, currents and source/sink
+separations before claiming a general truncation bound. Any downstream
+ratio/fit/matching refresh needs a new B-labelled product and paired
+configuration/bootstrap identities. The old A analysis and its
+normalization/matching caveats are not overwritten.
 
 \section{Validation and systematic-error program}
 
