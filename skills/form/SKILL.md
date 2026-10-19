@@ -29,6 +29,8 @@ metadata:
 - 基线 `811900c` 的数学符号名和上游兼容入口保留原拼写；新普通接口仍用
   `snake_case`。
 - LaTeX/Markdown 使用内容或领域名称；日志仅允许 `log/json/tsv/csv/txt`。
+- Agent 指令文件唯一名称是 `AGENTS.md`，`AGENT.md` 不是兼容别名。同目录并存时，
+  必须先完整合并有效内容并去重到 `AGENTS.md`，再删除 `AGENT.md`，并同步全部现行引用。
 - `refer/` 永远只读；生产代码不得依赖 `refer/` 或 `pyqcd.testing`。
 - `data/**` 不是空数据目录，而是本库批准的历史数据、图像、脚本和运行归档树。
 
