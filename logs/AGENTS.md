@@ -39,3 +39,11 @@
 - 关键内容: 修复 TMD ratio、NLO matching、Fourier 归一化及 fail-closed 数值门；全量 110 项通过；一致性验证因缺失大体积参考产物未执行
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## form-20261021 - final - 2026-10-21 04:01:36 +0800
+- 主任务: PyQCD ~form 格式治理：登记参考库分析文档本地例外并补齐来源清单
+- 日志文件: logs/v2026102104.txt
+- 文件大小: 5037 bytes
+- 触发原因: 任务完成
+- 关键内容: 25 项 REFERENCE_DOC_MISPLACED 登记为本地例外 9，审计 0 未登记，全量测试 110 passed
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

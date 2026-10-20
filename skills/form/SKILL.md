@@ -61,6 +61,9 @@ metadata:
   路径中的 tag 形目录名只作版本定位，允许精确保留；不得据此新增同类路径。
 - `pyqcd/testing/tmd/artifacts/*/docs/analy_test9_*` 是与二进制 PDF 成对的冻结产物，
   为保持 TeX/PDF 一致性允许保留，并由本地包装器逐路径豁免。
+- `refer/git-rep/{EasyDistillation,LQCD_Master,PyQUDA,lamet-agent}` 是已验证的普通
+  参考拷贝（非 submodule）；其 `docs/` 内本库产出的 `analy_*/pure_*/report_*` TeX/PDF
+  原地保留，并由本地包装器逐路径精确豁免。不得据此新增同类路径。
 
 除上述条件外，新增例外必须先写入根 `AGENTS.md` 并在审计包装器中按精确路径登记。
 

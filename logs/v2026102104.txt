@@ -1,0 +1,88 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-21 04:01:36 +0800
+批次: form-20261021
+主任务: PyQCD ~form 格式治理：登记参考库分析文档本地例外并补齐来源清单
+触发原因: 任务完成
+摘要: 25 项 REFERENCE_DOC_MISPLACED 登记为本地例外 9，审计 0 未登记，全量测试 110 passed
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 只读审计与裁决
+- 目标: 定位未登记的命名、目录与交付格式冲突，区分真实违规和已批准历史例外。
+- 命令/操作: `git status --short --branch`；`git tag --list`；全局与本地 form 审计；
+  `git ls-files -s -- refer/git-rep`；`git submodule status -- refer/git-rep`。
+- 关键输出: 工作区仅 `M refer/git-rep/README.md`；严格审计 1172 项，其中 25 项
+  `REFERENCE_DOC_MISPLACED` 未登记，其余 1147 项均为既有具名例外。
+- 退出码: 本地包装器首次 exit 1（unexpected=25）。
+- 证据与判断: 25 项均位于 4 个普通参考拷贝的 `docs/`，根 AGENTS 已声明这些库非
+  submodule；按本地原约定优先，登记例外而不重建参考树。
+
+### S2 — 整改与规则同步
+- 目标: 精确豁免既有分析文档，补齐参考库来源清单，避免放行新违规。
+- 命令/操作: 修改本地审计包装器（25 条完整路径）；调用
+  `form-agents-sync.sh --content` 更新根 AGENTS 托管块；同步本地 form SKILL；
+  重写 `refer/git-rep/README.md`；新增任务文档。
+- 关键输出: `PASS form-audit(pyqcd): registered exceptions=1172 unexpected=0`。
+- 退出码: 0。
+- 证据与判断: `REFERENCE_DOC_MISPLACED` 分支仅对列表中路径计数，其他路径仍失败；
+  用户已有的 LQCD_Skills URL 改动被保留并纳入清单。
+
+### S3 — 功能复现与交付检查
+- 目标: 确认格式整改不破坏功能，并满足 Git 交付闸门。
+- 命令/操作: `bash -n`；`python -m pyqcd.testing`；`git diff --check`；
+  `form-agents-sync.sh --check`；提交前大文件闸门。
+- 关键输出: 全量测试首轮 `109 passed, 1 failed`，立即重跑 `110 passed, 0 failed`；
+  语法、审计、diff 检查均通过。
+- 退出码: 最终全量测试 0。
+- 证据与判断: 改动不含 Python 代码；首轮失败未保留用例名，判定为环境性偶发，
+  已在任务文档中如实记录。
+
+## 验证与证据
+- 测试/检查: `bash -n skills/form/scripts/form-audit.sh`、本地 form 审计、
+  `python -m pyqcd.testing`、`git diff --check`、根规则同步检查。
+- 结果: 语法 0；审计 1172 例外/0 未登记；全量 110 passed/0 failed；diff 0；同步已最新。
+- 未验证项: 首次全量测试的偶发失败未定位到具体用例；4 个参考库未做 submodule 迁移
+  （本地已登记例外，非本轮计划）。
+
+## 变更与产物
+- 文件: `AGENTS.md`、`skills/form/SKILL.md`、`skills/form/scripts/form-audit.sh`、
+  `refer/git-rep/README.md`、`docs/form_pyqcd_20261021.md`、本日志、`logs/AGENTS.md`。
+- 产物: 本地审计 0 未登记；参考库来源/用途清单。
+- 未改动范围: 参考库文件、Python 生产代码、历史数据、日志归档和冻结产物。
+
+## 风险、限制与下一步
+- 风险: 25 条路径豁免为精确匹配，新增同类文档仍会被审计报告。
+- 阻塞: 无。
+- 下一步: 普通提交并推送 `main`，打 `dev21` 标签保存验收快照。
+
+## 用户输入指令
+~form
+
+## Agent 全文报告
+--- report begin ---
+**finished** — PyQCD `~form` 本轮完成。
+
+改动内容：
+- 根 `AGENTS.md` 新增本地例外 9：`refer/git-rep/{EasyDistillation,LQCD_Master,PyQUDA,lamet-agent}`
+  为已验证普通参考拷贝，其 `docs/` 内本库 `analy_*/pure_*/report_*` TeX/PDF 原地保留；
+  块外标签约定改为不绑定具体版本号。
+- `skills/form/scripts/form-audit.sh` 新增 25 条完整路径的精确豁免，其他
+  `REFERENCE_DOC_MISPLACED` 仍失败。
+- `skills/form/SKILL.md` 同步具名例外。
+- `refer/git-rep/README.md` 改为 path、来源、用途、引入方式清单并补充致谢，保留用户
+  已有的 `LQCD_Skills` URL 改动。
+- 新增 `docs/form_pyqcd_20261021.md`。
+
+推理依据：25 项均为 4 个普通参考拷贝内的本库分析文档；根规则已明确它们不是独立
+仓库、由主仓库跟踪。全局 submodule 规则与本地约定冲突时保留本地约定并登记具名例外，
+避免删除/重建 4 棵大型参考树和改变已验证产物路径。
+
+验证结果：`bash -n` exit 0；本地审计 `registered exceptions=1172 unexpected=0`；
+`python -m pyqcd.testing` 最终 `110 passed, 0 skipped, 0 failed`；`git diff --check`
+exit 0；根规则同步 `--check` exit 0。首轮全量测试曾出现 1 项未捕获用例名的偶发失败，
+重跑通过，已在任务文档如实记录。
+
+后续步骤：普通提交并推送 `main`，打并推送 `dev21` 标签；若未来要求参考库统一
+submodule 化，需另立计划处理网络迁移与文档路径更新。
+--- report end ---

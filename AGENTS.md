@@ -95,6 +95,10 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
   只读历史证据，路径中的 tag 形目录名只作版本定位，允许精确保留；不得据此新增同类路径。
 - 本地例外 8：`pyqcd/testing/tmd/artifacts/*/docs/analy_test9_*` 是与二进制 PDF 成对的
   冻结产物，为保持 TeX/PDF 一致性允许保留，并由本地包装器逐路径豁免。
+- 本地例外 9：`refer/git-rep/{EasyDistillation,LQCD_Master,PyQUDA,lamet-agent}` 是已
+  验证的普通参考拷贝（非 submodule），其 `docs/` 内 `analy_*/pure_*/report_*` 的
+  TeX/PDF 是本库产出；为保持引用与历史一致性原地保留，由本地包装器逐路径精确豁免。
+  不得据此新增同类路径，也不放宽上游自带文档或其他 PDF/TeX 的审计。
 <!-- form-skill:end -->
 
 ## 外来参考库分析产物（refer/git-rep/*/docs）
@@ -305,7 +309,7 @@ docs/analy_dev7_20260823.pdf（29 页 Overfull=0/Float=0/Missing=0）。
 - 编译：docs 与 logs 的 tex 一律 xelatex（中文）；`\quad` 后跟中文需空格。
 - 测试：无 pytest 框架依赖，`python -m pyqcd.testing` 直接运行。
 - refer/ 只读参考：pyqcd 逻辑照抄但不 import。
-- git tag 约定：stab<N>/dev<N>/bug<N>/test<N>（当前 dev15；form 治理完成后为 dev16）。
+- git tag 约定：stab<N>/dev<N>/bug<N>/test<N>，按序号递增；当前发布快照以最新 dev 标签为准。
 
 ## 反模式
 
