@@ -47,3 +47,11 @@
 - 关键内容: 25 项 REFERENCE_DOC_MISPLACED 登记为本地例外 9，审计 0 未登记，全量测试 110 passed
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## form-20261021-refer - final - 2026-10-21 04:16:14 +0800
+- 主任务: PyQCD ~form：迁移参考库分析文档并把 refer/git-rep 重建为 submodule
+- 日志文件: logs/v202610210416.txt
+- 文件大小: 5633 bytes
+- 触发原因: 任务完成
+- 关键内容: 25 个分析文档迁入 refer/git-rep/docs，4 个普通拷贝改为 submodule，审计 0 未登记，110 项回归通过
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
