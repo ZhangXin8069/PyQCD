@@ -1,3 +1,15 @@
 [submodule "refer/git-rep/LQCD_Skills"]
 	path = refer/git-rep/LQCD_Skills
 	url = https://github.com/AI4LGT/LQCD_Skills
+[submodule "refer/git-rep/EasyDistillation"]
+	path = refer/git-rep/EasyDistillation
+	url = https://github.com/IHEP-LQCD/EasyDistillation
+[submodule "refer/git-rep/lamet-agent"]
+	path = refer/git-rep/lamet-agent
+	url = https://github.com/Greyyy-HJC/lamet-agent
+[submodule "refer/git-rep/LQCD_Master"]
+	path = refer/git-rep/LQCD_Master
+	url = https://github.com/sjtu-sai-agents/LQCD_Master
+[submodule "refer/git-rep/PyQUDA"]
+	path = refer/git-rep/PyQUDA
+	url = https://github.com/CLQCD/PyQUDA

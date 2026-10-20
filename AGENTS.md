@@ -67,6 +67,9 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 - 顶层目录白名单：`pyqcd/`（生产包）、`data/`（历史数据、图像和运行脚本）、
   `docs/`（任务文档和图片）、`logs/`（纯文本运行记录）、`refer/`（只读外部参考）、
   `skills/`（项目技能）。
+- 参考 Git 子库：`refer/git-rep/<name>` 必须是 submodule（索引模式 `160000`），
+  README 记录来源/致谢与固定 commit；本库分析文档统一放 `refer/git-rep/docs/`，
+  子库工作树只读，不修改上游内容。
 - 测试入口：`python -m pyqcd.testing`；复杂库新测试统一放入 `pyqcd/testing/`。
 - 功能复现：`python -m pyqcd.testing`，以及改动涉及的模块级测试或主入口冒烟。
 - 文档/日志/数据：`docs/` 允许 `md/tex/pdf` 和图片；`logs/` 允许
@@ -95,22 +98,19 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
   只读历史证据，路径中的 tag 形目录名只作版本定位，允许精确保留；不得据此新增同类路径。
 - 本地例外 8：`pyqcd/testing/tmd/artifacts/*/docs/analy_test9_*` 是与二进制 PDF 成对的
   冻结产物，为保持 TeX/PDF 一致性允许保留，并由本地包装器逐路径豁免。
-- 本地例外 9：`refer/git-rep/{EasyDistillation,LQCD_Master,PyQUDA,lamet-agent}` 是已
-  验证的普通参考拷贝（非 submodule），其 `docs/` 内 `analy_*/pure_*/report_*` 的
-  TeX/PDF 是本库产出；为保持引用与历史一致性原地保留，由本地包装器逐路径精确豁免。
-  不得据此新增同类路径，也不放宽上游自带文档或其他 PDF/TeX 的审计。
+
 <!-- form-skill:end -->
 
-## 外来参考库分析产物（refer/git-rep/*/docs）
+## 外来参考库分析产物（refer/git-rep/docs）
 
 对 `refer/git-rep/` 下 4 个外来软件库（EasyDistillation/LQCD_Master/PyQUDA/lamet-agent）
-执行 analy/pure 分析的产物约定：PDF+tex 各存放于对应库的 `docs/` 子目录，
-命名 `analy_<slug>_<YYYYMMDD>.pdf` / `pure_<slug>_<YYYYMMDD>.pdf`（slug 拼音/英文短词），
+执行 analy/pure 分析的产物统一存放于 `refer/git-rep/docs/`，命名
+`analy_<slug>_<YYYYMMDD>.pdf` / `pure_<slug>_<YYYYMMDD>.pdf`（slug 拼音/英文短词），
 编译要求 xelatex 两遍、Overfull=0 且 Float too large=0。已产出：
 EasyDistillation（analy/pure_distillation_20260817）、LQCD_Master（analy/pure_qcd_master_20260817）、
 PyQUDA（analy/pure_pyquda_20260817）、lamet-agent（analy/pure_lamet_20260817）。
-这些库非独立 git 仓库（由主仓库跟踪），报告内 git 信息注明"非独立仓库"；
-产物为新建文件，不修改库内既有内容。
+这 4 个库现以 submodule 固定在上游 commit，报告撰写时曾是主仓库普通拷贝，历史报告内
+“非独立仓库”的表述保留其撰写语境；产物为新建文件，不修改子库工作树。
 
 ## 主仓库 PyQCD 自身 analy/pure 产物（docs/）
 

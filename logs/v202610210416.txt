@@ -1,0 +1,99 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-21 04:16:14 +0800
+批次: form-20261021-refer
+主任务: PyQCD ~form：迁移参考库分析文档并把 refer/git-rep 重建为 submodule
+触发原因: 任务完成
+摘要: 25 个分析文档迁入 refer/git-rep/docs，4 个普通拷贝改为 submodule，审计 0 未登记，110 项回归通过
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 用户纠正与版本审计
+- 目标: 按用户要求真正整理 `refer/git-rep`，而非把 25 个分析文档登记为本地例外。
+- 命令/操作: `git ls-remote` 检查 4 个上游；`--filter=blob:none` 克隆上游；
+  比较主仓库已跟踪 blob 与上游历史树。
+- 关键输出: 上游均可达；`LQCD_Master` 精确匹配 `e4a443e`，`lamet-agent` 精确匹配
+  `9355c52`；`EasyDistillation`/`PyQUDA` 取上游 HEAD `f74bf7d`/`138d8ad`。
+- 退出码: 0。
+- 证据与判断: 精确匹配可保版本；其余两个上游 HEAD 与当前拷贝的主要差异是
+  `.gitattributes` 命名、`.gitignore` 和 PyQUDA 的 pycparser 展开，submodule 化会
+  恢复上游真实结构。
+
+### S2 — 分析文档迁移
+- 目标: 把本库产出的 25 个 TeX/PDF 放到全局规则要求的位置。
+- 命令/操作: `git mv` 25 个文件到 `refer/git-rep/docs/`；修改 `refer/.gitignore`
+  的 `*.pdf` 放行目标目录；修复 `report_distillation_20260828.tex` 的 4 处相对路径。
+- 关键输出: 目标目录 25 个文件；105 条 `\lstinputlisting` 中仅 26 条历史
+  `/Users/zhangxin` 断链（迁移前已存在），迁移引入断链为 0。
+- 退出码: 0。
+- 证据与判断: 误移的 lamet-agent 上游 `papers/docs` 两份文件已及时移回。
+
+### S3 — submodule 化
+- 目标: 删除 4 个普通拷贝并以 submodule 固定上游版本。
+- 命令/操作: 对每个库执行 `git rm -r`、清理残留、`git submodule add`、
+  `checkout` 固定 commit；PyQUDA 额外执行递归 submodule 初始化。
+- 关键输出: 5 个顶层 gitlink 均为 `160000`；嵌套 pycparser 固定
+  `5b60167602e7914139b3e277266ccdff5c24dbf2`。
+- 退出码: 0（pycparser 首次 TLS 失败，重试成功）。
+- 证据与判断: 主仓库不再跟踪上游文件，子库工作树保持干净。
+
+### S4 — 验证
+- 目标: 确认格式整改不破坏功能与引用。
+- 命令/操作: `bash -n`；本地 form 审计；`python -m pyqcd.testing`；
+  `git diff --check`；大文件闸门。
+- 关键输出: 审计 `registered exceptions=1147 unexpected=0`；全量
+  `110 passed, 0 failed`；差异检查通过。
+- 退出码: 0。
+- 证据与判断: 25 项 `REFERENCE_DOC_MISPLACED` 随迁移消失；本地例外 9 与包装器
+  豁免已删除。
+
+## 验证与证据
+- 测试/检查: Shell 语法、本地 form 审计、gitlink 模式、递归 submodule 状态、
+  全量测试、TeX 引用、`git diff --check`、大文件闸门。
+- 结果: 1147 例外/0 未登记；5 个顶层 gitlink；110 passed；迁移引入断链 0；
+  差异检查通过。
+- 未验证项: 26 条历史 `/Users/zhangxin` 绝对路径未改写（迁移前已断链，PDF 已存在）；
+  EasyDistillation/PyQUDA 未做逐文件精确快照复刻。
+
+## 变更与产物
+- 文件: `refer/git-rep/docs/`（25 个文档）、4 个 submodule、`.gitmodules`、
+  `refer/git-rep/README.md`、`refer/.gitignore`、`AGENTS.md`、`skills/form/*`、
+  任务文档、本日志。
+- 产物: 参考库全部为 `160000` gitlink；本库分析文档集中到 `refer/git-rep/docs/`。
+- 未改动范围: Python 生产代码、历史数据、历史日志、冻结产物、已推送 `dev21`。
+
+## 风险、限制与下一步
+- 风险: PyQUDA 嵌套 submodule 需要递归初始化；上游 HEAD 与旧拷贝存在已记录差异。
+- 阻塞: 无。
+- 下一步: 暂存本任务文件、通过大文件闸门后提交并推送 `main`，打 `dev22`。
+
+## 用户输入指令
+~form
+不对,应重新整理refer/git-rep
+
+## Agent 全文报告
+--- report begin ---
+**finished** — `refer/git-rep` 已按 submodule 规范重新整理。
+
+改动内容：
+- 25 个本库参考库分析文档从 `refer/git-rep/<name>/docs/` 迁移到 `refer/git-rep/docs/`，
+  并修复 `report_distillation_20260828.tex` 中 4 处迁移引起的相对路径。
+- `EasyDistillation`、`LQCD_Master`、`PyQUDA`、`lamet-agent` 四个普通拷贝删除并重建为
+  submodule，分别固定 `f74bf7d`、`e4a443e`、`138d8ad`、`9355c52`；`LQCD_Skills` 保留。
+- `.gitmodules`、`refer/git-rep/README.md` 更新为来源/用途/固定 commit 清单；
+  `refer/.gitignore` 放行 `refer/git-rep/docs/**`。
+- 根 `AGENTS.md` 删除“本地例外 9”，新增参考子库规则并更新产物章节；本地 form SKILL
+  与审计包装器删除对应的 25 条豁免。
+
+推理依据：全局规则要求参考库为 submodule、分析文档集中到 `refer/git-rep/docs/`。
+版本通过比较主仓库 blob 与上游历史确定；两个精确匹配库使用原快照 commit，另两个无
+精确匹配的库使用上游 HEAD，并在任务文档记录差异（`.gitattributes` 命名、`.gitignore`、
+PyQUDA 展开的 pycparser）。
+
+验证结果：本地审计 `registered exceptions=1147 unexpected=0`；5 个顶层参考目录均为
+`160000`，嵌套 pycparser 已递归初始化；`python -m pyqcd.testing` 为
+`110 passed, 0 skipped, 0 failed`；105 条 TeX 代码引用中 26 条历史
+`/Users/zhangxin` 断链为迁移前既有问题，迁移引入断链 0；`git diff --check` 通过。
+
+后续步骤：暂存本任务文件、通过大文件闸门后提交并推送 `main`，打并推送 `dev22`。
+--- report end ---
