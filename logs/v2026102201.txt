@@ -1,0 +1,74 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-22 01:34:44 +0800
+批次: form-audit-20261022
+主任务: PyQCD form 只读格式审计（main，无整改项）
+触发原因: 任务完成
+摘要: form 审计通过：registered exceptions=1147 unexpected=0；110 passed/0 failed
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 仓库与审计基线
+- 目标: 对 /root/PyQCD 执行 ~form 格式审计，确认命名、目录、交付格式与参考子库布局合规
+- 命令/操作: git status --short --branch; git tag --list --sort=-creatordate | head -n 10; bash -n skills/form/scripts/form-audit.sh; skills/form/scripts/form-audit.sh
+- 关键输出: branch=main; 工作区干净; 最新标签 dev22; PASS form-audit(pyqcd): registered exceptions=1147 unexpected=0
+- 退出码: 0
+- 证据与判断: 所有审计发现均属根 AGENTS.md 已登记例外，无新增违规
+
+### S2 — 扩展格式检查
+- 目标: 覆盖审计包装器未覆盖的标签边界、AGENTS 同步与子库布局
+- 命令/操作: git diff --check; find 顶层目录; git ls-files | grep AGENT.md; git ls-files -s -- refer/git-rep; git config -f .gitmodules; git submodule status; git grep 标签形标识符; form-agents-sync.sh --check
+- 关键输出: diff --check 干净; 顶层为 data/docs/logs/pyqcd/refer/skills（.pytest_cache 未跟踪忽略）; 无 AGENT.md; 5 个参考库均为 160000 gitlink（PyQUDA/LQCD_Skills/lamet-agent/EasyDistillation/LQCD_Master）; README 含来源与致谢; 本库分析文档仅在 refer/git-rep/docs/; 未跟踪文件 0; 生产代码无标签形标识符; form 标记块“已是最新”
+- 退出码: 0
+- 证据与判断: 子库、文档归属与根规则同步均合规
+
+### S3 — 全量功能复现
+- 目标: 按本地验证门运行测试套件
+- 命令/操作: python -m pyqcd.testing
+- 关键输出: 110 passed, 0 skipped, 0 failed
+- 退出码: 汇总行 0 failed（当前 shell 不支持 PIPESTATUS，未单独捕获进程退出码；main() 仅在 failed>0 时返回 1）
+- 证据与判断: 功能基线通过，无环境依赖跳过项
+
+## 验证与证据
+- 测试/检查: 本地 form 包装器审计、git diff --check、form-agents-sync --check、全量测试
+- 结果: 全部通过；registered exceptions=1147, unexpected=0；110 passed / 0 skipped / 0 failed
+- 未验证项: 测试进程独立退出码未捕获；未做 MPI 独立重跑（本次无跳过项）
+
+## 变更与产物
+- 文件: logs/v2026102201.txt、logs/AGENTS.md（索引）
+- 产物: 本日志
+- 未改动范围: 仓库其余全部文件
+
+## 风险、限制与下一步
+- 风险: 无
+- 阻塞: 无
+- 下一步: 本次审计无整改项，无需提交代码变更；该日志如需入库可单独提交
+
+## 用户输入指令
+~form
+
+## Agent 全文报告
+--- report begin ---
+# ~form 审计结果（/root/PyQCD，main）
+
+## 结论
+格式审计通过，无新增违规，无需整改；本次为只读审计，未修改任何仓库文件。
+
+## 证据
+- 仓库：`main`，工作区干净，远端 `origin`（gitee），最新标签 `dev22`。
+- 本地审计门：`bash -n skills/form/scripts/form-audit.sh` 通过；`skills/form/scripts/form-audit.sh` 输出 `PASS form-audit(pyqcd): registered exceptions=1147 unexpected=0`，退出码 0。
+- `git diff --check` 干净；未跟踪文件 0。
+- 顶层目录仅 `data/ docs/ logs/ pyqcd/ refer/ skills/`（`.pytest_cache` 未跟踪且被忽略）。
+- 全库无 `AGENT.md`；`AGENTS.md` 的 form 标记块经 `form-agents-sync.sh --check` 校验为“已是最新”。
+- 参考子库：`refer/git-rep` 下 5 个库均为 `160000` gitlink（PyQUDA、LQCD_Skills、lamet-agent、EasyDistillation、LQCD_Master）；`.gitmodules` 映射完整；README 逐项记录来源、用途、固定 commit 与致谢；本库分析文档仅位于 `refer/git-rep/docs/`。
+- 标签边界：生产代码中无标签形标识符；`test6/test9` 等仅出现在注释/文档中作为版本引用，符合“本地例外 7”和标签只作版本引用的规则。
+- 本地验证门：`python -m pyqcd.testing` 输出 `110 passed, 0 skipped, 0 failed`。
+
+## 未验证项
+- 当前 shell 不提供 `PIPESTATUS`，测试进程的独立退出码未捕获；以汇总行 `0 failed` 作为通过证据。
+- 本轮 0 skipped，无 MPI/环境依赖重跑需求。
+
+## 后续
+- 无整改项，无需 `~init`/`~tag(dev)` 收尾（无变更可打标）。
+- 已按常驻 `log` 技能写入 final 日志；未提交、未推送，等待授权。
+--- report end ---

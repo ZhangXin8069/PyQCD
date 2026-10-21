@@ -273,7 +273,10 @@ def gluon_tmd_operator(U, z, b_perp, z_dir=2, b_dir=0, L=None,
 def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
                         spatial_sum=True,
                         color_normalization='fundamental_trace'):
-    """批量计算 O(z, b⊥)：返回 (nz, nb) 实数数组（逐 t 时间片均分后求和）。
+    """批量计算 O(z, b⊥) 的实数数组。
+
+    ``spatial_sum=True`` 返回 ``(nz,nb)``，每个元素是逐时间片空间和的均值。
+    ``spatial_sum=False`` 返回 ``(nz,nb,Nt,Nz,Ny,Nx)``，保留逐格点值。
 
     胶子 TMD transverse 组合 O = M^{ti;ti} + M^{tj;tj} − 2M^{ij;ij} 为实数值
     （每项 M 的虚部在色迹 + 空间求和后归零）。同一批次必须共享固定
@@ -281,7 +284,13 @@ def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
     """
     cp = get_backend()
     z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
-    out = np.zeros((len(z_list), len(b_list)), dtype=np.float64)
+    if spatial_sum:
+        out = np.zeros((len(z_list), len(b_list)), dtype=np.float64)
+    else:
+        out = np.zeros(
+            (len(z_list), len(b_list), *U.shape[:4]),
+            dtype=np.result_type(U.real.dtype, np.float64),
+        )
     if len(z_list) == 0 or len(b_list) == 0:
         return out
     batch_L = max(abs(z) for z in z_list) if L is None else L
@@ -297,7 +306,10 @@ def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
                 val = _to_cpu(O)
             checked = _checked_real_part(
                 val, "tmd_matrix_elements output")
-            out[i, j] = np.mean(checked)
+            if spatial_sum:
+                out[i, j] = np.mean(checked)
+            else:
+                out[i, j] = checked
     return out
 
 

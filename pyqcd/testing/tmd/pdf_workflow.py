@@ -300,10 +300,15 @@ def run_tmd_pdf_chain(conf_ids, run_dir, logger, args, *, momenta=None):
     b_grid = np.array(B_LIST) * (a_len_set[conf] * fm_to_GeV)   # fm
 
     hR = hR_store[main_tag]['hR']        # (nz, nb)
-    # 准 TMD-PDF：x·g̃(x, b⊥, Pz)
-    x_grid = np.linspace(0.02, 0.98, 128)
-    x, xg = quasi_tmd_pdf(hR, z_grid, b_grid, pz_gev=pz_gev,
-                          x_grid=x_grid, z_max=z_grid[-1])
+    # 准 TMD-PDF：在完整 signed-x 支撑上构造 Fourier 输入。匹配核的
+    # ξ<0 支路对应 y=x/ξ<0；只给正 x/y 网格会静默丢弃反夸克支路。
+    x_grid_full = np.linspace(-0.98, 0.98, 256)
+    positive = x_grid_full > 0.0
+    x = x_grid_full[positive]
+    _, quasi_full = quasi_tmd_pdf(
+        hR, z_grid, b_grid, pz_gev=pz_gev,
+        x_grid=x_grid_full, z_max=z_grid[-1])
+    xg = quasi_full[positive]
 
     # CS 核（两动量比值，若有）：pyqcd.renorm.cs_kernel_two_momentum
     # （z_ref=1 起始 + clamp 数值保护，整合自本示例原内联实现）
@@ -316,16 +321,18 @@ def run_tmd_pdf_chain(conf_ids, run_dir, logger, args, *, momenta=None):
             from pyqcd.renorm import cs_kernel_two_momentum
             c01 = hR_store[tags2[0]]['c0']
             c02 = hR_store[tags2[1]]['c0']
-            K = cs_kernel_two_momentum(c01.mean(0), c02.mean(0),
-                                       pz_to_gev(p1, conf), pz_to_gev(p2, conf),
-                                       z_ref=1, k_clip=(-3.0, 3.0))
+            K = cs_kernel_two_momentum(
+                c01.mean(0), c02.mean(0),
+                pz_to_gev(p1, conf), pz_to_gev(p2, conf), z_ref=1)
 
     # NLO 匹配 → 光锥 TMD-PDF x·g(x, b⊥)
-    xm, xg_match, matching_metadata = tmd_matching_hybrid(
-        x_grid, b_perp=b_grid, mu=2.0, pz_gev=pz_gev,
+    _, matched_full, matching_metadata = tmd_matching_hybrid(
+        x_grid_full, y_grid=x_grid_full, b_perp=b_grid, mu=2.0,
+        pz_gev=pz_gev,
         cs_kernel=(K if K is not None else 0.0),
-        soft_factor=1.0, x_tmd=xg,
+        soft_factor=1.0, x_tmd=quasi_full,
         lambda_s_fm=0.3, return_metadata=True)
+    xg_match = matched_full[positive]
 
     np.save(os.path.join(an_dir, 'quasi_tmd_pdf_x.npy'), x)
     np.save(os.path.join(an_dir, 'quasi_tmd_pdf_xg.npy'), xg)

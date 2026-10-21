@@ -329,6 +329,10 @@ def gradient_flow_gluon_ope(gauge, tau, epsilon=0.01, z_count=None,
         0 if tau == 0.0
         else (n_steps if n_steps is not None else int(np.ceil(tau / epsilon)))
     )
+    # ``flowed_gluon_ope`` resolves ``z_count=None`` to the full periodic
+    # extent.  Metadata must record that resolved extent rather than the
+    # caller's sentinel value.
+    resolved_z_count = int(data.shape[4])
     metadata = {
         "schema": OPE_SCHEMA,
         "status": OPE_STATUS,
@@ -346,7 +350,7 @@ def gradient_flow_gluon_ope(gauge, tau, epsilon=0.01, z_count=None,
         },
         "operator": {
             "z_dir": int(z_dir),
-            "z_values_a": list(range(int(z_count))),
+            "z_values_a": list(range(resolved_z_count)),
             "field_strength": "-i(Q-Qdagger)/8",
             "dual": "0.5*epsilon_E^{munurhosigma}*F_rhosigma",
             "wilson_line": "straight_periodic_plus_minus_z",

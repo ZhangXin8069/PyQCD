@@ -85,9 +85,15 @@ def quasi_tmd_pdf(hR_z, z_grid, b_perp, pz_gev, p_t=None, x_grid=None,
         raise ValueError("z_max 不能小于 z_grid 的最小 fm 值")
     z_upper_fm = min(z_max_fm, z_fm[-1])
 
+    # ``pz_gev=0`` makes the Fourier normalization singular, while a negative
+    # value silently mirrors x through the cosine.  Both are invalid inputs for
+    # this positive-momentum quasi-TMD extraction.
+    pz_gev = _positive_finite_scalar(pz_gev, "pz_gev")
     if p_t is None:
         M_N = 0.94
         p_t = np.sqrt(M_N ** 2 + pz_gev ** 2)
+    else:
+        p_t = _positive_finite_scalar(p_t, "p_t")
     norm = (pz_gev ** 2) / (p_t ** 2)
 
     # 接口截断始终在 fm 完成；仅在积分网格确定后统一换算 GeV^-1。
@@ -316,7 +322,7 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
 
     Args:
         x_grid: 输出 x 网格（(0,1)）。
-        y_grid: 积分 y 网格；None 时取 x_grid（匹配矩阵结构要求同维）。
+        y_grid: 积分 y 网格；None 时取 x_grid（当前离散矩阵结构要求同维）。
         b_perp: b⊥（fm，标记用）。
         mu: 匹配标度（GeV）。
         pz_gev: Pz（GeV）。

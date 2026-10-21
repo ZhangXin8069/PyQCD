@@ -83,6 +83,22 @@ class GradientFlowGluonContract(unittest.TestCase):
         self.assertEqual(metadata["input_scheme"], "thin_link_no_hyp_no_smear")
         self.assertEqual(metadata["flow"]["n_steps"], 0)
 
+    def test_default_z_count_metadata_uses_resolved_periodic_extent(self):
+        """z_count=None 必须记录实际输出 z 轴，而不是对 None 调用 int()."""
+        from pyqcd.operator import (
+            gradient_flow_gluon_ope,
+            validate_gradient_flow_gluon_ope,
+        )
+
+        data, metadata = gradient_flow_gluon_ope(
+            _near_identity_su3(seed=4150), tau=0.0, z_count=None,
+            conf_id=4150,
+        )
+        self.assertEqual(data.shape[4], 2)
+        self.assertEqual(metadata["operator"]["z_values_a"], [0, 1])
+        validate_gradient_flow_gluon_ope(
+            data, metadata, conf_id=4150, tau=0.0, epsilon=0.01)
+
     def test_traceless_projection_matches_gauge_observable(self):
         from pyqcd.gauge import clover_field_strength
         from pyqcd.operator import flowed_gluon_ope, plaquette_clover
