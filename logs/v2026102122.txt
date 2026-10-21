@@ -1,0 +1,52 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-21 22:54:55 +0800
+批次: agent-config-tui-fix
+主任务: debug co go 启动失败
+触发原因: 任务完成
+摘要: 定位并修复 co go TUI 启动漏传 CODEX_BIN 的回归
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 复现与定位
+- 目标: 修复 `co go` 启动失败。
+- 命令/操作: `co go </dev/null`；读取本次 run 的 `agent.log`；在 /tmp 用 `agent-runtime.sh` 最小复现。
+- 关键输出: `_: line 43: exec: --: invalid option`；`agent.log` 同文；最小复现同样 `EXIT=2`。
+- 退出码: 2
+- 证据与判断: 提交 `6534ef3` 把 Codex TUI 启动改为 watcher 包装时，调用 `_agent_runtime_run_tui_watched` 漏传 `"${_CODEX_BIN}"`；`agent-runtime.sh:189` 的 `exec "$@"` 将 `--model` 当作命令执行。
+
+### S2 — 修复与验证
+- 改动: `/root/configure/bin/agent.sh:2612` 补回 `"${_CODEX_BIN}"`（`tools/bin/agent.sh` 为同一 inode 硬链接，自动同步）。
+- 命令/操作: `bash -n`；`CODEX_BIN=<fake> AGENT_AUTO_RESUME=0 co go` 检查实际参数；真实 `co go </dev/null`；三个相关测试。
+- 关键输出: fake codex 首参为 `--model`、无 `exec: --`；真实启动仅报 `Error: stdin is not a terminal`（非交互环境预期）；`agent-runtime-resume.test.sh`、`agent-tui-watch.test.py`、`agent-codex-resume.test.py` 全部通过。
+- 退出码: 测试均为 0；真实 TUI 在非 TTY 下为 1。
+- 证据与判断: 启动链路已正确到达 Codex，原回归消除。
+
+## 验证与证据
+- 测试/检查: `bash -n /root/configure/bin/agent.sh`；`agent-runtime-resume.test.sh`；`agent-tui-watch.test.py`；`agent-codex-resume.test.py`。
+- 结果: 全部通过。
+- 未验证项: 真实交互 TTY 下的完整 TUI 会话（当前会话无 TTY）；未提交 /root/configure 变更。
+
+## 变更与产物
+- 文件: `/root/configure/bin/agent.sh`（1 行新增参数）。
+- 产物: 本日志。
+- 未改动范围: `/root/PyQCD` 源码与数据未改动。
+
+## 风险、限制与下一步
+- 风险: 无已知功能风险；若上游再次改动 TUI 调用，需保留首个参数为 Codex 可执行文件。
+- 阻塞: 无。
+- 下一步: 用户在真实终端执行 `co go` 做交互确认；如需归档可提交 /root/configure 的该行修复。
+
+## 用户输入指令
+debug"co go"启动失败
+
+## Agent 全文报告
+--- report begin ---
+已修复 `co go` 启动失败。
+
+- 根因：`/root/configure/bin/agent.sh:2612` 的 TUI watcher 调用漏传 `"${_CODEX_BIN}"`，`exec "$@"` 把 `--model` 当成命令，报 `exec: --: invalid option` 并退出 2。回归由提交 `6534ef3` 引入，仅影响交互 TUI。
+- 改动：调用参数前补回 `"${_CODEX_BIN}"`；`tools/bin/agent.sh` 与 `bin/agent.sh` 为同一 inode，自动同步。
+- 验证：`bash -n` 通过；fake codex 收到正确参数且无 exec 错误；真实 `co go </dev/null` 仅报 `stdin is not a terminal`（非 TTY 预期）；`agent-runtime-resume.test.sh`、`agent-tui-watch.test.py`、`agent-codex-resume.test.py` 全部通过。
+- 回滚：`git -C /root/configure checkout -- bin/agent.sh`。
+- 后续：请在真实终端运行 `co go` 确认交互 TUI；变更未提交。
+--- report end ---
