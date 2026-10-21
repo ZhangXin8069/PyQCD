@@ -55,3 +55,12 @@
 - 关键内容: 25 个分析文档迁入 refer/git-rep/docs，4 个普通拷贝改为 submodule，审计 0 未登记，110 项回归通过
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## agent-config-tui-fix - final - 2026-10-21 22:54:55 +0800
+- 主任务: debug co go 启动失败
+- 日志文件: logs/v2026102122.txt
+- 文件大小: 3230 bytes
+- 触发原因: 任务完成
+- 关键内容: 定位并修复 co go TUI 启动漏传 CODEX_BIN 的回归
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
