@@ -114,6 +114,18 @@ class TmdSu3GeometryContract(unittest.TestCase):
         self.assertGreater(legacy_sensitivity, 1e-6)
         self.assertLess(fixed_error, 1e-10)
 
+    def test_batch_no_spatial_sum_preserves_local_field_shape(self):
+        """spatial_sum=False 不得把逐格点张量静默压成单个均值。"""
+        gauge = random_su3_gauge(L=2, seed=7306)
+        actual = tmd_matrix_elements(
+            gauge, [1], [1], z_dir=2, b_dir=0, L=1,
+            spatial_sum=False)
+        expected = np.asarray(gluon_tmd_operator(
+            gauge, z=1, b_perp=1, z_dir=2, b_dir=0, L=1))
+
+        self.assertEqual(actual.shape, (1, 1) + gauge.shape[:4])
+        np.testing.assert_allclose(actual[0, 0], expected, rtol=0, atol=2e-12)
+
     def test_adjoint_color_normalization_is_twice_fundamental_trace(self):
         """标准生成元归一化下 F^a W_adj^ab F^b = 2 Tr[F W F W†]。"""
         field = np.zeros((1, 1, 1, 1, 3, 3), dtype=np.complex128)

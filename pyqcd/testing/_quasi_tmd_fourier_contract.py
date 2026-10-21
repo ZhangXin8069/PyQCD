@@ -56,6 +56,16 @@ class QuasiTmdFourierContract(unittest.TestCase):
                 np.ones((2, 1)), np.array([0.2, 0.4]), [0.1],
                 self.pz, p_t=self.p_t, x_grid=np.array([0.3]), n_pts=17)
 
+    def test_quasi_tmd_rejects_nonpositive_momentum_and_energy(self):
+        """零/负 Pz 或非正 Pt 会让 Fourier 归一化失去物理定义。"""
+        for pz, pt in ((0.0, self.p_t), (-self.pz, self.p_t),
+                       (self.pz, 0.0), (self.pz, -self.p_t)):
+            with self.subTest(pz=pz, pt=pt):
+                with self.assertRaisesRegex(ValueError, "正数"):
+                    quasi_tmd_pdf(
+                        self.h, self.z_fm, [0.1], pz,
+                        p_t=pt, x_grid=self.x, n_pts=17)
+
     def test_quasi_pdf_gluon_rejects_nonzero_start_instead_of_truncating_integral(self):
         """sin 变换同样不得从非零首点开始积分。"""
         with self.assertRaisesRegex(ValueError, r"z.?=.?0"):
@@ -212,6 +222,24 @@ class QuasiTmdFourierContract(unittest.TestCase):
         np.testing.assert_array_equal(x_out, x)
         self.assertTrue(np.iscomplexobj(actual))
         np.testing.assert_allclose(actual, x_tmd, rtol=0.0, atol=0.0)
+
+    def test_matching_keeps_signed_x_support_for_negative_xi_branch(self):
+        """完整 signed-x 网格必须能进入匹配，再从中选择物理正 x。"""
+        x_signed = np.linspace(-0.9, 0.9, 10)
+        x_tmd = np.column_stack((
+            0.4 + 0.1 * x_signed,
+            0.2 - 0.05 * x_signed,
+        ))
+        with patch("pyqcd.renorm._tmdextract.A_s_run", return_value=0.0):
+            x, actual = tmd_matching_hybrid(
+                x_signed, y_grid=x_signed, pz_gev=self.pz,
+                pz_scale=self.pz, cs_kernel=0.0, soft_factor=1.0,
+                x_tmd=x_tmd)
+
+        positive = x > 0.0
+        self.assertGreater(int(np.count_nonzero(positive)), 0)
+        self.assertEqual(actual.shape, x_tmd.shape)
+        self.assertTrue(np.isfinite(actual).all())
 
 
 if __name__ == "__main__":
