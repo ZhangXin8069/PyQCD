@@ -1,0 +1,75 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-22 13:58:04 +0800
+批次: dev24
+主任务: 创建 dev24 Git 开发快照标签
+触发原因: 任务完成
+摘要: 验证 dev23..HEAD 后创建本地 annotated tag dev24，全量回归 112 passed，未推送远程
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 基线与变更分析
+- 目标: 为当前 HEAD 创建下一个 dev 开发快照。
+- 命令/操作: 检查 dev 标签、以 dev23 为实际基线执行 git log/git diff --stat/--summary/--numstat，并核对关键代码与审计文档。
+- 关键输出: dev23 peeled commit=3e1edd4；HEAD=8eea2e8；dev23..HEAD 为 1 个提交、79 个文件、+7033/-458。
+- 退出码: 0。
+- 证据与判断: 存在可打标的新提交；主要内容为源分辨 C2/ratio、Sumratio-difference、TMD/OPE/Fourier/匹配契约、工作流验证及诊断归档。
+
+### S2 — 标签链与初始化检查
+- 目标: 验证历史标签链并检查打标前目录治理状态。
+- 命令/操作: 执行 tag-chain.sh --check --remote origin；按受控范围枚举 agent 初始化文件。
+- 关键输出: 94 个受管标签 PASS，follow 链、提交祖先关系和远端 origin 对象一致；根目录无散落 CLAUDE.md/CODEX.md/.claude/.codex 等待归档对象。
+- 退出码: 0。
+- 证据与判断: 可安全继续本地打标；refer/sush/_distillation/CLAUDE.md 为只读历史参考内容，不修改。
+
+### S3 — 全量验证
+- 目标: 在打标前确认当前 HEAD 的回归状态。
+- 命令/操作: python -m pyqcd.testing；关键修改文件 python -m py_compile；git diff --check。
+- 关键输出: 首轮 111 passed/0 skipped/1 failed，唯一失败为 MPI setup 在 15s 边界超时；隔离重跑该用例 2.13s PASS；第二轮全量 112 passed/0 skipped/0 failed。
+- 退出码: 0（最终全量）；py_compile 与 git diff --check 均通过。
+- 证据与判断: 首轮为整套负载下的瞬时 MPI 启动超时，非稳定代码失败；最终全量结果干净。
+
+### S4 — 创建并验证 dev24
+- 目标: 创建本地 annotated dev 标签。
+- 命令/操作: git tag -a dev24 -m 'follow dev23, ... [codex].'；随后验证对象类型、peeled commit、消息和本地标签链。
+- 关键输出: dev24 为 annotated tag，peeled commit=8eea2e8d0b96c454459a40b6d57fe3de3b970bda；本地标签链 95 个受管标签 PASS。
+- 退出码: 0。
+- 证据与判断: 标签目标正确、消息格式符合 follow/编号/分号/[codex] 约定。
+
+### S5 — 远程状态
+- 目标: 核对未获授权时是否保持本地标签范围。
+- 命令/操作: git ls-remote --tags origin refs/tags/dev24。
+- 关键输出: 无命中；未执行 push。
+- 退出码: 0。
+- 证据与判断: dev24 当前仅存在于本地，符合“未明确要求同步远程时不推送”的约束。
+
+## 验证与证据
+- 测试/检查: 最终 python -m pyqcd.testing；关键文件 py_compile；git diff --check；tag-chain.sh --check；git cat-file/rev-parse；git ls-remote。
+- 结果: 112 passed, 0 skipped, 0 failed；dev24 annotated tag 指向 HEAD；95 个受管标签链 PASS；远程无 dev24。
+- 未验证项: 未执行远程分支或标签推送；未重跑大规模真实 data production，仅复用并核对本轮已归档的真实诊断产物与审计证据。
+
+## 变更与产物
+- 文件: 创建 Git annotated tag refs/tags/dev24；本次操作未修改工作树。
+- 产物: 本地标签 dev24；最终日志文件与 logs/AGENTS.md 索引。
+- 未改动范围: refer/、data/ 原始内容、生产代码、AGENTS.md 及现有标签均未改写。
+
+## 风险、限制与下一步
+- 风险: dev24 尚未同步到 origin；其他机器当前不可见。
+- 阻塞: 物理胶子 TMD-PDF 仍受缺少同几何 soft/rapidity、胶子-夸克 mixing 与多尺度输入限制，标签不代表物理 PDF 已闭合。
+- 下一步: 如需协作者可见，显式授权后推送 dev24；后续开发继续补齐多尺度与软/混合输入。
+
+## 用户输入指令
+~tag:dev
+
+## Agent 全文报告
+--- report begin ---
+已创建本地注释标签 dev24，目标提交为 8eea2e8d0b96c454459a40b6d57fe3de3b970bda。
+
+改动内容：标签消息概括了 dev23 以来的源分辨 C2/ensemble 真空扣除与 Sumratio-difference 重构、梯度流胶子 OPE/Fourier/CS/NLO/软因子及 hybrid/Z_R 契约加固、TMD9/PDF 工作流与 11 组态诊断归档，并明确物理 PDF 仍处于未接受状态。
+
+推理依据：dev23..HEAD 存在 1 个有效提交、79 个文件变更；历史标签链预检通过；初始化检查无可归档散落 agent 文件；最终全量回归 112 passed、0 skipped、0 failed，关键文件编译和 git diff --check 均通过。
+
+验证结果：dev24 为 annotated tag，peeled commit 与 HEAD 完全一致，follow dev23 链及 95 个受管标签拓扑检查 PASS。远程 refs/tags/dev24 无命中，未执行 push。
+
+后续步骤：dev24 当前为本地标签。若需要同步到 origin，需另行明确授权。完整物理 PDF 仍受 soft/rapidity、胶子-夸克 mixing 和多尺度数据缺口约束，不能由本开发快照升级为物理验收结论。
+--- report end ---
