@@ -12,7 +12,11 @@ from unittest.mock import patch
 
 import numpy as np
 
-from pyqcd.renorm import quasi_pdf_gluon, quasi_tmd_pdf, tmd_matching_hybrid
+from pyqcd.renorm import (
+    ioffe_time_distribution, quasi_pdf_gluon, quasi_tmd_pdf,
+    scheme_c0_coefficient, apply_scheme_c0_correction,
+    tmd_matching_hybrid,
+)
 
 
 FM_TO_GEV = 0.197
@@ -55,6 +59,44 @@ class QuasiTmdFourierContract(unittest.TestCase):
             quasi_tmd_pdf(
                 np.ones((2, 1)), np.array([0.2, 0.4]), [0.1],
                 self.pz, p_t=self.p_t, x_grid=np.array([0.3]), n_pts=17)
+
+    def test_ioffe_time_distribution_matches_gaussian_analytic_oracle(self):
+        """Q=1/pi integral cos(x lambda)H(lambda) must not repeat the z0 prefactor."""
+        A, width, pz = 0.43, 0.4, 1.7
+        lam = np.linspace(0.0, 40.0, 20001)
+        z_fm = lam * FM_TO_GEV / pz
+        h = 2.0 * A * np.exp(-0.5 * (width * lam) ** 2)
+        x = np.array([0.05, 0.2, 0.55, 0.9])
+        _, actual = ioffe_time_distribution(
+            h, z_fm, pz, x_grid=x, n_pts=40001)
+        expected = 2.0 * A / (np.sqrt(2.0 * np.pi) * width) * np.exp(
+            -x ** 2 / (2.0 * width ** 2))
+        np.testing.assert_allclose(actual, expected, rtol=2e-7, atol=2e-9)
+
+    def test_scheme_c0_bridge_uses_z_eff_and_zero_local_convention(self):
+        z = np.array([0.0, 0.1, 0.25, 0.5])
+        actual = scheme_c0_coefficient(z, mu_gev=2.0, zs_fm=0.25)
+        z_eff = np.minimum(z, 0.25) / FM_TO_GEV
+        expected = np.zeros_like(z)
+        positive = z_eff > 0.0
+        expected[positive] = (
+            5.0 / 6.0 * np.log(
+                z_eff[positive] ** 2 * 2.0 ** 2
+                * np.exp(2.0 * 0.5772156649015329) / 4.0) + 1.5)
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+        self.assertEqual(float(actual[0]), 0.0)
+
+    def test_scheme_c0_correction_is_fixed_order_and_shape_checked(self):
+        value = np.array([2.0, 3.0])
+        correction = np.array([0.5, -0.25])
+        actual = apply_scheme_c0_correction(
+            value, correction, alpha_s=0.25, ca=3.0)
+        expected = value - 0.25 * 3.0 / (2.0 * np.pi) * correction
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=1e-15)
+        with self.assertRaises(ValueError):
+            apply_scheme_c0_correction(value, correction[:1], 0.25)
+        with self.assertRaises(ValueError):
+            apply_scheme_c0_correction(value, correction, -0.1)
 
     def test_quasi_tmd_rejects_nonpositive_momentum_and_energy(self):
         """零/负 Pz 或非正 Pt 会让 Fourier 归一化失去物理定义。"""
@@ -240,6 +282,48 @@ class QuasiTmdFourierContract(unittest.TestCase):
         self.assertGreater(int(np.count_nonzero(positive)), 0)
         self.assertEqual(actual.shape, x_tmd.shape)
         self.assertTrue(np.isfinite(actual).all())
+
+    def test_matching_separates_output_x_and_convolution_y_supports(self):
+        """x∈[-1,1] must convolve over the wider reference y∈[-3,3] support."""
+        x = np.linspace(-0.98, 0.98, 34)
+        y = np.linspace(-3.0, 3.0, 98)
+        x_tmd = np.exp(-y ** 2) * (1.0 + 0.25 * np.tanh(1.5 * y))
+        _, actual, metadata = tmd_matching_hybrid(
+            x, y_grid=y, pz_gev=2.0, pz_scale=2.0,
+            cs_kernel=0.2, soft_factor=1.0, x_tmd=x_tmd,
+            return_metadata=True, alpha_s=0.25)
+        self.assertEqual(actual.shape, x.shape)
+        self.assertTrue(np.isfinite(actual).all())
+        self.assertEqual(metadata["x_grid_size"], x.size)
+        self.assertEqual(metadata["y_grid_size"], y.size)
+        self.assertEqual(metadata["alpha_s_source"], "explicit_input")
+
+    def test_matching_rapidity_factor_uses_x_dependent_zeta_z(self):
+        """ζ_z=(2|y|Pz)^2：不同输入 y 必须得到不同快度演化因子。"""
+        x = np.linspace(0.1, 0.8, 4)
+        x_tmd = np.exp(-x)
+        kernel = 0.07
+        _, baseline = tmd_matching_hybrid(
+            x, pz_gev=2.0, pz_scale=1.0, cs_kernel=0.0,
+            soft_factor=1.0, x_tmd=x_tmd)
+        _, evolved = tmd_matching_hybrid(
+            x, pz_gev=2.0, pz_scale=1.0, cs_kernel=kernel,
+            soft_factor=1.0, x_tmd=x_tmd)
+        expected_rap = np.exp(
+            0.5 * np.log(((2.0 * x * 2.0) ** 2) / (2.0 * 1.0) ** 2)
+            * kernel
+        )
+        # The gluon matching matrix is zero for alpha_s=0; isolate the
+        # rapidity factor from the tree-level identity kernel.
+        with patch("pyqcd.renorm._tmdextract.A_s_run", return_value=0.0):
+            _, evolved_identity = tmd_matching_hybrid(
+                x, pz_gev=2.0, pz_scale=1.0, cs_kernel=kernel,
+                soft_factor=1.0, x_tmd=x_tmd)
+        np.testing.assert_allclose(
+            evolved_identity, x_tmd * expected_rap, rtol=1e-14, atol=1e-14)
+        self.assertGreater(np.ptp(expected_rap), 1e-4)
+        self.assertTrue(np.all(np.isfinite(evolved)))
+        self.assertTrue(np.all(np.isfinite(baseline)))
 
 
 if __name__ == "__main__":

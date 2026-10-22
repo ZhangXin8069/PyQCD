@@ -29,7 +29,7 @@ from ._gradient_flow import (
 from ._gradient_flow_quasi import (
     GEV_FM, FLOW_TO_QUASI_SCHEMA, coefficients,
     gradient_flow_to_quasi_coefficients, match_one,
-    match_gradient_flow_ope_to_quasi,
+    match_gradient_flow_ope_to_quasi, local_spin2_coefficients,
 )
 from ._tmd import (
     staple_wilson_line, M_mu_lambda_nu_rho, gluon_tmd_operator,
@@ -40,7 +40,10 @@ from ._tmd import (
 )
 from ._tmdextract import (
     quasi_tmd_pdf, quasi_pdf_gluon, cs_kernel_from_ratio, cs_kernel_two_momentum,
-    soft_function_intrinsic, tmd_matching_hybrid, sftx_gluon_matching_coeff,
+    flow_scale_mask, soft_function_intrinsic, tmd_matching_hybrid,
+    ioffe_time_distribution, scheme_c0_coefficient,
+    apply_scheme_c0_correction,
+    sftx_gluon_matching_coeff,
     sftx_energy_density_t0, flow_time_gev_m2,
 )
 from ._soft import (
@@ -73,14 +76,18 @@ __all__ = [
     "proj_su3",
     "GEV_FM", "FLOW_TO_QUASI_SCHEMA", "coefficients",
     "gradient_flow_to_quasi_coefficients", "match_one",
-    "match_gradient_flow_ope_to_quasi",
+    "match_gradient_flow_ope_to_quasi", "local_spin2_coefficients",
     # TMD
     "staple_wilson_line", "M_mu_lambda_nu_rho", "gluon_tmd_operator",
     "tmd_matrix_elements", "tmd_matrix_elements_time",
     "gradient_flow_renormalized_tmd",
     "self_renormalized_ratio", "invariant_amplitude", "collins_soper_kernel",
     "scan_staple_length", "fit_staple_plateau",
-    "quasi_tmd_pdf", "quasi_pdf_gluon", "cs_kernel_from_ratio", "soft_function_intrinsic",
+    "quasi_tmd_pdf", "quasi_pdf_gluon", "cs_kernel_from_ratio",
+    "ioffe_time_distribution",
+    "scheme_c0_coefficient",
+    "apply_scheme_c0_correction",
+    "flow_scale_mask", "soft_function_intrinsic",
     "tmd_matching_hybrid", "sftx_gluon_matching_coeff",
     "sftx_energy_density_t0", "flow_time_gev_m2", "cs_kernel_two_momentum",
     # 矩形 Wilson 圈软因子 / rapidity subtraction

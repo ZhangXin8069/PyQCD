@@ -1,0 +1,191 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-22 07:22:06 +0800
+批次: dev20-absorb-debug-4
+主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
+触发原因: 任务完成
+摘要: 完成 11 组态/1000 bootstrap 真实诊断、严格 LIME 解析、flow b-window fail-closed；112 项回归通过，物理 PDF 仍 blocked
+Git 根目录: /root/PyQCD
+
+## 关键日志
+
+### S1 — 物理与统计主链
+- 修复 `corr3=None` 的 `C2×OPE` ensemble 归一化：按
+  `Nsource × Nconf` 双重平均；解析反例从 6 恢复为 1，真实 P000 代表点
+  从旧值 -21.61751 恢复到约 -1.13。
+- 修复中心失败错误门控 replica AIC；中心和每个 replica 独立选择。
+- helicity 保留完整复数 `nopol` 分母，物理选择 `T_H-S_H`；旧 plus 组合
+  只能显式 legacy diagnostic。
+- `hR_x` 分离实 cos/复 Hermitian；`hR_lambda` 禁止未声明 λ 外推；
+  软因子严格要求实正；局域 spin-2 仅用于 traceless projection。
+
+### S2 — 真实数据扩展
+- 当前 `/public` 可用的 L24x72 eigensystem/perambulator 共 11 组态；
+  新增 conf4150，完成源分辨 2pt、Wilson flow、OPE `(13,5,72)`。
+- TMD 工作流默认组态更新为 11 个。
+- 11 组态 C2(0)：P000 0.6299 > P200 0.2723 > P400 0.0242；
+  spread 1.9%/1.9%/2.1%。
+- bootstrap 从 200 提高到 1000，并在 artifact 中保存
+  `Nsample`、`bootstrap_samples`、`resampling_kind`。
+
+### S3 — 严格质量结果
+- P000：quality 52/65，central fallback 13，replica fallback 1.46%。
+- P200：quality 51/65，central fallback 14，replica fallback 1.23%。
+- P400：quality 65/65，central fallback 0，replica fallback 0.12%。
+- 200 replica 时 P000/P200 曾为 54/65、56/65；提高到 1000 后下降，
+  证明小 bootstrap 的通过数偏乐观。严格 loader 继续拒绝 hybrid/Z_R。
+
+### S4 — Flow window 决定性阻塞
+- `tau=3` 时 `r_flow/a=sqrt(24)=4.899`。
+- 当前 `B_LIST=0..4` 的所有非零 b 均不满足 `r_flow < b`；z=1..4 也不满足
+  `r_flow < z`。现有 b 与小 z 输入只能诊断，不能作为受控 SFTE 物理输入。
+- `chain_status` 记录 `flow_radius_not_smaller_than_all_nonzero_b`、
+  `flow_step_size_above_reference_0p01` 和 P000 质量门失败原因。
+
+### S5 — I/O 与来源加固
+- `pyqcd/operator/_gluon_ope.py` 改为严格 LIME record 解析：验证 magic、
+  64-bit length、128-byte type 与 `ildg-binary-data` payload byte count；
+  不再用首链接幺正性扫描 ±16 KiB。
+- 合成 LIME 容器读回通过；真实 conf6250 573 MB 容器读取通过。
+- `refer/donghx` 定性为无固定上游 commit、无 LICENSE 的只读历史快照；
+  旧“完整可交付 PDF”结论不能作为当前证据。
+
+### S6 — 验证
+- `python -m pyqcd.testing`：112 passed, 0 skipped, 0 failed。
+- `python -m py_compile <修改 Python 文件>`：exit 0。
+- `bash skills/form/scripts/form-audit.sh`：
+  `PASS form-audit(pyqcd): registered exceptions=1147 unexpected=0`。
+- `git diff --check`：exit 0。
+- `verify_pdf_workflow --skip-flow --allow-partial`：
+  `[B][C][D] PASS`，`[E] PARTIAL`，无物理 PDF。
+
+## 验证与证据
+- 11/11 OPE finite；P000/P200/P400 ratio 与 Sumratio finite。
+- 定向契约：`_bare_sumratio_contract` 7/7、`_statistics_edge_contract` 32/32、
+  `_pipeline_persistence_contract` 37/37、`_tmd_physical_contract` 12/12。
+- 严格 LIME：合成容器的 `.lime.contents` 与容器路径均通过；真实 conf6250
+  容器读取 shape `(72,24,24,24,4,3,3)`。
+- 未验证：soft/rapidity、gluon-quark mixing、多格距 Z_R、连续极限。
+
+## 变更与产物
+- 代码：`pyqcd/analysis/_disconnected.py`、`_bare_sumratio.py`、
+  `_gradient_flow_ratio.py`、`_tmd_ratio.py`、`pyqcd/operator/_gluon_ope.py`、
+  `pyqcd/renorm/_soft.py`、`_hybrid.py`、`_gradient_flow_quasi.py`、
+  `_tmd.py`、`_tmdextract.py`、`pyqcd/testing/tmd/pdf_workflow.py` 等。
+- 测试：对应 contract 与 `test_read_gauge_lime_accepts_contents_directory`。
+- 数据：`data/runs/tmd-production-10conf/`，现含 11 组态及 1000 bootstrap
+  P000/P200/P400 分析产物。
+- 文档：`docs/absorb_dev20_gluon_tmd_audit_20261022.md`；
+  `data/runs/agent-reports/donghx-content.md`。
+- 未暂存、未提交、未推送。
+
+## 风险、限制与下一步
+- 当前 tau=3 的 b-window 整体失败，必须降低流时、增加 b 范围或重新定义
+  非局域窗口；不能把现有 b=1..4 结果称为物理 TMD。
+- P000/P200 统计质量不足，P400 replica fallback 仍非零。
+- 缺 Z_R 多格距、soft/rapidity、mixing 和连续极限。
+- eps=0.05 与参考 eps=0.01 的收敛未完成；fm_to_GeV 常量与 cache 语义版本
+  仍需统一/加固。
+- 最终状态：blocked，禁止发布物理 TMD-PDF。
+
+## 用户输入指令
+吸收git-tag-dev20到现在的外来内容,同时对这些内容(已知他们的最终的物理结果并不完全正确)进行全面的debug,此大任务持续时长为6-8小时
+
+重点是{refer/donghx/_Gradient_Flow_GluonPDF}
+
+debug重点是{refer/donghx/_Gradient_Flow_GluonPDF},主要对象是{refer/**(拼音)}系列,不要debug{refer/git-rep}
+
+{refer/git-rep}可以作为吸收对象
+
+注意要代入一部分格点QCD的物理角度
+
+选择性参考refer/papers与refer/books
+
+本环境中存在参考数据,其路径参考"https://gitee.com/zhangxin8069/PyQCD/blob/stab1/examples/_docker/download_beta6.20_mu-0.2770_ms-0.2400_L24x72.sh"
+
+还有更多可供参考的数据位于/public
+
+注意最终的物理结果必须正确,符合第一性原理的原则
+
+选择性调用conf-refer-skill
+
+注意排查{refer/donghx/_Gradient_Flow_GluonPDF}的会得到的物理结果
+
+同时注意{refer/donghx/**}中的其他内容
+
+## Agent 全文报告
+--- report begin ---
+# 最终交接：dev20 外来内容吸收与胶子 TMD-PDF 审计
+
+身份：`{物理+代码}`。本轮完成了来源审计、统计纠错、11 组态真实数据扩展、
+严格 LIME I/O 加固和全量回归。最终物理胶子 TMD-PDF 仍不能发布，原因已经
+定位为两层：P000/P200/P400 的严格质量门未通过，以及当前 `tau=3` 的流半径
+大于全部非零 b，导致现有 `b=1..4` 与小 z 数据不满足受控小流窗口。
+
+## 已完成的实质修复
+
+- 修复 `C2×OPE` ensemble 归一化的 critical `Nconf` 缺失。
+- 修复 replica AIC 被中心失败错误门控。
+- 修复 helicity 复数分母与 `T_H-S_H` 物理选择。
+- 修复 Fourier 实/复约定、λ 外推和软因子实正域。
+- 修复局域 spin-2 projection 污染。
+- 严格化 LIME record 解析，移除偏移搜索。
+- 将 TMD 默认组态扩展到 11 个，将 bootstrap 提高到 1000。
+
+## 当前真实结果
+
+```text
+11 confs: 4150, 6250, 6450, 6650, 6850, 7050, 7250, 7450, 7650, 7850, 8050
+C2(0): P000 0.6299 > P200 0.2723 > P400 0.0242
+OPE: 11/11 finite shape (13,5,72)
+P000: quality 52/65, central fallback 13, replica fallback 1.46%
+P200: quality 51/65, central fallback 14, replica fallback 1.23%
+P400: quality 65/65, central fallback 0,  replica fallback 0.12%
+bootstrap: 1000
+```
+
+严格 loader 要求所有点通过且所有 replica 无 fallback，因此不进入
+`tmd_renormalize_hybrid`/Z_R。200 replica 的旧通过数更高，但 1000 replica
+后下降，说明小样本估计偏乐观，不应回退。
+
+## 物理阻塞
+
+`tau=3` 的 `r_flow/a=4.899`。当前 `B_LIST=0..4` 的所有非零 b 都不满足
+`r_flow < b`；z=1..4 也不满足 `r_flow < z`。所以当前 b 和小 z 结果只能
+作诊断，不能作为受控 SFTE 物理 TMD。即使统计门通过，也必须先降低流时、
+增加 b 范围或重定义非局域窗口。
+
+此外仍缺：
+
+- 同几何 soft/rapidity；
+- gluon-quark singlet mixing；
+- 同方案多格距 Z_R；
+- 多个 tau/a/Pz 和连续极限；
+- eps=0.01 步长收敛与 fm↔GeV 常量统一。
+
+## 验证
+
+```text
+python -m pyqcd.testing
+112 passed, 0 skipped, 0 failed
+
+python -m py_compile <修改 Python 文件>
+exit=0
+
+bash skills/form/scripts/form-audit.sh
+PASS form-audit(pyqcd): registered exceptions=1147 unexpected=0
+
+git diff --check
+exit=0
+
+verify_pdf_workflow --skip-flow --allow-partial
+[B][C][D] PASS; [E] PARTIAL; no physical PDF
+```
+
+## 最终状态
+
+**blocked**：本次代码、统计、I/O、真实数据诊断和审计归档已交付；但物理
+胶子 TMD-PDF 仍不满足第一性原理的流窗口、统计质量、Z_R、soft/rapidity、
+mixing 和连续极限要求。下一步应做较低 flow time 下的 z/b 窗口扫描，而不是
+放宽严格门。
+--- report end ---

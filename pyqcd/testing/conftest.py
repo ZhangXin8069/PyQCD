@@ -111,6 +111,8 @@ from pyqcd.testing import (  # noqa: F401
     test_read_gauge_lime_accepts_contents_directory,
     test_renorm_numerical_guards_contracts,
     test_gradient_flow_quasi_policy_contracts,
+    test_tmd_physical_contracts,
+    test_bare_sumratio_contracts,
     test_analysis_safety_contracts,
     test_infra_safety_contracts,
 )

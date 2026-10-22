@@ -53,6 +53,21 @@ def _finite_array(name, value):
 def _sqrt_soft_factor(name, value):
     backend = get_backend()
     array = _finite_array(name, value)
+    dtype = getattr(array, "dtype", None)
+    is_complex = False
+    if dtype is not None:
+        try:
+            is_complex = np.issubdtype(np.dtype(dtype), np.complexfloating)
+        except TypeError:
+            is_complex = str(dtype).startswith("complex")
+    if is_complex:
+        imaginary = backend.imag(array)
+        if not bool(backend.min(backend.abs(imaginary) == 0)):
+            raise ValueError(
+                f"{name} 必须是实数正因子，不能含非零虚部，收到 {value!r}")
+        array = backend.real(array)
+    if not bool(backend.min(array > 0)):
+        raise ValueError(f"{name} 必须是严格正的实数，收到 {value!r}")
     try:
         root = backend.sqrt(array)
     except Exception as exc:

@@ -182,6 +182,118 @@ def quasi_pdf_gluon(h_z, z_grid, pz_gev, x_grid=None):
     return x_grid, out
 
 
+def ioffe_time_distribution(h_z, z_grid, pz_gev, x_grid=None, n_pts=2048,
+                            lambda_max=None):
+    """Fourier-transform a positive-axis Ioffe-time amplitude.
+
+    This implements the reference convention
+
+    ``Q(x) = (1/pi) integral_0^infinity dlambda cos(x lambda) H(lambda)``
+
+    with ``lambda=z Pz``.  It is deliberately distinct from
+    :func:`quasi_tmd_pdf`, whose prefactor ``1/(2*pi*Pz) * Pz**2/Pt**2``
+    belongs to a different quasi-TMD convention.  Reusing that prefactor for
+    the absolute spin-2 branch applies the Fourier normalization twice.
+
+    ``H`` must be the already renormalized, explicitly real unpolarized
+    amplitude.  A complex value with a material imaginary part is rejected
+    rather than silently projected.  The integral is a finite-support
+    diagnostic unless the caller supplies a separately justified tail;
+    this function does not invent one.
+    """
+    h = np.asarray(h_z)
+    z_fm = np.asarray(z_grid, dtype=float)
+    if h.ndim == 1:
+        h = h[:, None]
+    h = _finite_real_array(h, "h_z")
+    if z_fm.ndim != 1 or z_fm.size < 2:
+        raise ValueError("z_grid 必须是一维且至少含两个点")
+    if h.ndim != 2 or h.shape[0] != z_fm.size:
+        raise ValueError("h_z 的 z 维必须与 z_grid 一致")
+    if not np.isfinite(z_fm).all() or np.any(np.diff(z_fm) <= 0.0):
+        raise ValueError("z_grid 必须全部有限且严格递增")
+    if z_fm[0] != 0.0:
+        raise ValueError("ioffe_time_distribution 的 z_grid 必须从 z=0 开始")
+    if not (isinstance(n_pts, (int, np.integer)) and not isinstance(n_pts, bool)
+            and n_pts >= 2):
+        raise ValueError("n_pts 必须是至少为 2 的整数")
+
+    pz_gev = _positive_finite_scalar(pz_gev, "pz_gev")
+    lambda_grid = z_fm / fm_to_GeV * pz_gev
+    lambda_upper = lambda_grid[-1]
+    if lambda_max is not None:
+        lambda_upper = _positive_finite_scalar(lambda_max, "lambda_max")
+    lambda_upper = min(lambda_upper, lambda_grid[-1])
+
+    lam = np.linspace(0.0, lambda_upper, n_pts)
+    h_interp = np.empty((n_pts, h.shape[1]), dtype=np.float64)
+    for b_index in range(h.shape[1]):
+        h_interp[:, b_index] = np.interp(
+            lam, lambda_grid, h[:, b_index])
+
+    if x_grid is None:
+        x_grid = np.linspace(0.0, 1.0, 201)
+    x_grid = np.asarray(x_grid, dtype=float)
+    if (x_grid.ndim != 1 or x_grid.size == 0
+            or not np.isfinite(x_grid).all()):
+        raise ValueError("x_grid 必须是非空有限一维数组")
+
+    dlam = np.diff(lam)
+    weights = np.empty_like(lam)
+    weights[0] = 0.5 * dlam[0]
+    weights[-1] = 0.5 * dlam[-1]
+    weights[1:-1] = 0.5 * (dlam[:-1] + dlam[1:])
+    weighted_h = h_interp * weights[:, None] * (1.0 / pi)
+    integral = np.cos(np.multiply.outer(x_grid, lam)) @ weighted_h
+    # ``cos`` is even, so the same positive-lambda formula is valid for a
+    # signed diagnostic grid.  Keep the result shape convention aligned with
+    # ``quasi_tmd_pdf`` for a single transverse separation.
+    if h.shape[1] == 1:
+        integral = integral[:, 0]
+    return x_grid, integral
+
+
+def scheme_c0_coefficient(z_fm, mu_gev, zs_fm=0.25):
+    """Perturbative coordinate-space bridge used by the reference v2 chain.
+
+    ``c0(z) = 5/6 log(z_eff^2 mu^2 exp(2 gamma_E)/4) + 3/2`` with
+    ``z_eff=min(|z|,zs)`` in GeV^-1.  The local point is explicitly zero,
+    matching the reference's local-grid convention; it is not an endpoint
+    extrapolation of the bilocal logarithm.
+    """
+    z = np.asarray(z_fm, dtype=float)
+    scalar_input = z.ndim == 0
+    z = np.atleast_1d(z)
+    if not np.isfinite(z).all() or np.any(z < 0.0):
+        raise ValueError("z_fm must be finite and non-negative")
+    mu_gev = _positive_finite_scalar(mu_gev, "mu_gev")
+    zs_fm = _positive_finite_scalar(zs_fm, "zs_fm")
+    z_eff = np.minimum(z / fm_to_GeV, zs_fm / fm_to_GeV)
+    out = np.zeros_like(z_eff, dtype=float)
+    positive = z_eff > 0.0
+    out[positive] = (5.0 / 6.0) * np.log(
+        z_eff[positive] ** 2 * mu_gev ** 2
+        * np.exp(2.0 * gammaE) / 4.0) + 1.5
+    return out[0] if scalar_input else out
+
+
+def apply_scheme_c0_correction(x_tmd, scheme_c0_x, alpha_s, ca=CA):
+    """Apply the one-loop ``-g F[c0*h]`` bridge at fixed order."""
+    value = np.asarray(x_tmd)
+    correction = np.asarray(scheme_c0_x)
+    if value.shape != correction.shape:
+        raise ValueError("x_tmd and scheme_c0_x must have the same shape")
+    if not np.isfinite(value).all() or not np.isfinite(correction).all():
+        raise ValueError("scheme correction inputs must be finite")
+    if isinstance(alpha_s, (bool, np.bool_)):
+        raise ValueError("alpha_s must be a finite non-negative scalar")
+    alpha_s = float(alpha_s)
+    ca = float(ca)
+    if not np.isfinite(alpha_s) or alpha_s < 0.0 or not np.isfinite(ca):
+        raise ValueError("alpha_s must be non-negative and ca finite")
+    return value - alpha_s * ca / (2.0 * np.pi) * correction
+
+
 def _positive_finite_scalar(value, name):
     """Validate a strictly positive finite scalar."""
     if isinstance(value, (bool, np.bool_)):
@@ -213,7 +325,7 @@ def _finite_real_array(values, name):
 def cs_kernel_from_ratio(hR_pz1, hR_pz2, pz1, pz2):
     """CS 核提取（LPC 2020 比值法）。
 
-    K(b⊥) = ln[hR(z=z₀, b⊥, Pz₁)/hR(z=z₀, b⊥, Pz₂)] / ln(Pz₁/Pz₂)
+    K(b⊥) = ln|hR(z=z₀, b⊥, Pz₁)/hR(z=z₀, b⊥, Pz₂)| / ln(Pz₁/Pz₂)
 
     Args:
         hR_pz1/hR_pz2: 两动量下的重整化矩阵元（(nz, nb) 或 (nz,)）。
@@ -236,10 +348,10 @@ def cs_kernel_from_ratio(hR_pz1, hR_pz2, pz1, pz2):
     if pz1 == pz2:
         raise ValueError("pz1 与 pz2 必须不同")
     ratio = h1[0] / h2[0]           # z=0 处（b⊥ 依赖保留）
-    if not np.isfinite(ratio).all() or np.any(ratio <= 0.0):
+    if not np.isfinite(ratio).all() or np.any(ratio == 0.0):
         raise ValueError(
-            "CS kernel requires a finite strictly positive hR ratio")
-    return np.log(ratio) / np.log(pz1 / pz2)
+            "CS kernel requires a finite nonzero hR ratio")
+    return np.log(np.abs(ratio)) / np.log(pz1 / pz2)
 
 
 def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
@@ -279,9 +391,9 @@ def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
     if not (0 <= z_ref < len(a)):
         raise ValueError(f"z_ref={z_ref} 超出 z 维 [0, {len(a)-1}]")
     ratio = a[z_ref] / b_[z_ref]
-    if not np.isfinite(ratio).all() or np.any(ratio <= 0.0):
+    if not np.isfinite(ratio).all() or np.any(ratio == 0.0):
         raise ValueError(
-            "CS kernel requires a finite strictly positive c0 ratio")
+            "CS kernel requires a finite nonzero c0 ratio")
     if k_clip is not None:
         if len(k_clip) != 2:
             raise ValueError("k_clip 必须是 (K_min, K_max) 二元组或 None")
@@ -289,8 +401,45 @@ def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
         if not (np.isfinite(lo) and np.isfinite(hi) and lo < hi):
             raise ValueError("k_clip 边界必须是有限数且 K_min < K_max")
         k_clip = (lo, hi)
-    k = np.log(ratio) / np.log(pz1_gev / pz2_gev)
+    k = np.log(np.abs(ratio)) / np.log(pz1_gev / pz2_gev)
     return np.clip(k, *k_clip) if k_clip is not None else k
+
+
+def flow_scale_mask(z_over_a, tau, radius_factor=1.0, include_local=True):
+    """Return the scale-separated flow window in lattice coordinates.
+
+    The gradient-flow smoothing radius is ``sqrt(8*tau)`` in lattice units.
+    For a nonlocal bilinear of length ``z`` one requires
+    ``sqrt(8*tau) < radius_factor * z``.  The local ``z=0`` point cannot
+    satisfy that inequality by construction; it may be retained only as an
+    explicitly separate local-matching input.  This helper therefore treats
+    ``z=0`` according to ``include_local`` and does not silently claim that a
+    local/endpoint conversion validates the bilinear window.
+    """
+    z = np.asarray(z_over_a)
+    if z.ndim != 1 or z.size == 0:
+        raise ValueError("z_over_a 必须是非空一维数组")
+    if np.iscomplexobj(z) or not np.issubdtype(z.dtype, np.number):
+        raise ValueError("z_over_a 必须是实数数组")
+    z = np.asarray(z, dtype=float)
+    if not np.isfinite(z).all() or np.any(z < 0.0):
+        raise ValueError("z_over_a 必须为非负有限格点距离")
+    if isinstance(tau, (bool, np.bool_)):
+        raise ValueError("tau 必须是有限非负标量")
+    try:
+        tau = float(tau)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("tau 必须是有限非负标量") from exc
+    if not np.isfinite(tau) or tau < 0.0:
+        raise ValueError("tau 必须是有限非负标量")
+    radius_factor = _positive_finite_scalar(radius_factor, "radius_factor")
+    if not isinstance(include_local, (bool, np.bool_)):
+        raise ValueError("include_local 必须是布尔值")
+    radius = np.sqrt(8.0 * tau)
+    mask = (z > 0.0) & (radius < radius_factor * z)
+    if include_local:
+        mask |= z == 0.0
+    return mask
 
 
 def soft_function_intrinsic(R_square, b_perp, mu=2.0):
@@ -300,13 +449,19 @@ def soft_function_intrinsic(R_square, b_perp, mu=2.0):
     此处实现通用归一化框架：输入逐 b⊥ 的比值矩阵元，输出归一化软函数。
     """
     R = np.asarray(R_square, dtype=float)
+    if R.ndim != 1 or R.size == 0:
+        raise ValueError("R_square 必须是非空一维数组")
+    if not np.isfinite(R).all():
+        raise ValueError("R_square 必须全部为有限值")
+    if R[0] == 0.0:
+        raise ValueError("R_square 的参考点不得为零")
     return R / R[0]
 
 
 def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
                         cs_kernel=None, soft_factor=None, pz_scale=2.0,
                         x_tmd=None, lambda_s_fm=0.3,
-                        return_metadata=False):
+                        return_metadata=False, alpha_s=None):
     """混合方案 TMD 匹配（Eq.:matching_tmd 的离散实现，1 圈核）。
 
     x·g̃(x, b⊥) = ∫(dy/|y|)·C^hybrid(x/y, λs, μ/(yPz))
@@ -328,20 +483,21 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
         pz_gev: Pz（GeV）。
         cs_kernel: 必填 K(b⊥)（标量或数组）。未测量时必须显式提供 0
             并把结果标为 proxy，不能依赖函数默认值。
-        soft_factor: 必填 √S_I(b⊥)（标量或数组）。未测量时必须显式提供 1
+        soft_factor: 必填的原始内禀软函数 ``S_I(b⊥)``（标量或数组），不是它的
+            平方根；函数内部按公式除以 ``sqrt(S_I)``。未测量时必须显式提供 1
             并把结果标为 proxy。
         pz_scale: 参考快度标度 ζ 对应的动量（GeV）。
         x_tmd: 输入光锥 TMD y·g(y, b⊥)（数组，与 y_grid 同形）。
         lambda_s_fm: 大 λ 截断（fm，默认 0.3，同 _matching.hR_PDF）。
         return_metadata: 为 True 时额外返回匹配状态字典。
+        alpha_s: 可选显式固定耦合。工作流必须把端点转换、绝对归一化和
+            matching 使用同一值；None 仅保留历史 A_s_run 计算路径。
     Returns:
         ``(x_grid, x·g̃(x,b⊥))``；``return_metadata=True`` 时再附状态字典。
     """
     x = _validate_uniform_grid(x_grid, "x_grid")
     y = (x if y_grid is None
          else _validate_uniform_grid(y_grid, "y_grid"))
-    if len(y) != len(x):
-        raise ValueError("TMD 匹配矩阵结构要求 y 网格与 x 网格同维")
     if x_tmd is None:
         raise ValueError("x_tmd 不得为 None")
     yg = np.asarray(x_tmd)
@@ -349,8 +505,8 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
         raise ValueError("x_tmd 必须是一维或二维数组")
     if yg.ndim == 1:
         yg = yg[:, None]
-    if yg.shape[0] != len(x) or yg.shape[1] == 0:
-        raise ValueError("x_tmd 的 y 轴必须与 x/y 网格一致且不得为空")
+    if yg.shape[0] != len(y) or yg.shape[1] == 0:
+        raise ValueError("x_tmd 的 y 轴必须与 y_grid 一致且不得为空")
     if not np.isfinite(yg).all():
         raise ValueError("x_tmd 必须全部有限")
     nb = yg.shape[1]
@@ -367,12 +523,25 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
     lambda_s = lambda_s_fm / fm_to_GeV * pz_gev
     # 与 _matching.hR_PDF 同构：A_s ≡ α_s/(4π)，×4π 还原真耦合
     # （zengch 端 matching*.py 均为 alpha_s = A_s(mu)*4π）
-    alpha_s = A_s_run(mu) * 4.0 * pi
+    if alpha_s is None:
+        alpha_s = A_s_run(mu) * 4.0 * pi
+        alpha_s_source = "A_s_run(mu)*4*pi"
+    else:
+        if isinstance(alpha_s, (bool, np.bool_)):
+            raise ValueError("alpha_s 必须是有限非负标量")
+        try:
+            alpha_s = float(alpha_s)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("alpha_s 必须是有限非负标量") from exc
+        if not np.isfinite(alpha_s) or alpha_s < 0.0:
+            raise ValueError("alpha_s 必须是有限非负标量")
+        alpha_s_source = "explicit_input"
 
     matrix = _matching_matrix(y, x, pz_gev, mu, lambda_s)
     coupling = alpha_s * CA / (2.0 * pi)
 
-    # 快度演化因子与软函数（逐 b⊥）
+    # 快度演化因子与软函数（逐 b⊥）。准 TMD 的固有快度标度是
+    # ζ_z=(2|y|Pz)^2 作用于卷积输入 y*g(y)，而不是输出 x。
     K = _finite_real_array(cs_kernel, "cs_kernel").ravel()
     S = _finite_real_array(soft_factor, "soft_factor").ravel()
     if K.size == 0 or S.size == 0:
@@ -387,15 +556,27 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
     S = np.broadcast_to(S, (nb,))
     if np.any(S <= 0.0):
         raise ValueError("soft_factor 必须严格为正")
-    rap = np.exp(0.5 * np.log((2.0 * pz_gev) ** 2 / (2.0 * pz_scale) ** 2) * K)
+    # Rapidity evolution multiplies the input distribution y*g(y), before
+    # the convolution with C(x/y).  It must not be indexed by the output x.
+    y_abs = np.abs(y)
+    zeta_z = (2.0 * y_abs[:, None] * pz_gev) ** 2
+    zeta_ref = (2.0 * pz_scale) ** 2
+    rap = np.exp(0.5 * np.log(zeta_z / zeta_ref) * K[None, :])
     if not np.isfinite(rap).all():
         raise ValueError("快度演化因子含非有限值")
 
     out = np.empty((n, nb), dtype=np.result_type(yg.dtype, matrix.dtype,
                                                   rap.dtype, S.dtype))
     for j in range(nb):
-        v = yg[:, j] * rap[j] / np.sqrt(S[j])
-        out[:, j] = v - coupling * (matrix @ v)
+        v = yg[:, j] * rap[:, j] / np.sqrt(S[j])
+        if np.iscomplexobj(v):
+            tree = (
+                np.interp(x, y, v.real)
+                + 1j * np.interp(x, y, v.imag)
+            )
+        else:
+            tree = np.interp(x, y, v)
+        out[:, j] = tree - coupling * (matrix @ v)
     if nb == 1:
         out = out[:, 0]
     if return_metadata:
@@ -408,9 +589,18 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
             "status": "one_loop_hybrid_matching_diagnostic",
             "cs_kernel": "explicit_input",
             "soft_factor": "explicit_input",
+            "soft_factor_definition": "S_I(b_perp), consumed as sqrt(S_I)",
             "proxy_terms": proxy_terms,
             "physical_acceptance": False,
-            "light_cone_matching": "applied_in_fixed_one_loop_form",
+            "rapidity_scale": "zeta_z=(2*abs(y)*pz_gev)^2",
+            "reference_rapidity_scale": "zeta_ref=(2*pz_scale)^2",
+            "light_cone_matching": "one_loop_gg_only_diagnostic",
+            "alpha_s": float(alpha_s),
+            "alpha_s_source": alpha_s_source,
+            "x_support": [float(x[0]), float(x[-1])],
+            "y_support": [float(y[0]), float(y[-1])],
+            "x_grid_size": int(len(x)),
+            "y_grid_size": int(len(y)),
         }
         return x, out, metadata
     return x, out

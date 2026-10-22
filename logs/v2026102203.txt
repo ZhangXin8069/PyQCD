@@ -1,0 +1,65 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-22 03:09:58 +0800
+批次: dev20-absorb-debug
+主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
+触发原因: 任务完成
+摘要: 111 tests pass; source-resolved real conf6250 smoke; physical PDF remains blocked by missing soft/mixing/multi-scale data
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 范围、来源与吸收矩阵
+- 目标: 审计 dev20 至当前 HEAD 的外来内容，重点 refer/donghx/**，不 debug refer/git-rep。
+- 操作: 固定 dev20 annotated tag 对象 519ef9c、实际提交 3d528be；盘点严格区间 9 个候选，重点目录 181 文件/4,460,308 字节。
+- 关键输出: 拼音参考树处置 keep=26、reference-only=594、reject=285、adapt=0；重点目录因上游 ref/许可证未知保持 reference-only。
+- 退出码: 0。
+- 证据与判断: data/runs/agent-reports/provenance.md、data/runs/absorb/dev20-20261022-014335/inventory.json。
+### S2 — 统计、算符与匹配纠错
+- 目标: 纠正会改变最终物理结果的根因。
+- 操作: 新增源分辨 C2(source,dt) strict cache；逐 replica 重算 ensemble 真空协方差；共享重采样索引；full-sample central fit；三层状态；局域 spin-2 独立 Ioffe Fourier；宽 y 支撑；CS ln|R|；gauge SHA 绑定 flow/OPE contract；Z_R 失败关闭。
+- 关键输出: 一维源平均 C2 被物理入口拒绝；production_ratio/factorized degenerate 路径禁用；soft/rapidity/gg-only 缺口固定标为 diagnostic。
+- 退出码: 0。
+- 证据与判断: pyqcd/analysis/_disconnected.py、_tmd_ratio.py、_fitter.py、renorm/_tmdextract.py、pipeline/_tmd9.py、testing/tmd/pdf_workflow.py。
+### S3 — 真实 conf6250 smoke
+- 目标: 验证 final cache contract 在 /public 真数据上可执行且 fail-closed。
+- 操作: Torch CPU complex64 重算 source-resolved P200 2pt；从 gauge 重新 Wilson flow 并计算 TMD OPE；随后 only-analysis 重载 strict cache。
+- 关键输出: C2 shape=(72,72) 全有限，276s；flow 238s，E 2.2867→0.0453；OPE shape=(13,5,72)，46s；gauge SHA=e68a9c1f55f03a14955da431a496ec775c3c20c179544a3e60ce9975544bc861；OPE flow SHA=7cc528eb152d53eac90386137b7c55c3d51f428beb388d65b6703d048599151c。
+- 退出码: 0。
+- 证据与判断: data/runs/tmd-source-resolved-conf6250-v2、data/runs/tmd-source-ope-conf6250-v3；单组态 chain_status=diagnostic_only、physical_acceptance=false，未写物理 PDF。
+### S4 — 全量验证与归档
+- 目标: 确认代码改动无回归。
+- 操作: 全量测试、逐修改文件 py_compile、真实 verifier、form audit、git diff --check。
+- 关键输出: python -m pyqcd.testing 为 111 passed/0 skipped/0 failed；verifier --skip-flow --allow-partial 返回 PARTIAL；form-audit unexpected=0；git diff --check 无输出。
+- 退出码: 0。
+- 证据与判断: 详见 docs/absorb_dev20_gluon_tmd_audit_20261022.md。
+
+## 验证与证据
+- 测试/检查: python -m pyqcd.testing；python -m py_compile 全部本轮修改 Python 文件；python -B -m pyqcd.testing.tmd.verify_pdf_workflow --skip-flow --allow-partial data/runs/tmd-source-ope-conf6250-v3；bash skills/form/scripts/form-audit.sh；git diff --check。
+- 结果: 111/111 全绿；PARTIAL 与真实单组态限制一致；form-audit PASS；diff check 通过。
+- 未验证项: soft/rapidity、胶子-夸克 mixing、多 a/tau/ell/Pz、连续极限和 10 组态真实物理 PDF。
+
+## 变更与产物
+- 文件: pyqcd/analysis/{_disconnected,_fitter,_tmd_ratio}.py；pyqcd/pipeline/{_steps,_tmd9}.py；pyqcd/renorm/{_gradient_flow,_gradient_flow_quasi,_hybrid,_tmd,_tmdextract,_zr}.py；pyqcd/testing/tmd/{pdf_workflow,verify_pdf_workflow}.py；相关测试。
+- 产物: docs/absorb_dev20_gluon_tmd_audit_20261022.md、docs/plans/2026-10-22-absorb-dev20-gluon-tmd-debug.md、data/runs/agent-reports/*.md、两个真实 conf6250 smoke 目录。
+- 未改动范围: refer/**、refer/git-rep 子模块、Git 索引、系统配置；未提交、未推送、未打标签。
+
+## 风险、限制与下一步
+- 风险: 当前真实数据只有一个 L24x72 系综；单组态不能形成物理 ensemble。soft/rapidity 与 g/q mixing 缺失时任何 xg 曲线都不是物理 TMD-PDF。
+- 阻塞: 需要同几何 soft/rapidity、完整 Z_ij、至少多 Pz/tau/a/ell 扫描和更多组态。缺少 Dong HX 重点目录的上游 URL、固定 commit、许可证。
+- 下一步: 先按新 v2 source-resolved contract 重算至少 10 组态 C2，再用带 gauge/flow SHA 的 OPE contract 重算；补齐 soft/mixing 和多尺度系统后才能升级 physical_acceptance。
+
+## 用户输入指令
+吸收 git-tag-dev20 到现在的外来内容；重点 refer/donghx/_Gradient_Flow_GluonPDF；主要对象是 refer/** 拼音系列，不 debug refer/git-rep，但 refer/git-rep 可作为吸收对象；同时注意 refer/donghx/** 中其他内容；选择性参考 refer/papers 与 refer/books；使用 /public 真数据和 conf-refer-skill；代入格点 QCD 物理视角；全面 debug，最终物理结果必须正确并符合第一性原理。
+
+## Agent 全文报告
+--- report begin ---
+本轮以 {物理+代码} 身份完成 dev20 外来内容吸收、来源/许可固定、核心代码与物理链审计、失败关闭升级和真实 conf6250 smoke。严格 dev20..HEAD 的 9 个候选均有来源记录；拼音参考树 905 个文件的处置矩阵完整；重点 Dong HX 目录因上游 ref/许可证未知保持 reference-only。
+
+关键纠错包括：源分辨 C2(source,dt) 取代源平均 C2；逐 replica ensemble 真空协方差取代二次时间平移与 factorized 恒零路径；共享 bootstrap/jackknife 索引及 full-sample central fit；数据可辨识性、拟合质量、plateau 与物理状态分层；局域 spin-2 Ioffe Fourier 去除重复 1/(2πPz) 归一化；卷积 y 支撑恢复为 [-3,3]；CS 使用 ln|R|；rapidity 作用于 y*g(y)；端点与 matching 使用同一 a/αs；gauge SHA 与 flow/OPE strict contract 绑定；Z_R 优化失败不再返回伪有限参数。
+
+真实 conf6250 上，source-resolved C2 为 (72,72) 全部有限，耗时 276s；Wilson flow 238s，E 从 2.2867 降至 0.0453；TMD OPE (13,5,72) 耗时 46s。gauge SHA-256 为 e68a9c1f55f03a14955da431a496ec775c3c20c179544a3e60ce9975544bc861。最终缓存 contract 可重载并通过 structure/finite 检查。
+
+验证证据：python -m pyqcd.testing 为 111 passed / 0 skipped / 0 failed；全部修改文件 py_compile 通过；真实 verifier 的 --allow-partial 模型准确返回 PARTIAL；form-audit registered exceptions=1147、unexpected=0；git diff --check 通过。
+
+物理终端判断：吸收与纠错门 finished；完整物理胶子 TMD-PDF 仍 blocked/unverified。当前只有单一 L24x72 格距、单流时与单组态 smoke，缺少 soft/rapidity、胶子-夸克 mixing、多 Pz/tau/a/ell、连续极限及足够组态统计，不能发布最终 PDF。详细证据与局限见 docs/absorb_dev20_gluon_tmd_audit_20261022.md。
+--- report end ---

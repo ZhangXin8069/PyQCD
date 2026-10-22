@@ -1,0 +1,243 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-22 06:51:46 +0800
+批次: dev20-absorb-debug-2
+主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
+触发原因: 任务完成
+摘要: 修复 C2×OPE ensemble 归一化、replica AIC、helicity 复数分母/Fourier/soft 域；112 项回归通过；物理 PDF 仍因 P000 质量和多尺度缺失而 blocked
+Git 根目录: /root/PyQCD
+
+## 关键日志
+
+### S1 — 来源、范围与参考库审计
+- 目标：吸收 `dev20..HEAD` 外来内容，并以 `{物理+代码}` 身份重点 debug
+  `refer/donghx/_Gradient_Flow_GluonPDF` 与 `refer/donghx/**`。
+- 边界：`refer/git-rep` 只作来源/固定 OID 证据，不 debug 其内部；不修改
+  `refer/**`，不提交、不推送、不打标签。
+- 证据：`refer/donghx` 是无固定上游 commit、无 LICENSE 的历史快照；
+  `copy.sh` 仅记录集群绝对路径。旧顶层 `Operator.py`、`2pt_proton_*.py`
+  等已不在当前工作树。
+- 新增报告：`data/runs/agent-reports/donghx-content.md`。
+
+### S2 — 物理与统计链纠错
+- 修复 `pyqcd/analysis/_disconnected.py` 的 critical 归一化错误：
+  `corr3=None` 的 `C2×OPE` 原先只除 `Nsource`，现按
+  `Nsource * len(selected)` 双重平均。解析反例 `C2=[1,3]`、`OPE=[2,6]`
+  从错误值 `6` 恢复为 `1`。
+- 修复 `_bare_sumratio.py` 的 replica AIC 门控：中心失败不再强制所有
+  replica fallback；中心与每个 replica 独立选择 cut/window。
+- 修复 helicity 统计：`_gradient_flow_ratio.py` 保留完整复数 `nopol`
+  分母；`physical_helicity_ratio()` 默认选择 `T_H-S_H`，裸 `combined`
+  只能显式 legacy diagnostic。
+- 修复 Fourier/soft 状态：`hR_x` 分离实 cos 与复 Hermitian 变换；
+  `hR_lambda` 未显式 opt-in 时不得越过实测 λ；软因子必须实正；
+  `soft_function_intrinsic` 拒绝零/非有限参考点。
+- 局域 spin-2 仅作用于 traceless projection；复 helicity 选择器和
+  `match_one` 均 fail-closed。
+- P000 已正式进入分析阶段并写入
+  `zero_momentum_denominator_status.json`，但 `used_for_pdf=false`。
+
+### S3 — 真实 10 组态分析重跑
+- 使用现有 strict source-resolved 2pt/OPE 缓存，仅重跑分析层：
+  `python -m pyqcd.testing.tmd.pdf_workflow --only-plot \
+   --out data/runs/tmd-production-10conf --momenta Z --eps 0.05 \
+   --backend numpy --cpu-threads 8`
+- 修复后 P000 代表点 `(T,tau,z,b)=(8,4,0,0)` 为 `-1.12093`，旧错误值为
+  `-21.61751`。
+- 修复后 Sumratio：
+  - P000：quality `54/65`，central fallback `11`，replica fallback 均值
+    `1.55%`。
+  - P200：quality `54/65`，central fallback `11`，replica fallback 均值
+    `0.89%`。
+  - P400：quality `65/65`，central fallback `0`，replica fallback 均值
+    `0.47%`。
+- 严格 loader 仍拒绝 P000/Pz>0 输入；P000 失败点主要来自
+  `candidate_bootstrap_success_fraction < 0.90`。
+
+### S4 — 验证
+- `PYTHONDONTWRITEBYTECODE=1 python -B -m pyqcd.testing`：
+  `112 passed, 0 skipped, 0 failed`。
+- `python -m py_compile <本轮修改 Python 文件>`：退出码 0。
+- `bash skills/form/scripts/form-audit.sh`：
+  `PASS form-audit(pyqcd): registered exceptions=1147 unexpected=0`。
+- `git diff --check`：退出码 0。
+- 真实链验证：
+  `python -B -m pyqcd.testing.tmd.verify_pdf_workflow --skip-flow \
+   --allow-partial data/runs/tmd-production-10conf`
+  返回 `PARTIAL`；`[B][C][D] PASS`，`[E] PARTIAL`，没有物理 PDF。
+
+### S5 — 最终物理判定
+- 当前不能发布物理胶子 TMD-PDF。单格距 L24x72、单 `tau=3`、单 staple、
+  无同几何 soft/rapidity、无 gluon-quark singlet mixing、无多 `tau/a/Pz`
+  连续极限；P000 严格质量门也未通过。
+- `chain_status.json`：`diagnostic_only`、`physical_acceptance=false`，
+  reasons 含 `no_verified_positive_longitudinal_plateau`、
+  `flow_step_size_above_reference_0p01`、
+  `zero_momentum_denominator_quality_gate_failed`。
+- 因此代码/审计工作可交接，但最终物理结果标记为 `blocked`。
+
+## 验证与证据
+- 测试：`python -m pyqcd.testing`，112 passed/0 skipped/0 failed。
+- 定向：`_bare_sumratio_contract` 7/7、`_gradient_flow_gluon_contract`
+  12/12、`_tmd_soft_factor_ze_contract` 9/9、`_renorm_numerical_guards_contract`
+  29/29、`_statistics_edge_contract` 32/32。
+- 真实数据：10/10 组态 OPE `(13,5,72)` finite；C2(0) 排序
+  P000 0.6275 > P200 0.2713 > P400 0.0241，组态 spread 约 1.6%–1.7%。
+- 格式：form-audit unexpected=0，`git diff --check` 通过。
+- 未验证：C++/PyQCD 真实逐元素差分、soft/rapidity 实测、Z_R 多格距拟合、
+  gluon-quark mixing、连续极限、P000 多组态扩展。
+
+## 变更与产物
+- 生产代码：`pyqcd/analysis/_disconnected.py`、`_bare_sumratio.py`、
+  `_gradient_flow_ratio.py`、`_tmd_ratio.py`、`_soft.py`、`_hybrid.py`、
+  `_gradient_flow_quasi.py`、`_tmd.py`、`_tmdextract.py`、
+  `operator/_gradient_flow_gluon_ope.py`、`pipeline/_tmd9.py`、
+  `testing/tmd/pdf_workflow.py`、`testing/tmd/verify_pdf_workflow.py` 等。
+- 测试：新增/扩展 `_bare_sumratio_contract.py`、`_statistics_edge_contract.py`、
+  `_gradient_flow_gluon_contract.py`、`_gradient_flow_quasi_policy_contract.py`、
+  `_tmd_soft_factor_ze_contract.py`、`_renorm_numerical_guards_contract.py`、
+  `_pipeline_persistence_contract.py`、`_tmd_physical_contract.py`。
+- 数据产物：`data/runs/tmd-production-10conf/`；P000/P200/P400 ratio、
+  c0、Sumratio、状态和诊断图；`analysis/tmd_summary.json`、
+  `analysis/tmd_ratio/chain_status.json`。
+- 文档：`docs/absorb_dev20_gluon_tmd_audit_20261022.md`、
+  `data/runs/agent-reports/donghx-content.md`、本轮计划与审计报告。
+- 未改动：`refer/**` 原始参考树、`refer/git-rep/**` 子模块、Git 索引。
+
+## 风险、限制与下一步
+- P000/P200 的 bootstrap 成功率不足，P400 仍有 replica fallback；严格 loader
+  因此拒绝进入 `tmd_renormalize_hybrid`。
+- 无同方案 Z_R 多格距产物；hybrid 公式虽正确，生产接线必须保持 blocked。
+- 当前运行 `eps=0.05`，参考冻结口径为 `eps=0.01`；已写入 chain reason，
+  但未做步长收敛重算。
+- `fm_to_GeV=0.197` 与梯度流绝对归一化的 `0.1973269804` 仍混用，约 0.17%
+  系统差异。
+- flow/OPE cache 算法版本仍为静态 `v1`；LIME reader 仍以首链接幺正性搜索
+  payload，均需后续加固。
+- 下一步优先级：修复后的 P000/Pz>0 多组态统计扩容 → 同几何 soft/rapidity
+  → Z_R/mixing → 多 tau/a/Pz 连续极限；在此之前不得发布物理 PDF。
+
+## 用户输入指令
+吸收git-tag-dev20到现在的外来内容,同时对这些内容(已知他们的最终的物理结果并不完全正确)进行全面的debug,此大任务持续时长为6-8小时
+
+重点是{refer/donghx/_Gradient_Flow_GluonPDF}
+
+debug重点是{refer/donghx/_Gradient_Flow_GluonPDF},主要对象是{refer/**(拼音)}系列,不要debug{refer/git-rep}
+
+{refer/git-rep}可以作为吸收对象
+
+注意要代入一部分格点QCD的物理角度
+
+选择性参考refer/papers与refer/books
+
+本环境中存在参考数据,其路径参考"https://gitee.com/zhangxin8069/PyQCD/blob/stab1/examples/_docker/download_beta6.20_mu-0.2770_ms-0.2400_L24x72.sh"
+
+还有更多可供参考的数据位于/public
+
+注意最终的物理结果必须正确,符合第一性原理的原则
+
+选择性调用conf-refer-skill
+
+注意排查{refer/donghx/_Gradient_Flow_GluonPDF}的会得到的物理结果
+
+同时注意{refer/donghx/**}中的其他内容
+
+## Agent 全文报告
+--- report begin ---
+# dev20 外来内容吸收与胶子 TMD-PDF 审计交接
+
+身份：`{物理+代码}`。范围：`dev20..HEAD` 与 `refer/donghx/**`；重点为
+`refer/donghx/_Gradient_Flow_GluonPDF`，`refer/git-rep` 只作来源证据，未调试
+其内部。未修改 `refer/**` 或 submodule，未提交、推送或打标签。
+
+## 核心结果
+
+本轮修复了一个会直接污染所有 ratio/c0 的 critical 错误：
+`corr3=None` 的解析 `C2×OPE` 路径少除 `Nconf`。修复后按
+`Nsource × Nconf` 双重平均；真实 P000 代表点从错误的 `-21.61751`
+恢复为 `-1.12093`，与独立解析重算一致。修复前所有 ratio/c0/Sumratio
+数值已撤回，当前产物由 strict 2pt/OPE 缓存重新生成。
+
+同时修复：
+
+- replica AIC 不再被中心候选失败错误门控；中心和每个 replica 独立选择
+  cut/window 与 fallback。
+- helicity 统计保留完整复数 `nopol` 分母；物理入口默认 `T_H-S_H`，
+  `combined=T_H+S_H` 只能显式作为 legacy diagnostic。
+- `hR_x` 分离实 cos 与复 Hermitian Fourier；`hR_lambda` 默认禁止越过实测
+  λ 的静默外推；软因子必须实正。
+- 局域 spin-2 只作用于 traceless projection。
+- P000 正式进入分析阶段并生成可审计的零动量分母状态，但严格标记
+  `used_for_pdf=false`。
+
+## 真实数据状态
+
+10 个 L24x72 组态的 P000/P200/P400 源分辨 2pt 与 OPE 已存在。修复后：
+
+```text
+P000 Sumratio quality=54/65, central fallback=11, replica fallback mean=1.55%
+P200 Sumratio quality=54/65, central fallback=11, replica fallback mean=0.89%
+P400 Sumratio quality=65/65, central fallback=0,  replica fallback mean=0.47%
+```
+
+严格 loader 要求全部 65 点通过且所有 replica 无 fallback，因此仍拒绝生成
+物理 PDF。P000 失败点主要来自 bootstrap success fraction < 0.90；P400
+的中心点全过，但少数 replica 仍有 fallback。两者都不能用 `M_filled` 绕过。
+
+真实链当前状态：
+
+```text
+chain_status = diagnostic_only
+physical_acceptance = false
+reasons = [
+  no_verified_positive_longitudinal_plateau,
+  flow_step_size_above_reference_0p01,
+  zero_momentum_denominator_quality_gate_failed
+]
+```
+
+## 验证
+
+```text
+python -m pyqcd.testing
+112 passed, 0 skipped, 0 failed
+
+python -m py_compile <本轮修改 Python 文件>
+exit=0
+
+bash skills/form/scripts/form-audit.sh
+PASS form-audit(pyqcd): registered exceptions=1147 unexpected=0
+
+git diff --check
+exit=0
+
+python -B -m pyqcd.testing.tmd.verify_pdf_workflow \
+  --skip-flow --allow-partial data/runs/tmd-production-10conf
+[B][C][D] PASS; [E] PARTIAL; 无物理 PDF
+```
+
+## `refer/donghx/**` 其他内容
+
+- 该目录是无上游固定 commit、无 LICENSE 的只读历史快照；`copy.sh` 的集群
+  绝对路径不能替代版本/许可证明。
+- `_codex/Markdown` 可吸收流窗口、统计契约、状态分层、line-mass/SFTE
+  边界，但 `/public` 路径和当前结果状态不可复用。
+- 旧文档的“完整/可交付 PDF”结论与当前 soft/rapidity、gg-only、单 a、单 tau
+  状态冲突，只能作为历史证据。
+- 新增来源处置报告：`data/runs/agent-reports/donghx-content.md`。
+
+## 仍未闭合
+
+- P000/P200 统计质量不足，P000 未通过严格 hybrid 分母门。
+- 无同方案 Z_R 多格距产物，`tmd_renormalize_hybrid` 未进入生产。
+- 无同几何 soft/rapidity、gluon-quark singlet mixing、多 `tau/a/Pz` 和
+  连续极限。
+- `eps=0.05` 与参考 `eps=0.01` 的步长收敛未完成；`fm_to_GeV` 常数、
+  cache 算法版本和 LIME payload 解析仍有残余风险。
+
+## 最终状态
+
+**blocked**：代码、测试与审计交接已完成；最终物理胶子 TMD-PDF 不能发布，
+必须补齐 P000/Pz>0 统计质量、hybrid/Z_R、soft/rapidity、mixing 和多尺度
+连续极限后重新验收。
+--- report end ---

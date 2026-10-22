@@ -1,19 +1,23 @@
 """
-test9 梯度流重整化核子胶子 TMD-PDF 物理链（pyqcd 核心模块）
-========================================================
+test9 梯度流核子胶子 TMD-PDF 诊断链（pyqcd 核心模块）
+====================================================
 
-从真实蒸馏数据（eigvec/peram/gauge）出发计算核子中胶子 TMD-PDF：
+从真实蒸馏数据（eigvec/peram/gauge）出发执行以下诊断步骤：
 
-    1. 蒸馏 2pt：核子谱线 C2(dt)（多动量 Pz=0,2,4 或全方向）
+    1. 蒸馏 2pt：源分辨 C2(t_src,dt)（多动量 Pz=0,2,4 或全方向）
     2. 梯度流：gauge → wilson_flow(τ=3a²) → flowed gauge V_tau
     3. 胶子 TMD 算符：在 flowed gauge 上逐时间片计算
        O(z,b⊥) = M^{tx;tx}+M^{ty;ty}−2M^{xy;xy}（空间求和）→ (nz,nb,Nt)
-    4. 不相连 3pt 因子化：C3(dt,dtau,z,b) = C2(dt)·OPE(dtau,z,b)
-    5. 真空扣除 + 比值 R(dt,dtau,z,b) = <[C3−C2⟨OPE⟩]/C2>_ti
+    4. 不相连协方差：在逐 replica 的 ensemble 均值上计算
+       C3=<C2·OPE>−<C2><OPE>
+    5. 比值 R=mean_t0(C3)/mean_t0(Re C2)
     6. 逐 (z,b) 拟合 c0(z,b) → 裸矩阵元 hB(z,b,Pz)
     7. 自重整化（梯度流方案）：hR(z,b,Pz) = hB(z,b,Pz)/hB(0,b,Pz=0)
     8. λ 外推 + 傅里叶 → 准 TMD-PDF
-    9. NLO 匹配 → 光锥 TMD-PDF x·g(x,b⊥) + CS 核
+    9. 一圈 gg-only 匹配诊断 + CS proxy
+
+当前数据尺度与 soft/rapidity、胶子-夸克混合、连续极限尚未闭合，因此
+本模块产物只能作为诊断；不得仅凭函数可执行就称为物理 TMD-PDF。
 
 本模块只放"物理链计算"函数（数据读取、算符、统计、重整化），
 顶层编排（配置/目录/CLI/并行）在
@@ -371,10 +375,32 @@ def _safe_tag_text(value):
         for char in str(value))
 
 
-def _flow_cache_contract(conf_id, tau, eps, precision):
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _gauge_source_identity(conf_id):
+    """Return a content identity for production gauge input when available."""
+    path = get_gauge_path(conf_id)
+    if not os.path.isfile(path):
+        return None
+    stat = os.stat(path)
+    return {
+        'path': os.path.abspath(path),
+        'size_bytes': int(stat.st_size),
+        'mtime_ns': int(stat.st_mtime_ns),
+        'sha256': _sha256_file(path),
+    }
+
+
+def _flow_cache_contract(conf_id, tau, eps, precision, input_source=None):
     tau, eps = _validate_flow_controls(tau, eps)
     precision = _validate_precision(precision)
-    return {
+    contract = {
         "algorithm_version": _FLOW_ALGORITHM_VERSION,
         "artifact": "flowed_gauge",
         "conf_id": _cache_int(conf_id, "conf_id"),
@@ -386,6 +412,9 @@ def _flow_cache_contract(conf_id, tau, eps, precision):
         "shape": [int(NT), int(NX), int(NX), int(NX), 4, 3, 3],
         "tau": tau,
     }
+    if input_source is not None:
+        contract["input_source"] = input_source
+    return contract
 
 
 def _flow_cache_tag(contract):
@@ -507,7 +536,10 @@ def _vertex_cache_specs(conf_id, run_dir, momenta, precision):
 
 
 def _multi_2pt_cache_specs(conf_id, run_dir, momenta, channels,
-                            precision, v_kind):
+                            precision, v_kind, source_resolved=False):
+    if not isinstance(source_resolved, (bool, np.bool_)):
+        raise ValueError("source_resolved 必须是布尔值")
+    source_resolved = bool(source_resolved)
     conf_id = _cache_int(conf_id, "conf_id")
     cdir = _strict_conf_path(run_dir, conf_id)
     lattice = _lattice_cache_contract()
@@ -543,9 +575,18 @@ def _multi_2pt_cache_specs(conf_id, run_dir, momenta, channels,
                 "vertex_artifact": vertex_contract["artifact"],
                 "vertex_contract_sha256": vertex_digest,
             }
+            if source_resolved:
+                contract.update({
+                    "algorithm_version":
+                        "pyqcd.pipeline.multi-2pt.v2-source-resolved",
+                    "source_resolved": True,
+                    "source_axis_order": "source,dt",
+                    "shape": [lattice["nt"], lattice["nt"]],
+                })
             digest = _contract_sha256(contract)
+            cache_version = "strict-v2" if source_resolved else "strict-v1"
             filename = (
-                f"{key}_tmd9-strict-v1_nm{len(momenta)}_"
+                f"{key}_tmd9-{cache_version}_nm{len(momenta)}_"
                 f"nc{len(channels)}_p{precision}_v{v_kind}_"
                 f"sha256-{digest}_conf{conf_id}.h5")
             specs[key] = _strict_cache_spec(
@@ -571,18 +612,23 @@ def compute_vertices_multi(conf_id, run_dir, logger, momenta,
 
 def compute_2pt_multi(conf_id, run_dir, logger, vertices, momenta,
                       precision=PRECISION, channels=('pp',),
-                      v_kind='VVV', recompute=False):
+                      v_kind='VVV', recompute=False,
+                      source_resolved=False):
     """多动量核子 2pt（test9 strict canonical cache）。"""
+    if not isinstance(source_resolved, (bool, np.bool_)):
+        raise ValueError("source_resolved 必须是布尔值")
     precision = _validate_precision(precision)
     momenta = _validate_momenta(momenta)
     channels = _validate_channels(channels)
     v_kind = _validate_v_kind(v_kind)
     strict_cache = _multi_2pt_cache_specs(
-        conf_id, run_dir, momenta, channels, precision, v_kind)
+        conf_id, run_dir, momenta, channels, precision, v_kind,
+        source_resolved=source_resolved)
     return compute_2pt_for_config_multi(
         conf_id, run_dir, logger, vertices, momenta,
         precision=precision, channels=channels, v_kind=v_kind,
-        strict_cache=strict_cache, recompute=recompute)
+        strict_cache=strict_cache, recompute=recompute,
+        source_resolved=source_resolved)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -590,7 +636,8 @@ def compute_2pt_multi(conf_id, run_dir, logger, vertices, momenta,
 # ═══════════════════════════════════════════════════════════════════
 
 def flow_gauge_for_config(conf_id, tau=3.0, eps=0.05, precision=PRECISION,
-                          save_dir=None, logger=print, save_gauge=True):
+                          save_dir=None, logger=print, save_gauge=True,
+                          input_source_identity=None):
     """读组态 → Wilson flow → flowed gauge（h5 缓存，可复现）。
 
     Args:
@@ -604,7 +651,11 @@ def flow_gauge_for_config(conf_id, tau=3.0, eps=0.05, precision=PRECISION,
     Returns:
         flowed gauge V (Nt,Nz,Ny,Nx,4,3,3)，torch 张量（torch 后端时）
     """
-    contract = _flow_cache_contract(conf_id, tau, eps, precision)
+    input_source = (
+        _gauge_source_identity(conf_id)
+        if input_source_identity is None else input_source_identity)
+    contract = _flow_cache_contract(
+        conf_id, tau, eps, precision, input_source=input_source)
     backend = get_backend()
     tau = contract["tau"]
     eps = contract["eps"]
@@ -680,11 +731,12 @@ def _validate_color_normalization(color_normalization):
 
 
 def _tmd_ope_contract(conf_id, tau, eps, precision, z_dir, b_dir,
-                      z_list, b_list, staple_length, color_normalization):
+                      z_list, b_list, staple_length, color_normalization,
+                      flow_contract_sha256=None):
     tau, eps, precision, z_dir, b_dir, z_list, b_list = (
         _validate_tmd_request(
             tau, eps, precision, z_dir, b_dir, z_list, b_list))
-    return {
+    contract = {
         "algorithm_version": _OPE_ALGORITHM_VERSION,
         "artifact": "tmd_ope_time",
         "b_dir": b_dir,
@@ -703,6 +755,9 @@ def _tmd_ope_contract(conf_id, tau, eps, precision, z_dir, b_dir,
         "z_dir": z_dir,
         "z_list": z_list,
     }
+    if flow_contract_sha256 is not None:
+        contract["flow_contract_sha256"] = flow_contract_sha256
+    return contract
 
 
 def _tmd_ope_tag(contract):
@@ -756,9 +811,16 @@ def compute_tmd_ope_time(conf_id, run_dir, logger, z_list, b_list,
             tau, eps, precision, z_dir, b_dir, z_list, b_list))
     staple_length = _resolve_staple_length(z_list, staple_length)
     color_normalization = _validate_color_normalization(color_normalization)
+    input_source = _gauge_source_identity(conf_id)
+    flow_contract_sha256 = None
+    if input_source is not None:
+        flow_contract = _flow_cache_contract(
+            conf_id, tau, eps, precision, input_source=input_source)
+        flow_contract_sha256 = _contract_sha256(flow_contract)
     contract = _tmd_ope_contract(
         conf_id, tau, eps, precision, z_dir, b_dir,
-        z_list, b_list, staple_length, color_normalization)
+        z_list, b_list, staple_length, color_normalization,
+        flow_contract_sha256=flow_contract_sha256)
     conf_id = contract["conf_id"]
     tau = contract["tau"]
     eps = contract["eps"]
@@ -784,7 +846,8 @@ def compute_tmd_ope_time(conf_id, run_dir, logger, z_list, b_list,
 
     V = flow_gauge_for_config(conf_id, tau, eps, precision,
                               save_dir=gauge_flow_dir, logger=logger,
-                              save_gauge=False)
+                              save_gauge=False,
+                              input_source_identity=input_source)
     backend = get_backend()
     if get_backend_name() == 'torch':
         set_precision(precision)
@@ -827,12 +890,14 @@ def _momenta_from_tags(momentum_tag_list):
 
 def load_multi_2pt(run_dir, conf_ids, momentum_tag_list, channels=('pp',),
                    logger=print, *, momenta=None, precision=PRECISION,
-                   v_kind='VVV'):
+                   v_kind='VVV', source_resolved=False):
     """严格读取多动量 2pt canonical HDF5。
 
     既有 ``P000``/``P200``/``P400`` 调用保持可用；多位/负分量使用
     ``P10_-2_0`` canonical 格式，也可通过 ``momenta=`` 显式校验。
     """
+    if not isinstance(source_resolved, (bool, np.bool_)):
+        raise ValueError("source_resolved 必须是布尔值")
     precision = _validate_precision(precision)
     channels = _validate_channels(channels)
     v_kind = _validate_v_kind(v_kind)
@@ -856,7 +921,8 @@ def load_multi_2pt(run_dir, conf_ids, momentum_tag_list, channels=('pp',),
     corr = {}
     for cid in conf_ids:
         specs = _multi_2pt_cache_specs(
-            cid, run_dir, momenta, channels, precision, v_kind)
+            cid, run_dir, momenta, channels, precision, v_kind,
+            source_resolved=source_resolved)
         entry = {}
         for key, spec in specs.items():
             array, reason = _load_contract_h5(
@@ -889,9 +955,16 @@ def load_tmd_ope_all(run_dir, conf_ids, z_list, b_list, logger=print,
     color_normalization = _validate_color_normalization(color_normalization)
     ope = {}
     for cid in conf_ids:
+        input_source = _gauge_source_identity(cid)
+        flow_contract_sha256 = None
+        if input_source is not None:
+            flow_contract = _flow_cache_contract(
+                cid, tau, eps, precision, input_source=input_source)
+            flow_contract_sha256 = _contract_sha256(flow_contract)
         contract = _tmd_ope_contract(
             cid, tau, eps, precision, z_dir, b_dir,
-            z_list, b_list, staple_length, color_normalization)
+            z_list, b_list, staple_length, color_normalization,
+            flow_contract_sha256=flow_contract_sha256)
         cdir = _strict_conf_path(run_dir, contract["conf_id"])
         _base, candidates = _tmd_ope_cache_paths(cdir, contract)
         tmd, _cache_path = _load_first_matching_cache(
@@ -909,9 +982,23 @@ def self_renormalize(c0):
 
     c0: (Nsample, nz, nb) 逐样本裸矩阵元。
     Returns: (hR, norm) 逐样本。
+
+    这里的 ``z=0`` 比值是 shape-normalization 诊断，不是零动量混合方案
+    分母；调用方必须把这一事实写入产物状态。复数通道保留复数 dtype，
+    不得静默取实部。
     """
-    c0 = np.asarray(c0, dtype=float)
+    c0 = np.asarray(c0)
+    if c0.ndim != 3:
+        raise ValueError("c0 必须具有 (Nsample,nz,nb) 三轴")
+    if any(size == 0 for size in c0.shape):
+        raise ValueError("c0 的各轴均不得为空")
+    dtype = np.result_type(c0.dtype, np.float64)
+    c0 = c0.astype(dtype, copy=False)
+    if not np.isfinite(c0).all():
+        raise ValueError("c0 必须全部有限")
     norm = c0[:, 0:1, :]           # z=0 每样本每 b
+    if np.any(norm == 0):
+        raise ValueError("c0 的 z=0 归一化分母不得为零")
     return c0 / norm, norm
 
 

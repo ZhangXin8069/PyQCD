@@ -164,11 +164,12 @@ class SingleConfigurationContractTests(unittest.TestCase):
     def _single_configuration_inputs(nt=6, nz=1, nb=None):
         t = np.arange(nt, dtype=np.float64)
         corr = np.exp(-0.25 * t) + 0.01
+        source_resolved = np.broadcast_to(corr[None, :], (nt, nt)).copy()
         corr_2pt = {
             11: {
-                "corr_pp_P2": corr,
-                "corr_pion_P2": 0.8 * corr,
-                "corr_pp_P200": corr,
+                "corr_pp_P2": source_resolved,
+                "corr_pion_P2": 0.8 * source_resolved,
+                "corr_pp_P200": source_resolved,
             }
         }
         values = np.sin(0.4 * t)[None, :]
@@ -397,27 +398,40 @@ class SingleConfigurationContractTests(unittest.TestCase):
         self.assertIn("Nconf=1", report)
 
     def test_tmd_ensemble_ratio_averages_before_dividing(self):
-        """TMD 默认估计量必须是 mean(C3_disc)/mean(C2)，不是逐点比值均值。"""
+        """TMD 估计量必须在 ensemble 联合轴上做真空协方差。"""
         from pyqcd.analysis._tmd_ratio import _disconnected_ratio
 
-        corr2 = np.array([[[1.0], [3.0]]], dtype=np.float64)
-        ope = np.empty((1, 2, 1, 1, 1), dtype=np.float64)
-        ope[0, :, 0, 0, 0] = np.array([2.0, 5.0])
-        corr3 = np.empty((1, 2, 1, 1, 1, 1), dtype=np.float64)
-        corr3[0, :, 0, 0, 0, 0] = np.array([6.0, 12.0])
+        corr2 = np.array(
+            [[[1.0], [1.0]], [[3.0], [3.0]]], dtype=np.float64)
+        ope = np.empty((2, 2, 1, 1, 1), dtype=np.float64)
+        ope[0, :, 0, 0, 0] = 2.0
+        ope[1, :, 0, 0, 0] = 6.0
+        corr3 = np.empty((2, 2, 1, 1, 1, 1), dtype=np.float64)
+        corr3[0, :, 0, 0, 0, 0] = 2.0
+        corr3[1, :, 0, 0, 0, 0] = 18.0
 
         ensemble = _disconnected_ratio(
             corr2, ope, corr3, estimator="ensemble")
-        legacy = _disconnected_ratio(
-            corr2, ope, corr3, estimator="configuration_ratio")
 
-        self.assertEqual(ensemble.shape, (1, 1, 1, 1, 1))
-        self.assertAlmostEqual(float(ensemble[0, 0, 0, 0, 0]), 1.0)
-        self.assertAlmostEqual(float(legacy[0, 0, 0, 0, 0]), 1.5)
+        self.assertEqual(ensemble.shape, (1, 1, 1, 1))
+        self.assertAlmostEqual(float(ensemble[0, 0, 0, 0]), 1.0)
+        with self.assertRaises(ValueError):
+            _disconnected_ratio(
+                corr2, ope, corr3, estimator="configuration_ratio")
+
+    def test_analytic_corr3_path_uses_ensemble_mean_normalization(self):
+        """corr3=None 的 C2*OPE 必须按 configuration 与 source 双重平均。"""
+        from pyqcd.analysis._disconnected import ensemble_covariance_ratio
+
+        corr2 = np.array([[[1.0]], [[3.0]]], dtype=np.float64)
+        ope = np.array([[[[2.0]]], [[[6.0]]]], dtype=np.float64)
+        actual = ensemble_covariance_ratio(corr2, ope)
+        self.assertAlmostEqual(float(actual[0, 0, 0, 0]), 1.0)
+        self.assertNotAlmostEqual(float(actual[0, 0, 0, 0]), 6.0)
 
     def test_tmd_correlator_source_shift_is_applied_once(self):
         """C2(t_sink-t_source) 不得在 full 构造和切片时重复平移。"""
-        from pyqcd.analysis._tmd_ratio import _relative_correlator
+        from pyqcd.analysis._disconnected import _relative_correlator
 
         correlator = np.arange(8, dtype=np.float64)[None, :]
         actual = _relative_correlator(correlator, dt_max=4)
@@ -433,9 +447,11 @@ class SingleConfigurationContractTests(unittest.TestCase):
         corr_2pt = {}
         ope = {}
         for cid, phase in ((11, 0.0), (22, 0.08)):
+            corr1d = np.exp(
+                -0.22 * t + phase * np.cos(0.4 * t)) + 0.01
             corr_2pt[cid] = {
-                "corr_pp_P200": np.exp(
-                    -0.22 * t + phase * np.cos(0.4 * t)) + 0.01,
+                "corr_pp_P200": np.broadcast_to(
+                    corr1d[None, :], (len(t), len(t))).copy(),
             }
             ope[cid] = {
                 "tmd": np.sin(0.3 * t + phase)[None, None, :],
@@ -447,10 +463,12 @@ class SingleConfigurationContractTests(unittest.TestCase):
                 NT=8, nz=1, nb=1,
                 dt_max=5, dt_start=2, dt_end=4, cut=2,
                 momentum="P200",
+                bootstrap_samples=37,
             )["proton"]
 
         self.assertEqual(result["resampling_kind"], "bootstrap")
-        self.assertEqual(result["Nsample"], 200)
+        self.assertEqual(result["Nsample"], 37)
+        self.assertEqual(result["ratio"].shape[0], 37)
 
     def test_extended_plots_single_configuration_skips_direct_energy_fit(self):
         from pyqcd.analysis._extended_plots import generate_energy_style_plots

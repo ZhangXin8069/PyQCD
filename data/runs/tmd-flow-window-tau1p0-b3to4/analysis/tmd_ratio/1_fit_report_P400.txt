@@ -1,0 +1,12 @@
+======================================================================
+  TMD Fit Report: proton, P400, Nconf=11
+======================================================================
+  t_sep range : [7, 10]
+  cut         : 6
+  Nsample     : 1000
+  jackknife   : False
+fit status = statistically_unidentifiable; fit reason = legacy three-parameter fit disabled; use Sumratio-difference artifact
+  nz x nb     : 11 x 2
+======================================================================
+
+legacy three-parameter fit disabled; use Sumratio-difference artifact

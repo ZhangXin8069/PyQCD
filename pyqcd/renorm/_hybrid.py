@@ -2,8 +2,8 @@
 混合方案重整化 + λ 外推 + 傅里叶变换（移植 zengch fit_hR_big_lambda_new.py）。
 
 混合方案（Ji 2021, arXiv:2105.10539；A Hybrid Renormalization Scheme）：
-    z < z_s：  hR(z, Pz) = hB(z, Pz) / hB(z, Pz=0)          （比值方案，短距）
-    z ≥ z_s：  hR(z, Pz) = [hB(z, Pz) / Z_R(z)] · η_s       （自重整化，长距）
+    |z| < z_s：  hR(z, Pz) = hB(z, Pz) / hB(z, Pz=0)        （比值方案，短距）
+    |z| ≥ z_s：  hR(z, Pz) = [hB(z, Pz) / Z_R(z)] · η_s     （自重整化，长距）
     其中 η_s = Z_R(z_s) / hB(z_s, Pz=0) = T_s。
 
 λ 外推：hR(λ) ~ l₁·λ^{−a₁}·e^{−λ/λ₀}（大 λ 的解析尾巴，压制傅里叶截断振荡）。
@@ -45,21 +45,47 @@ def hR_z_Pz(z_, Pz_, hR_pz, hR_0, zs, zr_fit, conf):
     hR_0 = np.asarray(hR_0_raw, dtype=value_dtype)
     zr_fit = np.asarray(zr_fit_raw, dtype=value_dtype)
 
+    if z_.ndim != 1 or z_.size == 0 or not np.isfinite(z_).all():
+        raise ValueError("z_ 必须是非空有限一维数组")
+    if hR_pz.shape[0] != z_.size or hR_0.shape != hR_pz.shape:
+        raise ValueError("hR_pz/hR_0 的 z 轴必须与 z_ 一致且 shape 相同")
+    if zr_fit.shape != z_.shape:
+        raise ValueError("zr_fit 必须与 z_ 同形")
+    if not np.isfinite(hR_pz).all() or not np.isfinite(zr_fit).all():
+        raise ValueError("hR_pz 与 zr_fit 必须全部有限")
+    zs = float(zs)
+    if not np.isfinite(zs) or zs <= 0.0:
+        raise ValueError("zs 必须是有限正数")
+
     pz_gev = pz_to_gev(Pz_, conf)
     z_gev = z_ / fm_to_GeV
     lambda_ = z_gev * pz_gev
 
     res = np.zeros_like(hR_pz, dtype=value_dtype)
-    mask = z_ < zs
+    mask = np.abs(z_) < zs
 
     if hR_pz.ndim == 1:
+        if np.any(hR_0[mask] == 0):
+            raise ValueError("短距 hR_0 分母不得为零")
         res[mask] = hR_pz[mask] / hR_0[mask]
-        eta_s = zr_fit[~mask][0] / hR_0[~mask][0]
-        res[~mask] = (hR_pz[~mask] / zr_fit[~mask]) * eta_s
+        if np.any(~mask):
+            if hR_0[~mask][0] == 0:
+                raise ValueError("长距 hR_0 锚点不得为零")
+            if np.any(zr_fit[~mask] == 0):
+                raise ValueError("长距 Z_R 不得为零")
+            eta_s = zr_fit[~mask][0] / hR_0[~mask][0]
+            res[~mask] = (hR_pz[~mask] / zr_fit[~mask]) * eta_s
     else:
+        if np.any(hR_0[mask] == 0):
+            raise ValueError("短距 hR_0 分母不得为零")
         res[mask] = hR_pz[mask] / hR_0[mask, :]
-        eta_s = (zr_fit[~mask][0] / hR_0[~mask][0])
-        res[~mask] = (hR_pz[~mask] / zr_fit[~mask][:, None]) * eta_s
+        if np.any(~mask):
+            if hR_0[~mask][0] == 0:
+                raise ValueError("长距 hR_0 锚点不得为零")
+            if np.any(zr_fit[~mask] == 0):
+                raise ValueError("长距 Z_R 不得为零")
+            eta_s = (zr_fit[~mask][0] / hR_0[~mask][0])
+            res[~mask] = (hR_pz[~mask] / zr_fit[~mask][:, None]) * eta_s
 
     return lambda_, res
 
@@ -168,63 +194,111 @@ def fit_hR_lambda(par_ini, lambda_range, lamb, hR_data, cov_kind='diag',
 
 
 def hR_lambda(lambda_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
-              zs, z_data, hR_pz, hR_0, zr_fit, conf):
+              zs, z_data, hR_pz, hR_0, zr_fit, conf,
+              allow_extrapolation=False):
     """插值 + 外推拼接的 hR(λ)：λ ≤ λ_extra 用插值，否则用外推尾巴。
 
     Pz_: 格点单位动量（内部经 pz_to_gev 转换为 GeV，与 zengch 原版一致）。
     """
+    if not isinstance(allow_extrapolation, (bool, np.bool_)):
+        raise ValueError("allow_extrapolation 必须是布尔值")
+    allow_extrapolation = bool(allow_extrapolation)
     lambda_data, hR_data = hR_z_Pz(z_data, Pz_, hR_pz, hR_0, zs, zr_fit, conf)
+    if (lambda_data.ndim != 1 or lambda_data.size == 0
+            or not np.isfinite(lambda_data).all()
+            or np.any(np.diff(lambda_data) <= 0.0)):
+        raise ValueError("lambda_data 必须是非空、有限且严格递增的一维数组")
+    try:
+        lambda_extra = float(lambda_extra_)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("lambda_extra_ 必须是有限非负标量") from exc
+    if not np.isfinite(lambda_extra) or lambda_extra < 0.0:
+        raise ValueError("lambda_extra_ 必须是有限非负标量")
+    if not allow_extrapolation and lambda_extra > float(lambda_data[-1]):
+        raise ValueError(
+            "lambda_extra_ 超过实测 lambda 支撑；显式允许外推才能继续")
 
     from scipy.interpolate import interp1d
     interp = interp1d(lambda_data, hR_data, kind='linear', axis=0,
-                      bounds_error=False, fill_value='extrapolate')
+                      bounds_error=False,
+                      fill_value='extrapolate' if allow_extrapolation else np.nan)
 
     if np.ndim(lambda_) == 0:
-        if float(lambda_) <= float(lambda_extra_):
+        lambda_scalar = float(lambda_)
+        if not allow_extrapolation and lambda_scalar > float(lambda_data[-1]):
+            return np.nan
+        if lambda_scalar <= lambda_extra:
             return interp(lambda_)
         return hR_lambda_fit_form(
             lambda_, l1_fit_, a1_fit_, lambda0_fit_)
 
     lambda_array = np.asarray(lambda_)
     result = np.asarray(interp(lambda_array))
-    tail = lambda_array > lambda_extra_
+    tail = lambda_array > lambda_extra
     if np.any(tail):
         result = np.array(result, copy=True)
         result[tail] = hR_lambda_fit_form(
             lambda_array[tail], l1_fit_, a1_fit_, lambda0_fit_)
+    if not allow_extrapolation:
+        result = np.array(result, copy=True)
+        result[lambda_array > float(lambda_data[-1])] = np.nan
     return result
 
 
 def hR_x(x_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
-         zs, z_data, hR_pz, hR_0, zr_fit, conf):
-    """傅里叶变换 → 准 PDF：hR(x) = (2/(2π))·∫dλ hR(λ)·cos(x·λ)。
+         zs, z_data, hR_pz, hR_0, zr_fit, conf, transform='cos'):
+    """傅里叶变换 → 准 PDF，并显式声明实/复通道约定。
 
-    x_ 必须为向量；用快速余弦傅里叶（scipy 数值积分）。
-    Pz_: 格点单位动量（内部经 pz_to_gev 转换为 GeV，与 zengch 原版一致）。"""
-    lambda_max = 60.0   # 积分截断（足够大以覆盖外推尾巴）
+    ``transform='cos'`` 只接受实数 hR，执行偶 cos 变换：
+    ``(1/pi) ∫_0^L cos(xλ) hR(λ) dλ``。
+    ``transform='hermitian'`` 接受实或复 hR，并对复 Hermitian 延拓
+    ``h(-λ)=h(λ)^*`` 使用
+    ``(1/pi) ∫_0^L [cos(xλ) Re hR + sin(xλ) Im hR] dλ``。
+    """
+    if transform not in ('cos', 'hermitian'):
+        raise ValueError("transform 必须是 'cos' 或 'hermitian'")
+    lambda_data, _ = hR_z_Pz(
+        z_data, Pz_, hR_pz, hR_0, zs, zr_fit, conf)
+    lambda_max = float(lambda_data[-1])
+    lambda_extra = min(float(lambda_extra_), lambda_max)
     n = 4096
     lam = np.linspace(0.0, lambda_max, n)
     dlam = lam[1] - lam[0]
 
-    hr = hR_lambda(lam, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
-                   zs, z_data, hR_pz, hR_0, zr_fit, conf)
+    hr = hR_lambda(lam, Pz_, lambda_extra, l1_fit_, a1_fit_, lambda0_fit_,
+                   zs, z_data, hR_pz, hR_0, zr_fit, conf,
+                   allow_extrapolation=False)
     input_dtype = np.result_type(
         np.asarray(hR_pz).dtype,
         np.asarray(hR_0).dtype,
         np.asarray(zr_fit).dtype,
     )
+    if transform == 'cos' and np.iscomplexobj(hr):
+        scale = max(1.0, float(np.max(np.abs(hr.real))))
+        if float(np.max(np.abs(hr.imag))) > 1.0e-12 * scale:
+            raise ValueError(
+                "hR_x(transform='cos') 不接受显著复虚部；"
+                "Hermitian 数据请显式选择 transform='hermitian'")
     out_dtype = (
         input_dtype if np.issubdtype(input_dtype, np.complexfloating)
         else np.float64)
+    cosine = np.cos(np.outer(x_, lam).T)
+    sine = None if transform == 'cos' else np.sin(np.outer(x_, lam).T)
     if hr.ndim > 1:
-        # 逐样本余弦变换
         out = np.empty(
             (len(x_), hr.shape[1]),
             dtype=out_dtype)
         for j in range(hr.shape[1]):
-            out[:, j] = (2.0 / (2.0 * pi)) * dlam * (
-                hr[:, j] @ np.cos(np.outer(x_, lam).T))
+            if transform == 'cos':
+                out[:, j] = (1.0 / pi) * dlam * (
+                    hr[:, j] @ cosine)
+            else:
+                out[:, j] = (1.0 / pi) * dlam * (
+                    hr[:, j].real @ cosine + hr[:, j].imag @ sine)
         return out
-    out = (2.0 / (2.0 * pi)) * dlam * (
-        hr @ np.cos(np.outer(x_, lam).T))
+    if transform == 'cos':
+        out = (1.0 / pi) * dlam * (hr @ cosine)
+    else:
+        out = (1.0 / pi) * dlam * (
+            hr.real @ cosine + hr.imag @ sine)
     return np.asarray(out, dtype=out_dtype)

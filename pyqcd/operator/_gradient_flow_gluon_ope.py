@@ -193,8 +193,10 @@ def _straight_bilocal(gauge, first, second, z_dir, z_count, direction):
 
 
 def _component_set(gauge, fields, channel, z_dir, z_count):
-    transverse = [direction for direction in range(3) if direction != z_dir]
-    i, j = transverse
+    # Keep the reference cyclic assignment.  For z_dir=1 this is (i,j)=(2,0),
+    # not the ascending (0,2); the sum is invariant but the raw direction
+    # component labels are not.
+    i, j = (z_dir + 1) % 3, (z_dir + 2) % 3
     use_dual = channel == "helicity"
 
     def primitive(mu, nu):
@@ -483,6 +485,11 @@ def select_gradient_flow_gluon_component(data, field_projection="traceless",
         if channel != "helicity":
             raise ValueError("helicity_diagnostic_T_plus_S 只适用于 helicity")
         return array[ip, ic, io, 1] + array[ip, ic, io, 2]
+    if channel == "helicity" and component == "combined":
+        raise ValueError(
+            "helicity combined 是 legacy T_H+S_H；请显式选择 "
+            "helicity_physical_T_minus_S 或 "
+            "helicity_diagnostic_T_plus_S")
     try:
         ik = COMPONENTS.index(component)
     except ValueError as exc:

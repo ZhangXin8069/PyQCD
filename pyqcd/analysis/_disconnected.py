@@ -4,9 +4,8 @@
 
 移植冻结蒸馏基线 analyze.py 的 code_1.py 风格分析：
 
-    C3(dt, dtau, z) = C2(dt) · OPE(dtau, z)         （不相连因子化）
-    C3_disc = C3 − C2·⟨OPE⟩                         （真空扣除）
-    R(dt, dtau, z) = ⟨C3_disc / C2⟩_ti
+    C3(dt,dtau,z) = ⟨C2(dt)OPE(dtau,z)⟩ − ⟨C2(dt)⟩⟨OPE(dtau,z)⟩
+    R(dt,dtau,z) = mean_t0(C3) / mean_t0(Re C2)
     逐 z 相关拟合：R = c0 + c1·e^{−dE·dtau} + c1·e^{−dE·(dt−dtau)}
     （lsqfit.nonlinear_fit，svdcut=1e-6，jackknife 协方差）
 
@@ -17,6 +16,7 @@ from __future__ import annotations
 import os
 import operator
 import time
+import hashlib
 
 import numpy as np
 
@@ -95,6 +95,99 @@ def _positive_resample_integer(value, name):
 
 
 _DEFAULT_RESAMPLE_SEED = object()
+
+
+def shared_resampling_indices(n_conf, jackknife, Nsample=None, seed=0):
+    """Return one auditable index matrix shared by all correlated inputs."""
+    n_conf = _positive_resample_integer(n_conf, "n_conf")
+    if n_conf < 2:
+        raise ValueError("physical resampling requires at least two configurations")
+    if not isinstance(jackknife, (bool, np.bool_)):
+        raise TypeError("jackknife must be bool")
+    if jackknife:
+        all_indices = np.arange(n_conf, dtype=np.int64)
+        return np.stack([
+            np.delete(all_indices, omitted) for omitted in range(n_conf)
+        ])
+    Nsample = _positive_resample_integer(Nsample, "Nsample")
+    rng = np.random.default_rng(seed=seed)
+    return rng.integers(0, n_conf, size=(Nsample, n_conf), dtype=np.int64)
+
+
+def ensemble_covariance_ratio(corr2, ope, corr3=None, indices=None):
+    """Recompute disconnected covariance and ratio inside every replica.
+
+    Input axes are ``C2=(conf,source,dt)``, ``OPE=(conf,source,dtau,...)``
+    and optional ``C3=(conf,source,dt,dtau,...)``.  Each row of ``indices``
+    selects configurations for one jackknife/bootstrap replica.  The vacuum
+    subtraction is performed after averaging over the selected ensemble:
+
+    ``mean(C3) - mean(C2)*mean(OPE)``
+
+    then divided by the real unpolarized ``mean(C2)``.  Source and ensemble
+    axes are never collapsed before the covariance is formed.
+    """
+    c2 = np.asarray(corr2)
+    op = np.asarray(ope)
+    if c2.ndim != 3:
+        raise ValueError("corr2 must have (conf,source,dt) axes")
+    if op.ndim < 3 or op.shape[:2] != c2.shape[:2]:
+        raise ValueError(
+            "ope must have (conf,source,dtau,...) with matching leading axes")
+    n_conf, n_source, n_dt = c2.shape
+    if n_conf < 2 or n_source < 1 or n_dt < 1:
+        raise ValueError("corr2 axes must be nonempty and n_conf must be >=2")
+    expected_c3_tail = (n_dt,) + op.shape[2:]
+    if corr3 is None:
+        c3 = None
+        result_tail = expected_c3_tail
+    else:
+        c3 = np.asarray(corr3)
+        if c3.shape != (n_conf, n_source) + expected_c3_tail:
+            raise ValueError("corr3 shape does not match corr2/ope")
+        result_tail = expected_c3_tail
+
+    if indices is None:
+        indices = np.arange(n_conf, dtype=np.int64)[None, :]
+    idx = np.asarray(indices)
+    if idx.ndim != 2 or idx.shape[0] == 0 or idx.shape[1] == 0:
+        raise ValueError("indices must be a nonempty (n_replica,n_conf) matrix")
+    if idx.dtype.kind not in "iu":
+        raise ValueError("indices must contain integers")
+    if np.any(idx < 0) or np.any(idx >= n_conf):
+        raise ValueError("indices are outside the configuration axis")
+
+    dtype = np.result_type(c2.dtype, op.dtype,
+                           np.float64 if c3 is None else c3.dtype)
+    flat_op = op.reshape(n_conf, n_source, op.shape[2], -1).astype(
+        dtype, copy=False)
+    c2_work = c2.astype(dtype, copy=False)
+    c3_flat = None if c3 is None else c3.reshape(
+        n_conf, n_source, *expected_c3_tail).astype(dtype, copy=False)
+
+    output = np.empty((idx.shape[0],) + result_tail, dtype=dtype)
+    for replica, selected in enumerate(idx):
+        c2_sel = c2_work[selected]
+        op_sel = flat_op[selected]
+        if c3_flat is None:
+            cross = np.einsum(
+                "nsd,nstf->dtf", c2_sel, op_sel, optimize=True) / (
+                    n_source * len(selected))
+        else:
+            cross = np.mean(c3_flat[selected], axis=(0, 1))
+        c2_mean = np.mean(c2_sel, axis=(0, 1))
+        op_mean = np.mean(op_sel, axis=(0, 1))
+        numerator = cross - c2_mean[:, None, None] * op_mean[None, :, :]
+        denominator = c2_mean.real
+        if not np.isfinite(denominator).all() or np.any(denominator == 0.0):
+            raise FloatingPointError(
+                "ensemble disconnected ratio has a zero or non-finite C2 denominator")
+        ratio = numerator / denominator[:, None, None]
+        output[replica] = ratio.reshape(result_tail)
+        del c2_sel, op_sel, cross, numerator, ratio
+    if not np.isfinite(output).all():
+        raise FloatingPointError("ensemble disconnected ratio is non-finite")
+    return output
 
 
 def _as_resample_array(data):
@@ -469,7 +562,7 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
     """不相连胶子 ratio + 逐 z 拟合（code_1.py 算法）。
 
     Args:
-        corr_2pt_all: {conf_id: {'corr_pp_P2': (Nt,), 'corr_pion_P2': (Nt,), ...}}
+        corr_2pt_all: {conf_id: {'corr_pp_P2': (source,dt), ...}}
         ope_all:      {conf_id: {'combined': (Nz, Nt)}}
         conf_ids:     组态列表
         run_dir:      输出目录（analysis/disconnected/）
@@ -498,38 +591,47 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
     for ch_key, k2, had_name in channels:
         logger(f"\n  Channel: {had_name} at Pz=2")
 
-        # 平移不变 2pt：C(t_sink, t_src) = C((t_sink − t_src) mod Nt)
         key2 = f'{k2}_P{target_momentum[-1]}'
-        _corr = np.stack([np.real(corr_2pt_all[cid][key2]) for cid in conf_ids])
+        _corr = np.stack([np.asarray(corr_2pt_all[cid][key2]) for cid in conf_ids])
+        if _corr.ndim != 3:
+            raise ValueError(
+                "physical disconnected analysis requires source-resolved C2 "
+                f"with shape (Nconf,source,dt); got {_corr.shape}")
+        if _corr.shape[1] != NT or _corr.shape[2] < dt_max:
+            raise ValueError(
+                "source-resolved C2 must have shape (Nconf,NT,dt>=dt_max)")
+        if np.max(np.abs(_corr.imag), initial=0.0) > 1e-12 * max(
+                1.0, float(np.max(np.abs(_corr.real)))):
+            raise ValueError("C2 contains a material imaginary component")
+        _corr = np.asarray(_corr.real[:, :, :dt_max], dtype=np.float64)
         # OPE combined：(Nconf, Nz, Nt) → (Nconf, tau, z)
         _ope = np.stack([np.real(ope_all[cid]['combined']) for cid in conf_ids])
         _ope = _ope.transpose(0, 2, 1)
 
-        # 相对时间构造
-        _corr2_rel = _relative_correlator(_corr, dt_max)
         _ope_rel = np.zeros((Nconf, NT, dt_max, NX), dtype=np.float64)
         for ti in range(NT):
             ope_shift = np.roll(_ope, -ti, axis=1)
             _ope_rel[:, ti, :, :] = ope_shift[:, :dt_max, :]
 
-        # 不相连 3pt = C2 × OPE（因子化）
-        _corr3 = np.zeros((Nconf, NT, dt_max, dt_max, NX), dtype=np.float64)
-        for _dt in range(dt_max):
-            for _dtau in range(_dt + 1):
-                _corr3[:, :, _dt, _dtau, :] = (
-                    _ope_rel[:, :, _dtau, :] * _corr2_rel[:, :, _dt][:, :, None])
-
-        corr2 = resample(_corr2_rel, jack, Nsample)
-        ope = resample(_ope_rel, jack, Nsample)
-        corr3 = resample(_corr3, jack, Nsample)
-
-        # 真空扣除 + ratio
-        corr3_disc = corr3 - corr2[:, :, :, None, None] * ope[:, :, None, :, :]
-        eps = 1e-30
-        ratio = np.mean(corr3_disc / (corr2[:, :, :, None, None] + eps), axis=1)
-        ratio = ratio.real   # (Nsample, dt_max, dt_max, Nz)
+        if Nconf < 2:
+            indices = None
+            ratio = np.full((1, dt_max, dt_max, NX), np.nan)
+            ratio_original = ratio[0]
+        else:
+            indices = shared_resampling_indices(
+                Nconf, jack, Nsample=Nsample, seed=0)
+            ratio = ensemble_covariance_ratio(
+                _corr, _ope_rel, indices=indices).real
+            ratio_original = ensemble_covariance_ratio(
+                _corr, _ope_rel,
+                indices=np.arange(Nconf, dtype=np.int64)[None, :])[0].real
         np.save(os.path.join(out_dir, f'ratio_{had_name}_P{target_momentum[-1]}.npy'),
                 ratio)
+        np.save(
+            os.path.join(
+                out_dir,
+                f'ratio_original_{had_name}_P{target_momentum[-1]}.npy'),
+            ratio_original)
 
         # 逐 z 相关拟合
         front_remove = cut // 2
@@ -633,6 +735,12 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
             'effective_rank_by_z': effective_rank_by_z,
             'sample_rank_by_z': sample_rank_by_z,
             'required_rank': required_rank,
+            'ratio_original': ratio_original,
+            'bootstrap_indices': indices,
+            'resampling_index_sha256': (
+                None if indices is None else hashlib.sha256(
+                    np.asarray(indices, dtype='<i8').tobytes(order='C')
+                ).hexdigest()),
         }
         channel_reports[had_name] = report_lines
 
@@ -710,6 +818,16 @@ def run_disconnected_ratio(corr_2pt_all, ope_all, conf_ids, run_dir, logger=prin
             "sample_rank": result["sample_rank_by_z"],
             "required_rank": np.asarray(required_rank, dtype=np.int64),
             "channel": np.asarray(had_name),
+            "ratio_original": result["ratio_original"],
+            "bootstrap_indices": (
+                np.asarray([], dtype=np.int64)
+                if result["bootstrap_indices"] is None
+                else np.asarray(result["bootstrap_indices"], dtype=np.int64)),
+            "conf_ids": np.asarray(conf_ids, dtype=np.int64),
+            "resampling_kind": np.asarray("jackknife" if jack else "bootstrap"),
+            "resampling_index_sha256": np.asarray(
+                "none" if result["resampling_index_sha256"] is None
+                else result["resampling_index_sha256"]),
         })
         data_path = os.path.join(out_dir, f"0_fit_data_{had_name}.npz")
         report_path = os.path.join(out_dir, f"1_fit_report_{had_name}.txt")

@@ -73,3 +73,48 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## dev20-absorb-debug - final - 2026-10-22 03:09:58 +0800
+- 主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
+- 日志文件: logs/v2026102203.txt
+- 文件大小: 7011 bytes
+- 触发原因: 任务完成
+- 关键内容: 111 tests pass; source-resolved real conf6250 smoke; physical PDF remains blocked by missing soft/mixing/multi-scale data
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## dev20-absorb-debug-2 - final - 2026-10-22 06:51:46 +0800
+- 主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
+- 日志文件: logs/v2026102206.txt
+- 文件大小: 11485 bytes
+- 触发原因: 任务完成
+- 关键内容: 修复 C2×OPE ensemble 归一化、replica AIC、helicity 复数分母/Fourier/soft 域；112 项回归通过；物理 PDF 仍因 P000 质量和多尺度缺失而 blocked
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## dev20-absorb-debug-3 - final - 2026-10-22 07:18:08 +0800
+- 主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
+- 日志文件: logs/v2026102207.txt
+- 文件大小: 8388 bytes
+- 触发原因: 任务完成
+- 关键内容: 扩展到 11 组态并采用 1000 bootstrap；记录 flow b-window 失败；112 项回归通过，物理 PDF 仍 blocked
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## dev20-absorb-debug-4 - final - 2026-10-22 07:22:06 +0800
+- 主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
+- 日志文件: logs/v2026102207-2.txt
+- 文件大小: 8544 bytes
+- 触发原因: 任务完成
+- 关键内容: 完成 11 组态/1000 bootstrap 真实诊断、严格 LIME 解析、flow b-window fail-closed；112 项回归通过，物理 PDF 仍 blocked
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## dev20-absorb-debug-5 - final - 2026-10-22 07:55:38 +0800
+- 主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
+- 日志文件: logs/v2026102207-3.txt
+- 文件大小: 7481 bytes
+- 触发原因: 任务完成
+- 关键内容: 完成 11 组态 1000 bootstrap、tau=0.5/1.0 受控 flow-window 扫描、严格 LIME I/O；112 项回归通过，物理 PDF 仍 blocked
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+

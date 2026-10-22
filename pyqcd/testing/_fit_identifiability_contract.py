@@ -823,10 +823,12 @@ class LowSampleFitContractTests(unittest.TestCase):
         ope = {}
         for cid, shift in ((11, 0.0), (22, 0.03)):
             corr = np.exp(-(0.25 + shift) * t) + 0.01
+            source_resolved = np.broadcast_to(
+                corr[None, :], (len(t), len(t))).copy()
             corr_2pt[cid] = {
-                "corr_pp_P2": corr,
-                "corr_pion_P2": 0.8 * corr,
-                "corr_pp_P200": corr,
+                "corr_pp_P2": source_resolved,
+                "corr_pion_P2": 0.8 * source_resolved,
+                "corr_pp_P200": source_resolved,
             }
             values = np.sin(0.4 * t + shift)[None, :]
             if nb is None:
@@ -992,7 +994,10 @@ class LowSampleFitContractTests(unittest.TestCase):
             corr = np.exp(-(0.22 + 0.012 * amplitude) * t) * (
                 1.0 + 0.015 * amplitude * np.cos(0.7 * t)
             ) + 0.01
-            corr_2pt[k] = {"corr_pp_P200": corr}
+            corr_2pt[k] = {
+                "corr_pp_P200": np.broadcast_to(
+                    corr[None, :], (len(t), len(t))).copy()
+            }
             values = (
                 np.sin(0.4 * t + 0.13 * amplitude)
                 + 0.04 * amplitude * np.cos(0.9 * t)
@@ -1101,7 +1106,11 @@ class LowSampleFitContractTests(unittest.TestCase):
             self.assertTrue(
                 np.all(plateau_saved["plateau_status"] == "identifiable")
             )
-            self.assertTrue(np.all(plateau_saved["plateau_sample_rank"] == 1))
+            self.assertTrue(np.all(plateau_saved["plateau_sample_rank"] >= 1))
+            self.assertIn("plateau_fit_quality_status", plateau_saved.files)
+            self.assertIn("plateau_physical_result_status", plateau_saved.files)
+            self.assertIn("fit_quality_status", fit_saved.files)
+            self.assertIn("physical_result_status", fit_saved.files)
 
 
 class IdentifiableFitRegressionTests(unittest.TestCase):

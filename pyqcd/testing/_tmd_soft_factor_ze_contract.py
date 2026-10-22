@@ -26,6 +26,7 @@ from pyqcd.renorm import (
     sqrt_Z_E,
     tmd_matching_hybrid,
 )
+from pyqcd.renorm._soft import _sqrt_soft_factor
 from pyqcd.tools import set_backend
 
 
@@ -112,6 +113,21 @@ class TmdSoftFactorZeContract(unittest.TestCase):
         np.testing.assert_allclose(soft, ze / ze[0], rtol=0.0, atol=0.0)
         np.testing.assert_allclose(scaled, soft, rtol=0.0, atol=0.0)
         np.testing.assert_allclose(np.sqrt(soft)[0], 1.0, rtol=0.0, atol=0.0)
+
+    def test_soft_factor_domain_and_reference_point_are_explicit(self):
+        """软因子必须是实正数，参考点不得为零或非有限。"""
+        with self.assertRaisesRegex(ValueError, "严格正"):
+            _sqrt_soft_factor("Z_E", -1.0)
+        with self.assertRaisesRegex(ValueError, "严格正"):
+            _sqrt_soft_factor("Z_E", 0.0)
+        with self.assertRaisesRegex(ValueError, "虚部"):
+            _sqrt_soft_factor("Z_E", 1.0 + 1.0j)
+        with self.assertRaisesRegex(ValueError, "参考点"):
+            soft_function_intrinsic(np.array([0.0, 1.0]), b_perp=[0, 1])
+        with self.assertRaisesRegex(ValueError, "有限"):
+            soft_function_intrinsic(np.array([1.0, np.nan]), b_perp=[0, 1])
+        with self.assertRaisesRegex(ValueError, "一维"):
+            soft_function_intrinsic(np.ones((2, 2)), b_perp=[0, 1])
 
     def test_rapidity_subtraction_enters_matching_only_through_sqrt_soft_factor(self):
         """tmd_matching_hybrid 必须把 soft_factor 作为 sqrt 分母消费。"""

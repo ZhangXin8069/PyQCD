@@ -1,0 +1,8 @@
+======================================================================
+  TMD Fit Report: proton, P200, Nconf=1
+======================================================================
+fit status = statistically_unidentifiable
+effective covariance rank = 0
+sample covariance rank = 0
+required parameter rank = 3
+fit skipped: Nconf=1 cannot support delete-one jackknife covariance

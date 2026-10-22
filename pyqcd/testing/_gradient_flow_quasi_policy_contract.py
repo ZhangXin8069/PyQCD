@@ -121,6 +121,15 @@ class GradientFlowQuasiPolicyContract(unittest.TestCase):
             metadata["local_spin2_factor"], 2.0 - c_loc, places=15
         )
 
+    def test_z0_spin2_local_does_not_contaminate_legacy_projection(self):
+        array = np.repeat(_fixture(), 2, axis=0)
+        array[0, :, :, 1, :, :] = 0.25
+        array[0, :, :, 2, :, :] = 0.10
+        matched, _ = _match(array, z0_policy="spin2_local")
+        self.assertTrue(np.isnan(matched[0, :, :, 0, 0, :]).all())
+        self.assertTrue(np.isfinite(matched[1, 0, :, 0, 0, :]).all())
+        self.assertTrue(np.isnan(matched[1, 1, :, 0, 0, :]).all())
+
     def test_window_mask_separates_validity_from_acceptance(self):
         array = _fixture()
         partial = np.array([False, True, True], dtype=bool)
@@ -232,8 +241,19 @@ class GradientFlowQuasiPolicyContract(unittest.TestCase):
                 physical_acceptance=True,
             )
 
+        with self.assertRaisesRegex(ValueError, "spin2_local"):
+            _match(
+                array,
+                window_mask=np.ones(3, dtype=bool),
+                kappa_F=1.25,
+                absolute_normalization_validated=True,
+                normalization_provenance="independent tree-level oracle test",
+                physical_acceptance=True,
+            )
+
         matched, metadata = _match(
             array,
+            z0_policy="spin2_local",
             window_mask=np.ones(3, dtype=bool),
             kappa_F=1.25,
             absolute_normalization_validated=True,
