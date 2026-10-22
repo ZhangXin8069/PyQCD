@@ -896,6 +896,103 @@ def fit(
     return fit_result, cov, cond, last_fit_info
 
 
+def fit_central(y_coor, x_coor, model, fitpa: FitParams, cov,
+                jackknife: bool = False):
+    """Fit the original ensemble data once with the replica covariance.
+
+    Replica fits estimate uncertainty; they are not substitutes for the
+    full-sample central fit.  Returns ``(fit_info, status, reason, metadata)``.
+    ``fit_info`` is ``None`` when the same rank/identifiability gates used by
+    :func:`fit` fail.
+    """
+    import gvar as gv
+    import lsqfit
+
+    y = _require_finite_array("central y_coor", y_coor).reshape(-1)
+    x = _require_finite_array("central x_coor", x_coor)
+    cov = np.asarray(cov)
+    expected_shape = (y.size, y.size)
+    if cov.shape != expected_shape:
+        raise ValueError(
+            f"central covariance shape must be {expected_shape}, got {cov.shape}")
+    if np.iscomplexobj(y):
+        raise ValueError("central fit requires an explicitly real observable")
+    param_names = list(fitpa.p0.keys())
+    n_params = len(param_names)
+    _evaluate_finite_model(model, x, fitpa.p0, y.size)
+    resolved_svdcut = _validate_svdcut(fitpa.svdcut)
+    eigensystem = _correlation_eigensystem(cov)
+    effective_rank = _covariance_effective_rank_from_eigensystem(
+        eigensystem, resolved_svdcut)
+    sample_rank = _covariance_sample_rank_from_eigensystem(eigensystem)
+    use_prior = fitpa.prior is not None and len(fitpa.prior) > 0
+    if use_prior and set(fitpa.prior) != set(param_names):
+        raise ValueError("prior and p0 must have the same parameter keys")
+    identifiable, gate_reason = fit_identifiability(
+        y.size, n_params, effective_rank, sample_rank=sample_rank,
+        has_prior=use_prior)
+    metadata = {
+        "n_data": int(y.size),
+        "n_param": int(n_params),
+        "effective_rank": int(effective_rank),
+        "sample_rank": int(sample_rank),
+        "svdcut": resolved_svdcut,
+        "jackknife_covariance": bool(jackknife),
+    }
+    if not identifiable:
+        return None, "statistically_unidentifiable", gate_reason, metadata
+    if resolved_svdcut is None and sample_rank < y.size:
+        raise ValueError(
+            "svdcut=None cannot be used with a singular central covariance")
+
+    y_gvar = gv.gvar(y, cov)
+    if use_prior:
+        info = lsqfit.nonlinear_fit(
+            data=(x, y_gvar), prior=fitpa.prior, fcn=model,
+            svdcut=resolved_svdcut)
+    else:
+        info = lsqfit.nonlinear_fit(
+            data=(x, y_gvar), p0=fitpa.p0, fcn=model,
+            svdcut=resolved_svdcut)
+    parameters = {
+        name: float(_require_finite_array(
+            f"central fit parameter {name}", info.pmean[name]).reshape(-1)[0])
+        for name in param_names
+    }
+    fitted = _evaluate_finite_model(model, x, parameters, y.size)
+    residual = _require_finite_array("central fit residual", y - fitted)
+    metadata["residual_rms"] = float(np.sqrt(np.mean(residual ** 2)))
+    if not use_prior:
+        metric = _prepare_jacobian_metric(eigensystem, resolved_svdcut)
+        model_rank = _model_jacobian_rank(
+            model, x, parameters, param_names, cov, resolved_svdcut,
+            y.size, jacobian=fitpa.jacobian, metric=metric)
+        metadata["model_rank"] = int(model_rank)
+        if model_rank < n_params:
+            return (
+                None, "statistically_unidentifiable",
+                f"central model Jacobian rank={model_rank} < Nparam={n_params}",
+                metadata,
+            )
+        info.pyqcd_fit_status = "identifiable"
+        info.pyqcd_data_identifiable = True
+        status = "identifiable"
+    else:
+        info.pyqcd_fit_status = "prior_constrained"
+        info.pyqcd_data_identifiable = None
+        status = "prior_constrained"
+    dof = float(_require_finite_array("central fit dof", info.dof).reshape(-1)[0])
+    if dof <= 0:
+        raise ValueError("central fit dof must be positive")
+    metadata.update({
+        "parameter": parameters,
+        "chi2": float(info.chi2),
+        "dof": dof,
+        "chi2_dof": float(info.chi2 / dof),
+    })
+    return info, status, "identifiable", metadata
+
+
 def make_summary_table(field_names: List[str], rows: List[List[str]],
                        align: Optional[Dict[str, str]] = None) -> str:
     """ASCII 对齐表格（PrettyTable 风格，无外部依赖）。

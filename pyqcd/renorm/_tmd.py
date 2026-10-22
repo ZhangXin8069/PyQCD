@@ -37,6 +37,36 @@ from ..tools._backend import get_backend
 from ..analysis._ratio_fit import fit_constant_window
 
 
+def _normalize_compute_dtype(compute_dtype, reference_dtype):
+    """Return a supported complex backend dtype without host-only coercion."""
+    module = type(reference_dtype).__module__.split(".", 1)[0]
+    if module == "torch":
+        import torch
+        allowed = (torch.complex64, torch.complex128)
+        if compute_dtype in allowed:
+            return compute_dtype
+        if isinstance(compute_dtype, torch.dtype):
+            raise ValueError("compute_dtype 必须是 complex64 或 complex128")
+        try:
+            mapped = {
+                "complex64": torch.complex64,
+                "complex128": torch.complex128,
+            }[str(compute_dtype)]
+        except KeyError as exc:
+            raise ValueError(
+                "compute_dtype 必须是 complex64 或 complex128") from exc
+        return mapped
+
+    try:
+        resolved = np.dtype(compute_dtype)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "compute_dtype 必须是 complex64 或 complex128") from exc
+    if resolved not in (np.dtype("complex64"), np.dtype("complex128")):
+        raise ValueError("compute_dtype 必须是 complex64 或 complex128")
+    return resolved
+
+
 def _to_cpu(x):
     """后端无关的 GPU→CPU 转换（运行时取后端，兼容 numpy/cupy/torch）。"""
     asnumpy = getattr(get_backend(), 'asnumpy', None)
@@ -172,15 +202,20 @@ def M_mu_lambda_nu_rho(U, mu, lam, nu, rho, z, b_perp, z_dir=2, b_dir=0,
     z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
     if compute_dtype is None:
         compute_dtype = U.dtype
+    else:
+        U = cp.asarray(U)
+    compute_dtype = _normalize_compute_dtype(compute_dtype, U.dtype)
+    U = cp.asarray(U, dtype=compute_dtype)
 
     F_mu = plaquette_clover(U, mu, lam)
     F_nu = plaquette_clover(U, nu, rho)
 
     W = staple_wilson_line(U, z, b_perp, z_dir, b_dir, L)
 
-    return _matrix_element_from_fields(
+    result = _matrix_element_from_fields(
         F_mu, F_nu, W, z, b_perp, z_dir, b_dir,
         color_normalization=color_normalization)
+    return cp.astype(result, compute_dtype)
 
 
 def _color_normalization_factor(color_normalization):
@@ -229,8 +264,10 @@ def _traceless_color_field(field):
 def _tmd_clover_fields(U, z_dir, b_dir):
     """返回纵向 ``z_dir`` 对应的两个 transverse 场与平面场。"""
     z_dir, _ = _validate_spatial_directions(z_dir, b_dir)
-    i, j = (direction for direction in (0, 1, 2)
-            if direction != z_dir)
+    # Use the same cyclic convention as the reference: i=(z_dir+1)%3,
+    # j=(z_dir+2)%3.  The combined unpolarized operator is symmetric under
+    # i<->j, but the raw ti/tj fields are not.
+    i, j = (z_dir + 1) % 3, (z_dir + 2) % 3
     return (
         plaquette_clover(U, 3, i),
         plaquette_clover(U, 3, j),
@@ -300,14 +337,15 @@ def tmd_matrix_elements(U, z_list, b_list, z_dir=2, b_dir=0, L=None,
             W = staple_wilson_line(U, z, b, z_dir, b_dir, batch_L)
             O = _gluon_tmd_operator_from_fields(
                 fields, W, z, b, z_dir, b_dir, color_normalization)
-            if spatial_sum:
-                val = _to_cpu(cp.sum(O, axis=(1, 2, 3)))
-            else:
-                val = _to_cpu(O)
+            # Validate the local operator before summing over space.  A
+            # spatially alternating material imaginary part must not cancel
+            # into an apparently real, summed observable.
             checked = _checked_real_part(
-                val, "tmd_matrix_elements output")
+                _to_cpu(O), "tmd_matrix_elements local output")
+            checked = np.asarray(checked, dtype=np.float64)
             if spatial_sum:
-                out[i, j] = np.mean(checked)
+                out[i, j] = np.mean(
+                    np.sum(checked, axis=(1, 2, 3)))
             else:
                 out[i, j] = checked
     return out
@@ -338,9 +376,10 @@ def tmd_matrix_elements_time(
             W = staple_wilson_line(U, z, b, z_dir, b_dir, batch_L)
             O = _gluon_tmd_operator_from_fields(
                 fields, W, z, b, z_dir, b_dir, color_normalization)
-            val = _to_cpu(cp.sum(O, axis=(1, 2, 3)))
-            out[i, j] = _checked_real_part(
-                val, "tmd_matrix_elements_time output")
+            checked = _checked_real_part(
+                _to_cpu(O), "tmd_matrix_elements_time local output")
+            checked = np.asarray(checked, dtype=np.float64)
+            out[i, j] = np.sum(checked, axis=(1, 2, 3))
     return out
 
 

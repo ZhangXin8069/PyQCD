@@ -10,8 +10,10 @@ import numpy as np
 
 from pyqcd.renorm import (
     alpha_s,
+    fit_ZR,
     fit_hR_PDF_extrap_boot,
     hR_form,
+    hR_lambda,
     hR_PDF,
     hR_z_Pz,
     prepare_zr_dataset,
@@ -96,12 +98,38 @@ class HybridComplexContract(unittest.TestCase):
                 np.array([0.1, 0.2]), 4, 0.3,
                 1.0, 1.0, 0.5,
                 zs=0.4, z_data=z, hR_pz=hR_pz, hR_0=hR_0,
-                zr_fit=zr, conf="L24x72",
+                zr_fit=zr, conf="L24x72", transform="hermitian",
             )
         self.assertEqual(transformed.dtype, np.dtype(np.complex64))
         self.assertFalse(any(
             "divide by zero" in str(item.message) for item in caught
         ))
+        with self.assertRaisesRegex(ValueError, "Hermitian|虚部"):
+            hR_x(
+                np.array([0.1, 0.2]), 4, 0.3,
+                1.0, 1.0, 0.5,
+                zs=0.4, z_data=z, hR_pz=hR_pz, hR_0=hR_0,
+                zr_fit=zr, conf="L24x72",
+            )
+
+    def test_hybrid_tail_does_not_extrapolate_past_measured_lambda(self):
+        """未显式 opt-in 时，lambda 不得由插值器静默线性外推。"""
+        z = np.array([0.0, 0.2, 0.8])
+        hR_pz = np.array([2.0, 4.0, 6.0])
+        hR_0 = np.array([1.0, 2.0, 3.0])
+        zr = np.array([1.0, 1.5, 2.0])
+        lambda_data, _ = hR_z_Pz(
+            z, 4, hR_pz, hR_0, zs=0.4, zr_fit=zr, conf="L24x72")
+        with self.assertRaisesRegex(ValueError, "超过实测"):
+            hR_lambda(
+                lambda_data[-1] + 1.0, 4, lambda_data[-1] + 0.5,
+                1.0, 1.0, 0.5, zs=0.4, z_data=z, hR_pz=hR_pz,
+                hR_0=hR_0, zr_fit=zr, conf="L24x72")
+        outside = hR_lambda(
+            lambda_data[-1] + 1.0, 4, lambda_data[-1] - 0.1,
+            1.0, 1.0, 0.5, zs=0.4, z_data=z, hR_pz=hR_pz,
+            hR_0=hR_0, zr_fit=zr, conf="L24x72")
+        self.assertTrue(np.isnan(outside))
 
 
 class CouplingDomainContract(unittest.TestCase):
@@ -152,8 +180,8 @@ class KernelInvalidRatioContract(unittest.TestCase):
             cs_kernel_two_momentum(c01, c02, 4.0, 2.0, z_ref=1),
             np.array([1.0]), rtol=0.0, atol=1e-15)
 
-    def test_nonpositive_or_nonfinite_ratios_are_rejected_before_clipping(self):
-        for first in (-1.0, 0.0, np.nan):
+    def test_zero_or_nonfinite_ratios_are_rejected_before_clipping(self):
+        for first in (0.0, np.nan):
             with self.subTest(first=first):
                 with self.assertRaises(ValueError):
                     cs_kernel_from_ratio(
@@ -162,6 +190,19 @@ class KernelInvalidRatioContract(unittest.TestCase):
                     cs_kernel_two_momentum(
                         np.array([[first]]), np.array([[1.0]]),
                         4.0, 2.0, k_clip=(-3.0, 3.0))
+
+    def test_negative_ratio_uses_documented_log_absolute_value(self):
+        np.testing.assert_allclose(
+            cs_kernel_from_ratio(
+                np.array([-2.0, 3.0]), np.array([1.0, 2.0]), 4.0, 2.0),
+            np.log(2.0) / np.log(2.0), rtol=0.0, atol=0.0)
+        z = np.arange(3)[:, None]
+        c02 = np.exp(-z / 0.3)
+        c01 = np.sign(0.5 - z) * c02 * 2.0 ** z
+        np.testing.assert_allclose(
+            cs_kernel_two_momentum(
+                c01, c02, 4.0, 2.0, z_ref=1),
+            np.array([1.0]), rtol=0.0, atol=1e-15)
 
     def test_boolean_scalars_and_arrays_are_rejected(self):
         with self.assertRaises(ValueError):
@@ -325,6 +366,20 @@ class TmdImaginaryResidualContract(unittest.TestCase):
 
 
 class ZRCovarianceAndSummaryContract(unittest.TestCase):
+    def test_failed_scipy_zr_optimizer_cannot_return_finite_parameters(self):
+        z = np.linspace(0.01, 0.28, 25)
+        dataset = {
+            "z": z, "loghB": np.linspace(0.1, 0.5, z.size),
+            "c_inv": np.eye(z.size), "a": 0.53,
+        }
+        bad = SimpleNamespace(
+            x=np.arange(21, dtype=float) + 1.0,
+            success=False, fun=np.nan, message="forced failure")
+        with patch("scipy.optimize.minimize", return_value=bad):
+            with self.assertRaisesRegex(RuntimeError, "failed"):
+                fit_ZR(
+                    np.ones(21), [dataset], 2.0, use_iminuit=False)
+
     def test_diag_covariance_regression_uses_actual_positive_variances(self):
         samples = np.array([[0.0, 1.0], [2.0, 4.0]])
         prepared = prepare_zr_dataset(

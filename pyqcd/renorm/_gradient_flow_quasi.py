@@ -246,6 +246,10 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
                 or not normalization_provenance.strip()):
             raise ValueError(
                 "physical_acceptance=True 要求非空 normalization_provenance")
+        if z0_policy != "spin2_local":
+            raise ValueError(
+                "physical_acceptance=True 要求 z=0 使用 spin2_local；"
+                "默认 nan policy 会留下非有限局域点")
 
     c_parallel, c_perp, delta_m, t_gev = coefficients(
         tau, a_fm, mu_gev, alpha_s, ca
@@ -288,9 +292,14 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
             array[:, 0, :, 1, 0, :] - array[:, 0, :, 2, 0, :]
         )
         out[..., 0, :] = np.nan
-        out[:, 0, :, 0, 0, :] = local_factor * raw_local
+        # The local spin-2 coefficient is derived for the connection-field
+        # (traceless) projection.  Do not silently apply it to a legacy
+        # untraced projection when both are present.
+        projection_index = 1 if array.shape[0] > 1 else 0
+        out[projection_index, 0, :, 0, 0, :] = (
+            local_factor * raw_local[projection_index])
         if kappa_F is not None:
-            out[:, 0, :, 0, 0, :] *= kappa_F ** 2
+            out[projection_index, 0, :, 0, 0, :] *= kappa_F ** 2
         z0_status = "spin2_local_unpolarized_combined"
     else:
         z0_status = "legacy_endpoint_factor_explicit_opt_in"

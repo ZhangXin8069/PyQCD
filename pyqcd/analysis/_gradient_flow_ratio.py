@@ -98,11 +98,10 @@ def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
         - o_times_c_mean_source / (nconf * nconf)
     )
     c2_central = np.mean(sum_denominator, axis=0) / nconf
-    c2_central_real = np.real(c2_central)
-    if (np.any(~np.isfinite(c2_central_real))
-            or np.any(c2_central_real == 0.0)):
+    if (np.any(~np.isfinite(c2_central))
+            or np.any(c2_central == 0.0)):
         raise FloatingPointError(
-            "ratio denominator Re(C2) contains zero/non-finite value")
+            "ratio denominator C2 contains zero/non-finite value")
 
     shape = c3_central.shape
     nan_complex = np.full(shape, np.nan + 1j * np.nan, dtype=np.complex128)
@@ -136,17 +135,16 @@ def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
         np.mean(sum_denominator, axis=0)[None, :]
         - np.mean(denominator, axis=1)
     ) / nminus
-    c2_jackknife_real = np.real(c2_jackknife)
-    if (np.any(~np.isfinite(c2_jackknife_real))
-            or np.any(c2_jackknife_real == 0.0)):
+    if (np.any(~np.isfinite(c2_jackknife))
+            or np.any(c2_jackknife == 0.0)):
         raise FloatingPointError(
-            "delete-one ratio denominator Re(C2) contains zero/non-finite value")
+            "delete-one ratio denominator C2 contains zero/non-finite value")
     ratio_jackknife = (
-        c3_jackknife / c2_jackknife_real[:, None, :]
+        c3_jackknife / c2_jackknife[:, None, :]
     )
     jk_mean = np.mean(ratio_jackknife, axis=0)
     jk_bias_corrected = (
-        nconf * (c3_central / c2_central_real[None, :])
+        nconf * (c3_central / c2_central[None, :])
         - nminus * jk_mean
     )
     prefactor = nminus / nconf
@@ -267,7 +265,7 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
                         slice(None), dt_index, insertion, slice(None),
                     )
                     c3[target] = c3_one.reshape(shape)
-                    central_ratio = c3_one / np.real(c2_one)[None, :]
+                    central_ratio = c3_one / c2_one[None, :]
                     ratio[target] = central_ratio.reshape(shape)
                     jk_mean[target] = mean_one.reshape(shape)
                     jk_bias[target] = bias_one.reshape(shape)
@@ -303,14 +301,15 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
 calculate_ratios = calculate_gradient_flow_ratios
 
 
-def physical_helicity_ratio(ratio, *, orientation="odd_difference",
-                            component=None):
+def physical_helicity_ratio(
+        ratio, *, orientation="odd_difference",
+        component="helicity_physical_T_minus_S"):
     """取参考 helicity 的最终 Euclidean 相位投影 ``Re[-i R_H]``。
 
     对 schema-v2 的 ``combined``，参考 OPE 文件保存的是
     ``Mtiti+Mijij``；理论目标 ``Mtiti-Mijij`` 应在 OPE 层显式选择后
-    再进入 ratio。默认返回指定 orientation 下的全部 component；传入
-    ``component`` 时只返回该 component。
+    再进入 ratio。默认直接返回理论目标 ``T_H-S_H``；``component=None``
+    才返回指定 orientation 下的全部 component，供显式诊断使用。
     """
     array = np.asarray(ratio, dtype=np.complex128)
     if array.ndim < 2:
@@ -322,9 +321,22 @@ def physical_helicity_ratio(ratio, *, orientation="odd_difference",
     if array.shape[0] < 2 or array.shape[1] <= io:
         raise ValueError("ratio 缺少 helicity/orientation 轴")
     selected = array[1, io]
-    if component is not None:
+    if component == "helicity_physical_T_minus_S":
+        if selected.ndim < 1 or selected.shape[0] < 3:
+            raise ValueError("ratio 未保存 Mtiti/Mijij component")
+        selected = selected[1] - selected[2]
+    elif component == "helicity_diagnostic_T_plus_S":
+        if selected.ndim < 1 or selected.shape[0] < 3:
+            raise ValueError("ratio 未保存 Mtiti/Mijij component")
+        selected = selected[1] + selected[2]
+    elif component is not None:
         if component not in COMPONENTS:
             raise ValueError(f"未知 component: {component}")
+        if component == "combined":
+            raise ValueError(
+                "helicity combined 是 legacy T_H+S_H；请显式选择 "
+                "helicity_physical_T_minus_S 或 "
+                "helicity_diagnostic_T_plus_S")
         if selected.ndim < 1 or selected.shape[0] not in (3, len(COMPONENTS)):
             raise ValueError(
                 "按 component 选择时，ratio 必须保留前三组件或完整六组件轴")
@@ -421,8 +433,7 @@ def validate_gradient_flow_ratio_results(results, *, nconf=None):
             errors[1][expanded_valid] < 0.0):
         raise ValueError("jackknife 误差不能为负")
 
-    denominator = np.real(
-        c2[0][None, None, None, :, None, :, None, :])
+    denominator = c2[0][None, None, None, :, None, :, None, :]
     expected_ratio = c3 / denominator
     if not np.allclose(
             ratio[expanded_valid], expected_ratio[expanded_valid],

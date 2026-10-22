@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 import os
+import struct
 
 import numpy as np
 
@@ -909,56 +910,74 @@ def _resolve_ildg_binary_record(filepath):
     return resolve_ildg_binary_record(filepath)
 
 
+def _find_lime_payload(filepath, expected_bytes):
+    """Return the offset of the unique ildg-binary-data payload."""
+    file_size = os.path.getsize(filepath)
+    with open(filepath, "rb") as stream:
+        pos = 0
+        while pos + 144 <= file_size:
+            stream.seek(pos)
+            header = stream.read(144)
+            if len(header) != 144:
+                break
+            magic = struct.unpack(">I", header[:4])[0]
+            if magic != 0x456789AB:
+                raise ValueError(
+                    f"invalid LIME magic at offset {pos} in {filepath}")
+            # The 4-byte field at [4:8] is part of the LIME record header;
+            # the payload length is the big-endian 64-bit word at [8:16].
+            length = struct.unpack(">Q", header[8:16])[0]
+            record_type = header[16:144].split(b"\0", 1)[0]
+            data_offset = pos + 144
+            if data_offset + length > file_size:
+                raise ValueError(
+                    f"LIME record exceeds file size at offset {pos} in {filepath}")
+            if record_type == b"ildg-binary-data":
+                if length != expected_bytes:
+                    raise ValueError(
+                        "ILDG payload bytes mismatch: "
+                        f"got {length}, expected {expected_bytes}")
+                return data_offset
+            padded = (length + 7) & ~7
+            next_pos = data_offset + padded
+            if next_pos <= pos:
+                raise ValueError(f"non-advancing LIME record in {filepath}")
+            pos = next_pos
+    raise ValueError(f"LIME ildg-binary-data record not found in {filepath}")
+
+
 def read_gauge_lime(filepath: str, Nt: int, Nx: int, Nc: int = 3) -> np.ndarray:
     """读 .lime 规范组态 → complex128 (Nt,Nx,Nx,Nx,4,Nc,Nc)。
 
-    ILDG .lime 为大端 float64 + XML 头 + 尾部记录；扫描 ±16KB 窗口
-    按幺正性定位数据起点。
+    ILDG .lime 为大端 float64 LIME records。实现严格遍历 record magic、
+    length、128-byte type，并要求唯一的 ``ildg-binary-data`` payload 精确
+    等于格点数组字节数；不再用首链接幺正性猜测任意偏移。
 
     ``filepath`` 也可以是解包后的 ``.lime.contents`` 目录；此时读取其
     标准 ``msg02.rec04.ildg-binary-data`` 记录。
 
-    优化：幺正性判定只需首链接（18 个 double = 144B）。先用微小探针定位
-    合法偏移，命中后才全量读取一次，避免每个候选偏移都读整份（≈573MB）
-    造成的 TB 级读盘与乱字节数据导致的 matmul 溢出告警。扫描顺序、阈值
-    与回退逻辑与原实现完全一致。
+    解包后的目录仍可直接指向标准 payload 文件；容器文件走严格 LIME
+    record 解析。
     """
     filepath = resolve_ildg_binary_record(filepath)
     expected_elems = Nt * Nx * Nx * Nx * 4 * Nc * Nc * 2
     expected_bytes = expected_elems * 8
     file_size = os.path.getsize(filepath)
-    approx_off = file_size - expected_bytes
-
-    def _read_at(off):
-        with open(filepath, 'rb') as f:
-            f.seek(off)
-            return np.fromfile(f, dtype='>f8', count=expected_elems)
-
-    def _probe_unitarity(off: int) -> bool:
-        """仅读首链接（144B）判定偏移合法性。"""
-        if off < 0 or off + expected_bytes > file_size:
-            return False
-        with open(filepath, 'rb') as f:
-            f.seek(off)
-            head = np.fromfile(f, dtype='>f8', count=Nc * Nc * 2)
-        if head.size != Nc * Nc * 2:
-            return False
-        return _first_link_unitarity(head, Nc) < 1e-3
-
-    if 0 <= approx_off < file_size and _probe_unitarity(approx_off):
-        raw = _read_at(approx_off)
-        if raw.size == expected_elems and _first_link_unitarity(raw, Nc) < 1e-3:
-            return _gauge_from_raw(raw, Nt, Nx, Nc)
-
-    for delta in range(-16384, 16385, 8):
-        off = approx_off + delta
-        if _probe_unitarity(off):
-            raw = _read_at(off)
-            if raw.size == expected_elems and _first_link_unitarity(raw, Nc) < 1e-3:
-                return _gauge_from_raw(raw, Nt, Nx, Nc)
-
-    raise ValueError(f"No valid gauge data found in {filepath} "
-                     f"(size={file_size} bytes)")
+    if file_size == expected_bytes:
+        payload_offset = 0
+    else:
+        payload_offset = _find_lime_payload(filepath, expected_bytes)
+    with open(filepath, "rb") as stream:
+        stream.seek(payload_offset)
+        raw = np.fromfile(stream, dtype=">f8", count=expected_elems)
+    if raw.size != expected_elems:
+        raise ValueError(
+            f"ILDG payload read mismatch in {filepath}: "
+            f"got {raw.size} doubles, expected {expected_elems}")
+    if _first_link_unitarity(raw, Nc) >= 1e-3:
+        raise ValueError(
+            f"ILDG payload first link is not unitary in {filepath}")
+    return _gauge_from_raw(raw, Nt, Nx, Nc)
 
 
 def _gauge_from_raw(raw: np.ndarray, Nt: int, Nx: int, Nc: int = 3) -> np.ndarray:

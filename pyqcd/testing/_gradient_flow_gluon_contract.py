@@ -162,6 +162,11 @@ class GradientFlowGluonContract(unittest.TestCase):
         )
         expected = data[1, 1, 3, 1] - data[1, 1, 3, 2]
         np.testing.assert_allclose(physical, expected, rtol=0, atol=2e-12)
+        with self.assertRaisesRegex(ValueError, "legacy|显式选择"):
+            select_gradient_flow_gluon_component(
+                data, channel="helicity", orientation="odd_difference",
+                component="combined",
+            )
         np.testing.assert_allclose(
             data[:, :, 2], data[:, :, 0] + data[:, :, 1],
             rtol=0, atol=2e-12,
@@ -280,17 +285,11 @@ class GradientFlowGluonContract(unittest.TestCase):
         c2 = nopol.mean(axis=(0, 1))
         np.testing.assert_allclose(got[0], c3, rtol=0, atol=3e-14)
         np.testing.assert_allclose(got[1], c2, rtol=0, atol=3e-14)
-        np.testing.assert_allclose(
-            got[0] / got[1].real[None, :],
-            c3 / c2.real[None, :],
-            rtol=0, atol=3e-14,
-        )
         complex_division = c3 / c2[None, :]
-        self.assertGreater(
-            float(np.max(np.abs(
-                c3 / c2.real[None, :] - complex_division))),
-            1e-5,
-            "C2 非零虚部未区分 Re(C2) 分母与复数除法",
+        np.testing.assert_allclose(
+            got[0] / got[1][None, :],
+            complex_division,
+            rtol=0, atol=3e-14,
         )
         wrong = covariance_ratio_estimator(
             operator, pol35.imag, True, denominator_correlator=nopol
@@ -337,15 +336,14 @@ class GradientFlowGluonContract(unittest.TestCase):
             result["c2_mean"][0], result["c2_mean"][1], rtol=0, atol=0
         )
         phase = physical_helicity_ratio(result["ratio"])
-        self.assertEqual(phase.shape, result["ratio"].shape[2:])
+        self.assertEqual(phase.shape, result["ratio"].shape[3:])
         self.assertTrue(np.isrealobj(phase))
         combined_phase = physical_helicity_ratio(
-            result["ratio"], component="combined"
+            result["ratio"], component="helicity_diagnostic_T_plus_S"
         )
-        self.assertEqual(combined_phase.shape, result["ratio"].shape[3:])
-        np.testing.assert_allclose(
-            combined_phase, phase[0], rtol=0, atol=0
-        )
+        self.assertEqual(combined_phase.shape, phase.shape)
+        with self.assertRaisesRegex(ValueError, "legacy|显式选择"):
+            physical_helicity_ratio(result["ratio"], component="combined")
 
     def test_npz_json_roundtrip_is_atomic_and_strict(self):
         from pyqcd.operator import (

@@ -193,6 +193,8 @@ def _cost_function_core(z_set_, hb_data, c_inv, a_, mu_, par_g_set,
     hb_th = th_hB(z_set_, a_, mu_, par_g_set, f_set, z1_fm)
     del_hb = hb_th - np.asarray(hb_data, dtype=float)
     chi2 = del_hb.T @ np.asarray(c_inv, dtype=float) @ del_hb
+    if not np.isfinite(chi2) or chi2 < -1e-10:
+        return np.inf
     return chi2 / data_num
 
 
@@ -201,7 +203,16 @@ def _cost_function_prepared(z_set_, hb_data, c_inv, a_, mu_, par_g_set,
     data_num = len(z_set_)
     hb_th = th_hB(z_set_, a_, mu_, par_g_set, f_set, z1_fm)
     del_hb = hb_th - hb_data
+    if not np.isfinite(del_hb).all():
+        return np.inf
     chi2 = del_hb.T @ c_inv @ del_hb
+    if not np.isfinite(chi2):
+        return np.inf
+    # Tiny negative roundoff is allowed; a material negative quadratic form
+    # means the optimizer entered an invalid parameter region.
+    scale = float(np.max(np.abs(del_hb), initial=0.0) ** 2)
+    if chi2 < -1e-10 * max(1.0, scale):
+        return np.inf
     return chi2 / data_num
 
 
@@ -277,6 +288,8 @@ def _cost_function_all_prepared(par_set, datasets, mu_):
         chi2_sum += chi2 * ds.n_points
         n_sum += ds.n_points
     dof = n_sum - len(par_set)
+    if dof <= 0:
+        return np.inf
     return chi2_sum / dof
 
 
@@ -539,6 +552,16 @@ def _fit_ZR_prepared(par_ini, datasets, mu_, use_iminuit=True):
     def cost(par):
         return _cost_function_all_prepared(par, datasets, mu_)
 
+    par_ini = np.asarray(par_ini, dtype=float)
+    if par_ini.shape != (len(par_name),) or not np.isfinite(par_ini).all():
+        raise ValueError(
+            f"Z_R parameter seed must contain {len(par_name)} finite values")
+    initial_cost = float(cost(par_ini))
+    if not np.isfinite(initial_cost):
+        raise ValueError("Z_R initial parameters lie outside the finite cost domain")
+    if initial_cost <= 1.0e-12:
+        return par_ini
+
     if use_iminuit:
         try:
             from iminuit import Minuit
@@ -550,14 +573,26 @@ def _fit_ZR_prepared(par_ini, datasets, mu_, use_iminuit=True):
             m.limits['Lambda_QCD'] = (0, None)
             m.fixed['f1', 'f2', 'm2'] = True
             m.migrad()
-            return np.array(m.values)
+            fmin = getattr(m, "fmin", None)
+            valid = getattr(m, "valid", True)
+            valid = valid and getattr(fmin, "is_valid", True)
+            values = np.asarray(m.values, dtype=float)
+            fval = float(getattr(fmin, "fval", np.nan))
+            if not valid or not np.isfinite(fval) or not np.isfinite(values).all():
+                raise RuntimeError("iminuit Z_R fit failed or reached an invalid minimum")
+            return values
         except ImportError:
             pass  # 回退到 scipy
 
     from scipy.optimize import minimize
     res = minimize(cost, par_ini, method='Nelder-Mead',
-                   options={'maxiter': 5000, 'xatol': 1e-6})
-    return res.x
+                   options={'maxiter': 20000, 'maxfev': 40000,
+                            'xatol': 1e-8, 'fatol': 1e-10})
+    values = np.asarray(res.x, dtype=float)
+    if (not res.success or not np.isfinite(res.fun)
+            or not np.isfinite(values).all()):
+        raise RuntimeError(f"scipy Z_R fit failed: {res.message}")
+    return values
 
 
 def fit_ZR(par_ini, datasets, mu_, use_iminuit=True):

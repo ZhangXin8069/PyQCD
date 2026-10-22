@@ -987,7 +987,7 @@ def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
                                  precision=PRECISION,
                                  channels=('pp', 'pn', 'pion'),
                                  v_kind='VVV', strict_cache=None,
-                                 recompute=False):
+                                 recompute=False, source_resolved=False):
     """多动量 2pt（test9 胶子 TMD 物理链用）：按 (pz,py,px) 列表逐动量计算。
 
     momenta: 形如 [(pz,py,px), ...] 的动量列表（格点单位 2π/L）。
@@ -995,6 +995,9 @@ def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
     使用边界明确格式（如 corr_pp_P10_-2_0）。
     顶点由 compute_vertices_for_config 的 mom_sink_vdv/vvv 提供对应索引。
     """
+    if not isinstance(source_resolved, (bool, np.bool_)):
+        raise ValueError("source_resolved 必须是布尔值")
+    source_resolved = bool(source_resolved)
     if strict_cache is not None and not recompute:
         cached = _load_strict_cache_mapping(strict_cache, logger)
         if cached is not None:
@@ -1025,7 +1028,8 @@ def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
     }
     op_cfg = {ch: op_cfg[ch] for ch in channels}
 
-    acc = {f'corr_{ch}_{tag}': np.zeros(NT, dtype=np.float64)
+    output_shape = (NT, NT) if source_resolved else (NT,)
+    acc = {f'corr_{ch}_{tag}': np.zeros(output_shape, dtype=np.float64)
            for ch in channels for tag in tags}
     _info(logger, f"  2pt multi: channels={list(op_cfg.keys())}, "
                   f"momenta={list(momenta)}, v_kind={v_kind}")
@@ -1056,14 +1060,39 @@ def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
                                    peram_t, peram_seq_t,
                                    t_src, t_sink, v_src, v_sink, v_kind,
                                    gname, gval, projector)
-                    acc[f'corr_{ch}_{tag}'][dt] += val / NT
+                    val_value = val
+                    if hasattr(val_value, 'detach'):
+                        val_value = val_value.detach().cpu().numpy()
+                    elif hasattr(val_value, 'get') and callable(val_value.get):
+                        val_value = val_value.get()
+                    val_array = np.asarray(val_value)
+                    if np.iscomplexobj(val_array):
+                        imaginary = float(np.max(np.abs(val_array.imag)))
+                        scale = max(1.0, float(np.max(np.abs(val_array.real))))
+                        tolerance = (
+                            1e-5 if val_array.dtype == np.dtype('complex64')
+                            else 1e-12)
+                        if imaginary > tolerance * scale:
+                            raise ValueError(
+                                "multi-2pt contraction has a material imaginary residual")
+                    val_real = float(np.real(val_array))
+                    if source_resolved:
+                        # First axis is the nucleon source, second is the
+                        # source-sink separation.  This preserves the source
+                        # covariance needed by the disconnected estimator.
+                        acc[f'corr_{ch}_{tag}'][t_src, dt] = val_real
+                    else:
+                        acc[f'corr_{ch}_{tag}'][dt] += val_real / NT
 
         if t_src % 12 == 0 or t_src == NT - 1:
+            sample_index = (0, 0) if source_resolved else 0
+            progress = " ".join(
+                f"{ch}{tags[0]}="
+                f"{acc[f'corr_{ch}_{tags[0]}'][sample_index]:.4e}"
+                for ch in channels)
             _info(logger, f"    t_src={t_src:3d}/{NT} "
                           f"elapsed={time.perf_counter()-t_start:.0f}s "
-                          + " ".join(
-                              f"{ch}{tags[0]}={acc[f'corr_{ch}_{tags[0]}'][0]:.4e}"
-                              for ch in channels))
+                          + progress)
         del peram_t, peram_seq_t
 
     if strict_cache is not None:
@@ -1085,7 +1114,8 @@ def compute_2pt_for_config_multi(conf_id, run_dir, logger, vertices,
                 spec['path'], arr, logger,
                 attrs=_strict_contract_attrs(spec['contract']))
     _info(logger, f"  2pt multi saved: " + ", ".join(
-        f"{k}={v[0]:.3e}" for k, v in acc.items()))
+        f"{k}={v[(0, 0) if source_resolved else 0]:.3e}"
+        for k, v in acc.items()))
     return acc
 
 

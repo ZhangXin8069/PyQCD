@@ -6,6 +6,7 @@ public ``pyqcd.testing`` regression entrypoint.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -172,6 +173,7 @@ def test_tmd_workflow_analysis_forwards_tmd_cache_identity():
             "logger": logger,
             "momenta": momenta,
             "precision": "complex128",
+            "source_resolved": True,
         },
     }
 
@@ -186,6 +188,58 @@ def test_tmd_workflow_analysis_forwards_tmd_cache_identity():
         "eps": 0.025,
         "precision": "complex128",
     }
+
+
+def test_tmd_workflow_runs_pz0_denominator_without_promoting_fallbacks():
+    """Pz=0 must be analyzed as a gated denominator, never as a PDF input."""
+    spec = importlib.util.spec_from_file_location(
+        "pipeline_persistence_tmd_pz0", TMD_WORKFLOW_SOURCE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    calls = {}
+    args = SimpleNamespace(
+        staple_length=12, precision="complex64", tau=3.0, eps=0.05)
+    sumratio = {
+        "M": np.zeros((2, 1), dtype=float),
+        "M_boot": np.zeros((3, 2, 1), dtype=float),
+        "quality_accepted": np.ones((2, 1), dtype=bool),
+        "estimate_available": np.ones((2, 1), dtype=bool),
+        "central_fallback_used": np.zeros((2, 1), dtype=bool),
+        "replica_fallback_fraction": np.zeros((2, 1), dtype=float),
+    }
+
+    def ratio_side_effect(*_args, **kwargs):
+        calls["ratio_kwargs"] = kwargs
+        return {"proton": {"sumratio_difference": sumratio}}
+
+    with tempfile.TemporaryDirectory() as tmp, \
+            patch.object(
+                module, "load_multi_2pt",
+                return_value={6250: {"corr_pp_P000": np.zeros((72, 72))}}), \
+            patch(
+                "pyqcd.pipeline._tmd9.load_tmd_ope_all",
+                return_value={6250: {"tmd": np.zeros((13, 5, 72))}}), \
+            patch(
+                "pyqcd.analysis.run_disconnected_tmd_ratio",
+                side_effect=ratio_side_effect), \
+            patch("pyqcd.analysis.plot_tmd_c0"), \
+            patch("pyqcd.analysis.plot_tmd_ratio"), \
+            patch.object(module, "run_tmd_pdf_chain"), \
+            patch.object(module, "write_summary"):
+        module.run_analysis([6250], [(0, 0, 0)], tmp, lambda *_args: None,
+                            args)
+        status_path = Path(tmp) / "analysis" / "tmd_ratio" / \
+            "zero_momentum_denominator_status.json"
+        with status_path.open(encoding="utf-8") as stream:
+            status = json.load(stream)
+
+    assert calls["ratio_kwargs"]["momentum"] == "P000"
+    assert status["role"] == "zero_momentum_hybrid_denominator"
+    assert status["physical_status"] == "unverified"
+    assert status["used_for_pdf"] is False
+    assert status["strict_gate_passed"] is True
 
 
 def test_tmd_workflow_smoke_uses_exactly_the_requested_single_momentum():
@@ -228,18 +282,33 @@ def test_tmd_workflow_pdf_inputs_require_longitudinal_verified_samples():
         np.savez(
             analysis_dir / "c0_plateau_status_P400.npz",
             plateau_status=np.asarray("identifiable"),
+            plateau_fit_quality_status=np.asarray("good"),
+            plateau_physical_result_status=np.asarray("unverified"),
+        )
+        np.savez(
+            analysis_dir / "sumratio_difference_P400.npz",
+            M=np.array([[2.0], [1.0]]),
+            M_boot=sample_plateau.copy(),
+            quality_accepted=np.ones((2, 1), dtype=bool),
+            estimate_available=np.ones((2, 1), dtype=bool),
+            central_fallback_used=np.zeros((2, 1), dtype=bool),
+            replica_fallback_fraction=np.zeros((2, 1), dtype=float),
         )
         # P10_-2_0: valid status/data, but py != 0 so not a z-momentum TMD.
         np.save(analysis_dir / "c0_plateau_P10_-2_0.npy", sample_plateau)
         np.savez(
             analysis_dir / "c0_plateau_status_P10_-2_0.npz",
             plateau_status=np.asarray("identifiable"),
+            plateau_fit_quality_status=np.asarray("good"),
+            plateau_physical_result_status=np.asarray("unverified"),
         )
         # P600: status exists but a 2-D mean is not a resampled input.
         np.save(analysis_dir / "c0_plateau_P600.npy", sample_plateau.mean(0))
         np.savez(
             analysis_dir / "c0_plateau_status_P600.npz",
             plateau_status=np.asarray("identifiable"),
+            plateau_fit_quality_status=np.asarray("good"),
+            plateau_physical_result_status=np.asarray("unverified"),
         )
 
         actual = module.load_verified_plateau_inputs(
@@ -250,7 +319,8 @@ def test_tmd_workflow_pdf_inputs_require_longitudinal_verified_samples():
 
     assert set(actual) == {"P400"}
     assert actual["P400"]["pz_lattice"] == 4
-    assert actual["P400"]["hR"].shape == (2, 1)
+    assert actual["P400"]["c0"].shape == (3, 2, 1)
+    assert actual["P400"]["estimator"] == "forward_sumratio_difference_aic"
     assert any("status" in message and "unavailable" in message
                for message in messages)
     assert any("longitudinal" in message for message in messages)
@@ -1241,6 +1311,7 @@ TESTS = (
     test_parallel_cli_dry_run_does_not_create_output_trees,
     test_tmd_workflow_dry_run_does_not_create_output_trees,
     test_tmd_workflow_analysis_forwards_tmd_cache_identity,
+    test_tmd_workflow_runs_pz0_denominator_without_promoting_fallbacks,
     test_tmd_workflow_smoke_uses_exactly_the_requested_single_momentum,
     test_tmd_workflow_pdf_inputs_require_longitudinal_verified_samples,
     test_runner_default_root_tracks_config_output_dir,

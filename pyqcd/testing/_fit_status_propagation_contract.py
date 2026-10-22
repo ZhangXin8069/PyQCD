@@ -564,10 +564,13 @@ def _disconnected_inputs(nconf=9, nt=6, nz=1, nb=1, seed=903):
         cid = 100 + offset
         corr = np.exp(-0.18 * t) * (
             1.0 + 0.04 * rng.standard_normal(nt))
+        source_resolved = np.broadcast_to(
+            corr[None, :], (nt, nt)).copy()
         corr_2pt[cid] = {
-            "corr_pp_P2": corr,
-            "corr_pp_P200": corr,
-            "corr_pion_P2": corr * (1.0 + 0.03 * rng.standard_normal(nt)),
+            "corr_pp_P2": source_resolved,
+            "corr_pp_P200": source_resolved,
+            "corr_pion_P2": source_resolved * (
+                1.0 + 0.03 * rng.standard_normal(nt))[None, :],
         }
         combined = 0.2 + 0.04 * rng.standard_normal((nz, nt))
         ope[cid] = {

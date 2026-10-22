@@ -44,14 +44,40 @@ def proj_su3(A):
 
 
 def su3_exp(A):
-    """SU(3) 矩阵指数 exp(A)（A 为无迹反厄米，截断级数 + 投影）。"""
+    """SU(3) 矩阵指数 exp(A)（A 为无迹反厄米）。
+
+    小步长走四阶 Taylor 快路径；大步长先做 scaling-and-squaring，避免
+    固定阶截断在 ``eps`` 较大时破坏幺正性。生产 ``eps<=0.05`` 仍使用快路径。
+    """
     cp = get_backend()
-    # exp(A) ≈ I + A + A²/2 + A³/6 + A⁴/24（对 ε·Z 足够，ε 小）
-    A2 = A @ A
-    A3 = A2 @ A
-    A4 = A3 @ A
-    res = (cp.eye(3, dtype=A.dtype)[None, None, None, None, ...]
-           + A + 0.5 * A2 + (1.0 / 6.0) * A3 + (1.0 / 24.0) * A4)
+    max_norm = cp.max(cp.abs(A))
+    if hasattr(max_norm, "detach"):
+        max_norm = max_norm.detach().cpu()
+    elif hasattr(max_norm, "get"):
+        max_norm = max_norm.get()
+    max_norm = float(max_norm)
+
+    def taylor(argument, terms):
+        eye = cp.eye(3, dtype=argument.dtype)[None, None, None, None, ...]
+        result = eye
+        term = eye
+        for order in range(1, terms + 1):
+            term = argument @ term * (1.0 / order)
+            result = result + term
+        return result
+
+    if max_norm <= 0.1:
+        # Fast production path: |A| is small because eps <= 0.05.
+        res = taylor(A, 4)
+        return proj_su3(res)
+
+    # Scaling and squaring keeps the truncated exponential accurate for a
+    # larger public eps while retaining backend portability.
+    scale_steps = int(np.ceil(np.log2(max_norm / 0.1)))
+    scaled = A / float(2 ** scale_steps)
+    res = taylor(scaled, 12)
+    for _ in range(scale_steps):
+        res = res @ res
     return proj_su3(res)
 
 

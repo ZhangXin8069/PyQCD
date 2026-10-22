@@ -466,6 +466,7 @@ def test_tmd_operator_runs():
 
 def test_read_gauge_lime_accepts_contents_directory():
     """.lime.contents 目录应解析到标准 ILDG binary record。"""
+    import struct
     from pathlib import Path
     import tempfile
 
@@ -481,10 +482,22 @@ def test_read_gauge_lime_accepts_contents_directory():
         raw.tofile(record)
 
         gauge = read_gauge_lime(contents, 1, 1)
+        payload = raw.tobytes()
+        lime = Path(directory) / "cfg.lime"
+        header = (
+            struct.pack(">I", 0x456789AB)
+            + b"\0\0\0\0"
+            + struct.pack(">Q", len(payload))
+            + b"ildg-binary-data".ljust(128, b"\0")
+        )
+        padding = (-len(payload)) % 8
+        lime.write_bytes(header + payload + b"\0" * padding)
+        gauge_from_lime = read_gauge_lime(lime, 1, 1)
 
     assert gauge.shape == (1, 1, 1, 1, 4, 3, 3)
     assert gauge.dtype == np.complex128
     assert np.allclose(gauge, np.eye(3, dtype=complex)[None, None, None, None, None])
+    np.testing.assert_allclose(gauge_from_lime, gauge, rtol=0, atol=0)
 
 
 def test_matching_kernel():
@@ -562,12 +575,17 @@ def test_tmd_matching_nlo():
     coupling = A_s_run(2.0) * 4.0 * np.pi * 3.0 / (2.0 * np.pi)
     np.testing.assert_allclose(
         out, yg - coupling * (matrix @ yg), rtol=0.0, atol=1e-14)
-    # 2) 快度演化因子：pz_scale≠pz → 输出 × exp[½ln((2Pz)²/(2ζ)²)K]
+    # 2) 快度演化因子作用在卷积输入 y·g(y)，δ 项也使用演化后的输入。
     _, out_rap = tmd_matching_hybrid(x, b_perp=[0.2], mu=2.0, pz_gev=2.0,
                                      cs_kernel=0.1, soft_factor=1.0,
                                      pz_scale=1.0, x_tmd=yg)
-    rap = np.exp(0.5 * np.log((2.0 * 2.0) ** 2 / (2.0 * 1.0) ** 2) * 0.1)
-    assert np.allclose(out_rap, out * rap, rtol=1e-8)
+    rap = np.exp(
+        0.5 * np.log(((2.0 * x * 2.0) ** 2) / (2.0 * 1.0) ** 2) * 0.1
+    )
+    evolved = yg * rap
+    expected_rap = (
+        evolved - coupling * (matrix @ evolved))
+    assert np.allclose(out_rap, expected_rap, rtol=1e-8)
     # 3) 软函数：S=4 → 输出 ×½
     _, out_s = tmd_matching_hybrid(x, b_perp=[0.2], mu=2.0, pz_gev=2.0,
                                    cs_kernel=0.0, soft_factor=4.0, x_tmd=yg)
@@ -2251,7 +2269,7 @@ def test_zr_sample_refit_loop():
     mu_ = 2.0
     par_true = np.array([0.30, 0.20, 1.0, 0.05, 0.28]
                         + [0.02 * (i + 1) for i in range(14)] + [0.0, 0.0])
-    z_fm = np.linspace(0.05, 0.45, 5)
+    z_fm = np.linspace(0.05, 0.45, 12)
     fm2gev = 1.0 / 0.1973
     dss = []
     for a_fm in (0.105, 0.085):
@@ -2862,6 +2880,20 @@ def test_gradient_flow_quasi_policy_contracts():
     )
 
     _run_unittest_contract(GradientFlowQuasiPolicyContract)
+
+
+def test_tmd_physical_contracts():
+    """Flow window and diagnostic-only workflow status boundaries."""
+    from ._tmd_physical_contract import test_tmd_physical_contracts as run
+
+    run()
+
+
+def test_bare_sumratio_contracts():
+    """Forward Sumratio-difference Tmin, AIC and fallback contracts."""
+    from ._bare_sumratio_contract import test_bare_sumratio_contracts as run
+
+    run()
 
 
 def test_analysis_safety_contracts():
