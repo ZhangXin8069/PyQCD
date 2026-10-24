@@ -1,0 +1,74 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-24 21:29:37 +0800
+批次: tag-dev
+主任务: 创建 dev26 本地注释标签
+触发原因: 任务完成
+摘要: dev26 已创建并验证，标签链通过；文档登记与尾随空白待后续处理，未推送远程
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 标签类型与基线确定
+- 目标: 按用户 `~tag:dev` 请求创建下一个本地开发快照标签。
+- 命令/操作: 检查工作区、远程、标签拓扑、`dev25..HEAD` 提交与差异。
+- 关键输出: 工作区干净；`HEAD=4c4b6625850515cc73fd21f291e6ca5f96996121`；拓扑上的最近受管标签为 `dev25`；基线后 2 个提交、5 个文件变更。
+- 退出码: 0
+- 证据与判断: 下一主版本为 `dev26`，`follow` 前驱应为 `dev25`。
+
+### S2 — 历史自检与 init 门控
+- 目标: 在打标前验证标签链并检查仓库初始化状态。
+- 命令/操作: 执行 `tag-chain.sh --check --remote origin`，定向检查根目录 agent 初始化文件及相关 README/AGENTS 登记。
+- 关键输出: 打标前 96 个受管标签 PASS；根目录仅有 `AGENTS.md`，无待归档旧式 agent 文件；`PyQCU` 尚未列入 `refer/git-rep/README.md`，AGENTS 子库说明仍列 4 个。
+- 退出码: 0
+- 证据与判断: 标签链可安全继续；文档漂移来自既有 `HEAD`，未在无提交授权下制造新的未提交修改，并纳入标签说明。
+
+### S3 — dev26 创建与验证
+- 目标: 创建并验证 `dev26` 注释标签。
+- 命令/操作: `git tag -a dev26 HEAD -m ...`；检查标签对象、peeled commit、标签消息及全历史链。
+- 关键输出: `dev26` 为 `tag` 对象；peeled commit 与 `HEAD` 均为 `4c4b6625850515cc73fd21f291e6ca5f96996121`；打标后 97 个受管标签 PASS。
+- 退出码: 0
+- 证据与判断: 本地注释标签创建成功，`follow dev25` 链完整。
+
+## 验证与证据
+- 测试/检查: 两个变更 Python 文件执行 `compile(..., 'exec')`；变更 Bash 脚本执行 `bash -n`；执行标签链检查与目标一致性检查。
+- 结果: Python 语法 PASS；Bash 语法 PASS；标签链 PASS；`dev26^{}` 与 `HEAD` 哈希一致。
+- 未验证项: 未运行参考脚本的真实数据链路；未推送分支或标签。`git diff --check dev25..HEAD` 报告 `refer/sush/_distillation/contraction.nn.2pt.cupy.py` 多处尾随空白，已在 `dev26` 说明中标注待补。
+
+## 变更与产物
+- 文件: 本任务未修改源码或文档；仅由 log 技能新增最终日志并更新 `logs/AGENTS.md`。
+- 产物: 本地注释标签 `dev26`，指向 `4c4b6625850515cc73fd21f291e6ca5f96996121`。
+- 未改动范围: 未暂存、未提交、未推送；未修改 `AGENTS.md`、`refer/git-rep/README.md` 或参考子模块。
+
+## 风险、限制与下一步
+- 风险: `PyQCU` 固定提交尚未登记到 `refer/git-rep/README.md`；AGENTS 的子库说明尚未纳入 `PyQCU`；sush 参考脚本存在尾随空白。
+- 阻塞: 无。
+- 下一步: 完成文档登记与空白清理并提交后，在明确授权下推送 `main` 和 `dev26`。
+
+## 用户输入指令
+~tag:dev
+
+## Agent 全文报告
+--- report begin ---
+**finished**
+
+**改动内容**
+- 已创建本地注释标签 `dev26`，指向 `HEAD` 提交 `4c4b6625850515cc73fd21f291e6ca5f96996121`。
+- 标签消息为：`follow dev25, 1. 重构 huangcl P0 ratio 参考脚本为六方向独立输出并在绘图阶段平均; 2. 将 sush 2pt contraction 切换至 lqcddb 动态缩并接口; 3. 新增 PyQCU 参考子模块; 4. PyQCU README 固定提交登记与参考脚本尾随空白清理待补; [codex].`
+- 按常驻日志规范新增最终任务日志并更新 `logs/AGENTS.md`。
+
+**推理依据**
+- 标签链按 peeled commit 拓扑排序，拓扑上最近标签为 `dev25`，因此下一开发主版本为 `dev26`。
+- `dev25..HEAD` 包含 2 个提交、5 个文件变更，涉及 huangcl ratio 参考脚本、sush 2pt contraction 与 `PyQCU` 子模块。
+
+**验证结果**
+- `dev26` 为附注标签对象，peeled commit 与 `HEAD` 哈希一致。
+- 打标前 96 个、打标后 97 个受管标签的历史链、祖先关系检查全部 PASS。
+- 两个变更 Python 文件编译检查 PASS；变更 Bash 脚本 `bash -n` PASS。
+- `git diff --check dev25..HEAD` 检出 sush 参考脚本多处尾随空白，已在标签说明中如实记录。
+- 未推送远程；用户未要求同步。
+
+**后续步骤**
+- 补充 `PyQCU` 在 `refer/git-rep/README.md` 的固定提交登记，并同步 AGENTS 子库说明。
+- 清理 `refer/sush/_distillation/contraction.nn.2pt.cupy.py` 的尾随空白。
+- 如需同步远程，再明确授权推送 `main` 与 `dev26`。
+--- report end ---
