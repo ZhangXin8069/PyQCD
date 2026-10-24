@@ -85,15 +85,17 @@ def su3_exp(A):
 # 6-staple（Wilson 作用量流导数）
 # ═══════════════════════════════════════════════════════════════════
 
-def staple_6(U):
-    """计算 6-staple 求和 Ω_μ(x)（Wilson 作用量 ∂S 的链接求和，roll 预计算版）。
+def staple_6(U, *, precompute_rolls=False):
+    """计算 6-staple 求和 Ω_μ(x)（Wilson 作用量 ∂S 的链接求和）。
 
     Ω_μ(x) = Σ_{ν≠μ} [ U_μ(x,ν) + U_μ(x,−ν) ]，其中
         U_μ(x,ν)  = U_ν(x)·U_μ(x+ν̂)·U_ν†(x+μ̂)
         U_μ(x,−ν) = U_ν†(x−ν̂)·U_μ(x−ν̂)·U_ν(x−ν̂+μ̂)
 
-    预计算整场 roll（Rp/Rm，含 t 方向）后复用，比逐 (μ,ν) 独立 roll 快 ~1.5–1.8x，
-    数学结果逐位一致（verify: max|diff|=0）。
+    默认按 ``mu/nu`` 按需 roll，避免同时常驻 8 个整场平移副本；这在 8 GiB
+    GPU 上对 RK3 的 Z0/Z1/Z2 共存场景是必要的。``precompute_rolls=True``
+    保留原高速路径，供内存充足环境或数值 oracle 使用。两条路径数学结果
+    逐项一致。
 
     Args:
         U: 规范场 (Nt,Nz,Ny,Nx,4,3,3)（t,z,y,x 序）。
@@ -104,30 +106,52 @@ def staple_6(U):
     e = cp.einsum
     res = cp.zeros_like(U)
 
-    # 整场 roll：Rp[a] = U(x+â)，Rm[a] = U(x−â)（a = 轴 0..3，含 t 方向）
-    Rp = [cp.roll(U, -1, axis=a) for a in (0, 1, 2, 3)]
-    Rm = [cp.roll(U, 1, axis=a) for a in (0, 1, 2, 3)]
+    Rp = None
+    Rm = None
+    if precompute_rolls:
+        # Memory-rich fast path retained as an exact oracle.
+        Rp = [cp.roll(U, -1, axis=a) for a in (0, 1, 2, 3)]
+        Rm = [cp.roll(U, 1, axis=a) for a in (0, 1, 2, 3)]
 
     for mu in range(4):
         a_mu = 3 - mu
+        if not precompute_rolls:
+            rp_mu = cp.roll(U, -1, axis=a_mu)
         acc = None
         for nu in range(4):
             if nu == mu:
                 continue
             a_nu = 3 - nu
+            if precompute_rolls:
+                rp_mu_nu = Rp[a_mu][..., nu, :, :]
+                rp_nu_mu = Rp[a_nu][..., mu, :, :]
+                rm_nu = Rm[a_nu]
+                rm_nu_mu = cp.roll(rm_nu, -1, axis=a_mu)
+            else:
+                rp_nu = cp.roll(U, -1, axis=a_nu)
+                rm_nu = cp.roll(U, 1, axis=a_nu)
+                rp_mu_nu = rp_mu[..., nu, :, :]
+                rp_nu_mu = rp_nu[..., mu, :, :]
+                rm_nu_mu = cp.roll(rm_nu, -1, axis=a_mu)
             # U_μ(x,ν)：U_ν(x)·U_μ(x+ν̂)·U_ν†(x+μ̂)
             t1 = e("...ab,...bc->...ac", U[..., nu, :, :],
-                   Rp[a_nu][..., mu, :, :])
+                   rp_nu_mu)
             t1 = e("...ab,...cb->...ac", t1,
-                   Rp[a_mu][..., nu, :, :].conj())
+                   rp_mu_nu.conj())
             # U_μ(x,−ν)：U_ν†(x−ν̂)·U_μ(x−ν̂)·U_ν(x−ν̂+μ̂)
             t2 = e("...ba,...bc->...ac",
-                   Rm[a_nu][..., nu, :, :].conj(),
-                   Rm[a_nu][..., mu, :, :])
+                   rm_nu[..., nu, :, :].conj(),
+                   rm_nu[..., mu, :, :])
             t2 = e("...ab,...bc->...ac", t2,
-                   cp.roll(Rm[a_nu], -1, axis=a_mu)[..., nu, :, :])
-            acc = t1 + t2 if acc is None else acc + t1 + t2
+                   rm_nu_mu[..., nu, :, :])
+            if acc is None:
+                acc = t1 + t2
+            else:
+                acc += t1
+                acc += t2
         res[..., mu, :, :] = acc
+        if not precompute_rolls:
+            del rp_mu
     return res
 
 

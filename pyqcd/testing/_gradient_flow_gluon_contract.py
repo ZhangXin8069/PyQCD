@@ -194,6 +194,30 @@ class GradientFlowGluonContract(unittest.TestCase):
         )
         self.assertLess(relative, 1e-4)
 
+    def test_memory_efficient_staple_matches_precomputed_roll_oracle(self):
+        """On-demand rolls must preserve the precomputed six-staple result."""
+        from pyqcd.renorm._gradient_flow import staple_6
+        from pyqcd.tools import set_backend
+
+        gauge = _near_identity_su3(
+            seed=20261025, strength=0.2).astype(np.complex64)
+        np.testing.assert_array_equal(
+            np.asarray(staple_6(gauge)),
+            np.asarray(staple_6(gauge, precompute_rolls=True)),
+        )
+
+        import torch
+
+        set_backend('torch', device='cpu')
+        try:
+            tensor = torch.as_tensor(gauge, dtype=torch.complex64)
+            actual = staple_6(tensor).detach().cpu().numpy()
+            expected = staple_6(
+                tensor, precompute_rolls=True).detach().cpu().numpy()
+            np.testing.assert_array_equal(actual, expected)
+        finally:
+            set_backend('numpy')
+
     def test_periodic_z_count_cannot_wrap_past_lattice_extent(self):
         """z_count 不得超过对应周期方向长度，避免静默回绕到同一格点。"""
         from pyqcd.operator import flowed_gluon_ope

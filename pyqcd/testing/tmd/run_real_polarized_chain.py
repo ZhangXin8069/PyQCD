@@ -81,7 +81,11 @@ def run_chain(run_dir, conf_ids=None, *, precision='complex64',
         raise ValueError("conf_ids 不能为空")
     if len(set(conf_ids)) != len(conf_ids):
         raise ValueError("conf_ids 不得重复")
-    set_backend(backend, device=device if backend == 'torch' else None)
+    device_setting = (
+        'cpu' if isinstance(device, str) and device.lower() == 'cpu'
+        else device)
+    set_backend(
+        backend, device=device_setting if backend == 'torch' else None)
     if backend == 'torch':
         set_precision(precision)
 
@@ -177,7 +181,9 @@ def parse_args():
         help='comma-separated configuration IDs; default: discover conf* dirs')
     parser.add_argument('--precision', default='complex64')
     parser.add_argument('--backend', default='torch')
-    parser.add_argument('--device', type=int, default=0)
+    parser.add_argument(
+        '--device', default='0',
+        help="torch device: integer GPU index or 'cpu'")
     parser.add_argument('--skip-c2', action='store_true')
     parser.add_argument('--skip-ope', action='store_true')
     parser.add_argument('--recompute-c2', action='store_true')
@@ -191,9 +197,12 @@ def main():
     conf_ids = None
     if args.conf_ids:
         conf_ids = [int(value) for value in args.conf_ids.split(',') if value]
+    device = (
+        args.device if str(args.device).lower() == 'cpu'
+        else int(args.device))
     result = run_chain(
         args.run_dir, conf_ids, precision=args.precision,
-        backend=args.backend, device=args.device,
+        backend=args.backend, device=device,
         skip_c2=args.skip_c2, skip_ope=args.skip_ope,
         recompute_c2=args.recompute_c2,
         recompute_ope=args.recompute_ope,
