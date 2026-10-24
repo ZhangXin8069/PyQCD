@@ -13,3 +13,6 @@
 [submodule "refer/git-rep/PyQUDA"]
 	path = refer/git-rep/PyQUDA
 	url = https://github.com/CLQCD/PyQUDA
+[submodule "refer/git-rep/PyQCU"]
+	path = refer/git-rep/PyQCU
+	url = https://gitee.com/zhangxin8069/PyQCU.git
