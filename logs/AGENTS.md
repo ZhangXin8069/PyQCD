@@ -136,3 +136,28 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## tmd-equivalence - final - 2026-10-24 22:01:09 +0800
+- 主任务: PyQCD 与 refer/donghx 的核子胶子 TMD-PDF 等价性审计
+- 日志文件: logs/v2026102422.txt
+- 文件大小: 9468 bytes
+- 触发原因: 任务完成
+- 关键内容: 结论：整库及完整核子胶子 TMD-PDF 不等价；直线胶子 OPE、flow-to-quasi 与 gg 匹配核为算法/移植等价，PyQCD 的横向 staple TMD 是扩展诊断原型。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## donghx-cross-reference - final - 2026-10-24 22:20:55 +0800
+- 主任务: PyQCD 与 refer/donghx 在 4x4x4x8 格点上的胶子 OPE 对照测试
+- 日志文件: logs/v2026102422-2.txt
+- 文件大小: 8720 bytes
+- 触发原因: 任务完成
+- 关键内容: 同一 4x4x4x8 SU(3) thin-link 场上完成双方实跑；共享 flow/OPE/matching 链 23/23 通过并两次复现，完整横向 TMD 因 donghx 无对应实现不可直接对照。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## handoff-donghx-cross-reference - final - 2026-10-24 22:26:59 +0800
+- 主任务: 4x4x4x8 PyQCD/donghx 对照测试跨设备交接
+- 日志文件: logs/v2026102422-3.txt
+- 文件大小: 41261 bytes
+- 触发原因: 任务完成
+- 关键内容: 单一日志包含完整源码补丁、环境、哈希、23/23 对照结果、回归失败清单与跨设备恢复步骤。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
