@@ -247,3 +247,51 @@
 - 关键内容: 完成 v3 双极化合同、真实 4150/6250 C2、audit v2 和 ratio 接线；4150 公共参考误差 1e-8/1e-6，全量 112/112 PASS。
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## readonly-size-audit - final - 2026-10-25 03:39:49 +0800
+- 主任务: 统计 Gradient Flow GluonPDF 参考目录数据大小
+- 日志文件: logs/v2026102503.txt
+- 文件大小: 2951 bytes
+- 触发原因: 任务完成
+- 关键内容: 统计当前目录逻辑与实际占用大小，交叉核验文件数量且不跟随符号链接
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## key-data-size-audit - final - 2026-10-25 05:06:34 +0800
+- 主任务: 统计 Gradient Flow GluonPDF 相关关键数据大小
+- 日志文件: logs/v2026102505.txt
+- 文件大小: 4289 bytes
+- 触发原因: 任务完成
+- 关键内容: 统计当前代码及两套组态、传播子、本征矢、2pt、流动结果与OPE派生数据；记录权限缺口
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## data-list-v20261025 - final - 2026-10-25 05:21:14 +0800
+- 主任务: 生成 Gradient Flow GluonPDF 数据路径与意义清单
+- 日志文件: logs/v2026102505-2.txt
+- 文件大小: 3118 bytes
+- 触发原因: 任务完成
+- 关键内容: 创建 222 行数据路径清单，修正并核验总量与权限缺口
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## data4pyqcd-2tb - final - 2026-10-25 05:39:29 +0800
+- 主任务: 生成 2TB 预算内的 PyQCD 数据取样下载清单
+- 日志文件: logs/v2026102505-3.txt
+- 文件大小: 3129 bytes
+- 触发原因: 任务完成
+- 关键内容: 101 条分层取样路径，含 4 个传播子配置和 33 个 donghx 对照结果
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## data4pyqcd-downloader - final - 2026-10-25 05:45:16 +0800
+- 主任务: 编写 data4pyqcd 清单远程下载脚本
+- 日志文件: logs/v2026102505-4.txt
+- 文件大小: 2927 bytes
+- 触发原因: 任务完成
+- 关键内容: 实现清单驱动、dry-run、断点续传和双远端根目录的 SSH 下载脚本
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## pyqcd-infra-data-transfer - final - 2026-10-25 05:49:39 +0800
+- 主任务: 将对照数据取样经验写入 pyqcd-infra 技能
+- 日志文件: logs/v2026102505-5.txt
+- 文件大小: 3475 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增 data-transfer reference 并同步技能入口、注册表和验证
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

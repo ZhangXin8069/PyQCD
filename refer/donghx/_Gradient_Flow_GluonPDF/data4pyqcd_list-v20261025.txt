@@ -1,0 +1,137 @@
+# PyQCD sampled download list
+# File: data4pyqcd_list-v20261025.txt
+# Date: 2026-10-25
+# Ensemble: beta6.41_mu-0.2295_ms-0.2050_L32x96
+#
+# Sample basis: frozen 20-configuration contract already used by inventory20.py:
+# 10000 10100 10200 10300 10400 10500 10600 10700 10800 10900
+# 11000 11100 12300 12400 12500 12600 12700 12800 12900 13000
+#
+# Data groups:
+# gauge - raw thin-link CLOVER configurations (20 configurations)
+# eigen - distilled eigenvectors and compressed stochastic basis (4 configurations)
+# peram - light perambulators for the contraction chain (4 configurations)
+# ope   - gluon OPE tensors and metadata (20 configurations)
+# twopt - momentum-smeared nopol/pol35 two-point functions (20 configurations)
+# result - donghx computed results: OPE/ratio/matching, spin-2, flow extrapolation,
+#          Wilson/static potential, line-mass/Zchi, LaMET and L32x64 cross-checks
+#
+# Metric: actual allocated bytes from du -sB1 -x. All 101 paths existed when listed.
+# Total bytes: 1958277360128
+# Total IEC: 1.781 TiB
+# Total decimal: 1.958 TB
+#
+# Group totals:
+# gauge: 36244029440 B (20 entries)
+# eigen: 362388094976 B (4 entries)
+# peram: 1509949669376 B (4 entries)
+# ope: 3193497600 B (20 entries)
+# twopt: 301475840 B (20 entries)
+# result: 46200592896 B (33 entries)
+#
+# The selected perambulator tier accounts for 1.373 TiB. Flow caches, generated
+# vertices and VVV contractions are intentionally excluded.
+#
+# Sample list:
+size_bytes | human_iec | dataset | conf | source_path
+1812201472 | 1.688 GiB | gauge | 10000 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10000.lime
+1812201472 | 1.688 GiB | gauge | 10100 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10100.lime
+1812201472 | 1.688 GiB | gauge | 10200 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10200.lime
+1812201472 | 1.688 GiB | gauge | 10300 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10300.lime
+1812201472 | 1.688 GiB | gauge | 10400 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10400.lime
+1812201472 | 1.688 GiB | gauge | 10500 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10500.lime
+1812201472 | 1.688 GiB | gauge | 10600 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10600.lime
+1812201472 | 1.688 GiB | gauge | 10700 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10700.lime
+1812201472 | 1.688 GiB | gauge | 10800 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10800.lime
+1812201472 | 1.688 GiB | gauge | 10900 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_10900.lime
+1812201472 | 1.688 GiB | gauge | 11000 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_11000.lime
+1812201472 | 1.688 GiB | gauge | 11100 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_11100.lime
+1812201472 | 1.688 GiB | gauge | 12300 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_12300.lime
+1812201472 | 1.688 GiB | gauge | 12400 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_12400.lime
+1812201472 | 1.688 GiB | gauge | 12500 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_12500.lime
+1812201472 | 1.688 GiB | gauge | 12600 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_12600.lime
+1812201472 | 1.688 GiB | gauge | 12700 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_12700.lime
+1812201472 | 1.688 GiB | gauge | 12800 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_12800.lime
+1812201472 | 1.688 GiB | gauge | 12900 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_12900.lime
+1812201472 | 1.688 GiB | gauge | 13000 | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_13000.lime
+90597023744 | 84.375 GiB | eigen | 10000 | /nexdata/project/lqcd/sush/eigensystem/beta6.41_mu-0.2295_ms-0.2050_L32x96/10000
+90597023744 | 84.375 GiB | eigen | 10100 | /nexdata/project/lqcd/sush/eigensystem/beta6.41_mu-0.2295_ms-0.2050_L32x96/10100
+90597023744 | 84.375 GiB | eigen | 10200 | /nexdata/project/lqcd/sush/eigensystem/beta6.41_mu-0.2295_ms-0.2050_L32x96/10200
+90597023744 | 84.375 GiB | eigen | 10300 | /nexdata/project/lqcd/sush/eigensystem/beta6.41_mu-0.2295_ms-0.2050_L32x96/10300
+377487417344 | 351.562 GiB | peram | 10000 | /nexdata/project/lqcd/sush/perambulators/beta6.41_mu-0.2295_ms-0.2050_L32x96/light/10000
+377487417344 | 351.562 GiB | peram | 10100 | /nexdata/project/lqcd/sush/perambulators/beta6.41_mu-0.2295_ms-0.2050_L32x96/light/10100
+377487417344 | 351.562 GiB | peram | 10200 | /nexdata/project/lqcd/sush/perambulators/beta6.41_mu-0.2295_ms-0.2050_L32x96/light/10200
+377487417344 | 351.562 GiB | peram | 10300 | /nexdata/project/lqcd/sush/perambulators/beta6.41_mu-0.2295_ms-0.2050_L32x96/light/10300
+159674880 | 152.278 MiB | ope | 10000 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10000
+159674880 | 152.278 MiB | ope | 10100 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10100
+159674880 | 152.278 MiB | ope | 10200 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10200
+159674880 | 152.278 MiB | ope | 10300 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10300
+159674880 | 152.278 MiB | ope | 10400 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10400
+159674880 | 152.278 MiB | ope | 10500 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10500
+159674880 | 152.278 MiB | ope | 10600 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10600
+159674880 | 152.278 MiB | ope | 10700 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10700
+159674880 | 152.278 MiB | ope | 10800 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10800
+159674880 | 152.278 MiB | ope | 10900 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf10900
+159674880 | 152.278 MiB | ope | 11000 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf11000
+159674880 | 152.278 MiB | ope | 11100 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf11100
+159674880 | 152.278 MiB | ope | 12300 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf12300
+159674880 | 152.278 MiB | ope | 12400 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf12400
+159674880 | 152.278 MiB | ope | 12500 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf12500
+159674880 | 152.278 MiB | ope | 12600 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf12600
+159674880 | 152.278 MiB | ope | 12700 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf12700
+159674880 | 152.278 MiB | ope | 12800 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf12800
+159674880 | 152.278 MiB | ope | 12900 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf12900
+159674880 | 152.278 MiB | ope | 13000 | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5/conf13000
+15073792 | 14.375 MiB | twopt | 10000 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10000
+15073792 | 14.375 MiB | twopt | 10100 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10100
+15073792 | 14.375 MiB | twopt | 10200 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10200
+15073792 | 14.375 MiB | twopt | 10300 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10300
+15073792 | 14.375 MiB | twopt | 10400 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10400
+15073792 | 14.375 MiB | twopt | 10500 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10500
+15073792 | 14.375 MiB | twopt | 10600 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10600
+15073792 | 14.375 MiB | twopt | 10700 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10700
+15073792 | 14.375 MiB | twopt | 10800 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10800
+15073792 | 14.375 MiB | twopt | 10900 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/10900
+15073792 | 14.375 MiB | twopt | 11000 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/11000
+15073792 | 14.375 MiB | twopt | 11100 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/11100
+15073792 | 14.375 MiB | twopt | 12300 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/12300
+15073792 | 14.375 MiB | twopt | 12400 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/12400
+15073792 | 14.375 MiB | twopt | 12500 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/12500
+15073792 | 14.375 MiB | twopt | 12600 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/12600
+15073792 | 14.375 MiB | twopt | 12700 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/12700
+15073792 | 14.375 MiB | twopt | 12800 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/12800
+15073792 | 14.375 MiB | twopt | 12900 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/12900
+15073792 | 14.375 MiB | twopt | 13000 | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96/momsmear2z/13000
+4621224960 | 4.304 GiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/ratio_bootstrap_all_operators_v1
+2940741632 | 2.739 GiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/fit_all_operators_aic_v1
+4396198400 | 4.094 GiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/matching
+915493888 | 873.083 MiB | result | all | /public/group/lqcd/donghx/Diagram_GluonPDF/Gradient_flow_gluon
+11273728 | 10.751 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_unpolarized_sixflow_bare_fit_v1
+5208175616 | 4.850 GiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x96_B_matched_radius20_7flow_20261021
+16690864128 | 15.545 GiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_production_20260922
+25708544 | 24.518 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_benchmark_20260922
+4900039168 | 4.564 GiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_omega_compare_20261014
+1188421632 | 1.107 GiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_A_ratio30_boot100_T7_Q1em3_chi1e3_20261016
+2297750016 | 2.140 GiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/polyakov_L32x96
+590894080 | 563.521 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_boot2000_20261016
+478098432 | 455.950 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_P2_B_20261015
+419967488 | 400.512 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_d_boot3000_20261018
+359269888 | 342.626 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_flow_c3_ratio_v2
+198017024 | 188.844 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_radius030_20261020
+146289152 | 139.512 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_Tw_static_20261020
+145763840 | 139.011 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_time_tau_gt_0p1_v1
+125579264 | 119.762 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/gluon_unpolarized_stages_CT18NLO_20260921
+112606720 | 107.390 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020
+85227520 | 81.279 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_three_stages_10conf_Nboot50_20260920
+74349568 | 70.905 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_Zchi1_control_10conf_Nboot50_20260920
+57678336 | 55.006 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/static_potential_L32x64_1700conf_20261017
+51516416 | 49.130 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_time_analysis_v1
+40249344 | 38.385 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/static_potential_fullgrid_20261017
+35006464 | 33.385 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_d_current_20261017
+27533824 | 26.258 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_scale_windows_20261017
+18485248 | 17.629 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_matching_pilot_v1
+13375488 | 12.756 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_time_tau_gt_1p0_v1
+8399360 | 8.010 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_gf_matching_20_ud_20260927
+7740928 | 7.382 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_lambda_fourier_lamet_20260920
+5637120 | 5.376 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_extrap_tau_gt1
+3015680 | 2.876 MiB | result | all | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_extrap_aic_tau_min1

@@ -18,7 +18,7 @@
 | [`pyqcd-gluon-renorm/`](pyqcd-gluon-renorm/) | `root` | 区分 bare、gauge-fixed 与 renormalized 胶子可观测量，并约束 Clover、Fourier、EMT/current 契约。 | `2026-10-13` | [`SKILL.md`](pyqcd-gluon-renorm/SKILL.md) |
 | [`pyqcd-helicity-renorm/`](pyqcd-helicity-renorm/) | `root` | 显式审查 legacy helicity/EMT matching、R12/R21 放置与 coupled running 来源冲突。 | `2026-10-13` | [`SKILL.md`](pyqcd-helicity-renorm/SKILL.md) |
 | [`pyqcd-hisq-recover/`](pyqcd-hisq-recover/) | `root` | 将 staggered/HISQ 单分量传播子重构为 naive 四旋量 Wilson-like 存储，并约束 producer metadata。 | `2026-10-13` | [`SKILL.md`](pyqcd-hisq-recover/SKILL.md) |
-| [`pyqcd-infra/`](pyqcd-infra/) | `root` | 处理 numpy/cupy/torch 后端、GPU 计时、HDF5/ASCII/VdV/VVV I/O、MPI 与显存规划。 | `2026-08-31 10:15:20 +08:00` | [`SKILL.md`](pyqcd-infra/SKILL.md) |
+| [`pyqcd-infra/`](pyqcd-infra/) | `root` | 处理后端、GPU 计时、HDF5/ASCII/VdV/VVV I/O、MPI/显存规划，以及对照数据体积盘点、分层取样和断点下载。 | `2026-10-25` | [`SKILL.md`](pyqcd-infra/SKILL.md) |
 | [`pyqcd-momentum-smear/`](pyqcd-momentum-smear/) | `root` | 定义 link-phased Wuppertal 动量涂抹、source/sink/sequential one-smear 与相位链。 | `2026-10-13` | [`SKILL.md`](pyqcd-momentum-smear/SKILL.md) |
 | [`pyqcd-physics-correlator/`](pyqcd-physics-correlator/) | `root` | 将观测量推导为算符、关联函数、Wick、蒸馏 basis/传播子交接和 einsum。 | `2026-10-13` | [`SKILL.md`](pyqcd-physics-correlator/SKILL.md) |
 | [`pyqcd-physics-spectrum/`](pyqcd-physics-spectrum/) | `root` | 权威定义谱分解、色散似然、backward 态和两点/三点拟合模板。 | `2026-08-31 09:11:23 +08:00` | [`SKILL.md`](pyqcd-physics-spectrum/SKILL.md) |

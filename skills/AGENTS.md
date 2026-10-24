@@ -15,7 +15,7 @@
 | `pyqcd-gauge` | 纯规范路径、Wilson/Polyakov 圈、拓扑、流和涂抹 | 只有规范链接的观测量 |
 | `pyqcd-statistics` | 重采样、协方差、SVD、窗口和统计诊断 | jackknife/bootstrap、相关拟合 |
 | `pyqcd-analysis` | 已有数据的分析运行、物理量提取和图表；不定义谱模型或统计纪律 | ratio、有效质量、E0、FH、c0 |
-| `pyqcd-infra` | backend、设备/精度、I/O、MPI 元任务和显存规划 | torch、HDF5、ASCII、VdV/VVV、OOM |
+| `pyqcd-infra` | backend、设备/精度、I/O、MPI/显存规划、对照数据盘点与远程传输 | torch、HDF5、VdV/VVV、OOM、du、manifest、rsync |
 | `pyqcd-pipeline` | 九步运行编排、守卫、断点续跑和一致性验证 | test0、test9、基线复现 |
 | `pyqcd-tmd-chain` | 梯度流胶子 TMD-PDF 的端到端导航 | 全链规划、阶段关系、状态判断 |
 | `pyqcd-tmd-algorithm` | TMD 几何、重整化、匹配、外推和物理验证门 | 算法实现、staple、soft、CS、匹配 |
@@ -65,6 +65,9 @@ pyqcd-pipeline <- pyqcd-infra
 pyqcd-analysis / pyqcd-tmd-chain / pyqcd-pipeline -> pyqcd-docs
 ```
 
+跨项目对照数据的体积盘点、分层取样、机器可读清单和断点下载由 `pyqcd-infra` 承担；
+物理结果类别与解释仍由相应 TMD、分析或重整化技能定义。
+
 读图规则：`conventions` 是共享先验；`correlator` 决定物理对象，`propagator` 生产数据，
 `spectrum` 定义谱模型，`statistics` 定义统计门，`analysis` 调用并呈现数据；`gauge` 提供纯规范基础，`tmd-chain` 导航全链，
 `tmd-algorithm` 承担 TMD 的实现和验收细节；`momentum-smear`、`blending`、
@@ -89,7 +92,7 @@ pyqcd-analysis / pyqcd-tmd-chain / pyqcd-pipeline -> pyqcd-docs
 错误处理和交接章节；其规则以根 `AGENTS.md` 的“form 格式约定”为准。
 
 共同内容只保留一个权威来源：轴序/单位/边界/证据状态写入 `pyqcd-conventions`，
-重采样/协方差/拟合纪律写入 `pyqcd-statistics`，后端/I/O/MPI 写入 `pyqcd-infra`。
+重采样/协方差/拟合纪律写入 `pyqcd-statistics`，后端/I/O/MPI/对照数据传输写入 `pyqcd-infra`。
 其他技能通过名称路由，不复制整段规则；TMD 总览与 TMD 实现契约分离。
 
 ## 执行与验证约定

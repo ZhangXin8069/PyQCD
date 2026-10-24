@@ -1,0 +1,222 @@
+# Gradient Flow GluonPDF 相关数据路径清单
+# 文件名: data_list-v20261025.txt
+# 生成日期: 2026-10-25
+# 统计对象: /public/home/zhangxin/PyQCD/refer/donghx/_Gradient_Flow_GluonPDF
+#             及其代码明确引用的组态、本征矢、传播子、2pt、OPE、ratio、matching 和流动结果。
+#
+# 统计口径
+# 1. size_bytes 为 du -sB1 -x 得到的实际文件系统分配字节数，不是文件逻辑长度之和。
+# 2. human_iec 使用二进制单位 B / KiB / MiB / GiB / TiB / PiB。
+# 3. 不读取文件内容；默认不跟随符号链接；不同路径按目录命名空间累加，不按文件内容去重。
+# 4. 统计采用 ionice idle I/O 与 nice 19；超大目录按子目录并行汇总，避免扫描无关家目录。
+# 5. 私人文档、代码小目录和非必要辅助数据已按用户要求排除。
+#
+# 状态
+# complete    : 该路径下全部可访问内容已统计。
+# partial     : 路径主体可访问，但存在权限不足的子目录；所列数值仅为可读部分。
+# skipped     : 用户要求聚焦必要数据，主动未统计。
+# inaccessible: 无遍历权限，大小未知。
+#
+# 重要结论
+# 已测可读关键数据合计: 682,022,998,201,856 B = 620.296 TiB = 682.022998 TB (decimal)。
+# 该值是“可读关键数据合计”，不是包含全部受保护运行目录的严格全库最终值。
+# 受保护目录未用文件大小公式、平均值或配额进行估算。
+#
+# 汇总
+size_bytes | human_iec | state | 类别/路径 | 意义
+26933248 | 25.686 MiB | complete | 当前目录代码与资料 | _Gradient_Flow_GluonPDF 内 237 个文件；Python、Shell、Markdown、PDF、PNG、C++ 和参考结果
+90157604674560 | 81.998 TiB | partial | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF | L32x64 主生产、胶子 OPE、ratio、matching、flow 与辅助研究；受保护子目录未计入
+31766600574976 | 28.892 TiB | complete | /public 外部关键输入与结果 | 两套原始组态、两套 HYP 组态、L32x96 2pt、流动结果、Blending 结果与 Gluon OPE 分析结果
+560098766019072 | 509.407 TiB | complete | /nexdata/project/lqcd/sush | 两套本征矢和传播子；四个指定根目录均已完整统计
+509312738068992 | 463.217 TiB | complete | 传播子小计 | L32x96 light/strange 与 L32x64 light/strange perambulator
+50786027950080 | 46.190 TiB | complete | 本征矢小计 | 两套 ensemble 的 distilled eigenvectors 与噪声压缩基底
+3804465931776 | 3.460 TiB | complete | 原始 CLOVER 组态小计 | L32x96 与 L32x64 薄链组态
+3290218331136 | 2.992 TiB | complete | HYP-smear 组态小计 | L32x96 与 L32x64 的 hpy_4D_10times_new 组态
+78225900032 | 72.854 GiB | complete | L32x96 2pt | 胶子算符断连矩阵元的 nopol/pol35 两点评分函数
+23640633519616 | 21.501 TiB | complete | L32x96 Blending Result | 四维 gradient-flow Blending basis/vertex 生产中间结果
+952141398528 | 886.751 GiB | complete | L32x96 Gradient_Flow Result | flowed gauge、cache、派生传播子和中间结果
+915493888 | 873.083 MiB | complete | Gluon OPE 分析目录 | manifest、ratio_v2、拟合产品和 comparison 输入
+682022998201856 | 620.296 TiB | partial | 已测可读关键数据总计 | 上述可读路径合计；不包含权限受限目录和非核心跳过项
+
+# 一、当前目录
+size_bytes | human_iec | state | path | meaning
+26933248 | 25.686 MiB | complete | /public/home/zhangxin/PyQCD/refer/donghx/_Gradient_Flow_GluonPDF | 代码、笔记、PDF/PNG 与参考结果；是本次目录识别和引用分析的起点
+
+# 二、/public 外部关键输入与结果
+size_bytes | human_iec | state | path | meaning
+23640633519616 | 21.501 TiB | complete | /public/group/lqcd/donghx/Gradient_Flow/Blending_L32x96/Result | L32x96 四维 flow Blending 的 flowed gauge、basis、vertex 和顺序传播子中间结果
+2053891948544 | 1.868 TiB | complete | /public/group/lqcd/configurations/CLOVER/beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64 | L32x64 原始薄链 CLOVER 组态，是 L32x64 flow 与 distillation 的规范场输入
+1882210503680 | 1.712 TiB | complete | /public/group/lqcd/donghx/Hypsmear_beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64/hyp_4D_10times_new | L32x64 四维 HYP-smear 组态，是本征矢/传播子产生所用的预处理规范场
+1750573983232 | 1.592 TiB | complete | /public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96 | L32x96 原始薄链 CLOVER 组态，是胶子 OPE 与 flow 的规范场输入
+1408007827456 | 1.281 TiB | complete | /public/group/lqcd/donghx/Hypsmear_beta6.41_mu-0.2295_ms-0.2050_L32x96/hpy_4D_10times_new | L32x96 四维 HYP-smear 组态，是 distillation 本征矢与传播子的输入
+952141398528 | 886.751 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow/Result/beta6.41_mu-0.2295_ms-0.2050_L32x96 | L32x96 的 flowed gauge、flow cache、派生传播子和中间结果
+78225900032 | 72.854 GiB | complete | /public/group/lqcd/donghx/2pt_Result/beta6.41_mu-0.2295_ms-0.2050_L32x96 | 胶子断连算符所需的 momentum-smeared nopol/pol35 两点评分函数
+915493888 | 873.083 MiB | complete | /public/group/lqcd/donghx/Diagram_GluonPDF/Gradient_flow_gluon | L32x96 胶子 OPE ratio 的 manifest、ratio_v2、拟合产品与交叉检查输入
+
+# 三、/nexdata 本征矢与传播子
+size_bytes | human_iec | state | path | meaning
+366706367218176 | 333.517 TiB | complete | /nexdata/project/lqcd/sush/perambulators/beta6.41_mu-0.2295_ms-0.2050_L32x96 | L32x96 light/strange perambulator；C2/C3 Wick 收缩和断开三点的关键传播子输入
+142606370850816 | 129.700 TiB | complete | /nexdata/project/lqcd/sush/perambulators/beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64 | L32x64 light/strange perambulator；L32x64 夸克/胶子对照链的传播子输入
+33673250000384 | 30.626 TiB | complete | /nexdata/project/lqcd/sush/eigensystem/beta6.41_mu-0.2295_ms-0.2050_L32x96 | L32x96 本征矢及噪声压缩基底，用于构造流动 basis/vertex 和 sequential perambulator
+17112777949696 | 15.564 TiB | complete | /nexdata/project/lqcd/sush/eigensystem/beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64 | L32x64 本征矢及噪声压缩基底，用于 distillation 与 flow 对照
+
+# 四、Gradient_Flow_GluonPDF 根目录内的已测路径
+# 主要项目子目录按实际分配字节数降序排列；根级聚合补充列在末尾。
+# partial 仅表示存在不可读子目录，不代表所列字节为 0。
+size_bytes | human_iec | state | path | meaning
+40339459790848 | 36.689 TiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_flow_20261007 | L32x64 主生产链：流动基底、顶点、投影 C2/C3 结果
+36916666575360 | 33.576 TiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_fill_flows_20260923 | 自旋-2 算符补全 flow 的生产结果
+7069195340288 | 6.429 TiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_expansion20_20260922 | 自旋-2 算符 distillation、收缩扩展、生产或基准数据
+1812080989184 | 1.648 TiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_P4_B_20conf_8flow_20261016 | L32x64 Pz=4 B-scheme 矩阵元、窗口或内存修复结果
+1517629156352 | 1.380 TiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x96_B_matched_radius20_7flow_retry_v2_20261021 | L32x96 B-scheme 半径匹配的 seven-flow 结果
+1002660813312 | 933.801 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_expansion30_20260925 | 自旋-2 算符 distillation、收缩扩展、生产或基准数据
+865345276928 | 805.916 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_P4_B_20conf_20261015 | L32x64 Pz=4 B-scheme 矩阵元、窗口或内存修复结果
+164145912320 | 152.873 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_schemeB_window_20261015 | L32x64 B-scheme 有限时间窗稳定性审查
+141791326208 | 132.053 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_v5 | 胶子 OPE v5 张量及元数据，供 C3/C2 与 matching 链读取
+100492354048 | 93.591 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_insertions_20conf_8flow_20261017 | 逐 insertion time 的 B-scheme C3/C2 生产结果
+57432497664 | 53.488 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output_L32x64_v1 | L32x64 胶子 OPE 组件的导出结果
+52129627648 | 48.549 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_P4_B_pilot_20261015 | L32x64 Pz=4 B-scheme 矩阵元、窗口或内存修复结果
+16690864128 | 15.545 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_production_20260922 | 自旋-2 算符 distillation、收缩扩展、生产或基准数据
+13969064960 | 13.010 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_Pz0_20conf_7flow_20261020 | L32x64 Pz=0 B-scheme seven-flow 生产数据
+5208175616 | 4.850 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x96_B_matched_radius20_7flow_20261021 | L32x96 B-scheme 半径匹配的 seven-flow 结果
+4900039168 | 4.564 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_omega_compare_20261014 | Omega acceleration 与逐 Wick 路径的 GPU 对照
+4664773632 | 4.344 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_ratio20_boot100_T7_Q1em3_chi1e3_20261020_v2 | L32x64 ratio 拟合、bootstrap 与方案对照结果
+4621224960 | 4.304 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/ratio_bootstrap_all_operators_v1 | 共享 configuration bootstrap 的全算符 ratio 结果
+4396198400 | 4.094 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/matching | 胶子准 PDF/TMD 的单圈 matching 与方案转换结果
+3472780800 | 3.234 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/ratio_bootstrap_latest_v1 | 共享 configuration bootstrap 的全算符 ratio 结果
+2940741632 | 2.739 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/fit_all_operators_aic_v1 | 全算符 AIC 或最新拟合及拟合诊断
+2297750016 | 2.140 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/polyakov_L32x96 | L32x96 纯规范流动 Polyakov loop 结果
+2093385728 | 1.950 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/fit_latest_v1 | 全算符 AIC 或最新拟合及拟合诊断
+1197911040 | 1.116 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_P4_B_memfix_20261015 | L32x64 Pz=4 B-scheme 矩阵元、窗口或内存修复结果
+1188421632 | 1.107 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_A_ratio30_boot100_T7_Q1em3_chi1e3_20261016 | L32x64 ratio 拟合、bootstrap 与方案对照结果
+1165315072 | 1.085 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/output | 早期通用输出目录，含 OPE 或分析中间产物
+717113856 | 683.893 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_Pz0_ratio20_boot100_T7_Q1em3_chi1e3_20261021 | L32x64 Pz=0 B-scheme ratio20 bootstrap 拟合结果
+590894080 | 563.521 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_boot2000_20261016 | 辅助 line-mass/发散窗口研究，不属于胶子 TMD 主链
+478098432 | 455.950 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_P2_B_20261015 | 辅助 line-mass/发散窗口研究，不属于胶子 TMD 主链
+445403136 | 424.770 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_bare_ratio_20_ud_20260927 | 20 组态裸 matrix element 或 ratio 分析
+444356608 | 423.771 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_bare_ratio_20_20260926 | 20 组态裸 matrix element 或 ratio 分析
+430460928 | 410.520 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_pionDA_workflow_20261022 | B-scheme pion DA 提取与 workflow 结果
+419967488 | 400.512 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_d_boot3000_20261018 | 辅助 line-mass/发散窗口研究，不属于胶子 TMD 主链
+387701248 | 369.741 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/gluon_l32x64_ope_components_20261009 | L32x64 胶子 OPE 分量张量
+359269888 | 342.626 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_flow_c3_ratio_v2 | 夸克流 C3/C2 ratio 的版本化结果
+328348160 | 313.137 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_expand30_20261012 | L32x64 基底或统计扩展的对照结果
+222430208 | 212.126 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_flow_c3_ratio_v1 | 夸克流 C3/C2 ratio 的版本化结果
+198017024 | 188.844 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_radius030_20261020 | Wilson loop、static potential 或辅助重整化检查
+178651648 | 170.375 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_flow_c3_ratio_small_v1 | 夸克流 C3/C2 ratio 的版本化结果
+146289152 | 139.512 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_Tw_static_20261020 | Wilson loop、static potential 或辅助重整化检查
+145763840 | 139.011 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_time_tau_gt_0p1_v1 | flow-time 依赖与连续外推结果
+133805056 | 127.606 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_pilot_20261015 | 辅助 line-mass/发散窗口研究，不属于胶子 TMD 主链
+125579264 | 119.762 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/gluon_unpolarized_stages_CT18NLO_20260921 | 非极化胶子 CT18NLO matching 分阶段产物
+112606720 | 107.390 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020 | Wilson loop、static potential 或辅助重整化检查
+101754368 | 97.041 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_pionDA_linear_only_20261023 | B-scheme pion DA 提取与 workflow 结果
+85227520 | 81.279 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_three_stages_10conf_Nboot50_20260920 | 10 组态三阶段或 Zchi1 控制链结果
+74349568 | 70.905 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_Zchi1_control_10conf_Nboot50_20260920 | 10 组态三阶段或 Zchi1 控制链结果
+72800256 | 69.428 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_zero_lambda_fourier_quasi_matching_20260927 | 零 flow 外推后的 Fourier/quasi matching 结果
+62870016 | 59.958 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/logs | 项目运行日志与 Slurm 输出
+60978176 | 58.153 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/handoff | 阶段性交接材料、清单与报告
+59279360 | 56.533 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_localnorm_line_dF0p374137_20261021 | B-scheme local normalization 生产与审计
+58336768 | 55.634 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ratio_fit_20_ud_0p6_20260927 | 夸克 ratio 的 flow、窗宽与 matching 拟合
+57678336 | 55.006 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/static_potential_L32x64_1700conf_20261017 | Wilson loop、static potential 或辅助重整化检查
+54020096 | 51.518 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_pionDA_m0_zlt030_20261023 | B-scheme pion DA 提取与 workflow 结果
+51675136 | 49.281 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_localnorm20_boot100_20261021_v2 | B-scheme local normalization 生产与审计
+51516416 | 49.130 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_time_analysis_v1 | flow-time 依赖与连续外推结果
+50990080 | 48.628 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ratio_fit_20_ud_0p1_relaxed_20260927 | 夸克 ratio 的 flow、窗宽与 matching 拟合
+44721664 | 42.650 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_dF0p374137_trial_m0_20261020 | B-scheme dF 参数试验
+40249344 | 38.385 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/static_potential_fullgrid_20261017 | Wilson loop、static potential 或辅助重整化检查
+36976128 | 35.263 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/documentation_updates | 文档更新与一致性检查记录
+35006464 | 33.385 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_d_current_20261017 | 辅助 line-mass/发散窗口研究，不属于胶子 TMD 主链
+27533824 | 26.258 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_scale_windows_20261017 | 辅助 line-mass/发散窗口研究，不属于胶子 TMD 主链
+27132416 | 25.875 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/build | 本地编译产物与可执行文件
+25708544 | 24.518 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_benchmark_20260922 | 自旋-2 算符 distillation、收缩扩展、生产或基准数据
+23868416 | 22.763 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_recovery_v7 | ringed kinetic 求解器恢复与复验数据
+19542016 | 18.637 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_recovery_v5 | ringed kinetic 求解器恢复与复验数据
+19280384 | 18.387 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_recovery_v2 | ringed kinetic 求解器恢复与复验数据
+19280384 | 18.387 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_recovery_v6 | ringed kinetic 求解器恢复与复验数据
+18485248 | 17.629 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_matching_pilot_v1 | ringed 方案 matching 或 SFTE 试点结果
+18387456 | 17.536 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_flow_products | 夸克 flow 产品索引与中间结果
+15216128 | 14.511 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ratio_fit_20_ud_0p1_relaxed_flow_extrap_20260927 | 夸克 ratio 的 flow、窗宽与 matching 拟合
+13375488 | 12.756 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_time_tau_gt_1p0_v1 | flow-time 依赖与连续外推结果
+13111808 | 12.504 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_window_review_20261015 | B-scheme 有限窗与源汇窗口复核
+11273728 | 10.751 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_unpolarized_sixflow_bare_fit_v1 | 非极化六 flow 裸 matrix element 拟合
+9348608 | 8.916 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/runs | 运行收据与小型元数据
+8399360 | 8.010 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_gf_matching_20_ud_20260927 | 20 组态 u/d 胶子流 matching 对照
+7740928 | 7.382 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_lambda_fourier_lamet_20260920 | lambda Fourier/LaMET 对照结果
+7218688 | 6.884 MiB | partial | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_ensemble_v1 | ringed 10-configuration ensemble；存在不可读子目录，数值为可读部分
+7088640 | 6.760 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ratio_fit_20_ud_0p6_matching_20260927 | 夸克 ratio 的 flow、窗宽与 matching 拟合
+7078912 | 6.751 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/comparison | 结果对照与验证图表
+6423552 | 6.126 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_unpolarized_bootstrap_fit_v1 | 非极化夸克 bootstrap 或 ratio AIC 拟合
+6031872 | 5.752 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ratio_fit_20_ud_0p1_relaxed_matching_20260927 | 夸克 ratio 的 flow、窗宽与 matching 拟合
+5637120 | 5.376 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_extrap_tau_gt1 | flow-time 依赖与连续外推结果
+3540480 | 3.376 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_unpolarized_ratio_fit_aic_v1 | 非极化夸克 bootstrap 或 ratio AIC 拟合
+3408896 | 3.251 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_unpolarized_bootstrap_fit_small_v1 | 非极化夸克 bootstrap 或 ratio AIC 拟合
+3015680 | 2.876 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/flow_extrap_aic_tau_min1 | flow-time 依赖与连续外推结果
+2890752 | 2.757 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/__pycache__ | Python 或测试缓存，不承载物理数据
+2633728 | 2.512 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/.gluon_bare_fit_stage | 分析流水线暂存产物
+1847808 | 1.762 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_recovery_v3 | ringed kinetic 求解器恢复与复验数据
+1847296 | 1.762 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_recovery_v4 | ringed kinetic 求解器恢复与复验数据
+1840640 | 1.755 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/progress_audit_20261016 | 生产进度审计与状态汇总
+1837056 | 1.752 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_sixflow_ringed_sfte_v1 | ringed 方案 matching 或 SFTE 试点结果
+1705472 | 1.626 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_unpolarized_ratio_fit_aic_small_v1 | 非极化夸克 bootstrap 或 ratio AIC 拟合
+1584128 | 1.511 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/.ratio_v3_stage | 分析流水线暂存产物
+1452544 | 1.385 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_ratio20_boot100_T7_Q1em3_chi1e3_20261020 | L32x64 ratio 拟合、bootstrap 与方案对照结果
+1447424 | 1.380 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_m0_zlt0p15_audit_20261021 | B-scheme m0 窗口审计
+1184256 | 1.129 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_expand40_20261013 | L32x64 基底或统计扩展的对照结果
+792064 | 773.500 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/documentation_checks | 文档更新与一致性检查记录
+787968 | 769.500 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_gradient_flow_matching_v1 | 早期 gradient-flow matching 图表与诊断
+666624 | 651.000 KiB | partial | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1 | critical valence mass pilot；存在 12 个不可读运行目录，数值为可读部分
+561664 | 548.500 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_missing30_no_tf1_20260928_v3 | 自旋-2 缺失 flow 的补算状态或小结果
+398336 | 389.000 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_localnorm20_boot100_20261021 | B-scheme local normalization 生产与审计
+263168 | 257.000 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/analysis | 分析入口与派生产物
+262656 | 256.500 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/plans | 运行计划、冻结参数与审计清单
+135168 | 132.000 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/tests | 回归测试与测试夹具
+34304 | 33.500 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_missing30_no_tf1_20260929_v4 | 自旋-2 缺失 flow 的补算状态或小结果
+20480 | 20.000 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/slurm | Slurm 提交脚本与作业模板
+4608 | 4.500 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/.pytest_cache | Python 或测试缓存，不承载物理数据
+1024 | 1.000 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/jobs | 任务状态或作业元数据
+1024 | 1.000 KiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_missing30_no_tf1_20260928_v2 | 自旋-2 缺失 flow 的补算状态或小结果
+512 | 512 B | partial | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/ringed_doc_update_20260920_oygtSM | 私人 ringed 文档更新目录；不可读且已跳过内容
+
+# 项目根聚合补充
+42548967936 | 39.627 GiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/gluon_l32x64_allconf_20261009 | L32x64 1,700 个组态的全组态胶子 OPE 结果，包括 conf1000 至 conf9990
+4883968 | 4.658 MiB | complete | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/[root-level files and directory metadata] | 项目根层普通文件与根目录元数据；用于闭合项目根汇总
+
+# 五、权限缺口
+# 这些路径模式为 2700，当前用户不能遍历；大小未知，未用估算值补齐。
+inaccessible | path | impact
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_13cmron4 | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_1udkfnde | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_5c75kavp | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_8uixj3nq | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_cqplod6m | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_cuonexuz | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_d6xdeel6 | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_ei1yb2qj | pipeline.py 直接引用的冻结 critical-mass 基准
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_n4ld7zcp | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_tcpn4tdc | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_xg_904dd | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_xho9lqtd | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_mass_pilot_v1/runs/critical_mass_20260918_zm3hr8nv | critical mass pilot 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_ensemble_v1/after_Zchi_20260920_yr75XV | ringed ensemble 后处理
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_ensemble_v1/runs/critical_10conf_20260920_rz65f_im | ringed 10-configuration 运行
+inaccessible | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/ringed_doc_update_20260920_oygtSM | 私人文档更新目录
+
+# 六、按用户要求跳过
+state | path | reason
+skipped | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/docs_update_20261009_YyHRbs | 私人文档目录
+skipped | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_allconf_B_20261015 | 非胶子 TMD 主链的全组态辅助扫描
+skipped | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_static_allfits_20261017 | 辅助 line-mass 拟合
+skipped | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/gluon_flow_current_plots_v1 | 绘图小目录
+skipped | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_ringed_kinetic_v1 | 代码型小目录
+skipped | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_spin2_tf03_tf04_20261004 | 非本胶子 TMD 主链关键数据
+skipped | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/scripts | 外部源码小目录
+skipped | /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/src | 外部源码小目录
+
+# 七、使用说明
+# 1. 若要得到包含受保护运行目录的严格全量，需要 donghx 或目录所有者开放读取/遍历权限，
+#    随后只需补测第五节列出的 15 个目录，并与本文件的可读总量相加。
+# 2. “文件路径”在本清单中指本次统计的目录粒度。目录内部文件沿用各运行 manifest、
+#    done/receipt 和小型索引文件管理；未逐个展开数十万至数百万中间文件。
+# 3. 若用于跨仓库搬运，应以 size_bytes 为容量规划依据，并额外考虑文件系统块大小、
+#    inode 数量、传输开销和是否保留全部中间 flow/vertex 数据。
+# 4. L32x64 全组态胶子结果按 1,700 个 conf 目录并行汇总；其总量已包含在项目根汇总中。
+# 5. 当前清单文件自身不计入当前目录的 26,933,248 B 统计值。
