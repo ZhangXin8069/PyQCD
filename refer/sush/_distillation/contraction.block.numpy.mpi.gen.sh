@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=Pi_ENV
-#SBATCH --array=2,4,10
+#SBATCH --array=0
 #SBATCH --nodes=1
 
 #SBATCH --error=test_pion_3pt_error
@@ -10,8 +10,9 @@
 ##SBATCH --partition=na800-pcie
 ##SBATCH --partition=h20-nettr
 ##SBATCH --partition=dgx1
-#SBATCH --partition=i72c512g,cpu6248R
+##SBATCH --partition=i72c512g,cpu6248R
 ##SBATCH --partition=gpu-debug
+#SBATCH --partition=cpu-short
 #SBATCH --nodes=1
 #SBATCH --ntasks=24
 #SBATCH --ntasks-per-node=24
@@ -25,13 +26,13 @@
 ##SBATCH --gres=gpu:1
 
 ##SBATCH --begin=now+7hour
-#SBATCH --time="2-00:00:00"
+##SBATCH --time="2-00:00:00"
 ##SBATCH --time="30:00"
 
 ##SBATCH -w cpu016
-#SBATCH -w cpu058
+##SBATCH -w cpu058
 
-#SBATCH -x cpu022,cpu051,cpu054,cpu059,cpu055
+##SBATCH -x cpu022,cpu051,cpu054,cpu059,cpu055
 ##SBATCH --exclusive
 
 # 禁用不需要的传输方式

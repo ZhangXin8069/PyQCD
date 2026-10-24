@@ -66,7 +66,7 @@ V_list = [x for x in range(Nx**3)][rank*(Nx**3//size):(rank+1)*(Nx**3//size)]
 V_max = Nx**3
 
 eigen = corr_eigvecs(Nx = Nx)
-Mom_link = creat_mom_list(Mom = [0, 0, 1], fix_Q2 = True)
+Mom_link = creat_mom_list(Mom = [1, 1, 1], fix_Q2 = True)
 mu_nu_indx, mu_nu_gamma, mu_indx, mu_gamma =  PFF_Mom_to_gamma_new(Mom_link[:], allow_t = False)
 
 mu_nu_gamma = backend.asarray(mu_nu_gamma)
@@ -155,87 +155,87 @@ for t_src in range(Nt):
         
     del prop_bubble_light, prop_bubble_strange
 
-    st_mpi_time = time.perf_counter()
+    # st_mpi_time = time.perf_counter()
+    
+    # # prop = np.memmap(
+    # #     f'/nexdata/project/lqcd/sush/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light/{conf_id}/t{t_src:03d}_gen_e50_stout_smear_20_0.12.mmap', 
+    # #     dtype=complex, mode='r', shape=(24 * 24 * 24, 3, 72, 4, 4, 50)
+    # #     )
     
     # prop = np.memmap(
-    #     f'/nexdata/project/lqcd/sush/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light/{conf_id}/t{t_src:03d}_gen_e50_stout_smear_20_0.12.mmap', 
+    #     f'/beegfs/group-bak/lqcd/sush/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light/{conf_id}/t{t_src:03d}_gen_e50_stout_smear_20_0.12.mmap', 
     #     dtype=complex, mode='r', shape=(24 * 24 * 24, 3, 72, 4, 4, 50)
     #     )
     
-    prop = np.memmap(
-        f'/beegfs/group-bak/lqcd/sush/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light/{conf_id}/t{t_src:03d}_gen_e50_stout_smear_20_0.12.mmap', 
-        dtype=complex, mode='r', shape=(24 * 24 * 24, 3, 72, 4, 4, 50)
-        )
+    # t_sink_list = [x%Nt for x in range(t_src, t_src + 40, 1)]
     
-    t_sink_list = [x%Nt for x in range(t_src, t_src + 40, 1)]
+    # prop_load = backend.zeros((len(V_list), 3, 72, 4, 4, 50), dtype = complex)
     
-    prop_load = backend.zeros((len(V_list), 3, 72, 4, 4, 50), dtype = complex)
+    # prop_load[:, :, t_sink_list] = prop[rank*(Nx**3//size):(rank+1)*(Nx**3//size), :, t_sink_list, ...]
     
-    prop_load[:, :, t_sink_list] = prop[rank*(Nx**3//size):(rank+1)*(Nx**3//size), :, t_sink_list, ...]
-    
-    if rank == 0:
-        print(f'mpidata and lexico prop use time {(time.perf_counter() - st_mpi_time):.3f} s of tsrc {t_src}')
+    # if rank == 0:
+    #     print(f'mpidata and lexico prop use time {(time.perf_counter() - st_mpi_time):.3f} s of tsrc {t_src}')
 
-    st_cal_time = time.perf_counter()
-    for t_sink in t_sink_list:
-        prop_tsink = prop_load[:, :, t_sink]
+    # st_cal_time = time.perf_counter()
+    # for t_sink in t_sink_list:
+    #     prop_tsink = prop_load[:, :, t_sink]
         
-        prop_sep_tsink = contract('ab,...bcf,cd->...daf', g5, prop_tsink.conj(), g5)
-        corr_2pt_mu_matrix[:, :, t_src, t_sink] = corr_2pt_mu_matrix[:, :, t_src, t_sink] + contract('Vcijn,Vckln,MVc,MGli,jk->MG', prop_tsink, prop_sep_tsink, phase_link, mu_gamma, g5, optimize = 'greedy')
+    #     prop_sep_tsink = contract('ab,...bcf,cd->...daf', g5, prop_tsink.conj(), g5)
+    #     corr_2pt_mu_matrix[:, :, t_src, t_sink] = corr_2pt_mu_matrix[:, :, t_src, t_sink] + contract('Vcijn,Vckln,MVc,MGli,jk->MG', prop_tsink, prop_sep_tsink, phase_link, mu_gamma, g5, optimize = 'greedy')
         
-    if rank == 0:
-        print(f'cal 2pt use time {(time.perf_counter() - st_cal_time):.3f} s of tsrc {t_src}')
+    # if rank == 0:
+    #     print(f'cal 2pt use time {(time.perf_counter() - st_cal_time):.3f} s of tsrc {t_src}')
         
-    if rank == 0:
-        peram_sep = backend.load(f'/nexdata/project/lqcd/sush/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light/{conf_id}/t{((t_sep + t_src)%Nt):03d}_e50_s[100, 200, 300, 500, 800]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n500_V1_stout_smear_20_0.12.npy')
-    else:
-        peram_sep = None
+    # if rank == 0:
+    #     peram_sep = backend.load(f'/nexdata/project/lqcd/sush/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light/{conf_id}/t{((t_sep + t_src)%Nt):03d}_e50_s[100, 200, 300, 500, 800]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n500_V1_stout_smear_20_0.12.npy')
+    # else:
+    #     peram_sep = None
     
-    peram_sep = get_mpi_data(data = peram_sep, mdtype = 'TScatter', root = 0, axis = 0)
+    # peram_sep = get_mpi_data(data = peram_sep, mdtype = 'TScatter', root = 0, axis = 0)
     
-    peram_sep = seq_peram(peram_sep)
+    # peram_sep = seq_peram(peram_sep)
     
-    for Mom_indx in range(len(Mom_link)):
-        st_all_cal_time = time.perf_counter()
+    # for Mom_indx in range(len(Mom_link)):
+    #     st_all_cal_time = time.perf_counter()
         
-        if rank == size - 1:
-            peram_one_Mom = backend.zeros((Nt, 4, 4, Nev_max, 50), dtype = complex)
+    #     if rank == size - 1:
+    #         peram_one_Mom = backend.zeros((Nt, 4, 4, Nev_max, 50), dtype = complex)
 
-        else:
-            peram_one_Mom = None
+    #     else:
+    #         peram_one_Mom = None
         
-        for t in t_sink_list:
-            peram = contract('Vcabn,mVc,Vc->abmn', prop_load[:, :, t], vectors_tmp[t].conj(), phase_link[Mom_indx])
-            peram_one_Mom_temp = get_mpi_data(data = peram, mdtype = 'Gather', root = size - 1)
-            if rank == size - 1:
-                peram_one_Mom[t] = peram_one_Mom_temp.sum(0)
+    #     for t in t_sink_list:
+    #         peram = contract('Vcabn,mVc,Vc->abmn', prop_load[:, :, t], vectors_tmp[t].conj(), phase_link[Mom_indx])
+    #         peram_one_Mom_temp = get_mpi_data(data = peram, mdtype = 'Gather', root = size - 1)
+    #         if rank == size - 1:
+    #             peram_one_Mom[t] = peram_one_Mom_temp.sum(0)
             
-        peram_one_Mom = get_mpi_data(data = peram_one_Mom, mdtype = 'TScatter', root = size - 1, axis = -1)
-        peram_one_Mom_sep_tsink = seq_peram(peram = peram_one_Mom[(t_sep + t_src)%Nt])
+    #     peram_one_Mom = get_mpi_data(data = peram_one_Mom, mdtype = 'TScatter', root = size - 1, axis = -1)
+    #     peram_one_Mom_sep_tsink = seq_peram(peram = peram_one_Mom[(t_sep + t_src)%Nt])
             
-        for t_curr in t_sink_list:
-            if rank == t_curr%size:
-                peram_sep_curr = peram_sep[t_curr//size]
+    #     for t_curr in t_sink_list:
+    #         if rank == t_curr%size:
+    #             peram_sep_curr = peram_sep[t_curr//size]
 
-            else:
-                peram_sep_curr = None
+    #         else:
+    #             peram_sep_curr = None
                 
-            peram_sep_curr = get_mpi_data(data = peram_sep_curr, mdtype = 'Bcast', root = t_curr%size)
+    #         peram_sep_curr = get_mpi_data(data = peram_sep_curr, mdtype = 'Bcast', root = t_curr%size)
                 
-            if t_curr != (t_src + t_sep)%Nt:
-                corr_3pt_matrix[Mom_indx, :, t_src, t_curr] = (
-                    corr_3pt_matrix[Mom_indx, :, t_src, t_curr] + 
-                    contract('ijvn,klnm,opmv,Gpi,Glo,jk,v,m->G', peram_one_Mom[t_curr], peram_one_Mom_sep_tsink, peram_sep_curr, mu_nu_gamma[Mom_indx, :, 0], mu_nu_gamma[Mom_indx, :, 1], g5, omega1, omega1, optimize = 'greedy')
-                    )
+    #         if t_curr != (t_src + t_sep)%Nt:
+    #             corr_3pt_matrix[Mom_indx, :, t_src, t_curr] = (
+    #                 corr_3pt_matrix[Mom_indx, :, t_src, t_curr] + 
+    #                 contract('ijvn,klnm,opmv,Gpi,Glo,jk,v,m->G', peram_one_Mom[t_curr], peram_one_Mom_sep_tsink, peram_sep_curr, mu_nu_gamma[Mom_indx, :, 0], mu_nu_gamma[Mom_indx, :, 1], g5, omega1, omega1, optimize = 'greedy')
+    #                 )
 
-            else:
-                corr_3pt_matrix[Mom_indx, :, t_src, t_curr] = (
-                    corr_3pt_matrix[Mom_indx, :, t_src, t_curr] + 
-                    contract('mv,ijvn,klnm,opmv,Gpi,Glo,jk->G', omega2, peram_one_Mom[t_curr], peram_one_Mom_sep_tsink, peram_sep_curr, mu_nu_gamma[Mom_indx, :, 0], mu_nu_gamma[Mom_indx, :, 1], g5, optimize = 'greedy')
-                    )
+    #         else:
+    #             corr_3pt_matrix[Mom_indx, :, t_src, t_curr] = (
+    #                 corr_3pt_matrix[Mom_indx, :, t_src, t_curr] + 
+    #                 contract('mv,ijvn,klnm,opmv,Gpi,Glo,jk->G', omega2, peram_one_Mom[t_curr], peram_one_Mom_sep_tsink, peram_sep_curr, mu_nu_gamma[Mom_indx, :, 0], mu_nu_gamma[Mom_indx, :, 1], g5, optimize = 'greedy')
+    #                 )
 
-        if rank == 0:
-            print(f'cal 3pt use time {(time.perf_counter() - st_all_cal_time):.3f} s of tsrc {t_src} Mom_indx {Mom_indx}')
+    #     if rank == 0:
+    #         print(f'cal 3pt use time {(time.perf_counter() - st_all_cal_time):.3f} s of tsrc {t_src} Mom_indx {Mom_indx}')
 
 corr_2pt_mu_matrix = get_mpi_data(data = corr_2pt_mu_matrix, mdtype = 'Gather')
 corr_3pt_matrix = get_mpi_data(data = corr_3pt_matrix, mdtype = 'Gather')
@@ -267,10 +267,10 @@ if rank == 0:
             print('mkdir_save_path:',corr_save_path)
 
         for mu_indx_1, mu in enumerate(mu_indx[Mom_indx]):
-            backend.save(f'{corr_save_path}/corr_2pt_gamma{(mu):02d}_gen_stout_smear_20_0.12_src50.npy', corr_2pt_mu_matrix[Mom_indx, mu_indx_1])
+            # backend.save(f'{corr_save_path}/corr_2pt_gamma{(mu):02d}_gen_stout_smear_20_0.12_src50.npy', corr_2pt_mu_matrix[Mom_indx, mu_indx_1])
             backend.save(f'{corr_save_path}/corr_bubble_light_gamma{(mu):02d}_gen_stout_smear_20_0.12_src650.npy', bubble_light_matrix[Mom_indx, mu_indx_1])
             backend.save(f'{corr_save_path}/corr_bubble_strange_gamma{(mu):02d}_gen_stout_smear_20_0.12_src650.npy', bubble_strange_matrix[Mom_indx, mu_indx_1])
             backend.save(f'{corr_save_path}/corr_bubble_u-s_gamma{(mu):02d}_gen_stout_smear_20_0.12_src650.npy', bubble_light_matrix[Mom_indx, mu_indx_1] - bubble_strange_matrix[Mom_indx, mu_indx_1])
             
-        for gamma_indx, gamma_list in enumerate(mu_nu_indx[Mom_indx]):
-            backend.save(f'{corr_save_path}/corr_3pt_gamma0{gamma_list[1]}0{gamma_list[0]}05_tsep{t_sep}_gen_stout_smear_20_0.12_src50_sink{Nev_max}_curr{Nev_max}_compensation.npy', corr_3pt_matrix[Mom_indx, gamma_indx])
+        # for gamma_indx, gamma_list in enumerate(mu_nu_indx[Mom_indx]):
+        #     backend.save(f'{corr_save_path}/corr_3pt_gamma0{gamma_list[1]}0{gamma_list[0]}05_tsep{t_sep}_gen_stout_smear_20_0.12_src50_sink{Nev_max}_curr{Nev_max}_compensation.npy', corr_3pt_matrix[Mom_indx, gamma_indx])

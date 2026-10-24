@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=Pi_ENV
-#SBATCH --array=0-79
+#SBATCH --array=0-19
 #SBATCH --nodes=1
 
 #SBATCH --error=test_pion_3pt_error

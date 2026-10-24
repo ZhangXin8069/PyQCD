@@ -2,6 +2,10 @@
 
 本文针对本项目的四维 thin-link gradient-flow quark/gluon PDF 计算，解释 Wilson line 的线性发散、其与流时间的关系，以及用 Polyakov loop 或 Wilson loop 抽取线自能的原理和实际操作。公式采用自然单位，$\hbar=c=1$。
 
+**2026-10-22 最新理论与实施状态导航：**新增第 27 节，集中回答局域归一化后 matching 系数怎样变化、有限残余质量 $m_0^{\overline{\rm MS}}$ 是什么，以及怎样使用 $P_z=0$ 数据确定它。第 27.3 节给出声明约定下的归一化一圈系数，第 27.6–27.8 节给出静止核子的短距离 OPE 目标、残余质量的拟合符号和当前窗口限制。2026-10-21 已完成 **固定候选 $d_F=0.374137$ 的局域归一化矩阵元试算减除**，但没有将其升级为正式 $d_F$，也没有确定 $m_0^{\overline{\rm MS}}$；具体结果入口见第 27.9 节。此前“没有对 PDF 施加减除”的表述是各段标注日期时的历史状态；最新状态是“已做诊断性矩阵元减除，尚非完整 $\overline{\rm MS}$ matching 或 PDF”。本次只更新本文，不改数值产品或提交新任务。
+
+**2026-10-20 最新结果导航：**第 26 节记录严格半径窗 $a<\sqrt{8t_f}<0.3\,\mathrm{fm}$ 下的 **1700 conf / 3000 配对 bootstrap** 新分析：固定流时间对的直接 Wilson 时间 log-ratio 拟合、完整有效静态势图、跨 flow 的 $d_F/d_A$ 候选、空间平台和新参考流时间扫描。请注意与第 25 节先拟合原始 $W$ 再作势差的路线区分。当前基本表示存在显著 flow-window/model 依赖，伴随表示尚无受控距离平台；`final_d_F=null`、`final_d_A=null`，**没有批准最终系数，也没有对 PDF 施加线质量减除**。第 26 节列出代码、参数样本、完整审计和图片地址。以下旧日期段落保留为历史，不代表最新最终结论。
+
 **2026-10-18 拟合图阅读导航：**第 25 节逐项解释 `flow_fits.pdf` 中的 `full/low08/low14`、`R/a=6..12/7..12`、红蓝模型、参考流时间以及空白子图。说明以最新已完成的 `line_mass_d_boot3000_20261018`（**1700 conf / 3000 配对 bootstrap**）的冻结代码和机器结果为准，并给出每个示例实际使用的 $\tau$ 列表。`full` 不是全部原始测量点，`low08/low14` 是**下限**，红蓝区分拟合模型而不是基本/伴随表示。第 24 节保留的是 2026-10-17 的历史版本；其先拟合 $-\log\langle W\rangle$ 的时间估计器与本次先拟合原始 $\langle W\rangle$ 的版本不能混用数值。本次只补充文档，不重跑拟合、不选定最终 $d$、不对 PDF 施加减除。
 
 **2026-10-17 方法释义与尺度窗更新导航：**第 24 节详细解释当前图中的 **Wilson Cornell** 与 **Wilson relative**：二者先由 Wilson loop 的时间衰减提取势，前者再拟合空间距离依赖、后者在固定距离作跨 flow-time 差分。尤其注意，本文代码中的 relative **不是** $V(R)-V(R_{\rm ref})$。第 24.7–24.9 节记录最新 `line_mass_scale_windows_20261017` 的尺度条件、候选结果、图表及实现路径；它沿用 **1700 conf / 1000 配对 bootstrap**，没有改成 2000 bootstrap。第 23 节及更早日期的结果、固定 reference 和“下一步”保留为历史记录；当前尺度窗版本的具体定义以第 24 节及其冻结代码为准。本次仅更新说明，没有重跑拟合、改动 matching 或施加 PDF 线质量减除。
@@ -1674,6 +1678,161 @@ $d_{\mathcal R}$ 是无量纲系数，**已含表示依赖，不再额外乘 Cas
 
 这些是纯规范量，**没有 blending A/B 权重**。目录中的 `B` 只标记相关 quark 工作分支；不能向闭合圈测量中加入 C3 的 A/B 权重表。
 
+### 23.2.1 代码中基本表示与伴随表示 Wilson loop 的实际计算
+
+这里的“基本表示”和“伴随表示”不是两套不同的几何路径，而是同一条闭合矩形路径在两个颜色表示下的两个不同 character。生产测量使用冻结目录
+
+```text
+/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_boot2000_20261016/src/closed_loops.cpp
+/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_boot2000_20261016/src/polyakov_base.cpp
+```
+
+全量运行分支的调用和产物检查位于
+
+```text
+/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_allconf_B_20261015/code/run.py
+/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_allconf_B_20261015/code/common.py
+```
+
+这些 Wilson/Polyakov 圈的 `B` 只是运行目录名称；闭合圈是纯规范观测量，**不使用 quark C3/C2 的 blending A/B 权重**。
+
+#### (a) 两种表示共用的矩形 holonomy
+
+流化后规范链接记为
+
+\[
+ U_\mu^{(\tau)}(x),\qquad \mu\in\{x,y,z,t\},
+\]
+
+其中代码中的数组坐标顺序是 `(t,z,y,x)`，但物理链接方向顺序是 `(x,y,z,t)`；时间方向的数组索引为 `3`。对每个四维起点 `x`、空间方向
+\(\mu=x,y,z\)、空间长度 \(n_R=R/a\) 和时间长度 \(n_T=T/a\)，代码构造同一个闭合矩形
+
+\[
+ H_{\mu t}(x;n_R,n_T;\tau)
+ =S_\mu(x;n_R)
+  T(x+n_R\hat\mu;n_T)
+  S_\mu^\dagger(x+n_T\hat t;n_R)
+  T^\dagger(x;n_T),
+\]
+
+其中
+
+\[
+ S_\mu(x;n_R)=\prod_{r=0}^{n_R-1}U_\mu(x+r\hat\mu),\qquad
+ T(x;n_T)=\prod_{s=0}^{n_T-1}U_t(x+s\hat t).
+\]
+
+因此路径依次是 `+mu R, +t T, -mu R, -t T`；回程段使用真正的逆链接（dagger），不是简单地反转数组。代码为了减少矩阵乘法，先缓存所有起点的时间 transporter `temporal[t-1][s]`，再逐步累乘空间 transporter `spatial[s]`。矩形的 trace 用等价的 Frobenius 内积实现：
+
+\[
+ A=S_\mu(x)T(x+R\hat\mu),\qquad
+ B=T(x)S_\mu(x+T\hat t),
+\]
+\[
+ \operatorname{Tr}H=\operatorname{Tr}(AB^\dagger)
+ =\sum_{i,j}A_{ij}B_{ij}^{*}.
+\]
+
+这样既保持了闭合路径的顺序，也避免显式再构造一次完整的回程矩阵。代码测量三个 \(\mu t\) 平面 `XT/YT/ZT`，\(n_R=0,\ldots,12\)、\(n_T=0,\ldots,16\)。对每个固定的空间方向 \(\mu\)，先平均全部 \(32^3\times64\) 个四维起点；C++ 测量函数保留方向维，不在这里除以 3。后处理读取三个方向后才按方向取平均。输出的形状是
+
+```text
+wilson_fundamental.npy : (3, 13, 17), complex128
+wilson_adjoint.npy     : (3, 13, 17), float64
+```
+
+其中第一维是空间方向，第二、三维分别是 \(n_R,n_T\)。\(n_R=0\) 或 \(n_T=0\) 的退化矩形保留初始化值 1；非退化矩形由上述路径乘积计算。
+
+#### (b) 基本表示：保留基本表示的复 trace
+
+规范链接本身是 \(3\times3\) 基本表示矩阵，因此生产代码首先对每个局部闭合 holonomy 计算
+
+\[
+ q_F(H)=\frac{1}{N_c}\operatorname{Tr}_F H
+       =\frac{1}{3}\operatorname{Tr}_F H.
+\]
+
+对每个起点的局部值分别累加实部和虚部，最后才除以四维体积：
+
+\[
+ W_{F,\mu}(R,T;\tau)
+ =\left\langle q_F(H_{\mu t})\right\rangle_x
+ =\frac{1}{V}\sum_x
+   \frac{\operatorname{Tr}_F H_{\mu t}(x;R,T;\tau)}{3},
+ \qquad
+ \overline W_F=\frac13\sum_{\mu=x,y,z}W_{F,\mu}.
+\]
+
+所以 `wilson_fundamental.npy` 保存的是复数基本表示结果，而不是测量阶段就强制取实部。后续静态势/线质量分析通常对组态平均后的 Wilson loop 取实部再进入 \(-\log W/T\)；这一步是分析投影，不改变基本表示的原始数据。单个有限统计组态的虚部可以非零，不能在测量阶段把它误解为伴随表示结果。
+
+#### (c) 伴随表示：由基本表示 trace 的 character 恒等式得到
+
+对于 \(SU(3)\)，伴随表示的 character 满足
+
+\[
+ \chi_A(H)=\operatorname{Tr}_A H_A
+ =\operatorname{Tr}_F H\,\operatorname{Tr}_F H^\dagger-1
+ =\left|\operatorname{Tr}_F H\right|^2-1.
+\]
+
+因此归一化的伴随 Wilson loop 局部估计量是
+
+\[
+ q_A(H)=\frac{\chi_A(H)}{N_A}
+ =\frac{|\operatorname{Tr}_F H|^2-1}{8},
+ \qquad N_A=N_c^2-1=8,
+\]
+
+生产代码在每个局部矩形上先用同一个基本表示 `trace` 形成
+`(norm(trace)-1)/8`，再对固定空间方向的所有起点平均；三个方向的平均在后处理阶段完成：
+
+\[
+ W_{A,\mu}(R,T;\tau)
+ =\left\langle q_A(H_{\mu t})\right\rangle_x
+ =\frac{1}{V}\sum_x
+   \frac{|\operatorname{Tr}_F H_{\mu t}(x;R,T;\tau)|^2-1}{8},
+ \qquad
+ \overline W_A=\frac13\sum_{\mu=x,y,z}W_{A,\mu}.
+\]
+
+生产路径中**没有**为每条链接显式建立并相乘一个 \(8\times8\) 伴随链接；使用 character 恒等式在基本表示的闭合 holonomy 上得到完全等价的伴随 trace。测试代码另外用显式 \(8\times8\) 伴随表示比较该恒等式，检查了非平凡矩形、伴随结果为实数、局部先构造后平均以及规范变换不变性。
+
+#### (d) 平均顺序是不可改变的统计约定
+
+代码计算的是
+
+\[
+ \left\langle |\operatorname{Tr}_F H|^2\right\rangle
+ \quad\text{而不是}\quad
+ \left|\left\langle\operatorname{Tr}_F H\right\rangle\right|^2.
+\]
+
+也就是说，伴随 character 必须在每个局部起点（以及每个组态）上先形成，再做空间方向、四维起点、组态和 bootstrap 平均。先把基本表示 trace 平均起来再取模平方会丢失局部涨落，得到的是另一种统计量，不能作为伴随 Wilson loop。相应地，不能用
+
+\[
+ W_A=W_F^{C_A/C_F}
+ \quad\text{或}\quad m_A=\frac{C_A}{C_F}m_F
+ \]
+
+替代实际伴随测量；Casimir scaling 至多是某些近似区间的模型假设，不是本代码的定义。
+
+基本表示和伴随表示使用完全相同的 flowed gauge field、起点集合、矩形尺寸、方向分量和流时间；区别只有颜色表示映射和归一化。因此两者分别保存为独立数组、独立 bootstrap 样本和独立线性发散拟合。代码输出先保留三个方向，后处理才在每个组态内取方向平均，再以组态作为 bootstrap 单位。不能把两种表示结果相加或平均，也不能把基本表示的 \(d_F\) 直接当作伴随表示的 \(d_A\)。
+
+#### (e) 与 Polyakov 实现的对应关系
+
+同一表示映射也用于完整时间方向的 Polyakov holonomy \(P(\boldsymbol x)=\prod_{t=0}^{N_t-1}U_t(\boldsymbol x,t)\)：
+
+\[
+ p_F(\boldsymbol x)=\frac{\operatorname{Tr}_F P(\boldsymbol x)}{3},
+ \qquad
+ p_A(\boldsymbol x)=\frac{|\operatorname{Tr}_F P(\boldsymbol x)|^2-1}{8}.
+\]
+
+基本表示 Polyakov 数据保留复数，伴随表示是有符号实数；Polyakov pair 也在每个空间点先构造两个局部表示值再平均。这里同样不能把平均后的基本表示 Polyakov loop 取模平方来定义伴随量。
+
+#### (f) 对线性发散拟合的直接影响
+
+后处理代码分别读取 `wilson_fundamental.npy` 和 `wilson_adjoint.npy`，对每一表示独立做实部投影、有限时间窗口拟合、跨流时间拟合和 bootstrap。由 Wilson rectangle 的两条时间方向长线得到相对有效势斜率时，\(\Delta V=2\Delta m_{\rm line}\)，所以后处理中的 `Wilson_DeltaV_over_2` 会再除以 2；这个几何因子与表示归一化是两件不同的事。最终的 \(d_F,d_A\) 仍需各自经过流时间、空间距离、有限 \(T\) 和模型系统误差检查；当前文档中 `final_d_F=null`、`final_d_A=null`、`final_d_approved=false` 的状态不能因这一定义说明而改变。
+
 ### 23.3 Wilson loop 的实际两阶段拟合
 
 **第一阶段：固定流时间对和空间距离，拟合有限 $T_W$ 的相对有效线质量。** 先对每份 ensemble/bootstrap/jackknife 求圈平均，再形成
@@ -2560,3 +2719,662 @@ Polyakov 的 flow 图沿用相同的窗口下限命名，但其尺度门不能�
 本次会话标题：**flow_fits 图中 flow 窗、Cornell 距离窗与红蓝模型的逐项解释**。
 
 本次仅核对已有冻结代码/机器结果并补充文档；未重新拟合、未重画已有 PDF、未提交 CPU/GPU 作业、未改变任何拟合窗口或统计处方。第 24 节及更早记录作为有日期的历史版本保留。
+
+## 26. 严格半径窗内的直接 Wilson 时间拟合、静态势与 d 候选（2026-10-20）
+
+### 26.1 当前结论与证据等级
+
+本节依据两个已完成目录的机器结果、冻结实现与独立审计：
+
+```text
+/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_Tw_static_20261020
+/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020
+```
+
+**已完成：**固定流时间对的直接时间斜率拟合、完整有限时间有效势作图、逐 $R$ 的跨 flow 系数拟合、相关空间平台、共同 $d$ 的二维相关交叉检查，以及重新构造圈比值的新参考扫描。**实现验证通过不等于物理系数已定稿。** 当前状态文件 `analysis/final_d_status.json` 明确为
+
+```json
+{"final_d_F": null, "final_d_A": null, "final_d_approved": false,
+ "PDF_subtraction_applied": false, "Casimir_conversion_used": false}
+```
+
+已有候选可供诊断，但不能把任一个小统计误差的值写成最终可减除系数。基本、伴随表示独立；没有重拟合 Polyakov，不能把本节 Wilson 结果称为 Wilson/Polyakov 联合最终值。第 23–25 节历史结果及其估计器不改写。
+
+### 26.2 数据、流时间、统计和不可变约定
+
+- ensemble 为 L32x64，$a=0.0897\,\mathrm{fm}$；thin-link 四维 Wilson RK3 flow，$\epsilon=0.01$，测量定义沿用第 23.2 节。
+- 输入是 `line_mass_d_boot3000_20261018/analysis/loop_resamples.npz` 与 `bootstrap_indices.npz`：1700 个共同组态，3000 份配置级 iid bootstrap，seed=20261015，每份有放回抽1700次；中心、1700份 delete-one JK 和 bootstrap 全链分别传播。
+- 不同 $\tau,R,T_w$ 和表示使用原来的同一索引，没有重新抽样、删除失败样本、取绝对值、截断负圈或最小误差替补。当前误差未评估新增自相关分块及完整系统误差。
+- 时间/flow/空间拟合固定使用相应 JK 估计器的完整相关协方差；相关矩阵本征模删除阈值 $10^{-8}$，原始信息秩阈值 $10^{-12}$，没有静默对角化或抬升精确零模。无先验、$\chi^2/Q/AIC$ 切选，但仍保存并解释拟合质量。
+- 完整误差要求3000/3000样本均有效，采用 `ddof=0` 的 bootstrap 标准差，不除以 $\sqrt{3000}$。不完整时保存中心/失败计数，不能删失败样本后报告“完整误差”。
+- 保持 $am_s=d_s/\sqrt{8\tau}+\cdots$、$\delta m_s=-m_s$，$s=F,A$。$d_s$ 已含表示依赖，不再额外乘 Casimir；两种表示不能平均，也未用 Casimir scaling 替代伴随测量。
+
+严格半径条件是
+
+$$
+a<r_f=\sqrt{8t_f}<0.3\,\mathrm{fm}
+\quad\Longleftrightarrow\quad
+0.125<\tau<1.3981946511.
+$$
+
+当前已测网格中实际选中
+
+$$
+\tau\in\{0.15,0.20,0.25,0.30,0.35,0.40,0.45,0.50,
+0.55,0.60,0.65,0.80,1.00\}.
+$$
+
+$\tau=1.4$ 超过严格上界，没有纳入。主参考 $\tau_r=0.15$，非零距离 $R/a=1,\ldots,12$；两个 Wilson 时间窗分别为 $T_w/a=10,\ldots,16$ 与 $8,\ldots,12$，含端点。此版没有叠加第 25 节的旧尺度 mask；短距离几何风险仅标注，不因未作切选而消失。
+
+### 26.3 直接固定流时间对的有限 Tw 拟合
+
+对中心、JK和每份 bootstrap，先算平均圈，再形成
+
+$$
+Y_s(R,\ell;\tau,\tau_r)
+=-\log\frac{\overline W_s(R,\ell;\tau)}{\overline W_s(R,\ell;\tau_r)},
+\qquad \ell\equiv T_w/a.
+$$
+
+分子和分母各自都必须为正且有限；两个负圈的比值虽可能为正，也不能冒充本定义下的实 log 链。固定 $R,\tau,\tau_r$，在时间窗内拟合
+
+$$
+\overline W_s(R,\ell;\tau)\simeq A_s(R,\tau)e^{-\ell aV_s^{\rm eff}(R;\tau)}
+\quad\Longrightarrow\quad
+Y_s=b_s+2\ell\,a\Delta m_s^{\rm eff}.
+$$
+
+设计矩阵为 $[1,2\ell]$，参数顺序为 $[b_s,a\Delta m_s^{\rm eff}]$；截距自由，吸收空间边、端点与重叠振幅差。斜率为 $a\Delta V^{\rm eff}=2a\Delta m^{\rm eff}$，两条时间长边的因子2在此已经除去，后续不得再除。
+
+$$
+\frac{Y_s}{2\ell}=a\Delta m_s^{\rm eff}+\frac{b_s}{2\ell}.
+$$
+
+所以直接除以有限 $T_w$ 得到的曲线不必是常数平台。与先分别拟合原始 $W$ 再相减的方法相比，本方法在理想单指数极限目标一致，但有限窗、噪声和相关权重不同，不能宣称数值必然相同。
+
+基本表示 $R/a=4$、$\tau=0.5$ 对参考0.15的示例：
+
+|$T_w/a$窗|$a\Delta m_F^{\rm eff}$|自由截距 $b_F$|$\chi^2/\mathrm{dof}$|$Q$|
+|---|---|---|---|---|
+|$10..16$|$-0.14514751\pm0.00163624$|$-0.72573561\pm0.03227443$|0.246464|0.941739|
+|$8..12$|$-0.14375264\pm0.00048566$|$-0.75409561\pm0.00760351$|0.492713|0.687325|
+
+两窗均完整3000/3000。576个主时间拟合候选中，228个有有限中心，168个有完整误差。原参考0.15的大距离信号缺失会同时传到多个目标flow，不是重新抽更多bootstrap可消除的缺口。
+
+直接拟合与完整静态势图见：
+
+- [固定流时间对的时间拟合示例（基本/伴随各一页）](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_Tw_static_20261020/figures/01_fixed_flow_pair_Tw_fit_examples.pdf)。**此图蓝色为时间窗10..16、红色为8..12，不是第25节的红蓝模型含义。**
+- [有限时间 $Y/(2\ell)$ 与截距修正](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_Tw_static_20261020/figures/02_finite_Tw_relative_mass_examples.pdf)。
+- [所有固定流时间对和R的48页时间拟合](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_Tw_static_20261020/figures/03_all_fixed_flow_pairs_Tw_fits.pdf)。
+
+### 26.4 Static potential 图的量、单位及与 Pion_DA 的区别
+
+静态势图复用 `wilson_relative_radius030_20261020` 已完成的原始 $W=Ae^{-\ell aV_{\rm eff}}$ 时间拟合参数，没有把相对质量重新解释成完整势：
+
+$$
+z=R=na,\qquad
+V_{\rm eff}[\mathrm{GeV}]=(aV_{\rm eff})\frac{0.1973269804}{0.0897}.
+$$
+
+这是**未减除、未作加性平移、未除以2的完整有限时间有效势**。$\Delta m^{\rm eff}$ 才是势差的一半。`Pion_DA.pdf` 第15页左图同样用 $z[\mathrm{fm}],V[\mathrm{GeV}]$，但该slide使用two-state model average；本图仅借鉴其坐标/分组，仍是有限窗单指数估计，不能称已复现其谱分析。
+
+- [Static potential 五个代表flow：0.2、0.3、0.5、0.8、1.0](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_Tw_static_20261020/figures/05_static_potential_PionDA_style.pdf)。基本/伴随各一页，左右为两时间窗；按流半径着色，数据不连线。
+- [全部13个flow的有效势](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_Tw_static_20261020/figures/06_static_potential_all_flow_times.pdf)。
+- [逐flow的空间Cornell诊断](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_Tw_static_20261020/figures/07_static_potential_by_flow_Cornell_checks.pdf)。它只是额外诊断，不是本次直接relative提取d的必经步骤。
+
+实心误差棒表示完整bootstrap误差，空心仅有中心值，底部叉号表示未定义而**不是 $V=0$**。不能把大距离信号失败画成平坦势。
+
+### 26.5 从时间斜率到 d：模型和空间平台
+
+固定R，拟合相对质量的flow依赖，$q=1/\sqrt{8\tau}$、$q_r=q(\tau_r)$：
+
+$$
+\begin{aligned}
+\texttt{leading}:\quad a\Delta m_{\rm eff}&=d_s(q-q_r),\\
+\texttt{flow\_c}:\quad a\Delta m_{\rm eff}&=d_s(q-q_r)+c_s(\tau-\tau_r).
+\end{aligned}
+$$
+
+不再加独立截距，也不把参考点恒等零当作新数据。另比较 $e_s(q^3-q_r^3)$ 以及同时含 $c_s,e_s$ 的经验模型：$q^3$ 仅用于单格距离散化敏感性检查，不是已证明的完整格距修正，也不能把较好的Q自动解释为正确。
+
+固定参考0.15，flow上限扫描 $0.30,0.50,0.65,0.80,1.00$。每个R、两个时间窗均记录；随后用跨R的配对JK协方差对 $d_s(R)$ 拟合常数。预定空间窗为 $1..2,2..3,3..4,4..5,4..6,5..7,6..7,6..8,6..12,7..12,8..12$。其中请求的任一R失败时，不偷偷删点制造平台。另做一个共同d、每个R独立 $c_R$ 的跨R/flow全相关拟合作为交叉检查；两个分析路线和两个时间窗均非独立测量，不能独立平均。
+
+基本表示、时间窗8..12、含c模型、R/a=6,7相关平台的结果：
+
+|$\tau_{\max}$|候选 $d_F$|空间平台 $\chi^2/\mathrm{dof}$|空间平台 $Q$|
+|---|---|---|---|
+|0.50|$0.40418592\pm0.00287239$|1.94527|0.16310|
+|0.65|$0.39055588\pm0.00171659$|1.27326|0.25916|
+|0.80|$0.38263473\pm0.00144453$|0.000145506|0.99038|
+|1.00|$0.37475233\pm0.00121053$|1.78842|0.18112|
+
+全部完整3000/3000，但误差仅是固定窗口/模型下的统计误差。用相同bootstrap计算上限0.5相对1.0的配对漂移：
+
+$$
+d_F(\tau_{\max}=0.5)-d_F(\tau_{\max}=1.0)
+=0.02943358\pm0.00276048.
+$$
+
+不能把此列表直接平均，也没有把范围或漂移自动当作完整系统误差。
+特别是上限1.0的上游flow拟合：
+
+|$R/a$|固定R候选 $d_F$|flow $\chi^2/\mathrm{dof}$|flow $Q$|
+|---|---|---|---|
+|6|$0.37413696\pm0.00131600$|62.06299|$1.5493\times10^{-52}$|
+|7|$0.37169710\pm0.00268527$|20.42724|$7.5660\times10^{-17}$|
+
+**空间平台Q约0.18不能消除上游flow模型的严重失配。** 二维共同d拟合给 $0.37526859\pm0.00120040$，但 $\chi^2/\mathrm{dof}=29.0264$、$Q=4.2169\times10^{-51}$。添加经验$q^3$项又会明显改变d。因此尚不支持唯一最终系数。
+
+### 26.6 新参考扫描和伴随表示
+
+对预先声明的 $(\tau_r,\tau_{\max})=(0.2,0.5),(0.2,0.65),(0.2,1.0),(0.3,0.65),(0.3,1.0),(0.5,1.0)$，从原始平均圈的中心/JK/bootstrap重新形成直接log-ratio并重拟合时间斜率；不是把不同权重的旧斜率相减。仍使用同一3000份索引，没有通过换参考补造原先失败的样本。
+
+伴随表示在参考0.5、上限1.0、时间窗8..12、含c模型下：实际非参考flow为 $0.55,0.60,0.65,0.80,1.00$。
+
+|$R/a$|候选 $d_A$|flow $\chi^2/\mathrm{dof}$|flow $Q$|可用bootstrap|
+|---|---|---|---|---|
+|4|$0.869908\pm0.00221365$|1.46156|0.2228|3000/3000|
+|5|$0.833204\pm0.00889481$|0.201074|0.8957|3000/3000|
+|6|$0.840247$，无完整误差|3.93717|0.008058|2964/3000|
+
+新参考恢复部分信号，但最大半径 $r_f/a=\sqrt8$ 在R=4,5处的 $r_f/R\simeq0.707,0.566$；有限flow相互作用势可能污染，且没有建立受控距离平台。个别拟合Q好不能代替这一检查。基本表示新参考的结果同样保留，见对应图/CSV；不只展示最小误差的点。
+
+### 26.7 为什么当前不是最终自能系数，以及下一步的权限边界
+
+$$
+\Delta m_s^{\rm eff}(R;\tau,\tau_r)
+=\Delta m_{{\rm line},s}
++\frac12\Delta V_{{\rm int},s}(R)
++\text{有限Wilson时间效应}.
+$$
+
+本次未把这三项完全分离。实际使用 $\tau\le1$，故 $a^2/t_f=1/\tau\ge1$，并未实现 $a^2/t_f\ll1$；半径大于a不是充分的尺度分离证据。系数还可能受耦合跑动/缺失高阶项、有限a、激发态、flow/空间窗以及有限重整化方案影响。相对差分消去常数并不固定绝对有限质量处方，更不代替端点、$Z_\chi$、mixing或LaMET matching。
+
+**待确认/未执行：**是否另开版本放宽 $r_f<0.3\,\mathrm{fm}$ 上限，对已测较大tau作尺度/几何扫描；是否采用独立验证的有限a流自能模型；有限时间多态/窗口、自相关分块和有限方案转换如何控制。放宽窗口不是已有结论，也不会自动解决尺度矛盾。本轮没有代用户放宽半径上限、定稿d或对PDF施加减除。
+
+### 26.8 图片、代码、样本、运行命令与检查证据
+
+第二阶段目录下的优先入口：
+
+- [d的flow上限、模型及参考敏感性汇总](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020/figures/06_final_d_diagnostics.pdf)。
+- [逐R跨flow拟合](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020/figures/01_flow_fits_full_window.pdf)。此图蓝色为leading、红色为flow_c、绿色为q3诊断；不是Tw图的时间窗颜色。
+- [d(R)的窗口稳定性](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020/figures/03_d_vs_R_window_stability.pdf)。
+- [R平台拟合](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020/figures/04_R_plateau_fits.pdf)。
+- [共同d二维相关拟合窗口扫描](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020/figures/05_joint_d_window_scan.pdf)。
+- [新参考的直接比值时间斜率后续flow拟合](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020/reference_scan/figures/01_reference_scan_flow_fits.pdf)。
+- [新参考的d(R)](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020/reference_scan/figures/02_reference_scan_d_vs_R.pdf)。
+- [完成结果说明](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020/RESULTS.md)、[方法和文件入口](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020/README.md)。
+
+两个目录下 `analysis/` 的重点文件：
+
+|目录|文件|含义|
+|---|---|---|
+|Tw/static|`direct_ratio_time_fits.csv`、`ratio_samples.npz`|直接时间斜率的参数/状态与配对样本；参数轴 `[b,aDelta_m_eff]`|
+|Tw/static|`static_potential_points.csv`|624个复用有效势点，格点/GeV单位、样本完整性均保留|
+|d|`flow_d_results.csv`、`R_plateau_results.csv`、`joint_R_flow_results.csv`|逐R系数、R平台和二维模型的窗口/参数/chi2/Q/秩/状态|
+|d|`input_mass_ledger.csv`、`paired_sensitivity.csv`|输入关联和配对变动诊断|
+|d|`fit_samples.npz`|后缀 `__center`、`__jk`、`__boot`；样本轴分别无/1700/3000，末轴为报告中的参数顺序|
+|d|`final_d_status.json`|最终值仍为null，候选与配对窗口漂移，不自动选点|
+|d/reference_scan|`analysis/time_fits.csv`、`flow_d_results.csv`、`R_plateau_results.csv`、`fit_samples.npz`|新参考的直接时间拟合及后续系数链|
+|各分析|`report.json`、`complete.json`、`validation.json`、`independent_audit.json`|来源哈希、完成标记、实现/样本轴/误差/SVD审计；PASS不是物理批准|
+
+主要入口是第二阶段 `code/fit_d.py`、`audit.py`、`reference_scan.py`、`final_review.py`；第一阶段为 `code/tw_static.py`。运行只用CPU，分区为 `a192c1t,cpu6248R,cpueicc,i72c512g`。原提交形式如下（已完成目录禁止原位重跑；新研究先创建独立版本）：
+
+```bash
+cd /public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_relative_d_from_Tw_20261020
+sbatch --parsable --export=ALL,TW_D_ROOT="$PWD" \
+  --output="$PWD/logs/run_%j.out" --error="$PWD/logs/run_%j.err" slurm/run_cpu.slurm
+```
+
+第一阶段修复绘图标签后的任务3860685及独立审计3860692均COMPLETED/0:0。
+第二阶段3860805（主拟合）、3860811（独立审计）、3860819（新参考扫描）、3860829（最终汇总）均COMPLETED/0:0，节点cpu001；3860824曾因同名audit模块导入冲突失败，修复后重交，未改变科学拟合。主分析825个可用拟合、新参考316个可用flow拟合的独立SVD重构通过；完整误差检查分别585个和新参考各阶段895个。主分析240个部分可用拟合没有被报告为完整误差，1455个不可用候选原样保留。
+
+### 26.9 Note 同步位置与文档验收
+
+本节对应 [Note 源文件](/public/home/donghx/Note/Gradient_Flow/main.tex) 的第16节
+`Wilson-loop relative masses, static potentials and candidate line-mass coefficients: 20 October 2026`，
+在 [Note PDF](/public/home/donghx/Note/Gradient_Flow/main.pdf) 的实际第69–78页。
+正文含直接时间拟合、基本/伴随有效静态势、flow上限/模型依赖和新参考扫描图，
+完整图册与参数样本地址见26.3–26.8节。
+
+按 `pyqcd-docs` 的文档验收流程，暂存版完成三遍XeLaTeX及BibTeX，PDF共82页，
+三遍日志均 `Overfull=0`、`Float too large=0`、`Missing character=0`；
+末遍没有未定义引用/引文或待重编交叉引用。日志仍有数学标题的hyperref书签转换警告，
+不应误写为“完全无警告”。CPU文档渲染任务3861096已COMPLETED/0:0，
+82页全部渲染；已检查全部7张联系图，并逐页查看新增章节69–78页的全页图，
+没有发现裁切、重叠或不可读图例。本次没有在登录节点进行科学拟合或圈测量。
+
+原始编译记录 `build_3861096.json` 中的章节证据页码曾因文本内分页符误计为79/85；
+这只是验收脚本的页码定位问题。经按真实PDF逐页提取核对，章节开头与窗口稳定性图
+实际位于69/75页，验收脚本已修正；未修改科学数据、拟合或已渲染PDF。
+最终人工/代理视觉检查记录为
+[visual_review_20261020.json](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/documentation_updates/line_mass_20261020/validation/visual_review_20261020.json)，
+原文件备份保留于
+[documentation_updates/line_mass_20261020/original](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/documentation_updates/line_mass_20261020/original)。
+
+**本次文档更新日期：2026-10-20（Asia/Shanghai）。**
+
+**本次会话标题：有限Wilson时间相对质量、静态势和d候选的结果同步。** 本次仅整理已有结果并更新本文与Note、编译/检查文档，不重跑科学拟合、不新增圈测量、不修改matching或线质量符号，也不对PDF施加减除。
+
+## 27. 局域归一化后的 matching、有限残余质量与 Pz0 条件（2026-10-22）
+
+### 27.1 先固定本项目已经实施的“局域归一化”定义
+
+本节只讨论四维 thin-link flow 的 connected **quark** bilocal，不把以下夸克系数用于 gluon。
+用 $\Gamma$ 表示 Dirac/极化通道，$f=u,d,u-d$ 表示输入 flavor 组合。当前代码实际计算的是
+
+$$
+\boxed{
+\mathcal M_\Gamma^f(z,P_z,t_f)
+=\frac{h_\Gamma^{f,\rm GF}(z,P_z,t_f)}
+       {h_{\Gamma,\rm even}^{f,\rm GF}(0,P_z,t_f)}.
+}
+$$
+
+分母与分子同通道、同 flavor、同动量、同 flow time、同 B 权重，并使用相同 bootstrap。
+在现有 even-real/odd-imag 产品中，两个分量都除以 **even-real 的局域分母**；不能除以
+odd-imag 的局域对称性零。$P_z=0$ 分支使用它自己的 $h(0,0,t_f)$；这不是
+$h(z,P_z,t_f)/h(0,0,t_f)$，更不是 $h(z,P_z,t_f)/h(z,0,t_f)$。
+
+若两端流费米子共同场归一化为 $h^{\rm ring}=Z_\chi h^{\rm GF}$，则
+
+$$
+\mathcal M_\Gamma
+=\frac{Z_\chi h_\Gamma^{\rm GF}(z)}{Z_\chi h_\Gamma^{\rm GF}(0)}.
+$$
+
+因此共同的 $Z_\chi$ 相消，**不是 $Z_\chi=1$，也不是测得了绝对 ringed 矩阵元**。
+这是共同标量因子的代数相消；有限流时间/质量/格距高维项并未由此消失。
+局域电荷也被除掉：$\mathcal M_{\rm even}(0)=1$ 是定义约束，不提供新的统计信息。
+各 flavor 分别归一化后，一般有 $\mathcal M^{u-d}\ne\mathcal M^u-\mathcal M^d$。
+这些定义由 `quark_l32x64_B_localnorm20_boot100_20261021_v2/README.md`、
+`normalization.py` 和 `run_cpu.py` 固定，不能为方便 matching 偷换分母。
+
+### 27.2 为什么 matching 系数必须随归一化方案改变
+
+先在适用的长线小流时间窗口、同一 ringed 与 $\overline{\rm MS}$ 约定下，分别写出
+**非局域**和**局域**算符的 leading SFTE：
+
+$$
+\begin{aligned}
+Z_\chi h_\Gamma^{\rm GF}(z,P_z,t_f)
+&=C_\psi(t_f,\mu)e^{-m_F^{\rm PT}(t_f)L}
+  h_\Gamma^{\overline{\rm MS}}(z,P_z,\mu)
+  +\Delta_z,\qquad L=|z|>0,\\
+Z_\chi h_\Gamma^{\rm GF}(0,P_z,t_f)
+&=\zeta_\Gamma(t_f,\mu)
+  h_\Gamma^{\overline{\rm MS}}(0,P_z,\mu)+\Delta_0.
+\end{aligned}
+$$
+
+$C_\psi$ 是两个辅助重轻端点组合出的**非局域长线**系数；$\zeta_\Gamma$ 是
+普通局域 V/A/T 双线性算符的 SFTE 系数，不是同一个对象。[27-A,27-B]
+忽略受控的余项并相除，定义目标的局域归一化矩阵元
+
+$$
+\mathcal R_\Gamma^{\overline{\rm MS}}(z,P_z,\mu)
+=\frac{h_\Gamma^{\overline{\rm MS}}(z,P_z,\mu)}
+       {h_\Gamma^{\overline{\rm MS}}(0,P_z,\mu)},
+$$
+
+便得到
+
+$$
+\mathcal M_\Gamma
+=\underbrace{\frac{C_\psi}{\zeta_\Gamma}}_{C_\Gamma^{\rm loc\,norm}}
+ e^{-m_F^{\rm PT}L}\mathcal R_\Gamma^{\overline{\rm MS}}
++\text{流/格距/截断修正},
+$$
+
+$$
+\boxed{
+\mathcal R_\Gamma^{\overline{\rm MS}}
+=\frac{\zeta_\Gamma}{C_\psi}
+ e^{m_F^{\rm PT}L}\mathcal M_\Gamma
++\text{修正}.
+}
+$$
+
+**方向不要写反：**若代码的 `coefficient` 定义为“GF = coefficient × MS”，使用
+$C_\psi/\zeta_\Gamma$；若代码直接保存“乘在 GF 数据上的逆转换因子”，使用
+$\zeta_\Gamma/C_\psi$。局域归一化只改这个有限系数，不改变线表示、$m_F$ 的定义或指数符号。
+分母很小时，$\Delta_0$ 对比值的影响可以被放大，不能将余项简单当作与绝对矩阵元相同的误差。
+
+### 27.3 可以明确写出的归一化一圈系数：V/A 与 T 要区分
+
+以下是**理论推导式，尚未据此改写或重新运行当前 matching 产品**。限定为连续、无质量
+非 singlet、同一 ringed 定义与一致的张量/轴流有限重整化处方；非局域线沿空间 $z$，
+并要求 $a\ll r_f\ll L$ 等 SFTE 条件。定义
+
+$$
+\ell_s=\frac{\alpha_s(\mu)C_F}{4\pi},\qquad
+\mathcal L_f=\ln\!\left(2\mu^2t_f e^{\gamma_E}\right).
+$$
+
+这里 $\mathcal L_f$ 是无量纲对数，不是第 2 节的时间盒长 $L_t$。
+实际实现应使用不含歧义的变量名 `log_2_mu2_tf_exp_gammaE`。
+arXiv:2312.05032v3 Eq. (A.28) 与局域双线性结果 arXiv:2311.16799v2
+Eqs. (3.9)、(3.10)、(3.12) 分别给出 [27-A,27-B]
+
+$$
+\begin{aligned}
+C_\psi&=1-\ell_s\left(3\mathcal L_f+2+\ln432\right)+O(\alpha_s^2),\\
+\zeta_V=\zeta_{A,\rm ns}
+&=1+\ell_s\left(\frac12-\ln432\right)+O(\alpha_s^2),\\
+\zeta_T&=1+\ell_s\left(\mathcal L_f-\ln432\right)+O(\alpha_s^2).
+\end{aligned}
+$$
+
+在上述非 singlet、手征与有限转换约定下，轴流与矢量流的局域系数一致；这不是
+singlet 轴流反常、任意 $\gamma_5$ 方案或有限格距 Wilson 算符混合都可忽略的结论。
+本项目 transversity 使用的张量/赝张量须先对齐同一对偶与 $\gamma_5$ 有限处方，
+不能用本式自动批准此前仍待外部确认的相对符号。
+
+将比值**一致展开到一圈**，可直接检查 $\ln432$ 的相消：
+
+$$
+\boxed{
+\begin{aligned}
+C_{V/A}^{\rm loc\,norm}
+&=1-\ell_s\left(3\mathcal L_f+\frac52\right)+O(\alpha_s^2),\\
+C_T^{\rm loc\,norm}
+&=1-\ell_s\left(4\mathcal L_f+2\right)+O(\alpha_s^2).
+\end{aligned}
+}
+$$
+
+因此，**乘在尚未做线质量减除的局域比值上**的纯微扰 leading 因子为
+
+$$
+\begin{aligned}
+\mathcal R_{V/A}^{\overline{\rm MS}}
+&=e^{m_F^{\rm PT}L}
+ \left[1+\ell_s\left(3\mathcal L_f+\frac52\right)\right]\mathcal M_{V/A}
+ +O(\alpha_s^2,\text{power}),\\
+\mathcal R_T^{\overline{\rm MS}}
+&=e^{m_F^{\rm PT}L}
+ \left[1+\ell_s\left(4\mathcal L_f+2\right)\right]\mathcal M_T
+ +O(\alpha_s^2,\text{power}).
+\end{aligned}
+$$
+
+指数是否重求和须在实现中声明；将两个一圈多项式保留为未展开的有理比，或使用
+指数化有限系数，会隐含不同的高阶项，不能将这些差别当成新的已知高阶精度。
+若长度以 fm、$\mu,m$ 以 GeV 输入，必须先将 $z$ 转成 $\mathrm{GeV}^{-1}$、
+$t_f$ 转成 $\mathrm{GeV}^{-2}$；对数与指数中不能直接混用 fm 和 GeV。
+
+**不要在 $z=0$ 使用这些长线公式。** $z=0$ 的局域归一化点继续精确为 1，odd 为 0。
+$C_\psi$ 是先保持非零 $z$、再取 $t_f/z^2\to0$ 的结果；不能令 $z=0$ 并强迫
+$C_\psi=\zeta_\Gamma$。若 $r_f/z$ 不小，需要完整有限流时间转换或联合短距离展开；
+[27-A] Appendix A 的有限 $z/r_f$ 矢量结果可以作为研究入口，但不是对任意极化、
+质量或高维项已经验证的通用乘法系数。
+
+### 27.4 已经乘过非微扰候选线质量时，不能再套完整 PT 指数
+
+当前试算产品是
+
+$$
+\mathcal M_{\Gamma,\rm line}^{\rm NP}
+=e^{m_F^{\rm NP}(t_f)L}\mathcal M_\Gamma,\qquad
+m_F^{\rm NP}(t_f)=\frac{d_F}{r_f},\qquad d_F=0.374137\ \text{固定候选}.
+$$
+
+代回**纯微扰转换关系**得到严格的组合恒等式
+
+$$
+\boxed{
+\mathcal R_\Gamma^{\overline{\rm MS}}
+=\frac{\zeta_\Gamma}{C_\psi}
+ e^{[m_F^{\rm PT}(t_f)-m_F^{\rm NP}(t_f)]L}
+ \mathcal M_{\Gamma,\rm line}^{\rm NP}
++\text{修正}.
+}
+$$
+
+这里不是再乘一份完整的 $e^{m_F^{\rm PT}L}$；代回去后本式仍等于原 PT 路线，
+**单靠代数重写没有获得新的非微扰精度**。
+若要真正采用 NP 线质量作为新的中间方案，必须为该方案确定配套的有限端点转换与
+残余质量条件，而不是随意假设剩余系数就是未修改的 $C_\psi$。[第 18.6 节；27-A]
+
+尤其不能先验写 $m_F^{\rm PT}-d_F/r_f=\text{有限常数}$：若 leading 系数尚不一致，
+差中仍可能含 $1/r_f$、耦合跑动或高阶项。不同 $\tau$ 拟合出来的“$m_0$”若系统性
+随 $1/r_f$ 漂移，优先检查未减净的 leading 线质量/flow 效应，而不是宣布发现多个物理质量。
+本项目静态势 relative 分支还包含经验 flow 修正；它们不能未经转换就等同于 bilocal 的绝对线质量。
+
+### 27.5 为什么可能需要 m0：减去发散斜率不等于固定有限方案
+
+取一个已经处理共同场因子、线性幂发散、适当端点项，并声明连续/零流或有限流处方的
+**中间方案** $S$。直线算符允许一个有限、沿单位线长累积的残余质量重定义：
+
+$$
+\boxed{
+\mathcal R_\Gamma^{\overline{\rm MS}}(z,P_z,\mu)
+=e^{m_0^{S\to\overline{\rm MS}}(\mu)L}
+ \mathcal R_{\Gamma,S}(z,P_z)+\text{受控余项}.
+}
+$$
+
+这沿用本项目与 [27-C] Eq. (SM11) 的**正号转换 convention**。若长度为 fm，实际指数为
+$m_0[\mathrm{GeV}]\,L[\mathrm{fm}]/(0.1973269804\,\mathrm{GeV\,fm})$。
+
+- $d_F/r_f$ 是随 UV 调节半径移除而发散的线质量部分；$m_0$ 是为把中间线质量方案
+  转到指定目标方案所需的**有限残余质量**，量纲为质量，数值/符号依赖方案、微扰阶数和处方。
+- 辅助静态源形式中它对应单位线长的 residual-mass counterterm；静态势常数平移
+  $V(R)\mapsto V(R)+2\Delta m$ 体现同一每条长边的有限质量自由度。
+- $m_0$ **不是** Wilson/clover 夸克临界质量 $m_{\rm crit}$、输入轻夸克质量、核子质量、
+  $Z_\chi$ 或恢复局域电荷的常数因子。它改变非零 $z$ 的指数形状，不能由 $z=0$ 归一化固定。
+- 在静态源/线质量的全阶微扰展开中，可出现 $O(\Lambda_{\rm QCD})$ 的 renormalon
+  处方歧义；它与有限残余质量方案有关，但**不能把任意拟合得到的全部 $m_0$ 都称为
+  测得的 renormalon**。有限阶、格距、未减净的 $d_F$、flow 与高 twist 污染也可能进入拟合。[27-A,27-D]
+- 在固定表示和线质量方案下，真正的线残余质量不应随外态动量、u/d 或 V/A/T 任意变化。
+  通道相关端点系数与高 twist 项须另外处理；逐通道/动量独立试算可作一致性诊断，
+  不应悄悄定义成许多互不相干的“物理 $m_0$”。
+
+**并非所有 gradient-flow matching 都必须额外拟合 $m_0$。** 若完整 PT 转换及其线质量、
+有限端点和 scheme/renormalon 处方已定义，残余质量条件已包含在该定义中；另拟合并再乘
+一个任意指数会改变方案或重复计数。只有选择独立 NP 减除、中间方案尚未固定时，
+才需要一个额外的有限方案条件（短距离拟合是其中一种），并与后续 kernel 一致。
+反之，仅做 $e^{d_FL/r_f}\mathcal M$ 尚不能声称完成 $\overline{\rm MS}$ 转换。
+
+相对 Wilson/Polyakov 跨流差分可以消掉一个与 flow 无关的有限质量，所以能帮助确定
+leading $d_F$，但不能单靠这个差分反推出已被消掉的 $m_0$。
+不要把 [27-C] Polyakov 多项式模型 Eq. (SM19) 中也记作 $m_0$ 的 $t_fT^2$ 系数，
+与 Eq. (SM11) 的 $m_0^{\overline{\rm MS}}$ 或本项目 `aDelta_m_eff` 混为同一个参数。
+
+### 27.6 Pz=0 可以用，但“静止”不等于理论目标为 1
+
+**原则上可以使用 $P_z=0$，而且有同一 B 方案数据是有价值的。** UV 线质量不取决于
+外部核子的运动，静止态能减少 Ioffe-time 形状与待拟合 PDF moments 的干扰。
+应先选具有非零局域分母、运动学清楚的 **unpolarized、$\Gamma=\gamma_4$、非 singlet $u-d$**
+作首个候选条件；现有 connected u/d 单独并非完整 singlet。[27-D；本节为向 GF 方案的有条件迁移]
+
+例如对除去标准运动学因子的矢量矩阵元，leading-twist 短距离 OPE 示意为
+
+$$
+h_V^{\overline{\rm MS}}(z,P_z,\mu)
+=\sum_{n\ge0}\frac{(i\nu)^n}{n!}
+ C_{V,n}(z^2\mu^2,\alpha_s)\,a_{n+1}(\mu)
++O(z^2\Lambda_{\rm QCD}^2,z^2M_N^2),\qquad \nu=P_zz.
+$$
+
+这里 $z^2$ 在对数中表示正的欧式空间长度平方，不混用 Minkowski 的负 $z_M^2$。
+$P_z=0$ 令 $\nu=0$，但并不令 $z=0$：
+
+$$
+\frac{h_V^{\overline{\rm MS}}(z,0,\mu)}
+     {h_V^{\overline{\rm MS}}(0,0,\mu)}
+=C_{V,0}(z^2\mu^2,\alpha_s)+\text{短距离 power 修正}.
+$$
+
+局域电荷 $a_1$ 被相同电荷分母除掉，**短距离 Wilson 系数并没有被除掉**。
+对沿空间 $z$ 的线、垂直方向 $\Gamma=\gamma_4$、上述连续无质量非 singlet $\overline{\rm MS}$
+约定，一圈候选目标可写为
+
+$$
+\boxed{
+\mathcal T_V(z,\mu)
+=1+\frac{\alpha_s(\mu)C_F}{2\pi}
+ \left[\frac32\ln\!\left(\frac{\mu^2z^2e^{2\gamma_E}}4\right)+\frac52\right]
++O(\alpha_s^2).
+}
+$$
+
+依据是 [27-D] Sec. V.1、Eq. (21) 的零动量短距离结果，并可用 [27-A] Eq. (A.26) 的
+$a'_{\gamma_\perp}=5$ 交叉检查。这是 **MS bilocal 到局域电荷的短距离 OPE 系数**，
+不是第 27.3 节的 GF-to-MS 系数；二者不能互相替代。它也不是适用于 $z=0$ 的数值函数：
+零距离局域流单独定义，短距离非局域系数包含对数，极限顺序必须区分。
+本次只在文档中明确这个矢量候选目标，**尚未把它作为已验证输入安装到现有拟合程序**。
+
+helicity/transversity 的静止态在适当自旋投影下不必为零，但需各自推导非局域短距离系数、
+局域轴/张量电荷、运动学张量结构与有限重整化；不能将上式的常数项机械复用。
+不满足纯标量不变振幅条件时，先处理其他 Lorentz 结构/trace、高 twist 或混合，再讨论共同线质量。
+局域归一化后的 Pz0 曲线不是“真空矩阵元”，也不是没有强子结构的信息。
+
+### 27.7 用 Pz0 拟合 m0 的具体条件与符号
+
+先得到与上节目标**同一有限端点/归一化约定**的 $\mathcal R_{V,S}(z,0)$。
+如果它已在受控连续/零流分析中定义，或使用了经验证的有限-flow 到 $S$ 转换，则在短距离窗拟合
+
+$$
+\begin{aligned}
+\mathcal R_{V,S}(z,0)&=e^{b-m_0L}\mathcal T_V(z,\mu)
+ \,[1+\epsilon_{\rm power}(z)],\\
+Y(z)&\equiv\ln\!\left[\frac{\mathcal R_{V,S}(z,0)}{\mathcal T_V(z,\mu)}\right]
+=b-m_0L+\cdots.
+\end{aligned}
+$$
+
+故本项目正指数转换 convention 下，**$m_0$ 是该对数比关于正长度的负斜率**；
+已固定端点归一化时 $b=0$，否则 $b$ 只能作为明确声明的独立有限条件/截距 nuisance，
+不能任意省略。长度用 fm 时斜率为 $-m_0/(\hbar c)$。
+作为单点定义而非受验证拟合，若理论目标和截距均已固定，
+
+$$
+m_0=-\frac{\hbar c}{L[\mathrm{fm}]}
+\ln\!\left[\frac{\mathcal R_{V,S}(L,0)}{\mathcal T_V(L,\mu)}\right]
+$$
+
+是一个可写的重整化条件，但零自由度不能支持拟合质量、窗口或高 twist 稳定性结论。
+[27-D] Eq. (20) 使用 $g(z)-\ln Z_{\rm MS}(z)=+m_0z$ 定义它自己的残余斜率；
+因此不能只按符号名把其参数填入本文 $e^{+m_0L}$。若中间量完全一致，本文 $m_0$
+与那个**斜率参数**符号相反；实际比较还须先对齐方案和有限项。[27-C,27-D]
+
+实施顺序应为：
+
+1. 固定 $\Gamma=\gamma_4$、B 权重、u-d、Pz0 与局域分母，声明 $\mu$、$n_f$、耦合、
+   OPE 阶数/RG、$d_F$ 来源、端点转换及 residual-mass scheme；不是直接拟合裸 Pz0 曲线。
+2. 明确采用“完整 PT 路线”还是“NP 中间方案 + 有限条件”。若仍为有限 $t_f$，
+   使用正确的局域归一化 flow 转换；不能把仅减去候选 $d_F/r_f$ 的产品直接叫 $\mathcal R_S$。
+3. 预先选定共同短距离窗，控制 $z\Lambda_{\rm QCD}$、cutoff 与 $r_f/z$；检查非零分母、
+   理论曲线和全部样本的对数比同号性。禁止取绝对值、删掉过零样本或 clipping 来制造拟合。
+4. 中心值与原来的 100 份配对 bootstrap 各自走同一条归一化/转换/拟合链。
+   使用相关协方差、记录实际秩与参数可辨识性、完整样本覆盖和窗口/尺度/阶数变动。
+   $z=0$ 的精确归一化约束不能用协方差正则化变造成一个独立数据点。
+5. 若 $d_F$ 有误差，它应作为共同 nuisance 传播；1700-conf/3000-bootstrap 圈样本
+   **不能**按序号伪装成与 20-conf/100-bootstrap 矩阵元配对。应有显式跨数据集联合/外部输入处方。
+6. 先在 Pz0 确定可辨识的共同条件，再将同一线残余质量用于同表示/同方案的 moving 通道；
+   逐动量重新调 $m_0$ 以把曲线拉齐不是独立验证。
+
+若给 $\mathcal R_S$ 与 $\mathcal T$ 的定义还留有未计算的有限因子，先拟合出的数值只能叫
+该明示中间方案的 diagnostic residual mass，不能自动标作正式 $m_0^{\overline{\rm MS}}$。
+
+### 27.8 对现有 L32x64 数据，什么已经可做，什么仍不成立
+
+现有 Pz0 数据提供了开展上述条件的输入，但此前用户要求的 **严格 $z<0.15\,\mathrm{fm}$**
+不能在当前网格上支持受验证的空间斜率拟合：
+
+$$
+a=0.0897\,\mathrm{fm},\qquad
+z=0,\;a=0.0897\,\mathrm{fm}\ \text{在窗内},\qquad
+2a=0.1794\,\mathrm{fm}\ \text{在窗外}.
+$$
+
+- $z=0$ 是精确局域约束；实际只有一个独立非零 $z$。自由截距加质量有参数退化；
+  截距完全固定时虽能定义一个单点条件，却没有剩余空间自由度或窗口检验。
+- 当前七个 flow time $\tau=0.2,\ldots,0.8$ 的 $r_f=0.11346$–$0.22693\,\mathrm{fm}$
+  均大于该唯一非零距离。没有 $a<r_f<z$ 的点，更未满足 $a\ll r_f\ll z$。
+  第 27.3 节长线渐近系数与上节零流 OPE 不能不加修正直接叠上去。
+- 多加几个相同 $z=a$ 的 flow 点不能自动增加空间斜率信息；在同一个长度上同时拟合
+  $b$ 与 $m_0$ 仍然退化。若固定所有其他条件作跨 flow 联合诊断，仍需处理相关性、
+  finite-flow 形状和缺少尺度重叠的问题。
+- 现有窗口审计还保留了上游 fallback 状态；全部数值有限不等于上游裸拟合已足够可靠。
+
+只按点数计，固定截距的单参数拟合并要求正自由度，至少要包含 $a,2a$；
+自由截距加 $m_0$ 并要求正自由度，至少要包含 $a,2a,3a=0.2691\,\mathrm{fm}$。
+**这是必要的计数条件，不是批准把窗口扩大到 0.2/0.3 fm，也不保证那里已经短距离或 flow 受控。**
+下一步先定义并测试矢量 Pz0 的有限-flow/零-flow 与端点方案；若要放宽空间窗，应另行做全局
+窗口和 power 修正诊断，或采用更细格距。当前 `m0_MSbar_GeV=null`、`fit_executed=false`
+仍有效，本次没有拟合或施加任何新的 $m_0$。
+
+参考 [27-C] 的实际工作对象是**真空色电关联器、伴随直线、quenched ensembles**。
+其 SM8–SM11 在连续极限和幂发散减除/零流之后再固定有限方案，SM12–SM15 的距离窗为
+$0.236$–$0.30\,\mathrm{fm}$ 或 $0.165$–$0.30\,\mathrm{fm}$，不是普适的 $z<0.15\,\mathrm{fm}$。
+本项目可借鉴“独立幂减除 + 同算符短距离有限条件”的逻辑，不能复制它的伴随 $d_A$、
+$m_0$ 数值、色电微扰目标、$n_f=0$ 耦合或窗口来替代 quark 条件。
+
+### 27.9 当前代码、已完成产物与待确认事项
+
+以下路径均在 `/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/` 下：
+
+|路径/入口|已经确认的作用与状态|
+|---|---|
+|`quark_l32x64_B_localnorm20_boot100_20261021_v2/normalization.py`、`run_cpu.py`|同 P、同通道/同 flavor 的局域分母，原 100 份 bootstrap 配对相除；不做 matching|
+|`quark_l32x64_B_localnorm20_boot100_20261021_v2/normalized/{moving,Pz0}/`|已完成的局域比值；Pz0 为七个 flow，moving 另含诊断 $\tau=0.1$|
+|`quark_l32x64_B_localnorm_line_dF0p374137_20261021/RESULTS.md`、`verification.json`|已完成固定候选 $d_F$ 的单次减除与逐元素验收；未做有限转换或 $m_0$|
+|`quark_l32x64_B_localnorm_line_dF0p374137_20261021/line_subtracted/{moving,Pz0}/`|126 个 NPZ，保留 20 conf/100 bootstrap、三通道、三 flavor、Pz0/3/4/5/6；误差条件于 $d_F$ 固定|
+|`quark_l32x64_B_localnorm_line_dF0p374137_20261021/plots_final/`|37 张最终排版 PDF；不是 MSbar 或最终 PDF 图|
+|`quark_l32x64_B_m0_zlt0p15_audit_20261021/RESULTS.md`、`m0_status.json`|已完成单非零 $z$ 的窗口/秩/flow 几何审计；**没有完成 $m_0$ 拟合**|
+|`quark_l32x64_B_dF0p374137_trial_m0_20261020/code/m0_core.py::fit_log_ratio`|已有通用 $\log(H/\mathcal T)=b-m_0L$ 相关拟合器；不自带已验证 quark 目标或 finite-flow 转换，禁止绕过守卫生成结果|
+|`wilson_relative_d_from_Tw_20261020/analysis/final_d_status.json`|正式 $d_F/d_A$ 仍未批准；候选试算不改变该状态|
+
+固定候选 $d_F=0.374137$ 来源的原 flow 模型拟合仍有
+$\chi^2/\mathrm{dof}=62.06299$、$Q=1.5493\times10^{-52}$；不能因减除代码通过而改变这一质量结论。
+局域归一化线减除产品中 13230 点有 13176 点继承 fallback 标记（含分母影响/约束点），
+严格无 fallback、非约束的上游质量点为 42 个。这些是既有产物的审计记录，不是本次新拟合。
+
+**待确认/待实施：**
+
+- 将第 27.3 节的局域系数与当前实际 matching 入口逐项对齐：方向、阶数、单位、
+  $\gamma_5$/tensor 方案和归一化元数据；不能把旧绝对 ringed matching 图改名当作新结果。
+- 为 Pz0 vector 明确有限-flow 与端点转换；第 27.6 节一圈 $\mathcal T_V$ 只固定了连续 MS
+  短距离候选目标，不解决当前 $z<r_f$、有限格距、残余幂项与上游 fallback。
+- 决定是保持严格原窗口并承认只能做单点条件，还是经授权开展更宽 $z$ 的独立诊断；
+  不悄悄更改原窗口，不用不受控先验填补缺失的距离信息。
+- 正式误差需另含 $d_F$ 的模型/窗口、耦合/尺度/微扰阶数、有限流和 cutoff；当前产品未覆盖这些。
+- 归一化得到的是 MS 局域比值。若后续需要绝对 PDF，应恢复相应目标方案的局域电荷，
+  并使用兼容的 channel-specific LaMET kernel；若保留 ratio scheme，则 kernel 也需相应转换。
+
+### 27.10 本节依据、不可随意修改的结论与更新范围
+
+本节引用以原始论文与现有冻结源码为依据；公式系数的比值、单点秩与统计配对说明为本文推导/审计，
+不是声称参考论文已经完成了本项目所有方案。
+
+- **[27-A]** N. Brambilla and X.-P. Wang, *Off-lightcone Wilson-line operators in gradient flow*,
+  arXiv:2312.05032v3，JHEP 06 (2024) 210。Sec. 2 的 auxiliary residual mass，
+  Eq. (4.69)、Appendix A Eqs. (A.26)–(A.28)。本地原文：
+  `quark_l32x64_B_dF0p374137_trial_m0_20261020/references/arxiv_2312_05032_v3_for_quark_m0.pdf`。
+- **[27-B]** J. Borgulat, R. V. Harlander, J. T. Kohnen and F. Lange,
+  *Short-flow-time expansion of quark bilinears through next-to-next-to-leading order QCD*,
+  arXiv:2311.16799v2，Eqs. (3.9)、(3.10)、(3.12)：本节只使用 V/A/T 的一圈项。
+  所谓共同 $Z_\chi$ 与局域有限 SFTE 系数是不同层次；Ward 路线另见本文第 18 节及 arXiv:2609.23379v1。
+- **[27-C]** N. Brambilla et al., *Inclusive P-wave Quarkonium Decay Widths from Lattice QCD and pNRQCD*,
+  arXiv:2607.13024v1，Supplemental Material Eqs. (SM8)–(SM16)、(SM19)。本地原文：
+  `quark_l32x64_B_dF0p374137_trial_m0_20261020/references/arxiv_2607_13024_v1_for_quark_m0.pdf`。
+- **[27-D]** LPC Collaboration (Y.-K. Huo et al.), *Self-Renormalization of Quasi-Light-Front Correlators on the Lattice*,
+  arXiv:2103.02965v1，Sec. V.1、Eqs. (20)–(22)、Fig. 10。
+  用零动量短距离条件固定残余线质量的 quark 先例；
+  它并不使用本项目 GF/B 估计器，其拟合参数与指数方向必须重新映射。
+
+不可随意改变：$\delta m=-m_{\rm line}$；局域归一化不减去线质量；GF-forward 系数为
+$C_\psi/\zeta_\Gamma$、逆转换为 $\zeta_\Gamma/C_\psi$；NP/PT 幂指数不可重复；
+$m_0$ 的指数方向与拟合斜率要成对声明；Pz0 不等于常数理论目标；
+$z=0$ 约束不算独立点；候选 $d_F$ 与 fallback 的质量状态不因后处理升级。
+
+本文原有第 17、18 节的代数关系仍成立；第 27 节给出更明确的一圈系数、方案边界和当前产物状态。
+本次没有修改原始 C3/C2、bootstrap 索引、裸拟合、既有 matching 或 $m_0$ 守卫；
+没有新增 CPU/GPU 数值作业，也没有改动 Note。原 markdown 备份与暂存更新位于
+`/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/documentation_updates/localnorm_matching_m0_20261022/`。
+
+**生成/更新日期：2026-10-22（Asia/Shanghai）。**
+
+**本次会话标题：局域归一化的 gradient-flow 系数与 Pz0 残余质量条件。**

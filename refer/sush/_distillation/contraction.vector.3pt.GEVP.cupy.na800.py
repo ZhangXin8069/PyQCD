@@ -39,8 +39,9 @@ source_mom_chunk = 9
 # copies is 61.52/41.01/20.51 GiB for N=3/2/1; source chunking reduces this.
 # Allow 7.2 GiB for resident arrays and at least 8 GiB for CUDA/workspace.
 gpu_free_bytes, _ = backend.cuda.runtime.memGetInfo()
-sink_mom_chunk = 3 if gpu_free_bytes >= 77*1024**3 else (2 if gpu_free_bytes >= 57*1024**3 else 1)
-sink_mom_chunk = min(comm.allgather(sink_mom_chunk))
+# sink_mom_chunk = 3 if gpu_free_bytes >= 77*1024**3 else (2 if gpu_free_bytes >= 57*1024**3 else 1)
+# sink_mom_chunk = min(comm.allgather(sink_mom_chunk))
+sink_mom_chunk = 7
 
 phase_exp_2pt = backend.zeros((Mom_len, Nx, Nx, Nx, Nc), dtype = complex)
 phase_exp_3pt = backend.zeros((Mom_len, Nx, Nx, Nx), dtype = complex)
@@ -166,7 +167,7 @@ if rank == 0:
     print(f'load eigen and cal VVV VDV use time {(time.perf_counter() - st_eigen):.3f} s')
 
 # M5 Peram data: host time cache avoids ~19.6 GiB/rank of resident GPU data.
-corr_NJN_GEVP = backend.zeros((len(sink_operator), len(source_operator), len(current_operator), len(source_times), Lt, 4, Ns//2, Ns//2, Mom_len, Mom_len), dtype = complex)
+corr_NJN_GEVP = backend.zeros((len(sink_operator), len(source_operator), len(current_operator), len(source_times), Lt, 4, Ns//2, Ns//2, sink_mom_chunk, Mom_len), dtype = complex)
 # Eq. (19) defines the admixtures only at nonzero total N momentum.
 corr_NJN_GEVP[1:, ..., 0, :] = complex(np.nan, np.nan)
 
@@ -244,7 +245,7 @@ for source_indx, tsrc in enumerate(source_times):
             # A common N label pairs equal sink/current momenta; M labels
             # pair source N(-r) and pi(r). Neither label is summed or crossed.
             # Start at 1 for the two admixtures, where p_hat is undefined at 0.
-            for Mom_indx in range(0 if i == 0 else 1, Mom_len, sink_mom_chunk):
+            for Mom_indx in range(1): #range(0 if i == 0 else 1, sink_mom_chunk, sink_mom_chunk):
                 Mom_stop = min(Mom_indx + sink_mom_chunk, Mom_len)
                 VR.register('VDV_0', 'tcur0', VdV_link[tcur0, Mom_indx:Mom_stop])
                 if i == 1:
@@ -335,25 +336,28 @@ if rank == 0:
     # V^(1,0)=(C_d-C_u)/sqrt(2); V^(0,0)=(C_u+C_d)/sqrt(2), Eq. (S9).
     # In this reversed orientation, C_opt = sum_a,m d_a * conj(c_m) * C_a,m.
     # For the paper's linear truncation retain a=0 OR m=0, after shell averaging.
+    
     np.savez(f'{corr_save_path}/corr_3pt_vector_GEVP_tsep{tsep}{source_tag}_basis.npz',
-             axes = ['N_basis', 'source_charge', 'current_flavor', 'tsrc_sum', 'tJ_minus_tsrc', 'mu', 'spin_N', 'spin_Npi', 'p', 'r'],
-             N_basis = ['N(p)', 'sigma_p*N(p)pi(0)', 'sigma_p*N(0)pi(p)'],
-             source_charge = ['p*pi0_E', 'n*pi+_E'], current_flavor = ['u', 'd'],
-             mu = [1, 2, 3, 4], p = Mom_sink_VVV, r = Mom_sink_VDV,
-             source_shell_q2 = np.sum(np.asarray(Mom_sink_VDV)**2, axis = 1),
-             source_isospin = [0.5, 1.5], source_CG = [[np.sqrt(1/3), np.sqrt(2/3)], [-np.sqrt(2/3), np.sqrt(1/3)]],
-             current_isospin = [1, 0], current_coefficients = [[-np.sqrt(1/2), np.sqrt(1/2)], [np.sqrt(1/2), np.sqrt(1/2)]],
-             N_admixture_valid = np.any(np.asarray(Mom_sink_VVV) != 0, axis = 1),
-             insertion_time_offsets = np.arange(current_start, current_stop),
-             current_window = [current_start, current_stop],
-             momentum_component_order = ['pz', 'py', 'px'], current_convention = 'Euclidean; mu=4 is time',
-             source_time_count = len(source_times), source_times = source_times, tsep = tsep,
-             current_renormalized = False, source_time_reduction = 'sum',
-             full_five_point = False, five_point_factorized = False, gevp_cross_terms = True,
-             ignore_current_loops = ignore_dis, use_equivalence = use_equivalence,
-             batched_lorentz = True, batched_N_admixtures = False, shared_current_insertion = False,
-             sink_mom_chunk = sink_mom_chunk, source_mom_chunk = source_mom_chunk,
-             perambulator_storage = 'host', endpoint_VVV_storage = 'host',
-             independent_channels = [[0, 1], [1, 0], [1, 1]], reconstructed_channel = [0, 0],
-             isospin_reconstruction = 'C_Au=(C_Bu+C_Bd)/sqrt(2)-C_Ad')
+            axes = ['N_basis', 'source_charge', 'current_flavor', 'tsrc_sum', 'tJ_minus_tsrc', 'mu', 'spin_N', 'spin_Npi', 'p', 'r'],
+            N_basis = ['N(p)', 'sigma_p*N(p)pi(0)', 'sigma_p*N(0)pi(p)'],
+            source_charge = ['p*pi0_E', 'n*pi+_E'], current_flavor = ['u', 'd'],
+            mu = [1, 2, 3, 4], p = Mom_sink_VVV, r = Mom_sink_VDV,
+            source_shell_q2 = np.sum(np.asarray(Mom_sink_VDV)**2, axis = 1),
+            source_isospin = [0.5, 1.5], source_CG = [[np.sqrt(1/3), np.sqrt(2/3)], [-np.sqrt(2/3), np.sqrt(1/3)]],
+            current_isospin = [1, 0], current_coefficients = [[-np.sqrt(1/2), np.sqrt(1/2)], [np.sqrt(1/2), np.sqrt(1/2)]],
+            N_admixture_valid = np.any(np.asarray(Mom_sink_VVV) != 0, axis = 1),
+            insertion_time_offsets = np.arange(current_start, current_stop),
+            current_window = [current_start, current_stop],
+            momentum_component_order = ['pz', 'py', 'px'], current_convention = 'Euclidean; mu=4 is time',
+            source_time_count = len(source_times), source_times = source_times, tsep = tsep,
+            current_renormalized = False, source_time_reduction = 'sum',
+            full_five_point = False, five_point_factorized = False, gevp_cross_terms = True,
+            ignore_current_loops = ignore_dis, use_equivalence = use_equivalence,
+            batched_lorentz = True, batched_N_admixtures = False, shared_current_insertion = False,
+            sink_mom_chunk = sink_mom_chunk, source_mom_chunk = source_mom_chunk,
+            perambulator_storage = 'host', endpoint_VVV_storage = 'host',
+            independent_channels = [[0, 1], [1, 0], [1, 1]], reconstructed_channel = [0, 0],
+            isospin_reconstruction = 'C_Au=(C_Bu+C_Bd)/sqrt(2)-C_Ad'
+            )
+    
     print(f'total elapsed time {time.perf_counter() - st_total:.3f} s')

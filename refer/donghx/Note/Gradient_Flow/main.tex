@@ -35,7 +35,7 @@
 \title{\textbf{Gradient-Flowed Quark and Gluon Quasi-PDFs in Lattice QCD}\\
 \large Theory, Distillation, and the \(32^3\times96\) Implementations}
 \author{Hongxin Dong}
-\date{15 October 2026}
+\date{20 October 2026}
 
 \begin{document}
 \maketitle
@@ -85,6 +85,12 @@ Section~\ref{sec:blending-oct15} adds the Blending weight audit and the
 completed ten-configuration L32x64 temporal-window tests. The subsequent
 user-selected scheme B is isolated from the frozen historical scheme A;
 implementation regression is not a proof of stochastic unbiasedness.
+Section~\ref{sec:line-mass-oct20} records the L32x64 Wilson-loop analysis
+with 1700 configurations and 3000 paired bootstrap replicas: direct
+fixed-flow-pair time slopes, finite-time static energies, and candidate
+line-mass coefficients. Flow-window/model dependence and adjoint signal
+limitations currently prevent approval of a unique final coefficient.
+No nonperturbative line-mass subtraction has been applied to the PDFs.
 \end{abstract}
 
 \tableofcontents
@@ -4934,6 +4940,468 @@ ratio/fit/matching refresh needs a new B-labelled product and paired
 configuration/bootstrap identities. The old A analysis and its
 normalization/matching caveats are not overwritten.
 
+\section{Wilson-loop relative masses, static potentials and candidate
+line-mass coefficients: 20 October 2026}
+\label{sec:line-mass-oct20}
+
+\subsection{Scope, frozen inputs and current conclusion}
+
+This update documents completed numerical products, not a new measurement
+or a new fit performed during documentation. The ensemble is L32x64,
+\(a=0.0897\,\mathrm{fm}\), with 1700 common configurations and the original
+3000 configuration-level paired bootstrap replicas, seed 20261015. Each
+replica draws 1700 configurations with replacement. Gauge measurements
+start from unsmeared links and use four-dimensional Wilson RK3 flow with
+\(\epsilon=0.01\). Wilson rectangles average their starting points and the
+XT/YT/ZT planes; fundamental and adjoint traces are normalized separately.
+These are pure-gauge measurements: no Blending A/B weight enters a loop.
+
+The three relevant analysis roots below share the prefix
+\begin{center}
+\path{/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/}.
+\end{center}
+\begin{itemize}
+ \item \path{line_mass_d_boot3000_20261018/}: original paired loop averages
+       and bootstrap indices.
+ \item \path{wilson_relative_Tw_static_20261020/}: direct fixed-flow-pair
+       Wilson-time fits and static-potential figures.
+ \item \path{wilson_relative_d_from_Tw_20261020/}: subsequent flow fits,
+       spatial plateaus, joint fits and new-reference scans.
+\end{itemize}
+The earlier \path{wilson_relative_radius030_20261020/} contains separate
+raw-loop fits reused for the full static-energy plots. It is a different
+finite-window estimator from the direct log-ratio slope.
+
+\paragraph{Status, not a final subtraction prescription.}
+Numerical completion and independent implementation checks have passed.
+They do not establish a unique universal \(d_F\) or \(d_A\). The current
+machine-readable status is \texttt{final\_d\_approved=false}, with both
+\texttt{final\_d\_F} and \texttt{final\_d\_A} equal to \texttt{null}.
+The finite-window estimates below must not be promoted to final coefficients
+by selecting a small error or an attractive spatial plateau. No new
+Polyakov fit or Wilson/Polyakov joint determination was performed in this
+update, and no resulting factor was applied to a PDF.
+
+\subsection{Conventions, flow window and paired statistics}
+
+Let \(s=F,A\) denote the fundamental or adjoint representation, distinct
+from the spatial distance \(R\). Preserve the positive-line-self-energy
+convention
+\begin{equation}
+ h_s^{\rm GF}\sim e^{-m_{{\rm line},s}|z|},\qquad
+ am_{{\rm line},s}(\tau)=d_s q(\tau)+\cdots,\qquad
+ q(\tau)=\frac{1}{\sqrt{8\tau}},\qquad
+ \delta m_s=-m_{{\rm line},s}.
+ \label{eq:line-mass-oct20-convention}
+\end{equation}
+Here \(d_s\) is dimensionless and already includes representation
+dependence. Do not multiply by another Casimir, average the two
+representations, set \(m_A=2m_F\), or substitute Casimir scaling for an
+unavailable adjoint measurement. Fundamental lines are relevant to quark
+bilocals and adjoint lines to gluon bilocals; this does not by itself fix
+their finite scheme conversion.
+
+The user-selected strict radius window is
+\begin{equation}
+ a<r_f=\sqrt{8\tf}<0.3\,\mathrm{fm}
+ \quad\Longleftrightarrow\quad
+ 0.125<\tau<1.3981946511.
+ \label{eq:line-mass-oct20-radius}
+\end{equation}
+The actually measured checkpoints retained in this interval are
+\begin{equation}
+ \begin{split}
+ \tau\in\{&0.15,0.20,0.25,0.30,0.35,0.40,0.45,\,0.50,\\
+           &0.55,0.60,0.65,0.80,1.00\}.
+ \end{split}
+\end{equation}
+The point 1.4 is outside the strict bound. The main reference is
+\(\tau_r=0.15\); \(R/a=1,\ldots,12\); the two inclusive Wilson-time
+windows are \(T_w/a=10,\ldots,16\) and \(8,\ldots,12\). Old additional
+scale masks are not silently reapplied. Short-distance flow overlap is
+recorded as a risk, not removed by the absence of a cut.
+
+All flow times, distances, Wilson times and representations retain the
+same configuration/bootstrap identities. Each stage constructs a fixed
+full covariance from its 1700 delete-one jackknife estimators. Correlation
+eigenmodes below \(10^{-8}\) of the largest eigenvalue are deleted; the
+unregulated information-rank threshold is \(10^{-12}\). Rank and finite
+input checks remain mandatory. There are no priors or
+\(\chi^2/Q/\mathrm{AIC}\) quality cuts, covariance diagonalization,
+negative-loop absolute values, or failed-replica replacements. Quality
+diagnostics are nevertheless reported and interpreted.
+
+A full statistical error is reported only for 3000/3000 usable bootstrap
+replicas. It is the population standard deviation, \texttt{ddof=0}, not
+that spread divided by \(\sqrt{3000}\). Incomplete cases retain their
+center and usable count where defined, but no full bootstrap error. The
+configuration-level iid resampling has not acquired a new autocorrelation
+blocking study; the errors below are not total systematic uncertainties.
+
+\subsection{Fixed-flow-pair finite Wilson-time fit}
+
+For the central estimator, every JK sample, and every bootstrap sample,
+first average each loop and then form
+\begin{equation}
+ Y_s(R,\ell;\tau,\tau_r)
+ =-\log\frac{\overline W_s(R,\ell;\tau)}
+                 {\overline W_s(R,\ell;\tau_r)},
+ \qquad \ell=T_w/a.
+ \label{eq:line-mass-oct20-logratio}
+\end{equation}
+This is not the average of per-configuration logarithms or ratios. Both
+mean loops must individually be positive and finite. The positive ratio
+of two negative means is not accepted as this real-log estimator.
+
+If a finite time window admits
+\(\overline W_s\simeq A_s\exp[-\ell aV_s^{\rm eff}]\), then
+\begin{align}
+ Y_s&=b_s+2\ell\,a\Delta m_s^{\rm eff},
+ &b_s&=-\log\frac{A_s(R,\tau)}{A_s(R,\tau_r)},
+ \label{eq:line-mass-oct20-time-fit}\\
+ a\Delta m_s^{\rm eff}
+ &=\frac{aV_s^{\rm eff}(R;\tau)-aV_s^{\rm eff}(R;\tau_r)}{2}.
+ \label{eq:line-mass-oct20-factor-two}
+\end{align}
+The design matrix is \([1,2\ell]\) and parameter order is
+\([b_s,a\Delta m_s^{\rm eff}]\). The free intercept absorbs
+time-independent spatial-edge, endpoint and overlap-amplitude differences;
+forcing it to vanish changes the estimator. The factor two accounts for
+the two temporal long edges. It has already been removed from the stored
+relative mass and must not be removed a second time in a flow fit.
+In particular,
+\begin{equation}
+ \frac{Y_s}{2\ell}=a\Delta m_s^{\rm eff}+\frac{b_s}{2\ell}
+ \label{eq:line-mass-oct20-finite-time}
+\end{equation}
+need not be a constant plateau at finite \(T_w\).
+
+For the fundamental representation, \(R/a=4\), \(\tau=0.5\) relative to
+0.15, both windows have 3000/3000 usable replicas:
+\begin{center}
+\small
+\begin{tabular}{@{}cccc@{}}
+ \toprule
+ \(T_w/a\) & \(a\Delta m_F^{\rm eff}\) & \(b_F\) & \(\chi^2/\mathrm{dof}\) \\
+ \midrule
+ \(10..16\) & \(-0.145148\pm0.001636\) & \(-0.725736\pm0.032274\) & 0.246464 \\
+ \(8..12\) & \(-0.143753\pm0.000486\) & \(-0.754096\pm0.007604\) & 0.492713 \\
+ \bottomrule
+\end{tabular}
+\end{center}
+The corresponding \(Q\) values are 0.941739 and 0.687325. Negative
+relative masses here mean a lower effective energy at the larger flow
+time, not an automatic sign error. Figure~\ref{fig:line-mass-oct20-time}
+shows this example using the saved samples and fit parameters, without
+repeating the fit. Of the 576 main time-fit candidates, 228 have finite
+centers and 168 have complete bootstrap errors. Reference-loop signal
+loss at large \(R\) propagates to multiple target flow times.
+
+\begin{figure}[tbp]
+ \centering
+ \includegraphics[width=0.96\linewidth]{figures/wilson_direct_Tw_note_20261020.pdf}
+ \caption{Direct paired log-ratio at fixed \(R/a=4\), \(\tau=0.5\),
+ reference 0.15, fundamental representation. Blue and red denote the
+ \(10..16\) and \(8..12\) Wilson-time windows, respectively, not the
+ two flow models. Gray early-time points are context only. The fitted
+ lines have a free intercept; the data are not joined.}
+ \label{fig:line-mass-oct20-time}
+\end{figure}
+
+\subsection{Full static-energy plots and the Pion-DA presentation}
+
+For full static energies, reuse the completed separate fits
+\(\overline W=Ae^{-\ell aV_{\rm eff}}\) from
+\path{wilson_relative_radius030_20261020/}; do not reinterpret the
+relative-mass slope as the full potential. Convert units explicitly:
+\begin{equation}
+ z=R=na,\qquad
+ V_{\rm eff}[\mathrm{GeV}]
+ =(aV_{\rm eff})\frac{0.1973269804\,\mathrm{GeV\,fm}}
+                          {0.0897\,\mathrm{fm}}.
+ \label{eq:line-mass-oct20-static-units}
+\end{equation}
+These are unrenormalized finite-time effective static energies, with no
+additive shift and no factor of one half. The half belongs only to the
+relative line-mass difference in Eq.~\eqref{eq:line-mass-oct20-factor-two}.
+
+The local presentation \path{Pion_DA.pdf}, page 15, uses \(z\,[\mathrm{fm}]\)
+and \(V\,[\mathrm{GeV}]\), grouped by smoothing radius. Its two-state
+model average on F32P30 is not the single-exponential finite-window
+estimator on our L32x64 ensemble. Figures~\ref{fig:line-mass-oct20-static-F}
+and \ref{fig:line-mass-oct20-static-A} adopt its axis/grouping style only,
+not its spectral analysis. Filled points carry full bootstrap errors;
+hollow points have a center but no full error; bottom crosses denote
+undefined estimates, not zero potential. No absolute-value repair or
+interpolation has filled failed distances.
+
+\begin{figure}[tbp]
+ \centering
+ \includegraphics[page=1,width=0.96\linewidth]{figures/wilson_static_note_20261020.pdf}
+ \caption{Fundamental finite-time static energy versus physical separation,
+ \(T_w/a=10..16\), for five representative flows. Larger flow lowers
+ much of the self-energy contribution, but shape changes can also include
+ a flow-dependent interaction potential. The result is neither shifted
+ nor divided by two. Both time windows and all 13 flows are available in
+ the original figures listed below.}
+ \label{fig:line-mass-oct20-static-F}
+\end{figure}
+\begin{figure}[tbp]
+ \centering
+ \includegraphics[page=2,width=0.96\linewidth]{figures/wilson_static_note_20261020.pdf}
+ \caption{The corresponding adjoint effective static energy. Large-distance
+ failures and incomplete replica coverage are explicit. Adjoint screening
+ and finite flow/time effects preclude assuming that every distance obeys
+ the same unscreened Cornell form or that a short-distance coefficient is
+ already a pure line self-energy.}
+ \label{fig:line-mass-oct20-static-A}
+\end{figure}
+
+\subsection{Flow dependence, spatial plateaus and the fundamental candidate}
+
+At fixed \(R\), compare
+\begin{align}
+ \text{leading:}\quad a\Delta m_s^{\rm eff}
+   &=d_s(q-q_r),\\
+ \text{flow correction:}\quad a\Delta m_s^{\rm eff}
+   &=d_s(q-q_r)+c_s(\tau-\tau_r).
+ \label{eq:line-mass-oct20-flow-models}
+\end{align}
+There is no extra intercept: the relative definition cancels a
+flow-independent constant. The reference's identically zero difference
+is not an additional data point. An empirical
+\(e_s(q^3-q_r^3)\) term, with or without \(c_s\), is also retained as a
+single-spacing discretization-sensitivity diagnostic, not a validated
+complete cutoff correction or a way to certify a fit by its \(Q\).
+
+With fixed reference 0.15, upper bounds are 0.30, 0.50, 0.65, 0.80 and
+1.00. The resulting \(d_s(R)\) values are fit to a constant using their
+paired JK covariance across \(R\). Predeclared spatial windows are
+\(1..2,2..3,3..4,4..5,4..6,5..7,6..7,6..8,6..12,7..12,8..12\).
+An unavailable required distance is not silently omitted to create a
+plateau. A separate full-covariance joint fit uses one common \(d_s\)
+and, in the corrected model, a separate nuisance \(c_R\) for every
+distance. The two routes and the two temporal windows are correlated
+cross-checks, not independent measurements to average.
+
+For \(T_w/a=8..12\), \(R/a=6,7\), reference 0.15 and the model with
+\(c_s\), the spatial plateau gives:
+\begin{center}
+\small
+\begin{tabular}{@{}cccc@{}}
+ \toprule
+ \(\tau_{\max}\) & Candidate \(d_F\) & Plateau \(\chi^2/\mathrm{dof}\) & Plateau \(Q\) \\
+ \midrule
+ 0.50 & \(0.404186\pm0.002872\) & 1.94527 & 0.16310 \\
+ 0.65 & \(0.390556\pm0.001717\) & 1.27326 & 0.25916 \\
+ 0.80 & \(0.382635\pm0.001445\) & 0.000146 & 0.99038 \\
+ 1.00 & \(0.374752\pm0.001211\) & 1.78842 & 0.18112 \\
+ \bottomrule
+\end{tabular}
+\end{center}
+All these errors use 3000/3000 replicas and are conditional statistical
+errors, not total uncertainties. A paired difference, retaining the common
+bootstrap rather than adding two errors in quadrature, is
+\begin{equation}
+ d_F(\tau_{\max}=0.5)-d_F(\tau_{\max}=1.0)
+ =0.02943358\pm0.00276048.
+ \label{eq:line-mass-oct20-window-drift}
+\end{equation}
+Figure~\ref{fig:line-mass-oct20-d} shows this drift and model sensitivity.
+The range is not automatically a completed systematic-error budget.
+
+\paragraph{Why a reasonable spatial plateau is insufficient.}
+At \(\tau_{\max}=1\), the input fixed-distance flow fits give
+\begin{center}
+\small
+\begin{tabular}{@{}cccc@{}}
+ \toprule
+ \(R/a\) & Candidate \(d_F\) & Flow \(\chi^2/\mathrm{dof}\) & Flow \(Q\) \\
+ \midrule
+ 6 & \(0.374137\pm0.001316\) & 62.06299 & \(1.55\times10^{-52}\) \\
+ 7 & \(0.371697\pm0.002685\) & 20.42724 & \(7.57\times10^{-17}\) \\
+ \bottomrule
+\end{tabular}
+\end{center}
+Thus a spatial-plateau \(Q\simeq0.18\) does not repair the poor upstream
+flow model. The joint fit gives \(d_F=0.375269\pm0.001200\), but with
+\(\chi^2/\mathrm{dof}=29.0264\) and \(Q=4.22\times10^{-51}\).
+Neither is approved as the final coefficient. Rank identifiability,
+model goodness of fit and physical validity are distinct questions.
+
+\begin{figure}[tbp]
+ \centering
+ \includegraphics[page=1,width=0.96\linewidth]{figures/wilson_d_stability_note_20261020.pdf}
+ \caption{Fundamental spatial-plateau candidates from \(R/a=6,7\) and
+ \(T_w/a=8..12\), versus the flow-window upper bound. Blue: leading
+ model; red: an added \(c(\tau-\tau_r)\); green: an empirical
+ \(q^3-q_r^3\) sensitivity term. Small horizontal offsets aid comparison;
+ no data are joined. The error bars are conditional bootstrap errors and
+ do not cover the model/window drift.}
+ \label{fig:line-mass-oct20-d}
+\end{figure}
+
+\subsection{New references and the adjoint candidate}
+
+To test the poor small-reference signal, declare
+\begin{equation}
+ (\tau_r,\tau_{\max})\in
+ \{(0.2,0.5),(0.2,0.65),(0.2,1.0),
+    (0.3,0.65),(0.3,1.0),(0.5,1.0)\}.
+\end{equation}
+For each pair, rebuild Eq.~\eqref{eq:line-mass-oct20-logratio} from the
+original mean-loop center/JK/bootstrap arrays and refit the time slope.
+This is not subtraction of old slopes that used different correlated
+weights. Resampling identities are unchanged; the new estimator is not
+a replacement value for failed replicas of the old estimator.
+
+For the adjoint representation with reference 0.5, maximum 1.0,
+\(T_w/a=8..12\), and the model including \(c_s\), the nonreference
+checkpoints are \(0.55,0.60,0.65,0.80,1.00\):
+\begin{center}
+\small
+\begin{tabular}{@{}ccccc@{}}
+ \toprule
+ \(R/a\) & Candidate \(d_A\) & Flow \(\chi^2/\mathrm{dof}\) & \(Q\) & Usable/3000 \\
+ \midrule
+ 4 & \(0.869908\pm0.002214\) & 1.46156 & 0.2228 & 3000 \\
+ 5 & \(0.833204\pm0.008895\) & 0.201074 & 0.8957 & 3000 \\
+ 6 & 0.840247; no full error & 3.93717 & 0.008058 & 2964 \\
+ \bottomrule
+\end{tabular}
+\end{center}
+The new reference recovers some signals, but at the largest flow
+\(r_f/a=\sqrt8\); \(r_f/R\) is about 0.707 and 0.566 at \(R/a=4,5\).
+Flow-dependent interaction contamination has not been eliminated, and
+a controlled distance plateau is not established. A good \(Q\) at one
+short distance is insufficient. Fundamental new-reference results are
+also retained; Fig.~\ref{fig:line-mass-oct20-ref} illustrates their
+sensitivity rather than selecting the smallest error.
+
+\begin{figure}[tbp]
+ \centering
+ \includegraphics[page=2,width=0.96\linewidth]{figures/wilson_d_stability_note_20261020.pdf}
+ \caption{Fundamental \(R/a=6,7\) plateau candidates with new direct
+ references at fixed \(\tau_{\max}=1\), using the corrected flow model.
+ Blue/red label the two Wilson-time windows; hollow markers have no
+ complete bootstrap error. Agreement between selected points does not
+ override their upstream flow-fit quality. No old slope has been
+ subtracted to simulate a newly fitted direct ratio.}
+ \label{fig:line-mass-oct20-ref}
+\end{figure}
+
+\subsection{What remains before a final coefficient can be used}
+
+The measured relative slope still has the schematic content
+\begin{equation}
+ \Delta m_s^{\rm eff}(R;\tau,\tau_r)
+ =\Delta m_{{\rm line},s}
+  +\frac12\Delta V_{{\rm int},s}(R)
+  +\text{finite-Wilson-time effects}.
+ \label{eq:line-mass-oct20-contamination}
+\end{equation}
+Current fits have not completely separated these terms. All retained
+measured flows satisfy \(\tau\le1\), hence \(a^2/\tf=1/\tau\ge1\),
+not a parametrically small cutoff correction. The inequality \(r_f>a\)
+is not proof of \(a^2/\tf\ll1\). Flow/model dependence, missing running
+or higher-order terms, excited states, finite-spacing effects and finite
+mass-scheme conversion remain explicit limitations. Canceling an additive
+constant in relative differences does not fix an absolute residual-mass
+prescription, endpoint conversion, \(Z_\chi\), operator mixing or LaMET.
+An independently fitted nonperturbative factor must also not double count
+the line term already present in an existing perturbative conversion.
+
+\textbf{Pending, not executed:} authorize a separate analysis with a relaxed
+0.3 fm upper-radius bound on already measured larger flows, or specify an
+independently validated finite-\(a\) flow-self-energy model; then check
+Wilson-time, distance, reference, covariance and flow-window stability,
+autocorrelation blocking, and finite-scheme conversion. Relaxing a window
+is not guaranteed to resolve competing scales. This documentation update
+does not authorize that change, choose a final coefficient, or apply a
+subtraction to a PDF.
+
+\subsection{Code, samples, original figures and completed checks}
+
+Under \path{wilson_relative_Tw_static_20261020/}, the primary products are
+\path{analysis/direct_ratio_time_fits.csv},
+\path{analysis/ratio_samples.npz} and
+\path{analysis/static_potential_points.csv}. The code is
+\path{code/tw_static.py}; the parameter order of time fits is
+\([b,a\Delta m_{\rm eff}]\). The original figures are
+\path{figures/01_fixed_flow_pair_Tw_fit_examples.pdf},
+\path{figures/02_finite_Tw_relative_mass_examples.pdf},
+\path{figures/03_all_fixed_flow_pairs_Tw_fits.pdf} (48 pages),
+\path{figures/05_static_potential_PionDA_style.pdf}, and
+\path{figures/06_static_potential_all_flow_times.pdf}.
+
+Under \path{wilson_relative_d_from_Tw_20261020/}, use:
+\begin{longtable}{@{}p{0.49\textwidth}p{0.46\textwidth}@{}}
+ \toprule
+ Relative path & Content \\
+ \midrule
+ \endhead
+ \path{code/fit_d.py}, \path{code/audit.py} & Fixed-R flow fits, correlated
+ spatial plateaus, joint checks and independent SVD audit.\\
+ \path{code/reference_scan.py}, \path{code/final_review.py} & New direct
+ reference fits, independent flow reconstruction and paired window drift.\\
+ \path{analysis/flow_d_results.csv},
+ \path{analysis/R_plateau_results.csv},
+ \path{analysis/joint_R_flow_results.csv} & Windows, parameters, covariance
+ ranks, fit quality, usable counts and failure states.\\
+ \path{analysis/fit_samples.npz} & Suffixes \texttt{\_\_center},
+ \texttt{\_\_jk}, \texttt{\_\_boot}; JK/bootstrap leading axes have
+ lengths 1700/3000, with the reported parameter order on the last axis.\\
+ \path{analysis/input_mass_ledger.csv},
+ \path{analysis/paired_sensitivity.csv} & Traceable inputs and paired
+ time-window/model changes.\\
+ \path{analysis/final_d_status.json} & Final coefficients are null;
+ candidates and paired drift are retained, with no automatic selection.\\
+ \path{reference_scan/analysis/} & New-reference time, flow and spatial
+ fits and their parameter samples.\\
+ \path{figures/01_flow_fits_full_window.pdf},
+ \path{figures/03_d_vs_R_window_stability.pdf} & All-R flow fits and
+ distance/window sensitivity, including unavailable cases.\\
+ \path{figures/04_R_plateau_fits.pdf},
+ \path{figures/05_joint_d_window_scan.pdf} & Spatial plateaus and joint-fit
+ window comparison.\\
+ \path{figures/06_final_d_diagnostics.pdf} & Compact flow-window, model
+ and new-reference comparison.\\
+ \path{reference_scan/figures/01_reference_scan_flow_fits.pdf},
+ \path{reference_scan/figures/02_reference_scan_d_vs_R.pdf} & Full
+ new-reference flow fits and distance scans.\\
+ \path{analysis/report.json}, \path{analysis/complete.json},
+ \path{analysis/validation.json}, \path{analysis/independent_audit.json}
+ & Source hashes, completion and implementation checks; analogous files
+ are in the reference-scan analysis. PASS is not physical approval.\\
+ \bottomrule
+\end{longtable}
+
+All numerical fitting and plotting used CPU partitions
+\texttt{a192c1t}, \texttt{cpu6248R}, \texttt{cpueicc} or
+\texttt{i72c512g}, not the login node. Main jobs 3860805, 3860811,
+3860819 and 3860829 completed with exit 0:0 on cpu001. The initial review
+job 3860824 failed on a same-name Python-module import and was corrected
+without changing scientific fits. The preceding corrected time/static
+job 3860685 and its audit 3860692 also completed. Independent SVD checks
+cover 825 usable main fits and 316 new-reference flow fits; complete-error
+checks cover 585 main fits and 895 new-reference stage fits. The main
+audit retains 240 partial fits without full errors and 1455 unavailable
+candidates. These checks establish implementation consistency, not a
+controlled final line mass.
+
+The main CPU entry is \path{slurm/run_cpu.slurm}, requiring
+\texttt{TW\_D\_ROOT}; independent and reference jobs are
+\path{slurm/audit_cpu.slurm}, \path{slurm/reference_cpu.slurm} and
+\path{slurm/review_cpu.slurm}. The typical submission is
+\texttt{sbatch --parsable --export=ALL,TW\_D\_ROOT=<analysis-root>}
+followed by the relevant script, with explicit log paths. Completed
+versions refuse in-place reruns: create a separate version for changed
+windows or schemes. The Chinese handoff with full absolute links is
+\path{/public/home/donghx/.codex/Markdown/divergence.md}, Section 26.
+The document date is 20 October 2026; this section records only verified
+existing results and pending decisions, not a new physics approval.
+
+\clearpage
 \section{Validation and systematic-error program}
 
 A production calculation should pass:

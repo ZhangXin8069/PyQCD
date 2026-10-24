@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=N_pi
-#SBATCH --array=50
+#SBATCH --array=39-46
 #SBATCH --nodes=1
 
 #SBATCH --error=test_pion_3pt_error
@@ -9,14 +9,12 @@
 
 ##SBATCH --partition=i72c512g,cpueicc,cpu6248R
 ##SBATCH --partition=na800-pcie
-##SBATCH --partition=nv100-sug,nv100-ins,dgx2
-#SBATCH --partition=gpu-debug
-##SBATCH --partition=cpu-short
-
+#SBATCH --partition=nv100-sug,nv100-ins,dgx2
+##SBATCH --partition=gpu-debug
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=2
 #SBATCH --gres=gpu:1
 
 ##SBATCH --partition=na800-pcie
@@ -26,13 +24,12 @@
 ##SBATCH --gres=gpu:1
 
 ##SBATCH --begin=now+7hour
-##SBATCH --time="2-00:00:00"
-#SBATCH --time="30:00"
-##SBATCH --time="4:00:00"
+#SBATCH --time="2-00:00:00"
+##SBATCH --time="30:00"
 
 ##SBATCH -w gpu048
 
-#SBATCH -x cpu057,cpu060
+##SBATCH -x cpu052
 ##SBATCH --exclusive
 
 # 禁用不需要的传输方式
@@ -49,10 +46,10 @@ conf=$[${conf_stare}+${gap}*${SLURM_ARRAY_TASK_ID}]
 
 run_dir=/public/home/sush/distillation/0v2b
 
-exe=${run_dir}/contraction.NN.2pt.cupy.py
-dir_file=${run_dir}/file/contraction.NN.2pt.cupy.${conf}
+exe=${run_dir}/contraction.nn.2pt.cupy.py
+dir_file=${run_dir}/file/contraction.nn.2pt.cupy.${conf}
 
-output_file=${run_dir}/output/contraction.NN.2pt.cupy.${conf}.log
+output_file=${run_dir}/output/contraction.nn.2pt.cupy.${conf}.log
 
 if [ ! -e "${run_dir}/output/" ];then
     mkdir ${run_dir}/output/
@@ -63,6 +60,7 @@ if [ ! -e "${run_dir}/file" ];then
 fi
 
 echo "${conf} job starts at" `date` > ${output_file}
+mkdir ${dir_file}
 
 if [ -d ${dir_file} ]; then
     mpirun -n 1 --bind-to core --map-by core python -u $exe ${conf} >> ${output_file} 2>&1 

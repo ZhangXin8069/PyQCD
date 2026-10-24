@@ -562,16 +562,16 @@ $$
 | E6 | `eigvectors/vector.py:357-445` | V4 的字面量 `'Z_N'` 不能解析；Z3 不是三次单位根，Z8 高阶相位模长不为 1。常用 Z4 列表正确，但随机种子也不可控。 |
 | E7 | `base/base_functions.py:244-345` | `cached_contract` 对 ellipsis 批维从左对齐，拒绝 NumPy 合法的右对齐广播；现有包内收缩大多不用这种模式。 |
 | E8 | `contraction/contractadviser.py` | ellipsis 输出大小漏算批维，V100/A100 `compute_efficiency` 大于 1；只能视为启发式性能工具，不能影响物理结论。 |
-| E9 | `io/write_date.py:38-83` | `write_data_ascii` 使用纯文件名时尝试创建空目录名；显式父目录路径可工作。 |
-| E10 | `io/write_date.py:6-13` | `readin_eigvecs` 未关闭文件句柄。 |
-| E11 | `io/write_date.py` | vendored `savetxt` 依赖旧 `numpy.compat`，NumPy 2.x 存在兼容风险；多数据列的固定 `fmt` 也有限制。 |
+| E9 | `io/write_data.py:38-83` | `write_data_ascii` 使用纯文件名时尝试创建空目录名；显式父目录路径可工作。 |
+| E10 | `io/write_data.py:6-13` | `readin_eigvecs` 未关闭文件句柄。 |
+| E11 | `io/write_data.py` | vendored `savetxt` 依赖旧 `numpy.compat`，NumPy 2.x 存在兼容风险；多数据列的固定 `fmt` 也有限制。 |
 | E12 | `base/mpi_init.py` | 单 rank Gather/Allgather 的返回形状与多 rank 路径不完全一致；串行调试不能自动代表 MPI 形状。 |
 | E13 | `constant/gamma_matrix.py:108-110` | 非法 gamma 索引调用 `sys.exit()`；应抛异常。物理代码不会主动使用非法索引，因此不是物理缺陷。 |
 | E14 | `constant/sigma_matrix.py:25-49` | 非法 sigma 索引静默返回 `None`。 |
 | E15 | `constant/gamma_matrix.py:137-180` | `PFF_Mom_to_gamma_new` 不能处理同一批中非零分量数不同的动量；README 已提示该限制。 |
 | E16 | `base/base_functions.py:39-99` | `creat_mom_list` 某些输入产生重复动量；动量壳平均前需去重并核对简并度。 |
 | E17 | 多处 | `raise print(...)` 最终产生 `TypeError`，不是预期异常。 |
-| E18 | `io/write_date.py` | `safe_save` 自动回退到 `/nexdata/...` 是站点特定行为，不适合作为可移植默认值。 |
+| E18 | `io/write_data.py` | `safe_save` 自动回退到 `/nexdata/...` 是站点特定行为，不适合作为可移植默认值。 |
 
 ## 7. README、类型存根与打包问题
 

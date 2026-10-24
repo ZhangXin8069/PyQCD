@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=Pi_ENV
-#SBATCH --array=6-28,30-36,40-72,76-99
+#SBATCH --array=100-149
 #SBATCH --nodes=1
 
 #SBATCH --error=test_pion_3pt_error
@@ -69,7 +69,7 @@ do
     fi
 
     echo "${conf} job starts at" `date` > ${output_file}
-    # mkdir ${dir_file}
+    mkdir ${dir_file}
 
     if [ -d ${dir_file} ]; then
         mpirun -n 16 --bind-to none python -u $exe ${conf} >> ${output_file} 2>&1 

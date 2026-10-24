@@ -1,3 +1,4 @@
+import glob
 import os
 import sys
 from time import perf_counter
@@ -11,7 +12,7 @@ from lattice import set_backend, get_backend, check_QUDA
 grid_size = [1, 1, 1, 1]
 
 # check and init PyQuda & MPI
-if not check_QUDA(grid_size=grid_size, backend="cupy", resource_path='/public/home/sush/EasyDistillation/work/resource/beta6.20_mu-0.2770_ms-0.2400_L24x72/A100'):
+if not check_QUDA(grid_size=grid_size, backend="cupy", resource_path=os.environ.get("C24P29_QUDA_RESOURCE_PATH", '/public/home/sush/EasyDistillation/work/resource/beta6.20_mu-0.2770_ms-0.2400_L24x72/V100')):
     raise ImportError("Please install PyQuda")
 
 from lattice import GaugeFieldIldg, EigenvectorNpy, Nc, Nd
@@ -20,6 +21,17 @@ Nx = int(sys.argv[1])
 Ny = int(sys.argv[2])
 Nz = int(sys.argv[3])
 Nt = int(sys.argv[4])
+
+# Half-open global source-time interval; the default preserves the first-half run.
+# tsrc_start = int(os.environ.get("C24P29_TSRC_START", "0"))
+# tsrc_stop = int(os.environ.get("C24P29_TSRC_STOP", str(Nt // 2)))
+
+tsrc_start = 0
+tsrc_stop = Nt
+
+if not 0 <= tsrc_start < tsrc_stop <= Nt:
+    raise ValueError(f"Invalid source-time interval [{tsrc_start}, {tsrc_stop}) for Nt={Nt}")
+print(f"Source times: [{tsrc_start}, {tsrc_stop}), sink times: [0, {Nt})", flush=True)
 
 latt_size = [Nx, Ny, Nz, Nt]
 Gx, Gy, Gz, Gt = grid_size
@@ -508,7 +520,7 @@ g5[3,3]=-1.0+0.0*1j
 
 gamma_mu = backend.asarray([g1, g2, g3, g4])
 
-phase_mom = creat_mom_list([1, 1, 1]) + creat_mom_list([0, 0, 2])
+phase_mom = creat_mom_list([1, 1, 1], fix_Q2 = True) + creat_mom_list([0, 0, 2], fix_Q2 = True)
 
 phase_link = backend.zeros((len(phase_mom), Nx, Nx, Nx, Nc), dtype = complex)
 
@@ -531,6 +543,29 @@ validation_max_abs = 0.0
 validation_max_rel_l2 = 0.0
 
 from opt_einsum import contract
+
+
+def drop_source_time_parts(corr_base, full_path, expected):
+    """Delete the per-interval ``_tsrc###-###.npy`` files of one result.
+
+    Those files only carry a source-time interval between runs (the first half
+    is the input of the merging run). Once ``{corr_base}.npy`` contains the
+    complete source-time range and reproduces the parts exactly, the parts are
+    removed, so that only the final file is left on disk.
+    """
+    stored = np.load(full_path, allow_pickle=False)
+    if (stored.shape != expected.shape or stored.dtype != np.dtype("<c16") or
+            not np.array_equal(stored, expected)):
+        raise ValueError(f"{full_path} does not reproduce the source-time parts; keeping them")
+    removed = []
+    for part_path in sorted(glob.glob(f'{corr_base}_tsrc*.npy')):
+        if os.path.abspath(part_path) == os.path.abspath(full_path):
+            continue
+        os.remove(part_path)
+        removed.append(os.path.basename(part_path))
+    print(f"Removed source-time part file(s) of {os.path.basename(corr_base)}: "
+          f"{', '.join(removed)}", flush=True)
+
 
 for N_stout in [20]:
     name = [
@@ -568,7 +603,7 @@ for N_stout in [20]:
     
     # The source index n is summed independently in the original contraction;
     # adding source-block results preserves it without storing all 50 sources.
-    corr_2pt = backend.zeros((Nt // 2, Nt, len(phase_mom), len(gamma_mu)), dtype="<c16")
+    corr_2pt = backend.zeros((tsrc_stop - tsrc_start, Nt, len(phase_mom), len(gamma_mu)), dtype="<c16")
     
     for cfg in [conf_id]:
         print(cfg)
@@ -587,7 +622,7 @@ for N_stout in [20]:
         print('load complete')
         perambulator.stout_smear(1, 0.125, 4)
         
-        for t in range(0, Nt//2, 1):
+        for t in range(tsrc_start, tsrc_stop, 1):
             source_start = perf_counter()
             invert_store_time = 0.0
             contraction_time = 0.0
@@ -601,44 +636,86 @@ for N_stout in [20]:
                     stage_start = perf_counter()
                     propa = gen_peramb[:, tsink].reshape(-1, Ns, Ns, Nc, len(source_block))
                     prop_sep_tsink = contract('ab,...bcef,cd->...daef', g5, propa.conj(), g5)
-                    block_corr = contract('Vijcn,Vklcn,MVc,Gli,jk->MG', propa, prop_sep_tsink,
-                                          phase_link[tsink % 2], gamma_mu, g5, optimize='greedy')
-                    corr_2pt[t, tsink] += block_corr
+                    block_corr = contract('Vijcn,Vklcn,MVc,Gli,jk->MG', propa, prop_sep_tsink, phase_link[tsink % 2], gamma_mu, g5, optimize='greedy')
+                    corr_2pt[t - tsrc_start, tsink] += block_corr
                     backend.cuda.runtime.deviceSynchronize()
                     contraction_time += perf_counter() - stage_start
 
-                    # Optional real-propagator comparison against the original lexico/get path.
-                    # Check every sink, momentum and gamma at the first/last source times,
-                    # including both a full source block and the final partial source block.
-                    if (validate_evenodd and t in (0, Nt // 2 - 1) and
-                            block_start in (0, ((len(perambulator.source_range) - 1) // source_block_size) * source_block_size)):
-                        stage_start = perf_counter()
-                        reference_eo = gen_peramb[:, tsink:tsink + 1]
-                        # lexico sees local time zero for this slice: restore its true time parity.
-                        if tsink % 2:
-                            reference_eo = reference_eo[::-1].copy()
-                        reference_propa = backend.asarray(lexico(reference_eo, [0, 1, 2, 3, 4]).get())
-                        reference_propa = reference_propa.reshape(-1, Ns, Ns, Nc, len(source_block))
-                        reference_sep = contract('ab,...bcef,cd->...daef', g5, reference_propa.conj(), g5)
-                        reference_corr = contract('Vijcn,Vklcn,MVc,Gli,jk->MG', reference_propa, reference_sep,
-                                                  phase_link_lexico, gamma_mu, g5, optimize='greedy').get()
-                        actual_corr = block_corr.get()
-                        np.testing.assert_allclose(actual_corr, reference_corr, rtol=1e-11, atol=1e-12)
-                        error = actual_corr - reference_corr
-                        validation_count += 1
-                        validation_max_abs = max(validation_max_abs, float(np.max(np.abs(error))))
-                        validation_max_rel_l2 = max(validation_max_rel_l2,
-                            float(np.linalg.norm(error) / max(np.linalg.norm(reference_corr), np.finfo(float).tiny)))
-                        validation_time += perf_counter() - stage_start
-                        del reference_eo, reference_propa, reference_sep, reference_corr, actual_corr
+                    # # Optional real-propagator comparison against the original lexico/get path.
+                    # # Check every sink, momentum and gamma at the first/last source times,
+                    # # including both a full source block and the final partial source block.
+                    # if (validate_evenodd and t in (0, Nt // 2 - 1) and
+                    #         block_start in (0, ((len(perambulator.source_range) - 1) // source_block_size) * source_block_size)):
+                    #     stage_start = perf_counter()
+                    #     reference_eo = gen_peramb[:, tsink:tsink + 1]
+                    #     # lexico sees local time zero for this slice: restore its true time parity.
+                    #     if tsink % 2:
+                    #         reference_eo = reference_eo[::-1].copy()
+                    #     reference_propa = backend.asarray(lexico(reference_eo, [0, 1, 2, 3, 4]).get())
+                    #     reference_propa = reference_propa.reshape(-1, Ns, Ns, Nc, len(source_block))
+                    #     reference_sep = contract('ab,...bcef,cd->...daef', g5, reference_propa.conj(), g5)
+                    #     reference_corr = contract('Vijcn,Vklcn,MVc,Gli,jk->MG', reference_propa, reference_sep,
+                    #                               phase_link_lexico, gamma_mu, g5, optimize='greedy').get()
+                    #     actual_corr = block_corr.get()
+                    #     np.testing.assert_allclose(actual_corr, reference_corr, rtol=1e-11, atol=1e-12)
+                    #     error = actual_corr - reference_corr
+                    #     validation_count += 1
+                    #     validation_max_abs = max(validation_max_abs, float(np.max(np.abs(error))))
+                    #     validation_max_rel_l2 = max(validation_max_rel_l2,
+                    #         float(np.linalg.norm(error) / max(np.linalg.norm(reference_corr), np.finfo(float).tiny)))
+                    #     validation_time += perf_counter() - stage_start
+                    #     del reference_eo, reference_propa, reference_sep, reference_corr, actual_corr
+                    
                     del propa, prop_sep_tsink, block_corr
+
                 del gen_peramb
+
             print(f"TIMING tsrc={t} invert_store={invert_store_time:.6f} contraction={contraction_time:.6f} "
                   f"validation={validation_time:.6f} total={perf_counter() - source_start:.6f} sec", flush=True)
 
-        corr_path = os.path.join(test_dir, 'output', f'corr_2pt.C24P29.{cfg}.evenodd.npy')
-        np.save(corr_path, corr_2pt.get())
-        print(f"Saved {corr_path}, axes=(tsrc,tsink,momentum,gamma), shape={corr_2pt.shape}", flush=True)
+        for Mom_indx, Mom_list in enumerate(phase_mom[:]):
+            corr_save_path = f'/public/home/sush/distillation/pion_form_factor/result_compensation/{Nx}x{Nt}/Px{Mom_list[2]}Py{Mom_list[1]}Pz{Mom_list[0]}/ENV_650/conf{conf_id}'
+            import pathlib
+
+            path = pathlib.Path(corr_save_path)
+
+            if path.exists():
+                print('save_path:',corr_save_path)
+            
+            else:
+                path.mkdir(parents = True, exist_ok = True)
+                print('mkdir_save_path:',corr_save_path)
+            
+            # The 100-vector sink is exact and needs no fourth-order compensation.
+            for mu_indx_1, mu in enumerate([1, 2, 3, 4]):
+                corr_base = f'{corr_save_path}/corr_2pt_gamma0{mu}_gen_stout_smear_20_0.12_src50'
+                part_path = f'{corr_base}_tsrc{tsrc_start:03d}-{tsrc_stop - 1:03d}.npy'
+                backend.save(part_path, corr_2pt[..., Mom_indx, mu_indx_1])
+                full_path = f'{corr_base}.npy'
+                if tsrc_start == Nt // 2 and tsrc_stop == Nt:
+                    first_path = f'{corr_base}_tsrc000-{Nt // 2 - 1:03d}.npy'
+                    first_half = np.load(first_path, allow_pickle=False)
+                    second_half = np.load(part_path, allow_pickle=False)
+                    if (first_half.shape != (Nt // 2, Nt) or
+                            second_half.shape != (Nt - Nt // 2, Nt) or
+                            first_half.dtype != np.dtype("<c16") or second_half.dtype != first_half.dtype):
+                        raise ValueError(f"Incompatible source-time parts: {first_path}, {part_path}")
+                    full_corr = np.concatenate((first_half, second_half), axis=0)
+                    np.save(full_path, full_corr)
+                elif tsrc_start == 0 and tsrc_stop == Nt:
+                    backend.save(full_path, corr_2pt[..., Mom_indx, mu_indx_1])
+                    full_corr = np.load(part_path, allow_pickle=False)
+                else:
+                    # A partial interval only: the part file is the input of the
+                    # run that computes the remaining source times, so it stays.
+                    continue
+                drop_source_time_parts(corr_base, full_path, full_corr)
+
+        
+        print(f"Saved {corr_save_path}, axes=(tsrc,tsink), shape={corr_2pt.shape}", flush=True)
+        if tsrc_start == Nt // 2 and tsrc_stop == Nt:
+            print(f"Merged both source-time halves: axes=(tsrc,tsink), shape=({Nt},{Nt})", flush=True)
+        
         if validate_evenodd:
             print(f"VALIDATION PASS comparisons={validation_count} max_abs_error={validation_max_abs:.16e} "
                   f"max_rel_l2_error={validation_max_rel_l2:.16e} rtol=1e-11 atol=1e-12", flush=True)

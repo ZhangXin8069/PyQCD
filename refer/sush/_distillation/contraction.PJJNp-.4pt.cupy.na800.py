@@ -25,7 +25,7 @@ from lqcddb.base.mpi_init import getMPIComm, getMPIRank, getMPISize, get_mpi_dat
 from lqcddb.constant.constant import Nc
 from lqcddb.constant.gamma_matrix import gamma
 from lqcddb.contraction.baroperator import conjugate_operator
-from lqcddb.contraction.dynamic import GammaRegistry, PeramRegistry, VRegistry, dynamic_contraction, run_wick_analysis
+from lqcddb.contraction.dynamic import GammaRegistry, PeramRegistry, VRegistry, dynamic_contraction
 from lqcddb.eigvectors.vertex import vertex_creator
 
 
@@ -161,8 +161,10 @@ operator_groups = [[sink_operator, source_operator, current_operator]]
 Cpt = "4pt"
 Vindex = ["N", "K", "K", "M", "M"]
 Gindex = ["", "G", "H", "", "", ""]
-use_equivalence = False
+
+use_equivalence = True
 ignore_dis = False
+
 optimize = ["greedy", "dp", "auto"]
 
 expected_source_operator = [1.0, "|", "d^d", "gamma_5", "u", "|", "|", "u^d", "gamma_7", "d^d", "d^d", "|"]
