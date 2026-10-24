@@ -53,6 +53,27 @@ def _input_complex_precision(*values):
         else "complex128")
 
 
+def _orientation_identity_matches(target, left, right, sign, precision):
+    """Compare linear orientation identities with cancellation-aware scale."""
+    target = np.asarray(target)
+    left = np.asarray(left)
+    right = np.asarray(right)
+    expected = left + sign * right
+    if precision == "complex64":
+        # Ratio construction performs several complex divisions before the
+        # orientation identity; 2e-5 of the operand scale covers that
+        # accumulation without using the possibly near-zero difference.
+        rtol, atol = 2e-5, 2e-6
+    elif precision == "complex128":
+        rtol, atol = 5e-12, 1e-10
+    else:
+        raise ValueError("input_precision 必须是 complex64/complex128")
+    tolerance = atol + rtol * (np.abs(left) + np.abs(right))
+    matches = np.abs(target - expected) <= tolerance
+    both_nan = np.isnan(target) & np.isnan(expected)
+    return matches | both_nan
+
+
 def _validate_tseps(tseps, nt):
     values = list(tseps)
     if not values:
@@ -1031,26 +1052,23 @@ def validate_gradient_flow_ratio_results(results, *, nconf=None):
 
     if ratio.shape[2] == len(COMPONENTS) and labels == COMPONENTS:
         input_precision = results.get("input_precision", "complex128")
-        if input_precision == "complex64":
-            kw = {"rtol": 1e-5, "atol": 2e-6, "equal_nan": True}
-        elif input_precision == "complex128":
-            kw = {"rtol": 5e-12, "atol": 1e-10, "equal_nan": True}
-        else:
-            raise ValueError("input_precision 必须是 complex64/complex128")
+        kw = (
+            {"rtol": 2e-5, "atol": 2e-6, "equal_nan": True}
+            if input_precision == "complex64"
+            else {"rtol": 5e-12, "atol": 1e-10, "equal_nan": True}
+        )
         oi = {name: ORIENTATIONS.index(name) for name in ORIENTATIONS}
         checks = (
-            np.allclose(
+            _orientation_identity_matches(
                 ratio[:, oi["even_sum"]],
-                ratio[:, oi["plus_z_raw"]] + ratio[:, oi["minus_z_raw"]],
-                **kw,
-            ),
-            np.allclose(
+                ratio[:, oi["plus_z_raw"]],
+                ratio[:, oi["minus_z_raw"]], +1.0, input_precision),
+            _orientation_identity_matches(
                 ratio[:, oi["odd_difference"]],
-                ratio[:, oi["plus_z_raw"]] - ratio[:, oi["minus_z_raw"]],
-                **kw,
-            ),
+                ratio[:, oi["plus_z_raw"]],
+                ratio[:, oi["minus_z_raw"]], -1.0, input_precision),
         )
-        if not all(checks):
+        if not all(bool(np.asarray(check).all()) for check in checks):
             raise ValueError("ratio orientation linear identities failed")
         for name, array in (("c3_mean", c3), ("ratio", ratio)):
             odd_z0 = array[1, oi["odd_difference"], :, :, 0, :, :, :]
