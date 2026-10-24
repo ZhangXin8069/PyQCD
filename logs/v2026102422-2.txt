@@ -1,0 +1,119 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-24 22:20:55 +0800
+批次: donghx-cross-reference
+主任务: PyQCD 与 refer/donghx 在 4x4x4x8 格点上的胶子 OPE 对照测试
+触发原因: 任务完成
+摘要: 同一 4x4x4x8 SU(3) thin-link 场上完成双方实跑；共享 flow/OPE/matching 链 23/23 通过并两次复现，完整横向 TMD 因 donghx 无对应实现不可直接对照。
+Git 根目录: /Users/zhangxin/PyQCD
+
+## 关键日志
+### S1 — 任务定义与环境门
+- 目标: 用 `(Lx,Ly,Lz,Nt)=(4,4,4,8)` 的同一 SU(3) thin-link 场对照 PyQCD 与 refer/donghx。
+- 输入: deterministic seed=20261024，complex64 近恒等 SU(3)，写为 big-endian double LIME。
+- 环境: arm64, 8 CPU cores, Apple Clang 21.0.0。
+- 构建门: donghx `flowed_gluon_ope.cpp` 成功原生编译；`--self-test` 输出 `SELF_TEST_OK`，指数误差 8.33e-09，规范协变流误差 2.98396e-07。
+
+### S2 — 对照链实现
+- 新增: `pyqcd/testing/tmd/cross_reference_donghx.py`。
+- 原 donghx CLI: 对 tau=0、0.1、0.5，eps=0.01，生成 schema-v2 OPE 并运行 `validate_output_v5.py`。
+- 自定义只读驱动: `#include` 原始 donghx C++ 源，调用其 `read_ildg`、`wilson_flow`，导出 flowed gauge float32 中间量。
+- PyQCD: 同输入调用 `gradient_flow_gluon_ope`，分别使用 complex64/complex128；执行 flow-to-quasi、gg kernel、Fourier、ratio 约定和 TMD `b=0,L=0` 共线归约。
+- `.gitignore`: 忽略 `pyqcd/testing/tmd/artifacts/donghx_cross_reference_*/` 自动产物。
+
+### S3 — 首轮失败与修正
+- 首轮: 15/18 通过。
+- 失败: 所有三项均为 PyQCD TMD `b=0,L=0` 对直线 OPE 的 max-abs 阈值 1e-10；complex64 实测为 1.803e-06、1.110e-06、3.306e-08。
+- 根因: 单精度下 TMD 路径与 straight OPE 的 Clover/路径累加顺序不同，不是公式差异。
+- 修正: 同时执行 complex64 与 complex128；complex64 阈值 1e-5，complex128 阈值 1e-12。complex128 实测为 7.994e-15、2.665e-15、6.245e-17。
+- 修正后: 23/23 通过。
+
+### S4 — 最终对照结果
+- 输入 LIME SHA-256: 5d7c80e2c0063db215f804b860096dd215de959f09ecacd03b7f26849c140f9f。
+- tau=0: flow rel-L2=0；OPE c64 rel-L2=5.761e-08；OPE c128 rel-L2=2.562e-08。
+- tau=0.1: flow rel-L2=2.265e-07；OPE c64 rel-L2=3.087e-07；OPE c128 rel-L2=1.399e-07；native flow-to-quasi rel-L2=4.846e-07。
+- tau=0.5: flow rel-L2=5.282e-07；OPE c64 rel-L2=3.950e-07；OPE c128 rel-L2=2.297e-06；native flow-to-quasi rel-L2=4.289e-07。
+- 同输入 flow-to-quasi max|d|=0；gg matching kernel max|d|=0；同 hbar Fourier max|d|=1.388e-17；ratio central-C3 max|d|=0。
+- 约定差异: Fourier 默认 hbar 常数导致 max|d|=1.869e-04；ratio 分母 Re(C2) 与复 C2 导致 max|d|=6.770e-03。
+- TMD 边界: 有限 b staple 仅 PyQCD 实现，donghx 无对应算符，未伪造对照结果。
+
+### S5 — 重复性与回归
+- 最终脚本重复两次，输入 SHA、23 项检查及 native flow-to-quasi 误差完全相同。
+- 定向现有回归: gradient-flow gluon 12/12，operator staple 6/6，quasi-TMD Fourier 17/17，TMD physical contract 退出码 0。
+- 全量 `python -B -m pyqcd.testing`: 104 passed, 2 skipped, 6 failed。
+- 全量失败与本任务改动无直接关系: 两个 gvar 缺失、一个 CUDA/dtype 组、一个 MPI `/contract` 只读、一个 persistence 路径快照、一个 XeLaTeX 字体缺失。
+- `git diff --check`: PASS。
+- form audit 使用全局路径执行后仍报告 3 个既有问题: 两个 docs tag 路径、一个 `refer/git-rep/README.md` 来源缺失；新增文件未命中规则。
+
+## 验证与证据
+- 测试/检查: donghx C++ 自测、同输入端到端 flow/OPE、共享后处理原语、TMD 共线归约、双精度分层、重复运行、现有定向回归、全量回归、form audit、git diff check。
+- 结果: 核心对照 23/23 PASS，重复性 PASS；全量测试受环境/既有基线问题阻断，未宣称 100% 全绿。
+- 未验证项: 有限 b 的真实 donghx TMD 对照；共同核子 C2/C3 与 soft/rapidity；多格距、连续极限。
+
+## 变更与产物
+- 文件: `.gitignore`、`pyqcd/testing/tmd/cross_reference_donghx.py`。
+- 产物: `pyqcd/testing/tmd/artifacts/donghx_cross_reference_20261024_221859/` 与 `pyqcd/testing/tmd/artifacts/donghx_cross_reference_final_repeat_20261024/`，包含 `comparison.json`、`report.md`、`arrays.npz`、LIME 输入、原始 C++ OPE 和 flowed gauge 中间量。
+- 未改动范围: `pyqcd` 生产实现和 `refer/donghx` 均未修改。
+
+## 风险、限制与下一步
+- 风险: 本次验证的是共享直线 OPE 与匹配原语，不能外推为完整有限 b TMD-PDF 等价。
+- 阻塞: donghx 当前没有横向 staple TMD，也没有共同核子 C2/C3 数据。
+- 下一步: 若要检验有限 b TMD，应建立独立的 staple/TMD oracle，或在 donghx 中增加同几何算符后复用本驱动。
+
+## 用户输入指令
+使用4*4*4*8的小格子作为对象,将双方进行对照测试
+
+## Agent 全文报告
+--- report begin ---
+**finished**
+
+**改动内容**
+新增可复现对照驱动 [cross_reference_donghx.py](/Users/zhangxin/PyQCD/pyqcd/testing/tmd/cross_reference_donghx.py)，直接编译原始 donghx C++，在同一 `(Lx,Ly,Lz,Nt)=(4,4,4,8)`、数组形状 `(Nt,Nz,Ny,Nx)=(8,4,4,4)` 的确定性 SU(3) thin-link 场上比较双方实现。新增 [.gitignore](/Users/zhangxin/PyQCD/.gitignore) 规则，避免自动测试产物污染工作树。生产代码和 `refer/donghx` 均未修改。
+
+最终结果目录：
+- [comparison.json](/Users/zhangxin/PyQCD/pyqcd/testing/tmd/artifacts/donghx_cross_reference_20261024_221859/comparison.json)
+- [report.md](/Users/zhangxin/PyQCD/pyqcd/testing/tmd/artifacts/donghx_cross_reference_20261024_221859/report.md)
+- [arrays.npz](/Users/zhangxin/PyQCD/pyqcd/testing/tmd/artifacts/donghx_cross_reference_20261024_221859/arrays.npz)
+
+输入 LIME SHA-256 为 `5d7c80e2c0063db215f804b860096dd215de959f09ecacd03b7f26849c140f9f`。
+
+**推理依据**
+对照范围分为两层：
+
+1. **双方都有的直线 Wilson-line 胶子 OPE**：donghx C++ 与 PyQCD schema-v2。测试 `tau=0, 0.1, 0.5`，`eps=0.01`，`z=0..3`，包含两种场强投影、unpolarized/helicity、四种方向组合和六个分量。
+2. **双方都可定义的后续原语**：GF-to-MS-bar 端点转换、gg matching kernel、余弦 Fourier、断连 ratio 的 C3/分母约定，以及 PyQCD TMD 在 `b=0,L=0` 时向直线 OPE 的共线归约。
+
+donghx 没有 `b_perp` 和横向 staple，因此有限 `b` 的 PyQCD TMD 无法与 donghx 做同算符对照，只能记录为不可比较项。
+
+**验证结果**
+
+| tau | flow rel-L2 | OPE c64 rel-L2 | OPE c128 rel-L2 | 原生 flow-to-quasi rel-L2 |
+|---:|---:|---:|---:|---:|
+| 0 | 0 | `5.76e-8` | `2.56e-8` | 不适用 |
+| 0.1 | `2.27e-7` | `3.09e-7` | `1.40e-7` | `4.85e-7` |
+| 0.5 | `5.28e-7` | `3.95e-7` | `2.30e-6` | `4.29e-7` |
+
+其他结果：
+
+- 同输入 flow-to-quasi 最大差异：`0`
+- gg matching kernel 最大差异：`0`
+- 同一 `hbar` 常数下 Fourier 最大差异：`1.39e-17`
+- ratio 的 central C3 最大差异：`0`
+- 两库默认 `hbar` 常数导致的 Fourier 最大差异：`1.87e-4`
+- donghx 使用 `Re(C2_nopol)`、PyQCD schema-v2 使用复 C2 分母，合成 ratio 差异：`6.77e-3`
+- PyQCD TMD `b=0,L=0` 共线归约：complex64 最大差异 `3.31e-8`，complex128 最大差异 `6.25e-17`
+
+最终测试为 **23/23 PASS**，并独立重复一次；两次输入 SHA、检查明细和关键误差完全一致。donghx C++ 自测也通过，指数误差 `8.33e-9`。
+
+现有定向回归同样通过：gradient-flow gluon `12/12`、operator staple `6/6`、quasi-TMD Fourier `17/17`，TMD physical contract 退出码为 0。
+
+全量 `python -B -m pyqcd.testing` 为 **104 passed, 2 skipped, 6 failed**。失败分别来自缺少 `gvar`、无 CUDA、MPI `/contract` 只读、持久化路径快照和 XeLaTeX 中文字体缺失，均未指向本次修改的对照驱动。`git diff --check` 通过；form audit 仍报告 3 个既有路径/README 问题。
+
+**结论**
+在 4×4×4×8 小格点上，双方共享的 Wilson flow、直线胶子 OPE、GF-to-MS-bar 转换、gg matching kernel 和 Fourier 公式在单精度浮点误差范围内一致，可判定为**算法等价且有受控数值证据**。
+
+但完整核子胶子 TMD-PDF 仍**不等价**：donghx 缺少有限 `b_perp` 的横向 staple TMD。本次结果只证明共享直线准 PDF 链一致，不能证明完整横向 TMD 链等价。
+
+**后续步骤**
+若目标是完整 TMD 对照，需要为有限 `b_perp` 建立独立 staple/TMD oracle，或在 donghx 中增加同几何算符，再复用当前驱动扩展到多个 `b`、`staple_length`、`Pz` 和 `tau`。
+--- report end ---

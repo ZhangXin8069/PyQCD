@@ -1,0 +1,106 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-24 22:01:09 +0800
+批次: tmd-equivalence
+主任务: PyQCD 与 refer/donghx 的核子胶子 TMD-PDF 等价性审计
+触发原因: 任务完成
+摘要: 结论：整库及完整核子胶子 TMD-PDF 不等价；直线胶子 OPE、flow-to-quasi 与 gg 匹配核为算法/移植等价，PyQCD 的横向 staple TMD 是扩展诊断原型。
+Git 根目录: /Users/zhangxin/PyQCD
+
+## 关键日志
+### S1 — 范围与身份判定
+- 目标: 判定 PyQCD 当前工作树与 refer/donghx 归档在核子胶子 TMD-PDF 上是否等价；将用户“饺子”按“胶子”解释。
+- 操作: 激活 {物理+代码}、auto/all/log，读取 TMD 链、胶子重整化、共享约定、TMD 算法及 donghx 参考技能。
+- 判定: 整库不等价；需按物理链分段比较源实现、公式和统计约定。
+
+### S2 — 并行代码审计
+- 操作: 通过 agent-dispatch 并行审计 PyQCD 与 refer/donghx 两个独立代码域。
+- 结果: 两个子代理均成功完成，结论一致：donghx 当前快照是直线 Wilson line 的断连胶子准 PDF 诊断链；PyQCD 共享底层直线 OPE/端点转换思想并新增 staple TMD 诊断原型。
+- 冲突: 无；git status --short 为空。
+
+### S3 — 关键源码核验
+- donghx: flowed_gluon_ope.cpp 只使用直线 +z/-z Wilson line；schema-v2 metadata 将 nucleon_C2C3、真空扣除、重整化、flow-to-MS 与 LaMET 标为 not_applied。
+- donghx: Note/Gradient_Flow/main.tex 明确空间分离 z_mu=(0,0,z,0)，没有横向 b_perp/staple。
+- PyQCD: _gradient_flow_gluon_ope.py 是 schema-v2 直线 OPE 的 Python 重实现。
+- PyQCD: _tmd.py 新增 b_perp、三段 staple、O=M^{ti;ti}+M^{tj;tj}-2M^{ij;ij} 与逐时间片矩阵元。
+- PyQCD: pdf_workflow.py 明确整链为 diagnostic_only；soft/rapidity、混合、连续极限和固定流时/臂长均未闭合。
+- 差异: donghx calc_ratio_matched.py 与 PyQCD _gradient_flow_ratio.py 的 C3 真空扣除相同，但 schema-v2 ratio 前者用 Re(C2) 分母，后者用复 C2 分母；PyQCD 主 TMD ratio 路径使用 Re(C2)。
+
+### S4 — 数值交叉验证
+- PyQCD flowed_gluon_ope 对 donghx 独立 float64 OPE oracle：unpolarized max|d|=8.897e-16，helicity max|d|=2.231e-16。
+- PyQCD match_one(legacy policy) 对 donghx gluon_flow_to_quasi.match_one：随机六轴数组 max|d|=0。
+- PyQCD _matching_kernels 对 donghx hybrid/ratio gg 核：max|d|=0。
+- 同一 hbar 常数下，PyQCD ioffe_time_distribution 对 donghx Fourier 矩阵：max|d|=1.110e-16；默认常数不同会产生约 8.6e-4 的合成数据差异。
+- schema-v2 ratio：C3/C2 central 各 max|d|=0；复/实分母约定使 ratio 合成差异达 6.770e-3。
+
+### S5 — 回归测试
+- PyQCD 十个显式计数套件 115/115 通过：gradient-flow OPE 12、operator staple 6、TMD SU(3) 7、TMD hybrid 44、quasi-Fourier 17、matching grid 4、flow-to-quasi policy 8、TMD public 6、soft factor 9、SFTX units 2。
+- 另外 _tmd_physical_contract 与 _tmd_runner_contract 退出码均为 0。
+- donghx test_gluon_flow_to_quasi 直接调用 2/2 通过。
+- PyQCD pdf_workflow --dry-run --smoke 通过，默认单组态 6250、P200、tau=3、eps=0.05、staple_length=12。
+- 未运行真实组态端到端物理计算；未宣称物理闭环。
+
+## 验证与证据
+- 测试/检查: 相关合同测试、受控数值交叉对照、dry-run、源码行号与嵌套 AGENTS 边界核验。
+- 结果: 所有运行的测试通过；未发现子代理越界改动。
+- 未验证项: 同系综、同流时间、同格距的 PyQCD 与 donghx 全链逐位输出；当前 donghx 快照缺 build 路径、外部 C2/拟合依赖及数值产物，不能直接端到端重跑。
+
+## 变更与产物
+- 文件: 本次分析未修改源码；仅新增本日志并更新 logs/AGENTS.md。
+- 产物: 分段物理链对照、数值交叉验证与测试证据。
+- 未改动范围: pyqcd/**、refer/** 均未修改。
+
+## 风险、限制与下一步
+- 风险: 不能把底层算法等价外推为完整 TMD-PDF 等价；不能把 donghx 的 collinear quasi-PDF 称为 TMD。
+- 阻塞: 无。
+- 下一步: 若要求严格逐位等价，应在同一 C++ 构建版本和同一组态/参数下分别运行两边 OPE，并比较 raw TU/SU/TH/SH、ratio、flow-to-quasi 与 Fourier 中间量。
+
+## 用户输入指令
+本库代码与refer/donghx的代码是否等价?(主要是核子中的饺子tmd-pdf)
+
+## Agent 全文报告
+--- report begin ---
+**结论**
+
+按整库或“核子中的胶子 TMD-PDF 全链”判据，**不等价**。更准确地说：
+
+- `refer/donghx` 当前归档实现的是**核子外态、断连、直线 Wilson line 的胶子准 PDF / LaMET 诊断链**，不是横向 TMD。
+- PyQCD **移植/重实现了其中若干底层模块**，并另外增加 `b_perp` 与三段 staple，形成胶子 TMD 矩阵元诊断原型。
+- 两边都**没有**完成可用于物理发布的核子胶子 TMD-PDF；因此也不能用“底层公式相同”推出“全链等价”。
+
+**分段判定**
+
+| 物理层 | PyQCD | refer/donghx | 判定 |
+|---|---|---|---|
+| 4D Wilson flow、Clover、对偶场强 | RK3 与四叶 Clover 在 `_gradient_flow.py`、`_gluon_ope.py` 实现 | `flowed_gluon_ope.cpp` 使用相同流方程/场强定义 | 算法等价；非逐位同码 |
+| 直线胶子 OPE | `schema-v2` Python 重实现，见 `_gradient_flow_gluon_ope.py` | C++ `compute_ope` 输出相同六轴 schema | 受控输入下数值等价 |
+| GF→MS-bar 端点转换 | `_gradient_flow_quasi.match_one` | `gluon_flow_to_quasi.match_one` | 显式移植；legacy policy 下输出逐位相同 |
+| 断连 C3 真空扣除 | `_gradient_flow_ratio.py` 与主 TMD `_disconnected.py` | `calc_ratio_matched.py`、`construct_bootstrap.py` | C3 代数相同；统计/分母约定不完全相同 |
+| 核子两/三点 | 有源分辨蒸馏 C2，并用 `C2·Lg` 因子化得到断连 C3 | C++ 只产胶子 loop，C2 从外部产物读入 | 都是断连近似，不是直接全 Wick 胶子 3pt |
+| 横向 TMD 算符 | 有 `b_perp`、staple、`M^{ti;ti}+M^{tj;tj}-2M^{ij;ij}` | 当前源码未发现 `b_perp`/横向 staple，只有沿 z 的直线链接 | **不等价：PyQCD 扩展，donghx 无对应全链** |
+| Z_R、soft/rapidity、TMD matching | Z_R/hybrid API 存在但活动链未用；soft=1、CS 为两动量 proxy、gg-only | 有端点转换、flow-time 外推和 gg-only LaMET；无 TMD soft/CS | 仅有部分公式亲缘，不能互称等价 |
+| 连续极限 | 有外推接口，活动链明确未做 | 单格距、未做连续极限 | 双方均未闭合 |
+
+**关键证据**
+
+1. PyQCD 的直线 OPE 文件明确写着“参考 schema-v2 梯度流胶子 OPE”，并在 `_straight_bilocal`、`_component_set` 中复现 donghx 的 `+z/-z`、双场强和 `T±S` 组合。用 donghx 自带独立 float64 oracle 交叉检查，unpolarized 最大误差 `8.897e-16`，helicity 最大误差 `2.231e-16`。这说明**这一层确实可视为等价移植**。
+
+2. donghx 的 C++ 元数据将 `nucleon_C2C3`、`vacuum_subtraction`、`renormalization`、`flow_to_MS_matching`、`LaMET_matching` 列为 `not_applied`；其技术说明也把空间分离固定为 `z_mu=(0,0,z,0)`。因此归档中的“胶子 PDF”主线是共线准 PDF，不是 `b_perp` TMD。
+
+3. PyQCD 的 `_tmd.py` 才显式实现 `b_perp` 与三段 staple，并有 `tmd_matrix_elements_time` 输出 `(nz,nb,Nt)`；这是 donghx 当前快照没有的 TMD 几何扩展。其几何/规范不变性合同测试通过，但这只证明算符代数与几何，不证明完整 TMD 方案。
+
+4. PyQCD 的主工作流自己也标记为 `diagnostic_only`、`physical_acceptance=False`，并列出 `soft_rapidity_not_measured`、`single_fixed_flow_time_no_tau_extrapolation`、`single_lattice_spacing_no_continuum_limit`、`fixed_staple_length_no_ell_extrapolation`、`gg_only_no_gluon_quark_mixing` 等未闭合项。
+
+5. `schema-v2` ratio 也不是完全同码：donghx 规定并用 `Re(C2_nopol)` 作分母；PyQCD `_gradient_flow_ratio.py` 保留复 C2 除法。受控复输入下 central C3 完全一致，但 ratio 因分母约定可差 `6.770e-3`。PyQCD 主 TMD 的 `_disconnected.ensemble_covariance_ratio` 又改回用 `Re(C2)`，所以不存在一条贯穿两库的完全同一统计实现。
+
+6. 有两类容易误判的名词：donghx 的 `M_boot`、`b` 多数是 bootstrap/内部指标，不是 `b_perp`；donghx 的 `staple` 是 Wilson-flow 六链接 staple，不是 TMD 横向 Wilson-line staple。
+
+**验证**
+
+当前工作树已运行相关合同测试：十个有显式计数的 PyQCD 套件 `115/115` 通过，另两个 TMD 合同模块退出码为 0；donghx 的 `flow_to_quasi` 测试 `2/2` 通过；`pdf_workflow --dry-run --smoke` 通过。受控交叉验证显示：flow-to-quasi 与 gg 匹配核在对应策略下逐位一致；同 `hbar` 下 Fourier 积分器一致，但两库默认 `hbar` 常数不同。未在相同真实系综上运行完整端到端对照，因此结论是“源码与受控数值层面的等价边界”，不是“全链真实数据输出等价”。
+
+**判断口诀**
+
+- 若问题是“PyQCD 的直线 `schema-v2` 胶子 OPE 是否移植自/等价于 donghx？”：**大体是，核心公式和受控输出可视为等价**。
+- 若问题是“PyQCD 的核子胶子 TMD-PDF 全链是否等价于 donghx？”：**不是；donghx 当前实现是直线准 PDF 诊断链，PyQCD 是在其基础上新增 staple TMD 的诊断原型**。
+--- report end ---

@@ -76,6 +76,7 @@ docs/background.png
 tmp/
 scripts/
 pyqcd/testing/tmd/artifacts/work/
+pyqcd/testing/tmd/artifacts/donghx_cross_reference_*/
 # ---- 追加自 lib/_gitignore 模板 (gadd-ignore.sh)：逐行精确匹配去重补加，分节含义见该模板 ----
 # ============================================================================
 # configure 仓库通用 .gitignore
