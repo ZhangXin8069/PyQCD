@@ -49,8 +49,11 @@
 |---|---|
 | flow | algorithm、`dtype`/precision、`shape`、lattice (`NT/NX`)、`conf_id`、`tau`、`eps` |
 | OPE | algorithm、`dtype`/precision、`shape`、lattice (`NT/NX`)、`tau`、`eps`、`z_dir/b_dir`、有序 `z_list/b_list`、`staple_length`、`color_normalization` |
+| full-channel OPE | 上述字段外，另须 channel/orientation/component labels 与 `(2,4,6,nz,nb,Nt)` shape；独立 algorithm/artifact，禁止命中旧 3D `tmd_ope_time.v1` |
+| 2D full-channel OPE | 另须有序 `b_x/b_y` 网格、两个横向方向、`transverse_order` 与 `(2,4,6,nz,nbx,nby,Nt)` shape；独立 v3 artifact，禁止与 1D cache 互命中 |
 | vertex | algorithm、`dtype`/precision、`shape`、lattice (`NT/NX`)、完整有序动量列表、`VdV/VVV` shape、`NEV/NEV1` |
-| multi-2pt | algorithm、`dtype`/precision、`shape`、lattice (`NT/NX`)、完整有序动量列表、通道集合、`v_kind`、vertex 上游 algorithm/artifact/contract SHA |
+| multi-2pt v1 | algorithm、`dtype`/precision、`shape`、lattice (`NT/NX`)、完整有序动量列表、通道集合、`v_kind`、vertex 上游 algorithm/artifact/contract SHA |
+| source-resolved C2 v3 | 另须 complex128 `(source,dt)`、`polarization=nopol|pol35`、投影定义、`Cg5g4`、反周期边界与 `time_axis_order=source,sink`；旧 v2 禁止复用 |
 
 动量标签必须是带边界的单射编码；`(1,23,0)` 与 `(12,3,0)` 等输入不得共享文件名、字典
 键或 accumulator 槽。文件名中的可读参数标签只是定位辅助，不能替代 JSON/SHA。
@@ -100,6 +103,35 @@ python -B -m pyqcd.testing._tmd9_hybrid_contract
 ```
 
 任一门失败都保留 raw/intermediate，停止向下游升级状态，不用“文件存在”代替物理验证。
+
+有限横距 ratio-v2 运行前先执行只读输入审计：
+
+```bash
+python -B -m pyqcd.testing.tmd.audit_finite_b_inputs \
+  --run-dir <run_dir> --conf-ids <id1,id2,...> --out <audit.json>
+```
+
+审计要求至少两个组态、每个组态都在同一 channel/momentum 下同时具有
+`nopol` 与 `pol35` source-resolved C2 `(source,dt)`，且存在
+`(channel,orientation,component,z,b,t)` 七轴 TMD OPE。source-averaged C2 或 3D
+非极化组合 OPE 会得到 `status=blocked`，不得通过广播或补零进入 ratio-v2。
+同一生产目录中的旧 `tmd_ope_time.v1` 可以与 full-channel v2 共存；审计只对
+`artifact=tmd_ope_time_full_channel` 的候选逐项验证，不会因合法旧产物存在而误阻塞，
+但任何已识别的 full-channel 候选若 contract/shape/labels 不符仍会使整组失败。
+审计 schema v2 将 nopol/pol35 成对覆盖纳入结构 hard gate；空的极化元数据不能由
+文件名猜测。通过后仍须验证 `t_sep`、协方差和物理接受门。
+
+当前受控集成契约已覆盖两配置小格点的完整材料链：
+`full-channel producer → canonical OPE cache → source-resolved C2 cache → audit ready
+→ strict loaders → cross-configuration ratio-v2 → Im(R_H)`。该链使用合成 C2 和小规范场，
+只证明缓存身份、共享索引、统计接口和最终相位投影能够闭合；不能升级为真实系综结果。
+
+2026-10-25 的真实合同核查使用 `4150/6250`：两组均生成 complex128
+`nopol/pol35` `(source,dt)=(72,72)` 缓存并通过 audit v2。`4150 P200` 与 `/public`
+`momsmear0_Cg5g4` 参考的映射误差为 nopol `max|d|=1.92e-8`、`rel_L2=3.51e-8`，
+pol35 `max|d|=1.38e-8`、`rel_L2=3.71e-6`；两组随机时间对的直接合同 oracle 最大误差
+`2.89e-10`。`P200,t_sep={5,6,7}` 的两组态 ratio-v3 接线只标为 diagnostic；Nconf=2
+不构成统计结论，也未通过 soft/rapidity、匹配或连续极限门。
 
 ## 典型错误
 

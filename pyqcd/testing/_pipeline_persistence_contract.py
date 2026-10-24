@@ -174,6 +174,7 @@ def test_tmd_workflow_analysis_forwards_tmd_cache_identity():
             "momenta": momenta,
             "precision": "complex128",
             "source_resolved": True,
+            "polarization": "nopol",
         },
     }
 

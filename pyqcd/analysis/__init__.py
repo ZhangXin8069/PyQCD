@@ -10,9 +10,17 @@ __all__ = [
     "sem", "resample", "cov_mat", "model_ratio", "run_disconnected_ratio",
     "run_disconnected_tmd_ratio", "plot_tmd_c0", "plot_tmd_ratio",
     "GRADIENT_FLOW_RATIO_SCHEMA", "GRADIENT_FLOW_POLARIZATION",
+    "GRADIENT_FLOW_TMD_RATIO_SCHEMA",
+    "GRADIENT_FLOW_TMD_RATIO_2D_SCHEMA",
     "covariance_ratio_estimator", "calculate_gradient_flow_ratios",
+    "calculate_gradient_flow_tmd_ratios",
+    "calculate_gradient_flow_tmd_ratios_2d",
+    "calculate_gradient_flow_tmd_ratios_from_configurations",
+    "calculate_gradient_flow_tmd_ratios_2d_from_configurations",
     "calculate_ratios",
     "physical_helicity_ratio", "validate_gradient_flow_ratio_results",
+    "validate_gradient_flow_tmd_ratio_results",
+    "validate_gradient_flow_tmd_ratio_2d_results",
     "run_meff_jackknife", "run_3pt_ratio",
     "th_E0", "fit_dispersion", "dispersion_check", "pz_to_gev_lattice",
     "R_model", "covariance_matrix_inv", "fit_ratio",
@@ -52,12 +60,20 @@ from ._tmd_ratio import (
 )
 from ._gradient_flow_ratio import (
     RATIO_SCHEMA as GRADIENT_FLOW_RATIO_SCHEMA,
+    TMD_RATIO_SCHEMA as GRADIENT_FLOW_TMD_RATIO_SCHEMA,
+    TMD_RATIO_2D_SCHEMA as GRADIENT_FLOW_TMD_RATIO_2D_SCHEMA,
     POLARIZATION_FOR_CHANNEL as GRADIENT_FLOW_POLARIZATION,
     covariance_ratio_estimator,
     calculate_gradient_flow_ratios,
+    calculate_gradient_flow_tmd_ratios,
+    calculate_gradient_flow_tmd_ratios_2d,
+    calculate_gradient_flow_tmd_ratios_from_configurations,
+    calculate_gradient_flow_tmd_ratios_2d_from_configurations,
     calculate_ratios,
     physical_helicity_ratio,
     validate_gradient_flow_ratio_results,
+    validate_gradient_flow_tmd_ratio_results,
+    validate_gradient_flow_tmd_ratio_2d_results,
 )
 from ._correlators import run_meff_jackknife, run_3pt_ratio
 from ._dispersion import th_E0, fit_dispersion, dispersion_check, pz_to_gev_lattice

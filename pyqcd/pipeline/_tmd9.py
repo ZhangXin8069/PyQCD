@@ -8,6 +8,8 @@ test9 梯度流核子胶子 TMD-PDF 诊断链（pyqcd 核心模块）
     2. 梯度流：gauge → wilson_flow(τ=3a²) → flowed gauge V_tau
     3. 胶子 TMD 算符：在 flowed gauge 上逐时间片计算
        O(z,b⊥) = M^{tx;tx}+M^{ty;ty}−2M^{xy;xy}（空间求和）→ (nz,nb,Nt)
+       可选 full-channel schema 同时保存 unpolarized/helicity 的
+       (2,4,6,nz,nb,Nt) 原始 orientation/components。
     4. 不相连协方差：在逐 replica 的 ensemble 均值上计算
        C3=<C2·OPE>−<C2><OPE>
     5. 比值 R=mean_t0(C3)/mean_t0(Re C2)
@@ -41,10 +43,18 @@ from ..pipeline._config import (
 )
 from ..pipeline._steps import (
     compute_vertices_for_config, compute_2pt_for_config_multi,
+    compute_2pt_polarizations_for_config_multi,
+    TWO_POINT_POLARIZATIONS,
     _info, _momentum_tag,
 )
-from ..renorm import wilson_flow, flow_action_density, tmd_matrix_elements_time
-from ..operator import read_gauge_lime
+from ..renorm import (
+    wilson_flow, flow_action_density, tmd_matrix_elements_time,
+    full_channel_tmd_ope_time, full_channel_tmd_ope_time_2d,
+)
+from ..operator import (
+    read_gauge_lime, GRADIENT_FLOW_CHANNELS,
+    GRADIENT_FLOW_ORIENTATIONS, GRADIENT_FLOW_COMPONENTS,
+)
 
 
 _CACHE_SCHEMA = "pyqcd.physical-cache.v1"
@@ -52,8 +62,14 @@ _CONTRACT_JSON_ATTR = "pyqcd_cache_contract_json"
 _CONTRACT_SHA_ATTR = "pyqcd_cache_contract_sha256"
 _VERTEX_ALGORITHM_VERSION = "pyqcd.pipeline.vertex-multi.v1"
 _MULTI_2PT_ALGORITHM_VERSION = "pyqcd.pipeline.multi-2pt.v1"
+_POLARIZED_2PT_ALGORITHM_VERSION = (
+    "pyqcd.pipeline.multi-2pt.v3-source-resolved-polarized")
 _FLOW_ALGORITHM_VERSION = "pyqcd.renorm.wilson-flow.v1"
 _OPE_ALGORITHM_VERSION = "pyqcd.pipeline.tmd-ope-time.v1"
+_FULL_OPE_ALGORITHM_VERSION = (
+    "pyqcd.pipeline.tmd-ope-time-full-channel.v2")
+_FULL_2D_OPE_ALGORITHM_VERSION = (
+    "pyqcd.pipeline.tmd-ope-time-full-channel-2d.v3")
 
 
 def _cache_float(value, name):
@@ -102,6 +118,15 @@ def _validate_precision(precision):
             or str(precision) not in ("complex64", "complex128")):
         raise ValueError("precision 必须是 'complex64' 或 'complex128'")
     return str(precision)
+
+
+def _validate_2pt_polarization(polarization):
+    """Validate the two supported source-resolved baryon polarizations."""
+    if (not isinstance(polarization, (str, np.str_))
+            or str(polarization) not in TWO_POINT_POLARIZATIONS):
+        raise ValueError(
+            "polarization 必须是 'nopol' 或 'pol35'")
+    return str(polarization)
 
 
 def _validate_momenta(momenta):
@@ -187,6 +212,51 @@ def _validate_tmd_request(tau, eps, precision, z_dir, b_dir,
     z_list = _cache_int_list(z_list, "z_list")
     b_list = _cache_int_list(b_list, "b_list")
     return tau, eps, precision, z_dir, b_dir, z_list, b_list
+
+
+def _validate_tmd_2d_request(
+        tau, eps, precision, z_dir, b_x_dir, b_y_dir,
+        z_list, b_x_list, b_y_list, transverse_order):
+    """Validate two-component finite-b OPE requests."""
+    tau, eps = _validate_flow_controls(tau, eps)
+    precision = _validate_precision(precision)
+    directions = []
+    for name, value in (
+            ("z_dir", z_dir), ("b_x_dir", b_x_dir),
+            ("b_y_dir", b_y_dir)):
+        value = _cache_int(value, name)
+        if value not in (0, 1, 2):
+            raise ValueError(
+                f"{name} 必须是受支持的空间方向 0=x, 1=y, 2=z")
+        directions.append(value)
+    if len(set(directions)) != 3:
+        raise ValueError("z_dir、b_x_dir、b_y_dir 必须互不相同")
+    try:
+        transverse_order = tuple(transverse_order)
+    except TypeError as exc:
+        raise ValueError(
+            "transverse_order 必须是 (0,1) 或 (1,0)") from exc
+    if any(isinstance(value, (bool, np.bool_))
+           or not isinstance(value, (int, np.integer))
+           for value in transverse_order):
+        raise ValueError("transverse_order 必须含非布尔整数")
+    transverse_order = tuple(int(value) for value in transverse_order)
+    if transverse_order not in ((0, 1), (1, 0)):
+        raise ValueError("transverse_order 必须是 (0,1) 或 (1,0)")
+    z_list = _cache_int_list(z_list, "z_list")
+    b_x_list = _cache_int_list(b_x_list, "b_x_list")
+    b_y_list = _cache_int_list(b_y_list, "b_y_list")
+    if any(value < 0 for value in z_list):
+        raise ValueError("z_list 必须为非负整数")
+    for name, values in (
+            ("z_list", z_list), ("b_x_list", b_x_list),
+            ("b_y_list", b_y_list)):
+        if len(values) != len(set(values)):
+            raise ValueError(f"{name} 不得重复")
+    return (
+        tau, eps, precision, directions[0], directions[1], directions[2],
+        z_list, b_x_list, b_y_list, transverse_order,
+    )
 
 
 def _canonical_contract_json(contract):
@@ -536,10 +606,15 @@ def _vertex_cache_specs(conf_id, run_dir, momenta, precision):
 
 
 def _multi_2pt_cache_specs(conf_id, run_dir, momenta, channels,
-                            precision, v_kind, source_resolved=False):
+                            precision, v_kind, source_resolved=False,
+                            polarization='nopol'):
     if not isinstance(source_resolved, (bool, np.bool_)):
         raise ValueError("source_resolved 必须是布尔值")
     source_resolved = bool(source_resolved)
+    polarization = _validate_2pt_polarization(polarization)
+    if not source_resolved and polarization != 'nopol':
+        raise ValueError(
+            "source_resolved=False 只支持 nopol；pol35 必须保留 source/dt 轴")
     conf_id = _cache_int(conf_id, "conf_id")
     cdir = _strict_conf_path(run_dir, conf_id)
     lattice = _lattice_cache_contract()
@@ -578,16 +653,32 @@ def _multi_2pt_cache_specs(conf_id, run_dir, momenta, channels,
             if source_resolved:
                 contract.update({
                     "algorithm_version":
-                        "pyqcd.pipeline.multi-2pt.v2-source-resolved",
+                        _POLARIZED_2PT_ALGORITHM_VERSION,
+                    "artifact": "tmd9_multi_2pt_polarized",
+                    "antiperiodic_boundary": True,
+                    "dirac_interpolator": "Cg5g4",
+                    "dtype": "complex128",
+                    "polarization": polarization,
+                    "polarization_definition": {
+                        "nopol":
+                            "0.5*(gamma_0+gamma_4)",
+                        "pol35":
+                            "0.5*(gamma_0+gamma_4)@"
+                            "(1j*gamma_3@gamma_5)",
+                    }[polarization],
                     "source_resolved": True,
                     "source_axis_order": "source,dt",
                     "shape": [lattice["nt"], lattice["nt"]],
+                    "time_axis_order": "source,sink",
                 })
             digest = _contract_sha256(contract)
-            cache_version = "strict-v2" if source_resolved else "strict-v1"
+            cache_version = "strict-v3" if source_resolved else "strict-v1"
+            polarization_tag = (
+                f"_pol{polarization}" if source_resolved else "")
             filename = (
                 f"{key}_tmd9-{cache_version}_nm{len(momenta)}_"
                 f"nc{len(channels)}_p{precision}_v{v_kind}_"
+                f"{polarization_tag}"
                 f"sha256-{digest}_conf{conf_id}.h5")
             specs[key] = _strict_cache_spec(
                 os.path.join(cdir, filename), contract)
@@ -613,22 +704,66 @@ def compute_vertices_multi(conf_id, run_dir, logger, momenta,
 def compute_2pt_multi(conf_id, run_dir, logger, vertices, momenta,
                       precision=PRECISION, channels=('pp',),
                       v_kind='VVV', recompute=False,
-                      source_resolved=False):
+                      source_resolved=False, polarization='nopol'):
     """多动量核子 2pt（test9 strict canonical cache）。"""
     if not isinstance(source_resolved, (bool, np.bool_)):
         raise ValueError("source_resolved 必须是布尔值")
+    source_resolved = bool(source_resolved)
     precision = _validate_precision(precision)
     momenta = _validate_momenta(momenta)
     channels = _validate_channels(channels)
     v_kind = _validate_v_kind(v_kind)
+    polarization = _validate_2pt_polarization(polarization)
     strict_cache = _multi_2pt_cache_specs(
         conf_id, run_dir, momenta, channels, precision, v_kind,
-        source_resolved=source_resolved)
+        source_resolved=source_resolved, polarization=polarization)
+    if source_resolved:
+        result = compute_2pt_polarizations_for_config_multi(
+            conf_id, run_dir, logger, vertices, momenta,
+            precision=precision, channels=channels,
+            polarizations=(polarization,),
+            strict_cache_by_polarization={polarization: strict_cache},
+            recompute=recompute,
+        )
+        return result[polarization]
     return compute_2pt_for_config_multi(
         conf_id, run_dir, logger, vertices, momenta,
         precision=precision, channels=channels, v_kind=v_kind,
         strict_cache=strict_cache, recompute=recompute,
-        source_resolved=source_resolved)
+        source_resolved=False)
+
+
+def compute_2pt_polarizations_multi(
+        conf_id, run_dir, logger, vertices, momenta,
+        precision=PRECISION, channels=('pp',),
+        polarizations=TWO_POINT_POLARIZATIONS, recompute=False):
+    """Compute source-resolved ``nopol`` and ``pol35`` in one contraction pass."""
+    precision = _validate_precision(precision)
+    momenta = _validate_momenta(momenta)
+    channels = _validate_channels(channels)
+    try:
+        polarizations = tuple(polarizations)
+    except TypeError as exc:
+        raise ValueError("polarizations 必须是极化标签序列") from exc
+    if not polarizations:
+        raise ValueError("polarizations 不能为空")
+    polarizations = tuple(
+        _validate_2pt_polarization(value) for value in polarizations)
+    if len(set(polarizations)) != len(polarizations):
+        raise ValueError("polarizations 不得重复")
+    specs = {
+        polarization: _multi_2pt_cache_specs(
+            conf_id, run_dir, momenta, channels, precision, 'VVV',
+            source_resolved=True, polarization=polarization)
+        for polarization in polarizations
+    }
+    return compute_2pt_polarizations_for_config_multi(
+        conf_id, run_dir, logger, vertices, momenta,
+        precision=precision, channels=channels,
+        polarizations=polarizations,
+        strict_cache_by_polarization=specs,
+        recompute=recompute,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -732,37 +867,60 @@ def _validate_color_normalization(color_normalization):
 
 def _tmd_ope_contract(conf_id, tau, eps, precision, z_dir, b_dir,
                       z_list, b_list, staple_length, color_normalization,
-                      flow_contract_sha256=None):
+                      flow_contract_sha256=None, full_channels=False):
     tau, eps, precision, z_dir, b_dir, z_list, b_list = (
         _validate_tmd_request(
             tau, eps, precision, z_dir, b_dir, z_list, b_list))
+    if not isinstance(full_channels, (bool, np.bool_)):
+        raise ValueError("full_channels 必须是布尔值")
+    full_channels = bool(full_channels)
+    artifact = (
+        "tmd_ope_time_full_channel" if full_channels else "tmd_ope_time")
+    algorithm_version = (
+        _FULL_OPE_ALGORITHM_VERSION if full_channels
+        else _OPE_ALGORITHM_VERSION)
+    output_dtype = (
+        precision if full_channels else "float64")
+    output_shape = (
+        [2, 4, 6, len(z_list), len(b_list), int(NT)]
+        if full_channels else [len(z_list), len(b_list), int(NT)]
+    )
     contract = {
-        "algorithm_version": _OPE_ALGORITHM_VERSION,
-        "artifact": "tmd_ope_time",
+        "algorithm_version": algorithm_version,
+        "artifact": artifact,
         "b_dir": b_dir,
         "b_list": b_list,
         "color_normalization": _validate_color_normalization(
             color_normalization),
         "conf_id": _cache_int(conf_id, "conf_id"),
-        "dtype": "float64",
+        "dtype": output_dtype,
         "eps": eps,
         "lattice": {"nt": int(NT), "nx": int(NX)},
         "precision": precision,
         "schema": _CACHE_SCHEMA,
-        "shape": [len(z_list), len(b_list), int(NT)],
+        "shape": output_shape,
         "staple_length": _cache_int(staple_length, "staple_length"),
         "tau": tau,
         "z_dir": z_dir,
         "z_list": z_list,
     }
+    if full_channels:
+        contract["channel_labels"] = list(GRADIENT_FLOW_CHANNELS)
+        contract["orientation_labels"] = list(GRADIENT_FLOW_ORIENTATIONS)
+        contract["component_labels"] = list(GRADIENT_FLOW_COMPONENTS)
     if flow_contract_sha256 is not None:
         contract["flow_contract_sha256"] = flow_contract_sha256
     return contract
 
 
 def _tmd_ope_tag(contract):
+    version = (
+        "v2_full"
+        if contract["artifact"] == "tmd_ope_time_full_channel"
+        else "v1"
+    )
     return (
-        f"v1_{_sequence_tag('z', contract['z_list'])}_"
+        f"{version}_{_sequence_tag('z', contract['z_list'])}_"
         f"{_sequence_tag('b', contract['b_list'])}_"
         f"tau{_float_tag(contract['tau'])}_"
         f"eps{_float_tag(contract['eps'])}_"
@@ -779,6 +937,8 @@ def _tmd_ope_cache_paths(cdir, contract):
     conf_id = contract["conf_id"]
     canonical_base = os.path.join(
         cdir, f"tmd_ope_{_tmd_ope_tag(contract)}_conf{conf_id}")
+    if contract["artifact"] == "tmd_ope_time_full_channel":
+        return canonical_base, [canonical_base + '.h5']
     z_legacy = ''.join(str(value) for value in contract["z_list"])
     b_legacy = ''.join(str(value) for value in contract["b_list"])
     legacy_tags = (
@@ -795,20 +955,89 @@ def _tmd_ope_cache_paths(cdir, contract):
     return canonical_base, candidates
 
 
+def _tmd_ope_2d_contract(
+        conf_id, tau, eps, precision, z_dir, b_x_dir, b_y_dir,
+        z_list, b_x_list, b_y_list, transverse_order, staple_length,
+        color_normalization, flow_contract_sha256=None):
+    request = _validate_tmd_2d_request(
+        tau, eps, precision, z_dir, b_x_dir, b_y_dir,
+        z_list, b_x_list, b_y_list, transverse_order)
+    tau, eps, precision, z_dir, b_x_dir, b_y_dir, z_list, b_x_list, \
+        b_y_list, transverse_order = request
+    contract = {
+        "algorithm_version": _FULL_2D_OPE_ALGORITHM_VERSION,
+        "artifact": "tmd_ope_time_full_channel_2d",
+        "b_x_dir": b_x_dir,
+        "b_x_list": b_x_list,
+        "b_y_dir": b_y_dir,
+        "b_y_list": b_y_list,
+        "channel_labels": list(GRADIENT_FLOW_CHANNELS),
+        "color_normalization": _validate_color_normalization(
+            color_normalization),
+        "component_labels": list(GRADIENT_FLOW_COMPONENTS),
+        "conf_id": _cache_int(conf_id, "conf_id"),
+        "dtype": precision,
+        "eps": eps,
+        "lattice": {"nt": int(NT), "nx": int(NX)},
+        "orientation_labels": list(GRADIENT_FLOW_ORIENTATIONS),
+        "precision": precision,
+        "schema": _CACHE_SCHEMA,
+        "shape": [
+            2, 4, 6, len(z_list), len(b_x_list), len(b_y_list), int(NT)],
+        "staple_length": _cache_int(staple_length, "staple_length"),
+        "tau": tau,
+        "transverse_order": list(transverse_order),
+        "z_dir": z_dir,
+        "z_list": z_list,
+    }
+    if flow_contract_sha256 is not None:
+        contract["flow_contract_sha256"] = flow_contract_sha256
+    return contract
+
+
+def _tmd_ope_2d_tag(contract):
+    order = "".join(str(value) for value in contract["transverse_order"])
+    return (
+        f"v3_full_2d_{_sequence_tag('z', contract['z_list'])}_"
+        f"{_sequence_tag('bx', contract['b_x_list'])}_"
+        f"{_sequence_tag('by', contract['b_y_list'])}_"
+        f"tau{_float_tag(contract['tau'])}_"
+        f"eps{_float_tag(contract['eps'])}_"
+        f"p{_safe_tag_text(contract['precision'])}_"
+        f"zd{_int_tag(contract['z_dir'])}_"
+        f"bxd{_int_tag(contract['b_x_dir'])}_"
+        f"byd{_int_tag(contract['b_y_dir'])}_order{order}_"
+        f"L{_int_tag(contract['staple_length'])}_"
+        f"C{_safe_tag_text(contract['color_normalization'])}_"
+        f"sha256-{_contract_sha256(contract)}")
+
+
+def _tmd_ope_2d_cache_paths(cdir, contract):
+    base = os.path.join(
+        cdir,
+        f"tmd_ope_2d_{_tmd_ope_2d_tag(contract)}_"
+        f"conf{contract['conf_id']}")
+    return base, [base + '.h5']
+
+
 def compute_tmd_ope_time(conf_id, run_dir, logger, z_list, b_list,
                          tau=3.0, eps=0.05, precision=PRECISION,
                          z_dir=2, b_dir=0, recompute=False,
                          gauge_flow_dir=None, staple_length=None,
-                         color_normalization='fundamental_trace'):
-    """单组态梯度流 TMD 算符逐时间片矩阵元 → (nz, nb, Nt) 实数。
+                         color_normalization='fundamental_trace',
+                         full_channels=False):
+    """单组态梯度流 TMD OPE 逐时间片矩阵元。
 
-    输出键：'tmd'（(nz, nb, Nt)），保存于 <run_dir>/data/conf<id>/。
-    算符 O = M^{tx;tx}+M^{ty;ty}−2M^{xy;xy} 在 flowed gauge 上
-    （梯度流重整化：算符自动有限）。
+    默认输出 ``'tmd': (nz,nb,Nt)`` 实数。``full_channels=True`` 时输出
+    ``'tmd_full': (2,4,6,nz,nb,Nt)`` 复数，保留 unpolarized/helicity 的
+    ±z raw 与 even/odd、六个 component。两者使用独立 canonical cache contract。
     """
     tau, eps, precision, z_dir, b_dir, z_list, b_list = (
         _validate_tmd_request(
             tau, eps, precision, z_dir, b_dir, z_list, b_list))
+    if not isinstance(full_channels, (bool, np.bool_)):
+        raise ValueError('full_channels 必须是布尔值')
+    full_channels = bool(full_channels)
     staple_length = _resolve_staple_length(z_list, staple_length)
     color_normalization = _validate_color_normalization(color_normalization)
     input_source = _gauge_source_identity(conf_id)
@@ -820,7 +1049,8 @@ def compute_tmd_ope_time(conf_id, run_dir, logger, z_list, b_list,
     contract = _tmd_ope_contract(
         conf_id, tau, eps, precision, z_dir, b_dir,
         z_list, b_list, staple_length, color_normalization,
-        flow_contract_sha256=flow_contract_sha256)
+        flow_contract_sha256=flow_contract_sha256,
+        full_channels=full_channels)
     conf_id = contract["conf_id"]
     tau = contract["tau"]
     eps = contract["eps"]
@@ -831,18 +1061,26 @@ def compute_tmd_ope_time(conf_id, run_dir, logger, z_list, b_list,
     b_list = contract["b_list"]
     staple_length = contract["staple_length"]
     color_normalization = contract["color_normalization"]
+    full_channels = contract["artifact"] == "tmd_ope_time_full_channel"
     from ..pipeline._steps import conf_data_dir as _cdir
     cdir = _cdir(run_dir, conf_id)
     path, candidates = _tmd_ope_cache_paths(cdir, contract)
+    output_key = 'tmd_full' if full_channels else 'tmd'
+    expected_shape = (
+        (2, 4, 6, len(z_list), len(b_list), int(NT))
+        if full_channels else (len(z_list), len(b_list), int(NT))
+    )
+    expected_dtype = (
+        np.dtype(precision) if full_channels else np.dtype(np.float64))
     if not recompute:
         tmd, cache_path = _load_first_matching_cache(
             candidates, contract, logger,
-            expected_shape=(len(z_list), len(b_list), int(NT)),
-            expected_dtype=np.float64)
+            expected_shape=expected_shape,
+            expected_dtype=expected_dtype)
         if tmd is not None:
             _info(logger, f"  conf={conf_id}: loaded cached TMD OPE "
                           f"{tmd.shape} from {cache_path}")
-            return {'tmd': tmd}
+            return {output_key: tmd}
 
     V = flow_gauge_for_config(conf_id, tau, eps, precision,
                               save_dir=gauge_flow_dir, logger=logger,
@@ -855,18 +1093,84 @@ def compute_tmd_ope_time(conf_id, run_dir, logger, z_list, b_list,
     del V
 
     t0 = time.perf_counter()
-    tmd = tmd_matrix_elements_time(
-        Vg, z_list, b_list, z_dir=z_dir, b_dir=b_dir,
-        L=staple_length, color_normalization=color_normalization)
+    if full_channels:
+        tmd = full_channel_tmd_ope_time(
+            Vg, z_list, b_list, z_dir=z_dir, b_dir=b_dir,
+            L=staple_length, color_normalization=color_normalization)
+    else:
+        tmd = tmd_matrix_elements_time(
+            Vg, z_list, b_list, z_dir=z_dir, b_dir=b_dir,
+            L=staple_length, color_normalization=color_normalization)
     _validate_contract_array(
-        tmd, "TMD OPE", (len(z_list), len(b_list), int(Vg.shape[0])),
-        np.float64)
+        tmd, "TMD OPE", expected_shape, expected_dtype)
     dt = time.perf_counter() - t0
     _info(logger, f"  conf={conf_id}: TMD OPE z={len(z_list)} b={len(b_list)} "
                   f"({dt:.0f}s) -> {tmd.shape}")
     _save_contract_h5(tmd, path + '.h5', contract)
     del Vg
-    return {'tmd': tmd}
+    return {output_key: tmd}
+
+
+def compute_tmd_ope_time_2d(
+        conf_id, run_dir, logger, z_list, b_x_list, b_y_list,
+        tau=3.0, eps=0.05, precision=PRECISION,
+        z_dir=2, b_x_dir=0, b_y_dir=1, transverse_order=(0, 1),
+        recompute=False, gauge_flow_dir=None, staple_length=None,
+        color_normalization='fundamental_trace'):
+    """Compute and persist a two-component finite-b full-channel TMD OPE."""
+    request = _validate_tmd_2d_request(
+        tau, eps, precision, z_dir, b_x_dir, b_y_dir,
+        z_list, b_x_list, b_y_list, transverse_order)
+    tau, eps, precision, z_dir, b_x_dir, b_y_dir, z_list, b_x_list, \
+        b_y_list, transverse_order = request
+    staple_length = _resolve_staple_length(z_list, staple_length)
+    color_normalization = _validate_color_normalization(color_normalization)
+    input_source = _gauge_source_identity(conf_id)
+    flow_contract_sha256 = None
+    if input_source is not None:
+        flow_contract = _flow_cache_contract(
+            conf_id, tau, eps, precision, input_source=input_source)
+        flow_contract_sha256 = _contract_sha256(flow_contract)
+    contract = _tmd_ope_2d_contract(
+        conf_id, tau, eps, precision, z_dir, b_x_dir, b_y_dir,
+        z_list, b_x_list, b_y_list, transverse_order, staple_length,
+        color_normalization, flow_contract_sha256=flow_contract_sha256)
+    conf_id = contract["conf_id"]
+    from ..pipeline._steps import conf_data_dir as _cdir
+    cdir = _cdir(run_dir, conf_id)
+    path, candidates = _tmd_ope_2d_cache_paths(cdir, contract)
+    expected_shape = (
+        2, 4, 6, len(z_list), len(b_x_list), len(b_y_list), int(NT))
+    expected_dtype = np.dtype(precision)
+    if not recompute:
+        tmd, cache_path = _load_first_matching_cache(
+            candidates, contract, logger,
+            expected_shape=expected_shape,
+            expected_dtype=expected_dtype)
+        if tmd is not None:
+            _info(logger, f"  conf={conf_id}: loaded cached 2D TMD OPE "
+                          f"{tmd.shape} from {cache_path}")
+            return {'tmd_full_2d': tmd}
+
+    V = flow_gauge_for_config(
+        conf_id, tau, eps, precision, save_dir=gauge_flow_dir,
+        logger=logger, save_gauge=False,
+        input_source_identity=input_source)
+    backend = get_backend()
+    if get_backend_name() == 'torch':
+        set_precision(precision)
+    Vg = backend.asarray(V)
+    del V
+    tmd = full_channel_tmd_ope_time_2d(
+        Vg, z_list, b_x_list, b_y_list,
+        z_dir=contract["z_dir"], b_x_dir=contract["b_x_dir"],
+        b_y_dir=contract["b_y_dir"], L=staple_length,
+        transverse_order=tuple(contract["transverse_order"]),
+        color_normalization=color_normalization)
+    _validate_contract_array(tmd, "2D TMD OPE", expected_shape, expected_dtype)
+    _save_contract_h5(tmd, path + '.h5', contract)
+    del Vg
+    return {'tmd_full_2d': tmd}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -890,7 +1194,8 @@ def _momenta_from_tags(momentum_tag_list):
 
 def load_multi_2pt(run_dir, conf_ids, momentum_tag_list, channels=('pp',),
                    logger=print, *, momenta=None, precision=PRECISION,
-                   v_kind='VVV', source_resolved=False):
+                   v_kind='VVV', source_resolved=False,
+                   polarization='nopol'):
     """严格读取多动量 2pt canonical HDF5。
 
     既有 ``P000``/``P200``/``P400`` 调用保持可用；多位/负分量使用
@@ -898,9 +1203,14 @@ def load_multi_2pt(run_dir, conf_ids, momentum_tag_list, channels=('pp',),
     """
     if not isinstance(source_resolved, (bool, np.bool_)):
         raise ValueError("source_resolved 必须是布尔值")
+    source_resolved = bool(source_resolved)
     precision = _validate_precision(precision)
     channels = _validate_channels(channels)
     v_kind = _validate_v_kind(v_kind)
+    polarization = _validate_2pt_polarization(polarization)
+    if not source_resolved and polarization != 'nopol':
+        raise ValueError(
+            "source_resolved=False 只支持 nopol；pol35 必须保留 source/dt 轴")
     if momenta is None:
         tags, momenta = _momenta_from_tags(momentum_tag_list)
     else:
@@ -922,7 +1232,8 @@ def load_multi_2pt(run_dir, conf_ids, momentum_tag_list, channels=('pp',),
     for cid in conf_ids:
         specs = _multi_2pt_cache_specs(
             cid, run_dir, momenta, channels, precision, v_kind,
-            source_resolved=source_resolved)
+            source_resolved=source_resolved,
+            polarization=polarization)
         entry = {}
         for key, spec in specs.items():
             array, reason = _load_contract_h5(
@@ -940,6 +1251,44 @@ def load_multi_2pt(run_dir, conf_ids, momentum_tag_list, channels=('pp',),
     _info(logger, f"  Loaded multi-momentum 2pt for {len(corr)} configs "
                   f"({len(tags)} momenta)")
     return corr
+
+
+def load_multi_2pt_polarizations(
+        run_dir, conf_ids, momentum_tag_list, channels=('pp',),
+        logger=print, *, momenta=None, precision=PRECISION,
+        v_kind='VVV', polarizations=TWO_POINT_POLARIZATIONS):
+    """Strictly load a shared set of source-resolved polarizations."""
+    try:
+        polarizations = tuple(polarizations)
+    except TypeError as exc:
+        raise ValueError("polarizations 必须是极化标签序列") from exc
+    if not polarizations:
+        raise ValueError("polarizations 不能为空")
+    polarizations = tuple(
+        _validate_2pt_polarization(value) for value in polarizations)
+    if len(set(polarizations)) != len(polarizations):
+        raise ValueError("polarizations 不得重复")
+
+    nested = {}
+    common = None
+    for polarization in polarizations:
+        loaded = load_multi_2pt(
+            run_dir, conf_ids, momentum_tag_list, channels=channels,
+            logger=logger, momenta=momenta, precision=precision,
+            v_kind=v_kind, source_resolved=True,
+            polarization=polarization)
+        current = set(loaded)
+        common = current if common is None else common & current
+        for conf_id, entry in loaded.items():
+            nested.setdefault(conf_id, {})[polarization] = entry
+
+    common = common or set()
+    result = {
+        conf_id: nested[conf_id] for conf_id in sorted(common)
+    }
+    _info(logger, "  Loaded polarized multi-2pt for "
+                  f"{len(result)} configs ({len(polarizations)} channels)")
+    return result
 
 
 def load_tmd_ope_all(run_dir, conf_ids, z_list, b_list, logger=print,
@@ -974,6 +1323,84 @@ def load_tmd_ope_all(run_dir, conf_ids, z_list, b_list, logger=print,
         if tmd is not None:
             ope[contract["conf_id"]] = {'tmd': tmd}
     _info(logger, f"  Loaded TMD OPE for {len(ope)} configs")
+    return ope
+
+
+def load_full_channel_tmd_ope_all(
+        run_dir, conf_ids, z_list, b_list, logger=print,
+        staple_length=None, color_normalization='fundamental_trace',
+        tau=3.0, eps=0.05, precision=PRECISION,
+        z_dir=2, b_dir=0):
+    """Read six-axis full-channel TMD OPE caches keyed by configuration."""
+    tau, eps, precision, z_dir, b_dir, z_list, b_list = (
+        _validate_tmd_request(
+            tau, eps, precision, z_dir, b_dir, z_list, b_list))
+    staple_length = _resolve_staple_length(z_list, staple_length)
+    color_normalization = _validate_color_normalization(color_normalization)
+    expected_shape = (2, 4, 6, len(z_list), len(b_list), int(NT))
+    expected_dtype = np.dtype(precision)
+    ope = {}
+    for cid in conf_ids:
+        input_source = _gauge_source_identity(cid)
+        flow_contract_sha256 = None
+        if input_source is not None:
+            flow_contract = _flow_cache_contract(
+                cid, tau, eps, precision, input_source=input_source)
+            flow_contract_sha256 = _contract_sha256(flow_contract)
+        contract = _tmd_ope_contract(
+            cid, tau, eps, precision, z_dir, b_dir,
+            z_list, b_list, staple_length, color_normalization,
+            flow_contract_sha256=flow_contract_sha256,
+            full_channels=True)
+        cdir = _strict_conf_path(run_dir, contract["conf_id"])
+        _base, candidates = _tmd_ope_cache_paths(cdir, contract)
+        tmd, _cache_path = _load_first_matching_cache(
+            candidates, contract, logger,
+            expected_shape=expected_shape,
+            expected_dtype=expected_dtype)
+        if tmd is not None:
+            ope[contract["conf_id"]] = {'tmd_full': tmd}
+    _info(logger, f"  Loaded full-channel TMD OPE for {len(ope)} configs")
+    return ope
+
+
+def load_full_channel_tmd_ope_2d_all(
+        run_dir, conf_ids, z_list, b_x_list, b_y_list, logger=print,
+        staple_length=None, color_normalization='fundamental_trace',
+        tau=3.0, eps=0.05, precision=PRECISION,
+        z_dir=2, b_x_dir=0, b_y_dir=1, transverse_order=(0, 1)):
+    """Read two-component finite-b full-channel TMD OPE caches."""
+    request = _validate_tmd_2d_request(
+        tau, eps, precision, z_dir, b_x_dir, b_y_dir,
+        z_list, b_x_list, b_y_list, transverse_order)
+    tau, eps, precision, z_dir, b_x_dir, b_y_dir, z_list, b_x_list, \
+        b_y_list, transverse_order = request
+    staple_length = _resolve_staple_length(z_list, staple_length)
+    color_normalization = _validate_color_normalization(color_normalization)
+    expected_shape = (
+        2, 4, 6, len(z_list), len(b_x_list), len(b_y_list), int(NT))
+    expected_dtype = np.dtype(precision)
+    ope = {}
+    for cid in conf_ids:
+        input_source = _gauge_source_identity(cid)
+        flow_contract_sha256 = None
+        if input_source is not None:
+            flow_contract = _flow_cache_contract(
+                cid, tau, eps, precision, input_source=input_source)
+            flow_contract_sha256 = _contract_sha256(flow_contract)
+        contract = _tmd_ope_2d_contract(
+            cid, tau, eps, precision, z_dir, b_x_dir, b_y_dir,
+            z_list, b_x_list, b_y_list, transverse_order, staple_length,
+            color_normalization, flow_contract_sha256=flow_contract_sha256)
+        cdir = _strict_conf_path(run_dir, contract["conf_id"])
+        _base, candidates = _tmd_ope_2d_cache_paths(cdir, contract)
+        tmd, _cache_path = _load_first_matching_cache(
+            candidates, contract, logger,
+            expected_shape=expected_shape,
+            expected_dtype=expected_dtype)
+        if tmd is not None:
+            ope[contract["conf_id"]] = {'tmd_full_2d': tmd}
+    _info(logger, f"  Loaded 2D full-channel TMD OPE for {len(ope)} configs")
     return ope
 
 

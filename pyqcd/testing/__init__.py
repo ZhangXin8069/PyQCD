@@ -2889,6 +2889,62 @@ def test_tmd_physical_contracts():
     run()
 
 
+def test_real_polarized_chain_resume_contract():
+    """Real-chain batch driver must checkpoint and resume missing stages."""
+    import json
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from .tmd import run_real_polarized_chain as chain
+
+    with tempfile.TemporaryDirectory() as root:
+        Path(root, 'data', 'conf10').mkdir(parents=True)
+        Path(root, 'data', 'conf20').mkdir(parents=True)
+        checkpoint = Path(root, 'status.json')
+        calls = []
+
+        def record_c2(conf_id, *_args, **_kwargs):
+            calls.append(('c2', conf_id))
+            return {'nopol': {}, 'pol35': {}}
+
+        def record_ope(conf_id, *_args, **_kwargs):
+            calls.append(('ope', conf_id))
+            return {'tmd_full': None}
+
+        with patch.object(chain, '_c2_complete', return_value=False), \
+                patch.object(chain, '_ope_complete', return_value=False), \
+                patch.object(chain, 'compute_vertices_multi',
+                             return_value={'VVV': None}), \
+                patch.object(chain, 'compute_2pt_polarizations_multi',
+                             side_effect=record_c2), \
+                patch.object(chain, 'compute_tmd_ope_time',
+                             side_effect=record_ope), \
+                patch.object(chain, 'free_gpu_memory'):
+            first = chain.run_chain(
+                root, [10, 20], backend='numpy',
+                checkpoint=checkpoint, logger=lambda *_args: None)
+
+        assert calls == [
+            ('c2', 10), ('ope', 10), ('c2', 20), ('ope', 20)]
+        assert first['status'] == 'complete'
+        assert json.loads(checkpoint.read_text())['status'] == 'complete'
+
+        with patch.object(chain, '_c2_complete', return_value=True), \
+                patch.object(chain, '_ope_complete', return_value=True), \
+                patch.object(chain, 'compute_vertices_multi',
+                             side_effect=AssertionError('unexpected C2 IO')), \
+                patch.object(chain, 'compute_tmd_ope_time',
+                             side_effect=AssertionError('unexpected OPE IO')):
+            resumed = chain.run_chain(
+                root, [10, 20], backend='numpy',
+                checkpoint=checkpoint, logger=lambda *_args: None)
+        assert resumed['status'] == 'complete'
+        assert all(
+            item['c2'] == 'cache_hit' and item['ope'] == 'cache_hit'
+            for item in resumed['configurations'].values())
+
+
 def test_bare_sumratio_contracts():
     """Forward Sumratio-difference Tmin, AIC and fallback contracts."""
     from ._bare_sumratio_contract import test_bare_sumratio_contracts as run

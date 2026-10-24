@@ -83,6 +83,83 @@ loop 时才具有该因子化解释。真空扣除必须在重采样后的 ensem
 时逐组态扣除会恒等为零。没有多个 `t_sep`、独立 loop 来源和平台/多态稳定性时，
 `c0` 只能称为数值骨架。
 
+### 有限横距 ratio-v2
+
+`calculate_gradient_flow_tmd_ratios` 把 schema-v2 的完整 channel/orientation/
+component 统计扩展为显式有限横距轴。输入 OPE 固定为
+
+```text
+(conf, channel, orientation, component, z, b, t)
+```
+
+且 `b_values` 必须逐项给出、非布尔、不得重复，单位为格距 `a`。输出轴为
+
+```text
+(channel, orientation, component, direction, z, b, tsep, insertion, momentum)
+```
+
+实现只在内部按 `(z,b)` C-order 展平复用 ratio-v2 观测轴，随后恢复两个显式轴；
+两个 channel 仍共享复数 `nopol` 分母（C2 轴序 `(conf,source,tsep,momentum)`）。
+helicity 的物理量只能在最终层使用 `Re[-iR_H]=Im(R_H)`，不得在
+`covariance_ratio_estimator` 之前把 `pol35` 或 C2 截成实部。对应契约同时检查
+delete-one jackknife、b 切片隔离和 `z=0` helicity odd 恒等式；它仍只属于“测试通过”，
+不证明真实核子有限 `b` 三点或完整 TMD 方案闭合。
+结果 metadata 显式保存 `do_jackknife`；中心-only 模式必须把 JK 均值、偏差修正和
+实/虚误差全部写为 `NaN`，不得留下看似可用的零误差。
+
+跨组态入口 `calculate_gradient_flow_tmd_ratios_from_configurations` 按调用者给出的
+`conf_ids` 顺序逐项读取 OPE/C2，不做隐式排序。逐组态 OPE 必须为
+`(channel,orientation,component,z,b,t)`，逐组态 C2 必须为
+`(channel,direction,tsep,source,momentum)`；`source` 长度必须等于 `t`。source-averaged
+`(t,)` C2 会直接失败，不得广播成伪 source 轴。输出保存 `conf_ids`、
+`source_resolved_c2=True`、`input_index_schema` 和 `input_index_sha256`，供后续
+delete-one/bootstrap 与跨 `z/b/tsep` 对齐审计。
+
+### source-resolved 双极化 C2（v3）
+
+真实核子 C2 使用独立算法版本
+`pyqcd.pipeline.multi-2pt.v3-source-resolved-polarized` 和 artifact
+`tmd9_multi_2pt_polarized`。每个物理产物只对应一个极化：
+
+```text
+nopol = 0.5*(gamma_0+gamma_4)
+pol35 = 0.5*(gamma_0+gamma_4) @ (1j*gamma_3@gamma_5)
+```
+
+两者都固定为 complex128，并保存 `(source,dt)`；`time_axis_order="source,sink"` 表示原始
+时间对，存储前若 `t_sink < t_source` 必须施加反周期边界负号。共享 Dirac 矩阵使用
+`Cg5g4` 合同缩并；`nopol` 不得提前取实部，因为真实动量相关函数可含显著虚部。
+canonical contract 必须记录 polarization、投影定义、边界条件和 Dirac 插值器。
+
+`compute_2pt_polarizations_multi` 在一次合同缩并中同时产生 nopol/pol35；
+`load_multi_2pt_polarizations` 只在两组极化均完整匹配时返回共享组态集合。旧
+`v2-source-resolved` 产物因缺少极化身份且 nopol 被压成实数，不得被 v3 loader 复用。
+
+单组态有限横距 OPE 由 `full_channel_tmd_ope_time` 产生，输出
+`(channel,orientation,component,z,b,Nt)=(2,4,6,nz,nb,Nt)` 复数数组。raw ±z
+分别用 signed `z` 构造同一 staple schema 的端点；even/odd 直接相加/相减且不乘
+`1/2`。helicity primitive 为 `F W dual(F)`，dual 放在原点端点；unpolarized 为
+`F W F`。`b=0,L=0` 必须与经过 donghx 校验的 straight schema-v2 逐项一致。
+该 producer 不执行最终 helicity phase projection，复数必须保留到 ratio 层。
+有限 `b` helicity 目前是该已验证 straight convention 的受控扩展，尚无独立
+finite-b helicity oracle；只能标为测试通过或诊断，不能标为独立物理验证。
+
+canonical 缓存使用 artifact `tmd_ope_time_full_channel` 和 algorithm version
+`pyqcd.pipeline.tmd-ope-time-full-channel.v2`，不得命中旧 3D
+`tmd_ope_time.v1`。读取入口为 `load_full_channel_tmd_ope_all`；六轴 HDF5 还须通过
+只读输入审计后，才能进入 source-resolved C2 的跨组态 ratio-v2。
+
+二维 full-channel 使用独立 artifact `tmd_ope_time_full_channel_2d` 与 algorithm version
+`pyqcd.pipeline.tmd-ope-time-full-channel-2d.v3`。contract 必须绑定有序
+`z_list/b_x_list/b_y_list`、`z_dir/b_x_dir/b_y_dir`、`transverse_order`、
+`staple_length`、precision、shape 与 labels；读取入口为
+`load_full_channel_tmd_ope_2d_all`。一维与二维 cache 不得互相命中。二维 ratio 轴和
+二维 ratio-v3 使用 `calculate_gradient_flow_tmd_ratios_2d` /
+`calculate_gradient_flow_tmd_ratios_2d_from_configurations`，输出
+`(channel,orientation,component,direction,z,b_x,b_y,tsep,insertion,momentum)`；
+`(z,b_x,b_y)` 在内部按 C-order 展平并恢复。跨组态入口继续要求 source-resolved C2、
+显式 conf 顺序、索引 SHA 与 staircase metadata。二维 audit ready 门尚未实现。
+
 ## 软因子、自重整化与混合
 
 方案模板可写成

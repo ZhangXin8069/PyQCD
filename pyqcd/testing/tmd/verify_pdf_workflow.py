@@ -92,7 +92,8 @@ def test_b_2pt(run_dir, conf_ids, *, allow_partial=False):
     for cid in conf_ids:
         specs = _multi_2pt_cache_specs(
             cid, run_dir, [tuple(parse_momentum_tag(m)) for m in moms],
-            ('pp',), 'complex64', 'VVV', source_resolved=True)
+            ('pp',), 'complex64', 'VVV', source_resolved=True,
+            polarization='nopol')
         for m in moms:
             spec = specs[f'corr_pp_{m}']
             array, _reason = _load_contract_h5(

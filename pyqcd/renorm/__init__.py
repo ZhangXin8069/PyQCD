@@ -32,8 +32,11 @@ from ._gradient_flow_quasi import (
     match_gradient_flow_ope_to_quasi, local_spin2_coefficients,
 )
 from ._tmd import (
-    staple_wilson_line, M_mu_lambda_nu_rho, gluon_tmd_operator,
+    staple_wilson_line, staple_wilson_line_2d,
+    M_mu_lambda_nu_rho, gluon_tmd_operator,
     tmd_matrix_elements, tmd_matrix_elements_time,
+    full_channel_tmd_ope_time,
+    full_channel_tmd_ope_time_2d,
     gradient_flow_renormalized_tmd,
     self_renormalized_ratio, invariant_amplitude, collins_soper_kernel,
     scan_staple_length, fit_staple_plateau,
@@ -78,8 +81,11 @@ __all__ = [
     "gradient_flow_to_quasi_coefficients", "match_one",
     "match_gradient_flow_ope_to_quasi", "local_spin2_coefficients",
     # TMD
-    "staple_wilson_line", "M_mu_lambda_nu_rho", "gluon_tmd_operator",
+    "staple_wilson_line", "staple_wilson_line_2d",
+    "M_mu_lambda_nu_rho", "gluon_tmd_operator",
     "tmd_matrix_elements", "tmd_matrix_elements_time",
+    "full_channel_tmd_ope_time",
+    "full_channel_tmd_ope_time_2d",
     "gradient_flow_renormalized_tmd",
     "self_renormalized_ratio", "invariant_amplitude", "collins_soper_kernel",
     "scan_staple_length", "fit_staple_plateau",

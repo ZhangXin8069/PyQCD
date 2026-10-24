@@ -72,6 +72,18 @@ G^b_{\rho\sigma}(x_2;\tau).
 `(L+z)*z_dir`，终点为 `x+z*z_dir+b_perp*b_dir`。颜色闭合固定为
 `Tr[F(x) W(x,y) F(y) W†(x,y)]`，两个端点间隔着 `F(y)`，不能把 Wilson 线相邻抵消。
 
+二维横向诊断入口 `staple_wilson_line_2d` / `full_channel_tmd_ope_time_2d`
+使用 `b_perp=(b_x,b_y)`，路径为
+
+```text
+-L z_dir -> b_x x_dir -> b_y y_dir -> (L+z) z_dir
+```
+
+或显式 `transverse_order=(1,0)` 的反序 staircase；三个空间方向必须互异。有限格距下
+不同 staircase 不是同一个离散算符，`transverse_order` 必须进入后续 cache/ratio 元数据。
+当前二维接口已覆盖低层 geometry、full-channel producer 与独立 canonical cache/loader；
+尚未接入二维 ratio-v2、audit ready 判定或真实数据链。
+
 批量 `tmd_matrix_elements` 与 `tmd_matrix_elements_time` 在一次调用中只预计算三个
 Clover 场 `F_ti/F_tj/F_ij`，其中 `i,j` 随 `z_dir` 动态选择；并对每个 `(z,b)` 只构造
 一条 staple，复用于 `M^{ti;ti}`、`M^{tj;tj}`、`M^{ij;ij}`。这是调用内复用，不是

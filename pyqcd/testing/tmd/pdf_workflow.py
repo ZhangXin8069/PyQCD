@@ -130,7 +130,7 @@ def write_data_provenance(run_dir, conf_ids, logger=print):
         cdir = os.path.join(run_dir, 'data', f'conf{conf_id}')
         caches = []
         for pattern in (
-                'corr_pp_*tmd9-strict-v2*.h5',
+                'corr_pp_*tmd9-strict-v3*.h5',
                 'tmd_ope_*_conf*.h5'):
             for path in sorted(glob.glob(os.path.join(cdir, pattern))):
                 with h5py.File(path, 'r') as handle:
@@ -220,7 +220,8 @@ def main():
                                            precision=args.precision)
             acc = compute_2pt_multi(cid, run_dir, logger, verts, momenta,
                                     precision=args.precision,
-                                    channels=('pp',), source_resolved=True)
+                                    channels=('pp',), source_resolved=True,
+                                    polarization='nopol')
             logger(f"  2pt conf={cid} done in {time.perf_counter()-t0:.0f}s")
     else:
         logger("跳过蒸馏 2pt（--skip-2pt）")
@@ -259,7 +260,8 @@ def run_analysis(conf_ids, momenta, run_dir, logger, args):
     mom_tags = [momentum_tag(m) for m in momenta]
     corr2 = load_multi_2pt(
         run_dir, conf_ids, mom_tags, channels=('pp',), logger=logger,
-        momenta=momenta, precision=args.precision, source_resolved=True)
+        momenta=momenta, precision=args.precision, source_resolved=True,
+        polarization='nopol')
     ope = load_tmd_ope_all(
         run_dir, conf_ids, Z_LIST, B_LIST, logger=logger,
         staple_length=args.staple_length,

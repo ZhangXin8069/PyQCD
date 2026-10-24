@@ -47,7 +47,7 @@ from ..lattice import gamma
 from ..vertex import phase_exp_2pt, phase_exp_3pt, Mom_VdV_sink_t
 from ..contraction import (
     PeramRegistry, VRegistry, GammaRegistry, dynamic_contraction,
-    clear_plan_cache, seq_peram,
+    clear_plan_cache, seq_peram, contract_donghx_2pt_pair,
 )
 from ..operator import (
     read_gauge_lime, gluon_ope_operator_z0, gluon_ope_channel,
@@ -911,6 +911,155 @@ def _run_2pt(backend, sink_op, src_op, peram_t, peram_seq_t,
     value = _contraction_array(
         dc.calculate_all(), (1,), "2pt Oindex='M'")
     return float(np.real(value[0]))
+
+
+TWO_POINT_POLARIZATIONS = ('nopol', 'pol35')
+
+
+def _host_gamma_matrix(index):
+    """Return one gamma matrix as a host NumPy array under any backend."""
+    value = gamma(index)
+    getter = getattr(value, 'get', None)
+    if getter is not None:
+        value = getter()
+    elif hasattr(value, 'detach'):
+        value = value.detach().cpu().numpy()
+    return np.asarray(value, dtype=np.complex128)
+
+
+def _two_point_polarization_projectors(polarizations):
+    g0 = _host_gamma_matrix(0)
+    g3 = _host_gamma_matrix(3)
+    g4 = _host_gamma_matrix(4)
+    g5 = _host_gamma_matrix(5)
+    pplus = 0.5 * (g0 + g4)
+    definitions = {
+        'nopol': pplus,
+        'pol35': pplus @ (1j * g3 @ g5),
+    }
+    return definitions, np.stack(
+        [definitions[polarization] for polarization in polarizations])
+
+
+def compute_2pt_polarizations_for_config_multi(
+        conf_id, run_dir, logger, vertices, momenta,
+        precision=PRECISION, channels=('pp',),
+        polarizations=TWO_POINT_POLARIZATIONS,
+        strict_cache_by_polarization=None, recompute=False):
+    """Compute source-resolved ``(source,dt)`` nopol/pol35 in one pass.
+
+    The shared Dirac matrix uses the explicitly verified donghx ``Cg5g4``
+    contraction.  Both polarizations are projected from that matrix, retain
+    their complex phase, and receive the anti-periodic boundary sign before
+    being stored as separate canonical artifacts.
+    """
+    if tuple(channels) != ('pp',):
+        raise ValueError(
+            "polarized source-resolved 2pt currently supports channels=('pp',)")
+    try:
+        polarizations = tuple(polarizations)
+    except TypeError as exc:
+        raise ValueError("polarizations 必须是极化标签序列") from exc
+    if not polarizations:
+        raise ValueError("polarizations 不能为空")
+    if any(value not in TWO_POINT_POLARIZATIONS for value in polarizations):
+        raise ValueError("polarizations 只能包含 nopol/pol35")
+    if len(set(polarizations)) != len(polarizations):
+        raise ValueError("polarizations 不得重复")
+    if strict_cache_by_polarization is None:
+        raise ValueError("strict_cache_by_polarization 不能为空")
+    if set(strict_cache_by_polarization) != set(polarizations):
+        raise ValueError(
+            "strict_cache_by_polarization 必须与 polarizations 一一对应")
+
+    if not recompute:
+        loaded = {
+            polarization: _load_strict_cache_mapping(
+                strict_cache_by_polarization[polarization], logger)
+            for polarization in polarizations
+        }
+        if all(value is not None for value in loaded.values()):
+            _info(logger, f"  conf={conf_id}: loaded strict cached polarized "
+                          "multi-2pt")
+            return loaded
+
+    backend = get_backend()
+    if get_backend_name() == 'torch':
+        set_precision(precision)
+    dtype = np.complex64 if precision == 'complex64' else np.complex128
+    # Keep the full vertex tensor resident once.  Slicing a host-backed 1.7 GB
+    # VVV inside every (source, sink, momentum) step would otherwise dominate
+    # runtime with repeated PCIe copies.
+    VVV = backend.asarray(vertices['VVV'], dtype=dtype)
+    peram_dir = get_peram_dir(conf_id)
+    tags = [_momentum_tag(momentum) for momentum in momenta]
+    keys = [f'corr_pp_{tag}' for tag in tags]
+    definitions, projector_stack = _two_point_polarization_projectors(
+        polarizations)
+    acc = {
+        polarization: {
+            key: np.zeros((NT, NT), dtype=np.complex128) for key in keys
+        }
+        for polarization in polarizations
+    }
+    _info(logger, "  polarized 2pt: channels=['pp'], "
+                  f"momenta={list(momenta)}, polarizations={list(polarizations)}")
+    t_start = time.perf_counter()
+
+    for t_src in range(NT):
+        peram_cpu = readin_peram_time_slice(
+            peram_dir, str(conf_id), t_src, NT, NEV)
+        peram_t = backend.asarray(peram_cpu.astype(dtype))
+        for t_sink in range(NT):
+            dt = (t_sink - t_src + NT) % NT
+            boundary_sign = -1.0 if t_sink < t_src else 1.0
+            for mi, tag in enumerate(tags):
+                v_src = backend.asarray(
+                    VVV[t_src, mi].conj(), dtype=dtype)
+                v_sink = backend.asarray(VVV[t_sink, mi], dtype=dtype)
+                contract = contract_donghx_2pt_pair(
+                    peram_t[t_sink], v_sink, v_src, variant='Cg5g4')
+                matrix = _contraction_array(
+                    contract, (4, 4), "polarized 2pt Cg5g4 contract")
+                values = boundary_sign * np.einsum(
+                    'pli,il->p', projector_stack, matrix)
+                key = keys[mi]
+                for index, polarization in enumerate(polarizations):
+                    acc[polarization][key][t_src, dt] = values[index]
+
+        if t_src % 12 == 0 or t_src == NT - 1:
+            nopol = acc.get('nopol')
+            sample = (
+                f"nopol0={np.real(nopol[keys[0]][t_src, 0]):.4e} "
+                if nopol is not None else "")
+            _info(logger, f"    t_src={t_src:3d}/{NT} "
+                          f"elapsed={time.perf_counter()-t_start:.0f}s "
+                          f"{sample}keys={keys}")
+        del peram_t
+
+    result = {}
+    for polarization in polarizations:
+        values = acc[polarization]
+        specs = strict_cache_by_polarization[polarization]
+        if set(values) != set(specs):
+            raise ValueError(
+                "polarized 2pt strict cache keys 与计算输出不一致")
+        validated = {
+            key: _strict_array(array, key, specs[key])
+            for key, array in values.items()
+        }
+        for key, array in validated.items():
+            spec = specs[key]
+            save_array(
+                spec['path'], array, logger,
+                attrs=_strict_contract_attrs(spec['contract']))
+        result[polarization] = validated
+    _info(logger, "  polarized 2pt saved: "
+                  + ", ".join(f"{pol}:{definitions[pol].shape}"
+                              for pol in polarizations))
+    del VVV, v_src, v_sink, contract
+    free_gpu_memory()
+    return result
 
 
 def compute_2pt_for_config(conf_id, run_dir, logger, vertices,

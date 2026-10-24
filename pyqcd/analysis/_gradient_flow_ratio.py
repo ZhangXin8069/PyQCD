@@ -9,8 +9,13 @@
 统计层保留完整复数。特别是 helicity 通道使用完整 `pol35` 两点函数
 构造 covariance；只有在显示或物理相位投影阶段才取
 ``Re[-i R_H] = Im(R_H)``。
+
+有限横距通过 ``calculate_gradient_flow_tmd_ratios`` 暴露显式 ``b`` 轴；
+该包装层复用同一复数 ratio-v2 核心，不引入第二套估计量。
 """
 from __future__ import annotations
+
+import hashlib
 
 import numpy as np
 
@@ -24,6 +29,8 @@ POLARIZATION_FOR_CHANNEL = {
     "helicity": "pol35",
 }
 RATIO_SCHEMA = "gradient_flow_gluon_ratio_v2"
+TMD_RATIO_SCHEMA = "gradient_flow_gluon_tmd_ratio_v2"
+TMD_RATIO_2D_SCHEMA = "gradient_flow_gluon_tmd_ratio_2d_v3"
 
 
 def _as_complex128(value, name):
@@ -31,6 +38,19 @@ def _as_complex128(value, name):
     if not np.isfinite(array).all():
         raise ValueError(f"{name} 含非有限值")
     return array
+
+
+def _input_complex_precision(*values):
+    """Return the weakest complex precision among analysis inputs."""
+    dtypes = []
+    for value in values:
+        try:
+            dtypes.append(np.asarray(value).dtype)
+        except (TypeError, ValueError):
+            dtypes.append(np.dtype(np.complex128))
+    return (
+        "complex64" if np.dtype(np.complex64) in dtypes
+        else "complex128")
 
 
 def _validate_tseps(tseps, nt):
@@ -194,6 +214,10 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
         `valid_insertion_mask`。ratio 轴为
         ``(channel,orientation,component,direction,z,tsep,insertion,momentum)``。
     """
+    if not isinstance(do_jackknife, (bool, np.bool_)):
+        raise ValueError("do_jackknife 必须是布尔值")
+    do_jackknife = bool(do_jackknife)
+    input_precision = _input_complex_precision(ope, twopt)
     ope = _as_complex128(ope, "ope")
     twopt = _as_complex128(twopt, "twopt")
     if ope.ndim != 6:
@@ -295,10 +319,560 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
         ),
         "polarization_for_channel": dict(POLARIZATION_FOR_CHANNEL),
         "denominator_polarization": "nopol",
+        "do_jackknife": do_jackknife,
+        "input_precision": input_precision,
     }
 
 
 calculate_ratios = calculate_gradient_flow_ratios
+
+
+def _reshape_ratio_z_b(array, nz, nb):
+    """Restore a flattened ``(z,b)`` observable axis."""
+    values = np.asarray(array)
+    if values.ndim != 8 or values.shape[4] != nz * nb:
+        raise ValueError(
+            "内部 ratio 数组必须具有扁平 (z*b) observable 轴，"
+            f"收到 {values.shape}")
+    return values.reshape(
+        values.shape[:4] + (nz, nb) + values.shape[5:])
+
+
+def _reshape_ratio_z_bx_by(array, nz, nbx, nby):
+    """Restore a flattened ``(z,b_x,b_y)`` observable axis."""
+    values = np.asarray(array)
+    if values.ndim != 8 or values.shape[4] != nz * nbx * nby:
+        raise ValueError(
+            "内部 ratio 数组必须具有扁平 (z*bx*by) observable 轴，"
+            f"收到 {values.shape}")
+    return values.reshape(
+        values.shape[:4] + (nz, nbx, nby) + values.shape[5:])
+
+
+def _validate_tmd_ratio_2d_metadata(
+        b_x_values, b_y_values, nbx, nby, z_dir, b_x_dir, b_y_dir,
+        transverse_order):
+    """Validate explicit 2D displacement and staircase metadata."""
+    values = []
+    for name, requested, expected in (
+            ("b_x_values", b_x_values, nbx),
+            ("b_y_values", b_y_values, nby)):
+        try:
+            normalized = tuple(requested)
+        except TypeError as exc:
+            raise ValueError(f"{name} 必须是非空整数序列") from exc
+        if len(normalized) != expected:
+            raise ValueError(
+                f"{name} 长度必须为 {expected}，收到 {len(normalized)}")
+        if any(isinstance(value, (bool, np.bool_))
+               or not isinstance(value, (int, np.integer))
+               for value in normalized):
+            raise ValueError(f"{name} 必须是非布尔整数")
+        normalized = tuple(int(value) for value in normalized)
+        if len(set(normalized)) != len(normalized):
+            raise ValueError(f"{name} 不得重复")
+        values.append(normalized)
+    directions = []
+    for name, value in (
+            ("z_dir", z_dir), ("b_x_dir", b_x_dir), ("b_y_dir", b_y_dir)):
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+                value, (int, np.integer)) or int(value) not in (0, 1, 2):
+            raise ValueError(f"{name} 必须是空间方向 0,1,2")
+        directions.append(int(value))
+    if len(set(directions)) != 3:
+        raise ValueError("z_dir、b_x_dir、b_y_dir 必须互不相同")
+    try:
+        transverse_order = tuple(transverse_order)
+    except TypeError as exc:
+        raise ValueError(
+            "transverse_order 必须是 (0,1) 或 (1,0)") from exc
+    if any(isinstance(value, (bool, np.bool_))
+           or not isinstance(value, (int, np.integer))
+           for value in transverse_order):
+        raise ValueError("transverse_order 必须含非布尔整数")
+    transverse_order = tuple(int(value) for value in transverse_order)
+    if transverse_order not in ((0, 1), (1, 0)):
+        raise ValueError("transverse_order 必须是 (0,1) 或 (1,0)")
+    return (
+        values[0], values[1], directions[0], directions[1], directions[2],
+        transverse_order,
+    )
+
+
+def calculate_gradient_flow_tmd_ratios(
+        ope, twopt, tseps, b_values, do_jackknife=True,
+        component_labels=None):
+    """Construct ratio-v2 statistics with explicit ``(z,b)`` observables.
+
+    Args:
+        ope: ``(conf,2,4,ncomp,nz,nb,Nt)`` complex TMD OPE.
+        twopt: ``(2,ndirection,conf,ntsep,Nt,nmomentum)`` complex C2.
+        tseps: separations corresponding to the ``twopt`` tsep axis.
+        b_values: explicit transverse displacements in lattice-spacing units,
+            one per ``b`` axis entry.
+
+    The OPE ``(z,b)`` axes are flattened in C order for the shared
+    observable estimator and restored in every output.  This preserves the
+    schema-v2 complex-nopol ratio while making the transverse displacement an
+    explicit result axis.
+    """
+    input_precision = _input_complex_precision(ope, twopt)
+    array = _as_complex128(ope, "ope")
+    if array.ndim != 7:
+        raise ValueError(
+            "TMD ope 必须具有 "
+            "(conf,channel,orientation,component,z,b,t) 七轴，"
+            f"收到 {array.shape}")
+    nconf, nch, norient, ncomp, nz, nb, nt = array.shape
+    if min(nconf, nch, norient, ncomp, nz, nb, nt) <= 0:
+        raise ValueError("TMD ope 各轴长度必须为正")
+    try:
+        b_values = tuple(b_values)
+    except TypeError as exc:
+        raise ValueError("b_values 必须是非空整数序列") from exc
+    if len(b_values) != nb:
+        raise ValueError(
+            f"b_values 长度必须等于 nb={nb}，收到 {len(b_values)}")
+    if any(isinstance(value, (bool, np.bool_))
+           or not isinstance(value, (int, np.integer))
+           for value in b_values):
+        raise ValueError("b_values 必须是非布尔整数")
+    b_values = tuple(int(value) for value in b_values)
+    if len(set(b_values)) != len(b_values):
+        raise ValueError("b_values 不得重复")
+    flattened = array.reshape(nconf, nch, norient, ncomp, nz * nb, nt)
+    result = calculate_gradient_flow_ratios(
+        flattened,
+        twopt,
+        tseps,
+        do_jackknife=do_jackknife,
+        component_labels=component_labels,
+    )
+    for key in (
+            "c3_mean", "ratio", "ratio_jackknife_mean",
+            "ratio_jackknife_bias_corrected",
+            "ratio_jackknife_error_real",
+            "ratio_jackknife_error_imag"):
+        result[key] = _reshape_ratio_z_b(result[key], nz, nb)
+    result["schema"] = TMD_RATIO_SCHEMA
+    result["axes"] = (
+        "channel", "z_orientation", "component", "direction",
+        "z", "b", "tsep", "insertion", "momentum_abs",
+    )
+    result["b_values"] = b_values
+    result["b_unit"] = "lattice_spacing_a"
+    result["observable_flatten_order"] = "z_major_b_minor_c_order"
+    result["base_schema"] = RATIO_SCHEMA
+    result["input_precision"] = input_precision
+    return result
+
+
+def calculate_gradient_flow_tmd_ratios_2d(
+        ope, twopt, tseps, b_x_values, b_y_values, *,
+        z_dir=2, b_x_dir=0, b_y_dir=1, transverse_order=(0, 1),
+        do_jackknife=True, component_labels=None):
+    """Construct ratio-v3 statistics with explicit ``(z,b_x,b_y)`` axes."""
+    input_precision = _input_complex_precision(ope, twopt)
+    array = _as_complex128(ope, "ope")
+    if array.ndim != 8:
+        raise ValueError(
+            "2D TMD ope 必须具有 "
+            "(conf,channel,orientation,component,z,b_x,b_y,t) 八轴，"
+            f"收到 {array.shape}")
+    nconf, nch, norient, ncomp, nz, nbx, nby, nt = array.shape
+    if min(nconf, nch, norient, ncomp, nz, nbx, nby, nt) <= 0:
+        raise ValueError("2D TMD ope 各轴长度必须为正")
+    b_x_values, b_y_values, z_dir, b_x_dir, b_y_dir, transverse_order = (
+        _validate_tmd_ratio_2d_metadata(
+            b_x_values, b_y_values, nbx, nby,
+            z_dir, b_x_dir, b_y_dir, transverse_order)
+    )
+    flattened = array.reshape(
+        nconf, nch, norient, ncomp, nz * nbx * nby, nt)
+    result = calculate_gradient_flow_ratios(
+        flattened,
+        twopt,
+        tseps,
+        do_jackknife=do_jackknife,
+        component_labels=component_labels,
+    )
+    for key in (
+            "c3_mean", "ratio", "ratio_jackknife_mean",
+            "ratio_jackknife_bias_corrected",
+            "ratio_jackknife_error_real",
+            "ratio_jackknife_error_imag"):
+        result[key] = _reshape_ratio_z_bx_by(
+            result[key], nz, nbx, nby)
+    result["schema"] = TMD_RATIO_2D_SCHEMA
+    result["axes"] = (
+        "channel", "z_orientation", "component", "direction",
+        "z", "b_x", "b_y", "tsep", "insertion", "momentum_abs",
+    )
+    result["b_x_values"] = b_x_values
+    result["b_y_values"] = b_y_values
+    result["b_x_dir"] = b_x_dir
+    result["b_y_dir"] = b_y_dir
+    result["z_dir"] = z_dir
+    result["transverse_order"] = transverse_order
+    result["b_unit"] = "lattice_spacing_a"
+    result["observable_flatten_order"] = (
+        "z_major_bx_middle_by_minor_c_order")
+    result["base_schema"] = RATIO_SCHEMA
+    result["input_precision"] = input_precision
+    return result
+
+
+def calculate_gradient_flow_tmd_ratios_from_configurations(
+        ope_by_conf, twopt_by_conf, conf_ids, b_values, tseps,
+        do_jackknife=True, component_labels=None):
+    """Stack source-resolved configuration inputs in an explicit shared order.
+
+    Each OPE entry has shape
+    ``(2,4,component,z,b,t)`` and each C2 entry has shape
+    ``(2,direction,tsep,source,momentum)``.  The source axis must be retained;
+    source-averaged ``(t,)`` inputs are rejected instead of being broadcast.
+    """
+    try:
+        ids = tuple(conf_ids)
+    except TypeError as exc:
+        raise ValueError("conf_ids 必须是配置 ID 序列") from exc
+    if not ids:
+        raise ValueError("conf_ids 不得为空")
+    if any(isinstance(value, (bool, np.bool_))
+           or not isinstance(value, (int, np.integer))
+           for value in ids):
+        raise ValueError("conf_ids 必须是非布尔整数")
+    ids = tuple(int(value) for value in ids)
+    if len(set(ids)) != len(ids):
+        raise ValueError("conf_ids 不得重复")
+
+    ope_samples = []
+    twopt_samples = []
+    ope_shape = None
+    twopt_shape = None
+    nt = None
+    for conf_id in ids:
+        if conf_id not in ope_by_conf:
+            raise ValueError(f"conf_ids 中的配置缺少 OPE: {conf_id}")
+        if conf_id not in twopt_by_conf:
+            raise ValueError(f"conf_ids 中的配置缺少 C2: {conf_id}")
+        ope = np.asarray(ope_by_conf[conf_id])
+        twopt = np.asarray(twopt_by_conf[conf_id])
+        if ope.ndim != 6:
+            raise ValueError(
+                "每组态 OPE 必须具有 (channel,orientation,component,z,b,t) "
+                f"六轴，conf={conf_id} 收到 {ope.shape}")
+        if twopt.ndim != 5:
+            raise ValueError(
+                "source-resolved C2 必须具有 "
+                "(channel,direction,tsep,source,momentum) 五轴，"
+                f"conf={conf_id} 收到 {twopt.shape}")
+        conf_nt = int(ope.shape[-1])
+        if conf_nt <= 0 or twopt.shape[3] != conf_nt:
+            raise ValueError(
+                "source-resolved C2 的 source 轴必须与 OPE 时间轴一致，"
+                f"conf={conf_id} 收到 source={twopt.shape[3]}, t={conf_nt}")
+        if nt is None:
+            nt = conf_nt
+            ope_shape = ope.shape
+            twopt_shape = twopt.shape
+        elif ope.shape != ope_shape or twopt.shape != twopt_shape:
+            raise ValueError(
+                "所有组态的 OPE/C2 shape 必须一致，"
+                f"conf={conf_id} 收到 {ope.shape}/{twopt.shape}，"
+                f"期望 {ope_shape}/{twopt_shape}")
+        ope_samples.append(ope)
+        twopt_samples.append(twopt)
+
+    result = calculate_gradient_flow_tmd_ratios(
+        np.stack(ope_samples),
+        np.stack(twopt_samples, axis=2),
+        tseps,
+        b_values,
+        do_jackknife=do_jackknife,
+        component_labels=component_labels,
+    )
+    index_bytes = np.asarray(ids, dtype='<i8').tobytes(order='C')
+    result["conf_ids"] = ids
+    result["source_resolved_c2"] = True
+    result["c2_source_length"] = nt
+    result["input_index_schema"] = (
+        "explicit_source_resolved_configuration_order")
+    result["input_index_sha256"] = hashlib.sha256(index_bytes).hexdigest()
+    result["resampling_kind"] = (
+        "delete_one_jackknife" if result["do_jackknife"] else "central_only")
+    return result
+
+
+def calculate_gradient_flow_tmd_ratios_2d_from_configurations(
+        ope_by_conf, twopt_by_conf, conf_ids, b_x_values, b_y_values,
+        tseps, *, z_dir=2, b_x_dir=0, b_y_dir=1,
+        transverse_order=(0, 1), do_jackknife=True,
+        component_labels=None):
+    """Stack source-resolved inputs for two-component transverse ratios."""
+    try:
+        ids = tuple(conf_ids)
+    except TypeError as exc:
+        raise ValueError("conf_ids 必须是配置 ID 序列") from exc
+    if not ids:
+        raise ValueError("conf_ids 不得为空")
+    if any(isinstance(value, (bool, np.bool_))
+           or not isinstance(value, (int, np.integer))
+           for value in ids):
+        raise ValueError("conf_ids 必须是非布尔整数")
+    ids = tuple(int(value) for value in ids)
+    if len(set(ids)) != len(ids):
+        raise ValueError("conf_ids 不得重复")
+
+    ope_samples = []
+    twopt_samples = []
+    ope_shape = None
+    twopt_shape = None
+    nt = None
+    for conf_id in ids:
+        if conf_id not in ope_by_conf:
+            raise ValueError(f"conf_ids 中的配置缺少 OPE: {conf_id}")
+        if conf_id not in twopt_by_conf:
+            raise ValueError(f"conf_ids 中的配置缺少 C2: {conf_id}")
+        ope = np.asarray(ope_by_conf[conf_id])
+        twopt = np.asarray(twopt_by_conf[conf_id])
+        if ope.ndim != 7:
+            raise ValueError(
+                "每组态 2D OPE 必须具有 "
+                "(channel,orientation,component,z,b_x,b_y,t) 七轴，"
+                f"conf={conf_id} 收到 {ope.shape}")
+        if twopt.ndim != 5:
+            raise ValueError(
+                "source-resolved C2 必须具有 "
+                "(channel,direction,tsep,source,momentum) 五轴，"
+                f"conf={conf_id} 收到 {twopt.shape}")
+        conf_nt = int(ope.shape[-1])
+        if conf_nt <= 0 or twopt.shape[3] != conf_nt:
+            raise ValueError(
+                "source-resolved C2 的 source 轴必须与 OPE 时间轴一致，"
+                f"conf={conf_id} 收到 source={twopt.shape[3]}, t={conf_nt}")
+        if nt is None:
+            nt = conf_nt
+            ope_shape = ope.shape
+            twopt_shape = twopt.shape
+        elif ope.shape != ope_shape or twopt.shape != twopt_shape:
+            raise ValueError(
+                "所有组态的 2D OPE/C2 shape 必须一致，"
+                f"conf={conf_id} 收到 {ope.shape}/{twopt.shape}，"
+                f"期望 {ope_shape}/{twopt_shape}")
+        ope_samples.append(ope)
+        twopt_samples.append(twopt)
+
+    result = calculate_gradient_flow_tmd_ratios_2d(
+        np.stack(ope_samples),
+        np.stack(twopt_samples, axis=2),
+        tseps,
+        b_x_values,
+        b_y_values,
+        z_dir=z_dir,
+        b_x_dir=b_x_dir,
+        b_y_dir=b_y_dir,
+        transverse_order=transverse_order,
+        do_jackknife=do_jackknife,
+        component_labels=component_labels,
+    )
+    index_bytes = np.asarray(ids, dtype='<i8').tobytes(order='C')
+    result["conf_ids"] = ids
+    result["source_resolved_c2"] = True
+    result["c2_source_length"] = nt
+    result["input_index_schema"] = (
+        "explicit_source_resolved_configuration_order")
+    result["input_index_sha256"] = hashlib.sha256(index_bytes).hexdigest()
+    result["resampling_kind"] = (
+        "delete_one_jackknife" if result["do_jackknife"] else "central_only")
+    return result
+
+
+def validate_gradient_flow_tmd_ratio_results(results, *, nconf=None):
+    """Validate finite-``b`` ratio-v2 axes and all scalar invariants."""
+    ratio = np.asarray(results["ratio"])
+    if ratio.ndim != 9 or ratio.shape[0:2] != (2, 4):
+        raise ValueError(
+            "TMD ratio 必须为 "
+            "(channel=2,orientation=4,component,direction,z,b,tsep,"
+            f"insertion,momentum) 九轴数组，收到 {ratio.shape}"
+        )
+    nz, nb = int(ratio.shape[4]), int(ratio.shape[5])
+    flattened = dict(results)
+    for key in (
+            "c3_mean", "ratio", "ratio_jackknife_mean",
+            "ratio_jackknife_bias_corrected",
+            "ratio_jackknife_error_real",
+            "ratio_jackknife_error_imag"):
+        values = np.asarray(results[key])
+        if values.shape != ratio.shape:
+            raise ValueError(f"{key} 与 TMD ratio shape 不一致")
+        flattened[key] = values.reshape(
+            values.shape[:4] + (nz * nb,) + values.shape[6:])
+    flattened["schema"] = RATIO_SCHEMA
+    flattened["axes"] = (
+        "channel", "z_orientation", "component", "direction",
+        "z", "tsep", "insertion", "momentum_abs",
+    )
+    validate_gradient_flow_ratio_results(flattened, nconf=nconf)
+
+    if results.get("schema") != TMD_RATIO_SCHEMA:
+        raise ValueError("TMD ratio schema 不一致")
+    expected_axes = (
+        "channel", "z_orientation", "component", "direction",
+        "z", "b", "tsep", "insertion", "momentum_abs",
+    )
+    if tuple(results.get("axes", ())) != expected_axes:
+        raise ValueError("TMD ratio axes 不一致")
+    b_values = tuple(results.get("b_values", ()))
+    if len(b_values) != nb:
+        raise ValueError("b_values 与 TMD b 轴不一致")
+    if any(isinstance(value, (bool, np.bool_))
+           or not isinstance(value, (int, np.integer))
+           for value in b_values):
+        raise ValueError("b_values 必须是非布尔整数")
+    if len(set(b_values)) != len(b_values):
+        raise ValueError("b_values 不得重复")
+    if results.get("b_unit") != "lattice_spacing_a":
+        raise ValueError("b_unit 必须为 lattice_spacing_a")
+    if results.get("observable_flatten_order") != "z_major_b_minor_c_order":
+        raise ValueError("TMD observable flatten order 不一致")
+    if results.get("base_schema") != RATIO_SCHEMA:
+        raise ValueError("TMD base schema 不一致")
+    do_jackknife = bool(results["do_jackknife"])
+
+    integration_fields = (
+        "conf_ids", "source_resolved_c2", "c2_source_length",
+        "input_index_schema", "input_index_sha256", "resampling_kind",
+    )
+    present = tuple(name in results for name in integration_fields)
+    if any(present):
+        if not all(present):
+            raise ValueError(
+                "跨组态 ratio metadata 不完整: "
+                + ", ".join(
+                    name for name, exists in zip(integration_fields, present)
+                    if not exists
+                ))
+        conf_ids = tuple(results["conf_ids"])
+        if not conf_ids:
+            raise ValueError("跨组态 conf_ids 不得为空")
+        if any(isinstance(value, (bool, np.bool_))
+               or not isinstance(value, (int, np.integer))
+               for value in conf_ids):
+            raise ValueError("跨组态 conf_ids 必须是非布尔整数")
+        conf_ids = tuple(int(value) for value in conf_ids)
+        if len(set(conf_ids)) != len(conf_ids):
+            raise ValueError("跨组态 conf_ids 不得重复")
+        if nconf is not None and len(conf_ids) != int(nconf):
+            raise ValueError("conf_ids 长度与 nconf 不一致")
+        if results.get("source_resolved_c2") is not True:
+            raise ValueError("跨组态计算必须声明 source-resolved C2")
+        source_length = results.get("c2_source_length")
+        if (isinstance(source_length, (bool, np.bool_))
+                or not isinstance(source_length, (int, np.integer))
+                or int(source_length) <= 0):
+            raise ValueError("c2_source_length 必须是正整数")
+        if results.get("input_index_schema") != (
+                "explicit_source_resolved_configuration_order"):
+            raise ValueError("跨组态 input_index_schema 不一致")
+        expected_index_hash = hashlib.sha256(
+            np.asarray(conf_ids, dtype='<i8').tobytes(order='C')
+        ).hexdigest()
+        if results.get("input_index_sha256") != expected_index_hash:
+            raise ValueError("跨组态 input_index_sha256 不一致")
+        expected_resampling = (
+            "delete_one_jackknife" if do_jackknife else "central_only")
+        if results.get("resampling_kind") != expected_resampling:
+            raise ValueError("跨组态 resampling_kind 与 do_jackknife 不一致")
+
+    valid = np.asarray(results["valid_insertion_mask"])
+    expanded_valid = np.broadcast_to(
+        valid[None, None, None, None, None, None, :, :, None],
+        ratio.shape,
+    )
+    odd = ORIENTATIONS.index("odd_difference")
+    odd_z0 = ratio[1, odd, :, :, 0, :, :, :, :]
+    odd_valid = np.broadcast_to(
+        valid[None, None, :, :, None], odd_z0.shape)
+    kw = {"rtol": 5e-12, "atol": 1e-10, "equal_nan": True}
+    if not np.allclose(odd_z0[odd_valid], 0.0, **kw):
+        raise ValueError("TMD helicity odd z=0 恒等式失败")
+    if not np.isfinite(ratio[expanded_valid]).all():
+        raise ValueError("TMD ratio 有效插入含非有限值")
+    return True
+
+
+def validate_gradient_flow_tmd_ratio_2d_results(results, *, nconf=None):
+    """Validate ratio-v3 two-component transverse axes and metadata."""
+    ratio = np.asarray(results["ratio"])
+    if ratio.ndim != 10 or ratio.shape[0:2] != (2, 4):
+        raise ValueError(
+            "2D TMD ratio 必须为 "
+            "(channel=2,orientation=4,component,direction,z,b_x,b_y,"
+            f"tsep,insertion,momentum) 十轴数组，收到 {ratio.shape}")
+    nz, nbx, nby = (
+        int(ratio.shape[4]), int(ratio.shape[5]), int(ratio.shape[6]))
+    flattened = dict(results)
+    for key in (
+            "c3_mean", "ratio", "ratio_jackknife_mean",
+            "ratio_jackknife_bias_corrected",
+            "ratio_jackknife_error_real",
+            "ratio_jackknife_error_imag"):
+        values = np.asarray(results[key])
+        if values.shape != ratio.shape:
+            raise ValueError(f"{key} 与 2D TMD ratio shape 不一致")
+        flattened[key] = values.reshape(
+            values.shape[:4] + (nz * nbx * nby, 1) + values.shape[7:])
+    flattened["schema"] = TMD_RATIO_SCHEMA
+    flattened["axes"] = (
+        "channel", "z_orientation", "component", "direction",
+        "z", "b", "tsep", "insertion", "momentum_abs",
+    )
+    flattened["b_values"] = (0,)
+    flattened["b_unit"] = "lattice_spacing_a"
+    flattened["observable_flatten_order"] = "z_major_b_minor_c_order"
+    validate_gradient_flow_tmd_ratio_results(flattened, nconf=nconf)
+
+    if results.get("schema") != TMD_RATIO_2D_SCHEMA:
+        raise ValueError("2D TMD ratio schema 不一致")
+    expected_axes = (
+        "channel", "z_orientation", "component", "direction",
+        "z", "b_x", "b_y", "tsep", "insertion", "momentum_abs",
+    )
+    if tuple(results.get("axes", ())) != expected_axes:
+        raise ValueError("2D TMD ratio axes 不一致")
+    validated = _validate_tmd_ratio_2d_metadata(
+        results.get("b_x_values", ()), results.get("b_y_values", ()),
+        nbx, nby, results.get("z_dir"), results.get("b_x_dir"),
+        results.get("b_y_dir"), results.get("transverse_order"))
+    if validated[0] != tuple(results.get("b_x_values", ())):
+        raise ValueError("2D TMD b_x_values 不一致")
+    if validated[1] != tuple(results.get("b_y_values", ())):
+        raise ValueError("2D TMD b_y_values 不一致")
+    if validated[2] != results.get("z_dir"):
+        raise ValueError("2D TMD z_dir 不一致")
+    if validated[3] != results.get("b_x_dir"):
+        raise ValueError("2D TMD b_x_dir 不一致")
+    if validated[4] != results.get("b_y_dir"):
+        raise ValueError("2D TMD b_y_dir 不一致")
+    if validated[5] != tuple(results.get("transverse_order", ())):
+        raise ValueError("2D TMD transverse_order 不一致")
+    if results.get("b_unit") != "lattice_spacing_a":
+        raise ValueError("2D TMD b_unit 必须为 lattice_spacing_a")
+    if results.get("observable_flatten_order") != (
+            "z_major_bx_middle_by_minor_c_order"):
+        raise ValueError("2D TMD observable flatten order 不一致")
+
+    valid = np.asarray(results["valid_insertion_mask"])
+    odd = ORIENTATIONS.index("odd_difference")
+    odd_z0 = ratio[1, odd, :, :, 0, :, :, :, :, :]
+    odd_valid = np.broadcast_to(
+        valid[None, None, None, None, :, :, None], odd_z0.shape)
+    kw = {"rtol": 5e-12, "atol": 1e-10, "equal_nan": True}
+    if not np.allclose(odd_z0[odd_valid], 0.0, **kw):
+        raise ValueError("2D TMD helicity odd z=0 恒等式失败")
+    return True
 
 
 def physical_helicity_ratio(
@@ -400,6 +974,10 @@ def validate_gradient_flow_ratio_results(results, *, nconf=None):
         raise ValueError("ratio-v2 denominator 必须是 nopol")
     if results.get("polarization_for_channel") != POLARIZATION_FOR_CHANNEL:
         raise ValueError("channel polarization metadata 不一致")
+    do_jackknife = results.get("do_jackknife")
+    if not isinstance(do_jackknife, (bool, np.bool_)):
+        raise ValueError("do_jackknife 必须是显式布尔元数据")
+    do_jackknife = bool(do_jackknife)
     if tuple(results.get("channel_labels", ())) != tuple(CHANNELS):
         raise ValueError("channel_labels 不一致")
     if tuple(results.get("z_orientation_labels", ())) != tuple(ORIENTATIONS):
@@ -418,20 +996,31 @@ def validate_gradient_flow_ratio_results(results, *, nconf=None):
         valid[None, None, None, None, None, :, :, None],
         ratio.shape,
     )
-    for name, array in (
-            ("c3_mean", c3), ("ratio", ratio),
-            ("ratio_jackknife_mean", jk_mean),
-            ("ratio_jackknife_bias_corrected", jk_bias),
-            ("ratio_jackknife_error_real", errors[0]),
-            ("ratio_jackknife_error_imag", errors[1]),
-    ):
+    for name, array in (("c3_mean", c3), ("ratio", ratio)):
         if not np.isfinite(array[expanded_valid]).all():
             raise ValueError(f"{name} 的有效插入含非有限值")
         if not np.isnan(array[~expanded_valid]).all():
             raise ValueError(f"{name} 的无效插入必须全部为 NaN")
-    if np.any(errors[0][expanded_valid] < 0.0) or np.any(
-            errors[1][expanded_valid] < 0.0):
-        raise ValueError("jackknife 误差不能为负")
+    jackknife_arrays = (
+        ("ratio_jackknife_mean", jk_mean),
+        ("ratio_jackknife_bias_corrected", jk_bias),
+        ("ratio_jackknife_error_real", errors[0]),
+        ("ratio_jackknife_error_imag", errors[1]),
+    )
+    if do_jackknife:
+        for name, array in jackknife_arrays:
+            if not np.isfinite(array[expanded_valid]).all():
+                raise ValueError(f"{name} 的有效插入含非有限值")
+            if not np.isnan(array[~expanded_valid]).all():
+                raise ValueError(f"{name} 的无效插入必须全部为 NaN")
+        if np.any(errors[0][expanded_valid] < 0.0) or np.any(
+                errors[1][expanded_valid] < 0.0):
+            raise ValueError("jackknife 误差不能为负")
+    else:
+        for name, array in jackknife_arrays:
+            if not np.isnan(array).all():
+                raise ValueError(
+                    f"do_jackknife=False 时 {name} 必须全部为 NaN")
 
     denominator = c2[0][None, None, None, :, None, :, None, :]
     expected_ratio = c3 / denominator
@@ -441,7 +1030,13 @@ def validate_gradient_flow_ratio_results(results, *, nconf=None):
         raise ValueError("central ratio 与 c3_mean/c2_mean 不一致")
 
     if ratio.shape[2] == len(COMPONENTS) and labels == COMPONENTS:
-        kw = {"rtol": 5e-12, "atol": 1e-10, "equal_nan": True}
+        input_precision = results.get("input_precision", "complex128")
+        if input_precision == "complex64":
+            kw = {"rtol": 1e-5, "atol": 2e-6, "equal_nan": True}
+        elif input_precision == "complex128":
+            kw = {"rtol": 5e-12, "atol": 1e-10, "equal_nan": True}
+        else:
+            raise ValueError("input_precision 必须是 complex64/complex128")
         oi = {name: ORIENTATIONS.index(name) for name in ORIENTATIONS}
         checks = (
             np.allclose(
@@ -468,8 +1063,15 @@ def validate_gradient_flow_ratio_results(results, *, nconf=None):
 
 
 __all__ = [
-    "RATIO_SCHEMA", "POLARIZATION_FOR_CHANNEL",
+    "RATIO_SCHEMA", "TMD_RATIO_SCHEMA", "TMD_RATIO_2D_SCHEMA",
+    "POLARIZATION_FOR_CHANNEL",
     "covariance_ratio_estimator", "calculate_gradient_flow_ratios",
+    "calculate_gradient_flow_tmd_ratios",
+    "calculate_gradient_flow_tmd_ratios_2d",
+    "calculate_gradient_flow_tmd_ratios_from_configurations",
+    "calculate_gradient_flow_tmd_ratios_2d_from_configurations",
     "calculate_ratios",
     "physical_helicity_ratio", "validate_gradient_flow_ratio_results",
+    "validate_gradient_flow_tmd_ratio_results",
+    "validate_gradient_flow_tmd_ratio_2d_results",
 ]

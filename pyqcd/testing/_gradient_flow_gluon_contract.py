@@ -345,6 +345,423 @@ class GradientFlowGluonContract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "legacy|显式选择"):
             physical_helicity_ratio(result["ratio"], component="combined")
 
+    def test_finite_b_ratio_v2_keeps_b_axis_isolated_and_complex_phase(self):
+        from pyqcd.analysis import (
+            calculate_gradient_flow_ratios,
+            calculate_gradient_flow_tmd_ratios,
+            physical_helicity_ratio,
+            validate_gradient_flow_tmd_ratio_results,
+        )
+
+        rng = np.random.default_rng(7318)
+        nconf, nt, nz, nb = 6, 5, 2, 3
+        raw = (
+            rng.normal(size=(nconf, 2, 2, 3, nz, nb, nt))
+            + 1j * rng.normal(size=(nconf, 2, 2, 3, nz, nb, nt))
+        )
+        raw[:, :, 1, :, 0] = raw[:, :, 0, :, 0]
+        ope = np.empty(
+            (nconf, 2, 4, 3, nz, nb, nt), dtype=np.complex128)
+        for channel in range(2):
+            for orientation in range(2):
+                mt = raw[:, channel, orientation, 0]
+                mi = raw[:, channel, orientation, 1]
+                ope[:, channel, orientation, 1] = mt
+                ope[:, channel, orientation, 2] = mi
+                ope[:, channel, orientation, 0] = (
+                    mt - mi if channel == 0 else mt + mi
+                )
+            ope[:, channel, 2] = (
+                ope[:, channel, 0] + ope[:, channel, 1])
+            ope[:, channel, 3] = (
+                ope[:, channel, 0] - ope[:, channel, 1])
+        twopt = (
+            3.0 + rng.normal(size=(2, 1, nconf, 2, nt, 2))
+            + 1j * rng.normal(size=(2, 1, nconf, 2, nt, 2))
+        )
+
+        result = calculate_gradient_flow_tmd_ratios(
+            ope, twopt, [1, 2], [0, 2, 4], do_jackknife=True)
+        self.assertTrue(validate_gradient_flow_tmd_ratio_results(
+            result, nconf=nconf))
+        expected_shape = (2, 4, 3, 1, nz, nb, 2, 3, 2)
+        self.assertEqual(result["ratio"].shape, expected_shape)
+        self.assertEqual(result["axes"], (
+            "channel", "z_orientation", "component", "direction",
+            "z", "b", "tsep", "insertion", "momentum_abs",
+        ))
+        self.assertEqual(result["b_values"], (0, 2, 4))
+        self.assertEqual(result["b_unit"], "lattice_spacing_a")
+        np.testing.assert_array_equal(
+            result["c2_mean"][0], result["c2_mean"][1])
+
+        flattened = calculate_gradient_flow_ratios(
+            ope.reshape(nconf, 2, 4, 3, nz * nb, nt),
+            twopt,
+            [1, 2],
+            do_jackknife=True,
+        )
+        np.testing.assert_allclose(
+            result["ratio"],
+            flattened["ratio"].reshape(expected_shape),
+            rtol=0,
+            atol=0,
+        )
+
+        odd = 3
+        physical = physical_helicity_ratio(result["ratio"])
+        expected_phase = np.imag(
+            result["ratio"][1, odd, 1] - result["ratio"][1, odd, 2])
+        np.testing.assert_array_equal(physical, expected_phase)
+
+        perturbed = ope.copy()
+        perturbed[..., 2, :] += (
+            (0.03 + 0.02j)
+            * np.arange(1, perturbed[..., 2, :].size + 1).reshape(
+                perturbed[..., 2, :].shape)
+        )
+        changed = calculate_gradient_flow_tmd_ratios(
+            perturbed, twopt, [1, 2], [0, 2, 4], do_jackknife=True)
+        np.testing.assert_array_equal(
+            changed["ratio"][..., :2, :, :, :],
+            result["ratio"][..., :2, :, :, :],
+        )
+        valid = result["valid_insertion_mask"]
+        changed_b2 = changed["ratio"][..., 2, :, :, :]
+        original_b2 = result["ratio"][..., 2, :, :, :]
+        changed_valid = np.broadcast_to(
+            valid[None, None, None, None, None, :, :, None],
+            changed_b2.shape,
+        )
+        self.assertGreater(
+            float(np.max(np.abs(
+                (changed_b2 - original_b2)[changed_valid]))),
+            1e-8,
+        )
+        central_only = calculate_gradient_flow_tmd_ratios(
+            ope, twopt, [1, 2], [0, 2, 4], do_jackknife=False)
+        self.assertFalse(central_only["do_jackknife"])
+        self.assertTrue(validate_gradient_flow_tmd_ratio_results(
+            central_only, nconf=nconf))
+        for key in (
+                "ratio_jackknife_mean",
+                "ratio_jackknife_bias_corrected",
+                "ratio_jackknife_error_real",
+                "ratio_jackknife_error_imag"):
+            self.assertTrue(np.isnan(central_only[key]).all())
+        with self.assertRaisesRegex(ValueError, "b_values"):
+            calculate_gradient_flow_tmd_ratios(
+                ope, twopt, [1, 2], [0, 1], do_jackknife=True)
+        with self.assertRaisesRegex(ValueError, "b_values"):
+            calculate_gradient_flow_tmd_ratios(
+                ope, twopt, [1, 2], [0, 2, 2], do_jackknife=True)
+
+    def test_finite_b_delete_one_jackknife_matches_direct_resampling(self):
+        from pyqcd.analysis import covariance_ratio_estimator
+
+        rng = np.random.default_rng(7319)
+        nconf, nz, nb, nsource, nmom = 6, 2, 3, 4, 2
+        nobs = nz * nb
+        operator = (
+            rng.normal(size=(nconf, nobs, nsource))
+            + 1j * rng.normal(size=(nconf, nobs, nsource))
+        )
+        pol35 = (
+            rng.normal(size=(nconf, nsource, nmom))
+            + 1j * rng.normal(size=(nconf, nsource, nmom))
+        )
+        nopol = (
+            4.0 + rng.normal(size=(nconf, nsource, nmom))
+            + 1j * rng.normal(size=(nconf, nsource, nmom))
+        )
+        result = covariance_ratio_estimator(
+            operator, pol35, True, denominator_correlator=nopol)
+
+        def direct_central(selected):
+            op = operator[selected]
+            corr = pol35[selected]
+            denominator = nopol[selected]
+            nselected = len(selected)
+            cross = np.einsum(
+                "nos,nsp->op", op, corr, optimize=True
+            ) / nsource / nselected
+            disconnected = np.einsum(
+                "os,sp->op", op.sum(axis=0), corr.sum(axis=0),
+                optimize=True,
+            ) / nsource / (nselected * nselected)
+            return (
+                cross - disconnected,
+                denominator.mean(axis=(0, 1)),
+            )
+
+        all_conf = np.arange(nconf)
+        c3, c2 = direct_central(all_conf)
+        jackknife = []
+        for omitted in range(nconf):
+            c3_jk, c2_jk = direct_central(np.delete(all_conf, omitted))
+            jackknife.append(c3_jk / c2_jk[None, :])
+        jackknife = np.asarray(jackknife)
+        jackknife_mean = jackknife.mean(axis=0)
+        central_ratio = c3 / c2[None, :]
+        bias_corrected = (
+            nconf * central_ratio - (nconf - 1) * jackknife_mean)
+        prefactor = (nconf - 1) / nconf
+        error_real = np.sqrt(prefactor * np.sum(
+            (jackknife.real - jackknife_mean.real) ** 2, axis=0))
+        error_imag = np.sqrt(prefactor * np.sum(
+            (jackknife.imag - jackknife_mean.imag) ** 2, axis=0))
+
+        np.testing.assert_allclose(result[0], c3, rtol=0, atol=3e-14)
+        np.testing.assert_allclose(result[1], c2, rtol=0, atol=3e-14)
+        np.testing.assert_allclose(
+            result[2], jackknife_mean, rtol=0, atol=3e-14)
+        np.testing.assert_allclose(
+            result[3], bias_corrected, rtol=0, atol=3e-14)
+        np.testing.assert_allclose(
+            result[4], error_real, rtol=0, atol=3e-14)
+        np.testing.assert_allclose(
+            result[5], error_imag, rtol=0, atol=3e-14)
+        self.assertTrue(all(np.isfinite(np.asarray(value)).all()
+                            for value in result))
+
+    def test_two_dimensional_ratio_v3_axes_and_cross_configuration_gate(self):
+        import hashlib
+
+        from pyqcd.analysis import (
+            calculate_gradient_flow_ratios,
+            calculate_gradient_flow_tmd_ratios_2d,
+            calculate_gradient_flow_tmd_ratios_2d_from_configurations,
+            physical_helicity_ratio,
+            validate_gradient_flow_tmd_ratio_2d_results,
+        )
+
+        rng = np.random.default_rng(7321)
+        nconf, nt, nz, nbx, nby, ncomp = 4, 4, 2, 2, 2, 3
+        raw = (
+            rng.normal(size=(nconf, 2, 2, ncomp, nz, nbx, nby, nt))
+            + 1j * rng.normal(size=(nconf, 2, 2, ncomp, nz, nbx, nby, nt))
+        )
+        raw[:, :, 1, :, 0] = raw[:, :, 0, :, 0]
+        ope = np.empty(
+            (nconf, 2, 4, ncomp, nz, nbx, nby, nt),
+            dtype=np.complex128,
+        )
+        for channel in range(2):
+            for orientation in range(2):
+                mt = raw[:, channel, orientation, 1]
+                mi = raw[:, channel, orientation, 2]
+                ope[:, channel, orientation, 1] = mt
+                ope[:, channel, orientation, 2] = mi
+                ope[:, channel, orientation, 0] = (
+                    mt - mi if channel == 0 else mt + mi)
+            ope[:, channel, 2] = (
+                ope[:, channel, 0] + ope[:, channel, 1])
+            ope[:, channel, 3] = (
+                ope[:, channel, 0] - ope[:, channel, 1])
+        twopt = (
+            3.0 + rng.normal(size=(2, 1, nconf, 2, nt, 2))
+            + 1j * rng.normal(size=(2, 1, nconf, 2, nt, 2))
+        )
+
+        result = calculate_gradient_flow_tmd_ratios_2d(
+            ope,
+            twopt,
+            [1, 2],
+            [0, 2],
+            [0, 1],
+            z_dir=2,
+            b_x_dir=0,
+            b_y_dir=1,
+            transverse_order=(0, 1),
+            do_jackknife=True,
+        )
+        self.assertTrue(validate_gradient_flow_tmd_ratio_2d_results(
+            result, nconf=nconf))
+        expected_shape = (2, 4, ncomp, 1, nz, nbx, nby, 2, 3, 2)
+        self.assertEqual(result["ratio"].shape, expected_shape)
+        flattened = calculate_gradient_flow_ratios(
+            ope.reshape(nconf, 2, 4, ncomp, nz * nbx * nby, nt),
+            twopt,
+            [1, 2],
+            do_jackknife=True,
+        )
+        np.testing.assert_allclose(
+            result["ratio"],
+            flattened["ratio"].reshape(expected_shape),
+            rtol=0,
+            atol=0,
+        )
+        phase = physical_helicity_ratio(result["ratio"])
+        expected_phase = np.imag(
+            result["ratio"][1, 3, 1] - result["ratio"][1, 3, 2])
+        np.testing.assert_array_equal(phase, expected_phase)
+
+        ope_by_conf = {cid: ope[index] for index, cid in enumerate((40, 10, 30, 20))}
+        twopt_by_conf = {
+            cid: twopt[:, :, index]
+            for index, cid in enumerate((40, 10, 30, 20))
+        }
+        conf_ids = [40, 10, 30, 20]
+        cross = calculate_gradient_flow_tmd_ratios_2d_from_configurations(
+            ope_by_conf,
+            twopt_by_conf,
+            conf_ids,
+            [0, 2],
+            [0, 1],
+            [1, 2],
+            z_dir=2,
+            b_x_dir=0,
+            b_y_dir=1,
+            transverse_order=(0, 1),
+            do_jackknife=True,
+        )
+        np.testing.assert_allclose(
+            cross["ratio"], result["ratio"], rtol=0, atol=0)
+        self.assertEqual(tuple(cross["conf_ids"]), tuple(conf_ids))
+        self.assertEqual(
+            cross["input_index_sha256"],
+            hashlib.sha256(
+                np.asarray(conf_ids, dtype='<i8').tobytes(order='C')
+            ).hexdigest(),
+        )
+        tampered = dict(cross)
+        tampered["transverse_order"] = (0, 0)
+        with self.assertRaisesRegex(ValueError, 'transverse_order'):
+            validate_gradient_flow_tmd_ratio_2d_results(
+                tampered, nconf=nconf)
+        source_averaged = dict(twopt_by_conf)
+        source_averaged[10] = np.ones(nt)
+        with self.assertRaisesRegex(ValueError, 'source-resolved'):
+            calculate_gradient_flow_tmd_ratios_2d_from_configurations(
+                ope_by_conf, source_averaged, conf_ids,
+                [0, 2], [0, 1], [1, 2])
+        with self.assertRaisesRegex(ValueError, '重复'):
+            calculate_gradient_flow_tmd_ratios_2d_from_configurations(
+                ope_by_conf, twopt_by_conf, [40, 10, 10],
+                [0, 2], [0, 1], [1, 2])
+
+    def test_configuration_ratio_v2_requires_source_resolved_shared_order(self):
+        import hashlib
+
+        from pyqcd.analysis import (
+            calculate_gradient_flow_tmd_ratios,
+            calculate_gradient_flow_tmd_ratios_from_configurations,
+            validate_gradient_flow_tmd_ratio_results,
+        )
+
+        rng = np.random.default_rng(7320)
+        conf_ids = [40, 10, 30, 20]
+        nt, nz, nb, ncomp = 4, 1, 2, 3
+        ope_by_conf = {}
+        twopt_by_conf = {}
+        for sample, conf_id in enumerate(conf_ids):
+            raw = (
+                rng.normal(size=(2, 2, ncomp, nz, nb, nt))
+                + 1j * rng.normal(size=(2, 2, ncomp, nz, nb, nt))
+            )
+            raw[:, :, :, 0, :, :] += sample * 0.01
+            raw[:, 1, :, 0] = raw[:, 0, :, 0]
+            ope = np.empty(
+                (2, 4, ncomp, nz, nb, nt), dtype=np.complex128)
+            for channel in range(2):
+                for orientation in range(2):
+                    mt = raw[channel, orientation, 1]
+                    mi = raw[channel, orientation, 2]
+                    ope[channel, orientation, 1] = mt
+                    ope[channel, orientation, 2] = mi
+                    ope[channel, orientation, 0] = (
+                        mt - mi if channel == 0 else mt + mi
+                    )
+                ope[channel, 2] = (
+                    ope[channel, 0] + ope[channel, 1])
+                ope[channel, 3] = (
+                    ope[channel, 0] - ope[channel, 1])
+            ope_by_conf[conf_id] = ope
+            twopt_by_conf[conf_id] = (
+                3.0 + rng.normal(size=(2, 1, 2, nt, 2))
+                + 1j * rng.normal(size=(2, 1, 2, nt, 2))
+            )
+
+        actual = calculate_gradient_flow_tmd_ratios_from_configurations(
+            ope_by_conf,
+            twopt_by_conf,
+            conf_ids,
+            [0, 2],
+            [1, 2],
+            do_jackknife=True,
+        )
+        self.assertTrue(validate_gradient_flow_tmd_ratio_results(
+            actual, nconf=len(conf_ids)))
+        expected = calculate_gradient_flow_tmd_ratios(
+            np.stack([ope_by_conf[cid] for cid in conf_ids]),
+            np.stack([twopt_by_conf[cid] for cid in conf_ids], axis=2),
+            [1, 2],
+            [0, 2],
+            do_jackknife=True,
+        )
+        for key in (
+                "c3_mean", "ratio", "ratio_jackknife_mean",
+                "ratio_jackknife_bias_corrected",
+                "ratio_jackknife_error_real",
+                "ratio_jackknife_error_imag"):
+            np.testing.assert_allclose(
+                actual[key], expected[key], rtol=0, atol=0)
+        expected_hash = hashlib.sha256(
+            np.asarray(conf_ids, dtype='<i8').tobytes(order='C')
+        ).hexdigest()
+        self.assertEqual(tuple(actual["conf_ids"]), tuple(conf_ids))
+        self.assertEqual(actual["input_index_sha256"], expected_hash)
+        self.assertTrue(actual["source_resolved_c2"])
+        bad_hash = dict(actual)
+        bad_hash["input_index_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "index_sha256|索引"):
+            validate_gradient_flow_tmd_ratio_results(
+                bad_hash, nconf=len(conf_ids))
+        unaveraged_claim = dict(actual)
+        unaveraged_claim["source_resolved_c2"] = False
+        with self.assertRaisesRegex(ValueError, "source-resolved"):
+            validate_gradient_flow_tmd_ratio_results(
+                unaveraged_claim, nconf=len(conf_ids))
+
+        source_averaged = dict(twopt_by_conf)
+        source_averaged[10] = np.ones(nt)
+        with self.assertRaisesRegex(ValueError, "source-resolved"):
+            calculate_gradient_flow_tmd_ratios_from_configurations(
+                ope_by_conf, source_averaged, conf_ids, [0, 2], [1, 2])
+        with self.assertRaisesRegex(ValueError, "conf_ids.*重复|重复"):
+            calculate_gradient_flow_tmd_ratios_from_configurations(
+                ope_by_conf, twopt_by_conf, [40, 10, 10], [0, 2], [1, 2])
+        with self.assertRaisesRegex(ValueError, "缺少|missing"):
+            calculate_gradient_flow_tmd_ratios_from_configurations(
+                ope_by_conf, twopt_by_conf, [40, 99], [0, 2], [1, 2])
+
+    def test_complex64_ratio_uses_precision_aware_orientation_gate(self):
+        from pyqcd.analysis import (
+            calculate_gradient_flow_tmd_ratios,
+            validate_gradient_flow_tmd_ratio_results,
+        )
+
+        rng = np.random.default_rng(20261025)
+        ope = (
+            rng.normal(size=(2, 2, 4, 3, 2, 4))
+            + 1j * rng.normal(size=(2, 2, 4, 3, 2, 4))
+        ).astype(np.complex64)
+        ope[:, :, 2] = ope[:, :, 0] + ope[:, :, 1]
+        ope[:, :, 3] = ope[:, :, 0] - ope[:, :, 1]
+        ope[:, 1, 3, :, 0, :] = 0.0
+        ope = ope[:, :, :, :, :, None, :]
+        twopt = (
+            rng.normal(size=(2, 1, 2, 1, 4, 1))
+            + 1j * rng.normal(size=(2, 1, 2, 1, 4, 1))
+        ).astype(np.complex64)
+        actual = calculate_gradient_flow_tmd_ratios(
+            ope, twopt, [1], [0], do_jackknife=True,
+            component_labels=('combined', 'Mtiti', 'Mijij'),
+        )
+        self.assertEqual(actual['input_precision'], 'complex64')
+        self.assertTrue(validate_gradient_flow_tmd_ratio_results(
+            actual, nconf=2))
+
     def test_npz_json_roundtrip_is_atomic_and_strict(self):
         from pyqcd.operator import (
             gradient_flow_gluon_ope, load_gradient_flow_gluon_ope,

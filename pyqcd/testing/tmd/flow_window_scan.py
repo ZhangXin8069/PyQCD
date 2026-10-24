@@ -98,7 +98,8 @@ def run_scan(*, source_run, out_dir, conf_ids, z_list, b_list, tau,
     tags = [momentum_tag(momentum) for momentum in DEFAULT_MOMENTA]
     corr2 = load_multi_2pt(
         source_run, conf_ids, tags, channels=('pp',), logger=logger,
-        momenta=DEFAULT_MOMENTA, precision=precision, source_resolved=True)
+        momenta=DEFAULT_MOMENTA, precision=precision, source_resolved=True,
+        polarization='nopol')
     ope = load_tmd_ope_all(
         out_dir, conf_ids, z_list, b_list, logger=logger,
         staple_length=max(z_list), tau=tau, eps=eps, precision=precision)

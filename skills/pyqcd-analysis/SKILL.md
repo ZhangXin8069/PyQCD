@@ -40,6 +40,12 @@ metadata:
 | FH 变换与常数窗 | `_fh.run_fh` | `bash data/from-logs/logs/test0_fh/run-local.sh`（38 项） |
 | 三方向差异与直方图 | `_ana_3dir.analyze_3dir` | `bash data/from-logs/logs/test0/run-local.sh` |
 | disconnected TMD/c0 | `_tmd_ratio.run_disconnected_tmd_ratio`、`plateau_c0`、`plot_tmd_*` | `python -m pyqcd.testing.tmd.pdf_workflow --only-plot --conf-ids 6250` |
+| 有限横距 ratio-v2 | `_gradient_flow_ratio.calculate_gradient_flow_tmd_ratios` | `python -B -m pyqcd.testing._gradient_flow_gluon_contract` |
+| 跨组态有限横距 ratio-v2 | `_gradient_flow_ratio.calculate_gradient_flow_tmd_ratios_from_configurations` | 同上 |
+| 双极化 source-resolved C2 | `_tmd9.compute_2pt_polarizations_multi`、`load_multi_2pt_polarizations` | `python -B -m pyqcd.testing._tmd_physical_contract` |
+| 二维有限横距 ratio-v3 | `_gradient_flow_ratio.calculate_gradient_flow_tmd_ratios_2d` | `python -B -m pyqcd.testing._gradient_flow_gluon_contract` |
+| 二维跨组态 ratio-v3 | `_gradient_flow_ratio.calculate_gradient_flow_tmd_ratios_2d_from_configurations` | 同上 |
+| 有限横距输入审计 | `pyqcd.testing.tmd.audit_finite_b_inputs` | `python -B -m pyqcd.testing._tmd_physical_contract` |
 | 连通 3pt/2pt ratio | `_correlators.run_3pt_ratio`、`_analyse.ratio_3pt` | `pyqcd.pipeline._steps.step_analysis` |
 | 02_ratio 生产链（OPE/2pt） | `_ratio2pt.run_ratio2pt` | `bash data/from-logs/logs/test0_ratio/run-local.sh`（22 项） |
 

@@ -83,6 +83,7 @@ def test_tmd_ope_cache_distinguishes_fixed_staple_length():
         )
 
     with tempfile.TemporaryDirectory() as run_dir, \
+            patch.object(_tmd9, 'NT', gauge.shape[0]), \
             patch.object(_tmd9, 'flow_gauge_for_config',
                          return_value=gauge), \
             patch.object(_tmd9, 'tmd_matrix_elements_time',

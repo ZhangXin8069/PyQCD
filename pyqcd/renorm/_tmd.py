@@ -159,6 +159,50 @@ def staple_wilson_line(U, z, b_perp, z_dir=2, b_dir=0, L=None):
     return W
 
 
+def staple_wilson_line_2d(
+        U, z, b_x, b_y, z_dir=2, b_x_dir=0, b_y_dir=1, L=None,
+        transverse_order=(0, 1)):
+    """Staple with a two-component transverse staircase displacement.
+
+    The path is fixed as ``-L*z_dir``, then the two transverse segments in
+    ``transverse_order``, then ``(L+z)*z_dir``.  The contour choice is physical
+    at finite lattice spacing, so the order is explicit and must be carried in
+    metadata.
+    """
+    cp = get_backend()
+    z_dir, b_x_dir = _validate_spatial_directions(z_dir, b_x_dir)
+    z_dir, b_y_dir = _validate_spatial_directions(z_dir, b_y_dir)
+    if b_x_dir == b_y_dir:
+        raise ValueError("二维横向方向必须互不相同")
+    try:
+        transverse_order = tuple(transverse_order)
+    except TypeError as exc:
+        raise ValueError("transverse_order 必须是两个横向轴的排列") from exc
+    if transverse_order not in ((0, 1), (1, 0)):
+        raise ValueError("transverse_order 必须是 (0,1) 或 (1,0)")
+    for name, value in (("z", z), ("b_x", b_x), ("b_y", b_y)):
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+                value, (int, np.integer)):
+            raise ValueError(f"{name} 必须是非布尔整数")
+    z, b_x, b_y = int(z), int(b_x), int(b_y)
+    if L is None:
+        L = abs(z)
+    if isinstance(L, (bool, np.bool_)) or not isinstance(
+            L, (int, np.integer)) or int(L) < 0:
+        raise ValueError("staple 臂长 L 必须是非负非布尔整数")
+    L = int(L)
+
+    transverse = ((b_x_dir, b_x), (b_y_dir, b_y))
+    transverse = tuple(transverse[index] for index in transverse_order)
+    path = ((z_dir, -L),) + transverse + ((z_dir, L + z),)
+    nc = U.shape[-1]
+    W = cp.broadcast_to(cp.eye(nc, dtype=U.dtype), U.shape[:4] + (nc, nc))
+    displacement = [0, 0, 0]
+    for direction, signed_length in path:
+        W = _path_product(U, W, direction, signed_length, displacement)
+    return W
+
+
 def _shift_spatial(field, displacement):
     """返回 ``field(x + displacement)``；方向序为 x,y,z。"""
     cp = get_backend()
@@ -232,14 +276,23 @@ def _color_normalization_factor(color_normalization):
 def _matrix_element_from_fields(F_mu, F_nu, W, z, b_perp, z_dir, b_dir,
                                 color_normalization='fundamental_trace'):
     """逐点投影 Clover 到 su(Nc)，再闭合双场强颜色迹。"""
-    cp = get_backend()
     z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
-    F_mu = _traceless_color_field(F_mu)
-    F_nu = _traceless_color_field(F_nu)
-
     endpoint = [0, 0, 0]
     endpoint[z_dir] += z
     endpoint[b_dir] += b_perp
+    return _matrix_element_from_fields_at_endpoint(
+        F_mu, F_nu, W, endpoint, color_normalization)
+
+
+def _matrix_element_from_fields_at_endpoint(
+        F_mu, F_nu, W, endpoint, color_normalization='fundamental_trace'):
+    """Close a bilocal for an explicit three-dimensional lattice endpoint."""
+    cp = get_backend()
+    endpoint = tuple(int(value) for value in endpoint)
+    if len(endpoint) != 3:
+        raise ValueError("endpoint 必须含 x,y,z 三个整数位移")
+    F_mu = _traceless_color_field(F_mu)
+    F_nu = _traceless_color_field(F_nu)
     F_mu_shift = _shift_spatial(F_mu, endpoint)
     W_dagger = cp.swapaxes(W.conj(), -1, -2)
 
@@ -273,6 +326,236 @@ def _tmd_clover_fields(U, z_dir, b_dir):
         plaquette_clover(U, 3, j),
         plaquette_clover(U, i, j),
     )
+
+
+def _tmd_field_dictionary(U):
+    """Return all canonical Clover fields needed for finite-b dual tensors."""
+    return {
+        (mu, nu): plaquette_clover(U, mu, nu)
+        for mu in range(4)
+        for nu in range(mu + 1, 4)
+    }
+
+
+def _ordered_tmd_field(fields, mu, nu):
+    field = fields[(mu, nu) if mu < nu else (nu, mu)]
+    return field if mu < nu else -field
+
+
+def _tmd_channel_components(fields, first_fields, W, endpoint,
+                            z_dir, channel,
+                            color_normalization='fundamental_trace'):
+    """Build the six schema-v2 components for one channel and orientation."""
+    i, j = (z_dir + 1) % 3, (z_dir + 2) % 3
+    pairs = ((3, i), (3, j), (i, j))
+    primitives = [
+        _matrix_element_from_fields_at_endpoint(
+            _ordered_tmd_field(fields, *pair),
+            _ordered_tmd_field(first_fields, *pair),
+            W, endpoint, color_normalization,
+        )
+        for pair in pairs
+    ]
+    ti, tj, ij = primitives
+    mtiti = ti + tj
+    mijij = 2.0 * ij
+    combined = mtiti - mijij if channel == 'unpolarized' else mtiti + mijij
+    return combined, mtiti, mijij, ti, tj, ij
+
+
+def full_channel_tmd_ope_time(
+        U, z_list, b_list, z_dir=2, b_dir=0, L=None,
+        color_normalization='fundamental_trace'):
+    """Finite-b full-channel TMD OPE, summed in space per time slice.
+
+    Returns a complex array with axes
+    ``(channel,orientation,component,z,b,Nt)`` and dimensions
+    ``(2,4,6,nz,nb,Nt)``.  Raw plus/minus z orientations are retained;
+    even/odd combinations are direct sums/differences without a factor 1/2.
+    Helicity uses ``F W dual(F)`` with the dual on the origin endpoint.
+    The final helicity phase projection is intentionally not applied here.
+    The finite-b helicity branch is a controlled extension of the validated
+    straight-OPE convention; no independent finite-b helicity oracle exists.
+    """
+    cp = get_backend()
+    z_dir, b_dir = _validate_spatial_directions(z_dir, b_dir)
+    z_values = tuple(z_list)
+    b_values = tuple(b_list)
+    for name, values, nonnegative in (
+            ('z_list', z_values, True), ('b_list', b_values, False)):
+        if any(isinstance(value, (bool, np.bool_))
+               or not isinstance(value, (int, np.integer))
+               for value in values):
+            raise ValueError(f"{name} 必须是非布尔整数序列")
+        if len(set(int(value) for value in values)) != len(values):
+            raise ValueError(f"{name} 不得重复")
+        if nonnegative and any(int(value) < 0 for value in values):
+            raise ValueError(f"{name} 必须为非负整数")
+    z_values = tuple(int(value) for value in z_values)
+    b_values = tuple(int(value) for value in b_values)
+    if L is None:
+        L = max((abs(value) for value in z_values), default=0)
+    if isinstance(L, (bool, np.bool_)) or not isinstance(
+            L, (int, np.integer)):
+        raise ValueError("L 必须是非布尔整数")
+    if int(L) < 0:
+        raise ValueError("L 必须为非负整数")
+    L = int(L)
+    if U.ndim != 7 or U.shape[4] != 4 or U.shape[5] != U.shape[6]:
+        raise ValueError("U 必须具有 (Nt,Nz,Ny,Nx,4,Nc,Nc) 七轴 shape")
+
+    nt = int(U.shape[0])
+    output_dtype = np.dtype(_to_cpu(U).dtype)
+    output = np.zeros(
+        (2, 4, 6, len(z_values), len(b_values), nt),
+        dtype=output_dtype,
+    )
+    if not z_values or not b_values:
+        return output
+
+    fields = _tmd_field_dictionary(U)
+    i, j = (z_dir + 1) % 3, (z_dir + 2) % 3
+    dual_fields = dict(fields)
+    for pair in ((3, i), (3, j), (i, j)):
+        canonical = (min(pair), max(pair))
+        dual = compute_dual_field_strength(fields, *pair)
+        dual_fields[canonical] = dual if pair == canonical else -dual
+
+    channels = (
+        ('unpolarized', fields),
+        ('helicity', dual_fields),
+    )
+    for channel_index, (channel, second_fields) in enumerate(channels):
+        for z_index, z in enumerate(z_values):
+            for b_index, b_perp in enumerate(b_values):
+                components = []
+                for signed_z in (z, -z):
+                    W = staple_wilson_line(
+                        U, signed_z, b_perp, z_dir, b_dir, L)
+                    endpoint = [0, 0, 0]
+                    endpoint[z_dir] += signed_z
+                    endpoint[b_dir] += b_perp
+                    components.append(_tmd_channel_components(
+                        fields, second_fields, W, endpoint,
+                        z_dir, channel, color_normalization,
+                    ))
+                plus, minus = components
+                for component_index in range(6):
+                    plus_value = plus[component_index]
+                    minus_value = minus[component_index]
+                    for orientation_index, value in enumerate((
+                            plus_value,
+                            minus_value,
+                            plus_value + minus_value,
+                            plus_value - minus_value)):
+                        summed = np.sum(
+                            _to_cpu(value), axis=(1, 2, 3))
+                        output[
+                            channel_index, orientation_index,
+                            component_index, z_index, b_index, :,
+                        ] = np.asarray(summed, dtype=output_dtype)
+    return output
+
+
+def full_channel_tmd_ope_time_2d(
+        U, z_list, b_x_list, b_y_list, z_dir=2,
+        b_x_dir=0, b_y_dir=1, L=None, transverse_order=(0, 1),
+        color_normalization='fundamental_trace'):
+    """Two-component transverse full-channel TMD OPE.
+
+    Returns ``(channel,orientation,component,z,b_x,b_y,Nt)``.  The transverse
+    staircase order is explicit and is part of the finite-lattice operator
+    definition.  No continuum path-independence assumption is made.
+    """
+    cp = get_backend()
+    z_dir, b_x_dir = _validate_spatial_directions(z_dir, b_x_dir)
+    z_dir, b_y_dir = _validate_spatial_directions(z_dir, b_y_dir)
+    if b_x_dir == b_y_dir:
+        raise ValueError("二维横向方向必须互不相同")
+    try:
+        transverse_order = tuple(transverse_order)
+    except TypeError as exc:
+        raise ValueError("transverse_order 必须是两个横向轴的排列") from exc
+    if transverse_order not in ((0, 1), (1, 0)):
+        raise ValueError("transverse_order 必须是 (0,1) 或 (1,0)")
+
+    z_values = tuple(z_list)
+    bx_values = tuple(b_x_list)
+    by_values = tuple(b_y_list)
+    for name, values, nonnegative in (
+            ('z_list', z_values, True),
+            ('b_x_list', bx_values, False),
+            ('b_y_list', by_values, False)):
+        if any(isinstance(value, (bool, np.bool_))
+               or not isinstance(value, (int, np.integer))
+               for value in values):
+            raise ValueError(f"{name} 必须是非布尔整数序列")
+        if len(set(int(value) for value in values)) != len(values):
+            raise ValueError(f"{name} 不得重复")
+        if nonnegative and any(int(value) < 0 for value in values):
+            raise ValueError(f"{name} 必须为非负整数")
+    z_values = tuple(int(value) for value in z_values)
+    bx_values = tuple(int(value) for value in bx_values)
+    by_values = tuple(int(value) for value in by_values)
+    if L is None:
+        L = max((abs(value) for value in z_values), default=0)
+    if isinstance(L, (bool, np.bool_)) or not isinstance(
+            L, (int, np.integer)) or int(L) < 0:
+        raise ValueError("L 必须是非负非布尔整数")
+    L = int(L)
+    if U.ndim != 7 or U.shape[4] != 4 or U.shape[5] != U.shape[6]:
+        raise ValueError("U 必须具有 (Nt,Nz,Ny,Nx,4,Nc,Nc) 七轴 shape")
+
+    output_dtype = np.dtype(_to_cpu(U).dtype)
+    output = np.zeros(
+        (2, 4, 6, len(z_values), len(bx_values), len(by_values),
+         int(U.shape[0])),
+        dtype=output_dtype,
+    )
+    if not z_values or not bx_values or not by_values:
+        return output
+    fields = _tmd_field_dictionary(U)
+    i, j = (z_dir + 1) % 3, (z_dir + 2) % 3
+    dual_fields = dict(fields)
+    for pair in ((3, i), (3, j), (i, j)):
+        canonical = (min(pair), max(pair))
+        dual = compute_dual_field_strength(fields, *pair)
+        dual_fields[canonical] = dual if pair == canonical else -dual
+    channels = (('unpolarized', fields), ('helicity', dual_fields))
+    for channel_index, (channel, second_fields) in enumerate(channels):
+        for z_index, z in enumerate(z_values):
+            for bx_index, b_x in enumerate(bx_values):
+                for by_index, b_y in enumerate(by_values):
+                    components = []
+                    for signed_z in (z, -z):
+                        W = staple_wilson_line_2d(
+                            U, signed_z, b_x, b_y, z_dir=z_dir,
+                            b_x_dir=b_x_dir, b_y_dir=b_y_dir, L=L,
+                            transverse_order=transverse_order)
+                        endpoint = [0, 0, 0]
+                        endpoint[z_dir] += signed_z
+                        endpoint[b_x_dir] += b_x
+                        endpoint[b_y_dir] += b_y
+                        components.append(_tmd_channel_components(
+                            fields, second_fields, W, endpoint,
+                            z_dir, channel, color_normalization,
+                        ))
+                    plus, minus = components
+                    for component_index in range(6):
+                        plus_value = plus[component_index]
+                        minus_value = minus[component_index]
+                        for orientation_index, value in enumerate((
+                                plus_value, minus_value,
+                                plus_value + minus_value,
+                                plus_value - minus_value)):
+                            summed = np.sum(
+                                _to_cpu(value), axis=(1, 2, 3))
+                            output[
+                                channel_index, orientation_index,
+                                component_index, z_index, bx_index,
+                                by_index, :,
+                            ] = np.asarray(summed, dtype=output_dtype)
+    return output
 
 
 def _gluon_tmd_operator_from_fields(

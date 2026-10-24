@@ -13,7 +13,6 @@
 - 关键内容: 删除12个大文件及全部LFS历史内容，重写并同步main与88个标签；Gitee服务端GC待网页触发
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
-
 ### 20261020-git-slimming-gc-verify - final - 2026-10-20 01:08:39 +0800
 - 主任务: Gitee GC 后远程物理删除复核
 - 日志文件: logs/v2026102001-2.txt
@@ -22,7 +21,6 @@
 - 关键内容: Gitee GC后旧main SHA仍可读取，逻辑删除完成但服务端物理回收未确认
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
-
 ### pyqcd-form-20261020 - final - 2026-10-20 01:21:15 +0800
 - 主任务: PyQCD 2026-10-20 form 整改与功能复现
 - 日志文件: logs/v2026102001-3.txt
@@ -159,5 +157,93 @@
 - 文件大小: 41261 bytes
 - 触发原因: 任务完成
 - 关键内容: 单一日志包含完整源码补丁、环境、哈希、23/23 对照结果、回归失败清单与跨设备恢复步骤。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## cross-device-resume - final - 2026-10-24 22:33:41 +0800
+- 主任务: 衔接 4x4x4x8 PyQCD/donghx 对照测试跨设备交接
+- 日志文件: logs/v2026102422-4.txt
+- 文件大小: 5266 bytes
+- 触发原因: 任务完成
+- 关键内容: Linux 本机复跑 23/23 PASS，固定输入 SHA 匹配，生成并校验 artifact。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## tmd-finite-b-oracle - final - 2026-10-24 22:57:21 +0800
+- 主任务: 扩展有限 b_perp staple/TMD 验证
+- 日志文件: logs/v2026102422-5.txt
+- 文件大小: 5126 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增常量链接闭式路径、b=0/L 无关性和纯规范零场强三项 oracle；全量 112/112 PASS。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## finite-b-ratio-v2 - final - 2026-10-24 23:08:51 +0800
+- 主任务: 有限 b_perp 胶子 TMD C3/C2 ratio-v2 长任务
+- 日志文件: logs/v2026102423.txt
+- 文件大小: 6889 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增有限 b ratio-v2 公共 API、显式 b 元数据、独立 jackknife oracle 与中心-only JK 状态；全量 112/112 PASS。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## finite-b-integration-gate - final - 2026-10-24 23:33:45 +0800
+- 主任务: 有限 b_perp TMD 端到端输入审计与跨组态统计集成
+- 日志文件: logs/v2026102423-2.txt
+- 文件大小: 8095 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增 source-resolved 跨组态 ratio-v2 API 与只读输入审计 CLI；真实工作区因 Nconf=1、C2 非源分辨且 OPE 非全通道而 blocked；全量 112/112 PASS。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## finite-b-full-channel-ope - final - 2026-10-25 00:02:53 +0800
+- 主任务: 有限 b_perp 全通道 TMD OPE producer 与 canonical cache
+- 日志文件: logs/v2026102500.txt
+- 文件大小: 7115 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增 (2,4,6,nz,nb,Nt) producer、独立 full-channel v2 cache/loader 与严格审计；b=0 全方向 straight 差异 1.243e-14；全量 112/112 PASS。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## finite-b-end-to-end-synthetic - final - 2026-10-25 00:06:11 +0800
+- 主任务: 两配置有限 b TMD audit-to-ratio 合成端到端链
+- 日志文件: logs/v2026102500-2.txt
+- 文件大小: 5580 bytes
+- 触发原因: 任务完成
+- 关键内容: 完成 producer→OPE cache→source-resolved C2 cache→audit ready→ratio-v2→Im(R_H) 两配置受控闭环；物理契约 16/16、全量 112/112 PASS。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## finite-b-2d-geometry - final - 2026-10-25 00:12:41 +0800
+- 主任务: 二维有限横向位移 staircase 与 full-channel TMD OPE geometry
+- 日志文件: logs/v2026102500-3.txt
+- 文件大小: 5002 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增显式 transverse_order 的二维 staple、2D 端点矩阵元与 (2,4,6,nz,nbx,nby,Nt) producer；常量闭式、规范协变、1D 退化均通过；全量 112/112 PASS。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## finite-b-2d-cache - final - 2026-10-25 00:21:42 +0800
+- 主任务: 二维 full-channel TMD OPE canonical cache 与 loader
+- 日志文件: logs/v2026102500-4.txt
+- 文件大小: 5361 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增 v3 2D cache contract/compute/loader，绑定 bx/by 网格、方向与 transverse_order；三请求隔离、1D loader 不误命中、全量 112/112 PASS。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## finite-b-ratio-v3-public-data - final - 2026-10-25 01:46:42 +0800
+- 主任务: 二维 finite-b ratio-v3、真实 full-channel OPE 与跨组态审计
+- 日志文件: logs/v2026102501.txt
+- 文件大小: 7752 bytes
+- 触发原因: 任务完成
+- 关键内容: 完成 ratio-v3/cross-config、full-channel OPE/cache、真实 4150/6250 输入审计；全量 112/112 PASS，结构 ready，真实 pol35 仍缺失。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## polarized-c2-v3-real-4150-6250 - final - 2026-10-25 02:49:07 +0800
+- 主任务: source-resolved nopol/pol35 v3 C2 与真实 4150/6250 ratio 接线
+- 日志文件: logs/v2026102502.txt
+- 文件大小: 6326 bytes
+- 触发原因: 任务完成
+- 关键内容: 完成 v3 双极化合同、真实 4150/6250 C2、audit v2 和 ratio 接线；4150 公共参考误差 1e-8/1e-6，全量 112/112 PASS。
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
