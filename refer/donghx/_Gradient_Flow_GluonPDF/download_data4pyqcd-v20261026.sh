@@ -40,7 +40,7 @@ Usage: download_data4pyqcd-v20261026.sh [OPTIONS]
 Options:
   --dry-run              Validate and print transfers without network access
   --yes, -y              Do not prompt before each file or directory
-  --skip-existing        Skip only entries completed by this script
+  --skip-existing        Skip completed entries; verify unmarked files by SHA-256
   --resume               Alias for --skip-existing
   --dest-root PATH       Preserve /public and /nexdata below PATH (default: /)
   --list FILE            Use a different sample list
@@ -166,6 +166,24 @@ remote_kind() {
         "if [ -d $quoted ]; then echo dir; elif [ -f $quoted ]; then echo file; else echo missing; fi"
 }
 
+remote_file_size() {
+    local remote_path quoted size
+    remote_path=$1
+    quoted=$(quote_remote_path "$remote_path") || return 1
+    size=$(ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" "stat -c%s $quoted") || return 1
+    [[ "$size" =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "$size"
+}
+
+remote_file_sha256() {
+    local remote_path quoted checksum
+    remote_path=$1
+    quoted=$(quote_remote_path "$remote_path") || return 1
+    checksum=$(ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" "sha256sum $quoted" | awk '{print $1}') || return 1
+    [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$checksum"
+}
+
 list_state_file() {
     local remote_path=$1 key
     key=$(printf '%s' "$remote_path" | sha256sum | awk '{print $1}')
@@ -173,11 +191,26 @@ list_state_file() {
 }
 
 already_complete() {
-    local remote_path=$1 local_path=$2 expected=$3 state marker_size marker_path
+    local remote_path=$1 local_path=$2 expected=$3 kind=$4
+    local state marker_size marker_path remote_size local_size remote_checksum local_checksum
     state=$(list_state_file "$remote_path")
-    [[ -e "$state" && -e "$local_path" ]] || return 1
-    IFS=$'\t' read -r marker_size marker_path < "$state" || return 1
-    [[ "$marker_size" == "$expected" && "$marker_path" == "$remote_path" ]]
+    if [[ -e "$state" && -e "$local_path" ]]; then
+        if IFS=$'\t' read -r marker_size marker_path < "$state" &&
+            [[ "$marker_size" == "$expected" && "$marker_path" == "$remote_path" ]]; then
+            return 0
+        fi
+    fi
+
+    # The list stores allocated bytes, so unmarked files require a checksum
+    # against the remote source instead of trusting the list or preallocated size.
+    [[ "$kind" == file && "$DRY_RUN" == false && -f "$local_path" ]] || return 1
+    printf '  VERIFY: existing file lacks a completion marker; comparing SHA-256...\n'
+    remote_size=$(remote_file_size "$remote_path") || return 1
+    local_size=$(stat -c%s "$local_path" 2>/dev/null) || return 1
+    [[ "$remote_size" == "$local_size" ]] || return 1
+    remote_checksum=$(remote_file_sha256 "$remote_path") || return 1
+    local_checksum=$(sha256sum "$local_path" | awk '{print $1}') || return 1
+    [[ "$remote_checksum" == "$local_checksum" ]]
 }
 
 mark_complete() {
@@ -309,8 +342,11 @@ for i in "${!LIST_PATHS[@]}"; do
     printf '\n[%d/%d] %s (%s, %s bytes)\n' "$((i + 1))" "$ENTRY_COUNT" "$remote_path" "$kind" "$expected"
     printf '  Local: %s\n' "$local_path"
 
-    if $SKIP_EXISTING && already_complete "$remote_path" "$local_path" "$expected"; then
-        printf '  SKIP: completed entry recorded by this script\n'
+    if $SKIP_EXISTING && already_complete "$remote_path" "$local_path" "$expected" "$kind"; then
+        if ! $DRY_RUN; then
+            mark_complete "$remote_path" "$expected"
+        fi
+        printf '  SKIP: completed entry verified\n'
         COUNT_SKIPPED=$((COUNT_SKIPPED + 1))
         continue
     fi

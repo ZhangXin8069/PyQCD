@@ -334,3 +334,11 @@
 - 关键内容: Fix SCP directory transfers and preserve remote absolute paths from /
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## v20261026 - final - 2026-10-26 03:51:29 +0800
+- 主任务: fix download skip-existing re-download behavior
+- 日志文件: logs/v2026102603-2.txt
+- 文件大小: 6764 bytes
+- 触发原因: 任务完成
+- 关键内容: Verify unmarked existing files by remote/local size and SHA-256 before skipping
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
