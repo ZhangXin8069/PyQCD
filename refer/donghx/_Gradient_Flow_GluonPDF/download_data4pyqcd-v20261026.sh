@@ -2,23 +2,23 @@
 # Download the sampled PyQCD comparison data listed in data4pyqcd_list-v20261025.txt.
 #
 # Usage:
-#   bash download_data4pyqcd-v20261025.sh
-#   bash download_data4pyqcd-v20261025.sh --dry-run
-#   bash download_data4pyqcd-v20261025.sh --yes --skip-existing
-#   bash download_data4pyqcd-v20261025.sh --dest-root /data/pyqcd
-#   bash download_data4pyqcd-v20261025.sh --dest-root / --yes --skip-existing
+#   bash download_data4pyqcd-v20261026.sh
+#   bash download_data4pyqcd-v20261026.sh --dry-run
+#   bash download_data4pyqcd-v20261026.sh --yes --skip-existing
+#   bash download_data4pyqcd-v20261026.sh --dest-root /data/pyqcd
+#   bash download_data4pyqcd-v20261026.sh --dest-root / --yes --skip-existing
 #
 # Default destination:
-#   <script-dir>/data4pyqcd-v20261025/public/...
-#   <script-dir>/data4pyqcd-v20261025/nexdata/...
+#   /public/...
+#   /nexdata/...
 #
-# The remote absolute path is always preserved beneath --dest-root.
+# The remote absolute path is preserved exactly beneath --dest-root.
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 LIST_FILE="${SCRIPT_DIR}/data4pyqcd_list-v20261025.txt"
-DEST_ROOT="${SCRIPT_DIR}/data4pyqcd-v20261025"
+DEST_ROOT="/"
 
 SSH_HOST="${PYQCD_SSH_HOST:-222.200.137.16}"
 SSH_PORT="${PYQCD_SSH_PORT:-10023}"
@@ -35,14 +35,14 @@ SKIP_EXISTING=false
 
 usage() {
     cat <<'EOF'
-Usage: download_data4pyqcd-v20261025.sh [OPTIONS]
+Usage: download_data4pyqcd-v20261026.sh [OPTIONS]
 
 Options:
   --dry-run              Validate and print transfers without network access
   --yes, -y              Do not prompt before each file or directory
   --skip-existing        Skip only entries completed by this script
   --resume               Alias for --skip-existing
-  --dest-root PATH       Preserve /public and /nexdata below PATH
+  --dest-root PATH       Preserve /public and /nexdata below PATH (default: /)
   --list FILE            Use a different sample list
   --help, -h             Show this help
 
@@ -133,8 +133,8 @@ fi
 
 DEST_ROOT=${DEST_ROOT%/}
 [[ -n "$DEST_ROOT" ]] || DEST_ROOT=/
-STATE_DIR="${DEST_ROOT%/}/.download-state/data4pyqcd-v20261025"
-[[ "$DEST_ROOT" == / ]] && STATE_DIR="/.download-state/data4pyqcd-v20261025"
+STATE_DIR="${DEST_ROOT%/}/.download-state/data4pyqcd-v20261026"
+[[ "$DEST_ROOT" == / ]] && STATE_DIR="/.download-state/data4pyqcd-v20261026"
 
 map_remote_to_local() {
     local remote_path=$1
@@ -212,12 +212,12 @@ download_file() {
 
 download_dir() {
     local remote_path=$1 local_path=$2
-    mkdir -p "$local_path"
     if [[ "$TRANSFER_TOOL" == rsync ]]; then
         rsync -avP --partial --partial-dir=.rsync-partial -e "ssh ${SSH_COMMON_OPTS[*]}" \
             "${SSH_TARGET}:${remote_path}/" "${local_path}/"
     else
-        scp -r "${SCP_OPTS[@]}" "${SSH_TARGET}:${remote_path}/." "${local_path}/"
+        # Copy the directory itself into its parent; scp's SFTP mode rejects a trailing "/.".
+        scp -r "${SCP_OPTS[@]}" "${SSH_TARGET}:${remote_path}" "$(dirname "$local_path")/"
     fi
 }
 

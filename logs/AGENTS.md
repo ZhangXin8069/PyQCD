@@ -326,3 +326,11 @@
 - 关键内容: 4 提交；分母差 5.7σ；τ=1 试点 11 组态；33 页 11 图三零；112/112
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## v20261026 - final - 2026-10-26 03:40:41 +0800
+- 主任务: rename and fix download_data4pyqcd-v20261026.sh
+- 日志文件: logs/v2026102603.txt
+- 文件大小: 5392 bytes
+- 触发原因: 任务完成
+- 关键内容: Fix SCP directory transfers and preserve remote absolute paths from /
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
