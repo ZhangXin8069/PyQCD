@@ -129,7 +129,9 @@ soft/rapidity、完整胶子-夸克 matching、多流时或多格距连续极限
 相位敏感度，不是跨 \(\ts\) 的稳定相位，也不是 ratio 的统计误差。
 同一受控复输入的实测 denominator 差为
 \(\max|\Delta R|=6.77\times10^{-3}\)（归一化最大差 7.86\%，
-相对 \(L_2\) 7.28\%）。这不是胶子-夸克算符混合，而是估计量/相位约定差异；
+相对 \(L_2\) 7.28\%）。在真实 11 组态上，该约定差在 P400、\(\ts/a=10\)
+达到 \(\max|\Delta R|/\sigma_{\rm JK}=5.7\)（unpolarized）与 \(3.1\)（helicity），
+而 P000/P200 均小于 \(0.2\)。这不是胶子-夸克算符混合，而是估计量/相位约定差异；
 在统一之前，不能把当前数值与 donghx 的绝对 ratio 直接等同。
 \end{abstract}
 
@@ -756,9 +758,9 @@ Wilson flow 的 complex64 相对 \(L_2\le2.5\times10^{-7}\)、直线胶子 OPE
 \begin{keybox}
 所有 \code{finite_fraction=1} 和 \code{covariance_rank=10} 都只证明“没有 NaN/Inf”以及
 “达到样本秩上限”。它们不证明每个 \(z,b,\ts\) 点是独立、稳定或物理可用的。
-口径说明：1D 核心函数的 schema 仍是 \code{gradient\_flow\_gluon\_tmd\_ratio\_v2}；
+口径说明：1D 核心函数的 schema 仍是 \code{gradient_flow_gluon_tmd_ratio_v2}；
 文件名中的 “ratio-v3/all11” 是批次产物名，真正显式 v3 的是 2D 路径和
-\code{all11\_ratio\_v3} 汇总文件。
+\code{all11_ratio_v3} 汇总文件。
 \end{keybox}
 
 \subsection{B9 全部图表与物理结果分析}
@@ -790,6 +792,7 @@ F6 & \pathref{figures/tmd_gluon_audit_20261025/fig06_plateau_instability.pdf} & 
 F7 & \pathref{figures/tmd_gluon_audit_20261025/fig07_staircase_order_sensitivity.pdf} & \((0,1)\) 与 \((1,0)\) 路径顺序差 \\
 F8 & \pathref{figures/tmd_gluon_audit_20261025/fig08_flow_window_check.pdf} & \(r_f/a=4.899\) 与全部非零 \(b\) 的窗口冲突 \\
 F9 & \pathref{figures/tmd_gluon_audit_20261025/fig09_nopol_denominator_phase.pdf} & 复/实 \texttt{nopol} 分母约定敏感性 \\
+F10 & \pathref{figures/tmd_gluon_audit_20261025/fig10_denominator_convention.pdf} & 真实 11 组态上 real/complex 分母的差异与 JK 显著性 \\
 \bottomrule
 \end{xltabular}
 
@@ -977,6 +980,69 @@ R_H^{\rm PyQCD}\approx R_H^{\rm donghx}
 也不得把两套中心值直接相减。建议把 denominator convention 变为显式选择，
 并在同一 JK 样本上报告 complex-denominator 与 real-denominator 的并列 sensitivity。
 
+\subsubsection{B9.8 复/实分母的真实数据敏感度}
+
+\textbf{实现.} \code{covariance_ratio_estimator} 与
+\code{calculate_gradient_flow_tmd_ratios*} 入口新增
+\code{denominator_mode="complex"|"real"}：disconnected 分子始终使用
+复数 \(C_2\)，real 模式只把归一化分母替换为 \(\Real C_2\)。
+用冻结的 11 组态 C2 与 full-channel 1D OPE 重算，complex 模式与生产
+\code{*_ratio_v3_diagnostic.npz} 逐元素一致
+（P000/P200/P400 的 \(\max|\Delta|=0\)），证明新选项未改变默认结果。
+
+\textbf{解析关系.} 对每个 \((z,b,t_{\rm ins},\ts)\)，
+\begin{equation}
+R^{\rm real}=R^{\rm complex}\frac{C_2^{\rm nopol}}{\Real C_2^{\rm nopol}}
+=R^{\rm complex}\left(1+i\frac{\Imag C_2}{\Real C_2}\right),
+\label{eq:denominator-factor}
+\end{equation}
+所以中心值的相对差严格等于分母相位；真实数据上该恒等式的最大偏差为
+\(2.3\times10^{-14}\)。但 JK 误差不是简单倍数：每个 delete-one 样本的
+分母相位不同，必须用同一 JK 样本并列重算。
+
+\textbf{结果.} 表 13 与图 10 给出 11 组态、\code{even_sum}/\code{combined}、
+insertion 窗平均的 unpolarized 与 helicity 结果。
+P000/P200 的约定差在所有 \(\ts\) 都小于 \(0.2\sigma\)，可以忽略；
+P400 在 \(\ts/a=8\) 达到约 \(1.0/1.2\sigma\)，在 \(\ts/a=10\) 达到
+\(5.7\sigma\)（unpolarized）与 \(3.1\sigma\)（helicity），
+相对 \(L_2\) 分别为 105\% 与 43\%。
+这是 \(|\Imag/\Real|=121\%\) 的相位在晚 \(\ts\) 放大后的结果，不是新的统计涨落。
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{复/实分母在真实 11 组态上的差异（source-resolved C2 + full-channel OPE；\(\sigma\) 取 complex 模式的 delete-one JK）}
+\begin{tabular}{@{}l r r r r r@{}}
+\toprule
+动量 & \(\ts/a\) & \(|\Imag C_2/\Real C_2|\) (\%) & \(\max|\Delta R|\) & unpol. \(\max|\Delta R|/\sigma\) & helicity \(\max|\Delta R|/\sigma\) \\
+\midrule
+P000 & 5 & 0.34 & \(2.12\times10^{-4}\) & 0.01 & 0.03 \\
+P000 & 8 & 0.90 & \(5.76\times10^{-4}\) & 0.02 & 0.05 \\
+P000 & 10 & 2.05 & \(2.77\times10^{-3}\) & 0.08 & 0.09 \\
+P200 & 5 & 0.62 & \(2.57\times10^{-4}\) & 0.02 & 0.05 \\
+P200 & 8 & 1.29 & \(1.16\times10^{-3}\) & 0.03 & 0.10 \\
+P200 & 10 & 1.80 & \(7.25\times10^{-3}\) & 0.10 & 0.18 \\
+P400 & 5 & 2.22 & \(6.55\times10^{-3}\) & 0.15 & 0.09 \\
+P400 & 8 & 15.60 & \(2.52\times10^{-1}\) & 1.02 & 1.21 \\
+P400 & 10 & 121.2 & \(6.78\) & 5.67 & 3.08 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.98\textwidth,height=0.46\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig10_denominator_convention.pdf}
+\caption{左：\texttt{nopol} \(C_2\) 的 \(|\Imag/\Real|\) 随 \(\ts\)；中/右：unpolarized 与 helicity 通道中 real 与 complex 分母的 \(\max|\Delta R|/\sigma_{\rm JK}\)。虚线为一个 JK 误差。}
+\end{figure}
+
+\textbf{物理解析.} 该结果把“约定选择”从口头警告变成可量化系统：
+若统一到 real 分母，P400 晚 \(\ts\) 的中心值会移动超过 5 个 JK 误差，
+在同一张图上混合两套约定会产生假的 \(\ts\) 趋势；而 P000/P200 的差异
+远小于统计误差，不构成当前主导不确定性。无论选哪一种，\(\ts\) 漂移本身
+（B9.1）都远大于该约定差，所以状态仍是 \statusdiag。
+下一步必须在生产配置中显式写死 \code{denominator_mode} 并写入
+manifest/audit 身份，而不是在分析阶段临时换算。
+
 \subsection{B10 综合分析}
 
 \subsubsection{B10.1 对称性、极限与不变量}
@@ -1000,7 +1066,7 @@ R_H^{\rm PyQCD}\approx R_H^{\rm donghx}
 二维路径顺序 & 算符身份 & \(b_y=1\) 切片差约 2\%；连续极限未做 \\
 \(\ts\) 平台 & 失败 & 无动量在整个 \((z,b)\) 面通过均匀平台；最坏点 P400 达 \(>10\) \\
 流窗口 & 失败 & 非零 \(b<r_f\)、\(z\le4<r_f\)、\(\Pz r_f/(\hbar c)>1\)、\(L_\parallel=L_s/2\) \\
-分母约定 & 未统一 & ratio-v3 复 \(C_2\)；主 \texttt{\_disconnected}/donghx 实 \(C_2\) \\
+分母约定 & 未统一（已量化） & ratio-v3 复 \(C_2\)；real 模式已显式实现并与生产复算逐元素核对（B9.8）；晚 \(\ts\) 差异达 \(5.7\sigma\) \\
 soft/rapidity & 未实现 & 无同几何软函数、CS 核或 rapidity subtraction \\
 完整 matching & 未实现 & 只有 gg-only 诊断接口，无 \(g/q_S/\bar q_S\) 单态 \\
 连续极限 & 未实现 & 单 \(a\)、单 \(\tau\)、单 \(L_\parallel\)、单系综 \\
@@ -1108,12 +1174,14 @@ Lüscher 的 Wilson flow \cite{Luscher2010}、Lüscher--Weisz 微扰分析
 
 \subsubsection{B15.1 图表闭合清单}
 
-本报告 9 张图全部由真实 all11 结果生成，统一由
+本报告 10 张图全部由真实 all11 结果生成，统一由
 \pathref{data/runs/tmd-audit-20261025/make_figures.py} 重生成：
 F1--F3 来自 1D plateau 协方差 NPZ；F4 来自 2D plateau 协方差 NPZ
 （完整 \(z/a=0,\ldots,12\)）；F5 来自 covariance eigenvalues；
 F6 来自 plateau/error；F7 来自 4150/6250 的 order \((0,1)/(1,0)\) 2D OPE HDF5；
-F8 是固定 \(\tau=3\) 的解析尺度关系；F9 来自 11 组态 v3 \texttt{nopol} C2 HDF5。
+F8 是固定 \(\tau=3\) 的解析尺度关系；F9 来自 11 组态 v3 \texttt{nopol} C2 HDF5；
+F10 来自 \pathref{data/runs/tmd-audit-20261025/denominator_convention.py} 对同一
+C2/OPE 的 real/complex 并列重算（complex 路径与生产 NPZ 逐元素一致）。
 任何图中都没有用合成值替代真实数据；只有 F8 是解析尺度检查示意。
 图 F5 的秩阈值固定为 \(\lambda>10^{-8}\lambda_{\max}\)，F7 的左右两图分别标注
 切片相对 \(L_2\) 与逐 \((z,b_x)\) 相对差，避免与完整二维值混淆。
@@ -1143,6 +1211,7 @@ python -B -m pyqcd.testing.tmd.audit_finite_b_inputs \
 python -B -m pyqcd.testing.tmd.audit_finite_b_inputs --dimension 2d \
   --run-dir data/runs/tmd-production-10conf \
   --conf-ids 4150,6250,6450,6650,6850,7050,7250,7450,7650,7850,8050
+python -B data/runs/tmd-audit-20261025/denominator_convention.py
 python data/runs/tmd-audit-20261025/make_figures.py
 for i in 1 2 3; do xelatex -interaction=nonstopmode -halt-on-error \
   docs/report_tmd_gluon_audit_20261025.tex; done
@@ -1187,7 +1256,8 @@ Euclidean 诊断链的实质性扩展，并在 11 个真实组态上生成了完
 材料；软件与算符合同通过 112 项回归。当前数据只能支持 \statusdiag，
 不支持物理 TMD-PDF 或 \(\Delta G(x,\bT)\) 声称。下一阶段的决定性问题不是继续增加
 同一 \(\tau,a\) 参数点的图，而是先建立合法流窗口、稳定基态平台和统一的
-\texttt{nopol} 分母约定，再进入 soft/rapidity、ZR/hybrid、matching 与连续极限。
+\texttt{nopol} 分母约定（差异已量化，见 B9.8），再进入 soft/rapidity、
+ZR/hybrid、matching 与连续极限。
 \end{conclbox}
 
 \begin{thebibliography}{99}

@@ -92,7 +92,8 @@ def _validate_tseps(tseps, nt):
 
 def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
                                denominator_correlator=None,
-                               return_jackknife=False):
+                               return_jackknife=False,
+                               denominator_mode="complex"):
     """计算一个插入量的 disconnected ratio 和 delete-one jackknife。
 
     Args:
@@ -101,18 +102,26 @@ def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
             投影；unpolarized 使用 nopol，helicity 使用 pol35。
         do_jackknife: 是否生成 Nconf 个 delete-one 样本。
         denominator_correlator: ratio 分母的 C2；省略时使用 correlator。
+        denominator_mode: ``"complex"``（默认，ratio-v3 约定）或
+            ``"real"``（`ensemble_covariance_ratio`/donghx 约定，取
+            denominator C2 的实部）。disconnected 分子始终使用复数 C2。
 
     Returns:
         ``(c3_central, c2_central, ratio_jk_mean,
         ratio_jk_bias_corrected, error_real, error_imag)``。
         central ratio 不做实部/虚部截断。
     """
+    if denominator_mode not in ("complex", "real"):
+        raise ValueError(
+            f"denominator_mode 必须是 'complex' 或 'real'，收到 {denominator_mode!r}")
     op = _as_complex128(operator, "operator")
     c2 = _as_complex128(correlator, "correlator")
     denominator = (
         c2 if denominator_correlator is None
         else _as_complex128(denominator_correlator, "denominator_correlator")
     )
+    if denominator_mode == "real":
+        denominator = np.real(denominator)
     if not isinstance(return_jackknife, (bool, np.bool_)):
         raise ValueError("return_jackknife 必须是布尔值")
     return_jackknife = bool(return_jackknife)
@@ -233,7 +242,8 @@ def _component_labels_for_count(ncomp, component_labels):
 
 def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
                                    component_labels=None,
-                                   store_jackknife_samples=False):
+                                   store_jackknife_samples=False,
+                                   denominator_mode="complex"):
     """按参考 ratio-v2 轴构造所有 channel/orientation/component ratio。
 
     Args:
@@ -325,6 +335,7 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
                         do_jackknife=do_jackknife,
                         denominator_correlator=denominator_by_dt[:, dt_index],
                         return_jackknife=store_jackknife_samples,
+                        denominator_mode=denominator_mode,
                     )
                     if store_jackknife_samples:
                         (c3_one, c2_one, mean_one, bias_one, err_r, err_i,
@@ -370,6 +381,7 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
         ),
         "polarization_for_channel": dict(POLARIZATION_FOR_CHANNEL),
         "denominator_polarization": "nopol",
+        "denominator_mode": denominator_mode,
         "do_jackknife": do_jackknife,
         "input_precision": input_precision,
     }
@@ -455,7 +467,8 @@ def _validate_tmd_ratio_2d_metadata(
 
 def calculate_gradient_flow_tmd_ratios(
         ope, twopt, tseps, b_values, do_jackknife=True,
-        component_labels=None, store_jackknife_samples=False):
+        component_labels=None, store_jackknife_samples=False,
+        denominator_mode="complex"):
     """Construct ratio-v2 statistics with explicit ``(z,b)`` observables.
 
     Args:
@@ -502,6 +515,7 @@ def calculate_gradient_flow_tmd_ratios(
         do_jackknife=do_jackknife,
         component_labels=component_labels,
         store_jackknife_samples=store_jackknife_samples,
+        denominator_mode=denominator_mode,
     )
     for key in (
             "c3_mean", "ratio", "ratio_jackknife_mean",
@@ -529,7 +543,7 @@ def calculate_gradient_flow_tmd_ratios_2d(
         ope, twopt, tseps, b_x_values, b_y_values, *,
         z_dir=2, b_x_dir=0, b_y_dir=1, transverse_order=(0, 1),
         do_jackknife=True, component_labels=None,
-        store_jackknife_samples=False):
+        store_jackknife_samples=False, denominator_mode="complex"):
     """Construct ratio-v3 statistics with explicit ``(z,b_x,b_y)`` axes."""
     input_precision = _input_complex_precision(ope, twopt)
     array = _as_complex128(ope, "ope")
@@ -555,6 +569,7 @@ def calculate_gradient_flow_tmd_ratios_2d(
         do_jackknife=do_jackknife,
         component_labels=component_labels,
         store_jackknife_samples=store_jackknife_samples,
+        denominator_mode=denominator_mode,
     )
     for key in (
             "c3_mean", "ratio", "ratio_jackknife_mean",
@@ -588,7 +603,7 @@ def calculate_gradient_flow_tmd_ratios_2d(
 def calculate_gradient_flow_tmd_ratios_from_configurations(
         ope_by_conf, twopt_by_conf, conf_ids, b_values, tseps,
         do_jackknife=True, component_labels=None,
-        store_jackknife_samples=False):
+        store_jackknife_samples=False, denominator_mode="complex"):
     """Stack source-resolved configuration inputs in an explicit shared order.
 
     Each OPE entry has shape
@@ -656,6 +671,7 @@ def calculate_gradient_flow_tmd_ratios_from_configurations(
         do_jackknife=do_jackknife,
         component_labels=component_labels,
         store_jackknife_samples=store_jackknife_samples,
+        denominator_mode=denominator_mode,
     )
     index_bytes = np.asarray(ids, dtype='<i8').tobytes(order='C')
     result["conf_ids"] = ids
@@ -673,7 +689,8 @@ def calculate_gradient_flow_tmd_ratios_2d_from_configurations(
         ope_by_conf, twopt_by_conf, conf_ids, b_x_values, b_y_values,
         tseps, *, z_dir=2, b_x_dir=0, b_y_dir=1,
         transverse_order=(0, 1), do_jackknife=True,
-        component_labels=None, store_jackknife_samples=False):
+        component_labels=None, store_jackknife_samples=False,
+        denominator_mode="complex"):
     """Stack source-resolved inputs for two-component transverse ratios."""
     try:
         ids = tuple(conf_ids)
@@ -741,6 +758,7 @@ def calculate_gradient_flow_tmd_ratios_2d_from_configurations(
         do_jackknife=do_jackknife,
         component_labels=component_labels,
         store_jackknife_samples=store_jackknife_samples,
+        denominator_mode=denominator_mode,
     )
     index_bytes = np.asarray(ids, dtype='<i8').tobytes(order='C')
     result["conf_ids"] = ids

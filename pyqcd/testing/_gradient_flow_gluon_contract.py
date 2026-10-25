@@ -323,6 +323,52 @@ class GradientFlowGluonContract(unittest.TestCase):
             "丢弃 pol35 实部没有暴露 estimator 差异",
         )
 
+        real_mode = covariance_ratio_estimator(
+            operator, pol35, True, denominator_correlator=nopol,
+            denominator_mode="real",
+        )
+        real_denominator = c2.real
+        np.testing.assert_allclose(real_mode[0], c3, rtol=0, atol=3e-14)
+        np.testing.assert_allclose(
+            real_mode[1], real_denominator, rtol=0, atol=3e-14)
+        np.testing.assert_allclose(
+            real_mode[0] / real_mode[1][None, :],
+            c3 / real_denominator[None, :],
+            rtol=0, atol=3e-14,
+        )
+        nconf = operator.shape[0]
+        nsource = operator.shape[2]
+        direct_jk = []
+        for omitted in range(nconf):
+            selected = np.delete(np.arange(nconf), omitted)
+            op = operator[selected]
+            corr = pol35[selected]
+            denominator = nopol[selected].real
+            size = len(selected)
+            cross = np.einsum(
+                "nos,nsp->op", op, corr, optimize=True) / nsource / size
+            disconnected = np.einsum(
+                "os,sp->op", op.sum(axis=0), corr.sum(axis=0),
+                optimize=True,
+            ) / nsource / (size * size)
+            direct_jk.append(
+                (cross - disconnected)
+                / denominator.mean(axis=(0, 1))[None, :])
+        direct_jk = np.asarray(direct_jk)
+        np.testing.assert_allclose(
+            real_mode[2], direct_jk.mean(axis=0), rtol=0, atol=3e-14)
+        np.testing.assert_allclose(
+            real_mode[3],
+            nconf * (c3 / real_denominator[None, :])
+            - (nconf - 1) * direct_jk.mean(axis=0),
+            rtol=0, atol=3e-14,
+        )
+        with self.assertRaises(ValueError):
+            covariance_ratio_estimator(
+                operator, pol35, True, denominator_correlator=nopol,
+                denominator_mode="bogus",
+            )
+
     def test_ratio_axes_nopol_denominator_and_final_phase_projection(self):
         from pyqcd.analysis import (
             calculate_gradient_flow_ratios,
