@@ -138,6 +138,8 @@ MyQCD 对照；双遍 XeLaTeX，Overfull=0、Float too large=0、Missing charact
 complex 路径与生产 NPZ 逐元素一致，P000/P200 差 <0.2σ，P400 晚 `t_sep` 达 5.7σ。
 三遍 XeLaTeX 达成 Overfull=0、Float too large=0、Missing character=0，`python -B -m pyqcd.testing`
 112/112 通过；结论保持 diagnostic_only、不支持物理 TMD-PDF，2026-10-25 生成。
+另附 3 组态 τ=1.0 full-channel 流窗口试点（`data/runs/tmd-audit-20261025/flow_window_pilot.py`，
+`r_f/a=2.828`）：τ=3 的单调 b 压低在窗口外点消失，但 3 组态/JK 秩 2 仅作路线验证。
 
 ## torch 后端 + h5 IO + MPI 并行（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
 
