@@ -64,7 +64,10 @@ validation。
 方案仍缺 soft/rapidity、匹配和连续极限，也不能把路径顺序不同的离散结果混用。
 source-resolved 核子 C2 使用 v3
 `nopol/pol35` 极化身份、complex128 `(source,dt)` 与反周期边界；旧 v2 实数
-nopol 合同不得迁移为 helicity 输入。
+nopol 合同不得迁移为 helicity 输入。ratio-v3 的 nopol 分母现已显式支持
+`denominator_mode='complex'|'real'`（默认 complex，real 取 `Re C2`，对应主
+`_disconnected`/donghx 约定）；11 组态实测约定差严格等于 `C2/Re C2` 相位因子，
+P400 晚 `t_sep` 达 5.7σ（unpolarized），P000/P200 小于 0.2σ，跨约定比较必须声明模式。
 中心几何与锚定几何不能混用，复数不能在证明
 对称性前取实部或强行偶化。
 

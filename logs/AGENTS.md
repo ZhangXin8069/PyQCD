@@ -318,3 +318,11 @@
 - 关键内容: 审计高优先级项 0 遗留；AGENTS.md 登记 dev25 报告
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## tmd-audit-20261025 - final - 2026-10-25 19:13:08 +0800
+- 主任务: dev25 报告后续：分母约定量化、τ=1 流窗口试点与入库
+- 日志文件: logs/v2026102519.txt
+- 文件大小: 5797 bytes
+- 触发原因: 任务完成
+- 关键内容: 4 提交；分母差 5.7σ；τ=1 试点 11 组态；33 页 11 图三零；112/112
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
