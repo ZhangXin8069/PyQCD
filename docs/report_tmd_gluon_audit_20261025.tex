@@ -793,6 +793,7 @@ F7 & \pathref{figures/tmd_gluon_audit_20261025/fig07_staircase_order_sensitivity
 F8 & \pathref{figures/tmd_gluon_audit_20261025/fig08_flow_window_check.pdf} & \(r_f/a=4.899\) 与全部非零 \(b\) 的窗口冲突 \\
 F9 & \pathref{figures/tmd_gluon_audit_20261025/fig09_nopol_denominator_phase.pdf} & 复/实 \texttt{nopol} 分母约定敏感性 \\
 F10 & \pathref{figures/tmd_gluon_audit_20261025/fig10_denominator_convention.pdf} & 真实 11 组态上 real/complex 分母的差异与 JK 显著性 \\
+F11 & \pathref{figures/tmd_gluon_audit_20261025/fig11_flow_window_pilot.pdf} & 11 组态 $\tau=1.0/3.0$ full-channel 流窗口试点 \\
 \bottomrule
 \end{xltabular}
 
@@ -930,22 +931,31 @@ helicity phase 的对应最大值也都大于 1。按朴素判据 \(\le1\) 的�
 部分 \((z,b)\) 可满足流窗口；它们不是本次 full-channel \texttt{nopol/pol35} 链，
 不能与 all11 结果混同，也没有闭合本链。
 
-\textbf{初步 \(\tau=1.0\) 全通道试点.} 为检验“更换流时”是否改变结论，本报告在
-4150/6250/6450 三个组态上以同一 source-resolved C2 重算 full-channel OPE
+\textbf{\(\tau=1.0\) 全通道试点.} 为检验“更换流时”是否改变结论，本报告在全部
+11 个组态上以同一 source-resolved C2 重算 full-channel OPE
 （\(\tau=1.0\)、\(\epsilon=0.05\)、staple 12、\(z/a\in\{0,3,4,6,8,10,12\}\)、
 \(b/a\in\{0,3,4\}\)；\(r_f/a=2.828\)，故 \(b=3,4\) 与 \(z\ge3\) 均在流半径外）。
-在 \(\ts/a=8,z/a=6\)，\(\tau=3\) 的 \(R_U\) 从 \(b=0\) 的
-\(0.081\pm0.071\)（P200）/\(4.28\pm1.44\)（P400）降到 \(b=4\) 的
-\(-0.059\pm0.023\)/\(-0.311\pm0.116\)；\(\tau=1\) 在 \(b=3,4\) 为
-\(-0.033\pm0.262\)/\(-0.185\pm0.322\)（P200）与
-\(-0.290\pm1.059\)/\(0.398\pm1.210\)（P400）。
-即 \(\tau=3\) 的单调 \(b\) 压低在 \(\tau=1\) 的窗口外点上消失，
-与“流化平滑横向结构”的图像一致；但 \(b=0\) 的 P200 归一化也从
-\(0.081\) 变到 \(0.806\)，说明换流时改变的不只是 \(b<r_f\) 的平滑，
-还包括算符匹配。该试点只有 3 个组态、delete-one 秩 2、误差 \(O(0.3)\)--\(O(1.2)\)，
-不能提取平台或作物理结论；它只把“多组态 \(\tau\) 扫描”从建议变成有数据的路线。
+在 \(\ts/a=8,z/a=6\)：\(\tau=3\) 的 \(R_U\) 在 \(b=0,3\) 为
+\(-0.143\pm0.839\)/\(0.065\pm0.031\)（P200）与
+\(-1.641\pm1.723\)/\(0.027\pm0.322\)（P400）；
+\(\tau=1\) 的 \(b=3\) 为 \(-0.051\pm0.149\)（P200）与
+\(-0.045\pm1.900\)（P400）。两套流时都没有形成随 \(b\) 的单调结构，
+窗口外点均与零相容或绝对值很小；图 9 给出同一参考点的 \(b\) 依赖。
+更定量地，\(\ts\) 漂移/误差在 \((z,b)\) 上的中位数从 \(\tau=3\) 的
+1.68/9.03（P200/P400）降到 \(\tau=1\) 的 1.24/3.44，
+但最大值仍为 9.6/21.7 与 9.4/22.8。因此更换流时只能改善典型漂移，
+不能消除最坏点，平台失败不是单纯由 \(b<r_f\) 造成；小流时同时带来更大的
+UV/离散修正（\(b=0\) 归一化明显移动），不能作为物理解。
+该试点 11 个组态、delete-one 秩 10，但仍是单格距、固定 staple、单流时对照，
+不能提取物理平台；它把“多流时扫描”从建议变成有数据的路线。
 产物：\pathref{data/runs/tmd-flow-window-full-tau1p0/}（OPE cache）与
 \pathref{data/runs/tmd-audit-20261025/flow_window_pilot.py}。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.94\textwidth,height=0.44\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig11_flow_window_pilot.pdf}
+\caption{11 组态、\(z/a=6\)、\(\ts/a=8\) 的 \(R_U\) 随 \(b\)：红线为 \(\tau=3\) 的 \(b=0,\ldots,4\)，蓝点为 \(\tau=1\) 的 \(b=0,3,4\)。虚线/点线标出 \(r_f/a=4.899/2.828\)；\(b<r_f\) 的点在流半径内。}
+\end{figure}
 
 \subsubsection{B9.7 \texttt{nopol} 分母相位}
 
@@ -1191,14 +1201,16 @@ Lüscher 的 Wilson flow \cite{Luscher2010}、Lüscher--Weisz 微扰分析
 
 \subsubsection{B15.1 图表闭合清单}
 
-本报告 10 张图全部由真实 all11 结果生成，统一由
+本报告 11 张图全部由真实 all11 结果生成，统一由
 \pathref{data/runs/tmd-audit-20261025/make_figures.py} 重生成：
 F1--F3 来自 1D plateau 协方差 NPZ；F4 来自 2D plateau 协方差 NPZ
 （完整 \(z/a=0,\ldots,12\)）；F5 来自 covariance eigenvalues；
 F6 来自 plateau/error；F7 来自 4150/6250 的 order \((0,1)/(1,0)\) 2D OPE HDF5；
 F8 是固定 \(\tau=3\) 的解析尺度关系；F9 来自 11 组态 v3 \texttt{nopol} C2 HDF5；
 F10 来自 \pathref{data/runs/tmd-audit-20261025/denominator_convention.py} 对同一
-C2/OPE 的 real/complex 并列重算（complex 路径与生产 NPZ 逐元素一致）。
+C2/OPE 的 real/complex 并列重算（complex 路径与生产 NPZ 逐元素一致）；
+F11 来自 \pathref{data/runs/tmd-audit-20261025/flow_window_pilot.py} 的
+11 组态 $\tau=1.0/3.0$ 对照（delete-one 秩 10，仅作路线验证）。
 任何图中都没有用合成值替代真实数据；只有 F8 是解析尺度检查示意。
 图 F5 的秩阈值固定为 \(\lambda>10^{-8}\lambda_{\max}\)，F7 的左右两图分别标注
 切片相对 \(L_2\) 与逐 \((z,b_x)\) 相对差，避免与完整二维值混淆。

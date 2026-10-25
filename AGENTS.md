@@ -130,16 +130,17 @@ cos/sin 双通道 → NLO 匹配 Z_ij+CS 核+SFTX → 连续极限外推，含 2
 断连 ratio、z=0 比值与 Z_R/混合入口、Fourier/CS/NLO/SFTX、连续极限、工程链及
 MyQCD 对照；双遍 XeLaTeX，Overfull=0、Float too large=0、Missing character=0；
 单一系综与完整物理闭环缺口已明确标注，2026-08-28 生成）。
-新增：`docs/report_tmd_gluon_audit_20261025.tex/.pdf`（中文 32 页 dev25 区间审计：
+新增：`docs/report_tmd_gluon_audit_20261025.tex/.pdf`（中文 33 页 dev25 区间审计：
 14 提交、source-resolved nopol/pol35 C2、1D/2D ratio-v3、delete-one JK、staircase 顺序、
-流窗口与复/实分母诊断；10 图由 `data/runs/tmd-audit-20261025/make_figures.py` 生成）。
+流窗口与复/实分母诊断；11 图由 `data/runs/tmd-audit-20261025/make_figures.py` 生成）。
 复/实分母已实现显式 `denominator_mode`（`pyqcd/analysis/_gradient_flow_ratio.py`），
 由 `data/runs/tmd-audit-20261025/denominator_convention.py` 在 11 组态并列重算：
 complex 路径与生产 NPZ 逐元素一致，P000/P200 差 <0.2σ，P400 晚 `t_sep` 达 5.7σ。
 三遍 XeLaTeX 达成 Overfull=0、Float too large=0、Missing character=0，`python -B -m pyqcd.testing`
 112/112 通过；结论保持 diagnostic_only、不支持物理 TMD-PDF，2026-10-25 生成。
-另附 3 组态 τ=1.0 full-channel 流窗口试点（`data/runs/tmd-audit-20261025/flow_window_pilot.py`，
-`r_f/a=2.828`）：τ=3 的单调 b 压低在窗口外点消失，但 3 组态/JK 秩 2 仅作路线验证。
+另附 11 组态 τ=1.0 full-channel 流窗口试点（`data/runs/tmd-audit-20261025/flow_window_pilot.py`，
+`r_f/a=2.828`）：τ=1 使 t_sep 漂移/误差中位数由 1.68/9.03 降到 1.24/3.44（P200/P400），
+但最坏点仍达 9.6/21.7 与 9.4/22.8，平台失败不能只归因于 `b<r_f`；JK 秩 10，仅作路线验证。
 
 ## torch 后端 + h5 IO + MPI 并行（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
 
