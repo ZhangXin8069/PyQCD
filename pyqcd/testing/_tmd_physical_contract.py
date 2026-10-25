@@ -428,7 +428,31 @@ class TmdPhysicalContract(unittest.TestCase):
                         'shape': [1, 2, 8],
                     },
                 )
+                write_cache(
+                    os.path.join(conf_dir, 'tmd_ope_2d_P200.h5'),
+                    (2, 4, 6, 1, 2, 2, 8),
+                    {
+                        'algorithm_version':
+                            _tmd9._FULL_2D_OPE_ALGORITHM_VERSION,
+                        'artifact': 'tmd_ope_time_full_channel_2d',
+                        'b_x_dir': 0,
+                        'b_x_list': [0, 1],
+                        'b_y_dir': 1,
+                        'b_y_list': [0, 1],
+                        'channel_labels': list(GRADIENT_FLOW_CHANNELS),
+                        'component_labels': list(GRADIENT_FLOW_COMPONENTS),
+                        'conf_id': conf_id,
+                        'orientation_labels':
+                            list(GRADIENT_FLOW_ORIENTATIONS),
+                        'shape': [2, 4, 6, 1, 2, 2, 8],
+                        'transverse_order': [0, 1],
+                        'z_dir': 2,
+                    },
+                )
             ready = audit_finite_b_ratio_inputs(root)
+            ready_2d = audit_finite_b_ratio_inputs(
+                root, dimension='2d', b_x_list=(0, 1),
+                b_y_list=(0, 1), transverse_order=(0, 1))
             Path(
                 root, 'data', 'conf6250',
                 'corr_pp_P200_pol35.h5').unlink()
@@ -438,9 +462,11 @@ class TmdPhysicalContract(unittest.TestCase):
         self.assertTrue(ready['full_channel_tmd_ope'])
         self.assertEqual(ready['configurations'], [6250, 6450])
         self.assertTrue(all(
-            len(item['tmd_ope']) == 2
+            len(item['tmd_ope']) == 3
             for item in ready['per_configuration'].values()
         ))
+        self.assertEqual(ready_2d['status'], 'ready')
+        self.assertEqual(ready_2d['dimension'], '2d')
         self.assertEqual(missing_pol35['status'], 'blocked')
         self.assertIn(
             'source_resolved_c2_missing',

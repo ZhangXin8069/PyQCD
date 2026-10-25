@@ -15,6 +15,7 @@ from pyqcd.operator import (
     GRADIENT_FLOW_COMPONENTS,
 )
 from pyqcd.pipeline._tmd9 import (
+    _FULL_2D_OPE_ALGORITHM_VERSION,
     _FULL_OPE_ALGORITHM_VERSION,
     _POLARIZED_2PT_ALGORITHM_VERSION,
     TWO_POINT_POLARIZATIONS,
@@ -86,8 +87,51 @@ def _full_channel_tmd_ope(summary: dict) -> bool:
     )
 
 
-def audit_finite_b_ratio_inputs(run_dir, conf_ids=None) -> dict:
+def _matches_2d_request(summary, b_x_list, b_y_list, z_dir, b_x_dir,
+                        b_y_dir, transverse_order):
+    contract = summary["contract"]
+    return (
+        contract.get("artifact") == "tmd_ope_time_full_channel_2d"
+        and contract.get("b_x_list") == list(b_x_list)
+        and contract.get("b_y_list") == list(b_y_list)
+        and contract.get("z_dir") == z_dir
+        and contract.get("b_x_dir") == b_x_dir
+        and contract.get("b_y_dir") == b_y_dir
+        and contract.get("transverse_order") == list(transverse_order)
+    )
+
+
+def _full_channel_tmd_ope_2d(summary: dict) -> bool:
+    shape = summary["shape"]
+    contract = summary["contract"]
+    return (
+        len(shape) == 7
+        and tuple(shape[:3]) == (2, 4, 6)
+        and contract.get("shape") == shape
+        and contract.get("artifact") == "tmd_ope_time_full_channel_2d"
+        and contract.get("algorithm_version")
+        == _FULL_2D_OPE_ALGORITHM_VERSION
+        and contract.get("channel_labels") == list(GRADIENT_FLOW_CHANNELS)
+        and contract.get("orientation_labels")
+        == list(GRADIENT_FLOW_ORIENTATIONS)
+        and contract.get("component_labels") == list(GRADIENT_FLOW_COMPONENTS)
+    )
+
+
+def audit_finite_b_ratio_inputs(
+        run_dir, conf_ids=None, *, dimension='1d',
+        b_x_list=(0, 1, 2, 3, 4), b_y_list=(0, 1),
+        z_dir=2, b_x_dir=0, b_y_dir=1,
+        transverse_order=(0, 1)) -> dict:
     """Return an availability report for finite-b ratio-v2 inputs."""
+    if dimension not in ('1d', '2d'):
+        raise ValueError("dimension 必须是 '1d' 或 '2d'")
+    try:
+        b_x_list = tuple(int(value) for value in b_x_list)
+        b_y_list = tuple(int(value) for value in b_y_list)
+        transverse_order = tuple(int(value) for value in transverse_order)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("2D b/order metadata 必须是整数序列") from exc
     root = Path(run_dir)
     data_root = root / "data"
     if conf_ids is None:
@@ -147,15 +191,26 @@ def audit_finite_b_ratio_inputs(run_dir, conf_ids=None) -> dict:
             contract["polarization"] for contract in (
                 item["contract"] for item in valid_c2)
         })
-        full_channel_ope = [
-            item for item in ope
-            if item["contract"].get("artifact")
-            == "tmd_ope_time_full_channel"
-        ]
+        if dimension == '1d':
+            full_channel_ope = [
+                item for item in ope
+                if item["contract"].get("artifact")
+                == "tmd_ope_time_full_channel"
+            ]
+        else:
+            full_channel_ope = [
+                item for item in ope
+                if _matches_2d_request(
+                    item, b_x_list, b_y_list, z_dir, b_x_dir, b_y_dir,
+                    transverse_order)
+            ]
         # Legacy and full-channel products may coexist in a production run.
         # Only the explicitly selected artifact participates in this gate.
+        validator = (
+            _full_channel_tmd_ope if dimension == '1d'
+            else _full_channel_tmd_ope_2d)
         full_channel = bool(full_channel_ope) and all(
-            _full_channel_tmd_ope(item) for item in full_channel_ope)
+            validator(item) for item in full_channel_ope)
         c2_states.append(source_resolved)
         ope_states.append(full_channel)
         per_configuration[str(conf_id)] = {
@@ -195,6 +250,7 @@ def audit_finite_b_ratio_inputs(run_dir, conf_ids=None) -> dict:
         "run_dir": str(root.resolve()),
         "configurations": conf_ids,
         "nconf": len(conf_ids),
+        "dimension": dimension,
         "missing_configurations": missing,
         "source_resolved_c2": bool(c2_states) and all(c2_states),
         "full_channel_tmd_ope": bool(ope_states) and all(ope_states),
@@ -204,9 +260,9 @@ def audit_finite_b_ratio_inputs(run_dir, conf_ids=None) -> dict:
         "status": "ready" if not reasons else "blocked",
         "blocking_reasons": reasons,
         "scope": (
-            "Input structure availability only; ready still requires verified "
-            "nopol/pol35 channel coverage, t_sep, covariance and physical "
-            "acceptance gates."
+            "Input structure availability only; polarization coverage is "
+            "verified, while t_sep, covariance and physical acceptance remain "
+            "separate gates."
         ),
     }
 
@@ -220,6 +276,13 @@ def parse_args():
         help="comma-separated configuration IDs; default: discover conf* dirs",
     )
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument('--dimension', choices=('1d', '2d'), default='1d')
+    parser.add_argument('--bx-list', default='0,1,2,3,4')
+    parser.add_argument('--by-list', default='0,1')
+    parser.add_argument('--z-dir', type=int, default=2)
+    parser.add_argument('--bx-dir', type=int, default=0)
+    parser.add_argument('--by-dir', type=int, default=1)
+    parser.add_argument('--transverse-order', default='0,1')
     return parser.parse_args()
 
 
@@ -228,7 +291,13 @@ def main() -> int:
     conf_ids = None
     if args.conf_ids:
         conf_ids = [int(value) for value in args.conf_ids.split(",") if value]
-    report = audit_finite_b_ratio_inputs(args.run_dir, conf_ids)
+    report = audit_finite_b_ratio_inputs(
+        args.run_dir, conf_ids, dimension=args.dimension,
+        b_x_list=tuple(int(x) for x in args.bx_list.split(',')),
+        b_y_list=tuple(int(x) for x in args.by_list.split(',')),
+        z_dir=args.z_dir, b_x_dir=args.bx_dir, b_y_dir=args.by_dir,
+        transverse_order=tuple(
+            int(x) for x in args.transverse_order.split(',')))
     text = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.out is None:
         print(text, end="")

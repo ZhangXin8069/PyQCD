@@ -2944,6 +2944,27 @@ def test_real_polarized_chain_resume_contract():
             item['c2'] == 'cache_hit' and item['ope'] == 'cache_hit'
             for item in resumed['configurations'].values())
 
+        calls_2d = []
+        checkpoint_2d = Path(root, 'status_2d.json')
+        with patch.object(chain, '_ope_2d_complete', return_value=False), \
+                patch.object(
+                    chain, 'compute_tmd_ope_time_2d',
+                    side_effect=lambda conf_id, *_args, **_kwargs:
+                    calls_2d.append(conf_id)):
+            first_2d = chain.run_chain_2d(
+                root, [10], backend='numpy', checkpoint=checkpoint_2d,
+                logger=lambda *_args: None)
+        assert calls_2d == [10]
+        assert first_2d['status'] == 'complete'
+        with patch.object(chain, '_ope_2d_complete', return_value=True), \
+                patch.object(
+                    chain, 'compute_tmd_ope_time_2d',
+                    side_effect=AssertionError('unexpected 2D OPE IO')):
+            resumed_2d = chain.run_chain_2d(
+                root, [10], backend='numpy', checkpoint=checkpoint_2d,
+                logger=lambda *_args: None)
+        assert resumed_2d['configurations']['10']['ope_2d'] == 'cache_hit'
+
 
 def test_bare_sumratio_contracts():
     """Forward Sumratio-difference Tmin, AIC and fallback contracts."""

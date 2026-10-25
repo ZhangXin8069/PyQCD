@@ -158,7 +158,14 @@ canonical 缓存使用 artifact `tmd_ope_time_full_channel` 和 algorithm versio
 `calculate_gradient_flow_tmd_ratios_2d_from_configurations`，输出
 `(channel,orientation,component,direction,z,b_x,b_y,tsep,insertion,momentum)`；
 `(z,b_x,b_y)` 在内部按 C-order 展平并恢复。跨组态入口继续要求 source-resolved C2、
-显式 conf 顺序、索引 SHA 与 staircase metadata。二维 audit ready 门尚未实现。
+显式 conf 顺序、索引 SHA 与 staircase metadata。audit v2 现在按有序 b 网格、三个方向
+和 `transverse_order` 精确选择二维 artifact；不同网格或反序路径不得互相替代。
+
+ratio-v2/v3 可显式设置 `store_jackknife_samples=True`，输出比 ratio 多一个 conf 轴的
+delete-one samples。跨 `z/b/direction/tsep` 的协方差必须从同一 conf 轴构造；JK 协方差
+秩最多为 `Nconf-1`，不能把有效零模当统计信息。11 组态真实 run 的协方差正秩为 10；
+同一 `b_x=0..4,b_y=0..1` 网格下，`(0,1)` 与 `(1,0)` staircase 在 `b_y=1` 上的相对 L2
+差约 1.8%–2.0%，必须保留为不同离散算符。
 
 ## 软因子、自重整化与混合
 

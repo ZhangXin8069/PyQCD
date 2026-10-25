@@ -61,7 +61,6 @@
 - 关键内容: 定位并修复 co go TUI 启动漏传 CODEX_BIN 的回归
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
-
 ## form-audit-20261022 - final - 2026-10-22 01:34:44 +0800
 - 主任务: PyQCD form 只读格式审计（main，无整改项）
 - 日志文件: logs/v2026102201.txt
@@ -293,5 +292,13 @@
 - 文件大小: 3475 bytes
 - 触发原因: 任务完成
 - 关键内容: 新增 data-transfer reference 并同步技能入口、注册表和验证
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## all11-polarized-tmd-diagnostic - final - 2026-10-25 08:24:36 +0800
+- 主任务: 11 组态极化 gluon TMD 真实诊断链与 GPU flow 内存修复
+- 日志文件: logs/v2026102508.txt
+- 文件大小: 7357 bytes
+- 触发原因: 任务完成
+- 关键内容: 完成 11 组态 v3 C2、1D/2D full-channel OPE、audit、ratio、JK 协方差与 staircase 对照；修复 GPU flow OOM，全量 112/112 PASS。
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete

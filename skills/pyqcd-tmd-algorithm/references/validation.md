@@ -121,6 +121,14 @@ python -B -m pyqcd.testing.tmd.audit_finite_b_inputs \
 审计 schema v2 将 nopol/pol35 成对覆盖纳入结构 hard gate；空的极化元数据不能由
 文件名猜测。通过后仍须验证 `t_sep`、协方差和物理接受门。
 
+二维 OPE 使用同一审计入口的显式模式，网格、方向和 staircase order 必须与读取请求一致：
+
+```bash
+python -B -m pyqcd.testing.tmd.audit_finite_b_inputs \
+  --run-dir <run_dir> --conf-ids <ids> --dimension 2d \
+  --bx-list 0,1,2,3,4 --by-list 0,1 --transverse-order 0,1
+```
+
 当前受控集成契约已覆盖两配置小格点的完整材料链：
 `full-channel producer → canonical OPE cache → source-resolved C2 cache → audit ready
 → strict loaders → cross-configuration ratio-v2 → Im(R_H)`。该链使用合成 C2 和小规范场，
@@ -132,6 +140,17 @@ python -B -m pyqcd.testing.tmd.audit_finite_b_inputs \
 pol35 `max|d|=1.38e-8`、`rel_L2=3.71e-6`；两组随机时间对的直接合同 oracle 最大误差
 `2.89e-10`。`P200,t_sep={5,6,7}` 的两组态 ratio-v3 接线只标为 diagnostic；Nconf=2
 不构成统计结论，也未通过 soft/rapidity、匹配或连续极限门。
+
+后续 11 组态真实诊断 run 已覆盖 `4150..8050` 的 v3 C2、1D full-channel OPE、
+`b_x=0..4,b_y=0..1` 2D OPE、audit v2、多 `t_sep` ratio 与 delete-one JK samples。
+1D/2D 三个动量的 valid ratio 和 helicity phase 均全 finite；JK 协方差正秩为 10
+（`Nconf-1`）。t_sep 漂移超过 JK error，因此当前显著状态必须是
+`plateau_unstable/diagnostic_only`，不能输出物理 PDF。`(1,0)` 对 `(0,1)` 的 2D
+staircase 比较在 `b_y=1` 上相对 L2 差约 1.8%–2.0%，`b_y=0` 逐元素一致。
+
+GPU 小显存运行必须使用按需 roll 的 `staple_6`。旧预计算路径同时保留 8 个整场副本，
+在 8 GiB 卡上会 OOM；两条路径在 NumPy/Torch 受控测试中逐元素一致。修复后的真实
+`72×24³` flow 峰值 allocated/reserved 为 `3.97/4.36 GiB`。
 
 ## 典型错误
 

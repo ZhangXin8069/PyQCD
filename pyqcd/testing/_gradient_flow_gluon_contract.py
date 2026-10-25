@@ -500,6 +500,9 @@ class GradientFlowGluonContract(unittest.TestCase):
         )
         result = covariance_ratio_estimator(
             operator, pol35, True, denominator_correlator=nopol)
+        with_samples = covariance_ratio_estimator(
+            operator, pol35, True, denominator_correlator=nopol,
+            return_jackknife=True)
 
         def direct_central(selected):
             op = operator[selected]
@@ -547,6 +550,9 @@ class GradientFlowGluonContract(unittest.TestCase):
             result[5], error_imag, rtol=0, atol=3e-14)
         self.assertTrue(all(np.isfinite(np.asarray(value)).all()
                             for value in result))
+        self.assertEqual(with_samples[-1].shape, (nconf, nobs, nmom))
+        np.testing.assert_allclose(
+            with_samples[-1], jackknife, rtol=0, atol=3e-14)
 
     def test_two_dimensional_ratio_v3_axes_and_cross_configuration_gate(self):
         import hashlib
@@ -597,12 +603,14 @@ class GradientFlowGluonContract(unittest.TestCase):
             b_x_dir=0,
             b_y_dir=1,
             transverse_order=(0, 1),
-            do_jackknife=True,
+            do_jackknife=True, store_jackknife_samples=True,
         )
         self.assertTrue(validate_gradient_flow_tmd_ratio_2d_results(
             result, nconf=nconf))
         expected_shape = (2, 4, ncomp, 1, nz, nbx, nby, 2, 3, 2)
         self.assertEqual(result["ratio"].shape, expected_shape)
+        self.assertEqual(result["ratio_jackknife_samples"].shape,
+                         expected_shape + (nconf,))
         flattened = calculate_gradient_flow_ratios(
             ope.reshape(nconf, 2, 4, ncomp, nz * nbx * nby, nt),
             twopt,

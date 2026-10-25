@@ -43,6 +43,8 @@ metadata:
 | 有限横距 ratio-v2 | `_gradient_flow_ratio.calculate_gradient_flow_tmd_ratios` | `python -B -m pyqcd.testing._gradient_flow_gluon_contract` |
 | 跨组态有限横距 ratio-v2 | `_gradient_flow_ratio.calculate_gradient_flow_tmd_ratios_from_configurations` | 同上 |
 | 双极化 source-resolved C2 | `_tmd9.compute_2pt_polarizations_multi`、`load_multi_2pt_polarizations` | `python -B -m pyqcd.testing._tmd_physical_contract` |
+| 真实极化链批量恢复 | `pyqcd.testing.tmd.run_real_polarized_chain` | `python -B -m pyqcd.testing.tmd.run_real_polarized_chain --help` |
+| 跨 observable JK 协方差 | ratio-v2/v3 `store_jackknife_samples=True` | `python -B -m pyqcd.testing._gradient_flow_gluon_contract` |
 | 二维有限横距 ratio-v3 | `_gradient_flow_ratio.calculate_gradient_flow_tmd_ratios_2d` | `python -B -m pyqcd.testing._gradient_flow_gluon_contract` |
 | 二维跨组态 ratio-v3 | `_gradient_flow_ratio.calculate_gradient_flow_tmd_ratios_2d_from_configurations` | 同上 |
 | 有限横距输入审计 | `pyqcd.testing.tmd.audit_finite_b_inputs` | `python -B -m pyqcd.testing._tmd_physical_contract` |

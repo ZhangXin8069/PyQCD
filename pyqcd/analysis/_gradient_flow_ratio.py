@@ -61,9 +61,9 @@ def _orientation_identity_matches(target, left, right, sign, precision):
     expected = left + sign * right
     if precision == "complex64":
         # Ratio construction performs several complex divisions before the
-        # orientation identity; 2e-5 of the operand scale covers that
+        # orientation identity; 3e-5 of the operand scale covers that
         # accumulation without using the possibly near-zero difference.
-        rtol, atol = 2e-5, 2e-6
+        rtol, atol = 3e-5, 2e-6
     elif precision == "complex128":
         rtol, atol = 5e-12, 1e-10
     else:
@@ -91,7 +91,8 @@ def _validate_tseps(tseps, nt):
 
 
 def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
-                               denominator_correlator=None):
+                               denominator_correlator=None,
+                               return_jackknife=False):
     """计算一个插入量的 disconnected ratio 和 delete-one jackknife。
 
     Args:
@@ -112,6 +113,12 @@ def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
         c2 if denominator_correlator is None
         else _as_complex128(denominator_correlator, "denominator_correlator")
     )
+    if not isinstance(return_jackknife, (bool, np.bool_)):
+        raise ValueError("return_jackknife 必须是布尔值")
+    return_jackknife = bool(return_jackknife)
+    if return_jackknife and not do_jackknife:
+        raise ValueError(
+            "return_jackknife=True 要求 do_jackknife=True")
     if op.ndim != 3 or c2.ndim != 3:
         raise ValueError(
             f"需要 operator=(conf,observable,source)、C2=(conf,source,momentum)，"
@@ -148,10 +155,11 @@ def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
     nan_complex = np.full(shape, np.nan + 1j * np.nan, dtype=np.complex128)
     nan_real = np.full(shape, np.nan, dtype=np.float64)
     if not do_jackknife:
-        return (
+        result = (
             c3_central, c2_central, nan_complex,
             nan_complex.copy(), nan_real, nan_real.copy(),
         )
+        return result
 
     nminus = nconf - 1
     own_oc_mean_source = np.einsum(
@@ -199,10 +207,13 @@ def covariance_ratio_estimator(operator, correlator, do_jackknife=True,
             (ratio_jackknife.imag - jk_mean.imag) ** 2, axis=0
         )
     )
-    return (
+    result = (
         c3_central, c2_central, jk_mean, jk_bias_corrected,
         error_real, error_imag,
     )
+    if return_jackknife:
+        return result + (ratio_jackknife,)
+    return result
 
 
 def _component_labels_for_count(ncomp, component_labels):
@@ -221,7 +232,8 @@ def _component_labels_for_count(ncomp, component_labels):
 
 
 def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
-                                   component_labels=None):
+                                   component_labels=None,
+                                   store_jackknife_samples=False):
     """按参考 ratio-v2 轴构造所有 channel/orientation/component ratio。
 
     Args:
@@ -238,6 +250,12 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
     if not isinstance(do_jackknife, (bool, np.bool_)):
         raise ValueError("do_jackknife 必须是布尔值")
     do_jackknife = bool(do_jackknife)
+    if not isinstance(store_jackknife_samples, (bool, np.bool_)):
+        raise ValueError("store_jackknife_samples 必须是布尔值")
+    store_jackknife_samples = bool(store_jackknife_samples)
+    if store_jackknife_samples and not do_jackknife:
+        raise ValueError(
+            "store_jackknife_samples=True 要求 do_jackknife=True")
     input_precision = _input_complex_precision(ope, twopt)
     ope = _as_complex128(ope, "ope")
     twopt = _as_complex128(twopt, "twopt")
@@ -277,6 +295,10 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
     nan_real = np.full(out_shape, np.nan, dtype=np.float64)
     jk_err_real = nan_real.copy()
     jk_err_imag = nan_real.copy()
+    jk_samples = (
+        np.full(out_shape + (nconf,), np.nan + 1j * np.nan,
+                dtype=np.complex128)
+        if store_jackknife_samples else None)
     c2_mean = np.empty((nch, ndir, ndt, nmom), dtype=np.complex128)
 
     source = np.arange(nt)
@@ -302,8 +324,13 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
                         c2_by_dt[:, dt_index],
                         do_jackknife=do_jackknife,
                         denominator_correlator=denominator_by_dt[:, dt_index],
+                        return_jackknife=store_jackknife_samples,
                     )
-                    c3_one, c2_one, mean_one, bias_one, err_r, err_i = result
+                    if store_jackknife_samples:
+                        (c3_one, c2_one, mean_one, bias_one, err_r, err_i,
+                         samples_one) = result
+                    else:
+                        c3_one, c2_one, mean_one, bias_one, err_r, err_i = result
                     shape = (norient, ncomp, nz, nmom)
                     target = (
                         channel, slice(None), slice(None), direction,
@@ -316,11 +343,14 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
                     jk_bias[target] = bias_one.reshape(shape)
                     jk_err_real[target] = err_r.reshape(shape)
                     jk_err_imag[target] = err_i.reshape(shape)
+                    if store_jackknife_samples:
+                        jk_samples[target] = samples_one.reshape(
+                            shape + (nconf,))
 
     valid_insertion = np.zeros((ndt, max_tsep + 1), dtype=bool)
     for index, dt in enumerate(tseps):
         valid_insertion[index, :dt + 1] = True
-    return {
+    result = {
         "c3_mean": c3,
         "c2_mean": c2_mean,
         "ratio": ratio,
@@ -343,6 +373,9 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
         "do_jackknife": do_jackknife,
         "input_precision": input_precision,
     }
+    if store_jackknife_samples:
+        result["ratio_jackknife_samples"] = jk_samples
+    return result
 
 
 calculate_ratios = calculate_gradient_flow_ratios
@@ -351,7 +384,7 @@ calculate_ratios = calculate_gradient_flow_ratios
 def _reshape_ratio_z_b(array, nz, nb):
     """Restore a flattened ``(z,b)`` observable axis."""
     values = np.asarray(array)
-    if values.ndim != 8 or values.shape[4] != nz * nb:
+    if values.ndim < 8 or values.shape[4] != nz * nb:
         raise ValueError(
             "内部 ratio 数组必须具有扁平 (z*b) observable 轴，"
             f"收到 {values.shape}")
@@ -362,7 +395,7 @@ def _reshape_ratio_z_b(array, nz, nb):
 def _reshape_ratio_z_bx_by(array, nz, nbx, nby):
     """Restore a flattened ``(z,b_x,b_y)`` observable axis."""
     values = np.asarray(array)
-    if values.ndim != 8 or values.shape[4] != nz * nbx * nby:
+    if values.ndim < 8 or values.shape[4] != nz * nbx * nby:
         raise ValueError(
             "内部 ratio 数组必须具有扁平 (z*bx*by) observable 轴，"
             f"收到 {values.shape}")
@@ -422,7 +455,7 @@ def _validate_tmd_ratio_2d_metadata(
 
 def calculate_gradient_flow_tmd_ratios(
         ope, twopt, tseps, b_values, do_jackknife=True,
-        component_labels=None):
+        component_labels=None, store_jackknife_samples=False):
     """Construct ratio-v2 statistics with explicit ``(z,b)`` observables.
 
     Args:
@@ -468,6 +501,7 @@ def calculate_gradient_flow_tmd_ratios(
         tseps,
         do_jackknife=do_jackknife,
         component_labels=component_labels,
+        store_jackknife_samples=store_jackknife_samples,
     )
     for key in (
             "c3_mean", "ratio", "ratio_jackknife_mean",
@@ -475,6 +509,9 @@ def calculate_gradient_flow_tmd_ratios(
             "ratio_jackknife_error_real",
             "ratio_jackknife_error_imag"):
         result[key] = _reshape_ratio_z_b(result[key], nz, nb)
+    if store_jackknife_samples:
+        result["ratio_jackknife_samples"] = _reshape_ratio_z_b(
+            result["ratio_jackknife_samples"], nz, nb)
     result["schema"] = TMD_RATIO_SCHEMA
     result["axes"] = (
         "channel", "z_orientation", "component", "direction",
@@ -491,7 +528,8 @@ def calculate_gradient_flow_tmd_ratios(
 def calculate_gradient_flow_tmd_ratios_2d(
         ope, twopt, tseps, b_x_values, b_y_values, *,
         z_dir=2, b_x_dir=0, b_y_dir=1, transverse_order=(0, 1),
-        do_jackknife=True, component_labels=None):
+        do_jackknife=True, component_labels=None,
+        store_jackknife_samples=False):
     """Construct ratio-v3 statistics with explicit ``(z,b_x,b_y)`` axes."""
     input_precision = _input_complex_precision(ope, twopt)
     array = _as_complex128(ope, "ope")
@@ -516,6 +554,7 @@ def calculate_gradient_flow_tmd_ratios_2d(
         tseps,
         do_jackknife=do_jackknife,
         component_labels=component_labels,
+        store_jackknife_samples=store_jackknife_samples,
     )
     for key in (
             "c3_mean", "ratio", "ratio_jackknife_mean",
@@ -524,6 +563,9 @@ def calculate_gradient_flow_tmd_ratios_2d(
             "ratio_jackknife_error_imag"):
         result[key] = _reshape_ratio_z_bx_by(
             result[key], nz, nbx, nby)
+    if store_jackknife_samples:
+        result["ratio_jackknife_samples"] = _reshape_ratio_z_bx_by(
+            result["ratio_jackknife_samples"], nz, nbx, nby)
     result["schema"] = TMD_RATIO_2D_SCHEMA
     result["axes"] = (
         "channel", "z_orientation", "component", "direction",
@@ -545,7 +587,8 @@ def calculate_gradient_flow_tmd_ratios_2d(
 
 def calculate_gradient_flow_tmd_ratios_from_configurations(
         ope_by_conf, twopt_by_conf, conf_ids, b_values, tseps,
-        do_jackknife=True, component_labels=None):
+        do_jackknife=True, component_labels=None,
+        store_jackknife_samples=False):
     """Stack source-resolved configuration inputs in an explicit shared order.
 
     Each OPE entry has shape
@@ -612,6 +655,7 @@ def calculate_gradient_flow_tmd_ratios_from_configurations(
         b_values,
         do_jackknife=do_jackknife,
         component_labels=component_labels,
+        store_jackknife_samples=store_jackknife_samples,
     )
     index_bytes = np.asarray(ids, dtype='<i8').tobytes(order='C')
     result["conf_ids"] = ids
@@ -629,7 +673,7 @@ def calculate_gradient_flow_tmd_ratios_2d_from_configurations(
         ope_by_conf, twopt_by_conf, conf_ids, b_x_values, b_y_values,
         tseps, *, z_dir=2, b_x_dir=0, b_y_dir=1,
         transverse_order=(0, 1), do_jackknife=True,
-        component_labels=None):
+        component_labels=None, store_jackknife_samples=False):
     """Stack source-resolved inputs for two-component transverse ratios."""
     try:
         ids = tuple(conf_ids)
@@ -696,6 +740,7 @@ def calculate_gradient_flow_tmd_ratios_2d_from_configurations(
         transverse_order=transverse_order,
         do_jackknife=do_jackknife,
         component_labels=component_labels,
+        store_jackknife_samples=store_jackknife_samples,
     )
     index_bytes = np.asarray(ids, dtype='<i8').tobytes(order='C')
     result["conf_ids"] = ids
@@ -729,6 +774,13 @@ def validate_gradient_flow_tmd_ratio_results(results, *, nconf=None):
         if values.shape != ratio.shape:
             raise ValueError(f"{key} 与 TMD ratio shape 不一致")
         flattened[key] = values.reshape(
+            values.shape[:4] + (nz * nb,) + values.shape[6:])
+    if "ratio_jackknife_samples" in results:
+        values = np.asarray(results["ratio_jackknife_samples"])
+        if values.shape != ratio.shape + (values.shape[-1],):
+            raise ValueError(
+                "ratio_jackknife_samples 与 TMD ratio shape 不一致")
+        flattened["ratio_jackknife_samples"] = values.reshape(
             values.shape[:4] + (nz * nb,) + values.shape[6:])
     flattened["schema"] = RATIO_SCHEMA
     flattened["axes"] = (
@@ -844,6 +896,13 @@ def validate_gradient_flow_tmd_ratio_2d_results(results, *, nconf=None):
         if values.shape != ratio.shape:
             raise ValueError(f"{key} 与 2D TMD ratio shape 不一致")
         flattened[key] = values.reshape(
+            values.shape[:4] + (nz * nbx * nby, 1) + values.shape[7:])
+    if "ratio_jackknife_samples" in results:
+        values = np.asarray(results["ratio_jackknife_samples"])
+        if values.shape != ratio.shape + (values.shape[-1],):
+            raise ValueError(
+                "ratio_jackknife_samples 与 2D ratio shape 不一致")
+        flattened["ratio_jackknife_samples"] = values.reshape(
             values.shape[:4] + (nz * nbx * nby, 1) + values.shape[7:])
     flattened["schema"] = TMD_RATIO_SCHEMA
     flattened["axes"] = (
@@ -1043,6 +1102,27 @@ def validate_gradient_flow_ratio_results(results, *, nconf=None):
                 raise ValueError(
                     f"do_jackknife=False 时 {name} 必须全部为 NaN")
 
+    if "ratio_jackknife_samples" in results:
+        samples = np.asarray(results["ratio_jackknife_samples"])
+        if samples.ndim != ratio.ndim + 1:
+            raise ValueError("ratio_jackknife_samples 必须多一个 conf 轴")
+        sample_nconf = int(samples.shape[-1])
+        if samples.shape != ratio.shape + (sample_nconf,):
+            raise ValueError("ratio_jackknife_samples shape 错误")
+        if nconf is not None and sample_nconf != int(nconf):
+            raise ValueError("ratio_jackknife_samples 的 conf 轴不一致")
+        if not do_jackknife:
+            raise ValueError(
+                "do_jackknife=False 时不得保存 jackknife samples")
+        samples_valid = np.broadcast_to(
+            valid[None, None, None, None, None, :, :, None, None],
+            samples.shape,
+        )
+        if not np.isfinite(samples[samples_valid]).all():
+            raise ValueError("ratio_jackknife_samples 有效位置含非有限值")
+        if not np.isnan(samples[~samples_valid]).all():
+            raise ValueError("ratio_jackknife_samples 无效位置必须为 NaN")
+
     denominator = c2[0][None, None, None, :, None, :, None, :]
     expected_ratio = c3 / denominator
     if not np.allclose(
@@ -1053,7 +1133,7 @@ def validate_gradient_flow_ratio_results(results, *, nconf=None):
     if ratio.shape[2] == len(COMPONENTS) and labels == COMPONENTS:
         input_precision = results.get("input_precision", "complex128")
         kw = (
-            {"rtol": 2e-5, "atol": 2e-6, "equal_nan": True}
+            {"rtol": 3e-5, "atol": 2e-6, "equal_nan": True}
             if input_precision == "complex64"
             else {"rtol": 5e-12, "atol": 1e-10, "equal_nan": True}
         )

@@ -60,8 +60,9 @@ validation。
 配置或元数据必须先固定：通道与 Lorentz 投影、纵向/横向轴、`z`、`b_perp`、独立
 `staple_length`、无量纲 `tau=t/a²`、`Pz`、`mu`、`zeta`、表示、匹配阶数和 Fourier 约定。当前
 已有显式 staircase 的二维 `b_perp=(b_x,b_y)` geometry/full-channel OPE producer、
-独立 cache 与 ratio-v3 统计入口，但 audit ready 判定、生产运行和真实二维数据尚未闭合，
-也不能把路径顺序不同的离散结果混用。source-resolved 核子 C2 使用 v3
+独立 cache、audit v2 与 ratio-v3 统计入口，并已在 11 组态真实诊断子集运行；完整 TMD
+方案仍缺 soft/rapidity、匹配和连续极限，也不能把路径顺序不同的离散结果混用。
+source-resolved 核子 C2 使用 v3
 `nopol/pol35` 极化身份、complex128 `(source,dt)` 与反周期边界；旧 v2 实数
 nopol 合同不得迁移为 helicity 输入。
 中心几何与锚定几何不能混用，复数不能在证明
