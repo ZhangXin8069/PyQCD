@@ -1,1 +1,5 @@
 !*.csv
+
+.build_dev25/
+.render_dev25/
+**/.preview/

@@ -302,3 +302,19 @@
 - 关键内容: 完成 11 组态 v3 C2、1D/2D full-channel OPE、audit、ratio、JK 协方差与 staircase 对照；修复 GPU flow OOM，全量 112/112 PASS。
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## dev25-report-20261025 - final - 2026-10-25 18:10:40 +0800
+- 主任务: 恢复 dev25 胶子 TMD 报告任务：PDF 交付与 112 项全量回归验证
+- 日志文件: logs/v2026102518.txt
+- 文件大小: 5833 bytes
+- 触发原因: 任务完成
+- 关键内容: 交付 30 页 PDF（三零）；112/112 回归通过；未提交
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## dev25-report-20261025 - general - 2026-10-25 18:15:13 +0800
+- 主任务: dev25 报告收尾：审计问题闭环复核与文档索引同步
+- 日志文件: logs/v20261025181513.txt
+- 文件大小: 2521 bytes
+- 触发原因: 一般记录
+- 关键内容: 审计高优先级项 0 遗留；AGENTS.md 登记 dev25 报告
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress

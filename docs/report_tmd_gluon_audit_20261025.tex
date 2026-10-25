@@ -1,0 +1,1259 @@
+% ============================================================
+% PyQCD: tag dev25 至 2026-10-25 HEAD 的胶子 TMD 物理结果审计
+% XeLaTeX, two passes. Source and PDF share the same stem.
+% ============================================================
+\documentclass[UTF8]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{titlesec}
+
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{evidence}{HTML}{1E8449}
+\definecolor{reference}{HTML}{8C6D1F}
+\definecolor{conclusion}{HTML}{8B1A1A}
+\definecolor{codebg}{HTML}{F4F6F7}
+\definecolor{struct}{HTML}{3B3B98}
+\definecolor{relation}{HTML}{0E7C7B}
+\definecolor{idea}{HTML}{B03A2E}
+\definecolor{warn}{HTML}{D35400}
+\definecolor{hl}{HTML}{FDF6E3}
+
+\setlength{\emergencystretch}{3em}
+\setlength{\headheight}{13pt}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accent,
+  urlcolor=relation,
+  pdftitle={PyQCD dev25 至 2026-10-25 HEAD 胶子 TMD 物理结果审计},
+  pdfauthor={PyQCD physics and code audit}
+}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{struct}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{struct!70!black}}{\thesubsubsection}{1em}{}
+
+\newtcolorbox{conclbox}{breakable,colback=conclusion!6,colframe=conclusion,title=结论}
+\newtcolorbox{refbox}{breakable,colback=reference!6,colframe=reference,title=参考背景}
+\newtcolorbox{ideabox}{breakable,colback=idea!6,colframe=idea,title=物理与工程判断}
+\newtcolorbox{warnbox}{breakable,colback=warn!6,colframe=warn,title=局限与风险}
+\newtcolorbox{keybox}{breakable,colback=hl,colframe=accent,title=要点}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  language=Python,
+  firstnumber=auto,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{evidence!70!black},
+  stringstyle=\color{struct},
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{accent}{$\hookrightarrow$}\space},
+  keepspaces=true,
+  columns=flexible,
+  numbers=left,
+  numberstyle=\tiny\color{struct!60!black},
+}
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\pathref}[1]{\texttt{\nolinkurl{#1}}}
+\newcommand{\MSbar}{\overline{\mathrm{MS}}}
+\newcommand{\GF}{\mathrm{GF}}
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\Real}{\operatorname{Re}}
+\newcommand{\Imag}{\operatorname{Im}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\bT}{\boldsymbol b_T}
+\newcommand{\kT}{\boldsymbol k_T}
+\newcommand{\Pz}{P_z}
+\newcommand{\ts}{t_{\mathrm{sep}}}
+\newcommand{\statusdiag}{\textcolor{warn}{\textbf{diagnostic\_only}}}
+\newcommand{\confirmed}{\textcolor{struct}{\textbf{确证}}}
+\newcommand{\inferred}{\textcolor{relation}{\textbf{推断}}}
+\newcommand{\unverified}{\textcolor{warn}{\textbf{未验证}}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{PyQCD: dev25 至 2026-10-25 HEAD 物理结果审计}
+\fancyhead[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\title{PyQCD 从 \texttt{dev25} 到当前 HEAD 的\\胶子 TMD 物理结果、公式与图表审计}
+\author{PyQCD 物理链审计}
+\date{2026 年 10 月 25 日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告审计 PyQCD 从标签 \texttt{dev25}（annotated tag 对象
+\texttt{0840298}，peeled commit \texttt{2d21a74}）之后至 2026-10-25 当前 HEAD
+\texttt{0f5ac61} 的物理与算法增量。该区间共 14 个提交，实体成果集中在
+\texttt{dev27}（提交 \texttt{19ab351}）：有限横距 Wilson staple、
+full-channel 胶子 OPE、source-resolved \texttt{nopol/pol35} 核子两点函数、
+一维与二维 ratio-v3、delete-one jackknife 协方差、二维 staircase 顺序审计，
+以及一次 11 组态真实数据诊断。软件侧同时修复了 GPU Wilson-flow 六-staple
+峰值显存缺陷，当前全量回归记录为 112 项通过。
+
+物理上，本区间已经建立了可复核的
+\[
+\text{流化规范场}\longrightarrow\text{有限 }b_\perp\text{ 算符}
+\longrightarrow C_2/C_3\longrightarrow
+\text{ratio/JK 协方差}
+\]
+诊断链，并在 4150--8050 的 11 个组态上运行。它尚未建立核子胶子
+TMD-PDF 的物理闭环：\texttt{t\_sep} 漂移显著超过 JK 误差；所有非零
+\(b_T/a=1,\ldots,4\) 均落在 \(r_f/a=\sqrt{24}\approx4.899\) 的流半径内；
+\(\Pz r_f/(\hbar c)\) 对 P200/P400 分别约为 2.57/5.13；并且没有同几何
+soft/rapidity、完整胶子-夸克 matching、多流时或多格距连续极限。
+因此所有 all11 结果必须保持 \statusdiag 与
+\code{physical_acceptance=false}。
+
+本报告同时记录一个必须显式处理的估计量分歧：ratio-v3 使用完整复数
+\texttt{nopol} \(C_2\) 作共同分母，而归档 donghx ratio 与仓内主
+\texttt{\_disconnected} 路径使用 \(\Real C_{2,\mathrm{nopol}}\)。在
+\(\ts/a=8\) 的 source 平均中，P400 的
+\(|\Imag C_2/\Real C_2|=15.60\%\)（相位 \(8.87^\circ\)）；这是\textbf{单点}
+相位敏感度，不是跨 \(\ts\) 的稳定相位，也不是 ratio 的统计误差。
+同一受控复输入的实测 denominator 差为
+\(\max|\Delta R|=6.77\times10^{-3}\)（归一化最大差 7.86\%，
+相对 \(L_2\) 7.28\%）。这不是胶子-夸克算符混合，而是估计量/相位约定差异；
+在统一之前，不能把当前数值与 donghx 的绝对 ratio 直接等同。
+\end{abstract}
+
+\tableofcontents
+
+\section{任务、版本边界与结论先行}
+
+\subsection{任务定义与证据范围}
+
+任务定义为：梳理 \code{tag dev25} 到当前 HEAD 的全部物理结果，提取涉及的物理公式和
+相关图表，结合用户指定的参考文件
+\pathref{/root/MyQCD/docs/pyqcd_physics/report_gluon_tmd_lattice_qcd_review_20261023.tex}
+进行大量物理分析，并在本仓库 \code{docs/} 中生成可编译的 LaTeX 与 PDF。
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{版本边界（来源：\code{git show-ref}、\code{git log dev25..HEAD} 实测）}
+\begin{tabularx}{\textwidth}{@{}l l X@{}}
+\toprule
+对象 & 提交/标签 & 作用 \\
+\midrule
+审计起点 & \code{0840298}（tag）/ \code{2d21a74}（commit） & \code{dev25} annotated tag 的 2026-10-23 发布快照 \\
+中继标签 & \code{4c4b662} / \code{dev26} & 参考脚本、PyQCU 子模块与归档整理 \\
+物理实体标签 & \code{19ab351} / \code{dev27} & 11 组态极化 TMD 诊断与二维批量链 \\
+当前 HEAD & \code{0f5ac61} & \code{dev27} 之后 4 个归档/下载状态提交 \\
+提交数量 & 14 & \code{dev25..HEAD} \\
+工作树 & 派生输出未跟踪 & 报告、图、构建与审计文件均为 HEAD 之后新增；历史“干净”状态无独立快照，标为未验证 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{证据分级}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{本报告采用的证据等级（来源：代码、日志、运行产物与参考理论交叉核对）}
+\begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}X@{}}
+\toprule
+状态 & 含义与本次实例 \\
+\midrule
+\confirmed{} 算符/代码 &
+函数可定位，几何、shape、dtype、路径和代数恒等式由源码及测试确定 \\
+\confirmed{} 真实材料 &
+11 组态 C2/OPE/ratio 文件存在，有限性、索引哈希和 JK 样本可直接读取 \\
+\confirmed{} 软件回归 &
+当前 HEAD 的测试和编译命令实际返回成功；只说明软件契约，不说明物理闭环 \\
+\inferred{} 物理解读 &
+把有限 \(b_T\)、\(\ts\)、\(\Pz\) 诊断与 TMD 结构联系起来的解释，必须声明尺度和近似 \\
+\unverified{} 物理闭环 &
+soft/rapidity、完整 matching、混合矩阵、多尺度极限或稳定基态平台尚无证据 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{结论先行}
+
+\begin{conclbox}
+\begin{enumerate}
+  \item \textbf{本区间确实产生了新的真实数据结果。} 11 个组态、3 个动量、
+        1D \(b=0,\ldots,4\)、2D \((b_x,b_y)=(0,\ldots,4)\times(0,1)\)、
+        6 个 \(\ts/a\) 构成可追溯的 Euclidean 胶子矩阵元与 ratio 诊断集
+        \cite{local-log-all11}.
+  \item \textbf{算符与合同层已经达到可继续开发的稳定程度。} 有限 \(b\)
+        geometry、\(b=0\) 退化、纯规范零响应、双极化 C2、full-channel
+        OPE、cache 身份和二维 staircase 顺序均有独立契约或真实数据对照。
+  \item \textbf{物理基态矩阵元尚未提取。} 1D unpolarized 的最大
+        \(\ts\) 漂移/误差为 7.86、10.17、12.95（P000/P200/P400）；
+        2D 为 19.84、8.53、63.57。该指标是
+        \(\max_{z,b}[\max_t R-\min_t R]/\overline{\sigma_t}\)，只证明
+        \textbf{至少一个} \((z,b)\) 点失败。按朴素判据 \(\le1\)，局部通过率为
+        1D \(22/65\)、\(26/65\)、\(13/65\)（unpolarized）与
+        \(43/65\)、\(20/65\)、\(16/65\)（helicity）；2D 为
+        \(43/130\)、\(45/130\)、\(24/130\) 与 \(82/130\)、\(41/130\)、\(28/130\)。
+        因此正确表述是：\textbf{没有任何动量在整个 \((z,b)\) 面上通过均匀平台门}；
+        局部通过点仍需相关协方差和预先声明的选点规则检验，当前未做。
+  \item \textbf{流窗口不成立。} \(a\simeq0.1053\,\mathrm{fm}\)，
+        \(r_f=4.899a\simeq0.516\,\mathrm{fm}\)，而全部非零 1D 位移
+        \(b\le4a=0.421\,\mathrm{fm}\)，二维最大模长
+        \(|\bT|_{\max}=\sqrt{17}a=0.434\,\mathrm{fm}\)；\(z/a=1,\ldots,4\)
+        同样满足 \(z<r_f\)。流化尺度大于待测横向与纵向距离。
+  \item \textbf{大动量条件也不成立。} P200/P400 对应约
+        \(0.981/1.962\,\mathrm{GeV}\)，而
+        \(\Pz r_f/(\hbar c)\simeq2.57/5.13\)（格点乘积
+        \((\Pz a)(r_f/a)\) 同值），不满足 \(\Pz r_f\ll1\)。
+  \item \textbf{复/实 \texttt{nopol} 分母尚未统一。} ratio-v3 使用复数除法；
+        归档 donghx 与仓内主 \texttt{\_disconnected} 使用实数分母。P400 在
+        \(\ts/a=8\) 的单点相位为 \(8.87^\circ\)（\(|\Imag/\Real|=15.60\%\)），
+        受控复输入的 denominator 差为 \(\max|\Delta R|=6.77\times10^{-3}\)；
+        两者都不是 ratio 的统计误差，也不能外推为稳定相位。
+  \item \textbf{二维路径顺序是算符身份的一部分。} \(b_y/a=0\) 时
+        \((1,0)\) 与 \((0,1)\) 逐元素一致；\(b_y/a=1\) 的切片相对 \(L_2\)
+        对 4150/6250 分别为 1.954\% 与 1.793\%（完整二维数组为
+        1.156\%/1.076\%）。这是 contour/Wilson-loop 结构，不是浮点舍入。
+  \item \textbf{因此当前应称为：} 流化、source-resolved、有限横距胶子
+        Euclidean 矩阵元与 disconnected ratio 诊断；不应称为光锥胶子
+        TMD-PDF、\(\Delta G(x,\bT)\) 或已经完成梯度流重整化的物理结果。
+\end{enumerate}
+\end{conclbox}
+
+\section{主体结构、数据关系与项目思路}
+
+\subsection{提交与阶段结构}
+
+\begin{xltabular}{\textwidth}{@{}l l X@{}}
+\caption{dev25 之后 14 个提交的阶段归并（数据来源：Git 实测）}\\
+\toprule
+提交 & 阶段 & 物理/工程内容 \\
+\midrule
+\endfirsthead
+\toprule
+提交 & 阶段 & 物理/工程内容 \\
+\midrule
+\endhead
+\code{cdb81c7} & 参考整理 & huangcl P0 ratio 与 sush 2pt 动态缩并参考代码调整；不是 PyQCD 生产结果 \\
+\code{4c4b662} & 子模块 & 新增 PyQCU 子模块，无物理数值结论 \\
+\code{158d887} & dev26 日志 & 归档 dev26 核查；记录后续空白清理事项 \\
+\code{395dba0} & 交叉验证 & 新增 donghx 4D 小格点对照驱动，区分直线准 PDF 与有限 \(b\) TMD 扩展 \\
+\code{36de54c} & 核心落库 & 有限 \(b\) geometry、full-channel OPE、双极化 C2、1D/2D cache、ratio-v2/v3、真实输入审计与日志 \\
+\code{f432c36} & 参考同步 & donghx/huangcl/sush 参考资料批量同步，无新生产运行 \\
+\code{1354d31} & 数据盘点 & 682.023 TB 可读关键数据与 101 项传输清单，工程信息而非物理结果 \\
+\code{06826a3} & GPU 修复 & 按需 roll 消除六-staple 和 RK3 同时驻留导致的峰值显存缺陷 \\
+\code{7d4e74d} & JK 持久化 & 保存完整 delete-one JK 组态轴，并收紧 complex64 orientation 容差 \\
+\code{19ab351} & dev27 & 11 组态真实 C2、1D/2D OPE、audit、ratio、covariance 与 staircase 诊断 \\
+\code{815e964} & 会话转储 & 临时加入 89,302 行会话 Markdown，无算法内容 \\
+\code{c89ee42} & 转储删除 & 删除上一提交同一文件，净效果为零 \\
+\code{ac5a9cf} & 下载标记 & 加入 8 个传输完成标记，无物理影响 \\
+\code{0f5ac61} & 忽略规则 & 删除完成标记并忽略下载状态目录 \\
+\bottomrule
+\end{xltabular}
+
+\subsection{模块与物理对象}
+
+\begin{xltabular}{\textwidth}{@{}p{0.30\textwidth}p{0.30\textwidth}X@{}}
+\caption{代码对象与物理对象映射（来源：当前 HEAD 源码）}\\
+\toprule
+代码入口 & 物理对象 & 本区间作用与边界 \\
+\midrule
+\endfirsthead
+\toprule
+代码入口 & 物理对象 & 本区间作用与边界 \\
+\midrule
+\endhead
+\pathref{pyqcd/renorm/_gradient_flow.py} & Wilson flow \(V_\tau\) & RK3 积分；GPU 峰值内存修复，不改变数值约定 \\
+\pathref{pyqcd/renorm/_tmd.py} & Clover \(F_{\mu\nu}\)、staple、胶子双线性 & 新增 1D/2D finite-\(b\) full-channel OPE，输出复数逐时间片可观测量 \\
+\pathref{pyqcd/pipeline/_steps.py} & 核子 C2 与投影 & 一次 \(Cg5g4\) 合同生成 \texttt{nopol/pol35} source-resolved C2 \\
+\pathref{pyqcd/pipeline/_tmd9.py} & canonical cache/loader & 绑定极化、源轴、\(z,b\)、staircase、方向、精度和 SHA-256 \\
+\pathref{pyqcd/analysis/_gradient_flow_ratio.py} & disconnected \(C_3/C_2\) & 显式 \(z,b_x,b_y\) 轴、复数估计、delete-one JK、最终 helicity 相位 \\
+\pathref{pyqcd/testing/tmd/audit_finite_b_inputs.py} & fail-closed 输入门 & 组态数、双极化 C2、OPE shape/labels/order 与共享索引审计 \\
+\pathref{pyqcd/testing/tmd/run_real_polarized_chain.py} & 批量恢复 & 1D/2D、GPU/CPU、cache hit、逐组态 checkpoint 与失败恢复 \\
+\bottomrule
+\end{xltabular}
+
+\subsection{数据流与身份}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{从组态到 ratio 诊断的可执行流程（数据来源：源码与真实 run 产物）}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+阶段 & 关键输入、输出与守恒量 \\
+\midrule
+输入 & 真实 gauge、perambulator、VVV；\(24^3\times72\)，\(a\simeq0.1053\,\mathrm{fm}\) \\
+流化 & \(\tau=3\)、\(\epsilon=0.05\)；输出 flowed links \(V_\tau\) \\
+OPE & \(z/a=0,\ldots,12\)；1D \(b/a=0,\ldots,4\)；2D \(b_x/a=0,\ldots,4,\ b_y/a=0,1\) \\
+外态 & \texttt{nopol/pol35} C2，形状 \((72,72)\)，时间轴 source/relative-$dt$ \\
+审计 & 共享组态顺序、输入索引 SHA、极化成对覆盖、schema、shape、dtype、finite \\
+ratio & \(C_3/C_2\)、维度 \((z,b_x,b_y)\times\ts\times\) insertion \(\times P_z\) \\
+统计 & delete-one JK 共 11 个样本；协方差最大正秩 \(N_{\rm conf}-1=10\) \\
+物理门 & 当前止于 plateau/流窗口/soft/rapidity/matching/continuum 之前 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{设计意图}
+
+\begin{ideabox}
+该区间的工程设计不是“尽快得到一条 PDF 曲线”，而是先建立可追踪的中间物理对象：
+同一组态上的 OPE 与 C2、来源明确的极化和源轴、显式离散路径顺序、不可混淆的
+cache 身份，以及 fail-closed 的 audit。这个顺序是正确的，因为胶子 TMD 的
+Wilson-line 几何、算符混合和软/快度结构都不能由“文件存在”或“曲线光滑”替代。
+\end{ideabox}
+
+\section{物理公式基线}
+
+\subsection{场强、对偶场强与规范链}
+
+采用参考文件中的场强约定
+\begin{equation}
+F_{\mu\nu}=\frac{i}{g}[D_\mu,D_\nu],\qquad
+D_\mu=\partial_\mu-igA_\mu,
+\qquad
+\Tr(T^aT^b)=\frac12\delta^{ab},
+\label{eq:field-strength}
+\end{equation}
+以及格点四叶 Clover 场强
+\begin{equation}
+F_{\mu\nu}(x)=-\frac{i}{8}\left[Q_{\mu\nu}(x)-Q_{\mu\nu}^{\dagger}(x)\right],
+\qquad
+F_{\mu\nu}^{\rm tl}=F_{\mu\nu}-\frac{\Tr F_{\mu\nu}}{N_c}\mathbf 1,
+\label{eq:clover}
+\end{equation}
+和 Euclidean 对偶
+\begin{equation}
+\widetilde F_{\rho\sigma}
+=\frac12\epsilon_{\rho\sigma\mu\nu}F_{\mu\nu}.
+\label{eq:dual}
+\end{equation}
+来源：\pathref{pyqcd/renorm/_tmd.py:317-337}、
+\pathref{/root/MyQCD/docs/pyqcd_physics/report_gluon_tmd_lattice_qcd_review_20261023.tex:648-690}。
+
+一维 staple 从 \(x\) 到 \(x+z\hat z+b_\perp\) 的代码路径是
+\begin{equation}
+\Gamma_{z,b}:\quad
+-L\hat z\longrightarrow+b_\perp\hat e_\perp
+\longrightarrow+(L+z)\hat z,
+\qquad L=12a\ \text{（当前生产）}.
+\label{eq:staple-path}
+\end{equation}
+二维 staircase 为
+\begin{equation}
+\Gamma^{(0,1)}_{2d}:\quad
+-L\hat z\to b_x\hat x\to b_y\hat y\to(L+z)\hat z,
+\label{eq:staple-2d-01}
+\end{equation}
+反序 \((1,0)\) 交换两个横向段，但它是另一条连续 contour，不只是同一连续 Wilson line 的格距离散；有限格距的非交换链接进一步放大路径差。
+
+\subsection{核子胶子双线性}
+
+采用颜色闭合
+\begin{equation}
+M^{\mu\lambda;\nu\rho}(z,b_\perp;\vec x)
+=\Tr\!\left[
+F^{\nu\rho}(\vec x)\,
+W_{\mathrm{st}}(\vec x,\vec x+z\hat z+\bT)\,
+F^{\mu\lambda}(\vec x+z\hat z+\bT)\,
+W_{\mathrm{st}}^{\dagger}(\vec x,\vec x+z\hat z+\bT)
+\right],
+\label{eq:tmd-bilocal}
+\end{equation}
+unpolarized 在两个端点都取 \(F\)；helicity-labelled 通道把\textbf{原点端点}
+的第一个场强换成 \(\widetilde F\)，第二个端点仍是 \(F\)：
+\begin{equation}
+M_H^{\mu\lambda;\nu\rho}
+=\Tr\!\left[
+\widetilde F^{\nu\rho}(\vec x)\,
+W_{\mathrm{st}}(\vec x,\vec x+z\hat z+\bT)\,
+F^{\mu\lambda}(\vec x+z\hat z+\bT)\,
+W_{\mathrm{st}}^{\dagger}(\vec x,\vec x+z\hat z+\bT)
+\right].
+\label{eq:helicity-bilocal}
+\end{equation}
+对偶使用 \(\epsilon_{xyzt}=+1\) 的固定指标顺序；整体取向可翻转 helicity 算符，
+但不能改变 \(T_H-S_H\) 的相对号。当前生产在基本表示中计算迹；伴随归一需要
+显式因子 2。有限 \(b\) 的 helicity 分支只有内部代数/几何契约，没有独立
+有限 \(b\) oracle；\texttt{pol35} 两点 C2 的公开参考一致不能升级为
+“有限 \(b\) helicity OPE 已独立验证”。
+
+设 \(t\) 为 Euclidean 时间方向，\(i,j\) 为纵向 \(z\) 之外的另外两个空间方向。
+六组件定义为
+\begin{align}
+ti&=M_{ti;ti},&
+tj&=M_{tj;tj},&
+ij_{\rm single}&=M_{ij;ij},\\
+M_{titi}&=ti+tj,&
+M_{ijij}&=2\,ij_{\rm single},&
+combined&=M_{titi}\mp M_{ijij}.
+\label{eq:six-components}
+\end{align}
+unpolarized 物理组合使用减号：
+\begin{equation}
+O_U=M_{titi}-M_{ijij}
+=M_{ti;ti}+M_{tj;tj}-2M_{ij;ij}.
+\label{eq:unpolarized-combination}
+\end{equation}
+helicity producer 中历史 \code{combined} 字段保存加号
+\(M_{titi}+M_{ijij}\)，而本区间下游物理选择器明确重建
+\begin{equation}
+O_H^{\rm phys}=M_{titi}-M_{ijij}.
+\label{eq:helicity-physical-combination}
+\end{equation}
+因此不能把历史 \code{combined} 字段直接当作最终物理螺旋度算符。
+
+正、负纵向方向保留为
+\begin{equation}
+O_{+}=O(+z),\quad O_{-}=O(-z),\quad
+O_{\rm even}=O_++O_-,\quad
+O_{\rm odd}=O_+-O_-,
+\label{eq:orientation}
+\end{equation}
+不额外乘 \(1/2\)。这保证 \(z=0\) 时 \(O_{\rm odd}=0\) 可被严格检查。
+
+\subsection{source-resolved \texttt{nopol/pol35} C2}
+
+DeGrand-Rossi 基中 \code{gamma(0)} 是单位阵哨兵，\code{gamma(4)} 是时间矩阵。
+核子投影采用
+\begin{equation}
+P_{\rm nopol}=\frac12(\gamma_0+\gamma_4),
+\qquad
+P_{\rm pol35}=P_{\rm nopol}\,(i\gamma_3\gamma_5).
+\label{eq:two-point-projectors}
+\end{equation}
+因此 \texttt{nopol}/\texttt{pol35} 是同一正宇称子空间中的 projected correlators：
+前者无额外自旋投影，后者乘 \(i\gamma_3\gamma_5\)。在非零动量下它们是插值算符
+投影约定，不严格隔离所有同动量的宇称/自旋态，不能写成已经完成的物理态投影。
+二者都不是“胶子极化”本身；胶子 helicity 由算符中的
+\(F\widetilde F\) 表示，核子自旋由 \texttt{pol35} 表示。两种“极化”不能混称。
+
+真实 C2 缓存为
+\begin{equation}
+C_{2,\Pi}(\ts;t_{\rm src},t_{\rm sink}),\qquad
+\Pi\in\{\texttt{nopol},\texttt{pol35}\},
+\label{eq:source-resolved-c2}
+\end{equation}
+轴语义为 \code{(source,dt)}，其中 \code{dt=(t_{\rm sink}-t_{\rm src}) mod N_t}
+是 source-relative time，不是 raw sink；当 \(t_{\rm sink}<t_{\rm src}\) 时施加
+反周期负号。合同以 complex64 输入计算、以 complex128 累加并存储，
+“存储 complex128”不能当作有效精度 complex128。
+
+\subsection{disconnected C3/C2}
+
+对每个通道 \(a\)、源 \(s\)、插入时刻 \(t_{\rm ins}\)、分离 \(\ts\)、
+动量 \(P_z\) 和流时 \(\tau\)，组态 \(k\) 上定义
+\begin{equation}
+C_{3,a}(t_{\rm ins};\ts,P_z,\tau)
+=\left\langle\frac1{N_s}\sum_s O_{a,s}(t_{\rm ins})C_{2,a,s}(\ts)\right\rangle_k
+-\frac1{N_s}\sum_s
+\left\langle O_{a,s}(t_{\rm ins})\right\rangle_k
+\left\langle C_{2,a,s}(\ts)\right\rangle_k,
+\label{eq:disconnected-ratio}
+\end{equation}
+\begin{equation}
+R_a(t_{\rm ins};\ts,P_z,\tau)
+=\frac{C_{3,a}(t_{\rm ins};\ts,P_z,\tau)}{C_{2,\rm den}(\ts,P_z,\tau)}.
+\label{eq:ratio-def}
+\end{equation}
+source 平均在每一次 JK 删除重算内部完成；不同 source 不是独立统计样本。
+在当前逐时间片空间求和归一化下 \(R_a\) 可作为无量纲量报告，但 \(C_2\) 中心值
+仍是带插值算符和格点归一化的 bare 量，不能跨路径直接比较；谱学关系
+\(R\to\langle P|O|P\rangle/(2E_P)\) 尚未用于提取物理矩阵元。
+helicity 的 \(C_3\) 协方差使用 \texttt{pol35}，unpolarized 使用
+\texttt{nopol}；两个通道当前共享 \texttt{nopol} 分母。物理 helicity 只在
+全部统计完成后取
+\begin{equation}
+A_H=\Real[-iR_H]=\Imag R_H.
+\label{eq:helicity-phase}
+\end{equation}
+不能在真空扣除或 resampling 前把 \texttt{pol35} 截成实部/虚部。
+
+\subsection{delete-one jackknife}
+
+对 \(N\) 个组态，删除第 \(k\) 个组态后重新计算非线性 ratio：
+\begin{equation}
+R^{(-k)}=\frac{C_3^{(-k)}}{C_{2,\rm den}^{(-k)}}.
+\label{eq:jk-ratio}
+\end{equation}
+JK 偏差修正和实/虚误差为
+\begin{align}
+R_{\rm bc}&=N R_{\rm central}-(N-1)\overline{R^{(-k)}},\\
+\sigma_{\Real/\Imag}
+&=\left[
+\frac{N-1}{N}\sum_k
+\left(\Real/\Imag R^{(-k)}
+-\Real/\Imag\overline{R^{(-k)}}\right)^2
+\right]^{1/2}.
+\label{eq:jk-error}
+\end{align}
+跨 \(z,b,\ts\) 的协方差必须来自同一组态索引，因此 11 组态的最大正秩是 10。
+JK 删除代数已由契约测试验证；11 个规范组态之间的自相关长度和误差是否充分
+包含 gauge autocorrelation 没有独立检查，标为未验证。
+
+\subsection{复数分母与实数分母的代数差异}
+
+当前 PyQCD estimator 计算完整复数除法 \(R=C_3/C_2\)；
+归档 donghx estimator 使用 \(\Real C_2\) 作分母：
+\begin{align}
+R_U^{\rm PyQCD}
+&=\Real\frac{C_{3,U}}{C_{2,N}},
+&
+R_H^{\rm PyQCD}
+&=\Imag\frac{C_{3,H}}{C_{2,N}},\\
+R_U^{\rm donghx}
+&=\frac{\Real C_{3,U}}{\Real C_{2,N}},
+&
+R_H^{\rm donghx}
+&=\frac{\Imag C_{3,H}}{\Real C_{2,N}}.
+\label{eq:denominator-conventions}
+\end{align}
+若 \(C_2=D e^{i\phi}\)，则两者通过 \(\tan\phi\) 混合 \(C_3\) 的实部与虚部。
+这是一项\textbf{估计量/相位约定差异}，不是紫外算符混合，也不是胶子-夸克 mixing。
+相关源码：
+\pathref{pyqcd/analysis/_gradient_flow_ratio.py:137-214}、
+\pathref{refer/donghx/_Gradient_Flow_GluonPDF/calc_ratio_matched.py:320-372}。
+
+\subsection{梯度流与物理窗口}
+
+连续 Wilson flow 和流半径定义为
+\begin{equation}
+\partial_t B_\mu(t,x)=D_\nu G_{\nu\mu}(t,x),
+\qquad
+r_f=\sqrt{8t}=\sqrt{8\tau}\,a.
+\label{eq:flow-radius}
+\end{equation}
+当前使用 \(\tau=3\)，故
+\begin{equation}
+r_f=4.899a\simeq0.516\,\mathrm{fm}.
+\label{eq:current-rf}
+\end{equation}
+短流时匹配要求
+\begin{equation}
+a\ll r_f\ll \min(z,b_T,\Lambda_{\rm QCD}^{-1}),
+\qquad
+\Pz r_f/(\hbar c)\ll1.
+\label{eq:flow-window}
+\end{equation}
+当前所有非零横向距离与 \(z/a=1,\ldots,4\) 均小于 \(r_f\)，且 P200/P400 的 \(\Pz r_f/(\hbar c)\) 均大于 1。
+因此最终对象只能是 fixed-flow diagnostic，不能解释为受控短流时 TMD。
+
+\subsection{完整 TMD 链还要求什么}
+
+在 ratio 诊断之后，完整胶子 TMD-PDF 还需要至少以下串联门：
+\begin{align}
+&\text{UV/端点:}\quad Z_O,\ Z_{ij}^{\rm UV},\
+\text{Wilson-line subtraction},\ \sqrt{Z_E}\ \text{(同几何 Wilson loop)},\\
+&\text{rapidity/soft:}\quad
+f^R=\frac{f^{\rm bare}}{\sqrt{S_R(\bT;\mu,Y_1,Y_2)}},\quad
+2\zeta\frac{\partial}{\partial\zeta}\ln f^R=K_R,\\
+&\text{matching:}\quad
+\widetilde f_i=C_{ij}\otimes f_j,\quad i,j\in\{g,q_S,\bar q_S\},\\
+&\qquad C_{ij}=\delta_{ij}+\frac{\alpha_sC_A}{2\pi}g_{ij}+\cdots,\quad
+C_{ij}\ \text{含 CS 因子}\ e^{\frac12K_j\ln(\zeta_z/\zeta)},\\
+&\text{小 }b_T:\quad \text{OPE},\ b_T^*\ \text{模型},\
+O\!\left(\frac{1}{b_T^2P_z^2}\right)\ \text{幂修正},\\
+&\text{limits:}\quad L_\parallel\to\infty,\quad
+\tau\to0,\quad z,b_T\to0,\quad \Pz\to\infty,\quad a\to0,\quad V\to\infty,
+\label{eq:full-tmd-chain}
+\end{align}
+其中 \(C_{ij}\)（硬匹配）与 \(Z_{ij}^{\rm UV}\)（紫外重正化）不是同一对象；
+胶子-夸克单态最低需要 \(g/q_S/\bar q_S\) 基底，不能只保留 gg 子块。
+上述极限不可交换（尤其 \(\tau\to0\) 与 \(z,b_T\to0\)）。
+当前区间没有完成任何一项的物理闭环；代码接口存在不等于 all11 数据已经消费它们。
+
+\section{十五步交叉工作流：B1--B6}
+
+\subsection{B1 目的与前期准备}
+
+本工作的目的是把“有限横距”从几何参数推进到可重构的统计 observable，并检验
+真实核子 C2 与胶子 OPE 是否能在共享组态索引上进入 disconnected ratio。
+前置条件是 \(24^3\times72\) 真实蒸馏数据、复现的 perambulator/VVV、规范场流化、
+idempotent 投影检查、反周期时间边界和 source-resolved C2 contract。
+
+\subsection{B2 输入}
+
+\begin{xltabular}{\textwidth}{@{}p{0.25\textwidth}p{0.25\textwidth}X@{}}
+\caption{B2 主要输入与约束（来源：manifest、cache contract 与源码）}\\
+\toprule
+输入 & 当前值/形状 & 物理与数值约束 \\
+\midrule
+\endfirsthead
+\toprule
+输入 & 当前值/形状 & 物理与数值约束 \\
+\midrule
+\endhead
+组态 & 4150, 6250, 6450, 6650, 6850, 7050, 7250, 7450, 7650, 7850, 8050 & 11 个真实组态；单系综、单格距 \\
+格点/流 & \(24^3\times72\)，\(\tau=3\)，\(\epsilon=0.05\) & \(a\simeq0.1053\,\mathrm{fm}\)，\(r_f=4.899a\) \\
+OPE 几何 & \(z/a=0,\ldots,12\)，1D \(b/a=0,\ldots,4\) & full channel \(2\times4\times6\)；复数保留 \\
+二维几何 & \(b_x/a=0,\ldots,4\)，\(b_y/a=0,1\) & staircase \((0,1)\)，另有 4150/6250 的 \((1,0)\) 对照 \\
+核子 C2 & 每动量 \((72,72)\)，c64 计算/c128 存储 & source-resolved，反周期边界，Cg5g4，\texttt{nopol/pol35} \\
+动量 & P000/P200/P400 & \(\Pz=0,2,4\) 个单位 \(2\pi/L\) \\
+ratio 时间 & \(\ts/a=5,\ldots,10\) & insertion \(0\le i\le\ts\) 有效；不用零填充 \\
+\bottomrule
+\end{xltabular}
+
+\subsection{B3 输出应该是什么}
+
+单组态 full-channel OPE 应为
+\begin{equation}
+O:(2,4,6,N_z,N_b,N_t),
+\qquad
+O_{\rm 2d}:(2,4,6,N_z,N_{bx},N_{by},N_t),
+\label{eq:ope-shapes}
+\end{equation}
+复数、逐时间片空间求和、不提前投影。跨组态 ratio 应为
+\begin{align}
+R_{1d}&:(2,4,6,1,13,5,6,11,1),\\
+R_{2d}&:(2,4,6,1,13,5,2,6,11,1),
+\label{eq:ratio-shapes}
+\end{align}
+分别对应 channel、orientation、component、direction、\(z\)、\(b\) 或
+\((b_x,b_y)\)、\(\ts\)、insertion、momentum；JK 样本再增加 11 个 delete-one 组态轴。
+
+\subsection{B4 整体框架}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{B4 物理链与软件链的对应（数据来源：源码实测）}
+\begin{tabularx}{\textwidth}{@{}l X l@{}}
+\toprule
+物理步骤 & 数学对象 & 软件门 \\
+\midrule
+流化 & $V_\tau=\mathcal T\exp[\int_0^\tau Z(V_s)\dd s]V_0$ & flow contract \\
+场强/路径 & $F_{\mu\nu},W_{\rm st}$ & geometry contract \\
+胶子 OPE & $M^{ti;ti},M^{tj;tj},M^{ij;ij}$ & full-channel producer \\
+核子 C2 & $P_\Pi C_{2}$ & source-resolved v3 cache \\
+真空扣除 & $\langle OC_2\rangle-\langle O\rangle\langle C_2\rangle$ & ratio estimator \\
+统计 & delete-one JK & covariance NPZ/JSON \\
+物理解释 & plateau + soft/rapidity + matching + limits & 当前 fail-closed \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{B5 关键推导与代码对应}
+
+代码直接实现的核心段有三层。第一层是核子投影和 source-resolved C2：
+\lstinputlisting[language=Python,firstline=930,lastline=941]{/root/PyQCD/pyqcd/pipeline/_steps.py}
+第二步由同一个 \(Cg5g4\) 矩阵得到两个投影，并保留复数与反周期符号：
+\lstinputlisting[language=Python,firstline=1009,lastline=1028]{/root/PyQCD/pyqcd/pipeline/_steps.py}
+第三步把六组件和方向组合写入 full-channel OPE：
+\lstinputlisting[language=Python,firstline=345,lastline=363]{/root/PyQCD/pyqcd/renorm/_tmd.py}
+
+ratio 的估计量先对 source 求平均、再做组态 covariance；下列代码给出中心 \(C_3\)
+和共同分母：
+\lstinputlisting[language=Python,firstline=137,lastline=152]{/root/PyQCD/pyqcd/analysis/_gradient_flow_ratio.py}
+JK 部分直接使用组态删除后的解析展开：
+\lstinputlisting[language=Python,firstline=164,lastline=199]{/root/PyQCD/pyqcd/analysis/_gradient_flow_ratio.py}
+\lstinputlisting[language=Python,firstline=200,lastline=209]{/root/PyQCD/pyqcd/analysis/_gradient_flow_ratio.py}
+
+\subsection{B6 正确执行顺序}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{B6 执行顺序与停止条件（示意，依据源码与 validation reference）}
+\begin{tabularx}{\textwidth}{@{}l X@{}}
+\toprule
+步骤 & 正确做法与失败条件 \\
+\midrule
+1. 输入 & 固定系综、体积、a、\(\tau\)、\(\epsilon\)、L、方向、动量；身份缺失即失败 \\
+2. 流化 & 从 raw gauge 独立流化；监测 \(U^\dagger U\)、det 和流作用量；失败不进入 OPE \\
+3. OPE & 同一流场构造 canonical Clover、dual、staple；端点、颜色和 \(b=0\) 极限先通过 \\
+4. C2 & 同一合同一次生成 \texttt{nopol/pol35}；保留 complex128、source 轴和反周期符号 \\
+5. audit & 检查极化成对、七/八轴 OPE、shape/labels、共享组态和 SHA；不通过则 blocked \\
+6. ratio & 仅用同一组态顺序；insertion 越界填 NaN；在每样本重算 C2 和 C3 \\
+7. 统计 & 报告 JK rank、条件数、finite fraction、\(\ts\) 漂移；漂移大则 diagnostic \\
+8. 物理 & 只有流窗口、平台、soft/rapidity、matching 和极限都通过才允许物理命名 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{十五步交叉工作流：B7--B15}
+
+\subsection{B7 实际执行情况}
+
+本区间真实执行由 2026-10-25 的 all11 批次完成。关键实测过程如下：
+
+\begin{xltabular}{\textwidth}{@{}p{0.25\textwidth}X@{}}
+\caption{B7 实测过程（来源：all11 final log）}\\
+\toprule
+阶段 & 命令/动作、退出状态与关键输出 \\
+\midrule
+\endfirsthead
+\toprule
+阶段 & 命令/动作、退出状态与关键输出 \\
+\endhead
+双极化 C2 & 11 组态均生成 P000/P200/P400 的 \texttt{nopol/pol35} \((72,72)\) H5，共 66 个；c64 计算、c128 存储 \\
+随机 oracle & 每组态随机时间对的独立合同对照，11 组态最大绝对误差 \(1.63\times10^{-11}\) \\
+公共参考 & 4150/P200 对 \texttt{/public} 的 nopol \(\mathrm{rel}_{L2}=3.51\times10^{-8}\)，pol35 \(\mathrm{rel}_{L2}=3.71\times10^{-6}\) \\
+1D OPE & 11 个 full-channel OPE，shape \((2,4,6,13,5,72)\)，dtype complex64 \\
+2D OPE & 13 个二维 OPE，shape \((2,4,6,13,5,2,72)\)；11 个 order \((0,1)\)，2 个 order \((1,0)\) \\
+audit & 1D all11 与 2D all11 均 \code{status=ready}，\code{blocking_reasons=[]}；ready 只表示输入契约 \\
+ratio & 1D/2D 三动量、六 \(\ts\)、delete-one JK 均完成；当前状态为 \statusdiag \\
+GPU flow & 7650 的 \(72\times24^3\) flow 用时 238 s，峰值 allocated/reserved 3972.1/4462.0 MiB；这是修复后的独立 GPU 验证，不是 all11 全部组态的生产 provenance（部分组态曾 fallback 到 CPU） \\
+全量回归 & 本报告再次实测 \code{python -B -m pyqcd.testing}：112 passed, 0 skipped, 0 failed \\
+\bottomrule
+\end{xltabular}
+
+\subsubsection{B7.1 与归档 donghx 的受控交叉验证}
+
+提交 \code{395dba0} 同时引入 \code{pyqcd/testing/tmd/cross_reference_donghx.py}。
+在 \(4^4\times8\)、\(\tau\in\{0,0.1,0.5\}\)、\(\epsilon=0.01\) 的受控输入上，
+23 项 required checks 全部通过（\code{overall_status=pass}）：
+Wilson flow 的 complex64 相对 \(L_2\le2.5\times10^{-7}\)、直线胶子 OPE
+\(\le3.3\times10^{-6}\)、flow-to-quasi 与 gg matching kernel 逐点一致、
+同 \(\hbar\) Fourier 差 \(1.39\times10^{-17}\)、C3 中心值差为 0。
+默认 \(\hbar\) 常数下的 Fourier 差为 \(1.87\times10^{-4}\)，必须显式固定约定。
+唯一实质差异是 denominator：对同一复输入，复分母与 donghx 实分母的
+\(\max|\Delta R|=6.77\times10^{-3}\)（归一化 7.86\%，相对 \(L_2\) 7.28\%）。
+有限 \(b\) 的 helicity TMD 在归档参考中没有对应实现，因此“23/23”不能
+升级为有限 \(b\) 物理链的独立验证。
+
+证据：\pathref{pyqcd/testing/tmd/artifacts/donghx_cross_reference_20261025_082205/report.md:1-31}、
+\pathref{pyqcd/testing/tmd/artifacts/donghx_cross_reference_20261025_082205/comparison.json}、
+\pathref{logs/v2026102422.txt:29-42}。
+
+\subsection{B8 实际输出情况}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{B8 结果规模与状态（来源：all11 summary/manifest 实测）}
+\begin{tabularx}{\textwidth}{@{}l l l X@{}}
+\toprule
+对象 & 数值/形状 & finite & 物理解释 \\
+\midrule
+组态数 & 11 & --- & 仅 JK 最大正秩 10，不构成大样本生产 \\
+1D valid ratio & 159120/动量（raw 205920，NaN 46800） & 100\% & 仅 valid-mask 子集有限，不代表独立信息量 \\
+1D helicity phase & 3315/动量 & 100\% & 有限性通过，不代表相位平台稳定 \\
+2D valid ratio & 318240/动量（raw 411840，NaN 93600） & 100\% & 二维 schema 和轴线通过 \\
+2D helicity phase & 6630/动量 & 100\% & 二维相位有限性通过 \\
+1D covariance & \(780\times780\) & rank 10 & 最大秩等于 \(N_{\rm conf}-1\) \\
+2D covariance & \(1560\times1560\) & rank 10 & 维度远大于统计秩，不能全协方差反演 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+来源：
+\pathref{data/runs/tmd-production-10conf/analysis/finite_b_ratio_v3_all11/all11_ratio_v3_summary.json:41-151}、
+\pathref{data/runs/tmd-production-10conf/analysis/finite_b_ratio_v3_2d_all11/all11_ratio_2d_v3_summary.json:45-165}、
+\pathref{data/runs/tmd-production-10conf/analysis/source_resolved_gluon_tmd_all11_manifest_20261025.json:64-108}。
+
+\begin{keybox}
+所有 \code{finite_fraction=1} 和 \code{covariance_rank=10} 都只证明“没有 NaN/Inf”以及
+“达到样本秩上限”。它们不证明每个 \(z,b,\ts\) 点是独立、稳定或物理可用的。
+口径说明：1D 核心函数的 schema 仍是 \code{gradient\_flow\_gluon\_tmd\_ratio\_v2}；
+文件名中的 “ratio-v3/all11” 是批次产物名，真正显式 v3 的是 2D 路径和
+\code{all11\_ratio\_v3} 汇总文件。
+\end{keybox}
+
+\subsection{B9 全部图表与物理结果分析}
+
+\subsubsection*{图表边界}
+
+\code{git diff --name-only dev25..HEAD} 的实测结果没有任何
+\code{.png/.pdf/.svg} 文件。因此该版本区间原先没有新增成图；已有的
+\code{data/runs/tmd-production-10conf/analysis/tmd_ratio/*.png} 9 张图生成于
+2026-10-22，早于 \code{dev25}，只能作为前序背景，不能冒充本区间结果。
+本报告从当前 NPZ/HDF5/JSON 直接生成 9 张 PDF 图，构成本区间的完整图表集。
+
+\begin{xltabular}{\textwidth}{@{}l p{0.27\textwidth}X@{}}
+\caption{本报告新增图表清单（数据来源：all11 NPZ/HDF5/JSON）}\\
+\toprule
+ID & 文件 & 主要物理内容 \\
+\midrule
+\endfirsthead
+\toprule
+ID & 文件 & 主要物理内容 \\
+\midrule
+\endhead
+F1 & \pathref{figures/tmd_gluon_audit_20261025/fig01_tsep_stability_1d.pdf} & 1D \(\ts\) 稳定性，P000/P200/P400 的 \(R_U\) 与 helicity phase \\
+F2 & \pathref{figures/tmd_gluon_audit_20261025/fig02_b_dependence_1d.pdf} & 参考 \(\ts=8a\) 下的 \(b\) 依赖与 JK 误差 \\
+F3 & \pathref{figures/tmd_gluon_audit_20261025/fig03_z_b_maps_1d.pdf} & 三动量在 \((z,b)\) 平面的诊断热图 \\
+F4 & \pathref{figures/tmd_gluon_audit_20261025/fig04_bx_by_slices_2d.pdf} & P200 的二维 \((b_x,b_y)\) staircase 切片 \\
+F5 & \pathref{figures/tmd_gluon_audit_20261025/fig05_jk_covariance_spectrum.pdf} & 1D/2D JK 协方差正谱 \\
+F6 & \pathref{figures/tmd_gluon_audit_20261025/fig06_plateau_instability.pdf} & \(\ts\) 漂移/误差，平台失败量化 \\
+F7 & \pathref{figures/tmd_gluon_audit_20261025/fig07_staircase_order_sensitivity.pdf} & \((0,1)\) 与 \((1,0)\) 路径顺序差 \\
+F8 & \pathref{figures/tmd_gluon_audit_20261025/fig08_flow_window_check.pdf} & \(r_f/a=4.899\) 与全部非零 \(b\) 的窗口冲突 \\
+F9 & \pathref{figures/tmd_gluon_audit_20261025/fig09_nopol_denominator_phase.pdf} & 复/实 \texttt{nopol} 分母约定敏感性 \\
+\bottomrule
+\end{xltabular}
+
+\subsubsection{B9.1 一维 t\_sep 稳定性}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.92\textwidth,height=0.64\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig01_tsep_stability_1d.pdf}
+\caption{1D 诊断：\(z/a=2,b/a=0\)，对每个 \(\ts\) 的 plateau insertion 窗做平均，误差由同一组态轴上的 delete-one JK 计算。纵轴是无量纲 Euclidean ratio，不是 PDF。}
+\end{figure}
+
+\textbf{物理意义.} 若基态已隔离，\(R_U\) 或 helicity phase 应随 \(\ts\) 进入稳定平台；
+平台内变化应与 JK 误差同量级。\textbf{对应结果.} P000 的 \(R_U\) 从
+\(-0.395\pm0.026\) 漂移到 \(0.137\pm0.164\)；P200 从
+\(-0.372\pm0.017\) 到 \(-0.100\pm0.054\)；P400 从
+\(-0.763\pm0.084\) 到 \(4.160\pm2.074\)。helicity phase 同样没有平台，
+P400 在 \(\ts/a=10\) 达到 \(-3.45\pm4.05\)。\textbf{物理解析.} 这些曲线不是
+“有噪声的基态矩阵元”，而是未识别激发态、流污染、分母小或统计不足共同导致的失败信号。
+
+\subsubsection{B9.2 b 依赖与 (z,b) 图}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.90\textwidth,height=0.58\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig02_b_dependence_1d.pdf}
+\caption{参考点 \(\ts/a=8,z/a=2\)。左：unpolarized \(R_U\)；右：helicity phase。误差为 insertion 窗口平均后的 delete-one JK。}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.98\textwidth,height=0.68\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig03_z_b_maps_1d.pdf}
+\caption{1D \((z,b)\) 诊断图：每列一个动量，上排 unpolarized、下排 helicity phase；固定 \(\ts/a=8\) 并对 insertion 窗 \([2,5]\) 平均。颜色尺度按每幅图最大绝对值居中。}
+\end{figure}
+
+\textbf{物理意义.} 在理想短流时窗口内，\(b\) 依赖应由非局域胶子关联决定，并应在
+旋转/反射和连续极限下具有受控对称性；固定 \(\ts\) 的图只用于发现异常，不是平台值。
+\textbf{对应结果.} P000/P200 在 \(b=0\) 的中心值相近，但 \(b/a=1,2\) 的 JK 误差
+已达 \(1.7\)--\(3.4\)，与中心值同量级甚至更大；P400 的误差更大（\(3.4\)--\(5.1\)）。
+因此不能按中心值排序，也不能把低 \(b\) 的“量级相近”当作稳定结构。
+不同 \(z,b\) 的组合没有形成平滑、可由单一尺度描述的曲面。\textbf{物理解析.}
+由于 \(r_f=0.516\,\mathrm{fm}\) 大于所有非零 \(b\le0.421\,\mathrm{fm}\)，
+流化会直接平滑待测横向结构；因此在当前固定流时下，\(b\) 依赖不能解释为物理 TMD
+分布。该图的价值是证明诊断可以运行并暴露尺度层级失败，而不是提取形状。
+
+\subsubsection{B9.3 二维 staircase 结果}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.90\textwidth,height=0.62\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig04_bx_by_slices_2d.pdf}
+\caption{P200 二维结果：固定 \(\ts/a=8\)、对 insertion 窗 \([2,5]\) 平均；每列对应 \(b_y/a=0,1\)，横轴 \(b_x/a\)，纵轴 \(z/a\)。}
+\end{figure}
+
+\textbf{物理意义.} 二维 Wilson line 应保留横向向量的方向和离散路径；在 \(b_y=0\)
+时，同一 producer 的二维路径顺序必须精确退化。\textbf{对应结果.} 需要区分三件事：
+(i) 同一 2D producer 的 \((0,1)\) 与 \((1,0)\) 在 \(b_y=0\) 时逐元素为零；
+(ii) 合成 1D/2D 契约在 \(2\times10^{-12}\) 内通过；
+(iii) 真实生产的 1D-v2 与 2D-v3 cache 不是同一实现，11 个组态中 6 个在
+\(b_y=0\) 的相对 \(L_2\) 为 \(7.48\times10^{-5}\)--\(7.59\times10^{-5}\)
+（最大绝对差约 \(0.035\)--\(0.038\)），5 个逐元素一致。因此不能写“2D 与 1D
+输入数值一致”，应写“合成退化契约通过，生产 cache 在 complex64 精度上存在
+约 \(7.5\times10^{-5}\) 的差异，尚未证明逐点一致”。\textbf{物理解析.} 二维网格
+目前只覆盖 \(b_y/a\le1\)，不足以做旋转/反射连续性或大 \(b\) 尾部分析；
+它证明“二维轴可执行”，不能证明连续横向对称性。
+
+\subsubsection{B9.4 JK 协方差与平台指标}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.90\textwidth,height=0.52\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig05_jk_covariance_spectrum.pdf}
+\caption{1D/2D JK 协方差正本征值谱，按最大正本征值归一。每幅谱恰有 10 个正模，对应 \(N_{\rm conf}-1=10\)。}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.90\textwidth,height=0.52\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig06_plateau_instability.pdf}
+\caption{各动量、各通道的最大 \(\ts\) 漂移与 JK 误差比。红虚线 1 表示“漂移与一个 JK 误差同量级”；所有柱子均远大于 1。}
+\end{figure}
+
+\textbf{物理意义.} 协方差秩给出可用于线性组合的独立统计方向数；\(\ts\) 漂移/误差
+衡量平台选择是否被统计误差支持。\textbf{指标定义.}
+图 6 的柱高是 \(\max_{z,b}\{[\max_t R-\min_t R]/\overline{\sigma_t}\}\)；
+它只证明至少一个点失败，不是逐点平台检验。
+\textbf{对应结果.} 1D 的正谱秩都是 10（阈值 \(\lambda>10^{-8}\lambda_{\max}\)；
+P400 有 21 个原始正本征值 \(>10^{-12}\)，其中 10 个在阈值以上），
+正谱条件数为 169.24、115.51、79.52；2D 为 91.45、70.72、50.58。P400 的协方差
+最大正本征值达到 \(6.235\times10^3\)（1D）和 \(9.334\times10^3\)（2D），说明少数方向
+由强涨落主导。1D unpolarized 漂移比为 7.86、10.17、12.95；2D 为 19.84、8.53、63.57。
+helicity phase 的对应最大值也都大于 1。按朴素判据 \(\le1\) 的局部通过率为
+1D unpolarized \(22/65\)、\(26/65\)、\(13/65\)，helicity \(43/65\)、\(20/65\)、\(16/65\)；
+2D 为 \(43/130\)、\(45/130\)、\(24/130\) 与 \(82/130\)、\(41/130\)、\(28/130\)。
+\textbf{物理解析.} 满 JK 秩不等于协方差可逆，因为矩阵维度是 780 或 1560，
+而秩只有 10；任何全局相关拟合都必须做 SVD 截断或使用低维投影。
+当前没有动量在整个 \((z,b)\) 面上通过均匀平台门；局部通过点仍需相关协方差和
+预先声明的选点规则，故整体必须固定为 diagnostic。
+
+\subsubsection{B9.5 staircase 顺序敏感性}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.94\textwidth,height=0.56\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig07_staircase_order_sensitivity.pdf}
+\caption{左：4150/6250 的 full 2D OPE 相对 \(L_2\) 差；右：\(b_y/a=1\) 时 unpolarized combined component 的逐 \((z,b_x)\) 相对差。}
+\end{figure}
+
+\textbf{物理意义.} 固定 \(b_x,b_y\) 时，\((0,1)\) 与 \((1,0)\) 是两条不同的
+连续 staircase 轮廓，不只是同一连续 Wilson line 的两种格距离散；有限格距的
+非交换链接只是让路径依赖更显眼。\textbf{对应结果.} 本报告直接读取两个真实
+2D OPE HDF5，定义切片相对 \(L_2\) \(\|A-B\|_2/\|A\|_2\)（以 order \((0,1)\)
+的 \(b_y=1\) 切片为分母）：\(b_y=0\) 为零，\(b_y=1\) 对 4150 为
+\(1.9543\%\)、对 6250 为 \(1.7935\%\)；完整二维数组为 \(1.156\%\) 与 \(1.076\%\)。
+\textbf{物理解析.} 该量级远高于 float32 舍入，是 contour/Wilson-loop 结构；
+它是否可由某个高扭度或局域展开描述，需要独立短距 OPE 证明。当前只有一个格距
+和两个组态，未验证 \(a\to0\) 行为；在连续外推前不能把反序路径直接平均。
+该图支持把 \code{transverse_order} 放入 cache、audit、ratio 身份字段。
+
+\subsubsection{B9.6 流窗口冲突}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.88\textwidth,height=0.46\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig08_flow_window_check.pdf}
+\caption{固定 \(\tau=3\) 的流半径与当前非零 \(b/a\)。\(r_f/a=4.899\)，所有非零 \(b=1,\ldots,4\) 都满足 \(b<r_f\)，即落在 \(r_f>b\) 的失败区内；没有 \(b>r_f\) 的非零点。}
+\end{figure}
+
+\textbf{物理意义.} 梯度流尺度必须大于格距以压低 UV，又必须小于待测非局域距离以保留
+目标结构；大动量还必须满足 \(\Pz r_f/(\hbar c)\ll1\)。\textbf{对应结果.}
+\(r_f=4.899a=0.516\,\mathrm{fm}\)；非零 \(b\) 最大只有
+\(0.421\,\mathrm{fm}\)，二维最大模长 \(0.434\,\mathrm{fm}\)；\(z/a=1,\ldots,4\)
+同样满足 \(z<r_f\)。令 \(L_s=24a\)、\(L_\parallel=12a\)，则
+\(L_\parallel=L_s/2\)，不满足 \(L_\parallel\ll L_s/2\)；且 \(t_s\) 平台失败，
+\(t_s\gg1/\Delta E\) 也未验证。P200/P400 的物理动量为约
+\(0.981/1.962\,\mathrm{GeV}\)，对应 \(\Pz r_f/(\hbar c)\simeq2.57/5.13\)。
+\textbf{物理解析.} 当前数据没有同时满足 \(a\ll r_f\ll b_T,z\)、
+\(\Pz r_f/(\hbar c)\ll1\) 与 \(L_\parallel\ll L_s/2\) 的非零 \(b\) 点。
+这是物理验收失败，且无法通过改善统计误差修复；必须更换流时、b 范围或系综参数
+后重新生产。\textbf{范围限定.} 仓内另有 pre-\code{dev25} 的受控低流时扫描
+（\(\tau=0.5,1.0\)，\(r_f/a=2,2.828\)，\(b/a=3,4\)，scalar/real v1 OPE），
+部分 \((z,b)\) 可满足流窗口；它们不是本次 full-channel \texttt{nopol/pol35} 链，
+不能与 all11 结果混同，也没有闭合本链。
+
+\subsubsection{B9.7 \texttt{nopol} 分母相位}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.88\textwidth,height=0.50\textheight,keepaspectratio]{figures/tmd_gluon_audit_20261025/fig09_nopol_denominator_phase.pdf}
+\caption{11 组态、\(\ts/a=8\) 的 source 平均 \texttt{nopol} C2 复数均值。左图为复平面；右图为 \(|\Imag/\Real|\) 及相位角。}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{\texttt{nopol} 分母相位诊断（数据来源：11 组态 v3 C2 HDF5，\(\ts/a=8\)，source 平均）}
+\begin{tabular}{@{}l r r r r@{}}
+\toprule
+动量 & \(\Real C_2\) & \(\Imag C_2\) & 相位角 & \(|\Imag/\Real|\) \\
+\midrule
+P000 & \(3.608\times10^{-4}\) & \(-3.255\times10^{-6}\) & \(-0.517^\circ\) & 0.902\% \\
+P200 & \(4.676\times10^{-5}\) & \(6.013\times10^{-7}\) & \(0.737^\circ\) & 1.286\% \\
+P400 & \(1.357\times10^{-7}\) & \(2.117\times10^{-8}\) & \(8.869^\circ\) & 15.604\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{物理意义.} 在无相位约定歧义的无限统计极限，正宇称 C2 可作为正常化分母；
+有限样本下若保留复数分母，除法会把分母相位转入 physical ratio。
+\textbf{对应结果.} 表 12 是 \(\ts/a=8\) 的 \textbf{单点} source 平均：
+P000/P200 的相位小于 1 度，P400 为 \(8.87^\circ\)（\(|\Imag/\Real|=15.60\%\)）。
+跨 \(\ts\) 并不稳定：P400 的 \(|\Imag/\Real|\) 在
+\(\ts/a=5,8,10\) 分别约为 2.22\%、15.60\%、121.2\%，
+相位约为 \(-1.27^\circ\)、\(8.87^\circ\)、\(50.47^\circ\)（中心值）。
+因此 15.6\% 只能标记为单点敏感度，不能当作“P400 代表性相位”。
+\textbf{三条 denominator 路径.} (i) ratio-v3 使用复 \(C_2\)；
+(ii) 仓内主 \texttt{\_disconnected} 的 \texttt{ensemble\_covariance\_ratio}
+使用 \(\Real C_2\)；(iii) 归档 donghx 使用 \(\Real C_2\)。
+对同一受控复输入，复/实分母的 \(\max|\Delta R|=6.77\times10^{-3}\)
+（归一化 7.86\%，相对 \(L_2\) 7.28\%），这是可以直接比较的敏感度上界。
+\textbf{物理解析.} 对 \(C_2=De^{i\phi}\)，一阶展开给出
+\begin{equation}
+R_U^{\rm PyQCD}\approx R_U^{\rm donghx}
++\frac{\Imag C_{3,U}}{\Real C_{2,N}}\tan\phi,
+\qquad
+R_H^{\rm PyQCD}\approx R_H^{\rm donghx}
+-\frac{\Real C_{3,H}}{\Real C_{2,N}}\tan\phi,
+\label{eq:phase-leakage}
+\end{equation}
+但该式只在 \(|\phi|\ll1\) 时可用；\(\ts/a=10\) 的 \(50^\circ\) 已超出适用范围，
+应改用精确复除法。统一前不得判定哪一种 denominator 约定在物理上正确，
+也不得把两套中心值直接相减。建议把 denominator convention 变为显式选择，
+并在同一 JK 样本上报告 complex-denominator 与 real-denominator 的并列 sensitivity。
+
+\subsection{B10 综合分析}
+
+\subsubsection{B10.1 对称性、极限与不变量}
+
+\begin{xltabular}{\textwidth}{@{}p{0.22\textwidth}p{0.20\textwidth}X@{}}
+\caption{B10 物理不变量与当前证据（来源：contract tests 与真实数据）}\\
+\toprule
+检查 & 状态 & 说明 \\
+\midrule
+\endfirsthead
+\toprule
+检查 & 状态 & 说明 \\
+\midrule
+\endhead
+规范协变 & 通过 & 2D staple 规范协变残差 \(<2\times10^{-11}\)；纯规范 TMD 约 \(10^{-32}\) \\
+\(b=0\) 直线退化 & 通过 & full-channel 与 straight OPE 最大差 \(1.243\times10^{-14}\) \\
+\(b_y=0\) 二维退化 & 契约通过 & 同一 2D producer 精确退化；合成 1D/2D 契约通过；真实 1D-v2/2D-v3 有 6/11 组态约 \(7.5\times10^{-5}\) 相对差 \\
+\(z=0\) odd 零 & 通过 & helicity odd orientation 精确为零 \\
+反周期边界 & 通过 & \(t_{\rm sink}<t_{\rm src}\) 施加负号，C2 oracle 通过 \\
+有限 \(b\) helicity & 未验证 & 只有内部代数/几何契约，无独立有限 \(b\) oracle \\
+二维路径顺序 & 算符身份 & \(b_y=1\) 切片差约 2\%；连续极限未做 \\
+\(\ts\) 平台 & 失败 & 无动量在整个 \((z,b)\) 面通过均匀平台；最坏点 P400 达 \(>10\) \\
+流窗口 & 失败 & 非零 \(b<r_f\)、\(z\le4<r_f\)、\(\Pz r_f/(\hbar c)>1\)、\(L_\parallel=L_s/2\) \\
+分母约定 & 未统一 & ratio-v3 复 \(C_2\)；主 \texttt{\_disconnected}/donghx 实 \(C_2\) \\
+soft/rapidity & 未实现 & 无同几何软函数、CS 核或 rapidity subtraction \\
+完整 matching & 未实现 & 只有 gg-only 诊断接口，无 \(g/q_S/\bar q_S\) 单态 \\
+连续极限 & 未实现 & 单 \(a\)、单 \(\tau\)、单 \(L_\parallel\)、单系综 \\
+\bottomrule
+\end{xltabular}
+
+\subsubsection{B10.2 量纲与尺度}
+
+取 \(a=0.1053\,\mathrm{fm}\)，\(\hbar c=0.197327\,\mathrm{GeV\,fm}\)，
+空间长度 \(L_s=24a\)。本报告的动量以 \(2\pi/L_s\) 为单位：
+\begin{equation}
+\Pz(n)=n\frac{2\pi}{La}\hbar c.
+\label{eq:pz-physical}
+\end{equation}
+因此 P200/P400 约为 \(0.981/1.962\,\mathrm{GeV}\)。这高于质子质量，但只有约
+\(1.0/2.1\,M_N\)，不构成大动量极限族。更重要的是，固定流半径给出
+\(\Pz r_f/(\hbar c)=2.57/5.13\)，说明流化尺度在 boost 后的算符上不可忽略。
+
+体积条件方面，\(L_s=2.527\,\mathrm{fm}\)，\(L_s/2=1.264\,\mathrm{fm}\)；
+当前 \(b_{\max}=0.421\,\mathrm{fm}\) 满足 \(b\ll L_s/2\)。但
+\(L_\parallel=12a\) 恰好等于 \(L_s/2\)，不满足 \(L_\parallel\ll L_s/2\)，
+也未独立扫描；\(t_s\gg1/\Delta E\) 同样未验证。因此有限体积通过不弥补
+流窗口失败。
+
+\subsubsection{B10.3 统计秩与信息量}
+
+159120 或 318240 个 finite ratio 是张量元素计数，不是 159120 个独立测量。
+它们共享 11 个组态，并在 \(z,b,\ts,\) insertion 上高度相关。任何拟合必须使用
+跨 observable 协方差或明确降维。当前 \(780\times780\) 和 \(1560\times1560\)
+协方差都只有 10 个正模，直接求逆会把零模放大。正确做法是：
+\begin{enumerate}
+  \item 先在物理选择器下形成低维 observable；
+  \item 对协方差做 SVD，报告截断谱和稳定性；
+  \item 用相同 JK 样本传播所有非线性操作；
+  \item 将窗口、流时、\(b\) 范围和路径顺序作为系统变化，而不是只做中心值。
+\end{enumerate}
+
+\subsubsection{B10.4 当前结果的物理层级}
+
+参考文件采用 L0--L3 分级：L0 为算符/代数，L1 为受控矩阵元与统计，L2 为方案一致性，
+L3 为多尺度连续极限。当前可判为：
+\begin{itemize}
+  \item \textbf{L0：达到。} 场强、staple、颜色闭合、一维/二维退化、cache 和合同均有证据。
+  \item \textbf{L1：部分达到。} 真实 source-resolved C2、disconnected C3/C2 与 JK 可运行，
+        但基态平台失败，故未完成受控矩阵元提取。
+  \item \textbf{L2：未达到。} 无同几何 soft/rapidity、ZR/hybrid 运行链和完整 matching。
+  \item \textbf{L3：未达到。} 无多 \(a,\tau,\Pz,L_\parallel\) 和稳定联合外推。
+\end{itemize}
+因此“软件测试通过”与“物理级别”必须分栏报告，不能把 112 项测试通过升级为 L2/L3。
+
+\subsection{B11 结尾总结}
+
+\begin{conclbox}
+本区间最重要的物理成果不是某个数值，而是把有限横距胶子 TMD 从“几何函数”推进到
+可追溯的 \(C_2/C_3\)、极化和 JK 协方差诊断，并明确证明当前参数点不能作为物理 TMD。
+\(b=0\) 直线极限、同一 producer 的二维退化、规范协变和极化合同已经足够扎实，
+可作为下一阶段开发的回归基线；真实 1D/2D cache 的 \(7.5\times10^{-5}\) 差异和
+有限 \(b\) helicity 的 oracle 缺项仍需补证。非零 \(b\) 的物理结果则因流窗口和
+平台失败而必须暂时冻结。
+\end{conclbox}
+
+\subsection{B12 结尾评价}
+
+\textbf{优点.} (i) 每个物理轴都有显式 shape/label/SHA 身份；(ii) C2 合同有公共参考和
+逐时间对 oracle；(iii) all11 manifest 明确 fail-closed；(iv) 二维路径顺序没有静默平均；
+(v) GPU 内存缺陷通过数值等价 oracle 修复。
+
+\textbf{缺点.} (i) 本次 full-channel all11 链共用单一流时，无法分离流污染
+（pre-\code{dev25} 的 scalar 低流时扫描不构成本链）；(ii) 分母 convention
+未统一；(iii) 没有稳定 \(\ts\) 平台和低维物理 fit；(iv) 二维 \(b_y\) 范围过小；
+(v) 完整 TMD 外层没有运行。下一轮应优先修正物理窗口和估计量一致性，而不是增加图数。
+
+\subsection{B13 补充说明：适用范围与下一步}
+
+\begin{warnbox}
+\begin{enumerate}
+  \item \textbf{流时扫描：} 对 full-channel 链至少选多个 \(\tau\)，逐点检查
+        \(a\ll r_f\ll b_T,z\) 和 \(\Pz r_f/(\hbar c)\ll1\)；当前 \(\tau=3\)
+        的单点不足以做流时外推。pre-\code{dev25} 的 scalar 低流时扫描只证明
+        部分 \((z,b)\) 可满足窗口，不能替代本链。
+  \item \textbf{denominator 决策：} 对 complex 与 real \(\texttt{nopol}\) 分母并列重算，
+        在相同 JK 样本上报告 \(R_U,R_H\) 的差和相位灵敏度。
+  \item \textbf{平台与态分离：} 增加组态、源数，并用二态/多态或 GEVP 控制激发态；
+        在平台稳定前不要发布基态矩阵元。
+  \item \textbf{staple 长度与二维方向：} 独立扫描 \(L_\parallel\)，扩大 \(b_y\) 并检验
+        旋转/反射；在连续外推前继续把 staircase order 保留为算符身份。
+  \item \textbf{完整方案：} 同表示 soft/rapidity、Wilson-line subtraction、ZR/hybrid、
+        \(g/q_S/\bar q_S\) matching 和多格距连续极限必须全部进入同一条可复现链。
+  \item \textbf{统计独立性：} 11 个规范组态的自相关长度与 JK 误差是否充分，
+        当前未验证；config id 间隔不能替代 binning/block-length 检查。
+\end{enumerate}
+\end{warnbox}
+
+\subsection{B14 参考源}
+
+本报告使用三类来源：(i) 用户指定的 MyQCD 理论参考；(ii) 本仓库当前 HEAD 的代码、
+测试、日志、JSON/NPZ/HDF5；(iii) 参考文件中已列出的原始论文。核心论文包括
+Lüscher 的 Wilson flow \cite{Luscher2010}、Lüscher--Weisz 微扰分析
+\cite{LuscherWeisz2011}、Collins 的 TMD 因子化 \cite{Collins2011}、
+胶子准 PDF/LaMET \cite{Ji2013,Ji2014,JiReview2021,ZhangGluonLaMET2019,LiMaQiu2019}、
+以及胶子 TMD 软函数/CS 核先例 \cite{ZhangSoft2020,ChuCS2022,ChuSoft2023}。
+这些论文提供理论边界，不替代当前数据缺项。
+
+\subsection{B15 附录与附件}
+
+\subsubsection{B15.1 图表闭合清单}
+
+本报告 9 张图全部由真实 all11 结果生成，统一由
+\pathref{data/runs/tmd-audit-20261025/make_figures.py} 重生成：
+F1--F3 来自 1D plateau 协方差 NPZ；F4 来自 2D plateau 协方差 NPZ
+（完整 \(z/a=0,\ldots,12\)）；F5 来自 covariance eigenvalues；
+F6 来自 plateau/error；F7 来自 4150/6250 的 order \((0,1)/(1,0)\) 2D OPE HDF5；
+F8 是固定 \(\tau=3\) 的解析尺度关系；F9 来自 11 组态 v3 \texttt{nopol} C2 HDF5。
+任何图中都没有用合成值替代真实数据；只有 F8 是解析尺度检查示意。
+图 F5 的秩阈值固定为 \(\lambda>10^{-8}\lambda_{\max}\)，F7 的左右两图分别标注
+切片相对 \(L_2\) 与逐 \((z,b_x)\) 相对差，避免与完整二维值混淆。
+
+\subsubsection{B15.2 关键源码直引：二维 staircase}
+
+\lstinputlisting[language=Python,firstline=162,lastline=203]{/root/PyQCD/pyqcd/renorm/_tmd.py}
+
+\subsubsection{B15.3 关键源码直引：最终 helicity 选择}
+
+\lstinputlisting[language=Python,firstline=958,lastline=1001]{/root/PyQCD/pyqcd/analysis/_gradient_flow_ratio.py}
+
+\subsubsection{B15.4 关键源码直引：复数分母校验}
+
+\lstinputlisting[language=Python,firstline=1126,lastline=1131]{/root/PyQCD/pyqcd/analysis/_gradient_flow_ratio.py}
+
+\subsubsection{B15.5 复现命令}
+
+\begin{lstlisting}[language=bash,numbers=none]
+python -B -m pyqcd.testing
+python -B -m pyqcd.testing._gradient_flow_gluon_contract
+python -B -m pyqcd.testing._tmd_physical_contract
+python -B -m pyqcd.testing._tmd_su3_geometry_contract
+python -B -m pyqcd.testing.tmd.audit_finite_b_inputs \
+  --run-dir data/runs/tmd-production-10conf \
+  --conf-ids 4150,6250,6450,6650,6850,7050,7250,7450,7650,7850,8050
+python -B -m pyqcd.testing.tmd.audit_finite_b_inputs --dimension 2d \
+  --run-dir data/runs/tmd-production-10conf \
+  --conf-ids 4150,6250,6450,6650,6850,7050,7250,7450,7650,7850,8050
+python data/runs/tmd-audit-20261025/make_figures.py
+for i in 1 2 3; do xelatex -interaction=nonstopmode -halt-on-error \
+  docs/report_tmd_gluon_audit_20261025.tex; done
+\end{lstlisting}
+2D audit 的 order 对照使用 \code{--transverse-order 0,1}（4150/6250）。
+
+\subsection{B15.6 证据索引补充}
+
+\begin{xltabular}{\textwidth}{@{}p{0.38\textwidth}X@{}}
+\caption{本报告的关键可追溯证据}\\
+\toprule
+证据 & 内容 \\
+\midrule
+\endfirsthead
+\toprule
+证据 & 内容 \\
+\midrule
+\endhead
+\pathref{logs/v2026102508.txt:17-65} & 11 组态真实 C2、GPU、1D/2D ratio、JK、staircase 与 112 项回归 \\
+\pathref{data/runs/tmd-production-10conf/analysis/source_resolved_gluon_tmd_all11_manifest_20261025.json:64-108} & 11 组态、1D/2D 维度、\(\ts\) 和 fail-closed 状态 \\
+\pathref{data/runs/tmd-production-10conf/analysis/finite_b_ratio_v3_all11/all11_ratio_v3_summary.json:41-151} & 1D shape、finite count、JK shape 和 diagnostic status \\
+\pathref{data/runs/tmd-production-10conf/analysis/finite_b_ratio_v3_all11/all11_plateau_covariance.json:32-118} & 1D observable selector、JK rank、条件数和 \(\ts\) 漂移 \\
+\pathref{data/runs/tmd-production-10conf/analysis/finite_b_ratio_v3_2d_all11/all11_ratio_2d_v3_summary.json:45-165} & 2D shape、finite count、staircase order 和 diagnostic status \\
+\pathref{data/runs/tmd-production-10conf/analysis/finite_b_ratio_v3_2d_all11/all11_plateau_covariance_2d.json:33-86} & 2D JK rank、条件数和平台漂移 \\
+\pathref{data/runs/tmd-production-10conf/analysis/gpu_flow_memory_regression_20261025.json:2-35} & OOM 根因、修复实现和真实 7650 峰值显存 \\
+\pathref{pyqcd/renorm/_tmd.py:123-203} & 1D/2D staple 路径与二维顺序 \\
+\pathref{pyqcd/renorm/_tmd.py:345-457} & 六组件、channel、orientation 和 1D full-channel producer \\
+\pathref{pyqcd/pipeline/_steps.py:930-1056} & \texttt{nopol/pol35} 投影、Cg5g4 合同和 source-resolved C2 写缓存 \\
+\pathref{pyqcd/analysis/_gradient_flow_ratio.py:93-216} & disconnected C3/C2 与解析 delete-one JK \\
+\pathref{pyqcd/analysis/_gradient_flow_ratio.py:456-585} & 显式 1D/2D ratio 轴恢复与 schema \\
+\pathref{pyqcd/analysis/_gradient_flow_ratio.py:958-1001} & physical helicity \(M_{titi}-M_{ijij}\) 与最终相位 \\
+\pathref{/root/MyQCD/docs/pyqcd_physics/report_gluon_tmd_lattice_qcd_review_20261023.tex:1790-1882} & Wilson flow、SFTX 和流窗口理论参考 \\
+\pathref{/root/MyQCD/docs/pyqcd_physics/report_gluon_tmd_lattice_qcd_review_20261023.tex:3777-3862} & 共同尺度窗口、误差矩阵和 L0--L3 验收 \\
+\bottomrule
+\end{xltabular}
+
+\section{最终结论}
+
+\begin{conclbox}
+\textbf{准确结论：}从 \code{dev25} 到当前 HEAD，PyQCD 完成了有限横距胶子 TMD
+Euclidean 诊断链的实质性扩展，并在 11 个真实组态上生成了完整的 C2/OPE/ratio/JK
+材料；软件与算符合同通过 112 项回归。当前数据只能支持 \statusdiag，
+不支持物理 TMD-PDF 或 \(\Delta G(x,\bT)\) 声称。下一阶段的决定性问题不是继续增加
+同一 \(\tau,a\) 参数点的图，而是先建立合法流窗口、稳定基态平台和统一的
+\texttt{nopol} 分母约定，再进入 soft/rapidity、ZR/hybrid、matching 与连续极限。
+\end{conclbox}
+
+\begin{thebibliography}{99}
+
+\bibitem{local-log-all11}
+PyQCD,
+\newblock \textit{all11-polarized-tmd-diagnostic final log},
+\newblock \pathref{logs/v2026102508.txt}, 2026-10-25.
+
+\bibitem{Collins2011}
+J. Collins,
+\newblock \textit{Foundations of Perturbative QCD},
+\newblock Cambridge University Press, Cambridge, 2011.
+
+\bibitem{Ji2013}
+X. Ji,
+\newblock ``Parton physics on a Euclidean lattice,''
+\newblock Phys. Rev. Lett. \textbf{110}, 262002 (2013);
+arXiv:1305.1539.
+
+\bibitem{Ji2014}
+X. Ji,
+\newblock ``Parton physics from large-momentum effective field theory,''
+\newblock Sci. China Phys. Mech. Astron. \textbf{57}, 1407 (2014);
+arXiv:1404.6680.
+
+\bibitem{JiReview2021}
+X. Ji, Y. Liu, Y.-S. Liu, J.-H. Zhang, and Y. Zhao,
+\newblock ``Large-momentum effective theory,''
+\newblock Rev. Mod. Phys. \textbf{93}, 035005 (2021); arXiv:2004.03543.
+
+\bibitem{ZhangGluonLaMET2019}
+J.-H. Zhang, X. Ji, A. Schäfer, W. Wang, and S. Zhao,
+\newblock ``Accessing gluon parton distributions in large momentum effective theory,''
+\newblock Phys. Rev. Lett. \textbf{122}, 142001 (2019); arXiv:1808.10824.
+
+\bibitem{LiMaQiu2019}
+Z.-Y. Li, Y.-Q. Ma, and J.-W. Qiu,
+\newblock ``Multiplicative renormalizability of quasi-parton operators,''
+\newblock Phys. Rev. Lett. \textbf{122}, 062002 (2019); arXiv:1809.01836.
+
+\bibitem{ZhangSoft2020}
+Q.-A. Zhang \textit{et al.},
+\newblock ``Lattice-QCD calculations of TMD soft function through large-momentum effective theory,''
+\newblock Phys. Rev. Lett. \textbf{125}, 192001 (2020); arXiv:2005.14572.
+
+\bibitem{ChuCS2022}
+M.-H. Chu \textit{et al.},
+\newblock ``Nonperturbative determination of Collins--Soper kernel from quasi transverse-momentum dependent wave functions,''
+\newblock Phys. Rev. D \textbf{106}, 034509 (2022); arXiv:2204.00200.
+
+\bibitem{ChuSoft2023}
+M.-H. Chu \textit{et al.},
+\newblock ``Lattice calculation of the intrinsic soft function and the Collins--Soper kernel,''
+\newblock JHEP \textbf{08}, 172 (2023); arXiv:2306.06488.
+
+\bibitem{Luscher2010}
+M. Lüscher,
+\newblock ``Properties and uses of the Wilson flow in lattice QCD,''
+\newblock JHEP \textbf{08}, 071 (2010); arXiv:1006.4518.
+
+\bibitem{LuscherWeisz2011}
+M. Lüscher and P. Weisz,
+\newblock ``Perturbative analysis of the gradient flow in non-Abelian gauge theories,''
+\newblock JHEP \textbf{02}, 051 (2011); arXiv:1101.0963.
+
+\end{thebibliography}
+
+\end{document}
