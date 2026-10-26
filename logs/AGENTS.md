@@ -342,3 +342,19 @@
 - 关键内容: Verify unmarked existing files by remote/local size and SHA-256 before skipping
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## v20261026 - final - 2026-10-27 00:13:53 +0800
+- 主任务: 新增 L24x72 50 组态完整数据下载脚本
+- 日志文件: logs/v2026102700.txt
+- 文件大小: 6763 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增 50 组态、1200 项数据传输脚本，完成 dry-run、清单与静态验证；远端认证未通过
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## v20261026 - final - 2026-10-27 00:24:08 +0800
+- 主任务: 收紧 L24x72 50 组态下载脚本为 core-only
+- 日志文件: logs/v2026102700-2.txt
+- 文件大小: 5566 bytes
+- 触发原因: 任务完成
+- 关键内容: 默认改为 gauge/eigensystem/light perambulator 共 150 项；增强数据改为显式开关；补充 scp+tar 目录回退
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
