@@ -72,7 +72,8 @@ def _near_identity_su3(shape: tuple[int, int, int, int], *,
 
 def _compile_reference(source: Path, output: Path) -> dict:
     command = [
-        "g++", "-O3", "-std=c++17", "-ffast-math", "-Wall", "-Wextra",
+        "g++", "-O3", "-std=c++17", "-ffast-math", "-fopenmp",
+        "-Wall", "-Wextra",
         str(source), "-o", str(output),
     ]
     subprocess.run(command, check=True)

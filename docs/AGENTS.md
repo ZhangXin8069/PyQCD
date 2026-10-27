@@ -41,6 +41,8 @@ cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelate
 
 ## 格式治理
 
+- `form_pyqcd_20261027.md`：记录 2026-10-27 胶子 TMD-PDF 诊断交付的格式审计结果；
+  `git diff --check` 与脚本语法通过，3 项既有仓库问题保留为治理债。
 - `form_pyqcd_20260928.md`：记录 PyQCD 命名/目录/归档边界审计、具名例外、本地
   `form` 审计入口和整改前后功能复现证据。
 

@@ -358,3 +358,19 @@
 - 关键内容: 默认改为 gauge/eigensystem/light perambulator 共 150 项；增强数据改为显式开关；补充 scp+tar 目录回退
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## donghx-gradient-flow-audit-20261027 - stage - 2026-10-27 01:35:42 +0800
+- 主任务: Donghx Gradient Flow GluonPDF 全面 debug 与小实例比对
+- 日志文件: logs/v202610270135.txt
+- 文件大小: 12638 bytes
+- 触发原因: 阶段成果
+- 关键内容: C++/PyQCD 小实例对照与归档树缺陷审计完成，真实数据子代理待完成
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## resume-20261027T003813.r7UP9v - final - 2026-10-27 05:57:04 +0800
+- 主任务: Donghx 梯度流胶子 PDF 审计与真实数据 TMD-PDF 失败关闭诊断
+- 日志文件: logs/v2026102705.txt
+- 文件大小: 8518 bytes
+- 触发原因: 任务完成
+- 关键内容: 恢复任务完成：23/23 跨实现验证、34/34 独立验证、27 图与报告生成，物理结论保持 diagnostic_only
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
