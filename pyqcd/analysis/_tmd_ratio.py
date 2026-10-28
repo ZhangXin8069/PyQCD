@@ -842,6 +842,147 @@ def plot_tmd_c0(ch_results, run_dir, momentum, logger=print,
         logger("  No TMD c0 plot passed the physical-quality gate")
 
 
+def c2_signal_to_noise(c2_samples):
+    """逐 ``dt`` 的核子 2pt 信噪比 ``|mean|/std``（bootstrap 轴在前）。
+
+    Args:
+        c2_samples: ``(Nsample, Ndt)`` bootstrap 样本（实数或复数）。
+    Returns:
+        ``(Ndt,)`` 的 S/N；``std == 0`` 记为 ``inf``。
+    """
+    c2 = np.asarray(c2_samples)
+    if c2.ndim != 2:
+        raise ValueError("c2_samples 必须为 (Nsample, Ndt) 二维数组")
+    if c2.shape[0] < 2:
+        raise ValueError("c2_samples 至少需要两个 bootstrap 样本")
+    if not np.all(np.isfinite(c2)):
+        raise ValueError("c2_samples 必须全部有限")
+    mean = np.mean(c2, axis=0)
+    std = np.std(c2, axis=0, ddof=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        snr = np.where(std > 0.0, np.abs(mean) / std, np.inf)
+    return snr
+
+
+def select_plateau_window(ratio, c2_samples=None, *, dt_min=3, dt_max=None,
+                          span=3, snr_min=3.0, cut=6,
+                          max_error_growth=None):
+    """由 C2 信噪比horizon选择 ``t_sep`` 平台窗口（非挑窗）。
+
+    物理依据：ratio 的分母是核子 2pt。一旦 ``C2`` 进入噪声区，``C3/C2``
+    的方差按 ``1/|C2|^2`` 发散，任何"平台"都只是噪声放大。因此窗口上界
+    取 C2 仍满足 ``|mean|/std >= snr_min`` 的最大 ``t_sep``（horizon），
+    下界取 ``horizon - span + 1``；这样窗口只由分母数据决定，不用 ratio
+    自身挑最优值（避免 look-elsewhere）。
+
+    Args:
+        ratio: ``(Nsample, dt_max, dtau_max, nz, nb)`` 不相连 ratio。
+        c2_samples: 可选 ``(Nsample, Ndt)`` 的 C2 bootstrap 样本；省略时
+            退回 ``[dt_min, dt_max]`` 全区间并标记 ``c2_horizon_used=False``。
+        dt_min: 窗口下界下限（默认 3，避开接触项）。
+        dt_max: 候选上界；默认为 ``ratio.shape[1] - 1``。
+        span: 窗口宽度（``t_sep`` 点数）。
+        snr_min: C2 horizon 的信噪比阈值。
+        cut: 与 :func:`plateau_c0` 相同的插入时间前后留空。
+        max_error_growth: 可选正数。给出时要求平台均值的 bootstrap 误差
+            ``sigma(t_sep) <= max_error_growth * sigma(dt_min)``；这直接
+            拦住 ``1/|C2|^2`` 型方差爆炸（分母进入噪声后 ratio 误差量级
+            跳到 10^2-10^3）。
+    Returns:
+        字典：``tsep_start``、``tsep_end``、``horizon``、``c2_snr``、
+        ``c2_horizon_used``、``reason``、``n_points``、``ratio_error``。
+    """
+    r = np.asarray(ratio)
+    if r.ndim != 5:
+        raise ValueError("ratio 必须为 (Nsample, dt, dtau, nz, nb) 五维数组")
+    if r.shape[0] < 2 or r.shape[1] < 2:
+        raise ValueError("ratio 的 sample/dt 轴至少为 2")
+    dt_top = r.shape[1] - 1 if dt_max is None else int(dt_max)
+    dt_min = int(dt_min)
+    span = int(span)
+    if span < 1:
+        raise ValueError("span 必须为正整数")
+    if dt_min < 0 or dt_top < dt_min:
+        raise ValueError(f"非法 dt 区间: [{dt_min}, {dt_top}]")
+    snr_min = float(snr_min)
+    if not np.isfinite(snr_min) or snr_min < 0.0:
+        raise ValueError("snr_min 必须为非负有限数")
+
+    if max_error_growth is not None:
+        max_error_growth = float(max_error_growth)
+        if not np.isfinite(max_error_growth) or max_error_growth <= 0.0:
+            raise ValueError("max_error_growth 必须为正有限数")
+
+    front = cut // 2
+    back = cut - front
+    ratio_error = np.full(dt_top + 1, np.nan, dtype=np.float64)
+    for dt in range(dt_min, dt_top + 1):
+        lo, hi = front, dt - back
+        if hi < lo:
+            continue
+        sample = r[:, dt, lo:hi + 1].reshape(r.shape[0], -1)
+        sample = sample[np.all(np.isfinite(sample), axis=1)]
+        if sample.shape[0] < 2:
+            continue
+        ratio_error[dt] = float(np.mean(np.std(sample, axis=0, ddof=1)))
+
+    growth_ok = np.ones(dt_top + 1, dtype=bool)
+    if max_error_growth is not None:
+        reference = ratio_error[dt_min]
+        if not np.isfinite(reference) or reference <= 0.0:
+            finite = ratio_error[np.isfinite(ratio_error)]
+            reference = float(np.min(finite)) if finite.size else np.nan
+        if np.isfinite(reference) and reference > 0.0:
+            growth_ok = ratio_error <= max_error_growth * reference
+        else:
+            growth_ok = np.zeros(dt_top + 1, dtype=bool)
+            growth_ok[dt_min] = True
+
+    if c2_samples is None:
+        snr = None
+        used = False
+        c2_ok = np.ones(dt_top + 1, dtype=bool)
+        c2_reason = "no_c2_samples_full_range"
+    else:
+        snr = c2_signal_to_noise(c2_samples)
+        if snr.shape[0] <= dt_top:
+            raise ValueError(
+                f"c2_samples 的 dt 轴 ({snr.shape[0]}) 短于请求的 dt_max ({dt_top})")
+        c2_ok = snr >= snr_min
+        used = True
+        c2_reason = "c2_horizon"
+
+    candidates = [dt for dt in range(dt_min, dt_top + 1)
+                  if c2_ok[dt] and growth_ok[dt]]
+    if candidates:
+        horizon = max(candidates)
+        reason = c2_reason
+    else:
+        horizon = dt_min
+        reason = ("c2_below_threshold_everywhere" if used
+                  else "ratio_error_growth_rejected_everywhere")
+    end = min(dt_top, horizon)
+    start = max(dt_min, end - span + 1)
+    if max_error_growth is not None:
+        reason += "_growth_gate"
+
+    points = _plateau_points(r, dt_top, start, end, cut)
+    if not points and start > dt_min:
+        start = dt_min
+        points = _plateau_points(r, dt_top, start, end, cut)
+        reason += "_window_widened_to_dt_min"
+    return {
+        "tsep_start": int(start),
+        "tsep_end": int(end),
+        "horizon": int(horizon),
+        "c2_snr": None if snr is None else np.asarray(snr),
+        "c2_horizon_used": bool(used),
+        "reason": reason,
+        "n_points": len(points),
+        "ratio_error": ratio_error,
+    }
+
+
 def plateau_c0(ratio, dt_max=20, dt_start=7, dt_end=10, cut=6):
     """fit 窗口内 ratio 的 plateau 均值 → c0(z,b)（抗奇异协方差）。
 

@@ -1277,6 +1277,61 @@ def test_tmd_plateau_and_cs_kernel():
         bad, c02, pz1, pz2, k_clip=(-3.0, 3.0))).max() <= 3.0
 
 
+def test_tmd_plateau_window_and_cs_significance():
+    """C2 horizon 选窗与 CS 核显著性/符号门（不再把噪声当核）。"""
+    from pyqcd.analysis import c2_signal_to_noise, select_plateau_window
+    from pyqcd.renorm import cs_kernel_two_momentum
+
+    rng = np.random.default_rng(11)
+    nt = 20
+    noise = 1e-4
+    t = np.arange(nt)
+    signal = np.exp(-0.5 * t)
+    c2 = signal[None, :] + noise * rng.standard_normal((400, nt))
+    snr = c2_signal_to_noise(c2)
+    assert snr.shape == (nt,)
+    assert snr[0] > snr[-1]
+    # e^{-0.5 t} / 1e-4 >= 3  ->  horizon = 16
+    expected_horizon = int(np.max(np.where(signal / noise >= 3.0)[0]))
+    ratio = np.zeros((10, nt, nt, 1, 1), dtype=float)
+    window = select_plateau_window(ratio, c2, dt_min=3, span=3, snr_min=3.0)
+    assert window["c2_horizon_used"] is True
+    assert window["horizon"] == expected_horizon
+    assert window["tsep_end"] == expected_horizon
+    assert window["tsep_start"] == max(3, expected_horizon - 2)
+    assert window["n_points"] > 0
+
+    dead = noise * rng.standard_normal((400, nt))
+    dead_window = select_plateau_window(
+        ratio, dead, dt_min=3, span=3, snr_min=3.0)
+    assert dead_window["reason"] == "c2_below_threshold_everywhere"
+    assert dead_window["tsep_start"] == dead_window["tsep_end"] == 3
+
+    # 方差爆炸门：dt>=7 的 ratio 误差放大 1e3 倍，窗口必须停在 6。
+    explosive = 0.1 * rng.standard_normal((400, nt, nt, 1, 1))
+    explosive[:, 7:] *= 1e3
+    gated = select_plateau_window(
+        explosive, None, dt_min=3, span=3, max_error_growth=3.0)
+    assert gated["tsep_end"] <= 6, gated
+    assert gated["reason"].endswith("growth_gate")
+
+    # CS 核：低显著度与符号翻转都置 nan，只有合格点给有限值。
+    z = np.arange(3)[:, None]
+    c02 = np.exp(-z / 0.3) * np.array([[1.0, 1.0, 1.0]])
+    ratio_value = np.array([[2.0, 2.0, -2.0]])
+    c01 = c02 * ratio_value
+    errors = np.array([[0.1, 1.0, 0.1]])
+    kernel = cs_kernel_two_momentum(
+        c01, c02, 4.0, 2.0, z_ref=1, errors=errors,
+        min_significance=3.0, require_same_sign=True)
+    assert np.isnan(kernel[1])
+    assert np.isnan(kernel[2])
+    assert abs(kernel[0] - 1.0) < 1e-12
+    with np.testing.assert_raises(ValueError):
+        cs_kernel_two_momentum(
+            c01, c02, 4.0, 2.0, z_ref=1, errors=errors)
+
+
 def test_plot_tmd_pdf():
     """TMD-PDF 链成图：4 张 png 齐全且非空。"""
     import os

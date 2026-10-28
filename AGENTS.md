@@ -142,6 +142,17 @@ complex 路径与生产 NPZ 逐元素一致，P000/P200 差 <0.2σ，P400 晚 `t
 `r_f/a=2.828`）：τ=1 使 t_sep 漂移/误差中位数由 1.68/9.03 降到 1.24/3.44（P200/P400），
 但最坏点仍达 9.6/21.7 与 9.4/22.8，平台失败不能只归因于 `b<r_f`；JK 秩 10，仅作路线验证。
 
+新增：`data/runs/tmd-recompute-20261028/`（2026-10-28 全链复算与勘误）。旧运行
+`data/runs/tmd-gluon-subagent-20261027/` 的重整化/匹配图表被判为噪声放大（见该目录
+`ERRATA.md`）：① 平台窗写死 `t_sep/a=7..10`，而参考 2pt 的 P400 在 `t/a>=7` 已无信号
+（C2 与 Donghx `/public` 参考逐位一致，差 ≤1e-7）；② hybrid 除以零一致分母
+（`c0_P000[z=0,b=0]=-0.50±0.52`，旧 `h_R=385.6`）；③ CS 核用 `|ratio|` 无误差/符号门，
+`K≈4` 经 matching 放大 `5.4e3`。新增库函数 `analysis.select_plateau_window`
+（C2 信噪比 horizon + ratio 误差增长选窗）与 `cs_kernel_two_momentum(..., errors=,
+min_significance=, require_same_sign=)` 显著性/符号门；复算用 9 组态、失败关闭成图，
+结论保持 diagnostic_only（`|h_B|≲1`，无 CS 核、无 `x·g`），`python -m pyqcd.testing`
+108 passed/2 skipped/2 failed（两失败均为无 CUDA 设备的 GPU 契约，与改动无关）。
+
 ## torch 后端 + h5 IO + MPI 并行（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
 
 - 后端：`set_backend('torch')`（别名 gpu/cuda）全面替换 numpy/cupy；numpy/cupy 输入自动转

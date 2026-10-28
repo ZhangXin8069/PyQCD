@@ -355,7 +355,8 @@ def cs_kernel_from_ratio(hR_pz1, hR_pz2, pz1, pz2):
 
 
 def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
-                           k_clip=None):
+                           k_clip=None, *, errors=None,
+                           min_significance=None, require_same_sign=False):
     """两动量 c0 比值 CS 核提取——工程封装（整合 test9 示例内联实现）。
 
     与 cs_kernel_from_ratio 的差异：
@@ -370,8 +371,14 @@ def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
         pz1_gev/pz2_gev: 两动量（GeV）。
         z_ref: 参考 z 行索引（负数按 Python 惯例回绕）。
         k_clip: 可选 (K_min, K_max) 显式截断区间；默认不截断。
+        errors: 可选，与 ``a[z_ref]/b_[z_ref]`` 同形的比值误差（bootstrap
+            std）。给出时与 ``min_significance`` 联合使用。
+        min_significance: 可选正数。``|ratio|/errors`` 低于该阈值的 b 点
+            直接置 ``nan``（统计上不可识别，不得当作有限物理核）。
+        require_same_sign: 为 True 时，两动量矩阵元符号相反的 b 点置
+            ``nan``（符号翻转说明该点由噪声主导而非演化）。
     Returns:
-        K(b⊥) 数组（沿所选 z 行）。
+        K(b⊥) 数组（沿所选 z 行）；被门控拒绝的点为 ``nan``。
     """
     a = _finite_real_array(c01, "c01")
     b_ = _finite_real_array(c02, "c02")
@@ -390,6 +397,12 @@ def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
     z_ref = int(z_ref if z_ref >= 0 else len(a) + z_ref)
     if not (0 <= z_ref < len(a)):
         raise ValueError(f"z_ref={z_ref} 超出 z 维 [0, {len(a)-1}]")
+    if errors is not None and min_significance is None:
+        raise ValueError("给出 errors 时必须同时给出 min_significance")
+    if min_significance is not None:
+        min_significance = float(min_significance)
+        if not np.isfinite(min_significance) or min_significance < 0.0:
+            raise ValueError("min_significance 必须是非负有限数")
     ratio = a[z_ref] / b_[z_ref]
     if not np.isfinite(ratio).all() or np.any(ratio == 0.0):
         raise ValueError(
@@ -402,6 +415,26 @@ def cs_kernel_two_momentum(c01, c02, pz1_gev, pz2_gev, z_ref=1,
             raise ValueError("k_clip 边界必须是有限数且 K_min < K_max")
         k_clip = (lo, hi)
     k = np.log(np.abs(ratio)) / np.log(pz1_gev / pz2_gev)
+    if errors is not None:
+        err = np.asarray(errors, dtype=float)
+        if err.shape != ratio.shape:
+            try:
+                err = np.broadcast_to(err, ratio.shape).copy()
+            except ValueError:
+                if err.size == ratio.size:
+                    err = err.reshape(ratio.shape)
+                else:
+                    raise ValueError(
+                        f"errors 形状 {err.shape} 无法匹配比值 {ratio.shape}")
+        if not np.all(np.isfinite(err)) or np.any(err < 0.0):
+            raise ValueError("errors 必须为非负有限数组")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            significance = np.where(err > 0.0, np.abs(ratio) / err, np.inf)
+        rejected = significance < min_significance
+        k = np.where(rejected, np.nan, k)
+    if require_same_sign:
+        opposite = np.sign(a[z_ref]) * np.sign(b_[z_ref]) < 0.0
+        k = np.where(opposite, np.nan, k)
     return np.clip(k, *k_clip) if k_clip is not None else k
 
 

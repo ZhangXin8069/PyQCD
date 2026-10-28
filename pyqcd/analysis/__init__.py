@@ -9,6 +9,8 @@ __all__ = [
     "mean_over_array_of_list", "sum_over_array_of_list", "dis_connect","Mom2GeV", "Jackknife", "Bootstrap", "meff", "ratio_3pt", "loop_tsrc", "solve_gevp",
     "sem", "resample", "cov_mat", "model_ratio", "run_disconnected_ratio",
     "run_disconnected_tmd_ratio", "plot_tmd_c0", "plot_tmd_ratio",
+    "plateau_c0", "plot_tmd_pdf", "select_plateau_window",
+    "c2_signal_to_noise",
     "GRADIENT_FLOW_RATIO_SCHEMA", "GRADIENT_FLOW_POLARIZATION",
     "GRADIENT_FLOW_TMD_RATIO_SCHEMA",
     "GRADIENT_FLOW_TMD_RATIO_2D_SCHEMA",
@@ -56,7 +58,7 @@ from ._disconnected import (
 )
 from ._tmd_ratio import (
     run_disconnected_tmd_ratio, plot_tmd_c0, plot_tmd_ratio,
-    plateau_c0, plot_tmd_pdf,
+    plateau_c0, plot_tmd_pdf, select_plateau_window, c2_signal_to_noise,
 )
 from ._gradient_flow_ratio import (
     RATIO_SCHEMA as GRADIENT_FLOW_RATIO_SCHEMA,
