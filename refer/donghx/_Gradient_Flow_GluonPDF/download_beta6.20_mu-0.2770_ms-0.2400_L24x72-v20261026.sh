@@ -6,6 +6,7 @@
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --preflight
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --yes
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --yes --skip-existing
+#   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --jobs 8 --yes --skip-existing
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --dest-root /data/lqcd --yes
 #
 # Default configuration set:
@@ -60,6 +61,7 @@ DEST_ROOT="${DEST_ROOT:-/}"
 DRY_RUN=false
 SKIP_CONFIRM=false
 SKIP_EXISTING=false
+PARALLEL_JOBS=${PYQCD_DOWNLOAD_JOBS:-4}
 PREFLIGHT_ONLY=false
 NO_PREFLIGHT=false
 ALLOW_MISSING=false
@@ -89,6 +91,7 @@ Options:
   --conf-ids-file FILE   Use one numeric configuration ID per line instead of defaults
   --list-conf-ids        Print the selected configuration IDs and exit
   --summary-only         In dry-run mode, print category counts without every path
+  --jobs N, -j N         Run up to N transfers concurrently (default: 4; 1 = sequential)
   --with-smear           Also request four HYP-smear gauge trees per configuration
   --with-momsmear        Also request momentum-smeared eigenvectors/perambulators
   --with-vvv-vdv         Also request VVV/VdV caches for mom_smear=0 and -2
@@ -101,6 +104,7 @@ Environment:
   PYQCD_SSH_HOST         Remote host (default: 222.200.137.16)
   PYQCD_SSH_PORT         Remote SSH port (default: 10023)
   PYQCD_SSH_USER         Remote user (default: zhangxin)
+  PYQCD_DOWNLOAD_JOBS    Default concurrency (default: 4)
   PUBLIC_BASE            Remote public root (default: /public)
   DONGHX_BASE            Donghx data root
   EIGENSYSTEM_BASE       Eigensystem root
@@ -178,6 +182,11 @@ while (($#)); do
             SUMMARY_ONLY=true
             shift
             ;;
+        --jobs|-j)
+            (($# >= 2)) || die "--jobs requires a positive integer"
+            PARALLEL_JOBS=$2
+            shift 2
+            ;;
         --with-smear)
             WITH_SMEAR=true
             shift
@@ -211,6 +220,14 @@ while (($#)); do
             ;;
     esac
 done
+
+[[ "$PARALLEL_JOBS" =~ ^[1-9][0-9]*$ ]] ||
+    die "--jobs requires a positive integer: $PARALLEL_JOBS"
+
+if ((PARALLEL_JOBS > 1)) && { ((BASH_VERSINFO[0] < 4)) || ((BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3)); }; then
+    log_warn "bash >= 4.3 is required for parallel transfers; using --jobs 1"
+    PARALLEL_JOBS=1
+fi
 
 if $WITH_ALL_AUXILIARY; then
     WITH_SMEAR=true
@@ -342,12 +359,45 @@ quote_remote_path() {
     printf "'%s'" "$path"
 }
 
+execute_transfer() {
+    local index=$1 job_type=$2 local_path=$3 rc=0
+    if [[ "$job_type" == file ]]; then
+        transfer_file "$index" "$local_path" || rc=$?
+    else
+        transfer_dir "$index" "$local_path" || rc=$?
+    fi
+    return "$rc"
+}
+
+launch_transfer() {
+    local index=$1 job_type=$2 remote_path=$3 local_path=$4
+    local log_file="${JOB_LOG_DIR}/${index}.log"
+    local status_file="${STATUS_DIR}/${index}.status"
+    (
+        set +e
+        execute_transfer "$index" "$job_type" "$local_path" >"$log_file" 2>&1
+        rc=$?
+        if ((rc == 0)); then
+            printf 'done\n' >"$status_file"
+            printf '  DONE   %s\n' "$remote_path"
+        else
+            printf 'failed\n' >"$status_file"
+            printf '  FAILED %s (log: %s)\n' "$remote_path" "$log_file" >&2
+        fi
+        exit 0
+    ) &
+    RUNNING_JOBS=$((RUNNING_JOBS + 1))
+}
+
 cleanup_ssh() {
     if [[ -n "${SSH_CONTROL_PATH:-}" && -S "$SSH_CONTROL_PATH" ]]; then
         ssh "${SSH_COMMON_OPTS[@]}" -O exit "$SSH_TARGET" >/dev/null 2>&1 || true
     fi
     if [[ -n "${SSH_CONTROL_DIR:-}" ]]; then
         rm -rf "$SSH_CONTROL_DIR"
+    fi
+    if [[ -n "${WORK_DIR:-}" ]] && ! ${KEEP_WORK_DIR:-false}; then
+        rm -rf "$WORK_DIR"
     fi
 }
 
@@ -524,6 +574,11 @@ elif ! $DRY_RUN; then
     die "neither rsync nor scp is installed"
 fi
 
+# Fail early: a missing tar inside a background transfer would only kill one job.
+if [[ "$TRANSFER_TOOL" == scp+tar ]] && ! $DRY_RUN; then
+    command -v tar >/dev/null 2>&1 || die "tar is required for the scp directory fallback"
+fi
+
 AUXILIARY_GROUPS=()
 if $WITH_SMEAR; then AUXILIARY_GROUPS+=(smear); fi
 if $WITH_MOMSMEAR; then AUXILIARY_GROUPS+=(momsmear); fi
@@ -547,6 +602,7 @@ printf ' Measured core:  at least %d GB for gauge + eigensystem + light perambul
 printf ' Destination:    %s\n' "$DEST_ROOT"
 printf ' SSH:            %s:%s (%s)\n' "$SSH_HOST" "$SSH_PORT" "$SSH_USER"
 printf ' Tool:           %s\n' "$TRANSFER_TOOL"
+printf ' Jobs:           %d\n' "$PARALLEL_JOBS"
 printf ' Mode:           %s%s\n' \
     "$($DRY_RUN && printf DRY-RUN || printf LIVE)" \
     "$($SKIP_EXISTING && printf ' + skip-existing' || true)"
@@ -569,6 +625,12 @@ if $DRY_RUN; then
 fi
 
 init_ssh
+
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pyqcd-download-work.XXXXXX")
+STATUS_DIR="${WORK_DIR}/status"
+JOB_LOG_DIR="${WORK_DIR}/logs"
+mkdir -p "$STATUS_DIR" "$JOB_LOG_DIR"
+printf ' Concurrent job logs: %s\n' "$JOB_LOG_DIR"
 
 if ! $NO_PREFLIGHT; then
     if ! run_preflight; then
@@ -604,6 +666,10 @@ done
 COUNT_SKIPPED=0
 COUNT_DONE=0
 COUNT_FAILED=0
+RUNNING_JOBS=0
+KEEP_WORK_DIR=false
+LAUNCHED_INDICES=()
+FAILED_LOG_INDICES=()
 
 for i in "${!JOB_SOURCES[@]}"; do
     if [[ -n "${SKIP_SET[$i]:-}" ]]; then
@@ -633,30 +699,61 @@ for i in "${!JOB_SOURCES[@]}"; do
         fi
     fi
 
-    if [[ "$job_type" == file ]]; then
-        if transfer_file "$i" "$local_path"; then
-            log_done "$remote_path"
+    if ((PARALLEL_JOBS == 1)); then
+        if execute_transfer "$i" "$job_type" "$local_path"; then
+            if [[ "$job_type" == file ]]; then
+                log_done "$remote_path"
+            else
+                log_done "$remote_path/"
+            fi
             COUNT_DONE=$((COUNT_DONE + 1))
         else
-            log_error "failed: $remote_path"
+            if [[ "$job_type" == file ]]; then
+                log_error "failed: $remote_path"
+            else
+                log_error "failed: $remote_path/"
+            fi
             COUNT_FAILED=$((COUNT_FAILED + 1))
         fi
     else
-        if transfer_dir "$i" "$local_path"; then
-            log_done "$remote_path/"
-            COUNT_DONE=$((COUNT_DONE + 1))
-        else
-            log_error "failed: $remote_path/"
-            COUNT_FAILED=$((COUNT_FAILED + 1))
-        fi
+        launch_transfer "$i" "$job_type" "$remote_path" "$local_path"
+        LAUNCHED_INDICES+=("$i")
+        while ((RUNNING_JOBS >= PARALLEL_JOBS)); do
+            wait -n || true
+            RUNNING_JOBS=$((RUNNING_JOBS - 1))
+        done
     fi
 done
+
+if ((PARALLEL_JOBS > 1)); then
+    wait || true
+    RUNNING_JOBS=0
+    for i in "${LAUNCHED_INDICES[@]}"; do
+        status_file="${STATUS_DIR}/${i}.status"
+        if [[ -f "$status_file" && "$(< "$status_file")" == done ]]; then
+            COUNT_DONE=$((COUNT_DONE + 1))
+        else
+            COUNT_FAILED=$((COUNT_FAILED + 1))
+            FAILED_LOG_INDICES+=("$i")
+        fi
+    done
+fi
 
 printf '\n%s\n' '============================================================================='
 printf ' Skipped: %d\n' "$COUNT_SKIPPED"
 printf ' Done:    %d\n' "$COUNT_DONE"
 printf ' Failed:  %d\n' "$COUNT_FAILED"
 printf '%s\n' '============================================================================='
+
+if ((${#FAILED_LOG_INDICES[@]} > 0)); then
+    KEEP_WORK_DIR=true
+    printf '\nFailure logs (last 20 lines):\n' >&2
+    for i in "${FAILED_LOG_INDICES[@]}"; do
+        printf -- '--- %s (job log: %s) ---\n' "${JOB_SOURCES[$i]}" "${JOB_LOG_DIR}/${i}.log" >&2
+        tail -n 20 "${JOB_LOG_DIR}/${i}.log" >&2 || true
+    done
+    printf 'Full job logs kept in: %s\n' "$JOB_LOG_DIR" >&2
+fi
 
 if ((COUNT_FAILED > 0)); then
     log_error "some transfers failed; rerun with --skip-existing after fixing the cause"

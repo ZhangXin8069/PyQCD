@@ -5,6 +5,7 @@
 #   bash download_data4pyqcd-v20261026.sh
 #   bash download_data4pyqcd-v20261026.sh --dry-run
 #   bash download_data4pyqcd-v20261026.sh --yes --skip-existing
+#   bash download_data4pyqcd-v20261026.sh --jobs 8 --yes --skip-existing
 #   bash download_data4pyqcd-v20261026.sh --dest-root /data/pyqcd
 #   bash download_data4pyqcd-v20261026.sh --dest-root / --yes --skip-existing
 #
@@ -32,6 +33,7 @@ EXPECTED_TOTAL_BYTES="${EXPECTED_TOTAL_BYTES:-1958277360128}"
 DRY_RUN=false
 SKIP_CONFIRM=false
 SKIP_EXISTING=false
+PARALLEL_JOBS=${PYQCD_DOWNLOAD_JOBS:-4}
 
 usage() {
     cat <<'EOF'
@@ -44,12 +46,14 @@ Options:
   --resume               Alias for --skip-existing
   --dest-root PATH       Preserve /public and /nexdata below PATH (default: /)
   --list FILE            Use a different sample list
+  --jobs N, -j N         Run up to N transfers concurrently (default: 4; 1 = sequential)
   --help, -h             Show this help
 
 Environment:
   PYQCD_SSH_HOST         Remote host (default: 222.200.137.16)
   PYQCD_SSH_PORT         Remote SSH port (default: 10023)
   PYQCD_SSH_USER         Remote user (default: zhangxin)
+  PYQCD_DOWNLOAD_JOBS    Default concurrency (default: 4)
   EXPECTED_ENTRIES       Expected list entry count (default: 101)
   EXPECTED_TOTAL_BYTES   Expected sampled bytes (default: 1958277360128)
 EOF
@@ -79,6 +83,11 @@ while (($#)); do
             LIST_FILE=$2
             shift 2
             ;;
+        --jobs|-j)
+            (($# >= 2)) || { printf 'ERROR: --jobs requires a positive integer\n' >&2; exit 2; }
+            PARALLEL_JOBS=$2
+            shift 2
+            ;;
         --help|-h)
             usage
             exit 0
@@ -90,6 +99,22 @@ while (($#)); do
             ;;
     esac
 done
+
+[[ "$PARALLEL_JOBS" =~ ^[1-9][0-9]*$ ]] || {
+    printf 'ERROR: --jobs requires a positive integer: %s\n' "$PARALLEL_JOBS" >&2
+    exit 2
+}
+
+if ((PARALLEL_JOBS > 1)) && { ((BASH_VERSINFO[0] < 4)) || ((BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3)); }; then
+    printf 'WARN: bash >= 4.3 is required for parallel transfers; using --jobs 1\n' >&2
+    PARALLEL_JOBS=1
+fi
+
+# Per-entry prompts and concurrent transfer logs would interleave on a terminal.
+if ((PARALLEL_JOBS > 1)) && ! $DRY_RUN && ! $SKIP_CONFIRM && [[ -t 0 ]]; then
+    printf 'NOTE: interactive confirmation requires --yes for parallel transfers; using --jobs 1\n' >&2
+    PARALLEL_JOBS=1
+fi
 
 [[ -f "$LIST_FILE" ]] || { printf 'ERROR: list not found: %s\n' "$LIST_FILE" >&2; exit 1; }
 
@@ -254,12 +279,48 @@ download_dir() {
     fi
 }
 
+execute_transfer() {
+    local index=$1 kind=$2 remote_path=$3 local_path=$4 rc=0
+    if [[ "$kind" == file ]]; then
+        download_file "$remote_path" "$local_path" || rc=$?
+    else
+        download_dir "$remote_path" "$local_path" || rc=$?
+    fi
+    if ((rc == 0)); then
+        mark_complete "$remote_path" "${LIST_BYTES[$index]}" || rc=$?
+    fi
+    return "$rc"
+}
+
+launch_transfer() {
+    local index=$1 kind=$2 remote_path=$3 local_path=$4
+    local log_file="${JOB_LOG_DIR}/${index}.log"
+    local status_file="${STATUS_DIR}/${index}.status"
+    (
+        set +e
+        execute_transfer "$index" "$kind" "$remote_path" "$local_path" >"$log_file" 2>&1
+        rc=$?
+        if ((rc == 0)); then
+            printf 'done\n' >"$status_file"
+            printf '  DONE   %s\n' "$remote_path"
+        else
+            printf 'failed\n' >"$status_file"
+            printf '  FAILED %s (log: %s)\n' "$remote_path" "$log_file" >&2
+        fi
+        exit 0
+    ) &
+    RUNNING_JOBS=$((RUNNING_JOBS + 1))
+}
+
 cleanup_ssh() {
     if [[ -n "${SSH_CONTROL_PATH:-}" && -S "$SSH_CONTROL_PATH" ]]; then
         ssh "${SSH_COMMON_OPTS[@]}" -O exit "$SSH_TARGET" >/dev/null 2>&1 || true
     fi
     if [[ -n "${SSH_CONTROL_DIR:-}" ]]; then
         rm -rf "$SSH_CONTROL_DIR"
+    fi
+    if [[ -n "${WORK_DIR:-}" ]] && ! ${KEEP_WORK_DIR:-false}; then
+        rm -rf "$WORK_DIR"
     fi
 }
 
@@ -282,6 +343,7 @@ printf ' Bytes:      %d\n' "$TOTAL_BYTES"
 printf ' Destination:%s\n' "$DEST_ROOT"
 printf ' SSH:        %s:%s (%s)\n' "$SSH_HOST" "$SSH_PORT" "$SSH_USER"
 printf ' Tool:       %s\n' "$TRANSFER_TOOL"
+printf ' Jobs:       %d\n' "$PARALLEL_JOBS"
 printf ' Mode:       %s%s\n' \
     "$($DRY_RUN && printf DRY-RUN || printf LIVE)" \
     "$($SKIP_EXISTING && printf ' + skip-existing' || true)"
@@ -310,14 +372,26 @@ if ! $DRY_RUN; then
         exit 1
     fi
     mkdir -p "$STATE_DIR"
+    WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pyqcd-download-work.XXXXXX")
+    STATUS_DIR="${WORK_DIR}/status"
+    JOB_LOG_DIR="${WORK_DIR}/logs"
+    mkdir -p "$STATUS_DIR" "$JOB_LOG_DIR"
+    printf ' Concurrent job logs: %s\n' "$JOB_LOG_DIR"
 else
     SSH_COMMON_OPTS=()
     SCP_OPTS=()
+    WORK_DIR=""
+    STATUS_DIR=""
+    JOB_LOG_DIR=""
 fi
 
 COUNT_SKIPPED=0
 COUNT_DONE=0
 COUNT_FAILED=0
+RUNNING_JOBS=0
+KEEP_WORK_DIR=false
+LAUNCHED_INDICES=()
+FAILED_LOG_INDICES=()
 
 for i in "${!LIST_PATHS[@]}"; do
     remote_path=${LIST_PATHS[$i]}
@@ -363,18 +437,11 @@ for i in "${!LIST_PATHS[@]}"; do
     fi
 
     mkdir -p "$(dirname "$local_path")"
-    if [[ "$kind" == file ]]; then
-        if download_file "$remote_path" "$local_path"; then
-            mark_complete "$remote_path" "$expected"
-            COUNT_DONE=$((COUNT_DONE + 1))
-            printf '  DONE\n'
-        else
-            COUNT_FAILED=$((COUNT_FAILED + 1))
-            printf '  FAILED\n' >&2
-        fi
-    elif [[ "$kind" == dir ]]; then
-        if download_dir "$remote_path" "$local_path"; then
-            mark_complete "$remote_path" "$expected"
+    if [[ "$kind" != file && "$kind" != dir ]]; then
+        printf 'FAILED: unsupported remote type: %s\n' "$kind" >&2
+        COUNT_FAILED=$((COUNT_FAILED + 1))
+    elif ((PARALLEL_JOBS == 1)); then
+        if execute_transfer "$i" "$kind" "$remote_path" "$local_path"; then
             COUNT_DONE=$((COUNT_DONE + 1))
             printf '  DONE\n'
         else
@@ -382,16 +449,44 @@ for i in "${!LIST_PATHS[@]}"; do
             printf '  FAILED\n' >&2
         fi
     else
-        printf 'FAILED: unsupported remote type: %s\n' "$kind" >&2
-        COUNT_FAILED=$((COUNT_FAILED + 1))
+        launch_transfer "$i" "$kind" "$remote_path" "$local_path"
+        LAUNCHED_INDICES+=("$i")
+        while ((RUNNING_JOBS >= PARALLEL_JOBS)); do
+            wait -n || true
+            RUNNING_JOBS=$((RUNNING_JOBS - 1))
+        done
     fi
 done
+
+if ((PARALLEL_JOBS > 1)); then
+    wait || true
+    RUNNING_JOBS=0
+    for i in "${LAUNCHED_INDICES[@]}"; do
+        status_file="${STATUS_DIR}/${i}.status"
+        if [[ -f "$status_file" && "$(< "$status_file")" == done ]]; then
+            COUNT_DONE=$((COUNT_DONE + 1))
+        else
+            COUNT_FAILED=$((COUNT_FAILED + 1))
+            FAILED_LOG_INDICES+=("$i")
+        fi
+    done
+fi
 
 printf '\n%s\n' '============================================================================='
 printf ' Skipped: %d\n' "$COUNT_SKIPPED"
 printf ' Done:    %d\n' "$COUNT_DONE"
 printf ' Failed:  %d\n' "$COUNT_FAILED"
 printf '%s\n' '============================================================================='
+
+if ((${#FAILED_LOG_INDICES[@]} > 0)); then
+    KEEP_WORK_DIR=true
+    printf '\nFailure logs (last 20 lines):\n' >&2
+    for i in "${FAILED_LOG_INDICES[@]}"; do
+        printf -- '--- %s (job log: %s) ---\n' "${LIST_PATHS[$i]}" "${JOB_LOG_DIR}/${i}.log" >&2
+        tail -n 20 "${JOB_LOG_DIR}/${i}.log" >&2 || true
+    done
+    printf 'Full job logs kept in: %s\n' "$JOB_LOG_DIR" >&2
+fi
 
 if $DRY_RUN; then
     printf 'Dry run complete; remove --dry-run to transfer data.\n'

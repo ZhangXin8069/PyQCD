@@ -374,3 +374,11 @@
 - 关键内容: 恢复任务完成：23/23 跨实现验证、34/34 独立验证、27 图与报告生成，物理结论保持 diagnostic_only
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## download-scripts-20261028 - final - 2026-10-28 20:28:44 +0800
+- 主任务: 为 download_**-v20261026.sh 添加多线程下载
+- 日志文件: logs/v2026102820.txt
+- 文件大小: 3657 bytes
+- 触发原因: 任务完成
+- 关键内容: 两个下载脚本新增 --jobs/-j 并发传输、并发安全计数与失败日志
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
