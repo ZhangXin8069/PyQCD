@@ -1,6 +1,6 @@
 # AGENTS.md — refer/papers
 
-文献 PDF 只读参考库（`pdftotext` 提取阅读，不在此目录写代码）。当前共 118 篇 PDF。
+文献 PDF 只读参考库（`pdftotext` 提取阅读，不在此目录写代码）。当前共 121 篇 PDF。
 
 ## 分类
 
@@ -56,3 +56,25 @@
 | `Recent_Advances_in_Transverse-Momentum--Dependent_Distributions_in_Lattice_QCD_Lin_2026.pdf` | 2610.24785 | Lin 2026 |
 
 获取方式：`https://arxiv.org/pdf/<id>`；全部 PDF 已用 `pdfinfo` 校验可读。
+
+## 梯度流胶子 TMD-PDF 补遗（2026-10-29 补充 3 篇）
+
+| 文件 | arXiv | 许可 | 用途 |
+|---|---|---|---|
+| `Factorization_connecting_continuum_and_lattice_TMDs_Ebert_2022.pdf` | 2201.08401 | CC BY 4.0 | 连续/格点 TMD 因子化；gluon matching 与味道对角性 |
+| `Counting_linearly_polarized_gluons_with_lattice_QCD_Zhao_2022.pdf` | 2212.00825 | CC BY 4.0 | 线性极化胶子 TMD 的格点可计算比值与 UV 有限性 |
+| `A_unified_description_of_DGLAP_CSS_BFKL_TMD_factorization_Mukherjee_2023.pdf` | 2311.16402 | CC BY 4.0 | 胶子 TMD 的 DGLAP/CSS/BFKL 统一演化 |
+
+另检索并取得 `2510.26738`（梯度流 flowed moments，pion 价夸克，
+$N_f=3$，$m_\\pi\\simeq411$ MeV）的 LaTeX 源码与 PDF；其许可为 arXiv
+非独占分发，故仅存于
+`data/runs/get-paper/20261029-022356-gluon-tmd-gradient/fetch/2510.26738/`，
+未复制进本目录。
+
+**pion 质量匹配硬门**：`beta6.20_mu-0.2770_ms-0.2400_L24x72` TMD 运行现已用
+同 config ID 的 P000 pion 2pt 得到 9 个逐组态 `m_pi`，均值 `0.2929 GeV`、
+组态间样本标准差 `0.0268 GeV`；亚-MeV 拟合窗误差不是总误差。文档中的
+`m_pi≈293 MeV` 仍只作系综级交叉检查，外部数值比较仍须匹配 $N_f,a,L,m_\\pi$
+和算符几何。完整产物位于
+`data/runs/tmd-gluon-subagent-20261027/run/pion2pt_20261029/`，文献兼容矩阵见
+`data/runs/get-paper/20261029-022356-gluon-tmd-gradient/selection.json`。

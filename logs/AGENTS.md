@@ -69,7 +69,6 @@
 - 关键内容: form 审计通过：registered exceptions=1147 unexpected=0；110 passed/0 failed
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
-
 ## dev20-absorb-debug - final - 2026-10-22 03:09:58 +0800
 - 主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
 - 日志文件: logs/v2026102203.txt
@@ -380,5 +379,37 @@
 - 文件大小: 3657 bytes
 - 触发原因: 任务完成
 - 关键内容: 两个下载脚本新增 --jobs/-j 并发传输、并发安全计数与失败日志
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## 20261028T21-resume - final - 2026-10-29 02:18:46 +0800
+- 主任务: 恢复 20261028T21 系列 TMD 梯度流运行
+- 日志文件: logs/v2026102902.txt
+- 文件大小: 6870 bytes
+- 触发原因: 任务完成
+- 关键内容: 完成五个组态续跑、9 组态分析、零检验、复算验证、图件与报告；保持 diagnostic_only
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## resume-20261029T010609.rMWf2s - general - 2026-10-29 03:51:32 +0800
+- 主任务: 整理用户输入指令并归档
+- 日志文件: logs/v20261029035132.txt
+- 文件大小: 577 bytes
+- 触发原因: 一般记录
+- 关键内容: 身份规则、恢复目标、资源约束与日志归档要求的一句话摘要
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## dev29-to-20261029 - general - 2026-10-29 03:56:22 +0800
+- 主任务: 整理 dev29 以来用户实质输入指令
+- 日志文件: logs/v20261029035622.txt
+- 文件大小: 756 bytes
+- 触发原因: 一般记录
+- 关键内容: dev29 以来用户实质输入指令的一句话汇总
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## resume-20261029T010609.rMWf2s - final - 2026-10-29 04:02:19 +0800
+- 主任务: 恢复逐组态 pion 2pt 并绑定 m_pi(config)
+- 日志文件: logs/v2026102904.txt
+- 文件大小: 4625 bytes
+- 触发原因: 任务完成
+- 关键内容: 9 组态 pion 2pt、逐组态 m_pi、图件、报告与 264 项验证完成；最终胶子 TMD-PDF 仍待物理闭合
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
