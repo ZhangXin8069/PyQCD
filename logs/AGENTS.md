@@ -461,3 +461,11 @@
 - 关键内容: 27 个 b7 缓存与共同流窗 16 点流时分析验收通过；A/B/C/D 全过、0 硬错误、未重算
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## download-beta-l24x72-source-local-20261029 - final - 2026-10-29 20:02:10 +0800
+- 主任务: 检查并修复 L24x72 数据下载脚本在源端环境卡死
+- 日志文件: logs/v2026102920.txt
+- 文件大小: 6971 bytes
+- 触发原因: 任务完成
+- 关键内容: 确认默认150项存在、定位SSH认证卡死并新增source-local模式
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

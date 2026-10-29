@@ -4,6 +4,8 @@
 # Usage:
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --dry-run
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --preflight
+#   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --source-local --preflight
+#   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --source-local --dest-root /data/lqcd --yes
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --yes
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --yes --skip-existing
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --jobs 8 --yes --skip-existing
@@ -68,6 +70,7 @@ ALLOW_MISSING=false
 SUMMARY_ONLY=false
 LIST_CONF_IDS=false
 CONF_IDS_FILE=""
+SOURCE_LOCAL=false
 WITH_SMEAR=false
 WITH_MOMSMEAR=false
 WITH_VVV_VDV=false
@@ -87,6 +90,7 @@ Options:
   --resume               Alias for --skip-existing
   --allow-missing        Download available entries instead of aborting on missing sources
   --no-preflight         Do not probe all remote paths before a live transfer
+  --source-local         Read source paths directly on this host; do not use SSH
   --dest-root PATH       Preserve remote absolute paths below PATH (default: /)
   --conf-ids-file FILE   Use one numeric configuration ID per line instead of defaults
   --list-conf-ids        Print the selected configuration IDs and exit
@@ -105,6 +109,7 @@ Environment:
   PYQCD_SSH_PORT         Remote SSH port (default: 10023)
   PYQCD_SSH_USER         Remote user (default: zhangxin)
   PYQCD_DOWNLOAD_JOBS    Default concurrency (default: 4)
+  PYQCD_SOURCE_LOCAL     Set to 1 to use local source paths without SSH
   PUBLIC_BASE            Remote public root (default: /public)
   DONGHX_BASE            Donghx data root
   EIGENSYSTEM_BASE       Eigensystem root
@@ -123,6 +128,7 @@ The default configuration list contains the previous ten configurations
 6250,6450,...,8050 and extends the same 200-spacing pattern to 16050.
 Only gauge, eigensystem, and light perambulator are downloaded by default.
 Directory transfers prefer rsync for resumability and otherwise use an ssh tar stream.
+With --source-local, source paths are read directly on this host and SSH is skipped.
 EOF
 }
 
@@ -162,6 +168,10 @@ while (($#)); do
             ;;
         --no-preflight)
             NO_PREFLIGHT=true
+            shift
+            ;;
+        --source-local)
+            SOURCE_LOCAL=true
             shift
             ;;
         --dest-root)
@@ -220,6 +230,10 @@ while (($#)); do
             ;;
     esac
 done
+
+if [[ "${PYQCD_SOURCE_LOCAL:-0}" == 1 ]]; then
+    SOURCE_LOCAL=true
+fi
 
 [[ "$PARALLEL_JOBS" =~ ^[1-9][0-9]*$ ]] ||
     die "--jobs requires a positive integer: $PARALLEL_JOBS"
@@ -402,6 +416,13 @@ cleanup_ssh() {
 }
 
 init_ssh() {
+    trap cleanup_ssh EXIT
+
+    if $SOURCE_LOCAL; then
+        log_info "Using source paths directly on this host; SSH setup skipped"
+        return 0
+    fi
+
     command -v ssh >/dev/null 2>&1 || die "ssh is not installed"
 
     SSH_CONTROL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pyqcd-download.XXXXXX")
@@ -411,22 +432,31 @@ init_ssh() {
         -o ControlMaster=auto
         -o "ControlPath=${SSH_CONTROL_PATH}"
         -o ControlPersist=600
-        -o ServerAliveInterval=30
-        -o ServerAliveCountMax=6
+        -o BatchMode=yes
+        -o NumberOfPasswordPrompts=0
+        -o StrictHostKeyChecking=yes
+        -o ConnectTimeout=15
+        -o ConnectionAttempts=1
+        -o ServerAliveInterval=15
+        -o ServerAliveCountMax=4
     )
     SCP_OPTS=(
         -P "$SSH_PORT"
         -o ControlMaster=auto
         -o "ControlPath=${SSH_CONTROL_PATH}"
         -o ControlPersist=600
-        -o ServerAliveInterval=30
-        -o ServerAliveCountMax=6
+        -o BatchMode=yes
+        -o NumberOfPasswordPrompts=0
+        -o StrictHostKeyChecking=yes
+        -o ConnectTimeout=15
+        -o ConnectionAttempts=1
+        -o ServerAliveInterval=15
+        -o ServerAliveCountMax=4
     )
-    trap cleanup_ssh EXIT
 
     log_info "Establishing SSH master connection to ${SSH_TARGET}:${SSH_PORT} ..."
-    ssh "${SSH_COMMON_OPTS[@]}" -o ConnectTimeout=10 "$SSH_TARGET" true ||
-        die "cannot connect to ${SSH_TARGET}:${SSH_PORT}"
+    ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" true ||
+        die "cannot establish non-interactive SSH connection to ${SSH_TARGET}:${SSH_PORT}; configure key authentication and known_hosts, or use --source-local"
     log_done "SSH master connection established"
 }
 
@@ -449,7 +479,11 @@ MISSING_JOBS=()
 PREFLIGHT_FAILED=false
 
 run_preflight() {
-    log_step "Remote source preflight"
+    if $SOURCE_LOCAL; then
+        log_step "Local source preflight"
+    else
+        log_step "Remote source preflight"
+    fi
     local batch_size=64 start end command output state index size expected
     local missing_count=0 wrong_type_count=0
 
@@ -461,31 +495,61 @@ run_preflight() {
         REMOTE_SIZES[$i]=0
     done
 
-    for ((start = 0; start < ${#JOB_SOURCES[@]}; start += batch_size)); do
-        end=$((start + batch_size))
-        ((end <= ${#JOB_SOURCES[@]})) || end=${#JOB_SOURCES[@]}
-        command=$(build_remote_probe_command "$start" "$end")
-        output=$(ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" "$command") ||
-            die "remote preflight command failed for entries $((start + 1))..$end"
-
-        while IFS=$'\t' read -r state index size; do
-            [[ -n "$state" && -n "$index" ]] || continue
-            expected=${JOB_TYPES[$index]}
-            REMOTE_STATES[$index]=$state
-            REMOTE_SIZES[$index]=${size:-0}
+    if $SOURCE_LOCAL; then
+        for i in "${!JOB_SOURCES[@]}"; do
+            path=${JOB_SOURCES[$i]}
+            expected=${JOB_TYPES[$i]}
+            if [[ -f "$path" ]]; then
+                state=F
+                size=$(stat -c%s "$path" 2>/dev/null || printf '0')
+            elif [[ -d "$path" ]]; then
+                state=D
+                size=0
+            else
+                state=M
+                size=0
+            fi
+            REMOTE_STATES[$i]=$state
+            REMOTE_SIZES[$i]=$size
 
             if [[ "$state" == M ]]; then
-                log_error "missing: ${JOB_CATEGORIES[$index]} ${JOB_SOURCES[$index]}"
-                MISSING_JOBS+=("$index")
+                log_error "missing: ${JOB_CATEGORIES[$i]} $path"
+                MISSING_JOBS+=("$i")
                 missing_count=$((missing_count + 1))
             elif [[ "$state" == F && "$expected" != file ]] ||
                  [[ "$state" == D && "$expected" != dir ]]; then
-                log_error "wrong source type: ${JOB_CATEGORIES[$index]} ${JOB_SOURCES[$index]}"
-                MISSING_JOBS+=("$index")
+                log_error "wrong source type: ${JOB_CATEGORIES[$i]} $path"
+                MISSING_JOBS+=("$i")
                 wrong_type_count=$((wrong_type_count + 1))
             fi
-        done <<< "$output"
-    done
+        done
+    else
+        for ((start = 0; start < ${#JOB_SOURCES[@]}; start += batch_size)); do
+            end=$((start + batch_size))
+            ((end <= ${#JOB_SOURCES[@]})) || end=${#JOB_SOURCES[@]}
+            command=$(build_remote_probe_command "$start" "$end")
+            output=$(ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" "$command") ||
+                die "remote preflight command failed for entries $((start + 1))..$end"
+
+            while IFS=$'\t' read -r state index size; do
+                [[ -n "$state" && -n "$index" ]] || continue
+                expected=${JOB_TYPES[$index]}
+                REMOTE_STATES[$index]=$state
+                REMOTE_SIZES[$index]=${size:-0}
+
+                if [[ "$state" == M ]]; then
+                    log_error "missing: ${JOB_CATEGORIES[$index]} ${JOB_SOURCES[$index]}"
+                    MISSING_JOBS+=("$index")
+                    missing_count=$((missing_count + 1))
+                elif [[ "$state" == F && "$expected" != file ]] ||
+                     [[ "$state" == D && "$expected" != dir ]]; then
+                    log_error "wrong source type: ${JOB_CATEGORIES[$index]} ${JOB_SOURCES[$index]}"
+                    MISSING_JOBS+=("$index")
+                    wrong_type_count=$((wrong_type_count + 1))
+                fi
+            done <<< "$output"
+        done
+    fi
 
     for i in "${!JOB_SOURCES[@]}"; do
         if [[ "${REMOTE_STATES[$i]:-?}" == '?' ]]; then
@@ -509,8 +573,12 @@ file_already_downloaded() {
     [[ -f "$relocal" ]] || return 1
     remote_size=${REMOTE_SIZES[$index]:-}
     if [[ -z "$remote_size" ]]; then
-        remote_size=$(ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" \
-            "stat -c%s $(quote_remote_path "${JOB_SOURCES[$index]}")" 2>/dev/null) || return 1
+        if $SOURCE_LOCAL; then
+            remote_size=$(stat -c%s "${JOB_SOURCES[$index]}" 2>/dev/null) || return 1
+        else
+            remote_size=$(ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" \
+                "stat -c%s $(quote_remote_path "${JOB_SOURCES[$index]}")" 2>/dev/null) || return 1
+        fi
     fi
     local_size=$(stat -c%s "$relocal" 2>/dev/null) || return 1
     [[ "$remote_size" == "$local_size" ]]
@@ -519,8 +587,13 @@ file_already_downloaded() {
 dir_already_downloaded() {
     local index=$1 reldir=$2 remote_manifest remote_size rel_path local_file local_size
     [[ -d "$reldir" ]] || return 1
-    remote_manifest=$(ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" \
-        "cd $(quote_remote_path "${JOB_SOURCES[$index]}") 2>/dev/null && find . -type f -printf '%s\\t%P\\n'" 2>/dev/null) || return 1
+    if $SOURCE_LOCAL; then
+        remote_manifest=$(cd "${JOB_SOURCES[$index]}" 2>/dev/null &&
+            find . -type f -printf '%s\t%P\n' 2>/dev/null) || return 1
+    else
+        remote_manifest=$(ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" \
+            "cd $(quote_remote_path "${JOB_SOURCES[$index]}") 2>/dev/null && find . -type f -printf '%s\\t%P\\n'" 2>/dev/null) || return 1
+    fi
     [[ -n "$remote_manifest" ]] || return 1
 
     while IFS=$'\t' read -r remote_size rel_path; do
@@ -534,6 +607,20 @@ dir_already_downloaded() {
 
 transfer_file() {
     local index=$1 remote_path=${JOB_SOURCES[$1]} local_path=$2
+    if $SOURCE_LOCAL; then
+        if [[ "$remote_path" == "$local_path" ]]; then
+            log_info "source already at destination: $remote_path"
+            return 0
+        fi
+        mkdir -p "$(dirname "$local_path")"
+        if [[ "$TRANSFER_TOOL" == rsync ]]; then
+            rsync -avP --partial "$remote_path" "$local_path"
+        else
+            cp -a -- "$remote_path" "$local_path"
+        fi
+        return
+    fi
+
     mkdir -p "$(dirname "$local_path")"
     if [[ "$TRANSFER_TOOL" == rsync ]]; then
         rsync -avP --partial -e "ssh ${SSH_COMMON_OPTS[*]}" \
@@ -545,6 +632,25 @@ transfer_file() {
 
 transfer_dir() {
     local index=$1 remote_path=${JOB_SOURCES[$1]} local_path=$2
+    if $SOURCE_LOCAL; then
+        if [[ "$remote_path" == "$local_path" ]]; then
+            log_info "source already at destination: $remote_path"
+            return 0
+        fi
+        if [[ "$local_path/" == "$remote_path/"* ]]; then
+            log_error "destination is inside local source: $local_path"
+            return 1
+        fi
+        mkdir -p "$local_path"
+        if [[ "$TRANSFER_TOOL" == rsync ]]; then
+            rsync -avP --partial --partial-dir=.rsync-partial \
+                "${remote_path}/" "${local_path}/"
+        else
+            cp -a -- "${remote_path}/." "${local_path}/"
+        fi
+        return
+    fi
+
     mkdir -p "$local_path"
     if [[ "$TRANSFER_TOOL" == rsync ]]; then
         rsync -avP --partial --partial-dir=.rsync-partial -e "ssh ${SSH_COMMON_OPTS[*]}" \
@@ -568,6 +674,8 @@ confirm_transfer_plan() {
 TRANSFER_TOOL=none
 if command -v rsync >/dev/null 2>&1; then
     TRANSFER_TOOL=rsync
+elif $SOURCE_LOCAL && command -v cp >/dev/null 2>&1; then
+    TRANSFER_TOOL=cp
 elif command -v scp >/dev/null 2>&1; then
     TRANSFER_TOOL=scp+tar
 elif ! $DRY_RUN; then
@@ -600,7 +708,11 @@ printf ' User estimate:  about %d GB\n' "$CAPACITY_HINT_GB"
 printf ' Measured core:  at least %d GB for gauge + eigensystem + light perambulators\n' \
     "$MEASURED_CORE_GB_50"
 printf ' Destination:    %s\n' "$DEST_ROOT"
-printf ' SSH:            %s:%s (%s)\n' "$SSH_HOST" "$SSH_PORT" "$SSH_USER"
+if $SOURCE_LOCAL; then
+    printf ' Source:         local filesystem\n'
+else
+    printf ' SSH:            %s:%s (%s)\n' "$SSH_HOST" "$SSH_PORT" "$SSH_USER"
+fi
 printf ' Tool:           %s\n' "$TRANSFER_TOOL"
 printf ' Jobs:           %d\n' "$PARALLEL_JOBS"
 printf ' Mode:           %s%s\n' \
@@ -684,7 +796,11 @@ for i in "${!JOB_SOURCES[@]}"; do
     local_path=$(map_remote_to_local "$remote_path")
 
     printf '\n[%d/%d] %s\n' "$((i + 1))" "${#JOB_SOURCES[@]}" "$category"
-    printf '  Remote: %s:%s\n' "$SSH_TARGET" "$remote_path"
+    if $SOURCE_LOCAL; then
+        printf '  Source: %s\n' "$remote_path"
+    else
+        printf '  Remote: %s:%s\n' "$SSH_TARGET" "$remote_path"
+    fi
     printf '  Local:  %s\n' "$local_path"
 
     if $SKIP_EXISTING; then
