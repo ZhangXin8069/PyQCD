@@ -477,3 +477,11 @@
 - 关键内容: 恢复 SSH 密码与动态验证码交互认证，保留 source-local 和连接安全参数
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## refer/donghx/_Gradient_Flow_GluonPDF - final - 2026-10-29 20:35:38 +0800
+- 主任务: 为 L24x72 下载脚本添加下载进度条与速度显示
+- 日志文件: logs/v2026102920-3.txt
+- 文件大小: 5776 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增统一字节进度、实时速度、TTY 自动模式、并行聚合与强制开关；完成语法、串行/并行、TTY、慢速中间进度和远程探针命令验证。
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

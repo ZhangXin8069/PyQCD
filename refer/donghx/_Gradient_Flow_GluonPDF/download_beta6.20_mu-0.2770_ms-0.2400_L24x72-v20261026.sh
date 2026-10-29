@@ -9,6 +9,7 @@
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --yes
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --yes --skip-existing
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --jobs 8 --yes --skip-existing
+#   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --jobs 8 --progress --yes
 #   bash download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20261026.sh --dest-root /data/lqcd --yes
 #
 # Default configuration set:
@@ -64,6 +65,7 @@ DRY_RUN=false
 SKIP_CONFIRM=false
 SKIP_EXISTING=false
 PARALLEL_JOBS=${PYQCD_DOWNLOAD_JOBS:-4}
+PROGRESS_MODE=${PYQCD_DOWNLOAD_PROGRESS:-auto}
 PREFLIGHT_ONLY=false
 NO_PREFLIGHT=false
 ALLOW_MISSING=false
@@ -96,6 +98,8 @@ Options:
   --list-conf-ids        Print the selected configuration IDs and exit
   --summary-only         In dry-run mode, print category counts without every path
   --jobs N, -j N         Run up to N transfers concurrently (default: 4; 1 = sequential)
+  --progress             Force byte progress and transfer-speed display
+  --no-progress          Disable byte progress and transfer-speed display
   --with-smear           Also request four HYP-smear gauge trees per configuration
   --with-momsmear        Also request momentum-smeared eigenvectors/perambulators
   --with-vvv-vdv         Also request VVV/VdV caches for mom_smear=0 and -2
@@ -109,6 +113,7 @@ Environment:
   PYQCD_SSH_PORT         Remote SSH port (default: 10023)
   PYQCD_SSH_USER         Remote user (default: zhangxin)
   PYQCD_DOWNLOAD_JOBS    Default concurrency (default: 4)
+  PYQCD_DOWNLOAD_PROGRESS  Progress mode: auto, on, or off (default: auto)
   PYQCD_SOURCE_LOCAL     Set to 1 to use local source paths without SSH
   PUBLIC_BASE            Remote public root (default: /public)
   DONGHX_BASE            Donghx data root
@@ -197,6 +202,14 @@ while (($#)); do
             PARALLEL_JOBS=$2
             shift 2
             ;;
+        --progress)
+            PROGRESS_MODE=on
+            shift
+            ;;
+        --no-progress)
+            PROGRESS_MODE=off
+            shift
+            ;;
         --with-smear)
             WITH_SMEAR=true
             shift
@@ -237,6 +250,20 @@ fi
 
 [[ "$PARALLEL_JOBS" =~ ^[1-9][0-9]*$ ]] ||
     die "--jobs requires a positive integer: $PARALLEL_JOBS"
+
+case "$PROGRESS_MODE" in
+    auto|on|off) ;;
+    *) die "PYQCD_DOWNLOAD_PROGRESS must be auto, on, or off: $PROGRESS_MODE" ;;
+esac
+
+PROGRESS_ENABLED=false
+PROGRESS_TTY=false
+if [[ "$PROGRESS_MODE" == on ]] || { [[ "$PROGRESS_MODE" == auto ]] && [[ -t 2 ]]; }; then
+    PROGRESS_ENABLED=true
+    if [[ -t 2 ]]; then
+        PROGRESS_TTY=true
+    fi
+fi
 
 if ((PARALLEL_JOBS > 1)) && { ((BASH_VERSINFO[0] < 4)) || ((BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3)); }; then
     log_warn "bash >= 4.3 is required for parallel transfers; using --jobs 1"
@@ -373,6 +400,162 @@ quote_remote_path() {
     printf "'%s'" "$path"
 }
 
+path_bytes() {
+    local path=$1
+    if [[ -f "$path" ]]; then
+        stat -c%s -- "$path" 2>/dev/null || printf '0\n'
+    elif [[ -d "$path" ]]; then
+        du -sb -- "$path" 2>/dev/null | awk 'NR == 1 { print $1 }'
+    else
+        printf '0\n'
+    fi
+}
+
+format_bytes() {
+    local bytes=${1:-0} unit value fraction suffix
+    if ((bytes >= 1099511627776)); then
+        unit=1099511627776
+        suffix=TiB
+    elif ((bytes >= 1073741824)); then
+        unit=1073741824
+        suffix=GiB
+    elif ((bytes >= 1048576)); then
+        unit=1048576
+        suffix=MiB
+    elif ((bytes >= 1024)); then
+        unit=1024
+        suffix=KiB
+    else
+        printf '%d B\n' "$bytes"
+        return
+    fi
+    value=$((bytes / unit))
+    fraction=$(((bytes % unit) * 100 / unit))
+    printf '%d.%02d %s\n' "$value" "$fraction" "$suffix"
+}
+
+format_speed() {
+    printf '%s/s\n' "$(format_bytes "${1:-0}")"
+}
+
+time_ms() {
+    local milliseconds
+    milliseconds=$(date +%s%3N 2>/dev/null)
+    if [[ "$milliseconds" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$milliseconds"
+    else
+        printf '%s000\n' "$(date +%s)"
+    fi
+}
+
+progress_bar_string() {
+    local percent_tenths=${1:-0} width=${2:-28} filled empty
+    ((percent_tenths < 0)) && percent_tenths=0
+    ((percent_tenths > 1000)) && percent_tenths=1000
+    filled=$((percent_tenths * width / 1000))
+    empty=$((width - filled))
+    printf -v filled '%*s' "$filled" ''
+    filled=${filled// /#}
+    printf -v empty '%*s' "$empty" ''
+    empty=${empty// /-}
+    printf '[%s%s]\n' "$filled" "$empty"
+}
+
+progress_current_bytes() {
+    local index expected value total=0 local_path
+    for index in "${TRANSFER_INDICES[@]}"; do
+        if ((${JOB_FINAL_BYTES[$index]:--1} >= 0)); then
+            value=${JOB_FINAL_BYTES[$index]}
+        elif ((${JOB_STARTED[$index]:-0} == 1)); then
+            local_path=$(map_remote_to_local "${JOB_SOURCES[$index]}")
+            value=$(path_bytes "$local_path")
+        else
+            value=${JOB_BASE_BYTES[$index]:-0}
+        fi
+        expected=${REMOTE_SIZES[$index]:--1}
+        if ((expected >= 0 && value > expected)); then
+            value=$expected
+        fi
+        total=$((total + value))
+    done
+    printf '%d\n' "$total"
+}
+
+progress_clear_line() {
+    if $PROGRESS_TTY && ${PROGRESS_LINE_ACTIVE:-false}; then
+        printf '\r\033[K' >&2
+        PROGRESS_LINE_ACTIVE=false
+    fi
+}
+
+render_progress() {
+    local final=${1:-false} force=${2:-false}
+    $PROGRESS_ENABLED || return 0
+
+    local now
+    now=$(time_ms)
+    if ! $final && ! $force && ((now - PROGRESS_LAST_SAMPLE_MS < 1000)); then
+        return 0
+    fi
+    PROGRESS_LAST_SAMPLE_MS=$now
+
+    local current transferred elapsed_ms speed percent_tenths percent_whole percent_fraction
+    local bar total_display queue_count active_count line
+    current=$(progress_current_bytes)
+    elapsed_ms=$((now - PROGRESS_START_MS))
+    ((elapsed_ms > 0)) || elapsed_ms=1
+    transferred=$((current - PROGRESS_START_BYTES))
+    ((transferred >= 0)) || transferred=0
+    speed=$((transferred * 1000 / elapsed_ms))
+    queue_count=$((${#TRANSFER_INDICES[@]} - TRANSFER_STARTED_COUNT))
+    active_count=${#ACTIVE_PIDS[@]}
+
+    if $PROGRESS_TOTAL_KNOWN; then
+        if ((${PROGRESS_TOTAL_BYTES:-0} == 0)); then
+            percent_tenths=1000
+        else
+            if ((current > PROGRESS_TOTAL_BYTES)); then
+                current=$PROGRESS_TOTAL_BYTES
+            fi
+            percent_tenths=$((current * 1000 / PROGRESS_TOTAL_BYTES))
+        fi
+        percent_whole=$((percent_tenths / 10))
+        percent_fraction=$((percent_tenths % 10))
+        bar=$(progress_bar_string "$percent_tenths")
+        total_display=$(format_bytes "$PROGRESS_TOTAL_BYTES")
+        line=$(printf '[PROGRESS] %s %d.%d%% %s/%s %s active=%d queued=%d' \
+            "$bar" "$percent_whole" "$percent_fraction" \
+            "$(format_bytes "$current")" "$total_display" "$(format_speed "$speed")" \
+            "$active_count" "$queue_count")
+    else
+        percent_tenths=-1
+        line=$(printf '[PROGRESS] [------------------------------] --%% %s %s active=%d queued=%d' \
+            "$(format_bytes "$current")" "$(format_speed "$speed")" \
+            "$active_count" "$queue_count")
+    fi
+
+    if ! $PROGRESS_TTY && ! $final && ! $force; then
+        if ((now - PROGRESS_LAST_RENDER_MS < 5000)); then
+            if ((percent_tenths < 0 || percent_tenths < PROGRESS_LAST_PERCENT_TENTHS + 100)); then
+                return 0
+            fi
+        fi
+    fi
+
+    if $PROGRESS_TTY; then
+        printf '\r%s\033[K' "$line" >&2
+        PROGRESS_LINE_ACTIVE=true
+        if $final; then
+            printf '\n' >&2
+            PROGRESS_LINE_ACTIVE=false
+        fi
+    else
+        printf '%s\n' "$line" >&2
+    fi
+    PROGRESS_LAST_RENDER_MS=$now
+    PROGRESS_LAST_PERCENT_TENTHS=$percent_tenths
+}
+
 execute_transfer() {
     local index=$1 job_type=$2 local_path=$3 rc=0
     if [[ "$job_type" == file ]]; then
@@ -393,14 +576,92 @@ launch_transfer() {
         rc=$?
         if ((rc == 0)); then
             printf 'done\n' >"$status_file"
-            printf '  DONE   %s\n' "$remote_path"
         else
             printf 'failed\n' >"$status_file"
-            printf '  FAILED %s (log: %s)\n' "$remote_path" "$log_file" >&2
         fi
         exit 0
     ) &
+    LAST_TRANSFER_PID=$!
     RUNNING_JOBS=$((RUNNING_JOBS + 1))
+}
+
+print_transfer_job() {
+    local index=$1 remote_path=${JOB_SOURCES[$1]} local_path=$2
+    progress_clear_line
+    printf '\n[%d/%d] %s\n' "$((index + 1))" "${#JOB_SOURCES[@]}" "${JOB_CATEGORIES[$index]}"
+    if $SOURCE_LOCAL; then
+        printf '  Source: %s\n' "$remote_path"
+    else
+        printf '  Remote: %s:%s\n' "$SSH_TARGET" "$remote_path"
+    fi
+    printf '  Local:  %s\n' "$local_path"
+}
+
+launch_indexed_transfer() {
+    local index=$1 job_type=${JOB_TYPES[$1]} remote_path=${JOB_SOURCES[$1]} local_path
+    local_path=$(map_remote_to_local "$remote_path")
+    print_transfer_job "$index" "$local_path"
+    JOB_STARTED[$index]=1
+    TRANSFER_STARTED_COUNT=$((TRANSFER_STARTED_COUNT + 1))
+    launch_transfer "$index" "$job_type" "$remote_path" "$local_path"
+    ACTIVE_PIDS+=("$LAST_TRANSFER_PID")
+    ACTIVE_INDICES+=("$index")
+}
+
+reap_finished_transfers() {
+    local position pid index status expected final_bytes
+    local remaining_pids=()
+    local remaining_indices=()
+
+    for position in "${!ACTIVE_PIDS[@]}"; do
+        pid=${ACTIVE_PIDS[$position]}
+        index=${ACTIVE_INDICES[$position]}
+        if kill -0 "$pid" 2>/dev/null; then
+            remaining_pids+=("$pid")
+            remaining_indices+=("$index")
+            continue
+        fi
+
+        wait "$pid" || true
+        RUNNING_JOBS=$((RUNNING_JOBS - 1))
+        status=""
+        if [[ -f "${STATUS_DIR}/${index}.status" ]]; then
+            status=$(< "${STATUS_DIR}/${index}.status")
+        fi
+
+        progress_clear_line
+        if [[ "$status" == done ]]; then
+            expected=${REMOTE_SIZES[$index]:--1}
+            if ((expected >= 0)); then
+                final_bytes=$expected
+            else
+                final_bytes=$(path_bytes "$(map_remote_to_local "${JOB_SOURCES[$index]}")")
+                [[ -n "$final_bytes" ]] || final_bytes=0
+            fi
+            JOB_FINAL_BYTES[$index]=$final_bytes
+            if [[ "${JOB_TYPES[$index]}" == file ]]; then
+                log_done "${JOB_SOURCES[$index]}"
+            else
+                log_done "${JOB_SOURCES[$index]}/"
+            fi
+            COUNT_DONE=$((COUNT_DONE + 1))
+        else
+            if [[ "${JOB_TYPES[$index]}" == file ]]; then
+                log_error "failed: ${JOB_SOURCES[$index]}"
+            else
+                log_error "failed: ${JOB_SOURCES[$index]}/"
+            fi
+            COUNT_FAILED=$((COUNT_FAILED + 1))
+            FAILED_LOG_INDICES+=("$index")
+        fi
+    done
+
+    ACTIVE_PIDS=()
+    ACTIVE_INDICES=()
+    if ((${#remaining_pids[@]} > 0)); then
+        ACTIVE_PIDS=("${remaining_pids[@]}")
+        ACTIVE_INDICES=("${remaining_indices[@]}")
+    fi
 }
 
 cleanup_ssh() {
@@ -464,8 +725,12 @@ build_remote_probe_command() {
         path=${JOB_SOURCES[$i]}
         quoted=$(quote_remote_path "$path")
         command+="if [ -f $quoted ]; then size=\$(stat -c%s $quoted 2>/dev/null); printf 'F\\t%s\\t%s\\n' $i \"\${size:-0}\"; "
-        command+="elif [ -d $quoted ]; then printf 'D\\t%s\\t0\\n' $i; "
-        command+="else printf 'M\\t%s\\t0\\n' $i; fi; "
+        if $PROGRESS_ENABLED; then
+            command+="elif [ -d $quoted ]; then size=\$(du -sb $quoted 2>/dev/null | cut -f1); [ -n \"\$size\" ] || size=-1; printf 'D\\t%s\\t%s\\n' $i \"\$size\"; "
+        else
+            command+="elif [ -d $quoted ]; then printf 'D\\t%s\\t0\\n' $i; "
+        fi
+        command+="else printf 'M\\t%s\\t-1\\n' $i; fi; "
     done
     printf '%s\n' "$command"
 }
@@ -489,7 +754,7 @@ run_preflight() {
     MISSING_JOBS=()
     for i in "${!JOB_SOURCES[@]}"; do
         REMOTE_STATES[$i]="?"
-        REMOTE_SIZES[$i]=0
+        REMOTE_SIZES[$i]=-1
     done
 
     if $SOURCE_LOCAL; then
@@ -501,10 +766,15 @@ run_preflight() {
                 size=$(stat -c%s "$path" 2>/dev/null || printf '0')
             elif [[ -d "$path" ]]; then
                 state=D
-                size=0
+                if $PROGRESS_ENABLED; then
+                    size=$(du -sb -- "$path" 2>/dev/null | awk 'NR == 1 { print $1 }')
+                    [[ -n "$size" ]] || size=-1
+                else
+                    size=0
+                fi
             else
                 state=M
-                size=0
+                size=-1
             fi
             REMOTE_STATES[$i]=$state
             REMOTE_SIZES[$i]=$size
@@ -532,7 +802,7 @@ run_preflight() {
                 [[ -n "$state" && -n "$index" ]] || continue
                 expected=${JOB_TYPES[$index]}
                 REMOTE_STATES[$index]=$state
-                REMOTE_SIZES[$index]=${size:-0}
+                REMOTE_SIZES[$index]=${size:--1}
 
                 if [[ "$state" == M ]]; then
                     log_error "missing: ${JOB_CATEGORIES[$index]} ${JOB_SOURCES[$index]}"
@@ -569,7 +839,7 @@ file_already_downloaded() {
     local index=$1 relocal=$2 remote_size local_size
     [[ -f "$relocal" ]] || return 1
     remote_size=${REMOTE_SIZES[$index]:-}
-    if [[ -z "$remote_size" ]]; then
+    if [[ ! "$remote_size" =~ ^[0-9]+$ ]]; then
         if $SOURCE_LOCAL; then
             remote_size=$(stat -c%s "${JOB_SOURCES[$index]}" 2>/dev/null) || return 1
         else
@@ -611,7 +881,7 @@ transfer_file() {
         fi
         mkdir -p "$(dirname "$local_path")"
         if [[ "$TRANSFER_TOOL" == rsync ]]; then
-            rsync -avP --partial "$remote_path" "$local_path"
+            rsync -avP --inplace --partial "$remote_path" "$local_path"
         else
             cp -a -- "$remote_path" "$local_path"
         fi
@@ -620,7 +890,7 @@ transfer_file() {
 
     mkdir -p "$(dirname "$local_path")"
     if [[ "$TRANSFER_TOOL" == rsync ]]; then
-        rsync -avP --partial -e "ssh ${SSH_COMMON_OPTS[*]}" \
+        rsync -avP --inplace --partial -e "ssh ${SSH_COMMON_OPTS[*]}" \
             "${SSH_TARGET}:${remote_path}" "$local_path"
     else
         scp "${SCP_OPTS[@]}" "${SSH_TARGET}:${remote_path}" "$local_path"
@@ -712,6 +982,7 @@ else
 fi
 printf ' Tool:           %s\n' "$TRANSFER_TOOL"
 printf ' Jobs:           %d\n' "$PARALLEL_JOBS"
+printf ' Progress:       %s\n' "$($PROGRESS_ENABLED && printf 'bytes + speed' || printf disabled)"
 printf ' Mode:           %s%s\n' \
     "$($DRY_RUN && printf DRY-RUN || printf LIVE)" \
     "$($SKIP_EXISTING && printf ' + skip-existing' || true)"
@@ -777,8 +1048,11 @@ COUNT_DONE=0
 COUNT_FAILED=0
 RUNNING_JOBS=0
 KEEP_WORK_DIR=false
-LAUNCHED_INDICES=()
 FAILED_LOG_INDICES=()
+TRANSFER_INDICES=()
+ACTIVE_PIDS=()
+ACTIVE_INDICES=()
+TRANSFER_STARTED_COUNT=0
 
 for i in "${!JOB_SOURCES[@]}"; do
     if [[ -n "${SKIP_SET[$i]:-}" ]]; then
@@ -787,69 +1061,71 @@ for i in "${!JOB_SOURCES[@]}"; do
         continue
     fi
 
-    category=${JOB_CATEGORIES[$i]}
-    remote_path=${JOB_SOURCES[$i]}
     job_type=${JOB_TYPES[$i]}
-    local_path=$(map_remote_to_local "$remote_path")
-
-    printf '\n[%d/%d] %s\n' "$((i + 1))" "${#JOB_SOURCES[@]}" "$category"
-    if $SOURCE_LOCAL; then
-        printf '  Source: %s\n' "$remote_path"
-    else
-        printf '  Remote: %s:%s\n' "$SSH_TARGET" "$remote_path"
-    fi
-    printf '  Local:  %s\n' "$local_path"
+    local_path=$(map_remote_to_local "${JOB_SOURCES[$i]}")
 
     if $SKIP_EXISTING; then
         if [[ "$job_type" == file ]] && file_already_downloaded "$i" "$local_path"; then
-            log_skip "size match"
+            log_skip "size match: ${JOB_SOURCES[$i]}"
             COUNT_SKIPPED=$((COUNT_SKIPPED + 1))
             continue
         elif [[ "$job_type" == dir ]] && dir_already_downloaded "$i" "$local_path"; then
-            log_skip "remote/local manifest match"
+            log_skip "remote/local manifest match: ${JOB_SOURCES[$i]}"
             COUNT_SKIPPED=$((COUNT_SKIPPED + 1))
             continue
         fi
     fi
+    TRANSFER_INDICES+=("$i")
+done
 
-    if ((PARALLEL_JOBS == 1)); then
-        if execute_transfer "$i" "$job_type" "$local_path"; then
-            if [[ "$job_type" == file ]]; then
-                log_done "$remote_path"
-            else
-                log_done "$remote_path/"
-            fi
-            COUNT_DONE=$((COUNT_DONE + 1))
+for i in "${TRANSFER_INDICES[@]}"; do
+    JOB_BASE_BYTES[$i]=0
+    JOB_FINAL_BYTES[$i]=-1
+    JOB_STARTED[$i]=0
+done
+
+if $PROGRESS_ENABLED && ((${#TRANSFER_INDICES[@]} > 0)); then
+    command -v du >/dev/null 2>&1 || die "du is required for byte progress display"
+    PROGRESS_TOTAL_BYTES=0
+    PROGRESS_TOTAL_KNOWN=true
+    PROGRESS_START_BYTES=0
+    for i in "${TRANSFER_INDICES[@]}"; do
+        expected=${REMOTE_SIZES[$i]:--1}
+        local_path=$(map_remote_to_local "${JOB_SOURCES[$i]}")
+        base_bytes=$(path_bytes "$local_path")
+        [[ -n "$base_bytes" ]] || base_bytes=0
+        if ((expected >= 0)); then
+            ((base_bytes <= expected)) || base_bytes=$expected
+            PROGRESS_TOTAL_BYTES=$((PROGRESS_TOTAL_BYTES + expected))
         else
-            if [[ "$job_type" == file ]]; then
-                log_error "failed: $remote_path"
-            else
-                log_error "failed: $remote_path/"
-            fi
-            COUNT_FAILED=$((COUNT_FAILED + 1))
+            PROGRESS_TOTAL_KNOWN=false
         fi
-    else
-        launch_transfer "$i" "$job_type" "$remote_path" "$local_path"
-        LAUNCHED_INDICES+=("$i")
-        while ((RUNNING_JOBS >= PARALLEL_JOBS)); do
-            wait -n || true
-            RUNNING_JOBS=$((RUNNING_JOBS - 1))
-        done
+        JOB_BASE_BYTES[$i]=$base_bytes
+        PROGRESS_START_BYTES=$((PROGRESS_START_BYTES + base_bytes))
+    done
+    PROGRESS_START_MS=$(time_ms)
+    PROGRESS_LAST_SAMPLE_MS=$((PROGRESS_START_MS - 1000))
+    PROGRESS_LAST_RENDER_MS=$((PROGRESS_START_MS - 5000))
+    PROGRESS_LAST_PERCENT_TENTHS=-100
+    PROGRESS_LINE_ACTIVE=false
+    render_progress false true
+fi
+
+TRANSFER_CURSOR=0
+while ((TRANSFER_CURSOR < ${#TRANSFER_INDICES[@]} || RUNNING_JOBS > 0)); do
+    while ((RUNNING_JOBS < PARALLEL_JOBS && TRANSFER_CURSOR < ${#TRANSFER_INDICES[@]})); do
+        launch_indexed_transfer "${TRANSFER_INDICES[$TRANSFER_CURSOR]}"
+        TRANSFER_CURSOR=$((TRANSFER_CURSOR + 1))
+    done
+    render_progress
+    if ((RUNNING_JOBS > 0)); then
+        sleep 0.2
+        reap_finished_transfers
     fi
 done
 
-if ((PARALLEL_JOBS > 1)); then
-    wait || true
-    RUNNING_JOBS=0
-    for i in "${LAUNCHED_INDICES[@]}"; do
-        status_file="${STATUS_DIR}/${i}.status"
-        if [[ -f "$status_file" && "$(< "$status_file")" == done ]]; then
-            COUNT_DONE=$((COUNT_DONE + 1))
-        else
-            COUNT_FAILED=$((COUNT_FAILED + 1))
-            FAILED_LOG_INDICES+=("$i")
-        fi
-    done
+if $PROGRESS_ENABLED && ((${#TRANSFER_INDICES[@]} > 0)); then
+    render_progress true true
 fi
 
 printf '\n%s\n' '============================================================================='
