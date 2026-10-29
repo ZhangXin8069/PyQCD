@@ -427,13 +427,12 @@ init_ssh() {
 
     SSH_CONTROL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pyqcd-download.XXXXXX")
     SSH_CONTROL_PATH="${SSH_CONTROL_DIR}/sock-%r@%h:%p"
+    # Keep SSH interactive because the source host requires password plus dynamic verification code.
     SSH_COMMON_OPTS=(
         -p "$SSH_PORT"
         -o ControlMaster=auto
         -o "ControlPath=${SSH_CONTROL_PATH}"
         -o ControlPersist=600
-        -o BatchMode=yes
-        -o NumberOfPasswordPrompts=0
         -o StrictHostKeyChecking=yes
         -o ConnectTimeout=15
         -o ConnectionAttempts=1
@@ -445,8 +444,6 @@ init_ssh() {
         -o ControlMaster=auto
         -o "ControlPath=${SSH_CONTROL_PATH}"
         -o ControlPersist=600
-        -o BatchMode=yes
-        -o NumberOfPasswordPrompts=0
         -o StrictHostKeyChecking=yes
         -o ConnectTimeout=15
         -o ConnectionAttempts=1
@@ -456,7 +453,7 @@ init_ssh() {
 
     log_info "Establishing SSH master connection to ${SSH_TARGET}:${SSH_PORT} ..."
     ssh "${SSH_COMMON_OPTS[@]}" "$SSH_TARGET" true ||
-        die "cannot establish non-interactive SSH connection to ${SSH_TARGET}:${SSH_PORT}; configure key authentication and known_hosts, or use --source-local"
+        die "cannot connect to ${SSH_TARGET}:${SSH_PORT}; check password/verification-code authentication and known_hosts, or use --source-local"
     log_done "SSH master connection established"
 }
 

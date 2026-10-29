@@ -469,3 +469,11 @@
 - 关键内容: 确认默认150项存在、定位SSH认证卡死并新增source-local模式
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## download-l24x72-auth-rollback-20261029 - final - 2026-10-29 20:12:32 +0800
+- 主任务: 回滚 L24x72 下载脚本 SSH 二步验证认证模式
+- 日志文件: logs/v2026102920-2.txt
+- 文件大小: 4326 bytes
+- 触发原因: 任务完成
+- 关键内容: 恢复 SSH 密码与动态验证码交互认证，保留 source-local 和连接安全参数
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
