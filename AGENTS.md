@@ -142,6 +142,19 @@ complex 路径与生产 NPZ 逐元素一致，P000/P200 差 <0.2σ，P400 晚 `t
 `r_f/a=2.828`）：τ=1 使 t_sep 漂移/误差中位数由 1.68/9.03 降到 1.24/3.44（P200/P400），
 但最坏点仍达 9.6/21.7 与 9.4/22.8，平台失败不能只归因于 `b<r_f`；JK 秩 10，仅作路线验证。
 
+新增：`data/runs/tmd-recompute-20261028/products/next-round-20261029/`（2026-10-29 横距扩展到
+`b=0..6` 与共同流窗流时分析）。27 个 `(τ=1,2,3)×9 组态` 的 full-channel OPE 缓存
+（`..._b7_0to6_...`，与已发布 `b5_0to4` 并存），torch 的 15 个单元格与已发布产品
+`max|Δ|=0.0`（bit_exact），CuPy 单元格相对 Frobenius `4.8e-7~7.0e-7`
+（float32_equivalent，阈值 1e-5），`(τ=1,conf=4150)` 跨 P100 重算 `array_equal=true`。
+流窗判据 `sqrt(8τ)<|z|,|b|` 给出 τ=1 的 40 点、τ=2,3 各 16 点，**共同窗**
+`z≥5,b=5,6`（16 点）；在此窗内首次可比较流时，$P_{200}$ 的 τ=2→3 在 16 点×3 插入上
+全部同号（中位 $\Delta\approx-1.5\times10^{-3}$，配对中位 $|\sigma|$ 1.6–2.6），
+比值层与 C3 层同向，结论为「检测到系统性流时漂移」，但仅两个 $b$ 值、9 组态，
+保持 `diagnostic_only`/`physical_acceptance=false`。排查记录见该目录
+`b_extension_20261029/FINAL_CHECK.md`（A/B/C/D 四层全部通过，0 硬错误，
+未触发重算）；报告 `docs/report_gluon_tmd_flow_scan_20261029.tex/.pdf` 17 页。
+
 新增：`data/runs/tmd-recompute-20261028/`（2026-10-28 全链复算与勘误）。旧运行
 `data/runs/tmd-gluon-subagent-20261027/` 的重整化/匹配图表被判为噪声放大（见该目录
 `ERRATA.md`）：① 平台窗写死 `t_sep/a=7..10`，而参考 2pt 的 P400 在 `t/a>=7` 已无信号

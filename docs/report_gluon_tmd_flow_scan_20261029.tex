@@ -1,0 +1,1016 @@
+% !TEX program = xelatex
+% 梯度流胶子准 TMD 比值的流时稳定性与统计能力报告
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+
+\usepackage[a4paper,margin=2.05cm,headheight=14pt]{geometry}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,longtable,array,tabularx,multirow}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{hyperref}
+
+\definecolor{pyblue}{RGB}{36,91,163}
+\definecolor{qudared}{RGB}{190,65,55}
+\definecolor{goodgreen}{RGB}{30,132,73}
+\definecolor{warnorange}{RGB}{197,90,17}
+\hypersetup{
+  colorlinks=true,linkcolor=pyblue,urlcolor=pyblue,citecolor=pyblue,
+  pdftitle={梯度流胶子准 TMD 比值的流时稳定性与统计能力}
+}
+\urlstyle{tt}
+\newcommand{\pathref}[1]{\path{#1}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\SU}{\mathrm{SU}}
+\newcommand{\GF}{\mathrm{GF}}
+\newcommand{\diag}{\textcolor{goodgreen}{\textbf{通过}}}
+\newcommand{\fail}{\textcolor{qudared}{\textbf{未通过}}}
+\newcommand{\na}{\textcolor{warnorange}{\textbf{不可判定}}}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.35em}
+\emergencystretch=3em
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.08}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  frame=single,
+  breaklines=true,
+  breakatwhitespace=false,
+  keepspaces=true,
+  columns=flexible,
+  numbers=none
+}
+
+\title{梯度流胶子准 TMD-PDF 的比值估计量：\\
+流时稳定性、统计能力与零检验}
+\author{PyQCD 代码—物理分析记录}
+\date{2026 年 10 月 29 日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告汇总在组态系综
+\code{beta6.20_mu-0.2770_ms-0.2400_L24x72}（9 个组态）
+上对核子内胶子准 TMD-PDF 的梯度流（gradient flow）重整化方案的
+当前状态。核心估计量是比值
+$R(z,b;t_{\rm sep})=\langle C_3(\tau)/C_2(t_{\rm sep})\rangle$
+的所有组态平均；其分子为梯度流后的胶子三点关联函数，
+分母为同一动量与极化下的两点关联函数。
+
+本报告回答四个问题：
+(1) 该比值统计实现是否正确、可复现；
+(2) 比值是否随流时间 $\tau$ 变化；
+(3) 在两态模型内，基态矩阵元 $B_{00}$ 能否被稳定提取；
+(4) 由组合噪声得到的 $z$ 分数是否只是置换零假设的产物。
+结论是：比值实现在 $10^{-14}$ 相对量级内可复现；流时扫描与零检验给出可用的诊断；
+但 9 个组态下 $B_{00}$ 的显著性为 $0/12$，\emph{全部}非零横向分离 $b$
+在 $b\le4$ 的网格上都处在流窗之外。本轮因此把 $b$ 扩到 $6$，得到三个流时
+共有的 16 点流窗；在该窗内第一次可以真正比较流时，结果是
+\textbf{检测到系统性流时漂移}（$\tau/a^2=2\to3$ 最强，$P_{200}$ 上 16 个
+$(z,b)$ 在三个插入时间上全部同号），而不是「流时无关」。
+因此本轮**不给出任何物理接受**，状态保持
+\code{diagnostic_only}、\code{physical_acceptance=false}。
+\end{abstract}
+
+\tableofcontents
+
+\section{目标与状态边界}
+
+本轮工作对象是核子内胶子准 TMD-PDF 的梯度流重整化方案。
+梯度流把规范场在流时间 $\tau$ 上平滑，从而以
+$\GF$ 方案压住算符的紫外发散；代价是引入了
+一个重整化标度，因此任何由该方案给出的矩阵元都必须先证明
+\textbf{对标度不敏感}，才可能进一步讨论匹配与连续极限。
+
+本报告的所有数值结果都处在诊断状态：
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+项目 & 取值 \\
+\midrule
+产品状态 & \code{diagnostic_only} \\
+物理接受 & \code{physical_acceptance=false} \\
+是否含匹配系数 & 否 \\
+是否含软/快度因子 & 否 \\
+是否含连续极限 & 否 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+一个通过流时稳定性检验的比值是物理矩阵元的\emph{必要}条件，
+不是充分条件。本报告的任何表格都不构成对物理 TMD-PDF 的断言。
+
+\section{算符与估计量}
+
+\subsection{两点与三点关联函数}
+
+令 $C_2(t_{\rm sep})$ 为动量为 $P$、极化与通道给定的胶子两点关联函数，
+$C_3(\tau;t_{\rm sep})$ 为在时间 $t_{\rm sep}$ 处插入胶子流算符、
+插入位置为 $t_{\rm ins}=\tau$ 的三点关联函数。两者都来自同一个
+梯度流规范场 $V_\tau$，即
+\begin{equation}
+  V_\tau = \mathcal{T}\exp\!\left(-i\int_0^\tau \dd s\, Z_s\right),
+  \qquad
+  Z_s = \frac{1}{g_0^2}\frac{\dd Q_s}{\dd s}Q_s^{-1},
+\end{equation}
+其中 $Q_s$ 是在流时间 $s$ 上以 $\epsilon$ 步长积分得到的规范链接。
+本库的流参数为 $\tau/a^2=3$（参考流时）、$\epsilon=0.05$。
+
+\subsection{比值估计量}
+
+对每一个组态 $c$ 与每一个 $(z,b;t_{\rm sep})$ 元组，比值定义为
+\begin{equation}
+  R_c(z,b;t_{\rm sep})
+  = \frac{C_{3,c}(\tau;t_{\rm sep})}
+         {C_{2,c}(t_{\rm sep})},
+  \qquad
+  R(z,b;t_{\rm sep}) = \Big\langle R_c \Big\rangle_{\!c},
+\end{equation}
+其中 $z$ 为沿 $z$ 方向的算符长度，$b$ 为横向分离。
+比值的分母与分子共享同一批规范场，因此共模噪声在比值中部分抵消。
+这正是比值估计量相对于裸矩阵元的优势，也是后续所有跨流时比较
+必须使用\textbf{配对} jackknife 的原因（第 \ref{sec:stats} 节）。
+
+\subsection{通道、取向与分量的物理选择}
+
+产品的缓存 contract 中显式记录了以下标签维度：
+\begin{itemize}
+  \item 通道：\code{unpolarized}、\code{helicity}；
+  \item 取向：\code{plus_z_raw}、\code{minus_z_raw}、
+        \code{even_sum}、\code{odd_difference}；
+  \item 分量：\code{combined}、\code{Mtiti}、\code{Mijij}、
+        \code{ti}、\code{tj}、\code{ij_single}。
+\end{itemize}
+本报告固定采用
+通道 $=$ \code{unpolarized}、取向 $=$ \code{even_sum}、
+分量 $=$ \code{combined}、方向 $= z$，与
+\pathref{data/runs/tmd-recompute-20261028/analyze_finite_b_tmd.py}
+的选择一致。
+
+\section{数据集与数值参数}
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+参数 & 取值 \\
+\midrule
+系综 & \code{beta6.20_mu-0.2770_ms-0.2400_L24x72} \\
+格点间距 & $a=0.1053\ \mathrm{fm}$ \\
+时间长度 & $N_t=72$ \\
+组态 & $4150,6250,6450,6650,6850,7050,7250,7450,7650$（9 个）\\
+源/时间片 & $8$ 个源，分布在 72 个时间片上 \\
+算符长度 & $z/a=0,\dots,12$ \\
+横向分离 & $b/a=0,\dots,6$（第 \ref{sec:bext} 节扩展；原产品为 $0,\dots,4$）\\
+时间分离 & $t_{\rm sep}/a=5,\dots,24$（$b$ 扩展分析）\\
+插入窗 & $t_{\rm sep}/2\pm1$（纯运动学掩码 $t_{\rm ins}\le t_{\rm sep}$）\\
+流时间 & $\tau/a^2=3$（参考）、$1$、$2$（扫描）\\
+流步长 & $\epsilon=0.05$ \\
+Wilson 线订书钉长度 & $L=12$ \\
+精度 & \code{complex64} 缓存、\code{complex128} 分析 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+动量取 $P_{000}$、$P_{200}$、$P_{400}$ 三个标签
+（即 $n_z=0,2,4$ 个 $2\pi/L$ 单位）。
+
+\section{统计方法}
+\label{sec:stats}
+
+\subsection{delete-one jackknife}
+
+每个观测量的误差由组态层面的 delete-one jackknife（JK）给出。
+9 个组态给出 9 个删一复制品，样本协方差的秩上限为 $n_{\rm conf}-1=8$。
+这是本数据集统计能力的硬上限：任何需要多于 8 个独立方向的拟合
+（例如多态拟合一并放开多个振幅）都会被这个秩限制。
+
+\subsection{配对差值 jackknife}
+
+比较两个流时间 $\tau_1,\tau_2$ 时，两个比值
+$R^{(\tau_1)}$、$R^{(\tau_2)}$ 使用\textbf{同一批组态}，
+其涨落高度相关。若分别求误差再线性相加，共模噪声会被重复计数，
+把真实差异淹没。正确的做法是对差值做配对 JK：
+\begin{equation}
+  \sigma_{\Delta}^2
+  = \frac{n-1}{n}\sum_{c=1}^{n}
+    \Big(\Delta_c - \bar\Delta\Big)^2,
+  \qquad
+  \Delta_c = R_c^{(\tau_1)} - R_c^{(\tau_2)},
+\end{equation}
+其中 $\Delta_c$ 是同一组态 $c$ 上两个流时之差。
+本报告所有跨流时结论都基于 $\sigma_\Delta$，而不是两个单独误差的组合。
+
+\subsection{协方差秩与格点计数}
+
+在统计表格中，「格点」指 $(z,b,t_{\rm sep})$ 的总数（$13\times5\times6=390$）。
+$\sigma\ge2$ 与 $\sigma\ge3$ 的计数只统计有限且误差非零的格点。
+由于 390 个格点共享同一批 9 个组态，格点之间存在强相关，
+这些计数只能作为整体趋势的描述，不能当作 390 个独立假设检验。
+
+\section{已修复的缺陷与逐位复现}
+\label{sec:fix}
+
+在先前的产品中发现 JK 样本的轴顺序错误：\code{_gradient_flow_ratio.py}
+中把组态轴临时移动到末位后没有还原，导致下游按
+\code{[..., :]} 取样本时切到了错误的轴。修复为
+\begin{center}
+\code{np.moveaxis(samples_one, 0, -1)}
+\end{center}
+位于 \pathref{pyqcd/analysis/_gradient_flow_ratio.py} 第 362 行；修复后文件
+sha256 为
+\begin{center}
+\footnotesize\ttfamily
+fb7f57d0456c511295e4bbcbc38c13c0af7e2a9032bd9d307782891e00b38a65
+\end{center}
+
+修复后全量重生成 ratio-v3 产品，并做逐位复核：对 $P_{000}$、$P_{200}$、$P_{400}$
+分别重建比值与 JK 样本，与已发布 \code{.npz} 比较，得到
+\begin{center}
+\begin{tabular}{@{}lccl@{}}
+\toprule
+动量 & $\max|\Delta\,\mathrm{Re}\,R|$ & $\max|\Delta S|$ & 掩码/NaN 模式 \\
+\midrule
+$P_{000}$ & $2.10\times10^{-14}$ & $2.51\times10^{-14}$ & 完全一致 \\
+$P_{200}$ & $2.10\times10^{-14}$ & $2.47\times10^{-14}$ & 完全一致 \\
+$P_{400}$ & $2.88\times10^{-14}$ & $3.73\times10^{-14}$ & 完全一致 \\
+\bottomrule
+\end{tabular}
+\end{center}
+三者的差异都只有 float64 舍入量级，没有格点超过 $10^{-6}$。
+比较使用双向 \code{np.isfinite} 掩码，并单独比较有限性模式与
+\code{valid_insertion_mask}，避免含 NaN 数组直接相减产生假 NaN。
+
+已发布产品把比值存为复数，而分析链一律取实部。复比值的虚部来自分母
+C2 的相位；第 \ref{sec:flowscan} 节给出两种分母约定的系统检查，
+确认它对实部的影响可以忽略。
+
+\section{流窗有效性}
+\label{sec:window}
+
+梯度流把半径 $\sqrt{8\tau}$ 内的规范场平滑掉。当该半径不小于
+算符分离 $|z|$ 或 $|b|$ 时，算符已被流抹平，几何上不再是一个
+可用的准 TMD 矩阵元。因此每个流时都附带一个几何有效窗
+\begin{equation}
+  \sqrt{8\tau} < |z|,\quad \sqrt{8\tau} < |b|.
+\end{equation}
+
+\begin{center}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+$\tau/a^2$ & 流半径 $\sqrt{8\tau}$ [a] & 满足 $b>$ 半径的 $b$ & 满足 $z>$ 半径的 $z$ \\
+\midrule
+1 & 2.83 & 3, 4, 5, 6 & 3--12 \\
+2 & 4.00 & 5, 6 & 5--12 \\
+3 & 4.90 & 5, 6 & 5--12 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+在原有的 $b\le4$ 网格上，参考流时 $\tau/a^2=3$ 的流半径超过所有非零 $b$，
+即 $b/a=1,\dots,4$ 全部处在流窗之外；$\tau/a^2=2$ 同样没有任何窗内格点；
+只有 $\tau/a^2=1$ 在 $b=3,4$ 上重新进入流窗。这意味着在 $b\le4$ 上
+\textbf{无法做任何流时比较}。
+
+本轮为此把横向距离扩到 $b/a\le6$（第 \ref{sec:bext} 节）。
+扩展后三个流时都有了窗内格点：$\tau=1$ 有 40 个
+$(z,b)\in\{3,\dots,12\}\times\{3,4,5,6\}$，$\tau=2,3$ 各有 16 个
+$(z,b)\in\{5,\dots,12\}\times\{5,6\}$。三者的\textbf{共同窗}是
+\begin{equation}
+  |z|\ge5,\quad |b|\in\{5,6\},\qquad \text{共 }16\ \text{个 }(z,b),
+\end{equation}
+这是唯一能同时比较三个流时的几何。跨流时结论只能限定在这 16 个点上：
+把 $\tau=1$ 的 40 点与 $\tau=2,3$ 的 16 点直接比较会把只在 $\tau=1$
+有效的 $b=3,4$ 混进差值。
+
+共同窗仍属小样本，且窗内最靠近流半径的 4 个点
+$(5,5),(5,6),(6,5),(6,6)$ 是边缘最脆弱的子集。本节之后所有跨流时结果
+都同时给出 16 点全集与这 4 点的子集，用于区分边缘效应与整体趋势。
+
+\section{横距扩展生产：$b/a=0,\dots,6$}
+\label{sec:bext}
+
+要在 $\tau/a^2=2,3$ 上取得任何窗内格点，必须把横向距离扩到 $b/a\ge5$。
+沿横距方向的扩展\textbf{不是}分析层的零成本参数：full-channel OPE 缓存的
+contract 键包含完整有序 \code{b_list}，扩 $b$ 必须重新流化并重算 OPE。
+
+\subsection{生产配置与后端}
+
+共 $9$ 个组态 $\times$ 3 个流时 $=27$ 个缓存，
+$z/a=0,\dots,12$、$b/a=0,\dots,6$、$\epsilon=0.05$、订书钉长度 12、
+\code{complex64}，输出形状 $(2,4,6,13,7,72)$。三张卡并行：
+
+\begin{center}
+\footnotesize
+\begin{tabular}{@{}llll@{}}
+\toprule
+设备 & 后端 & 分配 & 说明 \\
+\midrule
+V100 32\,GiB & torch & $\tau=3$ 全部 9 个，$\tau=2$ 共 5 个 & 参考流时全部留在 torch \\
+P100 16\,GiB (a) & cupy & $\tau=2$ 三个，$\tau=1$ 三个 & sm\_60 需 CuPy \\
+P100 16\,GiB (b) & cupy & $\tau=1$ 六个 & 同上 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+按实测速度静态分配（V100 $\approx2.4\times$ P100），单卡只跑一个进程。
+每个 $(z,b)$ 的新缓存在 contract 中带独立 \code{b_list}，与旧的
+\code{b5\_0to4} 缓存并存，不会覆盖。
+
+\subsection{非侵入性：旧切片回归}
+
+正确性证据不是「独立重算」，而是\textbf{新缓存的 $b\le4$ 切片与已发布
+torch 生产缓存逐元素一致}：
+
+\begin{itemize}
+  \item torch 产出的 9 个 $\tau=3$ 缓存：$\max|\Delta|=\mathbf{0.0}$，
+        NaN 掩码完全相同（逐位）。
+  \item CuPy 产出的 9 个 $\tau=1,2$ 缓存：$\max|\Delta|\approx
+        6\times10^{-4}$--$1.9\times10^{-3}$，出现在 $|{\rm ref}|\approx0$
+        的格点上。这是 \code{complex64} 的舍入差，按相对 Frobenius 范数
+        衡量为 $4.8\times10^{-7}$--$7.0\times10^{-7}$，阈值取
+        $1\times10^{-5}$（$\approx14$ 倍余量，仍比任何真实的索引或几何
+        错误低 5 个数量级），判据记为 \code{float32\_equivalent}。
+        \textbf{绝对容差在这里没有意义}：缓存跨 $10^4$ 量级，$10^{-7}$
+        的相对舍入就是 $10^{-3}$ 的绝对差。
+\end{itemize}
+
+两个判据（\code{bit\_exact} 与 \code{float32\_equivalent}）连同阈值、
+实测范围与每个 $(\tau,{\rm conf})$ 的后端归属一并写进
+\code{cache\_matrix.json}，而不是只留在日志里。
+
+\subsection{抽样复算：跨设备的确定性}
+
+直接把某个 $(\tau,{\rm conf})$ 再跑一遍不会触发计算（缓存命中立即返回），
+因此抽查必须先把该缓存挪出匹配范围、放到另一张卡上重算，再逐位比较。
+本轮对 $(\tau,{\rm conf})=(1,4150)$ 做了这一检查：原缓存由 P100(a) 产出，
+重算在 P100(b) 上完成，耗时 363\,s，结果
+\begin{itemize}
+  \item \code{array\_equal = True}，$\max|\Delta|=\mathbf{0.0}$；
+  \item NaN 掩码完全相同；
+  \item contract JSON 与 \code{sha256} 完全相同。
+\end{itemize}
+结论：CuPy/P100 路径在当前驱动下\textbf{确定}，跨设备重算逐位一致。
+torch 一侧的同类证据来自更早的 $\tau=2$、conf 6250 基准运行：它的
+$b\le4$ 切片与已发布缓存同样 $\max|\Delta|=0.0$。
+
+\subsection{新格点的健全性}
+
+$b=5,6$ 全部格点有限（有限性比例 $1.0$），且量级沿 $b$ 单调衰减。
+以「先在单个组态的 channel$\times$component$\times z\times t$ 全部有限元素上
+取 $|{\rm OPE}|$ 中位数，再对 9 个组态取中位数」计，$b/a=3,4,5,6$ 依次为：
+$\tau=1$ 时 $3.315/3.107/2.971/2.872$；$\tau=2$ 时
+$2.628/2.104/1.974/1.898$；$\tau=3$ 时 $2.405/1.779/1.566/1.493$。
+没有跳变或发散，说明新格点处在同一标度区，不是几何边界的伪影。
+换一个统计口径（只取 $z\ge5$、先合并组态、或用均值）会给出差 5\%--10\%
+的另一组数，因此上表同时给出定义；此外这些数字必须在 27 个缓存全部到位后
+再算——只完成一半组态时的早期值（如 $\tau=2$ 的 $2.66/2.14/2.01/1.91$）
+虽然只差 $1\%$--$2\%$，但不是同一个统计量。
+
+\subsection{共同流窗内的流时依赖}
+\label{sec:flowwindow}
+
+$b/a\le4$ 上不存在任何窗内格点，所以此前所有「流时稳定性」的说法都只能是
+\emph{不可判定}。扩展到 $b=6$ 之后第一次有了 16 个 $(z,b)$ 的共同窗
+（\S\ref{sec:window}）。本节所有比较都对\textbf{差值的逐复制品}做
+delete-one JK：同一次复制品在三个流时里丢掉的是同一个组态，共模涨落在
+差值里相消；把两个误差平方相加会把这个相消完全丢掉（下文可以看到，
+它决定了结论的方向）。
+
+\paragraph{比值层。}
+直接比较三个流时的实部比值 $R=C_3/C_2$，每个 $t_{\rm sep}$ 取与已发布产品
+一致的中心三点窗口，$16\times6=96$ 个格点。
+
+\begin{center}
+\footnotesize
+\begin{tabular}{@{}lcccrc@{}}
+\toprule
+动量 & 比较 & $\sigma\ge2$ & $\sigma\ge3$ & 中位 $\sigma$ & 中位 $|\Delta R|/|R|$ \\
+\midrule
+$P_{000}$ & $\tau=1$ vs $2$ & 13 & 0 & 0.91 & 1.66 \\
+$P_{000}$ & $\tau=1$ vs $3$ & 5 & 0 & 0.45 & 2.35 \\
+$P_{000}$ & $\tau=2$ vs $3$ & 20 & 1 & 1.34 & 1.41 \\
+$P_{200}$ & $\tau=1$ vs $2$ & 0 & 0 & 0.59 & 0.86 \\
+$P_{200}$ & $\tau=1$ vs $3$ & 1 & 0 & 0.57 & 1.26 \\
+$P_{200}$ & $\tau=2$ vs $3$ & 31 & 5 & 1.62 & 1.30 \\
+$P_{400}$ & $\tau=1$ vs $2$ & 6 & 0 & 0.66 & 0.97 \\
+$P_{400}$ & $\tau=1$ vs $3$ & 7 & 0 & 0.42 & 1.67 \\
+$P_{400}$ & $\tau=2$ vs $3$ & 7 & 1 & 0.87 & 1.27 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+同一 $(z,b)$ 的 6 个 $t_{\rm sep}$ 窗口、以及不同 $z$ 之间都高度相关，
+所以 $\sigma\ge2$ 的计数不是独立检验数；中位 $|\Delta R|/|R|$ 全部大于
+$0.8$，说明相对差本身就是信号量级，单看 $\sigma$ 会低估系统性。
+
+\paragraph{C3 层。}
+更直接的是固定插入时间的组合量
+$P(\tau_{\rm ins})=B_{00}+B_{01}e^{-(m_1-m_0)\tau_{\rm ins}}$
+（\S\ref{sec:tau1plateau}）：它把 $B_{00}$ 与 $B_{01}$ 的相关性一并保留，
+误差由逐复制品的组合值求得。下表只列共同窗、$t_{\rm sep}$ 窗口
+$[5,24]$，每行 16 个 $(z,b)$。
+
+\begin{center}
+\footnotesize
+\begin{tabular}{@{}lcccrcr@{}}
+\toprule
+动量 & 比较 & $\tau_{\rm ins}$ & $\Delta>0$ & 中位 $\Delta$ & 平均 $|\sigma|$ & $|\sigma|\ge2$ \\
+\midrule
+$P_{000}$ & $\tau=1$ vs $2$ & 1 & 16/16 & $+1.69\times10^{-3}$ & 0.75 & 1 \\
+$P_{000}$ & $\tau=1$ vs $2$ & 5 & 14/16 & $+3.44\times10^{-3}$ & 1.12 & 4 \\
+$P_{000}$ & $\tau=1$ vs $3$ & 1 & 13/16 & $+1.42\times10^{-3}$ & 0.55 & 0 \\
+$P_{000}$ & $\tau=2$ vs $3$ & 5 & 0/16 & $-3.06\times10^{-3}$ & 1.58 & 3 \\
+$P_{200}$ & $\tau=1$ vs $2$ & 1 & 2/16 & $-1.01\times10^{-3}$ & 0.52 & 0 \\
+$P_{200}$ & $\tau=1$ vs $3$ & 1 & 1/16 & $-2.56\times10^{-3}$ & 0.98 & 0 \\
+$P_{200}$ & $\tau=2$ vs $3$ & 1 & 0/16 & $-1.20\times10^{-3}$ & 2.59 & 12 \\
+$P_{200}$ & $\tau=2$ vs $3$ & 3 & 0/16 & $-1.53\times10^{-3}$ & 1.70 & 5 \\
+$P_{200}$ & $\tau=2$ vs $3$ & 5 & 0/16 & $-1.55\times10^{-3}$ & 1.56 & 3 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{判读。}
+\begin{itemize}
+  \item $\tau=2$ 与 $\tau=3$ 之间的差异是\textbf{系统性}的：在 $P_{200}$ 上，
+        16 个 $(z,b)$ 在三个插入时间上\textbf{全部同号}（$\Delta<0$，
+        中位 $-1.2$ 到 $-1.6\times10^{-3}$），逐点显著性中位 $1.5$--$2.6\sigma$，
+        插入 1 处有 12/16 个点 $|\sigma|\ge2$；$P_{000}$ 在插入 3、5 上
+        同样 0/16 反向。同号的点高度相关，不能当成 16 次独立检验，
+        但「全部同号 + 中位 $2\sigma$ 级」不可能由独立噪声产生。
+  \item 配对与否改变结论的量级：$P_{200}$、$\tau=2$ vs $3$、插入 1 的
+        中位 $|\sigma|$ 从未配对（误差平方相加）的 $0.95$ 升到配对的
+        $2.57$。共模涨落在差值中相消，用平方和会把它重复计入两次。
+  \item $\tau=1$ 与 $\tau=2,3$ 的比较没有一致方向的显著差异
+        （$P_{200}$ 全部 $0$ 个点 $|\sigma|\ge2$），但 $P_{000}$ 的
+        $\tau=1$ vs $2$ 有 16/16 同号、$P_{200}$ 的 $\tau=1$ vs $2$ 在
+        插入 1 处 14/16 同号——方向随动量与插入时间改变，且逐点只有
+        $0.5$--$1.2\sigma$，属于「有结构但未达判定」。
+  \item 比值层与 C3 层独立地给出同一图案（$\tau=2$ vs $3$ 最强），
+        两层一致性检查通过（比值层中位 $\sigma=0.66$，C3 层
+        $[5,24]$、插入 1 的中位 $\sigma=0.58$，同为「未达 $2\sigma$」）。
+  \item 因此本轮\textbf{不能}再写「流时无关」。能确定的是：在共同窗内、
+        $b=5,6$ 的窄带上存在系统性流时差异，最强的是 $\tau=2\to3$，
+        方向统一为 $P(\tau=3)>P(\tau=2)$（$P_{200}$ 三个插入时间、
+        $P_{000}$ 插入 3 与 5 均为 16/16 同号）。$\tau=1$ 与 $\tau=2$ 的
+        差方向随动量与插入时间改变，逐点只有 $0.5$--$1.2\sigma$，
+        不足以给出一条单调的流时依赖曲线。由于窗内只有两个 $b$ 值、
+        $\tau=3$ 的流半径 $4.90a$ 距 $b=5$ 只有 $0.1a$、且 9 组态的
+        自由度上限为 8，这仍只是 \code{diagnostic\_only}，不能外推为
+        流时重整化后的物理结论。
+\end{itemize}
+
+\section{结果}
+
+\subsection{参考流时 $\tau/a^2=3$ 的比值}
+
+表 \ref{tab:ref} 给出 $t_{\rm sep}/a=8$ 处的窗口平均值与 JK 误差，
+$z/a=2,4,6,8$、$b/a=0,2,4$。
+
+\begin{table}[htbp]
+\centering
+\caption{$\tau/a^2=3$、$t_{\rm sep}/a=8$ 的窗口平均值 $R$ 与 delete-one JK 误差，
+括号内为信号噪比 $|R|/\sigma$。}
+\label{tab:ref}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}llccc@{}}
+\toprule
+动量 & $b/a$ & $z/a=2$ & $z/a=4$ & $z/a=6$ \\
+\midrule
+\multirow{3}{*}{$P_{000}$}
+ & 0 & $-0.1976\pm0.2368$ (0.8) & $-0.0248\pm0.1679$ (0.1) & $0.1172\pm0.1198$ (1.0) \\
+ & 2 & $-0.0283\pm0.1298$ (0.2) & $0.1103\pm0.0910$ (1.2)  & $0.1950\pm0.0723$ (2.7) \\
+ & 4 & $-0.0449\pm0.1121$ (0.4) & $-0.0131\pm0.0772$ (0.2) & $0.0357\pm0.0733$ (0.5) \\
+\midrule
+\multirow{3}{*}{$P_{200}$}
+ & 0 & $-0.3810\pm0.3744$ (1.0) & $-0.2548\pm0.3053$ (0.8) & $-0.0891\pm0.1880$ (0.5) \\
+ & 2 & $-0.1884\pm0.1972$ (1.0) & $-0.0253\pm0.1689$ (0.1) & $0.1176\pm0.1224$ (1.0) \\
+ & 4 & $-0.0451\pm0.1383$ (0.3) & $0.0158\pm0.0973$ (0.2)  & $0.0824\pm0.0913$ (0.9) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+两个动量下 $b/a\ge1$ 的所有格点，$|R|$ 的中位数约为 $0.08$，
+信号噪比中位数分别为 $1.1$（$P_{000}$）与 $0.81$（$P_{200}$）。
+$P_{400}$ 的分母在 $t/a\ge7$ 后接近噪声，
+其中位 $|R|$ 从 $t_{\rm sep}=5$ 的 $0.152$ 涨到 $t_{\rm sep}=10$ 的 $5.95$，
+尾部出现无误差控制的大值，本报告不对其做物理解读。
+
+\subsection{流时扫描}
+\label{sec:flowscan}
+
+为检验 $\GF$ 方案的重整化标度依赖性，在 $\tau/a^2=1$ 与 $2$ 上
+独立计算 full-channel 1D OPE，并用\textbf{同一} C2 重建比值。
+每个流时的缓存以自身 contract（含 $\tau$ 与 \code{staple_length}）为键，
+与 $\tau=3$ 产品并存，互不覆盖。
+
+18 个 $(\tau,\text{组态})$ 作业全部完成，单作业耗时 133--170~s
+（流 $40$--$43$~s，full-channel OPE $86$--$118$~s）。
+在 $\tau=3$ 上重建的比值与已发布 ratio-v3 产品的实部在
+$10^{-14}$ 相对量级内一致（\textbf{不是}逐位相等）：
+$\max|\Delta\,\mathrm{Re}\,R|=2.1\times10^{-14}$，
+JK 样本 $\max|\Delta S|=2.5\times10^{-14}$，
+$0/3315$ 个格点超过 $10^{-6}$；掩码与 NaN 模式完全相同。
+逐位相等只出现在 OPE 缓存层（全 torch 的 15 个 $(\tau,\text{组态})$
+单元格 $\max|\Delta|=0$）；比值层多一次除法和求和归约，差 $10^{-14}$。
+
+\begin{table}[htbp]
+\centering
+\caption{流时与参考流时 $\tau/a^2=3$ 的配对 delete-one JK 比较。
+「格点」为 $(z,b,t_{\rm sep})$ 总数；$\sigma\ge2/\ge3$ 只统计有效格点。}
+\label{tab:flowscan}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llcccccc@{}}
+\toprule
+动量 & $\tau/a^2$ & 格点 & $\sigma\ge2$ & $\sigma\ge3$
+ & 中位 $\sigma$ & 中位 $|\Delta R|$ & 中位相对差 \\
+\midrule
+$P_{000}$ & 1 & 390 & 20 & 3 & 0.49 & 0.084 & 0.871 \\
+$P_{000}$ & 2 & 390 & 18 & 1 & 0.58 & 0.040 & 0.501 \\
+$P_{200}$ & 1 & 390 & 7  & 0 & 0.48 & 0.087 & 0.980 \\
+$P_{200}$ & 2 & 390 & 4  & 0 & 0.61 & 0.043 & 0.481 \\
+$P_{400}$ & 1 & 390 & 40 & 8 & 0.70 & 0.545 & 1.459 \\
+$P_{400}$ & 2 & 390 & 39 & 16 & 0.80 & 0.281 & 0.708 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+限制到流窗内格点（$\tau=1$ 时 $b=3,4$、$z\ge3$，共 120 个）：
+$P_{000}$ 中位 $\sigma=0.36$、$\sigma\ge3$ 为 $0/120$；
+$P_{200}$ 为 $0.42$ 与 $0/120$；
+$P_{400}$ 为 $0.71$ 与 $1/120$。
+$\tau=2$ 的流半径为 $4.0a$，没有任何非零 $b$ 落在窗内，故不可判定。
+
+小 $\sigma$ 不等于「比值为零」。若把中位 $|\Delta R|$ 与参考流时的中位 $|R|$
+相比，$P_{000}$ 为 $0.88$、$P_{200}$ 为 $0.78$、$P_{400}$ 为 $3.19$：
+差值本身与信号同量级，而误差还要更大。
+因此本轮流时扫描的结论是
+\begin{center}
+\emph{在 9 个组态下检测不到统计显著的流时依赖，但检验没有区分能力；\\
+既不能确认、也不能排除 $O(1)$ 的流时依赖。}
+\end{center}
+把这一结果读成「比值与流时无关」是过度解读。
+
+\subsubsection{分母约定的系统检查}
+
+复比值的虚部并不小：中位 $|\mathrm{Im}\,R|/|\mathrm{Re}\,R|$ 为
+$0.35$（$P_{000}$）、$0.90$（$P_{200}$）、$0.93$（$P_{400}$）。
+缓存的 OPE 本身虚部严格为零，因此虚部来自分母 C2 的相位；
+比值分子是 OPE 与 C2 的协方差估计量，相位不会自动抵消。
+
+已发布产品用复数 C2 作分母。另一种约定取 C2 实部。表 \ref{tab:denom}
+比较两者对下游实际使用的实部的影响。
+
+\begin{table}[htbp]
+\centering
+\caption{分母约定对窗口平均实部的影响（$\tau/a^2=3$）。}
+\label{tab:denom}
+\footnotesize
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+动量 & 中位 $|\Delta\,\mathrm{Re}\,R|$ & 中位相对差 & 中位 JK 误差
+ & 中位 $|\mathrm{Im}\,R|/|\mathrm{Re}\,R|$ \\
+\midrule
+$P_{000}$ & $1.49\times10^{-4}$ & 0.20\% & 0.083 & 0.35 \\
+$P_{200}$ & $2.32\times10^{-4}$ & 0.25\% & 0.112 & 0.90 \\
+$P_{400}$ & $4.76\times10^{-2}$ & 10.7\%  & 0.582 & 0.93 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+对 $P_{000}$、$P_{200}$，两种约定相差约 $0.2\%$，比 JK 误差小两个量级；
+$P_{400}$ 差异较大，但它已因分母趋零被排除。
+因此虚部虽大，对本轮所选观测量不构成偏差来源，也不是物理信号，
+而是 C2 相位在协方差比值中的投影。这一检查不改变任何既有产品。
+
+\subsection{时间分离扩展}
+
+full-channel OPE 缓存的插入轴覆盖全部 72 个时间点，C2 也按整条时间序列加载，
+因此把 $t_{\rm sep}$ 从 $5$ 扩到 $16$ 只需重跑分析、不需要任何格点计算，
+也不写任何缓存。扩展的目的不是增加统计量，而是问：
+窗口值在更大的 $t_{\rm sep}$ 上是否继续漂移，即 $5$--$10$ 窗口是否已被污染。
+
+一致性先要保证：$t_{\rm sep}\le10$ 的子集与已发布 ratio-v3 产品逐位对齐，
+最大差为 $5.6\times10^{-17}$（$P_{000}$、$P_{200}$）与
+$8.9\times10^{-16}$（$P_{400}$）。
+
+\begin{table}[htbp]
+\centering
+\caption{$t_{\rm sep}$ 扩展。每个单元为中位 $|R|$（括号内为中位信号噪比），
+取遍 $z\ge2$、$b\ge1$ 的有效格点。}
+\label{tab:tsep}
+\footnotesize
+\begin{tabular}{@{}rcccccc@{}}
+\toprule
+ & \multicolumn{2}{c}{$P_{000}$} & \multicolumn{2}{c}{$P_{200}$}
+ & \multicolumn{2}{c}{$P_{400}$} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+$t_{\rm sep}/a$ & $|R|$ & SNR & $|R|$ & SNR & $|R|$ & SNR \\
+\midrule
+ 5 & 0.024 & 0.45 & 0.021 & 0.54 & 0.076 & 0.98 \\
+ 6 & 0.055 & 0.91 & 0.057 & 1.13 & 0.086 & 0.57 \\
+ 7 & 0.072 & 1.07 & 0.060 & 0.88 & 0.197 & 0.68 \\
+ 8 & 0.128 & 2.08 & 0.141 & 1.24 & 0.610 & 0.59 \\
+ 9 & 0.164 & 2.19 & 0.115 & 0.72 & 0.796 & 0.29 \\
+10 & 0.258 & 2.32 & 0.183 & 0.82 & 1.334 & 0.45 \\
+11 & 0.260 & 1.96 & 0.278 & 0.62 & 1.222 & 0.54 \\
+12 & 0.384 & 2.00 & 0.195 & 0.26 & 11.48 & 0.68 \\
+13 & 0.417 & 1.79 & 0.419 & 0.32 & 4.571 & 0.22 \\
+14 & 0.485 & 1.68 & 1.331 & 0.57 & 8.494 & 0.79 \\
+15 & 0.629 & 1.42 & 2.316 & 0.45 & 2.323 & 0.99 \\
+16 & 0.845 & 1.48 & 2.203 & 0.15 & 3.350 & 1.34 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+$P_{000}$ 的 $|R|$ 从 $t_{\rm sep}=5$ 的 $0.024$ 单调升到 $t_{\rm sep}=16$
+的 $0.845$，在 $8$--$12$ 区间 SNR 约为 $2$，之后误差主导。
+单调上升是激发态污染的典型形状：C2 中的激发态随 $t_{\rm sep}$ 衰减更快，
+比值因此朝基态矩阵元靠拢，而 $5$--$10$ 窗口并没有到达平台。
+$P_{200}$ 从 $t_{\rm sep}=11$ 起 SNR 低于 $1$；$P_{400}$ 全程 SNR 不超过 $1.4$，
+其大 $|R|$ 值是分母趋零的放大，不是信号。
+因此把 $t_{\rm sep}=5$--$10$ 的窗口值当作渐近值是过度解读。
+
+\subsection{两态多指数联合拟合}
+
+在 12 个 $(P,z,b)$ 格点上做两态联合拟合：
+$C_2 = A_0 e^{-m_0 t} + A_1 e^{-m_1 t}$（$t=1,\dots,10$），
+$C_3 = B_{00}e^{-m_0(t_{\rm sep}-\tau)}e^{-m_0\tau} + B_{01}(\cdots) + B_{10}(\cdots)$
+（$t_{\rm sep}=5,\dots,10$，$\tau=1,\dots,t_{\rm sep}-1$）。
+误差为 9 组态 delete-one JK：每个删一组态的子集单独求 C3，
+再用中心拟合的固定 JK 权重重拟合。
+
+C2 一致性检查：直接 source/组态平均的 C2 与库返回的 \code{c2_mean}
+在 $t_{\rm sep}=5,\dots,10$ 的最大差为 $4.34\times10^{-19}$（$P_{000}$）、
+$1.08\times10^{-19}$（$P_{200}$），说明拟合输入与产品一致。
+
+预先声明的判据为：
+质量分裂 $(m_1-m_0)/\sigma\ge3.0$；
+$B_{00}$ 相对误差 $\le1.0$；
+$|B_{00}|/\sigma\ge2$；
+窗口最大偏离 $\le2.0\sigma$；
+$\chi^2/{\rm dof}\le3.0$；
+所有 JK 重拟合收敛。结果：
+
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+判据 & 通过数 & 总数 \\
+\midrule
+质量分裂 $(m_1-m_0)/\sigma\ge3$ & 12 & 12 \\
+$|B_{00}|/\sigma\ge2$ & 0 & 12 \\
+$t_{\rm sep}$ 窗口内 $B_{00}$ 稳定 & 12 & 12 \\
+$\chi^2/{\rm dof}\le3.0$ & 12 & 12 \\
+\textbf{全部同时满足} & \textbf{0} & \textbf{12} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+两态模型在统计判据下不可行：$B_{00}$ 无法从这批 9 组态数据中稳定提取。
+典型情形（$P_{000}$，$(z,b)=(0,0)$）：
+$m_0=0.5743(0.0061)$、$m_1=1.493(0.018)$、
+$B_{00}=-0.008419(0.01)$、$|B_{00}|/\sigma=0.81$、$\chi^2/{\rm dof}=0.47$。
+拟合本身良好，问题出在振幅的误差尺度与 9 组态的秩上限，
+而不是模型无法描述数据。
+
+\subsection{联合拟合扩展到 $t_{\rm sep}=16$}
+
+既然比值在 $5$--$10$ 上并未到达平台，自然的问题是：把 $t_{\rm sep}$ 扩到 $16$
+后，两态拟合中的激发态项能否吸收漂移、使 $B_{00}$ 变得可提取。
+扩展仍不流化、不重算 OPE、不写缓存，只替换分析脚本的 $t_{\rm sep}$ 列表。
+
+\paragraph{扩展的合法性。}
+先把 $C_3$ 的网格从 $t_{\rm sep}\le10$ 改到 $t_{\rm sep}\le16$，
+比较两种网格在重叠的 $(t_{\rm sep},\tau)$ 格点上的中心值：
+$3315$ 个有限格点的最大差为 $\mathbf{0.0}$，有限性掩码完全相同。
+因此新增的 $t_{\rm sep}=11$--$16$ 不改变已有的 $C_3$，「零成本扩展」成立。
+
+\paragraph{复现检查。}
+在 $[5,10]$ 子窗口上，结果必须与已发布的两态拟合逐位一致。
+这里踩了两个坑，值得记录：先把 C2 区间也扩到 $t=1,\dots,16$，
+得到 $|\Delta B_{00}|=3.2\times10^{-3}$ 的假差异；
+改成只写 $c_2\le10$ 后又得到 $5.2\times10^{-3}$，
+因为已发布模块的区间是 $C2_{\rm TMIN}=1$，漏掉下界就把 $t=0$ 带进了 C2 拟合。
+按 $(t\ge1)\wedge(t\le10)$ 取掩码后，复现差为 $\mathbf{0.0}$（两个动量）。
+教训：复现检查里不要重写区间，直接复用已发布模块的界；上下界各改一次
+就已经是两个变量。主拟合固定 C2 区间，另设一个 C2 区间敏感性变体，
+把「新增 C3 数据点」与「C2 模型变化」分开。
+
+\paragraph{结果。}
+表~\ref{tab:b00tsep16} 给出 12 个格点上的 $B_{00}$。
+扩到 $16$ 后误差基本持平（平均相对误差仍约 $50\%$），
+$B_{00}$ 相对 $5$--$10$ 窗口平均移动 $0.52\sigma$，
+最大显著性只有 $1.09\sigma$，$|B_{00}|/\sigma\ge2$ 仍为 $0/12$。
+$P_{000}$ 的 $C_3$ 中位信号噪比在 $(z,b)=(0,0)$ 上从 $t_{\rm sep}=5$ 的 $2.06$
+降到 $t_{\rm sep}=10$ 的 $0.20$，在 $15$--$16$ 才回到 $1.3$--$1.7$；
+而中位 $|C_3|$ 同时从 $1.0\times10^{-3}$ 衰减到 $1.2\times10^{-5}$。
+新增的大 $t_{\rm sep}$ 点主要由噪声构成，这就是误差没有改善的原因。
+
+\begin{table}[htbp]
+\centering
+\caption{两态联合拟合在 $t_{\rm sep}=5$--$10$ 与 $5$--$16$ 两个窗口上的 $B_{00}$。
+括号内为 delete-one JK 误差，$\sigma$ 定义为 $|B_{00}|/\delta B_{00}$。}
+\label{tab:b00tsep16}
+\footnotesize
+\begin{tabular}{@{}llrcrcc@{}}
+\toprule
+动量 & $(z,b)$ & $B_{00}^{[5,10]}$ & $\sigma$ & $B_{00}^{[5,16]}$ & $\sigma$ & $\chi^2/{\rm dof}$ \\
+\midrule
+$P_{000}$ & $(0,0)$ & $-8.42(1.04)\times10^{-3}$ & 0.81 & $0.39(1.18)\times10^{-3}$ & 0.03 & 1.23 \\
+$P_{000}$ & $(2,0)$ & $-6.83(0.90)\times10^{-3}$ & 0.76 & $0.65(1.03)\times10^{-3}$ & 0.06 & 1.11 \\
+$P_{000}$ & $(4,0)$ & $-1.14(0.64)\times10^{-3}$ & 0.18 & $3.56(0.77)\times10^{-3}$ & 0.46 & 0.84 \\
+$P_{000}$ & $(6,0)$ & $3.34(0.44)\times10^{-3}$ & 0.76 & $5.51(0.53)\times10^{-3}$ & 1.04 & 0.59 \\
+$P_{000}$ & $(0,2)$ & $-4.92(0.55)\times10^{-3}$ & 0.90 & $-0.50(0.77)\times10^{-3}$ & 0.06 & 0.87 \\
+$P_{000}$ & $(0,4)$ & $-1.90(0.46)\times10^{-3}$ & 0.41 & $1.27(0.66)\times10^{-3}$ & 0.19 & 0.74 \\
+$P_{200}$ & $(0,0)$ & $-11.2(9.6)\times10^{-4}$ & 1.17 & $-7.43(11.3)\times10^{-4}$ & 0.66 & 0.56 \\
+$P_{200}$ & $(2,0)$ & $-10.9(8.8)\times10^{-4}$ & 1.24 & $-7.74(10.1)\times10^{-4}$ & 0.77 & 0.46 \\
+$P_{200}$ & $(4,0)$ & $-7.73(6.90)\times10^{-4}$ & 1.12 & $-5.97(7.60)\times10^{-4}$ & 0.79 & 0.41 \\
+$P_{200}$ & $(6,0)$ & $-3.03(4.39)\times10^{-4}$ & 0.69 & $-2.21(4.69)\times10^{-4}$ & 0.47 & 0.58 \\
+$P_{200}$ & $(0,2)$ & $-7.38(4.52)\times10^{-4}$ & 1.63 & $-5.63(5.18)\times10^{-4}$ & 1.09 & 0.76 \\
+$P_{200}$ & $(0,4)$ & $-1.92(3.64)\times10^{-4}$ & 0.53 & $-1.19(4.49)\times10^{-4}$ & 0.27 & 0.50 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+判据计数：收敛 $12/12$、质量分裂 $12/12$、$\chi^2/{\rm dof}\le3.0$ $12/12$，
+而 $|B_{00}|/\sigma\ge2$ 为 $0/12$，全部同时满足为 $0/12$。
+把 $t_{\rm sep}$ 扩到 $16$ 没有把 $B_{00}$ 变成可提取量：
+两态模型能描述数据（$\chi^2/{\rm dof}=0.41$--$1.23$），
+但数据没有约束住振幅。
+
+\subsection{流窗内的固定插入时间分析（$\tau/a^2=1$，$t_{\rm sep}\le24$）}
+\label{sec:tau1plateau}
+
+第 \ref{sec:flowscan} 节说明本几何下只有 $\tau/a^2=1$ 存在窗内格点，
+而且此时窗内只有 $b/a=3,4$、$z/a\ge3$。把 $t_{\rm sep}$ 扩到 $24$ 后，
+对该流时的拟合数据缓存（$3.2$~MB）可复用全部已发布拟合机制，
+不需要重算任何格点量。
+
+\paragraph{可提取的组合量。}
+两态模型中三个振幅按设计矩阵的列排列：
+$B_{00}$ 乘 $e^{-m_0(t_{\rm sep}-\tau)}e^{-m_0\tau}$（\code{left0*right0}），
+$B_{01}$ 乘 \code{left0*right1}，$B_{10}$ 乘 \code{left1*right0}。
+固定插入时间 $\tau$ 并除以 $e^{-m_0t_{\rm sep}}$ 后，
+$B_{01}$ 项留下与 $t_{\rm sep}$ 无关的常量，$B_{10}$ 项随 $t_{\rm sep}$ 衰减。
+因此在近平台区物理上可提取的是
+\begin{equation}
+  P(\tau) = B_{00} + B_{01}e^{-(m_1-m_0)\tau}.
+\end{equation}
+$B_{00}$ 与 $B_{01}$ 由同一批 delete-one 复制品决定，二者强反相关，
+误差\textbf{必须}由逐复制品的 $P(\tau)$ 求得，不能把两个参数的误差平方相加。
+
+\paragraph{一个必须避开的平均陷阱。}
+已发布模块的 \code{\_b00\_per\_tsep} 在固定 $t_{\rm sep}$ 时对\textbf{全部}
+插入时间加权平均。随着 $t_{\rm sep}$ 增大，这个平均逐步剔除
+$B_{01}$ 与 $B_{10}$ 项，其值从 $5.4\times10^{-3}$ 单调升到
+$1.2\times10^{-2}$，看上去像平台，实际是平均权重的效应。
+平台判据必须按固定 $\tau$ 计算；本轮据此重写了诊断脚本
+（\code{b00\_tsep\_plateau.py} 的 \code{-{}-tau-fixed} 选项）。
+
+\paragraph{结果。}
+表~\ref{tab:tau1combo} 给出 $[5,24]$ 窗口、8 个窗内 $(P,z,b)$ 格点的结果。
+$P_{000}$ 的 $(4,3)$ 格点上 $B_{00}=1.04\times10^{-2}\pm2.29\times10^{-3}$
+（$4.5\sigma$），但 $B_{01}=-2.20\times10^{-2}$、$B_{00}$ 与 $B_{01}$
+的复制品相关系数为 $-0.76$；相关组合给出
+$P(1)=+3.2\times10^{-4}\pm2.9\times10^{-3}$，即 $\mathbf{0.11\sigma}$。
+也就是说 $B_{00}$ 的 $4.5\sigma$ 是反相关参数之间交换出来的，
+不是矩阵元。
+
+\begin{table}[htbp]
+\centering
+\caption{$\tau/a^2=1$、$t_{\rm sep}=5$--$24$ 的两态拟合与相关组合 $P(\tau)$。
+单位为 $10^{-3}$，括号内为 delete-one JK 误差；$P(\tau)$ 后的数字为
+$|P|/\sigma$。全部格点都在流窗内（$b=3,4$ 且 $z\ge3$）。}
+\label{tab:tau1combo}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}llrrrrrr@{}}
+\toprule
+动量 & $(z,b)$ & $B_{00}$ & $B_{01}$ & corr & $P(1)$ & $P(3)$ & $P(5)$ \\
+\midrule
+\multirow{4}{*}{$P_{000}$}
+ & $(4,3)$ & $10.36(2.29)$ & $-22.01(8.85)$ & $-0.76$ & $0.32(2.95)$ 0.1 & $8.27(1.77)$ 4.7 & $9.93(2.15)$ 4.6 \\
+ & $(6,3)$ & $9.24(2.11)$  & $-22.92(8.16)$ & $-0.97$ & $-1.16(2.01)$ 0.6 & $7.10(1.40)$ 5.1 & $8.80(1.94)$ 4.5 \\
+ & $(4,4)$ & $7.75(2.78)$  & $-25.98(9.26)$ & $-0.43$ & $-3.37(4.01)$ 0.8 & $5.71(2.50)$ 2.3 & $7.37(2.69)$ 2.7 \\
+ & $(6,4)$ & $3.45(4.22)$  & $-16.59(10.71)$ & $-0.73$ & $-3.25(3.21)$ 1.0 & $2.35(3.73)$ 0.6 & $3.27(4.14)$ 0.8 \\
+\midrule
+\multirow{4}{*}{$P_{200}$}
+ & $(4,3)$ & $-0.63(1.51)$ & $-4.83(4.62)$ & $-0.55$ & $-2.65(1.69)$ 1.6 & $-0.98(1.36)$ 0.7 & $-0.69(1.48)$ 0.5 \\
+ & $(6,3)$ & $-2.29(1.61)$ & $-1.40(4.88)$ & $-0.75$ & $-2.88(1.36)$ 2.1 & $-2.39(1.36)$ 1.8 & $-2.31(1.56)$ 1.5 \\
+ & $(4,4)$ & $-0.32(1.62)$ & $-2.22(5.05)$ & $-0.59$ & $-1.25(1.72)$ 0.7 & $-0.48(1.43)$ 0.3 & $-0.35(1.58)$ 0.2 \\
+ & $(6,4)$ & $-3.74(2.57)$ & $-0.25(6.12)$ & $-0.74$ & $-3.85(1.86)$ 2.1 & $-3.76(2.23)$ 1.7 & $-3.75(2.50)$ 1.5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+表~\ref{tab:tau1combo} 同时给出一个稳定的物理信息：
+$P(3)$ 与 $P(5)$ 在 $P_{000}$ 的 $(4,3)$、$(6,3)$ 上达到 $4.5$--$5.1\sigma$，
+即\textbf{信号确实存在，但出现在更晚的插入时间上}。
+$P_{200}$ 的 $P(1)$ 在四个格点上全部为负、最大 $2.1\sigma$，
+同号值得记录，但在 4 个高度相关的格点上不足以宣称信号。
+
+\paragraph{晚期窗口不可用。}
+窗口 $\tau_{\rm ins}\in[10,24)$ 把 $B_{01}$ 推到 $-6\times10^{-2}$，
+$[16,24)$ 上 $B_{00}$ 的误差已达 $1\times10^{-1}$：长 $t_{\rm sep}$ 尾部
+按 $e^{-m_0t_{\rm sep}}$ 放大误差，两态模型在该区域退化。
+只有同时覆盖中段与尾部的 $[5,24]$ 稳定，而 $B_{00}^{[5,24]}$ 与
+$B_{00}^{[5,16]}$ 只差 $1\%$（$1.036\times10^{-2}$ 对 $1.024\times10^{-2}$）。
+此前把 $B_{00}^{[11,16]}$ 的偏移读成「随窗口单调漂移」是错误归因：
+漂移来自后期窗口退化，不是系统趋势。
+
+\paragraph{结论。}
+在流窗内唯一可用的插入时间 $\tau/a^2=1$ 上，可提取组合
+$P(1)$ 与零一致；更晚的插入点虽然有 $4.5$--$5.1\sigma$ 的信号，
+但其流半径（$\sqrt{8\cdot3}=4.90a$）已超过 $b\le4$，
+不能作为流窗内结果。要进一步推进，必须先把横向距离扩到 $b\ge5$，
+使 $\tau=2,3$ 也进入流窗。该结论与全部数值已一并写入
+\code{physics\_dataset\_20261029/plateau\_combination.csv}。
+
+\subsection{零检验}
+
+零检验把真实配对（同一组态上的分子与分母）替换为打乱配对
+（组态平移），再重算 $z$ 分数分布。
+真实数据在 1D 情形给出 771 个 $|z|\ge2$ 格点（共 3315 个有效格点），
+最大 $|z|=8.56$，JK 误差中位数 $0.0912$，协方差秩 8，
+$z=0$ 处螺旋度严格为 0；
+打乱配对只给出 158 个 $|z|\ge2$ 格点，最大 $|z|=3.29$。
+两者相差 $-613$ 个 $|z|\ge2$、$-334$ 个 $|z|\ge3$，
+最大 $|z|$ 相差 $-5.27$。
+
+这说明真实的强相关不是置换零假设的产物：
+共模噪声一旦被破坏，$z$ 分数的尾部立即塌缩。
+零检验同时确认 $z=0$ 处的严格零是代数结构，而不是数值巧合。
+
+\subsection{数据审计：极值、方差与均值}
+
+在解读任何数字之前，先对全部产物做只读审计
+（15 个 NPZ 文件与全部 JSON 数值叶子）。
+审计不重算物理，只回答三个问题：数值是否在合理范围、
+误差是否自洽、极端值能否归因。
+
+\paragraph{NaN 的约定。}
+ratio-v3 在插入时间超过 $t_{\rm sep}$ 的格点上按约定写 NaN：
+1D 为 $975/4290$，2D 为 $1950/8580$。
+审计逐格核对 NaN 掩码与「$\tau>t_{\rm sep}$」完全一致后，才统计其余数值。
+把「有 NaN」直接当硬错误会淹没真问题。本轮最终硬错误 $0$ 条。
+
+\paragraph{误差自洽。}
+用已存的 9 个 JK 样本按 $t_{\rm sep}/2\pm1$ 窗口独立重算 delete-one 误差，
+与 NPZ 中的 \code{unpolarized\_window\_error} 比较：
+6 个已发布文件、$390$（1D）与 $780$（2D）个格点，最大差为 $0.0$。
+
+\paragraph{极值与方差。}
+比值实部的范围随动量迅速放大：
+$P_{000}$ 为 $[-0.55,0.51]$（$\tau/a^2=3$），均值 $0.062$、标准差 $0.155$；
+$P_{200}$ 为 $[-0.59,0.75]$，均值 $-0.006$、标准差 $0.152$；
+$P_{400}$ 在 $\tau/a^2=3$ 为 $[-19.7,22.2]$，$\tau/a^2=1$ 时达到 $[-43.6,56.3]$，
+标准差 $6.4$。
+$P_{400}$ 的大值可完全归因于分母：其 \code{c2\_mean} 实部从 $8.5\times10^{-9}$
+到 $5.7\times10^{-6}$，跨度约 $670$ 倍，$t/a\ge7$ 后信号噪比低于 $1$。
+因此 $P_{400}$ 的尾部只作分母趋零的诊断，不进入任何物理判读。
+
+\paragraph{拟合量的分布。}
+12 个两态联合拟合的 $\chi^2/{\rm dof}$ 在 $0.41$--$1.23$，
+没有张力；$B_{00}$ 全部落在 $\pm1.2\times10^{-2}$ 以内，
+$|B_{00}|/\sigma$ 最大 $1.09$。
+审计共给出 10 条提示，全部是 C2-only \emph{单指数}拟合在
+$t=1$--$3$ 起始区间上的 $\chi^2/{\rm dof}$（最高 $225$）：
+单指数本就不能描述小 $t$ 的激发态，这是模型的已知不足，
+标为 \code{info} 而不阻塞判读。两态拟合若出现同样数值才是真张力。
+
+\subsection{时间分离漂移}
+
+在 $t_{\rm sep}=5,\dots,10$ 的局部比较中未发现统计显著的
+$t_{\rm sep}$ 依赖；但第 \ref{tab:tsep} 节把范围扩到 $16$ 后，
+$P_{000}$ 的 $|R|$ 单调增长近一个量级，说明该局部比较同样缺乏功效，
+$5$--$10$ 窗口并不是平台。此前报告的「自重整化成功」结论已撤回：
+自重整化依赖 $R(z,0)$ 作为归一化，而 $R(z,0)$ 在本数据中过零，
+除法在该点失效。
+
+\section{结论与判据汇总}
+
+\begin{center}
+\begin{tabular}{@{}p{0.36\textwidth}p{0.14\textwidth}p{0.40\textwidth}@{}}
+\toprule
+检验 & 结果 & 说明 \\
+\midrule
+比值实现可复现 & \diag & $10^{-14}$ 相对量级：$\max|\Delta R|=\max|\Delta S|\le2.5\times10^{-14}$（非逐位） \\
+缓存非破坏 & \diag & 按 contract 隔离，$\tau=1,2,3$ 并存 \\
+流时稳定性 & \fail & 共同流窗内检测到系统漂移：$P_{200}$ 的 $\tau=2\to3$ 在 16 点 $\times$ 3 插入上全部同号，中位 $\Delta\approx-1.5\times10^{-3}$ \\
+分母约定 & \diag & 两种约定差 $0.2\%$，远小于 JK 误差 \\
+$B_{00}$ 显著性 & \fail & $0/12$ 格点满足全部判据；扩到 $t_{\rm sep}=16$ 后最大 $1.09\sigma$ \\
+$t_{\rm sep}$ 扩展合法性 & \diag & 重叠 $C_3$ 最大差 $0.0$（3315 格点），$[5,10]$ 复现 $|\Delta B_{00}|=0.0$ \\
+数据审计 & \diag & 0 硬错误；JK 重算窗口误差最大差 $0.0$；NaN 全部符合约定 \\
+零检验 & \diag & 真实 771 vs 打乱 158 个 $|z|\ge2$ \\
+$t_{\rm sep}$ 平台 & \fail & $5$--$10$ 内无显著漂移，但扩到 $16$ 时 $|R|$ 单调上升，未达平台 \\
+流窗覆盖 & \diag & $b\le4$ 上无窗内点；扩到 $b=6$ 后三个流时有 16 点共同窗，但窗内只有 $b=5,6$，无法做有限 $b$ 外推 \\
+$b$ 扩展非侵入性 & \diag & torch 的 $b\le4$ 切片 $\max|\Delta|=0.0$；CuPy 相对范数 $4.8$--$7.0\times10^{-7}$（阈值 $10^{-5}$）\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+综合判断：本轮建立的是一条\emph{可复现、可诊断}的比值分析链，
+但没有任何一项满足物理接受所需的完整条件。特别地，
+$b$ 扩展把「流时无关」从\emph{不可判定}变成了\emph{可检验}，
+而检验结果是\textbf{存在}流时依赖；当前所有结论都停留在
+\code{diagnostic_only}。
+
+\section{限制与未闭合项}
+
+\begin{enumerate}
+  \item delete-one JK 只反映 9 个组态的涨落；C3 的 source-level 协方差未闭合。
+  \item 协方差秩上限为 8，多参数拟合的自由度受硬限制。
+  \item 在 $b\le4$ 时所有非零 $b$ 在 $\tau/a^2=3$ 下都处在流窗之外；本轮把
+        $b$ 扩到 6 后三个流时有了 16 点共同窗，但窗内仍只有 $\{5,6\}\times
+        \{5,\dots,12\}$ 这一条窄带，有限 $b$ 外推依然没有独立控制
+        （窗内 $b$ 只有两个值）。此外 $\tau=3$ 的流半径 $4.90a$ 与窗内最小的
+        $b=5a$ 只差 $0.1a$，边缘 4 点 $(5,5),(5,6),(6,5),(6,6)$ 对
+        「流窗判据是否足够保守」最敏感；本报告的所有趋势都同时给出这 4 点的
+        子集，它们在 $\tau=2$ vs $3$ 的 $P_{200}$ 上给出 12/12 同号、
+        $1.0$--$3.4\sigma$ 的差异，方向上与 16 点全集一致。
+  \item 无匹配系数、无软因子、无快度因子，因此不能声明物理 TMD。
+  \item 无连续极限、无体积依赖检查、无订书钉长度系统误差扫描。
+  \item $P_{400}$ 的 C2 在 $t/a\ge7$ 后信号噪比低于 1，
+        其大 $|R|$ 尾部不具物理意义。
+\end{enumerate}
+
+\section{复现}
+
+\begin{lstlisting}
+# 1. 横距扩展生产（b=0..6，27 个缓存；每张卡一个进程）
+python3 -B products/next-round-20261029/b_extension_20261029/b_extension_worker.py \
+  --tag v100   --backend torch --device cuda:0 --jobs 3:4150,...,2:7050 \
+  --b-list 0-6 --out workers/gpu_v100.json
+CUDA_VISIBLE_DEVICES=1 python3 -B .../b_extension_worker.py \
+  --tag p100a --backend cupy --device 0 --jobs 2:7250,...,1:6450 ...
+CUDA_VISIBLE_DEVICES=2 python3 -B .../b_extension_worker.py \
+  --tag p100b --backend cupy --device 0 --jobs 1:6650,...,1:7650 ...
+
+# 2. 缓存矩阵：覆盖 / 契约 / 旧切片回归 / 逐 b 统计 / 后端归属
+python3 -B products/next-round-20261029/b_extension_20261029/verify_caches.py \
+  --out ..../b_extension_20261029/cache_matrix.json
+
+# 3. 重建 b=0..6 比值并做 b<=4 回归
+python3 -B .../b_extension_20261029/b_extension_ratio.py
+
+# 4. 共同流窗的比值层配对比较（16 点与边缘 4 点子集）
+python3 -B .../b_extension_20261029/flow_window_comparison.py
+
+# 5. C3 层：逐 tsep 有效 B00 与固定插入组合量（每流时一个进程）
+python3 -B .../multistate_fit_tsep16/b00_tsep_plateau.py --tau T \
+  --tsep-max 24 --b-list 0-6 --zb "<共同窗 16 点>" --cache c3_cache_tauT_tsep24_b7.npz
+python3 -B .../multistate_fit_tau1_tsep24/plateau_combination_jk.py \
+  --expect-flow-tau T --cache .../c3_cache_tauT_tsep24_b7.npz
+
+# 6. 跨流时配对比较与数据集/审计
+python3 -B .../b_extension_20261029/plateau_across_flow.py --inputs "1=...;2=...;3=..."
+python3 -B .../next-round-20261029/build_physics_dataset.py
+python3 -B .../next-round-20261029/data_audit.py
+\end{lstlisting}
+
+原有的流时扫描、两态拟合与零检验命令不变：
+
+\begin{lstlisting}
+python3 -B data/runs/tmd-recompute-20261028/analyze_finite_b_tmd.py
+python3 -B data/runs/tmd-recompute-20261028/products/next-round-20261029/flow_time_scan/flow_time_scan.py --taus 1,2 --backend torch --device 0
+python3 -B data/runs/tmd-recompute-20261028/products/next-round-20261029/multistate_fit/multistate_fit.py
+python3 -B data/runs/tmd-recompute-20261028/products/next-round-20261029/zero_test/zero_test.py
+\end{lstlisting}
+
+\appendix
+\section{产物清单}
+
+\begin{center}
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.60\textwidth}
+                   >{\raggedright\arraybackslash}p{0.33\textwidth}@{}}
+\toprule
+路径 & 内容 \\
+\midrule
+\pathref{data/runs/tmd-gluon-subagent-20261027/products/pipeline/analysis/finite_b_ratio_v3_20261029/}
+  & ratio-v3 产品（6 个 \code{npz}） \\
+\pathref{data/runs/tmd-recompute-20261028/products/next-round-20261029/flow_time_scan/}
+  & 流时扫描脚本、JSON、\code{RESULT.md} \\
+\pathref{data/runs/tmd-recompute-20261028/products/next-round-20261029/multistate_fit/}
+  & 两态拟合脚本、JSON、\code{RESULT.md} \\
+\pathref{data/runs/tmd-recompute-20261028/products/next-round-20261029/zero_test/}
+  & 零检验脚本、JSON、\code{RESULT.md} \\
+\pathref{data/runs/tmd-recompute-20261028/products/next-round-20261029/tsep_drift/}
+  & 时间分离漂移分析 \\
+\pathref{data/runs/tmd-recompute-20261028/products/next-round-20261029/b_extension_20261029/}
+  & $b$ 扩展生产脚本、\code{cache\_matrix.json}、比值与共同流窗分析 \\
+\addlinespace
+\pathref{data/runs/tmd-gluon-subagent-20261027/products/pipeline/data/}
+  & $b/a=0,\dots,6$ full-channel OPE 缓存（27 个） \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}

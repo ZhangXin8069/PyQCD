@@ -1,6 +1,6 @@
 # AGENTS.md — docs
 
-格点 QCD 中文 LaTeX 笔记（53 篇；另有 13 篇分析/报告 TeX，共 66 个，
+格点 QCD 中文 LaTeX 笔记（53 篇；另有 14 篇分析/报告 TeX，共 67 个，
 均使用 xelatex 编译）。原 `logs/**` 中的 PDF/TeX/Markdown 现统一归档于
 `docs/from-logs/`，并保留原相对路径。
 
@@ -17,6 +17,7 @@
 | 仓库/工作流 | `PyQCD仓库结构与核心物理链解析.tex`、`理论解析与工作流.tex`（过时未验证版）、`理论解析与工作流-v20260911.tex`（梯度流重整化 TMD-PDF 已验证版，100 页/5957 行，XeLaTeX 两遍三零，零明文代码）、`构造胶子准算符.tex`、`格点上计算胶子准算符.tex` |
 | 谱学/变分方法 | `格点QCD中的GEVP.tex`（GEVP 的数学结构、物理内涵与本库实现解剖；7 组实测实验、2 张配图、24 页，XeLaTeX 两遍 Overfull=0 Float=0 Missing=0） |
 | 分析与专题 | `质子自旋危机解析.tex`、`格点QCD中的胶子极化.tex`、`格点QCD中的部分子分布函数.tex` |
+| 本轮报告 | `report_gluon_tmd_flow_scan_20261029.tex/.pdf`（梯度流胶子准 TMD 比值的流时稳定性、统计能力与零检验；含流窗有效性、配对 JK、tsep 扩展到 16/24、两态拟合、固定插入 τ 的相关组合 $P(\tau)=B_{00}+B_{01}e^{-(m_1-m_0)\tau}$、分母约定系统检查，以及把 $b$ 扩到 6 后的 16 点共同流窗与流时漂移检验；17 页，XeLaTeX 三遍 Overfull=0、Missing character=0）（2026-10-29） |
 | GPD 专题 | `analy_gpd_20260928.tex/.pdf`（全库 GPD 文档、参考代码与生产链审计；21 页，XeLaTeX 两遍 Overfull=0 Float=0 Missing=0） |
 
 完整清单：原 `docs/*.tex` 66 篇，加 `docs/from-logs/**` 迁移的 10 篇 TeX，
@@ -38,6 +39,13 @@ cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelate
 - 文本模式数学符号需 `$...$` 包裹（如 `$\pi$介子`）；`\quad` 后跟中文须空格。
 - 依赖宏包：ctexart/beamer、amsmath、physics、slashed、natbib（无 biblatex）。
 - 新文档放入本目录并登记到上方表格。
+
+## 分析经验记录
+
+- `gluon_tmd_analysis_notes_20261029.md`：梯度流胶子准 TMD 比值分析的可复用经验
+  （复数比值取实部、流窗与空集合判定、配对 JK 与检验功效、9 组态协方差秩、
+  零成本 tsep 扩展、复用已发布拟合、数据审计与 LaTeX 版式），对应报告
+  `report_gluon_tmd_flow_scan_20261029.tex`（2026-10-29）。
 
 ## 格式治理
 

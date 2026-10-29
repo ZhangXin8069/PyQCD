@@ -37,9 +37,11 @@ f_{g/N}^{[\Gamma]}(x,\boldsymbol b_\perp;\mu,\zeta)
 | `tau/z/b`、Clover、staple、表示、路径、正负方向 | [`references/geometry.md`](references/geometry.md) | 几何与算符契约 |
 | `C2*Lg`、soft/Z_R、CS、匹配、外推 | [`references/renormalization.md`](references/renormalization.md) | 重整化与提取方案 |
 | 状态升级、门控顺序、失败边界 | [`references/validation.md`](references/validation.md) | 可审计的验收矩阵 |
+| 真实 GPU 生产、CUDA 设备映射、C2/1D/2D OPE 批次与成本 | [`references/gpu-production.md`](references/gpu-production.md) | 可复现运行与资源证据 |
 
 不涉及对应模式时只读相关 reference；跨层任务依次读取 geometry → renormalization →
-validation。
+validation。涉及真实 GPU、长批次缓存、断点恢复或本机设备映射时，先读
+`gpu-production.md`，并在运行前重新探测实际设备能力。
 
 ## 四种状态
 
@@ -99,6 +101,31 @@ P400 晚 `t_sep` 达 5.7σ（unpolarized），P000/P200 小于 0.2σ，跨约定
 9. 外推：检查 `ell`、`tau→0`、`Pz→∞`、`a→0`、体积和拟合窗，分离统计/系统误差。
 10. 归档：HDF5/JSON 保存数组、维度、单位、参数、seed、命令、版本和每个门的结果；
     test9 持久缓存按 canonical JSON + SHA-256 + HDF5 metadata 规则发布。
+
+## 分析层的四道门
+
+从矩阵元进入物理解读之前，比值/流时/tsep 分析必须依次过四道门；任一道不过，
+状态只能停在 `diagnostic_only`：
+
+1. **复数值门**：先取 `Re R`；虚部来自分母 C2 的相位，不是误差也不是信号。
+   分母 `complex`/`real` 两种约定要显式声明并比较。
+2. **流窗门**：`sqrt(8τ) < |z|,|b|`。窗内无格点时判「不可判定」，
+   不能落到默认分支。`b≤4` 的网格上 τ/a²=3 的所有 b≥1 都在窗外；
+   把 b 扩到 6 后 τ=2,3 才出现窗内点，且三个流时的**共同窗**只有
+   `(z≥5, b=5,6)`——跨流时比较必须先取交集。
+3. **功效门**：`σ` 小不等于差值为零。必须同时给出中位 `|ΔR|/|R_ref|`，
+   并用**配对** JK（对差值）比较不同流时。
+4. **平台门**：tsep 窗口要证明是平台而不是缩小范围的假象。本轮把 tsep 扩到 16
+   后发现 P000 的 `|R|` 单调上升，5…10 不是平台。
+
+具体误判实例、零成本 tsep 扩展配方和复用已发布拟合的做法见
+[`references/validation.md`](references/validation.md) 的「比值分析层」一节。
+
+要扩的是**几何轴**（`b`、`tau`）而不是分析层参数时，成本与风险都不同：full-channel
+OPE 的 contract 键含 `b_list`，必须重新流化并重算，然后用「旧切片与已发布缓存
+逐位一致」证明扩轴没有扰动旧区间；混用 P100/CuPy 会把判据降级为
+`float32_equivalent`。配方见 `validation.md` 的「需要重算的批次轴扩展」与
+`gpu-production.md` 的「混合后端生产」。
 
 ## 完整链的停止条件
 

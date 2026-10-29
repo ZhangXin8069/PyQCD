@@ -413,3 +413,51 @@
 - 关键内容: 9 组态 pion 2pt、逐组态 m_pi、图件、报告与 264 项验证完成；最终胶子 TMD-PDF 仍待物理闭合
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## tmd-c2-v3-20261029 - stage - 2026-10-29 04:51:04 +0800
+- 主任务: GPU 生成 9 组态 v3 双极化 C2 并复核 finite-b 审计
+- 日志文件: logs/v202610290451.txt
+- 文件大小: 2244 bytes
+- 触发原因: 阶段成果
+- 关键内容: 54/54 v3 C2 完成；source-resolved C2 门通过，full-channel OPE 仍阻塞
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## tmd-finite-b-ope-20261029 - stage - 2026-10-29 06:10:29 +0800
+- 主任务: 完成 1D/2D full-channel OPE、论文对照与技能固化
+- 日志文件: logs/v202610290610.txt
+- 文件大小: 3066 bytes
+- 触发原因: 阶段成果
+- 关键内容: C2 54/54、1D/2D OPE 9/9、双 audit ready；论文对照和 GPU 技能经验完成
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## resume-20261029T032103.ZSXbIi - final - 2026-10-29 06:28:11 +0800
+- 主任务: 恢复 run 20261029T032103.ZSXbIi 并修复 finite-b ratio-v3 的 JK 统计缺陷
+- 日志文件: logs/v2026102906.txt
+- 文件大小: 5512 bytes
+- 触发原因: 任务完成
+- 关键内容: 识别 codex run 无可恢复 thread_id；修复 ratio-v3 JK conf 轴被索引吞掉的缺陷并重跑，秩恢复为 8
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## tmd-tsep16-audit-20261029 - stage - 2026-10-29 08:17:39 +0800
+- 主任务: tsep 扩到 16 的两态联合拟合与全产物数据审计
+- 日志文件: logs/v202610290817.txt
+- 文件大小: 5207 bytes
+- 触发原因: 阶段成果
+- 关键内容: C3 网格不变性 0.0；修正 C2 下界后 [5,10] 复现差 0.0；B00 显著性仍 0/12；审计 0 硬错误
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## tmd-tau1-plateau-20261029 - stage - 2026-10-29 08:46:06 +0800
+- 主任务: 流窗内 τ=1 的固定插入时间分析与相关组合 P(τ)=B00+B01·exp(−dm·τ)
+- 日志文件: logs/v202610290846.txt
+- 文件大小: 6216 bytes
+- 触发原因: 阶段成果
+- 关键内容: τ=1 相关组合 P(1)=0.11σ；信号在 τ≥3 出流窗；审计 NaN 假阳性修复后 0 硬错误；数据集新增 plateau_combination.csv
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## tmd-b7-common-window-20261029 - final - 2026-10-29 10:36:22 +0800
+- 主任务: 梯度流胶子准 TMD-PDF：b 扩展到 0..6 与共同流窗流时分析收尾
+- 日志文件: logs/v2026102910.txt
+- 文件大小: 9762 bytes
+- 触发原因: 任务完成
+- 关键内容: 27 个 b7 缓存与共同流窗 16 点流时分析验收通过；A/B/C/D 全过、0 硬错误、未重算
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

@@ -28,7 +28,7 @@
 | [`pyqcd-quark-renorm/`](pyqcd-quark-renorm/) | `root` | 分级管理夸克双线性 RI-to-MSbar conversion/running 与 profile provenance。 | `2026-10-13` | [`SKILL.md`](pyqcd-quark-renorm/SKILL.md) |
 | [`pyqcd-ri-renorm/`](pyqcd-ri-renorm/) | `root` | 验证 RI'/MOM 或 RI/SMOM 动量学、独立双腿截肢与 raw quark-bilinear Z factors。 | `2026-10-13` | [`SKILL.md`](pyqcd-ri-renorm/SKILL.md) |
 | [`pyqcd-statistics/`](pyqcd-statistics/) | `root` | 统一 jackknife/bootstrap、协方差、模型 Jacobian 可辨识性、拟合窗口和统计诊断纪律。 | `2026-10-13` | [`SKILL.md`](pyqcd-statistics/SKILL.md) |
-| [`pyqcd-tmd-algorithm/`](pyqcd-tmd-algorithm/) | `root` | 约束梯度流核子胶子 TMD 的几何、重整化、匹配、外推、缓存和验证门。 | `2026-10-13` | [`SKILL.md`](pyqcd-tmd-algorithm/SKILL.md) |
+| [`pyqcd-tmd-algorithm/`](pyqcd-tmd-algorithm/) | `root` | 约束梯度流核子胶子 TMD 的几何、重整化、匹配、外推、真实 GPU 生产、缓存和验证门。 | `2026-10-29` | [`SKILL.md`](pyqcd-tmd-algorithm/SKILL.md) |
 | [`pyqcd-tmd-chain/`](pyqcd-tmd-chain/) | `root` | 导航梯度流、OPE、断连、Z_R/混合、Fourier/CS/匹配到连续极限全链。 | `2026-10-13` | [`SKILL.md`](pyqcd-tmd-chain/SKILL.md) |
 
 ## 运维技能

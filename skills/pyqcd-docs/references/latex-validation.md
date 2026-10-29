@@ -50,3 +50,16 @@ pdfinfo <document>.pdf | rg "Pages"
 先改内容断行和布局，再调整图表尺寸；等宽代码优先使用覆盖源码 Unicode 的字体（如
 DejaVu Sans Mono）。禁止用 `\tiny` 或 `\scriptsize` 作为通用溢出修复；只有明确的
 局部外部规范要求时才例外，并记录原因。
+
+### 已实测的溢出来源与修复（2026-10-29 报告）
+
+| 溢出来源 | 宽度 | 修复 |
+|---|---:|---|
+| 长 sha256 哈希作为普通文本 | 290pt | 单独成段，`\centering\footnotesize\ttfamily`；不要放进行内句子 |
+| 复现命令 | 12.6pt | `listings` + `breaklines=true, breakatwhitespace=false, columns=flexible` |
+| 产物路径表 | 165pt | 用 `>{\raggedright\arraybackslash}p{0.60\textwidth}` 列 + `\footnotesize` |
+| 数值参考表 | 22pt | `\footnotesize` + `\setlength{\tabcolsep}{3pt}`，必要时拆列 |
+| 交叉引用显示成 `??` | — | 中文文档的 label 需要 xelatex 第三遍；以第三遍日志为准 |
+
+验收时同时 grep `Overfull`、`Underfull`、`Missing character`、`LaTeX Warning`，
+并核对页数与 PDF 字节数在重编后确实变化。

@@ -355,8 +355,12 @@ def calculate_gradient_flow_ratios(ope, twopt, tseps, do_jackknife=True,
                     jk_err_real[target] = err_r.reshape(shape)
                     jk_err_imag[target] = err_i.reshape(shape)
                     if store_jackknife_samples:
-                        jk_samples[target] = samples_one.reshape(
-                            shape + (nconf,))
+                        # samples_one 是 (nconf, Nobs, Nmom)；直接 reshape 会把
+                        # conf 轴与 observable 轴混在一起，导致下游从样本算出的
+                        # “误差”实际上是不同 (z,orientation,component) 格点之间
+                        # 的散布。必须先移轴到末尾。
+                        jk_samples[target] = np.moveaxis(
+                            samples_one, 0, -1).reshape(shape + (nconf,))
 
     valid_insertion = np.zeros((ndt, max_tsep + 1), dtype=bool)
     for index, dt in enumerate(tseps):
