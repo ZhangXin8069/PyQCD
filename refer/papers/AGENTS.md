@@ -1,80 +1,68 @@
-# AGENTS.md — refer/papers
+# AGENTS.md — papers（原文转排库与导读文选）
 
-文献 PDF 只读参考库（`pdftotext` 提取阅读，不在此目录写代码）。当前共 121 篇 PDF。
+`papers/` 下共 102 个目录，分两类：
 
-## 分类
+- **原文转排库**：50 篇精华论文的双语全文（100 个目录，2026-08-26 由 agent 生成）；
+- **导读文选**：2 套 38 篇论文的英文/中文评注导读（2 个目录，2026-08-25 生成）。
 
-- **AI for Science**：LQCDMaster、LaMET-Agent、ML-Master、Kosmos、Robin
-- **格点 QCD 结果**：核子轴荷 g_A、n-p 质量差、强子谱、Ξ_c 半轻子衰变、μ子 g-2 HVP、
-  胶子 PDF（LaMET + 连续极限）等
-- **方法**：扩散模型随机量子化、等变流采样、流生成模型 MCMC
-- **梯度流 / 短流时展开**：Lüscher 2010/2013/2014、Monahan–Orginos 2015/2017、
-  Harlander–Kluth–Lange 2018、Artz et al. 2019、Borgulat et al. 2024、
-  Harlander 2025（twist-2 NNLO）、Harlander 2026（综述）、Beneke 2025（无 IR renormalon OPE）
-- **胶子 TMD / 准 PDF 理论**：Mulders–Rodrigues 2000、Cherednikov 2015、
-  Ji et al. 2019（LMET TMD）、Ebert et al. 2019（quasi-TMD）、Zhu et al. 2022（胶子 TMD LMET）、
-  Schindler et al. 2022（胶子 TMD 一圈匹配）、Río et al. 2023（NNLO）、
-  Xie et al. 2025（leading-twist 胶子 TMD）、Monahan et al. 2026（胶子关联子分解与匹配）、
-  Alvaro et al. 2026（leading-power 胶子 TMD collinear matching）
-- **胶子算符重整化**：Gavriel et al. 2023/2024（非局域胶子算符）、
-  Zhang et al. 2022（TMD 重整化）、NieMiera et al. 2025（自重整化胶子 PDF 系统研究）
-- **CS 核 / soft factor**：Li et al. 2021、Ji et al. 2019、
-  Bollweg et al. 2025（π 介子 TMD/CS 核/soft/TMDWF）、
-  Avkhadiev et al. 2026（非微扰胶子 CS 核首次约束）、Chay et al. 2026（quasi-TMD soft factor）
-- 另有禁闭、格点 QCD 宇宙学、QUDA/PyQUDA、Chroma 文档
+文选与原文库互补：文选是评注导读，原文库是全文。两套文选目录实际位于本目录下，
+不是 `refer/` 根目录。
 
-## 梯度流重整化胶子 TMD-PDF 专题（2026-10-28 补充 27 篇）
+## 结构约定
 
-| 文件 | arXiv | 作者/年 |
-|---|---|---|
-| `Leading-twist_gluon_transverse_momentum_dependent_distributions_from_large-momentum_Xie_2025.pdf` | 2512.08292 | Xie 2025 |
-| `Gluon_Transverse-Momentum-Dependent_Distributions_from_Large-Momentum_Effective_Theory_Zhu_2022.pdf` | 2209.05443 | Zhu 2022 |
-| `One-loop_matching_for_gluon_lattice_TMDs_Schindler_2022.pdf` | 2205.12369 | Schindler 2022 |
-| `Collinear_matching_for_leading_power_gluon_transverse_momentum_distributions_Alvaro_2026.pdf` | 2605.07516 | Alvaro 2026 |
-| `Unpolarized_quasi-_and_pseudo-distributions_at_one_loop_gluon_correlator_decomposition_Monahan_2026.pdf` | 2609.40205 | Monahan 2026 |
-| `Quasi_Transverse_Momentum_Dependent_Distributions_at_Next-to-Next-to-Leading_order_Río_2023.pdf` | 2304.14440 | Río 2023 |
-| `Transverse-Momentum-Dependent_Parton_Distribution_Functions_from_Large-Momentum_Ji_2019.pdf` | 1911.03840 | Ji 2019 |
-| `Towards_Quasi-Transverse_Momentum_Dependent_PDFs_Computable_on_the_Lattice_Ebert_2019.pdf` | 1901.03685 | Ebert 2019 |
-| `TMD_Soft_Function_from_Large-Momentum_Effective_Theory_Ji_2019.pdf` | 1910.11415 | Ji 2019 |
-| `Lattice_QCD_Study_of_Transverse-Momentum_Dependent_Soft_Function_Li_2021.pdf` | 2106.13027 | Li 2021 |
-| `Transverse-momentum-dependent_pion_structures_from_lattice_QCD_Collins-Soper_kernel_Bollweg_2025.pdf` | 2504.04625 | Bollweg 2025 |
-| `Lattice_QCD_Benchmark_of_Proton_Helicity_and_Flavor-Dependent_Unpolarized_Transverse_Bollweg_2025.pdf` | 2505.18430 | Bollweg 2025 |
-| `First_constraints_on_the_nonperturbative_gluon_Collins-Soper_kernel_Avkhadiev_2026.pdf` | 2607.24587 | Avkhadiev 2026 |
-| `Soft_factor_of_quasi-TMDPDFs_from_the_soft_limit_of_the_quasi_beam_function_Chay_2026.pdf` | 2610.33638 | Chay 2026 |
-| `Renormalization_of_non-local_gluon_operators_in_lattice_perturbation_theory_Gavriel_2023.pdf` | 2311.17468 | Gavriel 2023 |
-| `Renormalization_of_nonlocal_gluon_operators_on_the_lattice_Gavriel_2024.pdf` | 2406.15446 | Gavriel 2024 |
-| `Renormalization_of_transverse-momentum-dependent_parton_distribution_on_the_lattice_Zhang_2022.pdf` | 2205.13402 | Zhang 2022 |
-| `Systematic_Study_of_the_Self-Renormalized_Nucleon_Gluon_PDF_in_Large-Momentum_Effective_NieMiera_2025.pdf` | 2511.14708 | NieMiera 2025 |
-| `Renormalon_effect_of_quasi-PDF_in_gradient_flow_formalism_Zhang_2025.pdf` | 2507.18233 | Zhang 2025 |
-| `Short-flow-time_expansion_of_non-singlet_twist-two_operators_at_next-to-next-to-leading_Harlander_2025.pdf` | 2511.17145 | Harlander 2025 |
-| `Recent_applications_of_the_gradient_flow_Harlander_2026.pdf` | 2609.07940 | Harlander 2026 |
-| `Gradient-flowed_operator_product_expansion_without_IR_renormalons_Beneke_2025.pdf` | 2510.12193 | Beneke 2025 |
-| `Accessing_the_Gluon_Momentum_Fraction_of_Nucleons_through_the_Gradient_Flow_Edwards_2026.pdf` | 2602.14260 | Edwards 2026 |
-| `Gauge-Invariant_Gluon_TMD_and_Evolution_in_the_Coordinate_Space_Cherednikov_2015.pdf` | 1511.00517 | Cherednikov 2015 |
-| `Transverse_momentum_dependence_in_gluon_distribution_and_fragmentation_functions_Mulders_2000.pdf` | hep-ph/0009343 | Mulders 2000 |
-| `Connecting_baryon_light-front_wave_functions_to_quasi-transverse-momentum-dependent_Rodini_2026.pdf` | 2603.08405 | Rodini 2026 |
-| `Recent_Advances_in_Transverse-Momentum--Dependent_Distributions_in_Lattice_QCD_Lin_2026.pdf` | 2610.24785 | Lin 2026 |
+- 原文每篇两个目录：`<Slug>_latex/`（英文转排）+ `<中文名>_latex/`（中文译本）。
+- 英文版：`article` 类；`main.tex` + `chapters/sectionNN.tex`（每节一文件）+
+  `chapters/backmatter.tex`（致谢/附录/参考文献）+ `images/`；由 arXiv 官方源
+  归一化改造而成（去除 REVTeX/elsarticle 等期刊私有宏，统一标准宏包），正文逐字保留。
+- 中文版：`ctexart`（XeLaTeX，字体 AR PL UMing CN / Droid Sans Fallback）；逐节忠实翻译；
+  公式照抄不改；人名与参考文献列表保留英文；插图复用英文目录 `images/`。
+- 每目录应附 `CONVERSION_GUIDE.md`（英文版来源与妥协点）或 `TRANSLATION_GUIDE.md`
+  （中文版约定）及简版 `AGENTS.md`。
+- 导读文选为 `book`/`ctexbook` 类，`main.tex` 使用 `\input{../chapters/...}`，须在
+  `build/` 内编译。
 
-获取方式：`https://arxiv.org/pdf/<id>`；全部 PDF 已用 `pdfinfo` 校验可读。
+## 编译
 
-## 梯度流胶子 TMD-PDF 补遗（2026-10-29 补充 3 篇）
+```bash
+# 原文转排
+cd <目录> && xelatex -interaction=nonstopmode -halt-on-error -output-directory=build main.tex  # 两遍
 
-| 文件 | arXiv | 许可 | 用途 |
-|---|---|---|---|
-| `Factorization_connecting_continuum_and_lattice_TMDs_Ebert_2022.pdf` | 2201.08401 | CC BY 4.0 | 连续/格点 TMD 因子化；gluon matching 与味道对角性 |
-| `Counting_linearly_polarized_gluons_with_lattice_QCD_Zhao_2022.pdf` | 2212.00825 | CC BY 4.0 | 线性极化胶子 TMD 的格点可计算比值与 UV 有限性 |
-| `A_unified_description_of_DGLAP_CSS_BFKL_TMD_factorization_Mukherjee_2023.pdf` | 2311.16402 | CC BY 4.0 | 胶子 TMD 的 DGLAP/CSS/BFKL 统一演化 |
+# 导读文选
+cd <选集目录>/build && xelatex -interaction=nonstopmode -halt-on-error ../main.tex  # 两遍
+```
 
-另检索并取得 `2510.26738`（梯度流 flowed moments，pion 价夸克，
-$N_f=3$，$m_\\pi\\simeq411$ MeV）的 LaTeX 源码与 PDF；其许可为 arXiv
-非独占分发，故仅存于
-`data/runs/get-paper/20261029-022356-gluon-tmd-gradient/fetch/2510.26738/`，
-未复制进本目录。
+当前工作区未保留任何 `build/main.pdf`；除 2026-10-21 复验的两套文选外，历史页数尚未复验。
 
-**pion 质量匹配硬门**：`beta6.20_mu-0.2770_ms-0.2400_L24x72` TMD 运行现已用
-同 config ID 的 P000 pion 2pt 得到 9 个逐组态 `m_pi`，均值 `0.2929 GeV`、
-组态间样本标准差 `0.0268 GeV`；亚-MeV 拟合窗误差不是总误差。文档中的
-`m_pi≈293 MeV` 仍只作系综级交叉检查，外部数值比较仍须匹配 $N_f,a,L,m_\\pi$
-和算符几何。完整产物位于
-`data/runs/tmd-gluon-subagent-20261027/run/pion2pt_20261029/`，文献兼容矩阵见
-`data/runs/get-paper/20261029-022356-gluon-tmd-gradient/selection.json`。
+## 索引与质量
+
+- 总索引：`INDEX.md`，覆盖 50 篇原文（目录对 / 实测页数 / arXiv 底稿 / 备注）；
+  两套导读文选单列在该文件的“导读文选”一节。
+- 原文 100 个目录历史上 xelatex 两遍编译通过、日志零错误，合计 2460 页；
+  该结论来自 2026-08-26 的历史记录，当前工作区无 PDF 可复核。
+- 两套导读文选于 2026-10-21 复验：两遍编译零错误，英文 36 页、中文 35 页。
+- 原 PARTIAL 2 处已于 2026-08-26 收尾修复：CT18 中英版补齐全量 234 图
+  （arXiv:1912.10053 源、原始参数还原，EN 143→146 页 / ZH 140→143 页）；
+  NNPDF17 中文版 5 类大表原生还原（xeCJK「bad native font flag」根因=数学上标内
+  老式 `\rm` 组含 `\bar{希腊}`，改写为 `\mathrm{CC},\bar{\nu}` 等价形式后消除）。
+
+## 已知缺口
+
+- 20 个原文转排目录缺简版 `AGENTS.md`：19 个中文译本（`LaMET计算TMD软函数_latex`、
+  `任意阶部分子分布矩_latex`、`伪部分子分布的单圈演化_latex`、`准PDF完整非微扰重正化方案_latex`、
+  `准光前关联函数的自重正化_latex`、`准部分子分布的可重正性_latex`、
+  `同位旋矢量分布的重正化匹配系统分析_latex`、`大动量有效理论再论_latex`、
+  `微扰论中的涂抹准分布_latex`、`手征对称性与杨米尔斯梯度流_latex`、
+  `扩散模型即随机量化_latex`、`格点算符非微扰重正化一般方法_latex`、
+  `梯度流中的非光锥威尔逊线算符_latex`、`梯度流形式的双圈能动量张量_latex`、
+  `梯度流高阶计算的技术与结果_latex`、`欧氏与光锥分布因子化定理_latex`、
+  `胶子伪分布的短距行为_latex`、`规范等变的流采样_latex`、
+  `高动量强子新夸克涂抹_latex`）和 1 个英文转排（`Parton_Physics_on_Euclidean_Lattice_latex`）。
+  它们均已有所需的 `CONVERSION_GUIDE.md` 或 `TRANSLATION_GUIDE.md`。
+- 两套导读文选目录（`Essential_Papers_on_Lattice_QCD_Parton_Physics_latex`、
+  `格点QCD部分子物理精华论文选_latex`）缺 `AGENTS.md` 与 GUIDE；其结构由本文件与
+  `../AGENTS.md` 约束。
+- `anomalpap5.tex` 为 0 字节遗留文件，未被任何索引或 LaTeX 入口引用，待确认后删除。
+- 未收录 5 篇前印本经典（无开放获取底稿）：Gross–Wilczek/Politzer 1973、
+  Altarelli–Parisi 1977、Duane et al. 1987(HMC)、Collins–Soper 1981、Parisi–Wu 1981。
+- 书目勘误：文选卡片中 Morningstar–Peardon 的 arXiv id 应为 hep-lat/0311018（非 0307022）。
+- 生产日志：`.make.2026-08-25-08-59-10.log`；用户输入清单 `.agent.*.list`（均不入库）。
