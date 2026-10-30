@@ -11,7 +11,6 @@
 !*.cpp
 !*.eps
 !*.jpg
-!*.json
 !*.md
 !*.pdf
 !*.png
