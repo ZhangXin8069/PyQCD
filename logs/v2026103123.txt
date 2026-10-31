@@ -1,0 +1,138 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-10-31 23:31:18 +0800
+批次: configure-agent-pyqcd-init-20261031
+主任务: PyQCD diff-init-validate-commit-push-tag-final-log
+触发原因: 任务完成
+摘要: 初始化 PyQCD 受维护目录治理文件并完成验证、提交、main 推送、dev31 标签和 final 日志
+Git 根目录: /root/PyQCD
+
+## 关键日志
+
+### S1 — 初始 diff 审计
+- 目标: 在任何写入前冻结工作区、暂存区、HEAD、upstream 与标签状态。
+- 命令/操作: `git status --short --branch`、`git diff --stat`、`git diff --cached`、`git rev-parse HEAD`、`git rev-list --left-right --count '@{upstream}...HEAD'`、四类标签统计。
+- 关键输出: 初始 HEAD `8c4d26473e734e81beab8f1cbc4f22565dd1721b`；唯一未暂存改动为 `refer/git-rep/PyQCU` gitlink `8d7002f908aa2c162705f840b604814971753171 -> 0b37896f716b191655197488fc7f721a376bb643`；暂存区为空；upstream 领先/落后为 `0/0`。
+- 初始标签: stab 37（最新 stab30）、dev 33（最新 dev30）、bug 4（最新 bug3）、test 27（最新 test11）；按 tag 技能版本排序的任意类型基线为 test11。
+- 退出码: 0。
+- 证据与判断: 该 PyQCU 指针是派发前用户状态，后续全程不暂存、不提交、不推送、不进入子模块。
+
+### S2 — init 只读盘点与 apply
+- 目标: 只处理 PyQCD 受维护源码、测试、文档和自有技能目录。
+- 命令/操作: 完整读取根 `AGENTS.md`、相关子目录 `AGENTS.md`、`diff/init/tag/log` 技能；扫描目录、散落 `SKILL.md`、agent init 文件和 `.opencode` 忽略规则。
+- 关键输出: `docs/` 为扁平目录；`pyqcd/` 与自有 `pyqcd-*`、`form` 技能树存在缺失治理文件；`skills/donghx/`、`skills/sush/` 为只读外部来源；`artifacts/` 与冻结 `output/` 为生成物；根目录无待归档 `CLAUDE.md`/`AGENT.md`/agent 隐藏配置。`.opencode` 被 `.gitignore:52` 的 `.*` 规则忽略，未 force-add。
+- 变更: 新建 66 个 `AGENTS.md`（15 个 pyqcd 源码/测试目录 + 51 个 form/自有技能目录）；更新 `docs/AGENTS.md`、`pyqcd/AGENTS.md`、`pyqcd/tools/AGENTS.md`；归档 0。
+- 退出码: 0。
+- 证据与判断: 所有 `SKILL.md` 均位于 canonical `skills/` 或只读外部技能树；未修改 refer/git-rep、外部参考/书籍/论文、data/logs 或生成产物。
+
+### S3 — 验证与索引复核
+- 命令/操作: 两次执行目录幂等扫描；检查新文件标题/尾随空白/冲突标记；`quick_validate.py` 遍历 24 个自有技能；`bash -n`；`git diff --check`；显式暂存后 `git diff --cached --check`；大文件检查；`form-audit.sh`。
+- 关键输出: pyqcd `missing=0`、skills `missing=0`、docs `missing=0`；新治理文件 headers=PASS；24/24 skills valid；`bash -n` PASS；diff checks PASS；暂存 69 文件（66 A / 3 M）；大文件检查通过（69 文件，限制 10,000,000 bytes）。
+- form 审计: 退出码 1，且仅有 2 个本次未触碰的既有发现：`docs/absorb_dev20_gluon_tmd_audit_20261022.md` 的 tag 形路径；只读 `refer/git-rep/README.md` 未登记 PyQCU 来源。未扩大任务范围修改它们。
+- 未运行: GPU、MPI、数小时物理流水线及全量物理回归，符合本次配置/文档初始化范围。
+
+### S4 — 提交与 main 推送
+- 命令/操作: 显式 `git add` 本任务 69 个文件；确认暂存区不含 PyQCU；普通 `git commit`；普通 `git push origin main`。
+- 关键输出: 初始化提交 `f79c3c3b1ab4dd87e5985c011ba782e375f182b3`（`docs(init): synchronize maintained agent guidance`）；`8c4d264..f79c3c3  main -> main`。
+- 退出码: 提交 0；branch push 0。
+- 证据与判断: 指针仍为未暂存的 `refer/git-rep/PyQCU`，未进入提交或推送。
+
+### S5 — 标签链与 dev31
+- 命令/操作: `tag-chain.sh --check --remote origin`；实测 dev 最新与下一编号；创建注释标签并 push；推送后再次远端全历史检查。
+- 关键输出: 标签链基线按技能实测为 `test11`，dev 最新为 `dev30`，下一主版本为 `dev31`；102 个 managed tags 的 follow 链、Peeled commit、祖先关系与远端对象均通过。
+- 标签对象: `d368eebc94feb1b7df37e9c7cc1ee6233c4c5d5f`，peeled target `f79c3c3b1ab4dd87e5985c011ba782e375f182b3`。
+- tag push: 0；`* [new tag] dev31 -> dev31`。
+- 证据与判断: 未删除、未改写任何既有或已推送标签。
+
+### S6 — final log
+- 目标: 按 log final 模式归档完整过程、验证、交付结果和用户指令。
+- 关键输出: 本日志与 `logs/AGENTS.md` 后续将显式暂存，普通提交并推送 `origin main`。
+
+## 验证与证据
+- 测试/检查: `git diff --check`，退出码 0。
+- 测试/检查: `git diff --cached --check`，退出码 0。
+- 测试/检查: init 幂等复查，pyqcd/skills/docs 均为 `missing=0`。
+- 测试/检查: 24 个自有技能 `quick_validate.py`，24/24 通过。
+- 测试/检查: `bash -n skills/form/scripts/form-audit.sh`，退出码 0。
+- 测试/检查: staged large-file check，69 文件检查通过。
+- 测试/检查: post-push tag-chain，102 tags PASS。
+- 未验证项: 未运行 GPU/MPI/长物理链；无源码算法改动，任务不要求全量物理测试。
+- 已知既有问题: `form-audit.sh` 退出码 1，仅 2 个未由本次引入且不在授权范围的发现，详见 S3。
+
+## 变更与产物
+- 文件: 66 个新增 `AGENTS.md`，3 个更新治理文档。
+- 提交: `f79c3c3b1ab4dd87e5985c011ba782e375f182b3`。
+- 分支: `origin/main` 已包含初始化提交。
+- 标签: annotated `dev31`，已推送。
+- 日志: `/root/PyQCD/logs/v2026103123.txt`。
+- 未改动范围: `refer/**`（既有 PyQCU 工作树指针除外）、`data/**`、`logs/**`（仅本 final 日志与索引）、外部技能、生成 artifacts、冻结基线。
+
+## 风险、限制与下一步
+- 风险: 无本次代码/算法改动；未运行全量物理验证。
+- 阻塞: 无，任务完成。
+- 遗留: 既有未暂存 PyQCU gitlink 完整保留；form 审计的 2 个既有发现继续保留，后续需单独授权处理。
+
+## 用户输入指令
+你是 configure agent 系列的子 agent。只处理下面给出的任务，不扩大范围；先理解再行动，采用最小可靠改动，执行可用的验证，最终简洁返回结果、证据与阻塞。除非任务明确要求，不要继续派发子 agent；确需派发但失败时，复用启动本 agent 的同一 provider/model/auth/settings 链重试，仍失败则自行串行完成。
+
+【派发任务】
+身份：{代码}。你是 PyQCD 仓库维护代理，唯一工作范围是 /root/PyQCD，不得访问或修改其他项目仓库。
+开始前完整读取 /root/PyQCD/AGENTS.md、相关子目录最近的 AGENTS.md，以及 /root/configure/skills/diff/SKILL.md、init/SKILL.md、tag/SKILL.md、log/SKILL.md；tag 的 references/tag-operations.md 按需读取。遵守仓库安全边界，不读取无关文件。
+目标：在 /root/PyQCD 完成 diff → init → 验证 → 提交本次 init 产物 → push main → 创建并 push dev tag → final log。
+当前已知未暂存改动：refer/git-rep/PyQCU 子模块指针，这是派发前已有用户状态，必须完整保留，不得 reset、checkout、暂存、提交或推送该指针，也不得进入子模块修改。
+强制步骤：
+1. diff：记录 status、工作区 diff（含上述指针）、暂存区 diff、HEAD、upstream 领先/落后、当前四类 tag。
+2. init：先只读盘点再 apply。所有 refer/git-rep 子模块、外部参考/书籍/论文拷贝、数据归档和生成产物不得修改；只处理本仓库维护源码、技能与文档目录。已有 AGENTS.md 就地校正，缺失的受维护目录按 init 规则生成；不臆造命令。检查散落 SKILL.md 与 .opencode/skills 归集规则；.opencode 被隐藏文件规则忽略，不得 force-add。
+3. 验证：至少 git diff --check；运行 init 幂等复查。目标仅为配置/文档初始化，不运行 GPU、MPI 或数小时物理流水线；仅运行与改动直接相关且快速的检查。
+4. 提交：只显式暂存本次 init 产生的文件，禁止 git add -A、git add .、git commit -a；绝不能暂存子模块指针。提交消息写明原因、改动、验证。
+5. push：先 git push origin main，禁止 force。若远端不可 fast-forward 或认证失败，保留本地提交并如实报告。
+6. tag：分支 push 成功后运行 bash /root/configure/skills/tag/tag-chain.sh --check --remote origin。不得删除或改写已推送标签。若安全通过，按 tag 技能计算任意类型最新基线和下一个 dev 主版本（当前候选 dev31，但必须实测确认），从本次 init 的 diff/commit 生成合规中文变更清单，创建注释标签并 git push origin <tag>。
+7. log：全部完成后按 log 技能 final 模式写入并验证 /root/PyQCD/logs；显式暂存该日志和 logs/AGENTS.md，普通提交并 push origin main，禁止 force。
+安全：不删除文件，不修改系统配置，不触碰子模块内部，不泄露凭据。若 init 没有产生变更，如实说明，不得伪造变更。若 tag 链需要改写，停止该部分并报告。
+返回格式：状态 finished/blocked/failed；初始 diff；init 新建/更新/归档统计；验证命令与退出码；提交 SHA；branch push 与 tag push 结果；dev tag 名和完整消息；日志绝对路径；未触碰的子模块指针和任何其他遗留。
+
+## Agent 全文报告
+--- report begin ---
+状态: finished
+
+初始 diff:
+- HEAD: `8c4d26473e734e81beab8f1cbc4f22565dd1721b`
+- 工作区: 仅 `M refer/git-rep/PyQCU`，gitlink `8d7002f908aa2c162705f840b604814971753171 -> 0b37896f716b191655197488fc7f721a376bb643`
+- 暂存区: 空
+- upstream: `0/0`
+- tags: stab 37/latest stab30，dev 33/latest dev30，bug 4/latest bug3，test 27/latest test11
+
+init 统计:
+- 新建: 66 个受维护目录 `AGENTS.md`
+- 更新: 3 个（`docs/AGENTS.md`、`pyqcd/AGENTS.md`、`pyqcd/tools/AGENTS.md`）
+- 归档: 0
+- 跳过: refer/git-rep、外部 donghx/sush、data/logs、artifacts/冻结 output；`.opencode` 缺失且被忽略，未 force-add
+
+验证:
+- `git diff --check`: 0
+- `git diff --cached --check`: 0
+- init 幂等复查: pyqcd/skills/docs 全部 `missing=0`
+- 技能校验: 24/24 `quick_validate.py` 通过
+- `bash -n skills/form/scripts/form-audit.sh`: 0
+- staged large-file check: 0（69 文件，10,000,000 bytes 限制）
+- form audit: 1，仅有 2 个未触碰的既有发现（tag 形历史文档路径；只读 refer README 缺 PyQCU 来源）
+- 未运行 GPU/MPI/长物理流水线
+
+提交:
+- init commit: `f79c3c3b1ab4dd87e5985c011ba782e375f182b3`
+- branch push: 成功，`origin/main` `8c4d264..f79c3c3`
+- tag chain pre/post: PASS（102 managed tags）
+- dev tag: `dev31`，对象 `d368eebc94feb1b7df37e9c7cc1ee6233c4c5d5f`，target `f79c3c3`
+- tag push: 成功，`* [new tag] dev31 -> dev31`
+- tag 完整消息: `follow dev30, 1. 初始化 PyQCD 受维护目录，新增 66 个目录级 AGENTS.md 并校正 docs/pyqcd/tools 漂移; 2. 明确 pyqcd、测试链及 23 个自有领域技能与 form 的权威入口、只读边界和验证门; 3. 保持 refer/git-rep、外部技能、data/logs 和生成产物不变，既有 PyQCU 指针不进入提交; 4. 验证 init 幂等 missing=0、24 个技能校验通过、bash -n/diff-check/大文件检查通过，保留两项既有 form 审计债; [codex].`
+
+日志:
+- `/root/PyQCD/logs/v2026103123.txt`
+
+未触碰:
+- 既有 PyQCU 工作区指针保持未暂存、未提交、未推送，全程未进入子模块
+- 无其他本次范围外改动
+
+遗留:
+- 两项既有 form 审计发现保持原状，需另行授权处理
+--- report end ---
