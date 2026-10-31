@@ -493,3 +493,11 @@
 - 关键内容: 初始化 PyQCD 受维护目录治理文件并完成验证、提交、main 推送、dev31 标签和 final 日志
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## data-inventory - final - 2026-11-01 01:30:15 +0800
+- 主任务: 盘点 /public 下 beta6.20_mu-0.2770_ms-0.2400_L24x72 可用数据
+- 日志文件: logs/v2026110101.txt
+- 文件大小: 4674 bytes
+- 触发原因: 任务完成
+- 关键内容: 1套系综、19个原始规范场组态；完整跨产品数据仅4150
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
