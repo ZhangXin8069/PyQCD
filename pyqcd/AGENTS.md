@@ -15,10 +15,11 @@
 | 子包 | 内容 | 来源 |
 |---|---|---|
 | `lattice/` | 常数（Nc/fm2GeV）、DR 基 γ/σ 矩阵 | lib/constants,gamma,sigma |
-| `tools/` | 后端切换（numpy/cupy）、缓存 einsum、切片、数据读取 | lib/backend,base,io_readers |
+| `tools/` | 后端切换（numpy/cupy/torch）、HDF5/遗留数组 IO、缓存 einsum、切片 | lib/backend,base,io_readers + torch/h5 IO |
 | `vertex/` | VdV/VVV 顶点、相位因子 | lib/vertex |
 | `contraction/` | 自动 Wick、重子算符、seqperam、动态收缩 | lib/autowick,baroperator,seqperam,dynamic |
 | `operator/` | Clover 场强 F、对偶 F̃、胶子 OPE 算符、.lime 读取、TMD staple 扩展 | compute_ope.py + 新写 |
+| `gauge/` | Wilson/Polyakov 圈、Clover 场强与拓扑荷纯规范观测量 | 新写 |
 | `analysis/` | Jackknife/Bootstrap/meff/ratio_3pt + disconnected(code_1)/meff/3pt 编排 + 色散拟合 | lib/analyse + analyze.py/zengch 逻辑 |
 | `renorm/_tmdextract.py` | ★ 准 TMD-PDF/CS 核/SFTX 1 圈匹配 | 理论文档新写 |
 | `smear/` | HYP 涂抹（Hasenbusch 2001，梯度流备选方案） | 理论文档对比项新写 |
@@ -26,13 +27,14 @@
 | `analysis/_ratio_fit.py` | c0 裸矩阵元提取（R 模型逐样本拟合） | zengch fit_ratio 逻辑 |
 | `renorm/` | ★ 自重整化 Z_R、混合方案、NLO 匹配、外推、梯度流、TMD 提取 | refer/zengch 逻辑移植 + 理论文档新写 |
 | `pipeline/` | 集中配置 + 9 步管线调度（+tmd 步） | config.py/run_pipeline.py |
+| `parallel/` | 资源探测、MPI 元任务规划与并行管线 | 新写 |
 | `testing/` | 原 `examples/` 的契约测试、回归、示例、基线与历史快照 | 迁移整理 |
 
 ## 关键约定
 
 - 张量布局：gauge `(Nt,Nz,Ny,Nx,4,3,3)`；链接/场强 `(…,3,3)`；维序 t,z,y,x。
-- 后端：`from pyqcd.tools import set_backend/get_backend`；numpy/cupy 通用；
-  禁止直接 import cupy 计算（仅 try/except 探测）。
+- 后端：`from pyqcd.tools import set_backend/get_backend`；numpy/cupy/torch 通用；
+  禁止直接 import cupy 计算（仅 try/except 探测）。新管线产物优先 HDF5。
 - 梯度流：`wilson_flow(U, tau, eps=0.01)`（RK3，Luescher 2010）；
   流时间物理约定 τ=3a²（NieMiera 2025）。
 - 重整化：z 单位 fm（内部转 GeV⁻¹ 用 fm_to_GeV=0.197）；μ=2 GeV 默认。

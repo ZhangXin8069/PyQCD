@@ -1,6 +1,8 @@
 # AGENTS.md — pyqcd/tools
 
-后端切换（numpy/cupy/torch）、缓存 einsum、切片工具、IO 读取。
+后端切换（numpy/cupy/torch）、缓存 einsum、切片工具与 IO。
+HDF5 统一读写入口为 `save_tensor_h5/load_tensor_h5`（numpy/torch/cupy 通用），
+读取层优先 HDF5、兼容旧 `.npy/.npz` 产物。
 L.Liu ASCII 关联函数读写（`_io.write_data_ascii/read_data_ascii`，.gz 自动压缩）；torch 适配层含 numpy-like 数学函数全集（cos/sin/arccos/isnan/clip/maximum
 （接受标量）/argwhere/identity/append/random 等）。禁止直接 import cupy 计算
 （仅 try/except 探测）。

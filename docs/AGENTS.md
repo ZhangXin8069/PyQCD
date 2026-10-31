@@ -1,27 +1,19 @@
 # AGENTS.md — docs
 
-格点 QCD 中文 LaTeX 笔记（53 篇；另有 14 篇分析/报告 TeX，共 67 个，
-均使用 xelatex 编译）。原 `logs/**` 中的 PDF/TeX/Markdown 现统一归档于
-`docs/from-logs/`，并保留原相对路径。
+格点 QCD 中文 LaTeX 与分析/报告文档目录。当前工作树包含 11 个 TeX 源文件和
+9 个 Markdown 文件；LaTeX 文档统一使用 xelatex 编译。`docs/.gitignore` 禁止
+新增嵌套目录，历史迁移材料的当前事实以 Git 索引为准。
 
 ## 文件
 
 | 类别 | 文件（节选） |
 |---|---|
-| 胶子 PDF 总论 | `胶子PDF笔记.tex`、`胶子PDF完整推导.tex`、`胶子PDF计算代码解析.tex` |
-| 连续极限 | `胶子PDF连续极限.tex`、`胶子PDF连续极限幻灯片.tex`、`胶子PDF幻灯片.tex`、`胶子PDF连续极限论文.tex`、`胶子TMD梯度流连续极限.tex` |
-| TMD/重整化 | `格点QCD中的TMD_PDF.tex`、`格点QCD中的梯度流重整化.tex`、`格点QCD中的重整化.tex` |
-| 理论框架 | `格点QCD中的光锥PDF、准PDF、赝PDF.tex`、`格点QCD中的光锥PDF与quasi_PDF.tex`、`格点QCD中的大动量有效理论.tex`、`格点QCD中的光锥与光前.tex` |
-| 格点技术 | `格点QCD中的Wilson线.tex`、`格点QCD中的场强张量.tex`、`格点QCD中的胶子算符.tex`、`格点QCD中的smear算法.tex`、`格点QCD蒸馏方法解析.tex` |
-| 方法学 | `格点QCD中的外推.tex`、`格点QCD中的误差统计.tex`、`格点QCD中的重采样方法.tex`、`格点QCD中的蒙卡方法.tex` |
-| 仓库/工作流 | `PyQCD仓库结构与核心物理链解析.tex`、`理论解析与工作流.tex`（过时未验证版）、`理论解析与工作流-v20260911.tex`（梯度流重整化 TMD-PDF 已验证版，100 页/5957 行，XeLaTeX 两遍三零，零明文代码）、`构造胶子准算符.tex`、`格点上计算胶子准算符.tex` |
-| 谱学/变分方法 | `格点QCD中的GEVP.tex`（GEVP 的数学结构、物理内涵与本库实现解剖；7 组实测实验、2 张配图、24 页，XeLaTeX 两遍 Overfull=0 Float=0 Missing=0） |
-| 分析与专题 | `质子自旋危机解析.tex`、`格点QCD中的胶子极化.tex`、`格点QCD中的部分子分布函数.tex` |
-| 本轮报告 | `report_gluon_tmd_flow_scan_20261029.tex/.pdf`（梯度流胶子准 TMD 比值的流时稳定性、统计能力与零检验；含流窗有效性、配对 JK、tsep 扩展到 16/24、两态拟合、固定插入 τ 的相关组合 $P(\tau)=B_{00}+B_{01}e^{-(m_1-m_0)\tau}$、分母约定系统检查，以及把 $b$ 扩到 6 后的 16 点共同流窗与流时漂移检验；17 页，XeLaTeX 三遍 Overfull=0、Missing character=0）（2026-10-29） |
-| GPD 专题 | `analy_gpd_20260928.tex/.pdf`（全库 GPD 文档、参考代码与生产链审计；21 页，XeLaTeX 两遍 Overfull=0 Float=0 Missing=0） |
+| 全库/工作流 | `analy_pyqcd_20260818.tex`、`pure_pyqcd_20260818.tex`、`analy_physics_chain_20260824.tex`、`analy_torch_parallel_20260816.tex` |
+| 谱学/专题 | `analy_proton_energy_20260816.tex`、`analy_gpd_20260928.tex` |
+| TMD/重整化报告 | `report_gluon_tmd_gradient_flow_20260828.tex`、`report_tmd_gluon_audit_20261025.tex`、`report_gluon_tmd_flow_scan_20261029.tex` |
+| 参考对照 | `report_cmp1_4150_20260828.tex`、`report_gradient_flow_gluonpdf_pyqcd_20260909.tex` |
 
-完整清单：原 `docs/*.tex` 66 篇，加 `docs/from-logs/**` 迁移的 10 篇 TeX，
-共 76 篇；`*.aux/*.log/*.out/*.nav/*.snm/*.toc` 为编译产物（gitignore）。
+TeX 编译的中间文件不纳入结果证据；提交文档时只保留源文件与需要交付的 PDF。
 
 `examples/` 目录已于 2026-09-27 整体迁移到 `pyqcd/testing/`；历史报告中的旧
 路径映射见 `docs/EXAMPLES_MIGRATION_20260927.md` 与
@@ -56,13 +48,7 @@ cd docs && xelatex -interaction=nonstopmode <文件>.tex   # 中文必须 xelate
 
 ## 对照测试报告
 
-- `report_cmp1_4150_20260828.tex/.pdf`：基于真实组态 4150 的 PyQCD 与 lqcddb/donghx 功能对照报告；16:9 横板、16 页，含 L20 复数 GEVP 差异判定、HYP 输入守卫、验证命令与未验证边界（2026-08-28）。
-- `report_donghx_4150_reproduction_20260829.tex/.pdf`：基于真实组态 4150 的 donghx/PyQCD eigvec、VdV、VVV、Clover/dual/OPE 与质子 2pt 复现报告；明确 Cg5/Cg5g4、动量方向/大小、smear 输入边界及 3pt/ratio/barematrix 未验证项（2026-08-29）。
-- `report_donghx_4150_reproduction_20260830.tex/.pdf`：在上一版基础上纳入 7 个 4150 2pt 成品根目录、58 个动量组、`momsmear0` 隐式命名检查及 Cg5/Cg5g4 各 35 个真实时间对；保留独立 smeared peram、逐时间 VVV 与下游 3pt/ratio/barematrix 的未验证边界（2026-08-30）。
-- `report_donghx_pyqcd_compare_20260830.tex/.pdf`：简要汇总组态 4150 的已通过 dhx/PyQCD 低层、4D10 HYP-OPE、质子 2pt、正宇称投影与 effmass 聚合对照；表格列出数据路径、物理公式、PyQCD 函数/参数和相对误差（2026-08-30）。
-- `report_donghx_pyqcd_compare_20260830_2.tex/.pdf`：同一对照结果的单一分页巨大表格版；仅保留已测试条目（2026-08-30）。
-- `data/from-docs/docs/report_donghx_pyqcd_compare_20260830_2.csv`：对应巨大表格的 UTF-8 CSV；34 条已通过记录。
-- `report_gradient_flow_gluonpdf_pyqcd_20260909.tex/.pdf`：donghx
-  Gradient_Flow_GluonPDF 与 PyQCD 的 Wilson flow、Clover/dual、schema-v2
-  OPE、复数 disconnected ratio、一圈 GF-to-quasi 转换的算法审计与修正报告；
-  17 页，Overfull=0、Float too large=0、Missing character=0（2026-09-09）。
+- `report_cmp1_4150_20260828.tex`：真实组态 4150 的 PyQCD 与 lqcddb/donghx
+  功能对照，含 GEVP、HYP 输入守卫与未验证边界。
+- `report_gradient_flow_gluonpdf_pyqcd_20260909.tex`：Wilson flow、Clover/dual、
+  schema-v2 OPE 与 disconnected ratio 的算法审计。
