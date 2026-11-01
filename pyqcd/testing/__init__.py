@@ -3018,7 +3018,28 @@ def test_real_polarized_chain_resume_contract():
             resumed_2d = chain.run_chain_2d(
                 root, [10], backend='numpy', checkpoint=checkpoint_2d,
                 logger=lambda *_args: None)
-        assert resumed_2d['configurations']['10']['ope_2d'] == 'cache_hit'
+            assert resumed_2d['configurations']['10']['ope_2d'] == 'cache_hit'
+
+
+def test_tmd_full_production_contract():
+    """Full production driver must enforce resume and resource guardrails."""
+    from ._tmd_full_production_contract import TmdFullProductionContract
+
+    _run_unittest_contract(TmdFullProductionContract)
+
+
+def test_tmd_full_analysis_contract():
+    """Full analysis must preserve named axes and lattice-only status."""
+    from ._tmd_full_analysis_contract import TmdFullAnalysisContract
+
+    _run_unittest_contract(TmdFullAnalysisContract)
+
+
+def test_tmd_full_report_contract():
+    """Generated report must retain the lattice-only evidence boundary."""
+    from ._tmd_full_report_contract import TmdFullReportContract
+
+    _run_unittest_contract(TmdFullReportContract)
 
 
 def test_bare_sumratio_contracts():

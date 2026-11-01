@@ -1,0 +1,41 @@
+[日志元数据]
+日志类型: general
+生成时间: 2026-11-01 07:44:44 +0800
+批次: tmd-full-production
+主任务: TMD 12 组态全链生产资源门暂停
+触发原因: 一般记录
+摘要: 完成三组态蒸馏与 flow，OPE 部分完成；磁盘达到 77.9%，需授权存储策略
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 数据与代码准备
+- 目标: 使用 6250–8450 共 12 组态完成梯度流胶子 TMD-PDF 全链。
+- 命令/操作: 完整读取 auto/all/dispatch/phys-model 及 PyQCD TMD、pipeline、statistics、analysis、docs 技能；派发两轮共 8 个只读子代理；实现生产驱动、分析驱动、报告生成器和 strict verifier。
+- 关键输出: 新增 `run_full_production.py`、`analyze_full_production.py`、`build_full_report.py`、`verify_full_production.py` 及三组 contract；新增合同测试均通过。
+- 退出码: 0
+- 证据与判断: 代码审查发现并修复 checkpoint 冲突、sample/JK 轴序、C2 mapping、self-renormalize tuple、CS 复数门、热图 NaN mask、Beamer 转义与 footer overfull 等问题。
+
+### S2 — 真实三 GPU 生产
+- 目标: 并行计算 12 组态 VVV/VdV、双极化 2pt、连接 3pt、三流时 flowed gauge、三方向 1D full/legacy OPE、2D 双 staircase OPE。
+- 命令/操作: 使用 V100 和两块 P100，每卡一个 worker，CPU 4 线程；按 80% duty-cycle 控制 GPU wall-time 平均占用。
+- 关键输出: 6250 的 distillation/flow/OPE 完成；6450 和 6650 的 distillation/flow 完成，OPE 部分完成；6850 已开始 distillation，在资源门暂停前已写出 VVV/VdV。
+- 退出码: 进程由 Ctrl-C 主动暂停，缓存与 checkpoint 保留。
+- 证据与判断: `/root/PyQCD/data/runs/tmd-full-20261101` 当前约 14 GiB；monitor 记录 CPU 峰值 39.1%、RAM 17.0%、GPU 显存峰值 62.54%、磁盘实际 77.90%。GPU 平均利用率约 56%–77%，瞬时 kernel 峰值可到 100%。
+
+## 验证与证据
+- 测试/检查: `python -B -m pyqcd.testing._tmd_full_production_contract`、`_tmd_full_analysis_contract`、`_tmd_full_report_contract` 均通过；报告 mock 实际 XeLaTeX 双遍且零 Overfull/Float/Missing character。
+- 结果: 已生成 3 个组态的完整 distillation 与 flow 缓存，6250 的 1D/2D OPE 完整，6450/6650 部分 OPE 已保存。
+- 未验证项: 12 组态全链、最终分析、正式报告、full suite 和 form audit 尚未完成。
+
+## 变更与产物
+- 文件: `pyqcd/testing/tmd/run_full_production.py`、`analyze_full_production.py`、`build_full_report.py`、`verify_full_production.py`、三个 `_tmd_full_*_contract.py`、`pyqcd/testing/__init__.py`、`docs/plan_tmd_full_production_20261101.md`。
+- 产物: `/root/PyQCD/data/runs/tmd-full-20261101/`，含 worker checkpoints、resource logs、canonical HDF5 与 flow caches。
+- 未改动范围: `/public` 只读；未提交、未推送、未打标签。
+
+## 风险、限制与下一步
+- 风险: 剩余未压缩 VVV 若全部写出会使磁盘占用超过用户规定的 80%。
+- 阻塞: 需要用户明确授权存储策略。
+- 下一步: 用户授权后从现有 checkpoint 断点继续，完成剩余组态、分析、验证、报告和最终日志。
+
+## 用户输入指令
+使用数据{6250–8450},并参考所有相关的文档与代码,充分利用系统资源(占用均不可超过80%)和本库代码实现{使用梯度流重整化方案的格点QCD的核子中的胶子PDF的计算与分析}(自动跳过与格点QCD本身无关的部分,例如部分matching),要求计算完整(VVV,VdV,2pt,3pt,梯度流相关数据,裸矩阵元,矩阵元,ratio,PDF结果,TMD-PDF结果)(注意保存),且分析完整(effective-mass,各种平台拟合图,各种物理量展示图,等等图表),最终结果汇报到docs中,相关日志汇总到logs中,不设预算上限,需要同时派发多个子代理,总任务时长不低于六小时
