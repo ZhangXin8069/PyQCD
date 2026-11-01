@@ -71,9 +71,11 @@ PRECISION = "complex64"
 T_SEP_3PT = 12
 DEFAULT_STAGES = ("distillation", "flow", "ope")
 VALID_STAGES = frozenset(DEFAULT_STAGES)
-RESOURCE_FIELDS = (
-    "cpu_percent", "memory_percent", "disk_percent", "gpu_memory_percent",
+NON_DISK_RESOURCE_FIELDS = (
+    "cpu_percent", "memory_percent", "gpu_memory_percent",
 )
+RESOURCE_FIELDS = NON_DISK_RESOURCE_FIELDS + ("disk_percent",)
+MAX_DISK_FRACTION = 0.95
 
 
 class ResourceLimitError(RuntimeError):
@@ -120,6 +122,18 @@ def _validate_fraction(max_fraction):
     return float(max_fraction)
 
 
+def _validate_disk_fraction(max_disk_fraction):
+    if (isinstance(max_disk_fraction, (bool, np.bool_))
+            or not isinstance(max_disk_fraction, (int, float, np.integer,
+                                                   np.floating))
+            or not np.isfinite(max_disk_fraction)
+            or not 0.0 < float(max_disk_fraction) <= MAX_DISK_FRACTION):
+        raise ValueError(
+            "max_disk_fraction 必须是 (0, "
+            f"{MAX_DISK_FRACTION:.2f}] 内的有限数")
+    return float(max_disk_fraction)
+
+
 def _throttle_backend_work(work_seconds, context):
     """Duty-cycle GPU kernels so wall-time occupancy stays at or below target."""
     target = float(context.get('gpu_duty_cycle', 0.8))
@@ -132,9 +146,14 @@ def _throttle_backend_work(work_seconds, context):
     return sleep_seconds
 
 
-def validate_resource_snapshot(snapshot, max_fraction=0.8):
-    """Reject measured resource use above the requested absolute fraction."""
-    limit = 100.0 * _validate_fraction(max_fraction)
+def validate_resource_snapshot(snapshot, max_fraction=0.8,
+                               max_disk_fraction=None):
+    """Reject process or disk use above their independent hard limits."""
+    max_fraction = _validate_fraction(max_fraction)
+    if max_disk_fraction is None:
+        max_disk_fraction = max_fraction
+    else:
+        max_disk_fraction = _validate_disk_fraction(max_disk_fraction)
     for key in RESOURCE_FIELDS:
         value = snapshot.get(key)
         if value is None:
@@ -145,6 +164,9 @@ def validate_resource_snapshot(snapshot, max_fraction=0.8):
                 or not np.isfinite(value)
                 or not 0.0 <= float(value) <= 100.0):
             raise ValueError(f"{key} 必须是 [0,100] 内的有限百分比")
+        limit_fraction = (
+            max_disk_fraction if key == 'disk_percent' else max_fraction)
+        limit = 100.0 * limit_fraction
         if float(value) > limit:
             raise ResourceLimitError(
                 f"{key}={float(value):.2f}% 超过硬上限 {limit:.2f}%")
@@ -189,17 +211,18 @@ def resource_snapshot(backend='numpy', device='cpu', path=None):
     }
 
 
-def _assert_disk_reserve(path, max_fraction, reserve_bytes):
+def _assert_disk_reserve(path, max_disk_fraction, reserve_bytes):
+    max_disk_fraction = _validate_disk_fraction(max_disk_fraction)
     target = Path(path)
     probe = target
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent
     disk = shutil.disk_usage(probe)
     projected = disk.used + max(0, int(reserve_bytes))
-    if projected > float(max_fraction) * disk.total:
+    if projected > max_disk_fraction * disk.total:
         raise ResourceLimitError(
             f'磁盘预留失败: projected={projected / 2**30:.2f} GiB, '
-            f'limit={float(max_fraction) * disk.total / 2**30:.2f} GiB')
+            f'limit={max_disk_fraction * disk.total / 2**30:.2f} GiB')
 
 
 def _sanitize_worker_tag(value):
@@ -674,6 +697,7 @@ def run_worker(run_dir, conf_ids=CONF_IDS, *, backend='torch', device=0,
                b_y_list=B_Y_LIST, staple_length=STAPLE_LENGTH,
                eps=FLOW_EPS, t_sep=T_SEP_3PT, cpu_threads=4,
                recompute=False, max_resource_fraction=0.8,
+               max_disk_fraction=0.8,
                gpu_duty_cycle=0.8,
                worker_tag=None,
                stage_executor=None, resource_checker=None,
@@ -684,6 +708,7 @@ def run_worker(run_dir, conf_ids=CONF_IDS, *, backend='torch', device=0,
     conf_ids = _validate_conf_ids(conf_ids)
     stages = _validate_stages(stages)
     max_resource_fraction = _validate_fraction(max_resource_fraction)
+    max_disk_fraction = _validate_disk_fraction(max_disk_fraction)
     gpu_duty_cycle = _validate_fraction(gpu_duty_cycle)
     worker_tag = _sanitize_worker_tag(worker_tag)
     if isinstance(cpu_threads, (bool, np.bool_)) or int(cpu_threads) <= 0:
@@ -711,7 +736,7 @@ def run_worker(run_dir, conf_ids=CONF_IDS, *, backend='torch', device=0,
         torch.set_num_threads(cpu_threads)
 
     request_contract = {
-        'schema_version': 2,
+        'schema_version': 3,
         'backend': backend,
         'device': device,
         'precision': precision,
@@ -730,6 +755,7 @@ def run_worker(run_dir, conf_ids=CONF_IDS, *, backend='torch', device=0,
         'worker_tag': worker_tag,
         'cpu_threads': cpu_threads,
         'max_resource_fraction': max_resource_fraction,
+        'max_disk_fraction': max_disk_fraction,
         'input_sources': {
             str(conf_id): _gauge_source_identity(int(conf_id))
             for conf_id in conf_ids
@@ -755,21 +781,25 @@ def run_worker(run_dir, conf_ids=CONF_IDS, *, backend='torch', device=0,
         previous_request = payload.get('request_sha256')
         previous_version = int(
             payload.get('request_contract', {}).get('schema_version', 1))
-        if (previous_version >= 2 and previous_request is not None
+        if (previous_version >= 3 and previous_request is not None
                 and previous_request != request_sha256):
             raise ValueError('checkpoint request contract 与当前运行不一致')
-        if previous_request is not None and previous_version < 2:
+        if previous_request is not None and previous_version < 3:
             payload.setdefault('migrations', []).append({
                 'from_schema_version': previous_version,
-                'to_schema_version': 2,
+                'to_schema_version': 3,
                 'time_utc': _utc_now(),
             })
         payload['request_contract'] = request_contract
         payload['request_sha256'] = request_sha256
         payload['cpu_threads'] = cpu_threads
         payload['max_resource_fraction'] = max_resource_fraction
+        payload['max_disk_fraction'] = max_disk_fraction
+        payload['hostname'] = socket.gethostname()
+        payload['pid'] = os.getpid()
         payload['status'] = 'running'
         payload['resumed_utc'] = _utc_now()
+        payload.pop('finished_utc', None)
         payload.pop('failed_conf_id', None)
         payload.pop('failed_stage', None)
     else:
@@ -792,6 +822,7 @@ def run_worker(run_dir, conf_ids=CONF_IDS, *, backend='torch', device=0,
             't_sep': int(t_sep),
             'cpu_threads': cpu_threads,
             'max_resource_fraction': max_resource_fraction,
+            'max_disk_fraction': max_disk_fraction,
             'gpu_duty_cycle': gpu_duty_cycle,
             'worker_tag': worker_tag,
             'request_contract': request_contract,
@@ -813,7 +844,10 @@ def run_worker(run_dir, conf_ids=CONF_IDS, *, backend='torch', device=0,
 
     def check_resources(label, conf_id):
         snapshot = validate_resource_snapshot(
-            checker_base(), max_fraction=max_resource_fraction)
+            checker_base(),
+            max_fraction=max_resource_fraction,
+            max_disk_fraction=max_disk_fraction,
+        )
         reserve_gib = 0.0
         if label == 'vertices':
             reserve_gib = 3.2
@@ -822,7 +856,7 @@ def run_worker(run_dir, conf_ids=CONF_IDS, *, backend='torch', device=0,
         elif str(label).startswith(('full-ope', 'legacy-ope', '2d-ope')):
             reserve_gib = 0.03
         _assert_disk_reserve(
-            run_dir, max_resource_fraction, reserve_gib * 2**30)
+            run_dir, max_disk_fraction, reserve_gib * 2**30)
         snapshot.update({
             'label': str(label),
             'conf_id': int(conf_id),
@@ -948,6 +982,7 @@ def parse_args(argv=None):
     parser.add_argument('--cpu-threads', type=int, default=4)
     parser.add_argument('--recompute', action='store_true')
     parser.add_argument('--max-resource-fraction', type=float, default=0.8)
+    parser.add_argument('--max-disk-fraction', type=float, default=0.8)
     parser.add_argument('--gpu-duty-cycle', type=float, default=0.8)
     parser.add_argument('--worker-tag', default=None)
     return parser.parse_args(argv)
@@ -983,6 +1018,7 @@ def main(argv=None):
         cpu_threads=args.cpu_threads,
         recompute=args.recompute,
         max_resource_fraction=args.max_resource_fraction,
+        max_disk_fraction=args.max_disk_fraction,
         gpu_duty_cycle=args.gpu_duty_cycle,
         worker_tag=args.worker_tag,
     )

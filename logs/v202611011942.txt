@@ -1,0 +1,64 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-01 19:42:22 +0800
+批次: tmd-full-production-resume
+主任务: 恢复 12 组态梯度流胶子 TMD-PDF 全链：放宽磁盘门并续跑生产
+触发原因: 阶段成果
+摘要: 实现独立 95% 磁盘门和 checkpoint 所有权修复，三卡生产已恢复并从既有缓存继续
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 用户授权与实现
+- 目标: 保持 CPU/RAM/GPU 80% 上限，仅将磁盘上限放宽到独立可控值。
+- 命令/操作: 先添加失败 contract，再实现 `max_disk_fraction`、schema v3 request contract、CLI 参数和 checkpoint 迁移。
+- 关键输出: 磁盘门允许 `(0, 0.95]`；非磁盘资源继续由 `max_resource_fraction<=0.8` 约束；不一致的 schema v3 checkpoint 请求仍拒绝。
+- 退出码: 0
+- 证据与判断: `python -B -m pyqcd.testing._tmd_full_production_contract` 为 11/11 OK；`_tmd_hybrid_contract` 为 44/44 OK。
+
+### S2 — checkpoint 所有权修复
+- 目标: 恢复旧 checkpoint 时写入当前进程所有权，防止重复 worker。
+- 命令/操作: 新增 resume-active-owner contract；在 running 状态写入当前 hostname/PID，并移除旧 finished timestamp。
+- 关键输出: 修复前 contract 报 `pid=None`，修复后 11/11 OK。
+- 退出码: 0
+- 证据与判断: 后续断点重启可可靠检测活动 checkpoint 占用。
+
+### S3 — 设备与资源预检
+- 目标: 在重启前确认设备映射与资源门。
+- 命令/操作: `nvidia-smi`、逐 CUDA_VISIBLE_DEVICES torch kernel、CuPy kernel、`resource_snapshot`。
+- 关键输出: CUDA 可见索引 0=V100、1/2=P100；CPU 15.1%、RAM 3.9%、磁盘 81.81%；GPU 显存采样 4.5%–7.3%。
+- 退出码: 0
+- 证据与判断: 全部低于 CPU/RAM/GPU 80% 门和磁盘 95% 门。
+
+### S4 — 三卡恢复生产
+- 目标: 从既有 checkpoint 完成 12 组态生产。
+- 命令/操作: 启动 V100 `torch_0`、P100 `p100-a`、P100 `p100-b` 三个原分片 worker，均写入 `max_disk_fraction=0.95`。
+- 关键输出: 6250 flow sidecar 补齐后 OPE 56.9s 全命中；6450 flow/OPE 全部补齐；6650 flow 3190.8s 补齐并进入 OPE；6850 distillation 2592.0s 完成并进入 flow；7050 已开始顶点计算。
+- 退出码: 三个 worker 仍在运行
+- 证据与判断: 当前 PID 为 64162、64163、64167；GPU kernel 持续运行，未发生资源门拒绝或未处理异常。
+
+## 验证与证据
+- 测试/检查: full-production contract 11/11、hybrid contract 44/44、py_compile、`git diff --check`。
+- 结果: 全部通过；stage checkpoint 持续更新。
+- 未验证项: 12 组态生产、完整分析、图表、XeLaTeX 与最终物理状态尚未完成。
+
+## 变更与产物
+- 文件: `pyqcd/testing/tmd/run_full_production.py`、`pyqcd/testing/_tmd_full_production_contract.py`、`docs/plan_tmd_full_production_20261101.md`。
+- 产物: `data/runs/tmd-full-20261101/` 中新增/补齐 strict 缓存和 stage records。
+- 未改动范围: `/public` 只读；已有已证明缓存不删除、不覆盖；没有提交或推送。
+
+## 风险、限制与下一步
+- 风险: 剩余 flow、OPE 为小时级 RK3/CUDA 计算；磁盘预计最终约 84.7%。
+- 阻塞: 当前无资源阻塞。
+- 下一步: 监控三个 worker 至 12 组态完成，随后执行 strict verification、完整分析、XeLaTeX 报告和最终日志。
+
+## 用户输入指令
+放宽磁盘上限
+
+## Agent 全文报告
+--- report begin ---
+已将磁盘例外按 95% 实现，同时保持 CPU、RAM 与 GPU 显存 80% 硬门不变。生产 driver 现使用独立 `max_disk_fraction`，并以 schema v3 将它写入 checkpoint；恢复时会刷新当前 PID/hostname，避免重复 worker。
+
+设备实测映射为 CUDA 可见索引 0=V100、1/2=P100。三卡生产已从原 shard 恢复：6250 flow sidecar 和 OPE 全命中；6450 flow/OPE 补齐；6650 flow 补齐并进入 OPE；6850 distillation 完成并进入 flow；7050 已开始顶点计算。资源实测 CPU 24.3%、RAM 8.7%、磁盘约 81.8%，均在当前门限内。
+
+本轮 full-production contract 11/11、hybrid contract 44/44、py_compile 与 `git diff --check` 均通过。三个 worker 仍在运行，尚未宣称全链完成；goal 保持 active。
+--- report end ---

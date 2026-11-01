@@ -1,0 +1,69 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-01 18:12:12 +0800
+批次: tmd-full-production-resume
+主任务: 恢复 20261101T012354.TgopEG 的 12 组态梯度流胶子 TMD-PDF 全链
+触发原因: 阶段成果
+摘要: 确认运行断点与产物，五个关键契约通过；磁盘 81.79% 超过 80% 硬门，生产保持暂停
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 运行身份与断点恢复
+- 目标: 恢复 2026-11-01 前缀运行并继续 12 组态梯度流核子胶子 TMD-PDF 全链。
+- 命令/操作: 检索 `/root/configure/data/runs/20261101T0*`，核对 manifest/state/agent.log、进程、Git 与生产 checkpoint。
+- 关键输出: 共 9 个前缀匹配；仅 `20261101T012354.TgopEG` 标记 running，但其主进程已不存在且无 session_id，原生会话不可恢复，改用手动接管。
+- 退出码: 0
+- 证据与判断: 当前 Git 工作树干净；无旧 production worker 进程；保留下载进程，不终止、不干预。
+
+### S2 — 生产进度审计
+- 目标: 从 checkpoint 和 canonical 缓存还原 Task 2 进度。
+- 命令/操作: 读取 `data/runs/tmd-full-20261101/workers/*.json`、`validation_cache_6250.json`，统计各 conf 产物。
+- 关键输出: 6250 的 distillation/flow/OPE 全部完成并通过 strict validation；6450、6650 的 distillation/flow 完成、OPE 部分完成；6850 已完成 VVV/VdV，flow/OPE 未完成；其余 8 个组态未启动。
+- 退出码: 0
+- 证据与判断: 可断点继续，不能重置待办或重复覆盖已完成 stage。
+
+### S3 — 恢复前契约验证
+- 目标: 确认生产、分析、报告和物理门实现未在后续提交中退化。
+- 命令/操作: `PYTHONPATH=data/deps:. python -B -m pyqcd.testing._tmd_full_production_contract`；`_tmd_full_analysis_contract`；`_tmd_full_report_contract`；`_tmd_hybrid_contract`；`_tmd_physical_contract`。
+- 关键输出: production 7/7、analysis 9/9、report 1/1、hybrid 44/44、physical 18/18，全部 OK。
+- 退出码: 均为 0
+- 证据与判断: 恢复代码与严格缓存契约通过受控测试，但仍不能替代真实 12 组态数值验证。
+
+### S4 — 资源硬门
+- 目标: 在重启 worker 前核对用户规定的资源不超过 80%。
+- 命令/操作: `df`、`shutil.disk_usage('/')`、检查生产写入占用和压缩探针。
+- 关键输出: total=1081101176832 B，used=884249624576 B，ratio=81.79%；需释放 19368683111 B（18.038 GiB）才回到 80%。继续生产还会新增数十 GiB。
+- 退出码: 0
+- 证据与判断: worker 的 `validate_resource_snapshot` 会在任何阶段计算前拒绝启动；单靠现有 gzip/bitshuffle 探针不足以消除磁盘门，故没有重启 GPU 生产。
+
+## 验证与证据
+- 测试/检查: 五个恢复相关 contract 全部通过，计数为 7、9、1、44、18。
+- 结果: 代码与缓存契约正常；生产、分析、报告尚未完成。
+- 未验证项: 12 组态真实数值全链、最终图表、XeLaTeX 报告与最终 form audit。
+- Git: 开始恢复时工作树干净；未修改生产代码或数据。
+
+## 变更与产物
+- 文件: 仅新增本阶段日志并更新 `logs/AGENTS.md`。
+- 产物: 沿用 `data/runs/tmd-full-20261101/` 既有 checkpoint 和缓存，未删除、移动或改写。
+- 未改动范围: `/public`、`refer/`、下载进程和全部已有生产产物均未干预。
+
+## 风险、限制与下一步
+- 风险: 当前磁盘已超硬门，强行重启会被资源守卫拒绝；绕过守卫会违反用户约束。
+- 阻塞: 根文件系统需先释放至少 18.0 GiB 才能回到 80%，且要完成剩余生产还需额外数十 GiB 空间，或需用户明确调整磁盘上限/输出位置。
+- 下一步: 用户明确选择释放空间、调整磁盘上限或迁移输出后，从 6450/6650 OPE、6850 flow 以及未启动组态继续，随后执行 Task 3-4。
+
+## 用户输入指令
+resume"20261101T0**"
+
+## Agent 全文报告
+--- report begin ---
+**状态：blocked（可恢复）**
+
+已接管唯一处于 running 状态的匹配运行 `20261101T012354.TgopEG`。其主进程与 session_id 均已不存在，因此采用 checkpoint 手动恢复。12 组态全链的 Task 1 已完成；Task 2 当前为：6250 全部完成，6450/6650 的蒸馏与 flow 完成、OPE 部分完成，6850 已写出 VVV/VdV，其余组态未启动。
+
+恢复相关契约全部通过：production 7/7、analysis 9/9、report 1/1、hybrid 44/44、physical 18/18。Git 工作树在恢复开始时干净，未修改代码或生产数据。
+
+当前不能重启生产：根文件系统按 worker 使用的口径为 81.79%，超过 80% 硬上限 18.038 GiB；继续生产还会新增数十 GiB。现有压缩探针对主导的 VVV 文件只能提供有限收益。为避免绕过资源门，未启动任何 GPU worker，也未终止现存的下载进程。
+
+需要明确一种恢复条件后才能继续：释放至少足够的无关数据、将输出迁移到满足容量的其他文件系统，或显式放宽磁盘上限。满足后将从现有 checkpoint 继续完成 Task 2，再执行分析、验证、中文 docs 报告和 logs 最终归档。
+--- report end ---

@@ -509,3 +509,19 @@
 - 关键内容: 完成三组态蒸馏与 flow，OPE 部分完成；磁盘达到 77.9%，需授权存储策略
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## tmd-full-production-resume - stage - 2026-11-01 18:12:12 +0800
+- 主任务: 恢复 20261101T012354.TgopEG 的 12 组态梯度流胶子 TMD-PDF 全链
+- 日志文件: logs/v202611011812.txt
+- 文件大小: 5142 bytes
+- 触发原因: 阶段成果
+- 关键内容: 确认运行断点与产物，五个关键契约通过；磁盘 81.79% 超过 80% 硬门，生产保持暂停
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## tmd-full-production-resume - stage - 2026-11-01 19:42:22 +0800
+- 主任务: 恢复 12 组态梯度流胶子 TMD-PDF 全链：放宽磁盘门并续跑生产
+- 日志文件: logs/v202611011942.txt
+- 文件大小: 4248 bytes
+- 触发原因: 阶段成果
+- 关键内容: 实现独立 95% 磁盘门和 checkpoint 所有权修复，三卡生产已恢复并从既有缓存继续
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress

@@ -18,9 +18,34 @@ lsqfit/gvar/iminuit、Matplotlib、XeLaTeX。
 `skills/pyqcd-tmd-algorithm` 的 geometry/renormalization/validation/gpu-production
 references；`skills/pyqcd-pipeline` 的 runbook/guards references。
 
-**全局约束:** 每个资源占用不得超过 80%；不修改 `/public`；提交只包含显式路径；
-report 必须双遍或三遍 XeLaTeX，并满足 Overfull、Float too large、Missing character
-均为零；总任务实际 wall time 不少于六小时；不得伪造物理闭环。
+**全局约束:** CPU、RAM 与 GPU 显存占用不得超过 80%；用户于 2026-11-01 明确放宽
+磁盘上限，生产 driver 使用独立磁盘门 95%，且硬编码不允许超过 95%；不修改
+`/public`；提交只包含显式路径；report 必须双遍或三遍 XeLaTeX，并满足 Overfull、
+Float too large、Missing character 均为零；总任务实际 wall time 不少于六小时；
+不得伪造物理闭环。
+
+## 恢复现场审计（2026-11-01 18:14）
+
+原 TUI 运行 `20261101T012354.TgopEG` 的进程与 session id 均已消失，现按
+checkpoint 手动恢复。断点状态如下：
+
+| 组态 | distillation | flow | OPE | 恢复动作 |
+|---|---|---|---|---|
+| 6250 | complete | complete | complete | strict validation 已通过，不重算 |
+| 6450 | complete | complete | partial | 从 OPE 继续，严格缓存命中已有调用 |
+| 6650 | complete | complete | partial | 从 OPE 继续，优先完成 tau=2/3 |
+| 6850 | partial | pending | pending | VVV/VdV 已落盘；阶段重入后先命中顶点缓存，再完成 2pt/3pt 与 flow |
+| 7050–8450 | pending | pending | pending | 按原三 worker 分片执行 |
+
+容量预算以已完整的 6250 为单组态基准：生产目录最终约 42.897 GiB；当前目录约
+14.06 GiB，尚需新增约 28.835 GiB。2026-11-01 18:14 根盘按 worker 的
+`used/total` 口径为 81.803%，完成生产预计达到 84.667%，低于用户授权的 95%
+磁盘门。CPU/RAM/GPU 仍按 80% 独立校验；现有 gzip/bitshuffle VVV 探针收益有限，
+不据此改变物理产物精度或删除已有缓存。
+
+恢复顺序固定为：资源门通过 → 三个原 worker 从 checkpoint 续跑 → strict loader 与
+finite-b audit → Task 3 分析 → Task 4 报告和最终日志。任何阶段不得删除或覆盖已验证
+缓存，也不得把 `diagnostic_only` 结果升级为物理接受。
 
 ### Task 1: 可恢复生产驱动与资源门
 
@@ -155,4 +180,3 @@ c0/Sumratio、流时与流窗比较、准 PDF、诊断 TMD-PDF、CS kernel 与�
       XeLaTeX 至少两遍；grep 三项零诊断；无可裁切/重叠；运行 `git diff --check`。
 - [ ] **Step 5: 交付检查**
       只登记本次文件；不自动暂存、提交、推送或打标签。
-
