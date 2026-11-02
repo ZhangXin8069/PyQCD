@@ -9,6 +9,19 @@ import numpy as np
 
 
 class TmdFullAnalysisContract(unittest.TestCase):
+    def test_formal_analysis_requires_all_twelve_configurations(self):
+        from pyqcd.testing.tmd.analyze_full_production import (
+            CONF_IDS, _validate_analysis_conf_ids,
+        )
+
+        self.assertEqual(
+            _validate_analysis_conf_ids(CONF_IDS), tuple(CONF_IDS))
+        with self.assertRaisesRegex(ValueError, '12'):
+            _validate_analysis_conf_ids(CONF_IDS[:-1])
+        self.assertEqual(
+            _validate_analysis_conf_ids(
+                CONF_IDS[:-1], allow_partial=True), tuple(CONF_IDS[:-1]))
+
     def test_direction_momentum_map_matches_flow_geometry(self):
         from pyqcd.testing.tmd.analyze_full_production import (
             DIRECTION_MOMENTUM,
@@ -110,6 +123,24 @@ class TmdFullAnalysisContract(unittest.TestCase):
         np.testing.assert_allclose(
             result, np.broadcast_to(expected[:, None, None], result.shape))
 
+    def test_effective_mass_uses_physical_time_axis(self):
+        from pyqcd.testing.tmd.analyze_full_production import (
+            ALttc, FM2GEV, _effective_mass_samples, _effective_mass_times,
+        )
+
+        n_time = 24
+        mass_lattice = 0.17
+        time = np.arange(n_time, dtype=np.float64)
+        correlator = np.exp(-mass_lattice * time)
+        samples = np.broadcast_to(correlator, (4, n_time))
+        mass = _effective_mass_samples(samples)
+        np.testing.assert_allclose(
+            mass, mass_lattice * FM2GEV / ALttc, rtol=2e-13, atol=0.0)
+        times = _effective_mass_times(n_time)
+        np.testing.assert_array_equal(times, np.arange(1, n_time - 1))
+        window_indices = np.flatnonzero((times >= 5) & (times < 8))
+        np.testing.assert_array_equal(window_indices, [4, 5, 6])
+
     def test_safe_self_renormalization_is_per_b_and_keeps_nan_columns(self):
         from pyqcd.testing.tmd.analyze_full_production import (
             safe_self_renormalize,
@@ -169,6 +200,28 @@ class TmdFullAnalysisContract(unittest.TestCase):
         np.testing.assert_array_equal(
             expanded[3, :4], np.moveaxis(values[:, :, 1, :4], -1, 0))
 
+    def test_sumratio_inputs_keep_sample_and_insertion_axes(self):
+        from pyqcd.testing.tmd.analyze_full_production import (
+            TSEPS, expand_sumratio_inputs,
+        )
+
+        shape = (4, 3, 2, len(TSEPS), max(TSEPS) + 1)
+        samples = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+        selected = {'samples': samples, 'ratio': samples[0].copy()}
+        expanded_samples, expanded_original = expand_sumratio_inputs(selected)
+        self.assertEqual(
+            expanded_samples.shape,
+            (shape[0], max(TSEPS) + 1, max(TSEPS) + 1, shape[1], shape[2]))
+        self.assertEqual(
+            expanded_original.shape,
+            (max(TSEPS) + 1, max(TSEPS) + 1, shape[1], shape[2]))
+        np.testing.assert_array_equal(
+            expanded_samples[0, 7, 2, 1, 1],
+            samples[0, 1, 1, TSEPS.index(7), 2])
+        np.testing.assert_array_equal(
+            expanded_original[7, 2, 1, 1],
+            samples[0, 1, 1, TSEPS.index(7), 2])
+
     def test_lattice_only_status_never_promotes_physical_acceptance(self):
         from pyqcd.testing.tmd.analyze_full_production import (
             make_lattice_only_status,
@@ -189,6 +242,60 @@ class TmdFullAnalysisContract(unittest.TestCase):
             path = _write_npz(Path(root) / 'sample.npz', value=np.arange(3))
             self.assertTrue(path.is_file())
             self.assertFalse(list(path.parent.glob('*.tmp.npz')))
+
+    def test_artifact_manifest_excludes_governance_and_records_producer(self):
+        from pyqcd.testing.tmd.analyze_full_production import (
+            write_artifact_manifest,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            run_dir = Path(root)
+            data_path = run_dir / 'data' / 'conf6250' / 'sample.h5'
+            data_path.parent.mkdir(parents=True)
+            data_path.write_bytes(b'data')
+            result_path = run_dir / 'analysis' / 'result.json'
+            result_path.parent.mkdir(parents=True)
+            result_path.write_text('{}\n', encoding='utf-8')
+            governance = run_dir / 'analysis' / 'agents' / 'audit.md'
+            governance.parent.mkdir(parents=True)
+            governance.write_text('audit\n', encoding='utf-8')
+            manifest = write_artifact_manifest(
+                run_dir, [6250], [1.0, 2.0, 3.0])
+            paths = {entry['path']: entry for entry in manifest['entries']}
+            self.assertIn('data/conf6250/sample.h5', paths)
+            self.assertIn('analysis/result.json', paths)
+            self.assertNotIn('analysis/agents/audit.md', paths)
+            self.assertEqual(paths['data/conf6250/sample.h5']['producer'], 'production')
+            self.assertEqual(paths['analysis/result.json']['producer'], 'analysis')
+            self.assertEqual(paths['analysis/result.json']['kind'], 'json')
+
+    def test_summary_plot_helpers_write_nonempty_images(self):
+        from pyqcd.testing.tmd.analyze_full_production import (
+            _plot_spectrum_comparison, _plot_sumratio_quality,
+        )
+
+        spectrum = {
+            'nopol_P000': {
+                'energy_GeV': 1.1, 'energy_error_GeV': 0.1,
+            },
+            'nopol_P200': {
+                'energy_GeV': 1.2, 'energy_error_GeV': 0.1,
+            },
+            'pol35_P000': {
+                'energy_GeV': 1.15, 'energy_error_GeV': 0.2,
+            },
+        }
+        plateau = {
+            'tau1_z_P200': {'sumratio_quality_fraction': 0.5},
+            'tau2_z_P200': {'sumratio_quality_fraction': 0.75},
+        }
+        with tempfile.TemporaryDirectory() as root:
+            spectrum_path = Path(root) / 'spectrum.png'
+            plateau_path = Path(root) / 'sumratio.png'
+            _plot_spectrum_comparison(spectrum, spectrum_path)
+            _plot_sumratio_quality(plateau, plateau_path)
+            self.assertGreater(spectrum_path.stat().st_size, 0)
+            self.assertGreater(plateau_path.stat().st_size, 0)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,76 @@
+[日志元数据]
+日志类型: general
+生成时间: 2026-11-02 09:59:27 +0800
+批次: tmd-smear-role-clarification
+主任务: 澄清 HYP/stout/momentum smear 与 Wilson flow 在 2pt/3pt 和 OPE 中的不同角色
+触发原因: 一般记录
+摘要: 2pt/3pt 消费外部态 perambulator/eigenvector；OPE 消费独立 Wilson-flowed gauge，二者不可混为同一层
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 核对 2pt/3pt 的外部态输入
+- 目标: 判断 HYP/stout/momentum smear 是否与 2pt/3pt 无关。
+- 命令/操作: 只读检查 `run_full_production.py`、`pipeline/_steps.py`、`pipeline/_tmd9.py` 和 pipeline 配置路径。
+- 关键输出: `_run_distillation_stage` 调用 VVV/VdV、source-resolved 2pt 和 generic 2pt/3pt；这些入口没有 Wilson-flow `tau` 参数。`compute_vertices_for_config` 读取特征矢，`compute_2pt_for_config` 和 `compute_3pt_for_config` 读取 perambulator。
+- 退出码: 0
+- 证据与判断: HYP/stout 规范链接 smear 和 momentum source/sink smear 属于核子外部态/传播子输入，可能是 2pt/3pt 的必要数据；它们不是胶子 OPE 的 flowed gauge。
+
+### S2 — 核对 OPE 的独立 flowed-gauge 输入
+- 目标: 确认 Wilson flow 只替换胶子算符层的规范链接。
+- 命令/操作: 只读检查 `compute_tmd_ope_time` 与 `flow_gauge_for_config` 调用链。
+- 关键输出: `compute_tmd_ope_time` 显式接收 `tau`、`eps`，并在 cache miss 后调用 `flow_gauge_for_config`；OPE contract 绑定 `tau`、`eps`、`z/b`、方向、staple 和 flowed-gauge contract SHA。
+- 退出码: 0
+- 证据与判断: 普通非 flow OPE 不能直接用于 flow 方案；每个需要的流时必须从原始规范场生成对应 `V_tau`。
+
+### S3 — 复用边界
+- 目标: 给出外部态数据与 flowed 算符数据的组合规则。
+- 命令/操作: 仅静态代码审计，未修改生产代码、数据或 worker。
+- 关键输出: 同一外部态合同下，VVV/VdV、2pt、connected 3pt 可复用；OPE 与下游 ratio/PDF 必须按新 flow 合同重算。
+- 退出码: 0
+- 证据与判断: 当前顶点/2pt/3pt 入口不含 flow 参数；OPE 入口含 flow 参数并消费 flowed gauge。
+
+## 验证与证据
+- 测试/检查: 只读源码与调用链核对；本次未运行生产重算。
+- 结果: 外部态层与胶子算符层在代码中分离。
+- 未验证项: 当前 cache contract 没有直接对 perambulator/特征矢内容做 SHA 哈希；实际复用时仍需审计原始 gauge、特征矢、perambulator、源汇 momentum smear、动量、边界、精度和收缩约定。
+
+## 变更与产物
+- 文件: 无代码修改。
+- 产物: 本一般日志。
+- 未改动范围: 生产 worker、`/public` 输入、checkpoint、现有 VVV/VdV/2pt/3pt/OPE 缓存。
+
+## 风险、限制与下一步
+- 风险: 把 HYP/stout 或 momentum smear 当作 Wilson flow 会混用方案；反过来，误以为 2pt/3pt 不需要外部态 smear 数据也会导致传播子/外态错误。
+- 阻塞: 无。
+- 下一步: 复用前固定外部态合同；按每个 `tau` 生成 flowed gauge，再重算 OPE 与 ratio/PDF 下游。
+
+## 用户输入指令
+你说"| HYP/stout/momentum smear | 不能当作梯度流直接复用 |",那么计算2pt与3pt难道不需要与[HYP/stout/momentum smear]相关的数据吗?
+
+## Agent 全文报告
+--- report begin ---
+需要。上一句的准确含义是：**HYP/stout/momentum smear 不能替代 Wilson flow 的 \(V_\tau\)**，并不是说 2pt/3pt 不需要这些外部态数据。
+
+可以分成三层：
+
+| 层 | 数据 | 用途 |
+|---|---|---|
+| 外部态层 | 特征矢、perambulator、源/汇 momentum smear；若 Dirac 求解使用了 HYP/stout 规范链接，也属于这一层 | 生成 VVV/VdV、source-resolved 2pt、generic 2pt/3pt，描述核子外态和传播子 |
+| 胶子算符层 | 原始 gauge → Wilson flow → \(V_\tau\) | 构造 Clover/对偶场强、staple 和胶子 TMD OPE |
+| 下游层 | OPE × 外部态收缩 → \(C_3\)、ratio、c0、准 PDF/TMD-PDF | 消费前两层的结果 |
+
+因此：
+
+- **HYP/stout**：如果旧传播子、特征矢或 perambulator 是用某一组 HYP/stout 参数生成的，那么 2pt/3pt 确实需要它们；只要外部态合同完全相同，就可以复用，不能把它们当作 \(V_\tau\)。
+- **momentum smear**：它是源/汇夸克场的动量涂抹，影响 boosted 核子外态和 2pt/3pt 重叠；必须与旧数据使用完全相同的源汇 smear、动量和边界时才可复用。
+- **Wilson flow**：作用于胶子 TMD 算符的规范链接。即使外部态使用 HYP/stout/momentum smear，OPE 仍必须另外从原始规范场生成对应 `tau` 的 \(V_\tau\)。
+- **若采用“先流化整个规范场，再求解 Dirac 方程”的定义**，则外部态本身也改变，VVV/VdV、2pt、3pt 和 perambulator 都要重算。当前 PyQCD 主链不是这种定义：它复用外部态输入，只对 OPE 的胶子链接做 Wilson flow。
+
+代码依据：
+
+- [`run_full_production.py:485`](/root/PyQCD/pyqcd/testing/tmd/run_full_production.py:485) 的 distillation 阶段调用 VVV/VdV、2pt 和 3pt，没有 flow `tau` 参数。
+- [`_steps.py:792`](/root/PyQCD/pyqcd/pipeline/_steps.py:792) 的顶点计算读取特征矢；[`_steps.py:1075`](/root/PyQCD/pyqcd/pipeline/_steps.py:1075) 和 [`_steps.py:1325`](/root/PyQCD/pyqcd/pipeline/_steps.py:1325) 的 2pt/3pt 读取 perambulator。
+- [`_tmd9.py:1023`](/root/PyQCD/pyqcd/pipeline/_tmd9.py:1023) 的 OPE 入口接收 `tau`/`eps`，并在 [`_tmd9.py:1085`](/root/PyQCD/pyqcd/pipeline/_tmd9.py:1085) 调用 `flow_gauge_for_config`。
+
+所以正确说法是：**2pt/3pt 需要并可以复用相同的外部态 smear 数据；OPE 需要独立的 flowed gauge；HYP/stout/momentum smear 不能冒充 Wilson flow。** 当前缓存合同还没有直接哈希 perambulator/特征矢内容，实际迁移时仍要审计这些上游身份。
+--- report end ---

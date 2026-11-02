@@ -273,15 +273,17 @@ class TmdFullProductionContract(unittest.TestCase):
                     device='cpu',
                     stages=('flow',),
                     max_disk_fraction=0.95,
+                    worker_tag='resume-test',
                     stage_executor=lambda *_args: (_ for _ in ()).throw(
                         RuntimeError('interrupted')),
                     resource_checker=resources,
                     logger=lambda *_args: None,
                 )
-            checkpoint = root / 'workers' / 'cpu.json'
+            checkpoint = root / 'workers' / 'worker_resume-test.json'
             payload = json.loads(checkpoint.read_text(encoding='utf-8'))
             payload['pid'] = None
             payload['hostname'] = None
+            payload['worker_tag'] = None
             checkpoint.write_text(
                 json.dumps(payload), encoding='utf-8')
 
@@ -299,6 +301,7 @@ class TmdFullProductionContract(unittest.TestCase):
                 device='cpu',
                 stages=('flow',),
                 max_disk_fraction=0.95,
+                worker_tag='resume-test',
                 stage_executor=executor,
                 resource_checker=resources,
                 logger=lambda *_args: None,
@@ -306,6 +309,7 @@ class TmdFullProductionContract(unittest.TestCase):
             self.assertEqual(observed['status'], 'running')
             self.assertEqual(observed['pid'], __import__('os').getpid())
             self.assertTrue(observed['hostname'])
+            self.assertEqual(observed['worker_tag'], 'resume-test')
             self.assertEqual(observed['max_disk_fraction'], 0.95)
             self.assertEqual(
                 observed['request_contract']['max_disk_fraction'], 0.95)

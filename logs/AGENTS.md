@@ -525,3 +525,51 @@
 - 关键内容: 实现独立 95% 磁盘门和 checkpoint 所有权修复，三卡生产已恢复并从既有缓存继续
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## resume-20261102T - stage - 2026-11-02 04:06:45 +0800
+- 主任务: 恢复匹配 20261102T* 的 agent run
+- 日志文件: logs/v202611020406.txt
+- 文件大小: 2890 bytes
+- 触发原因: 阶段成果
+- 关键内容: 匹配运行均为 stopped/finished/alive，无可恢复断点
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## tmd-full-20261101-stage1 - stage - 2026-11-02 04:41:21 +0800
+- 主任务: 6250-8450 梯度流核子胶子 PDF/TMD-PDF 全链生产与分析
+- 日志文件: logs/v202611020441.txt
+- 文件大小: 4638 bytes
+- 触发原因: 阶段成果
+- 关键内容: 生产续跑、并行审计、分析轴/报告门修复与自动收尾器已就绪
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## tmd-full-20261101-progress-0906 - stage - 2026-11-02 09:07:17 +0800
+- 主任务: 下载与梯度流胶子 TMD-PDF 全链生产进度简报
+- 日志文件: logs/v202611020907.txt
+- 文件大小: 9786 bytes
+- 触发原因: 阶段成果
+- 关键内容: 汇总两组下载任务与 12 组态生产的最新可审计进度
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## tmd-flow-reuse-qa - general - 2026-11-02 09:45:31 +0800
+- 主任务: 梯度流重整化方案的 VVV/VdV、smear、2pt、OPE 复用边界
+- 日志文件: logs/v20261102094532.txt
+- 文件大小: 5481 bytes
+- 触发原因: 一般记录
+- 关键内容: 确认蒸馏顶点和同外态关联函数可复用，flowed gauge/OPE 与下游分析必须重算
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## tmd-smear-role-clarification - general - 2026-11-02 09:59:27 +0800
+- 主任务: 澄清 HYP/stout/momentum smear 与 Wilson flow 在 2pt/3pt 和 OPE 中的不同角色
+- 日志文件: logs/v20261102095927.txt
+- 文件大小: 5910 bytes
+- 触发原因: 一般记录
+- 关键内容: 2pt/3pt 消费外部态 perambulator/eigenvector；OPE 消费独立 Wilson-flowed gauge，二者不可混为同一层
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## tmd-dependency-chains - general - 2026-11-02 10:12:37 +0800
+- 主任务: 后台汇报：胶子 TMD-PDF 全链依赖关系与 Wilson-flow/非-Wilson-flow 两条链
+- 日志文件: logs/v20261102101237.txt
+- 文件大小: 13071 bytes
+- 触发原因: 一般记录
+- 关键内容: 区分外部态、胶子算符、收缩与下游重整化层，并标明 HYP/stout/momentum-smear/Wilson-flow 的作用对象
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress

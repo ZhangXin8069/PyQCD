@@ -792,6 +792,7 @@ def run_worker(run_dir, conf_ids=CONF_IDS, *, backend='torch', device=0,
             })
         payload['request_contract'] = request_contract
         payload['request_sha256'] = request_sha256
+        payload['worker_tag'] = worker_tag
         payload['cpu_threads'] = cpu_threads
         payload['max_resource_fraction'] = max_resource_fraction
         payload['max_disk_fraction'] = max_disk_fraction

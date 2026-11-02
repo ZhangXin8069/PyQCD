@@ -1,0 +1,207 @@
+[日志元数据]
+日志类型: general
+生成时间: 2026-11-02 10:12:37 +0800
+批次: tmd-dependency-chains
+主任务: 后台汇报：胶子 TMD-PDF 全链依赖关系与 Wilson-flow/非-Wilson-flow 两条链
+触发原因: 一般记录
+摘要: 区分外部态、胶子算符、收缩与下游重整化层，并标明 HYP/stout/momentum-smear/Wilson-flow 的作用对象
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 依赖对象盘点
+- 目标: 给出 `gauge`、`eigensystem`、`light-perambulator`、`VVV/VdV`、`2pt`、`connected-3pt`、`OPE/胶子-TMD-矩阵元`、`ratio`、`c0`、`Sumratio`、`Z_R/hybrid`、`PDF/TMD-PDF` 的直接依赖。
+- 命令/操作: 只读核对 `run_full_production.py`、`pipeline/_steps.py`、`pipeline/_tmd9.py`、`operator/_gradient_flow_gluon_ope.py`、`renorm/_tmd.py`、`renorm/_tmdextract.py`、`analysis/_gradient_flow_ratio.py`、`analysis/_tmd_ratio.py`。
+- 关键输出: 外部态层由 gauge、eigensystem、perambulator 和 source/sink smear 组成；胶子算符层由 OPE 的规范链接组成；ratio 层将 OPE 与 source-resolved 2pt 结合。
+- 退出码: 0
+- 证据与判断: 当前生产将 VVV/VdV、2pt、3pt 放在 distillation 阶段，把 Wilson flow 和 OPE 放在后续独立阶段。
+
+### S2 — 作用对象判定
+- 目标: 区分 HYP、stout、momentum-smear、Wilson-flow 的操作对象。
+- 命令/操作: 检查规范链接、特征矢、perambulator、源汇和 OPE 的输入路径。
+- 关键输出: HYP/stout 作用于 Dirac/特征矢/perambulator 所用的规范链接；momentum-smear 作用于夸克源/汇场；Wilson-flow 作用于进入胶子 OPE 的规范链接。
+- 退出码: 0
+- 证据与判断: `compute_vertices_for_config` 读取特征矢，2pt/3pt 读取 perambulator；`compute_tmd_ope_time` 显式调用 `flow_gauge_for_config` 并消费 flowed gauge。
+
+### S3 — 两条链及下游分支
+- 目标: 分别写出不使用 Wilson flow 和使用 Wilson flow 的依赖链。
+- 命令/操作: 按直接输入/输出关系整理，不把 Sumratio 误写成 PDF 的必经节点，不把 connected-3pt 误写成胶子 OPE 三点。
+- 关键输出: 非-flow 链使用 `U_OPE=U0` 或声明的 HYP/stout 链接；flow 链使用 `V_tau=WilsonFlow[U0]`。两条链共享外部态和 ratio/c0 结构，但 OPE 及其下游必须匹配各自规范链接。
+- 退出码: 0
+- 证据与判断: 当前代码中外部态入口不含 flow `tau`，OPE 入口含 `tau/eps` 与 flow contract。
+
+## 验证与证据
+- 测试/检查: 只读源码与调用链核对；未启动生产重算，未修改生产缓存。
+- 结果: 依赖层级、作用对象和两条链已在全文报告中给出。
+- 未验证项: 具体旧 perambulator/特征矢是否使用 HYP/stout 及其参数，需要按原始数据 provenance 单独审计；当前 cache contract 未直接哈希这些上游内容。
+
+## 变更与产物
+- 文件: 无代码修改。
+- 产物: 本一般日志。
+- 未改动范围: 生产 worker、`/public` 输入、checkpoint、VVV/VdV/2pt/3pt/OPE 缓存。
+
+## 风险、限制与下一步
+- 风险: 把外部态 HYP/stout/momentum-smear 当成 flowed gauge，或把 connected-3pt 当成胶子 TMD 三点，都会导致物理链错层。
+- 阻塞: 无。
+- 下一步: 若迁移旧外部态，先审计 eigensystem/perambulator provenance，再按目标方案选择非-flow 或 flow 的 OPE 分支。
+
+## 用户输入指令
+后台汇报(只保存到日志):指明[gauge、eigensystem、light-perambulator、VVV/VdV、2pt、connected-3pt、OPE/胶子-TMD-矩阵元、ratio、c0、Sumratio、Z_R/hybrid、PDF/TMD-PDF]直接的依赖关系,并且指明[HYP/stout/momentum-smear/Wilson-flow]的作用对象,使用Wilson-flow和不使用Wilson-flow的分别给出两个依赖链[都在对应部分指明'作用对象']
+
+## Agent 全文报告
+--- report begin ---
+# 胶子 TMD-PDF 全链依赖关系与作用对象
+
+## 1. 记号与分层
+
+令：
+
+- `U0` 为原始规范链接。
+- `U_ext` 为核子外部态 Dirac 求解实际使用的规范链接。若未使用 HYP/stout，则 `U_ext=U0`。
+- `V_tau = WilsonFlow(U0; tau, eps)` 为 Wilson-flowed gauge。
+- `E` 为 Dirac 特征矢/eigensystem。
+- `P` 为 light perambulator。
+- `S_mom` 为源/汇 momentum-smear 操作及其参数。
+- `O` 为胶子 TMD OPE 算符；`O_nonflow` 使用非-flow 规范链接，`O_flow` 使用 `V_tau`。
+- `C2` 为 source-resolved 核子两点函数；`C3_ext` 为 connected 3pt 控制道；`C3_g` 为胶子 OPE 与外部态收缩得到的 disconnected 胶子三点。
+
+需要先固定两个边界：
+
+1. `C3_ext` 是普通的 connected 3pt 控制道，不是胶子 TMD 的 disconnected 三点。
+2. `O` 本身是裸的 flowed/non-flowed 胶子算符矩阵元候选；只有与 `C2`/外部 loop 结合后，才进入 `C3_g` 和 ratio 链。
+
+## 2. 直接依赖表
+
+| 对象 | 直接依赖 | 直接输出/用途 | 作用对象与边界 |
+|---|---|---|---|
+| `gauge` | 原始组态 `U0` | `U_ext`、`V_tau`、OPE 输入 | HYP/stout 若使用，作用于 `U0` 生成 `U_ext`；Wilson-flow 作用于 `U0` 生成 `V_tau` |
+| `eigensystem` | `U_ext`、Dirac 算符、边界、格点几何 | 特征矢 `E` | 依赖外部态 Dirac 约定；不由 Wilson-flow 自动替代 |
+| `light-perambulator` | `U_ext`、`E`、源/汇、`S_mom`、边界、精度 | `P` | momentum-smear 作用于夸克源/汇场；HYP/stout 通过 `U_ext` 间接影响 `P` |
+| `VVV/VdV` | `E`、动量、`NEV/NEV1`、精度、收缩约定 | 2pt/3pt 的蒸馏顶点 | 当前入口不消费 `tau`；若 `E` 或外部态改变，必须重算 |
+| `2pt` | `P`、`VVV/VdV`、插值算符、投影、动量、边界 | `C2`，包括 source-resolved `nopol/pol35` | 不直接消费 Wilson-flow `tau`；它是 ratio 的分母和平台/谱学输入 |
+| `connected-3pt` | `P`、`VVV/VdV`、流算符、投影、`t_sep`、动量 | `C3_ext` 控制道 | 是外态/传播子控制量，不是胶子 OPE 的 disconnected `C3_g` |
+| `OPE/胶子-TMD-矩阵元` | `U_OPE`、`tau`（若 flow）、`eps`、`z/b`、方向、staple、Clover/对偶场强、颜色归一化 | `O_nonflow` 或 `O_flow` | HYP/stout 只能作为明确声明的 `U_OPE` 选择；Wilson-flow 只通过 `V_tau` 进入该层 |
+| `ratio` | `O`、`C2`、外部 loop/共享组态索引、`tsep`、复数分母约定 | 逐组态/逐样本的 `R` | `O` 与 `C2` 必须来自同一组态顺序和同一外部态合同 |
+| `c0` | `ratio`、`tsep` 窗、删一组态样本、平台/质量门 | `c0(z,b,tau)` 样本与均值 | 是裸的/条件性的平台矩阵元候选，不是最终物理 TMD |
+| `Sumratio` | `ratio`、`tsep` 窗、AIC/质量门 | 平台稳定性/可识别性诊断 | 是 ratio 的诊断分支，不是 `Z_R/hybrid` 或 PDF 的必经主链节点 |
+| `Z_R/hybrid` | `c0`/`hB`、短距比值、`Z_R` 参数化、soft/rapidity、多尺度/多格距输入 | `h_R` 或 hybrid 矩阵元 | 当前单系综/单格距数据不能识别完整 `Z_R` 物理参数；soft/rapidity 不能由 flow 自动替代 |
+| `PDF/TMD-PDF` | `c0`/`h_R`、Fourier 变换、`x/z` 支撑、soft/rapidity、matching/方案转换、连续极限 | 准 PDF/TMD-PDF 或物理 TMD-PDF | 当前任务跳过非格点 matching；只能交付 `diagnostic_only` 的准量，除非软/快度、混合、匹配和多尺度门全部补齐 |
+
+补充：`Z_R/hybrid` 不是 `Sumratio` 的简单下游。`Sumratio` 用于判断 ratio 平台是否稳定；`Z_R/hybrid` 消费的是通过质量门的 `c0`/`hB` 和明确的软/快度/尺度输入。
+
+## 3. 四个操作的作用对象
+
+### 3.1 HYP
+
+- 作用对象：用于 Dirac 求解、特征矢和 perambulator 生成的规范链接 `U_ext`。
+- 影响：`U_ext -> E -> P -> VVV/VdV、2pt、connected-3pt`。
+- 若 HYP 仅用于外部态，而 OPE 使用原始 thin-link，则它是外部态层的 HYP，不是 OPE 的 flowed gauge。
+- 若 OPE 也声明使用 HYP 链接，则必须把 `U_OPE=U_HYP` 写入 OPE contract；不能把它标成 Wilson-flow 结果。
+
+### 3.2 stout
+
+- 作用对象：与 HYP 同属规范链接平滑，通常用于 Dirac/特征矢/perambulator 的 `U_ext`。
+- 影响：`U_ext -> E -> P -> VVV/VdV、2pt、connected-3pt`。
+- stout 参数属于外部态身份；不同 stout 参数不能共用同一 `P`、`E` 或 2pt/3pt。
+- stout 不等于 Wilson flow，不能用 stout 迭代次数替代 `tau=t/a^2`。
+
+### 3.3 momentum-smear
+
+- 作用对象：夸克源/汇场，不是规范链接，也不是 flowed gauge。
+- 影响：`S_mom + U_ext + E -> P`，进而影响 boosted 核子 2pt/connected-3pt 的外态重叠。
+- 复用条件：源/汇类型、动量、smear 参数、边界、Dirac 约定和 perambulator 完全一致。
+- momentum-smear 不应进入 OPE 的 `V_tau` contract；它属于外部态层。
+
+### 3.4 Wilson-flow
+
+- 作用对象：进入胶子 TMD OPE 的规范链接；当前 PyQCD 主链为 `V_tau = WilsonFlow(U0; tau, eps)`。
+- 影响：`V_tau -> O_flow -> C3_g -> ratio -> c0 -> PDF/TMD-PDF`。
+- 当前主链不把 `V_tau` 自动送入 `E`/`P`，所以普通 2pt/connected-3pt 不因 `tau` 自动改变。
+- 若采用“先流化整个规范场，再求解 Dirac”的变体，则 `V_tau` 也作用于外部态，必须重算 `E、P、VVV/VdV、2pt、connected-3pt`。这是与当前主链不同的方案。
+
+## 4. 不使用 Wilson flow 的依赖链
+
+```text
+U0
+  -> [可选 HYP/stout] -> U_ext
+  -> U_ext -> E
+  -> U_ext + E + [momentum-smear on source/sink] -> P
+  -> E -> VVV/VdV
+  -> P + VVV/VdV -> C2 / C3_ext
+
+U_OPE = U0 或明确声明的 U_HYP/U_stout
+  -> O_nonflow
+  -> O_nonflow + C2/外部 loop -> C3_g
+  -> C2 + C3_g -> ratio
+  -> ratio -> c0
+  -> ratio -> Sumratio (质量/平台诊断分支)
+  -> c0/hB + [soft/rapidity/multi-scale] -> Z_R/hybrid -> h_R
+  -> c0/h_R + Fourier + [matching/soft/rapidity] -> PDF/TMD-PDF
+```
+
+作用对象标注：
+
+- HYP/stout：`U0 -> U_ext`，作用于外部态 Dirac/特征矢/perambulator 所用的规范链接。
+- momentum-smear：作用于源/汇夸克场，进入 `P` 和 2pt/connected-3pt。
+- 非-flow OPE：作用于 `U_OPE=U0` 或明确声明的 `U_HYP/U_stout` 规范链接。
+- 这条链中的 `ratio/c0` 是非-flow OPE 的下游，不能直接套到 `V_tau` 的 flow OPE 上。
+
+## 5. 使用 Wilson flow 的依赖链
+
+```text
+U0
+  -> V_tau = WilsonFlow(U0; tau, eps)
+  -> V_tau -> O_flow
+
+U0
+  -> [可选 HYP/stout] -> U_ext
+  -> U_ext -> E
+  -> U_ext + E + [momentum-smear on source/sink] -> P
+  -> E -> VVV/VdV
+  -> P + VVV/VdV -> C2 / C3_ext
+
+O_flow + C2/外部 loop -> C3_g(tau)
+  -> C2 + C3_g(tau) -> ratio(tau)
+  -> ratio(tau) -> c0(tau)
+  -> ratio(tau) -> Sumratio(tau) (质量/平台诊断分支)
+  -> c0(tau)/hB(tau) + [soft/rapidity/multi-scale] -> Z_R/hybrid -> h_R(tau)
+  -> c0(tau)/h_R(tau) + Fourier + [matching/soft/rapidity] -> PDF/TMD-PDF(tau)
+```
+
+作用对象标注：
+
+- Wilson-flow：`U0 -> V_tau`，只作用于进入胶子 OPE 的规范链接；每个 `tau` 对应独立的 OPE contract。
+- HYP/stout：若存在，只通过 `U0 -> U_ext` 进入外部态 `E/P`；不能把 `U_ext` 当作 `V_tau`。
+- momentum-smear：只作用于源/汇夸克场，进入 `P` 和 2pt/connected-3pt；不进入 OPE 的 flowed-gauge contract。
+- `O_flow` 及其下游 `ratio(tau)、c0(tau)、h_R(tau)、PDF/TMD-PDF(tau)` 必须使用同一 `tau/eps/几何/staple/精度` 身份。
+
+如果采用“全流化外部态”变体，则应改写为：
+
+```text
+U0 -> V_tau
+V_tau -> E_flow
+V_tau + E_flow + momentum-smear -> P_flow
+E_flow -> VVV/VdV_flow
+P_flow + VVV/VdV_flow -> C2_flow / C3_ext_flow
+V_tau -> O_flow
+O_flow + C2_flow/外部 loop -> C3_g(tau) -> ratio(tau) -> ...
+```
+
+该变体不是当前 PyQCD 主链；采用它时，VVV/VdV、2pt、connected-3pt 不能沿用旧的非-flow 外部态缓存。
+
+## 6. 当前任务的状态边界
+
+当前 6250–8450 目标链的准确定位是：
+
+- 已完成/正在完成：`U0 -> V_tau -> O_flow`、外部态 `E/P -> VVV/VdV、C2、C3_ext`、以及 `O_flow` 与外部态的 ratio/c0 诊断。
+- `Sumratio`：作为 ratio 平台稳定性诊断，不替代 `c0`，也不直接进入 PDF。
+- `Z_R/hybrid`：接口存在，但单格距、单系综、缺 soft/rapidity 和完整混合输入时只能保留 `not_identifiable`/`diagnostic_only`。
+- `PDF/TMD-PDF`：Fourier/准量诊断可以生成；物理 TMD-PDF 仍要求 soft/rapidity、完整混合/匹配和多尺度极限。
+- 当前状态必须保持 `diagnostic_only`、`physical_acceptance=false`，不能把 `O_flow`、`ratio` 或 `c0` 直接命名为物理 TMD-PDF。
+
+## 7. 结论
+
+1. HYP/stout 和 momentum-smear 不是“与 2pt/3pt 无关的数据”；它们属于外部态层，可能是 2pt/3pt 的必要输入。
+2. Wilson-flow 是胶子 OPE 层的独立规范链接变换，不自动改变当前外部态；它的输出 `V_tau` 必须按 `tau` 重算 OPE。
+3. VVV/VdV、2pt、connected-3pt 可在相同外部态合同下复用；OPE 和其下游 ratio/c0/PDF 必须匹配所用规范链接方案。
+4. 若切换为“全流化外部态”，则外部态及其所有顶点/关联函数都要重算，不能沿用旧缓存。
+--- report end ---

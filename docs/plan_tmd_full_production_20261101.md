@@ -14,15 +14,14 @@ soft/rapidity、胶子-夸克混合和连续极限证据。
 **技术栈:** Python 3.10、PyQCD、PyTorch/CUDA、CuPy、h5py、NumPy/SciPy、
 lsqfit/gvar/iminuit、Matplotlib、XeLaTeX。
 
-**规格:** 用户 2026-11-01 指令；`AGENTS.md`；`skills/pyqcd-tmd-chain`；
+**规格:** 用户 2026-11-01 与 2026-11-02 指令；`AGENTS.md`；`skills/pyqcd-tmd-chain`；
 `skills/pyqcd-tmd-algorithm` 的 geometry/renormalization/validation/gpu-production
 references；`skills/pyqcd-pipeline` 的 runbook/guards references。
 
-**全局约束:** CPU、RAM 与 GPU 显存占用不得超过 80%；用户于 2026-11-01 明确放宽
-磁盘上限，生产 driver 使用独立磁盘门 95%，且硬编码不允许超过 95%；不修改
-`/public`；提交只包含显式路径；report 必须双遍或三遍 XeLaTeX，并满足 Overfull、
-Float too large、Missing character 均为零；总任务实际 wall time 不少于六小时；
-不得伪造物理闭环。
+**全局约束:** CPU、RAM 与 GPU 显存占用不得超过 80%；磁盘不设置人为上限
+（2026-11-02 用户明确覆盖此前的 80%/95% 讨论）。不修改 `/public`；提交只包含
+显式路径；report 必须双遍或三遍 XeLaTeX，并满足 Overfull、Float too large、
+Missing character 均为零；总任务实际 wall time 不少于六小时；不得伪造物理闭环。
 
 ## 恢复现场审计（2026-11-01 18:14）
 
@@ -38,14 +37,62 @@ checkpoint 手动恢复。断点状态如下：
 | 7050–8450 | pending | pending | pending | 按原三 worker 分片执行 |
 
 容量预算以已完整的 6250 为单组态基准：生产目录最终约 42.897 GiB；当前目录约
-14.06 GiB，尚需新增约 28.835 GiB。2026-11-01 18:14 根盘按 worker 的
-`used/total` 口径为 81.803%，完成生产预计达到 84.667%，低于用户授权的 95%
-磁盘门。CPU/RAM/GPU 仍按 80% 独立校验；现有 gzip/bitshuffle VVV 探针收益有限，
-不据此改变物理产物精度或删除已有缓存。
+14.06 GiB，尚需新增约 28.835 GiB。磁盘不作为本次停止条件，但仍需在文件系统容量
+耗尽前完成原子写入与完整性校验。
 
 恢复顺序固定为：资源门通过 → 三个原 worker 从 checkpoint 续跑 → strict loader 与
 finite-b audit → Task 3 分析 → Task 4 报告和最终日志。任何阶段不得删除或覆盖已验证
 缓存，也不得把 `diagnostic_only` 结果升级为物理接受。
+
+## 资源门状态（2026-11-02 04:22）
+
+CPU、RAM 与 GPU 显存仍按 80% 门校验。三个 worker 曾因磁盘占用约 88% 被
+`SIGSTOP` 暂停；用户随后明确“硬盘不设置上限”，已用 `SIGCONT` 恢复，checkpoint、
+GPU 内存和进程状态保持不变，未删除任何数据。
+
+## 并行审计与代码加固（2026-11-02 04:36）
+
+四个并行子代理均已完成只读审计，报告保存在
+`data/runs/tmd-full-20261101/analysis/agents/`：
+
+- `production_audit.md`：258 个 HDF5 可读，已存在产物 finite/contract 检查通过；
+  审计快照生产为 `203/456` 逻辑产物，当前仍在续跑。
+- `physics_chain_audit.md`：确认当前数据集最多支持 `diagnostic_only`；soft/rapidity、
+  胶子--夸克混合、完整 matching 和连续极限必须跳过。
+- `analysis_report_plan.md`：给出完整图表/JSON/报告清单，并识别 Sumratio 轴、
+  effective-mass 时间轴、manifest provenance 与报告 fail-open 风险。
+- `verification_audit.md`：CPU-only 契约审计，最终工作树聚合为 124/124 通过。
+
+已在主工作树完成并验证以下加固：
+
+1. `analyze_full_production.py` 的 Sumratio 直接消费
+   `(sample,z,b,tsep,insertion)`，新增 `expand_sumratio_inputs()` 并加入微型回归测试。
+2. effective-mass 使用物理中心时间 `t=1..Nt-2`，平台窗、NPZ 和图的横轴统一；
+   新增解析指数恢复测试。
+3. 正式分析默认强制 12 个目标组态；部分运行必须显式 `--allow-partial`。
+4. `build_full_report.py` 对缺失/空图像、缺失 JSON、非完整组态和非 `diagnostic_only`
+   状态 fail-closed；报告中的组态数和 worker 数从分析 JSON 派生。
+
+回归结果：`_tmd_full_analysis_contract` 12/12、`_tmd_full_report_contract` 3/3、
+`_tmd_full_production_contract` 11/11 通过。
+
+## 自动收尾器（2026-11-02）
+
+`data/runs/tmd-full-20261101/run_finalize.sh` 已通过 `bash -n`、dry-run 和独立
+`setsid` 启动验证。它等待 12 个组态目录、12 份 flow history 和三个 active worker
+checkpoint 全部 complete，并强制总任务至少运行到 2026-11-02 10:09:49 +0800。
+随后按顺序执行全量 `python -m pyqcd.testing`、full analysis、strict
+`verify_full_production`、中文 TeX/Markdown 报告生成、三遍 XeLaTeX、三零检查、
+final `log` 归档和 `git diff --check`。收尾器只写运行目录、`docs/` 与 `logs/`，
+不删除生产数据、不自动提交或推送。
+
+### 指令再次确认（2026-11-02 05:23）
+
+用户再次确认原始范围：使用 `6250–8450` 全组态，完成 VVV/VdV、2pt、3pt、梯度流、
+裸/重整化矩阵元、ratio、准 PDF 和诊断 TMD-PDF 的生产与分析，并输出 effective-mass、
+平台拟合及物理量图表到 `docs/`、日志到 `logs/`。CPU、RAM、GPU 显存继续按 80% 门；
+磁盘按用户后续明确指令不设人为上限；非格点 matching 自动跳过。不得因任务长或局部
+结果可用而缩小范围；最终物理状态仍为 `diagnostic_only`、`physical_acceptance=false`。
 
 ### Task 1: 可恢复生产驱动与资源门
 

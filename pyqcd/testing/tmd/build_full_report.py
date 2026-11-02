@@ -8,6 +8,11 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+EXPECTED_CONF_IDS = (
+    6250, 6450, 6650, 6850, 7050, 7250,
+    7450, 7650, 7850, 8050, 8250, 8450,
+)
+EXPECTED_TAU_VALUES = (1.0, 2.0, 3.0)
 
 
 def _load_json(path, default=None):
@@ -124,10 +129,31 @@ def _worker_rows(run_dir):
     return rows
 
 
+def _validate_report_summary(summary):
+    if summary.get('status') != 'diagnostic_only':
+        raise ValueError('正式报告要求 analysis status=diagnostic_only')
+    if summary.get('physical_acceptance') is not False:
+        raise ValueError('正式报告要求 physical_acceptance=false')
+    conf_ids = tuple(int(value) for value in summary.get('conf_ids', ()))
+    if conf_ids != EXPECTED_CONF_IDS:
+        raise ValueError('正式报告必须按目标顺序覆盖 12 个组态')
+    tau_values = tuple(float(value) for value in summary.get('tau_values', ()))
+    if tau_values != EXPECTED_TAU_VALUES:
+        raise ValueError('正式报告要求 tau_values=1,2,3')
+    return conf_ids, tau_values
+
+
+def _validate_report_inputs(workers, manifest):
+    if not workers:
+        raise ValueError('正式报告没有 complete worker checkpoint')
+    if int(manifest.get('file_count', 0)) <= 0:
+        raise ValueError('artifact_manifest 必须列出非空产物')
+
+
 def _worker_table(run_dir):
     rows = _worker_rows(run_dir)
     lines = [
-        r'\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.16\linewidth} l l X l@{}}',
+        r'\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.16\linewidth} l l >{\raggedright\arraybackslash}X l@{}}',
         r'\toprule',
         r'worker & backend/device & 状态 & 组态 & 完成时间 \\',
         r'\midrule',
@@ -137,7 +163,7 @@ def _worker_table(run_dir):
             f"{_tex_escape(item['worker'])} & "
             f"{_tex_escape(item['backend'])}/{_tex_escape(item['device'])} & "
             f"{_tex_escape(item['status'])} & "
-            f"{_tex_escape(','.join(map(str, item['conf_ids'])))} & "
+            f"{_tex_escape(', '.join(map(str, item['conf_ids'])))} & "
             f"{_tex_escape(str(item['finished'])[:19])} \\\\")
     lines.extend([r'\bottomrule', r'\end{tabularx}'])
     return '\n'.join(lines)
@@ -145,11 +171,8 @@ def _worker_table(run_dir):
 
 def _figure(path, caption, width=0.88):
     path = Path(path)
-    if not path.is_file():
-        return (
-            r'\begin{block}{图像不可用}'
-            + _path_text(path)
-            + r'\end{block}')
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise FileNotFoundError(f'正式报告缺少非空图像: {path}')
     return (
         rf'\includegraphics[width={width:.2f}\linewidth,'
         rf'height=0.62\textheight,keepaspectratio]'
@@ -172,7 +195,8 @@ def _frame(title, body, source=None, plain=False):
     )
 
 
-def _summary_markdown(summary, workers, resources, manifest, status):
+def _summary_markdown(summary, workers, resources, manifest, status,
+                      spectrum=None, plateau=None):
     lines = [
         '# 梯度流核子胶子 TMD-PDF 全链计算结果',
         '',
@@ -184,9 +208,10 @@ def _summary_markdown(summary, workers, resources, manifest, status):
         '',
         '## 结论摘要',
         '',
-        f"本次运行完成了 {len(summary.get('conf_ids', []))} 组态蒸馏顶点、"
+        f"本次运行产出了 {len(summary.get('conf_ids', []))} 组态蒸馏顶点、"
         '双极化 2pt、连接 3pt、三流时 Wilson flow、'
-        '三方向有限横距 OPE、二维 staircase OPE、ratio、平台矩阵元与格点端准 PDF/TMD-PDF。',
+        '三方向有限横距 OPE、二维 staircase OPE、ratio 与平台诊断；'
+        f"格点端准 PDF/TMD-PDF 诊断产物数为 {summary.get('n_pdf', 0)}。",
         '由于缺少 soft/rapidity、胶子-夸克混合和连续极限，结果不能升级为物理光锥 TMD-PDF。',
         '',
         '## 计算与资源',
@@ -205,6 +230,36 @@ def _summary_markdown(summary, workers, resources, manifest, status):
         f"- PDF/TMD-PDF 产物数：{summary.get('n_pdf', 0)}",
         f"- 汇总文件：`analysis/analysis_summary.json`",
         '',
+    ]
+    if spectrum:
+        lines.extend([
+            '## 谱学平台',
+            '',
+            '| 通道 | E [GeV] | 误差 [GeV] | 平台窗 [t/a] | 状态 |',
+            '|---|---:|---:|---|---|',
+        ])
+        for key, item in sorted(spectrum.items()):
+            lines.append(
+                f"| `{key}` | {_fmt(item.get('energy_GeV'))} | "
+                f"{_fmt(item.get('energy_error_GeV'))} | "
+                f"`{item.get('plateau_window', [])}` | "
+                f"`{item.get('energy_status', 'unavailable')}` |")
+        lines.append('')
+    if plateau:
+        lines.extend([
+            '## 平台质量',
+            '',
+            '| 通道 | 主窗可识别率 | Sumratio 质量率 | 主窗 |',
+            '|---|---:|---:|---|',
+        ])
+        for key, item in sorted(plateau.items()):
+            lines.append(
+                f"| `{key}` | "
+                f"{_fmt(item.get('primary_identifiable_fraction'))} | "
+                f"{_fmt(item.get('sumratio_quality_fraction'))} | "
+                f"`{item.get('primary_window', [])}` |")
+        lines.append('')
+    lines.extend([
         '## 风险与未验证项',
         '',
         '- 未执行微扰 light-cone matching。',
@@ -215,7 +270,7 @@ def _summary_markdown(summary, workers, resources, manifest, status):
         '## 状态',
         '',
         f"- `status={status}`",
-    ]
+    ])
     return '\n'.join(lines) + '\n'
 
 
@@ -225,18 +280,39 @@ def build_report(run_dir, tex_path, summary_path):
     summary = _load_json(analysis_dir / 'analysis_summary.json')
     if summary is None:
         raise FileNotFoundError('缺少 analysis/analysis_summary.json')
-    spectrum = _load_json(analysis_dir / 'spectrum' / 'spectrum_summary.json', {})
-    plateau = _load_json(analysis_dir / 'plateaus' / 'plateau_summary.json', {})
-    flow_windows = _load_json(
-        analysis_dir / 'flow_windows' / 'flow_window_summary.json', {})
-    budget = _load_json(analysis_dir / 'error_budget.json', {})
-    manifest = _load_json(analysis_dir / 'artifact_manifest.json', {})
-    staircase = _load_json(
-        analysis_dir / 'ratio_2d' / 'staircase_summary.json', {})
+    _validate_report_summary(summary)
+    required_json = {
+        'spectrum': analysis_dir / 'spectrum' / 'spectrum_summary.json',
+        'plateau': analysis_dir / 'plateaus' / 'plateau_summary.json',
+        'flow_windows': analysis_dir / 'flow_windows' / 'flow_window_summary.json',
+        'budget': analysis_dir / 'error_budget.json',
+        'manifest': analysis_dir / 'artifact_manifest.json',
+        'staircase': analysis_dir / 'ratio_2d' / 'staircase_summary.json',
+        'pdf': analysis_dir / 'pdf' / 'pdf_summary.json',
+    }
+    missing_json = [str(path) for path in required_json.values() if not path.is_file()]
+    if missing_json:
+        raise FileNotFoundError('正式报告缺少分析 JSON: ' + ', '.join(missing_json))
+    spectrum = _load_json(required_json['spectrum'])
+    plateau = _load_json(required_json['plateau'])
+    flow_windows = _load_json(required_json['flow_windows'])
+    budget = _load_json(required_json['budget'])
+    manifest = _load_json(required_json['manifest'])
+    staircase = _load_json(required_json['staircase'])
+    pdf_summary = _load_json(required_json['pdf'])
     resources = _resource_summary(
         run_dir / 'workers' / 'system_resources.jsonl')
     workers = _worker_rows(run_dir)
+    _validate_report_inputs(workers, manifest)
     status = summary.get('status', 'diagnostic_only')
+    conf_ids = [int(value) for value in summary['conf_ids']]
+    conf_count = len(conf_ids)
+    split = (conf_count + 1) // 2
+    conf_rows = rf'组态 1 & {", ".join(map(str, conf_ids[:split]))} \\ '
+    if conf_ids[split:]:
+        conf_rows += '\n' + rf'组态 2 & {", ".join(map(str, conf_ids[split:]))} \\ '
+    tau_values = [float(value) for value in summary['tau_values']]
+    tau_text = ','.join(f'{value:g}' for value in tau_values)
 
     source_map = [
         ('Wilson flow RK3', 'pyqcd/renorm/_gradient_flow.py',
@@ -316,17 +392,17 @@ def build_report(run_dir, tex_path, summary_path):
 
     frames = []
     frames.append(_frame(
-        '梯度流重整化核子胶子 TMD-PDF：12 组态全链完成，但物理接受仍未闭合',
+        f'梯度流重整化核子胶子 TMD-PDF：{conf_count} 组态全链完成，但物理接受仍未闭合',
         r'\centering\begin{minipage}{0.86\linewidth}\centering'
         r'{\Large\bfseries PyQCD 真实数据计算结果}\par\vspace{0.7em}'
-        r'12 configurations \quad $\tau/a^2=1,2,3$ \quad '
+        rf'{conf_count} configurations \quad $\tau/a^2={tau_text}$ \quad '
         r'$z/a=0\ldots12$ \quad $b/a=0\ldots6$\par\vspace{1em}'
         rf'\textcolor{{warning}}{{状态：{_tex_escape(status)}；'
         r'physical\_acceptance=false}\end{minipage}',
         plain=True,
     ))
     frames.append(_frame(
-        '结论先行：完整格点链已产出，但只能作为诊断性 TMD-PDF',
+        '结论先行：格点数据链已产出，但只能作为诊断性 TMD-PDF',
         r'\begin{columns}[T,totalwidth=\textwidth]' + '\n'
         r'\begin{column}{0.32\textwidth}\begin{block}{已完成}'
         rf'{summary.get("n_ratio_1d", 0)} 个 1D ratio、'
@@ -334,7 +410,7 @@ def build_report(run_dir, tex_path, summary_path):
         rf'{summary.get("n_pdf", 0)} 个 PDF/TMD-PDF 产出。'
         r'\end{block}\end{column}' + '\n'
         r'\begin{column}{0.32\textwidth}\begin{block}{最强证据}'
-        rf'12/12 组态、{manifest.get("file_count", 0)} 个数据文件；'
+        rf'{conf_count}/{conf_count} 组态、{manifest.get("file_count", 0)} 个数据文件；'
         rf'总字节 {manifest.get("total_bytes", 0)}。'
         r'\end{block}\end{column}' + '\n'
         r'\begin{column}{0.32\textwidth}\begin{block}{未闭合}'
@@ -346,7 +422,7 @@ def build_report(run_dir, tex_path, summary_path):
         '验收标准区分“数据链完整”与“物理方案闭合”',
         r'\small\begin{tabularx}{\linewidth}{@{}l X l@{}}'
         r'\toprule 层级 & 本次证据 & 状态 \\ \midrule '
-        r'输入与缓存 & 12 组原始 gauge/eigen/peram 与 canonical HDF5 全链 & 确证 \\ '
+        rf'输入与缓存 & {conf_count} 组原始 gauge/eigen/peram 与 canonical HDF5 全链 & 确证 \\ '
         r'统计与图表 & 1D/2D ratio、JK、平台、Fourier、CS 与误差账本 & 确证 \\ '
         r'soft/rapidity & 无同几何测量 & 未验证 \\ '
         r'微扰 matching & 按要求跳过非格点 matching & 不适用 \\ '
@@ -374,11 +450,12 @@ def build_report(run_dir, tex_path, summary_path):
             'def _run_ope_stage'),
     ))
     frames.append(_frame(
-        '输入严格绑定 12 个目标组态、三流时和三方向位移网格',
+        f'输入严格绑定 {conf_count} 个目标组态、三流时和三方向位移网格',
         r'\small\begin{tabularx}{\linewidth}{@{}l X@{}}'
         r'\toprule 参数 & 设置 \\ \midrule '
-        r'组态 & 6250, 6450, 6650, 6850, 7050, 7250, 7450, 7650, 7850, 8050, 8250, 8450 \\ '
-        r'格点 & $24^3\times72$, $a=0.1053$ fm \\ '
+        + conf_rows
+        + '\n'
+        + r'格点 & $24^3\times72$, $a=0.1053$ fm \\ '
         r'动量 & P000, P200, P020, P002, P400 \\ '
         r'流时/步长 & $\tau/a^2=1,2,3$, RK3 $\epsilon=0.01$ \\ '
         r'非局域几何 & $z=0\ldots12$, $b=0\ldots6$, $L=12a$ \\ '
@@ -387,7 +464,7 @@ def build_report(run_dir, tex_path, summary_path):
         '运行参数写入 workers/*.json 与 canonical cache contract。',
     ))
     frames.append(_frame(
-        r'三 worker 分片执行，所有资源门保持在 80\% 预算内',
+        rf'{len(workers)} 个 worker 分片执行，所有资源门保持在 80\% 预算内',
         workers_table + r'\vspace{0.5em}' + '\n' + gpu_table,
         rf'CPU峰值 {_fmt(resources["cpu_max"], 4, "%")}，'
         rf'RAM峰值 {_fmt(resources["memory_max"], 4, "%")}，'
@@ -396,11 +473,11 @@ def build_report(run_dir, tex_path, summary_path):
     ))
     frames.append(_frame(
         'Wilson flow 显示平稳 UV 平滑并给出 $t_0$ 诊断',
-        _figure(flow_image, '12 组态 Wilson-flow 作用量密度与 $t^2\\langle E\\rangle$'),
+        _figure(flow_image, f'{conf_count} 组态 Wilson-flow 作用量密度与 $t^2\\langle E\\rangle$'),
         _source_ref('pyqcd/renorm/_gradient_flow.py', 'def flow_action_density'),
     ))
     frames.append(_frame(
-        '核子 2pt 在低动量窗口形成可读平台，P400 更早进入噪声区',
+        '核子 2pt 的有效质量与平台窗作为诊断量报告',
         r'\begin{columns}[T,totalwidth=\textwidth]' + '\n'
         r'\begin{column}{0.49\textwidth}' + _figure(
             spectrum_images[0], 'P000 nopol effective mass', 0.96)
@@ -422,6 +499,15 @@ def build_report(run_dir, tex_path, summary_path):
             connected, '连接矢量流 3pt/2pt ratio 控制道', 0.96)
         + r'\end{column}\end{columns}',
         _source_ref('pyqcd/analysis/_correlators.py', 'def run_3pt_ratio'),
+    ))
+    frames.append(_frame(
+        '方向与动量比较保留谱学平台的方向依赖',
+        _figure(
+            analysis_dir / 'spectrum' / 'direction_momentum_comparison.png',
+            'nopol/pol35 的五个动量与方向平台比较'),
+        _source_ref(
+            'pyqcd/testing/tmd/analyze_full_production.py',
+            'def _plot_spectrum_comparison'),
     ))
     frames.append(_frame(
         '有限横距 OPE 的离散量已完整落盘，三方向用于旋转对称性检查',
@@ -483,6 +569,15 @@ def build_report(run_dir, tex_path, summary_path):
             _figure(image, f'tau={tau} 多窗口 c0 稳定性'),
             rf'窗口结果：{_path_text(analysis_dir / "plateaus" / f"c0_tau{tau}_z_P200.npz")}',
         ))
+    frames.append(_frame(
+        'Sumratio AIC 质量与 fallback 覆盖作为独立诊断层报告',
+        _figure(
+            analysis_dir / 'plateaus' / 'sumratio_quality.png',
+            'Sumratio quality-accepted fraction 总览'),
+        _source_ref(
+            'pyqcd/testing/tmd/analyze_full_production.py',
+            'def _plot_sumratio_quality'),
+    ))
     window_image = analysis_dir / 'flow_windows' / 'flow_window_coverage.png'
     paired_image = analysis_dir / 'flow_windows' / 'flow_time_paired_difference.png'
     frames.append(_frame(
@@ -496,7 +591,7 @@ def build_report(run_dir, tex_path, summary_path):
         rf'共同窗：{_tex_escape(str(flow_windows.get("common_window", {})))}。',
     ))
     frames.append(_frame(
-        '格点端准 PDF 与准 TMD-PDF 已生成，但未施加光锥匹配',
+        '格点端准 PDF 与准 TMD-PDF 仅报告诊断状态，未施加光锥匹配',
         r'\begin{columns}[T,totalwidth=\textwidth]' + '\n'
         r'\begin{column}{0.49\textwidth}' + _figure(
             pdf_images[0], 'tau=1, P200 准 PDF/TMD-PDF', 0.96)
@@ -518,7 +613,18 @@ def build_report(run_dir, tex_path, summary_path):
         _source_ref('pyqcd/pipeline/_tmd9.py', 'def self_renormalize'),
     ))
     frames.append(_frame(
-        '两动量 CS 核作为格点提取量保存，零核和任意截断均未使用',
+        'P400 准 PDF/TMD-PDF 与 hR 作为高动量诊断单独展示',
+        r'\begin{columns}[T,totalwidth=\textwidth]' + '\n'
+        r'\begin{column}{0.49\textwidth}' + _figure(
+            pdf_dir / 'quasi_tau3_P400.png', 'tau=3, P400 准 PDF/TMD-PDF', 0.96)
+        + r'\end{column}' + '\n'
+        r'\begin{column}{0.49\textwidth}' + _figure(
+            pdf_dir / 'hR_tau3_P400.png', 'tau=3, P400 hR(z,b)', 0.96)
+        + r'\end{column}\end{columns}',
+        _source_ref('pyqcd/renorm/_tmdextract.py', 'def quasi_tmd_pdf'),
+    ))
+    frames.append(_frame(
+        '两动量 CS 核状态与信噪比门控作为格点诊断保存',
         r'\begin{columns}[T,totalwidth=\textwidth]' + '\n'
         r'\begin{column}{0.49\textwidth}' + _figure(
             pdf_images[2], 'tau=1 CS kernel', 0.96) + r'\end{column}' + '\n'
@@ -553,7 +659,7 @@ def build_report(run_dir, tex_path, summary_path):
         '当前结论：数值链闭合为 diagnostic-only，物理闭环明确失败关闭',
         r'\begin{columns}[T,totalwidth=\textwidth]' + '\n'
         r'\begin{column}{0.48\textwidth}\begin{block}{可确认}'
-        r'12 组态真实数据、三流时、三方向与 2D OPE、ratio 和格点端 Fourier 均有可读产物。'
+        rf'{conf_count} 组态真实数据、三流时、三方向与 2D OPE、ratio 和格点端 Fourier 均有可读产物。'
         r'\end{block}\end{column}' + '\n'
         r'\begin{column}{0.48\textwidth}\begin{block}{不可确认}'
         r'不能将当前 xg 解读为物理胶子 TMD-PDF；流时/platform/matching 等系统误差仍主导。'
@@ -616,7 +722,7 @@ def build_report(run_dir, tex_path, summary_path):
 \setbeamertemplate{{footline}}{{%
   \hbox{{\begin{{beamercolorbox}}[wd=\dimexpr\paperwidth-1.1cm\relax,ht=2.3ex,dp=0.9ex,
     leftskip=0.55cm,rightskip=0.55cm]{{author in head/foot}}%
-    \scriptsize\color{{muted}}PyQCD 12-conf TMD production\hfill
+    \scriptsize\color{{muted}}PyQCD {conf_count}-conf TMD production\hfill
     \insertframenumber/\inserttotalframenumber
   \end{{beamercolorbox}}}}}}
 \newcommand{{\source}}[1]{{\vspace{{0.06em}}\par{{\raggedright\scriptsize\color{{muted}}来源：#1\par}}}}
@@ -632,7 +738,9 @@ def build_report(run_dir, tex_path, summary_path):
     tex_path.write_text(tex, encoding='utf-8')
     summary_path = Path(summary_path)
     summary_path.write_text(
-        _summary_markdown(summary, workers, resources, manifest, status),
+        _summary_markdown(
+            summary, workers, resources, manifest, status,
+            spectrum=spectrum, plateau=plateau),
         encoding='utf-8',
     )
     return tex_path, summary_path

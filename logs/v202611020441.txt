@@ -1,0 +1,59 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-02 04:41:21 +0800
+批次: tmd-full-20261101-stage1
+主任务: 6250-8450 梯度流核子胶子 PDF/TMD-PDF 全链生产与分析
+触发原因: 阶段成果
+摘要: 生产续跑、并行审计、分析轴/报告门修复与自动收尾器已就绪
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 恢复生产与资源门
+- 目标: 对 `6250–8450` 的 12 组态完成梯度流胶子 TMD-PDF 全链生产、分析和文档交付。
+- 命令/操作: 读取恢复运行 `20261101T180249.kgF79u` 的 checkpoint、worker JSON、flow history、data/conf 产物；恢复 3 个 worker。
+- 关键输出: `p100-a=11259`、`p100-b=11262`、`torch_0=11260`；生产目录约 25 GiB；磁盘不设人为上限，CPU/RAM/GPU 显存按 80% 门。
+- 证据与判断: 审计快照已有 7 个组态目录、258 个 HDF5 可读；已完成组态为 `6250/6450/6650/6850/7050`，当前 `7450 distillation`、`7250 flow`、`7650 distillation`。
+
+### S2 — 并行子代理审计
+- 目标: 对生产状态、物理链、分析/报告和轻量验证进行独立审计。
+- 命令/操作: 通过 `/root/configure/bin/agent-dispatch.sh` 同时派发 4 个子代理。
+- 关键输出: `production_audit.md`、`physics_chain_audit.md`、`analysis_report_plan.md`、`verification_audit.md` 全部完成。
+- 证据与判断: 生产审计未发现 HDF5/contract/finite 硬错误；物理审计确认结果只能 `diagnostic_only`；验证审计最终 124/124 通过；分析审计发现 Sumratio 轴错误和报告 fail-open。
+
+### S3 — 分析代码加固
+- 目标: 修复会阻断真实分析或产生误导报告的实现。
+- 命令/操作: 修改 `analyze_full_production.py`、`build_full_report.py` 及对应 contract。
+- 关键输出: 修复 Sumratio 轴顺序；effective-mass 使用物理时间 `t=1..Nt-2`；正式分析强制 12 组态，部分运行需 `--allow-partial`；报告缺图/缺 JSON/非完整组态 fail-closed；报告组态数与 worker 数从 JSON 派生；新增方向/动量比较图与 Sumratio 质量图。
+- 退出码: 0
+- 证据与判断: `_tmd_full_analysis_contract` 12/12、`_tmd_full_report_contract` 3/3、`_tmd_full_production_contract` 11/11 通过。
+
+### S4 — 自动收尾器
+- 目标: 防止会话结束丢失长时任务。
+- 命令/操作: 新增并后台启动 `data/runs/tmd-full-20261101/run_finalize.sh`。
+- 关键输出: 后台 PID `113944`；等待 12 组态、3 个 active worker complete，且总任务达到 `2026-11-02 10:09:49 +0800`；随后运行 full analysis、报告生成、三遍 XeLaTeX 和三零检查。
+- 退出码: 0（dry-run 与 bash -n 通过）
+- 证据与判断: `analysis/finalize.log` 记录 `production_wait elapsed=60s`；lock 与状态文件已创建。
+
+## 验证与证据
+- 测试/检查: 分析、报告、生产契约；Python py_compile；shell bash -n；子代理只读审计。
+- 结果: 关键代码回归全绿；生产审计 258 个 HDF5 可读；报告合成契约通过。
+- 未验证项: 12 组态真实生产尚未完成，最终 ratio/c0/PDF/CS 和正式 PDF 尚未生成。
+
+## 变更与产物
+- 文件: `pyqcd/testing/tmd/analyze_full_production.py`、`pyqcd/testing/tmd/build_full_report.py`、两个 contract、`docs/plan_tmd_full_production_20261101.md`、`data/runs/tmd-full-20261101/run_finalize.sh`。
+- 产物: 4 份并行审计报告、阶段日志、自动收尾器。
+- 未改动范围: 未删除数据、未提交、未推送、未修改 `/public`、未执行匹配层。
+
+## 风险、限制与下一步
+- 风险: 单格距、12 组态、固定流时和固定 staple 不能形成物理 TMD-PDF 闭环；soft/rapidity、胶子--夸克混合、matching 和连续极限必须继续标为跳过。
+- 阻塞: 生产尚未完成，最终分析/报告等待自动收尾器。
+- 下一步: 监控 worker checkpoint 与 `analysis/finalize.log`；完成后验证 `analysis_summary.json`、报告三零、docs 和 logs。
+
+## Agent 全文报告
+--- report begin ---
+身份：`{物理+代码}`。
+
+当前阶段已完成恢复生产、并行审计和分析/报告代码加固。生产继续在 3 个 GPU worker 上运行；磁盘不设人为上限，CPU/RAM/GPU 显存仍按 80% 门。后台收尾器会在 12 组态和三 worker 完成后，且总任务达到至少 6 小时后，自动执行全量分析、中文报告生成和三遍 XeLaTeX 验收。
+
+当前物理边界仍是 `diagnostic_only`、`physical_acceptance=false`：没有同几何 soft/rapidity、胶子--夸克混合、完整 matching 或连续极限，不能把格点端准分布结果升级为物理 TMD-PDF。
+--- report end ---

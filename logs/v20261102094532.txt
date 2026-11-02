@@ -1,0 +1,61 @@
+[日志元数据]
+日志类型: general
+生成时间: 2026-11-02 09:45:31 +0800
+批次: tmd-flow-reuse-qa
+主任务: 梯度流重整化方案的 VVV/VdV、smear、2pt、OPE 复用边界
+触发原因: 一般记录
+摘要: 确认蒸馏顶点和同外态关联函数可复用，flowed gauge/OPE 与下游分析必须重算
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 复核对象依赖
+- 目标: 判定从非梯度流重整化方案迁移到 Wilson-flow 重整化方案时，哪些已有对象可复用。
+- 命令/操作: 读取 `pyqcd-tmd-chain`、`pyqcd-tmd-algorithm`、`pyqcd-gluon-renorm` 技能；检查 `_tmd9.py`、`_steps.py`、`_gradient_flow_gluon_ope.py` 和 `_tmd.py` 的输入签名与 cache contract。
+- 关键输出: `compute_vertices_multi`、`compute_2pt_polarizations_multi`、`compute_2pt_for_config`、`compute_3pt_for_config` 不消费 flow `tau`；`compute_tmd_ope_time(_2d)` 显式调用 `flow_gauge_for_config` 并记录 `flow_contract_sha256`。
+- 退出码: 0
+- 证据与判断: VVV/VdV 是蒸馏顶点；2pt/connected 3pt 是同一原始规范场和 perambulator 上的外态关联函数；flowed OPE 是流化规范链接上的胶子矩阵元。
+
+### S2 — 复用边界结论
+- 目标: 给出可直接复用与必须重算的清单。
+- 命令/操作: 仅只读审计，未修改代码或生产缓存。
+- 关键输出: VVV/VdV、相同定义的 2pt/connected 3pt 可复用；HYP/stout/momentum smear 不可冒充 Wilson flow；OPE、ratio、c0/Sumratio、Z_R/hybrid、PDF/TMD-PDF 必须基于 flowed gauge 重算。
+- 退出码: 0
+- 证据与判断: 当前梯度流胶子 OPE metadata 为 `input_scheme=thin_link_no_hyp_no_smear`；缓存合同包含 `tau`、`eps`、几何和 flow hash。
+
+## 验证与证据
+- 测试/检查: 代码入口与缓存 contract 静态核对；生产 worker 存活检查。
+- 结果: `compute_vertices_multi` 与 2pt/3pt 入口无 flow 参数；OPE 入口含 `flow_contract_sha256`。
+- 未验证项: 未对旧数据做逐文件身份匹配；实际复用前仍需核对 conf ID、原始 gauge hash、特征矢/ perambulator、动量、精度、源汇插值、边界和算符约定。
+
+## 变更与产物
+- 文件: 无代码修改。
+- 产物: 本一般日志。
+- 未改动范围: `/public` 输入、生产 checkpoint、现有 VVV/VdV/2pt/OPE 缓存。
+
+## 风险、限制与下一步
+- 风险: 把 HYP/stout/momentum-smear 数据当作 Wilson-flow 数据会产生方案混用；只做单个 `tau=3` 不足以完成流时重整化。
+- 阻塞: 无。
+- 下一步: 若执行迁移，先做旧缓存身份审计，再复用顶点/同外态 2pt/3pt，重新生成 `tau=1,2,3` flowed gauge 与对应 1D/2D OPE，最后重跑下游分析。
+
+## 用户输入指令
+提问:使用梯度流重整化方案的话是否需要重算{VVV/VdV、smear、2pt、OPE},或者说本方案是否能够直接套用已经计算好的不使用梯度流重整化方案的{VVV/VdV、smear、2pt、OPE} [保存日志]
+
+## Agent 全文报告
+--- report begin ---
+结论：不能全部复用，也不能全部重算。梯度流重整化改变的是胶子 TMD 算符使用的规范链接，不是蒸馏顶点或外态关联函数的定义。
+
+| 对象 | 是否重算 | 条件与原因 |
+|---|---|---|
+| VVV/VdV | 通常不需要 | 只依赖原始组态、特征矢量/perambulator、动量、Nev、精度和收缩约定，不依赖 flow tau。相同身份下可复用。 |
+| HYP/stout/momentum smear | 不能当作梯度流直接复用 | 它们是不同的 UV 平滑/方案；旧 HYP/stout/momentum-smear 数据不能冒充 Wilson-flow 数据。 |
+| 2pt | 通常不需要 | 2pt 是核子/π 外态关联函数，不包含 flowed 胶子流算符。只要组态、插值算符、perambulator、动量、边界和极化定义一致即可复用。 |
+| connected 3pt | 通常不需要 | 与 2pt 同理；它用于外态和激发态控制，不因胶子流算符采用 flow 方案而改变。 |
+| OPE/胶子 TMD 矩阵元 | 必须重算 | OPE 直接消费 flowed gauge V_tau，并依赖 tau、eps、z、b、staple、方向和算符组合。非 flow OPE 不能直接用于 flow 方案。 |
+| ratio、c0、Sumratio、Z_R/hybrid、PDF/TMD-PDF | 必须基于新 OPE 重算 | 这些量消费 flowed OPE，不能从非 flow OPE 的旧 ratio 直接套用。 |
+
+代码依据：`compute_vertices_multi`、`compute_2pt_polarizations_multi`、`compute_2pt_for_config` 和 `compute_3pt_for_config` 都没有 flow tau 参数；`compute_tmd_ope_time` 与 `compute_tmd_ope_time_2d` 显式调用 `flow_gauge_for_config`，且 OPE contract 包含 `flow_contract_sha256`。当前 flowed 胶子 OPE metadata 明确记录 `input_scheme=thin_link_no_hyp_no_smear`。
+
+需要区分“smear”的两种含义：Wilson flow 本身必须对每个 tau 从同一原始 gauge 独立重算；源汇插值算符的 smearing 属于外态定义，只有完全相同才可复用。旧 HYP/stout/momentum smear 不能替代 Wilson flow。
+
+实际迁移顺序：先审计 conf ID、原始 gauge hash、特征矢/perambulator、动量、精度、源汇插值、边界和算符约定；通过后复用 VVV/VdV 与相同定义的 2pt/connected 3pt；为 tau=1,2,3 重新生成 flowed gauge；重新计算 full-channel、legacy 与 2D staircase OPE；最后重跑 ratio、c0/Sumratio、Z_R/hybrid、准 PDF 与诊断 TMD-PDF。只有旧 OPE 已经采用相同 flow tau/eps/几何/算符约定时才可直接复用；单个 tau=3 也不足以完成流时重整化。
+--- report end ---

@@ -101,6 +101,22 @@ ENERGY_WINDOWS = {
 }
 
 
+def _validate_analysis_conf_ids(conf_ids, *, allow_partial=False):
+    expected = tuple(int(value) for value in CONF_IDS)
+    values = tuple(int(value) for value in conf_ids)
+    if not values:
+        raise ValueError('分析组态列表不能为空')
+    if len(set(values)) != len(values):
+        raise ValueError('分析组态列表不能包含重复值')
+    unknown = sorted(set(values) - set(expected))
+    if unknown:
+        raise ValueError(f'分析组态不在 12 组态目标集合中: {unknown}')
+    if not allow_partial and values != expected:
+        raise ValueError(
+            '正式分析必须按目标顺序覆盖 12 个组态；部分运行需显式 --allow-partial')
+    return values
+
+
 def _utc_now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -323,6 +339,16 @@ def expand_ratio_axes(values, *, tseps=TSEPS, sample_axis=False):
     return output
 
 
+def expand_sumratio_inputs(selected, *, tseps=TSEPS):
+    """Expand selected ratio arrays without disturbing sample/insertion axes."""
+    samples = np.asarray(selected['samples'])
+    original = np.asarray(selected['ratio'])
+    return (
+        expand_ratio_axes(samples, tseps=tseps, sample_axis=True),
+        expand_ratio_axes(original, tseps=tseps, sample_axis=False),
+    )
+
+
 def _load_h5_data(path):
     import h5py
     with h5py.File(path, 'r') as handle:
@@ -517,6 +543,13 @@ def _effective_mass_samples(samples):
     return mass
 
 
+def _effective_mass_times(n_time):
+    """Return the physical times represented by ``_effective_mass_samples``."""
+    if int(n_time) < 3:
+        raise ValueError('effective-mass time axis 至少需要 3 个点')
+    return np.arange(1, int(n_time) - 1, dtype=np.int64)
+
+
 def _plateau_mean_samples(samples, start, end):
     if end <= start or start < 0 or end > samples.shape[1]:
         raise ValueError('平台窗口无效')
@@ -541,8 +574,13 @@ def analyze_spectrum(run_dir, conf_ids, polarized_2pt, corr2, corr3,
             mass_samples = _effective_mass_samples(jack)
             mass_mean, mass_error = _finite_mean_error(mass_samples)
             start, end = ENERGY_WINDOWS.get(tag, (5, 12))
+            mass_times = _effective_mass_times(magnitude.shape[1])
+            window_indices = np.flatnonzero(
+                (mass_times >= start) & (mass_times < end))
+            if not window_indices.size:
+                raise ValueError(f'effective-mass 平台窗为空: {tag} [{start}, {end})')
             plateau_samples = _plateau_mean_samples(
-                mass_samples, start, max(start + 1, end - 2))
+                mass_samples, int(window_indices[0]), int(window_indices[-1] + 1))
             energy = float(np.nanmean(plateau_samples))
             energy_error = float(sem(plateau_samples, jackknife=True))
             summary[f'{polarization}_{tag}'] = {
@@ -551,7 +589,8 @@ def analyze_spectrum(run_dir, conf_ids, polarized_2pt, corr2, corr3,
                 'source_mean_shape': list(stack.shape),
                 'effective_mass_GeV': mass_mean,
                 'effective_mass_error_GeV': mass_error,
-                'plateau_window': [start, end - 2],
+                'plateau_window': [start, end - 1],
+                'plateau_times': mass_times[window_indices].tolist(),
                 'energy_GeV': energy,
                 'energy_error_GeV': energy_error,
                 'energy_status': (
@@ -567,7 +606,7 @@ def analyze_spectrum(run_dir, conf_ids, polarized_2pt, corr2, corr3,
                 plateau_samples=plateau_samples,
             )
             _plot_effective_mass(
-                stack, mass_mean, mass_error, start, end - 2,
+                stack, mass_mean, mass_error, mass_times, start, end,
                 out_dir / f'effective_mass_{polarization}_{tag}.png',
                 f'{polarization} {tag}',
             )
@@ -588,16 +627,17 @@ def analyze_spectrum(run_dir, conf_ids, polarized_2pt, corr2, corr3,
             item, out_dir / f'ratio_3pt_{key}.png', key)
     _write_json(out_dir / 'connected_3pt_ratio.json', connected_payload)
     _plot_dispersion(summary, out_dir / 'dispersion_diagnostic.png')
+    _plot_spectrum_comparison(
+        summary, out_dir / 'direction_momentum_comparison.png')
     _write_json(out_dir / 'spectrum_summary.json', summary)
     return summary
 
 
-def _plot_effective_mass(source, mean, error, start, end, path, label):
+def _plot_effective_mass(source, mean, error, times, start, end, path, label):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    t = np.arange(len(mean))
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.2), constrained_layout=True)
     axes[0].errorbar(
         np.arange(source.shape[0]), np.abs(source.mean(axis=0)),
@@ -607,13 +647,12 @@ def _plot_effective_mass(source, mean, error, start, end, path, label):
     axes[0].set_xlabel('t/a')
     axes[0].set_ylabel(r'$|C_2(t)|$')
     axes[0].set_title('两点关联函数')
-    lower = start - 2
-    upper = min(end - 2, len(mean) - 1)
-    axes[1].errorbar(t, mean, yerr=error, marker='o', ms=2.5, lw=1.0,
+    axes[1].errorbar(times, mean, yerr=error, marker='o', ms=2.5, lw=1.0,
                      capsize=1.5, color='#B24C32')
-    if 0 <= lower < upper:
-        band = np.nanmean(mean[lower:upper])
-        axes[1].axvspan(lower, upper, color='#E9C46A', alpha=0.2)
+    window = (times >= start) & (times < end)
+    if np.any(window):
+        band = np.nanmean(mean[window])
+        axes[1].axvspan(start - 0.5, end - 0.5, color='#E9C46A', alpha=0.2)
         axes[1].axhline(band, color='#264653', ls='--', lw=1.0)
     axes[1].set_xlabel('t/a')
     axes[1].set_ylabel(r'$m_{\rm eff}$ [GeV]')
@@ -668,6 +707,35 @@ def _plot_dispersion(summary, path):
     axis.set_xlabel(r'$p^2/(2\pi/L)^2$')
     axis.set_ylabel(r'$E_{\rm plateau}$ [GeV]')
     axis.set_title('核子能量色散诊断')
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_spectrum_comparison(summary, path):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    tags = ('P000', 'P200', 'P400', 'P020', 'P002')
+    fig, axis = plt.subplots(figsize=(7.0, 4.0), constrained_layout=True)
+    for polarization, color in (('nopol', '#264653'), ('pol35', '#E76F51')):
+        x, values, errors = [], [], []
+        for index, tag in enumerate(tags):
+            item = summary.get(f'{polarization}_{tag}')
+            if item is None or not np.isfinite(item.get('energy_GeV', np.nan)):
+                continue
+            x.append(index)
+            values.append(item['energy_GeV'])
+            errors.append(item['energy_error_GeV'])
+        if x:
+            axis.errorbar(
+                x, values, yerr=errors, marker='o', capsize=2.0,
+                lw=1.2, color=color, label=polarization)
+    axis.set_xticks(np.arange(len(tags)), tags)
+    axis.set_xlabel('momentum / direction')
+    axis.set_ylabel(r'$E_{\rm plateau}$ [GeV]')
+    axis.set_title('核子谱学：方向与动量比较')
+    axis.legend()
     fig.savefig(path, dpi=180)
     plt.close(fig)
 
@@ -1007,13 +1075,10 @@ def analyze_plateaus(run_dir, ratio_1d, logger=print):
             primary, jackknife=True)
         _plot_c0_heatmap(
             primary_mean, out_dir / f'c0_{stem}_heatmap.png', stem)
-        sumratio_samples = np.transpose(
-            selected['samples'], (4, 0, 1, 2, 3))
-        sumratio_original = np.transpose(
-            selected['ratio'], (0, 1, 2, 3))
+        sumratio_samples, sumratio_original = expand_sumratio_inputs(selected)
         sumratio = fit_forward_sumratio_difference(
-            expand_ratio_axes(sumratio_samples, sample_axis=True),
-            expand_ratio_axes(sumratio_original, sample_axis=False),
+            sumratio_samples,
+            sumratio_original,
             tmin=physical_tmin(a_fm, SUM_RATIO_THRESHOLD_FM),
             cuts=(1, 2, 3), tsep_max=SUM_RATIO_MAX_TSEP,
         )
@@ -1037,7 +1102,36 @@ def analyze_plateaus(run_dir, ratio_1d, logger=print):
             f"  plateau tau={tau:g} dir={DIRECTION_LABEL[direction]} "
             f"mom={momentum_tag_value}")
     _write_json(out_dir / 'plateau_summary.json', summary)
+    _plot_sumratio_quality(summary, out_dir / 'sumratio_quality.png')
     return summary
+
+
+def _plot_sumratio_quality(summary, path):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    keys = sorted(summary)
+    values = np.asarray([
+        float(summary[key].get('sumratio_quality_fraction', np.nan))
+        for key in keys
+    ])
+    finite = np.isfinite(values)
+    fig, axis = plt.subplots(
+        figsize=(8.0, max(3.0, 0.28 * len(keys))), constrained_layout=True)
+    if finite.any():
+        y = np.arange(len(keys))[finite]
+        axis.barh(y, values[finite], color='#457B9D')
+        axis.set_yticks(y, [keys[index] for index in y])
+        axis.set_xlim(0.0, 1.0)
+    else:
+        axis.text(0.5, 0.5, 'Sumratio quality unavailable',
+                  ha='center', va='center', transform=axis.transAxes)
+        axis.set_yticks([])
+    axis.set_xlabel('quality-accepted fraction')
+    axis.set_title('Sumratio AIC 质量与 fallback 覆盖')
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
 
 
 def analyze_plateaus_2d(run_dir, ratio_2d, logger=print):
@@ -1432,16 +1526,19 @@ def _cs_kernel(tau, hR_by_momentum, out_dir, summary):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    fig, axis = plt.subplots(figsize=(6.0, 4.0), constrained_layout=True)
     if np.isfinite(mean).any():
-        fig, axis = plt.subplots(figsize=(6.0, 4.0), constrained_layout=True)
         axis.errorbar(np.asarray(B_LIST) * ALttc, mean, yerr=error,
                       marker='o', capsize=2.0, lw=1.0, color='#6A4C93')
         axis.axhline(0.0, color='0.5', lw=0.8)
-        axis.set_xlabel(r'$b_\perp$ [fm]')
-        axis.set_ylabel('K(b)')
-        axis.set_title(f'CS 核诊断, tau={tau:g}, z_ref={z_ref}')
-        fig.savefig(out_dir / f'cs_kernel_tau{tau:g}.png', dpi=180)
-        plt.close(fig)
+    else:
+        axis.text(0.5, 0.5, 'CS kernel unavailable\n(significance/sign/flow gate)',
+                  ha='center', va='center', transform=axis.transAxes)
+    axis.set_xlabel(r'$b_\perp$ [fm]')
+    axis.set_ylabel('K(b)')
+    axis.set_title(f'CS 核诊断, tau={tau:g}, z_ref={z_ref}')
+    fig.savefig(out_dir / f'cs_kernel_tau{tau:g}.png', dpi=180)
+    plt.close(fig)
 
 
 def _plot_pdf(x, qpdf_mean, qpdf_error, qtmd_mean, qtmd_error, b_fm,
@@ -1553,25 +1650,56 @@ def _plot_error_budget(budget, path):
     plt.close(fig)
 
 
+_MANIFEST_TOP_LEVEL = {
+    'data', 'flow_history', 'flowed', 'env', 'workers', 'analysis', 'plots',
+}
+_MANIFEST_EXCLUDED_PARTS = {'agents'}
+_MANIFEST_EXCLUDED_NAMES = {
+    'analysis_summary.json', 'artifact_manifest.json', 'finalize.log',
+    '.finalize.lock', 'finalize_status.json',
+}
+
+
+def _manifest_entry(path, run_dir):
+    relative = path.relative_to(run_dir)
+    if not relative.parts or relative.parts[0] not in _MANIFEST_TOP_LEVEL:
+        return None
+    if any(part in _MANIFEST_EXCLUDED_PARTS for part in relative.parts):
+        return None
+    if path.name in _MANIFEST_EXCLUDED_NAMES:
+        return None
+    if relative.parts[0] in {'data', 'flow_history', 'flowed', 'env', 'workers'}:
+        producer = 'production'
+    elif relative.parts[0] in {'analysis', 'plots'}:
+        producer = 'analysis'
+    else:
+        producer = 'metadata'
+    return {
+        'conf_id': next((
+            int(parent.name[4:]) for parent in path.parents
+            if parent.parent == run_dir / 'data'
+            and parent.name.startswith('conf')
+            and parent.name[4:].isdigit()
+        ), None),
+        'path': str(relative),
+        'kind': path.suffix.lstrip('.') or 'unknown',
+        'producer': producer,
+        'size_bytes': path.stat().st_size,
+    }
+
+
 def write_artifact_manifest(run_dir, conf_ids, tau_values):
     run_dir = Path(run_dir)
     entries = []
     manifest_path = run_dir / 'analysis' / 'artifact_manifest.json'
     for path in sorted(run_dir.rglob('*')):
-        if (not path.is_file() or path == manifest_path
-                or path.name.endswith(('.tmp', '.tmp.npz'))):
+        if not path.is_file() or path == manifest_path:
             continue
-        conf_id = None
-        for parent in path.parents:
-            if parent.parent == run_dir / 'data' and parent.name.startswith('conf'):
-                suffix = parent.name[4:]
-                conf_id = int(suffix) if suffix.isdigit() else None
-                break
-        entries.append({
-            'conf_id': conf_id,
-            'path': str(path.relative_to(run_dir)),
-            'size_bytes': path.stat().st_size,
-        })
+        if path.name.endswith(('.tmp', '.tmp.npz')):
+            continue
+        entry = _manifest_entry(path, run_dir)
+        if entry is not None:
+            entries.append(entry)
     manifest = {
         'schema': 'pyqcd.tmd_full_artifact_manifest.v1',
         'created_utc': _utc_now(),
@@ -1586,10 +1714,11 @@ def write_artifact_manifest(run_dir, conf_ids, tau_values):
 
 
 def analyze_run(run_dir, conf_ids=CONF_IDS, tau_values=FLOW_TIMES,
-                logger=print):
+                logger=print, allow_partial=False):
     started = time.perf_counter()
     run_dir = Path(run_dir).resolve()
-    conf_ids = tuple(int(value) for value in conf_ids)
+    conf_ids = _validate_analysis_conf_ids(
+        conf_ids, allow_partial=allow_partial)
     tau_values = tuple(float(value) for value in tau_values)
     logger(f"loading 12-configuration analysis inputs from {run_dir}")
     raw_manifest = write_raw_input_manifest(run_dir, conf_ids)
@@ -1665,6 +1794,9 @@ def parse_args(argv=None):
     parser.add_argument('--run-dir', type=Path, required=True)
     parser.add_argument('--conf-ids', default=','.join(map(str, CONF_IDS)))
     parser.add_argument('--tau-list', default=','.join(map(str, FLOW_TIMES)))
+    parser.add_argument(
+        '--allow-partial', action='store_true',
+        help='允许显式缩小组态集合，仅用于 smoke/调试，不用于正式报告')
     return parser.parse_args(argv)
 
 
@@ -1673,7 +1805,9 @@ def main(argv=None):
     conf_ids = tuple(int(value) for value in args.conf_ids.split(',') if value)
     tau_values = tuple(
         float(value) for value in args.tau_list.split(',') if value)
-    result = analyze_run(args.run_dir, conf_ids, tau_values)
+    result = analyze_run(
+        args.run_dir, conf_ids, tau_values,
+        allow_partial=args.allow_partial)
     print(json.dumps({
         'status': result['status'],
         'physical_acceptance': result['physical_acceptance'],
