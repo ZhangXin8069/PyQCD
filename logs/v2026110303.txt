@@ -1,0 +1,68 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-03 03:01:58 +0800
+批次: pyqcd-closeout-dev32
+主任务: PyQCD diff-init-push-tag closeout
+触发原因: 任务完成
+摘要: 完成改动复查、init 幂等检查、全量回归、main 推送、dev32 标签创建与远端验证
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — diff 与变更基线
+- 目标: 复查当前工作区及 dev31 以来的变更，为 dev32 标签说明提供证据。
+- 命令/操作: `git status --short --branch`、`git log dev31..HEAD --oneline --no-merges`、`git diff dev31..HEAD --stat/--numstat/--summary/--check`。
+- 关键输出: 工作区干净且 `main` 与 `origin/main` 同步；dev31 以来 18 个提交、31 个文件，`+6985/-5`，主要为 12 组态 TMD 全生产驱动、分析、验证、报告、契约测试、文档与日志。
+- 退出码: 0；历史区间 `--check` 退出码 2，定位为既有 `docs/report_tmd_full_production_20261101.tex:70-71` 两条行尾空白。
+- 证据与判断: 当前工作树没有本任务产生的新改动；历史空白不纳入本次越界修改。
+
+### S2 — init 幂等盘点
+- 目标: 同步受维护目录的 AGENTS.md、识别 agent 配置与散落技能归集需求。
+- 命令/操作: 扫描 agent 初始化文件、agent 配置目录、受维护源码/文档/技能目录的 AGENTS.md 覆盖情况，并核对顶层白名单与忽略规则。
+- 关键输出: 受维护目录无 AGENTS.md 缺口；无 `.claude/.codex/.cursor` 等配置目录；唯一 `refer/sush/_distillation/CLAUDE.md` 位于只读外部参考树；`.opencode/` 被忽略且不在项目顶层白名单。
+- 退出码: 0。
+- 证据与判断: init 为无变更幂等结果，未触碰 `refer/`、历史产物或忽略目录。
+
+### S3 — 验证与失败重试
+- 目标: 在打标前验证当前 HEAD。
+- 命令/操作: `python -B -m pyqcd.testing`；定向重跑 MPI 时序契约；再次运行全量测试；`bash skills/form/scripts/form-audit.sh`；标签链自检。
+- 关键输出: 首轮全量测试 110 passed/1 skipped/1 failed，唯一失败为 MPI setup 子进程 15 秒启动超时；定向重跑 1/1 通过（3.42 秒）；全量重跑 111 passed/1 skipped/0 failed；form audit 为 registered exceptions=7、unexpected=0。
+- 退出码: 0（最终全量测试、定向测试、form audit、标签链均成功）。
+- 证据与判断: MPI 失败不可复现，确认是一次性启动时序抖动；跳过项为环境缺少 `physics.sty`。
+
+### S4 — 推送与标签
+- 目标: 推送 main，创建并推送默认 dev 标签。
+- 命令/操作: `git push origin main`；`git tag -a dev32`；`git push origin dev32`；回读本地与远端 peeled commit；执行 `tag-chain.sh --check --remote origin`。
+- 关键输出: main 为 `Everything up-to-date`；dev32 远端 tag object `9392c08c91d07228c484f89ab7e1c59977abb3ad`，peeled commit `ea01a78fd869c7f08ee945a9680fd87a8bf18cf2`；103 个管理标签链 PASS。
+- 退出码: 0。
+- 证据与判断: dev32 指向当前 HEAD，且 follow 链、提交祖先关系和远端对象一致。
+
+## 验证与证据
+- 测试/检查: 全量测试、MPI 定向测试、form audit、工作树 diff-check、标签链远端检查。
+- 结果: 111 passed/1 skipped/0 failed；form audit PASS；工作区干净；103 个标签链 PASS。
+- 未验证项: `physics.sty` 不可用导致 1 个 LaTeX 运行时契约跳过；历史 TeX 行尾空白未改写。
+
+## 变更与产物
+- 文件: 本次 init 无文件改动；最终日志将新增 `logs/v*.txt` 并更新 `logs/AGENTS.md`。
+- 产物: 本地及远端注释标签 `dev32`；远端 `origin/main` 指向 `ea01a78`。
+- 未改动范围: `refer/`、历史运行产物、外部技能与忽略目录均未修改。
+
+## 风险、限制与下一步
+- 风险: dev32 保持 `diagnostic_only` 与 `physical_acceptance=false`，不得解释为物理光锥 TMD-PDF。
+- 阻塞: 无。
+- 下一步: 后续从 dev32 继续开发；如需修复历史 TeX 行尾空白，应作为独立治理任务提交。
+
+## 用户输入指令
+~diff~init~push~tag
+
+## Agent 全文报告
+--- report begin ---
+已完成 `~diff~init~push~tag` 流程。
+
+改动内容：工作区原本干净，`init` 盘点未发现需要同步的受维护 AGENTS.md、agent 配置目录或合规技能归集；未修改只读的 `refer/` 与历史产物。dev31 以来现有 18 个提交、31 个文件变更，主要是 12 组态梯度流胶子 TMD-PDF 全生产链、契约测试、文档与运行证据。
+
+推理依据：标签基线取 dev31；未指定标签类型，因此按 tag 约定使用 dev32。`.opencode/` 与项目顶层白名单冲突且被忽略，不能为执行 init 而创建。
+
+验证结果：全量回归最终为 `111 passed / 1 skipped / 0 failed`；首轮 MPI setup 超时经定向重跑 3.42 秒通过，并在全量重跑中通过。`form-audit` 为 `registered exceptions=7, unexpected=0`。main 推送成功，dev32 已创建并推送；远端 peeled commit 为 `ea01a78fd869c7f08ee945a9680fd87a8bf18cf2`，103 个标签的 follow 链、祖先关系和远端对象检查全部 PASS。历史 TeX 两条行尾空白属于既有内容，本次未越界修改。
+
+后续步骤：从 dev32 继续开发；如需清理历史空白或补装 `physics.sty`，分别作为独立治理任务处理。
+--- report end ---

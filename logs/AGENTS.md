@@ -77,7 +77,6 @@
 - 关键内容: 111 tests pass; source-resolved real conf6250 smoke; physical PDF remains blocked by missing soft/mixing/multi-scale data
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
-
 ## dev20-absorb-debug-2 - final - 2026-10-22 06:51:46 +0800
 - 主任务: dev20 外来内容吸收与胶子 TMD-PDF 全面 debug
 - 日志文件: logs/v2026102206.txt
@@ -587,5 +586,13 @@
 - 文件大小: 16867 bytes
 - 触发原因: 任务完成
 - 关键内容: 12 组态全链完成；813 个产物、48,248,396,007 字节；验证 passed；111 passed/1 skipped/0 failed；报告 29 页三零；diagnostic_only
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## pyqcd-closeout-dev32 - final - 2026-11-03 03:01:58 +0800
+- 主任务: PyQCD diff-init-push-tag closeout
+- 日志文件: logs/v2026110303.txt
+- 文件大小: 5330 bytes
+- 触发原因: 任务完成
+- 关键内容: 完成改动复查、init 幂等检查、全量回归、main 推送、dev32 标签创建与远端验证
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
