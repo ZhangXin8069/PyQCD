@@ -73,11 +73,24 @@ def _source_ref(relative_path, needle, label=None):
         f'（{_tex_escape(label)}）' if label else '')
 
 
-def _resource_summary(path):
-    path = Path(path)
+def _resource_summary(path, *, worker_paths=()):
+    # Prefer the per-worker JSONL files produced by the active run.  The
+    # historical system_resources.jsonl only describes the earlier probe.
+    system_path = Path(path)
+    system_rows = []
+    if system_path.is_file():
+        for line in system_path.read_text(encoding='utf-8').splitlines():
+            try:
+                system_rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    worker_paths = [Path(item) for item in worker_paths if Path(item).is_file()]
+    paths = worker_paths or [system_path]
     rows = []
-    if path.is_file():
-        for line in path.read_text(encoding='utf-8').splitlines():
+    for item_path in paths:
+        if not item_path.is_file():
+            continue
+        for line in item_path.read_text(encoding='utf-8').splitlines():
             try:
                 rows.append(json.loads(line))
             except json.JSONDecodeError:
@@ -102,12 +115,28 @@ def _resource_summary(path):
             value['memory_max'] = max(
                 value['memory_max'], float(item['memory_percent']))
             value['util_values'].append(float(item['utilization_percent']))
+        if row.get('gpu_memory_percent') is not None:
+            device = row.get('device', '?')
+            value = gpu.setdefault(device, {
+                'name': f'worker device {device}',
+                'memory_max': 0.0,
+                'util_values': [],
+            })
+            value['memory_max'] = max(
+                value['memory_max'], float(row['gpu_memory_percent']))
     return {
         'samples': len(rows),
         'cpu_max': max(float(row['cpu_percent']) for row in rows),
         'memory_max': max(float(row['memory_percent']) for row in rows),
         'disk_max': max(float(row['disk_percent']) for row in rows),
         'gpu': gpu,
+        'source': 'worker_logs' if worker_paths else 'system_resources',
+        'system_samples': len(system_rows),
+        'system_gpu_util_max': max(
+            (float(item['utilization_percent'])
+             for row in system_rows for item in row.get('gpu', [])
+             if item.get('utilization_percent') is not None),
+            default=None),
     }
 
 
@@ -153,7 +182,7 @@ def _validate_report_inputs(workers, manifest):
 def _worker_table(run_dir):
     rows = _worker_rows(run_dir)
     lines = [
-        r'\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.16\linewidth} l l >{\raggedright\arraybackslash}X l@{}}',
+        r'\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.20\linewidth} l l >{\raggedright\arraybackslash}X l@{}}',
         r'\toprule',
         r'worker & backend/device & 状态 & 组态 & 完成时间 \\',
         r'\midrule',
@@ -222,6 +251,7 @@ def _summary_markdown(summary, workers, resources, manifest, status,
         f"- CPU 最大占用：{_fmt(resources.get('cpu_max'), 4, '%')}",
         f"- RAM 最大占用：{_fmt(resources.get('memory_max'), 4, '%')}",
         f"- 磁盘最大占用：{_fmt(resources.get('disk_max'), 4, '%')}",
+        f"- 资源记录来源：`{resources.get('source', 'unknown')}`",
         '',
         '## 结果与证据',
         '',
@@ -266,6 +296,13 @@ def _summary_markdown(summary, workers, resources, manifest, status,
         '- 未测量 soft/rapidity。',
         '- 仅单一格距、单一系综，无连续极限。',
         '- 有限 Fourier 支撑与固定 staple 长度引入系统误差。',
+    ])
+    if resources.get('system_gpu_util_max') is not None:
+        lines.extend([
+            f"- 系统级 GPU 遥测瞬时利用率峰值 {_fmt(resources['system_gpu_util_max'], 4, '%')}；"
+            'worker duty-cycle 控制平均负载，但不能认证全局瞬时占用始终不超过 80%。',
+        ])
+    lines.extend([
         '',
         '## 状态',
         '',
@@ -301,7 +338,9 @@ def build_report(run_dir, tex_path, summary_path):
     staircase = _load_json(required_json['staircase'])
     pdf_summary = _load_json(required_json['pdf'])
     resources = _resource_summary(
-        run_dir / 'workers' / 'system_resources.jsonl')
+        run_dir / 'workers' / 'system_resources.jsonl',
+        worker_paths=sorted((run_dir / 'workers').glob('resources_*.jsonl')),
+    )
     workers = _worker_rows(run_dir)
     _validate_report_inputs(workers, manifest)
     status = summary.get('status', 'diagnostic_only')
@@ -463,13 +502,20 @@ def build_report(run_dir, tex_path, summary_path):
         r'\bottomrule\end{tabularx}',
         '运行参数写入 workers/*.json 与 canonical cache contract。',
     ))
-    frames.append(_frame(
-        rf'{len(workers)} 个 worker 分片执行，所有资源门保持在 80\% 预算内',
-        workers_table + r'\vspace{0.5em}' + '\n' + gpu_table,
+    resource_note = (
         rf'CPU峰值 {_fmt(resources["cpu_max"], 4, "%")}，'
         rf'RAM峰值 {_fmt(resources["memory_max"], 4, "%")}，'
-        rf'磁盘峰值 {_fmt(resources["disk_max"], 4, "%")}；'
-        'GPU 平均利用率由 duty-cycle 控制，瞬时 kernel 峰值单独报告。',
+        rf'GPU显存峰值 {_fmt(max((item["memory_max"] for item in resources["gpu"].values()), default=None), 4, "%")}，'
+        rf'磁盘峰值 {_fmt(resources["disk_max"], 4, "%")}。'
+        'worker duty-cycle 限制平均负载。')
+    if resources.get('system_gpu_util_max') is not None:
+        resource_note += (
+            f'系统级 GPU 遥测瞬时峰值 {_fmt(resources["system_gpu_util_max"], 4, "%")}，'
+            '因此不能认证全局瞬时利用率始终不超过 80\\%。')
+    frames.append(_frame(
+        rf'{len(workers)} 个 worker 分片执行；CPU/RAM/GPU 显存配置门为 80\%',
+        workers_table + r'\vspace{0.5em}' + '\n' + gpu_table,
+        resource_note,
     ))
     frames.append(_frame(
         'Wilson flow 显示平稳 UV 平滑并给出 $t_0$ 诊断',

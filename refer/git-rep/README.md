@@ -11,6 +11,7 @@ commit。子库工作树保持上游状态，不修改、不把上游文件混�
 | `refer/git-rep/lamet-agent` | https://github.com/Greyyy-HJC/lamet-agent | LaMET/LQCD 分析 agent 的 Python 脚手架 | `9355c52ab7f5061fcc1befacfb7e1b65a0b32db1` |
 | `refer/git-rep/EasyDistillation` | https://github.com/IHEP-LQCD/EasyDistillation | 蒸馏方法（本征矢、perambulator、elemental 与自动缩并）的多后端实现 | `f74bf7de5ebb3ae94107c147339f66c5552cf240` |
 | `refer/git-rep/LQCD_Master` | https://github.com/sjtu-sai-agents/LQCD_Master | 自然语言到 PyQUDA 程序与 Slurm 脚本的 agentic 计算流水线 | `e4a443e08d5904371fc280ce93c00ff84df21893` |
+| `refer/git-rep/PyQCU` | https://gitee.com/zhangxin8069/PyQCU.git | torch、mpi4py 与 h5py 架构范例及 PyQCD 实现参考 | `8d7002f908aa2c162705f840b604814971753171` |
 
 `PyQUDA` 内部的 `pyquda_core/pycparser` 是其上游嵌套 submodule
 （https://github.com/eliben/pycparser.git），需以 `git submodule update --init

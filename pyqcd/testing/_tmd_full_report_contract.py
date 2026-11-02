@@ -52,7 +52,10 @@ class TmdFullReportContract(unittest.TestCase):
                 'n_ratio_1d': 1, 'n_ratio_2d': 1, 'n_pdf': 1,
             },
             workers=[{'status': 'complete'}],
-            resources={'cpu_max': 50, 'memory_max': 40, 'disk_max': 75},
+            resources={
+                'cpu_max': 50, 'memory_max': 40, 'disk_max': 75,
+                'system_gpu_util_max': 100,
+            },
             manifest={'file_count': 1, 'total_bytes': 1},
             status='diagnostic_only',
             spectrum={
@@ -75,6 +78,8 @@ class TmdFullReportContract(unittest.TestCase):
         self.assertIn('## 平台质量', text)
         self.assertIn('tau1_z_P200', text)
         self.assertIn('0.75', text)
+        self.assertIn('系统级 GPU 遥测瞬时利用率峰值 100%', text.replace('\\%', '%'))
+        self.assertIn('不能认证全局瞬时占用始终不超过 80%', text)
 
     def test_figure_missing_is_fail_closed(self):
         from pyqcd.testing.tmd.build_full_report import _figure

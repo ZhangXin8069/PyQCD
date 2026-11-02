@@ -236,12 +236,20 @@ class TmdFullAnalysisContract(unittest.TestCase):
         self.assertIn('single_lattice_spacing', status['reasons'])
 
     def test_npz_publish_is_atomic(self):
-        from pyqcd.testing.tmd.analyze_full_production import _write_npz
+        from pyqcd.testing.tmd.analyze_full_production import (
+            _write_json, _write_npz,
+        )
 
         with tempfile.TemporaryDirectory() as root:
-            path = _write_npz(Path(root) / 'sample.npz', value=np.arange(3))
+            out_dir = Path(root) / 'nested'
+            path = _write_npz(out_dir / 'sample.npz', value=np.arange(3))
+            json_path = _write_json(out_dir / 'sample.json', {'value': 3})
             self.assertTrue(path.is_file())
-            self.assertFalse(list(path.parent.glob('*.tmp.npz')))
+            self.assertTrue(json_path.is_file())
+            self.assertEqual(
+                sorted(item.name for item in out_dir.iterdir()),
+                ['sample.json', 'sample.npz'],
+            )
 
     def test_artifact_manifest_excludes_governance_and_records_producer(self):
         from pyqcd.testing.tmd.analyze_full_production import (
@@ -271,7 +279,9 @@ class TmdFullAnalysisContract(unittest.TestCase):
 
     def test_summary_plot_helpers_write_nonempty_images(self):
         from pyqcd.testing.tmd.analyze_full_production import (
-            _plot_spectrum_comparison, _plot_sumratio_quality,
+            _plot_connected_ratio, _plot_effective_mass,
+            _plot_spectrum_comparison,
+            _plot_sumratio_quality,
         )
 
         spectrum = {
@@ -296,6 +306,28 @@ class TmdFullAnalysisContract(unittest.TestCase):
             _plot_sumratio_quality(plateau, plateau_path)
             self.assertGreater(spectrum_path.stat().st_size, 0)
             self.assertGreater(plateau_path.stat().st_size, 0)
+
+            source = np.ones((4, 24), dtype=np.float64)
+            mass_times = np.arange(1, 23)
+            mass = np.full(mass_times.shape, 1.1, dtype=np.float64)
+            mass_error = np.full(mass_times.shape, 0.1, dtype=np.float64)
+            mass_path = Path(root) / 'effective_mass.png'
+            _plot_effective_mass(
+                source, mass, mass_error, mass_times, 5, 12,
+                mass_path, 'synthetic effective mass')
+            self.assertGreater(mass_path.stat().st_size, 0)
+
+            connected_path = Path(root) / 'connected_3pt.png'
+            _plot_connected_ratio(
+                {
+                    'R': np.linspace(0.2, 0.4, 13),
+                    'R_err': np.full(13, 0.01),
+                    't_sep': 12,
+                },
+                connected_path,
+                'synthetic connected 3pt',
+            )
+            self.assertGreater(connected_path.stat().st_size, 0)
 
 
 if __name__ == '__main__':

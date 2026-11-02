@@ -36,7 +36,8 @@ while IFS= read -r line; do
     WARNING$'\t'FILE_UPPERCASE$'\t'pyqcd/testing/regression/baselines/docker_support/download_beta6.20_mu-0.2770_ms-0.2400_L24x72.sh$'\t'* | \
     WARNING$'\t'FILE_UPPERCASE$'\t'pyqcd/testing/regression/baselines/docker_support/download_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20260801.sh$'\t'* | \
     WARNING$'\t'FILE_UPPERCASE$'\t'pyqcd/testing/regression/baselines/docker_support/pack_beta6.20_mu-0.2770_ms-0.2400_L24x72.sh$'\t'* | \
-    WARNING$'\t'FILE_UPPERCASE$'\t'pyqcd/testing/regression/baselines/docker_support/pack_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20260801.sh$'\t'*)
+    WARNING$'\t'FILE_UPPERCASE$'\t'pyqcd/testing/regression/baselines/docker_support/pack_beta6.20_mu-0.2770_ms-0.2400_L24x72-v20260801.sh$'\t'* | \
+    WARNING$'\t'TAG_NAME_IN_PATH$'\t'docs/absorb_dev20_gluon_tmd_audit_20261022.md$'\t'*)
       EXPECTED=$((EXPECTED + 1))
       ;;
     '')

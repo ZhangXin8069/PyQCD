@@ -98,6 +98,8 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
   只读历史证据，路径中的 tag 形目录名只作版本定位，允许精确保留；不得据此新增同类路径。
 - 本地例外 8：`pyqcd/testing/tmd/artifacts/*/docs/analy_test9_*` 是与二进制 PDF 成对的
   冻结产物，为保持 TeX/PDF 一致性允许保留，并由本地包装器逐路径豁免。
+- 本地例外 9：`docs/absorb_dev20_gluon_tmd_audit_20261022.md` 是绑定历史 `dev20`
+  审计语境的既有文档；为避免破坏历史引用保留其名称，不授权新增同类 tag 形路径。
 
 <!-- form-skill:end -->
 

@@ -573,3 +573,19 @@
 - 关键内容: 区分外部态、胶子算符、收缩与下游重整化层，并标明 HYP/stout/momentum-smear/Wilson-flow 的作用对象
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## tmd-full-20261101-final - final - 2026-11-02 20:13:32 +0800
+- 主任务: 6250–8450 梯度流核子胶子 PDF/TMD-PDF 全链生产、分析与中文报告
+- 日志文件: logs/v2026110220.txt
+- 文件大小: 6701 bytes
+- 触发原因: 任务完成
+- 关键内容: 12 组态生产、诊断分析、strict verification、29 页中文报告与三零 XeLaTeX 验收完成
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## tmd-full-20261101 - final - 2026-11-02 20:24:21 +0800
+- 主任务: 使用 6250–8450 完成梯度流重整化核子胶子 PDF/TMD-PDF 全链生产、分析、图表、docs 报告与 logs 归档
+- 日志文件: logs/v2026110220-2.txt
+- 文件大小: 16867 bytes
+- 触发原因: 任务完成
+- 关键内容: 12 组态全链完成；813 个产物、48,248,396,007 字节；验证 passed；111 passed/1 skipped/0 failed；报告 29 页三零；diagnostic_only
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

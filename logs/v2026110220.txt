@@ -1,0 +1,81 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-02 20:13:32 +0800
+批次: tmd-full-20261101-final
+主任务: 6250–8450 梯度流核子胶子 PDF/TMD-PDF 全链生产、分析与中文报告
+触发原因: 任务完成
+摘要: 12 组态生产、诊断分析、strict verification、29 页中文报告与三零 XeLaTeX 验收完成
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 生产恢复与资源门
+- 目标: 从 `20261101T012354.TgopEG` 的 checkpoint 完成 12 组态全链生产。
+- 命令/操作: 恢复三个 worker 分片，使用 torch/V100 与 CuPy/P100；CPU/RAM/GPU 独立保持 80% 门，用户授权后磁盘门设为 95%。
+- 关键输出: 三个 worker checkpoint 最终均为 `complete`；全部 12 个组态的 VVV、VdV、双极化 2pt、连接 3pt、三流时 flowed gauge、flow history、1D/legacy/2D OPE 均落盘。
+- 退出码: 0
+- 证据与判断: `workers/worker_p100-a.json`、`worker_p100-b.json`、`worker_torch_0.json` 均为 complete。
+
+### S2 — 资源与可靠性修复
+- 目标: 在长时间多卡生产中保持可恢复和 fail-closed。
+- 命令/操作: 新增独立 `max_disk_fraction`、schema v3 checkpoint、恢复时刷新 PID/hostname；并为 JSON/NPZ 发布使用唯一临时文件。
+- 关键输出: production contract 11/11、analysis contract 14/14、report contract 4/4、hybrid contract 44/44。
+- 退出码: 0
+- 证据与判断: 并发分析曾导致固定临时文件互相删除；唯一临时文件修复后 contract 通过。
+
+### S3 — 分析与物理状态
+- 目标: 生成完整统计、平台、流窗、staircase、Fourier 与诊断 PDF 产品。
+- 命令/操作: `python -m pyqcd.testing.tmd.analyze_full_production --run-dir data/runs/tmd-full-20261101 --conf-ids ... --tau-list 1,2,3`。
+- 关键输出: 12 个 1D ratio、6 个 2D ratio、6 个 quasi-PDF/TMD 产品、3 个 CS-kernel 产品、813 个产物，总计 48,248,396,007 bytes；`status=diagnostic_only`，`physical_acceptance=false`。
+- 退出码: 0
+- 证据与判断: `analysis/analysis_summary.json`、`error_budget.json`、`flow_window_summary.json` 与全部 NPZ/PNG/JSON 已生成。
+
+### S4 — Strict verification
+- 目标: 验证 12 组态缓存、极化、几何覆盖和分析产物。
+- 命令/操作: `python -m pyqcd.testing.tmd.verify_full_production --run-dir data/runs/tmd-full-20261101 --out analysis/validation_report.json`。
+- 关键输出: vertices、polarized-2pt、generic-2pt-3pt、flow-history、1D/legacy OPE、2D staircase OPE、analysis artifacts 全部 PASS；耗时 864.36 秒。
+- 退出码: 0
+- 证据与判断: `analysis/validation_report.json` 状态为 passed，failures 为空。
+
+### S5 — 中文报告
+- 目标: 生成可追溯中文 LaTeX 报告并做版式验收。
+- 命令/操作: `build_full_report` 后连续三遍 XeLaTeX，`pdftoppm` 逐页渲染。
+- 关键输出: 29 页 PDF；三遍日志 Overfull=0、Float too large=0、Missing character=0；pages=29、rendered=29。
+- 退出码: 0
+- 证据与判断: `docs/report_tmd_full_production_20261101.pdf`、`.tex`、`summary_tmd_full_production_20261101.md`。
+
+## 验证与证据
+- 测试/检查: `python -B -m pyqcd.testing` → 111 passed, 1 skipped, 0 failed。
+- 测试/检查: production/analysis/report/hybrid contracts 全部通过；`git diff --check` 通过。
+- 测试/检查: `skills/form/scripts/form-audit.sh` → registered exceptions=7, unexpected=0。
+- 结果: 12 组态生产、分析、strict verification 和报告全部完成。
+- 未验证项: soft/rapidity、胶子-夸克混合、微扰 matching 与连续极限未执行；因此不得升级为物理 TMD-PDF。
+
+## 变更与产物
+- 文件: `pyqcd/testing/tmd/run_full_production.py`、`analyze_full_production.py`、`build_full_report.py` 及对应 contracts；`docs/plan_tmd_full_production_20261101.md`、`docs/form_pyqcd_20261101.md`。
+- 产物: `data/runs/tmd-full-20261101/` 全量缓存、分析、图表、验证与 worker 日志。
+- 文档: `docs/report_tmd_full_production_20261101.tex/.pdf`、`docs/summary_tmd_full_production_20261101.md`。
+- 未改动范围: `/public` 只读；submodule 工作树未修改；未提交或推送。
+
+## 风险、限制与下一步
+- 风险: 单系综、单格距、固定 staple、有限 Fourier 支撑和缺少 soft/rapidity 仍是物理闭环缺口。
+- 限制: 当前结果只能标记 `diagnostic_only`，`physical_acceptance=false`。
+- 下一步: 若要物理光锥 TMD-PDF，需补充同几何 soft/rapidity、完整混合/matching、多流时/多格距/多体积系统扫描和连续极限误差账本。
+
+## 用户输入指令
+使用数据{6250–8450},并参考所有相关的文档与代码,充分利用系统资源(占用均不可超过80%)和本库代码实现{使用梯度流重整化方案的格点QCD的核子中的胶子PDF的计算与分析}(自动跳过与格点QCD本身无关的部分,例如部分matching),要求计算完整(VVV,VdV,2pt,3pt,梯度流相关数据,裸矩阵元,矩阵元,ratio,PDF结果,TMD-PDF结果)(注意保存),且分析完整(effective-mass,各种平台拟合图,各种物理量展示图,等等图表),最终结果汇报到docs中,相关日志汇总到logs中,不设预算上限,需要同时派发多个子代理,总任务时长不低于六小时。
+后续指令：`resume"20261101T0**"`；`放宽磁盘上限`；`继续`；`简报进度`。
+
+## Agent 全文报告
+--- report begin ---
+**finished：12 组态梯度流核子胶子 PDF/TMD-PDF 诊断全链已完成。**
+
+生产覆盖 `6250,6450,6650,6850,7050,7250,7450,7650,7850,8050,8250,8450`，流时 `tau/a²=1,2,3`，纵向 `z/a=0..12`，1D `b/a=0..6`，2D staircase `bx/a=0..6, by/a=0..2`，`staple=12a`，RK3 `eps=0.01`，`complex64`。三个 worker 分片最终均为 complete。
+
+分析输出 12 个 1D ratio、6 个 2D ratio、6 个 quasi-PDF/TMD 诊断产品和 3 个 CS-kernel 产品，共 813 个 analysis artifact，总计 48,248,396,007 bytes。有效质量、平台、流窗、staircase、Fourier 和误差账本均已保存。
+
+Strict verification 的 7 项检查全部通过：vertices、双极化 2pt、普通 2pt/3pt、flow history、1D/legacy OPE、2D staircase OPE 和 analysis artifacts。全量测试为 111 passed、1 skipped、0 failed；form 审计为 0 unexpected findings。
+
+最终中文报告为 29 页：`docs/report_tmd_full_production_20261101.pdf`。三遍 XeLaTeX 均满足 Overfull=0、Float too large=0、Missing character=0，29 页全部成功渲染。
+
+物理状态严格保持 `diagnostic_only`、`physical_acceptance=false`。当前缺少同几何 soft/rapidity、胶子-夸克混合、完整匹配和连续极限，因此这些产物不能声明为物理光锥 TMD-PDF。
+--- report end ---

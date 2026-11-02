@@ -1,0 +1,248 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-02 20:24:21 +0800
+批次: tmd-full-20261101
+主任务: 使用 6250–8450 完成梯度流重整化核子胶子 PDF/TMD-PDF 全链生产、分析、图表、docs 报告与 logs 归档
+触发原因: 任务完成
+摘要: 12 组态全链完成；813 个产物、48,248,396,007 字节；验证 passed；111 passed/1 skipped/0 failed；报告 29 页三零；diagnostic_only
+Git 根目录: /root/PyQCD
+
+## 关键日志
+
+### S0 — 任务定义与身份
+- 任务：对组态 `6250–8450` 完成梯度流重整化格点 QCD 核子胶子 PDF/TMD-PDF 全链计算与分析。
+- 激活身份：`{物理+代码}`；物理层按 Wilson flow、Clover/对偶场强、staple、OPE、断连 ratio、平台拟合与准 PDF/TMD-PDF 诊断链检查；工程层按可恢复 worker、显式验证、fail-closed 图表和可复现报告实现。
+- 目标累计运行时间：`57021s`，约 `15.8h`，满足“总任务时长不低于六小时”。
+- 并行事实：最终生产由 3 个 worker 同时分片；另形成 4 份子代理审计文档：物理链、生产、验证、分析报告计划。
+- 任务边界：按要求跳过非格点 QCD matching；不把仅有格点端数据解释为物理光锥 TMD-PDF。
+
+### S1 — 输入、流时与几何
+- 组态：`6250,6450,6650,6850,7050,7250,7450,7650,7850,8050,8250,8450`，共 12 组。
+- 格点：`24^3×72`，`a=0.1053 fm`。
+- 动量：`P000,P200,P020,P002,P400`。
+- Wilson-flow 流时：`tau/a^2=1,2,3`；RK3 步长 `epsilon=0.01`。
+- 1D 非局域几何：`z=0..12`，`b=0..6`，staple 长度 `L=12a`。
+- 2D staircase 几何：`bx=0..6`，`by=0..2`，两种顺序 `order01/order10`。
+- 时间分离：`t_sep=12`。
+- 原始 gauge、eigenvector、perambulator 与输入哈希均有账本；未访问任务无关路径，未修改 `/public`。
+
+### S2 — 生产完成情况
+- `worker_p100-a.json`：`status=complete`，组态 `6250,6850,7450,8050`。
+- `worker_p100-b.json`：`status=complete`，组态 `6450,7050,7650,8250`。
+- `worker_torch_0.json`：`status=complete`，组态 `6650,7250,7850,8450`。
+- 早期 `worker_cupy_0.json` 在 `6450` 的 distillation 阶段收到 `KeyboardInterrupt` 后中止；其分片由后续 Torch worker 接管。该失败没有留下伪完成状态。
+- 每个组态均完成：
+  - `VVV` 与 `VdV` 蒸馏顶点。
+  - 双极化核子 2pt：`nopol`、`pol35`。
+  - connected 2pt/3pt 与质子、π 介子关联函数。
+  - 三个流时的 flowed gauge 与 flow history。
+  - 9 个 1D full-channel OPE、9 个 legacy OPE、6 个 2D staircase OPE，共 24 个 OPE 调用。
+  - 裸矩阵元、矩阵元、ratio、平台、准 PDF/TMD-PDF 诊断层。
+- 全运行合计 288 个 OPE 调用。
+- 产物账本：`analysis/artifact_manifest.json`，`813` 个文件，`48,248,396,007` 字节；运行目录约 `45G`。
+- 用户随后明确“硬盘不设上限”，因此磁盘峰值 `84.66%` 不作为本任务阻塞项。
+
+### S3 — 资源与占用边界
+- 最终 worker 资源账本 `workers/resources_*.jsonl`：487 个采样。
+  - CPU 峰值：`36.6%`。
+  - RAM 峰值：`16.4%`。
+  - GPU 显存峰值：`32.073456%`。
+  - 磁盘峰值：`84.660382%`。
+- 系统级探针 `workers/system_resources.jsonl`：1273 个采样。
+  - CPU 峰值：`39.1%`。
+  - RAM 峰值：`17.0%`。
+  - GPU 显存峰值：`62.536621%`。
+  - GPU 利用率瞬时峰值：`100%`。
+- worker 分别配置 `gpu_duty_cycle=0.8` 或 `0.35` 以限制平均负载，但系统探针确实记录到 P100 瞬时 `100%`。因此最终报告只声明 CPU/RAM/GPU 显存配置门不超过 80%，不虚假声称全局瞬时 GPU 利用率始终低于 80%。
+
+### S4 — 正式分析
+- 分析命令入口：`python -m pyqcd.testing.tmd.analyze_full_production`。
+- 分析耗时：`1003.579s`。
+- 分析状态：`diagnostic_only`。
+- `physical_acceptance=false`。
+- 产物计数：
+  - `n_ratio_1d=12`。
+  - `n_ratio_2d=6`。
+  - `n_pdf=6`，与请求数 `n_pdf_requested=6` 一致。
+  - `n_cs_kernel=3`。
+  - flow history：12。
+- 图谱覆盖：
+  - Wilson-flow 作用量密度与 `t^2<E>` 历史。
+  - 核子 effective mass、平台窗与色散诊断。
+  - connected 3pt ratio 与方向/动量比较。
+  - 1D ratio、c0 平台、Sumratio 质量。
+  - 2D staircase ratio、heatmap 与顺序敏感性。
+  - flow-window 覆盖与配对流时差。
+  - 准 PDF、hybrid、CS kernel、误差预算。
+- 验证报告统计 PNG 共 `85` 张；分析 NPZ 与 JSON 均已保存。
+- 关键谱学诊断：
+  - `nopol_P000 = 1.0791 ± 0.0081 GeV`。
+  - `nopol_P200 = 1.4810 ± 0.0110 GeV`。
+  - `nopol_P020 = 1.4653 ± 0.0143 GeV`。
+  - `nopol_P002 = 1.4849 ± 0.0135 GeV`。
+  - `nopol_P400 = 2.2538 ± 0.0563 GeV`。
+  - `pol35_P000 = 0.4935 ± 0.0536 GeV`。
+  - `pol35_P200 = 0.8749 ± 0.0836 GeV`。
+  - `pol35_P020 = 0.6985 ± 0.2000 GeV`。
+  - `pol35_P002 = 0.8871 ± 0.3839 GeV`。
+  - `pol35_P400 = 1.3678 ± 0.5299 GeV`。
+- 误差账本中位数：
+  - 统计中位：`0.2291769078`。
+  - 平台窗漂移中位：`1.1556802649`。
+  - 流时相对效应中位：`0.9192816345`。
+  - staircase 相对 L2 中位：`0.2013008267`。
+  - Fourier 支撑：`x in [-0.9,0.9]`。
+- 顶层汇总：`data/runs/tmd-full-20261101/analysis/analysis_summary.json`。
+- 误差账本：`data/runs/tmd-full-20261101/analysis/error_budget.json`。
+
+### S5 — 全组态严格验证
+- 验证报告：`data/runs/tmd-full-20261101/analysis/validation_report.json`。
+- `status=passed`。
+- `failures=[]`。
+- 已通过的检查项：
+  - `vertices`：12/12，VdV 与 VVV 形状逐组态通过。
+  - `polarized-2pt`：12/12，双极化、5 动量 `72×72` 关联通过。
+  - `generic-2pt-3pt`：`n_2pt=48`、`n_3pt=48`。
+  - `flow-history`：12/12，每组态 31 个作用量采样、3 个 tau checkpoint。
+  - `full-and-legacy-1d-ope`：9 个 `(tau,z)` 通道通过。
+  - `full-2d-ope-both-staircases`：6 个 `(tau,order)` 通道通过。
+  - `analysis-artifacts`：`ratio_1d_npz=24`、`ratio_2d_npz=12`、`pdf_npz=6`、`png=85`、`n_pdf=6`。
+- 指定组态回验文件均在 `analysis/`：`validation_conf7450.json`、`validation_conf7850.json`、`validation_conf8050.json`、`validation_conf8250.json`、`validation_conf8450.json`。
+
+### S6 — 失败、根因与修复
+- 第一次正式分析失败：`_plot_effective_mass` 把组态数当作时间轴，传入了长度不匹配的 x/y，抛出 `ValueError: 'x' and 'y' must have the same size`。修复为使用 `source.shape[1]` 的时间轴，并加入 `(configuration,time)` 与 mean/error 同形守卫。
+- 第二次正式分析失败：1D ratio 的固定临时 NPZ 名在原子替换阶段缺失，抛出临时文件 `...tmp.npz -> ...npz` 的 `FileNotFoundError`。修复为在目标目录创建唯一 `NamedTemporaryFile`，原子替换并用 `finally` 清理，避免临时文件生命周期/命名冲突。
+- connected-3pt 一维时间序列绘图曾触发二维索引假设；修复为对一维输入升维，缺失分量关闭面板。
+- 报告资源表曾误读早期 `system_resources.jsonl`；修复为优先读取当前 `workers/resources_*.jsonl`，并保留系统级遥测边界。
+- 报告 worker 表 `0.16\linewidth` 产生 `5.38pt Overfull`；修复为 `0.20\linewidth`。
+- 上述历史失败保留在 `analysis/finalize.log`，未删除、未伪造；最终 `analysis/finalize_status.json` 已由过期 `analysis_failed` 更新为 `complete`，并记录成功证据。
+
+### S7 — 测试、报告与渲染
+- 最终全量回归：`python -B -m pyqcd.testing`。
+- 结果：`111 passed, 1 skipped, 0 failed`。
+- 跳过项：环境缺少 `physics.sty`，与本次产物无关。
+- 报告源：`docs/report_tmd_full_production_20261101.tex`。
+- 报告 PDF：`docs/report_tmd_full_production_20261101.pdf`，29 页，约 2.18 MB。
+- Markdown 摘要：`docs/summary_tmd_full_production_20261101.md`。
+- 报告索引：`docs/AGENTS.md`。
+- XeLaTeX 连续三遍成功；最终日志统计：
+  - `Overfull=0`。
+  - `Float too large=0`。
+  - `Missing character=0`。
+- PDF 使用 `pdftoppm` 全页渲染，`page-01.png` 至 `page-29.png` 共 29 个文件，完整率 29/29。
+- 报告资源页和摘要均明确写明系统级 GPU 瞬时峰值 100% 不可认证边界。
+
+### S8 — 需求逐项审计
+- `VVV,VdV`：完成并通过形状验证。
+- `2pt,3pt`：双极化 2pt、connected 2pt/3pt 完成并通过验证。
+- 梯度流相关数据：3 个流时、flow gauge、31 点 flow history、t0 诊断完成。
+- 裸矩阵元、矩阵元、ratio：1D/2D、多方向、多流时完成。
+- PDF 与 TMD-PDF：6 个格点端准 PDF/TMD-PDF 诊断产物完成；按物理边界不宣称物理光锥结果。
+- effective-mass、平台拟合、物理量与误差预算图：完成。
+- docs 汇报：TeX、PDF、Markdown 与索引完成。
+- logs 汇总：本 final 日志完成。
+- 多子代理：4 份审计文档与最终 3 worker 并行生产均有文件证据。
+- 六小时下限：累计约 15.8h，满足。
+- 资源：CPU、RAM、GPU 显存低于 80%；磁盘按后续显式例外不设上限；全局瞬时 GPU 利用率严格低于 80% 无法由现有遥测证明。
+
+## 验证与证据
+- 测试/检查：`python -B -m pyqcd.testing`。
+- 结果：`111 passed, 1 skipped, 0 failed`。
+- 物理链验证：`validation_report.json` 为 `passed`、`failures=[]`。
+- 分析状态：`analysis_summary.json` 为 `diagnostic_only`、`physical_acceptance=false`。
+- 报告检查：29 页、三遍 XeLaTeX、三零、29/29 页渲染。
+- 格式检查：`git diff --check` 通过。
+- 未验证项：全局瞬时 GPU 利用率严格 `<80%`；soft/rapidity、胶子--夸克混合、非格点 matching、连续极限与 staple 外推不在本次可用数据/任务范围内。
+
+## 变更与产物
+- 代码与测试：
+  - `pyqcd/testing/tmd/analyze_full_production.py`：effective-mass 时间轴、connected-3pt 一维兼容、NPZ 原子写入稳健化。
+  - `pyqcd/testing/tmd/build_full_report.py`：资源来源、资源遥测边界、worker 表宽修复。
+  - `pyqcd/testing/_tmd_full_report_contract.py`：资源遥测边界契约断言。
+- 文档：
+  - `docs/report_tmd_full_production_20261101.tex`。
+  - `docs/report_tmd_full_production_20261101.pdf`。
+  - `docs/summary_tmd_full_production_20261101.md`。
+  - `docs/AGENTS.md`。
+- 运行与证据根目录：`/root/PyQCD/data/runs/tmd-full-20261101`。
+- 最终状态：`analysis/finalize_status.json` 为 `complete`。
+- 未改动范围：未修改 `/public`，未删除生产文件，未提交或推送 Git。
+
+## 风险、限制与下一步
+- 物理风险：当前只有单格距、单系综、固定 staple、有限 Fourier 支撑，且无 soft/rapidity、混合矩阵和连续极限，不能把诊断 PDF 作为物理 TMD-PDF 发布。
+- 资源风险：系统探针记录 P100 瞬时 100%；只能证明 duty-cycle 配置和 CPU/RAM/GPU 显存门，不能证明全时瞬时 GPU 利用率小于 80%。
+- 下一步：补同几何 soft/rapidity、显式胶子--夸克混合、多流时/多 staple 扫描、多格距连续极限；完成这些验收门后再升级物理状态。
+
+## 用户输入指令
+使用数据{6250–8450},并参考所有相关的文档与代码,充分利用系统资源(占用均不可超过80%)和本库代码实现{使用梯度流重整化方案的格点QCD的核子中的胶子PDF的计算与分析}(自动跳过与格点QCD本身无关的部分,例如部分matching),要求计算完整(VVV,VdV,2pt,3pt,梯度流相关数据,裸矩阵元,矩阵元,ratio,PDF结果,TMD-PDF结果)(注意保存),且分析完整(effective-mass,各种平台拟合图,各种物理量展示图,等等图表),最终结果汇报到docs中,相关日志汇总到logs中,不设预算上限,需要同时派发多个子代理,总任务时长不低于六小时 [重申原始指令]
+
+补充约束原文：硬盘不设置上限。
+
+## Agent 全文报告
+--- report begin ---
+# 梯度流重整化核子胶子 PDF/TMD-PDF 全链任务最终报告
+
+## 结论
+
+任务 `finished`。组态 `6250–8450` 的 12 组数据已完成梯度流重整化格点端全链生产、分析、图表、验证、中文报告与日志归档。生产累计约 15.8 小时，使用 3 个最终 worker 并行分片，并形成 4 份独立子代理审计文档。
+
+正式物理状态保持 `diagnostic_only`，`physical_acceptance=false`。已生成准 PDF/TMD-PDF 诊断结果，但不将其解释为物理光锥 TMD-PDF：缺少 soft/rapidity、胶子--夸克混合、非格点 matching、连续极限和 staple 外推。
+
+## 完成物
+
+- 运行根目录：`/root/PyQCD/data/runs/tmd-full-20261101`。
+- 全链汇总：`analysis/analysis_summary.json`。
+- 验证报告：`analysis/validation_report.json`，`status=passed`、`failures=[]`。
+- 产物清单：`analysis/artifact_manifest.json`，813 个文件，48,248,396,007 字节。
+- 误差账本：`analysis/error_budget.json`。
+- 最终状态：`analysis/finalize_status.json`，`status=complete`。
+- 正式报告：`docs/report_tmd_full_production_20261101.tex`、`docs/report_tmd_full_production_20261101.pdf`，29 页。
+- 摘要：`docs/summary_tmd_full_production_20261101.md`。
+- 图表：`analysis/flow`、`spectrum`、`ratio_1d`、`ratio_2d`、`plateaus`、`plateaus_2d`、`flow_windows`、`pdf`。
+- 报告渲染证据：`analysis/pdf_render_check/page-01.png` 至 `page-29.png`。
+- 子代理审计：`analysis/agents/physics_chain_audit.md`、`production_audit.md`、`verification_audit.md`、`analysis_report_plan.md`。
+
+## 物理与数值链
+
+输入为 12 个组态的 gauge、eigenvector 与 perambulator。每个组态完成 VVV/VdV 蒸馏顶点、双极化核子 2pt、connected 2pt/3pt，并在 `tau/a^2=1,2,3` 上进行 Wilson flow。每个流时保存 flowed gauge 与 flow history，主 flow history 包含 31 个作用量采样与 3 个 checkpoint。
+
+非局域胶子算符使用 `z=0..12`、`b=0..6`、staple `L=12a`；二维扫描使用 `bx=0..6`、`by=0..2` 两种 staircase。每个组态生成 9 个 1D full-channel OPE、9 个 legacy OPE 与 6 个 2D staircase OPE，共 24 个 OPE 调用；全运行 288 个。随后执行断连 ratio、Sumratio/c0 平台、flow-window、误差预算、Fourier 与 CS kernel 诊断。
+
+分析生成 12 条 1D ratio、6 条 2D ratio、6 个 PDF/TMD-PDF 诊断产物和 3 个 CS kernel 产物，验证到 85 张 PNG。
+
+## 关键诊断结果
+
+无极化核子平台诊断给出：
+
+| 通道 | E [GeV] | 平台窗 [t/a] |
+|---|---:|---|
+| `nopol_P000` | 1.0791 ± 0.0081 | `[5,13]` |
+| `nopol_P200` | 1.4810 ± 0.0110 | `[5,11]` |
+| `nopol_P020` | 1.4653 ± 0.0143 | `[5,11]` |
+| `nopol_P002` | 1.4849 ± 0.0135 | `[5,11]` |
+| `nopol_P400` | 2.2538 ± 0.0563 | `[4,9]` |
+
+极化通道误差明显较大，例如 `pol35_P000=0.4935±0.0536 GeV`、`pol35_P200=0.8749±0.0836 GeV`、`pol35_P400=1.3678±0.5299 GeV`，因此只作为诊断层展示。
+
+误差预算中，平台窗漂移中位为 `1.156`、流时相对效应中位为 `0.919`、staircase 相对 L2 中位为 `0.2013`；这些系统量级是当前不能升级为物理 PDF 的主要数值依据。Fourier 支撑为 `x in [-0.9,0.9]`。
+
+## 验证与报告
+
+`validation_report.json` 的 7 个主检查均通过：vertices、polarized-2pt、generic-2pt-3pt、flow-history、1D OPE、2D OPE、analysis-artifacts。最终全量测试为 `111 passed, 1 skipped, 0 failed`，唯一跳过项是环境缺少 `physics.sty`。
+
+报告经三遍 XeLaTeX 编译，最终 29 页，`Overfull=0`、`Float too large=0`、`Missing character=0`；29 页全部重新渲染成功。
+
+## 失败与修复记录
+
+早期 CuPy worker 在 distillation 阶段被中断，后续由 Torch worker 完成对应组态，最终三个有效 worker 均为 `complete`。
+
+第一次分析失败源于 effective-mass 图横轴误用组态数，已改为时间轴并增加同形守卫。第二次分析失败源于 ratio NPZ 固定临时名在原子替换时缺失，已改为目标目录内唯一临时文件和 `finally` 清理。connected-3pt 的一维输入绘图、报告资源来源和 5.38pt Overfull 也已修复。历史错误保留在 `analysis/finalize.log`，最终状态文件记录成功结果。
+
+## 资源边界
+
+最终 worker 账本记录 CPU `36.6%`、RAM `16.4%`、GPU 显存 `32.073456%`；磁盘峰值 `84.66%`，用户已明确硬盘不设上限。系统级探针记录 P100 瞬时利用率最高 `100%`。worker 配置了 duty-cycle，但不能据此声称全局瞬时 GPU 利用率始终低于 80%。正式报告和摘要已如实标注该限制。
+
+## 限制与下一步
+
+当前结果不能作为物理光锥 TMD-PDF 发布。下一阶段应按物理瓶颈补齐同几何 soft/rapidity、显式胶子--夸克混合矩阵、多流时与多 staple 扫描、多格距/体积数据与连续极限；完成这些门后才考虑提升 `physical_acceptance`。
+--- report end ---

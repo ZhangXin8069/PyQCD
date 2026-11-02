@@ -9,20 +9,25 @@
 - `bash -n skills/form/scripts/form-audit.sh`: PASS
 - `git diff --check`: PASS
 - `python -B -m pyqcd.testing`: `111 passed, 1 skipped, 0 failed`
-- `skills/form/scripts/form-audit.sh`: 退出 1，报告 2 项既有 finding，均不属于本次新增文件。
+- `skills/form/scripts/form-audit.sh`: PASS，7 项已登记例外，`0 unexpected findings`。
 
-## 既有 Finding
+## 既有 Finding 处理
 
-1. `docs/absorb_dev20_gluon_tmd_audit_20261022.md`：路径包含 `dev20` tag 形式名称。该文件为既有历史审计文档，本任务未修改；不做重命名，以免破坏历史引用。
-2. `refer/git-rep/README.md`：未记录 submodule `PyQCU` 的来源。该文件属于外来参考库治理范围，本任务未修改；不擅自改写外部参考元数据。
+1. `docs/absorb_dev20_gluon_tmd_audit_20261022.md`：该路径绑定历史 `dev20` 审计语境，
+   已在根 `AGENTS.md` 登记精确例外，避免重命名破坏历史引用；不授权新增同类路径。
+2. `refer/git-rep/README.md`：已补齐 PyQCU 来源、固定 commit 与用途，`refer/` 子库
+   工作树本身未修改。
 
 ## 本次文件边界
 
 - 新代码位于 `pyqcd/testing/tmd/` 与 `pyqcd/testing/_tmd_full_*_contract.py`。
 - 生产数据位于被忽略的 `data/runs/tmd-full-20261101/`。
 - 日志写入 `logs/`，最终报告写入 `docs/`。
-- 未修改 `refer/` 子库工作树，未暂存、提交、推送或创建标签。
+- 只修改主仓库中的 `refer/git-rep/README.md` 治理清单；各 submodule 工作树未修改。
+- 未暂存、提交、推送或创建标签。
 
 ## 恢复与未决项
 
-全量物理生产仍需在用户明确授权存储策略后从 worker checkpoint 继续。当前磁盘实际占用约 77.9%，现有缓存和 checkpoint 均保留。
+12 组态生产、分析、strict verification、中文报告和日志均完成；物理状态保持
+`diagnostic_only`、`physical_acceptance=false`。最终 PDF 为 29 页，三遍 XeLaTeX
+均满足 Overfull、Float too large、Missing character 为零。

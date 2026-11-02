@@ -11,6 +11,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -138,21 +139,32 @@ def _json_safe(value):
 def _write_json(path, payload):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + '.tmp')
-    temporary.write_text(
-        json.dumps(_json_safe(payload), indent=2, ensure_ascii=False) + '\n',
-        encoding='utf-8',
-    )
-    os.replace(temporary, path)
+    with tempfile.NamedTemporaryFile(
+            mode='w', encoding='utf-8', dir=path.parent,
+            prefix=f'.{path.name}.', suffix='.tmp', delete=False) as stream:
+        temporary = Path(stream.name)
+        stream.write(
+            json.dumps(
+                _json_safe(payload), indent=2, ensure_ascii=False) + '\n')
+    try:
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
 
 
 def _write_npz(path, **arrays):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix('.tmp.npz')
-    np.savez_compressed(temporary, **arrays)
-    os.replace(temporary, path)
+    with tempfile.NamedTemporaryFile(
+            dir=path.parent, prefix=f'.{path.name}.',
+            suffix='.tmp.npz', delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        np.savez_compressed(temporary, **arrays)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
 
 
@@ -638,9 +650,14 @@ def _plot_effective_mass(source, mean, error, times, start, end, path, label):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
+    source = np.asarray(source)
+    if source.ndim != 2:
+        raise ValueError('effective-mass source 必须为 (configuration,time)')
+    if np.shape(mean) != np.shape(times) or np.shape(error) != np.shape(times):
+        raise ValueError('effective-mass mean/error 必须与 times 同形')
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.2), constrained_layout=True)
     axes[0].errorbar(
-        np.arange(source.shape[0]), np.abs(source.mean(axis=0)),
+        np.arange(source.shape[1]), np.abs(source.mean(axis=0)),
         yerr=sem(np.abs(source), jackknife=True), marker='o', ms=2.5,
         lw=1.0, capsize=1.5, color='#174A6E')
     axes[0].set_yscale('log')
@@ -669,8 +686,16 @@ def _plot_connected_ratio(item, path, label):
 
     values = np.asarray(item['R'])
     errors = np.asarray(item['R_err'])
+    if values.ndim == 1:
+        values = values[:, None]
+        errors = errors[:, None]
+    if values.ndim != 2 or errors.shape != values.shape or values.shape[1] > 4:
+        raise ValueError('connected-3pt R/R_err 必须同形且最多包含四个分量')
     fig, axes = plt.subplots(2, 2, figsize=(10.0, 6.0), constrained_layout=True)
     for component, axis in enumerate(axes.ravel()):
+        if component >= values.shape[1]:
+            axis.axis('off')
+            continue
         x = np.arange(values.shape[0])
         axis.errorbar(x, values[:, component], yerr=errors[:, component],
                       marker='o', ms=2.5, lw=1.0, capsize=1.5,
