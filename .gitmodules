@@ -15,4 +15,4 @@
 	url = https://github.com/CLQCD/PyQUDA
 [submodule "refer/git-rep/PyQCU"]
 	path = refer/git-rep/PyQCU
-	url = https://code.itp.ac.cn/zhangxin8069/PyQCU.git
+	url = https://gitlab.itp.ac.cn/zhangxin8069/PyQCU.git

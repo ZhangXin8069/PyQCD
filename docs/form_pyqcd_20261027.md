@@ -18,7 +18,7 @@
 - `docs/absorb_dev20_gluon_tmd_audit_20261022.md`：路径包含 Git 标签名。
 - `docs/plans/2026-10-22-absorb-dev20-gluon-tmd-debug.md`：路径包含 Git 标签名。
 - `refer/git-rep/README.md`：未记录子模块 PyQCU 的来源
-  `https://code.itp.ac.cn/zhangxin8069/PyQCU.git`。
+  `https://gitlab.itp.ac.cn/zhangxin8069/PyQCU.git`。
 
 前两项属于历史文档命名债，后一项位于只读 `refer/` 边界。为避免超越本次发布范围，
 本次不改名、不移动、不修改参考树，也不修改审计包装器来隐藏问题。
