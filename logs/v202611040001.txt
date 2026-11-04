@@ -1,0 +1,64 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-04 00:01:21 +0800
+批次: dev32-extend
+主任务: 承接 dev32：补算 9 个未生产组态并扩展分析链
+触发原因: 阶段成果
+摘要: 3 组态已开算，6 个待上游；分析/报告链参数化完成，31 契约测试通过
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 承接基线与输入盘点
+- 目标: 以 dev32 为基线，确认可继续计算的输入。
+- 命令/操作: `git log -1 dev32`、三层输入目录清点（gauge/eigensystem/perambulators）、磁盘与 GPU 预检。
+- 关键输出: dev32=ea01a78，HEAD 领先 8 个仅文档/日志提交；原始系综 21 组态，本征矢 51 组态，perambulator 50 组态。
+- 退出码: 0
+- 证据与判断: 三层齐备 21 组态；已生产 12（6250--8450），待生产 9。
+
+### S2 — 9 组态可算性判定
+- 目标: 判定 9 个未生产组态的输入是否齐备。
+- 命令/操作: 逐组态统计 eigvecs 与 perams 文件数。
+- 关键输出: 4150/8650/8850 = 72 eig + 288 perp（齐备）；9050=256、9250=188、9450=175、9650=111、9850=111（上游仍在写入，mtime 实时更新）；10050=41 eig + 36 perp（自 2026-11-01 17:58 停写）。
+- 退出码: 0
+- 证据与判断: 仅 3 个组态可立即开算，其余需等待上游蒸馏生产。
+
+### S3 — 启动扩展生产
+- 目标: 以 3 GPU 并行生产 4150/8650/8850。
+- 命令/操作: `python -m pyqcd.testing.tmd.run_full_production --conf-ids <c> --backend torch|cupy --device 0|1|2 --stages distillation,flow,ope --worker-tag ext-a|ext-b|ext-c --cpu-threads 4 --max-resource-fraction 0.8 --max-disk-fraction 1.0 --gpu-duty-cycle 0.8`
+- 关键输出: 三个 worker 检查点 `workers/worker_ext-{a,b,c}.json` 建立，参数 `max_disk_fraction=1.0`、`max_resource_fraction=0.8`、`cpu_threads=4`。
+- 退出码: 0
+- 证据与判断: 首轮以 0.95 启动后按“磁盘不设上限”重启；重启前检查点仅 `distillation: running`，无已完成阶段。
+
+### S4 — 分析/报告链组态集合参数化
+- 目标: 让分析与报告可覆盖 12 以外的组态集合，同时保持 12 组态默认行为。
+- 命令/操作: 修改 `_validate_analysis_conf_ids(target=...)`、`analyze_run(target_conf_ids=...)`、CLI `--target-conf-ids`；`_validate_report_summary(expected_conf_ids=...)`、`build_report(..., expected_conf_ids)`、CLI `--expected-conf-ids`；`MAX_DISK_FRACTION` 0.95 → 1.0。
+- 关键输出: 新增 2 项契约测试、更新 1 项；`python -B -m unittest` 三项契约 31 tests OK。
+- 退出码: 0
+- 证据与判断: 改动向后兼容，默认路径与消息语义不变。
+
+### S5 — 子代理审计与看护
+- 目标: 并行核对 dev32 产物完整性并跟踪上游。
+- 命令/操作: 派发只读审计代理与上游监控代理；编写 `run_finalize_ext.sh` 与 `watch_extend.py`。
+- 关键输出: 审计结论 25 项要求全部满足、manifest 813/813 匹配、validation 7/7 passed、报告 29 页；看护脚本每 300 s 检测，齐备即占用空闲 GPU 开算，结束触发统一收尾。
+- 退出码: 0
+- 证据与判断: 12 组态产物无缺件；扩展链具备无人值守能力。
+
+## 验证与证据
+- 测试/检查: 三项契约测试（生产/分析/报告）；脚本语法检查 `bash -n`、`py_compile`；`FINALIZE_DRY_RUN=1` 空跑返回 waiting；资源快照 GPU 4.5--7.3%、磁盘 85.3%。
+- 结果: 31 tests OK；脚本语法与空跑通过；三个 worker 正常运行。
+- 未验证项: 显式目标集合路径的端到端冒烟（已启动，进行中）；扩展生产本身尚未完成。
+
+## 变更与产物
+- 文件: `pyqcd/testing/tmd/analyze_full_production.py`、`pyqcd/testing/tmd/build_full_report.py`、`pyqcd/testing/tmd/run_full_production.py`、`pyqcd/testing/_tmd_full_analysis_contract.py`、`pyqcd/testing/_tmd_full_production_contract.py`、`pyqcd/testing/_tmd_full_report_contract.py`；新增 `data/runs/tmd-ext-20261103/{run_finalize_ext.sh,watch_extend.py}`。
+- 产物: 扩展生产进程 3 个、看护进程 1 个。
+- 未改动范围: dev32 的 12 组态数据与分析产物未修改。
+
+## 风险、限制与下一步
+- 风险: 上游 10050 停滞；其余 5 组态依赖外部生产进度；磁盘不设上限，峰值预计约 90%。
+- 阻塞: 无（3 组态已在算）。
+- 下一步: 等待生产与上游补齐，触发统一分析、验证、docs 报告与 logs 归档。
+
+## Agent 全文报告
+--- report begin ---
+已按“不重算、补算 9 个组态”执行：4150、8650、8850 输入齐备并已在 3 张 GPU 上生产；9050/9250/9450/9650/9850 的上游 perambulator 仍在外部写入，10050 已停写。资源按 CPU/RAM/GPU ≤80% 配置，磁盘不设上限；分析/报告链已参数化支持扩展组态集，31 项契约测试通过；审计确认 dev32 的 12 组态产物 25 项要求全部满足。
+--- report end ---

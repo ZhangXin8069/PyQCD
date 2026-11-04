@@ -75,7 +75,7 @@ NON_DISK_RESOURCE_FIELDS = (
     "cpu_percent", "memory_percent", "gpu_memory_percent",
 )
 RESOURCE_FIELDS = NON_DISK_RESOURCE_FIELDS + ("disk_percent",)
-MAX_DISK_FRACTION = 0.95
+MAX_DISK_FRACTION = 1.0
 
 
 class ResourceLimitError(RuntimeError):

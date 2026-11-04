@@ -1,0 +1,68 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-04 07:52:35 +0800
+批次: tmd-ext-20261103
+主任务: 承接 dev32：补算未生产组态并完成分析与报告交付
+触发原因: 任务完成
+摘要: 4150 全链完成；13 组态统一分析/验证/报告交付，其余组态受上游制约
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 承接 dev32 与输入盘点
+- 目标: 在不重算 12 组态的前提下补算未生产组态。
+- 命令/操作: 清点 `/public/group/lqcd` 三层输入（规范场 21、本征矢 51、perambulator 50 组态），逐组态统计文件数与字节数。
+- 关键输出: 4150/8650/8850 齐备（72 eigvecs + 288 perams，每个 46080000 B）；9050=252/256、9250=184/188、9450=171/175、9650=109/111、9850=109/111（上游仍在写入）；10050=35/36（停滞）。
+- 退出码: 0
+- 证据与判断: 仅 3 个组态可立即开算，其余受外部 perambulator 生产约束。
+
+### S2 — 扩展生产
+- 目标: 在 V100 与 2×P100 上并行生产。
+- 命令/操作: `run_full_production --conf-ids <c> --backend torch|cupy --device 0|1|2 --stages distillation,flow,ope --cpu-threads 4 --max-resource-fraction 0.8 --max-disk-fraction 1.0 --gpu-duty-cycle 0.8`。
+- 关键输出: 4150 完成（distillation 1262 s、flow 2282 s、ope 4609 s，共 8137 s），产物 44 文件构成与既有 12 组态一致；8650/8850 首次因上游半写入文件触发 `reshape (4,72,100,4,100,2)` 失败，改为“288 文件且每个恰 46080000 B、5 分钟无写入”判据后等待上游。
+- 退出码: 0
+- 证据与判断: 4150 检查点 `complete`；其余组态上游自 00:52 起停止写入。
+
+### S3 — 收尾链干跑与缺陷修复
+- 目标: 在正式收尾前暴露问题。
+- 命令/操作: 以 13 组态执行 `run_finalize_ext.sh` 全链（镜像硬链接→分析→验证→报告→三遍 XeLaTeX）。
+- 关键输出: 发现并修复两处真实缺陷——① `verify_full_production` 误把 1D ratio 产物数量当作“≥组态数”（12 组态时与 4 通道×3τ 巧合相等，13 组态即失败），改为与 `analysis_summary.n_ratio_1d/2d` 对齐；② 报告 worker 表 4 行时出现 `Overfull \vbox 3.7pt`，改为 `len(workers) ≥ 4` 时 `\small`。
+- 退出码: 0
+- 证据与判断: 复跑验证 `status=passed`、failures=0；三遍编译 Overfull/Float/Missing 全零。
+
+### S4 — 正式收尾
+- 目标: 13 组态（12 + 4150）统一分析与交付。
+- 命令/操作: 看护于 07:19:29 触发停滞兜底并启动 `run_finalize_ext.sh`。
+- 关键输出: 分析 917.7 s、验证 `passed`（0 失败）、报告 29 页、三遍 XeLaTeX 诊断全零、逐页渲染通过；`finalize_ext_status=complete`。
+- 退出码: 0
+- 证据与判断: `analysis_summary`（13 组态、859 产物）、`validation_report.json`、`docs/report_tmd_ext_production_20261103.pdf`。
+
+## 验证与证据
+- 测试/检查: 三项契约测试 31 项全过；干跑与正式收尾全链；PDF 页数与逐页渲染；LaTeX 三遍诊断计数。
+- 结果: 分析 `status=diagnostic_only`、`n_configurations=13`、`artifact_count=859`；验证 `passed`/0 失败；报告 29 页、Overfull=0、Float=0、Missing=0。
+- 未验证项: 8650/8850/9050/9250/9450/9650/9850 未纳入（上游 perambulator 未补齐）；10050 上游停滞。
+
+## 变更与产物
+- 文件: `pyqcd/testing/tmd/analyze_full_production.py`、`build_full_report.py`、`run_full_production.py`、`verify_full_production.py`、三项契约测试；新增 `data/runs/tmd-ext-20261103/{run_finalize_ext.sh,watch_extend.py}`；`docs/AGENTS.md` 增补报告索引。
+- 产物: `data/runs/tmd-ext-20261103/analysis/`（859 产物、57.9 GB）、`docs/report_tmd_ext_production_20261103.tex/.pdf`、`docs/summary_tmd_ext_production_20261103.md`、`data/runs/tmd-ext-20261103/logs/finalize_ext_status.json`。
+- 未改动范围: dev32 的 12 组态数据、分析与既有报告未修改（`data/runs/tmd-full-20261101/analysis/` 保持原状）。
+
+## 风险、限制与下一步
+- 风险: 仅 13 组态参与统计（12 + 4150），其余组态依赖外部 perambulator 生产；结果仍为 `diagnostic_only`、`physical_acceptance=false`。
+- 阻塞: 上游 8650/8850 各差 3 个 perambulator 文件，9050–9850 未补齐，10050 自 2026-11-01 17:58 停滞。
+- 下一步: 上游补齐后重跑 `run_finalize_ext.sh`（CONF_IDS 加入新组态）即可扩展统计并覆盖报告；无需重算既有组态。
+
+## 用户输入指令
+1. 计算"未生产 9 个：4150、8650、8850、9050、9250、9450、9650、9850、10050" 并承接 dev32 的其他要求。
+2. 不要重算。
+3. 硬盘不设置上限。
+4. 其他资源占用要充分，但不要超过 80%。
+5. 在任务彻底完成前，禁止中断本 agent；继续全自动全程监督此工作。
+
+## Agent 全文报告
+--- report begin ---
+按"不重算 12 组态、补算未生产组态"执行：4150 已完成全链（蒸馏 1262 s + 流 2282 s + OPE 4609 s），8650/8850 因上游 perambulator 半写入失败并在判据收紧后等待，9050–9850 与 10050 上游始终未补齐。
+
+在正式收尾前用 13 组态做全链干跑，发现并修复两处真实缺陷（ratio 产物判据误用组态数；worker 表 4 行时 Overfull）。停滞兜底于 07:19 触发正式收尾：分析 917.7 s（13 组态、859 产物、57.9 GB）、严格验证 passed/0 失败、报告 29 页且三遍 XeLaTeX Overfull/Float/Missing 全零、逐页渲染通过。
+
+交付物：docs/report_tmd_ext_production_20261103.tex/.pdf、docs/summary_tmd_ext_production_20261103.md、data/runs/tmd-ext-20261103/analysis/、logs 归档。结果保持 diagnostic_only / physical_acceptance=false；未纳入组态已在报告中说明。
+--- report end ---

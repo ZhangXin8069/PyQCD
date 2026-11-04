@@ -10,7 +10,7 @@
 |---|---|
 | 全库/工作流 | `analy_pyqcd_20260818.tex`、`pure_pyqcd_20260818.tex`、`analy_physics_chain_20260824.tex`、`analy_torch_parallel_20260816.tex` |
 | 谱学/专题 | `analy_proton_energy_20260816.tex`、`analy_gpd_20260928.tex` |
-| TMD/重整化报告 | `report_gluon_tmd_gradient_flow_20260828.tex`、`report_tmd_gluon_audit_20261025.tex`、`report_gluon_tmd_flow_scan_20261029.tex`、`report_tmd_full_production_20261101.tex`、`summary_tmd_full_production_20261101.md` |
+| TMD/重整化报告 | `report_gluon_tmd_gradient_flow_20260828.tex`、`report_tmd_gluon_audit_20261025.tex`、`report_gluon_tmd_flow_scan_20261029.tex`、`report_tmd_full_production_20261101.tex`、`summary_tmd_full_production_20261101.md`、`report_tmd_ext_production_20261103.tex`、`summary_tmd_ext_production_20261103.md` |
 | 参考对照 | `report_cmp1_4150_20260828.tex`、`report_gradient_flow_gluonpdf_pyqcd_20260909.tex` |
 
 TeX 编译的中间文件不纳入结果证据；提交文档时只保留源文件与需要交付的 PDF。

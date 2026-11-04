@@ -22,6 +22,19 @@ class TmdFullAnalysisContract(unittest.TestCase):
             _validate_analysis_conf_ids(
                 CONF_IDS[:-1], allow_partial=True), tuple(CONF_IDS[:-1]))
 
+    def test_explicit_target_set_supports_extension_runs(self):
+        from pyqcd.testing.tmd.analyze_full_production import (
+            CONF_IDS, _validate_analysis_conf_ids,
+        )
+
+        target = (4150,) + tuple(CONF_IDS)
+        self.assertEqual(
+            _validate_analysis_conf_ids(target, target=target), target)
+        with self.assertRaisesRegex(ValueError, '13'):
+            _validate_analysis_conf_ids(tuple(CONF_IDS), target=target)
+        with self.assertRaisesRegex(ValueError, '不在'):
+            _validate_analysis_conf_ids((1111,), target=target)
+
     def test_direction_momentum_map_matches_flow_geometry(self):
         from pyqcd.testing.tmd.analyze_full_production import (
             DIRECTION_MOMENTUM,

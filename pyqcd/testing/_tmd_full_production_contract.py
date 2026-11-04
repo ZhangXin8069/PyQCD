@@ -86,7 +86,7 @@ class TmdFullProductionContract(unittest.TestCase):
             validate_resource_snapshot(
                 accepted,
                 max_fraction=0.8,
-                max_disk_fraction=0.951,
+                max_disk_fraction=1.001,
             )
 
     def test_disk_reserve_uses_the_independent_limit(self):

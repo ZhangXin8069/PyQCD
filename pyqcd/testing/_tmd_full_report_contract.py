@@ -106,6 +106,25 @@ class TmdFullReportContract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '12'):
             _validate_report_summary(summary)
 
+    def test_report_accepts_explicit_extension_conf_set(self):
+        from pyqcd.testing.tmd.build_full_report import _validate_report_summary
+
+        conf_ids = [
+            4150, 6250, 6450, 6650, 6850, 7050,
+            7250, 7450, 7650, 7850, 8050, 8250, 8450,
+        ]
+        summary = {
+            'status': 'diagnostic_only',
+            'physical_acceptance': False,
+            'conf_ids': conf_ids,
+            'tau_values': [1, 2, 3],
+        }
+        self.assertEqual(
+            _validate_report_summary(summary, conf_ids)[0], tuple(conf_ids))
+        summary['conf_ids'] = summary['conf_ids'][:-1]
+        with self.assertRaisesRegex(ValueError, '13'):
+            _validate_report_summary(summary, conf_ids)
+
     def test_report_generator_emits_evidence_and_no_placeholders(self):
         from pyqcd.testing.tmd.build_full_report import build_report
 

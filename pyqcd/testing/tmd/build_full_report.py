@@ -158,14 +158,16 @@ def _worker_rows(run_dir):
     return rows
 
 
-def _validate_report_summary(summary):
+def _validate_report_summary(summary, expected_conf_ids=EXPECTED_CONF_IDS):
+    expected = tuple(int(value) for value in expected_conf_ids)
     if summary.get('status') != 'diagnostic_only':
         raise ValueError('正式报告要求 analysis status=diagnostic_only')
     if summary.get('physical_acceptance') is not False:
         raise ValueError('正式报告要求 physical_acceptance=false')
     conf_ids = tuple(int(value) for value in summary.get('conf_ids', ()))
-    if conf_ids != EXPECTED_CONF_IDS:
-        raise ValueError('正式报告必须按目标顺序覆盖 12 个组态')
+    if conf_ids != expected:
+        raise ValueError(
+            f'正式报告必须按目标顺序覆盖 {len(expected)} 个组态')
     tau_values = tuple(float(value) for value in summary.get('tau_values', ()))
     if tau_values != EXPECTED_TAU_VALUES:
         raise ValueError('正式报告要求 tau_values=1,2,3')
@@ -311,13 +313,15 @@ def _summary_markdown(summary, workers, resources, manifest, status,
     return '\n'.join(lines) + '\n'
 
 
-def build_report(run_dir, tex_path, summary_path):
+def build_report(run_dir, tex_path, summary_path, expected_conf_ids=None):
     run_dir = Path(run_dir).resolve()
     analysis_dir = run_dir / 'analysis'
     summary = _load_json(analysis_dir / 'analysis_summary.json')
     if summary is None:
         raise FileNotFoundError('缺少 analysis/analysis_summary.json')
-    _validate_report_summary(summary)
+    if expected_conf_ids is None:
+        expected_conf_ids = EXPECTED_CONF_IDS
+    _validate_report_summary(summary, expected_conf_ids)
     required_json = {
         'spectrum': analysis_dir / 'spectrum' / 'spectrum_summary.json',
         'plateau': analysis_dir / 'plateaus' / 'plateau_summary.json',
@@ -512,9 +516,10 @@ def build_report(run_dir, tex_path, summary_path):
         resource_note += (
             f'系统级 GPU 遥测瞬时峰值 {_fmt(resources["system_gpu_util_max"], 4, "%")}，'
             '因此不能认证全局瞬时利用率始终不超过 80\\%。')
+    table_size = r'\small' if len(workers) >= 4 else ''
     frames.append(_frame(
         rf'{len(workers)} 个 worker 分片执行；CPU/RAM/GPU 显存配置门为 80\%',
-        workers_table + r'\vspace{0.5em}' + '\n' + gpu_table,
+        table_size + workers_table + r'\vspace{0.5em}' + '\n' + gpu_table,
         resource_note,
     ))
     frames.append(_frame(
@@ -801,12 +806,20 @@ def parse_args(argv=None):
     parser.add_argument(
         '--summary', type=Path,
         default=PROJECT_ROOT / 'docs' / 'summary_tmd_full_production_20261101.md')
+    parser.add_argument(
+        '--expected-conf-ids', default=None,
+        help='显式期望组态集合（默认 12 组态正式集合），用于扩展运行')
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
-    tex, summary = build_report(args.run_dir, args.tex, args.summary)
+    expected_conf_ids = None
+    if args.expected_conf_ids:
+        expected_conf_ids = tuple(
+            int(value) for value in args.expected_conf_ids.split(',') if value)
+    tex, summary = build_report(
+        args.run_dir, args.tex, args.summary, expected_conf_ids)
     print(tex)
     print(summary)
     return 0

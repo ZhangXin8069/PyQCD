@@ -102,8 +102,8 @@ ENERGY_WINDOWS = {
 }
 
 
-def _validate_analysis_conf_ids(conf_ids, *, allow_partial=False):
-    expected = tuple(int(value) for value in CONF_IDS)
+def _validate_analysis_conf_ids(conf_ids, *, allow_partial=False, target=None):
+    expected = tuple(int(value) for value in (CONF_IDS if target is None else target))
     values = tuple(int(value) for value in conf_ids)
     if not values:
         raise ValueError('分析组态列表不能为空')
@@ -111,10 +111,10 @@ def _validate_analysis_conf_ids(conf_ids, *, allow_partial=False):
         raise ValueError('分析组态列表不能包含重复值')
     unknown = sorted(set(values) - set(expected))
     if unknown:
-        raise ValueError(f'分析组态不在 12 组态目标集合中: {unknown}')
+        raise ValueError(f'分析组态不在 {len(expected)} 组态目标集合中: {unknown}')
     if not allow_partial and values != expected:
         raise ValueError(
-            '正式分析必须按目标顺序覆盖 12 个组态；部分运行需显式 --allow-partial')
+            f'正式分析必须按目标顺序覆盖 {len(expected)} 个组态；部分运行需显式 --allow-partial')
     return values
 
 
@@ -1739,13 +1739,14 @@ def write_artifact_manifest(run_dir, conf_ids, tau_values):
 
 
 def analyze_run(run_dir, conf_ids=CONF_IDS, tau_values=FLOW_TIMES,
-                logger=print, allow_partial=False):
+                logger=print, allow_partial=False, target_conf_ids=None):
     started = time.perf_counter()
     run_dir = Path(run_dir).resolve()
     conf_ids = _validate_analysis_conf_ids(
-        conf_ids, allow_partial=allow_partial)
+        conf_ids, allow_partial=allow_partial, target=target_conf_ids)
     tau_values = tuple(float(value) for value in tau_values)
-    logger(f"loading 12-configuration analysis inputs from {run_dir}")
+    logger(
+        f"loading {len(conf_ids)}-configuration analysis inputs from {run_dir}")
     raw_manifest = write_raw_input_manifest(run_dir, conf_ids)
     polarized_2pt = load_multi_2pt_polarizations(
         run_dir, conf_ids,
@@ -1822,17 +1823,25 @@ def parse_args(argv=None):
     parser.add_argument(
         '--allow-partial', action='store_true',
         help='允许显式缩小组态集合，仅用于 smoke/调试，不用于正式报告')
+    parser.add_argument(
+        '--target-conf-ids', default=None,
+        help='显式目标组态集合（默认使用 12 组态正式集合），用于扩展运行')
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
     conf_ids = tuple(int(value) for value in args.conf_ids.split(',') if value)
+    target_conf_ids = None
+    if args.target_conf_ids:
+        target_conf_ids = tuple(
+            int(value) for value in args.target_conf_ids.split(',') if value)
     tau_values = tuple(
         float(value) for value in args.tau_list.split(',') if value)
     result = analyze_run(
         args.run_dir, conf_ids, tau_values,
-        allow_partial=args.allow_partial)
+        allow_partial=args.allow_partial,
+        target_conf_ids=target_conf_ids)
     print(json.dumps({
         'status': result['status'],
         'physical_acceptance': result['physical_acceptance'],

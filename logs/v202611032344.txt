@@ -1,0 +1,89 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-03 23:44:03 +0800
+批次: dev32-input-inventory
+主任务: 承接 tag:dev32，盘点可继续用于计算的输入数据
+触发原因: 阶段成果
+摘要: 三层原始输入齐备 21 组态，已生产 12、可扩 9；缓存 588 文件自洽可读
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 定位 dev32 基线
+- 目标: 确认承接基线与仓库当前差异。
+- 命令/操作: `git log -1 --format=... dev32`、`git tag -l --format dev32`、`git log dev32..HEAD --oneline`、`git diff dev32..HEAD --stat`。
+- 关键输出: dev32=ea01a78（2026-11-03 02:41）；HEAD 领先 8 个提交，改动仅 logs/、docs/form_pyqcd_20261027.md、refer/git-rep/README.md、.gitmodules、PASS.md，无功能差异。
+- 退出码: 0
+- 证据与判断: dev32 为 12 组态梯度流胶子 TMD-PDF 全生产快照（111 passed/1 skipped/0 failed，diagnostic_only）。
+
+### S2 — 盘点原始输入三层
+- 目标: 找出可继续计算所需的规范场、本征矢、perambulator。
+- 命令/操作: `ls/du` 检查 `/public/group/lqcd/{configurations/CLOVER,eigensystem,perambulators}/beta6.20_mu-0.2770_ms-0.2400_L24x72`。
+- 关键输出: 规范场 21 个 .lime（4150、6250--9850 步长 200 共 19 个、10050；547 MiB/个，12 GB）；本征矢 51 组态（4150、6250--16050；72 eigvecs/组态）；perambulator 50 组态（4150、6250--15850；288 perams/组态，13 GB/组态）。
+- 退出码: 0
+- 证据与判断: 三层齐备 21 组态，其中已生产 12 个（6250--8450），未生产 9 个（4150、8650、8850、9050、9250、9450、9650、9850、10050）；10250--15850 有 eig+perp 缺 gauge，16050 缺 perp。
+
+### S3 — 复核已产出缓存
+- 目标: 确认 12 组态缓存与流缓存完整、可复用。
+- 命令/操作: 逐组态 `ls | grep -c` 分类计数、`find -size 0`、临时文件扫描、h5py 抽样读取。
+- 关键输出: 每组 44 文件且 12 组态完全一致（VVV×1、VdV×1、corr_pp×12、corr_pion×2、3pt×4、OPE v1×9、v2×9、2d×6）；flowed 36（12×tau1/2/3）+ flow_history 24；总文件 588；零字节 0；临时 0；h5 抽样 corr_pp (72,72) complex128、ope_v2 (2,4,6,13,7,72) complex64、VdV (72,5,100,100) complex64。
+- 退出码: 0
+- 证据与判断: 缓存可读且计数自洽；finalize_status=complete、validation 7 项通过。
+
+### S4 — 资源与外源核对
+- 目标: 判断继续计算的可行性边界。
+- 命令/操作: `df -h /root`、`nvidia-smi --query-gpu`、`ls/du /root/data`。
+- 关键输出: 磁盘 97 GB 可用（90% 已用）；GPU 2×P100 16 GB + V100 32 GB 空闲；18 核 / 88 GB RAM；`/root/data` 仅 L24x64 cfg9950 与 L32x64 cfg11000 两个孤立 lime。
+- 退出码: 0
+- 证据与判断: 每新增组态约 3.6 GB，9 组态约 33 GB，可行但余量有限；孤立 lime 属其他系综，不可混用。
+
+## 验证与证据
+- 测试/检查: 目录与计数只读核对；h5py 抽样读取；零字节/临时文件扫描；标签与提交差异核对。
+- 结果: 12 组态缓存构成一致、588 文件自洽、h5 可读；21 组态原始输入齐备；无残留半成品。
+- 未验证项: 未逐文件复核文件名内 sha256（需读取全部 GB 级数据）；未解析 .lime 内容；未启动任何计算。
+
+## 变更与产物
+- 文件: 仅新增本阶段日志及 logs/AGENTS.md 索引。
+- 产物: 输入数据盘点结论（原始三层覆盖矩阵、已产出缓存清单、资源边界、三条可续算路线）。
+- 未改动范围: 生产代码、测试、数据、配置与 /public 数据源均未修改。
+
+## 风险、限制与下一步
+- 风险: 磁盘已用 90%，大规划续算前需预留空间；10250--15850 缺规范场，无法直接开算。
+- 阻塞: 无。
+- 下一步: 由用户选择路线（+9 组态扩统计 / 复用 flow 缓存做新 z、b / 纯分析层扩展）。
+
+## Agent 全文报告
+--- report begin ---
+承接 tag:dev32（ea01a78，2026-11-03 02:41；HEAD 领先 8 个仅日志/文档/子模块提交，无功能差异），输入数据盘点结果：
+
+一、原始输入三层（/public/group/lqcd，只读）
+| 层 | 覆盖 | 规模 |
+|---|---|---|
+| 规范场 CLOVER/beta6.20_mu-0.2770_ms-0.2400_L24x72 | 21 个 .lime：4150、6250--9850（步长 200，19 个）、10050 | 547 MiB/个，共 12 GB |
+| 本征矢 eigensystem/<ens>/<conf>/ | 51 组态：4150、6250--16050 | 72 eigvecs/组态，约 4.4 GB/组态 |
+| perambulator perambulators/<ens>/light/<conf>/ | 50 组态：4150、6250--15850 | 288 perams/组态，约 13 GB/组态 |
+
+三件齐备、可直接开算的 21 组态：4150、6250--9850、10050。其中已生产 12 个（6250--8450），未生产 9 个（4150、8650、8850、9050、9250、9450、9650、9850、10050）。10250--15850 有本征矢与 perambulator 但缺规范场，16050 缺 perambulator，均不能直接跑 flow/顶点。
+
+二、已产出可复用缓存（data/runs/tmd-full-20261101，45 GB，gitignored）
+- data/conf<ID>/：12 × 2.8 GB，每组 44 文件且构成完全一致：VVV×1、VdV×1、corr_pp×12（5 动量 × nopol/pol35 + P0/P2）、corr_pion×2、3pt×4、OPE v1×9、v2×9、2d×6。
+- flowed/：36 个 flowed gauge（12 组态 × tau=1,2,3），9.7 GB；flow_history/ 24 个（json+npz）。
+- analysis/：ratio_1d 48、ratio_2d 26、pdf 25、plateaus 50、plateaus_2d 13、spectrum 28。
+- 状态：finalize_status=complete，validation_report 7 项全过，111 passed/1 skipped/0 failed；diagnostic_only、physical_acceptance=false。
+
+三、本次实测证据
+- h5py 抽样：corr_pp (72,72) complex128、tmd_ope_v2 (2,4,6,13,7,72) complex64、VdV (72,5,100,100) complex64，均可读。
+- 12 组态分类计数完全一致；零字节文件 0；临时/半成品 0；文件总数 588 = 12×44 + 36 + 24。
+- 冒烟输入 data/runs/tmd-smoke-20261101（276 MB，conf6250）。
+- /root/data 仅 L24x64 cfg9950（487 MB）与 L32x64 cfg11000（1.2 GB）两个孤立 lime，属其他系综，不可混用。
+
+四、资源边界
+- 磁盘 97 GB 可用（90% 已用）；每新增组态约 3.6 GB（缓存 2.8 + flow 0.8），9 组态约 33 GB。
+- GPU 空闲：2×P100 16 GB + V100 32 GB；18 核、88 GB RAM。
+
+五、可继续的计算路线
+1. 扩统计：对 9 个未生产组态跑 distillation→flow→ope，约 +33 GB。
+2. 复用已有 flowed 缓存（tau=1,2,3）做新 z/b/算符，无需重跑 flow。
+3. 纯分析层扩展（ratio→c0→匹配/外推）直接消费 data/conf*/ 与 analysis/。
+
+未验证：未逐文件复核文件名内 sha256（需读取全部 GB 级数据）、未解析 .lime 内容、未启动计算。
+--- report end ---

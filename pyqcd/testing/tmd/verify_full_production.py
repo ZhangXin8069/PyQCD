@@ -198,10 +198,19 @@ def verify_run(run_dir, conf_ids=CONF_IDS, tau_values=FLOW_TIMES,
         selected_1d = [path for path in ratio_1d if path.stem.endswith('_selected')]
         ratio_2d = sorted((analysis_dir / 'ratio_2d').glob('*.npz'))
         selected_2d = [path for path in ratio_2d if path.stem.endswith('_selected')]
-        if len(selected_1d) < len(conf_ids) or len(selected_2d) < 2 * len(tau_values):
+        n_ratio_1d = int(summary.get('n_ratio_1d', 0))
+        n_ratio_2d = int(summary.get('n_ratio_2d', 0))
+        if (n_ratio_1d < 4 * len(tau_values)
+                or n_ratio_2d < 2 * len(tau_values)):
             raise ValueError(
-                f'ratio selected 产物不足: 1D={len(selected_1d)}, '
-                f'2D={len(selected_2d)}')
+                f'分析汇总的 ratio 产物不足: 1D={n_ratio_1d}, '
+                f'2D={n_ratio_2d}')
+        if (len(selected_1d) != n_ratio_1d
+                or len(selected_2d) != n_ratio_2d):
+            raise ValueError(
+                f'ratio selected 产物与汇总不一致: '
+                f'1D={len(selected_1d)}/{n_ratio_1d}, '
+                f'2D={len(selected_2d)}/{n_ratio_2d}')
         for path in selected_1d + selected_2d:
             with np.load(path, allow_pickle=False) as handle:
                 if 'unpolarized_samples' not in handle.files:

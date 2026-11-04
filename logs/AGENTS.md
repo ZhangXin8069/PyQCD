@@ -596,3 +596,27 @@
 - 关键内容: 完成改动复查、init 幂等检查、全量回归、main 推送、dev32 标签创建与远端验证
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## dev32-input-inventory - stage - 2026-11-03 23:44:03 +0800
+- 主任务: 承接 tag:dev32，盘点可继续用于计算的输入数据
+- 日志文件: logs/v202611032344.txt
+- 文件大小: 6634 bytes
+- 触发原因: 阶段成果
+- 关键内容: 三层原始输入齐备 21 组态，已生产 12、可扩 9；缓存 588 文件自洽可读
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## dev32-extend - stage - 2026-11-04 00:01:21 +0800
+- 主任务: 承接 dev32：补算 9 个未生产组态并扩展分析链
+- 日志文件: logs/v202611040001.txt
+- 文件大小: 4882 bytes
+- 触发原因: 阶段成果
+- 关键内容: 3 组态已开算，6 个待上游；分析/报告链参数化完成，31 契约测试通过
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## tmd-ext-20261103 - final - 2026-11-04 07:52:35 +0800
+- 主任务: 承接 dev32：补算未生产组态并完成分析与报告交付
+- 日志文件: logs/v2026110407.txt
+- 文件大小: 5755 bytes
+- 触发原因: 任务完成
+- 关键内容: 4150 全链完成；13 组态统一分析/验证/报告交付，其余组态受上游制约
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
