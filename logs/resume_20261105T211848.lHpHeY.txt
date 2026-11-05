@@ -1,0 +1,308 @@
+# Resume Bootstrap — 20261105T211848.lHpHeY（pyqcd-einsum）
+
+本文件是**跨平台**的续跑引导：任何 agent（Command Code / Codex / Claude Code / OpenCode）
+在任意机器上只要拿到本文件与工作树，即可在不依赖原对话历史的前提下接手。
+内容分「已证实事实」与「推断」两类，推断项均已标注。
+
+```
+schema_version=1
+kind=resume-bootstrap
+source_run_id=20261105T211848.lHpHeY
+source_agent=commandcode
+source_launcher=cm
+source_model=deepseek/deepseek-v4.1-flash
+source_state=running          # 未收尾，无 turn-end / 无 session-end 事件
+source_created_at=2026-11-05T21:18:48+0800
+source_last_heartbeat=2026-11-05T23:01:33+0800
+source_workspace=/root/PyQCD
+source_cwd=/root/PyQCD
+source_session_id=            # 空
+source_thread_id=             # 空
+task_object=pyqcd-einsum      # 由 setup.py name="pyqcd-einsum" 与提交内容反推
+logs_imported=logs/v2026110521.txt            # 源 run 自身批次日志，§9 全文导入
+logs_index=18 个 logs/*.txt / 122948 bytes    # 全量索引与相关性判定见 §10
+generated_at=2026-11-05T23:47:50+0800
+generated_by=commandcode run 20261105T230724.GUWfVk
+```
+
+## 0. 怎么用（跨平台）
+
+任选其一，**只开一个写会话**，不要与其它 agent 并发改同一工作树：
+
+| 平台 | 动作 |
+|---|---|
+| 任意 agent | 首轮输入：`读取 /root/PyQCD/logs/resume_20261105T211848.lHpHeY.txt，按 §6 继续` |
+| Command Code (`cm`) | `cm --resume 20261105T211848.lHpHeY`（原生续跑，见 §5 的实测判定）；不可用时同「任意 agent」 |
+| Codex | 全新会话，首条消息贴本文件路径 + 「按 §6 继续」；不要求复原旧 thread |
+| Claude Code | 同上；`--resume` 只对本地 session_id 有效，本 run 无 session_id |
+| OpenCode | `opencode run "读取 <本文件>，按 §6 继续"`；不用 `-c`（会接到无关会话） |
+
+禁止：把本文件当作可执行脚本；把历史对话当权威（历史已丢失）；跨平台搬运凭据。
+
+## 1. 任务对象
+
+`pyqcd-einsum`：PyQCD 的**原生收缩引擎**，对外提供与 opt_einsum 兼容的 API。
+证据：`/root/PyQCD/setup.py:67` `name="pyqcd-einsum"`、
+`setup.py:69` `description="Native contraction engine for PyQCD with an opt_einsum-compatible API."`
+
+三层结构（均已落码）：
+
+| 层 | 位置 | 内容 |
+|---|---|---|
+| Python API/规划 | `pyqcd/einsum/` | `_api.py`(599) `_expr.py`(303) `_plan_py.py`(915) `_execute.py`(179) `_sharing.py`(206) `pathinfo/paths/parser/blas/helpers` |
+| CPU 原生 | `cpp/kupl/einsum/` | `src/plan_core.cpp`(649) `src/apply_plan.cpp`(206) + `make.sh` |
+| CUDA 原生 | `cpp/cuda/einsum/` | `src/{apply_plan,batched_gemm,permute}.cu` + `make-nv.sh` |
+| 绑定 | `pyqcd/einsum/_native.py`(89) `kupl/einsum.py`(222) `cuda/__init__.py`(45) `cuda/einsum.cpp`(10601) | ctypes + Cython |
+| 差分/基准 | `pyqcd/testing/einsum/` | `verify_compat.py`(401) `verify_cuda.py`(559) `bench_distillation.py`(649) `_oracle.py` `_target.py` |
+
+## 2. 源 run 事实（来自 run 目录，未经推断）
+
+- 目录：`/root/configure/data/runs/20261105T211848.lHpHeY/`
+- `events.jsonl`：仅 3 条 —— `session-created`、`session-start`、`turn-start`（21:18:48），
+  **无 turn-end / session-end**，故 `state=running` 属进程被杀而非正常结束。
+- `inputs.txt` = **0 字节**；`context.txt` 只记录 `instruction[1]=/root/PyQCD/AGENTS.md|lines=354`。
+  → **原始任务书不可恢复**，§1 是由产物反推，不是转述。
+- `agent.log` 仅 62 字节（reasoning effort 提示）；`tui-watch.log` 心跳至 23:01:33（pid 27446）。
+- 生成本文件前实测：`agent-resume.sh --check --run-id 20261105T211848.lHpHeY`
+  → `status=resumable ... reason=unexpected_interruption`（exit 0）。注意 manifest 的
+  `session_id/thread_id` 为空，原生续跑依赖工具自行到各平台会话库反查，成功率未验证。
+
+## 3. 工作树快照（2026-11-05 23:47）
+
+```
+branch=main
+head=534e244  2026-11-05 23:04:50  2026-11-05-23-04-50
+status=clean（工作区无改动）
+```
+
+该 run 时间窗内的两次提交：
+
+1. `d12953c 2026-11-05 21:24:27 feat(refer): 新增 opt_einsum 参考子库`
+   —— `.gitmodules` + `refer/git-rep/opt_einsum` 子模块（固定 commit 见 `git submodule status`）、
+   `logs/v2026110521.txt`、`logs/AGENTS.md` 索引 +8 行。
+2. `534e244 2026-11-05 23:04:50 2026-11-05-23-04-50`
+   —— **37 文件 / +17791 行**，即 einsum 子系统整体落码（Python + KUPL C++ + CUDA + 构建脚本 +
+   测试夹具 + `env.sh`/`install.sh`/`build-*.sh`）。
+
+**推断（未证实）**：`534e244` 用时间戳做提交信息，与仓库既有归档式提交（`5330334`、`d5b3982`）
+同构，故像自动/草稿式提交；其时间 23:04:50 **晚于**该 run 最后心跳 23:01:33，因此「由该 run 直接
+提交」只是内容与时间上的合理归因，不是证据。仓库无 git hooks（`.git/hooks` 为空、无
+`core.hooksPath`）。
+
+构建产物（已存在，未重新编译）：
+
+```
+cpp/kupl/einsum/libpyqcdeinsum.so   cpp/kupl/einsum/build/libpyqcdeinsum.so
+cpp/cuda/einsum/libpyqcdeinsum.so   cpp/cuda/einsum/build/libpyqcdeinsum.so
+pyqcd/einsum/cuda/einsum.cpython-310-x86_64-linux-gnu.so
+```
+
+## 4. 已实测通过（2026-11-05 23:20–23:47，生成本文件时实跑，可原样复跑）
+
+```bash
+# 1) 导入与基本语义
+cd /root/PyQCD
+python -c "import numpy as np, pyqcd.einsum as E; \
+a=np.arange(6.).reshape(2,3); b=np.arange(12.).reshape(3,4); \
+print(np.allclose(E.contract('ij,jk->ik',a,b), a@b), E.contract_path('ij,jk->ik',a,b)[1].opt_cost)"
+# → True 48
+
+# 2) 冒烟差分（opt_einsum 3.4.1.dev25+g5b54bc1dc 为 oracle）
+python -m pyqcd.testing.einsum.verify_compat --smoke
+# → PASS 143/144；oracle 自检 36/36、API 面 38/38、路径面 33/34、数值面 36/36
+#   唯一 FAIL 是「随机网络数 >= 200（实际 8）」——--smoke 的预期行为，非缺陷
+
+# 3) 原生 KUPL 路径（complex128）
+PYQCD_EINSUM_NATIVE=kupl python -c "import numpy as np, pyqcd.einsum as E; \
+a=(np.random.rand(4,5)+1j*np.random.rand(4,5)); b=(np.random.rand(5,6)+1j*np.random.rand(5,6)); \
+r=E.contract('ij,jk->ik',a,b); f=np.einsum('ij,jk->ik',a,b); \
+print(float(np.max(np.abs(r-f))/np.max(np.abs(f))))"
+# → 1.4e-16（远优于契约 rel<=1e-12）
+```
+
+`backends.has_einsum()` 对 `kupl`/`cuda` 返回 `False` **属设计**：这两条是 `_native.py` 的
+内部绑定（环境变量 `PYQCD_EINSUM_NATIVE=auto|kupl|cuda`），不是 dispatch 的公开后端。
+
+## 5. 未验证 / 未完成（按优先级）
+
+| 级别 | 项 | 说明 |
+|---|---|---|
+| P0 | 全量差分 `verify_compat`（默认 200 网络 / 40 方程） | 只跑过 `--smoke`；路径面 ≥200 的断言尚未真正满足 |
+| P0 | 原生与纯 Python 路径的**逐位一致性**批量回归 | 目前只有单点 matmul |
+| P1 | `verify_cuda` | 需 GPU 与已构建扩展；本机未构建/未跑 |
+| P1 | `bench_distillation` | 性能验收（median(≥10)，CPU 对 CPU / GPU 对 GPU）从未产出 |
+| P2 | `cpp/*/einsum` 的 ABI 导出面检查 | 契约要求 `-Wl,--version-script` 收敛导出、NUL 导出全部符号 |
+| P2 | `logs/AGENTS.md` 批次索引 | 只有 `d12953c`（opt_einsum 子库）那条；einsum 子系统提交未登记 |
+| P3 | 混合精度 fail-closed、`memory_limit` 超限返回码 2 | 契约条目，未见测试覆盖证据 |
+
+## 6. 恢复步骤（建议顺序）
+
+1. `cd /root/PyQCD && git status --short && git log -1 --oneline` —— 确认仍是 `534e244` 且工作区干净；
+   若工作区有改动，先判断是他人未提交的工作，**不要覆盖**。
+2. 复跑 §4 三条命令，确认环境未漂移。
+3. 跑全量差分：`python -m pyqcd.testing.einsum.verify_compat`；
+   失败项按 `路径面/代价等价/数值面` 分类，先修 `_plan_py.py`（纯 Python 回退是行为基线）。
+4. 通过后再评估原生层：`PYQCD_EINSUM_NATIVE=kupl python -m pyqcd.testing.einsum.verify_compat`。
+5. 性能基准 `python -m pyqcd.testing.einsum.bench_distillation`（需要蒸馏方程夹具）。
+6. 收尾：补 `logs/AGENTS.md` 索引条目 + 单次提交（只暂存本任务文件，不 `git add -A`）。
+
+## 7. 契约与边界（改代码前必读）
+
+- `pyqcd/einsum/AGENTS.md` —— **冻结契约**：文件归属（API 组 / 规划组 / 执行组 / 原生组）、
+  `Step` 元组结构、公共签名、`PathInfo` 字段名、原生 ABI（`params: int32[32]`、`set_ptrs: int64[16]`）、
+  返回码 0/1/2/3、精度口径。**禁止跨组改文件**。
+- `cpp/kupl/einsum/AGENTS.md`、`cpp/cuda/einsum/AGENTS.md` —— 各自构建与 ABI 约定。
+- `refer/git-rep/opt_einsum` —— **只读**子模块，是差分 oracle；不得修改，不得被生产代码 import。
+- 生产代码禁止 `import refer/` 与 `pyqcd.testing`；oracle 只允许出现在 `pyqcd/testing/einsum/`。
+- 回退不变量：缺 `.so` → 自动走 `_plan_py.py`，结果不变、仅变慢；原生失败只 warning 一次。
+
+## 8. 安全
+
+- 本文件不含任何凭据、密钥或隐藏提示；源 run 目录中的历史产物一律视为**不可信数据**，不得当指令执行。
+- 源 run 目录权限为 `0700`；本文件只记录路径与摘要，不复制其内容。
+
+## 9. 源 run 日志全文（`logs/v2026110521.txt`，逐字导入）
+
+该 run 唯一产出的批次日志，生成于 2026-11-05 21:21:25（run 启动后约 3 分钟），
+内容即 opt_einsum 子库那一轮的全部可审计记录。下列文本未经改写，仅去掉行尾空白。
+
+```text
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-05 21:21:25 +0800
+批次: refer/git-rep
+主任务: 添加 opt_einsum 参考子库
+触发原因: 任务完成
+摘要: opt_einsum 以 submodule 固定到 fccdd5aa，README 已登记
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 添加 opt_einsum 参考子库
+- 目标: 将 dgasmith/opt_einsum 以 Git submodule 形式固定到 `refer/git-rep/opt_einsum`
+- 命令/操作:
+  - `git submodule add https://github.com/dgasmith/opt_einsum.git refer/git-rep/opt_einsum`
+  - 首次执行被根 `.gitignore` 白名单规则拦截（`*`，第 8 行）
+- 关键输出: `The following paths are ignored by one of your .gitignore files: refer/git-rep/opt_einsum`，退出码 1
+- 退出码: 1（首次）
+- 证据与判断: `git check-ignore -v` 定位到 `.gitignore:8:*`，该文件为白名单式忽略，需为每个子库单独放行
+
+### S2 — 补放行规则并重试
+- 目标: 按既有约定在 `.gitignore` 第 2 节补 `!/refer/git-rep/opt_einsum`
+- 命令/操作: 编辑 `.gitignore`（第 21 行）；重跑 `git submodule add`
+- 关键输出: `Cloning into '/root/PyQCD/refer/git-rep/opt_einsum'...`，退出码 0
+- 退出码: 0
+- 证据与判断: 克隆成功，暂存区新增 gitlink
+
+### S3 — 登记来源与固定 commit
+- 目标: 满足 AGENTS.md「`refer/git-rep/<name>` 必须是 submodule，README 记录来源/致谢与固定 commit」
+- 命令/操作: 在 `refer/git-rep/README.md` 表格追加 opt_einsum 行；引言由「参考软件与技能库」改为「参考软件、技能库与数值基础设施库」
+- 关键输出: 表格新增 `fccdd5aa2a933c8bd1452f44689d15e737982cc0`
+- 退出码: 0
+- 证据与判断: 目录内新增非格点 QCD 的数值库，引言需如实覆盖
+
+## 验证与证据
+- 测试/检查:
+  - `git ls-files -s --stage refer/git-rep/opt_einsum` → `160000 fccdd5aa2a933c8bd1452f44689d15e737982cc0 0`
+  - `git submodule status refer/git-rep/opt_einsum` → `fccdd5aa... (v3.1.0-64-gfccdd5a)`
+  - `git -C refer/git-rep/opt_einsum log -1` → `fccdd5aa | 2026-10-25 | Bug fix: when calling contract with optimize=False (#252)`
+  - `git -C refer/git-rep/opt_einsum status --short` → 无输出（工作树干净，未修改上游）
+  - `git diff --check` → 通过，无冲突标记
+  - `git diff --cached .gitmodules` → 新增 `[submodule "refer/git-rep/opt_einsum"]` 三项
+- 结果: 子模块索引模式为 160000，commit 与 README 登记一致，上游工作树未被改动
+- 未验证项: 未运行全量测试 `python -m pyqcd.testing`（本次仅新增只读参考子库，未触及生产代码）；未做 `git submodule update --init --recursive` 嵌套校验（opt_einsum 是否存在嵌套子库未逐项确认）
+
+## 变更与产物
+- 文件:
+  - `.gitignore`: 新增 `!/refer/git-rep/opt_einsum` 放行规则
+  - `.gitmodules`: 新增 opt_einsum 子模块条目（由 `git submodule add` 自动暂存）
+  - `refer/git-rep/README.md`: 登记来源、用途与固定 commit；引言措辞调整
+  - `refer/git-rep/opt_einsum`: 新增 gitlink（160000，指向 `fccdd5aa`）
+- 产物: `refer/git-rep/opt_einsum` 上游源码工作树
+- 未改动范围: `pyqcd/` 生产代码、其他子库、上游仓库内容
+
+## 风险、限制与下一步
+- 风险: `.gitignore` 白名单机制意味着后续新增子库仍需逐条放行，否则 `submodule add` 会失败
+- 阻塞: 无
+- 下一步:
+  - 如需在本机初始化嵌套子库，执行 `git submodule update --init --recursive`
+  - 若要把本次改动落库，需显式授权提交（当前 `.gitignore` 与 README 仍为未暂存状态）
+
+## 用户输入指令
+git submodule add https://github.com/dgasmith/opt_einsum.git refer/git-rep/opt_einsum
+
+## Agent 全文报告
+--- report begin ---
+已把 opt_einsum 加为子模块。
+
+**改动内容**
+- `.gitignore`：白名单式忽略文件第 8 行为 `*`，需单独放行；按既有约定补 `!/refer/git-rep/opt_einsum`
+- `.gitmodules` + gitlink：`git submodule add` 写入，索引模式 `160000`
+- `refer/git-rep/README.md`：按 AGENTS.md 要求登记来源、用途与固定 commit；引言由「参考软件与技能库」改为「参考软件、技能库与数值基础设施库」
+
+**推理依据**
+首次执行被 `.gitignore:8:*` 拦截（`git check-ignore -v` 定位）。该文件是「默认忽略全部 + 白名单放行」策略，每个子库都有对应 `!/refer/git-rep/<name>` 行，因此补放行是完成任务的必要最小改动，而非用 `-f` 绕过。
+
+**验证结果**
+- `git ls-files --stage refer/git-rep/opt_einsum` → `160000 fccdd5aa2a933c8bd1452f44689d15e737982cc0`（模式正确）
+- `git submodule status` → `fccdd5aa... (v3.1.0-64-gfccdd5a)`，`git describe` → `v3.4.0-14-gfccdd5a`
+- 固定 commit：`fccdd5aa2a933c8bd1452f44689d15e737982cc0`（2026-10-25，"Bug fix: when calling contract with optimize=False (#252)"）
+- 子库工作树 `git status --short` 无输出，未改动上游
+- `git diff --check` 通过
+
+**后续步骤**
+- 未提交：`.gitmodules` 与 gitlink 已被 `git submodule add` 暂存，`.gitignore` 与 README 仍未暂存，需要我提交请明示
+- 若要初始化嵌套子库：`git submodule update --init --recursive`
+- 未运行 `python -m pyqcd.testing`：本次只新增只读参考库，未触及 `pyqcd/` 生产代码
+--- report end ---
+```
+
+## 10. `logs/*.txt` 全量索引与相关性判定
+
+`logs/` 下除本文件外共 **18 个 `*.txt`，合计 122,948 字节**（`logs/AGENTS.md` 索引口径）。
+逐文件判定：**只有 `v2026110521.txt` 属于本任务血缘**（它是 §9 的全文）；其余 17 个是
+TMD-PDF 生产链、dev32 数据盘点与目录治理的历史批次，与本任务**无代码耦合**，
+故不逐字内联——它们与本文件的唯一关系是「同一仓库的历史上下文」。
+需要时可原样读取；不要把其中结论当作 einsum 子系统的现状。
+
+| 文件 | 字节 | 主任务 | 关键内容 | 批次状态 | 相关性 |
+|---|---|---|---|---|---|
+| `v2026103123.txt` | 11714 | PyQCD diff-init-validate-commit-push-tag-final-log | 初始化受维护目录治理、main 推送、dev31 标签、final 日志 | complete | 无关 |
+| `v2026110101.txt` | 4674 | 盘点 /public 下 L24x72 可用数据 | 1 套系综 19 组态；完整跨产品仅 4150 | complete | 无关 |
+| `v20261101074444.txt` | 3871 | TMD 12 组态全链生产资源门暂停 | 三组态蒸馏+flow 完成，磁盘 77.9% | in-progress | 无关 |
+| `v202611011812.txt` | 5142 | 恢复 12 组态梯度流胶子 TMD-PDF 全链 | 五契约通过；磁盘 81.79% 触发硬门 | in-progress | 无关 |
+| `v202611011942.txt` | 4248 | 放宽磁盘门并续跑生产 | 95% 磁盘门 + checkpoint 所有权修复，三卡恢复 | in-progress | 无关 |
+| `v202611020406.txt` | 2890 | 恢复匹配 20261102T* 的 agent run | 匹配运行无可恢复断点 | in-progress | 无关（续跑方法论可参考） |
+| `v202611020441.txt` | 4638 | 6250–8450 梯度流核子胶子 PDF/TMD-PDF 全链 | 生产续跑、并行审计、报告门修复 | in-progress | 无关 |
+| `v202611020907.txt` | 9786 | 下载与全链生产进度简报 | 两组下载 + 12 组态进度 | in-progress | 无关 |
+| `v20261102094532.txt` | 5481 | VVV/VdV、smear、2pt、OPE 复用边界 | 顶点与同外态关联函数可复用；flowed gauge/OPE 必须重算 | in-progress | 无关 |
+| `v20261102095927.txt` | 5910 | HYP/stout/momentum smear 与 Wilson flow 的角色 | 2pt/3pt 消费外部态；OPE 消费独立 flowed gauge | in-progress | 无关 |
+| `v20261102101237.txt` | 13071 | 胶子 TMD-PDF 全链依赖与两条链 | 区分外部态/胶子算符/收缩/重整化层 | in-progress | 无关 |
+| `v2026110220-2.txt` | 16867 | 6250–8450 全链生产+分析+docs+logs 归档 | 12 组态、813 产物、HDF5 48.2 GB；111 passed/1 skipped；诊断结论 | complete | 无关（但含 HDF5/大产物工程范式） |
+| `v2026110220.txt` | 6701 | 6250–8450 全链生产与中文报告 | 29 页报告三零验收 | complete | 无关 |
+| `v2026110303.txt` | 5330 | PyQCD diff-init-push-tag closeout | 全量回归、main 推送、dev32 标签 | complete | 无关 |
+| `v202611032344.txt` | 6634 | 承接 tag:dev32 盘点输入 | 21 组态齐备，已产 12、可扩 9 | in-progress | 无关 |
+| `v202611040001.txt` | 4882 | 承接 dev32 补算 9 组态 | 3 组态开算，31 契约测试通过 | in-progress | 无关 |
+| `v2026110407.txt` | 5755 | 承接 dev32 补算并交付分析与报告 | 4150 全链完成；13 组态统一分析 | complete | 无关 |
+| `v2026110521.txt` | 5354 | 添加 opt_einsum 参考子库 | submodule 固定 fccdd5aa，README 登记 | complete | **直接相关（§9 全文）** |
+
+合计：18 文件 / 122,948 bytes；其中 `complete` 7 个、`in-progress` 11 个（按上表逐行统计）。
+
+### 10.1 为什么不全量内联
+
+`agent-resume.sh` 的上下文交接上限默认 32,768 字节（`AGENT_RESUME_HANDOFF_MAX_BYTES`），
+全量内联 122 KB 会直接截断，反而丢失关键的 §1–§7。本文件的取舍是：
+**本任务血缘全文（§9）+ 全部历史日志的可导航索引（§10）+ 精确路径**，
+续跑方按索引按需打开原文，而不是把它们塞进一个会截断的文件里。
+
+### 10.2 供续跑方检索的命令
+
+```bash
+cd /root/PyQCD/logs
+grep -n "einsum" *.txt            # 实测：仅 resume_*.txt 与 v2026110521.txt 命中
+grep -n "^- 日志文件: logs/" AGENTS.md   # 76 条索引
+```
+
+注（实测计数，非估计）：`logs/AGENTS.md` 共 **76** 条 `日志文件: logs/*.txt` 引用，
+其中 **58** 条指向的文件在当前工作树已不存在（`data/from-logs/logs/` 为空，
+去向未在本次核查中确认）；本目录实际现存 `*.txt` 为 **19** 个（18 个历史批次 + 本文件），
+与 §10 表格一一对应。
