@@ -16,3 +16,6 @@
 [submodule "refer/git-rep/PyQCU"]
 	path = refer/git-rep/PyQCU
 	url = https://gitlab.itp.ac.cn/zhangxin8069/PyQCU.git
+[submodule "refer/git-rep/opt_einsum"]
+	path = refer/git-rep/opt_einsum
+	url = https://github.com/dgasmith/opt_einsum.git

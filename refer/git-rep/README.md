@@ -1,6 +1,6 @@
 # refer/git-rep 参考库清单
 
-本目录只读收录 lattice QCD 参考软件与技能库，全部以 Git submodule 固定在上游
+本目录只读收录 lattice QCD 参考软件、技能库与数值基础设施库，全部以 Git submodule 固定在上游
 commit。子库工作树保持上游状态，不修改、不把上游文件混入主库源码。本库对这些库的
 分析文档统一存放于 `refer/git-rep/docs/`。
 
@@ -12,6 +12,7 @@ commit。子库工作树保持上游状态，不修改、不把上游文件混�
 | `refer/git-rep/EasyDistillation` | https://github.com/IHEP-LQCD/EasyDistillation | 蒸馏方法（本征矢、perambulator、elemental 与自动缩并）的多后端实现 | `f74bf7de5ebb3ae94107c147339f66c5552cf240` |
 | `refer/git-rep/LQCD_Master` | https://github.com/sjtu-sai-agents/LQCD_Master | 自然语言到 PyQUDA 程序与 Slurm 脚本的 agentic 计算流水线 | `e4a443e08d5904371fc280ce93c00ff84df21893` |
 | `refer/git-rep/PyQCU` | https://gitlab.itp.ac.cn/zhangxin8069/PyQCU.git | torch、mpi4py 与 h5py 架构范例及 PyQCD 实现参考 | `8d7002f908aa2c162705f840b604814971753171` |
+| `refer/git-rep/opt_einsum` | https://github.com/dgasmith/opt_einsum | 张量缩并路径优化库（`einsum_path`/`contract`），供缩并成本诊断与路径加速参考 | `fccdd5aa2a933c8bd1452f44689d15e737982cc0` |
 
 `PyQUDA` 内部的 `pyquda_core/pycparser` 是其上游嵌套 submodule
 （https://github.com/eliben/pycparser.git），需以 `git submodule update --init

@@ -620,3 +620,11 @@
 - 关键内容: 4150 全链完成；13 组态统一分析/验证/报告交付，其余组态受上游制约
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## refer/git-rep - final - 2026-11-05 21:21:25 +0800
+- 主任务: 添加 opt_einsum 参考子库
+- 日志文件: logs/v2026110521.txt
+- 文件大小: 5354 bytes
+- 触发原因: 任务完成
+- 关键内容: opt_einsum 以 submodule 固定到 fccdd5aa，README 已登记
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

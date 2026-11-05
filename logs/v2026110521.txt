@@ -1,0 +1,87 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-05 21:21:25 +0800
+批次: refer/git-rep
+主任务: 添加 opt_einsum 参考子库
+触发原因: 任务完成
+摘要: opt_einsum 以 submodule 固定到 fccdd5aa，README 已登记
+Git 根目录: /root/PyQCD
+
+## 关键日志
+### S1 — 添加 opt_einsum 参考子库
+- 目标: 将 dgasmith/opt_einsum 以 Git submodule 形式固定到 `refer/git-rep/opt_einsum`
+- 命令/操作:
+  - `git submodule add https://github.com/dgasmith/opt_einsum.git refer/git-rep/opt_einsum`
+  - 首次执行被根 `.gitignore` 白名单规则拦截（`*`，第 8 行）
+- 关键输出: `The following paths are ignored by one of your .gitignore files: refer/git-rep/opt_einsum`，退出码 1
+- 退出码: 1（首次）
+- 证据与判断: `git check-ignore -v` 定位到 `.gitignore:8:*`，该文件为白名单式忽略，需为每个子库单独放行
+
+### S2 — 补放行规则并重试
+- 目标: 按既有约定在 `.gitignore` 第 2 节补 `!/refer/git-rep/opt_einsum`
+- 命令/操作: 编辑 `.gitignore`（第 21 行）；重跑 `git submodule add`
+- 关键输出: `Cloning into '/root/PyQCD/refer/git-rep/opt_einsum'...`，退出码 0
+- 退出码: 0
+- 证据与判断: 克隆成功，暂存区新增 gitlink
+
+### S3 — 登记来源与固定 commit
+- 目标: 满足 AGENTS.md「`refer/git-rep/<name>` 必须是 submodule，README 记录来源/致谢与固定 commit」
+- 命令/操作: 在 `refer/git-rep/README.md` 表格追加 opt_einsum 行；引言由「参考软件与技能库」改为「参考软件、技能库与数值基础设施库」
+- 关键输出: 表格新增 `fccdd5aa2a933c8bd1452f44689d15e737982cc0`
+- 退出码: 0
+- 证据与判断: 目录内新增非格点 QCD 的数值库，引言需如实覆盖
+
+## 验证与证据
+- 测试/检查:
+  - `git ls-files -s --stage refer/git-rep/opt_einsum` → `160000 fccdd5aa2a933c8bd1452f44689d15e737982cc0 0`
+  - `git submodule status refer/git-rep/opt_einsum` → `fccdd5aa... (v3.1.0-64-gfccdd5a)`
+  - `git -C refer/git-rep/opt_einsum log -1` → `fccdd5aa | 2026-10-25 | Bug fix: when calling contract with optimize=False (#252)`
+  - `git -C refer/git-rep/opt_einsum status --short` → 无输出（工作树干净，未修改上游）
+  - `git diff --check` → 通过，无冲突标记
+  - `git diff --cached .gitmodules` → 新增 `[submodule "refer/git-rep/opt_einsum"]` 三项
+- 结果: 子模块索引模式为 160000，commit 与 README 登记一致，上游工作树未被改动
+- 未验证项: 未运行全量测试 `python -m pyqcd.testing`（本次仅新增只读参考子库，未触及生产代码）；未做 `git submodule update --init --recursive` 嵌套校验（opt_einsum 是否存在嵌套子库未逐项确认）
+
+## 变更与产物
+- 文件:
+  - `.gitignore`: 新增 `!/refer/git-rep/opt_einsum` 放行规则
+  - `.gitmodules`: 新增 opt_einsum 子模块条目（由 `git submodule add` 自动暂存）
+  - `refer/git-rep/README.md`: 登记来源、用途与固定 commit；引言措辞调整
+  - `refer/git-rep/opt_einsum`: 新增 gitlink（160000，指向 `fccdd5aa`）
+- 产物: `refer/git-rep/opt_einsum` 上游源码工作树
+- 未改动范围: `pyqcd/` 生产代码、其他子库、上游仓库内容
+
+## 风险、限制与下一步
+- 风险: `.gitignore` 白名单机制意味着后续新增子库仍需逐条放行，否则 `submodule add` 会失败
+- 阻塞: 无
+- 下一步:
+  - 如需在本机初始化嵌套子库，执行 `git submodule update --init --recursive`
+  - 若要把本次改动落库，需显式授权提交（当前 `.gitignore` 与 README 仍为未暂存状态）
+
+## 用户输入指令
+git submodule add https://github.com/dgasmith/opt_einsum.git refer/git-rep/opt_einsum
+
+## Agent 全文报告
+--- report begin ---
+已把 opt_einsum 加为子模块。
+
+**改动内容**
+- `.gitignore`：白名单式忽略文件第 8 行为 `*`，需单独放行；按既有约定补 `!/refer/git-rep/opt_einsum`
+- `.gitmodules` + gitlink：`git submodule add` 写入，索引模式 `160000`
+- `refer/git-rep/README.md`：按 AGENTS.md 要求登记来源、用途与固定 commit；引言由「参考软件与技能库」改为「参考软件、技能库与数值基础设施库」
+
+**推理依据**
+首次执行被 `.gitignore:8:*` 拦截（`git check-ignore -v` 定位）。该文件是「默认忽略全部 + 白名单放行」策略，每个子库都有对应 `!/refer/git-rep/<name>` 行，因此补放行是完成任务的必要最小改动，而非用 `-f` 绕过。
+
+**验证结果**
+- `git ls-files --stage refer/git-rep/opt_einsum` → `160000 fccdd5aa2a933c8bd1452f44689d15e737982cc0`（模式正确）
+- `git submodule status` → `fccdd5aa... (v3.1.0-64-gfccdd5a)`，`git describe` → `v3.4.0-14-gfccdd5a`
+- 固定 commit：`fccdd5aa2a933c8bd1452f44689d15e737982cc0`（2026-10-25，"Bug fix: when calling contract with optimize=False (#252)"）
+- 子库工作树 `git status --short` 无输出，未改动上游
+- `git diff --check` 通过
+
+**后续步骤**
+- 未提交：`.gitmodules` 与 gitlink 已被 `git submodule add` 暂存，`.gitignore` 与 README 仍未暂存，需要我提交请明示
+- 若要初始化嵌套子库：`git submodule update --init --recursive`
+- 未运行 `python -m pyqcd.testing`：本次只新增只读参考库，未触及 `pyqcd/` 生产代码
+--- report end ---
