@@ -1,29 +1,69 @@
 #!/usr/bin/env bash
-# Environment for the PyQCD einsum native stack.
-#
-# Mirrors PyQCU/env.sh: repository first on PYTHONPATH, both backend library
-# directories on LD_LIBRARY_PATH, every artefact path exported.
+# Environment for the PyQCD einsum Python and native source trees.
 set -u
 
 PYQCD_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)
 
 export PYQCD_ROOT
+export PYQCD_EINSUM_SOURCE_DIR="$PYQCD_ROOT"
+export PYQCD_EINSUM_PYTHON_DIR="$PYQCD_ROOT"
+export PYQCD_EINSUM_SETUP="$PYQCD_ROOT/setup.py"
 export PYQCD_EINSUM_CUDA_DIR="$PYQCD_ROOT/cpp/cuda/einsum"
 export PYQCD_EINSUM_KUPL_DIR="$PYQCD_ROOT/cpp/kupl/einsum"
-export PYQCD_EINSUM_CUDA_LIB="$PYQCD_EINSUM_CUDA_DIR/libpyqcdeinsum.so"
-export PYQCD_EINSUM_KUPL_LIB="$PYQCD_EINSUM_KUPL_DIR/libpyqcdeinsum.so"
+export PYQCD_EINSUM_CUDA_LIB="$PYQCD_EINSUM_CUDA_DIR/libpyqcdeinsum_cuda.so"
+export PYQCD_EINSUM_KUPL_LIB="$PYQCD_EINSUM_KUPL_DIR/libpyqcdeinsum_kupl.so"
+export PYQCD_EINSUM_CUDA_BUILD_DIR="${PYQCD_EINSUM_CUDA_BUILD_DIR:-$PYQCD_EINSUM_CUDA_DIR/build}"
+export PYQCD_EINSUM_KUPL_BUILD_DIR="${PYQCD_EINSUM_KUPL_BUILD_DIR:-$PYQCD_EINSUM_KUPL_DIR/build}"
+export PYQCD_EINSUM_CYTHON_BUILD_DIR="${PYQCD_EINSUM_CYTHON_BUILD_DIR:-$PYQCD_ROOT/build/cython}"
 
-export PYQCD_EINSUM_BACKEND="${PYQCD_EINSUM_BACKEND:-kupl}"
+_PYQCD_ENV_BACKEND=${PYQCD_EINSUM_BACKEND:-auto}
+case "$_PYQCD_ENV_BACKEND" in
+    cuda)
+        _PYQCD_ENV_ACTIVE_BACKEND=cuda
+        _PYQCD_ENV_LIBRARY=$PYQCD_EINSUM_CUDA_LIB
+        _PYQCD_ENV_BUILD_DIR=$PYQCD_EINSUM_CUDA_BUILD_DIR
+        ;;
+    kupl)
+        _PYQCD_ENV_ACTIVE_BACKEND=kupl
+        _PYQCD_ENV_LIBRARY=$PYQCD_EINSUM_KUPL_LIB
+        _PYQCD_ENV_BUILD_DIR=$PYQCD_EINSUM_KUPL_BUILD_DIR
+        ;;
+    auto)
+        if [ -e "$PYQCD_EINSUM_CUDA_LIB" ]; then
+            _PYQCD_ENV_ACTIVE_BACKEND=cuda
+            _PYQCD_ENV_LIBRARY=$PYQCD_EINSUM_CUDA_LIB
+            _PYQCD_ENV_BUILD_DIR=$PYQCD_EINSUM_CUDA_BUILD_DIR
+        else
+            _PYQCD_ENV_ACTIVE_BACKEND=kupl
+            _PYQCD_ENV_LIBRARY=$PYQCD_EINSUM_KUPL_LIB
+            _PYQCD_ENV_BUILD_DIR=$PYQCD_EINSUM_KUPL_BUILD_DIR
+        fi
+        ;;
+    *)
+        printf 'error: PYQCD_EINSUM_BACKEND must be kupl, cuda, or auto\n' >&2
+        return 2 2>/dev/null || exit 2
+        ;;
+esac
 
-if [ "$PYQCD_EINSUM_BACKEND" = "cuda" ]; then
-    export PYQCD_EINSUM_LIB="$PYQCD_EINSUM_CUDA_LIB"
-else
-    export PYQCD_EINSUM_LIB="$PYQCD_EINSUM_KUPL_LIB"
-fi
+export PYQCD_EINSUM_BACKEND="$_PYQCD_ENV_ACTIVE_BACKEND"
+export PYQCD_EINSUM_ACTIVE_BACKEND="$_PYQCD_ENV_ACTIVE_BACKEND"
+export PYQCD_EINSUM_LIB="$_PYQCD_ENV_LIBRARY"
+export PYQCD_EINSUM_BUILD_DIR="${PYQCD_EINSUM_BUILD_DIR:-$_PYQCD_ENV_BUILD_DIR}"
+export PYQCD_EINSUM_PYTHON="${PYQCD_EINSUM_PYTHON:-$(command -v python3)}"
 
-export PYTHONPATH="$PYQCD_ROOT${PYTHONPATH:+:$PYTHONPATH}"
-export LD_LIBRARY_PATH="$PYQCD_EINSUM_KUPL_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export LD_LIBRARY_PATH="$PYQCD_EINSUM_CUDA_DIR:$LD_LIBRARY_PATH"
+case ":${PYTHONPATH:-}:" in
+    *":$PYQCD_ROOT:"*) ;;
+    *) export PYTHONPATH="$PYQCD_ROOT${PYTHONPATH:+:$PYTHONPATH}" ;;
+esac
+case ":${LD_LIBRARY_PATH:-}:" in
+    *":$PYQCD_EINSUM_KUPL_DIR:"*) ;;
+    *) export LD_LIBRARY_PATH="$PYQCD_EINSUM_KUPL_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+esac
+case ":${LD_LIBRARY_PATH:-}:" in
+    *":$PYQCD_EINSUM_CUDA_DIR:"*) ;;
+    *) export LD_LIBRARY_PATH="$PYQCD_EINSUM_CUDA_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+esac
 
-export PYQCD_EINSUM_BUILD_DIR="${PYQCD_EINSUM_BUILD_DIR:-$PYQCD_EINSUM_KUPL_DIR/build}"
 export OMP_DYNAMIC="${OMP_DYNAMIC:-FALSE}"
+
+unset _PYQCD_ENV_BACKEND _PYQCD_ENV_ACTIVE_BACKEND _PYQCD_ENV_LIBRARY _PYQCD_ENV_BUILD_DIR

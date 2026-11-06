@@ -16,6 +16,7 @@
 | `pyqcd-statistics` | 重采样、协方差、SVD、窗口和统计诊断 | jackknife/bootstrap、相关拟合 |
 | `pyqcd-analysis` | 已有数据的分析运行、物理量提取和图表；不定义谱模型或统计纪律 | ratio、有效质量、E0、FH、c0 |
 | `pyqcd-infra` | backend、设备/精度、I/O、MPI/显存规划、对照数据盘点与远程传输 | torch、HDF5、VdV/VVV、OOM、du、manifest、rsync |
+| `pyqcd-einsum` | opt_einsum 兼容收缩、原生 CUDA/KUPL、K-lowest 布局、MPI/stream 与性能门 | einsum、原生库、cuBLAS、OpenMP、3x、蒸馏基准 |
 | `pyqcd-pipeline` | 九步运行编排、守卫、断点续跑和一致性验证 | test0、test9、基线复现 |
 | `pyqcd-tmd-chain` | 梯度流胶子 TMD-PDF 的端到端导航 | 全链规划、阶段关系、状态判断 |
 | `pyqcd-tmd-algorithm` | TMD 几何、重整化、匹配、外推和物理验证门 | 算法实现、staple、soft、CS、匹配 |
@@ -62,6 +63,7 @@ pyqcd-conventions
 
 pyqcd-analysis <- pyqcd-statistics <- pyqcd-bare-matrix
 pyqcd-pipeline <- pyqcd-infra
+pyqcd-distillation -> pyqcd-einsum <- pyqcd-infra
 pyqcd-analysis / pyqcd-tmd-chain / pyqcd-pipeline -> pyqcd-docs
 ```
 
@@ -109,7 +111,7 @@ pyqcd-analysis / pyqcd-tmd-chain / pyqcd-pipeline -> pyqcd-docs
 
 ## 所有权与只读边界
 
-本文件和根 [`README.md`](README.md) 登记 23 个 `pyqcd-*` 领域技能，并单列 `form`
+本文件和根 [`README.md`](README.md) 登记 24 个 `pyqcd-*` 领域技能，并单列 `form`
 运维技能。`LQCD_Skills/` 是外部 submodule；`donghx/`、`sush/` 及其中的
 `sush/AGENTS.md`、`sush/README.md`、`sush/lqcddb` 均属于对应外部来源。本库只读
 借鉴，不修改、不重命名、不更新创建者或目录条目。外来参考代码同样保持只读；需要

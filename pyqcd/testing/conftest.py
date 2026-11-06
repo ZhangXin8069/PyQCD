@@ -115,6 +115,10 @@ from pyqcd.testing import (  # noqa: F401
     test_bare_sumratio_contracts,
     test_analysis_safety_contracts,
     test_infra_safety_contracts,
+    test_einsum_native_contracts,
+    test_einsum_cuda_mpi_partition_contracts,
+    test_einsum_zero_extent_and_noncontiguous_contracts,
+    test_einsum_mixed_native_backends,
 )
 
 

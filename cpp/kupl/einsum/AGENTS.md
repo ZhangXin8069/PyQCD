@@ -8,38 +8,37 @@
 
 | 文件 | 职责 | 负责人 |
 |---|---|---|
-| `include/einsum_define.h` | 冻结 C ABI：槽位常量、状态码、四个 `apply*Qcd` 声明 | 原生组（规划） |
+| `include/einsum_define.h` | 冻结 C ABI、状态码与 compiled-context 扩展声明 | 原生组（规划） |
 | `include/einsum_plan.h` | 规划内核的 C++ 接口（`PlanSpec` / `PlanOutcome` / `plan_contract`） | 原生组（规划） |
+| `include/einsum_runtime.h` | version-2 执行计划、pair/unary 分析与 K-lowest 布局 | 原生组（执行） |
 | `src/apply_plan.cpp` | `applyPlanQcd` 入口：参数校验、地址解包、状态码映射 | 原生组（规划） |
 | `src/plan_core.cpp` | greedy 路径搜索 + 代价回放 + 饱和整数运算 | 原生组（规划） |
-| `src/apply_contract.cpp` | `applyContractQcd` CPU 数值域 | 原生组（执行，未落地） |
-| `src/cuda/**` | CUDA kernel | 原生组（GPU，未落地） |
-| `build.sh` | g++ 直编，无 CMake | 原生组（规划） |
+| `src/runtime.cpp` | 计划解析、label 分类和布局契约 | 原生组（执行） |
+| `src/apply_contract.cpp` | KUPL CPU 数值执行、sandwich/batch-dot fast path、compiled context | 原生组（执行） |
+| `src/mpi_runtime.cpp` | 单输出轴 MPI shard、对称 preflight、Allgatherv | 原生组（并行） |
+| `make.sh` | g++/OpenMP/OpenBLAS 直接构建 | 原生组（构建） |
 | `libpyqcdeinsum.so` | 产物（指向 `build/` 的稳定软链，不提交） | — |
 
-`build.sh` 只编译 `src/*.cpp`（不递归），因此 `src/cuda/**` 不会混进 CPU 构建。
-`applyInitQcd` / `applyEndQcd` 目前是 `apply_plan.cpp` 内的 **weak 空实现**，
-只用于让规划侧单独构建时导出面完整；数值域负责人提供强定义后自动覆盖，
-不会产生重复符号。
+KUPL 独立编译 `runtime.cpp`、`plan_core.cpp`、`apply_contract.cpp` 与
+`apply_plan.cpp`，不包含或链接 CUDA 源码。
 
 ## 2. 构建
 
 ```bash
-bash cpp/einsum/build.sh            # 产物 cpp/einsum/libpyqcdeinsum.so
-bash cpp/einsum/build.sh --clean    # 删除 build/ 与公开软链
+bash build-kupl.sh                  # 仓库根入口
+bash cpp/kupl/einsum/make.sh        # 直接构建 KUPL 库
 ```
 
 - 编译器 `g++`（可用 `CXX` 覆盖），默认
   `-O3 -fopenmp -shared -fPIC -std=c++17 -fvisibility=hidden -Wall -Wextra`
-  （可用 `PYQCD_EINSUM_FLAGS` 覆盖）。当前源码没有 OpenMP 并行区，链接器
-  `--as-needed` 因而未写入 `libgomp` 依赖；数值域加入 `#pragma omp` 后，
-  同一条 `-fopenmp` 命令会自动带上。
+  （可用 `PYQCD_EINSUM_FLAGS` 覆盖）。pack 与 sandwich lane 使用 OpenMP，
+  GEMM 使用 CBLAS/OpenBLAS。
 - 先链接到 `build/libpyqcdeinsum.so.tmp.$$`，再 `mv -Tf` 覆盖
   `build/libpyqcdeinsum.so`；公开路径用临时软链 + `mv -Tf` 原子替换，
   与 PyQCU `cpp/kupl/qcu/make.sh` 的稳定软链做法一致。
 - 失败时打印编译器原始输出（同时留档 `build/build.log`）并以非零退出。
 - 导出面由 `-fvisibility=hidden` + `QCD_EINSUM_API` + `-Wl,--version-script`
-  三重收敛，`nm -D --defined-only` 只剩 `apply*Qcd`。
+  三重收敛，动态表只保留冻结四入口和 compiled-context 三入口。
 - 构建目录可用 `PYQCD_EINSUM_BUILD_DIR` 重定向（ASAN 旁路构建用）。
 
 ## 3. ABI 落地约定
@@ -91,7 +90,24 @@ bash cpp/einsum/build.sh --clean    # 删除 build/ 与公开软链
 - 全部状态都在栈/局部容器里，无全局量、无静态缓存，天然可重入且不泄漏；
   工作集超过预算（键表 > 2^24 words）抛 `PlanBudgetExceeded` → 状态码 2。
 
-## 5. fail-closed 与状态码
+## 5. 数值执行与布局
+
+- version-2 计划由 `runtime.cpp` 解析；初始 shape、逐步 positions/labels 与最终
+  输出全部校验后才进入内核。
+- 二元规范布局为 left `[B,M,K]`、right `[B,N,K]`、out `[B,M,N]`，K 是两侧
+  最低连续轴；CBLAS 对 right 使用 transpose-B。
+- 输入/输出和中间 layout 变换使用增量 odometer、固定宽度 copy 和按元素数限制的
+  OpenMP；小矩阵 pack 不过度并行。
+- `ab,...bce,cd->...dae` 走结构化 sandwich kernel；`M=N=1` 最终闭合走
+  batch-dot，不分配 pack 或调用 1x1 GEMM。
+- compiled context 缓存解析后的 `ExecutionPlan`；输入内容、输出和外部指针不缓存。
+- MPI 构建只在 `PYQCD_EINSUM_ENABLE_MPI=1` 时启用；默认 g++ 库不包含 MPI 符号或
+  动态依赖。第一阶段只分片一个最终保留的 batch/free 输出轴，rank-local 执行后
+  Allgatherv；分片轴若在任一步被消去、广播或多轴则 fail closed。
+- Python 多进程 fallback 位于 `pyqcd/einsum/kupl/multiprocess.py`，使用 spawn、
+  shared memory 和 worker 单 BLAS 线程；小任务不保证加速，必须与 MPI 分开报告。
+
+## 6. fail-closed 与状态码
 
 `applyPlanQcd` 先做**全量校验再写输出**，任何一个不合法参数都返回非零且
 不触碰 `set_ptrs[4]/[5]`：
@@ -106,17 +122,17 @@ bash cpp/einsum/build.sh --clean    # 删除 build/ 与公开软链
 上限：`num_ops ≤ 65536`、`num_symbols ≤ 262144`、扁平下标 ≤ 2^26。
 所有异常都在 C 边界捕获，不会传播到 ctypes 调用方。
 
-## 6. 验收
+## 7. 验收
 
 ```bash
-bash cpp/einsum/build.sh
-nm -D --defined-only cpp/einsum/libpyqcdeinsum.so | grep Qcd
+bash build-kupl.sh
+nm -D --defined-only cpp/kupl/einsum/libpyqcdeinsum.so | grep Qcd
 ```
 
-最近一次实测（2026-11-05）：
+最近一次实测（2026-11-06）：
 
-- 构建退出码 `0`，导出 `applyPlanQcd`(T)、`applyInitQcd`(W)、`applyEndQcd`(W)；
-  `applyContractQcd` 待数值域落地后由 `build.sh` 自动纳入。
+- 构建退出码 `0`，导出 `applyPlanQcd`、`applyContractQcd`、`applyCompileQcd`、
+  `applyCompiledQcd`、`applyDestroyQcd`、`applyInitQcd`、`applyEndQcd`。
 - 随机表达式 **3400 条**（600 + 1200 + 800 + 800，三套生成器）与
   `contract_path(..., optimize='greedy')[1]` 的 `opt_cost` / `path` /
   `largest_intermediate` 全部逐位一致，0 不一致。
@@ -132,10 +148,11 @@ nm -D --defined-only cpp/einsum/libpyqcdeinsum.so | grep Qcd
 `applyPlanQcd`，用 `sys.path.insert(0, 'refer/git-rep/opt_einsum')` 的
 `contract_path(..., optimize='greedy')` 作 oracle。
 
-## 7. 未实现（如实登记）
+## 8. 未实现（如实登记）
 
 - `planner_id = 1/2/3`（optimal / dp / branch）尚未实现，返回状态码 1，
   `_native.plan` 随之返回 `None` 由上层回退 `_plan_py.py`。
 - `memory_limit` 非空时 greedy 应转 `branch(nbranch=1)`，同样未实现，
   返回状态码 1。
-- `applyContractQcd`（CPU 数值域）与 `src/cuda/**` 不在本组范围。
+- MPI 只支持单输出轴且不做跨 rank 浮点 allreduce；多轴、消去轴分片、NUMA 自动绑定
+  尚未落地。多进程 fallback 只支持 NumPy host backend。

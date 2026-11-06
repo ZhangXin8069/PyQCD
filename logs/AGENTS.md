@@ -628,3 +628,11 @@
 - 关键内容: opt_einsum 以 submodule 固定到 fccdd5aa，README 已登记
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pyqcd-einsum-performance - stage - 2026-11-06 09:15:41 +0800
+- 主任务: qcd-einsum CUDA/KUPL 性能进度
+- 日志文件: logs/v202611060915.txt
+- 文件大小: 5133 bytes
+- 触发原因: 阶段成果
+- 关键内容: T1 蒸馏实例：KUPL 四项 PASS；CUDA E4/E5 PASS，E1/E2 未达 3x；CUDA MPI 降轴路径测试失败待修
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress

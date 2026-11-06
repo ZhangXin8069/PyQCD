@@ -95,18 +95,32 @@ def find_contraction(positions, input_sets, output_set) -> tuple[frozenset, froz
 
 int  applyPlanQcd(long long set_ptrs, long long params);
 int  applyContractQcd(long long plan, long long tensors, long long out, long long params);
+int  applyContractMpiQcd(long long plan, long long tensors, long long out, long long params);
+int  applyCompileQcd(long long plan, long long params, long long out_context);
+int  applyCompiledQcd(long long context, long long tensors, long long out, long long params);
+void applyDestroyQcd(long long context);
 void applyInitQcd(long long set_ptrs, long long params);
 void applyEndQcd(long long set_ptrs, long long params);
 ```
 
+前三个数值入口是 compiled-context 扩展：`applyCompileQcd` 解析一次 version-2 计划并
+返回不透明 `int64` 上下文，`applyCompiledQcd` 复用计划和后端 workspace，
+`applyDestroyQcd` 释放上下文。上下文只由对应 backend 解释，禁止跨 KUPL/CUDA 传递。
+
 返回值：`0` 成功；`1` 参数非法（fail-closed）；`2` 内存超限；`3` 内部错误。
-**NUL 必须导出全部符号**；`build.sh` 用 `-Wl,--version-script` 收敛导出面。
+`applyContractMpiQcd` 当前只由 KUPL MPI 构建实现；CUDA 镜像导出同名 fail-closed
+stub。**NUL 必须导出冻结四入口、MPI 入口与 compiled-context 三入口**；构建脚本用
+`-Wl,--version-script` 收敛导出面，内部 kernel 符号不得进入动态导出表。
 
 ## 6. 精度与数值口径
 
 - dtype：`complex128` 为主，`complex64`、`float64` 必须支持；混合精度 **fail closed**。
 - 数值验收：与 `numpy.einsum` / `opt_einsum` 逐元素 `rel ≤ 1e-12`（complex128）。
 - 性能验收：同后端、同 dtype、同线程数，`median(≥10 次)`；CPU 对 CPU、GPU 对 GPU。
+- 二元收缩规范布局：左 `[B,M,K]`、右 `[B,N,K]`，K 必须是两侧最低连续维；GEMM
+  执行语义为 `out[B,M,N] = left[B,M,K] @ right[B,N,K]^T`。
+- 稳定基准入口应缓存计划/compiled context，不缓存输入内容；同一 plan 的重复调用必须
+  使用本次输入指针且不能返回旧数据。
 
 ## 7. 回退不变量
 
@@ -120,3 +134,17 @@ void applyEndQcd(long long set_ptrs, long long params);
 - **生产代码禁止 import `refer/` 与 `pyqcd.testing`**；oracle 只在 `pyqcd/testing/einsum/` 内。
 - 不修改 `refer/git-rep/**` 子模块。
 - 不加注释解释显而易见的代码；只在非显然处写一句原因。
+
+## 9. 当前验证入口
+
+```bash
+python -m pyqcd.testing.einsum.verify_native --backend kupl
+python -m pyqcd.testing.einsum.verify_native --backend cuda
+PYQCD_EINSUM_ORACLE=installed PYQCD_EINSUM_NATIVE=kupl \
+  python -m pyqcd.testing.einsum.bench_native --profiles T1 \
+  --backends cpu --isolation process
+mpirun -np 2 python -m pyqcd.testing.einsum.verify_mpi
+```
+
+`T0/T0n` 是 overhead 诊断 profile；`T1/T2` 是性能验收 profile。安装 oracle 模式必须
+在产物中保留 `frozen=false`，不能替代冻结子模块证据。

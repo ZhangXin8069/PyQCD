@@ -887,7 +887,9 @@ def optimize(
     for cnum, contract_inds in enumerate(path):
         contract_inds = tuple(sorted(contract_inds, reverse=True))
 
-        out_inds, input_sets, idx_removed = find_contraction(contract_inds, input_sets, output_set)
+        out_inds, input_sets, idx_removed, _idx_contract = find_contraction(
+            contract_inds, input_sets, output_set
+        )
 
         tmp_inputs = [input_list.pop(x) for x in contract_inds]
         tmp_shapes = [input_shapes.pop(x) for x in contract_inds]

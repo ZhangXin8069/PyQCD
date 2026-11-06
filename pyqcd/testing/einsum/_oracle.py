@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import functools
+import importlib
 import os
 import sys
 
@@ -33,6 +34,19 @@ def oracle():
     解析结果必须落在 `refer/git-rep/opt_einsum/opt_einsum`，否则报错
     （站点包 3.4.0 与参考仓库版本不同，混用会让差分测试失去意义）。
     """
+    mode = os.environ.get('PYQCD_EINSUM_ORACLE', 'frozen').strip().lower()
+    if mode == 'installed':
+        while ORACLE_ROOT in sys.path:
+            sys.path.remove(ORACLE_ROOT)
+        loaded = sys.modules.get('opt_einsum')
+        if loaded is not None and _package_dir(loaded) == os.path.abspath(
+                ORACLE_PACKAGE):
+            _purge_opt_einsum()
+        return importlib.import_module('opt_einsum')
+    if mode != 'frozen':
+        raise RuntimeError(
+            "PYQCD_EINSUM_ORACLE must be 'frozen' or 'installed', "
+            f'got {mode!r}')
     if not os.path.isdir(ORACLE_PACKAGE):
         raise FileNotFoundError(f'缺少参考实现目录: {ORACLE_PACKAGE}')
     if ORACLE_ROOT not in sys.path:

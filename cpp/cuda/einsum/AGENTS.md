@@ -1,7 +1,7 @@
 # cpp/cuda/einsum — CUDA 后端（与 KUPL 同一套 C ABI）
 
-本目录产出 `libpyqcdeinsum.so`，导出面与 `cpp/kupl/einsum` **完全相同**的四个
-`apply*Qcd`。冻结契约见 `pyqcd/einsum/AGENTS.md` §5 与
+本目录产出 `libpyqcdeinsum.so`，导出面与 `cpp/kupl/einsum` 相同的冻结四入口与
+compiled-context 三入口。冻结契约见 `pyqcd/einsum/AGENTS.md` §5 与
 `../../kupl/einsum/include/einsum_define.h`；本文件只登记本目录的落地细节，
 冲突时以那两处为准。
 
@@ -9,8 +9,11 @@
 
 | 文件 | 职责 | 负责人 |
 |---|---|---|
-| `include/einsum_cuda.h` | 三个数值 kernel 的 weak 声明 + `applyContractQcd` 的 int32 步骤表编码 | 装配组（本组） |
-| `src/apply_plan.cu` | `applyPlanQcd` / `applyContractQcd` / `applyInitQcd` / `applyEndQcd` | 装配组（本组） |
+| `include/einsum_cuda.h` | pack/reduce/GEMM/stream 内部接口 | 原生组 |
+| `src/apply_plan.cu` | `applyPlanQcd` 薄适配与会话钩子 | 原生组 |
+| `src/apply_contract.cu` | version-2 计划、compiled context、stream pool、workspace | 原生组 |
+| `src/pack.cu` | pack/transpose/reduce/hadamard CUDA kernel | 原生组 |
+| `src/batched_gemm.cu` | cuBLAS K-last batched GEMM | 原生组 |
 | `make-nv.sh` | nvcc 直编 + 原子软链发布 | 装配组（本组） |
 | `include/einsum_define.h` | 冻结 C ABI 的**逐字节镜像**（不属本组，勿改） | 原生组（规划） |
 | `include/einsum_permute.h`、`src/permute.cu` | `qcd_cuda_permute` / `qcd_cuda_hadamard` | A 组 |
@@ -25,8 +28,8 @@
 
 1. **导出面**：`-Xcompiler -fvisibility=hidden` + `QCD_EINSUM_API` +
    `-Xlinker --version-script`（`build/einsum_cuda_exports.map`）三重收敛，
-   `nm -D --defined-only` 只剩 `applyPlanQcd` / `applyContractQcd` /
-   `applyInitQcd` / `applyEndQcd`；三个 `qcd_cuda_*` 是 .so 内部符号。
+   `nm -D --defined-only` 只保留冻结四入口与 `applyCompileQcd` /
+   `applyCompiledQcd` / `applyDestroyQcd`；`qcd_cuda_*` 是内部符号。
 2. **规划核心唯一真源**：`../../kupl/einsum/src/plan_core.cpp` 与
    `../../kupl/einsum/include/einsum_plan.h` 被**直接编译**进本库，不复制、
    不 fork。`applyPlanQcd` 只是 thin adapter（校验地址 → `PlanSpec` →
@@ -80,46 +83,15 @@ nvcc -O3 -std=c++17 --shared -Xcompiler -fPIC -Xcompiler -fvisibility=hidden \
   `build-nv.sh` / `_native.py` 需要这个库来规划）；`--require-kernels`（或
   `PYQCD_EINSUM_REQUIRE_KERNELS=1`）把这同一种状态变成**明确错误 + 退出码 1**。
 
-## 4. `applyContractQcd` 的 plan 编码（version 1）
+## 4. 执行与并行
 
-`plan` 是 int32 流：4 个 header word + `num_steps` 个固定 16 word（8 个 pair）
-的步骤记录 + 步骤表之后的 int32 payload 区（存放 permute 的 shape/perm）。
-int64 字段用小端两 word 表示：`value = (uint64)(uint32)hi << 32 | (uint32)lo`。
-
-```
-plan[0] version(=1)   plan[1] num_steps   plan[2] plan[3] 保留，必须 0
-base = 4 + 16 * step
-  base+0..3    kind, dst_slot, a_slot, b_slot
-  base+4..5    ndim, dtype_id              (dtype_id == -1 → params[8])
-  base+6..7    hadamard 元素个数 (lo, hi)
-  base+8..9    gemm M (lo, hi)
-  base+10..11  gemm N (lo, hi)
-  base+12..13  gemm K (lo, hi)
-  base+14..15  gemm batch (lo, hi) | permute (shape_offset, perm_off)
-kind: 1 = PERMUTE, 2 = HADAMARD, 3 = GEMM
-```
-
-- **槽位**：`tensors` 是 int64 数据指针数组，长度
-  `num_slots = params[QCD_PARAM_NUM_OPS]`；`slot < num_slots` 取
-  `tensors[slot]`，`slot == num_slots` 取 `out[0]`（结果缓冲区）。
-  **只有最后一步**可以写结果槽，`out[0]` 必须非空。
-- **payload**：`shape_offset` / `perm_off` 是 `plan` 的**绝对 word 下标**，必须
-  ≥ payload 起点；`src_shape[ndim]` 与 `dst_perm[ndim]` 均为 int32，adapter 在
-  调用 kernel 前把 shape 展宽成 int64。
-- **别名**：HADAMARD 允许 `dst == a` 或 `dst == b`（逐元素，可原地）；PERMUTE
-  拒绝 `dst == a`，GEMM 拒绝 `dst == a || dst == b`（kernel 不承诺原地安全）。
-  PERMUTE 不使用 `b_slot`，必须写 0。
-- **校验清单**（任一不满足 → `1`）：空指针；version/保留字；`num_steps`、
-  `num_slots`、`dtype_id` 越界；`dst_slot` 越界或非末步写结果槽；`a/b_slot`
-  越界或指针为 0；PERMUTE 的 `ndim ∉ [1,8]`、offset 落在步骤表内、shape 为负、
-  perm 非 `[0,ndim)` 的置换（含重复轴）；GEMM 的 m/n/k/batch 为负或
-  `m*n*k*batch` 溢出 int64；kind 未知。
-- **dtype**：`dtype_id` 逐 step 生效，`-1` 表示继承 `params[QCD_PARAM_DTYPE_ID]`；
-  取值由数值域定义（当前 `0 complex128 / 1 complex64 / 2 float64 / 3 float32`，
-  见 `einsum_permute.h`），本层只做 `[0,63]` 的 sanity 上界。
-- **stream**：编码里没有流槽位，adapter 一律传 `nullptr`（默认流），
-  排序由调用方用 `cudaDeviceSynchronize`/事件保证；需要显式流的版本属于
-  后续 ABI 扩展（`params[10:32]` 保留）。
+- `applyContractQcd` 解析 version-2 执行计划；left `[B,M,K]`、right `[B,N,K]`，
+  K 为两侧最低连续轴，cuBLAS 使用 transpose-B。
+- compiled context 首次执行分配并复用中间、packed 与 GEMM workspace；重复调用
+  不重新解析计划或 cudaMalloc。
+- stream pool 由 `PYQCD_EINSUM_CUDA_STREAMS` 控制，最多 32 条且受 batch 数限制。
+  pack 后记录 event，工作流分片并行，所有流完成后在默认流汇合。
+- 支持 complex128、complex64、float64、float32，混合精度 fail closed。
 
 ## 5. 已实现 / 未实现边界（如实登记）
 
@@ -127,26 +99,19 @@ kind: 1 = PERMUTE, 2 = HADAMARD, 3 = GEMM
 
 - `applyPlanQcd`：与 KUPL **完全相同**的校验与语义，含 0 算子、1 算子、
   `mem_hi < 0` 无限内存、容量不足、下标越界、尺寸为负等全部 fail-closed 分支。
-- `applyContractQcd`：`PERMUTE` / `HADAMARD` / `GEMM` 三类步骤的校验、顺序派发、
-  kernel 缺失检测、返回值归一；真实 GPU 上 hadamard → permute → gemm 三步链
-  与 numpy 结果逐元素相同（见 §6）。
-- `applyInitQcd` / `applyEndQcd`：强定义空实现（本后端无 session 状态）。
+- `applyContractQcd`、compiled-context 三入口、pack/reduce/hadamard、K-last
+  batched GEMM 已实现并通过 GPU 数值对照。
+- `applyInitQcd` / `applyEndQcd`：强定义兼容钩子。
 
 **未实现（返回 `1`，不假装支持）**：
 
-- **把 `applyPlanQcd` 写出的 `(i, j)` 路径对直接喂给 `applyContractQcd`
-  执行一般 einsum**：该编码只有"第几步收缩哪两个操作数"，没有索引集合、
-  输出索引和形状，无法推导 permute 的 `src_shape/dst_perm`，也无法推导
-  GEMM 的 `m/n/k/batch`。因此本层要求调用方显式给出 kernel 级步骤；
-  一般 einsum 的执行编码属于后续版本（需要额外的 index/shape 通道）。
-- 任意 stride 的视图（只支持连续缓冲区）、多输出、batched 之外的广播、
-  混合精度（`dtype_id` 单值）。
-- PERMUTE 的 `ndim > 8`（与 `einsum_permute.h` 的 kernel 上限一致）。
-- GEMM / PERMUTE 原地（别名）执行。
-- 显式 CUDA 流选择（见 §4，固定默认流）。
-- 多线程/多设备调度、错误状态的下钻（kernel 失败统一映射为 `3`）。
+- 非连续 view 由 Python 绑定显式转连续或回退；不允许静默错误读取 stride。
+- 尚未支持：混合精度、单 operand 重复轴、MPI rank 分片和跨设备 collective。
+- 当前 stream pool 只在单一当前 CUDA device 内工作；跨设备生产拓扑尚需 MPI。
+- `applyContractMpiQcd` 已导出但与 KUPL 不同，当前为返回 `1` 的显式 stub；CUDA MPI
+  rank 分片尚未实现，禁止声称支持。
 
-## 6. 验收（实测 2026-11-05）
+## 6. 验收（实测 2026-11-06）
 
 ```bash
 bash cpp/cuda/einsum/make-nv.sh                     # 退出码 0
@@ -154,10 +119,8 @@ nm -D --defined-only cpp/cuda/einsum/libpyqcdeinsum.so | grep Qcd
 ```
 
 ```
-0000000000003fa0 T applyContractQcd
-0000000000004140 T applyEndQcd
-0000000000004130 T applyInitQcd
-0000000000003f70 T applyPlanQcd
+applyPlanQcd / applyContractQcd / applyCompileQcd / applyCompiledQcd /
+applyDestroyQcd / applyInitQcd / applyEndQcd
 ```
 
 - `readelf -d`：`NEEDED libcublas.so.12`、`libcudart.so.12`；`SONAME
@@ -166,8 +129,7 @@ nm -D --defined-only cpp/cuda/einsum/libpyqcdeinsum.so | grep Qcd
   `path` / `opt_cost` / `largest_intermediate` 逐位相同，差异 **0**；
   同时与 `refer/git-rep/opt_einsum` 的 `contract_path(..., optimize='greedy')`
   对照 **310/310** 一致。
-- `applyContractQcd` 校验用例 17 条全部命中预期状态码；真实 GPU 上
-  HADAMARD→PERMUTE→GEMM 三步执行 `status 0`，与 numpy `max|diff| = 0.000e+00`。
-- 缺少 kernel 实现时（把本目录源码复制到临时树上、只留 `apply_plan.cu`）：
-  默认构建打印缺哪三个符号并以 **0** 退出（规划 ABI 完整，`applyContractQcd`
-  实测返回 **3**）；`--require-kernels` 以 **1** 退出并给出明确错误。
+- V100/P100 四种 dtype 与 NumPy 对照通过；compiled context 重复执行
+  `max|Δ| ≈ 1.9e-15`；streams=4 时 batch=4/6 使用四流，batch=2 自动限制两流。
+- T0 distillation GPU 开发窗口：E1 `3.14x`、E2 `4.12x`、E4 `3.10x`；E5 由
+  专用 sandwich fast path 继续优化。

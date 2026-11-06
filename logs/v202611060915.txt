@@ -1,0 +1,64 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-06 09:15:41 +0800
+批次: pyqcd-einsum-performance
+主任务: qcd-einsum CUDA/KUPL 性能进度
+触发原因: 阶段成果
+摘要: T1 蒸馏实例：KUPL 四项 PASS；CUDA E4/E5 PASS，E1/E2 未达 3x；CUDA MPI 降轴路径测试失败待修
+Git 根目录: /root/PyQCD
+
+## 关键日志
+
+### S1 — T1 CPU/KUPL 性能门禁
+- 目标: 在 distillation 四条实战方程上验证 KUPL 主路径相对 opt_einsum 的 3x 门禁。
+- 命令/操作: 使用 `bench_native.py` 的 T1、CPU、complex128、4 线程、greedy path、process isolation 和 10 次中位数。
+- 关键输出: E1 3.873333399s / 0.875025502s = 4.426538x；E2 32.182849152s / 0.854958442s = 37.642589x；E4 0.035357416s / 0.005274095s = 6.703978x；E5 0.000342571s / 0.000105356s = 3.251557x。
+- 退出码: 0（现有 `/tmp/pyqcd-bench-T1-process-accept-20261106/bench.json`；四项 PASS）。
+- 证据与判断: KUPL 单进程 C++/OpenBLAS/OpenMP 主路径达到 T1 3x，但 E5 余量较小。KUPL-MP 小规模仅 0.42x-0.44x，KUPL-MPI 2-rank 仅功能通过，均不得并入主路径性能结论。
+
+### S2 — CUDA V100/P100 单卡性能门禁
+- 目标: 在相同 T1 实例与 oracle 口径下验证 CUDA 单卡。
+- 命令/操作: `bench_native.py --profiles T1 --backends gpu --isolation process`，分别使用 V100 UUID 与 P100。
+- 关键输出: V100 E1 1.186x、E2 1.083x、E4 5.150x、E5 4.117x；P100 E1 1.170x、E2 1.091x、E4 3.199x、E5 3.179x。
+- 退出码: 1（E1/E2 低于 3x，验收状态 FAIL）。
+- 证据与判断: CUDA 的 E4/E5 已在 V100/P100 通过；E1/E2 是剩余主阻塞。tiled transpose pack 将 P100 E1 qcd 从约 24.4ms 降到 14.6ms，但 opt 同口径约 17.1ms，倍率仍只有 1.17x。
+
+### S3 — 多 stream 与 MPI 试验
+- 目标: 进一步压缩 E1/E2 的两次 16M complex128 中间布局转换和大型 GEMM。
+- 命令/操作: 增加 M 维单 GEMM 多 stream 分片；V100 分别测试 1/4/8 streams。新增 CUDA MPI 消去轴分片与 Allreduce 路径及 2-rank 正确性入口。
+- 关键输出: V100 E1 单 stream 14.38ms，4 streams 15.22ms，8 streams 15.75ms；E2 单 stream 14.34ms，4 streams 15.14ms，8 streams 15.81ms。CUDA MPI 2-rank 首个 matmul 用例两 rank 相对误差分别为 5.074e+00 和 6.430e+00。
+- 退出码: 多 stream 数值测试 14/14 PASS，但性能为负收益；CUDA MPI 测试退出码 1。
+- 证据与判断: 单卡 dense complex128 已接近当前 kernel/硬件可行上限，多 stream 不改善；CUDA MPI 当前存在结果组合或分片错误，不能宣称完成。
+
+## 验证与证据
+- 测试/检查: CUDA native `14 passed, 0 skipped, 0 failed`，包括 complex128/complex64/float64/float32、chain、batch、dot、sandwich、compiled context 和 contract expression。
+- 结果: tiled pack 后单 stream 数值契约通过；4-stream CUDA 数值契约同样 14/14 通过。
+- 未验证项: T1/T2 CUDA MPI 生产规模、冻结 `opt_einsum` oracle、指定 `beta6.20_mu-0.2770_ms-0.2310_L24x64_cfg` 数据、CUDA native C ABI MPI 入口。
+
+## 变更与产物
+- 文件: `cpp/cuda/einsum/src/pack.cu` 新增 tiled transpose pack；`cpp/cuda/einsum/src/apply_contract.cu` 新增 M 维多 stream 分片；`pyqcd/einsum/cuda/mpi.py` 新增 CUDA MPI 编排；`pyqcd/testing/einsum/verify_cuda_mpi.py` 新增 2-rank 验证入口。
+- 产物: `/tmp/pyqcd-bench-T1-process-accept-20261106/bench.json`、`/tmp/pyqcd-bench-T1-gpu-v100-real-20261106/bench.json`、`/tmp/pyqcd-bench-T1-gpu-p100-tiled-20261106b/bench.json`。
+- 未改动范围: KUPL 主计算路径、`refer/` 外部参考树、目标数据目录。
+
+## 风险、限制与下一步
+- 风险: 当前 oracle 为站点包 `opt_einsum 3.4.0`，固定子模块 `fccdd5aa` 仍不可用；当前数据为 `conf6250/L24x72/ms0.2400` 代理实例。
+- 阻塞: CUDA E1/E2 单卡未达 3x；CUDA MPI 2-rank 数值错误尚未定位。
+- 下一步: 修复 CUDA MPI 分片/本地计划/Allreduce，随后在真实 T1 E1/E2 上做 2-GPU 与 3-GPU 验收，并重跑双后端全量测试。
+
+## 用户输入指令
+简报性能进度到日志
+
+## Agent 全文报告
+--- report begin ---
+性能简报（T1 蒸馏实例，complex128，进程隔离，provisional）：
+
+| 后端/设备 | E1 | E2 | E4 | E5 | 状态 |
+|---|---:|---:|---:|---:|---|
+| KUPL CPU | 4.43x | 37.64x | 6.70x | 3.25x | 四项 PASS |
+| CUDA V100 | 1.19x | 1.08x | 5.15x | 4.12x | E4/E5 PASS |
+| CUDA P100 | 1.17x | 1.09x | 3.20x | 3.18x | E4/E5 PASS |
+
+关键变化：tiled transpose pack 将 P100 的 E1 qcd 时间从约 24.4 ms 降到 14.6 ms，但 opt 同步为 17.1 ms，所以只到 1.17x。单卡 CUDA 多 stream 实测反而慢 6%-10%，不会作为收益上报。CUDA E1/E2 当前受 dense complex128 计算下界与布局转换限制；正在通过 CUDA MPI 消去轴分片与 Allreduce 并行闭合，但 2-rank 首个用例已暴露数值错误，当前状态为 FAIL，不能宣称 CUDA 已达 3x。
+
+所有结果仍为 provisional：固定 opt_einsum oracle 未初始化，用户指定的 L24x64/ms0.2310 数据不存在，暂用 conf6250/L24x72/ms0.2400。
+--- report end ---

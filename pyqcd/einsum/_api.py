@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import warnings
+from collections import OrderedDict
 from collections.abc import Sequence
 from typing import Any
 
@@ -19,6 +21,14 @@ _EINSUM_PUNCTUATION = ",->."
 _BASE_TYPES = (bool, int, float, complex, str, bytes)
 
 _MODULES: dict[str, Any] = {}
+_NATIVE_PLAN_CACHE: OrderedDict[tuple[Any, ...], bytes] = OrderedDict()
+_NATIVE_PLAN_CACHE_LIMIT = 128
+_CONTRACT_PROGRAM_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+_CONTRACT_PROGRAM_CACHE_LIMIT = 64
+_LAST_CONTRACT_SIGNATURE: tuple[Any, ...] | None = None
+_LAST_CONTRACT_PROGRAM: Any | None = None
+_NATIVE_DISABLED: set[tuple[Any, ...]] = set()
+_NATIVE_WARNING_EMITTED = False
 
 
 def _sibling(name: str) -> Any:
@@ -48,6 +58,10 @@ def _planner() -> Any:
 
 def _executor() -> Any:
     return _sibling("_execute")
+
+
+def _native_executor() -> Any:
+    return _sibling("_native")
 
 
 def __getattr__(name: str) -> Any:
@@ -508,7 +522,61 @@ def contract(
     if (optimize is True) or (optimize is None):
         optimize = "auto"
 
+    global _LAST_CONTRACT_SIGNATURE, _LAST_CONTRACT_PROGRAM
+
     operands_list = [subscripts] + list(operands)
+
+    cached_key = None
+    cacheable_operands = all(
+        hasattr(operand, "shape") and hasattr(operand, "dtype")
+        for operand in operands
+    )
+    cacheable_optimize = isinstance(optimize, (str, bool, tuple)) or optimize is None
+    cache_enabled = (
+        isinstance(subscripts, str)
+        and cacheable_operands
+        and cacheable_optimize
+        and not kwargs
+        and out is None
+        and optimize is not False
+    )
+    if cache_enabled:
+        resolved_backend = parse_backend(operands, backend)
+        last_signature = (
+            subscripts,
+            resolved_backend,
+            tuple(id(operand) for operand in operands),
+            tuple(tuple(int(value) for value in operand.shape) for operand in operands),
+            tuple(str(operand.dtype) for operand in operands),
+            tuple(
+                int(operand.device.id)
+                if hasattr(operand, "device") and hasattr(operand.device, "id")
+                else -1
+                for operand in operands
+            ),
+            id(optimize),
+            bool(use_blas),
+            memory_limit,
+        )
+        if last_signature == _LAST_CONTRACT_SIGNATURE and _LAST_CONTRACT_PROGRAM is not None:
+            try:
+                return _LAST_CONTRACT_PROGRAM(list(operands))
+            except Exception:
+                _LAST_CONTRACT_SIGNATURE = None
+                _LAST_CONTRACT_PROGRAM = None
+        cached_key = _contract_program_key(
+            subscripts, operands, resolved_backend, optimize, memory_limit, use_blas
+        )
+        cached_program = _cached_contract_program(cached_key)
+        if cached_program is not None:
+            try:
+                result = cached_program(list(operands))
+                _LAST_CONTRACT_SIGNATURE = last_signature
+                _LAST_CONTRACT_PROGRAM = cached_program
+                return result
+            except Exception:
+                if cached_key is not None:
+                    _CONTRACT_PROGRAM_CACHE.pop(cached_key, None)
 
     # if no optimization, run pure einsum
     if optimize is False:
@@ -540,6 +608,42 @@ def contract(
 
         return ContractExpression(full_str, contraction_list, constants_dict, **kwargs)
 
+    resolved_backend = parse_backend(operands_prepped, backend)
+    if cache_enabled:
+        if cached_key is None:
+            cached_key = _contract_program_key(
+                subscripts, operands_prepped, resolved_backend, optimize,
+                memory_limit, use_blas,
+            )
+        program = _compile_native_expression(
+            contraction_list, operands_prepped, resolved_backend
+        )
+        if program is not None:
+            _cache_contract_program(cached_key, program)
+            try:
+                result = program(list(operands_prepped))
+                _LAST_CONTRACT_SIGNATURE = (
+                    subscripts,
+                    resolved_backend,
+                    tuple(id(operand) for operand in operands_prepped),
+                    tuple(tuple(int(value) for value in operand.shape)
+                          for operand in operands_prepped),
+                    tuple(str(operand.dtype) for operand in operands_prepped),
+                    tuple(
+                        int(operand.device.id)
+                        if hasattr(operand, "device") and hasattr(operand.device, "id")
+                        else -1
+                        for operand in operands_prepped
+                    ),
+                    id(optimize),
+                    bool(use_blas),
+                    memory_limit,
+                )
+                _LAST_CONTRACT_PROGRAM = program
+                return result
+            except Exception:
+                _CONTRACT_PROGRAM_CACHE.pop(cached_key, None)
+
     return _core_contract(operands_prepped, contraction_list, backend=backend, out=out, **kwargs)
 
 
@@ -562,12 +666,247 @@ def _run_step(step: Any, operands: list[Any], backend: str, out: Any, kwargs: di
     return execute_step(local_step, window, backend, out)
 
 
+def _native_backend(backend: str) -> str | None:
+    """Map an array backend to the matching native execution backend."""
+    if backend in ("numpy", "cpu"):
+        return "kupl"
+    if backend in ("cupy", "gpu"):
+        return "cuda"
+    return None
+
+
+def _native_compatible(operands: Sequence[Any], backend: str, kwargs: dict[str, Any]) -> bool:
+    """Reject cases where a native call would copy, reinterpret or lose semantics."""
+    if kwargs or _native_backend(backend) is None:
+        return False
+    for operand in operands:
+        if operand is None or not hasattr(operand, "shape") or not hasattr(operand, "dtype"):
+            return False
+        if any(int(extent) == 0 for extent in operand.shape):
+            # The native kernels require positive packed extents. The Python
+            # execution path implements zero-length reductions as exact zeros.
+            return False
+        flags = getattr(operand, "flags", None)
+        if flags is not None and not bool(getattr(flags, "c_contiguous", True)):
+            return False
+        if flags is None and hasattr(operand, "is_contiguous") and not operand.is_contiguous():
+            return False
+    return True
+
+
+def _native_plan_key(
+    operands: Sequence[Any], contraction_list: Sequence[tuple[Any, ...]], backend: str
+) -> tuple[Any, ...]:
+    return (
+        backend,
+        tuple(tuple(int(value) for value in operand.shape) for operand in operands),
+        tuple(str(operand.dtype) for operand in operands),
+        tuple(
+            int(operand.device.id)
+            if hasattr(operand, "device") and hasattr(operand.device, "id")
+            else -1
+            for operand in operands
+        ),
+        tuple(
+            (
+                tuple(int(value) for value in step[0]),
+                tuple(sorted(step[1])),
+                str(step[2]),
+                None if step[3] is None else tuple(str(value) for value in step[3]),
+                str(step[4]),
+            )
+            for step in contraction_list
+        ),
+    )
+
+
+def _try_native_contract(
+    operands: Sequence[Any],
+    contraction_list: Sequence[tuple[Any, ...]],
+    backend: str,
+    out: Any,
+    kwargs: dict[str, Any],
+    native_cache: dict[tuple[Any, ...], Any] | None = None,
+) -> tuple[bool, Any]:
+    """Return ``(handled, result)`` for one native execution attempt."""
+    global _NATIVE_WARNING_EMITTED
+
+    if not _native_compatible(operands, backend, kwargs):
+        return False, None
+    native_backend = _native_backend(backend)
+    assert native_backend is not None
+    if native_cache is None:
+        key = _native_plan_key(operands, contraction_list, native_backend)
+    else:
+        key = (
+            native_backend,
+            tuple(str(operand.dtype) for operand in operands),
+            tuple(tuple(int(value) for value in operand.shape) for operand in operands),
+        )
+    if key in _NATIVE_DISABLED:
+        return False, None
+
+    if native_cache is not None:
+        cached = native_cache.get(key)
+        if cached is not None and hasattr(cached, "__call__"):
+            try:
+                return True, cached(list(operands), out=out)
+            except Exception as exc:
+                _NATIVE_DISABLED.add(key)
+                if not _NATIVE_WARNING_EMITTED:
+                    warnings.warn(
+                        f"pyqcd.einsum native {native_backend} execution unavailable; "
+                        f"using Python execution: {type(exc).__name__}: {exc}",
+                        RuntimeWarning,
+                        stacklevel=3,
+                    )
+                    _NATIVE_WARNING_EMITTED = True
+                return False, None
+
+    plan = native_cache.get(key) if native_cache is not None else _NATIVE_PLAN_CACHE.get(key)
+    if plan is None:
+        try:
+            from ._native_plan import encode_execution_plan
+
+            plan = encode_execution_plan(contraction_list, operands)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            _NATIVE_DISABLED.add(key)
+            if not _NATIVE_WARNING_EMITTED:
+                warnings.warn(
+                    f"pyqcd.einsum native plan unavailable; using Python execution: {exc}",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                _NATIVE_WARNING_EMITTED = True
+            return False, None
+        if native_cache is None:
+            _NATIVE_PLAN_CACHE[key] = plan
+            if len(_NATIVE_PLAN_CACHE) > _NATIVE_PLAN_CACHE_LIMIT:
+                _NATIVE_PLAN_CACHE.popitem(last=False)
+
+    if native_cache is not None:
+        try:
+            program = _native_executor().compile(plan, backend=native_backend)
+        except Exception as exc:
+            _NATIVE_DISABLED.add(key)
+            if not _NATIVE_WARNING_EMITTED:
+                warnings.warn(
+                    f"pyqcd.einsum native {native_backend} compiler unavailable; "
+                    f"using Python execution: {type(exc).__name__}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                _NATIVE_WARNING_EMITTED = True
+            return False, None
+        native_cache[key] = program
+        try:
+            return True, program(list(operands), out=out)
+        except Exception as exc:
+            _NATIVE_DISABLED.add(key)
+            if not _NATIVE_WARNING_EMITTED:
+                warnings.warn(
+                    f"pyqcd.einsum native {native_backend} execution unavailable; "
+                    f"using Python execution: {type(exc).__name__}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                _NATIVE_WARNING_EMITTED = True
+            return False, None
+
+    try:
+        result = _native_executor().execute(
+            plan, list(operands), out=out, backend=native_backend
+        )
+    except Exception as exc:  # Native failures must fall back without changing semantics.
+        _NATIVE_DISABLED.add(key)
+        if not _NATIVE_WARNING_EMITTED:
+            warnings.warn(
+                f"pyqcd.einsum native {native_backend} execution unavailable; "
+                f"using Python execution: {type(exc).__name__}: {exc}",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            _NATIVE_WARNING_EMITTED = True
+        return False, None
+    return True, result
+
+
+def _compile_native_expression(
+    contraction_list: Sequence[tuple[Any, ...]],
+    operands: Sequence[Any],
+    backend: str,
+    kwargs: dict[str, Any] | None = None,
+) -> Any | None:
+    """Compile a reusable native program for a fixed expression, or return ``None``."""
+    if not _native_compatible(operands, backend, kwargs or {}):
+        return None
+    native_backend = _native_backend(backend)
+    if native_backend is None:
+        return None
+    try:
+        from ._native_plan import encode_execution_plan
+
+        plan = encode_execution_plan(contraction_list, operands)
+        return _native_executor().compile(plan, backend=native_backend)
+    except Exception:
+        return None
+
+
+def _contract_program_key(
+    subscripts: Any,
+    operands: Sequence[Any],
+    backend: str,
+    optimize: Any,
+    memory_limit: Any,
+    use_blas: bool,
+) -> tuple[Any, ...] | None:
+    if not isinstance(subscripts, str) or _native_backend(backend) is None:
+        return None
+    try:
+        return (
+            subscripts,
+            _native_backend(backend),
+            tuple(tuple(int(value) for value in operand.shape) for operand in operands),
+            tuple(str(operand.dtype) for operand in operands),
+            tuple(
+                int(operand.device.id)
+                if hasattr(operand, "device") and hasattr(operand.device, "id")
+                else -1
+                for operand in operands
+            ),
+            repr(optimize),
+            repr(memory_limit),
+            bool(use_blas),
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _cached_contract_program(key: tuple[Any, ...] | None) -> Any | None:
+    if key is None:
+        return None
+    program = _CONTRACT_PROGRAM_CACHE.get(key)
+    if program is not None:
+        _CONTRACT_PROGRAM_CACHE.move_to_end(key)
+    return program
+
+
+def _cache_contract_program(key: tuple[Any, ...] | None, program: Any | None) -> None:
+    if key is None or program is None:
+        return
+    _CONTRACT_PROGRAM_CACHE[key] = program
+    _CONTRACT_PROGRAM_CACHE.move_to_end(key)
+    while len(_CONTRACT_PROGRAM_CACHE) > _CONTRACT_PROGRAM_CACHE_LIMIT:
+        _CONTRACT_PROGRAM_CACHE.popitem(last=False)
+
+
 def _core_contract(
     operands_: Sequence[Any],
     contraction_list: Sequence[tuple[Any, ...]],
     backend: str | None = "auto",
     evaluate_constants: bool = False,
     out: Any = None,
+    native_cache: dict[tuple[Any, ...], Any] | None = None,
     **kwargs: Any,
 ) -> Any:
     """Run ``contraction_list`` step by step on ``operands_``."""
@@ -575,6 +914,13 @@ def _core_contract(
 
     operands = list(operands_)
     backend = parse_backend(operands, backend)
+
+    if not evaluate_constants:
+        handled, native_result = _try_native_contract(
+            operands, contraction_list, backend, out, kwargs, native_cache=native_cache
+        )
+        if handled:
+            return native_result
 
     last = len(contraction_list) - 1
     for num, step in enumerate(contraction_list):

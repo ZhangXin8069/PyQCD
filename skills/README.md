@@ -13,6 +13,7 @@
 | [`pyqcd-conventions/`](pyqcd-conventions/) | `root` | 统一 γ 矩阵、轴序、单位、边界、Fourier/basis 符号、复数和结果状态契约。 | `2026-10-13` | [`SKILL.md`](pyqcd-conventions/SKILL.md) |
 | [`pyqcd-distillation/`](pyqcd-distillation/) | `root` | 审计 LapH/Wick/perambulator/GEVP/MPI/I/O 因果链及当前实现证据边界。 | `2026-10-13` | [`SKILL.md`](pyqcd-distillation/SKILL.md) |
 | [`pyqcd-docs/`](pyqcd-docs/) | `root` | 编写和验收中文 LaTeX、analy/pure 报告及 PDF 版式与源码证据。 | `2026-08-31 10:15:20 +08:00` | [`SKILL.md`](pyqcd-docs/SKILL.md) |
+| [`pyqcd-einsum/`](pyqcd-einsum/) | `root` | 维护 opt_einsum 兼容 API、原生收缩计划、K-lowest CUDA/KUPL 执行、MPI/stream 与性能门。 | `2026-11-06` | [`SKILL.md`](pyqcd-einsum/SKILL.md) |
 | [`pyqcd-enhanced-interpolator/`](pyqcd-enhanced-interpolator/) | `root` | 构造和审查 boosted-hadron 增强内插算符、Euclidean γ± 与 direct-minus-exchange 缩并。 | `2026-10-13` | [`SKILL.md`](pyqcd-enhanced-interpolator/SKILL.md) |
 | [`pyqcd-gauge/`](pyqcd-gauge/) | `root` | 计算 Wilson/Polyakov 圈、静态势、拓扑荷、Wilson flow 和链接涂抹。 | `2026-10-13` | [`SKILL.md`](pyqcd-gauge/SKILL.md) |
 | [`pyqcd-gluon-renorm/`](pyqcd-gluon-renorm/) | `root` | 区分 bare、gauge-fixed 与 renormalized 胶子可观测量，并约束 Clover、Fourier、EMT/current 契约。 | `2026-10-13` | [`SKILL.md`](pyqcd-gluon-renorm/SKILL.md) |
@@ -39,7 +40,7 @@
 
 ## 维护边界
 
-- 表中 23 个 `pyqcd-*` 目录及其 reference 由当前用户 `root` 维护；新增或更新入口时同步
+- 表中 24 个 `pyqcd-*` 目录及其 reference 由当前用户 `root` 维护；新增或更新入口时同步
   更新本表。
 - `form/` 由当前用户 `root` 维护，是仓库运维技能，不属于上述 23 个物理领域技能。
 - `LQCD_Skills/`、`donghx/` 与 `sush/` 是只读外来参考树；其内容只由对应

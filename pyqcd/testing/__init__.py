@@ -3077,3 +3077,85 @@ def test_infra_safety_contracts():
     _run_unittest_contract(AsciiCounterSafetyContract)
     _run_unittest_contract(EigcompressSchemeSafetyContract)
     _run_unittest_contract(MpiContractTimingSafetyContract)
+
+
+def test_einsum_native_contracts():
+    """Native KUPL/CUDA dtype, cache, out, expression and fallback contracts."""
+    from .einsum.verify_native import run
+
+    tally, ok = run(backend='auto', smoke=True)
+    if tally.skipped and not tally.passed:
+        print(f'SKIP native einsum: {tally.name} unavailable')
+        return
+    assert ok, f'native einsum failed: {tally.failed} assertion(s)'
+
+
+def test_einsum_cuda_mpi_partition_contracts():
+    """CUDA MPI weighted partitions remain complete and reproducible."""
+    from pyqcd.einsum import contract_path
+    from pyqcd.einsum.cuda.mpi import (
+        CudaMpiConfig,
+        _choose_reduction_label,
+        _partition_for,
+    )
+
+    config = CudaMpiConfig(mode='reduce', weights=(1.0, 1.0, 2.0))
+    partitions = [
+        _partition_for(100, config.weights, size=3, rank=rank)
+        for rank in range(3)
+    ]
+    assert [(item.start, item.count) for item in partitions] == [
+        (0, 25), (25, 25), (50, 50)
+    ]
+
+    shapes = (
+        (4, 4, 100, 100), (4, 4, 100, 100), (4, 4, 100, 100),
+        (4, 4), (4, 4), (1, 100, 100, 100), (1, 100, 100, 100), (4, 4),
+    )
+    _, path_info = contract_path(
+        'gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M',
+        *shapes,
+        shapes=True,
+        optimize='greedy',
+    )
+    label = _choose_reduction_label(path_info)
+    assert label not in path_info.output_subscript
+    assert path_info.size_dict[label] == 100
+
+
+def test_einsum_zero_extent_and_noncontiguous_contracts():
+    """Empty reductions are zeros and mutable strided views are not stale."""
+    import numpy as np
+
+    from pyqcd.einsum import contract, contract_expression
+
+    empty_cases = (
+        ('ij,jk->ik', (np.empty((2, 0)), np.empty((0, 4)))),
+        ('ij->i', (np.empty((2, 0)),)),
+        ('i,i->', (np.empty((0,)), np.empty((0,)))),
+    )
+    for equation, operands in empty_cases:
+        actual = contract(equation, *operands)
+        expected = np.einsum(equation, *operands)
+        assert np.array_equal(actual, expected), equation
+
+    base = np.arange(12.0).reshape(3, 4)
+    view = base[:, ::2]
+    right = np.arange(8.0).reshape(2, 4)
+    first = contract('ij,jk->ik', view, right)
+    base += 1000.0
+    second = contract('ij,jk->ik', view, right)
+    expected = np.einsum('ij,jk->ik', view, right)
+    assert not np.array_equal(first, second)
+    assert np.allclose(second, expected, rtol=0.0, atol=0.0)
+    assert contract('i,i->', [1, 2], [3, 4]) == 11
+    expression = contract_expression('i,i->', (3,), (3,))
+    assert expression([1, 2, 3], [4, 5, 6]) == 32
+
+
+def test_einsum_mixed_native_backends():
+    """KUPL-first and CUDA-second loading must not collide by SONAME."""
+    from .einsum.verify_native import run_mixed_backends
+
+    ok, detail = run_mixed_backends()
+    assert ok, detail

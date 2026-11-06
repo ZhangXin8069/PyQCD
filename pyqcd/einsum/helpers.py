@@ -17,11 +17,10 @@ def find_contraction(
     positions: Collection[int],
     input_sets: Sequence,
     output_set,
-) -> tuple[frozenset, list, frozenset]:
+) -> tuple[frozenset, list, frozenset, frozenset]:
     """Contract ``positions`` of ``input_sets`` against the overall ``output_set``.
 
-    Returns ``(new_result, remaining, idx_removed)``; the contracted index set is
-    recoverable as ``new_result | idx_removed``.
+    Returns ``(new_result, remaining, idx_removed, idx_contract)``.
     """
     remaining = list(input_sets)
     inputs = (remaining.pop(i) for i in sorted(positions, reverse=True))
@@ -32,7 +31,7 @@ def find_contraction(
     idx_removed = idx_contract - new_result
     remaining.append(new_result)
 
-    return new_result, remaining, idx_removed
+    return new_result, remaining, idx_removed, idx_contract
 
 
 def flop_count(idx_contraction: Collection, inner: bool, num_terms: int, size_dict: dict) -> int:

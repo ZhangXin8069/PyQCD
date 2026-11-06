@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Build the KUPL einsum backend: cpp/kupl/einsum.
-#
-# "kupl" is the stable backend identifier (never "cpu") so a future Kunpeng
-# port can reuse the same name, flags and environment contract.
+# Build the KUPL shared library without involving CUDA or Cython.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)
+PYQCD_REQUESTED_BUILD_DIR=${PYQCD_EINSUM_BUILD_DIR:-}
+export PYQCD_EINSUM_BACKEND=kupl
 # shellcheck source=/dev/null
 source "$ROOT/env.sh"
+case "$PYQCD_REQUESTED_BUILD_DIR" in
+    ""|"$PYQCD_EINSUM_KUPL_BUILD_DIR"|"$PYQCD_EINSUM_CUDA_BUILD_DIR")
+        export PYQCD_EINSUM_BUILD_DIR="$PYQCD_EINSUM_KUPL_BUILD_DIR"
+        ;;
+    *) export PYQCD_EINSUM_BUILD_DIR="$PYQCD_REQUESTED_BUILD_DIR" ;;
+esac
 
 printf '=== PyQCD einsum build (kupl) ===\n'
 bash "$ROOT/cpp/kupl/einsum/make.sh" "$@"

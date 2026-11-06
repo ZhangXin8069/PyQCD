@@ -6,7 +6,7 @@ from collections import namedtuple
 from typing import Any, Collection, Iterable, Sequence
 
 from . import backends
-from ._api import _core_contract, _parser, contract_path
+from ._api import _compile_native_expression, _core_contract, _parser, contract_path
 
 __all__ = [
     "ArrayShaped",
@@ -116,6 +116,8 @@ class ContractExpression:
         self._constants_dict = constants_dict
         self._evaluated_constants: dict[str, Any] = {}
         self._backend_expressions: dict[str, Any] = {}
+        self._native_cache: dict[tuple[Any, ...], Any] = {}
+        self._native_expression_programs: dict[tuple[str, str, tuple[int, ...]], Any] = {}
 
     def evaluate_constants(self, backend: str | None = "auto") -> None:
         """Contract the constant operands and store the remaining expression."""
@@ -161,12 +163,43 @@ class ContractExpression:
             self._full_contraction_list if evaluate_constants else self.contraction_list
         )
 
+        native_backend = {"numpy": "numpy", "cupy": "cupy"}.get(backend)
+        native_inputs = all(
+            hasattr(array, "shape") and hasattr(array, "dtype") for array in arrays
+        )
+        if (
+            not evaluate_constants
+            and native_inputs
+            and native_backend is not None
+            and not self.kwargs
+        ):
+            dtype_key = str(arrays[0].dtype) if arrays else ""
+            device_key = tuple(
+                int(array.device.id)
+                if hasattr(array, "device") and hasattr(array.device, "id")
+                else -1
+                for array in arrays
+            )
+            program_key = (native_backend, dtype_key, device_key)
+            if program_key not in self._native_expression_programs:
+                program = _compile_native_expression(
+                    contraction_list, arrays, native_backend
+                )
+                self._native_expression_programs[program_key] = program or False
+            program = self._native_expression_programs[program_key]
+            if program is not False:
+                try:
+                    return program(list(arrays), out=out)
+                except Exception:
+                    self._native_expression_programs[program_key] = False
+
         return _core_contract(
             list(arrays),
             contraction_list,
             out=out,
             backend=backend,
             evaluate_constants=evaluate_constants,
+            native_cache=self._native_cache,
             **self.kwargs,
         )
 

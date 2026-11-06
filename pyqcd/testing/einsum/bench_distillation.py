@@ -1,50 +1,110 @@
-"""蒸馏实战基准：`numpy.einsum` 朴素 / `opt_einsum.contract` / `pyqcd.einsum.contract`。
+"""严格、可复现的 qcd-einsum vs opt_einsum 蒸馏实战基准。
 
-真实数据（只读，不复制）：`/public/group/lqcd/perambulators/
-beta6.20_mu-0.2770_ms-0.2400_L24x72/light/4150/perams.4150.{0,1,2,3}.{t_src}`
-每个文件 46,080,000 字节（`<f8` 5,760,000 个数 = Nt×Nvec×Nvec 的实/虚部对）。
-四个 spin 分片拼成 `reshape(4, 72, 100, 4, 100, 2)` → 复化 →
-`transpose(1, 3, 0, 4, 2)` 得 `[Nt, 4, 4, Nvec, Nvec]`。
+真实数据（只读）来自 conf6250 的四个 perambulator spin 分片。目标
+``L24x64/ms0.2310`` 数据不存在，因此当前报告明确标记为 provisional。
 
-基准方程取自 `refer/sush/_distillation/contraction.block.cupy.gen.py`
-（行号已核对：E1:165、E2:234、E4:211、E5:200）。
+公平性约束：
 
-口径：同 backend、同 dtype（complex128）、同线程数；预热 2 次后取 ≥10 次中位数；
-GPU 只与 GPU 比、CPU 只与 CPU 比；`speedup_vs_opt = median(opt_einsum) /
-median(本实现)`。不足 3.0 时如实打印，不做任何调参美化。
+* 两边使用同一组操作数、同一 complex128 dtype、同一显式收缩 path；
+* CPU 只与 CPU 比，GPU 只与 GPU 比；
+* 默认让两边分别在全新解释器中预热并计时，可用 ``--isolation abba``
+  切回进程内 ABBA 交错计时；
+* GPU 每次计时前后均同步，计时外校验逐元素 max relative error；
+* qcd-einsum 低于 3x、数值失败或任何对照错误均返回非零。
 """
 from __future__ import annotations
 
 import argparse
+import gc
+import hashlib
+import importlib
 import json
 import os
 import platform
 import statistics
+import subprocess
 import sys
+import tempfile
 import time
+import warnings
 from datetime import datetime
 
-# 线程数必须在 numpy 导入前钉住；main.py 入口保证本模块先于 numpy 被导入。
-THREADS = int(os.environ.get('PYQCD_BENCH_THREADS', '8') or 8)
-for _var in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
-             'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
-    os.environ.setdefault(_var, str(THREADS))
+DEFAULT_THREADS = 4
+THREAD_ENV_VARS = (
+    'OMP_NUM_THREADS',
+    'OPENBLAS_NUM_THREADS',
+    'MKL_NUM_THREADS',
+    'NUMEXPR_NUM_THREADS',
+    'VECLIB_MAXIMUM_THREADS',
+)
 
-import numpy as np  # noqa: E402 - 必须在钉住线程环境变量之后导入
 
-from . import _oracle, _target  # noqa: E402
+def _configured_threads():
+    raw = os.environ.get('PYQCD_BENCH_THREADS', str(DEFAULT_THREADS))
+    try:
+        threads = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f'PYQCD_BENCH_THREADS 必须是正整数，收到 {raw!r}') from exc
+    if threads < 1:
+        raise RuntimeError(
+            f'PYQCD_BENCH_THREADS 必须是正整数，收到 {raw!r}')
+    return threads
+
+
+# 必须在 import numpy 前覆盖而不是 setdefault，避免调用者环境造成两边线程不同。
+THREADS = _configured_threads()
+for _thread_var in THREAD_ENV_VARS:
+    os.environ[_thread_var] = str(THREADS)
+
+NUMPY_WAS_IMPORTED = 'numpy' in sys.modules
+THREAD_PIN_BEFORE_NUMPY_IMPORT = (
+    not NUMPY_WAS_IMPORTED
+    or os.environ.get('PYQCD_BENCH_THREAD_PINNED') == '1'
+)
+
+import numpy as np  # noqa: E402 - 线程变量必须在 numpy 导入前钉住
+
+from . import _target  # noqa: E402
 
 DTYPE = 'complex128'
+RELATIVE_ERROR_TOLERANCE = 1e-12
 SPEEDUP_TARGET = 3.0
+MIN_ACCEPTANCE_ITERATIONS = 10
 
-DATA_ROOT = ('/public/group/lqcd/perambulators/'
-             'beta6.20_mu-0.2770_ms-0.2400_L24x72/light/4150')
-DATA_CONF = 4150
+DATA_ROOT = (
+    '/public/group/lqcd/perambulators/'
+    'beta6.20_mu-0.2770_ms-0.2400_L24x72/light/6250'
+)
+DATA_CONF = 6250
 NT_FULL = 72
 NVEC_FULL = 100
 SPIN_FILES = 4
 FILE_BYTES = 46_080_000
-VALUES_PER_FILE = FILE_BYTES // 8          # 5_760_000
+VALUES_PER_FILE = FILE_BYTES // 8
+
+TARGET_DATA = {
+    'lattice': 'L24x64',
+    'mass': 'ms0.2310',
+    'available': False,
+}
+DATA_SCOPE = {
+    'provisional': True,
+    'requested_target': TARGET_DATA,
+    'used_data': {
+        'ensemble': 'beta6.20_mu-0.2770_ms-0.2400_L24x72',
+        'lattice': 'L24x72',
+        'mass': 'ms0.2400',
+        'conf': DATA_CONF,
+    },
+    'note': ('目标 L24x64/ms0.2310 数据集不存在；'
+             '本次使用 conf6250/L24x72 真实 perambulator，结论标记 provisional'),
+}
+
+FROZEN_ORACLE_ROOT = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..', '..',
+    'refer', 'git-rep', 'opt_einsum'))
+FROZEN_ORACLE_PACKAGE = os.path.join(FROZEN_ORACLE_ROOT, 'opt_einsum')
 
 EQUATIONS = (
     {'name': 'E1', 'line': 165, 'desc': '8 算子 2pt',
@@ -60,30 +120,27 @@ EQUATION_BY_NAME = {item['name']: item for item in EQUATIONS}
 
 PROFILES = {
     'T0n': {'nvec': 6, 'spatial': 1, 'n_t': 2, 't_src': (0,), 't_sink': 4,
-            'note': '朴素 numpy 可行探针（最小档，用于给出朴素基线实数）'},
+            'note': '最小真实数据探针'},
     'T0': {'nvec': 20, 'spatial': 1, 'n_t': 2, 't_src': (0,), 't_sink': 4,
            'note': 'CI 规模 Nvec=20'},
     'T1': {'nvec': 100, 'spatial': 1, 'n_t': 2, 't_src': (0,), 't_sink': 8,
-           'note': '单 t_src，全 Nvec=100（真实数据）'},
-    'T2': {'nvec': 100, 'spatial': 1, 'n_t': 2, 't_src': (0, 1), 't_sink': 8,
-           'note': '多 t_src 持续吞吐（只跑 opt_einsum / pyqcd）',
-           'impls': ('opt_einsum_contract', 'pyqcd_einsum_contract')},
+           'note': '单 t_src，全 Nvec=100'},
+    'T2': {'nvec': 100, 'spatial': 1, 'n_t': 2, 't_src': (0, 1),
+           't_sink': 8, 'note': '多 t_src 持续吞吐'},
 }
 DEFAULT_PROFILES = ('T0n', 'T0', 'T1', 'T2')
+ACCEPTANCE_PROFILES = frozenset(('T1', 'T2'))
+DIAGNOSTIC_PROFILES = frozenset(('T0n', 'T0'))
 DEFAULT_BACKENDS = ('cpu', 'gpu')
 BACKEND_NAMES = {'cpu': 'numpy', 'gpu': 'cupy'}
 
-
-# ═══════════════════════════════════════════════════════════════════
-# 真实数据（只读）
-# ═══════════════════════════════════════════════════════════════════
 
 def data_path(t_src, spin):
     return os.path.join(DATA_ROOT, f'perams.{DATA_CONF}.{spin}.{t_src}')
 
 
 def data_status(t_src_list):
-    """返回缺失/尺寸不符的文件清单（空列表表示数据齐全）。"""
+    """返回缺失或尺寸不符的真实数据文件清单。"""
     problems = []
     for t_src in t_src_list:
         for spin in range(SPIN_FILES):
@@ -91,19 +148,20 @@ def data_status(t_src_list):
             if not os.path.isfile(path):
                 problems.append(f'缺失 {path}')
             elif os.path.getsize(path) != FILE_BYTES:
-                problems.append(f'{path} 大小 {os.path.getsize(path)} '
-                                f'!= {FILE_BYTES}')
+                problems.append(
+                    f'{path} 大小 {os.path.getsize(path)} != {FILE_BYTES}')
     return problems
 
 
 def load_peram(t_src, nvec):
-    """读取 4 个 spin 分片，返回 `[Nt, 4, 4, Nvec, Nvec]` complex128。"""
+    """读取四个 spin 分片，返回 ``[Nt, 4, 4, Nvec, Nvec]`` complex128。"""
     slices = []
     for spin in range(SPIN_FILES):
-        buffer = np.fromfile(data_path(t_src, spin), dtype='<f8')
+        path = data_path(t_src, spin)
+        buffer = np.fromfile(path, dtype='<f8')
         if buffer.size != VALUES_PER_FILE:
-            raise ValueError(f'{data_path(t_src, spin)} 元素数 '
-                             f'{buffer.size} != {VALUES_PER_FILE}')
+            raise ValueError(
+                f'{path} 元素数 {buffer.size} != {VALUES_PER_FILE}')
         slices.append(buffer)
     cube = np.stack(slices).reshape(
         SPIN_FILES, NT_FULL, NVEC_FULL, SPIN_FILES, NVEC_FULL, 2)
@@ -113,24 +171,14 @@ def load_peram(t_src, nvec):
     return np.ascontiguousarray(peram, dtype=np.complex128)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 操作数构造（peram 真实，VVV / 传播子 / 规范场为可复现合成数据）
-# ═══════════════════════════════════════════════════════════════════
-
 def _gamma(index):
-    """DeGrand-Rossi γ 矩阵（来自被测仓库自身的 lattice 层，只读使用）。"""
-    try:
-        from pyqcd.lattice import gamma
-        return np.asarray(gamma(index), dtype=np.complex128)
-    except Exception:  # noqa: BLE001 - γ 只是基准操作数，缺失时退化为随机矩阵
-        rng = np.random.default_rng(index)
-        base = rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4))
-        return base / np.linalg.norm(base)
+    from pyqcd.lattice import gamma
+
+    return np.asarray(gamma(index), dtype=np.complex128)
 
 
 def _projector():
-    return np.asarray(
-        (_gamma(0) + _gamma(4)) / 2.0, dtype=np.complex128)
+    return np.asarray((_gamma(0) + _gamma(4)) / 2.0, dtype=np.complex128)
 
 
 def _rand(shape, rng):
@@ -139,7 +187,7 @@ def _rand(shape, rng):
 
 
 def build_operands(name, peram, cfg, seed):
-    """按参考脚本的算符形状构造一次基准的全部操作数。"""
+    """按参考脚本形状，用固定 seed 构造一例的全部操作数。"""
     rng = np.random.default_rng(seed)
     nvec = cfg['nvec']
     n_t = cfg['n_t']
@@ -153,7 +201,7 @@ def build_operands(name, peram, cfg, seed):
                 _rand((1, nvec, nvec, nvec), rng),
                 _projector()]
     if name == 'E2':
-        current = peram[t_sink][None]                  # 'Geifj'，G 取单切片
+        current = peram[t_sink][None]
         src_a = peram[0]
         src_b = peram[1 % peram.shape[0]]
         g7 = _gamma(7)
@@ -174,56 +222,219 @@ def build_operands(name, peram, cfg, seed):
     raise KeyError(f'未知方程 {name}')
 
 
-def operand_shapes(name, cfg, peram):
-    """只取形状（用于朴素代价估计与报告）。"""
-    key = ('peram', cfg['n_t'])
-    del key
-    return [tuple(array.shape)
-            for array in build_operands(name, peram, cfg, seed=0)]
+def _purge_opt_einsum():
+    for name in [n for n in list(sys.modules)
+                 if n == 'opt_einsum' or n.startswith('opt_einsum.')]:
+        del sys.modules[name]
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 代价估计
-# ═══════════════════════════════════════════════════════════════════
-
-def size_dict_of(eq, shapes):
-    lhs = eq.split('->')[0]
-    terms = lhs.split(',')
-    sizes = {}
-    for term, shape in zip(terms, shapes):
-        if '...' in term:
-            head, tail = term.split('...')
-            if head:
-                raise ValueError(f'暂不估计前缀 ellipsis: {eq}')
-            n_ellipsis = len(shape) - len(tail)
-            pairs = [(f'@{i}', d) for i, d in enumerate(shape[:n_ellipsis])]
-            pairs += list(zip(tail, shape[n_ellipsis:]))
-        else:
-            pairs = list(zip(term, shape))
-        for label, dim in pairs:
-            dim = int(dim)
-            sizes[label] = max(sizes.get(label, 1), dim)
-    return sizes
+def _package_dir(module):
+    return os.path.abspath(os.path.dirname(module.__file__))
 
 
-def naive_op_count(eq, shapes):
-    """朴素 einsum 的标量乘加次数估计 = 所有唯一索引尺寸之积。"""
-    total = 1
-    for dim in size_dict_of(eq, shapes).values():
-        total *= dim
-    return total
+def resolve_oracle():
+    """按显式规则加载冻结 oracle 或站点包。"""
+    mode = os.environ.get('PYQCD_EINSUM_ORACLE', 'frozen').strip().lower()
+    _purge_opt_einsum()
+    if mode == 'frozen':
+        if not os.path.isfile(os.path.join(
+                FROZEN_ORACLE_PACKAGE, '__init__.py')):
+            raise RuntimeError(
+                '固定 opt_einsum 子模块不可用；如仅需非冻结诊断，'
+                '显式设置 PYQCD_EINSUM_ORACLE=installed')
+        head = subprocess.run(
+            ['git', '-C', FROZEN_ORACLE_ROOT, 'rev-parse', 'HEAD'],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        index = subprocess.run(
+            ['git', '-C', os.path.abspath(os.path.join(
+                FROZEN_ORACLE_ROOT, '..', '..', '..')),
+             'ls-files', '-s', '--', 'refer/git-rep/opt_einsum'],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        fields = index.split()
+        if len(fields) < 2 or fields[0] != '160000' or fields[1] != head:
+            raise RuntimeError(
+                'frozen opt_einsum HEAD does not match the parent gitlink')
+        dirty = subprocess.run(
+            ['git', '-C', FROZEN_ORACLE_ROOT, 'status', '--porcelain'],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        if dirty:
+            raise RuntimeError('frozen opt_einsum worktree is not clean')
+        if FROZEN_ORACLE_ROOT not in sys.path:
+            sys.path.insert(0, FROZEN_ORACLE_ROOT)
+        module = importlib.import_module('opt_einsum')
+        resolved = _package_dir(module)
+        if resolved != os.path.abspath(FROZEN_ORACLE_PACKAGE):
+            raise RuntimeError(
+                f'frozen oracle 解析到 {resolved}，应为 '
+                f'{os.path.abspath(FROZEN_ORACLE_PACKAGE)}')
+        return module, {
+            'kind': 'frozen',
+            'label': 'frozen（冻结子模块）',
+            'frozen': True,
+            'provisional': False,
+            'version': getattr(module, '__version__', 'unknown'),
+            'path': resolved,
+            'commit': head,
+        }
+
+    if mode == 'installed':
+        while FROZEN_ORACLE_ROOT in sys.path:
+            sys.path.remove(FROZEN_ORACLE_ROOT)
+        module = importlib.import_module('opt_einsum')
+        resolved = _package_dir(module)
+        if resolved == os.path.abspath(FROZEN_ORACLE_PACKAGE):
+            raise RuntimeError('installed 模式仍解析到冻结 oracle')
+        return module, {
+            'kind': 'installed',
+            'label': 'installed（非冻结站点包）',
+            'frozen': False,
+            'provisional': True,
+            'version': getattr(module, '__version__', 'unknown'),
+            'path': resolved,
+        }
+
+    raise RuntimeError(
+        'PYQCD_EINSUM_ORACLE 仅支持 frozen 或 installed，'
+        f'收到 {mode!r}')
 
 
-def optimized_cost(eq, shapes):
-    """oracle 的 dp 规划代价（Decimal），用于报告对照。"""
-    module = _oracle.oracle()
-    _path, info = module.contract_path(eq, *shapes, shapes=True, optimize='dp')
-    return info.opt_cost
+def _target_module():
+    module, missing = _target.probe()
+    if missing:
+        raise RuntimeError('pyqcd.einsum 未就绪: ' + '; '.join(missing))
+    version_module = importlib.import_module('pyqcd.einsum._version')
+    return module, {
+        'version': getattr(version_module, '__version__', 'unknown'),
+        'native_version': getattr(
+            version_module, '__native_version__', 'unknown'),
+        'path': os.path.abspath(module.__file__),
+    }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 计时与显存
-# ═══════════════════════════════════════════════════════════════════
+def _native_availability() -> dict[str, bool]:
+    """Probe the concrete native entry expected by each benchmark backend."""
+    from pyqcd.einsum import _native
+
+    return {
+        'kupl': _native._kupl_entry() is not None,
+        'cuda': _native._cuda_entry() is not None,
+    }
+
+
+def _cpu_count():
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return os.cpu_count()
+
+
+def _device_info(backend):
+    if backend == 'cpu':
+        return {
+            'type': 'cpu',
+            'name': platform.processor() or platform.machine(),
+            'threads': THREADS,
+        }
+    try:
+        import cupy
+
+        props = cupy.cuda.runtime.getDeviceProperties(0)
+        name = props['name']
+        if isinstance(name, bytes):
+            name = name.decode()
+        free, total = cupy.cuda.Device(0).mem_info
+        return {
+            'type': 'gpu',
+            'name': str(name),
+            'cupy': cupy.__version__,
+            'free_mb': round(free / 2 ** 20, 1),
+            'total_mb': round(total / 2 ** 20, 1),
+        }
+    except Exception as exc:  # noqa: BLE001 - 环境记录中如实报告不可用
+        return {
+            'type': 'gpu',
+            'available': False,
+            'error': f'{type(exc).__name__}: {exc}',
+        }
+
+
+def _environment(profiles, backends, equations, iterations, warmup,
+                 optimize, mode, isolation):
+    numpy_config = np.show_config(mode='dicts')
+    blas = numpy_config.get('Build Dependencies', {}).get('blas', {})
+    return {
+        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'hostname': platform.node(),
+        'platform': platform.platform(),
+        'python': platform.python_version(),
+        'python_executable': sys.executable,
+        'command': list(sys.argv),
+        'numpy': np.__version__,
+        'numpy_blas': blas,
+        'dtype': DTYPE,
+        'threads': THREADS,
+        'thread_environment': {
+            name: os.environ.get(name) for name in THREAD_ENV_VARS},
+        'thread_pin_before_numpy_import': THREAD_PIN_BEFORE_NUMPY_IMPORT,
+        'cpu_count': _cpu_count(),
+        'devices': {name: _device_info(name) for name in backends},
+        'optimize': optimize,
+        'iterations': iterations,
+        'warmup': warmup,
+        'measurement_order': (
+            'ABBA' if isolation == 'abba' else 'PROCESS_ISOLATED'),
+        'isolation': isolation,
+        'profiles': list(profiles),
+        'backends': list(backends),
+        'equations': list(equations),
+        'mode': mode,
+        'data_scope': DATA_SCOPE,
+        'relative_error_tolerance': RELATIVE_ERROR_TOLERANCE,
+        'speedup_target': SPEEDUP_TARGET,
+    }
+
+
+def _normalize_path(path):
+    return [tuple(int(index) for index in step) for step in path]
+
+
+def _path_digest(path):
+    encoded = json.dumps(path, separators=(',', ':')).encode('ascii')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _plan_pair(eq, shapes, optimize, oracle_module, target_module):
+    oracle_path, oracle_info = oracle_module.contract_path(
+        eq, *shapes, shapes=True, optimize=optimize)
+    qcd_path, qcd_info = target_module.contract_path(
+        eq, *shapes, shapes=True, optimize=optimize)
+    path = _normalize_path(oracle_path)
+    qcd_path = _normalize_path(qcd_path)
+    return path, {
+        'path': path,
+        'oracle_planner_path': path,
+        'qcd_planner_path': qcd_path,
+        'planner_path_match': path == qcd_path,
+        'path_digest': _path_digest(path),
+        'oracle_opt_cost': str(oracle_info.opt_cost),
+        'qcd_opt_cost': str(qcd_info.opt_cost),
+    }
+
+
+def _to_backend(arrays, backend):
+    if backend == 'gpu':
+        import cupy
+
+        return [cupy.asarray(array) for array in arrays]
+    return list(arrays)
+
+
+def _array_dtypes(arrays):
+    return [str(array.dtype) for array in arrays]
+
 
 def _sync(backend):
     if backend == 'gpu':
@@ -232,289 +443,858 @@ def _sync(backend):
         cupy.cuda.Stream.null.synchronize()
 
 
-def _pool_used_bytes():
-    try:
+def _to_numpy(array, backend):
+    if backend == 'gpu':
         import cupy
 
-        return int(cupy.get_default_memory_pool().used_bytes())
-    except Exception:  # noqa: BLE001
-        return 0
+        return cupy.asnumpy(array)
+    return np.asarray(array)
 
 
-def _cpu_peak_bytes(fn):
-    """tracemalloc 峰值（单次调用，不计时；numpy 数据分配会被追踪）。"""
-    import tracemalloc
+def _max_relative_error(actual, expected):
+    actual = np.asarray(actual)
+    expected = np.asarray(expected)
+    if actual.shape != expected.shape:
+        return float('inf')
+    if not np.isfinite(actual).all() or not np.isfinite(expected).all():
+        return float('inf')
+    difference = np.abs(actual - expected)
+    scale = np.maximum(
+        np.abs(expected), np.finfo(np.float64).tiny)
+    return float(np.max(difference / scale, initial=0.0))
 
-    tracemalloc.start()
-    try:
-        fn()
-        _current, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-    return int(peak)
+
+def _max_absolute_error(actual, expected):
+    actual = np.asarray(actual)
+    expected = np.asarray(expected)
+    if actual.shape != expected.shape:
+        return float('inf')
+    if not np.isfinite(actual).all() or not np.isfinite(expected).all():
+        return float('inf')
+    return float(np.max(np.abs(actual - expected), initial=0.0))
 
 
-def measure(fn, backend, iterations, warmup=2):
-    """预热后取 iterations 次中位数，同时记录峰值显存/内存。"""
-    for _ in range(warmup):
-        fn()
-    _sync(backend)
-    base = _pool_used_bytes() if backend == 'gpu' else 0
-    peak = 0
-    times = []
-    for _ in range(iterations):
-        start = time.perf_counter()
-        fn()
+def _abba_schedule(iterations):
+    """每个完整 ABBA 周期给两边各两次样本。"""
+    cycles = (iterations + 1) // 2
+    schedule = []
+    for _ in range(cycles):
+        schedule.extend(('opt_einsum', 'qcd_einsum',
+                         'qcd_einsum', 'opt_einsum'))
+    return schedule
+
+
+def _measure_pair(functions, backend, iterations, warmup):
+    """预热后按 ABBA 交错计时，并返回双方统计量。"""
+    for _ in range(max(1, warmup)):
+        for name in ('opt_einsum', 'qcd_einsum',
+                     'qcd_einsum', 'opt_einsum'):
+            output = functions[name]()
+            _sync(backend)
+            del output
+
+    samples = {'opt_einsum': [], 'qcd_einsum': []}
+    schedule = _abba_schedule(iterations)
+    for name in schedule:
         _sync(backend)
-        times.append(time.perf_counter() - start)
-        if backend == 'gpu':
-            peak = max(peak, _pool_used_bytes() - base)
-    stats = {'median_s': statistics.median(times),
-             'min_s': min(times),
-             'max_s': max(times),
-             'stdev_s': statistics.pstdev(times) if len(times) > 1 else 0.0,
-             'iterations': iterations}
-    if backend == 'gpu':
-        stats['peak_bytes'] = int(peak)
+        start = time.perf_counter()
+        output = functions[name]()
+        _sync(backend)
+        samples[name].append(time.perf_counter() - start)
+        del output
+
+    stats = {}
+    for name, values in samples.items():
+        stats[name] = {
+            'samples_s': [round(value, 9) for value in values],
+            'iterations': len(values),
+            'median_s': round(statistics.median(values), 9),
+            'min_s': round(min(values), 9),
+            'max_s': round(max(values), 9),
+            'stdev_s': round(
+                statistics.pstdev(values) if len(values) > 1 else 0.0, 9),
+        }
+    return stats, schedule
+
+
+def _operand_digest(arrays):
+    """对 dtype、形状和 C-order 数据做摘要，用于跨进程操作数校验。"""
+    digest = hashlib.sha256()
+    for index, array in enumerate(arrays):
+        contiguous = np.ascontiguousarray(array)
+        digest.update(
+            f'{index}:{contiguous.dtype}:{contiguous.shape}:'.encode('ascii'))
+        digest.update(contiguous.tobytes(order='C'))
+    return digest.hexdigest()
+
+
+def _measure_single(function, backend, iterations, warmup):
+    """在单个隔离进程中预热并统计一个实现。"""
+    for _ in range(max(1, warmup)):
+        output = function()
+        _sync(backend)
+        del output
+
+    samples = []
+    for _ in range(iterations):
+        _sync(backend)
+        start = time.perf_counter()
+        output = function()
+        _sync(backend)
+        samples.append(time.perf_counter() - start)
+        del output
+    return {
+        'samples_s': [round(value, 9) for value in samples],
+        'iterations': len(samples),
+        'median_s': round(statistics.median(samples), 9),
+        'min_s': round(min(samples), 9),
+        'max_s': round(max(samples), 9),
+        'stdev_s': round(
+            statistics.pstdev(samples) if len(samples) > 1 else 0.0, 9),
+    }
+
+
+def _loaded_oracle_snapshot():
+    module = sys.modules.get('opt_einsum')
+    if module is None:
+        return {'loaded': False}
+    return {
+        'loaded': True,
+        'version': getattr(module, '__version__', 'unknown'),
+        'path': _package_dir(module),
+    }
+
+
+def _read_json(path):
+    with open(path, 'r', encoding='utf-8') as handle:
+        return json.load(handle)
+
+
+def _write_json(path, payload):
+    with open(path, 'w', encoding='utf-8') as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+
+def _worker_benchmark(task):
+    if task.get('schema') != 1:
+        raise RuntimeError('不支持的 worker task schema')
+    implementation = task['implementation']
+    if implementation not in ('opt_einsum', 'qcd_einsum'):
+        raise RuntimeError(f'未知 worker implementation: {implementation!r}')
+    if task['dtype'] != DTYPE:
+        raise RuntimeError(
+            f"worker dtype={task['dtype']!r}，应为 {DTYPE!r}")
+    if task['backend'] not in BACKEND_NAMES:
+        raise RuntimeError(f"未知 worker backend: {task['backend']!r}")
+
+    cfg = task['profile_config']
+    peram = load_peram(task['t_src'], cfg['nvec'])
+    arrays = build_operands(
+        task['equation'], peram, cfg, seed=task['operand_seed'])
+    shapes = [tuple(array.shape) for array in arrays]
+    dtypes = _array_dtypes(arrays)
+    if shapes != [tuple(shape) for shape in task['operand_shapes']]:
+        raise RuntimeError(f'worker 操作数形状不一致: {shapes}')
+    if dtypes != task['operand_dtypes']:
+        raise RuntimeError(f'worker 操作数 dtype 不一致: {dtypes}')
+    actual_operand_digest = _operand_digest(arrays)
+    if actual_operand_digest != task['operand_digest']:
+        raise RuntimeError(
+            'worker 操作数摘要不一致: '
+            f'{actual_operand_digest} != {task["operand_digest"]}')
+
+    path = _normalize_path(task['path'])
+    if _path_digest(path) != task['path_digest']:
+        raise RuntimeError('worker 显式 path 摘要不一致')
+
+    if implementation == 'opt_einsum':
+        module, loaded_oracle = resolve_oracle()
+        loaded_oracle = dict(loaded_oracle)
+        loaded_oracle['loaded'] = True
+        contract = module.contract
+        implementation_info = loaded_oracle
     else:
-        stats['peak_bytes'] = _cpu_peak_bytes(fn)
-    return stats
+        module, implementation_info = _target_module()
+        loaded_oracle = _loaded_oracle_snapshot()
+        contract = module.contract
+
+    backend = task['backend']
+    backend_arrays = _to_backend(arrays, backend)
+    actual_dtypes = _array_dtypes(backend_arrays)
+    if actual_dtypes != task['operand_dtypes']:
+        raise RuntimeError(f'worker backend 操作数 dtype 不一致: {actual_dtypes}')
+
+    def function():
+        return contract(
+            task['subscripts'], *backend_arrays,
+            optimize=path, backend=BACKEND_NAMES[backend])
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        _sync(backend)
+        output = function()
+        _sync(backend)
+    implementation_warnings = [
+        f'{item.category.__name__}: {item.message}' for item in caught]
+    output_host = _to_numpy(output, backend)
+    output_dtype = str(output.dtype)
+    output_shape = list(output.shape)
+    del output
+
+    np.save(task['output_path'], output_host, allow_pickle=False)
+    del output_host, arrays, peram
+    gc.collect()
+    stats = _measure_single(function, backend, task['iterations'], task['warmup'])
+    del backend_arrays
+    return {
+        'schema': 1,
+        'implementation': implementation,
+        'worker_pid': os.getpid(),
+        'backend': backend,
+        'dtype': task['dtype'],
+        'threads': THREADS,
+        'thread_environment': {
+            name: os.environ.get(name) for name in THREAD_ENV_VARS},
+        'thread_pin_before_numpy_import': THREAD_PIN_BEFORE_NUMPY_IMPORT,
+        'numpy_version': np.__version__,
+        'operand_seed': task['operand_seed'],
+        'operand_digest': actual_operand_digest,
+        'operand_shapes': [list(shape) for shape in shapes],
+        'operand_dtypes': dtypes,
+        'path': [list(step) for step in path],
+        'path_digest': task['path_digest'],
+        'output_dtype': output_dtype,
+        'output_shape': output_shape,
+        'implementation_warnings': implementation_warnings,
+        'loaded_oracle': loaded_oracle,
+        'implementation_info': implementation_info,
+        'iterations': task['iterations'],
+        'warmup': task['warmup'],
+        'stats': stats,
+    }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 三个实现的登记
-# ═══════════════════════════════════════════════════════════════════
+def _run_worker_task(task_path):
+    task = _read_json(task_path)
+    result_path = task.get('result_path')
+    try:
+        result = _worker_benchmark(task)
+    except Exception as exc:  # noqa: BLE001 - 通过受控 JSON 回传硬失败
+        result = {
+            'schema': 1,
+            'implementation': task.get('implementation'),
+            'worker_pid': os.getpid(),
+            'error': f'{type(exc).__name__}: {exc}',
+        }
+        if result_path:
+            _write_json(result_path, result)
+        return 1
+    _write_json(result_path, result)
+    return 0
 
-def implementations(backend, optimize, target_module):
-    """返回 [(名称, callable(eq, operands))]，顺序即打印顺序。"""
+
+def _run_isolated_worker(implementation, task):
+    with tempfile.TemporaryDirectory(
+            prefix=f'pyqcd-bench-{implementation}-') as directory:
+        output_path = os.path.join(directory, 'output.npy')
+        result_path = os.path.join(directory, 'result.json')
+        task_path = os.path.join(directory, 'task.json')
+        worker_task = dict(task)
+        worker_task.update({
+            'schema': 1,
+            'implementation': implementation,
+            'output_path': output_path,
+            'result_path': result_path,
+        })
+        _write_json(task_path, worker_task)
+
+        environment = os.environ.copy()
+        environment.pop('PYQCD_BENCH_BOOTSTRAP_ACTIVE', None)
+        environment['PYQCD_BENCH_THREAD_PINNED'] = '1'
+        environment['PYQCD_BENCH_THREADS'] = str(THREADS)
+        environment['PYQCD_BENCH_ISOLATION_WORKER'] = '1'
+        for name in THREAD_ENV_VARS:
+            environment[name] = str(THREADS)
+        worker_script = os.path.join(os.path.dirname(__file__), 'bench_native.py')
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+        completed = subprocess.run(
+            [sys.executable, '-B', worker_script, '--worker-task', task_path],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        result = _read_json(result_path) if os.path.isfile(result_path) else None
+        if completed.returncode != 0 or result is None or result.get('error'):
+            detail = result.get('error') if result else ''
+            stderr = completed.stderr.strip()
+            if stderr:
+                detail = f'{detail}; stderr={stderr[-2000:]}' if detail else stderr[-2000:]
+            raise RuntimeError(
+                f'{implementation} worker 失败（returncode='
+                f'{completed.returncode}）: {detail or "无错误信息"}')
+        if not isinstance(result.get('worker_pid'), int):
+            raise RuntimeError(f'{implementation} worker 未返回有效 worker_pid')
+        if not os.path.isfile(output_path):
+            raise RuntimeError(f'{implementation} worker 未生成输出数组')
+        output = np.load(output_path, allow_pickle=False)
+        if str(output.dtype) != result.get('output_dtype'):
+            raise RuntimeError(f'{implementation} worker 输出 dtype 不一致')
+        if list(output.shape) != result.get('output_shape'):
+            raise RuntimeError(f'{implementation} worker 输出 shape 不一致')
+        return result, output
+
+
+def _validate_isolated_result(result, task, oracle_info=None):
+    implementation = result['implementation']
+    if result.get('threads') != THREADS:
+        raise RuntimeError(f'{implementation} worker threads 不一致')
+    expected_thread_env = {name: str(THREADS) for name in THREAD_ENV_VARS}
+    if result.get('thread_environment') != expected_thread_env:
+        raise RuntimeError(f'{implementation} worker 线程环境不一致')
+    if not result.get('thread_pin_before_numpy_import', False):
+        raise RuntimeError(f'{implementation} worker 未在 NumPy 导入前钉住线程')
+    if result.get('backend') != task['backend'] or result.get('dtype') != DTYPE:
+        raise RuntimeError(f'{implementation} worker backend/dtype 不一致')
+    if result.get('operand_digest') != task['operand_digest']:
+        raise RuntimeError(f'{implementation} worker 操作数摘要不一致')
+    if result.get('operand_seed') != task['operand_seed']:
+        raise RuntimeError(f'{implementation} worker 操作数 seed 不一致')
+    if _normalize_path(result.get('path', [])) != _normalize_path(task['path']):
+        raise RuntimeError(f'{implementation} worker 未使用父进程显式 path')
+    if result.get('path_digest') != task['path_digest']:
+        raise RuntimeError(f'{implementation} worker path 摘要不一致')
+    if result.get('iterations') != task['iterations']:
+        raise RuntimeError(f'{implementation} worker iterations 不一致')
+    if result.get('warmup') != task['warmup']:
+        raise RuntimeError(f'{implementation} worker warmup 不一致')
+    if result.get('stats', {}).get('iterations') != task['iterations']:
+        raise RuntimeError(f'{implementation} worker 样本数不一致')
+    if oracle_info is not None:
+        loaded = result.get('loaded_oracle', {})
+        for key in ('kind', 'version', 'path'):
+            if loaded.get(key) != oracle_info.get(key):
+                raise RuntimeError(
+                    f'{implementation} worker loaded oracle {key} 不一致')
+
+
+def _measure_abba_case(arrays, backend, eq, path, oracle_module,
+                       target_module, iterations, warmup, oracle_info):
+    backend_arrays = _to_backend(arrays, backend)
+    actual_dtypes = _array_dtypes(backend_arrays)
+    if any(dtype != DTYPE for dtype in actual_dtypes):
+        raise RuntimeError(
+            f'{backend} 操作数 dtype 非 {DTYPE}: {actual_dtypes}')
+
     backend_name = BACKEND_NAMES[backend]
-    entries = []
-    if backend == 'cpu':
-        entries.append(
-            ('numpy_einsum_naive',
-             lambda eq, ops: np.einsum(eq, *ops, optimize=False)))
-        entries.append(
-            ('numpy_einsum_path',
-             lambda eq, ops: np.einsum(eq, *ops, optimize=optimize)))
-    else:
-        import cupy
+    functions = {
+        'opt_einsum': (
+            lambda: oracle_module.contract(
+                eq, *backend_arrays, optimize=path, backend=backend_name)),
+        'qcd_einsum': (
+            lambda: target_module.contract(
+                eq, *backend_arrays, optimize=path, backend=backend_name)),
+    }
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        _sync(backend)
+        oracle_output = functions['opt_einsum']()
+        _sync(backend)
+        qcd_output = functions['qcd_einsum']()
+        _sync(backend)
+    implementation_warnings = [
+        f'{item.category.__name__}: {item.message}' for item in caught]
+    oracle_host = _to_numpy(oracle_output, backend)
+    qcd_host = _to_numpy(qcd_output, backend)
+    oracle_dtype = str(oracle_output.dtype)
+    qcd_dtype = str(qcd_output.dtype)
+    dtype_match = oracle_dtype == DTYPE and qcd_dtype == DTYPE
+    relative_error = _max_relative_error(qcd_host, oracle_host)
+    absolute_error = _max_absolute_error(qcd_host, oracle_host)
+    relative_error_pass = relative_error <= RELATIVE_ERROR_TOLERANCE
+    del oracle_output, qcd_output, oracle_host, qcd_host
 
-        entries.append(
-            ('cupy_einsum_naive',
-             lambda eq, ops: cupy.einsum(eq, *ops, optimize=False)))
-        # cupy.einsum 只认 True/False/'greedy'/'optimal'，没有 'dp'
-        entries.append(
-            ('cupy_einsum_path',
-             lambda eq, ops: cupy.einsum(eq, *ops, optimize='optimal')))
-    oracle_module = _oracle.oracle()
-    entries.append(
-        ('opt_einsum_contract',
-         lambda eq, ops: oracle_module.contract(
-             eq, *ops, optimize=optimize, backend=backend_name)))
-    if target_module is not None:
-        entries.append(
-            ('pyqcd_einsum_contract',
-             lambda eq, ops: target_module.contract(
-                 eq, *ops, optimize=optimize, backend=backend_name)))
-    return entries
+    gc.collect()
+    stats, schedule = _measure_pair(functions, backend, iterations, warmup)
+    del backend_arrays
+    return {
+        'stats': stats,
+        'measurement_sequence': schedule,
+        'measurement_order': 'ABBA',
+        'worker_pid': None,
+        'loaded_oracle': dict(oracle_info),
+        'worker_loaded_oracles': {
+            'opt_einsum': dict(oracle_info),
+            'qcd_einsum': {'loaded': 'in-process'},
+        },
+        'max_relative_error': relative_error,
+        'max_absolute_error': absolute_error,
+        'oracle_output_dtype': oracle_dtype,
+        'qcd_output_dtype': qcd_dtype,
+        'output_dtype_match': dtype_match,
+        'correctness_pass': dtype_match and relative_error_pass,
+        'implementation_warnings': implementation_warnings,
+    }
 
 
-def _to_backend(arrays, backend):
-    if backend == 'gpu':
-        import cupy
+def _measure_process_case(task, oracle_info):
+    opt_result, oracle_host = _run_isolated_worker('opt_einsum', task)
+    qcd_result, qcd_host = _run_isolated_worker('qcd_einsum', task)
+    _validate_isolated_result(opt_result, task, oracle_info=oracle_info)
+    _validate_isolated_result(qcd_result, task)
 
-        return [cupy.asarray(array) for array in arrays]
-    return arrays
+    oracle_dtype = opt_result['output_dtype']
+    qcd_dtype = qcd_result['output_dtype']
+    dtype_match = oracle_dtype == DTYPE and qcd_dtype == DTYPE
+    relative_error = _max_relative_error(qcd_host, oracle_host)
+    absolute_error = _max_absolute_error(qcd_host, oracle_host)
+    relative_error_pass = relative_error <= RELATIVE_ERROR_TOLERANCE
+    del oracle_host, qcd_host
+    gc.collect()
+    return {
+        'stats': {
+            'opt_einsum': opt_result['stats'],
+            'qcd_einsum': qcd_result['stats'],
+        },
+        'measurement_sequence': ['opt_einsum', 'qcd_einsum'],
+        'measurement_order': 'PROCESS_ISOLATED',
+        'worker_pid': {
+            'opt_einsum': opt_result['worker_pid'],
+            'qcd_einsum': qcd_result['worker_pid'],
+        },
+        'loaded_oracle': opt_result['loaded_oracle'],
+        'worker_loaded_oracles': {
+            'opt_einsum': opt_result['loaded_oracle'],
+            'qcd_einsum': qcd_result['loaded_oracle'],
+        },
+        'max_relative_error': relative_error,
+        'max_absolute_error': absolute_error,
+        'oracle_output_dtype': oracle_dtype,
+        'qcd_output_dtype': qcd_dtype,
+        'output_dtype_match': dtype_match,
+        'correctness_pass': dtype_match and relative_error_pass,
+        'implementation_warnings': (
+            [f'opt_einsum: {item}' for item in
+             opt_result['implementation_warnings']]
+            + [f'qcd_einsum: {item}' for item in
+               qcd_result['implementation_warnings']]),
+    }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 主流程
-# ═══════════════════════════════════════════════════════════════════
+def _new_row(profile_name, cfg, backend, env, eq_name, meta, t_src,
+             operand_shapes, operand_dtypes, path_info):
+    row = {
+        'profile': profile_name,
+        'eq': eq_name,
+        'desc': meta['desc'],
+        'subscripts': meta['eq'],
+        'line': meta['line'],
+        'backend': backend,
+        'device': env['devices'][backend],
+        'dtype': DTYPE,
+        'nvec': cfg['nvec'],
+        't_src': t_src,
+        'spatial': cfg['spatial'],
+        'n_t': cfg['n_t'],
+        'operand_seed': 1000 + 17 * t_src,
+        'operand_shapes': operand_shapes,
+        'operand_dtypes': operand_dtypes,
+        'optimize': env['optimize'],
+        'measurement_order': env['measurement_order'],
+        'isolation': env['isolation'],
+        'worker_pid': None,
+        'loaded_oracle': None,
+        'operand_digest': None,
+        'status': 'ok',
+        'note': '',
+    }
+    row.update(path_info)
+    return row
+
 
 def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
         equations=tuple(item['name'] for item in EQUATIONS),
-        iterations=10, warmup=2, naive_budget=2e9, optimize='dp',
-        log=print):
-    """执行基准，返回 (rows, env, skipped, reasons)。"""
-    target_module, missing = _target.probe()
-    if missing:
-        target_module = None
-    oracle_version, oracle_path = _oracle.oracle_version()
+        iterations=MIN_ACCEPTANCE_ITERATIONS, warmup=2,
+        optimize='greedy', mode='full', isolation='process', log=print):
+    """执行基准并返回 ``(rows, env, problems)``。"""
+    profiles = tuple(profiles)
+    backends = tuple(backends)
+    equations = tuple(equations)
+    env = _environment(
+        profiles, backends, equations, iterations, warmup, optimize, mode,
+        isolation)
+    problems = []
 
-    env = {
-        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'hostname': platform.node(),
-        'python': platform.python_version(),
-        'numpy': np.__version__,
-        'opt_einsum': oracle_version,
-        'opt_einsum_path': oracle_path,
-        'pyqcd_einsum': ('ready' if target_module is not None
-                         else f'not ready: {_target.skip_reason()}'),
-        'dtype': DTYPE,
-        'threads': THREADS,
-        'cpu_count': os.cpu_count(),
-        'optimize': optimize,
-        'iterations': iterations,
-        'warmup': warmup,
-        'profiles': list(profiles),
-        'backends': list(backends),
-        'equations': list(equations),
-        'naive_budget_ops': naive_budget,
-    }
-    try:
-        import cupy
-
-        env['cupy'] = cupy.__version__
-        free, total = cupy.cuda.Device(0).mem_info
-        env['gpu'] = {'name': cupy.cuda.runtime.getDeviceProperties(0)['name']
-                      .decode() if isinstance(
-                          cupy.cuda.runtime.getDeviceProperties(0)['name'],
-                          bytes) else str(
-                              cupy.cuda.runtime.getDeviceProperties(0)['name']),
-                      'free_mb': round(free / 2 ** 20, 1),
-                      'total_mb': round(total / 2 ** 20, 1)}
-    except Exception as exc:  # noqa: BLE001
-        env['cupy'] = f'不可用: {type(exc).__name__}: {exc}'
-        env['gpu'] = None
-
-    log(f"oracle      : opt_einsum {oracle_version}")
-    log(f"pyqcd.einsum: "
-        + ('就绪' if target_module is not None else
-           f"未就绪（{_target.skip_reason()}），pyqcd 列整列 SKIP"))
-    log(f"线程/精度   : {THREADS} 线程, {DTYPE}, optimize={optimize!r}")
-
-    problems = data_status(sorted({t for name in profiles
-                                  for t in PROFILES[name]['t_src']}))
+    unknown_profiles = sorted(set(profiles) - set(PROFILES))
+    unknown_equations = sorted(set(equations) - set(EQUATION_BY_NAME))
+    unknown_backends = sorted(set(backends) - set(BACKEND_NAMES))
+    if unknown_profiles:
+        problems.append(f'未知 profiles: {unknown_profiles}')
+    if unknown_equations:
+        problems.append(f'未知 equations: {unknown_equations}')
+    if unknown_backends:
+        problems.append(f'未知 backends: {unknown_backends}')
     if problems:
-        for problem in problems[:5]:
-            log(f'SKIP 原因：{problem}')
-        return [], env, True, problems
+        return [], env, problems
 
+    try:
+        oracle_module, oracle_info = resolve_oracle()
+    except Exception as exc:  # noqa: BLE001 - 转为硬失败报告
+        env['opt_einsum'] = {
+            'error': f'{type(exc).__name__}: {exc}'}
+        return [], env, [env['opt_einsum']['error']]
+    env['opt_einsum'] = oracle_info
+    env['loaded_oracle'] = dict(oracle_info)
+    log(f"oracle      : {oracle_info['label']} "
+        f"{oracle_info['version']} ({oracle_info['path']})")
+
+    try:
+        target_module, target_info = _target_module()
+    except Exception as exc:  # noqa: BLE001 - pyqcd 不可用也应硬失败
+        env['pyqcd_einsum'] = {
+            'error': f'{type(exc).__name__}: {exc}'}
+        return [], env, [env['pyqcd_einsum']['error']]
+    env['pyqcd_einsum'] = target_info
+    env['native_available'] = _native_availability()
+    log(f"pyqcd.einsum: {target_info['version']} ({target_info['path']})")
+    log(f"线程/精度   : {THREADS} 线程, {DTYPE}, optimize={optimize!r}, "
+        f"isolation={isolation}, iterations={iterations}")
+    log('数据口径    : provisional - ' + DATA_SCOPE['note'])
+
+    t_srcs = sorted({
+        t_src for profile_name in profiles
+        for t_src in PROFILES[profile_name]['t_src']
+    })
+    data_problems = data_status(t_srcs)
+    if data_problems:
+        problems.extend(data_problems)
+        for problem in data_problems[:5]:
+            log(f'DATA ERROR: {problem}')
+        return [], env, problems
+
+    for backend in backends:
+        if env['devices'][backend].get('available') is False:
+            problem = (f'{backend} 不可用: '
+                       f"{env['devices'][backend]['error']}")
+            problems.append(problem)
+            log(f'BACKEND ERROR: {problem}')
+
+    available_backends = tuple(
+        backend for backend in backends
+        if env['devices'][backend].get('available') is not False)
+    for backend in available_backends:
+        native_name = 'cuda' if backend == 'gpu' else 'kupl'
+        if not env['native_available'].get(native_name, False):
+            problems.append(f'{backend} requested but native {native_name} is unavailable')
     rows = []
     for profile_name in profiles:
         cfg = dict(PROFILES[profile_name])
-        note = cfg.get('note', '')
-        allowed = cfg.get('impls')
-        for backend in backends:
-            if backend == 'gpu' and env.get('gpu') is None:
-                log(f'  SKIP {profile_name}/{backend}: cupy 不可用')
-                continue
-            for t_src in cfg['t_src']:
-                load_start = time.perf_counter()
-                peram = load_peram(t_src, cfg['nvec'])
-                load_s = time.perf_counter() - load_start
-                log(f"\n══ {profile_name} · Nvec={cfg['nvec']} · t_src={t_src}"
-                    f" · backend={backend} · 读盘 {load_s:.2f}s "
-                    f"[{cfg['nvec']}×{cfg['nvec']} 切片]  ({note})")
-                for eq_name in equations:
-                    meta = EQUATION_BY_NAME[eq_name]
-                    arrays = build_operands(eq_name, peram, cfg,
-                                            seed=1000 + 17 * t_src)
-                    shapes = [tuple(array.shape) for array in arrays]
-                    naive_ops = naive_op_count(meta['eq'], shapes)
+        for t_src in cfg['t_src']:
+            load_start = time.perf_counter()
+            peram = load_peram(t_src, cfg['nvec'])
+            load_s = time.perf_counter() - load_start
+            log(f"\n[{profile_name}] Nvec={cfg['nvec']} t_src={t_src} "
+                f"读盘={load_s:.2f}s - {cfg['note']}")
+            for eq_name in equations:
+                meta = EQUATION_BY_NAME[eq_name]
+                arrays = build_operands(
+                    eq_name, peram, cfg, seed=1000 + 17 * t_src)
+                shapes = [tuple(array.shape) for array in arrays]
+                dtypes = _array_dtypes(arrays)
+                operand_digest = _operand_digest(arrays)
+                if any(dtype != DTYPE for dtype in dtypes):
+                    problems.append(
+                        f'{profile_name}/{eq_name} 操作数 dtype 非 {DTYPE}: '
+                        f'{dtypes}')
+                    continue
+
+                for backend in available_backends:
+                    row = None
                     try:
-                        opt_cost = optimized_cost(meta['eq'], shapes)
-                    except Exception as exc:  # noqa: BLE001
-                        opt_cost = f'规划失败: {type(exc).__name__}'
-                    backend_arrays = _to_backend(arrays, backend)
-                    log(f"  {eq_name} {meta['desc']}  naive≈{naive_ops:.2e} "
-                        f"dp_cost={opt_cost}")
-                    group = []
-                    for impl_name, fn in implementations(
-                            backend, optimize, target_module):
-                        if allowed is not None and impl_name not in allowed:
-                            continue
-                        row = {'profile': profile_name, 'eq': eq_name,
-                               'desc': meta['desc'], 'subscripts': meta['eq'],
-                               'line': meta['line'], 'impl': impl_name,
-                               'backend': backend, 'dtype': DTYPE,
-                               'nvec': cfg['nvec'], 't_src': t_src,
-                               'spatial': cfg['spatial'], 'n_t': cfg['n_t'],
-                               'iterations': iterations,
-                               'naive_est_ops': naive_ops,
-                               'optimize': optimize,
-                               'opt_cost': (str(opt_cost)
-                                            if hasattr(opt_cost, 'as_tuple')
-                                            else str(opt_cost)),
-                               'load_s': round(load_s, 4),
-                               'median_s': None, 'speedup_vs_opt': None,
-                               'peak_bytes': None, 'status': 'ok',
-                               'note': ''}
-                        if 'naive' in impl_name and naive_ops > naive_budget:
-                            row['status'] = 'skip'
-                            row['note'] = (f'朴素代价 {naive_ops:.2e} 次标量乘加 '
-                                           f'> 预算 {naive_budget:.1e}，不运行')
-                            rows.append(row)
-                            group.append(row)
-                            log(f"    {impl_name:<22s} SKIP  {row['note']}")
-                            continue
-                        try:
-                            stats = measure(lambda: fn(
-                                meta['eq'], backend_arrays), backend,
-                                iterations, warmup)
-                            row.update({key: round(value, 6) if isinstance(
-                                value, float) else value
-                                for key, value in stats.items()})
-                        except Exception as exc:  # noqa: BLE001
+                        path, path_info = _plan_pair(
+                            meta['eq'], shapes, optimize,
+                            oracle_module, target_module)
+                        row = _new_row(
+                            profile_name, cfg, backend, env, eq_name, meta,
+                            t_src, shapes, dtypes, path_info)
+                        if isolation == 'process':
+                            worker_task = {
+                                'profile': profile_name,
+                                'equation': eq_name,
+                                'subscripts': meta['eq'],
+                                't_src': t_src,
+                                'profile_config': {
+                                    'nvec': cfg['nvec'],
+                                    'spatial': cfg['spatial'],
+                                    'n_t': cfg['n_t'],
+                                    't_sink': cfg['t_sink'],
+                                },
+                                'operand_seed': 1000 + 17 * t_src,
+                                'operand_shapes': [
+                                    list(shape) for shape in shapes],
+                                'operand_dtypes': dtypes,
+                                'operand_digest': operand_digest,
+                                'path': [list(step) for step in path],
+                                'path_digest': path_info['path_digest'],
+                                'backend': backend,
+                                'dtype': DTYPE,
+                                'iterations': iterations,
+                                'warmup': warmup,
+                            }
+                            measurement = _measure_process_case(
+                                worker_task, oracle_info)
+                        else:
+                            measurement = _measure_abba_case(
+                                arrays, backend, meta['eq'], path,
+                                oracle_module, target_module, iterations,
+                                warmup, oracle_info)
+                        opt_median = measurement['stats'][
+                            'opt_einsum']['median_s']
+                        qcd_median = measurement['stats'][
+                            'qcd_einsum']['median_s']
+                        speedup = opt_median / qcd_median
+                        row.update({
+                            'opt_einsum': measurement['stats']['opt_einsum'],
+                            'qcd_einsum': measurement['stats']['qcd_einsum'],
+                            'measurement_sequence':
+                                measurement['measurement_sequence'],
+                            'measurement_order':
+                                measurement['measurement_order'],
+                            'worker_pid': measurement['worker_pid'],
+                            'loaded_oracle': measurement['loaded_oracle'],
+                            'worker_loaded_oracles':
+                                measurement['worker_loaded_oracles'],
+                            'operand_digest': operand_digest,
+                            'max_relative_error':
+                                measurement['max_relative_error'],
+                            'max_absolute_error':
+                                measurement['max_absolute_error'],
+                            'oracle_output_dtype':
+                                measurement['oracle_output_dtype'],
+                            'qcd_output_dtype':
+                                measurement['qcd_output_dtype'],
+                            'output_dtype_match':
+                                measurement['output_dtype_match'],
+                            'relative_error_tolerance':
+                                RELATIVE_ERROR_TOLERANCE,
+                            'correctness_pass':
+                                measurement['correctness_pass'],
+                            'implementation_warnings':
+                                measurement['implementation_warnings'],
+                            'speedup_vs_opt': round(speedup, 6),
+                            'speedup_target': SPEEDUP_TARGET,
+                            'speedup_pass': speedup >= SPEEDUP_TARGET,
+                        })
+                        if not measurement['output_dtype_match']:
                             row['status'] = 'error'
-                            row['note'] = f'{type(exc).__name__}: {exc}'
-                        rows.append(row)
-                        group.append(row)
+                            row['note'] = (
+                                '输出 dtype 不一致: '
+                                f"oracle={measurement['oracle_output_dtype']}, "
+                                f"qcd={measurement['qcd_output_dtype']}, "
+                                f'expected={DTYPE}')
+                        elif not measurement['correctness_pass']:
+                            row['status'] = 'error'
+                            row['note'] = (
+                                'max relative error 超过容差: '
+                                f"{measurement['max_relative_error']:.3e}")
+                        elif speedup < SPEEDUP_TARGET:
+                            row['note'] = (
+                                f'低于 {SPEEDUP_TARGET:.1f}x 硬门禁')
+                        log(f"  {eq_name}/{backend}: "
+                            f"opt={opt_median:.6f}s "
+                            f"qcd={qcd_median:.6f}s "
+                            f"speedup={speedup:.3f}x "
+                            f"max_rel={measurement['max_relative_error']:.3e} "
+                            f"path={path_info['path_digest'][:12]}")
+                    except Exception as exc:  # noqa: BLE001 - 单例失败写入报告
+                        if row is None:
+                            row = _new_row(
+                                profile_name, cfg, backend, env, eq_name, meta,
+                                t_src, shapes, dtypes, {
+                                    'path': None,
+                                    'path_digest': None,
+                                    'planner_path_match': False,
+                                })
+                            row['operand_digest'] = operand_digest
+                        row['status'] = 'error'
+                        row['note'] = f'{type(exc).__name__}: {exc}'
+                        row['correctness_pass'] = False
+                        row['speedup_pass'] = False
+                        log(f"  {eq_name}/{backend}: ERROR {row['note']}")
+                    rows.append(row)
+            del peram
+            gc.collect()
+    if isolation == 'process':
+        env['worker_pids'] = sorted({
+            pid for row in rows
+            for pid in (row.get('worker_pid') or {}).values()
+            if isinstance(pid, int)
+        })
+        env['worker_loaded_oracles'] = [
+            row.get('worker_loaded_oracles') for row in rows
+            if row.get('worker_loaded_oracles') is not None
+        ]
+    return rows, env, problems
 
-                    opt_row = next((item for item in group
-                                    if item['impl'] == 'opt_einsum_contract'
-                                    and item['median_s']), None)
-                    if opt_row:
-                        for item in group:
-                            if item['median_s']:
-                                item['speedup_vs_opt'] = round(
-                                    opt_row['median_s'] / item['median_s'], 4)
-                    for item in group:
-                        _print_row(log, item)
-                del peram
 
-    return rows, env, False, []
-
-
-def _print_row(log, row):
-    median = row['median_s']
-    median_text = f"{median:.4f}s" if median else '   —   '
-    speedup = row['speedup_vs_opt']
-    speedup_text = f'{speedup:.2f}x' if speedup is not None else '  —  '
-    if median and row['status'] == 'ok':
-        peak = row['peak_bytes']
-        peak_text = (f"{peak / 2 ** 20:.1f}MB" if peak else '  —  ')
-        warn = ''
-        if row['impl'] == 'pyqcd_einsum_contract' and speedup is not None \
-                and speedup < SPEEDUP_TARGET:
-            warn = f'  [< {SPEEDUP_TARGET:.1f} 未达标]'
-        log(f"    {row['impl']:<22s} {median_text}  "
-            f"speedup_vs_opt={speedup_text}  peak={peak_text}{warn}")
+def _acceptance(rows, env, problems, mode, requested_backends):
+    reasons = list(problems)
+    provisional_reasons = []
+    oracle = env.get('opt_einsum', {})
+    if oracle.get('frozen') is not True:
+        provisional_reasons.append('oracle is not the frozen opt_einsum submodule')
+    if DATA_SCOPE.get('provisional', True):
+        provisional_reasons.append('benchmark uses a proxy dataset rather than the requested target')
+    if mode == 'smoke':
+        reasons.append('smoke 只覆盖 T0n/CPU，明确不构成验收')
     else:
-        log(f"    {row['impl']:<22s} {row['status'].upper():<6s}  "
-            f"{row['note'][:96]}")
+        missing_profiles = sorted(
+            ACCEPTANCE_PROFILES - set(env.get('profiles', ()))
+        )
+        missing_equations = sorted(
+            set(EQUATION_BY_NAME) - set(env.get('equations', ()))
+        )
+        missing_backends = sorted(
+            set(BACKEND_NAMES) - set(env.get('backends', ()))
+        )
+        if missing_profiles:
+            reasons.append(f'验收缺少 profiles: {missing_profiles}')
+        if missing_equations:
+            reasons.append(f'验收缺少 equations: {missing_equations}')
+        if missing_backends:
+            reasons.append(f'验收缺少 backends: {missing_backends}')
+    if not env.get('thread_pin_before_numpy_import', False):
+        reasons.append('numpy 在强制线程变量前已导入，计时口径无效')
+    if env.get('iterations', 0) < MIN_ACCEPTANCE_ITERATIONS:
+        reasons.append(
+            f'中位数样本请求数 {env.get("iterations")} < '
+            f'{MIN_ACCEPTANCE_ITERATIONS}')
+    if env.get('isolation') not in ('abba', 'process'):
+        reasons.append(f'未知 isolation={env.get("isolation")!r}')
+    if not rows:
+        reasons.append('没有可评估的基准行')
+    measured_backends = {row['backend'] for row in rows
+                         if row.get('status') == 'ok'}
+    missing_backends = [
+        backend for backend in requested_backends
+        if backend not in measured_backends]
+    if missing_backends:
+        reasons.append(f'请求的 backend 未测成功: {missing_backends}')
+    for row in rows:
+        label = f"{row['profile']}/{row['eq']}/{row['backend']}"
+        if row.get('status') != 'ok':
+            reasons.append(f'{label} status={row.get("status")}')
+            continue
+        if not row.get('correctness_pass', False):
+            reasons.append(f'{label} 数值校验失败')
+        if not row.get('planner_path_match', False):
+            reasons.append(f'{label} 双方规划 path 不一致')
+        native_name = 'cuda' if row['backend'] == 'gpu' else 'kupl'
+        if not env.get('native_available', {}).get(native_name, False):
+            reasons.append(f'{label} native {native_name} unavailable')
+        fallback_warnings = [
+            warning for warning in row.get('implementation_warnings', [])
+            if 'using Python execution' in warning
+            or 'native' in warning and 'unavailable' in warning
+        ]
+        if fallback_warnings:
+            reasons.append(f'{label} used Python fallback: {fallback_warnings}')
+        if env.get('isolation') == 'process':
+            worker_pid = row.get('worker_pid')
+            if not (isinstance(worker_pid, dict)
+                    and isinstance(worker_pid.get('opt_einsum'), int)
+                    and isinstance(worker_pid.get('qcd_einsum'), int)):
+                reasons.append(f'{label} 缺少有效 worker_pid')
+            if not row.get('loaded_oracle'):
+                reasons.append(f'{label} 缺少 loaded oracle 信息')
+        if row['profile'] in ACCEPTANCE_PROFILES and not row.get('speedup_pass', False):
+            reasons.append(
+                f'{label} speedup={row.get("speedup_vs_opt")} < '
+                f'{SPEEDUP_TARGET}')
+    acceptance_rows = [row for row in rows if row['profile'] in ACCEPTANCE_PROFILES]
+    if mode != 'smoke' and not acceptance_rows:
+        reasons.append('没有运行 T1/T2 生产规模 profile，不能作为性能验收')
+    if mode == 'smoke':
+        state = 'NON_ACCEPTANCE'
+        passed = False
+        return_code = 2
+    elif mode != 'smoke' and not acceptance_rows:
+        state = 'NON_ACCEPTANCE'
+        passed = False
+        return_code = 2
+    elif reasons:
+        state = 'FAIL'
+        passed = False
+        return_code = 1
+    elif provisional_reasons:
+        state = 'NON_ACCEPTANCE'
+        passed = False
+        return_code = 2
+    else:
+        state = 'PASS'
+        passed = True
+        return_code = 0
+    return {
+        'state': state,
+        'passed': passed,
+        'acceptance_evaluated': mode != 'smoke',
+        'provisional': DATA_SCOPE['provisional'],
+        'reasons': reasons + provisional_reasons,
+        'return_code': return_code,
+    }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 产物
-# ═══════════════════════════════════════════════════════════════════
+def _checks(rows):
+    checks = []
+    for row in rows:
+        checks.append({
+            'profile': row['profile'],
+            'acceptance_profile': row['profile'] in ACCEPTANCE_PROFILES,
+            'eq': row['eq'],
+            'backend': row['backend'],
+            'isolation': row.get('isolation'),
+            'status': row['status'],
+            'path_digest': row.get('path_digest'),
+            'planner_path_match': row.get('planner_path_match'),
+            'operand_digest': row.get('operand_digest'),
+            'worker_pid': row.get('worker_pid'),
+            'loaded_oracle': row.get('loaded_oracle'),
+            'output_dtype_match': row.get('output_dtype_match'),
+            'max_relative_error': row.get('max_relative_error'),
+            'relative_error_tolerance': RELATIVE_ERROR_TOLERANCE,
+            'correctness_pass': bool(row.get('correctness_pass', False)),
+            'speedup_vs_opt': row.get('speedup_vs_opt'),
+        'speedup_target': SPEEDUP_TARGET,
+        'speedup_pass': bool(row.get('speedup_pass', False)),
+        'pass': bool(row.get('correctness_pass', False)
+                         and row.get('speedup_pass', False)
+                         and row.get('planner_path_match', False)),
+            'note': row.get('note', ''),
+        })
+    return checks
+
 
 def artifact_dir(outdir=None):
     if outdir:
         path = os.path.abspath(outdir)
     else:
         stamp = datetime.now().strftime('%Y%m%d%H%M%S')
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            'artifacts', f'bench_{stamp}')
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            'artifacts', f'bench_{stamp}')
     os.makedirs(path, exist_ok=True)
     return path
 
 
-def write_artifacts(rows, env, directory):
-    payload = {'env': env,
-               'speedup_target': SPEEDUP_TARGET,
-               'rows': rows,
-               'checks': _checks(rows)}
+def write_artifacts(rows, env, acceptance, directory):
+    payload = {
+        'benchmark': 'qcd-einsum vs opt_einsum',
+        'acceptance': acceptance,
+        'checks': _checks(rows),
+        'environment': env,
+        'rows': rows,
+    }
     with open(os.path.join(directory, 'bench.json'), 'w',
               encoding='utf-8') as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
@@ -523,126 +1303,183 @@ def write_artifacts(rows, env, directory):
         json.dump(env, handle, indent=2, ensure_ascii=False)
     with open(os.path.join(directory, 'bench.md'), 'w',
               encoding='utf-8') as handle:
-        handle.write(render_markdown(rows, env))
+        handle.write(render_markdown(rows, env, acceptance))
     return directory
 
 
-def _checks(rows):
-    """pyqcd 相对 opt_einsum 的达标判定（目标 3.0x）。"""
-    checks = []
-    for row in rows:
-        if row['impl'] != 'pyqcd_einsum_contract' or not row['median_s']:
-            continue
-        speedup = row['speedup_vs_opt']
-        checks.append({'profile': row['profile'], 'eq': row['eq'],
-                       'backend': row['backend'], 'nvec': row['nvec'],
-                       't_src': row['t_src'],
-                       'speedup_vs_opt': speedup,
-                       'target': SPEEDUP_TARGET,
-                       'pass': bool(speedup is not None
-                                    and speedup >= SPEEDUP_TARGET)})
-    return checks
+def render_markdown(rows, env, acceptance):
+    oracle = env.get('opt_einsum', {})
+    pyqcd = env.get('pyqcd_einsum', {})
+    lines = [
+        '# qcd-einsum vs opt_einsum 3x 硬门禁基准',
+        '',
+        '## 结论',
+        '',
+        f"- 状态：**{acceptance['state']}**",
+        f"- acceptance evaluated：{acceptance['acceptance_evaluated']}",
+        f"- provisional：{acceptance['provisional']}",
+        f"- 说明：{DATA_SCOPE['note']}",
+    ]
+    for reason in acceptance['reasons']:
+        lines.append(f'- 阻断：{reason}')
+    lines += [
+        '',
+        '## 口径',
+        '',
+        f"- dtype：`{env['dtype']}`",
+        f"- threads：`{env['threads']}`（numpy 导入前强制）",
+        f"- optimize：`{env['optimize']}`",
+        f"- isolation：`{env['isolation']}`",
+        f"- acceptance profiles：`{sorted(ACCEPTANCE_PROFILES)}`；"
+        f"diagnostic profiles：`{sorted(DIAGNOSTIC_PROFILES)}`",
+        f"- 计时：预热后 {env['measurement_order']}，每实现不少于 "
+        f"{env['iterations']} 次，取中位数",
+        '- path：oracle planner 生成一次，双方用同一显式 path',
+        '- 正确性：`max |actual-expected| / max(|expected|, tiny)` '
+        f"≤ `{RELATIVE_ERROR_TOLERANCE}`",
+        '- GPU：每次计时前后调用 default stream synchronize',
+        '',
+        '## 环境',
+        '',
+        f"- oracle：{oracle.get('label', 'error')}；version="
+        f"`{oracle.get('version', 'unknown')}`；"
+        f"frozen={oracle.get('frozen', False)}",
+        f"- oracle path：`{oracle.get('path', oracle.get('error', ''))}`",
+        f"- pyqcd.einsum：`{pyqcd.get('version', 'unknown')}`；"
+        f"native=`{pyqcd.get('native_version', 'unknown')}`",
+        f"- pyqcd path：`{pyqcd.get('path', pyqcd.get('error', ''))}`",
+        f"- Python：`{env['python']}`；NumPy：`{env['numpy']}`",
+        f"- CPU：`{env['cpu_count']}` logical CPUs",
+    ]
+    if env.get('worker_pids'):
+        lines.append(f"- worker pids：`{env['worker_pids']}`")
+    for backend, device in env['devices'].items():
+        lines.append(f"- {backend} device：`{device}`")
 
-
-def render_markdown(rows, env):
-    lines = ['# bench_distillation 结果', '']
-    lines.append(f"- 时间：{env['time']}  主机：{env['hostname']}")
-    lines.append(f"- oracle：opt_einsum {env['opt_einsum']}")
-    lines.append(f"- pyqcd.einsum：{env['pyqcd_einsum']}")
-    lines.append(f"- dtype={env['dtype']} threads={env['threads']} "
-                 f"optimize={env['optimize']} iterations={env['iterations']}")
-    lines.append('')
-    lines.append('| profile | eq | backend | impl | nvec | median_s | '
-                 'speedup_vs_opt | peak_bytes | status |')
-    lines.append('|---|---|---|---|---|---|---|---|---|')
+    lines += [
+        '',
+        '## 结果',
+        '',
+        '| profile | eq | backend | isolation | worker pids | optimize | '
+        'opt median/s | qcd median/s | speedup | max rel err | '
+        'planner path match | status |',
+        '|---|---|---|---|---|---|---|---|---|---|---|---|',
+    ]
     for row in rows:
-        median = (f"{row['median_s']:.6f}" if row['median_s'] else '')
-        speedup = (f"{row['speedup_vs_opt']:.3f}"
-                   if row['speedup_vs_opt'] is not None else '')
-        peak = row['peak_bytes'] if row['peak_bytes'] else ''
-        lines.append(f"| {row['profile']} | {row['eq']} | {row['backend']} | "
-                     f"{row['impl']} | {row['nvec']} | {median} | {speedup} | "
-                     f"{peak} | {row['status']} |")
-    checks = _checks(rows)
-    if checks:
-        lines += ['', '## pyqcd vs opt_einsum（目标 3.0x）', '']
-        for item in checks:
-            verdict = 'PASS' if item['pass'] else 'FAIL(<3.0)'
-            lines.append(f"- {item['profile']}/{item['eq']}/"
-                         f"{item['backend']}: {item['speedup_vs_opt']}x "
-                         f"{verdict}")
-    else:
-        lines += ['', '## pyqcd vs opt_einsum', '',
-                  f"未测量：{env['pyqcd_einsum']}"]
+        opt = row.get('opt_einsum', {}).get('median_s')
+        qcd = row.get('qcd_einsum', {}).get('median_s')
+        speedup = row.get('speedup_vs_opt')
+        verdict = 'PASS' if row.get('speedup_pass') else (
+            'DIAGNOSTIC(<3x)' if row['profile'] in DIAGNOSTIC_PROFILES
+            else 'FAIL(<3x)')
+        relative = row.get('max_relative_error')
+        lines.append(
+            f"| {row['profile']} | {row['eq']} | {row['backend']} | "
+            f"{row['isolation']} | {row.get('worker_pid') or ''} | "
+            f"{row['optimize']} | {opt if opt is not None else ''} | "
+            f"{qcd if qcd is not None else ''} | "
+            f"{speedup if speedup is not None else ''} | "
+            f"{relative if relative is not None else ''} | "
+            f"{row.get('planner_path_match', '')} | {row['status']} / {verdict} |")
+
+    if rows:
+        lines += ['', '## 显式 path', '']
+        for row in rows:
+            if row.get('path') is not None:
+                lines.append(
+                    f"- {row['profile']}/{row['eq']}/{row['backend']}: "
+                    f"`{row['path']}`；digest=`{row['path_digest']}`")
     return '\n'.join(lines) + '\n'
+
+
+def _print_summary(rows, env, acceptance, directory):
+    print('\n──────────── benchmark 汇总 ────────────')
+    print(f"模式: {env['mode']}；验收状态: {acceptance['state']}")
+    print(f"oracle: {env.get('opt_einsum', {}).get('label', 'error')}")
+    print(f"线程: {env['threads']}；dtype: {env['dtype']}；"
+          f"optimize: {env['optimize']}；isolation: {env['isolation']}")
+    for row in rows:
+        if row['status'] == 'ok':
+            verdict = 'PASS' if row.get('speedup_pass') else (
+                'DIAGNOSTIC(<3x)' if row['profile'] in DIAGNOSTIC_PROFILES
+                else 'FAIL(<3x)')
+            print(
+                f"  {row['profile']:<4s} {row['eq']:<3s} "
+                f"{row['backend']:<4s} "
+                f"speedup={row['speedup_vs_opt']:.3f}x "
+                f"max_rel={row['max_relative_error']:.3e} "
+                f"{verdict}")
+        else:
+            print(
+                f"  {row['profile']:<4s} {row['eq']:<3s} "
+                f"{row['backend']:<4s} ERROR {row['note']}")
+    for reason in acceptance['reasons']:
+        print(f'  阻断: {reason}')
+    print(f'\n产物: {directory}')
+    print('       bench.json / bench.md / env.json')
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description='蒸馏实战基准：numpy naive / opt_einsum / pyqcd.einsum')
+        description='qcd-einsum vs opt_einsum 严格 3x 蒸馏基准')
     parser.add_argument('--profiles', default=','.join(DEFAULT_PROFILES),
-                        help='逗号列表：T0n,T0,T1,T2')
+                        help='逗号列表：T0n,T0,T1,T2；T1/T2 为性能验收 profile，T0/T0n 为诊断')
     parser.add_argument('--backends', default=','.join(DEFAULT_BACKENDS),
                         help='逗号列表：cpu,gpu')
     parser.add_argument('--equations',
                         default=','.join(item['name'] for item in EQUATIONS))
-    parser.add_argument('--iters', type=int, default=10,
-                        help='计时次数（>=10，默认 10）')
-    parser.add_argument('--warmup', type=int, default=2)
-    parser.add_argument('--naive-budget', type=float, default=2e9,
-                        help='朴素 numpy 的标量乘加次数预算，超出则 SKIP')
+    parser.add_argument('--iters', type=int,
+                        default=MIN_ACCEPTANCE_ITERATIONS,
+                        help='每实现中位数样本数，验收模式必须 >=10')
+    parser.add_argument('--warmup', type=int, default=2,
+                        help='每实现预热周期数')
+    parser.add_argument('--optimize', default='greedy',
+                        help='收缩规划器；默认 greedy，可显式传 dp')
+    parser.add_argument('--isolation', choices=('abba', 'process'),
+                        default='process',
+                        help='process=每实现全新解释器；abba=进程内交错计时')
     parser.add_argument('--outdir', default=None,
                         help='产物目录（默认 artifacts/bench_<时间戳>/）')
     parser.add_argument('--smoke', action='store_true',
-                        help='快速冒烟：T0n+T0、仅 CPU、3 次计时')
+                        help='T0n/CPU 冒烟；报告明确 NON_ACCEPTANCE 并返回 2')
+    parser.add_argument('--worker-task', default=None,
+                        help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
+    if args.worker_task:
+        return _run_worker_task(args.worker_task)
+
     if args.smoke:
-        profiles = ('T0n', 'T0')
+        profiles = ('T0n',)
         backends = ('cpu',)
-        iterations, warmup = 3, 1
+        equations = tuple(item['name'] for item in EQUATIONS)
+        iterations = MIN_ACCEPTANCE_ITERATIONS
+        warmup = max(1, args.warmup)
+        mode = 'smoke'
     else:
         profiles = tuple(item for item in args.profiles.split(',') if item)
         backends = tuple(item for item in args.backends.split(',') if item)
-        iterations, warmup = max(1, args.iters), max(0, args.warmup)
-    equations = tuple(item for item in args.equations.split(',') if item)
+        equations = tuple(item for item in args.equations.split(',') if item)
+        iterations = args.iters
+        warmup = args.warmup
+        mode = 'full'
+        if iterations < MIN_ACCEPTANCE_ITERATIONS:
+            parser.error(
+                f'验收模式 --iters 必须 >= {MIN_ACCEPTANCE_ITERATIONS}')
+        if warmup < 1:
+            parser.error('验收模式 --warmup 必须 >= 1')
 
-    print('════════ bench_distillation：蒸馏实战基准 ════════')
-    rows, env, skipped, reasons = run(
+    print('════════ qcd-einsum vs opt_einsum 3x 硬门禁 ════════')
+    rows, env, problems = run(
         profiles=profiles, backends=backends, equations=equations,
-        iterations=iterations, warmup=warmup,
-        naive_budget=args.naive_budget)
-    if skipped:
-        print('\nSKIP bench_distillation：真实数据不可用')
-        for reason in reasons[:5]:
-            print(f'  - {reason}')
-        return 0
-
+        iterations=iterations, warmup=warmup, optimize=args.optimize,
+        mode=mode, isolation=args.isolation)
+    acceptance = _acceptance(
+        rows, env, problems, mode, requested_backends=backends)
     directory = artifact_dir(args.outdir)
-    write_artifacts(rows, env, directory)
-
-    print('\n──────────── bench 汇总（speedup_vs_opt）────────────')
-    checks = _checks(rows)
-    errors = [row for row in rows if row['status'] == 'error']
-    if checks:
-        for item in checks:
-            verdict = ('未达标(<3.0)' if not item['pass'] else '达标')
-            print(f"  {item['profile']:<4s} {item['eq']:<3s} "
-                  f"{item['backend']:<4s} Nvec={item['nvec']:<4d} "
-                  f"t_src={item['t_src']}  "
-                  f"speedup_vs_opt={item['speedup_vs_opt']:.2f}x  {verdict}")
-    else:
-        print(f"  pyqcd 列未测量：{env['pyqcd_einsum']}")
-    for row in errors:
-        print(f"  ERROR {row['profile']}/{row['eq']}/{row['backend']}/"
-              f"{row['impl']}: {row['note']}")
-    print(f"\n产物: {directory}")
-    print(f"       bench.json / bench.md / env.json（{len(rows)} 行）")
-    if errors:
-        print('FAIL bench_distillation（存在实现报错的对照行）')
-        return 1
-    print('PASS bench_distillation')
-    return 0
+    write_artifacts(rows, env, acceptance, directory)
+    _print_summary(rows, env, acceptance, directory)
+    return acceptance['return_code']
 
 
 if __name__ == '__main__':
