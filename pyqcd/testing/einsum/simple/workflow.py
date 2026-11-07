@@ -41,11 +41,19 @@ MOM_BLOCK = 3
 T_SINK_WINDOW = 32
 
 
-def counts(nt, tsep):
+def counts(nt, tsep, link_max=1):
+    """生产调用计数（依据脚本循环结构）。
+
+    * 2pt：`contraction.NN.2pt.py:96-113`  Nt × 32 × ceil(Mom/3)
+    * 3pt：`contraction.NJNp-.3pt.cupy.py:125-200`  Nt × (tsep+1) × 3 × (2 + 9)
+    * gauge（E4/E5）：`contraction.block.numpy.gen.py:127-195`
+      len(t_src)=1 × t_sink 窗 32 × (2*link_max+1)
+    """
     per_mom2 = math.ceil(MOM_LEN / MOM_BLOCK)
     two_point = nt * T_SINK_WINDOW * per_mom2
     three_point = nt * (tsep + 1) * MOM_BLOCK * (2 + MOM_BLOCK * 3)
-    return two_point, three_point
+    gauge = 1 * T_SINK_WINDOW * (2 * link_max + 1)
+    return two_point, three_point, gauge
 
 
 def main(argv=None):
@@ -58,6 +66,12 @@ def main(argv=None):
     parser.add_argument('--mode', choices=('model', 'run'), default='model')
     parser.add_argument('--group2', default='E1', help='2pt 使用的方程')
     parser.add_argument('--group3', default='P1,P2', help='3pt 使用的方程（交替）')
+    parser.add_argument('--link-max', type=int, default=1,
+                        help='gauge 管线的 link_max（计数 2*link_max+1）')
+    parser.add_argument('--gauge-groups', default='E4,E5',
+                        help='peram×gauge 管线使用的方程')
+    parser.add_argument('--gauge-profile', default=None,
+                        help='gauge 管线单独使用的 profile（默认与 --profile 相同）')
     args = parser.parse_args(argv)
 
     backend = args.backend
@@ -68,20 +82,24 @@ def main(argv=None):
         'PYQCD_EINSUM_NATIVE', 'cuda' if backend == 'cuda' else 'kupl')
 
     cfg = _common.profile_config(args.profile)
+    gauge_names = [name for name in args.gauge_groups.split(',') if name]
     oracle = _common.oracle_module()
     import pyqcd.einsum as target
 
     backend_name = 'cupy' if backend == 'cuda' else 'numpy'
-    two_calls, three_calls = counts(args.nt, args.tsep)
+    two_calls, three_calls, gauge_calls = counts(args.nt, args.tsep, args.link_max)
     groups = [(args.group2, two_calls)]
     three_names = [name for name in args.group3.split(',') if name]
     for name in three_names:
         groups.append((name, three_calls // max(len(three_names), 1)))
+    for name in gauge_names:
+        groups.append((name, gauge_calls // max(len(gauge_names), 1)))
 
     print(f'profile={args.profile} backend={backend} mode={args.mode} '
           f'nt={args.nt} tsep={args.tsep}')
     print(f'调用数：2pt={two_calls}  3pt={three_calls}'
-          f'（每 (t_src,t_curr) 33 次，Mom_len={MOM_LEN}）')
+          f'（每 (t_src,t_curr) 33 次，Mom_len={MOM_LEN}）'
+          f'  gauge={gauge_calls}（link_max={args.link_max}）')
     header = (f'{"group":6s} {"calls":>8s} {"opt_ms/call":>12s} '
               f'{"qcd_ms/call":>12s} {"opt_share":>10s} {"qcd_share":>10s}')
     print(header)
@@ -93,7 +111,9 @@ def main(argv=None):
         if meta is None:
             print(f'{name}: 未知方程')
             continue
-        arrays = _common.operands(name, cfg)
+        group_cfg = cfg if name not in gauge_names else _common.profile_config(
+            args.gauge_profile or args.profile)
+        arrays = _common.operands(name, group_cfg)
         host = _common.to_backend(arrays, backend)
         oracle_path = list(oracle.contract_path(
             meta['eq'], *arrays, optimize='dp')[0])

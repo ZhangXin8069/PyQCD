@@ -154,6 +154,10 @@ class Lease {
         return reinterpret_cast<Type*>(data_);
     }
 
+    const void* raw() const { return data_; }
+
+    std::size_t bytes() const { return bytes_; }
+
     bool ok() const { return data_ != nullptr || bytes_ == 0; }
 
   private:
@@ -572,14 +576,18 @@ void permute_sink_wedge(const Cplx* c2, int64_t n, Cplx* c2p) {
 
 class Arena {
   public:
-    bool reserve(std::size_t elements) {
-        return lease_.take(elements * sizeof(Cplx));
+    /* 按元素数列表精确预留；carve 顺序必须与 reserve 的列表一致。 */
+    bool reserve(const std::size_t* sizes, int count) {
+        std::size_t bytes = 0;
+        for (int index = 0; index < count; ++index) {
+            bytes += align_bytes(sizes[index]);
+        }
+        return lease_.take(bytes);
     }
 
     Cplx* take(std::size_t elements) {
-        const std::size_t bytes = elements * sizeof(Cplx);
-        const std::size_t aligned = (bytes + 63u) & ~static_cast<std::size_t>(63u);
-        uint8_t* pointer = static_cast<uint8_t*>(lease_.raw()) + used_;
+        const std::size_t aligned = align_bytes(elements);
+        uint8_t* pointer = static_cast<uint8_t*>(const_cast<void*>(lease_.raw())) + used_;
         used_ += aligned;
         return reinterpret_cast<Cplx*>(pointer);
     }
@@ -587,6 +595,11 @@ class Arena {
     bool fits() const { return used_ <= lease_.bytes(); }
 
   private:
+    static std::size_t align_bytes(std::size_t elements) {
+        const std::size_t bytes = elements * sizeof(Cplx);
+        return (bytes + 63u) & ~static_cast<std::size_t>(63u);
+    }
+
     Lease lease_{};
     std::size_t used_ = 0;
 };
@@ -636,34 +649,46 @@ bool run_p1(const Cplx* const* in, int64_t n, int64_t mm, int64_t mn, int64_t li
     const int64_t block = static_cast<int64_t>(p1_permute_block(n));
 
     Arena arena;
-    const std::size_t elements = static_cast<std::size_t>(kDirac * kProj * nnn) * 2 +
-                                 static_cast<std::size_t>(kDirac * n * block * n * kProj) +
-                                 static_cast<std::size_t>(16 * nn) * 3 +
-                                 static_cast<std::size_t>(8 * nn) * 6 +
-                                 static_cast<std::size_t>(nnn) +
-                                 static_cast<std::size_t>(8 * link * nn) +
-                                 static_cast<std::size_t>(64 * link) + 4096;
-    if (!arena.reserve(elements)) {
+    const std::size_t sizes[] = {
+        8 * static_cast<std::size_t>(nn),                        /* a2 */
+        8 * static_cast<std::size_t>(nn),                        /* c2 */
+        8 * static_cast<std::size_t>(nn),                        /* c2p */
+        16 * static_cast<std::size_t>(nn),                       /* d3t */
+        16 * static_cast<std::size_t>(nn),                       /* e3t */
+        16 * static_cast<std::size_t>(nn),                       /* b2t */
+        8 * static_cast<std::size_t>(nn),                        /* t1 */
+        8 * static_cast<std::size_t>(nn),                        /* t2 */
+        8 * static_cast<std::size_t>(nn),                        /* t2p */
+        static_cast<std::size_t>(kDirac * kProj * nnn),          /* t3 */
+        static_cast<std::size_t>(kDirac * n * block * n * kProj),/* t3p */
+        static_cast<std::size_t>(kDirac * kProj * nnn),          /* o */
+        8 * static_cast<std::size_t>(nn),                        /* s */
+        static_cast<std::size_t>(nnn),                           /* vvvp */
+        8 * static_cast<std::size_t>(link * nn),                 /* w */
+        8 * static_cast<std::size_t>(nn),                        /* out1 */
+        64 * static_cast<std::size_t>(link)                      /* z */
+    };
+    if (!arena.reserve(sizes, static_cast<int>(sizeof(sizes) / sizeof(sizes[0])))) {
         return false;
     }
     P1Buffers buf;
-    buf.a2 = arena.take(8 * nn);
-    buf.c2 = arena.take(8 * nn);
-    buf.c2p = arena.take(8 * nn);
-    buf.d3t = arena.take(16 * nn);
-    buf.e3t = arena.take(16 * nn);
-    buf.b2t = arena.take(16 * nn);
-    buf.t1 = arena.take(8 * nn);
-    buf.t2 = arena.take(8 * nn);
-    buf.t2p = arena.take(8 * nn);
-    buf.t3 = arena.take(kDirac * kProj * nnn);
-    buf.t3p = arena.take(kDirac * n * block * n * kProj);
-    buf.o = arena.take(kDirac * kProj * nnn);
-    buf.s = arena.take(8 * nn);
-    buf.vvvp = arena.take(nnn);
-    buf.w = arena.take(8 * link * nn);
-    buf.out1 = arena.take(8 * nn);
-    buf.z = arena.take(64 * link);
+    buf.a2 = arena.take(sizes[0]);
+    buf.c2 = arena.take(sizes[1]);
+    buf.c2p = arena.take(sizes[2]);
+    buf.d3t = arena.take(sizes[3]);
+    buf.e3t = arena.take(sizes[4]);
+    buf.b2t = arena.take(sizes[5]);
+    buf.t1 = arena.take(sizes[6]);
+    buf.t2 = arena.take(sizes[7]);
+    buf.t2p = arena.take(sizes[8]);
+    buf.t3 = arena.take(sizes[9]);
+    buf.t3p = arena.take(sizes[10]);
+    buf.o = arena.take(sizes[11]);
+    buf.s = arena.take(sizes[12]);
+    buf.vvvp = arena.take(sizes[13]);
+    buf.w = arena.take(sizes[14]);
+    buf.out1 = arena.take(sizes[15]);
+    buf.z = arena.take(sizes[16]);
     if (!arena.fits()) {
         return false;
     }
@@ -704,7 +729,7 @@ bool run_p1(const Cplx* const* in, int64_t n, int64_t mm, int64_t mn, int64_t li
             permute_p1_big_block(buf.t3, n, b0, bb, buf.t3p);
             if (!gemm(kCblasNoTrans, kCblasNoTrans, kDirac * n, bb * n * kProj, kDirac * n,
                       buf.b2t, kDirac * n, buf.t3p, bb * n * kProj, !first_block,
-                      buf.o + b0 * proj_cols, nnn * kDirac)) {
+                      buf.o + b0 * proj_cols, nn * kProj)) {
                 return false;
             }
             first_block = false;
@@ -805,42 +830,49 @@ struct P2Buffers {
 bool run_p2(const Cplx* const* in, int64_t n, int64_t mm, int64_t mn, int64_t link, Cplx* out) {
     const int64_t nn = n * n;
     const int64_t nnn = nn * n;
-    const int64_t proj_cols = n * kProj;
     const int64_t wedge_cols = kDirac * kProj * n;
     const int64_t mid_cols = kDirac * kDirac * n; /* (e,q,d) = 16n */
     const int64_t f_cols = mm * n;                /* (M,t) */
 
     Arena arena;
-    const std::size_t elements = static_cast<std::size_t>(16 * nnn) * 2 +
-                                 static_cast<std::size_t>(4 * nnn) * 2 +
-                                 static_cast<std::size_t>(16 * nn) * 4 +
-                                 static_cast<std::size_t>(8 * nn) * 2 +
-                                 static_cast<std::size_t>(nnn) +
-                                 static_cast<std::size_t>(n * f_cols) +
-                                 static_cast<std::size_t>(8 * n * f_cols) +
-                                 static_cast<std::size_t>(32 * n * f_cols) +
-                                 static_cast<std::size_t>(8 * link * nn) +
-                                 static_cast<std::size_t>(8 * link) + 4096;
-    if (!arena.reserve(elements)) {
+    const std::size_t sizes[] = {
+        8 * static_cast<std::size_t>(nn),                         /* a2 */
+        8 * static_cast<std::size_t>(nn),                         /* c2 */
+        8 * static_cast<std::size_t>(nn),                         /* c2p */
+        16 * static_cast<std::size_t>(nn),                        /* fp */
+        16 * static_cast<std::size_t>(nn),                        /* m4t */
+        8 * static_cast<std::size_t>(nn),                         /* t1 */
+        8 * static_cast<std::size_t>(nn),                         /* t2 */
+        static_cast<std::size_t>(nnn),                            /* svvv */
+        static_cast<std::size_t>(mid_cols * nn),                  /* t3 */
+        static_cast<std::size_t>(n * nn * mm),                    /* out4 */
+        static_cast<std::size_t>(nn * f_cols),                    /* out4t */
+        static_cast<std::size_t>(n * f_cols),                     /* out2 */
+        static_cast<std::size_t>(kProj * kDirac * n * f_cols),    /* tjoin */
+        static_cast<std::size_t>(kProj * kDirac * n * f_cols * kDirac), /* y1 */
+        8 * static_cast<std::size_t>(link * nn),                  /* w */
+        8 * static_cast<std::size_t>(link)                        /* z2 */
+    };
+    if (!arena.reserve(sizes, static_cast<int>(sizeof(sizes) / sizeof(sizes[0])))) {
         return false;
     }
     P2Buffers buf;
-    buf.a2 = arena.take(8 * nn);
-    buf.c2 = arena.take(8 * nn);
-    buf.c2p = arena.take(8 * nn);
-    buf.fp = arena.take(16 * nn);
-    buf.m4t = arena.take(16 * nn);
-    buf.t1 = arena.take(8 * nn);
-    buf.t2 = arena.take(8 * nn);
-    buf.svvv = arena.take(nnn);
-    buf.t3 = arena.take(mid_cols * nn);
-    buf.out4 = arena.take(n * nn * mm);
-    buf.out4t = arena.take(nn * f_cols);
-    buf.out2 = arena.take(n * f_cols);
-    buf.tjoin = arena.take(kProj * kDirac * n * f_cols);
-    buf.y1 = arena.take(kProj * kDirac * n * f_cols * kDirac);
-    buf.w = arena.take(8 * link * nn);
-    buf.z2 = arena.take(8 * link);
+    buf.a2 = arena.take(sizes[0]);
+    buf.c2 = arena.take(sizes[1]);
+    buf.c2p = arena.take(sizes[2]);
+    buf.fp = arena.take(sizes[3]);
+    buf.m4t = arena.take(sizes[4]);
+    buf.t1 = arena.take(sizes[5]);
+    buf.t2 = arena.take(sizes[6]);
+    buf.svvv = arena.take(sizes[7]);
+    buf.t3 = arena.take(sizes[8]);
+    buf.out4 = arena.take(sizes[9]);
+    buf.out4t = arena.take(sizes[10]);
+    buf.out2 = arena.take(sizes[11]);
+    buf.tjoin = arena.take(sizes[12]);
+    buf.y1 = arena.take(sizes[13]);
+    buf.w = arena.take(sizes[14]);
+    buf.z2 = arena.take(sizes[15]);
     if (!arena.fits()) {
         return false;
     }

@@ -1368,37 +1368,6 @@ bool step_timing_enabled() {
     return enabled;
 }
 
-// A pack whose destination strides already equal the source strides copies each
-// element onto itself; the GEMM can consume the operand in place.
-// ``PYQCD_EINSUM_CUDA_PACK_ELISION=0`` restores the unconditional pack.
-bool pack_elision_enabled() {
-    static const bool enabled = [] {
-        const char* value = std::getenv("PYQCD_EINSUM_CUDA_PACK_ELISION");
-        if (value == nullptr || *value == '\0') {
-            return true;
-        }
-        return std::atoi(value) != 0;
-    }();
-    return enabled;
-}
-
-bool copy_spec_is_identity(const qcd_cuda_copy_spec& spec) {
-    if (spec.elements <= 0 || spec.rank < 0) {
-        return false;
-    }
-    int64_t expected = 1;
-    for (int32_t axis = spec.rank - 1; axis >= 0; --axis) {
-        if (spec.shape[axis] <= 1) {
-            continue;
-        }
-        if (spec.src_stride[axis] != expected) {
-            return false;
-        }
-        expected *= spec.shape[axis];
-    }
-    return true;
-}
-
 const char* operation_kind_name(OperationKind kind) {
     switch (kind) {
         case OperationKind::kCopy:
@@ -1437,7 +1406,7 @@ int execute_prepared(
     const std::size_t timing_count = step_timing ? prepared.size() : 0;
     std::vector<cudaEvent_t> timing_start(timing_count, nullptr);
     std::vector<cudaEvent_t> timing_stop(timing_count, nullptr);
-    std::vector<int> timing_skipped(timing_count, 0);
+    std::vector<int> timing_skipped(timing_count, 0);  // reserved: pack elision off
     if (step_timing) {
         for (std::size_t index = 0; index < timing_count; ++index) {
             if (cudaEventCreate(&timing_start[index]) != cudaSuccess ||
@@ -1514,38 +1483,19 @@ int execute_prepared(
                 }
                 void* left_pack = workspace->left_pack();
                 void* right_pack = workspace->right_pack();
-                const bool elide = pack_elision_enabled();
-                const bool left_in_place =
-                    elide && copy_spec_is_identity(step.left_pack);
-                const bool right_in_place =
-                    elide && copy_spec_is_identity(step.right_pack);
-                if (left_in_place) {
-                    left_pack = nodes[static_cast<std::size_t>(step.left)];
-                    if (step_timing) {
-                        ++timing_skipped[step_index];
-                    }
-                } else {
-                    status = qcd_cuda_permute(
-                        dtype_id, nodes[static_cast<std::size_t>(step.left)], left_pack,
-                        step.left_pack, nullptr);
-                    if (status != QCD_STATUS_OK) {
-                        destroy_timing();
-                        return status;
-                    }
+                status = qcd_cuda_permute(
+                    dtype_id, nodes[static_cast<std::size_t>(step.left)], left_pack,
+                    step.left_pack, nullptr);
+                if (status != QCD_STATUS_OK) {
+                    destroy_timing();
+                    return status;
                 }
-                if (right_in_place) {
-                    right_pack = nodes[static_cast<std::size_t>(step.right)];
-                    if (step_timing) {
-                        ++timing_skipped[step_index];
-                    }
-                } else {
-                    status = qcd_cuda_permute(
-                        dtype_id, nodes[static_cast<std::size_t>(step.right)], right_pack,
-                        step.right_pack, nullptr);
-                    if (status != QCD_STATUS_OK) {
-                        destroy_timing();
-                        return status;
-                    }
+                status = qcd_cuda_permute(
+                    dtype_id, nodes[static_cast<std::size_t>(step.right)], right_pack,
+                    step.right_pack, nullptr);
+                if (status != QCD_STATUS_OK) {
+                    destroy_timing();
+                    return status;
                 }
                 void* gemm_output = step.permute_output ? workspace->gemm_output() : step_output;
                 const bool split_batch = step.batch > 1;

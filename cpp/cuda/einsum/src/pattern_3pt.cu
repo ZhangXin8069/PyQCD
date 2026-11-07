@@ -5,37 +5,40 @@
  *   variant 1 (P2)  agbh,eqfr,ospt,ckdl,imjn,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy
  *                   -> MNGLxy
  *
- * The generic path spends its time in the 14 pairwise steps of the dp plan: it
- * transposes (packs) both operands of every step and then calls a batched GEMM
- * whose shapes are tiny on the spin side (4x4 gamma contractions become K=4
- * GEMMs).  This file instead executes a *fixed* fusion plan for the pattern.
+ * Why this file exists
+ * --------------------
+ * The generic path executes the 14 pairwise steps of the dp plan: every step
+ * packs (transposes) both operands and then calls a batched GEMM, so the 4x4
+ * gamma contractions become K=4 GEMMs and the floating point work is dominated
+ * by packing traffic and launch latency rather than by arithmetic.
  *
- * Fusion plan
- * -----------
- * Everything is expressed in the eigenvector ("nev") indices, the spin indices
- * are folded into the perambulators once up front, and the four propagator
- * vertices (sink_VVV, VdV_link, source_VdV, source_VVV) are absorbed into a
- * single running "carrier" tensor in the cost-optimal order.  For P1 that order
- * is the open Dirac chain  x-A-g5-E-g7kq-(T,B,V)-g7ce-D-W-C-y ; for P2 the
- * closed g7/g7 loop (B,D) has to be closed first, so the same carrier walk runs
- * from the D end:
+ * This file executes one fixed fusion plan per variant instead:
  *
- *   P1: fold A/B/C/D -> S -> E -> g7kq -> T -> B -> V -> D -> W -> C
- *   P2: fold A/B/C/D -> T -> B -> V -> A -> S -> E -> W -> C
+ *   1. the projectors and the gamma matrices are folded into the five
+ *      perambulator slices once (six tiny kernels),
+ *   2. the four propagator vertices (sink_VVV, VdV_link, source_VdV,
+ *      source_VVV) are absorbed into a single running "carrier" tensor in the
+ *      cost-optimal order,
+ *   3. the last stage (only spin*proj^2*mom^2*link outputs) is a block-wide
+ *      reduction because the nev^2 reduction is far longer than the output.
  *
- * Both walks touch the same 15 operands; the only difference is which Dirac leg
- * of the 4th/5th perambulator carries which gamma.  Every walk step is a tensor
- * contraction with an arbitrary strided layout, so one primitive
- * (``gc_kernel``) implements all of them; the final step, whose output has only
- * spin*proj*proj*mom*mom*link elements, is a dedicated reduction kernel that
- * splits the nev^2 reduction across the block.
+ * The walk order is the dp order of the same equation, so the plan does not add
+ * arithmetic - it removes packing, K=4 GEMMs and intermediate round trips:
  *
- * Cost of the chosen order (complex MACs, nev=N, mom=1, link=2, spins=4):
- *   P1: 8N^4 (T) + 32N^4 (B) + 8N^4 (V) + O(N^3)   = 3.1e8 at N=50
- *   P2: 16N^4 (T) + 16N^4 (B) + N^4 (V) + O(N^3)   = 2.2e8 at N=50
- * which is exactly the dp plan cost of the same equation, i.e. the fusion does
- * not add arithmetic - it removes the packing, the 4x4 GEMMs and the
- * intermediate round trips.
+ *   P1 (open Dirac chain x-A-g5-E-g7kq-...-D-W-C-y):
+ *     folds -> S -> E -> g7kq -> T -> B -> V -> D -> W -> C(final)
+ *       cost  8N^3 + 32N^3 + 8N^3 + 8N^4 + 32N^4 + 8N^4 + 32N^3 + 16N^3
+ *   P2 (the g7/g7 loop B-D has to be closed first, so the walk starts at D):
+ *     folds -> T -> B -> V -> A -> S -> E -> W -> C(final)
+ *       cost 16N^4 + 16N^4 + N^4 + 8N^3 + 8N^3 + 32N^3 + 16N^3
+ *
+ * at N=nev=50, mom=1, link=2 that is 3.1e8 (P1) / 2.2e8 (P2) complex MACs,
+ * identical to the dp plan cost of the same 15-operand equation.
+ *
+ * Every walk step is "out[batch,j] = sum_k left[batch,k] * right[batch,k,j]"
+ * with arbitrary per-axis strides, which is implemented once (gc_kernel) and
+ * reused by all 15/14 stages.  Layouts are declared next to each stage in
+ * [slowest]..[fastest] order.
  */
 
 #include "pattern_3pt.h"
@@ -57,10 +60,6 @@ constexpr int kMaxJ = 3;
 
 using cplx = double2;
 
-__device__ __forceinline__ cplx cmul(cplx a, cplx b) {
-    return make_double2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
-}
-
 __device__ __forceinline__ void cmac(cplx& acc, cplx a, cplx b) {
     acc.x = fma(a.x, b.x, fma(-a.y, b.y, acc.x));
     acc.y = fma(a.x, b.y, fma(a.y, b.x, acc.y));
@@ -70,8 +69,8 @@ __device__ __forceinline__ void cmac(cplx& acc, cplx a, cplx b) {
  * One axis of a contraction stage.
  *
  *   batch axes live in both operands (a stride of 0 means "absent") and in the
- *   output; ``k`` axes are summed and appear in neither output nor as batch;
- *   ``j`` axes are free and come from the right operand only.
+ *   output, ``k`` axes are summed, ``j`` axes are free and come from the right
+ *   operand only.
  */
 struct gc_axis {
     long long extent;
@@ -104,8 +103,7 @@ struct gc_builder {
         spec.k[spec.nk++] = gc_axis{extent, sa, sb, 0};
     }
     void j(long long extent, long long sb, long long so) {
-        spec.j[spec.nj++] = gc_axis{0, sb, so};
-        spec.j[spec.nj - 1].extent = extent;
+        spec.j[spec.nj++] = gc_axis{extent, 0, sb, so};
     }
 };
 
@@ -129,8 +127,10 @@ long long product_of_j(const gc_spec& spec) {
  * out[batch, j] = sum_k left[batch, k] * right[batch, k, j]
  *
  * One thread per output element; the k loop is a compile-time sized nest so the
- * inner loop is a plain pointer walk.  Nested axes are declared slowest first,
- * which also fixes the linearisation used for the thread mapping.
+ * inner loop is a plain pointer walk.  Axes are declared slowest first, which
+ * also fixes the linearisation used for the thread mapping.  Because complex128
+ * runs at 1/64 of the fp64 rate on this class of GPU the loop is arithmetically
+ * bound even with two loads per MAC, so no shared-memory tiling is needed.
  */
 template <int NK>
 __global__ __launch_bounds__(kThreads) void gc_kernel(
@@ -227,11 +227,9 @@ __global__ __launch_bounds__(kThreads) void gc_kernel(
 }
 
 /*
- * Final stage: out[batch, j] = sum_k left[batch, k] * right[batch, k, j].
- *
- * The output is tiny (mom^2 * spin * link * proj^2 elements, 32 in production)
- * while the reduction is nev^2 * spin long, so one block owns one output
- * element and splits the reduction across the block.
+ * Final stage: same contraction, but the output is tiny (mom^2 * spin * link *
+ * proj^2 = 32 elements in production) while the reduction is nev^2 * spin, so
+ * one block owns one output element and splits the reduction across the block.
  */
 __global__ __launch_bounds__(kThreads) void final_kernel(
     const cplx* __restrict__ left,
@@ -317,22 +315,23 @@ int launch_gc(const gc_spec& spec, const void* left, const void* right,
         return QCD_STATUS_OK;
     }
     const long long blocks = (total + kThreads - 1) / kThreads;
-    const unsigned grid = (unsigned)(blocks > 2147483647LL ? 2147483647LL : blocks);
+    const unsigned grid =
+        (unsigned)(blocks > 2147483647LL ? 2147483647LL : blocks);
     const cplx* l = static_cast<const cplx*>(left);
     const cplx* r = static_cast<const cplx*>(right);
     cplx* o = static_cast<cplx*>(out);
     switch (spec.nk) {
         case 1:
-            gc_kernel<1><<<grid, kThreads, 0, stream>>>(l, r, o, spec,
-                                                        total_left, total_right);
+            gc_kernel<1><<<grid, kThreads, 0, stream>>>(
+                l, r, o, spec, total_left, total_right);
             break;
         case 2:
-            gc_kernel<2><<<grid, kThreads, 0, stream>>>(l, r, o, spec,
-                                                        total_left, total_right);
+            gc_kernel<2><<<grid, kThreads, 0, stream>>>(
+                l, r, o, spec, total_left, total_right);
             break;
         case 3:
-            gc_kernel<3><<<grid, kThreads, 0, stream>>>(l, r, o, spec,
-                                                        total_left, total_right);
+            gc_kernel<3><<<grid, kThreads, 0, stream>>>(
+                l, r, o, spec, total_left, total_right);
             break;
         default:
             return QCD_STATUS_INVALID;
@@ -369,6 +368,7 @@ std::mutex g_arena_mutex;
 
 void* arena_reserve(std::size_t bytes, int* status) {
     if (bytes == 0) {
+        *status = QCD_STATUS_INVALID;
         return nullptr;
     }
     int device = 0;
@@ -398,13 +398,6 @@ void* arena_reserve(std::size_t bytes, int* status) {
     }
     *status = QCD_STATUS_OK;
     return g_arena.pointer;
-}
-
-std::size_t verify_integer(long long value, long long limit) {
-    if (value <= 0 || value > limit) {
-        return 0;
-    }
-    return 1;
 }
 
 #ifdef QCD_PATTERN_3PT_DEBUG_DUMP
@@ -441,408 +434,406 @@ void debug_dump(const char* name, const void* device_pointer,
 #define QCD_DUMP(name, pointer, elements, stream) ((void)0)
 #endif
 
+#ifdef QCD_PATTERN_3PT_STAGE_TIMING
+/* Development-only per-stage profile: one CUDA event pair per stage. */
+struct stage_timer {
+    const char* name;
+    cudaStream_t stream;
+    cudaEvent_t start;
+    cudaEvent_t stop;
+
+    stage_timer(const char* stage_name, cudaStream_t s)
+        : name(stage_name), stream(s), start(nullptr), stop(nullptr) {
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        cudaEventRecord(start, stream);
+    }
+    ~stage_timer() {
+        cudaEventRecord(stop, stream);
+        cudaEventSynchronize(stop);
+        float milliseconds = 0.0f;
+        cudaEventElapsedTime(&milliseconds, start, stop);
+        std::printf("[stage] %-8s %9.3f ms\n", name, milliseconds);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+    }
+};
+/* Each stage lives in its own block scope, so a fixed local name is safe. */
+#define QCD_STAGE_TIMER_1(name, stream) stage_timer qcd_stage_timer(name, stream)
+#else
+#define QCD_STAGE_TIMER_1(name, stream) ((void)0)
+#endif
+
 /* ------------------------------------------------------------------ */
-/* the two fusion plans                                                */
+/* fusion plans                                                        */
 /* ------------------------------------------------------------------ */
 
-/*
- * Layouts are written as [axis][axis]...[axis] with the last one contiguous.
- * ``sp`` = Dirac extent 4, ``pj`` = projector extent 2, ``N`` = nev,
- * ``mo`` = mom, ``lk`` = link.
- */
 struct dims_t {
-    long long sp;
-    long long pj;
-    long long n;
-    long long mo;
-    long long lk;
+    long long sp;   /* 4 */
+    long long pj;   /* 2 */
+    long long n;    /* nev */
+    long long mo;   /* mom */
+    long long lk;   /* link */
 };
 
-long long elem(long long a) { return a; }
-long long elem(long long a, long long b) { return a * b; }
-long long elem(long long a, long long b, long long c) { return a * b * c; }
-long long elem(long long a, long long b, long long c, long long d) {
-    return a * b * c * d;
-}
-long long elem(long long a, long long b, long long c, long long d, long long e) {
-    return a * b * c * d * e;
-}
-long long elem(long long a, long long b, long long c, long long d, long long e,
-               long long f) {
-    return a * b * c * d * e * f;
-}
-
-/*
- * Folds shared by both variants:
- *   ta[a][i][b][h] = sum_g A[a][g][b][h] gamma5[g][i]
- *   a1[x][i][b][h] = sum_a ta[a][i][b][h] P[a][x]
- *   tc[o][y][p][t] = sum_s C[o][s][p][t] P[s][y]
- *   c1[G][m][y][p][t] = sum_o gamma_curr[G][m][o] tc[o][y][p][t]
- *   b1[e][k][f][r] = sum_q B[e][q][f][r] gamma7_kq[k][q]
- *   d1[e][s][d][n] = sum_c gamma7_ce[c][e] D[c][s][d][n]
- */
-struct scratch {
+struct buffers {
     cplx* ta;
     cplx* a1;
     cplx* tc;
     cplx* c1;
     cplx* b1;
     cplx* d1;
-    cplx* big_a;   /* P1: a5 */ cplx* big_b; /* P1: a6 */
-    cplx* car0;    /* P1: a2/a3/a4 ; P2: u2/u3 */
-    cplx* car1;    /* P1: a7/a8    ; P2: u4/u5 */
-    cplx* car2;    /* P1: a9       ; P2: u6 */
+    cplx* s0;
+    cplx* s1;
+    cplx* s2;
+    cplx* s3;
+    cplx* big0;
+    cplx* big1;
+    cplx* tail;
     cplx* out;
 };
 
-int run_shared_folds(const dims_t& d, const void* const* in, scratch& s,
-                     cudaStream_t stream) {
+/*
+ * Folds shared by both variants (everything that only involves one Dirac pair):
+ *   ta[a][i][b][h]    = sum_g A[a][g][b][h] gamma5[g][i]
+ *   a1[x][i][b][h]    = sum_a ta[a][i][b][h] proj_ax[a][x]
+ *   tc[o][y][p][t]    = sum_s C[o][s][p][t] proj_sy[s][y]
+ *   c1[G][m][y][p][t] = sum_o gamma_curr[G][m][o] tc[o][y][p][t]
+ *   b1[e][k][f][r]    = sum_q B[e][q][f][r] gamma7_kq[k][q]
+ *   d1[e][s][d][n]    = sum_c gamma7_ce[c][e] D[c][s][d][n]
+ */
+int run_folds(const dims_t& d, const void* const* in, buffers& b,
+              cudaStream_t stream) {
     const long long N = d.n, SP = d.sp, PJ = d.pj;
     int status = QCD_STATUS_OK;
 
-    /* ta[a][i][b][h] */
     {
-        gc_builder b;
-        b.batch(SP, SP * N * N, 0, SP * N * N);           /* a */
-        b.batch(N, N, 0, N);                              /* b */
-        b.batch(N, 1, 0, 1);                              /* h */
-        b.k(SP, N * N, SP);                               /* g */
-        b.j(SP, 1, N * N);                                /* i */
-        status = launch_gc(b.spec, in[0], in[7], s.ta, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("ta", stream);
+        g.batch(SP, SP * N * N, 0, SP * N * N);   /* a */
+        g.batch(N, N, 0, N);                      /* b */
+        g.batch(N, 1, 0, 1);                      /* h */
+        g.k(SP, N * N, SP);                       /* g */
+        g.j(SP, 1, N * N);                        /* i */
+        status = launch_gc(g.spec, in[0], in[7], b.ta, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("ta", s.ta, elem(SP, SP, N, N), stream);
+        QCD_DUMP("ta", b.ta, SP * SP * N * N, stream);
     }
-    /* a1[x][i][b][h] */
     {
-        gc_builder b;
-        b.batch(SP, N * N, 0, N * N);                     /* i */
-        b.batch(N, N, 0, N);                              /* b */
-        b.batch(N, 1, 0, 1);                              /* h */
-        b.k(SP, SP * N * N, PJ);                          /* a */
-        b.j(PJ, 1, SP * N * N);                           /* x */
-        status = launch_gc(b.spec, s.ta, in[13], s.a1, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("a1", stream);
+        g.batch(SP, N * N, 0, N * N);             /* i */
+        g.batch(N, N, 0, N);                      /* b */
+        g.batch(N, 1, 0, 1);                      /* h */
+        g.k(SP, SP * N * N, PJ);                  /* a */
+        g.j(PJ, 1, SP * N * N);                   /* x */
+        status = launch_gc(g.spec, b.ta, in[13], b.a1, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("a1", s.a1, elem(PJ, SP, N, N), stream);
+        QCD_DUMP("a1", b.a1, PJ * SP * N * N, stream);
     }
-    /* tc[o][y][p][t] */
     {
-        gc_builder b;
-        b.batch(SP, SP * N * N, 0, PJ * N * N);           /* o */
-        b.batch(N, N, 0, N);                              /* p */
-        b.batch(N, 1, 0, 1);                              /* t */
-        b.k(SP, N * N, PJ);                               /* s */
-        b.j(PJ, 1, N * N);                                /* y */
-        status = launch_gc(b.spec, in[2], in[14], s.tc, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("tc", stream);
+        g.batch(SP, SP * N * N, 0, PJ * N * N);   /* o */
+        g.batch(N, N, 0, N);                      /* p */
+        g.batch(N, 1, 0, 1);                      /* t */
+        g.k(SP, N * N, PJ);                       /* s */
+        g.j(PJ, 1, N * N);                        /* y */
+        status = launch_gc(g.spec, in[2], in[14], b.tc, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("tc", s.tc, elem(SP, PJ, N, N), stream);
+        QCD_DUMP("tc", b.tc, SP * PJ * N * N, stream);
     }
-    /* c1[G][m][y][p][t] */
     {
-        gc_builder b;
-        b.batch(N, N * N, 0, N * N);                      /* y */
-        b.batch(N, N, 0, N);                              /* p */
-        b.batch(N, 1, 0, 1);                              /* t */
-        b.k(SP, PJ * N * N, 1);                           /* o */
-        b.j(SP, SP * SP, SP * PJ * N * N);                /* G */
-        b.j(SP, SP, PJ * N * N);                          /* m */
-        status = launch_gc(b.spec, s.tc, in[6], s.c1, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("c1", stream);
+        g.batch(PJ, N * N, 0, N * N);             /* y */
+        g.batch(N, N, 0, N);                      /* p */
+        g.batch(N, 1, 0, 1);                      /* t */
+        g.k(SP, PJ * N * N, 1);                   /* o */
+        g.j(SP, SP * SP, SP * PJ * N * N);        /* G */
+        g.j(SP, SP, PJ * N * N);                  /* m */
+        status = launch_gc(g.spec, b.tc, in[6], b.c1, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("c1", s.c1, elem(SP, SP, PJ, N, N), stream);
+        QCD_DUMP("c1", b.c1, SP * SP * PJ * N * N, stream);
     }
-    /* b1[e][k][f][r] */
     {
-        gc_builder b;
-        b.batch(SP, SP * N * N, 0, SP * N * N);           /* e */
-        b.batch(N, N, 0, N);                              /* f */
-        b.batch(N, 1, 0, 1);                              /* r */
-        b.k(SP, N * N, 1);                                /* q */
-        b.j(SP, SP, N * N);                               /* k */
-        status = launch_gc(b.spec, in[1], in[8], s.b1, stream);
+        /* b1[e][k][r][f]: r/f swapped so that f - the axis the B absorb walks
+         * with consecutive threads - is contiguous. */
+        gc_builder g;
+        QCD_STAGE_TIMER_1("b1", stream);
+        g.batch(SP, SP * N * N, 0, SP * N * N);   /* e */
+        g.batch(N, N, 0, 1);                      /* f  -> out stride 1 */
+        g.batch(N, 1, 0, N);                      /* r  -> out stride N */
+        g.k(SP, N * N, 1);                        /* q */
+        g.j(SP, SP, N * N);                       /* k */
+        status = launch_gc(g.spec, in[1], in[8], b.b1, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("b1", s.b1, elem(SP, SP, N, N), stream);
+        QCD_DUMP("b1", b.b1, SP * SP * N * N, stream);
     }
-    /* d1[e][s][d][n] */
     {
-        gc_builder b;
-        b.batch(SP, N * N, 0, N * N);                     /* s (= cmdn's m / ckdl's k) */
-        b.batch(N, N, 0, N);                              /* d */
-        b.batch(N, 1, 0, 1);                              /* n (= n / l) */
-        b.k(SP, SP * N * N, SP);                          /* c */
-        b.j(SP, 1, SP * N * N);                           /* e */
-        status = launch_gc(b.spec, in[3], in[5], s.d1, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("d1", stream);
+        g.batch(SP, N * N, 0, N * N);             /* s (cmdn m / ckdl k) */
+        g.batch(N, N, 0, N);                      /* d */
+        g.batch(N, 1, 0, 1);                      /* n (n / l) */
+        g.k(SP, SP * N * N, SP);                  /* c */
+        g.j(SP, 1, SP * N * N);                   /* e */
+        status = launch_gc(g.spec, in[3], in[5], b.d1, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("d1", s.d1, elem(SP, SP, N, N), stream);
+        QCD_DUMP("d1", b.d1, SP * SP * N * N, stream);
     }
     return status;
 }
 
-/* shared tail: W absorb + final projection (identical for both variants) */
-int run_shared_tail(const dims_t& d, const void* const* in, scratch& s,
-                    cudaStream_t stream) {
+/* shared tail: W absorb + final projection; identical for both variants */
+int run_tail(const dims_t& d, const void* const* in, const cplx* carrier,
+             buffers& b, cudaStream_t stream) {
     const long long N = d.n, SP = d.sp, PJ = d.pj, MO = d.mo, LK = d.lk;
     int status = QCD_STATUS_OK;
 
-    /* car2[M][x][t][N][m][L][p] = sum_n car1[M][x][t][N][m][n] W[N][L][n][p] */
+    /* car[M][x][t][N][m][L][p] = sum_n carrier[M][x][t][N][m][n] W[N][L][n][p] */
     {
-        gc_builder b;
-        b.batch(MO, PJ * N * MO * SP * N, 0, PJ * N * MO * SP * LK * N); /* M */
-        b.batch(PJ, N * MO * SP * N, 0, N * MO * SP * LK * N);           /* x */
-        b.batch(N, MO * SP * N, 0, MO * SP * LK * N);                    /* t */
-        b.batch(MO, SP * N, LK * N * N, SP * LK * N);                    /* N */
-        b.batch(SP, N, 0, LK * N);                                       /* m */
-        b.k(N, 1, N);                                                    /* n */
-        b.j(LK, N * N, N);                                               /* L */
-        b.j(N, 1, 1);                                                    /* p */
-        status = launch_gc(b.spec, s.car1, in[10], s.car2, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("car", stream);
+        g.batch(MO, PJ * N * MO * SP * N, 0, PJ * N * MO * SP * LK * N); /* M */
+        g.batch(PJ, N * MO * SP * N, 0, N * MO * SP * LK * N);           /* x */
+        g.batch(N, MO * SP * N, 0, MO * SP * LK * N);                    /* t */
+        g.batch(MO, SP * N, LK * N * N, SP * LK * N);                    /* N */
+        g.batch(SP, N, 0, LK * N);                                       /* m */
+        g.k(N, 1, N);                                                    /* n */
+        g.j(LK, N * N, N);                                               /* L */
+        g.j(N, 1, 1);                                                    /* p */
+        status = launch_gc(g.spec, carrier, in[10], b.tail, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("car2", s.car2, elem(MO, PJ, N, MO, SP, LK, N), stream);
+        QCD_DUMP("car", b.tail, MO * PJ * N * MO * SP * LK * N, stream);
     }
-    /* out[M][N][G][L][x][y] = sum_{m,p,t} car2[M][x][t][N][m][L][p] c1[G][m][y][p][t] */
+    /* out[M][N][G][L][x][y] = sum_{m,p,t} car[..] c1[G][m][y][p][t] */
     {
-        gc_builder b;
-        b.batch(MO, PJ * N * MO * SP * LK * N, 0, MO * SP * LK * PJ * PJ); /* M */
-        b.batch(MO, SP * LK * N, 0, SP * LK * PJ * PJ);                    /* N */
-        b.batch(SP, 0, SP * PJ * N * N, LK * PJ * PJ);                     /* G */
-        b.batch(PJ, N * MO * SP * LK * N, 0, PJ);                          /* x */
-        b.batch(LK, N, 0, PJ * PJ);                                        /* L */
-        b.k(SP, LK * N, PJ * N * N);                                       /* m */
-        b.k(N, 1, N);                                                      /* p */
-        b.k(N, MO * SP * LK * N, 1);                                       /* t */
-        b.j(PJ, N * N, 1);                                                 /* y */
-        status = launch_final(b.spec, s.car2, s.c1, s.out, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("out", stream);
+        g.batch(MO, PJ * N * MO * SP * LK * N, 0, MO * SP * LK * PJ * PJ); /* M */
+        g.batch(MO, SP * LK * N, 0, SP * LK * PJ * PJ);                    /* N */
+        g.batch(SP, 0, SP * PJ * N * N, LK * PJ * PJ);                     /* G */
+        g.batch(PJ, N * MO * SP * LK * N, 0, PJ);                          /* x */
+        g.batch(LK, N, 0, PJ * PJ);                                        /* L */
+        g.k(SP, LK * N, PJ * N * N);                                       /* m */
+        g.k(N, 1, N);                                                      /* p */
+        g.k(N, MO * SP * LK * N, 1);                                       /* t */
+        g.j(PJ, N * N, 1);                                                 /* y */
+        status = launch_final(g.spec, b.tail, b.c1, b.out, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("out", s.out, elem(MO, MO, SP, LK, PJ, PJ), stream);
+        QCD_DUMP("out", b.out, MO * MO * SP * LK * PJ * PJ, stream);
     }
     return status;
 }
 
 /* variant 0: agbh,eqfr,ospt,cmdn,ikjl,... */
-int run_p1(const dims_t& d, const void* const* in, scratch& s,
+int run_p1(const dims_t& d, const void* const* in, buffers& b,
            cudaStream_t stream) {
     const long long N = d.n, SP = d.sp, PJ = d.pj, MO = d.mo;
     int status = QCD_STATUS_OK;
 
     /* a2[M][x][i][b][j] = sum_h a1[x][i][b][h] S[M][h][j] */
     {
-        gc_builder b;
-        b.batch(MO, 0, N * N, PJ * SP * N * N);           /* M */
-        b.batch(PJ, SP * N * N, 0, SP * N * N);           /* x */
-        b.batch(SP, N * N, 0, N * N);                     /* i */
-        b.batch(N, N, 0, N);                              /* b */
-        b.k(N, 1, N);                                     /* h */
-        b.j(N, 1, 1);                                     /* j */
-        status = launch_gc(b.spec, s.a1, in[11], s.car0, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p1_a2", stream);
+        g.batch(MO, 0, N * N, PJ * SP * N * N);   /* M */
+        g.batch(PJ, SP * N * N, 0, SP * N * N);   /* x */
+        g.batch(SP, N * N, 0, N * N);             /* i */
+        g.batch(N, N, 0, N);                      /* b */
+        g.k(N, 1, N);                             /* h */
+        g.j(N, 1, 1);                             /* j */
+        status = launch_gc(g.spec, b.a1, in[11], b.s0, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p1_a2", s.car0, elem(MO, PJ, SP, N, N), stream);
+        QCD_DUMP("p1_a2", b.s0, MO * PJ * SP * N * N, stream);
     }
     /* a3[M][x][b][s2][l] = sum_{i,j} a2[M][x][i][b][j] E[i][s2][j][l] */
     {
-        gc_builder b;
-        b.batch(MO, PJ * SP * N * N, 0, PJ * N * SP * N); /* M */
-        b.batch(PJ, SP * N * N, 0, N * SP * N);           /* x */
-        b.batch(N, N, 0, SP * N);                         /* b */
-        b.k(SP, N * N, SP * N * N);                       /* i */
-        b.k(N, 1, N);                                     /* j */
-        b.j(SP, N * N, N);                                /* s2 */
-        b.j(N, 1, 1);                                     /* l */
-        status = launch_gc(b.spec, s.car0, in[4], s.big_b, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p1_a3", stream);
+        g.batch(MO, PJ * SP * N * N, 0, PJ * N * SP * N); /* M */
+        g.batch(PJ, SP * N * N, 0, N * SP * N);           /* x */
+        g.batch(N, N, 0, SP * N);                         /* b */
+        g.k(SP, N * N, SP * N * N);                       /* i */
+        g.k(N, 1, N);                                     /* j */
+        g.j(SP, N * N, N);                                /* s2 */
+        g.j(N, 1, 1);                                     /* l */
+        status = launch_gc(g.spec, b.s0, in[4], b.s1, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p1_a3", s.big_b, elem(MO, PJ, N, SP, N), stream);
+        QCD_DUMP("p1_a3", b.s1, MO * PJ * N * SP * N, stream);
     }
-    /* a4[M][x][b][q][l] = sum_{s2} a3[M][x][b][s2][l] gamma7_kq[s2][q] */
+    /* a5[M][x][b][k][r][t] = sum_l a3[M][x][b][k][l] T[M][l][r][t]
+     *
+     * note: gamma7_kq is folded into b1 (b1[e][k][f][r] = sum_q B[e][q][f][r]
+     * gamma7[k][q]), so the carrier keeps E's raw k here and the B absorb below
+     * contracts (k, r) - applying the gamma on both sides would square it. */
     {
-        gc_builder b;
-        b.batch(MO, PJ * N * SP * N, 0, PJ * N * SP * N); /* M */
-        b.batch(PJ, N * SP * N, 0, N * SP * N);           /* x */
-        b.batch(N, SP * N, 0, SP * N);                    /* b */
-        b.batch(N, 1, 0, 1);                              /* l */
-        b.k(SP, N, SP);                                   /* s2 */
-        b.j(SP, 1, N);                                    /* q */
-        status = launch_gc(b.spec, s.big_b, in[8], s.car0, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p1_a5", stream);
+        g.batch(MO, PJ * N * SP * N, N * N * N, PJ * N * SP * N * N); /* M */
+        g.batch(PJ, N * SP * N, 0, N * SP * N * N);                   /* x */
+        g.batch(N, SP * N, 0, SP * N * N);                            /* b */
+        g.batch(SP, N, 0, N * N);                                     /* k */
+        g.k(N, 1, N * N);                                             /* l */
+        g.j(N, N, N);                                                 /* r */
+        g.j(N, 1, 1);                                                 /* t */
+        status = launch_gc(g.spec, b.s1, in[12], b.big0, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p1_a4", s.car0, elem(MO, PJ, N, SP, N), stream);
+        QCD_DUMP("p1_a5", b.big0, MO * PJ * N * SP * N * N, stream);
     }
-    /* a5[M][x][b][q][r][t] = sum_l a4[M][x][b][q][l] T[M][l][r][t] */
+    /* a6[M][x][b][t][e][f] = sum_{k,r} a5[M][x][b][k][r][t] b1[e][k][f][r] */
     {
-        gc_builder b;
-        b.batch(MO, PJ * N * SP * N, N * N * N, PJ * N * SP * N * N); /* M */
-        b.batch(PJ, N * SP * N, 0, N * SP * N * N);                   /* x */
-        b.batch(N, SP * N, 0, SP * N * N);                            /* b */
-        b.batch(SP, N, 0, N * N);                                     /* q */
-        b.k(N, 1, N * N);                                             /* l */
-        b.j(N, N, N);                                                 /* r */
-        b.j(N, 1, 1);                                                 /* t */
-        status = launch_gc(b.spec, s.car0, in[12], s.big_a, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p1_a6", stream);
+        g.batch(MO, PJ * N * SP * N * N, 0, PJ * N * N * SP * N); /* M */
+        g.batch(PJ, N * SP * N * N, 0, N * N * SP * N);           /* x */
+        g.batch(N, SP * N * N, 0, N * SP * N);                    /* b */
+        g.batch(N, 1, 0, SP * N);                                 /* t */
+        g.k(SP, N * N, N * N);                                    /* k */
+        g.k(N, N, N);                                             /* r */
+        g.j(SP, SP * N * N, N);                                   /* e */
+        g.j(N, 1, 1);                                             /* f */
+        status = launch_gc(g.spec, b.big0, b.b1, b.big1, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p1_a5", s.big_a, elem(MO, PJ, N, SP, N, N), stream);
-    }
-    /* a6[M][x][b][t][e][f] = sum_{q,r} a5[M][x][b][q][r][t] b1[e][q][f][r] */
-    {
-        gc_builder b;
-        b.batch(MO, PJ * N * SP * N * N, 0, PJ * N * N * SP * N); /* M */
-        b.batch(PJ, N * SP * N * N, 0, N * N * SP * N);           /* x */
-        b.batch(N, SP * N * N, 0, N * SP * N);                    /* b */
-        b.batch(N, 1, 0, SP * N);                                 /* t */
-        b.k(SP, N * N, N * N);                                    /* q */
-        b.k(N, N, 1);                                             /* r */
-        b.j(SP, SP * N * N, N);                                   /* e */
-        b.j(N, N, 1);                                             /* f */
-        status = launch_gc(b.spec, s.big_a, s.b1, s.big_b, stream);
-        if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p1_a6", s.big_b, elem(MO, PJ, N, N, SP, N), stream);
+        QCD_DUMP("p1_a6", b.big1, MO * PJ * N * N * SP * N, stream);
     }
     /* a7[M][x][t][e][N][d] = sum_{b,f} a6[M][x][b][t][e][f] V[N][b][d][f] */
     {
-        gc_builder b;
-        b.batch(MO, PJ * N * N * SP * N, 0, PJ * N * SP * MO * N); /* M */
-        b.batch(PJ, N * N * SP * N, 0, N * SP * MO * N);           /* x */
-        b.batch(N, SP * N, 0, SP * MO * N);                        /* t */
-        b.batch(SP, N, 0, MO * N);                                 /* e */
-        b.batch(MO, 0, N * N * N, N);                              /* N */
-        b.k(N, N * SP * N, N * N);                                 /* b */
-        b.k(N, 1, 1);                                              /* f */
-        b.j(N, N, 1);                                              /* d */
-        status = launch_gc(b.spec, s.big_b, in[9], s.car1, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p1_a7", stream);
+        g.batch(MO, PJ * N * N * SP * N, 0, PJ * N * SP * MO * N); /* M */
+        g.batch(PJ, N * N * SP * N, 0, N * SP * MO * N);           /* x */
+        g.batch(N, SP * N, 0, SP * MO * N);                        /* t */
+        g.batch(SP, N, 0, MO * N);                                 /* e */
+        g.batch(MO, 0, N * N * N, N);                              /* N */
+        g.k(N, N * SP * N, N * N);                                 /* b */
+        g.k(N, 1, 1);                                              /* f */
+        g.j(N, N, 1);                                              /* d */
+        status = launch_gc(g.spec, b.big1, in[9], b.s3, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p1_a7", s.car1, elem(MO, PJ, N, SP, MO, N), stream);
+        QCD_DUMP("p1_a7", b.s3, MO * PJ * N * SP * MO * N, stream);
     }
     /* a8[M][x][t][N][m][n] = sum_{e,d} a7[M][x][t][e][N][d] d1[e][m][d][n] */
     {
-        gc_builder b;
-        b.batch(MO, PJ * N * SP * MO * N, 0, PJ * N * MO * SP * N); /* M */
-        b.batch(PJ, N * SP * MO * N, 0, N * MO * SP * N);           /* x */
-        b.batch(N, SP * MO * N, 0, MO * SP * N);                    /* t */
-        b.batch(MO, N, 0, SP * N);                                  /* N */
-        b.k(SP, MO * N, SP * N * N);                                /* e */
-        b.k(N, 1, N);                                               /* d */
-        b.j(SP, N * N, N);                                          /* m */
-        b.j(N, 1, 1);                                               /* n */
-        status = launch_gc(b.spec, s.car1, s.d1, s.car1, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p1_a8", stream);
+        g.batch(MO, PJ * N * SP * MO * N, 0, PJ * N * MO * SP * N); /* M */
+        g.batch(PJ, N * SP * MO * N, 0, N * MO * SP * N);           /* x */
+        g.batch(N, SP * MO * N, 0, MO * SP * N);                    /* t */
+        g.batch(MO, N, 0, SP * N);                                  /* N */
+        g.k(SP, MO * N, SP * N * N);                                /* e */
+        g.k(N, 1, N);                                               /* d */
+        g.j(SP, N * N, N);                                          /* m */
+        g.j(N, 1, 1);                                               /* n */
+        status = launch_gc(g.spec, b.s3, b.d1, b.s0, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p1_a8", s.car1, elem(MO, PJ, N, MO, SP, N), stream);
+        QCD_DUMP("p1_a8", b.s0, MO * PJ * N * MO * SP * N, stream);
     }
     return status;
 }
 
 /* variant 1: agbh,eqfr,ospt,ckdl,imjn,... */
-int run_p2(const dims_t& d, const void* const* in, scratch& s,
+int run_p2(const dims_t& d, const void* const* in, buffers& b,
            cudaStream_t stream) {
     const long long N = d.n, SP = d.sp, PJ = d.pj, MO = d.mo;
     int status = QCD_STATUS_OK;
 
     /* u1[M][e][k][d][r][t] = sum_l d1[e][k][d][l] T[M][l][r][t] */
     {
-        gc_builder b;
-        b.batch(MO, 0, N * N * N, SP * SP * N * N * N); /* M */
-        b.batch(SP, SP * N * N, 0, SP * N * N * N);     /* e */
-        b.batch(SP, N * N, 0, N * N * N);               /* k */
-        b.batch(N, N, 0, N * N);                        /* d */
-        b.k(N, 1, N * N);                               /* l */
-        b.j(N, N, N);                                   /* r */
-        b.j(N, 1, 1);                                   /* t */
-        status = launch_gc(b.spec, s.d1, in[12], s.big_a, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p2_u1", stream);
+        g.batch(MO, 0, N * N * N, SP * SP * N * N * N); /* M */
+        g.batch(SP, SP * N * N, 0, SP * N * N * N);     /* e */
+        g.batch(SP, N * N, 0, N * N * N);               /* k */
+        g.batch(N, N, 0, N * N);                        /* d */
+        g.k(N, 1, N * N);                               /* l */
+        g.j(N, N, N);                                   /* r */
+        g.j(N, 1, 1);                                   /* t */
+        status = launch_gc(g.spec, b.d1, in[12], b.big0, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p2_u1", s.big_a, elem(MO, SP, SP, N, N, N), stream);
+        QCD_DUMP("p2_u1", b.big0, MO * SP * SP * N * N * N, stream);
     }
     /* u2[M][d][t][f] = sum_{e,k,r} u1[M][e][k][d][r][t] b1[e][k][f][r] */
     {
-        gc_builder b;
-        b.batch(MO, SP * SP * N * N * N, 0, N * N * N); /* M */
-        b.batch(N, N * N, 0, N * N);                    /* d */
-        b.batch(N, 1, 0, N);                            /* t */
-        b.k(SP, SP * N * N * N, SP * N * N);            /* e */
-        b.k(SP, N * N * N, N * N);                      /* k */
-        b.k(N, N, 1);                                   /* r */
-        b.j(N, N, 1);                                   /* f */
-        status = launch_gc(b.spec, s.big_a, s.b1, s.car0, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p2_u2", stream);
+        g.batch(MO, SP * SP * N * N * N, 0, N * N * N); /* M */
+        g.batch(N, N * N, 0, N * N);                    /* d */
+        g.batch(N, 1, 0, N);                            /* t */
+        g.k(SP, SP * N * N * N, SP * N * N);            /* e */
+        g.k(SP, N * N * N, N * N);                      /* k */
+        g.k(N, N, N);                                   /* r */
+        g.j(N, 1, 1);                                   /* f */
+        status = launch_gc(g.spec, b.big0, b.b1, b.s0, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p2_u2", s.car0, elem(MO, N, N, N), stream);
+        QCD_DUMP("p2_u2", b.s0, MO * N * N * N, stream);
     }
     /* u3[M][t][N][b] = sum_{d,f} u2[M][d][t][f] V[N][b][d][f] */
     {
-        gc_builder b;
-        b.batch(MO, N * N * N, 0, N * MO * N);   /* M */
-        b.batch(N, N, 0, MO * N);                /* t */
-        b.batch(MO, 0, N * N * N, N);            /* N */
-        b.k(N, N * N, N);                        /* d */
-        b.k(N, 1, 1);                            /* f */
-        b.j(N, N * N, 1);                        /* b */
-        status = launch_gc(b.spec, s.car0, in[9], s.car0, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p2_u3", stream);
+        g.batch(MO, N * N * N, 0, N * MO * N);   /* M */
+        g.batch(N, N, 0, MO * N);                /* t */
+        g.batch(MO, 0, N * N * N, N);            /* N */
+        g.k(N, N * N, N);                        /* d */
+        g.k(N, 1, 1);                            /* f */
+        g.j(N, N * N, 1);                        /* b */
+        status = launch_gc(g.spec, b.s0, in[9], b.s1, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p2_u3", s.car0, elem(MO, N, MO, N), stream);
+        QCD_DUMP("p2_u3", b.s1, MO * N * MO * N, stream);
     }
     /* u4[M][t][N][x][i][h] = sum_b u3[M][t][N][b] a1[x][i][b][h] */
     {
-        gc_builder b;
-        b.batch(MO, N * MO * N, 0, N * MO * PJ * SP * N); /* M */
-        b.batch(N, MO * N, 0, MO * PJ * SP * N);          /* t */
-        b.batch(MO, N, 0, PJ * SP * N);                   /* N */
-        b.k(N, 1, N);                                     /* b */
-        b.j(PJ, SP * N * N, SP * N);                      /* x */
-        b.j(SP, N * N, N);                                /* i */
-        b.j(N, 1, 1);                                     /* h */
-        status = launch_gc(b.spec, s.car0, s.a1, s.car1, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p2_u4", stream);
+        g.batch(MO, N * MO * N, 0, N * MO * PJ * SP * N); /* M */
+        g.batch(N, MO * N, 0, MO * PJ * SP * N);          /* t */
+        g.batch(MO, N, 0, PJ * SP * N);                   /* N */
+        g.k(N, 1, N);                                     /* b */
+        g.j(PJ, SP * N * N, SP * N);                      /* x */
+        g.j(SP, N * N, N);                                /* i */
+        g.j(N, 1, 1);                                     /* h */
+        status = launch_gc(g.spec, b.s1, b.a1, b.s2, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p2_u4", s.car1, elem(MO, N, MO, PJ, SP, N), stream);
+        QCD_DUMP("p2_u4", b.s2, MO * N * MO * PJ * SP * N, stream);
     }
     /* u5[M][t][N][x][i][j] = sum_h u4[M][t][N][x][i][h] S[M][h][j] */
     {
-        gc_builder b;
-        b.batch(MO, N * MO * PJ * SP * N, N * N, N * MO * PJ * SP * N); /* M */
-        b.batch(N, MO * PJ * SP * N, 0, MO * PJ * SP * N);              /* t */
-        b.batch(MO, PJ * SP * N, 0, PJ * SP * N);                       /* N */
-        b.batch(PJ, SP * N, 0, SP * N);                                 /* x */
-        b.batch(SP, N, 0, N);                                           /* i */
-        b.k(N, 1, N);                                                   /* h */
-        b.j(N, 1, 1);                                                   /* j */
-        status = launch_gc(b.spec, s.car1, in[11], s.car1, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p2_u5", stream);
+        g.batch(MO, N * MO * PJ * SP * N, N * N, N * MO * PJ * SP * N); /* M */
+        g.batch(N, MO * PJ * SP * N, 0, MO * PJ * SP * N);              /* t */
+        g.batch(MO, PJ * SP * N, 0, PJ * SP * N);                       /* N */
+        g.batch(PJ, SP * N, 0, SP * N);                                 /* x */
+        g.batch(SP, N, 0, N);                                           /* i */
+        g.k(N, 1, N);                                                   /* h */
+        g.j(N, 1, 1);                                                   /* j */
+        status = launch_gc(g.spec, b.s2, in[11], b.s3, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p2_u5", s.car1, elem(MO, N, MO, PJ, SP, N), stream);
+        QCD_DUMP("p2_u5", b.s3, MO * N * MO * PJ * SP * N, stream);
     }
     /* u6[M][x][t][N][m][n] = sum_{i,j} u5[M][t][N][x][i][j] E2[i][m][j][n] */
     {
-        gc_builder b;
-        b.batch(MO, N * MO * PJ * SP * N, 0, PJ * N * MO * SP * N); /* M */
-        b.batch(PJ, SP * N, 0, N * MO * SP * N);                    /* x */
-        b.batch(N, MO * PJ * SP * N, 0, MO * SP * N);               /* t */
-        b.batch(MO, PJ * SP * N, 0, SP * N);                        /* N */
-        b.k(SP, N, SP * N * N);                                     /* i */
-        b.k(N, 1, N);                                               /* j */
-        b.j(SP, N * N, N);                                          /* m */
-        b.j(N, 1, 1);                                               /* n */
-        status = launch_gc(b.spec, s.car1, in[4], s.car2, stream);
+        gc_builder g;
+        QCD_STAGE_TIMER_1("p2_u6", stream);
+        g.batch(MO, N * MO * PJ * SP * N, 0, PJ * N * MO * SP * N); /* M */
+        g.batch(PJ, SP * N, 0, N * MO * SP * N);                    /* x */
+        g.batch(N, MO * PJ * SP * N, 0, MO * SP * N);               /* t */
+        g.batch(MO, PJ * SP * N, 0, SP * N);                        /* N */
+        g.k(SP, N, SP * N * N);                                     /* i */
+        g.k(N, 1, N);                                               /* j */
+        g.j(SP, N * N, N);                                          /* m */
+        g.j(N, 1, 1);                                               /* n */
+        /* u6 goes to big1 so that the shared tail can read it while writing its
+         * own carrier into the tail slot. */
+        status = launch_gc(g.spec, b.s3, in[4], b.big1, stream);
         if (status != QCD_STATUS_OK) return status;
-        QCD_DUMP("p2_u6", s.car2, elem(MO, PJ, N, MO, SP, N), stream);
+        QCD_DUMP("p2_u6", b.big1, MO * PJ * N * MO * SP * N, stream);
     }
-    /* u6 is the carrier the shared tail expects, but the tail reads car1 */
-    s.car1 = s.car2;
     return status;
 }
 
-int run_variant(int variant, const dims_t& d, const void* const* in, scratch& s,
-                cudaStream_t stream) {
-    int status = run_shared_folds(d, in, s, stream);
-    if (status != QCD_STATUS_OK) {
-        return status;
-    }
-    if (variant == 0) {
-        /*
-         * P1 needs three live carriers (a4 -> a5 -> a6) so big_a/big_b hold the
-         * two nev^3 tensors and car0 carries the nev^2 stages.
-         */
-        status = run_p1(d, in, s, stream);
-        if (status != QCD_STATUS_OK) {
-            return status;
-        }
-        s.car1 = nullptr; /* a8 is written into car1 by run_p1 */
-    } else {
-        status = run_p2(d, in, s, stream);
-        if (status != QCD_STATUS_OK) {
-            return status;
-        }
-    }
-    return run_shared_tail(d, in, s, stream);
-}
+long long max_of(long long a, long long b) { return a > b ? a : b; }
 
 }  // namespace
 
@@ -881,28 +872,38 @@ extern "C" QCD_PATTERN_3PT_API int qcd_cuda_pattern_3pt(
     }
     const long long N = d.n, SP = d.sp, PJ = d.pj, MO = d.mo, LK = d.lk;
 
-    /* Intermediate sizes (elements).  Both plans are laid out so that the
-     * offsets can be computed without a general allocator. */
-    const long long n_ta = elem(SP, SP, N, N);
-    const long long n_a1 = elem(PJ, SP, N, N);
-    const long long n_tc = elem(SP, PJ, N, N);
-    const long long n_c1 = elem(SP, SP, PJ, N, N);
-    const long long n_b1 = elem(SP, SP, N, N);
-    const long long n_d1 = elem(SP, SP, N, N);
-    const long long n_mid = elem(MO, PJ, N, SP, N);              /* a2..a4 */
-    const long long n_big = elem(MO, PJ, N, SP, N, N);           /* a5/a6 */
-    const long long n_car = elem(MO, PJ, N, MO, SP, N);          /* a7/a8 */
-    const long long n_tail = elem(MO, PJ, N, MO, SP, LK, N);     /* a9/u6-u7 */
-    const long long n_u1 = elem(MO, SP, SP, N, N, N);
-    const long long n_u2 = elem(MO, N, N, N);
-    const long long n_u4 = elem(MO, N, MO, PJ, SP, N);
+    const long long n_ta = SP * SP * N * N;
+    const long long n_a1 = PJ * SP * N * N;
+    const long long n_tc = SP * PJ * N * N;
+    const long long n_c1 = SP * SP * PJ * N * N;
+    const long long n_b1 = SP * SP * N * N;
+    const long long n_d1 = SP * SP * N * N;
+    const long long n_folds = n_ta + n_a1 + n_tc + n_c1 + n_b1 + n_d1;
 
-    long long total = n_ta + n_a1 + n_tc + n_c1 + n_b1 + n_d1;
+    /* stages that live in one of the four "small" slots */
+    const long long n_mid = MO * PJ * N * SP * N;             /* a2     */
+    const long long n_car = MO * PJ * N * MO * SP * N;        /* a7/a8  */
+    const long long n_u2 = MO * N * N * N;                    /* u2     */
+    const long long n_u3 = MO * N * MO * N;                   /* u3     */
+    const long long n_u4 = MO * N * MO * PJ * SP * N;         /* u4/u5  */
+    const long long n_small =
+        max_of(max_of(n_mid, n_car), max_of(max_of(n_u2, n_u3), n_u4));
+    /* the two "big" slots */
+    const long long n_big_a = MO * PJ * N * SP * N * N;       /* a5     */
+    const long long n_big_b = MO * PJ * N * SP * N * N;       /* a6     */
+    const long long n_u1 = MO * SP * SP * N * N * N;          /* u1     */
+    const long long n_tail = MO * PJ * N * MO * SP * LK * N;  /* a9/u6  */
+
+    long long total = n_folds + 4 * n_small + n_tail;
+    long long big0 = 0, big1 = 0;
     if (variant == 0) {
-        total += n_mid * 2 + n_big * 2 + n_car + n_tail;
+        big0 = n_big_a;
+        big1 = n_big_b;
     } else {
-        total += n_u1 + n_u2 + n_u4 * 2 + n_tail;
+        big0 = n_u1;
+        big1 = max_of(n_big_a, n_car); /* holds u6 for P2 */
     }
+    total += big0 + big1;
 
     std::lock_guard<std::mutex> guard(g_arena_mutex);
     int status = QCD_STATUS_OK;
@@ -912,35 +913,45 @@ extern "C" QCD_PATTERN_3PT_API int qcd_cuda_pattern_3pt(
     }
 
     cplx* cursor = static_cast<cplx*>(arena);
-    scratch s{};
-    s.ta = cursor; cursor += n_ta;
-    s.a1 = cursor; cursor += n_a1;
-    s.tc = cursor; cursor += n_tc;
-    s.c1 = cursor; cursor += n_c1;
-    s.b1 = cursor; cursor += n_b1;
-    s.d1 = cursor; cursor += n_d1;
-    if (variant == 0) {
-        s.car0 = cursor; cursor += n_mid;    /* a2/a3/a4 share (sequential) */
-        s.big_a = cursor; cursor += n_big;   /* a5 */
-        s.big_b = cursor; cursor += n_big;   /* a6, then a3 lives in big_b */
-        s.car1 = cursor; cursor += n_car;    /* a7/a8 */
-        s.car2 = cursor; cursor += n_tail;   /* a9 */
-    } else {
-        s.big_a = cursor; cursor += n_u1;    /* u1 */
-        s.car0 = cursor; cursor += n_u2;     /* u2/u3 (u2 is nev^3 * mom)  */
-        cursor += (n_u2 > n_mid ? n_u2 - n_mid : 0); /* headroom for u3 */
-        s.car1 = cursor; cursor += n_u4;     /* u4/u5 */
-        s.car2 = cursor; cursor += n_tail;   /* u6 -> u7 */
-    }
-    s.out = static_cast<cplx*>(output);
-    if (cursor > static_cast<cplx*>(arena) + total) {
-        return QCD_STATUS_INTERNAL; /* layout bookkeeping drift */
-    }
+    const cplx* const arena_end = cursor + total;
+    buffers b{};
+    b.ta = cursor; cursor += n_ta;
+    b.a1 = cursor; cursor += n_a1;
+    b.tc = cursor; cursor += n_tc;
+    b.c1 = cursor; cursor += n_c1;
+    b.b1 = cursor; cursor += n_b1;
+    b.d1 = cursor; cursor += n_d1;
+    b.s0 = cursor; cursor += n_small;
+    b.s1 = cursor; cursor += n_small;
+    b.s2 = cursor; cursor += n_small;
+    b.s3 = cursor; cursor += n_small;
+    b.big0 = cursor; cursor += big0;
+    b.big1 = cursor; cursor += big1;
+    b.tail = cursor; cursor += n_tail;
+    b.out = static_cast<cplx*>(output);
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_pointer);
-    status = run_variant(variant, d, inputs, s, stream);
+    status = run_folds(d, inputs, b, stream);
+    if (status == QCD_STATUS_OK) {
+        if (variant == 0) {
+            status = run_p1(d, inputs, b, stream);
+            if (status == QCD_STATUS_OK) {
+                /* a8 landed in s0 */
+                status = run_tail(d, inputs, b.s0, b, stream);
+            }
+        } else {
+            status = run_p2(d, inputs, b, stream);
+            if (status == QCD_STATUS_OK) {
+                /* u6 landed in big1 */
+                status = run_tail(d, inputs, b.big1, b, stream);
+            }
+        }
+    }
     if (status != QCD_STATUS_OK) {
         return status;
+    }
+    if (cursor > arena_end) {
+        return QCD_STATUS_INTERNAL; /* layout bookkeeping drift */
     }
     return map_cuda(cudaGetLastError());
 }
