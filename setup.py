@@ -50,7 +50,10 @@ def _stage_native_library() -> None:
         raise RuntimeError(f"native library was not built: {source}")
     destination = HOME / "pyqcd" / "einsum" / BUILD_BACKEND / library_name
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, destination)
+    # 必须原子落位：就地 O_TRUNC 覆盖正在被其它进程 mmap 的 .so 会让其在退出期 SIGSEGV。
+    staged = destination.with_name(destination.name + f".tmp.{os.getpid()}")
+    shutil.copy2(source, staged)
+    os.replace(staged, destination)
 
 
 class NativeBuildExt(build_ext):
