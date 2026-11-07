@@ -145,15 +145,19 @@ class BufferPool {
         }
     }
 
-    uint8_t* acquire(std::size_t bytes) {
+    uint8_t* acquire(std::size_t bytes, std::size_t* capacity) {
+        *capacity = bytes;
         if (bytes == 0) {
             return nullptr;
         }
         std::lock_guard<std::mutex> guard(mutex_);
         std::size_t best = blocks_.size();
         for (std::size_t index = 0; index < blocks_.size(); ++index) {
-            if (blocks_[index].bytes >= bytes &&
-                (best == blocks_.size() || blocks_[index].bytes < blocks_[best].bytes)) {
+            const std::size_t available = blocks_[index].bytes;
+            if (available < bytes || available > bytes * 2) {
+                continue;
+            }
+            if (best == blocks_.size() || available < blocks_[best].bytes) {
                 best = index;
             }
         }
@@ -162,6 +166,7 @@ class BufferPool {
             blocks_[best] = blocks_.back();
             blocks_.pop_back();
             cached_ -= block.bytes;
+            *capacity = block.bytes;
             return block.data;
         }
         void* allocated = nullptr;
@@ -232,8 +237,7 @@ class Buffer {
         if (bytes == 0) {
             return true;
         }
-        data_ = buffer_pool().acquire(bytes);
-        bytes_ = data_ != nullptr ? bytes : 0;
+        data_ = buffer_pool().acquire(bytes, &bytes_);
         return data_ != nullptr;
     }
 

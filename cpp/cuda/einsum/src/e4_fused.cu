@@ -13,7 +13,8 @@ constexpr int kE4Threads = 256;
 constexpr int kWarpSize = 32;
 constexpr int kMaxValuesPerLane = 4;
 constexpr int64_t kMaxGridBlocks = 65535;
-constexpr int kMaxAccumulators = 8;
+constexpr int kMaxAccumulators = 4;
+constexpr int kE4MinBlocks = 2;
 constexpr int64_t kStagedSharedBudget = 48 * 1024;
 constexpr int64_t kStagedExtentLimit = int64_t(1) << 30;
 
@@ -29,6 +30,10 @@ struct E4Ops<float> {
     __device__ static __forceinline__ float mul(float left, float right) {
         return left * right;
     }
+    __device__ static __forceinline__ void madd(
+        float& acc, float left, float right) {
+        acc = __fmaf_rn(left, right, acc);
+    }
 };
 
 template <>
@@ -39,6 +44,10 @@ struct E4Ops<double> {
     }
     __device__ static __forceinline__ double mul(double left, double right) {
         return left * right;
+    }
+    __device__ static __forceinline__ void madd(
+        double& acc, double left, double right) {
+        acc = __fma_rn(left, right, acc);
     }
 };
 
@@ -57,6 +66,11 @@ struct E4Ops<cuFloatComplex> {
             left.x * right.x - left.y * right.y,
             left.x * right.y + left.y * right.x);
     }
+    __device__ static __forceinline__ void madd(
+        cuFloatComplex& acc, cuFloatComplex left, cuFloatComplex right) {
+        acc.x = __fmaf_rn(left.x, right.x, __fmaf_rn(-left.y, right.y, acc.x));
+        acc.y = __fmaf_rn(left.x, right.y, __fmaf_rn(left.y, right.x, acc.y));
+    }
 };
 
 template <>
@@ -73,6 +87,11 @@ struct E4Ops<cuDoubleComplex> {
         return make_cuDoubleComplex(
             left.x * right.x - left.y * right.y,
             left.x * right.y + left.y * right.x);
+    }
+    __device__ static __forceinline__ void madd(
+        cuDoubleComplex& acc, cuDoubleComplex left, cuDoubleComplex right) {
+        acc.x = __fma_rn(left.x, right.x, __fma_rn(-left.y, right.y, acc.x));
+        acc.y = __fma_rn(left.x, right.y, __fma_rn(left.y, right.x, acc.y));
     }
 };
 
@@ -220,7 +239,7 @@ __global__ __launch_bounds__(kE4Threads) void e4_fused_kernel(
 // Block = (t, b, f-tile). Folds c into a per-block "sums_n[v][g][a][n]" table and
 // e into "factors[v][G][g][a][d][f]", then runs one flat (f, n) contraction pass.
 template <typename Type, int MaxAcc>
-__global__ __launch_bounds__(kE4Threads) void e4_staged_kernel(
+__global__ __launch_bounds__(kE4Threads, kE4MinBlocks) void e4_staged_kernel(
     const Type* __restrict__ a,
     const Type* __restrict__ b,
     const Type* __restrict__ gamma,
@@ -302,9 +321,8 @@ __global__ __launch_bounds__(kE4Threads) void e4_staged_kernel(
             (static_cast<int64_t>(og_index) * dim_a + a_index) * dim_e;
         Type acc = E4Ops<Type>::zero();
         for (int e_index = 0; e_index < dim_e; ++e_index) {
-            acc = E4Ops<Type>::add(
-                acc, E4Ops<Type>::mul(gamma[gamma_offset + e_index],
-                                      b[b_offset + e_index * b_e]));
+            E4Ops<Type>::madd(acc, gamma[gamma_offset + e_index],
+                              b[b_offset + e_index * b_e]);
         }
         const int64_t factor_offset =
             ((((static_cast<int64_t>(v_index) * og + og_index) * ig + g_index) *
@@ -333,9 +351,8 @@ __global__ __launch_bounds__(kE4Threads) void e4_staged_kernel(
                                                  static_cast<int64_t>(a_index) * a_a;
                         Type acc = E4Ops<Type>::zero();
                         for (int c_index = 0; c_index < dim_c; ++c_index) {
-                            acc = E4Ops<Type>::add(
-                                acc, E4Ops<Type>::mul(a[a_offset + c_index * a_c],
-                                                      c[c_offset + c_index * c_c]));
+                            E4Ops<Type>::madd(acc, a[a_offset + c_index * a_c],
+                                              c[c_offset + c_index * c_c]);
                         }
                         sums_n[((static_cast<int64_t>(v_index) * ig + g_index) * dim_a +
                                 a_index) * nl + tid] = acc;
@@ -347,9 +364,13 @@ __global__ __launch_bounds__(kE4Threads) void e4_staged_kernel(
 
         int f_index = tid / n_count;
         int n_lane = tid - f_index * n_count;
+        const int factor_stride = dim_d * f_count;
         const int64_t output_base = static_cast<int64_t>(t_index) * o_t +
                                     static_cast<int64_t>(b_index) * o_b + n_base;
         for (; f_index < f_count;) {
+            const int64_t output_tile = output_base +
+                                        static_cast<int64_t>(f_base + f_index) * o_f +
+                                        n_lane;
             for (int og_index = 0; og_index < og; ++og_index) {
                 Type acc[MaxAcc];
 #pragma unroll
@@ -357,29 +378,22 @@ __global__ __launch_bounds__(kE4Threads) void e4_staged_kernel(
                     acc[d_index] = E4Ops<Type>::zero();
                 }
                 for (int v_index = 0; v_index < volume; ++v_index) {
-                    for (int g_index = 0; g_index < ig; ++g_index) {
-                        for (int a_index = 0; a_index < dim_a; ++a_index) {
-                            const Type value =
-                                sums_n[((static_cast<int64_t>(v_index) * ig + g_index) *
-                                            dim_a +
-                                        a_index) * nl + n_lane];
-                            const Type* factor_row =
-                                factors +
-                                ((((static_cast<int64_t>(v_index) * og + og_index) * ig +
-                                   g_index) * dim_a + a_index) * dim_d) * f_count +
-                                f_index;
-                            for (int d_index = 0; d_index < dim_d; ++d_index) {
-                                acc[d_index] = E4Ops<Type>::add(
-                                    acc[d_index],
-                                    E4Ops<Type>::mul(factor_row[d_index * f_count], value));
-                            }
+                    int sum_offset = (v_index * rank) * nl + n_lane;
+                    int factor_offset =
+                        ((v_index * og + og_index) * rank) * factor_stride + f_index;
+                    for (int pair = 0; pair < rank; ++pair) {
+                        const Type value = sums_n[sum_offset];
+                        const Type* factor_row = factors + factor_offset;
+                        for (int d_index = 0; d_index < dim_d; ++d_index) {
+                            E4Ops<Type>::madd(acc[d_index],
+                                              factor_row[d_index * f_count], value);
                         }
+                        sum_offset += nl;
+                        factor_offset += factor_stride;
                     }
                 }
-                const int64_t output_offset = output_base +
-                                              static_cast<int64_t>(og_index) * o_g +
-                                              static_cast<int64_t>(f_base + f_index) * o_f +
-                                              n_lane;
+                const int64_t output_offset =
+                    output_tile + static_cast<int64_t>(og_index) * o_g;
                 for (int d_index = 0; d_index < dim_d; ++d_index) {
                     dst[output_offset + static_cast<int64_t>(d_index) * o_d] =
                         acc[d_index];
