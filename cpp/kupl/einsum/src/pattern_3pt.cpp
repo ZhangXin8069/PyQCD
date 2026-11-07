@@ -565,4 +565,483 @@ void permute_sink_wedge(const Cplx* c2, int64_t n, Cplx* c2p) {
     }
 }
 
+/* ------------------------------------------------------------------------- */
+/* 一次 arena：所有中间缓冲从同一块申请，复用 pool 里的同一块内存，            */
+/* 避免每次调用重新映射 + 首触页缺页。                                        */
+/* ------------------------------------------------------------------------- */
+
+class Arena {
+  public:
+    bool reserve(std::size_t elements) {
+        return lease_.take(elements * sizeof(Cplx));
+    }
+
+    Cplx* take(std::size_t elements) {
+        const std::size_t bytes = elements * sizeof(Cplx);
+        const std::size_t aligned = (bytes + 63u) & ~static_cast<std::size_t>(63u);
+        uint8_t* pointer = static_cast<uint8_t*>(lease_.raw()) + used_;
+        used_ += aligned;
+        return reinterpret_cast<Cplx*>(pointer);
+    }
+
+    bool fits() const { return used_ <= lease_.bytes(); }
+
+  private:
+    Lease lease_{};
+    std::size_t used_ = 0;
+};
+
+/* ------------------------------------------------------------------------- */
+/* P1 主体                                                                   */
+/* ------------------------------------------------------------------------- */
+
+struct P1Buffers {
+    Cplx* a2 = nullptr;      /* [x,b,i,h]                      8n^2 */
+    Cplx* c2 = nullptr;      /* [o,y,p,t]                      8n^2 */
+    Cplx* c2p = nullptr;     /* [p,(o,y,t)]                    8n^2 */
+    Cplx* d3t = nullptr;     /* [(m,n),(d,e)]                 16n^2 */
+    Cplx* e3t = nullptr;     /* [(i,j),(q,l)]                 16n^2 */
+    Cplx* b2t = nullptr;     /* [(e,f),(q,r)]                 16n^2 */
+    Cplx* t1 = nullptr;      /* [x,b,i,j]（复用于 [x,g,b,h]）   8n^2 */
+    Cplx* t2 = nullptr;      /* [x,b,q,l]                      8n^2 */
+    Cplx* t2p = nullptr;     /* [(q,b,x),(l)]                  8n^2 */
+    Cplx* t3 = nullptr;      /* [(q,b,x),(r,t)]                8n^3 */
+    Cplx* t3p = nullptr;     /* [(q,r),(b,t,x)]（按 b 分块）    8n^3 / 块 */
+    Cplx* o = nullptr;       /* [(e,f),(b,t,x)]                8n^3 */
+    Cplx* s = nullptr;       /* [(d,e),(t,x)]                  8n^2 */
+    Cplx* vvvp = nullptr;    /* [(d),(f,b)]                    n^3  */
+    Cplx* w = nullptr;       /* [L][n,(o,y,t)]                 8L n^2 */
+    Cplx* out1 = nullptr;    /* [(m,n),(t,x)]                  8n^2 */
+    Cplx* z = nullptr;       /* [m,o,L,y,x]                    64L  */
+};
+
+std::size_t p1_permute_block(int64_t n) {
+    /* t3p 分块列数上限按 ~2 Mi 元素控制，n 不大时一块用完。 */
+    const int64_t per_b = kDirac * n * n * kProj;
+    int64_t block = 2097152 / (per_b > 0 ? per_b : 1);
+    if (block < 1) {
+        block = 1;
+    }
+    if (block > n) {
+        block = n;
+    }
+    return static_cast<std::size_t>(block);
+}
+
+bool run_p1(const Cplx* const* in, int64_t n, int64_t mm, int64_t mn, int64_t link, Cplx* out) {
+    const int64_t nn = n * n;
+    const int64_t nnn = nn * n;
+    const int64_t proj_cols = n * kProj;
+    const int64_t wedge_cols = kDirac * kProj * n;
+    const int64_t block = static_cast<int64_t>(p1_permute_block(n));
+
+    Arena arena;
+    const std::size_t elements = static_cast<std::size_t>(kDirac * kProj * nnn) * 2 +
+                                 static_cast<std::size_t>(kDirac * n * block * n * kProj) +
+                                 static_cast<std::size_t>(16 * nn) * 3 +
+                                 static_cast<std::size_t>(8 * nn) * 6 +
+                                 static_cast<std::size_t>(nnn) +
+                                 static_cast<std::size_t>(8 * link * nn) +
+                                 static_cast<std::size_t>(64 * link) + 4096;
+    if (!arena.reserve(elements)) {
+        return false;
+    }
+    P1Buffers buf;
+    buf.a2 = arena.take(8 * nn);
+    buf.c2 = arena.take(8 * nn);
+    buf.c2p = arena.take(8 * nn);
+    buf.d3t = arena.take(16 * nn);
+    buf.e3t = arena.take(16 * nn);
+    buf.b2t = arena.take(16 * nn);
+    buf.t1 = arena.take(8 * nn);
+    buf.t2 = arena.take(8 * nn);
+    buf.t2p = arena.take(8 * nn);
+    buf.t3 = arena.take(kDirac * kProj * nnn);
+    buf.t3p = arena.take(kDirac * n * block * n * kProj);
+    buf.o = arena.take(kDirac * kProj * nnn);
+    buf.s = arena.take(8 * nn);
+    buf.vvvp = arena.take(nnn);
+    buf.w = arena.take(8 * link * nn);
+    buf.out1 = arena.take(8 * nn);
+    buf.z = arena.take(64 * link);
+    if (!arena.fits()) {
+        return false;
+    }
+
+    /* ---- 与 M/N 无关的预处理（每次调用一次） ---- */
+    if (!dress_sink_wedge(in[2], in[14], n, buf.c2)) {
+        return false;
+    }
+    permute_sink_wedge(buf.c2, n, buf.c2p);
+    if (!dress_source_wedge(in[0], in[13], in[7], n, buf.t1, buf.a2)) {
+        return false;
+    }
+    dress_p1_sink_peram(in[3], in[5], n, buf.d3t);
+    dress_p1_source_peram(in[4], in[8], n, buf.e3t);
+    permute_middle_pair(in[1], n, buf.b2t);
+
+    for (int64_t m = 0; m < mm; ++m) {
+        /* S1: t1[(x,b,i),(j)] = a2[(x,b,i),(h)] * srcVdV[m][(h),(j)] */
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n * kDirac, n, n, buf.a2, n,
+                  in[11] + m * nn, n, false, buf.t1, n)) {
+            return false;
+        }
+        /* S2: t2[(x,b),(q,l)] = t1[(x,b),(i,j)] * e3t[(i,j),(q,l)] */
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n, kDirac * n, kDirac * n, buf.t1,
+                  kDirac * n, buf.e3t, kDirac * n, false, buf.t2, kDirac * n)) {
+            return false;
+        }
+        permute_p1_middle(buf.t2, n, buf.t2p);
+        /* S3: t3[(q,b,x),(r,t)] = t2p[(q,b,x),(l)] * srcVVV[m][(l),(r,t)] */
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kDirac * kProj * n, nn, n, buf.t2p, n,
+                  in[12] + m * nnn, nn, false, buf.t3, nn)) {
+            return false;
+        }
+        /* S5: o[(e,f),(b,t,x)] += b2t[(e,f),(q,r)] * t3p[(q,r),(b,t,x)]（按 b 分块） */
+        bool first_block = true;
+        for (int64_t b0 = 0; b0 < n; b0 += block) {
+            const int64_t bb = (b0 + block < n) ? block : (n - b0);
+            permute_p1_big_block(buf.t3, n, b0, bb, buf.t3p);
+            if (!gemm(kCblasNoTrans, kCblasNoTrans, kDirac * n, bb * n * kProj, kDirac * n,
+                      buf.b2t, kDirac * n, buf.t3p, bb * n * kProj, !first_block,
+                      buf.o + b0 * proj_cols, nnn * kDirac)) {
+                return false;
+            }
+            first_block = false;
+        }
+        for (int64_t ns = 0; ns < mn; ++ns) {
+            /* S6: s[(d,e),(t,x)] = vvvp[(d),(f,b)] * o[(e,f),(b,t,x)]（逐 e） */
+            permute_sink_vvv(in[9] + ns * nnn, n, buf.vvvp);
+            for (int64_t e = 0; e < kDirac; ++e) {
+                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, proj_cols, nn, buf.vvvp, nn,
+                          buf.o + e * n * nn * kProj, proj_cols, false,
+                          buf.s + e * proj_cols, kDirac * proj_cols)) {
+                    return false;
+                }
+            }
+            /* 尾部 step10：out1[(m,n),(t,x)] = d3t[(m,n),(d,e)] * s[(d,e),(t,x)] */
+            if (!gemm(kCblasNoTrans, kCblasNoTrans, kDirac * n, proj_cols, kDirac * n, buf.d3t,
+                      kDirac * n, buf.s, proj_cols, false, buf.out1, proj_cols)) {
+                return false;
+            }
+            /* W[L][(n),(o,y,t)] = VdVL[ns,L][(n),(p)] * c2p[(p),(o,y,t)] */
+            for (int64_t l = 0; l < link; ++l) {
+                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, wedge_cols, n,
+                          in[10] + (ns * link + l) * nn, n, buf.c2p, wedge_cols, false,
+                          buf.w + l * n * wedge_cols, wedge_cols)) {
+                    return false;
+                }
+            }
+            /* z[m,o,L,y,x] = sum_{n,t} out1[(m,n),(t,x)] * W[L][(n),(o,y,t)] */
+            std::memset(buf.z, 0, static_cast<std::size_t>(64 * link) * sizeof(Cplx));
+            for (int64_t mi = 0; mi < kDirac; ++mi) {
+                for (int64_t ni = 0; ni < n; ++ni) {
+                    const Cplx* row = buf.out1 + (mi * n + ni) * proj_cols;
+                    for (int64_t l = 0; l < link; ++l) {
+                        const Cplx* wrow = buf.w + (l * n + ni) * wedge_cols;
+                        for (int64_t o = 0; o < kDirac; ++o) {
+                            for (int64_t y = 0; y < kProj; ++y) {
+                                const Cplx* wt = wrow + (o * kProj + y) * n;
+                                Cplx* za = buf.z + ((((mi * kDirac + o) * link + l) * kProj + y) *
+                                                    kProj);
+                                for (int64_t t = 0; t < n; ++t) {
+                                    const Cplx wv = wt[t];
+                                    madd(&za[0], row[t * kProj], wv);
+                                    madd(&za[1], row[t * kProj + 1], wv);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            /* out[M,N,G,L,x,y] = sum_{m,o} gcur[G,m,o] z[m,o,L,y,x] */
+            for (int64_t g = 0; g < kDirac; ++g) {
+                for (int64_t l = 0; l < link; ++l) {
+                    for (int64_t xx = 0; xx < kProj; ++xx) {
+                        for (int64_t yy = 0; yy < kProj; ++yy) {
+                            Cplx acc{0.0, 0.0};
+                            for (int64_t mi = 0; mi < kDirac; ++mi) {
+                                for (int64_t o = 0; o < kDirac; ++o) {
+                                    madd(&acc, in[6][(g * kDirac + mi) * kDirac + o],
+                                         buf.z[((((mi * kDirac + o) * link + l) * kProj + yy) *
+                                                    kProj +
+                                                xx)]);
+                                }
+                            }
+                            out[(((m * mn + ns) * kDirac + g) * link + l) * kProj * kProj +
+                                xx * kProj + yy] = acc;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/* ------------------------------------------------------------------------- */
+/* P2 主体                                                                   */
+/* ------------------------------------------------------------------------- */
+
+struct P2Buffers {
+    Cplx* a2 = nullptr;   /* [x,b,i,h]        8n^2 */
+    Cplx* c2 = nullptr;   /* [o,y,p,t]        8n^2 */
+    Cplx* c2p = nullptr;  /* [p,(o,y,t)]      8n^2 */
+    Cplx* fp = nullptr;   /* [(l),(e,q,d)]   16n^2 */
+    Cplx* m4t = nullptr;  /* [(i,j),(m,n)]   16n^2 */
+    Cplx* t1 = nullptr;   /* [x,b,i,j]        8n^2 */
+    Cplx* t2 = nullptr;   /* [x,b,m,n]        8n^2 */
+    Cplx* svvv = nullptr; /* [(r,t),(l)]      n^3  */
+    Cplx* t3 = nullptr;   /* [(r,t),(e,q,d)] 16n^3 */
+    Cplx* out4 = nullptr; /* [M][f][(t,d)]   4n^3 */
+    Cplx* out4t = nullptr;/* [(d,f)][M][t]   4n^3 */
+    Cplx* out2 = nullptr; /* [N][b][M][t]     n^2 M */
+    Cplx* tjoin = nullptr;/* [x,m,n][M][t]    8 n^2 M */
+    Cplx* y1 = nullptr;   /* [x,o,n][M][t][G]  32 n^2 M */
+    Cplx* w = nullptr;    /* [L][n,(o,y,t)]   8L n^2 */
+    Cplx* z2 = nullptr;   /* [x,G,L,y]        8L */
+};
+
+bool run_p2(const Cplx* const* in, int64_t n, int64_t mm, int64_t mn, int64_t link, Cplx* out) {
+    const int64_t nn = n * n;
+    const int64_t nnn = nn * n;
+    const int64_t proj_cols = n * kProj;
+    const int64_t wedge_cols = kDirac * kProj * n;
+    const int64_t mid_cols = kDirac * kDirac * n; /* (e,q,d) = 16n */
+    const int64_t f_cols = mm * n;                /* (M,t) */
+
+    Arena arena;
+    const std::size_t elements = static_cast<std::size_t>(16 * nnn) * 2 +
+                                 static_cast<std::size_t>(4 * nnn) * 2 +
+                                 static_cast<std::size_t>(16 * nn) * 4 +
+                                 static_cast<std::size_t>(8 * nn) * 2 +
+                                 static_cast<std::size_t>(nnn) +
+                                 static_cast<std::size_t>(n * f_cols) +
+                                 static_cast<std::size_t>(8 * n * f_cols) +
+                                 static_cast<std::size_t>(32 * n * f_cols) +
+                                 static_cast<std::size_t>(8 * link * nn) +
+                                 static_cast<std::size_t>(8 * link) + 4096;
+    if (!arena.reserve(elements)) {
+        return false;
+    }
+    P2Buffers buf;
+    buf.a2 = arena.take(8 * nn);
+    buf.c2 = arena.take(8 * nn);
+    buf.c2p = arena.take(8 * nn);
+    buf.fp = arena.take(16 * nn);
+    buf.m4t = arena.take(16 * nn);
+    buf.t1 = arena.take(8 * nn);
+    buf.t2 = arena.take(8 * nn);
+    buf.svvv = arena.take(nnn);
+    buf.t3 = arena.take(mid_cols * nn);
+    buf.out4 = arena.take(n * nn * mm);
+    buf.out4t = arena.take(nn * f_cols);
+    buf.out2 = arena.take(n * f_cols);
+    buf.tjoin = arena.take(kProj * kDirac * n * f_cols);
+    buf.y1 = arena.take(kProj * kDirac * n * f_cols * kDirac);
+    buf.w = arena.take(8 * link * nn);
+    buf.z2 = arena.take(8 * link);
+    if (!arena.fits()) {
+        return false;
+    }
+
+    /* ---- 与 M/N 无关的预处理 ---- */
+    if (!dress_sink_wedge(in[2], in[14], n, buf.c2)) {
+        return false;
+    }
+    permute_sink_wedge(buf.c2, n, buf.c2p);
+    if (!dress_source_wedge(in[0], in[13], in[7], n, buf.t1, buf.a2)) {
+        return false;
+    }
+    dress_p2_middle_peram(in[3], in[5], in[8], n, buf.fp);
+    permute_source_pair(in[4], n, buf.m4t);
+
+    for (int64_t m = 0; m < mm; ++m) {
+        /* S1: t1[(x,b,i),(j)] = a2[(x,b,i),(h)] * srcVdV[m][(h),(j)] */
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n * kDirac, n, n, buf.a2, n,
+                  in[11] + m * nn, n, false, buf.t1, n)) {
+            return false;
+        }
+        /* S2: t2[(x,b),(m,n)] = t1[(x,b),(i,j)] * m4t[(i,j),(m,n)] */
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n, kDirac * n, kDirac * n, buf.t1,
+                  kDirac * n, buf.m4t, kDirac * n, false, buf.t2, kDirac * n)) {
+            return false;
+        }
+        /* S3: t3[(r,t),(e,q,d)] = srcVVV[m][(l),(r,t)]^T * fp[(l),(e,q,d)] */
+        transpose_2d(in[12] + m * nnn, buf.svvv, n, nn, nn, n);
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, nn, mid_cols, n, buf.svvv, n, buf.fp, mid_cols,
+                  false, buf.t3, mid_cols)) {
+            return false;
+        }
+        /* S4: out4[M][(f),(t,d)] = sum_{e,q} eqfr[e,q][(f),(r)] * t3[(r),(t,d)] */
+        for (int64_t e = 0; e < kDirac; ++e) {
+            for (int64_t q = 0; q < kDirac; ++q) {
+                const bool accumulate = (e != 0) || (q != 0);
+                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, nn, n,
+                          in[1] + (e * kDirac + q) * nn, n, buf.t3 + (e * kDirac + q) * n,
+                          mid_cols, accumulate, buf.out4 + m * n * nn, nn)) {
+                    return false;
+                }
+            }
+        }
+        /* out4[M][f][(t,d)] -> out4t[(d,f)][(M,t)] */
+        for (int64_t mi = 0; mi < mm; ++mi) {
+            for (int64_t f = 0; f < n; ++f) {
+                transpose_2d(buf.out4 + (mi * n + f) * nn, buf.out4t + f * f_cols + mi * n, n, n,
+                             n, n * f_cols);
+            }
+        }
+        for (int64_t ns = 0; ns < mn; ++ns) {
+            /* S5: out2[(b),(M,t)] = VVV[ns][(b),(d,f)] * out4t[(d,f),(M,t)] */
+            if (!gemm(kCblasNoTrans, kCblasNoTrans, n, f_cols, nn,
+                      in[9] + ns * nnn, nn, buf.out4t, f_cols, false, buf.out2, f_cols)) {
+                return false;
+            }
+            /* S6: tjoin[(x,m,n),(M,t)] = t2[(x,b),(m,n)]^T * out2[(b),(M,t)] */
+            for (int64_t x = 0; x < kProj; ++x) {
+                if (!gemm(kCblasTrans, kCblasNoTrans, kDirac * n, f_cols, n,
+                          buf.t2 + x * kDirac * n * n, kDirac * n, buf.out2, f_cols, false,
+                          buf.tjoin + x * kDirac * n * f_cols, f_cols)) {
+                    return false;
+                }
+            }
+            /* W[L][(n),(o,y,t)] = VdVL[ns,L][(n),(p)] * c2p[(p),(o,y,t)] */
+            for (int64_t l = 0; l < link; ++l) {
+                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, wedge_cols, n,
+                          in[10] + (ns * link + l) * nn, n, buf.c2p, wedge_cols, false,
+                          buf.w + l * n * wedge_cols, wedge_cols)) {
+                    return false;
+                }
+            }
+            /* y1[x,o,n][(M,t)][G] = sum_m tjoin[x,m,n][(M,t)] gcur[G,m,o] */
+            for (int64_t x = 0; x < kProj; ++x) {
+                for (int64_t o = 0; o < kDirac; ++o) {
+                    for (int64_t ni = 0; ni < n; ++ni) {
+                        for (int64_t mt = 0; mt < f_cols; ++mt) {
+                            Cplx v[kDirac];
+                            for (int64_t mi = 0; mi < kDirac; ++mi) {
+                                v[mi] = buf.tjoin[((x * kDirac + mi) * n + ni) * f_cols + mt];
+                            }
+                            Cplx* dst = buf.y1 + (((x * kDirac + o) * n + ni) * f_cols + mt) *
+                                                        kDirac;
+                            for (int64_t g = 0; g < kDirac; ++g) {
+                                Cplx acc{0.0, 0.0};
+                                for (int64_t mi = 0; mi < kDirac; ++mi) {
+                                    madd(&acc, v[mi], in[6][(g * kDirac + mi) * kDirac + o]);
+                                }
+                                dst[g] = acc;
+                            }
+                        }
+                    }
+                }
+            }
+            /* z2[x,G,L,y] = sum_{n,o,t} y1[x,o,n][(M,t)][G] * W[L][(n),(o,y,t)] */
+            std::memset(buf.z2, 0, static_cast<std::size_t>(8 * link) * sizeof(Cplx));
+            for (int64_t x = 0; x < kProj; ++x) {
+                for (int64_t o = 0; o < kDirac; ++o) {
+                    for (int64_t ni = 0; ni < n; ++ni) {
+                        const Cplx* ybase =
+                            buf.y1 + (((x * kDirac + o) * n + ni) * f_cols) * kDirac;
+                        for (int64_t l = 0; l < link; ++l) {
+                            const Cplx* wrow = buf.w + (l * n + ni) * wedge_cols;
+                            for (int64_t y = 0; y < kProj; ++y) {
+                                const Cplx* wt = wrow + (o * kProj + y) * n;
+                                Cplx* zx = buf.z2 + (((x * kDirac) * link + l) * kProj + y) *
+                                                       kProj;
+                                for (int64_t t = 0; t < n; ++t) {
+                                    const Cplx wv = wt[t];
+                                    const Cplx* yv = ybase + t * kDirac;
+                                    for (int64_t g = 0; g < kDirac; ++g) {
+                                        madd(&zx[g * link * kProj * kProj], yv[g], wv);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (int64_t g = 0; g < kDirac; ++g) {
+                for (int64_t l = 0; l < link; ++l) {
+                    for (int64_t xx = 0; xx < kProj; ++xx) {
+                        for (int64_t yy = 0; yy < kProj; ++yy) {
+                            out[(((m * mn + ns) * kDirac + g) * link + l) * kProj * kProj +
+                                xx * kProj + yy] =
+                                buf.z2[(((xx * kDirac + g) * link + l) * kProj + yy)];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+bool supported(int dtype_id, const int64_t* dims, int variant) {
+    if (dims == nullptr) {
+        return false;
+    }
+    if (dtype_id != QCD_DTYPE_COMPLEX128) {
+        return false;
+    }
+    if (variant != QCD_PATTERN_3PT_P1 && variant != QCD_PATTERN_3PT_P2) {
+        return false;
+    }
+    const int64_t n = dims[QCD_3PT_DIM_NVEC];
+    const int64_t mm = dims[QCD_3PT_DIM_MOM_SOURCE];
+    const int64_t mn = dims[QCD_3PT_DIM_MOM_SINK];
+    const int64_t link = dims[QCD_3PT_DIM_LINK];
+    if (n < 1 || mm < 1 || mn < 1 || link < 1) {
+        return false;
+    }
+    if (dims[QCD_3PT_DIM_DIRAC] != kDirac || dims[QCD_3PT_DIM_PROJ] != kProj) {
+        return false;
+    }
+    /* 所有 GEMM 维度都要落在 int32 内（LP64 CBLAS 路径）。 */
+    const int64_t limit = std::numeric_limits<int>::max();
+    if (n > limit || mm > limit || mn > limit || link > limit) {
+        return false;
+    }
+    if (n * n > limit || n * n * n > limit || n * n * kDirac * kDirac > limit) {
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
+
+extern "C" QCD_EINSUM_API int qcd_kupl_pattern_3pt_supported(int dtype_id, const int64_t* dims,
+                                                            int variant) {
+    return supported(dtype_id, dims, variant) ? QCD_STATUS_OK : QCD_STATUS_INVALID;
+}
+
+extern "C" QCD_EINSUM_API int qcd_kupl_pattern_3pt(int dtype_id, const void* const* inputs,
+                                                   void* output, const int64_t* dims,
+                                                   int variant) {
+    if (!supported(dtype_id, dims, variant)) {
+        return QCD_STATUS_INVALID;
+    }
+    if (inputs == nullptr || output == nullptr) {
+        return QCD_STATUS_INVALID;
+    }
+    for (int index = 0; index < QCD_3PT_INPUT_COUNT; ++index) {
+        if (inputs[index] == nullptr) {
+            return QCD_STATUS_INVALID;
+        }
+    }
+    if (!blas().ready()) {
+        return QCD_STATUS_INTERNAL;
+    }
+    const int64_t n = dims[QCD_3PT_DIM_NVEC];
+    const int64_t mm = dims[QCD_3PT_DIM_MOM_SOURCE];
+    const int64_t mn = dims[QCD_3PT_DIM_MOM_SINK];
+    const int64_t link = dims[QCD_3PT_DIM_LINK];
+    const Cplx* const* typed = reinterpret_cast<const Cplx* const*>(inputs);
+    Cplx* out = reinterpret_cast<Cplx*>(output);
+    try {
+        const bool ok = (variant == QCD_PATTERN_3PT_P1) ? run_p1(typed, n, mm, mn, link, out)
+                                                        : run_p2(typed, n, mm, mn, link, out);
+        return ok ? QCD_STATUS_OK : QCD_STATUS_INTERNAL;
+    } catch (...) {
+        return QCD_STATUS_INTERNAL;
+    }
+}
