@@ -59,6 +59,8 @@
 # 4. Ignore hidden files and directories
 # ==================================================
 .*
+pyqcd/*.cpp
+*.so
 
 # ==================================================
 # 5. Keep common files and directories
