@@ -13,6 +13,9 @@ constexpr int kE4Threads = 256;
 constexpr int kWarpSize = 32;
 constexpr int kMaxValuesPerLane = 4;
 constexpr int64_t kMaxGridBlocks = 65535;
+constexpr int kMaxAccumulators = 8;
+constexpr int64_t kStagedSharedBudget = 48 * 1024;
+constexpr int64_t kStagedExtentLimit = int64_t(1) << 30;
 
 template <typename Type>
 struct E4Ops;
@@ -93,6 +96,8 @@ __device__ __forceinline__ cuDoubleComplex broadcast_warp(cuDoubleComplex value)
         __shfl_sync(0xffffffffu, value.y, 0));
 }
 
+// One warp per output row: reads every factor through a lane-0 broadcast and
+// re-reads the left operand for each (c, g, a, e) step. Fallback path.
 template <typename Type, int ValuesPerLane>
 __global__ __launch_bounds__(kE4Threads) void e4_fused_kernel(
     const Type* a,
@@ -212,6 +217,184 @@ __global__ __launch_bounds__(kE4Threads) void e4_fused_kernel(
     }
 }
 
+// Block = (t, b, f-tile). Folds c into a per-block "sums_n[v][g][a][n]" table and
+// e into "factors[v][G][g][a][d][f]", then runs one flat (f, n) contraction pass.
+template <typename Type, int MaxAcc>
+__global__ __launch_bounds__(kE4Threads) void e4_staged_kernel(
+    const Type* __restrict__ a,
+    const Type* __restrict__ b,
+    const Type* __restrict__ gamma,
+    const Type* __restrict__ c,
+    Type* __restrict__ dst,
+    qcd_cuda_e4_spec spec,
+    int nl,
+    int fc,
+    int nf) {
+    extern __shared__ __align__(16) unsigned char raw_shared[];
+    Type* shared = reinterpret_cast<Type*>(raw_shared);
+
+    const int volume = static_cast<int>(spec.z * spec.y * spec.x);
+    const int rank = static_cast<int>(spec.input_g * spec.a);
+    const int ig = static_cast<int>(spec.input_g);
+    const int og = static_cast<int>(spec.output_g);
+    const int dim_a = static_cast<int>(spec.a);
+    const int dim_b = static_cast<int>(spec.b);
+    const int dim_c = static_cast<int>(spec.c);
+    const int dim_d = static_cast<int>(spec.d);
+    const int dim_e = static_cast<int>(spec.e);
+    const int dim_f = static_cast<int>(spec.f);
+    const int dim_n = static_cast<int>(spec.n);
+    const int dim_t = static_cast<int>(spec.t);
+
+    Type* sums_n = shared;
+    Type* factors = shared + static_cast<int64_t>(volume) * rank * nl;
+
+    const int f_tile_index = static_cast<int>(blockIdx.x) % nf;
+    const int row_unit = static_cast<int>(blockIdx.x) / nf;
+    const int b_index = row_unit % dim_b;
+    const int t_index = row_unit / dim_b;
+
+    const int64_t a_b = dim_n;
+    const int64_t a_a = static_cast<int64_t>(dim_b) * a_b;
+    const int64_t a_t = static_cast<int64_t>(dim_a) * a_a;
+    const int64_t a_c = static_cast<int64_t>(dim_t) * a_t;
+    const int64_t a_v = static_cast<int64_t>(dim_c) * a_c;
+    const int64_t c_c = 1;
+    const int64_t c_g = dim_c;
+    const int64_t c_v = static_cast<int64_t>(ig) * c_g;
+    const int64_t c_t = static_cast<int64_t>(volume) * c_v;
+    const int64_t b_e = dim_f;
+    const int64_t b_d = static_cast<int64_t>(dim_e) * b_e;
+    const int64_t b_t = static_cast<int64_t>(dim_d) * b_d;
+    const int64_t b_g = static_cast<int64_t>(dim_t) * b_t;
+    const int64_t b_v = static_cast<int64_t>(ig) * b_g;
+    const int64_t o_f = dim_n;
+    const int64_t o_b = static_cast<int64_t>(dim_f) * o_f;
+    const int64_t o_d = static_cast<int64_t>(dim_b) * o_b;
+    const int64_t o_g = static_cast<int64_t>(dim_d) * o_d;
+    const int64_t o_t = static_cast<int64_t>(og) * o_g;
+
+    const int f_base = f_tile_index * fc;
+    const int f_remaining = dim_f - f_base;
+    const int f_count = fc < f_remaining ? fc : f_remaining;
+    const int tid = static_cast<int>(threadIdx.x);
+
+    const int factor_count = volume * og * rank * dim_d * f_count;
+    for (int item = tid; item < factor_count; item += kE4Threads) {
+        int rest = item;
+        const int f_index = rest % f_count;
+        rest /= f_count;
+        const int d_index = rest % dim_d;
+        rest /= dim_d;
+        const int a_index = rest % dim_a;
+        rest /= dim_a;
+        const int g_index = rest % ig;
+        rest /= ig;
+        const int og_index = rest % og;
+        const int v_index = rest / og;
+
+        const int64_t b_offset = static_cast<int64_t>(v_index) * b_v +
+                                 static_cast<int64_t>(g_index) * b_g +
+                                 static_cast<int64_t>(t_index) * b_t +
+                                 static_cast<int64_t>(d_index) * b_d +
+                                 (f_base + f_index);
+        const int64_t gamma_offset =
+            (static_cast<int64_t>(og_index) * dim_a + a_index) * dim_e;
+        Type acc = E4Ops<Type>::zero();
+        for (int e_index = 0; e_index < dim_e; ++e_index) {
+            acc = E4Ops<Type>::add(
+                acc, E4Ops<Type>::mul(gamma[gamma_offset + e_index],
+                                      b[b_offset + e_index * b_e]));
+        }
+        const int64_t factor_offset =
+            ((((static_cast<int64_t>(v_index) * og + og_index) * ig + g_index) *
+                  dim_a +
+              a_index) * dim_d + d_index) * f_count + f_index;
+        factors[factor_offset] = acc;
+    }
+    __syncthreads();
+
+    for (int n_base = 0; n_base < dim_n; n_base += nl) {
+        const int n_remaining = dim_n - n_base;
+        const int n_count = nl < n_remaining ? nl : n_remaining;
+        if (tid < n_count) {
+            const int n_index = n_base + tid;
+            for (int v_index = 0; v_index < volume; ++v_index) {
+                const int64_t a_offset_base = static_cast<int64_t>(v_index) * a_v +
+                                              static_cast<int64_t>(t_index) * a_t +
+                                              static_cast<int64_t>(b_index) * a_b +
+                                              n_index;
+                for (int g_index = 0; g_index < ig; ++g_index) {
+                    const int64_t c_offset = static_cast<int64_t>(t_index) * c_t +
+                                             static_cast<int64_t>(v_index) * c_v +
+                                             static_cast<int64_t>(g_index) * c_g;
+                    for (int a_index = 0; a_index < dim_a; ++a_index) {
+                        const int64_t a_offset = a_offset_base +
+                                                 static_cast<int64_t>(a_index) * a_a;
+                        Type acc = E4Ops<Type>::zero();
+                        for (int c_index = 0; c_index < dim_c; ++c_index) {
+                            acc = E4Ops<Type>::add(
+                                acc, E4Ops<Type>::mul(a[a_offset + c_index * a_c],
+                                                      c[c_offset + c_index * c_c]));
+                        }
+                        sums_n[((static_cast<int64_t>(v_index) * ig + g_index) * dim_a +
+                                a_index) * nl + tid] = acc;
+                    }
+                }
+            }
+        }
+        __syncthreads();
+
+        int f_index = tid / n_count;
+        int n_lane = tid - f_index * n_count;
+        const int64_t output_base = static_cast<int64_t>(t_index) * o_t +
+                                    static_cast<int64_t>(b_index) * o_b + n_base;
+        for (; f_index < f_count;) {
+            for (int og_index = 0; og_index < og; ++og_index) {
+                Type acc[MaxAcc];
+#pragma unroll
+                for (int d_index = 0; d_index < MaxAcc; ++d_index) {
+                    acc[d_index] = E4Ops<Type>::zero();
+                }
+                for (int v_index = 0; v_index < volume; ++v_index) {
+                    for (int g_index = 0; g_index < ig; ++g_index) {
+                        for (int a_index = 0; a_index < dim_a; ++a_index) {
+                            const Type value =
+                                sums_n[((static_cast<int64_t>(v_index) * ig + g_index) *
+                                            dim_a +
+                                        a_index) * nl + n_lane];
+                            const Type* factor_row =
+                                factors +
+                                ((((static_cast<int64_t>(v_index) * og + og_index) * ig +
+                                   g_index) * dim_a + a_index) * dim_d) * f_count +
+                                f_index;
+                            for (int d_index = 0; d_index < dim_d; ++d_index) {
+                                acc[d_index] = E4Ops<Type>::add(
+                                    acc[d_index],
+                                    E4Ops<Type>::mul(factor_row[d_index * f_count], value));
+                            }
+                        }
+                    }
+                }
+                const int64_t output_offset = output_base +
+                                              static_cast<int64_t>(og_index) * o_g +
+                                              static_cast<int64_t>(f_base + f_index) * o_f +
+                                              n_lane;
+                for (int d_index = 0; d_index < dim_d; ++d_index) {
+                    dst[output_offset + static_cast<int64_t>(d_index) * o_d] =
+                        acc[d_index];
+                }
+            }
+            n_lane += kE4Threads;
+            while (n_lane >= n_count) {
+                n_lane -= n_count;
+                ++f_index;
+            }
+        }
+        __syncthreads();
+    }
+}
+
 bool multiply_checked(int64_t left, int64_t right, int64_t* product) {
     if (left < 0 || right < 0 ||
         (left != 0 && right > std::numeric_limits<int64_t>::max() / left)) {
@@ -270,6 +453,134 @@ int map_cuda_error(cudaError_t error) {
     return error == cudaErrorMemoryAllocation ? QCD_STATUS_MEMORY : QCD_STATUS_INTERNAL;
 }
 
+int multiprocessor_count() {
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess) {
+        return 0;
+    }
+    static int cached_device = -1;
+    static int cached_count = 0;
+    if (cached_device == device) {
+        return cached_count;
+    }
+    int count = 0;
+    if (cudaDeviceGetAttribute(&count, cudaDevAttrMultiProcessorCount, device) !=
+            cudaSuccess ||
+        count <= 0) {
+        count = 0;
+    }
+    cached_count = count;
+    cached_device = device;
+    return count;
+}
+
+struct StagedTiles {
+    int nl = 0;
+    int fc = 0;
+    int nf = 0;
+};
+
+bool plan_staged_tiles(
+    const qcd_cuda_e4_spec& spec,
+    int64_t volume,
+    int64_t element_bytes,
+    StagedTiles* tiles) {
+    const int64_t extents[] = {
+        spec.z, spec.y, spec.x, spec.c, spec.t, spec.a, spec.b, spec.n,
+        spec.input_g, spec.output_g, spec.d, spec.e, spec.f};
+    for (int64_t extent : extents) {
+        if (extent > kStagedExtentLimit) {
+            return false;
+        }
+    }
+    if (spec.d < 1 || spec.d > kMaxAccumulators || spec.a < 1 ||
+        spec.input_g < 1 || spec.output_g < 1 || spec.n < 1 || spec.f < 1 ||
+        spec.t < 1 || spec.b < 1 || spec.c < 1 || spec.e < 1) {
+        return false;
+    }
+    const int64_t rank = spec.input_g * spec.a;
+    if (volume * rank > kStagedExtentLimit) {
+        return false;
+    }
+
+    int64_t nl = std::min<int64_t>(spec.n, kE4Threads);
+    int64_t sums_bytes = volume * rank * nl * element_bytes;
+    if (sums_bytes > kStagedSharedBudget / 2) {
+        nl = (kStagedSharedBudget / 2) / (volume * rank * element_bytes);
+        if (nl < 1) {
+            return false;
+        }
+        nl = std::min<int64_t>(nl, spec.n);
+        sums_bytes = volume * rank * nl * element_bytes;
+    }
+    const int64_t factor_bytes =
+        volume * spec.output_g * rank * spec.d * element_bytes;
+    int64_t fc_max = (kStagedSharedBudget - sums_bytes) / factor_bytes;
+    fc_max = std::min<int64_t>(fc_max, spec.f);
+    if (fc_max < 1) {
+        return false;
+    }
+
+    const int64_t units = spec.t * spec.b;
+    const int sm_count = multiprocessor_count();
+    const int64_t target_blocks = sm_count > 0 ? 10 * static_cast<int64_t>(sm_count) : 240;
+    const int64_t target_tiles = std::max<int64_t>(1, (target_blocks + units - 1) / units);
+    int64_t fc = (spec.f + target_tiles - 1) / target_tiles;
+    fc = std::max<int64_t>(1, std::min(fc, fc_max));
+    const int64_t nf = (spec.f + fc - 1) / fc;
+    if (units * nf > kStagedExtentLimit) {
+        return false;
+    }
+    tiles->nl = static_cast<int>(nl);
+    tiles->fc = static_cast<int>(fc);
+    tiles->nf = static_cast<int>(nf);
+    return true;
+}
+
+template <typename Type>
+int launch_e4_staged(
+    const void* a,
+    const void* b,
+    const void* gamma,
+    const void* c,
+    void* dst,
+    qcd_cuda_e4_spec spec,
+    cudaStream_t stream,
+    bool* launched) {
+    *launched = false;
+    const int64_t volume = spec.z * spec.y * spec.x;
+    StagedTiles tiles;
+    if (!plan_staged_tiles(spec, volume, static_cast<int64_t>(sizeof(Type)), &tiles)) {
+        return QCD_STATUS_OK;
+    }
+    const int64_t shared_elements =
+        volume * (static_cast<int64_t>(spec.input_g) * spec.a * tiles.nl +
+                  static_cast<int64_t>(spec.output_g) * spec.input_g * spec.a *
+                      spec.d * tiles.fc);
+    const int64_t blocks = static_cast<int64_t>(spec.t) * spec.b * tiles.nf;
+    if (blocks <= 0) {
+        return QCD_STATUS_OK;
+    }
+    const std::size_t shared_bytes =
+        static_cast<std::size_t>(shared_elements) * sizeof(Type);
+    if (spec.d > 1) {
+        e4_staged_kernel<Type, kMaxAccumulators>
+            <<<static_cast<unsigned int>(blocks), kE4Threads, shared_bytes, stream>>>(
+                static_cast<const Type*>(a), static_cast<const Type*>(b),
+                static_cast<const Type*>(gamma), static_cast<const Type*>(c),
+                static_cast<Type*>(dst), spec, tiles.nl, tiles.fc, tiles.nf);
+    } else {
+        e4_staged_kernel<Type, 1>
+            <<<static_cast<unsigned int>(blocks), kE4Threads, shared_bytes, stream>>>(
+                static_cast<const Type*>(a), static_cast<const Type*>(b),
+                static_cast<const Type*>(gamma), static_cast<const Type*>(c),
+                static_cast<Type*>(dst), spec, tiles.nl, tiles.fc, tiles.nf);
+    }
+    const int status = map_cuda_error(cudaGetLastError());
+    *launched = status == QCD_STATUS_OK;
+    return status;
+}
+
 template <typename Type, int ValuesPerLane>
 int launch_e4_tiled(
     const void* a,
@@ -316,7 +627,7 @@ int launch_e4_tiled(
 }
 
 template <typename Type>
-int launch_e4(
+int launch_e4_fallback(
     const void* a,
     const void* b,
     const void* gamma,
@@ -336,6 +647,24 @@ int launch_e4(
     static_assert(kMaxValuesPerLane == 4, "E4 lane specialization count drifted");
     return launch_e4_tiled<Type, kMaxValuesPerLane>(
         a, b, gamma, c, dst, spec, stream);
+}
+
+template <typename Type>
+int launch_e4(
+    const void* a,
+    const void* b,
+    const void* gamma,
+    const void* c,
+    void* dst,
+    qcd_cuda_e4_spec spec,
+    cudaStream_t stream) {
+    bool launched = false;
+    const int status =
+        launch_e4_staged<Type>(a, b, gamma, c, dst, spec, stream, &launched);
+    if (launched || status != QCD_STATUS_OK) {
+        return status;
+    }
+    return launch_e4_fallback<Type>(a, b, gamma, c, dst, spec, stream);
 }
 
 }  // namespace

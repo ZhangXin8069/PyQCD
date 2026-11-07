@@ -17,7 +17,7 @@
 | `src/apply_contract.cpp` | KUPL CPU 数值执行、sandwich/batch-dot fast path、compiled context | 原生组（执行） |
 | `src/mpi_runtime.cpp` | 单输出轴 MPI shard、对称 preflight、Allgatherv | 原生组（并行） |
 | `make.sh` | g++/OpenMP/OpenBLAS 直接构建 | 原生组（构建） |
-| `libpyqcdeinsum.so` | 产物（指向 `build/` 的稳定软链，不提交） | — |
+| `libpyqcdeinsum_kupl.so` | 产物（指向 `build/libpyqcdeinsum_kupl.so` 的稳定软链，不提交） | — |
 
 KUPL 独立编译 `runtime.cpp`、`plan_core.cpp`、`apply_contract.cpp` 与
 `apply_plan.cpp`，不包含或链接 CUDA 源码。
@@ -33,13 +33,16 @@ bash cpp/kupl/einsum/make.sh        # 直接构建 KUPL 库
   `-O3 -fopenmp -shared -fPIC -std=c++17 -fvisibility=hidden -Wall -Wextra`
   （可用 `PYQCD_EINSUM_FLAGS` 覆盖）。pack 与 sandwich lane 使用 OpenMP，
   GEMM 使用 CBLAS/OpenBLAS。
-- 先链接到 `build/libpyqcdeinsum.so.tmp.$$`，再 `mv -Tf` 覆盖
-  `build/libpyqcdeinsum.so`；公开路径用临时软链 + `mv -Tf` 原子替换，
+- 先链接到 `build/libpyqcdeinsum_kupl.so.tmp.$$`，再 `mv -Tf` 覆盖
+  `build/libpyqcdeinsum_kupl.so`；公开路径用临时软链 + `mv -Tf` 原子替换，
   与 PyQCU `cpp/kupl/qcu/make.sh` 的稳定软链做法一致。
+- 链接时写入 `-Wl,-soname,libpyqcdeinsum_kupl.so`（`make.sh:195`）；CUDA 后端的
+  soname 是 `libpyqcdeinsum_cuda.so`，两者可同时 `dlopen`，互不覆盖。
 - 失败时打印编译器原始输出（同时留档 `build/build.log`）并以非零退出。
 - 导出面由 `-fvisibility=hidden` + `QCD_EINSUM_API` + `-Wl,--version-script`
   三重收敛，动态表只保留冻结四入口和 compiled-context 三入口。
 - 构建目录可用 `PYQCD_EINSUM_BUILD_DIR` 重定向（ASAN 旁路构建用）。
+- 本机实测的可用开关、失败模式与复现命令见 §9（2026-11-08 实测）。
 
 ## 3. ABI 落地约定
 
@@ -126,7 +129,7 @@ bash cpp/kupl/einsum/make.sh        # 直接构建 KUPL 库
 
 ```bash
 bash build-kupl.sh
-nm -D --defined-only cpp/kupl/einsum/libpyqcdeinsum.so | grep Qcd
+nm -D --defined-only cpp/kupl/einsum/libpyqcdeinsum_kupl.so | grep Qcd
 ```
 
 最近一次实测（2026-11-06）：
@@ -156,3 +159,64 @@ nm -D --defined-only cpp/kupl/einsum/libpyqcdeinsum.so | grep Qcd
   返回状态码 1。
 - MPI 只支持单输出轴且不做跨 rank 浮点 allreduce；多轴、消去轴分片、NUMA 自动绑定
   尚未落地。多进程 fallback 只支持 NumPy host backend。
+
+## 9. 本机实测构建矩阵（实测日期 2026-11-08）
+
+只登记**本机实跑**结果。主机 Intel i7-13620H / WSL2 x86_64、conda-forge gcc 12.4.0、
+CUDA 12.4.131、RTX 4060 Laptop（`sm_89`）。跨后端总表与逐条复现命令见
+`docs/pyqcd_einsum_build_matrix_20261108.md`。
+
+### 9.1 四条实测事实
+
+1. **MPI 与 `CXX` 冲突：不显式关 MPI 就会失败。**
+   `PYQCD_EINSUM_ENABLE_MPI=0 bash build-kupl.sh` 成功。依赖自动探测时（`make.sh:11`
+   默认 `auto`），本机 `command -v mpicxx` 命中 → `MPI_ENABLED=1`（`make.sh:20-24`），
+   `DEFAULT_CXX` 变成 `mpicxx`，但 `CXX=${CXX:-$DEFAULT_CXX}`（`make.sh:36`）被 conda
+   已导出的 `x86_64-conda-linux-gnu-c++` 覆盖；该编译器不带 MPI include，构建在
+   `src/mpi_runtime.cpp:7` 的 `#include <mpi.h>` 处失败：
+
+   ```
+   mpi_runtime.cpp:7:10: fatal error: mpi.h: No such file or directory
+   ```
+
+   修复方向：`CXX=mpicxx` 或显式给出 MPI include（**本次未复跑**，只登记方向）。
+
+2. **OpenBLAS 探测与运行期不一致。** `make.sh` 的 `_discover_openblas` 在本机打印
+   `OpenBLAS: not found`（无 `pkg-config`、`/usr/include/cblas.h` 等候选头全缺、
+   `ldconfig -p` 无记录），但 BLAS 不在链接期解析：`src/apply_contract.cpp:287-290`
+   先试 `RTLD_DEFAULT`（进程内已有符号），再按 `libcblas.so.3` → `libcblas.so` →
+   `libopenblas.so.0` → `libopenblas.so` 的顺序 `dlopen`。本机
+   `ctypes.CDLL("libcblas.so.3")` 与 `ctypes.CDLL("libopenblas.so.0")` 均成功
+   （`ldconfig -p` 看不到，只在 conda 前缀 `/home/zhangxin/miniforge3/lib/` 找到），
+   数值路径可用。判定口径：**日志里的 `OpenBLAS: not found` 不能当作 BLAS 不可用**。
+   运行期可用 `PYQCD_EINSUM_CBLAS_LIB`（`src/apply_contract.cpp:269`）指定具体库。
+
+3. **`-march=native` 默认 ON，与 PyQCU 相反。** `NATIVE_ARCH=${PYQCD_EINSUM_NATIVE_ARCH:-1}`
+   （`make.sh:37-41`）默认追加 `-march=native -funroll-loops`；PyQCU 对应开关默认
+   OFF。后果是默认产物绑定构建机 ISA，跨机分发（含 Kunpeng/aarch64）有不可加载 /
+   非法指令风险；该风险本次**未实机复跑**，但两边默认值的差异是确定的。
+   需要可分发产物时应显式 `PYQCD_EINSUM_NATIVE_ARCH=0`（退回 `make.sh:38`
+   不含 `-march` 的基线 flags）。
+
+4. **发布方式与 PyQCU 一致（对照登记，非本次实测）。** 稳定软链 + `mv -Tf` 原子替换
+   与 `cpp/kupl/qcu/make.sh` 同款（据 §2 记载）；与 PyQCU 的已知差异集中在第 3 条的
+   默认 ISA 开关，其余行为本次未逐项核对。
+
+### 9.2 本目录的可用组合
+
+| 组合 | 命令 | 状态（2026-11-08） |
+|---|---|---|
+| MPI 关闭 | `PYQCD_EINSUM_ENABLE_MPI=0 bash build-kupl.sh` | 实测通过 |
+| MPI 自动探测（默认） | `bash build-kupl.sh` | 实测失败（9.1-1） |
+| MPI 开启 + 指定编译器/include | `PYQCD_EINSUM_ENABLE_MPI=1 CXX=mpicxx bash build-kupl.sh` | 未实测 |
+
+产物核对（非 MPI 构建）：
+
+```bash
+readelf -d cpp/kupl/einsum/libpyqcdeinsum_kupl.so | grep -E 'SONAME|NEEDED'
+# SONAME libpyqcdeinsum_kupl.so；NEEDED 仅 libstdc++/libm/libgomp/libgcc_s/libc/ld-linux
+nm -D --defined-only cpp/kupl/einsum/libpyqcdeinsum_kupl.so \
+  | awk '{print $NF}' | grep Qcd | sort
+# 8 个入口，含 applyContractMpiQcd——非 MPI 构建里它是
+# src/apply_contract.cpp:1678 的 fail-closed stub（返回 QCD_STATUS_INVALID=1）。
+```

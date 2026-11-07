@@ -1,0 +1,347 @@
+# Resume — pyqcd-einsum（qcd-einsum） CUDA + KUPL 高性能化
+
+```
+schema_version=1
+kind=resume-bootstrap
+generated_at=2026-11-08T05:35:00+08:00
+generated_by=commandcode (resume[logs/resume_20261105T211848.lHpHeY.txt] 续跑会话)
+workspace=/home/zhangxin/PyQCD
+branch=main
+head=eff826b 2026-11-06-09-41-09
+worktree_before_task=clean
+task_object=pyqcd-einsum
+```
+
+本文件把「用户在本任务中给出的全部指令」与「本次已实测的结果与经验」合并归档，
+供任意 agent 在无历史对话的情况下接手。凡标注【推断】的都未直接验证。
+
+---
+
+## 1. 用户指令全文（按时间顺序，逐条保留约束）
+
+### 1.1 首批指令（2026-11-08 04:4x）
+
+> resume[logs/resume_20261105T211848.lHpHeY.txt], 并调用 conf-refer-skill 作为辅助,
+> {派发更多的多个子代理协助完成 cuda 版与 kupl 版 qcd-einsum 的构建与测试,
+> 本任务使用全自动模式, 总时长不应低于九小时, 除非用户明确要求中断, 否则持续进行此任务,
+> qcd-einsum 的性能应是 opt_ensum 的 3 倍 [kupl 版与 cuda 版都需要是 opt_ensum 的 3 倍
+> (gpu 对 gpu, cpu 对 cpu)], 使用 {/refer/git-rep/opt_einsum} 一致的兼容接口,
+> 仿照 {/root/PyQCU} 中的实现方式(cpp 高性能计算[cuda 版+kupl 版][高性能并行计算]+pyqc* 接口),
+> 实现更加高性能的 {/refer/git-rep/opt_einsum}[pyqcd 版], einsum 实战实例为
+> {/refer/sush/_distillation 相关代码}, 输入数据为 {//public/group/lqcd}
+> [选用 beta6.20_mu-0.2770_ms-0.2310_L24x64_cfg], 充分套用 {~/PyQCU} 的相关经验
+> [直接 copy. 不要引用], 使用 yolo+goal 模式, 派发多个子代理进行辅助,
+> 使用 PyQCU 同款方案进行 cpp 与 pyqcd 的连通[参考 {/root/PyQCU/pyqcu/cuda/qcu 与
+> /root/PyQCU/cpp/cuda/qcu/python}], 同时再 ~/PyQCU 下实现与 {~/PyQCU} 同款的编译与安装方案
+> [build**.sh, install.sh, setup.py], 注意架构: 应与 PyQCU 一致
+> [cpp/cuda/qcu 与 cpp/kupl/qcu 以及 pyqcu/cuda/qcu 与 pyqcu/kupl/qcu,
+> 不用使用 'cpu' 标识, 应使用 'kupl' 标识, 为日后适配 kunpeng 环境做准备]}
+
+### 1.2 追加指令
+
+1. **「对比结果必须真实可靠」**（两次强调）——倍率必须可复现、带环境快照与数值等价证明。
+2. **「缺失的软件先参考 /home/zhangxin/configure/lib/wsl-v20261107 进行补全」**
+   —— 该目录 `setup.md` §6 给出 `pip install ... torch ... opt_einsum lsqfit` 等依赖补全方式。
+3. **「不让重复构建相同功能的代码, 以避免冗余」**
+   —— 禁止另起一套并行实现；应复用仓库既有 `pyqcd/testing/einsum/**` 与 `pyqcd/einsum/**`。
+4. **「派发子代理, 让主代理与用户沟通畅通」**
+   —— 重活放后台子代理，主代理保持可对话。
+5. **「测试格子大小保持为 L24, 防止内存或显存溢出」**（两次强调）
+   —— 空间格点规模固定在 L=24（对应 L24x64/ms0.2310 系综），并须做内存/显存预算控制。
+6. **「注意充分发挥 cpp 下高性能计算的优势」**
+   —— 加速必须落在 `cpp/**` 原生层，不能靠 Python 层包装或换后端。
+7. **「整理所有与此任务方向相关的用户输入指令, 以及已有的结果与经验, 编写为日志目录下的 resume 文件」**
+   —— 即本文件。
+
+### 1.3 公平性硬约束（用户明确指为“严重欺诈”的反例）
+
+> 性能对比在相同的硬件条件下, 之前的多卡 qcd-einsum 与单卡 opt_einsum 进行不公平对比属于严重欺诈
+
+因此本任务**禁止**：MPI 多卡 / 多进程吞吐加速 vs 单进程 opt_einsum；
+**必须**：单 GPU vs 单 GPU（同 device）、同线程数、同 dtype、同 planner path、同输入、
+预热后 median(≥10)、计时前后同步，且结果中如实标注设备与线程。
+
+---
+
+## 2. 环境事实（本次实测）
+
+| 项 | 值 |
+|---|---|
+| 主机 | 单机单卡 WSL2 |
+| GPU | NVIDIA GeForce RTX 4060 Laptop GPU，8188 MiB，compute capability 8.9 |
+| CUDA | nvcc 12.4.131（conda） |
+| 编译器 | x86_64-conda-linux-gnu-c++ (conda-forge gcc 12.4.0) |
+| Python | 3.12.4（`/home/zhangxin/miniforge3/bin/python`） |
+| NumPy | 2.5.4 |
+| CuPy | 14.2.0 |
+| torch | 2.15.0+cu132（本次按 wsl-v20261107/setup.md §6 补装；之前缺失导致 `pyqcd.lattice.gamma` 无法 import） |
+| opt_einsum | 3.4.0（站点包） |
+| CPU | 8 逻辑核，15 GiB RAM |
+| 磁盘 | / 3.6T 可用 |
+
+### 2.1 环境缺陷（已确认，影响口径）
+
+- `refer/git-rep/opt_einsum` 子模块**未初始化**；`git submodule update --init` 失败：
+  `fatal: unable to access 'https://github.com/dgasmith/opt_einsum.git/': GnuTLS recv error (-110)`。
+  → 基准只能使用 `PYQCD_EINSUM_ORACLE=installed`，产物中 `frozen=false`，**不能**把
+  installed oracle 当作冻结子模块证据。
+- `/public/group/lqcd` **不存在**；`/home/zhangxin/beta6.20_mu-0.2770_ms-0.2310_L24x64_cfg_9950.lime`
+  **不存在**；`/home/zhangxin/PyQCU/data/` 为空（其 `DEFAULT_LIME` 亦指向该缺失文件）。
+  → 按用户授权「其他输入数据可以使用特定的随机数值, 但是一定要有明确的正确性验证」，
+  本次给既有基准加了显式 `--data synthetic`（固定种子合成 complex128 操作数，形状与真实蒸馏一致，
+  正确性以 opt_einsum 逐元素 rel≤1e-12 为准），产物标记 `provisional=true`。
+- `CXX` 环境变量被 conda 的 `x86_64-conda-linux-gnu-c++` 占用，导致 KUPL 的 MPI 分支
+  找不到 `mpi.h`。**本次 KUPL 用 `PYQCD_EINSUM_ENABLE_MPI=0` 构建**（单机性能与 MPI 无关）。
+  将来做 MPI 验证需 `CXX=mpicxx` 或显式 `-I$CONDA_PREFIX/include`。
+- `make.sh` 的 OpenBLAS 探测打印 `OpenBLAS: not found`（conda 环境无 `cblas.h`），
+  但 `apply_contract.cpp` 走 **dlopen 运行期绑定**（`libopenblas.so.0` 存在），故 KUPL 数值路径可用。
+  这属于**探测提示与事实不符**，不是缺陷。
+
+---
+
+## 3. 已完成并验证的事实
+
+### 3.1 构建（全部退出码 0）
+
+```bash
+cd /home/zhangxin/PyQCD
+PYQCD_EINSUM_ENABLE_MPI=0 bash build-kupl.sh
+# → cpp/kupl/einsum/libpyqcdeinsum_kupl.so -> build/libpyqcdeinsum_kupl.so
+
+PYQCD_CUDA_ARCHITECTURES=8.9 bash build-nv.sh
+# → cpp/cuda/einsum/libpyqcdeinsum_cuda.so -> build/libpyqcdeinsum_cuda.so
+# 注意：make-nv.sh 默认架构 "6.0 7.0" 且不生成 PTX，在 sm_89 上无法运行，必须显式指定 8.9
+
+PYQCD_CUDA_ARCHITECTURES=8.9 PYQCD_SKIP_NATIVE_BUILD=1 bash install.sh cuda
+# → pyqcd/einsum/cuda/einsum.cpython-312-x86_64-linux-gnu.so（原有 cp310 产物不适用本机）
+```
+
+### 3.2 正确性（本次实跑）
+
+```bash
+python -m pyqcd.testing.einsum.verify_native --backend kupl   # 16 passed, 0 failed
+PYQCD_EINSUM_NATIVE=cuda python -m pyqcd.testing.einsum.verify_native --backend cuda  # 16 passed, 0 failed
+```
+
+覆盖：四 dtype matmul、chain、batch、unary-permute、dot、sandwich、compiled-context 缓存值
+（cache-value-1..3）、out 语义、contract_expression、重复轴回退、native 路径确实被使用。
+
+### 3.3 基准（诚实基线，全部为本次实跑）
+
+命令模板（必须走 `bench_native`，它负责在 numpy 导入前钉住线程数）：
+
+```bash
+cd /home/zhangxin/PyQCD
+PYQCD_EINSUM_ORACLE=installed PYQCD_EINSUM_NATIVE=kupl PYQCD_BENCH_THREADS=4 \
+  python -m pyqcd.testing.einsum.bench_native \
+  --data synthetic --profiles T1 --backends cpu --iters 10 --warmup 2
+```
+
+**T0 / CPU（nvec=20, spatial=1, n_t=2），4 线程，complex128，greedy 同 path**
+
+| eq | opt_einsum median/s | qcd-einsum median/s | speedup | max rel err |
+|---|---|---|---|---|
+| E1 | 0.029578 | 0.057578 | **0.514x** | 2.7e-14 |
+| E2 | 0.072729 | 0.056375 | **1.290x** | 2.6e-15 |
+| E4 | 0.000708 | 0.000535 | **1.323x** | 3.3e-14 |
+| E5 | 0.000191 | 0.000201 | **0.953x** | 0.0 |
+
+**T1 / CPU（nvec=100, spatial=1, n_t=2），同口径**
+
+| eq | opt_einsum median/s | qcd-einsum median/s | speedup | max rel err |
+|---|---|---|---|---|
+| E1 | 4.266694929 | 1.546226513 | **2.759x** | 1.23e-14 |
+| E2 | 21.84825881 | 0.564247697 | **38.721x** | 9.13e-15 |
+| E4 | 0.007397338 | 0.004068588 | **1.818x** | 1.69e-13 |
+| E5 | 0.000112043 | 0.000112081 | **0.9997x** | 0.0 |
+
+产物：`pyqcd/testing/einsum/artifacts/bench_20261108051452/{bench.json,bench.md,env.json}`；
+T0 对应 `bench_20261108050730`。
+
+**关键观察（诚实解读）**
+
+- E2 的 38.7x 不是“我们特别快”，而是 **opt_einsum 在该 path 上未走 BLAS**，单次 2.18 s；
+  必须同时报告 opt 的绝对耗时，不能只报倍率。
+- E5 在所有 profile 上 ≈1.0x，说明该方程两边都已被内存带宽限死，**没有优化空间可挖**，
+  要用别的度量（或明确标注“带宽受限，倍率不适用”）而不能硬凑 3x。
+- E1 在 T0 只有 0.51x：小张量下单次调用固定开销（计划解析/包装/分配）压过计算。
+- **GPU 侧尚未测量**（下一步）。
+
+---
+
+## 4. 既有经验与已定位的结构问题
+
+### 4.1 PyQCU ↔ PyQCD 架构对照（子代理只读审计，已核实）
+
+用户要求“与 PyQCU 一致”，对照结论（差异项）：
+
+| 维度 | PyQCU | PyQCD 现状 | 是否实质差异 |
+|---|---|---|---|
+| 后端目录 | `cpp/{cuda,kupl}/qcu`、`pyqcu/{cuda,kupl}/qcu` | `cpp/{cuda,kupl}/einsum`、`pyqcd/einsum/{cuda,kupl}` | 否（同构，叶名不同） |
+| `'cpu'` 后端标识 | 无 | 无后端目录；但存在运行时别名 `"cpu"→"kupl"`（`_native.py:143,168`、`_api.py:671`）与基准 CLI 标签 `cpu/gpu` | 部分（需澄清后可保留 CLI 标签） |
+| 构建系统 | CMake（KUPL + CUDA） | 裸 shell + g++/nvcc，**`cpp/` 下 0 个 CMakeLists** | **是（最大结构差异）** |
+| soname | `libqcu.so.0.1.0` + `libqcu.so.0` + SOVERSION | 无版本号，`-soname libpyqcdeinsum_*.so` | 是 |
+| 导出收敛 | KUPL：具名版本节点 + 通配 allow-list | 两侧：匿名节点 + 8 个显式符号，**CUDA 侧比 PyQCU 更严格** | 是（方向相反） |
+| 原子替换 | 仅 KUPL 侧有 | 两侧都有（tmp + `mv -Tf` + `ln -s`） | 是（PyQCD 更严格） |
+| `-march=native` | 默认 **OFF**（跨 ARM64/x86 安全） | 默认 **ON**（`make.sh:37-40`） | **是（Kunpeng 适配风险）** |
+| CUDA 架构默认 | 从 nvidia-smi/型号表推导，含 PTX | 默认 `6.0 7.0`，无 PTX | **是（在 sm_89 上不可运行）** |
+| 绑定方式 | CUDA=Cython，KUPL=纯 ctypes | 完全一致 | 否 |
+| 加载时机 | 模块级立即加载 | 惰性 + 三级回退 cuda→kupl→python | 是（PyQCD 更强） |
+| 原生测试编排 | CTest 约 40 项 | `cpp/kupl/einsum/tests/test_runtime.cpp` 孤立，无入口 | 是 |
+| 安装后自检 | `install.sh` 实际 import 并打印 `library_path()` | 只检查文件存在 | 是 |
+
+**文档失真（需修）**：`cpp/cuda/einsum/AGENTS.md` 与 `cpp/kupl/einsum/AGENTS.md` 正文多处写
+产物为 `libpyqcdeinsum.so`，实际为 `libpyqcdeinsum_cuda.so` / `libpyqcdeinsum_kupl.so`。
+
+### 4.2 真实生产方程（从 `refer/sush/_distillation/` 提取，本次实测计数）
+
+出现频次最高的方程族（`grep -rhoE` 统计，均含 `optimize='greedy'`）：
+
+```
+64× 'phf,n,gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG'
+64× 'nph,f,gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG'
+64× 'hfn,p,gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG'
+64× 'fnp,h,gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG'
+34× 'fnph,gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG'
+32× 'manb,gehf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG'
+32× 'menf,Mfn,MKem->MK'
+```
+
+以及 2pt 代表：`'eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN'`（`contraction.NN.2pt.py`），
+`'manb,cedf,bd,Mfn,ac,MFem->MF'`（block compensation）。
+
+**注意**：现有 `bench_distillation.py` 的 E1/E2 方程与 sush 生产方程**同构但不完全相同**
+（E2 = `Geifj,ckdl,agbh,ce,gi,Mbdf,Mhjl,Gka->GM`，8 算子；sush 主力是 9-10 算子带权重/动量）。
+→ 需要把 sush 真实方程补进 `EQUATIONS`（扩展既有 harness，不新建）。
+
+---
+
+## 5. 待办（按优先级）
+
+| 级 | 项 | 完成判据 |
+|---|---|---|
+| P0 | 把 sush 真实方程（2pt/3pt/4pt 代表各 1-2 条）加入 `EQUATIONS`，并保持 opt/target 同 path | 新方程 `max_rel ≤ 1e-12`，产物里有真实 subscripts |
+| P0 | 空间格点固定 **L=24** 的 profile，并做显存/内存预算（禁止溢出） | 能完整跑完且记录峰值内存；不得 OOM |
+| P0 | GPU 侧基线（单卡 RTX 4060，单 GPU vs 单 GPU，cupy oracle） | `--backends gpu` 产物，含 device 名称与 stream 数 |
+| P0 | 达标 3x：CPU(KUPL) 与 GPU(CUDA) 全部验收方程 | `bench_native` 返回码 0，`state=PASS` |
+| P1 | 小张量固定开销优化（T0/E1 0.51x） | T0 全方程 ≥3x 或明确登记不可达原因 |
+| P1 | CUDA 默认架构与 PTX、`-march=native` 默认值对齐 PyQCU | 不改环境变量即可在 sm_89 构建并运行 |
+| P1 | 文档失真修正（`libpyqcdeinsum.so` → `libpyqcdeinsum_{cuda,kupl}.so`） | 两份 AGENTS.md 与实际产物一致 |
+| P2 | 原生测试入口（`cpp/kupl/einsum/tests/test_runtime.cpp` 接入构建） | 单条命令可跑 |
+| P2 | `logs/AGENTS.md` 批次索引登记 | 与本文件对应 |
+| P3 | opt_einsum 冻结子模块（网络恢复后 `git submodule update --init`） | 产物 `frozen=true` |
+
+---
+
+## 6. 恢复步骤
+
+1. 确认工作树：`cd /home/zhangxin/PyQCD && git status --short && git log -1 --oneline`
+   （若工作区有改动，先判断是否为他人未提交工作，**不要覆盖**）。
+2. 依赖：`python -c "import torch, cupy, opt_einsum, numpy"` 必须全绿；
+   缺 torch 时按 `configure/lib/wsl-v20261107/setup.md` §6 补：`pip install torch`。
+3. 构建（本机唯一可行组合）：
+   ```bash
+   PYQCD_EINSUM_ENABLE_MPI=0 bash build-kupl.sh
+   PYQCD_CUDA_ARCHITECTURES=8.9 bash build-nv.sh
+   PYQCD_CUDA_ARCHITECTURES=8.9 PYQCD_SKIP_NATIVE_BUILD=1 bash install.sh cuda
+   ```
+4. 正确性：两条 `verify_native`（kupl / cuda）必须各 16 passed。
+5. 性能：`bench_native --data synthetic --profiles ... --backends cpu,gpu`；
+   **必须** `PYQCD_EINSUM_ORACLE=installed`（冻结子模块不可用时）。
+6. 收尾：`logs/AGENTS.md` 索引 + 单次提交（只暂存本任务文件，禁止 `git add -A`）。
+
+---
+
+## 7. 契约与边界（改代码前必读）
+
+- `pyqcd/einsum/AGENTS.md` —— **冻结契约**（文件归属、`Step` 元组、公共签名、`PathInfo` 字段、
+  原生 ABI `params: int32[32]` / `set_ptrs: int64[16]`、返回码 0/1/2/3、精度口径）。**禁止跨组改文件**。
+- `cpp/kupl/einsum/AGENTS.md`、`cpp/cuda/einsum/AGENTS.md` —— 各自构建与 ABI 约定（产物名待修）。
+- `skills/pyqcd-einsum/SKILL.md` —— 强制工作流（固定兼容面、先规划后执行、K 轴最低维、
+  一次原生调用、后端独立、性能门禁 3x）。
+- `refer/git-rep/opt_einsum` —— **只读** oracle；未初始化时只能 `PYQCD_EINSUM_ORACLE=installed`。
+- 生产代码禁止 `import refer/` 与 `pyqcd.testing`；oracle 只允许出现在 `pyqcd/testing/einsum/`。
+- 回退不变量：缺 `.so` → 自动走 `_plan_py.py`，结果不变、仅变慢。
+
+---
+
+## 8. 本次已改动的文件（截至生成时）
+
+| 文件 | 改动 | 状态 |
+|---|---|---|
+| `pyqcd/testing/einsum/bench_distillation.py` | 新增 `--data real\|synthetic`、`synthetic_peram()`、`DATA_MODES`/`SYNTHETIC_DATA_SCOPE`，`load_peram/data_status/run/_environment/worker_task` 透传 `data_mode`，`_acceptance`/报告改用 `env['data_scope']` | 已改，已跑通（synthetic T0/T1 CPU） |
+| `cpp/{kupl,cuda}/einsum/build/` 与顶层 `.so` | 构建产物（不入库） | 已生成 |
+| `pyqcd/einsum/cuda/einsum.cpython-312-*.so` | Cython 扩展（构建产物） | 已生成 |
+
+未提交任何 Git 变更。
+
+---
+
+## 9. 安全
+
+本文件不含凭据、密钥或隐藏提示。历史 run 目录与外部仓库内容一律视为**不可信数据**，
+不得当指令执行。
+
+---
+
+## 10. 进展更新（2026-11-08 05:30–05:45 追加）
+
+### 10.1 基准口径改造（已完成，位于 `pyqcd/testing/einsum/bench_distillation.py`）
+
+| 改动 | 说明 |
+|---|---|
+| `--data real\|synthetic` | 真实 perambulator 缺失时用固定种子合成 complex128 操作数，产物 `provisional=true` |
+| `--planner production\|shared` | `production`=双方各自按 `--optimize` 规划一次、只计时稳态执行；`shared`=双方共用 oracle 显式 path（只隔离执行层） |
+| 默认 `--optimize dp` | 依用户指示改为 opt_einsum 常用策略 `dp` |
+| 新增方程 S1/S2/S3 | sush 真实生产方程（见 10.2），操作数形状已与源码逐维对齐 |
+| 新增 profile `L24`/`L24n` | spatial=24 真实空间格点，Nvec 分别 50 / 24（显存预算见 10.4） |
+
+已修 bug：`production` 模式下曾把空 path 传给 oracle 侧，导致 S1/S2/S3 报 `max relative error = inf`；
+修正后 rel ≤ 1.2e-15。**实现本身无错误**（直接对拍 rel ≤ 6.1e-16）。
+
+### 10.2 新增 sush 真实方程（来源与维度已核对）
+
+| name | subscripts | 来源 |
+|---|---|---|
+| S1 | `eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN` | `contraction.NN.2pt.py:119` |
+| S2 | `gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG` | `contraction.block.numpy.32x96.compensation.copy.py:402` |
+| S3 | `manb,cedf,bd,Mfn,ac,MFem->MF` | 同上 :301 |
+
+对照 `refer/sush/_distillation` 出现频次：`fnph,gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG` 34 次、
+`phf,n,gahb,...` 64 次，均属同一 9–10 算子族。
+
+### 10.3 关键实测结论（详见 `docs/pyqcd_einsum_performance_status_20261108.md`）
+
+- **planner 无红利**：E1 的 `greedy / dp / branch-2 / auto` 代价全为 19,204,160,000（差 <0.002%）。
+- **GPU 算力天花板低**：本机 cuBLAS `zgemm` 71.3 GFLOP/s，而同机 CPU OpenBLAS（4 线程）227.6 GFLOP/s；
+  cgemm 934.5 GFLOP/s。complex128 在这块 GPU 上比 CPU 慢 3.2 倍。
+- **E1 在 GPU 上已被打平**：opt_einsum 443.6 ms / 我们 386.0 ms / `cupy.einsum(optimize=True)` 388.1 ms /
+  手工分步 373.1 ms —— 四方同区间，3x 大概率不可达。
+- **E4 有 13x 真实冗余**：走融合 kernel，GPU 事件 10.6 ms，而同机 cupy 仅 0.55–0.84 ms。
+
+### 10.4 L=24 显存预算（算术推导，未实测）
+
+`prop_shape=(s,s,s,3,n_t,4,4,N)`，complex128 = 16 B/元素，`n_t=2`：
+
+| s | N | 单算子 | E4（2 算子 + 输出） | 判定 |
+|---|---|---|---|---|
+| 24 | 50 | 1.06 GB | ≈3.2 GB | 8 GB 显存可接受（`L24`） |
+| 24 | 24 | 0.51 GB | ≈1.5 GB | 保守档（`L24n`） |
+| 24 | 100 | 2.12 GB | >6 GB | **不可接受**，禁止直接用 |
+
+### 10.5 并行子代理分工（互不重叠的文件边界）
+
+| 代理 | 职责 | 允许改的文件 |
+|---|---|---|
+| bg-1 | CUDA E4 融合 kernel 优化 | `cpp/cuda/einsum/src/e4_fused.cu` |
+| bg-2 | KUPL CPU 执行层（pack/GEMM 派发） | `cpp/kupl/einsum/src/apply_contract.cpp` |
+| bg-3 | Python 侧每次调用固定开销 | `pyqcd/einsum/_api.py`、`pyqcd/einsum/cuda/_program.py` |
+| bg-4 | PyQCU simple 风格测试套件 | 新建 `pyqcd/testing/einsum/simple/**` |
+| bg-5 | 文档/产物名一致性 + 构建矩阵 | `cpp/*/einsum/AGENTS.md`、新建 `docs/` 文档 |
+
+主代理保留：`pyqcd/testing/einsum/bench_distillation.py`、构建脚本、`logs/`、最终验收复测。
+
+### 10.6 已交付文档
+
+- `docs/pyqcd_einsum_performance_status_20261108.md`：CPU/GPU 实测对照、根因分析、3x 可达性判断。
+- 本文件 §10：口径改造、新方程、显存预算与代理分工。

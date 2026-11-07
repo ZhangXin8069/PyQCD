@@ -1,0 +1,161 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-08 05:24:29 +0800
+批次: pyqcd/einsum
+主任务: pyqcd-einsum: CUDA/KUPL 原生收缩引擎构建、正确性验证与 3x 性能基线
+触发原因: 阶段成果
+摘要: KUPL/CUDA 构建成功、verify_native 各 16/16、CPU 基线 T0/T1 实测、resume 文件落盘
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 环境补全与构建（全部退出码 0）
+- 目标: 让 pyqcd.einsum 的 KUPL/CUDA 原生层与 Cython 绑定在本机（RTX 4060 / CUDA 12.4 / Python 3.12）可用
+- 命令/操作:
+  - `pip install --no-cache-dir torch` → torch-2.15.0+cu132（依据 `configure/lib/wsl-v20261107/setup.md` §6；此前缺失导致 `pyqcd.lattice.gamma` 无法 import）
+  - `PYQCD_EINSUM_ENABLE_MPI=0 bash build-kupl.sh`
+  - `PYQCD_CUDA_ARCHITECTURES=8.9 bash build-nv.sh`
+  - `PYQCD_CUDA_ARCHITECTURES=8.9 PYQCD_SKIP_NATIVE_BUILD=1 bash install.sh cuda`
+- 关键输出: `make.sh: SUCCESS`、`make-nv.sh: SUCCESS`、`PyQCD einsum installation complete. backend: cuda`
+- 退出码: 0 / 0 / 0
+- 证据与判断:
+  - 首次 KUPL 构建失败：`mpi_runtime.cpp:7:10: fatal error: mpi.h: No such file or directory`。
+    根因是 conda 把 `CXX` 固定为 `x86_64-conda-linux-gnu-c++`，`make.sh` 的 `auto` MPI 探测因
+    `mpicxx` 存在而启用 MPI 分支，但该编译器不带 MPI include。改用 `PYQCD_EINSUM_ENABLE_MPI=0`
+    构建非 MPI 版本（单机性能与 MPI 无关）；MPI 验证需 `CXX=mpicxx`，留待后续。
+  - `make-nv.sh` 默认架构 `6.0 7.0` 且不生成 PTX，在 sm_89（RTX 4060）上不可运行，必须显式
+    `PYQCD_CUDA_ARCHITECTURES=8.9`。
+  - `make.sh` 打印 `OpenBLAS: not found`（conda 无 `cblas.h`），但 `apply_contract.cpp` 走 dlopen
+    运行期绑定 `libopenblas.so.0`（存在），数值路径正常。属探测提示与实际不符，非缺陷。
+  - 原 `pyqcd/einsum/cuda/einsum.cpython-310-*.so` 与本机 Python 3.12 不匹配，已重建为 cp312。
+
+### S2 — 原生正确性验证
+- 命令/操作:
+  - `python -m pyqcd.testing.einsum.verify_native --backend kupl`
+  - `PYQCD_EINSUM_NATIVE=cuda python -m pyqcd.testing.einsum.verify_native --backend cuda`
+- 关键输出: `kupl: 16 passed, 0 skipped, 0 failed`；`cuda: 16 passed, 0 skipped, 0 failed`
+- 退出码: 0 / 0
+- 证据与判断: 覆盖四 dtype matmul、chain、batch、unary-permute、dot、sandwich、compiled-context
+  缓存值（cache-value-1..3）、out 语义、contract_expression、重复轴回退、native 路径确实被使用。
+
+### S3 — 基准确口径改造（复用既有 harness，不新建重复实现）
+- 目标: 在真实数据缺失的前提下仍能产出可复核的性能数字
+- 命令/操作: 修改 `pyqcd/testing/einsum/bench_distillation.py`，新增显式 `--data real|synthetic`：
+  `DATA_MODES`、`SYNTHETIC_DATA_SCOPE`、`synthetic_peram()`、`load_peram(..., data_mode)`、
+  `data_status(..., data_mode)`、`_environment(..., data_mode)`、worker task 透传 `data_mode`，
+  `_acceptance`/报告改用 `env['data_scope']`
+- 关键输出: `--data synthetic` 可完整跑通 T0/T1 CPU；产物 `provisional=true`，`data_scope` 注明
+  “固定种子合成 complex128 操作数，正确性以 opt_einsum 逐元素对照为准”
+- 退出码: 0
+- 证据与判断: 未新建第二套基准框架，全部计时/验收/产物逻辑复用既有实现。
+
+### S4 — CPU 基线实测（单机，4 线程，complex128，同 greedy path）
+- 命令/操作:
+  `PYQCD_EINSUM_ORACLE=installed PYQCD_EINSUM_NATIVE=kupl PYQCD_BENCH_THREADS=4 python -m pyqcd.testing.einsum.bench_native --data synthetic --profiles T0|T1 --backends cpu --iters 10 --warmup 2`
+- 关键输出（median/s，opt vs qcd，speedup，max rel err）:
+  - T0 (Nvec=20, spatial=1): E1 0.029578 / 0.057578 / 0.514x / 2.7e-14；
+    E2 0.072729 / 0.056375 / 1.290x / 2.6e-15；E4 0.000708 / 0.000535 / 1.323x / 3.3e-14；
+    E5 0.000191 / 0.000201 / 0.953x / 0.0
+  - T1 (Nvec=100, spatial=1): E1 4.266694929 / 1.546226513 / 2.759x / 1.23e-14；
+    E2 21.84825881 / 0.564247697 / 38.721x / 9.13e-15；E4 0.007397338 / 0.004068588 / 1.818x / 1.69e-13；
+    E5 0.000112043 / 0.000112081 / 0.9997x / 0.0
+- 退出码: 0（`bench_native` 因 <3x 判 FAIL，符合其门禁语义）
+- 证据与判断:
+  - E2 的 38.7x 不是“我们快”，而是 opt_einsum 在该 path 未走 BLAS，单次 2.18 s；报告中必须同时给绝对耗时。
+  - E5 各 profile ≈1.0x，说明两边都被内存带宽限死，不能硬凑 3x。
+  - T0/E1 仅 0.51x，说明小张量下我们的单次调用固定开销压过计算。
+  - 注意：必须经 `bench_native` 启动，否则 `pyqcd.testing` 包初始化会先导入 NumPy，线程钉扎失效
+    （首次用 `-m pyqcd.testing.einsum.bench_distillation` 即触发该阻断项）。
+  - 产物：`pyqcd/testing/einsum/artifacts/bench_20261108050730`（T0）、`bench_20261108051452`（T1）。
+
+### S5 — 架构对照与真实方程提取
+- 命令/操作: 派发只读子代理对照 `/home/zhangxin/PyQCU` 与 PyQCD 的 einsum 子系统；从
+  `refer/sush/_distillation/` 统计真实生产方程
+- 关键输出:
+  - PyQCU 用 CMake（SOVERSION/visibility preset/exclude-libs/CTest），PyQCD `cpp/` 下 0 个 CMakeLists；
+  - `-march=native`：PyQCU 默认 OFF，PyQCD 默认 ON（Kunpeng 适配风险）；
+  - CUDA 默认架构 PyQCU 从 nvidia-smi 推导并含 PTX，PyQCD 固定 `6.0 7.0` 无 PTX；
+  - 两后端绑定方式（CUDA=Cython、KUPL=纯 ctypes）完全一致；
+  - sush 生产主力方程：`fnph,gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG`（10 算子）等，
+    现有 E1/E2 与之同构但不完全相同。
+- 退出码: 0
+- 证据与判断: 详见 `logs/resume_20261108T053500_pyqcd-einsum.txt` §4.1/§4.2。
+
+## 验证与证据
+- 测试/检查: `verify_native`（kupl/cuda 各 16 项）、`bench_native`（T0/T1 CPU，iters=10，warmup=2）
+- 结果: 正确性全绿（max rel err ≤ 1.69e-13，契约阈值 1e-12）；性能 8 个单元格中仅 T1/E2 达 3x
+- 未验证项:
+  - GPU 侧基线尚未测量
+  - MPI 变体未构建（需 `CXX=mpicxx`）
+  - L=24 空间 profile 未实现（现有 profile 为 spatial=1）
+  - opt_einsum 冻结子模块未初始化（网络 `GnuTLS recv error (-110)`），oracle 为站点包 3.4.0
+
+## 变更与产物
+- 文件:
+  - `pyqcd/testing/einsum/bench_distillation.py`（新增 `--data real|synthetic` 及全部透传链路）
+  - `logs/resume_20261108T053500_pyqcd-einsum.txt`（本任务 resume/交接文件）
+- 产物（不入库）:
+  - `cpp/kupl/einsum/libpyqcdeinsum_kupl.so` → `build/libpyqcdeinsum_kupl.so`
+  - `cpp/cuda/einsum/libpyqcdeinsum_cuda.so` → `build/libpyqcdeinsum_cuda.so`
+  - `pyqcd/einsum/cuda/einsum.cpython-312-x86_64-linux-gnu.so`
+  - `pyqcd/testing/einsum/artifacts/bench_20261108050730`、`bench_20261108051452`
+- 未改动范围: `cpp/**` 源码、`pyqcd/einsum/**` 生产代码、`refer/**`（含未初始化的 opt_einsum 子模块）
+
+## 风险、限制与下一步
+- 风险:
+  - 用户明确指出的公平性红线：禁止多卡/多进程 qcd-einsum 对比单卡 opt_einsum。本任务只用单卡单进程口径。
+  - E5 类带宽受限方程可能永远无法达到 3x，需在报告中如实登记而非调参凑数。
+- 阻塞:
+  - 真实输入数据缺失：`/public/group/lqcd`、`/home/zhangxin/beta6.20_mu-0.2770_ms-0.2310_L24x64_cfg_9950.lime` 均不存在
+  - `refer/git-rep/opt_einsum` 子模块未初始化（网络不可达）
+- 下一步:
+  1. GPU 基线（单卡 RTX 4060，单 GPU vs 单 GPU，cupy oracle，记录 device 与 stream 数）
+  2. 将 sush 真实方程（9–10 算子族）加入 `EQUATIONS` 并保持 opt/target 同 path
+  3. L=24 空间 profile 与显存/内存预算（E4/E5 在 L=24、Nv=100 时单算子约 2.1 GB，需分块）
+  4. 小张量固定开销优化（T0/E1 0.51x）与 E4 原生层优化
+
+## Agent 全文报告
+--- report begin ---
+## 进度简报（2026-11-08 05:40）
+
+**已完成并验证**
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 环境补全 | ✅ | torch 2.15.0+cu132 已装（此前缺失导致 `pyqcd.lattice.gamma` 无法导入）；cupy 14.2 / numpy 2.5.4 / opt_einsum 3.4.0 |
+| KUPL 构建 | ✅ | `libpyqcdeinsum_kupl.so`（`PYQCD_EINSUM_ENABLE_MPI=0`，因 conda `CXX` 抢占导致 `mpi.h` 缺失） |
+| CUDA 构建 | ✅ | `libpyqcdeinsum_cuda.so`，必须显式 `PYQCD_CUDA_ARCHITECTURES=8.9`（默认 6.0/7.0 在 4060 上不可运行） |
+| Cython 绑定 | ✅ | `einsum.cpython-312-*.so`（原 cp310 产物不适用） |
+| 正确性 | ✅ | `verify_native`：kupl 16/16、cuda 16/16，全部 PASS |
+| CPU 基线 | ✅ | 见下表 |
+
+**CPU 基线（4 线程、complex128、同 greedy path、opt 与 ours 逐元素 rel ≤ 1.7e-13）**
+
+| eq | T0 (Nv=20) | T1 (Nv=100) |
+|---|---|---|
+| E1 | 0.51x | 2.76x |
+| E2 | 1.29x | 38.72x ⚠️ |
+| E4 | 1.32x | 1.82x |
+| E5 | 0.95x | 1.00x |
+
+⚠️ E2 的 38.7x 不是我们快，是 opt_einsum 该 path 没走 BLAS（单次 2.18 s）。我在报告里会同时给绝对耗时，不拿倍率充数。
+
+**当前差距：距离 3x 目标还很远**，T1 只有 E2 达标。
+
+**未完成 / 阻塞**
+- GPU 基线**尚未测**（下一步第一件事）。
+- `/public/group/lqcd` 与 `~/*.lime` 数据、`refer/git-rep/opt_einsum` 子模块在本机都不存在；网络 clone 报 `GnuTLS recv error`。已按你的授权用固定种子合成数据 + opt_einsum 对照验证，产物标 `provisional`。
+- L=24 空间 profile 与显存预算：现有 profile 是 `spatial=1`，按你的要求要改成 L24 并防溢出，正在设计（E4/E5 在 L=24、Nv=100 时单算子约 2.1 GB，需分块）。
+
+**已交付**
+- `logs/resume_20261108T053500_pyqcd-einsum.txt`：合并全部用户指令、环境事实、实测数字、PyQCU 对照差异、待办与恢复步骤。
+- `bench_distillation.py` 增加显式 `--data real|synthetic`（扩展既有 harness，未新建重复实现）。
+
+**下一步（后台子代理 + 主线程并行）**
+1. 测 GPU 基线（单卡对单卡，记录 device/stream 数）。
+2. 把 sush 真实方程（`fnph,gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG` 等 9–10 算子族）加入 `EQUATIONS`。
+3. L=24 profile 与内存预算。
+4. 针对 T0 小张量固定开销（E1 0.51x）与 E4/E5 做原生层优化。
+
+需要我现在优先冲哪一项？默认按 1→2→3→4 顺序推进。
+--- report end ---

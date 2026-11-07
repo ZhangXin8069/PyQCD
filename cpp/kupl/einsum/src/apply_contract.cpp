@@ -131,21 +131,96 @@ int64_t label_position(const std::vector<int32_t>& labels, int32_t label) {
     return found == labels.end() ? -1 : static_cast<int64_t>(found - labels.begin());
 }
 
+/* Recycles the large step buffers: a fresh 256 MiB mapping costs ~90 ms of
+ * first-touch page faults, and a single E1 call maps about 1 GiB. */
+class BufferPool {
+  public:
+    BufferPool() = default;
+    BufferPool(const BufferPool&) = delete;
+    BufferPool& operator=(const BufferPool&) = delete;
+
+    ~BufferPool() {
+        for (Block& block : blocks_) {
+            std::free(block.data);
+        }
+    }
+
+    uint8_t* acquire(std::size_t bytes) {
+        if (bytes == 0) {
+            return nullptr;
+        }
+        std::lock_guard<std::mutex> guard(mutex_);
+        std::size_t best = blocks_.size();
+        for (std::size_t index = 0; index < blocks_.size(); ++index) {
+            if (blocks_[index].bytes >= bytes &&
+                (best == blocks_.size() || blocks_[index].bytes < blocks_[best].bytes)) {
+                best = index;
+            }
+        }
+        if (best != blocks_.size()) {
+            const Block block = blocks_[best];
+            blocks_[best] = blocks_.back();
+            blocks_.pop_back();
+            cached_ -= block.bytes;
+            return block.data;
+        }
+        void* allocated = nullptr;
+        if (posix_memalign(&allocated, 64, bytes) != 0) {
+            return nullptr;
+        }
+        return static_cast<uint8_t*>(allocated);
+    }
+
+    void release(uint8_t* data, std::size_t bytes) {
+        if (data == nullptr) {
+            return;
+        }
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (bytes >= kMinPooledBytes && cached_ + bytes <= kMaxPooledBytes) {
+            blocks_.push_back(Block{data, bytes});
+            cached_ += bytes;
+            return;
+        }
+        std::free(data);
+    }
+
+  private:
+    static constexpr std::size_t kMinPooledBytes = std::size_t(1) << 19;
+    static constexpr std::size_t kMaxPooledBytes = std::size_t(1) << 30;
+
+    struct Block {
+        uint8_t* data;
+        std::size_t bytes;
+    };
+
+    std::mutex mutex_;
+    std::vector<Block> blocks_;
+    std::size_t cached_ = 0;
+};
+
+BufferPool& buffer_pool() {
+    static BufferPool pool;
+    return pool;
+}
+
 class Buffer {
   public:
     Buffer() = default;
     Buffer(const Buffer&) = delete;
     Buffer& operator=(const Buffer&) = delete;
 
-    Buffer(Buffer&& other) noexcept : data_(other.data_) {
+    Buffer(Buffer&& other) noexcept : data_(other.data_), bytes_(other.bytes_) {
         other.data_ = nullptr;
+        other.bytes_ = 0;
     }
 
     Buffer& operator=(Buffer&& other) noexcept {
         if (this != &other) {
             release();
             data_ = other.data_;
+            bytes_ = other.bytes_;
             other.data_ = nullptr;
+            other.bytes_ = 0;
         }
         return *this;
     }
@@ -157,12 +232,9 @@ class Buffer {
         if (bytes == 0) {
             return true;
         }
-        void* allocated = nullptr;
-        if (posix_memalign(&allocated, 64, bytes) != 0) {
-            return false;
-        }
-        data_ = static_cast<uint8_t*>(allocated);
-        return true;
+        data_ = buffer_pool().acquire(bytes);
+        bytes_ = data_ != nullptr ? bytes : 0;
+        return data_ != nullptr;
     }
 
     uint8_t* data() {
@@ -175,11 +247,13 @@ class Buffer {
 
   private:
     void release() noexcept {
-        std::free(data_);
+        buffer_pool().release(data_, bytes_);
         data_ = nullptr;
+        bytes_ = 0;
     }
 
     uint8_t* data_ = nullptr;
+    std::size_t bytes_ = 0;
 };
 
 struct SlotData {
@@ -358,6 +432,114 @@ bool resolve_input(const SlotData& slot, const TensorMeta& expected,
     return validate_actual_shape(*actual, sizes);
 }
 
+/* One loop level of a strided copy: ``destination`` advances by the element
+ * size, ``source`` by ``source_step`` elements. */
+struct CopyAxis {
+    int64_t extent = 1;
+    int64_t source_step = 0;
+    int64_t dest_step = 0;
+};
+
+struct alignas(16) Word128 {
+    uint64_t low;
+    uint64_t high;
+};
+
+template <typename Word>
+void copy_axes_fixed(uint8_t* output, const uint8_t* input, const std::vector<CopyAxis>& axes,
+                     int64_t begin, int64_t end) {
+    const std::size_t outer = axes.size() - 1;
+    const int64_t item_size = static_cast<int64_t>(sizeof(Word));
+    const CopyAxis inner = axes[outer];
+    std::vector<int64_t> coordinates(outer, 0);
+    int64_t remainder = begin;
+    int64_t source_index = 0;
+    int64_t dest_index = 0;
+    for (std::size_t reverse = outer; reverse > 0; --reverse) {
+        const std::size_t axis = reverse - 1;
+        coordinates[axis] = remainder % axes[axis].extent;
+        remainder /= axes[axis].extent;
+        source_index += coordinates[axis] * axes[axis].source_step;
+        dest_index += coordinates[axis] * axes[axis].dest_step;
+    }
+    const int64_t inner_step = inner.source_step * item_size;
+    const int64_t inner_span = inner.extent * item_size;
+    for (int64_t index = begin; index < end; ++index) {
+        uint8_t* target = output + dest_index * item_size;
+        const uint8_t* value = input + source_index * item_size;
+        if (inner.source_step == 1) {
+            std::memcpy(target, value, static_cast<std::size_t>(inner_span));
+        } else if (inner_step == 0) {
+            Word first;
+            std::memcpy(&first, value, sizeof(Word));
+            for (int64_t lane = 0; lane < inner.extent; ++lane) {
+                std::memcpy(target + lane * item_size, &first, sizeof(Word));
+            }
+        } else {
+            for (int64_t lane = 0; lane < inner.extent; ++lane) {
+                Word element;
+                std::memcpy(&element, value + lane * inner_step, sizeof(Word));
+                std::memcpy(target + lane * item_size, &element, sizeof(Word));
+            }
+        }
+        if (index + 1 == end) {
+            break;
+        }
+        for (std::size_t reverse = outer; reverse > 0; --reverse) {
+            const std::size_t axis = reverse - 1;
+            if (++coordinates[axis] < axes[axis].extent) {
+                source_index += axes[axis].source_step;
+                dest_index += axes[axis].dest_step;
+                break;
+            }
+            coordinates[axis] = 0;
+            source_index -= axes[axis].source_step * (axes[axis].extent - 1);
+            dest_index -= axes[axis].dest_step * (axes[axis].extent - 1);
+        }
+    }
+}
+
+void copy_axes_generic(uint8_t* output, const uint8_t* input,
+                       const std::vector<CopyAxis>& axes, std::size_t item_size, int64_t begin,
+                       int64_t end) {
+    const std::size_t outer = axes.size() - 1;
+    const CopyAxis inner = axes[outer];
+    std::vector<int64_t> coordinates(outer, 0);
+    int64_t remainder = begin;
+    int64_t source_index = 0;
+    int64_t dest_index = 0;
+    for (std::size_t reverse = outer; reverse > 0; --reverse) {
+        const std::size_t axis = reverse - 1;
+        coordinates[axis] = remainder % axes[axis].extent;
+        remainder /= axes[axis].extent;
+        source_index += coordinates[axis] * axes[axis].source_step;
+        dest_index += coordinates[axis] * axes[axis].dest_step;
+    }
+    for (int64_t index = begin; index < end; ++index) {
+        uint8_t* target = output + dest_index * static_cast<int64_t>(item_size);
+        const uint8_t* value = input + source_index * static_cast<int64_t>(item_size);
+        for (int64_t lane = 0; lane < inner.extent; ++lane) {
+            std::memcpy(target + lane * static_cast<int64_t>(item_size),
+                        value + lane * inner.source_step * static_cast<int64_t>(item_size),
+                        item_size);
+        }
+        if (index + 1 == end) {
+            break;
+        }
+        for (std::size_t reverse = outer; reverse > 0; --reverse) {
+            const std::size_t axis = reverse - 1;
+            if (++coordinates[axis] < axes[axis].extent) {
+                source_index += axes[axis].source_step;
+                dest_index += axes[axis].dest_step;
+                break;
+            }
+            coordinates[axis] = 0;
+            source_index -= axes[axis].source_step * (axes[axis].extent - 1);
+            dest_index -= axes[axis].dest_step * (axes[axis].extent - 1);
+        }
+    }
+}
+
 bool transpose_copy(const uint8_t* source, const std::vector<int64_t>& source_shape,
                     const std::vector<int64_t>& destination_shape,
                     const std::vector<int32_t>& destination_to_source, std::size_t item_size,
@@ -415,84 +597,117 @@ bool transpose_copy(const uint8_t* source, const std::vector<int64_t>& source_sh
         strides[axis - 2] = strides[axis - 1] * source_shape[axis - 1];
     }
 
-    uint8_t* output = destination->data();
-    std::vector<int64_t> source_steps(destination_shape.size(), 0);
-    for (std::size_t axis = 0; axis < destination_shape.size(); ++axis) {
+    const std::size_t rank = destination_shape.size();
+    std::vector<CopyAxis> raw(rank);
+    int64_t dest_step = 1;
+    for (std::size_t reverse = rank; reverse > 0; --reverse) {
+        const std::size_t axis = reverse - 1;
         const std::size_t source_axis =
             static_cast<std::size_t>(destination_to_source[axis]);
-        source_steps[axis] = source_shape[source_axis] == 1
-                                 ? 0
-                                 : strides[source_axis];
+        raw[axis].extent = destination_shape[axis];
+        raw[axis].source_step = source_shape[source_axis] == 1 ? 0 : strides[source_axis];
+        raw[axis].dest_step = dest_step;
+        dest_step *= destination_shape[axis];
     }
 
-    const auto copy_item = [&](uint8_t* target, const uint8_t* value) {
-        if (item_size == 16) {
-            auto* output_words = reinterpret_cast<uint64_t*>(target);
-            const auto* source_words = reinterpret_cast<const uint64_t*>(value);
-            output_words[0] = source_words[0];
-            output_words[1] = source_words[1];
-        } else if (item_size == 8) {
-            *reinterpret_cast<uint64_t*>(target) = *reinterpret_cast<const uint64_t*>(value);
-        } else if (item_size == 4) {
-            *reinterpret_cast<uint32_t*>(target) = *reinterpret_cast<const uint32_t*>(value);
-        } else {
-            std::memcpy(target, value, item_size);
+    std::vector<CopyAxis> axes;
+    axes.reserve(rank);
+    for (const CopyAxis& axis : raw) {
+        if (axis.extent == 1) {
+            continue;
         }
-    };
-
-    const auto copy_range = [&](int64_t begin, int64_t end) {
-        std::vector<int64_t> coordinates(destination_shape.size(), 0);
-        int64_t remainder = begin;
-        int64_t source_index = 0;
-        for (std::size_t reverse = destination_shape.size(); reverse > 0; --reverse) {
-            const std::size_t axis = reverse - 1;
-            coordinates[axis] = remainder % destination_shape[axis];
-            remainder /= destination_shape[axis];
-            source_index += coordinates[axis] * source_steps[axis];
+        if (!axes.empty() && axes.back().source_step == axis.source_step * axis.extent) {
+            axes.back().extent *= axis.extent;
+            axes.back().source_step = axis.source_step;
+            axes.back().dest_step = axis.dest_step;
+            continue;
         }
-        for (int64_t destination_index = begin; destination_index < end; ++destination_index) {
-            copy_item(output + destination_index * static_cast<int64_t>(item_size),
-                      source + source_index * static_cast<int64_t>(item_size));
-            if (destination_index + 1 == end) {
-                break;
+        axes.push_back(axis);
+    }
+    if (axes.empty()) {
+        return true;
+    }
+    if (axes.size() > 1 && axes.back().source_step != 1) {
+        std::size_t best = axes.size() - 1;
+        for (std::size_t axis = 0; axis + 1 < axes.size(); ++axis) {
+            if (axes[axis].source_step != 1) {
+                continue;
             }
-            for (std::size_t reverse = destination_shape.size(); reverse > 0; --reverse) {
-                const std::size_t axis = reverse - 1;
-                if (++coordinates[axis] < destination_shape[axis]) {
-                    source_index += source_steps[axis];
-                    break;
-                }
-                coordinates[axis] = 0;
-                source_index -= source_steps[axis] * (destination_shape[axis] - 1);
+            if (best + 1 == axes.size() || axes[axis].extent > axes[best].extent) {
+                best = axis;
             }
         }
-    };
+        if (best + 1 != axes.size()) {
+            std::swap(axes[best], axes[axes.size() - 2]);
+        }
+    }
 
+    const std::size_t outer = axes.size() - 1;
+    int64_t outer_count = 1;
+    for (std::size_t axis = 0; axis < outer; ++axis) {
+        outer_count *= axes[axis].extent;
+    }
+
+    uint8_t* output = destination->data();
 #ifdef _OPENMP
     const int max_threads = omp_get_max_threads();
 #else
     const int max_threads = 1;
 #endif
-    const int64_t parallel_threshold = 32768;
-    if (max_threads > 1 && destination_count >= parallel_threshold) {
-        const int thread_cap = destination_count < 32768 ? 1
-                              : destination_count < 1000000 ? 4
-                              : destination_count < 8000000 ? 4
-                                                            : max_threads;
-        const int threads = static_cast<int>(std::min<int64_t>(
-            std::min(max_threads, thread_cap),
-            std::max<int64_t>(1, destination_count / 8192)));
-        const int64_t chunk = (destination_count + threads - 1) / threads;
+    int threads = 1;
+    if (max_threads > 1 && destination_count >= 32768) {
+        threads = static_cast<int>(
+            std::min<int64_t>(max_threads, std::max<int64_t>(1, destination_count / 65536)));
+    }
+    const int64_t units = outer == 0 ? 1 : outer_count;
+    const int64_t chunk = (units + threads - 1) / threads;
+
+    const auto run_range = [&](int64_t begin, int64_t end) {
+        if (item_size == 16) {
+            copy_axes_fixed<Word128>(output, source, axes, begin, end);
+        } else if (item_size == 8) {
+            copy_axes_fixed<uint64_t>(output, source, axes, begin, end);
+        } else if (item_size == 4) {
+            copy_axes_fixed<uint32_t>(output, source, axes, begin, end);
+        } else {
+            copy_axes_generic(output, source, axes, item_size, begin, end);
+        }
+    };
+
+    if (threads > 1 && outer > 0 && units >= 2) {
 #pragma omp parallel for schedule(static) num_threads(threads)
         for (int thread = 0; thread < threads; ++thread) {
             const int64_t begin = static_cast<int64_t>(thread) * chunk;
-            const int64_t end = std::min(destination_count, begin + chunk);
+            const int64_t end = std::min(outer_count, begin + chunk);
             if (begin < end) {
-                copy_range(begin, end);
+                run_range(begin, end);
+            }
+        }
+    } else if (threads > 1 && outer == 0) {
+        const int64_t count = axes[0].extent;
+        const int64_t step = (count + threads - 1) / threads;
+        const int64_t source_step = axes[0].source_step * static_cast<int64_t>(item_size);
+        const int64_t element = static_cast<int64_t>(item_size);
+        const uint8_t* value = source;
+#pragma omp parallel for schedule(static) num_threads(threads)
+        for (int thread = 0; thread < threads; ++thread) {
+            const int64_t begin = static_cast<int64_t>(thread) * step;
+            const int64_t end = std::min(count, begin + step);
+            if (begin >= end) {
+                continue;
+            }
+            uint8_t* target = output + begin * element;
+            if (source_step == 0) {
+                for (int64_t lane = begin; lane < end; ++lane) {
+                    std::memcpy(output + lane * element, value, item_size);
+                }
+            } else {
+                std::memcpy(target, value + begin * source_step,
+                            static_cast<std::size_t>((end - begin) * element));
             }
         }
     } else {
-        copy_range(0, destination_count);
+        run_range(0, units);
     }
     return true;
 }
@@ -681,11 +896,8 @@ bool batched_gemm(int32_t dtype_id, const PairPlan& plan, const uint8_t* left,
             double* c = reinterpret_cast<double*>(output->data());
             for (int64_t batch = 0; batch < plan.batches; ++batch) {
                 if (api.ilp64) {
-                    const double* alpha64 = alpha;
-                    const double* beta64 = beta;
-                    api.zgemm64(kCblasRowMajor, kCblasNoTrans, kCblasTrans, m, n, k,
-                                alpha64, a + 2 * batch * m_k, k,
-                                b + 2 * batch * n_k, k, beta64,
+                    api.zgemm64(kCblasRowMajor, kCblasNoTrans, kCblasTrans, m, n, k, alpha,
+                                a + 2 * batch * m_k, k, b + 2 * batch * n_k, k, beta,
                                 c + 2 * batch * m_n, n);
                 } else {
                     api.zgemm(kCblasRowMajor, kCblasNoTrans, kCblasTrans, m, n, k, alpha,
@@ -703,9 +915,8 @@ bool batched_gemm(int32_t dtype_id, const PairPlan& plan, const uint8_t* left,
             float* c = reinterpret_cast<float*>(output->data());
             for (int64_t batch = 0; batch < plan.batches; ++batch) {
                 if (api.ilp64) {
-                    api.cgemm64(kCblasRowMajor, kCblasNoTrans, kCblasTrans, m, n, k,
-                                alpha, a + 2 * batch * m_k, k,
-                                b + 2 * batch * n_k, k, beta,
+                    api.cgemm64(kCblasRowMajor, kCblasNoTrans, kCblasTrans, m, n, k, alpha,
+                                a + 2 * batch * m_k, k, b + 2 * batch * n_k, k, beta,
                                 c + 2 * batch * m_n, n);
                 } else {
                     api.cgemm(kCblasRowMajor, kCblasNoTrans, kCblasTrans, m, n, k, alpha,

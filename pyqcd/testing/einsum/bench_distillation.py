@@ -71,6 +71,7 @@ DTYPE = 'complex128'
 RELATIVE_ERROR_TOLERANCE = 1e-12
 SPEEDUP_TARGET = 3.0
 MIN_ACCEPTANCE_ITERATIONS = 10
+MIN_MEANINGFUL_SECONDS = 0.1
 
 DATA_ROOT = (
     '/public/group/lqcd/perambulators/'
@@ -101,6 +102,21 @@ DATA_SCOPE = {
              '本次使用 conf6250/L24x72 真实 perambulator，结论标记 provisional'),
 }
 
+DATA_MODES = ('real', 'synthetic')
+SYNTHETIC_DATA_SCOPE = {
+    'provisional': True,
+    'requested_target': TARGET_DATA,
+    'used_data': {
+        'ensemble': 'synthetic',
+        'lattice': TARGET_DATA['lattice'],
+        'mass': TARGET_DATA['mass'],
+        'conf': None,
+    },
+    'note': ('目标数据集与本机 perambulator 均不存在；使用固定种子合成 '
+             'complex128 操作数，形状与真实蒸馏一致，正确性以 opt_einsum/numpy '
+             '逐元素对照（rel<=1e-12）为准，性能结论标记 provisional'),
+}
+
 FROZEN_ORACLE_ROOT = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', '..', '..',
     'refer', 'git-rep', 'opt_einsum'))
@@ -115,8 +131,15 @@ EQUATIONS = (
      'eq': 'zyxcTabn,zyxgTdef,Gae,Tzyxgc->TGdbfn'},
     {'name': 'E5', 'line': 200, 'desc': 'γ 夹心',
      'eq': 'ab,...bce,cd->...dae'},
+    {'name': 'S1', 'line': 119, 'desc': 'sush NN 2pt（8 算子，真实生产）',
+     'eq': 'eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN'},
+    {'name': 'S2', 'line': 402, 'desc': 'sush 3pt（9 算子，含 μν 插入，真实生产）',
+     'eq': 'gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG'},
+    {'name': 'S3', 'line': 301, 'desc': 'sush 2pt（6 算子，含 μ 插入，真实生产）',
+     'eq': 'manb,cedf,bd,Mfn,ac,MFem->MF'},
 )
 EQUATION_BY_NAME = {item['name']: item for item in EQUATIONS}
+SUSH_EQUATIONS = frozenset(('S1', 'S2', 'S3'))
 
 PROFILES = {
     'T0n': {'nvec': 6, 'spatial': 1, 'n_t': 2, 't_src': (0,), 't_sink': 4,
@@ -127,6 +150,10 @@ PROFILES = {
            'note': '单 t_src，全 Nvec=100'},
     'T2': {'nvec': 100, 'spatial': 1, 'n_t': 2, 't_src': (0, 1),
            't_sink': 8, 'note': '多 t_src 持续吞吐'},
+    'L24': {'nvec': 50, 'spatial': 24, 'n_t': 2, 't_src': (0,), 't_sink': 8,
+            'note': 'L=24 真实空间格点；prop 单算子 1.06 GB，峰值约 3.2 GB'},
+    'L24n': {'nvec': 24, 'spatial': 24, 'n_t': 2, 't_src': (0,), 't_sink': 8,
+             'note': 'L=24 显存保守档；prop 单算子 0.51 GB'},
 }
 DEFAULT_PROFILES = ('T0n', 'T0', 'T1', 'T2')
 ACCEPTANCE_PROFILES = frozenset(('T1', 'T2'))
@@ -139,8 +166,10 @@ def data_path(t_src, spin):
     return os.path.join(DATA_ROOT, f'perams.{DATA_CONF}.{spin}.{t_src}')
 
 
-def data_status(t_src_list):
-    """返回缺失或尺寸不符的真实数据文件清单。"""
+def data_status(t_src_list, data_mode='real'):
+    """返回缺失或尺寸不符的真实数据文件清单（synthetic 模式无文件依赖）。"""
+    if data_mode == 'synthetic':
+        return []
     problems = []
     for t_src in t_src_list:
         for spin in range(SPIN_FILES):
@@ -153,8 +182,21 @@ def data_status(t_src_list):
     return problems
 
 
-def load_peram(t_src, nvec):
+def synthetic_peram(t_src, nvec):
+    """以固定种子构造 ``[Nt,4,4,Nvec,Nvec]`` complex128 perambulator。
+
+    形状与 ``load_peram`` 一致；数值只用于正确性对照与计时，不代表任何物理结果。
+    """
+    rng = np.random.default_rng(20261107 + 7919 * int(t_src))
+    shape = (NT_FULL, 4, 4, nvec, nvec)
+    data = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    return np.ascontiguousarray(data, dtype=np.complex128)
+
+
+def load_peram(t_src, nvec, data_mode='real'):
     """读取四个 spin 分片，返回 ``[Nt, 4, 4, Nvec, Nvec]`` complex128。"""
+    if data_mode == 'synthetic':
+        return synthetic_peram(t_src, nvec)
     slices = []
     for spin in range(SPIN_FILES):
         path = data_path(t_src, spin)
@@ -219,6 +261,27 @@ def build_operands(name, peram, cfg, seed):
         prop_sep = _rand(prop_shape, rng)
         g5 = _gamma(5)
         return [g5, np.conj(prop_sep), g5]
+    if name == 'S1':
+        sl = peram[t_sink]
+        g7 = _gamma(7)
+        return [sl, sl, sl, g7, g7,
+                _rand((1, nvec, nvec, nvec), rng),
+                _rand((1, nvec, nvec, nvec), rng),
+                _projector()]
+    if name == 'S2':
+        return [peram[t_sink], peram[0], peram[1 % peram.shape[0]],
+                _rand((nvec, nvec), rng),
+                _rand((1, nvec, nvec), rng),
+                _rand((1, nvec, nvec), rng),
+                _gamma(5),
+                _rand((1, 1, 4, 4), rng),
+                _rand((1, 1, 4, 4), rng)]
+    if name == 'S3':
+        return [peram[t_sink], peram[0],
+                _rand((nvec, nvec), rng),
+                _rand((1, nvec, nvec), rng),
+                _gamma(5),
+                _rand((1, 1, 4, 4), rng)]
     raise KeyError(f'未知方程 {name}')
 
 
@@ -362,7 +425,7 @@ def _device_info(backend):
 
 
 def _environment(profiles, backends, equations, iterations, warmup,
-                 optimize, mode, isolation):
+                 optimize, mode, isolation, data_mode='real'):
     numpy_config = np.show_config(mode='dicts')
     blas = numpy_config.get('Build Dependencies', {}).get('blas', {})
     return {
@@ -391,7 +454,9 @@ def _environment(profiles, backends, equations, iterations, warmup,
         'backends': list(backends),
         'equations': list(equations),
         'mode': mode,
-        'data_scope': DATA_SCOPE,
+        'data_mode': data_mode,
+        'data_scope': (
+            SYNTHETIC_DATA_SCOPE if data_mode == 'synthetic' else DATA_SCOPE),
         'relative_error_tolerance': RELATIVE_ERROR_TOLERANCE,
         'speedup_target': SPEEDUP_TARGET,
     }
@@ -406,22 +471,39 @@ def _path_digest(path):
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _plan_pair(eq, shapes, optimize, oracle_module, target_module):
+def _plan_pair(eq, shapes, optimize, oracle_module, target_module,
+               planner='production'):
     oracle_path, oracle_info = oracle_module.contract_path(
         eq, *shapes, shapes=True, optimize=optimize)
     qcd_path, qcd_info = target_module.contract_path(
         eq, *shapes, shapes=True, optimize=optimize)
     path = _normalize_path(oracle_path)
     qcd_path = _normalize_path(qcd_path)
-    return path, {
+    # production：两边各自按 optimize 规划一次，只计时稳态执行（各自用己方 path）
+    # shared：两边共用 oracle path，只隔离执行层
+    measured = path
+    return measured, {
+        'planner': planner,
         'path': path,
         'oracle_planner_path': path,
         'qcd_planner_path': qcd_path,
         'planner_path_match': path == qcd_path,
         'path_digest': _path_digest(path),
+        'qcd_path_digest': _path_digest(qcd_path),
         'oracle_opt_cost': str(oracle_info.opt_cost),
         'qcd_opt_cost': str(qcd_info.opt_cost),
     }
+
+
+def _optimize_for(planner, optimize, path, side_path=None):
+    """Return the ``optimize`` argument one side should receive.
+
+    ``production`` 下双方各自使用己方 planner 产生的 path（规划只做一次，
+    不计入稳态计时）；``shared`` 下双方共用同一个 oracle path。
+    """
+    if planner == 'production' and side_path is not None:
+        return _normalize_path(side_path)
+    return _normalize_path(path)
 
 
 def _to_backend(arrays, backend):
@@ -588,7 +670,7 @@ def _worker_benchmark(task):
         raise RuntimeError(f"未知 worker backend: {task['backend']!r}")
 
     cfg = task['profile_config']
-    peram = load_peram(task['t_src'], cfg['nvec'])
+    peram = load_peram(task['t_src'], cfg['nvec'], task.get('data_mode', 'real'))
     arrays = build_operands(
         task['equation'], peram, cfg, seed=task['operand_seed'])
     shapes = [tuple(array.shape) for array in arrays]
@@ -603,9 +685,15 @@ def _worker_benchmark(task):
             'worker 操作数摘要不一致: '
             f'{actual_operand_digest} != {task["operand_digest"]}')
 
+    planner = task.get('planner', 'shared')
     path = _normalize_path(task['path'])
-    if _path_digest(path) != task['path_digest']:
+    if planner == 'shared' and _path_digest(path) != task['path_digest']:
         raise RuntimeError('worker 显式 path 摘要不一致')
+    qcd_path = _normalize_path(task.get('qcd_path') or task['path'])
+    optimize_argument = (
+        _optimize_for(planner, task.get('optimize'), path, qcd_path)
+        if implementation == 'qcd_einsum'
+        else _optimize_for(planner, task.get('optimize'), path))
 
     if implementation == 'opt_einsum':
         module, loaded_oracle = resolve_oracle()
@@ -627,7 +715,7 @@ def _worker_benchmark(task):
     def function():
         return contract(
             task['subscripts'], *backend_arrays,
-            optimize=path, backend=BACKEND_NAMES[backend])
+            optimize=optimize_argument, backend=BACKEND_NAMES[backend])
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
@@ -663,6 +751,10 @@ def _worker_benchmark(task):
         'operand_dtypes': dtypes,
         'path': [list(step) for step in path],
         'path_digest': task['path_digest'],
+        'planner': planner,
+        'optimize_argument': (optimize_argument
+                              if isinstance(optimize_argument, str)
+                              else 'shared-path'),
         'output_dtype': output_dtype,
         'output_shape': output_shape,
         'implementation_warnings': implementation_warnings,
@@ -780,7 +872,8 @@ def _validate_isolated_result(result, task, oracle_info=None):
 
 
 def _measure_abba_case(arrays, backend, eq, path, oracle_module,
-                       target_module, iterations, warmup, oracle_info):
+                       target_module, iterations, warmup, oracle_info,
+                       planner='production', optimize='dp', qcd_path=None):
     backend_arrays = _to_backend(arrays, backend)
     actual_dtypes = _array_dtypes(backend_arrays)
     if any(dtype != DTYPE for dtype in actual_dtypes):
@@ -788,13 +881,17 @@ def _measure_abba_case(arrays, backend, eq, path, oracle_module,
             f'{backend} 操作数 dtype 非 {DTYPE}: {actual_dtypes}')
 
     backend_name = BACKEND_NAMES[backend]
+    oracle_argument = _optimize_for(planner, optimize, path)
+    qcd_argument = _optimize_for(planner, optimize, path, qcd_path)
     functions = {
         'opt_einsum': (
             lambda: oracle_module.contract(
-                eq, *backend_arrays, optimize=path, backend=backend_name)),
+                eq, *backend_arrays, optimize=oracle_argument,
+                backend=backend_name)),
         'qcd_einsum': (
             lambda: target_module.contract(
-                eq, *backend_arrays, optimize=path, backend=backend_name)),
+                eq, *backend_arrays, optimize=qcd_argument,
+                backend=backend_name)),
     }
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
@@ -901,6 +998,7 @@ def _new_row(profile_name, cfg, backend, env, eq_name, meta, t_src,
         'operand_shapes': operand_shapes,
         'operand_dtypes': operand_dtypes,
         'optimize': env['optimize'],
+        'planner': env.get('planner', 'shared'),
         'measurement_order': env['measurement_order'],
         'isolation': env['isolation'],
         'worker_pid': None,
@@ -916,14 +1014,16 @@ def _new_row(profile_name, cfg, backend, env, eq_name, meta, t_src,
 def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
         equations=tuple(item['name'] for item in EQUATIONS),
         iterations=MIN_ACCEPTANCE_ITERATIONS, warmup=2,
-        optimize='greedy', mode='full', isolation='process', log=print):
+        optimize='dp', mode='full', isolation='process',
+        data_mode='real', planner='production', log=print):
     """执行基准并返回 ``(rows, env, problems)``。"""
     profiles = tuple(profiles)
     backends = tuple(backends)
     equations = tuple(equations)
     env = _environment(
         profiles, backends, equations, iterations, warmup, optimize, mode,
-        isolation)
+        isolation, data_mode)
+    env['planner'] = planner
     problems = []
 
     unknown_profiles = sorted(set(profiles) - set(PROFILES))
@@ -960,13 +1060,13 @@ def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
     log(f"pyqcd.einsum: {target_info['version']} ({target_info['path']})")
     log(f"线程/精度   : {THREADS} 线程, {DTYPE}, optimize={optimize!r}, "
         f"isolation={isolation}, iterations={iterations}")
-    log('数据口径    : provisional - ' + DATA_SCOPE['note'])
+    log('数据口径    : provisional - ' + env['data_scope']['note'])
 
     t_srcs = sorted({
         t_src for profile_name in profiles
         for t_src in PROFILES[profile_name]['t_src']
     })
-    data_problems = data_status(t_srcs)
+    data_problems = data_status(t_srcs, data_mode)
     if data_problems:
         problems.extend(data_problems)
         for problem in data_problems[:5]:
@@ -992,7 +1092,7 @@ def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
         cfg = dict(PROFILES[profile_name])
         for t_src in cfg['t_src']:
             load_start = time.perf_counter()
-            peram = load_peram(t_src, cfg['nvec'])
+            peram = load_peram(t_src, cfg['nvec'], data_mode)
             load_s = time.perf_counter() - load_start
             log(f"\n[{profile_name}] Nvec={cfg['nvec']} t_src={t_src} "
                 f"读盘={load_s:.2f}s - {cfg['note']}")
@@ -1014,7 +1114,7 @@ def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
                     try:
                         path, path_info = _plan_pair(
                             meta['eq'], shapes, optimize,
-                            oracle_module, target_module)
+                            oracle_module, target_module, planner)
                         row = _new_row(
                             profile_name, cfg, backend, env, eq_name, meta,
                             t_src, shapes, dtypes, path_info)
@@ -1031,12 +1131,19 @@ def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
                                     't_sink': cfg['t_sink'],
                                 },
                                 'operand_seed': 1000 + 17 * t_src,
+                                'data_mode': data_mode,
+                                'planner': planner,
+                                'optimize': optimize,
                                 'operand_shapes': [
                                     list(shape) for shape in shapes],
                                 'operand_dtypes': dtypes,
                                 'operand_digest': operand_digest,
-                                'path': [list(step) for step in path],
+                                'path': ([] if path is None
+                                         else [list(step) for step in path]),
                                 'path_digest': path_info['path_digest'],
+                                'qcd_path': [
+                                    list(step) for step in
+                                    path_info['qcd_planner_path']],
                                 'backend': backend,
                                 'dtype': DTYPE,
                                 'iterations': iterations,
@@ -1048,7 +1155,8 @@ def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
                             measurement = _measure_abba_case(
                                 arrays, backend, meta['eq'], path,
                                 oracle_module, target_module, iterations,
-                                warmup, oracle_info)
+                                warmup, oracle_info, planner, optimize,
+                                path_info['qcd_planner_path'])
                         opt_median = measurement['stats'][
                             'opt_einsum']['median_s']
                         qcd_median = measurement['stats'][
@@ -1084,6 +1192,9 @@ def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
                                 measurement['implementation_warnings'],
                             'speedup_vs_opt': round(speedup, 6),
                             'speedup_target': SPEEDUP_TARGET,
+                            'too_short': bool(
+                                min(opt_median, qcd_median)
+                                < MIN_MEANINGFUL_SECONDS),
                             'speedup_pass': speedup >= SPEEDUP_TARGET,
                         })
                         if not measurement['output_dtype_match']:
@@ -1144,7 +1255,7 @@ def _acceptance(rows, env, problems, mode, requested_backends):
     oracle = env.get('opt_einsum', {})
     if oracle.get('frozen') is not True:
         provisional_reasons.append('oracle is not the frozen opt_einsum submodule')
-    if DATA_SCOPE.get('provisional', True):
+    if env.get('data_scope', DATA_SCOPE).get('provisional', True):
         provisional_reasons.append('benchmark uses a proxy dataset rather than the requested target')
     if mode == 'smoke':
         reasons.append('smoke 只覆盖 T0n/CPU，明确不构成验收')
@@ -1181,6 +1292,7 @@ def _acceptance(rows, env, problems, mode, requested_backends):
         if backend not in measured_backends]
     if missing_backends:
         reasons.append(f'请求的 backend 未测成功: {missing_backends}')
+    short_rows = []
     for row in rows:
         label = f"{row['profile']}/{row['eq']}/{row['backend']}"
         if row.get('status') != 'ok':
@@ -1188,7 +1300,8 @@ def _acceptance(rows, env, problems, mode, requested_backends):
             continue
         if not row.get('correctness_pass', False):
             reasons.append(f'{label} 数值校验失败')
-        if not row.get('planner_path_match', False):
+        if (env.get('planner', 'shared') == 'shared'
+                and not row.get('planner_path_match', False)):
             reasons.append(f'{label} 双方规划 path 不一致')
         native_name = 'cuda' if row['backend'] == 'gpu' else 'kupl'
         if not env.get('native_available', {}).get(native_name, False):
@@ -1208,11 +1321,19 @@ def _acceptance(rows, env, problems, mode, requested_backends):
                 reasons.append(f'{label} 缺少有效 worker_pid')
             if not row.get('loaded_oracle'):
                 reasons.append(f'{label} 缺少 loaded oracle 信息')
+        if row.get('too_short'):
+            short_rows.append(label)
+            continue
         if row['profile'] in ACCEPTANCE_PROFILES and not row.get('speedup_pass', False):
             reasons.append(
                 f'{label} speedup={row.get("speedup_vs_opt")} < '
                 f'{SPEEDUP_TARGET}')
-    acceptance_rows = [row for row in rows if row['profile'] in ACCEPTANCE_PROFILES]
+    if short_rows:
+        reasons.append(
+            f'{len(short_rows)} 组双方中位耗时 < {MIN_MEANINGFUL_SECONDS}s，'
+            f'记为 too_short 且不作为实战对照: {short_rows}')
+    acceptance_rows = [row for row in rows if row['profile'] in ACCEPTANCE_PROFILES
+                       and not row.get('too_short')]
     if mode != 'smoke' and not acceptance_rows:
         reasons.append('没有运行 T1/T2 生产规模 profile，不能作为性能验收')
     if mode == 'smoke':
@@ -1239,7 +1360,7 @@ def _acceptance(rows, env, problems, mode, requested_backends):
         'state': state,
         'passed': passed,
         'acceptance_evaluated': mode != 'smoke',
-        'provisional': DATA_SCOPE['provisional'],
+        'provisional': env.get('data_scope', DATA_SCOPE)['provisional'],
         'reasons': reasons + provisional_reasons,
         'return_code': return_code,
     }
@@ -1318,7 +1439,7 @@ def render_markdown(rows, env, acceptance):
         f"- 状态：**{acceptance['state']}**",
         f"- acceptance evaluated：{acceptance['acceptance_evaluated']}",
         f"- provisional：{acceptance['provisional']}",
-        f"- 说明：{DATA_SCOPE['note']}",
+        f"- 说明：{env.get('data_scope', DATA_SCOPE)['note']}",
     ]
     for reason in acceptance['reasons']:
         lines.append(f'- 阻断：{reason}')
@@ -1334,7 +1455,12 @@ def render_markdown(rows, env, acceptance):
         f"diagnostic profiles：`{sorted(DIAGNOSTIC_PROFILES)}`",
         f"- 计时：预热后 {env['measurement_order']}，每实现不少于 "
         f"{env['iterations']} 次，取中位数",
-        '- path：oracle planner 生成一次，双方用同一显式 path',
+        f"- planner：`{env.get('planner', 'shared')}`"
+        + ('（双方各自规划一次，只计时稳态执行）'
+           if env.get('planner') == 'production'
+           else '（双方共用 oracle 显式 path，只隔离执行层）'),
+        f"- 可比性门槛：双方中位耗时均 ≥ `{MIN_MEANINGFUL_SECONDS}` s，"
+        '否则记 `too_short` 且不计入 3x 判定',
         '- 正确性：`max |actual-expected| / max(|expected|, tiny)` '
         f"≤ `{RELATIVE_ERROR_TOLERANCE}`",
         '- GPU：每次计时前后调用 default stream synchronize',
@@ -1361,22 +1487,25 @@ def render_markdown(rows, env, acceptance):
         '## 结果',
         '',
         '| profile | eq | backend | isolation | worker pids | optimize | '
-        'opt median/s | qcd median/s | speedup | max rel err | '
+        'planner | opt median/s | qcd median/s | speedup | max rel err | '
         'planner path match | status |',
-        '|---|---|---|---|---|---|---|---|---|---|---|---|',
+        '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
     ]
     for row in rows:
         opt = row.get('opt_einsum', {}).get('median_s')
         qcd = row.get('qcd_einsum', {}).get('median_s')
         speedup = row.get('speedup_vs_opt')
-        verdict = 'PASS' if row.get('speedup_pass') else (
-            'DIAGNOSTIC(<3x)' if row['profile'] in DIAGNOSTIC_PROFILES
-            else 'FAIL(<3x)')
+        verdict = ('too_short(no-comparison)' if row.get('too_short')
+                   else 'PASS' if row.get('speedup_pass') else (
+                       'DIAGNOSTIC(<3x)'
+                       if row['profile'] in DIAGNOSTIC_PROFILES
+                       else 'FAIL(<3x)'))
         relative = row.get('max_relative_error')
         lines.append(
             f"| {row['profile']} | {row['eq']} | {row['backend']} | "
             f"{row['isolation']} | {row.get('worker_pid') or ''} | "
-            f"{row['optimize']} | {opt if opt is not None else ''} | "
+            f"{row['optimize']} | {row.get('planner', '')} | "
+            f"{opt if opt is not None else ''} | "
             f"{qcd if qcd is not None else ''} | "
             f"{speedup if speedup is not None else ''} | "
             f"{relative if relative is not None else ''} | "
@@ -1433,11 +1562,18 @@ def main(argv=None):
                         help='每实现中位数样本数，验收模式必须 >=10')
     parser.add_argument('--warmup', type=int, default=2,
                         help='每实现预热周期数')
-    parser.add_argument('--optimize', default='greedy',
-                        help='收缩规划器；默认 greedy，可显式传 dp')
+    parser.add_argument('--optimize', default='dp',
+                        help='收缩规划器；默认 dp（opt_einsum 常用策略）')
     parser.add_argument('--isolation', choices=('abba', 'process'),
                         default='process',
                         help='process=每实现全新解释器；abba=进程内交错计时')
+    parser.add_argument('--planner', choices=('production', 'shared'),
+                        default='production',
+                        help='production=两边各自按 --optimize 规划（无缝替换语义）；'
+                             'shared=两边共用 oracle 的显式 path（只隔离执行层）')
+    parser.add_argument('--data', choices=DATA_MODES, default='real',
+                        help='real=真实 perambulator；synthetic=固定种子合成操作数'
+                             '（形状一致，正确性以 opt_einsum 对照为准）')
     parser.add_argument('--outdir', default=None,
                         help='产物目录（默认 artifacts/bench_<时间戳>/）')
     parser.add_argument('--smoke', action='store_true',
@@ -1473,7 +1609,8 @@ def main(argv=None):
     rows, env, problems = run(
         profiles=profiles, backends=backends, equations=equations,
         iterations=iterations, warmup=warmup, optimize=args.optimize,
-        mode=mode, isolation=args.isolation)
+        mode=mode, isolation=args.isolation, data_mode=args.data,
+        planner=args.planner)
     acceptance = _acceptance(
         rows, env, problems, mode, requested_backends=backends)
     directory = artifact_dir(args.outdir)

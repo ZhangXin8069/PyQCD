@@ -1,0 +1,71 @@
+[日志元数据]
+日志类型: general
+生成时间: 2026-11-08 05:50:17 +0800
+批次: pyqcd/einsum
+主任务: pyqcd-einsum: 基准口径改造、sush 真实方程、L24 profile 与子代理分工进度
+触发原因: 一般记录
+摘要: planner/data 口径改造、S1-S3 方程、L24 profile、100ms 可比性门槛、L24/E5 实跑 0.888x 且退出期 segfault
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 基准口径改造（主代理）
+- 目标: 让基准可复核、且与生产用法一致
+- 命令/操作: 改 `pyqcd/testing/einsum/bench_distillation.py`
+  - 新增 `--data real|synthetic`（真实数据缺失时用固定种子合成，产物 `provisional=true`）
+  - 新增 `--planner production|shared`（production=双方各自按 `--optimize` 规划一次、只计稳态执行；
+    shared=双方共用 oracle 显式 path，只隔离执行层）
+  - 默认 `--optimize` 由 greedy 改为 `dp`（用户指示 opt_einsum 常用策略）
+  - 新增 `MIN_MEANINGFUL_SECONDS = 0.1`：双方中位耗时均 <0.1 s 的行记 `too_short`，
+    不计入 3x 判定（用户指出 E4/E5 耗时过短不能作实战对照）
+- 关键输出: 冒烟 7 条方程全部跑通；S1/S2/S3 rel ≤ 1.2e-15
+- 退出码: 0
+- 证据与判断: 曾出现 `max relative error = inf`，根因是 production 模式下把空 path 传给 oracle 侧；
+  修正后正常。实现本身无错（直接对拍 S1 rel=0、S2 rel=6.1e-16、S3 rel=4.3e-16）
+
+### S2 — 新增 sush 真实方程与 L24 profile
+- 目标: 用真实生产方程与真实空间格点做对照
+- 命令/操作: 在 `EQUATIONS` 增加 S1/S2/S3；`PROFILES` 增加 `L24`(s=24,N=50) 与 `L24n`(s=24,N=24)
+- 关键输出（opt_einsum `dp` 规划代价，未实跑）:
+  - L24 E4: opt_cost=27,471,052,800，largest_intermediate=66,355,200
+  - L24 E5: opt_cost=1,061,683,200
+  - L24n E4: 6,561,202,176；L24n E5: 509,607,936
+  - prop 单算子 1.06 GB（N=50）/ 0.51 GB（N=24）
+- 退出码: 0
+- 证据与判断: L24 下 E4 预估 GPU ≈4 s、E5 ≈0.17 s，均超过 100 ms 可比性门槛
+
+### S3 — L24 端到端实跑（CPU）
+- 目标: 验证 L24 profile 的内存可行性与数值正确性
+- 命令/操作: `PYQCD_EINSUM_ORACLE=installed PYQCD_EINSUM_NATIVE=kupl PYQCD_BENCH_THREADS=4 \
+  python -m pyqcd.testing.einsum.bench_native --data synthetic --profiles L24 --backends cpu \
+  --equations E5 --iters 10 --warmup 2`
+- 关键输出: `L24 E5 cpu speedup=0.888x max_rel=0.000e+00`，无 OOM
+- 退出码: 0（**但进程退出时 Segfault**）
+- 证据与判断: 数值正确、内存可行；Segfault 发生在结果与产物写完之后，属解释器析构期缺陷，
+  怀疑 ctypes / OpenBLAS / CUDA 上下文销毁顺序，待定位
+
+### S4 — 子代理分工（互不重叠的文件边界）
+- bg-1: CUDA E4 融合 kernel — 仅 `cpp/cuda/einsum/src/e4_fused.cu`
+- bg-2: KUPL CPU 执行层 — 仅 `cpp/kupl/einsum/src/apply_contract.cpp`
+- bg-3: Python 单次调用开销 — 仅 `pyqcd/einsum/_api.py`、`pyqcd/einsum/cuda/_program.py`
+- bg-4: PyQCU simple 风格测试 — 仅新建 `pyqcd/testing/einsum/simple/**`
+- bg-5: 文档/产物名一致性 — 已完成
+
+## 验证与证据
+- 测试/检查: `bench_native --data synthetic --smoke`（7 方程）、`--profiles L24 --equations E5 --backends cpu`
+- 结果: 冒烟 7/7 跑通，数值 rel ≤ 1.2e-15；L24/E5 rel=0、无 OOM
+- 未验证项: GPU 侧 L24 未跑；L24 其余 6 条方程未跑；Segfault 未定位
+
+## 变更与产物
+- 文件: `pyqcd/testing/einsum/bench_distillation.py`、`docs/pyqcd_einsum_performance_status_20261108.md`、
+  `logs/resume_20261108T053500_pyqcd-einsum.txt`（追加 §10）
+- 产物: `pyqcd/testing/einsum/artifacts/bench_20261108054842/` 等基准产物
+- 未改动范围: `cpp/**`（子代理负责）、`pyqcd/einsum/**` 生产代码（bg-3 负责）
+
+## 风险、限制与下一步
+- 风险: 子代理并发编译/计时，最终验收数字必须在独占机器时复测
+- 阻塞: 真实数据与 opt_einsum 冻结子模块在本机缺失
+- 下一步:
+  1. 等 bg-1/bg-2/bg-3 落地后独占跑 L24 生产口径全量复测
+  2. 定位并修复退出期 Segfault
+  3. 出最终验收报告

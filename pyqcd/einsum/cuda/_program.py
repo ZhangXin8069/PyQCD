@@ -65,13 +65,22 @@ class CudaProgram:
                 f"plan expects {len(self.input_shapes)} arrays, got {len(arrays)}"
             )
 
-        array_key = (
-            tuple(id(array) for array in arrays),
-            tuple(getattr(array, "shape", None) for array in arrays),
-            tuple(getattr(array, "dtype", None) for array in arrays),
-        )
+        # A cached pointer table may only be replayed when every operand already
+        # lives on the device *and* the table was built for exactly these
+        # buffers: ``cupy.asarray`` copies host memory, and replaying such a copy
+        # would silently return stale values for an operand mutated after the
+        # first call. The device pointers are part of the key for the same
+        # reason (a re-bound view must rebuild the table).
+        array_key = None
+        if all(isinstance(array, cupy.ndarray) for array in arrays):
+            array_key = (
+                tuple(id(array) for array in arrays),
+                tuple(array.shape for array in arrays),
+                tuple(array.dtype for array in arrays),
+                tuple(int(array.data.ptr) for array in arrays),
+            )
         state = getattr(self._local, "state", None)
-        if state is None or state[0] != array_key:
+        if state is None or array_key is None or state[0] != array_key:
             device_arrays = []
             for index, (array, shape) in enumerate(zip(arrays, self.input_shapes)):
                 device_array = cupy.asarray(array)
@@ -90,7 +99,7 @@ class CudaProgram:
                 pointers[index] = int(array.data.ptr)
             output_pointers = np.empty(1, dtype=np.int64)
             state = (array_key, device_arrays, pointers, output_pointers)
-            self._local.state = state
+            self._local.state = state if array_key is not None else None
         else:
             _, device_arrays, pointers, output_pointers = state
 
@@ -99,15 +108,18 @@ class CudaProgram:
             raise ValueError("output does not match compiled CUDA plan")
         output_contiguous = cupy.ascontiguousarray(output)
         output_pointers[0] = int(output_contiguous.data.ptr)
-        stream = cupy.cuda.get_current_stream()
-        stream.synchronize()
+        # ``applyCompiledQcd`` blocks until every kernel it launched has finished
+        # (each native entry point ends in ``cudaDeviceSynchronize`` and reports
+        # the CUDA error), so the two device-wide CuPy stream barriers that used
+        # to bracket this call only added a round trip per call. Keeping them
+        # would also have synced the *CuPy* stream, which is not the stream the
+        # native entry point launches on.
         status = self._einsum.applyCompiledQcd(
             int(self.context[0]),
             pointers.ctypes.data,
             output_pointers.ctypes.data,
             self.params.ctypes.data,
         )
-        stream.synchronize()
         if status != 0:
             from ..kupl.einsum import NativeUnavailable
 

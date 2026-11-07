@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
+import threading
 import warnings
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -29,6 +31,18 @@ _LAST_CONTRACT_SIGNATURE: tuple[Any, ...] | None = None
 _LAST_CONTRACT_PROGRAM: Any | None = None
 _NATIVE_DISABLED: set[tuple[Any, ...]] = set()
 _NATIVE_WARNING_EMITTED = False
+
+# Compiled native contexts reused by plain ``contract()`` calls. Without this
+# cache every non-expression call rebuilt the backend context from the plan bytes
+# (CUDA: a full ``cudaMalloc`` workspace per call, KUPL: a plan re-parse).
+_NATIVE_CONTEXT_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+_NATIVE_CONTEXT_CACHE_LIMIT = 16
+_NATIVE_CONTEXT_CACHE_ENV = "PYQCD_EINSUM_CONTEXT_CACHE_LIMIT"
+_NATIVE_CONTEXT_LIMIT_RESOLVED = False
+_NATIVE_CONTEXT_CACHE_LOCK = threading.RLock()
+# Keys whose plan could not be compiled into a reusable context. They keep the
+# historical per-call native execution instead of being disabled outright.
+_NATIVE_CONTEXT_UNAVAILABLE: set[tuple[Any, ...]] = set()
 
 
 def _sibling(name: str) -> Any:
@@ -531,46 +545,34 @@ def contract(
         hasattr(operand, "shape") and hasattr(operand, "dtype")
         for operand in operands
     )
-    cacheable_optimize = isinstance(optimize, (str, bool, tuple)) or optimize is None
+    optimize_key = _optimize_cache_key(optimize)
     cache_enabled = (
         isinstance(subscripts, str)
         and cacheable_operands
-        and cacheable_optimize
+        and optimize_key is not None
         and not kwargs
-        and out is None
         and optimize is not False
     )
     if cache_enabled:
         resolved_backend = parse_backend(operands, backend)
-        last_signature = (
-            subscripts,
-            resolved_backend,
-            tuple(id(operand) for operand in operands),
-            tuple(tuple(int(value) for value in operand.shape) for operand in operands),
-            tuple(str(operand.dtype) for operand in operands),
-            tuple(
-                int(operand.device.id)
-                if hasattr(operand, "device") and hasattr(operand.device, "id")
-                else -1
-                for operand in operands
-            ),
-            id(optimize),
-            bool(use_blas),
-            memory_limit,
+        last_signature = _contract_signature(
+            subscripts, resolved_backend, optimize_key, use_blas, memory_limit, operands
         )
         if last_signature == _LAST_CONTRACT_SIGNATURE and _LAST_CONTRACT_PROGRAM is not None:
             try:
-                return _LAST_CONTRACT_PROGRAM(list(operands))
+                return _LAST_CONTRACT_PROGRAM(list(operands), out=out)
             except Exception:
+                # Shapes, dtypes or devices changed under the same objects: drop
+                # the memo and fall through to the shape keyed lookup.
                 _LAST_CONTRACT_SIGNATURE = None
                 _LAST_CONTRACT_PROGRAM = None
         cached_key = _contract_program_key(
-            subscripts, operands, resolved_backend, optimize, memory_limit, use_blas
+            subscripts, operands, resolved_backend, optimize_key, memory_limit, use_blas
         )
         cached_program = _cached_contract_program(cached_key)
         if cached_program is not None:
             try:
-                result = cached_program(list(operands))
+                result = cached_program(list(operands), out=out)
                 _LAST_CONTRACT_SIGNATURE = last_signature
                 _LAST_CONTRACT_PROGRAM = cached_program
                 return result
@@ -612,7 +614,7 @@ def contract(
     if cache_enabled:
         if cached_key is None:
             cached_key = _contract_program_key(
-                subscripts, operands_prepped, resolved_backend, optimize,
+                subscripts, operands_prepped, resolved_backend, optimize_key,
                 memory_limit, use_blas,
             )
         program = _compile_native_expression(
@@ -621,23 +623,10 @@ def contract(
         if program is not None:
             _cache_contract_program(cached_key, program)
             try:
-                result = program(list(operands_prepped))
-                _LAST_CONTRACT_SIGNATURE = (
-                    subscripts,
-                    resolved_backend,
-                    tuple(id(operand) for operand in operands_prepped),
-                    tuple(tuple(int(value) for value in operand.shape)
-                          for operand in operands_prepped),
-                    tuple(str(operand.dtype) for operand in operands_prepped),
-                    tuple(
-                        int(operand.device.id)
-                        if hasattr(operand, "device") and hasattr(operand.device, "id")
-                        else -1
-                        for operand in operands_prepped
-                    ),
-                    id(optimize),
-                    bool(use_blas),
-                    memory_limit,
+                result = program(list(operands_prepped), out=out)
+                _LAST_CONTRACT_SIGNATURE = _contract_signature(
+                    subscripts, resolved_backend, optimize_key, use_blas,
+                    memory_limit, operands_prepped,
                 )
                 _LAST_CONTRACT_PROGRAM = program
                 return result
@@ -720,6 +709,140 @@ def _native_plan_key(
     )
 
 
+def _warn_native_fallback_once(message: str) -> None:
+    """Emit the one-time native fallback warning."""
+    global _NATIVE_WARNING_EMITTED
+    if _NATIVE_WARNING_EMITTED:
+        return
+    warnings.warn(message, RuntimeWarning, stacklevel=4)
+    _NATIVE_WARNING_EMITTED = True
+
+
+def _native_context_cache_limit() -> int:
+    """Bound of the compiled-context cache (``0`` disables caching).
+
+    ``_NATIVE_CONTEXT_CACHE_LIMIT`` may be assigned directly; the environment
+    variable ``PYQCD_EINSUM_CONTEXT_CACHE_LIMIT`` is read once on first use.
+    """
+    global _NATIVE_CONTEXT_CACHE_LIMIT, _NATIVE_CONTEXT_LIMIT_RESOLVED
+    if not _NATIVE_CONTEXT_LIMIT_RESOLVED:
+        _NATIVE_CONTEXT_LIMIT_RESOLVED = True
+        raw = os.environ.get(_NATIVE_CONTEXT_CACHE_ENV, "").strip()
+        if raw:
+            try:
+                configured = int(raw)
+            except ValueError:
+                configured = -1
+            if configured >= 0:
+                _NATIVE_CONTEXT_CACHE_LIMIT = configured
+    return _NATIVE_CONTEXT_CACHE_LIMIT
+
+
+def _cached_native_context(key: tuple[Any, ...]) -> Any | None:
+    """Return the compiled context cached for ``key`` (LRU touch), or ``None``."""
+    with _NATIVE_CONTEXT_CACHE_LOCK:
+        program = _NATIVE_CONTEXT_CACHE.get(key)
+        if program is not None:
+            _NATIVE_CONTEXT_CACHE.move_to_end(key)
+        return program
+
+
+def _store_native_context(key: tuple[Any, ...], program: Any | None) -> None:
+    """Insert ``program`` into the bounded LRU, evicting the least recently used."""
+    limit = _native_context_cache_limit()
+    with _NATIVE_CONTEXT_CACHE_LOCK:
+        if limit <= 0 or program is None:
+            # Caching disabled: drop what is there so no context stays pinned.
+            _NATIVE_CONTEXT_CACHE.clear()
+            return
+        _NATIVE_CONTEXT_CACHE[key] = program
+        _NATIVE_CONTEXT_CACHE.move_to_end(key)
+        while len(_NATIVE_CONTEXT_CACHE) > limit:
+            # Evicted programs lose their last reference here; their destructor
+            # releases the native context (``applyDestroyQcd`` and friends).
+            _NATIVE_CONTEXT_CACHE.popitem(last=False)
+
+
+def _drop_native_context(key: tuple[Any, ...]) -> None:
+    """Forget the compiled context of ``key`` (used after a failed call)."""
+    with _NATIVE_CONTEXT_CACHE_LOCK:
+        _NATIVE_CONTEXT_CACHE.pop(key, None)
+
+
+def _native_plan_bytes(
+    key: tuple[Any, ...],
+    contraction_list: Sequence[tuple[Any, ...]],
+    operands: Sequence[Any],
+    native_cache: dict[tuple[Any, ...], Any] | None,
+) -> bytes | None:
+    """Return the encoded plan for ``key``, encoding and caching it once."""
+    plan = native_cache.get(key) if native_cache is not None else _NATIVE_PLAN_CACHE.get(key)
+    if plan is not None:
+        if native_cache is None:
+            _NATIVE_PLAN_CACHE.move_to_end(key)
+        return plan
+
+    try:
+        from ._native_plan import encode_execution_plan
+
+        plan = encode_execution_plan(contraction_list, operands)
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        _NATIVE_DISABLED.add(key)
+        _warn_native_fallback_once(
+            f"pyqcd.einsum native plan unavailable; using Python execution: {exc}"
+        )
+        return None
+
+    if native_cache is None:
+        _NATIVE_PLAN_CACHE[key] = plan
+        if len(_NATIVE_PLAN_CACHE) > _NATIVE_PLAN_CACHE_LIMIT:
+            _NATIVE_PLAN_CACHE.popitem(last=False)
+    return plan
+
+
+def _call_native_program(
+    program: Any,
+    key: tuple[Any, ...],
+    operands: Sequence[Any],
+    out: Any,
+    native_backend: str,
+) -> tuple[bool, Any]:
+    """Run ``program`` with *this* call's operands, disabling the key on failure."""
+    try:
+        return True, program(list(operands), out=out)
+    except Exception as exc:
+        # Fail closed: never retry a program that produced an error for this key.
+        _NATIVE_DISABLED.add(key)
+        _drop_native_context(key)
+        _warn_native_fallback_once(
+            f"pyqcd.einsum native {native_backend} execution unavailable; "
+            f"using Python execution: {type(exc).__name__}: {exc}"
+        )
+        return False, None
+
+
+def _execute_native_plan(
+    plan: bytes,
+    key: tuple[Any, ...],
+    operands: Sequence[Any],
+    out: Any,
+    native_backend: str,
+) -> tuple[bool, Any]:
+    """Execute ``plan`` without a reusable context (historical behaviour)."""
+    try:
+        result = _native_executor().execute(
+            plan, list(operands), out=out, backend=native_backend
+        )
+    except Exception as exc:  # Native failures must fall back without changing semantics.
+        _NATIVE_DISABLED.add(key)
+        _warn_native_fallback_once(
+            f"pyqcd.einsum native {native_backend} execution unavailable; "
+            f"using Python execution: {type(exc).__name__}: {exc}"
+        )
+        return False, None
+    return True, result
+
+
 def _try_native_contract(
     operands: Sequence[Any],
     contraction_list: Sequence[tuple[Any, ...]],
@@ -729,8 +852,6 @@ def _try_native_contract(
     native_cache: dict[tuple[Any, ...], Any] | None = None,
 ) -> tuple[bool, Any]:
     """Return ``(handled, result)`` for one native execution attempt."""
-    global _NATIVE_WARNING_EMITTED
-
     if not _native_compatible(operands, backend, kwargs):
         return False, None
     native_backend = _native_backend(backend)
@@ -749,86 +870,44 @@ def _try_native_contract(
     if native_cache is not None:
         cached = native_cache.get(key)
         if cached is not None and hasattr(cached, "__call__"):
-            try:
-                return True, cached(list(operands), out=out)
-            except Exception as exc:
-                _NATIVE_DISABLED.add(key)
-                if not _NATIVE_WARNING_EMITTED:
-                    warnings.warn(
-                        f"pyqcd.einsum native {native_backend} execution unavailable; "
-                        f"using Python execution: {type(exc).__name__}: {exc}",
-                        RuntimeWarning,
-                        stacklevel=3,
-                    )
-                    _NATIVE_WARNING_EMITTED = True
-                return False, None
+            return _call_native_program(cached, key, operands, out, native_backend)
+    else:
+        # Plain ``contract()``: reuse the compiled context of this exact plan.
+        cached = _cached_native_context(key)
+        if cached is not None:
+            return _call_native_program(cached, key, operands, out, native_backend)
 
-    plan = native_cache.get(key) if native_cache is not None else _NATIVE_PLAN_CACHE.get(key)
+    plan = _native_plan_bytes(key, contraction_list, operands, native_cache)
     if plan is None:
-        try:
-            from ._native_plan import encode_execution_plan
+        return False, None
 
-            plan = encode_execution_plan(contraction_list, operands)
-        except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            _NATIVE_DISABLED.add(key)
-            if not _NATIVE_WARNING_EMITTED:
-                warnings.warn(
-                    f"pyqcd.einsum native plan unavailable; using Python execution: {exc}",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-                _NATIVE_WARNING_EMITTED = True
-            return False, None
-        if native_cache is None:
-            _NATIVE_PLAN_CACHE[key] = plan
-            if len(_NATIVE_PLAN_CACHE) > _NATIVE_PLAN_CACHE_LIMIT:
-                _NATIVE_PLAN_CACHE.popitem(last=False)
-
-    if native_cache is not None:
-        try:
-            program = _native_executor().compile(plan, backend=native_backend)
-        except Exception as exc:
-            _NATIVE_DISABLED.add(key)
-            if not _NATIVE_WARNING_EMITTED:
-                warnings.warn(
-                    f"pyqcd.einsum native {native_backend} compiler unavailable; "
-                    f"using Python execution: {type(exc).__name__}: {exc}",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-                _NATIVE_WARNING_EMITTED = True
-            return False, None
-        native_cache[key] = program
-        try:
-            return True, program(list(operands), out=out)
-        except Exception as exc:
-            _NATIVE_DISABLED.add(key)
-            if not _NATIVE_WARNING_EMITTED:
-                warnings.warn(
-                    f"pyqcd.einsum native {native_backend} execution unavailable; "
-                    f"using Python execution: {type(exc).__name__}: {exc}",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-                _NATIVE_WARNING_EMITTED = True
-            return False, None
+    if native_cache is None and key in _NATIVE_CONTEXT_UNAVAILABLE:
+        return _execute_native_plan(plan, key, operands, out, native_backend)
 
     try:
-        result = _native_executor().execute(
-            plan, list(operands), out=out, backend=native_backend
-        )
-    except Exception as exc:  # Native failures must fall back without changing semantics.
-        _NATIVE_DISABLED.add(key)
-        if not _NATIVE_WARNING_EMITTED:
-            warnings.warn(
-                f"pyqcd.einsum native {native_backend} execution unavailable; "
-                f"using Python execution: {type(exc).__name__}: {exc}",
-                RuntimeWarning,
-                stacklevel=3,
+        program = _native_executor().compile(plan, backend=native_backend)
+    except Exception as exc:
+        if native_cache is None:
+            # No reusable context for this plan: keep executing the plan per call
+            # instead of dropping the whole native path.
+            _NATIVE_CONTEXT_UNAVAILABLE.add(key)
+            _warn_native_fallback_once(
+                f"pyqcd.einsum native {native_backend} compiler unavailable; "
+                f"using per-call native execution: {type(exc).__name__}: {exc}"
             )
-            _NATIVE_WARNING_EMITTED = True
+            return _execute_native_plan(plan, key, operands, out, native_backend)
+        _NATIVE_DISABLED.add(key)
+        _warn_native_fallback_once(
+            f"pyqcd.einsum native {native_backend} compiler unavailable; "
+            f"using Python execution: {type(exc).__name__}: {exc}"
+        )
         return False, None
-    return True, result
+
+    if native_cache is not None:
+        native_cache[key] = program
+    else:
+        _store_native_context(key, program)
+    return _call_native_program(program, key, operands, out, native_backend)
 
 
 def _compile_native_expression(
@@ -852,11 +931,58 @@ def _compile_native_expression(
         return None
 
 
+def _optimize_cache_key(optimize: Any) -> Any | None:
+    """Return a hashable, mutation proof cache token for ``optimize``.
+
+    ``None`` means "not cacheable". Strings, booleans and tuples are already
+    immutable, so they double as their own token; an explicit ``path`` given as
+    a list of step tuples is frozen into a tuple so that later edits of the list
+    cannot hit a stale program (opt_einsum accepts both spellings).
+    """
+    if optimize is None or isinstance(optimize, (str, bool)):
+        return optimize
+    if isinstance(optimize, tuple):
+        try:
+            hash(optimize)
+        except TypeError:
+            return None
+        return optimize
+    if isinstance(optimize, list):
+        try:
+            return tuple(tuple(int(index) for index in step) for step in optimize)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _contract_signature(
+    subscripts: Any,
+    backend: str,
+    optimize_key: Any,
+    use_blas: bool,
+    memory_limit: Any,
+    operands: Sequence[Any],
+) -> tuple[Any, ...]:
+    """Identity memo key: the same program can be replayed for these operands.
+
+    Shapes, dtypes and device ids are deliberately left to the native program,
+    which validates them on every call and raises (``fail closed``) on a change.
+    """
+    return (
+        subscripts,
+        backend,
+        optimize_key,
+        bool(use_blas),
+        memory_limit,
+        tuple(id(operand) for operand in operands),
+    )
+
+
 def _contract_program_key(
     subscripts: Any,
     operands: Sequence[Any],
     backend: str,
-    optimize: Any,
+    optimize_key: Any,
     memory_limit: Any,
     use_blas: bool,
 ) -> tuple[Any, ...] | None:
@@ -874,8 +1000,8 @@ def _contract_program_key(
                 else -1
                 for operand in operands
             ),
-            repr(optimize),
-            repr(memory_limit),
+            optimize_key,
+            memory_limit,
             bool(use_blas),
         )
     except (AttributeError, TypeError, ValueError):

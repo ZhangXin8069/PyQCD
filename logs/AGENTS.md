@@ -636,3 +636,19 @@
 - 关键内容: T1 蒸馏实例：KUPL 四项 PASS；CUDA E4/E5 PASS，E1/E2 未达 3x；CUDA MPI 降轴路径测试失败待修
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pyqcd/einsum - stage - 2026-11-08 05:24:29 +0800
+- 主任务: pyqcd-einsum: CUDA/KUPL 原生收缩引擎构建、正确性验证与 3x 性能基线
+- 日志文件: logs/v202611080524.txt
+- 文件大小: 10420 bytes
+- 触发原因: 阶段成果
+- 关键内容: KUPL/CUDA 构建成功、verify_native 各 16/16、CPU 基线 T0/T1 实测、resume 文件落盘
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+## pyqcd/einsum - general - 2026-11-08 05:50:17 +0800
+- 主任务: pyqcd-einsum: 基准口径改造、sush 真实方程、L24 profile 与子代理分工进度
+- 日志文件: logs/v20261108055017.txt
+- 文件大小: 4188 bytes
+- 触发原因: 一般记录
+- 关键内容: planner/data 口径改造、S1-S3 方程、L24 profile、100ms 可比性门槛、L24/E5 实跑 0.888x 且退出期 segfault
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
