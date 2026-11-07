@@ -1,0 +1,51 @@
+[日志元数据]
+日志类型: general
+生成时间: 2026-11-08 06:35:52 +0800
+批次: pyqcd/einsum
+主任务: 修复 KUPL transpose_copy 在输出全 1 维时返回未初始化缓冲（影响 E2 的 greedy/auto）
+触发原因: 一般记录
+摘要: 最小复现 abcde,cedb->ac；根因 axes.empty() 提前返回；修复后 E2 三 planner 全对
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 定位并修复 KUPL 原生执行的未初始化输出缺陷
+- 目标: 修复 `Geifj,ckdl,agbh,ce,gi,Mbdf,Mhjl,Gka->GM`（E2）在 greedy/auto 下返回未初始化缓冲
+- 命令/操作:
+  - 复现：`pe.contract(eq, *ops, optimize='greedy')` → `max|got|=5.273e-310`、`rel=1.00`
+  - 分离：`_execute.execute_plan(...)` 正确（rel=0）；`_api._core_contract(...)` 错误 → 定位在原生层
+  - 最小复现：`abcde,cedb->ac`，left `(1,5,1,5,5)`、right `(1,5,5,5)` → rel=1.00；改为 `->ca` 或让
+    a/c 尺寸 >1 均正确
+  - trace：失败用例 `pack_out=1`、`output_perm=1,0`、`batch=1 m=1 n=1 k=125`
+  - 根因：`transpose_copy()` 中 `extent == 1` 的轴被全部跳过后 `axes.empty()` **直接 `return true`**，
+    目标缓冲一次都没写
+- 关键输出: 修复后最小复现 rel=0；E2 方程 `greedy/auto/dp` 分别 1.90e-16 / 9.47e-16 / 5.91e-16
+- 退出码: 构建 `make.sh: SUCCESS`
+- 证据与判断:
+  - 该缺陷只在"输出所有维都为 1 且需要输出重排"时触发，属**既有产品缺陷**（非本次改动引入，
+    子代理 bg-7 用基线树对比已证明）
+  - 修复：`axes.empty()` 分支校验 `source_count == destination_count == 1` 后 `memcpy` 单个元素
+
+### S2 — 回归验证
+- 命令/操作:
+  - `verify_native --backend kupl` / `--backend cuda`
+  - `python -m pyqcd.testing.einsum.simple.check_equations`
+  - CUDA 侧 E2 greedy/auto 数值对照
+- 关键输出: kupl 16/16、cuda 16/16、equations 9/9；cuda/E2-greedy rel=4.48e-16、cuda/E2-auto rel=1.43e-15
+- 退出码: 0 / 0 / 0
+- 证据与判断: 修复未引入回归，CUDA 侧无同类问题（其 pack 路径独立）
+
+## 验证与证据
+- 测试/检查: 最小复现脚本、E2 三 planner、verify_native 双后端、simple check_equations、CUDA E2 对照
+- 结果: 全部通过
+- 未验证项: CUDA 侧是否存在"输出全 1 维 + 重排"的同类边界（当前用例未触发，未穷举）
+
+## 变更与产物
+- 文件: `cpp/kupl/einsum/src/apply_contract.cpp`（`transpose_copy` 的 `axes.empty()` 分支）
+- 产物: `cpp/kupl/einsum/libpyqcdeinsum_kupl.so`（重建）
+- 未改动范围: `runtime.cpp`、`plan_core.cpp`、`cpp/cuda/**`、`pyqcd/**`
+
+## 风险、限制与下一步
+- 风险: 该分支此前静默返回未初始化内存，可能已在历史结果中留下错误数据
+- 阻塞: 无
+- 下一步: 用 `verify_compat` 全量（需 opt_einsum 冻结子模块）复跑；补充"输出全 1 维"的回归用例

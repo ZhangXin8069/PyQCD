@@ -1356,6 +1356,63 @@ class CudaWorkspace {
     std::vector<cudaEvent_t> done_events_;
 };
 
+// ``PYQCD_EINSUM_TRACE=2`` adds per-step CUDA-event timing to the trace output.
+bool step_timing_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("PYQCD_EINSUM_TRACE");
+        if (value == nullptr) {
+            return false;
+        }
+        return std::atoi(value) >= 2;
+    }();
+    return enabled;
+}
+
+// A pack whose destination strides already equal the source strides copies each
+// element onto itself; the GEMM can consume the operand in place.
+// ``PYQCD_EINSUM_CUDA_PACK_ELISION=0`` restores the unconditional pack.
+bool pack_elision_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("PYQCD_EINSUM_CUDA_PACK_ELISION");
+        if (value == nullptr || *value == '\0') {
+            return true;
+        }
+        return std::atoi(value) != 0;
+    }();
+    return enabled;
+}
+
+bool copy_spec_is_identity(const qcd_cuda_copy_spec& spec) {
+    if (spec.elements <= 0 || spec.rank < 0) {
+        return false;
+    }
+    int64_t expected = 1;
+    for (int32_t axis = spec.rank - 1; axis >= 0; --axis) {
+        if (spec.shape[axis] <= 1) {
+            continue;
+        }
+        if (spec.src_stride[axis] != expected) {
+            return false;
+        }
+        expected *= spec.shape[axis];
+    }
+    return true;
+}
+
+const char* operation_kind_name(OperationKind kind) {
+    switch (kind) {
+        case OperationKind::kCopy:
+            return "copy";
+        case OperationKind::kReduce:
+            return "reduce";
+        case OperationKind::kHadamard:
+            return "hadamard";
+        case OperationKind::kGemm:
+            return "gemm";
+    }
+    return "?";
+}
+
 int execute_prepared(
     const pyqcd_einsum::ExecutionPlan& plan,
     const std::vector<PreparedStep>& prepared,
@@ -1374,6 +1431,47 @@ int execute_prepared(
     std::vector<void*> nodes(static_cast<std::size_t>(num_nodes), nullptr);
     for (int32_t input = 0; input < plan.num_inputs; ++input) {
         nodes[static_cast<std::size_t>(input)] = input_data[static_cast<std::size_t>(input)];
+    }
+
+    const bool step_timing = step_timing_enabled();
+    const std::size_t timing_count = step_timing ? prepared.size() : 0;
+    std::vector<cudaEvent_t> timing_start(timing_count, nullptr);
+    std::vector<cudaEvent_t> timing_stop(timing_count, nullptr);
+    std::vector<int> timing_skipped(timing_count, 0);
+    if (step_timing) {
+        for (std::size_t index = 0; index < timing_count; ++index) {
+            if (cudaEventCreate(&timing_start[index]) != cudaSuccess ||
+                cudaEventCreate(&timing_stop[index]) != cudaSuccess) {
+                for (cudaEvent_t event : timing_start) {
+                    if (event != nullptr) {
+                        cudaEventDestroy(event);
+                    }
+                }
+                for (cudaEvent_t event : timing_stop) {
+                    if (event != nullptr) {
+                        cudaEventDestroy(event);
+                    }
+                }
+                timing_start.clear();
+                timing_stop.clear();
+                return QCD_STATUS_INTERNAL;
+            }
+        }
+    }
+    const auto destroy_timing = [&timing_start, &timing_stop] {
+        for (cudaEvent_t event : timing_start) {
+            if (event != nullptr) {
+                cudaEventDestroy(event);
+            }
+        }
+        for (cudaEvent_t event : timing_stop) {
+            if (event != nullptr) {
+                cudaEventDestroy(event);
+            }
+        }
+    };
+    if (step_timing) {
+        cudaEventRecord(timing_start[0], nullptr);
     }
 
     for (std::size_t step_index = 0; step_index < prepared.size(); ++step_index) {
@@ -1416,17 +1514,38 @@ int execute_prepared(
                 }
                 void* left_pack = workspace->left_pack();
                 void* right_pack = workspace->right_pack();
-                status = qcd_cuda_permute(
-                    dtype_id, nodes[static_cast<std::size_t>(step.left)], left_pack,
-                    step.left_pack, nullptr);
-                if (status != QCD_STATUS_OK) {
-                    return status;
+                const bool elide = pack_elision_enabled();
+                const bool left_in_place =
+                    elide && copy_spec_is_identity(step.left_pack);
+                const bool right_in_place =
+                    elide && copy_spec_is_identity(step.right_pack);
+                if (left_in_place) {
+                    left_pack = nodes[static_cast<std::size_t>(step.left)];
+                    if (step_timing) {
+                        ++timing_skipped[step_index];
+                    }
+                } else {
+                    status = qcd_cuda_permute(
+                        dtype_id, nodes[static_cast<std::size_t>(step.left)], left_pack,
+                        step.left_pack, nullptr);
+                    if (status != QCD_STATUS_OK) {
+                        destroy_timing();
+                        return status;
+                    }
                 }
-                status = qcd_cuda_permute(
-                    dtype_id, nodes[static_cast<std::size_t>(step.right)], right_pack,
-                    step.right_pack, nullptr);
-                if (status != QCD_STATUS_OK) {
-                    return status;
+                if (right_in_place) {
+                    right_pack = nodes[static_cast<std::size_t>(step.right)];
+                    if (step_timing) {
+                        ++timing_skipped[step_index];
+                    }
+                } else {
+                    status = qcd_cuda_permute(
+                        dtype_id, nodes[static_cast<std::size_t>(step.right)], right_pack,
+                        step.right_pack, nullptr);
+                    if (status != QCD_STATUS_OK) {
+                        destroy_timing();
+                        return status;
+                    }
                 }
                 void* gemm_output = step.permute_output ? workspace->gemm_output() : step_output;
                 const bool split_batch = step.batch > 1;
@@ -1481,7 +1600,14 @@ int execute_prepared(
         }
         if (status != QCD_STATUS_OK) {
             cudaDeviceSynchronize();
+            destroy_timing();
             return status;
+        }
+        if (step_timing) {
+            cudaEventRecord(timing_stop[step_index], nullptr);
+            if (step_index + 1 < prepared.size()) {
+                cudaEventRecord(timing_start[step_index + 1], nullptr);
+            }
         }
     }
 
@@ -1489,6 +1615,7 @@ int execute_prepared(
     int64_t final_elements = prepared.back().output_elements;
     std::size_t final_bytes = 0;
     if (!allocation_bytes(final_elements, dtype_id, &final_bytes)) {
+        destroy_timing();
         return QCD_STATUS_INVALID;
     }
     if (final_elements > 0) {
@@ -1496,10 +1623,30 @@ int execute_prepared(
             output_data, nodes[static_cast<std::size_t>(final_node)], final_bytes,
             cudaMemcpyDeviceToDevice, nullptr);
         if (copy_error != cudaSuccess) {
+            destroy_timing();
             return map_cuda_error(copy_error);
         }
     }
-    return map_cuda_error(cudaDeviceSynchronize());
+    const cudaError_t sync_error = cudaDeviceSynchronize();
+    if (step_timing) {
+        for (std::size_t index = 0; index < timing_count; ++index) {
+            float milliseconds = 0.0f;
+            const bool measured =
+                cudaEventElapsedTime(&milliseconds, timing_start[index],
+                                     timing_stop[index]) == cudaSuccess;
+            const PreparedStep& step = prepared[index];
+            std::fprintf(
+                stderr,
+                "PYQCD_EINSUM_CUDA_STEP index=%zu kind=%s m=%lld n=%lld k=%lld "
+                "batch=%lld pack_skipped=%d ms=%.4f\n",
+                index, operation_kind_name(step.kind),
+                static_cast<long long>(step.m), static_cast<long long>(step.n),
+                static_cast<long long>(step.k), static_cast<long long>(step.batch),
+                timing_skipped[index], measured ? milliseconds : -1.0f);
+        }
+    }
+    destroy_timing();
+    return map_cuda_error(sync_error);
 }
 
 int execute_sandwich(
@@ -1633,8 +1780,13 @@ bool initialize_context(const void* plan_data, CompiledContext* context) {
         context->prepared.size() != context->plan.steps.size()) {
         return false;
     }
-    match_sandwich(context->plan, context->resolved, &context->sandwich);
-    match_e4_fused(context->plan, context->resolved, &context->e4_fused);
+    // specialize=False 时由 Python 侧设置该变量，强制走通用多步路径以便 A/B 对照。
+    if (std::getenv("PYQCD_EINSUM_DISABLE_FUSED") == nullptr) {
+        match_sandwich(context->plan, context->resolved, &context->sandwich);
+        match_e4_fused(context->plan, context->resolved, &context->e4_fused);
+    } else if (trace_enabled()) {
+        std::fprintf(stderr, "PYQCD_EINSUM_FUSED_DISABLED\n");
+    }
     return true;
 }
 

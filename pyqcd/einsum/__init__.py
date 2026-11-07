@@ -17,6 +17,7 @@ from . import backends, paths
 from ._api import contract, contract_path
 from ._expr import ContractExpression, contract_expression, format_const_einsum_str, shape_only
 from ._pathinfo import PathInfo
+from ._specialize import describe as specializations
 from ._sharing import count_cached_ops, shared_intermediates
 from .backends.dispatch import (
     get_func,
@@ -54,6 +55,7 @@ __all__ = [
     "register_path_fn",
     "shape_only",
     "shared_intermediates",
+    "specializations",
 ]
 
 # names served by sibling modules that may be written concurrently

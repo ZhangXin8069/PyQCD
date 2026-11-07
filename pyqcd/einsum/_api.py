@@ -14,6 +14,7 @@ from typing import Any
 from . import paths
 from ._pathinfo import PathInfo
 from ._sharing import einsum_cache_wrap
+from . import _specialize
 from .backends.dispatch import get_func, parse_backend
 
 __all__ = ["contract", "contract_path"]
@@ -27,6 +28,7 @@ _NATIVE_PLAN_CACHE: OrderedDict[tuple[Any, ...], bytes] = OrderedDict()
 _NATIVE_PLAN_CACHE_LIMIT = 128
 _CONTRACT_PROGRAM_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
 _CONTRACT_PROGRAM_CACHE_LIMIT = 64
+_FUSED_ENV_OWNED = False
 _LAST_CONTRACT_SIGNATURE: tuple[Any, ...] | None = None
 _LAST_CONTRACT_PROGRAM: Any | None = None
 _NATIVE_DISABLED: set[tuple[Any, ...]] = set()
@@ -526,6 +528,7 @@ def contract(
     optimize: Any = "auto",
     memory_limit: Any = None,
     backend: str = "auto",
+    specialize: bool = True,
     **kwargs: Any,
 ) -> Any:
     """Evaluate an einsum expression with an optimized contraction order.
@@ -535,6 +538,22 @@ def contract(
     """
     if (optimize is True) or (optimize is None):
         optimize = "auto"
+
+    # 方程形态专用路径：命中时打印提示；specialize=False 关闭本次调用的专用执行。
+    # 只回收本模块自己设置的开关，不覆盖调用方通过环境变量显式给出的设置。
+    global _FUSED_ENV_OWNED
+    specialized = None
+    if isinstance(subscripts, str):
+        if _specialize.enabled(specialize):
+            if _FUSED_ENV_OWNED:
+                os.environ.pop(_specialize.FUSED_DISABLE_ENV, None)
+                _FUSED_ENV_OWNED = False
+            specialized = _specialize.match(subscripts)
+            if specialized is not None:
+                _specialize.announce(specialized)
+        else:
+            os.environ[_specialize.FUSED_DISABLE_ENV] = "1"
+            _FUSED_ENV_OWNED = True
 
     global _LAST_CONTRACT_SIGNATURE, _LAST_CONTRACT_PROGRAM
 
@@ -552,6 +571,8 @@ def contract(
         and optimize_key is not None
         and not kwargs
         and optimize is not False
+        and specialized is not None
+        and specialize is not False
     )
     if cache_enabled:
         resolved_backend = parse_backend(operands, backend)

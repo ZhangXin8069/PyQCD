@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 
 namespace {
@@ -551,6 +552,281 @@ bool plan_staged_tiles(
     return true;
 }
 
+// ---- GEMM-shaped fused kernel ----------------------------------------------
+// The staged kernel above is limited by its thread mapping: one thread owns a
+// single (f, n) cell, so it only keeps `d` accumulators alive and re-reads the
+// whole factor row for every n. This kernel restructures the same algebra as a
+// register-tiled product:
+//
+//     out[t][G][d][b][f][n] = sum_{g,a} S[t][g*a][b][n] * F[t][G][g*a][d][f]
+//     S = sum_c a[v][c][t][a][b][n] * c[t][v][g][c]        (volume folded, v == 1)
+//     F = sum_e gamma[G][a][e] * b[v][g][t][d][e][f]
+//
+// Both operands are staged once per (t, b, f-tile) block in shared memory and
+// the contraction runs as a K = g*a rank-12 accumulation with a NV (n) by DimD
+// (d) register tile per thread, which is the minimum-FLOP factorization of this
+// network (3.84M complex MAC for the reference shape).
+constexpr int kGemmThreads = 256;
+constexpr int kGemmNVec = 2;
+constexpr int64_t kGemmSharedBudget = 48 * 1024;
+constexpr int64_t kGemmMinOutputElements = 65536;
+
+template <typename Type, int DimD>
+__global__ __launch_bounds__(kGemmThreads) void e4_gemm_kernel(
+    const Type* __restrict__ a,
+    const Type* __restrict__ b,
+    const Type* __restrict__ gamma,
+    const Type* __restrict__ c,
+    Type* __restrict__ dst,
+    qcd_cuda_e4_spec spec,
+    int n_pad,
+    int fc,
+    int nf) {
+    extern __shared__ __align__(16) unsigned char raw_shared[];
+    Type* shared = reinterpret_cast<Type*>(raw_shared);
+
+    const int ig = static_cast<int>(spec.input_g);
+    const int og = static_cast<int>(spec.output_g);
+    const int dim_a = static_cast<int>(spec.a);
+    const int dim_b = static_cast<int>(spec.b);
+    const int dim_c = static_cast<int>(spec.c);
+    const int dim_d = DimD;
+    const int dim_e = static_cast<int>(spec.e);
+    const int dim_f = static_cast<int>(spec.f);
+    const int dim_n = static_cast<int>(spec.n);
+    const int dim_t = static_cast<int>(spec.t);
+    const int rank = ig * dim_a;
+
+    Type* sums = shared;                                   // [rank][n_pad]
+    Type* factors = sums + static_cast<int64_t>(rank) * n_pad;  // [og][rank][DimD][fc]
+
+    const int f_tile = static_cast<int>(blockIdx.x) % nf;
+    const int row_unit = static_cast<int>(blockIdx.x) / nf;
+    const int b_index = row_unit % dim_b;
+    const int t_index = row_unit / dim_b;
+    const int f_base = f_tile * fc;
+    const int f_left = dim_f - f_base;
+    const int f_count = fc < f_left ? fc : f_left;
+    const int tid = static_cast<int>(threadIdx.x);
+
+    const int64_t a_b = dim_n;
+    const int64_t a_a = static_cast<int64_t>(dim_b) * a_b;
+    const int64_t a_t = static_cast<int64_t>(dim_a) * a_a;
+    const int64_t a_c = static_cast<int64_t>(dim_t) * a_t;
+    const int64_t c_g = dim_c;
+    const int64_t c_t = static_cast<int64_t>(ig) * c_g;
+    const int64_t b_e = dim_f;
+    const int64_t b_d = static_cast<int64_t>(dim_e) * b_e;
+    const int64_t b_t = static_cast<int64_t>(dim_d) * b_d;
+    const int64_t b_g = static_cast<int64_t>(dim_t) * b_t;
+    const int64_t o_f = dim_n;
+    const int64_t o_b = static_cast<int64_t>(dim_f) * o_f;
+    const int64_t o_d = static_cast<int64_t>(dim_b) * o_b;
+    const int64_t o_g = static_cast<int64_t>(dim_d) * o_d;
+    const int64_t o_t = static_cast<int64_t>(og) * o_g;
+
+    // S: contract the gauge field into the first perambulator.
+    const int sums_total = rank * n_pad;
+    for (int idx = tid; idx < sums_total; idx += kGemmThreads) {
+        const int r = idx / n_pad;
+        const int n = idx - r * n_pad;
+        Type acc = E4Ops<Type>::zero();
+        if (n < dim_n) {
+            const int g_index = r / dim_a;
+            const int a_index = r - g_index * dim_a;
+            const int64_t a_off = static_cast<int64_t>(t_index) * a_t +
+                                  static_cast<int64_t>(a_index) * a_a +
+                                  static_cast<int64_t>(b_index) * a_b + n;
+            const int64_t c_off = static_cast<int64_t>(t_index) * c_t +
+                                  static_cast<int64_t>(g_index) * c_g;
+            for (int ci = 0; ci < dim_c; ++ci) {
+                E4Ops<Type>::madd(acc, a[a_off + static_cast<int64_t>(ci) * a_c],
+                                  c[c_off + static_cast<int64_t>(ci)]);
+            }
+        }
+        sums[idx] = acc;
+    }
+
+    // F: contract the gamma matrix into the second perambulator.
+    const int factor_total = og * rank * DimD * f_count;
+    for (int idx = tid; idx < factor_total; idx += kGemmThreads) {
+        int rest = idx;
+        const int f_index = rest % f_count;
+        rest /= f_count;
+        const int d_index = rest % DimD;
+        rest /= DimD;
+        const int a_index = rest % dim_a;
+        rest /= dim_a;
+        const int g_index = rest % ig;
+        const int og_index = rest / ig;
+        const int64_t b_off = static_cast<int64_t>(g_index) * b_g +
+                              static_cast<int64_t>(t_index) * b_t +
+                              static_cast<int64_t>(d_index) * b_d +
+                              (f_base + f_index);
+        const int64_t g_off = (static_cast<int64_t>(og_index) * dim_a + a_index) * dim_e;
+        Type acc = E4Ops<Type>::zero();
+        for (int ei = 0; ei < dim_e; ++ei) {
+            E4Ops<Type>::madd(acc, gamma[g_off + ei],
+                              b[b_off + static_cast<int64_t>(ei) * b_e]);
+        }
+        const int64_t rank_index = static_cast<int64_t>(g_index) * dim_a + a_index;
+        const int64_t out_index =
+            ((static_cast<int64_t>(og_index) * rank + rank_index) * DimD + d_index) * fc +
+            f_index;
+        factors[out_index] = acc;
+    }
+    __syncthreads();
+
+    const int n_groups = (n_pad + kGemmNVec - 1) / kGemmNVec;
+    const int items = f_count * n_groups;
+    const int64_t output_row = static_cast<int64_t>(t_index) * o_t +
+                               static_cast<int64_t>(b_index) * o_b;
+    for (int item = tid; item < items; item += kGemmThreads) {
+        const int f_index = item / n_groups;
+        const int n0 = (item - f_index * n_groups) * kGemmNVec;
+        const int nv = dim_n - n0 < kGemmNVec ? dim_n - n0 : kGemmNVec;
+        for (int og_index = 0; og_index < og; ++og_index) {
+            Type acc[DimD][kGemmNVec];
+#pragma unroll
+            for (int di = 0; di < DimD; ++di) {
+#pragma unroll
+                for (int j = 0; j < kGemmNVec; ++j) acc[di][j] = E4Ops<Type>::zero();
+            }
+            const Type* factor =
+                factors + ((static_cast<int64_t>(og_index) * rank) * DimD) * fc + f_index;
+            for (int r = 0; r < rank; ++r) {
+                const Type* sum_row = sums + static_cast<int64_t>(r) * n_pad + n0;
+                Type sv[kGemmNVec];
+#pragma unroll
+                for (int j = 0; j < kGemmNVec; ++j) sv[j] = sum_row[j];
+                const Type* factor_row = factor + static_cast<int64_t>(r) * DimD * fc;
+#pragma unroll
+                for (int di = 0; di < DimD; ++di) {
+                    const Type fv = factor_row[static_cast<int64_t>(di) * fc];
+#pragma unroll
+                    for (int j = 0; j < kGemmNVec; ++j) E4Ops<Type>::madd(acc[di][j], fv, sv[j]);
+                }
+            }
+            Type* row = dst + output_row + static_cast<int64_t>(og_index) * o_g +
+                        static_cast<int64_t>(f_base + f_index) * o_f + n0;
+#pragma unroll
+            for (int di = 0; di < DimD; ++di) {
+                Type* line = row + static_cast<int64_t>(di) * o_d;
+#pragma unroll
+                for (int j = 0; j < kGemmNVec; ++j) {
+                    if (j < nv) line[j] = acc[di][j];
+                }
+            }
+        }
+    }
+}
+
+struct GemmTiles {
+    int n_pad = 0;
+    int fc = 0;
+    int nf = 0;
+};
+
+// Splits f into nf balanced tiles so that t*b*nf blocks cover the device once.
+bool plan_gemm_tiles(const qcd_cuda_e4_spec& spec, int64_t element_bytes, GemmTiles* tiles) {
+    if (spec.z < 0 || spec.y < 0 || spec.x < 0) {
+        return false;
+    }
+    if (spec.z * spec.y * spec.x != 1) {
+        return false;
+    }
+    if (spec.d < 1 || spec.d > 4 || spec.a < 1 || spec.input_g < 1 ||
+        spec.output_g < 1 || spec.n < 1 || spec.f < 1 || spec.t < 1 || spec.b < 1 ||
+        spec.c < 1 || spec.e < 1) {
+        return false;
+    }
+    const int64_t rank = spec.input_g * spec.a;
+    const int64_t units = spec.t * spec.b;
+    if (rank * spec.n + units > kStagedExtentLimit) {
+        return false;
+    }
+    if (spec.output_elements < kGemmMinOutputElements) {
+        return false;
+    }
+    const int n_pad = static_cast<int>(spec.n) +
+                      ((kGemmNVec - static_cast<int>(spec.n) % kGemmNVec) % kGemmNVec);
+    const int64_t sums_bytes = rank * n_pad * element_bytes;
+    const int64_t factor_bytes =
+        static_cast<int64_t>(spec.output_g) * rank * spec.d * element_bytes;
+    int64_t fc_max = (kGemmSharedBudget - sums_bytes) / factor_bytes;
+    fc_max = std::min<int64_t>(fc_max, spec.f);
+    if (fc_max < 1) {
+        return false;
+    }
+    const int sm_count = multiprocessor_count();
+    const int64_t target_blocks =
+        sm_count > 0 ? static_cast<int64_t>(sm_count) : int64_t(24);
+    int64_t target_tiles = (target_blocks + units - 1) / units;
+    target_tiles = std::max<int64_t>(1, target_tiles);
+    int64_t fc = (spec.f + target_tiles - 1) / target_tiles;
+    fc = std::max<int64_t>(1, std::min(fc, fc_max));
+    const int64_t nf = (spec.f + fc - 1) / fc;
+    if (units * nf > kStagedExtentLimit) {
+        return false;
+    }
+    tiles->n_pad = n_pad;
+    tiles->fc = static_cast<int>(fc);
+    tiles->nf = static_cast<int>(nf);
+    return true;
+}
+
+template <typename Type, int DimD>
+int launch_gemm_typed(const void* a, const void* b, const void* gamma, const void* c,
+                      void* dst, qcd_cuda_e4_spec spec, const GemmTiles& tiles,
+                      cudaStream_t stream) {
+    const int64_t rank = spec.input_g * spec.a;
+    const int64_t shared_elements =
+        rank * tiles.n_pad + static_cast<int64_t>(spec.output_g) * rank * spec.d * tiles.fc;
+    const std::size_t shared_bytes = static_cast<std::size_t>(shared_elements) * sizeof(Type);
+    if (static_cast<int64_t>(shared_bytes) > kGemmSharedBudget) {
+        return QCD_STATUS_OK;
+    }
+    const int64_t blocks = static_cast<int64_t>(spec.t) * spec.b * tiles.nf;
+    if (blocks <= 0) {
+        return QCD_STATUS_OK;
+    }
+    e4_gemm_kernel<Type, DimD><<<static_cast<unsigned int>(blocks), kGemmThreads,
+                                 shared_bytes, stream>>>(
+        static_cast<const Type*>(a), static_cast<const Type*>(b),
+        static_cast<const Type*>(gamma), static_cast<const Type*>(c),
+        static_cast<Type*>(dst), spec, tiles.n_pad, tiles.fc, tiles.nf);
+    return map_cuda_error(cudaGetLastError());
+}
+
+template <typename Type>
+int launch_e4_gemm(const void* a, const void* b, const void* gamma, const void* c,
+                   void* dst, qcd_cuda_e4_spec spec, cudaStream_t stream, bool* launched) {
+    *launched = false;
+    GemmTiles tiles;
+    if (!plan_gemm_tiles(spec, static_cast<int64_t>(sizeof(Type)), &tiles)) {
+        return QCD_STATUS_OK;
+    }
+    int status = QCD_STATUS_OK;
+    switch (static_cast<int>(spec.d)) {
+        case 1:
+            status = launch_gemm_typed<Type, 1>(a, b, gamma, c, dst, spec, tiles, stream);
+            break;
+        case 2:
+            status = launch_gemm_typed<Type, 2>(a, b, gamma, c, dst, spec, tiles, stream);
+            break;
+        case 3:
+            status = launch_gemm_typed<Type, 3>(a, b, gamma, c, dst, spec, tiles, stream);
+            break;
+        case 4:
+            status = launch_gemm_typed<Type, 4>(a, b, gamma, c, dst, spec, tiles, stream);
+            break;
+        default:
+            return QCD_STATUS_OK;
+    }
+    *launched = status == QCD_STATUS_OK;
+    return status;
+}
+
 template <typename Type>
 int launch_e4_staged(
     const void* a,
@@ -673,8 +949,15 @@ int launch_e4(
     qcd_cuda_e4_spec spec,
     cudaStream_t stream) {
     bool launched = false;
-    const int status =
-        launch_e4_staged<Type>(a, b, gamma, c, dst, spec, stream, &launched);
+    const char* force = std::getenv("PYQCD_E4_KERNEL");
+    int status = QCD_STATUS_OK;
+    if (force == nullptr || force[0] != '0') {
+        status = launch_e4_gemm<Type>(a, b, gamma, c, dst, spec, stream, &launched);
+        if (launched || status != QCD_STATUS_OK) {
+            return status;
+        }
+    }
+    status = launch_e4_staged<Type>(a, b, gamma, c, dst, spec, stream, &launched);
     if (launched || status != QCD_STATUS_OK) {
         return status;
     }

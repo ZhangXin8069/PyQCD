@@ -629,6 +629,12 @@ bool transpose_copy(const uint8_t* source, const std::vector<int64_t>& source_sh
         axes.push_back(axis);
     }
     if (axes.empty()) {
+        // 所有目标维都是 1：仍需拷贝唯一的那个元素，否则目标缓冲保持未初始化。
+        if (destination_count != 1 || source_count != 1) {
+            return false;
+        }
+        std::memcpy(destination->data(), source,
+                    static_cast<std::size_t>(item_size));
         return true;
     }
     if (axes.size() > 1 && axes.back().source_step != 1) {
@@ -1260,16 +1266,61 @@ bool valid_positions(const ExecutionStep& step, std::size_t active_count,
     return true;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Gamma-sandwich fast path: ``ab,...bce,cd->...dae``                        */
+/*                                                                           */
+/* Two different contraction orders reach this shape in practice:            */
+/*   * ``cd,...bce->...dbe`` first (the right matrix removes ``c``; this is    */
+/*     what the ``dp`` planner used by the benchmark emits),                   */
+/*   * ``ab,...bce->...cea`` first (the left matrix removes ``b``; the         */
+/*     ``greedy`` planner emits this).                                        */
+/* Both are algebraically the same two 4x4 matrix sandwiches, so the fused     */
+/* kernel ignores the intermediate completely: it reads the propagation        */
+/* tensor in its own layout ``[prefix][b][c][e]`` and writes the final         */
+/* ``[prefix][d][a][e]`` output.  Matching therefore inspects operand roles    */
+/* and the final output ordering only, mirroring the CUDA matcher.             */
+/* ------------------------------------------------------------------------- */
+
 struct SandwichGeometry {
     int32_t tensor_position = -1;
+    /* gamma that contracts ``b`` and contributes ``a``. */
     int32_t left_matrix_position = -1;
+    /* gamma that contracts ``c`` and contributes ``d``. */
     int32_t right_matrix_position = -1;
+    std::vector<int64_t> tensor_shape;
+    std::vector<int64_t> left_matrix_shape;
+    std::vector<int64_t> right_matrix_shape;
     int64_t prefix = 1;
-    int64_t left = 0;
-    int64_t contracted = 0;
-    int64_t right = 0;
-    int64_t lane = 0;
+    int64_t left = 0;              /* |a| */
+    int64_t contracted_left = 0;   /* |b| */
+    int64_t contracted_right = 0;  /* |c| */
+    int64_t right = 0;             /* |d| */
+    int64_t lane = 0;              /* |e| */
 };
+
+bool same_label_set(const std::vector<int32_t>& left, const std::vector<int32_t>& right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (int32_t label : left) {
+        if (std::find(right.begin(), right.end(), label) == right.end()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sandwich_extent(const std::vector<int64_t>& sizes, int32_t label, int64_t* extent) {
+    if (label < 0 || static_cast<std::size_t>(label) >= sizes.size()) {
+        return false;
+    }
+    const int64_t value = sizes[static_cast<std::size_t>(label)];
+    if (value <= 0) {
+        return false;
+    }
+    *extent = value;
+    return true;
+}
 
 bool match_sandwich(const ExecutionPlan& execution, SandwichGeometry* geometry) {
     if (execution.num_inputs != 3 || execution.steps.size() != 2) {
@@ -1282,401 +1333,391 @@ bool match_sandwich(const ExecutionPlan& execution, SandwichGeometry* geometry) 
         return false;
     }
 
-    const auto try_side = [&](int tensor_operand, int matrix_operand) -> bool {
+    for (int tensor_operand = 0; tensor_operand < 2; ++tensor_operand) {
+        const int matrix_operand = 1 - tensor_operand;
         const TensorMeta& tensor = first.inputs[static_cast<std::size_t>(tensor_operand)];
         const TensorMeta& first_matrix = first.inputs[static_cast<std::size_t>(matrix_operand)];
         if (tensor.labels.size() < 3 || first_matrix.labels.size() != 2) {
-            return false;
+            continue;
         }
         const std::size_t prefix_rank = tensor.labels.size() - 3;
-        const int32_t contracted_left = tensor.labels[prefix_rank];
-        const int32_t middle = tensor.labels[prefix_rank + 1];
-        const int32_t lane = tensor.labels[prefix_rank + 2];
-        const int32_t left = first_matrix.labels[0];
-        if (first_matrix.labels[1] != contracted_left || left == middle || left == lane) {
-            return false;
-        }
-        std::vector<int32_t> expected_first_output = tensor.labels;
-        expected_first_output.erase(
-            expected_first_output.begin() + static_cast<std::ptrdiff_t>(prefix_rank));
-        expected_first_output.push_back(left);
-        if (first.output.labels != expected_first_output) {
-            return false;
+        const int32_t b = tensor.labels[prefix_rank];
+        const int32_t c = tensor.labels[prefix_rank + 1];
+        const int32_t e = tensor.labels[prefix_rank + 2];
+
+        int32_t a = -1;
+        int32_t d = -1;
+        bool left_matrix_first = false;
+        if (first_matrix.labels[1] == b) {
+            a = first_matrix.labels[0];
+            left_matrix_first = true;
+        } else if (first_matrix.labels[0] == c) {
+            d = first_matrix.labels[1];
+            left_matrix_first = false;
+        } else {
+            continue;
         }
 
-        int second_matrix_operand = -1;
+        /* The second step must consume the intermediate plus the other gamma. */
+        int intermediate_operand = -1;
+        int remaining_matrix_operand = -1;
+        bool unique = true;
         for (int operand = 0; operand < 2; ++operand) {
-            if (second.inputs[static_cast<std::size_t>(operand)].labels == first.output.labels) {
-                if (second_matrix_operand >= 0) {
-                    return false;
+            const bool is_intermediate =
+                second.inputs[static_cast<std::size_t>(operand)].labels == first.output.labels;
+            int* slot = is_intermediate ? &intermediate_operand : &remaining_matrix_operand;
+            if (*slot >= 0) {
+                unique = false;
+                break;
+            }
+            *slot = operand;
+        }
+        if (!unique || intermediate_operand < 0 || remaining_matrix_operand < 0) {
+            continue;
+        }
+        const TensorMeta& other_matrix = second.inputs[static_cast<std::size_t>(remaining_matrix_operand)];
+        if (other_matrix.labels.size() != 2) {
+            continue;
+        }
+        if (left_matrix_first) {
+            if (other_matrix.labels[0] != c) {
+                continue;
+            }
+            d = other_matrix.labels[1];
+        } else {
+            if (other_matrix.labels[1] != b) {
+                continue;
+            }
+            a = other_matrix.labels[0];
+        }
+
+        /* The first step has to remove exactly ``b`` (left matrix first) or ``c``
+         * and keep everything else; the check rejects matrices that contract a
+         * prefix axis. */
+        std::vector<int32_t> prefix_labels(tensor.labels.begin(),
+                                           tensor.labels.begin() +
+                                               static_cast<std::ptrdiff_t>(prefix_rank));
+        std::vector<int32_t> expected_first_output = prefix_labels;
+        if (left_matrix_first) {
+            expected_first_output.push_back(c);
+            expected_first_output.push_back(e);
+            expected_first_output.push_back(a);
+        } else {
+            expected_first_output.push_back(d);
+            expected_first_output.push_back(b);
+            expected_first_output.push_back(e);
+        }
+        if (!same_label_set(first.output.labels, expected_first_output)) {
+            continue;
+        }
+
+        /* The final output has to be exactly ``[prefix..., d, a, e]`` because the
+         * fused kernel writes that layout directly. */
+        std::vector<int32_t> expected_output = prefix_labels;
+        expected_output.push_back(d);
+        expected_output.push_back(a);
+        expected_output.push_back(e);
+        if (second.output.labels != expected_output ||
+            execution.output_labels != expected_output) {
+            continue;
+        }
+        std::vector<int32_t> roles = expected_output;
+        roles.push_back(b);
+        roles.push_back(c);
+        std::sort(roles.begin(), roles.end());
+        if (std::adjacent_find(roles.begin(), roles.end()) != roles.end()) {
+            continue;
+        }
+
+        /* Live slots after the first step: the survivor keeps the lowest index and
+         * the freshly produced intermediate is appended last. */
+        if (second.positions[static_cast<std::size_t>(intermediate_operand)] != 1 ||
+            second.positions[static_cast<std::size_t>(remaining_matrix_operand)] != 0) {
+            continue;
+        }
+        const int32_t tensor_position = first.positions[static_cast<std::size_t>(tensor_operand)];
+        const int32_t first_matrix_position =
+            first.positions[static_cast<std::size_t>(matrix_operand)];
+        if (tensor_position < 0 || tensor_position >= execution.num_inputs ||
+            first_matrix_position < 0 || first_matrix_position >= execution.num_inputs ||
+            tensor_position == first_matrix_position) {
+            continue;
+        }
+        int32_t remaining_matrix_input = -1;
+        bool remaining_unique = true;
+        for (int32_t input = 0; input < execution.num_inputs; ++input) {
+            if (input != tensor_position && input != first_matrix_position) {
+                if (remaining_matrix_input >= 0) {
+                    remaining_unique = false;
+                    break;
                 }
-            } else {
-                second_matrix_operand = operand;
+                remaining_matrix_input = input;
             }
         }
-        if (second_matrix_operand < 0) {
-            return false;
-        }
-        const TensorMeta& second_matrix =
-            second.inputs[static_cast<std::size_t>(second_matrix_operand)];
-        if (second_matrix.labels.size() != 2 || second_matrix.labels[0] != middle) {
-            return false;
-        }
-        const int32_t right = second_matrix.labels[1];
-        std::vector<int32_t> expected_output;
-        expected_output.insert(expected_output.end(), tensor.labels.begin(),
-                               tensor.labels.begin() + static_cast<std::ptrdiff_t>(prefix_rank));
-        expected_output.push_back(right);
-        expected_output.push_back(left);
-        expected_output.push_back(lane);
-        if (second.output.labels != expected_output || second.output.labels != execution.output_labels) {
-            return false;
+        if (!remaining_unique || remaining_matrix_input < 0) {
+            continue;
         }
 
         SandwichGeometry candidate;
-        candidate.tensor_position = first.positions[static_cast<std::size_t>(tensor_operand)];
-        candidate.left_matrix_position = first.positions[static_cast<std::size_t>(matrix_operand)];
-        std::vector<int32_t> remaining_initial;
-        for (int32_t input = 0; input < execution.num_inputs; ++input) {
-            if (std::find(first.positions.begin(), first.positions.end(), input) ==
-                first.positions.end()) {
-                remaining_initial.push_back(input);
-            }
+        candidate.tensor_position = tensor_position;
+        candidate.left_matrix_position =
+            left_matrix_first ? first_matrix_position : remaining_matrix_input;
+        candidate.right_matrix_position =
+            left_matrix_first ? remaining_matrix_input : first_matrix_position;
+        candidate.tensor_shape = tensor.shape;
+        candidate.left_matrix_shape = first_matrix.shape;
+        candidate.right_matrix_shape = other_matrix.shape;
+        if (!left_matrix_first) {
+            std::swap(candidate.left_matrix_shape, candidate.right_matrix_shape);
         }
-        const int32_t second_matrix_live_position =
-            second.positions[static_cast<std::size_t>(second_matrix_operand)];
-        if (second_matrix_live_position < 0 ||
-            static_cast<std::size_t>(second_matrix_live_position) >= remaining_initial.size()) {
-            return false;
+        if (!sandwich_extent(execution.sizes, a, &candidate.left) ||
+            !sandwich_extent(execution.sizes, b, &candidate.contracted_left) ||
+            !sandwich_extent(execution.sizes, c, &candidate.contracted_right) ||
+            !sandwich_extent(execution.sizes, d, &candidate.right) ||
+            !sandwich_extent(execution.sizes, e, &candidate.lane)) {
+            continue;
         }
-        candidate.right_matrix_position = remaining_initial[
-            static_cast<std::size_t>(second_matrix_live_position)];
         bool ok = true;
         candidate.prefix = pyqcd_einsum::checked_product(
             std::vector<int64_t>(tensor.shape.begin(),
                                  tensor.shape.begin() + static_cast<std::ptrdiff_t>(prefix_rank)),
             &ok);
-        candidate.left = tensor.shape[prefix_rank];
-        candidate.contracted = tensor.shape[prefix_rank + 1];
-        candidate.lane = tensor.shape[prefix_rank + 2];
-        candidate.right = second_matrix.shape[1];
-        if (!ok || candidate.left <= 0 || candidate.contracted <= 0 || candidate.lane <= 0 ||
-            candidate.right <= 0 || first_matrix.shape[0] != candidate.left ||
-            first_matrix.shape[1] != candidate.contracted ||
-            second_matrix.shape[0] != candidate.contracted) {
-            return false;
+        if (!ok || candidate.prefix <= 0) {
+            continue;
         }
-        *geometry = candidate;
+        const std::vector<int64_t>& tensor_shape = candidate.tensor_shape;
+        if (tensor_shape.size() != prefix_rank + 3 ||
+            tensor_shape[prefix_rank] != candidate.contracted_left ||
+            tensor_shape[prefix_rank + 1] != candidate.contracted_right ||
+            tensor_shape[prefix_rank + 2] != candidate.lane) {
+            continue;
+        }
+        if (candidate.left_matrix_shape.size() != 2 ||
+            candidate.left_matrix_shape[0] != candidate.left ||
+            candidate.left_matrix_shape[1] != candidate.contracted_left ||
+            candidate.right_matrix_shape.size() != 2 ||
+            candidate.right_matrix_shape[0] != candidate.contracted_right ||
+            candidate.right_matrix_shape[1] != candidate.right) {
+            continue;
+        }
+        /* Only the 4x4 gamma sandwich has a dedicated kernel. */
+        if (candidate.left != 4 || candidate.contracted_left != 4 ||
+            candidate.contracted_right != 4 || candidate.right != 4) {
+            continue;
+        }
+        *geometry = std::move(candidate);
         return true;
-    };
-
-    return try_side(0, 1) || try_side(1, 0);
+    }
+    return false;
 }
 
+constexpr int kSandwichSize = 4;
+/* Complex lanes handled by one inner block: 8 complexes = 128 B per row. */
+constexpr int kSandwichBlock = 8;
+/* Prefix counts below this stay serial to avoid OpenMP start-up cost. */
+constexpr int64_t kSandwichParallelPrefix = 16;
+
+/* ``Complex`` means ``Real`` scalars interleaved as (real, imaginary) pairs. */
 template <typename Real, bool Complex>
 void sandwich4_values(const Real* __restrict__ tensor,
                       const Real* __restrict__ left_matrix,
                       const Real* __restrict__ right_matrix,
                       Real* __restrict__ output, const SandwichGeometry& geometry) {
-    constexpr int kSize = 4;
-    constexpr int kMaxLanes = 64 / sizeof(Real);
-    constexpr int kElements = kSize * kSize * kMaxLanes;
-    const int64_t block_count = (geometry.lane + kMaxLanes - 1) / kMaxLanes;
-    const int64_t channels = Complex ? 2 : 1;
-#pragma omp parallel for schedule(static) if(geometry.prefix * geometry.lane >= 256)
-    for (int64_t prefix = 0; prefix < geometry.prefix; ++prefix) {
-        std::array<Real, kElements> temporary_real{};
-        std::array<Real, kElements> temporary_imag{};
-        std::array<Real, kMaxLanes> accumulator{};
-        std::array<Real, kMaxLanes> accumulator_imag{};
-        for (int64_t block = 0; block < block_count; ++block) {
-            const int64_t lane_start = block * kMaxLanes;
-            const int lanes = static_cast<int>(
-                std::min<int64_t>(kMaxLanes, geometry.lane - lane_start));
-            std::fill(temporary_real.begin(), temporary_real.end(), Real(0));
-            if constexpr (Complex) {
-                std::fill(temporary_imag.begin(), temporary_imag.end(), Real(0));
-            }
+    constexpr int kSize = kSandwichSize;
+    constexpr int kBlock = kSandwichBlock;
+    constexpr int kChannels = Complex ? 2 : 1;
+    constexpr int kMatrixValues = kSize * kSize;
+    constexpr int kBlockValues = kMatrixValues * kBlock;
 
-#pragma GCC unroll 4
-            for (int first = 0; first < kSize; ++first) {
-#pragma GCC unroll 4
-                for (int right = 0; right < kSize; ++right) {
-                    const int temp_base = (first * kSize + right) * kMaxLanes;
-#pragma GCC unroll 4
-                    for (int middle = 0; middle < kSize; ++middle) {
-                        const int64_t tensor_base =
-                            ((((prefix * kSize + first) * kSize + middle) *
-                                  geometry.lane + lane_start) * channels);
-                        const int matrix_index = (middle * kSize + right) * channels;
-                        if constexpr (Complex) {
-                            const Real mr = right_matrix[matrix_index];
-                            const Real mi = right_matrix[matrix_index + 1];
-#pragma omp simd
-                            for (int lane = 0; lane < lanes; ++lane) {
-                                const Real xr = tensor[tensor_base + lane * channels];
-                                const Real xi = tensor[tensor_base + lane * channels + 1];
-                                temporary_real[static_cast<std::size_t>(temp_base + lane)] +=
-                                    xr * mr - xi * mi;
-                                temporary_imag[static_cast<std::size_t>(temp_base + lane)] +=
-                                    xr * mi + xi * mr;
-                            }
-                        } else {
-                            const Real matrix_value = right_matrix[matrix_index];
-#pragma omp simd
-                            for (int lane = 0; lane < lanes; ++lane) {
-                                temporary_real[static_cast<std::size_t>(temp_base + lane)] +=
-                                    tensor[tensor_base + lane] * matrix_value;
-                            }
-                        }
-                    }
-                }
-            }
-
-#pragma GCC unroll 4
-            for (int right = 0; right < kSize; ++right) {
-#pragma GCC unroll 4
-                for (int left = 0; left < kSize; ++left) {
-                    std::fill(accumulator.begin(), accumulator.end(), Real(0));
-                    if constexpr (Complex) {
-                        std::fill(accumulator_imag.begin(), accumulator_imag.end(), Real(0));
-                    }
-#pragma GCC unroll 4
-                    for (int first = 0; first < kSize; ++first) {
-                        const int temp_base = (first * kSize + right) * kMaxLanes;
-                        const int matrix_index = (left * kSize + first) * channels;
-                        if constexpr (Complex) {
-                            const Real lr = left_matrix[matrix_index];
-                            const Real li = left_matrix[matrix_index + 1];
-#pragma omp simd
-                            for (int lane = 0; lane < lanes; ++lane) {
-                                const Real tr = temporary_real[
-                                    static_cast<std::size_t>(temp_base + lane)];
-                                const Real ti = temporary_imag[
-                                    static_cast<std::size_t>(temp_base + lane)];
-                                accumulator[static_cast<std::size_t>(lane)] +=
-                                    lr * tr - li * ti;
-                                accumulator_imag[static_cast<std::size_t>(lane)] +=
-                                    lr * ti + li * tr;
-                            }
-                        } else {
-                            const Real matrix_value = left_matrix[matrix_index];
-#pragma omp simd
-                            for (int lane = 0; lane < lanes; ++lane) {
-                                accumulator[static_cast<std::size_t>(lane)] +=
-                                    temporary_real[static_cast<std::size_t>(temp_base + lane)] *
-                                    matrix_value;
-                            }
-                        }
-                    }
-                    const int64_t output_base =
-                        (((prefix * kSize + right) * kSize + left) *
-                             geometry.lane + lane_start) * channels;
-                    for (int lane = 0; lane < lanes; ++lane) {
-                        output[output_base + lane * channels] =
-                            accumulator[static_cast<std::size_t>(lane)];
-                        if constexpr (Complex) {
-                            output[output_base + lane * channels + 1] =
-                                accumulator_imag[static_cast<std::size_t>(lane)];
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-template <typename Real, bool Complex>
-void sandwich_values(const Real* __restrict__ tensor,
-                     const Real* __restrict__ left_matrix,
-                     const Real* __restrict__ right_matrix,
-                     Real* __restrict__ output, const SandwichGeometry& geometry) {
-    if (geometry.left == 4 && geometry.contracted == 4 && geometry.right == 4) {
-        sandwich4_values<Real, Complex>(
-            tensor, left_matrix, right_matrix, output, geometry);
-        return;
-    }
-    constexpr int kMaxLanes = 64 / sizeof(Real);
-    const int64_t block_count = (geometry.lane + kMaxLanes - 1) / kMaxLanes;
-    const int64_t channels = Complex ? 2 : 1;
-    const int64_t matrix_values = geometry.left * geometry.right * kMaxLanes;
-    const int64_t vector_values = std::max(geometry.left, geometry.right) * kMaxLanes;
-
-    const auto process_prefix = [&](int64_t prefix, std::vector<Real>& temporary) {
-        std::vector<Real> separate_imag;
+    Real left_real[kMatrixValues];
+    Real left_imag[kMatrixValues];
+    Real right_real[kMatrixValues];
+    Real right_imag[kMatrixValues];
+    for (int index = 0; index < kMatrixValues; ++index) {
+        left_real[index] = left_matrix[index * kChannels];
+        right_real[index] = right_matrix[index * kChannels];
         if constexpr (Complex) {
-            separate_imag.assign(static_cast<std::size_t>(matrix_values), Real(0));
+            left_imag[index] = left_matrix[index * kChannels + 1];
+            right_imag[index] = right_matrix[index * kChannels + 1];
+        } else {
+            left_imag[index] = Real(0);
+            right_imag[index] = Real(0);
         }
-        for (int64_t block = 0; block < block_count; ++block) {
-            const int64_t lane_start = block * kMaxLanes;
-            const int lanes = static_cast<int>(
-                std::min<int64_t>(kMaxLanes, geometry.lane - lane_start));
-            std::fill(temporary.begin(), temporary.end(), Real(0));
-            if constexpr (Complex) {
-                std::fill(separate_imag.begin(), separate_imag.end(), Real(0));
-            }
-
-            for (int64_t first = 0; first < geometry.left; ++first) {
-                for (int64_t right = 0; right < geometry.right; ++right) {
-                    const int64_t temp_base = (first * geometry.right + right) * kMaxLanes;
-                    for (int64_t middle = 0; middle < geometry.contracted; ++middle) {
-                        const int64_t tensor_base =
-                            ((((prefix * geometry.left + first) * geometry.contracted + middle) *
-                                  geometry.lane + lane_start) * channels);
-                        const int64_t matrix_index =
-                            (middle * geometry.right + right) * channels;
-                        if constexpr (Complex) {
-                            const Real mr = right_matrix[matrix_index];
-                            const Real mi = right_matrix[matrix_index + 1];
-#pragma omp simd
-                            for (int lane = 0; lane < lanes; ++lane) {
-                                const Real xr = tensor[tensor_base + lane * channels];
-                                const Real xi = tensor[tensor_base + lane * channels + 1];
-                                temporary[static_cast<std::size_t>(temp_base + lane)] +=
-                                    xr * mr - xi * mi;
-                                separate_imag[static_cast<std::size_t>(temp_base + lane)] +=
-                                    xr * mi + xi * mr;
-                            }
-                        } else {
-                            const Real matrix_value = right_matrix[matrix_index];
-#pragma omp simd
-                            for (int lane = 0; lane < lanes; ++lane) {
-                                temporary[static_cast<std::size_t>(temp_base + lane)] +=
-                                    tensor[tensor_base + lane] * matrix_value;
-                            }
-                        }
-                    }
-                }
-            }
-
-            std::vector<Real> accumulator(static_cast<std::size_t>(vector_values), Real(0));
-            std::vector<Real> accumulator_imag;
-            if constexpr (Complex) {
-                accumulator_imag.assign(static_cast<std::size_t>(vector_values), Real(0));
-            }
-            for (int64_t right = 0; right < geometry.right; ++right) {
-                for (int64_t left = 0; left < geometry.left; ++left) {
-                    std::fill(accumulator.begin(), accumulator.end(), Real(0));
-                    if constexpr (Complex) {
-                        std::fill(accumulator_imag.begin(), accumulator_imag.end(), Real(0));
-                    }
-                    for (int64_t first = 0; first < geometry.left; ++first) {
-                        const int64_t temp_base =
-                            (first * geometry.right + right) * kMaxLanes;
-                        const int64_t matrix_index = (left * geometry.left + first) * channels;
-                        if constexpr (Complex) {
-                            const Real lr = left_matrix[matrix_index];
-                            const Real li = left_matrix[matrix_index + 1];
-#pragma omp simd
-                            for (int lane = 0; lane < lanes; ++lane) {
-                                const Real tr = temporary[static_cast<std::size_t>(temp_base + lane)];
-                                const Real ti = separate_imag[static_cast<std::size_t>(temp_base + lane)];
-                                accumulator[static_cast<std::size_t>(lane)] +=
-                                    lr * tr - li * ti;
-                                accumulator_imag[static_cast<std::size_t>(lane)] +=
-                                    lr * ti + li * tr;
-                            }
-                        } else {
-                            const Real matrix_value = left_matrix[matrix_index];
-#pragma omp simd
-                            for (int lane = 0; lane < lanes; ++lane) {
-                                accumulator[static_cast<std::size_t>(lane)] +=
-                                    temporary[static_cast<std::size_t>(temp_base + lane)] *
-                                    matrix_value;
-                            }
-                        }
-                    }
-                    const int64_t output_base =
-                        (((prefix * geometry.right + right) * geometry.left + left) *
-                             geometry.lane + lane_start) * channels;
-                    for (int lane = 0; lane < lanes; ++lane) {
-                        output[output_base + lane * channels] =
-                            accumulator[static_cast<std::size_t>(lane)];
-                        if constexpr (Complex) {
-                            output[output_base + lane * channels + 1] =
-                                accumulator_imag[static_cast<std::size_t>(lane)];
-                        }
-                    }
-                }
-            }
-        }
-    };
-
-    if (geometry.prefix < 32) {
-        std::vector<Real> temporary(static_cast<std::size_t>(matrix_values), Real(0));
-        for (int64_t prefix = 0; prefix < geometry.prefix; ++prefix) {
-            process_prefix(prefix, temporary);
-        }
-        return;
     }
 
-#ifdef _OPENMP
-    const int max_threads = omp_get_max_threads();
-#else
-    const int max_threads = 1;
-#endif
-    std::vector<std::vector<Real>> workspaces(
-        static_cast<std::size_t>(max_threads),
-        std::vector<Real>(static_cast<std::size_t>(matrix_values), Real(0)));
-#pragma omp parallel for schedule(static)
+    const int64_t lane = geometry.lane;
+    /* Distance between two adjacent (b, c) rows of one prefix block. */
+    const int64_t row_stride = lane * kChannels;
+    const int64_t prefix_stride = static_cast<int64_t>(kMatrixValues) * row_stride;
+    const int64_t block_count = (lane + kBlock - 1) / kBlock;
+
+#pragma omp parallel for schedule(static) if(geometry.prefix >= kSandwichParallelPrefix)
     for (int64_t prefix = 0; prefix < geometry.prefix; ++prefix) {
-#ifdef _OPENMP
-        std::vector<Real>& temporary = workspaces[static_cast<std::size_t>(omp_get_thread_num())];
-#else
-        std::vector<Real>& temporary = workspaces[0];
-#endif
-        process_prefix(prefix, temporary);
+        /* ``middle[b * 4 + d]`` holds sum_c M[b][c] * gamma2[c][d] for one lane block. */
+        Real middle_real[kBlockValues];
+        Real middle_imag[kBlockValues];
+        for (int64_t block = 0; block < block_count; ++block) {
+            const int64_t lane_start = block * kBlock;
+            const int lanes = static_cast<int>(std::min<int64_t>(kBlock, lane - lane_start));
+            const Real* tensor_block = tensor + prefix * prefix_stride + lane_start * kChannels;
+            Real* output_block = output + prefix * prefix_stride + lane_start * kChannels;
+
+            /* Stage 1: middle[b][d] = sum_c M[b][c] * gamma2[c][d]. */
+            for (int first = 0; first < kSize; ++first) {
+                Real row_real[kSize][kBlock];
+                Real row_imag[kSize][kBlock];
+                for (int contracted = 0; contracted < kSize; ++contracted) {
+                    const Real* source =
+                        tensor_block + (first * kSize + contracted) * row_stride;
+                    for (int lane_index = 0; lane_index < lanes; ++lane_index) {
+                        row_real[contracted][lane_index] = source[lane_index * kChannels];
+                        if constexpr (Complex) {
+                            row_imag[contracted][lane_index] =
+                                source[lane_index * kChannels + 1];
+                        }
+                    }
+                }
+                for (int last = 0; last < kSize; ++last) {
+                    Real* target_real = middle_real + (first * kSize + last) * kBlock;
+                    Real* target_imag = middle_imag + (first * kSize + last) * kBlock;
+                    for (int lane_index = 0; lane_index < lanes; ++lane_index) {
+                        target_real[lane_index] = Real(0);
+                        target_imag[lane_index] = Real(0);
+                    }
+                    for (int contracted = 0; contracted < kSize; ++contracted) {
+                        const Real scale_real = right_real[contracted * kSize + last];
+                        const Real scale_imag = right_imag[contracted * kSize + last];
+                        const Real* source_real = row_real[contracted];
+                        const Real* source_imag = row_imag[contracted];
+                        if constexpr (Complex) {
+#pragma omp simd
+                            for (int lane_index = 0; lane_index < lanes; ++lane_index) {
+                                target_real[lane_index] +=
+                                    source_real[lane_index] * scale_real -
+                                    source_imag[lane_index] * scale_imag;
+                                target_imag[lane_index] +=
+                                    source_real[lane_index] * scale_imag +
+                                    source_imag[lane_index] * scale_real;
+                            }
+                        } else {
+#pragma omp simd
+                            for (int lane_index = 0; lane_index < lanes; ++lane_index) {
+                                target_real[lane_index] +=
+                                    source_real[lane_index] * scale_real;
+                            }
+                        }
+                    }
+                }
+            }
+
+            /* Stage 2: out[d][a] = sum_b gamma1[a][b] * middle[b][d]. */
+            for (int last = 0; last < kSize; ++last) {
+                for (int first = 0; first < kSize; ++first) {
+                    Real accumulator_real[kBlock];
+                    Real accumulator_imag[kBlock];
+                    for (int lane_index = 0; lane_index < lanes; ++lane_index) {
+                        accumulator_real[lane_index] = Real(0);
+                        accumulator_imag[lane_index] = Real(0);
+                    }
+                    for (int middle = 0; middle < kSize; ++middle) {
+                        const Real scale_real = left_real[first * kSize + middle];
+                        const Real scale_imag = left_imag[first * kSize + middle];
+                        const Real* source_real =
+                            middle_real + (middle * kSize + last) * kBlock;
+                        const Real* source_imag =
+                            middle_imag + (middle * kSize + last) * kBlock;
+                        if constexpr (Complex) {
+#pragma omp simd
+                            for (int lane_index = 0; lane_index < lanes; ++lane_index) {
+                                accumulator_real[lane_index] +=
+                                    source_real[lane_index] * scale_real -
+                                    source_imag[lane_index] * scale_imag;
+                                accumulator_imag[lane_index] +=
+                                    source_real[lane_index] * scale_imag +
+                                    source_imag[lane_index] * scale_real;
+                            }
+                        } else {
+#pragma omp simd
+                            for (int lane_index = 0; lane_index < lanes; ++lane_index) {
+                                accumulator_real[lane_index] +=
+                                    source_real[lane_index] * scale_real;
+                            }
+                        }
+                    }
+                    Real* destination = output_block + (last * kSize + first) * row_stride;
+                    for (int lane_index = 0; lane_index < lanes; ++lane_index) {
+                        destination[lane_index * kChannels] = accumulator_real[lane_index];
+                        if constexpr (Complex) {
+                            destination[lane_index * kChannels + 1] =
+                                accumulator_imag[lane_index];
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 enum class FastPathResult { not_matched, success, failure };
 
+// specialize=False 时由 Python 侧设置该变量，强制走通用多步路径以便 A/B 对照。
+bool fused_paths_disabled() {
+    // 不缓存：A/B 对照会在同一进程内反复切换该变量。
+    return std::getenv("PYQCD_EINSUM_DISABLE_FUSED") != nullptr;
+}
+
 FastPathResult try_sandwich_fast_path(const ExecutionPlan& execution,
                                       const std::vector<SlotData>& active,
                                       uint8_t* output) {
     SandwichGeometry geometry;
-    if (!match_sandwich(execution, &geometry)) {
+    if (fused_paths_disabled() || !match_sandwich(execution, &geometry)) {
         return FastPathResult::not_matched;
     }
-    if (geometry.tensor_position < 0 || geometry.left_matrix_position < 0 ||
-        geometry.right_matrix_position < 0 ||
-        static_cast<std::size_t>(geometry.tensor_position) >= active.size() ||
-        static_cast<std::size_t>(geometry.left_matrix_position) >= active.size() ||
-        static_cast<std::size_t>(geometry.right_matrix_position) >= active.size() ||
-        output == nullptr) {
+    const auto lookup = [&](int32_t position) -> const SlotData* {
+        if (position < 0 || static_cast<std::size_t>(position) >= active.size()) {
+            return nullptr;
+        }
+        return &active[static_cast<std::size_t>(position)];
+    };
+    const SlotData* tensor = lookup(geometry.tensor_position);
+    const SlotData* left = lookup(geometry.left_matrix_position);
+    const SlotData* right = lookup(geometry.right_matrix_position);
+    if (tensor == nullptr || left == nullptr || right == nullptr || output == nullptr) {
         return FastPathResult::failure;
     }
-    const uint8_t* tensor = active[static_cast<std::size_t>(geometry.tensor_position)].data();
-    const uint8_t* left = active[static_cast<std::size_t>(geometry.left_matrix_position)].data();
-    const uint8_t* right = active[static_cast<std::size_t>(geometry.right_matrix_position)].data();
-    if (tensor == nullptr || left == nullptr || right == nullptr) {
-        return FastPathResult::failure;
+    /* Only raw, exactly shaped operands use the fused kernel; broadcast (size-1)
+     * or already materialised operands fall back to pack/GEMM. */
+    if (tensor->has_labels || left->has_labels || right->has_labels ||
+        tensor->data() == nullptr || left->data() == nullptr || right->data() == nullptr ||
+        tensor->shape != geometry.tensor_shape || left->shape != geometry.left_matrix_shape ||
+        right->shape != geometry.right_matrix_shape) {
+        return FastPathResult::not_matched;
     }
     const auto start = std::chrono::steady_clock::now();
     switch (execution.dtype_id) {
         case QCD_DTYPE_COMPLEX128:
-            sandwich_values<double, true>(reinterpret_cast<const double*>(tensor),
-                                          reinterpret_cast<const double*>(left),
-                                          reinterpret_cast<const double*>(right),
-                                          reinterpret_cast<double*>(output), geometry);
-            break;
-        case QCD_DTYPE_COMPLEX64:
-            sandwich_values<float, true>(reinterpret_cast<const float*>(tensor),
-                                         reinterpret_cast<const float*>(left),
-                                         reinterpret_cast<const float*>(right),
-                                         reinterpret_cast<float*>(output), geometry);
-            break;
-        case QCD_DTYPE_FLOAT64:
-            sandwich_values<double, false>(reinterpret_cast<const double*>(tensor),
-                                           reinterpret_cast<const double*>(left),
-                                           reinterpret_cast<const double*>(right),
+            sandwich4_values<double, true>(reinterpret_cast<const double*>(tensor->data()),
+                                           reinterpret_cast<const double*>(left->data()),
+                                           reinterpret_cast<const double*>(right->data()),
                                            reinterpret_cast<double*>(output), geometry);
             break;
-        case QCD_DTYPE_FLOAT32:
-            sandwich_values<float, false>(reinterpret_cast<const float*>(tensor),
-                                          reinterpret_cast<const float*>(left),
-                                          reinterpret_cast<const float*>(right),
+        case QCD_DTYPE_COMPLEX64:
+            sandwich4_values<float, true>(reinterpret_cast<const float*>(tensor->data()),
+                                          reinterpret_cast<const float*>(left->data()),
+                                          reinterpret_cast<const float*>(right->data()),
                                           reinterpret_cast<float*>(output), geometry);
+            break;
+        case QCD_DTYPE_FLOAT64:
+            sandwich4_values<double, false>(reinterpret_cast<const double*>(tensor->data()),
+                                            reinterpret_cast<const double*>(left->data()),
+                                            reinterpret_cast<const double*>(right->data()),
+                                            reinterpret_cast<double*>(output), geometry);
+            break;
+        case QCD_DTYPE_FLOAT32:
+            sandwich4_values<float, false>(reinterpret_cast<const float*>(tensor->data()),
+                                           reinterpret_cast<const float*>(left->data()),
+                                           reinterpret_cast<const float*>(right->data()),
+                                           reinterpret_cast<float*>(output), geometry);
             break;
         default:
             return FastPathResult::failure;
@@ -1684,10 +1725,10 @@ FastPathResult try_sandwich_fast_path(const ExecutionPlan& execution,
     if (trace_enabled()) {
         std::fprintf(stderr,
                      "PYQCD_EINSUM_KUPL_SANDWICH prefix=%lld left=%lld middle=%lld "
-                     "right=%lld lane=%lld total_ms=%.3f\n",
+                     "right=%lld lane=%lld kernel=1 total_ms=%.3f\n",
                      static_cast<long long>(geometry.prefix),
                      static_cast<long long>(geometry.left),
-                     static_cast<long long>(geometry.contracted),
+                     static_cast<long long>(geometry.contracted_left),
                      static_cast<long long>(geometry.right),
                      static_cast<long long>(geometry.lane), elapsed_ms(start));
     }

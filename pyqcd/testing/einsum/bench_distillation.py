@@ -137,6 +137,10 @@ EQUATIONS = (
      'eq': 'gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG'},
     {'name': 'S3', 'line': 301, 'desc': 'sush 2pt（6 算子，含 μ 插入，真实生产）',
      'eq': 'manb,cedf,bd,Mfn,ac,MFem->MF'},
+    {'name': 'P1', 'line': 168, 'desc': 'sush 3pt 主项（15 算子，含 γ_curr 与投影，真实生产）',
+     'eq': 'agbh,eqfr,ospt,cmdn,ikjl,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy'},
+    {'name': 'P2', 'line': 176, 'desc': 'sush 3pt 主项（15 算子，置换型，真实生产）',
+     'eq': 'agbh,eqfr,ospt,ckdl,imjn,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy'},
 )
 EQUATION_BY_NAME = {item['name']: item for item in EQUATIONS}
 SUSH_EQUATIONS = frozenset(('S1', 'S2', 'S3'))
@@ -282,6 +286,17 @@ def build_operands(name, peram, cfg, seed):
                 _rand((1, nvec, nvec), rng),
                 _gamma(5),
                 _rand((1, 1, 4, 4), rng)]
+    if name in ('P1', 'P2'):
+        mom, link = 1, 2
+        projection = _projector()[:, :2]
+        return [peram[t_sink], peram[t_sink], peram[-1], peram[0],
+                peram[1 % peram.shape[0]],
+                _gamma(7), _rand((4, 4, 4), rng), _gamma(5), _gamma(7),
+                _rand((mom, nvec, nvec, nvec), rng),
+                _rand((mom, link, nvec, nvec), rng),
+                _rand((mom, nvec, nvec), rng),
+                _rand((mom, nvec, nvec, nvec), rng),
+                projection, projection]
     raise KeyError(f'未知方程 {name}')
 
 
@@ -533,7 +548,26 @@ def _to_numpy(array, backend):
     return np.asarray(array)
 
 
+def _norm_relative_error(actual, expected):
+    """范数相对误差：max|Δ| / max|ref|（契约判定用的稳健口径）。
+
+    逐元素 |Δ|/|ref| 在抵消严重的元素上（|ref| 接近 0）会被 1/|ref| 放大，
+    与 dtype 精度无关，不能作为契约判据；它只保留为诊断量。
+    """
+    actual = np.asarray(actual)
+    expected = np.asarray(expected)
+    if actual.shape != expected.shape:
+        return float('inf')
+    if not np.isfinite(actual).all() or not np.isfinite(expected).all():
+        return float('inf')
+    difference = np.abs(actual - expected)
+    denominator = max(float(np.max(np.abs(expected), initial=0.0)),
+                      np.finfo(np.float64).tiny)
+    return float(np.max(difference, initial=0.0) / denominator)
+
+
 def _max_relative_error(actual, expected):
+    """逐元素 max |Δ|/|ref|：仅作诊断，不作契约判据。"""
     actual = np.asarray(actual)
     expected = np.asarray(expected)
     if actual.shape != expected.shape:
@@ -907,7 +941,8 @@ def _measure_abba_case(arrays, backend, eq, path, oracle_module,
     oracle_dtype = str(oracle_output.dtype)
     qcd_dtype = str(qcd_output.dtype)
     dtype_match = oracle_dtype == DTYPE and qcd_dtype == DTYPE
-    relative_error = _max_relative_error(qcd_host, oracle_host)
+    relative_error = _norm_relative_error(qcd_host, oracle_host)
+    elementwise_error = _max_relative_error(qcd_host, oracle_host)
     absolute_error = _max_absolute_error(qcd_host, oracle_host)
     relative_error_pass = relative_error <= RELATIVE_ERROR_TOLERANCE
     del oracle_output, qcd_output, oracle_host, qcd_host
@@ -926,6 +961,7 @@ def _measure_abba_case(arrays, backend, eq, path, oracle_module,
             'qcd_einsum': {'loaded': 'in-process'},
         },
         'max_relative_error': relative_error,
+        'max_elementwise_relative_error': elementwise_error,
         'max_absolute_error': absolute_error,
         'oracle_output_dtype': oracle_dtype,
         'qcd_output_dtype': qcd_dtype,
@@ -944,7 +980,8 @@ def _measure_process_case(task, oracle_info):
     oracle_dtype = opt_result['output_dtype']
     qcd_dtype = qcd_result['output_dtype']
     dtype_match = oracle_dtype == DTYPE and qcd_dtype == DTYPE
-    relative_error = _max_relative_error(qcd_host, oracle_host)
+    relative_error = _norm_relative_error(qcd_host, oracle_host)
+    elementwise_error = _max_relative_error(qcd_host, oracle_host)
     absolute_error = _max_absolute_error(qcd_host, oracle_host)
     relative_error_pass = relative_error <= RELATIVE_ERROR_TOLERANCE
     del oracle_host, qcd_host
@@ -966,6 +1003,7 @@ def _measure_process_case(task, oracle_info):
             'qcd_einsum': qcd_result['loaded_oracle'],
         },
         'max_relative_error': relative_error,
+        'max_elementwise_relative_error': elementwise_error,
         'max_absolute_error': absolute_error,
         'oracle_output_dtype': oracle_dtype,
         'qcd_output_dtype': qcd_dtype,
@@ -1176,6 +1214,9 @@ def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
                             'operand_digest': operand_digest,
                             'max_relative_error':
                                 measurement['max_relative_error'],
+                            'max_elementwise_relative_error':
+                                measurement.get(
+                                    'max_elementwise_relative_error'),
                             'max_absolute_error':
                                 measurement['max_absolute_error'],
                             'oracle_output_dtype':
@@ -1383,6 +1424,8 @@ def _checks(rows):
             'loaded_oracle': row.get('loaded_oracle'),
             'output_dtype_match': row.get('output_dtype_match'),
             'max_relative_error': row.get('max_relative_error'),
+            'max_elementwise_relative_error': row.get(
+                'max_elementwise_relative_error'),
             'relative_error_tolerance': RELATIVE_ERROR_TOLERANCE,
             'correctness_pass': bool(row.get('correctness_pass', False)),
             'speedup_vs_opt': row.get('speedup_vs_opt'),

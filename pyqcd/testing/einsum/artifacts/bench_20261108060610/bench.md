@@ -1,0 +1,53 @@
+# qcd-einsum vs opt_einsum 3x 硬门禁基准
+
+## 结论
+
+- 状态：**FAIL**
+- acceptance evaluated：True
+- provisional：True
+- 说明：目标数据集与本机 perambulator 均不存在；使用固定种子合成 complex128 操作数，形状与真实蒸馏一致，正确性以 opt_einsum/numpy 逐元素对照（rel<=1e-12）为准，性能结论标记 provisional
+- 阻断：验收缺少 profiles: ['T2']
+- 阻断：验收缺少 equations: ['E1', 'E2', 'E4', 'E5']
+- 阻断：验收缺少 backends: ['gpu']
+- 阻断：T1/S1/cpu speedup=1.204577 < 3.0
+- 阻断：2 组双方中位耗时 < 0.1s，记为 too_short 且不作为实战对照: ['T1/S2/cpu', 'T1/S3/cpu']
+- 阻断：oracle is not the frozen opt_einsum submodule
+- 阻断：benchmark uses a proxy dataset rather than the requested target
+
+## 口径
+
+- dtype：`complex128`
+- threads：`4`（numpy 导入前强制）
+- optimize：`dp`
+- isolation：`process`
+- acceptance profiles：`['T1', 'T2']`；diagnostic profiles：`['T0', 'T0n']`
+- 计时：预热后 PROCESS_ISOLATED，每实现不少于 10 次，取中位数
+- planner：`production`（双方各自规划一次，只计时稳态执行）
+- 可比性门槛：双方中位耗时均 ≥ `0.1` s，否则记 `too_short` 且不计入 3x 判定
+- 正确性：`max |actual-expected| / max(|expected|, tiny)` ≤ `1e-12`
+- GPU：每次计时前后调用 default stream synchronize
+
+## 环境
+
+- oracle：installed（非冻结站点包）；version=`3.4.0`；frozen=False
+- oracle path：`/home/zhangxin/miniforge3/lib/python3.12/site-packages/opt_einsum`
+- pyqcd.einsum：`0.1.0`；native=`0.1.0`
+- pyqcd path：`/home/zhangxin/PyQCD/pyqcd/einsum/__init__.py`
+- Python：`3.12.4`；NumPy：`2.5.4`
+- CPU：`8` logical CPUs
+- worker pids：`[178459, 178594, 178691, 178736, 178761, 178792]`
+- cpu device：`{'type': 'cpu', 'name': 'x86_64', 'threads': 4}`
+
+## 结果
+
+| profile | eq | backend | isolation | worker pids | optimize | planner | opt median/s | qcd median/s | speedup | max rel err | planner path match | status |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| T1 | S1 | cpu | process | {'opt_einsum': 178459, 'qcd_einsum': 178594} | dp | production | 0.498796722 | 0.414084502 | 1.204577 | 0.0 | True | ok / FAIL(<3x) |
+| T1 | S2 | cpu | process | {'opt_einsum': 178691, 'qcd_einsum': 178736} | dp | production | 0.032858189 | 0.001989352 | 16.517031 | 5.323827037940131e-16 | True | ok / too_short(no-comparison) |
+| T1 | S3 | cpu | process | {'opt_einsum': 178761, 'qcd_einsum': 178792} | dp | production | 0.032901228 | 0.001701713 | 19.334181 | 3.737053528544654e-15 | True | ok / too_short(no-comparison) |
+
+## 显式 path
+
+- T1/S1/cpu: `[(2, 7), (5, 6), (1, 5), (3, 4), (2, 3), (0, 2), (0, 1)]`；digest=`16ac286c07d64a634796bba34f94ce2e34964e4f4c5d0ebe5188e070b163ce3a`
+- T1/S2/cpu: `[(2, 8), (4, 7), (2, 6), (0, 5), (2, 4), (0, 1), (0, 2), (0, 1)]`；digest=`89a98a4aedd600bc05f2bc5f599e94e0adc578568968cd0e15e2617e72110176`
+- T1/S3/cpu: `[(1, 5), (2, 4), (1, 3), (0, 2), (0, 1)]`；digest=`6562510463e4d12fd14a6f31607378b5ecc2a68235715b99b48827beae784e0d`

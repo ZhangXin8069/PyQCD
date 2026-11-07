@@ -652,3 +652,11 @@
 - 关键内容: planner/data 口径改造、S1-S3 方程、L24 profile、100ms 可比性门槛、L24/E5 实跑 0.888x 且退出期 segfault
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pyqcd/einsum - general - 2026-11-08 06:35:52 +0800
+- 主任务: 修复 KUPL transpose_copy 在输出全 1 维时返回未初始化缓冲（影响 E2 的 greedy/auto）
+- 日志文件: logs/v20261108063552.txt
+- 文件大小: 2892 bytes
+- 触发原因: 一般记录
+- 关键内容: 最小复现 abcde,cedb->ac；根因 axes.empty() 提前返回；修复后 E2 三 planner 全对
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
