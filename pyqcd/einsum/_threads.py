@@ -60,7 +60,7 @@ _MAX_BLAS = 4
 
 _state: dict[str, object] = {"applied": False, "omp": None, "blas": None,
                              "source": "not applied", "ranks": 1,
-                             "runtime_applied": []}
+                             "runtime_applied": [], "exported_env": {}}
 _runtime_complete = False
 
 
@@ -103,6 +103,9 @@ def _explicit(name: str) -> int | None:
     value = os.environ.get(name)
     if value is None or not value.strip():
         return None
+    exported = (_state.get("exported_env") or {}).get(name)
+    if exported is not None and value.strip() == exported:
+        return None                      # 我们自己写的，不算用户设置
     try:
         threads = int(value.strip())
     except ValueError:
@@ -215,7 +218,8 @@ def _set_runtime_threads(omp: int | None, blas: int | None,
                     function(ctypes.c_int(int(blas)))
                 except (TypeError, ValueError):
                     continue
-                applied.append(f"blas:{symbol}")
+                applied.append("blas")
+                _state["blas_symbol"] = symbol
                 break
     return applied
 
@@ -235,10 +239,17 @@ def apply(profile: str = "kernel", force: bool = False) -> dict[str, object]:
     explicit_blas = _explicit(STANDARD_BLAS_ENV) is not None
     applied = _set_runtime_threads(omp, blas, respect_standard=explicit_omp)
 
-    # 绝不把自己算出来的值写回 OMP_NUM_THREADS / OPENBLAS_NUM_THREADS：
-    # 那样 _pinned() 会把自动值当成用户设置，档位切换从此失效。
-    # 首次 apply() 时 BLAS/GOMP 可能还没加载，此时 applied 为空是正常的——
-    # 由 ensure_runtime() 在首次原生调用前补做。
+    # 同时导出到标准变量：GOMP 在**加载时**读 OMP_NUM_THREADS，而我们的原生库
+    # 是延迟 dlopen 的，导出后它初始化时就能拿到正确值（运行时 API 只对已加载的库有效）。
+    # 记录在 _state["exported_env"]，_pinned() 会忽略这些值，档位切换不会失效。
+    exported = dict(_state.get("exported_env") or {})
+    if not explicit_omp and omp is not None:
+        os.environ[STANDARD_OMP_ENV] = str(omp)
+        exported[STANDARD_OMP_ENV] = str(omp)
+    if not explicit_blas and blas is not None:
+        os.environ[STANDARD_BLAS_ENV] = str(blas)
+        exported[STANDARD_BLAS_ENV] = str(blas)
+    _state["exported_env"] = exported
 
     _state.update({"applied": True, "profile": profile, "omp": omp, "blas": blas,
                    "source": source, "ranks": mpi_ranks(),
@@ -287,6 +298,11 @@ def ensure_runtime() -> None:
     global _runtime_complete
     if _runtime_complete or not _state.get("applied") or _state.get("omp") is None:
         return
+    attempts = int(_state.get("runtime_attempts", 0)) + 1
+    _state["runtime_attempts"] = attempts
+    if attempts > 3:                     # 三次仍没成（例如库还没加载）就放弃
+        _runtime_complete = True
+        return
     respect = _explicit(STANDARD_OMP_ENV) is not None
     applied = _set_runtime_threads(_state["omp"], _state["blas"],
                                    respect_standard=respect)
@@ -296,3 +312,4 @@ def ensure_runtime() -> None:
     need = {"gomp", "blas"} - set(_state.get("runtime_applied") or [])
     if not need or not (need & set(libraries)):
         _runtime_complete = True
+    _state["runtime_applied"] = sorted(set(_state.get("runtime_applied") or []))

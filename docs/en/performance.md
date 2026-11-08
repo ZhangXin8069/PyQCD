@@ -86,14 +86,14 @@ check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2p
 
 ## Reproducible on the published package
 
-`pyqcd==0.1.21` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`pyqcd==0.1.22` (`build_info(): backend=kupl, array_backend=numpy`) versus
 `opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
 |---|---|---|---|
-| Nucleon 2pt, nvec=32 (production contract) | 97.67 ms | 17.06 ms | **5.73×** |
-| γ sandwich, T=256, nvec=512 | 27.71 ms | 5.03 ms | **5.51×** |
-| Generic chain 800³ (no specialised kernel) | 17.35 ms | 19.74 ms | 0.88× (PyQCD slower) |
+| Nucleon 2pt, nvec=32 (production contract) | 102.55 ms | 16.63 ms | **6.17×** |
+| γ sandwich, T=256, nvec=512 | 28.78 ms | 4.55 ms | **6.33×** |
+| Generic chain 800³ (no specialised kernel) | 13.40 ms | 16.99 ms | 0.79× (PyQCD slower) |
 
 What the shipped build actually accelerates:
 
@@ -108,26 +108,113 @@ The hint printed on the first hit says which of the two happened:
 `[kernel: kupl_nucleon_2pt]` means a kernel ran, `[plan-cache]` means only the
 plan was reused.
 
-## Historical development-build measurements
+## Generic einsum, case by case
 
-The figures below were taken on development builds that carried extra fused
-kernels (γ sandwich, perambulator × gauge). Those kernels *are* compiled into the
-0.1.x release, but the E4 one is gated to `z*y*x <= 1` because it measured 33x
-slower at the L24 volume; the headline numbers below came from ungated builds, so
-they are **not** reproducible from PyPI — they are kept only as a record of what
-the shapes can cost:
+Most users start with equations that have nothing to do with lattice QCD, so here
+is the same comparison on plain tensor algebra — CPU (KUPL backend), `float64`
+unless noted, median of 9 calls, measured on `pyqcd 0.1.21`:
 
-| Workload | opt_einsum | development build | Ratio |
+| Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
 |---|---|---|---|
-| Nucleon 2pt (CPU, N=100) | 120.43 ms | 22.65 ms | 5.32× |
-| Nucleon 3pt (GPU) | 285.40 ms | 30.74 ms | 9.29× |
-| γ sandwich, L24 (GPU) | 0.373987 s | 0.110959 s | 3.371× |
-| γ sandwich, L24 (CPU) | 1188.9 ms | 142.7 ms | 8.33× |
-| perambulator × gauge, L24 (GPU) | 1.112793 s | 1.095407 s | 1.016× (parity) |
+| batched matmul, 32×256² | 9.5–10.2 ms | 90.0–90.4 ms | **8.9–9.5×** |
+| ellipsis, 16×128×128 | 0.7–1.1 ms | 6.2–9.3 ms | **8.7×** |
+| outer product, 2000×2000 | 2.8–3.5 ms | 4.1–4.5 ms | **1.28–1.48×** |
+| complex matmul, 800² | 20.2–20.8 ms | 20.0 ms | 0.96–0.99× |
+| 3-operand chain, 3×500 | 2.7–2.9 ms | 2.6 ms | 0.92–0.98× |
+| 4-operand chain, 300 | 1.1–1.2 ms | 1.0 ms | 0.81–0.89× |
+| matmul, 1000² | 11.7–13.4 ms | 9.3–11.4 ms | 0.80–0.85× |
+| Hadamard, 4000² | 88.3–89.8 ms | 29.2–29.4 ms | 0.33× |
 
-A weighted production-mix model built on those numbers gave ≈2.82×
-(4757 s → 1688 s). It inherits the same caveat: it assumes the extra kernels.
+Read it honestly:
 
+* **batched and ellipsis equations win** — PyQCD keeps the batch axes in one
+  execution step and reuses the cached plan, while `opt_einsum`'s `dp` path falls
+  back to a per-batch loop;
+* **element-wise and single-GEMM equations lose** — the generic path is a thin
+  wrapper over the same BLAS, so `opt_einsum`'s leaner Python overhead wins;
+* the gap shrinks as an equation becomes more "GEMM-like" and the work per call grows.
+
+Run it yourself (every case is asserted against numpy *and* opt_einsum before any
+timing is printed):
+
+```python
+import statistics
+import time
+
+import numpy as np
+import pyqcd.einsum as pe
+import opt_einsum as oe
+
+
+def bench(call, warmup=2, repeat=9):
+    """Median of `repeat` calls after `warmup`; returns milliseconds."""
+    for _ in range(warmup):
+        call()
+    samples = []
+    for _ in range(repeat):
+        start = time.perf_counter()
+        call()
+        samples.append((time.perf_counter() - start) * 1e3)
+    return statistics.median(samples)
+
+
+rng = np.random.default_rng(0)
+
+
+def real(*shape):
+    return rng.standard_normal(shape)
+
+
+def cplx(*shape):
+    return (rng.standard_normal(shape)
+            + 1j * rng.standard_normal(shape)).astype(np.complex128)
+
+
+# every case must agree with numpy AND with opt_einsum before we time it
+CASES = [
+    ("matmul 1000^2", "ij,jk->ik", [real(1000, 1000), real(1000, 1000)]),
+    ("batched matmul 32x256^2", "bij,bjk->bik",
+     [real(32, 256, 256), real(32, 256, 256)]),
+    ("chain 3x500", "ij,jk,kl->il", [real(500, 500)] * 3),
+    ("ellipsis 16x128^2", "...ij,...jk->...ik",
+     [real(16, 128, 128), real(16, 128, 128)]),
+    ("outer 2000", "i,j->ij", [real(2000), real(2000)]),
+    ("hadamard 4000^2", "ij,ij->ij", [real(4000, 4000), real(4000, 4000)]),
+    ("4-operand chain 300", "ij,jk,kl,lm->im", [real(300, 300)] * 4),
+    ("complex matmul 800^2", "ij,jk->ik", [cplx(800, 800), cplx(800, 800)]),
+]
+
+print(f"{'case':24s} {'pyqcd':>9s} {'opt_einsum':>11s} {'rate':>6s}")
+for label, equation, operands in CASES:
+    ours = pe.contract(equation, *operands)
+    reference = np.einsum(equation, *operands, optimize="optimal")
+    other = oe.contract(equation, *operands, optimize="dp")
+    assert np.allclose(np.asarray(ours), reference, rtol=1e-10, atol=1e-12), label
+    assert np.allclose(np.asarray(other), reference, rtol=1e-10, atol=1e-12), label
+    ours_ms = bench(lambda: pe.contract(equation, *operands))
+    theirs_ms = bench(lambda: oe.contract(equation, *operands, optimize="dp"))
+    print(f"{label:24s} {ours_ms:9.2f} {theirs_ms:11.2f} {theirs_ms / ours_ms:6.2f}")
+```
+
+Sub-millisecond equations (`ii->`, `ii->i` on a 5000² matrix) are deliberately
+excluded: there the measurement is timer and call overhead, not the contraction.
+
+
+### Extended shapes (CPU and GPU)
+
+These four replace the earlier "development build" table — they are reproducible on
+the published `pyqcd 0.1.21`:
+
+| Workload | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
+|---|---|---|---|
+| Nucleon 2pt, CPU, nvec=100, nmom=6 | 2004 ms | 19231 ms | **9.59×** |
+| γ sandwich, GPU, T=24, nvec=1024 | 1.3 ms | 6.0 ms | **4.54×** |
+| perambulator × gauge, GPU, spatial 24³ | 72.7 ms | 78.6 ms | 1.08× |
+
+Two rows of the old table are gone on purpose: the nucleon-3pt GPU figure needs the
+production operand contract (operand shapes that are not part of the public docs),
+and the weighted "production mix" depended on an un-gated E4 kernel that the release
+deliberately disables at real volumes.
 
 ## CUDA: the same comparison on the GPU
 

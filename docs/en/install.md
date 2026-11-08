@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.1.21`. To pin it: `pip install "pyqcd==0.1.13"`.
+Current release: `0.1.22`. To pin it: `pip install "pyqcd==0.1.13"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need

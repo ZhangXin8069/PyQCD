@@ -773,3 +773,21 @@ KUPL 后端是 **OpenMP + dlopen 的 BLAS** 双层并行，两层同时开就会
 
 **不要**只用 `nm -D | grep qcd_cuda_`（版本脚本 `local: *` 会把内部 kernel 隐藏），
 也不要只看 Python 提示。说"未进发行版"之前必须走完这四步。
+
+### 幂等标记与自己的记录必须用同一套键（0.1.22 的真 bug）
+`ensure_runtime()` 用 `{"gomp","blas"} - set(state["runtime_applied"])` 判断是否做完，
+而 `_set_runtime_threads()` 追加的是 `"blas:<symbol>"` → 集合永远不相等 →
+**每次 `contract()` 都重新调用 `openblas_set_num_threads` / `omp_set_num_threads`**。
+代价：一次小收缩从 0.05 ms 变成 0.53 ms（E5 从 4.9× 掉到 0.25×）。
+
+修法：运行时记录只写规范键（`"gomp"` / `"blas"`，符号名另存），并加"最多尝试 3 次"兜底。
+判据：**数调用次数**，不要只看耗时——
+```python
+orig = _threads._set_runtime_threads
+_threads._set_runtime_threads = lambda *a, **k: (count.__setitem__('n', count['n']+1), orig(*a, **k))[1]
+for _ in range(10): pe.contract(...)
+assert count['n'] == 1        # 10 次调用只应设置 1 次
+```
+
+另外：把自动值写回 `OMP_NUM_THREADS` 会让 `_pinned()` 误判为用户设置，从而永久禁用切档；
+必须把导出值记在 `state["exported_env"]`，`_pinned()` 见到相同值要忽略。

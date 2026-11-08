@@ -78,14 +78,14 @@ check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2p
 
 ## 在已发布包上可复现
 
-`pyqcd==0.1.21`（`build_info(): backend=kupl, array_backend=numpy`）对
+`pyqcd==0.1.22`（`build_info(): backend=kupl, array_backend=numpy`）对
 `opt_einsum==3.4.0`（`dp`），`complex128`，预热 3 次后取 15 次中位数：
 
 | 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
 |---|---|---|---|
-| 核子 2pt，nvec=32（生产契约） | 97.67 ms | 17.06 ms | **5.73×** |
-| γ 夹心，T=256，nvec=512 | 27.71 ms | 5.03 ms | **5.51×** |
-| 通用链式 800³（无专用 kernel） | 17.35 ms | 19.74 ms | 0.88×（PyQCD 更慢） |
+| 核子 2pt，nvec=32（生产契约） | 102.55 ms | 16.63 ms | **6.17×** |
+| γ 夹心，T=256，nvec=512 | 28.78 ms | 4.55 ms | **6.33×** |
+| 通用链式 800³（无专用 kernel） | 13.40 ms | 16.99 ms | 0.79×（PyQCD 更慢） |
 
 本版本真正加速了哪些形态：
 
@@ -99,23 +99,107 @@ check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2p
 首次命中会打印提示，据实说明走的是哪条路：`[kernel: kupl_nucleon_2pt]` 表示
 真的跑了 kernel，`[plan-cache]` 表示只复用了计划。
 
-## 历史（开发构建）测量
+## 通用 einsum：逐例对照
 
-下表来自**未加体积门的开发构建**（γ 夹心、perambulator × 规范场）。这些 kernel
-**已编译进 0.1.x 发行版**，但 E4 被限制在 `z*y*x <= 1`（L24 体积下实测慢 33×，故主动关闭），
-因此下表数字**无法从 PyPI 复现**，仅作为"这些形态本身能有多贵"的记录：
+多数用户的起点与格点 QCD 无关，所以这里给出纯张量代数上的同一组对照——CPU
+（KUPL 后端）、除注明外 `float64`、取 9 次中位数，`pyqcd 0.1.21` 实测：
 
-| 工作负载 | opt_einsum | 开发构建 | 倍率 |
+| 用例 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
 |---|---|---|---|
-| 核子 2pt（CPU，N=100） | 120.43 ms | 22.65 ms | 5.32× |
-| 核子 3pt（GPU） | 285.40 ms | 30.74 ms | 9.29× |
-| γ 夹心 L24（GPU） | 0.373987 s | 0.110959 s | 3.371× |
-| γ 夹心 L24（CPU） | 1188.9 ms | 142.7 ms | 8.33× |
-| perambulator × 规范场 L24（GPU） | 1.112793 s | 1.095407 s | 1.016×（持平） |
+| 批量矩阵乘 32×256² | 9.5–10.2 ms | 90.0–90.4 ms | **8.9–9.5×** |
+| ellipsis 16×128×128 | 0.7–1.1 ms | 6.2–9.3 ms | **8.7×** |
+| 外积 2000×2000 | 2.8–3.5 ms | 4.1–4.5 ms | **1.28–1.48×** |
+| 复数矩阵乘 800² | 20.2–20.8 ms | 20.0 ms | 0.96–0.99× |
+| 三操作数链 3×500 | 2.7–2.9 ms | 2.6 ms | 0.92–0.98× |
+| 四操作数链 300 | 1.1–1.2 ms | 1.0 ms | 0.81–0.89× |
+| 矩阵乘 1000² | 11.7–13.4 ms | 9.3–11.4 ms | 0.80–0.85× |
+| Hadamard 4000² | 88.3–89.8 ms | 29.2–29.4 ms | 0.33× |
 
-基于这些数字的"生产混合加权 ≈2.82×（4757 s → 1688 s）"同样继承该前提：
-它假设那些额外 kernel 存在。
+如实解读：
 
+* **批量与 ellipsis 形态占优**——PyQCD 把 batch 轴保留在同一步执行并复用缓存计划，
+  而 `opt_einsum` 的 `dp` 路径在这里退化成逐 batch 循环；
+* **逐元素与单个 GEMM 形态落后**——通用路径本质是同一套 BLAS 的薄封装，
+  `opt_einsum` 的 Python 开销更小；
+* 方程越"像 GEMM"、单次工作量越大，差距越小。
+
+自己跑一遍（打印耗时前，每个用例都会先对 numpy *和* opt_einsum 各断言一次）：
+
+```python
+import statistics
+import time
+
+import numpy as np
+import pyqcd.einsum as pe
+import opt_einsum as oe
+
+
+def bench(call, warmup=2, repeat=9):
+    """Median of `repeat` calls after `warmup`; returns milliseconds."""
+    for _ in range(warmup):
+        call()
+    samples = []
+    for _ in range(repeat):
+        start = time.perf_counter()
+        call()
+        samples.append((time.perf_counter() - start) * 1e3)
+    return statistics.median(samples)
+
+
+rng = np.random.default_rng(0)
+
+
+def real(*shape):
+    return rng.standard_normal(shape)
+
+
+def cplx(*shape):
+    return (rng.standard_normal(shape)
+            + 1j * rng.standard_normal(shape)).astype(np.complex128)
+
+
+# every case must agree with numpy AND with opt_einsum before we time it
+CASES = [
+    ("matmul 1000^2", "ij,jk->ik", [real(1000, 1000), real(1000, 1000)]),
+    ("batched matmul 32x256^2", "bij,bjk->bik",
+     [real(32, 256, 256), real(32, 256, 256)]),
+    ("chain 3x500", "ij,jk,kl->il", [real(500, 500)] * 3),
+    ("ellipsis 16x128^2", "...ij,...jk->...ik",
+     [real(16, 128, 128), real(16, 128, 128)]),
+    ("outer 2000", "i,j->ij", [real(2000), real(2000)]),
+    ("hadamard 4000^2", "ij,ij->ij", [real(4000, 4000), real(4000, 4000)]),
+    ("4-operand chain 300", "ij,jk,kl,lm->im", [real(300, 300)] * 4),
+    ("complex matmul 800^2", "ij,jk->ik", [cplx(800, 800), cplx(800, 800)]),
+]
+
+print(f"{'case':24s} {'pyqcd':>9s} {'opt_einsum':>11s} {'rate':>6s}")
+for label, equation, operands in CASES:
+    ours = pe.contract(equation, *operands)
+    reference = np.einsum(equation, *operands, optimize="optimal")
+    other = oe.contract(equation, *operands, optimize="dp")
+    assert np.allclose(np.asarray(ours), reference, rtol=1e-10, atol=1e-12), label
+    assert np.allclose(np.asarray(other), reference, rtol=1e-10, atol=1e-12), label
+    ours_ms = bench(lambda: pe.contract(equation, *operands))
+    theirs_ms = bench(lambda: oe.contract(equation, *operands, optimize="dp"))
+    print(f"{label:24s} {ours_ms:9.2f} {theirs_ms:11.2f} {theirs_ms / ours_ms:6.2f}")
+```
+
+Sub-millisecond equations (`ii->`, `ii->i` on a 5000² matrix) are deliberately
+excluded: there the measurement is timer and call overhead, not the contraction.
+
+
+### 扩展形状（CPU 与 GPU）
+
+下面三条替换掉此前的"开发构建"表——它们都能在已发布的 `pyqcd 0.1.21` 上复现：
+
+| 工作负载 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
+|---|---|---|---|
+| 核子 2pt，CPU，nvec=100，nmom=6 | 2004 ms | 19231 ms | **9.59×** |
+| γ 夹心，GPU，T=24，nvec=1024 | 1.3 ms | 6.0 ms | **4.54×** |
+| perambulator × 规范场，GPU，空间 24³ | 72.7 ms | 78.6 ms | 1.08× |
+
+旧表里有两行被有意删除：核子 3pt（GPU）需要生产操作数契约（其操作数形状不在公开文档里），
+"生产混合加权"依赖未加体积门的 E4 kernel，而发行版在真实体积下主动禁用它。
 
 ## CUDA：同样的对照放到 GPU 上
 
