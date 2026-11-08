@@ -140,3 +140,23 @@ python -m sphinx -b html -d /tmp/x/doctrees -W docs/zh /tmp/x/html-zh
 - 发版、sdist 内容、venv 自检：`pypi-release`。
 - 报告、PDF 与 LaTeX 版式：`pyqcd-docs`；仓库目录与命名：`form`。
 - 站点示例涉及的 API 行为：交给对应 `pyqcd-*` 技能核实，不在文档里自造结论。
+
+## 文档示例可执行门
+
+文档里的 Python 示例必须能跑，否则"文档即真相"就是假的。仓库自带校验器：
+
+```bash
+python -m pyqcd.testing.docs_examples --keep-going
+python -m pyqcd.testing.docs_examples --lang zh --keep-going
+```
+
+规则：
+1. 每个 ```` ```python ```` 块会在同一命名空间里按页面顺序执行；
+2. 需要源码仓库或有意简写的片段，块内必须出现 `# pseudo-code` 或 `# docs-skip`；
+3. 中英文的块**逐字节相同**（见"双语一致性门"），所以只需保证英文块可执行；
+4. 当前基线 en 16 / zh 16 块，0 失败；新增页面要同步加入 `PAGES` 常量。
+
+实测价值：0.1.5 之前 `usage.md` 有两处示例签名与实现不符
+（`compute_dual_field_strength(U)` 实际是 `(F_dict, mu, nu)`；
+`Bootstrap(data, n_samples=200)` 实际是 `(data, Nconf_axes=0, ...)`），
+正是这个门把它们暴露出来的。

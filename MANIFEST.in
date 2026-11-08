@@ -16,7 +16,7 @@ include install.sh
 
 # Native backend sources, headers and their Makefile drivers. The build dirs
 # under cpp/ hold compiled artefacts and are pruned below.
-recursive-include cpp *.h *.hpp *.c *.cc *.cpp *.cu *.cuh *.sh *.md
+recursive-include cpp *.h *.cpp *.cu *.sh *.md
 prune cpp/kupl/einsum/build
 prune cpp/cuda/einsum/build
 
@@ -32,5 +32,4 @@ global-exclude AGENTS.md
 
 # Build artefacts must never reach the sdist.
 prune build
-recursive-exclude pyqcd/einsum __pycache__
-global-exclude *.so *.so.* *.o *.obj *.a *.lib *.log *.pyc
+global-exclude *.so *.log *.pyc

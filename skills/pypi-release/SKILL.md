@@ -322,3 +322,26 @@ python -m pyqcd --json     # 机器可读，便于脚本断言
    约定：不可运行的片段必须显式写 `# pseudo-code`。
 9. **构建产物里的绝对路径审计**：发版前检查
    `tar -xzOf <sdist> */pyqcd.egg-info/SOURCES.txt | grep -c '/home/'` 必须为 0。
+
+### 构建告警的正确处理
+`global-exclude`/`recursive-exclude` 在**没有任何文件匹配**时一定会打印
+`warning: no previously-included files matching '*.log' found anywhere in distribution`。
+这类告警是 setuptools 的固有行为，**不要为了消警告删掉 `*.so`/`*.log`/`*.pyc` 的排除规则**
+（它们是防止产物泄漏的安全网）。真正要清零的是：
+
+* `ProjectMetadataDeprecatedLicenseFormat`（`license` 表形式）→ 用 PEP 639 的
+  `license = "MIT"` + `license-files`；
+* `path must be relative`（`SOURCES.txt` 绝对路径）→ `cythonize` 用相对路径。
+
+发版前的构建告警门：`python -m build --sdist 2>&1 | grep -iE "deprecat|path must be relative"`
+必须为空。
+
+### 文档示例门（新增，必跑）
+```bash
+python -m pyqcd.testing.docs_examples --keep-going       # 英文四页
+python -m pyqcd.testing.docs_examples --lang zh --keep-going
+```
+它把 `docs/<lang>/*.md` 里的 ```` ```python ```` 块按页面顺序 `exec` 一遍；
+不可运行的片段必须显式写 `# pseudo-code` 或 `# docs-skip`。
+当前基线：en 16 块 / zh 16 块，0 失败。**改文档后必跑**，否则会出现
+`compute_dual_field_strength(U)` 这类"签名早已改、文档还在旧写法"的事故。
