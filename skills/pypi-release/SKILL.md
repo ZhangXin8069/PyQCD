@@ -816,3 +816,16 @@ opt_einsum / numpy 的行为完全相同，属于"兼容"而不是 bug。
    `N == n*Y`、`N*X >= m`、`gpu_needed <= b`，并把 `notes` 里的 cap 当作预期输出。
 
 对应地，文档也要写清"这是未封顶目标 + 压缩规则"，否则用户会按公式反推得到错误结论。
+
+### "性能差"先查是不是测到了旧安装（0.1.25 的真实案例）
+用户报告 CPU `0.41×`、GPU sandwich `0.75×`，实际原因是 **notebook 从别的目录运行，
+`import pyqcd` 命中了 base conda 里残留的 0.1.12**：该构建没有线程档（8×8 超订）
+且 CUDA `.so` 只有 `compute_70` SASS（无 PTX）→ 在 sm_89 上 kernel 返回 status 3 静默回落。
+
+三步定位（都在用户机器上可做）：
+1. `print(pyqcd.__version__, pyqcd.__file__)` —— 先确认版本与路径；
+2. `python -m pyqcd --gpu-probe` —— kernel 状态/命中提示/结论；
+3. `strings <so> | grep compute_` 或直接看 kernel 状态码（3 = 架构不匹配）。
+
+由此固化：**所有基准脚本开头必须打印版本与文件路径**；库里在"注册了 kernel 却没跑"
+时 `RuntimeWarning` 立即告警（同形态同原因一次），否则静默回落会把一切伪装成"库很慢"。

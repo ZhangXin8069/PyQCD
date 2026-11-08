@@ -44,6 +44,16 @@ _entry_3pt: Any = None
 _failed_3pt = False
 
 
+# 最近一次"该跑 kernel 却没跑"的原因，供上层给出可行动的告警。
+LAST_FAILURE: dict[str, object] = {"reason": "", "status": None}
+
+
+def _fail(reason: str, status=None):
+    LAST_FAILURE["reason"] = reason
+    LAST_FAILURE["status"] = status
+    return None
+
+
 def enabled() -> bool:
     return os.environ.get(_DISABLE_ENV, '1').strip().lower() not in (
         '0', 'false', 'off', 'no')
@@ -127,15 +137,15 @@ def _shape_ok(operands: Sequence[Any]) -> tuple[int, int] | None:
 def try_nucleon_2pt(subscripts: Any, operands: Sequence[Any]) -> np.ndarray | None:
     """匹配 E1 且条件满足时用专用 kernel 计算，否则返回 ``None``。"""
     if not enabled() or not isinstance(subscripts, str):
-        return None
+        return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
     if _normalize(subscripts) != NUCLEON_2PT_EQ:
         return None
     shapes = _shape_ok(operands)
     if shapes is None:
-        return None
+        return _fail("operand shapes do not satisfy the kernel contract")
     entry = _function()
     if entry is None:
-        return None
+        return _fail("kernel entry point is missing from the native library")
     nvec, nmom = shapes
     operands = [operand if operand.flags['C_CONTIGUOUS']
                 else np.ascontiguousarray(operand) for operand in operands]
@@ -145,7 +155,8 @@ def try_nucleon_2pt(subscripts: Any, operands: Sequence[Any]) -> np.ndarray | No
         *[operand.ctypes.data for operand in operands])
     status = entry(QCD_DTYPE_COMPLEX128, pointers, output.ctypes.data, dims, 0)
     if status != 0:
-        return None
+        return _fail(f"kernel returned status {status} "
+                     "(wrong CUDA architecture or an internal error)", status)
     return output
 
 
@@ -212,7 +223,7 @@ def try_three_pt(subscripts: Any, operands: Sequence[Any]) -> np.ndarray | None:
     提示标记"待进一步优化"；优化达标后应删除本标识。
     """
     if not enabled() or not isinstance(subscripts, str):
-        return None
+        return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
     variant = THREE_PT_EQUATIONS.get(_normalize(subscripts))
     if variant is None:
         return None
@@ -233,7 +244,8 @@ def try_three_pt(subscripts: Any, operands: Sequence[Any]) -> np.ndarray | None:
     status = entry(QCD_DTYPE_COMPLEX128, pointers, output.ctypes.data, dims,
                    variant)
     if status != 0:
-        return None
+        return _fail(f"kernel returned status {status} "
+                     "(wrong CUDA architecture or an internal error)", status)
     global _three_pt_notice_shown
     if not _three_pt_notice_shown:
         _three_pt_notice_shown = True

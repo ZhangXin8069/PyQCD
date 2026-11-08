@@ -68,10 +68,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="print the version only")
     parser.add_argument("--json", action="store_true",
                         help="machine-readable output")
+    parser.add_argument("--gpu-probe", action="store_true",
+                        help="check whether the CUDA fast path is actually active")
     args = parser.parse_args(argv)
 
     if args.version:
         print(__version__)
+        return 0
+
+    if args.gpu_probe:
+        from .einsum import _probe
+
+        report = _probe.probe()
+        if args.json:
+            import json as _json
+            print(_json.dumps(report, indent=2, ensure_ascii=False, default=str))
+        else:
+            print(_probe.format_report(report))
         return 0
 
     report = _report()

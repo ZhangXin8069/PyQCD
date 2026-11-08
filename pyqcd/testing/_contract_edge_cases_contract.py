@@ -150,3 +150,51 @@ def test_native_failure_falls_back_without_raising() -> None:
     assert len(caught) <= 1, f"expected at most one warning, got {len(caught)}"
     # 恢复后必须重新用回原生路径（没有留下永久的禁用状态）
     assert np.allclose(np.asarray(pe.contract("ij,jk->ik", a, b)), a @ b)
+
+
+def test_kernel_skip_warns_immediately() -> None:
+    """注册了专用 kernel 却没跑成时，必须立刻告警并给出原因。
+
+    静默回落会让"PyQCD 很慢"变成一个无法诊断的现象；这条契约保证用户第一次
+    遇到降级就能看到提示（同一形态+原因只报一次）。
+    """
+    import os
+    import warnings
+
+    import pyqcd.einsum._api as api
+
+    saved = {name: os.environ.get(name) for name in
+             ("PYQCD_EINSUM_KERNEL_KUPL", "PYQCD_EINSUM_KERNEL_CUDA")}
+    api._KERNEL_SKIP_WARNED.clear()
+    os.environ["PYQCD_EINSUM_KERNEL_KUPL"] = "0"
+    os.environ["PYQCD_EINSUM_KERNEL_CUDA"] = "0"
+    try:
+        rng = np.random.default_rng(0)
+
+        def draw(*shape):
+            return (rng.standard_normal(shape)
+                    + 1j * rng.standard_normal(shape)).astype(np.complex128)
+
+        n = 8
+        operands = [draw(4, 4, n, n), draw(4, 4, n, n), draw(4, 4, n, n),
+                    draw(4, 4), draw(4, 4), draw(4, n, n, n), draw(4, n, n, n),
+                    draw(4, 4)]
+        equation = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            import contextlib
+            import io
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = pe.contract(equation, *operands)
+        reference = np.einsum(equation, *operands, optimize="optimal")
+        assert np.allclose(np.asarray(result), reference)
+        messages = [str(item.message) for item in caught]
+        assert any("did not run" in message for message in messages), messages
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        api._KERNEL_SKIP_WARNED.clear()

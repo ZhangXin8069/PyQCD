@@ -76,9 +76,31 @@ check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2p
 * **错误要报不要猜**：操作数个数不符、标签尺寸冲突、输出标签未知都抛
   `ValueError`/`TypeError`，措辞与 `opt_einsum` 完全一致。
 
+### 动手之前
+
+先确认你测的是哪一份构建。`site-packages` 里残留的旧 `pyqcd` 会把所有数字变成
+"PyQCD 很慢"，而你并不知情：
+
+```python
+import pyqcd
+import pyqcd.einsum as pe
+
+print(pyqcd.__version__, pyqcd.__file__)     # which build is imported?
+info = pe.build_info()
+print(info)                                  # backend / array_backend
+assert pyqcd.__version__.count(".") == 2
+assert info["backend"] in {"cuda", "kupl", "python"}
+```
+
+GPU 任务可以直接问库"kernel 到底跑没跑"：
+
+```bash
+python -m pyqcd --gpu-probe
+```
+
 ## 在已发布包上可复现
 
-`pyqcd==0.1.24`（`build_info(): backend=kupl, array_backend=numpy`）对
+`pyqcd==0.1.25`（`build_info(): backend=kupl, array_backend=numpy`）对
 `opt_einsum==3.4.0`（`dp`），`complex128`，预热 3 次后取 15 次中位数：
 
 | 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
@@ -130,7 +152,13 @@ import statistics
 import time
 
 import numpy as np
+import pyqcd
+import pyqcd
 import pyqcd.einsum as pe
+
+print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)
+
+print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)
 import opt_einsum as oe
 
 
@@ -234,7 +262,10 @@ import statistics
 import time
 
 import numpy as np
+import pyqcd
 import pyqcd.einsum as pe
+
+print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)
 
 try:
     import cupy as cp

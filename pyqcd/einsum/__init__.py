@@ -41,6 +41,8 @@ __all__ = [
     "configure_threads",
     "thread_info",
     "thread_profiles",
+    "probe",
+    "format_report",
     "backends",
     "build_info",
     "blas",
@@ -129,3 +131,17 @@ def configure_threads(omp: int | None = None, blas: int | None = None,
     if blas is not None:
         os.environ[_threads_module.BLAS_ENV] = str(int(blas))
     return _threads_module.apply(force=True)
+
+
+def probe() -> dict:
+    """Diagnose whether the CUDA fast path is really active in this install."""
+    from . import _probe as probe_module
+
+    return probe_module.probe()
+
+
+def format_report(report: dict) -> str:
+    """Render :func:`probe` output as human-readable text."""
+    from . import _probe as probe_module
+
+    return probe_module.format_report(report)

@@ -84,9 +84,31 @@ check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2p
   size conflicts and unknown output labels raise `ValueError`/`TypeError` with the
   same wording as `opt_einsum`.
 
+### Before you benchmark
+
+Print the build you are actually measuring. A stale `pyqcd` left in
+`site-packages` silently turns every number into "PyQCD is slow":
+
+```python
+import pyqcd
+import pyqcd.einsum as pe
+
+print(pyqcd.__version__, pyqcd.__file__)     # which build is imported?
+info = pe.build_info()
+print(info)                                  # backend / array_backend
+assert pyqcd.__version__.count(".") == 2
+assert info["backend"] in {"cuda", "kupl", "python"}
+```
+
+and for GPU runs ask the library directly whether the kernel is alive:
+
+```bash
+python -m pyqcd --gpu-probe
+```
+
 ## Reproducible on the published package
 
-`pyqcd==0.1.24` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`pyqcd==0.1.25` (`build_info(): backend=kupl, array_backend=numpy`) versus
 `opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
@@ -142,7 +164,13 @@ import statistics
 import time
 
 import numpy as np
+import pyqcd
+import pyqcd
 import pyqcd.einsum as pe
+
+print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)
+
+print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)
 import opt_einsum as oe
 
 
@@ -249,7 +277,10 @@ import statistics
 import time
 
 import numpy as np
+import pyqcd
 import pyqcd.einsum as pe
+
+print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)
 
 try:
     import cupy as cp

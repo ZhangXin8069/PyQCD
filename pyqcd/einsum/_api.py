@@ -541,6 +541,31 @@ def _run_specialized_kernel(
     return None, ""
 
 
+_KERNEL_SKIP_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_kernel_skipped_once(entry: dict[str, str], reasons: list[str]) -> None:
+    """该形态注册了专用 kernel，但这次没有跑成 —— 立刻告诉调用方原因。
+
+    静默回落是数值契约（结果仍然正确），但它会伪装成"PyQCD 很慢"，所以命中
+    kernel 形态却没跑 kernel 时必须报警；同一(形态, 原因)只报一次，避免刷屏。
+    """
+    detail = "; ".join(reason for reason in reasons if reason) or "unknown reason"
+    key = (str(entry.get("name", "?")), detail)
+    if key in _KERNEL_SKIP_WARNED:
+        return
+    _KERNEL_SKIP_WARNED.add(key)
+    warnings.warn(
+        f"pyqcd.einsum: specialised kernel did not run for "
+        f"{entry.get('name', '?')} ({detail}). The contraction falls back to the "
+        "generic path — results are still correct, but slower. Check "
+        "`python -m pyqcd --gpu-probe`, PYQCD_EINSUM_KERNEL_* switches and "
+        "PYQCD_CUDA_ARCHITECTURES.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
 def _warn_specialized_kernel_once(exc: BaseException) -> None:
     global _SPECIALIZED_KERNEL_WARNED
 
@@ -607,6 +632,14 @@ def contract(
                     _specialize.announce(specialized, announce_kernel)
                     if kernel_result is not None:
                         return kernel_result
+                    if str(specialized.get("kind", "")).startswith("kernel"):
+                        from . import _kernel_cuda, _kernel_kupl
+
+                        reasons = [
+                            str(module.LAST_FAILURE.get("reason", ""))
+                            for module in (_kernel_kupl, _kernel_cuda)
+                        ]
+                        _warn_kernel_skipped_once(specialized, reasons)
                 else:
                     _specialize.announce(specialized)
         else:

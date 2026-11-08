@@ -31,6 +31,16 @@ _entry: Any = None
 _failed = False
 
 
+# 最近一次"该跑 kernel 却没跑"的原因，供上层给出可行动的告警。
+LAST_FAILURE: dict[str, object] = {"reason": "", "status": None}
+
+
+def _fail(reason: str, status=None):
+    LAST_FAILURE["reason"] = reason
+    LAST_FAILURE["status"] = status
+    return None
+
+
 def enabled() -> bool:
     return os.environ.get(_DISABLE_ENV, '1').strip().lower() not in (
         '0', 'false', 'off', 'no')
@@ -113,16 +123,16 @@ def _shape_ok(operands: Sequence[Any]) -> tuple[int, int, int] | None:
 def try_three_pt(subscripts: Any, operands: Sequence[Any]) -> Any | None:
     """匹配 P1/P2 且条件满足时用专用 kernel 计算，否则返回 ``None``。"""
     if not enabled() or not isinstance(subscripts, str):
-        return None
+        return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
     variant = THREE_PT_EQUATIONS.get(''.join(subscripts.split()))
     if variant is None:
         return None
     shapes = _shape_ok(operands)
     if shapes is None:
-        return None
+        return _fail("operand shapes do not satisfy the kernel contract")
     entry = _function()
     if entry is None:
-        return None
+        return _fail("kernel entry point is missing from the native library")
     import cupy
 
     nvec, mom, link = shapes
@@ -133,7 +143,8 @@ def try_three_pt(subscripts: Any, operands: Sequence[Any]) -> Any | None:
     status = entry(QCD_DTYPE_COMPLEX128, pointers, int(output.data.ptr), dims,
                    variant, None)
     if status != 0:
-        return None
+        return _fail(f"kernel returned status {status} "
+                     "(wrong CUDA architecture or an internal error)", status)
     return output
 
 
@@ -208,15 +219,15 @@ def try_nucleon_2pt(subscripts: Any, operands: Sequence[Any]) -> Any | None:
     与 opt_einsum 相比通常领先（1.75x–7.4x）。按契约仍需继续优化。
     """
     if not enabled() or not isinstance(subscripts, str):
-        return None
+        return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
     if ''.join(subscripts.split()) != NUCLEON_2PT_EQ:
         return None
     shapes = _nucleon_shape_ok(operands)
     if shapes is None:
-        return None
+        return _fail("operand shapes do not satisfy the kernel contract")
     entry = _function_2pt()
     if entry is None:
-        return None
+        return _fail("kernel entry point is missing from the native library")
     import cupy
 
     nvec, nmom = shapes
@@ -231,7 +242,8 @@ def try_nucleon_2pt(subscripts: Any, operands: Sequence[Any]) -> Any | None:
     status = entry(QCD_DTYPE_COMPLEX128, pointers, int(output.data.ptr), dims,
                    None)
     if status != 0:
-        return None
+        return _fail(f"kernel returned status {status} "
+                     "(wrong CUDA architecture or an internal error)", status)
     global _nucleon_notice_shown
     if not _nucleon_notice_shown:
         _nucleon_notice_shown = True
