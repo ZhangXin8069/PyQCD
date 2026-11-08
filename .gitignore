@@ -33,6 +33,7 @@
 !*.eps"
 !*.h
 !*.hpp
+!*.ipynb
 !*.jpg
 !*.jpg"
 !*.md

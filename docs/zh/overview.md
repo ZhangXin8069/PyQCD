@@ -34,9 +34,9 @@ import pyqcd.einsum as pe
 a = np.arange(6.0).reshape(2, 3)
 b = np.arange(12.0).reshape(3, 4)
 
-pe.contract("ij,jk->ik", a, b)                        # 等价于 a @ b
-pe.contract_path("ij,jk->ik", a, b)                   # (path, PathInfo)
-pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))   # 可复用表达式
+pe.contract("ij,jk->ik", a, b)          # same as a @ b
+pe.contract_path("ij,jk->ik", a, b)     # (path, PathInfo)
+pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))   # reusable expression
 ```
 
 ### 分层
@@ -69,6 +69,6 @@ pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))   # 可复用表达式
 import pyqcd.einsum as pe
 
 pe.build_info()        # backend / mpi / kupl_mpi_build / mpi_label / native_library
-pe.mpi_enabled()       # KUPL 二进制是否编入真实 MPI 分片
-pe.specializations()   # 当前注册的方程形态特化
+pe.mpi_enabled()       # whether the KUPL binary has real MPI support
+pe.specializations()   # equation-shape specialisations currently registered
 ```

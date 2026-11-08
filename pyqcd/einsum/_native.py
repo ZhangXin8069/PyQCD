@@ -195,11 +195,11 @@ def build_info() -> dict[str, Any]:
     kupl_mpi = bool(kupl_mpi_enabled())
     mpi = kupl_mpi and backend == 'kupl'
     if backend == 'cuda':
-        label = '非 MPI 版本（CUDA 后端未实现 MPI 分片）'
+        label = 'non-MPI build (CUDA backend has no MPI sharding)'
     elif mpi:
-        label = 'MPI 版本'
+        label = 'MPI build'
     else:
-        label = '非 MPI 版本'
+        label = 'non-MPI build'
     return {
         'backend': backend,
         'mpi': mpi,

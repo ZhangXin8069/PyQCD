@@ -15,9 +15,9 @@ PyQCD 从源码树直接运行；原生收缩后端是可选的，不装也能�
 ## 安装
 
 ```bash
-bash install.sh kupl     # CPU（KUPL）后端
-bash install.sh cuda     # CUDA 后端 + Cython 扩展
-bash install.sh          # auto：有 nvcc 且有 CUDA 源码则 cuda，否则 kupl
+bash install.sh kupl     # CPU (KUPL) backend
+bash install.sh cuda     # CUDA backend + Cython extension
+bash install.sh          # auto: cuda when nvcc and CUDA sources are present
 bash install.sh --help
 ```
 
@@ -63,9 +63,10 @@ PYQCD_EINSUM_ENABLE_MPI=1 bash install.sh kupl
 
 ```python
 import pyqcd.einsum as pe
+
 print(pe.build_info())
 # {'backend': 'kupl', 'mpi': False, 'kupl_mpi_build': False,
-#  'mpi_label': '非 MPI 版本', 'native_library': '.../libpyqcdeinsum_kupl.so'}
+#  'mpi_label': 'non-MPI build', 'native_library': '.../libpyqcdeinsum_kupl.so'}
 ```
 
 `mpi_enabled()` 只有在 KUPL 二进制确实编入 MPI 实现时才返回 `True`；CUDA 后端一律报非 MPI。
@@ -88,15 +89,15 @@ print(pe.build_info())
 
 ```bash
 source ./env.sh
-python -m pyqcd.testing                                  # 集成测试
+python -m pyqcd.testing                                  # integration suite
 
 python -m pyqcd.testing.einsum.verify_native --backend kupl
 python -m pyqcd.testing.einsum.verify_native --backend cuda
-python -m pyqcd.testing.einsum.verify_compat             # 与 opt_einsum 差分
+python -m pyqcd.testing.einsum.verify_compat             # differential vs opt_einsum
 mpirun -np 2 python -m pyqcd.testing.einsum.verify_mpi
 
-bash pyqcd/testing/einsum/simple/run-all.sh              # 子系统一键套件
-bash pyqcd/testing/simple/run-all.sh                     # 逐函数 API 对照套件
+bash pyqcd/testing/einsum/simple/run-all.sh              # one-shot sub-system suite
+bash pyqcd/testing/simple/run-all.sh                     # per-function API parity suite
 ```
 
 `verify_compat` 需要 `opt_einsum` 作为 oracle：默认用 `refer/git-rep/opt_einsum`

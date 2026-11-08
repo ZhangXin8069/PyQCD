@@ -59,7 +59,7 @@ pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))   # reusable expression
 | KUPL (CPU) | `cpp/kupl/einsum/` | `libpyqcdeinsum_kupl.so` |
 | CUDA (GPU) | `cpp/cuda/einsum/` | `libpyqcdeinsum_cuda.so` + Cython extension |
 
-Both export the same eight `Qcd` entry points; the planning core is compiled
+Both export the same 8 `Qcd` entry points; the planning core is compiled
 into both, so paths and costs are identical by construction.
 
 ### Fallback invariants
