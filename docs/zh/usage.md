@@ -145,3 +145,14 @@ print(P.format_plan(plan))
 ## 参见
 
 相对 `opt_einsum` 的加速、测量口径，以及**没有加速**的情形见 :doc:`performance`。
+
+### 与 `opt_einsum` 3.4.0 的差异
+
+只有两处**增量**差异：
+
+* `optimize=` 还接受**可调用对象** `(input_subsets, output_subset, size_dict) -> path`；
+  `opt_einsum` 3.4.0 对同样的参数会抛 `TypeError: 'function' object is not iterable`。
+* `pyqcd.einsum.PathInfo` 在包层级直接导出（上游放在 `opt_einsum.paths` 下）。
+
+其余行为一致——包括 `contract_expression` 的 `constants=` 处理（两边抛出同样的
+`ValueError`）。

@@ -150,3 +150,16 @@ and the per-GPU process count `Y = N/n`.
 
 Relative speed against `opt_einsum`, the measurement protocol and the cases
 where there is no gain are on :doc:`performance`.
+
+### Differences from `opt_einsum` 3.4.0
+
+Two deliberate deviations, both additive:
+
+* `optimize=` also accepts a **callable** `(input_subsets, output_subset, size_dict) -> path`.
+  `opt_einsum` 3.4.0 raises `TypeError: 'function' object is not iterable` for the same
+  argument; PyQCD plans with it.
+* `pyqcd.einsum.PathInfo` is exported at package level (it lives under `opt_einsum.paths`
+  upstream).
+
+Everything else — including the `constants=` handling of `contract_expression`, which
+raises the same `ValueError` in both — behaves identically.

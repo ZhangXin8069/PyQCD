@@ -653,3 +653,17 @@ python -m pyqcd.testing.release_check --with-tests    # 连测试套件一起
 
 0.1.11 实测：全量 **16/16 passed**，`--offline --with-tests` **10/10 passed**。
 注意 `sphinx` 与 `twine` 必须在当前解释器可用（本机是 conda 环境）。
+
+### 与 opt_einsum 3.4.0 的差异必须显式记录（0.1.11 实测）
+"完全兼容"是承诺，任何偏差都要写进文档并定期复核：
+
+| 行为 | opt_einsum 3.4.0 | pyqcd |
+|---|---|---|
+| `optimize=` 传可调用对象 | `TypeError: 'function' object is not iterable` | **支持**（返回 path 即用） |
+| `PathInfo` 位置 | `opt_einsum.paths.PathInfo` | 包层级也导出（超集） |
+| `contract_expression(*shapes)` | ok | ok（逐值一致的 path/cost） |
+| `contract_expression(..., constants={...})` | 同样抛 `ValueError` | 同样抛（bug-for-bug） |
+| 不同 shape 的路径缓存 | 正确重算 | 正确重算（cost 240 vs 252 一致） |
+
+结论：pyqcd 是**超集**（多接受 callable、多导出 PathInfo），没有"更少"的能力。
+新增差异时必须同时改 `docs/{en,zh}/usage.md` 的 "Differences from opt_einsum" 小节。
