@@ -69,9 +69,77 @@ perambulator × 规范场 26.4%、夹心 4%）：
 **硬件口径提醒**：以上 GPU 数字来自笔记本显卡，绝对耗时不能代表数据中心卡；
 但双方在同一块设备上测量，因此**倍率**仍然有意义。
 
-## 复现
+## 代码
+
+专用路径是默认行为：不需要 import、不需要开关、也不需要改计划结构。唯一需要知道的是，
+每个形态第一次命中时会打印一行提示，所以做 A/B 对照只差一个关键字参数。
+
+```python
+import numpy as np
+import pyqcd.einsum as pe
+
+rng = np.random.default_rng(0)
+
+
+def c(*shape):
+    return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+
+# Nucleon 2pt (E1): perambulator x gamma x VVV x parity projection
+nucleon_2pt = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
+ops_2pt = [c(2, 2, 2, 2), c(2, 2, 2, 2), c(2, 2, 2, 2), c(2, 2),
+           c(2, 2), c(4, 2, 2, 2), c(4, 2, 2, 2), c(2, 2)]
+
+fast = pe.contract(nucleon_2pt, *ops_2pt)                    # specialised path
+base = pe.contract(nucleon_2pt, *ops_2pt, specialize=False)  # general path
+assert np.allclose(fast, base)
+
+# gamma sandwich (E5): perambulator^dagger x gamma sandwich x perambulator
+sandwich = "ab,...bce,cd->...dae"
+ops_s = [c(2, 2), c(3, 2, 2, 2), c(2, 2)]
+assert np.allclose(pe.contract(sandwich, *ops_s),
+                   pe.contract(sandwich, *ops_s, specialize=False))
+
+# which shapes get a specialised path
+for name, kind, subscripts in pe.specializations():
+    print(f"{name:20s} {kind:28s} {subscripts}")
+```
+
+不想改应用代码时，同样的开关也可以从环境变量给：
 
 ```bash
+PYQCD_EINSUM_SPECIALIZE=0 python my_run.py            # process-wide off
+PYQCD_EINSUM_SPECIALIZE_VERBOSE=1 python my_run.py    # print for every call
+PYQCD_EINSUM_DISABLE_FUSED=1 python my_run.py         # keep planning, drop fused kernels
+PYQCD_EINSUM_KERNEL_KUPL=0 python my_run.py           # drop KUPL specialised kernels
+PYQCD_EINSUM_KERNEL_CUDA=0 python my_run.py           # drop CUDA specialised kernels
+```
+
+所有已注册形态都可以在运行期查询，而 `specialize=False` 永远复现通用路径，
+因此回归测试就是一句 `assert`：
+
+| 组 | 类型 | 覆盖内容 |
+|---|---|---|
+| `nucleon-2pt(E1)` | fused + KUPL/CUDA kernel | 8 算子核子 2pt |
+| `nucleon-3pt(E2)` | 计划缓存 | 8 算子核子 3pt |
+| `gauge-propagator(E4)` | fused（CUDA） | perambulator × 规范场 |
+| `gamma-sandwich(E5)` | fused（CPU + GPU） | `γ₅` 夹心 |
+| `sush-2pt(S1)`、`sush-3pt-munu(S2)`、`sush-2pt-mu(S3)` | 计划缓存 | sush 生产形态 |
+| `sush-3pt-main(P1/P2)` | fused + CUDA kernel | 14 算子 3pt 主项 |
+
+
+## 复现
+
+基准程序 `pyqcd.testing.einsum.bench_native` **不在 PyPI 包里**：`pyqcd.testing`
+被排除在发布版之外（`setup.py` 用
+`find_packages(exclude=["pyqcd.testing", "pyqcd.testing.*"])`），因此基准、测试和回归
+基线只存在于源码仓库。下面两条命令必须在**源码检出根目录**执行；在只执行过
+`pip install pyqcd` 的环境里，程序会直接报
+`ModuleNotFoundError: No module named 'pyqcd.testing'`。
+
+```bash
+cd /path/to/PyQCD     # source checkout root; pyqcd.testing is not on PyPI
+
 # CPU: KUPL backend, 4 pinned threads, process isolation
 PYQCD_EINSUM_ORACLE=installed PYQCD_EINSUM_NATIVE=kupl PYQCD_BENCH_THREADS=4 \
   python -m pyqcd.testing.einsum.bench_native \
@@ -83,6 +151,6 @@ PYQCD_EINSUM_ORACLE=installed PYQCD_EINSUM_NATIVE=cuda \
   --data synthetic --profiles L24 --backends gpu --iters 10 --warmup 4 --planner shared
 ```
 
-专用路径的正确性由产生这些数字的同一套件校验：
-`python -m pyqcd.testing.einsum.verify_compat`（980 例）与
+专用路径的正确性由产生这些数字的同一套件校验，出于同样的原因该套件也只在源码仓库
+可用：`python -m pyqcd.testing.einsum.verify_compat`（980 例）与
 `python -m pyqcd.testing.einsum.verify_native --backend kupl|cuda`。

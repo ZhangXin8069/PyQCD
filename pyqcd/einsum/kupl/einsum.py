@@ -87,7 +87,12 @@ def library_path() -> Path:
     requested = os.environ.get("PYQCD_EINSUM_LIB")
     if requested:
         return Path(requested).expanduser()
-    return _PACKAGED_LIB if _PACKAGED_LIB.is_file() else _REPO_LIB
+    if _PACKAGED_LIB.is_file():
+        return _PACKAGED_LIB
+    if _REPO_LIB.is_file():
+        return _REPO_LIB
+    # 都没编出来时报告包内规范路径，而不是安装后不存在的 site-packages/cpp 布局。
+    return _PACKAGED_LIB
 
 
 _LL = ctypes.c_longlong

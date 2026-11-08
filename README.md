@@ -24,6 +24,14 @@ Set `PYQCD_EINSUM_REQUIRE_NATIVE=1` to make a missing toolchain a hard error.
 * English — https://py-qcd.readthedocs.io/en/latest/usage.html
 * 中文 — https://py-qcd.readthedocs.io/zh-cn/latest/usage.html
 
+## Repositories
+
+| Platform | Role | URL |
+|---|---|---|
+| GitLab (gitlab.itp.ac.cn) | 国内开发 — primary development | https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD |
+| Gitee | 国内发布 — China release mirror | https://gitee.com/zhangxin8069/PyQCD |
+| GitHub | 国外发布 — global release mirror | https://github.com/zhangxin8069/PyQCD |
+
 ## Quick start
 
 ```python
@@ -102,6 +110,19 @@ dtype, same thread count and same `dp` planner:
 
 Weighted by the shape mix of a real production run the aggregate is roughly
 **2.82x** (4757 s → 1688 s, model estimate).
+
+```python
+import numpy as np
+import pyqcd.einsum as pe
+
+expr = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"   # nucleon 2pt
+fast = pe.contract(expr, *operands)                    # specialised path (default)
+base = pe.contract(expr, *operands, specialize=False)  # general path
+assert np.allclose(fast, base)                         # same numbers, different speed
+```
+
+Per-call `specialize=False` and the process-wide `PYQCD_EINSUM_SPECIALIZE=0`
+switch the optimisation off; both paths must agree numerically.
 
 The gain comes from recognising a handful of lattice-QCD equation shapes and
 routing them to purpose-built kernels (fusion, buffer reuse) instead of a

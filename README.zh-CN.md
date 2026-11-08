@@ -22,6 +22,14 @@ pip install pyqcd
 * English — https://py-qcd.readthedocs.io/en/latest/usage.html
 * 中文 — https://py-qcd.readthedocs.io/zh-cn/latest/usage.html
 
+## 代码托管
+
+| 平台 | 用途 | 地址 |
+|---|---|---|
+| GitLab（gitlab.itp.ac.cn） | 国内开发——主开发仓库 | https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD |
+| Gitee | 国内发布——国内镜像 | https://gitee.com/zhangxin8069/PyQCD |
+| GitHub | 国外发布——海外镜像 | https://github.com/zhangxin8069/PyQCD |
+
 ## 快速开始
 
 ```python
@@ -94,6 +102,19 @@ MPI 分片只在 KUPL 后端实现，且只分片单个输出轴；CUDA 后端�
 | perambulator × 规范场 L24（GPU） | 1.112793 s | 1.095407 s | 1.016×（持平） |
 
 按真实生产各形态耗时占比加权，整体约 **2.82×**（4757 s → 1688 s，模型估计）。
+
+```python
+import numpy as np
+import pyqcd.einsum as pe
+
+expr = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"   # nucleon 2pt
+fast = pe.contract(expr, *operands)                    # specialised path (default)
+base = pe.contract(expr, *operands, specialize=False)  # general path
+assert np.allclose(fast, base)                         # same numbers, different speed
+```
+
+按调用 `specialize=False` 或按进程 `PYQCD_EINSUM_SPECIALIZE=0` 都能关掉这套优化，
+两条路径的数值必须一致。
 
 优势来自识别少数格点 QCD 方程形态并改用专用 kernel（融合、缓冲复用），而不是通用 BLAS 链。
 但它**不是普适的**：GPU 核子 2pt/3pt 对 `opt_einsum` 双方都已贴近硬件上限（约 1×），

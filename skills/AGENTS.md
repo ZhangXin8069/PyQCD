@@ -38,6 +38,8 @@
 | 技能 | 单一职责 | 典型触发 |
 |---|---|---|
 | `form` | PyQCD 仓库命名、目录、交付格式、具名例外与本地审计 | form、格式治理、命名/目录规范、仓库规范化 |
+| `pypi-release` | PyPI 版本三处同步、sdist 构建/内容校验/上传、CDN 等待与干净 venv 自检 | 发版、twine、sdist、yank、版本号 |
+| `readthedocs` | Read the Docs 双语站点（`docs/en`、`docs/zh`）配置、页面集合、一致性门与重建联动 | readthedocs、sphinx、双语、toctree |
 
 ## 调用链
 

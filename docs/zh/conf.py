@@ -11,7 +11,7 @@ author = "PyQCD contributors"
 copyright = "PyQCD contributors"
 
 version = "0.1"
-release = "0.1.3"
+release = "0.1.4"
 
 language = "zh_CN"
 html_search_language = "zh"

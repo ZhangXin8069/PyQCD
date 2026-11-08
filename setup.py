@@ -1,8 +1,20 @@
-"""Build entry for the PyQCD einsum native and CUDA Cython layers.
+"""Build entry for the PyQCD native layers (KUPL and CUDA).
 
 Project metadata (name, version, dependencies, ...) lives in ``pyproject.toml``;
 this file only supplies the build mechanics that PEP 621 cannot express:
-compiling/staging the native library and the optional Cython CUDA extension.
+compiling/staging the native libraries and the optional Cython CUDA extension.
+
+Backend policy
+--------------
+* ``PYQCD_EINSUM_BACKEND=kupl`` -> KUPL only.
+* ``PYQCD_EINSUM_BACKEND=cuda`` -> KUPL, then CUDA. KUPL is built first so a
+  failing CUDA build still leaves a working native library.
+* ``PYQCD_EINSUM_BACKEND=auto`` (default) -> KUPL always, plus CUDA when
+  ``nvcc``, the CUDA sources and Cython are all available.
+
+A KUPL failure degrades the install to the pure-Python planner and only becomes
+fatal with ``PYQCD_EINSUM_REQUIRE_NATIVE=1``. A CUDA failure is *always* only a
+warning: the package stays installed with the KUPL library.
 """
 
 from __future__ import annotations
@@ -13,12 +25,13 @@ import subprocess
 import warnings
 from pathlib import Path
 
-from setuptools import Extension, setup
+from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 
 HOME = Path(__file__).resolve().parent
 RAW_BACKEND = os.environ.get("PYQCD_EINSUM_BACKEND", "auto").strip().lower()
+_WARNED_BACKENDS: set[str] = set()
 
 
 def _cuda_sources() -> tuple[Path, ...]:
@@ -26,44 +39,50 @@ def _cuda_sources() -> tuple[Path, ...]:
     return tuple(sorted((*source_dir.glob("*.cu"), *source_dir.glob("*.cpp"))))
 
 
-def _resolve_backend(value: str) -> str:
-    if value in {"kupl", "cuda"}:
-        return value
+def _cython_available() -> bool:
+    if os.environ.get("PYQCD_EINSUM_SKIP_CYTHON") == "1":
+        return False
+    try:
+        import Cython  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _resolve_backends(value: str) -> tuple[str, ...]:
+    """Backends to build, in build order; KUPL is always the baseline."""
+    if value == "kupl":
+        return ("kupl",)
+    if value == "cuda":
+        return ("kupl", "cuda")
     if value != "auto":
         raise RuntimeError(
             f"invalid PYQCD_EINSUM_BACKEND={value!r}; expected kupl, cuda, or auto")
     if shutil.which(os.environ.get("NVCC", "nvcc")) and _cuda_sources():
-        try:
-            import Cython  # noqa: F401
-        except ImportError:
-            # 隔离构建环境里没有 Cython 时，CUDA 扩展无法编译；
-            # 明确退到纯 CPU 的 KUPL 后端，而不是让 pip install 直接失败。
-            print("PyQCD einsum: Cython is unavailable, using the kupl backend")
-            return "kupl"
-        return "cuda"
-    return "kupl"
+        if _cython_available():
+            return ("kupl", "cuda")
+        print("PyQCD einsum: Cython is unavailable, building the kupl backend only")
+    return ("kupl",)
 
 
-BUILD_BACKEND = _resolve_backend(RAW_BACKEND)
-BACKEND_DIR = HOME / "cpp" / BUILD_BACKEND / "einsum"
-BUILD_SCRIPT = HOME / ("build-nv.sh" if BUILD_BACKEND == "cuda" else "build-kupl.sh")
-
-print(f"PyQCD einsum build backend: {BUILD_BACKEND}")
-print(f"native library directory: {BACKEND_DIR}")
-
-_SKIP_WARNED = False
+BACKENDS = _resolve_backends(RAW_BACKEND)
+BUILD_SCRIPTS = {
+    backend: HOME / ("build-nv.sh" if backend == "cuda" else "build-kupl.sh")
+    for backend in BACKENDS
+}
+print(f"PyQCD einsum build backends: {', '.join(BACKENDS)}")
 
 
-def _native_library_path() -> Path:
-    """Archive ``build-*.sh`` produces for the selected backend."""
-    return BACKEND_DIR / f"libpyqcdeinsum_{BUILD_BACKEND}.so"
+def _native_library_path(backend: str) -> Path:
+    """Archive ``build-*.sh`` produces for ``backend``."""
+    return HOME / "cpp" / backend / "einsum" / f"libpyqcdeinsum_{backend}.so"
 
 
-def _stage_native_library() -> None:
-    source = _native_library_path()
+def _stage_native_library(backend: str) -> None:
+    source = _native_library_path(backend)
     if not source.is_file():
         raise RuntimeError(f"native library was not built: {source}")
-    destination = HOME / "pyqcd" / "einsum" / BUILD_BACKEND / source.name
+    destination = HOME / "pyqcd" / "einsum" / backend / source.name
     destination.parent.mkdir(parents=True, exist_ok=True)
     # 必须原子落位：就地 O_TRUNC 覆盖正在被其它进程 mmap 的 .so 会让其在退出期 SIGSEGV。
     staged = destination.with_name(destination.name + f".tmp.{os.getpid()}")
@@ -71,16 +90,19 @@ def _stage_native_library() -> None:
     os.replace(staged, destination)
 
 
-def _toolchain_problem() -> str | None:
-    """Return why the native build cannot run, or None when it can."""
-    if not BUILD_SCRIPT.is_file():
-        return f"build script {BUILD_SCRIPT.name} is missing"
+def _toolchain_problem(backend: str) -> str | None:
+    """Return why the native build for ``backend`` cannot run, or None."""
+    script = BUILD_SCRIPTS[backend]
+    if not script.is_file():
+        return f"build script {script.name} is missing"
     if shutil.which("bash") is None:
         return "bash is not available on PATH"
-    # CUDA 后端需要两套工具链：nvcc 编译 .cu，主机 C++ 编译器编译 Cython 扩展。
-    compilers = [("CXX", "c++", "host C++ compiler")]
-    if BUILD_BACKEND == "cuda":
-        compilers.insert(0, ("NVCC", "nvcc", "CUDA compiler"))
+    if backend == "cuda":
+        # CUDA 需要两套工具链：nvcc 编译 .cu，主机 C++ 编译器编译 Cython 扩展。
+        compilers = [("NVCC", "nvcc", "CUDA compiler"),
+                     ("CXX", "c++", "host C++ compiler")]
+    else:
+        compilers = [("CXX", "c++", "host C++ compiler")]
     for variable, default, description in compilers:
         compiler = os.environ.get(variable, default)
         if shutil.which(compiler) is None:
@@ -88,65 +110,76 @@ def _toolchain_problem() -> str | None:
     return None
 
 
-def _skip_native(reason: str) -> None:
-    """Warn once about a skipped native build, or fail when it was requested."""
-    detail = (
-        f"PyQCD einsum: {reason}. Installing without the native {BUILD_BACKEND} "
-        "library; pyqcd.einsum then runs the pure-Python planner "
-        "(pyqcd/einsum/_plan_py.py)."
-    )
-    if os.environ.get("PYQCD_EINSUM_REQUIRE_NATIVE") == "1":
-        raise RuntimeError(
-            f"{detail} PYQCD_EINSUM_REQUIRE_NATIVE=1 is set, so this is a hard error.")
-    global _SKIP_WARNED
-    if not _SKIP_WARNED:
-        _SKIP_WARNED = True
-        warnings.warn(
-            f"{detail} Set PYQCD_EINSUM_REQUIRE_NATIVE=1 to make this a hard error.",
-            RuntimeWarning, stacklevel=2)
+def _skip_native(reason: str, backend: str) -> None:
+    """Warn about a skipped/failed native build, or fail for the KUPL baseline."""
+    detail = f"PyQCD einsum: {reason}. The native {backend} library is not installed."
+    if backend != "cuda":
+        detail += (" pyqcd.einsum then runs the pure-Python planner "
+                   "(pyqcd/einsum/_plan_py.py).")
+        if os.environ.get("PYQCD_EINSUM_REQUIRE_NATIVE") == "1":
+            raise RuntimeError(
+                f"{detail} PYQCD_EINSUM_REQUIRE_NATIVE=1 is set, so this is a hard "
+                "error.")
+    # CUDA 是机会性构建：失败只警告，KUPL 仍是可用的原生后端。
+    if backend in _WARNED_BACKENDS:
+        return
+    _WARNED_BACKENDS.add(backend)
+    suffix = ("pyqcd.einsum keeps using the kupl backend."
+              if backend == "cuda"
+              else "Set PYQCD_EINSUM_REQUIRE_NATIVE=1 to make this a hard error.")
+    warnings.warn(f"{detail} {suffix}", RuntimeWarning, stacklevel=2)
 
 
-def _stage_native_library_or_fallback() -> None:
-    """Stage the native library, degrading to the pure-Python plan on failure."""
-    try:
-        _stage_native_library()
-    except (RuntimeError, OSError) as error:
-        _skip_native(str(error))
+def _stage_built_libraries() -> None:
+    """Stage every backend whose library exists; never abort the install."""
+    for backend in BACKENDS:
+        try:
+            _stage_native_library(backend)
+        except (RuntimeError, OSError) as error:
+            _skip_native(str(error), backend)
 
 
 class NativeBuildExt(build_ext):
     """Own native compilation before setuptools builds Python extensions.
 
     A missing toolchain (or a failing compiler) degrades the install to the
-    pure-Python planner instead of aborting it; the sdist is installable on
+    remaining backends instead of aborting it; the sdist stays installable on
     machines without a C++ compiler or CUDA.
     """
 
+    def _build_backend(self, backend: str) -> bool:
+        problem = _toolchain_problem(backend)
+        if problem is not None:
+            _skip_native(problem, backend)
+            return False
+        environment = os.environ.copy()
+        environment["PYQCD_EINSUM_BACKEND"] = backend
+        try:
+            subprocess.check_call(
+                ["bash", str(BUILD_SCRIPTS[backend])], cwd=HOME, env=environment)
+        except subprocess.CalledProcessError as error:
+            _skip_native(
+                f"native build failed ({BUILD_SCRIPTS[backend].name} exited "
+                f"with {error.returncode})", backend)
+            return False
+        return True
+
     def run(self):
-        native_ready = True
-        if os.environ.get("PYQCD_SKIP_NATIVE_BUILD") != "1":
-            problem = _toolchain_problem()
-            if problem is not None:
-                _skip_native(problem)
-                native_ready = False
-            else:
-                environment = os.environ.copy()
-                environment["PYQCD_EINSUM_BACKEND"] = BUILD_BACKEND
-                try:
-                    subprocess.check_call(
-                        ["bash", str(BUILD_SCRIPT)], cwd=HOME, env=environment)
-                except subprocess.CalledProcessError as error:
-                    _skip_native(
-                        f"native build failed ({BUILD_SCRIPT.name} exited "
-                        f"with {error.returncode})")
-                    native_ready = False
-        elif not _native_library_path().is_file():
-            native_ready = False
-        if not native_ready:
-            # 没有原生库时，链接它的 Cython 扩展必然失败；纯 Python 规划等价。
-            self.extensions = []
+        built: dict[str, bool] = {}
+        skip = os.environ.get("PYQCD_SKIP_NATIVE_BUILD") == "1"
+        for backend in BACKENDS:
+            built[backend] = (
+                _native_library_path(backend).is_file() if skip
+                else self._build_backend(backend)
+            )
+        if not built.get("cuda", False):
+            # CUDA 扩展链接 libpyqcdeinsum_cuda.so；没有它时编译必然失败。
+            self.extensions = [
+                extension for extension in self.extensions
+                if not extension.name.startswith("pyqcd.einsum.cuda")
+            ]
         super().run()
-        _stage_native_library_or_fallback()
+        _stage_built_libraries()
 
 
 class NativeBuildPy(build_py):
@@ -154,26 +187,27 @@ class NativeBuildPy(build_py):
 
     def run(self):
         self.run_command("build_ext")
-        _stage_native_library_or_fallback()
+        _stage_built_libraries()
         super().run()
 
 
 def _extensions():
-    if BUILD_BACKEND != "cuda":
+    if "cuda" not in BACKENDS:
         return []
     if os.environ.get("PYQCD_EINSUM_SKIP_CYTHON") == "1":
         return []
     if (os.environ.get("PYQCD_SKIP_NATIVE_BUILD") == "1"
-            and not _native_library_path().is_file()):
+            and not _native_library_path("cuda").is_file()):
         # 扩展要链接原生 CUDA 库；跳过原生构建且库里不存在时，链接注定失败。
-        _skip_native(f"native library is missing ({_native_library_path()})")
+        _skip_native(
+            f"native library is missing ({_native_library_path('cuda')})", "cuda")
         return []
 
     try:
         from Cython.Build import cythonize
     except ImportError:
         _skip_native("Cython is unavailable, so the CUDA Cython extension "
-                     "cannot be built")
+                     "cannot be built", "cuda")
         return []
 
     cuda_dir = HOME / "pyqcd" / "einsum" / "cuda"
@@ -222,13 +256,10 @@ setup(
     # name/version/description/requires-python and the rest of the metadata are
     # declared once in pyproject.toml ([project]); declaring them here too makes
     # setuptools refuse to build.
-    packages=[
-        "pyqcd",
-        "pyqcd.einsum",
-        "pyqcd.einsum.backends",
-        "pyqcd.einsum.cuda",
-        "pyqcd.einsum.kupl",
-    ],
+    packages=find_packages(
+        include=["pyqcd", "pyqcd.*"],
+        exclude=["pyqcd.testing", "pyqcd.testing.*"],
+    ),
     package_data={
         "pyqcd.einsum.cuda": ["*.pyi", "*.pxd", "libpyqcdeinsum_cuda.so"],
         "pyqcd.einsum.kupl": ["libpyqcdeinsum_kupl.so"],

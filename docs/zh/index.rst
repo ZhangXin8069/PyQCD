@@ -27,6 +27,15 @@ PyQCD 中文文档
 * :doc:`performance` —— 相对 ``opt_einsum`` 的实测加速，以及不适用的情况。
 * :doc:`install` —— 安装、可选 extras、原生后端与可调开关。
 
+代码托管
+--------
+
+三个平台同步同一份历史：
+
+* 国内开发（主开发，GitLab）— https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD
+* 国内发布（国内镜像，Gitee）— https://gitee.com/zhangxin8069/PyQCD
+* 国外发布（海外镜像，GitHub）— https://github.com/zhangxin8069/PyQCD
+
 其他语言
 --------
 

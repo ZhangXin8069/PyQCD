@@ -32,6 +32,15 @@ Where to start
   do not apply.
 * :doc:`install` — installation, optional extras, native backends and knobs.
 
+Repositories
+------------
+
+All three mirrors carry the same history:
+
+* 国内开发 (primary, GitLab) — https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD
+* 国内发布 (China mirror, Gitee) — https://gitee.com/zhangxin8069/PyQCD
+* 国外发布 (global mirror, GitHub) — https://github.com/zhangxin8069/PyQCD
+
 Other languages
 ---------------
 

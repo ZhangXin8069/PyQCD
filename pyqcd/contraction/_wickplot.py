@@ -6,14 +6,15 @@
 """
 from typing import Literal
 
-import matplotlib
-matplotlib.use('AGG')
 import numpy as np
-import matplotlib.patches as patches
-import matplotlib.pyplot as plt
 
 
 def plot_figure_wick(result_dict, diagram_index=0, Cpt:Literal['2pt', '3pt', '4pt']='2pt', plot_text:Literal[True, False] = True):
+
+    import matplotlib
+    matplotlib.use('AGG')
+    import matplotlib.patches as patches
+    import matplotlib.pyplot as plt
 
     """
     **Wick contraction diagram** — fully general for 2pt/3pt/4pt+.
