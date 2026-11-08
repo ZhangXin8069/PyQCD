@@ -161,6 +161,7 @@ cat > "$VERSION_SCRIPT" <<'MAP'
     applyEndQcd;
     qcd_cuda_pattern_3pt;
     qcd_cuda_pattern_3pt_free;
+    qcd_cuda_nucleon_2pt;
   local:
     *;
 };
