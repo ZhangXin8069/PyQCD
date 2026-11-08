@@ -108,7 +108,7 @@ python -m pyqcd --gpu-probe
 
 ## Reproducible on the published package
 
-`pyqcd==0.1.27` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`pyqcd==0.1.28` (`build_info(): backend=kupl, array_backend=numpy`) versus
 `opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
