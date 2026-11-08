@@ -11,6 +11,9 @@ import importlib
 import os
 from typing import Any, Iterable, Sequence
 
+from ._sharing import (einsum_cache_wrap, tensordot_cache_wrap,
+                       transpose_cache_wrap)
+
 _FUNC_CACHE: dict[tuple[str, str], Any] = {}
 
 _FALLBACK_MODULES = {
@@ -120,6 +123,13 @@ def step_axes(step, idx_removed: Iterable[str]):
     idx_rm = idx_removed
     tensor_result = "".join(s for s in input_left + input_right if s not in idx_rm)
     return _blas_axes(input_left, input_right, idx_rm), tensor_result, results_index
+
+
+# 与 opt_einsum 一致：把三个后端原语包上共享缓存，使 `shared_intermediates()`
+# 真正复用中间结果（未共享时包装器直接透传，无额外开销）。
+_transpose = transpose_cache_wrap(_transpose)
+_tensordot = tensordot_cache_wrap(_tensordot)
+_einsum = einsum_cache_wrap(_einsum)
 
 
 def execute_plan(

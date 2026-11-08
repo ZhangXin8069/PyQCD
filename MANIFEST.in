@@ -1,0 +1,28 @@
+# Files shipped inside the sdist. Metadata lives in pyproject.toml; the build
+# mechanics (native staging, optional Cython extension) live in setup.py.
+
+include LICENSE
+include README.md
+include pyproject.toml
+include setup.py
+include MANIFEST.in
+
+# Scripts setup.py invokes to compile the native C/CUDA backends.
+include build-kupl.sh
+include build-nv.sh
+include env.sh
+include install.sh
+
+# Native backend sources, headers and their Makefile drivers. The build dirs
+# under cpp/ hold compiled artefacts and are pruned below.
+recursive-include cpp *.h *.hpp *.c *.cc *.cpp *.cu *.cuh *.sh *.md
+prune cpp/kupl/einsum/build
+prune cpp/cuda/einsum/build
+
+# Pure-Python package plus the Cython sources of the optional CUDA extension.
+recursive-include pyqcd/einsum *.py *.pyx *.pxd *.pyi
+
+# Build artefacts must never reach the sdist.
+prune build
+recursive-exclude pyqcd/einsum __pycache__
+global-exclude *.so *.so.* *.o *.obj *.a *.lib *.log *.pyc

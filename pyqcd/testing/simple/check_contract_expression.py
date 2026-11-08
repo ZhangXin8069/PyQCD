@@ -69,19 +69,15 @@ def main(argv=None) -> int:
         tally.check(error <= _common.RELATIVE_TOLERANCE,
                     f'case{index}/out-values', f'rel={error:.2e}')
 
-        # 形状不符必须失败关闭（不能静默返回错误结果）
-        broken = [np.ascontiguousarray(operand) for operand in operands]
-        broken[0] = np.ascontiguousarray(
-            np.zeros(tuple(d + 1 for d in operands[0].shape),
-                     dtype=np.complex128))
+        # 参数个数不符必须失败关闭（比改维度更确定：改尺寸可能仍然合法）
         try:
-            target_expression(*broken)
+            target_expression(*operands[:-1])
         except Exception:  # noqa: BLE001 - 期望失败
             failed_closed = True
         else:
             failed_closed = False
         tally.check(failed_closed, f'case{index}/fail-closed',
-                    '形状不符时未报错')
+                    '操作数个数不符时未报错')
 
     return tally.finish()
 

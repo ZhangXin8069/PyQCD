@@ -51,6 +51,7 @@
 !*.sh
 !*.tex
 !*.tex"
+!*.toml
 !*.txt
 !*.txt"
 !*.yaml
@@ -61,6 +62,9 @@
 .*
 pyqcd/*.cpp
 *.so
+# packaging artefacts of `python -m build` / `pip install .`
+/dist/
+*.egg-info/
 
 # ==================================================
 # 5. Keep common files and directories
@@ -92,6 +96,7 @@ pyqcd/*.cpp
 !Dockerfile
 !GNUmakefile
 !LICENSE
+!/MANIFEST.in
 !LICENSE.\*
 !Makefile
 !NOTICE

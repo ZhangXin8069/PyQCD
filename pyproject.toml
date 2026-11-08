@@ -1,0 +1,49 @@
+# PEP 517/518 build configuration and PEP 621 metadata for pyqcd-einsum.
+# Build-time mechanics that PEP 621 cannot express (native library staging,
+# optional Cython CUDA extension, package_data) stay in setup.py.
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyqcd-einsum"
+version = "0.1.0"
+description = "Native contraction engine for PyQCD with an opt_einsum-compatible API."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ZhangXin8069" }]
+keywords = ["lattice-qcd", "einsum", "tensor-contraction", "opt-einsum", "cuda", "mpi"]
+dependencies = ["numpy>=1.23"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+# Optional acceleration paths; both are imported lazily and are not required
+# for the pure-Python planner.
+cuda = ["cupy"]
+mpi = ["mpi4py"]
+
+[project.urls]
+Homepage = "https://gitlab.itp.ac.cn/zhangxin8069/PyQCD"
+Repository = "https://gitlab.itp.ac.cn/zhangxin8069/PyQCD"
+Issues = "https://gitlab.itp.ac.cn/zhangxin8069/PyQCD/-/issues"
+Documentation = "https://pyqcd.readthedocs.io/"
+
+[tool.setuptools]
+# Wheels carry exactly the files listed in setup.py package_data; LICENSE is
+# still picked up automatically by setuptools.
+include-package-data = false

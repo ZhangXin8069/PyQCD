@@ -54,12 +54,14 @@ def main(argv=None) -> int:
 
     # 2) register_path_fn / get_path_fn：注册一个自定义规划器并按其名字调用
     def custom_path(inputs, output, size_dict, memory_limit=None):
-        # 从左到右线性收缩，行为可预测
+        # 从尾部两两收缩：收缩 (n-2, n-1) 后新张量占据 n-2 位置，
+        # 因此下一轮仍是 (len-2, len-1)，直到只剩一个操作数。
         remaining = list(range(len(inputs)))
         steps = []
         while len(remaining) > 1:
-            steps.append((remaining[0], remaining[1]))
-            remaining = remaining[2:] + [max(remaining) + 1]
+            left, right = len(remaining) - 2, len(remaining) - 1
+            steps.append((left, right))
+            remaining = remaining[:-2] + [left]
         return steps
 
     for module, label in ((target, 'pyqcd'), (oracle, 'opt')):
