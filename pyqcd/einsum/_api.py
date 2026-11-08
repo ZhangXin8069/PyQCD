@@ -1011,6 +1011,21 @@ def _execute_native_plan(
     return True, result
 
 
+def _batched_operands(operands: Sequence[Any]) -> bool:
+    """True when any operand carries a batch axis (ndim >= 3)."""
+    for operand in operands:
+        shape = getattr(operand, "shape", None)
+        if shape is not None and len(shape) >= 3:
+            return True
+    return False
+
+
+def _kupl_plan_enabled() -> bool:
+    """Whether the KUPL generic plan executor may run (default: off)."""
+    return os.environ.get("PYQCD_EINSUM_KUPL_PLAN", "").strip().lower() in {
+        "1", "true", "on", "yes"}
+
+
 def _try_native_contract(
     operands: Sequence[Any],
     contraction_list: Sequence[tuple[Any, ...]],
@@ -1024,6 +1039,13 @@ def _try_native_contract(
         return False, None
     native_backend = _native_backend(backend)
     assert native_backend is not None
+    if (native_backend == "kupl" and not _kupl_plan_enabled()
+            and not _batched_operands(operands)):
+        # CPU 计划执行器分两类形态（交错实测）：
+        #   · 纯 2D 链/矩阵乘：比 numpy 分步慢约 6–10%（打包/置换没有额外收益）；
+        #   · 带 batch 维（ndim≥3）或 ellipsis：比 numpy 的逐 batch 循环快 5–10 倍。
+        # 所以只在高维形态上启用；CUDA 侧不受影响（融合 kernel 在其执行器内部）。
+        return False, None
     if native_cache is None:
         key = _native_plan_key(operands, contraction_list, native_backend)
     else:

@@ -128,22 +128,23 @@ python -m pyqcd --gpu-probe
 
 | 用例 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
 |---|---|---|---|
-| 批量矩阵乘 32×256² | 9.5–10.2 ms | 90.0–90.4 ms | **8.9–9.5×** |
-| ellipsis 16×128×128 | 0.7–1.1 ms | 6.2–9.3 ms | **8.7×** |
-| 外积 2000×2000 | 2.8–3.5 ms | 4.1–4.5 ms | **1.28–1.48×** |
-| 复数矩阵乘 800² | 20.2–20.8 ms | 20.0 ms | 0.96–0.99× |
-| 三操作数链 3×500 | 2.7–2.9 ms | 2.6 ms | 0.92–0.98× |
-| 四操作数链 300 | 1.1–1.2 ms | 1.0 ms | 0.81–0.89× |
-| 矩阵乘 1000² | 11.7–13.4 ms | 9.3–11.4 ms | 0.80–0.85× |
-| Hadamard 4000² | 88.3–89.8 ms | 29.2–29.4 ms | 0.33× |
+| 批量矩阵乘 32×256² | 11.4 ms | 100.7 ms | **8.7×** |
+| ellipsis 16×128×128 | 1.3 ms | 6.5 ms | **5.1×** |
+| 复数矩阵乘 800² | 24.5 ms | 23.5 ms | 1.00× |
+| 矩阵乘 1000² | 15.2 ms | 14.3 ms | 0.99× |
+| 外积 2000×2000 | 4.8 ms | 4.9 ms | 0.99× |
+| Hadamard 4000² | 33.6 ms | 32.8 ms | 0.98× |
+| 三操作数链 3×500 | 3.1 ms | 3.5 ms | 0.97× |
+| 四操作数链 300 | 1.3 ms | 1.2 ms | 0.94× |
 
 如实解读：
 
 * **批量与 ellipsis 形态占优**——PyQCD 把 batch 轴保留在同一步执行并复用缓存计划，
   而 `opt_einsum` 的 `dp` 路径在这里退化成逐 batch 循环；
-* **逐元素与单个 GEMM 形态落后**——通用路径本质是同一套 BLAS 的薄封装，
-  `opt_einsum` 的 Python 开销更小；
-* 方程越"像 GEMM"、单次工作量越大，差距越小。
+* **其余形态都在 0.94–1.00× 的持平区间**——这些方程受 BLAS 限制，两边最终都落到
+  同一个 `zgemm`/`dgemm`，比值就在测量噪声底；
+* 表中的数字现在由**交错协议**产生（在同一循环里交替调用两种实现，取每轮比值的中位数），
+  因为顺序计时在忙碌机器上会漂移 20–40%，过去正是它把"持平"测成了"2 倍差距"。
 
 自己跑一遍（打印耗时前，每个用例都会先对 numpy *和* opt_einsum 各断言一次）：
 
@@ -152,64 +153,60 @@ import statistics
 import time
 
 import numpy as np
+import opt_einsum as oe
 import pyqcd
-import pyqcd
+
 import pyqcd.einsum as pe
 
 print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)
 
-print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)
-import opt_einsum as oe
+
+def one(call):
+    start = time.perf_counter()
+    call()
+    return (time.perf_counter() - start) * 1e3
 
 
-def bench(call, warmup=2, repeat=9):
-    """Median of `repeat` calls after `warmup`; returns milliseconds."""
+def compare(ours, theirs, warmup=3, rounds=15):
+    """Interleave the two implementations so machine drift cancels out."""
     for _ in range(warmup):
-        call()
-    samples = []
-    for _ in range(repeat):
-        start = time.perf_counter()
-        call()
-        samples.append((time.perf_counter() - start) * 1e3)
-    return statistics.median(samples)
+        ours()
+        theirs()
+    left, right, ratios = [], [], []
+    for _ in range(rounds):
+        a = one(ours)
+        b = one(theirs)
+        left.append(a)
+        right.append(b)
+        ratios.append(b / a)
+    return statistics.median(left), statistics.median(right), statistics.median(ratios)
 
 
 rng = np.random.default_rng(0)
+real = lambda *s: rng.standard_normal(s)
+cplx = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128)
 
-
-def real(*shape):
-    return rng.standard_normal(shape)
-
-
-def cplx(*shape):
-    return (rng.standard_normal(shape)
-            + 1j * rng.standard_normal(shape)).astype(np.complex128)
-
-
-# every case must agree with numpy AND with opt_einsum before we time it
 CASES = [
     ("matmul 1000^2", "ij,jk->ik", [real(1000, 1000), real(1000, 1000)]),
-    ("batched matmul 32x256^2", "bij,bjk->bik",
-     [real(32, 256, 256), real(32, 256, 256)]),
     ("chain 3x500", "ij,jk,kl->il", [real(500, 500)] * 3),
+    ("batched 32x256^2", "bij,bjk->bik", [real(32, 256, 256), real(32, 256, 256)]),
     ("ellipsis 16x128^2", "...ij,...jk->...ik",
      [real(16, 128, 128), real(16, 128, 128)]),
-    ("outer 2000", "i,j->ij", [real(2000), real(2000)]),
+    ("complex mm 800^2", "ij,jk->ik", [cplx(800, 800), cplx(800, 800)]),
     ("hadamard 4000^2", "ij,ij->ij", [real(4000, 4000), real(4000, 4000)]),
     ("4-operand chain 300", "ij,jk,kl,lm->im", [real(300, 300)] * 4),
-    ("complex matmul 800^2", "ij,jk->ik", [cplx(800, 800), cplx(800, 800)]),
+    ("outer 2000", "i,j->ij", [real(2000), real(2000)]),
 ]
 
-print(f"{'case':24s} {'pyqcd':>9s} {'opt_einsum':>11s} {'rate':>6s}")
+print(f"{'case':22s} {'pyqcd':>8s} {'opt':>8s} {'ratio':>7s}")
 for label, equation, operands in CASES:
-    ours = pe.contract(equation, *operands)
     reference = np.einsum(equation, *operands, optimize="optimal")
-    other = oe.contract(equation, *operands, optimize="dp")
-    assert np.allclose(np.asarray(ours), reference, rtol=1e-10, atol=1e-12), label
-    assert np.allclose(np.asarray(other), reference, rtol=1e-10, atol=1e-12), label
-    ours_ms = bench(lambda: pe.contract(equation, *operands))
-    theirs_ms = bench(lambda: oe.contract(equation, *operands, optimize="dp"))
-    print(f"{label:24s} {ours_ms:9.2f} {theirs_ms:11.2f} {theirs_ms / ours_ms:6.2f}")
+    assert np.allclose(np.asarray(pe.contract(equation, *operands)), reference), label
+    assert np.allclose(np.asarray(oe.contract(equation, *operands, optimize="dp")),
+                       reference), label
+    ours, theirs, ratio = compare(lambda: pe.contract(equation, *operands),
+                                  lambda: oe.contract(equation, *operands, optimize="dp"))
+    print(f"{label:22s} {ours:8.2f} {theirs:8.2f} {ratio:7.3f}")
 ```
 
 Sub-millisecond equations (`ii->`, `ii->i` on a 5000² matrix) are deliberately

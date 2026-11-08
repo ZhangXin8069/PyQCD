@@ -252,3 +252,20 @@ def test_elementwise_equations_bypass_the_planner() -> None:
                            np.einsum(equation, *operands, optimize="optimal")), equation
     assert np.allclose(np.asarray(pe.contract("i,j->ij", a[0], b[0])),
                        np.outer(a[0], b[0]))
+
+
+def test_kupl_plan_gate_by_batch_structure() -> None:
+    """KUPL 计划执行器只在带 batch 维时启用（2D 链上它反而慢 6–10%）。"""
+    import pyqcd.einsum._api as api
+
+    assert api._batched_operands([np.zeros((2, 3, 4))]) is True
+    assert api._batched_operands([np.zeros((4, 4)), np.zeros((4, 4))]) is False
+    assert api._batched_operands([np.zeros((4, 4)), np.zeros((3, 4, 4))]) is True
+
+    rng = np.random.default_rng(12)
+    batched = [rng.standard_normal((4, 16, 16)), rng.standard_normal((4, 16, 16))]
+    assert np.allclose(np.asarray(pe.contract("bij,bjk->bik", *batched)),
+                       np.einsum("bij,bjk->bik", *batched, optimize="optimal"))
+    chain = [rng.standard_normal((32, 32)) for _ in range(3)]
+    assert np.allclose(np.asarray(pe.contract("ij,jk,kl->il", *chain)),
+                       np.einsum("ij,jk,kl->il", *chain, optimize="optimal"))
