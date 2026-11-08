@@ -525,23 +525,43 @@ _SPECIALIZED_KERNEL_WARNED = False
 
 def _run_specialized_kernel(
     subscripts: Any, operands: Sequence[Any]
-) -> tuple[Any, str] | tuple[None, str]:
-    """依次尝试各专用 kernel；返回 ``(结果或 None, 命中的 kernel 名或 '')``。"""
+) -> tuple[Any, str, dict[str, str]]:
+    """依次尝试各专用 kernel。
+
+    Returns ``(result or None, hit label or "", {label: failure reason})`` — the
+    per-label reasons let the caller report the *relevant* cause instead of
+    whichever attempt happened to run last.
+    """
     from . import _kernel_cuda, _kernel_kupl
 
-    for label, attempt in (
-        ("kupl_nucleon_2pt", lambda: _kernel_kupl.try_nucleon_2pt(subscripts, operands)),
-        ("kupl_3pt", lambda: _kernel_kupl.try_three_pt(subscripts, operands)),
-        ("cuda_nucleon_2pt", lambda: _kernel_cuda.try_nucleon_2pt(subscripts, operands)),
-        ("cuda_3pt", lambda: _kernel_cuda.try_three_pt(subscripts, operands)),
+    reasons: dict[str, str] = {}
+    for label, module, attempt in (
+        ("kupl_nucleon_2pt", _kernel_kupl,
+         lambda: _kernel_kupl.try_nucleon_2pt(subscripts, operands)),
+        ("kupl_3pt", _kernel_kupl, lambda: _kernel_kupl.try_three_pt(subscripts, operands)),
+        ("cuda_nucleon_2pt", _kernel_cuda,
+         lambda: _kernel_cuda.try_nucleon_2pt(subscripts, operands)),
+        ("cuda_3pt", _kernel_cuda, lambda: _kernel_cuda.try_three_pt(subscripts, operands)),
     ):
         result = attempt()
         if result is not None:
-            return result, label
-    return None, ""
+            return result, label, reasons
+        # 失败后才读原因：早读会拿到上一次调用残留的值
+        reasons[label] = str(module.LAST_FAILURE.get("reason", ""))
+    return None, "", reasons
 
 
 _KERNEL_SKIP_WARNED: set[tuple[str, str]] = set()
+
+
+def _kernel_labels_for(entry: dict[str, str]) -> tuple[str, ...]:
+    """Which kernel labels can serve this registered shape."""
+    name = str(entry.get("name", ""))
+    if "nucleon-2pt" in name:
+        return ("kupl_nucleon_2pt", "cuda_nucleon_2pt")
+    if "3pt-main" in name:
+        return ("kupl_3pt", "cuda_3pt")
+    return ()
 
 
 def _warn_kernel_skipped_once(entry: dict[str, str], reasons: list[str]) -> None:
@@ -623,8 +643,9 @@ def contract(
                 if out is None:
                     # 专用 kernel 失败必须回退通用路径（契约：原生失败只 warning
                     # 一次，不把异常抛给调用方）。
+                    kernel_reasons: dict[str, str] = {}
                     try:
-                        kernel_result, announce_kernel = _run_specialized_kernel(
+                        kernel_result, announce_kernel, kernel_reasons = _run_specialized_kernel(
                             subscripts, operands)
                     except Exception as exc:  # noqa: BLE001 - 见上
                         kernel_result = None
@@ -633,12 +654,9 @@ def contract(
                     if kernel_result is not None:
                         return kernel_result
                     if str(specialized.get("kind", "")).startswith("kernel"):
-                        from . import _kernel_cuda, _kernel_kupl
-
-                        reasons = [
-                            str(module.LAST_FAILURE.get("reason", ""))
-                            for module in (_kernel_kupl, _kernel_cuda)
-                        ]
+                        relevant = _kernel_labels_for(specialized)
+                        reasons = [kernel_reasons.get(label, "")
+                                   for label in relevant] or list(kernel_reasons.values())
                         _warn_kernel_skipped_once(specialized, reasons)
                 else:
                     _specialize.announce(specialized)

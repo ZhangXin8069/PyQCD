@@ -16,7 +16,7 @@ optional, and the package installs either way.
 import pyqcd
 import pyqcd.einsum as pe
 
-print(pyqcd.__version__)    # e.g. 0.1.25
+print(pyqcd.__version__)    # e.g. 0.1.26
 print(pe.build_info())      # backend / mpi / mpi_label / native_library
 
 info = pe.build_info()

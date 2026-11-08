@@ -128,12 +128,17 @@ def probe() -> dict[str, Any]:
     try:
         from . import _specialize
 
-        _specialize._announced.clear()
-        with contextlib.redirect_stdout(buffer):
-            from . import contract
+        saved_announced = set(getattr(_specialize, "_announced", ()))
+        _specialize._announced.clear()          # 让本次探测一定能看到提示
+        try:
+            with contextlib.redirect_stdout(buffer):
+                from . import contract
 
-            contract(NUCLEON_2PT, *operands)
-        cupy.cuda.Device(0).synchronize()
+                contract(NUCLEON_2PT, *operands)
+            cupy.cuda.Device(0).synchronize()
+        finally:
+            _specialize._announced.clear()
+            _specialize._announced.update(saved_announced)   # 恢复调用方状态
     except Exception as error:  # noqa: BLE001
         report["kernel_hint"] = f"call failed: {type(error).__name__}: {error}"
     lines = [line for line in buffer.getvalue().splitlines() if line.strip()]

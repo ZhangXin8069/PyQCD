@@ -16,7 +16,7 @@ author = "PyQCD contributors"
 copyright = "PyQCD contributors"
 
 version = "0.1"
-release = "0.1.25"
+release = "0.1.26"
 
 extensions = ["myst_parser"]
 
