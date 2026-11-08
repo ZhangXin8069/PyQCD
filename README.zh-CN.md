@@ -1,6 +1,6 @@
 # PyQCD（中文）
 
-[English](README.md) | **中文**
+[English](https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD/-/blob/main/README.md) | **中文**
 
 PyQCD 是一个用 Python 编写的格点 QCD 工具库，可选原生加速。它提供传播子与算符收缩、
 梯度流、重整化、胶子 TMD-PDF 提取所需的基础组件，并自带一个
@@ -16,6 +16,13 @@ pip install pyqcd
 纯 Python 规划 —— 结果相同，只是更慢。
 
 设置 `PYQCD_EINSUM_REQUIRE_NATIVE=1` 可把"缺工具链"变成硬错误。
+
+确认实际装上了什么（不需要写 import）：
+
+```bash
+python -m pyqcd            # version, native backend, optional deps, subpackages
+python -m pyqcd --json     # machine-readable
+```
 
 ## 文档
 
@@ -124,7 +131,7 @@ https://py-qcd.readthedocs.io/zh-cn/latest/performance.html
 
 ## 测试
 
-在源码仓库中运行：
+这些套件位于 `pyqcd/testing/`，**不在 PyPI 发行包里**；需在源码仓库中运行：
 
 ```bash
 python -m pyqcd.testing                       # integration suite

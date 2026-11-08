@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.1.4`。需要固定版本时：`pip install "pyqcd==0.1.4"`。
+当前发行版：`0.1.5`。需要固定版本时：`pip install "pyqcd==0.1.5"`。
 
 ## 依赖
 
@@ -75,6 +75,14 @@ CUDA 只在编译成功时才有）。
 执行（见最后两节）。
 
 ## 验证安装
+
+最快的检查是模块入口，它不需要写 import，直接报告实际装上了什么：
+
+```bash
+python -m pyqcd            # version, native backend, optional deps, subpackages
+python -m pyqcd --version  # version only
+python -m pyqcd --json     # machine-readable
+```
 
 ```python
 import pyqcd

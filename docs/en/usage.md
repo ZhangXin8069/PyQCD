@@ -80,12 +80,22 @@ print(S.hyp_smear(U).shape)
 ## Gradient flow and gluon operators
 
 ```python
-import pyqcd.renorm as R
+import numpy as np
+import pyqcd.gauge as G
 import pyqcd.operator as O
+import pyqcd.renorm as R
 
-print(R.flow_time_gev_m2(1.0, a_fm=0.1))          # flow time in GeV^-2
-print(O.flowed_gluon_ope(U, z_count=1, z_dir=2))
-print(O.compute_dual_field_strength(U).shape)
+rng = np.random.default_rng(0)
+U = np.zeros((2, 2, 2, 2, 4, 3, 3), dtype=complex)      # random SU(3) links
+for mu in range(4):
+    q, _ = np.linalg.qr(rng.standard_normal((2, 2, 2, 3, 3))
+                        + 1j * rng.standard_normal((2, 2, 2, 3, 3)))
+    U[..., mu, :, :] = q
+
+print(R.flow_time_gev_m2(1.0, a_fm=0.1))               # flow time in GeV^-2
+F = {(mu, nu): G.clover_field_strength(U, mu, nu)
+     for mu in range(4) for nu in range(4) if mu != nu}
+print(O.compute_dual_field_strength(F, 0, 1).shape)    # (2, 2, 2, 2, 3, 3)
 ```
 
 Flow-based renormalised TMD:
@@ -100,7 +110,8 @@ result = R.gradient_flow_renormalized_tmd(
 ```python
 import pyqcd.contraction as C
 
-# registries hold the perambulators, vertices and gamma matrices
+# pseudo-code: the registries must be filled with real perambulators,
+# vertices and gamma matrices before this block runs.
 result = C.dynamic_contraction(
     operator_groups, peram_registry=..., v_registry=..., gamma_registry=...,
     Cpt="2pt", verbose=True)
@@ -113,11 +124,12 @@ group equivalent operator structures before contracting.
 ## Analysis helpers
 
 ```python
+import numpy as np
 import pyqcd.analysis as A
 
-# jackknife / bootstrap resampling over per-configuration data
-samples = A.Bootstrap(data, n_samples=200)
-fit = A.FitParams(...)      # consumed by the ratio / energy / FH fitters
+data = np.random.default_rng(0).standard_normal((20, 5))   # 20 configs x 5 slices
+samples = A.Bootstrap(data, Nconf_axes=0)                  # dict of resampled arrays
+print(sorted(samples))
 ```
 
 ## Parallel planning

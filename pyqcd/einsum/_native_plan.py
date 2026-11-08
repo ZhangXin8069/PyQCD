@@ -298,7 +298,10 @@ def encode_execution_plan(
     operand_shapes = tuple(_operand_shape(operand) for operand in operand_list)
     operand_dtypes = tuple(dtype_id(_operand_dtype(operand)) for operand in operand_list)
     if len(set(operand_dtypes)) != 1:
-        raise ValueError(f"mixed precision is not supported: {operand_dtypes}")
+        raise ValueError(
+            f"mixed precision is not supported: {operand_dtypes}; cast all "
+            "operands to one dtype (for example numpy.complex128) to use the "
+            "native path")
     native_dtype_id = operand_dtypes[0]
 
     initial_entries, live, steps, sizes = _simulate_plan(contraction_list, operand_list)

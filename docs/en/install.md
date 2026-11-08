@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.1.4`. To pin it: `pip install "pyqcd==0.1.4"`.
+Current release: `0.1.5`. To pin it: `pip install "pyqcd==0.1.5"`.
 
 ## Requirements
 
@@ -85,6 +85,15 @@ In an installed environment `python -m pyqcd.testing` raises
 a source checkout instead (see the last two sections).
 
 ## Verify the installation
+
+The fastest check is the module entry point — it needs no imports and reports
+what is actually installed:
+
+```bash
+python -m pyqcd            # version, native backend, optional deps, subpackages
+python -m pyqcd --version  # version only
+python -m pyqcd --json     # machine-readable
+```
 
 ```python
 import pyqcd

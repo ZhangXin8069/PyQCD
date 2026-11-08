@@ -1,6 +1,6 @@
 # PyQCD
 
-**English** | [中文](README.zh-CN.md)
+**English** | [中文](https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD/-/blob/main/README.zh-CN.md)
 
 PyQCD is a lattice-QCD toolkit in Python with optional native acceleration.
 It provides building blocks for propagator and operator contractions, gradient
@@ -18,6 +18,13 @@ the package installs anyway and the contraction engine runs its pure-Python
 planner — same results, only slower.
 
 Set `PYQCD_EINSUM_REQUIRE_NATIVE=1` to make a missing toolchain a hard error.
+
+Check what you actually got (no imports needed):
+
+```bash
+python -m pyqcd            # version, native backend, optional deps, subpackages
+python -m pyqcd --json     # machine-readable
+```
 
 ## Documentation
 
@@ -134,7 +141,8 @@ https://py-qcd.readthedocs.io/en/latest/performance.html
 
 ## Tests
 
-Run from a source checkout:
+These suites live in `pyqcd/testing/`, which is **not** part of the PyPI
+distribution; run them from a source checkout:
 
 ```bash
 python -m pyqcd.testing                       # integration suite

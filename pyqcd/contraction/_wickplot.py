@@ -10,16 +10,33 @@ import numpy as np
 
 
 def plot_figure_wick(result_dict, diagram_index=0, Cpt:Literal['2pt', '3pt', '4pt']='2pt', plot_text:Literal[True, False] = True):
+    """**Wick contraction diagram** — fully general for 2pt/3pt/4pt+.
 
-    import matplotlib
+    All visual parameters scale automatically with diagram complexity.
+    Requires matplotlib: ``pip install "pyqcd[plot]"``.
+    """
+    required = (
+        'result_name', 'result_sign', 'result_indx', 'quark_pos', 'peram',
+        'gamma_pos', 'sep_pos', 'source_operators', 'sink_operators',
+        'curr_operators',
+    )
+    missing = [key for key in required if not isinstance(result_dict, dict)
+               or key not in result_dict]
+    if missing:
+        raise KeyError(
+            f'result_dict is missing {missing}; pass the dict returned by '
+            'pyqcd.contraction.wick_contraction(...)'
+        )
+    try:
+        import matplotlib
+    except ImportError as error:  # 给出可行动的提示，而不是裸 ModuleNotFoundError
+        raise ImportError(
+            'plot_figure_wick needs matplotlib; install it with '
+            '`pip install "pyqcd[plot]"`.'
+        ) from error
     matplotlib.use('AGG')
     import matplotlib.patches as patches
     import matplotlib.pyplot as plt
-
-    """
-    **Wick contraction diagram** — fully general for 2pt/3pt/4pt+.
-    All visual parameters scale automatically with diagram complexity.
-    """
 
     # ── Pre-compute structure to determine scale ───────────────────
     quark_pos  = result_dict['quark_pos']

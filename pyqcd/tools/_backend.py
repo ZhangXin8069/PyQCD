@@ -61,7 +61,13 @@ def set_backend(name: str, device=None):
             raise ImportError(
                 "CuPy is not installed. Install with: pip install cupy")
     elif name_lower in ('torch', 'gpu', 'cuda'):
-        from . import _torch_backend as tb
+        try:
+            from . import _torch_backend as tb
+        except ImportError as error:
+            raise ImportError(
+                'The torch backend needs PyTorch; install it with '
+                '`pip install "pyqcd[torch]"` or `pip install torch`.'
+            ) from error
         if name_lower != 'torch' and device is None:
             if not tb.torch.cuda.is_available():
                 raise ImportError(

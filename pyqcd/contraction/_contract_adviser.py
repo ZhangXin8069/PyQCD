@@ -176,7 +176,10 @@ def _estimate_cost_simple(parsed: ParsedContraction, dtype_bytes: int,
 def _estimate_cost_via_opt_einsum(parsed: ParsedContraction,
                                   dtype_bytes: int, flops_per_madd: int,
                                   optimize: str = 'auto'):
-    import opt_einsum as oe
+    try:
+        import opt_einsum as oe
+    except ImportError:
+        from .. import einsum as oe
 
     try:
         _, path_info = oe.contract_path(

@@ -90,7 +90,10 @@ def cached_contract(einsum_str: str, *tensors, optimize='auto'):
     ndarray
         Contraction result in the active backend.
     """
-    from opt_einsum import contract_expression, contract_path
+    try:                                   # opt_einsum 不是依赖
+        from opt_einsum import contract_expression, contract_path
+    except ImportError:
+        from ..einsum import contract_expression, contract_path
 
     backend = get_backend()
     shapes = tuple(t.shape for t in tensors)

@@ -229,12 +229,12 @@ twine 上传、CDN 传播等待、干净 venv 安装自检、回滚策略与双�
 | 隔离构建里 `ModuleNotFoundError: No module named 'Cython'` | `[build-system].requires` 缺 `cython` |
 | 安装成功但 `import pyqcd.lattice` 失败 | `packages` 硬编码漏包，改用 `find_packages` 重建并重跑第 5 步 |
 | 自检全绿但其实测的是源码树 | 在源码树外运行，并断言 `pyqcd.__file__` 含 `site-packages` |
-| 裸 venv 里 `import pyqcd.tools` 报 `h5py`/`scipy` 缺失 | 已知的依赖声明缺口（`dependencies` 只有 numpy）；包完整性门用 `find_spec`，不要改成补 import |
+| 裸 venv 里 `import pyqcd.tools` 报 `h5py`/`scipy` 缺失 | 0.1.4 起 `h5py`/`scipy` 已是硬依赖；若复发说明 `dependencies` 被回退 |
 | 无 `CXX`/`nvcc` 的机器安装失败 | 工具链检查或降级路径被打断，安装必须仍以 0 退出 |
 | `dist/` 里混入 wheel | 只上传 `dist/pyqcd-<ver>.tar.gz`；wheel 标签与 Linux `.so` 不符约定 |
 | token 出现在日志/文件/git | 立即停手：只从 `~/env-key.sh` 读取并走 `TWINE_PASSWORD` 环境变量 |
 
-验收门（全部满足才算发版完成）：三处版本号一致；`twine check` PASSED；sdist 含 16 个包且无
+验收门（全部满足才算发版完成）：三处版本号一致；`twine check` PASSED；sdist 含全部子包（当前 12 个顶层子包）且无
 `pyqcd.testing`；simple index 已见新版本；干净 venv 自检通过；两个远端均已推送。
 
 ## 交接
@@ -245,3 +245,80 @@ twine 上传、CDN 传播等待、干净 venv 安装自检、回滚策略与双�
 
 交付：版本号 diff、构建与 `twine check` 日志、sdist 内容校验输出、simple index 轮询结果、
 venv 自检输出、两个远端的推送结果，以及未验证项（例如无 CUDA 机器的原生路径）。
+
+## 发布硬化循环（2026-11-08 起，长期任务）
+
+长期迭代目标：让 PyPI 上的 `pyqcd` **足够规范、足够易用、有足够生产力价值**。
+台账：`docs/pypi_release_audit_20261108.md`（A 规范性 / B 易用性 / C 生产力，逐项状态）。
+
+### 判定口径（唯一）
+只认 **从 PyPI 远程安装** 的结果：
+
+```bash
+python -m venv /tmp/v && /tmp/v/bin/pip install --no-cache-dir \
+  --index-url https://pypi.org/simple "pyqcd==<ver>"
+```
+
+源码树里的 `import pyqcd`、本地 `dist/*.tar.gz` 都不构成证据；自检脚本必须打印
+`pyqcd.__file__` 并断言包含 `site-packages`。
+
+### 索引延迟的两个坑（实测）
+1. `https://pypi.org/pypi/pyqcd/<ver>/json` 返回 200 **不代表** pip 能装：
+   `https://pypi.org/simple/pyqcd/` 及其 CDN 边缘节点可能仍是旧列表，
+   pip 会报 `No matching distribution found`。加 `--index-url https://pypi.org/simple`
+   并轮询 simple index，等出现新版本再复验。
+2. 国内镜像（如清华 `pypi.tuna.tsinghua.edu.cn`）滞后更久；不要在镜像上判"发版失败"。
+3. `pip index versions pyqcd` 的最后一行是 pip 升级 notice，必须 `grep "Available versions"`。
+
+### 自检首选入口
+```bash
+python -m pyqcd            # 版本 + 原生后端 + 可选依赖 + 子包列表
+python -m pyqcd --json     # 机器可读，便于脚本断言
+```
+该入口由 `pyqcd/__main__.py` 提供，不导入任何重依赖，适合作为发布后第一条命令。
+
+### 依赖分层策略（0.1.4 起）
+| 类别 | 包 | 声明方式 |
+|---|---|---|
+| 必装 | `numpy`、`h5py`、`scipy` | `dependencies` |
+| 可选后端/作图 | `torch`、`matplotlib`、`cupy`、`mpi4py` | `optional-dependencies`：`torch` / `plot` / `cuda` / `mpi` |
+
+规则：**可选依赖一律函数内延迟导入**，顶层 `import pyqcd` 与任何子包的 import 都不得拉它们。
+`matplotlib` 的约定是函数内先 `matplotlib.use("AGG")` 再 `import matplotlib.pyplot`
+（`pyqcd/analysis/_plots.py` 是样板，`pyqcd/contraction/_wickplot.py` 曾违反、已修）。
+
+### 类型信息一致性
+`classifiers` 声明 `Typing :: Typed` 时，包内必须有 `pyqcd/py.typed` 且进 `package_data`；
+否则判定为元数据不一致（PEP 561）。
+
+### 每轮循环的最小动作
+1. 读台账 → 2. PyPI 远程安装 → 3. 跑未通过项 → 4. 修（不碰核心算法）→ 5. bump + 构建 + `twine check`
+→ 6. 上传 → 7. 重新远程安装复验 → 8. 追加台账一行 + 更新本技能 → 9. `gpush.sh` 与 `gpush.sh -t gitee.com`。
+
+### 0.1.5 踩过的坑（逐条都是实测）
+1. **`SOURCES.txt` 泄漏家目录**：`cythonize(build_dir=<绝对路径>)` 会把
+   `/home/<user>/.../einsum.cpp` 写进 egg-info，且**重建不自愈**（setuptools 复用旧 egg-info）。
+   修法：`build_dir` 与 `sources`/`depends` 全部传 HOME 相对路径；发版前必须
+   `rm -rf build *.egg-info dist`。
+2. **`py.typed` 三条规则都会漏**：`include-package-data = false` + 顶层 `package_data`
+   未列 + `MANIFEST.in` 只写 `recursive-include pyqcd/einsum`。必须同时：
+   `package_data={"pyqcd": ["py.typed"]}` 与 `include pyqcd/py.typed`。
+3. **放宽 MANIFEST 会连测试一起发**：`recursive-include pyqcd *.py` 会把
+   `pyqcd/testing/**` 全带上（实测 177 个成员），必须 `prune pyqcd/testing`。
+4. **license 元数据**：`license = { text = "MIT" }` 与 license classifier 均已弃用；
+   改成 PEP 639 的 `license = "MIT"` + `license-files = ["LICENSE"]`，
+   并把 `[build-system].requires` 提到 `setuptools>=77`。
+5. **可选依赖一定要延迟导入**：`cached_contract` 曾在函数顶部无条件
+   `from opt_einsum import ...`（opt_einsum 不是依赖）→ 纯安装环境直接崩；
+   正确做法是 `try: opt_einsum ... except ImportError: from ..einsum import ...`。
+6. **顶层可发现性**：只加 `__all__` 不够（`dir(pyqcd)` 仍空、`pyqcd.einsum` 仍
+   `AttributeError`），必须配合 PEP 562 的 `__getattr__`/`__dir__` 懒加载。
+7. **安装不 hermetic**：PyPI 只有 sdist 时，编译器"存在但编不过"会让 pip 直接失败。
+   构建脚本失败要能被捕获成警告；CUDA 扩展的编译前先做一次主机编译器试编译
+   （`int main(){return 0;}`），失败就跳过扩展而不是让 pip 挂掉。
+8. **文档代码块要能被机器执行**：把 `usage.md` 的 python 块按顺序 `exec` 一遍，
+   立刻暴露 `compute_dual_field_strength(U)`（真实签名 `(F_dict, mu, nu)`）与
+   `Bootstrap(data, n_samples=200)`（真实 `(data, Nconf_axes=0, ...)`）两处错误。
+   约定：不可运行的片段必须显式写 `# pseudo-code`。
+9. **构建产物里的绝对路径审计**：发版前检查
+   `tar -xzOf <sdist> */pyqcd.egg-info/SOURCES.txt | grep -c '/home/'` 必须为 0。

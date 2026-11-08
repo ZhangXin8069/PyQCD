@@ -21,7 +21,14 @@ prune cpp/kupl/einsum/build
 prune cpp/cuda/einsum/build
 
 # Pure-Python package plus the Cython sources of the optional CUDA extension.
-recursive-include pyqcd/einsum *.py *.pyx *.pxd *.pyi
+recursive-include pyqcd *.py *.pyx *.pxd *.pyi
+include pyqcd/py.typed
+
+# Tests, benchmarks and regression baselines stay in the repository only.
+prune pyqcd/testing
+
+# Internal contributor notes must not ship to end users.
+global-exclude AGENTS.md
 
 # Build artefacts must never reach the sdist.
 prune build

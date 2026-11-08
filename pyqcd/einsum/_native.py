@@ -200,10 +200,12 @@ def build_info() -> dict[str, Any]:
         label = 'MPI build'
     else:
         label = 'non-MPI build'
+    path = str(library_path())
     return {
         'backend': backend,
+        'native_available': backend != 'python',
         'mpi': mpi,
         'kupl_mpi_build': kupl_mpi,
         'mpi_label': label,
-        'native_library': str(library_path()),
+        'native_library': path,
     }

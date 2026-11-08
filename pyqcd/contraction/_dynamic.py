@@ -830,7 +830,10 @@ def _analyze_contraction_path(einsum_str, shapes, optimize='auto'):
         （对原版的唯一偏离：opt_einsum 缺失时亦返回该兜底而非 ImportError。）
     """
     try:
-        from opt_einsum import contract_path
+        try:
+            from opt_einsum import contract_path
+        except ImportError:
+            from ..einsum import contract_path
     except ImportError as _e:
         _log(f'    [FLOP分析] opt_einsum 不可用: {_e}')
         return 0, 0, 1.0, 0, 'N/A'

@@ -90,6 +90,24 @@ def _stage_native_library(backend: str) -> None:
     os.replace(staged, destination)
 
 
+def _host_compiler_works() -> bool:
+    """Compile a trivial program with the host compiler; False when it cannot."""
+    compiler = os.environ.get("CXX", "c++")
+    if shutil.which(compiler) is None:
+        return False
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / "probe.cpp"
+        source.write_text("int main() { return 0; }\n")
+        try:
+            subprocess.run([compiler, str(source), "-o", str(Path(tmp) / "probe")],
+                           check=True, capture_output=True, timeout=180)
+        except (subprocess.CalledProcessError, OSError, subprocess.TimeoutExpired):
+            return False
+    return True
+
+
 def _toolchain_problem(backend: str) -> str | None:
     """Return why the native build for ``backend`` cannot run, or None."""
     script = BUILD_SCRIPTS[backend]
@@ -107,6 +125,9 @@ def _toolchain_problem(backend: str) -> str | None:
         compiler = os.environ.get(variable, default)
         if shutil.which(compiler) is None:
             return f"{description} {compiler!r} is not available on PATH"
+    if backend == "cuda" and not _host_compiler_works():
+        return (f"host C++ compiler {os.environ.get('CXX', 'c++')!r} cannot compile "
+                "a trivial program")
     return None
 
 
@@ -210,6 +231,13 @@ def _extensions():
                      "cannot be built", "cuda")
         return []
 
+    def _rel(path: Path) -> str:
+        """Prefer a HOME-relative path so SOURCES.txt never leaks the user's home."""
+        try:
+            return str(Path(path).relative_to(HOME))
+        except ValueError:
+            return str(path)
+
     cuda_dir = HOME / "pyqcd" / "einsum" / "cuda"
     native_dir = HOME / "cpp" / "cuda" / "einsum"
     shared_include = HOME / "cpp" / "kupl" / "einsum" / "include"
@@ -225,11 +253,11 @@ def _extensions():
 
     extension = Extension(
         "pyqcd.einsum.cuda.einsum",
-        [str(source)],
+        [_rel(source)],
         depends=[
-            str(header),
-            str(shared_include / "einsum_define.h"),
-            str(api_declaration),
+            _rel(header),
+            _rel(shared_include / "einsum_define.h"),
+            _rel(api_declaration),
         ],
         include_dirs=[
             str(cuda_dir),
@@ -246,7 +274,7 @@ def _extensions():
     )
     return cythonize(
         [extension],
-        build_dir=str(generated_dir),
+        build_dir=_rel(generated_dir),
         compiler_directives={"language_level": 3},
         force=True,
     )
@@ -261,6 +289,7 @@ setup(
         exclude=["pyqcd.testing", "pyqcd.testing.*"],
     ),
     package_data={
+        "pyqcd": ["py.typed"],
         "pyqcd.einsum.cuda": ["*.pyi", "*.pxd", "libpyqcdeinsum_cuda.so"],
         "pyqcd.einsum.kupl": ["libpyqcdeinsum_kupl.so"],
     },
