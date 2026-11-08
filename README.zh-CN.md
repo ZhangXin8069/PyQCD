@@ -97,7 +97,7 @@ MPI 分片只在 KUPL 后端实现，且只分片单个输出轴；CUDA 后端�
 
 ## 性能
 
-下面是**已发布包上可复现**的数字：`pyqcd==0.1.10`
+下面是**已发布包上可复现**的数字：`pyqcd==0.1.11`
 （`build_info(): backend=kupl, array_backend=numpy`）、`opt_einsum==3.4.0` 的 `dp`
 策略、`complex128`、预热 3 次后取 15 次中位数。
 
@@ -123,6 +123,10 @@ assert np.allclose(fast, base)                         # same numbers, different
 
 按调用 `specialize=False` 或按进程 `PYQCD_EINSUM_SPECIALIZE=0` 都能关掉这套优化，
 两条路径的数值必须一致。
+
+- **内存。** Python 执行路径的峰值 RSS 约为 `opt_einsum` 的 1.4–2 倍
+  （实测 1200² 时 18→41 MB，2000² 时 73→104 MB），原因是每一步会多保留一份与输出同尺寸的
+  中间量。长时间任务请据此预留内存。
 
 优势来自识别少数格点 QCD 方程形态并改用专用 kernel（融合、缓冲复用），而不是通用 BLAS 链。
 但它**不是普适的**：GPU 核子 2pt/3pt 对 `opt_einsum` 双方都已贴近硬件上限（约 1×），

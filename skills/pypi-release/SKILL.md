@@ -595,3 +595,26 @@ grep -rn "REGISTRY\|KERNEL_MIN_ELEMENTS\|PYQCD_EINSUM_[A-Z_]*" pyqcd/einsum/_spe
 ```
 
 发版前用一条真实调用把 banner 打出来，确认文案与实际行为一致。
+
+### 内存与 memory_limit（0.1.11 实测）
+用 `resource.getrusage(RUSAGE_SELF).ru_maxrss` 在**独立进程**里测峰值
+（同一进程里连续测会互相污染，必须一进程一次）：
+
+| 形状（float64, dp） | opt_einsum | pyqcd |
+|---|---|---|
+| 1200²，2 操作数 | 18 MB | 41 MB |
+| 1200²，3 操作数 | 30 MB | 52 MB |
+| 1200²，4 操作数 | 29 MB | 52 MB |
+| 2000²，3 操作数 | 73 MB | 104 MB |
+
+结论：**峰值约为 opt_einsum 的 1.4–2 倍**（单步结束前多保留一份输出同尺寸中间量），
+耗时不受影响。这条必须写进面向用户的文档——生产上按 1.5 倍预留内存。
+
+`memory_limit` 语义与 opt_einsum 一致（`None` / `'max_input'` / 具体字节数四档实测
+异常类型与成败完全相同）；`largest_intermediate`、`opt_cost`、`path` 也逐值相同。
+
+一个已知的良性回落：`optimize='optimal'` + **很小的** `memory_limit` 时规划器会产出
+arity=3 的步，而原生执行器只支持一元/二元步 → 打印一次
+`native plan unavailable; using Python execution: step 0 arity must be one or two, got 3`
+并回落 Python（结果正确）。这是设计好的 fail-closed 行为，不是 bug；
+排查类似告警先看"规划器输出是否超出原生执行器的步型契约"。

@@ -19,7 +19,7 @@
 
 ## 在已发布包上可复现
 
-`pyqcd==0.1.10`（`build_info(): backend=kupl, array_backend=numpy`）对
+`pyqcd==0.1.11`（`build_info(): backend=kupl, array_backend=numpy`）对
 `opt_einsum==3.4.0`（`dp`），`complex128`，预热 3 次后取 15 次中位数：
 
 | 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
@@ -56,6 +56,25 @@
 
 基于这些数字的"生产混合加权 ≈2.82×（4757 s → 1688 s）"同样继承该前提：
 它假设那些额外 kernel 存在。
+
+
+## 内存
+
+用 `resource.getrusage` 在独立进程里测的单次收缩峰值（`pyqcd==0.1.10` 对
+`opt_einsum 3.4.0`，`dp` 策略，float64）：
+
+| 形状 | `opt_einsum` 峰值 | `pyqcd` 峰值 |
+|---|---|---|
+| 1200×1200，2 操作数 | 18 MB | 41 MB |
+| 1200×1200，3 操作数 | 30 MB | 52 MB |
+| 1200×1200，4 操作数 | 29 MB | 52 MB |
+| 2000×2000，3 操作数 | 73 MB | 104 MB |
+
+Python 执行路径在单步结束前会多保留一份与输出同尺寸的中间量，因此同一形状下的峰值约为
+`opt_einsum` 的 **1.4–2 倍**；同一批测量的耗时不受影响（0.02–0.19 s，双方都受 BLAS 限制）。
+
+实际含义：给 pyqcd 的内存预算要比给 `opt_einsum` 的宽 1.5 倍，或者先用
+`contract_path(...)` / `memory_limit=` 规划并切分收缩。
 
 ## 代码
 

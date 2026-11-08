@@ -22,7 +22,7 @@ is reused.
 
 ## Reproducible on the published package
 
-`pyqcd==0.1.10` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`pyqcd==0.1.11` (`build_info(): backend=kupl, array_backend=numpy`) versus
 `opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
@@ -61,6 +61,27 @@ a record of what the shapes can cost:
 
 A weighted production-mix model built on those numbers gave ≈2.82×
 (4757 s → 1688 s). It inherits the same caveat: it assumes the extra kernels.
+
+
+## Memory
+
+Peak RSS during a contraction, measured with `resource.getrusage` in separate
+processes (`pyqcd==0.1.10` vs `opt_einsum 3.4.0`, `dp` planner, float64):
+
+| Shape | `opt_einsum` peak | `pyqcd` peak |
+|---|---|---|
+| 1200×1200, 2 operands | 18 MB | 41 MB |
+| 1200×1200, 3 operands | 30 MB | 52 MB |
+| 1200×1200, 4 operands | 29 MB | 52 MB |
+| 2000×2000, 3 operands | 73 MB | 104 MB |
+
+The Python execution path holds one extra output-sized intermediate alive while a
+step finishes, so expect roughly **1.4–2× the peak of `opt_einsum`** on the same
+shape. Time is unaffected in the same runs (0.02–0.19 s, both BLAS-bound).
+
+Practical consequence: size a job by `1.5×` the memory you would give
+`opt_einsum`, or split the contraction with `memory_limit=` /
+`contract_path(...)` first.
 
 ## Code
 

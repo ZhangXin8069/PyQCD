@@ -105,7 +105,7 @@ axis; the CUDA backend has no MPI implementation.
 ## Performance
 
 Numbers you can reproduce on the **published package**, measured with
-`pyqcd==0.1.10` (`build_info(): backend=kupl, array_backend=numpy`),
+`pyqcd==0.1.11` (`build_info(): backend=kupl, array_backend=numpy`),
 `opt_einsum==3.4.0` with the `dp` planner, `complex128`, median of 15 calls after
 3 warm-up calls:
 
@@ -132,6 +132,11 @@ assert np.allclose(fast, base)                         # same numbers, different
 
 Per-call `specialize=False` and the process-wide `PYQCD_EINSUM_SPECIALIZE=0`
 switch the optimisation off; both paths must agree numerically.
+
+- **Memory.** The Python execution path peaks at roughly 1.4–2× the RSS of
+  `opt_einsum` on the same shape (measured 18→41 MB at 1200², 73→104 MB at
+  2000²), because one extra output-sized intermediate stays alive per step.
+  Size long jobs accordingly.
 
 The gain comes from recognising a handful of lattice-QCD equation shapes and
 routing them to purpose-built kernels (fusion, buffer reuse) instead of a
