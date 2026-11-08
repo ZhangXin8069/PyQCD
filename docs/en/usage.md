@@ -177,9 +177,14 @@ assert {"N", "Y", "X", "m"} <= set(plan)      # plan_parallel returns a dict
 assert plan["N"] >= 1 and plan["m"] == 12
 ```
 
-The planner follows `N*a = n*b` (a = memory per worker, b = usable memory per
-GPU, n = number of GPUs) and reports the worker count `N`, the batch `X = m/N`
-and the per-GPU process count `Y = N/n`.
+The planner starts from `N*a = n*b` (a = memory per worker, b = usable memory per
+GPU, n = number of GPUs) and reports the worker count `N`, the batch
+`X = ceil(m/N)` and the per-GPU process count `Y = N/n`. The equality is the
+*uncapped* target: `Y` is then reduced so that there is at least one task per
+process (`Y <= m/n`), no more processes than CPU threads, and no more than RAM
+allows, so with few tasks `N*a < n*b` — the reduction is reported in `notes`
+(e.g. `Y capped from 13 to 3`) and `gpu_ok` still tells you whether one worker
+fits in the per-GPU budget.
 
 ## Using PyTorch tensors
 

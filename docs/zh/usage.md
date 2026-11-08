@@ -174,8 +174,11 @@ assert {"N", "Y", "X", "m"} <= set(plan)      # plan_parallel returns a dict
 assert plan["N"] >= 1 and plan["m"] == 12
 ```
 
-规划遵循 `N*a = n*b`（a 为单元任务显存、b 为单卡可用显存、n 为 GPU 数），
-并给出进程数 `N`、批次 `X = m/N` 与每卡进程数 `Y = N/n`。
+规划**从** `N*a = n*b` 出发（a 为单元任务显存、b 为单卡可用显存、n 为 GPU 数），
+给出进程数 `N`、批次 `X = ceil(m/N)` 与每卡进程数 `Y = N/n`。该等式是**未封顶**的目标：
+随后 `Y` 会被压到"每个进程至少一个任务"（`Y <= m/n`）、不超过 CPU 线程数、且受内存限制，
+因此任务数少时会出现 `N*a < n*b`——压缩过程写在 `notes` 里（如 `Y capped from 13 to 3`），
+而 `gpu_ok` 仍告诉你单个 worker 是否放得进单卡预算。
 
 ## 使用 PyTorch 张量
 
