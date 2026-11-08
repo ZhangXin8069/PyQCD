@@ -453,3 +453,27 @@ fig.savefig('/tmp/wick_demo.png')      # 实测 107 KB，键数 12
 
 `pyqcd[torch]` 因 torch 轮子 539 MB 未做端到端安装（只做了 `--dry-run` 解析），
 台账里必须标为"未验证"，不要写成已验证。
+
+### extras 端到端验证矩阵（0.1.9 实测）
+| extra | 验证方式 | 结果 |
+|---|---|---|
+| `plot` | 干净 venv 装包 → `wick_contraction → plot_figure_wick` → `savefig` | 107 KB PNG，12 键 ✅ |
+| `torch` | 干净 venv 装包 → `set_backend('torch')` → torch 张量 contract vs `a @ b`；`pyqcd.lattice.gamma(0)` | torch 2.15.0+cu132，全部一致 ✅ |
+| `cuda` | `pip install --dry-run pyqcd[cuda]` | `Would install cuda-pathfinder, cupy-cuda12x` ✅ |
+| `mpi` | `pip install --dry-run pyqcd[mpi]` | `Would install mpi4py` ✅ |
+
+注意：`pyqcd[torch]` 会拉入 CUDA 版 torch 及其 nvidia 依赖（安装后 venv 约 6 GB）。
+验证时把 venv 放在**真实磁盘**（如 `~/venvs/`）而不是 `/tmp`（tmpfs 7.8 G 容易被撑满）。
+验证完记得删除，并把这条写进循环清理清单。
+
+### PyPI 项目页怎么核对（HTML 有 bot 挑战）
+`curl https://pypi.org/project/pyqcd/` 会返回 3 KB 的 "Client Challenge" 页面，
+无法用于断言；但 **JSON API 里的 `info.description` 就是渲染源**，直接数探针即可：
+
+```bash
+curl -s https://pypi.org/pypi/pyqcd/json | python -c "
+import json,sys; d=json.load(sys.stdin)['info']; t=d['description']
+for p in ('## Repositories','gitlab.itp.ac.cn','gitee.com','py-qcd.readthedocs.io','python -m pyqcd','6.02'):
+    print(p, t.count(p))
+"
+```
