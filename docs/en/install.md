@@ -8,6 +8,8 @@ machine.
 pip install pyqcd
 ```
 
+Current release: `0.1.2`. To pin it: `pip install "pyqcd==0.1.2"`.
+
 ## Requirements
 
 | Item | Needed for |
