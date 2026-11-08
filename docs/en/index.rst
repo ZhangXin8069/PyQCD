@@ -12,22 +12,22 @@ This site is a short introduction to what the package does and how to use it.
    :maxdepth: 2
    :caption: Contents
 
-   guide/overview
-   guide/usage
-   guide/install
+   overview
+   usage
+   install
 
 Where to start
 --------------
 
-* :doc:`guide/overview` — what each subpackage provides and how the contraction
+* :doc:`overview` — what each subpackage provides and how the contraction
   engine is layered.
-* :doc:`guide/usage` — runnable examples for every major module.
-* :doc:`guide/install` — building the optional native backends, backend
-  selection, MPI, and the test entry points.
+* :doc:`usage` — runnable examples for every major module.
+* :doc:`install` — building the optional native backends, backend selection,
+  MPI, and the test entry points.
 
 Scope
 -----
 
-The pages here describe the package and its usage. The repository also keeps
+These pages describe the package and its usage. The repository also keeps
 research notes and LaTeX reports under ``docs/``; those are separate material
-and are deliberately not part of this documentation site.
+and are deliberately not part of this site.

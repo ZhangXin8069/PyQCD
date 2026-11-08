@@ -1,6 +1,6 @@
 **/
-# Read the Docs 站点源文件：docs/guide（英文）与 docs/zh（中文）需要入库。
-!guide/
-!guide/**
+# Read the Docs 站点源文件：docs/en（英文）与 docs/zh（中文）需要入库。
+!en/
+!en/**
 !zh/
 !zh/**

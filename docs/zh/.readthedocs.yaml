@@ -1,11 +1,12 @@
 # Read the Docs 构建配置（v2）—— 中文站点，对应项目 `pyqcd-zh`。
 # 规范：https://docs.readthedocs.com/platform/stable/config-file/v2.html
 #
-# 仓库根的 `.readthedocs.yaml` 属于英文主项目；中文项目需要在
-# Read the Docs 的项目设置里把 "Configuration file" 指向本文件：
-#     .readthedocs.zh.yaml
+# 仓库根的 `.readthedocs.yaml` 属于英文主项目（指向 docs/en/conf.py）。
+# 中文项目需在 Read the Docs 的项目设置里把 "Configuration file"
+# 指向本文件（文件名仍必须是 `.readthedocs.yaml`）：
+#     docs/zh/.readthedocs.yaml
 #
-# 本文件中的所有路径都相对**仓库根**。
+# 本文件中的路径都相对**仓库根**。
 
 version: 2
 
@@ -15,7 +16,7 @@ build:
     python: "3.12"
 
 sphinx:
-  # 中文站点的 Sphinx 源在 docs/zh/，其 conf.py 设 language=zh_CN。
+  # 中文源目录 docs/zh/，其 conf.py 设 language=zh_CN。
   configuration: docs/zh/conf.py
 
 formats:
