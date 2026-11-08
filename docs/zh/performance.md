@@ -100,7 +100,7 @@ python -m pyqcd --gpu-probe
 
 ## 在已发布包上可复现
 
-`pyqcd==0.1.26`（`build_info(): backend=kupl, array_backend=numpy`）对
+`pyqcd==0.1.27`（`build_info(): backend=kupl, array_backend=numpy`）对
 `opt_einsum==3.4.0`（`dp`），`complex128`，预热 3 次后取 15 次中位数：
 
 | 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
@@ -356,6 +356,9 @@ Python 执行路径在单步结束前会多保留一份与输出同尺寸的中�
 下面这段就是上文数字背后的完整协议：构造生产形状的操作数、先预热、取 **9 次计时的中位数**
 （不是单次），并把倍率与 min/max 一起打印出来，机器抖动一眼可见。每次调用刻意控制在
 5–100 ms 量级——更短的计时测到的是计时器开销而不是引擎。
+
+**没有任何求和标签**的方程（逐元素、转置、对角、外积）会直接交给 backend 自己的
+`einsum`：规划器对它们无事可做，而 backend kernel 快 2–10 倍。
 
 ```python
 import statistics

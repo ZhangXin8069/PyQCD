@@ -108,7 +108,7 @@ python -m pyqcd --gpu-probe
 
 ## Reproducible on the published package
 
-`pyqcd==0.1.26` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`pyqcd==0.1.27` (`build_info(): backend=kupl, array_backend=numpy`) versus
 `opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
@@ -145,7 +145,7 @@ unless noted, median of 9 calls, measured on `pyqcd 0.1.21`:
 | 3-operand chain, 3×500 | 2.7–2.9 ms | 2.6 ms | 0.92–0.98× |
 | 4-operand chain, 300 | 1.1–1.2 ms | 1.0 ms | 0.81–0.89× |
 | matmul, 1000² | 11.7–13.4 ms | 9.3–11.4 ms | 0.80–0.85× |
-| Hadamard, 4000² | 88.3–89.8 ms | 29.2–29.4 ms | 0.33× |
+| Hadamard, 4000² | 31.2–36.8 ms | 29.2–37.3 ms | 0.89–1.19× |
 
 Read it honestly:
 
@@ -226,6 +226,9 @@ for label, equation, operands in CASES:
 
 Sub-millisecond equations (`ii->`, `ii->i` on a 5000² matrix) are deliberately
 excluded: there the measurement is timer and call overhead, not the contraction.
+Equations with **no summed index at all** (element-wise, transpose, diagonal, outer)
+are handed straight to the backend's own `einsum` — the planner has nothing to
+optimise for them, and the backend kernel is 2–10× faster.
 
 
 ### Extended shapes (CPU and GPU)

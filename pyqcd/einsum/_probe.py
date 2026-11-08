@@ -100,18 +100,40 @@ def probe() -> dict[str, Any]:
         return report
 
     try:
+        device_count = int(cupy.cuda.runtime.getDeviceCount())
+    except Exception as error:  # noqa: BLE001
+        device_count = 0
+        report["device"] = f"unavailable ({type(error).__name__}: {error})"
+    if device_count == 0:
+        report.setdefault("device", "no CUDA device visible")
+        report["kernel_enabled"] = None
+        report["kernel_status"] = {"state": "no-device",
+                                   "detail": "cupy is installed but no GPU is visible "
+                                             "to this process (check CUDA_VISIBLE_DEVICES)"}
+        report["verdict"] = ("no GPU available — pyqcd.einsum runs the CPU/native "
+                             "path; GPU kernels cannot be checked")
+        report["hints"].append("unset CUDA_VISIBLE_DEVICES or run on a GPU node")
+        return report
+    try:
         properties = cupy.cuda.runtime.getDeviceProperties(0)
         report["device"] = properties["name"].decode()
         report["compute_capability"] = (
             f"{properties['major']}.{properties['minor']}")
     except Exception as error:  # noqa: BLE001
-        report["device"] = f"unavailable ({type(error).__name__})"
+        report["device"] = f"unavailable ({type(error).__name__}: {error})"
 
     from . import _kernel_cuda as kernel
 
-    report["kernel_enabled"] = bool(kernel.enabled())
-    status, detail = _kernel_status()
-    report["kernel_status"] = {"state": status, "detail": detail}
+    try:
+        report["kernel_enabled"] = bool(kernel.enabled())
+        status, detail = _kernel_status()
+        report["kernel_status"] = {"state": status, "detail": detail}
+    except Exception as error:  # noqa: BLE001 - 诊断必须给出结论而不是抛异常
+        report["kernel_status"] = {"state": "probe-failed",
+                                   "detail": f"{type(error).__name__}: {error}"}
+        report["verdict"] = "GPU probe failed — see kernel_status"
+        report["hints"].append(str(error))
+        return report
 
     # does the specialised path announce a kernel (rather than a plan cache)?
     generator = cupy.random.default_rng(0)
@@ -128,13 +150,18 @@ def probe() -> dict[str, Any]:
     try:
         from . import _specialize
 
+        import warnings as _warnings
+
         saved_announced = set(getattr(_specialize, "_announced", ()))
         _specialize._announced.clear()          # 让本次探测一定能看到提示
         try:
-            with contextlib.redirect_stdout(buffer):
-                from . import contract
+            with _warnings.catch_warnings():
+                # 诊断本身会把"未命中"写进报告，不必再向用户抛告警
+                _warnings.simplefilter("ignore")
+                with contextlib.redirect_stdout(buffer):
+                    from . import contract
 
-                contract(NUCLEON_2PT, *operands)
+                    contract(NUCLEON_2PT, *operands)
             cupy.cuda.Device(0).synchronize()
         finally:
             _specialize._announced.clear()

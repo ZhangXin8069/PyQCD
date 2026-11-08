@@ -15,6 +15,7 @@ from . import paths
 from ._pathinfo import PathInfo
 from ._sharing import einsum_cache_wrap
 from . import _specialize, _threads
+from .backends import dispatch as backends
 from .backends.dispatch import get_func, parse_backend
 
 __all__ = ["contract", "contract_path"]
@@ -600,6 +601,29 @@ def _warn_specialized_kernel_once(exc: BaseException) -> None:
     )
 
 
+def _is_elementwise_equation(subscripts: str) -> bool:
+    """True when the equation sums over nothing (element-wise / permutation / diagonal).
+
+    Measured on this machine, ``ij,ij->ij`` at 4000² costs 89 ms through the step
+    executor versus 29 ms for one native ``einsum`` call, and ``ii->i`` costs 0.53 ms
+    versus 0.01 ms. Those equations have no BLAS structure at all, so the backend's
+    own kernel is strictly better — the planner adds only bookkeeping.
+    """
+    text = subscripts.replace(" ", "")
+    if "->" not in text:
+        return False                      # implicit output: leave to the normal path
+    lhs, rhs = text.split("->", 1)
+    terms = [term for term in lhs.split(",") if term]
+    if not terms:
+        return False
+    if len(terms) == 1:
+        return True                       # transpose / diagonal / trace / scale
+    if "..." in text:
+        return False                      # ellipsis needs the planner's broadcasting
+    summed = set("".join(terms)) - set(rhs)
+    return not summed
+
+
 def contract(
     subscripts: Any,
     *operands: Any,
@@ -663,6 +687,14 @@ def contract(
         else:
             os.environ[_specialize.FUSED_DISABLE_ENV] = "1"
             _FUSED_ENV_OWNED = True
+
+    # 逐元素/纯置换类方程没有 BLAS 结构：直接交给 backend 的原生 einsum，
+    # 比逐步执行 + 计划缓存更快（实测 Hadamard 4000² 89 ms -> 29 ms）。
+    if (isinstance(subscripts, str) and out is None and not kwargs
+            and _is_elementwise_equation(subscripts)):
+        elementwise_backend = parse_backend(operands, backend)
+        einsum_call = backends.get_func("einsum", elementwise_backend)
+        return einsum_call(subscripts, *operands)
 
     global _LAST_CONTRACT_SIGNATURE, _LAST_CONTRACT_PROGRAM
 
