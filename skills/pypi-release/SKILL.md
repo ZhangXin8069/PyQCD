@@ -618,3 +618,18 @@ arity=3 的步，而原生执行器只支持一元/二元步 → 打印一次
 `native plan unavailable; using Python execution: step 0 arity must be one or two, got 3`
 并回落 Python（结果正确）。这是设计好的 fail-closed 行为，不是 bug；
 排查类似告警先看"规划器输出是否超出原生执行器的步型契约"。
+
+### 并发安全（0.1.11 实测，已固化为门禁）
+引擎有模块级状态（计划缓存、kernel 句柄、sharing 上下文），必须验证多线程/多进程：
+
+| 场景 | 规模 | 结果 |
+|---|---|---|
+| 多线程 matmul | 8 线程 × 16 任务 × 25 次 | 0 错误 |
+| 多线程专用路径（核子 2pt） | 6 线程 × 12 种子 × 10 次 | 0 错误，逐线程与 numpy 一致 |
+| `shared_intermediates` 线程隔离 | 4 线程 | 每线程各自 cache（同尺寸 5 条目），无串扰 |
+| 多进程 | 4 进程 × 8 任务 | 全部正确 |
+
+门禁：`pyqcd/testing/_thread_safety_contract.py`（4 个用例，总耗时约 0.07 s），
+已接入 `conftest`，`python -m pyqcd.testing` 118→**119 passed**。
+写并发测试时注意：`count_cached_ops(cache)` **需要传 cache 参数**，
+无参调用会 `TypeError`（本轮就写错过，别误判成库缺陷）。
