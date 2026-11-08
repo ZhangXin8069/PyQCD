@@ -14,7 +14,7 @@ pip install pyqcd
 import pyqcd
 import pyqcd.einsum as pe
 
-print(pyqcd.__version__)    # e.g. 0.1.2
+print(pyqcd.__version__)    # e.g. 0.1.3
 print(pe.build_info())      # backend / mpi / mpi_label / native_library
 ```
 
@@ -86,3 +86,16 @@ pe.build_info()        # backend / mpi / kupl_mpi_build / mpi_label / native_lib
 pe.mpi_enabled()       # whether the KUPL binary has real MPI support
 pe.specializations()   # equation-shape specialisations currently registered
 ```
+
+## 性能概览
+
+在笔记本 RTX 4060、`complex128`、对照 `opt_einsum` 3.4.0 实测：
+
+| 工作负载 | 相对 `opt_einsum` 的倍率 |
+|---|---|
+| 核子 3pt（GPU，特化） | 9.29×（30.74 ms vs 285.40 ms） |
+| γ 夹心 L24（CPU / GPU） | 8.33× / 3.371× |
+| 核子 2pt（CPU，N=100） | 5.32×（22.65 ms vs 120.43 ms） |
+| perambulator × 规范场 L24（GPU） | 1.016×（持平） |
+
+测量口径、生产混合口径的汇总估计，以及**没有加速**的情形，见 :doc:`performance`。

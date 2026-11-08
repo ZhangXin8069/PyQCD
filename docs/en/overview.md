@@ -16,7 +16,7 @@ optional, and the package installs either way.
 import pyqcd
 import pyqcd.einsum as pe
 
-print(pyqcd.__version__)    # e.g. 0.1.2
+print(pyqcd.__version__)    # e.g. 0.1.3
 print(pe.build_info())      # backend / mpi / mpi_label / native_library
 ```
 
@@ -92,3 +92,17 @@ pe.build_info()        # backend / mpi / kupl_mpi_build / mpi_label / native_lib
 pe.mpi_enabled()       # whether the KUPL binary has real MPI support
 pe.specializations()   # equation-shape specialisations currently registered
 ```
+
+## Performance snapshot
+
+Measured on a laptop RTX 4060 with `complex128`, against `opt_einsum` 3.4.0:
+
+| Workload | Ratio vs `opt_einsum` |
+|---|---|
+| Nucleon 3pt (GPU, specialised) | 9.29× (30.74 ms vs 285.40 ms) |
+| γ sandwich L24 (CPU / GPU) | 8.33× / 3.371× |
+| Nucleon 2pt (CPU, N=100) | 5.32× (22.65 ms vs 120.43 ms) |
+| perambulator × gauge L24 (GPU) | 1.016× (parity) |
+
+See :doc:`performance` for the protocol, the aggregate production estimate and
+the cases where there is no gain.

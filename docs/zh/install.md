@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.1.2`。需要固定版本时：`pip install "pyqcd==0.1.2"`。
+当前发行版：`0.1.3`。需要固定版本时：`pip install "pyqcd==0.1.3"`。
 
 ## 依赖
 

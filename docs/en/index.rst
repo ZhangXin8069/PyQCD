@@ -20,6 +20,7 @@ repository.
 
    overview
    usage
+   performance
    install
 
 Where to start
@@ -27,6 +28,8 @@ Where to start
 
 * :doc:`overview` — what the package provides once installed.
 * :doc:`usage` — runnable examples for every major module.
+* :doc:`performance` — measured speed-ups over ``opt_einsum``, and where they
+  do not apply.
 * :doc:`install` — installation, optional extras, native backends and knobs.
 
 Other languages

@@ -133,3 +133,8 @@ print(P.format_plan(plan))
 The planner follows `N*a = n*b` (a = memory per worker, b = usable memory per
 GPU, n = number of GPUs) and reports the worker count `N`, the batch `X = m/N`
 and the per-GPU process count `Y = N/n`.
+
+## See also
+
+Relative speed against `opt_einsum`, the measurement protocol and the cases
+where there is no gain are on :doc:`performance`.

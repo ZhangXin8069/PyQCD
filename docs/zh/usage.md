@@ -129,3 +129,7 @@ print(P.format_plan(plan))
 
 规划遵循 `N*a = n*b`（a 为单元任务显存、b 为单卡可用显存、n 为 GPU 数），
 并给出进程数 `N`、批次 `X = m/N` 与每卡进程数 `Y = N/n`。
+
+## 参见
+
+相对 `opt_einsum` 的加速、测量口径，以及**没有加速**的情形见 :doc:`performance`。

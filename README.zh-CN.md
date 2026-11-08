@@ -80,6 +80,27 @@ pe.specializations()   # registered equation shapes
 
 MPI 分片只在 KUPL 后端实现，且只分片单个输出轴；CUDA 后端没有 MPI 实现。
 
+## 性能
+
+在同一台机器、同一 `complex128` dtype、同线程数、同 `dp` 策略下与
+`opt_einsum` 3.4.0 实测对比：
+
+| 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
+|---|---|---|---|
+| 核子 3pt（GPU，特化） | 285.40 ms | 30.74 ms | **9.29×** |
+| γ 夹心 L24（CPU） | 1188.9 ms | 142.7 ms | **8.33×** |
+| γ 夹心 L24（GPU） | 0.373987 s | 0.110959 s | **3.371×** |
+| 核子 2pt（CPU，N=100） | 120.43 ms | 22.65 ms | **5.32×** |
+| perambulator × 规范场 L24（GPU） | 1.112793 s | 1.095407 s | 1.016×（持平） |
+
+按真实生产各形态耗时占比加权，整体约 **2.82×**（4757 s → 1688 s，模型估计）。
+
+优势来自识别少数格点 QCD 方程形态并改用专用 kernel（融合、缓冲复用），而不是通用 BLAS 链。
+但它**不是普适的**：GPU 核子 2pt/3pt 对 `opt_einsum` 双方都已贴近硬件上限（约 1×），
+小张量会被单次调用开销吃掉，没有专用 kernel 的形态仍走通用路径。
+完整测量口径与限制：
+https://py-qcd.readthedocs.io/zh-cn/latest/performance.html
+
 ## 测试
 
 在源码仓库中运行：
