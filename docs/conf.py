@@ -1,24 +1,24 @@
-"""Sphinx configuration for the PyQCD documentation.
+"""Sphinx configuration for the PyQCD documentation site.
 
-Built on Read the Docs with the settings from ``.readthedocs.yaml``; see
-``docs/requirements.txt`` for the pinned set of required packages.
+The English sources live in ``docs/`` (``index.rst`` plus ``guide/*.md``); the
+Chinese translation lives in ``docs/zh/`` and is excluded from this build.
 
-Note: ``pyqcd`` itself is intentionally *not* imported here, so the docs build
-does not need the (heavy, CUDA-dependent) package to be installed.
+``pyqcd`` itself is not imported here, so the documentation build never needs
+the native einsum libraries (or CUDA) to be present.
+
+Note: the research notes and LaTeX reports stored in ``docs/`` are *not* part
+of this site — only the hand-written ``guide/`` pages are indexed.
 """
 
 project = "PyQCD"
 author = "PyQCD contributors"
 copyright = "PyQCD contributors"
 
-# Version shown in the docs; kept in sync with setup.py.
 version = "0.1"
 release = "0.1.0"
 
-# myst_parser renders the Markdown reports that already live in docs/.
 extensions = ["myst_parser"]
 
-# Both the Sphinx-native .rst sources and the existing Markdown reports.
 source_suffix = {
     ".rst": "restructuredtext",
     ".md": "markdown",
@@ -26,5 +26,6 @@ source_suffix = {
 
 html_theme = "sphinx_rtd_theme"
 
-# Do not pull benchmark artifacts or previous build output into the docs.
-exclude_patterns = ["**/artifacts/**", "_build"]
+# Only the hand-written guide pages are part of this site: the Chinese subtree
+# is built by its own project, and benchmark artifacts must never be indexed.
+exclude_patterns = ["_build", "zh", "**/artifacts/**"]
