@@ -738,3 +738,19 @@ python -c "from pyqcd.einsum import _kernel_cuda as k; print(k.enabled())"
 1. `pip install -v ... 2>&1 | grep -E "^  arch:"`（构建时打印来源与架构）
 2. `readelf -S <so> | grep nv_fatbin`（是否有 fatbin）
 3. `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 看提示是 `[kernel: cuda_nucleon_2pt]` 还是 `[plan-cache]`
+
+### 基准前先钉住线程（KUPL 实测，直接决定数字可信度）
+KUPL 后端是 **OpenMP + dlopen 的 BLAS** 双层并行，两层同时开就会过度并行：
+
+| OMP | OPENBLAS | 700×700 fp64 中位 |
+|---|---|---|
+| 1 | 1 | 11.04 ms |
+| 4 | 1 | 10.80 ms |
+| 1 | 4 | **7.25 ms** |
+| 4 | 4 | 8.21 ms |
+| 8 | 8 | 23.77 ms（退化 3 倍） |
+
+基准脚本必须：①在**独立进程**里跑每种配置；②打印 `OMP_NUM_THREADS` /
+`OPENBLAS_NUM_THREADS` / `backend` / `array_backend`；③默认建议
+`OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=<n>`。
+详细剖析见 `docs/report_kupl_acceleration_20261108.md`。
