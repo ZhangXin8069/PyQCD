@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.1.13`. To pin it: `pip install "pyqcd==0.1.13"`.
+Current release: `0.1.14`. To pin it: `pip install "pyqcd==0.1.13"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need
@@ -148,23 +148,34 @@ assert np.allclose(pe.contract("ij,jk->ik", a, b), a @ b)
 `PYQCD_EINSUM_BACKEND` (see above) selects the same backend at build time; it
 is the build-time knob, while `PYQCD_EINSUM_NATIVE` is the one read at run time.
 
-### CUDA architecture matters (read this before expecting GPU speed-ups)
+### CUDA architecture: auto-detected, and PTX is always embedded
 
-The build script's default architectures are `6.0` and `7.0`. SASS is embedded for
-exactly those values, so on any newer GPU (Ampere 8.0/8.6, Ada 8.9, Hopper 9.0)
-the CUDA kernels **cannot execute**: the entry point returns `QCD_STATUS_INTERNAL`,
-`pyqcd.einsum` falls back to the CPU/Python path and — because that is the fallback
-contract — results stay correct but silent about the missing speed-up.
+The build resolves the architecture in this order:
 
-Measured on an RTX 4060 Laptop (compute capability 8.9), `pyqcd==0.1.13`:
+| Priority | Source |
+|---|---|
+| 1 | `PYQCD_CUDA_ARCHITECTURES` (comma/semicolon/space separated list) |
+| 2 | `CMAKE_CUDA_ARCHITECTURES` |
+| 3 | `PYQCD_SM_ARCH` (legacy name) |
+| 4 | auto-detect: `nvidia-smi --query-gpu=compute_cap`, then a GPU-model fallback table |
+| 5 | default `6.0 7.0` (build machines without a GPU, e.g. CI or a cluster login node) |
 
-| build | wheel contents | kernel status | result |
-|---|---|---|---|
-| default (`6.0 7.0`) | `compute_70` | `3` (`QCD_STATUS_INTERNAL`) | falls back, rel 1.7e-14 |
-| `PYQCD_CUDA_ARCHITECTURES=8.9` | `compute_89` | `0` (`QCD_STATUS_OK`) | GPU kernel, rel 2.8e-14 |
+Every architecture is compiled as `code=[sm_XX,compute_XX]` — **cubin plus PTX**. The
+PTX means a newer GPU that has no matching SASS still runs, because the driver
+JIT-compiles the PTX; without it the kernel entry returns `QCD_STATUS_INTERNAL`
+and the engine silently falls back to the CPU path.
 
-So specify your architecture at install time — the variable is honoured by
-`pip install` too, because the wheel is built from source:
+Measured on an RTX 4060 Laptop (compute capability 8.9):
+
+| build | kernel status | result |
+|---|---|---|
+| old default, SASS only (`sm_70`) | `3` (`QCD_STATUS_INTERNAL`) | falls back to CPU |
+| auto-detected `8.9`, cubin+PTX | `0` (`QCD_STATUS_OK`) | GPU, rel 2.8e-14 |
+| explicit `7.0`, cubin+PTX | `0` (`QCD_STATUS_OK`) | GPU via PTX JIT, rel 2.8e-14 |
+
+So the out-of-the-box install works on current GPUs. You only need to set the
+variable when you want the fastest path (native SASS for your card) or when the
+build machine has no GPU and you know the target:
 
 ```bash
 nvidia-smi --query-gpu=compute_cap --format=csv,noheader      # e.g. 8.9
@@ -174,12 +185,27 @@ PYQCD_CUDA_ARCHITECTURES=8.9 pip install "pyqcd[cuda]"
 Diagnose an existing install with:
 
 ```bash
-python -c "import pyqcd, os; print(os.path.dirname(pyqcd.__file__))"
-strings <site-packages>/pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so | grep -oE "compute_[0-9]+" | sort -u
+# 1) which architectures were compiled (visible during the build)
+pip install -v "pyqcd[cuda]" 2>&1 | grep -E "^  arch:"
+
+# 2) does the installed archive carry a CUDA fatbin at all (cubin + PTX)?
+readelf -S <site-packages>/pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so | grep nv_fatbin
+
+# 3) the decisive check — does the GPU kernel really run?
+PYQCD_EINSUM_SPECIALIZE_VERBOSE=1 python -c "
+import numpy as np, cupy as cp, pyqcd.einsum as pe
+e = 'gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M'
+r = np.random.default_rng(0)
+o = [cp.asarray((r.standard_normal(s)+1j*r.standard_normal(s)).astype(np.complex128))
+     for s in [(4,4,16,16)]*3 + [(4,4)]*2 + [(4,16,16,16)]*2 + [(4,4)]]
+pe.contract(e, *o)
+"
 ```
 
-A `[plan-cache]` hint (instead of `[kernel: cuda_nucleon_2pt]`) means the GPU
-kernel did not run.
+The hint says `[kernel: cuda_nucleon_2pt]` when the GPU kernel ran and
+`[plan-cache]` when it did not. A `strings | grep compute_` check only works for
+SASS-only archives — with the fatbin layout the architecture names are not plain
+ASCII, so use the runtime hint instead.
 
 ## Building from a source checkout (development)
 

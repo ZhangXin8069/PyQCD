@@ -123,14 +123,70 @@ if [ ${#LOCAL_SOURCES[@]} -eq 0 ]; then
 fi
 SOURCES=("${SHARED_CORE_SOURCES[@]}" "${LOCAL_SOURCES[@]}")
 
+# ── CUDA architecture resolution (multi-environment) ────────────────────────
+# 优先级（高 → 低）：
+#   1. PYQCD_CUDA_ARCHITECTURES     显式指定（可多值，逗号/分号/空格分隔）
+#   2. CMAKE_CUDA_ARCHITECTURES     兼容 CMake 习惯
+#   3. PYQCD_SM_ARCH                旧变量名
+#   4. 自动探测：nvidia-smi compute_cap → GPU 型号回退表
+#   5. 默认 6.0 7.0（无 GPU 的构建机 / CI）
+# 无论哪种来源，都同时嵌入 cubin 与 PTX（code=[sm_XX,compute_XX]）：
+# 新卡即使没有对应 SASS，也能由驱动 JIT 出 PTX 执行，不会静默退回 CPU。
+detect_cuda_arch() {
+    command -v nvidia-smi >/dev/null 2>&1 || return 1
+    _cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
+        | head -n 1 | tr -d '[:space:]' || true)
+    case "$_cap" in
+        [0-9]*.[0-9]*) printf '%s' "${_cap%.*}${_cap#*.}"; return 0 ;;
+    esac
+    _model=$(nvidia-smi --query-gpu=gpu_name --format=csv,noheader 2>/dev/null \
+        | head -n 1 || true)
+    [ -n "$_model" ] || return 1
+    # 精确型号族优先于宽泛产品族（对齐 PyQCU env.sh 的回退表）。
+    case "$_model" in
+        *"Jetson"*"Thor"*|*"Jetson"*"T4000"*|*"Jetson"*"T5000"*) _arch=110 ;;
+        *"GB10"*) _arch=121 ;;
+        *"B300"*|*"GB300"*) _arch=103 ;;
+        *"B100"*|*"B200"*|*"GB200"*) _arch=100 ;;
+        *"RTX PRO"*"Blackwell"*|*"Blackwell"*|*"GeForce RTX 50"*) _arch=120 ;;
+        *"H100"*|*"H200"*|*"H800"*|*"H20"*|*"GH200"*) _arch=90 ;;
+        *"Ada"*|*"GeForce RTX 40"*|*"L40S"*|*"L40"*|*"L20"*|*"L4"*|*"L2"*) _arch=89 ;;
+        *"A100"*|*"A800"*|*"A30"*|*"CMP 170HX"*) _arch=80 ;;
+        *"GeForce RTX 30"*|*"RTX A"*|*"A40"*|*"A16"*|*"A10"*|*"A2"*|*"MX570"*) _arch=86 ;;
+        *"GeForce RTX 20"*|*"GeForce GTX 16"*|*"Quadro RTX"*|*"TITAN RTX"*|*"Tesla T4"*|*"T400"*|*"T600"*|*"MX450"*|*"MX550"*) _arch=75 ;;
+        *"RTX 8000"*|*"RTX 6000"*|*"RTX 5000"*|*"RTX 4000"*|*"RTX 3000"*) _arch=75 ;;
+        *"V100"*|*"TITAN V"*|*"GV100"*) _arch=70 ;;
+        *"GeForce GTX 10"*|*"TITAN Xp"*|*"TITAN X Pascal"*|*"Tesla P40"*|*"Tesla P6"*|*"Tesla P4"*|*"Quadro P"*|*"MX350"*|*"MX330"*|*"MX250"*|*"MX230"*|*"MX150"*) _arch=61 ;;
+        *"P100"*|*"GP100"*) _arch=60 ;;
+        *"GeForce GTX 9"*|*"TITAN X"*|*"Quadro M"*|*"Tesla M40"*|*"Tesla M60"*|*"Tesla M6"*|*"Tesla M4"*|*"GRID M"*) _arch=52 ;;
+        *"Tesla M10"*|*"GeForce GTX 750"*|*"GeForce MX110"*|*"GeForce MX130"*) _arch=50 ;;
+        *"Tesla K80"*) _arch=37 ;;
+        *"Tesla K40"*|*"Tesla K20"*|*"Quadro K6000"*|*"GTX 780"*|*"GTX TITAN"*|*"TITAN Z"*|*"TITAN Black"*) _arch=35 ;;
+        *"Jetson"*"Orin"*) _arch=87 ;;
+        *"Xavier"*) _arch=72 ;;
+        *"Tegra X2"*|*"Jetson TX2"*) _arch=62 ;;
+        *"Tegra X1"*|*"Jetson Nano"*|*"Jetson TX1"*) _arch=53 ;;
+        *) return 1 ;;
+    esac
+    printf '%s' "$_arch"
+    return 0
+}
+
+ARCH_SOURCE=""
 if [ -n "${PYQCD_CUDA_ARCHITECTURES:-}" ]; then
     ARCHITECTURES=$PYQCD_CUDA_ARCHITECTURES
+    ARCH_SOURCE="PYQCD_CUDA_ARCHITECTURES"
 elif [ -n "${CMAKE_CUDA_ARCHITECTURES:-}" ]; then
     ARCHITECTURES=$CMAKE_CUDA_ARCHITECTURES
+    ARCH_SOURCE="CMAKE_CUDA_ARCHITECTURES"
 elif [ -n "${PYQCD_SM_ARCH:-}" ]; then
     ARCHITECTURES=$PYQCD_SM_ARCH
+    ARCH_SOURCE="PYQCD_SM_ARCH"
+elif ARCHITECTURES=$(detect_cuda_arch); then
+    ARCH_SOURCE="auto-detected"
 else
     ARCHITECTURES=$DEFAULT_ARCHITECTURES
+    ARCH_SOURCE="default (no GPU detected)"
 fi
 ARCHITECTURES=${ARCHITECTURES//,/ }
 ARCHITECTURES=${ARCHITECTURES//;/ }
@@ -143,7 +199,8 @@ for architecture in $ARCHITECTURES; do
         printf 'error: invalid CUDA architecture %s\n' "$architecture" >&2
         exit 1
     fi
-    ARCH_FLAGS+=("-gencode=arch=compute_${compact},code=sm_${compact}")
+    # cubin + PTX：新卡的驱动能 JIT PTX，避免"编得出来却跑不起来"。
+    ARCH_FLAGS+=("-gencode=arch=compute_${compact},code=[sm_${compact},compute_${compact}]")
     ARCH_LABELS+=("$architecture")
 done
 
@@ -173,6 +230,8 @@ trap 'rm -f "$TEMP_LIBRARY" "$TEMP_PUBLIC"' EXIT
 
 printf 'pyqcd einsum CUDA build\n'
 printf '  nvcc:     %s\n' "$($NVCC --version | tail -n 1)"
+printf '  arch:     %s (source: %s; cubin+PTX embedded)\n' \
+    "${ARCH_LABELS[*]}" "$ARCH_SOURCE"
 printf '  arch:     %s\n' "${ARCH_LABELS[*]}"
 printf '  OpenBLAS: %s\n' "$_OPENBLAS_SUMMARY"
 printf '  sources:  %s\n' "$(for source in "${SOURCES[@]}"; do printf '%s ' "${source##*/}"; done)"

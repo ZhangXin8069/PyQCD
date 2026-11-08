@@ -716,3 +716,25 @@ python -c "from pyqcd.einsum import _kernel_cuda as k; print(k.enabled())"
 必须给出 `PYQCD_CUDA_ARCHITECTURES=8.9 pip install "pyqcd[cuda]"` 这种写法。
 可选改进（未实施，需用户批准，属构建配置而非接口）：把默认改成
 `code=[sm_XX,compute_XX]` 以嵌入 PTX，让新卡走驱动 JIT。
+
+### CUDA 架构：自动探测 + 始终嵌 PTX（0.1.14 起）
+`cpp/cuda/einsum/make-nv.sh` 现在的解析顺序：`PYQCD_CUDA_ARCHITECTURES` →
+`CMAKE_CUDA_ARCHITECTURES` → `PYQCD_SM_ARCH` → **自动探测**
+（`nvidia-smi compute_cap` → GPU 型号回退表，取自 PyQCU `env.sh`）→ 默认 `6.0 7.0`。
+每个架构都编译为 `-gencode=arch=compute_XX,code=[sm_XX,compute_XX]`（cubin + PTX）。
+
+关键收益（实测 RTX 4060 / sm_89）：
+
+| 构建 | kernel status | 说明 |
+|---|---|---|
+| 旧默认 SASS-only `sm_70` | 3 | 新卡跑不了，静默回落 |
+| 显式 `7.0` + PTX | **0** | 驱动 JIT PTX，**无 GPU 的登录节点也能编出可用的包** |
+| 自动探测 `8.9` | **0** | 原生 SASS，最快 |
+
+`pip install pyqcd==0.1.14`（不设任何变量）实测 `status=0`。
+
+**诊断方式已变**：`strings <so> | grep compute_` 只对纯 SASS 产物有效；fatbin 布局下
+架构名不是明文 ASCII。改用：
+1. `pip install -v ... 2>&1 | grep -E "^  arch:"`（构建时打印来源与架构）
+2. `readelf -S <so> | grep nv_fatbin`（是否有 fatbin）
+3. `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 看提示是 `[kernel: cuda_nucleon_2pt]` 还是 `[plan-cache]`
