@@ -2648,6 +2648,15 @@ def test_correlated_fit_identifiability_guards():
     _run_unittest_contract(FitWindowValidationTests)
 
 
+def test_contract_edge_cases():
+    """收缩 API 的边界矩阵：全 dtype、ellipsis、标量、零尺寸、out=、错误类型。"""
+    from . import _contract_edge_cases_contract as contract
+
+    for name in sorted(dir(contract)):
+        if name.startswith("test_") and callable(getattr(contract, name)):
+            getattr(contract, name)()
+
+
 def test_docs_api_contracts():
     """文档引用的每个 API 都必须真实存在（AST 解析 docs 的 python 代码块）。"""
     from . import _docs_api_contract as contract

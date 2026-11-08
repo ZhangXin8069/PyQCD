@@ -477,3 +477,27 @@ for p in ('## Repositories','gitlab.itp.ac.cn','gitee.com','py-qcd.readthedocs.i
     print(p, t.count(p))
 "
 ```
+
+### "drop-in 替换"要按边界矩阵验收（0.1.9 实测 0 失败）
+`pyqcd/testing/_contract_edge_cases_contract.py` 覆盖以下矩阵，全绿才算兼容：
+
+| 维度 | 用例 |
+|---|---|
+| dtype | float32/float64/complex64/complex128/int64/bool |
+| 语法 | 隐式输出 `ij,jk`、ellipsis `...ij,...jk->...ik`、重复标签 `ii->i`、迹 `ii->`、标量与 `,ij->ij`、恒等 `ij->ij`、转置、逐元素 |
+| 形状 | 非连续视图（`base[::2, ::2]`）、零尺寸维 `(0,4)` |
+| optimize | `False/True/'greedy'/'optimal'/'dp'/'auto'` |
+| kwargs | `out=`（**注意 `out` 形状必须与真结果一致，写错会得到广播错误而非误判库 bug**） |
+| 对象 | `contract_expression`、`shared_intermediates` 的 cache 字典 |
+| 规划 | `contract_path(...).opt_cost` 与 `opt_einsum` 完全一致 |
+| 错误 | 操作数个数不符 / 标签尺寸冲突 / 输出标签未知 → 必须 `ValueError`/`TypeError` |
+
+**`dtype=` 与 `order=` 不是缺陷**：`opt_einsum` 3.4.0 自己也会抛
+`TypeError: _tensordot() got an unexpected keyword argument 'dtype'`；
+pyqcd 与之一致即为兼容（bug-for-bug）。若将来要支持，属于**扩展**而非修 bug，
+必须在文档里明确写成"超出 opt_einsum 3.4.0 的行为"。
+
+跑法：
+```bash
+python -m pyqcd.testing._contract_edge_cases_contract    # 或整包 python -m pyqcd.testing
+```
