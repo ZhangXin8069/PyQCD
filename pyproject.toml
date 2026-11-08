@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyqcd"
-version = "0.1.28"
+version = "0.1.29"
 description = "Lattice QCD toolkit with a native contraction engine and an opt_einsum-compatible API."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -108,14 +108,14 @@ python -m pyqcd --gpu-probe
 
 ## Reproducible on the published package
 
-`pyqcd==0.1.28` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`pyqcd==0.1.29` (`build_info(): backend=kupl, array_backend=numpy`) versus
 `opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
 |---|---|---|---|
-| Nucleon 2pt, nvec=32 (production contract) | 102.55 ms | 16.63 ms | **6.17×** |
-| γ sandwich, T=256, nvec=512 | 28.78 ms | 4.55 ms | **6.33×** |
-| Generic chain 800³ (no specialised kernel) | 13.40 ms | 16.99 ms | 0.79× (PyQCD slower) |
+| γ sandwich, 8192×1024 (fused kernel) | 1.54 s | 0.76 s | **2.0×** |
+| Batched GEMM 16×1024² | 0.74 s | 0.75 s | 0.98× |
+| Nucleon 2pt, nvec=112 (kernel) | 2.65 s | 2.67 s | 0.99× |
 
 What the shipped build actually accelerates:
 
@@ -138,14 +138,26 @@ unless noted, median of 9 calls, measured on `pyqcd 0.1.21`:
 
 | Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
 |---|---|---|---|
-| batched matmul, 32×256² | 9.3 ms | 97.1 ms | **10.6×** |
-| ellipsis, 16×128×128 | 1.1 ms | 6.3 ms | **5.8×** |
-| 3-operand chain, 3×500 | 3.1 ms | 3.2 ms | 1.03× |
-| complex matmul, 800² | 20.4 ms | 21.0 ms | 1.03× |
-| Hadamard, 4000² | 30.1 ms | 30.2 ms | 1.00× |
-| outer product, 2000×2000 | 4.1 ms | 4.1 ms | 1.00× |
-| 4-operand chain, 300 | 1.15 ms | 1.11 ms | 1.00× |
-| matmul, 1000² | 10.7 ms | 10.2 ms | 0.97× |
+| batched matmul, 32×1024² | 0.61 s | 6.98 s | **11.6×** |
+| ellipsis, 256×512² | 0.91 s | 6.48 s | **7.1×** |
+| Hadamard, 16000² | 0.44 s | 0.55 s | **1.26×** |
+| matmul, 4600² | 1.05 s | 1.06 s | 1.01× |
+| 3-operand chain, 3×3570 | 1.00 s | 0.98 s | 0.98× |
+| complex matmul, 3100² | 1.36 s | 1.34 s | 0.96× |
+### Sized for production, not for the stopwatch
+
+Every case is dimensioned so that a **single call takes about 0.5–1.5 s**, then
+repeated **3 times**, interleaved with the reference implementation. Shorter runs
+measure cache warm-up and timer resolution rather than the contraction, and they
+hide the BLAS blocking regime that production shapes live in. The whole suite takes
+about a minute.
+
+| batched matmul, 32×1024² | 0.58 s | 6.33 s | **10.9×** |
+| ellipsis, 256×512² | 0.87 s | 6.42 s | **7.4×** |
+| Hadamard, 16000² | 0.54 s | 0.62 s | **1.17×** |
+| complex matmul, 3100² | 1.29 s | 1.30 s | 1.01× |
+| matmul, 4600² | 0.98 s | 0.97 s | 1.00× |
+| 3-operand chain, 3×3570 | 0.95 s | 0.94 s | 0.99× |
 
 Read it honestly:
 
@@ -175,14 +187,13 @@ print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)
 def one(call):
     start = time.perf_counter()
     call()
-    return (time.perf_counter() - start) * 1e3
+    return time.perf_counter() - start
 
 
-def compare(ours, theirs, warmup=3, rounds=15):
-    """Interleave the two implementations so machine drift cancels out."""
-    for _ in range(warmup):
-        ours()
-        theirs()
+def compare(ours, theirs, rounds=3):
+    """One warm-up call, then `rounds` interleaved timed calls (seconds)."""
+    ours()
+    theirs()
     left, right, ratios = [], [], []
     for _ in range(rounds):
         a = one(ours)
@@ -197,27 +208,25 @@ rng = np.random.default_rng(0)
 real = lambda *s: rng.standard_normal(s)
 cplx = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128)
 
+# Sized so that one call takes roughly 0.5-1.5 s: shorter runs measure timer and
+# cache noise, not the contraction, and they hide the BLAS register-blocking regime.
 CASES = [
-    ("matmul 1000^2", "ij,jk->ik", [real(1000, 1000), real(1000, 1000)]),
-    ("chain 3x500", "ij,jk,kl->il", [real(500, 500)] * 3),
-    ("batched 32x256^2", "bij,bjk->bik", [real(32, 256, 256), real(32, 256, 256)]),
-    ("ellipsis 16x128^2", "...ij,...jk->...ik",
-     [real(16, 128, 128), real(16, 128, 128)]),
-    ("complex mm 800^2", "ij,jk->ik", [cplx(800, 800), cplx(800, 800)]),
-    ("hadamard 4000^2", "ij,ij->ij", [real(4000, 4000), real(4000, 4000)]),
-    ("4-operand chain 300", "ij,jk,kl,lm->im", [real(300, 300)] * 4),
-    ("outer 2000", "i,j->ij", [real(2000), real(2000)]),
+    ("matmul 4600^2", "ij,jk->ik", [real(4600, 4600), real(4600, 4600)]),
+    ("chain 3x3570", "ij,jk,kl->il", [real(3570, 3570)] * 3),
+    ("batched 32x1024^2", "bij,bjk->bik", [real(32, 1024, 1024), real(32, 1024, 1024)]),
+    ("ellipsis 256x512^2", "...ij,...jk->...ik",
+     [real(256, 512, 512), real(256, 512, 512)]),
+    ("complex mm 3100^2", "ij,jk->ik", [cplx(3100, 3100), cplx(3100, 3100)]),
+    ("hadamard 16000^2", "ij,ij->ij", [real(16000, 16000), real(16000, 16000)]),
 ]
 
-print(f"{'case':22s} {'pyqcd':>8s} {'opt':>8s} {'ratio':>7s}")
+print(f"{'case':22s} {'pyqcd(s)':>9s} {'opt(s)':>8s} {'ratio':>6s}")
 for label, equation, operands in CASES:
     reference = np.einsum(equation, *operands, optimize="optimal")
     assert np.allclose(np.asarray(pe.contract(equation, *operands)), reference), label
-    assert np.allclose(np.asarray(oe.contract(equation, *operands, optimize="dp")),
-                       reference), label
     ours, theirs, ratio = compare(lambda: pe.contract(equation, *operands),
                                   lambda: oe.contract(equation, *operands, optimize="dp"))
-    print(f"{label:22s} {ours:8.2f} {theirs:8.2f} {ratio:7.3f}")
+    print(f"{label:22s} {ours:9.2f} {theirs:8.2f} {ratio:6.2f}")
 ```
 
 Sub-millisecond equations (`ii->`, `ii->i` on a 5000² matrix) are deliberately

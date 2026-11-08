@@ -274,3 +274,29 @@ def test_kupl_plan_gate_by_batch_structure() -> None:
     chain = [rng.standard_normal((32, 32)) for _ in range(3)]
     assert np.allclose(np.asarray(pe.contract("ij,jk,kl->il", *chain)),
                        np.einsum("ij,jk,kl->il", *chain, optimize="optimal"))
+
+
+def test_cupy_generic_path_delegates_to_cupy() -> None:
+    """cupy 的通用方程必须在规划之前交回 cupy.einsum（原生 batched GEMM 慢 5 倍）。"""
+    try:
+        import cupy
+    except ImportError:
+        return                      # 没有 cupy 时跳过（该路径不可达）
+
+    assert api_module()._cupy_operands([cupy.zeros((2, 2))]) is True
+    assert api_module()._cupy_operands([cupy.zeros((2, 2)), np.zeros((2, 2))]) is False
+    assert api_module()._cuda_fused_shape("bij,bjk->bik") is False
+    assert api_module()._cuda_fused_shape("ab,...bce,cd->...dae") is True
+
+    a = cupy.asarray(np.arange(16.0).reshape(4, 4).astype(np.complex128))
+    b = cupy.asarray(np.arange(16.0).reshape(4, 4).astype(np.complex128))
+    got = cupy.asnumpy(pe.contract("bij,bjk->bik", a[None], b[None]))
+    ref = np.einsum("bij,bjk->bik", cupy.asnumpy(a)[None], cupy.asnumpy(b)[None],
+                    optimize="optimal")
+    assert np.allclose(got, ref)
+
+
+def api_module():
+    import pyqcd.einsum._api as api
+
+    return api

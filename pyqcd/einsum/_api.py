@@ -601,6 +601,32 @@ def _warn_specialized_kernel_once(exc: BaseException) -> None:
     )
 
 
+def _backend_einsum(backend_name: str, subscripts: str, operands: Sequence[Any],
+                     out: Any = None):
+    """Call the backend's own einsum, preferring its optimised path."""
+    einsum_call = backends.get_func("einsum", backend_name)
+    kwargs: dict[str, Any] = {}
+    if len(operands) > 1:
+        kwargs["optimize"] = True      # numpy/cupy/torch 内部会用 tensordot/cuBLAS
+    if out is not None:
+        kwargs["out"] = out
+    try:
+        return einsum_call(subscripts, *operands, **kwargs)
+    except TypeError:
+        kwargs.pop("optimize", None)
+        return einsum_call(subscripts, *operands, **kwargs)
+
+
+def _cupy_operands(operands: Sequence[Any]) -> bool:
+    """True when every operand is a cupy array (the GPU delegation case)."""
+    if not operands:
+        return False
+    for operand in operands:
+        if not type(operand).__module__.startswith("cupy"):
+            return False
+    return True
+
+
 def _is_elementwise_equation(subscripts: str) -> bool:
     """True when the equation sums over nothing (element-wise / permutation / diagonal).
 
@@ -688,13 +714,19 @@ def contract(
             os.environ[_specialize.FUSED_DISABLE_ENV] = "1"
             _FUSED_ENV_OWNED = True
 
+    # GPU 上的通用（非融合）方程：cupy 自己的 einsum 直接走 cuBLAS，
+    # 实测在 16×1024² complex128 上比我们的原生批量 GEMM 快 5 倍。
+    # 在规划之前就委派，连契约解析的开销也省掉。
+    if (isinstance(subscripts, str) and out is None and not kwargs
+            and _cupy_operands(operands) and not _cuda_fused_shape(subscripts)):
+        return _backend_einsum("cupy", subscripts, operands)
+
     # 逐元素/纯置换类方程没有 BLAS 结构：直接交给 backend 的原生 einsum，
     # 比逐步执行 + 计划缓存更快（实测 Hadamard 4000² 89 ms -> 29 ms）。
     if (isinstance(subscripts, str) and out is None and not kwargs
             and _is_elementwise_equation(subscripts)):
         elementwise_backend = parse_backend(operands, backend)
-        einsum_call = backends.get_func("einsum", elementwise_backend)
-        return einsum_call(subscripts, *operands)
+        return _backend_einsum(elementwise_backend, subscripts, operands)
 
     global _LAST_CONTRACT_SIGNATURE, _LAST_CONTRACT_PROGRAM
 
@@ -796,7 +828,9 @@ def contract(
                 _CONTRACT_PROGRAM_CACHE.pop(cached_key, None)
 
     return _core_contract(operands_prepped, contraction_list, backend=backend, out=out,
-                          batch_like=_has_batch_index(subscripts), **kwargs)
+                          batch_like=_has_batch_index(subscripts),
+                          equation=subscripts if isinstance(subscripts, str) else None,
+                          **kwargs)
 
 
 def _run_step(step: Any, operands: list[Any], backend: str, out: Any, kwargs: dict[str, Any]) -> Any:
@@ -1012,6 +1046,17 @@ def _execute_native_plan(
     return True, result
 
 
+_CUDA_FUSED_EQUATIONS = ("ab,...bce,cd->...dae",)
+
+
+def _cuda_fused_shape(equation: str | None) -> bool:
+    """True when the CUDA executor has a fused kernel for this equation."""
+    if not equation:
+        return True                       # 未知时保持原生（保守）
+    normalised = equation.replace(" ", "")
+    return normalised in _CUDA_FUSED_EQUATIONS
+
+
 def _has_batch_index(subscripts: str | None) -> bool:
     """True when a label is shared by two operands **and** kept in the output.
 
@@ -1065,12 +1110,18 @@ def _try_native_contract(
     kwargs: dict[str, Any],
     native_cache: dict[tuple[Any, ...], Any] | None = None,
     batch_like: bool | None = None,
+    equation: str | None = None,
 ) -> tuple[bool, Any]:
     """Return ``(handled, result)`` for one native execution attempt."""
     if not _native_compatible(operands, backend, kwargs):
         return False, None
     native_backend = _native_backend(backend)
     assert native_backend is not None
+    if native_backend == "cuda" and not _cuda_fused_shape(equation):
+        # cupy 的 einsum 直接走 cuBLAS（含批量 GEMM），实测在 16×1024² 的
+        # complex128 上比我们的原生批量 GEMM 快约 5 倍；只有存在融合 kernel 的
+        # 方程（γ 夹心）才值得走原生执行器。2pt/3pt 专用 kernel 在更外层。
+        return False, None
     wants_batch_path = (_batched_operands(operands) if batch_like is None
                         else batch_like)
     if (native_backend == "kupl" and not _kupl_plan_enabled()
@@ -1257,6 +1308,7 @@ def _core_contract(
     contraction_list: Sequence[tuple[Any, ...]],
     backend: str | None = "auto",
     batch_like: bool | None = None,
+    equation: str | None = None,
     evaluate_constants: bool = False,
     out: Any = None,
     native_cache: dict[tuple[Any, ...], Any] | None = None,
@@ -1285,7 +1337,8 @@ def _core_contract(
         try:
             handled, native_result = _try_native_contract(
                 operands, contraction_list, backend, out, kwargs,
-                native_cache=native_cache, batch_like=batch_like)
+                native_cache=native_cache, batch_like=batch_like,
+                equation=equation)
         except Exception as exc:  # noqa: BLE001 - 见上
             handled, native_result = False, None
             _warn_native_fallback_once(
