@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.1.11`. To pin it: `pip install "pyqcd==0.1.11"`.
+Current release: `0.1.13`. To pin it: `pip install "pyqcd==0.1.13"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need
@@ -147,6 +147,39 @@ assert np.allclose(pe.contract("ij,jk->ik", a, b), a @ b)
 
 `PYQCD_EINSUM_BACKEND` (see above) selects the same backend at build time; it
 is the build-time knob, while `PYQCD_EINSUM_NATIVE` is the one read at run time.
+
+### CUDA architecture matters (read this before expecting GPU speed-ups)
+
+The build script's default architectures are `6.0` and `7.0`. SASS is embedded for
+exactly those values, so on any newer GPU (Ampere 8.0/8.6, Ada 8.9, Hopper 9.0)
+the CUDA kernels **cannot execute**: the entry point returns `QCD_STATUS_INTERNAL`,
+`pyqcd.einsum` falls back to the CPU/Python path and — because that is the fallback
+contract — results stay correct but silent about the missing speed-up.
+
+Measured on an RTX 4060 Laptop (compute capability 8.9), `pyqcd==0.1.13`:
+
+| build | wheel contents | kernel status | result |
+|---|---|---|---|
+| default (`6.0 7.0`) | `compute_70` | `3` (`QCD_STATUS_INTERNAL`) | falls back, rel 1.7e-14 |
+| `PYQCD_CUDA_ARCHITECTURES=8.9` | `compute_89` | `0` (`QCD_STATUS_OK`) | GPU kernel, rel 2.8e-14 |
+
+So specify your architecture at install time — the variable is honoured by
+`pip install` too, because the wheel is built from source:
+
+```bash
+nvidia-smi --query-gpu=compute_cap --format=csv,noheader      # e.g. 8.9
+PYQCD_CUDA_ARCHITECTURES=8.9 pip install "pyqcd[cuda]"
+```
+
+Diagnose an existing install with:
+
+```bash
+python -c "import pyqcd, os; print(os.path.dirname(pyqcd.__file__))"
+strings <site-packages>/pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so | grep -oE "compute_[0-9]+" | sort -u
+```
+
+A `[plan-cache]` hint (instead of `[kernel: cuda_nucleon_2pt]`) means the GPU
+kernel did not run.
 
 ## Building from a source checkout (development)
 

@@ -24,6 +24,9 @@ python -m pyqcd            # version, native backend, optional deps, subpackages
 python -m pyqcd --json     # machine-readable
 ```
 
+> **CUDA 构建与显卡架构绑定。** 默认只编 6.0/7.0，在更新的显卡（Ampere/Ada/Hopper）上
+> kernel 会静默回落；请显式指定，例如 `PYQCD_CUDA_ARCHITECTURES=8.9 pip install "pyqcd[cuda]"`。
+
 ## 文档
 
 * English — https://py-qcd.readthedocs.io/en/latest/usage.html
@@ -97,7 +100,7 @@ MPI 分片只在 KUPL 后端实现，且只分片单个输出轴；CUDA 后端�
 
 ## 性能
 
-下面是**已发布包上可复现**的数字：`pyqcd==0.1.11`
+下面是**已发布包上可复现**的数字：`pyqcd==0.1.13`
 （`build_info(): backend=kupl, array_backend=numpy`）、`opt_einsum==3.4.0` 的 `dp`
 策略、`complex128`、预热 3 次后取 15 次中位数。
 

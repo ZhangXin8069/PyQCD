@@ -693,3 +693,26 @@ git ls-remote git@gitee.com:zhangxin8069/PyQCD.git refs/tags/dev<N>
 ```
 注意：`git push origin dev<N>` 只推该 tag，不要 `--tags`（免得把历史 tag 一并推）；
 本仓库 tag 约定为 `dev<N>` 递增（当前 34），没有 `v*` 系列。
+
+### CUDA 编译架构是"支持 CUDA"的真假分界线（0.1.13 实测）
+`cpp/cuda/einsum/make-nv.sh` 的 `DEFAULT_ARCHITECTURES="6.0 7.0"`，且只嵌 SASS
+（`-gencode=arch=compute_XX,code=sm_XX`，不含 PTX）。因此在比 Volta 新的卡上：
+
+| 构建 | `.so` 内 | kernel 入口返回 | 现象 |
+|---|---|---|---|
+| 默认 | `compute_70` | `3`（`QCD_STATUS_INTERNAL`） | 静默回落 CPU/Python，**用户以为"支持 CUDA"其实没跑** |
+| `PYQCD_CUDA_ARCHITECTURES=8.9` | `compute_89` | `0`（`QCD_STATUS_OK`） | 真跑 GPU（rel 2.8e-14） |
+
+排查三步（不依赖日志）：
+```bash
+nvidia-smi --query-gpu=compute_cap --format=csv,noheader        # 本机算力
+strings <site-packages>/pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so | grep -oE "compute_[0-9]+" | sort -u
+python -c "from pyqcd.einsum import _kernel_cuda as k; print(k.enabled())"
+```
+判据：`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 下提示是 `[kernel: cuda_nucleon_2pt]`
+（真跑）还是 `[plan-cache]`（没跑）。
+
+`PYQCD_CUDA_ARCHITECTURES` 对 **`pip install` 同样生效**（sdist 现场编译），文档里
+必须给出 `PYQCD_CUDA_ARCHITECTURES=8.9 pip install "pyqcd[cuda]"` 这种写法。
+可选改进（未实施，需用户批准，属构建配置而非接口）：把默认改成
+`code=[sm_XX,compute_XX]` 以嵌入 PTX，让新卡走驱动 JIT。

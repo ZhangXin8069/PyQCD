@@ -26,6 +26,10 @@ python -m pyqcd            # version, native backend, optional deps, subpackages
 python -m pyqcd --json     # machine-readable
 ```
 
+> **CUDA builds are architecture-specific.** The default build targets compute 6.0/7.0, so on
+> newer GPUs (Ampere/Ada/Hopper) the kernels silently fall back unless you set
+> `PYQCD_CUDA_ARCHITECTURES` (e.g. `PYQCD_CUDA_ARCHITECTURES=8.9 pip install "pyqcd[cuda]"`).
+
 ## Documentation
 
 * English — https://py-qcd.readthedocs.io/en/latest/usage.html
@@ -105,7 +109,7 @@ axis; the CUDA backend has no MPI implementation.
 ## Performance
 
 Numbers you can reproduce on the **published package**, measured with
-`pyqcd==0.1.11` (`build_info(): backend=kupl, array_backend=numpy`),
+`pyqcd==0.1.13` (`build_info(): backend=kupl, array_backend=numpy`),
 `opt_einsum==3.4.0` with the `dp` planner, `complex128`, median of 15 calls after
 3 warm-up calls:
 

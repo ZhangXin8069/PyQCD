@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.1.11`。需要固定版本时：`pip install "pyqcd==0.1.11"`。
+当前发行版：`0.1.13`。需要固定版本时：`pip install "pyqcd==0.1.13"`。
 
 PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的
 manylinux wheel 需要 `auditwheel` 修补。因此首次安装会编译一次（笔记本上约一分钟），
@@ -131,6 +131,36 @@ assert np.allclose(pe.contract("ij,jk->ik", a, b), a @ b)
 
 `PYQCD_EINSUM_BACKEND`（见上）在构建阶段做同样的选择：构建期读的是
 `PYQCD_EINSUM_BACKEND`，运行期读的是 `PYQCD_EINSUM_NATIVE`。
+
+### CUDA 架构必须匹配（想要 GPU 加速先看这条）
+
+构建脚本的默认架构是 `6.0` 与 `7.0`，SASS 只嵌这两个值。因此在任何更新的显卡上
+（Ampere 8.0/8.6、Ada 8.9、Hopper 9.0）CUDA kernel **无法执行**：入口返回
+`QCD_STATUS_INTERNAL`，`pyqcd.einsum` 按回退契约转到 CPU/Python 路径——结果依然正确，
+但加速静默消失。
+
+在 RTX 4060 Laptop（算力 8.9）上实测 `pyqcd==0.1.13`：
+
+| 构建方式 | 产物内含 | kernel 状态 | 结果 |
+|---|---|---|---|
+| 默认（`6.0 7.0`） | `compute_70` | `3`（`QCD_STATUS_INTERNAL`） | 回落，rel 1.7e-14 |
+| `PYQCD_CUDA_ARCHITECTURES=8.9` | `compute_89` | `0`（`QCD_STATUS_OK`） | 走 GPU kernel，rel 2.8e-14 |
+
+所以安装时请显式给出架构——该变量对 `pip install` 同样生效（包是从源码构建的）：
+
+```bash
+nvidia-smi --query-gpu=compute_cap --format=csv,noheader      # e.g. 8.9
+PYQCD_CUDA_ARCHITECTURES=8.9 pip install "pyqcd[cuda]"
+```
+
+诊断已安装的包：
+
+```bash
+python -c "import pyqcd, os; print(os.path.dirname(pyqcd.__file__))"
+strings <site-packages>/pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so | grep -oE "compute_[0-9]+" | sort -u
+```
+
+提示打印 `[plan-cache]`（而不是 `[kernel: cuda_nucleon_2pt]`）就说明 GPU kernel 没跑。
 
 ## 从源码仓库构建（开发用途）
 
