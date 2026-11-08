@@ -540,3 +540,28 @@ PIP_NO_INDEX=1 pip install --find-links /tmp/wh pyqcd==<ver>
 （3.14 无 pip，用 `setup.py build` + `PYTHONPATH` 验证）。因此文档里必须写清
 "实测于 3.12（完整套件）与 3.14（构建+导入），3.10/3.11/3.13 预期可用但未自动验证"，
 不要含糊写成"支持 3.10–3.14"。
+
+### "静默漏发"守卫的受控实验（0.1.9 实测）
+0.1.3 曾因 `packages=[...]` 硬编码丢掉 11 个子包。现在的配置是否还会漏？
+受控实验（做完立刻删除）：
+
+```bash
+printf 'PROBE = 1\n' > pyqcd/_tmp_probe.py
+mkdir -p pyqcd/_tmp_pkg && printf 'PROBE = 1\n' > pyqcd/_tmp_pkg/__init__.py
+python -m build --sdist -o /tmp/probe_dist
+tar -tzf /tmp/probe_dist/pyqcd-<ver>.tar.gz | grep -E '_tmp_probe|_tmp_pkg'
+```
+
+结果：**模块与子包都会自动进 sdist**（`recursive-include pyqcd *.py` +
+`find_packages(include=["pyqcd","pyqcd.*"])`），且 `pyqcd._tmp_pkg` 自动进入 packages。
+同时 `test_public_subpackages_exist` 会**立刻失败**并指出
+`only on disk=['_tmp_pkg']` —— 即"新增子包忘记登记 `__all__`"会被守卫抓住。
+这就是双保险：打包层自动包含 + 测试层强制登记。
+
+### 构建可复现性（结论：内容可复现，字节不可复现）
+- 同一工作区连续两次 `python -m build --sdist`：tarball sha256 **不同**，
+  但解包后 `diff -r` **完全一致**；
+- 加 `SOURCE_DATE_EPOCH=<固定值>`（setuptools 84.2.1）**仍然不同**（tar 成员时间戳等），
+  不要为了"字节可复现"花时间。
+- 因此：**用内容哈希（解包后逐文件 sha256）判断"是否同一份发布"**，
+  不要用 tarball sha256 比较两次构建；PyPI 记录的 sha256 只用于校验那次上传本身。
