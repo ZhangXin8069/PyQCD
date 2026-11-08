@@ -520,6 +520,39 @@ def _einsum(*operands: Any, **kwargs: Any) -> Any:
     return fn(einsum_str, *operands, **kwargs)
 
 
+_SPECIALIZED_KERNEL_WARNED = False
+
+
+def _run_specialized_kernel(subscripts: Any, operands: Sequence[Any]) -> Any:
+    """依次尝试各专用 kernel，未命中返回 ``None``。"""
+    from . import _kernel_cuda, _kernel_kupl
+
+    for attempt in (
+        lambda: _kernel_kupl.try_nucleon_2pt(subscripts, operands),
+        lambda: _kernel_kupl.try_three_pt(subscripts, operands),
+        lambda: _kernel_cuda.try_nucleon_2pt(subscripts, operands),
+        lambda: _kernel_cuda.try_three_pt(subscripts, operands),
+    ):
+        result = attempt()
+        if result is not None:
+            return result
+    return None
+
+
+def _warn_specialized_kernel_once(exc: BaseException) -> None:
+    global _SPECIALIZED_KERNEL_WARNED
+
+    if _SPECIALIZED_KERNEL_WARNED:
+        return
+    _SPECIALIZED_KERNEL_WARNED = True
+    warnings.warn(
+        "pyqcd.einsum specialized kernel failed; using the generic path: "
+        f"{type(exc).__name__}: {exc}",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
 def contract(
     subscripts: Any,
     *operands: Any,
@@ -552,19 +585,14 @@ def contract(
             if specialized is not None:
                 _specialize.announce(specialized)
                 if out is None:
-                    from . import _kernel_kupl
-
-                    kernel_result = _kernel_kupl.try_nucleon_2pt(
-                        subscripts, operands)
-                    if kernel_result is None:
-                        kernel_result = _kernel_kupl.try_three_pt(
+                    # 专用 kernel 失败必须回退通用路径（契约：原生失败只 warning
+                    # 一次，不把异常抛给调用方）。
+                    try:
+                        kernel_result = _run_specialized_kernel(
                             subscripts, operands)
-                    if kernel_result is not None:
-                        return kernel_result
-                    from . import _kernel_cuda
-
-                    kernel_result = _kernel_cuda.try_three_pt(
-                        subscripts, operands)
+                    except Exception as exc:  # noqa: BLE001 - 见上
+                        kernel_result = None
+                        _warn_specialized_kernel_once(exc)
                     if kernel_result is not None:
                         return kernel_result
         else:

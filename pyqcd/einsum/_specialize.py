@@ -29,8 +29,8 @@ FUSED_DISABLE_ENV = "PYQCD_EINSUM_DISABLE_FUSED"
 REGISTRY: dict[str, dict[str, str]] = {
     "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M": {
         "name": "nucleon-2pt(E1)",
-        "kind": "fused",
-        "note": "8 算子核子 2pt；KUPL 专用 kernel（N=100 时约 1.1–1.4x 于通用路径、9.4x 于 opt）",
+        "kind": "fused(needs-optimization)",
+        "note": "8 算子核子 2pt；KUPL/CUDA 专用 kernel 均已接线（KUPL 1.1–1.4x；CUDA 0.86–1.17x 待优化）",
     },
     "Geifj,ckdl,agbh,ce,gi,Mbdf,Mhjl,Gka->GM": {
         "name": "nucleon-3pt(E2)",

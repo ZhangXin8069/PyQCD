@@ -122,6 +122,7 @@ def _kupl_cases(tally, nvec, rng):
                     KUPL_KERNEL_ENV)
 
     import pyqcd.einsum as target
+    from pyqcd.einsum import _kernel_kupl as target_module
 
     ops64 = [operand.astype(np.complex64)
              for operand in nucleon_operands(nvec, rng)]
@@ -130,6 +131,30 @@ def _kupl_cases(tally, nvec, rng):
     error = _common.relative_error(got, reference)
     tally.check(error <= 1e-5, 'kupl/nucleon-complex64',
                 f'rel={error:.2e} dtype={got.dtype}')
+
+    # kernel 内部抛异常时必须回退（契约：warning 一次，不抛给调用方）
+    import warnings
+
+    original = target_module.try_nucleon_2pt
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError('injected kernel failure')
+
+    target_module.try_nucleon_2pt = _boom
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            got = target.contract(NUCLEON_EQ, *nucleon_operands(nvec, rng),
+                                  optimize='dp')
+        reference = _reference(NUCLEON_EQ, nucleon_operands(nvec, rng))
+        del reference
+        tally.check(np.asarray(got).shape == (1,), 'kupl/nucleon-exception-fallback',
+                    f'shape={np.asarray(got).shape}')
+        tally.check(any('specialized kernel failed' in str(w.message)
+                        for w in caught), 'kupl/nucleon-exception-warn',
+                    '未发出一次性告警')
+    finally:
+        target_module.try_nucleon_2pt = original
 
     base = nucleon_operands(nvec, rng)
     strided = [np.asfortranarray(base[0])] + base[1:]
@@ -145,6 +170,35 @@ def _cuda_cases(tally, nvec, rng):
 
     import pyqcd.einsum as target
 
+    # --- E1（nucleon 2pt）---
+    host_nucleon = nucleon_operands(nvec, rng)
+    device_nucleon = [cupy.asarray(operand) for operand in host_nucleon]
+    reference = _reference(NUCLEON_EQ, host_nucleon)
+    got = cupy.asnumpy(target.contract(NUCLEON_EQ, *device_nucleon,
+                                       optimize='dp'))
+    error = _common.relative_error(got, reference)
+    tally.check(error <= _common.RELATIVE_TOLERANCE, 'cuda/nucleon-correct',
+                f'rel={error:.2e}')
+    module = importlib.import_module('pyqcd.einsum._kernel_cuda')
+    hit = module.try_nucleon_2pt(NUCLEON_EQ, device_nucleon) is not None
+    tally.check(hit, 'cuda/nucleon-hit', 'kernel 未命中')
+    got = cupy.asnumpy(_with_env(
+        CUDA_KERNEL_ENV, '0',
+        lambda: target.contract(NUCLEON_EQ, *device_nucleon, optimize='dp')))
+    error = _common.relative_error(got, reference)
+    tally.check(error <= _common.RELATIVE_TOLERANCE, 'cuda/nucleon-kernel-off',
+                f'rel={error:.2e}')
+
+    # 非连续设备数组必须回退（设备端不做 stride 解释，误用会读错内存）
+    strided = [cupy.asfortranarray(operand) for operand in device_nucleon]
+    hit = module.try_nucleon_2pt(NUCLEON_EQ, strided) is not None
+    tally.check(not hit, 'cuda/nucleon-noncontiguous', '非连续输入不应命中 kernel')
+    got = cupy.asnumpy(target.contract(NUCLEON_EQ, *strided, optimize='dp'))
+    error = _common.relative_error(got, reference)
+    tally.check(error <= _common.RELATIVE_TOLERANCE,
+                'cuda/nucleon-noncontiguous-correct', f'rel={error:.2e}')
+
+    # --- P1（3pt）---
     host_operands = three_pt_operands(nvec, rng)
     device_operands = [cupy.asarray(operand) for operand in host_operands]
     reference = _reference(THREE_PT_EQ, host_operands)

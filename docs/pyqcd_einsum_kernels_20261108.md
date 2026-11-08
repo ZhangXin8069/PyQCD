@@ -183,3 +183,48 @@ bash pyqcd/testing/einsum/simple/run-all.sh
 | `cuda_3pt`（P1/P2，GPU） | ✅ | 1.25–2.41x 于通用，1.25–9.29x 于 opt |
 | `kupl_3pt`（P1/P2，CPU） | ❌ 撤回 | 0.94–1.01x，N≥50 略慢于 opt |
 | `cuda_nucleon`（E1，GPU） | ❌ | 0.60x（优化中，bg-21） |
+
+---
+
+## 9. 最终接线状态（09:55）
+
+### 9.1 `cuda_nucleon`（E1，GPU）—— **已接线，保留 needs-optimization 标识**
+
+| 环节 | 内容 |
+|---|---|
+| 符号导出 | `make-nv.sh` version script 新增 `qcd_cuda_nucleon_2pt` |
+| 绑定 | `pyqcd/einsum/_kernel_cuda.py::try_nucleon_2pt`（设备指针、10 项 dims、perm 码 123、契约顺序 `{P1,P2,P3,G1,G2,pr,V1,V2}`） |
+| 分派 | `pyqcd/einsum/_api.py::contract`（numpy 路径不命中时尝试 KUPL → CUDA nucleon → CUDA 3pt） |
+| 标识 | 代码常量 `NUCLEON_2PT_NEEDS_OPTIMIZATION = True`；注册表 `fused(needs-optimization)`；首次命中打印一次性提示 |
+| 开关 | `PYQCD_EINSUM_KERNEL_CUDA=0` / `contract(..., specialize=False)` |
+
+### 9.2 实测（接线的生产库，单卡 RTX 4060）
+
+| Nvec | kernel 路径 | 通用路径 | opt_einsum | kernel/通用 | kernel/opt |
+|---|---|---|---|---|---|
+| 100（本轮复测） | **210.67 ms** | 396.51 ms | 381.04 ms | **1.88x** | **1.81x** |
+| 100（另一轮） | 415.33 ms | 486.02 ms | 3083 ms | 1.17x | 7.42x |
+| 50 | 86.5 ms | 74.0–89.3 ms | 88.9–151.7 ms | 0.86–1.05x | 1.0–1.8x |
+
+数值：`rel = 1.61e-13`（≤ 1e-12 契约）。
+
+> 通用路径在同机多次测量间波动 ±20%，kernel 相对收益因此在 0.86–1.88x 之间跳动；
+> 与 opt_einsum 相比始终领先（1.8x–7.4x）。这正是保留 `needs-optimization` 的依据。
+
+### 9.3 标识一览（当前）
+
+| 形态 | `pe.specializations()` 输出 | 说明 |
+|---|---|---|
+| E1 | `fused(needs-optimization)` | KUPL 1.1–1.4x；CUDA 0.86–1.88x，待优化 |
+| P1/P2 | `fused(needs-optimization)` | CUDA ≈1.8x；KUPL 待优化 |
+| E4 | `fused` | 仅 `z·y·x==1` 启用 |
+| E5 | `fused` | CPU 8.33x / GPU 3.37x |
+
+### 9.4 回归（接线后）
+
+| 检查 | 结果 |
+|---|---|
+| `verify_native` kupl / cuda | 16/16、16/16 |
+| `simple/run-all.sh` | **94 passed，exit=0**（kernels 子项已扩到 16） |
+| `verify_compat` 全量 | **980/980 PASS** |
+| `python -m pyqcd.testing` | **115 passed / 1 skipped / 0 failed** |

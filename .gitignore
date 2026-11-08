@@ -67,6 +67,9 @@ pyqcd/*.cpp
 # ==================================================
 !.github/
 !.github/**
+# docs build (Read the Docs): re-included after the ".*" rule in section 4
+!/.readthedocs.yaml
+!*.rst
 !.clang\*
 !.editorconfig
 !.env.dist

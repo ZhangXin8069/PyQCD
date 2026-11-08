@@ -69,7 +69,33 @@ KERNELS = {
 }
 
 
+def _prebuilt_library(spec):
+    """优先复用仓库已构建的库：它才是生产实际加载的二进制。
+
+    用 nvcc 现编的独立 .so 缺少仓库构建脚本里的
+    ``-fvisibility=hidden`` 与 ``-lcublas``/``-lcudart`` 链接参数，
+    实测性能与生产库可差 1.8x，用它做验收会得出错误结论。
+    """
+    if not spec.get('cuda'):
+        return None
+    candidate = os.path.join(REPO, 'cpp', 'cuda', 'einsum', 'build',
+                             'libpyqcdeinsum_cuda.so')
+    if not os.path.isfile(candidate):
+        return None
+    try:
+        import subprocess
+
+        defined = subprocess.run(['nm', '--defined-only', candidate],
+                                 capture_output=True, text=True).stdout
+    except OSError:
+        return None
+    return candidate if spec['symbol'] in defined else None
+
+
 def _build(spec, outdir):
+    prebuilt = _prebuilt_library(spec)
+    if prebuilt is not None:
+        return prebuilt, ''
     source = os.path.join(REPO, spec['source'])
     wip = source + '.wip'
     if not os.path.isfile(source):
@@ -150,17 +176,6 @@ CASES = {
 CUDA_STREAM_ARG = True
 
 
-def _run_kernel(library, symbol, operands, dims, variant):
-    function = getattr(library, symbol)
-    function.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p),
-                         ctypes.c_void_p, ctypes.POINTER(ctypes.c_int64),
-                         ctypes.c_int]
-    function.restype = ctypes.c_int
-    from pyqcd.einsum import contract_path
-    equation_operands = operands
-    return function, equation_operands
-
-
 def evaluate(name, spec, nvec, iterations=10):
     oracle = _common.oracle_module()
     import pyqcd.einsum as target
@@ -236,8 +251,11 @@ def evaluate(name, spec, nvec, iterations=10):
     kernel_seconds = _median(invoke, iterations)
     oracle_seconds = _median(
         lambda: oracle.contract(eq, *operands, optimize='dp'), iterations)
+    # 必须显式 specialize=False：默认路径一旦接线就会走 kernel，
+    # 否则这里测到的"generic"其实是 kernel 自己，对照失去意义。
     generic_seconds = _median(
-        lambda: target.contract(eq, *operands, optimize='dp'), iterations)
+        lambda: target.contract(eq, *operands, optimize='dp',
+                                specialize=False), iterations)
 
     if status != 0 or error > _common.RELATIVE_TOLERANCE:
         verdict = 'BUG（数值/返回码不合格）'

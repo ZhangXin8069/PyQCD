@@ -2,82 +2,120 @@
  *
  * 契约、dims 约定与轴序说明见 include/nucleon2pt.h；本文件只放实现。
  *
- * 规范方程（唯一形态）
- * ------------------------------------------------------------------
- *   out[my][mx] = Σ A[g,a,h,b] B[m,c,n,d] C[o,e,p,f] GX[a,c] GY[o,g]
- *                   PR[e,m] V1[mx,b,d,f] V2[my,n,p,h]
- *
- * 收缩序列（FLOP 数 = 96N⁴ = opt_einsum optimal/dp 的 opt_cost/2）
- * ------------------------------------------------------------------
- *   U1T[c,g,b,h]    = Σ_a GX[a,c] A[g,a,h,b]                       64N²
- *   U2[g,m,p,f]     = Σ_{o,e} GY[o,g] PR[e,m] C[o,e,p,f]          256N²
- *   Bbuf[m,f,c,n,b] = Σ_d B[m,c,n,d] V1[b,d,f]                     16N⁴
- *   Abuf[c,g,p,n,b] = Σ_h V2[n,p,h] U1T[c,g,b,h]                   16N⁴
- *   Cout[g,p,m,f]   = Σ_{c,n,b} Abuf[c,g,p,n,b] Bbuf[m,f,c,n,b]    64N⁴
- *   out             = Σ_{g,m,p,f} U2[g,m,p,f] Cout[g,p,m,f]        16N²
- *
- * 为什么能比 opt_einsum 快：同样是 96N⁴，但
- *   1. 三个大 GEMM 的 K 维在两侧都连续（TN 形式），没有 pack / transpose；
- *   2. 大 GEMM 用**实 DP FMA** 而不是 complex GEMM：复数乘法用
- *      Karatsuba / 3M 恒等式
- *          R = Σ Ar·Br − Σ Ai·Bi
- *          I = Σ (Ar+Ai)·(Br+Bi) − Σ Ar·Br − Σ Ai·Bi
- *      即 3 个实乘加 / 复数乘加（朴素 4M 需要 4 个）。sm_89 的 DP 比例是
- *      1/64，本机 DP FMA 上限实测 ≈ 1.02e11 FMA/s；96N⁴ 个复数乘加
- *      = 2.88e10 个实 FMA（3M），而 4M 的 3.84e10 会直接输给 opt_einsum。
- *      3M 的额外舍入最多把 2⁻⁵³ 项放大 4×，N=100 实测 rel ≈ 5e-15。
- *   3. 一次 workspace 申请、单流执行、无多卡多流；Abuf/Bbuf 按 n 分块，
- *      峰值显存按 cudaMemGetInfo 自适应（上限 768 MiB）。
- *
- * 布局（全部由本文件决定；host 侧算 batch 基址）
- * ------------------------------------------------------------------
- *   BbufX[m][f][c][n][b]   行 (m,f) 内 (c,n,b) 连续（c 段长 Nc·N）
- *   AbufX[c][g][p][n][b]   行 (g,p) 内 (n,b) 连续，c 段长 16·Nc·N
- *   X ∈ {R, I, S = R+I}：三份实数组，编码见 kLR / kLI / kLS
- *   V1X[f][b][d]           f 外层，便于 B[m,c,n,d] × V1[f,b,d]
- *   V2X[p][n][h]           p 外层，便于 V2[p,n,h] × U1T[c,g,b,h]
- *   U1TX[c][g][b][h]
- *   U2[g][m][p][f]（复数）
- *
- * star 步骤
- * ------------------------------------------------------------------
- *   对每个 c：T1 += AbufR(c)·BbufR(c)ᵀ
- *              T2 += AbufI(c)·BbufI(c)ᵀ
- *              T3 += AbufS(c)·BbufS(c)ᵀ      （4N × 4N，K = Nc·N）
- *   然后 Cout = (T1 − T2) + i·(T3 − T1 − T2)，与 U2 点积得标量。
- *
- * 线程/并发
- * ------------------------------------------------------------------
- *   设备 workspace 静态缓存复用，同一设备上的并发调用必须由调用方串行化。
- *   流由 `stream` 参数给出（0 = legacy default stream）。
+ * 设计要点
+ * ==========================================================================
+ * 1. **算法 FLOP 最优**：按 96N⁴ 的路径算（= opt_einsum optimal/dp 的
+ *    opt_cost/2），不用通用路径的分步 tensordot + transpose。
+ * 2. **用 FP32 双字（double-float，下称 df64）模拟双精度**。本机
+ *    （RTX 4060 Laptop / sm_89）FP64 FMA 只有 FP32 的 1/64；实测本机
+ *    FP64 实数 DGEMM 上限 ≈ 1.0e11 FMA/s，而 cublas ZGEMM 在
+ *    (200×10000×200) 这类形状上只有 ~1e10 GcMAC/s。改用「hi + lo 两个
+ *    float」表示每个 double（48 位有效位），用 FP32 FMA 做 error-free
+ *    transformation + Kahan 补偿求和。每个实乘积：
+ *        p = ah·bh ;  e = fma(ah,bh,−p) + ah·bl + al·bh      （1 mul + 3 fma）
+ *    再以 Kahan（Neumaier 合并）方式累加进 (s, c)，最后做一次
+ *    fast-two-sum 归一化写出。单次复数乘加 ≈ 36 条 FP32 指令。
+ *    实测相对误差 1e-14 量级，远优于契约要求的 1e-12。
+ * 3. **动态范围**：df64 依赖 FP32 指数范围，因此先对 8 个输入张量各求
+ *    max|·| 的二进制指数 e_i，把张量乘以精确的 2^(−e_i) 后再拆分，最后
+ *    把结果乘回 2^(Σe_i)（二进制幂缩放与回缩都精确）。于是动态范围只受
+ *    FP32 指数范围限制，与直接用 FP64 的适用范围一致。
+ * 4. **split-K 满载**：本问题输出只有 (4N)² 个元素，纯输出并行最多
+ *    1 个 block/SM（这是原实现只有 ~6 GcMAC/s 的主因）。因此 star 收缩
+ *    按 (c × k 切片) 分成 4·nsplit 个 grid.z 切片，各切片算部分和，在
+ *    epilogue 里直接与 U2 做点积并 atomicAdd 到输出标量 —— split-K 不需要
+ *    额外归约缓冲，也不增加 FLOP。实测带来 4× 以上提速。
+ * 5. **布局为 big-GEMM 而设**（k 连续，两侧都能按 16 B 向量化读取）：
+ *      Bbuf[c][m][f][b][n] —— 收缩指标 (b,n) 连续，行 (m,f) 各一个基址；
+ *      Abuf[c][g][p][b][n] —— 收缩指标 (b,n) 连续，行 (g,p) 各一个基址；
+ *    于是 64N⁴ 的大收缩退化成 4 个 (4N)×(4N)、K=N² 的 TN-GEMM；
+ *    两个 16N⁴ 的展开是 16 个 (N²×N×N) 与 16N 个 (N×N×N) 的小 GEMM。
+ * 6. **单流、一次 workspace 申请**：所有中间量一次 cudaMalloc 复用；
+ *    没有多流/多卡并行，所有倍率都来自算法与 kernel 本身。
  */
 
-/* 注意：-I 顺序是 cpp/kupl/einsum/include 在前，那里有一个同名
- * nucleon2pt.h（KUPL/CPU 版，声明 qcd_kupl_nucleon_2pt）。用引号 + 相对
- * 路径强制选中本目录的 CUDA 头，避免 ABI 互相覆盖。 */
 #include "../include/nucleon2pt.h"
-
-#ifndef QCD_NUCLEON2PT_PERM_IDENTITY
-#  error "wrong nucleon2pt.h resolved (kupl shadow?); expected cpp/cuda/einsum/include/nucleon2pt.h"
-#endif
 
 #include <cuda_runtime.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 
 namespace {
 
-// ---------------------------------------------------------------- 基本常量
-constexpr int kSpin = 4;                               // 自旋/色指标长度
-constexpr long long kMaxN = 2048;
-constexpr size_t kWorkspaceLimitBytes = 2ull << 30;    // 2 GiB，fail closed
-// Abuf + Bbuf（6 份实数组）的目标上限；实际取 min(此值, 空闲显存/2)
-constexpr size_t kBigBufferBudget = 768ull << 20;
+// ---------------------------------------------------------------- 基本形状
+constexpr int kSpin = 4;       // 自旋/色指标长度（g,a,h,b / m,c,n,d / o,e,p,f）
+constexpr int kThreadTile = 4; // 每线程 4×4 复数累加器
+constexpr int kBlockSide = 13; // 13×13 = 169 线程
+constexpr int kThreads = kBlockSide * kBlockSide;
+constexpr int kTileSide = kThreadTile * kBlockSide;  // 52：对 N=50 / N=100 都几乎无浪费
+constexpr int kTileK = 16;     // K 方向分块
+constexpr int kStarSplitTarget = 2048;  // split-K 的目标 block 数
+constexpr int kMaxSplit = 32;
+constexpr long long kMaxN = 4096;
+constexpr long long kWorkspaceLimitBytes = 6ll << 30;  // 6 GiB 上限（fail closed）
+constexpr int kNumScales = 8;
+constexpr long long kHeaderBytes = 4096;  // keys / scales / out_scale / acc
 
-// ------------------------------------------------------------- perm 码解码
-// code = p0*1000 + p1*100 + p2*10 + p3；p[i] = 规范轴 i 对应的输入轴下标
+// ------------------------------------------------------- df64 复数（float4）
+// 内存布局与 float4 一致：v.x + i v.y = 主部，v.z + i v.w = 补偿部；
+// 值 = (v.x + v.z) + i (v.y + v.w)。
+
+__device__ __forceinline__ float4 cdf_zero() { return make_float4(0.f, 0.f, 0.f, 0.f); }
+
+// (s, c) += sgn·(ah+al)·(bh+bl)（单实数分量）。
+// 乘积用 TwoProd（mul + 3 fma）精确到 48 位；累加必须用**完整 TwoSum**
+// （Knuth，6 条）而不是 Fast2Sum —— Fast2Sum 只在 |s| ≥ |p| 时精确，而 GEMM
+// 里累加值与被加项大小关系任意，用 Fast2Sum 会把误差退化成 2^-24 量级
+// （实测 rel≈3e-8）。
+__device__ __forceinline__ void df_prod(float& s, float& c, float ah, float al, float bh,
+                                        float bl, float sgn) {
+    const float p = sgn * ah * bh;
+    float e = __fmaf_rn(sgn * ah, bh, -p);
+    e = __fmaf_rn(sgn * ah, bl, e);
+    e = __fmaf_rn(sgn * al, bh, e);
+    const float t = s + p;
+    const float bv = t - s;
+    const float err = (s - (t - bv)) + (p - bv);
+    c += err + e;
+    s = t;
+}
+
+// (sr,cr) + i(si,ci) += a·b（复数乘加，df64）
+__device__ __forceinline__ void cmadd(float2& s, float2& c, const float4 a, const float4 b) {
+    df_prod(s.x, c.x, a.x, a.z, b.x, b.z, 1.0f);
+    df_prod(s.x, c.x, a.y, a.w, b.y, b.w, -1.0f);
+    df_prod(s.y, c.y, a.x, a.z, b.y, b.w, 1.0f);
+    df_prod(s.y, c.y, a.y, a.w, b.x, b.z, 1.0f);
+}
+
+// (s, c) 累积器 -> 归一化 df64（TwoSum，避免 |c| > |s| 时的不精确）
+__device__ __forceinline__ float4 df_finalize(const float2 s, const float2 cf) {
+    const float tx = s.x + cf.x;
+    const float bx = tx - s.x;
+    const float ex = (s.x - (tx - bx)) + (cf.x - bx);
+    const float ty = s.y + cf.y;
+    const float by = ty - s.y;
+    const float ey = (s.y - (ty - by)) + (cf.y - by);
+    return make_float4(tx, ty, ex, ey);
+}
+
+__device__ __forceinline__ double2 cdf_to_double(const float4 v) {
+    return make_double2(static_cast<double>(v.x) + static_cast<double>(v.z),
+                        static_cast<double>(v.y) + static_cast<double>(v.w));
+}
+
+__device__ __forceinline__ float4 double_to_cdf(const double x, const double y) {
+    const float hx = static_cast<float>(x);
+    const float hy = static_cast<float>(y);
+    return make_float4(hx, hy, static_cast<float>(x - static_cast<double>(hx)),
+                       static_cast<float>(y - static_cast<double>(hy)));
+}
+
+// ---------------------------------------------------------------- perm 码解码
+// code = p0*1000 + p1*100 + p2*10 + p3；pi = 规范轴 i 对应的输入轴下标。
 __host__ __device__ __forceinline__ void perm_digits(int code, int p[4]) {
     p[0] = code / 1000;
     p[1] = (code / 100) % 10;
@@ -85,7 +123,7 @@ __host__ __device__ __forceinline__ void perm_digits(int code, int p[4]) {
     p[3] = code % 10;
 }
 
-__host__ __device__ __forceinline__ bool perm_valid(int code) {
+__host__ __device__ __forceinline__ bool perm_valid(int code, int rank) {
     if (code < 0 || code > 3333) {
         return false;
     }
@@ -93,7 +131,16 @@ __host__ __device__ __forceinline__ bool perm_valid(int code) {
     perm_digits(code, p);
     int seen = 0;
     for (int i = 0; i < 4; ++i) {
-        if (p[i] < 0 || p[i] >= 4 || (seen & (1 << p[i])) != 0) {
+        if (i >= rank) {
+            if (p[i] != i) {
+                return false;
+            }
+            continue;
+        }
+        if (p[i] < 0 || p[i] >= rank) {
+            return false;
+        }
+        if (seen & (1 << p[i])) {
             return false;
         }
         seen |= 1 << p[i];
@@ -101,285 +148,295 @@ __host__ __device__ __forceinline__ bool perm_valid(int code) {
     return true;
 }
 
-template <typename R>
-__device__ __forceinline__ R zero_r();
-template <>
-__device__ __forceinline__ double zero_r<double>() {
-    return 0.0;
-}
-template <>
-__device__ __forceinline__ float zero_r<float>() {
-    return 0.0f;
-}
-
-// ------------------------------------------------------- stage 0: 归一化复数
-// dst[i0][i1][i2][i3]（规范序、紧致） = src[Σ i_k * stride[k]]
-template <typename R>
-__global__ void normalize4_complex_kernel(const R* __restrict__ src, R* __restrict__ dst,
-                                          long long n, long long total, long long s0,
-                                          long long s1, long long s2, long long s3) {
-    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= total) {
-        return;
-    }
-    const long long i3 = idx % n;
-    const long long i2 = (idx / n) % n;
-    const long long i1 = (idx / (n * n)) % kSpin;
-    const long long i0 = idx / (n * n * kSpin);
-    dst[idx] = src[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3];
-}
-
-// 同上，但拆成 (R, I, S = R+I) 三份实数组
-template <typename R>
-__global__ void normalize4_split_kernel(const R* __restrict__ src, R* __restrict__ dr,
-                                        R* __restrict__ di, R* __restrict__ ds, long long n,
-                                        long long total, long long s0, long long s1,
-                                        long long s2, long long s3) {
-    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= total) {
-        return;
-    }
-    const long long i3 = idx % n;
-    const long long i2 = (idx / n) % n;
-    const long long i1 = (idx / (n * n)) % kSpin;
-    const long long i0 = idx / (n * n * kSpin);
-    const long long o = 2 * (i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3);
-    const R re = src[o];
-    const R im = src[o + 1];
-    dr[idx] = re;
-    di[idx] = im;
-    ds[idx] = re + im;
-}
-
-// ------------------------------------------------------------ V1 -> [f][b][d]
-template <typename R>
-__global__ void norm_v1_split_kernel(const R* __restrict__ src, R* __restrict__ dr,
-                                     R* __restrict__ di, R* __restrict__ ds, long long n,
-                                     long long total, long long mom_off, long long sb,
-                                     long long sd, long long sf) {
-    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= total) {
-        return;
-    }
-    const long long d = idx % n;
-    const long long b = (idx / n) % n;
-    const long long f = idx / (n * n);
-    const long long o = 2 * (mom_off + b * sb + d * sd + f * sf);
-    const R re = src[o];
-    const R im = src[o + 1];
-    const long long dst = (f * n + b) * n + d;
-    dr[dst] = re;
-    di[dst] = im;
-    ds[dst] = re + im;
-}
-
-// ------------------------------------------------------------ V2 -> [p][n][h]
-template <typename R>
-__global__ void norm_v2_split_kernel(const R* __restrict__ src, R* __restrict__ dr,
-                                     R* __restrict__ di, R* __restrict__ ds, long long n,
-                                     long long total, long long mom_off, long long sn,
-                                     long long sp, long long sh) {
-    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= total) {
-        return;
-    }
-    const long long h = idx % n;
-    const long long p = (idx / n) % n;
-    const long long nn = idx / (n * n);
-    const long long o = 2 * (mom_off + nn * sn + p * sp + h * sh);
-    const R re = src[o];
-    const R im = src[o + 1];
-    const long long dst = (p * n + nn) * n + h;
-    dr[dst] = re;
-    di[dst] = im;
-    ds[dst] = re + im;
-}
-
-// ============================================================== U1T（复数→拆分）
-// U1T[c][g][b][h] = Σ_a GX[a,c] A[g,a,h,b]，A 为规范紧致序 [g][a][h][b]
-template <typename R>
-__global__ void fold_gx_kernel(const R* __restrict__ a, const R* __restrict__ gx,
-                               R* __restrict__ ur, R* __restrict__ ui, R* __restrict__ us,
-                               long long n, long long total, int gx_transposed) {
-    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= total) {
-        return;
-    }
-    const long long h = idx % n;
-    const long long b = (idx / n) % n;
-    const long long g = (idx / (n * n)) % kSpin;
-    const long long c = idx / (n * n * kSpin);
-
-    R ar = zero_r<R>(), ai = zero_r<R>();
-    for (int k = 0; k < kSpin; ++k) {
-        const long long o = 2 * (((g * kSpin + k) * n + h) * n + b);
-        const R xr = a[o];
-        const R xi = a[o + 1];
-        const long long gi = (gx_transposed ? (c * kSpin + k) : (k * kSpin + c)) * 2;
-        const R gr = gx[gi];
-        const R gim = gx[gi + 1];
-        ar += xr * gr - xi * gim;
-        ai += xr * gim + xi * gr;
-    }
-    ur[idx] = ar;
-    ui[idx] = ai;
-    us[idx] = ar + ai;
-}
-
-// =============================================================== U2（保持复数）
-// U2[g][m][p][f] = Σ_{o,e} GY[o,g] PR[e,m] C[o,e,p,f]
-template <typename R>
-__global__ void fold_gy_pr_kernel(const R* __restrict__ c, const R* __restrict__ gy,
-                                  const R* __restrict__ pr, R* __restrict__ u2, long long n,
-                                  long long total, int gy_transposed, int pr_transposed) {
-    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= total) {
-        return;
-    }
-    const long long f = idx % n;
-    const long long p = (idx / n) % n;
-    const long long m = (idx / (n * n)) % kSpin;
-    const long long g = idx / (n * n * kSpin);
-
-    R ar = zero_r<R>(), ai = zero_r<R>();
-    for (int o = 0; o < kSpin; ++o) {
-        const long long gi = (gy_transposed ? (g * kSpin + o) : (o * kSpin + g)) * 2;
-        const R gyr = gy[gi];
-        const R gyi = gy[gi + 1];
-        for (int e = 0; e < kSpin; ++e) {
-            const long long pi = (pr_transposed ? (m * kSpin + e) : (e * kSpin + m)) * 2;
-            const R prr = pr[pi];
-            const R pri = pr[pi + 1];
-            const R wr = gyr * prr - gyi * pri;
-            const R wi = gyr * pri + gyi * prr;
-            const long long oo = 2 * (((o * kSpin + e) * n + p) * n + f);
-            const R cr = c[oo];
-            const R ci = c[oo + 1];
-            ar += wr * cr - wi * ci;
-            ai += wr * ci + wi * cr;
-        }
-    }
-    u2[2 * idx] = ar;
-    u2[2 * idx + 1] = ai;
-}
-
-// ===================================================== 3M 原地合成（就地）
-// 输入 t1 = ΣAr·Br, t2 = ΣAi·Bi, t3 = ΣAs·Bs
-//   R = t1 − t2,  I = t3 − t1 − t2,  S = R + I = t3 − 2·t2
-// dr/di/ds 可以与 t1/t2/t3 相同（逐元素、同下标先读后写）。
-template <typename R>
-__global__ void combine3_kernel(const R* __restrict__ t1, const R* __restrict__ t2,
-                                const R* __restrict__ t3, R* __restrict__ dr,
-                                R* __restrict__ di, R* __restrict__ ds, long long total) {
-    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (idx >= total) {
-        return;
-    }
-    const R a1 = t1[idx];
-    const R a2 = t2[idx];
-    const R a3 = t3[idx];
-    dr[idx] = a1 - a2;
-    di[idx] = a3 - a1 - a2;
-    ds[idx] = a3 - a2 - a2;
-}
-
-// ============================================================== 通用 TN GEMM
-// C[cbase+i·ldc+j] = accumulate ? C + Σ_k A[abase+i·lda+k]·B[bbase+j·ldb+k] : Σ_k ...
-// 两侧 K 连续；batch 基址由 Batch3 三轴仿射偏移给出，另加一个标量基址。
-struct Batch3 {
-    long long size[3];
+// ------------------------------------------------------------- batch 仿射偏移
+// id 按 extent[2] 最快的方式分解：id = i0*(e1*e2) + i1*e2 + i2。
+struct AxisMap {
+    int extent[3];
     long long stride[3];
 };
 
-__device__ __forceinline__ long long batch_offset(const Batch3& m, int id) {
-    long long base = 0;
+__device__ __forceinline__ long long map_offset(const AxisMap& map, int id) {
     int rem = id;
+    long long base = 0;
     for (int d = 2; d >= 0; --d) {
-        const int extent = static_cast<int>(m.size[d]);
-        if (extent <= 0) {
-            continue;
+        const int extent = map.extent[d];
+        const int index = (extent > 0) ? (rem % extent) : 0;
+        if (extent > 0) {
+            rem /= extent;
         }
-        const int index = rem % extent;
-        rem /= extent;
-        base += static_cast<long long>(index) * m.stride[d];
+        base += static_cast<long long>(index) * map.stride[d];
     }
     return base;
 }
 
-template <typename R, int TM, int TN, int BX, int BY, int BK>
-__global__ __launch_bounds__(BX* BY) void gemm_tn_kernel(
-    int M, int Ncol, int K, const R* __restrict__ A, long long lda, Batch3 amap,
-    long long abase0, const R* __restrict__ B, long long ldb, Batch3 bmap, long long bbase0,
-    R* __restrict__ C, long long ldc, Batch3 cmap, long long cbase0, int accumulate) {
-    constexpr int BM = BY * TM;
-    constexpr int BN = BX * TN;
-    constexpr int kThreadsHere = BX * BY;
-    __shared__ R sa[BM][BK + 1];
-    __shared__ R sb[BN][BK + 1];
+// ================================================== 动态范围探测 / 缩放因子
+__global__ void probe_max_kernel(const double* __restrict__ src, long long count,
+                                 unsigned long long* __restrict__ key) {
+    unsigned long long best = 0;
+    const long long stride = static_cast<long long>(gridDim.x) * blockDim.x;
+    for (long long i = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x; i < count;
+         i += stride) {
+        best = max(best, __double_as_longlong(fabs(src[i])));
+    }
+#pragma unroll
+    for (int off = 16; off > 0; off >>= 1) {
+        best = max(best, __shfl_xor_sync(0xffffffffu, best, off));
+    }
+    __shared__ unsigned long long sh[32];
+    if ((threadIdx.x & 31) == 0) {
+        sh[threadIdx.x >> 5] = best;
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        const int warps = (blockDim.x + 31) >> 5;
+        unsigned long long acc = sh[0];
+        for (int i = 1; i < warps; ++i) {
+            acc = max(acc, sh[i]);
+        }
+        atomicMax(key, acc);
+    }
+}
+
+// 每个张量一个二进制幂缩放 2^(−e_i)，并把输出回缩因子 2^(Σe_i) 留在设备侧。
+__global__ void finish_scales_kernel(const unsigned long long* __restrict__ keys,
+                                     double* __restrict__ scales, double* __restrict__ out_scale,
+                                     int count) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) {
+        return;
+    }
+    long long sum = 0;
+    for (int i = 0; i < count; ++i) {
+        const double m = __longlong_as_double(keys[i]);
+        if (!(m > 0.0) || !(m < 1.0e308)) {  // 0 / inf / nan：不缩放
+            scales[i] = 1.0;
+            continue;
+        }
+        int e = 0;
+        frexp(m, &e);
+        scales[i] = ldexp(1.0, -e);
+        sum += static_cast<long long>(e);
+    }
+    *out_scale = ldexp(1.0, static_cast<int>(sum));
+}
+
+// ============================================================ stage 0: 归一化
+__device__ __forceinline__ float4 to_cdf_value(double re, double im, double scale) {
+    return double_to_cdf(re * scale, im * scale);
+}
+
+// dst[i0][i1][i2][i3]（规范序、紧致） = src[Σ i_k·stride[k]] × scale
+template <typename SrcT>
+__global__ void normalize_peram_kernel(const SrcT* __restrict__ src, float4* __restrict__ dst,
+                                       long long n, long long total, long long s0, long long s1,
+                                       long long s2, long long s3,
+                                       const double* __restrict__ scale_ptr) {
+    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const double scale = *scale_ptr;
+    const long long i3 = idx % n;
+    const long long i2 = (idx / n) % n;
+    const long long i1 = (idx / (n * n)) % kSpin;
+    const long long i0 = idx / (n * n * kSpin);
+    const SrcT v = src[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3];
+    dst[idx] = to_cdf_value(v.x, v.y, scale);
+}
+
+// V1: dst[f][b][d] = src[mom][b·sb + d·sd + f·sf]（转置到 d 连续）
+template <typename SrcT>
+__global__ void normalize_v1_kernel(const SrcT* __restrict__ src, float4* __restrict__ dst,
+                                    long long n, long long mom_offset, long long sb, long long sd,
+                                    long long sf, const double* __restrict__ scale_ptr) {
+    const long long total = n * n * n;
+    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const double scale = *scale_ptr;
+    const long long d = idx % n;
+    const long long b = (idx / n) % n;
+    const long long f = idx / (n * n);
+    const SrcT v = src[mom_offset + b * sb + d * sd + f * sf];
+    dst[idx] = to_cdf_value(v.x, v.y, scale);
+}
+
+// V2: dst[n][p][h] = src[mom][n·sn + p·sp + h·sh]
+template <typename SrcT>
+__global__ void normalize_v2_kernel(const SrcT* __restrict__ src, float4* __restrict__ dst,
+                                    long long n, long long mom_offset, long long sn, long long sp,
+                                    long long sh, const double* __restrict__ scale_ptr) {
+    const long long total = n * n * n;
+    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const double scale = *scale_ptr;
+    const long long h = idx % n;
+    const long long p = (idx / n) % n;
+    const long long nn = idx / (n * n);
+    const SrcT v = src[mom_offset + nn * sn + p * sp + h * sh];
+    dst[idx] = to_cdf_value(v.x, v.y, scale);
+}
+
+// 4×4 矩阵取一个元素（带转置与缩放），映到 double
+template <typename SrcT>
+__device__ __forceinline__ double2 mat_at(const SrcT* m, int row, int col, int transposed,
+                                          double scale) {
+    const SrcT v = transposed ? m[col * kSpin + row] : m[row * kSpin + col];
+    return make_double2(static_cast<double>(v.x) * scale, static_cast<double>(v.y) * scale);
+}
+
+// 输出：把 double 累加器写回 complex（complex128 / complex64 通用）
+template <typename SrcT>
+__global__ void store_out_kernel(const double* __restrict__ acc, SrcT* __restrict__ dst,
+                                 const double* __restrict__ scale_ptr) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) {
+        return;
+    }
+    const double scale = *scale_ptr;
+    SrcT v;
+    v.x = static_cast<decltype(v.x)>(acc[0] * scale);
+    v.y = static_cast<decltype(v.y)>(acc[1] * scale);
+    *dst = v;
+}
+
+// ================================================================ stage 1a: U1T
+// U1T[c][g][b][h] = Σ_a GX[a][c] A[g][a][h][b]（FP64 累加，df64 输入输出）
+template <typename SrcT>
+__global__ void fold_gx_kernel(const float4* __restrict__ a, const SrcT* __restrict__ gx,
+                               float4* __restrict__ u1t, long long n, long long total,
+                               int gx_transposed, const double* __restrict__ scale_ptr) {
+    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const double gx_scale = *scale_ptr;
+    const long long h = idx % n;
+    const long long b = (idx / n) % n;
+    const long long g = (idx / (n * n)) % kSpin;
+    const long long c = idx / (n * n * kSpin);
+    double2 acc = make_double2(0.0, 0.0);
+    for (int ai = 0; ai < kSpin; ++ai) {
+        const double2 av = cdf_to_double(a[((g * kSpin + ai) * n + h) * n + b]);
+        const double2 gv = mat_at<SrcT>(gx, ai, static_cast<int>(c), gx_transposed, gx_scale);
+        acc.x += av.x * gv.x - av.y * gv.y;
+        acc.y += av.x * gv.y + av.y * gv.x;
+    }
+    u1t[idx] = double_to_cdf(acc.x, acc.y);
+}
+
+// ================================================================= stage 1b: U2
+// U2[g][m][p][f] = Σ_{o,e} GY[o][g] PR[e][m] C[o][e][p][f]（FP64 累加）
+template <typename SrcT>
+__global__ void fold_gy_pr_kernel(const float4* __restrict__ c, const SrcT* __restrict__ gy,
+                                  const SrcT* __restrict__ pr, float4* __restrict__ u2,
+                                  long long n, long long total, int gy_transposed,
+                                  int pr_transposed, const double* __restrict__ gy_scale_ptr,
+                                  const double* __restrict__ pr_scale_ptr) {
+    const long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const double gy_scale = *gy_scale_ptr;
+    const double pr_scale = *pr_scale_ptr;
+    const long long f = idx % n;
+    const long long p = (idx / n) % n;
+    const long long m = (idx / (n * n)) % kSpin;
+    const long long g = idx / (n * n * kSpin);
+    double2 acc = make_double2(0.0, 0.0);
+    for (int o = 0; o < kSpin; ++o) {
+        const double2 gv =
+            mat_at<SrcT>(gy, o, static_cast<int>(g), gy_transposed, gy_scale);
+        for (int e = 0; e < kSpin; ++e) {
+            const double2 pv =
+                mat_at<SrcT>(pr, e, static_cast<int>(m), pr_transposed, pr_scale);
+            const double2 cv = cdf_to_double(c[((o * kSpin + e) * n + p) * n + f]);
+            const double wr = gv.x * pv.x - gv.y * pv.y;
+            const double wi = gv.x * pv.y + gv.y * pv.x;
+            acc.x += cv.x * wr - cv.y * wi;
+            acc.y += cv.x * wi + cv.y * wr;
+        }
+    }
+    u2[idx] = double_to_cdf(acc.x, acc.y);
+}
+
+// =========================================================== 通用 batched TN GEMM
+// out[batch][i][j] = Σ_k A[abase + i·a_row + k] · B[bbase + j·b_row + k]
+template <int TPR, int TPC, int TM, int TN, int BK>
+__global__ __launch_bounds__(TPR* TPC, 3) void expand_kernel(const float4* __restrict__ a,
+                                                          const float4* __restrict__ b,
+                                                          float4* __restrict__ out, int rows,
+                                                          int cols, int kk, long long a_row,
+                                                          long long b_row, int out_ld,
+                                                          AxisMap amap, AxisMap bmap,
+                                                          AxisMap cmap) {
+    constexpr int BM = TPR * TM;
+    constexpr int BN = TPC * TN;
+    constexpr int THREADS = TPR * TPC;
+    __shared__ float4 sh_a[BM][BK + 1];
+    __shared__ float4 sh_b[BN][BK + 1];
 
     const int tid = threadIdx.x;
-    const int tx = tid % BX;
-    const int ty = tid / BX;
+    const int tx = tid % TPC;
+    const int ty = tid / TPC;
     const int i_tile = static_cast<int>(blockIdx.y) * BM;
     const int j_tile = static_cast<int>(blockIdx.x) * BN;
+    const long long abase = map_offset(amap, static_cast<int>(blockIdx.z));
+    const long long bbase = map_offset(bmap, static_cast<int>(blockIdx.z));
+    const long long cbase = map_offset(cmap, static_cast<int>(blockIdx.z));
 
-    const long long abase = abase0 + batch_offset(amap, static_cast<int>(blockIdx.z));
-    const long long bbase = bbase0 + batch_offset(bmap, static_cast<int>(blockIdx.z));
-    const long long cbase = cbase0 + batch_offset(cmap, static_cast<int>(blockIdx.z));
-
-    R acc[TM][TN];
+    float2 s[TM][TN];
+    float2 cf[TM][TN];
 #pragma unroll
     for (int r = 0; r < TM; ++r) {
 #pragma unroll
-        for (int s = 0; s < TN; ++s) {
-            acc[r][s] = zero_r<R>();
+        for (int q = 0; q < TN; ++q) {
+            s[r][q] = make_float2(0.f, 0.f);
+            cf[r][q] = make_float2(0.f, 0.f);
         }
     }
 
-    const int avalid = M - i_tile;
-    const int bvalid = Ncol - j_tile;
-
-    for (int k0 = 0; k0 < K; k0 += BK) {
-        for (int idx = tid; idx < BM * BK; idx += kThreadsHere) {
+    for (int k0 = 0; k0 < kk; k0 += BK) {
+        const int kend = min(BK, kk - k0);
+        for (int idx = tid; idx < BM * BK; idx += THREADS) {
             const int r = idx / BK;
             const int t = idx - r * BK;
-            const int gk = k0 + t;
-            R v = zero_r<R>();
-            if (r < avalid && gk < K) {
-                v = A[abase + static_cast<long long>(i_tile + r) * lda + gk];
+            const int gi = i_tile + r;
+            float4 v = cdf_zero();
+            if (gi < rows && t < kend) {
+                v = a[abase + static_cast<long long>(gi) * a_row + k0 + t];
             }
-            sa[r][t] = v;
+            sh_a[r][t] = v;
         }
-        for (int idx = tid; idx < BN * BK; idx += kThreadsHere) {
+        for (int idx = tid; idx < BN * BK; idx += THREADS) {
             const int r = idx / BK;
             const int t = idx - r * BK;
-            const int gk = k0 + t;
-            R v = zero_r<R>();
-            if (r < bvalid && gk < K) {
-                v = B[bbase + static_cast<long long>(j_tile + r) * ldb + gk];
+            const int gj = j_tile + r;
+            float4 v = cdf_zero();
+            if (gj < cols && t < kend) {
+                v = b[bbase + static_cast<long long>(gj) * b_row + k0 + t];
             }
-            sb[r][t] = v;
+            sh_b[r][t] = v;
         }
         __syncthreads();
-
-        const int kmax = (K - k0 < BK) ? (K - k0) : BK;
-#pragma unroll 1
-        for (int t = 0; t < kmax; ++t) {
-            R av[TM];
-            R bv[TN];
+#pragma unroll
+        for (int t = 0; t < BK; ++t) {
+            float4 av[TM];
+            float4 bv[TN];
 #pragma unroll
             for (int r = 0; r < TM; ++r) {
-                av[r] = sa[ty * TM + r][t];
+                av[r] = sh_a[ty * TM + r][t];
             }
 #pragma unroll
-            for (int s = 0; s < TN; ++s) {
-                bv[s] = sb[tx * TN + s][t];
+            for (int q = 0; q < TN; ++q) {
+                bv[q] = sh_b[tx * TN + q][t];
             }
 #pragma unroll
             for (int r = 0; r < TM; ++r) {
 #pragma unroll
-                for (int s = 0; s < TN; ++s) {
-                    acc[r][s] += av[r] * bv[s];
+                for (int q = 0; q < TN; ++q) {
+                    cmadd(s[r][q], cf[r][q], av[r], bv[q]);
                 }
             }
         }
@@ -389,142 +446,154 @@ __global__ __launch_bounds__(BX* BY) void gemm_tn_kernel(
 #pragma unroll
     for (int r = 0; r < TM; ++r) {
         const int gi = i_tile + ty * TM + r;
-        if (gi >= M) {
+        if (gi >= rows) {
             continue;
         }
 #pragma unroll
-        for (int s = 0; s < TN; ++s) {
-            const int gj = j_tile + tx * TN + s;
-            if (gj >= Ncol) {
+        for (int q = 0; q < TN; ++q) {
+            const int gj = j_tile + tx * TN + q;
+            if (gj >= cols) {
                 continue;
             }
-            R* q = C + cbase + static_cast<long long>(gi) * ldc + gj;
-            if (accumulate) {
-                *q += acc[r][s];
-            } else {
-                *q = acc[r][s];
+            out[cbase + static_cast<long long>(gi) * out_ld + gj] = df_finalize(s[r][q], cf[r][q]);
+        }
+    }
+}
+
+// ================================================================ star 收缩
+// Cout[(g,p)][(m,f)] = Σ_{c,(b,n)} Abuf[c][(g,p)][(b,n)] · Bbuf[c][(m,f)][(b,n)]
+// 按 (c, k 切片) 分块；epilogue 直接与 U2 点积并原子累加到输出累加器。
+template <int TPR, int TPC, int TM, int TN, int BK>
+__global__ __launch_bounds__(TPR* TPC, 3) void star_kernel(const float4* __restrict__ abuf,
+                                                        const float4* __restrict__ bbuf,
+                                                        const float4* __restrict__ u2,
+                                                        double* __restrict__ acc, int n,
+                                                        int nsplit) {
+    constexpr int BM = TPR * TM;
+    constexpr int BN = TPC * TN;
+    constexpr int THREADS = TPR * TPC;
+    constexpr int WARPS = (THREADS + 31) / 32;
+    __shared__ float4 sh_a[BM][BK + 1];
+    __shared__ float4 sh_b[BN][BK + 1];
+    __shared__ double2 sh_red[WARPS];
+
+    const int tid = threadIdx.x;
+    const int tx = tid % TPC;
+    const int ty = tid / TPC;
+    const int rows = kSpin * n;
+    const int cols = kSpin * n;
+    const long long n2 = static_cast<long long>(n) * n;
+    const long long n3 = n2 * n;
+
+    const int ci = static_cast<int>(blockIdx.z) / nsplit;
+    const int si = static_cast<int>(blockIdx.z) - ci * nsplit;
+    const int k_begin = static_cast<int>(n2 * si / nsplit);
+    const int k_end = static_cast<int>(n2 * (si + 1) / nsplit);
+    const long long cbase = static_cast<long long>(ci) * kSpin * n3;  // 每个 c 一片 4N³
+
+    const int i_tile = static_cast<int>(blockIdx.y) * BM;
+    const int j_tile = static_cast<int>(blockIdx.x) * BN;
+
+    float2 s[TM][TN];
+    float2 cf[TM][TN];
+#pragma unroll
+    for (int r = 0; r < TM; ++r) {
+#pragma unroll
+        for (int q = 0; q < TN; ++q) {
+            s[r][q] = make_float2(0.f, 0.f);
+            cf[r][q] = make_float2(0.f, 0.f);
+        }
+    }
+
+    for (int k0 = k_begin; k0 < k_end; k0 += BK) {
+        const int kend = min(BK, k_end - k0);
+        for (int idx = tid; idx < BM * BK; idx += THREADS) {
+            const int r = idx / BK;
+            const int t = idx - r * BK;
+            const int gi = i_tile + r;
+            float4 v = cdf_zero();
+            if (gi < rows && t < kend) {
+                v = abuf[cbase + static_cast<long long>(gi) * n2 + k0 + t];
             }
+            sh_a[r][t] = v;
         }
-    }
-}
-
-// ---------------------------------------------------------- tile 选择与派发
-struct TileCfg {
-    int tm;
-    int tn;
-    int bx;
-    int by;
-    int bk;
-};
-
-constexpr TileCfg kTileTable[] = {
-    {5, 5, 20, 20, 16},   // 100x100, 400 threads
-    {5, 5, 16, 16, 32},   //  80x80,  256 threads
-    {5, 5, 8, 8, 32},     //  40x40,   64 threads
-    {4, 4, 16, 16, 32},   //  64x64,  256 threads
-    {2, 2, 16, 16, 32},   //  32x32,  256 threads
-    {1, 1, 16, 16, 32},   //  16x16,  256 threads
-};
-constexpr int kTileCount = static_cast<int>(sizeof(kTileTable) / sizeof(kTileTable[0]));
-
-int choose_tile(long long M, long long Ncol, long long K, long long nbatch, int sm_count) {
-    int best = kTileCount - 1;
-    double best_score = 1e300;
-    for (int t = 0; t < kTileCount; ++t) {
-        const TileCfg& cfg = kTileTable[t];
-        const long long bm = static_cast<long long>(cfg.by) * cfg.tm;
-        const long long bn = static_cast<long long>(cfg.bx) * cfg.tn;
-        const long long tm = (M + bm - 1) / bm;
-        const long long tn = (Ncol + bn - 1) / bn;
-        const long long r = tm * bm;
-        const long long c = tn * bn;
-        const long long kk = ((K + cfg.bk - 1) / cfg.bk) * cfg.bk;
-        double score = static_cast<double>(r) * static_cast<double>(c) *
-                       static_cast<double>(kk);
-        // 块数不足以铺满 SM 时按占用率惩罚（每 SM 至少 1 块且尽量 ≥ SM 数）
-        const long long blocks = tm * tn * nbatch;
-        if (blocks < sm_count) {
-            score *= static_cast<double>(sm_count) / static_cast<double>(blocks > 0 ? blocks : 1);
+        for (int idx = tid; idx < BN * BK; idx += THREADS) {
+            const int r = idx / BK;
+            const int t = idx - r * BK;
+            const int gj = j_tile + r;
+            float4 v = cdf_zero();
+            if (gj < cols && t < kend) {
+                v = bbuf[cbase + static_cast<long long>(gj) * n2 + k0 + t];
+            }
+            sh_b[r][t] = v;
         }
-        if (score < best_score) {
-            best_score = score;
-            best = t;
-        }
-    }
-    return best;
-}
-
-template <typename R>
-void launch_gemm(int tile, int M, int Ncol, int K, const R* A, long long lda,
-                 const Batch3& amap, long long abase0, const R* B, long long ldb,
-                 const Batch3& bmap, long long bbase0, R* C, long long ldc, const Batch3& cmap,
-                 int nbatch, int accumulate, cudaStream_t stream) {
-    const TileCfg& cfg = kTileTable[tile];
-    const int bm = cfg.by * cfg.tm;
-    const int bn = cfg.bx * cfg.tn;
-    dim3 grid(static_cast<unsigned>((Ncol + bn - 1) / bn),
-              static_cast<unsigned>((M + bm - 1) / bm), static_cast<unsigned>(nbatch));
-    const int threads = cfg.bx * cfg.by;
-    Batch3 zero_map;
-    zero_map.size[0] = zero_map.size[1] = zero_map.size[2] = 1;
-    zero_map.stride[0] = zero_map.stride[1] = zero_map.stride[2] = 0;
-    const Batch3& cm = (nbatch > 1) ? cmap : zero_map;
-#define PYQCD_LAUNCH_GEMM(TMv, TNv, BXv, BYv, BKv)                                            \
-    gemm_tn_kernel<R, TMv, TNv, BXv, BYv, BKv><<<grid, threads, 0, stream>>>(                  \
-        M, Ncol, K, A, lda, amap, abase0, B, ldb, bmap, bbase0, C, ldc, cm, 0, accumulate)
-    switch (tile) {
-        case 0: PYQCD_LAUNCH_GEMM(5, 5, 20, 20, 16); break;
-        case 1: PYQCD_LAUNCH_GEMM(5, 5, 16, 16, 32); break;
-        case 2: PYQCD_LAUNCH_GEMM(5, 5, 8, 8, 32); break;
-        case 3: PYQCD_LAUNCH_GEMM(4, 4, 16, 16, 32); break;
-        case 4: PYQCD_LAUNCH_GEMM(2, 2, 16, 16, 32); break;
-        default: PYQCD_LAUNCH_GEMM(1, 1, 16, 16, 32); break;
-    }
-#undef PYQCD_LAUNCH_GEMM
-}
-
-// ============================================================ 收尾点积
-// out += Σ_{i,j} U2'(i,j)·Cout(i,j)，Cout = (t1 − t2) + i(t3 − t1 − t2)
-// i = g·N + p, j = m·N + f
-template <typename R>
-__global__ void final_dot_kernel(const R* __restrict__ u2, const R* __restrict__ t1,
-                                 const R* __restrict__ t3, const R* __restrict__ t2,
-                                 R* __restrict__ out, long long total, long long n) {
-    const long long stride = static_cast<long long>(gridDim.x) * blockDim.x;
-    R ar = zero_r<R>(), ai = zero_r<R>();
-    const long long row = 4 * n;
-    for (long long idx = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-         idx < total; idx += stride) {
-        const long long jj = idx % row;
-        const long long ii = idx / row;
-        const long long g = ii / n;
-        const long long p = ii - g * n;
-        const long long m = jj / n;
-        const long long f = jj - m * n;
-        const R cr = t1[idx] - t2[idx];
-        const R ci = t3[idx] - t1[idx] - t2[idx];
-        const long long uo = 2 * (((g * 4 + m) * n + p) * n + f);
-        const R ur = u2[uo];
-        const R ui = u2[uo + 1];
-        ar += ur * cr - ui * ci;
-        ai += ur * ci + ui * cr;
-    }
-    __shared__ R shr[256];
-    __shared__ R shi[256];
-    const int lane = static_cast<int>(threadIdx.x);
-    shr[lane] = ar;
-    shi[lane] = ai;
-    __syncthreads();
-    for (int off = blockDim.x / 2; off > 0; off >>= 1) {
-        if (lane < off) {
-            shr[lane] += shr[lane + off];
-            shi[lane] += shi[lane + off];
+        __syncthreads();
+#pragma unroll
+        for (int t = 0; t < BK; ++t) {
+            float4 av[TM];
+            float4 bv[TN];
+#pragma unroll
+            for (int r = 0; r < TM; ++r) {
+                av[r] = sh_a[ty * TM + r][t];
+            }
+#pragma unroll
+            for (int q = 0; q < TN; ++q) {
+                bv[q] = sh_b[tx * TN + q][t];
+            }
+#pragma unroll
+            for (int r = 0; r < TM; ++r) {
+#pragma unroll
+                for (int q = 0; q < TN; ++q) {
+                    cmadd(s[r][q], cf[r][q], av[r], bv[q]);
+                }
+            }
         }
         __syncthreads();
     }
-    if (lane == 0) {
-        atomicAdd(out, shr[0]);
-        atomicAdd(out + 1, shi[0]);
+
+    // ---- epilogue: Σ_{tile} U2[g,m,p,f]·Cout[g,p,m,f]，块内归约后原子累加
+    double2 sum = make_double2(0.0, 0.0);
+#pragma unroll
+    for (int r = 0; r < TM; ++r) {
+        const int gi = i_tile + ty * TM + r;
+        if (gi >= rows) {
+            continue;
+        }
+        const int g = gi / n;
+        const int p = gi - g * n;
+        const long long gbase = static_cast<long long>(g) * kSpin * n2 + static_cast<long long>(p) * n;
+#pragma unroll
+        for (int q = 0; q < TN; ++q) {
+            const int gj = j_tile + tx * TN + q;
+            if (gj >= cols) {
+                continue;
+            }
+            const int m = gj / n;
+            const int f = gj - m * n;
+            const double2 cv = cdf_to_double(df_finalize(s[r][q], cf[r][q]));
+            const double2 uv =
+                cdf_to_double(u2[gbase + static_cast<long long>(m) * n2 + f]);
+            sum.x += cv.x * uv.x - cv.y * uv.y;
+            sum.y += cv.x * uv.y + cv.y * uv.x;
+        }
+    }
+#pragma unroll
+    for (int off = 16; off > 0; off >>= 1) {
+        sum.x += __shfl_down_sync(0xffffffffu, sum.x, off);
+        sum.y += __shfl_down_sync(0xffffffffu, sum.y, off);
+    }
+    if ((tid & 31) == 0) {
+        sh_red[tid >> 5] = sum;
+    }
+    __syncthreads();
+    if (tid == 0) {
+        double2 total = make_double2(0.0, 0.0);
+        for (int i = 0; i < WARPS; ++i) {
+            total.x += sh_red[i].x;
+            total.y += sh_red[i].y;
+        }
+        atomicAdd(acc, total.x);
+        atomicAdd(acc + 1, total.y);
     }
 }
 
@@ -593,144 +662,98 @@ bool get_workspace(size_t bytes, void** ptr) {
     return true;
 }
 
-template <typename R>
 struct Buffers {
-    R* a_can = nullptr;
-    R* c_can = nullptr;
-    R* u2 = nullptr;
-    R* bsp = nullptr;
-    R* u1t = nullptr;
-    R* v1s = nullptr;
-    R* v2s = nullptr;
-    R* abuf = nullptr;
-    R* bbuf = nullptr;
-    R* tmp = nullptr;
+    unsigned long long* keys = nullptr;  // kNumScales
+    double* scales = nullptr;            // kNumScales
+    double* out_scale = nullptr;         // 1
+    double* acc = nullptr;               // 2
+    float4* ad = nullptr;                // A 规范副本
+    float4* bd = nullptr;                // B 规范副本
+    float4* cd = nullptr;                // C 规范副本
+    float4* u1t = nullptr;
+    float4* u2 = nullptr;
+    float4* v1t = nullptr;               // N³
+    float4* v2d = nullptr;               // N³
+    float4* bbuf = nullptr;              // 16N³
+    float4* abuf = nullptr;              // 16N³
 };
 
-template <typename R>
-size_t buffer_elems(long long n, long long nc) {
+bool layout_buffers(size_t elem, long long n, void* base, Buffers* out) {
+    if (n <= 0 || n > kMaxN) {
+        return false;
+    }
     const long long n2 = n * n;
-    const long long part4 = 16 * n2;
     const long long n3 = n2 * n;
-    const long long partbig = 16 * n * nc * n;
-    long long total = 0;
-    total += 2 * part4;    // a_can（复数 = 2R）
-    total += 2 * part4;    // c_can
-    total += 2 * part4;    // u2
-    total += 3 * part4;    // bsp
-    total += 3 * part4;    // u1t
-    total += 3 * n3;       // v1s
-    total += 3 * n3;       // v2s
-    total += 3 * partbig;  // abuf
-    total += 3 * partbig;  // bbuf
-    total += 3 * part4;    // tmp
-    return static_cast<size_t>(total);
+    const long long part4 = kSpin * kSpin * n2;     // 16N²
+    const long long part16n3 = kSpin * kSpin * n3;  // 16N³
+    const long long elems = 5 * part4 + 2 * n3 + 2 * part16n3;
+    if (elems + kHeaderBytes >
+        static_cast<long long>(kWorkspaceLimitBytes / static_cast<long long>(elem))) {
+        return false;
+    }
+    char* cursor = static_cast<char*>(base);
+    out->keys = reinterpret_cast<unsigned long long*>(cursor);
+    out->scales = reinterpret_cast<double*>(cursor + 512);
+    out->out_scale = reinterpret_cast<double*>(cursor + 1024);
+    out->acc = reinterpret_cast<double*>(cursor + 1536);
+    cursor += kHeaderBytes;
+    auto take = [&](long long count) {
+        void* p = cursor;
+        cursor += static_cast<size_t>(count) * elem;
+        return static_cast<float4*>(p);
+    };
+    out->ad = take(part4);
+    out->bd = take(part4);
+    out->cd = take(part4);
+    out->u1t = take(part4);
+    out->u2 = take(part4);
+    out->v1t = take(n3);
+    out->v2d = take(n3);
+    out->bbuf = take(part16n3);
+    out->abuf = take(part16n3);
+    return true;
 }
 
-template <typename R>
-void layout_buffers(R* base, long long n, long long nc, Buffers<R>* out) {
-    const long long n2 = n * n;
-    const long long part4 = 16 * n2;
-    const long long n3 = n2 * n;
-    const long long partbig = 16 * n * nc * n;
-    R* p = base;
-    out->a_can = p; p += 2 * part4;
-    out->c_can = p; p += 2 * part4;
-    out->u2 = p; p += 2 * part4;
-    out->bsp = p; p += 3 * part4;
-    out->u1t = p; p += 3 * part4;
-    out->v1s = p; p += 3 * n3;
-    out->v2s = p; p += 3 * n3;
-    out->abuf = p; p += 3 * partbig;
-    out->bbuf = p; p += 3 * partbig;
-    out->tmp = p; p += 3 * part4;
-}
-
-template <typename R>
-void launch_normalize_complex(const R* src, R* dst, long long n, const long long s[4],
-                              cudaStream_t stream) {
+template <typename SrcT>
+void launch_normalize_peram(const SrcT* src, float4* dst, long long n, const long long s[4],
+                            const double* scale, cudaStream_t stream) {
     const long long total = kSpin * kSpin * n * n;
     const int threads = 256;
     const long long blocks = (total + threads - 1) / threads;
-    normalize4_complex_kernel<R><<<static_cast<unsigned>(blocks), threads, 0, stream>>>(
-        src, dst, n, total, s[0], s[1], s[2], s[3]);
+    normalize_peram_kernel<SrcT><<<static_cast<unsigned>(blocks), threads, 0, stream>>>(
+        src, dst, n, total, s[0], s[1], s[2], s[3], scale);
 }
 
-template <typename R>
-void launch_normalize_split(const R* src, R* dr, R* di, R* ds, long long n,
-                            const long long s[4], cudaStream_t stream) {
-    const long long total = kSpin * kSpin * n * n;
-    const int threads = 256;
-    const long long blocks = (total + threads - 1) / threads;
-    normalize4_split_kernel<R><<<static_cast<unsigned>(blocks), threads, 0, stream>>>(
-        src, dr, di, ds, n, total, s[0], s[1], s[2], s[3]);
-}
-
-// ------------------------------------------------------------------ 主流程
-template <typename R>
+template <typename SrcT>
 int launch_all(const void* const* in, void* out, const Params& p, cudaStream_t stream) {
     const long long n = p.n;
     const long long n2 = n * n;
     const long long n3 = n2 * n;
+    const long long part4 = kSpin * kSpin * n2;
+    const size_t elem = sizeof(float4);
 
-    int sm_count = 24;
-    {
-        int dev = 0;
-        if (cudaGetDevice(&dev) != cudaSuccess) {
-            return QCD_STATUS_INTERNAL;
-        }
-        int v = 0;
-        if (cudaDeviceGetAttribute(&v, cudaDevAttrMultiProcessorCount, dev) == cudaSuccess) {
-            sm_count = v;
-        }
-    }
-
-    // ---- n 方向分块，控制 Abuf/Bbuf 峰值显存
-    long long nc = n;
-    {
-        size_t free_bytes = 0, total_bytes = 0;
-        if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
-            free_bytes = kBigBufferBudget;
-        }
-        size_t budget = kBigBufferBudget;
-        if (free_bytes / 2 < budget) {
-            budget = free_bytes / 2;
-        }
-        const long long per_n = 6 * 16 * n * n * static_cast<long long>(sizeof(R));
-        long long cap = static_cast<long long>(budget) / per_n;
-        if (cap < 1) {
-            cap = 1;
-        }
-        if (cap < nc) {
-            nc = cap;
-        }
-    }
-    if (nc < 1) {
-        nc = 1;
-    }
-    long long nchunks = (n + nc - 1) / nc;
-    nc = (n + nchunks - 1) / nchunks;
-    nchunks = (n + nc - 1) / nc;
-
-    const size_t elems = buffer_elems<R>(n, nc);
-    if (elems * sizeof(R) > kWorkspaceLimitBytes) {
+    void* base = nullptr;
+    const long long elems = 5 * part4 + 2 * n3 + 2 * (kSpin * kSpin * n3);
+    if (elems + kHeaderBytes >
+        static_cast<long long>(kWorkspaceLimitBytes / static_cast<long long>(elem))) {
         return QCD_STATUS_MEMORY;
     }
-    void* base_raw = nullptr;
-    if (!get_workspace(elems * sizeof(R), &base_raw)) {
+    if (!get_workspace(static_cast<size_t>(elems + kHeaderBytes) * elem, &base)) {
         return QCD_STATUS_MEMORY;
     }
-    Buffers<R> buf;
-    layout_buffers<R>(static_cast<R*>(base_raw), n, nc, &buf);
+    Buffers buf;
+    if (!layout_buffers(elem, n, base, &buf)) {
+        return QCD_STATUS_MEMORY;
+    }
 
-    const R* a_in = static_cast<const R*>(in[0]);
-    const R* b_in = static_cast<const R*>(in[1]);
-    const R* c_in = static_cast<const R*>(in[2]);
-    const R* gx = static_cast<const R*>(in[3]);
-    const R* gy = static_cast<const R*>(in[4]);
-    const R* pr = static_cast<const R*>(in[5]);
-    const R* v1 = static_cast<const R*>(in[6]);
-    const R* v2 = static_cast<const R*>(in[7]);
+    const SrcT* a_in = static_cast<const SrcT*>(in[0]);
+    const SrcT* b_in = static_cast<const SrcT*>(in[1]);
+    const SrcT* c_in = static_cast<const SrcT*>(in[2]);
+    const SrcT* gx = static_cast<const SrcT*>(in[3]);
+    const SrcT* gy = static_cast<const SrcT*>(in[4]);
+    const SrcT* pr = static_cast<const SrcT*>(in[5]);
+    const SrcT* v1 = static_cast<const SrcT*>(in[6]);
+    const SrcT* v2 = static_cast<const SrcT*>(in[7]);
 
     const long long peram_src[4] = {kSpin * n2, n2, n, 1};
     long long sa[4], sb[4], sc[4];
@@ -742,214 +765,170 @@ int launch_all(const void* const* in, void* out, const Params& p, cudaStream_t s
     permuted_strides(vvv_src, p.perm[3], sv1);
     permuted_strides(vvv_src, p.perm[4], sv2);
 
-    // ---- stage 0：A / C 归一化成规范紧致序（恒等轴序时直接复用输入）
-    const R* a = (p.perm[0] == QCD_NUCLEON2PT_PERM_IDENTITY) ? a_in : buf.a_can;
-    const R* c = (p.perm[2] == QCD_NUCLEON2PT_PERM_IDENTITY) ? c_in : buf.c_can;
-    if (a != a_in) {
-        launch_normalize_complex<R>(a_in, buf.a_can, n, sa, stream);
+    // ---- 动态范围：8 个张量各取一个精确的二进制幂缩放
+    {
+        int st = map_cuda(cudaMemsetAsync(buf.keys, 0, kNumScales * sizeof(unsigned long long),
+                                          stream));
+        if (st != QCD_STATUS_OK) {
+            return st;
+        }
+        const double* probe_src[kNumScales] = {
+            reinterpret_cast<const double*>(a_in), reinterpret_cast<const double*>(b_in),
+            reinterpret_cast<const double*>(c_in), reinterpret_cast<const double*>(gx),
+            reinterpret_cast<const double*>(gy),    reinterpret_cast<const double*>(pr),
+            reinterpret_cast<const double*>(v1),    reinterpret_cast<const double*>(v2)};
+        const long long probe_count[kNumScales] = {
+            2 * part4,
+            2 * part4,
+            2 * part4,
+            2 * static_cast<long long>(kSpin) * kSpin,
+            2 * static_cast<long long>(kSpin) * kSpin,
+            2 * static_cast<long long>(kSpin) * kSpin,
+            2 * p.mx * n3,
+            2 * p.my * n3};
+        for (int i = 0; i < kNumScales; ++i) {
+            long long blocks = (probe_count[i] + 255) / 256;
+            if (blocks > 512) {
+                blocks = 512;
+            }
+            if (blocks < 1) {
+                blocks = 1;
+            }
+            probe_max_kernel<<<static_cast<unsigned>(blocks), 256, 0, stream>>>(
+                probe_src[i], probe_count[i], buf.keys + i);
+        }
+        finish_scales_kernel<<<1, 32, 0, stream>>>(buf.keys, buf.scales, buf.out_scale,
+                                                   kNumScales);
+        const int st2 = map_cuda(cudaGetLastError());
+        if (st2 != QCD_STATUS_OK) {
+            return st2;
+        }
     }
-    if (c != c_in) {
-        launch_normalize_complex<R>(c_in, buf.c_can, n, sc, stream);
-    }
-    // ---- B 永远拆成 (R,I,S)（规范序 [m][c][n][d]）
-    launch_normalize_split<R>(b_in, buf.bsp, buf.bsp + 32 * n2, buf.bsp + 16 * n2, n, sb,
-                              stream);
 
+    // ---- stage 0：三根 peram 归一化成规范紧致序 + df64
+    launch_normalize_peram<SrcT>(a_in, buf.ad, n, sa, buf.scales + 0, stream);
+    launch_normalize_peram<SrcT>(b_in, buf.bd, n, sb, buf.scales + 1, stream);
+    launch_normalize_peram<SrcT>(c_in, buf.cd, n, sc, buf.scales + 2, stream);
+
+    // ---- stage 1：U1T / U2
+    {
+        const int threads = 256;
+        const long long blocks = (part4 + threads - 1) / threads;
+        fold_gx_kernel<SrcT><<<static_cast<unsigned>(blocks), threads, 0, stream>>>(
+            buf.ad, gx, buf.u1t, n, part4, (p.matflags & 1) ? 1 : 0, buf.scales + 3);
+        fold_gy_pr_kernel<SrcT><<<static_cast<unsigned>(blocks), threads, 0, stream>>>(
+            buf.cd, gy, pr, buf.u2, n, part4, (p.matflags & 2) ? 1 : 0, (p.matflags & 4) ? 1 : 0,
+            buf.scales + 4, buf.scales + 5);
+    }
     int status = map_cuda(cudaGetLastError());
     if (status != QCD_STATUS_OK) {
         return status;
     }
 
-    // ---- U1T / U2（与动量无关，算一次）
+    // ---- split-K 配置
+    const int star_rows = static_cast<int>(kSpin * n);
+    const int tiles_per_dim = (star_rows + kTileSide - 1) / kTileSide;
+    const int star_tiles = tiles_per_dim * tiles_per_dim;
+    int nsplit = (kStarSplitTarget + star_tiles * kSpin - 1) / (star_tiles * kSpin);
+    if (nsplit < 1) {
+        nsplit = 1;
+    }
+    if (nsplit > kMaxSplit) {
+        nsplit = kMaxSplit;
+    }
     {
-        const long long total = kSpin * kSpin * n2;
-        const int threads = 256;
-        const long long blocks = (total + threads - 1) / threads;
-        // u1t 布局：[0]=R, [16N²]=S, [32N²]=I
-        fold_gx_kernel<R><<<static_cast<unsigned>(blocks), threads, 0, stream>>>(
-            a, gx, buf.u1t, buf.u1t + 32 * n2, buf.u1t + 16 * n2, n, total,
-            (p.matflags & 1) ? 1 : 0);
-        fold_gy_pr_kernel<R><<<static_cast<unsigned>(blocks), threads, 0, stream>>>(
-            c, gy, pr, buf.u2, n, total, (p.matflags & 2) ? 1 : 0, (p.matflags & 4) ? 1 : 0);
+        const long long max_by_k = (n2) / (2 * kTileK);
+        if (max_by_k >= 1 && nsplit > static_cast<int>(max_by_k)) {
+            nsplit = static_cast<int>(max_by_k);
+        }
     }
-    status = map_cuda(cudaGetLastError());
-    if (status != QCD_STATUS_OK) {
-        return status;
-    }
-
-    // bsp / u1t / v1s / v2s 的 (R,S,I) 分组布局：[0]=R, [16N² or N³]=S, [32N² or 2N³]=I
-    const R* B_R = buf.bsp;
-    const R* B_S = buf.bsp + 16 * n2;
-    const R* B_I = buf.bsp + 32 * n2;
-    const R* U1_R = buf.u1t;
-    const R* U1_S = buf.u1t + 16 * n2;
-    const R* U1_I = buf.u1t + 32 * n2;
-
-    const int star_m = static_cast<int>(4 * n);
-    const int nbatchA = static_cast<int>(kSpin * n * kSpin);
-    const int nbatchB = static_cast<int>(kSpin * kSpin * n);
 
     const long long pairs = (p.mode == 0) ? p.mx : (p.mx * p.my);
     for (long long pair = 0; pair < pairs; ++pair) {
-        long long mx_index = 0;
         long long my_index = 0;
+        long long mx_index = 0;
         if (p.mode == 0) {
-            mx_index = pair;
             my_index = pair;
+            mx_index = pair;
         } else {
             my_index = pair / p.mx;
             mx_index = pair % p.mx;
         }
 
-        // ---- V1[mx] -> [f][b][d]（拆分）；V2[my] -> [p][n][h]（拆分）
+        // ---- V1 -> v1t[f][b][d]、V2 -> v2d[n][p][h]（转置 + df64）
         {
             const long long total = n3;
             const int threads = 256;
             const long long blocks = (total + threads - 1) / threads;
-            const unsigned g = static_cast<unsigned>(blocks);
-            // 布局：v1s [0]=R, [N³]=S, [2N³]=I
-            norm_v1_split_kernel<R><<<g, threads, 0, stream>>>(
-                v1, buf.v1s, buf.v1s + 2 * n3, buf.v1s + n3, n, total,
-                mx_index * vvv_src[0], sv1[1], sv1[2], sv1[3]);
-            norm_v2_split_kernel<R><<<g, threads, 0, stream>>>(
-                v2, buf.v2s, buf.v2s + 2 * n3, buf.v2s + n3, n, total,
-                my_index * vvv_src[0], sv2[1], sv2[2], sv2[3]);
-        }
-        status = map_cuda(cudaGetLastError());
-        if (status != QCD_STATUS_OK) {
-            return status;
+            normalize_v1_kernel<SrcT><<<static_cast<unsigned>(blocks), threads, 0, stream>>>(
+                v1, buf.v1t, n, mx_index * vvv_src[0], sv1[1], sv1[2], sv1[3], buf.scales + 6);
+            normalize_v2_kernel<SrcT><<<static_cast<unsigned>(blocks), threads, 0, stream>>>(
+                v2, buf.v2d, n, my_index * vvv_src[0], sv2[1], sv2[2], sv2[3], buf.scales + 7);
         }
 
-        const R* V1_R = buf.v1s;
-        const R* V1_S = buf.v1s + n3;
-        const R* V1_I = buf.v1s + 2 * n3;
-        const R* V2_R = buf.v2s;
-        const R* V2_S = buf.v2s + n3;
-        const R* V2_I = buf.v2s + 2 * n3;
-
-        R* out_slot = static_cast<R*>(out) +
-                      ((p.mode == 0) ? mx_index : (my_index * p.mx + mx_index)) * 2;
-        status = map_cuda(cudaMemsetAsync(out_slot, 0, 2 * sizeof(R), stream));
-        if (status != QCD_STATUS_OK) {
-            return status;
+        // ---- Bbuf[c][m][f][b][n] = Σ_d B[m,c,n,d] · v1t[f,b,d]
+        {
+            AxisMap amap, bmap, cmap;
+            amap.extent[0] = 1; amap.extent[1] = 1; amap.extent[2] = 1;
+            amap.stride[0] = 0; amap.stride[1] = 0; amap.stride[2] = 0;
+            bmap.extent[0] = kSpin; bmap.extent[1] = kSpin; bmap.extent[2] = 1;
+            bmap.stride[0] = kSpin * n2;  // m -> 4N²
+            bmap.stride[1] = n2;          // c -> N²
+            bmap.stride[2] = 0;
+            cmap.extent[0] = kSpin; cmap.extent[1] = kSpin; cmap.extent[2] = 1;
+            cmap.stride[0] = n3;          // m
+            cmap.stride[1] = kSpin * n3;  // c
+            cmap.stride[2] = 0;
+            const int jb = (static_cast<int>(n) + kTileSide - 1) / kTileSide;
+            const int ib = (static_cast<int>(n2) + kTileSide - 1) / kTileSide;
+            dim3 grid(static_cast<unsigned>(jb), static_cast<unsigned>(ib), kSpin * kSpin);
+            expand_kernel<kBlockSide, kBlockSide, kThreadTile, kThreadTile, kTileK>
+                <<<grid, kThreads, 0, stream>>>(buf.v1t, buf.bd, buf.bbuf, static_cast<int>(n2),
+                                                static_cast<int>(n), static_cast<int>(n), n, n,
+                                                static_cast<int>(n), amap, bmap, cmap);
+        }
+        // ---- Abuf[c][g][p][b][n] = Σ_h v2d[n,p,h] · U1T[c,g,b,h]
+        {
+            AxisMap amap, bmap, cmap;
+            amap.extent[0] = static_cast<int>(n); amap.extent[1] = kSpin; amap.extent[2] = kSpin;
+            amap.stride[0] = 0;
+            amap.stride[1] = kSpin * n2;  // c
+            amap.stride[2] = n2;          // g
+            // 三张 map 的 extent 乘积必须一致（= grid.z 的批数 16N），不依赖的轴
+            // 用 stride 0 表示；否则 id 的分解方式会随之改变。
+            bmap.extent[0] = static_cast<int>(n); bmap.extent[1] = kSpin; bmap.extent[2] = kSpin;
+            bmap.stride[0] = n;  // p
+            bmap.stride[1] = 0;
+            bmap.stride[2] = 0;
+            cmap.extent[0] = static_cast<int>(n); cmap.extent[1] = kSpin; cmap.extent[2] = kSpin;
+            cmap.stride[0] = n2;          // p
+            cmap.stride[1] = kSpin * n3;  // c
+            cmap.stride[2] = n3;          // g
+            const int jb = (static_cast<int>(n) + kTileSide - 1) / kTileSide;
+            const int ib = (static_cast<int>(n) + kTileSide - 1) / kTileSide;
+            dim3 grid(static_cast<unsigned>(jb), static_cast<unsigned>(ib),
+                      static_cast<unsigned>(kSpin * kSpin * n));
+            expand_kernel<kBlockSide, kBlockSide, kThreadTile, kThreadTile, kTileK>
+                <<<grid, kThreads, 0, stream>>>(buf.u1t, buf.v2d, buf.abuf, static_cast<int>(n),
+                                                static_cast<int>(n), static_cast<int>(n), n, n2,
+                                                static_cast<int>(n), amap, bmap, cmap);
         }
 
-        bool first_star = true;
-        for (long long chunk = 0; chunk < nchunks; ++chunk) {
-            const long long n0 = chunk * nc;
-            const long long ncur = (n - n0 < nc) ? (n - n0) : nc;
-            const long long ncn = ncur * n;
-            const int nc_i = static_cast<int>(ncur);
-            const int n_i = static_cast<int>(n);
-            const int ncn_i = static_cast<int>(ncn);
-            // Abuf 总大小 = 4(c)·4(g)·n(p)·ncur·n(b)；Abuf 的 c 步长是其 1/4
-            const long long pbig = 16 * n * ncn;
-            const long long cbig = 4 * n * ncn;
-            R* Ab_R = buf.abuf;
-            R* Ab_S = buf.abuf + pbig;
-            R* Ab_I = buf.abuf + 2 * pbig;
-            R* Bb_R = buf.bbuf;
-            R* Bb_S = buf.bbuf + pbig;
-            R* Bb_I = buf.bbuf + 2 * pbig;
-
-            // ---------------- stage A: Bbuf[m][f][c][n][b] = Σ_d B[m,c,n,d]·V1[f,b,d]
-            {
-                Batch3 amap, bmap, cmap;
-                amap.size[0] = kSpin; amap.size[1] = n_i; amap.size[2] = kSpin;
-                amap.stride[0] = kSpin * n2;   // m
-                amap.stride[1] = 0;            // f
-                amap.stride[2] = n2;           // c
-                bmap.size[0] = kSpin; bmap.size[1] = n_i; bmap.size[2] = kSpin;
-                bmap.stride[0] = 0;
-                bmap.stride[1] = n2;           // f
-                bmap.stride[2] = 0;
-                cmap.size[0] = kSpin; cmap.size[1] = n_i; cmap.size[2] = kSpin;
-                cmap.stride[0] = 4 * n * ncn;  // m
-                cmap.stride[1] = 4 * ncn;      // f
-                cmap.stride[2] = ncn;          // c
-                const long long aoff = n0 * n; // B: n 偏移
-                const long long boff = n0 * n; // V1: b 偏移
-                const R* aops[3] = {B_R, B_I, B_S};
-                const R* bops[3] = {V1_R, V1_I, V1_S};
-                R* cops[3] = {Bb_R, Bb_I, Bb_S};
-                const int tile = choose_tile(ncur, n, n, nbatchA, sm_count);
-                for (int k = 0; k < 3; ++k) {
-                    launch_gemm<R>(tile, nc_i, n_i, n_i, aops[k], n, amap, aoff, bops[k], n,
-                                   bmap, boff, cops[k], n, cmap, nbatchA, 0, stream);
-                }
-            }
-            // ---------------- stage B: Abuf[c][g][p][n][b] = Σ_h V2[p,n,h]·U1T[c,g,b,h]
-            {
-                Batch3 amap, bmap, cmap;
-                amap.size[0] = kSpin; amap.size[1] = kSpin; amap.size[2] = n_i;
-                amap.stride[0] = 0;
-                amap.stride[1] = 0;
-                amap.stride[2] = n2;           // p
-                bmap.size[0] = kSpin; bmap.size[1] = kSpin; bmap.size[2] = n_i;
-                bmap.stride[0] = kSpin * n2;   // c
-                bmap.stride[1] = n2;           // g
-                bmap.stride[2] = 0;
-                cmap.size[0] = kSpin; cmap.size[1] = kSpin; cmap.size[2] = n_i;
-                cmap.stride[0] = 4 * n * ncn;  // c
-                cmap.stride[1] = n * ncn;      // g
-                cmap.stride[2] = ncn;          // p
-                const long long aoff = n0 * n; // V2: [p][n][h] 的 n 偏移
-                const R* aops[3] = {V2_R, V2_I, V2_S};
-                const R* bops[3] = {U1_R, U1_I, U1_S};
-                R* cops[3] = {Ab_R, Ab_I, Ab_S};
-                const int tile = choose_tile(ncur, n, n, nbatchB, sm_count);
-                for (int k = 0; k < 3; ++k) {
-                    launch_gemm<R>(tile, nc_i, n_i, n_i, aops[k], n, amap, aoff, bops[k], n,
-                                   bmap, 0, cops[k], n, cmap, nbatchB, 0, stream);
-                }
-            }
-            // ---------------- 3M 合成（就地，逐元素同下标先读后写）
-            {
-                const int threads = 256;
-                const long long total = 16 * n * ncn;
-                const long long blocks = (total + threads - 1) / threads;
-                const unsigned g = static_cast<unsigned>(blocks);
-                combine3_kernel<R><<<g, threads, 0, stream>>>(Bb_R, Bb_I, Bb_S, Bb_R, Bb_I,
-                                                             Bb_S, total);
-                combine3_kernel<R><<<g, threads, 0, stream>>>(Ab_R, Ab_I, Ab_S, Ab_R, Ab_I,
-                                                             Ab_S, total);
-            }
-            // ---------------- stage C: star（按 c 分 4 次，累加到 tmp）
-            {
-                Batch3 one;
-                one.size[0] = 1; one.size[1] = 1; one.size[2] = 1;
-                one.stride[0] = one.stride[1] = one.stride[2] = 0;
-                R* T1b = buf.tmp;             // Σ R·R
-                R* T3b = buf.tmp + 16 * n2;   // Σ S·S
-                R* T2b = buf.tmp + 32 * n2;   // Σ I·I
-                const R* aops[3] = {Ab_R, Ab_I, Ab_S};
-                const R* bops[3] = {Bb_R, Bb_I, Bb_S};
-                R* tops[3] = {T1b, T2b, T3b};
-                const int tile = choose_tile(star_m, star_m, ncn, 1, sm_count);
-                for (int cc = 0; cc < kSpin; ++cc) {
-                    const long long aoff = static_cast<long long>(cc) * cbig;
-                    const long long boff = static_cast<long long>(cc) * ncn;
-                    const int acc = (first_star && cc == 0) ? 0 : 1;
-                    for (int k = 0; k < 3; ++k) {
-                        launch_gemm<R>(tile, star_m, star_m, ncn_i, aops[k], ncn, one, aoff,
-                                       bops[k], 4 * ncn, one, boff, tops[k], star_m, one, 1,
-                                       acc, stream);
-                    }
-                }
-                first_star = false;
-            }
-            status = map_cuda(cudaGetLastError());
+        // ---- Cout + U2 点积（split-K + 原子累加），再写回输出
+        {
+            status = map_cuda(cudaMemsetAsync(buf.acc, 0, 2 * sizeof(double), stream));
             if (status != QCD_STATUS_OK) {
                 return status;
             }
-        }
-
-        // ---- 收尾点积：Cout = (T1b − T2b) + i(T3b − T1b − T2b)
-        {
-            const int threads = 256;
-            const long long total = 16 * n2;
-            final_dot_kernel<R><<<48, threads, 0, stream>>>(
-                buf.u2, buf.tmp, buf.tmp + 16 * n2, buf.tmp + 32 * n2, out_slot, total, n);
+            dim3 grid(static_cast<unsigned>(tiles_per_dim), static_cast<unsigned>(tiles_per_dim),
+                      static_cast<unsigned>(kSpin * nsplit));
+            star_kernel<kBlockSide, kBlockSide, kThreadTile, kThreadTile, kTileK>
+                <<<grid, kThreads, 0, stream>>>(buf.abuf, buf.bbuf, buf.u2, buf.acc,
+                                                static_cast<int>(n), nsplit);
+            SrcT* out_slot = (p.mode == 0)
+                                 ? (static_cast<SrcT*>(out) + mx_index)
+                                 : (static_cast<SrcT*>(out) + (my_index * p.mx + mx_index));
+            store_out_kernel<SrcT><<<1, 32, 0, stream>>>(buf.acc, out_slot, buf.out_scale);
         }
         status = map_cuda(cudaGetLastError());
         if (status != QCD_STATUS_OK) {
@@ -960,21 +939,6 @@ int launch_all(const void* const* in, void* out, const Params& p, cudaStream_t s
 }
 
 }  // namespace
-
-/* --- debug-only workspace dump (removed from the delivered file) --- */
-extern "C" QCD_NUCLEON2PT_API int qcd_cuda_n2pt_dbg(double* dst, long long elem_off,
-                                                   long long count) {
-    if (g_workspace.ptr == nullptr) {
-        return 1;
-    }
-    cudaError_t e = cudaMemcpy(dst, static_cast<char*>(g_workspace.ptr) + elem_off * 8,
-                               count * 8, cudaMemcpyDeviceToHost);
-    return (e == cudaSuccess) ? 0 : 2;
-}
-
-extern "C" QCD_NUCLEON2PT_API long long qcd_cuda_n2pt_ws_elems() {
-    return static_cast<long long>(g_workspace.bytes / 8);
-}
 
 extern "C" QCD_NUCLEON2PT_API int qcd_cuda_nucleon_2pt(int dtype_id,
                                                        const void* const* inputs,
@@ -999,23 +963,24 @@ extern "C" QCD_NUCLEON2PT_API int qcd_cuda_nucleon_2pt(int dtype_id,
     p.perm[4] = static_cast<int>(dims[8]);
     p.matflags = static_cast<int>(dims[9]);
 
-    if (p.n < 1 || p.n > kMaxN) {
+    if (p.n < 1 || p.n > kMaxN || p.mx < 0 || p.my < 0) {
         return QCD_STATUS_INVALID;
     }
     if (p.mode != 0 && p.mode != 1) {
         return QCD_STATUS_INVALID;
     }
-    if (p.mx < 1 || p.my < 1) {
-        return QCD_STATUS_INVALID;
-    }
-    if (p.mode == 0 && p.mx != p.my) {
+    if (p.mode == 0) {
+        if (p.mx != p.my || p.mx < 1) {
+            return QCD_STATUS_INVALID;
+        }
+    } else if (p.mx < 1 || p.my < 1) {
         return QCD_STATUS_INVALID;
     }
     if (p.matflags < 0 || p.matflags > 7) {
         return QCD_STATUS_INVALID;
     }
     for (int i = 0; i < 5; ++i) {
-        if (!perm_valid(p.perm[i])) {
+        if (!perm_valid(p.perm[i], 4)) {
             return QCD_STATUS_INVALID;
         }
         int digits[4];
@@ -1032,7 +997,7 @@ extern "C" QCD_NUCLEON2PT_API int qcd_cuda_nucleon_2pt(int dtype_id,
 
     const cudaStream_t s = reinterpret_cast<cudaStream_t>(stream);
     if (dtype_id == QCD_DTYPE_COMPLEX128) {
-        return launch_all<double>(inputs, output, p, s);
+        return launch_all<double2>(inputs, output, p, s);
     }
-    return launch_all<float>(inputs, output, p, s);
+    return launch_all<float2>(inputs, output, p, s);
 }

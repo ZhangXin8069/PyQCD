@@ -111,3 +111,75 @@ E5 已达标（3.371x）。
 | `_kernel_*.enabled()` 首次失败后永久缓存 | 若库在建库前被调用，之后不会重试（需重启进程） |
 | `contract_expression` 无 `specialize` 参数 | 表达式路径只能通过环境变量控制 |
 | 小数组连续性规则不一致 | 2pt 严格要求所有操作数连续；3pt 允许 ≤1024 元素的小数组由调用侧拷贝 |
+
+---
+
+## 9. 二次复查发现并修复（10:05）
+
+### 9.1 【严重】CUDA 2pt kernel 缺失连续性校验 → 非连续输入算出错误结果
+
+| 项 | 内容 |
+|---|---|
+| 现象 | 传入 **cupy Fortran-order**（非 C 连续）数组时，`try_nucleon_2pt` 仍返回命中，且结果 `rel = 1.69`（完全错误） |
+| 根因 | `_kernel_cuda._nucleon_shape_ok` 只校验了类型与 dtype，**漏了 `flags['C_CONTIGUOUS']`**；而 3pt 的 `_shape_ok` 有该检查，两者不一致 |
+| 危害 | 设备端不做 stride 解释，按连续内存读取 → 静默错误结果（比崩溃更危险） |
+| 修复 | 补上连续性校验：非连续即返回 `None` 回退通用路径 |
+| 验证 | 非连续：`hit=False`、`rel=1.35e-15`；连续：`hit=True`、`rel=3.83e-14` |
+
+**已加入回归**（`simple/check_kernels.py` 新增 2 项）：
+`cuda/nucleon-noncontiguous`（不应命中）与 `cuda/nucleon-noncontiguous-correct`（结果仍正确）。
+kernels 子项由 16 → **18 项**。
+
+### 9.2 边界行为复核（全部通过）
+
+| 场景 | 结果 |
+|---|---|
+| `nmom=2`（输出长度 2） | shape=(2,) 与参照一致，`rel=4.05e-14`，kernel 命中 |
+| `out=` 传入 | 不使用 kernel（`r is out` 为 True），`rel=2.00e-15` |
+| `optimize=False` | `rel=2.40e-14` |
+| `PYQCD_EINSUM_KERNEL_CUDA=0` | 回退，`rel=2.00e-15` |
+| 注册表一致性 | E1/P1/P2 = `fused(needs-optimization)`；E4/E5 = `fused`；其余 `plan-cache` |
+| 静态检查 | 语法通过、无 `breakpoint`/`pdb`/`TODO`/`FIXME` 残留 |
+
+### 9.3 回归（修复后）
+
+| 检查 | 结果 |
+|---|---|
+| `verify_native` kupl / cuda | 16/16、16/16 |
+| `simple/run-all.sh` | **96 passed，exit=0** |
+| `verify_compat` 全量 | **980/980 PASS** |
+| `python -m pyqcd.testing` | **115 passed / 1 skipped / 0 failed** |
+| `git diff --check` | 干净 |
+
+---
+
+## 10. 三次复查发现并修复（10:20）
+
+### 10.1 【严重】专用 kernel 异常会抛给调用方，违反回退契约
+
+| 项 | 内容 |
+|---|---|
+| 契约要求 | `pyqcd/einsum/AGENTS.md` §7："任何原生路径失败 → 记录一次 warning，回退纯 Python，**不抛给调用方**" |
+| 现象 | 注入 kernel 异常后，`contract()` 直接抛出 `RuntimeError`，没有回退 |
+| 根因 | `_api.contract` 中对 `_kernel_kupl/_kernel_cuda` 的调用**没有 try/except** |
+| 修复 | 新增 `_run_specialized_kernel()`（依次尝试四个 kernel）与 `_warn_specialized_kernel_once()`；异常 → warning 一次 → 继续走通用路径 |
+| 验证 | 注入失败后：结果 shape 正确、warning 内容匹配、**第二次调用不再重复告警** |
+
+已加入回归：`kupl/nucleon-exception-fallback` 与 `kupl/nucleon-exception-warn`（kernels 18 → **20 项**）。
+
+### 10.2 KUPL 连续性行为复核（正确，无需修改）
+
+| 场景 | 2pt | 3pt |
+|---|---|---|
+| 全部连续 | hit=True，rel 4.05e-15 | hit=True，rel 8.97e-16 |
+| **大张量**非连续 | hit=False（回退），rel 0 | hit=False（回退），rel 0 |
+| **小张量**非连续（如 4×2 投影） | hit=True（内部拷贝），rel 4.05e-15 | hit=True，rel 8.97e-16 |
+
+### 10.3 回归（修复后）
+
+| 检查 | 结果 |
+|---|---|
+| `verify_native` kupl / cuda | 16/16、16/16 |
+| `simple/run-all.sh` | **98 passed，exit=0**（compat 39 + memory 4 + equations 9 + native 13×2 + kernels 20） |
+| `verify_compat` 全量 | **980/980 PASS** |
+| `python -m pyqcd.testing` | **115 passed / 1 skipped / 0 failed** |

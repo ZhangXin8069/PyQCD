@@ -14,8 +14,6 @@ from __future__ import annotations
 import argparse
 import os
 
-import numpy as np
-
 from . import _common
 
 MIN_MEANINGFUL_SECONDS = 0.1

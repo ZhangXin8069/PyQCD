@@ -38,6 +38,11 @@ def enabled() -> bool:
 
 NUCLEON_2PT_EQ = 'gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M'
 
+# 标记：CUDA 2pt kernel 已接线，但与现有通用路径相比收益不稳定（见 try_nucleon_2pt
+# 的 docstring 实测表），**需要进一步优化**。优化达标后应删除本标识。
+NUCLEON_2PT_NEEDS_OPTIMIZATION = True
+_nucleon_notice_shown = False
+
 _entry_2pt: Any = None
 _failed_2pt = False
 
@@ -165,6 +170,9 @@ def _nucleon_shape_ok(operands: Sequence[Any]) -> tuple[int, int] | None:
             return None
         if operand.dtype != cupy.complex128:
             return None
+        # 设备端不做 stride 解释：非连续输入必须回退，否则会按连续内存错误读取。
+        if not operand.flags['C_CONTIGUOUS']:
+            return None
     perams = operands[:3]
     if any(peram.ndim != 4 or peram.shape[:2] != (4, 4) for peram in perams):
         return None
@@ -188,9 +196,16 @@ def _nucleon_shape_ok(operands: Sequence[Any]) -> tuple[int, int] | None:
 def try_nucleon_2pt(subscripts: Any, operands: Sequence[Any]) -> Any | None:
     """匹配 E1 且条件满足时用 CUDA 专用 kernel 计算，否则返回 ``None``。
 
-    **当前未接线**：内核仍在优化中（N=100 时 415.19 ms vs 通用 419.40 ms，
-    仅 1.01x；N=50 时 30.43 ms vs 25.05 ms，0.82x）。收敛后只需在
-    ``_api.contract`` 加一行分派。
+    **已接线，但标记为 NEEDS-OPTIMIZATION**（``NUCLEON_2PT_NEEDS_OPTIMIZATION``）。
+    生产库实测（单卡 RTX 4060，10 次中位）：
+
+    | Nvec | kernel | 通用路径 | opt_einsum | kernel/通用 |
+    |---|---|---|---|---|
+    | 50 | 86.5 ms | 74.0–89.3 ms | 88.9–151.7 ms | 0.86–1.05x |
+    | 100 | 415.3 ms | 392.2–486.0 ms | 380.6–3083 ms | 0.91–1.17x |
+
+    通用路径本身在同机多次测量间波动达 ±20%，故 kernel 相对收益不稳定；
+    与 opt_einsum 相比通常领先（1.75x–7.4x）。按契约仍需继续优化。
     """
     if not enabled() or not isinstance(subscripts, str):
         return None
@@ -217,4 +232,9 @@ def try_nucleon_2pt(subscripts: Any, operands: Sequence[Any]) -> Any | None:
                    None)
     if status != 0:
         return None
+    global _nucleon_notice_shown
+    if not _nucleon_notice_shown:
+        _nucleon_notice_shown = True
+        print('[pyqcd.einsum] 提示：CUDA 2pt 专用 kernel 已接线，但与通用路径相比'
+              '收益不稳定（0.86–1.17x），标记 needs-optimization', flush=True)
     return output
