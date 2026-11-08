@@ -501,3 +501,19 @@ pyqcd 与之一致即为兼容（bug-for-bug）。若将来要支持，属于**�
 ```bash
 python -m pyqcd.testing._contract_edge_cases_contract    # 或整包 python -m pyqcd.testing
 ```
+
+### 错误路径与解释器开关也要验（0.1.9 实测）
+错误消息必须与参照实现**逐字一致**，否则用户的报错搜索/经验迁移会失效。
+6 类非法输入实测全部 `SAME`（操作数个数、标签尺寸冲突、输出标签未知、输出标签重复、
+操作数过多、下标类型非法），`contract_path` 在非法输入下同样等价。
+
+解释器开关矩阵（`python -O` / `-OO` / `-B` / 只读 site-packages）必须照常工作：
+
+```bash
+for f in "" "-O" "-OO" "-B"; do python $f -c "import pyqcd.einsum as pe; ..."; done
+chmod -R a-w <site-packages>/pyqcd && python -B -c "import pyqcd"; chmod -R u+w ...
+```
+
+坑：`-OO` 会清空 `__doc__`，凡是用 `__doc__.splitlines()[0]` 当 `argparse` 描述的
+工具在 `-OO` 下会 `AttributeError`（本轮 `pyqcd/testing/docs_examples.py` 就中招，已改字面量）。
+**发布代码里不要用 `__doc__` 构造运行时必需的值。**

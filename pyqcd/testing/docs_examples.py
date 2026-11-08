@@ -63,7 +63,8 @@ def run_page(path: Path, namespace: dict) -> tuple[int, int, list[str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        description="Execute the Python code blocks of the user documentation.")
     parser.add_argument("--lang", default="en", choices=("en", "zh"),
                         help="which documentation tree to check (default: en)")
     parser.add_argument("--root", default=None,
