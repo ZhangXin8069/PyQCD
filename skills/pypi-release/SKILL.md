@@ -432,3 +432,24 @@ done
 被历史 venv 撑到 100%，pip 报 `No space left on device` 却被 `grep` 吃掉。
 规则：任何"解析/安装失败"先跑 `df -h /tmp`；循环里每轮结束清理
 `/tmp/p1*`、`/tmp/audit*/venv*`、`/tmp/buildlog*` 等。
+
+### 为什么本项目不发 wheel（决定 + 理由，别反复重提）
+- `libpyqcdeinsum_kupl.so` 的 `ldd` 显示它依赖**构建主机**的 `libstdc++.so.6`
+  与 `libgomp.so.1`（conda 路径），直接打 `linux_x86_64` 轮子在其他机器上会缺符号；
+- 可移植的 manylinux 轮子需要 `auditwheel repair` + `patchelf`，本机没有；
+- 发 `py3-none-any` 轮子更糟：pip 会优先选它，所有用户都退化成纯 Python。
+- 结论：**只发 sdist**，并在文档里写明"首次安装会编译约一分钟、pip 会缓存结果"。
+
+### extras 端到端验证（不能只看能否解析）
+`pyqcd[plot]` 已在干净 venv 里实跑通过：
+
+```python
+from pyqcd.contraction import wick_contraction, plot_figure_wick
+w = wick_contraction(sink_operators=[...11 项...], source_operators=[...11 项...],
+                     Cpt='2pt', curr_operators=[], Pindex=['p'], Vindex=['v'], Gindex=['g'])
+fig, ax = plot_figure_wick(w, diagram_index=0, Cpt='2pt')
+fig.savefig('/tmp/wick_demo.png')      # 实测 107 KB，键数 12
+```
+
+`pyqcd[torch]` 因 torch 轮子 539 MB 未做端到端安装（只做了 `--dry-run` 解析），
+台账里必须标为"未验证"，不要写成已验证。

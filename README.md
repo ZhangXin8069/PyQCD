@@ -105,7 +105,7 @@ axis; the CUDA backend has no MPI implementation.
 ## Performance
 
 Numbers you can reproduce on the **published package**, measured with
-`pyqcd==0.1.8` (`build_info(): backend=kupl, array_backend=numpy`),
+`pyqcd==0.1.9` (`build_info(): backend=kupl, array_backend=numpy`),
 `opt_einsum==3.4.0` with the `dp` planner, `complex128`, median of 15 calls after
 3 warm-up calls:
 

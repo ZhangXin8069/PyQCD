@@ -19,7 +19,7 @@
 
 ## 在已发布包上可复现
 
-`pyqcd==0.1.8`（`build_info(): backend=kupl, array_backend=numpy`）对
+`pyqcd==0.1.9`（`build_info(): backend=kupl, array_backend=numpy`）对
 `opt_einsum==3.4.0`（`dp`），`complex128`，预热 3 次后取 15 次中位数：
 
 | 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |

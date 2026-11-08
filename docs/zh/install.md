@@ -7,7 +7,11 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.1.8`。需要固定版本时：`pip install "pyqcd==0.1.8"`。
+当前发行版：`0.1.9`。需要固定版本时：`pip install "pyqcd==0.1.9"`。
+
+PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的
+manylinux wheel 需要 `auditwheel` 修补。因此首次安装会编译一次（笔记本上约一分钟），
+pip 会缓存编译好的 wheel，在相同解释器的其它环境里再装就很快。
 
 ## 依赖
 
