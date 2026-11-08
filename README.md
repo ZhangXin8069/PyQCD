@@ -104,19 +104,21 @@ axis; the CUDA backend has no MPI implementation.
 
 ## Performance
 
-Measured against `opt_einsum` 3.4.0 on the same machine, same `complex128`
-dtype, same thread count and same `dp` planner:
+Numbers you can reproduce on the **published package**, measured with
+`pyqcd==0.1.8` (`build_info(): backend=kupl, array_backend=numpy`),
+`opt_einsum==3.4.0` with the `dp` planner, `complex128`, median of 15 calls after
+3 warm-up calls:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
 |---|---|---|---|
-| Nucleon 3pt (GPU, specialised) | 285.40 ms | 30.74 ms | **9.29x** |
-| γ sandwich, L24 (CPU) | 1188.9 ms | 142.7 ms | **8.33x** |
-| γ sandwich, L24 (GPU) | 0.373987 s | 0.110959 s | **3.371x** |
-| Nucleon 2pt (CPU, N=100) | 120.43 ms | 22.65 ms | **5.32x** |
-| perambulator × gauge, L24 (GPU) | 1.112793 s | 1.095407 s | 1.016x (parity) |
+| Nucleon 2pt, nvec=16 (production contract) | 12.95 ms | 2.15 ms | **6.02x** |
+| Nucleon 2pt, nvec=24 | 41.45 ms | 7.11 ms | **5.83x** |
+| γ sandwich, T=8, nvec=64 | 0.169 ms | 0.058 ms | **2.91x** |
 
-Weighted by the shape mix of a real production run the aggregate is roughly
-**2.82x** (4757 s → 1688 s, model estimate).
+Those three run through the shipped kernels/plan cache with no extra setup.
+Dedicated kernels in this release cover the nucleon 2pt and 3pt shapes only;
+other lattice shapes (γ sandwich, perambulator × gauge, the sush variants) get
+the plan cache and the general execution layer.
 
 ```python
 import numpy as np

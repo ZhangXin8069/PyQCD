@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.1.7`。需要固定版本时：`pip install "pyqcd==0.1.7"`。
+当前发行版：`0.1.8`。需要固定版本时：`pip install "pyqcd==0.1.8"`。
 
 ## 依赖
 
@@ -29,7 +29,7 @@ Cython 不需要自己装：`pyproject.toml` 已在 `[build-system] requires` �
 ## 可选 extras
 
 ```bash
-pip install "pyqcd[cuda]"     # adds cupy
+pip install "pyqcd[cuda]"     # adds cupy-cuda12x (CUDA 12.x)
 pip install "pyqcd[mpi]"      # adds mpi4py
 pip install "pyqcd[torch]"    # adds torch (optional backend)
 pip install "pyqcd[plot]"     # adds matplotlib (Wick/analysis plots)

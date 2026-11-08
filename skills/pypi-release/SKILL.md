@@ -400,3 +400,35 @@ GPU kernel 只在 cupy/torch 张量上生效。汇报性能时必须同时给这
 同一台机器连续两次 `pip install pyqcd` 可能得到 `backend=cuda` 与 `backend=kupl`
 （取决于隔离环境里 nvcc/Cython/编译器是否可用）。因此每条性能或结论都要写成
 "`pyqcd==<ver>` + `backend=<x>` + `array_backend=<y>`"三件套。
+
+### 文档里的性能数字必须"发布即可复现"
+开发构建上测出的数字不能直接写进用户文档：0.1.x 只导出核子 2pt 与 3pt kernel，
+而早期文档写的 γ 夹心 8.33×/3.371× 来自**不在发行版里的**融合 kernel。
+处理规则：
+
+1. 面向用户的表只放**能在 `pip install` 的包上复现**的数字，并写明
+   `pyqcd==<ver>` + `build_info()` 的 `backend`/`array_backend` + 对照版本 + 计时口径；
+2. 开发构建的历史数字单独开一节，标题里明确"不可从 PyPI 复现"；
+3. 每次发版前用下面脚本重跑一遍可复现表（在纯安装 venv 里）：
+   `python /tmp/bench_pub.py`（E1 nvec=16/24、E5 T=8/nv=64，pyqcd vs opt_einsum dp）。
+
+0.1.8 实测（backend=kupl, array_backend=numpy）：E1 nvec=16 → 6.02×，
+nvec=24 → 5.83×，E5 → 2.91×。
+
+### extras 必须真的能装
+`cuda = ["cupy"]` 在 PyPI 上是**源码包**，`pip install "pyqcd[cuda]"` 会在构建阶段失败；
+正确依赖是 `cupy-cuda12x`（CUDA 12.x 预编译轮子），CUDA 11 用户用 `cupy-cuda11x`。
+发版检查（不需要真下载）：
+
+```bash
+for ex in plot mpi cuda torch; do
+  python -m pip install --dry-run --index-url https://pypi.org/simple "pyqcd[$ex]" \
+    | grep -oE "Would install .{0,80}"
+done
+```
+
+### /tmp 占满会伪造出一堆"失败"
+本轮 `cupy-cuda12x`/`torch` 的 dry-run 一开始全部无输出，真实原因是 `/tmp`（tmpfs 7.8G）
+被历史 venv 撑到 100%，pip 报 `No space left on device` 却被 `grep` 吃掉。
+规则：任何"解析/安装失败"先跑 `df -h /tmp`；循环里每轮结束清理
+`/tmp/p1*`、`/tmp/audit*/venv*`、`/tmp/buildlog*` 等。

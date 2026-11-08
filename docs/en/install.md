@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.1.7`. To pin it: `pip install "pyqcd==0.1.7"`.
+Current release: `0.1.8`. To pin it: `pip install "pyqcd==0.1.8"`.
 
 ## Requirements
 
@@ -31,7 +31,7 @@ that pip creates for `pip install pyqcd` always has it. A manual
 ## Optional extras
 
 ```bash
-pip install "pyqcd[cuda]"     # adds cupy
+pip install "pyqcd[cuda]"     # adds cupy-cuda12x (CUDA 12.x)
 pip install "pyqcd[mpi]"      # adds mpi4py
 pip install "pyqcd[torch]"    # adds torch (optional backend)
 pip install "pyqcd[plot]"     # adds matplotlib (Wick/analysis plots)

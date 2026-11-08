@@ -20,83 +20,47 @@ commands at the end of this page.
 Timing only covers steady-state execution: both sides plan once, then the plan
 is reused.
 
-## What is actually faster
+## Reproducible on the published package
 
-| Workload | Equation shape | opt_einsum | pyqcd.einsum | Ratio |
-|---|---|---|---|---|
-| Nucleon 2pt (CPU, N=100) | 8 operands, perambulator × γ × VVV × parity projection | 120.43 ms | 22.65 ms (specialised) / 25.26 ms (generic) | **5.32×** vs opt_einsum, 1.12× vs our generic path |
-| Nucleon 3pt (GPU) | 8 operands, source perambulator × current × γ × VdV × projection | 285.40 ms | 30.74 ms (specialised) / 74.13 ms (generic) | **9.29×** vs opt_einsum, 2.41× vs our generic path |
-| γ sandwich, L24 (GPU) | `γ₅ · peramb† · γ₅` over the full spatial volume | 0.373987 s | 0.110959 s | **3.371×** |
-| γ sandwich, L24 (CPU) | same shape, 4 threads | 1188.9 ms | 142.7 ms | **8.33×** |
-| perambulator × gauge, L24 (GPU) | 4 operands including the lattice `z,y,x` volume | 1.112793 s | 1.095407 s | 1.016× (parity) |
-| perambulator × gauge, `z·y·x = 1` (GPU) | same shape without the volume | — | — | **3.6×** |
+`pyqcd==0.1.8` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
-Two things are worth separating:
-
-* the ratio **against our own generic path** shows what the lattice-QCD
-  specialised kernels buy (1.12× for 2pt, 2.41× for 3pt, 8.33× for the CPU
-  sandwich);
-* the ratio **against `opt_einsum`** also includes everything the general
-  execution layer already wins on these shapes.
-
-## Aggregated over a production mix
-
-Weighting the five contraction shapes by their share of a real production run
-(2pt 51 %, 3pt 15.5 % + 3.1 %, perambulator × gauge 26.4 %, sandwich 4 %):
-
-| Implementation | Total | Relative |
-|---|---|---|
-| `opt_einsum` | 4757 s | 1.00× |
-| `pyqcd.einsum` | 1688 s | **2.82×** |
-
-This is a model built from the per-shape measurements above, not a single
-end-to-end run; treat it as an estimate of the aggregate effect.
-
-## Where the gain comes from
-
-1. **Equation-shape specialisation.** A small set of lattice-QCD shapes
-   (nucleon 2pt/3pt, γ sandwich, perambulator × gauge) is recognised and routed
-   to purpose-built kernels instead of a generic BLAS chain.
-2. **Fusion.** Intermediate contraction results stay in registers/shared memory
-   instead of being materialised as temporary tensors.
-3. **Buffer reuse.** Operand packing and output buffers are pooled across calls;
-   the fixed per-call overhead is not paid again for every intermediate.
-4. **Native planning.** Planning is compiled into the native library, so paths
-   and costs are identical to the Python planner (verified by the 980-case
-   differential suite) while dispatch is cheaper.
-
-### Reading the A/B switch correctly
-
-`specialize=False` (and `PYQCD_EINSUM_SPECIALIZE=0`) switches off the
-**whole** specialised branch, including its plan cache — it is not a pure
-kernel-vs-no-kernel comparison. Measured on the production nucleon-2pt contract
-(median of 30 calls, same machine):
-
-| nvec | default | `PYQCD_EINSUM_SPECIALIZE=0` | default vs off |
+| Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
 |---|---|---|---|
-| 8 | 0.85–0.97 ms | 1.21 ms | 1.3× faster |
-| 16 | 2.11–2.22 ms | 16.1 ms | 7.5× faster |
-| 24 | 7.16–7.24 ms | 44–49 ms | 6.3× faster |
+| Nucleon 2pt, nvec=16 (production contract) | 12.95 ms | 2.15 ms | **6.02×** |
+| Nucleon 2pt, nvec=24 | 41.45 ms | 7.11 ms | **5.83×** |
+| γ sandwich, T=8, nvec=64 | 0.169 ms | 0.058 ms | **2.91×** |
 
-The specialised kernels themselves only engage when the operands satisfy the
-production contraction contract (3×(4,4,nvec,nvec) perambulators, 3×(4,4)
-gamma matrices, 2×(nmom,nvec,nvec,nvec) VVV); otherwise the hint prints
-`[plan-cache]` and only the plan cache is used.
+What the shipped build actually accelerates:
 
-## Honest limitations
-
-| Situation | Measured behaviour |
+| Shape | Route in 0.1.x |
 |---|---|
-| GPU nucleon 2pt/3pt vs `opt_einsum` | ≈1× — four independent implementations land in 373–444 ms; the shape is bound by the hardware, not by the planner |
-| perambulator × gauge on the full L24 volume (GPU) | parity (1.016×); the fused kernel currently applies only when `z·y·x = 1` |
-| Small tensors (Nvec=20, `spatial=1`) | 0.51×–1.32× — per-call overhead dominates |
-| Complex dense `zgemm` throughput on this laptop GPU | ~71 GFLOP/s vs ~228 GFLOP/s on 4 CPU threads; GPU wins only when the work is big enough |
-| Shapes without a specialised kernel | generic path only; the plan is still `opt_einsum`-compatible, but no extra speed |
-| MPI | only the KUPL backend shards, and only one output axis; never used in these comparisons |
+| Nucleon 2pt (`gahb,mcnd,…->M`) | dedicated KUPL/CUDA kernel + plan cache |
+| Nucleon 3pt main (`…->MNGLxy`) | dedicated KUPL/CUDA kernel + plan cache |
+| Nucleon 3pt (`…->GM`), sush 2pt/3pt-mu | plan cache only |
+| γ sandwich (`ab,...bce,cd->...dae`), perambulator × gauge | plan cache + general execution |
 
-The GHz-class caveat matters: the GPU numbers above were taken on a laptop GPU,
-so absolute times are not representative of a data-centre card. Both sides were
-measured on the same device, so the **ratios** remain meaningful.
+The hint printed on the first hit says which of the two happened:
+`[kernel: kupl_nucleon_2pt]` means a kernel ran, `[plan-cache]` means only the
+plan was reused.
+
+## Historical development-build measurements
+
+The figures below were taken on development builds that carried extra fused
+kernels (γ sandwich, perambulator × gauge). **Those kernels are not in the 0.1.x
+release**, so the numbers are *not* reproducible from PyPI — they are kept only as
+a record of what the shapes can cost:
+
+| Workload | opt_einsum | development build | Ratio |
+|---|---|---|---|
+| Nucleon 2pt (CPU, N=100) | 120.43 ms | 22.65 ms | 5.32× |
+| Nucleon 3pt (GPU) | 285.40 ms | 30.74 ms | 9.29× |
+| γ sandwich, L24 (GPU) | 0.373987 s | 0.110959 s | 3.371× |
+| γ sandwich, L24 (CPU) | 1188.9 ms | 142.7 ms | 8.33× |
+| perambulator × gauge, L24 (GPU) | 1.112793 s | 1.095407 s | 1.016× (parity) |
+
+A weighted production-mix model built on those numbers gave ≈2.82×
+(4757 s → 1688 s). It inherits the same caveat: it assumes the extra kernels.
 
 ## Code
 
