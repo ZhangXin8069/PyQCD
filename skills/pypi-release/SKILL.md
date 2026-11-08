@@ -676,3 +676,20 @@ C1–C4 明明在后面几轮已验证，顶部还写着"待查"）。规则：
 2. 收尾用 `grep -c "待查\|待评\|待核\|待复核"` 断言归零；
 3. 打 tag 前跑 `python -m pyqcd.testing.release_check --with-tests`，
    全绿（0.1.11 为 **17/17**）才允许打。
+
+### 打 tag 的实操序列（本次 dev34）
+```bash
+# 1) 门槛前最后一次全量终检（必须 17/17）
+python -m pyqcd.testing.release_check --with-tests
+
+# 2) annotated tag，消息写清版本 + 硬化范围 + 验证数字
+git tag -a dev<N> -m "pyqcd <ver> — ..." && git push origin dev<N>
+git push git@gitee.com:zhangxin8069/PyQCD.git dev<N>
+
+# 3) 三端校验（tag 对象哈希必须一致）
+git rev-parse dev<N>
+git ls-remote origin refs/tags/dev<N>
+git ls-remote git@gitee.com:zhangxin8069/PyQCD.git refs/tags/dev<N>
+```
+注意：`git push origin dev<N>` 只推该 tag，不要 `--tags`（免得把历史 tag 一并推）；
+本仓库 tag 约定为 `dev<N>` 递增（当前 34），没有 `v*` 系列。
