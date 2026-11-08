@@ -667,3 +667,12 @@ python -m pyqcd.testing.release_check --with-tests    # 连测试套件一起
 
 结论：pyqcd 是**超集**（多接受 callable、多导出 PathInfo），没有"更少"的能力。
 新增差异时必须同时改 `docs/{en,zh}/usage.md` 的 "Differences from opt_einsum" 小节。
+
+### 台账自身的腐化也要修
+多轮迭代后，台账**顶部清单**最容易与底部迭代记录矛盾（本轮就是：A8/A10/B2–B5/
+C1–C4 明明在后面几轮已验证，顶部还写着"待查"）。规则：
+
+1. 每轮结束把顶部清单的对应行改成"✅ + 轮次号"，而不是只追加一条迭代记录；
+2. 收尾用 `grep -c "待查\|待评\|待核\|待复核"` 断言归零；
+3. 打 tag 前跑 `python -m pyqcd.testing.release_check --with-tests`，
+   全绿（0.1.11 为 **17/17**）才允许打。

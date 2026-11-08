@@ -17,27 +17,27 @@
 | A5 | 依赖声明完整（无隐性 import 失败） | 全新 venv 里逐个 `import pyqcd.<sub>` | 0.1.4 ✅（12/12） |
 | A6 | 无可选重依赖被硬编入（torch/matplotlib 按需） | `find_spec` 断言 + 子包 import | 0.1.4 ✅ |
 | A7 | `twine check` 全绿；README 渲染为 Markdown | twine + PyPI `description_content_type` | 0.1.4 ✅ |
-| A8 | PEP 561 类型信息（如有 `.pyi`/`py.typed` 需与声明一致） | 待核 | 待查 |
+| A8 | PEP 561 类型信息 | `py.typed` 在包内 + `Typing :: Typed` 声明 | ✅ 0.1.5 起随包发布（R2/R14 复核） |
 | A9 | 项目 URL 指向真实可达平台 | 三个托管地址 200 | 0.1.4 ✅ |
-| A10 | 无 setuptools 弃用告警（license 表等） | 构建日志 | 待查（D5） |
+| A10 | 无 setuptools 弃用告警 | 构建日志 grep `deprecat` | ✅ PEP 639 修完（R4）；仅剩 `global-exclude` 无害告警（R4 记录） |
 
 ### B. 易用性（First-run usability）
 | # | 检查项 | 判定方法 | 当前状态 |
 |---|---|---|---|
 | B1 | 安装即用：一条命令、无额外手动步骤 | 全新 venv `pip install pyqcd` | ✅ |
-| B2 | `import pyqcd` 后的可发现性 | `dir(pyqcd)`、`__version__` | 待评 |
-| B3 | 文档示例在**已安装包**上可直接跑通 | 逐段执行 docs 示例（不含源码仓库专属） | 待查 |
-| B4 | 错误信息可行动（缺 extra 时提示装哪个 extra） | 触发 ImportError 检查文案 | 待查 |
-| B5 | `pyqcd.einsum` 与 `opt_einsum` API 对等 | 38 项 API 差分 | 待复核 |
+| B2 | `import pyqcd` 后的可发现性 | `dir(pyqcd)` + PEP 562 懒加载 | ✅ `__all__`/`__getattr__`/`__dir__` + `python -m pyqcd`（R1/R2） |
+| B3 | 文档示例在**已安装包**上可直接跑通 | `python -m pyqcd.testing.docs_examples` | ✅ 16 块 0 失败（R2/R9）；API 引用 AST 校验 35 项 0 失败（R9） |
+| B4 | 错误信息可行动 | 触发 ImportError 检查文案 | ✅ torch/plot 均给出 `pip install "pyqcd[...]"`（R2）；6 类非法输入与 opt_einsum 逐字一致（R12） |
+| B5 | `pyqcd.einsum` 与 `opt_einsum` API 对等 | 差分套件 + 边界矩阵 | ✅ 49 项行为 MATCH；差异仅两处增量（callable planner、顶层 PathInfo，R19） |
 | B6 | 基准/测试命令明确标注"需源码仓库" | 文档措辞 | ✅ |
 
 ### C. 生产力价值（Productivity）
 | # | 检查项 | 判定方法 | 当前状态 |
 |---|---|---|---|
-| C1 | 无需源码即可完成一次真实收缩（2pt 形态） | 纯安装环境跑 E1 方程 + 正确性 | 待查 |
-| C2 | 与 `opt_einsum` 可互换（同一脚本只改 import） | 双实现同脚本对照 | 待查 |
-| C3 | 性能优势可在安装环境复现（A/B 开关可见） | `specialize=False` 对照 + 计时 | 待查 |
-| C4 | 物理组件可组合（gamma + 规范 + 收缩） | 端到端小例子 | 待查 |
+| C1 | 无需源码即可完成一次真实收缩 | 纯安装环境跑 E1 方程 + 正确性 | ✅ rel 2.4e-15（R5/C 组）；可复现表 6.02×（R7） |
+| C2 | 与 `opt_einsum` 可互换 | 双实现同脚本对照 | ✅ `opt_cost`/路径逐值一致（C 组 + R19） |
+| C3 | 性能优势可在安装环境复现 | 发布包上 A/B 计时 | ✅ 默认对 `SPECIALIZE=0` 快 1.3×/7.5×/6.3×（R5），对 opt_einsum 6.02×/5.83×/2.91×（R7） |
+| C4 | 物理组件可组合 | 端到端小例子 | ✅ clover→dual→γ→夹心 全链通（R14 文档示例实跑）；`compute_dual_field_strength` 错误已可行动（R6） |
 
 ## 迭代记录
 
@@ -63,3 +63,4 @@
 | R17 | 24:05 | 0.1.11（无新发行） | 并发安全未验证（嵌入流水线时的常见前提） | 多线程 matmul（8×16×25）、多线程专用路径（6×12×10）、`shared_intermediates` 线程隔离（4 线程各自 cache）、多进程（4×8）全部 0 错误；新增 `_thread_safety_contract.py` 四用例（0.07 s）并接入 conftest，`python -m pyqcd.testing` 118→**119 passed**；记录 `count_cached_ops(cache)` 需传参的坑 |
 | R18 | 24:50 | 0.1.11（无新发行） | 终检证据分散在多个命令里，打 tag 时容易漏项 | 新增 `pyqcd/testing/release_check.py`：一条命令验证 16 项（版本三处一致、sdist 存在/twine/内容洁净/无绝对路径、文档示例+中英块一致+sphinx -W 双站、PyPI 版本与页面探针、RTD 双语言含当前版本、gitlab/gitee 与本地 HEAD 同步），失败非 0 退出可直接做 tag 门。实测全量 **16/16 passed**，`--offline --with-tests` **10/10 passed** |
 | R19 | 25:35 | 0.1.11（无新发行） | ①`contract_expression` 的 constants/形状语义未与 opt_einsum 对照；②自定义 `optimize` callable 与路径缓存失效未验；③"完全兼容"承诺缺少差异清单 | 实测：`contract_expression(*shapes)` 两边一致；`constants={...}` 两边抛**同样的** `ValueError`（bug-for-bug）；不同 shape 的路径与 cost（240 vs 252）一致；`optimize=` 传 callable 时 **pyqcd 支持而 opt_einsum 3.4.0 抛 TypeError**（超集）。已在 usage 页（中英）新增 "Differences from opt_einsum" 小节，仅列两处增量差异 |
+| R20 | 25:20 | 0.1.11 | 台账顶部 A/B/C 清单仍留着 R0 时的"待查/待评"旧状态，与后面 19 轮的结论不一致 | 把 A8/A10/B2/B3/B4/B5/C1/C2/C3/C4 全部改写为已验证状态并标注对应轮次证据，`待查/待评/待核/待复核` 归零；`release_check --with-tests` 全量 **17/17 passed**（含 119 passed 测试套件） |
