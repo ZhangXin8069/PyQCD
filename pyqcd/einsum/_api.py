@@ -523,20 +523,22 @@ def _einsum(*operands: Any, **kwargs: Any) -> Any:
 _SPECIALIZED_KERNEL_WARNED = False
 
 
-def _run_specialized_kernel(subscripts: Any, operands: Sequence[Any]) -> Any:
-    """依次尝试各专用 kernel，未命中返回 ``None``。"""
+def _run_specialized_kernel(
+    subscripts: Any, operands: Sequence[Any]
+) -> tuple[Any, str] | tuple[None, str]:
+    """依次尝试各专用 kernel；返回 ``(结果或 None, 命中的 kernel 名或 '')``。"""
     from . import _kernel_cuda, _kernel_kupl
 
-    for attempt in (
-        lambda: _kernel_kupl.try_nucleon_2pt(subscripts, operands),
-        lambda: _kernel_kupl.try_three_pt(subscripts, operands),
-        lambda: _kernel_cuda.try_nucleon_2pt(subscripts, operands),
-        lambda: _kernel_cuda.try_three_pt(subscripts, operands),
+    for label, attempt in (
+        ("kupl_nucleon_2pt", lambda: _kernel_kupl.try_nucleon_2pt(subscripts, operands)),
+        ("kupl_3pt", lambda: _kernel_kupl.try_three_pt(subscripts, operands)),
+        ("cuda_nucleon_2pt", lambda: _kernel_cuda.try_nucleon_2pt(subscripts, operands)),
+        ("cuda_3pt", lambda: _kernel_cuda.try_three_pt(subscripts, operands)),
     ):
         result = attempt()
         if result is not None:
-            return result
-    return None
+            return result, label
+    return None, ""
 
 
 def _warn_specialized_kernel_once(exc: BaseException) -> None:
@@ -582,19 +584,22 @@ def contract(
                 os.environ.pop(_specialize.FUSED_DISABLE_ENV, None)
                 _FUSED_ENV_OWNED = False
             specialized = _specialize.match(subscripts)
-            if specialized is not None:
-                _specialize.announce(specialized)
+            if specialized is not None and out is None:
+                announce_kernel = ""
                 if out is None:
                     # 专用 kernel 失败必须回退通用路径（契约：原生失败只 warning
                     # 一次，不把异常抛给调用方）。
                     try:
-                        kernel_result = _run_specialized_kernel(
+                        kernel_result, announce_kernel = _run_specialized_kernel(
                             subscripts, operands)
                     except Exception as exc:  # noqa: BLE001 - 见上
                         kernel_result = None
                         _warn_specialized_kernel_once(exc)
+                    _specialize.announce(specialized, announce_kernel)
                     if kernel_result is not None:
                         return kernel_result
+                else:
+                    _specialize.announce(specialized)
         else:
             os.environ[_specialize.FUSED_DISABLE_ENV] = "1"
             _FUSED_ENV_OWNED = True

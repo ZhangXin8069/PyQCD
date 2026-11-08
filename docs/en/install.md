@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.1.5`. To pin it: `pip install "pyqcd==0.1.5"`.
+Current release: `0.1.6`. To pin it: `pip install "pyqcd==0.1.6"`.
 
 ## Requirements
 

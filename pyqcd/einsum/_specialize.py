@@ -29,8 +29,8 @@ FUSED_DISABLE_ENV = "PYQCD_EINSUM_DISABLE_FUSED"
 REGISTRY: dict[str, dict[str, str]] = {
     "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M": {
         "name": "nucleon-2pt(E1)",
-        "kind": "fused(needs-optimization)",
-        "note": "8 算子核子 2pt；KUPL/CUDA 专用 kernel 均已接线（KUPL 1.1–1.4x；CUDA 0.86–1.17x 待优化）",
+        "kind": "kernel(needs-optimization)",
+        "note": "8 算子核子 2pt；KUPL/CUDA kernel（规模 ≥ PYQCD_EINSUM_KERNEL_MIN_ELEMENTS 时启用）",
     },
     "Geifj,ckdl,agbh,ce,gi,Mbdf,Mhjl,Gka->GM": {
         "name": "nucleon-3pt(E2)",
@@ -39,13 +39,13 @@ REGISTRY: dict[str, dict[str, str]] = {
     },
     "zyxcTabn,zyxgTdef,Gae,Tzyxgc->TGdbfn": {
         "name": "gauge-propagator(E4)",
-        "kind": "fused",
-        "note": "peram × peram × γ × 规范场，CUDA E4 融合 kernel",
+        "kind": "plan-cache",
+        "note": "peram × peram × γ × 规范场（本版本无专用 kernel，走计划缓存）",
     },
     "ab,...bce,cd->...dae": {
         "name": "gamma-sandwich(E5)",
-        "kind": "fused",
-        "note": "γ₅ 夹心，CUDA sandwich kernel",
+        "kind": "plan-cache",
+        "note": "γ₅ 夹心（本版本无专用 kernel，走计划缓存）",
     },
     "eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN": {
         "name": "sush-2pt(S1)",
@@ -64,12 +64,12 @@ REGISTRY: dict[str, dict[str, str]] = {
     },
     "agbh,eqfr,ospt,cmdn,ikjl,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy": {
         "name": "sush-3pt-main(P1)",
-        "kind": "fused(needs-optimization)",
+        "kind": "kernel(needs-optimization)",
         "note": "sush 3pt 主项；专用 kernel 已接线（CUDA ≈1.8x 于通用；KUPL 待进一步优化）",
     },
     "agbh,eqfr,ospt,ckdl,imjn,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy": {
         "name": "sush-3pt-main(P2)",
-        "kind": "fused(needs-optimization)",
+        "kind": "kernel(needs-optimization)",
         "note": "sush 3pt 主项（置换型）；专用 kernel 已接线（CUDA ≈1.8x；KUPL 待优化）",
     },
 }
@@ -97,8 +97,12 @@ def match(subscripts: str) -> dict[str, str] | None:
     return REGISTRY.get(normalize(subscripts))
 
 
-def announce(entry: dict[str, str]) -> None:
-    """命中时打印提示；默认每形态每个进程只打印一次。"""
+def announce(entry: dict[str, str], kernel: str = "") -> None:
+    """命中时打印提示；默认每形态每个进程只打印一次。
+
+    ``kernel`` 是**实际执行**的专用内核名（空串表示只命中计划缓存），
+    提示里据实输出，避免把没有 kernel 的形态说成 fused。
+    """
     name = entry.get("name", "unknown")
     verbose = os.environ.get(VERBOSE_ENV, "").strip().lower() in (
         "1", "true", "on", "yes")
@@ -106,7 +110,7 @@ def announce(entry: dict[str, str]) -> None:
         if not verbose and name in _announced:
             return
         _announced.add(name)
-    kind = entry.get("kind", "")
+    kind = f"kernel: {kernel}" if kernel else "plan-cache"
     note = entry.get("note", "")
     print(f"[pyqcd.einsum] 专用路径: {name} [{kind}] {note}", flush=True)
 

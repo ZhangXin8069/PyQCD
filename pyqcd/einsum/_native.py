@@ -201,9 +201,16 @@ def build_info() -> dict[str, Any]:
     else:
         label = 'non-MPI build'
     path = str(library_path())
+    try:
+        from ..tools._backend import get_backend_name
+
+        array_backend = get_backend_name()
+    except Exception:  # noqa: BLE001 - 诊断信息，绝不抛错
+        array_backend = 'unknown'
     return {
         'backend': backend,
         'native_available': backend != 'python',
+        'array_backend': array_backend,
         'mpi': mpi,
         'kupl_mpi_build': kupl_mpi,
         'mpi_label': label,

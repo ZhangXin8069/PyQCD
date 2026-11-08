@@ -65,6 +65,24 @@ end-to-end run; treat it as an estimate of the aggregate effect.
    and costs are identical to the Python planner (verified by the 980-case
    differential suite) while dispatch is cheaper.
 
+### Reading the A/B switch correctly
+
+`specialize=False` (and `PYQCD_EINSUM_SPECIALIZE=0`) switches off the
+**whole** specialised branch, including its plan cache — it is not a pure
+kernel-vs-no-kernel comparison. Measured on the production nucleon-2pt contract
+(median of 30 calls, same machine):
+
+| nvec | default | `PYQCD_EINSUM_SPECIALIZE=0` | default vs off |
+|---|---|---|---|
+| 8 | 0.85–0.97 ms | 1.21 ms | 1.3× faster |
+| 16 | 2.11–2.22 ms | 16.1 ms | 7.5× faster |
+| 24 | 7.16–7.24 ms | 44–49 ms | 6.3× faster |
+
+The specialised kernels themselves only engage when the operands satisfy the
+production contraction contract (3×(4,4,nvec,nvec) perambulators, 3×(4,4)
+gamma matrices, 2×(nmom,nvec,nvec,nvec) VVV); otherwise the hint prints
+`[plan-cache]` and only the plan cache is used.
+
 ## Honest limitations
 
 | Situation | Measured behaviour |

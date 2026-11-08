@@ -345,3 +345,37 @@ python -m pyqcd.testing.docs_examples --lang zh --keep-going
 不可运行的片段必须显式写 `# pseudo-code` 或 `# docs-skip`。
 当前基线：en 16 块 / zh 16 块，0 失败。**改文档后必跑**，否则会出现
 `compute_dual_field_strength(U)` 这类"签名早已改、文档还在旧写法"的事故。
+
+### 性能 A/B 的三个陷阱（0.1.6 实测教训，务必先读）
+
+1. **`specialize=False` ≠ 只关 kernel**。它关掉整个专用分支，**连计划缓存一起关**。
+   用它当"无 kernel 基线"会把缓存收益算进 kernel，得出反向结论。
+   正确的用户级对照就是它本身（因为文档就是这么告诉用户的），但要清楚它测的是什么。
+2. **kernel 只对"生产契约形状"生效**。E1 的契约是
+   3×(4,4,nvec,nvec) perambulator + 3×(4,4) γ + 2×(nmom,nvec,nvec,nvec) VVV。
+   用 `(2,2,2,2)` 之类合成形状去测，永远不会命中 kernel，测到的只是计划缓存差异。
+   用非契约形状得到的"kernel 慢 10.9×"是**测量假象**，据此加的规模门槛是错的。
+3. **先确认结构体计数器**：`pyqcd.einsum._specialize.announce` 现在打印
+   `[kernel: <name>]` 或 `[plan-cache]`，**据实反映真正执行了什么**。
+   看到 `[plan-cache]` 就说明该次调用没走 kernel，一切性能结论都不成立。
+
+最终实测（生产契约形状，30 次中位数，同机）：
+
+| nvec | 默认 | `PYQCD_EINSUM_SPECIALIZE=0` |
+|---|---|---|
+| 8 | 0.85–0.97 ms | 1.21 ms |
+| 16 | 2.11–2.22 ms | 16.1 ms |
+| 24 | 7.16–7.24 ms | 44–49 ms |
+
+即默认**从不变差**，因此不需要任何"小规模回退门槛"。
+
+### `build_info()` 的字段语义
+| 字段 | 含义 |
+|---|---|
+| `backend` | 可用的原生库：`cuda` / `kupl` / `python` |
+| `native_available` | 是否真的有可用原生库（`python` 时为 `False`） |
+| `array_backend` | 当前数组后端（`numpy` / `cupy` / `torch`）——决定数据在哪、走哪个 kernel |
+| `kupl_mpi_build` / `mpi` | KUPL 库是否编入 MPI / 当前生效后端是否是它 |
+
+注意：`backend=cuda` 但 `array_backend=numpy` 时，numpy 数据走的是 **KUPL CPU kernel**，
+GPU kernel 只在 cupy/torch 张量上生效。汇报性能时必须同时给这两个字段。
