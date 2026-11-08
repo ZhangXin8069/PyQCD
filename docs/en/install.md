@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.1.9`. To pin it: `pip install "pyqcd==0.1.9"`.
+Current release: `0.1.10`. To pin it: `pip install "pyqcd==0.1.10"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need
@@ -195,3 +195,15 @@ The package is developed on GitLab and mirrored to Gitee (国内发布) and GitH
 * 国内开发 — https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD
 * 国内发布 — https://gitee.com/zhangxin8069/PyQCD
 * 国外发布 — https://github.com/zhangxin8069/PyQCD
+
+## Backends and array types
+
+| Input arrays | What runs |
+|---|---|
+| `numpy` | the KUPL native library (CPU) when it is installed, otherwise the pure-Python planner |
+| `cupy` | the CUDA kernels for the specialised shapes; the generic executor currently may report `QCD_STATUS_INTERNAL` and fall back to Python — a single `RuntimeWarning` names the reason, and results stay correct |
+| `torch` | the torch backend (`set_backend("torch")`), i.e. `torch.einsum` under PyQCD's dispatch |
+
+`pyqcd.einsum.build_info()` reports `backend` (which native library is usable) and
+`array_backend` (what your arrays are); the two are not the same question. A
+`backend='cuda'` build still runs numpy input on the CPU library.

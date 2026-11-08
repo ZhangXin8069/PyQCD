@@ -30,7 +30,7 @@ REGISTRY: dict[str, dict[str, str]] = {
     "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M": {
         "name": "nucleon-2pt(E1)",
         "kind": "kernel(needs-optimization)",
-        "note": "8 算子核子 2pt；KUPL/CUDA kernel（规模 ≥ PYQCD_EINSUM_KERNEL_MIN_ELEMENTS 时启用）",
+        "note": "8 算子核子 2pt；KUPL/CUDA 专用 kernel（形状不匹配时回落到计划缓存）",
     },
     "Geifj,ckdl,agbh,ce,gi,Mbdf,Mhjl,Gka->GM": {
         "name": "nucleon-3pt(E2)",

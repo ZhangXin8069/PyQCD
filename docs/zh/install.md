@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.1.9`。需要固定版本时：`pip install "pyqcd==0.1.9"`。
+当前发行版：`0.1.10`。需要固定版本时：`pip install "pyqcd==0.1.10"`。
 
 PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的
 manylinux wheel 需要 `auditwheel` 修补。因此首次安装会编译一次（笔记本上约一分钟），
@@ -175,3 +175,15 @@ bash pyqcd/testing/simple/run-all.sh                     # per-function API pari
 * 国内开发 — https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD
 * 国内发布 — https://gitee.com/zhangxin8069/PyQCD
 * 国外发布 — https://github.com/zhangxin8069/PyQCD
+
+## 后端与数组类型
+
+| 输入的数组 | 实际执行的路径 |
+|---|---|
+| `numpy` | 装了 KUPL 原生库就走 CPU 原生，否则纯 Python 规划 |
+| `cupy` | 特化形态走 CUDA kernel；通用执行器目前可能报 `QCD_STATUS_INTERNAL` 并回落到 Python —— 只会发一次 `RuntimeWarning` 说明原因，结果始终正确 |
+| `torch` | torch 后端（`set_backend("torch")`），即由 PyQCD 派发到 `torch.einsum` |
+
+`pyqcd.einsum.build_info()` 同时给出 `backend`（哪个原生库可用）与
+`array_backend`（你的数组是什么）；这是两个不同的问题——`backend='cuda'` 的构建，
+numpy 输入依然跑在 CPU 库上。

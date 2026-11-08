@@ -565,3 +565,33 @@ tar -tzf /tmp/probe_dist/pyqcd-<ver>.tar.gz | grep -E '_tmp_probe|_tmp_pkg'
   不要为了"字节可复现"花时间。
 - 因此：**用内容哈希（解包后逐文件 sha256）判断"是否同一份发布"**，
   不要用 tarball sha256 比较两次构建；PyPI 记录的 sha256 只用于校验那次上传本身。
+
+### 双原生后端一致性（0.1.10 实测）
+同一组方程在 `PYQCD_EINSUM_NATIVE=kupl` 与 `=cuda` 下（numpy 输入）：
+
+| 方程 | kupl vs numpy | cuda vs numpy | kupl vs cuda |
+|---|---|---|---|
+| 核子 2pt（生产契约 nvec=6） | 3.28e-15 | 3.28e-15 | **0.00e+00** |
+| `ij,jk->ik`（64×128） | 8.29e-16 | 8.29e-16 | **0.00e+00** |
+| ellipsis | 2.91e-16 | 2.91e-16 | **0.00e+00** |
+| E4 形态 | 0.00e+00 | 0.00e+00 | **0.00e+00** |
+
+即两条路径**逐位相同**。注意：`PYQCD_EINSUM_NATIVE=cuda` 只是选库，
+numpy 数组仍走 CPU kernel；设备端加速要靠 cupy 数组。
+
+### cupy 数组的真实能力边界（必须写进文档）
+- 特化形态（核子 2pt/3pt）→ CUDA kernel；形状不匹配 → `[plan-cache]`；
+- 通用执行器在 cupy 输入上目前可能抛 `QCD_STATUS_INTERNAL` 并回落 Python，
+  只发**一次** `RuntimeWarning`（`_warn_native_fallback_once` 机制），结果仍正确；
+- 因此文档必须给出"数组类型 × 执行路径"矩阵，别让用户以为 cupy 一定更快。
+
+### 提示文案会随重构过期
+`_specialize.REGISTRY` 的 `note` 曾在移除规模门槛后仍写着
+`PYQCD_EINSUM_KERNEL_MIN_ELEMENTS`（该环境变量已不存在），0.1.10 才修。
+**改动任何 `note` 依赖的机制时，搜索全仓是否还有引用**：
+
+```bash
+grep -rn "REGISTRY\|KERNEL_MIN_ELEMENTS\|PYQCD_EINSUM_[A-Z_]*" pyqcd/einsum/_specialize.py
+```
+
+发版前用一条真实调用把 banner 打出来，确认文案与实际行为一致。
