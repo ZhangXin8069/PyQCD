@@ -33,6 +33,13 @@ def _resolve_backend(value: str) -> str:
         raise RuntimeError(
             f"invalid PYQCD_EINSUM_BACKEND={value!r}; expected kupl, cuda, or auto")
     if shutil.which(os.environ.get("NVCC", "nvcc")) and _cuda_sources():
+        try:
+            import Cython  # noqa: F401
+        except ImportError:
+            # 隔离构建环境里没有 Cython 时，CUDA 扩展无法编译；
+            # 明确退到纯 CPU 的 KUPL 后端，而不是让 pip install 直接失败。
+            print("PyQCD einsum: Cython is unavailable, using the kupl backend")
+            return "kupl"
         return "cuda"
     return "kupl"
 
@@ -164,10 +171,10 @@ def _extensions():
 
     try:
         from Cython.Build import cythonize
-    except ImportError as error:
-        raise RuntimeError(
-            "CUDA backend requires Cython; install Cython or use `bash install.sh kupl`"
-        ) from error
+    except ImportError:
+        _skip_native("Cython is unavailable, so the CUDA Cython extension "
+                     "cannot be built")
+        return []
 
     cuda_dir = HOME / "pyqcd" / "einsum" / "cuda"
     native_dir = HOME / "cpp" / "cuda" / "einsum"

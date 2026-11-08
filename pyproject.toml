@@ -1,4 +1,4 @@
-# PEP 517/518 build configuration and PEP 621 metadata for pyqcd-einsum.
+# PEP 517/518 build configuration and PEP 621 metadata for the `pyqcd` distribution.
 # Build-time mechanics that PEP 621 cannot express (native library staging,
 # optional Cython CUDA extension, package_data) stay in setup.py.
 
@@ -7,9 +7,9 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pyqcd-einsum"
-version = "0.1.0"
-description = "Native contraction engine for PyQCD with an opt_einsum-compatible API."
+name = "pyqcd"
+version = "0.1.1"
+description = "Lattice QCD toolkit with a native contraction engine and an opt_einsum-compatible API."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -41,7 +41,7 @@ mpi = ["mpi4py"]
 Homepage = "https://gitlab.itp.ac.cn/zhangxin8069/PyQCD"
 Repository = "https://gitlab.itp.ac.cn/zhangxin8069/PyQCD"
 Issues = "https://gitlab.itp.ac.cn/zhangxin8069/PyQCD/-/issues"
-Documentation = "https://pyqcd.readthedocs.io/"
+Documentation = "https://py-qcd.readthedocs.io/"
 
 [tool.setuptools]
 # Wheels carry exactly the files listed in setup.py package_data; LICENSE is

@@ -22,6 +22,11 @@ PyQCD 是一个用 Python 编写的格点 QCD 工具库，可选配原生加速�
 * :doc:`usage` —— 每个主要模块的可运行示例。
 * :doc:`install` —— 如何构建原生后端、选择后端、启用 MPI，以及测试入口。
 
+其他语言
+--------
+
+* English — https://py-qcd.readthedocs.io/en/latest/usage.html
+
 范围说明
 --------
 

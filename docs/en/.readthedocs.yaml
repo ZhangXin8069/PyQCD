@@ -1,8 +1,10 @@
 # Read the Docs build configuration (schema v2) — English site (main project).
 # Spec: https://docs.readthedocs.com/platform/stable/config-file/v2.html
 #
-# The Chinese translation is a separate Read the Docs project (`pyqcd-zh`)
-# whose config is `docs/zh/.readthedocs.yaml`.
+# Read the Docs project: `py-qcd` (language `en`).
+# URL: https://py-qcd.readthedocs.io/en/latest/
+# The Chinese build (language `zh-cn`) uses `docs/zh/.readthedocs.yaml`;
+# URL: https://py-qcd.readthedocs.io/zh-cn/latest/
 #
 # IMPORTANT: the Read the Docs "Configuration file" setting must be pointed at
 # this file (`docs/en/.readthedocs.yaml`); the repository root no longer holds a

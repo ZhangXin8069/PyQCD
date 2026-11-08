@@ -1,14 +1,29 @@
 # Overview
 
-PyQCD is a lattice-QCD toolkit written in Python. The long-term goal of the
+`pyqcd` is a lattice-QCD toolkit published on PyPI. The long-term goal of the
 project is gluon TMD-PDF extraction with gradient-flow renormalisation; the
-package itself is a set of reusable building blocks for that chain and for
-general lattice-QCD work.
+package itself is the reusable tooling around that chain.
+
+```bash
+pip install pyqcd
+```
+
+Everything on this site is available from that single installation — no source
+checkout and no manual build step are required. Native acceleration is
+optional, and the package installs either way.
+
+```python
+import pyqcd
+import pyqcd.einsum as pe
+
+print(pyqcd.__version__)    # e.g. 0.1.1
+print(pe.build_info())      # backend / mpi / mpi_label / native_library
+```
 
 `pyqcd/__init__.py` intentionally stays almost empty (only `__version__`), so
 everything is reached through subpackages.
 
-## What the subpackages provide
+## What the package provides
 
 | Subpackage | Highlights |
 |---|---|
@@ -23,8 +38,7 @@ everything is reached through subpackages.
 | `pyqcd.analysis` | `Bootstrap`, `FitParams`, `AnaParams`, ratio / effective-mass / energy / FH fitting and plotting helpers |
 | `pyqcd.pipeline` | centralised configuration and multi-step pipeline; `run_pipeline` executes the numbered steps |
 | `pyqcd.parallel` | `detect_resources`, `plan_parallel`, `run_meta_task`, `run_parallel_pipeline`, `format_plan` |
-| `pyqcd.einsum` | contraction engine: an `opt_einsum`-compatible API plus optional native KUPL/CUDA backends |
-| `pyqcd.testing` | integration test entry point and all runnable examples/regression suites |
+| `pyqcd.einsum` | contraction engine: an `opt_einsum`-compatible API plus optional native backends |
 
 ## The contraction engine
 
@@ -38,8 +52,8 @@ import pyqcd.einsum as pe
 a = np.arange(6.0).reshape(2, 3)
 b = np.arange(12.0).reshape(3, 4)
 
-pe.contract("ij,jk->ik", a, b)          # same as a @ b
-pe.contract_path("ij,jk->ik", a, b)     # (path, PathInfo)
+pe.contract("ij,jk->ik", a, b)                        # same as a @ b
+pe.contract_path("ij,jk->ik", a, b)                   # (path, PathInfo)
 pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))   # reusable expression
 ```
 
@@ -50,21 +64,21 @@ pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))   # reusable expression
 | Public API | `contract`, `contract_path`, `contract_expression`, `PathInfo`, `paths`, `backends`, `shared_intermediates` |
 | Planning | `_plan_py.py` (pure-Python greedy/optimal/branch/dp), `helpers.py`, `parser.py`, `blas.py` |
 | Execution | `_execute.py` (BLAS dispatch + buffer pooling) |
-| Native | `pyqcd/einsum/_native.py` (ctypes) and `pyqcd/einsum/cuda/` (Cython); C ABI in `cpp/` |
+| Native | `_native.py` (ctypes) and `cuda/` (Cython extension) |
 
-### Native backends
+### Native backends (optional)
 
-| Backend | Sources | Artifact |
+| Backend | Usable for | Built during `pip install` when |
 |---|---|---|
-| KUPL (CPU) | `cpp/kupl/einsum/` | `libpyqcdeinsum_kupl.so` |
-| CUDA (GPU) | `cpp/cuda/einsum/` | `libpyqcdeinsum_cuda.so` + Cython extension |
+| KUPL | CPU | a C++17 compiler is available |
+| CUDA | GPU | `nvcc` and Cython are available |
 
-Both export the same 8 `Qcd` entry points; the planning core is compiled
-into both, so paths and costs are identical by construction.
+When no toolchain is present the package still installs and the engine runs its
+pure-Python planner: same results, only slower.
 
 ### Fallback invariants
 
-- A missing `.so` switches to the pure-Python planner: same results, slower.
+- A missing native library switches to the pure-Python planner: same results, slower.
 - `_native.py` only does `ctypes`; importing it never loads a library.
 - Any native failure emits a single warning and falls back to Python instead of
   raising.

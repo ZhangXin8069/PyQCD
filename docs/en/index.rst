@@ -1,12 +1,18 @@
 PyQCD
 =====
 
-PyQCD is a lattice-QCD toolkit in Python with optional native kernels. It
-provides building blocks for propagator and operator contractions, gradient
-flow, renormalisation, and gluon TMD-PDF extraction, plus a self-contained
-contraction engine with an ``opt_einsum``-compatible API.
+``pyqcd`` is a lattice-QCD toolkit distributed on PyPI. It ships the building
+blocks for propagator and operator contractions, gradient flow, renormalisation
+and gluon TMD-PDF extraction, together with a self-contained contraction engine
+that exposes an ``opt_einsum``-compatible API.
 
-This site is a short introduction to what the package does and how to use it.
+.. code-block:: bash
+
+   pip install pyqcd
+
+This site is written from the point of view of the installed package: every
+example assumes ``import pyqcd`` works and needs nothing else from the
+repository.
 
 .. toctree::
    :maxdepth: 2
@@ -19,15 +25,11 @@ This site is a short introduction to what the package does and how to use it.
 Where to start
 --------------
 
-* :doc:`overview` — what each subpackage provides and how the contraction
-  engine is layered.
+* :doc:`overview` — what the package provides once installed.
 * :doc:`usage` — runnable examples for every major module.
-* :doc:`install` — building the optional native backends, backend selection,
-  MPI, and the test entry points.
+* :doc:`install` — installation, optional extras, native backends and knobs.
 
-Scope
------
+Other languages
+---------------
 
-These pages describe the package and its usage. The repository also keeps
-research notes and LaTeX reports under ``docs/``; those are separate material
-and are deliberately not part of this site.
+* 中文 — https://py-qcd.readthedocs.io/zh-cn/latest/usage.html
