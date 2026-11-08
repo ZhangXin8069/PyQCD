@@ -451,11 +451,20 @@ def test_preflight_rejects_structurally_inconsistent_custom_plan():
             assert not makedirs.called
 
 
+def _writable_run_dir():
+    """Return a writable directory for pipeline contract tests.
+
+    早期实现硬编码 ``/contract/run``，在非特权环境会因无法创建 ``/contract``
+    而失败；改为临时目录后与主机权限无关。
+    """
+    return os.path.join(tempfile.mkdtemp(prefix='pyqcd-contract-'), 'run')
+
+
 class _SetupComm:
     """One-rank model of a two-rank communicator for setup contracts."""
 
-    def __init__(self, run_dir='/contract/run'):
-        self.run_dir = run_dir
+    def __init__(self, run_dir=None):
+        self.run_dir = run_dir if run_dir is not None else _writable_run_dir()
 
     @staticmethod
     def allgather(value):
@@ -523,14 +532,14 @@ def _run_backend_meta_task(backend, device, *, fake_torch=None):
                                 with patches[6]:
                                     mpi.run_parallel_pipeline(
                                         steps=('vertex',), conf_ids=[101, 102],
-                                        run_dir='/contract/run', logger=None,
+                                        run_dir=_writable_run_dir(), logger=None,
                                         backend=backend, device=device,
                                         plan=_backend_plan(),
                                         resources={'provided': True})
                             else:
                                 mpi.run_parallel_pipeline(
                                     steps=('vertex',), conf_ids=[101, 102],
-                                    run_dir='/contract/run', logger=None,
+                                    run_dir=_writable_run_dir(), logger=None,
                                     backend=backend, device=device,
                                     plan=_backend_plan(),
                                     resources={'provided': True})
@@ -616,7 +625,7 @@ def test_numpy_setup_does_not_import_gpu_backends():
             patch('pyqcd.pipeline._steps.dump_config_snapshot'), \
             patch('pyqcd.tools.set_backend') as set_backend:
         mpi.run_parallel_pipeline(
-            steps=(), conf_ids=[101], run_dir='/contract/run', logger=None,
+            steps=(), conf_ids=[101], run_dir=_writable_run_dir(), logger=None,
             backend='numpy', device=None, plan=_backend_plan())
 
     assert imported == []
@@ -727,7 +736,7 @@ def test_non_dry_custom_plan_logger_failure_still_rendezvous():
         try:
             mpi.run_parallel_pipeline(
                 steps=(), conf_ids=[101, 102],
-                run_dir='/contract/run', logger=fail_plan_logger,
+                run_dir=_writable_run_dir(), logger=fail_plan_logger,
                 backend='numpy', plan=_backend_plan(),
                 resources={'provided': True})
         except RuntimeError as exc:

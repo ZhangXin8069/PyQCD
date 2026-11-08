@@ -860,6 +860,8 @@ bool recover_input_terms(
     });
 }
 
+constexpr int64_t kE4FusedMaxSpatialVolume = 1;
+
 bool match_e4_fused(
     const pyqcd_einsum::ExecutionPlan& plan,
     const std::vector<ResolvedStep>& resolved,
@@ -937,6 +939,13 @@ bool match_e4_fused(
         candidate.spec.t, candidate.spec.output_g, candidate.spec.d,
         candidate.spec.b, candidate.spec.f, candidate.spec.n};
     if (!checked_product(output_shape, &candidate.spec.output_elements)) {
+        return false;
+    }
+    // 收益判据（实测，2026-11-08）：staged 融合 kernel 只在空间体积为 1 时占优
+    // （z*y*x=1 → 快的 3.6x；z*y*x=8/27/64/512 → 慢 1.4x/9.7x/22x/26x；
+    //  L24 的 z*y*x=13824 → 慢 33x）。超出阈值即回落通用多步，避免灾难性退化。
+    if (candidate.spec.z * candidate.spec.y * candidate.spec.x >
+        kE4FusedMaxSpatialVolume) {
         return false;
     }
     candidate.matched = true;

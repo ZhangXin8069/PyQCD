@@ -41,7 +41,17 @@
  * [slowest]..[fastest] order.
  */
 
-#include "pattern_3pt.h"
+/*
+ * NOTE on the include below: `make-nv.sh` passes the KUPL include directory
+ * *before* this backend's include directory, and `cpp/kupl/einsum/include`
+ * contains a different `pattern_3pt.h` (the CPU/KUPL ABI: no
+ * QCD_PATTERN_3PT_API and no qcd_cuda_pattern_3pt).  A plain
+ * #include "../include/pattern_3pt.h" therefore resolves to the KUPL header and the whole
+ * translation unit fails to parse at the first QCD_PATTERN_3PT_API token.
+ * Quoting the path relative to this file pins the lookup to
+ * cpp/cuda/einsum/include/pattern_3pt.h regardless of the -I order.
+ */
+#include "../include/pattern_3pt.h"
 
 #include <cuda_runtime.h>
 #include <cuComplex.h>

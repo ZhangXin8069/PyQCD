@@ -29,13 +29,13 @@ FUSED_DISABLE_ENV = "PYQCD_EINSUM_DISABLE_FUSED"
 REGISTRY: dict[str, dict[str, str]] = {
     "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M": {
         "name": "nucleon-2pt(E1)",
-        "kind": "fused-plan",
-        "note": "8 算子核子 2pt；γ₇×2 + VVV×2 + 宇称投影",
+        "kind": "fused",
+        "note": "8 算子核子 2pt；KUPL 专用 kernel（N=100 时约 1.1–1.4x 于通用路径、9.4x 于 opt）",
     },
     "Geifj,ckdl,agbh,ce,gi,Mbdf,Mhjl,Gka->GM": {
         "name": "nucleon-3pt(E2)",
-        "kind": "fused-plan",
-        "note": "8 算子核子 3pt",
+        "kind": "plan-cache",
+        "note": "8 算子核子 3pt（仅复用计划缓存，无专用 kernel）",
     },
     "zyxcTabn,zyxgTdef,Gae,Tzyxgc->TGdbfn": {
         "name": "gauge-propagator(E4)",
@@ -49,28 +49,28 @@ REGISTRY: dict[str, dict[str, str]] = {
     },
     "eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN": {
         "name": "sush-2pt(S1)",
-        "kind": "fused-plan",
-        "note": "sush NN 2pt 生产方程",
+        "kind": "plan-cache",
+        "note": "sush NN 2pt 生产方程（仅复用计划缓存）",
     },
     "gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG": {
         "name": "sush-3pt-munu(S2)",
-        "kind": "fused-plan",
-        "note": "sush 3pt 含 μν 插入",
+        "kind": "plan-cache",
+        "note": "sush 3pt 含 μν 插入（仅复用计划缓存）",
     },
     "manb,cedf,bd,Mfn,ac,MFem->MF": {
         "name": "sush-2pt-mu(S3)",
-        "kind": "fused-plan",
-        "note": "sush 2pt 含 μ 插入",
+        "kind": "plan-cache",
+        "note": "sush 2pt 含 μ 插入（仅复用计划缓存）",
     },
     "agbh,eqfr,ospt,cmdn,ikjl,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy": {
         "name": "sush-3pt-main(P1)",
-        "kind": "multi-step",
-        "note": "sush 3pt 主项，15 算子 14 步（生产热点）",
+        "kind": "fused(needs-optimization)",
+        "note": "sush 3pt 主项；KUPL 专用 kernel 已接线，实测与通用持平（0.94–1.01x），待优化",
     },
     "agbh,eqfr,ospt,ckdl,imjn,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy": {
         "name": "sush-3pt-main(P2)",
-        "kind": "multi-step",
-        "note": "sush 3pt 主项（置换型），15 算子 14 步",
+        "kind": "fused(needs-optimization)",
+        "note": "sush 3pt 主项（置换型）；KUPL 专用 kernel 已接线，实测与通用持平，待优化",
     },
 }
 

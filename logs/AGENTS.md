@@ -660,3 +660,11 @@
 - 关键内容: 最小复现 abcde,cedb->ac；根因 axes.empty() 提前返回；修复后 E2 三 planner 全对
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pyqcd/einsum - general - 2026-11-08 07:33:54 +0800
+- 主任务: CUDA 后端缺陷排查与专用路径开关缓存键修复
+- 日志文件: logs/v20261108073355.txt
+- 文件大小: 3096 bytes
+- 触发原因: 一般记录
+- 关键内容: 400+ 随机差分全通过；修复 specialize 开关缓存键（CUDA/KUPL 双向生效）
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress

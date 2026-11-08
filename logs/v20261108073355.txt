@@ -1,0 +1,57 @@
+[日志元数据]
+日志类型: general
+生成时间: 2026-11-08 07:33:54 +0800
+批次: pyqcd/einsum
+主任务: CUDA 后端缺陷排查与专用路径开关缓存键修复
+触发原因: 一般记录
+摘要: 400+ 随机差分全通过；修复 specialize 开关缓存键（CUDA/KUPL 双向生效）
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — CUDA 侧定向缺陷排查（400+ 用例）
+- 目标: 在推进下一步前，先确认 CUDA 后端是否存在真实缺陷
+- 命令/操作:
+  1. 退化用例（关联到已修的 transpose_copy 缺陷族）：9 例，含输出全 1 维 + 重排、标量输出、广播
+  2. 随机差分扫描 A：200 例，2-4 算子，标签尺寸 1-3，greedy
+  3. 随机差分扫描 B：210 例，最多 6 算子，greedy/dp/auto 三种 planner
+  4. `contract_expression` 复用：5 轮换数组
+  5. 融合路径专项：E4 融合 12 种形状（spatial 1-3、Nvec 4-7、T 2-3）、E5 夹心 8 种形状
+- 关键输出: 全部 0 失败；E4 12/12、E5 8/8 与 numpy 一致（rel ≤ 1e-15）
+- 退出码: 0
+- 证据与判断: **CUDA 数值核心未发现缺陷**；此前的 `transpose_copy` 缺陷是 KUPL 独有
+
+### S2 — 发现并修复专用路径开关的缓存键缺陷（影响 CUDA 与 KUPL）
+- 现象: 先 `specialize=False` 再切 `True`，性能不回落到专用值
+  （CUDA E4：False 1.376 ms → True 1.159 ms，而纯净 True 应为 ~0.68 ms）
+- 根因: 原生程序缓存键（`_native_plan_key` / `_contract_signature` /
+  `contract_expression` 的 `native_cache` 键）**没有包含"是否禁用融合"状态**，
+  导致先前编译的通用程序被复用
+- 修复: 引入 `_fused_disabled()`，把该状态并入上述三处缓存键
+- 关键输出（修复后，同一进程内反复切换）:
+  - CUDA E4: False 1.808 ms → True **0.735 ms** → False 1.611 ms → True **0.746 ms**
+  - KUPL E5: False 1266.82 ms → True **112.68 ms** → False 1006.71 ms
+  - 四次调用 `out_sum` 完全一致（CUDA 9.410919e+03；KUPL -1.343492e+04）→ 数值未变
+- 退出码: 0
+- 证据与判断: 切换现在双向生效且数值一致
+
+### S3 — 回归
+- 命令/操作: `verify_native --backend cuda`、`--backend kupl`、`bash pyqcd/testing/einsum/simple/run-all.sh`
+- 关键输出: cuda 16/16、kupl 16/16、simple 套件 78 passed / 0 failed，exit=0
+- 退出码: 0
+- 证据与判断: 修复未引入回归
+
+## 验证与证据
+- 测试/检查: 400+ 随机差分、9 例退化用例、20 例融合路径、双向开关、双后端回归
+- 结果: 全部通过
+- 未验证项: CUDA 侧 MPI 分片（`applyContractMpiQcd` 仍为显式 stub）、跨设备拓扑
+
+## 变更与产物
+- 文件: `pyqcd/einsum/_api.py`（新增 `_fused_disabled()`，并入三处缓存键）
+- 产物: 无新增二进制
+- 未改动范围: `cpp/**`（本轮只读排查）
+
+## 风险、限制与下一步
+- 风险: 缓存键增加一维会使缓存条目翻倍（有上限保护，影响可忽略）
+- 阻塞: 无
+- 下一步: 恢复"未接线 kernel"的评估结论（3 个不可用、1 个更慢），进入性能接线与最终验收

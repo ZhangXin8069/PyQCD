@@ -1,21 +1,25 @@
 /* 格点 QCD 3pt 主项（P1/P2）专用 CPU 执行 kernel。
  *
- * 目的：把 15 算子 / 14 步的通用执行（每步 pack + GEMM + 输出 permute + 新建
- * 中间缓冲）替换成**零 pack、零输出 permute、缓冲全复用**的一次调用。
+ * 目标：把 15 算子 / 14 步的通用执行（每步 pack + GEMM + 输出 permute + 新建
+ * 中间缓冲）替换成**固定 14 步、零通用 pack、缓冲全复用**的一次调用。
  *
- * 关键设计（与通用执行层的差异）：
- *   1. 所有 GEMM 的操作数都是**现成布局**：中间结果的 layout 在写出时就按下一
- *      步的 (m,k) / (k,n) 要求排好，只有少数小张量（≤ n^2 或 n^3 一次）需要
- *      显式置换，置换是连续 run 的拷贝，不是通用 odometer pack。
- *   2. 4x4 Dirac / 4x2 投影的哑指标全部用**按最内维遍历 + 寄存器复用**的直接
- *      循环（peram 预处理、gamma 夹心、尾部小收缩），不走 pack/GEMM。
- *   3. 大 GEMM 只有 3 个（P1: 5e7 / 2e8 / 5e7；P2: 1e8 / 1e8 + 6e6），
- *      全部是 (m,n,k) 形状友好、B 侧 k 维连续的 row-major GEMM。
- *   4. 中间缓冲通过小型 pool 复用，避免每次调用首触页缺页（通用执行层在
- *      step6 上正是被 16 MB 新映射的首触吃掉约 20 ms）。
+ * 设计要点（与通用执行层的差异）
+ * ------------------------------
+ * 1. 收缩顺序由方程结构手工推导（Gmo 的 mu 与 NLnp 的 n 分居两端，Mhj/gi/ax 在源端，
+ *    ospt/sy 在汇端，eqfr 与两条 peram 切片构成一个"环"），总乘加数与 opt_einsum 的
+ *    `dp` 最优路径同阶（P1 ≈ 3.1e8、P2 ≈ 2.1e8 复数乘加，n = Nev = 50），但：
+ *      - 每个中间张量的 layout 在写出时就按下一步的 (m,k)/(k,n) 排好，只有 <= 8n^2
+ *        或按 b 分块的小张量需要显式置换，置换是连续 run 拷贝；
+ *      - 大 GEMM 只有 3~4 个，形状分别为 (8n x n^2 x n)、(4n x 2n^2 x 4n)、
+ *        (n x 2n x n^2)，全部 row-major、B 侧 k/n 连续。
+ * 2. Dirac(4)/投影(4,2) 哑指标的预处理（agbh x ax x gi、ospt x sy、ikjl x kq、
+ *    cmdn x ce、ckdl x ce x kq）都是小 GEMM 或直循环，不进通用 pack。
+ * 3. 中间缓冲通过 pool 复用（避免每次调用重新 mmap + 首触页缺页）。
  *
- * 线程口径：GEMM 用进程内 CBLAS（OpenBLAS），线程数由 OPENBLAS_NUM_THREADS
- * 决定；本文件自己的 OpenMP 循环由 OMP_NUM_THREADS 决定；二者不嵌套。
+ * 线程口径：GEMM 全部交给进程内已加载的 CBLAS（OpenBLAS），线程数由
+ * `OPENBLAS_NUM_THREADS` 决定；本文件自己的 OpenMP 循环（置换/小预处理）只受
+ * `OMP_NUM_THREADS` 约束，且**不与任何 CBLAS 调用嵌套**，因此不存在
+ * OMP 线程 x BLAS 线程的乘性超订。
  */
 
 #include "pattern_3pt.h"
@@ -36,7 +40,6 @@ namespace {
 
 constexpr int64_t kDirac = 4; /* 固定 4x4 Dirac 结构 */
 constexpr int64_t kProj = 2;  /* 投影 (4,2) 的列数 */
-constexpr int64_t kSmallTile = 64;
 
 constexpr int kCblasRowMajor = 101;
 constexpr int kCblasNoTrans = 111;
@@ -54,8 +57,10 @@ inline void madd(Cplx* acc, const Cplx& a, const Cplx& b) {
     acc->im += a.re * b.im + a.im * b.re;
 }
 
+inline int64_t min64(int64_t a, int64_t b) { return a < b ? a : b; }
+
 /* ------------------------------------------------------------------------- */
-/* 可复用缓冲池：避免每次调用重新 mmap/首触 16~32 MB 中间缓冲                  */
+/* 可复用缓冲池：避免每次调用重新 mmap / 首触 16~64 MB 中间缓冲               */
 /* ------------------------------------------------------------------------- */
 
 class BufferPool {
@@ -71,13 +76,19 @@ class BufferPool {
         }
         {
             std::lock_guard<std::mutex> guard(mutex_);
+            int best = -1;
             for (int index = 0; index < kSlots; ++index) {
-                if (slots_[index].data != nullptr && slots_[index].bytes >= bytes &&
-                    slots_[index].bytes <= bytes * 2) {
-                    void* data = slots_[index].data;
-                    slots_[index].data = nullptr;
-                    return data;
+                if (slots_[index].data != nullptr && slots_[index].bytes >= bytes) {
+                    if (best < 0 || slots_[best].bytes > slots_[index].bytes) {
+                        best = index;
+                    }
                 }
+            }
+            if (best >= 0) {
+                void* data = slots_[best].data;
+                slots_[best].data = nullptr;
+                slots_[best].bytes = 0;
+                return data;
             }
         }
         void* data = nullptr;
@@ -105,7 +116,7 @@ class BufferPool {
     }
 
   private:
-    static constexpr int kSlots = 24;
+    static constexpr int kSlots = 8;
 
     struct Slot {
         void* data = nullptr;
@@ -149,20 +160,41 @@ class Lease {
         bytes_ = 0;
     }
 
-    template <typename Type>
-    Type* as() const {
-        return reinterpret_cast<Type*>(data_);
-    }
-
-    const void* raw() const { return data_; }
+    bool ok() const { return data_ != nullptr || bytes_ == 0; }
 
     std::size_t bytes() const { return bytes_; }
 
-    bool ok() const { return data_ != nullptr || bytes_ == 0; }
+    void* raw() const { return data_; }
 
   private:
     void* data_ = nullptr;
     std::size_t bytes_ = 0;
+};
+
+/* 从同一块 slab 上按 64B 对齐切分，越界即 fail-closed。 */
+class Arena {
+  public:
+    bool reserve(std::size_t bytes) { return lease_.take(bytes); }
+
+    template <typename Type>
+    Type* take(std::size_t elements) {
+        const std::size_t bytes = elements * sizeof(Type);
+        const std::size_t aligned = (bytes + 63u) & ~static_cast<std::size_t>(63u);
+        if (used_ + aligned > lease_.bytes()) {
+            overflow_ = true;
+            return nullptr;
+        }
+        Type* pointer = reinterpret_cast<Type*>(static_cast<uint8_t*>(lease_.raw()) + used_);
+        used_ += aligned;
+        return pointer;
+    }
+
+    bool ok() const { return lease_.ok() && !overflow_; }
+
+  private:
+    Lease lease_{};
+    std::size_t used_ = 0;
+    bool overflow_ = false;
 };
 
 /* ------------------------------------------------------------------------- */
@@ -231,7 +263,7 @@ const Blas& blas() {
     return api;
 }
 
-/* C = alpha*A*B + beta*C（alpha=1；beta 由 accumulate 决定）。 */
+/* C = alpha*A*B + beta*C，alpha=1；beta = accumulate ? 1 : 0。 */
 bool gemm(int trans_a, int trans_b, int64_t m, int64_t n, int64_t k, const Cplx* a, int64_t lda,
           const Cplx* b, int64_t ldb, bool accumulate, Cplx* c, int64_t ldc) {
     if (m <= 0 || n <= 0) {
@@ -254,9 +286,8 @@ bool gemm(int trans_a, int trans_b, int64_t m, int64_t n, int64_t k, const Cplx*
                   ldc);
         return true;
     }
-    if (m > std::numeric_limits<int>::max() || n > std::numeric_limits<int>::max() ||
-        k > std::numeric_limits<int>::max() || lda > std::numeric_limits<int>::max() ||
-        ldb > std::numeric_limits<int>::max() || ldc > std::numeric_limits<int>::max()) {
+    const int64_t limit = std::numeric_limits<int>::max();
+    if (m > limit || n > limit || k > limit || lda > limit || ldb > limit || ldc > limit) {
         return false;
     }
     api.lp64(kCblasRowMajor, trans_a, trans_b, static_cast<int>(m), static_cast<int>(n),
@@ -266,282 +297,203 @@ bool gemm(int trans_a, int trans_b, int64_t m, int64_t n, int64_t k, const Cplx*
 }
 
 /* ------------------------------------------------------------------------- */
-/* 小型置换：全部按“连续 run 拷贝”实现，并用 OpenMP 摊到 OMP_NUM_THREADS 上     */
+/* 预处理：与 M/N 无关的小收缩                                                 */
 /* ------------------------------------------------------------------------- */
 
-inline bool parallel_worth(int64_t work, int64_t minimum) { return work >= minimum; }
-
-/* dst[(i_j, j), (k, l)] <- src[(i, k, j, l)]（P1: gamma7b 之后的 ikjl / P2: imjn） */
-void permute_source_pair(const Cplx* src, int64_t n, Cplx* dst) {
-    /* src[((i*4 + x)*n + j)*n + l]，dst[((i*n + j)*4 + x)*n + l] */
-    const int64_t total = kDirac * n;
-#ifdef _OPENMP
-#pragma omp parallel for if (parallel_worth(total, 64)) schedule(static)
-#endif
-    for (int64_t row = 0; row < total; ++row) {
-        const int64_t i = row / n;
-        const int64_t j = row % n;
-        for (int64_t x = 0; x < kDirac; ++x) {
-            std::memcpy(dst + (row * kDirac + x) * n,
-                        src + ((i * kDirac + x) * n + j) * n,
-                        static_cast<std::size_t>(n) * sizeof(Cplx));
-        }
-    }
-}
-
-/* dst[(e*n + f), (q*n + r)] <- src[((e*4 + q)*n + f)*n + r]（eqfr） */
-void permute_middle_pair(const Cplx* src, int64_t n, Cplx* dst) {
-    const int64_t total = kDirac * n;
-#ifdef _OPENMP
-#pragma omp parallel for if (parallel_worth(total, 64)) schedule(static)
-#endif
-    for (int64_t row = 0; row < total; ++row) {
-        const int64_t e = row / n;
-        const int64_t f = row % n;
-        for (int64_t q = 0; q < kDirac; ++q) {
-            std::memcpy(dst + (row * kDirac + q) * n,
-                        src + ((e * kDirac + q) * n + f) * n,
-                        static_cast<std::size_t>(n) * sizeof(Cplx));
-        }
-    }
-}
-
-/* 2D 转置：dst[dst_row_stride*i + j] = src[src_row_stride*j + i]，8x8 分块。 */
-void transpose_2d(const Cplx* src, Cplx* dst, int64_t rows, int64_t cols,
-                  int64_t src_row_stride, int64_t dst_row_stride) {
-    constexpr int64_t kTile = 8;
-    const int64_t tile_rows = (rows + kTile - 1) / kTile;
-    const int64_t tile_cols = (cols + kTile - 1) / kTile;
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) if (parallel_worth(tile_rows * tile_cols, 8)) schedule(static)
-#endif
-    for (int64_t tr = 0; tr < tile_rows; ++tr) {
-        for (int64_t tc = 0; tc < tile_cols; ++tc) {
-            const int64_t r0 = tr * kTile;
-            const int64_t c0 = tc * kTile;
-            const int64_t r1 = r0 + kTile < rows ? r0 + kTile : rows;
-            const int64_t c1 = c0 + kTile < cols ? c0 + kTile : cols;
-            for (int64_t i = r0; i < r1; ++i) {
-                const Cplx* line = src + c0 * src_row_stride + i;
-                for (int64_t j = c0; j < c1; ++j) {
-                    dst[j * dst_row_stride + i] = line[(j - c0) * src_row_stride];
-                }
-            }
-        }
-    }
-}
-
-/* ------------------------------------------------------------------------- */
-/* peram 预处理（4x4 / 4x2 哑指标）：按最内维遍历 + 寄存器复用                */
-/* ------------------------------------------------------------------------- */
-
-/* a2[x,b,i,h] = sum_{a,g} proj[a,x] A[a,g,b,h] g5[g,i]
- * t1[x,g,b,h] 为中转。 */
-bool dress_source_wedge(const Cplx* a, const Cplx* proj, const Cplx* g5, int64_t n, Cplx* t1,
-                        Cplx* a2) {
-    const int64_t nn = n * n;
-    /* (a) t1[x,g,b,h] = sum_a proj[a,x] A[a,g,b,h]：每个 g 一次 (2 x 4) x (4 x n^2) GEMM。 */
-    Cplx proj_t[kProj * kDirac];
+/* a3[(x,i)][(b,h)] = sum_{a,g} ax[a,x] agbh[a,g,b,h] gi[g,i]（8 x n^2） */
+bool dress_source(const Cplx* agbh, const Cplx* gi, const Cplx* ax, int64_t n, Cplx* a3) {
+    Cplx weight[kProj * kDirac * kDirac * kDirac]; /* [(x,i)][(a,g)] = 8 x 16 */
     for (int64_t x = 0; x < kProj; ++x) {
-        for (int64_t d = 0; d < kDirac; ++d) {
-            proj_t[x * kDirac + d] = proj[d * kProj + x];
-        }
-    }
-    for (int64_t g = 0; g < kDirac; ++g) {
-        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj, nn, kDirac, proj_t, kDirac,
-                  a + g * nn, kDirac * nn, false, t1 + g * nn, kDirac * nn)) {
-            return false;
-        }
-    }
-    /* (b) a2[x,b,i,h] = sum_g t1[x,g,b,h] g5[g,i]：每次 8 个输出、16 次乘加。 */
-#ifdef _OPENMP
-#pragma omp parallel for if (parallel_worth(nn, 4096)) schedule(static)
-#endif
-    for (int64_t bh = 0; bh < nn; ++bh) {
-        Cplx t[kProj][kDirac];
-        for (int64_t x = 0; x < kProj; ++x) {
-            for (int64_t g = 0; g < kDirac; ++g) {
-                t[x][g] = t1[(x * kDirac + g) * nn + bh];
-            }
-        }
-        const int64_t b = bh / n;
-        const int64_t h = bh - b * n;
-        for (int64_t x = 0; x < kProj; ++x) {
-            for (int64_t i = 0; i < kDirac; ++i) {
-                Cplx acc{0.0, 0.0};
+        for (int64_t i = 0; i < kDirac; ++i) {
+            for (int64_t a = 0; a < kDirac; ++a) {
                 for (int64_t g = 0; g < kDirac; ++g) {
-                    madd(&acc, t[x][g], g5[g * kDirac + i]);
+                    const Cplx p = ax[a * kProj + x];
+                    const Cplx q = gi[g * kDirac + i];
+                    weight[((x * kDirac + i) * kDirac + a) * kDirac + g] =
+                        Cplx{p.re * q.re - p.im * q.im, p.re * q.im + p.im * q.re};
                 }
-                a2[((x * n + b) * kDirac + i) * n + h] = acc;
             }
         }
     }
-    return true;
+    const int64_t nn = n * n;
+    return gemm(kCblasNoTrans, kCblasNoTrans, kProj * kDirac, nn, kDirac * kDirac, weight,
+                kDirac * kDirac, agbh, nn, false, a3, nn);
 }
 
-/* c2[o,y,p,t] = sum_s C[o,s,p,t] proj[s,y] */
-bool dress_sink_wedge(const Cplx* c, const Cplx* proj, int64_t n, Cplx* c2) {
+/* c2[(o,y)][(p,t)] = sum_s ospt[o,s,p,t] sy[s,y]（8 x n^2） */
+bool dress_sink(const Cplx* ospt, const Cplx* sy, int64_t n, Cplx* c2) {
     const int64_t nn = n * n;
-    Cplx proj_t[kProj * kDirac];
+    Cplx sy_t[kProj * kDirac]; /* [(y)][(s)] */
     for (int64_t y = 0; y < kProj; ++y) {
         for (int64_t s = 0; s < kDirac; ++s) {
-            proj_t[y * kDirac + s] = proj[s * kProj + y];
+            sy_t[y * kDirac + s] = sy[s * kProj + y];
         }
     }
     for (int64_t o = 0; o < kDirac; ++o) {
-        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj, nn, kDirac, proj_t, kDirac,
-                  c + o * kDirac * nn, nn, false, c2 + o * kProj * nn, nn)) {
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj, nn, kDirac, sy_t, kDirac,
+                  ospt + o * kDirac * nn, nn, false, c2 + o * kProj * nn, nn)) {
             return false;
         }
     }
     return true;
 }
 
-/* P1: d3t[(m,n),(d,e)] = sum_c gamma7a[c,e] cmdn[c,m,d,n] */
-void dress_p1_sink_peram(const Cplx* d, const Cplx* g7a, int64_t n, Cplx* d3t) {
+/* c2p[(p)][(o,y,t)] <- c2[(o,y)][(p,t)]（8n^2） */
+void permute_sink_to_p(const Cplx* c2, int64_t n, Cplx* c2p) {
     const int64_t nn = n * n;
-    const int64_t dd = kDirac * kDirac;
+    const int64_t rows = kDirac * kProj; /* (o,y) */
 #ifdef _OPENMP
-#pragma omp parallel for if (parallel_worth(nn, 4096)) schedule(static)
+#pragma omp parallel for if (rows * n > 256) schedule(static)
 #endif
-    for (int64_t mn = 0; mn < nn; ++mn) {
-        const int64_t m = mn / n;
-        const int64_t nn_i = mn - m * n;
-        Cplx t[kDirac][kDirac];
-        for (int64_t c = 0; c < kDirac; ++c) {
-            for (int64_t dd_i = 0; dd_i < kDirac; ++dd_i) {
-                t[c][dd_i] = d[((c * kDirac + m) * n + dd_i) * n + nn_i];
-            }
+    for (int64_t row = 0; row < rows; ++row) {
+        const Cplx* src = c2 + row * nn;
+        Cplx* dst = c2p + row * n;
+        for (int64_t p = 0; p < n; ++p) {
+            std::memcpy(dst + p * rows * n, src + p * n,
+                        static_cast<std::size_t>(n) * sizeof(Cplx));
         }
-        for (int64_t dd_i = 0; dd_i < kDirac; ++dd_i) {
-            for (int64_t e = 0; e < kDirac; ++e) {
-                Cplx acc{0.0, 0.0};
-                for (int64_t c = 0; c < kDirac; ++c) {
-                    madd(&acc, g7a[c * kDirac + e], t[c][dd_i]);
-                }
-                d3t[mn * dd + dd_i * kDirac + e] = acc;
+    }
+}
+
+/* c2t[(p,t)][(o,y)] <- c2[(o,y)][(p,t)]（8n^2） */
+void permute_sink_to_pt(const Cplx* c2, int64_t n, Cplx* c2t) {
+    const int64_t nn = n * n;
+    const int64_t rows = kDirac * kProj;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) if (nn * rows > 4096) schedule(static)
+#endif
+    for (int64_t p = 0; p < n; ++p) {
+        for (int64_t t = 0; t < n; ++t) {
+            Cplx* dst = c2t + (p * n + t) * rows;
+            for (int64_t row = 0; row < rows; ++row) {
+                dst[row] = c2[row * nn + p * n + t];
             }
         }
     }
 }
 
-/* P1: e3t[((i*n + j)*4 + q)*n + l] = sum_k ikjl[i,k,j,l] gamma7b[k,q] */
-void dress_p1_source_peram(const Cplx* e, const Cplx* g7b, int64_t n, Cplx* e3t) {
-    const int64_t total = kDirac * n;
+/* P1: e4[(i,j)][(q,l)] = sum_k ikjl[i,k,j,l] kq[k,q]（16n^2） */
+void dress_source_pair(const Cplx* ikjl, const Cplx* kq, int64_t n, Cplx* e4) {
+    const int64_t nn = n * n;
+    const int64_t stride = kDirac * n; /* 4n */
+    Cplx kq_t[kDirac * kDirac];
+    for (int64_t q = 0; q < kDirac; ++q) {
+        for (int64_t k = 0; k < kDirac; ++k) {
+            kq_t[q * kDirac + k] = kq[k * kDirac + q];
+        }
+    }
 #ifdef _OPENMP
-#pragma omp parallel for if (parallel_worth(total, 64)) schedule(static)
+#pragma omp parallel for collapse(2) if (kDirac * n > 128) schedule(static)
 #endif
-    for (int64_t row = 0; row < total; ++row) {
-        const int64_t i = row / n;
-        const int64_t j = row - i * n;
-        Cplx* out = e3t + row * kDirac * n;
-        for (int64_t l0 = 0; l0 < n; l0 += kSmallTile) {
-            const int64_t l1 = l0 + kSmallTile < n ? l0 + kSmallTile : n;
-            Cplx t[kDirac][kSmallTile];
-            for (int64_t k = 0; k < kDirac; ++k) {
-                const Cplx* line = e + ((i * kDirac + k) * n + j) * n + l0;
-                for (int64_t l = l0; l < l1; ++l) {
-                    t[k][l - l0] = line[l - l0];
-                }
-            }
+    for (int64_t i = 0; i < kDirac; ++i) {
+        for (int64_t j = 0; j < n; ++j) {
+            const Cplx* base = ikjl + (i * kDirac * n + j) * n;
+            Cplx* out = e4 + (i * n + j) * stride;
             for (int64_t q = 0; q < kDirac; ++q) {
-                for (int64_t l = l0; l < l1; ++l) {
+                Cplx* dst = out + q * n;
+                for (int64_t l = 0; l < n; ++l) {
                     Cplx acc{0.0, 0.0};
                     for (int64_t k = 0; k < kDirac; ++k) {
-                        madd(&acc, g7b[k * kDirac + q], t[k][l - l0]);
+                        madd(&acc, kq_t[q * kDirac + k], base[k * nn + l]);
                     }
-                    out[q * n + l] = acc;
+                    dst[l] = acc;
                 }
             }
         }
     }
 }
 
-/* P2: fp[(l),(e,q,d)] = sum_{c,k} gamma7a[c,e] ckdl[c,k,d,l] gamma7b[k,q] */
-void dress_p2_middle_peram(const Cplx* d, const Cplx* g7a, const Cplx* g7b, int64_t n,
-                           Cplx* fp) {
-    /* 先把 (c,k) 折成 (e,q)：对固定 (d,l) 做 4x4 双线性型。 */
-    const int64_t nn = n * n;
+/* P1: d3[(mu,n)][(d,e)] = sum_c cmdn[c,mu,d,n] ce[c,e]（16n^2） */
+void dress_sink_peram(const Cplx* cmdn, const Cplx* ce, int64_t n, Cplx* d3) {
+    const int64_t cols = kDirac * n; /* 4n = (d,e) */
 #ifdef _OPENMP
-#pragma omp parallel for if (parallel_worth(nn, 4096)) schedule(static)
+#pragma omp parallel for collapse(2) if (kDirac * kDirac * n > 256) schedule(static)
 #endif
-    for (int64_t dl = 0; dl < nn; ++dl) {
-        const int64_t dd = dl / n;
-        const int64_t l = dl - dd * n;
-        Cplx t[kDirac][kDirac];
-        for (int64_t c = 0; c < kDirac; ++c) {
-            for (int64_t k = 0; k < kDirac; ++k) {
-                t[c][k] = d[((c * kDirac + k) * n + dd) * n + l];
-            }
-        }
-        for (int64_t e = 0; e < kDirac; ++e) {
-            for (int64_t q = 0; q < kDirac; ++q) {
-                Cplx acc{0.0, 0.0};
+    for (int64_t mu = 0; mu < kDirac; ++mu) {
+        for (int64_t d = 0; d < n; ++d) {
+            for (int64_t nv = 0; nv < n; ++nv) {
+                Cplx acc[kDirac];
+                for (int64_t e = 0; e < kDirac; ++e) {
+                    acc[e] = Cplx{0.0, 0.0};
+                }
                 for (int64_t c = 0; c < kDirac; ++c) {
-                    for (int64_t k = 0; k < kDirac; ++k) {
-                        const Cplx g = Cplx{g7a[c * kDirac + e].re * g7b[k * kDirac + q].re -
-                                                g7a[c * kDirac + e].im * g7b[k * kDirac + q].im,
-                                            g7a[c * kDirac + e].re * g7b[k * kDirac + q].im +
-                                                g7a[c * kDirac + e].im * g7b[k * kDirac + q].re};
-                        madd(&acc, g, t[c][k]);
+                    const Cplx val = cmdn[((c * kDirac + mu) * n + d) * n + nv];
+                    for (int64_t e = 0; e < kDirac; ++e) {
+                        madd(&acc[e], val, ce[c * kDirac + e]);
                     }
                 }
-                fp[(l * kDirac + e) * kDirac * n + q * n + dd] = acc;
-            }
-        }
-    }
-}
-
-/* P1: vvv_perm[(d),(f,b)] <- vvv[b,d,f] */
-void permute_sink_vvv(const Cplx* vvv, int64_t n, Cplx* out) {
-    const int64_t nn = n * n;
-#ifdef _OPENMP
-#pragma omp parallel for if (parallel_worth(n, 32)) schedule(static)
-#endif
-    for (int64_t dd = 0; dd < n; ++dd) {
-        Cplx* row = out + dd * nn;
-        for (int64_t f = 0; f < n; ++f) {
-            Cplx* dst = row + f * n;
-            const Cplx* src = vvv + dd * n + f;
-            for (int64_t b = 0; b < n; ++b) {
-                dst[b] = src[b * nn];
-            }
-        }
-    }
-}
-
-/* P1: [q,b,x,r,t] -> [q,r,b,t,x]，按 (q,r,b) 的 (t,x) 交错写；只处理 b in [b0,b0+bb)。 */
-void permute_p1_big_block(const Cplx* src, int64_t n, int64_t b0, int64_t bb, Cplx* dst) {
-#ifdef _OPENMP
-#pragma omp parallel for collapse(2) if (parallel_worth(kDirac * n, 16)) schedule(static)
-#endif
-    for (int64_t q = 0; q < kDirac; ++q) {
-        for (int64_t r = 0; r < n; ++r) {
-            Cplx* dbase = dst + (q * n + r) * (bb * n * kProj);
-            for (int64_t b = 0; b < bb; ++b) {
-                const Cplx* s0 = src + ((((q * n + (b0 + b)) * kProj) * n + r) * n);
-                const Cplx* s1 = s0 + n * n;
-                Cplx* d = dbase + b * n * kProj;
-                for (int64_t t = 0; t < n; ++t) {
-                    d[t * kProj] = s0[t];
-                    d[t * kProj + 1] = s1[t];
+                Cplx* dst = d3 + (mu * n + nv) * cols + d * kDirac;
+                for (int64_t e = 0; e < kDirac; ++e) {
+                    dst[e] = acc[e];
                 }
             }
         }
     }
 }
 
-/* P1: t2p[((q*n + b)*2 + x)*n + l] <- t2[((x*n + b)*4 + q)*n + l] */
-void permute_p1_middle(const Cplx* t2, int64_t n, Cplx* t2p) {
-    const int64_t total = kDirac * n;
+/* P2: d2[(e,q)][(d,l)] = sum_{c,k} ckdl[c,k,d,l] ce[c,e] kq[k,q]（16 x n^2） */
+bool dress_p2_middle(const Cplx* ckdl, const Cplx* ce, const Cplx* kq, int64_t n, Cplx* d2) {
+    Cplx weight[kDirac * kDirac * kDirac * kDirac]; /* [(e,q)][(c,k)] */
+    for (int64_t e = 0; e < kDirac; ++e) {
+        for (int64_t q = 0; q < kDirac; ++q) {
+            for (int64_t c = 0; c < kDirac; ++c) {
+                for (int64_t k = 0; k < kDirac; ++k) {
+                    const Cplx a = ce[c * kDirac + e];
+                    const Cplx b = kq[k * kDirac + q];
+                    weight[((e * kDirac + q) * kDirac + c) * kDirac + k] =
+                        Cplx{a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re};
+                }
+            }
+        }
+    }
+    const int64_t nn = n * n;
+    return gemm(kCblasNoTrans, kCblasNoTrans, kDirac * kDirac, nn, kDirac * kDirac, weight,
+                kDirac * kDirac, ckdl, nn, false, d2, nn);
+}
+
+/* P1: b2[(e,f)][(q,r)] <- eqfr[e,q,f,r]（16n^2） */
+void permute_middle_p1(const Cplx* eqfr, int64_t n, Cplx* b2) {
+    const int64_t nn = n * n;
 #ifdef _OPENMP
-#pragma omp parallel for collapse(2) if (parallel_worth(total, 128)) schedule(static)
+#pragma omp parallel for collapse(2) if (kDirac * n > 128) schedule(static)
 #endif
-    for (int64_t q = 0; q < kDirac; ++q) {
-        for (int64_t b = 0; b < n; ++b) {
-            for (int64_t x = 0; x < kProj; ++x) {
-                std::memcpy(t2p + ((q * n + b) * kProj + x) * n,
-                            t2 + ((x * n + b) * kDirac + q) * n,
+    for (int64_t e = 0; e < kDirac; ++e) {
+        for (int64_t f = 0; f < n; ++f) {
+            Cplx* dst = b2 + (e * n + f) * kDirac * n;
+            for (int64_t q = 0; q < kDirac; ++q) {
+                std::memcpy(dst + q * n, eqfr + (e * kDirac + q) * nn + f * n,
+                            static_cast<std::size_t>(n) * sizeof(Cplx));
+            }
+        }
+    }
+}
+
+/* P2: b2f[(f)][(e,q,r)] <- eqfr[e,q,f,r]（n x 16n） */
+void permute_middle_p2(const Cplx* eqfr, int64_t n, Cplx* b2f) {
+    const int64_t nn = n * n;
+    const int64_t rows = kDirac * kDirac * n; /* 16n = (e,q,r) */
+#ifdef _OPENMP
+#pragma omp parallel for if (n * rows > 1024) schedule(static)
+#endif
+    for (int64_t f = 0; f < n; ++f) {
+        Cplx* dst = b2f + f * rows;
+        for (int64_t eq = 0; eq < kDirac * kDirac; ++eq) {
+            std::memcpy(dst + eq * n, eqfr + eq * nn + f * n,
+                        static_cast<std::size_t>(n) * sizeof(Cplx));
+        }
+    }
+}
+
+/* P2: e2[(i,j)][(mu,n)] <- imjn[i,mu,j,n]（16n^2） */
+void permute_source_pair_p2(const Cplx* imjn, int64_t n, Cplx* e2) {
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) if (kDirac * n > 128) schedule(static)
+#endif
+    for (int64_t i = 0; i < kDirac; ++i) {
+        for (int64_t j = 0; j < n; ++j) {
+            Cplx* dst = e2 + (i * n + j) * kDirac * n;
+            for (int64_t mu = 0; mu < kDirac; ++mu) {
+                std::memcpy(dst + mu * n, imjn + ((i * kDirac + mu) * n + j) * n,
                             static_cast<std::size_t>(n) * sizeof(Cplx));
             }
         }
@@ -549,252 +501,427 @@ void permute_p1_middle(const Cplx* t2, int64_t n, Cplx* t2p) {
 }
 
 /* ------------------------------------------------------------------------- */
-/* 公共尾部：W[n,(o,y,t)] = sum_p VdV[N,L,n,p] c2[o,y,p,t]                     */
+/* 中间张量的换序（每个都按连续 run 拷贝实现）                                 */
 /* ------------------------------------------------------------------------- */
-/* c2p[(p),(o,y,t)] <- c2[o,y,p,t] */
-void permute_sink_wedge(const Cplx* c2, int64_t n, Cplx* c2p) {
-    const int64_t col = kDirac * kProj * n;
+
+/* t1[(x,i,b)][(j)] -> t1p[(x,b)][(i,j)]（8n^2） */
+void pack_t1(const Cplx* t1, int64_t n, Cplx* t1p) {
+    const int64_t stride = kDirac * n;
 #ifdef _OPENMP
-#pragma omp parallel for if (parallel_worth(n, 32)) schedule(static)
+#pragma omp parallel for collapse(2) if (kProj * kDirac * n > 512) schedule(static)
 #endif
-    for (int64_t p = 0; p < n; ++p) {
-        Cplx* dst = c2p + p * col;
-        for (int64_t o = 0; o < kDirac; ++o) {
-            for (int64_t y = 0; y < kProj; ++y) {
-                const Cplx* src = c2 + ((o * kProj + y) * n + p) * n;
-                std::memcpy(dst + (o * kProj + y) * n, src, static_cast<std::size_t>(n) *
-                                                                   sizeof(Cplx));
+    for (int64_t x = 0; x < kProj; ++x) {
+        for (int64_t b = 0; b < n; ++b) {
+            Cplx* dst = t1p + (x * n + b) * stride;
+            for (int64_t i = 0; i < kDirac; ++i) {
+                std::memcpy(dst + i * n, t1 + ((x * kDirac + i) * n + b) * n,
+                            static_cast<std::size_t>(n) * sizeof(Cplx));
             }
         }
     }
 }
 
-/* ------------------------------------------------------------------------- */
-/* 一次 arena：所有中间缓冲从同一块申请，复用 pool 里的同一块内存，            */
-/* 避免每次调用重新映射 + 首触页缺页。                                        */
-/* ------------------------------------------------------------------------- */
-
-class Arena {
-  public:
-    /* 按元素数列表精确预留；carve 顺序必须与 reserve 的列表一致。 */
-    bool reserve(const std::size_t* sizes, int count) {
-        std::size_t bytes = 0;
-        for (int index = 0; index < count; ++index) {
-            bytes += align_bytes(sizes[index]);
+/* P1: t2[(x,b)][(q,l)] -> t2p[(q,b,x)][(l)]（8n^2） */
+void pack_t2_p1(const Cplx* t2, int64_t n, Cplx* t2p) {
+    const int64_t stride = kDirac * n;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) if (kProj * kDirac * n > 512) schedule(static)
+#endif
+    for (int64_t x = 0; x < kProj; ++x) {
+        for (int64_t b = 0; b < n; ++b) {
+            const Cplx* src = t2 + (x * n + b) * stride;
+            for (int64_t q = 0; q < kDirac; ++q) {
+                std::memcpy(t2p + ((q * n + b) * kProj + x) * n, src + q * n,
+                            static_cast<std::size_t>(n) * sizeof(Cplx));
+            }
         }
-        return lease_.take(bytes);
     }
+}
 
-    Cplx* take(std::size_t elements) {
-        const std::size_t aligned = align_bytes(elements);
-        uint8_t* pointer = static_cast<uint8_t*>(const_cast<void*>(lease_.raw())) + used_;
-        used_ += aligned;
-        return reinterpret_cast<Cplx*>(pointer);
+/* P2: t2[(x,b)][(mu,n)] -> t2p[(x,mu,n)][(b)]（8n^2，分块转置） */
+void pack_t2_p2(const Cplx* t2, int64_t n, Cplx* t2p) {
+    const int64_t stride = kDirac * n;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) if (kProj * n * kDirac > 512) schedule(static)
+#endif
+    for (int64_t x = 0; x < kProj; ++x) {
+        for (int64_t b0 = 0; b0 < n; b0 += 8) {
+            const int64_t b1 = min64(b0 + 8, n);
+            for (int64_t mu = 0; mu < kDirac; ++mu) {
+                for (int64_t nv0 = 0; nv0 < n; nv0 += 8) {
+                    const int64_t nv1 = min64(nv0 + 8, n);
+                    for (int64_t b = b0; b < b1; ++b) {
+                        const Cplx* src = t2 + (x * n + b) * stride + mu * n;
+                        for (int64_t nv = nv0; nv < nv1; ++nv) {
+                            t2p[((x * kDirac + mu) * n + nv) * n + b] = src[nv];
+                        }
+                    }
+                }
+            }
+        }
     }
+}
 
-    bool fits() const { return used_ <= lease_.bytes(); }
-
-  private:
-    static std::size_t align_bytes(std::size_t elements) {
-        const std::size_t bytes = elements * sizeof(Cplx);
-        return (bytes + 63u) & ~static_cast<std::size_t>(63u);
+/* P1: t3[(q,b,x)][(r,t)]（b 分块）-> t3p[(q,r)][(b,t,x)] */
+void pack_t3(const Cplx* t3, int64_t n, int64_t bb, Cplx* t3p) {
+    const int64_t nn = n * n;
+    const int64_t cols = bb * kProj * n;
+    const int64_t pitch = kProj * n;
+    const int64_t total = kDirac * n; /* (q,r) */
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) if (total * bb * n > 4096) schedule(static)
+#endif
+    for (int64_t q = 0; q < kDirac; ++q) {
+        for (int64_t r = 0; r < n; ++r) {
+            Cplx* dst = t3p + (q * n + r) * cols;
+            for (int64_t b = 0; b < bb; ++b) {
+                const Cplx* s0 = t3 + ((q * bb * kProj) + b * kProj) * nn + r * n;
+                const Cplx* s1 = s0 + nn;
+                Cplx* d = dst + b * pitch;
+                for (int64_t t = 0; t < n; ++t) {
+                    d[2 * t] = s0[t];
+                    d[2 * t + 1] = s1[t];
+                }
+            }
+        }
     }
+}
 
-    Lease lease_{};
-    std::size_t used_ = 0;
-};
+/* P1: Nbdf[b,d,f] -> nbp[(d)][(f,b)]（n^3） */
+void permute_sink_vvv_p1(const Cplx* vvv, int64_t n, Cplx* nbp) {
+    const int64_t nn = n * n;
+    constexpr int64_t kTile = 16;
+    const int64_t tiles = (n + kTile - 1) / kTile;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) if (tiles * tiles > 2) schedule(static)
+#endif
+    for (int64_t td = 0; td < tiles; ++td) {
+        for (int64_t tf = 0; tf < tiles; ++tf) {
+            const int64_t d0 = td * kTile;
+            const int64_t f0 = tf * kTile;
+            const int64_t d1 = min64(d0 + kTile, n);
+            const int64_t f1 = min64(f0 + kTile, n);
+            for (int64_t b = 0; b < n; ++b) {
+                const Cplx* src = vvv + b * nn;
+                for (int64_t d = d0; d < d1; ++d) {
+                    Cplx* dst = nbp + (d * n + f0) * n + b;
+                    const Cplx* line = src + d * n;
+                    for (int64_t f = f0; f < f1; ++f) {
+                        dst[(f - f0) * n] = line[f];
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* P1: out1[(mu,n)][(t,x)] -> out1t[(mu,x)][(n,t)]（8n^2） */
+void pack_out1(const Cplx* out1, int64_t n, Cplx* out1t) {
+    const int64_t nn = n * n;
+    const int64_t pitch = kProj * n;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) if (kDirac * n > 128) schedule(static)
+#endif
+    for (int64_t mu = 0; mu < kDirac; ++mu) {
+        for (int64_t t = 0; t < n; ++t) {
+            for (int64_t nv = 0; nv < n; ++nv) {
+                const Cplx* src = out1 + (mu * n + nv) * pitch + t * kProj;
+                Cplx* dst = out1t + (mu * kProj) * nn + nv * n + t;
+                dst[0] = src[0];
+                dst[nn] = src[1];
+            }
+        }
+    }
+}
+
+/* P1: w[L][(n)][(o,y,t)] -> wt[L][(o,y)][(n,t)]（8L n^2） */
+void pack_w(const Cplx* w, int64_t n, int64_t link, Cplx* wt) {
+    const int64_t nn = n * n;
+    const int64_t rows = kDirac * kProj; /* 8 = (o,y) */
+    const int64_t pitch = rows * n;      /* 8n */
+#ifdef _OPENMP
+#pragma omp parallel for collapse(3) if (link * rows * n > 1024) schedule(static)
+#endif
+    for (int64_t l = 0; l < link; ++l) {
+        for (int64_t row = 0; row < rows; ++row) {
+            for (int64_t nv = 0; nv < n; ++nv) {
+                std::memcpy(wt + (l * rows + row) * nn + nv * n,
+                            w + l * n * pitch + nv * pitch + row * n,
+                            static_cast<std::size_t>(n) * sizeof(Cplx));
+            }
+        }
+    }
+}
+
+/* P2: 单个 (e,q) 块的 Z[(d)][(r,t)] -> Zt[(r)][(d,t)]（n^3） */
+void permute_p2_block(const Cplx* z, int64_t n, Cplx* zt) {
+    const int64_t nn = n * n;
+    constexpr int64_t kTile = 16;
+    const int64_t tiles = (n + kTile - 1) / kTile;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) if (tiles * tiles > 2) schedule(static)
+#endif
+    for (int64_t td = 0; td < tiles; ++td) {
+        for (int64_t tr = 0; tr < tiles; ++tr) {
+            const int64_t d0 = td * kTile;
+            const int64_t r0 = tr * kTile;
+            const int64_t d1 = min64(d0 + kTile, n);
+            const int64_t r1 = min64(r0 + kTile, n);
+            for (int64_t d = d0; d < d1; ++d) {
+                const Cplx* src = z + d * nn;
+                for (int64_t r = r0; r < r1; ++r) {
+                    std::memcpy(zt + r * nn + d * n, src + r * n,
+                                static_cast<std::size_t>(n) * sizeof(Cplx));
+                }
+            }
+        }
+    }
+}
+
+/* P2: Nbdf[b,d,f] -> nbp[(b)][(f,d)]（n^3） */
+void permute_sink_vvv_p2(const Cplx* vvv, int64_t n, Cplx* nbp) {
+    const int64_t nn = n * n;
+    constexpr int64_t kTile = 16;
+    const int64_t tiles = (n + kTile - 1) / kTile;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) if (tiles * tiles > 2) schedule(static)
+#endif
+    for (int64_t td = 0; td < tiles; ++td) {
+        for (int64_t tf = 0; tf < tiles; ++tf) {
+            const int64_t d0 = td * kTile;
+            const int64_t f0 = tf * kTile;
+            const int64_t d1 = min64(d0 + kTile, n);
+            const int64_t f1 = min64(f0 + kTile, n);
+            for (int64_t b = 0; b < n; ++b) {
+                const Cplx* src = vvv + b * nn;
+                Cplx* dst = nbp + b * nn;
+                for (int64_t f = f0; f < f1; ++f) {
+                    Cplx* line = dst + f * n;
+                    const Cplx* col = src + f;
+                    for (int64_t d = d0; d < d1; ++d) {
+                        line[d] = col[d * n];
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* P2: u[(x,mu,n)][(t)] -> up[(x,mu,t)][(n)]（8n^2） */
+void pack_u(const Cplx* u, int64_t n, Cplx* up) {
+    const int64_t nn = n * n;
+    const int64_t rows = kProj * kDirac; /* 8 = (x,mu) */
+#ifdef _OPENMP
+#pragma omp parallel for if (rows * n > 128) schedule(static)
+#endif
+    for (int64_t row = 0; row < rows; ++row) {
+        const Cplx* src = u + row * nn;
+        for (int64_t t = 0; t < n; ++t) {
+            Cplx* dst = up + row * nn + t * n;
+            for (int64_t nv = 0; nv < n; ++nv) {
+                dst[nv] = src[nv * n + t];
+            }
+        }
+    }
+}
+
+/* P2: v[(x,mu,t)][(p)] -> v3[(x,mu)][(p,t)]（8n^2） */
+void pack_v(const Cplx* v, int64_t n, Cplx* v3) {
+    const int64_t nn = n * n;
+    const int64_t rows = kProj * kDirac; /* 8 */
+#ifdef _OPENMP
+#pragma omp parallel for if (rows * n > 128) schedule(static)
+#endif
+    for (int64_t row = 0; row < rows; ++row) {
+        const Cplx* src = v + row * nn;
+        Cplx* dst = v3 + row * nn;
+        for (int64_t t = 0; t < n; ++t) {
+            for (int64_t p = 0; p < n; ++p) {
+                dst[p * n + t] = src[t * n + p];
+            }
+        }
+    }
+}
 
 /* ------------------------------------------------------------------------- */
 /* P1 主体                                                                   */
 /* ------------------------------------------------------------------------- */
 
-struct P1Buffers {
-    Cplx* a2 = nullptr;      /* [x,b,i,h]                      8n^2 */
-    Cplx* c2 = nullptr;      /* [o,y,p,t]                      8n^2 */
-    Cplx* c2p = nullptr;     /* [p,(o,y,t)]                    8n^2 */
-    Cplx* d3t = nullptr;     /* [(m,n),(d,e)]                 16n^2 */
-    Cplx* e3t = nullptr;     /* [(i,j),(q,l)]                 16n^2 */
-    Cplx* b2t = nullptr;     /* [(e,f),(q,r)]                 16n^2 */
-    Cplx* t1 = nullptr;      /* [x,b,i,j]（复用于 [x,g,b,h]）   8n^2 */
-    Cplx* t2 = nullptr;      /* [x,b,q,l]                      8n^2 */
-    Cplx* t2p = nullptr;     /* [(q,b,x),(l)]                  8n^2 */
-    Cplx* t3 = nullptr;      /* [(q,b,x),(r,t)]                8n^3 */
-    Cplx* t3p = nullptr;     /* [(q,r),(b,t,x)]（按 b 分块）    8n^3 / 块 */
-    Cplx* o = nullptr;       /* [(e,f),(b,t,x)]                8n^3 */
-    Cplx* s = nullptr;       /* [(d,e),(t,x)]                  8n^2 */
-    Cplx* vvvp = nullptr;    /* [(d),(f,b)]                    n^3  */
-    Cplx* w = nullptr;       /* [L][n,(o,y,t)]                 8L n^2 */
-    Cplx* out1 = nullptr;    /* [(m,n),(t,x)]                  8n^2 */
-    Cplx* z = nullptr;       /* [m,o,L,y,x]                    64L  */
-};
-
-std::size_t p1_permute_block(int64_t n) {
-    /* t3p 分块列数上限按 ~2 Mi 元素控制，n 不大时一块用完。 */
-    const int64_t per_b = kDirac * n * n * kProj;
-    int64_t block = 2097152 / (per_b > 0 ? per_b : 1);
-    if (block < 1) {
-        block = 1;
-    }
-    if (block > n) {
-        block = n;
-    }
-    return static_cast<std::size_t>(block);
-}
-
 bool run_p1(const Cplx* const* in, int64_t n, int64_t mm, int64_t mn, int64_t link, Cplx* out) {
     const int64_t nn = n * n;
     const int64_t nnn = nn * n;
-    const int64_t proj_cols = n * kProj;
-    const int64_t wedge_cols = kDirac * kProj * n;
-    const int64_t block = static_cast<int64_t>(p1_permute_block(n));
+    const int64_t mid_rows = kDirac * n;          /* 4n = (e,f) / (q,r) / (mu,n) */
+    const int64_t wedge_cols = kProj * n;         /* 2n = (t,x) */
+    const int64_t sink_cols = kDirac * kProj * n; /* 8n = (o,y,t) */
 
-    Arena arena;
+    /* b 分块：让 t3 / t3p 留在末级缓存（每块 <= 4 Mi 元素） */
+    int64_t bb = n;
+    {
+        const int64_t per_b = kProj * kDirac * nn; /* 8 n^2 */
+        const int64_t cap = 262144;
+        if (n * per_b > cap) {
+            bb = cap / per_b;
+            if (bb < 1) {
+                bb = 1;
+            }
+        }
+    }
+
     const std::size_t sizes[] = {
-        8 * static_cast<std::size_t>(nn),                        /* a2 */
-        8 * static_cast<std::size_t>(nn),                        /* c2 */
-        8 * static_cast<std::size_t>(nn),                        /* c2p */
-        16 * static_cast<std::size_t>(nn),                       /* d3t */
-        16 * static_cast<std::size_t>(nn),                       /* e3t */
-        16 * static_cast<std::size_t>(nn),                       /* b2t */
-        8 * static_cast<std::size_t>(nn),                        /* t1 */
-        8 * static_cast<std::size_t>(nn),                        /* t2 */
-        8 * static_cast<std::size_t>(nn),                        /* t2p */
-        static_cast<std::size_t>(kDirac * kProj * nnn),          /* t3 */
-        static_cast<std::size_t>(kDirac * n * block * n * kProj),/* t3p */
-        static_cast<std::size_t>(kDirac * kProj * nnn),          /* o */
-        8 * static_cast<std::size_t>(nn),                        /* s */
-        static_cast<std::size_t>(nnn),                           /* vvvp */
-        8 * static_cast<std::size_t>(link * nn),                 /* w */
-        8 * static_cast<std::size_t>(nn),                        /* out1 */
-        64 * static_cast<std::size_t>(link)                      /* z */
+        static_cast<std::size_t>(kProj * kDirac * nn),         /* a3 */
+        static_cast<std::size_t>(kDirac * kProj * nn),         /* c2 */
+        static_cast<std::size_t>(kDirac * kProj * nn),         /* c2p */
+        static_cast<std::size_t>(kDirac * kDirac * nn),        /* e4 */
+        static_cast<std::size_t>(kDirac * kDirac * nn),        /* d3 */
+        static_cast<std::size_t>(kDirac * kDirac * nn),        /* b2 */
+        static_cast<std::size_t>(kProj * kDirac * nn),         /* t1 */
+        static_cast<std::size_t>(kProj * kDirac * nn),         /* t1p */
+        static_cast<std::size_t>(kProj * kDirac * nn),         /* t2 */
+        static_cast<std::size_t>(kProj * kDirac * nn),         /* t2p */
+        static_cast<std::size_t>(kDirac * bb * kProj * nn),    /* t3 */
+        static_cast<std::size_t>(kDirac * n * bb * kProj * n), /* t3p */
+        static_cast<std::size_t>(kDirac * kProj * nnn),        /* o */
+        static_cast<std::size_t>(nnn),                         /* nbp */
+        static_cast<std::size_t>(kDirac * kProj * nn),         /* s */
+        static_cast<std::size_t>(kDirac * kProj * nn),         /* out1 */
+        static_cast<std::size_t>(kDirac * kProj * nn),         /* out1t */
+        static_cast<std::size_t>(sink_cols * n * link),        /* w */
+        static_cast<std::size_t>(kDirac * kProj * nn * link),  /* wt */
+        static_cast<std::size_t>(kDirac * kDirac * link * kProj * kProj) /* z */
     };
-    if (!arena.reserve(sizes, static_cast<int>(sizeof(sizes) / sizeof(sizes[0])))) {
+    const int count = static_cast<int>(sizeof(sizes) / sizeof(sizes[0]));
+    std::size_t bytes = 0;
+    for (int index = 0; index < count; ++index) {
+        bytes += (sizes[index] * sizeof(Cplx) + 63u) & ~static_cast<std::size_t>(63u);
+    }
+    Arena arena;
+    if (!arena.reserve(bytes)) {
         return false;
     }
-    P1Buffers buf;
-    buf.a2 = arena.take(sizes[0]);
-    buf.c2 = arena.take(sizes[1]);
-    buf.c2p = arena.take(sizes[2]);
-    buf.d3t = arena.take(sizes[3]);
-    buf.e3t = arena.take(sizes[4]);
-    buf.b2t = arena.take(sizes[5]);
-    buf.t1 = arena.take(sizes[6]);
-    buf.t2 = arena.take(sizes[7]);
-    buf.t2p = arena.take(sizes[8]);
-    buf.t3 = arena.take(sizes[9]);
-    buf.t3p = arena.take(sizes[10]);
-    buf.o = arena.take(sizes[11]);
-    buf.s = arena.take(sizes[12]);
-    buf.vvvp = arena.take(sizes[13]);
-    buf.w = arena.take(sizes[14]);
-    buf.out1 = arena.take(sizes[15]);
-    buf.z = arena.take(sizes[16]);
-    if (!arena.fits()) {
+    Cplx* a3 = arena.take<Cplx>(sizes[0]);
+    Cplx* c2 = arena.take<Cplx>(sizes[1]);
+    Cplx* c2p = arena.take<Cplx>(sizes[2]);
+    Cplx* e4 = arena.take<Cplx>(sizes[3]);
+    Cplx* d3 = arena.take<Cplx>(sizes[4]);
+    Cplx* b2 = arena.take<Cplx>(sizes[5]);
+    Cplx* t1 = arena.take<Cplx>(sizes[6]);
+    Cplx* t1p = arena.take<Cplx>(sizes[7]);
+    Cplx* t2 = arena.take<Cplx>(sizes[8]);
+    Cplx* t2p = arena.take<Cplx>(sizes[9]);
+    Cplx* t3 = arena.take<Cplx>(sizes[10]);
+    Cplx* t3p = arena.take<Cplx>(sizes[11]);
+    Cplx* o = arena.take<Cplx>(sizes[12]);
+    Cplx* nbp = arena.take<Cplx>(sizes[13]);
+    Cplx* s = arena.take<Cplx>(sizes[14]);
+    Cplx* out1 = arena.take<Cplx>(sizes[15]);
+    Cplx* out1t = arena.take<Cplx>(sizes[16]);
+    Cplx* w = arena.take<Cplx>(sizes[17]);
+    Cplx* wt = arena.take<Cplx>(sizes[18]);
+    Cplx* z = arena.take<Cplx>(sizes[19]);
+    if (!arena.ok()) {
         return false;
     }
 
-    /* ---- 与 M/N 无关的预处理（每次调用一次） ---- */
-    if (!dress_sink_wedge(in[2], in[14], n, buf.c2)) {
+    /* ---- 与 M/N 无关的预处理 ---- */
+    if (!dress_source(in[0], in[7], in[13], n, a3)) {
         return false;
     }
-    permute_sink_wedge(buf.c2, n, buf.c2p);
-    if (!dress_source_wedge(in[0], in[13], in[7], n, buf.t1, buf.a2)) {
+    if (!dress_sink(in[2], in[14], n, c2)) {
         return false;
     }
-    dress_p1_sink_peram(in[3], in[5], n, buf.d3t);
-    dress_p1_source_peram(in[4], in[8], n, buf.e3t);
-    permute_middle_pair(in[1], n, buf.b2t);
+    permute_sink_to_p(c2, n, c2p);
+    dress_source_pair(in[4], in[8], n, e4);
+    dress_sink_peram(in[3], in[5], n, d3);
+    permute_middle_p1(in[1], n, b2);
+
+    const Cplx* gm = in[6]; /* Gmo[G][mu][o] */
+    const int64_t group = kDirac * kProj; /* 8 */
 
     for (int64_t m = 0; m < mm; ++m) {
-        /* S1: t1[(x,b,i),(j)] = a2[(x,b,i),(h)] * srcVdV[m][(h),(j)] */
-        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n * kDirac, n, n, buf.a2, n,
-                  in[11] + m * nn, n, false, buf.t1, n)) {
+        /* S1: t1[(x,i,b)][(j)] = sum_h a3[(x,i)][(b,h)] Mhj[m][(h)][(j)] */
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * kDirac * n, n, n, a3, n,
+                  in[11] + m * nn, n, false, t1, n)) {
             return false;
         }
-        /* S2: t2[(x,b),(q,l)] = t1[(x,b),(i,j)] * e3t[(i,j),(q,l)] */
-        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n, kDirac * n, kDirac * n, buf.t1,
-                  kDirac * n, buf.e3t, kDirac * n, false, buf.t2, kDirac * n)) {
+        pack_t1(t1, n, t1p);
+        /* S2: t2[(x,b)][(q,l)] = sum_{(i,j)} t1p[(x,b)][(i,j)] e4[(i,j)][(q,l)] */
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n, mid_rows, mid_rows, t1p, mid_rows,
+                  e4, mid_rows, false, t2, mid_rows)) {
             return false;
         }
-        permute_p1_middle(buf.t2, n, buf.t2p);
-        /* S3: t3[(q,b,x),(r,t)] = t2p[(q,b,x),(l)] * srcVVV[m][(l),(r,t)] */
-        if (!gemm(kCblasNoTrans, kCblasNoTrans, kDirac * kProj * n, nn, n, buf.t2p, n,
-                  in[12] + m * nnn, nn, false, buf.t3, nn)) {
-            return false;
-        }
-        /* S5: o[(e,f),(b,t,x)] += b2t[(e,f),(q,r)] * t3p[(q,r),(b,t,x)]（按 b 分块） */
-        bool first_block = true;
-        for (int64_t b0 = 0; b0 < n; b0 += block) {
-            const int64_t bb = (b0 + block < n) ? block : (n - b0);
-            permute_p1_big_block(buf.t3, n, b0, bb, buf.t3p);
-            if (!gemm(kCblasNoTrans, kCblasNoTrans, kDirac * n, bb * n * kProj, kDirac * n,
-                      buf.b2t, kDirac * n, buf.t3p, bb * n * kProj, !first_block,
-                      buf.o + b0 * proj_cols, nn * kProj)) {
-                return false;
-            }
-            first_block = false;
-        }
-        for (int64_t ns = 0; ns < mn; ++ns) {
-            /* S6: s[(d,e),(t,x)] = vvvp[(d),(f,b)] * o[(e,f),(b,t,x)]（逐 e） */
-            permute_sink_vvv(in[9] + ns * nnn, n, buf.vvvp);
-            for (int64_t e = 0; e < kDirac; ++e) {
-                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, proj_cols, nn, buf.vvvp, nn,
-                          buf.o + e * n * nn * kProj, proj_cols, false,
-                          buf.s + e * proj_cols, kDirac * proj_cols)) {
+        pack_t2_p1(t2, n, t2p);
+        /* S3/S4：按 b 分块 */
+        for (int64_t b0 = 0; b0 < n; b0 += bb) {
+            const int64_t cur = min64(bb, n - b0);
+            /* S3: t3[(q,b,x)][(r,t)] = sum_l t2p[(q,b,x)][(l)] Mlrt[m][(l)][(r,t)] */
+            if (cur == n) {
+                if (!gemm(kCblasNoTrans, kCblasNoTrans, kDirac * kProj * n, nn, n, t2p, n,
+                          in[12] + m * nnn, nn, false, t3, nn)) {
                     return false;
                 }
-            }
-            /* 尾部 step10：out1[(m,n),(t,x)] = d3t[(m,n),(d,e)] * s[(d,e),(t,x)] */
-            if (!gemm(kCblasNoTrans, kCblasNoTrans, kDirac * n, proj_cols, kDirac * n, buf.d3t,
-                      kDirac * n, buf.s, proj_cols, false, buf.out1, proj_cols)) {
-                return false;
-            }
-            /* W[L][(n),(o,y,t)] = VdVL[ns,L][(n),(p)] * c2p[(p),(o,y,t)] */
-            for (int64_t l = 0; l < link; ++l) {
-                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, wedge_cols, n,
-                          in[10] + (ns * link + l) * nn, n, buf.c2p, wedge_cols, false,
-                          buf.w + l * n * wedge_cols, wedge_cols)) {
-                    return false;
-                }
-            }
-            /* z[m,o,L,y,x] = sum_{n,t} out1[(m,n),(t,x)] * W[L][(n),(o,y,t)] */
-            std::memset(buf.z, 0, static_cast<std::size_t>(64 * link) * sizeof(Cplx));
-            for (int64_t mi = 0; mi < kDirac; ++mi) {
-                for (int64_t ni = 0; ni < n; ++ni) {
-                    const Cplx* row = buf.out1 + (mi * n + ni) * proj_cols;
-                    for (int64_t l = 0; l < link; ++l) {
-                        const Cplx* wrow = buf.w + (l * n + ni) * wedge_cols;
-                        for (int64_t o = 0; o < kDirac; ++o) {
-                            for (int64_t y = 0; y < kProj; ++y) {
-                                const Cplx* wt = wrow + (o * kProj + y) * n;
-                                Cplx* za = buf.z + ((((mi * kDirac + o) * link + l) * kProj + y) *
-                                                    kProj);
-                                for (int64_t t = 0; t < n; ++t) {
-                                    const Cplx wv = wt[t];
-                                    madd(&za[0], row[t * kProj], wv);
-                                    madd(&za[1], row[t * kProj + 1], wv);
-                                }
-                            }
-                        }
+            } else {
+                for (int64_t q = 0; q < kDirac; ++q) {
+                    if (!gemm(kCblasNoTrans, kCblasNoTrans, cur * kProj, nn, n,
+                              t2p + (q * n + b0) * kProj * n, n, in[12] + m * nnn, nn, false,
+                              t3 + q * cur * kProj * nn, nn)) {
+                        return false;
                     }
                 }
             }
-            /* out[M,N,G,L,x,y] = sum_{m,o} gcur[G,m,o] z[m,o,L,y,x] */
-            for (int64_t g = 0; g < kDirac; ++g) {
-                for (int64_t l = 0; l < link; ++l) {
-                    for (int64_t xx = 0; xx < kProj; ++xx) {
-                        for (int64_t yy = 0; yy < kProj; ++yy) {
+            pack_t3(t3, n, cur, t3p);
+            /* S4: o[(e,f)][(b,t,x)] = sum_{(q,r)} b2[(e,f)][(q,r)] t3p[(q,r)][(b,t,x)] */
+            if (!gemm(kCblasNoTrans, kCblasNoTrans, mid_rows, cur * wedge_cols, mid_rows, b2,
+                      mid_rows, t3p, cur * wedge_cols, false, o + b0 * wedge_cols,
+                      n * wedge_cols)) {
+                return false;
+            }
+        }
+
+        for (int64_t ns = 0; ns < mn; ++ns) {
+            /* S6: s[(d,e)][(t,x)] = sum_{f,b} Nbdf[ns][b,d,f] o[(e,f)][(b,t,x)] */
+            permute_sink_vvv_p1(in[9] + ns * nnn, n, nbp);
+            for (int64_t e = 0; e < kDirac; ++e) {
+                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, wedge_cols, nn, nbp, nn,
+                          o + e * wedge_cols * nn, wedge_cols, false, s + e * wedge_cols,
+                          sink_cols)) {
+                    return false;
+                }
+            }
+            /* S7: out1[(mu,n)][(t,x)] = sum_{(d,e)} d3[(mu,n)][(d,e)] s[(d,e)][(t,x)] */
+            if (!gemm(kCblasNoTrans, kCblasNoTrans, mid_rows, wedge_cols, mid_rows, d3,
+                      mid_rows, s, wedge_cols, false, out1, wedge_cols)) {
+                return false;
+            }
+            pack_out1(out1, n, out1t);
+            /* S8: w[L][(n)][(o,y,t)] = NLnp[ns,L][(n)][(p)] c2p[(p)][(o,y,t)] */
+            for (int64_t l = 0; l < link; ++l) {
+                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, sink_cols, n,
+                          in[10] + (ns * link + l) * nn, n, c2p, sink_cols, false,
+                          w + l * n * sink_cols, sink_cols)) {
+                    return false;
+                }
+            }
+            pack_w(w, n, link, wt);
+            for (int64_t l = 0; l < link; ++l) {
+                /* S9: z[(mu,x),(o,y)] = sum_{(n,t)} out1t[(mu,x)][(n,t)] wt[l][(o,y)][(n,t)] */
+                if (!gemm(kCblasNoTrans, kCblasTrans, group, group, nn, out1t, nn,
+                          wt + l * group * nn, nn, false, z, group)) {
+                    return false;
+                }
+                /* S10: out[G][l][x][y] = sum_{mu,o} Gmo[G][mu][o] z[(mu,x),(o,y)] */
+                Cplx* dst =
+                    out + ((m * mn + ns) * kDirac) * link * kProj * kProj + l * kProj * kProj;
+                for (int64_t G = 0; G < kDirac; ++G) {
+                    for (int64_t x = 0; x < kProj; ++x) {
+                        for (int64_t y = 0; y < kProj; ++y) {
                             Cplx acc{0.0, 0.0};
-                            for (int64_t mi = 0; mi < kDirac; ++mi) {
-                                for (int64_t o = 0; o < kDirac; ++o) {
-                                    madd(&acc, in[6][(g * kDirac + mi) * kDirac + o],
-                                         buf.z[((((mi * kDirac + o) * link + l) * kProj + yy) *
-                                                    kProj +
-                                                xx)]);
+                            for (int64_t mu = 0; mu < kDirac; ++mu) {
+                                for (int64_t oo = 0; oo < kDirac; ++oo) {
+                                    madd(&acc, gm[(G * kDirac + mu) * kDirac + oo],
+                                         z[(mu * kProj + x) * group + (oo * kProj + y)]);
                                 }
                             }
-                            out[(((m * mn + ns) * kDirac + g) * link + l) * kProj * kProj +
-                                xx * kProj + yy] = acc;
+                            dst[G * link * kProj * kProj + x * kProj + y] = acc;
                         }
                     }
                 }
@@ -808,197 +935,147 @@ bool run_p1(const Cplx* const* in, int64_t n, int64_t mm, int64_t mn, int64_t li
 /* P2 主体                                                                   */
 /* ------------------------------------------------------------------------- */
 
-struct P2Buffers {
-    Cplx* a2 = nullptr;   /* [x,b,i,h]        8n^2 */
-    Cplx* c2 = nullptr;   /* [o,y,p,t]        8n^2 */
-    Cplx* c2p = nullptr;  /* [p,(o,y,t)]      8n^2 */
-    Cplx* fp = nullptr;   /* [(l),(e,q,d)]   16n^2 */
-    Cplx* m4t = nullptr;  /* [(i,j),(m,n)]   16n^2 */
-    Cplx* t1 = nullptr;   /* [x,b,i,j]        8n^2 */
-    Cplx* t2 = nullptr;   /* [x,b,m,n]        8n^2 */
-    Cplx* svvv = nullptr; /* [(r,t),(l)]      n^3  */
-    Cplx* t3 = nullptr;   /* [(r,t),(e,q,d)] 16n^3 */
-    Cplx* out4 = nullptr; /* [M][f][(t,d)]   4n^3 */
-    Cplx* out4t = nullptr;/* [(d,f)][M][t]   4n^3 */
-    Cplx* out2 = nullptr; /* [N][b][M][t]     n^2 M */
-    Cplx* tjoin = nullptr;/* [x,m,n][M][t]    8 n^2 M */
-    Cplx* y1 = nullptr;   /* [x,o,n][M][t][G]  32 n^2 M */
-    Cplx* w = nullptr;    /* [L][n,(o,y,t)]   8L n^2 */
-    Cplx* z2 = nullptr;   /* [x,G,L,y]        8L */
-};
-
 bool run_p2(const Cplx* const* in, int64_t n, int64_t mm, int64_t mn, int64_t link, Cplx* out) {
     const int64_t nn = n * n;
     const int64_t nnn = nn * n;
-    const int64_t wedge_cols = kDirac * kProj * n;
-    const int64_t mid_cols = kDirac * kDirac * n; /* (e,q,d) = 16n */
-    const int64_t f_cols = mm * n;                /* (M,t) */
+    const int64_t pair_cols = kDirac * kDirac * n; /* 16n = (e,q,r) */
+    const int64_t mid_rows = kDirac * n;           /* 4n = (x,mu,n) / (mu,n) */
+    const int64_t group = kDirac * kProj;          /* 8 = (x,mu) / (o,y) */
 
-    Arena arena;
     const std::size_t sizes[] = {
-        8 * static_cast<std::size_t>(nn),                         /* a2 */
-        8 * static_cast<std::size_t>(nn),                         /* c2 */
-        8 * static_cast<std::size_t>(nn),                         /* c2p */
-        16 * static_cast<std::size_t>(nn),                        /* fp */
-        16 * static_cast<std::size_t>(nn),                        /* m4t */
-        8 * static_cast<std::size_t>(nn),                         /* t1 */
-        8 * static_cast<std::size_t>(nn),                         /* t2 */
-        static_cast<std::size_t>(nnn),                            /* svvv */
-        static_cast<std::size_t>(mid_cols * nn),                  /* t3 */
-        static_cast<std::size_t>(n * nn * mm),                    /* out4 */
-        static_cast<std::size_t>(nn * f_cols),                    /* out4t */
-        static_cast<std::size_t>(n * f_cols),                     /* out2 */
-        static_cast<std::size_t>(kProj * kDirac * n * f_cols),    /* tjoin */
-        static_cast<std::size_t>(kProj * kDirac * n * f_cols * kDirac), /* y1 */
-        8 * static_cast<std::size_t>(link * nn),                  /* w */
-        8 * static_cast<std::size_t>(link)                        /* z2 */
+        static_cast<std::size_t>(kProj * kDirac * nn),  /* a3 */
+        static_cast<std::size_t>(kDirac * kProj * nn),  /* c2 */
+        static_cast<std::size_t>(kDirac * kProj * nn),  /* c2t */
+        static_cast<std::size_t>(kDirac * kDirac * nn), /* e2 */
+        static_cast<std::size_t>(kDirac * kDirac * nn), /* d2 */
+        static_cast<std::size_t>(pair_cols * n),        /* b2f */
+        static_cast<std::size_t>(kProj * kDirac * nn),  /* t1 */
+        static_cast<std::size_t>(kProj * kDirac * nn),  /* t1p */
+        static_cast<std::size_t>(kProj * kDirac * nn),  /* t2 */
+        static_cast<std::size_t>(kProj * kDirac * nn),  /* t2p */
+        static_cast<std::size_t>(nnn),                  /* zbuf */
+        static_cast<std::size_t>(nnn),                  /* zt */
+        static_cast<std::size_t>(nnn),                  /* y */
+        static_cast<std::size_t>(nnn),                  /* nbp */
+        static_cast<std::size_t>(nn),                   /* tot */
+        static_cast<std::size_t>(kProj * kDirac * nn),  /* u */
+        static_cast<std::size_t>(kProj * kDirac * nn),  /* up */
+        static_cast<std::size_t>(kProj * kDirac * nn),  /* v */
+        static_cast<std::size_t>(kProj * kDirac * nn),  /* v3 */
+        static_cast<std::size_t>(group * group)         /* z2 */
     };
-    if (!arena.reserve(sizes, static_cast<int>(sizeof(sizes) / sizeof(sizes[0])))) {
+    const int count = static_cast<int>(sizeof(sizes) / sizeof(sizes[0]));
+    std::size_t bytes = 0;
+    for (int index = 0; index < count; ++index) {
+        bytes += (sizes[index] * sizeof(Cplx) + 63u) & ~static_cast<std::size_t>(63u);
+    }
+    Arena arena;
+    if (!arena.reserve(bytes)) {
         return false;
     }
-    P2Buffers buf;
-    buf.a2 = arena.take(sizes[0]);
-    buf.c2 = arena.take(sizes[1]);
-    buf.c2p = arena.take(sizes[2]);
-    buf.fp = arena.take(sizes[3]);
-    buf.m4t = arena.take(sizes[4]);
-    buf.t1 = arena.take(sizes[5]);
-    buf.t2 = arena.take(sizes[6]);
-    buf.svvv = arena.take(sizes[7]);
-    buf.t3 = arena.take(sizes[8]);
-    buf.out4 = arena.take(sizes[9]);
-    buf.out4t = arena.take(sizes[10]);
-    buf.out2 = arena.take(sizes[11]);
-    buf.tjoin = arena.take(sizes[12]);
-    buf.y1 = arena.take(sizes[13]);
-    buf.w = arena.take(sizes[14]);
-    buf.z2 = arena.take(sizes[15]);
-    if (!arena.fits()) {
+    Cplx* a3 = arena.take<Cplx>(sizes[0]);
+    Cplx* c2 = arena.take<Cplx>(sizes[1]);
+    Cplx* c2t = arena.take<Cplx>(sizes[2]);
+    Cplx* e2 = arena.take<Cplx>(sizes[3]);
+    Cplx* d2 = arena.take<Cplx>(sizes[4]);
+    Cplx* b2f = arena.take<Cplx>(sizes[5]);
+    Cplx* t1 = arena.take<Cplx>(sizes[6]);
+    Cplx* t1p = arena.take<Cplx>(sizes[7]);
+    Cplx* t2 = arena.take<Cplx>(sizes[8]);
+    Cplx* t2p = arena.take<Cplx>(sizes[9]);
+    Cplx* zbuf = arena.take<Cplx>(sizes[10]);
+    Cplx* zt = arena.take<Cplx>(sizes[11]);
+    Cplx* y = arena.take<Cplx>(sizes[12]);
+    Cplx* nbp = arena.take<Cplx>(sizes[13]);
+    Cplx* tot = arena.take<Cplx>(sizes[14]);
+    Cplx* u = arena.take<Cplx>(sizes[15]);
+    Cplx* up = arena.take<Cplx>(sizes[16]);
+    Cplx* v = arena.take<Cplx>(sizes[17]);
+    Cplx* v3 = arena.take<Cplx>(sizes[18]);
+    Cplx* z2 = arena.take<Cplx>(sizes[19]);
+    if (!arena.ok()) {
         return false;
     }
 
-    /* ---- 与 M/N 无关的预处理 ---- */
-    if (!dress_sink_wedge(in[2], in[14], n, buf.c2)) {
+    if (!dress_source(in[0], in[7], in[13], n, a3)) {
         return false;
     }
-    permute_sink_wedge(buf.c2, n, buf.c2p);
-    if (!dress_source_wedge(in[0], in[13], in[7], n, buf.t1, buf.a2)) {
+    if (!dress_sink(in[2], in[14], n, c2)) {
         return false;
     }
-    dress_p2_middle_peram(in[3], in[5], in[8], n, buf.fp);
-    permute_source_pair(in[4], n, buf.m4t);
+    permute_sink_to_pt(c2, n, c2t);
+    permute_source_pair_p2(in[4], n, e2);
+    if (!dress_p2_middle(in[3], in[5], in[8], n, d2)) {
+        return false;
+    }
+    permute_middle_p2(in[1], n, b2f);
+
+    const Cplx* gm = in[6];
 
     for (int64_t m = 0; m < mm; ++m) {
-        /* S1: t1[(x,b,i),(j)] = a2[(x,b,i),(h)] * srcVdV[m][(h),(j)] */
-        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n * kDirac, n, n, buf.a2, n,
-                  in[11] + m * nn, n, false, buf.t1, n)) {
+        /* S1/S2：源端夹心（与 P1 相同） */
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * kDirac * n, n, n, a3, n,
+                  in[11] + m * nn, n, false, t1, n)) {
             return false;
         }
-        /* S2: t2[(x,b),(m,n)] = t1[(x,b),(i,j)] * m4t[(i,j),(m,n)] */
-        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n, kDirac * n, kDirac * n, buf.t1,
-                  kDirac * n, buf.m4t, kDirac * n, false, buf.t2, kDirac * n)) {
+        pack_t1(t1, n, t1p);
+        if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * n, mid_rows, mid_rows, t1p, mid_rows,
+                  e2, mid_rows, false, t2, mid_rows)) {
             return false;
         }
-        /* S3: t3[(r,t),(e,q,d)] = srcVVV[m][(l),(r,t)]^T * fp[(l),(e,q,d)] */
-        transpose_2d(in[12] + m * nnn, buf.svvv, n, nn, nn, n);
-        if (!gemm(kCblasNoTrans, kCblasNoTrans, nn, mid_cols, n, buf.svvv, n, buf.fp, mid_cols,
-                  false, buf.t3, mid_cols)) {
-            return false;
-        }
-        /* S4: out4[M][(f),(t,d)] = sum_{e,q} eqfr[e,q][(f),(r)] * t3[(r),(t,d)] */
-        for (int64_t e = 0; e < kDirac; ++e) {
-            for (int64_t q = 0; q < kDirac; ++q) {
-                const bool accumulate = (e != 0) || (q != 0);
-                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, nn, n,
-                          in[1] + (e * kDirac + q) * nn, n, buf.t3 + (e * kDirac + q) * n,
-                          mid_cols, accumulate, buf.out4 + m * n * nn, nn)) {
-                    return false;
-                }
-            }
-        }
-        /* out4[M][f][(t,d)] -> out4t[(d,f)][(M,t)] */
-        for (int64_t mi = 0; mi < mm; ++mi) {
-            for (int64_t f = 0; f < n; ++f) {
-                transpose_2d(buf.out4 + (mi * n + f) * nn, buf.out4t + f * f_cols + mi * n, n, n,
-                             n, n * f_cols);
-            }
-        }
-        for (int64_t ns = 0; ns < mn; ++ns) {
-            /* S5: out2[(b),(M,t)] = VVV[ns][(b),(d,f)] * out4t[(d,f),(M,t)] */
-            if (!gemm(kCblasNoTrans, kCblasNoTrans, n, f_cols, nn,
-                      in[9] + ns * nnn, nn, buf.out4t, f_cols, false, buf.out2, f_cols)) {
+        pack_t2_p2(t2, n, t2p);
+        /* 环 (d2, Mlrt, eqfr, Nbdf)：逐 (e,q) 块求值，块内中间量 n^3 可留缓存 */
+        for (int64_t eq = 0; eq < kDirac * kDirac; ++eq) {
+            /* Z[(d)][(r,t)] = sum_l d2[(e,q)][(d,l)] Mlrt[m][(l)][(r,t)] */
+            if (!gemm(kCblasNoTrans, kCblasNoTrans, n, nn, n, d2 + eq * nn, n,
+                      in[12] + m * nnn, nn, false, zbuf, nn)) {
                 return false;
             }
-            /* S6: tjoin[(x,m,n),(M,t)] = t2[(x,b),(m,n)]^T * out2[(b),(M,t)] */
-            for (int64_t x = 0; x < kProj; ++x) {
-                if (!gemm(kCblasTrans, kCblasNoTrans, kDirac * n, f_cols, n,
-                          buf.t2 + x * kDirac * n * n, kDirac * n, buf.out2, f_cols, false,
-                          buf.tjoin + x * kDirac * n * f_cols, f_cols)) {
-                    return false;
-                }
+            permute_p2_block(zbuf, n, zt);
+            /* Y[(f)][(d,t)] += sum_r b2f[(f)][(e,q,r)] zt[(r)][(d,t)] */
+            if (!gemm(kCblasNoTrans, kCblasNoTrans, n, nn, n, b2f + eq * n, pair_cols, zt, nn,
+                      eq != 0, y, nn)) {
+                return false;
             }
-            /* W[L][(n),(o,y,t)] = VdVL[ns,L][(n),(p)] * c2p[(p),(o,y,t)] */
+        }
+
+        for (int64_t ns = 0; ns < mn; ++ns) {
+            /* T[(b)][(t)] = sum_{(f,d)} Nbdf[ns][b,d,f] Y[(f),(d,t)] */
+            permute_sink_vvv_p2(in[9] + ns * nnn, n, nbp);
+            if (!gemm(kCblasNoTrans, kCblasNoTrans, n, n, nn, nbp, nn, y, n, false, tot, n)) {
+                return false;
+            }
+            /* U[(x,mu,n)][(t)] = sum_b t2p[(x,mu,n)][(b)] T[(b)][(t)] */
+            if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * mid_rows, n, n, t2p, n, tot, n,
+                      false, u, n)) {
+                return false;
+            }
+            pack_u(u, n, up);
             for (int64_t l = 0; l < link; ++l) {
-                if (!gemm(kCblasNoTrans, kCblasNoTrans, n, wedge_cols, n,
-                          in[10] + (ns * link + l) * nn, n, buf.c2p, wedge_cols, false,
-                          buf.w + l * n * wedge_cols, wedge_cols)) {
+                /* V[(x,mu,t)][(p)] = sum_n up[(x,mu,t)][(n)] NLnp[ns,l][(n)][(p)] */
+                if (!gemm(kCblasNoTrans, kCblasNoTrans, kProj * mid_rows, n, n, up, n,
+                          in[10] + (ns * link + l) * nn, n, false, v, n)) {
                     return false;
                 }
-            }
-            /* y1[x,o,n][(M,t)][G] = sum_m tjoin[x,m,n][(M,t)] gcur[G,m,o] */
-            for (int64_t x = 0; x < kProj; ++x) {
-                for (int64_t o = 0; o < kDirac; ++o) {
-                    for (int64_t ni = 0; ni < n; ++ni) {
-                        for (int64_t mt = 0; mt < f_cols; ++mt) {
-                            Cplx v[kDirac];
-                            for (int64_t mi = 0; mi < kDirac; ++mi) {
-                                v[mi] = buf.tjoin[((x * kDirac + mi) * n + ni) * f_cols + mt];
-                            }
-                            Cplx* dst = buf.y1 + (((x * kDirac + o) * n + ni) * f_cols + mt) *
-                                                        kDirac;
-                            for (int64_t g = 0; g < kDirac; ++g) {
-                                Cplx acc{0.0, 0.0};
-                                for (int64_t mi = 0; mi < kDirac; ++mi) {
-                                    madd(&acc, v[mi], in[6][(g * kDirac + mi) * kDirac + o]);
-                                }
-                                dst[g] = acc;
-                            }
-                        }
-                    }
+                pack_v(v, n, v3);
+                /* Z2[(x,mu)][(o,y)] = sum_{(p,t)} v3[(x,mu)][(p,t)] c2t[(p,t)][(o,y)] */
+                if (!gemm(kCblasNoTrans, kCblasNoTrans, group, group, nn, v3, nn, c2t, group,
+                          false, z2, group)) {
+                    return false;
                 }
-            }
-            /* z2[x,G,L,y] = sum_{n,o,t} y1[x,o,n][(M,t)][G] * W[L][(n),(o,y,t)] */
-            std::memset(buf.z2, 0, static_cast<std::size_t>(8 * link) * sizeof(Cplx));
-            for (int64_t x = 0; x < kProj; ++x) {
-                for (int64_t o = 0; o < kDirac; ++o) {
-                    for (int64_t ni = 0; ni < n; ++ni) {
-                        const Cplx* ybase =
-                            buf.y1 + (((x * kDirac + o) * n + ni) * f_cols) * kDirac;
-                        for (int64_t l = 0; l < link; ++l) {
-                            const Cplx* wrow = buf.w + (l * n + ni) * wedge_cols;
-                            for (int64_t y = 0; y < kProj; ++y) {
-                                const Cplx* wt = wrow + (o * kProj + y) * n;
-                                Cplx* zx = buf.z2 + (((x * kDirac) * link + l) * kProj + y) *
-                                                       kProj;
-                                for (int64_t t = 0; t < n; ++t) {
-                                    const Cplx wv = wt[t];
-                                    const Cplx* yv = ybase + t * kDirac;
-                                    for (int64_t g = 0; g < kDirac; ++g) {
-                                        madd(&zx[g * link * kProj * kProj], yv[g], wv);
-                                    }
+                Cplx* dst =
+                    out + ((m * mn + ns) * kDirac) * link * kProj * kProj + l * kProj * kProj;
+                for (int64_t G = 0; G < kDirac; ++G) {
+                    for (int64_t x = 0; x < kProj; ++x) {
+                        for (int64_t y = 0; y < kProj; ++y) {
+                            Cplx acc{0.0, 0.0};
+                            for (int64_t mu = 0; mu < kDirac; ++mu) {
+                                for (int64_t oo = 0; oo < kDirac; ++oo) {
+                                    madd(&acc, gm[(G * kDirac + mu) * kDirac + oo],
+                                         z2[(x * kDirac + mu) * group + (oo * kProj + y)]);
                                 }
                             }
-                        }
-                    }
-                }
-            }
-            for (int64_t g = 0; g < kDirac; ++g) {
-                for (int64_t l = 0; l < link; ++l) {
-                    for (int64_t xx = 0; xx < kProj; ++xx) {
-                        for (int64_t yy = 0; yy < kProj; ++yy) {
-                            out[(((m * mn + ns) * kDirac + g) * link + l) * kProj * kProj +
-                                xx * kProj + yy] =
-                                buf.z2[(((xx * kDirac + g) * link + l) * kProj + yy)];
+                            dst[G * link * kProj * kProj + x * kProj + y] = acc;
                         }
                     }
                 }
@@ -1007,6 +1084,10 @@ bool run_p2(const Cplx* const* in, int64_t n, int64_t mm, int64_t mn, int64_t li
     }
     return true;
 }
+
+/* ------------------------------------------------------------------------- */
+/* 参数校验                                                                  */
+/* ------------------------------------------------------------------------- */
 
 bool supported(int dtype_id, const int64_t* dims, int variant) {
     if (dims == nullptr) {
@@ -1028,12 +1109,15 @@ bool supported(int dtype_id, const int64_t* dims, int variant) {
     if (dims[QCD_3PT_DIM_DIRAC] != kDirac || dims[QCD_3PT_DIM_PROJ] != kProj) {
         return false;
     }
-    /* 所有 GEMM 维度都要落在 int32 内（LP64 CBLAS 路径）。 */
+    /* 所有 GEMM 维度都要落在 LP64 CBLAS 的 int32 范围内。 */
     const int64_t limit = std::numeric_limits<int>::max();
     if (n > limit || mm > limit || mn > limit || link > limit) {
         return false;
     }
-    if (n * n > limit || n * n * n > limit || n * n * kDirac * kDirac > limit) {
+    if (n * n > limit || n * n * n > limit) {
+        return false;
+    }
+    if (n * n * (kDirac * kProj) > limit) {
         return false;
     }
     return true;

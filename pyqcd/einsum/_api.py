@@ -551,6 +551,22 @@ def contract(
             specialized = _specialize.match(subscripts)
             if specialized is not None:
                 _specialize.announce(specialized)
+                if out is None:
+                    from . import _kernel_kupl
+
+                    kernel_result = _kernel_kupl.try_nucleon_2pt(
+                        subscripts, operands)
+                    if kernel_result is None:
+                        kernel_result = _kernel_kupl.try_three_pt(
+                            subscripts, operands)
+                    if kernel_result is not None:
+                        return kernel_result
+                    from . import _kernel_cuda
+
+                    kernel_result = _kernel_cuda.try_three_pt(
+                        subscripts, operands)
+                    if kernel_result is not None:
+                        return kernel_result
         else:
             os.environ[_specialize.FUSED_DISABLE_ENV] = "1"
             _FUSED_ENV_OWNED = True
@@ -704,11 +720,17 @@ def _native_compatible(operands: Sequence[Any], backend: str, kwargs: dict[str, 
     return True
 
 
+def _fused_disabled() -> bool:
+    """当前调用是否禁用原生融合路径（specialize=False 时由 env 标记）。"""
+    return os.environ.get(_specialize.FUSED_DISABLE_ENV) is not None
+
+
 def _native_plan_key(
     operands: Sequence[Any], contraction_list: Sequence[tuple[Any, ...]], backend: str
 ) -> tuple[Any, ...]:
     return (
         backend,
+        _fused_disabled(),
         tuple(tuple(int(value) for value in operand.shape) for operand in operands),
         tuple(str(operand.dtype) for operand in operands),
         tuple(
@@ -882,6 +904,7 @@ def _try_native_contract(
     else:
         key = (
             native_backend,
+            _fused_disabled(),
             tuple(str(operand.dtype) for operand in operands),
             tuple(tuple(int(value) for value in operand.shape) for operand in operands),
         )
@@ -995,6 +1018,7 @@ def _contract_signature(
         optimize_key,
         bool(use_blas),
         memory_limit,
+        _fused_disabled(),
         tuple(id(operand) for operand in operands),
     )
 

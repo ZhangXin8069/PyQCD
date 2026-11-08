@@ -169,6 +169,10 @@ cat > "$VERSION_SCRIPT" <<'MAP'
     applyDestroyQcd;
     applyInitQcd;
     applyEndQcd;
+    qcd_kupl_nucleon_2pt;
+    qcd_kupl_nucleon_2pt_supported;
+    qcd_kupl_pattern_3pt;
+    qcd_kupl_pattern_3pt_supported;
   local:
     *;
 };

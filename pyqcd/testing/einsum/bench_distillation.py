@@ -72,6 +72,9 @@ RELATIVE_ERROR_TOLERANCE = 1e-12
 SPEEDUP_TARGET = 3.0
 MIN_ACCEPTANCE_ITERATIONS = 10
 MIN_MEANINGFUL_SECONDS = 0.1
+# 实测：CUDA 路径前 3-4 次调用会因显存池增长慢 3-4 倍（L24/E4: 4.16/2.95/3.57 -> 1.095 s）。
+# 预热不足会把中位数拖到非稳态，故默认预热 4 轮。
+MIN_WARMUP = 4
 
 DATA_ROOT = (
     '/public/group/lqcd/perambulators/'
@@ -1051,7 +1054,7 @@ def _new_row(profile_name, cfg, backend, env, eq_name, meta, t_src,
 
 def run(profiles=DEFAULT_PROFILES, backends=DEFAULT_BACKENDS,
         equations=tuple(item['name'] for item in EQUATIONS),
-        iterations=MIN_ACCEPTANCE_ITERATIONS, warmup=2,
+        iterations=MIN_ACCEPTANCE_ITERATIONS, warmup=MIN_WARMUP,
         optimize='dp', mode='full', isolation='process',
         data_mode='real', planner='production', log=print):
     """执行基准并返回 ``(rows, env, problems)``。"""
@@ -1603,7 +1606,7 @@ def main(argv=None):
     parser.add_argument('--iters', type=int,
                         default=MIN_ACCEPTANCE_ITERATIONS,
                         help='每实现中位数样本数，验收模式必须 >=10')
-    parser.add_argument('--warmup', type=int, default=2,
+    parser.add_argument('--warmup', type=int, default=MIN_WARMUP,
                         help='每实现预热周期数')
     parser.add_argument('--optimize', default='dp',
                         help='收缩规划器；默认 dp（opt_einsum 常用策略）')
