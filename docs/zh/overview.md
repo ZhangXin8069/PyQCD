@@ -14,7 +14,7 @@ pip install pyqcd
 import pyqcd
 import pyqcd.einsum as pe
 
-print(pyqcd.__version__)    # e.g. 0.1.22
+print(pyqcd.__version__)    # e.g. 0.1.23
 print(pe.build_info())      # backend / mpi / mpi_label / native_library
 
 info = pe.build_info()

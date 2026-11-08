@@ -1140,9 +1140,17 @@ def _core_contract(
             sharing = False
 
     if not evaluate_constants and not sharing:
-        handled, native_result = _try_native_contract(
-            operands, contraction_list, backend, out, kwargs, native_cache=native_cache
-        )
+        # 回落是硬不变量：原生路径里的任何异常（包括规划/编译阶段，而不只是执行阶段）
+        # 都必须降级到 Python 路径，最多警告一次，绝不把异常抛给调用方。
+        try:
+            handled, native_result = _try_native_contract(
+                operands, contraction_list, backend, out, kwargs,
+                native_cache=native_cache)
+        except Exception as exc:  # noqa: BLE001 - 见上
+            handled, native_result = False, None
+            _warn_native_fallback_once(
+                "pyqcd.einsum native path failed; using Python execution: "
+                f"{type(exc).__name__}: {exc}")
         if handled:
             return native_result
 

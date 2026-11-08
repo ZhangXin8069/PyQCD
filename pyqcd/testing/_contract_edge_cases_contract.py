@@ -118,3 +118,35 @@ def test_invalid_input_errors() -> None:
         except (ValueError, TypeError):
             continue
         raise AssertionError(f"{subscripts}: expected ValueError/TypeError")
+
+
+def test_native_failure_falls_back_without_raising() -> None:
+    """回落是硬不变量：原生路径里任何异常都必须降级，而不是抛给调用方。
+
+    这里连"规划阶段"抛异常也一并模拟——历史上只有"执行阶段"被包住，
+    `_try_native_contract` 自身抛错会直接冒到用户代码里。
+    """
+    import warnings
+
+    import pyqcd.einsum._api as api
+
+    a = np.ones((16, 16))
+    b = np.ones((16, 16))
+    original = api._try_native_contract
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("simulated native planning failure")
+
+    api._try_native_contract = explode
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            results = [pe.contract("ij,jk->ik", a, b) for _ in range(4)]
+    finally:
+        api._try_native_contract = original
+
+    for result in results:
+        assert np.allclose(np.asarray(result), a @ b)
+    assert len(caught) <= 1, f"expected at most one warning, got {len(caught)}"
+    # 恢复后必须重新用回原生路径（没有留下永久的禁用状态）
+    assert np.allclose(np.asarray(pe.contract("ij,jk->ik", a, b)), a @ b)
