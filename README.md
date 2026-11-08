@@ -1,5 +1,7 @@
 # PyQCD
 
+**English** | [中文](README.zh-CN.md)
+
 PyQCD is a lattice-QCD toolkit in Python with optional native acceleration.
 It provides building blocks for propagator and operator contractions, gradient
 flow, renormalisation and gluon TMD-PDF extraction, plus a self-contained

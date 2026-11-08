@@ -1,11 +1,14 @@
 PyQCD 中文文档
 ==============
 
-PyQCD 是一个用 Python 编写的格点 QCD 工具库，可选配原生加速内核。它提供传播子与
-算符收缩、梯度流、重整化、胶子 TMD-PDF 提取所需的基础组件，并自带一个与
-``opt_einsum`` 兼容的收缩引擎。
+``pyqcd`` 是发布在 PyPI 上的格点 QCD 工具库。它提供传播子与算符收缩、梯度流、
+重整化、胶子 TMD-PDF 提取所需的基础组件，并自带一个与 ``opt_einsum`` 兼容的收缩引擎。
 
-本站只讲两件事：**这个库能做什么**，以及**怎么用**。
+.. code-block:: bash
+
+   pip install pyqcd
+
+本站以**已安装的包**为出发点：所有示例都假定 ``import pyqcd`` 可用，不需要仓库源码。
 
 .. toctree::
    :maxdepth: 2
@@ -18,17 +21,11 @@ PyQCD 是一个用 Python 编写的格点 QCD 工具库，可选配原生加速�
 从哪里开始
 ----------
 
-* :doc:`overview` —— 各子包提供什么，收缩引擎分几层。
+* :doc:`overview` —— 安装之后这个包能提供什么。
 * :doc:`usage` —— 每个主要模块的可运行示例。
-* :doc:`install` —— 如何构建原生后端、选择后端、启用 MPI，以及测试入口。
+* :doc:`install` —— 安装、可选 extras、原生后端与可调开关。
 
 其他语言
 --------
 
 * English — https://py-qcd.readthedocs.io/en/latest/usage.html
-
-范围说明
---------
-
-本目录下的页面是为文档站专门编写的功能与用法说明。仓库 ``docs/`` 下另有研究报告
-与 LaTeX/PDF 报告，属于独立材料，**不纳入本站**。
