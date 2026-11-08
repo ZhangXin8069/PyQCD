@@ -138,14 +138,14 @@ unless noted, median of 9 calls, measured on `pyqcd 0.1.21`:
 
 | Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
 |---|---|---|---|
-| batched matmul, 32×256² | 11.4 ms | 100.7 ms | **8.7×** |
-| ellipsis, 16×128×128 | 1.3 ms | 6.5 ms | **5.1×** |
-| complex matmul, 800² | 24.5 ms | 23.5 ms | 1.00× |
-| matmul, 1000² | 15.2 ms | 14.3 ms | 0.99× |
-| outer product, 2000×2000 | 4.8 ms | 4.9 ms | 0.99× |
-| Hadamard, 4000² | 33.6 ms | 32.8 ms | 0.98× |
-| 3-operand chain, 3×500 | 3.1 ms | 3.5 ms | 0.97× |
-| 4-operand chain, 300 | 1.3 ms | 1.2 ms | 0.94× |
+| batched matmul, 32×256² | 9.3 ms | 97.1 ms | **10.6×** |
+| ellipsis, 16×128×128 | 1.1 ms | 6.3 ms | **5.8×** |
+| 3-operand chain, 3×500 | 3.1 ms | 3.2 ms | 1.03× |
+| complex matmul, 800² | 20.4 ms | 21.0 ms | 1.03× |
+| Hadamard, 4000² | 30.1 ms | 30.2 ms | 1.00× |
+| outer product, 2000×2000 | 4.1 ms | 4.1 ms | 1.00× |
+| 4-operand chain, 300 | 1.15 ms | 1.11 ms | 1.00× |
+| matmul, 1000² | 10.7 ms | 10.2 ms | 0.97× |
 
 Read it honestly:
 
