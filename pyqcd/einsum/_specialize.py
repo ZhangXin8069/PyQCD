@@ -40,12 +40,12 @@ REGISTRY: dict[str, dict[str, str]] = {
     "zyxcTabn,zyxgTdef,Gae,Tzyxgc->TGdbfn": {
         "name": "gauge-propagator(E4)",
         "kind": "plan-cache",
-        "note": "peram × peram × γ × 规范场（本版本无专用 kernel，走计划缓存）",
+        "note": "peram × peram × γ × 规范场；Python 层无专用 kernel（计划缓存），CUDA 执行器在体积门内会内部融合（z*y*x<=1）",
     },
     "ab,...bce,cd->...dae": {
         "name": "gamma-sandwich(E5)",
         "kind": "plan-cache",
-        "note": "γ₅ 夹心（本版本无专用 kernel，走计划缓存）",
+        "note": "γ₅ 夹心；Python 层无专用 kernel（计划缓存），CUDA 执行器可能内部融合",
     },
     "eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN": {
         "name": "sush-2pt(S1)",

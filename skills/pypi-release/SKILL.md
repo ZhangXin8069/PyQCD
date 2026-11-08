@@ -754,3 +754,22 @@ KUPL 后端是 **OpenMP + dlopen 的 BLAS** 双层并行，两层同时开就会
 `OPENBLAS_NUM_THREADS` / `backend` / `array_backend`；③默认建议
 `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=<n>`。
 详细剖析见 `docs/report_kupl_acceleration_20261108.md`。
+
+### "没接线"与"有门槛"是两件事（0.1.18 的教训）
+我一度把 E4/E5 的融合 kernel 说成"未进发行版"——错。事实是：
+
+* `cpp/cuda/einsum/src/e4_fused.cu` / `sandwich.cu` **参与编译**，`apply_contract.cu`
+  里 `execute_e4_fused()` 会调用它们；
+* 但 `kE4FusedMaxSpatialVolume = 1`：只有 `z*y*x <= 1` 才启用（L24 实测慢 33×，
+  属于"主动关闭"而非"没实现"）；
+* Python 层只包了 2pt / 3pt，所以提示恒为 `[plan-cache]`——**提示只反映 Python 分发，
+  不反映 C++ 执行器内部是否融合**。
+
+判定证据链的正确顺序：
+1. `ls cpp/cuda/einsum/src`（源码是否在）；
+2. `grep -n "execute_e4_fused\|qcd_cuda_sandwich" apply_contract.cu`（是否被调用）；
+3. `grep -n "kE4FusedMaxSpatialVolume" ...`（是否有体积/收益门）；
+4. 运行期 `PYQCD_EINSUM_TRACE=1` 看是否真的打出 `PYQCD_EINSUM_CUDA_E4 ... kernel=1`。
+
+**不要**只用 `nm -D | grep qcd_cuda_`（版本脚本 `local: *` 会把内部 kernel 隐藏），
+也不要只看 Python 提示。说"未进发行版"之前必须走完这四步。

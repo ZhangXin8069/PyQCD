@@ -19,7 +19,7 @@
 
 ## 在已发布包上可复现
 
-`pyqcd==0.1.17`（`build_info(): backend=kupl, array_backend=numpy`）对
+`pyqcd==0.1.18`（`build_info(): backend=kupl, array_backend=numpy`）对
 `opt_einsum==3.4.0`（`dp`），`complex128`，预热 3 次后取 15 次中位数：
 
 | 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
@@ -42,9 +42,9 @@
 
 ## 历史（开发构建）测量
 
-下表来自**带额外融合 kernel 的开发构建**（γ 夹心、perambulator × 规范场）。
-这些 kernel **不在 0.1.x 发行版里**，因此数字**无法从 PyPI 复现**，仅作为
-"这些形态本身能有多贵"的记录：
+下表来自**未加体积门的开发构建**（γ 夹心、perambulator × 规范场）。这些 kernel
+**已编译进 0.1.x 发行版**，但 E4 被限制在 `z*y*x <= 1`（L24 体积下实测慢 33×，故主动关闭），
+因此下表数字**无法从 PyPI 复现**，仅作为"这些形态本身能有多贵"的记录：
 
 | 工作负载 | opt_einsum | 开发构建 | 倍率 |
 |---|---|---|---|

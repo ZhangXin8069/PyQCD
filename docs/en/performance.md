@@ -22,7 +22,7 @@ is reused.
 
 ## Reproducible on the published package
 
-`pyqcd==0.1.17` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`pyqcd==0.1.18` (`build_info(): backend=kupl, array_backend=numpy`) versus
 `opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
@@ -47,9 +47,11 @@ plan was reused.
 ## Historical development-build measurements
 
 The figures below were taken on development builds that carried extra fused
-kernels (γ sandwich, perambulator × gauge). **Those kernels are not in the 0.1.x
-release**, so the numbers are *not* reproducible from PyPI — they are kept only as
-a record of what the shapes can cost:
+kernels (γ sandwich, perambulator × gauge). Those kernels *are* compiled into the
+0.1.x release, but the E4 one is gated to `z*y*x <= 1` because it measured 33x
+slower at the L24 volume; the headline numbers below came from ungated builds, so
+they are **not** reproducible from PyPI — they are kept only as a record of what
+the shapes can cost:
 
 | Workload | opt_einsum | development build | Ratio |
 |---|---|---|---|

@@ -46,8 +46,8 @@ pyqcd 0.1.17  (Python 3.12.4)
 | `sush-3pt-main(P1)` | kernel | **专用 kernel**（KUPL/CUDA） |
 | `sush-3pt-main(P2)` | kernel | **专用 kernel**（KUPL/CUDA） |
 | `nucleon-3pt(E2)` | plan-cache | 仅计划缓存 |
-| `gauge-propagator(E4)` | plan-cache | 仅计划缓存（**开发版曾有融合 kernel，未进发行版**） |
-| `gamma-sandwich(E5)` | plan-cache | 仅计划缓存（同上） |
+| `gauge-propagator(E4)` | plan-cache | Python 层仅计划缓存；**CUDA 执行器在 `z*y*x<=1` 时会内部融合**（实测 trace 出现 `PYQCD_EINSUM_CUDA_E4 ... kernel=1`） |
+| `gamma-sandwich(E5)` | plan-cache | Python 层仅计划缓存；CUDA 执行器内部有 sandwich 融合分支 |
 | `sush-2pt(S1)` / `sush-3pt-munu(S2)` / `sush-2pt-mu(S3)` | plan-cache | 仅计划缓存 |
 
 运行期提示据实反映执行路径（`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 每次打印）：
@@ -95,7 +95,7 @@ generic matmul   -> (无提示，走通用路径)
 |---|---|---|
 | `pyqcd.testing`（测试、基准、回归基线） | **不随包** | 文档里相关命令均标注"需源码仓库" |
 | MPI 分片 | **默认关闭** | `mpi_label: non-MPI build`；需 `CXX=mpicxx PYQCD_EINSUM_ENABLE_MPI=1` 重建，且只分片单输出轴；CUDA 后端无 MPI |
-| E4 / E5 融合 kernel | **未进发行版** | 开发期实现过，发行包只有计划缓存；文档已据实标注 |
+| E4 / E5 融合 kernel | **已编译进发行版，但有体积门** | `e4_fused.cu` / `sandwich.cu` 参与编译并被 `apply_contract.cu` 调用；E4 仅在 `z*y*x <= 1` 时启用（`kE4FusedMaxSpatialVolume = 1`），因为 L24 实测慢 33×，故对真实格点体积主动关闭 |
 | `torch` / `matplotlib` / `cupy-cuda12x` / `mpi4py` | **可选 extras** | `pyqcd[torch]`、`pyqcd[plot]`、`pyqcd[cuda]`、`pyqcd[mpi]`；未装时给出可行动的 ImportError |
 | CUDA 通用执行器（cupy 输入） | **部分可用** | 特化形态走 kernel；通用执行器可能 `QCD_STATUS_INTERNAL` 回落 Python（单次警告，结果正确） |
 
