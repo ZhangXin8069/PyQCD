@@ -56,6 +56,88 @@ grep -n "docs/en/.readthedocs.yaml\|docs/zh/.readthedocs.yaml" .gitignore
   确需源码仓库的段落必须显式标注“需源码仓库 / source checkout only”
   （`install.md` 的构建与测试段、`performance.md` 的基准段已如此）。
 
+### 两套站点的结构：`docs/en` + `docs/zh`，同一 slug `py-qcd`
+
+```text
+docs/en/                                     docs/zh/
+├── .readthedocs.yaml                        ├── .readthedocs.yaml
+├── conf.py           （language 默认 en）    ├── conf.py          （language = "zh_CN"）
+├── index.rst         ← 唯一 RST，挂 toctree  ├── index.rst        ← 同一条 toctree
+├── overview.md  usage.md                    ├── overview.md  usage.md
+├── performance.md  install.md               ├── performance.md  install.md
+└── requirements.txt                         └── requirements.txt
+```
+
+- 一个 RTD 项目 slug `py-qcd`，两个语言版本：`en` → `https://py-qcd.readthedocs.io/en/latest/`，
+  `zh-cn` → `https://py-qcd.readthedocs.io/zh-cn/latest/`。三个写法别混：URL 语言码是 `zh-cn`（连字符），
+  `docs/zh/conf.py` 里是 `language = "zh_CN"`（下划线），本地目录是 `docs/zh/`。
+- 每侧只有一页 RST：`index.rst`（标题 + `pip install pyqcd` + toctree + “从哪里开始”）。四个
+  MyST 页 `overview` / `usage` / `performance` / `install` 两侧同名。`conf.py` 里
+  `extensions = ["myst_parser"]`、`source_suffix = {".rst": "restructuredtext", ".md": "markdown"}`
+  让 `index.rst` 直接索引 Markdown；不要给每页再套 `.rst` 壳。
+- `conf.py` 不 `import pyqcd`，`exclude_patterns = ["_build"]`；源目录就是 `docs/en/`，`docs/` 下的研究报告天然在站外。
+- 新增一页的落地清单（缺一条 = 404 或漏检）：① `docs/en/<slug>.md` 与 `docs/zh/<slug>.md` 同名建好；
+  ② 两份 `index.rst` 的 toctree **各加一行** `<slug>`；③ `pyqcd/testing/docs_examples.py` 的
+  `PAGES` 常量加 `<slug>`；④ 三道一致性门全绿（见下节）。
+- toctree 用脚本判，不靠肉眼：
+
+```bash
+python - <<'PY'
+import pathlib, re
+
+def toc(path):
+    text = pathlib.Path(path).read_text(encoding="utf-8")
+    body = re.search(r"\.\. toctree::\n(?:[ \t]*:[^\n]+\n)*\n((?:[ \t]+\S+\n)+)", text).group(1)
+    return [line.strip() for line in body.strip().splitlines()]
+
+en, zh = toc("docs/en/index.rst"), toc("docs/zh/index.rst")
+disk = {lang: {p.stem for p in pathlib.Path(f"docs/{lang}").glob("*.md")}
+        for lang in ("en", "zh")}
+print("en:", en); print("zh:", zh); print("disk:", disk)
+assert en == zh, "两份 toctree 顺序/内容不一致"
+assert set(en) == disk["en"] == disk["zh"], "有页面没进 toctree，或 toctree 指向不存在的页"
+PY
+```
+
+判据：exit 0。2026-11-08 实测 `en == zh == ['overview', 'usage', 'performance', 'install']`，
+与磁盘文件集合一致（顺序按导航比，集合按文件名比，不要用 `sorted()` 去比顺序）。
+
+### `performance.md` 的章节骨架（数字页唯一合法顺序）
+
+顺序固定、中英同步：**生产尺度表 → 小尺寸表 → 走哪条路径 → 增益来源 → 内存 → 正确性 →
+复现脚本 → 局限**。
+
+| # | 英文标题 | 中文标题 | 内容判据 |
+|---|---|---|---|
+| 1 | `Production-scale results` | `生产尺度结果` | 单次 0.4–2.7 s 的用例，CPU/GPU 分表，每行 `pyqcd` / `opt_einsum` / 倍率 |
+| 2 | `Small-shape results` | `小尺寸结果` | 必须带“只用于定位、不要外推”的限制句 |
+| 3 | `What runs where` | `什么情况走哪条路径` | 输入类型 → 执行路径 → 备注，含 `[kernel: …]` / `[plan-cache]` 说明 |
+| 4 | `Where the gains come from` | `增益从哪来` | 编号列表，每条对应上表某一列 |
+| 5 | `Memory` | `内存` | 峰值 RSS，独立进程测量；异常项（当前批量 8×512² 52 MB）必须点名 |
+| 6 | `Correctness` | `正确性` | 三重验证 + 一段可执行自验证脚本 + 不可破坏的不变量 |
+| 7 | `Reproduce` | `复现` | 与表一一对应的脚本，`CASES` 标签与表行同名 |
+| 8 | 局限 | 局限 | 当前形式是生产表后的 “Two honest notes / 两点如实说明”：哪些倍率掉到持平、为什么 |
+
+```bash
+python - <<'PY'
+import pathlib
+WANT = {
+    "en": ("Production-scale results", "Small-shape results", "What runs where",
+           "Where the gains come from", "Memory", "Correctness", "Reproduce"),
+    "zh": ("生产尺度结果", "小尺寸结果", "什么情况走哪条路径", "增益从哪来",
+           "内存", "正确性", "复现"),
+}
+for lang, want in WANT.items():
+    heads = [l[3:].strip() for l in pathlib.Path(f"docs/{lang}/performance.md")
+             .read_text(encoding="utf-8").splitlines() if l.startswith("## ")]
+    pos = [heads.index(w) if w in heads else -1 for w in want]
+    print(lang, "ORDER OK" if pos == sorted(pos) and -1 not in pos else "BROKEN", pos)
+PY
+```
+
+硬规则：表里每个数字必须由**同页脚本**产出，改尺寸就重跑并同时改表；复现不出来的数字只有两条出路——
+删除，或标注“历史数据 / 不可复现 + 原测量条件”；禁止“约、大概、估计”；“持平”写成 `1.01×` / `0.98×`。
+
 ## 最小工作流程
 
 1. 改 `docs/en/` 的页面；示例先按已安装包的口吻写。
@@ -65,6 +147,40 @@ grep -n "docs/en/.readthedocs.yaml\|docs/zh/.readthedocs.yaml" .gitignore
 5. 两份 `-W` 构建都必须 exit 0。
 6. `gpush.sh` 与 `gpush.sh -t gitee.com` 双推，Read the Docs 才会重建。
 7. 复验 `https://py-qcd.readthedocs.io/en/latest/` 与 `/zh-cn/latest/` 的新页面。
+
+### 三道一致性门：命令、判据、一次跑完
+
+| # | 门 | 命令 | 通过判据 |
+|---|---|---|---|
+| ① | 中英围栏代码块逐字节相同 | “双语一致性门”脚本 | `pages with mismatch: 0`，exit 0 |
+| ② | 双站 Sphinx 无告警构建 | `python -m sphinx -b html -d /tmp/x/doctrees -W docs/en /tmp/x/html`（中文把 `docs/en`→`docs/zh`、doctree 换 `-d /tmp/x/doctrees-zh`） | 两条都 `build succeeded.` 且 exit 0 |
+| ③ | 文档示例可执行且自验证 | `python -m pyqcd.testing.docs_examples --keep-going`，再跑 `--lang zh --keep-going` | `failed=0`，且 `ok + skipped` = 页面 `python` 块总数（`skipped` 只能来自标了 `# pseudo-code` / `# docs-skip` 的块） |
+
+一次跑完（`-euo pipefail` 保证任何一环失败即停；把输出贴进提交说明）：
+
+```bash
+set -euo pipefail
+python -m sphinx -b html -d /tmp/x/doctrees    -W docs/en /tmp/x/html    | tail -2
+python -m sphinx -b html -d /tmp/x/doctrees-zh -W docs/zh /tmp/x/html-zh | tail -2
+python -m pyqcd.testing.docs_examples --keep-going | tail -3
+python -m pyqcd.testing.docs_examples --lang zh --keep-going | tail -3
+```
+
+- 门③ 的耗时取决于 `performance.md` 的基准块是否被 `# docs-skip` 豁免：现状两块都标了（门禁跳过，整页秒级结束）；
+  去掉标记后门禁会真的跑 4600²/16000² 收缩（单次 0.5–2.7 s × 3 次 × 两种实现），单页十分钟量级，且两个语言
+  版本**必须串行**——并发会把 16000² 的两个 2.05 GB 数组同时压进内存，实测被内核 `Killed`（exit 137）。
+- 块之间共享一个命名空间、按 `PAGES` 顺序执行（overview → usage → performance → install）。
+
+2026-11-08 实测（`pyqcd 0.2.0`，Sphinx 9.1.1）：门① 输出见“双语一致性门”一节的基线块
+（同一次运行，`pages with mismatch: 0`）；门③ 两侧输出一致：
+
+```text
+en/overview     blocks ok=3  skipped=0 -> OK
+en/usage        blocks ok=11 skipped=1 -> OK
+en/performance  blocks ok=1  skipped=2 -> OK
+en/install      blocks ok=4  skipped=0 -> OK
+total: ok=19 skipped=3 failed=0
+```
 
 ## 双语一致性门
 
@@ -93,9 +209,9 @@ PY
 
 ```text
 overview: en=4 zh=4 same=4 OK
-usage: en=11 zh=11 same=11 OK
-performance: en=1 zh=1 same=1 OK
-install: en=7 zh=7 same=7 OK
+usage: en=12 zh=12 same=12 OK
+performance: en=4 zh=4 same=4 OK
+install: en=14 zh=14 same=14 OK
 pages with mismatch: 0
 ```
 
@@ -154,7 +270,8 @@ python -m pyqcd.testing.docs_examples --lang zh --keep-going
 1. 每个 ```` ```python ```` 块会在同一命名空间里按页面顺序执行；
 2. 需要源码仓库或有意简写的片段，块内必须出现 `# pseudo-code` 或 `# docs-skip`；
 3. 中英文的块**逐字节相同**（见"双语一致性门"），所以只需保证英文块可执行；
-4. 当前基线 en 16 / zh 16 块，0 失败；新增页面要同步加入 `PAGES` 常量。
+4. 当前基线 en 22 / zh 22 个 ```` ```python ```` 块（overview 3 / usage 12 / performance 3 /
+   install 4），其中 19 执行 / 3 跳过（usage 1 + performance 2）/ 0 失败；新增页面要同步加入 `PAGES` 常量。
 
 实测价值：0.1.5 之前 `usage.md` 有两处示例签名与实现不符
 （`compute_dual_field_strength(U)` 实际是 `(F_dict, mu, nu)`；
@@ -200,3 +317,81 @@ python -m pyqcd.testing.einsum.bench_native --data synthetic --profiles T1 \
 `count_cached_ops(cache)` 返回的是 **Counter**（用 `sum(ops.values())`）；
 `plan_parallel()` 返回 **dict**（用 `{"N","Y","X","m"} <= set(plan)`）；
 cupy 结果不能 `np.asarray`，要 `cp.asnumpy(...)`。
+
+### “无断言即失败”的实现判据与三条真实回归
+
+`pyqcd/testing/docs_examples.py::run_page` 的判据是硬编码的：块内既没有 `assert `、也没有
+`# pseudo-code` / `# docs-skip` → 直接记一条失败
+`no assertion — every example must verify its own result`，**该块根本不执行**。
+所以“能跑通”不等于通过，`print()` 出来的错数也永远不会暴露。
+
+断言必须对**独立参考**，不能对自己：数值用 `np.einsum(..., optimize="optimal")` 与
+`torch.einsum(...)` 双参考 + `np.allclose(rtol=1e-10, atol=1e-12)`；结构用
+`{"backend", "native_available", "array_backend", "mpi"} <= set(info)`；形状/不变量用
+`shape == (2, 2, 2, 2, 3, 3)`、`np.all(np.isfinite(...))`；返回类型要贴合真实对象
+（`count_cached_ops` → `Counter`，用 `sum(ops.values())`；`plan_parallel` → `dict`，
+用 `{"N", "Y", "X", "m"} <= set(plan)`）。
+
+三条真实回归（文档写了、实现没有；都靠这个门在 0.1.5 / 0.1.21 当场抓住）：
+
+| 文档原来写的 | 真实签名 / 返回 | 改法（可直接照抄） |
+|---|---|---|
+| `compute_dual_field_strength(U)` | `(F_dict, mu, nu)`；`F` 由 `clover_field_strength(U, mu, nu)` 给出 | `F = {(mu, nu): G.clover_field_strength(U, mu, nu) for mu in range(4) for nu in range(4) if mu != nu}`，再 `assert O.compute_dual_field_strength(F, 0, 1).shape == (2, 2, 2, 2, 3, 3)` |
+| `Bootstrap(data, n_samples=200)` | `Bootstrap(data, Nconf_axes=0, ...)`；没有 `n_samples`，返回 dict | `samples = A.Bootstrap(data, Nconf_axes=0)`；`assert {"data_mean", "data_err", "data_sample"} <= set(samples)`；`assert np.shape(samples["data_mean"])[0] == 5` |
+| `count_cached_ops(cache)` 被写成无参调用 | 必须传 `cache`，返回 `Counter` | `with pe.shared_intermediates() as cache:` 里连做两次 `pe.contract(...)`，然后 `assert sum(pe.count_cached_ops(cache).values()) >= 1` |
+
+教训：签名、参数名、返回类型的错误只有“真跑 + 真断言”会暴露；纯 `print()` 的页面看起来一切正常。
+
+### 基准脚本规范（`performance.md` 的计时块必须全满足）
+
+| # | 规则 | 判据 |
+|---|---|---|
+| 1 | 交错测量 | 同一轮里 `a = one(ours); b = one(theirs)`，不是“先测完 A 再测 B” |
+| 2 | 单次 0.5–2.7 s | 用例尺寸按此选（当前生产表 0.44–2.67 s）；更短的运行测到的是计时分辨率与缓存预热 |
+| 3 | 3 次重复取中位数 | `rounds=3`，时间与比值都过 `statistics.median(...)` |
+| 4 | 先断言后计时 | 进 `compare()` 之前 `assert np.allclose(ours, np.einsum(..., optimize="optimal"))`；断言失败就不产生时间 |
+| 5 | 打印被测构建 | 开头 `print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)`：`site-packages` 里的旧 `pyqcd` 会把所有数字变成“PyQCD 很慢”，缺这两行事后无法判断测的是哪份 |
+| 6 | GPU 同步计时 | 每次调用前后 `cp.cuda.Device(0).synchronize()`；比较前 `cp.asnumpy(...)`，不要 `np.asarray(cupy_array)` |
+
+```bash
+python - <<'PY'
+import pathlib, re
+BLOCK = re.compile(r"```python\n(.*?)```", re.S)
+KEYS = ("assert ", "pyqcd.__version__", "pyqcd.__file__", "rounds=3", "statistics.median")
+for path in ("docs/en/performance.md", "docs/zh/performance.md"):
+    for i, block in enumerate(BLOCK.findall(pathlib.Path(path).read_text(encoding="utf-8"))):
+        if "perf_counter" not in block:
+            continue
+        missing = [k for k in KEYS if k not in block]
+        print(f"{path}#{i}: {'OK' if not missing else 'MISSING ' + ','.join(missing)}")
+PY
+```
+
+判据：每个计时块都 `OK`。2026-11-08 实测：`#1`（CPU 生产尺度）`OK`；`#2`（GPU 生产尺度）报
+`MISSING pyqcd.__file__` —— 该块只打印了版本与设备名，属于必须先补的缺口（改
+`performance.md` 时加一行 `print(pyqcd.__file__)`），不是门的例外。
+
+### RTD 构建与发布联动：配置放行 → 推送 → 重建探针
+
+- 两份 `.readthedocs.yaml` 必须**被 `.gitignore` 放行且已提交**：根 `.gitignore` 用 `.*` 忽略隐藏文件，
+  靠 `!docs/en/.readthedocs.yaml`、`!docs/zh/.readthedocs.yaml` 豁免；未跟踪 = 线上没配置 = 构建失败。
+
+```bash
+git ls-files docs/en/.readthedocs.yaml docs/zh/.readthedocs.yaml   # 两行都必须有输出
+git check-ignore -v docs/en/.readthedocs.yaml docs/zh/.readthedocs.yaml; echo "exit=$? (1 且无输出 = 已放行)"
+```
+
+- 两份配置各自写 `sphinx.configuration: docs/<lang>/conf.py` 与 `python.install.requirements: docs/<lang>/requirements.txt`；
+  RTD 的 “Configuration file” 要指到各自文件；`formats: [pdf, epub]` 会在 HTML 之外再跑 LaTeX/EPUB，PDF 失败也计构建失败。
+- `conf.py` 的 `version`/`release` 只决定页脚与 `<title>`（`PyQCD <release> documentation`），与 PyPI 版本无自动关联：改版本时 `conf.py` 的 `release` 与 `install.md` 的发行号（en `Current release:` / zh `当前发行版：`）必须一起改，现在两处都是 `0.2.0`。
+- 推送后重建有延迟（分钟级），且**不同页面可能停在不同版本**——按页探针，别看完首页就下结论：
+
+```bash
+for lang in en/latest zh-cn/latest; do
+  curl -s "https://py-qcd.readthedocs.io/$lang/install.html" | grep -o '<title>[^<]*</title>'
+  curl -s "https://py-qcd.readthedocs.io/$lang/performance.html" | grep -c -e 'Production-scale results' -e '生产尺度结果'
+done
+```
+
+判据：探针里的版本号/章节标题必须与刚提交的源文一致；不一致 = 还没重建完（等 5–10 分钟再探），不是构建失败。
+2026-11-08 实测：两站 `install.html` 的 `<title>` 已是 `0.1.29`，而 `performance.html` 仍是旧结构（导航 `Measure it yourself` / `自己动手测`，新版已改名 `Reproduce` / `复现`）——同站不同页可差一个版本；`README.zh-CN.md` 只进 sdist 不进 PyPI 项目页（项目页描述取自根 `README.md`），文档改动要随版本才生效。

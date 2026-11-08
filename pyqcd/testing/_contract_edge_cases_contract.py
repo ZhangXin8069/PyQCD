@@ -300,3 +300,34 @@ def api_module():
     import pyqcd.einsum._api as api
 
     return api
+
+
+def test_out_keyword_on_backends_without_out_support() -> None:
+    """cupy/torch 的 einsum 没有 out=，必须按 opt_einsum 的语义回填。"""
+    try:
+        import cupy
+    except ImportError:
+        cupy = None
+    try:
+        import torch
+    except ImportError:
+        torch = None
+
+    data = np.arange(9.0).reshape(3, 3) + 1
+    expected = np.einsum("ij,jk->ik", data, data)
+
+    if cupy is not None and cupy.cuda.runtime.getDeviceCount() > 0:
+        source = cupy.asarray(data)
+        target = cupy.zeros((3, 3))
+        result = pe.contract("ij,jk->ik", source, source, out=target)
+        assert result is target
+        assert np.allclose(cupy.asnumpy(target), expected)
+
+    if torch is not None:
+        target = torch.zeros((3, 3))
+        pe.contract("ij,jk->ik", torch.as_tensor(data), torch.as_tensor(data), out=target)
+        assert np.allclose(target.numpy(), expected)
+
+    target = np.zeros((3, 3))
+    pe.contract("ij,jk->ik", data, data, out=target)
+    assert np.allclose(target, expected)

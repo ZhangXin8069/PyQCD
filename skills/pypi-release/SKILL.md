@@ -867,3 +867,231 @@ opt_einsum / numpy 的行为完全相同，属于"兼容"而不是 bug。
 
 同时记住这条经验：**GPU 上 cupy 已经是 cuBLAS 的薄封装，通用方程交回 cupy.einsum
 通常比自研执行器更快**；只有存在融合 kernel 的形态才值得走原生执行器。
+
+## 打包 · 安装 · 线程 · 性能的实测规则（0.1.13–0.1.29）
+
+### 打包配置自查表（八条，每条一个命令）
+| 项 | 权威位置 | 核对 → 期望 |
+|---|---|---|
+| 分发名 `pyqcd` | `pyproject.toml` 的 `[project] name` | `python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['name'])"` → `pyqcd` |
+| 版本三处一致 | `pyproject.toml` / `pyqcd/__init__.py` / `pyqcd/einsum/_version.py` | 「最小工作流程」第 1 步 → `version <ver> consistent in 3 places; __native_version__=0.1.0 (kept)` |
+| `__native_version__` 不动 | `pyqcd/einsum/_version.py` | 同上脚本单独打印 → 当前 `0.1.0`，只随原生 ABI 变更而改 |
+| 打包清单 | `setup.py`：`find_packages(include=["pyqcd","pyqcd.*"], exclude=["pyqcd.testing","pyqcd.testing.*"])` | 命令 1 → `16 ['pyqcd']`（`pyqcd` + 15 个子包） |
+| `py.typed` 三处 | ①文件 `pyqcd/py.typed` ②`package_data={"pyqcd": ["py.typed"]}` ③`MANIFEST.in` 的 `include pyqcd/py.typed`（另需 classifier `Typing :: Typed`） | 命令 2 第 1 行 → `1`；三处缺一即 PEP 561 失效（0.1.5 之前是三处同时缺） |
+| 内部文件不入包 | `MANIFEST.in`：`prune pyqcd/testing` + `global-exclude AGENTS.md` | 命令 2 第 2、3 行 → `0`、`0` |
+| license 与构建依赖 | PEP 639 `license = "MIT"` + `license-files = ["LICENSE"]`；`[build-system].requires` 含 `setuptools>=77` 与 `cython>=3.0` | `python -m build --sdist 2>&1 \| grep -ci deprecat` → `0`；`grep -c cython pyproject.toml` → `1` |
+| `SOURCES.txt` 无绝对路径 | `setup.py` 的 `_rel()` 把 `cythonize` 的 `sources`/`depends`/`build_dir` 全转 HOME 相对路径 | 命令 2 第 4 行 → `0` |
+
+```bash
+# 1) 包清单：必须 16，且不含 pyqcd.testing（期望输出: 16 ['pyqcd']）
+python -c "from setuptools import find_packages as f; p=f(include=['pyqcd','pyqcd.*'], exclude=['pyqcd.testing','pyqcd.testing.*']); print(len(p), [x for x in p if '.' not in x])"
+
+# 2) sdist 内容四问（T = dist/pyqcd-<ver>.tar.gz）
+T=dist/pyqcd-<ver>.tar.gz
+tar -tzf "$T" | grep -c "pyqcd/py.typed"        # 1
+tar -tzf "$T" | grep -c "pyqcd/testing/"        # 0
+tar -tzf "$T" | grep -c "AGENTS.md"             # 0
+tar -tzf "$T" | grep -cE "\.so$"                # 0
+tar -xzOf "$T" */pyqcd.egg-info/SOURCES.txt | grep -c "/home/"   # 0
+```
+`grep -c` 无匹配时退出码是 1，脚本里写成 `... | grep -c X || true` 或直接读输出，别让 `set -e` 提前退出。
+`SOURCES.txt` 的两步修法：①`cythonize` 的三个路径参数一律过 `_rel()`；②发版前
+`rm -rf build *.egg-info dist` 再构建——setuptools 会复用旧 egg-info，**只改代码不清理不自愈**。
+
+### 安装期三阶段的耗时与失败语义
+| 阶段 | 触发 | 失败语义（必须如此） | 实测耗时 |
+|---|---|---|---|
+| pip 隔离构建环境 | 每次从 sdist 安装 | 硬错误（缺 `setuptools>=77`/`wheel`/`cython` 即失败） | 3–8 s |
+| KUPL CPU 原生库 | **永远构建**：`PYQCD_EINSUM_BACKEND` 取 `auto`/`kupl`/`cuda` 都含它 | 只 `RuntimeWarning` 并回落纯 Python planner；仅 `PYQCD_EINSUM_REQUIRE_NATIVE=1` 才升级为硬错误 | ~6 s |
+| CUDA 原生库 | **机会性**：`nvcc` 在 PATH + `cpp/cuda/einsum/src/*.cu` 存在 + Cython 可 import | 永远只警告，KUPL 仍是可用原生后端；`=cuda` 也只保证"尝试" | ~20 s |
+| Cython CUDA 扩展 | 仅当 CUDA 库建成 | CUDA 没建成时先从 `self.extensions` 里剔除再 `super().run()`，不报错 | ~10 s |
+
+判据：`pip install -v pyqcd==<ver> 2>&1 | grep "build backends"` → `PyQCD einsum build backends: kupl, cuda`；只出现 `kupl` 说明机会性条件不满足（缺 nvcc / 缺 Cython / 缺源），不是缺陷。
+主机编译器"存在但编不过"必须先试编译：CUDA 阶段用 `$CXX`（默认 `c++`）编 `int main(){ return 0; }`
+（180 s 超时），失败只跳过 CUDA、**KUPL 照旧构建**；`CXX=/bin/false` 的实测结论是安装 exit 0、`backend='python'`、`native_available=False`。
+
+### 构建进度必须写 `/dev/tty`（pip 会吞掉构建输出）
+pip 捕获后端的 stdout，只在**失败时**回放；两分钟的编译在用户眼里就是卡死。三处都写：
+`setup.py` 的 `_notify_progress()`、`cpp/kupl/einsum/make.sh` 与 `cpp/cuda/einsum/make-nv.sh` 的
+`_pyqcd_notify()`（先试 `/dev/tty`，`OSError` 退回 stderr）。
+
+```text
+[pyqcd build] compiling the native kupl library (this takes a while; pip will stay silent until it finishes)
+[pyqcd build] KUPL (CPU): compiling 12 sources
+[pyqcd build] native kupl library built in 6.1s
+[pyqcd build] CUDA: compiling 8 sources for arch 8.9 (nvcc, 约 20 s)
+[pyqcd build] CUDA: done in 19s
+```
+判据：`pip install ... > /tmp/install.log 2>&1` 之后 `grep -c "pyqcd build" /tmp/install.log` ≥ 4
+（无 tty 时降级到 stderr，所以重定向也能收到）。为 0 说明某条进度链被改回 `print`，安装会像卡死。
+
+### CUDA 架构：先看构建时的 `arch:` 行，再看 kernel 状态码
+架构来源优先级：`PYQCD_CUDA_ARCHITECTURES` → `CMAKE_CUDA_ARCHITECTURES` → `PYQCD_SM_ARCH` →
+自动探测（`nvidia-smi --query-gpu=compute_cap`，无卡时按 GPU 型号回退表）→ 默认 `6.0 7.0`。
+每个架构一律 `-gencode=arch=compute_XX,code=[sm_XX,compute_XX]`，即 **cubin + PTX 双嵌**。
+
+| 构建 | sm_89 上 kernel 状态 | 结论 |
+|---|---|---|
+| 旧默认 SASS-only `compute_70` | `3`（`QCD_STATUS_INTERNAL`） | 静默回落 CPU，用户以为"支持 CUDA"其实没跑（0.1.12 就是这样） |
+| 只指定 `7.0` 但带 PTX | `0` | 驱动 JIT，**无 GPU 的登录节点也能编出可用的包** |
+| 自动探测 `8.9` | `0` | 原生 SASS 最快；`pip install` 不设变量即走这条（0.1.14 起） |
+
+```bash
+pip install -v pyqcd==<ver> 2>&1 | grep -E "^  arch:"
+# 期望:   arch:     8.9 (source: auto-detected; cubin+PTX embedded)
+SO=$(python -c "import os,pyqcd.einsum.cuda as m;print(os.path.dirname(m.__file__))")/libpyqcdeinsum_cuda.so
+readelf -S "$SO" | grep -c nv_fatbin                     # ≥1
+python -m pyqcd --gpu-probe | grep -E "kernel status|verdict"   # ok — ... / CUDA fast path is active
+```
+`strings <so> | grep compute_` 在 fatbin 布局下**无效**（架构名不是明文 ASCII），不要再拿它当判据。
+
+### 线程档：kernel/generic 双档与不可省的幂等键
+`pyqcd/einsum/_threads.py` 用两档，因为 kernel 路径与 BLAS 路径在小机器上要相反的配置：
+
+| 档 | OMP | BLAS | 服务对象 |
+|---|---|---|---|
+| `kernel` | `min(cores, 8)` | `clamp(cores//2, 1, 4)` | 命中特化形态（核子 2pt/3pt 专用 kernel） |
+| `generic` | `max(cores//2, 1)` | `min(max(cores, 2), 4)` | 普通 GEMM 链与打包 |
+
+优先级（高者胜）：`OMP_NUM_THREADS` / `OPENBLAS_NUM_THREADS` → `PYQCD_EINSUM_OMP_THREADS` /
+`PYQCD_EINSUM_BLAS_THREADS` → auto（`cores = physical_cores() // mpi_ranks()`）→
+`PYQCD_EINSUM_THREADS=off` 整体关闭。`contract()` 每次按形态选档，档位不变时不动运行时。
+
+实测（4 物理核 / 8 线程，KUPL，0.1.14；GEMM 700² / 核子 2pt）：未设 27.3 / 2.1 ms，
+`1/4` 4.3 / 3.7，`4/2` **5.8 / 1.1**（最优），`4/8` 27.5 / 2.7。
+判据：`python -m pyqcd | grep threads` → `threads        : omp=4 blas=2 [auto kernel (4 physical cores, 1 rank); runtime: blas]`。
+
+幂等标记必须与自身记录**同一套键**：`ensure_runtime()` 曾用 `{"gomp","blas"} - set(runtime_applied)`
+判断完成，而 `_set_runtime_threads()` 追加的是 `"blas:<symbol>"` → 集合永不相等 → **每次 `contract()`
+都重设一次线程**，小收缩 0.05 ms → 0.53 ms（10×），E5 从 4.9× 掉到 0.25×。判据是数调用次数：
+
+```python
+import numpy as np, pyqcd.einsum as pe, pyqcd.einsum._threads as t
+a, b = (np.ones((16, 16)),) * 2
+n, orig = {"c": 0}, t._set_runtime_threads
+t._set_runtime_threads = lambda *a, **k: (n.__setitem__("c", n["c"] + 1), orig(*a, **k))[1]
+for _ in range(10): pe.contract("ij,jk->ik", a, b)
+print(n["c"])          # 期望 1；大于 1 就是幂等键又坏了
+```
+导出值必须记账：`apply()` 会把自动值写回 `OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS`（GOMP 在
+dlopen **时**读它，运行时 API 对未加载的库无效），这些值必须同时记进 `state["exported_env"]`，
+否则 `_pinned()` 把它当成用户显式设置，从此**永久禁用切档**。
+
+### 性能方法论：交错测量 + 生产尺度
+1. **顺序计时会伪造差距**：同一台机器顺序测（先跑完全部 pyqcd 再跑全部 opt_einsum）得 matmul `0.76×`，
+   交错（interleaved）测（每轮相邻各跑一次、取每轮比值、报中位数）得 `0.97×`；忙碌机器上顺序漂移 20–40%，
+   足以造出一个假 2 倍。协议：`for _ in range(3): t_pyqcd(); t_ref()`，脚本开头打印两实现的版本与 `__file__`。
+2. **尺寸必须到生产量级**：单次 0.5–2.7 s、重复 3 次。小尺寸结论不可外推：
+
+| 形态 | 小尺寸 | 生产尺寸 |
+|---|---|---|
+| cupy 批量 GEMM（16×1024²） | 0.94× | **0.21×** |
+| γ 夹心（融合 kernel） | 7–16× | **2.0×**（8192×1024 工作区带宽受限） |
+| 核子 2pt kernel | 2.3×（nvec=64） | **0.99×**（nvec=112，cuBLAS 主导） |
+
+判据：任何"快 N 倍"必须同时给出 单次耗时（秒）、重复次数、交错协议、`OMP`/`OPENBLAS` 线程数、
+`backend`/`array_backend`、`pyqcd.__version__`。
+
+### 执行路径选择启发式（五条分支，按输入形态择一）
+| 输入形态 | 走哪条路 | 实测（交错，生产尺度） |
+|---|---|---|
+| 无求和标签：逐元素 / 转置 / 对角 / 迹 / 单操作数 | `backend.einsum` 原生 | Hadamard 4000² 89→30 ms（0.33×→1.00×），生产 1.26× |
+| numpy 数组 + batch 标签（两操作数共享且留在输出，或含 `...`） | KUPL 原生计划执行器 | batch 10.6×（生产 11.6×）、ellipsis 5.8×（7.1×） |
+| numpy 无 batch（2D 链 / 单矩阵乘 / 双收缩） | numpy 分步（tensordot 阶梯） | chain 1.03×（0.98×）、matmul 0.97×（1.01×）、complex 1.03×（0.96×） |
+| cupy + 融合形态 `ab,...bce,cd->...dae`（γ 夹心） | CUDA 原生执行器 | 2.0× |
+| cupy 其它 | `cupy.einsum`（cuBLAS） | 16×1024²：0.21× → 0.98× |
+
+强制开关：`PYQCD_EINSUM_KUPL_PLAN=1` 打开 CPU 计划执行器（默认只对 batch 形态启用）、
+`PYQCD_EINSUM_NATIVE=kupl|cuda` 选原生库、`PYQCD_EINSUM_SPECIALIZE=0` 关专用分支（连计划缓存一起关）、
+`PYQCD_EINSUM_TRACE=1` 看 C++ 执行器内部是否真融合。
+判据：同一方程跑两次（一次 `PYQCD_EINSUM_KUPL_PLAN=1`、一次不设），比值落在 0.9–1.1 之外且形态属 batch，
+说明分支判定错了；`abc,bcd->ad` 这种"三维但无 batch"的方程走原生会慢 1.5×。
+
+### `python -m pyqcd --gpu-probe` 的判据
+```text
+GPU probe
+  build_info     : backend=cuda native_available=True array_backend=numpy
+  cupy           : 14.2.0
+  device         : NVIDIA GeForce RTX 4060 Laptop GPU (compute 8.9)
+  kernel enabled : True
+  kernel status  : ok — kernel returned QCD_STATUS_OK
+  hit hint       : [pyqcd.einsum] 专用路径: nucleon-2pt(E1) [kernel: cuda_nucleon_2pt] ...
+  verdict        : CUDA fast path is active
+```
+`verdict` 是给人看的字符串（不要按枚举断言），实际出现过的：`CUDA fast path is active` /
+`kernel works, but this operand set did not hit it (shape contract mismatch)` /
+`CUDA fast path is NOT active — results fall back`、`no GPU available — ...`、`cupy missing — ...`、`GPU probe failed — see kernel_status`。
+
+判据：**永远 exit 0 且一定有 `verdict` 行**——无 GPU、cupy 缺失、探测自身抛异常都走 `probe-failed`
+分支给结论而不是抛异常；无 GPU 时 `kernel status` 为 `no-device` 并给
+`unset CUDA_VISIBLE_DEVICES or run on a GPU node` 的提示。诊断不得改动调用方状态
+（`probe()` 保存/恢复 `_specialize._announced`）。`python -m pyqcd --gpu-probe --json` 是机器可读版。
+
+### 内核未运行必须立即告警（同形态同原因只报一次）
+注册了特化形态却没跑成 kernel 时，库发 `RuntimeWarning`，原因串直接取自 kernel 的
+`LAST_FAILURE["reason"]`，四种，各自对应一种处置：
+
+| 原因串 | 含义 / 处置 |
+|---|---|
+| `kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)` | 开关关了：`PYQCD_EINSUM_KERNEL_CUDA` / `..._KUPL` 被设成 `0/false/off/no`，或 `.so` 缺失 |
+| `operand shapes do not satisfy the kernel contract` | 形状不符：不是生产契约形状（合成小形状永远不命中） |
+| `kernel entry point is missing from the native library` | 版本脚本（`local: *`）隐藏了符号，或装的是旧 `.so` |
+| `kernel returned status 3 (wrong CUDA architecture or an internal error)` | 架构不匹配：按上一节重建，必须带 PTX |
+
+去重键是 `(形态名, 原因串)`；原因必须**调用之后**读取、并按形态过滤（E1→2pt、P1/P2→3pt），
+否则会把 3pt 的失败原因报给 2pt。回归用例：
+`pyqcd/testing/_contract_edge_cases_contract.py::test_kernel_skip_warns_immediately`。
+判据：对同一契约形态连续调用两次，`python -W always::RuntimeWarning -c "<契约调用>" 2>&1 | grep -c "did not run"` → `1`（不是 0，也不是 2）。
+
+### 过期文案的检查法（删掉环境变量之后必跑）
+删除或改名任何 `PYQCD_*` 开关后，提示文案里残留旧名字不会报错，只会误导：
+`_specialize.REGISTRY` 的 note 曾在规模门槛删除后仍写着 `PYQCD_EINSUM_KERNEL_MIN_ELEMENTS`（0.1.10 才修）。
+
+```bash
+# 1) 盘点所有被"提到"的名字（提示文案、help、文档都算）
+grep -rhoIE "\bPYQCD_[A-Z0-9_]+" pyqcd docs README.md | sort -u
+# 2) 对可疑名字逐条找读点（读点长这样：os.environ.get(…)、getenv("…")、${VAR:-}、_ENV = "PYQCD_…"）
+grep -rnI "PYQCD_EINSUM_KERNEL_MIN_ELEMENTS" pyqcd cpp setup.py | grep -v __pycache__
+```
+判据：第 2 步**必须为空**（该变量早已删除，实测只有 `docs/` 里的历史台账还提它，
+那是记录不是文案）；反过来，若命中的行是 `note=`、`help=`、`print(`、`warnings.warn`，即为过期文案。
+开关常经常量间接读取（`DISABLE_ENV = "PYQCD_EINSUM_SPECIALIZE"` + `os.environ.get(DISABLE_ENV)`），
+所以别指望一条 `comm` 自动判定，要逐个指出读点。
+最后用一条真实调用把 banner 打出来（`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1 python -c "...contract(...)"`），banner 里出现的每个 `PYQCD_*` 都必须能指到读点。
+
+### 踩坑清单（0.1.12–0.1.29，每条都有实测数字）
+| 现象 | 真因 | 处置 / 判据 |
+|---|---|---|
+| 用户 notebook 里 CPU `0.41×`、GPU sandwich `0.75×` | `import pyqcd` 命中 base conda 里的 **0.1.12**：无线程档（8×8 超订）+ CUDA `.so` 只有 `compute_70` SASS → sm_89 上 status=3 | 先 `print(pyqcd.__version__, pyqcd.__file__)` + `--gpu-probe`；新 venv 复跑 0.92/8.38/0.90/8.36×，环境升到 0.1.26 后 sandwich 16.15× |
+| `No matching distribution found` 但 JSON 已 200 | simple index 比 `/pypi/<ver>/json` 慢（CDN 边缘） | 轮询 simple index（实测约 1 分钟），不要重传 |
+| 国内镜像装不到新版本 | 镜像同步滞后 | 复验一律 `--index-url https://pypi.org/simple`，别在镜像上判发版失败 |
+| `pip index versions` 抓不到版本 | 最后一行是 pip 升级 notice | `\| grep "Available versions"` |
+| `strings <so> \| grep compute_` 什么都没 | fatbin 里架构名不是明文 ASCII | 用 `pip -v` 的 `arch:` 行 / `readelf -S \| grep nv_fatbin` / 运行期 `[kernel: ...]` |
+| `count_cached_ops()` 抛 `TypeError` | 该函数需要 cache 参数 | `count_cached_ops(cache)`，别误判成库缺陷 |
+| `np.einsum(..., optimize='optimal')` 不返回 | 15 个操作数的全路径枚举组合爆炸 | 用 `timeout 120` 当判据；改 `'dp'`/`'greedy'` 或直接交给 `pyqcd.einsum` 默认规划 |
+| `plan_parallel` 给的 `N` 不满足 `N*a=n*b` | 该式是**未封顶目标**，Y 会被任务数/CPU/内存压缩 | 正确不变量：`N == n*Y`、`N*X >= m`、`gpu_needed <= b`；压缩原因写在 `notes` |
+| 解析/安装莫名失败 | `/tmp` tmpfs 被历史 venv 撑满 | 先 `df -h /tmp` |
+
+### 发版检查单（一条命令 + 远程复验 + 双推 + tag）
+```bash
+# 1) 终检 17 项（--with-tests 连 119 passed 套件）：必须 17/17
+python -m pyqcd.testing.release_check --with-tests
+# 2) 构建与元数据
+rm -rf build *.egg-info dist && python -m build --sdist && python -m twine check dist/*
+# 3) 只上传 tar.gz
+TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_ZHANGXIN8069_API_KEY" \
+  python -m twine upload --non-interactive --disable-progress-bar dist/pyqcd-<ver>.tar.gz
+# 4) 发布后必须从 PyPI 远程安装复验（本地 sdist 不算证据）
+python -m venv /tmp/rv && /tmp/rv/bin/pip install --no-cache-dir \
+  --index-url https://pypi.org/simple "pyqcd==<ver>"
+/tmp/rv/bin/python -c "import pyqcd; print(pyqcd.__version__, pyqcd.__file__)"   # 含 site-packages
+/tmp/rv/bin/python -m pyqcd --gpu-probe
+# 5) 双推
+gpush.sh && gpush.sh -t gitee.com
+# 6) tag：多行消息用 -F，别堆 -m
+git tag -a dev<N> -F /tmp/tagmsg.txt && git push origin dev<N>
+```
+17 项覆盖：版本三处一致、sdist 构建 / `twine check` / 内容洁净 / 无绝对路径、文档示例可执行、
+中英代码块逐字节一致、`sphinx -W` 双站、PyPI 版本与项目页探针、RTD 双语言含当前版本、
+gitlab/gitee 与本地 HEAD 同步、测试套件（`--offline --with-tests` 为 10 项）。
+发布后 24 h 内发现的任何问题只能用新版本号修；远程复验输出的 `pyqcd.__file__` 必须含 `site-packages`。

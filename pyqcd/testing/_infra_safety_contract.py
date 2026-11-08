@@ -127,8 +127,9 @@ class MpiContractTimingSafetyContract(unittest.TestCase):
                      'mpi4py unavailable')
     @unittest.skipIf(shutil.which('mpirun') is None, 'mpirun unavailable')
     def test_setup_scenario_completes_within_bounded_wait(self):
-        completed, output = mpi_contract._run_scenario_process(
-            'setup', timeout=15.0)
+        # 用模块默认上限（30 s）而不是写死 15 s：机器被别的基准占满时，两个 MPI
+        # 进程的启动本身就会超过 15 s，那测的是负载而不是契约。
+        completed, output = mpi_contract._run_scenario_process('setup')
 
         self.assertEqual(completed.returncode, 0)
         self.assertIn('PASS setup:', output)

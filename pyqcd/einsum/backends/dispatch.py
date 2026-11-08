@@ -68,7 +68,22 @@ def _wrap_einsum(fn: Callable[..., Any]) -> Callable[..., Any]:
     def einsum(equation: Any, *operands: Any, **kwargs: Any) -> Any:
         if isinstance(equation, str) and not equation.isascii():
             equation = _ascii_equation(equation)
-        return fn(equation, *operands, **kwargs)
+        try:
+            return fn(equation, *operands, **kwargs)
+        except TypeError as exc:
+            # cupy/torch 的 einsum 没有 ``out=`` 参数，而 numpy 有、opt_einsum 也
+            # 支持（它在自己的层里做回填）。这里按同样的语义补偿：先算出结果，
+            # 再写回调用方给的数组。
+            out = kwargs.pop("out", None)
+            if out is None or "out" not in str(exc):
+                raise
+            result = fn(equation, *operands, **kwargs)
+            if getattr(result, "shape", None) != getattr(out, "shape", None):
+                raise ValueError(
+                    f"output parameter shape {tuple(out.shape)} does not match "
+                    f"contraction result shape {tuple(getattr(result, 'shape', ())) }")
+            out[...] = result
+            return out
 
     einsum.__name__ = getattr(fn, "__name__", "einsum")
     einsum.__doc__ = getattr(fn, "__doc__", None)

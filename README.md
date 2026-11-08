@@ -115,21 +115,28 @@ axis; the CUDA backend has no MPI implementation.
 
 ## Performance
 
-Numbers you can reproduce on the **published package**, measured with
-`pyqcd==0.1.29` (`build_info(): backend=kupl, array_backend=numpy`),
-`opt_einsum==3.4.0` with the `dp` planner, `complex128`, median of 15 calls after
-3 warm-up calls:
+Measured against `opt_einsum` 3.4.0 with the `dp` planner, both implementations
+interleaved inside one loop (so machine drift cancels), sized so a **single call
+takes 0.4–2.7 s**, three timed calls per point:
 
-| Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
+| Case | `opt_einsum` | `pyqcd.einsum` | Ratio |
 |---|---|---|---|
-| Nucleon 2pt, nvec=32 (production contract) | 97.67 ms | 17.06 ms | **5.73x** |
-| γ sandwich, T=256, nvec=512 | 27.71 ms | 5.03 ms | **5.51x** |
-| Generic chain 800³ (no specialised kernel) | 17.35 ms | 19.74 ms | 0.88x (slower) |
+| batched matmul, 32×1024² (CPU) | 6.98 s | 0.61 s | **11.6x** |
+| ellipsis, 256×512² (CPU) | 6.48 s | 0.91 s | **7.1x** |
+| Hadamard, 16000² (CPU) | 0.55 s | 0.44 s | **1.26x** |
+| matmul, 4600² (CPU) | 1.06 s | 1.05 s | 1.01x |
+| 3-operand chain, 3×3570 (CPU) | 0.98 s | 1.00 s | 0.98x |
+| complex matmul, 3100² (CPU) | 1.34 s | 1.36 s | 0.96x |
+| γ sandwich, 8192×1024 (GPU) | 1.54 s | 0.76 s | **2.0x** |
+| batched GEMM, 16×1024² (GPU) | 0.74 s | 0.75 s | 0.98x |
+| nucleon 2pt, nvec=112 (GPU) | 2.65 s | 2.67 s | 0.99x |
 
-Those three run through the shipped kernels/plan cache with no extra setup.
-Dedicated kernels in this release cover the nucleon 2pt and 3pt shapes only;
-other lattice shapes (γ sandwich, perambulator × gauge, the sush variants) get
-the plan cache and the general execution layer.
+Where the gains come from: shape-specialised kernels (nucleon 2pt/3pt, fused
+γ sandwich), batched execution when a batch index exists, and handing equations the
+planner cannot improve (element-wise, generic `cupy`) straight to the backend. Two
+caveats stated plainly: on the GPU the γ-sandwich advantage shrinks from 16× to 2×
+at production size (workspace bandwidth), and the nucleon-2pt kernel reaches parity
+at nvec=112 because the shape is already cuBLAS-bound.
 
 ```python
 import numpy as np
