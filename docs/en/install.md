@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.1.14`. To pin it: `pip install "pyqcd==0.1.13"`.
+Current release: `0.1.17`. To pin it: `pip install "pyqcd==0.1.13"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need
@@ -266,3 +266,119 @@ The package is developed on GitLab and mirrored to Gitee (国内发布) and GitH
 `pyqcd.einsum.build_info()` reports `backend` (which native library is usable) and
 `array_backend` (what your arrays are); the two are not the same question. A
 `backend='cuda'` build still runs numpy input on the CPU library.
+
+## Performance knobs
+
+Every knob below is read from the environment unless stated otherwise, so it can
+be set per run, per script, or in a job file.
+
+### Threads (both backends)
+
+The engine configures OpenMP and BLAS once at import, because leaving both at
+"all logical cores" is the single most common cause of bad performance here
+(both runtimes oversubscribe the same cores).
+
+| Variable | Effect | Default |
+|---|---|---|
+| `OMP_NUM_THREADS` | OpenMP worker threads — highest priority | auto |
+| `OPENBLAS_NUM_THREADS` | BLAS threads (matmul) — highest priority | auto |
+| `PYQCD_EINSUM_OMP_THREADS` | same, second priority | auto |
+| `PYQCD_EINSUM_BLAS_THREADS` | same, second priority | auto |
+| `PYQCD_EINSUM_THREADS=off` | disable the auto configuration entirely | on |
+
+The kernel path and the BLAS path want **opposite** settings, so the engine keeps
+two profiles and switches between them per call — a matched specialised shape uses
+`kernel`, everything else uses `generic`:
+
+| Profile | OpenMP | BLAS | Tuned for |
+|---|---|---|---|
+| `kernel` | `min(physical_cores, 8)` | `clamp(physical_cores // 2, 1, 4)` | nucleon 2pt/3pt special kernels |
+| `generic` | `clamp(physical_cores // 2, 1, 8)` | `clamp(physical_cores, 2, 4)` | GEMM chains, packing, permutes |
+
+Both are divided by the MPI rank count when `OMPI_COMM_WORLD_SIZE` / `PMI_SIZE` /
+`SLURM_NTASKS` reports more than one rank. Switching only happens when the profile
+actually changes, and it is applied to the already-loaded runtimes (`libgomp` via
+`omp_set_num_threads`, OpenBLAS via `openblas_set_num_threads` or the
+`scipy_openblas_*` names used by the numpy/scipy wheels) rather than merely exported
+as variables.
+
+Measured on a 4-physical-core / 8-thread laptop, KUPL backend:
+
+| Configuration | generic chain 800³ | nucleon 2pt, nvec=32 |
+|---|---|---|
+| `PYQCD_EINSUM_THREADS=off` (all defaults) | 103.8 ms | 25.7 ms |
+| **default (per-call profiles)** | **15.0 ms** | **21.1 ms** |
+| pinned `OMP=1` / `BLAS=4` | 15.9 ms | 57.5 ms |
+| pinned `OMP=4` / `BLAS=8` | 55.7 ms | 21.6 ms |
+
+Per-call profiles reach (or beat) either hand-tuned configuration: the chain gets
+the `generic` profile and the kernel gets the `kernel` profile in the same process.
+
+Inspect or change it at runtime:
+
+```python
+import pyqcd.einsum as pe
+
+pe.thread_info()                 # {'omp': 4, 'blas': 2, 'source': 'auto (...)', ...}
+pe.configure_threads(4, 2)       # pin OpenMP=4, BLAS=2 explicitly
+pe.configure_threads(blas=4)     # only change BLAS
+```
+
+`python -m pyqcd` prints the effective values too.
+
+### KUPL (CPU) backend
+
+| Variable | Effect | Default |
+|---|---|---|
+| `PYQCD_EINSUM_NATIVE=kupl` | force the CPU library | auto |
+| `PYQCD_EINSUM_LIB` | load a specific `libpyqcdeinsum_kupl.so` | packaged |
+| `PYQCD_EINSUM_CBLAS_LIB` | BLAS library to `dlopen` (e.g. MKL, BLIS) | first found |
+| `PYQCD_EINSUM_POOL=0` | disable the buffer pool in the execution layer | enabled |
+| `PYQCD_EINSUM_CONTEXT_CACHE_LIMIT` | number of cached native contexts | built-in |
+| `PYQCD_EINSUM_KERNEL_KUPL=0` | skip the KUPL specialised kernels | on |
+| `PYQCD_EINSUM_SPECIALIZE=0` | skip the whole specialised path (kernels + plan cache) | on |
+| `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` | print the hit line on **every** call | first hit only |
+| `PYQCD_EINSUM_DISABLE_FUSED=1` | keep planning, drop the fused path | off |
+
+Diagnostics for the nucleon-2pt kernel (no numerical effect):
+
+| Variable | Effect |
+|---|---|
+| `PYQCD_KUPL_N2PT_MODE=steps\|fused` | reference 7-step path vs fused implementation |
+| `PYQCD_KUPL_N2PT_PROFILE=1` | per-stage timings on stderr |
+| `PYQCD_KUPL_N2PT_BUDGET_MB` | intermediate buffer budget (default 512 MB) |
+| `PYQCD_KUPL_N2PT_CHUNK` | force the `a1` blocking factor |
+| `PYQCD_KUPL_N2PT_POISON=1` | fill the workspace with NaN before each call to catch stale reads |
+
+### CUDA backend
+
+| Variable | Effect | Default |
+|---|---|---|
+| `PYQCD_EINSUM_NATIVE=cuda` | force the GPU library | auto |
+| `PYQCD_EINSUM_KERNEL_CUDA=0` | skip the CUDA specialised kernels | on |
+| `PYQCD_CUDA_ARCHITECTURES` | target SASS+PTX architectures at **build** time | auto-detected |
+| `PYQCD_CUDA_MPI_DEVICES` / `PYQCD_CUDA_MPI_WEIGHTS` | rank→device mapping (MPI builds only) | round-robin |
+
+Reminder: `PYQCD_EINSUM_NATIVE=cuda` selects the library, not the data. numpy
+arrays still run on the CPU library; GPU kernels need `cupy` arrays.
+
+### Build time
+
+| Variable | Effect |
+|---|---|
+| `PYQCD_EINSUM_BACKEND=kupl\|cuda\|auto` | which libraries to build |
+| `PYQCD_SKIP_NATIVE_BUILD=1` | skip compilation entirely |
+| `PYQCD_EINSUM_REQUIRE_NATIVE=1` | make a missing KUPL toolchain a hard error |
+| `PYQCD_EINSUM_SKIP_CYTHON=1` | build the CUDA library without the Cython extension |
+| `PYQCD_EINSUM_ENABLE_MPI=1` | MPI-enabled KUPL build (`CXX=mpicxx`) |
+| `PYQCD_SM_ARCH` | legacy alias for the CUDA architecture |
+
+### Introspection
+
+```python
+import pyqcd.einsum as pe
+
+pe.build_info()        # backend / native_available / array_backend / mpi / mpir_label
+pe.thread_info()       # effective omp / blas threads and where they came from
+pe.specializations()   # registered equation-shape specialisations
+```

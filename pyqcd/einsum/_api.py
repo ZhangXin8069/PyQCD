@@ -14,7 +14,7 @@ from typing import Any
 from . import paths
 from ._pathinfo import PathInfo
 from ._sharing import einsum_cache_wrap
-from . import _specialize
+from . import _specialize, _threads
 from .backends.dispatch import get_func, parse_backend
 
 __all__ = ["contract", "contract_path"]
@@ -574,6 +574,9 @@ def contract(
     if (optimize is True) or (optimize is None):
         optimize = "auto"
 
+    # 首次调用时把线程配置补到已加载的 OpenMP/BLAS 运行时上（幂等、极廉价）。
+    _threads.ensure_runtime()
+
     # 方程形态专用路径：命中时打印提示；specialize=False 关闭本次调用的专用执行。
     # 只回收本模块自己设置的开关，不覆盖调用方通过环境变量显式给出的设置。
     global _FUSED_ENV_OWNED
@@ -584,6 +587,12 @@ def contract(
                 os.environ.pop(_specialize.FUSED_DISABLE_ENV, None)
                 _FUSED_ENV_OWNED = False
             specialized = _specialize.match(subscripts)
+            # 内核路径与 BLAS 路径想要相反的线程配置：命中特化形态用 kernel 档，
+            # 其余用 generic 档。切换只在档位真正变化时发生。
+            if specialized is not None:
+                _threads.apply_profile("kernel")
+            else:
+                _threads.apply_profile("generic")
             if specialized is not None and out is None:
                 announce_kernel = ""
                 if out is None:

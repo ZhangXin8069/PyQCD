@@ -9,6 +9,7 @@ Only re-exports live here; the implementation is in the private modules.
 """
 
 from __future__ import annotations
+import os
 
 import importlib
 from typing import Any
@@ -31,7 +32,15 @@ from .backends.dispatch import (
 )
 from .paths import PATH_OPTIONS, PathOptimizer, get_path_fn, register_path_fn
 
+from . import _threads as _threads_module
+
+# 默认按物理核数配置 OpenMP 与 BLAS 线程（可用环境变量覆盖，见 _threads 文档）。
+_threads_module.apply()
+
 __all__ = [
+    "configure_threads",
+    "thread_info",
+    "thread_profiles",
     "backends",
     "build_info",
     "blas",
@@ -95,3 +104,28 @@ def __getattr__(name: str) -> Any:
             return value
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def thread_profiles() -> dict:
+    """Return the auto thread profiles (``kernel`` / ``generic``) for this machine."""
+    return _threads_module.profiles()
+
+
+def thread_info() -> dict:
+    """Return the effective OpenMP/BLAS thread configuration and its source."""
+    return _threads_module.current()
+
+
+def configure_threads(omp: int | None = None, blas: int | None = None,
+                      force: bool = False) -> dict:
+    """Override the thread configuration at runtime.
+
+    ``configure_threads(4, 2)`` pins 4 OpenMP threads and 2 BLAS threads. Passing
+    ``None`` keeps the auto-resolved value. The standard ``OMP_NUM_THREADS`` /
+    ``OPENBLAS_NUM_THREADS`` variables still win when they are set explicitly.
+    """
+    if omp is not None:
+        os.environ[_threads_module.OMP_ENV] = str(int(omp))
+    if blas is not None:
+        os.environ[_threads_module.BLAS_ENV] = str(int(blas))
+    return _threads_module.apply(force=True)

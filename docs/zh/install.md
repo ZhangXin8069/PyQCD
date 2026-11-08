@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.1.14`。需要固定版本时：`pip install "pyqcd==0.1.13"`。
+当前发行版：`0.1.17`。需要固定版本时：`pip install "pyqcd==0.1.13"`。
 
 PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的
 manylinux wheel 需要 `auditwheel` 修补。因此首次安装会编译一次（笔记本上约一分钟），
@@ -243,3 +243,114 @@ bash pyqcd/testing/simple/run-all.sh                     # per-function API pari
 `pyqcd.einsum.build_info()` 同时给出 `backend`（哪个原生库可用）与
 `array_backend`（你的数组是什么）；这是两个不同的问题——`backend='cuda'` 的构建，
 numpy 输入依然跑在 CPU 库上。
+
+## 性能开关
+
+下面所有开关都从环境变量读取，可放在命令行、脚本或作业文件里。
+
+### 线程（两个后端通用）
+
+引擎在 import 时一次性配置 OpenMP 与 BLAS，因为"两个运行时都吃满逻辑核"是这里最常见的
+性能事故来源（它们会互相超订）。
+
+| 变量 | 作用 | 默认 |
+|---|---|---|
+| `OMP_NUM_THREADS` | OpenMP 工作线程——最高优先级 | 自动 |
+| `OPENBLAS_NUM_THREADS` | BLAS（矩阵乘）线程——最高优先级 | 自动 |
+| `PYQCD_EINSUM_OMP_THREADS` | 同上，第二优先级 | 自动 |
+| `PYQCD_EINSUM_BLAS_THREADS` | 同上，第二优先级 | 自动 |
+| `PYQCD_EINSUM_THREADS=off` | 完全关闭自动配置 | 开启 |
+
+kernel 路径与 BLAS 路径想要**相反**的配置，因此引擎维护两档并按调用切换——命中特化形态
+用 `kernel` 档，其余用 `generic` 档：
+
+| 档位 | OpenMP | BLAS | 面向 |
+|---|---|---|---|
+| `kernel` | `min(物理核, 8)` | `clamp(物理核 // 2, 1, 4)` | 核子 2pt/3pt 专用 kernel |
+| `generic` | `clamp(物理核 // 2, 1, 8)` | `clamp(物理核, 2, 4)` | GEMM 链、打包、置换 |
+
+当 `OMPI_COMM_WORLD_SIZE` / `PMI_SIZE` / `SLURM_NTASKS` 显示多进程时，两者都按等级数均分。
+只有档位真正变化时才切换，且配置**作用到已加载的运行时**（`libgomp` 用
+`omp_set_num_threads`，OpenBLAS 用 `openblas_set_num_threads` 或 numpy/scipy wheel 里的
+`scipy_openblas_*` 符号名），不只是导出变量。
+
+在 4 物理核 / 8 线程笔记本上实测（KUPL 后端）：
+
+| 配置 | 通用链 800³ | 核子 2pt，nvec=32 |
+|---|---|---|
+| `PYQCD_EINSUM_THREADS=off`（全默认） | 103.8 ms | 25.7 ms |
+| **默认（按调用切档）** | **15.0 ms** | **21.1 ms** |
+| 钉死 `OMP=1` / `BLAS=4` | 15.9 ms | 57.5 ms |
+| 钉死 `OMP=4` / `BLAS=8` | 55.7 ms | 21.6 ms |
+
+按调用切档可以同时拿到两种手工调优的效果：同一进程里，链式收缩走 `generic` 档、
+内核走 `kernel` 档。
+
+运行期查看或修改：
+
+```python
+import pyqcd.einsum as pe
+
+pe.thread_info()                 # {'omp': 4, 'blas': 2, 'source': 'auto (...)', ...}
+pe.configure_threads(4, 2)       # pin OpenMP=4, BLAS=2 explicitly
+pe.configure_threads(blas=4)     # only change BLAS
+```
+
+`python -m pyqcd` 也会打印当前生效值。
+
+### KUPL（CPU）后端
+
+| 变量 | 作用 | 默认 |
+|---|---|---|
+| `PYQCD_EINSUM_NATIVE=kupl` | 强制使用 CPU 库 | auto |
+| `PYQCD_EINSUM_LIB` | 指定要加载的 `libpyqcdeinsum_kupl.so` | 包内 |
+| `PYQCD_EINSUM_CBLAS_LIB` | 指定 `dlopen` 的 BLAS（如 MKL、BLIS） | 自动探测 |
+| `PYQCD_EINSUM_POOL=0` | 关闭执行层缓冲池 | 开启 |
+| `PYQCD_EINSUM_CONTEXT_CACHE_LIMIT` | 缓存的原生上下文个数 | 内置 |
+| `PYQCD_EINSUM_KERNEL_KUPL=0` | 跳过 KUPL 专用 kernel | 开启 |
+| `PYQCD_EINSUM_SPECIALIZE=0` | 跳过整个专用路径（kernel + 计划缓存） | 开启 |
+| `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` | **每次**调用都打印命中提示 | 仅首次 |
+| `PYQCD_EINSUM_DISABLE_FUSED=1` | 保留规划，去掉融合路径 | 关闭 |
+
+核子 2pt kernel 的诊断开关（不影响数值）：
+
+| 变量 | 作用 |
+|---|---|
+| `PYQCD_KUPL_N2PT_MODE=steps\|fused` | 7 步参考路径 vs 融合实现 |
+| `PYQCD_KUPL_N2PT_PROFILE=1` | 逐阶段耗时输出到 stderr |
+| `PYQCD_KUPL_N2PT_BUDGET_MB` | 中间缓冲预算（默认 512 MB） |
+| `PYQCD_KUPL_N2PT_CHUNK` | 强制 `a1` 分块大小 |
+| `PYQCD_KUPL_N2PT_POISON=1` | 每次调用前把工作区填 NaN，自检"未写就读/跨调用残留" |
+
+### CUDA 后端
+
+| 变量 | 作用 | 默认 |
+|---|---|---|
+| `PYQCD_EINSUM_NATIVE=cuda` | 强制使用 GPU 库 | auto |
+| `PYQCD_EINSUM_KERNEL_CUDA=0` | 跳过 CUDA 专用 kernel | 开启 |
+| `PYQCD_CUDA_ARCHITECTURES` | **构建期**目标架构（SASS+PTX） | 自动探测 |
+| `PYQCD_CUDA_MPI_DEVICES` / `PYQCD_CUDA_MPI_WEIGHTS` | rank→设备映射（仅 MPI 构建） | 轮转 |
+
+提醒：`PYQCD_EINSUM_NATIVE=cuda` 选的是**库**，不是数据。numpy 数组仍走 CPU 库；
+GPU kernel 需要 `cupy` 数组。
+
+### 构建期
+
+| 变量 | 作用 |
+|---|---|
+| `PYQCD_EINSUM_BACKEND=kupl\|cuda\|auto` | 构建哪些库 |
+| `PYQCD_SKIP_NATIVE_BUILD=1` | 完全跳过编译 |
+| `PYQCD_EINSUM_REQUIRE_NATIVE=1` | 缺 KUPL 工具链时变成硬错误 |
+| `PYQCD_EINSUM_SKIP_CYTHON=1` | 编 CUDA 库但不编 Cython 扩展 |
+| `PYQCD_EINSUM_ENABLE_MPI=1` | 启用 MPI 的 KUPL 构建（`CXX=mpicxx`） |
+| `PYQCD_SM_ARCH` | CUDA 架构的旧变量名 |
+
+### 查询接口
+
+```python
+import pyqcd.einsum as pe
+
+pe.build_info()        # backend / native_available / array_backend / mpi / mpir_label
+pe.thread_info()       # effective omp / blas threads and where they came from
+pe.specializations()   # registered equation-shape specialisations
+```

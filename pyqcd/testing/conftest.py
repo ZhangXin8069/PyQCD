@@ -78,6 +78,7 @@ from pyqcd.testing import (  # noqa: F401
     test_pipeline_runtime_failure_contracts,
     test_correlated_fit_identifiability_guards,
     test_bootstrap_resampling_contracts,
+    test_threads_contracts,
     test_thread_safety,
     test_contract_edge_cases,
     test_docs_api_contracts,

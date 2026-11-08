@@ -28,6 +28,11 @@ python -m pyqcd --json     # machine-readable
 > 当前显卡开箱即用；若要原生 SASS，或在无 GPU 的登录节点上为已知目标构建，
 > 设 `PYQCD_CUDA_ARCHITECTURES=<算力>`（例如 `8.9`）。
 
+> **线程按调用自动调档。** 两档自动切换（专用形态用 `kernel` 档，BLAS 链用 `generic` 档），
+> 直接作用到已加载的运行时；用 `OMP_NUM_THREADS` /
+> `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
+> `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
+
 ## 文档
 
 * English — https://py-qcd.readthedocs.io/en/latest/usage.html
@@ -101,15 +106,15 @@ MPI 分片只在 KUPL 后端实现，且只分片单个输出轴；CUDA 后端�
 
 ## 性能
 
-下面是**已发布包上可复现**的数字：`pyqcd==0.1.14`
+下面是**已发布包上可复现**的数字：`pyqcd==0.1.17`
 （`build_info(): backend=kupl, array_backend=numpy`）、`opt_einsum==3.4.0` 的 `dp`
 策略、`complex128`、预热 3 次后取 15 次中位数。
 
 | 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
 |---|---|---|---|
-| 核子 2pt，nvec=16（生产契约） | 12.95 ms | 2.15 ms | **6.02×** |
-| 核子 2pt，nvec=24 | 41.45 ms | 7.11 ms | **5.83×** |
-| γ 夹心，T=8，nvec=64 | 0.169 ms | 0.058 ms | **2.91×** |
+| 核子 2pt，nvec=32（生产契约） | 97.67 ms | 17.06 ms | **5.73×** |
+| γ 夹心，T=256，nvec=512 | 27.71 ms | 5.03 ms | **5.51×** |
+| 通用链式 800³（无专用 kernel） | 17.35 ms | 19.74 ms | 0.88×（更慢） |
 
 这三条无需任何额外设置，直接走已发布的 kernel / 计划缓存。本版本的专用 kernel
 只覆盖核子 2pt 与 3pt 两种形态；其余格点形态（γ 夹心、perambulator × 规范场、

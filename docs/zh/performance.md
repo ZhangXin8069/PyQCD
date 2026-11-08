@@ -19,14 +19,14 @@
 
 ## 在已发布包上可复现
 
-`pyqcd==0.1.14`（`build_info(): backend=kupl, array_backend=numpy`）对
+`pyqcd==0.1.17`（`build_info(): backend=kupl, array_backend=numpy`）对
 `opt_einsum==3.4.0`（`dp`），`complex128`，预热 3 次后取 15 次中位数：
 
 | 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
 |---|---|---|---|
-| 核子 2pt，nvec=16（生产契约） | 12.95 ms | 2.15 ms | **6.02×** |
-| 核子 2pt，nvec=24 | 41.45 ms | 7.11 ms | **5.83×** |
-| γ 夹心，T=8，nvec=64 | 0.169 ms | 0.058 ms | **2.91×** |
+| 核子 2pt，nvec=32（生产契约） | 97.67 ms | 17.06 ms | **5.73×** |
+| γ 夹心，T=256，nvec=512 | 27.71 ms | 5.03 ms | **5.51×** |
+| 通用链式 800³（无专用 kernel） | 17.35 ms | 19.74 ms | 0.88×（PyQCD 更慢） |
 
 本版本真正加速了哪些形态：
 
@@ -75,6 +75,71 @@ Python 执行路径在单步结束前会多保留一份与输出同尺寸的中�
 
 实际含义：给 pyqcd 的内存预算要比给 `opt_einsum` 的宽 1.5 倍，或者先用
 `contract_path(...)` / `memory_limit=` 规划并切分收缩。
+
+## 自己动手测
+
+下面这段就是上文数字背后的完整协议：构造生产形状的操作数、先预热、取 **9 次计时的中位数**
+（不是单次），并把倍率与 min/max 一起打印出来，机器抖动一眼可见。每次调用刻意控制在
+5–100 ms 量级——更短的计时测到的是计时器开销而不是引擎。
+
+```python
+import statistics
+import time
+
+import numpy as np
+import pyqcd.einsum as pe
+
+try:
+    import opt_einsum as oe
+except ImportError:                       # pip install opt_einsum to run the comparison
+    raise SystemExit("install opt_einsum first: pip install opt_einsum")
+
+
+def bench(call, warmup=2, repeat=9):
+    """Median of `repeat` timed calls after `warmup` untimed ones (milliseconds)."""
+    for _ in range(warmup):
+        call()
+    samples = []
+    for _ in range(repeat):
+        start = time.perf_counter()
+        call()
+        samples.append((time.perf_counter() - start) * 1e3)
+    return statistics.median(samples), min(samples), max(samples)
+
+
+def compare(label, equation, operands):
+    ours = bench(lambda: pe.contract(equation, *operands))
+    theirs = bench(lambda: oe.contract(equation, *operands, optimize="dp"))
+    print(f"{label:24s} pyqcd {ours[0]:8.2f} ms | opt_einsum {theirs[0]:8.2f} ms "
+          f"| rate {theirs[0] / ours[0]:5.2f}x | n=9 "
+          f"(pyqcd min..max {ours[1]:.1f}..{ours[2]:.1f} ms)")
+
+
+rng = np.random.default_rng(0)
+
+
+def c(*shape):
+    return (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(np.complex128)
+
+
+# 1) nucleon 2pt at a production-shaped contract: the shape the kernels target.
+nuc = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
+n = 32
+compare("nucleon 2pt nvec=32", nuc,
+        [c(4, 4, n, n), c(4, 4, n, n), c(4, 4, n, n), c(4, 4), c(4, 4),
+         c(4, n, n, n), c(4, n, n, n), c(4, 4)])
+
+# 2) gamma sandwich, batched over time and vector space.
+compare("gamma sandwich T=256", "ab,...bce,cd->...dae",
+        [c(4, 4), c(256, 4, 4, 512), c(4, 4)])
+
+# 3) a generic chain with no specialised kernel — the honest control case.
+a, b, d = (rng.standard_normal((800, 800)) for _ in range(3))
+compare("generic chain 800", "ij,jk,kl->il", [a, b, d])
+```
+
+`opt_einsum` 用 `dp` 策略（生产默认）。第三组是对照：通用链式收缩没有专用 kernel，
+两者在噪声范围内（0.76–0.93×，即 PyQCD **并不更快**）。
 
 ## 代码
 

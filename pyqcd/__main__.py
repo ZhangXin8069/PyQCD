@@ -88,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"  native backend : unknown ({native})")
     print("  subpackages    : " + ", ".join(report["subpackages"]))
+    try:
+        from .einsum import _threads
+
+        print("  threads        : " + _threads.describe().replace("threads: ", ""))
+    except Exception:  # noqa: BLE001 - 诊断信息不应影响入口
+        pass
     missing = [
         f"{name} ({info['extra']})"
         for name, info in report["optional_dependencies"].items()

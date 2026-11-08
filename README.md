@@ -31,6 +31,12 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_CUDA_ARCHITECTURES=<cap>` (e.g. `8.9`) to get native SASS, or when building on a
 > GPU-less login node for a known target.
 
+> **Threads are tuned per call.** Two profiles are switched automatically (`kernel` for the
+> specialised shapes, `generic` for BLAS chains) on the already-loaded runtimes; override with
+> `OMP_NUM_THREADS` / `OPENBLAS_NUM_THREADS` (or `PYQCD_EINSUM_OMP_THREADS` /
+> `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
+> `pyqcd.einsum.thread_info()`.
+
 ## Documentation
 
 * English — https://py-qcd.readthedocs.io/en/latest/usage.html
@@ -110,15 +116,15 @@ axis; the CUDA backend has no MPI implementation.
 ## Performance
 
 Numbers you can reproduce on the **published package**, measured with
-`pyqcd==0.1.14` (`build_info(): backend=kupl, array_backend=numpy`),
+`pyqcd==0.1.17` (`build_info(): backend=kupl, array_backend=numpy`),
 `opt_einsum==3.4.0` with the `dp` planner, `complex128`, median of 15 calls after
 3 warm-up calls:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
 |---|---|---|---|
-| Nucleon 2pt, nvec=16 (production contract) | 12.95 ms | 2.15 ms | **6.02x** |
-| Nucleon 2pt, nvec=24 | 41.45 ms | 7.11 ms | **5.83x** |
-| γ sandwich, T=8, nvec=64 | 0.169 ms | 0.058 ms | **2.91x** |
+| Nucleon 2pt, nvec=32 (production contract) | 97.67 ms | 17.06 ms | **5.73x** |
+| γ sandwich, T=256, nvec=512 | 27.71 ms | 5.03 ms | **5.51x** |
+| Generic chain 800³ (no specialised kernel) | 17.35 ms | 19.74 ms | 0.88x (slower) |
 
 Those three run through the shipped kernels/plan cache with no extra setup.
 Dedicated kernels in this release cover the nucleon 2pt and 3pt shapes only;
