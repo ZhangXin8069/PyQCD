@@ -183,3 +183,35 @@ kernels 子项由 16 → **18 项**。
 | `simple/run-all.sh` | **98 passed，exit=0**（compat 39 + memory 4 + equations 9 + native 13×2 + kernels 20） |
 | `verify_compat` 全量 | **980/980 PASS** |
 | `python -m pyqcd.testing` | **115 passed / 1 skipped / 0 failed** |
+
+---
+
+## 11. 四次复查（10:35）—— 未发现新缺陷，补两项实证
+
+### 11.1 开关与分派路径验证（全部正确）
+
+| 场景 | 结果 |
+|---|---|
+| `PYQCD_EINSUM_SPECIALIZE=0` | **kernel 调用次数 = 0**（完全不进专用路径），结果正确 |
+| `optimize` 传显式 path | rel 6.19e-16（kernel 命中，结果正确） |
+| `optimize=False` | rel 6.19e-16 |
+| `contract_expression(...)` 调用 | rel 5.50e-16（正确） |
+
+### 11.2 已知限制（实证补充）：`contract_expression` 不走专用 kernel
+
+实测统计（monkeypatch 计数器）：
+
+| 入口 | `_run_specialized_kernel` 调用次数 |
+|---|---|
+| `contract(...)` | **1** |
+| `contract_expression(...)` 返回的表达式调用 | **0** |
+
+→ 表达式路径结果正确，但**不享受专用 kernel 加速**（`_expr.py` 直接编译原生程序，
+不经过 `contract()` 的形态分派）。属已知限制，已在 §8.3 登记；修复需要把 `specialize`
+语义传入表达式编译层，暂未实施。
+
+### 11.3 资源泄漏检查（通过）
+
+- 连续 200 次 kernel 路径调用：GPU 空闲内存 **7088.0 MiB → 7088.0 MiB（变化 0）**
+- 200 次后结果与首次一致（`np.allclose` 为 True）
+- 进程峰值 RSS 436.9 MiB
