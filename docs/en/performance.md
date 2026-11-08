@@ -16,64 +16,92 @@ table comes with the script that produced it.
 | Correctness | every case is asserted against `numpy.einsum` before it is timed |
 | Machine | 4 physical cores (8 threads) + RTX 4060 Laptop, 8 GB |
 
-## Production-scale results
+## Case coverage
 
-Sized so that a single call is in the 0.4–2.7 s range — short runs measure cache
-warm-up and timer resolution rather than the contraction, and they hide the BLAS
-blocking regime that production shapes live in.
+Fifteen cases, one per structural category the library routes differently — not a
+hand-picked highlight reel:
 
-### CPU (KUPL backend, `numpy` arrays)
+| Family | Cases |
+|---|---|
+| two-operand contraction | matmul 2D (real), matmul 2D (complex) |
+| no summed index | element-wise, outer product |
+| reduction only | full reduction (`ij,ij->`), partial reduction (`ij->i`) |
+| multi-operand chain | chain 3 ops, chain 4 ops |
+| closed triangle | hyper-edge (`ij,jk,ik->i`) |
+| batch structure | batched GEMM, ellipsis batch, batch × matrix, many small batches |
+| production kernels | nucleon 2pt, γ sandwich |
 
-| Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
-|---|---|---|---|
-| batched matmul, 32×1024² | 0.61 s | 6.98 s | **11.6×** |
-| ellipsis, 256×512² | 0.91 s | 6.48 s | **7.1×** |
-| Hadamard, 16000² | 0.44 s | 0.55 s | **1.26×** |
-| matmul, 4600² | 1.05 s | 1.06 s | 1.01× |
-| 3-operand chain, 3×3570 | 1.00 s | 0.98 s | 0.98× |
-| complex matmul, 3100² | 1.36 s | 1.34 s | 0.96× |
+Both tables use **the same fifteen cases at the same shapes**, so a row is directly
+comparable across devices. One call takes 0.003–2.4 s; three rounds per case, and the
+implementation that runs first alternates every round.
 
-### GPU (CUDA backend, `cupy` arrays)
-
-GPU numbers are **GPU against GPU**: both libraries run on the same device, so the
-ratio measures implementations, not CPU-vs-GPU throughput.
-
-| Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
-|---|---|---|---|
-| γ sandwich, 8192×1024 (fused kernel) | 0.76 s | 1.54 s | **2.0×** |
-| batched GEMM, 16×1024² | 0.75 s | 0.74 s | 0.98× |
-| nucleon 2pt, nvec=112 (kernel) | 2.67 s | 2.65 s | 0.99× |
-
-Two honest notes. The γ-sandwich row is *not* the 7–16× measured on smaller shapes:
-at 8192×1024 the fused kernel is bound by its 2.1 GB workspace traffic, not by
-arithmetic. And the nucleon-2pt kernel reaches parity at nvec=112 — the shape is
-already cuBLAS-bound, so there is nothing left for the kernel to win.
-
-## Small-shape results
-
-Useful for orientation, but do not extrapolate: at this scale the numbers are
-dominated by fixed per-call overhead.
-
-### CPU
+### CPU (`numpy` arrays, KUPL backend)
 
 | Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
 |---|---|---|---|
-| batched matmul, 32×256² | 9.3 ms | 97.1 ms | **10.6×** |
-| ellipsis, 16×128×128 | 1.1 ms | 6.3 ms | **5.8×** |
-| 3-operand chain, 3×500 | 3.1 ms | 3.2 ms | 1.03× |
-| complex matmul, 800² | 20.4 ms | 21.0 ms | 1.03× |
-| Hadamard, 4000² | 30.1 ms | 30.2 ms | 1.00× |
-| outer product, 2000×2000 | 4.1 ms | 4.1 ms | 1.00× |
-| 4-operand chain, 300 | 1.15 ms | 1.11 ms | 1.00× |
-| matmul, 1000² | 10.7 ms | 10.2 ms | 0.97× |
+| nucleon 2pt, nvec=112 (kernel) | 2.38 s | 44.24 s | **18.6×** |
+| batched GEMM, 16×1024² | 0.25 s | 2.91 s | **11.9×** |
+| ellipsis, 256×512² | 0.65 s | 5.92 s | **9.18×** |
+| γ sandwich, 8192×1024 (kernel) | 0.25 s | 1.93 s | **7.83×** |
+| many small batches, 4096×64² | 0.087 s | 0.201 s | **2.32×** |
+| outer product, 8000 | 0.051 s | 0.083 s | **1.62×** |
+| element-wise, 12000² | 0.20 s | 0.25 s | **1.25×** |
+| chain 3 ops, 3×3072 | 0.54 s | 0.59 s | **1.07×** |
+| matmul 2D (complex), 2048² | 0.31 s | 0.32 s | 1.04× |
+| full reduction, 12000² | 0.039 s | 0.040 s | 1.02× |
+| partial reduction, 16000² | 0.090 s | 0.092 s | 1.02× |
+| batch × matrix, 8×1024×512 | 0.044 s | 0.045 s | 1.01× |
+| chain 4 ops, 4×2048 | 0.26 s | 0.26 s | 1.00× |
+| matmul 2D (real), 4096² | 0.63 s | 0.63 s | 0.99× |
+| hyper-edge, 2048² | 0.088 s | 0.082 s | 0.93× |
 
-### GPU
+### GPU (`cupy` arrays, CUDA backend)
 
 | Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
 |---|---|---|---|
-| γ sandwich, 512×512 | 3.3 ms | 53.1 ms | **16.2×** |
-| nucleon 2pt, nvec=64 (kernel) | 146 ms | 263 ms | **1.81×** |
-| batched GEMM, 32×512² | 178 ms | 167 ms | 0.94× |
+| γ sandwich, 8192×1024 (fused kernel) | 0.51 s | 2.05 s | **4.04×** |
+| nucleon 2pt, nvec=112 (kernel) | 0.91 s | 2.43 s | **2.68×** |
+| full reduction, 12000² | 0.017 s | 0.036 s | **2.13×** |
+| matmul 2D (complex), 2048² | 0.48 s | 0.55 s | **1.15×** |
+| batch × matrix, 8×1024×512 | 0.071 s | 0.080 s | **1.13×** |
+| ellipsis, 256×512² | 0.52 s | 0.58 s | **1.11×** |
+| chain 3 ops, 3×3072 | 0.57 s | 0.63 s | **1.10×** |
+| chain 4 ops, 4×2048 | 0.37 s | 0.41 s | **1.10×** |
+| batched GEMM, 16×1024² | 0.35 s | 0.38 s | **1.09×** |
+| matmul 2D (real), 4096² | 0.67 s | 0.71 s | **1.05×** |
+| element-wise, 12000² | 0.015 s | 0.015 s | 1.02× |
+| hyper-edge, 2048² | 0.157 s | 0.160 s | 1.02× |
+| outer product, 8000 | 0.003 s | 0.003 s | 1.00× |
+| partial reduction, 16000² | 0.009 s | 0.009 s | 1.00× |
+| many small batches, 4096×64² | 0.034 s | 0.033 s | 0.96× |
+
+GPU rows are GPU against GPU. Rows below ~0.05 s are bandwidth-bound on the GPU, so
+their ratios are barely above noise; the same caveat applies to the 0.09 s CPU rows.
+
+## Why some rows are 10–19× and others are 1.0×
+
+The large ratios are **not** general speedups — they are three specific effects, each
+measurable:
+
+1. **The reference materialises a huge intermediate.** For the nucleon 2pt network
+   `opt_einsum`'s `dp` path needs 7 steps and peaks at an 89.9 M-element intermediate
+   (1.44 GB in `complex128`), while the inputs total only 11.8 M elements. Our kernel
+   contracts the network in one pass over the `n³` block structure. That is where
+   44 s → 2.4 s (18.6×) comes from — the arithmetic is the same, the traffic is not.
+
+2. **The reference does not turn a batch axis into a batched BLAS call.** On
+   `bij,bjk->bik` with 16×1024², `opt_einsum` executes its single path step in 2.99 s,
+   while `numpy.matmul` on the same arrays takes 0.28 s and `numpy.einsum(optimize=…)`
+   0.27 s. Our 0.25 s is simply the floor. So the 11.9× is "the reference is 11× above
+   the hardware floor", not "we are 11× faster than BLAS".
+
+3. **The reference pays per-batch pack/copy on the sandwich shape.** `ab,...bce,cd->...dae`
+   needs 2 steps and a 33.6 M-element intermediate (537 MB) in `opt_einsum`; the fused
+   CUDA kernel writes the result once, which is the 4× on GPU and 7.8× on CPU.
+
+The honest summary: on the generic shapes both libraries sit at parity (0.93–1.15×),
+and the two-digit multiples appear exactly where an intermediate gets avoided or a
+batch axis becomes one batched GEMM.
 
 ## What runs where
 
@@ -179,141 +207,94 @@ check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2p
 
 ## Reproduce
 
-### CPU, production scale
+One script, both tables: `python bench.py cpu` then `python bench.py gpu`.
 
-These two scripts run for minutes; the documentation gate skips them (`# docs-skip`)
-but still executes every other block.
+### The benchmark
 
 ```python
-import statistics
-import time
-
+import statistics, sys, time, warnings
 import numpy as np
 import opt_einsum as oe
-import pyqcd
+import pyqcd, pyqcd.einsum as pe
 
-import pyqcd.einsum as pe
-
-print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)   # docs-skip: 生产尺度基准，单次 0.4–2.7 s，门禁不跑
-
-
-def one(call):
-    start = time.perf_counter()
-    call()
-    return time.perf_counter() - start
-
-
-def compare(ours, theirs, rounds=3):
-    """One warm-up call, then `rounds` interleaved timed calls (seconds)."""
-    ours()
-    theirs()
-    left, right, ratios = [], [], []
-    for _ in range(rounds):
-        a = one(ours)
-        b = one(theirs)
-        left.append(a)
-        right.append(b)
-        ratios.append(b / a)
-    return statistics.median(left), statistics.median(right), statistics.median(ratios)
-
+DEVICE = sys.argv[1] if len(sys.argv) > 1 else "cpu"   # cpu | gpu  # docs-skip: 15 case 基准，门禁不跑
+ROUNDS = 3
+if DEVICE == "gpu":
+    import cupy as cp
+    to_dev = lambda a: cp.asarray(a)
+    sync = lambda: cp.cuda.Device(0).synchronize()
+    release = lambda: (cp.get_default_memory_pool().free_all_blocks(),
+                       cp.get_default_pinned_memory_pool().free_all_blocks())
+    name = cp.cuda.runtime.getDeviceProperties(0)["name"].decode()
+else:
+    to_dev = lambda a: a
+    sync = lambda: None
+    release = lambda: None
+    name = "cpu"
+print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", name)
 
 rng = np.random.default_rng(0)
-real = lambda *s: rng.standard_normal(s)
-cplx = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128)
+real = lambda *s: to_dev(rng.standard_normal(s))
+cplx = lambda *s: to_dev((rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128))
 
-# Sized so that one call takes roughly 0.5-1.5 s: shorter runs measure timer and
-# cache noise, not the contraction, and they hide the BLAS register-blocking regime.
+def one(call, inner=1):
+    sync(); best = float("inf")
+    for _ in range(inner):
+        start = time.perf_counter(); call(); sync()
+        best = min(best, time.perf_counter() - start)
+    return best
+
 CASES = [
-    ("matmul 4600^2", "ij,jk->ik", [real(4600, 4600), real(4600, 4600)]),
-    ("chain 3x3570", "ij,jk,kl->il", [real(3570, 3570)] * 3),
-    ("batched 32x1024^2", "bij,bjk->bik", [real(32, 1024, 1024), real(32, 1024, 1024)]),
-    ("ellipsis 256x512^2", "...ij,...jk->...ik",
-     [real(256, 512, 512), real(256, 512, 512)]),
-    ("complex mm 3100^2", "ij,jk->ik", [cplx(3100, 3100), cplx(3100, 3100)]),
-    ("hadamard 16000^2", "ij,ij->ij", [real(16000, 16000), real(16000, 16000)]),
+    ("matmul 2D (real)",        "ij,jk->ik",        lambda: [real(4096, 4096), real(4096, 4096)]),
+    ("matmul 2D (complex)",     "ij,jk->ik",        lambda: [cplx(2048, 2048), cplx(2048, 2048)]),
+    ("element-wise",            "ij,ij->ij",        lambda: [real(12000, 12000), real(12000, 12000)]),
+    ("outer product",           "i,j->ij",          lambda: [real(8000), real(8000)]),
+            ("full reduction",          "ij,ij->",          lambda: [real(12000, 12000), real(12000, 12000)]),
+    ("partial reduction",       "ij->i",            lambda: [real(16000, 16000)]),
+    ("chain 3 ops",             "ij,jk,kl->il",     lambda: [real(3072, 3072) for _ in range(3)]),
+    ("chain 4 ops",             "ij,jk,kl,lm->im",  lambda: [real(2048, 2048) for _ in range(4)]),
+    ("hyper-edge",              "ij,jk,ik->i",      lambda: [real(2048, 2048) for _ in range(3)]),
+    ("batched GEMM",            "bij,bjk->bik",     lambda: [real(16, 1024, 1024), real(16, 1024, 1024)]),
+    ("ellipsis",                "...ij,...jk->...ik", lambda: [real(256, 512, 512), real(256, 512, 512)]),
+    ("batch × matrix",          "abc,cd->abd",      lambda: [real(8, 1024, 512), real(512, 1024)]),
+    ("many small batches",      "bij,bjk->bik",     lambda: [real(4096, 64, 64), real(4096, 64, 64)]),
+    ("nucleon 2pt (kernel)",    "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",
+     lambda: [cplx(4,4,112,112), cplx(4,4,112,112), cplx(4,4,112,112), cplx(4,4), cplx(4,4),
+              cplx(4,112,112,112), cplx(4,112,112,112), cplx(4,4)]),
+    ("gamma sandwich (kernel)", "ab,...bce,cd->...dae", lambda: [cplx(4,4), cplx(8192,4,4,1024), cplx(4,4)]),
 ]
-
-print(f"{'case':22s} {'pyqcd(s)':>9s} {'opt(s)':>8s} {'ratio':>6s}")
-for label, equation, operands in CASES:
-    reference = np.einsum(equation, *operands, optimize="optimal")
-    assert np.allclose(np.asarray(pe.contract(equation, *operands)), reference), label
-    ours, theirs, ratio = compare(lambda: pe.contract(equation, *operands),
-                                  lambda: oe.contract(equation, *operands, optimize="dp"))
-    print(f"{label:22s} {ours:9.2f} {theirs:8.2f} {ratio:6.2f}")
+print(f"{'case':26s} {'pyqcd(s)':>9s} {'opt(s)':>9s} {'ratio':>6s}")
+for label, equation, make in CASES:
+    operands = make()
+    ref = oe.contract(equation, *operands, optimize="dp")
+    got = pe.contract(equation, *operands)
+    g = cp.asnumpy(got) if DEVICE == "gpu" else np.asarray(got)
+    r = cp.asnumpy(ref) if DEVICE == "gpu" else np.asarray(ref)
+    assert np.max(np.abs(g - r), initial=0.0) <= 1e-10 * max(np.max(np.abs(r)), 1e-30), label
+    del ref, got, g, r
+    release()
+    probe_t = one(lambda: pe.contract(equation, *operands))
+    inner = max(1, min(9, int(0.3 / max(probe_t, 1e-6))))
+    ours, theirs = [], []
+    for rnd in range(ROUNDS):
+        if rnd % 2 == 0:          # alternate the order: the second runner inherits a warm cache
+            ours.append(one(lambda: pe.contract(equation, *operands), inner))
+            theirs.append(one(lambda: oe.contract(equation, *operands, optimize="dp"), inner))
+        else:
+            theirs.append(one(lambda: oe.contract(equation, *operands, optimize="dp"), inner))
+            ours.append(one(lambda: pe.contract(equation, *operands), inner))
+        release()
+    a, b = statistics.median(ours), statistics.median(theirs)
+    print(f"{label:26s} {a:9.3f} {b:9.3f} {b / a:6.2f}")
+    del operands
+    release()
 ```
 
-### GPU, production scale
-
-```python
-import statistics
-import time
-import warnings
-
-import numpy as np
-import pyqcd
-
-import cupy as cp
-import opt_einsum as oe
-import pyqcd.einsum as pe
-
-print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__, "|",  # docs-skip: GPU 基准
-      cp.cuda.runtime.getDeviceProperties(0)["name"].decode())
-
-
-def one(call):
-    call()
-    cp.cuda.Device(0).synchronize()
-    start = time.perf_counter()
-    call()
-    cp.cuda.Device(0).synchronize()
-    return time.perf_counter() - start
-
-
-def compare(ours, theirs, rounds=3):
-    left, right, ratios = [], [], []
-    for _ in range(rounds):
-        a = one(ours)
-        b = one(theirs)
-        left.append(a)
-        right.append(b)
-        ratios.append(b / a)
-    return statistics.median(left), statistics.median(right), statistics.median(ratios)
-
-
-rng = np.random.default_rng(0)
-
-
-def g(*shape):
-    return cp.asarray(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
-
-
-n = 112                                                  # production-shaped nucleon 2pt
-nucleon = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
-nucleon_ops = [g(4, 4, n, n), g(4, 4, n, n), g(4, 4, n, n), g(4, 4), g(4, 4),
-               g(4, n, n, n), g(4, n, n, n), g(4, 4)]
-sandwich_ops = [g(4, 4), g(8192, 4, 4, 1024), g(4, 4)]
-batched_ops = [g(16, 1024, 1024), g(16, 1024, 1024)]
-
-CASES = [("nucleon 2pt nvec=112", nucleon, nucleon_ops),
-         ("gamma sandwich 8192x1024", "ab,...bce,cd->...dae", sandwich_ops),
-         ("batched GEMM 16x1024^2", "bij,bjk->bik", batched_ops)]
-
-print(f"{'case':26s} {'pyqcd(s)':>9s} {'opt(s)':>8s} {'ratio':>6s}")
-for label, equation, operands in CASES:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        reference = cp.asnumpy(oe.contract(equation, *operands, optimize="dp"))
-        assert np.allclose(cp.asnumpy(pe.contract(equation, *operands)), reference,
-                           rtol=1e-10, atol=1e-12), label
-        ours, theirs, ratio = compare(
-            lambda: pe.contract(equation, *operands),
-            lambda: oe.contract(equation, *operands, optimize="dp"))
-    print(f"{label:26s} {ours:9.2f} {theirs:8.2f} {ratio:6.2f}")
-```
-
-Before running anything, check which build you are measuring — a stale `pyqcd` in
-`site-packages` silently turns every number into "PyQCD is slow":
+### Before you trust a number
 
 ```bash
 python -m pyqcd --gpu-probe
 ```
+
+A stale `pyqcd` in `site-packages` turns every number into "PyQCD is slow"; the script
+prints `pyqcd.__version__` and `pyqcd.__file__` for exactly that reason.

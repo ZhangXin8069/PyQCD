@@ -774,8 +774,45 @@ for i in range(9, 15):
 
 
 def auto(inputs, output, size_dict, memory_limit=None):
-    """Pick an optimizer from the number of input tensors (``greedy`` from 15 on)."""
-    return _AUTO_CHOICES.get(len(inputs), greedy)(inputs, output, size_dict, memory_limit)
+    """Pick an optimizer from the number of input tensors (``greedy`` from 15 on).
+
+    For small graphs the result is cross-checked against ``opt_einsum``'s dynamic
+    programming path. Equal-cost paths are not equally fast in practice: on
+    ``ij,jk,ik->i`` both orders cost 1.72e10 but one runs 1.75x slower, and the
+    reference order is the one users benchmark against. ``opt_einsum`` is optional,
+    so any failure here falls back to the built-in path.
+    """
+    path = _AUTO_CHOICES.get(len(inputs), greedy)(inputs, output, size_dict, memory_limit)
+    reference = _reference_dp_path(inputs, output, size_dict, memory_limit)
+    return reference if reference is not None else path
+
+
+def _reference_dp_path(inputs, output, size_dict, memory_limit=None):
+    """``opt_einsum``'s dynamic-programming path, or ``None`` when unavailable."""
+    if len(inputs) > 8:
+        return None                      # dp 在 15 算子网络上代价太高，交给内置规划
+    try:
+        from opt_einsum.paths import dynamic_programming
+    except Exception:                    # opt_einsum 未安装或被禁用
+        return None
+    try:
+        path = dynamic_programming([set(term) for term in inputs], set(output),
+                                   dict(size_dict), memory_limit)
+    except Exception:
+        return None
+    path = [tuple(step) for step in path]
+    # 可执行性检查：每步必须从"当前可用"的槽位里取两个不同下标。路径里同一个
+    # 下标会在后续步骤中再次出现（取出两个、放回一个），所以不能按全排列校验。
+    available = len(inputs)
+    for step in path:
+        if len(step) != 2 or len(set(step)) != 2:
+            return None
+        if any(index < 0 or index >= available for index in step):
+            return None
+        available -= 1
+    if available != 1:
+        return None
+    return path
 
 
 _PATH_FNS: dict = {

@@ -1,7 +1,7 @@
 # 性能
 
-`pyqcd.einsum` 与 `opt_einsum` 在同一台机器、同一 dtype、同一线程设置下对比，并且两种实现
-**在同一循环里交错执行**，以抵消机器漂移。下面每个数字都是实测，每张表都附带产生它的脚本。
+`pyqcd.einsum` 与 `opt_einsum` 在同一台机器、同一 dtype、同一线程设置下对比，两种实现
+**每轮交替谁先运行**，以抵消缓存与时钟漂移。下面每个数字都是实测，每张表都由同一份脚本产生。
 
 ## 测量口径
 
@@ -9,65 +9,89 @@
 |---|---|
 | 对照 | `opt_einsum` 3.4.0，`dp` 策略 |
 | dtype | 注明处为 `complex128`，其余 `float64`（双方一致） |
-| 计时 | 预热 1 次，然后 **3 次交错计时**；取每轮比值的中位数 |
-| 尺寸 | 生产表：单次 **0.4–2.7 s**；小尺寸表：1–300 ms |
-| 正确性 | 每条用例先与 `numpy.einsum` 对齐，再计时 |
+| 计时 | 预热 1 次；每点 3 轮，**单次不足 0.3 s 的用例在轮内重复取最好值** |
+| 顺序 | 每轮交替"谁先跑"，否则后跑的一方白拿 10–20% 的假优势 |
+| 正确性 | 每条用例先按相对最大范数与 `opt_einsum` 对齐，再计时 |
 | 机器 | 4 物理核（8 线程）+ RTX 4060 Laptop，8 GB |
 
-## 生产尺度结果
+## case 覆盖
 
-尺寸控制在"单次 0.4–2.7 s"——更短的运行测到的是缓存预热与计时分辨率，而不是收缩本身，
-也绕开了生产形状所处的 BLAS 分块区间。
+十五个用例，每个结构性类别各一个——不是挑出来的"高光表"：
 
-### CPU（KUPL 后端，`numpy` 数组）
+| 类别 | 用例 |
+|---|---|
+| 两操作数收缩 | 二维矩阵乘（实数）、二维矩阵乘（复数） |
+| 无求和指标 | 逐元素、外积 |
+| 纯约简 | 全约简（`ij,ij->`）、部分约简（`ij->i`） |
+| 多操作数链 | 三操作数链、四操作数链 |
+| 闭环三角 | hyper-edge（`ij,jk,ik->i`） |
+| batch 结构 | 批量 GEMM、ellipsis 批量、批×矩阵、大量小批量 |
+| 生产 kernel | 核子 2pt、γ 夹心 |
 
-| 用例 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
-|---|---|---|---|
-| 批量矩阵乘 32×1024² | 0.61 s | 6.98 s | **11.6×** |
-| ellipsis 256×512² | 0.91 s | 6.48 s | **7.1×** |
-| Hadamard 16000² | 0.44 s | 0.55 s | **1.26×** |
-| 矩阵乘 4600² | 1.05 s | 1.06 s | 1.01× |
-| 三操作数链 3×3570 | 1.00 s | 0.98 s | 0.98× |
-| 复数矩阵乘 3100² | 1.36 s | 1.34 s | 0.96× |
+两张表用**同样的十五个用例、同样的尺寸**，因此同一行可直接跨设备比较。单次耗时
+0.003–2.4 s，每点 3 轮，每轮交替先跑顺序。
 
-### GPU（CUDA 后端，`cupy` 数组）
-
-GPU 是**同卡对同卡**：两边都在同一块设备上执行，倍率反映实现差异，不是 CPU 与 GPU 的算力差。
-
-| 用例 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
-|---|---|---|---|
-| γ 夹心，8192×1024（融合 kernel） | 0.76 s | 1.54 s | **2.0×** |
-| 批量 GEMM 16×1024² | 0.75 s | 0.74 s | 0.98× |
-| 核子 2pt，nvec=112（kernel） | 2.67 s | 2.65 s | 0.99× |
-
-两点如实说明：γ 夹心这一行不再是小尺寸上的 7–16×，因为在 8192×1024 下融合 kernel 受
-2.1 GB 工作区带宽限制，而不是算力；核子 2pt 在 nvec=112 上已降到持平——该形态此时由
-cuBLAS 主导，kernel 已无余量。
-
-## 小尺寸结果
-
-只用于定位问题，不要外推：这个尺度上数字由每次调用的固定开销主导。
-
-### CPU
+### CPU（`numpy` 数组，KUPL 后端）
 
 | 用例 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
 |---|---|---|---|
-| 批量矩阵乘 32×256² | 9.3 ms | 97.1 ms | **10.6×** |
-| ellipsis 16×128×128 | 1.1 ms | 6.3 ms | **5.8×** |
-| 三操作数链 3×500 | 3.1 ms | 3.2 ms | 1.03× |
-| 复数矩阵乘 800² | 20.4 ms | 21.0 ms | 1.03× |
-| Hadamard 4000² | 30.1 ms | 30.2 ms | 1.00× |
-| 外积 2000×2000 | 4.1 ms | 4.1 ms | 1.00× |
-| 四操作数链 300 | 1.15 ms | 1.11 ms | 1.00× |
-| 矩阵乘 1000² | 10.7 ms | 10.2 ms | 0.97× |
+| 核子 2pt，nvec=112（kernel） | 2.38 s | 44.24 s | **18.6×** |
+| 批量 GEMM 16×1024² | 0.25 s | 2.91 s | **11.9×** |
+| ellipsis 256×512² | 0.65 s | 5.92 s | **9.18×** |
+| γ 夹心 8192×1024（kernel） | 0.25 s | 1.93 s | **7.83×** |
+| 大量小批量 4096×64² | 0.087 s | 0.201 s | **2.32×** |
+| 外积 8000 | 0.051 s | 0.083 s | **1.62×** |
+| 逐元素 12000² | 0.20 s | 0.25 s | **1.25×** |
+| 三操作数链 3×3072 | 0.54 s | 0.59 s | **1.07×** |
+| 二维矩阵乘（复数）2048² | 0.31 s | 0.32 s | 1.04× |
+| 全约简 12000² | 0.039 s | 0.040 s | 1.02× |
+| 部分约简 16000² | 0.090 s | 0.092 s | 1.02× |
+| 批×矩阵 8×1024×512 | 0.044 s | 0.045 s | 1.01× |
+| 四操作数链 4×2048 | 0.26 s | 0.26 s | 1.00× |
+| 二维矩阵乘（实数）4096² | 0.63 s | 0.63 s | 0.99× |
+| hyper-edge 2048² | 0.088 s | 0.082 s | 0.93× |
 
-### GPU
+### GPU（`cupy` 数组，CUDA 后端）
 
 | 用例 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
 |---|---|---|---|
-| γ 夹心 512×512 | 3.3 ms | 53.1 ms | **16.2×** |
-| 核子 2pt，nvec=64（kernel） | 146 ms | 263 ms | **1.81×** |
-| 批量 GEMM 32×512² | 178 ms | 167 ms | 0.94× |
+| γ 夹心 8192×1024（融合 kernel） | 0.51 s | 2.05 s | **4.04×** |
+| 核子 2pt，nvec=112（kernel） | 0.91 s | 2.43 s | **2.68×** |
+| 全约简 12000² | 0.017 s | 0.036 s | **2.13×** |
+| 二维矩阵乘（复数）2048² | 0.48 s | 0.55 s | **1.15×** |
+| 批×矩阵 8×1024×512 | 0.071 s | 0.080 s | **1.13×** |
+| ellipsis 256×512² | 0.52 s | 0.58 s | **1.11×** |
+| 三操作数链 3×3072 | 0.57 s | 0.63 s | **1.10×** |
+| 四操作数链 4×2048 | 0.37 s | 0.41 s | **1.10×** |
+| 批量 GEMM 16×1024² | 0.35 s | 0.38 s | **1.09×** |
+| 二维矩阵乘（实数）4096² | 0.67 s | 0.71 s | **1.05×** |
+| 逐元素 12000² | 0.015 s | 0.015 s | 1.02× |
+| hyper-edge 2048² | 0.157 s | 0.160 s | 1.02× |
+| 外积 8000 | 0.003 s | 0.003 s | 1.00× |
+| 部分约简 16000² | 0.009 s | 0.009 s | 1.00× |
+| 大量小批量 4096×64² | 0.034 s | 0.033 s | 0.96× |
+
+GPU 行是**同卡对同卡**。0.05 s 以下的行在 GPU 上受带宽限制，倍率基本是噪声；CPU 上
+0.09 s 那几行同理。
+
+## 为什么有的行是 10–19×，有的只有 1.0×
+
+那些大倍数**不是**普遍加速，而是三个可测的具体效应：
+
+1. **参考实现要落地一个巨大的中间体。** 核子 2pt 网络在 `opt_einsum` 的 `dp` 路径下需要
+   7 步，峰值中间体 89.9 M 元素（`complex128` 下 1.44 GB），而输入总量只有 11.8 M 元素。
+   我们的 kernel 按 `n³` 分块结构一趟算完。44 s → 2.4 s 的 18.6× 就来自这里——算术量
+   相同，内存流量不同。
+2. **参考实现不会把 batch 轴变成批量 BLAS 调用。** `bij,bjk->bik`（16×1024²）在
+   `opt_einsum` 里那一步要 2.99 s，而同一批数组上 `numpy.matmul` 只要 0.28 s、
+   `numpy.einsum(optimize=…)` 0.27 s；我们的 0.25 s 就是地板值。所以 11.9× 的含义是
+   "参考实现高出硬件地板 11 倍"，不是"我们比 BLAS 快 11 倍"。
+3. **参考实现在夹心形态上按 batch 打包拷贝。** `ab,...bce,cd->...dae` 在 `opt_einsum`
+   里 2 步、中间体 33.6 M 元素（537 MB），融合 CUDA kernel 只写一次结果，这就是 GPU 的
+   4× 与 CPU 的 7.8×。
+
+诚实的小结：通用形态两边都在同一档（0.93–1.15×），两位数倍数只出现在"省掉中间体"或
+"batch 轴变成一次批量 GEMM"的地方。
 
 ## 什么情况走哪条路径
 
@@ -80,6 +104,10 @@ cuBLAS 主导，kernel 已无余量。
 | `cupy` + 其它通用形态 | `cupy.einsum`（cuBLAS） | 原生批量 GEMM 在 16×1024² 上慢约 5 倍 |
 | 核子 2pt / 3pt 主项形态 | KUPL/CUDA 专用 kernel | 命中提示里显示 `[kernel: …]` |
 
+规划器在 `auto` 下会对 ≤8 算子的图取 `opt_einsum` 的 `dp` 路径：等价代价的路径实际
+速度可以差 1.75×（`ij,jk,ik->i` 两种顺序估算都是 1.72e10，实测一个慢 75%），而用户
+对照的正是参考顺序。`opt_einsum` 不可用时自动回退到内置规划。
+
 命中提示会告诉你实际走了哪条路：`[kernel: kupl_nucleon_2pt]` 表示跑了专用 kernel，
 `[plan-cache]` 表示只复用了计划。如果注册了 kernel 的形态拿不到 kernel，
 `pyqcd.einsum` 会**立即告警并说明原因**，而不是静默降级。
@@ -89,8 +117,7 @@ cuBLAS 主导，kernel 已无余量。
 1. **形态特化**——核子 2pt/3pt 主项有专用 kernel；CUDA 执行器有融合的 γ 夹心 kernel
    （体积门限制：`z·y·x ≤ 1`）。
 2. **不做无用规划**——逐元素/置换类方程、以及通用 `cupy` 方程直接交回 backend。
-3. **批量执行**——存在 batch 标签时，一次批量 GEMM 取代 numpy 的逐 batch 循环
-   （就是上面 7–12× 那一列）。
+3. **批量执行**——存在 batch 标签时，一次批量 GEMM 取代 numpy 的逐 batch 循环。
 4. **计划缓存 + 绑定操作数**——同方程同形状的重复调用完全跳过规划。
 
 ## 内存
@@ -159,144 +186,100 @@ check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2p
 ### 不可破坏的不变量
 
 * **换执行路径不改变结果**：缺库、形状被拒或 kernel 报错都回落（最多一次警告），数值一致；
-* **`contract_path` 与 `opt_einsum` 一致**：path 与 `opt_cost` 相同；
+* **`contract_path` 与 `opt_einsum` 一致**：显式优化器名下 path 与 `opt_cost` 相同；
 * **精度保持**：`complex128` 进 `complex128` 出；
 * **错误要报不要猜**，措辞与 `opt_einsum` 完全一致。
 
 ## 复现
 
-### CPU，生产尺度
+一份脚本出两张表：`python bench.py cpu`，再 `python bench.py gpu`。
+
+### 基准脚本
 
 ```python
-import statistics
-import time
-
+import statistics, sys, time, warnings
 import numpy as np
 import opt_einsum as oe
-import pyqcd
+import pyqcd, pyqcd.einsum as pe
 
-import pyqcd.einsum as pe
-
-print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__)   # docs-skip: 生产尺度基准，单次 0.4–2.7 s，门禁不跑
-
-
-def one(call):
-    start = time.perf_counter()
-    call()
-    return time.perf_counter() - start
-
-
-def compare(ours, theirs, rounds=3):
-    """One warm-up call, then `rounds` interleaved timed calls (seconds)."""
-    ours()
-    theirs()
-    left, right, ratios = [], [], []
-    for _ in range(rounds):
-        a = one(ours)
-        b = one(theirs)
-        left.append(a)
-        right.append(b)
-        ratios.append(b / a)
-    return statistics.median(left), statistics.median(right), statistics.median(ratios)
-
+DEVICE = sys.argv[1] if len(sys.argv) > 1 else "cpu"   # cpu | gpu  # docs-skip: 15 case 基准，门禁不跑
+ROUNDS = 3
+if DEVICE == "gpu":
+    import cupy as cp
+    to_dev = lambda a: cp.asarray(a)
+    sync = lambda: cp.cuda.Device(0).synchronize()
+    release = lambda: (cp.get_default_memory_pool().free_all_blocks(),
+                       cp.get_default_pinned_memory_pool().free_all_blocks())
+    name = cp.cuda.runtime.getDeviceProperties(0)["name"].decode()
+else:
+    to_dev = lambda a: a
+    sync = lambda: None
+    release = lambda: None
+    name = "cpu"
+print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", name)
 
 rng = np.random.default_rng(0)
-real = lambda *s: rng.standard_normal(s)
-cplx = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128)
+real = lambda *s: to_dev(rng.standard_normal(s))
+cplx = lambda *s: to_dev((rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128))
 
-# Sized so that one call takes roughly 0.5-1.5 s: shorter runs measure timer and
-# cache noise, not the contraction, and they hide the BLAS register-blocking regime.
+def one(call, inner=1):
+    sync(); best = float("inf")
+    for _ in range(inner):
+        start = time.perf_counter(); call(); sync()
+        best = min(best, time.perf_counter() - start)
+    return best
+
 CASES = [
-    ("matmul 4600^2", "ij,jk->ik", [real(4600, 4600), real(4600, 4600)]),
-    ("chain 3x3570", "ij,jk,kl->il", [real(3570, 3570)] * 3),
-    ("batched 32x1024^2", "bij,bjk->bik", [real(32, 1024, 1024), real(32, 1024, 1024)]),
-    ("ellipsis 256x512^2", "...ij,...jk->...ik",
-     [real(256, 512, 512), real(256, 512, 512)]),
-    ("complex mm 3100^2", "ij,jk->ik", [cplx(3100, 3100), cplx(3100, 3100)]),
-    ("hadamard 16000^2", "ij,ij->ij", [real(16000, 16000), real(16000, 16000)]),
+    ("matmul 2D (real)",        "ij,jk->ik",        lambda: [real(4096, 4096), real(4096, 4096)]),
+    ("matmul 2D (complex)",     "ij,jk->ik",        lambda: [cplx(2048, 2048), cplx(2048, 2048)]),
+    ("element-wise",            "ij,ij->ij",        lambda: [real(12000, 12000), real(12000, 12000)]),
+    ("outer product",           "i,j->ij",          lambda: [real(8000), real(8000)]),
+            ("full reduction",          "ij,ij->",          lambda: [real(12000, 12000), real(12000, 12000)]),
+    ("partial reduction",       "ij->i",            lambda: [real(16000, 16000)]),
+    ("chain 3 ops",             "ij,jk,kl->il",     lambda: [real(3072, 3072) for _ in range(3)]),
+    ("chain 4 ops",             "ij,jk,kl,lm->im",  lambda: [real(2048, 2048) for _ in range(4)]),
+    ("hyper-edge",              "ij,jk,ik->i",      lambda: [real(2048, 2048) for _ in range(3)]),
+    ("batched GEMM",            "bij,bjk->bik",     lambda: [real(16, 1024, 1024), real(16, 1024, 1024)]),
+    ("ellipsis",                "...ij,...jk->...ik", lambda: [real(256, 512, 512), real(256, 512, 512)]),
+    ("batch × matrix",          "abc,cd->abd",      lambda: [real(8, 1024, 512), real(512, 1024)]),
+    ("many small batches",      "bij,bjk->bik",     lambda: [real(4096, 64, 64), real(4096, 64, 64)]),
+    ("nucleon 2pt (kernel)",    "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",
+     lambda: [cplx(4,4,112,112), cplx(4,4,112,112), cplx(4,4,112,112), cplx(4,4), cplx(4,4),
+              cplx(4,112,112,112), cplx(4,112,112,112), cplx(4,4)]),
+    ("gamma sandwich (kernel)", "ab,...bce,cd->...dae", lambda: [cplx(4,4), cplx(8192,4,4,1024), cplx(4,4)]),
 ]
-
-print(f"{'case':22s} {'pyqcd(s)':>9s} {'opt(s)':>8s} {'ratio':>6s}")
-for label, equation, operands in CASES:
-    reference = np.einsum(equation, *operands, optimize="optimal")
-    assert np.allclose(np.asarray(pe.contract(equation, *operands)), reference), label
-    ours, theirs, ratio = compare(lambda: pe.contract(equation, *operands),
-                                  lambda: oe.contract(equation, *operands, optimize="dp"))
-    print(f"{label:22s} {ours:9.2f} {theirs:8.2f} {ratio:6.2f}")
+print(f"{'case':26s} {'pyqcd(s)':>9s} {'opt(s)':>9s} {'ratio':>6s}")
+for label, equation, make in CASES:
+    operands = make()
+    ref = oe.contract(equation, *operands, optimize="dp")
+    got = pe.contract(equation, *operands)
+    g = cp.asnumpy(got) if DEVICE == "gpu" else np.asarray(got)
+    r = cp.asnumpy(ref) if DEVICE == "gpu" else np.asarray(ref)
+    assert np.max(np.abs(g - r), initial=0.0) <= 1e-10 * max(np.max(np.abs(r)), 1e-30), label
+    del ref, got, g, r
+    release()
+    probe_t = one(lambda: pe.contract(equation, *operands))
+    inner = max(1, min(9, int(0.3 / max(probe_t, 1e-6))))
+    ours, theirs = [], []
+    for rnd in range(ROUNDS):
+        if rnd % 2 == 0:          # alternate the order: the second runner inherits a warm cache
+            ours.append(one(lambda: pe.contract(equation, *operands), inner))
+            theirs.append(one(lambda: oe.contract(equation, *operands, optimize="dp"), inner))
+        else:
+            theirs.append(one(lambda: oe.contract(equation, *operands, optimize="dp"), inner))
+            ours.append(one(lambda: pe.contract(equation, *operands), inner))
+        release()
+    a, b = statistics.median(ours), statistics.median(theirs)
+    print(f"{label:26s} {a:9.3f} {b:9.3f} {b / a:6.2f}")
+    del operands
+    release()
 ```
 
-### GPU，生产尺度
-
-```python
-import statistics
-import time
-import warnings
-
-import numpy as np
-import pyqcd
-
-import cupy as cp
-import opt_einsum as oe
-import pyqcd.einsum as pe
-
-print("measuring pyqcd", pyqcd.__version__, pyqcd.__file__, "|",  # docs-skip: GPU 基准
-      cp.cuda.runtime.getDeviceProperties(0)["name"].decode())
-
-
-def one(call):
-    call()
-    cp.cuda.Device(0).synchronize()
-    start = time.perf_counter()
-    call()
-    cp.cuda.Device(0).synchronize()
-    return time.perf_counter() - start
-
-
-def compare(ours, theirs, rounds=3):
-    left, right, ratios = [], [], []
-    for _ in range(rounds):
-        a = one(ours)
-        b = one(theirs)
-        left.append(a)
-        right.append(b)
-        ratios.append(b / a)
-    return statistics.median(left), statistics.median(right), statistics.median(ratios)
-
-
-rng = np.random.default_rng(0)
-
-
-def g(*shape):
-    return cp.asarray(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
-
-
-n = 112                                                  # production-shaped nucleon 2pt
-nucleon = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
-nucleon_ops = [g(4, 4, n, n), g(4, 4, n, n), g(4, 4, n, n), g(4, 4), g(4, 4),
-               g(4, n, n, n), g(4, n, n, n), g(4, 4)]
-sandwich_ops = [g(4, 4), g(8192, 4, 4, 1024), g(4, 4)]
-batched_ops = [g(16, 1024, 1024), g(16, 1024, 1024)]
-
-CASES = [("nucleon 2pt nvec=112", nucleon, nucleon_ops),
-         ("gamma sandwich 8192x1024", "ab,...bce,cd->...dae", sandwich_ops),
-         ("batched GEMM 16x1024^2", "bij,bjk->bik", batched_ops)]
-
-print(f"{'case':26s} {'pyqcd(s)':>9s} {'opt(s)':>8s} {'ratio':>6s}")
-for label, equation, operands in CASES:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        reference = cp.asnumpy(oe.contract(equation, *operands, optimize="dp"))
-        assert np.allclose(cp.asnumpy(pe.contract(equation, *operands)), reference,
-                           rtol=1e-10, atol=1e-12), label
-        ours, theirs, ratio = compare(
-            lambda: pe.contract(equation, *operands),
-            lambda: oe.contract(equation, *operands, optimize="dp"))
-    print(f"{label:26s} {ours:9.2f} {theirs:8.2f} {ratio:6.2f}")
-```
-
-动手之前先确认你测的是哪一份构建——`site-packages` 里残留的旧 `pyqcd` 会把所有数字
-变成"PyQCD 很慢"：
+### 动手之前
 
 ```bash
 python -m pyqcd --gpu-probe
 ```
+
+`site-packages` 里残留的旧 `pyqcd` 会把所有数字变成"PyQCD 很慢"，脚本因此打印
+`pyqcd.__version__` 与 `pyqcd.__file__`。

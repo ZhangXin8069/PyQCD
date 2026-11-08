@@ -115,28 +115,35 @@ axis; the CUDA backend has no MPI implementation.
 
 ## Performance
 
-Measured against `opt_einsum` 3.4.0 with the `dp` planner, both implementations
-interleaved inside one loop (so machine drift cancels), sized so a **single call
-takes 0.4–2.7 s**, three timed calls per point:
+Fifteen cases — one per structural category the library routes differently, not a
+highlight reel — measured against `opt_einsum` 3.4.0 (`dp`), alternating which
+implementation runs first every round, three rounds per case. The same cases and the
+same shapes appear in both columns, so the two device columns are directly comparable.
 
-| Case | `opt_einsum` | `pyqcd.einsum` | Ratio |
-|---|---|---|---|
-| batched matmul, 32×1024² (CPU) | 6.98 s | 0.61 s | **11.6x** |
-| ellipsis, 256×512² (CPU) | 6.48 s | 0.91 s | **7.1x** |
-| Hadamard, 16000² (CPU) | 0.55 s | 0.44 s | **1.26x** |
-| matmul, 4600² (CPU) | 1.06 s | 1.05 s | 1.01x |
-| 3-operand chain, 3×3570 (CPU) | 0.98 s | 1.00 s | 0.98x |
-| complex matmul, 3100² (CPU) | 1.34 s | 1.36 s | 0.96x |
-| γ sandwich, 8192×1024 (GPU) | 1.54 s | 0.76 s | **2.0x** |
-| batched GEMM, 16×1024² (GPU) | 0.74 s | 0.75 s | 0.98x |
-| nucleon 2pt, nvec=112 (GPU) | 2.65 s | 2.67 s | 0.99x |
+| Case (category) | CPU | GPU |
+|---|---|---|
+| nucleon 2pt, nvec=112 (kernel) | **18.6x** | **2.68x** |
+| batched GEMM, 16×1024² | **11.9x** | **1.09x** |
+| ellipsis, 256×512² | **9.18x** | **1.11x** |
+| γ sandwich, 8192×1024 (kernel) | **7.83x** | **4.04x** |
+| many small batches, 4096×64² | **2.32x** | 0.96x |
+| outer product, 8000 | **1.62x** | 1.00x |
+| element-wise, 12000² | **1.25x** | 1.02x |
+| chain 3 ops, 3×3072 | **1.07x** | **1.10x** |
+| matmul 2D complex, 2048² | 1.04x | **1.15x** |
+| full reduction, 12000² | 1.02x | **2.13x** |
+| partial reduction, 16000² | 1.02x | 1.00x |
+| batch × matrix, 8×1024×512 | 1.01x | **1.13x** |
+| chain 4 ops, 4×2048 | 1.00x | **1.10x** |
+| matmul 2D real, 4096² | 0.99x | **1.05x** |
+| hyper-edge, 2048² | 0.93x | 1.02x |
 
-Where the gains come from: shape-specialised kernels (nucleon 2pt/3pt, fused
-γ sandwich), batched execution when a batch index exists, and handing equations the
-planner cannot improve (element-wise, generic `cupy`) straight to the backend. Two
-caveats stated plainly: on the GPU the γ-sandwich advantage shrinks from 16× to 2×
-at production size (workspace bandwidth), and the nucleon-2pt kernel reaches parity
-at nvec=112 because the shape is already cuBLAS-bound.
+Read this honestly: the generic shapes sit at parity (0.93–1.15x). The double-digit
+CPU multiples come from two effects, both measured — `opt_einsum` materialises an
+89.9 M-element intermediate for the nucleon 2pt network (1.44 GB vs 11.8 M input
+elements), and it does not turn a batch axis into one batched BLAS call (2.99 s vs
+0.28 s for `numpy.matmul` on the same arrays). Where it does use BLAS, we are level
+with it, not 10× ahead.
 
 ```python
 import numpy as np
