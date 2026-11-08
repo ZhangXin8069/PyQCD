@@ -2648,6 +2648,15 @@ def test_correlated_fit_identifiability_guards():
     _run_unittest_contract(FitWindowValidationTests)
 
 
+def test_release_metadata_contracts():
+    """发布元数据一致性：版本三处对齐、子包清单、MANIFEST 策略、build_info 字段。"""
+    from . import _release_metadata_contract as contract
+
+    for name in sorted(dir(contract)):
+        if name.startswith("test_") and callable(getattr(contract, name)):
+            getattr(contract, name)()
+
+
 def test_bootstrap_resampling_contracts():
     """任意样本轴、分块 RNG、dtype 和 NumPy/CuPy/Torch 契约。"""
     from ._bootstrap_resampling_contract import (

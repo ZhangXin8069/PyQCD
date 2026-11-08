@@ -555,6 +555,12 @@ def plaquette_clover(g, mu: int, nu: int):
 def compute_dual_field_strength(F_dict: dict, mu: int, nu: int):
     """F̃_{μν} = ½ Σ_{ρσ} ε_{μνρσ} F_{ρσ}。"""
     mu, nu = _validate_lorentz_pair(mu, nu)
+    if not hasattr(F_dict, "get"):
+        raise TypeError(
+            "F_dict must be a mapping keyed by Lorentz pairs (mu, nu); got "
+            f"{type(F_dict).__name__}. Build it with "
+            "{(mu, nu): pyqcd.gauge.clover_field_strength(U, mu, nu)}."
+        )
     cp = get_backend()
     result = None
     for rho in range(4):
@@ -567,6 +573,12 @@ def compute_dual_field_strength(F_dict: dict, mu: int, nu: int):
                 continue
             term = cp.array(coeff, dtype=F_rs.dtype) * F_rs
             result = term if result is None else result + term
+    if result is None:
+        raise ValueError(
+            f"F_dict has none of the components needed for F~_{{{mu}{nu}}}; "
+            "it must contain at least one of "
+            f"{[(rho, sigma) for rho in range(4) for sigma in range(4) if rho != sigma]}."
+        )
     return result
 
 

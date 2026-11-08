@@ -379,3 +379,24 @@ python -m pyqcd.testing.docs_examples --lang zh --keep-going
 
 注意：`backend=cuda` 但 `array_backend=numpy` 时，numpy 数据走的是 **KUPL CPU kernel**，
 GPU kernel 只在 cupy/torch 张量上生效。汇报性能时必须同时给这两个字段。
+
+### 公开函数的"静默 None"是发布级缺陷
+`compute_dual_field_strength(F_dict, mu, nu)` 曾在缺分量时**静默返回 `None`**、
+传 ndarray 时抛出无信息量的 `AttributeError: 'ndarray' object has no attribute 'get'`。
+纯安装用户第一次调用就会卡住。约定：
+
+* 参数类型不对 → `TypeError`，并在消息里写清"该传什么、怎么构造"；
+* 输入合法但信息不足 → `ValueError`，列出缺哪些键；
+* 绝不用 `None` 表示"没算出来"。
+
+### 版本漂移要用测试锁死
+`pyqcd/testing/_release_metadata_contract.py` 提供 5 条契约（版本三处一致、
+`__all__` 与磁盘目录一致、子包可导入、MANIFEST 策略、`build_info` 字段）。
+新增测试函数后**必须**同时：在 `pyqcd/testing/__init__.py` 加 `test_*` 包装，
+并在 `pyqcd/testing/conftest.py` 的导入清单里登记——`conftest.main()` 只遍历
+`globals()`，漏登记就永远不跑（本次实测 115→116 通过数即验证）。
+
+### `auto` 后端随构建机变化，汇报必须带版本与后端
+同一台机器连续两次 `pip install pyqcd` 可能得到 `backend=cuda` 与 `backend=kupl`
+（取决于隔离环境里 nvcc/Cython/编译器是否可用）。因此每条性能或结论都要写成
+"`pyqcd==<ver>` + `backend=<x>` + `array_backend=<y>`"三件套。
