@@ -24,6 +24,11 @@ same interpreter is fast.
 | `bash` + C++17 compiler | native KUPL (CPU) kernels — the baseline build |
 | `nvcc` | optional native CUDA (GPU) kernels |
 | Cython | optional CUDA extension; supplied by the pip build environment, no manual install |
+
+`requires-python` is `>=3.10`. The suites behind this documentation were executed
+on Python 3.12 (full test suite) and 3.14 (build + import + `python -m pyqcd`);
+3.10, 3.11 and 3.13 are expected to work but are not covered by an automated run
+on the release machine.
 | `mpicxx` | MPI-enabled KUPL build (source checkout only) |
 | `torch` | optional: the torch backend (`pip install "pyqcd[torch]"`) |
 | `matplotlib` | optional: plotting helpers (`pip install "pyqcd[plot]"`) |

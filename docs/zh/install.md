@@ -22,6 +22,10 @@ pip 会缓存编译好的 wheel，在相同解释器的其它环境里再装就�
 | `bash` + C++17 编译器 | 原生 KUPL（CPU）内核 —— 基线构建 |
 | `nvcc` | 可选的原生 CUDA（GPU）内核 |
 | Cython | 可选的 CUDA 扩展；由 pip 构建环境提供，无需手动安装 |
+
+`requires-python` 为 `>=3.10`。本套文档背后的验证在 Python 3.12（完整测试套件）与
+3.14（构建 + 导入 + `python -m pyqcd`）上执行；3.10、3.11、3.13 预期可用，但发布机器上
+没有对应的自动化实跑记录。
 | `mpicxx` | 启用 MPI 的 KUPL 构建（仅源码仓库） |
 | `torch` | 可选：torch 后端（`pip install "pyqcd[torch]"`） |
 | `matplotlib` | 可选：作图辅助（`pip install "pyqcd[plot]"`） |

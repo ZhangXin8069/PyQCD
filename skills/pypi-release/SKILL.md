@@ -517,3 +517,26 @@ chmod -R a-w <site-packages>/pyqcd && python -B -c "import pyqcd"; chmod -R u+w 
 坑：`-OO` 会清空 `__doc__`，凡是用 `__doc__.splitlines()[0]` 当 `argparse` 描述的
 工具在 `-OO` 下会 `AttributeError`（本轮 `pyqcd/testing/docs_examples.py` 就中招，已改字面量）。
 **发布代码里不要用 `__doc__` 构造运行时必需的值。**
+
+### 离线 / air-gapped 安装（HPC 集群常态）
+sdist 必须能在**没有网络**时装出来。标准验证流程：
+
+```bash
+# 1) 联网机器上准备 wheelhouse（含构建依赖，必须 :all: 二进制）
+pip download --only-binary :all: -d /tmp/wh "setuptools>=77" wheel "cython>=3.0" numpy h5py scipy
+cp dist/pyqcd-<ver>.tar.gz /tmp/wh/
+
+# 2) 断网安装
+PIP_NO_INDEX=1 pip install --find-links /tmp/wh pyqcd==<ver>
+```
+
+0.1.9 实测：wheelhouse 7 个包 / 60 MB，`PIP_NO_INDEX=1` 下
+`Successfully built pyqcd` + `Successfully installed ... pyqcd-0.1.9`，
+装完 `backend=cuda`、contract 正确。**不要忘了 wheelhouse 里要有
+`cython`**，否则隔离构建环境拿不到它，CUDA 扩展会被跳过。
+
+### Python 版本声明要诚实
+`requires-python = ">=3.10"` + classifiers 3.10–3.14，但发布机器只有 3.12 与 3.14
+（3.14 无 pip，用 `setup.py build` + `PYTHONPATH` 验证）。因此文档里必须写清
+"实测于 3.12（完整套件）与 3.14（构建+导入），3.10/3.11/3.13 预期可用但未自动验证"，
+不要含糊写成"支持 3.10–3.14"。
