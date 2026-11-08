@@ -258,9 +258,14 @@ def test_kupl_plan_gate_by_batch_structure() -> None:
     """KUPL 计划执行器只在带 batch 维时启用（2D 链上它反而慢 6–10%）。"""
     import pyqcd.einsum._api as api
 
-    assert api._batched_operands([np.zeros((2, 3, 4))]) is True
-    assert api._batched_operands([np.zeros((4, 4)), np.zeros((4, 4))]) is False
-    assert api._batched_operands([np.zeros((4, 4)), np.zeros((3, 4, 4))]) is True
+    # 正确判据是"共享且出现在输出里的标签"（batch 轴），不是 ndim>=3：
+    # abc,bcd->ad 三个维度都在，却没有 batch 轴，原生执行器在这里反而慢 1.5 倍
+    assert api._has_batch_index("bij,bjk->bik") is True
+    assert api._has_batch_index("...ij,...jk->...ik") is True
+    assert api._has_batch_index("ijk,ikl->ijl") is True
+    assert api._has_batch_index("abc,bcd->ad") is False
+    assert api._has_batch_index("abc,cd->abd") is False
+    assert api._has_batch_index("ij,jk->ik") is False
 
     rng = np.random.default_rng(12)
     batched = [rng.standard_normal((4, 16, 16)), rng.standard_normal((4, 16, 16))]
