@@ -633,3 +633,23 @@ arity=3 的步，而原生执行器只支持一元/二元步 → 打印一次
 已接入 `conftest`，`python -m pyqcd.testing` 118→**119 passed**。
 写并发测试时注意：`count_cached_ops(cache)` **需要传 cache 参数**，
 无参调用会 `TypeError`（本轮就写错过，别误判成库缺陷）。
+
+### 终检一条命令（打 tag 前必跑）
+```bash
+python -m pyqcd.testing.release_check                 # 全量（含网络）
+python -m pyqcd.testing.release_check --offline       # 断网/内网
+python -m pyqcd.testing.release_check --with-tests    # 连测试套件一起
+```
+它按顺序验证 16 项并打印 `PASS/FAIL + 一行证据`，任一失败退出码非 0，可直接做 tag 门：
+
+1. 版本三处一致（pyproject / `pyqcd.__version__` / `einsum._version`）+ 分发名 `pyqcd`
+2. sdist 存在（缺则自动构建）、`twine check`、内容洁净（无 `pyqcd/testing`、无 `.so`、
+   有 `py.typed`、无 `AGENTS.md`）、`SOURCES.txt` 无 `/home/` 绝对路径
+3. 文档示例可执行、中英代码块逐字节一致、`sphinx -W` 双站 exit 0
+4. PyPI：最新版号与本地一致、只发 sdist、项目页探针（Repositories / 文档链接 /
+   `python -m pyqcd` / `6.02`）
+5. Read the Docs：en 与 zh-cn 首页都已含当前版本号
+6. git 远端：local HEAD == gitlab main == gitee main
+
+0.1.11 实测：全量 **16/16 passed**，`--offline --with-tests` **10/10 passed**。
+注意 `sphinx` 与 `twine` 必须在当前解释器可用（本机是 conda 环境）。
