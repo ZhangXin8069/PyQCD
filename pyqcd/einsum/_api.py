@@ -528,7 +528,7 @@ def contract(
     optimize: Any = "auto",
     memory_limit: Any = None,
     backend: str = "auto",
-    specialize: bool = True,
+    specialize: bool | None = None,
     **kwargs: Any,
 ) -> Any:
     """Evaluate an einsum expression with an optimized contraction order.

@@ -18,6 +18,8 @@ from ._api import contract, contract_path
 from ._expr import ContractExpression, contract_expression, format_const_einsum_str, shape_only
 from ._pathinfo import PathInfo
 from ._specialize import describe as specializations
+from ._native import build_info
+from .kupl.einsum import mpi_enabled
 from ._sharing import count_cached_ops, shared_intermediates
 from .backends.dispatch import (
     get_func,
@@ -31,6 +33,7 @@ from .paths import PATH_OPTIONS, PathOptimizer, get_path_fn, register_path_fn
 
 __all__ = [
     "backends",
+    "build_info",
     "blas",
     "ContractExpression",
     "contract",
@@ -56,6 +59,7 @@ __all__ = [
     "shape_only",
     "shared_intermediates",
     "specializations",
+    "mpi_enabled",
 ]
 
 # names served by sibling modules that may be written concurrently

@@ -17,7 +17,11 @@ case "$MPI_SETTING" in
         MPI_ENABLED=0
         ;;
     auto|AUTO)
-        if command -v mpicxx >/dev/null 2>&1; then
+        # 仅当**有效编译器**能找到 mpi.h 时才启用 MPI：cxxt 环境里 CXX 常被
+        # 固定为不带 MPI include 的 g++，此时按 mpicxx 存在与否判断会编译失败。
+        if command -v mpicxx >/dev/null 2>&1 &&
+                printf '#include <mpi.h>\nint main(){return 0;}\n' |
+                "${CXX:-mpicxx}" -x c++ -E - >/dev/null 2>&1; then
             MPI_ENABLED=1
         else
             MPI_ENABLED=0
@@ -173,6 +177,7 @@ cat > "$VERSION_SCRIPT" <<'MAP'
     qcd_kupl_nucleon_2pt_supported;
     qcd_kupl_pattern_3pt;
     qcd_kupl_pattern_3pt_supported;
+    qcd_kupl_mpi_enabled;
   local:
     *;
 };

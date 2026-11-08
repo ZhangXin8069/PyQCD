@@ -18,6 +18,7 @@ run "$PY" -m pyqcd.testing.einsum.simple.check_compat
 run "$PY" -m pyqcd.testing.einsum.simple.check_memory
 run "$PY" -m pyqcd.testing.einsum.simple.check_equations
 run env PYQCD_EINSUM_NATIVE=kupl "$PY" -m pyqcd.testing.einsum.simple.check_native --backend kupl
+run env PYQCD_EINSUM_NATIVE=kupl "$PY" -m pyqcd.testing.einsum.simple.check_kernels --backend both
 run env PYQCD_EINSUM_NATIVE=cuda "$PY" -m pyqcd.testing.einsum.simple.check_native --backend cuda
 
 printf '\n===== simple suite exit=%s =====\n' "$STATUS"

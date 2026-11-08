@@ -94,11 +94,15 @@ def _shape_ok(operands: Sequence[Any]) -> tuple[int, int] | None:
     if len(operands) != 8:
         return None
     for operand in operands:
-        if type(operand).__module__.split('.')[0] != 'numpy':
-            return None
         if not isinstance(operand, np.ndarray):
             return None
-        if operand.dtype != np.complex128 or not operand.flags['C_CONTIGUOUS']:
+        if operand.dtype != np.complex128:
+            return None
+        # 与 3pt 一致：小数组（γ/投影等）允许非连续，由调用侧转连续；
+        # 大张量必须本身连续，避免静默整块拷贝。
+        if operand.flags['C_CONTIGUOUS']:
+            continue
+        if operand.size > _SMALL_OPERAND_ELEMENTS:
             return None
     perams = operands[:3]
     if any(peram.ndim != 4 or peram.shape[:2] != (4, 4) for peram in perams):
@@ -133,6 +137,8 @@ def try_nucleon_2pt(subscripts: Any, operands: Sequence[Any]) -> np.ndarray | No
     if entry is None:
         return None
     nvec, nmom = shapes
+    operands = [operand if operand.flags['C_CONTIGUOUS']
+                else np.ascontiguousarray(operand) for operand in operands]
     dims = (ctypes.c_int64 * 8)(nvec, nmom, 4, 0, 0, 0, 0, 0)
     output = np.zeros((nmom,), dtype=np.complex128)
     pointers = (ctypes.c_void_p * len(operands))(

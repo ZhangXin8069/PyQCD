@@ -632,3 +632,19 @@ def execute(
         mpi=mpi,
         mp=mp,
     )(arrays, out=out)
+
+
+def mpi_enabled() -> bool:
+    """返回当前 KUPL 二进制是否编入真实 MPI 分片实现。
+
+    非 MPI 构建下 ``applyContractMpiQcd`` 是 fail-closed stub（返回 1），
+    本函数返回 ``False``，供上层显式标注"非 MPI 版本"。
+    """
+    try:
+        library = _load_library()
+        entry = library.qcd_kupl_mpi_enabled
+    except Exception:  # noqa: BLE001 - 缺库/缺符号视为非 MPI
+        return False
+    entry.argtypes = []
+    entry.restype = ctypes.c_int
+    return entry() == 1

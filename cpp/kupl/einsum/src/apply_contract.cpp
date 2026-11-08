@@ -1971,3 +1971,14 @@ extern "C" QCD_EINSUM_API void applyDestroyQcd(long long context) {
     } catch (...) {
     }
 }
+
+/* 构建标识：当前二进制是否编入了真实 MPI 分片实现。
+ * 非 MPI 构建下 applyContractMpiQcd 是 fail-closed stub，本函数返回 0，
+ * 供 Python 侧显式标注"非 MPI 版本"。 */
+extern "C" QCD_EINSUM_API int qcd_kupl_mpi_enabled(void) {
+#if defined(PYQCD_EINSUM_ENABLE_MPI)
+    return 1;
+#else
+    return 0;
+#endif
+}

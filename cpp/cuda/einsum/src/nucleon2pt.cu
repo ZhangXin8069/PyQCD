@@ -842,12 +842,15 @@ int launch_all(const void* const* in, void* out, const Params& p, cudaStream_t s
             const int nc_i = static_cast<int>(ncur);
             const int n_i = static_cast<int>(n);
             const int ncn_i = static_cast<int>(ncn);
+            // Abuf 总大小 = 4(c)·4(g)·n(p)·ncur·n(b)；Abuf 的 c 步长是其 1/4
+            const long long pbig = 16 * n * ncn;
+            const long long cbig = 4 * n * ncn;
             R* Ab_R = buf.abuf;
-            R* Ab_S = buf.abuf + 16 * ncn;
-            R* Ab_I = buf.abuf + 32 * ncn;
+            R* Ab_S = buf.abuf + pbig;
+            R* Ab_I = buf.abuf + 2 * pbig;
             R* Bb_R = buf.bbuf;
-            R* Bb_S = buf.bbuf + 16 * ncn;
-            R* Bb_I = buf.bbuf + 32 * ncn;
+            R* Bb_S = buf.bbuf + pbig;
+            R* Bb_I = buf.bbuf + 2 * pbig;
 
             // ---------------- stage A: Bbuf[m][f][c][n][b] = Σ_d B[m,c,n,d]·V1[f,b,d]
             {
@@ -887,8 +890,8 @@ int launch_all(const void* const* in, void* out, const Params& p, cudaStream_t s
                 bmap.stride[1] = n2;           // g
                 bmap.stride[2] = 0;
                 cmap.size[0] = kSpin; cmap.size[1] = kSpin; cmap.size[2] = n_i;
-                cmap.stride[0] = 16 * ncn;     // c
-                cmap.stride[1] = 4 * ncn;      // g
+                cmap.stride[0] = 4 * n * ncn;  // c
+                cmap.stride[1] = n * ncn;      // g
                 cmap.stride[2] = ncn;          // p
                 const long long aoff = n0 * n; // V2: [p][n][h] 的 n 偏移
                 const R* aops[3] = {V2_R, V2_I, V2_S};
@@ -924,7 +927,7 @@ int launch_all(const void* const* in, void* out, const Params& p, cudaStream_t s
                 R* tops[3] = {T1b, T2b, T3b};
                 const int tile = choose_tile(star_m, star_m, ncn, 1, sm_count);
                 for (int cc = 0; cc < kSpin; ++cc) {
-                    const long long aoff = static_cast<long long>(cc) * 16 * ncn;
+                    const long long aoff = static_cast<long long>(cc) * cbig;
                     const long long boff = static_cast<long long>(cc) * ncn;
                     const int acc = (first_star && cc == 0) ? 0 : 1;
                     for (int k = 0; k < 3; ++k) {

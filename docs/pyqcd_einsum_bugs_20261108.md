@@ -79,3 +79,35 @@ L24 需回落通用路径。要拿到 3x，必须实现**可扩展（分块/流�
 这是下一阶段的核心工程项，不是 bug。
 
 E5 已达标（3.371x）。
+
+---
+
+## 8. 代码检查（09:10）
+
+### 8.1 发现并修复（3 项）
+
+| # | 问题 | 影响 | 修复 |
+|---|---|---|---|
+| **C1** | `contract(specialize: bool = True)` 默认值是 `True` 而非 `None`，`_specialize.enabled()` 恒走显式分支 | **环境变量 `PYQCD_EINSUM_SPECIALIZE=0` 完全不生效**（文档承诺的进程级关闭失效） | 签名改为 `specialize: bool \| None = None`，由 `enabled()` 决定默认值；验证：默认会打印专用路径提示，`=0` 时不打印 |
+| **C2** | `_kernel_cuda.py` 从 `.cuda` 导入不存在的 `_library_path` | 异常被 `except` 吞掉 → **CUDA 3pt kernel 从未真正生效**，此前"1.25x"是通用路径抖动 | 改从 `._native._cuda_library_path` 导入；修复后实测 kernel 37.13 ms vs 通用 66.23 ms（**1.78x**）vs opt 65.45 ms（1.76x），`rel=2.60e-15` |
+| **C3** | 注册表提示文案只写"KUPL 专用 kernel"，但 GPU 路径也会打印 | 误导 | 改为中性表述并区分 CUDA/KUPL 现状 |
+
+### 8.2 检查通过项
+
+| 检查 | 结果 |
+|---|---|
+| 生产代码调试残留（`breakpoint`/`pdb`/`XXX`/`FIXME`） | 无 |
+| 生产模块 `print` | 仅 `_native_plan._self_check()`（`eff826b` 基线即存在，属自检）与 `_kernel_kupl` 的一次性提示（需求要求） |
+| 构建告警 | KUPL / CUDA 均 **0 warning** |
+| ABI 导出面 | 冻结 8 个符号仍在；新增 kernel 符号是显式加入 version script（`qcd_kupl_nucleon_2pt*`、`qcd_kupl_pattern_3pt*`、`qcd_cuda_pattern_3pt*`） |
+| `pyqcd/einsum/cuda/einsum.cpp`（10601 行）被删除 | 该文件是 `einsum.pyx` 的 Cython 生成物；`setup.py` 只引用 `.pyx`。**实测删除后 `install.sh cuda` 仍能重建扩展**（`einsum.cpython-312-*.so` 192624 B） |
+| 回归 | `verify_native` 16/16 ×2、`simple` exit=0、`verify_compat` 980/980、`pyqcd.testing` 115 passed / 0 failed |
+
+### 8.3 已登记但未修复（风险说明）
+
+| 项 | 说明 |
+|---|---|
+| `specialize` 是**进程级**开关 | 通过环境变量传递给原生层；并发线程用不同设置时不可靠（缓存键已含该标志，缓解但不根治）。彻底解决需在 ABI 增加 per-call 参数 |
+| `_kernel_*.enabled()` 首次失败后永久缓存 | 若库在建库前被调用，之后不会重试（需重启进程） |
+| `contract_expression` 无 `specialize` 参数 | 表达式路径只能通过环境变量控制 |
+| 小数组连续性规则不一致 | 2pt 严格要求所有操作数连续；3pt 允许 ≤1024 元素的小数组由调用侧拷贝 |

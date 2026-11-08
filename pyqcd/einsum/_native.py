@@ -185,3 +185,25 @@ def compile(plan_data, backend: str = "auto"):
 
             return CudaProgram(plan_data)
     raise NativeUnavailable(f"native einsum compiler is unavailable for {selection!r}")
+
+
+def build_info() -> dict[str, Any]:
+    """返回当前原生构建的可查询标识（后端 / 是否 MPI / 库路径）。"""
+    from .kupl.einsum import mpi_enabled as kupl_mpi_enabled
+
+    backend = backend_name()
+    kupl_mpi = bool(kupl_mpi_enabled())
+    mpi = kupl_mpi and backend == 'kupl'
+    if backend == 'cuda':
+        label = '非 MPI 版本（CUDA 后端未实现 MPI 分片）'
+    elif mpi:
+        label = 'MPI 版本'
+    else:
+        label = '非 MPI 版本'
+    return {
+        'backend': backend,
+        'mpi': mpi,
+        'kupl_mpi_build': kupl_mpi,
+        'mpi_label': label,
+        'native_library': str(library_path()),
+    }

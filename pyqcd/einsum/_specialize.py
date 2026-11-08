@@ -65,12 +65,12 @@ REGISTRY: dict[str, dict[str, str]] = {
     "agbh,eqfr,ospt,cmdn,ikjl,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy": {
         "name": "sush-3pt-main(P1)",
         "kind": "fused(needs-optimization)",
-        "note": "sush 3pt 主项；KUPL 专用 kernel 已接线，实测与通用持平（0.94–1.01x），待优化",
+        "note": "sush 3pt 主项；专用 kernel 已接线（CUDA ≈1.8x 于通用；KUPL 待进一步优化）",
     },
     "agbh,eqfr,ospt,ckdl,imjn,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy": {
         "name": "sush-3pt-main(P2)",
         "kind": "fused(needs-optimization)",
-        "note": "sush 3pt 主项（置换型）；KUPL 专用 kernel 已接线，实测与通用持平，待优化",
+        "note": "sush 3pt 主项（置换型）；专用 kernel 已接线（CUDA ≈1.8x；KUPL 待优化）",
     },
 }
 
