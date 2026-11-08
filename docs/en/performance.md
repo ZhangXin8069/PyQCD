@@ -86,7 +86,7 @@ check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2p
 
 ## Reproducible on the published package
 
-`pyqcd==0.1.23` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`pyqcd==0.1.24` (`build_info(): backend=kupl, array_backend=numpy`) versus
 `opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |

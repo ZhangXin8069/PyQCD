@@ -2657,6 +2657,15 @@ def test_threads_contracts():
             getattr(contract, name)()
 
 
+def test_random_equations():
+    """随机方程差分：与 numpy 对拍，并回放 contract_path 返回的 path。"""
+    from . import _random_equations_contract as contract
+
+    for name in sorted(dir(contract)):
+        if name.startswith("test_") and callable(getattr(contract, name)):
+            getattr(contract, name)()
+
+
 def test_thread_safety():
     """并发调用契约：多线程 matmul、专用路径、shared_intermediates 线程隔离。"""
     from . import _thread_safety_contract as contract
