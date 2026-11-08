@@ -106,7 +106,7 @@ MPI 分片只在 KUPL 后端实现，且只分片单个输出轴；CUDA 后端�
 
 ## 性能
 
-下面是**已发布包上可复现**的数字：`pyqcd==0.1.18`
+下面是**已发布包上可复现**的数字：`pyqcd==0.1.21`
 （`build_info(): backend=kupl, array_backend=numpy`）、`opt_einsum==3.4.0` 的 `dp`
 策略、`complex128`、预热 3 次后取 15 次中位数。
 
@@ -142,6 +142,13 @@ assert np.allclose(fast, base)                         # same numbers, different
 小张量会被单次调用开销吃掉，没有专用 kernel 的形态仍走通用路径。
 完整测量口径与限制：
 https://py-qcd.readthedocs.io/zh-cn/latest/performance.html
+
+### PyTorch
+
+通过 `pip install "pyqcd[torch]"` 支持 PyTorch 张量：`contract()` 按操作数类型分派，
+`torch.Tensor` 进 → 同设备 `torch.Tensor` 出（由 `torch.einsum` 执行，不走原生库）。
+想要原生 kernel，请在边界处转成 numpy 或 cupy。完整对照表与示例：
+https://py-qcd.readthedocs.io/zh-cn/latest/usage.html
 
 ## 测试
 

@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.1.18`. To pin it: `pip install "pyqcd==0.1.13"`.
+Current release: `0.1.21`. To pin it: `pip install "pyqcd==0.1.13"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need
@@ -114,6 +114,11 @@ print(pyqcd.__version__)
 print(pe.build_info())
 # {'backend': 'kupl', 'mpi': False, 'kupl_mpi_build': False,
 #  'mpi_label': 'non-MPI build', 'native_library': '.../libpyqcdeinsum_kupl.so'}
+
+info = pe.build_info()
+assert pyqcd.__version__.count(".") == 2
+assert info["backend"] in {"cuda", "kupl", "python"}
+assert isinstance(info["native_library"], str)
 ```
 
 `backend` is `cuda`, `kupl` or `python` (the last one means the pure-Python
@@ -206,6 +211,53 @@ The hint says `[kernel: cuda_nucleon_2pt]` when the GPU kernel ran and
 `[plan-cache]` when it did not. A `strings | grep compute_` check only works for
 SASS-only archives — with the fatbin layout the architecture names are not plain
 ASCII, so use the runtime hint instead.
+
+### Why the first install takes a minute — and how to watch it
+
+`pip install pyqcd` builds everything from source, in this order (measured on a
+4-core laptop, `pyqcd 0.1.19`):
+
+| Phase | Typical time | What it does |
+|---|---|---|
+| pip build isolation | 3–8 s | creates a throw-away venv and installs `setuptools`, `wheel`, `cython` |
+| KUPL (CPU) library | ~6 s | one `g++ -O3 -fopenmp` pass over 6 sources |
+| CUDA library | ~20 s | one `nvcc` pass over 10 sources (skipped when `nvcc` is absent) |
+| Cython extension | ~10 s | glues the CUDA library to Python (skipped without CUDA) |
+| wheel packaging + install | 2–5 s | stages the `.so` files and installs the wheel |
+
+Roughly **30 s with CUDA, 10–15 s without**, plus downloading numpy/h5py/scipy.
+
+pip hides build output by default, so the compile looks like a hang. The build
+therefore reports progress **on the terminal directly** (`/dev/tty`, falling back
+to stderr), which is what you see during the install:
+
+```
+[pyqcd build] compiling the native kupl library (this takes a while; pip will stay silent until it finishes)
+[pyqcd build] KUPL (CPU): compiling 6 sources
+[pyqcd build] KUPL (CPU): done in 6s
+[pyqcd build] native kupl library built in 6.3s
+[pyqcd build] compiling the native cuda library (this takes a while; pip will stay silent until it finishes)
+[pyqcd build] CUDA: compiling 10 sources for arch 89 (nvcc, about 20 s)
+[pyqcd build] CUDA: done in 19s
+[pyqcd build] native cuda library built in 20.0s
+```
+
+If you want the full compiler log instead, or the install looks genuinely stuck:
+
+```bash
+pip install -v "pyqcd[cuda]"     # full build backend log
+echo $?                          # 0 means the install finished; the wheel is cached
+pip cache list pyqcd             # the built wheel is reused by later installs
+```
+
+Ways to shorten it:
+
+| Situation | Shortcut |
+|---|---|
+| only the CPU kernels are needed | `PYQCD_EINSUM_BACKEND=kupl pip install pyqcd` (skips nvcc, saves ~25 s) |
+| no compilation at all | `PYQCD_SKIP_NATIVE_BUILD=1 pip install pyqcd` → pure-Python planner |
+| many environments | install once, then reuse pip's wheel cache (no flag needed) |
+| air-gapped cluster | build a wheelhouse first, see “Offline / air-gapped installs” |
 
 ## Building from a source checkout (development)
 
@@ -322,6 +374,10 @@ import pyqcd.einsum as pe
 pe.thread_info()                 # {'omp': 4, 'blas': 2, 'source': 'auto (...)', ...}
 pe.configure_threads(4, 2)       # pin OpenMP=4, BLAS=2 explicitly
 pe.configure_threads(blas=4)     # only change BLAS
+
+info = pe.thread_info()
+assert info["omp"] >= 1 and info["blas"] >= 1
+assert "profile" in info
 ```
 
 `python -m pyqcd` prints the effective values too.
@@ -381,4 +437,8 @@ import pyqcd.einsum as pe
 pe.build_info()        # backend / native_available / array_backend / mpi / mpir_label
 pe.thread_info()       # effective omp / blas threads and where they came from
 pe.specializations()   # registered equation-shape specialisations
+
+info = pe.build_info()
+assert {"backend", "native_available", "array_backend", "mpi"} <= set(info)
+assert len(pe.specializations()) >= 1
 ```

@@ -8,6 +8,15 @@ BUILD_DIR=${PYQCD_EINSUM_BUILD_DIR:-"$SCRIPT_DIR/build"}
 BUILT_LIBRARY="$BUILD_DIR/libpyqcdeinsum_cuda.so"
 PUBLIC_LIBRARY="$SCRIPT_DIR/libpyqcdeinsum_cuda.so"
 VERSION_SCRIPT="$BUILD_DIR/einsum_cuda_exports.map"
+
+# 构建进度：pip 会捕获子进程输出、只在失败时回放，所以进度直接写终端（/dev/tty）；
+# 没有终端时退回 stderr。这样 `pip install pyqcd` 期间用户能看见"在编什么、编到哪"，
+# 不会误判为卡死。
+_pyqcd_notify() {
+    { printf '[pyqcd build] %s\n' "$*" > /dev/tty; } 2>/dev/null \
+        || printf '[pyqcd build] %s\n' "$*" >&2
+}
+_pyqcd_now() { date +%s; }
 BUILD_LOG="$BUILD_DIR/build.log"
 NVCC=${NVCC:-nvcc}
 SHARED_CORE_SOURCES=(
@@ -228,6 +237,8 @@ TEMP_LIBRARY="$BUILT_LIBRARY.tmp.$$"
 TEMP_PUBLIC="$PUBLIC_LIBRARY.tmp.$$"
 trap 'rm -f "$TEMP_LIBRARY" "$TEMP_PUBLIC"' EXIT
 
+_PYQCD_T0=$(_pyqcd_now)
+_pyqcd_notify "CUDA: compiling ${#SOURCES[@]} sources for arch ${ARCH_LABELS[*]} (nvcc, 约 20 s)"
 printf 'pyqcd einsum CUDA build\n'
 printf '  nvcc:     %s\n' "$($NVCC --version | tail -n 1)"
 printf '  arch:     %s (source: %s; cubin+PTX embedded)\n' \
@@ -256,6 +267,7 @@ if [ "$STATUS" -ne 0 ]; then
     printf 'error: nvcc failed with exit status %s (see %s)\n' "$STATUS" "$BUILD_LOG" >&2
     exit "$STATUS"
 fi
+_pyqcd_notify "CUDA: done in $(( $(_pyqcd_now) - _PYQCD_T0 ))s"
 if [ ! -f "$TEMP_LIBRARY" ]; then
     printf 'error: nvcc reported success but %s is missing\n' "$TEMP_LIBRARY" >&2
     exit 1

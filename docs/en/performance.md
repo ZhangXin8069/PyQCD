@@ -20,9 +20,73 @@ commands at the end of this page.
 Timing only covers steady-state execution: both sides plan once, then the plan
 is reused.
 
+## Correctness
+
+Speed is only meaningful on correct numbers, so the engine is verified at three
+levels, and **every example on these pages ends with an `assert`** — the
+documentation build executes all 21 runnable blocks and fails if any of them stops
+verifying itself (blocks that cannot run are explicitly marked `# pseudo-code`).
+
+### Verify it yourself
+
+Independent references, same inputs, both must agree:
+
+```python
+import numpy as np
+import torch
+import pyqcd.einsum as pe
+
+rng = np.random.default_rng(0)
+
+
+def check(equation, *operands):
+    """Compare pyqcd against two independent references on the same inputs."""
+    ours = np.asarray(pe.contract(equation, *operands))
+    numpy_ref = np.einsum(equation, *operands, optimize="optimal")
+    torch_ref = torch.einsum(equation, *[torch.as_tensor(o) for o in operands]).numpy()
+    assert np.allclose(ours, numpy_ref, rtol=1e-10, atol=1e-12), "differs from numpy"
+    assert np.allclose(ours, torch_ref, rtol=1e-10, atol=1e-12), "differs from torch"
+    print(f"{equation:32s} ok  max|Δ| = {np.max(np.abs(ours - numpy_ref)):.2e}")
+
+
+d = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128)
+
+check("ij,jk->ik", d(8, 8), d(8, 8))                     # plain matmul
+check("ij,jk,kl->il", d(8, 8), d(8, 8), d(8, 8))         # 3-operand chain
+check("...ij,...jk->...ik", d(2, 4, 5), d(2, 5, 6))      # ellipsis
+check("ii->i", d(6, 6))                                  # repeated label (diagonal)
+check("ij,ij->", d(5, 7), d(5, 7))                       # full contraction to scalar
+n = 8
+check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2pt shape
+      d(4, 4, n, n), d(4, 4, n, n), d(4, 4, n, n), d(4, 4), d(4, 4),
+      d(4, n, n, n), d(4, n, n, n), d(4, 4))
+```
+
+### What the project checks on every commit
+
+| Check | Scope |
+|---|---|
+| `python -m pyqcd.testing` | 120 contracts: numerical edge cases, threading, metadata |
+| differential suite (source checkout) | 980 cases against a frozen `opt_einsum` |
+| `python -m pyqcd.testing.docs_examples` | all 21 documentation blocks, each self-asserting |
+| `verify_native --backend kupl\|cuda` | native library vs the Python planner |
+
+### Invariants that must never break
+
+* **the result never changes when the fast path changes** — a missing library, a
+  rejected shape or a kernel error falls back silently (one warning at most) and
+  the numbers are identical;
+* **`contract_path` agrees with `opt_einsum`** on path and `opt_cost` for the same
+  shape and optimizer;
+* **precision is preserved** — `complex128` in, `complex128` out; `complex64` stays
+  `complex64`;
+* **dtype/shape errors are raised, not guessed**: operand-count mismatches, label
+  size conflicts and unknown output labels raise `ValueError`/`TypeError` with the
+  same wording as `opt_einsum`.
+
 ## Reproducible on the published package
 
-`pyqcd==0.1.18` (`build_info(): backend=kupl, array_backend=numpy`) versus
+`pyqcd==0.1.21` (`build_info(): backend=kupl, array_backend=numpy`) versus
 `opt_einsum==3.4.0` (`dp`), `complex128`, median of 15 calls after 3 warm-ups:
 
 | Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
@@ -64,6 +128,107 @@ the shapes can cost:
 A weighted production-mix model built on those numbers gave ≈2.82×
 (4757 s → 1688 s). It inherits the same caveat: it assumes the extra kernels.
 
+
+## CUDA: the same comparison on the GPU
+
+GPU runs compare **GPU against GPU** — both libraries execute on the same device
+with `cupy` arrays, so the ratio measures implementations, not CPU-vs-GPU
+throughput. Protocol: `complex128`, 5 warm-up calls, **median of 21 synchronised
+calls** (`cp.cuda.Device(0).synchronize()` around each timing), same `dp` planner.
+
+Measured with `pyqcd 0.1.19` (`build_info(): backend=cuda`) and
+`opt_einsum 3.4.0` on an RTX 4060 Laptop (compute capability 8.9, arch build 8.9):
+
+| Workload | `opt_einsum` | `pyqcd.einsum` | Ratio |
+|---|---|---|---|
+| γ sandwich, T=512, nvec=512 | 59.8–62.7 ms | 4.6–8.4 ms | **7–13×** (fused kernel) |
+| Nucleon 2pt, nvec=64 | 255.8–263.8 ms | 134–162 ms | **1.6–1.9×** (kernel, `needs-optimization`) |
+| Batched GEMM 32×512² | 163.2–168.0 ms | 190.6–192.0 ms | 0.86–0.88× (**PyQCD slower**) |
+
+What this says:
+
+* the **fused kernels** are where the GPU win comes from (γ sandwich runs as one
+  kernel, `PYQCD_EINSUM_CUDA_SANDWICH ... kernel=1`);
+* the nucleon-2pt CUDA kernel only buys 1.6–1.9× and is still marked
+  `needs-optimization` — the shape is bound by the device, not by the planner;
+* a plain batched GEMM has no fused kernel and PyQCD's native batched-GEMM path is
+  ~15% slower than letting `cupy.einsum` handle it, so `opt_einsum` wins there.
+
+Reproduce it (needs `cupy` and `opt_einsum`; without them the script exits with a
+clear message rather than failing the documentation build):
+
+```python
+import statistics
+import time
+
+import numpy as np
+import pyqcd.einsum as pe
+
+try:
+    import cupy as cp
+    import opt_einsum as oe
+except ImportError:
+    raise SystemExit("this comparison needs cupy and opt_einsum: "
+                     'pip install "pyqcd[cuda]" opt_einsum')
+
+
+def bench(call, warmup=5, repeat=21):
+    """Median of `repeat` GPU-synchronised calls (milliseconds)."""
+    for _ in range(warmup):
+        call()
+    cp.cuda.Device(0).synchronize()
+    samples = []
+    for _ in range(repeat):
+        start = time.perf_counter()
+        call()
+        cp.cuda.Device(0).synchronize()
+        samples.append((time.perf_counter() - start) * 1e3)
+    return statistics.median(samples), min(samples), max(samples)
+
+
+import warnings
+
+
+def compare(label, equation, operands):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")          # the fallback notices are printed below
+        ours = bench(lambda: pe.contract(equation, *operands))
+        theirs = bench(lambda: oe.contract(equation, *operands, optimize="dp"))
+    print(f"{label:26s} pyqcd {ours[0]:8.2f} ms | opt_einsum {theirs[0]:8.2f} ms "
+          f"| rate {theirs[0] / ours[0]:5.2f}x | n=21 "
+          f"(pyqcd min..max {ours[1]:.1f}..{ours[2]:.1f} ms)")
+
+
+rng = np.random.default_rng(0)
+
+
+def g(*shape):
+    return cp.asarray((rng.standard_normal(shape)
+                       + 1j * rng.standard_normal(shape)).astype(np.complex128))
+
+
+print("device:", cp.cuda.runtime.getDeviceProperties(0)["name"].decode(),
+      "|", pe.build_info()["backend"])
+
+n = 64                                                  # production-shaped nucleon 2pt
+compare("nucleon 2pt nvec=64", "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",
+        [g(4, 4, n, n), g(4, 4, n, n), g(4, 4, n, n), g(4, 4), g(4, 4),
+         g(4, n, n, n), g(4, n, n, n), g(4, 4)])
+compare("batched GEMM 32x512", "bij,bjk->bik", [g(32, 512, 512), g(32, 512, 512)])
+compare("gamma sandwich 512x512", "ab,...bce,cd->...dae",
+        [g(4, 4), g(512, 4, 4, 512), g(4, 4)])
+
+# correctness first: a benchmark of wrong numbers is worthless
+_ref_ops = [g(4, 4, 16, 16), g(4, 4, 16, 16), g(4, 4, 16, 16), g(4, 4), g(4, 4),
+            g(4, 16, 16, 16), g(4, 16, 16, 16), g(4, 4)]
+_eq = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
+_ours = cp.asnumpy(pe.contract(_eq, *_ref_ops))       # cupy -> host
+_theirs = cp.asnumpy(oe.contract(_eq, *_ref_ops, optimize="dp"))
+assert np.allclose(_ours, _theirs, rtol=1e-10, atol=1e-12), "kernel disagrees with opt_einsum"
+```
+
+GPU numbers on a laptop are noisy: report the min–max spread (the script prints it)
+and never trust a difference smaller than that spread.
 
 ## Memory
 
@@ -147,6 +312,12 @@ compare("gamma sandwich T=256", "ab,...bce,cd->...dae",
 # 3) a generic chain with no specialised kernel — the honest control case.
 a, b, d = (rng.standard_normal((800, 800)) for _ in range(3))
 compare("generic chain 800", "ij,jk,kl->il", [a, b, d])
+
+# correctness first: the ratio means nothing if the results disagree
+_a = np.arange(12.0).reshape(3, 4)
+_b = np.arange(20.0).reshape(4, 5)
+assert np.allclose(pe.contract("ij,jk->ik", _a, _b),
+                   oe.contract("ij,jk->ik", _a, _b, optimize="dp"))
 ```
 
 `opt_einsum` uses the `dp` planner, which is the production default. The third

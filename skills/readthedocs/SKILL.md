@@ -186,3 +186,17 @@ python -m pyqcd.testing.einsum.bench_native --data synthetic --profiles T1 \
 
 注意 bench 会自己打印"阻断"（too_short / oracle 非冻结 / 代理数据），
 这是设计如此，不是失败；文档里引用这些命令时应保留其产物路径说明。
+
+### 文档示例必须"自验证"，不是"能跑就行"
+只检查"代码块不报错"毫无价值：`print()` 出来的错数照样通过。规则（0.1.21 起强制）：
+
+* 每个 ```` ```python ```` 块**必须含 `assert`**，验证自己的结果（对 numpy / torch 的
+  独立参考、字段完整性、形状或不变量）；
+* 基准脚本要**先验数再计时**，否则测的是错误的数字；
+* 确实无法运行的片段必须写 `# pseudo-code` 或 `# docs-skip`；
+* `docs_examples` 遇到无断言的块直接判失败，消息里给出修复方法。
+
+补断言时踩过的三个坑（都是断言写错，不是库错）：
+`count_cached_ops(cache)` 返回的是 **Counter**（用 `sum(ops.values())`）；
+`plan_parallel()` 返回 **dict**（用 `{"N","Y","X","m"} <= set(plan)`）；
+cupy 结果不能 `np.asarray`，要 `cp.asnumpy(...)`。

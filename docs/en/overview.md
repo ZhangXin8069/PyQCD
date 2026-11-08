@@ -16,8 +16,12 @@ optional, and the package installs either way.
 import pyqcd
 import pyqcd.einsum as pe
 
-print(pyqcd.__version__)    # e.g. 0.1.18
+print(pyqcd.__version__)    # e.g. 0.1.21
 print(pe.build_info())      # backend / mpi / mpi_label / native_library
+
+info = pe.build_info()
+assert pyqcd.__version__.count(".") == 2, pyqcd.__version__
+assert info["backend"] in {"cuda", "kupl", "python"}, info["backend"]
 ```
 
 `pyqcd/__init__.py` intentionally stays almost empty (only `__version__`), so
@@ -55,6 +59,11 @@ b = np.arange(12.0).reshape(3, 4)
 pe.contract("ij,jk->ik", a, b)                        # same as a @ b
 pe.contract_path("ij,jk->ik", a, b)                   # (path, PathInfo)
 pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))   # reusable expression
+
+assert np.allclose(pe.contract("ij,jk->ik", a, b), a @ b)
+_path, _info = pe.contract_path("ij,jk->ik", a, b)
+assert int(_info.opt_cost) > 0
+assert np.allclose(pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))(a, b), a @ b)
 ```
 
 ### Layering
@@ -91,6 +100,11 @@ import pyqcd.einsum as pe
 pe.build_info()        # backend / mpi / kupl_mpi_build / mpi_label / native_library
 pe.mpi_enabled()       # whether the KUPL binary has real MPI support
 pe.specializations()   # equation-shape specialisations currently registered
+
+info = pe.build_info()
+assert isinstance(info, dict) and "backend" in info
+assert isinstance(pe.mpi_enabled(), bool)
+assert len(pe.specializations()) >= 1
 ```
 
 ## Performance snapshot

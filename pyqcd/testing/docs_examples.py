@@ -42,13 +42,23 @@ def extract(path: Path) -> list[str]:
 
 
 def run_page(path: Path, namespace: dict) -> tuple[int, int, list[str]]:
-    """Execute one page; return (ok, skipped, failures)."""
+    """Execute one page; return (ok, skipped, failures).
+
+    A block that runs without asserting anything verifies nothing, so every block
+    that is not explicitly skipped must contain an ``assert``: the documentation is
+    then a correctness suite, not a set of printouts.
+    """
     text = path.read_text(encoding="utf-8")
     blocks = _BLOCK.findall(text)
     failures: list[str] = []
     ok = 0
     for index, block in enumerate(blocks):
         if any(marker in block for marker in _SKIP_MARKERS):
+            continue
+        if "assert " not in block:
+            failures.append(
+                f"{path.name}#{index}: no assertion — every example must verify its "
+                f"own result (add `assert`, or mark the block `# pseudo-code`)")
             continue
         buffer = io.StringIO()
         try:

@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import subprocess
+import time
 import warnings
 from pathlib import Path
 
@@ -32,6 +34,23 @@ from setuptools.command.build_py import build_py
 HOME = Path(__file__).resolve().parent
 RAW_BACKEND = os.environ.get("PYQCD_EINSUM_BACKEND", "auto").strip().lower()
 _WARNED_BACKENDS: set[str] = set()
+
+
+def _notify_progress(message: str) -> None:
+    """Report build progress on the terminal.
+
+    pip captures the build backend's output and only replays it on failure, so a
+    two-minute compile looks like a hang. Writing to ``/dev/tty`` reaches the user
+    anyway; without a terminal it degrades to stderr.
+    """
+    line = f"[pyqcd build] {message}\n"
+    try:
+        with open("/dev/tty", "w") as terminal:
+            terminal.write(line)
+            terminal.flush()
+    except OSError:
+        sys.stderr.write(line)
+        sys.stderr.flush()
 
 
 def _cuda_sources() -> tuple[Path, ...]:
@@ -175,6 +194,9 @@ class NativeBuildExt(build_ext):
             return False
         environment = os.environ.copy()
         environment["PYQCD_EINSUM_BACKEND"] = backend
+        started = time.time()
+        _notify_progress(f"compiling the native {backend} library (this takes a "
+                         f"while; pip will stay silent until it finishes)")
         try:
             subprocess.check_call(
                 ["bash", str(BUILD_SCRIPTS[backend])], cwd=HOME, env=environment)
@@ -183,6 +205,8 @@ class NativeBuildExt(build_ext):
                 f"native build failed ({BUILD_SCRIPTS[backend].name} exited "
                 f"with {error.returncode})", backend)
             return False
+        _notify_progress(f"native {backend} library built in "
+                         f"{time.time() - started:.1f}s")
         return True
 
     def run(self):

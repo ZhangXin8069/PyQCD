@@ -17,9 +17,68 @@
 
 计时只覆盖稳态执行：双方各规划一次，之后复用计划。
 
+## 正确性
+
+只有在数字正确时，速度才有意义。引擎在三个层次上验证，而且**本页每个示例结尾都有
+`assert`**——文档构建会执行全部 21 个可运行代码块，任何一块不再自验证就会失败
+（无法运行的片段会显式标记 `# pseudo-code`）。
+
+### 自己验证一次
+
+下面的脚本用两个独立参考实现（NumPy 与 PyTorch）对同一批输入做对照，三者必须一致：
+
+```python
+import numpy as np
+import torch
+import pyqcd.einsum as pe
+
+rng = np.random.default_rng(0)
+
+
+def check(equation, *operands):
+    """Compare pyqcd against two independent references on the same inputs."""
+    ours = np.asarray(pe.contract(equation, *operands))
+    numpy_ref = np.einsum(equation, *operands, optimize="optimal")
+    torch_ref = torch.einsum(equation, *[torch.as_tensor(o) for o in operands]).numpy()
+    assert np.allclose(ours, numpy_ref, rtol=1e-10, atol=1e-12), "differs from numpy"
+    assert np.allclose(ours, torch_ref, rtol=1e-10, atol=1e-12), "differs from torch"
+    print(f"{equation:32s} ok  max|Δ| = {np.max(np.abs(ours - numpy_ref)):.2e}")
+
+
+d = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128)
+
+check("ij,jk->ik", d(8, 8), d(8, 8))                     # plain matmul
+check("ij,jk,kl->il", d(8, 8), d(8, 8), d(8, 8))         # 3-operand chain
+check("...ij,...jk->...ik", d(2, 4, 5), d(2, 5, 6))      # ellipsis
+check("ii->i", d(6, 6))                                  # repeated label (diagonal)
+check("ij,ij->", d(5, 7), d(5, 7))                       # full contraction to scalar
+n = 8
+check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2pt shape
+      d(4, 4, n, n), d(4, 4, n, n), d(4, 4, n, n), d(4, 4), d(4, 4),
+      d(4, n, n, n), d(4, n, n, n), d(4, 4))
+```
+
+### 项目每次改动都会跑的检查
+
+| 检查 | 范围 |
+|---|---|
+| `python -m pyqcd.testing` | 120 项契约：数值边界、并发、元数据 |
+| 差分套件（源码仓库） | 对冻结版 `opt_einsum` 的 980 个用例 |
+| `python -m pyqcd.testing.docs_examples` | 21 个文档块，每块自带断言 |
+| `verify_native --backend kupl\|cuda` | 原生库 vs Python 规划器 |
+
+### 不可破坏的不变量
+
+* **换执行路径不改变结果**：缺库、形状被拒或 kernel 报错都静默回落（最多一次警告），
+  数值完全一致；
+* **`contract_path` 与 `opt_einsum` 一致**：同形状、同优化器下 path 与 `opt_cost` 相同；
+* **精度保持**：`complex128` 进 `complex128` 出，`complex64` 保持 `complex64`；
+* **错误要报不要猜**：操作数个数不符、标签尺寸冲突、输出标签未知都抛
+  `ValueError`/`TypeError`，措辞与 `opt_einsum` 完全一致。
+
 ## 在已发布包上可复现
 
-`pyqcd==0.1.18`（`build_info(): backend=kupl, array_backend=numpy`）对
+`pyqcd==0.1.21`（`build_info(): backend=kupl, array_backend=numpy`）对
 `opt_einsum==3.4.0`（`dp`），`complex128`，预热 3 次后取 15 次中位数：
 
 | 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
@@ -57,6 +116,107 @@
 基于这些数字的"生产混合加权 ≈2.82×（4757 s → 1688 s）"同样继承该前提：
 它假设那些额外 kernel 存在。
 
+
+## CUDA：同样的对照放到 GPU 上
+
+GPU 对照是**同一块卡上的库对库**比较：两边都用 `cupy` 数组在同一设备上执行，
+倍率反映的是实现差异，不是 CPU 与 GPU 的算力差。协议：`complex128`、预热 5 次、
+**21 次同步计时取中位数**（每次计时前后 `cp.cuda.Device(0).synchronize()`）、
+两边都用 `dp` 策略。
+
+在 RTX 4060 Laptop（算力 8.9，按 8.9 编译）上，`pyqcd 0.1.19`
+（`build_info(): backend=cuda`）对 `opt_einsum 3.4.0` 实测：
+
+| 工作负载 | `opt_einsum` | `pyqcd.einsum` | 倍率 |
+|---|---|---|---|
+| γ 夹心，T=512，nvec=512 | 59.8–62.7 ms | 4.6–8.4 ms | **7–13×**（融合 kernel） |
+| 核子 2pt，nvec=64 | 255.8–263.8 ms | 134–162 ms | **1.6–1.9×**（kernel，`needs-optimization`） |
+| 批量 GEMM 32×512² | 163.2–168.0 ms | 190.6–192.0 ms | 0.86–0.88×（**PyQCD 更慢**） |
+
+结论：
+
+* GPU 上的收益来自**融合 kernel**（γ 夹心整条链一个 kernel，
+  trace 可见 `PYQCD_EINSUM_CUDA_SANDWICH ... kernel=1`）；
+* 核子 2pt 的 CUDA kernel 只有 1.6–1.9×，且仍标 `needs-optimization`——
+  该形态受设备吞吐约束，不是规划器问题；
+* 普通批量 GEMM 没有融合 kernel，PyQCD 的批量 GEMM 路径比直接交给
+  `cupy.einsum` 慢约 15%，这一组 `opt_einsum` 胜出。
+
+复现（需要 `cupy` 与 `opt_einsum`；缺依赖时脚本给出明确提示并退出，
+不会让文档构建失败）：
+
+```python
+import statistics
+import time
+
+import numpy as np
+import pyqcd.einsum as pe
+
+try:
+    import cupy as cp
+    import opt_einsum as oe
+except ImportError:
+    raise SystemExit("this comparison needs cupy and opt_einsum: "
+                     'pip install "pyqcd[cuda]" opt_einsum')
+
+
+def bench(call, warmup=5, repeat=21):
+    """Median of `repeat` GPU-synchronised calls (milliseconds)."""
+    for _ in range(warmup):
+        call()
+    cp.cuda.Device(0).synchronize()
+    samples = []
+    for _ in range(repeat):
+        start = time.perf_counter()
+        call()
+        cp.cuda.Device(0).synchronize()
+        samples.append((time.perf_counter() - start) * 1e3)
+    return statistics.median(samples), min(samples), max(samples)
+
+
+import warnings
+
+
+def compare(label, equation, operands):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")          # the fallback notices are printed below
+        ours = bench(lambda: pe.contract(equation, *operands))
+        theirs = bench(lambda: oe.contract(equation, *operands, optimize="dp"))
+    print(f"{label:26s} pyqcd {ours[0]:8.2f} ms | opt_einsum {theirs[0]:8.2f} ms "
+          f"| rate {theirs[0] / ours[0]:5.2f}x | n=21 "
+          f"(pyqcd min..max {ours[1]:.1f}..{ours[2]:.1f} ms)")
+
+
+rng = np.random.default_rng(0)
+
+
+def g(*shape):
+    return cp.asarray((rng.standard_normal(shape)
+                       + 1j * rng.standard_normal(shape)).astype(np.complex128))
+
+
+print("device:", cp.cuda.runtime.getDeviceProperties(0)["name"].decode(),
+      "|", pe.build_info()["backend"])
+
+n = 64                                                  # production-shaped nucleon 2pt
+compare("nucleon 2pt nvec=64", "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",
+        [g(4, 4, n, n), g(4, 4, n, n), g(4, 4, n, n), g(4, 4), g(4, 4),
+         g(4, n, n, n), g(4, n, n, n), g(4, 4)])
+compare("batched GEMM 32x512", "bij,bjk->bik", [g(32, 512, 512), g(32, 512, 512)])
+compare("gamma sandwich 512x512", "ab,...bce,cd->...dae",
+        [g(4, 4), g(512, 4, 4, 512), g(4, 4)])
+
+# correctness first: a benchmark of wrong numbers is worthless
+_ref_ops = [g(4, 4, 16, 16), g(4, 4, 16, 16), g(4, 4, 16, 16), g(4, 4), g(4, 4),
+            g(4, 16, 16, 16), g(4, 16, 16, 16), g(4, 4)]
+_eq = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
+_ours = cp.asnumpy(pe.contract(_eq, *_ref_ops))       # cupy -> host
+_theirs = cp.asnumpy(oe.contract(_eq, *_ref_ops, optimize="dp"))
+assert np.allclose(_ours, _theirs, rtol=1e-10, atol=1e-12), "kernel disagrees with opt_einsum"
+```
+
+笔记本上的 GPU 数字抖动较大：务必看脚本打印的 min–max 区间，
+小于该区间的差异不要当真。
 
 ## 内存
 
@@ -136,6 +296,12 @@ compare("gamma sandwich T=256", "ab,...bce,cd->...dae",
 # 3) a generic chain with no specialised kernel — the honest control case.
 a, b, d = (rng.standard_normal((800, 800)) for _ in range(3))
 compare("generic chain 800", "ij,jk,kl->il", [a, b, d])
+
+# correctness first: the ratio means nothing if the results disagree
+_a = np.arange(12.0).reshape(3, 4)
+_b = np.arange(20.0).reshape(4, 5)
+assert np.allclose(pe.contract("ij,jk->ik", _a, _b),
+                   oe.contract("ij,jk->ik", _a, _b, optimize="dp"))
 ```
 
 `opt_einsum` 用 `dp` 策略（生产默认）。第三组是对照：通用链式收缩没有专用 kernel，

@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.1.18`。需要固定版本时：`pip install "pyqcd==0.1.13"`。
+当前发行版：`0.1.21`。需要固定版本时：`pip install "pyqcd==0.1.13"`。
 
 PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的
 manylinux wheel 需要 `auditwheel` 修补。因此首次安装会编译一次（笔记本上约一分钟），
@@ -100,6 +100,11 @@ print(pyqcd.__version__)
 print(pe.build_info())
 # {'backend': 'kupl', 'mpi': False, 'kupl_mpi_build': False,
 #  'mpi_label': 'non-MPI build', 'native_library': '.../libpyqcdeinsum_kupl.so'}
+
+info = pe.build_info()
+assert pyqcd.__version__.count(".") == 2
+assert info["backend"] in {"cuda", "kupl", "python"}
+assert isinstance(info["native_library"], str)
 ```
 
 `backend` 取值为 `cuda`、`kupl` 或 `python`（后者表示正在用纯 Python 规划）。
@@ -187,6 +192,51 @@ pe.contract(e, *o)
 提示为 `[kernel: cuda_nucleon_2pt]` 表示真的跑了 GPU kernel，`[plan-cache]` 表示没跑。
 注意：`strings | grep compute_` 只对"纯 SASS"产物有效；fatbin 布局下架构名不是明文
 ASCII，请改用运行期提示判断。
+
+### 首次安装为什么要一分钟——以及怎么看进度
+
+`pip install pyqcd` 全部从源码构建，顺序如下（4 核笔记本实测，`pyqcd 0.1.19`）：
+
+| 阶段 | 典型耗时 | 做什么 |
+|---|---|---|
+| pip 构建隔离 | 3–8 s | 建临时 venv 并安装 `setuptools`、`wheel`、`cython` |
+| KUPL（CPU）库 | ~6 s | 一次 `g++ -O3 -fopenmp` 编译 6 个源文件 |
+| CUDA 库 | ~20 s | 一次 `nvcc` 编译 10 个源文件（无 `nvcc` 时跳过） |
+| Cython 扩展 | ~10 s | 把 CUDA 库接到 Python（无 CUDA 时跳过） |
+| 打 wheel + 安装 | 2–5 s | 落位 `.so` 并安装 wheel |
+
+合计约 **带 CUDA 30 s、不带 10–15 s**，另加 numpy/h5py/scipy 下载时间。
+
+pip 默认吞掉构建输出，所以编译期间看起来像卡死。为此构建过程**直接把进度写到终端**
+（`/dev/tty`，没有终端时退回 stderr），安装时你会看到：
+
+```
+[pyqcd build] compiling the native kupl library (this takes a while; pip will stay silent until it finishes)
+[pyqcd build] KUPL (CPU): compiling 6 sources
+[pyqcd build] KUPL (CPU): done in 6s
+[pyqcd build] native kupl library built in 6.3s
+[pyqcd build] compiling the native cuda library (this takes a while; pip will stay silent until it finishes)
+[pyqcd build] CUDA: compiling 10 sources for arch 89 (nvcc, about 20 s)
+[pyqcd build] CUDA: done in 19s
+[pyqcd build] native cuda library built in 20.0s
+```
+
+想看完整编译器日志，或者确实怀疑卡住：
+
+```bash
+pip install -v "pyqcd[cuda]"     # full build backend log
+echo $?                          # 0 means the install finished; the wheel is cached
+pip cache list pyqcd             # the built wheel is reused by later installs
+```
+
+缩短安装的几种办法：
+
+| 场景 | 做法 |
+|---|---|
+| 只需要 CPU 内核 | `PYQCD_EINSUM_BACKEND=kupl pip install pyqcd`（跳过 nvcc，省约 25 s） |
+| 完全不想编译 | `PYQCD_SKIP_NATIVE_BUILD=1 pip install pyqcd` → 纯 Python 规划 |
+| 多个环境 | 装一次，之后复用 pip 的 wheel 缓存（无需额外参数） |
+| 离线集群 | 先做 wheelhouse，见「离线 / air-gapped 安装」一节 |
 
 ## 从源码仓库构建（开发用途）
 
@@ -294,6 +344,10 @@ import pyqcd.einsum as pe
 pe.thread_info()                 # {'omp': 4, 'blas': 2, 'source': 'auto (...)', ...}
 pe.configure_threads(4, 2)       # pin OpenMP=4, BLAS=2 explicitly
 pe.configure_threads(blas=4)     # only change BLAS
+
+info = pe.thread_info()
+assert info["omp"] >= 1 and info["blas"] >= 1
+assert "profile" in info
 ```
 
 `python -m pyqcd` 也会打印当前生效值。
@@ -353,4 +407,8 @@ import pyqcd.einsum as pe
 pe.build_info()        # backend / native_available / array_backend / mpi / mpir_label
 pe.thread_info()       # effective omp / blas threads and where they came from
 pe.specializations()   # registered equation-shape specialisations
+
+info = pe.build_info()
+assert {"backend", "native_available", "array_backend", "mpi"} <= set(info)
+assert len(pe.specializations()) >= 1
 ```

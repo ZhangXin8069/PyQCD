@@ -7,6 +7,15 @@ BUILD_DIR=${PYQCD_EINSUM_BUILD_DIR:-"$SCRIPT_DIR/build"}
 BUILT_LIBRARY="$BUILD_DIR/libpyqcdeinsum_kupl.so"
 PUBLIC_LIBRARY="$SCRIPT_DIR/libpyqcdeinsum_kupl.so"
 VERSION_SCRIPT="$BUILD_DIR/einsum_kupl_exports.map"
+
+# 构建进度：pip 会捕获子进程输出、只在失败时回放，所以进度直接写终端（/dev/tty）；
+# 没有终端时退回 stderr。这样 `pip install pyqcd` 期间用户能看见"在编什么、编到哪"，
+# 不会误判为卡死。
+_pyqcd_notify() {
+    { printf '[pyqcd build] %s\n' "$*" > /dev/tty; } 2>/dev/null \
+        || printf '[pyqcd build] %s\n' "$*" >&2
+}
+_pyqcd_now() { date +%s; }
 BUILD_LOG="$BUILD_DIR/build.log"
 MPI_SETTING=${PYQCD_EINSUM_ENABLE_MPI:-auto}
 case "$MPI_SETTING" in
@@ -187,6 +196,8 @@ TEMP_LIBRARY="$BUILT_LIBRARY.tmp.$$"
 TEMP_PUBLIC="$PUBLIC_LIBRARY.tmp.$$"
 trap 'rm -f "$TEMP_LIBRARY" "$TEMP_PUBLIC"' EXIT
 
+_PYQCD_T0=$(_pyqcd_now)
+_pyqcd_notify "KUPL (CPU): compiling ${#SOURCES[@]} sources"
 printf 'pyqcd einsum KUPL build\n'
 printf '  compiler: %s\n' "$("$CXX" --version | head -n 1)"
 printf '  flags:    %s\n' "$FLAGS"
@@ -235,4 +246,5 @@ printf 'native library: %s -> %s\n' "$PUBLIC_LIBRARY" "$LINK_TARGET"
 if ! nm -D --defined-only "$BUILT_LIBRARY" | awk '{print $NF}' | grep -qx applyContractQcd; then
     printf 'warning: applyContractQcd is not implemented by this KUPL source set yet\n' >&2
 fi
+_pyqcd_notify "KUPL (CPU): done in $(( $(_pyqcd_now) - _PYQCD_T0 ))s"
 printf 'make.sh: SUCCESS\n'
