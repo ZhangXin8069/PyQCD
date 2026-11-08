@@ -70,13 +70,14 @@ def _toolchain_problem() -> str | None:
         return f"build script {BUILD_SCRIPT.name} is missing"
     if shutil.which("bash") is None:
         return "bash is not available on PATH"
-    compiler = (
-        os.environ.get("NVCC", "nvcc")
-        if BUILD_BACKEND == "cuda"
-        else os.environ.get("CXX", "g++")
-    )
-    if shutil.which(compiler) is None:
-        return f"compiler {compiler!r} is not available on PATH"
+    # CUDA 后端需要两套工具链：nvcc 编译 .cu，主机 C++ 编译器编译 Cython 扩展。
+    compilers = [("CXX", "c++", "host C++ compiler")]
+    if BUILD_BACKEND == "cuda":
+        compilers.insert(0, ("NVCC", "nvcc", "CUDA compiler"))
+    for variable, default, description in compilers:
+        compiler = os.environ.get(variable, default)
+        if shutil.which(compiler) is None:
+            return f"{description} {compiler!r} is not available on PATH"
     return None
 
 
