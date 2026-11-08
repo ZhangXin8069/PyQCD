@@ -160,3 +160,29 @@ python -m pyqcd.testing.docs_examples --lang zh --keep-going
 （`compute_dual_field_strength(U)` 实际是 `(F_dict, mu, nu)`；
 `Bootstrap(data, n_samples=200)` 实际是 `(data, Nconf_axes=0, ...)`），
 正是这个门把它们暴露出来的。
+
+## 文档 API 一致性门（新增）
+
+除了"代码块能跑"，还要保证**引用的符号真实存在**。仓库提供 AST 检查器：
+
+```bash
+python -m pyqcd.testing._docs_api_contract   # 或 python -m pyqcd.testing 里的 test_docs_api_contracts
+```
+
+它解析 `docs/en/*.md` 的每个 ```` ```python ```` 块，收集
+`import pyqcd.x as y` 与 `from pyqcd.x import n`，再对块内所有 `y.attr` / 导入名做
+`hasattr` 校验；`pyqcd.testing` 因不随 PyPI 发布而列入白名单。
+当前基线：35 个引用、0 失败，并断言"至少 20 个引用"以防解析器退化成空转。
+
+同时验证文档里的**命令**（bash 块不会被 Python 执行器覆盖）：
+
+```bash
+python -m pyqcd.testing.einsum.bench_native --help
+python -m pyqcd.testing.einsum.verify_compat --help
+python -m pyqcd.testing.einsum.verify_native --help
+python -m pyqcd.testing.einsum.bench_native --data synthetic --profiles T1 \
+  --backends cpu --iters 2 --warmup 1 --planner shared --smoke
+```
+
+注意 bench 会自己打印"阻断"（too_short / oracle 非冻结 / 代理数据），
+这是设计如此，不是失败；文档里引用这些命令时应保留其产物路径说明。

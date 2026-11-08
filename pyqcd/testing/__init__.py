@@ -2648,6 +2648,15 @@ def test_correlated_fit_identifiability_guards():
     _run_unittest_contract(FitWindowValidationTests)
 
 
+def test_docs_api_contracts():
+    """文档引用的每个 API 都必须真实存在（AST 解析 docs 的 python 代码块）。"""
+    from . import _docs_api_contract as contract
+
+    for name in sorted(dir(contract)):
+        if name.startswith("test_") and callable(getattr(contract, name)):
+            getattr(contract, name)()
+
+
 def test_release_metadata_contracts():
     """发布元数据一致性：版本三处对齐、子包清单、MANIFEST 策略、build_info 字段。"""
     from . import _release_metadata_contract as contract
