@@ -1,0 +1,43 @@
+# Read the Docs 构建配置（配置文件规范 v2）。
+# 规范：https://docs.readthedocs.com/platform/stable/config-file/v2.html
+#
+# 本文件专用于 Read the Docs 项目 `pyqcd-zh`
+# （https://app.readthedocs.org/projects/pyqcd-zh/ ），即 PyQCD 的中文文档站点。
+#
+# 重要：一个 Read the Docs 项目默认只读取**仓库根目录**的 `.readthedocs.yaml`，
+# 而仓库根的那份属于主项目（英文工程，指向 `docs/conf.py`）。因此必须在网页端把
+# 中文项目指向本文件：
+#
+#   Read the Docs → 项目 pyqcd-zh → Settings → "Configuration file"
+#   填写相对仓库根的路径：docs-zh/readthedocs.yaml
+#
+# 本文件中的全部路径都相对于**仓库根目录**（不是相对于 docs-zh/）。
+# 规范之外的键会让构建直接失败，不要在此添加其它字段。
+
+version: 2
+
+build:
+  # 构建镜像。
+  os: ubuntu-24.04
+  tools:
+    # 至少需要一个工具；与仓库运行的 Python 版本一致。
+    python: "3.12"
+
+sphinx:
+  # 使用 Sphinx 时必填：conf.py 的路径，相对仓库根目录。
+  configuration: docs-zh/conf.py
+
+# 在默认 HTML 之外额外构建的格式。
+formats:
+  - pdf
+  - epub
+
+python:
+  install:
+    # 只装文档依赖（sphinx / sphinx-rtd-theme / myst-parser），
+    # 不在 Read the Docs 上安装 pyqcd 包本身。
+    - requirements: docs-zh/requirements.txt
+
+submodules:
+  # submodules 是只读参考库，文档构建不需要，跳过克隆。
+  exclude: all

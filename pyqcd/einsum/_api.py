@@ -1114,7 +1114,18 @@ def _core_contract(
     operands = list(operands_)
     backend = parse_backend(operands, backend)
 
+    # `shared_intermediates()` 期间必须走（被缓存的）Python 路径：原生执行会绕过
+    # 共享缓存，使缓存恒为空、失去共享语义。
+    sharing = False
     if not evaluate_constants:
+        try:
+            from . import _sharing
+
+            sharing = _sharing.currently_sharing()
+        except Exception:  # noqa: BLE001 - 探测失败按未共享处理
+            sharing = False
+
+    if not evaluate_constants and not sharing:
         handled, native_result = _try_native_contract(
             operands, contraction_list, backend, out, kwargs, native_cache=native_cache
         )

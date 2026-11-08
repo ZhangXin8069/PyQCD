@@ -22,6 +22,12 @@ description: Use when implementing, debugging, or benchmarking pyqcd.einsum agai
 
 - 修改原生计划、ABI、CUDA/KUPL 或性能时，读
   [references/native-implementation.md](references/native-implementation.md)。
+- **动构建、性能测量或接线专用 kernel 之前必读**
+  [references/measured-pitfalls.md](references/measured-pitfalls.md)：
+  记录了 2026-11-08 会话中实测踩到的构建坑（CUDA 架构默认值、同名头文件冲突、MPI 探测误判）、
+  测量坑（预热不足、对照变成 kernel 比 kernel、用现编 .so 冒充生产库、逐元素误差误判）、
+  正确性坑（输出全 1 维未写、设备 kernel 缺连续性校验、异常不回退、开关未进缓存键）
+  与已知限制（`contract_expression` 不走 kernel、CUDA MPI 是 stub、E4 融合仅极小规模生效）。
 - 只做 API/物理缩并语义时，沿用 `pyqcd-distillation` 与
   `pyqcd-infra`，不要复制其完整规则。
 
