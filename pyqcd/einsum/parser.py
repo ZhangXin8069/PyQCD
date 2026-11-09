@@ -1,5 +1,7 @@
 """NumPy compatible parsing of einsum subscripts, without any array dependency."""
 
+from __future__ import annotations
+
 import itertools
 from collections.abc import Iterator, Sequence
 from typing import Any

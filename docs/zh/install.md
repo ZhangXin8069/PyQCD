@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.2.1`。需要固定版本时：`pip install "pyqcd==0.1.13"`。
+当前发行版：`0.2.3`。需要固定版本时：`pip install "pyqcd==0.1.13"`。
 
 PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的
 manylinux wheel 需要 `auditwheel` 修补。因此首次安装会编译一次（笔记本上约一分钟），
@@ -17,15 +17,17 @@ pip 会缓存编译好的 wheel，在相同解释器的其它环境里再装就�
 
 | 项 | 用于 |
 |---|---|
-| Python ≥ 3.10 | 必需 |
+| Python ≥ 3.8 | 必需 |
 | `numpy`、`h5py`、`scipy` | 必需（自动安装） |
 | `bash` + C++17 编译器 | 原生 KUPL（CPU）内核 —— 基线构建 |
 | `nvcc` | 可选的原生 CUDA（GPU）内核 |
 | Cython | 可选的 CUDA 扩展；由 pip 构建环境提供，无需手动安装 |
 
-`requires-python` 为 `>=3.10`。本套文档背后的验证在 Python 3.12（完整测试套件）与
-3.14（构建 + 导入 + `python -m pyqcd`）上执行；3.10、3.11、3.13 预期可用，但发布机器上
-没有对应的自动化实跑记录。
+`requires-python` 为 `>=3.8`。全部模块都能被 3.8 语法解析，并在不评估 PEP 604 注解
+（`from __future__ import annotations`）的前提下导入；本套文档背后的验证在 Python 3.8
+（安装 + 导入 + 收缩检查）、3.12（完整测试套件）与 3.14（构建 + 导入 + `python -m pyqcd`）
+上执行；3.9–3.11、3.13 预期可用，但发布机器上没有自动化实跑记录。选 3.8 作为下限，是因为
+它是同时满足所声明 `numpy`/`scipy` 版本下限、且仍有维护中 wheel 的最老解释器。
 | `mpicxx` | 启用 MPI 的 KUPL 构建（仅源码仓库） |
 | `torch` | 可选：torch 后端（`pip install "pyqcd[torch]"`） |
 | `matplotlib` | 可选：作图辅助（`pip install "pyqcd[plot]"`） |

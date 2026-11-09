@@ -9,6 +9,9 @@ contraction engine with an **`opt_einsum`-compatible API**.
 
 ## Install
 
+Requires **Python 3.8+** (3.8 is the oldest interpreter with maintained
+`numpy`/`scipy` wheels at the declared floors).
+
 ```bash
 pip install pyqcd
 ```

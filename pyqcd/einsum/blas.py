@@ -1,5 +1,7 @@
 """Decide whether a pairwise contraction maps onto a BLAS call."""
 
+from __future__ import annotations
+
 from collections.abc import Sequence
 
 __all__ = ["can_blas"]

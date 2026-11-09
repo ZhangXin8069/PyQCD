@@ -33,6 +33,7 @@ True
 dependencies and the subpackage list; ``python -m pyqcd --version`` prints the
 version only.
 """
+from __future__ import annotations
 
 __all__ = [
     "analysis",
@@ -49,7 +50,7 @@ __all__ = [
     "vertex",
 ]
 
-__version__ = "0.2.1"
+__version__ = "0.2.3"
 
 import importlib as _importlib
 

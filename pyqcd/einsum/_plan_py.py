@@ -1,5 +1,7 @@
 """Pure Python contraction path planning: greedy, optimal, branch bound and dp."""
 
+from __future__ import annotations
+
 import bisect
 import functools
 import heapq
@@ -9,12 +11,14 @@ import random
 import re
 from collections import Counter, defaultdict
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from .blas import can_blas
 from .helpers import compute_size_by_dict, find_contraction, flop_count
 from .parser import find_output_shape, parse_einsum_input
 
-Step = tuple[tuple[int, ...], frozenset, str, tuple[str, ...] | None, str | bool]
+if TYPE_CHECKING:                    # 仅类型检查期需要；3.8 运行时不能求值 PEP 585/604
+    Step = tuple[tuple[int, ...], frozenset, str, tuple[str, ...] | None, str | bool]
 
 _UNLIMITED_MEM = {-1, None, float("inf")}
 

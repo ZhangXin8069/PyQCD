@@ -8,6 +8,8 @@ PyQCD 是一个用 Python 编写的格点 QCD 工具库，可选原生加速。�
 
 ## 安装
 
+需要 **Python 3.8+**（3.8 是满足所声明 `numpy`/`scipy` 下限、且仍有维护 wheel 的最老解释器）。
+
 ```bash
 pip install pyqcd
 ```

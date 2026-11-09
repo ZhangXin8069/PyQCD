@@ -1,5 +1,7 @@
 """Index bookkeeping and cost helpers for contraction planning."""
 
+from __future__ import annotations
+
 from collections.abc import Collection, Iterable, Sequence
 
 __all__ = ["compute_size_by_dict", "find_contraction", "flop_count"]

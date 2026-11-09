@@ -187,6 +187,19 @@ def probe() -> dict[str, Any]:
     return report
 
 
+def _format_kernel_status(status: Any) -> str:
+    """Render the kernel status, which is ``None`` when no CUDA kernel exists.
+
+    Without ``cupy`` (CPU-only install) the probe has nothing to report here; a
+    ``None`` status used to raise ``TypeError`` instead of printing a line.
+    """
+    if not status:
+        return "n/a — no CUDA kernel in this installation"
+    state = status.get("state", "unknown")
+    detail = status.get("detail", "")
+    return f"{state} — {detail}" if detail else str(state)
+
+
 def format_report(report: dict[str, Any]) -> str:
     info = report["build_info"]
     lines = [
@@ -198,8 +211,7 @@ def format_report(report: dict[str, Any]) -> str:
         f"  device         : {report['device']} "
         f"(compute {report.get('compute_capability', '?')})",
         f"  kernel enabled : {report['kernel_enabled']}",
-        f"  kernel status  : {report['kernel_status']['state']} — "
-        f"{report['kernel_status']['detail']}",
+        "  kernel status  : " + _format_kernel_status(report.get("kernel_status")),
         f"  hit hint       : {report['kernel_hint']}",
         f"  verdict        : {report['verdict']}",
     ]
