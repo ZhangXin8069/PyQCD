@@ -6,6 +6,7 @@
 #if defined(PYQCMATX_HAVE_MATX) && PYQCMATX_HAVE_MATX
 #include <cuda/std/array>
 #include <cuda/std/complex>
+#include <cuda_runtime.h>
 #include <matx.h>
 #endif
 
@@ -34,11 +35,19 @@ constexpr const char* kNoCutensor =
 #if defined(PYQCMATX_HAVE_MATX) && PYQCMATX_HAVE_MATX && \
     defined(PYQCMATX_ENABLE_CUTENSOR) && PYQCMATX_ENABLE_CUTENSOR
 
+// matx::make_tensor(T*, const index_t (&shape)[RANK], bool owning=false) takes a
+// C array reference, so the shape must live in a wrapper whose member is the
+// array; an expression returning cuda::std::array would not bind.
 template <int R>
-cuda::std::array<matx::index_t, R> to_shape(const int64_t* raw) {
-    cuda::std::array<matx::index_t, R> shape{};
+struct Shape {
+    matx::index_t values[R];
+};
+
+template <int R>
+Shape<R> to_shape(const int64_t* raw) {
+    Shape<R> shape{};
     for (int axis = 0; axis < R; ++axis) {
-        shape[axis] = static_cast<matx::index_t>(raw[axis]);
+        shape.values[axis] = static_cast<matx::index_t>(raw[axis]);
     }
     return shape;
 }
@@ -46,27 +55,54 @@ cuda::std::array<matx::index_t, R> to_shape(const int64_t* raw) {
 template <typename T, int RIN, int ROUT>
 int run_unary(const char* subscripts, void* out, void* const* inputs,
               const int64_t* input_shapes, const int64_t* out_shape) {
-    auto a = matx::make_tensor<T>(static_cast<T*>(inputs[0]),
-                                  to_shape<RIN>(input_shapes));
-    auto c = matx::make_tensor<T>(static_cast<T*>(out),
-                                  to_shape<ROUT>(out_shape));
-    matx::CUDAExecutor exec;
-    (c = matx::cutensor::einsum(subscripts, a)).run(exec);
-    return PYQCMATX_STATUS_OK;
+    if constexpr (RIN == 0) {
+        return reject("rank-0 input operands are not supported by the bridge");
+    } else {
+        auto shape = to_shape<RIN>(input_shapes);
+        auto a = matx::make_tensor<T>(static_cast<T*>(inputs[0]),
+                                      shape.values);
+        matx::CUDAExecutor exec;
+        if constexpr (ROUT == 0) {
+            // A zero-length C array is not valid C++, so wrap the scalar output
+            // by allocating a rank-0 tensor and copying the single element back.
+            auto c = matx::make_tensor<T>(cuda::std::array<matx::index_t, 0>{});
+            (c = matx::cutensor::einsum(subscripts, a)).run(exec);
+            cudaMemcpy(out, c.Data(), sizeof(T), cudaMemcpyDeviceToDevice);
+        } else {
+            auto shape_out = to_shape<ROUT>(out_shape);
+            auto c = matx::make_tensor<T>(static_cast<T*>(out),
+                                          shape_out.values);
+            (c = matx::cutensor::einsum(subscripts, a)).run(exec);
+        }
+        return PYQCMATX_STATUS_OK;
+    }
 }
 
 template <typename T, int RIN, int ROUT>
 int run_binary(const char* subscripts, void* out, void* const* inputs,
                const int64_t* input_shapes, const int64_t* out_shape) {
-    auto a = matx::make_tensor<T>(static_cast<T*>(inputs[0]),
-                                  to_shape<RIN>(input_shapes));
-    auto b = matx::make_tensor<T>(static_cast<T*>(inputs[1]),
-                                  to_shape<RIN>(input_shapes + RIN));
-    auto c = matx::make_tensor<T>(static_cast<T*>(out),
-                                  to_shape<ROUT>(out_shape));
-    matx::CUDAExecutor exec;
-    (c = matx::cutensor::einsum(subscripts, a, b)).run(exec);
-    return PYQCMATX_STATUS_OK;
+    if constexpr (RIN == 0) {
+        return reject("rank-0 input operands are not supported by the bridge");
+    } else {
+        auto shape_a = to_shape<RIN>(input_shapes);
+        auto shape_b = to_shape<RIN>(input_shapes + RIN);
+        auto a = matx::make_tensor<T>(static_cast<T*>(inputs[0]),
+                                      shape_a.values);
+        auto b = matx::make_tensor<T>(static_cast<T*>(inputs[1]),
+                                      shape_b.values);
+        matx::CUDAExecutor exec;
+        if constexpr (ROUT == 0) {
+            auto c = matx::make_tensor<T>(cuda::std::array<matx::index_t, 0>{});
+            (c = matx::cutensor::einsum(subscripts, a, b)).run(exec);
+            cudaMemcpy(out, c.Data(), sizeof(T), cudaMemcpyDeviceToDevice);
+        } else {
+            auto shape_out = to_shape<ROUT>(out_shape);
+            auto c = matx::make_tensor<T>(static_cast<T*>(out),
+                                          shape_out.values);
+            (c = matx::cutensor::einsum(subscripts, a, b)).run(exec);
+        }
+        return PYQCMATX_STATUS_OK;
+    }
 }
 
 template <typename T>

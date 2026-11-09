@@ -565,8 +565,9 @@ def _section_contradiction(tally):
         tally.check(group, f'{key}|规范化取正文、API 段待核实',
                     '正文' in resolution and 'API' in resolution,
                     resolution[:70])
-        tally.check(group, f'{key}|API 段状态为 untested',
-                    entry.get('api_claim_status') == contract.STATUS_UNTESTED,
+        tally.check(group, f'{key}|API 段状态为 untested 或 stale',
+                    entry.get('api_claim_status') in (
+                        contract.STATUS_UNTESTED, contract.STATUS_STALE),
                     f'got={entry.get("api_claim_status")!r}')
         affected = tuple(entry.get('affected_cases', ()))
         tally.check(group, f'{key}|受影响用例存在', bool(affected)

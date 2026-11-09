@@ -49,6 +49,8 @@ MODE_IMPLICIT = 'implicit'
 STATUS_TESTED = 'tested'
 STATUS_UNTESTED = 'untested'
 STATUS_UNSUPPORTED = 'unsupported'
+#: 文档声明已被实际源码推翻（文档段落过时），保留记录但不再作为断言依据。
+STATUS_STALE = 'stale'
 
 CASE_FIELDS = ('name', 'group', 'subscripts', 'shapes', 'out_shape', 'mode',
                'matx_status', 'source_note')
@@ -113,11 +115,12 @@ DOC_CASES = (
         'shapes': ((5, 20, 4, 3),),
         'out_shape': (20, 3, 4, 5),
         'mode': MODE_EXPLICIT,
-        'matx_status': STATUS_UNTESTED,
+        'matx_status': STATUS_TESTED,
         'source_note': (
             '文档正文置换示例：a{5,20,4,3} → b{20,3,4,5}，'
-            'einsum("ijkl->jlki", a, b)。置换不在文档声明「已测试」的三类'
-            '操作（contraction / inner / GEMM）内，登记为 untested。'),
+            'einsum("ijkl->jlki", a, b)。上游 '
+            'test/00_tensor/EinsumTests.cu::Permute 覆盖了同一方程，'
+            '按源码核验记为 tested。'),
     },
     {
         'name': 'sum_axis',
@@ -126,10 +129,11 @@ DOC_CASES = (
         'shapes': ((2, 3),),
         'out_shape': (3,),
         'mode': MODE_EXPLICIT,
-        'matx_status': STATUS_UNTESTED,
+        'matx_status': STATUS_TESTED,
         'source_note': (
             '文档正文求和示例：a{2,3} → b{3}，einsum("ij->j", a, b)。'
-            '纯求和不在文档声明「已测试」的三类操作内，登记为 untested。'),
+            '上游 test/00_tensor/EinsumTests.cu::Sum 覆盖了同一方程，'
+            '按源码核验记为 tested。'),
     },
     {
         'name': 'trace',
@@ -138,11 +142,12 @@ DOC_CASES = (
         'shapes': ((10, 10),),
         'out_shape': (),
         'mode': MODE_EXPLICIT,
-        'matx_status': STATUS_UNTESTED,
+        'matx_status': STATUS_TESTED,
         'source_note': (
             '文档正文迹示例：a2{10,10} → 标量{}，einsum("ii->", a2, c)。'
-            '重复下标求和（迹）在文档中有示例但不在「已测试」清单内，'
-            '登记为 untested。注意文档没有 `ii->i` 对角输出示例。'),
+            '上游 test/00_tensor/EinsumTests.cu::Trace 与 '
+            'TraceImplicitOutput 覆盖了该方程，按源码核验记为 tested。'
+            '注意文档没有 `ii->i` 对角输出示例。'),
     },
     {
         'name': 'ellipsis_batch_gemm',
@@ -239,10 +244,14 @@ LIMITATIONS = (
         'key': 'tested-scope-contraction-inner-gemm',
         'kind': 'constraint',
         'statement': '文档声明目前只支持并测试了 tensor contractions、'
-                     'inner products、GEMMs；其他操作可能可用但未测试。',
-        'impact': '置换/求和/迹三条文档示例在 DOC_CASES 中标记 untested，'
-                  '不得当作 MatX 已保证的行为。',
-        'source': '文档正文「目前只支持并测试了 ...」段',
+                     'inner products、GEMMs；其他操作可能可用但未测试。'
+                     '实际源码（refer/git-rep/MatX @ 0ac8664）的上游测试 '
+                     'test/00_tensor/EinsumTests.cu 另覆盖 Permute、Sum、'
+                     'Trace、隐式输出与 ellipsis 广播。',
+        'impact': '文档措辞比实现保守；DOC_CASES 的 permute/sum/trace 按源码'
+                  '核验记为 tested，但本机无 cuTENSOR，仍属源码级而非执行级证据。',
+        'source': '文档正文「目前只支持并测试了 ...」段；'
+                  'test/00_tensor/EinsumTests.cu 测试清单',
         'enforced_by': 'DOC_CASES[*].matx_status',
     },
     {
@@ -282,13 +291,16 @@ CONTRADICTIONS = (
             'a variadic list of tensors for contraction is supported. '
             "The output operator '->' is required in MatX currently”。"),
         'resolution': (
-            '以正文为规范行为：`...` 按「各张量批维尺寸必须完全一致」处理，'
-            '显式 `->` 输出的写法和尺寸检查按正文示例执行；API 段的两条说法'
-            '（省略号尚未支持、`->` 强制必需）登记为待核实项，不作断言依据。'),
-        'api_claim_status': STATUS_UNTESTED,
+            '以实际源码为准（refer/git-rep/MatX @ 0ac8664）：'
+            'include/matx/transforms/einsum.h 的 InferImplicitOutput 与 '
+            'ellipsis 解析同时支持隐式输出与 `...` 广播；'
+            'include/matx/operators/einsum.h 的 EinsumOp::Exec 直接调用同一 '
+            'einsum_impl。因此正文与实现一致，API 段的两条说法是过时注释，'
+            '登记为 stale，不再作为待核实项。'),
+        'api_claim_status': STATUS_STALE,
         'affected_cases': ('ellipsis_batch_gemm',),
         'affected_topics': ('ellipsis-broadcast', 'implicit-output-mode'),
-        'recorded_in': 'pyqcd/testing/einsum/_matx_contract.py:CONTRADICTIONS',
+        'recorded_in': 'pyqcd/testing/matx/_contract.py:CONTRADICTIONS',
     },
 )
 

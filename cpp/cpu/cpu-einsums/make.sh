@@ -65,30 +65,47 @@ if [ "$NATIVE_ARCH" = "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Einsums header probe: `$EINSUMS_ROOT/include/Einsums/*.hpp` or
-# `$EINSUMS_ROOT/include/einsums/*.hpp`, first glob hit wins.
+# Einsums include probe. Three layouts are accepted, matching the verified tree
+# (refer/git-rep/Einsums @ 628971c):
+#   1. install prefix:   $EINSUMS_ROOT/include/Einsums/*.hpp
+#   2. source checkout:  $EINSUMS_ROOT/libs/Einsums/<Module>/include/Einsums/...
+#   3. configured build: $EINSUMS_ROOT/build/libs/Einsums/<Module>/include
+#                        (generated headers such as Config/Defines.hpp)
+# PYQCD_EINSUMS_INCLUDE_DIRS overrides the probe entirely.
 # ---------------------------------------------------------------------------
-EINSUMS_INCLUDE=""
-EINSUMS_HEADER_DIR=""
-if [ -n "$EINSUMS_ROOT" ]; then
+EINSUMS_INCLUDE_DIRS=()
+if [ -n "${PYQCD_EINSUMS_INCLUDE_DIRS:-}" ]; then
+    read -r -a EINSUMS_INCLUDE_DIRS <<< "$PYQCD_EINSUMS_INCLUDE_DIRS"
+elif [ -n "$EINSUMS_ROOT" ]; then
     for candidate in "$EINSUMS_ROOT/include/Einsums" "$EINSUMS_ROOT/include/einsums"; do
         if [ -d "$candidate" ]; then
             shopt -s nullglob
             headers=("$candidate"/*.hpp)
             shopt -u nullglob
             if [ ${#headers[@]} -gt 0 ]; then
-                EINSUMS_HEADER_DIR=$candidate
-                EINSUMS_INCLUDE="$EINSUMS_ROOT/include"
+                EINSUMS_INCLUDE_DIRS=("-I$EINSUMS_ROOT/include")
                 break
             fi
         fi
     done
+    if [ ${#EINSUMS_INCLUDE_DIRS[@]} -eq 0 ] && \
+       [ -f "$EINSUMS_ROOT/libs/Einsums/Tensor/include/Einsums/Tensor/Tensor.hpp" ]; then
+        shopt -s nullglob
+        for directory in "$EINSUMS_ROOT"/libs/Einsums/*/include; do
+            [ -d "$directory" ] && EINSUMS_INCLUDE_DIRS+=("-I$directory")
+        done
+        for directory in "$EINSUMS_ROOT"/build/libs/Einsums/*/include; do
+            [ -d "$directory" ] && EINSUMS_INCLUDE_DIRS+=("-I$directory")
+        done
+        shopt -u nullglob
+    fi
 fi
 
-if [ -z "$EINSUMS_INCLUDE" ]; then
+if [ ${#EINSUMS_INCLUDE_DIRS[@]} -eq 0 ]; then
     printf 'warning: no Einsums headers found' >&2
     if [ -n "$EINSUMS_ROOT" ]; then
-        printf ' under %s/include/{Einsums,einsums}/*.hpp\n' "$EINSUMS_ROOT" >&2
+        printf ' under %s/include/{Einsums,einsums}/*.hpp or %s/libs/Einsums/*/include\n' \
+            "$EINSUMS_ROOT" "$EINSUMS_ROOT" >&2
     else
         printf ': PYQCD_EINSUMS_ROOT (or EINSUMS_ROOT) is unset\n' >&2
     fi
@@ -110,22 +127,15 @@ read -r -a CXXFLAGS <<< "$FLAGS"
 DEFINE_FLAGS=()
 INCLUDE_FLAGS=("-I$SCRIPT_DIR/include")
 LINK_FLAGS=()
-if [ -n "$EINSUMS_INCLUDE" ]; then
+if [ ${#EINSUMS_INCLUDE_DIRS[@]} -gt 0 ]; then
     DEFINE_FLAGS+=("-DPYQCEINSUMS_HAVE_EINSUMS=1")
-    INCLUDE_FLAGS+=("-I$EINSUMS_INCLUDE")
-    # The probe accepts both directory spellings; the include spelling has to
-    # follow suit, otherwise a lowercase tree only fails deep inside the compile.
-    case "$EINSUMS_HEADER_DIR" in
-        */include/einsums)
-            DEFINE_FLAGS+=("-DPYQCEINSUMS_TENSOR_HEADER=<einsums/Tensor.hpp>")
-            DEFINE_FLAGS+=("-DPYQCEINSUMS_COMPUTE_GRAPH_HEADER=<einsums/ComputeGraph/ComputeGraph.hpp>")
-            ;;
-    esac
+    INCLUDE_FLAGS+=("${EINSUMS_INCLUDE_DIRS[@]}")
     if [ -n "$EINSUMS_LIBS" ]; then
         read -r -a LINK_FLAGS <<< "$EINSUMS_LIBS"
     else
         printf 'warning: PYQCD_EINSUMS_LIBS is empty; the archive will keep undefined Einsums symbols\n' >&2
-        printf 'warning: set e.g. PYQCD_EINSUMS_LIBS="-L\$PYQCD_EINSUMS_ROOT/lib -leinsums"\n' >&2
+        printf 'warning: set e.g. PYQCD_EINSUMS_LIBS="-L<einsums>/lib -lEinsums-abi<N>"\n' >&2
+        printf 'warning: or link the module archives: -lEinsums_Tensor -lEinsums_ComputeGraph ...\n' >&2
     fi
 else
     DEFINE_FLAGS+=("-DPYQCEINSUMS_HAVE_EINSUMS=0")
@@ -199,7 +209,7 @@ mv -Tf "$TEMP_PUBLIC" "$PUBLIC_LIBRARY"
 trap - EXIT
 
 printf 'native library: %s -> %s\n' "$PUBLIC_LIBRARY" "$LINK_TARGET"
-if [ -z "$EINSUMS_INCLUDE" ]; then
+if [ ${#EINSUMS_INCLUDE_DIRS[@]} -eq 0 ]; then
     printf 'warning: Einsums headers absent; pyqceinsums_einsum() returns UNAVAILABLE(4)\n' >&2
 fi
 _pyqcd_notify "Einsums (CPU): done"

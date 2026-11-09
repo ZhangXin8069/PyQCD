@@ -24,15 +24,15 @@
 
 #if defined(PYQCEINSUMS_HAVE_EINSUMS) && PYQCEINSUMS_HAVE_EINSUMS
 
-// Header spelling is the single unverified knob we cannot test here. Both are
-// overridable so a real checkout can be wired up without touching this file:
-//   -DPYQCEINSUMS_TENSOR_HEADER='<Einsums/Tensor.hpp>'
-//   -DPYQCEINSUMS_COMPUTE_GRAPH_HEADER='<Einsums/ComputeGraph/ComputeGraph.hpp>'
+// Header paths verified against refer/git-rep/Einsums @ 628971c:
+//   libs/Einsums/Tensor/include/Einsums/Tensor/Tensor.hpp      (create_tensor, Tensor<T,R>)
+//   libs/Einsums/ComputeGraph/include/Einsums/ComputeGraph/Operations.hpp  (cg::einsum)
+// Both stay overridable for a different Einsums version.
 #ifndef PYQCEINSUMS_TENSOR_HEADER
-#define PYQCEINSUMS_TENSOR_HEADER <Einsums/Tensor.hpp>
+#define PYQCEINSUMS_TENSOR_HEADER <Einsums/Tensor/Tensor.hpp>
 #endif
 #ifndef PYQCEINSUMS_COMPUTE_GRAPH_HEADER
-#define PYQCEINSUMS_COMPUTE_GRAPH_HEADER <Einsums/ComputeGraph/ComputeGraph.hpp>
+#define PYQCEINSUMS_COMPUTE_GRAPH_HEADER <Einsums/ComputeGraph/Operations.hpp>
 #endif
 
 #include PYQCEINSUMS_TENSOR_HEADER
@@ -67,9 +67,12 @@ int unavailable(const char* reason) {
 constexpr const char* kNoEinsums =
     "Einsums string-einsum bridge was built WITHOUT Einsums "
     "(PYQCEINSUMS_HAVE_EINSUMS=0), so pyqceinsums_einsum() is unavailable. "
-    "Fix: point PYQCD_EINSUMS_ROOT (or EINSUMS_ROOT) at an Einsums checkout or "
-    "install prefix that contains include/Einsums/*.hpp or include/einsums/*.hpp, "
-    "optionally set PYQCD_EINSUMS_LIBS (e.g. -leinsums) plus "
+    "Fix: point PYQCD_EINSUMS_ROOT (or EINSUMS_ROOT) at an Einsums install "
+    "prefix containing include/Einsums/*.hpp, or at a source checkout whose "
+    "libs/Einsums/Tensor/include/Einsums/Tensor/Tensor.hpp exists; "
+    "optionally set PYQCD_EINSUMS_LIBS (e.g. the Einsums CMake targets' "
+    "archive names: -lEinsums-abi<N> for the umbrella, or "
+    "-lEinsums_Tensor -lEinsums_ComputeGraph ... for the module libraries) plus "
     "PYQCD_EINSUMS_FLAGS, then rerun `bash cpp/cpu/cpu-einsums/make.sh`. The "
     "einsums python module is only needed for the pybind11 face and requires an "
     "Einsums configured with -DEINSUMS_BUILD_PYTHON=ON (pybind11>=2.11); this C "
@@ -81,22 +84,11 @@ constexpr const char* kNoEinsums =
 
 // ---------------------------------------------------------------- real path
 
-std::once_flag& einsums_init_flag() {
-    static std::once_flag flag;
-    return flag;
-}
-
-// Einsums expects einsums::initialize()/finalize() around any use of its
-// runtime (OpenMP threading environment, BLAS/HDF5 handles). unverified: the
-// exact signature, and whether a library that is only used through
-// compute_graph still needs it.
-void ensure_einsums_initialized() {
-    std::call_once(einsums_init_flag(), [] {
-        static char program[] = "libpyqceinsums";
-        char* argv[] = {program, nullptr};
-        einsums::initialize(1, argv);
-    });
-}
+// Einsums initialises its modules through registered startup hooks
+// (register_startup_function in libs/Einsums/*/src/InitModule.cpp); there is no
+// top-level einsums::initialize(). The only symbol with that name is
+// einsums::comm::initialize(int*, char***), the MPI layer, which the CPU eager
+// path does not need. Nothing to call here.
 
 template <int R>
 std::size_t element_count(const int64_t* shape) {
@@ -107,13 +99,15 @@ std::size_t element_count(const int64_t* shape) {
     return count;
 }
 
-// unverified: create_tensor<T>(name, dims...) is the assumed spelling; a rank-0
-// tensor is assumed to be creatable with no dims at all.
+// create_tensor<Type>(std::string const&, Args...):
+//   requires(std::is_convertible_v<Args, std::size_t> && ...)
+// and returns Tensor<Type, sizeof...(Args)>. Dimensions are cast to size_t to
+// match that constraint exactly.
 template <typename T, int R, std::size_t... I>
 auto make_tensor_impl(const char* name, const int64_t* shape,
                       std::index_sequence<I...>) {
     return einsums::create_tensor<T>(name,
-                                     static_cast<int64_t>(shape[I])...);
+                                     static_cast<std::size_t>(shape[I])...);
 }
 
 template <typename T, int R>
@@ -239,8 +233,10 @@ int pyqceinsums_einsum(const char* spec, long long set_ptrs, long long params) {
     const int rank = controls[PYQCEINSUMS_PARAM_INPUT_RANK];
     const int dtype_id = controls[PYQCEINSUMS_PARAM_DTYPE_ID];
     const int out_ndim = controls[PYQCEINSUMS_PARAM_OUT_NDIM];
-    if (num_ops < 1 || num_ops > PYQCEINSUMS_MAX_OPERANDS) {
-        return reject("num_ops must be 1 or 2");
+    if (num_ops != 2) {
+        return reject("Einsums cg::einsum has only two-operand overloads "
+                      "(Operations.hpp); a unary transpose/reduction must use "
+                      "cg::permute or cg::dot instead");
     }
     if (rank < 0 || rank > PYQCEINSUMS_MAX_RANK) {
         return reject("input rank out of range");
@@ -288,7 +284,6 @@ int pyqceinsums_einsum(const char* spec, long long set_ptrs, long long params) {
     // ---- backend dispatch --------------------------------------------------
 #if defined(PYQCEINSUMS_HAVE_EINSUMS) && PYQCEINSUMS_HAVE_EINSUMS
     try {
-        ensure_einsums_initialized();
         switch (dtype_id) {
         case PYQCEINSUMS_DTYPE_COMPLEX128:
             return dispatch<std::complex<double>>(

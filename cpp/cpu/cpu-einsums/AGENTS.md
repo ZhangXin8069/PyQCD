@@ -67,7 +67,7 @@ const char* pyqceinsums_last_error(void);                    // 线程局部
 
 1. `spec` 非空（`NULL` 或 `""` 都算空）；
 2. `set_ptrs`/`params` 非零；
-3. `1 <= nops <= 2`（`PYQCEINSUMS_MAX_OPERANDS`）；
+3. `nops == 2`（`PYQCEINSUMS_MAX_OPERANDS`；Einsums 的 `cg::einsum` 没有一元重载）；
 4. `0 <= rank <= 4`（`PYQCEINSUMS_MAX_RANK`）；
 5. `0 <= out_ndim <= 4`；
 6. `dtype_id` ∈ 0..3；
@@ -144,46 +144,49 @@ build/build.log` 到 stderr 并非零退出；构建后用
 
 **未实现 / 未验证（不得声称可用）**：
 
-- **真机 Einsums 路径 unverified：从未用真实 Einsums 头文件编译过，也从未链接过
-  真实 Einsums 库。** 本机无头文件、无库、无法下载源码（github.com 主站不可达）。
-  只用 scratchpad 里的 **mock 头**（不入库、不提交）做过两项**结构**检查：
-  `-fsyntax-only` 通过（模板全部实例化），以及 mock `einsum`（语义是假的
-  `out = Σ operands`）下 200 条派发路径的拷入/拷回正确。这证明的是接口层与配线，
-  **不证明** Einsums 的 API 用法或数值行为。
-- 一元 0 秩 / 任意秩的 Einsums 张量构造、二元同 rank 之外的广播、非连续 view、
-  strided 输入、`alpha/beta` 语义：均未实现也未测试。
+- **真机 Einsums 路径仍未编译/链接过**：`refer/git-rep/Einsums` 已 checkout（§6.1），
+  但它的头文件依赖 CMake configure 生成的 `Einsums/Config/Defines.hpp`，并需要
+  Apiary（libclang/LLVM）、BLAS/LAPACK、HDF5、OpenMP；本机不具备这些条件。
+  因此下述 API 均来自**源码核验**，不是编译或执行证据。
+
+### 6.1 已由实际源码确认（`refer/git-rep/Einsums` @ `628971cd886cd5bb9ecb71d87289522d6625910d`）
+
+1. **头文件路径**：`<Einsums/Tensor/Tensor.hpp>`（`create_tensor`、`Tensor<T,R>`、
+   `data()`）与 `<Einsums/ComputeGraph/Operations.hpp>`（`cg::einsum`）。源码位置：
+   `libs/Einsums/Tensor/include/...`、`libs/Einsums/ComputeGraph/include/...`。
+   仍可用 `-DPYQCEINSUMS_TENSOR_HEADER` / `-DPYQCEINSUMS_COMPUTE_GRAPH_HEADER` 覆盖。
+2. **`create_tensor` 签名**：`template <typename Type = double, typename... Args>
+   auto create_tensor(std::string const &name, Args... args)`，约束
+   `(std::is_convertible_v<Args, std::size_t> && ...)`，返回 `Tensor<Type, sizeof...(Args)>`。
+   桥内把维度显式转 `std::size_t`；不传维度即 `Tensor<T,0>`（Tensor.hpp:2721）。
+3. **`Tensor::data()`**：`using Pointer = T*;`，`[[nodiscard]] Pointer data()`
+   （Tensor.hpp:851/861）——与 `std::copy` 用法一致。
+4. **`cg::einsum` 签名**：`void einsum(EinsumFormatString spec, CType *C,
+   AType const &A, BType const &B)`（Operations.hpp:5711），另有 α/β 重载
+   （:5612）。`EinsumFormatString` 有**非 explicit** 的 `std::string_view`
+   构造函数（EinsumSpec.hpp:389），故 `const char*` 直接可用；运行时字符串在
+   `parse_einsum_spec()` 阶段校验。
+5. **没有一元 `cg::einsum`**：源码只有二元重载与 `sizeof...(Operands) >= 3`
+   的 n 元重载（NaryEinsum.hpp:208/273）；文档亦说明转置用 `cg::permute`、
+   标量用 `cg::dot`。本桥因此**只接受恰好 2 个操作数**，一元写法 fail-closed。
+6. **初始化**：不存在顶层 `einsums::initialize`；唯一同名符号是
+   `einsums::comm::initialize(int*, char***)`（MPI 层）。各模块通过
+   `register_startup_function` 注册启动钩子（`libs/Einsums/*/src/InitModule.cpp`），
+   桥内**不再调用任何初始化函数**。
+7. **库名/链接**：顶层 target 为 `Einsums`，`OUTPUT_NAME` 为
+   `Einsums-abi${EINSUMS_ABI_VERSION}`（`libs/CMakeLists.txt`），即
+   `libEinsums-abi<N>.so`；模块库为 `libEinsums_<Module>.so`。没有 `libeinsums.so`。
+   链接用 `PYQCD_EINSUMS_LIBS`（如 `-L<build>/lib -lEinsums-abi<N>` 或模块库列表）。
+8. **头文件探测**：`make.sh` 现接受三种布局——安装前缀 `include/Einsums/*.hpp`、
+   源码 checkout `libs/Einsums/*/include`、已 configure 的 `build/libs/Einsums/*/include`。
+
+### 6.2 仍未验证
+
+- 真机数值行为、`cg::einsum` 对秩 0 输出（`Tensor<T,0>*`）的接受度、spec 空格容忍度。
 - 元素数溢出检查：真机路径用 `std::size_t` 连乘，未做溢出保护（校验阶段只保证
   shape 非负）。
-- 未做 `einsums::finalize()`：进程退出由 Einsums/OpenMP 自己收尾。
-
-### 未核实清单（每条都是推断，真机接线前必须现场核对）
-
-1. **头文件路径**（unverified）：推断 `<Einsums/Tensor.hpp>` +
-   `<Einsums/ComputeGraph/ComputeGraph.hpp>`。文档只明确 `<Einsums/Tensor.hpp>`
-   （大写 E 目录），ComputeGraph 的具体头文件未核实。两处都可用
-   `-DPYQCEINSUMS_TENSOR_HEADER='<...>'` / `-DPYQCEINSUMS_COMPUTE_GRAPH_HEADER='<...>'`
-   覆盖，无需改源码。
-2. **`create_tensor<T>` 的签名**（unverified）：推断
-   `einsums::create_tensor<T>(name, dims...)`，变参维度、返回 `einsums::Tensor<T,Rank>`；
-   0 秩推断为「不传维度」。`create_tensor` 是 `compute_graph` 示例里的名字，
-   它在 `einsums::` 还是 `einsums::compute_graph::` 命名空间、以及是否支持 0 秩，
-   均未核实。
-3. **`Tensor::data()` 的名字与形态**（unverified）：推断有 `T* data()` /
-   `const T* data()` 且元素连续、行主序（Einsums 默认 row-major）。
-   若实际是 `data_ptr()`/`subscript` 风格，需改 §真机路径的两处 `std::copy`。
-4. **库名 / 链接方式**（unverified）：推断 `-leinsums`（CMake 目标是
-   `Einsums::Einsums`）。实际可能拆成 `libeinsums_core`/`libeinsums`、
-   header-only 或需要 `-L$root/lib64`；`PYQCD_EINSUMS_LIBS` 就是为此留的逃生口。
-5. **`einsums::compute_graph::einsum` 的参数顺序**（unverified）：推断
-   `einsum(spec, &out, a[, b])`（输出是指针、操作数按 spec 里输入顺序）。
-   官方示例正是这个形状，但它是**文档示例**而非编译验证；`spec` 里的
-   `<-` / `;` 是否允许空格、秩 0 输出是否接受 `Tensor<T,0>*`，都未核实。
-6. **`einsums::initialize(argc, argv)` / `finalize()` 的必要性与签名**（unverified）：
-   推断必须在使用前初始化，因此真机路径用 `std::call_once` 惰性调用
-   `initialize(1, argv)`；若 compute_graph 路径不需要初始化，这段是无害的多余。
-7. **`PYQCD_EINSUMS_LIBS` 之外还需不需要 `-DEINSUMS_BUILD_PYTHON=ON`**（unverified）：
-   本桥**不**通过 pybind11 调 Einsums，只用 C++ API，因此不需要 Python 构建；
-   原因串里提到它只是为了让「想用 `import einsums`」的用户知道路标。
+- 未调用 `einsums::comm::finalize()`：进程退出由 Einsums/OpenMP 自行收尾。
+- 桥的 `PYQCEINSUMS_MAX_OPERANDS=2` 是 ABI 常量；Einsums 的 n 元（≥3）路径不在本桥范围。
 
 ## 7. 与 `cpp/cuda/matx` 的对称关系
 
@@ -194,7 +197,7 @@ build/build.log` 到 stderr 并非零退出；构建后用
 | 指针 | 设备指针 | **主机指针** |
 | 槽位/参数表 | `int64_t[8]` / `int32_t[8]`，同下标同含义 | 完全一致 |
 | 校验顺序 | 同 10 条 | 完全一致（错误串措辞不同） |
-| 上界 | 1..2 操作数、rank ≤4、二元同 rank | 相同 |
+| 上界 | 1..2 操作数、rank ≤4、二元同 rank | 恰好 2 操作数、rank ≤4、二元同 rank |
 | 后端开关 | `PYQCMATX_HAVE_MATX` + `-DMATX_EN_CUTENSOR=ON` | `PYQCEINSUMS_HAVE_EINSUMS=1` |
 | 桩行为 | `UNAVAILABLE(4)` + 原因串 | `UNAVAILABLE(4)` + 原因串 |
 | 构建脚本 | `make-nv.sh`（nvcc） | `make.sh`（g++，风格对齐 `cpp/kupl/einsum/make.sh`） |

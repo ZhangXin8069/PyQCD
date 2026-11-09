@@ -35,9 +35,11 @@ extern "C" {
  * inputs separated by semicolons -- the Einsums ComputeGraph spelling of
  * numpy's `"in1,in2->out"`. The bridge does not translate between the two.
  *
- * The bridge is deliberately bounded: it accepts one or two operands, ranks up
- * to 4, and requires both operands of a binary contraction to share a rank
- * (they share the single INPUT_RANK slot). Everything outside that envelope is
+ * The bridge is deliberately bounded: it accepts exactly two operands, ranks up
+ * to 4, and requires both operands to share a rank (they share the single
+ * INPUT_RANK slot). Einsums' `compute_graph::einsum` has only two-operand and
+ * three-or-more n-ary overloads, so a unary transpose/reduction must be written
+ * with `cg::permute`/`cg::dot` instead. Everything outside the envelope is
  * rejected with PYQCEINSUMS_STATUS_INVALID before any Einsums call, matching the
  * fail-closed rule of the einsum ABI.
  */

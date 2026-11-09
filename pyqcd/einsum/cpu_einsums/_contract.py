@@ -464,10 +464,12 @@ DOC_CASES = (
         'source': SOURCE_INFERRED,
         'status': STATUS_UNTESTED,
         'source_note': (
-            'numpy 四维转置 ijkl->jlki；Einsums 文档把置换类写成 '
-            'permute("ijk <- kji", ...)，纯 einsum 的单操作数置换未给示例。'),
-        'native_check': True,
-        'native_note': 'nops=1、rank=4（桥上限）、out_ndim=4（桥上限）',
+            'numpy 四维转置 ijkl->jlki；Einsums 文档把转置写成 '
+            'permute("ijkl->jlki", ...) 而不是 einsum，且实际源码 '
+            'ComputeGraph/Operations.hpp 没有一元 cg::einsum 重载。'),
+        'native_check': False,
+        'native_note': 'Einsums 无一元 cg::einsum；转置须走 cg::permute，'
+                       '故不向桥断言',
     },
     {
         'name': 'sum_axis',
@@ -480,10 +482,10 @@ DOC_CASES = (
         'source': SOURCE_INFERRED,
         'status': STATUS_UNTESTED,
         'source_note': (
-            'numpy 按轴求和 ij->j；Einsums 文档没有单操作数归约示例，'
-            '只承诺字符串派发处理常见模式。'),
-        'native_check': True,
-        'native_note': 'nops=1、rank=2、out_ndim=1',
+            'numpy 按轴求和 ij->j；Einsums 的 cg::einsum 只有二元重载，'
+            '单操作数归约不在其 API 内（源码 Operations.hpp 已核实）。'),
+        'native_check': False,
+        'native_note': 'Einsums 无一元 cg::einsum；一元归约不在桥内',
     },
     {
         'name': 'trace',
@@ -701,6 +703,20 @@ LIMITATIONS = (
         'impact': '耦合簇残差这类 spec 目前不能经本桥执行。',
         'source': 'string_einsum.html：Index Modes / Permutation Operators',
         'enforced_by': '_contract._reject_unsupported + 未列入 DOC_CASES',
+    },
+    {
+        'key': 'no-unary-einsum',
+        'statement': 'Einsums 的 compute_graph::einsum 只有二元重载'
+                     '（另有 sizeof...(Operands)>=3 的 n 元重载），没有一元版本；'
+                     '转置用 cg::permute，标量内积用 cg::dot。',
+        'impact': '本桥只接受恰好两个操作数；numpy 风格的 ijkl->jlki、'
+                  'ii->、ij->j 等一元写法在 Einsums 侧应改写成 permute/dot，'
+                  '不能经本 ABI 执行。',
+        'source': 'refer/git-rep/Einsums @ 628971c：'
+                  'libs/Einsums/ComputeGraph/include/Einsums/ComputeGraph/'
+                  'Operations.hpp:5711（二元）与 NaryEinsum.hpp:208'
+                  '（>=3 元）；tutorial_einsum.rst 亦说明转置用 permute',
+        'enforced_by': 'C 侧 num_ops!=2 校验 + _bridge.check_abi_bounds',
     },
     {
         'key': 'prefactors-alpha-beta',

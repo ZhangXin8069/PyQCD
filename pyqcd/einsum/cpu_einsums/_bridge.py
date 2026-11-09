@@ -215,9 +215,11 @@ def check_abi_bounds(nops, ranks, out_ndim):
     ``ranks`` 是每个输入的 rank。>>> ``params[1]`` 只有单个 ``INPUT_RANK``
     槽位，因此两个输入的 rank 必须相同——这一点常被忽略，必须显式拒绝。
     """
-    if not 1 <= int(nops) <= MAX_OPERANDS:
-        return False, (f'操作数个数 {nops} 超出桥上限 1..{MAX_OPERANDS}'
-                       '（params[0]=NUM_OPS）')
+    if int(nops) != 2:
+        return False, (
+            f'操作数个数 {nops} 不被支持：Einsums compute_graph::einsum 只有'
+            '二元与三元以上 n 元重载（Operations.hpp / NaryEinsum.hpp），'
+            '没有一元版本；转置请用 cg::permute，标量内积请用 cg::dot')
     ranks = [int(rank) for rank in ranks]
     if len(ranks) != int(nops):
         return False, f'rank 表长度 {len(ranks)} 与操作数个数 {nops} 不一致'
@@ -350,6 +352,10 @@ def einsum_into(out, spec, *operands):
     """
     if not operands:
         raise EinsumsBridgeError('至少需要一个输入张量')
+    if len(operands) != 2:
+        raise EinsumsBridgeError(
+            f'Einsums compute_graph::einsum 没有 {len(operands)} 元重载；'
+            '本桥只支持二元收缩，转置请用 cg::permute、标量内积请用 cg::dot')
     normalized = _contract.normalize_spec(spec)
     out_labels, in_labels = _contract.parse_einsums_spec(normalized)
     if len(in_labels) != len(operands):
