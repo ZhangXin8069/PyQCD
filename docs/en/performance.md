@@ -127,8 +127,22 @@ reason instead of silently degrading.
    equations and generic `cupy` equations are handed straight to the backend.
 3. **Batched execution** — when a batch index exists, one batched GEMM replaces
    numpy's per-batch loop (that is the 7–12× column above).
-4. **Plan cache + bound operands** — repeated calls with the same equation/shape
-   skip planning entirely.
+4. **Plan cache + bound operands** — any equation with three or more operands caches
+   its contraction list, so repeated calls skip planning entirely. Planning is 31–84%
+   of call time on small/medium graphs (8-operand chain: 0.76 ms of 0.86 ms), and
+   parsing is 0.002 ms, so this is where repeated calls win.
+
+## Repeated calls
+
+Planning is skipped on the second and later calls with the same equation, shapes,
+dtypes and backend (three or more operands; a two-operand path is one step and the
+cache key would cost more than the plan). Median per call, 8×8 operands:
+
+| Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
+|---|---|---|---|
+| 8-operand chain `ab,bc,cd,de,ef,fg,gh,hi->ai` | 95 µs | 291 µs | **3.07×** |
+| 3-operand chain `ij,jk,kl->il` | 51 µs | 72 µs | **1.41×** |
+| mixed rank `ef,b,e->be` | 52 µs | 60 µs | **1.14×** |
 
 ## Memory
 
