@@ -19,3 +19,9 @@
 [submodule "refer/git-rep/opt_einsum"]
 	path = refer/git-rep/opt_einsum
 	url = https://github.com/dgasmith/opt_einsum.git
+[submodule "refer/git-rep/Einsums"]
+	path = refer/git-rep/Einsums
+	url = https://github.com/Einsums/Einsums
+[submodule "refer/git-rep/MatX"]
+	path = refer/git-rep/MatX
+	url = https://github.com/NVIDIA/MatX

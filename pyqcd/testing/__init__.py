@@ -3213,3 +3213,42 @@ def test_einsum_mixed_native_backends():
 
     ok, detail = run_mixed_backends()
     assert ok, detail
+
+
+def test_matx_einsum_contracts():
+    """MatX `einsum` 文档契约：语料、隐式推断与 C ABI fail-closed。"""
+    import unittest
+
+    from .matx.verify import run
+
+    tally, ready_skipped, reason = run()
+    passed, failed, _skipped = tally.counts()
+    if failed:
+        first = tally.failures()[0]
+        raise AssertionError(
+            f"matx einsum: {failed} assertion(s) failed; "
+            f"{first['group']}/{first['name']}: {first['detail']}")
+    if passed == 0:
+        raise unittest.SkipTest(f'matx einsum: 无可执行断言（{reason}）')
+    if ready_skipped:
+        print(f'matx einsum: pyqcd.einsum 未就绪，依赖它的断言已跳过（{reason}）')
+
+
+def test_cpu_einsums_contracts():
+    """Einsums 字符串 `einsum` 契约：spec 归一化与主机指针 C ABI。"""
+    import unittest
+
+    from pyqcd.einsum.cpu_einsums.verify import run
+
+    tally, native_skipped, reason = run()
+    passed, failed, _skipped = tally.counts()
+    if failed:
+        first = tally.failures()[0]
+        raise AssertionError(
+            f"cpu-einsums: {failed} assertion(s) failed; "
+            f"{first['group']}/{first['name']}: {first['detail']}")
+    if passed == 0:
+        raise unittest.SkipTest(f'cpu-einsums: 无可执行断言（{reason}）')
+    if native_skipped:
+        print('cpu-einsums: 原生桥不可用，native 组已跳过'
+              f'（{reason[:80]}）')

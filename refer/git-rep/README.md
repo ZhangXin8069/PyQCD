@@ -13,6 +13,8 @@ commit。子库工作树保持上游状态，不修改、不把上游文件混�
 | `refer/git-rep/LQCD_Master` | https://github.com/sjtu-sai-agents/LQCD_Master | 自然语言到 PyQUDA 程序与 Slurm 脚本的 agentic 计算流水线 | `e4a443e08d5904371fc280ce93c00ff84df21893` |
 | `refer/git-rep/PyQCU` | https://gitlab.itp.ac.cn/zhangxin8069/PyQCU.git | torch、mpi4py 与 h5py 架构范例及 PyQCD 实现参考 | `8d7002f908aa2c162705f840b604814971753171` |
 | `refer/git-rep/opt_einsum` | https://github.com/dgasmith/opt_einsum | 张量缩并路径优化库（`einsum_path`/`contract`），供缩并成本诊断与路径加速参考 | `fccdd5aa2a933c8bd1452f44689d15e737982cc0` |
+| `refer/git-rep/Einsums` | https://github.com/Einsums/Einsums | C++20 张量代数库：编译期模板与运行时字符串两套 `einsum`、PackedGemm 后端、ComputeGraph 延迟执行与 NumPy 风格 Python 绑定 | `628971cd886cd5bb9ecb71d87289522d6625910d` |
+| `refer/git-rep/MatX` | https://github.com/NVIDIA/MatX | CUDA C++17 张量计算库：GPU 端 `einsum`（cuTENSOR/cuTensorNet 后端）、GEMM 与算子融合 | `0ac86644a82d63e578f695e335fb2d01e1cb06ae` |
 
 `PyQUDA` 内部的 `pyquda_core/pycparser` 是其上游嵌套 submodule
 （https://github.com/eliben/pycparser.git），需以 `git submodule update --init

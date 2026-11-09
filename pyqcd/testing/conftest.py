@@ -125,6 +125,8 @@ from pyqcd.testing import (  # noqa: F401
     test_einsum_cuda_mpi_partition_contracts,
     test_einsum_zero_extent_and_noncontiguous_contracts,
     test_einsum_mixed_native_backends,
+    test_matx_einsum_contracts,
+    test_cpu_einsums_contracts,
 )
 
 
