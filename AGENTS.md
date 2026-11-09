@@ -80,7 +80,7 @@ cd docs && xelatex <文档>.tex        # 编译中文 LaTeX 文档（xelatex，�
 - Git 交付：只暂存本任务文件，禁止 `git add -A`；提交消息写明原因、改动和验证；
   普通推送，禁止 force push 或改写已推送标签。
 - Git 大文件：除用户明确要求外，禁止提交单个大于 `10,000,000` 字节的文件；
-  每批暂存后运行 `/root/configure/skills/form/scripts/form-large-files-check.sh`，
+  每批暂存后运行 `$HOME/configure/skills/form/scripts/form-large-files-check.sh`（`$HOME` 随安装用户而变；仓库内的 `skills/form/scripts/form-audit.sh` 会按候选路径解析全局实现），
   命中时停止提交并提醒用户。
 - 本地例外 1：`data/**` 是已验证历史数据和运行归档，允许跟踪数据、图片、脚本和
   说明文件；受用途与历史可复现性约束，不因通用 `data/` 空目录规则删除。
