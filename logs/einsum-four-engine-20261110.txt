@@ -1,0 +1,90 @@
+# 四引擎 15-case 基准（2026-11-10）
+# env: einsum-bench (python 3.12, numpy 2.5.4, opt_einsum 3.4.0, cupy 14.2)
+# cpu: i7-13620H 8 threads; gpu: RTX 4060 Laptop 8GB
+# protocol: rounds=3, alternate order, inner repeats to 0.3s, correctness first
+
+=== CPU ===
+pyqcd 0.2.4 /home/zhangxin/PyQCD/pyqcd/__init__.py | cpu: cpu
+einsums backend=True | rounds=3 target=0.3s | engines=qcd,opt,einsums
+matmul 2D (real)           qcd=697.20ms opt=682.26ms einsums=836.72ms
+matmul 2D (complex)        qcd=350.61ms opt=360.09ms einsums=429.80ms
+element-wise               qcd=244.51ms opt=292.23ms einsums=1492.87ms
+outer product              qcd=53.83ms opt=96.05ms einsums=295.18ms
+full reduction             qcd=43.31ms opt=41.24ms einsums=N/A
+partial reduction          qcd=101.87ms opt=100.92ms einsums=N/A
+chain 3 ops                qcd=586.55ms opt=583.37ms einsums=N/A
+chain 4 ops                qcd=269.68ms opt=280.98ms einsums=N/A
+hyper-edge                 qcd=89.06ms opt=91.25ms einsums=N/A
+batched GEMM               qcd=274.06ms opt=3495.15ms einsums=337.87ms
+ellipsis                   qcd=716.53ms opt=6201.97ms einsums=N/A
+batch × matrix             qcd=46.15ms opt=45.99ms einsums=N/A
+many small batches         qcd=90.73ms opt=212.19ms einsums=197.16ms
+[pyqcd.einsum] 专用路径: nucleon-2pt(E1) [kernel: kupl_nucleon_2pt] 8 算子核子 2pt；KUPL/CUDA 专用 kernel（形状不匹配时回落到计划缓存）
+nucleon 2pt (kernel)       qcd=2664.71ms opt=45200.89ms einsums=N/A
+[pyqcd.einsum] 专用路径: gamma-sandwich(E5) [plan-cache] γ₅ 夹心；Python 层无专用 kernel（计划缓存），CUDA 执行器可能内部融合
+gamma sandwich (kernel)    qcd=325.07ms opt=5627.39ms einsums=N/A
+
+====================================================================================================
+case                                    qcd              opt          einsums
+matmul 2D (real)                  697.20ms         682.26ms         836.72ms 
+matmul 2D (complex)               350.61ms         360.09ms         429.80ms 
+element-wise                      244.51ms         292.23ms        1492.87ms 
+outer product                      53.83ms          96.05ms         295.18ms 
+full reduction                     43.31ms          41.24ms               N/A
+partial reduction                 101.87ms         100.92ms               N/A
+chain 3 ops                       586.55ms         583.37ms               N/A
+chain 4 ops                       269.68ms         280.98ms               N/A
+hyper-edge                         89.06ms          91.25ms               N/A
+batched GEMM                      274.06ms        3495.15ms         337.87ms 
+ellipsis                          716.53ms        6201.97ms               N/A
+batch × matrix                     46.15ms          45.99ms               N/A
+many small batches                 90.73ms         212.19ms         197.16ms 
+nucleon 2pt (kernel)             2664.71ms       45200.89ms               N/A
+gamma sandwich (kernel)           325.07ms        5627.39ms               N/A
+
+wrote /tmp/bench_cpu2.json
+exit=0
+
+=== GPU ===
+pyqcd 0.2.4 /home/zhangxin/PyQCD/pyqcd/__init__.py | gpu: NVIDIA GeForce RTX 4060 Laptop GPU
+cupy 14.2.0 | matx abi=1 cutensor=True
+einsums backend=True | rounds=3 target=0.3s | engines=qcd,opt,matx
+matmul 2D (real)           qcd=652.27ms opt=646.83ms matx=648.69ms
+matmul 2D (complex)        qcd=326.69ms opt=324.94ms matx=327.71ms
+element-wise               qcd=15.49ms opt=15.61ms matx=238.80ms
+outer product              qcd=2.61ms opt=2.65ms matx=34.34ms
+full reduction             qcd=9.45ms opt=20.09ms matx=293.20ms
+partial reduction          qcd=8.91ms opt=8.77ms matx=17.44ms
+chain 3 ops                qcd=550.40ms opt=550.15ms matx=N/A
+chain 4 ops                qcd=338.14ms opt=365.59ms matx=N/A
+hyper-edge                 qcd=162.10ms opt=166.45ms matx=N/A
+batched GEMM               qcd=244.49ms opt=277.59ms matx=259.58ms
+ellipsis                   qcd=335.58ms opt=384.55ms matx=351.17ms
+batch × matrix             qcd=105.99ms opt=112.03ms matx=N/A
+many small batches         qcd=27.11ms opt=27.20ms matx=26.31ms
+[pyqcd.einsum] 提示：CUDA 2pt 专用 kernel 已接线，但与通用路径相比收益不稳定（0.86–1.17x），标记 needs-optimization
+[pyqcd.einsum] 专用路径: nucleon-2pt(E1) [kernel: cuda_nucleon_2pt] 8 算子核子 2pt；KUPL/CUDA 专用 kernel（形状不匹配时回落到计划缓存）
+nucleon 2pt (kernel)       qcd=877.72ms opt=2337.82ms matx=N/A
+[pyqcd.einsum] 专用路径: gamma-sandwich(E5) [plan-cache] γ₅ 夹心；Python 层无专用 kernel（计划缓存），CUDA 执行器可能内部融合
+gamma sandwich (kernel)    qcd=646.40ms opt=1053.81ms matx=N/A
+
+====================================================================================================
+case                                    qcd              opt             matx
+matmul 2D (real)                  652.27ms         646.83ms         648.69ms*
+matmul 2D (complex)               326.69ms         324.94ms         327.71ms*
+element-wise                       15.49ms          15.61ms         238.80ms*
+outer product                       2.61ms           2.65ms          34.34ms*
+full reduction                      9.45ms          20.09ms         293.20ms*
+partial reduction                   8.91ms           8.77ms          17.44ms*
+chain 3 ops                       550.40ms         550.15ms               N/A
+chain 4 ops                       338.14ms         365.59ms               N/A
+hyper-edge                        162.10ms         166.45ms               N/A
+batched GEMM                      244.49ms         277.59ms         259.58ms*
+ellipsis                          335.58ms         384.55ms         351.17ms*
+batch × matrix                    105.99ms         112.03ms               N/A
+many small batches                 27.11ms          27.20ms          26.31ms*
+nucleon 2pt (kernel)              877.72ms        2337.82ms               N/A
+gamma sandwich (kernel)           646.40ms        1053.81ms               N/A
+
+wrote /tmp/bench_gpu.json
+exit=0
