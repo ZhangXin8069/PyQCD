@@ -15,6 +15,10 @@ PUBLIC_LIBRARY="$SCRIPT_DIR/libpyqcmatx_cuda.so"
 VERSION_SCRIPT="$BUILD_DIR/matx_exports.map"
 BUILD_LOG="$BUILD_DIR/build.log"
 NVCC=${NVCC:-nvcc}
+NVCC_EXTRA=()
+if [ -n "${PYQCD_MATX_NVCC_FLAGS:-}" ]; then
+    read -r -a NVCC_EXTRA <<< "$PYQCD_MATX_NVCC_FLAGS"
+fi
 MATX_ROOT=${PYQCD_MATX_ROOT:-${MATX_ROOT:-}}
 MODE=build
 REQUIRE_MATX=${PYQCD_MATX_REQUIRE_MATX:-0}
@@ -31,6 +35,8 @@ usage() {
     printf '  --clean         remove the build directory and the published symlink\n'
     printf '  --cutensor      compile with -DMATX_EN_CUTENSOR=ON (needs cuTENSOR/cuTensorNet)\n'
     printf '  --require-matx  fail instead of publishing a MatX-less stub archive\n'
+    printf 'Env: PYQCD_MATX_ROOT, PYQCD_MATX_LIB_DIR, PYQCD_MATX_INCLUDE_DIRS,\n'
+    printf '     PYQCD_MATX_NVCC_FLAGS (e.g. -ccbin <g++-13>), PYQCD_MATX_BUILD_DIR\n'
 }
 
 while [ $# -gt 0 ]; do
@@ -114,6 +120,32 @@ fi
 DEFINE_FLAGS=()
 INCLUDE_FLAGS=("-I$SCRIPT_DIR/include")
 LINK_FLAGS=(-lcudart)
+# Conda-installed CUDA pieces live in two trees: $CONDA_PREFIX/include and
+# $CONDA_PREFIX/targets/x86_64-linux/include (NVTX, cudart), with libraries in
+# the matching lib directories. Both are added when present; explicit overrides
+# win for non-conda toolchains.
+if [ -n "${PYQCD_MATX_INCLUDE_DIRS:-}" ]; then
+    read -r -a _extra_includes <<< "$PYQCD_MATX_INCLUDE_DIRS"
+    INCLUDE_FLAGS+=("${_extra_includes[@]}")
+fi
+CONDA_INCLUDE_DIRS=()
+if [ -n "${CONDA_PREFIX:-}" ]; then
+    for directory in "$CONDA_PREFIX/include" "$CONDA_PREFIX/targets/x86_64-linux/include"; do
+        [ -d "$directory" ] && CONDA_INCLUDE_DIRS+=("-I$directory")
+    done
+fi
+INCLUDE_FLAGS+=("${CONDA_INCLUDE_DIRS[@]}")
+
+LIB_DIRS=()
+if [ -n "${PYQCD_MATX_LIB_DIR:-}" ]; then
+    LIB_DIRS+=("-L$PYQCD_MATX_LIB_DIR")
+fi
+if [ -n "${CONDA_PREFIX:-}" ]; then
+    for directory in "$CONDA_PREFIX/lib" "$CONDA_PREFIX/targets/x86_64-linux/lib"; do
+        [ -d "$directory" ] && LIB_DIRS+=("-L$directory")
+    done
+fi
+
 if [ -n "$MATX_HEADER" ]; then
     DEFINE_FLAGS+=("-DPYQCMATX_HAVE_MATX=1")
     INCLUDE_FLAGS+=("-I$MATX_ROOT/include")
@@ -122,6 +154,24 @@ else
     DEFINE_FLAGS+=("-DPYQCMATX_HAVE_MATX=0")
 fi
 
+if [ -n "${PYQCD_MATX_LINK_FLAGS:-}" ]; then
+    read -r -a _extra_links <<< "$PYQCD_MATX_LINK_FLAGS"
+    LINK_FLAGS+=("${_extra_links[@]}")
+fi
+
+have_library() {
+    local name=$1
+    if ldconfig -p 2>/dev/null | grep -q "lib${name}\.so"; then
+        return 0
+    fi
+    for directory in "${LIB_DIRS[@]}"; do
+        if ls "${directory#-L}"/lib"${name}".so >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 if [ "$ENABLE_CUTENSOR" = "1" ]; then
     if [ -z "$MATX_HEADER" ]; then
         printf 'error: --cutensor requires MatX headers (PYQCD_MATX_ROOT)\n' >&2
@@ -129,7 +179,7 @@ if [ "$ENABLE_CUTENSOR" = "1" ]; then
     fi
     missing=()
     for library in cutensor cutensornet; do
-        if ! (ldconfig -p 2>/dev/null | grep -q "lib${library}\.so"); then
+        if ! have_library "$library"; then
             missing+=("$library")
         fi
     done
@@ -139,7 +189,11 @@ if [ "$ENABLE_CUTENSOR" = "1" ]; then
         exit 1
     fi
     DEFINE_FLAGS+=("-DPYQCMATX_ENABLE_CUTENSOR=1")
-    LINK_FLAGS+=(-lcutensor -lcutensornet)
+    # MatX gates the einsum implementation on MATX_EN_CUTENSOR itself, so the
+    # bridge macro alone is not enough: without this the archive compiles but
+    # every einsum_impl() call throws matxNotSupported.
+    DEFINE_FLAGS+=("-DMATX_EN_CUTENSOR=1")
+    LINK_FLAGS+=("${LIB_DIRS[@]}" -lcutensor -lcutensornet)
 else
     DEFINE_FLAGS+=("-DPYQCMATX_ENABLE_CUTENSOR=0")
 fi
@@ -176,7 +230,8 @@ printf '  sources:  %s\n' "$(for source in "${SOURCES[@]}"; do printf '%s ' "${s
 printf '  output:   %s\n' "$PUBLIC_LIBRARY"
 
 set +e
-"$NVCC" -O3 -std=c++17 --shared \
+"$NVCC" -O3 -std=c++20 --shared \
+    "${NVCC_EXTRA[@]}" \
     -Xcompiler -fPIC -Xcompiler -fvisibility=hidden \
     "${ARCH_FLAGS[@]}" \
     "${DEFINE_FLAGS[@]}" \

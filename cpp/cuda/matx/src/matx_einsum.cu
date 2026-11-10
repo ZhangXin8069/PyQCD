@@ -60,7 +60,7 @@ int run_unary(const char* subscripts, void* out, void* const* inputs,
     } else {
         auto shape = to_shape<RIN>(input_shapes);
         auto a = matx::make_tensor<T>(static_cast<T*>(inputs[0]),
-                                      shape.values);
+                                      shape.values, false);
         matx::CUDAExecutor exec;
         if constexpr (ROUT == 0) {
             // A zero-length C array is not valid C++, so wrap the scalar output
@@ -71,7 +71,7 @@ int run_unary(const char* subscripts, void* out, void* const* inputs,
         } else {
             auto shape_out = to_shape<ROUT>(out_shape);
             auto c = matx::make_tensor<T>(static_cast<T*>(out),
-                                          shape_out.values);
+                                          shape_out.values, false);
             (c = matx::cutensor::einsum(subscripts, a)).run(exec);
         }
         return PYQCMATX_STATUS_OK;
@@ -87,9 +87,9 @@ int run_binary(const char* subscripts, void* out, void* const* inputs,
         auto shape_a = to_shape<RIN>(input_shapes);
         auto shape_b = to_shape<RIN>(input_shapes + RIN);
         auto a = matx::make_tensor<T>(static_cast<T*>(inputs[0]),
-                                      shape_a.values);
+                                      shape_a.values, false);
         auto b = matx::make_tensor<T>(static_cast<T*>(inputs[1]),
-                                      shape_b.values);
+                                      shape_b.values, false);
         matx::CUDAExecutor exec;
         if constexpr (ROUT == 0) {
             auto c = matx::make_tensor<T>(cuda::std::array<matx::index_t, 0>{});
@@ -98,7 +98,7 @@ int run_binary(const char* subscripts, void* out, void* const* inputs,
         } else {
             auto shape_out = to_shape<ROUT>(out_shape);
             auto c = matx::make_tensor<T>(static_cast<T*>(out),
-                                          shape_out.values);
+                                          shape_out.values, false);
             (c = matx::cutensor::einsum(subscripts, a, b)).run(exec);
         }
         return PYQCMATX_STATUS_OK;

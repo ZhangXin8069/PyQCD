@@ -450,8 +450,9 @@ DOC_CASES = (
             'string_einsum.html Supported Patterns 的 DOT 范式 " <- i ; i"；'
             'tutorial_einsum.html 说明空输出写进 rank-0 张量并走单次 DOT。'
             '本机无 Einsums，未实测。'),
-        'native_check': True,
-        'native_note': 'nops=2、rank=1、out_ndim=0（标量输出）；未在本机实测',
+        'native_check': False,
+        'native_note': 'Einsums 本版本的 cg::einsum 不支持 rank-0 输出；'
+                       '标量内积必须用 cg::dot，故不向桥断言',
     },
     {
         'name': 'transpose_4d',
@@ -703,6 +704,19 @@ LIMITATIONS = (
         'impact': '耦合簇残差这类 spec 目前不能经本桥执行。',
         'source': 'string_einsum.html：Index Modes / Permutation Operators',
         'enforced_by': '_contract._reject_unsupported + 未列入 DOC_CASES',
+    },
+    {
+        'key': 'no-rank0-tensors',
+        'statement': '本版本 Einsums 的 rank-0 张量不能作为 cg::einsum 的输入或'
+                     '输出：上游 EagerParityGaps.cpp 明确记录 "Tensor<T, 0> as an '
+                     'einsum INPUT does not compile on the eager path"，标量输出'
+                     '由 cg::dot 覆盖。',
+        'impact': '本桥要求输入 rank 1..4、输出 rank 1..4；dot/迹这类标量结果'
+                  '必须改用 cg::dot，不能经本 ABI 执行。',
+        'source': 'refer/git-rep/Einsums @ 628971c: '
+                  'libs/Einsums/ComputeGraph/tests/unit/EagerParityGaps.cpp'
+                  '（rank-0 einsum operands are rejected at compile time）',
+        'enforced_by': 'C 侧 RIN/ROUT==0 拒绝 + _bridge.check_abi_bounds',
     },
     {
         'key': 'no-unary-einsum',

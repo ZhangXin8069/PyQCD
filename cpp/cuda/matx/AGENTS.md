@@ -55,6 +55,11 @@ const char* pyqcmatx_last_error(void);
    `transforms/einsum.h` 的 `InferImplicitOutput` 与 ellipsis 解析确认隐式输出与
    `...` 由**实现**支持；`operators/einsum.h` 顶部的 "Ellipses are not supported yet"
    注释是过时注释。
+7. **计算精度固定为 32 位**：`include/matx/transforms/einsum.h:157` 把
+   `cutensornetComputeType_t computeType = CUTENSORNET_COMPUTE_32F;` 写死，与张量
+   dtype 无关。因此 float64 输入的实际误差约为 float32 量级（本机 7×7 GEMM
+   `max|Δ|≈1.9e-7`），complex128 实测 `1.4e-17` 属该例数值巧合，不得据此声称
+   64 位保证。
 
 ## 4. 构建
 
@@ -93,12 +98,9 @@ bash cpp/cuda/matx/make-nv.sh --require-matx   # 缺 MatX 时硬失败（CI 用�
 
 未验证（不得声称可用）：
 
-- **真机路径从未编译过**：本机缺少 `nvtx3/nvToolsExt.h`（conda CUDA 12.4 未带 NVTX），
-  MatX 全部头文件都无条件 `#include` 它，因此连只读头文件都无法通过 nvcc；更没有
-  cuTENSOR/cuTensorNet 头与库。
-- `matx::index_t` 与本 ABI 的 `int64_t` 宽度一致性、rank-0 输出 D2D 拷贝路径、
-  `cudaMemcpy` 在 managed 内存上的行为、以及真实 cuTENSOR 数值结果，均未实测。
-- 元素数溢出、非连续输入、混合精度、多 GPU/stream 不在本桥范围。
+- 真机路径已在 **独立 conda 环境**中编译并执行（见 §9）；仍属未验证的只有：
+  其余 dtype 组合、rank-0 **输入**操作数、非连续 view、多 GPU/stream。
+- 元素数溢出、混合精度不在本桥范围。
 
 ## 7. 与 `cpp/cpu/cpu-einsums` 的对称关系
 
@@ -123,3 +125,51 @@ python -m pyqcd.testing.matx.verify
 
 期望：四个 `pyqcmatx_*` 符号、`SONAME libpyqcmatx_cuda.so`、
 `PASS n/n`（`native` 组在桩库下断言 `UNAVAILABLE(4)` 与 fail-closed）。
+
+## 9. 本机真机构建与实测（2026-11-10）
+
+工具链全部装在独立 conda 环境，base 未改动：
+
+```bash
+mamba create -y -n matx-cu -c conda-forge -c nvidia \
+  "cuda-version=12.4" cuda-nvcc cuda-nvtx cuda-cudart-dev cutensor cuquantum
+mamba install -y -n matx-cu -c conda-forge \
+  "cuda-nvtx-dev=12.4.127" libcublas-dev libcusolver-dev libcurand-dev \
+  libcufft-dev libcusparse-dev libnvjitlink-dev cuda-driver-dev "gxx=13"
+# MatX 需要 CCCL 3.x 的 cuda/std/__algorithm 新布局；conda 的 cccl 只带内部头，
+# 所以从 codeload 取上游源码（隔离在 /tmp）：
+curl -sS -o /tmp/cccl3.tar.gz \
+  https://codeload.github.com/NVIDIA/cccl/tar.gz/refs/tags/v3.4.2
+mkdir -p /tmp/cccl-3.4.2 && tar -xzf /tmp/cccl3.tar.gz -C /tmp/cccl-3.4.2 --strip-components=1
+
+mamba run -n matx-cu bash -c '
+  export PYQCD_CUDA_ARCHITECTURES=8.9
+  export PYQCD_MATX_ROOT="$PWD/refer/git-rep/MatX"
+  export PYQCD_MATX_INCLUDE_DIRS="-I/tmp/cccl-3.4.2/libcudacxx/include -I/tmp/cccl-3.4.2/cub -I/tmp/cccl-3.4.2/thrust"
+  export PYQCD_MATX_NVCC_FLAGS="-ccbin $CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++"
+  export PYQCD_MATX_LINK_FLAGS="-L$CONDA_PREFIX/lib/stubs -lcuda"
+  bash cpp/cuda/matx/make-nv.sh --cutensor'
+```
+
+关键点：
+
+- `--cutensor` 必须同时定义 **`MATX_EN_CUTENSOR`**（MatX 自己的开关）与
+  `PYQCMATX_ENABLE_CUTENSOR`，否则库能编译但每次调用抛 `matxNotSupported`。
+- 链接需要 `-L$CONDA_PREFIX/lib/stubs -lcuda`；桥的 `DT_NEEDED` 里必须有
+  `libcuda.so.1`，否则 dlopen 报 `undefined symbol: cuGetProcAddress`。
+
+**真机数值（C++ 独立进程，不加载 torch/cupy，避免 CUDA 运行库混用）**：
+
+| 用例 | 结果 |
+|---|---|
+| `ik,kj->ij` float64 7×7 | `status=0`，`max\|Δ\| = 1.9e-7`（MatX 固定 32F 计算） |
+| `ijk,jil->kl` complex128 | `max\|Δ\| = 1.4e-17` |
+| `i,i->` float64 标量（rank-0 输出） | `max\|Δ\| = 4.8e-8`，走 rank-0 分配 + D2D 拷回 |
+| `ii->` float64 迹 | `max\|Δ\| = 0` |
+
+Python 侧（base python + `LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$CONDA_PREFIX/lib/stubs`）：
+
+```text
+python -m pyqcd.testing.matx.verify
+→ PASS 150/150  SKIP 1（native 组真跑，cutensor=True）
+```

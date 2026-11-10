@@ -19,6 +19,7 @@ BUILD_LOG="$BUILD_DIR/build.log"
 CXX=${CXX:-g++}
 NATIVE_ARCH=${PYQCD_EINSUMS_NATIVE_ARCH:-1}
 EINSUMS_ROOT=${PYQCD_EINSUMS_ROOT:-${EINSUMS_ROOT:-}}
+EINSUMS_BUILD_TREE=${PYQCD_EINSUMS_BUILD_TREE:-}
 EINSUMS_LIBS=${PYQCD_EINSUMS_LIBS:-}
 MODE=build
 REQUIRE_EINSUMS=0
@@ -36,6 +37,7 @@ usage() {
     printf '  --require-einsums fail instead of publishing an Einsums-less stub archive\n'
     printf 'Environment:\n'
     printf '  PYQCD_EINSUMS_ROOT / EINSUMS_ROOT    Einsums checkout or install prefix\n'
+    printf '  PYQCD_EINSUMS_BUILD_TREE             configured Einsums build dir (generated headers)\n'
     printf '  PYQCD_EINSUMS_LIBS                   extra link flags (default: empty)\n'
     printf '  PYQCD_EINSUMS_FLAGS                  full override of the compiler flags\n'
     printf '  PYQCD_EINSUMS_BUILD_DIR              build directory (default: <dir>/build)\n'
@@ -94,11 +96,20 @@ elif [ -n "$EINSUMS_ROOT" ]; then
         for directory in "$EINSUMS_ROOT"/libs/Einsums/*/include; do
             [ -d "$directory" ] && EINSUMS_INCLUDE_DIRS+=("-I$directory")
         done
-        for directory in "$EINSUMS_ROOT"/build/libs/Einsums/*/include; do
-            [ -d "$directory" ] && EINSUMS_INCLUDE_DIRS+=("-I$directory")
-        done
         shopt -u nullglob
     fi
+fi
+if [ -n "$EINSUMS_BUILD_TREE" ]; then
+    shopt -s nullglob
+    for directory in "$EINSUMS_BUILD_TREE"/libs/Einsums/*/include; do
+        [ -d "$directory" ] && EINSUMS_INCLUDE_DIRS+=("-I$directory")
+    done
+    # FetchContent dependencies (Waggle, Stripes, ...) keep their headers under
+    # _deps/<name>-src/include; Einsums' public headers include them directly.
+    for directory in "$EINSUMS_BUILD_TREE"/_deps/*-src/include; do
+        [ -d "$directory" ] && EINSUMS_INCLUDE_DIRS+=("-I$directory")
+    done
+    shopt -u nullglob
 fi
 
 if [ ${#EINSUMS_INCLUDE_DIRS[@]} -eq 0 ]; then
@@ -127,6 +138,12 @@ read -r -a CXXFLAGS <<< "$FLAGS"
 DEFINE_FLAGS=()
 INCLUDE_FLAGS=("-I$SCRIPT_DIR/include")
 LINK_FLAGS=()
+if [ -n "${CONDA_PREFIX:-}" ]; then
+    [ -d "$CONDA_PREFIX/include" ] && INCLUDE_FLAGS+=("-I$CONDA_PREFIX/include")
+    if [ -d "$CONDA_PREFIX/lib" ]; then
+        LINK_FLAGS+=("-L$CONDA_PREFIX/lib" "-Wl,-rpath,$CONDA_PREFIX/lib")
+    fi
+fi
 if [ ${#EINSUMS_INCLUDE_DIRS[@]} -gt 0 ]; then
     DEFINE_FLAGS+=("-DPYQCEINSUMS_HAVE_EINSUMS=1")
     INCLUDE_FLAGS+=("${EINSUMS_INCLUDE_DIRS[@]}")
@@ -170,7 +187,7 @@ _pyqcd_notify "Einsums (CPU): compiling ${#SOURCES[@]} source(s)"
 printf 'pyqcd CPU einsums bridge build\n'
 printf '  compiler: %s\n' "$("$CXX" --version | head -n 1)"
 printf '  flags:    %s\n' "$FLAGS"
-printf '  einsums:  %s\n' "${EINSUMS_HEADER_DIR:-not found (UNAVAILABLE stub)}"
+printf '  einsums:  %s\n' "$([ ${#EINSUMS_INCLUDE_DIRS[@]} -gt 0 ] && echo "${#EINSUMS_INCLUDE_DIRS[@]} include dirs" || echo 'not found (UNAVAILABLE stub)')"
 printf '  libs:     %s\n' "${EINSUMS_LIBS:-none}"
 printf '  sources:  %s\n' "$(for source in "${SOURCES[@]}"; do printf '%s ' "${source##*/}"; done)"
 printf '  output:   %s\n' "$PUBLIC_LIBRARY"

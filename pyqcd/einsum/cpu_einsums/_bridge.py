@@ -229,6 +229,10 @@ def check_abi_bounds(nops, ranks, out_ndim):
     if len(set(ranks)) > 1:
         return False, (f'输入 rank {ranks} 不一致：冻结 ABI 只有单个 '
                        'INPUT_RANK 槽位（params[1]），无法表达异 rank 操作数')
+    if int(out_ndim) < 1:
+        return False, (
+            'Einsums cg::einsum 不支持 rank-0 输出（本版本的 rank-0 张量不能'
+            '作为 einsum 操作数或输出；标量内积请用 cg::dot）')
     if int(out_ndim) > MAX_OUT_NDIM:
         return False, f'输出 rank {out_ndim} 超出桥上限 {MAX_OUT_NDIM}'
     if int(out_ndim) < 0:
@@ -356,6 +360,10 @@ def einsum_into(out, spec, *operands):
         raise EinsumsBridgeError(
             f'Einsums compute_graph::einsum 没有 {len(operands)} 元重载；'
             '本桥只支持二元收缩，转置请用 cg::permute、标量内积请用 cg::dot')
+    if int(np.ndim(out)) == 0:
+        raise EinsumsBridgeError(
+            'Einsums 本版本的 cg::einsum 不支持 rank-0 输出；'
+            '标量内积请用 cg::dot')
     normalized = _contract.normalize_spec(spec)
     out_labels, in_labels = _contract.parse_einsums_spec(normalized)
     if len(in_labels) != len(operands):

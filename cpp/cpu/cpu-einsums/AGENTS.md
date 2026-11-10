@@ -260,3 +260,60 @@ bash cpp/cpu/cpu-einsums/make.sh           # 退出码 0，重新产出可用产
   伪造成功，禁止。
 - 新增源文件放 `src/*.cpp`，`make.sh` 自动收编；新增导出符号必须同时进版本脚本，
   否则会被 `local: *` 吃掉。
+
+## 10. 本机真机构建与实测（2026-11-10）
+
+环境全部装在独立 conda 环境，未改动 base：
+
+```bash
+mamba create -y -n einsums-build -c conda-forge \
+  cmake ninja "gxx=13" "gcc=13" openblas hdf5 fmt spdlog mimalloc \
+  cpptrace catch2 apiary pkg-config
+
+mamba run -n einsums-build bash -c '
+  cmake -S refer/git-rep/Einsums -B /tmp/einsums-build -GNinja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" \
+    -DCMAKE_C_COMPILER="$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-gcc" \
+    -DCMAKE_CXX_COMPILER="$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++" \
+    -DEINSUMS_WITH_TESTS=OFF -DEINSUMS_BUILD_PYTHON=OFF \
+    -DEINSUMS_WITH_DOCUMENTATION=OFF
+  cmake --build /tmp/einsums-build -j 8'
+
+mamba run -n einsums-build bash -c '
+  export PYQCD_EINSUMS_ROOT="$PWD/refer/git-rep/Einsums"
+  export PYQCD_EINSUMS_BUILD_TREE=/tmp/einsums-build
+  export PYQCD_EINSUMS_LIBS="-L/tmp/einsums-build/lib -lEinsums-abi1 -Wl,-rpath,/tmp/einsums-build/lib"
+  bash cpp/cpu/cpu-einsums/make.sh'
+```
+
+`cmake --build` 在 **示例二进制**（`GPU_GPUBasics`、`basic`）处失败，但
+`lib/libEinsums-abi1.so`（44 MB，导出 13623 个 einsum 符号）已完整产出，足够链接桥。
+
+**真机 ctypes/C++ 实测（4/4）**：
+
+| 用例 | 结果 |
+|---|---|
+| `ij <- ik ; kj` float64 7×7 | `max\|Δ\| = 4.4e-16` |
+| `kl <- ijk ; jil` complex128 3×4×5 × 4×3×2 | `max\|Δ\| = 1.4e-17` |
+| `ij <- i ; j` float64 4×6 外积 | `max\|Δ\| = 0` |
+| ` <- i ; i` 标量输出 | `INVALID(1)`（rank-0 不支持，符合契约） |
+| 一元写法 | `INVALID(1)`（无一元 einsum） |
+
+**真机路径修正的三处实现错误**（此前仅源码推断，实测才暴露）：
+
+1. `create_tensor` 默认 **列主序**；主机缓冲区是 C 行主序，必须
+   `create_tensor<T>(true, name, dims...)`，否则 GEMM 结果是转置、外积全错。
+2. `GeneralTensor` 的**移动构造**把源对象清成 rank-0；`make_tensor_impl` 必须
+   直接返回纯右值（C++17 强制省略），不要 `auto t = ...; return t;`。
+3. 二元操作数**共享 rank 但 extent 可以不同**（60 vs 24）；拷贝必须用各自的
+   `element_count`。复用 A 的计数会越界写坏 B 的邻居（实测表现为 A 的 dim 变 0、
+   `free(): invalid size`）。
+4. 运行时字符串需显式 `EinsumFormatString(std::string_view(spec))`：`const char*`
+   到 `EinsumFormatString` 需要两次用户定义转换，不能隐式完成。
+
+Python 侧（base python + `LD_LIBRARY_PATH=/tmp/einsums-build/lib:$CONDA_PREFIX/lib`）：
+
+```text
+python -m pyqcd.einsum.cpu_einsums.verify
+→ PASS 169/169  SKIP 7（native 组真跑，backend_enabled=True）
+```

@@ -42,6 +42,7 @@
 #include <complex>
 #include <exception>
 #include <mutex>
+#include <string_view>
 #include <utility>
 
 #endif
@@ -106,8 +107,13 @@ std::size_t element_count(const int64_t* shape) {
 template <typename T, int R, std::size_t... I>
 auto make_tensor_impl(const char* name, const int64_t* shape,
                       std::index_sequence<I...>) {
-    return einsums::create_tensor<T>(name,
-                                     static_cast<std::size_t>(shape[I])...);
+    // Host buffers arrive in C (row-major) order; Einsums defaults to
+    // column-major, so request row-major explicitly. Return the prvalue
+    // directly: GeneralTensor's *move* constructor leaves the source tensor at
+    // rank-0 shape, and a named return would hand that broken object on when
+    // NRVO is not applied.
+    return einsums::create_tensor<T>(
+        true, name, static_cast<std::size_t>(shape[I])...);
 }
 
 template <typename T, int R>
@@ -116,36 +122,51 @@ auto make_tensor(const char* name, const int64_t* shape) {
 }
 
 template <typename T, int RIN, int ROUT>
-int run_unary(const char* spec, void* out, void* const* inputs,
-              const int64_t* input_shapes, const int64_t* out_shape) {
-    auto a = make_tensor<T, RIN>("A", input_shapes);
-    auto c = make_tensor<T, ROUT>("C", out_shape);
-    std::copy(static_cast<const T*>(inputs[0]),
-              static_cast<const T*>(inputs[0]) + element_count<RIN>(input_shapes),
-              a.data());
-    einsums::compute_graph::einsum(spec, &c, a);
-    std::copy(c.data(),
-              c.data() + element_count<ROUT>(out_shape),
-              static_cast<T*>(out));
-    return PYQCEINSUMS_STATUS_OK;
+int run_unary(const char* /*spec*/, void* /*out*/, void* const* /*inputs*/,
+              const int64_t* /*input_shapes*/, const int64_t* /*out_shape*/) {
+    // operations.hpp has only two-operand and >=3-operand overloads; a unary
+    // transpose/reduction is cg::permute/cg::dot, not cg::einsum.
+    return reject("Einsums compute_graph::einsum has no unary overload; "
+                  "use cg::permute for transposes and cg::dot for scalar "
+                  "inner products");
 }
 
 template <typename T, int RIN, int ROUT>
 int run_binary(const char* spec, void* out, void* const* inputs,
                const int64_t* input_shapes, const int64_t* out_shape) {
-    auto a = make_tensor<T, RIN>("A", input_shapes);
-    auto b = make_tensor<T, RIN>("B", input_shapes + RIN);
-    auto c = make_tensor<T, ROUT>("C", out_shape);
-    const std::size_t operand_count = element_count<RIN>(input_shapes);
-    std::copy(static_cast<const T*>(inputs[0]),
-              static_cast<const T*>(inputs[0]) + operand_count, a.data());
-    std::copy(static_cast<const T*>(inputs[1]),
-              static_cast<const T*>(inputs[1]) + operand_count, b.data());
-    einsums::compute_graph::einsum(spec, &c, a, b);
-    std::copy(c.data(),
-              c.data() + element_count<ROUT>(out_shape),
-              static_cast<T*>(out));
-    return PYQCEINSUMS_STATUS_OK;
+    if constexpr (RIN == 0 || ROUT == 0) {
+        // EagerParityGaps.cpp records the upstream limitation: "Tensor<T, 0>
+        // as an einsum INPUT does not compile on the eager path"; scalar
+        // outputs are covered by the dot tests (cg::dot), not cg::einsum.
+        return reject("Einsums cg::einsum cannot take rank-0 operands or "
+                      "produce a rank-0 output; use cg::dot for scalar inner "
+                      "products");
+    } else {
+        auto a = make_tensor<T, RIN>("A", input_shapes);
+        auto b = make_tensor<T, RIN>("B", input_shapes + RIN);
+        auto c = make_tensor<T, ROUT>("C", out_shape);
+        // The two operands share a rank but not necessarily their extents, so
+        // each copy uses its own element count. Reusing A's count overwrote B's
+        // allocation for e.g. "kl <- ijk ; jil" (60 vs 24 elements) and
+        // corrupted the neighbouring tensor's descriptor.
+        const std::size_t count_a = element_count<RIN>(input_shapes);
+        const std::size_t count_b = element_count<RIN>(input_shapes + RIN);
+        std::copy(static_cast<const T*>(inputs[0]),
+                  static_cast<const T*>(inputs[0]) + count_a, a.data());
+        std::copy(static_cast<const T*>(inputs[1]),
+                  static_cast<const T*>(inputs[1]) + count_b, b.data());
+        // EinsumFormatString has only a compile-time literal constructor and a
+        // std::string_view constructor; const char* would need two user-defined
+        // conversions, so wrap it explicitly for runtime strings.
+        einsums::compute_graph::einsum(
+            einsums::compute_graph::EinsumFormatString(
+                std::string_view(spec)),
+            &c, a, b);
+        std::copy(c.data(),
+                  c.data() + element_count<ROUT>(out_shape),
+                  static_cast<T*>(out));
+        return PYQCEINSUMS_STATUS_OK;
+    }
 }
 
 template <typename T, int RIN, int ROUT>
@@ -238,11 +259,13 @@ int pyqceinsums_einsum(const char* spec, long long set_ptrs, long long params) {
                       "(Operations.hpp); a unary transpose/reduction must use "
                       "cg::permute or cg::dot instead");
     }
-    if (rank < 0 || rank > PYQCEINSUMS_MAX_RANK) {
-        return reject("input rank out of range");
+    if (rank < 1 || rank > PYQCEINSUMS_MAX_RANK) {
+        return reject("input rank must be 1..4: Einsums cg::einsum cannot take "
+                      "rank-0 operands");
     }
-    if (out_ndim < 0 || out_ndim > PYQCEINSUMS_MAX_RANK) {
-        return reject("out_ndim out of range");
+    if (out_ndim < 1 || out_ndim > PYQCEINSUMS_MAX_RANK) {
+        return reject("output rank must be 1..4: Einsums cg::einsum cannot "
+                      "produce a rank-0 output; use cg::dot");
     }
     if (dtype_id < PYQCEINSUMS_DTYPE_COMPLEX128 ||
         dtype_id > PYQCEINSUMS_DTYPE_FLOAT32) {

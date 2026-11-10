@@ -255,6 +255,19 @@ LIMITATIONS = (
         'enforced_by': 'DOC_CASES[*].matx_status',
     },
     {
+        'key': 'compute-type-32f',
+        'kind': 'constraint',
+        'statement': 'MatX 的 cuTensorNet 路径把 compute type 硬编码为 '
+                     'CUTENSORNET_COMPUTE_32F（transforms/einsum.h:157），'
+                     '与张量 dtype 无关；float64/complex128 输入同样按 32 位计算。',
+        'impact': 'float64 实测只能达到 float32 量级精度（7×7 GEMM '
+                  'max|Δ|≈1.9e-7）；complex128 的 1.4e-17 属个例，不能据此'
+                  '声称 64 位保证。测试容差必须按 32F 设定。',
+        'source': 'refer/git-rep/MatX @ 0ac86644: '
+                  'include/matx/transforms/einsum.h:157',
+        'enforced_by': 'record-only（桥不做精度转换）',
+    },
+    {
         'key': 'output-tensor-required',
         'kind': 'constraint',
         'statement': '显式模式必须随调用给出输出张量（用 `->` 直接命名输出'
