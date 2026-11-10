@@ -22,6 +22,8 @@ repository.
    usage
    performance
    install
+   acknowledgements
+   appendix
 
 Where to start
 --------------

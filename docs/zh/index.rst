@@ -18,6 +18,8 @@ PyQCD 中文文档
    usage
    performance
    install
+   acknowledgements
+   appendix
 
 从哪里开始
 ----------

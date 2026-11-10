@@ -443,7 +443,54 @@ CUDA_PATH=/tmp/cuda13hdr \
 `components.log` 逐项比对，0 处数值不一致（过程中修正了两处倍率笔误）。
 但**转录正确 ≠ 测量有效**：本节的威胁分析不会因数字核对而消失。
 
-## 9. 相关提交
+## 9. 新对比测试对象的接入工作流
+
+以 MatX/Einsums 的落地过程为模板，新增一个对比引擎按以下顺序进行（每步都有
+可检查产物）：
+
+1. **固定上游**：`refer/git-rep/<name>` 以 Git submodule 固定 commit，并在
+   `refer/git-rep/README.md` 登记来源、用途、固定 commit；工作树只读。
+2. **C++ 桥**：`cpp/<device>/<name>/` 下放 `include/<name>.h`（状态码、dtype、
+   平坦 `int64`/`int32` 槽位）、`src/*.cu|*.cpp`、`python/*.h`、构建脚本与
+   `AGENTS.md`；导出面用 version script 收敛，构建失败关闭（缺依赖产出
+   `UNAVAILABLE(4)` 桩库）。
+3. **Python 绑定**：`pyqcd/testing/<name>/` 下 ctypes 编组、`probe()`、
+   `einsum_into()`、`verify.py`；契约语料只取官方文档，未核实项标
+   `untested`。
+4. **入口与总门**：在 `pyqcd/testing/__init__.py` 与 `conftest.py` 注册
+   `test_<name>_contracts`，保持 SKIP/失败语义。
+5. **基准接入**：在 `pyqcd/testing/einsum/bench_four_engines.py` 增加 runner、
+   支持矩阵、精度标签与 `N/A` 原因；不修改既有 15 个 case。
+6. **分发隔离**：`find_packages` 排除测试包，`MANIFEST.in` prune 其源码；
+   核心命名空间不引入第三方测试代码。
+7. **验收清单**：桩构建；依赖具备时真机构建；对独立 oracle 的正确性；同线程、
+   同预热、交替顺序的性能；`form-audit`；`git status` 干净；文档更新。
+
+关键判据：任何一步缺失都会在后续暴露——缺 submodule 固定点无法复现；缺
+fail-closed 会把“没跑”伪装成“跑对”；缺支持矩阵会把 `N/A` 误读为慢；
+缺分发隔离会污染 wheel/sdist。
+
+## 10. 在更多计算环境对比的展望
+
+当前结论受单机、单卡、单一尺寸与 3 轮采样限制。下一步按优先级：
+
+1. **机器维度**：服务器 CPU（NUMA、更多核）、数据中心 GPU（HBM）、
+   AMD/Apple；至少三台机器复核大倍率方向性。
+2. **并行维度**：MPI/多卡、多 stream、CUDA graph、分布式 batch 分片。
+3. **精度维度**：MatX 64F 路径（或全部引擎统一 32F）、complex64/float32、
+   混合精度与 32F 累加稳定性。
+4. **规模维度**：每个家族 ≥3 个尺寸做 scaling 曲线，定位 MatX cuTensorNet
+   开销被摊薄的 crossover；生产 L24/nvec=100 在显存守卫下测。
+5. **指标维度**：峰值内存、尾延迟（p95/p99）、吞吐、能耗、冷启动（规划 +
+   首次加载）、单位成本。
+6. **配置维度**：每引擎线程扫描（固定 8/8 vs 最佳档）、BLAS/CUDA 小版本矩阵。
+7. **方法维度**：独立进程、锁频、≥7–10 轮、bootstrap CI，并把不显著阈值
+   固化为报告判据。
+
+优先做 1（第二台机器）与 3（精度对齐），因为它们最可能改变现有排序；
+规模与并行维度用于确认大倍率结论是否在生产条件下仍成立。
+
+## 11. 相关提交
 
 | 提交 | 内容 |
 |---|---|
@@ -453,3 +500,5 @@ CUDA_PATH=/tmp/cuda13hdr \
 | `a68420a` | 四引擎 15-case 基准驱动与原始记录 |
 | `dc6333f` | 修正预热/缓冲/线程口径，记录计算占比 |
 | `388b746` | 区分“MatX 支持 double”与“einsum 固定 32F 计算” |
+| `9a00f28` | 将第三方桥测试代码隔离在 wheel/sdist 之外 |
+| `fbc05f7` | 将 cpu_einsums 测试子包迁出生产命名空间 |

@@ -28,7 +28,8 @@ import sys
 import traceback
 from pathlib import Path
 
-PAGES = ("overview", "usage", "performance", "install")
+PAGES = ("overview", "usage", "performance", "install",
+         "acknowledgements", "appendix")
 _BLOCK = re.compile(r"```python\n(.*?)```", re.S)
 _SKIP_MARKERS = ("# pseudo-code", "# docs-skip")
 
