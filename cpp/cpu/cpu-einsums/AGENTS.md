@@ -317,3 +317,24 @@ Python 侧（base python + `LD_LIBRARY_PATH=/tmp/einsums-build/lib:$CONDA_PREFIX
 python -m pyqcd.einsum.cpu_einsums.verify
 → PASS 169/169  SKIP 7（native 组真跑，backend_enabled=True）
 ```
+
+### 10.1 端到端 vs 真正计算（2026-11-10 复测）
+
+桥每次调用都会 `create_tensor` 建 3 个张量并做起止拷贝；`cg::einsum` 本身很快：
+
+| 用例 | engine | alloc | 计算占比 | 端到端（同轮基准） |
+|---|---:|---:|---:|---:|
+| gemm 4096 | 578.9 ms | 134.2 ms | **81.2%** | 944.8 ms |
+| elementwise 12000 | **75.4 ms** | 1103.7 ms | **6.4%** | 1547.6 ms |
+| outer 8000 | 70.0 ms | 173.3 ms | 28.8% | 294.8 ms |
+| batched 16×1024 | 173.5 ms | 136.4 ms | 56.0% | 401.0 ms |
+
+结论：elementwise/outer 的端到端耗时主要由**逐次张量分配**决定，不是 Einsums
+的收缩内核；把它们当成 Einsums 的算力会严重低估。复现：
+`cpp/cpu/cpu-einsums/tests/bench_components.cpp`（编译命令同 §10，链接
+`-lEinsums-abi1 -lwaggle -lfmt -lhdf5 -lmimalloc -lopenblas -lcpptrace -lgomp`）。
+
+线程注意：`pyqcd.einsum` 导入后会把 `OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS`
+改成 kernel/generic 档（本机 generic=4/2），同进程内后加载的 Einsums 会继承。
+跨引擎对比必须显式固定：`PYQCD_EINSUM_THREADS=off OMP_NUM_THREADS=8
+OPENBLAS_NUM_THREADS=8`；否则 GEMM 2048 会从 144 ms 变成 183 ms。

@@ -31,6 +31,16 @@ GPU runs need ``CUDA_PATH`` pointing at a CUDA toolkit include tree (cupy JIT)
 and the MatX bridge dependencies on ``LD_LIBRARY_PATH`` (``libcutensor``,
 ``libcutensornet``, the ``libcuda`` stub).  CPU runs need the Einsums build
 tree on ``LD_LIBRARY_PATH``.  Both bridges are loaded lazily per engine.
+
+Pin threads when comparing across engines: importing ``pyqcd.einsum`` rewrites
+``OMP_NUM_THREADS``/``OPENBLAS_NUM_THREADS`` for its own profiles, and the
+Einsums library loaded later in the same process inherits them::
+
+    PYQCD_EINSUM_THREADS=off OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 \
+        python -m pyqcd.testing.einsum.bench_four_engines --device cpu
+
+The driver warms each engine up adaptively (5/2/1 calls by one-shot probe) and
+allocates the bridges' output buffer once per case, not once per run.
 """
 from __future__ import annotations
 
@@ -171,21 +181,17 @@ def make_runners(device):
     from pyqcd.testing.matx import _bridge as matx_bridge
     from pyqcd.einsum.cpu_einsums import _bridge as einsums_bridge
 
-    def qcd(eq, ops, out_shape):
+    def qcd(eq, ops, out_shape, out=None):
         return pe.contract(eq, *ops)
 
-    def opt(eq, ops, out_shape):
+    def opt(eq, ops, out_shape, out=None):
         return oe.contract(eq, *ops, optimize='dp')
 
-    def matx(eq, ops, out_shape):
-        cp = _cuda()
-        dtype = ops[0].dtype
-        out = cp.zeros(out_shape, dtype=dtype)
+    def matx(eq, ops, out_shape, out=None):
         matx_bridge.einsum_into(out, eq, *ops)
         return out
 
-    def einsums(eq, ops, out_shape):
-        out = np.zeros(out_shape, dtype=np.asarray(ops[0]).dtype)
+    def einsums(eq, ops, out_shape, out=None):
         einsums_bridge.einsum_into(out, _numpy_to_einsums(eq), *ops)
         return out
 
@@ -254,13 +260,26 @@ def run(device, engines, rounds):
         row = {'case': label, 'equation': equation,
                'n_ops': len(operands), 'out_shape': list(out_shape),
                'engines': {}}
+        # The bridges take a caller-owned output. Allocate one per case (not
+        # once for the whole run): holding every case's output would keep
+        # gigabytes resident and distort later GPU cases.
+        outs = {}
+        if device == 'gpu' and available.get('matx', (False,))[0]:
+            outs['matx'] = _cuda().zeros(out_shape, dtype=operands[0].dtype)
+        if device == 'cpu' and available.get('einsums', (False,))[0]:
+            outs['einsums'] = np.zeros(
+                out_shape, dtype=np.asarray(operands[0]).dtype)
+
+        def call(name):
+            return runners[name](equation, operands, out_shape, outs.get(name))
+
         working = []
         for name, (ok, reason) in available.items():
             if not ok:
                 row['engines'][name] = {'status': 'N/A', 'reason': reason}
                 continue
             try:
-                got = runners[name](equation, operands, out_shape)
+                got = call(name)
                 host = to_host(got)
                 error = relative_error(host, reference_host)
                 tolerance = MATX_TOL if name == 'matx' else TOL
@@ -278,8 +297,23 @@ def run(device, engines, rounds):
                     'reason': f'{type(exc).__name__}: {exc}'[:200]}
 
         if working:
+            # CUDA clocks and allocator pools need more than one call to settle
+            # (the MatX batched case moves ~35% between the 2nd and 10th call),
+            # but a 45 s opt_einsum case must not pay five of them. Scale the
+            # warm-up count with a one-shot probe.
+            probe0 = {
+                name: one((lambda e=name: call(e)),
+                          1, sync)
+                for name in working
+            }
+            warmups = {name: (5 if t < 0.1 else 2 if t < 1.0 else 1)
+                       for name, t in probe0.items()}
+            for name in working:
+                for _ in range(warmups[name]):
+                    call(name)
+            sync()
             probe = {
-                name: one((lambda e=name: runners[e](equation, operands, out_shape)),
+                name: one((lambda e=name: call(e)),
                           1, sync)
                 for name in working
             }
@@ -292,8 +326,7 @@ def run(device, engines, rounds):
                 for engine in order:
                     try:
                         samples[engine].append(one(
-                            (lambda e=engine: runners[e](
-                                equation, operands, out_shape)), inner, sync))
+                            (lambda e=engine: call(e)), inner, sync))
                     except Exception as exc:  # noqa: BLE001
                         samples[engine].append(None)
                         row['engines'][engine] = {
