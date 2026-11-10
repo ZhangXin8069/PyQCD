@@ -55,11 +55,14 @@ const char* pyqcmatx_last_error(void);
    `transforms/einsum.h` 的 `InferImplicitOutput` 与 ellipsis 解析确认隐式输出与
    `...` 由**实现**支持；`operators/einsum.h` 顶部的 "Ellipses are not supported yet"
    注释是过时注释。
-7. **计算精度固定为 32 位**：`include/matx/transforms/einsum.h:157` 把
-   `cutensornetComputeType_t computeType = CUTENSORNET_COMPUTE_32F;` 写死，与张量
-   dtype 无关。因此 float64 输入的实际误差约为 float32 量级（本机 7×7 GEMM
-   `max|Δ|≈1.9e-7`），complex128 实测 `1.4e-17` 属该例数值巧合，不得据此声称
-   64 位保证。
+7. **计算精度固定为 32 位（仅 einsum）**：`include/matx/transforms/einsum.h:157`
+   把 `cutensornetComputeType_t computeType = CUTENSORNET_COMPUTE_32F;` 写死，与
+   张量 dtype 无关。float64 输入的实际误差约为 float32 量级（本机 7×7 GEMM
+   `max|Δ|≈1.9e-7`）。**这不等于 MatX 不支持 double**：张量类型、描述符
+   （`MatXTypeToCudaType<double>` → `CUDA_R_64F`）与 cuBLAS 路径都支持 FP64，
+   `detail::MatXTypeToCudaComputeType<double>()` 返回 `CUBLAS_COMPUTE_64F`；
+   本机 `matmul` float64 256² 实测 `rel=1.9e-16`。只有 `cutensor::einsum`
+   这一条路径被钉在 32F。
 
 ## 4. 构建
 
