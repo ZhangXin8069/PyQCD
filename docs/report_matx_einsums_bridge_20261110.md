@@ -331,18 +331,117 @@ CUDA_PATH=/tmp/cuda13hdr \
 原始输出：`logs/einsum-four-engine-20261110.txt`。基准驱动：
 `pyqcd/testing/einsum/bench_four_engines.py`。
 
-## 8. 局限与后续
+## 8. 评估的局限（威胁到效度的因素）
 
-- 单机、3 轮、best-of-inner；GPU 部分 case 轮间波动 1.3–1.7×，只能看量级。
-- MatX 的 32F 与其它 64F 引擎非等价精度；element-wise/outer/full-reduction 的
-  差距包含精度口径差异。
-- Einsums 的“纯计算”不含主机↔张量拷贝（element-wise 8000 实测拷贝 68.4 ms）；
+先声明结论强度：本报告能支撑“数量级优势 / 硬限制”的判断，不能支撑 5–10% 的
+精细排名，也不能外推到其它机器、精度或生产规模。
+
+### 8.1 构念效度：比较对象不是同一种东西
+
+- **opt_einsum 不是执行引擎**：CPU 上是 NumPy/BLAS，GPU 上是 CuPy/cuBLAS；
+  把它放进四引擎表，实际测的是“规划器 + 后端”。
+- **qcd 的路径依赖**：无求和标签交后端、批量轴走 KUPL/CUDA 原生执行器、
+  物理形态走专用 kernel、通用 cupy 形态又委派回 `cupy.einsum`。同一个
+  “qcd-einsum”标签混合了四类执行体，胜负不能简单归因于“引擎更快”。
+- **端到端边界不一致**：qcd/opt 每次调用自行分配输出；MatX/Einsums 使用
+  预分配 `out`；Einsums 桥还额外分配输入张量并做主机↔张量拷贝。跨引擎比值
+  混合了不同成本边界。
+- **精度混淆**：MatX einsum 固定 32F，其余 64F。GPU 上 32F 更省带宽/可能更快，
+  “MatX 在 batched 上略快”不能当作同精度优势。
+- **“matx-einsum / cpu-einsums”实为“本库桥 + 上游引擎”**：Einsums 端到端主要
+  反映我们 ABI 的逐次分配；MatX 桥虽薄，仍是我们写的调用层。
+
+### 8.2 统计效度与稳健性阈值
+
+- 每例 **3 轮**，每轮取 inner 内最快值再取中位数：这是“接近最优”的估计，
+  不是典型延迟。
+- 本轮修正后的同轮 spread：CPU 36 个样本中位 **1.09**、最大 **7.07**
+  （γ 夹心 qcd）；GPU 中位 **1.03**、最大 **1.31**（many-small opt）。
+  修正前（预热/缓冲未修）GPU batched 曾达 1.67。
+- 跨轮复测（同一 case、同设置）：qcd CPU element-wise 244.5 / 301.6 / 309.0 ms；
+  Einsums GEMM 4096 836.7 / 893.0 / 944.8 ms；MatX element-wise
+  161.1 / 195.5 ms；qcd GPU γ 夹心 877.4 / 796.4 ms——差异 **10–26%**。
+- 因此：只有 **>~15%（CPU）/ >~25%（GPU）** 的差异可作方向性结论；
+  5–10% 的差异一律不排名。
+
+| 结论 | 强度 | 依据 |
+|---|---|---|
+| qcd CPU batched 10.2×、ellipsis 9.9×、nucleon 17.3×、γ 23.1× | **强** | 数量级差，远超跨轮波动 |
+| MatX GPU element-wise 12.6×、full reduction 14.0× | **强（定性）** | 数量级差；但含 32F 口径 |
+| Einsums engine element-wise 4.7×、batched 21.9× | **强（engine-only）** | 组件探针；需标注非端到端 |
+| qcd GPU full reduction 2.1×、nucleon 2.7× | **中** | 跨轮 10% 级，方向可信、幅度不稳 |
+| Einsums 端到端 GEMM 1.33× | **中** | 跨轮约 13%，方向可信 |
+| matx batched 0.92× vs qcd 0.96×、matmul 1.00–1.02×、chain ±5% | **不可判定** | 落在噪声内 |
+
+### 8.3 内部效度：同进程/同卡的状态耦合
+
+- 四个引擎跑在同一进程、同一 GPU：CuPy 内存池、GPU 时钟、CPU turbo、页缓存
+  在 case 之间传递状态，轮换顺序只能部分抵消。
+- MatX 的隔离稳态 `outer=19.3 ms`、`element-wise=239.5 ms`，与交替基准中的
+  `31.8 ms`、`195.5 ms` 相差 25–65%，说明部分数值依赖“和谁一起跑”。
+- 自适应预热（5/2/1 次）不能证明长 case 已到稳态；长 case 只预热 1 次。
+- Einsums 的纯计算/分配拆分来自另一个 C++ 进程，分配器状态与线程默认值
+  与 Python 基准不完全一致；6.4% 是可靠量级，不是精确映射。且“纯计算”列
+  **不含主机↔张量拷贝**（element-wise 8000² 实测拷贝 68.4 ms），
   端到端数字才是当前 ABI 的真实调用成本。
-- 未做多卡/MPI、多 stream、非连续输入、混合精度；未与 PyPI 发布包的
-  `pyqcd.einsum` 做跨安装对照。
-- 建议后续：给 Einsums 桥加有界张量缓存（按 dtype/rank/shape 复用，设内存上限），
-  或提供 Tensor 句柄式 ABI；MatX 侧若上游将 compute type 改为按 dtype 选择，
-  重建桥即可获得 FP64 einsum。
+- 计划缓存处于热态：qcd/opt 的规划成本被正确性调用与预热排除，
+  **冷启动（首次规划 + 首次加载）未测**。
+- 桥使用预分配输出、qcd/opt 内部自行分配，二者成本边界不同。
+
+### 8.4 用例覆盖：结构覆盖而非规模覆盖
+
+- 每个家族**只有一个尺寸**，没有 small/medium/large 曲线，因此不知道
+  MatX cuTensorNet 开销被摊薄的 crossover，也不知道 Einsums 分配占比随尺寸的变化。
+- 未覆盖：多卡/MPI、多 stream、CUDA graph、非连续输入、size-1 广播、
+  混合精度、complex64/float32、稀疏/tiled、生产尺度（L24、nvec=100）。
+- MatX/Einsums 只在**支持的子集**上参与，聚合“最好/最差”时样本有偏；
+  “综合最优引擎”在本语料上不可定义。
+- 未测 NaN/denormal、32F 累加稳定性、峰值显存/RSS、能耗、单位成本。
+
+### 8.5 平台与外部效度：一台笔记本 + 两套软件栈
+
+- i7-13620H（8 线程）+ RTX 4060 Laptop 8 GB，受功耗墙、散热与显存容量限制；
+  服务器 CPU（NUMA/更多核）、数据中心 GPU（HBM）、AMD/Apple 平台的排序可能变化。
+- 线程固定 8/8，但各引擎最优线程档不同（Einsums GEMM 2048 在 4/2 与 8/8 下
+  差 27%）；固定线程保证同条件，不保证各自最佳。
+- 版本敏感：conda OpenBLAS、CUDA 13.5、cuTENSOR 2.8.1、cuTensorNet 2.14、
+  CuPy 14.2、NumPy 2.5、opt_einsum 3.4.0、GCC 13/14；换 BLAS/CUDA 小版本
+  可能翻转小倍率结论。
+- GPU 未锁频、未做温控，笔记本 clock 波动足以覆盖 10–20% 差异。
+
+### 8.6 指标单一：只有延迟
+
+- 缺峰值内存（opt 的 1.44 GB 中间体、qcd 批量约 3× opt 工作区、Einsums 每次
+  3 份张量、MatX workspace），而这直接决定生产规模能否跑起来。
+- 缺尾延迟/吞吐/并发、能耗/成本、冷启动与规划成本；32F 的维护/精度成本
+  也未计入。
+
+### 8.7 结论表述的风险
+
+- 报告中的 A/B/C/D 评级是作者综合，不是基准输出的统计结论；不应当作排行榜。
+- “CPU/GPU 最优”由单次中位数选出；噪声范围内的名次（matmul、chain、
+  many-small）不应写死。
+- “Einsums kernel 很强”是**潜力**（张量复用的 engine-only），不是当前 ABI 的
+  可交付性能；“Einsums 端到端慢”是**本库桥**的属性，不应归因于上游。
+- “MatX 在 batched 上更快”同时受 32F 与 cuTensorNet 缓存状态影响，必须带精度限定。
+
+### 8.8 补强实验优先级
+
+1. 每引擎独立进程 + 锁频 + ≥7–10 轮，报告中位数、IQR、p95 与 bootstrap CI；
+   统一把 <15%（CPU）/ <30%（GPU）标为不显著。
+2. 每个家族做尺寸扫描（≥3 点），给出 scaling 曲线与 MatX/Einsums 的 crossover。
+3. 统一精度：MatX 用 64F（直接 cuTENSOR 或改 compute type）与 64F 对手比；
+   或所有引擎单独跑 32F 一组。
+4. 统一成本边界：同时报告 engine-only、bridge end-to-end、cold-start 三列。
+5. 加入峰值内存、尾延迟；生产规模在显存守卫下单独测。
+6. 线程扫描：每引擎给“最佳线程档”和“固定 8/8”两组。
+7. 第二台机器/GPU 复核，至少验证大倍率结论的方向性。
+
+### 8.9 数据核对说明
+
+第 5 节的表格数字已由脚本与 `/tmp/bench_cpu5.json`、`bench_gpu3.json`、
+`components.log` 逐项比对，0 处数值不一致（过程中修正了两处倍率笔误）。
+但**转录正确 ≠ 测量有效**：本节的威胁分析不会因数字核对而消失。
 
 ## 9. 相关提交
 
