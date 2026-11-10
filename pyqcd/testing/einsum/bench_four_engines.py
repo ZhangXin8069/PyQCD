@@ -14,7 +14,7 @@ Engines
 * ``qcd``     : ``pyqcd.einsum.contract``
 * ``opt``     : ``opt_einsum.contract`` with the ``dp`` path
 * ``matx``    : ``pyqcd.testing.matx._bridge`` (GPU only, cuTENSOR)
-* ``einsums`` : ``pyqcd.einsum.cpu_einsums._bridge`` (CPU only)
+* ``einsums`` : ``pyqcd.testing.cpu_einsums._bridge`` (CPU only)
 
 MatX pins ``CUTENSORNET_COMPUTE_32F``, so its results are compared with a
 1e-4 relative tolerance and marked ``32F``.  Einsums' ``cg::einsum`` has no
@@ -172,14 +172,14 @@ def einsums_supported(ops, out_shape, equation):
 
 
 def _numpy_to_einsums(eq):
-    from pyqcd.einsum.cpu_einsums import _contract
+    from pyqcd.testing.cpu_einsums import _contract
 
     return _contract.numpy_to_einsums(eq)
 
 
 def make_runners(device):
     from pyqcd.testing.matx import _bridge as matx_bridge
-    from pyqcd.einsum.cpu_einsums import _bridge as einsums_bridge
+    from pyqcd.testing.cpu_einsums import _bridge as einsums_bridge
 
     def qcd(eq, ops, out_shape, out=None):
         return pe.contract(eq, *ops)
@@ -224,7 +224,7 @@ def run(device, engines, rounds):
     runners = make_runners(device)
 
     from pyqcd.testing.matx import _bridge as matx_bridge
-    from pyqcd.einsum.cpu_einsums import _bridge as einsums_bridge
+    from pyqcd.testing.cpu_einsums import _bridge as einsums_bridge
 
     print(f'pyqcd {pyqcd.__version__} {pyqcd.__file__} | {device}: {device_name}')
     if device == 'gpu':

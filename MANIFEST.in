@@ -29,7 +29,6 @@ prune pyqcd/testing
 
 # Third-party reference bridges and their contract tests are repository-only:
 # setup.py does not build them and the installed package does not import them.
-prune pyqcd/einsum/cpu_einsums
 prune cpp/cuda/matx
 prune cpp/cpu/cpu-einsums
 

@@ -314,7 +314,7 @@ mamba run -n einsums-build bash -c '
 Python 侧（base python + `LD_LIBRARY_PATH=/tmp/einsums-build/lib:$CONDA_PREFIX/lib`）：
 
 ```text
-python -m pyqcd.einsum.cpu_einsums.verify
+python -m pyqcd.testing.cpu_einsums.verify
 → PASS 169/169  SKIP 7（native 组真跑，backend_enabled=True）
 ```
 

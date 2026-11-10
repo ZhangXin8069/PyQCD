@@ -3238,7 +3238,7 @@ def test_cpu_einsums_contracts():
     """Einsums 字符串 `einsum` 契约：spec 归一化与主机指针 C ABI。"""
     import unittest
 
-    from pyqcd.einsum.cpu_einsums.verify import run
+    from .cpu_einsums.verify import run
 
     tally, native_skipped, reason = run()
     passed, failed, _skipped = tally.counts()

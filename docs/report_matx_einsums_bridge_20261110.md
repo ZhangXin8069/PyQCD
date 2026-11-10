@@ -4,7 +4,7 @@
 - 对象：`refer/git-rep/MatX`（`0ac86644`，v1.1.0-48）与
   `refer/git-rep/Einsums`（`628971cd`，v2.0.0a1-22）
 - 代码：`cpp/cuda/matx`、`cpp/cpu/cpu-einsums`、`pyqcd/testing/matx`、
-  `pyqcd/einsum/cpu_einsums`、`pyqcd/testing/einsum/bench_four_engines.py`
+  `pyqcd/testing/cpu_einsums`、`pyqcd/testing/einsum/bench_four_engines.py`
 - 原始数据：`logs/einsum-four-engine-20261110.txt`
 - 本报告只记录可复现的实测与源码核对结果；未运行的项目明确标为“未验证”。
 
@@ -176,7 +176,7 @@ full/partial reduction（rank-0/一元）、链、hyper-edge、ellipsis、batch�
 |---|---|
 | `python -m pyqcd.testing.matx.verify`（桩） | PASS 152/152 |
 | 同上（真机 cuTENSOR） | PASS 150/150，SKIP 1 |
-| `python -m pyqcd.einsum.cpu_einsums.verify`（桩/真机） | PASS 169/169，SKIP 7 |
+| `python -m pyqcd.testing.cpu_einsums.verify`（桩/真机） | PASS 169/169，SKIP 7 |
 | `python -m pyqcd.testing` | 123 passed / 1 skipped / 0 failed |
 | 15-case 基准内相对误差 | 64F ≤ 5e-15；MatX 32F ≤ 9.6e-8 |
 
@@ -311,7 +311,7 @@ partial 17.9 ms。outer/element-wise 在轮询环境中会受其他引擎的显�
 # 2) 构建两套桥（见 §2.2）
 # 3) 正确性
 python -m pyqcd.testing.matx.verify
-python -m pyqcd.einsum.cpu_einsums.verify
+python -m pyqcd.testing.cpu_einsums.verify
 python -m pyqcd.testing
 
 # 4) 15-case 基准

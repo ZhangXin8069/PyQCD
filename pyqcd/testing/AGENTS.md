@@ -8,6 +8,9 @@
 | 路径 | 内容 |
 |---|---|
 | `__init__.py`, `conftest.py`, `__main__.py` | 中心测试登记与执行入口 |
+| `einsum/` | `pyqcd.einsum` 差分测试、基准与四引擎驱动 |
+| `matx/` | MatX `einsum` 文档契约、ctypes 桥与 verify |
+| `cpu_einsums/` | Einsums 字符串 `einsum` 契约、ctypes 桥与 verify |
 | `demos/` | 自包含可运行示例 |
 | `regression/` | 蒸馏、GEVP、冻结基线一致性回归 |
 | `tmd/` | 梯度流胶子 TMD-PDF 工作流与运行快照 |

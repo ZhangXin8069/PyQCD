@@ -17,9 +17,9 @@
 
 验证入口::
 
-    python -m pyqcd.einsum.cpu_einsums.verify
-    python -m pyqcd.einsum.cpu_einsums.verify --verbose --seed 20260831
-    python -m pyqcd.einsum.cpu_einsums.verify --json
+    python -m pyqcd.testing.cpu_einsums.verify
+    python -m pyqcd.testing.cpu_einsums.verify --verbose --seed 20260831
+    python -m pyqcd.testing.cpu_einsums.verify --json
 
 失败退出码 1；依赖原生库的断言在库缺失时整组 SKIP，退出码仍是 0。
 """

@@ -310,8 +310,7 @@ setup(
     # setuptools refuse to build.
     packages=find_packages(
         include=["pyqcd", "pyqcd.*"],
-        exclude=["pyqcd.testing", "pyqcd.testing.*",
-                 "pyqcd.einsum.cpu_einsums"],
+        exclude=["pyqcd.testing", "pyqcd.testing.*"],
     ),
     package_data={
         "pyqcd": ["py.typed"],
