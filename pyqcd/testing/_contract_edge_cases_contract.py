@@ -331,3 +331,92 @@ def test_out_keyword_on_backends_without_out_support() -> None:
     target = np.zeros((3, 3))
     pe.contract("ij,jk->ik", data, data, out=target)
     assert np.allclose(target, expected)
+
+
+def test_direct_mode_contracts() -> None:
+    """direct 模式：跳过规划器、只调一次 backend.einsum，专用 kernel 仍优先。"""
+    import os
+    import warnings
+
+    import numpy as np
+    import pyqcd.einsum as pe
+    import pyqcd.einsum._api as api
+
+    rng = np.random.default_rng(0)
+    a, b, c = (rng.standard_normal((6, 6)) for _ in range(3))
+
+    assert pe.direct_enabled() is False            # 默认关闭，不改变既有行为
+
+    real_get = api.backends.get_func
+    counter = {"n": 0}
+
+    def counting_get(name, backend):
+        fn = real_get(name, backend)
+        if name != "einsum":
+            return fn
+
+        def wrapper(*args, **kwargs):
+            counter["n"] += 1
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    saved_env = os.environ.pop("PYQCD_EINSUM_DIRECT", None)
+    try:
+        api.backends.get_func = counting_get
+
+        counter["n"] = 0
+        pe.contract("ij,jk->ik", a, b)
+        assert counter["n"] == 0, "默认模式不应直接调用 backend.einsum"
+
+        assert pe.configure_direct(True) is True
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            counter["n"] = 0
+            result = np.asarray(pe.contract("ij,jk,kl->il", a, b, c))
+            assert counter["n"] == 1, "direct 模式应恰好调用一次 backend.einsum"
+            pe.contract("ij,jk,kl->il", a, b, c)
+            assert counter["n"] == 2
+        assert sum(1 for w in caught if "direct" in str(w.message)) == 1, "只警告一次"
+
+        reference = np.einsum("ij,jk,kl->il", a, b, c, optimize="optimal")
+        assert np.allclose(result, reference)
+
+        target = np.zeros((6, 6))
+        pe.contract("ij,jk->ik", a, b, out=target)
+        assert np.allclose(target, a @ b)
+
+        # 专用 kernel 优先：direct 模式下不应回落到 backend.einsum
+        nvec = 12
+        cplx = lambda *shape: (rng.standard_normal(shape)
+                               + 1j * rng.standard_normal(shape)).astype(np.complex128)
+        nucleon = [cplx(4, 4, nvec, nvec), cplx(4, 4, nvec, nvec), cplx(4, 4, nvec, nvec),
+                   cplx(4, 4), cplx(4, 4), cplx(4, nvec, nvec, nvec),
+                   cplx(4, nvec, nvec, nvec), cplx(4, 4)]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            counter["n"] = 0
+            kernel_result = pe.contract("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M", *nucleon)
+        assert np.asarray(kernel_result).shape == (4,)
+        assert counter["n"] == 0, "专用 kernel 命中时不应调用 backend.einsum"
+
+        assert pe.configure_direct(False) is False
+        counter["n"] = 0
+        pe.contract("ij,jk->ik", a, b)
+        assert counter["n"] == 0, "关闭 direct 后应回到规划器"
+    finally:
+        api.backends.get_func = real_get
+        pe.configure_direct(None)
+        if saved_env is not None:
+            os.environ["PYQCD_EINSUM_DIRECT"] = saved_env
+        else:
+            os.environ.pop("PYQCD_EINSUM_DIRECT", None)
+
+    os.environ["PYQCD_EINSUM_DIRECT"] = "1"
+    try:
+        assert pe.direct_enabled() is True
+        assert pe.configure_direct(False) is False
+    finally:
+        pe.configure_direct(None)
+        os.environ.pop("PYQCD_EINSUM_DIRECT", None)
+    assert pe.direct_enabled() is False

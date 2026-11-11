@@ -15,7 +15,12 @@ import importlib
 from typing import Any
 
 from . import backends, paths
-from ._api import contract, contract_path
+from ._api import (
+    configure_direct,
+    contract,
+    contract_path,
+    direct_enabled,
+)
 from ._expr import ContractExpression, contract_expression, format_const_einsum_str, shape_only
 from ._pathinfo import PathInfo
 from ._specialize import describe as specializations
@@ -38,6 +43,8 @@ from . import _threads as _threads_module
 _threads_module.apply()
 
 __all__ = [
+    "configure_direct",
+    "direct_enabled",
     "configure_threads",
     "thread_info",
     "thread_profiles",

@@ -62,6 +62,53 @@ Environment switches: `PYQCD_EINSUM_SPECIALIZE=0`,
 `PYQCD_EINSUM_DISABLE_FUSED=1`, `PYQCD_EINSUM_KERNEL_KUPL=0`,
 `PYQCD_EINSUM_KERNEL_CUDA=0`.
 
+## Direct mode
+
+By default every contraction goes through the planner (contraction order, memory
+re-planning, plan cache). `direct` mode skips all of that: the specialised kernel
+still wins when the equation matches one, otherwise the operands go straight to the
+backend's own `einsum` in a single call. That maximises compute density, but the
+order is whatever the backend picks, so multi-operand chains can be **several times
+slower**; enabling it emits one runtime warning saying exactly that.
+
+```python
+import numpy as np
+import pyqcd.einsum as pe
+
+rng = np.random.default_rng(0)
+a, b, c = (rng.standard_normal((32, 32)) for _ in range(3))
+
+# default: the planner picks a contraction order (fastest for multi-operand graphs)
+print(pe.direct_enabled())                 # False
+planned = pe.contract("ij,jk,kl->il", a, b, c)
+
+# direct mode: no planner, no memory re-planning -- one backend einsum call,
+# or a specialised kernel when the equation matches one
+pe.configure_direct(True)
+direct = pe.contract("ij,jk,kl->il", a, b, c)
+assert np.allclose(direct, planned)
+pe.configure_direct(None)                  # back to the environment/default
+
+assert pe.direct_enabled() is False
+```
+
+Set it from the environment instead of the API with `PYQCD_EINSUM_DIRECT=1`
+(`0`/unset restores the default). `pe.configure_direct(None)` clears a runtime
+override so the environment variable decides again.
+
+Measured cost of turning it on (this machine, `float64`, `numpy` backend):
+
+| Shape | default | direct |
+|---|---|---|
+| matmul 1024² | 18.3 ms | 199 ms (**10.9×** slower) |
+| batched 8×256² | 3.5 ms | 25.3 ms (**7.2×**) |
+| chain 3×256 | 0.6 ms | 2.21 s (**3900×**) |
+| chain 4×2048 | 0.27 s | did not finish in 10 min (run aborted) |
+
+The backend's `einsum` is a naive n-ary loop, so the cost grows with the number of
+operands far faster than a planned contraction. Use direct mode for one- or
+two-operand shapes, or when you have already fixed the order yourself.
+
 ## Lattice constants and Dirac algebra
 
 ```python

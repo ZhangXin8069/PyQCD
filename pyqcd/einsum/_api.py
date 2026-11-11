@@ -37,6 +37,60 @@ _CONTRACT_PLAN_CACHE_LIMIT = 128
 _FUSED_ENV_OWNED = False
 _LAST_CONTRACT_SIGNATURE: tuple[Any, ...] | None = None
 _LAST_CONTRACT_PROGRAM: Any | None = None
+# ------------------------------------------------------------------ direct 模式
+# direct 模式跳过规划器与内存重划分：命中专用 kernel 就用 kernel，否则直接调用
+# backend 的原生 einsum（一次 n 元调用）。计算密度最高，但收缩顺序未经选择，
+# 多算子链上可能远慢于默认路径，因此默认关闭并给出一次性性能警告。
+_DIRECT_ENV = "PYQCD_EINSUM_DIRECT"
+_DIRECT_STATE: dict[str, bool | None] = {"enabled": None}
+_DIRECT_WARNED = False
+_DIRECT_WARNING = (
+    "[pyqcd.einsum] direct 模式已启用：跳过规划器与内存重划分，命中专用 kernel 时用 "
+    "kernel，否则把全部参数一次性交给 backend.einsum（不做收缩顺序、不切分中间体）。"
+    "计算密度最高，但代价可能极大：本机实测 1024² 两算子 10.9x 慢、3x256 三算子链 "
+    "3885x 慢（backend 的 n 元朴素循环，随算子数指数恶化），4 算子大张量可能长时间"
+    "不返回。仅建议用于两算子形态或你确认顺序无关的场合；用 "
+    "pyqcd.einsum.configure_direct(False) 或 PYQCD_EINSUM_DIRECT=0 关闭。"
+)
+
+
+def _direct_from_env() -> bool:
+    raw = os.environ.get(_DIRECT_ENV, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def direct_enabled() -> bool:
+    """Whether direct mode (no planner, no memory re-partitioning) is active."""
+    override = _DIRECT_STATE["enabled"]
+    return bool(override) if override is not None else _direct_from_env()
+
+
+def configure_direct(enabled: bool | None = None) -> bool:
+    """Turn direct mode on/off; ``None`` clears the override (env var decides).
+
+    ``configure_direct(True)`` skips the contraction planner entirely and calls the
+    backend's own ``einsum`` in one shot, except where a specialised kernel matches
+    the equation. It maximises compute density at the cost of contraction order.
+    """
+    global _DIRECT_WARNED
+    if enabled is None:
+        _DIRECT_STATE["enabled"] = None
+        _DIRECT_WARNED = False
+    else:
+        _DIRECT_STATE["enabled"] = bool(enabled)
+        if not enabled:
+            _DIRECT_WARNED = False
+    return direct_enabled()
+
+
+def _warn_direct_once() -> None:
+    global _DIRECT_WARNED
+    if _DIRECT_WARNED:
+        return
+    _DIRECT_WARNED = True
+    warnings.warn(_DIRECT_WARNING, RuntimeWarning, stacklevel=3)
+
+
 _NATIVE_DISABLED: set[tuple[Any, ...]] = set()
 _NATIVE_WARNING_EMITTED = False
 
@@ -718,6 +772,18 @@ def contract(
         else:
             os.environ[_specialize.FUSED_DISABLE_ENV] = "1"
             _FUSED_ENV_OWNED = True
+
+    # direct 模式：专用 kernel 已在上面命中并返回；其余方程既不做规划，也不重划分
+    # 内存/显存，直接交给 backend 的原生 einsum（一次 n 元调用）。
+    if (isinstance(subscripts, str) and "_gen_expression" not in kwargs
+            and direct_enabled()):
+        _warn_direct_once()
+        direct_backend = parse_backend(operands, backend)
+        einsum_call = backends.get_func("einsum", direct_backend)
+        direct_kwargs = dict(kwargs)
+        if out is not None:
+            direct_kwargs["out"] = out
+        return einsum_call(subscripts, *operands, **direct_kwargs)
 
     # GPU 上的通用（非融合）方程：cupy 自己的 einsum 直接走 cuBLAS，
     # 实测在 16×1024² complex128 上比我们的原生批量 GEMM 快 5 倍。
