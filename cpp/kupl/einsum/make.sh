@@ -434,6 +434,7 @@ cat > "$VERSION_SCRIPT" <<'MAP'
     qcd_kupl_nucleon_2pt_supported;
     qcd_kupl_pattern_3pt;
     qcd_kupl_pattern_3pt_supported;
+    qcd_kupl_topology_apply;
     qcd_kupl_mpi_enabled;
   local:
     *;

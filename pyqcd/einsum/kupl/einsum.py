@@ -141,6 +141,10 @@ def library_report() -> dict[str, Any]:
 _LL = ctypes.c_longlong
 _I = ctypes.c_int
 
+# qcd_kupl_topology_apply 的补充状态码：计划结构超出 version-2 单步 arity ≤ 2 模型。
+# 与 _STATUS_OK(=0) 之外的其它代码一样，调用方一律回落现有路径。
+_TOPOLOGY_UNSUPPORTED = 4
+
 _SIGNATURES = {
     "applyPlanQcd": (_LL, _LL),
     "applyContractQcd": (_LL, _LL, _LL, _LL),
@@ -150,6 +154,15 @@ _SIGNATURES = {
     "applyDestroyQcd": (_LL,),
     "applyInitQcd": (_LL, _LL),
     "applyEndQcd": (_LL, _LL),
+    "qcd_kupl_topology_apply": (
+        ctypes.c_void_p,
+        _LL,
+        ctypes.POINTER(ctypes.c_void_p),
+        _I,
+        ctypes.POINTER(_LL),
+        ctypes.c_void_p,
+        _I,
+    ),
 }
 
 _STATUS_FUNCTIONS = {
@@ -158,6 +171,7 @@ _STATUS_FUNCTIONS = {
     "applyContractMpiQcd",
     "applyCompileQcd",
     "applyCompiledQcd",
+    "qcd_kupl_topology_apply",
 }
 
 _LIBRARY: Any = None
@@ -390,6 +404,11 @@ def load_contract() -> Any:
 def load_mpi_contract() -> Any:
     """Return the ctypes ``applyContractMpiQcd`` entry point."""
     return _load_symbol("applyContractMpiQcd")
+
+
+def load_topology() -> Any:
+    """Return the ctypes ``qcd_kupl_topology_apply`` entry point."""
+    return _load_symbol("qcd_kupl_topology_apply")
 
 
 def available() -> bool:
@@ -867,3 +886,113 @@ def mpi_enabled() -> bool:
     entry.argtypes = []
     entry.restype = ctypes.c_int
     return entry() == 1
+
+
+_PLAN_VIEW_CACHE: dict[
+    bytes, tuple[Any, np.dtype, tuple[tuple[int, ...], ...], tuple[int, ...]]
+] = {}
+_PLAN_VIEW_CACHE_LIMIT = 64
+_PLAN_VIEW_LOCK = threading.Lock()
+
+
+def _plan_view(
+    plan_data: np.ndarray,
+) -> tuple[Any, np.dtype, tuple[tuple[int, ...], ...], tuple[int, ...]]:
+    """Decode and validate a plan once per distinct byte stream.
+
+    A decoded plan is a pure function of its bytes, so the second call of the
+    same plan must not pay the decode again: on a 1.7 KB / 15-step plan that is
+    ~120 us, i.e. more than the native execution itself.
+    """
+    key = plan_data.tobytes()
+    with _PLAN_VIEW_LOCK:
+        cached = _PLAN_VIEW_CACHE.get(key)
+    if cached is not None:
+        return cached
+    info = decode_execution_plan(plan_data)
+    view = (
+        info,
+        dtype_from_id(info.dtype_id),
+        tuple(info.input_shapes),
+        tuple(info.sizes[label] for label in info.output_labels),
+    )
+    with _PLAN_VIEW_LOCK:
+        if len(_PLAN_VIEW_CACHE) >= _PLAN_VIEW_CACHE_LIMIT:
+            _PLAN_VIEW_CACHE.pop(next(iter(_PLAN_VIEW_CACHE)))
+        _PLAN_VIEW_CACHE[key] = view
+    return view
+
+
+def topology_apply(
+    plan: Any,
+    operands: Sequence[Any],
+    out: Any = None,
+    offsets: Sequence[int] | None = None,
+) -> Any:
+    """Run a whole version-2 plan with one native call.
+
+    ``operands`` are the plan inputs in plan order; the destination (``out``, or
+    a freshly allocated C-contiguous array when it is ``None``) is returned.
+    ``offsets`` are optional **byte** offsets added to each operand pointer, so a
+    slice of a big tensor can be addressed without copying it.
+
+    dtype and shape must match the plan exactly — nothing is converted
+    implicitly — and ``out`` must be C-contiguous, otherwise the native write
+    would land somewhere the caller cannot see. A mis-sized or non-contiguous
+    input is copied into a contiguous one first, exactly like
+    :meth:`KuplProgram.__call__`.
+
+    Raises :class:`NativeUnavailable` when the kernel reports a non-zero status;
+    ``status == _TOPOLOGY_UNSUPPORTED`` means the plan itself (not the arguments)
+    is outside what this entry can execute.
+    """
+    plan_data = _plan_buffer(plan)
+    info, dtype, input_shapes, output_shape = _plan_view(plan_data)
+    if len(operands) != len(input_shapes):
+        raise ValueError(f"plan expects {len(input_shapes)} operands, got {len(operands)}")
+    inputs = [
+        _host_buffer(operand, dtype, shape, f"operand {index}")
+        for index, (operand, shape) in enumerate(zip(operands, input_shapes))
+    ]
+    if out is None:
+        output = np.empty(output_shape, dtype=dtype)
+    else:
+        output = np.asarray(out)
+        if output.dtype != dtype:
+            raise ValueError(f"output dtype {output.dtype} does not match plan dtype {dtype}")
+        if tuple(output.shape) != output_shape:
+            raise ValueError(
+                f"output shape {output.shape} does not match plan shape {output_shape}"
+            )
+        if not output.flags.c_contiguous:
+            raise ValueError("output buffer must be C-contiguous")
+
+    pointers = (ctypes.c_void_p * len(inputs))(
+        *[int(array.ctypes.data) for array in inputs]
+    )
+    offset_array = None
+    if offsets is not None:
+        values = [int(value) for value in offsets]
+        if len(values) != len(inputs):
+            raise ValueError(f"offsets must have {len(inputs)} entries, got {len(values)}")
+        offset_array = (_LL * len(values))(*values)
+
+    status = int(
+        load_topology()(
+            int(plan_data.ctypes.data),
+            int(plan_data.size),
+            pointers,
+            len(inputs),
+            offset_array,
+            int(output.ctypes.data),
+            int(info.dtype_id),
+        )
+    )
+    if status != _STATUS_OK:
+        reason = (
+            " (plan not executable as version-2 steps)"
+            if status == _TOPOLOGY_UNSUPPORTED
+            else ""
+        )
+        raise NativeUnavailable(f"native topology execution failed with status {status}{reason}")
+    return output

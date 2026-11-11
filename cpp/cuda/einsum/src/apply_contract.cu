@@ -4,11 +4,14 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
+#include "../include/einsum_topology.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <functional>
 #include <limits>
@@ -1844,6 +1847,152 @@ void destroy_entry(long long context_address) {
     delete context;
 }
 
+bool providers_available(const std::vector<PreparedStep>& prepared) {
+    bool needs_permute = false;
+    bool needs_reduce = false;
+    bool needs_hadamard = false;
+    bool needs_gemm = false;
+    for (const PreparedStep& step : prepared) {
+        switch (step.kind) {
+            case OperationKind::kCopy:
+                needs_permute = true;
+                break;
+            case OperationKind::kReduce:
+                needs_reduce = true;
+                break;
+            case OperationKind::kHadamard:
+                needs_hadamard = true;
+                break;
+            case OperationKind::kGemm:
+                needs_permute = true;
+                needs_gemm = true;
+                break;
+        }
+    }
+    return (!needs_permute || qcd_cuda_permute != nullptr) &&
+           (!needs_reduce || qcd_cuda_reduce != nullptr) &&
+           (!needs_hadamard || qcd_cuda_hadamard != nullptr) &&
+           (!needs_gemm || qcd_cuda_batched_gemm != nullptr);
+}
+
+struct TopologyProgram {
+    std::mutex mutex;
+    std::vector<uint8_t> bytes;
+    int dtype_id = -1;
+    pyqcd_einsum::ExecutionPlan plan;
+    std::vector<ResolvedStep> resolved;
+    std::vector<PreparedStep> prepared;
+    CudaWorkspace workspace;
+
+    bool matches(const void* plan_data, long long plan_len, int requested_dtype) {
+        if (dtype_id != requested_dtype || bytes.empty() ||
+            plan_len != static_cast<long long>(bytes.size())) {
+            return false;
+        }
+        return std::memcmp(bytes.data(), plan_data, bytes.size()) == 0;
+    }
+
+    int load(const void* plan_data, long long plan_len, int requested_dtype) {
+        pyqcd_einsum::ExecutionPlan parsed;
+        if (!decode_execution_plan(plan_data, &parsed)) {
+            return QCD_TOPOLOGY_UNSUPPORTED;
+        }
+        if (parsed.dtype_id != requested_dtype) {
+            return QCD_STATUS_INVALID;
+        }
+        std::vector<ResolvedStep> candidate_resolved;
+        std::vector<PreparedStep> candidate_prepared;
+        if (!resolve_plan(parsed, &candidate_resolved) ||
+            candidate_resolved.size() != parsed.steps.size() ||
+            !prepare_execution(parsed, candidate_resolved, &candidate_prepared) ||
+            candidate_prepared.size() != parsed.steps.size()) {
+            return QCD_TOPOLOGY_UNSUPPORTED;
+        }
+        if (!providers_available(candidate_prepared)) {
+            return QCD_STATUS_INTERNAL;
+        }
+        std::vector<uint8_t> candidate_bytes(
+            static_cast<const uint8_t*>(plan_data),
+            static_cast<const uint8_t*>(plan_data) + plan_len);
+        // 计划换了以后 arena 里的偏移表（output_offsets_/max_*）已经失效，
+        // 必须让下一次 prepare 重新分配，不能沿用旧布局。
+        workspace.release();
+        bytes = std::move(candidate_bytes);
+        dtype_id = requested_dtype;
+        plan = std::move(parsed);
+        resolved = std::move(candidate_resolved);
+        prepared = std::move(candidate_prepared);
+        return QCD_STATUS_OK;
+    }
+};
+
+TopologyProgram& topology_program() {
+    static TopologyProgram program;
+    return program;
+}
+
+bool topology_dtype_supported(int dtype_id) {
+    return dtype_id >= QCD_DTYPE_COMPLEX128 && dtype_id <= QCD_DTYPE_FLOAT32;
+}
+
+bool offset_pointer_checked(
+    void* base, long long offset, void** result) {
+    const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(base);
+    if (offset < 0 ||
+        static_cast<std::uint64_t>(offset) >
+            std::numeric_limits<std::uintptr_t>::max() - address) {
+        return false;
+    }
+    *result = reinterpret_cast<void*>(address + static_cast<std::uintptr_t>(offset));
+    return true;
+}
+
+int topology_entry(
+    const void* plan_data,
+    long long plan_len,
+    void* const* operands,
+    int n_operands,
+    const long long* operand_offsets,
+    void* output,
+    int dtype_id,
+    void* stream) {
+    if (plan_data == nullptr || plan_len <= 0 || operands == nullptr ||
+        output == nullptr || stream != nullptr || n_operands <= 0 ||
+        !topology_dtype_supported(dtype_id)) {
+        return QCD_STATUS_INVALID;
+    }
+    if (plan_len < static_cast<long long>(9 * sizeof(int32_t)) ||
+        static_cast<long long>(static_cast<const int32_t*>(plan_data)[2]) != plan_len) {
+        return QCD_STATUS_INVALID;
+    }
+    TopologyProgram& program = topology_program();
+    std::lock_guard<std::mutex> lock(program.mutex);
+    if (!program.matches(plan_data, plan_len, dtype_id)) {
+        const int status = program.load(plan_data, plan_len, dtype_id);
+        if (status != QCD_STATUS_OK) {
+            return status;
+        }
+    }
+    if (n_operands != program.plan.num_inputs) {
+        return QCD_STATUS_INVALID;
+    }
+    std::vector<void*> input_data(
+        static_cast<std::size_t>(program.plan.num_inputs), nullptr);
+    for (int32_t index = 0; index < program.plan.num_inputs; ++index) {
+        void* base = operands[index];
+        if (base == nullptr) {
+            return QCD_STATUS_INVALID;
+        }
+        const long long offset =
+            operand_offsets == nullptr ? 0 : operand_offsets[index];
+        if (!offset_pointer_checked(base, offset, &input_data[static_cast<std::size_t>(index)])) {
+            return QCD_STATUS_INVALID;
+        }
+    }
+    return execute_prepared(
+        program.plan, program.prepared, &program.workspace, input_data, output);
+}
+
 }  // namespace
 
 extern "C" QCD_EINSUM_API int applyContractQcd(
@@ -1892,5 +2041,25 @@ extern "C" QCD_EINSUM_API void applyDestroyQcd(long long context) {
     try {
         destroy_entry(context);
     } catch (...) {
+    }
+}
+
+extern "C" QCD_CUDA_TOPOLOGY_API int qcd_cuda_topology_apply(
+    const void* plan,
+    long long plan_len,
+    void* const* operands,
+    int n_operands,
+    const long long* operand_offsets,
+    void* out,
+    int dtype_id,
+    void* stream) {
+    try {
+        return topology_entry(
+            plan, plan_len, operands, n_operands, operand_offsets, out, dtype_id,
+            stream);
+    } catch (const std::bad_alloc&) {
+        return QCD_STATUS_MEMORY;
+    } catch (...) {
+        return QCD_STATUS_INTERNAL;
     }
 }

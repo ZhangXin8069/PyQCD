@@ -548,6 +548,12 @@ def _run_specialized_kernel(
         ("cuda_nucleon_2pt", _kernel_cuda,
          lambda: _kernel_cuda.try_nucleon_2pt(subscripts, operands)),
         ("cuda_3pt", _kernel_cuda, lambda: _kernel_cuda.try_three_pt(subscripts, operands)),
+        # 语料拓扑：整条收缩计划一次性交给原生入口（plan 由实际 subscripts 生成，
+        # 因此任何拓扑等价写法都能走专用路径，不要求字面拼写一致）。
+        ("kupl_topology", _kernel_kupl,
+         lambda: _kernel_kupl.try_topology_apply(subscripts, operands)),
+        ("cuda_topology", _kernel_cuda,
+         lambda: _kernel_cuda.try_topology_apply(subscripts, operands)),
     ):
         result = attempt()
         if result is not None:
@@ -560,23 +566,36 @@ def _run_specialized_kernel(
 _KERNEL_SKIP_WARNED: set[tuple[str, str]] = set()
 
 
-def _kernel_labels_for(entry: dict[str, str]) -> tuple[str, ...]:
+def _kernel_labels_for(entry: dict[str, Any]) -> tuple[str, ...]:
     """Which kernel labels can serve this registered shape."""
-    name = str(entry.get("name", ""))
-    if "nucleon-2pt" in name:
-        return ("kupl_nucleon_2pt", "cuda_nucleon_2pt")
-    if "3pt-main" in name:
-        return ("kupl_3pt", "cuda_3pt")
-    return ()
+    declared = entry.get("kernels")
+    if declared is not None:
+        return tuple(str(label) for label in declared)
+    # 字面条目只带 name/kind/note：按形态关键词解析，规则由 _specialize 单点声明。
+    return _specialize.kernel_labels(str(entry.get("name", "")))
 
 
-def _warn_kernel_skipped_once(entry: dict[str, str], reasons: list[str]) -> None:
+def _no_kernel_reason(entry: dict[str, Any]) -> str:
+    """内核没留下原因时的兜底说明。
+
+    专用 kernel 只接受注册表里的字面拼写，对拓扑等价的其他写法会静默返回
+    ``None``（不改 ``LAST_FAILURE``）；这种命中必须说清"为什么没跑"。
+    """
+    subscripts = str(entry.get("subscripts", ""))
+    if subscripts:
+        return ("the equation is topologically equivalent to "
+                f"{subscripts}, but the specialised kernel only accepts that "
+                "exact spelling")
+    return "unknown reason"
+
+
+def _warn_kernel_skipped_once(entry: dict[str, Any], reasons: list[str]) -> None:
     """该形态注册了专用 kernel，但这次没有跑成 —— 立刻告诉调用方原因。
 
     静默回落是数值契约（结果仍然正确），但它会伪装成"PyQCD 很慢"，所以命中
     kernel 形态却没跑 kernel 时必须报警；同一(形态, 原因)只报一次，避免刷屏。
     """
-    detail = "; ".join(reason for reason in reasons if reason) or "unknown reason"
+    detail = "; ".join(reason for reason in reasons if reason) or _no_kernel_reason(entry)
     key = (str(entry.get("name", "?")), detail)
     if key in _KERNEL_SKIP_WARNED:
         return

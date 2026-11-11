@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
+import ctypes
+import os
 import threading
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
 
 from .._native_plan import decode_execution_plan, dtype_from_id
+
+_CUDA_LIBRARY_ENV = "PYQCD_EINSUM_CUDA_LIB"
+
+# Frozen status codes plus the topology entry's own QCD_TOPOLOGY_UNSUPPORTED,
+# kept numerically identical to ``cpp/cuda/einsum/include/einsum_topology.h``.
+_STATUS_OK = 0
+_TOPOLOGY_UNSUPPORTED = 4
+
+
+def _library_path() -> Path:
+    """Return the CUDA archive to load (``PYQCD_EINSUM_CUDA_LIB`` wins)."""
+    override = os.environ.get(_CUDA_LIBRARY_ENV, "").strip()
+    if override:
+        return Path(override)
+    from .._native import _cuda_library_path
+
+    return Path(_cuda_library_path())
 
 
 class CudaProgram:
@@ -127,3 +147,184 @@ class CudaProgram:
         if output_contiguous is not output:
             output[...] = output_contiguous
         return output
+
+
+class TopologyBinding:
+    """ctypes bridge for ``qcd_cuda_topology_apply``.
+
+    Deliberately outside the Cython extension: the topology entry is an extra
+    exported symbol (like ``qcd_cuda_pattern_3pt``), so no rebuild of
+    ``pyqcd.einsum.cuda.einsum`` is required for it to become usable.
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = Path(path) if path is not None else _library_path()
+        self.library = ctypes.CDLL(str(self.path))
+        self.apply = self.library.qcd_cuda_topology_apply
+        self.apply.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int64,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int64),
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_void_p,
+        ]
+        self.apply.restype = ctypes.c_int
+
+
+_binding_lock = threading.Lock()
+_binding_path: Path | None = None
+_binding: TopologyBinding | None = None
+
+
+def topology_binding(path: Path | None = None) -> TopologyBinding | None:
+    """Return the cached binding, or ``None`` when the archive lacks the symbol."""
+    global _binding, _binding_path
+    target = Path(path) if path is not None else _library_path()
+    with _binding_lock:
+        if _binding_path == target:
+            return _binding
+        _binding_path = target
+        try:
+            _binding = TopologyBinding(target)
+        except (OSError, AttributeError):
+            _binding = None
+        return _binding
+
+
+_PLAN_VIEW_LOCK = threading.Lock()
+_PLAN_VIEW_CACHE: dict[bytes, tuple[Any, Any, tuple, tuple]] = {}
+_PLAN_VIEW_CACHE_LIMIT = 32
+
+
+def _plan_buffer(plan: Any) -> np.ndarray:
+    if isinstance(plan, (bytes, bytearray, memoryview)):
+        buffer = np.frombuffer(plan, dtype=np.uint8)
+    else:
+        array = np.asarray(plan)
+        if array.dtype == np.dtype(np.uint8):
+            buffer = np.ascontiguousarray(array).reshape(-1)
+        elif array.dtype.kind in "iu":
+            buffer = np.ascontiguousarray(array).view(np.uint8).reshape(-1)
+        else:
+            raise TypeError("execution plan must be a bytes-like or integer array")
+    return np.ascontiguousarray(buffer)
+
+
+def _plan_view(plan_data: np.ndarray) -> tuple[Any, Any, tuple, tuple]:
+    """Decode and validate a plan once per distinct byte stream."""
+    key = plan_data.tobytes()
+    with _PLAN_VIEW_LOCK:
+        cached = _PLAN_VIEW_CACHE.get(key)
+    if cached is not None:
+        return cached
+    info = decode_execution_plan(plan_data)
+    view = (
+        info,
+        dtype_from_id(info.dtype_id),
+        tuple(info.input_shapes),
+        tuple(info.sizes[label] for label in info.output_labels),
+    )
+    with _PLAN_VIEW_LOCK:
+        if len(_PLAN_VIEW_CACHE) >= _PLAN_VIEW_CACHE_LIMIT:
+            _PLAN_VIEW_CACHE.pop(next(iter(_PLAN_VIEW_CACHE)))
+        _PLAN_VIEW_CACHE[key] = view
+    return view
+
+
+def topology_apply(
+    plan: Any,
+    operands: Sequence[Any],
+    out: Any = None,
+    offsets: Sequence[int] | None = None,
+    library_path: Path | str | None = None,
+) -> Any:
+    """Run a whole version-2 plan with one native call.
+
+    ``operands`` are CuPy arrays already on the compute device, in plan order;
+    ``offsets`` are optional **byte** offsets added to each device pointer so a
+    slice of a big tensor can be addressed without copying it. One native call
+    runs every step: the entry only reads the device pointers it is given and
+    writes the result once, so no host staging happens here either.
+
+    dtype and shape must match the plan exactly — nothing is converted
+    implicitly. Raises ``NativeUnavailable`` when the entry reports a non-zero
+    status; ``status == _TOPOLOGY_UNSUPPORTED`` means the plan itself (not the
+    arguments) is outside what the entry can execute.
+    """
+    import cupy
+
+    from ..kupl.einsum import NativeUnavailable
+
+    binding = topology_binding(None if library_path is None else Path(library_path))
+    if binding is None:
+        raise NativeUnavailable("qcd_cuda_topology_apply is not exported by the archive")
+
+    plan_data = _plan_buffer(plan)
+    info, native_dtype, input_shapes, output_shape = _plan_view(plan_data)
+    arrays = list(operands)
+    if len(arrays) != len(input_shapes):
+        raise ValueError(f"plan expects {len(input_shapes)} operands, got {len(arrays)}")
+    device_id = int(cupy.cuda.Device().id)
+    device_arrays = []
+    for index, (operand, shape) in enumerate(zip(arrays, input_shapes)):
+        array = cupy.asarray(operand)
+        if array.dtype != native_dtype:
+            raise ValueError(
+                f"operand {index} dtype {array.dtype} does not match plan dtype {native_dtype}")
+        if tuple(array.shape) != tuple(shape):
+            raise ValueError(
+                f"operand {index} shape {tuple(array.shape)} does not match plan shape {tuple(shape)}")
+        if int(array.device.id) != device_id:
+            raise ValueError(
+                f"operand {index} is on CUDA device {int(array.device.id)}, expected {device_id}")
+        device_arrays.append(cupy.ascontiguousarray(array))
+
+    if out is None:
+        output = cupy.empty(output_shape, dtype=native_dtype)
+    else:
+        output = cupy.asarray(out)
+        if output.dtype != native_dtype:
+            raise ValueError(f"output dtype {output.dtype} does not match plan dtype {native_dtype}")
+        if tuple(output.shape) != output_shape:
+            raise ValueError(
+                f"output shape {tuple(output.shape)} does not match plan shape {output_shape}")
+        if not output.flags['C_CONTIGUOUS']:
+            raise ValueError("output buffer must be C-contiguous")
+
+    pointers = (ctypes.c_void_p * len(device_arrays))(
+        *[int(array.data.ptr) for array in device_arrays])
+    offset_array = None
+    if offsets is not None:
+        values = [int(value) for value in offsets]
+        if len(values) != len(device_arrays):
+            raise ValueError(
+                f"offsets must have {len(device_arrays)} entries, got {len(values)}")
+        offset_array = (ctypes.c_int64 * len(values))(*values)
+
+    # CuPy issues conversions on its own stream while the entry launches on the
+    # default stream; wait for that stream so no operand is still being written.
+    cupy.cuda.get_current_stream().synchronize()
+    status = int(
+        binding.apply(
+            int(plan_data.ctypes.data),
+            int(plan_data.size),
+            pointers,
+            len(device_arrays),
+            offset_array,
+            int(output.data.ptr),
+            int(info.dtype_id),
+            None,
+        )
+    )
+    if status != _STATUS_OK:
+        reason = (
+            " (plan not executable as version-2 steps)"
+            if status == _TOPOLOGY_UNSUPPORTED
+            else ""
+        )
+        raise NativeUnavailable(
+            f"qcd_cuda_topology_apply failed with status {status}{reason}")
+    return output

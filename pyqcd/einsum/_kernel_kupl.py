@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import threading
 from typing import Any, Sequence
 
 import numpy as np
@@ -253,3 +254,74 @@ def try_three_pt(subscripts: Any, operands: Sequence[Any]) -> np.ndarray | None:
               '持平（0.94–1.01x，N>=50 略慢于 opt_einsum），标记 '
               'needs-optimization', flush=True)
     return output
+
+
+# 多操作数拓扑入口：一次原生调用跑完整条 version-2 计划。计划字节流按
+# (方程, 各操作数形状, dtype) 缓存，重复调用不再重新规划。
+_TOPOLOGY_CACHE_LIMIT = 32
+_TOPOLOGY_PLAN_CACHE: dict[tuple[Any, ...], bytes] = {}
+_TOPOLOGY_LOCK = threading.Lock()
+_entry_topology: Any = None
+_failed_topology = False
+
+
+def _function_topology():
+    global _entry_topology, _failed_topology
+    if _entry_topology is not None or _failed_topology:
+        return _entry_topology
+    try:
+        _entry_topology = kupl.load_topology()
+    except Exception:  # noqa: BLE001 - 缺库/缺符号时静默回退
+        _failed_topology = True
+        return None
+    return _entry_topology
+
+
+def _topology_key(subscripts: str, operands: Sequence[Any]) -> tuple[Any, ...]:
+    return (
+        _normalize(subscripts),
+        tuple(tuple(int(extent) for extent in operand.shape) for operand in operands),
+        operands[0].dtype.str,
+    )
+
+
+def _topology_plan(key: tuple[Any, ...], subscripts: str,
+                   operands: Sequence[Any]) -> bytes:
+    with _TOPOLOGY_LOCK:
+        plan = _TOPOLOGY_PLAN_CACHE.get(key)
+    if plan is not None:
+        return plan
+    from ._api import contract_path
+    from ._native_plan import encode_execution_plan
+
+    _, info = contract_path(subscripts, *operands)
+    plan = encode_execution_plan(info.contraction_list, operands)
+    with _TOPOLOGY_LOCK:
+        if len(_TOPOLOGY_PLAN_CACHE) >= _TOPOLOGY_CACHE_LIMIT:
+            _TOPOLOGY_PLAN_CACHE.pop(next(iter(_TOPOLOGY_PLAN_CACHE)))
+        _TOPOLOGY_PLAN_CACHE[key] = plan
+    return plan
+
+
+def try_topology_apply(subscripts: Any, operands: Sequence[Any],
+                       out: Any = None) -> np.ndarray | None:
+    """把整条收缩计划一次性交给原生拓扑入口；不满足条件即返回 ``None`` 回落。
+
+    与 ``try_nucleon_2pt`` / ``try_three_pt`` 同一契约：命中且执行成功才返回结果
+    数组，否则记录一次 ``LAST_FAILURE`` 并让上层走通用路径。dtype 必须全局一致
+    （``encode_execution_plan`` 不允许混合精度），因此不做任何隐式转换。
+    """
+    if not enabled() or not isinstance(subscripts, str):
+        return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
+    operands = list(operands)
+    if not operands or any(not isinstance(operand, np.ndarray) for operand in operands):
+        return _fail("operands must be numpy arrays")
+    if len({operand.dtype.str for operand in operands}) != 1:
+        return _fail("mixed operand dtypes are not supported by the native path")
+    if _function_topology() is None:
+        return _fail("topology entry point is missing from the native library")
+    try:
+        plan = _topology_plan(_topology_key(subscripts, operands), subscripts, operands)
+        return kupl.topology_apply(plan, operands, out)
+    except Exception as exc:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
+        return _fail(f"topology execution unavailable: {type(exc).__name__}: {exc}")
