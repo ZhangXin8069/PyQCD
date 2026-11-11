@@ -340,8 +340,8 @@ comparison point), results verified against serial `contract`:
 
 | mode | workload | serial | plan (`init`) | exec (`run`) | total | `×exec` |
 |---|---|---|---|---|---|---|
-| self-launched pool (4 processes) | S1, Nvec=40, 8 tasks | 168 ms | 1 ms | 276 ms | 276 ms | 0.61× |
-| self-launched pool (4 processes) | S1, Nvec=100, 8 tasks | 5391 ms | 1 ms | 2508 ms | 2509 ms | **2.15×** |
+| self-launched pool (4 processes) | S1, Nvec=40, 8 tasks | 165 ms | 1 ms | 255 ms | 256 ms | 0.65× |
+| self-launched pool (4 processes) | S1, Nvec=100, 8 tasks | 5310 ms | 1 ms | 2241 ms | 2242 ms | **2.37×** |
 
 Two conclusions, both reproducible with
 `python -m pyqcd.testing.parallel_einsum bench`:
@@ -351,8 +351,8 @@ Two conclusions, both reproducible with
   above does — a single bucket would mix planning into the compute figure.
 * **The self-launched pool pays a fixed cost**: MPICH `mpirun` start-up is ~150 ms
   and every operand is written to and read back from disk (~1.5 GB/s here). It only
-  wins once the serial run takes roughly a second or more (0.61× at 0.17 s serial,
-  2.15× at 5.4 s), and loses on small batches. Always compare with `bench` on your
+  wins once the serial run takes roughly a second or more (0.65× at 0.17 s serial,
+  2.37× at 5.4 s), and loses on small batches. Always compare with `bench` on your
   own machine instead of assuming a speed-up.
 
 `collective=True` is deprecated and no longer tested, so it is not benchmarked here.

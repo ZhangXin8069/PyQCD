@@ -1,0 +1,101 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-11 17:19:45 +0800
+批次: pyqcd-docs/batch-bench-switches
+主任务: 批量基准脚本对齐 15-case 基准的 cpu/gpu 快捷切换与 single/double 精度调整
+触发原因: 阶段成果
+摘要: 脚本参数化 + 同步计时 + 版本头；实跑刷新表格（S1 ×exec 0.65×、Nvec=100 2.37×）；release_check 10/10；gpu 分支未实跑
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 需求与对照
+- 目标: 让「批量基准脚本」（einsums 小节）具备与 15-case「基准脚本」相同的 cpu/gpu 快捷切换与精度调整
+- 参考实现: `docs/en/performance.md` 的 15-case 基准用 `DEVICE = sys.argv[1]`（`cpu`/`gpu`），
+  gpu 分支定义 `to_device` / `synchronise` 并打印设备名与 `pyqcd.__version__`/`__file__`
+- 现状: 批量脚本只有 `ROUNDS`/`PROCS`，精度写死 `float32`/`complex64`，无设备切换、无同步计时
+
+### S2 — 脚本改造（en，随后同步 zh）
+- 参数: `DEVICE = sys.argv[1]`（`cpu`|`gpu`）、`PRECISION = sys.argv[2]`（`single`|`double`）；
+  `REAL`/`COMPLEX` 按精度取 `float32/float64`、`complex64/complex128`，容差 `RTOL=1e-5/1e-12`
+- 设备层: gpu 分支 `cupy.asarray` + `cp.cuda.Device(0).synchronize()`，并加 `to_host` 把对照结果取回；
+  cpu 分支为恒等函数。`timed()` 与 `run_parallel()` 在 `init`/`run` 前后都做同步
+- 进程数: `PROCS = 4 if DEVICE == "cpu" else 1` —— 自建池会把操作数落盘成 numpy，
+  GPU 上多进程测的是 CPU，故 GPU 固定单进程（脚本注释与文档都写明）
+- 输出: 开头打印 `pyqcd <ver> <file> | <device> | <precision> | procs N`（避免把旧安装当成新构建）
+- 结果缓冲区: 保持 host 端 numpy（`init`/`run` 原地写入；自建池本就落盘 numpy），
+  GPU 下 exec 含一次 D2H 拷贝，已在脚本 docstring 注明
+- 退出码: 0
+
+### S3 — 文档与表格同步
+- 双语用法说明: `python bench.py cpu single`（默认）/ `python bench.py gpu double`，
+  并说明 GPU 下进程数固定为 1、上表是 CPU 实测
+- 实测表（en/zh performance、en/zh usage、skills/pyqcd-einsum）用本次新脚本的
+  `cpu single` 结果刷新：many small 0.09×、one-to-one 0.34×、skewed 0.34×、
+  S1 0.65×、S1 Nvec=100 **2.37×**
+
+## 验证与证据
+- 脚本实跑（`cpu single`，全量 CASES，3 轮中位）:
+  `pyqcd 0.3.2 … | cpu | single | procs 4`；
+  many small 25/1/282/283 ms、one-to-one 85/<1/248/248、skewed 85/<1/252/252、
+  S1 165/1/255/256、S1 Nvec=100 5310/1/2241/2242，倍率 0.09/0.34/0.34/0.65/2.37（`×exec`）
+- 精度分支: 精简副本（`ROUNDS=1`、去掉大任务）跑 `cpu double`，头部显示
+  `cpu | double | procs 4`，`RTOL=1e-12` 的对照断言全部通过
+- 文档门: `release_check --offline` **10/10**（含 `sphinx -W` 双站、示例 21 ok/4 skipped）；
+  `docs_examples --lang zh` 21 ok/0 failed；双语代码块 AST 等价（performance 5/5）
+- 未验证项: `gpu` 分支本机无 cupy，未实跑（脚本结构与 15-case 基准同源，仍属未验证）
+
+## 变更与产物
+- 文件: `docs/en/performance.md`、`docs/zh/performance.md`、`docs/en/usage.md`、
+  `docs/zh/usage.md`、`skills/pyqcd-einsum/SKILL.md`
+- 产物: 双语基准脚本（`cpu|gpu` + `single|double`）与刷新后的实测表
+- 未改动范围: `pyqcd/**` 运行时代码、版本号（仍 0.3.2；docs 不进 sdist，无发行内容漂移）
+
+## 风险、限制与下一步
+- 风险: GPU 路径依赖 `cupy`，本机未装，尚无实跑证据；用户需自行 `pip install "pyqcd[cuda]"` 验证
+- 风险: 表内数字仍是 4 物理核/8 线程机器的单次测量，换机需用脚本复测
+- 阻塞: 无
+- 下一步: 推送到双远端触发 RTD 重建；如要发布则另起版本
+
+## Agent 全文报告
+--- report begin ---
+批量基准脚本现在与 15-case 基准用同一套开关。
+
+## 一、接口
+
+```bash
+python bench.py                 # 默认 = cpu single
+python bench.py cpu single      # 单精度（float32 / complex64），rtol 1e-5
+python bench.py cpu double      # 双精度（float64 / complex128），rtol 1e-12
+python bench.py gpu single      # 设备端计时（cupy，带 synchronize）
+```
+
+- **设备**：`DEVICE = sys.argv[1]`，与 15-case 基准完全一致；gpu 分支负责
+  `to_device` / `to_host` / `synchronise`，并在开头打印
+  `pyqcd <版本> <文件路径> | <设备名> | <精度> | procs N`，避免把 site-packages 里的旧构建当成新版本。
+- **精度**：`PRECISION = sys.argv[2]`，`single`/`double` 同时决定操作数 dtype 与对照容差。
+- **GPU 的一个如实限制**：自建进程池会把每个操作数落盘成 numpy，所以 `gpu` 下进程数固定为 1
+  （多进程测到的是 CPU）。这一点写进了脚本注释和双语说明，上表因此仍是 CPU 实测。
+
+## 二、实测（脚本改动后重跑，`cpu single`，3 轮中位）
+
+| case | serial | plan | exec | total | ×exec |
+|---|---|---|---|---|---|
+| general: many small (400) | 25 ms | 1 ms | 282 ms | 283 ms | 0.09× |
+| general: one-to-one (3) | 85 ms | <1 ms | 248 ms | 248 ms | 0.34× |
+| general: skewed (12) | 85 ms | <1 ms | 252 ms | 252 ms | 0.34× |
+| sush: NN 2pt (8) | 165 ms | 1 ms | 255 ms | 256 ms | 0.65× |
+| sush: NN 2pt, Nvec=100 (8) | 5310 ms | 1 ms | 2241 ms | 2242 ms | **2.37×** |
+
+双精度分支用精简副本验证：头部显示 `cpu | double | procs 4`，`rtol=1e-12` 对照断言全过。
+
+## 三、验证
+
+`release_check --offline` **10/10**（含 `sphinx -W` 双站、示例 21 ok / 4 skipped / 0 failed）；
+zh 文档示例 21 ok / 0 failed；双语代码块 AST 等价；`git diff --check` 空。
+
+## 四、未验证
+
+`gpu` 分支本机没有 `cupy`，**没有实跑证据**——结构与 15-case 基准同源，但仍应按未验证对待。
+表内数字来自本机 4 物理核/8 线程，换机器请用脚本复测。
+--- report end ---

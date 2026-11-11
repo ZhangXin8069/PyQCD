@@ -740,3 +740,11 @@
 - 关键内容: 上传并远程复验（含 DeprecationWarning）；tag dev47 三端一致；RTD 双站 0.3.2；release_check 18/18
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pyqcd-docs/batch-bench-switches - stage - 2026-11-11 17:19:45 +0800
+- 主任务: 批量基准脚本对齐 15-case 基准的 cpu/gpu 快捷切换与 single/double 精度调整
+- 日志文件: logs/v202611111719.txt
+- 文件大小: 5975 bytes
+- 触发原因: 阶段成果
+- 关键内容: 脚本参数化 + 同步计时 + 版本头；实跑刷新表格（S1 ×exec 0.65×、Nvec=100 2.37×）；release_check 10/10；gpu 分支未实跑
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress

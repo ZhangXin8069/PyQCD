@@ -279,11 +279,11 @@ split itself buys, `× total` is what you get end to end.
 
 | Scenario | Tasks | Serial | plan | exec | total | `×exec` | `×total` |
 |---|---|---|---|---|---|---|---|
-| general: many small | 400 | 25 ms | 2 ms | 273 ms | 275 ms | 0.09× | 0.09× |
-| general: one-to-one | 3 | 87 ms | <1 ms | 255 ms | 256 ms | 0.34× | 0.34× |
-| general: skewed | 12 | 90 ms | 1 ms | 260 ms | 261 ms | 0.35× | 0.35× |
-| sush: NN 2pt (S1) | 8 | 168 ms | 1 ms | 276 ms | 276 ms | 0.61× | 0.61× |
-| sush: NN 2pt, Nvec=100 (large task) | 8 | 5391 ms | 1 ms | 2508 ms | 2509 ms | **2.15×** | **2.15×** |
+| general: many small | 400 | 25 ms | 1 ms | 282 ms | 283 ms | 0.09× | 0.09× |
+| general: one-to-one | 3 | 85 ms | <1 ms | 248 ms | 248 ms | 0.34× | 0.34× |
+| general: skewed | 12 | 85 ms | <1 ms | 252 ms | 252 ms | 0.34× | 0.34× |
+| sush: NN 2pt (S1) | 8 | 165 ms | 1 ms | 255 ms | 256 ms | 0.65× | 0.65× |
+| sush: NN 2pt, Nvec=100 (large task) | 8 | 5310 ms | 1 ms | 2241 ms | 2242 ms | **2.37×** | **2.37×** |
 
 Reading the table:
 
@@ -293,7 +293,7 @@ Reading the table:
   measure it, do not assume it.
 * **The pool costs ≈0.15–0.3 s per call** (`exec` includes it): `mpirun` start-up
   (~150 ms) plus writing every operand and reading it back (~1.5 GB/s here). It pays off
-  only once the batch itself takes seconds — the Nvec=100 row reaches **2.15×**.
+  only once the batch itself takes seconds — the Nvec=100 row reaches **2.37×**.
 * **Small batches lose on `×exec`** because that fixed cost dominates; the balancer is
   fine, the batch is simply too short to amortise process start-up.
 * Worker-reported pure compute is also available at runtime via `state["timings"]`
@@ -314,32 +314,81 @@ each against the serial baseline and the worker-reported compute time.
 
 ### Reproduce
 
+Run it exactly like the 15-case benchmark above — same two switches:
+`python bench.py cpu single` (the default) or `python bench.py gpu double`.
+On `gpu` the pool is pinned to one process, because the self-launched pool stages
+every operand as numpy; the table above is therefore a CPU measurement, and the GPU
+run measures the batch API's in-process overhead on the device.
+
 ```python
 # docs-skip: launches MPI worker processes
 import statistics
+import sys
 import time
 from functools import partial
 
 import numpy as np
+import pyqcd
 import pyqcd.einsum as pe
 from pyqcd.parallel import init, run
 
+# Same two switches as the 15-case benchmark: device first, precision second.
+DEVICE = sys.argv[1] if len(sys.argv) > 1 else "cpu"          # "cpu" or "gpu"
+PRECISION = sys.argv[2] if len(sys.argv) > 2 else "single"    # "single" or "double"
 ROUNDS = 3        # serial and parallel are each timed this many times; take the median ratio
-PROCS = 4         # size of the self-launched pool
+# The self-launched pool stages every operand as numpy, so on the GPU only the
+# in-process path (one process) measures device work; extra ranks would time the CPU.
+PROCS = 4 if DEVICE == "cpu" else 1
+
+REAL = np.float32 if PRECISION == "single" else np.float64
+COMPLEX = np.complex64 if PRECISION == "single" else np.complex128
+RTOL = 1e-5 if PRECISION == "single" else 1e-12
+
+if DEVICE == "gpu":
+    import cupy as cp
+
+    def to_device(array):
+        """Move a numpy array to the GPU."""
+        return cp.asarray(array)
+
+    def to_host(array):
+        """Bring a device result back as numpy for the comparison."""
+        return cp.asnumpy(array)
+
+    def synchronise():
+        """Synchronise before timing: otherwise you only measure kernel launch."""
+        cp.cuda.Device(0).synchronize()
+
+    device_name = cp.cuda.runtime.getDeviceProperties(0)["name"].decode()
+else:
+    def to_device(array):
+        return array
+
+    def to_host(array):
+        return array
+
+    def synchronise():
+        return None
+
+    device_name = "cpu"
+
+# Print version and path first: a stale copy in site-packages blames the wrong build.
+print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", device_name,
+      "|", PRECISION, "| procs", PROCS)
 
 rng = np.random.default_rng(0)
 
 
 def random_array(*shape):
-    """Single-precision real random array: float32 is enough to expose the parallel gain."""
-    return rng.standard_normal(shape).astype(np.float32)
+    """Real random array in the requested precision, on the requested device."""
+    return to_device(rng.standard_normal(shape).astype(REAL))
 
 
 def random_complex_array(*shape):
-    """Single-precision complex random array."""
+    """Complex random array: real and imaginary parts sampled separately."""
     real_part = rng.standard_normal(shape)
     imag_part = rng.standard_normal(shape)
-    return (real_part + 1j * imag_part).astype(np.complex64)
+    return to_device((real_part + 1j * imag_part).astype(COMPLEX))
 
 
 # A real lattice-QCD equation: the sush distillation nucleon two-point (NN 2pt), 8 operands.
@@ -400,8 +449,10 @@ def timed(function, rounds=ROUNDS):
     durations = []
     result = None
     for _ in range(rounds):
+        synchronise()
         start = time.perf_counter()
         result = function()
+        synchronise()
         durations.append(time.perf_counter() - start)
     return statistics.median(durations), result
 
@@ -420,7 +471,11 @@ def output_shape(equation, operands):
 
 
 def run_parallel(tasks):
-    """One ``init`` + ``run`` pair, timed in two phases; results land in the buffers."""
+    """One ``init`` + ``run`` pair, timed in two phases.
+
+    The buffers stay host-side on purpose: the self-launched pool stages numpy, and
+    `init`/`run` write results in place, so a host buffer keeps both devices honest.
+    """
     keys = list(tasks)
     results = [np.zeros(output_shape(*tasks[key]),
                         dtype=np.result_type(*[o.dtype for o in tasks[key][1]]))
@@ -430,12 +485,15 @@ def run_parallel(tasks):
               "operands": [list(tasks[key][1]) for key in keys],
               "results": results}
 
+    synchronise()
     start = time.perf_counter()
     state = init(config, max_proc=PROCS, reminder=False)    # planning only
     plan_seconds = time.perf_counter() - start
+    synchronise()
 
     start = time.perf_counter()
     run(state)                                             # execution only
+    synchronise()
     exec_seconds = time.perf_counter() - start
 
     return ({key: results[index] for index, key in enumerate(keys)},
@@ -463,10 +521,10 @@ for label, tasks in CASES.items():
     # Correctness first: the parallel result must equal the serial one, otherwise the
     # speed-up means nothing.
     for key, (equation, operands) in tasks.items():
-        reference = pe.contract(equation, *operands)
+        reference = to_host(pe.contract(equation, *operands))
         scale = max(float(np.max(np.abs(reference))), 1e-30)
         deviation = float(np.max(np.abs(results[key] - reference))) / scale
-        assert deviation <= 1e-5, f"{label} {key}: rel={deviation:.1e}"
+        assert deviation <= RTOL, f"{label} {key}: rel={deviation:.1e}"
 
     print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} {plan_seconds:8.3f} "
           f"{exec_seconds:8.3f} {total_seconds:8.3f} "
