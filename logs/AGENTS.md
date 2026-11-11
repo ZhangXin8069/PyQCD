@@ -684,3 +684,11 @@
 - 关键内容: einsums 任务级并行、12 项契约、真实 sush 方程实测（collective 3.09x / 自建池 2.47x）与文档技能同步
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pyqcd-parallel/einsum-release-028 - final - 2026-11-11 12:53:53 +0800
+- 主任务: 复核原有功能与 einsums 正确性/性能，文档性能页新增 einsums 基准，发布 0.2.8 并推送三端
+- 日志文件: logs/v2026111112.txt
+- 文件大小: 8523 bytes
+- 触发原因: 任务完成
+- 关键内容: 全量 124 passed、契约 13/13、collective 1.43-3.97x、PyPI 0.2.8、tag dev42
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

@@ -1,0 +1,153 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-11 12:53:53 +0800
+批次: pyqcd-parallel/einsum-release-028
+主任务: 复核原有功能与 einsums 正确性/性能，文档性能页新增 einsums 基准，发布 0.2.8 并推送三端
+触发原因: 任务完成
+摘要: 全量 124 passed、契约 13/13、collective 1.43-3.97x、PyPI 0.2.8、tag dev42
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 原有功能检查
+- 命令: `python -m pyqcd.testing`
+- 关键输出: `124 passed, 1 skipped, 0 failed`
+- 退出码: 0
+- 证据与判断: 既有 124 项全绿（含新增的并行 einsum 契约包装），1 skipped 为无 CUDA 环境项
+
+### S2 — 新功能正确性复核
+- 命令: `python -m pyqcd.testing._parallel_einsum_contract`
+- 关键输出: 13 passed, 0 failed（含新增线程预算回归用例）
+- 证据与判断: 分箱上界、输入校验、提醒一次、三条路径对照、失败点名、真实蒸馏方程、
+  collective、导入隔离、CLI、线程预算共 13 项全绿
+
+### S3 — 性能实测中发现的缺陷与修复
+- 现象: 400 个小任务（128² 矩阵乘）在自建池上 0.29 s，但在 `bench_parallel` 语境下变成 1.79 s
+- 二分: 导入 `pyqcd.testing.einsum.bench_distillation`（间接 `import torch`）会把
+  `OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS` 改写为 4
+- 根因: `_worker_env` 用"环境变量是否等于 `_threads.exported_env`"判断用户是否显式设置，
+  被改写后启发式失效 → 4 进程 × 4 线程在 4 物理核上超订
+- 修复: 直接按 `物理核数 // 进程数` 给预算，并新增 `worker_threads` 参数显式指定；
+  新增回归用例 `test_worker_thread_budget_is_not_inherited_from_parent`
+- 验证: 修复后 400 小任务自建池回到 0.29 s
+
+### S4 — einsums 全场景性能实测（collective，4 rank，complex64，单线程基准）
+- general: many small 400 → 0.069 s → 0.048 s（1.43×）
+- general: one-to-one 3 → 0.125 s → 0.046 s（2.73×）
+- general: skewed 12 → 0.118 s → 0.045 s（2.63×）
+- kernel: E1 nucleon 2pt 8 → 0.211 s → 0.053 s（3.97×）
+- sush: S1 NN 2pt 8 → 0.197 s → 0.052 s（3.77×）
+- sush: P1 3pt main 8 → 0.139 s → 0.042 s（3.32×）
+- sush: S1 Nvec=100 8 → 6.670 s → 1.696 s（3.93×）
+- kernel: E5 γ sandwich 8 → 0.001 s → 0.001 s（0.80×）
+- 全部 `ok=True`（与串行 contract 对照）
+
+### S5 — einsums 自建池实测（单进程，4 进程）
+- many small 400 → 0.043 s → 0.290 s（0.15×）
+- one-to-one 3 → 0.082 s → 0.225 s（0.37×）
+- skewed 12 → 0.085 s → 0.244 s（0.35×）
+- E1 8 → 0.167 s → 0.397 s（0.42×）
+- S1 8 → 0.155 s → 0.247 s（0.63×）
+- P1 8 → 0.115 s → 0.391 s（0.29×）
+- S1 Nvec=100 8 → 5.274 s → 2.259 s（2.33×）
+- 判据: 固定成本 0.2–0.3 s（mpirun 启动 ~150 ms + 落盘/回读 1.5 GB/s），串行 ≳1 s 才划算
+
+### S6 — 文档（readthedocs 性能模块）
+- `docs/en/performance.md` 与 `docs/zh/performance.md` 新增「批量独立收缩（einsums）」小节：
+  8 个场景覆盖（通用小任务/一对一/偏斜/核子 2pt/γ 夹心/sush NN 2pt/sush 3pt 主项/大任务），
+  集体模式与自建池两张表 + 结论 + 可复现脚本（形式与既有性能页一致，`# docs-skip` 标注）
+- 中英代码块逐字节一致（performance 3/3、usage 14/14）
+- `docs_examples`：en 20 ok/4 skipped/0 failed；zh 同
+
+### S7 — 发布与推送
+- 版本 0.2.8：pyproject / pyqcd/__init__ / pyqcd/einsum/_version 三处 + docs conf.py 双语
+  release + install/overview 版本示例
+- 构建: `python -m build --sdist` → pyqcd-0.2.8.tar.gz；`twine check` PASSED；156 文件
+- 上传: `twine upload` → https://pypi.org/project/pyqcd/0.2.8/
+- 远程复验: `pip install pyqcd==0.2.8` 成功；`pyqcd.__file__` 含 site-packages；
+  `plan_einsums`/`einsums` 可用；并行 vs 串行相对偏差 ~4e-7（float32，阈值 1e-5）
+- 发布终检: `release_check --offline` → 9/9
+- Git: 提交 4a0a37e，推送 gitlab + gitee；标签 dev42（前驱 dev41 由
+  `git describe --tags --abbrev=0 HEAD^` 取得），三端 tag 对象 0bb3db9 一致
+
+## 验证与证据
+- 测试/检查: 全量测试、并行契约 13 项、docs_examples 双语、release_check 离线、
+  form-audit、git diff --check、PyPI 远程安装复验、三端 tag 哈希核对
+- 结果: 124 passed/1 skipped/0 failed；13/13；20+20 ok；9/9；PASS；空；0.2.8 安装成功且 API 可用；0bb3db9 三端一致
+- 未验证项: RTD 站点重建需外部 CI，本地仅验证 sphinx -W 双站 0 错误；未在 GPU/多卡与 >8 物理核机器复测
+
+## 变更与产物
+- 文件: docs/{en,zh}/performance.md、docs/{en,zh}/{conf.py,install.md,overview.md}、
+  pyproject.toml、pyqcd/__init__.py、pyqcd/einsum/_version.py、pyqcd/parallel/einsum.py、
+  pyqcd/testing/_parallel_einsum_contract.py
+- 产物: PyPI pyqcd 0.2.8、dist/pyqcd-0.2.8.tar.gz、git tag dev42
+- 未改动范围: pyqcd.einsum 生产算法未变
+
+## 风险、限制与下一步
+- 风险: 自建池小批次收益为负（已在文档明确）；GPU 张量在自建池路径先转 numpy
+- 阻塞: 无
+- 下一步: 等 RTD 自动重建后核对双语言页面含 0.2.8 与 einsums 表
+
+## 用户输入指令
+检查原有的库功能是否正常,同时继续核对新功能正确性与性能实测,全部确认无误后在'readthedocs'
+的'性能'模块添加'einsums的基准实例'[覆盖所有的应用场景,形式参考原'性能'模块的基准脚本],
+最后复测无误后全面发布和推送
+（追加）保持最小改动原则
+
+## Agent 全文报告
+--- report begin ---
+原有功能与新功能都已复核，`einsums` 的全场景基准写入双语文档性能页，0.2.8 已发布并推送三端。
+
+## 一、原有库功能
+
+`python -m pyqcd.testing` → **124 passed, 1 skipped, 0 failed**（1 skipped 是无 CUDA 环境项）。
+`pyqcd.einsum` 生产代码本次未改动。
+
+## 二、新功能正确性
+
+并行契约 **13/13**。期间发现并修掉一个真实缺陷：`_worker_env` 用"环境变量是否等于
+`_threads.exported_env`"判断用户是否显式设置线程数，而任何在 `import pyqcd.einsum` 之后
+加载的库（本机实测 `torch`，经由 `pyqcd.testing.einsum.bench_distillation`）会把
+`OMP_NUM_THREADS` 改成 4，启发式随即失效 → 4 进程 × 4 线程在 4 物理核上超订，400 个小任务
+从 0.29 s 涨到 1.79 s。现改为直接按 `物理核数 // 进程数` 给预算，并暴露 `worker_threads`，
+新增回归用例锁死该行为。
+
+## 三、性能实测（真实 sush 方程，complex64，单线程基准，结果均与串行对照）
+
+集体模式（`mpirun -np 4`，零序列化）：
+
+| 场景 | 任务 | 串行 | 并行 | 加速比 |
+|---|---|---|---|---|
+| 通用：大量小任务 | 400 | 0.069 s | 0.048 s | 1.43× |
+| 通用：一对一 | 3 | 0.125 s | 0.046 s | 2.73× |
+| 通用：偏斜 | 12 | 0.118 s | 0.045 s | 2.63× |
+| 核子 2pt（E1） | 8 | 0.211 s | 0.053 s | 3.97× |
+| sush NN 2pt（S1） | 8 | 0.197 s | 0.052 s | 3.77× |
+| sush 3pt 主项（P1） | 8 | 0.139 s | 0.042 s | 3.32× |
+| sush NN 2pt Nvec=100 | 8 | 6.670 s | 1.696 s | 3.93× |
+| γ 夹心（E5，1 ms/任务） | 8 | 0.001 s | 0.001 s | 0.80× |
+
+自建池（4 进程）：除 Nvec=100 大任务 **2.33×** 外均 <1——固定成本 0.2–0.3 s
+（`mpirun` 约 150 ms + 落盘/回读 1.5 GB/s），串行 ≳1 s 才划算。
+
+## 四、文档
+
+`docs/{en,zh}/performance.md` 新增「批量独立收缩（einsums）」小节：8 个场景覆盖、两张表、
+结论与可复现脚本（与既有性能页同构，脚本标 `# docs-skip`）。中英代码块逐字节一致；
+`docs_examples` en/zh 各 20 ok/4 skipped/0 failed；`sphinx -W` 双站 0 错误。
+
+## 五、发布与推送
+
+| 项 | 值 |
+|---|---|
+| 版本 | 0.2.8（三处版本号 + 双语 conf.py + install/overview 示例同步） |
+| PyPI | https://pypi.org/project/pyqcd/0.2.8/ ，`pip install pyqcd==0.2.8` 成功 |
+| 远程复验 | `site-packages` 导入、`plan_einsums`/`einsums` 可用、并行 vs 串行相对偏差 ~4e-7 |
+| 终检 | `release_check --offline` 9/9；`form-audit` PASS；`git diff --check` 空 |
+| Git | 提交 4a0a37e 推送 gitlab + gitee；标签 **dev42**（前驱 dev41 由 git 取），三端 0bb3db9 一致 |
+
+## 六、未验证
+
+RTD 站点重建依赖外部 CI，本地只验证了 `sphinx -W` 双站 0 错误；未在 GPU/多卡与 >8 物理核
+机器复测加速比。
+--- report end ---
