@@ -11,23 +11,24 @@ import pyqcd.einsum as pe
 
 rng = np.random.default_rng(0)
 
-# 两个复数矩阵：contract 的输入与 numpy 完全一样，只是多了一个更聪明的规划器
+# Two complex matrices: contract takes exactly what numpy would, plus a smarter planner.
 a = (rng.standard_normal((3, 4)) + 1j * rng.standard_normal((3, 4))).astype(np.complex128)
 b = (rng.standard_normal((4, 5)) + 1j * rng.standard_normal((4, 5))).astype(np.complex128)
 
-# 1) 直接算：契约解析 -> 规划 -> 执行，一步到位
+# 1) Just compute it: parse the contract, plan, execute — one call.
 result = pe.contract("ij,jk->ik", a, b)
 
-# 2) 只想看它打算怎么算：contract_path 返回收缩顺序与代价，不做实际运算
+# 2) Ask how it intends to do it: contract_path returns the order and the cost
+#    without touching the data.
 path, info = pe.contract_path("ij,jk->ik", a, b)
 print(int(info.opt_cost), path)
 
-# 3) 同一方程要反复调用时，把规划结果编译成一个表达式对象复用
+# 3) When the same equation runs repeatedly, compile the plan once and reuse it.
 expr = pe.contract_expression("ij,jk->ik", (3, 4), (4, 5))
 for _ in range(3):
-    expr(a, b)           # 复用已编译的计划，不再重新规划
+    expr(a, b)           # reuses the compiled plan, no re-planning
 
-# 三种用法必须给出同一个矩阵乘结果
+# All three routes must produce the same matrix product.
 assert np.allclose(result, a @ b)
 assert int(info.opt_cost) > 0
 assert np.allclose(expr(a, b), a @ b)
@@ -36,13 +37,13 @@ assert np.allclose(expr(a, b), a @ b)
 Shared intermediates memoise repeated sub-contractions inside a context:
 
 ```python
-# 上下文管理器内的重复子收缩会被记住：第二次调用直接取缓存
+# Repeated sub-contractions inside the context are memoised: the second call hits the cache.
 with pe.shared_intermediates() as cache:
     pe.contract("ab,bc->ac", a, b, backend="numpy")
     pe.contract("ab,bc->ac", a, b, backend="numpy")
 print(pe.count_cached_ops(cache))
 
-# 计数值是一个 Counter（按算子签名分组），不是单个整数
+# The count is a Counter keyed by operand signature, not a single integer.
 ops = pe.count_cached_ops(cache)
 assert sum(ops.values()) >= 1, ops
 ```
@@ -52,8 +53,8 @@ assert sum(ops.values()) >= 1, ops
 ```python
 from pyqcd.tools import set_backend, get_backend, get_backend_name, get_precision
 
-# 全局后端：numpy（默认，CPU）/ cupy（NVIDIA GPU）/ torch（CPU 或 CUDA）
-set_backend("numpy")          # 也可以写 "cupy"、"torch"
+# Global backend: numpy (default, CPU) / cupy (NVIDIA GPU) / torch (CPU or CUDA).
+set_backend("numpy")          # also accepts "cupy" and "torch"
 print(get_backend_name(), get_precision())
 
 assert get_backend_name() == "numpy"
@@ -63,10 +64,11 @@ assert get_precision() in {"complex64", "complex128"}
 ### Turning specialisations off
 
 ```python
-# specialize=False 只影响这一次调用：不走方程特化的专用路径，改用通用规划
+# specialize=False affects this call only: skip the equation-specific path and use the
+# generic planner instead.
 pe.contract("ij,jk->ik", a, b, specialize=False)
 
-# 结果必须与走专用路径时完全一致——特化只改速度，不改数值
+# The result must be identical to the specialised path — specialisation only changes speed.
 assert np.allclose(pe.contract("ij,jk->ik", a, b, specialize=False), a @ b)
 ```
 
@@ -79,10 +81,10 @@ Environment switches: `PYQCD_EINSUM_SPECIALIZE=0`,
 ```python
 import pyqcd.lattice as L
 
-# 基本常数：颜色数、时空维数、旋量维数、格距换算因子
+# Basic constants: colours, spacetime dimensions, spinor dimension, lattice spacing factor.
 print(L.Nc, L.Nd, L.Ns, L.fm2GeV)
 
-# gamma 矩阵用 DeGrand–Rossi 基，gamma(5) 是 4x4
+# Gamma matrices use the DeGrand-Rossi basis; gamma(5) is 4x4.
 print(L.gamma(5).shape)
 
 assert (L.Nc, L.Nd, L.Ns) == (3, 4, 4)
@@ -97,19 +99,19 @@ import numpy as np
 import pyqcd.gauge as G
 import pyqcd.smear as S
 
-# 造一个 2^4 的平凡规范场：所有链接都是单位矩阵
-# 布局是 U[t, z, y, x, mu, colour, colour]
+# Build a trivial 2^4 gauge field: every link is the identity.
+# Layout is U[t, z, y, x, mu, colour, colour].
 U = np.zeros((2, 2, 2, 2, 4, 3, 3), dtype=np.complex128)
 for mu in range(4):
     U[..., mu, :, :] = np.eye(3)
 
-# Wilson 圈、Polyakov 圈、Stout 涂抹、HYP 涂抹
+# Wilson loop, Polyakov loop, Stout smearing, HYP smearing.
 print(G.wilson_loop(U, 1, 1, 0, 1))
 print(G.polyakov_loop(U).shape)
 print(S.stout_smear(U, nstep=1).shape)     # (2, 2, 2, 2, 4, 3, 3)
 print(S.hyp_smear(U).shape)
 
-# 单位链接下 1x1 Wilson 圈必须精确等于 1；涂抹不改变张量形状
+# With unit links a 1x1 Wilson loop is exactly 1; smearing never changes the shape.
 assert abs(complex(G.wilson_loop(U, 1, 1, 0, 1)) - 1.0) < 1e-12
 assert G.polyakov_loop(U).shape == (2, 2, 2) or G.polyakov_loop(U).size > 0
 assert S.stout_smear(U, nstep=1).shape == U.shape
@@ -124,7 +126,7 @@ import pyqcd.gauge as G
 import pyqcd.operator as O
 import pyqcd.renorm as R
 
-# 每个格点每个方向做一个随机 SU(3) 链接（QR 分解后取正交因子）
+# One random SU(3) link per site and direction (take the orthogonal factor of a QR).
 rng = np.random.default_rng(0)
 U = np.zeros((2, 2, 2, 2, 4, 3, 3), dtype=complex)
 for mu in range(4):
@@ -132,10 +134,11 @@ for mu in range(4):
                         + 1j * rng.standard_normal((2, 2, 2, 3, 3)))
     U[..., mu, :, :] = q
 
-# 流时换算：a=0.1 fm 时 tau=1.0 对应多少 GeV^-2
+# Flow-time conversion: tau=1.0 at a=0.1 fm is how many GeV^-2?
 print(R.flow_time_gev_m2(1.0, a_fm=0.1))
 
-# Clover 场强张量 F_{mu nu}，每对 (mu, nu) 一个张量；再取对偶 F~_{01}
+# Clover field-strength tensor F_{mu nu}, one tensor per (mu, nu) pair; then the
+# dual tensor F~_{01}.
 F = {(mu, nu): G.clover_field_strength(U, mu, nu)
      for mu in range(4) for nu in range(4) if mu != nu}
 print(O.compute_dual_field_strength(F, 0, 1).shape)    # (2, 2, 2, 2, 3, 3)
@@ -148,11 +151,12 @@ assert O.compute_dual_field_strength(F, 0, 1).shape == (2, 2, 2, 2, 3, 3)
 Flow-based renormalised TMD:
 
 ```python
-# 梯度流重整化后的胶子 TMD：给定流时 tau、两套横距 (z, b)，返回矩阵元
+# Gluon TMD after gradient-flow renormalisation: given a flow time tau and two sets of
+# separations (z, b), return the matrix element.
 result = R.gradient_flow_renormalized_tmd(
     U, tau=1.0, z_list=[0, 2, 4], b_list=[0], z_dir=2, b_dir=0)
 
-# 形状是 (len(z_list), len(b_list))，且必须全部有限
+# Shape is (len(z_list), len(b_list)) and every entry must be finite.
 assert np.shape(result) == (3, 1), np.shape(result)
 assert np.all(np.isfinite(np.asarray(result))), "non-finite TMD result"
 ```
@@ -179,12 +183,12 @@ group equivalent operator structures before contracting.
 import numpy as np
 import pyqcd.analysis as A
 
-# 20 个组态 x 5 个时间片的假数据；第 0 维是组态轴
+# Fake data: 20 configurations x 5 time slices; axis 0 is the configuration axis.
 data = np.random.default_rng(0).standard_normal((20, 5))
-samples = A.Bootstrap(data, Nconf_axes=0)                  # 返回重采样后的字典
+samples = A.Bootstrap(data, Nconf_axes=0)                  # dict of resampled arrays
 print(sorted(samples))
 
-# 字典里同时给出均值、误差与逐样本，切片的维度与输入一致
+# The dict carries mean, error and per-sample values; the slice axis matches the input.
 assert {"data_mean", "data_err", "data_sample"} <= set(samples)
 assert np.shape(samples["data_mean"])[0] == 5
 ```
@@ -194,13 +198,13 @@ assert np.shape(samples["data_mean"])[0] == 5
 ```python
 import pyqcd.parallel as P
 
-# 先探测资源，再按 N*a = n*b 规划进程数
+# Detect resources first, then plan the process count from N*a = n*b.
 resources = P.detect_resources()
 plan = P.plan_parallel(m=12, a_mem_mb=500, resources=resources)
 print(P.format_plan(plan))
 
 assert isinstance(P.format_plan(plan), str)
-assert {"N", "Y", "X", "m"} <= set(plan)      # plan_parallel 返回字典
+assert {"N", "Y", "X", "m"} <= set(plan)      # plan_parallel returns a dict
 assert plan["N"] >= 1 and plan["m"] == 12
 ```
 
@@ -224,7 +228,8 @@ import numpy as np
 import pyqcd.einsum as pe
 from pyqcd.parallel import einsums, plan_einsums
 
-# 一批相互独立的收缩：同一个方程、同一形状、不同数据（拼成字典，键即为任务名）
+# A batch of independent contractions: same equation, same shapes, different data
+# (a dict whose keys are the task names).
 rng = np.random.default_rng(0)
 tasks = {
     f"t{i}": {"subscripts": "ij,jk->ik",
@@ -233,18 +238,20 @@ tasks = {
     for i in range(4)
 }
 
-# 先看它打算怎么分：进程数、每个进程分到哪些任务、负载是否均衡
+# See how it would split the work: process count, which tasks land in which bin,
+# and whether the loads are balanced.
 plan = plan_einsums(tasks, max_procs=4)
 
-# max_procs=1 走串行路径，便于在这里对照结果（文档门禁不拉起 MPI 进程池）
+# max_procs=1 takes the serial path, so the docs gate never spawns an MPI pool.
 result = einsums(tasks, max_procs=1, reminder=False, verbose=False)
 
-# 结果与输入一一对应：同键、同序；装箱覆盖全部任务且没有短板
+# The result mirrors the input one-to-one: same keys, same order; the packing covers
+# every task and has no straggler.
 assert plan["workers"] == min(4, plan["limits"]["limit"])
 assert sorted(i for bin_ in plan["bins"] for i in bin_) == [0, 1, 2, 3]
 assert plan["skew"] >= 1.0 and len(plan["bins"]) == plan["workers"]
 
-# 每个任务的结果都必须等于自己单独调用 contract 的结果
+# Every task must equal what contract returns for it on its own.
 assert result.keys() == tasks.keys()
 for key, spec in tasks.items():
     assert np.allclose(result[key], pe.contract(spec["subscripts"], *spec["operands"]))
@@ -274,6 +281,18 @@ result = einsums(tasks, max_procs=4)          # self-launched MPI pool
   staging; the payload returns on rank 0 unless `broadcast=True`). Without MPI it
   starts its own `mpirun -np K` pool and exchanges tasks/results through a
   temporary directory.
+* **Memory: collective mode multiplies the input by the rank count.** Because the
+  planner runs inside `einsums`, every rank must build the *whole* batch, so the
+  input footprint becomes `one copy × ranks`; rank 0 additionally holds **all**
+  results, and `broadcast=True` gives every rank its own full copy of them.
+  Measured with `resource.ru_maxrss` (float32, 64 tasks of 512², batch input
+  134 MB): serial peaks at 234 MB, collective on 4 ranks totals ≈ 1.15 GB — roughly
+  `4 × input + output`. On GPU this means *one full batch per visible card*: keep the
+  rank count aligned with the visible device count, otherwise VRAM multiplies.
+  When the batch does not fit, use the self-launched pool instead — it ships tasks
+  through disk so each worker only reads its own bin, at the price of ~0.15–0.3 s
+  fixed overhead per call. `einsums` prints this warning on every collective call,
+  independently of `reminder=`.
 * **Precision follows the operands**: `complex64`/`float32` inputs halve both
   memory and arithmetic cost — the natural first lever on a memory-constrained
   machine. `einsums` never casts anything itself.
@@ -283,14 +302,14 @@ distillation equation S1 (NN 2pt, 8 operands), `complex64` operands,
 `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1` (single-thread baseline, the fair
 comparison point), results verified against serial `contract`:
 
-| mode | workload | serial | `einsums` | speed-up |
-|---|---|---|---|---|
-| `mpirun -np 2` (collective) | S1, Nvec=40, 8 tasks | 168 ms | 88 ms | **1.86×** |
-| `mpirun -np 4` (collective) | S1, Nvec=40, 8 tasks | 183 ms | 59 ms | **3.09×** |
-| `mpirun -np 4` (collective), default threads | S1, Nvec=40, 8 tasks | 138 ms | 53 ms | 2.28× |
-| self-launched pool, `max_procs=4` | S1, Nvec=60, 8 tasks | 736 ms | 622 ms | 1.18× |
-| self-launched pool, `max_procs=4` | S1, Nvec=100, 8 tasks | 5326 ms | 2160 ms | **2.47×** |
-| self-launched pool, `max_procs=4` | S1, Nvec=40, 8 tasks | 217 ms | 391 ms | 0.56× |
+| mode | workload | serial | `einsums` | speed-up | peak RSS (this rank / all ranks) |
+|---|---|---|---|---|---|
+| `mpirun -np 2` (collective) | S1, Nvec=40, 8 tasks | 168 ms | 88 ms | **1.86×** | rank 0 415 MB / ≈702 MB |
+| `mpirun -np 4` (collective) | S1, Nvec=40, 8 tasks | 183 ms | 59 ms | **3.09×** | rank 0 383 MB / ≈1.15 GB |
+| `mpirun -np 4` (collective), default threads | S1, Nvec=40, 8 tasks | 138 ms | 53 ms | 2.28× | — |
+| self-launched pool, `max_procs=4` | S1, Nvec=60, 8 tasks | 736 ms | 622 ms | 1.18× | one batch on disk |
+| self-launched pool, `max_procs=4` | S1, Nvec=100, 8 tasks | 5326 ms | 2160 ms | **2.47×** | one batch on disk |
+| self-launched pool, `max_procs=4` | S1, Nvec=40, 8 tasks | 217 ms | 391 ms | 0.56× | one batch on disk |
 
 Two conclusions from the measurements, both reproducible with
 `python -m pyqcd.testing.parallel_einsum bench` (self-launched pool) and

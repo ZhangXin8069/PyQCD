@@ -110,19 +110,57 @@ def check_sdist(report: Report, version: str) -> None:
                f"{len(absolute)} offending lines")
 
 
+def _code_signature(source: str) -> str:
+    """Structural signature of a code block, ignoring comments and docstrings.
+
+    The two documentation trees carry the same code with localized prose: English
+    comments/docstrings under ``docs/en``, Chinese under ``docs/zh``. Comparing the
+    raw text would forbid that, so the signature drops comments (which ``ast`` never
+    sees) and docstrings, then dumps the tree.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.dump(tree, annotate_fields=True, include_attributes=False)
+
+
+_CJK = re.compile(r"[\u4e00-\u9fff]")
+
+
 def check_docs(report: Report) -> None:
     code, output = _run([sys.executable, "-m", "pyqcd.testing.docs_examples"])
     report.add("docs examples run", code == 0,
                output.strip().splitlines()[-1][:80] if output.strip() else "")
 
-    mismatched = []
+    mismatched, unlocalized = [], []
     for page in PAGES:
         en = BLOCK.findall((ROOT / "docs" / "en" / f"{page}.md").read_text(encoding="utf-8"))
         zh = BLOCK.findall((ROOT / "docs" / "zh" / f"{page}.md").read_text(encoding="utf-8"))
-        if len(en) != len(zh) or any(a != b for a, b in zip(en, zh)):
+        if len(en) != len(zh):
             mismatched.append(page)
-    report.add("en/zh code blocks", not mismatched,
-               "identical" if not mismatched else f"differ: {mismatched}")
+            continue
+        if any(_code_signature(a) != _code_signature(b) for a, b in zip(en, zh)):
+            mismatched.append(page)
+        # English pages must not carry Chinese comments or docstrings.
+        if any(_CJK.search(block) for block in en):
+            unlocalized.append(page)
+    report.add("en/zh code identical", not mismatched,
+               "same code, localized prose" if not mismatched
+               else f"differ: {mismatched}")
+    report.add("en comments in English", not unlocalized,
+               "no CJK in docs/en code blocks" if not unlocalized
+               else f"CJK found: {unlocalized}")
 
     for lang in ("en", "zh"):
         code, _ = _run([sys.executable, "-m", "sphinx", "-b", "html",

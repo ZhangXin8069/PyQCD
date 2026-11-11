@@ -3,7 +3,8 @@ name: readthedocs
 description: |
   Use when editing or building the PyQCD Read the Docs sites in `docs/en/` and
   `docs/zh/`, adding a documentation page, keeping the bilingual fenced code
-  blocks byte-identical, or fixing a failed Read the Docs build.
+  blocks structurally identical while localizing their comments, or fixing a
+  failed Read the Docs build.
 metadata:
   openclaw:
     emoji: 📚
@@ -141,7 +142,7 @@ PY
 ## 最小工作流程
 
 1. 改 `docs/en/` 的页面；示例先按已安装包的口吻写。
-2. 同步 `docs/zh/` 对应段落，**围栏代码块逐字节复制**，不重译代码。
+2. 同步 `docs/zh/` 对应段落：**代码原样复制，注释与 docstring 各自本地化**（英文页必为英文）。
 3. 跑双语一致性门（下节脚本），必须 `0` mismatch。
 4. 新增页时补两份 `index.rst` 的 toctree。
 5. 两份 `-W` 构建都必须 exit 0。
@@ -152,7 +153,7 @@ PY
 
 | # | 门 | 命令 | 通过判据 |
 |---|---|---|---|
-| ① | 中英围栏代码块逐字节相同 | “双语一致性门”脚本 | `pages with mismatch: 0`，exit 0 |
+| ① | 中英围栏代码块结构相同、英文页注释为英文 | “双语一致性门”脚本 | `pages with mismatch: 0`，exit 0 |
 | ② | 双站 Sphinx 无告警构建 | `python -m sphinx -b html -d /tmp/x/doctrees -W docs/en /tmp/x/html`（中文把 `docs/en`→`docs/zh`、doctree 换 `-d /tmp/x/doctrees-zh`） | 两条都 `build succeeded.` 且 exit 0 |
 | ③ | 文档示例可执行且自验证 | `python -m pyqcd.testing.docs_examples --keep-going`，再跑 `--lang zh --keep-going` | `failed=0`，且 `ok + skipped` = 页面 `python` 块总数（`skipped` 只能来自标了 `# pseudo-code` / `# docs-skip` 的块） |
 
@@ -184,36 +185,65 @@ total: ok=19 skipped=3 failed=0
 
 ## 双语一致性门
 
-中英文的围栏代码块必须逐字节相同；正则 ```` ```[a-z]*\n(.*?)``` ```` + `re.S`：
+中英文的围栏代码块必须**代码一致、注释各自本地化**：英文页的注释与 docstring 用英文，
+中文页用中文。判据是「去掉注释与 docstring 后的 AST 签名相同」，外加「`docs/en` 的代码块
+里不得出现中日韩字符」。
 
 ```bash
 python - <<'PY'
-import pathlib, re, sys
+import ast, pathlib, re, sys
 
 BLOCK = re.compile(r"```[a-z]*\n(.*?)```", re.S)
+CJK = re.compile(r"[\u4e00-\u9fff]")
 PAGES = ("overview", "usage", "performance", "install")
+
+
+def signature(source):
+    """代码块的结构签名：忽略注释（ast 看不到）与 docstring。"""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                             ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.dump(tree, annotate_fields=True, include_attributes=False)
+
+
 bad = 0
 for name in PAGES:
     en = BLOCK.findall((pathlib.Path("docs/en") / f"{name}.md").read_text(encoding="utf-8"))
     zh = BLOCK.findall((pathlib.Path("docs/zh") / f"{name}.md").read_text(encoding="utf-8"))
-    same = sum(a == b for a, b in zip(en, zh))
-    ok = len(en) == len(zh) and same == len(en)
+    same = sum(signature(a) == signature(b) for a, b in zip(en, zh))
+    localized = not any(CJK.search(block) for block in en)
+    ok = len(en) == len(zh) and same == len(en) and localized
     bad += 0 if ok else 1
-    print(f"{name}: en={len(en)} zh={len(zh)} same={same} {'OK' if ok else 'MISMATCH'}")
+    print(f"{name}: en={len(en)} zh={len(zh)} code_same={same} "
+          f"en_localized={localized} {'OK' if ok else 'MISMATCH'}")
 print("pages with mismatch:", bad)
 sys.exit(1 if bad else 0)
 PY
 ```
 
-2026-11-08 实测输出（当前基线，块数变化时只更新期望值，不放松判据）：
+2026-11-11 实测输出（块数变化时只更新期望值，不放松判据）：
 
 ```text
-overview: en=4 zh=4 same=4 OK
-usage: en=12 zh=12 same=12 OK
-performance: en=4 zh=4 same=4 OK
-install: en=14 zh=14 same=14 OK
+overview: en=4 zh=4 code_same=4 en_localized=True OK
+usage: en=14 zh=14 code_same=14 en_localized=True OK
+performance: en=5 zh=5 code_same=5 en_localized=True OK
+install: en=14 zh=14 code_same=14 en_localized=True OK
 pages with mismatch: 0
 ```
+
+历史注记：早期判据是「逐字节相同」（`same = sum(a == b ...)`）。2026-11-11 起英文页注释
+必须是英文，逐字节相同与本地化互斥，因此判据改为 AST 签名 + 英文页 CJK 检查；
+`python -m pyqcd.testing.release_check` 的两条 `en/zh code identical` 与
+`en comments in English` 就是这条门的自动化版本。
 
 ## 构建门
 

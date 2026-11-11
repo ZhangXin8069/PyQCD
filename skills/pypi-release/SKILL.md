@@ -662,7 +662,7 @@ python -m pyqcd.testing.release_check --with-tests    # 连测试套件一起
 1. 版本三处一致（pyproject / `pyqcd.__version__` / `einsum._version`）+ 分发名 `pyqcd`
 2. sdist 存在（缺则自动构建）、`twine check`、内容洁净（无 `pyqcd/testing`、无 `.so`、
    有 `py.typed`、无 `AGENTS.md`）、`SOURCES.txt` 无 `/home/` 绝对路径
-3. 文档示例可执行、中英代码块逐字节一致、`sphinx -W` 双站 exit 0
+3. 文档示例可执行、中英代码块结构一致（注释各自本地化，英文页无中文）、`sphinx -W` 双站 exit 0
 4. PyPI：最新版号与本地一致、只发 sdist、项目页探针（Repositories / 文档链接 /
    `python -m pyqcd` / `6.02`）
 5. Read the Docs：en 与 zh-cn 首页都已含当前版本号
@@ -1115,6 +1115,6 @@ gpush.sh && gpush.sh -t gitee.com
 git tag -a dev<N> -F /tmp/tagmsg.txt && git push origin dev<N>
 ```
 17 项覆盖：版本三处一致、sdist 构建 / `twine check` / 内容洁净 / 无绝对路径、文档示例可执行、
-中英代码块逐字节一致、`sphinx -W` 双站、PyPI 版本与项目页探针、RTD 双语言含当前版本、
+中英代码块结构一致且英文页注释为英文、`sphinx -W` 双站、PyPI 版本与项目页探针、RTD 双语言含当前版本、
 gitlab/gitee 与本地 HEAD 同步、测试套件（`--offline --with-tests` 为 10 项）。
 发布后 24 h 内发现的任何问题只能用新版本号修；远程复验输出的 `pyqcd.__file__` 必须含 `site-packages`。

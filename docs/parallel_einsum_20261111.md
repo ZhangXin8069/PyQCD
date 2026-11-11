@@ -97,7 +97,34 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 python -m pyqcd.testing._parallel_einsum_contract
 ```
 
-## 7. 已知限制
+## 7. 内存代价（collective 的输入复制）
+
+实测方法：在 rank 内部读 `resource.getrusage(...).ru_maxrss`，分别在「造完输入之后」
+与「调用返回之后」取峰值；任务为 float32 矩阵乘。
+
+| 场景 | 单 rank 峰值 | 全部 rank 聚合 |
+|---|---|---|
+| 串行（tasks=64，512²，整批输入 134 MB） | 234 MB | 234 MB |
+| collective np=2 | rank 0 415 MB / worker 287 MB | ≈ 702 MB |
+| collective np=4 | rank 0 383 MB / worker 256 MB | ≈ 1151 MB |
+| collective np=4 + `broadcast=True` | rank 0 432 MB / worker 367 MB | ≈ 1533 MB |
+
+结论：
+
+1. **输入按 rank 数复制**：4 rank 在开始收缩前就已各占 223 MB（单份整批输入），
+   而串行只有一份。总占用 ≈ `rank 数 × 输入 + 结果`。
+2. **计算中间体基本不放大**：每个 rank 只为自己分箱里的任务开中间体，聚合量与串行相当。
+3. **rank 0 多一份全部结果**；`broadcast=True` 会让每个 rank 再各持一份全部结果
+   （worker 从 256 MB 涨到 367 MB）。
+4. **GPU 上最危险**：每个 rank 都把整批放进自己那张卡，rank 数 > 卡数则成倍放大；
+   多卡时应让 rank 数与可见卡数对齐。批次放不下时改用自建进程池（任务经磁盘分发，
+   worker 只读自己那一箱，代价 0.15–0.3 s 固定开销）。
+
+该警告已同时写入 `docs/{en,zh}/usage.md` 的 `einsums` 小节、双语文档性能页，并由
+`einsums` 在每次进入 collective 时打印（`COLLECTIVE_MEMORY_WARNING`，与 `reminder=`
+无关，每个进程一次）。
+
+## 8. 已知限制
 
 * 结果默认只回传 rank 0（collective）；需要全体持有请传 `broadcast=True`。
 * 自建进程池要求同机可执行 `mpirun`；找不到时降级为串行并给 `RuntimeWarning`。

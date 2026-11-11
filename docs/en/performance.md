@@ -179,18 +179,18 @@ rng = np.random.default_rng(0)
 
 
 def complex_noise(*shape):
-    """按给定形状生成复数随机数组：实部与虚部各自独立采样。"""
+    """Complex random array of the given shape (real and imaginary parts sampled separately)."""
     real_part = rng.standard_normal(shape)
     imag_part = rng.standard_normal(shape)
     return (real_part + 1j * imag_part).astype(np.complex128)
 
 
 def check(equation, *operands):
-    """用两套独立参考实现校验同一个结果。
+    """Verify one result against two independent reference implementations.
 
-    - numpy 用 optimize="optimal" 自行规划路径；
-    - torch 用它对同一批输入的原生实现；
-    三者逐元素一致（rtol 1e-10）才算通过。
+    - numpy plans its own path with optimize="optimal";
+    - torch evaluates the same operands with its native implementation;
+    the three must agree element-wise (rtol 1e-10) for the case to pass.
     """
     ours = np.asarray(pe.contract(equation, *operands))
     numpy_ref = np.einsum(equation, *operands, optimize="optimal")
@@ -200,30 +200,35 @@ def check(equation, *operands):
     print(f"{equation:32s} ok  max|d| = {np.max(np.abs(ours - numpy_ref)):.2e}")
 
 
-# 逐类覆盖：从最简单的矩阵乘一路到生产形状的核子 2pt
+# One case per structural category, from a plain matmul up to a production shape.
 check("ij,jk->ik", complex_noise(8, 8), complex_noise(8, 8))
-# 三算子链：规划器要决定先乘哪一对
+
+# Three-operand chain: the planner has to choose which pair to contract first.
 check("ij,jk,kl->il", complex_noise(8, 8), complex_noise(8, 8), complex_noise(8, 8))
-# 省略号批轴：同一方程作用在一批矩阵上
+
+# Ellipsis batch axis: the same equation applies to a batch of matrices.
 check("...ij,...jk->...ik", complex_noise(2, 4, 5), complex_noise(2, 5, 6))
-# 重复标签：取对角元（输入输出维度不同）
+
+# Repeated label: take the diagonal (input and output have different rank).
 check("ii->i", complex_noise(6, 6))
-# 全缩并成标量：没有输出标签
+
+# Full contraction to a scalar: the output has no labels.
 check("ij,ij->", complex_noise(5, 7), complex_noise(5, 7))
 
-# 生产形状：8 算子的核子 2pt。Nvec=8 只是为了让文档门禁秒级跑完，
-# 形状关系与真实计算完全一致（perambulator、gamma、VVV、投影算符）。
+# Production shape: the 8-operand nucleon 2pt. Nvec=8 only keeps the documentation
+# gate fast; the shape relations are exactly those of the real calculation
+# (perambulators, gammas, VVV vertices, projector).
 n = 8
 check(
     "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",
-    complex_noise(4, 4, n, n),        # perambulator（sink）
+    complex_noise(4, 4, n, n),        # perambulator (sink)
     complex_noise(4, 4, n, n),        # perambulator
     complex_noise(4, 4, n, n),        # perambulator
     complex_noise(4, 4),              # gamma_0
     complex_noise(4, 4),              # gamma_4
     complex_noise(4, n, n, n),        # sink VVV
     complex_noise(4, n, n, n),        # source VVV
-    complex_noise(4, 4),              # 投影算符
+    complex_noise(4, 4),              # projector
 )
 ```
 
@@ -283,6 +288,19 @@ two ways:
 Here the two calibers nearly coincide (staging is zero, only the plan broadcast is
 missing from `×compute`), which is exactly why collective is the mode to use.
 
+> **Memory warning — collective mode replicates the input on every rank.**
+> The planner runs inside `einsums`, so each rank must build the *whole* batch:
+> input memory becomes `one copy × ranks`. Rank 0 additionally holds **all**
+> results, and `broadcast=True` gives every rank its own full copy of them.
+> Measured with `resource.ru_maxrss` on float32 matrix products (batch input
+> 134 MB, 64 tasks of 512²): serial peaks at **234 MB**, while collective on
+> 4 ranks totals ≈ **1.15 GB** (`4 × input + output`). On GPU this means one full
+> batch per visible card — keep the rank count equal to the device count or VRAM
+> multiplies. If the batch does not fit, use the self-launched pool: it ships tasks
+> through disk and each worker reads only its own bin, at ~0.15–0.3 s fixed cost
+> per call. `einsums` prints this warning on every collective call, independently
+> of `reminder=`.
+
 ### Self-launched pool (single process, no pre-existing `mpirun`)
 
 | Scenario | Tasks | Serial | Pool wall | Pool compute | `×wall` | `×compute` |
@@ -322,7 +340,7 @@ The self-launched harness prints `speedup … (init included)` and
 ### Reproduce
 
 ```python
-# docs-skip: 会拉起 mpirun worker 进程
+# docs-skip: launches MPI worker processes
 import statistics
 import time
 from functools import partial
@@ -331,34 +349,34 @@ import numpy as np
 import pyqcd.einsum as pe
 from pyqcd.parallel import einsums
 
-ROUNDS = 3        # 串行与并行各测几轮，最后取每轮比值的中位数
-PROCS = 4         # 自建进程池的进程数；已在 mpirun 内运行时由 MPI rank 数决定
+ROUNDS = 3        # serial and parallel are each timed this many times; take the median ratio
+PROCS = 4         # size of the self-launched pool; inside mpirun the rank count decides
 
 rng = np.random.default_rng(0)
 
 
 def random_array(*shape):
-    """单精度实数随机数组：受限机器上用 float32 就够暴露并行收益。"""
+    """Single-precision real random array: float32 is enough to expose the parallel gain."""
     return rng.standard_normal(shape).astype(np.float32)
 
 
 def random_complex_array(*shape):
-    """单精度复数随机数组。"""
+    """Single-precision complex random array."""
     real_part = rng.standard_normal(shape)
     imag_part = rng.standard_normal(shape)
     return (real_part + 1j * imag_part).astype(np.complex64)
 
 
-# 真实格点 QCD 方程：sush 蒸馏的核子两关联（NN 2pt），8 个操作数
+# A real lattice-QCD equation: the sush distillation nucleon two-point (NN 2pt), 8 operands.
 SUSH_NN_2PT = "eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN"
 
 
 def sush_nn_2pt(nvec, count=8):
-    """造 count 个 NN 2pt 任务：同一方程、同一形状、不同数据。
+    """Build ``count`` NN 2pt tasks: same equation, same shapes, different data.
 
-    形状照 refer/sush/_distillation/contraction.NN.2pt.py：
-    三个 perambulator + 两个 gamma 矩阵 + 两个 VVV 顶点 + 一个投影算符。
-    每个任务用独立随机数，模拟"同一方程、不同组态"的真实批量。
+    Shapes follow refer/sush/_distillation/contraction.NN.2pt.py: three perambulators,
+    two gamma matrices, two VVV vertices and one projector. Each task uses its own
+    random numbers, mimicking the real case of "one equation, many configurations".
     """
     tasks = {}
     for index in range(count):
@@ -370,17 +388,18 @@ def sush_nn_2pt(nvec, count=8):
             random_complex_array(4, 4),                    # gamma_7
             random_complex_array(1, nvec, nvec, nvec),     # sink VVV
             random_complex_array(1, nvec, nvec, nvec),     # source VVV
-            random_complex_array(4, 2),                    # 投影算符（前两列）
+            random_complex_array(4, 2),                    # projector (first two columns)
         ]
         tasks[f"S1-{index}"] = (SUSH_NN_2PT, operands)
     return tasks
 
 
 def general_matmul(size, count, heavy=3):
-    """通用矩阵乘批次。
+    """Batch of plain matmuls.
 
-    ``heavy`` 控制前几个任务使用大尺寸，用来制造负载偏斜：
-    中间那组 12 个任务里只有 3 个是重的，看装箱器会不会把重的堆在同一个进程上。
+    ``heavy`` sets how many of the first tasks use the large size, which creates the
+    load skew: in the 12-task case only 3 tasks are heavy, so we can see whether the
+    bin packer puts them on the same process or spreads them out.
     """
     tasks = {}
     for index in range(count):
@@ -393,16 +412,16 @@ def general_matmul(size, count, heavy=3):
 
 
 CASES = {
-    "general: many small": general_matmul(128, 400),    # 大批量、小单量（本功能的目标场景）
-    "general: one-to-one": general_matmul(1200, 3),     # 任务数 = 进程数，一对一
-    "general: skewed": general_matmul(1200, 12),        # 3 个重任务 + 9 个轻任务
-    "sush: NN 2pt": sush_nn_2pt(40),                    # 真实蒸馏方程
-    "sush: NN 2pt large": sush_nn_2pt(100),             # 同上，单任务更大
+    "general: many small": general_matmul(128, 400),    # many tasks, tiny each (the target case)
+    "general: one-to-one": general_matmul(1200, 3),     # tasks == processes, one each
+    "general: skewed": general_matmul(1200, 12),        # 3 heavy tasks + 9 light tasks
+    "sush: NN 2pt": sush_nn_2pt(40),                    # real distillation equation
+    "sush: NN 2pt large": sush_nn_2pt(100),             # same, with a larger single task
 }
 
 
 def timed(function, rounds=ROUNDS):
-    """跑 rounds 轮，返回耗时中位数与最后一次的返回值。"""
+    """Run ``rounds`` times and return the median duration plus the last value."""
     durations = []
     result = None
     for _ in range(rounds):
@@ -413,13 +432,13 @@ def timed(function, rounds=ROUNDS):
 
 
 def run_serial(tasks):
-    """逐个串行调用 contract —— 这就是并行要打败的基准。"""
+    """Call contract one task at a time — this is the baseline parallel has to beat."""
     return [pe.contract(equation, *operands)
             for equation, operands in tasks.values()]
 
 
 def run_parallel(tasks):
-    """一次调用交给 einsums；返回与输入同键的字典。"""
+    """Hand the whole batch to einsums; it returns a dict with the same keys."""
     return einsums(tasks, max_procs=PROCS, reminder=False, verbose=False)
 
 
@@ -429,7 +448,8 @@ for label, tasks in CASES.items():
     serial_seconds, _ = timed(partial(run_serial, tasks))
     parallel_seconds, results = timed(partial(run_parallel, tasks))
 
-    # 先验正确性：并行结果必须等于串行结果，否则倍率没有意义
+    # Correctness first: the parallel result must equal the serial one, otherwise the
+    # speed-up means nothing.
     for key, (equation, operands) in tasks.items():
         reference = pe.contract(equation, *operands)
         scale = max(float(np.max(np.abs(reference))), 1e-30)
@@ -461,23 +481,23 @@ import opt_einsum as oe
 import pyqcd
 import pyqcd.einsum as pe
 
-# docs-skip: 15 个用例的全尺寸基准（单次 0.4–2.7 s），文档门禁不跑
-DEVICE = sys.argv[1] if len(sys.argv) > 1 else "cpu"     # "cpu" 或 "gpu"
-ROUNDS = 3                                               # 交错计时轮数
+# docs-skip: full-size 15-case benchmark (0.4-2.7 s per call); the docs gate skips it
+DEVICE = sys.argv[1] if len(sys.argv) > 1 else "cpu"     # "cpu" or "gpu"
+ROUNDS = 3                                               # interleaved timing rounds
 
 if DEVICE == "gpu":
     import cupy as cp
 
     def to_device(array):
-        """把 numpy 数组搬到显存。"""
+        """Move a numpy array to the GPU."""
         return cp.asarray(array)
 
     def synchronise():
-        """GPU 计时前必须同步，否则只量到 kernel 下发的时间。"""
+        """Synchronise before timing on the GPU; otherwise you only measure kernel launch."""
         cp.cuda.Device(0).synchronize()
 
     def release_memory():
-        """每个用例后清空显存池，避免上一次的残留把下一个用例挤爆。"""
+        """Empty the memory pools after each case so leftovers do not crowd out the next one."""
         cp.get_default_memory_pool().free_all_blocks()
         cp.get_default_pinned_memory_pool().free_all_blocks()
 
@@ -494,26 +514,27 @@ else:
 
     device_name = "cpu"
 
-# 先打印版本与路径：site-packages 里的旧版会把每个数字都变成"PyQCD 很慢"
+# Print version and path first: a stale copy in site-packages turns every number into
+# "PyQCD is slow".
 print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", device_name)
 
 rng = np.random.default_rng(0)
 
 
 def random_array(*shape):
-    """实数随机数组（float64）。"""
+    """Real random array (float64)."""
     return to_device(rng.standard_normal(shape))
 
 
 def random_complex_array(*shape):
-    """复数随机数组（complex128）：实部与虚部独立采样。"""
+    """Complex random array (complex128): real and imaginary parts sampled separately."""
     real_part = rng.standard_normal(shape)
     imag_part = rng.standard_normal(shape)
     return to_device((real_part + 1j * imag_part).astype(np.complex128))
 
 
 def one_call(function, repeat=1):
-    """调用 repeat 次并返回最快的一次；repeat>1 用来摊掉固定开销。"""
+    """Call ``repeat`` times and keep the fastest; repeat>1 amortises fixed overhead."""
     synchronise()
     best = float("inf")
     for _ in range(repeat):
@@ -524,8 +545,8 @@ def one_call(function, repeat=1):
     return best
 
 
-# 15 个结构类别，形状与上面两张表完全一致。
-# 每行 = (标签, 方程, 造数据的函数, 各操作数的形状)
+# Fifteen structural categories, at exactly the shapes used in the two tables above.
+# Each row is (label, equation, data builder, shapes of the operands).
 CASES = [
     ("matmul 2D (real)", "ij,jk->ik", random_array,
      [(4096, 4096), (4096, 4096)]),
@@ -565,7 +586,8 @@ print(f"{'case':26s} {'pyqcd(s)':>9s} {'opt(s)':>9s} {'ratio':>6s}")
 for label, equation, builder, shapes in CASES:
     operands = [builder(*shape) for shape in shapes]
 
-    # 1) 先验正确性：与 opt_einsum 逐元素对照，快而不对的数字没有意义
+    # 1) Correctness first: compare element-wise against opt_einsum. A fast wrong
+    #    number is worthless.
     reference = oe.contract(equation, *operands, optimize="dp")
     got = pe.contract(equation, *operands)
     ours_value = cp.asnumpy(got) if DEVICE == "gpu" else np.asarray(got)
@@ -575,13 +597,14 @@ for label, equation, builder, shapes in CASES:
     del reference, got, ours_value, their_value
     release_memory()
 
-    # 2) 先探一次耗时，据此决定内层重复次数，让每个样本至少约 0.3 s
+    # 2) Probe once to choose the inner repeat count, so each sample is about 0.3 s.
     ours_call = partial(pe.contract, equation, *operands)
     theirs_call = partial(oe.contract, equation, *operands, optimize="dp")
     probe = one_call(ours_call)
     inner = max(1, min(9, int(0.3 / max(probe, 1e-6))))
 
-    # 3) 交错计时：每轮交换先后顺序，机器漂移在比值里互相抵消
+    # 3) Interleaved timing: swap the order every round so machine drift cancels out
+    #    in the ratio.
     ours_times, theirs_times = [], []
     for round_index in range(ROUNDS):
         if round_index % 2 == 0:
@@ -592,7 +615,7 @@ for label, equation, builder, shapes in CASES:
             ours_times.append(one_call(ours_call, inner))
         release_memory()
 
-    # 4) 取中位数再相除，避免被单次抖动带偏
+    # 4) Take medians first, then divide, so a single jittery sample cannot dominate.
     median_ours = statistics.median(ours_times)
     median_theirs = statistics.median(theirs_times)
     print(f"{label:26s} {median_ours:9.3f} {median_theirs:9.3f} "

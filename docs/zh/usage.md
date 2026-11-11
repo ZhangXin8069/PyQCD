@@ -262,6 +262,14 @@ result = einsums(tasks, max_procs=4)          # self-launched MPI pool
   收紧。若你已在 `mpirun -np N` 下运行，则各 rank 都调用 `einsums`，任务直接分摊到
   这些 rank（不落盘交换，结果默认只在 rank 0 返回，`broadcast=True` 可让所有 rank 都拿到）；
   不在 MPI 下时它自己拉起 `mpirun -np K` 进程池，经临时目录交换任务与结果。
+* **内存：collective 模式的输入会按 rank 数翻倍。** 规划发生在 `einsums` 内部，因此每个
+  rank 都必须先构造**整批**任务，输入占用变成「单份 × rank 数」；rank 0 另外持有**全部
+  结果**，`broadcast=True` 时每个 rank 还会各持一份完整结果。用 `resource.ru_maxrss`
+  实测（float32，64 个 512² 任务，整批输入 134 MB）：串行峰值 234 MB，collective 4 rank
+  聚合约 1.15 GB——大致是「4 × 输入 + 输出」。在 GPU 上这意味着**每张可见卡各放一整批**：
+  让 rank 数与可见设备数对齐，否则显存会成倍放大。批次大到放不下时改用自建进程池——
+  任务经磁盘分发，worker 只读自己那一箱，代价是每次调用多 0.15–0.3 s 固定开销。
+  `einsums` 每次进入 collective 都会打印这条提醒，与 `reminder=` 无关。
 * **精度跟随操作数**：`complex64`/`float32` 直接把内存与算术量减半，是受限机器上
   最直接的一档；`einsums` 自己不做任何类型转换。
 
@@ -269,14 +277,14 @@ result = einsums(tasks, max_procs=4)          # self-launched MPI pool
 `complex64`；`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1` 作为单线程公平基准；
 并行结果均与串行 `contract` 对照通过）实测：
 
-| 模式 | 工作负载 | 串行 | `einsums` | 加速比 |
-|---|---|---|---|---|
-| `mpirun -np 2`（collective） | S1，Nvec=40，8 任务 | 168 ms | 88 ms | **1.86×** |
-| `mpirun -np 4`（collective） | S1，Nvec=40，8 任务 | 183 ms | 59 ms | **3.09×** |
-| `mpirun -np 4`（collective，默认线程） | S1，Nvec=40，8 任务 | 138 ms | 53 ms | 2.28× |
-| 自建进程池 `max_procs=4` | S1，Nvec=60，8 任务 | 736 ms | 622 ms | 1.18× |
-| 自建进程池 `max_procs=4` | S1，Nvec=100，8 任务 | 5326 ms | 2160 ms | **2.47×** |
-| 自建进程池 `max_procs=4` | S1，Nvec=40，8 任务 | 217 ms | 391 ms | 0.56× |
+| 模式 | 工作负载 | 串行 | `einsums` | 加速比 | 峰值 RSS（本 rank / 全部 rank） |
+|---|---|---|---|---|---|
+| `mpirun -np 2`（collective） | S1，Nvec=40，8 任务 | 168 ms | 88 ms | **1.86×** | rank 0 415 MB / 合计约 702 MB |
+| `mpirun -np 4`（collective） | S1，Nvec=40，8 任务 | 183 ms | 59 ms | **3.09×** | rank 0 383 MB / 合计约 1.15 GB |
+| `mpirun -np 4`（collective，默认线程） | S1，Nvec=40，8 任务 | 138 ms | 53 ms | 2.28× | — |
+| 自建进程池 `max_procs=4` | S1，Nvec=60，8 任务 | 736 ms | 622 ms | 1.18× | 磁盘上一份任务 |
+| 自建进程池 `max_procs=4` | S1，Nvec=100，8 任务 | 5326 ms | 2160 ms | **2.47×** | 磁盘上一份任务 |
+| 自建进程池 `max_procs=4` | S1，Nvec=40，8 任务 | 217 ms | 391 ms | 0.56× | 磁盘上一份任务 |
 
 两条可复现结论（入口分别是 `python -m pyqcd.testing.parallel_einsum bench`
 与 `mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective`）：

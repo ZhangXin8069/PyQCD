@@ -39,7 +39,8 @@ import numpy as np
 
 from ..einsum import contract, contract_path
 
-__all__ = ["einsums", "plan_einsums", "REMINDER_TEXT"]
+__all__ = ["einsums", "plan_einsums", "REMINDER_TEXT",
+           "COLLECTIVE_MEMORY_WARNING"]
 
 REMINDER_TEXT = (
     "使用场景提醒：本功能针对单队列执行的大批量但小单量的 einsum 任务，"
@@ -51,7 +52,23 @@ REMINDER_TEXT = (
     "实测口径见 `python -m pyqcd.testing.parallel_einsum bench`。）"
 )
 
+# collective 模式的内存警告：实测（`resource.ru_maxrss`，float32 矩阵乘）表明
+# 输入被每个 rank 各持一份 —— 64 个 512² 任务（整批输入 134 MB）时，4 rank 在开始
+# 收缩前就各占 223 MB，串行只有一份；结果在 rank 0 再叠一层，`broadcast=True` 还会
+# 让每个 rank 各持一份全部结果。这条单独成句而不是塞进上面的通用提醒，因为它是最
+# 容易被忽略、且在 GPU 上会直接触发 OOM 的代价。
+COLLECTIVE_MEMORY_WARNING = (
+    "collective 模式内存提醒：每个 rank 都持有**整批输入**（输入占用 ≈ 单份 × rank 数），"
+    "rank 0 另持有**全部结果**；传 broadcast=True 时每个 rank 都会各持一份全部结果。"
+    "实测（float32，64 个 512² 任务，整批输入 134 MB）：串行峰值 234 MB，"
+    "collective 4 rank 聚合约 1.15 GB。GPU/显存上这直接意味着 rank 数张卡各放一份整批输入，"
+    "多卡时请让 rank 数与可见卡数对齐，否则显存会成倍放大。"
+    "输入大到放不下时改用自建进程池（任务经磁盘分发，worker 只读自己那一箱），"
+    "代价是每次调用多 0.15–0.3 s 固定开销。"
+)
+
 _REMINDER_SHOWN = False
+_COLLECTIVE_WARNING_SHOWN = False
 _RANK_ENV = (
     ("OMPI_COMM_WORLD_SIZE", "OMPI_COMM_WORLD_RANK"),
     ("PMI_SIZE", "PMI_RANK"),
@@ -674,6 +691,14 @@ def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
         _REMINDER_SHOWN = True
 
     if comm is not None and size > 1:
+        # 进入 collective 就必然复制输入：这条警告与 reminder 分开，因为它是模式
+        # 本身的内存代价，不看用户是否要求打印通用提醒。每个进程只打一次。
+        global _COLLECTIVE_WARNING_SHOWN
+        if rank == 0:
+            if not _COLLECTIVE_WARNING_SHOWN:
+                print(f"[pyqcd.parallel.einsum] {COLLECTIVE_MEMORY_WARNING}",
+                      flush=True)
+            _COLLECTIVE_WARNING_SHOWN = True
         # 规划只在 rank 0 做一次：小任务上 contract_path 占总耗时的 31–84%，
         # 每个 rank 各自重算会把并行收益直接吃掉。
         slim = _slim_plan(_plan_specs(specs, max_procs=max_procs), size) \

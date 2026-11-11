@@ -387,6 +387,38 @@ def test_distillation_equations_match_serial_contract():
         assert 'mode=mpi-launch' in text, text
 
 
+def test_collective_memory_warning_is_emitted():
+    """进入 collective 必须打印内存警告，且与 ``reminder=`` 无关。
+
+    实测依据：每个 rank 都持有整批输入（4 rank、整批输入 134 MB 时聚合 ≈1.15 GB），
+    是最容易被忽略、在 GPU 上会直接 OOM 的代价，所以它不能藏在通用提醒后面。
+    """
+    launcher = _require_launcher()
+    project_root = Path(__file__).resolve().parents[2]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script = Path(tmpdir) / 'warning_probe.py'
+        script.write_text(
+            'import numpy as np\n'
+            'from pyqcd.parallel.einsum import einsums\n'
+            'rng = np.random.default_rng(3)\n'
+            'tasks = {"a": ("ij,jk->ik", [rng.standard_normal((16, 16)),\n'
+            '                             rng.standard_normal((16, 16))])}\n'
+            '# reminder=False 也不能压掉内存警告\n'
+            'einsums(tasks, max_procs=2, reminder=False, verbose=False)\n',
+            encoding='utf-8')
+        env = os.environ.copy()
+        env['PYTHONPATH'] = os.pathsep.join(
+            [str(project_root), env.get('PYTHONPATH', '')]).rstrip(os.pathsep)
+        completed = subprocess.run(
+            launcher + ['-np', '2', sys.executable, str(script)],
+            capture_output=True, text=True, env=env, cwd=project_root,
+            timeout=300)
+    assert completed.returncode == 0, completed.stderr[-1200:]
+    assert 'collective 模式内存提醒' in completed.stdout, completed.stdout[-800:]
+    # 只由 rank 0 打印一次，避免 N 份重复刷屏
+    assert completed.stdout.count('collective 模式内存提醒') == 1, completed.stdout
+
+
 def test_collective_path_matches_contract_and_returns_none_on_workers():
     """``mpirun`` 内部调用：rank 0 拿到结果，其余 rank 得到 None。"""
     launcher = _require_launcher()
@@ -486,6 +518,7 @@ _TESTS = (
     test_launched_path_reports_failing_task_key,
     test_invalid_equation_fails_in_every_path,
     test_distillation_equations_match_serial_contract,
+    test_collective_memory_warning_is_emitted,
     test_collective_path_matches_contract_and_returns_none_on_workers,
     test_parallel_import_does_not_change_einsum,
     test_worker_entry_point_is_reachable,

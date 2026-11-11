@@ -263,6 +263,16 @@ check(
 这里两种口径几乎重合（搬运为零，`×compute` 只少了计划广播那次通信），这正是推荐
 collective 的原因。
 
+> **内存警告：collective 模式会让每个 rank 各持一份整批输入。**
+> 规划发生在 `einsums` 内部，所以每个 rank 都必须先构造**整批**任务：输入占用
+> 变成「单份 × rank 数」。rank 0 另外持有**全部结果**，`broadcast=True` 时每个 rank
+> 还会各持一份完整结果。用 `resource.ru_maxrss` 在 float32 矩阵乘上实测
+> （整批输入 134 MB，64 个 512² 任务）：串行峰值 **234 MB**，collective 4 rank
+> 聚合约 **1.15 GB**（`4 × 输入 + 输出`）。在 GPU 上这意味着每张可见卡各放一整批——
+> 让 rank 数与可见设备数相等，否则显存成倍放大。批次放不下时改用自建进程池：
+> 任务经磁盘分发，worker 只读自己那一箱，代价是每次调用多 0.15–0.3 s 固定开销。
+> `einsums` 每次进入 collective 都会打印这条警告，与 `reminder=` 无关。
+
 ### 自建进程池（单进程、外部没有 `mpirun`）
 
 | 场景 | 任务数 | 串行 | 池 wall | 池 compute | `×wall` | `×compute` |
