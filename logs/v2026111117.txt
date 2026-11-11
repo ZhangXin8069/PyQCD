@@ -1,0 +1,148 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-11 17:49:00 +0800
+批次: pypi-release/0.3.3-native-fix
+主任务: 修复 KUPL 原生库静默缺失（编译器探测误判 + 失败仅告警）并发布 0.3.3，含批量基准脚本的 cpu/gpu 与精度切换
+触发原因: 任务完成
+摘要: 三子代理并行取证：非版本回归，CXX=/bin/false 可复现；KUPL 缺库改为默认硬失败；125 passed；PyPI 0.3.3 远程复验 native_available=True；tag dev48
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 事故与取证
+- 用户报告：另一台机器（Python 3.12 conda 环境）安装 pyqcd 后 site-packages 缺
+  `pyqcd/einsum/kupl/libpyqcdeinsum_kupl.so`，只出现一条 RuntimeWarning
+  `native kupl compiler unavailable; using per-call native execution: NativeUnavailable…`
+- 定位来源：`pyqcd/einsum/_api.py:1197` 的 `_warn_native_fallback_once`；内层异常为
+  `NativeUnavailable: native einsum library not found …/kupl/libpyqcdeinsum_kupl.so`
+- 取证要点（子代理 C，只读）：0.3.0/0.3.1/0.3.2 三个 sdist 的成员清单逐行相同（156 文件）、
+  `setup.py`/`MANIFEST.in` 零差异、`cpp/` 树哈希相同、均无预编译 `.so`；
+  本机三版安装都能生成 357752 B 的 `.so`（SHA256 相同）→ **不是版本回归**
+- 受控复现：`CXX=/bin/false` 安装 0.3.2 → pip exit 0、wheel 498577 B（正常 674926 B）、
+  无 `.so`、非 verbose 输出零告警；运行期逐字复现用户现象
+
+### S2 — 根因（子代理 A）
+1. `setup.py` 的 KUPL 工具链探测只认 `CXX`/`c++`，而 `cpp/kupl/einsum/make.sh` 实际按
+   `CXX → g++ → c++ → mpicxx` 解析 → **只装 g++ 的 HPC 节点被误判为缺工具链**，本该
+   成功的编译被跳过；
+2. KUPL 是原生基线，但构建失败只 `warnings.warn`；pip 成功时不回放构建输出 →
+   用户拿到一个不含任何原生库的包，运行时才降级。
+
+### S3 — 修复
+- `setup.py`：`_host_compiler()` 与 make.sh 同序；KUPL 增加 `nm` 检查；`_native_required()`
+  让 KUPL 缺库默认中止安装（信息含原因、`build.log` 路径与
+  `PYQCD_SKIP_NATIVE_BUILD=1` / `PYQCD_EINSUM_REQUIRE_NATIVE=0` 两个显式退出开关）；
+  CUDA 保持机会性；源码树已有库时复用
+- `pyqcd/einsum/kupl/einsum.py`：`library_report()` 区分 `library missing` /
+  `failed to load` / `compiler context unavailable`
+- `pyqcd/einsum/_api.py`：缺库警告改为可操作诊断（绝对路径、present、backend、
+  array_backend、修复建议），仍 fail-open 且同形态只发一次
+- 新增 `pyqcd/testing/_native_install_contract.py`（4 项）并登记到
+  `pyqcd/testing/__init__.py` 与 `conftest.py`
+- 文档同步：README 双语、双语安装页、`skills/pypi-release`（新增"g++ 探针"教训与新的
+  失败判据：缺 KUPL 工具链必须 exit != 0）
+- 版本 0.3.3（三处一致）；此前已提交的批量基准脚本（`cpu|gpu` + `single|double`）随本版发布
+
+### S4 — 发布
+- 构建：`python -m build --sdist` → 无 `deprecat`/`path must be relative` 告警；
+  `twine check` PASSED；PKG-INFO `Version: 0.3.3`、`Requires-Python: >=3.9`、`License-Expression: MIT`
+- 上传：https://pypi.org/project/pyqcd/0.3.3/
+- 提交 `36e3226`，双推 gitlab/gitee；标签 `dev48`（前驱 `dev47`，三端对象
+  `b103f365db05ffaee3b335b5219e1dd87e7d2bff` 一致）
+
+## 验证与证据
+- 全量测试：`python -B -m pyqcd.testing` → **125 passed / 1 skipped / 0 failed**
+  （含新增 `test_native_install_diagnostics_contracts`）
+- 新契约：`python -m pyqcd.testing._native_install_contract` → 4 passed
+- 安装三场景（真实磁盘 venv）：
+  (a) 正常安装 → `.so` 357752 B、`backend=cuda`、`native_available=True`；
+  (b) `CXX=/nonexistent/c++` → **exit 1**，信息含编译器日志路径与两个退出开关；
+  (c) `PYQCD_SKIP_NATIVE_BUILD=1` → exit 0、无 `.so`、`backend=python`
+- 发布终检：`release_check --offline` **10/10**；`release_check --with-tests` **18/18**
+  （PyPI 0.3.3 且仅 sdist、RTD 双站 0.3.3、双远端 `36e3226e` 同步、测试全绿）
+- 远程复验：从 PyPI 装 0.3.3（源码树外）→ `backend=cuda`、`native_available=True`、
+  `native_library` 在 site-packages 内、`init`/`run` 可用、`einsums` 不存在
+- 文档站：RTD 双站标题均为 0.3.3；性能页已含新的 `bench.py cpu|gpu`、`single|double` 说明
+- 未验证项: 安装页正文（KUPL 默认必需的新表述）在最后一次探测时仍为旧缓存，属 RTD 逐页刷新延迟；
+  `gpu` 分支基准脚本本机无 cupy，未实跑；3.9–3.11/3.13 无机测
+
+## 变更与产物
+- 代码: `setup.py`、`pyqcd/einsum/_api.py`、`pyqcd/einsum/kupl/einsum.py`、
+  `pyqcd/testing/{__init__,conftest}.py`、`pyqcd/testing/_native_install_contract.py`（新增）
+- 文档/技能: `README.md`、`README.zh-CN.md`、`docs/{en,zh}/{install,overview,conf.py}`、
+  `skills/pypi-release/SKILL.md`
+- 产物: PyPI `pyqcd 0.3.3`、git tag `dev48`、RTD 双站 0.3.3
+- 未改动范围: `pyqcd.einsum` 生产算法、`cpp/**` 源码
+
+## 风险、限制与下一步
+- 行为变更: 无 C++ 工具链的机器现在安装会失败（这正是本次要求）；纯 Python 需显式
+  `PYQCD_SKIP_NATIVE_BUILD=1`，已写入 README 与安装页
+- 遗留（未修，非本次范围）: 只构建 KUPL 时 wheel 仍标 `py3-none-any` 却含本地 `.so`；
+  因 PyPI 只发 sdist，用户侧不受影响
+- 遗留: `cpp/kupl/einsum/make.sh` 固定 `-march=native`，登录节点编译、异构计算节点运行
+  的集群可能出现 SIGILL，与本次缺库不是同一问题
+- 子代理留下的测试 venv（约 1.0 GB，`/home/zhangxin/venvs/*`、
+  `/home/zhangxin/pyqcd-forensics-20261111/`）未删除，等用户决定
+- 下一步: RTD 全站刷新后复核安装页新表述
+
+## 用户输入指令
+原有稳定功能被破坏!{/public/home/sush/anaconda3/envs/C12P12/... RuntimeWarning: pyqcd.einsum native kupl compiler unavailable … NativeUnavailable: native einsum library not found at …/kupl/libpyqcdeinsum_kupl.so}
+立即派发多个子代理进行修复
+汇报进度
+修复后立即发布,包括之前计划的[cpu与gpu切换功能+精度切换功能]的新'批量基准脚本'
+
+## Agent 全文报告
+--- report begin ---
+事故已修复并发布 0.3.3。
+
+## 一、根因（不是版本回归）
+
+三个子代理并行取证，结论一致：
+
+| 检查 | 结果 |
+|---|---|
+| 0.3.0 / 0.3.1 / 0.3.2 sdist | 成员清单逐行相同（156 文件），`setup.py`/`MANIFEST.in` 零差异，`cpp/` 树哈希相同，均无预编译 `.so` |
+| 本机三版安装 | 都能生成 357752 B 的 `libpyqcdeinsum_kupl.so`（SHA256 相同） |
+| 受控复现 | `CXX=/bin/false` 装 0.3.2 → pip exit 0、无 `.so`、非 verbose 输出零告警；运行期逐字复现你的警告 |
+
+真正的两处问题（叠加）：
+
+1. **编译器探测误判**：`setup.py` 只查 `CXX`/`c++`，而 `cpp/kupl/einsum/make.sh` 实际是
+   `CXX → g++ → c++ → mpicxx`。只装 `g++` 的集群被判成"缺工具链"，本该成功的编译被跳过。
+2. **失败静默化**：KUPL 是原生基线，但构建失败只发 `RuntimeWarning`，而 pip 成功时不回放
+   构建输出，于是你拿到一个没有任何原生库的包，直到运行时才看到那一条警告。
+
+## 二、修复
+
+- `setup.py`：探测顺序对齐 `make.sh`，KUPL 增加 `nm` 检查；**KUPL 缺库默认中止安装**，
+  信息里给原因、`build.log` 路径和两个显式退出开关（`PYQCD_SKIP_NATIVE_BUILD=1` /
+  `PYQCD_EINSUM_REQUIRE_NATIVE=0`）；CUDA 仍只警告；源码树已有库时复用。
+- 运行期诊断：`library_report()` 区分"库缺失 / 加载失败 / 编译上下文不可用"，
+  警告给出绝对路径、`present`、`backend`、`array_backend` 与修复建议，仍 fail-open 且只发一次。
+- 新增 4 项原生安装诊断契约（已登记进全量套件）。
+- README 双语、双语安装页、`pypi-release` 技能同步新策略，并记录 `g++` 探针这条教训。
+
+## 三、验证
+
+- `python -B -m pyqcd.testing` → **125 passed / 1 skipped / 0 failed**
+- 三个安装场景：正常 → `.so` 357752 B、`backend=cuda`；`CXX=/nonexistent/c++` → **exit 1**
+  且信息可照做；`PYQCD_SKIP_NATIVE_BUILD=1` → exit 0、`backend=python`
+- `release_check --offline` **10/10**；`--with-tests` **18/18**
+- **PyPI 远程安装 0.3.3** → `native_available=True`，`native_library` 落在 site-packages
+
+## 四、发布
+
+PyPI https://pypi.org/project/pyqcd/0.3.3/ ；提交 `36e3226` 双推；标签 `dev48` 三端一致；
+RTD 双站已是 0.3.3。此前计划的**批量基准脚本 cpu/gpu + single/double 切换**已随本次发布上线
+（性能页已确认包含新用法）。
+
+## 五、需要你知道的
+
+1. **行为变更**：没有 C++ 工具链的机器现在装 pyqcd 会失败——这是"不再静默降级"的直接后果；
+   只想要纯 Python 时加 `PYQCD_SKIP_NATIVE_BUILD=1`。
+2. 安装页正文的新表述在最后一次探测时仍是旧缓存（RTD 逐页刷新），标题已是 0.3.3。
+3. 两个未修的相关问题：只构建 KUPL 时 wheel 标签仍为 `py3-none-any`（PyPI 只发 sdist，暂不影响）；
+   `make.sh` 的 `-march=native` 在异构集群可能 SIGILL。
+4. 子代理留下的测试 venv 约 1.0 GB（`/home/zhangxin/venvs/*`、`/home/zhangxin/pyqcd-forensics-20261111/`），
+   我没删，等你决定。
+--- report end ---

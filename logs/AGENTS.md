@@ -748,3 +748,11 @@
 - 关键内容: 脚本参数化 + 同步计时 + 版本头；实跑刷新表格（S1 ×exec 0.65×、Nvec=100 2.37×）；release_check 10/10；gpu 分支未实跑
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pypi-release/0.3.3-native-fix - final - 2026-11-11 17:49:00 +0800
+- 主任务: 修复 KUPL 原生库静默缺失（编译器探测误判 + 失败仅告警）并发布 0.3.3，含批量基准脚本的 cpu/gpu 与精度切换
+- 日志文件: logs/v2026111117.txt
+- 文件大小: 9532 bytes
+- 触发原因: 任务完成
+- 关键内容: 三子代理并行取证：非版本回归，CXX=/bin/false 可复现；KUPL 缺库改为默认硬失败；125 passed；PyPI 0.3.3 远程复验 native_available=True；tag dev48
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
