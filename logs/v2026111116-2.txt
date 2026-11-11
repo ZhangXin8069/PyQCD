@@ -1,0 +1,106 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-11 16:55:10 +0800
+批次: pypi-release/0.3.2
+主任务: 发布 pyqcd 0.3.2：init/run 分开计时的口径修正 + collective 弃用与测试移除
+触发原因: 任务完成
+摘要: 上传并远程复验（含 DeprecationWarning）；tag dev47 三端一致；RTD 双站 0.3.2；release_check 18/18
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 上传前复核
+- 命令: 从提交 `be147b2` 重建（`rm -rf build dist pyqcd.egg-info && python -m build --sdist`）、
+  `twine check`、读 PKG-INFO、检查 sdist 是否混入 `pyqcd/testing`
+- 关键输出: 构建 exit 0；`deprecat` / `path must be relative` 告警 0；
+  `Version: 0.3.2`、`Requires-Python: >=3.9`、`License-Expression: MIT`；
+  `pyqcd/testing` 命中 0；`twine check` PASSED
+
+### S2 — 上传与远程安装复验
+- 上传: `twine upload dist/pyqcd-0.3.2.tar.gz` → https://pypi.org/project/pyqcd/0.3.2/
+- 索引: 第 2 次尝试（约 30 s）安装成功（首轮边缘滞后）
+- 干净 venv `/tmp/rv032` 自检: `version=0.3.2 requires=>=3.9 license=MIT backend=cuda`，
+  `__file__` 含 site-packages，`einsums` 不存在，`init`+`run` 结果与 `contract` 逐位一致；
+  `collective=True` 仍可用并实测捕获到 `DeprecationWarning`
+
+### S3 — 提交、双推与标签
+- 提交 `be147b2`（计时口径修正 + collective 弃用，19 文件）
+- 双推: gitlab/gitee 均 `3db8e40..be147b2`
+- 标签 `dev47`：前驱由 `git describe --tags --abbrev=0 HEAD^` 取得 = `dev46`；
+  三端 tag 对象 `ab1a9aa7403336eb65eca93b7c8908fe1f7ae75d` 一致，三端 main 均 `be147b2`
+
+### S4 — 文档站与收官终检
+- RTD 双站重建：`en/latest`、`zh-cn/latest` 的 performance 页标题均为 **0.3.2**，
+  正文含新的 `plan` / `exec` 列
+- 首轮 `release_check --with-tests` 出现 1 项失败：`pypi latest version pypi=0.3.1
+  local=0.3.2`（上传后 CDN 边缘仍回旧 JSON，而 pip 已可安装）；
+  加 cache-buster 轮询后 JSON 即返回 `latest=0.3.2`，复跑终检 **18/18**
+
+## 验证与证据
+- 测试/检查: 全量套件、并行契约、双语 docs_examples、release_check --offline（11/11）、
+  twine、sdist 内容、PyPI simple index 与 JSON、干净 venv 远程安装（含弃用信号）、
+  三端 git 哈希、RTD 双站探针、收官 `release_check --with-tests`
+- 结果: 124 passed / 1 skipped / 0 failed；契约 16 passed；docs 21 ok / 4 skipped ×2；
+  离线 11/11；PASSED；`latest=0.3.2` 且仅 sdist；tag/main 三端一致；双站 0.3.2；**18/18**
+- 未验证项: GPU/多卡与 >8 物理核倍率未复测；Python 3.9–3.11/3.13 无机测
+
+## 变更与产物
+- 产物: PyPI `pyqcd 0.3.2`（sdist）、git tag `dev47`、RTD 双站 0.3.2
+- 变更（已含于 `be147b2`）: 计时口径（文档/harness/表格）、collective 弃用与测试移除、
+  文档脚本三处硬错误修复、版本 0.3.2
+- 未改动范围: `pyqcd.einsum` 生产算法、`cpp/**`
+
+## 风险、限制与下一步
+- 风险: `collective=True` 仍可用但会发 `DeprecationWarning`，依赖它的脚本需改默认路径或自建池
+- 风险: 0.3.2 的实测表基于 4 物理核机器，其他硬件需自行用 `bench` 复测
+- 阻塞: 无
+- 下一步: 如需 0.3.3，可补 Python 3.9 解释器实跑与 GPU 多卡基准
+
+## 用户输入指令
+发布 0.3.2
+
+## Agent 全文报告
+--- report begin ---
+0.3.2 已发布并完成文档联动。
+
+## 一、发布内容
+
+| 项 | 值 |
+|---|---|
+| PyPI | https://pypi.org/project/pyqcd/0.3.2/ （仅 sdist） |
+| 元数据 | `Requires-Python: >=3.9`、`License-Expression: MIT` |
+| Git | 提交 `be147b2`，双远端均 `3db8e40..be147b2` |
+| 标签 | `dev47`，前驱 `dev46`（由 `git describe --tags --abbrev=0` 取），三端 `ab1a9aa7…` 一致 |
+| 文档站 | RTD `en/latest`、`zh-cn/latest` 均为 0.3.2，performance 页已含 `plan`/`exec` 列 |
+
+## 二、本次发布带出的内容
+
+1. **计时口径修正**：示例与 harness 都分开计 `init`（规划）与 `run`（执行），
+   表格给出 `plan | exec | total | ×exec | ×total`；串行基准改为纯 `contract` 循环。
+2. **文档脚本三处硬错误修复**：投影算符 `(4,2)`→`(4,4)`（原先脚本跑不起来）、
+   collective 复现命令与脚本开关不一致、引用了已不存在的入口。
+3. **collective 弃用**：`collective=True` 仍可用但发 `DeprecationWarning`；
+   删除 3 项 collective 契约测试（19→16）与 `bench-collective` 子命令；
+   双语性能页移除 collective 表，历史报告标注"弃用前实测"。
+
+## 三、远程安装复验（源码树外干净 venv）
+
+```
+version=0.3.2  requires=>=3.9  license=MIT  backend=cuda
+file=/tmp/rv032/lib/python3.12/site-packages/pyqcd/__init__.py
+einsums 不存在；init+run 与 contract 逐位一致；collective=True 捕获到 DeprecationWarning
+```
+
+## 四、收官终检
+
+首轮 `release_check --with-tests` 报 1 项失败：`pypi latest version pypi=0.3.1 local=0.3.2`
+—— 上传后 CDN 边缘仍返回旧 JSON（而 pip 已可安装 0.3.2）。加 cache-buster 轮询后端点即
+返回 `latest=0.3.2`，复跑 **18/18 通过**：版本一致、sdist/twine/内容洁净、示例可执行、
+中英代码块等价、`sphinx -W` 双站、PyPI 0.3.2 且仅 sdist、RTD 双站含 0.3.2、
+双远端与本地同步、测试 124 passed / 1 skipped / 0 failed。
+
+## 五、未验证
+
+GPU/多卡与 >8 物理核的并行倍率未复测（文档数字来自本机 4 物理核/8 线程）；
+Python 3.9–3.11、3.13 仍属"预期可用、无机测"。
+--- report end ---

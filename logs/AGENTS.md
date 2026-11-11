@@ -732,3 +732,11 @@
 - 关键内容: plan/exec/total 分列（S1 Nvec=100 ×exec 2.15×）；契约 19→16；release_check 11/11；修掉文档脚本 (4,2) 投影算符硬错误
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pypi-release/0.3.2 - final - 2026-11-11 16:55:10 +0800
+- 主任务: 发布 pyqcd 0.3.2：init/run 分开计时的口径修正 + collective 弃用与测试移除
+- 日志文件: logs/v2026111116-2.txt
+- 文件大小: 5619 bytes
+- 触发原因: 任务完成
+- 关键内容: 上传并远程复验（含 DeprecationWarning）；tag dev47 三端一致；RTD 双站 0.3.2；release_check 18/18
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
