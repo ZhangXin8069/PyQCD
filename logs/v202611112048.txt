@@ -1,0 +1,78 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-11 20:48:57 +0800
+批次: pyqcd-einsum/topology-kernels
+主任务: 扩展 qcd-einsum 特化 kernel：拓扑匹配 + 原生拓扑入口（阶段 2：全语料验证与性能断崖定位）
+触发原因: 阶段成果
+摘要: 2582/2582 命中原生拓扑入口且数值正确；全量 126 passed；size≥4 执行器断崖（size=3 4ms / size=4 >90s），性能目标未达成
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 本轮已完成（拓扑匹配 + 原生拓扑入口）
+- `pyqcd/einsum/_specialize.py`：`canonical_signature`（全式首次出现重编号）、`FAMILIES`
+  拓扑等价类、`match()` 三段式（字面 → 注册拓扑 → 语料拓扑）；语料索引惰性加载，
+  `import pyqcd.einsum` 未变慢
+- `pyqcd/einsum/_topology_registry.py`（生成物）：2582 条 `wick_12cases` 拓扑摘要
+  （blake2b-128）+ 代表写法；运行时不依赖 `refer/`
+- 原生入口（C 方案）：`qcd_kupl_topology_apply` / `qcd_cuda_topology_apply`
+  （单入口 + v2 计划），`einsum_topology.h` 共享头，version script 同步
+- Python 适配：`try_topology_apply`（两后端）+ `_api` 的 `kupl_topology` /
+  `cuda_topology` 分派；失败一律回落并给出原因
+- 契约 `_topology_equations_contract`：6/6（2582 条方程 vs numpy(greedy)、改名同签名、
+  结构改动不误命中、空白/省略输出不敏感、原 9 形态回归稳定）
+- 全量 `python -B -m pyqcd.testing`：126 passed / 1 skipped / 0 failed
+- 已提交 `84e68bb` 并双推（远端 HEAD `29e51e4`）
+
+### S2 — 本轮新增诊断（性能断崖定位）
+- 现象：16 算子方程（语料 #194）`size=3` 约 4 ms，`size=4` 超过 90 s
+- 计划侧排除：`contract_path(optimize='greedy')` 给出 **13 步**、`opt_cost`
+  从 4.71e4（size=3）到 4.01e5（size=4），步型均为 arity≤2，理论耗时应为微秒级
+- 结论：瓶颈在**原生拓扑执行器**（workspace 物化或循环实现），不是匹配层、也不是计划
+- 影响：全语料 2582/2582 能命中且结果正确（size 2/3 已验证），但“性能优先”未达成，
+  生产尺寸（nvec≥8）下会显著慢于通用路径
+
+### S3 — 过程记录
+- 自动监督（`agent-nudge`）触发的同会话续跑实例先写了 `_specialize` 初版与 C++ 拓扑入口；
+  本实例接管后补齐注册表、分派与全语料契约，避免重复与文件冲突
+- 一次 `gpush` 报 “tag push failed”，但分支两端均已同步（`29e51e4`）
+
+## 验证与证据
+- 拓扑匹配：`_specialize._selfcheck` 全绿；`ij,jk->ik` 与 `ij,jb->ib` 同签名，
+  `ij,kj->ik`、`ij,jk->ki` 不同签名
+- 语料命中：KUPL 重建后 `try_topology_apply` 对 2582 条方程全部返回结果（2582/2582）
+- 数值：size=2/3 下与 `numpy.einsum(optimize='greedy')` 一致（float32）
+- 性能：size=3 ≈4 ms；size=4 >90 s（超时）→ 未达标
+- 未验证：CUDA 侧仅编译与接口就绪（本机无 cupy，未实跑）；MPICH/Intel MPI 未测
+
+## 变更与产物
+- 代码：`pyqcd/einsum/{_specialize,_api,_kernel_kupl,_kernel_cuda}.py`、
+  `pyqcd/einsum/{_topology_registry.py,kupl/einsum.py,cuda/_program.py}`、
+  `cpp/kupl/einsum/{include/einsum_topology.h,src/topology_apply.cpp,make.sh}`、
+  `cpp/cuda/einsum/{include/einsum_topology.h,src/apply_contract.cu,make-nv.sh}`、
+  `pyqcd/testing/_topology_equations_contract.py`
+- 产物：提交 `84e68bb`；本日志
+
+## 风险、限制与下一步
+- 风险：执行器在 size≥4 时可能触发巨量 workspace，导致超时或 OOM；不应在未修复前
+  对外宣称“专用 kernel 更快”
+- 下一步（按优先级）：
+  1. 在 `topology_apply.cpp` 每步前后打印中间体形状/元素数与耗时，定位是分配还是循环；
+  2. 对 arity-2 步接入 cblas（KUPL 已有 dlopen BLAS），逐元素步融合；
+  3. size=4/8 重跑基准，未跑赢通用路径的拓扑显式回落；
+  4. CUDA 侧在有 cupy 的机器上验证 `qcd_cuda_topology_apply`。
+
+## Agent 全文报告
+--- report begin ---
+本轮把“按拓扑匹配 + 原生拓扑入口”打通并做了全语料验证，但**性能目标未达成**。
+
+已完成：`_specialize` 三段式拓扑匹配（含 2582 条语料索引、惰性加载）、KUPL/CUDA 的
+`*_topology_apply` 入口与 Python 适配、`_api` 分派、以及覆盖 2582 条真实收缩方程的契约；
+全量测试 126 passed，语料命中 2582/2582，数值与 numpy 一致。
+
+未完成：原生执行器在 size≥4 的 16 算子方程上出现断崖（size=3 约 4 ms，size=4 >90 s）。
+已排除计划侧原因——greedy 计划只有 13 步、约 4e5 FLOP，理论应在微秒级；问题在执行器的
+workspace/循环实现。下一步按“每步计时 → BLAS 装箱 → 基准复核”推进。
+
+过程中自动监督触发的并行实例先写了初版实现，我接管后补齐全语料契约与分派，避免了重复。
+--- report end ---

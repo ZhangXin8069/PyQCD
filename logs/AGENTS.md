@@ -772,3 +772,11 @@
 - 关键内容: 两路探索报告落地；实测 2582 条方程=2582 个唯一拓扑（元数 13/14/16 为主）；确定参数化家族 kernel 路线与精度策略；未改仓库
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pyqcd-einsum/topology-kernels - stage - 2026-11-11 20:48:57 +0800
+- 主任务: 扩展 qcd-einsum 特化 kernel：拓扑匹配 + 原生拓扑入口（阶段 2：全语料验证与性能断崖定位）
+- 日志文件: logs/v202611112048.txt
+- 文件大小: 4993 bytes
+- 触发原因: 阶段成果
+- 关键内容: 2582/2582 命中原生拓扑入口且数值正确；全量 126 passed；size≥4 执行器断崖（size=3 4ms / size=4 >90s），性能目标未达成
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
