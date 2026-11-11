@@ -60,49 +60,6 @@ assert np.allclose(pe.contract("ij,jk->ik", a, b, specialize=False), a @ b)
 环境变量开关：`PYQCD_EINSUM_SPECIALIZE=0`、`PYQCD_EINSUM_DISABLE_FUSED=1`、
 `PYQCD_EINSUM_KERNEL_KUPL=0`、`PYQCD_EINSUM_KERNEL_CUDA=0`。
 
-## direct 模式
-
-默认每次收缩都走规划器（收缩顺序、内存重划分、计划缓存）。`direct` 模式跳过这些步骤：
-方程命中专用 kernel 时仍然用 kernel，否则参数直接交给 backend 自己的 `einsum`，一次调用
-完成。这样计算密度最高，但顺序由 backend 决定，多操作数链上可能**慢数倍**；开启时会给出
-一条明确的运行时性能警告。
-
-```python
-import numpy as np
-import pyqcd.einsum as pe
-
-rng = np.random.default_rng(0)
-a, b, c = (rng.standard_normal((32, 32)) for _ in range(3))
-
-# default: the planner picks a contraction order (fastest for multi-operand graphs)
-print(pe.direct_enabled())                 # False
-planned = pe.contract("ij,jk,kl->il", a, b, c)
-
-# direct mode: no planner, no memory re-planning -- one backend einsum call,
-# or a specialised kernel when the equation matches one
-pe.configure_direct(True)
-direct = pe.contract("ij,jk,kl->il", a, b, c)
-assert np.allclose(direct, planned)
-pe.configure_direct(None)                  # back to the environment/default
-
-assert pe.direct_enabled() is False
-```
-
-也可以只用环境变量设置：`PYQCD_EINSUM_DIRECT=1`（`0` 或未设置即恢复默认）。
-`pe.configure_direct(None)` 会清除运行时覆盖，重新由环境变量决定。
-
-开启后的实测代价（本机，`float64`，`numpy` 后端）：
-
-| 形态 | 默认 | direct |
-|---|---|---|
-| 矩阵乘 1024² | 18.3 ms | 199 ms（**慢 10.9×**） |
-| 批量 8×256² | 3.5 ms | 25.3 ms（**慢 7.2×**） |
-| 三算子链 3×256 | 0.6 ms | 2.21 s（**慢 3900×**） |
-| 四算子链 4×2048 | 0.27 s | 10 分钟内未跑完（已中止） |
-
-backend 的 `einsum` 是朴素 n 元循环，代价随算子数增长远快于规划后的收缩。因此 direct
-模式适合一两个算子的形态，或你已经自己确定好顺序的场合。
-
 ## 格点常数与 Dirac 代数
 
 ```python
