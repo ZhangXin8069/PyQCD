@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.3.0`. To pin it: `pip install "pyqcd==0.3.0"`.
+Current release: `0.3.1`. To pin it: `pip install "pyqcd==0.3.1"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need
@@ -19,22 +19,20 @@ same interpreter is fast.
 
 | Item | Needed for |
 |---|---|
-| Python ≥ 3.8 | always |
+| Python ≥ 3.9 | always |
 | `numpy`, `h5py`, `scipy` | always (installed automatically) |
 | `bash` + C++17 compiler | native KUPL (CPU) kernels — the baseline build |
 | `nvcc` | optional native CUDA (GPU) kernels |
 | Cython | optional CUDA extension; supplied by the pip build environment, no manual install |
-
-`requires-python` is `>=3.8`. Every module parses under the 3.8 grammar and imports
-without evaluating PEP 604 annotations (`from __future__ import annotations`); the
-suites behind this documentation were executed on 3.8 (install + import + contraction
-checks), 3.12 (full test suite) and 3.14 (build + import + `python -m pyqcd`).
-3.9–3.11 and 3.13 are expected to work but have no automated run on the release
-machine. Python 3.8 is the oldest interpreter with a maintained `numpy`/`scipy`
-wheel pair that satisfies the declared floors.
 | `mpicxx` | MPI-enabled KUPL build (source checkout only) |
 | `torch` | optional: the torch backend (`pip install "pyqcd[torch]"`) |
 | `matplotlib` | optional: plotting helpers (`pip install "pyqcd[plot]"`) |
+
+`requires-python` is `>=3.9`. The suites behind this documentation were executed on
+3.12 (full test suite) and 3.14 (build + import + `python -m pyqcd`); 3.9–3.11 and
+3.13 are expected to work but have no automated run on the release machine.
+Python 3.8 is no longer supported: the distribution now uses PEP 639 license
+metadata, which requires `setuptools>=77`, and that setuptools dropped 3.8.
 
 Cython is not something you install yourself: `pyproject.toml` already lists
 `cython>=3.0` in `[build-system] requires`, so the isolated build environment

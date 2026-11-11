@@ -708,3 +708,11 @@
 - 关键内容: 全量 124 passed、契约 19 passed、release_check 10/10；sdist 修复 depends 绝对路径告警；PyPI 0.3.0 + tag dev45 + RTD 双站 0.3.0
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pypi-release/drop-py38 - stage - 2026-11-11 16:01:17 +0800
+- 主任务: 放弃 Python 3.8：requires-python 提到 3.9、迁移 PEP 639 许可证元数据、版本升到 0.3.1（仅本地构建与验证）
+- 日志文件: logs/v202611111601.txt
+- 文件大小: 6122 bytes
+- 触发原因: 阶段成果
+- 关键内容: setuptools>=77 + license=MIT/license-files，构建告警清零；全量 124 passed、release_check 10/10、干净 venv 装本地 0.3.1 通过（未上传）
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress

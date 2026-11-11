@@ -1,0 +1,102 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-11 16:01:17 +0800
+批次: pypi-release/drop-py38
+主任务: 放弃 Python 3.8：requires-python 提到 3.9、迁移 PEP 639 许可证元数据、版本升到 0.3.1（仅本地构建与验证）
+触发原因: 阶段成果
+摘要: setuptools>=77 + license=MIT/license-files，构建告警清零；全量 124 passed、release_check 10/10、干净 venv 装本地 0.3.1 通过（未上传）
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 决策落地范围确认
+- 目标: 按「放弃 Python 3.8」落实元数据与文档，消除 PEP 639 迁移的阻塞点
+- 命令/操作: 读 `pyproject.toml`；全仓 grep `3.8`（排除 logs/data/refer/dist/build/egg-info）
+- 关键输出: 真实引用共 9 处——`pyproject.toml` 的 `requires-python` 与 3.8 classifier、
+  `docs/{en,zh}/install.md` 的依赖表与说明段；其余命中均为数值噪声（如 `103.8 ms`）
+- 退出码: 0
+- 证据与判断: 改动范围限定在元数据 + 双语安装页，不触碰运行时代码
+
+### S2 — 元数据迁移到 PEP 639
+- 文件与改动（`pyproject.toml`）:
+  - `[build-system].requires`: `setuptools>=61` → `setuptools>=77`（PEP 639 所需）
+  - `requires-python`: `>=3.8` → `>=3.9`
+  - `license = { text = "MIT" }` → `license = "MIT"` + `license-files = ["LICENSE"]`
+  - classifiers 删除 `Programming Language :: Python :: 3.8`
+  - 版本号 `0.3.0` → `0.3.1`（已发布的 0.3.0 不可覆盖，元数据变更须换号）
+- 版本同步: `pyqcd/__init__.py`、`pyqcd/einsum/_version.py`、`docs/{en,zh}/conf.py`、
+  `docs/{en,zh}/install.md`、`docs/{en,zh}/overview.md`；`__native_version__` 保持 0.1.0
+- 关键输出: `version 0.3.1 consistent in 3 places; __native_version__=0.1.0 (kept)`
+
+### S3 — 双语安装页改写（含顺带修复的表格断裂）
+- 原状: `docs/{en,zh}/install.md` 的依赖表被中间一段说明文字截断，后三行（`mpicxx`/`torch`/
+  `matplotlib`）落在表外，渲染为普通段落
+- 改动: 依赖表合并为完整 8 行（Python ≥ 3.9），说明段移到表后；内容改为
+  「3.12 完整套件、3.14 构建+导入；3.9–3.11 与 3.13 预期可用但无机测；3.8 因 PEP 639 所需的
+  `setuptools>=77` 已放弃而不再支持」
+- 退出码: 0
+
+## 验证与证据
+- 构建: `rm -rf build dist pyqcd.egg-info && python -m build --sdist` → exit 0；
+  `project.license` 与 `path must be relative` 两类告警**全部消失**，仅余 setuptools 固有的
+  `no previously-included files matching '*.log'/'*.pyc'`（按技能要求保留的排除规则）
+- 元数据: `twine check` PASSED；PKG-INFO 含 `License-Expression: MIT`、`License-File: LICENSE`、
+  `Requires-Python: >=3.9`，classifiers 从 3.9 起；sdist 内含 `LICENSE`
+- 安装: 干净 venv `/tmp/rv031` 装本地 sdist → exit 0，`pyqcd 0.3.1`、
+  `__file__` 含 site-packages、`einsums` 不存在、`init`/`run` 可用
+- 测试: `python -m pyqcd.testing` → 124 passed / 1 skipped / 0 failed
+- 终检: `release_check --offline` → 10/10；`docs_examples --lang zh` → 21 ok / 4 skipped / 0 failed
+- 未验证项: 未上传 PyPI（0.3.1 属对外发布，待明确指令）；未在 3.9 解释器实跑（本机只有 3.12/3.14）
+
+## 变更与产物
+- 文件: `pyproject.toml`、`pyqcd/__init__.py`、`pyqcd/einsum/_version.py`、
+  `docs/en/{conf.py,install.md,overview.md}`、`docs/zh/{conf.py,install.md,overview.md}`
+- 产物: `dist/pyqcd-0.3.1.tar.gz`（本地，未上传）
+- 未改动范围: `pyqcd/**` 运行时代码、`setup.py` 构建逻辑、`cpp/**`
+
+## 风险、限制与下一步
+- 风险: 提高下限后 Python 3.8 用户将无法安装 0.3.1+（pip 会按 `Requires-Python` 自动回退到 0.3.0）
+- 风险: 本地构建需 `setuptools>=77`；离线构建环境若预置旧 setuptools，需要同步升级
+- 阻塞: 无
+- 下一步: 待明确指令后上传 0.3.1、双推提交并打 `dev46`（前驱须用 `git describe --tags --abbrev=0` 取）
+
+## Agent 全文报告
+--- report begin ---
+「放弃 Python 3.8」已落地，PEP 639 的阻塞点随之解除。
+
+## 一、改了什么
+
+`pyproject.toml`：
+- 构建依赖 `setuptools>=61` → **`>=77`**（PEP 639 所需）
+- `requires-python`：`>=3.8` → **`>=3.9`**
+- 许可证：`license = { text = "MIT" }` → **`license = "MIT"` + `license-files = ["LICENSE"]`**
+- classifiers 删除 `Python :: 3.8`
+- 版本 `0.3.0` → **`0.3.1`**（0.3.0 已发布不可覆盖，元数据变更必须换号）
+
+版本三处一致（`pyproject` / `pyqcd.__version__` / `einsum._version`，原生 ABI 仍 `0.1.0`），
+双语 `conf.py`、`install.md`、`overview.md` 同步。
+
+顺带修了一个此前就存在的文档缺陷：双语安装页的依赖表被中间一段说明文字截断，后三行
+（`mpicxx`/`torch`/`matplotlib`）落在表外、渲染成普通段落——现已合并为完整 8 行并更新为
+Python ≥ 3.9，说明段移到表后。
+
+## 二、验证（本次会话实跑）
+
+| 检查 | 结果 |
+|---|---|
+| 构建告警门 | `deprecat` / `path must be relative` **全部消失**（仅剩 setuptools 固有的 `*.log`/`*.pyc` 排除提示，按技能要求保留） |
+| 元数据 | `License-Expression: MIT`、`License-File: LICENSE`、`Requires-Python: >=3.9`，classifier 从 3.9 起 |
+| `twine check` | PASSED |
+| 干净 venv 装本地 sdist | exit 0，`pyqcd 0.3.1`，site-packages 路径，`einsums` 不存在 |
+| 全量测试 | **124 passed / 1 skipped / 0 failed** |
+| `release_check --offline` | **10/10** |
+| 中文文档示例 | 21 ok / 4 skipped / 0 failed |
+
+## 三、还没做的事
+
+**没有上传 PyPI，也没有推送提交/打标签**——0.3.1 是一次新的对外发布，需你明确指令。
+产物已就绪：`dist/pyqcd-0.3.1.tar.gz`。你确认后我会按既定流程走完：上传 → 简单索引轮询 →
+干净 venv 远程复验 → 双推 → `dev46`（前驱由 `git describe --tags --abbrev=0` 取）→ RTD 探针。
+
+另注：本机只有 3.12/3.14，`3.9–3.11` 仍属"预期可用但无机测"，安装页已如实写明。
+--- report end ---
