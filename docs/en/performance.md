@@ -535,7 +535,7 @@ for label, tasks in CASES.items():
 
 ## Reproduce
 
-One script, both tables: `python bench.py cpu` then `python bench.py gpu`.
+One script, both tables and both precisions: `python bench.py cpu` then `python bench.py gpu` (double by default), or append `single` for a faster run: `python bench.py cpu single` / `python bench.py gpu single`.
 
 ### The benchmark
 
@@ -552,7 +552,11 @@ import pyqcd.einsum as pe
 
 # docs-skip: full-size 15-case benchmark (0.4-2.7 s per call); the docs gate skips it
 DEVICE = sys.argv[1] if len(sys.argv) > 1 else "cpu"     # "cpu" or "gpu"
+PRECISION = sys.argv[2] if len(sys.argv) > 2 else "double"  # "single" or "double"
 ROUNDS = 3                                               # interleaved timing rounds
+REAL = np.float32 if PRECISION == "single" else np.float64
+COMPLEX = np.complex64 if PRECISION == "single" else np.complex128
+RTOL = 1e-5 if PRECISION == "single" else 1e-10
 
 if DEVICE == "gpu":
     import cupy as cp
@@ -585,21 +589,22 @@ else:
 
 # Print version and path first: a stale copy in site-packages turns every number into
 # "PyQCD is slow".
-print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", device_name)
+print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", device_name,
+      "|", PRECISION)
 
 rng = np.random.default_rng(0)
 
 
 def random_array(*shape):
     """Real random array (float64)."""
-    return to_device(rng.standard_normal(shape))
+    return to_device(rng.standard_normal(shape).astype(REAL))
 
 
 def random_complex_array(*shape):
-    """Complex random array (complex128): real and imaginary parts sampled separately."""
+    """Complex random array in the requested precision: real and imaginary parts sampled separately."""
     real_part = rng.standard_normal(shape)
     imag_part = rng.standard_normal(shape)
-    return to_device((real_part + 1j * imag_part).astype(np.complex128))
+    return to_device((real_part + 1j * imag_part).astype(COMPLEX))
 
 
 def one_call(function, repeat=1):
@@ -662,7 +667,7 @@ for label, equation, builder, shapes in CASES:
     ours_value = cp.asnumpy(got) if DEVICE == "gpu" else np.asarray(got)
     their_value = cp.asnumpy(reference) if DEVICE == "gpu" else np.asarray(reference)
     scale = max(float(np.max(np.abs(their_value))), 1e-30)
-    assert np.max(np.abs(ours_value - their_value), initial=0.0) <= 1e-10 * scale, label
+    assert np.max(np.abs(ours_value - their_value), initial=0.0) <= RTOL * scale, label
     del reference, got, ours_value, their_value
     release_memory()
 

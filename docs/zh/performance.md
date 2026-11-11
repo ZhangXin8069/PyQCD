@@ -505,7 +505,7 @@ for label, tasks in CASES.items():
 
 ## 复现
 
-一份脚本出两张表：`python bench.py cpu`，再 `python bench.py gpu`。
+一份脚本出两张表、两种精度：`python bench.py cpu`，再 `python bench.py gpu`（默认双精度）；第二个参数传 `single` 可跑单精度，例如 `python bench.py cpu single`、`python bench.py gpu single`。
 
 ### 基准脚本
 
@@ -522,7 +522,11 @@ import pyqcd.einsum as pe
 
 # docs-skip: 15 个用例的全尺寸基准（单次 0.4–2.7 s），文档门禁不跑
 DEVICE = sys.argv[1] if len(sys.argv) > 1 else "cpu"     # "cpu" 或 "gpu"
-ROUNDS = 3                                               # 交错计时轮数
+PRECISION = sys.argv[2] if len(sys.argv) > 2 else "double"  # "single" 或 "double"
+ROUNDS = 3
+REAL = np.float32 if PRECISION == "single" else np.float64
+COMPLEX = np.complex64 if PRECISION == "single" else np.complex128
+RTOL = 1e-5 if PRECISION == "single" else 1e-10                                               # 交错计时轮数
 
 if DEVICE == "gpu":
     import cupy as cp
@@ -554,21 +558,22 @@ else:
     device_name = "cpu"
 
 # 先打印版本与路径：site-packages 里的旧版会把每个数字都变成"PyQCD 很慢"
-print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", device_name)
+print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", device_name,
+      "|", PRECISION)
 
 rng = np.random.default_rng(0)
 
 
 def random_array(*shape):
     """实数随机数组（float64）。"""
-    return to_device(rng.standard_normal(shape))
+    return to_device(rng.standard_normal(shape).astype(REAL))
 
 
 def random_complex_array(*shape):
-    """复数随机数组（complex128）：实部与虚部独立采样。"""
+    """复数随机数组，精度可切换：实部与虚部独立采样。"""
     real_part = rng.standard_normal(shape)
     imag_part = rng.standard_normal(shape)
-    return to_device((real_part + 1j * imag_part).astype(np.complex128))
+    return to_device((real_part + 1j * imag_part).astype(COMPLEX))
 
 
 def one_call(function, repeat=1):
@@ -630,7 +635,7 @@ for label, equation, builder, shapes in CASES:
     ours_value = cp.asnumpy(got) if DEVICE == "gpu" else np.asarray(got)
     their_value = cp.asnumpy(reference) if DEVICE == "gpu" else np.asarray(reference)
     scale = max(float(np.max(np.abs(their_value))), 1e-30)
-    assert np.max(np.abs(ours_value - their_value), initial=0.0) <= 1e-10 * scale, label
+    assert np.max(np.abs(ours_value - their_value), initial=0.0) <= RTOL * scale, label
     del reference, got, ours_value, their_value
     release_memory()
 
