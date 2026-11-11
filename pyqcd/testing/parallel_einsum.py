@@ -318,7 +318,7 @@ def bench_collective(equation='S1', count=8, nvec=12, rounds=3, base=256,
         comm.Barrier()
         started = time.perf_counter()
         payload = einsums(tasks, reminder=False, verbose=False,
-                          optimize=optimize, max_procs=size)
+                          optimize=optimize, max_procs=size, collective=True)
         parallel_times.append(time.perf_counter() - started)
         comm.Barrier()
 

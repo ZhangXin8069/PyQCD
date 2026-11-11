@@ -39,7 +39,7 @@ import numpy as np
 
 from ..einsum import contract, contract_path
 
-__all__ = ["einsums", "plan_einsums", "REMINDER_TEXT",
+__all__ = ["einsums", "init", "run", "plan_einsums", "REMINDER_TEXT",
            "COLLECTIVE_MEMORY_WARNING"]
 
 REMINDER_TEXT = (
@@ -359,7 +359,11 @@ def _worker_identity():
 # 三条执行路径
 # ═══════════════════════════════════════════════════════════════════
 
-def _run_serial(kind, keys, specs, optimize, backend):
+def _run_serial(specs, optimize, backend, keys=None):
+    """逐个执行，返回与 ``specs`` 同序的结果列表；任何失败都会整体抛错。
+
+    ``keys`` 只用于错误信息（``task_id`` 或下标），不影响执行。
+    """
     ordered, failures = [], []
     for index, spec in enumerate(specs):
         try:
@@ -367,8 +371,9 @@ def _run_serial(kind, keys, specs, optimize, backend):
         except Exception as exc:
             failures.append(_failure(index, exc))
     if failures:
-        _raise_failures(failures, keys)
-    return _package(kind, keys, ordered)
+        _raise_failures(failures, keys if keys is not None
+                        else list(range(len(specs))))
+    return ordered
 
 
 def _slim_plan(plan, size):
@@ -390,7 +395,7 @@ def _slim_plan(plan, size):
             "limits": plan["limits"]}
 
 
-def _run_collective(comm, rank, size, kind, keys, specs, slim, optimize,
+def _run_collective(comm, rank, size, keys, specs, slim, optimize,
                     backend, broadcast, verbose):
     """已在 MPI 下：各 rank 分担分箱，结果 gather 回 rank 0。
 
@@ -431,11 +436,12 @@ def _run_collective(comm, rank, size, kind, keys, specs, slim, optimize,
         failures.sort(key=lambda item: item["index"])
         _raise_failures(failures, keys)
     ordered = [results[index] for index in range(len(specs))]
-    payload = _package(kind, keys, ordered)
     timings = {"per_rank_seconds": per_rank,
                "compute_seconds": max(per_rank) if per_rank else 0.0,
                "pool_overhead_seconds": 0.0}   # collective 没有进程池与落盘
-    return (comm.bcast(payload, root=0) if broadcast else payload), timings
+    if broadcast:
+        ordered = comm.bcast(ordered, root=0)
+    return ordered, timings
 
 
 def _to_numpy(value):
@@ -578,7 +584,7 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
             "mpirun/mpiexec not found; falling back to in-process serial "
             "execution (no task-level parallelism)",
             RuntimeWarning, stacklevel=3)
-        return _run_serial(kind, keys, specs, optimize, backend), {
+        return _run_serial(specs, optimize, backend), {
             "mode": "serial_fallback", "workers": 1}
 
     run_dir = tempfile.mkdtemp(prefix="pyqcd-einsums-", dir=workdir)
@@ -619,9 +625,8 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
                 f"--- launcher output ---\n{tail}")
         ordered = [np.load(os.path.join(results_dir, f"result_{index:05d}.npy"))
                    for index in range(len(specs))]
-        payload = _package(kind, keys, ordered)
         timings = _collect_worker_timings(results_dir)
-        return payload, {"mode": "mpi_launch", "workers": plan["workers"],
+        return ordered, {"mode": "mpi_launch", "workers": plan["workers"],
                          "threads": thread_budget,
                          "timings": timings,
                          "workdir": run_dir if keep_workdir else None}
@@ -631,14 +636,80 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 公共入口
+# 公共入口：einsums（一体化）/ init + run（分步，结果原位写入）
 # ═══════════════════════════════════════════════════════════════════
+
+def _execute(specs, keys, plan, optimize, backend, collective, workdir,
+             keep_workdir, launcher, worker_threads, broadcast, verbose):
+    """按 collective → 自建池 → 串行 的顺序执行，返回 ``(ordered, info)``。
+
+    collective 默认关闭：真实生产对内存/显存敏感（每个 rank 各持一份整批输入），
+    打开前必须显式传 ``collective=True``。关闭时若处于 ``mpirun`` 内，只由 rank 0
+    执行、其余 rank 直接返回 ``None``，不做任何复制或汇总。
+    """
+    comm, rank, size = _mpi_world()
+
+    if comm is not None and size > 1 and not collective:
+        if verbose and rank == 0:
+            print("[pyqcd.parallel.einsum] collective mode is disabled by "
+                  "default (memory-expensive: every rank would hold a full copy "
+                  "of the batch). Running on rank 0 only; pass "
+                  "collective=True to distribute.", flush=True)
+        if rank != 0:
+            return None, {"mode": "rank0_only", "workers": 1, "timings": None}
+        ordered = _run_serial(specs, optimize, backend, keys)
+        return ordered, {"mode": "rank0_only", "workers": 1, "timings": None}
+
+    if comm is not None and size > 1:
+        # 进入 collective 就必然复制输入：这条警告与 reminder 分开，因为它是模式
+        # 本身的内存代价，不看用户是否要求打印通用提醒。每个进程只打一次。
+        global _COLLECTIVE_WARNING_SHOWN
+        if rank == 0:
+            if not _COLLECTIVE_WARNING_SHOWN:
+                print(f"[pyqcd.parallel.einsum] {COLLECTIVE_MEMORY_WARNING}",
+                      flush=True)
+            _COLLECTIVE_WARNING_SHOWN = True
+        # 规划只在 rank 0 做一次：小任务上 contract_path 占总耗时的 31–84%，
+        # 每个 rank 各自重算会把并行收益直接吃掉。
+        slim = _slim_plan(plan, size) if rank == 0 else None
+        slim = comm.bcast(slim, root=0)
+        if verbose and rank == 0:
+            print(_format_plan(slim, "mpi-collective"), flush=True)
+        ordered, timings = _run_collective(comm, rank, size, keys, specs, slim,
+                                           optimize, backend, broadcast, verbose)
+        return ordered, {"mode": "mpi_collective", "workers": slim["workers"],
+                         "timings": timings}
+
+    if plan["workers"] > 1:
+        if verbose:
+            print(_format_plan(plan, "mpi-launch"), flush=True)
+        payload, info = _run_launched("list", keys, specs, plan, optimize,
+                                      backend, workdir, keep_workdir, launcher,
+                                      worker_threads)
+        return payload, info
+
+    if verbose:
+        print(_format_plan(plan, "serial"), flush=True)
+    ordered = _run_serial(specs, optimize, backend, keys)
+    return ordered, {"mode": "serial", "workers": plan["workers"],
+                     "timings": None}
+
+
+def _show_reminder(reminder):
+    global _REMINDER_SHOWN
+    if reminder and not _REMINDER_SHOWN:
+        print(f"[pyqcd.parallel.einsum] {REMINDER_TEXT}", flush=True)
+    _REMINDER_SHOWN = True
+
 
 def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
             reminder=True, verbose=True, workdir=None, keep_workdir=False,
             launcher=None, broadcast=False, worker_threads=None,
-            return_info=False):
+            return_info=False, collective=False):
     """并行执行多个相互独立的 einsum 任务，结果与串行调用逐一对应。
+
+    这是 "规划 + 执行" 的一体化入口；需要把耗时分段测量时改用 :func:`init` +
+    :func:`run`。
 
     Parameters
     ----------
@@ -673,6 +744,11 @@ def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
         ``True`` 时返回 ``(payload, info)``。``info`` 里带 ``timings``：
         自建进程池时各 worker 自报的**纯计算**耗时（不含 mpirun 启动与落盘），
         用于把"计入初始化"和"不计入初始化"两种口径分开统计。
+    collective : bool
+        **默认 ``False``**：collective 模式让每个 rank 各持一份整批输入，真实生产
+        对内存/显存敏感，因此默认不启用。处于 ``mpirun`` 内且保持默认时，只有
+        rank 0 执行、其余 rank 立即返回 ``None``。需要分摊到所有 rank 时显式写
+        ``collective=True``。
 
     Returns
     -------
@@ -680,56 +756,180 @@ def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
         与输入一一对应的结果；collective 模式下非 rank 0 默认得到 ``None``。
         传 ``return_info=True`` 时返回 ``(payload, info)``。
     """
-    global _REMINDER_SHOWN
     kind, keys, specs = _normalize_tasks(tasks)
-    comm, rank, size = _mpi_world()
-
-    if reminder and not _REMINDER_SHOWN and rank == 0:
-        print(f"[pyqcd.parallel.einsum] {REMINDER_TEXT}", flush=True)
-        _REMINDER_SHOWN = True
-    elif reminder:
-        _REMINDER_SHOWN = True
-
-    if comm is not None and size > 1:
-        # 进入 collective 就必然复制输入：这条警告与 reminder 分开，因为它是模式
-        # 本身的内存代价，不看用户是否要求打印通用提醒。每个进程只打一次。
-        global _COLLECTIVE_WARNING_SHOWN
-        if rank == 0:
-            if not _COLLECTIVE_WARNING_SHOWN:
-                print(f"[pyqcd.parallel.einsum] {COLLECTIVE_MEMORY_WARNING}",
-                      flush=True)
-            _COLLECTIVE_WARNING_SHOWN = True
-        # 规划只在 rank 0 做一次：小任务上 contract_path 占总耗时的 31–84%，
-        # 每个 rank 各自重算会把并行收益直接吃掉。
-        slim = _slim_plan(_plan_specs(specs, max_procs=max_procs), size) \
-            if rank == 0 else None
-        slim = comm.bcast(slim, root=0)
-        if verbose and rank == 0:
-            print(_format_plan(slim, "mpi-collective"), flush=True)
-        payload, timings = _run_collective(comm, rank, size, kind, keys, specs,
-                                           slim, optimize, backend, broadcast,
-                                           verbose)
-        if return_info:
-            return payload, {"mode": "mpi_collective",
-                             "workers": slim["workers"], "timings": timings}
-        return payload
-
+    _show_reminder(reminder)
     plan = _plan_specs(specs, max_procs=max_procs)
-    if plan["workers"] > 1:
-        if verbose:
-            print(_format_plan(plan, "mpi-launch"), flush=True)
-        payload, info = _run_launched(kind, keys, specs, plan, optimize,
-                                     backend, workdir, keep_workdir, launcher,
-                                     worker_threads)
-        return (payload, info) if return_info else payload
+    ordered, info = _execute(specs, keys, plan, optimize, backend, collective,
+                             workdir, keep_workdir, launcher, worker_threads,
+                             broadcast, verbose)
+    payload = None if ordered is None else _package(kind, keys, ordered)
+    return (payload, info) if return_info else payload
+
+
+_CONFIG_KEYS = frozenset(("task_id", "equation", "operands", "results"))
+
+
+def init(config, max_proc=None, verbose=False, reminder=True,
+         optimize="auto", backend="auto", collective=False, workdir=None,
+         keep_workdir=False, launcher=None, worker_threads=None,
+         broadcast=False):
+    """校验并规划一批任务，返回可直接交给 :func:`run` 的句柄（不执行计算）。
+
+    与 ``einsums`` 的区别：这里只接受**列式字典**，且结果写进调用方预先分配好的
+    缓冲区，因此可以先 ``init`` 计时、再 ``run`` 计时，把规划与执行分开测量。
+
+    Parameters
+    ----------
+    config : dict
+        四个键，前三个必需::
+
+            {
+              "task_id":  ["t0", "t1", ...],          # 可选，缺省用下标
+              "equation": ["ij,jk->ik", ...],         # 与任务一一对应
+              "operands": [[a0, b0], [a1, b1], ...],  # 只读，不会被复制或改动
+              "results":  [out0, out1, ...],          # 可写，结果原地写入
+            }
+
+        ``operands`` 里的数组**只读**：``init``/``run`` 不复制、不改写它们。
+        ``results`` 里的数组由调用方分配，``run`` 直接把结果写进这些缓冲区
+        （``results[i][...] = value``），不重新分配内存或显存。
+    max_proc : int, optional
+        进程数上限；``None`` 表示 ``min(子任务数, CPU 线程数, 可用内存允许值)``。
+    verbose : bool
+        调试输出，默认 ``False``；打开后每条都带 ``task_id``，便于定位。
+    reminder : bool
+        首次调用打印使用场景提醒。
+    其余参数（``optimize`` / ``backend`` / ``collective`` / ``workdir`` /
+    ``keep_workdir`` / ``launcher`` / ``worker_threads`` / ``broadcast``）
+    含义与 :func:`einsums` 相同。
+
+    Returns
+    -------
+    dict
+        句柄，含 ``specs``（内部任务描述）、``plan``（分箱与负载）、``keys``
+        （``task_id``）与 ``results``（调用方的输出缓冲区引用）。
+    """
+    if not isinstance(config, dict):
+        raise TypeError("config must be a dict with keys "
+                        f"{sorted(_CONFIG_KEYS)}; got {type(config).__name__}")
+    unknown = set(config) - _CONFIG_KEYS
+    if unknown:
+        raise ValueError(f"config has unsupported key(s): {sorted(unknown)}; "
+                         f"allowed: {sorted(_CONFIG_KEYS)}")
+    for required in ("equation", "operands", "results"):
+        if required not in config:
+            raise ValueError(f"config is missing required key {required!r}")
+    equations = config["equation"]
+    operands = config["operands"]
+    results = config["results"]
+    for name, value in (("equation", equations), ("operands", operands),
+                        ("results", results)):
+        if not isinstance(value, (list, tuple)):
+            raise TypeError(f"config[{name!r}] must be a list, "
+                            f"got {type(value).__name__}")
+    count = len(equations)
+    if count == 0:
+        raise ValueError("config must describe at least one task")
+    if len(operands) != count or len(results) != count:
+        raise ValueError(
+            f"config lengths differ: equation={count} operands={len(operands)} "
+            f"results={len(results)}")
+    ids = config.get("task_id")
+    if ids is None:
+        ids = list(range(count))
+    elif not isinstance(ids, (list, tuple)) or len(ids) != count:
+        raise ValueError("config['task_id'] must be a list with one entry per "
+                         "task (or omitted)")
+
+    specs, cache = [], {}
+    for index in range(count):
+        equation = equations[index]
+        task_operands = operands[index]
+        if not isinstance(equation, str):
+            raise TypeError(f"task {ids[index]!r} equation must be str, "
+                            f"got {type(equation).__name__}")
+        if not isinstance(task_operands, (list, tuple)) or not task_operands:
+            raise TypeError(f"task {ids[index]!r} operands must be a non-empty "
+                            f"list, got {type(task_operands).__name__}")
+        target = results[index]
+        writeable = getattr(target, "flags", None)
+        if writeable is not None and not writeable.writeable:
+            raise ValueError(f"task {ids[index]!r} result buffer is read-only; "
+                             "run() writes results in place")
+        specs.append({"subscripts": equation,
+                      "operands": list(task_operands),
+                      "kwargs": {}})
+
+    plan = _plan_specs(specs, max_procs=max_proc)
+    # 输出形状校验：提前失败好过算完才发现缓冲区尺寸不对。
+    for index, spec in enumerate(specs):
+        expected = _expected_output_shape(spec, cache)
+        actual = tuple(getattr(results[index], "shape", ()))
+        if expected is not None and actual != expected:
+            raise ValueError(
+                f"task {ids[index]!r} result buffer shape {actual} does not "
+                f"match the contraction output {expected}")
 
     if verbose:
-        print(_format_plan(plan, "serial"), flush=True)
-    payload = _run_serial(kind, keys, specs, optimize, backend)
-    if return_info:
-        return payload, {"mode": "serial", "workers": plan["workers"],
-                         "timings": None}
-    return payload
+        print(_format_plan(plan, "init"), flush=True)
+    return {"keys": list(ids), "specs": specs, "plan": plan,
+            "results": list(results), "verbose": bool(verbose),
+            "reminder": bool(reminder), "optimize": optimize,
+            "backend": backend, "collective": bool(collective),
+            "workdir": workdir, "keep_workdir": keep_workdir,
+            "launcher": launcher, "worker_threads": worker_threads,
+            "broadcast": broadcast}
+
+
+def run(state, max_proc=None):
+    """执行 :func:`init` 规划好的批次，结果**原地**写入 ``state["results"]``。
+
+    启动器语义：返回 ``None``；数据通过调用方传入的缓冲区交换，不产生新的返回值，
+    因此调用前后可以做精确的耗时/内存对照。collective 模式下非 rank 0 也会写完
+    自己的缓冲区（若 ``broadcast=True``），否则立即返回。
+
+    Parameters
+    ----------
+    state : dict
+        :func:`init` 的返回值。
+    max_proc : int, optional
+        覆盖 ``init`` 时的进程数上限（一般不用）。
+    """
+    if not isinstance(state, dict) or "specs" not in state:
+        raise TypeError("run() expects the dict returned by init()")
+    specs = state["specs"]
+    plan = state["plan"]
+    if max_proc is not None and max_proc != state["plan"]["workers"]:
+        plan = _plan_specs(specs, max_procs=max_proc)
+    _show_reminder(state.get("reminder", True))
+    ordered, info = _execute(
+        specs, state["keys"], plan, state["optimize"], state["backend"],
+        state["collective"], state["workdir"], state["keep_workdir"],
+        state["launcher"], state["worker_threads"], state["broadcast"],
+        state["verbose"])
+    if ordered is None:
+        return None
+    for target, value in zip(state["results"], ordered):
+        # 直接写进调用方的缓冲区：不分配新数组，也不改 dtype/形状。
+        target[...] = value
+    return None
+
+
+def _expected_output_shape(spec, cache):
+    """按 ``contract_path`` 的 size_dict 推出输出形状；失败时返回 ``None``。"""
+    key = (spec["subscripts"], tuple(_shape_of(op) for op in spec["operands"]))
+    if key in cache:
+        return cache[key]
+    shape = None
+    try:
+        _, info = contract_path(spec["subscripts"], *key[1], shapes=True,
+                                optimize="greedy")
+        shape = tuple(info.size_dict[label] for label in info.output_subscript)
+    except Exception:
+        shape = None
+    cache[key] = shape
+    return shape
+
 
 
 # ═══════════════════════════════════════════════════════════════════

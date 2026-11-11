@@ -272,7 +272,10 @@ two ways:
   ceiling the task split can reach once the pool already exists (typical when you are
   inside `mpirun`, or when the same pool serves a much larger batch).
 
-### Already inside `mpirun -np 4` (collective, no staging)
+### Already inside `mpirun -np 4` with `collective=True` (no staging)
+
+Collective is **off by default** (it replicates the batch onto every rank); the
+numbers below are what you get after opting in.
 
 | Scenario | Tasks | Serial | Parallel | `×wall` | `×compute` |
 |---|---|---|---|---|---|
@@ -286,7 +289,8 @@ two ways:
 | kernel: γ sandwich (E5, ~1 ms/task) | 8 | 0.5 ms | 0.7 ms | 0.73× | 1.59× |
 
 Here the two calibers nearly coincide (staging is zero, only the plan broadcast is
-missing from `×compute`), which is exactly why collective is the mode to use.
+missing from `×compute`). This is the fastest mode, but it is opt-in because of
+the memory cost below.
 
 > **Memory warning — collective mode replicates the input on every rank.**
 > The planner runs inside `einsums`, so each rank must build the *whole* batch:

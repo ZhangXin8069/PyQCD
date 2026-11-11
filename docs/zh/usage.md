@@ -229,7 +229,7 @@ tasks = {
 # 先看它打算怎么分：进程数、每个进程分到哪些任务、负载是否均衡
 plan = plan_einsums(tasks, max_procs=4)
 
-# max_procs=1 走串行路径，便于在这里对照结果（文档门禁不拉起 MPI 进程池）
+# max_procs=1 走串行路径，文档门禁不会拉起 MPI 进程池
 result = einsums(tasks, max_procs=1, reminder=False, verbose=False)
 
 # 结果与输入一一对应：同键、同序；装箱覆盖全部任务且没有短板
@@ -244,10 +244,10 @@ for key, spec in tasks.items():
 ```
 
 ```python
-# docs-skip: launches mpirun worker processes
+# docs-skip: 会拉起 mpirun worker 进程
 from pyqcd.parallel import einsums
 
-result = einsums(tasks, max_procs=4)          # self-launched MPI pool
+result = einsums(tasks, max_procs=4)          # 自建 MPI 进程池
 ```
 
 * **容器决定返回形状**：传 `dict` 返回同键 `dict`，传 `list`/`tuple` 返回同序 list。
@@ -259,19 +259,57 @@ result = einsums(tasks, max_procs=4)          # self-launched MPI pool
   输入/输出元素数兜底），再用 LPT（longest-processing-time-first）装箱；最慢进程
   不超过最优解的 `4/3 - 1/(3K)`，所以各箱任务数可以不同但不会出现短板。
 * **进程数**默认取 `min(子任务数, CPU 线程数, 可用内存允许值)`，可用 `max_procs=`
-  收紧。若你已在 `mpirun -np N` 下运行，则各 rank 都调用 `einsums`，任务直接分摊到
-  这些 rank（不落盘交换，结果默认只在 rank 0 返回，`broadcast=True` 可让所有 rank 都拿到）；
-  不在 MPI 下时它自己拉起 `mpirun -np K` 进程池，经临时目录交换任务与结果。
-* **内存：collective 模式的输入会按 rank 数翻倍。** 规划发生在 `einsums` 内部，因此每个
-  rank 都必须先构造**整批**任务，输入占用变成「单份 × rank 数」；rank 0 另外持有**全部
-  结果**，`broadcast=True` 时每个 rank 还会各持一份完整结果。用 `resource.ru_maxrss`
-  实测（float32，64 个 512² 任务，整批输入 134 MB）：串行峰值 234 MB，collective 4 rank
-  聚合约 1.15 GB——大致是「4 × 输入 + 输出」。在 GPU 上这意味着**每张可见卡各放一整批**：
-  让 rank 数与可见设备数对齐，否则显存会成倍放大。批次大到放不下时改用自建进程池——
-  任务经磁盘分发，worker 只读自己那一箱，代价是每次调用多 0.15–0.3 s 固定开销。
-  `einsums` 每次进入 collective 都会打印这条提醒，与 `reminder=` 无关。
-* **精度跟随操作数**：`complex64`/`float32` 直接把内存与算术量减半，是受限机器上
-  最直接的一档；`einsums` 自己不做任何类型转换。
+  收紧。不在 MPI 下时它自己拉起 `mpirun -np K` 进程池，经临时目录交换任务与结果。
+* **collective 模式默认关闭。** 已在 `mpirun -np N` 内时默认 `collective=False`：
+  只有 rank 0 执行整批任务，其余 rank 立即返回 `None`，不做任何复制。需要摊到全部
+  `N` 个 rank 时显式传 `collective=True`——不落盘交换，但每个 rank 都会持有一份整批输入
+  （见下条内存说明）。
+* **内存：collective 会把输入复制到每个 rank。** 规划发生在 `einsums` 内部，因此
+  `collective=True` 时每个 rank 都必须先构造**整批**任务，输入占用变成「单份 × rank 数」；
+  rank 0 另外持有**全部结果**，`broadcast=True` 时每个 rank 还会各持一份完整结果。
+  用 `resource.ru_maxrss` 实测（float32，64 个 512² 任务，整批输入 134 MB）：串行峰值
+  234 MB，collective 4 rank 聚合约 1.15 GB。在 GPU 上这意味着**每张可见卡各放一整批**，
+  所以 rank 数应与可见设备数对齐。这正是它默认关闭、且每次使用都会打印警告的原因；
+  批次大到放不下时改用自建进程池——任务经磁盘分发，worker 只读自己那一箱，
+  代价是每次调用多 0.15–0.3 s 固定开销。
+* **精度跟随操作数**：`complex64`/`float32` 直接把内存与算术量减半；
+  `einsums` 自己不做任何类型转换。
+
+#### 拆开用：`init` + `run`
+
+想把「规划」与「执行」分别计时，或让结果直接写进自己已经分配好的缓冲区，就用两步式：
+`init` 校验并规划，`run` 执行；`run` 不返回任何东西，**原地写入**。
+
+```python
+import numpy as np
+from pyqcd.parallel import init, run
+
+rng = np.random.default_rng(0)
+a = [rng.standard_normal((32, 32)) for _ in range(3)]
+b = [rng.standard_normal((32, 32)) for _ in range(3)]
+out = [np.zeros((32, 32)) for _ in range(3)]      # 调用方自己的输出缓冲区
+
+# 列式字典；task_id 可省略，其余三个必需
+config = {
+    "task_id": ["t0", "t1", "t2"],
+    "equation": ["ij,jk->ik"] * 3,
+    "operands": [[a[i], b[i]] for i in range(3)],   # 只读，不会被复制
+    "results": out,                                  # 可写，结果原地写入
+}
+
+state = init(config, max_proc=1, verbose=False, reminder=False)
+run(state)                     # 启动器：返回 None，把结果写进 out
+
+# 操作数没被改动、结果与 contract 一致、缓冲区没有被替换
+assert all(np.array_equal(a[i], config["operands"][i][0]) for i in range(3))
+assert all(np.array_equal(out[i], a[i] @ b[i]) for i in range(3))
+assert all(out[i] is config["results"][i] for i in range(3))
+assert state["keys"] == ["t0", "t1", "t2"] and state["plan"]["workers"] == 1
+```
+
+`init(config, ...)` 只接受这种字典（关键字参数与 `einsums` 相同），长度不匹配、
+结果缓冲区形状与收缩输出不符、或缓冲区只读时都会提前失败。`verbose=True` 会按步骤打印
+带 `task_id` 的调试行，这就是排查某批任务的开关。
 
 在本机（4 物理核 / 8 线程、16 GB；真实 sush 蒸馏方程 S1 = NN 2pt，8 算子；
 `complex64`；`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1` 作为单线程公平基准；

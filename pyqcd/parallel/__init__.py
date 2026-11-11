@@ -12,7 +12,7 @@ __all__ = [
     "detect_resources", "cpu_threads", "gpu_info",
     "get_mpi_context", "plan_parallel", "format_plan",
     "run_meta_task", "run_parallel_pipeline", "main",
-    "einsums", "plan_einsums",
+    "einsums", "init", "run", "plan_einsums",
 ]
 
 _MPI_NAMES = frozenset((
@@ -28,7 +28,7 @@ def __getattr__(name):
         value = getattr(_mpi, name)
         globals()[name] = value
         return value
-    if name in ("einsums", "plan_einsums"):
+    if name in ("einsums", "init", "run", "plan_einsums"):
         from . import einsum as _parallel_einsum
 
         value = getattr(_parallel_einsum, name)

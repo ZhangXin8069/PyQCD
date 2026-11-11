@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 import numpy as np
 
@@ -267,6 +268,146 @@ def test_timings_separate_pool_init_from_compute():
         assert np.array_equal(serial_payload[key], payload[key]), key
 
 
+def test_collective_is_disabled_by_default():
+    """``collective`` 默认关闭：mpirun 内只由 rank 0 执行，其余 rank 立即返回。
+
+    真实生产对内存/显存敏感（collective 让每个 rank 各持一份整批输入），所以它必须
+    是显式开关。这里同时验证：默认路径仍给出正确结果，且不打印内存警告。
+    """
+    launcher = _require_launcher()
+    project_root = Path(__file__).resolve().parents[2]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script = Path(tmpdir) / 'default_probe.py'
+        script.write_text(
+            'import json\n'
+            'import numpy as np\n'
+            'from mpi4py import MPI\n'
+            'import pyqcd.einsum as pe\n'
+            'from pyqcd.parallel.einsum import einsums\n'
+            'rank = MPI.COMM_WORLD.Get_rank()\n'
+            'rng = np.random.default_rng(5)\n'
+            'tasks = {"a": ("ij,jk->ik", [rng.standard_normal((16, 16)),\n'
+            '                             rng.standard_normal((16, 16))])}\n'
+            'payload, info = einsums(tasks, reminder=False,\n'
+            '                        verbose=(rank == 0), return_info=True)\n'
+            'ok = payload is not None and np.array_equal(\n'
+            '    payload["a"], pe.contract(*tasks["a"][:1], *tasks["a"][1]))\n'
+            'print("RESULT", json.dumps({"rank": rank, "mode": info["mode"],\n'
+            '                            "has_payload": payload is not None,\n'
+            '                            "ok": bool(ok)}))\n',
+            encoding='utf-8')
+        env = os.environ.copy()
+        env['PYTHONPATH'] = os.pathsep.join(
+            [str(project_root), env.get('PYTHONPATH', '')]).rstrip(os.pathsep)
+        completed = subprocess.run(
+            launcher + ['-np', '2', sys.executable, str(script)],
+            capture_output=True, text=True, env=env, cwd=project_root,
+            timeout=300)
+    assert completed.returncode == 0, completed.stderr[-1500:]
+    rows = [json.loads(line.split(' ', 1)[1])
+            for line in completed.stdout.splitlines()
+            if line.startswith('RESULT ')]
+    assert len(rows) == 2, completed.stdout
+    by_rank = {row['rank']: row for row in rows}
+    assert by_rank[0]['mode'] == 'rank0_only', by_rank
+    assert by_rank[0]['has_payload'] is True and by_rank[0]['ok'] is True, by_rank
+    assert by_rank[1]['has_payload'] is False, by_rank
+    assert '内存提醒' not in completed.stdout, completed.stdout
+    assert 'disabled by default' in completed.stdout, completed.stdout
+
+
+def test_init_and_run_write_results_in_place():
+    """``init`` 只规划，``run`` 把结果原地写进调用方缓冲区。
+
+    - ``operands`` 只读：执行前后逐字节不变；
+    - ``results`` 是同一批对象（不是新分配），形状/dtype 保持不变；
+    - ``init`` 与 ``run`` 可以分别计时，这就是拆分的意义。
+    """
+    tasks = _matmul_tasks(4, base=48)
+    equations, operands, results = [], [], []
+    for equation, ops in tasks.values():
+        equations.append(equation)
+        operands.append(list(ops))
+        results.append(np.zeros((ops[0].shape[0], ops[1].shape[1]),
+                                dtype=ops[0].dtype))
+    before = [operand.copy() for ops in operands for operand in ops]
+    config = {"task_id": list(tasks), "equation": equations,
+              "operands": operands, "results": results}
+
+    started = time.perf_counter()
+    state = parallel_einsum.init(config, max_proc=2, reminder=False)
+    init_seconds = time.perf_counter() - started
+    started = time.perf_counter()
+    returned = parallel_einsum.run(state)
+    run_seconds = time.perf_counter() - started
+
+    assert returned is None, 'run() is a launcher: it must not return a payload'
+    assert init_seconds >= 0.0 and run_seconds > 0.0
+    assert state["keys"] == list(tasks)
+    assert [buffer is original for buffer, original in zip(results, config["results"])]
+
+    flat_before = [operand for ops in operands for operand in ops]
+    for saved, current in zip(before, flat_before):
+        assert np.array_equal(saved, current), 'operands must stay read-only'
+
+    for key, (equation, ops) in tasks.items():
+        index = list(tasks).index(key)
+        expected = pe.contract(equation, *ops)
+        assert np.allclose(results[index], expected, rtol=0, atol=0), key
+        assert results[index] is config["results"][index]
+
+
+def test_init_rejects_bad_configs():
+    """``init`` 只接受列式字典，并对长度、形状、只读缓冲区提前失败。"""
+    good_ops = [[np.eye(3), np.eye(3)]]
+    cases = (
+        ({"equation": ["ij,jk->ik"], "operands": good_ops}, 'results'),
+        ({"equation": ["ij,jk->ik"], "operands": good_ops,
+          "results": [np.zeros((3, 3))], "extra": 1}, 'unsupported key'),
+        ({"equation": ["ij,jk->ik"], "operands": good_ops * 2,
+          "results": [np.zeros((3, 3))]}, 'lengths differ'),
+        ({"equation": ["ij,jk->ik"], "operands": good_ops,
+          "results": [np.zeros((4, 4))]}, 'does not match'),
+        ({"equation": [], "operands": [], "results": []}, 'at least one'),
+    )
+    for config, fragment in cases:
+        try:
+            parallel_einsum.init(config, max_proc=1, reminder=False)
+        except (ValueError, TypeError) as exc:
+            assert fragment in str(exc), (fragment, str(exc))
+        else:
+            raise AssertionError(f'init accepted bad config: {fragment}')
+
+    read_only = np.zeros((3, 3))
+    read_only.flags.writeable = False
+    try:
+        parallel_einsum.init({"equation": ["ij,jk->ik"], "operands": good_ops,
+                              "results": [read_only]}, max_proc=1,
+                             reminder=False)
+    except ValueError as exc:
+        assert 'read-only' in str(exc), str(exc)
+    else:
+        raise AssertionError('init accepted a read-only result buffer')
+
+
+def test_run_matches_einsums_and_respects_task_ids():
+    """``run`` 的结果必须与 ``einsums`` 一致；``task_id`` 只作用于标签与报错。"""
+    tasks = _matmul_tasks(3, base=40)
+    keys = list(tasks)
+    equations = [tasks[key][0] for key in keys]
+    operands = [list(tasks[key][1]) for key in keys]
+    results = [np.zeros((spec[1][0].shape[0], spec[1][1].shape[1]),
+                        dtype=spec[1][0].dtype) for spec in tasks.values()]
+    state = parallel_einsum.init({"task_id": keys, "equation": equations,
+                                  "operands": operands, "results": results},
+                                 max_proc=2, reminder=False)
+    parallel_einsum.run(state)
+    payload = parallel_einsum.einsums(tasks, max_procs=2, reminder=False,
+                                     verbose=False)
+    for index, key in enumerate(keys):
+        assert np.array_equal(results[index], payload[key]), key
+
+
 def test_plan_rejects_invalid_input():
     """空集合、非法键、非字符串方程都必须在执行前失败。"""
     for bad in ([], {}):
@@ -403,8 +544,9 @@ def test_collective_memory_warning_is_emitted():
             'rng = np.random.default_rng(3)\n'
             'tasks = {"a": ("ij,jk->ik", [rng.standard_normal((16, 16)),\n'
             '                             rng.standard_normal((16, 16))])}\n'
-            '# reminder=False 也不能压掉内存警告\n'
-            'einsums(tasks, max_procs=2, reminder=False, verbose=False)\n',
+            '# collective 默认关闭；这里显式打开，验证内存警告与 reminder 无关\n'
+            'einsums(tasks, max_procs=2, reminder=False, verbose=False,\n'
+            '        collective=True)\n',
             encoding='utf-8')
         env = os.environ.copy()
         env['PYTHONPATH'] = os.pathsep.join(
@@ -440,7 +582,7 @@ def test_collective_path_matches_contract_and_returns_none_on_workers():
             '    tasks[f"k{i}"] = ("ij,jk->ik", [rng.standard_normal((n, n)),\n'
             '                                     rng.standard_normal((n, n))])\n'
             'payload = einsums(tasks, max_procs=3, reminder=False,\n'
-            '                  verbose=(rank == 0))\n'
+            '                  verbose=(rank == 0), collective=True)\n'
             'if rank == 0:\n'
             '    exact = all(np.array_equal(payload[k],\n'
             '                               pe.contract(v[0], *v[1]))\n'
@@ -511,6 +653,10 @@ _TESTS = (
     test_plan_respects_task_and_process_caps,
     test_worker_thread_budget_is_not_inherited_from_parent,
     test_timings_separate_pool_init_from_compute,
+    test_collective_is_disabled_by_default,
+    test_init_and_run_write_results_in_place,
+    test_init_rejects_bad_configs,
+    test_run_matches_einsums_and_respects_task_ids,
     test_plan_rejects_invalid_input,
     test_reminder_is_printed_only_once,
     test_serial_path_matches_contract_bit_exact,

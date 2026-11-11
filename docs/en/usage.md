@@ -276,26 +276,64 @@ result = einsums(tasks, max_procs=4)          # self-launched MPI pool
   within `4/3 - 1/(3K)` of the optimal makespan, so bins can hold different
   numbers of tasks without creating a straggler.
 * **Process count** defaults to `min(number of tasks, CPU threads, RAM budget)`;
-  pass `max_procs=` to cap it. If you already launched with `mpirun -np N`, every
-  rank calls `einsums` and the work is divided over those `N` ranks (no data
-  staging; the payload returns on rank 0 unless `broadcast=True`). Without MPI it
-  starts its own `mpirun -np K` pool and exchanges tasks/results through a
-  temporary directory.
-* **Memory: collective mode multiplies the input by the rank count.** Because the
-  planner runs inside `einsums`, every rank must build the *whole* batch, so the
-  input footprint becomes `one copy × ranks`; rank 0 additionally holds **all**
+  pass `max_procs=` to cap it. Without MPI it starts its own `mpirun -np K` pool
+  and exchanges tasks/results through a temporary directory.
+* **Collective mode is off by default.** Inside an existing `mpirun -np N`, the
+  default is `collective=False`: only rank 0 runs the batch and every other rank
+  returns `None` immediately, so nothing is replicated. Pass `collective=True` to
+  spread the work over all `N` ranks — with no data staging, but every rank then
+  holds a full copy of the batch (see the memory note below).
+* **Memory: collective copies the input onto every rank.** The planner runs inside
+  `einsums`, so with `collective=True` each rank must build the *whole* batch:
+  input memory becomes `one copy × ranks`. Rank 0 additionally holds **all**
   results, and `broadcast=True` gives every rank its own full copy of them.
   Measured with `resource.ru_maxrss` (float32, 64 tasks of 512², batch input
-  134 MB): serial peaks at 234 MB, collective on 4 ranks totals ≈ 1.15 GB — roughly
-  `4 × input + output`. On GPU this means *one full batch per visible card*: keep the
-  rank count aligned with the visible device count, otherwise VRAM multiplies.
-  When the batch does not fit, use the self-launched pool instead — it ships tasks
-  through disk so each worker only reads its own bin, at the price of ~0.15–0.3 s
-  fixed overhead per call. `einsums` prints this warning on every collective call,
-  independently of `reminder=`.
+  134 MB): serial peaks at 234 MB, collective on 4 ranks totals ≈ 1.15 GB.
+  On GPU this means *one full batch per visible card*, so keep the rank count
+  aligned with the device count. This is exactly why the mode is opt-in, and why
+  `einsums` prints a warning whenever it is used. When the batch does not fit, use
+  the self-launched pool: it ships tasks through disk so each worker only reads its
+  own bin, at ~0.15–0.3 s fixed overhead per call.
 * **Precision follows the operands**: `complex64`/`float32` inputs halve both
-  memory and arithmetic cost — the natural first lever on a memory-constrained
-  machine. `einsums` never casts anything itself.
+  memory and arithmetic cost. `einsums` never casts anything itself.
+
+#### Split it: `init` + `run`
+
+When you want planning and execution timed separately — or results written straight
+into buffers you already own — use the two-step form. `init` validates and plans,
+`run` executes; `run` returns nothing and writes **in place**.
+
+```python
+import numpy as np
+from pyqcd.parallel import init, run
+
+rng = np.random.default_rng(0)
+a = [rng.standard_normal((32, 32)) for _ in range(3)]
+b = [rng.standard_normal((32, 32)) for _ in range(3)]
+out = [np.zeros((32, 32)) for _ in range(3)]      # caller-owned output buffers
+
+# A column-wise dict; task_id is optional, the other three are required.
+config = {
+    "task_id": ["t0", "t1", "t2"],
+    "equation": ["ij,jk->ik"] * 3,
+    "operands": [[a[i], b[i]] for i in range(3)],   # read-only, never copied
+    "results": out,                                  # writable, written in place
+}
+
+state = init(config, max_proc=1, verbose=False, reminder=False)
+run(state)                     # launcher: returns None, fills `out`
+
+# operands untouched, results identical to contract, buffers not replaced
+assert all(np.array_equal(a[i], config["operands"][i][0]) for i in range(3))
+assert all(np.array_equal(out[i], a[i] @ b[i]) for i in range(3))
+assert all(out[i] is config["results"][i] for i in range(3))
+assert state["keys"] == ["t0", "t1", "t2"] and state["plan"]["workers"] == 1
+```
+
+`init(config, ...)` accepts only this dict (plus the same keywords as `einsums`),
+and fails early on a length mismatch, a result buffer whose shape does not match the
+contraction, or a read-only buffer. `verbose=True` prints one line per step tagged
+with `task_id`, which is the debug switch for tracking a batch down.
 
 Measured on this 4-physical-core / 8-thread, 16 GB machine — real sush
 distillation equation S1 (NN 2pt, 8 operands), `complex64` operands,
