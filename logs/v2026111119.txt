@@ -1,0 +1,146 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-11 19:01:11 +0800
+批次: pypi-release/0.3.4-mpi-link
+主任务: 修复 MPI 未解析符号与构建诊断：MPI 端到端链接判定、依赖缺失四段式报错、加载韧性、GPU 批量脚本；发布 0.3.4
+触发原因: 任务完成
+摘要: 六子代理并行：非版本回归，坏库源于开 MPI 却用 g++ 链接；端到端判定+硬校验；126 passed；PyPI 0.3.4 远程复验 dlopen=OK；tag dev50
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 两个新故障与派发
+- 故障 A（MPI）：用户集群上 `.so` 存在但 dlopen 报
+  `undefined symbol: ompi_mpi_byte`，pyqcd.einsum 退化为 per-call/纯 Python
+- 故障 B（GPU 批量脚本）：`DEVICE=gpu` 时 `run(state)` 抛 TypeError（numpy 缓冲区接收
+  cupy 结果，CuPy 禁止隐式转换）
+- 用户追加要求：编译期报错要指明修复路径（缺 openblas/mpi/gcc/cuda 等）
+- 并行派发 6 个子代理：D/E/F 写代码，G/H/I 只读取证（文件范围互不重叠）
+
+### S2 — 取证结论
+- **G（MPI 矩阵）**：`make.sh` 只用“是否导出 applyContractMpiQcd”判定成功，从不检查
+  `DT_NEEDED`；链接器恒为 `CXX`（env 常被固定为 g++），MPI 开关只决定默认值与
+  `-DPYQCD_EINSUM_ENABLE_MPI=1` → “编进 MPI 宏、链接无 libmpi”的坏库，安装成功但 dlopen 失败
+- **H（GPU 审计）**：逐行列出主机/设备混用点，确认 F 的改法正确
+- **I（报错规范）**：给出依赖分类、判定条件、文案与退出码（3=缺依赖、2=配置错误），
+  并指出 `nm` 缺失会被误报成“符号未导出”、`-march=native` 的可移植性风险、BLAS 是运行期 dlopen
+
+### S3 — 修复（D/E/F）
+- **D（MPI 构建）**：`make.sh` 改为端到端判定——探针以 `-Wl,--no-undefined` 链接真实 MPI 调用，
+  通过条件是符号可解析 + `DT_NEEDED` 含 `libmpi*/libmpich*` + `ldd` 无 `not found`；
+  链接参数阶梯：`PYQCD_EINSUM_MPI_LINK_FLAGS` → CXX 本身是 wrapper → `mpicxx --showme:link/-show/-link_info`
+  → `-lmpi/-lmpich`（补 rpath）；`auto` 不可用时降级为串行并打印原因，显式 `ENABLE_MPI=1`
+  直接 `exit 2`；构建后再硬校验，失败 `exit 3`。`setup.py` 新增 `VALIDATION_EXIT_CODE=3`，
+  复用旧库旁路不再吞掉校验失败
+- **E（加载韧性）**：dlopen 遇 `undefined symbol` 时按 mpi4py → `find_library("mpi")` →
+  mpicxx 链接行 → `LD_LIBRARY_PATH` 顺序预加载 MPI 并重试一次（幂等、异常吞掉、fail-open）；
+  `library_report()` 新增 `load_retry`/`mpi_preload`，警告文案带出预加载尝试
+- **F（GPU 批量脚本）**：结果缓冲区改由 `to_device(...)` 产生、对照前 `to_host`；
+  `pyqcd/parallel/einsum.py` 的可写检查改为两层 `getattr`，兼容无 `writeable` 的 flags
+- **本轮补充（主 agent）**：`make.sh` 新增 `_pyqcd_fail`（missing/needed/fix/bypass/doc，
+  exit 3）与 `_pyqcd_explain_build_log`（mpi.h/omp.h/OpenBLAS/MPI 未解析四类 note）；
+  BLAS 构建期缺失降为 warning；`-march=native` 增加可移植性提示；`setup.py` 的
+  CUDA 主机编译器探测与 KUPL 对齐并补齐 apt/dnf/conda 修法、Cython 提示
+
+### S4 — 发布
+- 版本 0.3.4（三处一致）；安装页补 `PYQCD_EINSUM_MPI_LINK_FLAGS`
+- 提交 `1f12774`，双推；标签 `dev50`（前驱 `dev49`），三端对象
+  `26193d827dcb73e346f963d4c647f4b4ab6d0b49` 一致
+- PyPI https://pypi.org/project/pyqcd/0.3.4/
+
+## 验证与证据
+- 全量：`python -B -m pyqcd.testing` → **126 passed / 1 skipped / 0 failed**
+  （新增 `_native_loader_contract` 4 项、并行契约 16→17）
+- 构建诊断（临时副本，真实退出码）：缺编译器 → `exit 3` 且含
+  `missing/needed/fix/bypass/doc`；显式 MPI 不可用 → `exit 2` 且给三条修法；
+  坏编译参数 → `exit 1` + 编译器原文；MPI 正例 → `NEEDED libmpi.so.40` + `dlopen=OK`
+- 安装矩阵：正常 → `.so` 357752 B、`backend=cuda`、`native_available=True`；
+  `CXX=/nonexistent/c++` → `exit 1`，信息含 `fix: apt install build-essential | …`
+- 远程复验（PyPI 0.3.4，源码树外）：`backend=cuda`、`native_available=True`、
+  `ctypes.CDLL(lib)` 成功、`contract` 正确
+- 终检：`release_check --offline` 10/10；`--with-tests` **18/18**（首轮仅 PyPI JSON
+  边缘缓存报 0.3.3，cache-buster 轮询后复跑通过）
+- RTD：双站标题 0.3.4，安装页含 `PYQCD_EINSUM_MPI_LINK_FLAGS`
+- 未验证项：MPICH/Intel MPI 分支（代码已写，未实机）；真实用户 OpenMPI 环境；
+  GPU 批量脚本的 cupy 路径（本机无 cupy，用伪设备 shim 与静态审计替代）
+
+## 变更与产物
+- 代码：`cpp/kupl/einsum/make.sh`、`setup.py`、`pyqcd/einsum/kupl/einsum.py`、
+  `pyqcd/einsum/_api.py`、`pyqcd/parallel/einsum.py`、`pyqcd/testing/{__init__,conftest}.py`、
+  `pyqcd/testing/_native_loader_contract.py`（新）、`pyqcd/testing/_parallel_einsum_contract.py`
+- 文档：`docs/{en,zh}/{performance,install,overview,conf.py}`
+- 产物：PyPI `pyqcd 0.3.4`、tag `dev50`、RTD 双站 0.3.4
+- 未改动范围：`pyqcd.einsum` 生产算法、`cpp/cuda/**`
+
+## 风险、限制与下一步
+- 风险：MPI 启用后产物的 rpath 记录构建机库目录，换机需 `LD_LIBRARY_PATH` 或系统路径；
+  若在该机器上打 wheel，wheel 会带 `libmpi` 依赖（PyPI 只发 sdist，暂无影响）
+- 风险：`-march=native` 仍默认开启，异构集群建议 `PYQCD_EINSUM_NATIVE_ARCH=0`
+- 阻塞：无
+- 下一步：用户可在其 OpenMPI 环境重装 0.3.4 并确认 `python -m pyqcd` 的 native 行；
+  需要时把 `PYQCD_EINSUM_MPI_LINK_FLAGS` 用法补进 README
+
+## 用户输入指令
+派发更多子代理,继续上述"（D: MPI 构建、E: 加载韧性、F: GPU 批量脚本）"
+编译时的报错应更加清晰,为用户指明修复路径[例如缺失openblas或mpi或gcc或cuda等等]
+最小改动'批量基准脚本':{GPU 上 run(state) 抛 TypeError 的现场输出}
+继续巡检
+
+## Agent 全文报告
+--- report begin ---
+两条新故障都已修复并发布 0.3.4；编译期报错现在直接给修复路径。
+
+## 一、MPI：`undefined symbol: ompi_mpi_byte`
+
+**根因**（子代理 G 取证 + D 实测）：`make.sh` 只用“是否导出 `applyContractMpiQcd`”判定
+MPI 成功，从不检查 `DT_NEEDED`；链接器恒为 `CXX`，而集群环境里 `CXX` 常被固定成 conda g++。
+结果编进了 MPI 宏、链接却没带 `libmpi` —— 安装成功，`dlopen` 才失败。
+
+**修复**：判定改为端到端（探针 `--no-undefined` 链接真实 MPI 调用 + `DT_NEEDED` 含
+`libmpi*` + `ldd` 可解析）；链接参数按 `PYQCD_EINSUM_MPI_LINK_FLAGS` → CXX wrapper →
+`mpicxx --showme:link` → `-lmpi` 阶梯解析并补 rpath；`auto` 无法用 MPI 时降级并说明，
+显式 `ENABLE_MPI=1` 直接 `exit 2`；构建后硬校验失败 `exit 3`。
+
+此外运行期加了韧性：`dlopen` 遇到 `undefined symbol` 时先预加载 MPI 运行时再重试一次
+（幂等、失败仍 fail-open），报告里会写 `load_retry=preloaded libmpi.so.40`。
+
+## 二、编译期报错可操作化（你的新要求）
+
+统一为四段式，覆盖 gcc/g++、bash、binutils(nm)、OpenBLAS、MPI、nvcc、Cython：
+
+```
+error: C++ compiler (g++) is required to build the KUPL native backend.
+  missing: C++ compiler (g++)
+  needed:  the KUPL backend is C++17 source and cannot be built without it
+  fix:     apt install build-essential | dnf install gcc-c++ | conda install -c conda-forge gxx_linux-64
+  bypass:  PYQCD_SKIP_NATIVE_BUILD=1 pip install pyqcd (pure-Python planner)
+  doc:     https://py-qcd.readthedocs.io/en/latest/install.html
+```
+
+编译失败还会按日志补一条 `note:`（`mpi.h` / `omp.h` / `-lopenblas` / MPI 符号未解析）。
+OpenBLAS 构建期缺失降为 warning（它其实是运行期 `dlopen`），`-march=native` 增加可移植性提示。
+
+## 三、GPU 批量脚本
+
+结果缓冲区改由 `to_device(...)` 产生、对照前 `to_host`（CuPy 禁止隐式转换正是你那次
+`TypeError` 的来源）；`init` 的可写检查兼容“没有 `writeable` 的 flags”。
+
+## 四、验证
+
+| 检查 | 结果 |
+|---|---|
+| 全量测试 | **126 passed / 1 skipped / 0 failed** |
+| 构建诊断 | 缺编译器 exit **3**、显式 MPI 不可用 exit **2**、坏参数 exit **1**，均带 `fix:` |
+| MPI 正例 | `NEEDED libmpi.so.40`、`dlopen=OK` |
+| 安装矩阵 | 正常：`.so` 357752 B、`backend=cuda`、`native_available=True`；缺编译器：exit 1 且带修法 |
+| PyPI 0.3.4 远程复验 | `native_available=True`、`ctypes.CDLL(lib)` 成功、`contract` 正确 |
+| 终检 | offline 10/10；with-tests **18/18** |
+
+## 五、发布与残留
+
+PyPI https://pypi.org/project/pyqcd/0.3.4/ ；提交 `1f12774` 双推；标签 `dev50` 三端一致；
+RTD 双站 0.3.4，安装页已含 `PYQCD_EINSUM_MPI_LINK_FLAGS`。
+
+未验证：MPICH/Intel MPI 分支（代码已写未实机）、你那台真实 OpenMPI 环境、cupy 真卡路径；
+`-march=native` 仍默认开启，异构集群建议 `PYQCD_EINSUM_NATIVE_ARCH=0`。
+--- report end ---

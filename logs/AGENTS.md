@@ -756,3 +756,11 @@
 - 关键内容: 三子代理并行取证：非版本回归，CXX=/bin/false 可复现；KUPL 缺库改为默认硬失败；125 passed；PyPI 0.3.3 远程复验 native_available=True；tag dev48
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pypi-release/0.3.4-mpi-link - final - 2026-11-11 19:01:11 +0800
+- 主任务: 修复 MPI 未解析符号与构建诊断：MPI 端到端链接判定、依赖缺失四段式报错、加载韧性、GPU 批量脚本；发布 0.3.4
+- 日志文件: logs/v2026111119.txt
+- 文件大小: 9205 bytes
+- 触发原因: 任务完成
+- 关键内容: 六子代理并行：非版本回归，坏库源于开 MPI 却用 g++ 链接；端到端判定+硬校验；126 passed；PyPI 0.3.4 远程复验 dlopen=OK；tag dev50
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
