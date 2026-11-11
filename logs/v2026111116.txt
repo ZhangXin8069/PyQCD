@@ -1,0 +1,97 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-11 16:13:05 +0800
+批次: pypi-release/0.3.1
+主任务: 发布 pyqcd 0.3.1：放弃 Python 3.8（>=3.9）、PEP 639 许可证元数据，上传 PyPI 并完成双推/标签/文档站联动
+触发原因: 任务完成
+摘要: Requires-Python>=3.9 + License-Expression MIT；远程安装复验通过；tag dev46 三端一致；release_check 18/18
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 上传前一致性复核
+- 命令: `git status --short`（干净）、`rm -rf build dist pyqcd.egg-info && python -m build --sdist`、
+  `twine check`、读 PKG-INFO
+- 关键输出: 构建 exit 0；`deprecat`/`path must be relative` 告警 0；
+  `Version: 0.3.1`、`License-Expression: MIT`、`Requires-Python: >=3.9`；`twine check` PASSED
+- 判据: 用已提交状态（6705627）重建，sdist 与提交一致后才上传
+
+### S2 — 上传与远程安装复验
+- 上传: `twine upload dist/pyqcd-0.3.1.tar.gz` → https://pypi.org/project/pyqcd/0.3.1/
+- 索引: 首次 pip 解析未命中（边缘滞后），第 2 次尝试（约 30 s）成功
+- 干净 venv `/tmp/rv031`（源码树外）自检:
+  `version=0.3.1 requires-python=>=3.9 license=MIT backend=cuda opt_cost=48.0`，
+  `__file__` 含 site-packages，11 子包齐全，classifier 无 3.8，
+  `einsums`/`plan_einsums` 不存在、`init`+`run` 结果与 `contract` 逐位一致
+- `python -m pyqcd` → `pyqcd 0.3.1`
+
+### S3 — 提交、双推与标签
+- 提交 `6705627`（build: 放弃 Python 3.8，迁移 PEP 639 许可证元数据（0.3.1），11 文件）
+- 双推: gitlab `18dedf7..6705627`、gitee 同步
+- 标签 `dev46`：前驱由 `git describe --tags --abbrev=0 HEAD^` 取得 = `dev45`；
+  三端 tag 对象 `725d35ed30da82d8f2f3ad951d779a70d58dd78e` 一致，三端 main 均 `6705627`
+
+### S4 — 文档站重建探针
+- 首轮 en 站无响应（单次 curl 失败），重试 3 次后稳定
+- 双站 install 页标题均为 `0.3.1`，正文含 `Python ≥ 3.9`
+
+## 验证与证据
+- 上传前的本地验证: 全量 124 passed/1 skipped/0 failed；`release_check --offline` 10/10；
+  zh `docs_examples` 21 ok/4 skipped/0 failed（本会话前序）
+- 上传后远程验证: 元数据四项（Version/Requires-Python/License-Expression/classifier）与 API 面
+  （`init`/`run`/`plan_tasks` 存在、`einsums` 不存在）、数值（`opt_cost=48.0`、结果逐位一致）
+- 收官 `release_check --with-tests` → **18/18**：版本一致、sdist/twine/内容洁净、示例可执行、
+  中英代码块一致、`sphinx -W` 双站、PyPI latest=0.3.1 且仅 sdist、项目页探针、
+  RTD 双站含 0.3.1、双远端与本地 HEAD 同步、测试 124 passed
+- 未验证项: 未在 Python 3.9/3.10/3.11/3.13 实跑（本机仅 3.12/3.14）；`pyqcd[torch]` 仅依赖解析
+
+## 变更与产物
+- 产物: PyPI `pyqcd 0.3.1`（sdist）、git tag `dev46`、RTD 双站 0.3.1
+- 变更（本次发布已含于提交 6705627）: `pyproject.toml`（>=3.9、PEP 639、setuptools>=77）、
+  `pyqcd/__init__.py`、`pyqcd/einsum/_version.py`、双语 `conf.py`/`install.md`/`overview.md`
+- 未改动范围: 运行时代码、`setup.py` 构建逻辑、`cpp/**`
+
+## 风险、限制与下一步
+- 风险: 3.8 用户被 `Requires-Python` 留在 0.3.0，升级需先换解释器
+- 风险: 离线构建环境若预置旧 setuptools（<77），需先升级才能构建本版本
+- 阻塞: 无
+- 下一步: 观察 RTD 其余页面是否全部刷新到 0.3.1；如需要可在 3.9 解释器上补一次实跑
+
+## 用户输入指令
+决定放弃3.8
+发布 0.3.1
+
+## Agent 全文报告
+--- report begin ---
+0.3.1 已发布并完成文档联动。
+
+## 一、发布内容
+
+| 项 | 值 |
+|---|---|
+| PyPI | https://pypi.org/project/pyqcd/0.3.1/ （仅 sdist） |
+| 元数据 | `Requires-Python: >=3.9`、`License-Expression: MIT`、`License-File: LICENSE`，classifier 从 3.9 起 |
+| Git | 提交 `6705627`，gitlab/gitee 双推（`18dedf7..6705627`） |
+| 标签 | `dev46`，前驱 `dev45`（由 `git describe --tags --abbrev=0` 取），三端对象 `725d35ed…` 一致 |
+| 文档站 | RTD `en/latest` 与 `zh-cn/latest` 均已是 0.3.1，安装页显示 `Python ≥ 3.9` |
+
+## 二、远程安装复验（源码树外干净 venv）
+
+```
+version=0.3.1  requires-python=>=3.9  license=MIT  backend=cuda  opt_cost=48.0
+file=/tmp/rv031/lib/python3.12/site-packages/pyqcd/__init__.py
+einsums/plan_einsums 不存在；init+run 与 contract 逐位一致；11 子包齐全
+```
+
+## 三、收官终检
+
+`python -m pyqcd.testing.release_check --with-tests` → **18/18 通过**：版本一致、
+sdist/twine/内容洁净/无绝对路径、示例可执行、中英代码块一致、`sphinx -W` 双站、
+PyPI latest=0.3.1 且仅 sdist、项目页探针、RTD 双站含 0.3.1、双远端与本地 HEAD 同步、
+测试 124 passed / 1 skipped / 0 failed。
+
+## 四、未验证项
+
+本机只有 3.12 与 3.14：3.9–3.11、3.13 属"预期可用、无机测"，安装页已如实写明；
+`pyqcd[torch]` 仍只做过依赖解析，未做端到端安装。
+--- report end ---

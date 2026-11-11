@@ -716,3 +716,11 @@
 - 关键内容: setuptools>=77 + license=MIT/license-files，构建告警清零；全量 124 passed、release_check 10/10、干净 venv 装本地 0.3.1 通过（未上传）
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pypi-release/0.3.1 - final - 2026-11-11 16:13:05 +0800
+- 主任务: 发布 pyqcd 0.3.1：放弃 Python 3.8（>=3.9）、PEP 639 许可证元数据，上传 PyPI 并完成双推/标签/文档站联动
+- 日志文件: logs/v2026111116.txt
+- 文件大小: 5089 bytes
+- 触发原因: 任务完成
+- 关键内容: Requires-Python>=3.9 + License-Expression MIT；远程安装复验通过；tag dev46 三端一致；release_check 18/18
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
