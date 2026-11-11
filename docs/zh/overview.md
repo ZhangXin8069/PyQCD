@@ -38,7 +38,7 @@ assert info["backend"] in {"cuda", "kupl", "python"}, info["backend"]
 | `pyqcd.tools` | 后端切换（`set_backend`、`get_backend`、`get_backend_name`、`get_precision`）、`cached_contract`、`ArraySlicer`、`creat_mom_list`、`dump_env` |
 | `pyqcd.analysis` | `Bootstrap`、`FitParams`、`AnaParams`，以及 ratio / 有效质量 / 能量 / FH 拟合与作图 |
 | `pyqcd.pipeline` | 集中配置与多步管线；`run_pipeline` 依次执行编号步骤 |
-| `pyqcd.parallel` | `detect_resources`、`plan_parallel`、`run_meta_task`、`run_parallel_pipeline`、`format_plan` |
+| `pyqcd.parallel` | `detect_resources`、`plan_parallel`、`run_meta_task`、`run_parallel_pipeline`、`format_plan`；批量收缩：`einsums`、`plan_einsums`、`init` + `run` |
 | `pyqcd.einsum` | 收缩引擎：与 `opt_einsum` 兼容的 API，外加可选的原生后端 |
 
 ## 收缩引擎

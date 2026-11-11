@@ -217,7 +217,7 @@ allows, so with few tasks `N*a < n*b` — the reduction is reported in `notes`
 (e.g. `Y capped from 13 to 3`) and `gpu_ok` still tells you whether one worker
 fits in the per-GPU budget.
 
-### Batch of independent contractions (`einsums`)
+## Batch of independent contractions (`einsums`)
 
 `pyqcd.parallel.einsum.einsums` runs a **batch of mutually independent**
 contractions in parallel, one MPI process per work bin. Each task is an ordinary
@@ -297,7 +297,7 @@ result = einsums(tasks, max_procs=4)          # self-launched MPI pool
 * **Precision follows the operands**: `complex64`/`float32` inputs halve both
   memory and arithmetic cost. `einsums` never casts anything itself.
 
-#### Split it: `init` + `run`
+### Split it: `init` + `run`
 
 When you want planning and execution timed separately — or results written straight
 into buffers you already own — use the two-step form. `init` validates and plans,

@@ -207,7 +207,7 @@ assert plan["N"] >= 1 and plan["m"] == 12
 因此任务数少时会出现 `N*a < n*b`——压缩过程写在 `notes` 里（如 `Y capped from 13 to 3`），
 而 `gpu_ok` 仍告诉你单个 worker 是否放得进单卡预算。
 
-### 批量独立收缩（`einsums`）
+## 批量独立收缩（`einsums`）
 
 `pyqcd.parallel.einsum.einsums` 把**相互独立**的一批收缩按工作量分箱后交给多个 MPI
 进程并行执行，每个子任务仍是一次普通的 `contract(...)`，参数与语义都不变。
@@ -275,7 +275,7 @@ result = einsums(tasks, max_procs=4)          # 自建 MPI 进程池
 * **精度跟随操作数**：`complex64`/`float32` 直接把内存与算术量减半；
   `einsums` 自己不做任何类型转换。
 
-#### 拆开用：`init` + `run`
+### 拆开用：`init` + `run`
 
 想把「规划」与「执行」分别计时，或让结果直接写进自己已经分配好的缓冲区，就用两步式：
 `init` 校验并规划，`run` 执行；`run` 不返回任何东西，**原地写入**。
