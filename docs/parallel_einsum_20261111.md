@@ -15,7 +15,7 @@ MPI 进程执行（任务级并行）。本文件记录 2026-11-11 在本机（4
 
 | 模式 | 触发条件 | 数据交换 | 结果返回 |
 |---|---|---|---|
-| collective | 已在 `mpirun -np N` 内，各 rank 调 `init` + `run`（`collective=True`） | 无（任务已在各 rank 内存里） | 默认 rank 0；`broadcast=True` 全体 |
+| ~~collective~~（已弃用） | 已在 `mpirun -np N` 内，各 rank 调 `init` + `run`（`collective=True`） | 无（任务已在各 rank 内存里） | 默认 rank 0；`broadcast=True` 全体 |
 | self-launched | 单进程直接调 `init` + `run` | 操作数落盘到临时目录，worker 读回 | 原地写入调用方缓冲区 |
 | serial | `max_proc=1` 或子任务数为 1 | 无 | 调用方 |
 
@@ -28,7 +28,11 @@ MPI 进程执行（任务级并行）。本文件记录 2026-11-11 在本机（4
 * 进程数：`min(子任务数, 上限)`；上限默认 `min(CPU 线程数, 可用内存/最重任务×2)`，
   可用 `max_proc=` 收紧。任务数少于上限时一对一，多于上限时均摊。
 
-## 4. 实测（单线程公平基准，两种口径）
+## 4. 实测（0.3.0 之前的历史数据，wall/compute 两种口径）
+
+> 本节表格是 `init`/`run` 分离计时**之前**的记录（当时的并行列把规划与执行算在一个桶里）。
+> 现在 `init`（规划）与 `run`（执行）分开计时，当前口径与数字见
+> `docs/{en,zh}/performance.md` 的批量收缩小节；下面的历史数字保留用于对照。
 
 条件：真实 sush 蒸馏方程 S1 = NN 2pt（`eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN`，
 8 算子，形状照 `pyqcd/testing/einsum/bench_distillation.build_operands`），`complex64`，
@@ -68,8 +72,9 @@ MPI 进程执行（任务级并行）。本文件记录 2026-11-11 在本机（4
 
 ## 5. 可信性分析（结论与代价）
 
-1. **collective 是高效模式**：无数据搬运，两种口径几乎重合（4 rank 上 3.4–4.0×，
-   线性上限 4×，缺口来自计划广播与 BLAS 线程降档）。
+1. **collective（已弃用）曾是吞吐最高的模式**：无数据搬运，两种口径几乎重合
+   （4 rank 上 3.4–4.0×，线性上限 4×，缺口来自计划广播与 BLAS 线程降档）。
+   该模式自 0.3.x 起弃用且不再测试，本节数字为弃用前的历史实测。
 2. **自建进程池每次调用固定花约 0.15–0.3 s**（`wall − compute`）：MPICH `mpirun` 启动
    ~150 ms + 任务操作数落盘/回读约 1.5 GB/s（成本随操作数总量线性增长）。
 3. **两种口径给出不同结论，必须分开看**：按端到端（`×wall`）计，只有秒级批次才赚
@@ -88,16 +93,11 @@ MPI 进程执行（任务级并行）。本文件记录 2026-11-11 在本机（4
 # 自建进程池（同时打印 init included 与 init excluded 两个倍率）
 python -m pyqcd.testing.parallel_einsum bench --equation S1 --tasks 8 --nvec 40 --procs 4
 
-# collective（必须在 mpirun 内）
-OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
-  mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective \
-  --equation S1 --tasks 8 --nvec 40 --rounds 3
-
-# 正确性契约（14 项）
+# 正确性契约（16 项）
 python -m pyqcd.testing._parallel_einsum_contract
 ```
 
-## 7. 内存代价（collective 的输入复制）
+## 7. 内存代价（collective 输入复制的历史实测）
 
 实测方法：在 rank 内部读 `resource.getrusage(...).ru_maxrss`，分别在「造完输入之后」
 与「调用返回之后」取峰值；任务为 float32 矩阵乘。
@@ -120,13 +120,13 @@ python -m pyqcd.testing._parallel_einsum_contract
    多卡时应让 rank 数与可见卡数对齐。批次放不下时改用自建进程池（任务经磁盘分发，
    worker 只读自己那一箱，代价 0.15–0.3 s 固定开销）。
 
-该警告已同时写入 `docs/{en,zh}/usage.md` 的批量收缩小节、双语文档性能页，并由
-`run` 在每次进入 collective 时打印（`COLLECTIVE_MEMORY_WARNING`，与 `reminder=`
-无关，每个进程一次）。
+这组数字记录的是弃用前的行为：`collective` 现已弃用、不再纳入测试，双语文档
+（`usage.md` / `performance.md`）也不再给出它的基准。保留本节是为了说明"为什么弃用"，
+而不是推荐该模式。
 
 ## 8. 已知限制
 
-* 结果默认只回传 rank 0（collective）；需要全体持有请传 `broadcast=True`。
+* 结果默认只回传 rank 0；`collective` 已弃用，`broadcast=True` 仅在该模式下有意义。
 * 自建进程池要求同机可执行 `mpirun`；找不到时降级为串行并给 `RuntimeWarning`。
 * 任务失败即整体失败，错误里点名任务键（list 用下标、dict 用键），不返回部分结果。
 * GPU 张量会先转 numpy 落盘（自建池路径），显存优势在该路径上不成立。

@@ -724,3 +724,11 @@
 - 关键内容: Requires-Python>=3.9 + License-Expression MIT；远程安装复验通过；tag dev46 三端一致；release_check 18/18
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pyqcd-parallel/timing-and-collective-deprecation - stage - 2026-11-11 16:35:56 +0800
+- 主任务: 修正批量收缩的计时口径：init（规划）与 run（执行）分开计时，文档/表格/harness 同步；collective 模式弃用并移除其测试（0.3.2）
+- 日志文件: logs/v202611111635.txt
+- 文件大小: 7039 bytes
+- 触发原因: 阶段成果
+- 关键内容: plan/exec/total 分列（S1 Nvec=100 ×exec 2.15×）；契约 19→16；release_check 11/11；修掉文档脚本 (4,2) 投影算符硬错误
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress

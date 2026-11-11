@@ -214,6 +214,8 @@ assert plan["N"] >= 1 and plan["m"] == 12
 `init` 规划，`run` 执行。
 
 ```python
+import time
+
 import numpy as np
 import pyqcd.einsum as pe
 from pyqcd.parallel import init, plan_tasks, run
@@ -233,13 +235,22 @@ config = {
 }
 
 plan = plan_tasks(config["equation"], config["operands"], max_procs=4)
+
+# 两段分开计时：init 只做规划，run 只做执行。合成一个计时桶会把规划算进计算，
+# 得到的“计算时间”是虚高的。
+start = time.perf_counter()
 state = init(config, max_proc=1, reminder=False)      # max_proc=1 让本块走串行
+plan_seconds = time.perf_counter() - start
+
+start = time.perf_counter()
 run(state)                                           # 启动器：返回 None
+exec_seconds = time.perf_counter() - start
 
 # 结果与输入一一对应：同键、同序；装箱覆盖全部任务且没有短板
 assert plan["workers"] == min(4, plan["limits"]["limit"])
 assert sorted(i for bin_ in plan["bins"] for i in bin_) == [0, 1, 2, 3]
 assert plan["skew"] >= 1.0 and len(plan["bins"]) == plan["workers"]
+assert plan_seconds > 0.0 and exec_seconds > 0.0
 
 # 每个缓冲区现在正好等于 contract 的结果，且是同一批对象
 for i in range(4):
@@ -268,18 +279,11 @@ run(state)
   不超过最优解的 `4/3 - 1/(3K)`，所以各箱任务数可以不同但不会出现短板。
 * **进程数**默认取 `min(子任务数, CPU 线程数, 可用内存允许值)`，可用 `max_proc=`
   收紧。不在 MPI 下时它自己拉起 `mpirun -np K` 进程池，经临时目录交换任务与结果。
-* **collective 模式默认关闭。** 已在 `mpirun -np N` 内时默认 `collective=False`：
-  只有 rank 0 执行整批任务，其余 rank 立即返回，不做任何复制。需要摊到全部 `N` 个
-  rank 时显式传 `collective=True`——不落盘交换，但每个 rank 都会持有一份整批输入
-  （见下条内存说明）。
-* **内存：collective 会把输入复制到每个 rank。** `collective=True` 时每个 rank 都必须
-  先构造**整批**任务，输入占用变成「单份 × rank 数」；rank 0 另外持有**全部结果**，
-  `broadcast=True` 时每个 rank 还会各持一份完整结果。用 `resource.ru_maxrss` 实测
-  （float32，64 个 512² 任务，整批输入 134 MB）：串行峰值 234 MB，collective 4 rank
-  聚合约 1.15 GB。在 GPU 上这意味着**每张可见卡各放一整批**，所以 rank 数应与可见
-  设备数对齐。这正是它默认关闭、且每次使用都会打印警告的原因；批次大到放不下时改用
-  自建进程池——任务经磁盘分发，worker 只读自己那一箱，代价是每次调用多 0.15–0.3 s
-  固定开销。
+* **`collective` 已弃用且不再测试。** 已在 `mpirun -np N` 内时，只有 rank 0 执行整批、
+  其余 rank 立即返回，不做任何复制——这是受支持的行为。`collective=True` 仍然可用，
+  但不再纳入测试：每个 rank 都要持有一份整批输入（「单份 × rank 数」，实测 134 MB 批次
+  在 4 rank 上聚合约 1.15 GB），rank 0 还持有全部结果。批次大到放不下时改用自建进程池：
+  任务经磁盘分发，worker 只读自己那一箱，代价是每次调用多 0.15–0.3 s 固定开销。
 * **精度跟随操作数**：`complex64`/`float32` 直接把内存与算术量减半；
   `init`/`run` 自己不做任何类型转换。
 
@@ -311,22 +315,20 @@ assert state["mode"] == "serial"
 `complex64`；`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1` 作为单线程公平基准；
 并行结果均与串行 `contract` 对照通过）实测：
 
-| 模式 | 工作负载 | 串行 | `init` + `run` | 加速比 | 峰值 RSS（本 rank / 全部 rank） |
-|---|---|---|---|---|---|
-| `mpirun -np 2`（collective） | S1，Nvec=40，8 任务 | 168 ms | 88 ms | **1.86×** | rank 0 415 MB / 合计约 702 MB |
-| `mpirun -np 4`（collective） | S1，Nvec=40，8 任务 | 183 ms | 59 ms | **3.09×** | rank 0 383 MB / 合计约 1.15 GB |
-| `mpirun -np 4`（collective，默认线程） | S1，Nvec=40，8 任务 | 138 ms | 53 ms | 2.28× | — |
-| 自建进程池（4 进程） | S1，Nvec=60，8 任务 | 736 ms | 622 ms | 1.18× | 磁盘上一份任务 |
-| 自建进程池（4 进程） | S1，Nvec=100，8 任务 | 5326 ms | 2160 ms | **2.47×** | 磁盘上一份任务 |
-| 自建进程池（4 进程） | S1，Nvec=40，8 任务 | 217 ms | 391 ms | 0.56× | 磁盘上一份任务 |
+| 模式 | 工作负载 | 串行 | plan（`init`） | exec（`run`） | total | `×exec` |
+|---|---|---|---|---|---|---|
+| 自建进程池（4 进程） | S1，Nvec=40，8 任务 | 168 ms | 1 ms | 276 ms | 276 ms | 0.61× |
+| 自建进程池（4 进程） | S1，Nvec=100，8 任务 | 5391 ms | 1 ms | 2508 ms | 2509 ms | **2.15×** |
 
-两条可复现结论（入口分别是 `python -m pyqcd.testing.parallel_einsum bench`
-与 `mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective`）：
+两条可复现结论（入口 `python -m pyqcd.testing.parallel_einsum bench`）：
 
-* **已在 `mpirun` 内部（collective）是高效模式**：4 rank 上 3.09×，且完全不落盘。
+* **规划与执行分开报，且单条方程时规划很便宜**（这里约 1 ms）。自己写代码时也按上面的
+  示例分两段计时——合成一个桶会把规划混进计算。
 * **自建进程池有固定成本**：MPICH `mpirun` 启动约 150 ms，每个操作数还要落盘再回读
-  （本机约 1.5 GB/s）。串行耗时约 1 秒以上才开始划算（0.74 s 时 1.18×，5.3 s 时 2.47×），
+  （本机约 1.5 GB/s）。只有串行耗时到 1 秒以上才划算（0.17 s 时 0.61×，5.4 s 时 2.15×），
   小批次反而更慢。**不要假设加速**——先在同机同 dtype 下用 `bench` 复核。
+
+`collective=True` 已弃用且不再测试，因此这里不再给出它的基准。
 
 ## 使用 PyTorch 张量
 

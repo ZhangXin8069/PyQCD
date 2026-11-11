@@ -376,26 +376,25 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 缓冲区；`plan_tasks` 只规划。不提供一体化包装（避免与第三方 Einsums 库混淆）。实测（本机 4 物理核/8 线程，真实 sush S1 方程，
 `complex64`，单线程基准，结果与串行逐位一致）：
 
-| 模式 | 工作负载 | 串行 | 并行 | 加速比 |
-|---|---|---|---|---|
-| collective（`mpirun -np 4` 内调用） | S1 Nvec=40 × 8 | 183 ms | 59 ms | **3.09×** |
-| 自建池（4 进程） | S1 Nvec=40 × 8 | 217 ms | 391 ms | 0.56× |
-| 自建池（4 进程） | S1 Nvec=60 × 8 | 736 ms | 622 ms | 1.18× |
-| 自建池（4 进程） | S1 Nvec=100 × 8 | 5326 ms | 2160 ms | **2.47×** |
+| 模式 | 工作负载 | 串行 | plan（`init`） | exec（`run`） | `×exec` |
+|---|---|---|---|---|---|
+| 自建池（4 进程） | S1 Nvec=40 × 8 | 168 ms | 1 ms | 276 ms | 0.61× |
+| 自建池（4 进程） | S1 Nvec=100 × 8 | 5391 ms | 1 ms | 2508 ms | **2.15×** |
 
-三条硬结论：
+四条硬结论：
 
-1. **collective 是高效模式**：任务已在各 rank 内存里，零序列化；自建池要落盘再回读
-   （本机 1.5 GB/s）+ `mpirun` 启动 ~150 ms，串行耗时 ≳1 s 才开始划算。
-2. **工时估计用 `contract_path(optimize='greedy').opt_cost`**，逐元素方程以元素数兜底，
+1. **`init` 与 `run` 必须分开计时**：`init` 里跑 `contract_path` 做规划，`run` 才是真实执行。
+   合成一个计时桶会把规划算进"计算时间"；harness 现在同时打印 `plan`/`exec`/`total`。
+2. **`collective` 已弃用且不再纳测**：它曾是最快模式（4 rank 3–4×，零序列化），但每个 rank
+   各持一份整批输入，内存随 rank 数线性增长；不要再引用它的基准，也不要为它写新测试。
+3. **工时估计用 `contract_path(optimize='greedy').opt_cost`**，逐元素方程以元素数兜底，
    再 LPT 装箱；不要用「任务数均分」——那会产生短板。
-3. **线程超订是这里最容易踩的坑**：父进程若把 `OMP_NUM_THREADS` 写进环境，worker 会当成
-   用户显式设置照搬，K 进程 × 全线程在 4 物理核上把 3.09× 打到 2.28×。自建池已按
+4. **线程超订是这里最容易踩的坑**：父进程若把 `OMP_NUM_THREADS` 写进环境，worker 会当成
+   用户显式设置照搬，K 进程 × 全线程在 4 物理核上把并行收益吃掉一大半。自建池已按
    `物理核数 // 进程数` 重算；手工 `mpirun` 时请自行导出单线程变量。
 
-复现：`python -m pyqcd.testing.parallel_einsum bench --equation S1 --nvec 40 --procs 4`、
-`mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective --equation S1`；
-契约 12 项 `python -m pyqcd.testing._parallel_einsum_contract`。
+复现：`python -m pyqcd.testing.parallel_einsum bench --equation S1 --nvec 40 --procs 4`；
+契约 16 项 `python -m pyqcd.testing._parallel_einsum_contract`。
 报告：`docs/parallel_einsum_20261111.md`。
 
 ### 已知限制（不要声称已支持）

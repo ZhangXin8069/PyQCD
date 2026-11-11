@@ -225,6 +225,8 @@ call, so its arguments and semantics are unchanged. The interface has exactly tw
 steps: `init` plans, `run` executes.
 
 ```python
+import time
+
 import numpy as np
 import pyqcd.einsum as pe
 from pyqcd.parallel import init, plan_tasks, run
@@ -244,14 +246,23 @@ config = {
 }
 
 plan = plan_tasks(config["equation"], config["operands"], max_procs=4)
+
+# Time the two phases separately: init only plans, run only executes. Adding both
+# into one bucket mixes planning with compute and inflates the reported cost.
+start = time.perf_counter()
 state = init(config, max_proc=1, reminder=False)      # max_proc=1 keeps this serial
+plan_seconds = time.perf_counter() - start
+
+start = time.perf_counter()
 run(state)                                           # launcher: returns None
+exec_seconds = time.perf_counter() - start
 
 # The result mirrors the input one-to-one: same keys, same order; the packing covers
 # every task and has no straggler.
 assert plan["workers"] == min(4, plan["limits"]["limit"])
 assert sorted(i for bin_ in plan["bins"] for i in bin_) == [0, 1, 2, 3]
 assert plan["skew"] >= 1.0 and len(plan["bins"]) == plan["workers"]
+assert plan_seconds > 0.0 and exec_seconds > 0.0
 
 # Every buffer now holds exactly what contract returns, and is the same object.
 for i in range(4):
@@ -286,22 +297,14 @@ run(state)
 * **Process count** defaults to `min(number of tasks, CPU threads, RAM budget)`;
   pass `max_proc=` to cap it. Without MPI it starts its own `mpirun -np K` pool and
   exchanges tasks/results through a temporary directory.
-* **Collective mode is off by default.** Inside an existing `mpirun -np N`, the
-  default is `collective=False`: only rank 0 runs the batch and every other rank
-  returns immediately, so nothing is replicated. Pass `collective=True` to spread
-  the work over all `N` ranks — with no data staging, but every rank then holds a
-  full copy of the batch (see the memory note below).
-* **Memory: collective copies the input onto every rank.** With
-  `collective=True` each rank must build the *whole* batch: input memory becomes
-  `one copy × ranks`. Rank 0 additionally holds **all** results, and
-  `broadcast=True` gives every rank its own full copy of them. Measured with
-  `resource.ru_maxrss` (float32, 64 tasks of 512², batch input 134 MB): serial
-  peaks at 234 MB, collective on 4 ranks totals ≈ 1.15 GB. On GPU this means *one
-  full batch per visible card*, so keep the rank count aligned with the device
-  count. This is exactly why the mode is opt-in, and why `run` prints a warning
-  whenever it is used. When the batch does not fit, use the self-launched pool: it
-  ships tasks through disk so each worker only reads its own bin, at ~0.15–0.3 s
-  fixed overhead per call.
+* **`collective` is deprecated and untested.** Inside an existing `mpirun -np N`,
+  only rank 0 runs the batch and every other rank returns immediately, so nothing
+  is replicated; that is the supported behaviour. `collective=True` still works but
+  is no longer covered by tests: every rank then holds a full copy of the batch
+  (`one copy × ranks`; measured ≈1.15 GB for a 134 MB batch on 4 ranks) and rank 0
+  keeps all results. Use a self-launched pool when the batch is too big: it ships
+  tasks through disk so each worker reads only its own bin, at ~0.15–0.3 s fixed
+  overhead per call.
 * **Precision follows the operands**: `complex64`/`float32` inputs halve both
   memory and arithmetic cost. `init`/`run` never cast anything themselves.
 
@@ -335,27 +338,24 @@ distillation equation S1 (NN 2pt, 8 operands), `complex64` operands,
 `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1` (single-thread baseline, the fair
 comparison point), results verified against serial `contract`:
 
-| mode | workload | serial | `init` + `run` | speed-up | peak RSS (this rank / all ranks) |
-|---|---|---|---|---|---|
-| `mpirun -np 2` (collective) | S1, Nvec=40, 8 tasks | 168 ms | 88 ms | **1.86×** | rank 0 415 MB / ≈702 MB |
-| `mpirun -np 4` (collective) | S1, Nvec=40, 8 tasks | 183 ms | 59 ms | **3.09×** | rank 0 383 MB / ≈1.15 GB |
-| `mpirun -np 4` (collective), default threads | S1, Nvec=40, 8 tasks | 138 ms | 53 ms | 2.28× | — |
-| self-launched pool (4 processes) | S1, Nvec=60, 8 tasks | 736 ms | 622 ms | 1.18× | one batch on disk |
-| self-launched pool (4 processes) | S1, Nvec=100, 8 tasks | 5326 ms | 2160 ms | **2.47×** | one batch on disk |
-| self-launched pool (4 processes) | S1, Nvec=40, 8 tasks | 217 ms | 391 ms | 0.56× | one batch on disk |
+| mode | workload | serial | plan (`init`) | exec (`run`) | total | `×exec` |
+|---|---|---|---|---|---|---|
+| self-launched pool (4 processes) | S1, Nvec=40, 8 tasks | 168 ms | 1 ms | 276 ms | 276 ms | 0.61× |
+| self-launched pool (4 processes) | S1, Nvec=100, 8 tasks | 5391 ms | 1 ms | 2508 ms | 2509 ms | **2.15×** |
 
-Two conclusions from the measurements, both reproducible with
-`python -m pyqcd.testing.parallel_einsum bench` (self-launched pool) and
-`mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective`
-(collective):
+Two conclusions, both reproducible with
+`python -m pyqcd.testing.parallel_einsum bench`:
 
-* **Collective (already inside `mpirun`) is the efficient mode**: a 3.1× speed-up
-  on 4 ranks with no data staging.
+* **Plan and exec are reported apart, and planning is cheap for one equation**
+  (~1 ms here). Time `init` and `run` separately in your own code as the example
+  above does — a single bucket would mix planning into the compute figure.
 * **The self-launched pool pays a fixed cost**: MPICH `mpirun` start-up is ~150 ms
   and every operand is written to and read back from disk (~1.5 GB/s here). It only
-  wins once the serial run takes roughly a second or more (1.18× at 0.74 s serial,
-  2.47× at 5.3 s), and loses on small batches. Always compare with `bench` on your
+  wins once the serial run takes roughly a second or more (0.61× at 0.17 s serial,
+  2.15× at 5.4 s), and loses on small batches. Always compare with `bench` on your
   own machine instead of assuming a speed-up.
+
+`collective=True` is deprecated and no longer tested, so it is not benchmarked here.
 
 ## Using PyTorch tensors
 

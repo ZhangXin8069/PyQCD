@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import json
 import os
 from pathlib import Path
 import shutil
@@ -325,58 +324,6 @@ def test_timings_separate_pool_init_from_compute():
         assert np.array_equal(serial_payload[key], payload[key]), key
 
 
-def test_collective_is_disabled_by_default():
-    """``collective`` 默认关闭：mpirun 内只由 rank 0 执行，其余 rank 立即返回。
-
-    真实生产对内存/显存敏感（collective 让每个 rank 各持一份整批输入），所以它必须
-    是显式开关。这里同时验证：默认路径仍给出正确结果，且不打印内存警告。
-    """
-    launcher = _require_launcher()
-    project_root = Path(__file__).resolve().parents[2]
-    with tempfile.TemporaryDirectory() as tmpdir:
-        script = Path(tmpdir) / 'default_probe.py'
-        script.write_text(
-            'import json\n'
-            'import numpy as np\n'
-            'from mpi4py import MPI\n'
-            'import pyqcd.einsum as pe\n'
-            'from pyqcd.parallel.einsum import init, run\n'
-            'rank = MPI.COMM_WORLD.Get_rank()\n'
-            'rng = np.random.default_rng(5)\n'
-            'tasks = {"a": ("ij,jk->ik", [rng.standard_normal((16, 16)),\n'
-            '                             rng.standard_normal((16, 16))])}\n'
-            'results = [np.zeros((16, 16))]\n'
-            'state = init({"task_id": ["a"], "equation": ["ij,jk->ik"],\n'
-            '              "operands": [[tasks["a"][1][0], tasks["a"][1][1]]],\n'
-            '              "results": results}, reminder=False,\n'
-            '             verbose=(rank == 0))\n'
-            'run(state)\n'
-            'filled = bool(np.any(results[0]))\n'
-            'ok = filled and np.array_equal(\n'
-            '    results[0], pe.contract("ij,jk->ik", *tasks["a"][1]))\n'
-            'print("RESULT", json.dumps({"rank": rank, "mode": state.get("mode"),\n'
-            '                            "has_payload": filled, "ok": bool(ok)}))\n',
-            encoding='utf-8')
-        env = os.environ.copy()
-        env['PYTHONPATH'] = os.pathsep.join(
-            [str(project_root), env.get('PYTHONPATH', '')]).rstrip(os.pathsep)
-        completed = subprocess.run(
-            launcher + ['-np', '2', sys.executable, str(script)],
-            capture_output=True, text=True, env=env, cwd=project_root,
-            timeout=300)
-    assert completed.returncode == 0, completed.stderr[-1500:]
-    rows = [json.loads(line.split(' ', 1)[1])
-            for line in completed.stdout.splitlines()
-            if line.startswith('RESULT ')]
-    assert len(rows) == 2, completed.stdout
-    by_rank = {row['rank']: row for row in rows}
-    assert by_rank[0]['mode'] == 'rank0_only', by_rank
-    assert by_rank[0]['has_payload'] is True and by_rank[0]['ok'] is True, by_rank
-    assert by_rank[1]['has_payload'] is False, by_rank
-    assert '内存提醒' not in completed.stdout, completed.stdout
-    assert 'disabled by default' in completed.stdout, completed.stdout
-
-
 def test_init_and_run_write_results_in_place():
     """``init`` 只规划，``run`` 把结果原地写进调用方缓冲区。
 
@@ -596,97 +543,6 @@ def test_distillation_equations_match_serial_contract():
         assert info['mode'] == 'mpi_launch', info
 
 
-def test_collective_memory_warning_is_emitted():
-    """进入 collective 必须打印内存警告，且与 ``reminder=`` 无关。
-
-    实测依据：每个 rank 都持有整批输入（4 rank、整批输入 134 MB 时聚合 ≈1.15 GB），
-    是最容易被忽略、在 GPU 上会直接 OOM 的代价，所以它不能藏在通用提醒后面。
-    """
-    launcher = _require_launcher()
-    project_root = Path(__file__).resolve().parents[2]
-    with tempfile.TemporaryDirectory() as tmpdir:
-        script = Path(tmpdir) / 'warning_probe.py'
-        script.write_text(
-            'import numpy as np\n'
-            'from pyqcd.parallel.einsum import init, run\n'
-            'rng = np.random.default_rng(3)\n'
-            'tasks = {"a": ("ij,jk->ik", [rng.standard_normal((16, 16)),\n'
-            '                             rng.standard_normal((16, 16))])}\n'
-            '# collective 默认关闭；这里显式打开，验证内存警告与 reminder 无关\n'
-            'results = [np.zeros((16, 16))]\n'
-            'state = init({"equation": ["ij,jk->ik"],\n'
-            '              "operands": [[tasks["a"][1][0], tasks["a"][1][1]]],\n'
-            '              "results": results}, max_proc=2, reminder=False,\n'
-            '             verbose=False, collective=True)\n'
-            'run(state)\n',
-            encoding='utf-8')
-        env = os.environ.copy()
-        env['PYTHONPATH'] = os.pathsep.join(
-            [str(project_root), env.get('PYTHONPATH', '')]).rstrip(os.pathsep)
-        completed = subprocess.run(
-            launcher + ['-np', '2', sys.executable, str(script)],
-            capture_output=True, text=True, env=env, cwd=project_root,
-            timeout=300)
-    assert completed.returncode == 0, completed.stderr[-1200:]
-    assert 'collective 模式内存提醒' in completed.stdout, completed.stdout[-800:]
-    # 只由 rank 0 打印一次，避免 N 份重复刷屏
-    assert completed.stdout.count('collective 模式内存提醒') == 1, completed.stdout
-
-
-def test_collective_path_matches_contract_and_returns_none_on_workers():
-    """``mpirun`` 内部调用：rank 0 拿到结果，其余 rank 得到 None。"""
-    launcher = _require_launcher()
-    project_root = Path(__file__).resolve().parents[2]
-    with tempfile.TemporaryDirectory() as tmpdir:
-        script = Path(tmpdir) / 'collective_probe.py'
-        script.write_text(
-            'import json, sys\n'
-            'import numpy as np\n'
-            'from mpi4py import MPI\n'
-            'import pyqcd.einsum as pe\n'
-            'from pyqcd.parallel.einsum import init, run\n'
-            'comm = MPI.COMM_WORLD\n'
-            'rank = comm.Get_rank()\n'
-            'rng = np.random.default_rng(99)\n'
-            'tasks = {}\n'
-            'for i in range(6):\n'
-            '    n = 32 + 4 * i\n'
-            '    tasks[f"k{i}"] = ("ij,jk->ik", [rng.standard_normal((n, n)),\n'
-            '                                     rng.standard_normal((n, n))])\n'
-            'keys = list(tasks)\n'
-            'results = [np.zeros((s, s)) for s in\n'
-            '           [32 + 4 * i for i in range(len(keys))]]\n'
-            'state = init({"task_id": keys,\n'
-            '              "equation": [tasks[k][0] for k in keys],\n'
-            '              "operands": [list(tasks[k][1]) for k in keys],\n'
-            '              "results": results}, max_proc=3, reminder=False,\n'
-            '             verbose=(rank == 0), collective=True)\n'
-            'run(state)\n'
-            'if rank == 0:\n'
-            '    exact = all(np.array_equal(results[i],\n'
-            '                               pe.contract(tasks[k][0], *tasks[k][1]))\n'
-            '                for i, k in enumerate(keys))\n'
-            '    print("RESULT", json.dumps({"exact": exact, "keys": keys}))\n'
-            'else:\n'
-            '    print("RESULT", json.dumps({"payload": state.get("mode") ==\n'
-            '                                "mpi_collective"}))\n',
-            encoding='utf-8')
-        env = os.environ.copy()
-        env['PYTHONPATH'] = os.pathsep.join(
-            [str(project_root), env.get('PYTHONPATH', '')]).rstrip(os.pathsep)
-        completed = subprocess.run(
-            launcher + ['-np', '2', sys.executable, str(script)],
-            capture_output=True, text=True, env=env, cwd=project_root,
-            timeout=300)
-    assert completed.returncode == 0, completed.stderr[-2000:]
-    lines = [line for line in completed.stdout.splitlines()
-             if line.startswith('RESULT ')]
-    assert len(lines) == 2, completed.stdout
-    payloads = [json.loads(line.split(' ', 1)[1]) for line in lines]
-    assert any(item.get('exact') is True for item in payloads), payloads
-    assert any(item.get('payload') is True for item in payloads), payloads
-
-
 def test_parallel_import_does_not_change_einsum():
     """并行入口不得改变 ``pyqcd.einsum`` 的行为，也不得在包导入时拉入它。"""
     project_root = Path(__file__).resolve().parents[2]
@@ -734,7 +590,6 @@ _TESTS = (
     test_plan_respects_task_and_process_caps,
     test_worker_thread_budget_is_not_inherited_from_parent,
     test_timings_separate_pool_init_from_compute,
-    test_collective_is_disabled_by_default,
     test_init_and_run_write_results_in_place,
     test_init_rejects_bad_configs,
     test_run_matches_contract_and_respects_task_ids,
@@ -745,8 +600,6 @@ _TESTS = (
     test_launched_path_reports_failing_task_key,
     test_invalid_equation_fails_in_every_path,
     test_distillation_equations_match_serial_contract,
-    test_collective_memory_warning_is_emitted,
-    test_collective_path_matches_contract_and_returns_none_on_workers,
     test_parallel_import_does_not_change_einsum,
     test_worker_entry_point_is_reachable,
 )

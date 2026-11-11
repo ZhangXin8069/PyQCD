@@ -16,8 +16,9 @@
 两种运行方式：
 
 * 已在 MPI 下（``mpirun -np N python your_script.py``）：各 rank 都调用
-  ``init`` + ``run``，rank 0 规划后广播分箱，各 rank 算自己那箱，最后 gather 回
-  rank 0。此时数据不动，零序列化开销（需 ``collective=True``）。
+  ``init`` + ``run``，默认只由 rank 0 串行执行整批、其余 rank 立即返回。
+  ``collective=True`` 会让各 rank 分摊任务（零序列化），但**该模式已弃用**：
+  每个 rank 都要持有整批输入，内存/显存代价随 rank 数线性增长，且不再纳入测试。
 * 不在 MPI 下：自己 ``mpirun -np K python -m pyqcd.parallel.einsum --worker
   <dir>`` 拉起 K 个进程，任务与结果经临时目录传递。
 
@@ -654,18 +655,24 @@ def _execute(specs, keys, plan, optimize, backend, collective, workdir,
              keep_workdir, launcher, worker_threads, broadcast, verbose):
     """按 collective → 自建池 → 串行 的顺序执行，返回 ``(ordered, info)``。
 
-    collective 默认关闭：真实生产对内存/显存敏感（每个 rank 各持一份整批输入），
-    打开前必须显式传 ``collective=True``。关闭时若处于 ``mpirun`` 内，只由 rank 0
-    执行、其余 rank 直接返回 ``None``，不做任何复制或汇总。
+    ``collective`` 模式**已弃用**且不再纳入测试：每个 rank 都要持有整批输入，
+    内存/显存代价随 rank 数线性增长。默认（``collective=False``）在 ``mpirun``
+    内只由 rank 0 执行、其余 rank 直接返回 ``None``，不做任何复制。
     """
     comm, rank, size = _mpi_world()
 
+    if collective:
+        warnings.warn(
+            "pyqcd.parallel.einsum: collective mode is deprecated and is no "
+            "longer tested; every rank holds a full copy of the batch. Use the "
+            "default (rank 0 only) or a self-launched pool instead.",
+            DeprecationWarning, stacklevel=2)
+
     if comm is not None and size > 1 and not collective:
         if verbose and rank == 0:
-            print("[pyqcd.parallel.einsum] collective mode is disabled by "
-                  "default (memory-expensive: every rank would hold a full copy "
-                  "of the batch). Running on rank 0 only; pass "
-                  "collective=True to distribute.", flush=True)
+            print("[pyqcd.parallel.einsum] collective mode is deprecated and "
+                  "off by default (every rank would hold a full copy of the "
+                  "batch). Running on rank 0 only.", flush=True)
         if rank != 0:
             return None, {"mode": "rank0_only", "workers": 1, "timings": None}
         ordered = _run_serial(specs, optimize, backend, keys)
@@ -746,9 +753,10 @@ def init(config, max_proc=None, verbose=False, reminder=True,
         调试输出，默认 ``False``；打开后每条都带 ``task_id``，便于定位。
     reminder : bool
         首次调用打印使用场景提醒。
-    其余参数（``optimize`` / ``backend`` / ``collective`` / ``workdir`` /
-    ``keep_workdir`` / ``launcher`` / ``worker_threads`` / ``broadcast``）
-    含义见 :func:`init` 的参数说明。
+    其余参数（``optimize`` / ``backend`` / ``workdir`` / ``keep_workdir`` /
+    ``launcher`` / ``worker_threads`` / ``broadcast``）含义与 ``contract`` /
+    进程池设置一致。``collective`` **已弃用**且不再纳入测试：打开后每个 rank
+    都会持有整批输入，内存/显存随 rank 数线性增长；默认只由 rank 0 执行。
 
     Returns
     -------
@@ -832,8 +840,8 @@ def run(state, max_proc=None):
     """执行 :func:`init` 规划好的批次，结果**原地**写入 ``state["results"]``。
 
     启动器语义：返回 ``None``；数据通过调用方传入的缓冲区交换，不产生新的返回值，
-    因此调用前后可以做精确的耗时/内存对照。collective 模式下非 rank 0 也会写完
-    自己的缓冲区（若 ``broadcast=True``），否则立即返回。
+    因此调用前后可以做精确的耗时/内存对照——`init` 计时得到规划开销，`run` 计时
+    得到真实执行开销。在 ``mpirun`` 内默认只由 rank 0 执行，其余 rank 立即返回。
 
     Parameters
     ----------

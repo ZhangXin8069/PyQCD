@@ -1,0 +1,113 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-11 16:35:56 +0800
+批次: pyqcd-parallel/timing-and-collective-deprecation
+主任务: 修正批量收缩的计时口径：init（规划）与 run（执行）分开计时，文档/表格/harness 同步；collective 模式弃用并移除其测试（0.3.2）
+触发原因: 阶段成果
+摘要: plan/exec/total 分列（S1 Nvec=100 ×exec 2.15×）；契约 19→16；release_check 11/11；修掉文档脚本 (4,2) 投影算符硬错误
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 问题定位（文档示例的计时口径）
+- 目标: 按用户报告修掉示例把 `init` 与 `run` 混在一个计时桶里的问题
+- 命令/操作: 读 `docs/{en,zh}/performance.md` 的批量收缩小节与 `pyqcd/testing/parallel_einsum.py`
+- 关键发现（三处）:
+  1. 文档脚本 `run_parallel()` 先 `init` 再 `run`，外层 `timed()` 只计总时长 → 规划被算进"计算"；
+  2. harness 反向失真：`_run_batch` 只对 `run` 计时，`wall` 不含规划，`bench` 的串行基准其实是
+     "1 进程的 init+run"而不是纯 `contract` 循环；
+  3. 文档脚本的 sush 用例里投影算符写成 `(4,2)`，与方程标签 `a=4` 冲突 → 整段脚本根本跑不起来
+- 退出码: 0
+
+### S2 — 代码侧：分离计时 + collective 弃用
+- `pyqcd/testing/parallel_einsum.py`:
+  - `_run_batch` 分别返回 `init_seconds` / `run_seconds`，`wall = init + run`
+  - 新增 `_timed_serial`（纯 `contract` 循环，作为真实串行基准）
+  - `bench` 打印 `plan` / `exec` / `total` 三个中位数 + `×exec` / `×total` 与 worker 纯计算
+  - 删除 `bench_collective` 与 `bench-collective` 子命令（collective 不再测试）
+- `pyqcd/parallel/einsum.py`: `collective` 标为**已弃用**，使用时发 `DeprecationWarning`；
+  docstring 与模块说明改写；`_execute` 的提示文案不再引导开启
+- `pyqcd/testing/_parallel_einsum_contract.py`: 删除 3 项 collective 测试
+  （默认关闭 / 内存警告 / collective 路径），契约 19 → 16 项；移除不再使用的 `json` 导入
+- 退出码: 0
+
+### S3 — 文档侧
+- `docs/{en,zh}/performance.md`: 删除 collective 小节与表（改为一句弃用说明），
+  自建池表改为 `串行 | plan | exec | total | ×exec | ×total`，重写口径段落与复现命令；
+  脚本改为分段计时、修掉 `(4,2)` 投影算符、去掉 collective 开关；中英代码块保持等价
+- `docs/{en,zh}/usage.md`: 示例加入 `time.perf_counter()` 两段计时与断言；collective 条目改为
+  弃用说明；实测表改为 plan/exec/total 三列
+- `docs/parallel_einsum_20261111.md`: 表格与结论标注 collective 已弃用；第 4 节标注为
+  "0.3.0 之前的历史数据（wall/compute 两种口径）"
+- `skills/pyqcd-einsum/SKILL.md`、`pyqcd/parallel/AGENTS.md`: 同步新口径与弃用事实
+- 版本 0.3.1 → 0.3.2（已发布的 0.3.1 不可覆盖）
+
+## 验证与证据
+- 全量: `python -m pyqcd.testing` → **124 passed / 1 skipped / 0 failed**
+- 并行契约: `python -m pyqcd.testing._parallel_einsum_contract` → **16 passed / 0 failed**
+- harness: `verify --tasks 4 --procs 2` 通过（rel 1.2–2.5e-07）；
+  `bench --tasks 8 --procs 4` 输出 `plan 0.9 ms / exec 207.6 ms / total 208.4 ms` 与两个倍率
+- 文档门: `release_check --offline` → **11/11**（含 sdist 构建、twine、双语代码块等价、
+  `sphinx -W` 双站）；`docs_examples --lang zh` → 21 ok / 4 skipped / 0 failed
+- 双语一致性: 4 个页面 `code_same` 全等、英文页无 CJK，`pages with mismatch: 0`
+- 实跑数据（本机 4 物理核/8 线程，`OMP/OPENBLAS=1`，complex64，3 轮中位）:
+  S1 Nvec=40 → 串行 168 ms / plan 1 ms / exec 276 ms / ×exec 0.61×；
+  S1 Nvec=100 → 串行 5391 ms / plan 1 ms / exec 2508 ms / ×exec 2.15×
+- 未验证项: 未在 GPU/多卡与 >8 物理核复测；3.9–3.11/3.13 无机测
+
+## 变更与产物
+- 文件: `pyqcd/testing/parallel_einsum.py`、`pyqcd/testing/_parallel_einsum_contract.py`、
+  `pyqcd/parallel/einsum.py`、`pyqcd/parallel/AGENTS.md`、
+  `docs/{en,zh}/{performance,usage,install,overview,conf}.py|md`、
+  `docs/parallel_einsum_20261111.md`、`skills/pyqcd-einsum/SKILL.md`、三处版本号
+- 产物: `dist/pyqcd-0.3.2.tar.gz`（本地，未上传）
+- 未改动范围: `pyqcd.einsum` 生产算法、`cpp/**`
+
+## 风险、限制与下一步
+- 风险: `collective=True` 仍可用但会发 `DeprecationWarning`；依赖它的脚本需改用默认
+  （rank 0）或自建池
+- 风险: 文档历史表（`docs/parallel_einsum_20261111.md` 第 4 节）保留旧口径数字，已显式标注
+- 阻塞: 无
+- 下一步: 待授权后发布 0.3.2（上传 → 远程复验 → 双推 → `dev47`）
+
+## Agent 全文报告
+--- report begin ---
+按你的两点意见改完并复测。
+
+## 一、示例的计时口径（你指出的问题）
+
+三处一起改，因为它们是同一个病：
+
+1. **文档脚本**：`run_parallel()` 现在分两段计时——
+   `init`（校验 + LPT 规划，`contract_path` 在这里跑）与 `run`（拉起进程池、分发、回收）
+   各自计时，表格改为 `串行 | plan | exec | total | ×exec | ×total`。
+2. **harness**：`_run_batch` 返回 `init_seconds` / `run_seconds`；串行基准换成纯 `contract`
+   循环（原来拿"1 进程的 init+run"当基准，同样是失真）；`bench` 直接打印 plan/exec/total。
+3. **顺手修掉的硬错误**：文档脚本的投影算符写成 `(4,2)`，与方程标签 `a=4` 冲突，
+   整段脚本原本**根本跑不起来**；已改为 `(4,4)` 并实跑复现。
+
+实测（4 物理核/8 线程，单线程基准，complex64，3 轮中位）：S1 Nvec=40 → 串行 168 ms、
+plan 1 ms、exec 276 ms、`×exec` 0.61×；Nvec=100 → 5391 / 1 / 2508 ms、`×exec` **2.15×**。
+规划在"同一条方程"的批次里只有 ~1 ms，这一列现在单独可见，不再被摊进"计算时间"。
+
+## 二、collective 弃用
+
+- `collective=True` 标为**已弃用**，使用时发 `DeprecationWarning`，行为保留；
+- 删除 3 项 collective 测试（默认关闭 / 内存警告 / collective 路径），契约 **19 → 16 项**；
+- 删除 `bench_collective` 与 `bench-collective` 子命令；
+- 双语性能页删掉 collective 表与内存警告，只留一句弃用说明；
+  `docs/parallel_einsum_20261111.md` 的历史数字标注为"0.3.0 之前、弃用前实测"。
+
+## 三、验证
+
+全量 **124 passed / 1 skipped / 0 failed**；契约 **16 passed**；`release_check --offline`
+**11/11**（sdist、twine、双语代码块等价、`sphinx -W` 双站）；zh 文档示例 21 ok / 0 failed；
+harness 的 `verify` 与 `bench` 均实跑通过。
+
+版本升到 **0.3.2**（0.3.1 已发布不可覆盖），`dist/pyqcd-0.3.2.tar.gz` 已在本地构建，
+**未上传、未推送、未打标签**——等你确认发布。
+
+## 四、未验证
+
+GPU/多卡与 >8 物理核的倍率未复测；Python 3.9–3.11、3.13 仍无机测。
+--- report end ---

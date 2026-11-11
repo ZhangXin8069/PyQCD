@@ -263,84 +263,54 @@ Protocol: same machine, `complex64`/`float32` operands, `OMP_NUM_THREADS=OPENBLA
 3 rounds with serial and parallel timed back to back, median of the per-round ratios.
 Every batch is verified against serial `contract` before the ratio is printed.
 
-**Two calibers, both reported.** `run` writes the worker-measured pure compute time
-back into the state dict (`state["timings"]`), so a self-launched pool can be
-charged two ways:
+**Plan and execution are timed separately.** `init` validates the batch and computes the
+LPT binning — this is where `contract_path` runs; `run` starts the pool, ships the tasks
+and collects the results. Timing both in one bucket mixes planning with compute, so the
+table reports them apart:
 
-* **init included** (`×wall`) — what the caller actually waits for: `mpirun` start-up,
-  task/result staging, plus compute. This is the number to quote for end-to-end cost.
-* **init excluded** (`×compute`) — worker-reported contraction time only. This is the
-  ceiling the task split can reach once the pool already exists (typical when you are
-  inside `mpirun`, or when the same pool serves a much larger batch).
+* **plan** (`init`) — validation plus the cost model and binning;
+* **exec** (`run`) — the actual parallel work, including `mpirun` start-up and staging;
+* **total** — plan + exec, i.e. what a caller waits for when the pool is created per call.
 
-### Already inside `mpirun -np 4` with `collective=True` (no staging)
-
-Collective is **off by default** (it replicates the batch onto every rank); the
-numbers below are what you get after opting in.
-
-| Scenario | Tasks | Serial | Parallel | `×wall` | `×compute` |
-|---|---|---|---|---|---|
-| general: many small (128² matmul) | 400 | 42.5 ms | 25.7 ms | 1.65× | 3.81× |
-| general: one-to-one (1200² matmul, #tasks = #ranks) | 3 | 101.0 ms | 41.8 ms | 2.42× | 2.97× |
-| general: skewed (3 heavy + 9 light) | 12 | 103.8 ms | 37.3 ms | 2.78× | 3.21× |
-| kernel: nucleon 2pt (E1) | 8 | 184.4 ms | 46.1 ms | **4.00×** | **4.07×** |
-| sush: NN 2pt (S1) | 8 | 197.4 ms | 50.6 ms | **3.90×** | 3.96× |
-| sush: 3pt main (P1) | 8 | 134.7 ms | 39.7 ms | **3.39×** | 3.51× |
-| sush: NN 2pt, Nvec=100 (large task) | 8 | 6066.8 ms | 1536.7 ms | **3.95×** | 3.95× |
-| kernel: γ sandwich (E5, ~1 ms/task) | 8 | 0.5 ms | 0.7 ms | 0.73× | 1.59× |
-
-Here the two calibers nearly coincide (staging is zero, only the plan broadcast is
-missing from `×compute`). This is the fastest mode, but it is opt-in because of
-the memory cost below.
-
-> **Memory warning — collective mode replicates the input on every rank.**
-> The planner runs inside `init`, so each rank must build the *whole* batch:
-> input memory becomes `one copy × ranks`. Rank 0 additionally holds **all**
-> results, and `broadcast=True` gives every rank its own full copy of them.
-> Measured with `resource.ru_maxrss` on float32 matrix products (batch input
-> 134 MB, 64 tasks of 512²): serial peaks at **234 MB**, while collective on
-> 4 ranks totals ≈ **1.15 GB** (`4 × input + output`). On GPU this means one full
-> batch per visible card — keep the rank count equal to the device count or VRAM
-> multiplies. If the batch does not fit, use the self-launched pool: it ships tasks
-> through disk and each worker reads only its own bin, at ~0.15–0.3 s fixed cost
-> per call. `run` prints this warning on every collective call, independently of
-> `reminder=`.
+Speed-ups are always quoted against a plain serial `contract` loop: `× exec` is what the
+split itself buys, `× total` is what you get end to end.
 
 ### Self-launched pool (single process, no pre-existing `mpirun`)
 
-| Scenario | Tasks | Serial | Pool wall | Pool compute | `×wall` | `×compute` |
-|---|---|---|---|---|---|---|
-| general: many small | 400 | 38.7 ms | 283.3 ms | 14.1 ms | 0.14× | 2.74× |
-| general: one-to-one | 3 | 77.8 ms | 206.9 ms | 28.3 ms | 0.38× | 2.74× |
-| general: skewed | 12 | 80.0 ms | 222.3 ms | 30.4 ms | 0.36× | 2.64× |
-| kernel: nucleon 2pt (E1) | 8 | 142.4 ms | 337.2 ms | 162.2 ms | 0.42× | 0.88× |
-| sush: NN 2pt (S1) | 8 | 140.0 ms | 218.7 ms | 57.2 ms | 0.64× | **2.45×** |
-| sush: 3pt main (P1) | 8 | 101.6 ms | 327.6 ms | 146.9 ms | 0.31× | 0.69× |
-| sush: NN 2pt, Nvec=100 (large task) | 8 | 4997.0 ms | 1879.7 ms | 1586.8 ms | **2.66×** | **3.15×** |
-| kernel: γ sandwich (E5, ~1 ms/task) | 8 | 0.6 ms | 156.7 ms | 6.4 ms | 0.00× | 0.10× |
+| Scenario | Tasks | Serial | plan | exec | total | `×exec` | `×total` |
+|---|---|---|---|---|---|---|---|
+| general: many small | 400 | 25 ms | 2 ms | 273 ms | 275 ms | 0.09× | 0.09× |
+| general: one-to-one | 3 | 87 ms | <1 ms | 255 ms | 256 ms | 0.34× | 0.34× |
+| general: skewed | 12 | 90 ms | 1 ms | 260 ms | 261 ms | 0.35× | 0.35× |
+| sush: NN 2pt (S1) | 8 | 168 ms | 1 ms | 276 ms | 276 ms | 0.61× | 0.61× |
+| sush: NN 2pt, Nvec=100 (large task) | 8 | 5391 ms | 1 ms | 2508 ms | 2509 ms | **2.15×** | **2.15×** |
 
-Reading the pool table:
+Reading the table:
 
-* **The pool costs ≈0.15–0.3 s per call** (`wall − compute`): `mpirun` start-up
-  (~150 ms) plus writing every operand and reading it back (~1.5 GB/s here). It pays
-  off on end-to-end time only once the batch itself takes seconds (Nvec=100 row:
-  **2.66×**).
-* **`×compute` shows what the split can do.** With init excluded, small batches reach
-  2.6–2.7× — i.e. the balancer is doing its job and the loss is pure fixed cost.
-* **Kernel equations score below 1× on `×compute`** because each fresh worker pays
-  the one-off kernel/plan warm-up on its first call (measured: E1 first call 140 ms vs
-  17 ms warm). In a pool that runs one batch and exits, that cold start is real cost;
-  in a long-lived pool it amortises away.
+* **Planning is negligible here** (≈1 ms for 8–400 tasks with one equation): the cost
+  model is computed once per distinct equation/shape, so batching the *same* equation
+  does not multiply it. For batches mixing many different shapes this column grows —
+  measure it, do not assume it.
+* **The pool costs ≈0.15–0.3 s per call** (`exec` includes it): `mpirun` start-up
+  (~150 ms) plus writing every operand and reading it back (~1.5 GB/s here). It pays off
+  only once the batch itself takes seconds — the Nvec=100 row reaches **2.15×**.
+* **Small batches lose on `×exec`** because that fixed cost dominates; the balancer is
+  fine, the batch is simply too short to amortise process start-up.
+* Worker-reported pure compute is also available at runtime via `state["timings"]`
+  (self-launched pool only), which isolates contraction time from staging.
 
-Reproduce both calibers with the bundled harnesses:
+`collective=True` (every rank holds a full copy of the batch) is **deprecated and no
+longer tested**: it only helps when the batch already lives on every rank, and costs
+`ranks × input memory` (measured ≈1.15 GB for a 134 MB batch on 4 ranks).
+
+Reproduce the table with the bundled harness:
 
 ```bash
 python -m pyqcd.testing.parallel_einsum bench --equation S1 --nvec 100 --procs 4
-mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective --equation S1
 ```
 
-The self-launched harness prints `speedup … (init included)` and
-`speedup … (worker compute only, init excluded)`, plus the measured pool overhead.
+The harness prints `plan`, `exec` and `total` medians separately, plus the speed-up of
+each against the serial baseline and the worker-reported compute time.
 
 ### Reproduce
 
@@ -355,7 +325,7 @@ import pyqcd.einsum as pe
 from pyqcd.parallel import init, run
 
 ROUNDS = 3        # serial and parallel are each timed this many times; take the median ratio
-PROCS = 4         # size of the self-launched pool; inside mpirun the rank count decides
+PROCS = 4         # size of the self-launched pool
 
 rng = np.random.default_rng(0)
 
@@ -393,7 +363,7 @@ def sush_nn_2pt(nvec, count=8):
             random_complex_array(4, 4),                    # gamma_7
             random_complex_array(1, nvec, nvec, nvec),     # sink VVV
             random_complex_array(1, nvec, nvec, nvec),     # source VVV
-            random_complex_array(4, 2),                    # projector (first two columns)
+            random_complex_array(4, 4),                    # projector (g, a)
         ]
         tasks[f"S1-{index}"] = (SUSH_NN_2PT, operands)
     return tasks
@@ -450,25 +420,45 @@ def output_shape(equation, operands):
 
 
 def run_parallel(tasks):
-    """One ``init`` + ``run`` pair; results land in the caller-owned buffers."""
+    """One ``init`` + ``run`` pair, timed in two phases; results land in the buffers."""
     keys = list(tasks)
     results = [np.zeros(output_shape(*tasks[key]),
                         dtype=np.result_type(*[o.dtype for o in tasks[key][1]]))
                for key in keys]
-    state = init({"task_id": keys,
-                  "equation": [tasks[key][0] for key in keys],
-                  "operands": [list(tasks[key][1]) for key in keys],
-                  "results": results},
-                 max_proc=PROCS, reminder=False)
-    run(state)
-    return {key: results[index] for index, key in enumerate(keys)}
+    config = {"task_id": keys,
+              "equation": [tasks[key][0] for key in keys],
+              "operands": [list(tasks[key][1]) for key in keys],
+              "results": results}
+
+    start = time.perf_counter()
+    state = init(config, max_proc=PROCS, reminder=False)    # planning only
+    plan_seconds = time.perf_counter() - start
+
+    start = time.perf_counter()
+    run(state)                                             # execution only
+    exec_seconds = time.perf_counter() - start
+
+    return ({key: results[index] for index, key in enumerate(keys)},
+            plan_seconds, exec_seconds)
 
 
-print(f"{'case':24s} {'tasks':>5s} {'serial(s)':>9s} "
-      f"{'parallel(s)':>11s} {'speed-up':>8s}")
+def timed_parallel(tasks, rounds=ROUNDS):
+    """Median of the separately measured plan and exec times, plus the last result."""
+    plans, execs = [], []
+    results = None
+    for _ in range(rounds):
+        results, plan_seconds, exec_seconds = run_parallel(tasks)
+        plans.append(plan_seconds)
+        execs.append(exec_seconds)
+    return statistics.median(plans), statistics.median(execs), results
+
+
+print(f"{'case':24s} {'tasks':>5s} {'serial(s)':>9s} {'plan(s)':>8s} "
+      f"{'exec(s)':>8s} {'total(s)':>8s} {'x exec':>7s} {'x total':>8s}")
 for label, tasks in CASES.items():
     serial_seconds, _ = timed(partial(run_serial, tasks))
-    parallel_seconds, results = timed(partial(run_parallel, tasks))
+    plan_seconds, exec_seconds, results = timed_parallel(tasks)
+    total_seconds = plan_seconds + exec_seconds
 
     # Correctness first: the parallel result must equal the serial one, otherwise the
     # speed-up means nothing.
@@ -478,15 +468,12 @@ for label, tasks in CASES.items():
         deviation = float(np.max(np.abs(results[key] - reference))) / scale
         assert deviation <= 1e-5, f"{label} {key}: rel={deviation:.1e}"
 
-    print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} "
-          f"{parallel_seconds:11.3f} {serial_seconds / parallel_seconds:7.2f}x")
+    print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} {plan_seconds:8.3f} "
+          f"{exec_seconds:8.3f} {total_seconds:8.3f} "
+          f"{serial_seconds / exec_seconds:6.2f}x "
+          f"{serial_seconds / total_seconds:7.2f}x")
 
 ```
-
-To measure the collective mode instead, save the loop above as `bench.py` and run
-`mpirun -np 4 python bench.py`: every rank calls `init` + `run` with
-`collective=True`, and the work is divided over those ranks with no data staging
-(the table above uses exactly that path).
 
 ## Reproduce
 

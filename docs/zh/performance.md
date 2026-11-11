@@ -239,75 +239,50 @@ check(
 （单线程基准，使并行与串行拿到相同的单核预算）、3 轮内串行与并行背靠背计时、取每轮比值的
 中位数；每批结果在给倍率前都先与串行 `contract` 对照。
 
-**两种口径都报。** `run` 会把 worker 自报的纯计算时间写回 state 字典
-（`state["timings"]`），所以自建进程池可以按两种方式计费：
+**规划与执行分开计时。** `init` 负责校验与 LPT 装箱——`contract_path` 就在这里跑；
+`run` 负责拉起进程池、分发任务、回收结果。把两者放进同一个计时桶会把规划混进计算，
+所以下表分三列报：
 
-* **计入初始化**（`×wall`）：调用方实际等待的时间，含 `mpirun` 启动、任务/结果落盘与计算。
-  报端到端成本时用这个数。
-* **不计入初始化**（`×compute`）：只算 worker 实测的收缩时间。这是任务拆分本身能达到的
-  上限（进程池已存在时成立，例如你本来就在 `mpirun` 里，或同一个池要跑大得多的批次）。
+* **plan**（`init`）——校验 + 代价模型 + 装箱；
+* **exec**（`run`）——真正的并行工作，含 `mpirun` 启动与任务/结果搬运；
+* **total**——plan + exec，即每次调用都重建进程池时调用方实际等待的时间。
 
-### 在 `mpirun -np 4` 内显式 `collective=True`（无数据搬运）
-
-collective **默认关闭**（它会把整批输入复制到每个 rank）；下表是显式开启后的数字。
-
-| 场景 | 任务数 | 串行 | 并行 | `×wall` | `×compute` |
-|---|---|---|---|---|---|
-| 通用：大量小任务（128² 矩阵乘） | 400 | 42.5 ms | 25.7 ms | 1.65× | 3.81× |
-| 通用：一对一（1200² 矩阵乘，任务数 = rank 数） | 3 | 101.0 ms | 41.8 ms | 2.42× | 2.97× |
-| 通用：偏斜（3 个重 + 9 个轻） | 12 | 103.8 ms | 37.3 ms | 2.78× | 3.21× |
-| 专用核：核子 2pt（E1） | 8 | 184.4 ms | 46.1 ms | **4.00×** | **4.07×** |
-| sush：NN 2pt（S1） | 8 | 197.4 ms | 50.6 ms | **3.90×** | 3.96× |
-| sush：3pt 主项（P1） | 8 | 134.7 ms | 39.7 ms | **3.39×** | 3.51× |
-| sush：NN 2pt，Nvec=100（大任务） | 8 | 6066.8 ms | 1536.7 ms | **3.95×** | 3.95× |
-| 专用核：γ 夹心（E5，约 1 ms/任务） | 8 | 0.5 ms | 0.7 ms | 0.73× | 1.59× |
-
-这里两种口径几乎重合（搬运为零，`×compute` 只少了计划广播那次通信）。它是**最快的
-模式，但因为下面的内存代价，必须显式开启**。
-
-> **内存警告：collective 模式会让每个 rank 各持一份整批输入。**
-> 规划发生在 `init` 内部，所以每个 rank 都必须先构造**整批**任务：输入占用
-> 变成「单份 × rank 数」。rank 0 另外持有**全部结果**，`broadcast=True` 时每个 rank
-> 还会各持一份完整结果。用 `resource.ru_maxrss` 在 float32 矩阵乘上实测
-> （整批输入 134 MB，64 个 512² 任务）：串行峰值 **234 MB**，collective 4 rank
-> 聚合约 **1.15 GB**（`4 × 输入 + 输出`）。在 GPU 上这意味着每张可见卡各放一整批——
-> 让 rank 数与可见设备数相等，否则显存成倍放大。批次放不下时改用自建进程池：
-> 任务经磁盘分发，worker 只读自己那一箱，代价是每次调用多 0.15–0.3 s 固定开销。
-> `run` 每次进入 collective 都会打印这条警告，与 `reminder=` 无关。
+倍率一律以「纯串行 `contract` 循环」为分母：`×exec` 是拆分本身买到的收益，
+`×total` 是端到端拿到的收益。
 
 ### 自建进程池（单进程、外部没有 `mpirun`）
 
-| 场景 | 任务数 | 串行 | 池 wall | 池 compute | `×wall` | `×compute` |
-|---|---|---|---|---|---|---|
-| 通用：大量小任务 | 400 | 38.7 ms | 283.3 ms | 14.1 ms | 0.14× | 2.74× |
-| 通用：一对一 | 3 | 77.8 ms | 206.9 ms | 28.3 ms | 0.38× | 2.74× |
-| 通用：偏斜 | 12 | 80.0 ms | 222.3 ms | 30.4 ms | 0.36× | 2.64× |
-| 专用核：核子 2pt（E1） | 8 | 142.4 ms | 337.2 ms | 162.2 ms | 0.42× | 0.88× |
-| sush：NN 2pt（S1） | 8 | 140.0 ms | 218.7 ms | 57.2 ms | 0.64× | **2.45×** |
-| sush：3pt 主项（P1） | 8 | 101.6 ms | 327.6 ms | 146.9 ms | 0.31× | 0.69× |
-| sush：NN 2pt，Nvec=100（大任务） | 8 | 4997.0 ms | 1879.7 ms | 1586.8 ms | **2.66×** | **3.15×** |
-| 专用核：γ 夹心（E5，约 1 ms/任务） | 8 | 0.6 ms | 156.7 ms | 6.4 ms | 0.00× | 0.10× |
+| 场景 | 任务数 | 串行 | plan | exec | total | `×exec` | `×total` |
+|---|---|---|---|---|---|---|---|
+| 通用：大量小任务 | 400 | 25 ms | 2 ms | 273 ms | 275 ms | 0.09× | 0.09× |
+| 通用：一对一 | 3 | 87 ms | <1 ms | 255 ms | 256 ms | 0.34× | 0.34× |
+| 通用：偏斜 | 12 | 90 ms | 1 ms | 260 ms | 261 ms | 0.35× | 0.35× |
+| sush：NN 2pt（S1） | 8 | 168 ms | 1 ms | 276 ms | 276 ms | 0.61× | 0.61× |
+| sush：NN 2pt，Nvec=100（大任务） | 8 | 5391 ms | 1 ms | 2508 ms | 2509 ms | **2.15×** | **2.15×** |
 
-读这张表的三个要点：
+读这张表的要点：
 
-* **进程池每次调用固定花约 0.15–0.3 s**（`wall − compute`）：`mpirun` 启动（约 150 ms）
-  加上把所有操作数写出再读回（本机约 1.5 GB/s）。只有批次本身到秒级，端到端才赚
-  （Nvec=100 那行：**2.66×**）。
-* **`×compute` 反映拆分本身的能力。** 剔掉初始化后，小批次能到 2.6–2.7×——说明装箱器
-  在工作，损失纯粹来自固定成本。
-* **专用核方程在 `×compute` 上低于 1×**，因为每个新 worker 的首次调用要付一次性
-  kernel/计划预热（实测 E1 首调 140 ms vs 热调 17 ms）。跑完一批就退出的池里这是真实成本，
-  长期驻留的池里会被摊薄。
+* **这里规划可以忽略**（8–400 个任务、同一条方程时约 1 ms）：代价模型按「方程 + 形状」
+  只算一次，重复同一条方程不会成倍增长。混有多种形状的批次这一列会变大——实测，不要假设。
+* **进程池每次调用固定花约 0.15–0.3 s**（已含在 `exec` 里）：`mpirun` 启动（约 150 ms）
+  加上把所有操作数写出再读回（本机约 1.5 GB/s）。只有批次本身到秒级才赚
+  （Nvec=100 那行：**2.15×**）。
+* **小批次在 `×exec` 上亏**，因为固定成本占主导；装箱器没有问题，只是批次太短，
+  摊不掉进程启动。
+* worker 自报的纯计算时间仍可从 `state["timings"]` 取得（仅自建池），用来把搬运从计算里剥出来。
 
-两个口径都能用包内 harness 复现：
+`collective=True`（每个 rank 各持一份整批输入）**已弃用且不再纳入测试**：它只在批次
+本来就分布在每个 rank 上时才有意义，代价是 `rank 数 × 输入内存`（实测 134 MB 批次在
+4 rank 上聚合约 1.15 GB）。
+
+用包内 harness 复现这张表：
 
 ```bash
 python -m pyqcd.testing.parallel_einsum bench --equation S1 --nvec 100 --procs 4
-mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective --equation S1
 ```
 
-自建池 harness 会同时打印 `speedup … (init included)` 与
-`speedup … (worker compute only, init excluded)`，并给出实测池开销。
+harness 会分别打印 `plan`、`exec`、`total` 三个中位数，并给出它们各自相对串行基准的倍率
+以及 worker 自报的计算时间。
 
 ### 批量基准脚本
 
@@ -322,7 +297,7 @@ import pyqcd.einsum as pe
 from pyqcd.parallel import init, run
 
 ROUNDS = 3        # serial and parallel are each timed this many times; take the median ratio
-PROCS = 4         # size of the self-launched pool; inside mpirun the rank count decides
+PROCS = 4         # size of the self-launched pool
 
 rng = np.random.default_rng(0)
 
@@ -360,7 +335,7 @@ def sush_nn_2pt(nvec, count=8):
             random_complex_array(4, 4),                    # gamma_7
             random_complex_array(1, nvec, nvec, nvec),     # sink VVV
             random_complex_array(1, nvec, nvec, nvec),     # source VVV
-            random_complex_array(4, 2),                    # projector (first two columns)
+            random_complex_array(4, 4),                    # projector (g, a)
         ]
         tasks[f"S1-{index}"] = (SUSH_NN_2PT, operands)
     return tasks
@@ -417,25 +392,45 @@ def output_shape(equation, operands):
 
 
 def run_parallel(tasks):
-    """One ``init`` + ``run`` pair; results land in the caller-owned buffers."""
+    """One ``init`` + ``run`` pair, timed in two phases; results land in the buffers."""
     keys = list(tasks)
     results = [np.zeros(output_shape(*tasks[key]),
                         dtype=np.result_type(*[o.dtype for o in tasks[key][1]]))
                for key in keys]
-    state = init({"task_id": keys,
-                  "equation": [tasks[key][0] for key in keys],
-                  "operands": [list(tasks[key][1]) for key in keys],
-                  "results": results},
-                 max_proc=PROCS, reminder=False)
-    run(state)
-    return {key: results[index] for index, key in enumerate(keys)}
+    config = {"task_id": keys,
+              "equation": [tasks[key][0] for key in keys],
+              "operands": [list(tasks[key][1]) for key in keys],
+              "results": results}
+
+    start = time.perf_counter()
+    state = init(config, max_proc=PROCS, reminder=False)    # planning only
+    plan_seconds = time.perf_counter() - start
+
+    start = time.perf_counter()
+    run(state)                                             # execution only
+    exec_seconds = time.perf_counter() - start
+
+    return ({key: results[index] for index, key in enumerate(keys)},
+            plan_seconds, exec_seconds)
 
 
-print(f"{'case':24s} {'tasks':>5s} {'serial(s)':>9s} "
-      f"{'parallel(s)':>11s} {'speed-up':>8s}")
+def timed_parallel(tasks, rounds=ROUNDS):
+    """Median of the separately measured plan and exec times, plus the last result."""
+    plans, execs = [], []
+    results = None
+    for _ in range(rounds):
+        results, plan_seconds, exec_seconds = run_parallel(tasks)
+        plans.append(plan_seconds)
+        execs.append(exec_seconds)
+    return statistics.median(plans), statistics.median(execs), results
+
+
+print(f"{'case':24s} {'tasks':>5s} {'serial(s)':>9s} {'plan(s)':>8s} "
+      f"{'exec(s)':>8s} {'total(s)':>8s} {'x exec':>7s} {'x total':>8s}")
 for label, tasks in CASES.items():
     serial_seconds, _ = timed(partial(run_serial, tasks))
-    parallel_seconds, results = timed(partial(run_parallel, tasks))
+    plan_seconds, exec_seconds, results = timed_parallel(tasks)
+    total_seconds = plan_seconds + exec_seconds
 
     # Correctness first: the parallel result must equal the serial one, otherwise the
     # speed-up means nothing.
@@ -445,8 +440,10 @@ for label, tasks in CASES.items():
         deviation = float(np.max(np.abs(results[key] - reference))) / scale
         assert deviation <= 1e-5, f"{label} {key}: rel={deviation:.1e}"
 
-    print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} "
-          f"{parallel_seconds:11.3f} {serial_seconds / parallel_seconds:7.2f}x")
+    print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} {plan_seconds:8.3f} "
+          f"{exec_seconds:8.3f} {total_seconds:8.3f} "
+          f"{serial_seconds / exec_seconds:6.2f}x "
+          f"{serial_seconds / total_seconds:7.2f}x")
 
 ```
 
