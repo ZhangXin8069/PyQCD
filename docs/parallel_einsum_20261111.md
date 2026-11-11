@@ -1,4 +1,4 @@
-# 批量独立收缩并行（`pyqcd.parallel.einsum.einsums`）实测报告
+# 批量独立收缩并行（`pyqcd.parallel.einsum` 的 `init` + `run`）实测报告
 
 用途：把**相互独立**的一批 `pyqcd.einsum.contract` 任务按工作量分箱后分给多个
 MPI 进程执行（任务级并行）。本文件记录 2026-11-11 在本机（4 物理核 / 8 线程、
@@ -15,9 +15,9 @@ MPI 进程执行（任务级并行）。本文件记录 2026-11-11 在本机（4
 
 | 模式 | 触发条件 | 数据交换 | 结果返回 |
 |---|---|---|---|
-| collective | 已在 `mpirun -np N` 内，各 rank 调 `einsums` | 无（任务已在各 rank 内存里） | 默认 rank 0；`broadcast=True` 全体 |
-| self-launched | 单进程直接调 `einsums` | 操作数落盘到临时目录，worker 读回 | 父进程 |
-| serial | `max_procs=1` 或子任务数为 1 | 无 | 调用方 |
+| collective | 已在 `mpirun -np N` 内，各 rank 调 `init` + `run`（`collective=True`） | 无（任务已在各 rank 内存里） | 默认 rank 0；`broadcast=True` 全体 |
+| self-launched | 单进程直接调 `init` + `run` | 操作数落盘到临时目录，worker 读回 | 原地写入调用方缓冲区 |
+| serial | `max_proc=1` 或子任务数为 1 | 无 | 调用方 |
 
 ## 3. 工作量分配
 
@@ -26,7 +26,7 @@ MPI 进程执行（任务级并行）。本文件记录 2026-11-11 在本机（4
 * 装箱：LPT（longest-processing-time-first），按工时降序放入当前最空的箱，
   堆实现 O(m log m)。最慢进程 ≤ `(4/3 - 1/(3K)) × OPT`。
 * 进程数：`min(子任务数, 上限)`；上限默认 `min(CPU 线程数, 可用内存/最重任务×2)`，
-  可用 `max_procs=` 收紧。任务数少于上限时一对一，多于上限时均摊。
+  可用 `max_proc=` 收紧。任务数少于上限时一对一，多于上限时均摊。
 
 ## 4. 实测（单线程公平基准，两种口径）
 
@@ -34,8 +34,8 @@ MPI 进程执行（任务级并行）。本文件记录 2026-11-11 在本机（4
 8 算子，形状照 `pyqcd/testing/einsum/bench_distillation.build_operands`），`complex64`，
 `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1`；并行结果均与串行 `contract` 对照通过。
 
-**口径定义**：`einsums(..., return_info=True)` 会带回各 worker 自报的纯计算时间
-（`info["timings"]["compute_seconds"]`，取最慢进程）。因此自建进程池按两种方式计费：
+**口径定义**：`run` 会把各 worker 自报的纯计算时间写回 state（`state["timings"]`）
+（`timings["compute_seconds"]`，取最慢进程）。因此自建进程池按两种方式计费：
 
 * **计入初始化**（`×wall`）：调用方实际等待的墙钟时间，含 `mpirun` 启动与任务/结果落盘；
 * **不计入初始化**（`×compute`）：只算 worker 实测的收缩时间，是任务拆分本身的上限。
@@ -120,8 +120,8 @@ python -m pyqcd.testing._parallel_einsum_contract
    多卡时应让 rank 数与可见卡数对齐。批次放不下时改用自建进程池（任务经磁盘分发，
    worker 只读自己那一箱，代价 0.15–0.3 s 固定开销）。
 
-该警告已同时写入 `docs/{en,zh}/usage.md` 的 `einsums` 小节、双语文档性能页，并由
-`einsums` 在每次进入 collective 时打印（`COLLECTIVE_MEMORY_WARNING`，与 `reminder=`
+该警告已同时写入 `docs/{en,zh}/usage.md` 的批量收缩小节、双语文档性能页，并由
+`run` 在每次进入 collective 时打印（`COLLECTIVE_MEMORY_WARNING`，与 `reminder=`
 无关，每个进程一次）。
 
 ## 8. 已知限制

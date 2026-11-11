@@ -1,4 +1,4 @@
-"""契约测试：``pyqcd.parallel.einsum.einsums`` 的任务分箱、结果对应与失败传播。
+"""契约测试：``pyqcd.parallel.einsum``（``init`` + ``run``）的分箱、原位写入与失败传播。
 
 不依赖 pytest；既可经统一入口 ``python -m pyqcd.testing`` 运行，也可直接执行::
 
@@ -52,12 +52,71 @@ def _matmul_tasks(count, base=48, rng=None, prefix='t'):
     return tasks
 
 
+def _run_tasks(tasks, procs=None, max_procs=None, **kwargs):
+    """用 init + run 跑一批 dict 任务，返回 ``(payload, info)``。
+
+    适配层：``init``/``run`` 只吃列式字典并原地写缓冲区，而契约对照需要可比较的
+    返回值，所以这里铺一次平面数组。
+    """
+    procs = procs if procs is not None else max_procs
+    # 蒸馏用例传的是 dict（含 "S1-2pt" 这样的键），而 `_run_quiet` 会把 list 转成
+    # 下标键；这里统一按 dict 处理。
+    if not isinstance(tasks, dict):
+        raise TypeError("_run_tasks expects a dict of tasks")
+    # 接受两种任务写法：`(equation, operands)` 元组与
+    # `{"subscripts": ..., "operands": [...]}` 字典。
+    def _split(spec):
+        if isinstance(spec, dict):
+            return spec["subscripts"], list(spec["operands"])
+        return spec[0], list(spec[1])
+
+    keys = list(tasks)
+    equations = [_split(tasks[key])[0] for key in keys]
+    operands = [_split(tasks[key])[1] for key in keys]
+    results = []
+    for key in keys:
+        equation, ops = _split(tasks[key])
+        shapes = tuple(tuple(int(n) for n in op.shape) for op in ops)
+        try:
+            _, path_info = pe.contract_path(equation, *shapes, shapes=True,
+                                            optimize="greedy")
+            shape = tuple(path_info.size_dict[label]
+                          for label in path_info.output_subscript)
+        except Exception:
+            # 非法方程：这里推不出形状，交给 init/run 在报错时点名任务键。
+            shape = (1,)
+        results.append(np.zeros(shape, dtype=np.result_type(
+            *[op.dtype for op in ops])))
+    state = parallel_einsum.init(
+        {"task_id": keys, "equation": equations, "operands": operands,
+         "results": results}, max_proc=procs, reminder=False, verbose=False,
+        **kwargs)
+    started = time.perf_counter()
+    parallel_einsum.run(state)
+    elapsed = time.perf_counter() - started
+    payload = {key: results[index] for index, key in enumerate(keys)}
+    return payload, {"wall": elapsed, "mode": state.get("mode"),
+                     "timings": state.get("timings"), "plan": state["plan"]}
+
+
 def _run_quiet(**kwargs):
-    """调用 einsums 并吞掉提醒/规划输出，返回结果与捕获文本。"""
+    """调用 init + run 并吞掉提醒/规划输出，返回结果与捕获文本。
+
+    ``tasks`` 传 list 时转成下标键的 dict，
+    返回时再还原成 list —— ``init`` 只接受列式字典。
+    """
+    tasks = kwargs.get("tasks")
+    as_list = isinstance(tasks, (list, tuple))
+    if as_list:
+        kwargs = dict(kwargs, tasks={index: spec for index, spec in
+                                     enumerate(tasks)})
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
-        payload = parallel_einsum.einsums(reminder=False, **kwargs)
+        payload, _info = _run_tasks(**kwargs)
+    if as_list:
+        payload = [payload[index] for index in range(len(tasks))]
     return payload, buffer.getvalue()
+
 
 
 def _distillation_tasks(nvec=12):
@@ -167,7 +226,7 @@ def test_plan_balances_skewed_workloads():
             'ij,jk->ik',
             [rng.standard_normal((size, size)),
              rng.standard_normal((size, size))])
-    plan = parallel_einsum.plan_einsums(
+    plan = parallel_einsum.plan_tasks(
         tasks, resources={'cpu_threads': 4, 'mem_avail_mb': 1 << 20})
     assert plan['workers'] == 4, plan['workers']
     assert sorted(index for bin_ in plan['bins'] for index in bin_) == list(
@@ -183,7 +242,7 @@ def test_plan_balances_skewed_workloads():
     bound = (4.0 / 3.0 - 1.0 / (3.0 * plan['workers'])) * optimum
     assert plan['max_load'] <= bound + 1e-9, (plan['max_load'], bound, optimum)
 
-    even = parallel_einsum.plan_einsums(
+    even = parallel_einsum.plan_tasks(
         _matmul_tasks(8, base=64), resources={'cpu_threads': 4})
     assert even['skew'] < 1.05, even['loads']
 
@@ -191,7 +250,7 @@ def test_plan_balances_skewed_workloads():
 def test_plan_respects_task_and_process_caps():
     """进程数 = min(子任务数, 上限)：任务少时一对一，任务多时均摊。"""
     tasks = _matmul_tasks(5)
-    few = parallel_einsum.plan_einsums(
+    few = parallel_einsum.plan_tasks(
         tasks, max_procs=16, resources={'cpu_threads': 8})
     assert few['workers'] == 5
     # 一对一：每个箱子只装一个任务（LPT 按工时降序，故箱子顺序是按重到轻）。
@@ -199,13 +258,13 @@ def test_plan_respects_task_and_process_caps():
     assert sorted(index for bin_ in few['bins'] for index in bin_) == list(
         range(5))
 
-    many = parallel_einsum.plan_einsums(
+    many = parallel_einsum.plan_tasks(
         tasks, max_procs=2, resources={'cpu_threads': 8})
     assert many['workers'] == 2
     assert sorted(index for bin_ in many['bins'] for index in bin_) == list(
         range(5))
 
-    auto = parallel_einsum.plan_einsums(
+    auto = parallel_einsum.plan_tasks(
         _matmul_tasks(20), resources={'cpu_threads': 3})
     assert auto['workers'] == 3
     assert auto['limits']['capped_by'] == 'cpu_threads'
@@ -248,8 +307,7 @@ def test_timings_separate_pool_init_from_compute():
     """
     _require_launcher()
     tasks = _matmul_tasks(4, base=96)
-    payload, info = parallel_einsum.einsums(
-        tasks, max_procs=2, reminder=False, verbose=False, return_info=True)
+    payload, info = _run_tasks(tasks, 2)
     assert isinstance(payload, dict) and set(payload) == set(tasks)
     assert info["mode"] == "mpi_launch", info
     timings = info["timings"]
@@ -260,8 +318,7 @@ def test_timings_separate_pool_init_from_compute():
     assert timings["compute_seconds"] <= timings["total_task_seconds"] + 1e-9
     assert sum(timings["tasks_per_worker"]) == len(tasks), timings
 
-    serial_payload, serial_info = parallel_einsum.einsums(
-        tasks, max_procs=1, reminder=False, verbose=False, return_info=True)
+    serial_payload, serial_info = _run_tasks(tasks, 1)
     assert serial_info["mode"] == "serial", serial_info
     assert serial_info["timings"] is None, serial_info
     for key, (equation, operands) in tasks.items():
@@ -283,18 +340,22 @@ def test_collective_is_disabled_by_default():
             'import numpy as np\n'
             'from mpi4py import MPI\n'
             'import pyqcd.einsum as pe\n'
-            'from pyqcd.parallel.einsum import einsums\n'
+            'from pyqcd.parallel.einsum import init, run\n'
             'rank = MPI.COMM_WORLD.Get_rank()\n'
             'rng = np.random.default_rng(5)\n'
             'tasks = {"a": ("ij,jk->ik", [rng.standard_normal((16, 16)),\n'
             '                             rng.standard_normal((16, 16))])}\n'
-            'payload, info = einsums(tasks, reminder=False,\n'
-            '                        verbose=(rank == 0), return_info=True)\n'
-            'ok = payload is not None and np.array_equal(\n'
-            '    payload["a"], pe.contract(*tasks["a"][:1], *tasks["a"][1]))\n'
-            'print("RESULT", json.dumps({"rank": rank, "mode": info["mode"],\n'
-            '                            "has_payload": payload is not None,\n'
-            '                            "ok": bool(ok)}))\n',
+            'results = [np.zeros((16, 16))]\n'
+            'state = init({"task_id": ["a"], "equation": ["ij,jk->ik"],\n'
+            '              "operands": [[tasks["a"][1][0], tasks["a"][1][1]]],\n'
+            '              "results": results}, reminder=False,\n'
+            '             verbose=(rank == 0))\n'
+            'run(state)\n'
+            'filled = bool(np.any(results[0]))\n'
+            'ok = filled and np.array_equal(\n'
+            '    results[0], pe.contract("ij,jk->ik", *tasks["a"][1]))\n'
+            'print("RESULT", json.dumps({"rank": rank, "mode": state.get("mode"),\n'
+            '                            "has_payload": filled, "ok": bool(ok)}))\n',
             encoding='utf-8')
         env = os.environ.copy()
         env['PYTHONPATH'] = os.pathsep.join(
@@ -390,8 +451,8 @@ def test_init_rejects_bad_configs():
         raise AssertionError('init accepted a read-only result buffer')
 
 
-def test_run_matches_einsums_and_respects_task_ids():
-    """``run`` 的结果必须与 ``einsums`` 一致；``task_id`` 只作用于标签与报错。"""
+def test_run_matches_contract_and_respects_task_ids():
+    """``run`` 的结果必须与逐个 ``contract`` 一致；``task_id`` 只作用于标签与报错。"""
     tasks = _matmul_tasks(3, base=40)
     keys = list(tasks)
     equations = [tasks[key][0] for key in keys]
@@ -402,17 +463,16 @@ def test_run_matches_einsums_and_respects_task_ids():
                                   "operands": operands, "results": results},
                                  max_proc=2, reminder=False)
     parallel_einsum.run(state)
-    payload = parallel_einsum.einsums(tasks, max_procs=2, reminder=False,
-                                     verbose=False)
     for index, key in enumerate(keys):
-        assert np.array_equal(results[index], payload[key]), key
+        equation, ops = tasks[key]
+        assert np.array_equal(results[index], pe.contract(equation, *ops)), key
 
 
 def test_plan_rejects_invalid_input():
     """空集合、非法键、非字符串方程都必须在执行前失败。"""
     for bad in ([], {}):
         try:
-            parallel_einsum.plan_einsums(bad)
+            parallel_einsum.plan_tasks(bad)
         except (ValueError, TypeError) as exc:
             assert 'empty' in str(exc) or 'must' in str(exc), str(exc)
         else:
@@ -427,14 +487,14 @@ def test_plan_rejects_invalid_input():
     )
     for spec, fragment in cases:
         try:
-            parallel_einsum.plan_einsums([spec])
+            parallel_einsum.plan_tasks([spec])
         except (ValueError, TypeError) as exc:
             assert fragment in str(exc), (fragment, str(exc))
         else:
             raise AssertionError(f'invalid spec accepted: {spec!r}')
 
     try:
-        parallel_einsum.plan_einsums(_matmul_tasks(2), max_procs=0)
+        parallel_einsum.plan_tasks(_matmul_tasks(2), max_procs=0)
     except ValueError as exc:
         assert 'max_procs' in str(exc)
     else:
@@ -444,10 +504,17 @@ def test_plan_rejects_invalid_input():
 def test_reminder_is_printed_only_once():
     """使用场景提醒只在首次调用打印一次，且带可信性/实测要求。"""
     parallel_einsum._REMINDER_SHOWN = False
+    tasks = _matmul_tasks(1, base=8)
+    keys = list(tasks)
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
-        parallel_einsum.einsums(_matmul_tasks(1, base=8), max_procs=1)
-        parallel_einsum.einsums(_matmul_tasks(1, base=8), max_procs=1)
+        for _ in range(2):
+            results = [np.zeros((8, 8), dtype=tasks[keys[0]][1][0].dtype)]
+            state = parallel_einsum.init(
+                {"task_id": keys, "equation": [tasks[keys[0]][0]],
+                 "operands": [list(tasks[keys[0]][1])], "results": results},
+                max_proc=1, reminder=True, verbose=False)
+            parallel_einsum.run(state)
     text = buffer.getvalue()
     assert text.count('使用场景提醒') == 1, text
     for fragment in ('大批量但小单量', '超出硬件资源极限', '可信性分析', '功能实测'):
@@ -462,10 +529,10 @@ def test_reminder_is_printed_only_once():
 def test_serial_path_matches_contract_bit_exact():
     """单进程路径必须与逐个 contract 的结果逐位一致（list 与 dict 都要）。"""
     tasks = _matmul_tasks(4, base=24)
-    payload, text = _run_quiet(tasks=tasks, max_procs=1)
+    payload, info = _run_tasks(tasks, max_procs=1)
     expected = {key: pe.contract(eq, *ops) for key, (eq, ops) in tasks.items()}
     _assert_close(payload, expected, 'serial-dict')
-    assert 'mode=serial' in text, text
+    assert info['mode'] == 'serial', info
 
     ordered = list(tasks.values())
     listed, _ = _run_quiet(tasks=ordered, max_procs=1)
@@ -478,11 +545,11 @@ def test_launched_path_matches_contract_bit_exact():
     """自建 MPI 进程池路径的结果必须与串行逐位一致。"""
     _require_launcher()
     tasks = _matmul_tasks(4, base=32)
-    payload, text = _run_quiet(tasks=tasks, max_procs=2)
+    payload, info = _run_tasks(tasks, max_procs=2)
     expected = {key: pe.contract(eq, *ops) for key, (eq, ops) in tasks.items()}
     _assert_close(payload, expected, 'launched')
-    assert 'mode=mpi-launch' in text, text
-    assert 'workers=2' in text, text
+    assert info['mode'] == 'mpi_launch', info
+    assert info['plan']['workers'] == 2, info
 
 
 def test_launched_path_reports_failing_task_key():
@@ -520,12 +587,13 @@ def test_distillation_equations_match_serial_contract():
     tasks = _distillation_tasks()
     expected = {key: pe.contract(spec['subscripts'], *spec['operands'])
                 for key, spec in tasks.items()}
-    serial, _ = _run_quiet(tasks=tasks, max_procs=1)
+    serial, serial_info = _run_tasks(tasks, max_procs=1)
     _assert_close(serial, expected, 'distillation-serial')
+    assert serial_info['mode'] == 'serial', serial_info
     if _mpi_launcher() is not None:
-        launched, text = _run_quiet(tasks=tasks, max_procs=2)
+        launched, info = _run_tasks(tasks, max_procs=2)
         _assert_close(launched, expected, 'distillation-launched', rtol=1e-12)
-        assert 'mode=mpi-launch' in text, text
+        assert info['mode'] == 'mpi_launch', info
 
 
 def test_collective_memory_warning_is_emitted():
@@ -540,13 +608,17 @@ def test_collective_memory_warning_is_emitted():
         script = Path(tmpdir) / 'warning_probe.py'
         script.write_text(
             'import numpy as np\n'
-            'from pyqcd.parallel.einsum import einsums\n'
+            'from pyqcd.parallel.einsum import init, run\n'
             'rng = np.random.default_rng(3)\n'
             'tasks = {"a": ("ij,jk->ik", [rng.standard_normal((16, 16)),\n'
             '                             rng.standard_normal((16, 16))])}\n'
             '# collective 默认关闭；这里显式打开，验证内存警告与 reminder 无关\n'
-            'einsums(tasks, max_procs=2, reminder=False, verbose=False,\n'
-            '        collective=True)\n',
+            'results = [np.zeros((16, 16))]\n'
+            'state = init({"equation": ["ij,jk->ik"],\n'
+            '              "operands": [[tasks["a"][1][0], tasks["a"][1][1]]],\n'
+            '              "results": results}, max_proc=2, reminder=False,\n'
+            '             verbose=False, collective=True)\n'
+            'run(state)\n',
             encoding='utf-8')
         env = os.environ.copy()
         env['PYTHONPATH'] = os.pathsep.join(
@@ -572,7 +644,7 @@ def test_collective_path_matches_contract_and_returns_none_on_workers():
             'import numpy as np\n'
             'from mpi4py import MPI\n'
             'import pyqcd.einsum as pe\n'
-            'from pyqcd.parallel.einsum import einsums\n'
+            'from pyqcd.parallel.einsum import init, run\n'
             'comm = MPI.COMM_WORLD\n'
             'rank = comm.Get_rank()\n'
             'rng = np.random.default_rng(99)\n'
@@ -581,16 +653,23 @@ def test_collective_path_matches_contract_and_returns_none_on_workers():
             '    n = 32 + 4 * i\n'
             '    tasks[f"k{i}"] = ("ij,jk->ik", [rng.standard_normal((n, n)),\n'
             '                                     rng.standard_normal((n, n))])\n'
-            'payload = einsums(tasks, max_procs=3, reminder=False,\n'
-            '                  verbose=(rank == 0), collective=True)\n'
+            'keys = list(tasks)\n'
+            'results = [np.zeros((s, s)) for s in\n'
+            '           [32 + 4 * i for i in range(len(keys))]]\n'
+            'state = init({"task_id": keys,\n'
+            '              "equation": [tasks[k][0] for k in keys],\n'
+            '              "operands": [list(tasks[k][1]) for k in keys],\n'
+            '              "results": results}, max_proc=3, reminder=False,\n'
+            '             verbose=(rank == 0), collective=True)\n'
+            'run(state)\n'
             'if rank == 0:\n'
-            '    exact = all(np.array_equal(payload[k],\n'
-            '                               pe.contract(v[0], *v[1]))\n'
-            '                for k, v in tasks.items())\n'
-            '    print("RESULT", json.dumps({"exact": exact,\n'
-            '                                "keys": sorted(payload)}))\n'
+            '    exact = all(np.array_equal(results[i],\n'
+            '                               pe.contract(tasks[k][0], *tasks[k][1]))\n'
+            '                for i, k in enumerate(keys))\n'
+            '    print("RESULT", json.dumps({"exact": exact, "keys": keys}))\n'
             'else:\n'
-            '    print("RESULT", json.dumps({"payload": payload is None}))\n',
+            '    print("RESULT", json.dumps({"payload": state.get("mode") ==\n'
+            '                                "mpi_collective"}))\n',
             encoding='utf-8')
         env = os.environ.copy()
         env['PYTHONPATH'] = os.pathsep.join(
@@ -621,7 +700,9 @@ def test_parallel_import_does_not_change_einsum():
          'ref = pe.contract("ij,jk->ik", a, b)\n'
          'pe.contract("ij,jk->ik", a, b)\n'
          'assert np.array_equal(ref, a @ b)\n'
-         'assert callable(P.einsums) and callable(P.plan_einsums)\n'
+         'assert callable(P.init) and callable(P.run)\n'
+         'assert callable(P.plan_tasks)\n'
+         'assert not hasattr(P, "einsums"), "einsums must be gone"\n'
          'print("OK")\n'],
         capture_output=True, text=True, cwd=project_root,
         env=dict(os.environ, PYTHONPATH=str(project_root)))
@@ -656,7 +737,7 @@ _TESTS = (
     test_collective_is_disabled_by_default,
     test_init_and_run_write_results_in_place,
     test_init_rejects_bad_configs,
-    test_run_matches_einsums_and_respects_task_ids,
+    test_run_matches_contract_and_respects_task_ids,
     test_plan_rejects_invalid_input,
     test_reminder_is_printed_only_once,
     test_serial_path_matches_contract_bit_exact,

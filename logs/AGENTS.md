@@ -692,3 +692,11 @@
 - 关键内容: 全量 124 passed、契约 13/13、collective 1.43-3.97x、PyPI 0.2.8、tag dev42
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pyqcd-parallel/einsum-init-run-finalize - final - 2026-11-11 15:36:44 +0800
+- 主任务: 接续 resume[20261111T095325.nigwgy]：收口 pyqcd.parallel.einsum 的 init+run 重构（彻底移除 einsums/plan_einsums），并复核既有稳定功能
+- 日志文件: logs/v2026111115.txt
+- 文件大小: 8014 bytes
+- 触发原因: 任务完成
+- 关键内容: 删除孤儿 _package、修正文档标题空行与 max_proc 参数名；全量 124 passed、契约 19 passed、release_check 10/10
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

@@ -2962,7 +2962,7 @@ def test_parallel_mpi_planning_contracts():
 
 
 def test_parallel_einsum_contracts():
-    """批量 einsum 的 MPI 任务级并行：分箱、一一对应与失败传播契约。"""
+    """批量 einsum 的 MPI 任务级并行（init + run）：分箱、原位写入与失败传播契约。"""
     import unittest
 
     from ._parallel_einsum_contract import TESTS

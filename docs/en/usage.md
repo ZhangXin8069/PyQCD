@@ -217,33 +217,35 @@ allows, so with few tasks `N*a < n*b` — the reduction is reported in `notes`
 (e.g. `Y capped from 13 to 3`) and `gpu_ok` still tells you whether one worker
 fits in the per-GPU budget.
 
-## Batch of independent contractions (`einsums`)
+## Batch of independent contractions (`init` + `run`)
 
-`pyqcd.parallel.einsum.einsums` runs a **batch of mutually independent**
-contractions in parallel, one MPI process per work bin. Each task is an ordinary
-`contract(...)` call, so its arguments and semantics are unchanged.
+`pyqcd.parallel.einsum` runs a **batch of mutually independent** contractions in
+parallel, one MPI process per work bin. Each task is an ordinary `contract(...)`
+call, so its arguments and semantics are unchanged. The interface has exactly two
+steps: `init` plans, `run` executes.
 
 ```python
 import numpy as np
 import pyqcd.einsum as pe
-from pyqcd.parallel import einsums, plan_einsums
+from pyqcd.parallel import init, plan_tasks, run
 
-# A batch of independent contractions: same equation, same shapes, different data
-# (a dict whose keys are the task names).
+# A batch of independent contractions: same equation, same shapes, different data.
 rng = np.random.default_rng(0)
-tasks = {
-    f"t{i}": {"subscripts": "ij,jk->ik",
-              "operands": [rng.standard_normal((64, 64)),
-                           rng.standard_normal((64, 64))]}
-    for i in range(4)
+left = [rng.standard_normal((64, 64)) for _ in range(4)]
+right = [rng.standard_normal((64, 64)) for _ in range(4)]
+out = [np.zeros((64, 64)) for _ in range(4)]          # caller-owned output buffers
+
+# A column-wise dict; task_id is optional, the other three are required.
+config = {
+    "task_id": [f"t{i}" for i in range(4)],
+    "equation": ["ij,jk->ik"] * 4,
+    "operands": [[left[i], right[i]] for i in range(4)],   # read-only, never copied
+    "results": out,                                        # writable, written in place
 }
 
-# See how it would split the work: process count, which tasks land in which bin,
-# and whether the loads are balanced.
-plan = plan_einsums(tasks, max_procs=4)
-
-# max_procs=1 takes the serial path, so the docs gate never spawns an MPI pool.
-result = einsums(tasks, max_procs=1, reminder=False, verbose=False)
+plan = plan_tasks(config["equation"], config["operands"], max_procs=4)
+state = init(config, max_proc=1, reminder=False)      # max_proc=1 keeps this serial
+run(state)                                           # launcher: returns None
 
 # The result mirrors the input one-to-one: same keys, same order; the packing covers
 # every task and has no straggler.
@@ -251,103 +253,96 @@ assert plan["workers"] == min(4, plan["limits"]["limit"])
 assert sorted(i for bin_ in plan["bins"] for i in bin_) == [0, 1, 2, 3]
 assert plan["skew"] >= 1.0 and len(plan["bins"]) == plan["workers"]
 
-# Every task must equal what contract returns for it on its own.
-assert result.keys() == tasks.keys()
-for key, spec in tasks.items():
-    assert np.allclose(result[key], pe.contract(spec["subscripts"], *spec["operands"]))
+# Every buffer now holds exactly what contract returns, and is the same object.
+for i in range(4):
+    assert np.array_equal(out[i], pe.contract("ij,jk->ik", left[i], right[i]))
+    assert out[i] is config["results"][i]
 ```
 
 ```python
 # docs-skip: launches mpirun worker processes
-from pyqcd.parallel import einsums
+from pyqcd.parallel import init, run
 
-result = einsums(tasks, max_procs=4)          # self-launched MPI pool
+state = init(config, max_proc=4, reminder=False)      # self-launched MPI pool
+run(state)
 ```
 
-* **Container shape decides the result shape**: a `dict` of specs returns a
-  `dict` with the same keys, a `list`/`tuple` returns a `list` in the same order.
-* **A task spec** is `{"subscripts": str, "operands": [...], "kwargs": {...}}`
-  (also accepted as `equation`/`eq`; `kwargs` may be omitted) or the equivalent
-  `(subscripts, operands[, kwargs])` tuple. Per-task `kwargs` override the
-  call-level `optimize`/`backend`.
+* **`init` plans, `run` executes.** `init` validates the dict and computes the
+  binning; `run` is a launcher — it returns `None` and writes results **in place**,
+  so planning and execution can be timed separately and no output array is
+  reallocated.
+* **Since 0.3.0 there is no one-shot wrapper**: `einsums` and `plan_einsums` were
+  removed. Use `init` + `run` to execute and `plan_tasks` to plan only.
+* **Input dict** is `{"task_id": [...], "equation": [...], "operands": [...],
+  "results": [...]}`; `task_id` may be omitted (indices are used). Lengths must
+  match, each task's result buffer must have the contraction's output shape, and
+  buffers must be writable — otherwise `init` fails before any work starts.
+  `operands` are never copied or modified.
 * **Work balancing**: work per task is estimated from `contract_path`'s optimized
   FLOP count (with input/output element count as a floor for sum-free equations),
   then packed with LPT (longest-processing-time-first). The slowest process stays
   within `4/3 - 1/(3K)` of the optimal makespan, so bins can hold different
   numbers of tasks without creating a straggler.
 * **Process count** defaults to `min(number of tasks, CPU threads, RAM budget)`;
-  pass `max_procs=` to cap it. Without MPI it starts its own `mpirun -np K` pool
-  and exchanges tasks/results through a temporary directory.
+  pass `max_proc=` to cap it. Without MPI it starts its own `mpirun -np K` pool and
+  exchanges tasks/results through a temporary directory.
 * **Collective mode is off by default.** Inside an existing `mpirun -np N`, the
   default is `collective=False`: only rank 0 runs the batch and every other rank
-  returns `None` immediately, so nothing is replicated. Pass `collective=True` to
-  spread the work over all `N` ranks — with no data staging, but every rank then
-  holds a full copy of the batch (see the memory note below).
-* **Memory: collective copies the input onto every rank.** The planner runs inside
-  `einsums`, so with `collective=True` each rank must build the *whole* batch:
-  input memory becomes `one copy × ranks`. Rank 0 additionally holds **all**
-  results, and `broadcast=True` gives every rank its own full copy of them.
-  Measured with `resource.ru_maxrss` (float32, 64 tasks of 512², batch input
-  134 MB): serial peaks at 234 MB, collective on 4 ranks totals ≈ 1.15 GB.
-  On GPU this means *one full batch per visible card*, so keep the rank count
-  aligned with the device count. This is exactly why the mode is opt-in, and why
-  `einsums` prints a warning whenever it is used. When the batch does not fit, use
-  the self-launched pool: it ships tasks through disk so each worker only reads its
-  own bin, at ~0.15–0.3 s fixed overhead per call.
+  returns immediately, so nothing is replicated. Pass `collective=True` to spread
+  the work over all `N` ranks — with no data staging, but every rank then holds a
+  full copy of the batch (see the memory note below).
+* **Memory: collective copies the input onto every rank.** With
+  `collective=True` each rank must build the *whole* batch: input memory becomes
+  `one copy × ranks`. Rank 0 additionally holds **all** results, and
+  `broadcast=True` gives every rank its own full copy of them. Measured with
+  `resource.ru_maxrss` (float32, 64 tasks of 512², batch input 134 MB): serial
+  peaks at 234 MB, collective on 4 ranks totals ≈ 1.15 GB. On GPU this means *one
+  full batch per visible card*, so keep the rank count aligned with the device
+  count. This is exactly why the mode is opt-in, and why `run` prints a warning
+  whenever it is used. When the batch does not fit, use the self-launched pool: it
+  ships tasks through disk so each worker only reads its own bin, at ~0.15–0.3 s
+  fixed overhead per call.
 * **Precision follows the operands**: `complex64`/`float32` inputs halve both
-  memory and arithmetic cost. `einsums` never casts anything itself.
+  memory and arithmetic cost. `init`/`run` never cast anything themselves.
 
-### Split it: `init` + `run`
-
-When you want planning and execution timed separately — or results written straight
-into buffers you already own — use the two-step form. `init` validates and plans,
-`run` executes; `run` returns nothing and writes **in place**.
+### Failure handling and debugging
 
 ```python
-import numpy as np
-from pyqcd.parallel import init, run
+# A task whose result buffer has the wrong shape fails inside init, before any work.
+try:
+    init({"equation": ["ij,jk->ik"],
+          "operands": [[np.eye(3), np.eye(3)]],
+          "results": [np.zeros((4, 4))]}, max_proc=1, reminder=False)
+except ValueError as exc:
+    assert "does not match" in str(exc)
 
-rng = np.random.default_rng(0)
-a = [rng.standard_normal((32, 32)) for _ in range(3)]
-b = [rng.standard_normal((32, 32)) for _ in range(3)]
-out = [np.zeros((32, 32)) for _ in range(3)]      # caller-owned output buffers
-
-# A column-wise dict; task_id is optional, the other three are required.
-config = {
-    "task_id": ["t0", "t1", "t2"],
-    "equation": ["ij,jk->ik"] * 3,
-    "operands": [[a[i], b[i]] for i in range(3)],   # read-only, never copied
-    "results": out,                                  # writable, written in place
-}
-
-state = init(config, max_proc=1, verbose=False, reminder=False)
-run(state)                     # launcher: returns None, fills `out`
-
-# operands untouched, results identical to contract, buffers not replaced
-assert all(np.array_equal(a[i], config["operands"][i][0]) for i in range(3))
-assert all(np.array_equal(out[i], a[i] @ b[i]) for i in range(3))
-assert all(out[i] is config["results"][i] for i in range(3))
-assert state["keys"] == ["t0", "t1", "t2"] and state["plan"]["workers"] == 1
+# verbose=True prints one line per step tagged with task_id.
+state = init({"task_id": ["probe"],
+              "equation": ["ij,jk->ik"],
+              "operands": [[left[0], right[0]]],
+              "results": [np.zeros((64, 64))]},
+             max_proc=1, verbose=True, reminder=False)
+run(state)
+assert state["mode"] == "serial"
 ```
 
-`init(config, ...)` accepts only this dict (plus the same keywords as `einsums`),
-and fails early on a length mismatch, a result buffer whose shape does not match the
-contraction, or a read-only buffer. `verbose=True` prints one line per step tagged
-with `task_id`, which is the debug switch for tracking a batch down.
+`run` is a launcher, so it has no return value; the execution statistics it
+observed are written back into the state dict you passed in (`state["mode"]`,
+`state["timings"]`), which is what you time around.
 
 Measured on this 4-physical-core / 8-thread, 16 GB machine — real sush
 distillation equation S1 (NN 2pt, 8 operands), `complex64` operands,
 `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1` (single-thread baseline, the fair
 comparison point), results verified against serial `contract`:
 
-| mode | workload | serial | `einsums` | speed-up | peak RSS (this rank / all ranks) |
+| mode | workload | serial | `init` + `run` | speed-up | peak RSS (this rank / all ranks) |
 |---|---|---|---|---|---|
 | `mpirun -np 2` (collective) | S1, Nvec=40, 8 tasks | 168 ms | 88 ms | **1.86×** | rank 0 415 MB / ≈702 MB |
 | `mpirun -np 4` (collective) | S1, Nvec=40, 8 tasks | 183 ms | 59 ms | **3.09×** | rank 0 383 MB / ≈1.15 GB |
 | `mpirun -np 4` (collective), default threads | S1, Nvec=40, 8 tasks | 138 ms | 53 ms | 2.28× | — |
-| self-launched pool, `max_procs=4` | S1, Nvec=60, 8 tasks | 736 ms | 622 ms | 1.18× | one batch on disk |
-| self-launched pool, `max_procs=4` | S1, Nvec=100, 8 tasks | 5326 ms | 2160 ms | **2.47×** | one batch on disk |
-| self-launched pool, `max_procs=4` | S1, Nvec=40, 8 tasks | 217 ms | 391 ms | 0.56× | one batch on disk |
+| self-launched pool (4 processes) | S1, Nvec=60, 8 tasks | 736 ms | 622 ms | 1.18× | one batch on disk |
+| self-launched pool (4 processes) | S1, Nvec=100, 8 tasks | 5326 ms | 2160 ms | **2.47×** | one batch on disk |
+| self-launched pool (4 processes) | S1, Nvec=40, 8 tasks | 217 ms | 391 ms | 0.56× | one batch on disk |
 
 Two conclusions from the measurements, both reproducible with
 `python -m pyqcd.testing.parallel_einsum bench` (self-launched pool) and

@@ -250,9 +250,10 @@ check(
 * **precision is preserved** — `complex128` in, `complex128` out;
 * **dtype/shape errors are raised, not guessed**, with the same wording as `opt_einsum`.
 
-## Batch of independent contractions (`einsums`)
+## Batch of independent contractions (`init` + `run`)
 
-`pyqcd.parallel.einsum.einsums` runs a **batch of mutually independent** contractions
+`pyqcd.parallel.einsum` runs a **batch of mutually independent** contractions
+through `init` + `run`
 on several MPI ranks. Unlike the tables above, the comparison partner here is *the
 same library running serially* — the question is only whether splitting a queue of
 tasks across processes pays off.
@@ -262,9 +263,9 @@ Protocol: same machine, `complex64`/`float32` operands, `OMP_NUM_THREADS=OPENBLA
 3 rounds with serial and parallel timed back to back, median of the per-round ratios.
 Every batch is verified against serial `contract` before the ratio is printed.
 
-**Two calibers, both reported.** `einsums` returns the worker-measured pure compute
-time (`return_info=True` → `info["timings"]`), so a self-launched pool can be charged
-two ways:
+**Two calibers, both reported.** `run` writes the worker-measured pure compute time
+back into the state dict (`state["timings"]`), so a self-launched pool can be
+charged two ways:
 
 * **init included** (`×wall`) — what the caller actually waits for: `mpirun` start-up,
   task/result staging, plus compute. This is the number to quote for end-to-end cost.
@@ -293,7 +294,7 @@ missing from `×compute`). This is the fastest mode, but it is opt-in because of
 the memory cost below.
 
 > **Memory warning — collective mode replicates the input on every rank.**
-> The planner runs inside `einsums`, so each rank must build the *whole* batch:
+> The planner runs inside `init`, so each rank must build the *whole* batch:
 > input memory becomes `one copy × ranks`. Rank 0 additionally holds **all**
 > results, and `broadcast=True` gives every rank its own full copy of them.
 > Measured with `resource.ru_maxrss` on float32 matrix products (batch input
@@ -302,8 +303,8 @@ the memory cost below.
 > batch per visible card — keep the rank count equal to the device count or VRAM
 > multiplies. If the batch does not fit, use the self-launched pool: it ships tasks
 > through disk and each worker reads only its own bin, at ~0.15–0.3 s fixed cost
-> per call. `einsums` prints this warning on every collective call, independently
-> of `reminder=`.
+> per call. `run` prints this warning on every collective call, independently of
+> `reminder=`.
 
 ### Self-launched pool (single process, no pre-existing `mpirun`)
 
@@ -351,7 +352,7 @@ from functools import partial
 
 import numpy as np
 import pyqcd.einsum as pe
-from pyqcd.parallel import einsums
+from pyqcd.parallel import init, run
 
 ROUNDS = 3        # serial and parallel are each timed this many times; take the median ratio
 PROCS = 4         # size of the self-launched pool; inside mpirun the rank count decides
@@ -441,9 +442,26 @@ def run_serial(tasks):
             for equation, operands in tasks.values()]
 
 
+def output_shape(equation, operands):
+    """Shape of the contraction output, used to lay out the result buffers."""
+    shapes = tuple(tuple(int(n) for n in operand.shape) for operand in operands)
+    _, info = pe.contract_path(equation, *shapes, shapes=True, optimize="greedy")
+    return tuple(info.size_dict[label] for label in info.output_subscript)
+
+
 def run_parallel(tasks):
-    """Hand the whole batch to einsums; it returns a dict with the same keys."""
-    return einsums(tasks, max_procs=PROCS, reminder=False, verbose=False)
+    """One ``init`` + ``run`` pair; results land in the caller-owned buffers."""
+    keys = list(tasks)
+    results = [np.zeros(output_shape(*tasks[key]),
+                        dtype=np.result_type(*[o.dtype for o in tasks[key][1]]))
+               for key in keys]
+    state = init({"task_id": keys,
+                  "equation": [tasks[key][0] for key in keys],
+                  "operands": [list(tasks[key][1]) for key in keys],
+                  "results": results},
+                 max_proc=PROCS, reminder=False)
+    run(state)
+    return {key: results[index] for index, key in enumerate(keys)}
 
 
 print(f"{'case':24s} {'tasks':>5s} {'serial(s)':>9s} "
@@ -462,11 +480,13 @@ for label, tasks in CASES.items():
 
     print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} "
           f"{parallel_seconds:11.3f} {serial_seconds / parallel_seconds:7.2f}x")
+
 ```
 
 To measure the collective mode instead, save the loop above as `bench.py` and run
-`mpirun -np 4 python bench.py`: every rank calls `einsums` and the work is divided over
-those ranks with no data staging (the table above uses exactly that path).
+`mpirun -np 4 python bench.py`: every rank calls `init` + `run` with
+`collective=True`, and the work is divided over those ranks with no data staging
+(the table above uses exactly that path).
 
 ## Reproduce
 

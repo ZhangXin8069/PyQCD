@@ -6,14 +6,20 @@
 适用场景（也是本功能的边界）：单队列里排着大批量、但每个任务都很小的 einsum。
 这类任务无法把单次收缩拆到多进程（单个收缩的并行度受限），只能做**任务级**并行。
 
+公开接口只有两步（不提供一体化包装，避免与第三方 Einsums 库的名字混淆）：
+
+* :func:`init` —— 只接受列式字典 ``{task_id, equation, operands, results}``，
+  校验后做 LPT 规划，返回句柄（不执行计算）；
+* :func:`run` —— 启动器语义，无返回值，结果**原地**写入 ``init`` 时传入的
+  ``results`` 缓冲区，不重新分配内存或显存。
+
 两种运行方式：
 
 * 已在 MPI 下（``mpirun -np N python your_script.py``）：各 rank 都调用
-  ``einsums(...)``，rank 0 规划后广播分箱，各 rank 算自己那箱，最后 gather 回
-  rank 0。此时数据不动，零序列化开销。
-* 不在 MPI 下：``einsums(...)`` 自己 ``mpirun -np K python -m
-  pyqcd.parallel.einsum --worker <dir>`` 拉起 K 个进程，任务与结果经临时目录
-  传递。此时每个操作数会被序列化一次、结果反序列化一次。
+  ``init`` + ``run``，rank 0 规划后广播分箱，各 rank 算自己那箱，最后 gather 回
+  rank 0。此时数据不动，零序列化开销（需 ``collective=True``）。
+* 不在 MPI 下：自己 ``mpirun -np K python -m pyqcd.parallel.einsum --worker
+  <dir>`` 拉起 K 个进程，任务与结果经临时目录传递。
 
 工作量分配：按 ``contract_path`` 的优化 FLOP 数（并以输入/输出元素数兜底，覆盖
 零求和的逐元素方程）做工时估计，再用 LPT（longest-processing-time-first）装箱，
@@ -39,7 +45,7 @@ import numpy as np
 
 from ..einsum import contract, contract_path
 
-__all__ = ["einsums", "init", "run", "plan_einsums", "REMINDER_TEXT",
+__all__ = ["init", "run", "plan_tasks", "REMINDER_TEXT",
            "COLLECTIVE_MEMORY_WARNING"]
 
 REMINDER_TEXT = (
@@ -116,27 +122,20 @@ def _normalize_one(spec, index):
 
 
 def _normalize_tasks(tasks):
-    """返回 ``(kind, keys, specs)``；``kind`` 为 ``'list'`` 或 ``'dict'``。"""
+    """返回 ``(keys, specs)``：任务名（list 用下标）与规范化后的任务描述。"""
     if isinstance(tasks, dict):
         if not tasks:
             raise ValueError("tasks mapping must not be empty")
         keys = list(tasks.keys())
-        return "dict", keys, [_normalize_one(tasks[key], key) for key in keys]
+        return keys, [_normalize_one(tasks[key], key) for key in keys]
     if isinstance(tasks, (list, tuple)):
         if not tasks:
             raise ValueError("tasks sequence must not be empty")
-        return "list", list(range(len(tasks))), [
+        return list(range(len(tasks))), [
             _normalize_one(spec, index) for index, spec in enumerate(tasks)]
     raise TypeError(
         "tasks must be a list/tuple of task specs or a mapping of "
         f"name -> task spec, got {type(tasks).__name__}")
-
-
-def _package(kind, keys, ordered):
-    """按输入容器类型重装结果，保持一一对应。"""
-    if kind == "dict":
-        return {key: ordered[index] for index, key in enumerate(keys)}
-    return ordered
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -263,9 +262,18 @@ def _plan_specs(specs, max_procs=None, resources=None):
     }
 
 
-def plan_einsums(tasks, max_procs=None, resources=None):
-    """只做规划、不执行：返回进程数、分箱与负载统计（便于自查与复现）。"""
-    _kind, _keys, specs = _normalize_tasks(tasks)
+def plan_tasks(tasks, operands=None, max_procs=None, resources=None):
+    """只做规划、不执行：返回进程数、分箱与负载统计（便于自查与复现）。
+
+    两种调用方式：
+
+    * ``plan_tasks(tasks)`` —— ``tasks`` 是 dict 或 list 的任务描述；
+    * ``plan_tasks(equations, operands)`` —— 两个等长序列（与 ``init`` 的列式字典
+      同形），便于在 ``init`` 之前单独看分箱。
+    """
+    if operands is not None:
+        tasks = list(zip(tasks, operands))
+    _keys, specs = _normalize_tasks(tasks)
     plan = _plan_specs(specs, max_procs=max_procs, resources=resources)
     plan["bins"] = [list(entries) for entries in plan["bins"]]
     return plan
@@ -301,7 +309,8 @@ def _raise_failures(failures, keys):
     details = "; ".join(
         f"task {keys[item['index']]!r} ({item['type']}): {item['message']}"
         for item in failures)
-    raise RuntimeError(f"einsums: {len(failures)} task(s) failed: {details}")
+    raise RuntimeError(f"pyqcd.parallel.einsum: {len(failures)} "
+                       f"task(s) failed: {details}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -587,7 +596,7 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
         return _run_serial(specs, optimize, backend), {
             "mode": "serial_fallback", "workers": 1}
 
-    run_dir = tempfile.mkdtemp(prefix="pyqcd-einsums-", dir=workdir)
+    run_dir = tempfile.mkdtemp(prefix="pyqcd-einsum-", dir=workdir)
     results_dir = os.path.join(run_dir, "results")
     try:
         _write_tasks(run_dir, specs)
@@ -617,10 +626,12 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
                     detail += ("; " if detail else "")
                     detail += f"missing results for {missing[:8]}"
                 raise RuntimeError(
-                    f"einsums: {len(errors) or len(missing)} task(s) failed: "
+                    f"pyqcd.parallel.einsum: {len(errors) or len(missing)} "
+                    f"task(s) failed: "
                     f"{detail}\n--- launcher output ---\n{tail}")
             raise RuntimeError(
-                f"einsums: MPI launch failed (exit={completed.returncode}); "
+                f"pyqcd.parallel.einsum: MPI launch failed "
+                f"(exit={completed.returncode}); "
                 f"no task reported an error\n"
                 f"--- launcher output ---\n{tail}")
         ordered = [np.load(os.path.join(results_dir, f"result_{index:05d}.npy"))
@@ -636,7 +647,7 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 公共入口：einsums（一体化）/ init + run（分步，结果原位写入）
+# 公共入口：init（规划）/ run（启动器，结果原位写入）
 # ═══════════════════════════════════════════════════════════════════
 
 def _execute(specs, keys, plan, optimize, backend, collective, workdir,
@@ -702,70 +713,6 @@ def _show_reminder(reminder):
     _REMINDER_SHOWN = True
 
 
-def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
-            reminder=True, verbose=True, workdir=None, keep_workdir=False,
-            launcher=None, broadcast=False, worker_threads=None,
-            return_info=False, collective=False):
-    """并行执行多个相互独立的 einsum 任务，结果与串行调用逐一对应。
-
-    这是 "规划 + 执行" 的一体化入口；需要把耗时分段测量时改用 :func:`init` +
-    :func:`run`。
-
-    Parameters
-    ----------
-    tasks : list | dict
-        每个元素是一次 ``pyqcd.einsum.contract`` 的参数集合：``{'subscripts':
-        str, 'operands': [...], 'kwargs': {...}}``（``subscripts`` 亦可写作
-        ``equation``/``eq``，``kwargs`` 可省略），或等价的
-        ``(subscripts, operands[, kwargs])`` 元组。传 dict 返回同键 dict，
-        传 list 返回同序 list。
-    max_procs : int, optional
-        MPI 进程数上限；``None``（默认）表示取系统允许的最大值
-        ``min(子任务数, CPU 线程数, 可用内存允许的进程数)``。
-    optimize, backend : str
-        传给 ``contract`` 的默认值；单个任务的 ``kwargs`` 可覆盖。
-    reminder : bool
-        首次调用打印「使用场景提醒」（每个进程一次）。
-    verbose : bool
-        打印规划摘要（rank 0 / 父进程）。
-    workdir : str, optional
-        自建进程池时临时目录的父目录（默认系统临时目录）。
-    keep_workdir : bool
-        保留临时目录（调试用）。
-    launcher : list, optional
-        覆盖 MPI 启动命令，如 ``['mpiexec', '--allow-run-as-root']``。
-    worker_threads : int, optional
-        自建进程池里每个 worker 的 OMP/BLAS 线程数；默认 ``物理核数 // 进程数``。
-        小任务批次建议显式写 1（线程创建开销会盖过并行收益）。
-    broadcast : bool
-        仅 collective 模式有意义：``True`` 时把完整结果广播给所有 rank
-        （默认只在 rank 0 返回结果，其他 rank 返回 ``None``）。
-    return_info : bool
-        ``True`` 时返回 ``(payload, info)``。``info`` 里带 ``timings``：
-        自建进程池时各 worker 自报的**纯计算**耗时（不含 mpirun 启动与落盘），
-        用于把"计入初始化"和"不计入初始化"两种口径分开统计。
-    collective : bool
-        **默认 ``False``**：collective 模式让每个 rank 各持一份整批输入，真实生产
-        对内存/显存敏感，因此默认不启用。处于 ``mpirun`` 内且保持默认时，只有
-        rank 0 执行、其余 rank 立即返回 ``None``。需要分摊到所有 rank 时显式写
-        ``collective=True``。
-
-    Returns
-    -------
-    list | dict | None
-        与输入一一对应的结果；collective 模式下非 rank 0 默认得到 ``None``。
-        传 ``return_info=True`` 时返回 ``(payload, info)``。
-    """
-    kind, keys, specs = _normalize_tasks(tasks)
-    _show_reminder(reminder)
-    plan = _plan_specs(specs, max_procs=max_procs)
-    ordered, info = _execute(specs, keys, plan, optimize, backend, collective,
-                             workdir, keep_workdir, launcher, worker_threads,
-                             broadcast, verbose)
-    payload = None if ordered is None else _package(kind, keys, ordered)
-    return (payload, info) if return_info else payload
-
-
 _CONFIG_KEYS = frozenset(("task_id", "equation", "operands", "results"))
 
 
@@ -775,8 +722,8 @@ def init(config, max_proc=None, verbose=False, reminder=True,
          broadcast=False):
     """校验并规划一批任务，返回可直接交给 :func:`run` 的句柄（不执行计算）。
 
-    与 ``einsums`` 的区别：这里只接受**列式字典**，且结果写进调用方预先分配好的
-    缓冲区，因此可以先 ``init`` 计时、再 ``run`` 计时，把规划与执行分开测量。
+    只接受**列式字典**，且结果写进调用方预先分配好的缓冲区，因此可以先 ``init``
+    计时、再 ``run`` 计时，把规划与执行分开测量。
 
     Parameters
     ----------
@@ -801,7 +748,7 @@ def init(config, max_proc=None, verbose=False, reminder=True,
         首次调用打印使用场景提醒。
     其余参数（``optimize`` / ``backend`` / ``collective`` / ``workdir`` /
     ``keep_workdir`` / ``launcher`` / ``worker_threads`` / ``broadcast``）
-    含义与 :func:`einsums` 相同。
+    含义见 :func:`init` 的参数说明。
 
     Returns
     -------
@@ -907,6 +854,10 @@ def run(state, max_proc=None):
         state["collective"], state["workdir"], state["keep_workdir"],
         state["launcher"], state["worker_threads"], state["broadcast"],
         state["verbose"])
+    # 启动器语义：返回 None，但把这次执行的统计写回 state，供调用方分段计时
+    # （`run` 没有返回值，信息不能丢）。
+    state["mode"] = info.get("mode")
+    state["timings"] = info.get("timings")
     if ordered is None:
         return None
     for target, value in zip(state["results"], ordered):
@@ -978,7 +929,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="pyqcd.parallel.einsum worker / planning entry")
     parser.add_argument("--worker", metavar="RUN_DIR",
-                        help="执行已分箱的批量任务目录（由 einsums 内部使用）")
+                        help="执行已分箱的批量任务目录（由 init/run 内部使用）")
     parser.add_argument("--optimize", default="auto")
     parser.add_argument("--backend", default="auto")
     parser.add_argument("--dry-run", action="store_true",
@@ -994,7 +945,7 @@ def main(argv=None):
                  "operands": [rng.standard_normal((128, 128)),
                               rng.standard_normal((128, 128))]}
                 for _ in range(8)]
-        plan = plan_einsums(demo)
+        plan = plan_tasks(demo)
         print(_format_plan(plan, "dry-run"))
         print(REMINDER_TEXT)
         return 0

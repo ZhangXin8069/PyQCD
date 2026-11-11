@@ -229,9 +229,9 @@ check(
 * **精度保持**：`complex128` 进 `complex128` 出；
 * **错误要报不要猜**，措辞与 `opt_einsum` 完全一致。
 
-## 批量独立收缩（`einsums`）
+## 批量独立收缩（`init` + `run`）
 
-`pyqcd.parallel.einsum.einsums` 把一批**相互独立**的收缩分给多个 MPI rank。与上面几张表
+`pyqcd.parallel.einsum` 通过 `init` + `run` 把一批**相互独立**的收缩分给多个 MPI rank。与上面几张表
 不同，这里的对照对象是**同一个库的串行执行**——要回答的只是"把一队任务拆到多进程上是否
 划算"。
 
@@ -239,8 +239,8 @@ check(
 （单线程基准，使并行与串行拿到相同的单核预算）、3 轮内串行与并行背靠背计时、取每轮比值的
 中位数；每批结果在给倍率前都先与串行 `contract` 对照。
 
-**两种口径都报。** `einsums(..., return_info=True)` 会带回 worker 自报的纯计算时间
-（`info["timings"]`），所以自建进程池可以按两种方式计费：
+**两种口径都报。** `run` 会把 worker 自报的纯计算时间写回 state 字典
+（`state["timings"]`），所以自建进程池可以按两种方式计费：
 
 * **计入初始化**（`×wall`）：调用方实际等待的时间，含 `mpirun` 启动、任务/结果落盘与计算。
   报端到端成本时用这个数。
@@ -266,14 +266,14 @@ collective **默认关闭**（它会把整批输入复制到每个 rank）；下
 模式，但因为下面的内存代价，必须显式开启**。
 
 > **内存警告：collective 模式会让每个 rank 各持一份整批输入。**
-> 规划发生在 `einsums` 内部，所以每个 rank 都必须先构造**整批**任务：输入占用
+> 规划发生在 `init` 内部，所以每个 rank 都必须先构造**整批**任务：输入占用
 > 变成「单份 × rank 数」。rank 0 另外持有**全部结果**，`broadcast=True` 时每个 rank
 > 还会各持一份完整结果。用 `resource.ru_maxrss` 在 float32 矩阵乘上实测
 > （整批输入 134 MB，64 个 512² 任务）：串行峰值 **234 MB**，collective 4 rank
 > 聚合约 **1.15 GB**（`4 × 输入 + 输出`）。在 GPU 上这意味着每张可见卡各放一整批——
 > 让 rank 数与可见设备数相等，否则显存成倍放大。批次放不下时改用自建进程池：
 > 任务经磁盘分发，worker 只读自己那一箱，代价是每次调用多 0.15–0.3 s 固定开销。
-> `einsums` 每次进入 collective 都会打印这条警告，与 `reminder=` 无关。
+> `run` 每次进入 collective 都会打印这条警告，与 `reminder=` 无关。
 
 ### 自建进程池（单进程、外部没有 `mpirun`）
 
@@ -312,43 +312,43 @@ mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective --equation
 ### 批量基准脚本
 
 ```python
-# docs-skip: 会拉起 mpirun worker 进程
+# docs-skip: launches MPI worker processes
 import statistics
 import time
 from functools import partial
 
 import numpy as np
 import pyqcd.einsum as pe
-from pyqcd.parallel import einsums
+from pyqcd.parallel import init, run
 
-ROUNDS = 3        # 串行与并行各测几轮，最后取每轮比值的中位数
-PROCS = 4         # 自建进程池的进程数；已在 mpirun 内运行时由 MPI rank 数决定
+ROUNDS = 3        # serial and parallel are each timed this many times; take the median ratio
+PROCS = 4         # size of the self-launched pool; inside mpirun the rank count decides
 
 rng = np.random.default_rng(0)
 
 
 def random_array(*shape):
-    """单精度实数随机数组：受限机器上用 float32 就够暴露并行收益。"""
+    """Single-precision real random array: float32 is enough to expose the parallel gain."""
     return rng.standard_normal(shape).astype(np.float32)
 
 
 def random_complex_array(*shape):
-    """单精度复数随机数组。"""
+    """Single-precision complex random array."""
     real_part = rng.standard_normal(shape)
     imag_part = rng.standard_normal(shape)
     return (real_part + 1j * imag_part).astype(np.complex64)
 
 
-# 真实格点 QCD 方程：sush 蒸馏的核子两关联（NN 2pt），8 个操作数
+# A real lattice-QCD equation: the sush distillation nucleon two-point (NN 2pt), 8 operands.
 SUSH_NN_2PT = "eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN"
 
 
 def sush_nn_2pt(nvec, count=8):
-    """造 count 个 NN 2pt 任务：同一方程、同一形状、不同数据。
+    """Build ``count`` NN 2pt tasks: same equation, same shapes, different data.
 
-    形状照 refer/sush/_distillation/contraction.NN.2pt.py：
-    三个 perambulator + 两个 gamma 矩阵 + 两个 VVV 顶点 + 一个投影算符。
-    每个任务用独立随机数，模拟"同一方程、不同组态"的真实批量。
+    Shapes follow refer/sush/_distillation/contraction.NN.2pt.py: three perambulators,
+    two gamma matrices, two VVV vertices and one projector. Each task uses its own
+    random numbers, mimicking the real case of "one equation, many configurations".
     """
     tasks = {}
     for index in range(count):
@@ -360,17 +360,18 @@ def sush_nn_2pt(nvec, count=8):
             random_complex_array(4, 4),                    # gamma_7
             random_complex_array(1, nvec, nvec, nvec),     # sink VVV
             random_complex_array(1, nvec, nvec, nvec),     # source VVV
-            random_complex_array(4, 2),                    # 投影算符（前两列）
+            random_complex_array(4, 2),                    # projector (first two columns)
         ]
         tasks[f"S1-{index}"] = (SUSH_NN_2PT, operands)
     return tasks
 
 
 def general_matmul(size, count, heavy=3):
-    """通用矩阵乘批次。
+    """Batch of plain matmuls.
 
-    ``heavy`` 控制前几个任务使用大尺寸，用来制造负载偏斜：
-    中间那组 12 个任务里只有 3 个是重的，看装箱器会不会把重的堆在同一个进程上。
+    ``heavy`` sets how many of the first tasks use the large size, which creates the
+    load skew: in the 12-task case only 3 tasks are heavy, so we can see whether the
+    bin packer puts them on the same process or spreads them out.
     """
     tasks = {}
     for index in range(count):
@@ -383,16 +384,16 @@ def general_matmul(size, count, heavy=3):
 
 
 CASES = {
-    "general: many small": general_matmul(128, 400),    # 大批量、小单量（本功能的目标场景）
-    "general: one-to-one": general_matmul(1200, 3),     # 任务数 = 进程数，一对一
-    "general: skewed": general_matmul(1200, 12),        # 3 个重任务 + 9 个轻任务
-    "sush: NN 2pt": sush_nn_2pt(40),                    # 真实蒸馏方程
-    "sush: NN 2pt large": sush_nn_2pt(100),             # 同上，单任务更大
+    "general: many small": general_matmul(128, 400),    # many tasks, tiny each (the target case)
+    "general: one-to-one": general_matmul(1200, 3),     # tasks == processes, one each
+    "general: skewed": general_matmul(1200, 12),        # 3 heavy tasks + 9 light tasks
+    "sush: NN 2pt": sush_nn_2pt(40),                    # real distillation equation
+    "sush: NN 2pt large": sush_nn_2pt(100),             # same, with a larger single task
 }
 
 
 def timed(function, rounds=ROUNDS):
-    """跑 rounds 轮，返回耗时中位数与最后一次的返回值。"""
+    """Run ``rounds`` times and return the median duration plus the last value."""
     durations = []
     result = None
     for _ in range(rounds):
@@ -403,14 +404,31 @@ def timed(function, rounds=ROUNDS):
 
 
 def run_serial(tasks):
-    """逐个串行调用 contract —— 这就是并行要打败的基准。"""
+    """Call contract one task at a time — this is the baseline parallel has to beat."""
     return [pe.contract(equation, *operands)
             for equation, operands in tasks.values()]
 
 
+def output_shape(equation, operands):
+    """Shape of the contraction output, used to lay out the result buffers."""
+    shapes = tuple(tuple(int(n) for n in operand.shape) for operand in operands)
+    _, info = pe.contract_path(equation, *shapes, shapes=True, optimize="greedy")
+    return tuple(info.size_dict[label] for label in info.output_subscript)
+
+
 def run_parallel(tasks):
-    """一次调用交给 einsums；返回与输入同键的字典。"""
-    return einsums(tasks, max_procs=PROCS, reminder=False, verbose=False)
+    """One ``init`` + ``run`` pair; results land in the caller-owned buffers."""
+    keys = list(tasks)
+    results = [np.zeros(output_shape(*tasks[key]),
+                        dtype=np.result_type(*[o.dtype for o in tasks[key][1]]))
+               for key in keys]
+    state = init({"task_id": keys,
+                  "equation": [tasks[key][0] for key in keys],
+                  "operands": [list(tasks[key][1]) for key in keys],
+                  "results": results},
+                 max_proc=PROCS, reminder=False)
+    run(state)
+    return {key: results[index] for index, key in enumerate(keys)}
 
 
 print(f"{'case':24s} {'tasks':>5s} {'serial(s)':>9s} "
@@ -419,7 +437,8 @@ for label, tasks in CASES.items():
     serial_seconds, _ = timed(partial(run_serial, tasks))
     parallel_seconds, results = timed(partial(run_parallel, tasks))
 
-    # 先验正确性：并行结果必须等于串行结果，否则倍率没有意义
+    # Correctness first: the parallel result must equal the serial one, otherwise the
+    # speed-up means nothing.
     for key, (equation, operands) in tasks.items():
         reference = pe.contract(equation, *operands)
         scale = max(float(np.max(np.abs(reference))), 1e-30)
@@ -428,6 +447,7 @@ for label, tasks in CASES.items():
 
     print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} "
           f"{parallel_seconds:11.3f} {serial_seconds / parallel_seconds:7.2f}x")
+
 ```
 
 ## 复现

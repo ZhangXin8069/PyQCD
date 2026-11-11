@@ -1,4 +1,4 @@
-"""``pyqcd.parallel.einsum.einsums`` 的可信性自检与实测入口。
+"""``pyqcd.parallel.einsum``（``init`` + ``run``）的可信性自检与实测入口。
 
 两类证据分开给，避免把「快」当「对」：
 
@@ -28,7 +28,7 @@ import time
 import numpy as np
 
 import pyqcd.einsum as pe
-from pyqcd.parallel.einsum import einsums, plan_einsums
+from pyqcd.parallel.einsum import init, plan_tasks, run
 
 # refer/sush/_distillation 的真实方程（形状见 bench_distillation.build_operands）
 SUSH_EQUATIONS = {
@@ -55,6 +55,45 @@ _EQUATION_NOTES = {
 # ═══════════════════════════════════════════════════════════════════
 # 任务构造
 # ═══════════════════════════════════════════════════════════════════
+
+def _output_shape(task):
+    """按 ``contract_path`` 的 size_dict 推出输出形状（只用于铺缓冲区）。"""
+    equation, operands = task
+    shapes = tuple(tuple(int(n) for n in operand.shape) for operand in operands)
+    _, info = pe.contract_path(equation, *shapes, shapes=True, optimize="greedy")
+    return tuple(info.size_dict[label] for label in info.output_subscript)
+
+
+def _dtype_of(task):
+    """输出 dtype：所有操作数的公共类型（与 contract 的推断一致）。"""
+    return np.result_type(*[operand.dtype for operand in task[1]])
+
+
+def _run_batch(tasks, procs, optimize="auto", backend="auto", collective=False,
+               max_proc_override=None):
+    """用 init + run 执行一批 dict 任务，返回 ``(payload, info)``。
+
+    这是 harness 侧的唯一适配层：``init``/``run`` 只吃列式字典并原地写缓冲区，
+    benchmark 想要的是「可比较的返回值」，所以在这里铺一次平面数组。
+    """
+    keys = list(tasks)
+    equations = [tasks[key][0] for key in keys]
+    operands = [list(tasks[key][1]) for key in keys]
+    results = [np.zeros(_output_shape(tasks[key]), dtype=_dtype_of(tasks[key]))
+               for key in keys]
+    state = init({"task_id": keys, "equation": equations,
+                  "operands": operands, "results": results},
+                 max_proc=max_proc_override if max_proc_override is not None
+                 else procs,
+                 reminder=False, verbose=False, optimize=optimize,
+                 backend=backend, collective=collective)
+    started = time.perf_counter()
+    run(state)
+    elapsed = time.perf_counter() - started
+    payload = {key: results[index] for index, key in enumerate(keys)}
+    return payload, {"wall": elapsed, "plan": state["plan"],
+                     "mode": state.get("mode"), "timings": state.get("timings")}
+
 
 def _perturb(operands, rng, scale=0.05):
     """给同一形状的真实操作数加一点随机扰动，得到 m 个独立任务。"""
@@ -95,7 +134,7 @@ def build_tasks(equation, count, nvec=None, base=256, seed=20261111,
     默认用**单精度**（复数方程 ``complex64``、实数方程 ``float32``）：本函数只服务
     于性能与一致性对比，单精度把内存与算术量减半，受限机器上也能秒级跑完。
     需要双精度时显式传 ``precision='complex128'``/``'float64'``；dtype 始终由操作数
-    决定，``einsums`` 本身不做任何类型转换。
+    决定，``init``/``run`` 本身不做任何类型转换。
     """
     rng = np.random.default_rng(seed)
     if equation in ('matmul', 'hadamard'):
@@ -168,10 +207,10 @@ def verify(equation='S1', count=6, nvec=12, procs=2, rtol=None,
           f'({_EQUATION_NOTES[equation]})')
     ok = True
     for procs_ in (1, procs):
-        payload = einsums(tasks, max_procs=procs_, reminder=False)
+        payload, _ = _run_batch(tasks, procs_, collective=True)
         label = f'procs={procs_}'
         ok = _compare(payload, expected, label, rtol) and ok
-    plan = plan_einsums(tasks, max_procs=procs)
+    plan = plan_tasks(tasks, max_procs=procs)
     print(f'  plan: workers={plan["workers"]} skew={plan["skew"]:.2f}x '
           f'bins={[len(b) for b in plan["bins"]]} rtol={rtol:.0e}')
     return 0 if ok else 1
@@ -183,11 +222,8 @@ def verify(equation='S1', count=6, nvec=12, procs=2, rtol=None,
 
 def _one_round(tasks, procs, optimize='auto'):
     """跑一轮，返回 (墙钟耗时, 结果)。"""
-    started = time.perf_counter()
-    payload = einsums(tasks, max_procs=procs, reminder=False, verbose=False,
-                      optimize=optimize)
-    elapsed = time.perf_counter() - started
-    return elapsed, payload
+    payload, info = _run_batch(tasks, procs, optimize=optimize)
+    return info["wall"], payload
 
 
 def _timed_call(tasks, procs, optimize='auto'):
@@ -199,13 +235,9 @@ def _timed_call(tasks, procs, optimize='auto'):
     两者相减即进程池的初始化 + 数据搬运开销。串行/collective 路径没有 worker
     自报数据，``compute`` 为 ``None``。
     """
-    started = time.perf_counter()
-    payload, info = einsums(tasks, max_procs=procs, reminder=False,
-                            verbose=False, optimize=optimize,
-                            return_info=True)
-    wall = time.perf_counter() - started
-    timings = (info or {}).get('timings') or {}
-    return {"wall": wall, "compute": timings.get("compute_seconds")}, payload
+    payload, info = _run_batch(tasks, procs, optimize=optimize)
+    timings = info.get("timings") or {}
+    return {"wall": info["wall"], "compute": timings.get("compute_seconds")}, payload
 
 
 def bench(equation='S1', count=8, nvec=12, procs=4, rounds=3, base=256,
@@ -237,11 +269,10 @@ def bench(equation='S1', count=8, nvec=12, procs=4, rounds=3, base=256,
     # 不计初始化：只用 worker 自报的纯计算时间做分母
     compute_ratio = (median_serial / median_compute) if median_compute else None
 
-    payload = einsums(tasks, max_procs=procs, reminder=False, verbose=False,
-                      optimize=optimize)
+    payload, _ = _run_batch(tasks, procs, optimize=optimize)
     ok = _compare(payload, expected, f'bench-procs={procs}', rtol)
 
-    plan = plan_einsums(tasks, max_procs=procs)
+    plan = plan_tasks(tasks, max_procs=procs)
     per_task = median_serial / count
     report = {
         'equation': equation,
@@ -317,8 +348,8 @@ def bench_collective(equation='S1', count=8, nvec=12, rounds=3, base=256,
             serial_times.append(time.perf_counter() - started)
         comm.Barrier()
         started = time.perf_counter()
-        payload = einsums(tasks, reminder=False, verbose=False,
-                          optimize=optimize, max_procs=size, collective=True)
+        payload, _ = _run_batch(tasks, size, optimize=optimize,
+                                collective=True)
         parallel_times.append(time.perf_counter() - started)
         comm.Barrier()
 

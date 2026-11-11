@@ -1,7 +1,8 @@
 """pyqcd 并行子包：资源检测 + MPI 元任务调度（torch+mpi4py+h5py）。
 
-``pyqcd.parallel.einsum.einsums`` 把多个**相互独立**的 einsum 任务按工作量分箱
-后分给多个 MPI 进程执行（任务级并行，不改动 ``pyqcd.einsum`` 行为）。
+``pyqcd.parallel.einsum`` 把多个**相互独立**的 einsum 任务按工作量分箱后分给多个
+MPI 进程（任务级并行，不改动 ``pyqcd.einsum`` 行为）。公开接口是 ``init`` + ``run``：
+``init`` 只接受列式字典并规划，``run`` 无返回值、结果原地写入调用方缓冲区。
 
 ``_mpi`` 侧会经 ``pyqcd.pipeline`` 拉入 h5py/cupy（实测约 0.6 s）；批量 einsum 的
 worker 进程只需要轻量路径，所以这里全部改惰性解析，import 本包不再付出那份代价。
@@ -12,7 +13,7 @@ __all__ = [
     "detect_resources", "cpu_threads", "gpu_info",
     "get_mpi_context", "plan_parallel", "format_plan",
     "run_meta_task", "run_parallel_pipeline", "main",
-    "einsums", "init", "run", "plan_einsums",
+    "init", "run", "plan_tasks",
 ]
 
 _MPI_NAMES = frozenset((
@@ -28,7 +29,7 @@ def __getattr__(name):
         value = getattr(_mpi, name)
         globals()[name] = value
         return value
-    if name in ("einsums", "init", "run", "plan_einsums"):
+    if name in ("init", "run", "plan_tasks"):
         from . import einsum as _parallel_einsum
 
         value = getattr(_parallel_einsum, name)

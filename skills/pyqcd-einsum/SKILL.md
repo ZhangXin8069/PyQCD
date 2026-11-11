@@ -368,19 +368,20 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 
 复盘全文：`docs/report_direct_mode_postmortem_20261111.md`。
 
-### 任务级并行：`pyqcd.parallel.einsum.einsums`（2026-11-11 实测）
+### 任务级并行：`pyqcd.parallel.einsum` 的 `init` + `run`（2026-11-11 实测）
 
 单次收缩的并行度有限，真正能榨干硬件的是**把一批相互独立的收缩分给多个 MPI 进程**。
-入口 `einsums(tasks, max_procs=None, ...)`，只做分发与汇总，每个子任务仍是普通
-`contract(...)`；`plan_einsums` 只规划。实测（本机 4 物理核/8 线程，真实 sush S1 方程，
+入口是 `init(config, ...)` + `run(state)`：`init` 只接受列式字典
+`{task_id, equation, operands, results}` 并规划，`run` 无返回值、结果原地写入调用方
+缓冲区；`plan_tasks` 只规划。不提供一体化包装（避免与第三方 Einsums 库混淆）。实测（本机 4 物理核/8 线程，真实 sush S1 方程，
 `complex64`，单线程基准，结果与串行逐位一致）：
 
 | 模式 | 工作负载 | 串行 | 并行 | 加速比 |
 |---|---|---|---|---|
 | collective（`mpirun -np 4` 内调用） | S1 Nvec=40 × 8 | 183 ms | 59 ms | **3.09×** |
-| 自建池 `max_procs=4` | S1 Nvec=40 × 8 | 217 ms | 391 ms | 0.56× |
-| 自建池 `max_procs=4` | S1 Nvec=60 × 8 | 736 ms | 622 ms | 1.18× |
-| 自建池 `max_procs=4` | S1 Nvec=100 × 8 | 5326 ms | 2160 ms | **2.47×** |
+| 自建池（4 进程） | S1 Nvec=40 × 8 | 217 ms | 391 ms | 0.56× |
+| 自建池（4 进程） | S1 Nvec=60 × 8 | 736 ms | 622 ms | 1.18× |
+| 自建池（4 进程） | S1 Nvec=100 × 8 | 5326 ms | 2160 ms | **2.47×** |
 
 三条硬结论：
 

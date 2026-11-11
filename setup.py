@@ -296,12 +296,18 @@ def _extensions():
         extra_compile_args=["-O3", "-std=c++17"],
         extra_link_args=["-Wl,-rpath,$ORIGIN", f"-Wl,-rpath,{native_dir}"],
     )
-    return cythonize(
+    extensions = cythonize(
         [extension],
         build_dir=_rel(generated_dir),
         compiler_directives={"language_level": 3},
         force=True,
     )
+    # cythonize() rewrites `depends` to absolute paths, which makes setuptools warn
+    # ("the path must be relative") when it computes the manifest. Re-relativize
+    # them so the sdist step stays warning-free and SOURCES.txt never leaks $HOME.
+    for ext in extensions:
+        ext.depends = [_rel(Path(dep)) for dep in (ext.depends or [])]
+    return extensions
 
 
 setup(

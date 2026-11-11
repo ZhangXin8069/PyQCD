@@ -1,0 +1,109 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-11 15:36:44 +0800
+批次: pyqcd-parallel/einsum-init-run-finalize
+主任务: 接续 resume[20261111T095325.nigwgy]：收口 pyqcd.parallel.einsum 的 init+run 重构（彻底移除 einsums/plan_einsums），并复核既有稳定功能
+触发原因: 任务完成
+摘要: 删除孤儿 _package、修正文档标题空行与 max_proc 参数名；全量 124 passed、契约 19 passed、release_check 10/10
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 被恢复 run 的现场取证
+- 目标: `resume[20261111T095325.nigwgy]`，定位上次中断处的任务与遗留
+- 命令/操作: 读该 run 的 `manifest.env`/`state.env`/`inputs.txt`/`events.jsonl`/`agent.log`/`tui-watch.log`；`git status --short`；`git diff --stat`；读 `logs/v202611111{0,1,2}.txt`
+- 关键输出: run 为 09:53 创建的 TUI 会话，`inputs.txt` 为空、`events.jsonl` 仅 session-start 与心跳（09:53–15:27），无任务文本；工作区有 14 个未提交文件，全部围绕 `pyqcd/parallel/einsum.py`
+- 退出码: 0
+- 证据与判断: run 目录不含可恢复的任务定义，断点只能从工作区快照重建；快照内容为「删除一体化入口 `einsums`、`plan_einsums`→`plan_tasks`、`init`+`run` 成为唯一入口」的未完成重构
+
+### S2 — 语义核对与用户裁决
+- 目标: 确认这批改动是否与"不破坏原有稳定功能"冲突
+- 命令/操作: `grep -rn "einsums|plan_einsums"`（排除 cpp/refer/logs）；比对 HEAD 版 `einsum.py`；核 `docs/`、`skills/` 残留
+- 关键输出: 残留仅出现在历史日志与 `cpp/cpu/cpu-einsums`（Einsums C ABI 桥，无关）；`pyqcd/parallel/AGENTS.md` 已写明不提供 `einsums`；契约测试含 `assert not hasattr(P, "einsums")`
+- 退出码: 0
+- 证据与判断: 曾拟按"兼容优先"恢复 `einsums`/`plan_einsums` 薄包装，用户明确裁决「不保留 einsums/plan_einsums」，随即回退该两处编辑，保持彻底移除
+
+### S3 — 收口修复（本轮实际改动）
+- 文件与改动:
+  - `docs/en/usage.md:303`、`docs/zh/usage.md:282` — 小节标题 `### Failure handling and debugging` / `### 失败处理与调试` 前缺空行，补齐
+  - `pyqcd/parallel/einsum.py:141` — 删除孤儿函数 `_package`（原只服务被删的 `einsums`）；`_normalize_tasks` 返回值由 `(kind, keys, specs)` 收敛为 `(keys, specs)`，唯一调用点 `plan_tasks` 同步
+  - `docs/parallel_einsum_20261111.md:20,29` — 参数名 `max_procs=` → `max_proc=`（与 `init` 签名一致）
+  - `docs/{en,zh}/usage.md`、`skills/pyqcd-einsum/SKILL.md` — 性能表标签 `max_procs=4` 改为「4 进程」中性表述，避免暗示已被移除的 kwarg
+- 关键输出: `git diff --stat` 14 文件 / +488 −398；`git diff --check` 空
+- 退出码: 0
+- 证据与判断: 均为文档与死代码层面的最小收口，未改变 `init`/`run` 语义
+
+## 验证与证据
+- 测试/检查: `python -m pyqcd.testing._parallel_einsum_contract`；`python -m pyqcd.testing`（死代码清理前后各一次）；
+  `python -m pyqcd.testing.parallel_einsum verify --equation S1 --tasks 4 --nvec 8 --procs 2`；
+  `python -m pyqcd.testing.docs_examples`；`python -m pyqcd.testing.release_check --offline`；`bash skills/form/scripts/form-audit.sh`；`git diff --check`
+- 结果: 契约 19 passed/0 failed；全量 124 passed / 1 skipped / 0 failed（两次一致）；verify 串行 bit_exact=True、
+  2 进程 rel 1.2–2.5e-07（阈值 1e-5）；docs_examples ok=21 skipped=4 failed=0；release_check 10/10；
+  form-audit `registered exceptions=17 unexpected=0`；diff-check 空
+- 稳定 API 面复核: `pyqcd.parallel` 的 `detect_resources/cpu_threads/gpu_info/get_mpi_context/plan_parallel/format_plan/
+  run_meta_task/run_parallel_pipeline/main` 全部在位；`einsums`/`plan_einsums` 均为 False（按裁决移除）；
+  `pyqcd.einsum.contract` 与 `a @ b` 逐位一致
+- 未验证项: 未在 GPU/多卡与 >8 物理核机器复测加速比；未重建 RTD 站点（依赖外部 CI）；未发布新版本
+
+## 变更与产物
+- 文件: `pyqcd/parallel/einsum.py`、`pyqcd/parallel/__init__.py`、`pyqcd/parallel/AGENTS.md`、
+  `pyqcd/testing/{__init__.py,_parallel_einsum_contract.py,parallel_einsum.py}`、
+  `docs/{en,zh}/{overview,performance,usage}.md`、`docs/parallel_einsum_20261111.md`、`skills/pyqcd-einsum/SKILL.md`
+- 产物: 本日志
+- 未改动范围: `pyqcd/einsum/**` 生产代码、`cpp/**`、版本号（仍 0.2.10）
+
+## 风险、限制与下一步
+- 风险: 移除 `einsums`/`plan_einsums` 是对已发布 0.2.8/0.2.10 公开入口的破坏性变更，外部脚本升级后会 `ImportError`；
+  当前版本号仍为 0.2.10，若随补丁号发布语义不符，建议按 0.3.0 处理
+- 阻塞: 无
+- 下一步: 需要时提交这批改动并按 `pypi-release` 流程决定版本号；RTD 重建后核对双语页面已无 `einsums` 用法
+
+## 用户输入指令
+继续上次中断的任务即resume[20261111T095325.nigwgy]
+注意:不要破坏原有的稳定功能
+不保留 einsums/plan_einsums
+
+## Agent 全文报告
+--- report begin ---
+已接续 `20261111T095325.nigwgy` 的断点。该 run 目录里没有任何任务文本（`inputs.txt` 为空、事件日志只有启动与
+09:53–15:27 的心跳），可恢复的只有工作区快照：14 个未提交文件构成「`pyqcd.parallel.einsum` 去掉一体化入口
+`einsums`，改由 `init` + `run` 两步承担，`plan_einsums` 更名 `plan_tasks`」的未收尾重构。
+
+## 一、按你的两条约束校正方向
+
+我先按"不要破坏原有稳定功能"准备把已发布的 `einsums`/`plan_einsums` 恢复成兼容薄包装；你随后明确
+「不保留 einsums/plan_einsums」，我立刻回退了那两处编辑，保持彻底移除。
+
+对"稳定功能"的实测复核（均通过）：
+
+| 项 | 结果 |
+|---|---|
+| 既有 `pyqcd.parallel` 入口 | `detect_resources`/`cpu_threads`/`gpu_info`/`get_mpi_context`/`plan_parallel`/`format_plan`/`run_meta_task`/`run_parallel_pipeline`/`main` 全部在位 |
+| `pyqcd.einsum` 生产代码 | 未改动；`contract('ij,jk->ik')` 与 `a @ b` 逐位一致 |
+| 全量测试 | 124 passed / 1 skipped / 0 failed |
+| 并行契约 | 19 passed / 0 failed |
+
+## 二、本轮收口的三处缺陷
+
+1. `docs/{en,zh}/usage.md` 新小节标题前缺空行（`### Failure handling and debugging` / `### 失败处理与调试`），已补。
+2. `pyqcd/parallel/einsum.py` 里 `_package()` 成了孤儿（原本只给被删的 `einsums` 用），连同 `_normalize_tasks`
+   不再被消费的 `kind` 返回值一起删掉，`plan_tasks` 唯一调用点同步。
+3. 参数名漂移：`docs/parallel_einsum_20261111.md` 的 `max_procs=` 改为与 `init` 一致的 `max_proc=`；
+   性能表标签 `max_procs=4` 改为「4 进程」中性表述，避免读者去传一个已不存在的 kwarg。
+
+## 三、验证证据（本次会话实跑）
+
+- `python -m pyqcd.testing` → **124 passed, 1 skipped, 0 failed**（清理死代码前后各一次，结果一致）
+- `python -m pyqcd.testing._parallel_einsum_contract` → **19 passed, 0 failed**
+- `python -m pyqcd.testing.parallel_einsum verify --equation S1 --tasks 4 --nvec 8 --procs 2` →
+  串行 `bit_exact=True`，2 进程 `rel=1.19–2.51e-07`（阈值 1e-5），`workers=2 skew=1.00x bins=[2,2]`
+- `python -m pyqcd.testing.release_check --offline` → **10/10**（版本 0.2.10 一致、sdist/twine、示例 21 ok/4 skipped、
+  中英代码块逐字节一致、`sphinx -W` 双站 exit=0）
+- `bash skills/form/scripts/form-audit.sh` → `PASS registered exceptions=17 unexpected=0`；`git diff --check` 空
+
+## 四、需要你决策的一点
+
+移除 `einsums`/`plan_einsums` 会让 0.2.8/0.2.10 的使用方在升级后 `ImportError`。当前版本号仍是 0.2.10，
+若真要发布，语义上是 breaking change，建议按 **0.3.0** 而不是 0.2.11。工作区改动我**未提交、未推送**，
+等你决定提交与版本策略。
+--- report end ---
