@@ -2961,6 +2961,25 @@ def test_parallel_mpi_planning_contracts():
         test()
 
 
+def test_parallel_einsum_contracts():
+    """批量 einsum 的 MPI 任务级并行：分箱、一一对应与失败传播契约。"""
+    import unittest
+
+    from ._parallel_einsum_contract import TESTS
+
+    passed = 0
+    for test in TESTS:
+        try:
+            test()
+        except ImportError as exc:
+            if 'mpirun' in str(exc) or 'mpi4py' in str(exc):
+                raise unittest.SkipTest(str(exc)) from exc
+            raise
+        passed += 1
+    if passed == 0:
+        raise unittest.SkipTest('parallel einsum contracts did not run')
+
+
 def test_renorm_numerical_guards_contracts():
     """重整化复数、定义域、CS 比值、网格与协方差失败路径。"""
     from ._renorm_numerical_guards_contract import (

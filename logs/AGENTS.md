@@ -676,3 +676,11 @@
 - 关键内容: direct 模式复盘入 skills、发布技能回滚口径与标签前驱坑、复盘文档失真修正
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pyqcd-parallel/einsum-batch - final - 2026-11-11 11:44:43 +0800
+- 主任务: 新增 pyqcd.parallel.einsum.einsums：批量独立 einsum 的 MPI 任务级并行（LPT 装箱 + 结果一一对应）
+- 日志文件: logs/v2026111111.txt
+- 文件大小: 9369 bytes
+- 触发原因: 任务完成
+- 关键内容: einsums 任务级并行、12 项契约、真实 sush 方程实测（collective 3.09x / 自建池 2.47x）与文档技能同步
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

@@ -1,0 +1,137 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-11 11:44:43 +0800
+批次: pyqcd-parallel/einsum-batch
+主任务: 新增 pyqcd.parallel.einsum.einsums：批量独立 einsum 的 MPI 任务级并行（LPT 装箱 + 结果一一对应）
+触发原因: 任务完成
+摘要: einsums 任务级并行、12 项契约、真实 sush 方程实测（collective 3.09x / 自建池 2.47x）与文档技能同步
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 需求解析与身份判定
+- 目标: 新增 `pyqcd.parallel.einsum` 功能，`einsums` 接收 list/dict 形式的一批相互独立
+  einsum 任务，用 MPI 分给多个进程；最大进程数默认为系统支持上限（任务少时一对一、
+  任务多时均摊且避免短板）；结束时结果正确；启用时输出「使用场景提醒」；不破坏
+  `pyqcd.einsum`；用真实格点 QCD 缩并（`refer/sush/_distillation/contraction.*.py`）实测。
+- 身份: {物理+代码}（格点 QCD 数值并行实现）
+- 命令/操作: 读 `pyqcd/parallel/_mpi.py`、`_resources.py`、`pyqcd/einsum/_api.py`、
+  `_threads.py`、`pyqcd/testing/einsum/bench_distillation.py`、sush 参考脚本
+- 关键输出: 既有 `plan_parallel` 走 `N*a=n*b` 显存公式，不适配 CPU 任务级并行；
+  本库已在 `bench_distillation` 校准了 S1/S2/S3/P1/P2 真实方程形状
+- 退出码: 0
+
+### S2 — 实现（单一新模块 + 惰性导出）
+- 文件: `pyqcd/parallel/einsum.py`（719 行）、`pyqcd/parallel/__init__.py`（改惰性解析）、
+  `pyqcd/parallel/AGENTS.md`
+- 设计要点:
+  - `_normalize_tasks` 支持 dict 与 list，保持一一对应；键集合白名单校验
+  - 工时 `contract_path(optimize='greedy').opt_cost`，逐元素方程以元素数兜底
+  - LPT 装箱（堆实现），最慢进程 ≤ (4/3-1/(3K))×OPT
+  - 进程数 `min(子任务数, CPU 线程数, 内存预算)`，`max_procs` 可收紧
+  - 三条路径：serial / collective（MPI 内，零序列化）/ self-launched（自建 mpirun 池）
+  - 失败即整体失败并点名任务键；`broadcast=True` 可让所有 rank 持有结果
+- 关键输出: `python -c "import pyqcd.parallel"` 从 0.63 s 降到 0.007 s，且不拉入 `pyqcd.einsum`
+
+### S3 — 实测中发现的四个真实缺陷（均已修）
+1. `_package_root()` 少算一层目录 → worker `-m` 找不到包（ImportError）
+2. `_slim_plan` 按 rank 数截断箱子而非重装箱 → 结果缺项 `KeyError`
+3. `_threads` 把 `OMP/BLAS` 线程写进环境，worker 当作用户显式设置照搬 →
+   4 进程 × 4 线程超订，collective 从 3.09× 掉到 2.28×；改为按 `物理核数//进程数` 重算
+4. `mpi4py` 导入 1.6 s、`detect_resources` 为拿显存 `import torch` 1.0 s，都在热路径上 →
+   worker 先查启动器环境变量、调度改用轻量 CPU/内存探测
+
+### S4 — 真实格点 QCD 实测（`complex64`，单线程公平基准，结果与串行对照）
+- collective `-np 2`：S1 Nvec=40 ×8 → 168.5 ms → 88.3 ms（1.86×）
+- collective `-np 4`：183 ms → 59 ms（**3.09×**）
+- 自建池 ×4：S1 Nvec=40 217→391 ms（0.56×）；Nvec=60 736→622 ms（1.18×）；
+  Nvec=100 5326→2160 ms（**2.47×**）
+- 结论: collective 高效；自建池固定成本约 0.2–0.3 s（mpirun 启动 + 落盘/回读 1.5 GB/s），
+  串行 ≳1 s 才划算
+
+### S5 — 验证与收尾
+- 新增契约 12 项：`python -m pyqcd.testing._parallel_einsum_contract` → 12 passed
+- 全量：`python -m pyqcd.testing` → 124 passed, 1 skipped, 0 failed
+- 发布终检：`release_check --offline` → 9/9（含双语代码块逐字节一致、sphinx -W 双站）
+- 文档门禁：`docs_examples` en/zh 各 20 ok / 3 skipped / 0 failed
+- 格式：`form-audit` → registered exceptions=17 unexpected=0；`git diff --check` 空
+- 文档：`docs/{en,zh}/usage.md` 新增「批量独立收缩（einsums）」小节（代码块断言可执行、
+  中英逐字节一致），新增 `docs/parallel_einsum_20261111.md` 实测报告，
+  `skills/pyqcd-einsum/SKILL.md` 增加「任务级并行」小节
+
+## 验证与证据
+- 测试/检查: 全量测试、并行 einsum 契约 12 项、docs_examples 双语、release_check 离线、
+  form-audit、git diff --check、py_compile
+- 结果: 124 passed/1 skipped/0 failed；12/12；20+20 ok；9/9；PASS；空；OK
+- 未验证项: 未在 GPU/多卡环境实测；未在 >8 物理核机器复测加速比；未改 PyPI 发布
+
+## 变更与产物
+- 文件: `pyqcd/parallel/einsum.py`、`pyqcd/parallel/__init__.py`、`pyqcd/parallel/AGENTS.md`、
+  `pyqcd/testing/_parallel_einsum_contract.py`、`pyqcd/testing/parallel_einsum.py`、
+  `pyqcd/testing/__init__.py`、`pyqcd/testing/conftest.py`、`docs/en/usage.md`、
+  `docs/zh/usage.md`、`docs/parallel_einsum_20261111.md`、`skills/pyqcd-einsum/SKILL.md`
+- 产物: 本日志
+- 未改动范围: `pyqcd/einsum/**` 生产代码零改动；版本号未变
+
+## 风险、限制与下一步
+- 风险: 自建池在操作数很大时受落盘带宽限制；GPU 张量在该路径上先转 numpy
+- 阻塞: 无
+- 下一步: 如需发布，bump 版本并按 `pypi-release` 流程走；如需长期运行大规模批次，
+  建议直接用 collective 模式
+
+## 用户输入指令
+做最小改动,创建'pyqcd.parallel.einsum'功能:多mpi并行版pyqcd.einsum,使用新函数名einsums,
+即通过列表或字典[原qcd-einsum的输入参数的集合整合,注意一一对应,不要破坏原有qcd-einsum功能]
+输入参数组,将多个相互独立即不相互依赖的qcd-einsum通过mpi分别分配给多个相互独立的子进程,
+其中mpi最大进程数量默认为系统支持的最大进程数[如果einsum子任务数量小于此最大进程数,则实际
+进程数为子任务数,一对一,如果子任务数大于最大进程数则进行均摊,允许存在各个进程上子任务数量
+不同,但是各个进程的总任务量不应差距过大,以免产生短板效应,此工作量分配器自身应高效(耗时短)
+且智能(任务量尽量均衡且不超出当前硬件极限),使qcd-einusms性能最佳],注意进程与数据同步,
+确保einsums任务结束时输出结果正确无误,启用此函数时输出'使用场景提醒'{本功能针对单队列执行
+的大批量但小单量的einsum任务,解决此类任务不能充分利用计算资源的疼点,但是此功能也存在超出
+硬件资源极限的可能,注意可信性分析与功能实测},此任务相对独立,不要破坏本库原有功能,实测时
+注意添加真实的格点QCD实战缩并实例[sush/_distillation/contraction.***.py]
+（追加）由于本机器环境受限,可以使用单精度,缓减计算压力；抽空简报进度；继续
+
+## Agent 全文报告
+--- report begin ---
+已实现 `pyqcd.parallel.einsum.einsums`：把一批相互独立的 `contract(...)` 按工时估计
+LPT 装箱后交给多个 MPI 进程执行，结果与输入严格一一对应；`pyqcd.einsum` 生产代码零改动。
+
+## 改动内容
+
+| 文件 | 作用 |
+|---|---|
+| `pyqcd/parallel/einsum.py`（新增 719 行） | `einsums` / `plan_einsums` / worker CLI |
+| `pyqcd/parallel/__init__.py` | 改 `__getattr__` 惰性解析；包导入 0.63 s → 0.007 s，不再拉 `pyqcd.einsum` |
+| `pyqcd/testing/_parallel_einsum_contract.py`（新增） | 12 项契约：分箱上界、输入校验、提醒一次、三条路径逐位/相对对照、失败点名、蒸馏方程、collective、导入隔离、CLI |
+| `pyqcd/testing/parallel_einsum.py`（新增） | `verify` / `bench` / `bench-collective` 一键自检与交错计时 |
+| `docs/{en,zh}/usage.md` | 新增「批量独立收缩（einsums）」小节，代码块带 assert、中英逐字节一致 |
+| `docs/parallel_einsum_20261111.md`（新增） | 实测报告与可信性分析 |
+| `skills/pyqcd-einsum/SKILL.md` | 增加「任务级并行」经验小节 |
+
+## 推理依据
+
+* **工时用 FLOP 而非任务数**：任务数均分会产生短板；`contract_path(optimize='greedy').opt_cost`
+  是库内已有的权威代价，逐元素方程（无求和）以输入/输出元素数兜底。
+* **LPT 而非贪心轮询**：给出 `4/3-1/(3K)` 最坏界，正好对应"绝不能有短板"的要求。
+* **进程数默认为上限**：`min(子任务数, CPU 线程数, 内存预算)`，任务少时自动一对一。
+* **两种 MPI 拓扑**：已在 `mpirun` 内时零序列化；单进程时自建池，用临时目录交换数据。
+* **单精度**：dtype 完全由操作数决定，用户传 `complex64/float32` 即减半内存与算力，
+  本功能不做任何类型转换（遵循"最小改动、不改变原语义"）。
+
+## 验证结果
+
+- 全量 `python -m pyqcd.testing`：**124 passed, 1 skipped, 0 failed**
+- 并行契约 12 项：**12 passed**
+- `docs_examples` en/zh：各 **20 ok / 3 skipped / 0 failed**
+- `release_check --offline`：**9/9**（版本一致、sdist、twine、内容洁净、示例、双语一致、sphinx -W 双站）
+- `form-audit`：PASS（17 例外 / 0 未预期）；`git diff --check` 空
+
+真实 sush 方程实测（`complex64`，单线程基准）：collective 4 rank **3.09×**（183→59 ms），
+自建池在 5.3 s 批次上 **2.47×**，小批次 0.56×（固定成本主导）。
+
+## 后续步骤
+
+如需纳入发行版，bump 版本走 `pypi-release` 流程；大规模批次优先用 collective 模式。
+--- report end ---

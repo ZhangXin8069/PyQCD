@@ -180,6 +180,77 @@ assert plan["N"] >= 1 and plan["m"] == 12
 因此任务数少时会出现 `N*a < n*b`——压缩过程写在 `notes` 里（如 `Y capped from 13 to 3`），
 而 `gpu_ok` 仍告诉你单个 worker 是否放得进单卡预算。
 
+### 批量独立收缩（`einsums`）
+
+`pyqcd.parallel.einsum.einsums` 把**相互独立**的一批收缩按工作量分箱后交给多个 MPI
+进程并行执行，每个子任务仍是一次普通的 `contract(...)`，参数与语义都不变。
+
+```python
+import numpy as np
+import pyqcd.einsum as pe
+from pyqcd.parallel import einsums, plan_einsums
+
+rng = np.random.default_rng(0)
+tasks = {
+    f"t{i}": {"subscripts": "ij,jk->ik",
+              "operands": [rng.standard_normal((64, 64)),
+                           rng.standard_normal((64, 64))]}
+    for i in range(4)
+}
+plan = plan_einsums(tasks, max_procs=4)
+result = einsums(tasks, max_procs=1, reminder=False, verbose=False)   # serial path
+
+assert plan["workers"] == min(4, plan["limits"]["limit"])
+assert sorted(i for bin_ in plan["bins"] for i in bin_) == [0, 1, 2, 3]
+assert result.keys() == tasks.keys()
+for key, spec in tasks.items():
+    assert np.allclose(result[key], pe.contract(spec["subscripts"], *spec["operands"]))
+assert plan["skew"] >= 1.0 and len(plan["bins"]) == plan["workers"]
+```
+
+```python
+# docs-skip: launches mpirun worker processes
+from pyqcd.parallel import einsums
+
+result = einsums(tasks, max_procs=4)          # self-launched MPI pool
+```
+
+* **容器决定返回形状**：传 `dict` 返回同键 `dict`，传 `list`/`tuple` 返回同序 list。
+* **单个任务**写成 `{"subscripts": str, "operands": [...], "kwargs": {...}}`
+  （`subscripts` 也可写作 `equation`/`eq`，`kwargs` 可省略），或等价的
+  `(subscripts, operands[, kwargs])` 元组；任务内 `kwargs` 覆盖调用级的
+  `optimize`/`backend`。
+* **工作量分配**：用 `contract_path` 的优化 FLOP 数估计工时（对无求和的逐元素方程以
+  输入/输出元素数兜底），再用 LPT（longest-processing-time-first）装箱；最慢进程
+  不超过最优解的 `4/3 - 1/(3K)`，所以各箱任务数可以不同但不会出现短板。
+* **进程数**默认取 `min(子任务数, CPU 线程数, 可用内存允许值)`，可用 `max_procs=`
+  收紧。若你已在 `mpirun -np N` 下运行，则各 rank 都调用 `einsums`，任务直接分摊到
+  这些 rank（不落盘交换，结果默认只在 rank 0 返回，`broadcast=True` 可让所有 rank 都拿到）；
+  不在 MPI 下时它自己拉起 `mpirun -np K` 进程池，经临时目录交换任务与结果。
+* **精度跟随操作数**：`complex64`/`float32` 直接把内存与算术量减半，是受限机器上
+  最直接的一档；`einsums` 自己不做任何类型转换。
+
+在本机（4 物理核 / 8 线程、16 GB；真实 sush 蒸馏方程 S1 = NN 2pt，8 算子；
+`complex64`；`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1` 作为单线程公平基准；
+并行结果均与串行 `contract` 对照通过）实测：
+
+| 模式 | 工作负载 | 串行 | `einsums` | 加速比 |
+|---|---|---|---|---|
+| `mpirun -np 2`（collective） | S1，Nvec=40，8 任务 | 168 ms | 88 ms | **1.86×** |
+| `mpirun -np 4`（collective） | S1，Nvec=40，8 任务 | 183 ms | 59 ms | **3.09×** |
+| `mpirun -np 4`（collective，默认线程） | S1，Nvec=40，8 任务 | 138 ms | 53 ms | 2.28× |
+| 自建进程池 `max_procs=4` | S1，Nvec=60，8 任务 | 736 ms | 622 ms | 1.18× |
+| 自建进程池 `max_procs=4` | S1，Nvec=100，8 任务 | 5326 ms | 2160 ms | **2.47×** |
+| 自建进程池 `max_procs=4` | S1，Nvec=40，8 任务 | 217 ms | 391 ms | 0.56× |
+
+两条可复现结论（入口分别是 `python -m pyqcd.testing.parallel_einsum bench`
+与 `mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective`）：
+
+* **已在 `mpirun` 内部（collective）是高效模式**：4 rank 上 3.09×，且完全不落盘。
+* **自建进程池有固定成本**：MPICH `mpirun` 启动约 150 ms，每个操作数还要落盘再回读
+  （本机约 1.5 GB/s）。串行耗时约 1 秒以上才开始划算（0.74 s 时 1.18×，5.3 s 时 2.47×），
+  小批次反而更慢。**不要假设加速**——先在同机同 dtype 下用 `bench` 复核。
+
 ## 使用 PyTorch 张量
 
 PyTorch 支持是可选依赖（`pip install "pyqcd[torch]"`），并且是**按操作数类型**分派的：

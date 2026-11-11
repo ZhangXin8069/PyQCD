@@ -186,6 +186,90 @@ allows, so with few tasks `N*a < n*b` — the reduction is reported in `notes`
 (e.g. `Y capped from 13 to 3`) and `gpu_ok` still tells you whether one worker
 fits in the per-GPU budget.
 
+### Batch of independent contractions (`einsums`)
+
+`pyqcd.parallel.einsum.einsums` runs a **batch of mutually independent**
+contractions in parallel, one MPI process per work bin. Each task is an ordinary
+`contract(...)` call, so its arguments and semantics are unchanged.
+
+```python
+import numpy as np
+import pyqcd.einsum as pe
+from pyqcd.parallel import einsums, plan_einsums
+
+rng = np.random.default_rng(0)
+tasks = {
+    f"t{i}": {"subscripts": "ij,jk->ik",
+              "operands": [rng.standard_normal((64, 64)),
+                           rng.standard_normal((64, 64))]}
+    for i in range(4)
+}
+plan = plan_einsums(tasks, max_procs=4)
+result = einsums(tasks, max_procs=1, reminder=False, verbose=False)   # serial path
+
+assert plan["workers"] == min(4, plan["limits"]["limit"])
+assert sorted(i for bin_ in plan["bins"] for i in bin_) == [0, 1, 2, 3]
+assert result.keys() == tasks.keys()
+for key, spec in tasks.items():
+    assert np.allclose(result[key], pe.contract(spec["subscripts"], *spec["operands"]))
+assert plan["skew"] >= 1.0 and len(plan["bins"]) == plan["workers"]
+```
+
+```python
+# docs-skip: launches mpirun worker processes
+from pyqcd.parallel import einsums
+
+result = einsums(tasks, max_procs=4)          # self-launched MPI pool
+```
+
+* **Container shape decides the result shape**: a `dict` of specs returns a
+  `dict` with the same keys, a `list`/`tuple` returns a `list` in the same order.
+* **A task spec** is `{"subscripts": str, "operands": [...], "kwargs": {...}}`
+  (also accepted as `equation`/`eq`; `kwargs` may be omitted) or the equivalent
+  `(subscripts, operands[, kwargs])` tuple. Per-task `kwargs` override the
+  call-level `optimize`/`backend`.
+* **Work balancing**: work per task is estimated from `contract_path`'s optimized
+  FLOP count (with input/output element count as a floor for sum-free equations),
+  then packed with LPT (longest-processing-time-first). The slowest process stays
+  within `4/3 - 1/(3K)` of the optimal makespan, so bins can hold different
+  numbers of tasks without creating a straggler.
+* **Process count** defaults to `min(number of tasks, CPU threads, RAM budget)`;
+  pass `max_procs=` to cap it. If you already launched with `mpirun -np N`, every
+  rank calls `einsums` and the work is divided over those `N` ranks (no data
+  staging; the payload returns on rank 0 unless `broadcast=True`). Without MPI it
+  starts its own `mpirun -np K` pool and exchanges tasks/results through a
+  temporary directory.
+* **Precision follows the operands**: `complex64`/`float32` inputs halve both
+  memory and arithmetic cost — the natural first lever on a memory-constrained
+  machine. `einsums` never casts anything itself.
+
+Measured on this 4-physical-core / 8-thread, 16 GB machine — real sush
+distillation equation S1 (NN 2pt, 8 operands), `complex64` operands,
+`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1` (single-thread baseline, the fair
+comparison point), results verified against serial `contract`:
+
+| mode | workload | serial | `einsums` | speed-up |
+|---|---|---|---|---|
+| `mpirun -np 2` (collective) | S1, Nvec=40, 8 tasks | 168 ms | 88 ms | **1.86×** |
+| `mpirun -np 4` (collective) | S1, Nvec=40, 8 tasks | 183 ms | 59 ms | **3.09×** |
+| `mpirun -np 4` (collective), default threads | S1, Nvec=40, 8 tasks | 138 ms | 53 ms | 2.28× |
+| self-launched pool, `max_procs=4` | S1, Nvec=60, 8 tasks | 736 ms | 622 ms | 1.18× |
+| self-launched pool, `max_procs=4` | S1, Nvec=100, 8 tasks | 5326 ms | 2160 ms | **2.47×** |
+| self-launched pool, `max_procs=4` | S1, Nvec=40, 8 tasks | 217 ms | 391 ms | 0.56× |
+
+Two conclusions from the measurements, both reproducible with
+`python -m pyqcd.testing.parallel_einsum bench` (self-launched pool) and
+`mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective`
+(collective):
+
+* **Collective (already inside `mpirun`) is the efficient mode**: a 3.1× speed-up
+  on 4 ranks with no data staging.
+* **The self-launched pool pays a fixed cost**: MPICH `mpirun` start-up is ~150 ms
+  and every operand is written to and read back from disk (~1.5 GB/s here). It only
+  wins once the serial run takes roughly a second or more (1.18× at 0.74 s serial,
+  2.47× at 5.3 s), and loses on small batches. Always compare with `bench` on your
+  own machine instead of assuming a speed-up.
+
 ## Using PyTorch tensors
 
 PyTorch support is optional (`pip install "pyqcd[torch]"`) and is **type driven**:

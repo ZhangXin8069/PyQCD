@@ -368,6 +368,35 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 
 复盘全文：`docs/report_direct_mode_postmortem_20261111.md`。
 
+### 任务级并行：`pyqcd.parallel.einsum.einsums`（2026-11-11 实测）
+
+单次收缩的并行度有限，真正能榨干硬件的是**把一批相互独立的收缩分给多个 MPI 进程**。
+入口 `einsums(tasks, max_procs=None, ...)`，只做分发与汇总，每个子任务仍是普通
+`contract(...)`；`plan_einsums` 只规划。实测（本机 4 物理核/8 线程，真实 sush S1 方程，
+`complex64`，单线程基准，结果与串行逐位一致）：
+
+| 模式 | 工作负载 | 串行 | 并行 | 加速比 |
+|---|---|---|---|---|
+| collective（`mpirun -np 4` 内调用） | S1 Nvec=40 × 8 | 183 ms | 59 ms | **3.09×** |
+| 自建池 `max_procs=4` | S1 Nvec=40 × 8 | 217 ms | 391 ms | 0.56× |
+| 自建池 `max_procs=4` | S1 Nvec=60 × 8 | 736 ms | 622 ms | 1.18× |
+| 自建池 `max_procs=4` | S1 Nvec=100 × 8 | 5326 ms | 2160 ms | **2.47×** |
+
+三条硬结论：
+
+1. **collective 是高效模式**：任务已在各 rank 内存里，零序列化；自建池要落盘再回读
+   （本机 1.5 GB/s）+ `mpirun` 启动 ~150 ms，串行耗时 ≳1 s 才开始划算。
+2. **工时估计用 `contract_path(optimize='greedy').opt_cost`**，逐元素方程以元素数兜底，
+   再 LPT 装箱；不要用「任务数均分」——那会产生短板。
+3. **线程超订是这里最容易踩的坑**：父进程若把 `OMP_NUM_THREADS` 写进环境，worker 会当成
+   用户显式设置照搬，K 进程 × 全线程在 4 物理核上把 3.09× 打到 2.28×。自建池已按
+   `物理核数 // 进程数` 重算；手工 `mpirun` 时请自行导出单线程变量。
+
+复现：`python -m pyqcd.testing.parallel_einsum bench --equation S1 --nvec 40 --procs 4`、
+`mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective --equation S1`；
+契约 12 项 `python -m pyqcd.testing._parallel_einsum_contract`。
+报告：`docs/parallel_einsum_20261111.md`。
+
 ### 已知限制（不要声称已支持）
 
 | 项 | 现状与判据 |
