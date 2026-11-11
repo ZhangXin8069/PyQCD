@@ -239,6 +239,34 @@ def test_worker_thread_budget_is_not_inherited_from_parent():
                 os.environ[name] = value
 
 
+def test_timings_separate_pool_init_from_compute():
+    """``return_info=True`` 必须把「进程池初始化」与「纯计算」分开报出。
+
+    墙钟时间含 mpirun 启动与落盘/回读，worker 自报的 compute_seconds 只含收缩
+    本身；两者之差就是池的固定开销。这条口径是文档与 bench 的裁判依据。
+    """
+    _require_launcher()
+    tasks = _matmul_tasks(4, base=96)
+    payload, info = parallel_einsum.einsums(
+        tasks, max_procs=2, reminder=False, verbose=False, return_info=True)
+    assert isinstance(payload, dict) and set(payload) == set(tasks)
+    assert info["mode"] == "mpi_launch", info
+    timings = info["timings"]
+    assert timings is not None, info
+    assert timings["workers"] == 2, timings
+    assert len(timings["per_worker_seconds"]) == 2, timings
+    assert timings["compute_seconds"] > 0.0, timings
+    assert timings["compute_seconds"] <= timings["total_task_seconds"] + 1e-9
+    assert sum(timings["tasks_per_worker"]) == len(tasks), timings
+
+    serial_payload, serial_info = parallel_einsum.einsums(
+        tasks, max_procs=1, reminder=False, verbose=False, return_info=True)
+    assert serial_info["mode"] == "serial", serial_info
+    assert serial_info["timings"] is None, serial_info
+    for key, (equation, operands) in tasks.items():
+        assert np.array_equal(serial_payload[key], payload[key]), key
+
+
 def test_plan_rejects_invalid_input():
     """空集合、非法键、非字符串方程都必须在执行前失败。"""
     for bad in ([], {}):
@@ -450,6 +478,7 @@ _TESTS = (
     test_plan_balances_skewed_workloads,
     test_plan_respects_task_and_process_caps,
     test_worker_thread_budget_is_not_inherited_from_parent,
+    test_timings_separate_pool_init_from_compute,
     test_plan_rejects_invalid_input,
     test_reminder_is_printed_only_once,
     test_serial_path_matches_contract_bit_exact,

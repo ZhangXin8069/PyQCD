@@ -73,6 +73,10 @@ _PRECISIONS = {
     'float64': np.float64,
     'float32': np.float32,
 }
+# 默认单精度：本 harneess 只用于"是否并行得更快/结果是否一致"，单精度足以暴露问题，
+# 且内存与算术量减半，受限机器上也能秒级跑完。需要双精度请显式传 --precision。
+_DEFAULT_COMPLEX = 'complex64'
+_DEFAULT_REAL = 'float32'
 # 单精度下并行/串行的差异来自 BLAS 求和顺序，量级 ~1e-6；双精度取 1e-12。
 _DEFAULT_RTOL = {
     'complex128': 1e-12, 'float64': 1e-12,
@@ -88,13 +92,14 @@ def build_tasks(equation, count, nvec=None, base=256, seed=20261111,
                 precision=None):
     """构造 ``count`` 个相互独立的任务（同一方程、同一形状、不同数据）。
 
-    ``precision`` 为空时物理方程用 ``complex128``、通用方程用 ``float64``；
-    资源受限的机器可传 ``complex64``/``float32``：dtype 完全由操作数决定，
-    本功能不改变它，单精度能直接把内存与算力需求减半。
+    默认用**单精度**（复数方程 ``complex64``、实数方程 ``float32``）：本函数只服务
+    于性能与一致性对比，单精度把内存与算术量减半，受限机器上也能秒级跑完。
+    需要双精度时显式传 ``precision='complex128'``/``'float64'``；dtype 始终由操作数
+    决定，``einsums`` 本身不做任何类型转换。
     """
     rng = np.random.default_rng(seed)
     if equation in ('matmul', 'hadamard'):
-        dtype = np.dtype(_PRECISIONS[precision or 'float64'])
+        dtype = np.dtype(_PRECISIONS[precision or _DEFAULT_REAL])
         tasks = {}
         for index in range(count):
             size = base if equation == 'matmul' else base // 4
@@ -104,7 +109,7 @@ def build_tasks(equation, count, nvec=None, base=256, seed=20261111,
             tasks[f'{equation}-{index}'] = (eq, [left, right])
         return tasks
 
-    dtype = np.dtype(_PRECISIONS[precision or 'complex128'])
+    dtype = np.dtype(_PRECISIONS[precision or _DEFAULT_COMPLEX])
     from .einsum.bench_distillation import (
         PROFILES, build_operands, synthetic_peram)
     if nvec is None:
@@ -177,11 +182,30 @@ def verify(equation='S1', count=6, nvec=12, procs=2, rtol=None,
 # ═══════════════════════════════════════════════════════════════════
 
 def _one_round(tasks, procs, optimize='auto'):
+    """跑一轮，返回 (墙钟耗时, 结果)。"""
     started = time.perf_counter()
     payload = einsums(tasks, max_procs=procs, reminder=False, verbose=False,
                       optimize=optimize)
     elapsed = time.perf_counter() - started
     return elapsed, payload
+
+
+def _timed_call(tasks, procs, optimize='auto'):
+    """跑一轮，同时拿到「计入初始化」与「不计入初始化」两种耗时。
+
+    * ``wall``：调用方看到的墙钟时间，含 mpirun 启动与任务/结果落盘；
+    * ``compute``：worker 自报的最慢进程纯计算时间（自建进程池才有）。
+
+    两者相减即进程池的初始化 + 数据搬运开销。串行/collective 路径没有 worker
+    自报数据，``compute`` 为 ``None``。
+    """
+    started = time.perf_counter()
+    payload, info = einsums(tasks, max_procs=procs, reminder=False,
+                            verbose=False, optimize=optimize,
+                            return_info=True)
+    wall = time.perf_counter() - started
+    timings = (info or {}).get('timings') or {}
+    return {"wall": wall, "compute": timings.get("compute_seconds")}, payload
 
 
 def bench(equation='S1', count=8, nvec=12, procs=4, rounds=3, base=256,
@@ -197,15 +221,21 @@ def bench(equation='S1', count=8, nvec=12, procs=4, rounds=3, base=256,
           f'optimize={optimize}')
     print(f'  serial baseline: {total_elements/1e6:.2f} M elements per task set')
 
-    serial_times, parallel_times = [], []
+    serial_times, parallel_times, compute_times = [], [], []
     for _ in range(rounds):
         serial_times.append(_one_round(tasks, 1, optimize)[0])
-        parallel_times.append(_one_round(tasks, procs, optimize)[0])
+        measurement, _payload = _timed_call(tasks, procs, optimize)
+        parallel_times.append(measurement["wall"])
+        if measurement["compute"] is not None:
+            compute_times.append(measurement["compute"])
     # 交错协议：同一轮内先串行后并行，取每轮比值的中位数
     ratios = [s / p for s, p in zip(serial_times, parallel_times)]
     median_serial = statistics.median(serial_times)
     median_parallel = statistics.median(parallel_times)
     ratio = statistics.median(ratios)
+    median_compute = statistics.median(compute_times) if compute_times else None
+    # 不计初始化：只用 worker 自报的纯计算时间做分母
+    compute_ratio = (median_serial / median_compute) if median_compute else None
 
     payload = einsums(tasks, max_procs=procs, reminder=False, verbose=False,
                       optimize=optimize)
@@ -222,9 +252,12 @@ def bench(equation='S1', count=8, nvec=12, procs=4, rounds=3, base=256,
         'optimize': optimize,
         'serial_seconds': serial_times,
         'parallel_seconds': parallel_times,
+        'parallel_compute_seconds': compute_times,
         'serial_median': median_serial,
         'parallel_median': median_parallel,
+        'parallel_compute_median': median_compute,
         'speedup': ratio,
+        'speedup_compute_only': compute_ratio,
         'serial_per_task_ms': per_task * 1e3,
         'workers': plan['workers'], 'skew': plan['skew'],
         'bins': [len(item) for item in plan['bins']],
@@ -234,7 +267,16 @@ def bench(equation='S1', count=8, nvec=12, procs=4, rounds=3, base=256,
           f'({per_task*1e3:.1f} ms/task)')
     print(f'  parallel median {median_parallel*1e3:9.1f} ms '
           f'(mode=mpi_launch procs={procs} skew={plan["skew"]:.2f}x)')
-    print(f'  speedup  {ratio:.2f}x  (interleaved median of {rounds} rounds)')
+    if median_compute is None:
+        print(f'  speedup  {ratio:.2f}x  '
+              f'(interleaved median of {rounds} rounds, init included)')
+    else:
+        print(f'  speedup  {ratio:.2f}x  '
+              f'(interleaved median of {rounds} rounds, init included)')
+        print(f'  speedup  {compute_ratio:.2f}x  '
+              f'(worker compute only, init excluded; '
+              f'compute={median_compute*1e3:.1f} ms, '
+              f'pool overhead={(median_parallel - median_compute)*1e3:.1f} ms)')
     if ratio < 1.05 and per_task * 1e3 < 50:
         print('  note: per-task work is small; process startup and data '
               'staging dominate — expected for this shape, not a defect')
@@ -327,7 +369,7 @@ def main(argv=None):
                           help='不传则按 dtype 取默认值（单精度 1e-5，双精度 1e-12）')
     p_verify.add_argument('--precision', default=None,
                           choices=sorted(_PRECISIONS),
-                          help='操作数精度；资源受限时用 complex64/float32')
+                          help='操作数精度（默认 complex64/float32 单精度，快且省内存）')
 
     p_bench = sub.add_parser('bench', help='交错计时串行/并行')
     p_bench.add_argument('--equation', default='S1',
@@ -342,7 +384,7 @@ def main(argv=None):
     p_bench.add_argument('--json', default=None)
     p_bench.add_argument('--precision', default=None,
                          choices=sorted(_PRECISIONS),
-                         help='操作数精度；资源受限时用 complex64/float32')
+                         help='操作数精度（默认 complex64/float32 单精度，快且省内存）')
 
     p_coll = sub.add_parser(
         'bench-collective',

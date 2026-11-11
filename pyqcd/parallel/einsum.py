@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import warnings
 
@@ -390,26 +391,34 @@ def _run_collective(comm, rank, size, kind, keys, specs, slim, optimize,
     bins = slim["bins"]
     mine = bins[rank] if rank < len(bins) else []
     local_results, local_failures = [], []
+    compute_seconds = 0.0
     for index in mine:
         try:
+            started = time.perf_counter()
             local_results.append((index, _call(specs[index], optimize, backend)))
+            compute_seconds += time.perf_counter() - started
         except Exception as exc:
             local_failures.append(_failure(index, exc))
-    gathered = comm.gather((local_results, local_failures), root=0)
+    gathered = comm.gather((local_results, local_failures, compute_seconds),
+                           root=0)
 
     if rank != 0:
-        return comm.bcast(None, root=0) if broadcast else None
+        return (comm.bcast(None, root=0) if broadcast else None), None
 
-    results, failures = {}, []
-    for chunk_results, chunk_failures in gathered:
+    results, failures, per_rank = {}, [], []
+    for chunk_results, chunk_failures, chunk_seconds in gathered:
         results.update(chunk_results)
         failures.extend(chunk_failures)
+        per_rank.append(chunk_seconds)
     if failures:
         failures.sort(key=lambda item: item["index"])
         _raise_failures(failures, keys)
     ordered = [results[index] for index in range(len(specs))]
     payload = _package(kind, keys, ordered)
-    return comm.bcast(payload, root=0) if broadcast else payload
+    timings = {"per_rank_seconds": per_rank,
+               "compute_seconds": max(per_rank) if per_rank else 0.0,
+               "pool_overhead_seconds": 0.0}   # collective 没有进程池与落盘
+    return (comm.bcast(payload, root=0) if broadcast else payload), timings
 
 
 def _to_numpy(value):
@@ -481,6 +490,32 @@ def _collect_worker_errors(results_dir):
             with open(os.path.join(results_dir, name), encoding="utf-8") as handle:
                 errors.append(json.load(handle))
     return errors
+
+
+def _collect_worker_timings(results_dir):
+    """读回各 rank 自报的纯计算耗时；缺失时返回 ``None``。
+
+    进程池的墙钟时间包含 mpirun 启动与落盘/回读，二者对"这批任务值不值得并行"
+    是两个不同问题。这里把 worker 内部实测的计算时间单独取出，供调用方与基准
+    分别统计"计入初始化"和"不计入初始化"两种口径。
+    """
+    if not os.path.isdir(results_dir):
+        return None
+    timings = []
+    for name in sorted(os.listdir(results_dir)):
+        if name.startswith("timing_") and name.endswith(".json"):
+            with open(os.path.join(results_dir, name), encoding="utf-8") as handle:
+                timings.append(json.load(handle))
+    if not timings:
+        return None
+    per_worker = [item["compute_seconds"] for item in timings]
+    return {
+        "per_worker_seconds": per_worker,
+        "tasks_per_worker": [item["tasks"] for item in timings],
+        "compute_seconds": max(per_worker),
+        "total_task_seconds": sum(per_worker),
+        "workers": len(per_worker),
+    }
 
 
 def _missing_results(results_dir, total):
@@ -568,8 +603,10 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
         ordered = [np.load(os.path.join(results_dir, f"result_{index:05d}.npy"))
                    for index in range(len(specs))]
         payload = _package(kind, keys, ordered)
+        timings = _collect_worker_timings(results_dir)
         return payload, {"mode": "mpi_launch", "workers": plan["workers"],
                          "threads": thread_budget,
+                         "timings": timings,
                          "workdir": run_dir if keep_workdir else None}
     finally:
         if not keep_workdir:
@@ -582,7 +619,8 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
 
 def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
             reminder=True, verbose=True, workdir=None, keep_workdir=False,
-            launcher=None, broadcast=False, worker_threads=None):
+            launcher=None, broadcast=False, worker_threads=None,
+            return_info=False):
     """并行执行多个相互独立的 einsum 任务，结果与串行调用逐一对应。
 
     Parameters
@@ -614,11 +652,16 @@ def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
     broadcast : bool
         仅 collective 模式有意义：``True`` 时把完整结果广播给所有 rank
         （默认只在 rank 0 返回结果，其他 rank 返回 ``None``）。
+    return_info : bool
+        ``True`` 时返回 ``(payload, info)``。``info`` 里带 ``timings``：
+        自建进程池时各 worker 自报的**纯计算**耗时（不含 mpirun 启动与落盘），
+        用于把"计入初始化"和"不计入初始化"两种口径分开统计。
 
     Returns
     -------
     list | dict | None
         与输入一一对应的结果；collective 模式下非 rank 0 默认得到 ``None``。
+        传 ``return_info=True`` 时返回 ``(payload, info)``。
     """
     global _REMINDER_SHOWN
     kind, keys, specs = _normalize_tasks(tasks)
@@ -638,21 +681,30 @@ def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
         slim = comm.bcast(slim, root=0)
         if verbose and rank == 0:
             print(_format_plan(slim, "mpi-collective"), flush=True)
-        return _run_collective(comm, rank, size, kind, keys, specs, slim,
-                               optimize, backend, broadcast, verbose)
+        payload, timings = _run_collective(comm, rank, size, kind, keys, specs,
+                                           slim, optimize, backend, broadcast,
+                                           verbose)
+        if return_info:
+            return payload, {"mode": "mpi_collective",
+                             "workers": slim["workers"], "timings": timings}
+        return payload
 
     plan = _plan_specs(specs, max_procs=max_procs)
     if plan["workers"] > 1:
         if verbose:
             print(_format_plan(plan, "mpi-launch"), flush=True)
-        payload, _info = _run_launched(kind, keys, specs, plan, optimize,
-                                      backend, workdir, keep_workdir, launcher,
-                                      worker_threads)
-        return payload
+        payload, info = _run_launched(kind, keys, specs, plan, optimize,
+                                     backend, workdir, keep_workdir, launcher,
+                                     worker_threads)
+        return (payload, info) if return_info else payload
 
     if verbose:
         print(_format_plan(plan, "serial"), flush=True)
-    return _run_serial(kind, keys, specs, optimize, backend)
+    payload = _run_serial(kind, keys, specs, optimize, backend)
+    if return_info:
+        return payload, {"mode": "serial", "workers": plan["workers"],
+                         "timings": None}
+    return payload
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -671,10 +723,14 @@ def _worker_main(run_dir, optimize="auto", backend="auto"):
             meta_cache = json.load(handle)
     else:
         meta_cache = []
+    compute_seconds = 0.0          # 只累计真正做收缩的时间，不含进程启动与读盘
     for index in mine:
         try:
-            result = _call(_read_task(run_dir, index, meta_cache), optimize,
-                           backend)
+            # 读盘与计算分开计时：读盘属于进程池的搬运成本，不是收缩本身的开销。
+            spec = _read_task(run_dir, index, meta_cache)
+            started = time.perf_counter()
+            result = _call(spec, optimize, backend)
+            compute_seconds += time.perf_counter() - started
         except Exception as exc:
             info = _failure(index, exc)
             with open(os.path.join(results_dir, f"error_{rank:03d}.json"), "w",
@@ -685,6 +741,11 @@ def _worker_main(run_dir, optimize="auto", backend="auto"):
             return 1
         np.save(os.path.join(results_dir, f"result_{index:05d}.npy"),
                 _to_numpy(result))
+    # 每 rank 的纯计算耗时：父进程据此把"进程池启动"与"实际计算"分开统计。
+    with open(os.path.join(results_dir, f"timing_{rank:03d}.json"), "w",
+              encoding="utf-8") as handle:
+        json.dump({"tasks": len(mine), "compute_seconds": compute_seconds},
+                  handle)
     return 0
 
 

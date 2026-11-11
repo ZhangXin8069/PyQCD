@@ -178,34 +178,60 @@ import pyqcd.einsum as pe
 rng = np.random.default_rng(0)
 
 
+def complex_noise(*shape):
+    """按给定形状生成复数随机数组：实部与虚部各自独立采样。"""
+    real_part = rng.standard_normal(shape)
+    imag_part = rng.standard_normal(shape)
+    return (real_part + 1j * imag_part).astype(np.complex128)
+
+
 def check(equation, *operands):
-    """Compare pyqcd against two independent references on the same inputs."""
+    """用两套独立参考实现校验同一个结果。
+
+    - numpy 用 optimize="optimal" 自行规划路径；
+    - torch 用它对同一批输入的原生实现；
+    三者逐元素一致（rtol 1e-10）才算通过。
+    """
     ours = np.asarray(pe.contract(equation, *operands))
     numpy_ref = np.einsum(equation, *operands, optimize="optimal")
     torch_ref = torch.einsum(equation, *[torch.as_tensor(o) for o in operands]).numpy()
     assert np.allclose(ours, numpy_ref, rtol=1e-10, atol=1e-12), "differs from numpy"
     assert np.allclose(ours, torch_ref, rtol=1e-10, atol=1e-12), "differs from torch"
-    print(f"{equation:32s} ok  max|Δ| = {np.max(np.abs(ours - numpy_ref)):.2e}")
+    print(f"{equation:32s} ok  max|d| = {np.max(np.abs(ours - numpy_ref)):.2e}")
 
 
-d = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128)
+# 逐类覆盖：从最简单的矩阵乘一路到生产形状的核子 2pt
+check("ij,jk->ik", complex_noise(8, 8), complex_noise(8, 8))
+# 三算子链：规划器要决定先乘哪一对
+check("ij,jk,kl->il", complex_noise(8, 8), complex_noise(8, 8), complex_noise(8, 8))
+# 省略号批轴：同一方程作用在一批矩阵上
+check("...ij,...jk->...ik", complex_noise(2, 4, 5), complex_noise(2, 5, 6))
+# 重复标签：取对角元（输入输出维度不同）
+check("ii->i", complex_noise(6, 6))
+# 全缩并成标量：没有输出标签
+check("ij,ij->", complex_noise(5, 7), complex_noise(5, 7))
 
-check("ij,jk->ik", d(8, 8), d(8, 8))                     # plain matmul
-check("ij,jk,kl->il", d(8, 8), d(8, 8), d(8, 8))         # 3-operand chain
-check("...ij,...jk->...ik", d(2, 4, 5), d(2, 5, 6))      # ellipsis
-check("ii->i", d(6, 6))                                  # repeated label (diagonal)
-check("ij,ij->", d(5, 7), d(5, 7))                       # full contraction to scalar
+# 生产形状：8 算子的核子 2pt。Nvec=8 只是为了让文档门禁秒级跑完，
+# 形状关系与真实计算完全一致（perambulator、gamma、VVV、投影算符）。
 n = 8
-check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2pt shape
-      d(4, 4, n, n), d(4, 4, n, n), d(4, 4, n, n), d(4, 4), d(4, 4),
-      d(4, n, n, n), d(4, n, n, n), d(4, 4))
+check(
+    "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",
+    complex_noise(4, 4, n, n),        # perambulator（sink）
+    complex_noise(4, 4, n, n),        # perambulator
+    complex_noise(4, 4, n, n),        # perambulator
+    complex_noise(4, 4),              # gamma_0
+    complex_noise(4, 4),              # gamma_4
+    complex_noise(4, n, n, n),        # sink VVV
+    complex_noise(4, n, n, n),        # source VVV
+    complex_noise(4, 4),              # 投影算符
+)
 ```
 
 ### What the project checks on every change
 
 | Check | Scope |
 |---|---|
-| `python -m pyqcd.testing` | 121 contracts: numerical edge cases, threading, metadata |
+| `python -m pyqcd.testing` | 124 contracts: numerical edge cases, threading, metadata |
 | differential suite (source checkout) | 980 cases against a frozen `opt_einsum` |
 | `python -m pyqcd.testing.docs_examples` | every documentation block, each self-asserting |
 | `verify_native --backend kupl\|cuda` | native library vs the Python planner |
@@ -231,104 +257,192 @@ Protocol: same machine, `complex64`/`float32` operands, `OMP_NUM_THREADS=OPENBLA
 3 rounds with serial and parallel timed back to back, median of the per-round ratios.
 Every batch is verified against serial `contract` before the ratio is printed.
 
-| Scenario | Tasks | Serial | `einsums` (4 ranks) | Speed-up |
-|---|---|---|---|---|
-| general: many small (128² matmul) | 400 | 0.069 s | 0.048 s | 1.43× |
-| general: one-to-one (1200² matmul, #tasks = #ranks) | 3 | 0.125 s | 0.046 s | **2.73×** |
-| general: skewed (3 heavy + 9 light) | 12 | 0.118 s | 0.045 s | **2.63×** |
-| kernel: nucleon 2pt (E1) | 8 | 0.211 s | 0.053 s | **3.97×** |
-| sush: NN 2pt (S1) | 8 | 0.197 s | 0.052 s | **3.77×** |
-| sush: 3pt main (P1) | 8 | 0.139 s | 0.042 s | **3.32×** |
-| sush: NN 2pt, Nvec=100 (large task) | 8 | 6.670 s | 1.696 s | **3.93×** |
-| kernel: γ sandwich (E5, ~1 ms/task) | 8 | 0.001 s | 0.001 s | 0.80× |
+**Two calibers, both reported.** `einsums` returns the worker-measured pure compute
+time (`return_info=True` → `info["timings"]`), so a self-launched pool can be charged
+two ways:
 
-`mpirun -np 4`, no data staging (the tasks already live in each rank's memory). The
-γ-sandwich row is the boundary case: at ~1 ms per task the per-call overhead of the
-bin plumbing is larger than the work, so there is nothing to win.
+* **init included** (`×wall`) — what the caller actually waits for: `mpirun` start-up,
+  task/result staging, plus compute. This is the number to quote for end-to-end cost.
+* **init excluded** (`×compute`) — worker-reported contraction time only. This is the
+  ceiling the task split can reach once the pool already exists (typical when you are
+  inside `mpirun`, or when the same pool serves a much larger batch).
+
+### Already inside `mpirun -np 4` (collective, no staging)
+
+| Scenario | Tasks | Serial | Parallel | `×wall` | `×compute` |
+|---|---|---|---|---|---|
+| general: many small (128² matmul) | 400 | 42.5 ms | 25.7 ms | 1.65× | 3.81× |
+| general: one-to-one (1200² matmul, #tasks = #ranks) | 3 | 101.0 ms | 41.8 ms | 2.42× | 2.97× |
+| general: skewed (3 heavy + 9 light) | 12 | 103.8 ms | 37.3 ms | 2.78× | 3.21× |
+| kernel: nucleon 2pt (E1) | 8 | 184.4 ms | 46.1 ms | **4.00×** | **4.07×** |
+| sush: NN 2pt (S1) | 8 | 197.4 ms | 50.6 ms | **3.90×** | 3.96× |
+| sush: 3pt main (P1) | 8 | 134.7 ms | 39.7 ms | **3.39×** | 3.51× |
+| sush: NN 2pt, Nvec=100 (large task) | 8 | 6066.8 ms | 1536.7 ms | **3.95×** | 3.95× |
+| kernel: γ sandwich (E5, ~1 ms/task) | 8 | 0.5 ms | 0.7 ms | 0.73× | 1.59× |
+
+Here the two calibers nearly coincide (staging is zero, only the plan broadcast is
+missing from `×compute`), which is exactly why collective is the mode to use.
 
 ### Self-launched pool (single process, no pre-existing `mpirun`)
 
-Same batches, but `einsums` starts its own `mpirun -np 4` and exchanges tasks and
-results through a temporary directory:
+| Scenario | Tasks | Serial | Pool wall | Pool compute | `×wall` | `×compute` |
+|---|---|---|---|---|---|---|
+| general: many small | 400 | 38.7 ms | 283.3 ms | 14.1 ms | 0.14× | 2.74× |
+| general: one-to-one | 3 | 77.8 ms | 206.9 ms | 28.3 ms | 0.38× | 2.74× |
+| general: skewed | 12 | 80.0 ms | 222.3 ms | 30.4 ms | 0.36× | 2.64× |
+| kernel: nucleon 2pt (E1) | 8 | 142.4 ms | 337.2 ms | 162.2 ms | 0.42× | 0.88× |
+| sush: NN 2pt (S1) | 8 | 140.0 ms | 218.7 ms | 57.2 ms | 0.64× | **2.45×** |
+| sush: 3pt main (P1) | 8 | 101.6 ms | 327.6 ms | 146.9 ms | 0.31× | 0.69× |
+| sush: NN 2pt, Nvec=100 (large task) | 8 | 4997.0 ms | 1879.7 ms | 1586.8 ms | **2.66×** | **3.15×** |
+| kernel: γ sandwich (E5, ~1 ms/task) | 8 | 0.6 ms | 156.7 ms | 6.4 ms | 0.00× | 0.10× |
 
-| Scenario | Tasks | Serial | `einsums` (4 procs) | Speed-up |
-|---|---|---|---|---|
-| general: many small | 400 | 0.043 s | 0.290 s | 0.15× |
-| general: one-to-one | 3 | 0.082 s | 0.225 s | 0.37× |
-| general: skewed | 12 | 0.085 s | 0.244 s | 0.35× |
-| kernel: nucleon 2pt (E1) | 8 | 0.167 s | 0.397 s | 0.42× |
-| sush: NN 2pt (S1) | 8 | 0.155 s | 0.247 s | 0.63× |
-| sush: 3pt main (P1) | 8 | 0.115 s | 0.391 s | 0.29× |
-| sush: NN 2pt, Nvec=100 (large task) | 8 | 5.274 s | 2.259 s | **2.33×** |
+Reading the pool table:
 
-The pool has a fixed cost of roughly 0.2–0.3 s: `mpirun` start-up (~150 ms) plus
-writing every operand out and reading it back (~1.5 GB/s here). It only wins once the
-serial run takes about a second or more, so **use `mpirun` yourself when you can** and
-treat the self-launched pool as the fallback for batches that are already expensive.
+* **The pool costs ≈0.15–0.3 s per call** (`wall − compute`): `mpirun` start-up
+  (~150 ms) plus writing every operand and reading it back (~1.5 GB/s here). It pays
+  off on end-to-end time only once the batch itself takes seconds (Nvec=100 row:
+  **2.66×**).
+* **`×compute` shows what the split can do.** With init excluded, small batches reach
+  2.6–2.7× — i.e. the balancer is doing its job and the loss is pure fixed cost.
+* **Kernel equations score below 1× on `×compute`** because each fresh worker pays
+  the one-off kernel/plan warm-up on its first call (measured: E1 first call 140 ms vs
+  17 ms warm). In a pool that runs one batch and exits, that cold start is real cost;
+  in a long-lived pool it amortises away.
 
-### Reproduce
-
-```python
-# docs-skip: launches MPI worker processes
-import statistics, time
-import numpy as np
-import pyqcd.einsum as pe
-from pyqcd.parallel import einsums, plan_einsums
-
-ROUNDS, PROCS = 3, 4
-rng = np.random.default_rng(0)
-real = lambda *s: rng.standard_normal(s).astype(np.float32)
-cplx = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex64)
-
-S1 = "eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN"          # sush NN 2pt, 8 operands
-def sush_s1(nvec, count=8):
-    peram = lambda: [cplx(4, 4, nvec, nvec) for _ in range(3)] + \
-                    [cplx(4, 4) for _ in range(2)] + \
-                    [cplx(1, nvec, nvec, nvec) for _ in range(2)] + [cplx(4, 2)]
-    return {f"S1-{i}": (S1, peram()) for i in range(count)}
-
-CASES = {
-    "general: many small": {f"m{i}": ("ij,jk->ik", [real(128, 128), real(128, 128)])
-                            for i in range(400)},
-    "general: one-to-one": {f"m{i}": ("ij,jk->ik", [real(1200, 1200), real(1200, 1200)])
-                            for i in range(3)},
-    "general: skewed": {f"m{i}": ("ij,jk->ik", [real(1200, 1200), real(1200, 1200)]
-                                  if i < 3 else [real(200, 200), real(200, 200)])
-                        for i in range(12)},
-    "sush: NN 2pt": sush_s1(40),
-    "sush: NN 2pt large": sush_s1(100),
-}
-
-def median(fn):
-    times = []
-    for _ in range(ROUNDS):
-        start = time.perf_counter(); payload = fn()
-        times.append(time.perf_counter() - start)
-    return statistics.median(times), payload
-
-print(f"{'case':24s} {'tasks':>5s} {'serial(s)':>9s} {'parallel(s)':>11s} {'speed-up':>8s}")
-for label, tasks in CASES.items():
-    serial, _ = median(lambda: [pe.contract(eq, *ops, optimize="auto")
-                                for eq, ops in tasks.values()])
-    parallel, payload = median(lambda: einsums(tasks, reminder=False, verbose=False,
-                                               max_procs=PROCS))
-    for key, (eq, ops) in tasks.items():            # correctness first
-        ref = pe.contract(eq, *ops, optimize="auto")
-        scale = max(float(np.max(np.abs(ref))), 1e-30)
-        assert float(np.max(np.abs(payload[key] - ref))) / scale <= 1e-5, key
-    print(f"{label:24s} {len(tasks):5d} {serial:9.3f} {parallel:11.3f} "
-          f"{serial / parallel:7.2f}x")
-```
-
-To measure the collective mode instead, save the loop above as `bench.py` and run
-`mpirun -np 4 python bench.py`: every rank calls `einsums` and the work is divided over
-those ranks with no data staging (the table above uses exactly that path). The
-package also ships both harnesses:
+Reproduce both calibers with the bundled harnesses:
 
 ```bash
 python -m pyqcd.testing.parallel_einsum bench --equation S1 --nvec 100 --procs 4
 mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective --equation S1
 ```
+
+The self-launched harness prints `speedup … (init included)` and
+`speedup … (worker compute only, init excluded)`, plus the measured pool overhead.
+
+### Reproduce
+
+```python
+# docs-skip: 会拉起 mpirun worker 进程
+import statistics
+import time
+from functools import partial
+
+import numpy as np
+import pyqcd.einsum as pe
+from pyqcd.parallel import einsums
+
+ROUNDS = 3        # 串行与并行各测几轮，最后取每轮比值的中位数
+PROCS = 4         # 自建进程池的进程数；已在 mpirun 内运行时由 MPI rank 数决定
+
+rng = np.random.default_rng(0)
+
+
+def random_array(*shape):
+    """单精度实数随机数组：受限机器上用 float32 就够暴露并行收益。"""
+    return rng.standard_normal(shape).astype(np.float32)
+
+
+def random_complex_array(*shape):
+    """单精度复数随机数组。"""
+    real_part = rng.standard_normal(shape)
+    imag_part = rng.standard_normal(shape)
+    return (real_part + 1j * imag_part).astype(np.complex64)
+
+
+# 真实格点 QCD 方程：sush 蒸馏的核子两关联（NN 2pt），8 个操作数
+SUSH_NN_2PT = "eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN"
+
+
+def sush_nn_2pt(nvec, count=8):
+    """造 count 个 NN 2pt 任务：同一方程、同一形状、不同数据。
+
+    形状照 refer/sush/_distillation/contraction.NN.2pt.py：
+    三个 perambulator + 两个 gamma 矩阵 + 两个 VVV 顶点 + 一个投影算符。
+    每个任务用独立随机数，模拟"同一方程、不同组态"的真实批量。
+    """
+    tasks = {}
+    for index in range(count):
+        operands = [
+            random_complex_array(4, 4, nvec, nvec),        # perambulator
+            random_complex_array(4, 4, nvec, nvec),        # perambulator
+            random_complex_array(4, 4, nvec, nvec),        # perambulator
+            random_complex_array(4, 4),                    # gamma_7
+            random_complex_array(4, 4),                    # gamma_7
+            random_complex_array(1, nvec, nvec, nvec),     # sink VVV
+            random_complex_array(1, nvec, nvec, nvec),     # source VVV
+            random_complex_array(4, 2),                    # 投影算符（前两列）
+        ]
+        tasks[f"S1-{index}"] = (SUSH_NN_2PT, operands)
+    return tasks
+
+
+def general_matmul(size, count, heavy=3):
+    """通用矩阵乘批次。
+
+    ``heavy`` 控制前几个任务使用大尺寸，用来制造负载偏斜：
+    中间那组 12 个任务里只有 3 个是重的，看装箱器会不会把重的堆在同一个进程上。
+    """
+    tasks = {}
+    for index in range(count):
+        side = size if index < heavy else max(64, size // 6)
+        tasks[f"m{index}"] = (
+            "ij,jk->ik",
+            [random_array(side, side), random_array(side, side)],
+        )
+    return tasks
+
+
+CASES = {
+    "general: many small": general_matmul(128, 400),    # 大批量、小单量（本功能的目标场景）
+    "general: one-to-one": general_matmul(1200, 3),     # 任务数 = 进程数，一对一
+    "general: skewed": general_matmul(1200, 12),        # 3 个重任务 + 9 个轻任务
+    "sush: NN 2pt": sush_nn_2pt(40),                    # 真实蒸馏方程
+    "sush: NN 2pt large": sush_nn_2pt(100),             # 同上，单任务更大
+}
+
+
+def timed(function, rounds=ROUNDS):
+    """跑 rounds 轮，返回耗时中位数与最后一次的返回值。"""
+    durations = []
+    result = None
+    for _ in range(rounds):
+        start = time.perf_counter()
+        result = function()
+        durations.append(time.perf_counter() - start)
+    return statistics.median(durations), result
+
+
+def run_serial(tasks):
+    """逐个串行调用 contract —— 这就是并行要打败的基准。"""
+    return [pe.contract(equation, *operands)
+            for equation, operands in tasks.values()]
+
+
+def run_parallel(tasks):
+    """一次调用交给 einsums；返回与输入同键的字典。"""
+    return einsums(tasks, max_procs=PROCS, reminder=False, verbose=False)
+
+
+print(f"{'case':24s} {'tasks':>5s} {'serial(s)':>9s} "
+      f"{'parallel(s)':>11s} {'speed-up':>8s}")
+for label, tasks in CASES.items():
+    serial_seconds, _ = timed(partial(run_serial, tasks))
+    parallel_seconds, results = timed(partial(run_parallel, tasks))
+
+    # 先验正确性：并行结果必须等于串行结果，否则倍率没有意义
+    for key, (equation, operands) in tasks.items():
+        reference = pe.contract(equation, *operands)
+        scale = max(float(np.max(np.abs(reference))), 1e-30)
+        deviation = float(np.max(np.abs(results[key] - reference))) / scale
+        assert deviation <= 1e-5, f"{label} {key}: rel={deviation:.1e}"
+
+    print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} "
+          f"{parallel_seconds:11.3f} {serial_seconds / parallel_seconds:7.2f}x")
+```
+
+To measure the collective mode instead, save the loop above as `bench.py` and run
+`mpirun -np 4 python bench.py`: every rank calls `einsums` and the work is divided over
+those ranks with no data staging (the table above uses exactly that path).
 
 ## Reproduce
 
@@ -337,82 +451,154 @@ One script, both tables: `python bench.py cpu` then `python bench.py gpu`.
 ### The benchmark
 
 ```python
-import statistics, sys, time, warnings
+import statistics
+import sys
+import time
+from functools import partial
+
 import numpy as np
 import opt_einsum as oe
-import pyqcd, pyqcd.einsum as pe
+import pyqcd
+import pyqcd.einsum as pe
 
-DEVICE = sys.argv[1] if len(sys.argv) > 1 else "cpu"   # cpu | gpu  # docs-skip: 15 case 基准，门禁不跑
-ROUNDS = 3
+# docs-skip: 15 个用例的全尺寸基准（单次 0.4–2.7 s），文档门禁不跑
+DEVICE = sys.argv[1] if len(sys.argv) > 1 else "cpu"     # "cpu" 或 "gpu"
+ROUNDS = 3                                               # 交错计时轮数
+
 if DEVICE == "gpu":
     import cupy as cp
-    to_dev = lambda a: cp.asarray(a)
-    sync = lambda: cp.cuda.Device(0).synchronize()
-    release = lambda: (cp.get_default_memory_pool().free_all_blocks(),
-                       cp.get_default_pinned_memory_pool().free_all_blocks())
-    name = cp.cuda.runtime.getDeviceProperties(0)["name"].decode()
+
+    def to_device(array):
+        """把 numpy 数组搬到显存。"""
+        return cp.asarray(array)
+
+    def synchronise():
+        """GPU 计时前必须同步，否则只量到 kernel 下发的时间。"""
+        cp.cuda.Device(0).synchronize()
+
+    def release_memory():
+        """每个用例后清空显存池，避免上一次的残留把下一个用例挤爆。"""
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+
+    device_name = cp.cuda.runtime.getDeviceProperties(0)["name"].decode()
 else:
-    to_dev = lambda a: a
-    sync = lambda: None
-    release = lambda: None
-    name = "cpu"
-print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", name)
+    def to_device(array):
+        return array
+
+    def synchronise():
+        return None
+
+    def release_memory():
+        return None
+
+    device_name = "cpu"
+
+# 先打印版本与路径：site-packages 里的旧版会把每个数字都变成"PyQCD 很慢"
+print("pyqcd", pyqcd.__version__, pyqcd.__file__, "|", device_name)
 
 rng = np.random.default_rng(0)
-real = lambda *s: to_dev(rng.standard_normal(s))
-cplx = lambda *s: to_dev((rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex128))
 
-def one(call, inner=1):
-    sync(); best = float("inf")
-    for _ in range(inner):
-        start = time.perf_counter(); call(); sync()
+
+def random_array(*shape):
+    """实数随机数组（float64）。"""
+    return to_device(rng.standard_normal(shape))
+
+
+def random_complex_array(*shape):
+    """复数随机数组（complex128）：实部与虚部独立采样。"""
+    real_part = rng.standard_normal(shape)
+    imag_part = rng.standard_normal(shape)
+    return to_device((real_part + 1j * imag_part).astype(np.complex128))
+
+
+def one_call(function, repeat=1):
+    """调用 repeat 次并返回最快的一次；repeat>1 用来摊掉固定开销。"""
+    synchronise()
+    best = float("inf")
+    for _ in range(repeat):
+        start = time.perf_counter()
+        function()
+        synchronise()
         best = min(best, time.perf_counter() - start)
     return best
 
+
+# 15 个结构类别，形状与上面两张表完全一致。
+# 每行 = (标签, 方程, 造数据的函数, 各操作数的形状)
 CASES = [
-    ("matmul 2D (real)",        "ij,jk->ik",        lambda: [real(4096, 4096), real(4096, 4096)]),
-    ("matmul 2D (complex)",     "ij,jk->ik",        lambda: [cplx(2048, 2048), cplx(2048, 2048)]),
-    ("element-wise",            "ij,ij->ij",        lambda: [real(12000, 12000), real(12000, 12000)]),
-    ("outer product",           "i,j->ij",          lambda: [real(8000), real(8000)]),
-            ("full reduction",          "ij,ij->",          lambda: [real(12000, 12000), real(12000, 12000)]),
-    ("partial reduction",       "ij->i",            lambda: [real(16000, 16000)]),
-    ("chain 3 ops",             "ij,jk,kl->il",     lambda: [real(3072, 3072) for _ in range(3)]),
-    ("chain 4 ops",             "ij,jk,kl,lm->im",  lambda: [real(2048, 2048) for _ in range(4)]),
-    ("hyper-edge",              "ij,jk,ik->i",      lambda: [real(2048, 2048) for _ in range(3)]),
-    ("batched GEMM",            "bij,bjk->bik",     lambda: [real(16, 1024, 1024), real(16, 1024, 1024)]),
-    ("ellipsis",                "...ij,...jk->...ik", lambda: [real(256, 512, 512), real(256, 512, 512)]),
-    ("batch × matrix",          "abc,cd->abd",      lambda: [real(8, 1024, 512), real(512, 1024)]),
-    ("many small batches",      "bij,bjk->bik",     lambda: [real(4096, 64, 64), real(4096, 64, 64)]),
-    ("nucleon 2pt (kernel)",    "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",
-     lambda: [cplx(4,4,112,112), cplx(4,4,112,112), cplx(4,4,112,112), cplx(4,4), cplx(4,4),
-              cplx(4,112,112,112), cplx(4,112,112,112), cplx(4,4)]),
-    ("gamma sandwich (kernel)", "ab,...bce,cd->...dae", lambda: [cplx(4,4), cplx(8192,4,4,1024), cplx(4,4)]),
+    ("matmul 2D (real)", "ij,jk->ik", random_array,
+     [(4096, 4096), (4096, 4096)]),
+    ("matmul 2D (complex)", "ij,jk->ik", random_complex_array,
+     [(2048, 2048), (2048, 2048)]),
+    ("element-wise", "ij,ij->ij", random_array,
+     [(12000, 12000), (12000, 12000)]),
+    ("outer product", "i,j->ij", random_array,
+     [(8000,), (8000,)]),
+    ("full reduction", "ij,ij->", random_array,
+     [(12000, 12000), (12000, 12000)]),
+    ("partial reduction", "ij->i", random_array,
+     [(16000, 16000)]),
+    ("chain 3 ops", "ij,jk,kl->il", random_array,
+     [(3072, 3072), (3072, 3072), (3072, 3072)]),
+    ("chain 4 ops", "ij,jk,kl,lm->im", random_array,
+     [(2048, 2048), (2048, 2048), (2048, 2048), (2048, 2048)]),
+    ("hyper-edge", "ij,jk,ik->i", random_array,
+     [(2048, 2048), (2048, 2048), (2048, 2048)]),
+    ("batched GEMM", "bij,bjk->bik", random_array,
+     [(16, 1024, 1024), (16, 1024, 1024)]),
+    ("ellipsis", "...ij,...jk->...ik", random_array,
+     [(256, 512, 512), (256, 512, 512)]),
+    ("batch x matrix", "abc,cd->abd", random_array,
+     [(8, 1024, 512), (512, 1024)]),
+    ("many small batches", "bij,bjk->bik", random_array,
+     [(4096, 64, 64), (4096, 64, 64)]),
+    ("nucleon 2pt (kernel)", "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",
+     random_complex_array,
+     [(4, 4, 112, 112), (4, 4, 112, 112), (4, 4, 112, 112), (4, 4), (4, 4),
+      (4, 112, 112, 112), (4, 112, 112, 112), (4, 4)]),
+    ("gamma sandwich (kernel)", "ab,...bce,cd->...dae", random_complex_array,
+     [(4, 4), (8192, 4, 4, 1024), (4, 4)]),
 ]
+
 print(f"{'case':26s} {'pyqcd(s)':>9s} {'opt(s)':>9s} {'ratio':>6s}")
-for label, equation, make in CASES:
-    operands = make()
-    ref = oe.contract(equation, *operands, optimize="dp")
+for label, equation, builder, shapes in CASES:
+    operands = [builder(*shape) for shape in shapes]
+
+    # 1) 先验正确性：与 opt_einsum 逐元素对照，快而不对的数字没有意义
+    reference = oe.contract(equation, *operands, optimize="dp")
     got = pe.contract(equation, *operands)
-    g = cp.asnumpy(got) if DEVICE == "gpu" else np.asarray(got)
-    r = cp.asnumpy(ref) if DEVICE == "gpu" else np.asarray(ref)
-    assert np.max(np.abs(g - r), initial=0.0) <= 1e-10 * max(np.max(np.abs(r)), 1e-30), label
-    del ref, got, g, r
-    release()
-    probe_t = one(lambda: pe.contract(equation, *operands))
-    inner = max(1, min(9, int(0.3 / max(probe_t, 1e-6))))
-    ours, theirs = [], []
-    for rnd in range(ROUNDS):
-        if rnd % 2 == 0:          # alternate the order: the second runner inherits a warm cache
-            ours.append(one(lambda: pe.contract(equation, *operands), inner))
-            theirs.append(one(lambda: oe.contract(equation, *operands, optimize="dp"), inner))
+    ours_value = cp.asnumpy(got) if DEVICE == "gpu" else np.asarray(got)
+    their_value = cp.asnumpy(reference) if DEVICE == "gpu" else np.asarray(reference)
+    scale = max(float(np.max(np.abs(their_value))), 1e-30)
+    assert np.max(np.abs(ours_value - their_value), initial=0.0) <= 1e-10 * scale, label
+    del reference, got, ours_value, their_value
+    release_memory()
+
+    # 2) 先探一次耗时，据此决定内层重复次数，让每个样本至少约 0.3 s
+    ours_call = partial(pe.contract, equation, *operands)
+    theirs_call = partial(oe.contract, equation, *operands, optimize="dp")
+    probe = one_call(ours_call)
+    inner = max(1, min(9, int(0.3 / max(probe, 1e-6))))
+
+    # 3) 交错计时：每轮交换先后顺序，机器漂移在比值里互相抵消
+    ours_times, theirs_times = [], []
+    for round_index in range(ROUNDS):
+        if round_index % 2 == 0:
+            ours_times.append(one_call(ours_call, inner))
+            theirs_times.append(one_call(theirs_call, inner))
         else:
-            theirs.append(one(lambda: oe.contract(equation, *operands, optimize="dp"), inner))
-            ours.append(one(lambda: pe.contract(equation, *operands), inner))
-        release()
-    a, b = statistics.median(ours), statistics.median(theirs)
-    print(f"{label:26s} {a:9.3f} {b:9.3f} {b / a:6.2f}")
+            theirs_times.append(one_call(theirs_call, inner))
+            ours_times.append(one_call(ours_call, inner))
+        release_memory()
+
+    # 4) 取中位数再相除，避免被单次抖动带偏
+    median_ours = statistics.median(ours_times)
+    median_theirs = statistics.median(theirs_times)
+    print(f"{label:26s} {median_ours:9.3f} {median_theirs:9.3f} "
+          f"{median_theirs / median_ours:6.2f}")
     del operands
-    release()
+    release_memory()
 ```
 
 ### Before you trust a number
