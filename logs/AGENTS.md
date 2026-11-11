@@ -668,3 +668,11 @@
 - 关键内容: 400+ 随机差分全通过；修复 specialize 开关缓存键（CUDA/KUPL 双向生效）
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pyqcd-einsum/direct-mode-rollback - final - 2026-11-11 10:12:40 +0800
+- 主任务: 承接 resume 20261108T044254.N2qMUN：核实 direct 模式回滚与 0.2.7/dev41 状态，把失败经验写入 skills 并修正记录失真
+- 日志文件: logs/v2026111110.txt
+- 文件大小: 6909 bytes
+- 触发原因: 任务完成
+- 关键内容: direct 模式复盘入 skills、发布技能回滚口径与标签前驱坑、复盘文档失真修正
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

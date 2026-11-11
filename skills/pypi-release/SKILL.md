@@ -220,6 +220,23 @@ twine 上传、CDN 传播等待、干净 venv 安装自检、回滚策略与双�
   `pyqcd==<ver>` 仍可装。
 - 回滚、删包、改名、降级一律先问用户，不做“静默修好”。
 
+### 回滚已发布版本的两条路（0.2.6→0.2.7 实测）
+
+| 手段 | 效果 | 何时用 |
+|---|---|---|
+| yank 坏版本 | 不删除文件；`pip install pyqcd` 跳过它，但 `pyqcd==<ver>` 仍可装 | 坏版本有安全/正确性问题且不想再发版 |
+| **发新版本号重新发布稳定实现** | 覆盖式接管 `pip install pyqcd`（本次 0.2.7 = 0.2.4 的代码 + 0.2.7 的版本号） | 想让默认安装直接拿到回滚后的实现（推荐） |
+
+回滚发版的完整口径（本次实测 0.2.7）：
+
+1. `git revert` 掉出问题的提交，**不整体回退**（其后可能已有别的合法工作）；核对
+   `git diff <上次稳定 tag> -- <受影响子包>` 只剩版本号一行，并 `grep -rn` 断言已删接口 0 处残留；
+2. 三处版本号同步到新号（`pyproject.toml`、`pyqcd/__init__.py`、`pyqcd/einsum/_version.py`）
+   ——代码回到稳定实现、版本号仍前进，这是唯一能让 pip 默认安装拿到回滚实现的方式；
+3. 构建 → `twine check` → 上传 → 从 PyPI 远程安装复验（断言被删 API 不存在、核心结果正确）；
+4. 台账写一条"回滚轮"（说清为什么废弃），另立 postmortem 文档记失败经验；
+5. 格式错误的已推标签按用户授权撤回后重建，前驱用 `git describe --tags --abbrev=0 <tag>^` 取。
+
 ## 常见错误与验收门
 
 | 现象 | 处理 |
@@ -651,7 +668,8 @@ python -m pyqcd.testing.release_check --with-tests    # 连测试套件一起
 5. Read the Docs：en 与 zh-cn 首页都已含当前版本号
 6. git 远端：local HEAD == gitlab main == gitee main
 
-0.1.11 实测：全量 **16/16 passed**，`--offline --with-tests` **10/10 passed**。
+0.1.11 实测：全量 **16/16 passed**，`--offline --with-tests` **10/10 passed**；
+0.2.7 复测同为 **16/16** 与 **10/10**（套件 123 passed/1 skipped/0 failed）。
 注意 `sphinx` 与 `twine` 必须在当前解释器可用（本机是 conda 环境）。
 
 ### 与 opt_einsum 3.4.0 的差异必须显式记录（0.1.11 实测）
@@ -677,22 +695,27 @@ C1–C4 明明在后面几轮已验证，顶部还写着"待查"）。规则：
 3. 打 tag 前跑 `python -m pyqcd.testing.release_check --with-tests`，
    全绿（0.1.11 为 **17/17**）才允许打。
 
-### 打 tag 的实操序列（本次 dev34）
+### 打 tag 的实操序列（本次 dev41）
 ```bash
-# 1) 门槛前最后一次全量终检（必须 17/17）
+# 1) 门槛前最后一次全量终检（必须全绿）
 python -m pyqcd.testing.release_check --with-tests
 
-# 2) annotated tag，消息写清版本 + 硬化范围 + 验证数字
-git tag -a dev<N> -m "pyqcd <ver> — ..." && git push origin dev<N>
+# 2) 前驱标签必须用 git 取，不许按序号猜
+git describe --tags --abbrev=0 dev<N>^
+
+# 3) annotated tag，多行消息用 -F（消息格式见根 AGENTS.md）
+git tag -a dev<N> -F /tmp/tagmsg.txt && git push origin dev<N>
 git push git@gitee.com:zhangxin8069/PyQCD.git dev<N>
 
-# 3) 三端校验（tag 对象哈希必须一致）
+# 4) 三端校验（tag 对象哈希必须一致）
 git rev-parse dev<N>
 git ls-remote origin refs/tags/dev<N>
 git ls-remote git@gitee.com:zhangxin8069/PyQCD.git refs/tags/dev<N>
 ```
-注意：`git push origin dev<N>` 只推该 tag，不要 `--tags`（免得把历史 tag 一并推）；
-本仓库 tag 约定为 `dev<N>` 递增（当前 34），没有 `v*` 系列。
+注意：`git push origin dev<N>` 只推该 tag，不要 `--tags`（免得把历史 tag 一并推）。
+**`follow` 的后继标签不是序号前驱**：`test<N>` 与 `dev<N>` 各自独立计数，`test12`
+的打标时间晚于 `dev40`，所以 `dev41^` 的最近标签是 `test12` 而不是 `dev40`（本次写错过一次，
+撤回重建）。一律用第 2 步的命令取前驱，不要按"当前 dev 序号"推断。
 
 ### CUDA 编译架构是"支持 CUDA"的真假分界线（0.1.13 实测）
 `cpp/cuda/einsum/make-nv.sh` 的 `DEFAULT_ARCHITECTURES="6.0 7.0"`，且只嵌 SASS
@@ -1074,7 +1097,7 @@ grep -rnI "PYQCD_EINSUM_KERNEL_MIN_ELEMENTS" pyqcd cpp setup.py | grep -v __pyca
 
 ### 发版检查单（一条命令 + 远程复验 + 双推 + tag）
 ```bash
-# 1) 终检 17 项（--with-tests 连 119 passed 套件）：必须 17/17
+# 1) 终检 16 项（--with-tests 连 123 passed 套件）：必须 16/16；离线口径 10/10
 python -m pyqcd.testing.release_check --with-tests
 # 2) 构建与元数据
 rm -rf build *.egg-info dist && python -m build --sdist && python -m twine check dist/*

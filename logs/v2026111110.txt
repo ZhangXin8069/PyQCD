@@ -1,0 +1,89 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-11 10:12:40 +0800
+批次: pyqcd-einsum/direct-mode-rollback
+主任务: 承接 resume 20261108T044254.N2qMUN：核实 direct 模式回滚与 0.2.7/dev41 状态，把失败经验写入 skills 并修正记录失真
+触发原因: 任务完成
+摘要: direct 模式复盘入 skills、发布技能回滚口径与标签前驱坑、复盘文档失真修正
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 定位被恢复 run 的现场
+- 目标: `resume[20261108T044254.N2qMUN]`，确认该 run 上次中断处的任务与遗留项
+- 命令/操作: 读 `manifest.env`/`state.env`/`events.jsonl`；`agent-session-state.py --agent commandcode --run-id 20261108T044254.N2qMUN`；解析 commandcode 会话 JSONL 的 199 条用户消息
+- 关键输出: `state=stopped`、`last_exit=130`、`last_reason=收到中断信号`；session_id `c7c38d9b-765d-4822-91a7-aeff3c723ad6`，JSONL 3659 事件；末轮指令为 2026-11-11 01:41「放弃 direct 模式、回滚代码与文档、用稳定版覆盖 PyPI、撤回格式错误的 dev41」与 01:48「dev41 应 follow test12」
+- 退出码: 0
+- 证据与判断: `agent-resume.sh --check` 返回 `reason=state_stopped`（不可自动恢复），需人工承接；末轮两条指令在上一会话结束时已回报告完成
+
+### S2 — 核对上一会话成果是否真的落地（不采信自述）
+- 命令/操作: `git log/status/diff dev39 -- pyqcd/einsum`、`git describe --tags --abbrev=0 dev41^`、`git ls-remote` 两端、`release_check`
+- 关键输出: `pyqcd/einsum` 相对 dev39 仅剩 `_version.py` 版本号一行；direct API 残留 0 处；`dev41` 前驱 = `test12`；gitlab/gitee `main=c005504`、`tags/dev41=98e920a`；`release_check` 16/16；测试 123 passed/1 skipped/0 failed
+- 退出码: 0
+- 证据与判断: 回滚、发布与标签三件事均已真实完成；遗留缺口在"经验入库"与记录准确性，不在代码
+
+### S3 — 补齐三处遗留缺口
+- 目标: 落实长期指令「所有经验实时写入本库 skills」并修掉记录失真
+- 改动:
+  - `skills/pyqcd-einsum/SKILL.md` 新增「已否决方向：direct 模式」专节（7 行代价表 + 三条判据 + 复盘指向）
+  - `skills/pyqcd-einsum/references/measured-pitfalls.md` 测量口径表补 2 条：只测 1–2 算子会漏掉灾难性退化、"跳过规划"当加速项的谬误
+  - `skills/pypi-release/SKILL.md` 新增「回滚已发布版本的两条路」；打 tag 序列改为先取 `git describe --tags --abbrev=0`，并写明 dev41 前驱是 test12 的跨类型坑；陈旧计数 17/17→16/16、当前 34→实际 dev41
+  - `AGENTS.md`「关键约定」补一条：`follow` 前驱必须由 git 取、不得按序号推断
+  - `docs/report_direct_mode_postmortem_20261111.md` 修正两处失真：`git diff dev39` 并非为空（余版本号一行）、套件口径 121→123
+  - `skills/README.md` `pyqcd-einsum` 最近更改时间 `2026-11-06`→`2026-11-11`
+- 关键输出: `git status --short` 6 个已改文件；`git diff --check` 空；`bash skills/form/scripts/form-audit.sh` → `PASS registered exceptions=17 unexpected=0`
+- 退出码: 0
+- 证据与判断: 缺口确由本次补齐；均为文档/技能改动，未触碰生产代码
+
+## 验证与证据
+- 测试/检查: `python -m pyqcd.testing`；`release_check --offline --with-tests`；`release_check`（含 PyPI/RTD/远端）；`form-audit`；`git diff --check`；四处 Markdown 围栏配平
+- 结果: 123 passed/1 skipped/0 failed；离线 10/10；全量 16/16；form-audit PASS；diff-check 空；围栏全部配平
+- 未验证项: 未重新发布 PyPI（本次无代码/版本变更）；未重建 RTD（文档站无改动）
+
+## 变更与产物
+- 文件: `AGENTS.md`、`docs/report_direct_mode_postmortem_20261111.md`、`skills/README.md`、`skills/pypi-release/SKILL.md`、`skills/pyqcd-einsum/SKILL.md`、`skills/pyqcd-einsum/references/measured-pitfalls.md`
+- 产物: 本日志
+- 未改动范围: `pyqcd/**` 生产代码、`cpp/**`、版本号、已发布产物
+
+## 风险、限制与下一步
+- 风险: 无代码风险；技能条目为文档性质
+- 阻塞: 无
+- 下一步: 如需把该快照纳入标签，另打 `dev42`（前驱须用 `git describe --tags --abbrev=0 dev42^` 取）
+
+## 用户输入指令
+resume[20261108T044254.N2qMUN]
+
+（被恢复 run 的末两条指令，本次承接依据）
+1. 放弃此次direct模式的尝试,回滚代码与文档,并用覆盖已经发布的pypi[使用之前的稳定版覆盖],撤回tag[dev41 tag格式错误,注意],并将此次的失败经验写入文档目录作为绕道提醒
+2. 存在错误,dev41应follow test12
+
+## Agent 全文报告
+--- report begin ---
+已把 `20261108T044254.N2qMUN` 的现场接上并补齐遗留缺口。该 run 于 2026-11-08 04:42 创建，2026-11-11 09:52 收到中断信号退出（`last_exit=130`，`state=stopped`），`agent-resume.sh --check` 判定不可自动恢复，因此本次为人工承接。
+
+## 上一会话成果核实（不采信自述，逐项实测）
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| direct 模式回滚 | 已落地 | `pyqcd/einsum` 相对 dev39 仅剩 `_version.py` 的版本号一行；`configure_direct`/`direct_enabled`/`PYQCD_EINSUM_DIRECT` 残留 0 处 |
+| PyPI 0.2.7 | 已发布 | `release_check` 比对 `pypi=0.2.7 local=0.2.7` |
+| dev41 标签 | 已修正 | 前驱 `test12`；gitlab 与 gitee 均为 `98e920a`，`main=c005504` 三端一致 |
+
+## 本次补齐的三处缺口
+
+1. **失败经验未入 skills**（长期指令要求"所有经验实时写入本库 skills"，此前只写了 `docs/`）：
+   `skills/pyqcd-einsum/SKILL.md` 增「已否决方向：direct 模式」——7 行代价表（0.86× 到 3900×、
+   四算子链 10 分钟未返回）+ 三条可复用判据（跳过规划=放弃优化；注册态≠有 kernel；单/双算子
+   测不出灾难）；`references/measured-pitfalls.md` 测量口径表补两条同源陷阱。
+2. **发布技能含失真与陈旧值**：`skills/pypi-release/SKILL.md` 增「回滚已发布版本的两条路」
+   （yank vs 新版本号接管，含 0.2.7 五步实录）；打 tag 序列改为先 `git describe --tags --abbrev=0`
+   取前驱并写明 dev41 前驱是 test12 的跨类型坑；`17/17`→`16/16`（0.2.7 复测）、`当前 34`→实际
+   `dev41`。`AGENTS.md` 关键约定同步补该条。
+3. **复盘文档两处失真**：`git diff dev39 -- pyqcd/einsum` 其实不是空（余版本号一行），
+   "套件回到 121 项"与实测 123 不符（121 是 dev39 口径）。
+
+## 验证
+`python -m pyqcd.testing` → 123 passed/1 skipped/0 failed；`release_check` → 16/16；
+`--offline --with-tests` → 10/10；`form-audit` → registered exceptions=17 unexpected=0；
+`git diff --check` 空；改动文件围栏全部配平。本次不含代码/版本变更，故未重发 PyPI、未重建 RTD。
+--- report end ---

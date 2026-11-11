@@ -51,9 +51,9 @@
 
 | 项 | 处置 |
 |---|---|
-| 代码 | revert 直接模式提交；`git diff dev39 -- pyqcd/einsum` 为空 |
+| 代码 | revert 直接模式提交；`git diff dev39 -- pyqcd/einsum` 只剩 `_version.py` 的版本号一行，direct 相关代码 0 处 |
 | 文档 | 删除 `docs/{en,zh}/usage.md` 的 direct 模式一节与代价表 |
-| 测试 | 删除 `test_direct_mode_contracts`，套件回到 121 项 |
+| 测试 | 删除 `test_direct_mode_contracts`；套件 123 passed/1 skipped/0 failed（121 是 dev39 口径，dev39 之后另有两个与本任务无关的新测试） |
 | PyPI | 0.2.7 重新发布 0.2.4 的稳定实现（PyPI 不允许覆盖已上传文件，故以新版本号恢复） |
 | 标签 | 撤回 `dev41`（消息格式不符合 `follow <前一标签>, 1. ...; 2. ...; [agent].`），回滚后按规范重建 |
 

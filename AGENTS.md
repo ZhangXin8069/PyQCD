@@ -349,6 +349,9 @@ docs/analy_dev7_20260823.pdf（29 页 Overfull=0/Float=0/Missing=0）。
 - git tag 约定：stab<N>/dev<N>/bug<N>/test<N>，按序号递增；当前发布快照以最新 dev 标签为准。
 - tag 消息统一为 `follow <前一标签>, 1. ...; 2. ...; [<agent>].`：每项以 `;` 结尾，
   英文标点，末尾保留 agent 后缀；仅修正消息时保留原 commit 与 tagger 元数据。
+- `follow` 的前一标签必须用 `git describe --tags --abbrev=0 <新标签>^` 取，不得按同类型序号
+  推断：`test<N>` 与 `dev<N>` 独立计数，按 tagger 时间的最近标签可能跨类型（dev41 的前驱是
+  test12 而非 dev40，曾因此重打标签）。
 
 ## 反模式
 
