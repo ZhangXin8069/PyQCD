@@ -1,0 +1,141 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-11 15:50:32 +0800
+批次: pypi-release/0.3.0
+主任务: 复检复测后发布 pyqcd 0.3.0（移除 einsums/plan_einsums，init + run 为唯一入口）并同步双语文档与文档站
+触发原因: 任务完成
+摘要: 全量 124 passed、契约 19 passed、release_check 10/10；sdist 修复 depends 绝对路径告警；PyPI 0.3.0 + tag dev45 + RTD 双站 0.3.0
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 发版前复检（版本面与打包配置）
+- 目标: 在发布 0.3.0 前确认版本面、打包配置与既有功能无回归
+- 命令/操作: 全仓 grep `0.2.10`（排除 logs/data/refer/dist/build/egg-info）；同步 9 处版本引用；
+  核对 `pyproject.toml` 的 cython、`setup.py` 的 `find_packages`、`MANIFEST.in` 的 prune/py.typed
+- 关键输出: 9 处引用全部改到 0.3.0（pyproject / `pyqcd.__version__` / `einsum._version` / 双语 conf.py /
+  双语 install.md / 双语 overview.md）；`version 0.3.0 consistent in 3 places; __native_version__=0.1.0 (kept)`；
+  `16 ['pyqcd']`；`prune pyqcd/testing`、`global-exclude AGENTS.md`、`include pyqcd/py.typed` 均在位
+- 退出码: 0
+- 证据与判断: 打包配置四项通过；原生 ABI 版本按约定保持 0.1.0 不动
+
+### S2 — 构建告警门发现并修掉绝对路径缺陷
+- 现象: `python -m build --sdist` 报 `dependency /home/.../cpp/cuda/einsum/python/pyqcdeinsum.h won't be
+  automatically included in the manifest: the path must be relative` 与 `project.license` TOML 表弃用
+- 根因: `cythonize()` 会把 `Extension.depends` 归一成绝对路径，即使传入时已过 `_rel()`
+- 修复: `setup.py` 在 `cythonize()` 之后把 `ext.depends` 重新相对化（`文件:行号` = `setup.py:299-310`）
+- 复核: 重建后 `path must be relative` 告警消失；`SOURCES.txt` `/home/` 命中 0；头文件仍在 sdist 中
+- 保留项: `project.license` 表形式保留——PEP 639 的 SPDX 字符串要求 `setuptools>=77`（Python>=3.9），
+  而本包声明 `requires-python>=3.8`；弃用期限 2027-02-18，属已知权衡而非缺陷
+- 退出码: 0
+
+### S3 — 全量复测与发布终检
+- 命令/结果:
+  - `python -m pyqcd.testing` → 124 passed / 1 skipped / 0 failed
+  - `python -m pyqcd.testing._parallel_einsum_contract` → 19 passed / 0 failed（本轮前一次）
+  - `python -m pyqcd.testing.docs_examples --lang zh --keep-going` → ok=21 skipped=4 failed=0
+  - `python -m pyqcd.testing.release_check --offline` → 10/10（版本一致、sdist、twine、内容洁净、无绝对路径、
+    示例可执行、中英代码块一致、英文页无 CJK、`sphinx -W` 双站 exit 0）
+  - `python -m twine check dist/*` → PASSED
+- sdist 复核: 185 成员；`py.typed=1`、`pyqcd/testing/=0`、`AGENTS.md=0`、`.so=0`、`SOURCES.txt` `/home/=0`；
+  版本 `Version: 0.3.0`
+
+### S4 — 上传与远程安装复验
+- 上传: `twine upload dist/pyqcd-0.3.0.tar.gz` → https://pypi.org/project/pyqcd/0.3.0/
+- CDN: 首次 `pip install pyqcd==0.3.0` 报 No matching distribution（边缘节点滞后），轮询 15 s 后成功；
+  `/pypi/pyqcd/json` 初查仍为 0.2.10，加 cache-buster 后即返回 `latest=0.3.0 files=[('sdist', ...)]`
+- 干净 venv（`/tmp/rv030`，源码树外）: `version=0.3.0 backend=cuda array_backend=numpy opt_cost=48.0
+  specializations=9`；`pyqcd.__file__` 含 site-packages；11 个子包齐全；
+  `einsums`/`plan_einsums` 不存在，`init`+`run`+`plan_tasks` 端到端与 `contract` 逐位一致；
+  `python -m pyqcd` 输出 `pyqcd 0.3.0`
+- 说明: 首轮自检在第 42 行报错，经查是我的断言写错（LPT 分箱应取所有 bins 的并集，不是 `bins[0]`），
+  修正断言后全部通过，非库缺陷
+
+### S5 — 交付、标签与文档重建
+- 提交: `ed04041 release: pyqcd 0.3.0（移除 einsums/plan_einsums，init + run 为唯一入口）`（24 文件）
+- 双推: `gpush.sh` → gitlab `3e2edb0..ed04041`；`gpush.sh -t gitee.com` → gitee 同步
+- 标签: 前驱由 `git describe --tags --abbrev=0 HEAD^` 取得 = dev44；`dev45` 注释标签（多行 `-F`），
+  三端 tag 对象均为 `cf7bb923109aa73178184752afca255d7733d24b`，三端 main 均为 `ed04041`
+- 文档站: 推送后 RTD 重建，`en/latest` 与 `zh-cn/latest` 的 install 页标题均为 0.3.0，
+  usage 页出现新增的「0.3.0 起不再提供一体化包装 / no one-shot wrapper」说明
+
+## 验证与证据
+- 测试/检查: 全量套件、并行契约、双语 docs_examples、release_check --offline、twine check、
+  sdist 内容五问与 `SOURCES.txt` 绝对路径检查、构建告警门、PyPI simple index 轮询、PyPI JSON 探针、
+  干净 venv 远程安装自检、三端 git 哈希比对、RTD 双站标题与内容探针
+- 结果: 124/1/0；19/0；21 ok+21 ok（各 4 skipped）；10/10；PASSED；1/0/0/0/0；仅剩 license 弃用告警；
+  15 s 内可见；`latest=0.3.0` 且仅 sdist；`backend=cuda opt_cost=48.0 specializations=9` 且 einsums 不存在；
+  tag 与 main 三端一致；两站均 0.3.0
+- 未验证项: 未在 GPU 多卡与 >8 物理核机器复测并行加速比；`pyqcd[torch]` 只做依赖解析未做端到端安装；
+  Python 3.10/3.11/3.13 无机测（与安装页声明一致）
+
+## 变更与产物
+- 代码/配置: `pyqcd/parallel/{einsum.py,__init__.py,AGENTS.md}`、`pyqcd/testing/{__init__.py,
+  _parallel_einsum_contract.py,parallel_einsum.py}`、`pyproject.toml`、`setup.py`、
+  `pyqcd/__init__.py`、`pyqcd/einsum/_version.py`
+- 文档: `docs/{en,zh}/{conf.py,install.md,overview.md,performance.md,usage.md}`、
+  `docs/parallel_einsum_20261111.md`、`skills/pyqcd-einsum/SKILL.md`
+- 产物: PyPI `pyqcd 0.3.0`（sdist `dist/pyqcd-0.3.0.tar.gz`）、git tag `dev45`、RTD 双站 0.3.0
+- 未改动范围: `pyqcd.einsum` 生产算法、`cpp/**`、`pyqcd/testing` 之外的子包
+
+## 风险、限制与下一步
+- 风险: 0.3.0 删除了 0.2.x 已发布的 `einsums`/`plan_einsums`，属破坏性变更；升级方需改
+  `init` + `run` / `plan_tasks`（文档已写明）
+- 风险: `project.license` 表形式在 2027-02-18 后失效；届时若仍支持 Python 3.8 则需另案处理升级路径
+- 阻塞: 无
+- 下一步: 观察 RTD 全站页面是否全部刷新到 0.3.0（不同页可能滞后一个版本）；如需 GPU/多核实测，另行安排
+
+## 用户输入指令
+继续上次中断的任务即resume[20261111T095325.nigwgy]
+注意:不要破坏原有的稳定功能
+不保留 einsums/plan_einsums
+最后复检与复测后发布0.3.0及其文档
+
+## Agent 全文报告
+--- report begin ---
+0.3.0 已复检、复测、发布并完成文档联动。
+
+## 一、发版前复检与复测
+
+| 检查 | 结果 |
+|---|---|
+| 版本三处一致 | `pyproject=0.3.0 pyqcd=0.3.0 einsum=0.3.0`，`__native_version__=0.1.0` 保持不动 |
+| 全量测试 | **124 passed / 1 skipped / 0 failed** |
+| 并行契约 | **19 passed / 0 failed** |
+| 文档示例（zh / en） | **21 ok / 4 skipped / 0 failed** 两侧一致 |
+| `release_check --offline` | **10/10**（含中英代码块一致、`sphinx -W` 双站 exit 0） |
+| `twine check` | PASSED |
+| sdist 内容 | 185 成员；`py.typed=1`、无 `pyqcd/testing`、无 `AGENTS.md`、无 `.so`、`SOURCES.txt` 无 `/home/` |
+
+复检中发现并修掉一个真实打包缺陷：`cythonize()` 会把 `Extension.depends` 归一成绝对路径，
+触发 setuptools 的 `path must be relative` 告警。已在 `setup.py` 里于 `cythonize()` 之后重新相对化，
+重建后告警消失、头文件仍在 sdist 中。
+
+`project.license` 的 TOML 表形式告警**保留**：改 PEP 639 SPDX 字符串需要 `setuptools>=77`（Python≥3.9），
+而本包声明 `requires-python>=3.8`；弃用期限 2027-02-18，属显式权衡。
+
+## 二、发布
+
+| 项 | 值 |
+|---|---|
+| PyPI | https://pypi.org/project/pyqcd/0.3.0/ （仅 sdist `pyqcd-0.3.0.tar.gz`） |
+| simple index | 上传后约 15 s 可见（首次 pip 安装遇边缘滞后，轮询后成功） |
+| JSON 元数据 | `latest=0.3.0`，文件列表只有 sdist |
+| 干净 venv 复验 | `version=0.3.0 backend=cuda array_backend=numpy opt_cost=48.0 specializations=9`，`__file__` 含 site-packages，11 子包齐全 |
+| 0.3.0 API 面 | `einsums`/`plan_einsums` **不存在**；`init`+`run` 与 `contract` 逐位一致；`plan_tasks` 分箱正确 |
+
+（首轮自检第 42 行失败是我自己的断言写错——LPT 分箱应取所有 bins 的并集，不是 `bins[0]`；修正后全绿，非库缺陷。）
+
+## 三、Git 与文档
+
+- 提交 `ed04041`（24 文件），`gpush.sh` 与 `gpush.sh -t gitee.com` 双推成功；
+- 标签 **dev45**：前驱由 `git describe --tags --abbrev=0 HEAD^` 取得为 `dev44`，三端 tag 对象
+  `cf7bb923…` 完全一致，三端 main 均为 `ed04041`；
+- Read the Docs 双站已重建：`en/latest` 与 `zh-cn/latest` 的 install 页标题均为 **0.3.0**，
+  usage 页已出现「0.3.0 起不再提供一体化包装 / no one-shot wrapper」说明。
+
+## 四、未验证项
+
+GPU 多卡与 >8 物理核的并行加速比未复测；`pyqcd[torch]` 仅做过依赖解析；
+Python 3.10/3.11/3.13 无机测（与安装页声明一致）。
+--- report end ---

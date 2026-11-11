@@ -700,3 +700,11 @@
 - 关键内容: 删除孤儿 _package、修正文档标题空行与 max_proc 参数名；全量 124 passed、契约 19 passed、release_check 10/10
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pypi-release/0.3.0 - final - 2026-11-11 15:50:32 +0800
+- 主任务: 复检复测后发布 pyqcd 0.3.0（移除 einsums/plan_einsums，init + run 为唯一入口）并同步双语文档与文档站
+- 日志文件: logs/v2026111115-2.txt
+- 文件大小: 9210 bytes
+- 触发原因: 任务完成
+- 关键内容: 全量 124 passed、契约 19 passed、release_check 10/10；sdist 修复 depends 绝对路径告警；PyPI 0.3.0 + tag dev45 + RTD 双站 0.3.0
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
