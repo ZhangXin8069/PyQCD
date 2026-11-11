@@ -38,6 +38,12 @@ HOME = Path(__file__).resolve().parent
 RAW_BACKEND = os.environ.get("PYQCD_EINSUM_BACKEND", "auto").strip().lower()
 _WARNED_BACKENDS: set[str] = set()
 
+# make.sh 用该退出码表示"产物校验失败"（与编译失败区分）：构建命令本身成功，
+# 但产出的 .so 不满足运行期前提（例如 MPI 构建的 DT_NEEDED 里没有 libmpi*，
+# 装上去 dlopen 只会报 undefined symbol: ompi_mpi_byte）。这种库不能被当作
+# 可复用产物，否则源码树里的旧库会掩盖真实缺陷。
+VALIDATION_EXIT_CODE = 3
+
 
 def _notify_progress(message: str) -> None:
     """Report build progress on the terminal.
@@ -117,9 +123,9 @@ def _stage_native_library(backend: str) -> None:
     os.replace(staged, destination)
 
 
-def _host_compiler_works() -> bool:
+def _host_compiler_works(compiler: str | None = None) -> bool:
     """Compile a trivial program with the host compiler; False when it cannot."""
-    compiler = os.environ.get("CXX", "c++")
+    compiler = compiler or os.environ.get("CXX", "c++")
     if shutil.which(compiler) is None:
         return False
     import tempfile
@@ -154,27 +160,35 @@ def _toolchain_problem(backend: str) -> str | None:
     """Return why the native build for ``backend`` cannot run, or None."""
     script = BUILD_SCRIPTS[backend]
     if not script.is_file():
-        return f"build script {script.name} is missing"
+        return (f"build script {script.name} is missing; fix: the source tree is "
+                "incomplete — re-extract the sdist or re-clone the repository")
     if shutil.which("bash") is None:
-        return "bash is not available on PATH"
+        return ("bash is not available on PATH; fix: apt install bash | "
+                "dnf install bash | conda install -c conda-forge bash")
     if backend == "cuda":
         # CUDA 需要两套工具链：nvcc 编译 .cu，主机 C++ 编译器编译 Cython 扩展。
-        for variable, default, description in (
-                ("NVCC", "nvcc", "CUDA compiler"),
-                ("CXX", "c++", "host C++ compiler")):
-            compiler = os.environ.get(variable, default)
-            if shutil.which(compiler) is None:
-                return f"{description} {compiler!r} is not available on PATH"
-        if not _host_compiler_works():
-            return (f"host C++ compiler {os.environ.get('CXX', 'c++')!r} cannot "
-                    "compile a trivial program")
+        nvcc = os.environ.get("NVCC", "nvcc")
+        if shutil.which(nvcc) is None:
+            return (f"CUDA compiler {nvcc!r} is not available on PATH; fix: install "
+                    "the CUDA toolkit and put nvcc on PATH, or build the CPU backend "
+                    "only with PYQCD_EINSUM_BACKEND=kupl (CUDA is opportunistic)")
+        host = _host_compiler()
+        if host is None:
+            return ("host C++ compiler ('CXX', 'g++', 'c++' or 'mpicxx') is not "
+                    "available on PATH; fix: apt install build-essential | "
+                    "dnf install gcc-c++ | conda install -c conda-forge gxx_linux-64")
+        if not _host_compiler_works(host):
+            return (f"host C++ compiler {host!r} cannot compile a trivial program; "
+                    "fix: repair the toolchain (apt install build-essential) or set CXX")
         return None
     if shutil.which("nm") is None:
         # make.sh 用 nm 校验 applyPlanQcd 导出符号；缺 nm 时它只会报“符号缺失”。
-        return "binutils ('nm') is not available on PATH"
+        return ("binutils ('nm') is not available on PATH; fix: apt install binutils | "
+                "dnf install binutils | conda install -c conda-forge binutils")
     if _host_compiler() is None:
         return ("host C++ compiler ('CXX', 'g++', 'c++' or 'mpicxx') is not "
-                "available on PATH")
+                "available on PATH; fix: apt install build-essential | "
+                "dnf install gcc-c++ | conda install -c conda-forge gxx_linux-64")
     return None
 
 
@@ -255,8 +269,10 @@ class NativeBuildExt(build_ext):
             subprocess.check_call(
                 ["bash", str(BUILD_SCRIPTS[backend])], cwd=HOME, env=environment)
         except subprocess.CalledProcessError as error:
-            if _native_library_path(backend).is_file():
+            if (error.returncode != VALIDATION_EXIT_CODE
+                    and _native_library_path(backend).is_file()):
                 # 源码树里已有可复用的库（重复安装、增量开发）：不必因本次失败中止。
+                # 产物校验失败（退出码 3）不走这条路：那个旧库同样不可信。
                 _notify_progress(
                     f"reusing the existing native {backend} library "
                     f"({BUILD_SCRIPTS[backend].name} exited with "
@@ -316,7 +332,8 @@ def _extensions():
         from Cython.Build import cythonize
     except ImportError:
         _skip_native("Cython is unavailable, so the CUDA Cython extension "
-                     "cannot be built", "cuda")
+                     "cannot be built; fix: pip install cython (or keep the CPU "
+                     "backend with PYQCD_EINSUM_SKIP_CYTHON=1)", "cuda")
         return []
 
     def _rel(path: Path) -> str:

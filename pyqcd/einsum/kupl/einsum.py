@@ -11,6 +11,12 @@ first planning or execution call performs the ``CDLL``. A missing archive or
 symbol raises :class:`NativeUnavailable`; callers that support a pure Python
 fallback catch that exception and continue.
 
+An archive built against MPI needs that runtime in the process first, otherwise
+``dlopen`` fails with ``undefined symbol: ompi_mpi_byte``. When the error is an
+undefined symbol the loader preloads an MPI runtime once and retries, so the
+installation order of the MPI and einsum libraries does not matter;
+:func:`library_report` records that retry under ``load_retry``.
+
 Index symbols are non-negative integers that index ``sizes`` (a mapping is
 accepted too and renamed to dense ids); the array lengths the kernel cannot
 infer travel in the reserved ``set_ptrs`` slots ``[8:11]``.
@@ -19,8 +25,12 @@ infer travel in the reserved ``set_ptrs`` slots ``[8:11]``.
 from __future__ import annotations
 
 import ctypes
+import ctypes.util
 import glob
 import os
+import shutil
+import subprocess
+import sys
 import threading
 from collections.abc import Mapping
 from pathlib import Path
@@ -104,6 +114,11 @@ def library_report() -> dict[str, Any]:
     missing dependency) or ``compiler context unavailable`` (the archive loads
     but exports no usable compiler entry point, or compiling that plan failed).
     The three need different repairs, so callers must not collapse them.
+
+    ``load_retry`` is set when a failed ``dlopen`` was rescued by preloading an
+    MPI runtime (``"preloaded libmpi.so.40"``); ``mpi_preload`` describes that
+    preload attempt whether it helped or not, and is ``None`` when the archive
+    never needed it.
     """
     path = library_path()
     present = path.is_file()
@@ -118,6 +133,8 @@ def library_report() -> dict[str, Any]:
         "present": present,
         "status": status,
         "load_failure": _LOAD_FAILURE,
+        "load_retry": _LOAD_RETRY,
+        "mpi_preload": _mpi_preload_report(),
     }
 
 
@@ -149,6 +166,171 @@ _LOAD_FAILURE: str | None = None
 _LOAD_FAILURE_KIND: str | None = None
 _LIBRARY_LOCK = threading.Lock()
 
+# dlopen 只会在两种情况下"装不进去"：归档缺失，或归档依赖的库没进进程。后者最常见的
+# 报错是 ``undefined symbol: ompi_mpi_byte``（归档链了 OpenMPI，运行时却不在进程里）。
+# 把 MPI 运行时先带进全局作用域再重试一次 dlopen 就能装上，所以这里保留这条最小韧性，
+# 其余失败照旧 fail-open：预加载只允许"帮忙"，不允许改变结果语义。
+_UNDEFINED_SYMBOL = "undefined symbol"
+_PRELOAD_ATTEMPTED = False
+_PRELOAD_RESULT: str | None = None
+_PRELOAD_FAILURE: str | None = None
+# 每个候选库路径只 dlopen 一次（幂等），结果按路径缓存。
+_PRELOAD_TRIED: dict[str, str | None] = {}
+_LOAD_RETRY: str | None = None
+# ``ctypes.CDLL`` 走模块属性，契约测试才能只替换本模块的加载器，而不去补丁 stdlib 里
+# 的全局符号（那会波及同一进程里无关的 ctypes 使用者）。
+_dlopen = ctypes.CDLL
+
+
+def _mpi4py_candidate() -> list[str]:
+    """MPI runtime already dragged into the process by an imported ``mpi4py.MPI``."""
+    origin = getattr(sys.modules.get("mpi4py.MPI"), "__file__", None)
+    return [str(origin)] if origin else []
+
+
+def _find_library_candidate() -> list[str]:
+    """Whatever the dynamic linker cache calls the MPI runtime."""
+    found = ctypes.util.find_library("mpi")
+    return [found] if found else []
+
+
+def _mpicxx_candidates() -> list[str]:
+    """MPI runtimes named by ``mpicxx --showme:link`` (OpenMPI/MPICH conventions)."""
+    for compiler in ("mpicxx", "mpic++", "mpicc"):
+        executable = shutil.which(compiler)
+        if not executable:
+            continue
+        try:
+            completed = subprocess.run(
+                [executable, "--showme:link"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        tokens = completed.stdout.split()
+        directories = [token[2:] for token in tokens if token.startswith("-L")]
+        names = [token[2:] for token in tokens if token.startswith("-l")]
+        found: list[str] = []
+        for directory in directories:
+            for name in names:
+                found.extend(
+                    sorted(glob.glob(os.path.join(directory, f"lib{name}.so*"))))
+            found.extend(sorted(glob.glob(os.path.join(directory, "libmpi.so*"))))
+        if found:
+            return found
+    return []
+
+
+def _ld_library_path_candidates() -> list[str]:
+    """``libmpi.so*`` reachable through ``LD_LIBRARY_PATH``."""
+    found: list[str] = []
+    for entry in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep):
+        if entry:
+            found.extend(sorted(glob.glob(os.path.join(entry, "libmpi.so*"))))
+    return found
+
+
+def _mpi_candidate_paths() -> list[str]:
+    """MPI runtimes worth preloading, cheapest first and de-duplicated."""
+    candidates: list[str] = []
+    for group in (
+        _mpi4py_candidate(),
+        _find_library_candidate(),
+        _mpicxx_candidates(),
+        _ld_library_path_candidates(),
+    ):
+        for candidate in group:
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
+def _preload_mpi_runtime() -> str | None:
+    """Bring an MPI runtime into the global scope, reporting what loaded.
+
+    Returns a short description of the runtime now in the process (for example
+    ``"libmpi.so.40"``) or ``None`` when no candidate could be loaded. Every
+    path is tried at most once, and any failure is recorded instead of raised:
+    the preload may only help the retry, never change its outcome.
+    """
+    global _PRELOAD_ATTEMPTED, _PRELOAD_RESULT, _PRELOAD_FAILURE
+
+    if _PRELOAD_ATTEMPTED:
+        return _PRELOAD_RESULT
+    _PRELOAD_ATTEMPTED = True
+    candidates = _mpi_candidate_paths()
+    failures: list[str] = []
+    for candidate in candidates:
+        if candidate not in _PRELOAD_TRIED:
+            try:
+                _dlopen(candidate, mode=ctypes.RTLD_GLOBAL)
+            except Exception as exc:  # noqa: BLE001 - 预加载只是尽力而为
+                _PRELOAD_TRIED[candidate] = None
+                failures.append(f"{candidate}: {type(exc).__name__}: {exc}")
+            else:
+                _PRELOAD_TRIED[candidate] = os.path.basename(candidate)
+        description = _PRELOAD_TRIED[candidate]
+        if description:
+            _PRELOAD_RESULT = description
+            return description
+    _PRELOAD_FAILURE = (
+        "; ".join(failures)
+        or f"no candidate among {len(candidates)} MPI library path(s)"
+    )
+    return None
+
+
+def _mpi_preload_report() -> str | None:
+    """One-line outcome of the MPI preload attempt (``None`` when never attempted)."""
+    if not _PRELOAD_ATTEMPTED:
+        return None
+    if _PRELOAD_RESULT:
+        return f"preloaded {_PRELOAD_RESULT}"
+    return f"no usable MPI runtime ({_PRELOAD_FAILURE or 'unknown reason'})"
+
+
+def _load_failure_text(error: OSError) -> str:
+    """``library failed to load`` text, carrying any MPI preload attempt."""
+    text = f"native einsum library failed to load: {error}"
+    if _PRELOAD_ATTEMPTED:
+        text += (
+            f"; MPI preload attempted: {_mpi_preload_report()}; "
+            "dlopen after preload failed"
+        )
+    return text
+
+
+def _retry_after_mpi_preload(path: Path, error: OSError) -> Any:
+    """Preload an MPI runtime once and retry ``dlopen`` for an unresolved symbol.
+
+    Only an ``undefined symbol`` failure is retried: the archive is on disk and
+    well formed, it just needs its MPI runtime loaded first. Every other
+    ``dlopen`` failure keeps the plain fail-open path, and a preload that raises
+    is recorded rather than propagated — the retry may never turn a load failure
+    into a different failure.
+    """
+    global _LOAD_RETRY, _PRELOAD_ATTEMPTED, _PRELOAD_FAILURE
+
+    if _UNDEFINED_SYMBOL not in str(error):
+        return None
+    try:
+        preloaded = _preload_mpi_runtime()
+    except Exception as exc:  # noqa: BLE001 - 预加载失败只记录原因，不改结果
+        _PRELOAD_ATTEMPTED = True
+        _PRELOAD_FAILURE = f"{type(exc).__name__}: {exc}"
+        preloaded = None
+    if not preloaded:
+        return None
+    try:
+        library = _dlopen(str(path), mode=ctypes.RTLD_LOCAL)
+    except OSError:
+        return None
+    _LOAD_RETRY = f"preloaded {preloaded}"
+    return library
+
 
 def _load_library() -> Any:
     """Load the archive once and bind every signature the build exports."""
@@ -169,11 +351,13 @@ def _load_library() -> Any:
             _LOAD_FAILURE = f"native einsum library not found at {path}"
             raise _NativeUnavailable(_LOAD_FAILURE)
         try:
-            library = ctypes.CDLL(str(path), mode=ctypes.RTLD_LOCAL)
+            library = _dlopen(str(path), mode=ctypes.RTLD_LOCAL)
         except OSError as exc:
-            _LOAD_FAILURE_KIND = "load"
-            _LOAD_FAILURE = f"native einsum library failed to load: {exc}"
-            raise _NativeUnavailable(_LOAD_FAILURE) from exc
+            library = _retry_after_mpi_preload(path, exc)
+            if library is None:
+                _LOAD_FAILURE_KIND = "load"
+                _LOAD_FAILURE = _load_failure_text(exc)
+                raise _NativeUnavailable(_LOAD_FAILURE) from exc
         for name, argtypes in _SIGNATURES.items():
             try:
                 function = getattr(library, name)

@@ -398,6 +398,54 @@ def test_init_rejects_bad_configs():
         raise AssertionError('init accepted a read-only result buffer')
 
 
+class _FlagsWithoutWriteable:
+    """后端 flags 的最小替身：存在，但不提供 ``writeable``。"""
+
+    c_contiguous = True
+
+
+class _BufferWithoutWriteableFlag(np.ndarray):
+    """设备风格的输出缓冲区：``flags`` 存在，但里面没有 ``writeable``。
+
+    cupy 的 ``flags`` 就不带这个字段。旧实现直接取 ``flags.writeable``，于是
+    ``init`` 在校验结果缓冲区时抛 ``AttributeError``——缓冲区本身完全可写。
+    """
+
+    @property
+    def flags(self):
+        return _FlagsWithoutWriteable()
+
+
+def test_init_tolerates_result_buffers_without_writeable_flag():
+    """``init`` 不得要求结果缓冲区提供 ``flags.writeable``，``run`` 照常原地写入。"""
+    tasks = _matmul_tasks(2, base=16)
+    keys = list(tasks)
+    results = [
+        np.zeros((spec[1][0].shape[0], spec[1][1].shape[1]),
+                 dtype=spec[1][0].dtype).view(_BufferWithoutWriteableFlag)
+        for spec in tasks.values()]
+    assert getattr(results[0].flags, 'writeable', None) is None
+    try:
+        results[0].flags.writeable
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError('the stub flags unexpectedly expose writeable')
+
+    state = parallel_einsum.init(
+        {'task_id': keys,
+         'equation': [tasks[key][0] for key in keys],
+         'operands': [list(tasks[key][1]) for key in keys],
+         'results': results},
+        max_proc=1, reminder=False)
+    parallel_einsum.run(state)
+
+    for index, key in enumerate(keys):
+        equation, ops = tasks[key]
+        assert np.array_equal(np.asarray(results[index]),
+                              pe.contract(equation, *ops)), key
+
+
 def test_run_matches_contract_and_respects_task_ids():
     """``run`` 的结果必须与逐个 ``contract`` 一致；``task_id`` 只作用于标签与报错。"""
     tasks = _matmul_tasks(3, base=40)
@@ -592,6 +640,7 @@ _TESTS = (
     test_timings_separate_pool_init_from_compute,
     test_init_and_run_write_results_in_place,
     test_init_rejects_bad_configs,
+    test_init_tolerates_result_buffers_without_writeable_flag,
     test_run_matches_contract_and_respects_task_ids,
     test_plan_rejects_invalid_input,
     test_reminder_is_printed_only_once,

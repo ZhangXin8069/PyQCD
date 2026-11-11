@@ -3160,6 +3160,14 @@ def test_native_install_diagnostics_contracts():
         test()
 
 
+def test_native_loader_contracts():
+    """dlopen 报 undefined symbol 时的 MPI 预加载重试、报告记录与一次性诊断契约。"""
+    from ._native_loader_contract import TESTS
+
+    for test in TESTS:
+        test()
+
+
 def test_einsum_native_contracts():
     """Native KUPL/CUDA dtype, cache, out, expression and fallback contracts."""
     from .einsum.verify_native import run

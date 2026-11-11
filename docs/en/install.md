@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.3.3`. To pin it: `pip install "pyqcd==0.3.3"`.
+Current release: `0.3.4`. To pin it: `pip install "pyqcd==0.3.4"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need
@@ -81,6 +81,7 @@ The switches below are read while `pip install` builds the package:
 | `PYQCD_EINSUM_BACKEND=auto` (default) | KUPL always, plus CUDA when `nvcc`, the CUDA sources and Cython are present |
 | `PYQCD_EINSUM_REQUIRE_NATIVE` | `1` (default) makes a skipped or failed **KUPL** build a hard error; `0` lets the install continue with the pure-Python planner. It never applies to CUDA |
 | `PYQCD_EINSUM_SKIP_CYTHON=1` | pretend Cython is missing: `auto` drops to KUPL only, `cuda` still builds the CUDA library but skips its Cython extension |
+| `PYQCD_EINSUM_MPI_LINK_FLAGS` | extra link flags for an MPI-enabled KUPL build (e.g. `$(mpicxx --showme:link)`); the build only claims MPI support once the library records the MPI runtime in `DT_NEEDED` and that dependency resolves |
 | `PYQCD_SKIP_NATIVE_BUILD=1` | skip native compilation entirely and reuse an existing library if there is one; without one, install the pure-Python planner on purpose |
 
 ## What the installed package contains

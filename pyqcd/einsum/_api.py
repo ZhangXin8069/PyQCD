@@ -996,11 +996,18 @@ def _native_compile_warning(
         build=_NATIVE_REBUILD_COMMAND.get(native_backend, "bash install.sh"),
     )
     execution = "per-call native execution" if per_call else "Python execution"
+    # 归档链了 MPI 却没拿到运行时的现场，加载器会先预加载 MPI 再重试一次；重试的
+    # 结果必须出现在文案里，否则用户无法判断"是不是已经试过预加载"。
+    resilience = ""
+    if report.get("load_retry"):
+        resilience += f"; load_retry={report['load_retry']}"
+    if report.get("mpi_preload"):
+        resilience += f"; mpi_preload_attempted={report['mpi_preload']}"
     return (
         f"pyqcd.einsum native {native_backend} compiler unavailable "
         f"({report['status']}); using {execution}, results stay correct: "
         f"{type(exc).__name__}: {exc}; library={report['path']} "
-        f"(present={report['present']}); backend={build_backend} "
+        f"(present={report['present']}){resilience}; backend={build_backend} "
         f"array_backend={array_backend}; fix: {hint}"
     )
 

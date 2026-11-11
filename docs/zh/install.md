@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.3.3`。需要固定版本时：`pip install "pyqcd==0.3.3"`。
+当前发行版：`0.3.4`。需要固定版本时：`pip install "pyqcd==0.3.4"`。
 
 PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的
 manylinux wheel 需要 `auditwheel` 修补。因此首次安装会编译一次（笔记本上约一分钟），
@@ -69,6 +69,7 @@ extras 只拉取 Python 依赖；原生库仍在同一次 `pip install` 中、�
 | `PYQCD_EINSUM_BACKEND=auto`（默认） | 总是构建 KUPL；`nvcc`、CUDA 源码与 Cython 齐备时再加编 CUDA |
 | `PYQCD_EINSUM_REQUIRE_NATIVE` | 默认 `1`：**KUPL** 的跳过或失败是硬错误；设为 `0` 才允许带着纯 Python 规划装完。对 CUDA 从不生效 |
 | `PYQCD_EINSUM_SKIP_CYTHON=1` | 假装没有 Cython：`auto` 降级为只编 KUPL，`cuda` 仍编 CUDA 库但不编其 Cython 扩展 |
+| `PYQCD_EINSUM_MPI_LINK_FLAGS` | 给启用 MPI 的 KUPL 构建追加链接参数（如 `$(mpicxx --showme:link)`）；只有产物在 `DT_NEEDED` 中登记 MPI 运行库且该依赖可解析，构建才声称支持 MPI |
 | `PYQCD_SKIP_NATIVE_BUILD=1` | 完全跳过原生编译，若已有现成库则直接复用；否则就是显式选择纯 Python 规划 |
 
 ## 安装包里有什么

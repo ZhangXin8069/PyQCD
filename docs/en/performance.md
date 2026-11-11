@@ -318,7 +318,9 @@ Run it exactly like the 15-case benchmark above — same two switches:
 `python bench.py cpu single` (the default) or `python bench.py gpu double`.
 On `gpu` the pool is pinned to one process, because the self-launched pool stages
 every operand as numpy; the table above is therefore a CPU measurement, and the GPU
-run measures the batch API's in-process overhead on the device.
+run measures the batch API's in-process overhead on the device. The result buffers are
+allocated on the operands' device (`make_buffer`), because `init`/`run` write into them
+in place: a numpy buffer cannot receive a cupy result.
 
 ```python
 # docs-skip: launches MPI worker processes
@@ -470,15 +472,25 @@ def output_shape(equation, operands):
     return tuple(info.size_dict[label] for label in info.output_subscript)
 
 
+def make_buffer(shape, dtype):
+    """Result buffer on the operands' device: ``run`` writes into it in place.
+
+    A host buffer cannot receive a device array — CuPy refuses the implicit
+    conversion with a ``TypeError`` — so the buffer has to live where the
+    contraction runs.
+    """
+    return to_device(np.zeros(shape, dtype=dtype))
+
+
 def run_parallel(tasks):
     """One ``init`` + ``run`` pair, timed in two phases.
 
-    The buffers stay host-side on purpose: the self-launched pool stages numpy, and
-    `init`/`run` write results in place, so a host buffer keeps both devices honest.
+    ``init``/``run`` write results in place, so the buffers are allocated on the
+    operands' device: numpy on the CPU, cupy on the GPU.
     """
     keys = list(tasks)
-    results = [np.zeros(output_shape(*tasks[key]),
-                        dtype=np.result_type(*[o.dtype for o in tasks[key][1]]))
+    results = [make_buffer(output_shape(*tasks[key]),
+                           np.result_type(*[o.dtype for o in tasks[key][1]]))
                for key in keys]
     config = {"task_id": keys,
               "equation": [tasks[key][0] for key in keys],
@@ -519,11 +531,13 @@ for label, tasks in CASES.items():
     total_seconds = plan_seconds + exec_seconds
 
     # Correctness first: the parallel result must equal the serial one, otherwise the
-    # speed-up means nothing.
+    # speed-up means nothing. Both sides come back to the host before comparing —
+    # numpy ufuncs do not accept device arrays either.
     for key, (equation, operands) in tasks.items():
         reference = to_host(pe.contract(equation, *operands))
+        actual = to_host(results[key])
         scale = max(float(np.max(np.abs(reference))), 1e-30)
-        deviation = float(np.max(np.abs(results[key] - reference))) / scale
+        deviation = float(np.max(np.abs(actual - reference))) / scale
         assert deviation <= RTOL, f"{label} {key}: rel={deviation:.1e}"
 
     print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} {plan_seconds:8.3f} "

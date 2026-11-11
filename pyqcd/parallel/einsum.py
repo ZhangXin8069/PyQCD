@@ -746,7 +746,9 @@ def init(config, max_proc=None, verbose=False, reminder=True,
 
         ``operands`` 里的数组**只读**：``init``/``run`` 不复制、不改写它们。
         ``results`` 里的数组由调用方分配，``run`` 直接把结果写进这些缓冲区
-        （``results[i][...] = value``），不重新分配内存或显存。
+        （``results[i][...] = value``），不重新分配内存或显存。缓冲区必须与操作数
+        **同设备**：GPU 上要给设备数组，给 numpy 缓冲区会触发 CuPy 的
+        “implicit conversion to a NumPy array is not allowed” 而报 ``TypeError``。
     max_proc : int, optional
         进程数上限；``None`` 表示 ``min(子任务数, CPU 线程数, 可用内存允许值)``。
     verbose : bool
@@ -807,8 +809,11 @@ def init(config, max_proc=None, verbose=False, reminder=True,
             raise TypeError(f"task {ids[index]!r} operands must be a non-empty "
                             f"list, got {type(task_operands).__name__}")
         target = results[index]
-        writeable = getattr(target, "flags", None)
-        if writeable is not None and not writeable.writeable:
+        # 两层 getattr：设备数组的 flags 未必提供 writeable（cupy 就没有），
+        # 直接取属性会抛 AttributeError，而这只是"能否提前发现只读缓冲区"的
+        # 便利检查，不该成为缓冲区类型的准入门槛。
+        writeable = getattr(getattr(target, "flags", None), "writeable", None)
+        if writeable is not None and not writeable:
             raise ValueError(f"task {ids[index]!r} result buffer is read-only; "
                              "run() writes results in place")
         specs.append({"subscripts": equation,

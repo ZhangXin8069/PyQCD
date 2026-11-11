@@ -288,7 +288,9 @@ harness 会分别打印 `plan`、`exec`、`total` 三个中位数，并给出它
 
 用法与上面的 15-case 基准完全一致，同样两个开关：`python bench.py cpu single`（默认）
 或 `python bench.py gpu double`。`gpu` 下进程数被固定为 1——自建池会把每个操作数落盘成
-numpy；因此上表是 CPU 实测，GPU 那一轮测的是批量接口在设备上的进程内开销。
+numpy；因此上表是 CPU 实测，GPU 那一轮测的是批量接口在设备上的进程内开销。结果缓冲区
+按操作数所在设备分配（`make_buffer`）：`init`/`run` 原地写入，numpy 缓冲区接不下
+cupy 结果。
 
 ```python
 # docs-skip: launches MPI worker processes
@@ -440,15 +442,25 @@ def output_shape(equation, operands):
     return tuple(info.size_dict[label] for label in info.output_subscript)
 
 
+def make_buffer(shape, dtype):
+    """Result buffer on the operands' device: ``run`` writes into it in place.
+
+    A host buffer cannot receive a device array — CuPy refuses the implicit
+    conversion with a ``TypeError`` — so the buffer has to live where the
+    contraction runs.
+    """
+    return to_device(np.zeros(shape, dtype=dtype))
+
+
 def run_parallel(tasks):
     """One ``init`` + ``run`` pair, timed in two phases.
 
-    The buffers stay host-side on purpose: the self-launched pool stages numpy, and
-    `init`/`run` write results in place, so a host buffer keeps both devices honest.
+    ``init``/``run`` write results in place, so the buffers are allocated on the
+    operands' device: numpy on the CPU, cupy on the GPU.
     """
     keys = list(tasks)
-    results = [np.zeros(output_shape(*tasks[key]),
-                        dtype=np.result_type(*[o.dtype for o in tasks[key][1]]))
+    results = [make_buffer(output_shape(*tasks[key]),
+                           np.result_type(*[o.dtype for o in tasks[key][1]]))
                for key in keys]
     config = {"task_id": keys,
               "equation": [tasks[key][0] for key in keys],
@@ -489,11 +501,13 @@ for label, tasks in CASES.items():
     total_seconds = plan_seconds + exec_seconds
 
     # Correctness first: the parallel result must equal the serial one, otherwise the
-    # speed-up means nothing.
+    # speed-up means nothing. Both sides come back to the host before comparing —
+    # numpy ufuncs do not accept device arrays either.
     for key, (equation, operands) in tasks.items():
         reference = to_host(pe.contract(equation, *operands))
+        actual = to_host(results[key])
         scale = max(float(np.max(np.abs(reference))), 1e-30)
-        deviation = float(np.max(np.abs(results[key] - reference))) / scale
+        deviation = float(np.max(np.abs(actual - reference))) / scale
         assert deviation <= RTOL, f"{label} {key}: rel={deviation:.1e}"
 
     print(f"{label:24s} {len(tasks):5d} {serial_seconds:9.3f} {plan_seconds:8.3f} "
