@@ -3152,6 +3152,14 @@ def test_infra_safety_contracts():
     _run_unittest_contract(MpiContractTimingSafetyContract)
 
 
+def test_native_install_diagnostics_contracts():
+    """原生 KUPL 库缺失时的诊断文案（路径/后端/修复建议）与 fail-open 契约。"""
+    from ._native_install_contract import TESTS
+
+    for test in TESTS:
+        test()
+
+
 def test_einsum_native_contracts():
     """Native KUPL/CUDA dtype, cache, out, expression and fallback contracts."""
     from .einsum.verify_native import run

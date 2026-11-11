@@ -14,10 +14,11 @@ PyQCD 是一个用 Python 编写的格点 QCD 工具库，可选原生加速。�
 pip install pyqcd
 ```
 
-原生内核是**可选**的：没有 C++ 编译器（或没有 CUDA）时包照样能装，收缩引擎会改用
-纯 Python 规划 —— 结果相同，只是更慢。
-
-设置 `PYQCD_EINSUM_REQUIRE_NATIVE=1` 可把"缺工具链"变成硬错误。
+**KUPL 原生内核默认是必需的**：`pip install` 会现场编译，缺 C++ 工具链时直接
+以可操作的错误信息中止安装，而不是悄悄给你一个只会走纯 Python 规划的包。装上
+`g++`/`c++` 与 `bash`、`binutils` 即可；确实只想要纯 Python 规划时显式：
+`PYQCD_SKIP_NATIVE_BUILD=1 pip install pyqcd`（`PYQCD_EINSUM_REQUIRE_NATIVE=0` 等价）。
+CUDA 仍是机会性构建：缺 `nvcc` 只是拿不到 GPU 内核，不影响 CPU 原生路径。
 
 确认实际装上了什么（不需要写 import）：
 

@@ -206,11 +206,13 @@ twine 上传、CDN 传播等待、干净 venv 安装自检、回滚策略与双�
    修补只能发新版本（如 0.1.4），0.1.3 不可覆盖。
 3. `pyqcd.testing`（测试、基准、回归基线）不进包，文档里的基准/回归命令必须标注
    “需源码仓库”；包内代码不得 import 它。
-4. 缺工具链时安装必须仍然成功：没有 `CXX`、没有 `nvcc`、没有 Cython 或构建脚本失败时，
-   安装降级到纯 Python planner 并以 0 退出（0.1.3 前修过两次：`CXX` 不存在、
-   `auto` 选中 CUDA 导致构建脚本成功而 Cython 扩展崩溃）。核对方式：在干净 venv 里用
-   `CXX=/nonexistent/c++ NVCC=/nonexistent/nvcc "$VENV/bin/pip" install pyqcd==<ver>`
-   必须 exit 0，且 `pe.build_info()["backend"] == "python"`（实测只发 RuntimeWarning）。
+4. 缺 KUPL 工具链时安装必须**失败**（0.3.3 起）：KUPL 是原生基线，缺库却 exit 0 等于
+   悄悄发一个只会走纯 Python 规划的包——0.3.2 就是这样在只有 `g++` 的集群上翻车的
+   （`setup.py` 的探针只认 `CXX`/`c++`，而 `make.sh` 实际用 `g++`）。核对方式：
+   `CXX=/nonexistent/c++ "$VENV/bin/pip" install pyqcd==<ver>` 必须 **exit != 0**，且信息里
+   含原因、编译器日志路径与 `PYQCD_SKIP_NATIVE_BUILD=1` / `PYQCD_EINSUM_REQUIRE_NATIVE=0`
+   两个显式退出开关；`PYQCD_SKIP_NATIVE_BUILD=1` 时必须 exit 0 且
+   `pe.build_info()["backend"] == "python"`。CUDA 缺 `nvcc` 仍只警告、exit 0。
 
 ## 撤销与回滚
 
@@ -925,13 +927,18 @@ tar -xzOf "$T" */pyqcd.egg-info/SOURCES.txt | grep -c "/home/"   # 0
 | 阶段 | 触发 | 失败语义（必须如此） | 实测耗时 |
 |---|---|---|---|
 | pip 隔离构建环境 | 每次从 sdist 安装 | 硬错误（缺 `setuptools>=77`/`wheel`/`cython` 即失败） | 3–8 s |
-| KUPL CPU 原生库 | **永远构建**：`PYQCD_EINSUM_BACKEND` 取 `auto`/`kupl`/`cuda` 都含它 | 只 `RuntimeWarning` 并回落纯 Python planner；仅 `PYQCD_EINSUM_REQUIRE_NATIVE=1` 才升级为硬错误 | ~6 s |
+| KUPL CPU 原生库 | **永远构建**：`PYQCD_EINSUM_BACKEND` 取 `auto`/`kupl`/`cuda` 都含它 | **默认硬错误**（缺工具链或 `build-kupl.sh` 非零即中止安装）；`PYQCD_SKIP_NATIVE_BUILD=1` 或 `PYQCD_EINSUM_REQUIRE_NATIVE=0` 才降级为警告 + 纯 Python planner | ~6 s |
 | CUDA 原生库 | **机会性**：`nvcc` 在 PATH + `cpp/cuda/einsum/src/*.cu` 存在 + Cython 可 import | 永远只警告，KUPL 仍是可用原生后端；`=cuda` 也只保证"尝试" | ~20 s |
 | Cython CUDA 扩展 | 仅当 CUDA 库建成 | CUDA 没建成时先从 `self.extensions` 里剔除再 `super().run()`，不报错 | ~10 s |
 
 判据：`pip install -v pyqcd==<ver> 2>&1 | grep "build backends"` → `PyQCD einsum build backends: kupl, cuda`；只出现 `kupl` 说明机会性条件不满足（缺 nvcc / 缺 Cython / 缺源），不是缺陷。
 主机编译器"存在但编不过"必须先试编译：CUDA 阶段用 `$CXX`（默认 `c++`）编 `int main(){ return 0; }`
-（180 s 超时），失败只跳过 CUDA、**KUPL 照旧构建**；`CXX=/bin/false` 的实测结论是安装 exit 0、`backend='python'`、`native_available=False`。
+（180 s 超时），失败只跳过 CUDA、**KUPL 照旧构建**。
+
+KUPL 的编译器探测必须与 `cpp/kupl/einsum/make.sh` 同序：`CXX` → `g++` → `c++` → `mpicxx`，
+并额外要求 `bash` 与 `nm`。2026-11-11 的实测事故：探针只查 `c++`，而集群 modulefile 常只给
+`g++`，于是"工具链缺失"被误判 → 静默跳过 KUPL → 用户在 site-packages 里看不到
+`libpyqcdeinsum_kupl.so`。判据：仅 `g++` 在 PATH 时也必须编出该 `.so`（357 KB 量级）。
 
 ### 构建进度必须写 `/dev/tty`（pip 会吞掉构建输出）
 pip 捕获后端的 stdout，只在**失败时**回放；两分钟的编译在用户眼里就是卡死。三处都写：

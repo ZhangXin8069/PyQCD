@@ -7,7 +7,7 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.3.2`。需要固定版本时：`pip install "pyqcd==0.3.2"`。
+当前发行版：`0.3.3`。需要固定版本时：`pip install "pyqcd==0.3.3"`。
 
 PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的
 manylinux wheel 需要 `auditwheel` 修补。因此首次安装会编译一次（笔记本上约一分钟），
@@ -54,9 +54,10 @@ extras 只拉取 Python 依赖；原生库仍在同一次 `pip install` 中、�
    `cpp/cuda/einsum/src` 下的 CUDA 源码、以及 Cython 三者齐备时，才会再编译 CUDA
    库及其 Cython 扩展。Cython 由 pip 构建环境提供，所以实际起作用的门槛就是
    `nvcc`。KUPL 先编，因此 CUDA 工具链出问题绝不会连带丢掉 CPU 后端。
-3. **原生构建失败只是警告，不是安装失败**。CUDA 构建失败发 `RuntimeWarning`，
-   安装继续进行，`pyqcd.einsum` 继续使用 KUPL。KUPL 构建失败同样只警告，引擎降级
-   到纯 Python 规划。
+3. **KUPL 构建失败会让安装失败；CUDA 失败只警告**。KUPL 是原生基线：工具链缺失或
+   `build-kupl.sh` 返回非零时，`pip install` 直接中止，并在信息里给出原因、编译器
+   日志路径与两个显式退出开关。CUDA 构建失败只发 `RuntimeWarning`，安装继续，
+   `pyqcd.einsum` 仍走 KUPL。
 4. 按实际产出的库安装 `pyqcd`；`build_info()['backend']` 报告运行期真正可用的后端。
 
 下列开关在 `pip install` 构建阶段读取：
@@ -66,9 +67,9 @@ extras 只拉取 Python 依赖；原生库仍在同一次 `pip install` 中、�
 | `PYQCD_EINSUM_BACKEND=kupl` | 只构建 KUPL |
 | `PYQCD_EINSUM_BACKEND=cuda` | 构建 KUPL **和** CUDA —— 该取值表示“两个都编”，KUPL 仍是必需基线 |
 | `PYQCD_EINSUM_BACKEND=auto`（默认） | 总是构建 KUPL；`nvcc`、CUDA 源码与 Cython 齐备时再加编 CUDA |
-| `PYQCD_EINSUM_REQUIRE_NATIVE=1` | 把 **KUPL** 的跳过或失败变成硬错误；对 CUDA 从不生效 |
+| `PYQCD_EINSUM_REQUIRE_NATIVE` | 默认 `1`：**KUPL** 的跳过或失败是硬错误；设为 `0` 才允许带着纯 Python 规划装完。对 CUDA 从不生效 |
 | `PYQCD_EINSUM_SKIP_CYTHON=1` | 假装没有 Cython：`auto` 降级为只编 KUPL，`cuda` 仍编 CUDA 库但不编其 Cython 扩展 |
-| `PYQCD_SKIP_NATIVE_BUILD=1` | 完全跳过原生编译，若已有现成库则直接复用；否则只有纯 Python 规划可用 |
+| `PYQCD_SKIP_NATIVE_BUILD=1` | 完全跳过原生编译，若已有现成库则直接复用；否则就是显式选择纯 Python 规划 |
 
 ## 安装包里有什么
 

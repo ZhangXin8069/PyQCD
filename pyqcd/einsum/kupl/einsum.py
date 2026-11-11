@@ -95,6 +95,32 @@ def library_path() -> Path:
     return _PACKAGED_LIB
 
 
+def library_report() -> dict[str, Any]:
+    """Describe the archive this module loads, for actionable diagnostics.
+
+    ``status`` names *why* a native call has no reusable compiler context:
+    ``library missing`` (nothing at the reported path), ``library failed to
+    load`` (present but ``dlopen`` rejected it, e.g. wrong architecture or a
+    missing dependency) or ``compiler context unavailable`` (the archive loads
+    but exports no usable compiler entry point, or compiling that plan failed).
+    The three need different repairs, so callers must not collapse them.
+    """
+    path = library_path()
+    present = path.is_file()
+    if not present:
+        status = "library missing"
+    elif _LOAD_FAILURE_KIND == "load":
+        status = "library failed to load"
+    else:
+        status = "compiler context unavailable"
+    return {
+        "path": os.path.abspath(str(path)),
+        "present": present,
+        "status": status,
+        "load_failure": _LOAD_FAILURE,
+    }
+
+
 _LL = ctypes.c_longlong
 _I = ctypes.c_int
 
@@ -119,12 +145,14 @@ _STATUS_FUNCTIONS = {
 
 _LIBRARY: Any = None
 _LOAD_FAILURE: str | None = None
+# ``"missing"`` / ``"load"``: 缺库与"库在但 dlopen 失败"的修法不同，报告要能区分。
+_LOAD_FAILURE_KIND: str | None = None
 _LIBRARY_LOCK = threading.Lock()
 
 
 def _load_library() -> Any:
     """Load the archive once and bind every signature the build exports."""
-    global _LIBRARY, _LOAD_FAILURE
+    global _LIBRARY, _LOAD_FAILURE, _LOAD_FAILURE_KIND
     with _LIBRARY_LOCK:
         if _LIBRARY is not None:
             return _LIBRARY
@@ -137,11 +165,13 @@ def _load_library() -> Any:
                 os.environ["PYQCD_EINSUM_CBLAS_LIB"] = candidates[0]
         path = library_path()
         if not path.is_file():
+            _LOAD_FAILURE_KIND = "missing"
             _LOAD_FAILURE = f"native einsum library not found at {path}"
             raise _NativeUnavailable(_LOAD_FAILURE)
         try:
             library = ctypes.CDLL(str(path), mode=ctypes.RTLD_LOCAL)
         except OSError as exc:
+            _LOAD_FAILURE_KIND = "load"
             _LOAD_FAILURE = f"native einsum library failed to load: {exc}"
             raise _NativeUnavailable(_LOAD_FAILURE) from exc
         for name, argtypes in _SIGNATURES.items():

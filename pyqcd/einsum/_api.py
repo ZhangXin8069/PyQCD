@@ -946,6 +946,65 @@ def _warn_native_fallback_once(message: str) -> None:
     _NATIVE_WARNING_EMITTED = True
 
 
+# 原生编译失败的一次性诊断：库缺失、库无法 dlopen、库没有可复用编译入口是三种不同的
+# 修法，所以文案要点名是哪一种，并给出归档绝对路径、build_info() 的后端与可执行修复步骤。
+_NATIVE_ARCHIVE_LABEL = {
+    "kupl": "pyqcd/einsum/kupl/libpyqcdeinsum_kupl.so",
+    "cuda": "pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so",
+}
+_NATIVE_REBUILD_COMMAND = {"kupl": "bash install.sh", "cuda": "bash install.sh cuda"}
+_NATIVE_REPAIR_HINT = (
+    "reinstall pyqcd from a build that ships {archive}, or rebuild it in a source "
+    "checkout ({build}) after checking the C/C++ compiler and the build log; then "
+    "confirm with `python -m pyqcd` and `python -m pyqcd --gpu-probe`"
+)
+
+
+def _native_library_report(native_backend: str) -> dict[str, Any]:
+    """Path, presence and failure class of a native archive (never raises)."""
+    try:
+        if native_backend == "kupl":
+            from .kupl import einsum as kupl_einsum
+
+            return kupl_einsum.library_report()
+        from ._native import library_path as backend_library_path
+
+        path = os.path.abspath(str(backend_library_path(native_backend)))
+        present = os.path.isfile(path)
+        return {
+            "path": path,
+            "present": present,
+            "status": "compiler context unavailable" if present else "library missing",
+        }
+    except Exception:  # noqa: BLE001 - 诊断失败绝不能改变调用方的行为
+        return {"path": "unknown", "present": False, "status": "unknown"}
+
+
+def _native_compile_warning(
+    native_backend: str, exc: BaseException, *, per_call: bool
+) -> str:
+    """One-line, actionable warning for a native compiler that cannot be reused."""
+    report = _native_library_report(native_backend)
+    try:
+        info = _native_executor().build_info()
+        build_backend = str(info.get("backend", "unknown"))
+        array_backend = str(info.get("array_backend", "unknown"))
+    except Exception:  # noqa: BLE001 - 同上
+        build_backend = array_backend = "unknown"
+    hint = _NATIVE_REPAIR_HINT.format(
+        archive=_NATIVE_ARCHIVE_LABEL.get(native_backend, "the native archive"),
+        build=_NATIVE_REBUILD_COMMAND.get(native_backend, "bash install.sh"),
+    )
+    execution = "per-call native execution" if per_call else "Python execution"
+    return (
+        f"pyqcd.einsum native {native_backend} compiler unavailable "
+        f"({report['status']}); using {execution}, results stay correct: "
+        f"{type(exc).__name__}: {exc}; library={report['path']} "
+        f"(present={report['present']}); backend={build_backend} "
+        f"array_backend={array_backend}; fix: {hint}"
+    )
+
+
 def _native_context_cache_limit() -> int:
     """Bound of the compiled-context cache (``0`` disables caching).
 
@@ -1193,14 +1252,12 @@ def _try_native_contract(
             # instead of dropping the whole native path.
             _NATIVE_CONTEXT_UNAVAILABLE.add(key)
             _warn_native_fallback_once(
-                f"pyqcd.einsum native {native_backend} compiler unavailable; "
-                f"using per-call native execution: {type(exc).__name__}: {exc}"
+                _native_compile_warning(native_backend, exc, per_call=True)
             )
             return _execute_native_plan(plan, key, operands, out, native_backend)
         _NATIVE_DISABLED.add(key)
         _warn_native_fallback_once(
-            f"pyqcd.einsum native {native_backend} compiler unavailable; "
-            f"using Python execution: {type(exc).__name__}: {exc}"
+            _native_compile_warning(native_backend, exc, per_call=False)
         )
         return False, None
 

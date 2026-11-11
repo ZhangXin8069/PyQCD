@@ -12,9 +12,12 @@ Backend policy
 * ``PYQCD_EINSUM_BACKEND=auto`` (default) -> KUPL always, plus CUDA when
   ``nvcc``, the CUDA sources and Cython are all available.
 
-A KUPL failure degrades the install to the pure-Python planner and only becomes
-fatal with ``PYQCD_EINSUM_REQUIRE_NATIVE=1``. A CUDA failure is *always* only a
-warning: the package stays installed with the KUPL library.
+KUPL is the baseline native backend, so a failed KUPL build aborts the install:
+the alternative is a wheel that ships no native kernel at all and falls back to
+the pure-Python planner without telling the user. ``PYQCD_SKIP_NATIVE_BUILD=1``
+(and ``PYQCD_EINSUM_REQUIRE_NATIVE=0``) opt into that pure-Python install on
+purpose. A CUDA failure is *always* only a warning: the package stays installed
+with the KUPL library.
 """
 
 from __future__ import annotations
@@ -97,6 +100,11 @@ def _native_library_path(backend: str) -> Path:
     return HOME / "cpp" / backend / "einsum" / f"libpyqcdeinsum_{backend}.so"
 
 
+def _build_log(backend: str) -> Path:
+    """Compiler log ``make.sh`` leaves behind for ``backend``."""
+    return HOME / "cpp" / backend / "einsum" / "build" / "build.log"
+
+
 def _stage_native_library(backend: str) -> None:
     source = _native_library_path(backend)
     if not source.is_file():
@@ -127,6 +135,21 @@ def _host_compiler_works() -> bool:
     return True
 
 
+def _host_compiler() -> str | None:
+    """Compiler ``make.sh`` resolves: ``CXX`` if set, else g++ -> c++ -> mpicxx.
+
+    Probing ``c++`` alone reports a missing toolchain on clusters whose module
+    file only exposes ``g++``, even though ``make.sh`` would have compiled fine.
+    """
+    explicit = os.environ.get("CXX")
+    if explicit:
+        return explicit if shutil.which(explicit) else None
+    for candidate in ("g++", "c++", "mpicxx"):
+        if shutil.which(candidate):
+            return candidate
+    return None
+
+
 def _toolchain_problem(backend: str) -> str | None:
     """Return why the native build for ``backend`` cannot run, or None."""
     script = BUILD_SCRIPTS[backend]
@@ -136,37 +159,62 @@ def _toolchain_problem(backend: str) -> str | None:
         return "bash is not available on PATH"
     if backend == "cuda":
         # CUDA 需要两套工具链：nvcc 编译 .cu，主机 C++ 编译器编译 Cython 扩展。
-        compilers = [("NVCC", "nvcc", "CUDA compiler"),
-                     ("CXX", "c++", "host C++ compiler")]
-    else:
-        compilers = [("CXX", "c++", "host C++ compiler")]
-    for variable, default, description in compilers:
-        compiler = os.environ.get(variable, default)
-        if shutil.which(compiler) is None:
-            return f"{description} {compiler!r} is not available on PATH"
-    if backend == "cuda" and not _host_compiler_works():
-        return (f"host C++ compiler {os.environ.get('CXX', 'c++')!r} cannot compile "
-                "a trivial program")
+        for variable, default, description in (
+                ("NVCC", "nvcc", "CUDA compiler"),
+                ("CXX", "c++", "host C++ compiler")):
+            compiler = os.environ.get(variable, default)
+            if shutil.which(compiler) is None:
+                return f"{description} {compiler!r} is not available on PATH"
+        if not _host_compiler_works():
+            return (f"host C++ compiler {os.environ.get('CXX', 'c++')!r} cannot "
+                    "compile a trivial program")
+        return None
+    if shutil.which("nm") is None:
+        # make.sh 用 nm 校验 applyPlanQcd 导出符号；缺 nm 时它只会报“符号缺失”。
+        return "binutils ('nm') is not available on PATH"
+    if _host_compiler() is None:
+        return ("host C++ compiler ('CXX', 'g++', 'c++' or 'mpicxx') is not "
+                "available on PATH")
     return None
 
 
+def _native_required(backend: str) -> bool:
+    """Whether a missing ``backend`` library must abort the install.
+
+    KUPL is the baseline: without it the wheel carries no native kernel, so the
+    build fails loudly unless the user explicitly asked for the pure-Python
+    planner (``PYQCD_SKIP_NATIVE_BUILD=1`` / ``PYQCD_EINSUM_REQUIRE_NATIVE=0``).
+    CUDA stays opportunistic because KUPL is still installed.
+    """
+    if backend == "cuda":
+        return False
+    if os.environ.get("PYQCD_SKIP_NATIVE_BUILD") == "1":
+        return False
+    return os.environ.get("PYQCD_EINSUM_REQUIRE_NATIVE", "1") != "0"
+
+
 def _skip_native(reason: str, backend: str) -> None:
-    """Warn about a skipped/failed native build, or fail for the KUPL baseline."""
+    """Warn about a skipped/failed native build, or abort for the KUPL baseline."""
     detail = f"PyQCD einsum: {reason}. The native {backend} library is not installed."
+    if backend != "cuda" and _native_required(backend):
+        raise RuntimeError(
+            f"{detail} KUPL is the baseline native backend, so this install would "
+            "ship no native kernel and silently fall back to the pure-Python "
+            "planner (pyqcd/einsum/_plan_py.py) at runtime. Install a C++ "
+            "toolchain (CXX/g++/c++, bash and binutils) and reinstall, or ask for "
+            "the pure-Python planner on purpose with PYQCD_SKIP_NATIVE_BUILD=1 "
+            "(or PYQCD_EINSUM_REQUIRE_NATIVE=0).")
     if backend != "cuda":
         detail += (" pyqcd.einsum then runs the pure-Python planner "
                    "(pyqcd/einsum/_plan_py.py).")
-        if os.environ.get("PYQCD_EINSUM_REQUIRE_NATIVE") == "1":
-            raise RuntimeError(
-                f"{detail} PYQCD_EINSUM_REQUIRE_NATIVE=1 is set, so this is a hard "
-                "error.")
     # CUDA 是机会性构建：失败只警告，KUPL 仍是可用的原生后端。
     if backend in _WARNED_BACKENDS:
         return
     _WARNED_BACKENDS.add(backend)
     suffix = ("pyqcd.einsum keeps using the kupl backend."
               if backend == "cuda"
-              else "Set PYQCD_EINSUM_REQUIRE_NATIVE=1 to make this a hard error.")
+              else "Continuing with the pure-Python planner because "
+                   "PYQCD_SKIP_NATIVE_BUILD=1 / PYQCD_EINSUM_REQUIRE_NATIVE=0.")
     warnings.warn(f"{detail} {suffix}", RuntimeWarning, stacklevel=2)
 
 
@@ -182,9 +230,9 @@ def _stage_built_libraries() -> None:
 class NativeBuildExt(build_ext):
     """Own native compilation before setuptools builds Python extensions.
 
-    A missing toolchain (or a failing compiler) degrades the install to the
-    remaining backends instead of aborting it; the sdist stays installable on
-    machines without a C++ compiler or CUDA.
+    A failing CUDA build degrades the install to the KUPL library, which stays
+    opportunistic. A failing KUPL build aborts the install (see
+    :func:`_native_required`) unless the user opted into the pure-Python planner.
     """
 
     def _build_backend(self, backend: str) -> bool:
@@ -194,6 +242,12 @@ class NativeBuildExt(build_ext):
             return False
         environment = os.environ.copy()
         environment["PYQCD_EINSUM_BACKEND"] = backend
+        if backend != "cuda" and "CXX" not in os.environ:
+            # make.sh 默认用 g++；只有它缺席时才显式透传探测到的编译器（如仅有 c++），
+            # 不影响 CXX 已设置或 g++ 存在（含 MPI 自动探测）的既有成功路径。
+            resolved = _host_compiler()
+            if resolved is not None and resolved != "g++":
+                environment["CXX"] = resolved
         started = time.time()
         _notify_progress(f"compiling the native {backend} library (this takes a "
                          f"while; pip will stay silent until it finishes)")
@@ -201,9 +255,19 @@ class NativeBuildExt(build_ext):
             subprocess.check_call(
                 ["bash", str(BUILD_SCRIPTS[backend])], cwd=HOME, env=environment)
         except subprocess.CalledProcessError as error:
-            _skip_native(
-                f"native build failed ({BUILD_SCRIPTS[backend].name} exited "
-                f"with {error.returncode})", backend)
+            if _native_library_path(backend).is_file():
+                # 源码树里已有可复用的库（重复安装、增量开发）：不必因本次失败中止。
+                _notify_progress(
+                    f"reusing the existing native {backend} library "
+                    f"({BUILD_SCRIPTS[backend].name} exited with "
+                    f"{error.returncode})")
+                return True
+            log = _build_log(backend)
+            detail = (f"native build failed ({BUILD_SCRIPTS[backend].name} exited "
+                      f"with {error.returncode}")
+            if log.is_file():
+                detail += f"; compiler log: {log}"
+            _skip_native(f"{detail})", backend)
             return False
         _notify_progress(f"native {backend} library built in "
                          f"{time.time() - started:.1f}s")

@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.3.2`. To pin it: `pip install "pyqcd==0.3.2"`.
+Current release: `0.3.3`. To pin it: `pip install "pyqcd==0.3.3"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need
@@ -63,10 +63,12 @@ during the same `pip install` when a toolchain is available.
    present. Cython comes from the pip build environment, so in practice the
    CUDA decision hangs on `nvcc`. KUPL is compiled first, so a broken CUDA
    toolchain can never cost you the CPU backend.
-3. **A failing native build is a warning, not a failed install.** A CUDA failure
-   emits a `RuntimeWarning`, the installation continues, and `pyqcd.einsum`
-   keeps using KUPL. A KUPL failure also only warns and degrades the engine to
-   the pure-Python planner.
+3. **A failing KUPL build fails the install; a failing CUDA build only warns.**
+   KUPL is the baseline native backend: if its toolchain is missing or
+   `build-kupl.sh` exits non-zero, `pip install` aborts and the message names the
+   reason, the compiler log and the two opt-outs. A CUDA failure emits a
+   `RuntimeWarning`, the installation continues, and `pyqcd.einsum` keeps using
+   KUPL.
 4. `pyqcd` is installed with whichever libraries were staged, and
    `build_info()['backend']` reports at run time what is actually usable.
 
@@ -77,9 +79,9 @@ The switches below are read while `pip install` builds the package:
 | `PYQCD_EINSUM_BACKEND=kupl` | build KUPL only |
 | `PYQCD_EINSUM_BACKEND=cuda` | build KUPL **and** CUDA — the value means "both", KUPL stays the mandatory baseline |
 | `PYQCD_EINSUM_BACKEND=auto` (default) | KUPL always, plus CUDA when `nvcc`, the CUDA sources and Cython are present |
-| `PYQCD_EINSUM_REQUIRE_NATIVE=1` | turn a skipped or failed **KUPL** build into a hard error; it never applies to CUDA |
+| `PYQCD_EINSUM_REQUIRE_NATIVE` | `1` (default) makes a skipped or failed **KUPL** build a hard error; `0` lets the install continue with the pure-Python planner. It never applies to CUDA |
 | `PYQCD_EINSUM_SKIP_CYTHON=1` | pretend Cython is missing: `auto` drops to KUPL only, `cuda` still builds the CUDA library but skips its Cython extension |
-| `PYQCD_SKIP_NATIVE_BUILD=1` | skip native compilation entirely and reuse an existing library if there is one; without one, only the pure-Python planner is available |
+| `PYQCD_SKIP_NATIVE_BUILD=1` | skip native compilation entirely and reuse an existing library if there is one; without one, install the pure-Python planner on purpose |
 
 ## What the installed package contains
 

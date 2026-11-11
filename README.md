@@ -16,11 +16,13 @@ Requires **Python 3.8+** (3.8 is the oldest interpreter with maintained
 pip install pyqcd
 ```
 
-The native kernels are **optional**: without a C++ compiler (or without CUDA)
-the package installs anyway and the contraction engine runs its pure-Python
-planner — same results, only slower.
-
-Set `PYQCD_EINSUM_REQUIRE_NATIVE=1` to make a missing toolchain a hard error.
+The **KUPL native kernel is required by default**: `pip install` compiles it and
+aborts with an actionable message if no C++ toolchain is available, instead of
+silently handing you a package that falls back to the pure-Python planner.
+Install `g++`/`c++` plus `bash` and `binutils`, or opt into the pure-Python
+planner explicitly with `PYQCD_SKIP_NATIVE_BUILD=1 pip install pyqcd`
+(`PYQCD_EINSUM_REQUIRE_NATIVE=0` does the same). CUDA stays opportunistic: a
+missing `nvcc` only costs you the GPU kernels.
 
 Check what you actually got (no imports needed):
 
