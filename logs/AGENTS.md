@@ -764,3 +764,11 @@
 - 关键内容: 六子代理并行：非版本回归，坏库源于开 MPI 却用 g++ 链接；端到端判定+硬校验；126 passed；PyPI 0.3.4 远程复验 dlopen=OK；tag dev50
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pyqcd-einsum/topology-kernels - stage - 2026-11-11 20:00:42 +0800
+- 主任务: 扩展 KUPL/CUDA qcd-einsum 特化 kernel 至 wick_12cases 的拓扑路径（阶段 1：探索与拓扑归并）
+- 日志文件: logs/v202611112000.txt
+- 文件大小: 5912 bytes
+- 触发原因: 阶段成果
+- 关键内容: 两路探索报告落地；实测 2582 条方程=2582 个唯一拓扑（元数 13/14/16 为主）；确定参数化家族 kernel 路线与精度策略；未改仓库
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
