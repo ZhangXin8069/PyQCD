@@ -210,6 +210,35 @@ def test_plan_respects_task_and_process_caps():
     assert auto['limits']['capped_by'] == 'cpu_threads'
 
 
+def test_worker_thread_budget_is_not_inherited_from_parent():
+    """worker 线程预算必须由启动器算，不能被父进程残留的线程变量带偏。
+
+    实测回归：父进程导入 `torch`（经由 `bench_distillation`）会把 `OMP_NUM_THREADS`
+    改成 4，旧启发式误判成"用户显式设置"，于是 4 进程 × 4 线程在 4 物理核上超订，
+    400 个小任务从 0.30 s 涨到 1.79 s。
+    """
+    saved = {name: os.environ.get(name) for name in
+             ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS')}
+    try:
+        os.environ['OMP_NUM_THREADS'] = '7'          # 冒充"父进程残留"
+        os.environ['OPENBLAS_NUM_THREADS'] = '7'
+        env, info = parallel_einsum._worker_env(4)
+        assert info is not None
+        assert info['per_worker'] == max(1, info['cores'] // 4), info
+        assert env['OMP_NUM_THREADS'] == str(info['per_worker']), env
+        assert env['OPENBLAS_NUM_THREADS'] == str(info['per_worker']), env
+
+        forced, forced_info = parallel_einsum._worker_env(4, worker_threads=1)
+        assert forced_info['per_worker'] == 1
+        assert forced['OMP_NUM_THREADS'] == '1', forced
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def test_plan_rejects_invalid_input():
     """空集合、非法键、非字符串方程都必须在执行前失败。"""
     for bad in ([], {}):
@@ -420,6 +449,7 @@ def test_worker_entry_point_is_reachable():
 _TESTS = (
     test_plan_balances_skewed_workloads,
     test_plan_respects_task_and_process_caps,
+    test_worker_thread_budget_is_not_inherited_from_parent,
     test_plan_rejects_invalid_input,
     test_reminder_is_printed_only_once,
     test_serial_path_matches_contract_bit_exact,

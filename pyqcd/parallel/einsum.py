@@ -491,35 +491,33 @@ def _missing_results(results_dir, total):
                 os.path.join(results_dir, f"result_{index:05d}.npy"))]
 
 
-def _worker_env(workers):
+def _worker_env(workers, worker_threads=None):
     """给 worker 分配线程预算，避免 K 进程 × 全线程造成超订。
 
-    ``pyqcd.einsum._threads`` 在 import 时就把 ``OMP_NUM_THREADS`` /
-    ``OPENBLAS_NUM_THREADS`` 写进本进程环境；子进程会把它当成"用户显式设置"而
-    全盘照抄——实测 4 进程 × 4 线程在 4 物理核上把并行变成 0.6×。这里按
-    ``物理核数 // 进程数`` 重算，用户亲手设的变量仍然优先。
+    不能靠"环境变量与 ``_threads.exported_env`` 相同与否"来判断用户是否显式设置：
+    任何在导入 ``pyqcd.einsum`` **之后**才加载的库（本机实测 `torch`，经由
+    `pyqcd.testing.einsum.bench_distillation`）会把 ``OMP_NUM_THREADS`` 等改写掉，
+    旧启发式随即失效，4 进程各拿 4 线程 → 400 个小任务从 0.30 s 涨到 1.79 s。
+    启动器知道自己要起几个进程，因此这里直接给出预算；需要别的值请传
+    ``worker_threads``。
     """
     env = os.environ.copy()
     try:
         from ..einsum import _threads
-        exported = _threads._state.get("exported_env") or {}
         cores = max(1, _threads.physical_cores())
+        names = (_threads.STANDARD_OMP_ENV, _threads.STANDARD_BLAS_ENV)
     except Exception:
         return env, None
-    pinned = {name for name in (_threads.STANDARD_OMP_ENV, _threads.STANDARD_BLAS_ENV)
-              if os.environ.get(name) not in (None, exported.get(name))}
-    budget = max(1, cores // max(1, workers))
-    for name in (_threads.STANDARD_OMP_ENV, _threads.STANDARD_BLAS_ENV):
-        if name not in pinned:
-            env[name] = str(budget)
-    threads = {name: env.get(name) for name in
-               (_threads.STANDARD_OMP_ENV, _threads.STANDARD_BLAS_ENV)}
-    return env, {"cores": cores, "per_worker": budget, "threads": threads,
-                 "pinned": sorted(pinned)}
+    budget = max(1, int(worker_threads)) if worker_threads else \
+        max(1, cores // max(1, workers))
+    for name in names:
+        env[name] = str(budget)
+    return env, {"cores": cores, "per_worker": budget,
+                 "threads": {name: env[name] for name in names}}
 
 
 def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
-                  keep_workdir, launcher):
+                  keep_workdir, launcher, worker_threads=None):
     """不在 MPI 下：自建 mpirun 进程池，任务与结果经临时目录交换。"""
     argv_prefix = (list(launcher) if launcher is not None
                    else _default_launcher())
@@ -544,7 +542,7 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
             "-np", str(plan["workers"]), sys.executable,
             "-m", "pyqcd.parallel.einsum", "--worker", run_dir,
             "--optimize", str(optimize), "--backend", str(backend)]
-        env, thread_budget = _worker_env(plan["workers"])
+        env, thread_budget = _worker_env(plan["workers"], worker_threads)
         env["PYTHONPATH"] = os.pathsep.join(
             [_package_root(), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
         completed = subprocess.run(command, capture_output=True, text=True,
@@ -584,7 +582,7 @@ def _run_launched(kind, keys, specs, plan, optimize, backend, workdir,
 
 def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
             reminder=True, verbose=True, workdir=None, keep_workdir=False,
-            launcher=None, broadcast=False):
+            launcher=None, broadcast=False, worker_threads=None):
     """并行执行多个相互独立的 einsum 任务，结果与串行调用逐一对应。
 
     Parameters
@@ -610,6 +608,9 @@ def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
         保留临时目录（调试用）。
     launcher : list, optional
         覆盖 MPI 启动命令，如 ``['mpiexec', '--allow-run-as-root']``。
+    worker_threads : int, optional
+        自建进程池里每个 worker 的 OMP/BLAS 线程数；默认 ``物理核数 // 进程数``。
+        小任务批次建议显式写 1（线程创建开销会盖过并行收益）。
     broadcast : bool
         仅 collective 模式有意义：``True`` 时把完整结果广播给所有 rank
         （默认只在 rank 0 返回结果，其他 rank 返回 ``None``）。
@@ -645,7 +646,8 @@ def einsums(tasks, max_procs=None, optimize="auto", backend="auto",
         if verbose:
             print(_format_plan(plan, "mpi-launch"), flush=True)
         payload, _info = _run_launched(kind, keys, specs, plan, optimize,
-                                      backend, workdir, keep_workdir, launcher)
+                                      backend, workdir, keep_workdir, launcher,
+                                      worker_threads)
         return payload
 
     if verbose:

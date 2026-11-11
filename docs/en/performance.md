@@ -219,6 +219,117 @@ check("gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",            # production nucleon 2p
 * **precision is preserved** — `complex128` in, `complex128` out;
 * **dtype/shape errors are raised, not guessed**, with the same wording as `opt_einsum`.
 
+## Batch of independent contractions (`einsums`)
+
+`pyqcd.parallel.einsum.einsums` runs a **batch of mutually independent** contractions
+on several MPI ranks. Unlike the tables above, the comparison partner here is *the
+same library running serially* — the question is only whether splitting a queue of
+tasks across processes pays off.
+
+Protocol: same machine, `complex64`/`float32` operands, `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=1`
+(single-thread baseline, so parallel and serial use the same per-core budget),
+3 rounds with serial and parallel timed back to back, median of the per-round ratios.
+Every batch is verified against serial `contract` before the ratio is printed.
+
+| Scenario | Tasks | Serial | `einsums` (4 ranks) | Speed-up |
+|---|---|---|---|---|
+| general: many small (128² matmul) | 400 | 0.069 s | 0.048 s | 1.43× |
+| general: one-to-one (1200² matmul, #tasks = #ranks) | 3 | 0.125 s | 0.046 s | **2.73×** |
+| general: skewed (3 heavy + 9 light) | 12 | 0.118 s | 0.045 s | **2.63×** |
+| kernel: nucleon 2pt (E1) | 8 | 0.211 s | 0.053 s | **3.97×** |
+| sush: NN 2pt (S1) | 8 | 0.197 s | 0.052 s | **3.77×** |
+| sush: 3pt main (P1) | 8 | 0.139 s | 0.042 s | **3.32×** |
+| sush: NN 2pt, Nvec=100 (large task) | 8 | 6.670 s | 1.696 s | **3.93×** |
+| kernel: γ sandwich (E5, ~1 ms/task) | 8 | 0.001 s | 0.001 s | 0.80× |
+
+`mpirun -np 4`, no data staging (the tasks already live in each rank's memory). The
+γ-sandwich row is the boundary case: at ~1 ms per task the per-call overhead of the
+bin plumbing is larger than the work, so there is nothing to win.
+
+### Self-launched pool (single process, no pre-existing `mpirun`)
+
+Same batches, but `einsums` starts its own `mpirun -np 4` and exchanges tasks and
+results through a temporary directory:
+
+| Scenario | Tasks | Serial | `einsums` (4 procs) | Speed-up |
+|---|---|---|---|---|
+| general: many small | 400 | 0.043 s | 0.290 s | 0.15× |
+| general: one-to-one | 3 | 0.082 s | 0.225 s | 0.37× |
+| general: skewed | 12 | 0.085 s | 0.244 s | 0.35× |
+| kernel: nucleon 2pt (E1) | 8 | 0.167 s | 0.397 s | 0.42× |
+| sush: NN 2pt (S1) | 8 | 0.155 s | 0.247 s | 0.63× |
+| sush: 3pt main (P1) | 8 | 0.115 s | 0.391 s | 0.29× |
+| sush: NN 2pt, Nvec=100 (large task) | 8 | 5.274 s | 2.259 s | **2.33×** |
+
+The pool has a fixed cost of roughly 0.2–0.3 s: `mpirun` start-up (~150 ms) plus
+writing every operand out and reading it back (~1.5 GB/s here). It only wins once the
+serial run takes about a second or more, so **use `mpirun` yourself when you can** and
+treat the self-launched pool as the fallback for batches that are already expensive.
+
+### Reproduce
+
+```python
+# docs-skip: launches MPI worker processes
+import statistics, time
+import numpy as np
+import pyqcd.einsum as pe
+from pyqcd.parallel import einsums, plan_einsums
+
+ROUNDS, PROCS = 3, 4
+rng = np.random.default_rng(0)
+real = lambda *s: rng.standard_normal(s).astype(np.float32)
+cplx = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(np.complex64)
+
+S1 = "eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN"          # sush NN 2pt, 8 operands
+def sush_s1(nvec, count=8):
+    peram = lambda: [cplx(4, 4, nvec, nvec) for _ in range(3)] + \
+                    [cplx(4, 4) for _ in range(2)] + \
+                    [cplx(1, nvec, nvec, nvec) for _ in range(2)] + [cplx(4, 2)]
+    return {f"S1-{i}": (S1, peram()) for i in range(count)}
+
+CASES = {
+    "general: many small": {f"m{i}": ("ij,jk->ik", [real(128, 128), real(128, 128)])
+                            for i in range(400)},
+    "general: one-to-one": {f"m{i}": ("ij,jk->ik", [real(1200, 1200), real(1200, 1200)])
+                            for i in range(3)},
+    "general: skewed": {f"m{i}": ("ij,jk->ik", [real(1200, 1200), real(1200, 1200)]
+                                  if i < 3 else [real(200, 200), real(200, 200)])
+                        for i in range(12)},
+    "sush: NN 2pt": sush_s1(40),
+    "sush: NN 2pt large": sush_s1(100),
+}
+
+def median(fn):
+    times = []
+    for _ in range(ROUNDS):
+        start = time.perf_counter(); payload = fn()
+        times.append(time.perf_counter() - start)
+    return statistics.median(times), payload
+
+print(f"{'case':24s} {'tasks':>5s} {'serial(s)':>9s} {'parallel(s)':>11s} {'speed-up':>8s}")
+for label, tasks in CASES.items():
+    serial, _ = median(lambda: [pe.contract(eq, *ops, optimize="auto")
+                                for eq, ops in tasks.values()])
+    parallel, payload = median(lambda: einsums(tasks, reminder=False, verbose=False,
+                                               max_procs=PROCS))
+    for key, (eq, ops) in tasks.items():            # correctness first
+        ref = pe.contract(eq, *ops, optimize="auto")
+        scale = max(float(np.max(np.abs(ref))), 1e-30)
+        assert float(np.max(np.abs(payload[key] - ref))) / scale <= 1e-5, key
+    print(f"{label:24s} {len(tasks):5d} {serial:9.3f} {parallel:11.3f} "
+          f"{serial / parallel:7.2f}x")
+```
+
+To measure the collective mode instead, save the loop above as `bench.py` and run
+`mpirun -np 4 python bench.py`: every rank calls `einsums` and the work is divided over
+those ranks with no data staging (the table above uses exactly that path). The
+package also ships both harnesses:
+
+```bash
+python -m pyqcd.testing.parallel_einsum bench --equation S1 --nvec 100 --procs 4
+mpirun -np 4 python -m pyqcd.testing.parallel_einsum bench-collective --equation S1
+```
+
 ## Reproduce
 
 One script, both tables: `python bench.py cpu` then `python bench.py gpu`.
