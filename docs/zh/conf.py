@@ -10,8 +10,19 @@ project = "PyQCD（中文文档）"
 author = "PyQCD contributors"
 copyright = "PyQCD contributors"
 
-version = "0.1"
-release = "0.3.4"
+# 版本从 pyproject.toml 读，避免每次发版手改这里（曾经漏改导致站点停旧版）。
+def _project_version() -> str:
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    found = re.search(r'(?m)^version = "([^"]+)"', text)
+    return found.group(1) if found else "0.0.0"
+
+
+version = ".".join(_project_version().split(".")[:2])
+release = _project_version()
 
 language = "zh_CN"
 html_search_language = "zh"

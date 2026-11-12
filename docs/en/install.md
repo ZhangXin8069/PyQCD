@@ -7,7 +7,7 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.3.4`. To pin it: `pip install "pyqcd==0.3.4"`.
+Current release: `0.3.5`. To pin it: `pip install "pyqcd==0.3.5"`.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need
@@ -213,7 +213,7 @@ ASCII, so use the runtime hint instead.
 ### Why the first install takes a minute — and how to watch it
 
 `pip install pyqcd` builds everything from source, in this order (measured on a
-4-core laptop, `pyqcd 0.2.0`):
+4-core laptop):
 
 | Phase | Typical time | What it does |
 |---|---|---|

@@ -4,7 +4,7 @@ Every contraction listed here is dispatched by **topology signature** (label
 independent), so `ij,jk->ik` and `ij,jb->ib` take the same path. Counts are
 generated from the corpus and the registry, not typed by hand.
 
-* pyqcd version: `0.3.4` (backend `cuda`, array backend `numpy`)
+* pyqcd version: `0.3.5` (backend `cuda`, array backend `numpy`)
 * corpus size: **8638** contractions (2582 base table + 6056 appendix variants)
 * topology index: **8638** signatures in **24** buckets
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -199,6 +200,35 @@ def check_pypi(report: Report, version: str) -> None:
                "all probes present" if not missing else f"missing: {missing}")
 
 
+def check_docs_version(report: Report, version: str) -> None:
+    """文档里的版本号必须与包版本一致。
+
+    2026-11-12 发 0.3.5 时 RTD 站点仍显示 0.3.4，根因是 ``docs/*/conf.py`` 的
+    ``release`` 与 ``install.md`` 的版本号都是**手写**的，发版流程只改了三处
+    代码版本。现在 conf.py 从 pyproject.toml 读，剩下的手写处由本项守住。
+    """
+    # 只查**发布文档站**（docs/en、docs/zh）。docs/ 根目录是历史工作记录与审计台账，
+    # 里面出现旧版本号是正确的史料（如"4 核笔记本实测，pyqcd 0.2.0"），不该被门拦下。
+    stale = []
+    for lang in ("en", "zh"):
+        for path in sorted((pathlib.Path("docs") / lang).glob("*.md")):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            # 形如 "pyqcd 0.2.0" 的实测记录豁免：它们前面紧跟 pyqcd 但没有反引号版本语义。
+            for found in re.findall(r"\b(0\.\d+\.\d+)\b", text):
+                if found != version:
+                    stale.append(f"{path.name}:{found}")
+        conf = pathlib.Path("docs") / lang / "conf.py"
+        if conf.is_file() and "release = " in conf.read_text(encoding="utf-8"):
+            # conf.py 现在从 pyproject 读，不再手写；若又出现字面量说明被改回去了。
+            literal = re.search(r'(?m)^release = "(0\.[^"]+)"',
+                                conf.read_text(encoding="utf-8"))
+            if literal:
+                stale.append(f"{lang}/conf.py:literal")
+    report.add("docs version pinned", not stale,
+               f"all docs say {version}" if not stale
+               else f"stale: {stale[:4]}")
+
+
 def check_rtd(report: Report, version: str) -> None:
     for lang, url in RTD.items():
         try:
@@ -236,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     version = check_versions(report)
     check_sdist(report, version)
     check_docs(report)
+    check_docs_version(report, version)
     if not args.offline:
         check_pypi(report, version)
         check_rtd(report, version)
