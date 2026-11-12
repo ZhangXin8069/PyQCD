@@ -687,6 +687,56 @@ def contract(
 
     Drop-in replacement for :func:`numpy.einsum` that contracts the operands
     pairwise in a cost minimizing order.
+
+    Parameters
+    ----------
+    subscripts : str
+        Einstein summation subscripts, e.g. ``"ij,jk->ik"``. The ``->`` part is
+        optional (implicit output) and ``...`` broadcasting is supported.
+    *operands : array_like
+        Two or more tensors. All operands must share one dtype; results keep it.
+    out : ndarray, optional
+        Preallocated buffer written **in place**. Its shape and dtype must match
+        the contraction output, otherwise a ``ValueError`` is raised. Passing
+        ``out`` disables the specialized-kernel path.
+    use_blas : bool
+        Allow pairwise contractions to be dispatched to BLAS (default ``True``).
+    optimize : bool | str | list | PathOptimizer
+        ``False`` for a single n-ary einsum, an explicit path, the name of a
+        registered optimizer (``"greedy"``/``"optimal"``/``"dp"``), or
+        ``True``/``None``/``"auto"`` (default) to let the planner decide.
+    memory_limit : int | str | None
+        Upper bound on any intermediate's element count. ``None``/``-1`` means
+        unlimited, ``"max_input"`` means the largest input tensor.
+    backend : str
+        ``"auto"`` (default), ``"numpy"``, ``"cupy"``, ``"torch"`` or a
+        registered backend name.
+    specialize : bool | None
+        ``None`` (default) follows ``PYQCD_EINSUM_SPECIALIZE``; ``False`` forces
+        the generic path for this call; ``True`` forces the specialized path.
+    **kwargs
+        Forwarded to the underlying backend.
+
+    Returns
+    -------
+    ndarray
+        The contraction result, in the operands' dtype. When ``out`` is given,
+        the returned object is that same buffer.
+
+    Raises
+    ------
+    ValueError
+        Mismatched operand counts, conflicting label sizes, unknown or
+        duplicated output labels, or an ``out`` buffer with the wrong shape.
+    TypeError
+        Non-string subscripts or unsupported operand types.
+
+    Notes
+    -----
+    Specialized kernels are selected by **topology** (label-independent), so
+    ``"ij,jk->ik"`` and ``"ij,jb->ib"`` take the same path. A failed native
+    kernel falls back to the generic path with one ``RuntimeWarning``; results
+    stay correct. Set ``PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`` to log every hit.
     """
     if (optimize is True) or (optimize is None):
         optimize = "auto"
