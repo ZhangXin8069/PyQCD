@@ -24,7 +24,6 @@ same interpreter is fast.
 | `bash` + C++17 compiler | native KUPL (CPU) kernels — the baseline build |
 | `nvcc` | optional native CUDA (GPU) kernels |
 | Cython | optional CUDA extension; supplied by the pip build environment, no manual install |
-| `mpicxx` | MPI-enabled KUPL build (source checkout only) |
 | `torch` | optional: the torch backend (`pip install "pyqcd[torch]"`) |
 | `matplotlib` | optional: plotting helpers (`pip install "pyqcd[plot]"`) |
 
@@ -44,7 +43,6 @@ that pip creates for `pip install pyqcd` always has it. A manual
 
 ```bash
 pip install "pyqcd[cuda]"     # adds cupy-cuda12x (CUDA 12.x)
-pip install "pyqcd[mpi]"      # adds mpi4py
 pip install "pyqcd[torch]"    # adds torch (optional backend)
 pip install "pyqcd[plot]"     # adds matplotlib (Wick/analysis plots)
 ```
@@ -81,7 +79,6 @@ The switches below are read while `pip install` builds the package:
 | `PYQCD_EINSUM_BACKEND=auto` (default) | KUPL always, plus CUDA when `nvcc`, the CUDA sources and Cython are present |
 | `PYQCD_EINSUM_REQUIRE_NATIVE` | `1` (default) makes a skipped or failed **KUPL** build a hard error; `0` lets the install continue with the pure-Python planner. It never applies to CUDA |
 | `PYQCD_EINSUM_SKIP_CYTHON=1` | pretend Cython is missing: `auto` drops to KUPL only, `cuda` still builds the CUDA library but skips its Cython extension |
-| `PYQCD_EINSUM_MPI_LINK_FLAGS` | extra link flags for an MPI-enabled KUPL build (e.g. `$(mpicxx --showme:link)`); the build only claims MPI support once the library records the MPI runtime in `DT_NEEDED` and that dependency resolves |
 | `PYQCD_SKIP_NATIVE_BUILD=1` | skip native compilation entirely and reuse an existing library if there is one; without one, install the pure-Python planner on purpose |
 
 ## What the installed package contains
@@ -116,8 +113,8 @@ import pyqcd.einsum as pe
 
 print(pyqcd.__version__)
 print(pe.build_info())
-# {'backend': 'kupl', 'mpi': False, 'kupl_mpi_build': False,
-#  'mpi_label': 'non-MPI build', 'native_library': '.../libpyqcdeinsum_kupl.so'}
+# {'backend': 'kupl', 'native_available': True,
+#  'array_backend': 'numpy', 'native_library': '.../libpyqcdeinsum_kupl.so'}
 
 info = pe.build_info()
 assert pyqcd.__version__.count(".") == 2
@@ -128,10 +125,7 @@ assert isinstance(info["native_library"], str)
 `backend` is `cuda`, `kupl` or `python` (the last one means the pure-Python
 planner is in use). CUDA is preferred and falls back to KUPL whenever the CUDA
 extension cannot be imported, so a machine whose CUDA build was skipped still
-reports `kupl`. `kupl_mpi_build` is `True` only when the KUPL library was built
-with real MPI support, and `mpi` is `True` only when that build is also the
-active backend; the CUDA backend never has MPI. `pe.mpi_enabled()` exposes the
-KUPL build flag alone, independent of which backend is currently active.
+reports `kupl`.
 
 Quick functional check:
 
@@ -280,11 +274,6 @@ generation:
 PYQCD_CUDA_ARCHITECTURES=8.9 bash install.sh cuda
 ```
 
-MPI sharding exists only in the KUPL backend and only shards a single output
-axis. `PYQCD_EINSUM_ENABLE_MPI` accepts `auto` (default: enabled only when
-`mpicxx` exists and the effective `CXX` can preprocess `#include <mpi.h>`), `1`
-and `0`.
-
 ## Tests (source checkout)
 
 These commands import `pyqcd.testing`, which is not shipped on PyPI, so they
@@ -296,7 +285,6 @@ python -m pyqcd.testing                                  # integration suite
 python -m pyqcd.testing.einsum.verify_native --backend kupl
 python -m pyqcd.testing.einsum.verify_native --backend cuda
 python -m pyqcd.testing.einsum.verify_compat             # differential vs opt_einsum
-mpirun -np 2 python -m pyqcd.testing.einsum.verify_mpi
 
 bash pyqcd/testing/einsum/simple/run-all.sh              # einsum sub-system suite
 bash pyqcd/testing/simple/run-all.sh                     # per-function API parity suite
@@ -348,11 +336,10 @@ two profiles and switches between them per call — a matched specialised shape 
 
 | Profile | OpenMP | BLAS | Tuned for |
 |---|---|---|---|
-| `kernel` | `min(physical_cores, 8)` | `clamp(physical_cores // 2, 1, 4)` | nucleon 2pt/3pt special kernels |
+| `kernel` | `min(physical_cores, 8)` | `clamp(physical_cores // 2, 1, 4)` | topology and step-table kernels |
 | `generic` | `clamp(physical_cores // 2, 1, 8)` | `clamp(physical_cores, 2, 4)` | GEMM chains, packing, permutes |
 
-Both are divided by the MPI rank count when `OMPI_COMM_WORLD_SIZE` / `PMI_SIZE` /
-`SLURM_NTASKS` reports more than one rank. Switching only happens when the profile
+Switching only happens when the profile
 actually changes, and it is applied to the already-loaded runtimes (`libgomp` via
 `omp_set_num_threads`, OpenBLAS via `openblas_set_num_threads` or the
 `scipy_openblas_*` names used by the numpy/scipy wheels) rather than merely exported
@@ -417,7 +404,6 @@ Diagnostics for the nucleon-2pt kernel (no numerical effect):
 | `PYQCD_EINSUM_NATIVE=cuda` | force the GPU library | auto |
 | `PYQCD_EINSUM_KERNEL_CUDA=0` | skip the CUDA specialised kernels | on |
 | `PYQCD_CUDA_ARCHITECTURES` | target SASS+PTX architectures at **build** time | auto-detected |
-| `PYQCD_CUDA_MPI_DEVICES` / `PYQCD_CUDA_MPI_WEIGHTS` | rank→device mapping (MPI builds only) | round-robin |
 
 Reminder: `PYQCD_EINSUM_NATIVE=cuda` selects the library, not the data. numpy
 arrays still run on the CPU library; GPU kernels need `cupy` arrays.
@@ -430,7 +416,6 @@ arrays still run on the CPU library; GPU kernels need `cupy` arrays.
 | `PYQCD_SKIP_NATIVE_BUILD=1` | skip compilation entirely |
 | `PYQCD_EINSUM_REQUIRE_NATIVE=1` | make a missing KUPL toolchain a hard error |
 | `PYQCD_EINSUM_SKIP_CYTHON=1` | build the CUDA library without the Cython extension |
-| `PYQCD_EINSUM_ENABLE_MPI=1` | MPI-enabled KUPL build (`CXX=mpicxx`) |
 | `PYQCD_SM_ARCH` | legacy alias for the CUDA architecture |
 
 ### Introspection
@@ -438,11 +423,11 @@ arrays still run on the CPU library; GPU kernels need `cupy` arrays.
 ```python
 import pyqcd.einsum as pe
 
-pe.build_info()        # backend / native_available / array_backend / mpi / mpir_label
+pe.build_info()        # backend / native_available / array_backend / native_library
 pe.thread_info()       # effective omp / blas threads and where they came from
 pe.specializations()   # registered equation-shape specialisations
 
 info = pe.build_info()
-assert {"backend", "native_available", "array_backend", "mpi"} <= set(info)
+assert {"backend", "native_available", "array_backend"} <= set(info)
 assert len(pe.specializations()) >= 1
 ```

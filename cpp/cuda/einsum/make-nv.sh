@@ -226,6 +226,7 @@ cat > "$VERSION_SCRIPT" <<'MAP'
     applyEndQcd;
     qcd_cuda_topology_apply;
     qcd_cuda_dedicated_apply;
+    qcd_cuda_dedicated_dtypes;
   local:
     *;
 };

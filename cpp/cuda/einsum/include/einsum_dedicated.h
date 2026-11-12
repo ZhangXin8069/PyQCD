@@ -31,10 +31,18 @@
  *              设备端不做 stride 解释，要求 C 行主序连续。
  *   n_operands 操作数个数，必须等于表头 num_operands。
  *   out        设备输出缓冲区，元素个数 = 输出形状乘积；调用方分配。
- *   dtype_id   QCD_DTYPE_FLOAT32(3) 或 QCD_DTYPE_FLOAT64(2)，必须与表头一致。
- *              **不做任何隐式转换**：float32 → cublasSgemm，float64 → cublasDgemm；
- *              complex 一律返回 4。
+ *   dtype_id   四种 IEEE 精度之一，必须与表头一致：float32(3) → cublasSgemm，
+ *              float64(2) → cublasDgemm，complex64(1) → cublasCgemm，
+ *              complex128(0) → cublasZgemm（batch > 1 时用同名 *StridedBatched）。
+ *              复数按 numpy 的**交错实虚**布局直传，不做任何隐式转换或降精度。
+ *              运行期符号不齐备时返回 4（见 `qcd_cuda_dedicated_dtypes`）。
  *   stream     只支持默认流（nullptr）；非 nullptr 返回 1。
+ *
+ * 数值口径：除 GEMM 外，步内还有三条短路径（与 KUPL `gemm_block` 逐条对齐）——
+ * k==1 是纯缩放（按存储精度乘一次）；m==1 或 n==1 是广播归约，**用双精度累加器**
+ * （float→double、complex64→complex128）再舍入回存储精度。升档的理由与 KUPL 相同：
+ * 这两个形状下 cuBLAS 走 gemv，按存储精度累加，长链 k 上明显劣于分块 GEMM 的
+ * 内部累加口径。
  *
  * ---------------------------------------------------------------------------
  * 步表格式 v1（小端；整数按本机字节序 memcpy，长度单位是字节）
@@ -58,8 +66,9 @@
  *   1  参数非法（指针/长度/槽位/轴表/形状乘积/dtype 不符、stream 非空等）
  *   2  显存不足
  *   3  其它内部错误（含异常兜底；缺 `qcd_cuda_permute` 实现时也归此类）
- *   4  QCD_CUDA_DEDICATED_UNSUPPORTED：表本身超出本入口能力（complex dtype、
- *      阶数/步数/槽数越界、同一中间槽被写两次）
+ *   4  QCD_CUDA_DEDICATED_UNSUPPORTED：表本身或本机能力不足以执行（dtype 的
+ *      cuBLAS 符号不齐备、阶数/步数/槽数越界、同一中间槽被写两次）。上层据此
+ *      回落通用路径（fail open），不需要把它当成错误。
  *
  * ---------------------------------------------------------------------------
  * workspace
@@ -103,6 +112,14 @@ QCD_CUDA_DEDICATED_API int qcd_cuda_dedicated_apply(
     void* out,
     int dtype_id,
     void* stream);
+
+/* 运行期 dtype 能力查询：返回 bit(QCD_DTYPE_*) 掩码，置位表示该 dtype 在本机
+ * cuBLAS 上**符号齐备、可执行**（base 与 StridedBatched 两种变体都在）。
+ *
+ * Python 侧用它裁剪 `dedicated_dtypes()`：缺符号的 dtype 不进白名单，
+ * `try_dedicated` 对它返回 None（fail open，回落通用路径），不会把「本机不支持」
+ * 误报成「数值错误」。查询只读符号表、不建 context、不碰设备，无卡机器返回 0。 */
+QCD_CUDA_DEDICATED_API int qcd_cuda_dedicated_dtypes(void);
 
 #ifdef __cplusplus
 }

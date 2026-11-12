@@ -2,7 +2,7 @@
 
 The fallback shards one output axis that is retained by every execution step.
 Workers read and write host shared memory, while the parent process validates
-and assembles results in shard order. MPI is never initialized here.
+and assembles results in shard order.
 """
 
 from __future__ import annotations
@@ -23,14 +23,6 @@ from typing import Any
 import numpy as np
 
 from .._native_plan import dtype_from_id, encode_execution_plan
-from .mpi import (
-    MPI_MODE_BATCH,
-    MPI_MODE_FREE,
-    MpiConfig,
-    MpiConfigError,
-    _initial_labels,
-    _validate_plan,
-)
 
 MP_MODE_OFF = 0
 MP_MODE_AUTO = 1
@@ -52,13 +44,6 @@ _OUTPUT_NAMES = {
     "global": MP_OUTPUT_GATHER,
     "local": MP_OUTPUT_LOCAL,
 }
-_MPI_ENV_MARKERS = (
-    "OMPI_COMM_WORLD_SIZE",
-    "OMPI_UNIVERSE_SIZE",
-    "PMI_SIZE",
-    "PMIX_SIZE",
-    "SLURM_NTASKS",
-)
 _BLAS_ENV = (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
@@ -170,27 +155,53 @@ def mp_cache_key(value: Any = None) -> tuple[int, int | None, int, int, int]:
     return normalize_mp_config(value).cache_key
 
 
-def _mpi_active() -> bool:
-    """Detect an existing MPI context without importing mpi4py or initializing it."""
-    for module_name in ("mpi4py.MPI", "MPI"):
-        module = sys.modules.get(module_name)
-        if module is None or not hasattr(module, "Is_initialized"):
+def _initial_labels(info: Any) -> tuple[tuple[int, ...], ...]:
+    """Every initial input's label tuple, in plan operand order."""
+    active: list[tuple[bool, tuple[int, ...] | None]] = [
+        (True, None) for _ in info.input_shapes
+    ]
+    initial: list[tuple[int, ...] | None] = [None] * len(info.input_shapes)
+    for step in info.steps:
+        for position, labels in zip(step.positions, step.inputs):
+            if position < 0 or position >= len(active):
+                raise MpConfigError("execution plan references an invalid live operand")
+            is_initial, known = active[position]
+            if known is not None and known != labels:
+                raise MpConfigError("execution plan has inconsistent live labels")
+            if is_initial and initial[position] is None:
+                initial[position] = labels
+            active[position] = (is_initial, labels)
+        for position in sorted(step.positions, reverse=True):
+            active.pop(position)
+        active.append((False, step.output))
+    if len(active) != 1 or any(labels is None for labels in initial):
+        raise MpConfigError("execution plan does not expose every initial input label")
+    return tuple(labels for labels in initial if labels is not None)
+
+
+def _validate_plan(info: Any, labels: Sequence[tuple[int, ...]], axis: int) -> int:
+    """Reject any shard axis that a step eliminates, introduces, or broadcasts."""
+    symbol = info.output_labels[axis]
+    occurrences = sum(symbol in term for term in labels)
+    if occurrences == 0:
+        raise MpConfigError("shard symbol is absent from all inputs")
+
+    extent = info.sizes[symbol]
+    for input_index, term in enumerate(labels):
+        if symbol not in term:
             continue
-        try:
-            if bool(module.Is_initialized()):
-                return True
-        except Exception:
-            return True
-    try:
-        function = ctypes.CDLL(None).MPI_Initialized
-        function.argtypes = (ctypes.POINTER(ctypes.c_int),)
-        function.restype = ctypes.c_int
-        initialized = ctypes.c_int()
-        if function(ctypes.byref(initialized)) == 0 and initialized.value:
-            return True
-    except (AttributeError, OSError):
-        pass
-    return any(name in os.environ for name in _MPI_ENV_MARKERS)
+        input_axis = term.index(symbol)
+        if info.input_shapes[input_index][input_axis] != extent:
+            raise MpConfigError("broadcasting is not supported on the shard axis")
+
+    for step_number, step in enumerate(info.steps):
+        appears_in = [symbol in term for term in step.inputs]
+        appears_out = symbol in step.output
+        if any(appears_in) != appears_out:
+            raise MpConfigError(
+                f"shard symbol is eliminated or introduced at execution step {step_number}"
+            )
+    return symbol
 
 
 def _partition(extent: int, workers: int, worker: int) -> tuple[int, int]:
@@ -266,15 +277,15 @@ def _resolve_axis(
         symbol = info.output_labels[axis]
         occurrences = sum(symbol in term for term in labels)
         if occurrences == 1:
-            semantic_mode = MPI_MODE_FREE
+            semantic_mode = MP_MODE_FREE
         elif occurrences >= 2:
-            semantic_mode = MPI_MODE_BATCH
+            semantic_mode = MP_MODE_BATCH
         else:
             failures.append("shard symbol is absent from all inputs")
             continue
         try:
-            _validate_plan(MpiConfig(semantic_mode, axis, "gather"), info, labels, axis)
-        except MpiConfigError as exc:
+            _validate_plan(info, labels, axis)
+        except MpConfigError as exc:
             failures.append(str(exc))
             continue
         return axis, symbol, semantic_mode
@@ -692,10 +703,6 @@ def make_mp_executor(
         if normalized.mode == MP_MODE_REQUIRE:
             raise MpUnavailable("KUPL MP currently supports only the NumPy host backend")
         return None
-    if _mpi_active():
-        if normalized.mode == MP_MODE_REQUIRE:
-            raise MpUnavailable("KUPL MP cannot run while MPI is initialized")
-        return None
     if multiprocessing.current_process().daemon:
         if normalized.mode == MP_MODE_REQUIRE:
             raise MpUnavailable("daemonic processes cannot create KUPL MP workers")
@@ -709,14 +716,10 @@ def make_mp_executor(
     try:
         labels = _initial_labels(info)
         shard_axis, shard_symbol, semantic_mode = _resolve_axis(normalized, info, labels)
-    except MpiConfigError as exc:
+    except MpConfigError as exc:
         if normalized.mode == MP_MODE_AUTO:
             return None
         raise MpConfigError(f"MP execution plan validation failed: {exc}") from exc
-    except MpConfigError:
-        if normalized.mode == MP_MODE_AUTO:
-            return None
-        raise
     context = multiprocessing.get_context("spawn")
     try:
         return MpSession(

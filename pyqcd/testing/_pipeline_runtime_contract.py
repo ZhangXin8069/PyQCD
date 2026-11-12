@@ -1,7 +1,6 @@
-"""4pt 动态收缩与 MPI 元任务的运行时契约测试。"""
+"""4pt 动态收缩与管线运行时的契约测试。"""
 from __future__ import annotations
 
-import builtins
 import os
 import shutil
 import subprocess
@@ -193,131 +192,6 @@ def test_4pt_dynamic_failure_is_raised_before_output_is_saved():
             raise AssertionError("动态收缩异常被吞掉，4pt 继续执行")
 
     assert saved.call_count == 0, "动态收缩失败后仍写入了部分 4pt 产物"
-
-
-def test_meta_task_cpu_success_cleans_without_importing_torch():
-    """numpy/cupy 元任务不得因清理路径导入 torch。"""
-    from pyqcd.parallel import _mpi as mpi
-    from pyqcd.pipeline import _steps as steps
-
-    cleaned = []
-    real_import = builtins.__import__
-
-    def reject_torch(name, *args, **kwargs):
-        if name == "torch":
-            raise AssertionError("numpy 元任务不应导入 torch")
-        return real_import(name, *args, **kwargs)
-
-    with patch.object(steps, "compute_vertices_for_config",
-                      lambda *args: "done"), \
-            patch.object(steps, "free_gpu_memory",
-                         lambda: cleaned.append("gpu")), \
-            patch.object(mpi.gc, "collect",
-                         lambda: cleaned.append("gc")), \
-            patch("builtins.__import__", reject_torch):
-        elapsed = mpi.run_meta_task(
-            "vertex", 7, {"backend": "numpy"}, ".", logger=None)
-
-    assert elapsed >= 0.0
-    assert cleaned == ["gpu", "gc"]
-
-
-def test_meta_task_failure_propagates_after_cleanup():
-    """计算异常必须原样上抛，同时 finally 仍执行两类清理。"""
-    from pyqcd.parallel import _mpi as mpi
-    from pyqcd.pipeline import _steps as steps
-
-    failure = RuntimeError("vertex failed")
-    cleaned = []
-
-    def fail(*args):
-        raise failure
-
-    with patch.object(steps, "compute_vertices_for_config", fail), \
-            patch.object(steps, "free_gpu_memory",
-                         lambda: cleaned.append("gpu")), \
-            patch.object(mpi.gc, "collect",
-                         lambda: cleaned.append("gc")):
-        try:
-            mpi.run_meta_task(
-                "vertex", 7, {"backend": "numpy"}, ".", logger=None)
-        except RuntimeError as exc:
-            assert exc is failure
-        else:
-            raise AssertionError("元任务异常未传播")
-
-    assert cleaned == ["gpu", "gc"]
-
-
-def test_parallel_setup_applies_backend_before_vertex_compute():
-    """并行驱动必须在元任务前应用请求的后端与设备。"""
-    from pyqcd.parallel import _mpi as mpi
-    from pyqcd.pipeline import _steps as steps
-    from pyqcd.tools import (
-        get_backend_name, get_torch_device, set_backend,
-    )
-
-    class LocalCollective:
-        @staticmethod
-        def allgather(value):
-            return [value]
-
-        @staticmethod
-        def bcast(value, root=0):
-            assert root == 0
-            return value
-
-        @staticmethod
-        def Barrier():
-            return None
-
-    observed = []
-
-    def capture_backend(*_args, **_kwargs):
-        observed.append((get_backend_name(), str(get_torch_device())))
-
-    plan = {'n_gpu': 0, 'N': 2, 'm': 1, 'X': 1}
-    set_backend('numpy')
-    try:
-        with tempfile.TemporaryDirectory() as run_dir, \
-                patch.object(mpi, 'get_mpi_context',
-                             return_value=(LocalCollective(), 0, 2)), \
-                patch.object(steps, 'dump_config_snapshot'), \
-                patch.object(steps, 'compute_vertices_for_config',
-                             side_effect=capture_backend), \
-                patch.object(steps, 'free_gpu_memory'):
-            mpi.run_parallel_pipeline(
-                steps=('vertex',), conf_ids=[7], run_dir=run_dir,
-                logger=None, backend='torch', device='cpu', plan=plan,
-                resources={'provided': True})
-    finally:
-        set_backend('numpy')
-
-    assert observed == [('torch', 'cpu')], observed
-
-
-def test_mpi_launcher_does_not_silently_fallback_without_mpi4py():
-    """MPI launcher 下 mpi4py 初始化失败必须快速失败而非伪装串行。"""
-    from pyqcd.parallel import _mpi as mpi
-
-    real_import = builtins.__import__
-
-    def reject_mpi4py(name, *args, **kwargs):
-        if name == 'mpi4py':
-            raise ImportError('mpi4py unavailable')
-        return real_import(name, *args, **kwargs)
-
-    with patch.dict(os.environ, {'OMPI_COMM_WORLD_SIZE': '2'}, clear=True), \
-            patch('builtins.__import__', reject_mpi4py):
-        try:
-            mpi.get_mpi_context()
-        except RuntimeError as exc:
-            message = str(exc)
-        else:
-            raise AssertionError('MPI launcher 下错误退化为独立串行进程')
-
-    assert 'MPI launcher detected' in message
-    assert 'OMPI_COMM_WORLD_SIZE' in message
 
 
 def test_serial_pipeline_base_exception_cleans_and_propagates():
@@ -796,10 +670,6 @@ def main():
         test_timer_propagates_torch_cuda_post_sync_failure_after_success,
         test_timer_does_not_synchronize_torch_cpu,
         test_4pt_dynamic_failure_is_raised_before_output_is_saved,
-        test_meta_task_cpu_success_cleans_without_importing_torch,
-        test_meta_task_failure_propagates_after_cleanup,
-        test_parallel_setup_applies_backend_before_vertex_compute,
-        test_mpi_launcher_does_not_silently_fallback_without_mpi4py,
         test_serial_pipeline_base_exception_cleans_and_propagates,
         test_vertex_cache_reads_canonical_h5_without_recompute,
         test_vertex_cache_rejects_wrong_shape_dtype_finite_and_schema,

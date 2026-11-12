@@ -1382,76 +1382,6 @@ def test_pipeline_tmd_uses_dimensionless_flow_time():
     assert payload['flow_eps'] == 0.01
 
 
-def test_parallel_mpi_default_run_dir_is_broadcast():
-    """MPI 默认输出目录必须由 rank 0 生成一次并广播给所有 rank。"""
-    from unittest.mock import patch
-
-    import pyqcd.parallel._mpi as mpi
-
-    shared = {'run_dir': None}
-
-    class FakeComm:
-        def __init__(self, rank):
-            self.rank = rank
-            self.sent = []
-
-        def bcast(self, value, root=0):
-            assert root == 0
-            self.sent.append(value)
-            if self.rank == root:
-                shared['run_dir'] = value
-            return shared['run_dir']
-
-        def Barrier(self):
-            return None
-
-    plan = {'n_gpu': 0, 'N': 2, 'm': 1, 'X': 1}
-    results = []
-    comms = [FakeComm(0), FakeComm(1)]
-    for rank, comm in enumerate(comms):
-        with patch.object(mpi, 'get_mpi_context',
-                          return_value=(comm, rank, 2)), \
-                patch.object(mpi.os, 'makedirs') as makedirs_spy, \
-                patch('pyqcd.pipeline._steps.dump_config_snapshot'):
-            result, _ = mpi.run_parallel_pipeline(
-                steps=(), conf_ids=[6250], run_dir=None, logger=None,
-                backend='numpy', plan=plan, resources={'provided': True})
-        results.append(result)
-        created = {call.args[0] for call in makedirs_spy.call_args_list}
-        expected = {
-            mpi.os.path.join(result['run_dir'], directory)
-            for directory in ('data', 'analysis', 'plots')
-        }
-        assert expected <= created
-
-    assert results[0]['run_dir'] == results[1]['run_dir']
-    assert mpi.os.path.basename(results[0]['run_dir']).startswith('output_')
-    assert comms[0].sent == [results[0]['run_dir']]
-    assert comms[1].sent == [None]
-
-
-def test_parallel_plan_does_not_report_unknown_memory_as_zero():
-    """未提供单任务显存时必须报告未知，而非伪造 a=0 MB/task。"""
-    from pyqcd.parallel import format_plan, plan_parallel
-
-    resources = {
-        'n_gpu': 1,
-        'gpu_vram_mb': 8192.0,
-        'gpu_usable_mb': 6553.0,
-        'cpu_threads': 8,
-        'mem_total_mb': 32768.0,
-        'mem_avail_mb': 32768.0,
-    }
-    default_plan = plan_parallel(2, None, resources=resources)
-    default_text = format_plan(default_plan)
-    assert 'a=not provided' in default_text
-    assert 'a=0 MB/task' not in default_text
-
-    measured_plan = plan_parallel(2, 512.0, resources=resources)
-    measured_text = format_plan(measured_plan)
-    assert 'a=512 MB/task' in measured_text
-
-
 def _projection_test_registries(seed, pion=False):
     """Nev=2 三时间区随机张量；只供重子投影独立参考测试使用。"""
     from pyqcd.contraction import PeramRegistry, VRegistry, GammaRegistry
@@ -2821,10 +2751,6 @@ def test_pipeline_runtime_failure_contracts():
         test_timer_propagates_torch_cuda_post_sync_failure_after_success,
         test_timer_does_not_synchronize_torch_cpu,
         test_4pt_dynamic_failure_is_raised_before_output_is_saved,
-        test_meta_task_cpu_success_cleans_without_importing_torch,
-        test_meta_task_failure_propagates_after_cleanup,
-        test_parallel_setup_applies_backend_before_vertex_compute,
-        test_mpi_launcher_does_not_silently_fallback_without_mpi4py,
         test_serial_pipeline_base_exception_cleans_and_propagates,
         test_vertex_cache_reads_canonical_h5_without_recompute,
         test_vertex_cache_rejects_wrong_shape_dtype_finite_and_schema,
@@ -2846,10 +2772,6 @@ def test_pipeline_runtime_failure_contracts():
     test_timer_propagates_torch_cuda_post_sync_failure_after_success()
     test_timer_does_not_synchronize_torch_cpu()
     test_4pt_dynamic_failure_is_raised_before_output_is_saved()
-    test_meta_task_cpu_success_cleans_without_importing_torch()
-    test_meta_task_failure_propagates_after_cleanup()
-    test_parallel_setup_applies_backend_before_vertex_compute()
-    test_mpi_launcher_does_not_silently_fallback_without_mpi4py()
     test_serial_pipeline_base_exception_cleans_and_propagates()
     test_vertex_cache_reads_canonical_h5_without_recompute()
     test_vertex_cache_rejects_wrong_shape_dtype_finite_and_schema()
@@ -2882,102 +2804,6 @@ def test_pjn_3pt_explicit_wick_oracle():
 
     metrics = test_pjn_3pt_matches_four_explicit_wick_contractions()
     assert metrics['max_rel_error'] < 2e-12
-
-
-def test_mpi_run_directory_contracts():
-    """串行/MPI 默认目录须跨作业唯一、作业内一致，显式路径不变。"""
-    from ._mpi_run_dir_contract import (
-        test_default_run_dirs_are_unique_across_independent_jobs_in_same_second,
-        test_default_run_tag_rejects_path_components_before_writing,
-        test_explicit_run_dir_is_broadcast_unchanged,
-        test_mpi_default_run_dir_uses_dynamic_pipeline_output_root,
-        test_rank_zero_default_run_dir_is_broadcast_within_one_job,
-        test_runner_default_run_dirs_are_unique_within_same_second,
-        test_steps_default_run_dirs_are_unique_within_same_second,
-    )
-
-    test_default_run_dirs_are_unique_across_independent_jobs_in_same_second()
-    test_default_run_tag_rejects_path_components_before_writing()
-    test_rank_zero_default_run_dir_is_broadcast_within_one_job()
-    test_mpi_default_run_dir_uses_dynamic_pipeline_output_root()
-    test_explicit_run_dir_is_broadcast_unchanged()
-    test_runner_default_run_dirs_are_unique_within_same_second()
-    test_steps_default_run_dirs_are_unique_within_same_second()
-
-
-def test_parallel_mpi_reliability_contracts():
-    """MPI preflight、env、2pt 续跑和 best-effort 清理契约。"""
-    from ._mpi_reliability_contract import (
-        test_cli_recompute_2pt_flag_is_forwarded,
-        test_collective_preflight_rejects_plan_size_mismatch,
-        test_collective_preflight_rejects_tmd_and_unknown_steps,
-        test_env_step_reaches_rank_zero_report_with_serial_fields,
-        test_mpi_2pt_cache_skips_unless_recompute_is_true,
-        test_parallel_driver_propagates_recompute_2pt_to_meta_tasks,
-        test_run_meta_task_cleanup_is_best_effort_after_success,
-        test_run_meta_task_preserves_primary_baseexception_during_cleanup,
-        test_run_meta_task_preserves_primary_exception_during_cleanup,
-        test_serial_fallback_real_pipeline_recomputes_when_override_is_true,
-        test_serial_fallback_real_pipeline_reuses_cache_when_recompute_is_false,
-        test_serial_fallback_propagates_recompute_override,
-    )
-
-    tests = (
-        test_collective_preflight_rejects_tmd_and_unknown_steps,
-        test_collective_preflight_rejects_plan_size_mismatch,
-        test_env_step_reaches_rank_zero_report_with_serial_fields,
-        test_run_meta_task_preserves_primary_exception_during_cleanup,
-        test_run_meta_task_preserves_primary_baseexception_during_cleanup,
-        test_run_meta_task_cleanup_is_best_effort_after_success,
-        test_mpi_2pt_cache_skips_unless_recompute_is_true,
-        test_parallel_driver_propagates_recompute_2pt_to_meta_tasks,
-        test_serial_fallback_propagates_recompute_override,
-        test_serial_fallback_real_pipeline_reuses_cache_when_recompute_is_false,
-        test_serial_fallback_real_pipeline_recomputes_when_override_is_true,
-        test_cli_recompute_2pt_flag_is_forwarded,
-    )
-    for test in tests:
-        test()
-
-
-def test_parallel_mpi_collective_failure_contracts():
-    """真实双 rank 的目录、初始化、元任务和后处理异常均须同步退出。"""
-    from ._mpi_failure_contract import (
-        test_missing_mpi_prerequisites_raise_skiptest,
-        test_mpi_collective_failure_contracts,
-        test_standalone_main_reports_skip_without_pass,
-    )
-
-    test_missing_mpi_prerequisites_raise_skiptest()
-    test_standalone_main_reports_skip_without_pass()
-    test_mpi_collective_failure_contracts()
-
-
-def test_parallel_mpi_planning_contracts():
-    """MPI 计划、绑定、CLI preflight 与空组态语义契约。"""
-    from ._mpi_planning_contract import TESTS
-
-    for test in TESTS:
-        test()
-
-
-def test_parallel_einsum_contracts():
-    """批量 einsum 的 MPI 任务级并行（init + run）：分箱、原位写入与失败传播契约。"""
-    import unittest
-
-    from ._parallel_einsum_contract import TESTS
-
-    passed = 0
-    for test in TESTS:
-        try:
-            test()
-        except ImportError as exc:
-            if 'mpirun' in str(exc) or 'mpi4py' in str(exc):
-                raise unittest.SkipTest(str(exc)) from exc
-            raise
-        passed += 1
-    if passed == 0:
-        raise unittest.SkipTest('parallel einsum contracts did not run')
 
 
 def test_renorm_numerical_guards_contracts():
@@ -3160,14 +2986,6 @@ def test_native_install_diagnostics_contracts():
         test()
 
 
-def test_native_loader_contracts():
-    """dlopen 报 undefined symbol 时的 MPI 预加载重试、报告记录与一次性诊断契约。"""
-    from ._native_loader_contract import TESTS
-
-    for test in TESTS:
-        test()
-
-
 def test_einsum_native_contracts():
     """Native KUPL/CUDA dtype, cache, out, expression and fallback contracts."""
     from .einsum.verify_native import run
@@ -3177,39 +2995,6 @@ def test_einsum_native_contracts():
         print(f'SKIP native einsum: {tally.name} unavailable')
         return
     assert ok, f'native einsum failed: {tally.failed} assertion(s)'
-
-
-def test_einsum_cuda_mpi_partition_contracts():
-    """CUDA MPI weighted partitions remain complete and reproducible."""
-    from pyqcd.einsum import contract_path
-    from pyqcd.einsum.cuda.mpi import (
-        CudaMpiConfig,
-        _choose_reduction_label,
-        _partition_for,
-    )
-
-    config = CudaMpiConfig(mode='reduce', weights=(1.0, 1.0, 2.0))
-    partitions = [
-        _partition_for(100, config.weights, size=3, rank=rank)
-        for rank in range(3)
-    ]
-    assert [(item.start, item.count) for item in partitions] == [
-        (0, 25), (25, 25), (50, 50)
-    ]
-
-    shapes = (
-        (4, 4, 100, 100), (4, 4, 100, 100), (4, 4, 100, 100),
-        (4, 4), (4, 4), (1, 100, 100, 100), (1, 100, 100, 100), (4, 4),
-    )
-    _, path_info = contract_path(
-        'gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M',
-        *shapes,
-        shapes=True,
-        optimize='greedy',
-    )
-    label = _choose_reduction_label(path_info)
-    assert label not in path_info.output_subscript
-    assert path_info.size_dict[label] == 100
 
 
 def test_einsum_zero_extent_and_noncontiguous_contracts():

@@ -25,7 +25,6 @@ _OPTIONAL = {
     "torch": 'pyqcd[torch]',
     "matplotlib": 'pyqcd[plot]',
     "cupy": 'pyqcd[cuda]',
-    "mpi4py": 'pyqcd[mpi]',
 }
 
 
@@ -96,7 +95,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"pyqcd {report['version']}  (Python {report['python']})")
     if isinstance(native, dict) and "backend" in native:
         print(f"  native backend : {native['backend']}")
-        print(f"  mpi            : {native['mpi']} ({native['mpi_label']})")
         print(f"  library        : {native['native_library']}")
     else:
         print(f"  native backend : unknown ({native})")

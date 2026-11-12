@@ -17,7 +17,7 @@ Subpackages
 ``pyqcd.tools``        backend switching, I/O, slices, environment capture
 ``pyqcd.analysis``     resampling, fits, ratio / effective-mass / energy helpers
 ``pyqcd.pipeline``     configuration and the multi-step pipeline
-``pyqcd.parallel``     resource detection and MPI meta-task planning
+``pyqcd.parallel``     resource detection (CPU/GPU/RAM/disk snapshot)
 ``pyqcd.einsum``       contraction engine (``opt_einsum``-compatible API)
 
 Examples

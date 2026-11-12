@@ -14,7 +14,7 @@ settings on a small machine (measured, 4 physical cores):
 ====================  =========  =========  =============
 profile               OMP        BLAS       tuned for
 ====================  =========  =========  =============
-``kernel``            cores      2          nucleon 2pt/3pt special kernels
+``kernel``            cores      2          topology / step-table kernels
 ``generic``           cores//2   4          plain GEMM chains and packing
 ====================  =========  =========  =============
 
@@ -26,15 +26,13 @@ Priority (highest wins)
 -----------------------
 1. ``OMP_NUM_THREADS`` / ``OPENBLAS_NUM_THREADS`` (the standard variables)
 2. ``PYQCD_EINSUM_OMP_THREADS`` / ``PYQCD_EINSUM_BLAS_THREADS``
-3. auto: ``OMP = min(physical_cores, 8)``, ``BLAS = clamp(physical_cores // 2, 1, 4)``,
-   both divided by the MPI rank count when ``OMPI_COMM_WORLD_SIZE`` /
-   ``SLURM_NTASKS`` says more than one rank is running
+3. auto: ``OMP = min(physical_cores, 8)``, ``BLAS = clamp(physical_cores // 2, 1, 4)``
 4. ``PYQCD_EINSUM_THREADS=off`` disables the auto configuration entirely
 
 Measured on a 4-physical-core / 8-thread laptop (KUPL backend, ``pyqcd 0.1.14``):
 
 ===========  ===========  ==========  =============
-OMP threads  BLAS threads  GEMM 700²   nucleon 2pt
+OMP threads  BLAS threads  GEMM 700²   topology
 ===========  ===========  ==========  =============
 unset        unset        27.3 ms     2.1 ms
 1            4            4.3 ms      3.7 ms
@@ -59,7 +57,7 @@ _MAX_OMP = 8
 _MAX_BLAS = 4
 
 _state: dict[str, object] = {"applied": False, "omp": None, "blas": None,
-                             "source": "not applied", "ranks": 1,
+                             "source": "not applied",
                              "runtime_applied": [], "exported_env": {}}
 _runtime_complete = False
 
@@ -90,15 +88,6 @@ def physical_cores() -> int:
     return max(detected // 2, 1) if detected > 1 else 1
 
 
-def mpi_ranks() -> int:
-    for name in ("OMPI_COMM_WORLD_SIZE", "PMI_SIZE", "SLURM_NTASKS",
-                 "MV2_COMM_WORLD_SIZE"):
-        value = os.environ.get(name)
-        if value and value.isdigit() and int(value) > 1:
-            return int(value)
-    return 1
-
-
 def _explicit(name: str) -> int | None:
     value = os.environ.get(name)
     if value is None or not value.strip():
@@ -114,8 +103,8 @@ def _explicit(name: str) -> int | None:
 
 
 def profiles() -> dict[str, tuple[int, int]]:
-    """Return ``{name: (omp, blas)}`` scaled to this machine and MPI rank count."""
-    cores = max(physical_cores() // mpi_ranks(), 1)
+    """Return ``{name: (omp, blas)}`` scaled to this machine."""
+    cores = max(physical_cores(), 1)
     kernel_omp = min(cores, _MAX_OMP)
     kernel_blas = min(max(cores // 2, 1), _MAX_BLAS)
     generic_omp = min(max(cores // 2, 1), _MAX_OMP)
@@ -150,10 +139,8 @@ def resolve(profile: str = "kernel") -> tuple[int | None, int | None, str]:
     table = profiles()
     omp, blas = table.get(profile, table["kernel"])
     if pinned is None:
-        ranks = mpi_ranks()
-        cores = max(physical_cores() // ranks, 1)
-        return omp, blas, (f"auto {profile} ({cores} physical cores, "
-                           f"{ranks} rank{'s' if ranks > 1 else ''})")
+        cores = max(physical_cores(), 1)
+        return omp, blas, f"auto {profile} ({cores} physical cores)"
     pinned_omp, pinned_blas = pinned
     if (_explicit(STANDARD_OMP_ENV) is not None
             or _explicit(STANDARD_BLAS_ENV) is not None):
@@ -231,7 +218,7 @@ def apply(profile: str = "kernel", force: bool = False) -> dict[str, object]:
     omp, blas, source = resolve(profile)
     if omp is None and blas is None:
         _state.update({"applied": True, "profile": profile, "omp": None,
-                       "blas": None, "source": source, "ranks": mpi_ranks(),
+                       "blas": None, "source": source,
                        "runtime_applied": []})
         return dict(_state)
 
@@ -252,7 +239,7 @@ def apply(profile: str = "kernel", force: bool = False) -> dict[str, object]:
     _state["exported_env"] = exported
 
     _state.update({"applied": True, "profile": profile, "omp": omp, "blas": blas,
-                   "source": source, "ranks": mpi_ranks(),
+                   "source": source,
                    "runtime_applied": applied})
     return dict(_state)
 
@@ -285,7 +272,7 @@ def describe() -> str:
 
 def reset() -> None:  # pragma: no cover - test helper
     _state.update({"applied": False, "omp": None, "blas": None,
-                   "source": "not applied", "ranks": 1})
+                   "source": "not applied"})
 
 
 def ensure_runtime() -> None:

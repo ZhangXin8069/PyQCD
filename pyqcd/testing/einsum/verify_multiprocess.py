@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 import statistics
-import subprocess
-import sys
 import time
 from typing import Any
 
@@ -14,7 +12,6 @@ import numpy as np
 from pyqcd.einsum import contract_path
 from pyqcd.einsum._native_plan import encode_execution_plan
 from pyqcd.einsum.kupl.einsum import compile_program
-from pyqcd.einsum.kupl.mpi import MpiConfig
 from pyqcd.einsum.kupl.multiprocess import (
     MP_OUTPUT_LOCAL,
     MpConfig,
@@ -121,17 +118,6 @@ def _check_config_and_serial(tally: Tally) -> None:
         serial is compile_program(plan, mp_config=MpConfig("off")),
         "MP configuration participates in program cache key",
     )
-
-    failed_closed = False
-    try:
-        compile_program(
-            plan,
-            mpi_config=MpiConfig("off"),
-            mp_config=MpConfig("off"),
-        )
-    except TypeError:
-        failed_closed = True
-    tally.check(failed_closed, "MPI/MP configuration mutual exclusion")
 
     invalid_threads = False
     try:
@@ -329,44 +315,6 @@ def _check_performance(tally: Tally) -> None:
         _close(parallel)
 
 
-def _check_mpi_guard(tally: Tally) -> None:
-    code = r"""
-import numpy as np
-from mpi4py import MPI
-from pyqcd.einsum import contract_path
-from pyqcd.einsum._native_plan import encode_execution_plan
-from pyqcd.einsum.kupl.einsum import compile_program
-from pyqcd.einsum.kupl.multiprocess import MpConfig, MpUnavailable
-
-assert MPI.Is_initialized()
-left = np.ones((4, 3), dtype=np.float64)
-right = np.ones((3, 5), dtype=np.float64)
-_, info = contract_path("ij,jk->ik", left, right, optimize="greedy")
-plan = encode_execution_plan(info.contraction_list, (left, right))
-try:
-    compile_program(plan, mp_config=MpConfig("require", 0, "gather", workers=2))
-except MpUnavailable:
-    pass
-else:
-    raise AssertionError("MP was enabled after MPI initialization")
-program = compile_program(plan, mp_config=MpConfig("auto", 0, "gather", workers=2))
-assert program.mp_executor is None
-assert np.array_equal(program((left, right)), left @ right)
-"""
-    environment = os.environ.copy()
-    environment["MPI4PY_RC_INITIALIZE"] = "true"
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        cwd=os.getcwd(),
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    detail = result.stderr.strip() or result.stdout.strip()
-    tally.check(result.returncode == 0, "MPI-initialized guard", detail)
-
-
 def main() -> int:
     tally = Tally()
     _check_config_and_serial(tally)
@@ -375,7 +323,6 @@ def main() -> int:
     _check_output_modes(tally)
     _check_fail_closed(tally)
     _check_performance(tally)
-    _check_mpi_guard(tally)
     print(f"multiprocess: {tally.passed} passed, {tally.failed} failed")
     return 0 if tally.failed == 0 else 1
 

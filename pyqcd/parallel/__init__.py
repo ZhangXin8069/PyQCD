@@ -1,41 +1,27 @@
-"""pyqcd 并行子包：资源检测 + MPI 元任务调度（torch+mpi4py+h5py）。
+"""pyqcd 并行子包：本机资源探测（CPU 线程 / 内存 / GPU / 磁盘）。
 
-``pyqcd.parallel.einsum`` 把多个**相互独立**的 einsum 任务按工作量分箱后分给多个
-MPI 进程（任务级并行，不改动 ``pyqcd.einsum`` 行为）。公开接口是 ``init`` + ``run``：
-``init`` 只接受列式字典并规划，``run`` 无返回值、结果原地写入调用方缓冲区。
-
-``_mpi`` 侧会经 ``pyqcd.pipeline`` 拉入 h5py/cupy（实测约 0.6 s）；批量 einsum 的
-worker 进程只需要轻量路径，所以这里全部改惰性解析，import 本包不再付出那份代价。
+只提供只读的资源快照，不做任务调度、不启动子进程、不依赖任何分布式运行时。
+``detect_resources`` 汇总全部字段，``cpu_threads`` / ``gpu_info`` 等可按需单独调用。
 """
 from ._resources import detect_resources, cpu_threads, gpu_info
 
 __all__ = [
-    "detect_resources", "cpu_threads", "gpu_info",
-    "get_mpi_context", "plan_parallel", "format_plan",
-    "run_meta_task", "run_parallel_pipeline", "main",
-    "init", "run", "plan_tasks",
+    "detect_resources", "cpu_threads", "gpu_info", "total_memory_mb",
+    "available_memory_mb", "free_disk_mb",
 ]
-
-_MPI_NAMES = frozenset((
-    "get_mpi_context", "plan_parallel", "format_plan",
-    "run_meta_task", "run_parallel_pipeline", "main"))
 
 
 def __getattr__(name):
-    """惰性解析：``_mpi`` 的重依赖与批量 einsum 入口都不在包导入时加载。"""
-    if name in _MPI_NAMES:
-        from . import _mpi
+    """惰性解析：探测函数都在 ``_resources`` 里，导入本包不触发任何探测。"""
+    from . import _resources
 
-        value = getattr(_mpi, name)
-        globals()[name] = value
-        return value
-    if name in ("init", "run", "plan_tasks"):
-        from . import einsum as _parallel_einsum
-
-        value = getattr(_parallel_einsum, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        value = getattr(_resources, name)
+    except AttributeError:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}") from None
+    globals()[name] = value
+    return value
 
 
 def __dir__():

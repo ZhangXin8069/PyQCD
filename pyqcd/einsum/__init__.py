@@ -20,7 +20,6 @@ from ._expr import ContractExpression, contract_expression, format_const_einsum_
 from ._pathinfo import PathInfo
 from ._specialize import describe as specializations
 from ._native import build_info
-from .kupl.einsum import mpi_enabled
 from ._sharing import count_cached_ops, shared_intermediates
 from .backends.dispatch import (
     get_func,
@@ -70,7 +69,6 @@ __all__ = [
     "shape_only",
     "shared_intermediates",
     "specializations",
-    "mpi_enabled",
 ]
 
 # names served by sibling modules that may be written concurrently

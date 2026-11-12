@@ -45,24 +45,8 @@ def backend_info() -> dict[str, Any] | None:
         return None
 
 
-def contract_mpi(*args: Any, **kwargs: Any) -> Any:
-    """Run CUDA einsum with rank-local slicing through ``mpi4py``."""
-    from .mpi import contract_mpi as execute
-
-    return execute(*args, **kwargs)
-
-
-def clear_mpi_cache() -> None:
-    """Release cached rank-local CUDA MPI programs."""
-    from .mpi import clear_mpi_cache as clear
-
-    clear()
-
-
 __all__ = [
     "backend_info",
-    "clear_mpi_cache",
     "compiled_available",
-    "contract_mpi",
     "load",
 ]

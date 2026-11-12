@@ -39,9 +39,8 @@ RAW_BACKEND = os.environ.get("PYQCD_EINSUM_BACKEND", "auto").strip().lower()
 _WARNED_BACKENDS: set[str] = set()
 
 # make.sh 用该退出码表示"产物校验失败"（与编译失败区分）：构建命令本身成功，
-# 但产出的 .so 不满足运行期前提（例如 MPI 构建的 DT_NEEDED 里没有 libmpi*，
-# 装上去 dlopen 只会报 undefined symbol: ompi_mpi_byte）。这种库不能被当作
-# 可复用产物，否则源码树里的旧库会掩盖真实缺陷。
+# 但产出的 .so 不满足运行期前提（例如缺 OpenBLAS 运行库，装上去 dlopen 会失败）。
+# 这种库不能被当作可复用产物，否则源码树里的旧库会掩盖真实缺陷。
 VALIDATION_EXIT_CODE = 3
 
 
@@ -142,7 +141,7 @@ def _host_compiler_works(compiler: str | None = None) -> bool:
 
 
 def _host_compiler() -> str | None:
-    """Compiler ``make.sh`` resolves: ``CXX`` if set, else g++ -> c++ -> mpicxx.
+    """Compiler ``make.sh`` resolves: ``CXX`` if set, else g++ -> c++.
 
     Probing ``c++`` alone reports a missing toolchain on clusters whose module
     file only exposes ``g++``, even though ``make.sh`` would have compiled fine.
@@ -150,7 +149,7 @@ def _host_compiler() -> str | None:
     explicit = os.environ.get("CXX")
     if explicit:
         return explicit if shutil.which(explicit) else None
-    for candidate in ("g++", "c++", "mpicxx"):
+    for candidate in ("g++", "c++"):
         if shutil.which(candidate):
             return candidate
     return None
@@ -174,7 +173,7 @@ def _toolchain_problem(backend: str) -> str | None:
                     "only with PYQCD_EINSUM_BACKEND=kupl (CUDA is opportunistic)")
         host = _host_compiler()
         if host is None:
-            return ("host C++ compiler ('CXX', 'g++', 'c++' or 'mpicxx') is not "
+            return ("host C++ compiler ('CXX', 'g++' or 'c++') is not "
                     "available on PATH; fix: apt install build-essential | "
                     "dnf install gcc-c++ | conda install -c conda-forge gxx_linux-64")
         if not _host_compiler_works(host):
@@ -186,7 +185,7 @@ def _toolchain_problem(backend: str) -> str | None:
         return ("binutils ('nm') is not available on PATH; fix: apt install binutils | "
                 "dnf install binutils | conda install -c conda-forge binutils")
     if _host_compiler() is None:
-        return ("host C++ compiler ('CXX', 'g++', 'c++' or 'mpicxx') is not "
+        return ("host C++ compiler ('CXX', 'g++' or 'c++') is not "
                 "available on PATH; fix: apt install build-essential | "
                 "dnf install gcc-c++ | conda install -c conda-forge gxx_linux-64")
     return None

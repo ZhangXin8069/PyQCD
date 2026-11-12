@@ -943,3 +943,100 @@ unpack 用对偶构造（A=单位阵 ⇒ `C_canon=B`，`out_phys` 必等于 `np.
 2. **只改 `_DEDICATED_DTYPE_IDS` 不够**：`try_dedicated` 先用 `_DEDICATED_DTYPES` 拦 dtype，字典在拦过之后才查；两处必须同时加，否则复数永远走不到下发。
 3. **family 入口不要跟着放开**：`try_family_apply` 原本复用 `_DEDICATED_DTYPES`，复数放开后会把 complex 下发给只实例化了实数的族模板（白跑一次原生、留 status 4）。现独立为 `_FAMILY_DTYPES`，`family_dtypes()` 也只报实数两档。
 4. **dispatch 顺序的连带效应**：`_api` 里 `kupl_dedicated` 排在 `kupl_topology` 之前，complex64 一旦被 dedicated 接下，语料里就**不再有**「只由拓扑入口服务」的式子。`_topology_kernel_contract.test_native_failure_falls_back_with_one_warning` 正是靠这个前提挑方程（断言"原生入口必须真的被调用过"），因此转红。数值本身正确（该式 dedicated 6.2e-8、通用 1.3e-7，参考为 complex128 精确值），修法是在该测试里把 dedicated 入口一并 patch 掉——属测试侧改动，不在本内核任务范围内。
+
+## 15. [S2] KUPL 复数特化的独立验收（2026-11-12）
+
+§14 的 `[S1]` 是**实现侧**记录；本节是**验收侧**复核：不改内核，只复跑判据、补两条此前没测过的
+证据，并修正 §14.2 里两处会被误读的表述。
+
+### 15.1 四项交付逐条核对（源码行号对应当前工作树）
+
+| 任务项 | 落点 | 复核结果 |
+|---|---|---|
+| `run_typed<std::complex<T>>` 数值路径 | `dedicated_apply.cpp:1206`（`run_typed` 是模板，四档共用同一份代码） | 已有；`sizeof(std::complex<T>) == 2*sizeof(T)` 的 `static_assert` 在 `:276-279`（不是模板内——两档各写一条，编译期钉死） |
+| 归约分支双精度累加 | `Accumulator<T>` trait `:284-295`，用在 `n==1`（`:1149`）与 `m==1`（`:1166`）两处 | 已有；`complex<float> → complex<double>` |
+| GEMM 走 `cgemm`/`zgemm`，alpha/beta 为**指针** | `gemm_call` 复数重载 `:1094-1116`；`CgemmFn`/`ZgemmFn` `:305-308` | 已有；`const std::complex<float> alpha(1.0F,0.0F)` 取地址下发 |
+| `parse_table` 白名单放开四档 + 缺符号 fail closed | `:571-581` | 已有；缺 `cgemm`/`zgemm` 返回 `QCD_DEDICATED_UNSUPPORTED`(4) |
+| `apply_dedicated` 四档分派 | `:1449-1460` | 已有 |
+| `_DEDICATED_DTYPE_IDS` 加两档 | `_kernel_kupl.py:468-471`（complex128=0 / complex64=1 / float64=2 / float32=3） | 已有，且与 `einsum_define.h:31-34` 逐项一致 |
+
+复核时的**前置确认**（不做这步会误判）：包内副本
+`pyqcd/einsum/kupl/libpyqcdeinsum_kupl.so` 与 `cpp/kupl/einsum/build/` 的新构建产物
+`cmp` **逐字节相同**——否则测的是旧库（§14.3 第 1 条）。
+
+### 15.2 判据实跑（本机 conda OpenBLAS `libcblas.so.3`，`cblas_cgemm`/`cblas_zgemm` 均在）
+
+| 口径 | 结果 |
+|---|---|
+| `python -m pyqcd.testing._double_precision_contract --dtype complex128 --sample 100` | 特化真跑 **100/100**、失败 **0**、最大偏差 **2.42e-14**（中位 2.44e-16，门槛 1e-12） |
+| 同上 `--sample 0`（全 8638 条） | 跑完 **8638/8638**，仅 2 条超「特化 vs 通用 ≤1e-13」辅助项（`seq=1973` 1.20e-13、`seq=7998` 1.11e-13），**对参考的偏差仍 ≤1.20e-13、无一条超主判据** |
+| complex64 抽检 **120** 条（自建脚本，参考升 complex128 + 固定 path，rtol 1e-5） | 命中 **120/120**、失败 **0**、最大偏差 **6.59e-07**、中位 1.74e-07；`LAST_INFO['dtype_id']` 恒为 **1** |
+| complex64 结果 dtype | 逐条仍是 `complex64`（未被悄悄升精） |
+| `python -m pyqcd.testing._complex_precision_contract` | **9 passed / 0 pending / 1 failed**；失败项是契约 4「公开入口拒绝混合精度」，属 `_api.contract` 的语义，不在内核范围（内核层 `test_mixed_precision_kernel_fails_closed` 通过） |
+
+`seq=1973` 的超阈不是复数问题：**同一方程用 float64 跑同一路径，偏差 4.18e-13，比 complex128 的
+1.20e-13 更大**。它是 16 算子链的求和顺序差异，§14.2 已有同结论。
+
+### 15.3 补测一：complex64 确实按**双精度**累加（§12 结论对复数的落点）
+
+只报「偏差小」不足以证明走了升档累加——必须让升档与不升档**分出差距**。做法：把归约轴拉到
+`k=20000`（长链放大 float 累加误差），与「顺序 `complex64` 累加」这一错误口径对照：
+
+| 分支 | kernel 偏差 | 顺序 float 累加 | 倍数 |
+|---|---:|---:|---:|
+| `n==1`（`ij,j->i`） | **6.30e-07** | 2.868e-06 | kernel 准 **4.6x** |
+| `m==1`（`j,kj->k`） | **1.31e-08** | 8.191e-07 | kernel 准 **62.5x** |
+
+更强的判据是**随链长的增长斜率**（`k` 从 1e3 → 1e5）：
+
+| k | kernel 偏差 | 顺序 float 累加 |
+|---:|---:|---:|
+| 1 000 | 3.40e-07 | 4.19e-07 |
+| 10 000 | 4.51e-07 | 1.06e-06 |
+| 100 000 | **5.54e-07**（仅 1.6x） | **4.31e-06**（10.3x） |
+
+双精度累加的误差只随**存储精度**（`complex64` 的 1.2e-7 表示误差 × √k）走，与累加位数无关；
+float 累加则随 k 线性放大。kernel 的曲线是前者 ⇒ 升档累加生效。
+
+### 15.4 补测二：`transA`/`transB`/`batch>1` 的复数组合（此前只测过 transB 单点）
+
+用 `PYQCD_EINSUM_DEDICATED_TRACE=1` 同时确认**真的下发了 trans 位**，而不是靠 pack 绕过去：
+
+| 形态 | trace 里的 trans | 偏差（vs opt_einsum，complex128） |
+|---|---|---:|
+| `ji,jk->ik`（A 为 `[K][M]`） | `trans=10` | **0.00e+00** |
+| `ij,kj->ik`（B 为 `[N][K]`） | `trans=01` | **0.00e+00** |
+| `bij,bjk->bik`（batch=4） | `trans=11`（两侧均直通） | 1.24e-16 |
+| `bji,bjk->bik`（batch+transA） | `trans=10` | 2.35e-16 |
+
+另外三项落地契约也实测：`out=` 原地写入（返回同一对象、`dtype=complex64`、偏差 3.78e-08）、
+`k==0` 复数走 zero-fill（形状 `(2,0)`、dtype 保留、全零）、`try_dedicated` 的 `LAST_INFO['path']
+== 'kupl_dedicated'`。
+
+### 15.5 fail-closed 的证据强度：假 BLAS 是唯一可靠办法
+
+`cblas_api()` 按 `PYQCD_EINSUM_CBLAS_LIB` → `RTLD_DEFAULT` → 候选名 依次探测，本机 conda 的
+OpenBLAS 一定命中，**没法靠"这台机器没有复数 BLAS"来测回落**。必须编一个只导出部分符号的
+假 `.so` 指过去：
+
+| 假 BLAS 导出 | complex64 | complex128 | float64/float32 |
+|---|---|---|---|
+| 只有 `sgemm/dgemm` | status **4** | status **4** | 正常出结果 |
+| `sgemm/dgemm/cgemm`（**缺 zgemm**） | status **4** | status **4** | 正常出结果 |
+
+第二行是本轮新发现的口径细节：`parse_table:576` 用的是 `complex_complete()`（= `cgemm && zgemm`
+**两者齐备**），而执行期 `BlasGate<T>` 只查自己那一个符号。所以「只有 `cgemm` 的 BLAS」会把
+**complex64 也一起拒掉**。这是**偏保守的 fail closed**（回落通用路径、结果仍正确、绝不硬错、
+绝不降精度），符合任务要求，故不改；但要知道它不是"按精度分别放行"。若将来遇到真的只带
+`cgemm` 的精简 BLAS 并希望 complex64 仍走特化，把 `:576` 的判据换成 `BlasGate` 同款按精度检查
+即可（一处改动，执行期守卫已就绪）。
+
+### 15.6 实数不回归
+
+`python -B -m pyqcd.testing` → **126 passed, 1 skipped, 1 failed**。该失败项是
+`test_contract_edge_cases`，报
+`ValueError: Number of einsum subscripts, 15, must be equal to the number of operands, 16`：
+用例给 `…,ax,sy->MNGLxy`（**15** 个项）画了 **16** 个操作数。判据无关 dtype——
+把操作数换成 `float64` 同样报同一句，因此与复数特化无关（属测试侧多画一个算子的笔误）。
+`_topology_kernel_contract` 在 dedicated 接管 complex64 后一度转红（§14.3 第 4 条），
+已在测试侧 patch 掉 dedicated 入口修复，现单跑 PASS。

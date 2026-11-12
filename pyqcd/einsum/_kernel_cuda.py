@@ -1,19 +1,13 @@
-"""CUDA 专用 kernel 的绑定与形态判定（15 算子 3pt，P1/P2）。
+"""CUDA 原生 kernel 的绑定与形态判定（拓扑 / 固定步表入口）。
 
-契约见 `cpp/cuda/einsum/include/pattern_3pt.h`：
-- 只支持 complex128；
-- `dims` 长度 5：``[nev, mom, link, spin(4), proj(2)]``；
-- 操作数与输出都是**设备**指针，必须 C 连续；
-- 输出形状 ``(mom, mom, 4, link, 2, 2)``。
+两条路径的契约都按 dtype / 形状 / 连续性 / 设备严格校验，任一不满足即返回
+``None`` 回落，绝不猜测或放宽：
 
-实测（2026-11-08，单卡 RTX 4060，nvec=50，10 次中位）：
-kernel 30.74 ms vs 通用 CUDA 路径 74.13 ms（**2.41x**）vs opt_einsum 285.40 ms（9.29x），
-数值 ``rel = 3.13e-15``。
-
-另有一个**多操作数拓扑入口**（``try_topology_apply``），语义与 KUPL 侧同构：
-按 ``TOPOLOGY_DTYPES`` 显式声明 dtype（单精度默认与首选，双精度须原生实测通过），
-未启用的 dtype 返回 ``None`` 回落且**绝不降级**；成功下发时把 plan 字节数、
-操作数个数、``out`` 模式与复制下标记进 ``LAST_INFO``。
+* ``try_topology_apply``：多操作数拓扑入口，按 ``TOPOLOGY_DTYPES`` 显式声明
+  dtype（单精度默认与首选，双精度须原生实测通过），未启用的 dtype 返回
+  ``None`` 回落且**绝不降级**；成功下发时把 plan 字节数、操作数个数、``out``
+  模式与复制下标记进 ``LAST_INFO``。
+* ``try_dedicated``：与 KUPL 侧共用同一份 GEMM 步表字节流。
 """
 
 from __future__ import annotations
@@ -25,16 +19,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-QCD_DTYPE_COMPLEX128 = 0
-
-THREE_PT_EQUATIONS = {
-    'agbh,eqfr,ospt,cmdn,ikjl,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy': 0,
-    'agbh,eqfr,ospt,ckdl,imjn,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy': 1,
-}
-
 _DISABLE_ENV = 'PYQCD_EINSUM_KERNEL_CUDA'
-_entry: Any = None
-_failed = False
 
 
 # 最近一次"该跑 kernel 却没跑"的原因，供上层给出可行动的告警。
@@ -50,212 +35,6 @@ def _fail(reason: str, status=None):
 def enabled() -> bool:
     return os.environ.get(_DISABLE_ENV, '1').strip().lower() not in (
         '0', 'false', 'off', 'no')
-
-
-NUCLEON_2PT_EQ = 'gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M'
-
-# 标记：CUDA 2pt kernel 已接线，但与现有通用路径相比收益不稳定（见 try_nucleon_2pt
-# 的 docstring 实测表），**需要进一步优化**。优化达标后应删除本标识。
-NUCLEON_2PT_NEEDS_OPTIMIZATION = True
-_nucleon_notice_shown = False
-
-_entry_2pt: Any = None
-_failed_2pt = False
-
-
-def _function():
-    global _entry, _failed
-    if _entry is not None or _failed:
-        return _entry
-    try:
-        from ._native import _cuda_library_path
-
-        library = ctypes.CDLL(str(_cuda_library_path()))
-        entry = library.qcd_cuda_pattern_3pt
-    except Exception:  # noqa: BLE001 - 缺库/缺符号时静默回退
-        _failed = True
-        return None
-    entry.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p),
-                      ctypes.c_void_p, ctypes.POINTER(ctypes.c_int64),
-                      ctypes.c_int, ctypes.c_void_p]
-    entry.restype = ctypes.c_int
-    _entry = entry
-    return _entry
-
-
-def _shape_ok(operands: Sequence[Any]) -> tuple[int, int, int] | None:
-    """返回 ``(nvec, mom, link)``，不满足 P1/P2 契约时返回 ``None``。"""
-    try:
-        import cupy
-    except ImportError:
-        return None
-    if len(operands) != 15:
-        return None
-    for operand in operands:
-        if not isinstance(operand, cupy.ndarray):
-            return None
-        if operand.dtype != cupy.complex128:
-            return None
-        if not operand.flags['C_CONTIGUOUS']:
-            return None
-    perams = operands[:5]
-    nvec = perams[0].shape[2] if perams[0].ndim == 4 else 0
-    if nvec < 1 or any(peram.shape != (4, 4, nvec, nvec) for peram in perams):
-        return None
-    if operands[5].shape != (4, 4) or operands[6].shape != (4, 4, 4):
-        return None
-    if operands[7].shape != (4, 4) or operands[8].shape != (4, 4):
-        return None
-    sink, vdv, src_vdv, src_vvv = operands[9], operands[10], operands[11], operands[12]
-    if sink.ndim != 4 or vdv.ndim != 4 or src_vdv.ndim != 3 or src_vvv.ndim != 4:
-        return None
-    mom = sink.shape[0]
-    link = vdv.shape[1]
-    if mom < 1 or link < 1:
-        return None
-    if sink.shape != (mom, nvec, nvec, nvec):
-        return None
-    if vdv.shape != (mom, link, nvec, nvec):
-        return None
-    if src_vdv.shape != (mom, nvec, nvec):
-        return None
-    if src_vvv.shape != (mom, nvec, nvec, nvec):
-        return None
-    if operands[13].shape != (4, 2) or operands[14].shape != (4, 2):
-        return None
-    return nvec, mom, link
-
-
-def try_three_pt(subscripts: Any, operands: Sequence[Any]) -> Any | None:
-    """匹配 P1/P2 且条件满足时用专用 kernel 计算，否则返回 ``None``。"""
-    if not enabled() or not isinstance(subscripts, str):
-        return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
-    variant = THREE_PT_EQUATIONS.get(''.join(subscripts.split()))
-    if variant is None:
-        return None
-    shapes = _shape_ok(operands)
-    if shapes is None:
-        return _fail("operand shapes do not satisfy the kernel contract")
-    entry = _function()
-    if entry is None:
-        return _fail("kernel entry point is missing from the native library")
-    import cupy
-
-    nvec, mom, link = shapes
-    dims = (ctypes.c_int64 * 5)(nvec, mom, link, 4, 2)
-    output = cupy.zeros((mom, mom, 4, link, 2, 2), dtype=cupy.complex128)
-    pointers = (ctypes.c_void_p * len(operands))(
-        *[int(operand.data.ptr) for operand in operands])
-    status = entry(QCD_DTYPE_COMPLEX128, pointers, int(output.data.ptr), dims,
-                   variant, None)
-    if status != 0:
-        return _fail(f"kernel returned status {status} "
-                     "(wrong CUDA architecture or an internal error)", status)
-    return output
-
-
-def _function_2pt():
-    global _entry_2pt, _failed_2pt
-    if _entry_2pt is not None or _failed_2pt:
-        return _entry_2pt
-    try:
-        from ._native import _cuda_library_path
-
-        library = ctypes.CDLL(str(_cuda_library_path()))
-        entry = library.qcd_cuda_nucleon_2pt
-    except Exception:  # noqa: BLE001 - 缺库/缺符号时静默回退
-        _failed_2pt = True
-        return None
-    entry.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p),
-                      ctypes.c_void_p, ctypes.POINTER(ctypes.c_int64),
-                      ctypes.c_void_p]
-    entry.restype = ctypes.c_int
-    _entry_2pt = entry
-    return _entry_2pt
-
-
-def _nucleon_shape_ok(operands: Sequence[Any]) -> tuple[int, int] | None:
-    """返回 ``(nvec, nmom)``；不满足 CUDA 2pt 契约时返回 ``None``。"""
-    try:
-        import cupy
-    except ImportError:
-        return None
-    if len(operands) != 8:
-        return None
-    for operand in operands:
-        if not isinstance(operand, cupy.ndarray):
-            return None
-        if operand.dtype != cupy.complex128:
-            return None
-        # 设备端不做 stride 解释：非连续输入必须回退，否则会按连续内存错误读取。
-        if not operand.flags['C_CONTIGUOUS']:
-            return None
-    perams = operands[:3]
-    if any(peram.ndim != 4 or peram.shape[:2] != (4, 4) for peram in perams):
-        return None
-    nvec = perams[0].shape[2]
-    if nvec < 1 or any(peram.shape != (4, 4, nvec, nvec) for peram in perams):
-        return None
-    for gamma in (operands[3], operands[4], operands[7]):
-        if gamma.shape != (4, 4):
-            return None
-    vvv_a, vvv_b = operands[5], operands[6]
-    if vvv_a.ndim != 4 or vvv_b.ndim != 4:
-        return None
-    nmom = vvv_a.shape[0]
-    if nmom < 1 or vvv_a.shape != (nmom, nvec, nvec, nvec):
-        return None
-    if vvv_b.shape != (nmom, nvec, nvec, nvec):
-        return None
-    return nvec, nmom
-
-
-def try_nucleon_2pt(subscripts: Any, operands: Sequence[Any]) -> Any | None:
-    """匹配 E1 且条件满足时用 CUDA 专用 kernel 计算，否则返回 ``None``。
-
-    **已接线，但标记为 NEEDS-OPTIMIZATION**（``NUCLEON_2PT_NEEDS_OPTIMIZATION``）。
-    生产库实测（单卡 RTX 4060，10 次中位）：
-
-    | Nvec | kernel | 通用路径 | opt_einsum | kernel/通用 |
-    |---|---|---|---|---|
-    | 50 | 86.5 ms | 74.0–89.3 ms | 88.9–151.7 ms | 0.86–1.05x |
-    | 100 | 415.3 ms | 392.2–486.0 ms | 380.6–3083 ms | 0.91–1.17x |
-
-    通用路径本身在同机多次测量间波动达 ±20%，故 kernel 相对收益不稳定；
-    与 opt_einsum 相比通常领先（1.75x–7.4x）。按契约仍需继续优化。
-    """
-    if not enabled() or not isinstance(subscripts, str):
-        return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
-    if ''.join(subscripts.split()) != NUCLEON_2PT_EQ:
-        return None
-    shapes = _nucleon_shape_ok(operands)
-    if shapes is None:
-        return _fail("operand shapes do not satisfy the kernel contract")
-    entry = _function_2pt()
-    if entry is None:
-        return _fail("kernel entry point is missing from the native library")
-    import cupy
-
-    nvec, nmom = shapes
-    # 契约顺序：{P1,P2,P3,G1,G2,pr,V1,V2}（投影在 V 之前）
-    ordered = [operands[0], operands[1], operands[2], operands[3],
-               operands[4], operands[7], operands[5], operands[6]]
-    # dims(10) = [N, mx, my, mode, permA..permV2, matflags]，恒等 perm 码 = 123
-    dims = (ctypes.c_int64 * 10)(nvec, nmom, nmom, 0, 123, 123, 123, 123, 123, 0)
-    output = cupy.zeros((nmom,), dtype=cupy.complex128)
-    pointers = (ctypes.c_void_p * len(ordered))(
-        *[int(operand.data.ptr) for operand in ordered])
-    status = entry(QCD_DTYPE_COMPLEX128, pointers, int(output.data.ptr), dims,
-                   None)
-    if status != 0:
-        return _fail(f"kernel returned status {status} "
-                     "(wrong CUDA architecture or an internal error)", status)
-    global _nucleon_notice_shown
-    if not _nucleon_notice_shown:
-        _nucleon_notice_shown = True
-        print('[pyqcd.einsum] 提示：CUDA 2pt 专用 kernel 已接线，但与通用路径相比'
-              '收益不稳定（0.86–1.17x），标记 needs-optimization', flush=True)
-    return output
 
 
 # 多操作数拓扑入口：一次原生调用跑完整条计划。下发的是**拓扑描述符**（只带
@@ -433,7 +212,7 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
                        offsets: Sequence[int] | None = None) -> Any:
     """把整条收缩计划一次性交给 CUDA 拓扑入口；不满足条件即返回 ``None`` 回落。
 
-    与 ``try_three_pt`` / ``try_nucleon_2pt`` 同一契约：命中且执行成功才返回
+    与 ``try_dedicated`` 同一契约：命中且执行成功才返回
     ``cupy`` 数组，否则记录一次 ``LAST_FAILURE`` 并让上层走通用路径。
 
     dtype 契约（见 ``TOPOLOGY_DTYPES`` / ``topology_dtypes``）：只下发显式声明
@@ -507,9 +286,12 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
 #
 # 精度契约：接受 ``float32`` / ``float64`` / ``complex64`` / ``complex128``（原生分别
 # 走 cublasSgemm / Dgemm / Cgemm / Zgemm；复数元素按 cupy 的交错实虚布局直传）。
-# 其它 dtype 一律返回 ``None`` 并记录原因 —— **绝不隐式降精度**，也绝不抛异常。
+# 白名单由原生 ``qcd_cuda_dedicated_dtypes`` 的运行期能力掩码裁剪（见
+# ``dedicated_dtypes``）：本机缺某个 cuBLAS 符号时该 dtype 直接不进白名单。
+# 其它 dtype / 未启用的 dtype 一律返回 ``None`` 并记录原因 —— **绝不隐式降精度**，
+# 也绝不抛异常。
 
-_DEDICATED_DTYPES: tuple[np.dtype, ...] = (
+_DEDICATED_DECLARED_DTYPES: tuple[np.dtype, ...] = (
     np.dtype(np.complex128), np.dtype(np.complex64),
     np.dtype(np.float64), np.dtype(np.float32))
 # 与 _kernel_kupl._DEDICATED_DTYPE_IDS 逐项相同（两个后端吃同一份步表字节）：
@@ -520,11 +302,43 @@ _DEDICATED_DTYPE_IDS = {
 }
 _entry_dedicated: Any = None
 _failed_dedicated = False
+_dedicated_dtypes: tuple[np.dtype, ...] | None = None
+_dedicated_dtypes_lock = threading.Lock()
 
 
 def dedicated_dtypes() -> tuple[np.dtype, ...]:
-    """本入口可执行的 dtype（只读，不触发加载）。"""
-    return _DEDICATED_DTYPES
+    """本入口在**本机**可执行的 dtype（首次调用时向原生查一次能力掩码）。
+
+    白名单不是写死的常量：原生 ``qcd_cuda_dedicated_dtypes`` 按运行期 cuBLAS 符号
+    是否齐备返回 bit 掩码，这里据此裁剪。缺符号的 dtype 不进白名单，
+    ``try_dedicated`` 对它返回 ``None`` 并说明原因（fail open，回落通用路径）。
+    库缺失或查询入口缺失时返回空元组 —— 此时本入口本来就不可用。
+    """
+    global _dedicated_dtypes
+    if _dedicated_dtypes is not None:
+        return _dedicated_dtypes
+    with _dedicated_dtypes_lock:
+        if _dedicated_dtypes is None:
+            _dedicated_dtypes = _query_dedicated_dtypes()
+    return _dedicated_dtypes
+
+
+def _query_dedicated_dtypes() -> tuple[np.dtype, ...]:
+    try:
+        from ._native import _cuda_library_path
+
+        library = ctypes.CDLL(str(_cuda_library_path()))
+        query = library.qcd_cuda_dedicated_dtypes
+    except Exception:  # noqa: BLE001 - 缺库/缺符号即视为入口不可用
+        return ()
+    query.argtypes = []
+    query.restype = ctypes.c_int
+    try:
+        mask = int(query())
+    except Exception:  # noqa: BLE001
+        return ()
+    return tuple(dtype for dtype in _DEDICATED_DECLARED_DTYPES
+                 if mask & (1 << _DEDICATED_DTYPE_IDS[dtype]))
 
 
 def _function_dedicated():
@@ -580,10 +394,11 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
     dtype = np.dtype(operands[0].dtype)
     if any(np.dtype(operand.dtype) != dtype for operand in operands[1:]):
         return _fail("mixed operand dtypes are not supported by the native path")
-    if dtype not in _DEDICATED_DTYPES:
-        supported = ", ".join(str(item) for item in _DEDICATED_DTYPES)
+    supported_dtypes = dedicated_dtypes()
+    if dtype not in supported_dtypes:
+        supported = ", ".join(str(item) for item in supported_dtypes) or "none"
         return _fail(
-            f"dtype {dtype} has no dedicated step-table path "
+            f"dtype {dtype} has no dedicated step-table path on this machine "
             f"(supported: {supported}); no implicit downcast is performed")
     if any(not operand.flags['C_CONTIGUOUS'] for operand in operands):
         return _fail("dedicated kernel requires C-contiguous operands")
@@ -630,8 +445,9 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
         return _fail(f"dedicated execution unavailable: {type(error).__name__}: {error}",
                      getattr(error, "status", None))
     if status != 0:
-        reason = ("the step table is outside the CUDA executor's range"
-                  if status == 4 else "invalid arguments or an internal error")
+        reason = ("the step table or this machine's cuBLAS capability is outside "
+                  "the CUDA executor's range" if status == 4
+                  else "invalid arguments or an internal error")
         return _fail(f"dedicated kernel returned status {status} ({reason})", status)
     LAST_INFO.update(
         path="cuda_dedicated",

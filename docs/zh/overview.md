@@ -15,7 +15,7 @@ import pyqcd
 import pyqcd.einsum as pe
 
 print(pyqcd.__version__)    # e.g. 0.3.4
-print(pe.build_info())      # backend / mpi / mpi_label / native_library
+print(pe.build_info())      # backend / native_available / native_library
 
 info = pe.build_info()
 assert pyqcd.__version__.count(".") == 2, pyqcd.__version__
@@ -91,13 +91,11 @@ assert np.allclose(pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))(a, b), a 
 ```python
 import pyqcd.einsum as pe
 
-pe.build_info()        # backend / mpi / kupl_mpi_build / mpi_label / native_library
-pe.mpi_enabled()       # whether the KUPL binary has real MPI support
+pe.build_info()        # backend / native_available / array_backend / native_library
 pe.specializations()   # equation-shape specialisations currently registered
 
 info = pe.build_info()
 assert isinstance(info, dict) and "backend" in info
-assert isinstance(pe.mpi_enabled(), bool)
 assert len(pe.specializations()) >= 1
 ```
 

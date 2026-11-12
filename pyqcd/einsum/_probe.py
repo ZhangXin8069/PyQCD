@@ -5,20 +5,17 @@ once and the numbers stay correct), which makes a *slow* GPU run hard to explain
 the timings look like "PyQCD is slow" when in fact the kernel never ran.
 
 ``probe()`` answers the question directly: does the build see a device, does the
-CUDA library expose a usable kernel, does that kernel return OK for a real
-operand set, and do the projected shapes hit the specialised path.
+CUDA archive expose the topology entry, and does one tiny contraction through it
+agree with the reference result.
 
     python -m pyqcd --gpu-probe
 """
 
 from __future__ import annotations
 
-import contextlib
-import io
 from typing import Any
 
-NUCLEON_2PT = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
-SANDWICH = "ab,...bce,cd->...dae"
+_PROBE_EQUATION = "ij,jk->ik"
 
 
 def _cupy():
@@ -30,7 +27,7 @@ def _cupy():
 
 
 def _kernel_status() -> tuple[str, str]:
-    """Call the CUDA 2pt kernel once and report its status code."""
+    """Run one tiny topology contraction through the CUDA entry."""
     from . import _kernel_cuda as kernel
 
     cupy = _cupy()
@@ -39,42 +36,23 @@ def _kernel_status() -> tuple[str, str]:
     if not kernel.enabled():
         return "disabled", "PYQCD_EINSUM_KERNEL_CUDA=0 is set, or the library is absent"
 
-    def draw(*shape):
-        generator = cupy.random.default_rng(0)
-        return (generator.standard_normal(shape)
-                + 1j * generator.standard_normal(shape)).astype(cupy.complex128)
+    import numpy as np
 
-    n = 8
-    operands = [draw(4, 4, n, n), draw(4, 4, n, n), draw(4, 4, n, n),
-                draw(4, 4), draw(4, 4), draw(4, n, n, n), draw(4, n, n, n),
-                draw(4, 4)]
+    left = cupy.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=cupy.complex64)
+    right = cupy.asarray([[5.0, 6.0], [7.0, 8.0]], dtype=cupy.complex64)
     try:
-        entry = kernel._function_2pt()
+        actual = kernel.try_topology_apply(_PROBE_EQUATION, (left, right))
     except Exception as error:  # noqa: BLE001 - diagnostics only
-        return "entry-missing", f"{type(error).__name__}: {error}"
-    if entry is None:
-        return "entry-missing", "libpyqcdeinsum_cuda.so does not export the kernel"
-
-    import ctypes
-
-    ordered = [operands[0], operands[1], operands[2], operands[3],
-               operands[4], operands[7], operands[5], operands[6]]
-    dims = (ctypes.c_int64 * 10)(n, 4, 4, 0, 123, 123, 123, 123, 123, 0)
-    out = cupy.zeros((4,), dtype=cupy.complex128)
-    pointers = (ctypes.c_void_p * len(ordered))(
-        *[int(operand.data.ptr) for operand in ordered])
-    try:
-        status = entry(kernel.QCD_DTYPE_COMPLEX128, pointers,
-                       int(out.data.ptr), dims, None)
-    except Exception as error:  # noqa: BLE001
         return "call-failed", f"{type(error).__name__}: {error}"
-    if status == 0:
-        return "ok", "kernel returned QCD_STATUS_OK"
-    names = getattr(kernel, "STATUS_NAMES", ())
-    label = names[status] if 0 <= status < len(names) else str(status)
-    return f"status-{status}", (
-        f"kernel returned {label}; the cubin/PTX was built for another "
-        "architecture — rebuild with PYQCD_CUDA_ARCHITECTURES=<your compute cap>")
+    if actual is None:
+        reason = kernel.LAST_FAILURE.get("reason") or "unknown reason"
+        return "fallback", f"topology entry did not run: {reason}"
+    expected = np.einsum(
+        _PROBE_EQUATION, cupy.asnumpy(left), cupy.asnumpy(right))
+    got = cupy.asnumpy(actual)
+    if got.shape != expected.shape or not np.allclose(got, expected, atol=1e-6):
+        return "mismatch", "topology entry returned a different result"
+    return "ok", "topology entry returned the reference result"
 
 
 def probe() -> dict[str, Any]:
@@ -89,13 +67,13 @@ def probe() -> dict[str, Any]:
         "device": None,
         "kernel_enabled": None,
         "kernel_status": None,
-        "kernel_hint": None,
-        "specialised": None,
         "verdict": "",
         "hints": [],
     }
     if cupy is None:
         report["verdict"] = "cupy missing — GPU kernels cannot receive numpy data"
+        report["kernel_status"] = {"state": "cupy-missing",
+                                   "detail": "cupy is not importable"}
         report["hints"].append('pip install "pyqcd[cuda]"')
         return report
 
@@ -135,49 +113,8 @@ def probe() -> dict[str, Any]:
         report["hints"].append(str(error))
         return report
 
-    # does the specialised path announce a kernel (rather than a plan cache)?
-    generator = cupy.random.default_rng(0)
-
-    def draw(*shape):
-        return (generator.standard_normal(shape)
-                + 1j * generator.standard_normal(shape)).astype(cupy.complex128)
-
-    n = 8
-    operands = [draw(4, 4, n, n), draw(4, 4, n, n), draw(4, 4, n, n),
-                draw(4, 4), draw(4, 4), draw(4, n, n, n), draw(4, n, n, n),
-                draw(4, 4)]
-    buffer = io.StringIO()
-    try:
-        from . import _specialize
-
-        import warnings as _warnings
-
-        saved_announced = set(getattr(_specialize, "_announced", ()))
-        _specialize._announced.clear()          # 让本次探测一定能看到提示
-        try:
-            with _warnings.catch_warnings():
-                # 诊断本身会把"未命中"写进报告，不必再向用户抛告警
-                _warnings.simplefilter("ignore")
-                with contextlib.redirect_stdout(buffer):
-                    from . import contract
-
-                    contract(NUCLEON_2PT, *operands)
-            cupy.cuda.Device(0).synchronize()
-        finally:
-            _specialize._announced.clear()
-            _specialize._announced.update(saved_announced)   # 恢复调用方状态
-    except Exception as error:  # noqa: BLE001
-        report["kernel_hint"] = f"call failed: {type(error).__name__}: {error}"
-    lines = [line for line in buffer.getvalue().splitlines() if line.strip()]
-    hint = next((line for line in lines if "专用路径" in line), "")
-    report["kernel_hint"] = hint or (lines[0] if lines else "(no hint printed)")
-    report["specialised"] = "kernel:" in hint
-
-    if status == "ok" and report["specialised"]:
+    if status == "ok":
         report["verdict"] = "CUDA fast path is active"
-    elif status == "ok":
-        report["verdict"] = ("kernel works, but this operand set did not hit it "
-                             "(shape contract mismatch)")
     else:
         report["verdict"] = "CUDA fast path is NOT active — results fall back"
         report["hints"].append(detail)
@@ -212,7 +149,6 @@ def format_report(report: dict[str, Any]) -> str:
         f"(compute {report.get('compute_capability', '?')})",
         f"  kernel enabled : {report['kernel_enabled']}",
         "  kernel status  : " + _format_kernel_status(report.get("kernel_status")),
-        f"  hit hint       : {report['kernel_hint']}",
         f"  verdict        : {report['verdict']}",
     ]
     for hint in report["hints"]:

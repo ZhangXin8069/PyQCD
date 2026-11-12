@@ -188,18 +188,8 @@ def compile(plan_data, backend: str = "auto"):
 
 
 def build_info() -> dict[str, Any]:
-    """返回当前原生构建的可查询标识（后端 / 是否 MPI / 库路径）。"""
-    from .kupl.einsum import mpi_enabled as kupl_mpi_enabled
-
+    """返回当前原生构建的可查询标识（后端 / 库路径）。"""
     backend = backend_name()
-    kupl_mpi = bool(kupl_mpi_enabled())
-    mpi = kupl_mpi and backend == 'kupl'
-    if backend == 'cuda':
-        label = 'non-MPI build (CUDA backend has no MPI sharding)'
-    elif mpi:
-        label = 'MPI build'
-    else:
-        label = 'non-MPI build'
     path = str(library_path())
     try:
         from ..tools._backend import get_backend_name
@@ -211,8 +201,5 @@ def build_info() -> dict[str, Any]:
         'backend': backend,
         'native_available': backend != 'python',
         'array_backend': array_backend,
-        'mpi': mpi,
-        'kupl_mpi_build': kupl_mpi,
-        'mpi_label': label,
         'native_library': path,
     }

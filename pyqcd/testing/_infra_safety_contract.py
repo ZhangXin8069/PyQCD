@@ -1,12 +1,8 @@
-"""Infrastructure safety contracts for eigcompression, ASCII I/O, and MPI."""
+"""Infrastructure safety contracts for eigcompression and ASCII I/O."""
 
-import importlib.util
 from pathlib import Path
-import shutil
-import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
 
 import numpy as np
 
@@ -15,7 +11,6 @@ from pyqcd.vertex._eigcompress import (
     check_orthonormal,
     compress_matrix_V4,
 )
-from pyqcd.testing import _mpi_failure_contract as mpi_contract
 
 
 class AsciiCounterSafetyContract(unittest.TestCase):
@@ -93,46 +88,6 @@ class EigcompressSchemeSafetyContract(unittest.TestCase):
         self.assertFalse(check_orthonormal(result))
         with self.assertRaises(RuntimeError):
             self._compress('Z_4', check=True)
-
-
-class MpiContractTimingSafetyContract(unittest.TestCase):
-    """Timeout and contract failure must remain distinct outcomes."""
-
-    def test_timeout_is_reported_as_timeout(self):
-        expired = subprocess.TimeoutExpired(
-            cmd='mpirun', timeout=0.01,
-            output='partial stdout', stderr='partial stderr',
-        )
-        with patch.object(
-                mpi_contract.subprocess, 'run', side_effect=expired):
-            with self.assertRaisesRegex(
-                    AssertionError, r'^MPI plan-log TIMEOUT'):
-                mpi_contract._run_scenario_process(
-                    'plan-log', timeout=0.01)
-
-    def test_nonzero_exit_is_reported_as_contract_failure(self):
-        failed = subprocess.CompletedProcess(
-            args=['mpirun'], returncode=9,
-            stdout='PASS plan-log: misleading partial success',
-            stderr='contract stderr',
-        )
-        with patch.object(
-                mpi_contract.subprocess, 'run', return_value=failed):
-            with self.assertRaisesRegex(
-                    AssertionError,
-                    r'^MPI plan-log CONTRACT FAILURE rc=9'):
-                mpi_contract._run_scenario_process('plan-log')
-
-    @unittest.skipIf(importlib.util.find_spec('mpi4py') is None,
-                     'mpi4py unavailable')
-    @unittest.skipIf(shutil.which('mpirun') is None, 'mpirun unavailable')
-    def test_setup_scenario_completes_within_bounded_wait(self):
-        # 用模块默认上限（30 s）而不是写死 15 s：机器被别的基准占满时，两个 MPI
-        # 进程的启动本身就会超过 15 s，那测的是负载而不是契约。
-        completed, output = mpi_contract._run_scenario_process('setup')
-
-        self.assertEqual(completed.returncode, 0)
-        self.assertIn('PASS setup:', output)
 
 
 if __name__ == '__main__':

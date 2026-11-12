@@ -95,7 +95,6 @@ def find_contraction(positions, input_sets, output_set) -> tuple[frozenset, froz
 
 int  applyPlanQcd(long long set_ptrs, long long params);
 int  applyContractQcd(long long plan, long long tensors, long long out, long long params);
-int  applyContractMpiQcd(long long plan, long long tensors, long long out, long long params);
 int  applyCompileQcd(long long plan, long long params, long long out_context);
 int  applyCompiledQcd(long long context, long long tensors, long long out, long long params);
 void applyDestroyQcd(long long context);
@@ -108,8 +107,7 @@ void applyEndQcd(long long set_ptrs, long long params);
 `applyDestroyQcd` 释放上下文。上下文只由对应 backend 解释，禁止跨 KUPL/CUDA 传递。
 
 返回值：`0` 成功；`1` 参数非法（fail-closed）；`2` 内存超限；`3` 内部错误。
-`applyContractMpiQcd` 当前只由 KUPL MPI 构建实现；CUDA 镜像导出同名 fail-closed
-stub。**NUL 必须导出冻结四入口、MPI 入口与 compiled-context 三入口**；构建脚本用
+**NUL 必须导出冻结四入口与 compiled-context 三入口**；构建脚本用
 `-Wl,--version-script` 收敛导出面，内部 kernel 符号不得进入动态导出表。
 
 ## 6. 精度与数值口径
@@ -143,7 +141,6 @@ python -m pyqcd.testing.einsum.verify_native --backend cuda
 PYQCD_EINSUM_ORACLE=installed PYQCD_EINSUM_NATIVE=kupl \
   python -m pyqcd.testing.einsum.bench_native --profiles T1 \
   --backends cpu --isolation process
-mpirun -np 2 python -m pyqcd.testing.einsum.verify_mpi
 ```
 
 `T0/T0n` 是 overhead 诊断 profile；`T1/T2` 是性能验收 profile。安装 oracle 模式必须

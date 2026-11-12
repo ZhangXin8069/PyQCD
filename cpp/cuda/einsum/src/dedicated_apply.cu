@@ -684,6 +684,19 @@ __device__ inline void from_accum(cuDoubleComplex value, cuDoubleComplex* destin
     *destination = value;
 }
 
+/* K == 1 的缩放**不升档**：该步没有归约链，按存储精度乘一次即可，与 KUPL 侧
+ * `target[column] = scale * right[column]` 逐位同口径。 */
+__device__ inline float type_mul(float left, float right) { return left * right; }
+__device__ inline double type_mul(double left, double right) { return left * right; }
+__device__ inline cuFloatComplex type_mul(cuFloatComplex left, cuFloatComplex right) {
+    return make_cuFloatComplex(left.x * right.x - left.y * right.y,
+                               left.x * right.y + left.y * right.x);
+}
+__device__ inline cuDoubleComplex type_mul(cuDoubleComplex left, cuDoubleComplex right) {
+    return make_cuDoubleComplex(left.x * right.x - left.y * right.y,
+                                left.x * right.y + left.y * right.x);
+}
+
 constexpr int kReduceThreads = 128;
 
 int reduce_blocks(std::int64_t elements) {
@@ -704,8 +717,8 @@ __global__ void scale_k1_kernel(const T* a, const T* b, T* c, std::int64_t batch
         const std::int64_t row = rest / n;
         const std::int64_t column = rest % n;
         const auto product =
-            accum_mul(to_accum(a[group * m + row]), to_accum(b[group * n + column]));
-        from_accum(product, c + index);
+            type_mul(a[group * m + row], b[group * n + column]);
+        c[index] = product;
     }
 }
 
@@ -761,6 +774,88 @@ int map_launch(cudaError_t error) {
                ? QCD_STATUS_OK
                : (error == cudaErrorMemoryAllocation ? QCD_STATUS_MEMORY
                                                      : QCD_STATUS_INTERNAL);
+}
+
+/* ------------------------------------------------------------------ BLAS 能力 */
+
+/* dtype 白名单必须与**运行期**的 cuBLAS 能力一致：精简版 BLAS（某些容器镜像只保留
+ * Sgemm/Dgemm）上没有 Cgemm/Zgemm 时，本入口必须把对应 dtype 判为不可执行并返回
+ * QCD_CUDA_DEDICATED_UNSUPPORTED，让上层回落通用路径（fail open），而不是在
+ * GEMM 调用点炸掉、也不是把复数降成实数算。
+ *
+ * 探测用 dlsym(RTLD_DEFAULT)：本 TU 已硬链 -lcublas，正常部署一律命中；探测的价值
+ * 在于把"符号是否齐备"变成**数据**，而不是让缺符号在第一次调用时才暴露。
+ * 每个 dtype 都要求 base 与 StridedBatched 两种变体齐备 —— 执行器在 batch>1 时
+ * 只走后者，缺它就等于该 dtype 的完整路径不存在。 */
+template <typename Function>
+bool bind_gemm_symbol(const char* name, Function* function) {
+    void* symbol = dlsym(RTLD_DEFAULT, name);
+    if (symbol == nullptr) {
+        *function = nullptr;
+        return false;
+    }
+    static_assert(sizeof(Function) == sizeof(symbol), "function pointer size mismatch");
+    std::memcpy(function, &symbol, sizeof(Function));
+    return true;
+}
+
+struct GemmSymbols {
+    bool float32 = false;
+    bool float64 = false;
+    bool complex64 = false;
+    bool complex128 = false;
+};
+
+/* 探测只依赖符号表，不需要设备，因此可以安全地在无卡构建机上查询（全 false）。 */
+const GemmSymbols& gemm_symbols() {
+    static const GemmSymbols symbols = [] {
+        GemmSymbols found;
+        decltype(&cublasSgemm) sgemm = nullptr;
+        decltype(&cublasDgemm) dgemm = nullptr;
+        decltype(&cublasCgemm) cgemm = nullptr;
+        decltype(&cublasZgemm) zgemm = nullptr;
+        decltype(&cublasSgemmStridedBatched) sgemm_batched = nullptr;
+        decltype(&cublasDgemmStridedBatched) dgemm_batched = nullptr;
+        decltype(&cublasCgemmStridedBatched) cgemm_batched = nullptr;
+        decltype(&cublasZgemmStridedBatched) zgemm_batched = nullptr;
+        found.float32 = bind_gemm_symbol("cublasSgemm", &sgemm) &&
+                        bind_gemm_symbol("cublasSgemmStridedBatched", &sgemm_batched);
+        found.float64 = bind_gemm_symbol("cublasDgemm", &dgemm) &&
+                        bind_gemm_symbol("cublasDgemmStridedBatched", &dgemm_batched);
+        found.complex64 = bind_gemm_symbol("cublasCgemm", &cgemm) &&
+                          bind_gemm_symbol("cublasCgemmStridedBatched", &cgemm_batched);
+        found.complex128 = bind_gemm_symbol("cublasZgemm", &zgemm) &&
+                           bind_gemm_symbol("cublasZgemmStridedBatched", &zgemm_batched);
+        return found;
+    }();
+    return symbols;
+}
+
+bool gemm_available(int dtype_id) {
+    const GemmSymbols& symbols = gemm_symbols();
+    switch (dtype_id) {
+        case QCD_DTYPE_FLOAT32:
+            return symbols.float32;
+        case QCD_DTYPE_FLOAT64:
+            return symbols.float64;
+        case QCD_DTYPE_COMPLEX64:
+            return symbols.complex64;
+        case QCD_DTYPE_COMPLEX128:
+            return symbols.complex128;
+        default:
+            return false;
+    }
+}
+
+/* bit(dtype_id) 置位 = 该 dtype 有完整数值路径；Python 侧据此裁剪 dtype 白名单。 */
+int dtype_mask() {
+    int mask = 0;
+    for (int dtype_id = 0; dtype_id <= 3; ++dtype_id) {
+        if (gemm_available(dtype_id)) {
+            mask |= 1 << dtype_id;
+        }
+    }
+    return mask;
 }
 
 /* ------------------------------------------------------------------ cuBLAS */
@@ -960,6 +1055,51 @@ struct GemmDispatch<cuDoubleComplex> {
         return map_cublas(status);
     }
 };
+
+/* ------------------------------------------------------------------ 步执行 */
+
+/* 一步的数值执行：先走缩放/归约短路径，其余交给 cuBLAS。
+ *
+ * pack 之后两侧缓冲区一律是规范序 [batch,M,K] / [batch,K,N] 的连续块（未 pack 时
+ * 只可能是恒等轴序，同样是连续规范序），所以这里不需要 KUPL 侧那套 trans 判定。
+ * 三条短路径与 KUPL `gemm_block` 逐条对齐：k==1 是纯缩放（按存储精度乘一次），
+ * m==1 / n==1 是广播归约（**双精度累加**，见 AccumTraits），其余才进 GEMM。 */
+template <typename T>
+int run_step_math(cublasHandle_t handle, const Step& step, const T* left, const T* right,
+                  T* result) {
+    if (step.batch == 0) {
+        return QCD_STATUS_OK;
+    }
+    if (step.k == 1) {
+        const std::int64_t elements = step.batch * step.m * step.n;
+        if (elements == 0) {
+            return QCD_STATUS_OK;
+        }
+        scale_k1_kernel<T><<<reduce_blocks(elements), kReduceThreads>>>(
+            left, right, result, step.batch, step.m, step.n);
+        return map_launch(cudaGetLastError());
+    }
+    if (step.n == 1) {
+        const std::int64_t elements = step.batch * step.m;
+        if (elements == 0) {
+            return QCD_STATUS_OK;
+        }
+        reduce_n1_kernel<T><<<reduce_blocks(elements), kReduceThreads>>>(
+            left, right, result, step.batch, step.m, step.k);
+        return map_launch(cudaGetLastError());
+    }
+    if (step.m == 1) {
+        const std::int64_t elements = step.batch * step.n;
+        if (elements == 0) {
+            return QCD_STATUS_OK;
+        }
+        reduce_m1_kernel<T><<<reduce_blocks(elements), kReduceThreads>>>(
+            left, right, result, step.batch, step.n, step.k);
+        return map_launch(cudaGetLastError());
+    }
+    return GemmDispatch<T>::run(handle, step.batch, step.m, step.n, step.k, left, right,
+                                result);
+}
 
 /* ------------------------------------------------------------------ 执行 */
 
@@ -1178,8 +1318,7 @@ int run_typed(const Table& table, void* const* operands, void* out, cublasHandle
                     return status;
                 }
             } else {
-                status = GemmDispatch<T>::run(handle, step.batch, step.m, step.n, step.k,
-                                              packed_left, packed_right, result);
+                status = run_step_math<T>(handle, step, packed_left, packed_right, result);
                 if (status != QCD_STATUS_OK) {
                     return status;
                 }
@@ -1256,6 +1395,11 @@ int apply_dedicated(const void* steps, long long steps_len, void* const* operand
     if (n_operands != table.num_operands) {
         return QCD_STATUS_INVALID;
     }
+    /* dtype 白名单与运行期 cuBLAS 能力必须一致：缺符号即判 UNSUPPORTED（fail open），
+     * 由上层回落通用路径，绝不在 GEMM 调用点失败、也绝不降精度。 */
+    if (!gemm_available(dtype_id)) {
+        return QCD_CUDA_DEDICATED_UNSUPPORTED;
+    }
     for (int index = 0; index < n_operands; ++index) {
         if (operands[index] == nullptr) {
             return QCD_STATUS_INVALID;
@@ -1301,5 +1445,13 @@ extern "C" QCD_CUDA_DEDICATED_API int qcd_cuda_dedicated_apply(
         return QCD_STATUS_MEMORY;
     } catch (...) {
         return QCD_STATUS_INTERNAL;
+    }
+}
+
+extern "C" QCD_CUDA_DEDICATED_API int qcd_cuda_dedicated_dtypes(void) {
+    try {
+        return dtype_mask();
+    } catch (...) {
+        return 0;
     }
 }

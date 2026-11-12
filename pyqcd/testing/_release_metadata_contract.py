@@ -73,8 +73,8 @@ def test_build_info_shape() -> None:
     import pyqcd.einsum as pe
 
     info = pe.build_info()
-    for key in ("backend", "native_available", "array_backend", "mpi",
-                "kupl_mpi_build", "mpi_label", "native_library"):
+    for key in ("backend", "native_available", "array_backend",
+                "native_library"):
         assert key in info, f"build_info() is missing {key!r}"
     assert info["backend"] in {"cuda", "kupl", "python"}
     assert info["native_available"] is (info["backend"] != "python")

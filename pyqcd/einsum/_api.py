@@ -542,12 +542,6 @@ def _run_specialized_kernel(
 
     reasons: dict[str, str] = {}
     for label, module, attempt in (
-        ("kupl_nucleon_2pt", _kernel_kupl,
-         lambda: _kernel_kupl.try_nucleon_2pt(subscripts, operands)),
-        ("kupl_3pt", _kernel_kupl, lambda: _kernel_kupl.try_three_pt(subscripts, operands)),
-        ("cuda_nucleon_2pt", _kernel_cuda,
-         lambda: _kernel_cuda.try_nucleon_2pt(subscripts, operands)),
-        ("cuda_3pt", _kernel_cuda, lambda: _kernel_cuda.try_three_pt(subscripts, operands)),
         # 语料拓扑：先走 per-拓扑 dedicated 执行器（步表缓存在 Python 侧，
         # 热调用实测比通用路径快 20–100 倍）；它不可用时再回落 topology 入口。
         ("kupl_dedicated", _kernel_kupl,
@@ -1019,13 +1013,9 @@ def _native_compile_warning(
         build=_NATIVE_REBUILD_COMMAND.get(native_backend, "bash install.sh"),
     )
     execution = "per-call native execution" if per_call else "Python execution"
-    # 归档链了 MPI 却没拿到运行时的现场，加载器会先预加载 MPI 再重试一次；重试的
-    # 结果必须出现在文案里，否则用户无法判断"是不是已经试过预加载"。
     resilience = ""
     if report.get("load_retry"):
         resilience += f"; load_retry={report['load_retry']}"
-    if report.get("mpi_preload"):
-        resilience += f"; mpi_preload_attempted={report['mpi_preload']}"
     return (
         f"pyqcd.einsum native {native_backend} compiler unavailable "
         f"({report['status']}); using {execution}, results stay correct: "
@@ -1234,7 +1224,7 @@ def _try_native_contract(
     if native_backend == "cuda" and not _cuda_fused_shape(equation):
         # cupy 的 einsum 直接走 cuBLAS（含批量 GEMM），实测在 16×1024² 的
         # complex128 上比我们的原生批量 GEMM 快约 5 倍；只有存在融合 kernel 的
-        # 方程（γ 夹心）才值得走原生执行器。2pt/3pt 专用 kernel 在更外层。
+        # 方程（γ 夹心）才值得走原生执行器。
         return False, None
     wants_batch_path = (_batched_operands(operands) if batch_like is None
                         else batch_like)

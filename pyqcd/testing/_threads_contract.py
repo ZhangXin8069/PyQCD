@@ -109,16 +109,6 @@ def test_project_env_is_second_priority() -> None:
     assert source in ({"PYQCD_EINSUM_OMP_THREADS", "PYQCD_EINSUM_BLAS_THREADS"})
 
 
-def test_mpi_ranks_divide_the_budget() -> None:
-    cores = _threads.physical_cores()
-    with _env(OMP_NUM_THREADS=None, OPENBLAS_NUM_THREADS=None,
-              PYQCD_EINSUM_OMP_THREADS=None, PYQCD_EINSUM_BLAS_THREADS=None,
-              PYQCD_EINSUM_THREADS=None, OMPI_COMM_WORLD_SIZE="2"):
-        omp, _blas, source = _threads.resolve()
-    assert omp == min(max(cores // 2, 1), 8)
-    assert "2 ranks" in source
-
-
 def test_apply_is_idempotent() -> None:
     first = _threads.apply("kernel")
     second = _threads.apply("kernel")

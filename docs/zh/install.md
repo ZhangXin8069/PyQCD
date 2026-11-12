@@ -22,7 +22,6 @@ pip 会缓存编译好的 wheel，在相同解释器的其它环境里再装就�
 | `bash` + C++17 编译器 | 原生 KUPL（CPU）内核 —— 基线构建 |
 | `nvcc` | 可选的原生 CUDA（GPU）内核 |
 | Cython | 可选的 CUDA 扩展；由 pip 构建环境提供，无需手动安装 |
-| `mpicxx` | 启用 MPI 的 KUPL 构建（仅源码仓库） |
 | `torch` | 可选：torch 后端（`pip install "pyqcd[torch]"`） |
 | `matplotlib` | 可选：作图辅助（`pip install "pyqcd[plot]"`） |
 
@@ -39,7 +38,6 @@ Cython 不需要自己装：`pyproject.toml` 已在 `[build-system] requires` �
 
 ```bash
 pip install "pyqcd[cuda]"     # adds cupy-cuda12x (CUDA 12.x)
-pip install "pyqcd[mpi]"      # adds mpi4py
 pip install "pyqcd[torch]"    # adds torch (optional backend)
 pip install "pyqcd[plot]"     # adds matplotlib (Wick/analysis plots)
 ```
@@ -69,7 +67,6 @@ extras 只拉取 Python 依赖；原生库仍在同一次 `pip install` 中、�
 | `PYQCD_EINSUM_BACKEND=auto`（默认） | 总是构建 KUPL；`nvcc`、CUDA 源码与 Cython 齐备时再加编 CUDA |
 | `PYQCD_EINSUM_REQUIRE_NATIVE` | 默认 `1`：**KUPL** 的跳过或失败是硬错误；设为 `0` 才允许带着纯 Python 规划装完。对 CUDA 从不生效 |
 | `PYQCD_EINSUM_SKIP_CYTHON=1` | 假装没有 Cython：`auto` 降级为只编 KUPL，`cuda` 仍编 CUDA 库但不编其 Cython 扩展 |
-| `PYQCD_EINSUM_MPI_LINK_FLAGS` | 给启用 MPI 的 KUPL 构建追加链接参数（如 `$(mpicxx --showme:link)`）；只有产物在 `DT_NEEDED` 中登记 MPI 运行库且该依赖可解析，构建才声称支持 MPI |
 | `PYQCD_SKIP_NATIVE_BUILD=1` | 完全跳过原生编译，若已有现成库则直接复用；否则就是显式选择纯 Python 规划 |
 
 ## 安装包里有什么
@@ -101,8 +98,8 @@ import pyqcd.einsum as pe
 
 print(pyqcd.__version__)
 print(pe.build_info())
-# {'backend': 'kupl', 'mpi': False, 'kupl_mpi_build': False,
-#  'mpi_label': 'non-MPI build', 'native_library': '.../libpyqcdeinsum_kupl.so'}
+# {'backend': 'kupl', 'native_available': True,
+#  'array_backend': 'numpy', 'native_library': '.../libpyqcdeinsum_kupl.so'}
 
 info = pe.build_info()
 assert pyqcd.__version__.count(".") == 2
@@ -112,9 +109,7 @@ assert isinstance(info["native_library"], str)
 
 `backend` 取值为 `cuda`、`kupl` 或 `python`（后者表示正在用纯 Python 规划）。
 优先 CUDA：CUDA 扩展导入不了时回落到 KUPL，因此 CUDA 构建被跳过的机器仍然报
-`kupl`。`kupl_mpi_build` 只有在 KUPL 库确实编入 MPI 支持时才为 `True`，`mpi` 还要求
-该库就是当前生效的后端；CUDA 后端永远没有 MPI。`pe.mpi_enabled()` 单独暴露
-KUPL 的构建标志，与当前生效后端无关。
+`kupl`。
 
 功能自检：
 
@@ -257,10 +252,6 @@ CUDA 架构按 `PYQCD_CUDA_ARCHITECTURES` → `CMAKE_CUDA_ARCHITECTURES` → `PY
 PYQCD_CUDA_ARCHITECTURES=8.9 bash install.sh cuda
 ```
 
-MPI 分片只在 KUPL 后端实现，且只分片单个输出轴。`PYQCD_EINSUM_ENABLE_MPI` 支持
-`auto`（默认：仅当有 `mpicxx` 且有效 `CXX` 能预编译 `#include <mpi.h>` 时启用）、
-`1` 与 `0`。
-
 ## 测试（源码仓库）
 
 这些命令依赖 `pyqcd.testing`，而它不在 PyPI 包里，因此只能在源码检出根目录执行：
@@ -271,7 +262,6 @@ python -m pyqcd.testing                                  # integration suite
 python -m pyqcd.testing.einsum.verify_native --backend kupl
 python -m pyqcd.testing.einsum.verify_native --backend cuda
 python -m pyqcd.testing.einsum.verify_compat             # differential vs opt_einsum
-mpirun -np 2 python -m pyqcd.testing.einsum.verify_mpi
 
 bash pyqcd/testing/einsum/simple/run-all.sh              # einsum sub-system suite
 bash pyqcd/testing/simple/run-all.sh                     # per-function API parity suite
@@ -322,7 +312,6 @@ kernel 路径与 BLAS 路径想要**相反**的配置，因此引擎维护两档
 | `kernel` | `min(物理核, 8)` | `clamp(物理核 // 2, 1, 4)` | 核子 2pt/3pt 专用 kernel |
 | `generic` | `clamp(物理核 // 2, 1, 8)` | `clamp(物理核, 2, 4)` | GEMM 链、打包、置换 |
 
-当 `OMPI_COMM_WORLD_SIZE` / `PMI_SIZE` / `SLURM_NTASKS` 显示多进程时，两者都按等级数均分。
 只有档位真正变化时才切换，且配置**作用到已加载的运行时**（`libgomp` 用
 `omp_set_num_threads`，OpenBLAS 用 `openblas_set_num_threads` 或 numpy/scipy wheel 里的
 `scipy_openblas_*` 符号名），不只是导出变量。
@@ -386,7 +375,6 @@ assert "profile" in info
 | `PYQCD_EINSUM_NATIVE=cuda` | 强制使用 GPU 库 | auto |
 | `PYQCD_EINSUM_KERNEL_CUDA=0` | 跳过 CUDA 专用 kernel | 开启 |
 | `PYQCD_CUDA_ARCHITECTURES` | **构建期**目标架构（SASS+PTX） | 自动探测 |
-| `PYQCD_CUDA_MPI_DEVICES` / `PYQCD_CUDA_MPI_WEIGHTS` | rank→设备映射（仅 MPI 构建） | 轮转 |
 
 提醒：`PYQCD_EINSUM_NATIVE=cuda` 选的是**库**，不是数据。numpy 数组仍走 CPU 库；
 GPU kernel 需要 `cupy` 数组。
@@ -399,7 +387,6 @@ GPU kernel 需要 `cupy` 数组。
 | `PYQCD_SKIP_NATIVE_BUILD=1` | 完全跳过编译 |
 | `PYQCD_EINSUM_REQUIRE_NATIVE=1` | 缺 KUPL 工具链时变成硬错误 |
 | `PYQCD_EINSUM_SKIP_CYTHON=1` | 编 CUDA 库但不编 Cython 扩展 |
-| `PYQCD_EINSUM_ENABLE_MPI=1` | 启用 MPI 的 KUPL 构建（`CXX=mpicxx`） |
 | `PYQCD_SM_ARCH` | CUDA 架构的旧变量名 |
 
 ### 查询接口
@@ -407,11 +394,11 @@ GPU kernel 需要 `cupy` 数组。
 ```python
 import pyqcd.einsum as pe
 
-pe.build_info()        # backend / native_available / array_backend / mpi / mpir_label
+pe.build_info()        # backend / native_available / array_backend / native_library
 pe.thread_info()       # effective omp / blas threads and where they came from
 pe.specializations()   # registered equation-shape specialisations
 
 info = pe.build_info()
-assert {"backend", "native_available", "array_backend", "mpi"} <= set(info)
+assert {"backend", "native_available", "array_backend"} <= set(info)
 assert len(pe.specializations()) >= 1
 ```

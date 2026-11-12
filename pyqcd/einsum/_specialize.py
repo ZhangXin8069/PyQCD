@@ -50,20 +50,6 @@ Entry = dict[str, Any]
 
 # 形态键为规范化后的 subscripts（去空白）。
 REGISTRY: dict[str, dict[str, str]] = {
-    "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M": {
-        "name": "nucleon-2pt(E1, deprecated)",
-        # 该形态的专用 kernel 已弃用：它的形状契约（nvec≤64 附近）在生产尺度
-        # （nvec=100/112）上会 MemoryError（实测需 74–131 GiB 中间体），
-        # 且 nvec=20 时与通用路径持平（1.03×）。保留注册只为日志可识别，
-        # 执行链已不再尝试 E1 专用 kernel，统一走通用路径或拓扑特化。
-        "kind": "plan-cache",
-        "note": "已弃用：生产尺度会 OOM 且无收益；用拓扑特化（kupl_dedicated）替代",
-    },
-    "Geifj,ckdl,agbh,ce,gi,Mbdf,Mhjl,Gka->GM": {
-        "name": "nucleon-3pt(E2)",
-        "kind": "plan-cache",
-        "note": "8 算子核子 3pt（仅复用计划缓存，无专用 kernel）",
-    },
     "zyxcTabn,zyxgTdef,Gae,Tzyxgc->TGdbfn": {
         "name": "gauge-propagator(E4)",
         "kind": "plan-cache",
@@ -89,16 +75,6 @@ REGISTRY: dict[str, dict[str, str]] = {
         "kind": "plan-cache",
         "note": "sush 2pt 含 μ 插入（仅复用计划缓存）",
     },
-    "agbh,eqfr,ospt,cmdn,ikjl,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy": {
-        "name": "sush-3pt-main(P1)",
-        "kind": "kernel(needs-optimization)",
-        "note": "sush 3pt 主项；专用 kernel 已接线（CUDA ≈1.8x 于通用；KUPL 待进一步优化）",
-    },
-    "agbh,eqfr,ospt,ckdl,imjn,ce,Gmo,gi,kq,Nbdf,NLnp,Mhj,Mlrt,ax,sy->MNGLxy": {
-        "name": "sush-3pt-main(P2)",
-        "kind": "kernel(needs-optimization)",
-        "note": "sush 3pt 主项（置换型）；专用 kernel 已接线（CUDA ≈1.8x；KUPL 待优化）",
-    },
 }
 
 # 指标字符集与广播位。签名里广播位固定记作 -1，不占用首现编号。
@@ -108,11 +84,8 @@ _ELLIPSIS_ID = -1
 
 # 形态名关键词 → 可服务该形态的专用 kernel 标签。执行侧（``_api._kernel_labels_for``）
 # 以条目里的 ``kernels`` 为准，这里同时是字面条目与拓扑条目的唯一声明处。
-_KERNEL_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    # nucleon-2pt(E1) 已弃用（生产尺度 OOM 且无收益），不再挂专用 kernel 标签。
-
-    ("3pt-main", ("kupl_3pt", "cuda_3pt")),
-)
+# 旧的核子 2pt/3pt 专用 kernel 已整体删除，字面形态都只复用计划缓存或走拓扑入口。
+_KERNEL_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 # 「不可能命中」也是结果，缓存它才能保证 match() 的未命中开销与旧实现同级。
 _SIGNATURE_CACHE_LIMIT = 512
@@ -401,7 +374,7 @@ def _selfcheck() -> int:
         check(f"canonical_signature({bad!r}) is None",
               canonical_signature(bad) is None)
 
-    print("\n9 条字面写法仍按字面命中（回归不变）：")
+    print(f"\n{len(REGISTRY)} 条字面写法仍按字面命中（回归不变）：")
     for key, entry in REGISTRY.items():
         hit = match(key)
         check(f"{entry['name']} 字面命中 name/kind/note 一致",

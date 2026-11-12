@@ -75,30 +75,6 @@ def test_config_import_does_not_create_output_trees():
         assert created == [], f"config import created directories: {created}"
 
 
-def test_parallel_cli_dry_run_does_not_create_output_trees():
-    """The documented MPI planning dry-run must not persist directories."""
-    with tempfile.TemporaryDirectory() as tmp:
-        isolated_root = Path(tmp)
-        (isolated_root / "pyqcd").symlink_to(
-            PROJECT_ROOT / "pyqcd", target_is_directory=True)
-
-        completed = subprocess.run(
-            [sys.executable, "-m", "pyqcd.parallel", "--dry-run",
-             "--confs", "6250,6450", "--n-gpu", "0"],
-            cwd=isolated_root,
-            env=_isolated_env(isolated_root),
-            text=True,
-            capture_output=True,
-        )
-        _assert_subprocess_ok(completed)
-
-        created = [
-            name for name in ("data", "plots", "logs", "output")
-            if (isolated_root / name).exists()
-        ]
-        assert created == [], f"parallel dry-run created directories: {created}"
-
-
 def test_tmd_workflow_dry_run_does_not_create_output_trees():
     """The TMD dry-run must report its plan without creating output trees."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -372,31 +348,6 @@ def test_direct_serial_default_root_tracks_config_output_dir():
                 steps=(), conf_ids=[6250], logger=None, backend="numpy")
 
         assert result["run_dir"] == os.fspath(run_dir)
-        assert calls == [os.fspath(canonical)], calls
-
-
-def test_single_rank_parallel_fallback_tracks_config_output_dir():
-    """Single-rank MPI fallback must inherit the serial canonical root."""
-    from pyqcd.parallel import _mpi
-    from pyqcd.pipeline import _config, _steps
-
-    plan = {"n_gpu": 0, "N": 1, "m": 1, "X": 1}
-    with tempfile.TemporaryDirectory() as tmp:
-        canonical = Path(tmp) / "canonical-output"
-        run_dir = Path(tmp) / "single-rank-run"
-        calls: list[str] = []
-        with patch.object(_config, "OUTPUT_DIR", os.fspath(canonical)), \
-                patch.object(_mpi, "get_mpi_context",
-                             return_value=(None, 0, 1)), \
-                patch.object(
-                    _steps, "reserve_unique_run_dir",
-                    side_effect=_capturing_allocator(calls, run_dir)):
-            result, actual_plan = _mpi.run_parallel_pipeline(
-                steps=(), conf_ids=[6250], logger=None, backend="numpy",
-                resources={"provided": True}, plan=plan)
-
-        assert result["run_dir"] == os.fspath(run_dir)
-        assert actual_plan is plan
         assert calls == [os.fspath(canonical)], calls
 
 
@@ -1309,7 +1260,6 @@ def test_run_pipeline_without_env_step_does_not_fake_snapshot():
 
 TESTS = (
     test_config_import_does_not_create_output_trees,
-    test_parallel_cli_dry_run_does_not_create_output_trees,
     test_tmd_workflow_dry_run_does_not_create_output_trees,
     test_tmd_workflow_analysis_forwards_tmd_cache_identity,
     test_tmd_workflow_runs_pz0_denominator_without_promoting_fallbacks,
@@ -1317,7 +1267,6 @@ TESTS = (
     test_tmd_workflow_pdf_inputs_require_longitudinal_verified_samples,
     test_runner_default_root_tracks_config_output_dir,
     test_direct_serial_default_root_tracks_config_output_dir,
-    test_single_rank_parallel_fallback_tracks_config_output_dir,
     test_save_array_failure_preserves_previous_file_atomically,
     test_save_array_success_is_readable_without_temporary_files,
     test_save_array_cleanup_failure_preserves_primary_write_exception,
