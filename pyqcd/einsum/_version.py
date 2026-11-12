@@ -1,4 +1,4 @@
 """Version metadata for :mod:`pyqcd.einsum`."""
 
-__version__ = "0.3.8"
+__version__ = "0.3.9"
 __native_version__ = "0.1.0"

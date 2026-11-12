@@ -1005,6 +1005,10 @@ void choose_copy_plan(const std::int64_t* source_steps,
     *plan = by_source;
 }
 
+/* 分块转置的块边（元素）。32 x 32 x 8 字节 = 8 KB，约 L1 的一半，
+ * 让源端连续读与目的端连续写都吃满 cache line。 */
+constexpr std::int64_t kTransposeTile = 32;
+
 /* 按 CopyPlan 执行 gather：外层里程计 + 内层 run。 */
 template <typename T>
 void run_copy_plan(const T* source, T* destination, const CopyPlan& plan,
@@ -1038,6 +1042,114 @@ void run_copy_plan(const T* source, T* destination, const CopyPlan& plan,
     for (int index = 0; index < plan.outer_rank; ++index) {
         outer *= extents[plan.order[index]];
     }
+    /* 超立方体轴重排的分块转置快路。
+     *
+     * 实测场景（seq=129 最终步）：源 (w,m,q,a) 连续 → 目的 (a,q,m,w) 连续，
+     * 四轴各 50，共 6.25M 元素 / 100 MB：
+     *   inner: 50, src_step=125000, dst_step=1
+     *   outer: (50, src 2500/dst 50) (50, 50/2500) (50, 1/125000)
+     * 朴素「内层跨步读 + 连续写」87 ms，有效带宽 2.4 GB/s（DRAM 的 7.5%）。
+     *
+     * 做法：全部轴等长 dim 的超立方体，按 TILE^rank 分块。块内先按源布局顺序
+     * 读进连续缓冲、再按目的布局顺序写出，两侧内层循环都连续；块之间才跳跃。
+     * TILE=8 时 8^4=4096 元素（complex128 下 64 KB），适合 L1/L2。 */
+    if (!plan.memcpy_run && plan.inner > 1 && plan.inner <= 4096) {
+        const std::int64_t dim = plan.inner;
+        const int rank = plan.outer_rank + 1;
+        /* 判据：所有轴**等长**。实测放宽到不等长会变慢（120 -> 134 ms）：
+         * 等长三角让每块都是完整的 TILE^rank 立方体，两侧访存都对齐；混合长度
+         * 会产生大量残块，tile 收益被抵消。 */
+        bool separable = rank >= 2 && rank <= 4;
+        for (int axis = 0; separable && axis < plan.outer_rank; ++axis) {
+            separable = extents[plan.order[axis]] == dim;
+        }
+        if (separable) {
+            /* 目的轴 0 = 内层轴；其余沿用 plan.order 的顺序。
+             * 源轴与之一一对应（同一组逻辑轴，只是步长不同）。 */
+            std::int64_t source_steps_all[kMaxRank];
+            std::int64_t destination_steps_all[kMaxRank];
+            destination_steps_all[0] = plan.inner_destination_step;
+            source_steps_all[0] = plan.inner_source_step;
+            for (int axis = 0; axis < plan.outer_rank; ++axis) {
+                destination_steps_all[axis + 1] = destination_steps[plan.order[axis]];
+                source_steps_all[axis + 1] = source_steps[plan.order[axis]];
+            }
+            constexpr std::int64_t kTile = 8;
+            const std::int64_t capacity = [] {
+                std::int64_t value = 1;
+                for (int axis = 0; axis < 4; ++axis) {
+                    value *= kTile;
+                }
+                return value;
+            }();
+            std::vector<T> block(static_cast<std::size_t>(capacity));
+            std::int64_t axis_extent[kMaxRank];
+            axis_extent[0] = dim;
+            for (int axis = 0; axis < plan.outer_rank; ++axis) {
+                axis_extent[axis + 1] = extents[plan.order[axis]];
+            }
+            std::int64_t base[kMaxRank] = {};
+            while (true) {
+                /* 本块各轴的跨度。 */
+                std::int64_t span[kMaxRank];
+                std::int64_t count = 1;
+                for (int axis = 0; axis < rank; ++axis) {
+                    const std::int64_t remaining = axis_extent[axis] - base[axis];
+                    span[axis] = remaining < kTile ? remaining : kTile;
+                    count *= span[axis];
+                }
+                std::int64_t local[kMaxRank] = {};
+                std::int64_t offset = 0;
+                for (int axis = 0; axis < rank; ++axis) {
+                    offset += base[axis] * source_steps_all[axis];
+                }
+                /* 读：源布局顺序 -> 连续 block。 */
+                for (std::int64_t index = 0; index < count; ++index) {
+                    block[static_cast<std::size_t>(index)] = source[offset];
+                    for (int axis = 0; axis < rank; ++axis) {
+                        offset += source_steps_all[axis];
+                        if (++local[axis] < span[axis]) {
+                            break;
+                        }
+                        local[axis] = 0;
+                        offset -= source_steps_all[axis] * span[axis];
+                    }
+                }
+                /* 写：连续 block -> 目的布局顺序。 */
+                offset = 0;
+                for (int axis = 0; axis < rank; ++axis) {
+                    local[axis] = 0;
+                    offset += base[axis] * destination_steps_all[axis];
+                }
+                for (std::int64_t index = 0; index < count; ++index) {
+                    destination[offset] = block[static_cast<std::size_t>(index)];
+                    for (int axis = 0; axis < rank; ++axis) {
+                        offset += destination_steps_all[axis];
+                        if (++local[axis] < span[axis]) {
+                            break;
+                        }
+                        local[axis] = 0;
+                        offset -= destination_steps_all[axis] * span[axis];
+                    }
+                }
+                /* 下一块。 */
+                bool finished = true;
+                for (int axis = 0; axis < rank; ++axis) {
+                    base[axis] += kTile;
+                    if (base[axis] < axis_extent[axis]) {
+                        finished = false;
+                        break;
+                    }
+                    base[axis] = 0;
+                }
+                if (finished) {
+                    break;
+                }
+            }
+            return;
+        }
+    }
+
     for (std::int64_t index = 0; index < outer; ++index) {
         const T* from = source + source_offset;
         T* to = destination + destination_offset;
@@ -1343,6 +1455,7 @@ int run_typed(const Table& table, void* const* operands, void* out) {
             trace ? TraceClock::now() : TraceClock::time_point{};
         const T* packed_left = left;
         if (step.pack_a) {
+
             T* buffer = reinterpret_cast<T*>(packed_a.data());
             run_copy_plan(left, buffer, step.copy_a, step.a_source_steps,
                           step.a_packed_steps, step.a_extent);
@@ -1350,6 +1463,7 @@ int run_typed(const Table& table, void* const* operands, void* out) {
         }
         const T* packed_right = right;
         if (step.pack_b) {
+
             T* buffer = reinterpret_cast<T*>(packed_b.data());
             run_copy_plan(right, buffer, step.copy_b, step.b_source_steps,
                           step.b_packed_steps, step.b_extent);
@@ -1378,6 +1492,7 @@ int run_typed(const Table& table, void* const* operands, void* out) {
         const TraceClock::time_point multiplied =
             trace ? TraceClock::now() : TraceClock::time_point{};
         if (step.pack_c) {
+
             run_copy_plan(result, reinterpret_cast<T*>(destination), step.copy_c,
                           step.c_source_steps, step.c_destination_steps,
                           step.c_destination_extents);

@@ -300,10 +300,10 @@ comparable.
 ### Generic-kernel benchmark (15 generic paths)
 
 ```bash
-python -m pyqcd.testing.einsum.bench_generic cpu double
-python -m pyqcd.testing.einsum.bench_generic cpu single
-python -m pyqcd.testing.einsum.bench_generic gpu double
-python -m pyqcd.testing.einsum.bench_generic --list
+python -m pyqcd.einsum.bench_generic cpu double
+python -m pyqcd.einsum.bench_generic cpu single
+python -m pyqcd.einsum.bench_generic gpu double
+python -m pyqcd.einsum.bench_generic --list
 ```
 
 These run the generic pairwise planner. This is the script behind the two tables
@@ -312,17 +312,18 @@ above.
 ### Specialized-kernel benchmark (15 specialized paths)
 
 ```bash
-python -m pyqcd.testing.einsum.bench_specialized cpu double
-python -m pyqcd.testing.einsum.bench_specialized cpu single
-python -m pyqcd.testing.einsum.bench_specialized gpu double
-python -m pyqcd.testing.einsum.bench_specialized --list
+python -m pyqcd.einsum.bench_specialized cpu double
+python -m pyqcd.einsum.bench_specialized cpu single
+python -m pyqcd.einsum.bench_specialized gpu double
+python -m pyqcd.einsum.bench_specialized --list
 ```
 
 Each row's `path` column reports what actually ran (`kernel: …` or
 `plan-cache`); a `WRONG` there means that row's numbers are invalid. The full
 list of specialized paths is in {doc}`appendix_specialized`.
 
-Both scripts are source-checkout only (they live under `pyqcd.testing`).
+Both scripts ship with the package (they live under `pyqcd/einsum/`), so
+`pip install pyqcd` is enough — no source checkout needed.
 
 ### The benchmark
 

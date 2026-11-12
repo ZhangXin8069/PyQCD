@@ -8,7 +8,7 @@ whitespace or output-order differences do not matter.
 The list is generated from the `wick_12cases` corpus, not typed by hand. Run
 `python -m pyqcd.testing._gen_specialized_appendix` to regenerate it.
 
-* pyqcd version: `0.3.8` (backend `cuda`, array backend `numpy`)
+* pyqcd version: `0.3.9` (backend `cuda`, array backend `numpy`)
 * specialized paths: **8638** (2582 base table + 6056 appendix variants)
 * distinct topology signatures: **8638**, indexed in **24** buckets
 

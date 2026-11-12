@@ -267,10 +267,10 @@ check(
 通用路径指**不命中** `wick_12cases` 语料、走通用分步规划器的形状：
 
 ```bash
-python -m pyqcd.testing.einsum.bench_generic cpu double
-python -m pyqcd.testing.einsum.bench_generic cpu single
-python -m pyqcd.testing.einsum.bench_generic gpu double
-python -m pyqcd.testing.einsum.bench_generic --list
+python -m pyqcd.einsum.bench_generic cpu double
+python -m pyqcd.einsum.bench_generic cpu single
+python -m pyqcd.einsum.bench_generic gpu double
+python -m pyqcd.einsum.bench_generic --list
 ```
 
 覆盖 15 种结构类别：matmul（实/复）、逐元素、外积、全归约、部分归约、
@@ -282,10 +282,10 @@ batches、trace、diagonal。
 特化路径指**命中**语料、走拓扑特化内核的形状：
 
 ```bash
-python -m pyqcd.testing.einsum.bench_specialized cpu double
-python -m pyqcd.testing.einsum.bench_specialized cpu single
-python -m pyqcd.testing.einsum.bench_specialized gpu double
-python -m pyqcd.testing.einsum.bench_specialized --list
+python -m pyqcd.einsum.bench_specialized cpu double
+python -m pyqcd.einsum.bench_specialized cpu single
+python -m pyqcd.einsum.bench_specialized gpu double
+python -m pyqcd.einsum.bench_specialized --list
 ```
 
 覆盖 15 条取自语料的真实方程，跨 6 到 16 个算子（2pt/3pt/4pt/5pt/6pt 几何，
@@ -297,7 +297,8 @@ python -m pyqcd.testing.einsum.bench_specialized --list
 （交错轮次、比值取中位数、每条样本约 0.3 s、计时前先用 `opt_einsum` 校验
 数值），因此数字可直接横向比较。
 
-两个脚本都只在源码仓库可用（位于 `pyqcd.testing` 下）。
+两个脚本随包发布（位于 `pyqcd/einsum/` 下），`pip install pyqcd` 即可使用，
+无需源码仓库。
 
 ### 基准实现
 

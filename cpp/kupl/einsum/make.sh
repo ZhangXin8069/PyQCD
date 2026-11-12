@@ -121,9 +121,14 @@ _discover_openblas() {
         local header=""
         local directory=""
         local candidate=""
+        # conda / venv 的 BLAS 不在 ldconfig 缓存里，必须显式搜 $CONDA_PREFIX 等前缀；
+        # 漏掉它们会让"其实装好了"的机器被误判为缺失（2026-11-12 实测）。
         for candidate in \
             "${OPENBLAS_ROOT:-}/include/cblas.h" \
             "${OPENBLAS_HOME:-}/include/cblas.h" \
+            "${CONDA_PREFIX:-}/include/cblas.h" \
+            "${CONDA_PREFIX:-}/include/openblas/cblas.h" \
+            "${VIRTUAL_ENV:-}/include/cblas.h" \
             /usr/local/include/cblas.h \
             /usr/include/cblas.h \
             /usr/include/x86_64-linux-gnu/openblas-pthread/cblas.h \
@@ -142,6 +147,23 @@ _discover_openblas() {
             if command -v ldconfig >/dev/null 2>&1; then
                 library=$(ldconfig -p 2>/dev/null | awk '$1 == "libopenblas.so" {print $NF; exit}')
             fi
+            # conda/venv 的库不进 ldconfig 缓存：按同一前缀补查。
+            if [ -z "$library" ] || [ ! -e "$library" ]; then
+                local search
+                for search in \
+                    "${CONDA_PREFIX:-}/lib" \
+                    "${VIRTUAL_ENV:-}/lib" \
+                    "$(dirname "$directory")/lib"; do
+                    if [ -n "$search" ] && [ -d "$search" ]; then
+                        local found
+                        found=$(ls "$search"/libopenblas.so* 2>/dev/null | head -n 1)
+                        if [ -n "$found" ]; then
+                            library=$found
+                            break
+                        fi
+                    fi
+                done
+            fi
             if [ -n "$library" ] && [ -e "$library" ]; then
                 _OPENBLAS_FLAGS+=("$library")
                 _OPENBLAS_SUMMARY="$header; $library"
@@ -155,7 +177,12 @@ _discover_openblas() {
 
 _discover_openblas
 if [ "$_OPENBLAS_SUMMARY" = "not found" ]; then
-    _pyqcd_notify "KUPL (CPU): warning: OpenBLAS not found at build time; the runtime loads it via dlopen (libcblas/libopenblas). Install libopenblas0 (apt) / openblas (conda), or set PYQCD_OPENBLAS_LIBRARY if the runtime cannot find it."
+    # KUPL 的 GEMM 全部经由 cblas，没有 BLAS 就等于没有通用内核：构建期就失败，
+    # 不要发一个"能装但一算就走纯 Python 回落"的包（用户明确要求直接报错）。
+    _pyqcd_fail "OpenBLAS (cblas)" \
+        "the KUPL native kernel performs every GEMM through cblas_sgemm/dgemm" \
+        "apt install libopenblas-dev | dnf install openblas-devel | conda install -c conda-forge openblas" \
+        "or set PYQCD_OPENBLAS_LIBRARY=/path/to/libopenblas.so (conda envs are auto-detected via \$CONDA_PREFIX)"
 fi
 read -r -a CXXFLAGS <<< "$FLAGS"
 
