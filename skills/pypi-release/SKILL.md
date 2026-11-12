@@ -165,15 +165,15 @@ twine 上传、CDN 传播等待、干净 venv 安装自检、回滚策略与双�
    _path, pinfo = pe.contract_path("ij,jk->ik", a, b)
    assert float(pinfo.opt_cost) == 48.0, pinfo.opt_cost
    n = len(pe.specializations())
-   assert n >= 5, n
+   assert n >= 8638, n
    print(f"backend={info['backend']} opt_cost={float(pinfo.opt_cost)} "
          f"specializations={n}")
    PY
    ```
 
    判据：`backend` 为 `python`/`kupl`/`cuda` 之一（缺工具链时 `python` 是**正确**的降级，
-   不是失败）；`opt_cost==48.0`；`specializations()` 当前为 **5**（0.3.5 起：删掉旧的
-nucleon-2pt/3pt 专用 kernel 后只剩 5 条 `plan-cache` 形态，其余 8638 条走拓扑特化）；
+   不是失败）；`opt_cost==48.0`；`specializations()` 当前为 **8638**（0.3.5 起：旧的
+5 条字面形态表已删除，`describe()` 改为返回 wick_12cases 全部语料路径）；
    11 个子包全部随包安装。2026-11-08 实测（无 `CXX`/`nvcc` 的干净 venv）：
    `backend=python opt_cost=48.0 specializations=9`，退出码 0，安装只发 RuntimeWarning。
 

@@ -200,11 +200,14 @@ numpy double contract  [('native', 'numpy', False, False)]
 `0,1,2,…`（`...` 固定 `-1`）：先扫描全部操作数（操作数顺序、操作数内指标顺序都
 不变），再扫描输出；无 `->` 时按 einsum 规则补隐含输出；非法方程返回 `None` 而不抛
 异常。因此 `ij,jk->ik`、`ij,jb->ib`、`ab,bc->ac` 同签名
-`((0,1),(1,2),(0,2))`；`ij,kj->ik`、`ij,jk->ki`、`jk,ij->ik` 都不同。`match()`
-三段：字面 `REGISTRY`（9 条，逐字符，历史行为不变）→ `FAMILIES`（由 9 条折叠出的
-9 个拓扑等价类）→ 语料摘要（`_topology_registry.TOPOLOGY_DIGESTS`，2582 条
-blake2b-128，惰性加载；`REPRESENTATIVES` 提供代表写法供报错使用）。三段都未命中时
-行为与旧实现完全一致。
+`((0,1),(1,2),(0,2))`；`ij,kj->ik`、`ij,jk->ki`、`jk,ij->ik` 都不同。
+
+**`match()` 只有一段：拓扑签名查语料索引**（`pyqcd/einsum/_specialize.py`）。
+旧的「字面 `REGISTRY`（9 条）→ `FAMILIES` → 语料」三段式**已删除**——那张字面表
+（`gauge-propagator(E4)`、`gamma-sandwich(E5)`、`sush-2pt(S1)`、`sush-3pt-munu(S2)`、
+`sush-2pt-mu(S3)`）是退役专用内核的遗留项，**不在** wick_12cases 语料内，留着会让
+人误以为支持的特化路径只有 5 条。现在语料 8638 条路径全部由拓扑入口服务，
+未命中即语料之外的方程。
 
 摘要口径必须与生成物一致：先 `canonical_signature`，再对
 `"|".join(",".join(map(str, term)) for term in signature)` 做 blake2b-128 十六进制。
@@ -226,9 +229,9 @@ blake2b-128，惰性加载；`REPRESENTATIVES` 提供代表写法供报错使用
 
 **新增一条拓扑内核**：
 
-1. 语料侧：在 `refer/sush/wick_12cases.md` 增加 `result_indx` 行；或直接在
-   `_specialize.REGISTRY` 增加字面条目（`name/kind/note`，`kernels` 可选）。
-   同签名的重复字面条目会被 `FAMILIES` 折叠，只有第一条生效。
+1. 语料侧：在 `refer/sush/wick_12cases.md` 增加 `result_indx` 行，然后重跑
+   `_wick_tasklist` / `_dedicated_step_tables` / `_topology_registry` 三个生成器。
+   不再有字面注册表可加——新增路径只能通过语料进入。
 2. 语料摘要：`_topology_registry.TOPOLOGY_DIGESTS` 必须含该签名的摘要，
    `REPRESENTATIVES` 必须含一条代表写法；按上面的摘要口径重算。**注意**：registry
    的 docstring 指向 `-m pyqcd.testing._topology_registry_regen`，该模块目前不在仓库
@@ -532,9 +535,9 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 因此 `ij,jk->ik` ≡ `ij,jb->ib` ≡ `ab,bc->ac` = `((0,1),(1,2),(0,2))`；
 `ij,kj->ik`、`ij,jk->ki`、`jk,ij->ik` 均不同。
 
-`match()` 三段式（`pyqcd/einsum/_specialize.py:285-307`）：字面 `REGISTRY`（9 条，逐字符，
-历史行为不变）→ `FAMILIES`（9 条折叠的拓扑等价类）→ 语料摘要
-（`_topology_registry.TOPOLOGY_DIGESTS`，惰性加载，首次 0.87–0.90 ms）。
+`match()` 单段式：拓扑签名 → 语料索引（`_topology_registry` 的
+`(元数, 槽位总数)` 二级分叉，惰性加载，首次 0.87–0.90 ms）。字面 `REGISTRY` 与
+`FAMILIES` 已随旧专用内核一并删除。
 
 摘要口径（改动语料时必须一致）：`"|".join(",".join(map(str, term)) for term in signature)`
 → `blake2b(digest_size=16).hexdigest()`（`_specialize.py:243-246`）。

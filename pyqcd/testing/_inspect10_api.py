@@ -99,7 +99,7 @@ assert float(info.opt_cost) == 54.0, info.opt_cost
 expr = pe.contract_expression("ij,jk->ik", a.shape, b.shape)
 assert np.allclose(expr(a, b), a @ b)
 assert pe.shape_only(((3, 3), (3, 3))) is not None
-assert pe.specializations()
+assert len(pe.specializations()) >= 8638, len(pe.specializations())
 assert set(("backend", "native_available", "array_backend")) <= set(pe.build_info())
 print("OK")
 """)

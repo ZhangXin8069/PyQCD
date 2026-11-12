@@ -909,3 +909,54 @@ def _is_output_sample(block): return "[pyqcd.einsum]" in block
 1. 「文档里的中文」不一定是文档问题——先问"这是库的输出吗"。
 2. 面向用户的提示一律走语言选择函数，不要 `print("中文")` 硬编码。
 3. 新加任何带语言的检查前，先区分"代码块"与"输出块"，否则会得到互相矛盾的两条门。
+
+## 18. 删掉字面注册表：它会让人以为"只支持 5 条路径"（2026-11-12）
+
+### 事故形态
+
+`_specialize.REGISTRY` 里留着 5 条手工字面形态：
+
+```
+gauge-propagator(E4)   zyxcTabn,zyxgTdef,Gae,Tzyxgc->TGdbfn
+gamma-sandwich(E5)     ab,...bce,cd->...dae
+sush-2pt(S1)           eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN
+sush-3pt-munu(S2)      gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG
+sush-2pt-mu(S3)        manb,cedf,bd,Mfn,ac,MFem->MF
+```
+
+它们是**退役专用内核时代**的登记项，`kind` 全是 `plan-cache`（只复用计划，没有
+内核）。新版拓扑内核覆盖语料全部 8638 条之后，这 5 条既没有执行意义，又在
+`specializations()` 里占据全部输出——用户第一眼看到的就是"支持 5 条"。
+
+**关键判据**：这 5 条**不在** `wick_12cases` 语料里（逐条对比 `_wick_tasklist.EQUATIONS`
+全为 False）。所以删除不损失任何覆盖率。
+
+### 删除清单（一处源 + 四处消费者）
+
+| 位置 | 改动 |
+|---|---|
+| `pyqcd/einsum/_specialize.py` | 删 `REGISTRY`；`FAMILIES` 置空（保留名字兼容外部诊断）；`match()` 收成单段（签名 → 语料索引）；新增 `_REMOVED_NAMES` 记录历史名字 |
+| `describe()` | 改为遍历 `_wick_tasklist.TASKS`，返回 8638 条真实方程 + 与运行时一致的 `topology:<摘要8位>` |
+| `_selfcheck()` | 改为断言"8638 条语料全部命中 + 语料外不误命中" |
+| `_topology_equations_contract.py` | `test_specialization_hit_is_stable_for_registered_forms` → `..._for_corpus_forms`（含 `_TESTS` 元组同步） |
+| `_topology_kernel_contract.py` | `_topology_equation()` 不再排除字面表 |
+| `_threads_contract.py` | 旧形态换成语料首条方程；形状按方程标签生成 |
+| `specialize_ab.py` | `print_registry()` 改打印 `describe()` |
+| `_gen_specialized_appendix.py` | 附录改为**逐条列出 8638 条**，按语料小节分组，带 `seq` |
+
+### 两个必踩的坑
+
+1. **改名测试函数要同步 `_TESTS` 元组**：只改 `def` 不改元组，`python -m` 直接
+   `NameError`（本模块不用 pytest 自动发现）。
+2. **删形态后线程档测试要换方程**：`_threads_contract` 原先用 `sush-2pt-mu(S3)`
+   验证"命中即切 kernel 档"。换成语料方程后，**手工写的 `shapes` 必须同步**——
+   我第一版留了旧的 6 个形状，与 `cadb,menf,ac,em,bd,fn->` 的 rank 完全对不上。
+   正确做法是按方程标签生成形状（同一标签全局同长）。
+
+### 判据
+
+```bash
+python -c "import pyqcd.einsum as pe; print(len(pe.specializations()))"   # 8638
+python -c "from pyqcd.einsum import _specialize as S; print(hasattr(S,'REGISTRY'))"  # False
+python -m pyqcd.einsum._specialize   # 必须打印 "8638 条语料全部命中（未命中 0 条）"
+```

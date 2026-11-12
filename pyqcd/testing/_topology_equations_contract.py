@@ -22,6 +22,7 @@ import string
 import numpy as np
 
 from ..einsum import _specialize as spec
+from ..einsum import _wick_tasklist as _tasklist
 from ..einsum import contract
 
 CASES_PATH = (pathlib.Path(__file__).resolve().parents[2]
@@ -146,14 +147,26 @@ def test_matching_is_whitespace_and_output_insensitive():
         spec.canonical_signature("ij,jk->ik")
 
 
-def test_specialization_hit_is_stable_for_registered_forms():
-    """已注册的 9 条形态：原名与改名写法都命中同一条目，未注册形态不误命中。"""
-    for subscripts, entry in spec.REGISTRY.items():
-        assert (spec.match(subscripts) or {}).get("name") == entry["name"]
-        renamed = _rename(subscripts)
-        if renamed != subscripts:
-            assert (spec.match(renamed) or {}).get("name") == entry["name"]
+def test_specialization_hit_is_stable_for_corpus_forms():
+    """语料形态：每条都命中，改名写法命中同一条，语料外不误命中。
+
+    旧的 5 条字面登记表（gauge-propagator/gamma-sandwich/sush-*）已随新版
+    拓扑内核移除——它们不在语料里，留着会让人误以为支持的特化路径只有 5 条。
+    """
+    missed = [task.seq for task in _tasklist.TASKS
+              if spec.match(task.equation) is None]
+    assert not missed, f"{len(missed)} 条语料未命中，例如 {missed[:5]}"
+
+    for task in _tasklist.TASKS[:200]:
+        original = spec.match(task.equation)
+        renamed = _rename(task.equation)
+        if renamed != task.equation:
+            assert (spec.match(renamed) or {}).get("name") \
+                == (original or {}).get("name")
+
+    # 语料之外的形状不得被特化（走通用路径）
     assert spec.match("ij,jk->ik") is None
+    assert spec.match("ab,bc->ac") is None
 
 
 _TESTS = (
@@ -162,7 +175,7 @@ _TESTS = (
     test_renamed_equations_keep_the_same_signature,
     test_structural_changes_do_not_collide,
     test_matching_is_whitespace_and_output_insensitive,
-    test_specialization_hit_is_stable_for_registered_forms,
+    test_specialization_hit_is_stable_for_corpus_forms,
 )
 
 

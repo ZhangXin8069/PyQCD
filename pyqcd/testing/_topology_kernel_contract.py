@@ -555,16 +555,18 @@ def test_corpus_sample_matches_generic_path():
 # ── 6. 失败回落 ─────────────────────────────────────────────────────────────
 
 def _topology_equation() -> str:
-    """挑一条**只**由拓扑入口服务的真实语料方程（不在字面注册表里）。"""
+    """挑一条由拓扑入口服务的真实语料方程。
+
+    字面注册表（gauge-propagator/gamma-sandwich/sush-*）已随新版拓扑内核删除，
+    现在**所有**语料方程都由拓扑入口服务，因此直接取第一条即可。
+    """
     from ..einsum import _specialize
 
     for equation in _equations():
-        if equation in _specialize.REGISTRY:
-            continue
         entry = _specialize.match(equation) or {}
         if entry.get("kind") == "kernel(topology)":
             return equation
-    raise unittest.SkipTest("语料里找不到只由拓扑入口服务的方程")
+    raise unittest.SkipTest("语料里找不到拓扑入口服务的方程")
 
 
 def test_native_failure_falls_back_with_one_warning():

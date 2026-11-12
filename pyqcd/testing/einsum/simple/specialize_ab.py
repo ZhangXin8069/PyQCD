@@ -41,7 +41,7 @@ VARIANTS = (('on', True), ('off', False))
 
 
 def subject_equations():
-    """默认方程集：``_common`` 方程表中命中 ``_specialize.REGISTRY`` 的那些。"""
+    """默认方程集：``_common`` 方程表中命中特化路径的那些。"""
     try:
         from pyqcd.einsum import _specialize
     except ImportError:  # pragma: no cover - 没有专用路径时退回全部方程
@@ -108,15 +108,16 @@ def _sci(value, width=9):
     return f'{value:{width}.2e}'
 
 
-def print_registry():
-    """打印 ``_specialize.REGISTRY``（形态表唯一真源，避免手抄）。"""
+def print_registry(limit=10):
+    """打印新版特化路径（语料拓扑，唯一真源是 ``_specialize.describe()``）。"""
     from pyqcd.einsum import _specialize
 
-    print(f'{"name":24s} {"kind":11s} {"note":44s} subscripts')
-    print('-' * 140)
-    for key, entry in _specialize.REGISTRY.items():
-        print(f'{entry.get("name", "?"):24s} {entry.get("kind", "?"):11s} '
-              f'{entry.get("note", ""):44s} {key}')
+    rows = _specialize.describe()
+    print(f'{"name":22s} {"kind":18s} subscripts')
+    print('-' * 110)
+    for name, kind, subscripts in rows[:limit]:
+        print(f'{name:22s} {kind:18s} {subscripts}')
+    print(f'... 共 {len(rows)} 条（只列前 {min(limit, len(rows))} 条）')
 
 
 def main(argv=None):

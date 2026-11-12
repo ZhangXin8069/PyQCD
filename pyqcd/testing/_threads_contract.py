@@ -67,17 +67,23 @@ def test_profile_switching_is_observable() -> None:
     with _env(OMP_NUM_THREADS=None, OPENBLAS_NUM_THREADS=None,
               PYQCD_EINSUM_OMP_THREADS=None, PYQCD_EINSUM_BLAS_THREADS=None):
         _threads.reset()
-        # sush-2pt-mu(S3)：仍在 REGISTRY 里的字面形态，命中即切到 kernel 档。
-        expr = "manb,cedf,bd,Mfn,ac,MFem->MF"
+        # 取一条真实语料方程：它是拓扑特化路径，命中即切到 kernel 档。
+        # 每条指标一个固定尺寸，同一指标在不同操作数里必须同长。
+        from ..einsum import _wick_tasklist
+
+        expr = _wick_tasklist.TASKS[0].equation
         rng = np.random.default_rng(0)
 
         def draw(*shape):
             return (rng.standard_normal(shape)
                     + 1j * rng.standard_normal(shape)).astype(np.complex128)
 
-        shapes = ((2, 2, 2, 3), (2, 2, 3, 2), (3, 3),
-                  (4, 2, 2), (2, 2), (4, 2, 2, 2))
-        registered = [draw(*shape) for shape in shapes]
+        sizes = {}
+        for term in expr.split("->")[0].split(","):
+            for label in term:
+                sizes.setdefault(label, 2 + (ord(label) % 2))
+        registered = [draw(*(sizes[label] for label in term))
+                      for term in expr.split("->")[0].split(",")]
         with contextlib.redirect_stdout(io.StringIO()):
             pe.contract(expr, *registered)
         assert _threads.current()["profile"] == "kernel"

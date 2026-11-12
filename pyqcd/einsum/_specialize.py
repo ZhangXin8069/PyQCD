@@ -54,34 +54,18 @@ FUSED_DISABLE_ENV = "PYQCD_EINSUM_DISABLE_FUSED"
 # 形态条目的值类型：字面条目只有字符串，拓扑条目另带 kernels/subscripts。
 Entry = dict[str, Any]
 
-# 形态键为规范化后的 subscripts（去空白）。
-REGISTRY: dict[str, dict[str, str]] = {
-    "zyxcTabn,zyxgTdef,Gae,Tzyxgc->TGdbfn": {
-        "name": "gauge-propagator(E4)",
-        "kind": "plan-cache",
-        "note": "peram × peram × γ × 规范场；Python 层无专用 kernel（计划缓存），CUDA 执行器在体积门内会内部融合（z*y*x<=1）",
-    },
-    "ab,...bce,cd->...dae": {
-        "name": "gamma-sandwich(E5)",
-        "kind": "plan-cache",
-        "note": "γ₅ 夹心；Python 层无专用 kernel（计划缓存），CUDA 执行器可能内部融合",
-    },
-    "eofp,ambn,cgdh,ce,mo,Nbdf,Mnph,ga->MN": {
-        "name": "sush-2pt(S1)",
-        "kind": "plan-cache",
-        "note": "sush NN 2pt 生产方程（仅复用计划缓存）",
-    },
-    "gahb,menf,codp,bd,Mfn,Mph,ac,MGem,MGog->MG": {
-        "name": "sush-3pt-munu(S2)",
-        "kind": "plan-cache",
-        "note": "sush 3pt 含 μν 插入（仅复用计划缓存）",
-    },
-    "manb,cedf,bd,Mfn,ac,MFem->MF": {
-        "name": "sush-2pt-mu(S3)",
-        "kind": "plan-cache",
-        "note": "sush 2pt 含 μ 插入（仅复用计划缓存）",
-    },
-}
+# 已废弃：历史上这里有一张 5 条的字面形态表（gauge-propagator(E4)、gamma-sandwich(E5)、
+# sush-2pt(S1)、sush-3pt-munu(S2)、sush-2pt-mu(S3)）。它们**不在** wick_12cases 语料里，
+# 只是旧专用内核时代的遗留登记项。新版特化内核按拓扑覆盖全部 8638 条语料路径后，
+# 这张表既不再有执行意义，也会让用户误以为"支持的特化路径只有 5 条"，故整体移除。
+# 保留名字只为让旧的调用点报错清楚，见 _REMOVED_NAMES。
+_REMOVED_NAMES = (
+    "gauge-propagator(E4)",
+    "gamma-sandwich(E5)",
+    "sush-2pt(S1)",
+    "sush-3pt-munu(S2)",
+    "sush-2pt-mu(S3)",
+)
 
 # 指标字符集与广播位。签名里广播位固定记作 -1，不占用首现编号。
 _LABELS = frozenset(string.ascii_letters)
@@ -198,25 +182,9 @@ def canonical_signature(subscripts: Any) -> tuple | None:
     return _signature_of_normalized(normalize(subscripts))
 
 
-def _build_families() -> dict[tuple, Entry]:
-    """把 :data:`REGISTRY` 的字面写法折叠成拓扑等价类：签名 → 形态条目。"""
-    families: dict[tuple, Entry] = {}
-    for subscripts, entry in REGISTRY.items():
-        signature = canonical_signature(subscripts)
-        if signature is None or signature in families:
-            continue
-        families[signature] = {
-            "name": entry["name"],
-            "kind": entry["kind"],
-            "note": entry["note"],
-            "kernels": kernel_labels(str(entry["name"])),
-            "subscripts": subscripts,
-        }
-    return families
-
-
-# 拓扑等价类：改字母、加空白、换输出宽度都命中同一条目（只用于 REGISTRY 未命中的写法）。
-FAMILIES: dict[tuple, Entry] = _build_families()
+# 旧的字面形态表移除后这里没有可折叠的条目；语料形态统一走 _topology_hit。
+# 保留该名字（空 dict）是为了兼容外部诊断代码的 `FAMILIES` 引用。
+FAMILIES: dict[tuple, Entry] = {}
 
 # 真实语料（refer/sush/wick_12cases.md 的 2582 条收缩）的拓扑摘要索引按需加载：
 # 数据块 300 KB+，放进 import 路径会拖慢 `import pyqcd.einsum`。
@@ -285,22 +253,16 @@ def enabled(specialize: bool | None = None) -> bool:
 def match(subscripts: str) -> Entry | None:
     """返回命中的专用路径描述，未命中返回 None。
 
-    两段式：先按字面查 :data:`REGISTRY`（与历史行为逐字符一致），未命中再按
-    :func:`canonical_signature` 的拓扑签名查 :data:`FAMILIES`。两段都未命中就是
-    旧实现的未命中 —— 调用方照旧回落到计划缓存路径。
+    唯一判据是**拓扑签名**：算出 :func:`canonical_signature` 后查语料索引
+    （:mod:`._topology_registry`，覆盖 wick_12cases 的全部 8638 条路径）。
+    因此 ``ij,jk->ik`` 与 ``ij,jb->ib`` 走同一条路，改字母、加空格、换输出宽度
+    都不影响命中。未命中即语料之外的方程，调用方照旧走通用路径。
     """
     if not isinstance(subscripts, str):
         return None
-    text = normalize(subscripts)
-    literal = REGISTRY.get(text)
-    if literal is not None:
-        return literal
-    signature = _signature_of_normalized(text)
+    signature = _signature_of_normalized(normalize(subscripts))
     if signature is None:
         return None
-    entry = FAMILIES.get(signature)
-    if entry is not None:
-        return entry
     digest = _topology_hit(subscripts, signature)
     if digest is not None:
         return _topology_entry(digest)
@@ -394,16 +356,32 @@ def announce_generic(subscripts: str = "", backend: str = "") -> None:
     print(message, flush=True)
 
 
-def describe() -> list[tuple[str, str, str]]:
-    """列出所有已注册形态：(name, kind, subscripts)。"""
-    return [(item["name"], item["kind"], key) for key, item in REGISTRY.items()]
+def describe(limit: int | None = None) -> list[tuple[str, str, str]]:
+    """列出所有支持的特化路径：(name, kind, subscripts)。
+
+    数据源是 wick_12cases 语料本身（8638 条），每条给出真实方程写法；
+    名字用该路径的拓扑摘要前 8 位，与运行时提示里打印的完全一致。
+    ``limit`` 只截断返回条数，不影响索引。
+    """
+    from . import _wick_tasklist as tasklist
+
+    rows: list[tuple[str, str, str]] = []
+    for task in tasklist.TASKS:
+        signature = canonical_signature(task.equation)
+        if signature is None:
+            continue
+        rows.append(("topology:" + _signature_digest(signature)[:8],
+                     "kernel(topology)", task.equation))
+        if limit is not None and len(rows) >= limit:
+            break
+    return rows
 
 
 ##### 人工自检入口（不属于测试注册文件）
 
 
 def _selfcheck() -> int:
-    """打印已注册签名并跑等价性断言；返回进程退出码。"""
+    """打印已支持的特化路径并跑等价性断言；返回进程退出码。"""
     failures: list[str] = []
 
     def check(label: str, condition: bool) -> None:
@@ -411,11 +389,17 @@ def _selfcheck() -> int:
         if not condition:
             failures.append(label)
 
-    print("已注册字面形态与拓扑签名：")
-    print(f"  {'name':22s} {'kind':28s} 签名")
-    for key, entry in REGISTRY.items():
-        print(f"  {entry['name']:22s} {entry['kind']:28s} {canonical_signature(key)}")
-    print(f"字面条目 {len(REGISTRY)} 条，拓扑等价类 {len(FAMILIES)} 个")
+    from . import _wick_tasklist as tasklist
+
+    rows = describe()
+    print("支持的特化路径（来自 wick_12cases 语料，按拓扑签名匹配）：")
+    print(f"  共 {len(rows)} 条；下面列出前 5 条：")
+    for name, kind, subscripts in rows[:5]:
+        print(f"  {name:22s} {kind:18s} {subscripts}")
+
+    print("\n语料全量命中（每条都必须匹配上）：")
+    missed = [task.seq for task in tasklist.TASKS if match(task.equation) is None]
+    check(f"8638 条语料全部命中（未命中 {len(missed)} 条）", not missed)
 
     print("\n等价性（应命中同一签名/同一形态）：")
     pairs = [
@@ -449,15 +433,11 @@ def _selfcheck() -> int:
         check(f"canonical_signature({bad!r}) is None",
               canonical_signature(bad) is None)
 
-    print(f"\n{len(REGISTRY)} 条字面写法仍按字面命中（回归不变）：")
-    for key, entry in REGISTRY.items():
-        hit = match(key)
-        check(f"{entry['name']} 字面命中 name/kind/note 一致",
-              hit is not None
-              and (hit["name"], hit["kind"], hit["note"])
-              == (entry["name"], entry["kind"], entry["note"]))
+    print("\n语料外的方程不误命中（走通用路径）：")
+    for outside in ("ij,jk->ik", "ab,bc->ac", "ijk->i"):
+        check(f"{outside} 不在语料 → None", match(outside) is None)
 
-    print("\n同一形态的字母重命名写法按拓扑命中（name 一致）：")
+    print("\n语料方程的字母重命名写法按拓扑命中：")
     letters = string.ascii_letters
 
     def renamed(subscripts: str, shift: int = 7) -> str:
@@ -466,18 +446,14 @@ def _selfcheck() -> int:
             for label in set(subscripts) if label in _LABELS})
         return subscripts.translate(table)
 
-    for key, entry in REGISTRY.items():
-        variant = renamed(key)
-        check(f"{entry['name']} 的改名写法命中同一 name",
-              variant != key
-              and (match(variant) or {}).get("name") == entry["name"])
-
-    print("\n形态声明的 kernels 与执行侧解析一致（防漂移）：")
-    from . import _api
-
-    for entry in FAMILIES.values():
-        check(f"{entry['name']} kernels={entry['kernels']}",
-              _api._kernel_labels_for(entry) == tuple(entry["kernels"]))
+    for task in tasklist.TASKS[:200]:
+        original = match(task.equation)
+        variant = renamed(task.equation)
+        if variant == task.equation:
+            continue
+        check(f"seq={task.seq} 改名仍命中同一 name",
+              (match(variant) or {}).get("name")
+              == (original or {}).get("name"))
 
     print()
     if failures:
