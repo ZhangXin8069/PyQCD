@@ -45,10 +45,6 @@ enum {
     QCD_PARAM_USE_BLAS = 7,
     QCD_PARAM_DTYPE_ID = 8,
     QCD_PARAM_LAYOUT_ID = 9,
-    QCD_PARAM_MPI_MODE = 10,
-    QCD_PARAM_MPI_SHARD_SYMBOL = 11,
-    QCD_PARAM_MPI_SHARD_AXIS = 12,
-    QCD_PARAM_MPI_OUTPUT = 13,
     QCD_PARAM_SIZE = 32
 };
 
@@ -67,22 +63,8 @@ enum {
     QCD_SET_SIZE = 16
 };
 
-enum {
-    QCD_MPI_MODE_OFF = 0,
-    QCD_MPI_MODE_BATCH = 1,
-    QCD_MPI_MODE_FREE = 2,
-    QCD_MPI_MODE_REQUIRE = 3
-};
-
-enum {
-    QCD_MPI_OUTPUT_GATHER = 0,
-    QCD_MPI_OUTPUT_LOCAL = 1
-};
-
 QCD_EINSUM_API int applyPlanQcd(long long set_ptrs, long long params);
 QCD_EINSUM_API int applyContractQcd(
-    long long plan, long long tensors, long long out, long long params);
-QCD_EINSUM_API int applyContractMpiQcd(
     long long plan, long long tensors, long long out, long long params);
 QCD_EINSUM_API int applyCompileQcd(
     long long plan, long long params, long long out_context);

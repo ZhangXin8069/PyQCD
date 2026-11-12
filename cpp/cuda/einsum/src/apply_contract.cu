@@ -1418,7 +1418,7 @@ constexpr uint64_t kCompiledContextMagic = 0x514345434f4e5458ULL;
 constexpr int32_t kMaxCudaStreams = 32;
 std::shared_mutex context_lifecycle_mutex;
 
-// TODO: streams are scoped to one CUDA device; MPI and multi-device scheduling are not implemented.
+// TODO: streams are scoped to one CUDA device; multi-device scheduling is not implemented.
 bool trace_enabled() {
     static const bool enabled = std::getenv("PYQCD_EINSUM_TRACE") != nullptr;
     return enabled;

@@ -611,6 +611,158 @@ class CallArena {
     std::size_t capacity_ = 0;
 };
 
+/* ------------------------------------------------------------------ 归约分支 */
+
+/* 归约分支的累加精度：与 KUPL 侧 `Accumulator<T>` 逐项同口径 —— 单精度升到双精度
+ * （复数同档：cuFloatComplex → cuDoubleComplex），双精度保持原位。
+ *
+ * 为什么要升档：M/N/K 任一为 1 时该步是纯缩放/广播归约，cuBLAS 会绕开分块内核直接
+ * 走 gemv。gemv 在 32F 计算下按 float 累加，长链（k 大）上新引入的舍入显著劣于
+ * cublasSgemm 的分块累加；KUPL 侧实测同一现象为 2.97e-04 vs 3.95e-05（差 7.5 倍）。
+ * 这里把累加器统一提到双精度再舍入回存储精度，两边口径一致。 */
+template <typename T>
+struct AccumTraits;
+
+template <>
+struct AccumTraits<float> {
+    using accum = double;
+};
+
+template <>
+struct AccumTraits<double> {
+    using accum = double;
+};
+
+template <>
+struct AccumTraits<cuFloatComplex> {
+    using accum = cuDoubleComplex;
+};
+
+template <>
+struct AccumTraits<cuDoubleComplex> {
+    using accum = cuDoubleComplex;
+};
+
+__device__ inline double to_accum(float value) { return static_cast<double>(value); }
+__device__ inline double to_accum(double value) { return value; }
+
+__device__ inline cuDoubleComplex to_accum(cuFloatComplex value) {
+    return make_cuDoubleComplex(static_cast<double>(value.x), static_cast<double>(value.y));
+}
+
+__device__ inline cuDoubleComplex to_accum(cuDoubleComplex value) { return value; }
+
+__device__ inline double zero_accum(double) { return 0.0; }
+__device__ inline cuDoubleComplex zero_accum(cuDoubleComplex) {
+    return make_cuDoubleComplex(0.0, 0.0);
+}
+
+/* 归约累加：实数与复数各一个重载，避免依赖 cuComplex 的 + / * 运算符重载差异。 */
+__device__ inline double accum_add(double left, double right) { return left + right; }
+__device__ inline cuDoubleComplex accum_add(cuDoubleComplex left, cuDoubleComplex right) {
+    return make_cuDoubleComplex(left.x + right.x, left.y + right.y);
+}
+
+__device__ inline double accum_mul(double left, double right) { return left * right; }
+__device__ inline cuDoubleComplex accum_mul(cuDoubleComplex left, cuDoubleComplex right) {
+    return make_cuDoubleComplex(left.x * right.x - left.y * right.y,
+                               left.x * right.y + left.y * right.x);
+}
+
+__device__ inline void from_accum(double value, float* destination) {
+    *destination = static_cast<float>(value);
+}
+
+__device__ inline void from_accum(double value, double* destination) { *destination = value; }
+
+__device__ inline void from_accum(cuDoubleComplex value, cuFloatComplex* destination) {
+    *destination = make_cuFloatComplex(static_cast<float>(value.x),
+                                       static_cast<float>(value.y));
+}
+
+__device__ inline void from_accum(cuDoubleComplex value, cuDoubleComplex* destination) {
+    *destination = value;
+}
+
+constexpr int kReduceThreads = 128;
+
+int reduce_blocks(std::int64_t elements) {
+    const std::int64_t blocks = (elements + kReduceThreads - 1) / kReduceThreads;
+    return static_cast<int>(std::min<std::int64_t>(blocks, 65535));
+}
+
+/* K == 1：纯缩放 C[b][m][n] = A[b][m] * B[b][n]（无归约，不进 BLAS）。 */
+template <typename T>
+__global__ void scale_k1_kernel(const T* a, const T* b, T* c, std::int64_t batch,
+                                std::int64_t m, std::int64_t n) {
+    const std::int64_t total = batch * m * n;
+    const std::int64_t stride = static_cast<std::int64_t>(blockDim.x) * gridDim.x;
+    for (std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         index < total; index += stride) {
+        const std::int64_t group = index / (m * n);
+        const std::int64_t rest = index % (m * n);
+        const std::int64_t row = rest / n;
+        const std::int64_t column = rest % n;
+        const auto product =
+            accum_mul(to_accum(a[group * m + row]), to_accum(b[group * n + column]));
+        from_accum(product, c + index);
+    }
+}
+
+/* N == 1：C[b][m] = Σ_k A[b][m][k] · B[b][k]，**双精度累加**（见 AccumTraits）。 */
+template <typename T>
+__global__ void reduce_n1_kernel(const T* a, const T* b, T* c, std::int64_t batch,
+                                 std::int64_t m, std::int64_t k) {
+    using Accum = typename AccumTraits<T>::accum;
+    const std::int64_t total = batch * m;
+    const std::int64_t stride = static_cast<std::int64_t>(blockDim.x) * gridDim.x;
+    for (std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         index < total; index += stride) {
+        const std::int64_t group = index / m;
+        const std::int64_t row = index % m;
+        const T* left = a + (group * m + row) * k;
+        const T* right = b + group * k;
+        Accum total_value = zero_accum(Accum{});
+        for (std::int64_t inner = 0; inner < k; ++inner) {
+            total_value = accum_add(
+                total_value,
+                accum_mul(to_accum(left[inner]), to_accum(right[inner])));
+        }
+        from_accum(total_value, c + index);
+    }
+}
+
+/* M == 1：C[b][n] = Σ_k A[b][k] · B[b][k][n]，同样双精度累加。 */
+template <typename T>
+__global__ void reduce_m1_kernel(const T* a, const T* b, T* c, std::int64_t batch,
+                                 std::int64_t n, std::int64_t k) {
+    using Accum = typename AccumTraits<T>::accum;
+    const std::int64_t total = batch * n;
+    const std::int64_t stride = static_cast<std::int64_t>(blockDim.x) * gridDim.x;
+    for (std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         index < total; index += stride) {
+        const std::int64_t group = index / n;
+        const std::int64_t column = index % n;
+        const T* left = a + group * k;
+        const T* right = b + group * k * n;
+        Accum total_value = zero_accum(Accum{});
+        for (std::int64_t inner = 0; inner < k; ++inner) {
+            total_value = accum_add(
+                total_value,
+                accum_mul(to_accum(left[inner]),
+                          to_accum(right[inner * n + column])));
+        }
+        from_accum(total_value, c + index);
+    }
+}
+
+int map_launch(cudaError_t error) {
+    return error == cudaSuccess
+               ? QCD_STATUS_OK
+               : (error == cudaErrorMemoryAllocation ? QCD_STATUS_MEMORY
+                                                     : QCD_STATUS_INTERNAL);
+}
+
 /* ------------------------------------------------------------------ cuBLAS */
 
 int map_cublas(cublasStatus_t status) {

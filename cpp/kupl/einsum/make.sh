@@ -38,12 +38,7 @@ _pyqcd_fail() {
 _pyqcd_explain_build_log() {
     local log=$1
     [ -f "$log" ] || return 0
-    if grep -q 'mpi\.h: No such file' "$log" 2>/dev/null; then
-        printf 'note: mpi.h was not found. Install Open MPI/MPICH development files\n' >&2
-        printf '      (apt install libopenmpi-dev, dnf install openmpi-devel, or\n' >&2
-        printf '      conda install -c conda-forge openmpi), or build the serial library\n' >&2
-        printf '      with PYQCD_EINSUM_ENABLE_MPI=0.\n' >&2
-    elif grep -q 'omp\.h: No such file' "$log" 2>/dev/null; then
+    if grep -q 'omp\.h: No such file' "$log" 2>/dev/null; then
         printf 'note: the OpenMP header omp.h is missing. Install a GCC toolchain with\n' >&2
         printf '      OpenMP (apt install build-essential, conda install gxx_linux-64) or\n' >&2
         printf '      drop -fopenmp via PYQCD_EINSUM_FLAGS.\n' >&2
@@ -51,29 +46,9 @@ _pyqcd_explain_build_log() {
         printf 'note: OpenBLAS/CBLAS was not found by the linker. Install it\n' >&2
         printf '      (apt install libopenblas-dev, conda install openblas) or point at it\n' >&2
         printf '      with PYQCD_OPENBLAS_LIBRARY / PYQCD_OPENBLAS_FLAGS.\n' >&2
-    elif grep -qE 'undefined reference to .?(MPI_|ompi_)' "$log" 2>/dev/null; then
-        printf 'note: MPI symbols are unresolved at link time. Link through mpicxx (or set\n' >&2
-        printf '      PYQCD_EINSUM_MPI_LINK_FLAGS="$(mpicxx --showme:link)"), or build the\n' >&2
-        printf '      serial library with PYQCD_EINSUM_ENABLE_MPI=0.\n' >&2
     fi
 }
 BUILD_LOG="$BUILD_DIR/build.log"
-MPI_SETTING=${PYQCD_EINSUM_ENABLE_MPI:-auto}
-case "$MPI_SETTING" in
-    1|on|ON|true|TRUE)
-        MPI_REQUEST=1
-        ;;
-    0|off|OFF|false|FALSE)
-        MPI_REQUEST=0
-        ;;
-    auto|AUTO)
-        MPI_REQUEST=auto
-        ;;
-    *)
-        printf 'error: invalid PYQCD_EINSUM_ENABLE_MPI=%s\n' "$MPI_SETTING" >&2
-        exit 2
-        ;;
-esac
 NATIVE_ARCH=${PYQCD_EINSUM_NATIVE_ARCH:-1}
 DEFAULT_FLAGS="-O3 -fopenmp -shared -fPIC -std=c++17 -fvisibility=hidden -Wall -Wextra"
 if [ "$NATIVE_ARCH" = "1" ]; then
@@ -102,206 +77,7 @@ if [ "$MODE" = clean ]; then
     exit 0
 fi
 
-# ---- MPI 可用性：按**链接结果**判定，而不是按 <mpi.h> 是否可见 ----
-#
-# 只看 mpi.h 会漏掉一类"能装不能跑"的产物：CXX 在集群/conda 环境里常被固定为
-# 普通 g++，而 mpi.h 可能经 CPATH/-I 可见。此时 mpi_runtime.cpp 会带着
-# -DPYQCD_EINSUM_ENABLE_MPI=1 编进来，链接却仍用不带 libmpi 的 g++，于是
-# DT_NEEDED 里没有 libmpi*，产物安装成功、dlopen 时才报
-#   undefined symbol: ompi_mpi_byte
-# （是"依赖没登记"，不是"库不存在"）。所以启用 MPI 的前提是：探针共享库的
-# DT_NEEDED 真的出现 libmpi/libmpich，且该依赖在加载期可解析。
-MPI_LINK_FLAGS=""
-MPI_SUMMARY=""
-_MPI_PROBE_DETAIL=""
-
-_mpi_wrapper() {
-    # 能自报链接参数的 MPI 编译器包装器（OpenMPI/MPICH/Intel 的常见名字）。
-    local candidate
-    for candidate in mpicxx mpic++ mpiCC; do
-        if command -v "$candidate" >/dev/null 2>&1; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
-    done
-    return 1
-}
-
-_mpi_wrapper_link_flags() {
-    local wrapper=$1 output probe
-    for probe in --showme:link -show -link_info; do
-        if output=$("$wrapper" "$probe" 2>/dev/null) && [ -n "$output" ]; then
-            printf '%s\n' "$output"
-            return 0
-        fi
-    done
-    return 1
-}
-
-_mpi_rpath_flags() {
-    # 把 -L<dir> 补成 rpath：运行期 dlopen 时才能定位到刚链上的 libmpi*。
-    local flag directory
-    for flag in $1; do
-        case "$flag" in
-            -L*)
-                directory=${flag#-L}
-                if [ -n "$directory" ] && [ -d "$directory" ]; then
-                    directory=$(realpath "$directory" 2>/dev/null || printf '%s' "$directory")
-                    printf -- '-Wl,-rpath,%s ' "$directory"
-                fi
-                ;;
-        esac
-    done
-}
-
-_mpi_library_dir() {
-    # MPI 运行库所在目录：补进 rpath，产物就不依赖运行时的 LD_LIBRARY_PATH。
-    local compiler=$1 name path
-    for name in libmpi.so libmpich.so; do
-        path=$("$compiler" -print-file-name="$name" 2>/dev/null || true)
-        case "$path" in
-            /*)
-                if [ -e "$path" ]; then
-                    dirname "$(realpath "$path" 2>/dev/null || printf '%s' "$path")"
-                    return 0
-                fi
-                ;;
-        esac
-    done
-    if command -v ldconfig >/dev/null 2>&1; then
-        for name in libmpi.so.40 libmpi.so.12 libmpich.so.12; do
-            path=$(ldconfig -p 2>/dev/null | awk -v want="$name" '$1 == want {print $NF; exit}')
-            if [ -n "$path" ] && [ -e "$path" ]; then
-                dirname "$(realpath "$path" 2>/dev/null || printf '%s' "$path")"
-                return 0
-            fi
-        done
-    fi
-    return 1
-}
-
-_mpi_headers_visible() {
-    printf '#include <mpi.h>\nint main(){return 0;}\n' |
-        "$1" $BASE_FLAGS -x c++ -E - >/dev/null 2>&1
-}
-
-_mpi_link_probe() {
-    # 用 $1 编译器、$2 追加链接参数构建引用 MPI 符号的探针 .so。
-    # 通过条件：链接期能真正解析 MPI 符号（-z defs，排除头文件与运行库 ABI 不一致），
-    # DT_NEEDED 含 libmpi*/libmpich*，且 ldd 无 "not found"。
-    local compiler=$1
-    local extra_flags=${2:-}
-    local source="$BUILD_DIR/mpi_link_probe.cpp"
-    local library="$BUILD_DIR/mpi_link_probe.so"
-    local missing=""
-    if ! command -v readelf >/dev/null 2>&1; then
-        _MPI_PROBE_DETAIL="readelf is unavailable, so the MPI dependency cannot be verified"
-        return 1
-    fi
-    mkdir -p "$BUILD_DIR"
-    printf '#include <mpi.h>\nvoid* pyqcd_mpi_link_probe(void) { return (void*)&MPI_Initialized; }\n' \
-        > "$source"
-    if ! "$compiler" $BASE_FLAGS $extra_flags -Wl,--no-undefined -shared \
-        "$source" -o "$library" >/dev/null 2>&1; then
-        _MPI_PROBE_DETAIL="'$compiler ${extra_flags:-}' cannot resolve MPI symbols at link time"
-        return 1
-    fi
-    if ! readelf -d "$library" 2>/dev/null | grep -qE 'NEEDED.*libmpi|NEEDED.*libmpich'; then
-        _MPI_PROBE_DETAIL="'$compiler ${extra_flags:-}' links without libmpi*/libmpich* in DT_NEEDED"
-        return 1
-    fi
-    if command -v ldd >/dev/null 2>&1; then
-        missing=$(ldd "$library" 2>/dev/null | grep 'not found' | head -n 1)
-        if [ -n "$missing" ]; then
-            _MPI_PROBE_DETAIL="MPI runtime is not resolvable at load time: $missing"
-            return 1
-        fi
-    fi
-    return 0
-}
-
-_mpi_resolve_link_flags() {
-    # 为 $1 编译器求出一组能让 DT_NEEDED 带上 MPI 运行库的链接参数。
-    local compiler=$1 wrapper="" flags="" with_rpath="" mpi_dir="" rpath=""
-    if mpi_dir=$(_mpi_library_dir "$compiler"); then
-        rpath="-Wl,-rpath,$mpi_dir"
-    fi
-    if [ -n "${PYQCD_EINSUM_MPI_LINK_FLAGS:-}" ]; then
-        if _mpi_link_probe "$compiler" "$PYQCD_EINSUM_MPI_LINK_FLAGS"; then
-            MPI_LINK_FLAGS=$PYQCD_EINSUM_MPI_LINK_FLAGS
-            MPI_SUMMARY="PYQCD_EINSUM_MPI_LINK_FLAGS"
-            return 0
-        fi
-        _MPI_PROBE_DETAIL="PYQCD_EINSUM_MPI_LINK_FLAGS: $_MPI_PROBE_DETAIL"
-        return 1
-    fi
-    # (1) CXX 本身是 MPI 包装器：链接命令已自带 MPI 运行库。
-    if _mpi_link_probe "$compiler" "$rpath"; then
-        MPI_LINK_FLAGS=$rpath
-        MPI_SUMMARY="$compiler already links the MPI runtime"
-        return 0
-    fi
-    # (2) 借用包装器报告的链接参数，并补齐 -L 目录的 rpath。
-    if wrapper=$(_mpi_wrapper) && flags=$(_mpi_wrapper_link_flags "$wrapper"); then
-        with_rpath="$flags $(_mpi_rpath_flags "$flags") $rpath"
-        if _mpi_link_probe "$compiler" "$with_rpath"; then
-            MPI_LINK_FLAGS=$with_rpath
-            MPI_SUMMARY="$wrapper link flags"
-            return 0
-        fi
-    fi
-    # (3) 最后退路：直接链 MPI 运行库。
-    for flags in "-lmpi" "-lmpich"; do
-        if _mpi_link_probe "$compiler" "$flags $rpath"; then
-            MPI_LINK_FLAGS="$flags $rpath"
-            MPI_SUMMARY="$flags"
-            return 0
-        fi
-    done
-    return 1
-}
-
-MPI_PROBE_CXX=${CXX:-}
-if [ -z "$MPI_PROBE_CXX" ] && [ "$MPI_REQUEST" != 0 ]; then
-    MPI_PROBE_CXX=$(command -v mpicxx 2>/dev/null || true)
-fi
-MPI_ENABLED=0
-case "$MPI_REQUEST" in
-    0)
-        MPI_SUMMARY="disabled by PYQCD_EINSUM_ENABLE_MPI=$MPI_SETTING"
-        ;;
-    *)
-        if [ -z "$MPI_PROBE_CXX" ]; then
-            MPI_SUMMARY="no MPI-capable C++ compiler on PATH"
-        elif ! _mpi_headers_visible "$MPI_PROBE_CXX"; then
-            MPI_SUMMARY="'$MPI_PROBE_CXX' cannot include <mpi.h>"
-        elif ! _mpi_resolve_link_flags "$MPI_PROBE_CXX"; then
-            MPI_SUMMARY="'$MPI_PROBE_CXX' cannot link the MPI runtime ($_MPI_PROBE_DETAIL)"
-        else
-            MPI_ENABLED=1
-        fi
-        ;;
-esac
-# 探针只是判定手段，构建目录里不留残留物（否则会出现在 git status 里）。
-rm -f "$BUILD_DIR/mpi_link_probe.cpp" "$BUILD_DIR/mpi_link_probe.so"
-if [ "$MPI_ENABLED" = 0 ] && [ "$MPI_REQUEST" = 1 ]; then
-    # 显式要求 MPI 时不允许静默降级：这正是"装着能跑、结果退回纯 Python"的成因。
-    printf 'error: PYQCD_EINSUM_ENABLE_MPI=%s was requested, but MPI cannot be used: %s\n' \
-        "$MPI_SETTING" "$MPI_SUMMARY" >&2
-    printf '       Set CXX to an MPI wrapper (e.g. mpicxx), pass the MPI link line with\n' >&2
-    printf '       PYQCD_EINSUM_MPI_LINK_FLAGS="$(mpicxx --showme:link)", or build the\n' >&2
-    printf '       serial library with PYQCD_EINSUM_ENABLE_MPI=0.\n' >&2
-    exit 2
-fi
-if [ "$MPI_ENABLED" = 0 ] && [ "$MPI_REQUEST" = auto ]; then
-    _pyqcd_notify "KUPL (CPU): MPI disabled ($MPI_SUMMARY)"
-fi
-
-if [ "$MPI_ENABLED" = 1 ]; then
-    DEFAULT_CXX=mpicxx
-else
-    DEFAULT_CXX=g++
-fi
+CXX=${CXX:-g++}
 CXX=${CXX:-$DEFAULT_CXX}
 if ! command -v "$CXX" >/dev/null 2>&1; then
     _pyqcd_fail "C++ compiler (${CXX})" \
@@ -319,9 +95,6 @@ if [ "$NATIVE_ARCH" = "1" ]; then
     _pyqcd_notify "KUPL (CPU): note: -march=native bakes this host's ISA; set PYQCD_EINSUM_NATIVE_ARCH=0 for portable binaries"
 fi
 FLAGS=$BASE_FLAGS
-if [ "$MPI_ENABLED" = 1 ]; then
-    FLAGS="$FLAGS -DPYQCD_EINSUM_ENABLE_MPI=1"
-fi
 
 _discover_openblas() {
     _OPENBLAS_FLAGS=()
@@ -402,11 +175,6 @@ BACKEND_SOURCES=()
 for source in "$SCRIPT_DIR"/src/*.cpp; do
     case "$(basename "$source")" in
         runtime.cpp|plan_core.cpp) ;;
-        mpi_runtime.cpp)
-            if [ "$MPI_ENABLED" = 1 ]; then
-                BACKEND_SOURCES+=("$source")
-            fi
-            ;;
         *) BACKEND_SOURCES+=("$source") ;;
     esac
 done
@@ -424,20 +192,14 @@ cat > "$VERSION_SCRIPT" <<'MAP'
   global:
     applyPlanQcd;
     applyContractQcd;
-    applyContractMpiQcd;
     applyCompileQcd;
     applyCompiledQcd;
     applyDestroyQcd;
     applyInitQcd;
     applyEndQcd;
-    qcd_kupl_nucleon_2pt;
-    qcd_kupl_nucleon_2pt_supported;
-    qcd_kupl_pattern_3pt;
-    qcd_kupl_pattern_3pt_supported;
     qcd_kupl_topology_apply;
     qcd_kupl_dedicated_apply;
     qcd_kupl_family_apply;
-    qcd_kupl_mpi_enabled;
   local:
     *;
 };
@@ -452,25 +214,17 @@ _pyqcd_notify "KUPL (CPU): compiling ${#SOURCES[@]} sources"
 printf 'pyqcd einsum KUPL build\n'
 printf '  compiler: %s\n' "$("$CXX" --version | head -n 1)"
 printf '  flags:    %s\n' "$FLAGS"
-if [ "$MPI_ENABLED" = 1 ]; then
-    printf '  MPI:      enabled (%s)\n' "$MPI_SUMMARY"
-    printf '  MPI link: %s\n' "${MPI_LINK_FLAGS:-<none>}"
-else
-    printf '  MPI:      disabled (%s)\n' "$MPI_SUMMARY"
-fi
 printf '  OpenBLAS: %s\n' "$_OPENBLAS_SUMMARY"
 printf '  sources:  %s\n' "$(for source in "${SOURCES[@]}"; do printf '%s ' "${source##*/}"; done)"
 printf '  output:   %s\n' "$PUBLIC_LIBRARY"
 
 set +e
-# shellcheck disable=SC2086  # MPI_LINK_FLAGS 是链接参数串，需按空格拆分
 "$CXX" "${CXXFLAGS[@]}" \
     -I"$SCRIPT_DIR/include" \
     "${SOURCES[@]}" \
     "${_OPENBLAS_FLAGS[@]}" \
     -Wl,--version-script="$VERSION_SCRIPT" \
     -Wl,-soname,libpyqcdeinsum_kupl.so \
-    $MPI_LINK_FLAGS \
     -o "$TEMP_LIBRARY" 2>&1 | tee "$BUILD_LOG"
 STATUS=${PIPESTATUS[0]}
 set -e
@@ -488,35 +242,6 @@ fi
 if ! nm -D --defined-only "$TEMP_LIBRARY" | awk '{print $NF}' | grep -qx applyPlanQcd; then
     printf 'error: built library does not export applyPlanQcd\n' >&2
     exit 1
-fi
-if [ "$MPI_ENABLED" = 1 ] &&
-    ! nm -D --defined-only "$TEMP_LIBRARY" | awk '{print $NF}' | grep -qx applyContractMpiQcd; then
-    printf 'error: MPI build does not export applyContractMpiQcd\n' >&2
-    exit 1
-fi
-
-# MPI 构建的硬校验：MPI 宏编进来了，DSO 就必须登记 MPI 运行库。否则产物能装、
-# 编译也"成功"，但 dlopen 会报 undefined symbol: ompi_mpi_byte，pyqcd.einsum
-# 只能退回纯 Python 路径。退出码 3 = "产物校验失败"（区别于编译失败），
-# setup.py 据此拒绝复用源码树里的旧库。
-if [ "$MPI_ENABLED" = 1 ]; then
-    if ! readelf -d "$TEMP_LIBRARY" 2>/dev/null | grep -qE 'NEEDED.*libmpi|NEEDED.*libmpich'; then
-        printf 'error: MPI build produced a library without an MPI runtime dependency\n' >&2
-        printf '       %s has no libmpi*/libmpich* in DT_NEEDED, so dlopen would fail with\n' \
-            "$TEMP_LIBRARY" >&2
-        printf '       "undefined symbol: ompi_mpi_*". Link flags used: %s\n' \
-            "${MPI_LINK_FLAGS:-<none>}" >&2
-        printf '       Set CXX=mpicxx (or PYQCD_EINSUM_MPI_LINK_FLAGS) and retry, or build\n' >&2
-        printf '       the serial library with PYQCD_EINSUM_ENABLE_MPI=0.\n' >&2
-        exit 3
-    fi
-    _MPI_MISSING=$(ldd "$TEMP_LIBRARY" 2>/dev/null | grep 'not found' || true)
-    if [ -n "$_MPI_MISSING" ]; then
-        printf 'error: MPI library leaves shared-library dependencies unresolved:\n%s\n' \
-            "$_MPI_MISSING" >&2
-        printf '       The library would fail to load with dlopen.\n' >&2
-        exit 3
-    fi
 fi
 
 mv -Tf "$TEMP_LIBRARY" "$BUILT_LIBRARY"

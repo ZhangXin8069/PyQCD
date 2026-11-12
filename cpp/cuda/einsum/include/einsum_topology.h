@@ -7,7 +7,7 @@
 
 /* CUDA 多操作数拓扑执行入口，与 KUPL 侧 `qcd_kupl_topology_apply` 同构：
  * 参数顺序、`QCD_DTYPE_*` 枚举、返回码语义逐项相同，CUDA 侧只在末尾多一个
- * stream 尾巴（与 `qcd_cuda_pattern_3pt` 的约定一致）。
+ * stream 尾巴（默认流，必须传 nullptr）。
  *
  * ---------------------------------------------------------------------------
  * 两种字节流（`plan` / `plan_len`）

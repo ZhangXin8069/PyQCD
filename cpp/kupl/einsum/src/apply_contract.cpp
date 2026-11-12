@@ -1,5 +1,4 @@
 #include "einsum_define.h"
-#include "einsum_mpi.h"
 #include "einsum_runtime.h"
 
 #include <algorithm>
@@ -1930,17 +1929,6 @@ extern "C" QCD_EINSUM_API int applyContractQcd(long long plan, long long tensors
     }
 }
 
-#if !defined(PYQCD_EINSUM_ENABLE_MPI)
-extern "C" QCD_EINSUM_API int applyContractMpiQcd(
-    long long plan, long long tensors, long long out, long long params) {
-    (void)plan;
-    (void)tensors;
-    (void)out;
-    (void)params;
-    return QCD_STATUS_INVALID;
-}
-#endif
-
 extern "C" QCD_EINSUM_API int applyCompileQcd(long long plan, long long params,
                                                long long out_context) {
     try {
@@ -1970,15 +1958,4 @@ extern "C" QCD_EINSUM_API void applyDestroyQcd(long long context) {
         destroy_compiled(context);
     } catch (...) {
     }
-}
-
-/* 构建标识：当前二进制是否编入了真实 MPI 分片实现。
- * 非 MPI 构建下 applyContractMpiQcd 是 fail-closed stub，本函数返回 0，
- * 供 Python 侧显式标注"非 MPI 版本"。 */
-extern "C" QCD_EINSUM_API int qcd_kupl_mpi_enabled(void) {
-#if defined(PYQCD_EINSUM_ENABLE_MPI)
-    return 1;
-#else
-    return 0;
-#endif
 }

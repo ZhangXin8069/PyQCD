@@ -219,15 +219,11 @@ cat > "$VERSION_SCRIPT" <<'MAP'
   global:
     applyPlanQcd;
     applyContractQcd;
-    applyContractMpiQcd;
     applyCompileQcd;
     applyCompiledQcd;
     applyDestroyQcd;
     applyInitQcd;
     applyEndQcd;
-    qcd_cuda_pattern_3pt;
-    qcd_cuda_pattern_3pt_free;
-    qcd_cuda_nucleon_2pt;
     qcd_cuda_topology_apply;
     qcd_cuda_dedicated_apply;
   local:
