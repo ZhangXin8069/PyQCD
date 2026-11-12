@@ -15,22 +15,22 @@
 | `pyqcd-gauge` | 纯规范路径、Wilson/Polyakov 圈、拓扑、流和涂抹 | 只有规范链接的观测量 |
 | `pyqcd-statistics` | 重采样、协方差、SVD、窗口和统计诊断 | jackknife/bootstrap、相关拟合 |
 | `pyqcd-analysis` | 已有数据的分析运行、物理量提取和图表；不定义谱模型或统计纪律 | ratio、有效质量、E0、FH、c0 |
-| `pyqcd-infra` | backend、设备/精度、I/O、MPI/显存规划、对照数据盘点与远程传输 | torch、HDF5、VdV/VVV、OOM、du、manifest、rsync |
-| `pyqcd-einsum` | opt_einsum 兼容收缩、原生 CUDA/KUPL、K-lowest 布局、MPI/stream 与性能门 | einsum、原生库、cuBLAS、OpenMP、3x、蒸馏基准 |
+| `pyqcd-infra` | backend、设备/精度、I/O、本机资源探测/显存预算、对照数据盘点与远程传输 | torch、HDF5、VdV/VVV、OOM、du、manifest、rsync |
+| `pyqcd-einsum` | opt_einsum 兼容收缩、原生 CUDA/KUPL、K-lowest 布局、stream 与性能门 | einsum、原生库、cuBLAS、OpenMP、3x、蒸馏基准 |
 | `pyqcd-pipeline` | 九步运行编排、守卫、断点续跑和一致性验证 | test0、test9、基线复现 |
 | `pyqcd-tmd-chain` | 梯度流胶子 TMD-PDF 的端到端导航 | 全链规划、阶段关系、状态判断 |
 | `pyqcd-tmd-algorithm` | TMD 几何、重整化、匹配、外推和物理验证门 | 算法实现、staple、soft、CS、匹配 |
 | `pyqcd-momentum-smear` | link-phased Wuppertal、source/sink/sequential one-smear 与相位链 | momentum smearing、boosted source、S-to-S/S-to-P |
 | `pyqcd-blending` | 低模加 stochastic complement 的 blended all-to-all 估计量 | blending、elemental、projected perambulator、n_ev/n_st |
 | `pyqcd-enhanced-interpolator` | boosted-hadron 增强内插、Euclidean conjugation 与局部缩并 | kinematic enhancement、gamma_plus、enhanced diquark |
-| `pyqcd-hisq-recover` | staggered/HISQ 到 naive 四旋量存储的 spin lift | HISQ recover、Omega(x)、full-grid、MPI parity |
+| `pyqcd-hisq-recover` | staggered/HISQ 到 naive 四旋量存储的 spin lift | HISQ recover、Omega(x)、full-grid、parity |
 | `pyqcd-ri-renorm` | RI/SMOM 动量学、双腿截肢与 raw bilinear factors | RI projection、amputated vertex、Zq/ZA/ZV |
 | `pyqcd-quark-renorm` | RI-to-MSbar conversion、running 与 profile provenance | quark conversion、anomalous dimension、MSbar running |
 | `pyqcd-gluon-renorm` | bare/gauge-fixed/renormalized 胶子观测量分界 | gluon renormalization、Clover、EMT、K_mu |
 | `pyqcd-helicity-renorm` | explicit-only legacy helicity/EMT matching 审计 | helicity matching、R12/R21、coupled running |
 | `pyqcd-quark-pdf` | 连通夸克梯度流准 PDF 全链导航 | 4D flow、ringed normalization、SFTE、quark matching |
 | `pyqcd-bare-matrix` | physical Tmin、AIC、bootstrap coverage 与 fallback 契约 | bare matrix、Sumratio、AIC、fit fallback |
-| `pyqcd-distillation` | LapH/Wick/perambulator/GEVP/MPI/I/O 安全链 | distillation、lqcddb、perambulator、Wick audit |
+| `pyqcd-distillation` | LapH/Wick/perambulator/GEVP/I/O 安全链 | distillation、lqcddb、perambulator、Wick audit |
 | `pyqcd-docs` | 中文 LaTeX、源码证据、PDF 和报告验收 | analy、pure、xelatex、版式 |
 
 ## 运维技能注册表
@@ -96,7 +96,7 @@ pyqcd-analysis / pyqcd-tmd-chain / pyqcd-pipeline -> pyqcd-docs
 错误处理和交接章节；其规则以根 `AGENTS.md` 的“form 格式约定”为准。
 
 共同内容只保留一个权威来源：轴序/单位/边界/证据状态写入 `pyqcd-conventions`，
-重采样/协方差/拟合纪律写入 `pyqcd-statistics`，后端/I/O/MPI/对照数据传输写入 `pyqcd-infra`。
+重采样/协方差/拟合纪律写入 `pyqcd-statistics`，后端/I/O/资源探测/对照数据传输写入 `pyqcd-infra`。
 其他技能通过名称路由，不复制整段规则；TMD 总览与 TMD 实现契约分离。
 
 ## 执行与验证约定

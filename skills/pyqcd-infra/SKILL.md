@@ -2,10 +2,9 @@
 name: pyqcd-infra
 description: |
   Use when a PyQCD task crosses backend selection, tensor I/O, ASCII or VdV/VVV
-  readers, MPI meta-task scheduling, rank-divergent failure handling, GPU
-  binding, memory planning, storage-bounded comparison-data sampling, or
-  resumable remote downloads; not for PyQUDA lattice-domain decomposition or
-  physical-observable definitions.
+  readers, local resource detection (CPU/GPU/RAM/disk), memory budgeting,
+  storage-bounded comparison-data sampling, or resumable remote downloads;
+  not for PyQUDA lattice-domain decomposition or physical-observable definitions.
 metadata:
   openclaw:
     emoji: 🧱
@@ -15,7 +14,7 @@ metadata:
 
 ## 目的与边界
 
-本入口只负责把基础设施问题路由到一个聚焦的契约：计算后端、数据 I/O、MPI 元任务，或
+本入口只负责把基础设施问题路由到一个聚焦的契约：计算后端、数据 I/O、本机资源探测，或
 跨项目对照数据的盘点与传输。
 它不含物理定义、传播子算法和统计拟合，也不把 PyQUDA 的 lattice domain decomposition
 与 PyQCD 的元任务调度混为一谈。OPE strict cache 的 artifact 命中、source identity 和
@@ -29,7 +28,7 @@ metadata:
 |---|---|---|
 | `set_backend`、torch/cupy、精度、`complex64` eigcompress、CPU/GPU 一致性 | [`references/backend.md`](references/backend.md) | backend/precision 与误差证据 |
 | h5、npy/npz、ASCII、V†V/VVV、`create_omega_accelerate`、env.json | [`references/io.md`](references/io.md) | 可 round-trip 的文件、元数据与收缩权重契约 |
-| MPI、显存公式、GPU 绑定、并行管线、OOM | [`references/parallel.md`](references/parallel.md) | dry-run、任务退出码和 rank0 产物 |
+| 本机资源探测（CPU/GPU/RAM/磁盘）、显存预算、OOM 判据 | [`references/parallel.md`](references/parallel.md) | `detect_resources` 快照与容量判据 |
 | `du` 盘点、1–2 TB 预算、组态级分层取样、eigen/perambulator 成本、远程清单和断点下载 | [`references/data-transfer.md`](references/data-transfer.md) | 可审计 manifest、体积闭合、完整性和下载脚本 |
 
 只涉及一个模式时只读对应文件；跨模式任务按“backend → I/O → parallel”依赖顺序读取。

@@ -784,14 +784,13 @@ LIMITATIONS = (
         'enforced_by': 'C++ 侧 std::copy；Python 侧只传 .ctypes.data',
     },
     {
-        'key': 'gpu-mpi-disk-status',
-        'statement': 'GPU 后端（CUDA/Metal）、MPI 分布式执行与磁盘张量接口的状态：'
-                     'GPU 为可用特性但本桥不涉及；MPI 仍在开发；'
-                     '磁盘张量接口尚未稳定。',
-        'impact': '本桥只覆盖主机 CPU 的 eager einsum，不能声称支持 GPU/MPI/'
+        'key': 'gpu-disk-status',
+        'statement': 'GPU 后端（CUDA/Metal）与磁盘张量接口的状态：'
+                     'GPU 为可用特性但本桥不涉及；磁盘张量接口尚未稳定。',
+        'impact': '本桥只覆盖主机 CPU 的 eager einsum，不能声称支持 GPU/'
                   'out-of-core 路径。',
         'source': 'docs latest 首页 Capabilities and Limitations；'
-                  'README（CUDA GPU backend and MPI are works in progress）',
+                  'README（CUDA GPU backend is a work in progress）',
         'enforced_by': 'C ABI 只有主机指针 + 单进程调用',
     },
 )

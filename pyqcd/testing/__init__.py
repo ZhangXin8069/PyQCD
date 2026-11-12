@@ -2579,7 +2579,7 @@ def test_correlated_fit_identifiability_guards():
 
 
 def test_threads_contracts():
-    """线程配置优先级：标准 env > 项目 env > 自动（按物理核 / MPI 等级数）。"""
+    """线程配置优先级：标准 env > 项目 env > 自动（按物理核数）。"""
     from . import _threads_contract as contract
 
     for name in sorted(dir(contract)):
@@ -2966,16 +2966,14 @@ def test_analysis_safety_contracts():
 
 
 def test_infra_safety_contracts():
-    """ASCII counter、legacy noise 枚举和 MPI 判定分类契约。"""
+    """ASCII counter 与 legacy noise 枚举的判定分类契约。"""
     from ._infra_safety_contract import (
         AsciiCounterSafetyContract,
         EigcompressSchemeSafetyContract,
-        MpiContractTimingSafetyContract,
     )
 
     _run_unittest_contract(AsciiCounterSafetyContract)
     _run_unittest_contract(EigcompressSchemeSafetyContract)
-    _run_unittest_contract(MpiContractTimingSafetyContract)
 
 
 def test_native_install_diagnostics_contracts():

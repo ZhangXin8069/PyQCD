@@ -10,8 +10,6 @@ source ./env.sh                      # 环境（若存在）
 python -m pyqcd.testing   # 全量测试（物理/链路、整合功能及回归契约；实际计数以命令输出为准）
 python -m pyqcd.testing.regression.consistency   # 冻结蒸馏基线一致性验证
 python -m pyqcd.testing.demos.tmd_gradient_flow   # 梯度流 TMD 全链示例
-python -m pyqcd.parallel --dry-run --confs 6250,6450   # MPI 并行规划预览（用户公式 N*a=n*b）
-mpirun -np N python -m pyqcd.parallel --confs ...      # MPI 元任务并行管线（N 由 plan_parallel 给出）
 bash data/from-logs/logs/test0/run-local.sh        # ana_3dir 三方向差异分析+作图测试（17 项断言）
 bash data/from-logs/logs/test0_ratio/run-local.sh  # 02_ratio 比值+拟合+图测试（22 项断言）
 bash data/from-logs/logs/test0_anaratio/run-local.sh  # 03_ana_ratio 纯画图测试（25 项断言）
@@ -168,7 +166,7 @@ min_significance=, require_same_sign=)` 显著性/符号门；复算用 9 组态
 结论保持 diagnostic_only（`|h_B|≲1`，无 CS 核、无 `x·g`），`python -m pyqcd.testing`
 108 passed/2 skipped/2 failed（两失败均为无 CUDA 设备的 GPU 契约，与改动无关）。
 
-## torch 后端 + h5 IO + MPI 并行（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
+## torch 后端 + h5 IO + 本机资源探测（pyqcd/tools/_torch_backend.py + pyqcd/parallel/）
 
 - 后端：`set_backend('torch')`（别名 gpu/cuda）全面替换 numpy/cupy；numpy/cupy 输入自动转
   torch（复数遵循全局精度）；`set_precision('complex64'|'complex128')` 精度切换；
@@ -176,13 +174,11 @@ min_significance=, require_same_sign=)` 显著性/符号门；复算用 9 组态
   linalg 等已包装）；torch.Tensor 补丁 transpose/astype/.T/repeat(axis=)/get/二元运算。
 - IO：管线产物一律 h5py 读写（`save_tensor_h5`/`load_tensor_h5`，numpy/torch/cupy 通用），
   读取层 `_load_any` 优先 .h5、回退 .npy/.npz（旧产物兼容）。
-- 并行：`pyqcd.parallel.plan_parallel` 按用户公式 N*a=n*b（a=单元任务显存、b=单卡可用显存
-  80%、n=GPU 数）给出进程数 N、批次 X=m/N、每卡进程 Y=N/n；`run_parallel_pipeline` 元任务
-  （step,conf）round-robin 调度 + GPU 绑定（rank mod n）+ 每任务后自动释放
-  （empty_cache+gc）；analysis/plots/report 仅 rank 0（分析作图不并行）。
+- 并行：`pyqcd.parallel` 只做只读资源探测（`detect_resources`：CPU 线程 / 内存 /
+  GPU 数与显存 / 磁盘），不调度任务、不起子进程。MPI 任务级并行（`parallel.einsum`、
+  `plan_parallel`、`run_parallel_pipeline`、KUPL/CUDA 的 MPI 分片）已整体删除。
 - 实测：torch CPU 梯度流 2.7–4.8x（vs numpy，逐位一致 max|d|~1e-15）；CPU 自动 8 线程
-  （16 线程过并行慢 40%）；vertex conf6250 GPU 36s（峰值 176MB）、2pt 337s（峰值 570MB）；
-  本机 1 卡+内存紧张时公式自动收敛 N=1。
+  （16 线程过并行慢 40%）；vertex conf6250 GPU 36s（峰值 176MB）、2pt 337s（峰值 570MB）。
 
 ## 蒸馏管线一致性测试（`pyqcd.testing.regression.distillation`）
 
@@ -288,8 +284,8 @@ matching_cc.py 重写）、2 处原版潜在 bug 的可运行化补全
 判定已在位（第三轮清查结论，零改动）：`_fitter.fit` 的 debug/debugNfit/NaN
 填充与 `cov_mat` 条件数返回（B11，子代理报告有误）；docker utils 文件日志
 工厂 setup_logging/print_banner/log_exception（与仓库 print/tlog 日志约定
-冲突，ProgressLog 已覆盖）；mpi_init 域分解搬运层 get_mpi_data/TScatter
-（范式不同于 pyqcd.parallel 元任务调度，预留未来）。
+冲突，ProgressLog 已覆盖）；lqcddb 的域分解搬运层 get_mpi_data/TScatter
+（依赖 MPI，随 MPI 支持一并删除，不再预留）。
 
 跳过（记录理由）：IOG reader（依赖 iog.so 二进制）、Chroma XML 生成器与
 SIDIS-DY 唯象层（依赖库外 evolution 模块）、contractadviser（性能顾问非物理，

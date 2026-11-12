@@ -97,13 +97,12 @@ left/right 的 K 均为最低维；KUPL 调用 CBLAS 时对 right 使用 transpo
 
 - CUDA 一般 batched GEMM 当前返回 `CUBLAS_STATUS_INVALID_VALUE`，状态码 3；不能以
   逐元素 CUDA 路径正确性替代。
-- CUDA K-last、一般 GEMM、compiled context、多 stream 与 E5 sandwich 已完成；
-  CUDA MPI rank 分片仍未实现（`applyContractMpiQcd` 当前为 fail-closed stub）。
-- KUPL MPI 第一阶段已通过真实 2-rank：仅分片一个保留到最终输出的 batch/free 轴，
-  rank-local 执行后 Allgatherv；被消去轴、广播分片和多轴分片仍 fail closed。
+- CUDA K-last、一般 GEMM、compiled context、多 stream 与 E5 sandwich 已完成。
+- MPI 支持（`applyContractMpiQcd`、`kupl/mpi.py`、`cuda/mpi.py`、`mpi_runtime.cpp`
+  与运行时预加载）已于 2026-11-12 整体删除，不再有 rank 分片入口。
 - KUPL 多进程 fallback 已实现并通过 25 项功能契约；32×64×64 小例为 `0.42x`
   串行速度，说明进程/shared-memory 开销占主导，不能写成性能加速。
-- MPI、多 CUDA stream、真实 2-rank/多 GPU 尚未完成数值与性能门。
+- 多 CUDA stream、多 GPU 尚未完成数值与性能门。
 - 固定 `opt_einsum` 子模块当前未初始化；两次 GitHub TLS/连接失败。开发对照使用本机
   `opt_einsum 3.4.0`，不能替代固定 `fccdd5aa` oracle 的最终证据。
 - 指定 `beta6.20_mu-0.2770_ms-0.2310_L24x64_cfg` 未在

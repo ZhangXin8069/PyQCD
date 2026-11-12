@@ -8,9 +8,8 @@ Detect the resources the user allows pyqcd to use:
 - GPU count & per-GPU VRAM (torch.cuda / nvidia-smi)
 - Free disk space (``shutil.disk_usage``)
 
-Used by ``pyqcd.parallel`` to plan the MPI process count following the
-user formula: N*a = n*b (N processes x per-task VRAM = total usable VRAM),
-batches X = m/N, and Y = N/n processes per GPU.
+Callers use the snapshot to size batch jobs or to decide how many worker
+processes fit this machine; nothing here starts a process or a runtime.
 """
 
 import os

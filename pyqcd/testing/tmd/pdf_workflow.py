@@ -26,7 +26,6 @@
     python -m pyqcd.testing.tmd.pdf_workflow --smoke
     python -m pyqcd.testing.tmd.pdf_workflow --conf-ids 6250 --momenta A
     python -m pyqcd.testing.tmd.pdf_workflow
-    mpirun -np N python -m pyqcd.testing.tmd.pdf_workflow --full
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 ---
 name: pyqcd-einsum
-description: Use when implementing, debugging, or benchmarking pyqcd.einsum against opt_einsum, especially native CUDA/KUPL execution, contraction-plan ABI, distillation workloads, vectorization, MPI, or CUDA streams.
+description: Use when implementing, debugging, or benchmarking pyqcd.einsum against opt_einsum, especially native CUDA/KUPL execution, contraction-plan ABI, distillation workloads, vectorization, or CUDA streams.
 ---
 
 # pyqcd-einsum - 原生兼容收缩引擎
@@ -9,7 +9,7 @@ description: Use when implementing, debugging, or benchmarking pyqcd.einsum agai
 
 本技能维护 `pyqcd.einsum` 的兼容 API、收缩规划、原生 ABI、CUDA/KUPL 执行、
 蒸馏实战基准与性能门禁。它不定义 LapH/Wick 物理语义，也不替代 `pyqcd-infra`
-对 backend、显存、MPI 和计时平台的统一契约。
+对 backend、显存和计时平台的统一契约。
 
 状态词：
 
@@ -24,10 +24,10 @@ description: Use when implementing, debugging, or benchmarking pyqcd.einsum agai
   [references/native-implementation.md](references/native-implementation.md)。
 - **动构建、性能测量或接线专用 kernel 之前必读**
   [references/measured-pitfalls.md](references/measured-pitfalls.md)：
-  记录了 2026-11-08 会话中实测踩到的构建坑（CUDA 架构默认值、同名头文件冲突、MPI 探测误判）、
+  记录了 2026-11-08 会话中实测踩到的构建坑（CUDA 架构默认值、同名头文件冲突）、
   测量坑（预热不足、对照变成 kernel 比 kernel、用现编 .so 冒充生产库、逐元素误差误判）、
   正确性坑（输出全 1 维未写、设备 kernel 缺连续性校验、异常不回退、开关未进缓存键）
-  与已知限制（`contract_expression` 不走 kernel、CUDA MPI 是 stub、E4 融合仅极小规模生效）。
+  与已知限制（`contract_expression` 不走 kernel、E4 融合仅极小规模生效）。
 - 只做 API/物理缩并语义时，沿用 `pyqcd-distillation` 与
   `pyqcd-infra`，不要复制其完整规则。
 
@@ -44,9 +44,8 @@ description: Use when implementing, debugging, or benchmarking pyqcd.einsum agai
    多步收缩在 C++/CUDA 内完成。中间结果与工作区必须复用，避免逐步 Python dispatch。
 5. **后端独立**：KUPL 不链接 CUDA，CUDA 不调用 PyQCU 库；两边共享 ABI 与计划格式，
    数值实现保持独立。生产代码不得 import `refer/` 或 `pyqcd.testing`。
-6. **并行分层**：CUDA 为 MPI rank → 单 device context → 多 stream 批任务；KUPL 为
-   MPI rank → 多进程/OpenMP → SIMD。多 rank 只切独立 batch，任何跨 rank 求和必须用
-   对称 collective；不得让 rank 提前返回。
+6. **并行分层**：CUDA 为单 device context → 多 stream 批任务；KUPL 为多进程/OpenMP →
+   SIMD。跨进程拆分与结果聚合由调用方负责，引擎本身不建通信域、不做 collective。
 7. **性能门禁**：CPU 对 CPU、GPU 对 GPU，固定 dtype、线程、设备、输入、规划与
    stream；预热后取至少 10 次中位数。目标为 opt_einsum 的 3x，且结论需多轮复测。
    低于目标必须返回非零，不能只打印 warning。
@@ -64,7 +63,7 @@ description: Use when implementing, debugging, or benchmarking pyqcd.einsum agai
 - CUDA 编译、动态导出与 Cython 加载已 `implemented`，但一般 cuBLAS GEMM 路径仍
   `unverified`，不得用逐元素路径通过代替 batch GEMM 通过。
 - 开发窗口 CPU T0 四条方程约 `3.0x-18x`，CUDA V100/P100 E5 约
-  `3.49x-4.07x`；但固定 oracle、进程隔离、MPI/MP 与目标系综仍未全部闭合，
+  `3.49x-4.07x`；但固定 oracle、进程隔离、MP 与目标系综仍未全部闭合，
   因此只能标为 provisional，不能升级为 `performance-validated`。
 
 ## 性能调试与路径选择（2026-11-08 实测）
@@ -276,17 +275,17 @@ blake2b-128，惰性加载；`REPRESENTATIVES` 提供代表写法供报错使用
 
 | 档 | 何时用 | OMP | BLAS | 为谁调 |
 |---|---|---:|---:|---|
-| `kernel` | `_specialize.match(eq)` 命中 2pt/3pt 等注册形态 | 物理核数（≤8） | ≤4 | 专用 kernel |
+| `kernel` | `_specialize.match(eq)` 命中注册形态（E4/E5/S1–S3）或语料拓扑 | 物理核数（≤8） | ≤4 | 拓扑/步表 kernel |
 | `generic` | 其余所有调用（GEMM 链、打包、分步） | 核数//2（≥1） | 2–4 | BLAS |
 
 优先级（高 → 低）：`OMP_NUM_THREADS`/`OPENBLAS_NUM_THREADS` → `PYQCD_EINSUM_OMP_THREADS`/
-`PYQCD_EINSUM_BLAS_THREADS` → 自动（`OMP=min(cores,8)`、`BLAS=clamp(cores//2,1,4)`，按 MPI rank
-均分）→ `PYQCD_EINSUM_THREADS=off` 全关。自己导出的变量记在 `_state["exported_env"]`，
+`PYQCD_EINSUM_BLAS_THREADS` → 自动（`OMP=min(cores,8)`、`BLAS=clamp(cores//2,1,4)`）→
+`PYQCD_EINSUM_THREADS=off` 全关。自己导出的变量记在 `_state["exported_env"]`，
 `_pinned()` 会忽略它们，否则档位切换会把自己"钉死"。
 
 - **命令**：`python -c "from pyqcd.einsum import _threads; print(_threads.profiles()); print(_threads.describe())"`
 - **期望**（4 物理核/8 线程本机）：`{'kernel': (4, 2), 'generic': (2, 4)}` 与
-  `threads: omp=4 blas=2 [auto kernel (4 physical cores, 1 rank); runtime: blas]`。
+  `threads: omp=4 blas=2 [auto kernel (4 physical cores); runtime: blas]`。
   `runtime:` 里没有 `gomp` 只表示 `libgomp` 还没映射（按 `/proc/self/maps` 探测），不是错误，
   但要写进报告。
 - **关闭**：`PYQCD_EINSUM_THREADS=off python -c "from pyqcd.einsum import _threads; print(_threads.describe())"`
@@ -442,35 +441,6 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 
 复盘全文：`docs/report_direct_mode_postmortem_20261111.md`。
 
-### 任务级并行：`pyqcd.parallel.einsum` 的 `init` + `run`（2026-11-11 实测）
-
-单次收缩的并行度有限，真正能榨干硬件的是**把一批相互独立的收缩分给多个 MPI 进程**。
-入口是 `init(config, ...)` + `run(state)`：`init` 只接受列式字典
-`{task_id, equation, operands, results}` 并规划，`run` 无返回值、结果原地写入调用方
-缓冲区；`plan_tasks` 只规划。不提供一体化包装（避免与第三方 Einsums 库混淆）。实测（本机 4 物理核/8 线程，真实 sush S1 方程，
-`complex64`，单线程基准，结果与串行逐位一致）：
-
-| 模式 | 工作负载 | 串行 | plan（`init`） | exec（`run`） | `×exec` |
-|---|---|---|---|---|---|
-| 自建池（4 进程） | S1 Nvec=40 × 8 | 165 ms | 1 ms | 255 ms | 0.65× |
-| 自建池（4 进程） | S1 Nvec=100 × 8 | 5310 ms | 1 ms | 2241 ms | **2.37×** |
-
-四条硬结论：
-
-1. **`init` 与 `run` 必须分开计时**：`init` 里跑 `contract_path` 做规划，`run` 才是真实执行。
-   合成一个计时桶会把规划算进"计算时间"；harness 现在同时打印 `plan`/`exec`/`total`。
-2. **`collective` 已弃用且不再纳测**：它曾是最快模式（4 rank 3–4×，零序列化），但每个 rank
-   各持一份整批输入，内存随 rank 数线性增长；不要再引用它的基准，也不要为它写新测试。
-3. **工时估计用 `contract_path(optimize='greedy').opt_cost`**，逐元素方程以元素数兜底，
-   再 LPT 装箱；不要用「任务数均分」——那会产生短板。
-4. **线程超订是这里最容易踩的坑**：父进程若把 `OMP_NUM_THREADS` 写进环境，worker 会当成
-   用户显式设置照搬，K 进程 × 全线程在 4 物理核上把并行收益吃掉一大半。自建池已按
-   `物理核数 // 进程数` 重算；手工 `mpirun` 时请自行导出单线程变量。
-
-复现：`python -m pyqcd.testing.parallel_einsum bench --equation S1 --nvec 40 --procs 4`；
-契约 16 项 `python -m pyqcd.testing._parallel_einsum_contract`。
-报告：`docs/parallel_einsum_20261111.md`。
-
 ### 已知限制（不要声称已支持）
 
 | 项 | 现状与判据 |
@@ -480,7 +450,7 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 | E4 融合在公开入口基本不可达 | R33 的 cupy 委派在规划前就把 E4 交给 `cupy.einsum`（`_cuda_fused_shape` 只认 E5）。实测 `contract(E4, *cupy_ops)` 分支探针只有 `[('backend','cupy')]`；**传 `out=` 绕过委派后**才回到原生执行器，此时 trace 才有 `PYQCD_EINSUM_CUDA_E4 … kernel=1`。要验证 E4 融合就必须带 `out=`。 |
 | `[plan-cache]` 不代表 C++ 没融合 | Python 层只判断"命中注册形态"，E4/E5 在 Python 没有专用 kernel，恒打 `[plan-cache]`。是否真融合看 `PYQCD_EINSUM_TRACE=1` 的 `… kernel=1`。 |
 | 批量形态内存约 3× opt | `8×512²`：`opt_einsum` 16 MB vs `pyqcd` 52 MB（打包工作区）。长批量作业按此估 RSS/显存。 |
-| 其余 | `contract_expression` 不走专用 kernel；CUDA MPI 是 fail-closed stub；细节见 `references/measured-pitfalls.md`。 |
+| 其余 | `contract_expression` 不走专用 kernel；细节见 `references/measured-pitfalls.md`。 |
 
 ## 验收门
 
@@ -492,7 +462,7 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
    逐类覆盖；不支持项必须走显式回退。
 4. CUDA 同 plan 在 `sm_60` 与 `sm_70` 实机执行；检查 device synchronize、stream
    依赖、错误码与中间 buffer 释放。
-5. KUPL 检查 OpenMP 线程数、SIMD 连续 K、MPI rank 对称性和工作区复用。
+5. KUPL 检查 OpenMP 线程数、SIMD 连续 K 和工作区复用。
 6. 性能 JSON 必须保存 oracle commit/version、设备 UUID、线程、stream、warmup、
    iterations、path hash、median/IQR、峰值内存和正确性摘要；所有 3x 项 PASS 才可
    声明 `performance-validated`。
@@ -514,12 +484,12 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 - 将 K 放在高维或依赖隐式跨步，导致 SIMD lane 和 CUDA warp 访存离散。
 - 用逐元素 CUDA 正确性替代 cuBLAS batched GEMM 正确性。
 - benchmark 固定执行顺序、无预热、无同步、混用 `optimal/dp` 或低倍率仍返回 0。
-- 把 MPI/多 stream 的吞吐加速冒充算法单流加速；两者必须分别报告。
+- 把多 stream 的吞吐加速冒充算法单流加速；两者必须分别报告。
 
 ## 交接
 
 - 物理方程与 LapH 轴序：`pyqcd-distillation`、`pyqcd-physics-correlator`。
-- backend、设备、MPI、显存和计时基础：`pyqcd-infra`。
+- backend、设备、显存和计时基础：`pyqcd-infra`。
 - CUDA/KUPL 构建参考经验：PyQCU 原理吸收后自包含实现，不在运行时引用。
 - 报告或 PDF 验收：`pyqcd-docs`。
 
@@ -724,3 +694,50 @@ dim=16→5.54 MB(L3)、dim=24→38 MB(DRAM)。
 
 **踩坑**：基础表的 `subtable` 为空字符串，附录才带 `动量/3.2` 之类；
 按 `(case, subtable)` 查时两者别混。
+
+### [T1] 彻底删除 MPI 与 2pt/3pt 专用 kernel（2026-11-12 实测）
+
+用户要求 `qcd-einsum` 不再有任何 MPI 相关内容，同时保留「通用内核 + 新版特化内核」。
+已删除：`nucleon2pt`/`pattern_3pt`（KUPL/CUDA 的 .cpp/.cu/.h 共 8 个文件）、
+`kupl/mpi.py`、`cuda/mpi.py`、`kupl/src/mpi_runtime.cpp`、`kupl/include/einsum_mpi.h`、
+`pyqcd/parallel/{_mpi,_mpi_transport,einsum}.py`、`pyqcd/testing/{parallel_einsum,_parallel_einsum_contract,_mpi_*_contract,_native_loader_contract}.py`、
+`pyqcd/testing/einsum/{verify_mpi,verify_cuda_mpi,bench_cuda_mpi}.py` 与
+`pyqcd/testing/comparisons/lqcddb/mpi_test.py`。保留 `apply_contract`/`runtime`/`plan_core`/
+`pack`/`apply_plan`/`e4_fused`/`sandwich`/`batched_gemm` 与 `dedicated_apply`/`topology_apply`/
+`topology_gemm.h`/`einsum_topology.h`/`einsum_dedicated.h`。
+
+踩坑与修法（都可用一条命令复现）：
+
+1. **`multiprocess.py` 隐性依赖被删模块**：它从 `kupl/mpi.py` import
+   `_initial_labels` / `_validate_plan` / `MpiConfig`。删掉 `mpi.py` 后
+   `import pyqcd.einsum` 立刻 `ModuleNotFoundError`。这两个函数只是纯 plan 校验，
+   内联到 `multiprocess.py` 并改用本文件的 `MpConfigError`；`verify_multiprocess.py`
+   里“MPI/MP 互斥”一条随 `MpiConfig` 一起删除。**先跑 `python -c "import pyqcd.einsum"`
+   再继续删**，否则错误会拖到测试阶段。
+2. **旧测试用被删形态当夹具**：`_contract_edge_cases.test_kernel_skip_warns_immediately`
+   用 P1 方程 + 16 个操作数（方程只有 15 项），原先靠专用 kernel 提前拦截才不报错；
+   删除注册后 parser 直接抛 `Number of einsum subscripts, 15, must be equal to ... 16`。
+   改为直接驱动 `_api._warn_kernel_skipped_once(entry, reasons)` 并断言只告警一次。
+   `_threads_contract.test_profile_switching_is_observable` 用 E1 命中 `kernel` 档，
+   删除 E1 后恒为 `generic`；换成仍注册的 S3（`manb,cedf,bd,Mfn,ac,MFem->MF`）即可。
+3. **`build_info()` 去字段要同步所有读者**：删掉 `mpi`/`kupl_mpi_build`/`mpi_label`
+   后，`__main__.py` 的打印、`_release_metadata_contract` 的键集合、
+   `_api._native_compile_warning` 的 `report['mpi_preload']` 都要一起改；
+   漏一处就是 `KeyError` 或断言失败。
+4. **C++ 双侧必须逐字节同步**：`cpp/{kupl,cuda}/einsum/include/einsum_define.h`
+   被 `make-nv.sh` 用 `cmp` 比较；改 `QCD_PARAM_MPI_*` / `QCD_MPI_MODE_*` /
+   `applyContractMpiQcd` 声明时两份要同样改。另需清 `make.sh` 里的 MPI 探测块
+   （否则它仍去编已删除的 `mpi_runtime.cpp`）、version script 的
+   `qcd_kupl_nucleon_2pt*` / `qcd_cuda_pattern_3pt*` / `applyContractMpiQcd`、
+   `apply_contract.cpp` 的 `#include "einsum_mpi.h"` 与 `qcd_kupl_mpi_enabled()`。
+5. **残留 grep 有假阳性**：`pyqcd/renorm/**` 的 `mpi` / `MPI_PHYSICAL` 是 pion mass
+   （m_π）数学符号，不是 MPI；`compiled`/`compile` 含子串 `mpi`。按
+   `grep -rn "mpi4py\|MPI\." pyqcd/ --include="*.py"` 判据，删除后只应命中
+   明确写“已删除/不提供”的说明文档字符串。
+
+验证（本机 2026-11-12）：`bash cpp/kupl/einsum/make.sh` → SUCCESS（7 源，
+导出 `applyPlanQcd/applyContractQcd/applyCompileQcd/applyCompiledQcd/applyDestroyQcd/
+applyInitQcd/applyEndQcd` + `qcd_kupl_{topology,dedicated,family}_apply`）；
+`bash cpp/cuda/einsum/make-nv.sh` → SUCCESS（9 源，sm_89）；
+`python -B -m pyqcd.testing` → **118 passed, 1 skipped, 0 failed**
+（skip 是 `physics.sty` 缺失，与本改动无关）。

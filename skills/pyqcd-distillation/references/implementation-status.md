@@ -15,8 +15,8 @@
 | GEVP | source real-projects complex matrices | complex Hermitian fixed and tested | state tracking、conditioning、真实矩阵 |
 | Stout smearing | source has known implementation risks | port tested identity/unitarity/action/backend | historical production equivalence not established |
 | contraction adviser | heuristic | diagnostic only | ellipsis accounting/efficiency not hardware-validated |
-| MPI domain transport | source module imported eagerly | separate `_mpi_transport` port | not the main reliability path |
-| MPI meta-task pipeline | n/a | implemented, tested | TMD parallel step intentionally rejected |
+| MPI domain transport | source module imported eagerly | removed with the MPI support | no distributed transport in PyQCD |
+| MPI meta-task pipeline | n/a | removed with the MPI support | also removed: `parallel.einsum`, `plan_parallel`, `run_parallel_pipeline` |
 | HDF5 I/O | source legacy helpers | canonical PyQCD write/load | external legacy files require provenance |
 | legacy distillation pipeline | reference outputs | closed at 237/237 regression scope | physical validation per observable separate |
 
@@ -51,7 +51,7 @@ GEVP 或真实物理量已经 independently physically validated。
 4. current Stout 的 documented rank、internal transpose、zero-generator branch 和
    spatial roll-axis mapping 有风险。
 5. `ratio_3pt` 的 axes 可占据不同位置，当前广播可能产生错误 shape。
-6. dynamic module 在 module load 时 import MPI helpers，wildcard import 可能初始化 MPI。
+6. dynamic module 在 module load 时 import 外部 helpers，wildcard import 可能触发副作用。
 7. `TGather` 要求 equal local leading sizes；size-one 和 multi-rank helper shape 不一定
    相同。
 8. `write_data_ascii` basename-only path 会尝试创建空目录。
@@ -71,8 +71,8 @@ GEVP 或真实物理量已经 independently physically validated。
 - PyQCD Stout 有 identity、`rho=0`、unitarity、action decrease、time-chain 和 backend
   contracts。
 - PJN 3pt 有四张手写 Wick 图的 independent oracle。
-- MPI meta-task 有 planning、run-dir、GPU binding、failure propagation、cache/recompute
-  和 rank0 输出 contracts。
+- MPI 元任务并行已整体删除（连同 KUPL/CUDA 的 MPI 分片与运行时预加载），
+  `pyqcd.parallel` 只保留只读资源探测。
 
 这些补强只覆盖各自合同；不能把某个 unit test 的存在传播到其他拓扑。
 
@@ -106,7 +106,7 @@ python -m py_compile pyqcd/tools/_io.py pyqcd/analysis/_analyse.py
 ```
 
 如果真实 PyQUDA 环境不可用，只能报告 serial/static contracts；不能声称真实求逆、
-perambulator 或 MPI production 已完成。
+perambulator 或 production 已完成。
 
 ## 7. 交付状态模板
 

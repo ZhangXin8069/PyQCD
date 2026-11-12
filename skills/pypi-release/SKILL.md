@@ -394,7 +394,6 @@ python -m pyqcd.testing.docs_examples --lang zh --keep-going
 | `backend` | 可用的原生库：`cuda` / `kupl` / `python` |
 | `native_available` | 是否真的有可用原生库（`python` 时为 `False`） |
 | `array_backend` | 当前数组后端（`numpy` / `cupy` / `torch`）——决定数据在哪、走哪个 kernel |
-| `kupl_mpi_build` / `mpi` | KUPL 库是否编入 MPI / 当前生效后端是否是它 |
 
 注意：`backend=cuda` 但 `array_backend=numpy` 时，numpy 数据走的是 **KUPL CPU kernel**，
 GPU kernel 只在 cupy/torch 张量上生效。汇报性能时必须同时给这两个字段。

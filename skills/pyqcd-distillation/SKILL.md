@@ -1,6 +1,6 @@
 ---
 name: pyqcd-distillation
-description: Use when a PyQCD task defines, audits, or implements LapH distillation through Wick contractions, perambulators, vertices, GEVP, MPI partitioning, or lattice tensor I/O.
+description: Use when a PyQCD task defines, audits, or implements LapH distillation through Wick contractions, perambulators, vertices, GEVP, or lattice tensor I/O.
 ---
 
 # pyqcd-distillation - LapH 蒸馏安全链
@@ -11,7 +11,7 @@ description: Use when a PyQCD task defines, audits, or implements LapH distillat
 
 `physical definition -> convention -> tensor formula -> numerical algorithm -> implementation`.
 
-本技能负责把物理定义落成可审计的 LapH/Wick/perambulator/GEVP/MPI/I/O 契约。它不负责
+本技能负责把物理定义落成可审计的 LapH/Wick/perambulator/GEVP/I/O 契约。它不负责
 替代 `pyqcd-propagator` 的 PyQUDA 求逆、`pyqcd-physics-spectrum` 的谱模型、
 `pyqcd-statistics` 的通用重采样，或 `pyqcd-analysis` 的最终图表。
 
@@ -28,7 +28,7 @@ description: Use when a PyQCD task defines, audits, or implements LapH distillat
 ## 按需参考
 
 - 读 [references/chain-and-gates.md](references/chain-and-gates.md) 获取物理定义、
-  约定、张量公式、算法、Wick、perambulator、GEVP、MPI、I/O 和验收门。
+  约定、张量公式、算法、Wick、perambulator、GEVP、I/O 和验收门。
 - 读 [references/implementation-status.md](references/implementation-status.md) 获取
   lqcddb 来源限制、PyQCD 当前覆盖、测试范围和未闭合项。
 
@@ -52,8 +52,8 @@ description: Use when a PyQCD task defines, audits, or implements LapH distillat
    显式 projector 或 trace 闭合，不依赖广播或 `ravel()[:4]` 隐藏残轴。
 8. **谱学交接**：若使用 GEVP，先验证 `C(t0)` Hermitian positive definite、复数
    非对角元保留、state tracking 和 `t0` 稳定性，再交给谱学技能解释。
-9. **并行与落盘**：先 dry-run MPI plan，再运行；gather/reduce 在 gauge context 外，
-   rank 0 发布 canonical 文件；保存形状、轴、dtype、backend、seed、命令和 hash。
+9. **落盘**：gauge context 外发布 canonical 文件；保存形状、轴、dtype、backend、
+   seed、命令和 hash。
 10. **按声明范围验收**：分别报告 `implemented/tested/closed/physical-validated`，
     不把 2pt 或 3pt oracle 外推到 4pt 或真实物理结果。
 
@@ -75,9 +75,7 @@ description: Use when a PyQCD task defines, audits, or implements LapH distillat
    time labels、vertices 和 connected topology 全部证明相同后启用。
 7. **GEVP**：`C(t0)` 经记录条件化后 HPD；保留 complex Hermitian off-diagonal；
    用 `scipy.linalg.eigh(C(t),C(t0))` 或独立小矩阵核对；近简并用 overlap 追踪 state。
-8. **MPI**：验证 rank grid、local time list、root 语义、size-one vs multi-rank shape、
-   equal leading size 和 collective failure 同步退出。
-9. **I/O**：canonical HDF5 保存 shape/axes/dtype/endian/units/hash/command；读写
+8. **I/O**：canonical HDF5 保存 shape/axes/dtype/endian/units/hash/command；读写
    round-trip；禁止把自动 cwd fallback 当成可移植恢复策略。
 
 ## 当前实现边界
@@ -89,7 +87,7 @@ description: Use when a PyQCD task defines, audits, or implements LapH distillat
 | autowick/dynamic contraction | implemented, 部分 tested | PJN 3pt 有四项显式 oracle；PJNNJNP 4pt 无独立 12 图 oracle |
 | GEVP complex Hermitian | implemented, tested | 来源 lqcddb 曾丢复部；PyQCD port 已修复该合同 |
 | Stout port | implemented, tested 基本不变量 | 未证明历史生产等价的全部物理范围 |
-| MPI meta-task pipeline | implemented, tested | lattice-domain `_mpi_transport` 仍是独立预留层 |
+| MPI meta-task pipeline | removed | MPI 支持已整体删除；并行只保留只读资源探测 |
 | legacy distillation regression | closed 于基线复现范围 | 不等于所有物理量 physical-validated |
 | general physical validation | not established | 必须按具体 observable 和拓扑单独升级 |
 
@@ -106,7 +104,7 @@ description: Use when a PyQCD task defines, audits, or implements LapH distillat
   语义；本技能补 LapH 数据与算法实现门。
 - `pyqcd-propagator`：负责 PyQUDA 求逆、源构造、sequential source 和 covDev；
   perambulator 身份与收缩由本技能核验。
-- `pyqcd-infra`：负责 backend、HDF5/ASCII、VdV/VVV readers、MPI 调度、GPU 绑定和
+- `pyqcd-infra`：负责 backend、HDF5/ASCII、VdV/VVV readers、本机资源探测和
   内存规划；本技能规定数据身份及 gather/write 顺序。
 - `pyqcd-conventions`：统一 gamma、轴、单位、边界、basis phase 和状态元数据。
 

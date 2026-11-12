@@ -174,7 +174,7 @@ class TopologyBinding:
     """ctypes bridge for ``qcd_cuda_topology_apply``.
 
     Deliberately outside the Cython extension: the topology entry is an extra
-    exported symbol (like ``qcd_cuda_pattern_3pt``), so no rebuild of
+    exported symbol (like ``qcd_cuda_dedicated_apply``), so no rebuild of
     ``pyqcd.einsum.cuda.einsum`` is required for it to become usable.
     """
 

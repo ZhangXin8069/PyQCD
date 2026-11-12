@@ -349,7 +349,7 @@ def save_tensor_h5(arr, file_path: str, dataset: str = 'data',
     """Save an array/tensor (numpy, cupy or torch) to an HDF5 file via h5py.
 
     Each call opens its own file handle (with statement) so concurrent
-    calls from multiple MPI ranks / threads are safe.
+    concurrent calls from multiple threads are safe.
 
     Parameters
     ----------

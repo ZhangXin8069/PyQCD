@@ -67,25 +67,25 @@ def test_profile_switching_is_observable() -> None:
     with _env(OMP_NUM_THREADS=None, OPENBLAS_NUM_THREADS=None,
               PYQCD_EINSUM_OMP_THREADS=None, PYQCD_EINSUM_BLAS_THREADS=None):
         _threads.reset()
-        expr = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
+        # sush-2pt-mu(S3)：仍在 REGISTRY 里的字面形态，命中即切到 kernel 档。
+        expr = "manb,cedf,bd,Mfn,ac,MFem->MF"
         rng = np.random.default_rng(0)
 
         def draw(*shape):
             return (rng.standard_normal(shape)
                     + 1j * rng.standard_normal(shape)).astype(np.complex128)
 
-        n = 8
-        nucleon = [draw(4, 4, n, n), draw(4, 4, n, n), draw(4, 4, n, n),
-                   draw(4, 4), draw(4, 4), draw(4, n, n, n), draw(4, n, n, n),
-                   draw(4, 4)]
+        shapes = ((2, 2, 2, 3), (2, 2, 3, 2), (3, 3),
+                  (4, 2, 2), (2, 2), (4, 2, 2, 2))
+        registered = [draw(*shape) for shape in shapes]
         with contextlib.redirect_stdout(io.StringIO()):
-            pe.contract(expr, *nucleon)
+            pe.contract(expr, *registered)
         assert _threads.current()["profile"] == "kernel"
         a, b, c = (rng.standard_normal((64, 64)) for _ in range(3))
         pe.contract("ij,jk,kl->il", a, b, c)
         assert _threads.current()["profile"] == "generic"
         with contextlib.redirect_stdout(io.StringIO()):
-            pe.contract(expr, *nucleon)
+            pe.contract(expr, *registered)
         assert _threads.current()["profile"] == "kernel"
 
 

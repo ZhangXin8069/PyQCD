@@ -7,8 +7,8 @@
 | 事实 | 说明 |
 |---|---|
 | **CUDA 必须显式指定架构** | `make-nv.sh` 默认 `6.0 7.0` 且**不生成 PTX**，在 sm_89（RTX 4060）上无法运行。必须 `PYQCD_CUDA_ARCHITECTURES=8.9 bash build-nv.sh`。 |
-| **MPI 自动探测会误判** | conda 常把 `CXX` 固定为不带 MPI 头的 `g++`，而 `PYQCD_EINSUM_ENABLE_MPI=auto` 曾只看 `command -v mpicxx` → 编译失败（`mpi.h: No such file`）。已改为**试编译 `#include <mpi.h>`** 才启用。显式 MPI 构建：`CXX=mpicxx PYQCD_EINSUM_ENABLE_MPI=1 bash build-kupl.sh`。 |
-| **同名头文件冲突（重要）** | `cpp/kupl/einsum/include/` 与 `cpp/cuda/einsum/include/` 下有同名 `nucleon2pt.h`、`pattern_3pt.h`，而 `make-nv.sh` 把 **KUPL 的 include 放前面** → CUDA 源文件会包含错头，报"标识符未定义"。修法：CUDA 源文件用相对路径 `#include "../include/xxx.h"`。 |
+| **MPI 构建已整体删除（2026-11-12）** | `PYQCD_EINSUM_ENABLE_MPI`、`PYQCD_EINSUM_MPI_LINK_FLAGS`、`mpi_runtime.cpp`、`einsum_mpi.h`、`applyContractMpiQcd` 与 `kupl_mpi_enabled()` 全部移除；`make.sh` 不再探测 `mpicxx`。历史上 conda 固定 `CXX=g++` 导致 `mpi.h: No such file` 的坑因此不再存在，不要再按旧文档设置这些变量。 |
+| **同名头文件冲突（重要）** | `cpp/kupl/einsum/include/` 与 `cpp/cuda/einsum/include/` 下曾有同名 `nucleon2pt.h`、`pattern_3pt.h`（两者已于 2026-11-12 删除），而 `make-nv.sh` 把 **KUPL 的 include 放前面** → CUDA 源文件会包含错头，报"标识符未定义"。新增同名头文件时仍要用相对路径 `#include "../include/xxx.h"`。 |
 | **Cython 生成物不必入库** | `pyqcd/einsum/cuda/einsum.cpp`（约 1 万行）是 `einsum.pyx` 的生成物；删除后 `install.sh cuda` 仍可重建扩展（实测 192 KB `.so`）。 |
 | **OpenBLAS 探测提示会误导** | `make.sh` 打印 `OpenBLAS: not found` 属探测失败，但运行期是 dlopen `libopenblas.so.0`，数值路径正常。 |
 | 导出面 | `-Wl,--version-script` 收敛；新增 kernel 符号必须**显式**加入 `make.sh` / `make-nv.sh` 的 map，否则 `nm -D` 看不到、Python 侧取不到。 |
@@ -50,11 +50,9 @@
      CUDA 2pt 是 **10 项**并含 perm 码，恒等=123）、算子顺序也可能不同；
    - **CUDA 要设备指针**（`cupy` → `data.ptr`），KUPL 是主机指针。
 3. **分派**（`_api.contract`）：仅在 `out is None`、`specialize` 生效时尝试；异常 → warning 一次 → 回退。
-4. **验收**（`python -m pyqcd.testing.einsum.simple.kernel_acceptance --nvec N --only <name>`）：
-   - 判据：**慢于 opt_einsum → BUG**；快于 opt 但慢于通用路径 → `OK-WITH-CAVEAT`（不接线）；快于两者 → `PASS`。
-   - 同时看 nvec=50 与 100；两者结论可能相反。
-5. **接线后回归**：`simple/check_kernels.py`（命中/开关/complex64/非连续/异常回退），
-   再跑 `verify_native` 双后端 + `verify_compat` + `python -m pyqcd.testing`。
+4. **验收**：`kernel_acceptance` / `check_kernels` 两个脚本随核子 2pt/3pt kernel
+   一并删除（2026-11-12）；新入口改用 `python -m pyqcd.testing._topology_kernel_contract`
+   与 `verify_native` 双后端 + `verify_compat` + `python -m pyqcd.testing`。
 
 ## 5. 已知限制（不要声称已支持）
 

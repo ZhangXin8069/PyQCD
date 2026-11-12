@@ -1,4 +1,4 @@
-"""Collision-resistant run-directory allocation shared by serial and MPI."""
+"""Collision-resistant run-directory allocation for pipeline runs."""
 
 from __future__ import annotations
 

@@ -18,7 +18,7 @@ from ._autowick import wick_contraction, identify_equivalent_diagrams
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Logging (non-MPI version for single-GPU)
+# Logging (single-GPU path)
 # ═══════════════════════════════════════════════════════════════════
 
 def _log(*args, **kwargs):
