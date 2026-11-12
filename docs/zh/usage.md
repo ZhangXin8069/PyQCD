@@ -87,7 +87,10 @@ assert np.allclose(pe.contract("ij,jk->ik", a, b, specialize=False), a @ b)
 `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 可让特化提示**每次命中**都打印。
 支持的全部形态见 {doc}`appendix_specialized`。
 
-环境变量开关：`PYQCD_EINSUM_NOTICE=0`、`PYQCD_EINSUM_SPECIALIZE=0`、
+提示语言跟随 locale（`zh_*` 说中文，其余说英文），可用
+`PYQCD_EINSUM_LANG=zh|en` 强制指定。
+
+环境变量开关：`PYQCD_EINSUM_NOTICE=0`、`PYQCD_EINSUM_LANG=zh|en`、`PYQCD_EINSUM_SPECIALIZE=0`、
 `PYQCD_EINSUM_DISABLE_FUSED=1`、`PYQCD_EINSUM_KERNEL_KUPL=0`、
 `PYQCD_EINSUM_KERNEL_CUDA=0`。
 

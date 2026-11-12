@@ -150,7 +150,14 @@ def check_docs(report: Report) -> None:
         if len(en) != len(zh):
             mismatched.append(page)
             continue
-        if any(_code_signature(a) != _code_signature(b) for a, b in zip(en, zh)):
+        # 日志/输出示例块本来就该按语言本地化（库的提示现在跟随 locale），
+        # 它们不是可执行代码，跳过结构比对。
+        def _is_output_sample(block: str) -> bool:
+            return "[pyqcd.einsum]" in block
+
+        if any(_code_signature(a) != _code_signature(b)
+               for a, b in zip(en, zh)
+               if not (_is_output_sample(a) or _is_output_sample(b))):
             mismatched.append(page)
         # English pages must not carry Chinese comments or docstrings.
         if any(_CJK.search(block) for block in en):

@@ -858,3 +858,54 @@ python -m pyqcd.testing._complex_specialized_verify --dtype complex128   # 全�
 python -m pyqcd.testing._complex_specialized_verify --dtype complex64
 python -m pyqcd.testing._topology_perf_multidim --dtype complex128 --dims 4,6,8
 ```
+
+## 17. 提示文案的语言：跟随 locale，别硬编码中文（2026-11-12，发布前拦截）
+
+### 事故形态
+
+发布终检 `release_check` 报 `FAIL en comments in English: CJK found: ['usage']`。
+追下去发现：`docs/en/usage.md` 里那段"日志示例"是**库真实打印的中文**，
+不是文档作者写错。也就是说——
+
+> 英文环境的用户在控制台看到的是中文提示。
+
+这是真实可用性缺陷，不是文档瑕疵。删掉示例只能掩盖问题（下一个人重新加回来还会犯），
+所以修的是库。
+
+### 修法（`pyqcd/einsum/_specialize.py`）
+
+```python
+LANGUAGE_ENV = "PYQCD_EINSUM_LANG"
+
+def notice_language() -> str:
+    explicit = os.environ.get(LANGUAGE_ENV, "").strip().lower()
+    if explicit.startswith("zh"): return "zh"
+    if explicit.startswith("en"): return "en"
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(name, "").strip().lower()
+        if value:
+            return "zh" if value.startswith("zh") else "en"
+    return "en"
+```
+
+优先级：`PYQCD_EINSUM_LANG` → `LC_ALL`/`LC_MESSAGES`/`LANG` → 默认 **en**。
+默认取 en 而不是 zh：`C`/`C.UTF-8`（HPC 与容器最常见）必须给英文，否则又回到原问题。
+
+`announce()` 与 `announce_generic()` 各分中英两支，措辞对称、都带上关闭方法。
+
+### 连带修了检查器的一处误判
+
+`release_check` 的 "en/zh code identical" 用 AST 比对，把**日志示例块**也算了进去——
+而那两块本来就该按语言不同。判据加了豁免：
+
+```python
+def _is_output_sample(block): return "[pyqcd.einsum]" in block
+```
+
+规则：**可执行代码块**要求跨语言 AST 等价；**输出示例块**要求各自本地化、不比对。
+
+### 教训
+
+1. 「文档里的中文」不一定是文档问题——先问"这是库的输出吗"。
+2. 面向用户的提示一律走语言选择函数，不要 `print("中文")` 硬编码。
+3. 新加任何带语言的检查前，先区分"代码块"与"输出块"，否则会得到互相矛盾的两条门。

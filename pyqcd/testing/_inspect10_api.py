@@ -320,7 +320,8 @@ buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     pe.contract(eq, *ops)
 text = buf.getvalue()
-assert "专用路径" in text, text[:200]
+# 提示语言跟随 locale（zh_* 说中文，其余说英文），两版都必须出现
+assert ("专用路径" in text) or ("specialized path" in text), text[:200]
 assert "kernel" in text or "plan-cache" in text, text[:200]
 print("OK")
 """)

@@ -78,19 +78,21 @@ Both kernels announce themselves **once per shape per process** the first time
 they run, so you can tell from the log which path a contraction took:
 
 ```
-[pyqcd.einsum] 专用路径: topology:9f3c... [kernel: kupl_dedicated] ...
-[pyqcd.einsum] 通用路径: 未命中特化形态 (ij,jk->ik)；执行的是通用分步收缩。...
+[pyqcd.einsum] specialized path: topology:9f3c... [kernel: kupl_dedicated] ...
+[pyqcd.einsum] generic path: no specialized shape matched (ij,jk->ik); ...
 ```
 
-* `专用路径 … [kernel: ...]` — a native specialized kernel ran (2–4× faster).
-* `专用路径 … [plan-cache]` — the shape is known but only its plan is reused.
-* `通用路径 …` — no specialization; the generic pairwise contraction ran.
+* `specialized path … [kernel: ...]` — a native specialized kernel ran (2–4× faster).
+* `specialized path … [plan-cache]` — the shape is known but only its plan is reused.
+* `generic path …` — no specialization; the generic pairwise contraction ran.
 
-Turn the notices off with `PYQCD_EINSUM_NOTICE=0`; make the specialized one fire
-on **every** call with `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`. The full list of
-supported shapes is in {doc}`appendix_specialized`.
+The notices follow the locale: Chinese on `zh_*` locales, English otherwise. Force
+it with `PYQCD_EINSUM_LANG=zh|en`. Turn the notices off with
+`PYQCD_EINSUM_NOTICE=0`; make the specialized one fire on **every** call with
+`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`. The full list of supported shapes is in
+{doc}`appendix_specialized`.
 
-Environment switches: `PYQCD_EINSUM_NOTICE=0`,
+Environment switches: `PYQCD_EINSUM_NOTICE=0`, `PYQCD_EINSUM_LANG=en|zh`,
 `PYQCD_EINSUM_SPECIALIZE=0`, `PYQCD_EINSUM_DISABLE_FUSED=1`,
 `PYQCD_EINSUM_KERNEL_KUPL=0`, `PYQCD_EINSUM_KERNEL_CUDA=0`.
 

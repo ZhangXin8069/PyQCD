@@ -324,13 +324,39 @@ def announce(entry: Entry, kernel: str = "") -> None:
         _announced.add(name)
     kind = f"kernel: {kernel}" if kernel else "plan-cache"
     note = entry.get("note", "")
-    print(f"[pyqcd.einsum] 专用路径: {name} [{kind}] {note}", flush=True)
+    if notice_language() == "zh":
+        print(f"[pyqcd.einsum] 专用路径: {name} [{kind}] {note}", flush=True)
+    else:
+        print(f"[pyqcd.einsum] specialized path: {name} [{kind}] {note}",
+              flush=True)
+
+
+LANGUAGE_ENV = "PYQCD_EINSUM_LANG"
 
 
 def notice_enabled() -> bool:
     """首次命中提示是否开启（默认开启，``PYQCD_EINSUM_NOTICE=0`` 关闭）。"""
     return os.environ.get(NOTICE_ENV, "1").strip().lower() not in (
         "0", "false", "off", "no")
+
+
+def notice_language() -> str:
+    """提示语言：``PYQCD_EINSUM_LANG`` 优先，否则跟随 ``LC_ALL``/``LANG``。
+
+    显式设成 ``en``/``zh`` 时一直用它；未设时，环境 locale 是中文（``zh*``）就说
+    中文，其余（含 ``C``/``C.UTF-8``/``en_US``）说英文——英文环境的用户不该在日志里
+    看到中文。
+    """
+    explicit = os.environ.get(LANGUAGE_ENV, "").strip().lower()
+    if explicit.startswith("zh"):
+        return "zh"
+    if explicit.startswith("en"):
+        return "en"
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(name, "").strip().lower()
+        if value:
+            return "zh" if value.startswith("zh") else "en"
+    return "en"
 
 
 def announce_generic(subscripts: str = "", backend: str = "") -> None:
@@ -351,12 +377,21 @@ def announce_generic(subscripts: str = "", backend: str = "") -> None:
         _announced.add(key)
     where = f" backend={backend}" if backend else ""
     equation = f" ({subscripts})" if subscripts else ""
-    print(
-        f"[pyqcd.einsum] 通用路径: 未命中特化形态{equation}{where}；"
-        f"执行的是通用分步收缩。若该方程属于蒸馏语料（wick_12cases），"
-        f"可用 `python -m pyqcd.einsum._specialize` 查看已注册形态；"
-        f"设 PYQCD_EINSUM_NOTICE=0 可关闭本提示。",
-        flush=True)
+    if notice_language() == "zh":
+        message = (
+            f"[pyqcd.einsum] 通用路径: 未命中特化形态{equation}{where}；"
+            f"执行的是通用分步收缩。若该方程属于蒸馏语料（wick_12cases），"
+            f"可用 `python -m pyqcd.einsum._specialize` 查看已注册形态；"
+            f"设 PYQCD_EINSUM_NOTICE=0 可关闭本提示。")
+    else:
+        message = (
+            f"[pyqcd.einsum] generic path: no specialized shape matched"
+            f"{equation}{where}; running the generic pairwise contraction. "
+            f"If this equation comes from the distillation corpus "
+            f"(wick_12cases), run `python -m pyqcd.einsum._specialize` to list "
+            f"the registered shapes. Set PYQCD_EINSUM_NOTICE=0 to silence this "
+            f"notice.")
+    print(message, flush=True)
 
 
 def describe() -> list[tuple[str, str, str]]:
