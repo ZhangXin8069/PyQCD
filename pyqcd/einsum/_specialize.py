@@ -51,9 +51,13 @@ Entry = dict[str, Any]
 # 形态键为规范化后的 subscripts（去空白）。
 REGISTRY: dict[str, dict[str, str]] = {
     "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M": {
-        "name": "nucleon-2pt(E1)",
-        "kind": "kernel(needs-optimization)",
-        "note": "8 算子核子 2pt；KUPL/CUDA 专用 kernel（形状不匹配时回落到计划缓存）",
+        "name": "nucleon-2pt(E1, deprecated)",
+        # 该形态的专用 kernel 已弃用：它的形状契约（nvec≤64 附近）在生产尺度
+        # （nvec=100/112）上会 MemoryError（实测需 74–131 GiB 中间体），
+        # 且 nvec=20 时与通用路径持平（1.03×）。保留注册只为日志可识别，
+        # 执行链已不再尝试 E1 专用 kernel，统一走通用路径或拓扑特化。
+        "kind": "plan-cache",
+        "note": "已弃用：生产尺度会 OOM 且无收益；用拓扑特化（kupl_dedicated）替代",
     },
     "Geifj,ckdl,agbh,ce,gi,Mbdf,Mhjl,Gka->GM": {
         "name": "nucleon-3pt(E2)",
@@ -105,7 +109,8 @@ _ELLIPSIS_ID = -1
 # 形态名关键词 → 可服务该形态的专用 kernel 标签。执行侧（``_api._kernel_labels_for``）
 # 以条目里的 ``kernels`` 为准，这里同时是字面条目与拓扑条目的唯一声明处。
 _KERNEL_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("nucleon-2pt", ("kupl_nucleon_2pt", "cuda_nucleon_2pt")),
+    # nucleon-2pt(E1) 已弃用（生产尺度 OOM 且无收益），不再挂专用 kernel 标签。
+
     ("3pt-main", ("kupl_3pt", "cuda_3pt")),
 )
 
@@ -243,15 +248,31 @@ _TOPOLOGY_ENTRY_CACHE: dict[str, Entry] = {}
 def _signature_digest(signature: tuple) -> str:
     """签名 → 128 位摘要；口径必须与 ``_topology_registry`` 的生成脚本一致。"""
     payload = "|".join(",".join(map(str, term)) for term in signature)
-    return hashlib.blake2b(payload.encode(), digest_size=16).hexdigest()
+    return hashlib.blake2b(payload.encode(), digest_size=12).hexdigest()
 
 
-def _topology_index() -> frozenset[str]:
-    global _TOPOLOGY_DIGESTS
-    if _TOPOLOGY_DIGESTS is None:
-        from . import _topology_registry as registry
-        _TOPOLOGY_DIGESTS = registry.TOPOLOGY_DIGESTS
-    return _TOPOLOGY_DIGESTS
+def _topology_hit(subscripts: str, signature: tuple) -> str | None:
+    """按 (元数, 槽位总数) 二级分叉查桶：只解压命中的那个桶。
+
+    两级键都由方程本身算出，不需要预解析语料：
+      元数   = 操作数个数（签名长度 - 1，末项是输出）；
+      槽位数 = 各操作数 rank 之和 + 输出 rank。
+    """
+    from . import _topology_registry as registry
+    arity = len(signature) - 1
+    slots = sum(len(term) for term in signature)
+    digest = _signature_digest(signature)
+    return digest if registry.contains(digest, arity, slots) else None
+
+
+def _topology_index():
+    """兼容旧接口：返回全部摘要的并集（仅诊断用，热路径不要调）。"""
+    from . import _topology_registry as registry
+    merged: set[str] = set()
+    for key in registry._BUCKETS:
+        raw = registry.bucket_raw(key)
+        merged |= {raw[i:i + 16].hex() for i in range(0, len(raw), 16)}
+    return frozenset(merged)
 
 
 def _topology_entry(digest: str) -> Entry:
@@ -264,7 +285,7 @@ def _topology_entry(digest: str) -> Entry:
             "kind": "kernel(topology)",
             "note": "真实语料拓扑（整条计划交给原生拓扑入口；不支持时回落计划缓存）",
             "kernels": ("kupl_topology", "cuda_topology"),
-            "subscripts": registry.REPRESENTATIVES.get(digest, ""),
+            "subscripts": "",
         }
         if len(_TOPOLOGY_ENTRY_CACHE) < 4096:
             _TOPOLOGY_ENTRY_CACHE[digest] = entry
@@ -301,8 +322,8 @@ def match(subscripts: str) -> Entry | None:
     entry = FAMILIES.get(signature)
     if entry is not None:
         return entry
-    digest = _signature_digest(signature)
-    if digest in _topology_index():
+    digest = _topology_hit(subscripts, signature)
+    if digest is not None:
         return _topology_entry(digest)
     return None
 

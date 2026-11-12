@@ -119,6 +119,40 @@ dedicated kernel, `[plan-cache]` means only the plan was reused. If a registered
 kernel shape does not get its kernel, `pyqcd.einsum` warns immediately with the
 reason instead of silently degrading.
 
+## Topology-specialised kernels
+
+The eleven hadron-topology cases in `refer/sush/wick_12cases.md` define **2582 unique
+contraction topologies** with 6–16 operands. They are indexed by *topology signature*,
+not by spelling: labels are renumbered by first appearance across the whole equation,
+so `ij,jk->ik`, `ij,jb->ib` and `ab,bc->ac` are one entry, while `ij,kj->ik` and
+`ij,jk->ki` are different entries. Whitespace and an omitted output do not change the
+signature; the operand order and the index order inside an operand do.
+
+On a hit the whole contraction plan is handed to one native call
+(`qcd_kupl_topology_apply` or `qcd_cuda_topology_apply`) instead of being stepped
+through in Python. The hit line distinguishes the two cases: `[kernel: kupl_topology]`
+means the native topology entry executed the plan, `[plan-cache]` means the equation
+was recognised but only the plan was reused — for example with `out=`, with mixed
+operand dtypes, or when the native entry is unavailable. A fallback changes speed
+only; the result is identical.
+
+This path is not performance-validated yet: the KUPL executor has an equation-specific
+size cliff (corpus equation #194, 16 operands, `dim=4`: 2 ms on the generic path vs
+>90 s through the topology entry) and the measurement table is still `TBD`.
+`docs/topology_kernels_20261111.md` records the corpus definition, the matching and
+execution mechanics, and the pending numbers; do not quote a speed-up for this path
+until that table is filled.
+
+```bash
+python -m pyqcd.testing._topology_equations_contract
+python -m pyqcd.testing._topology_kernel_contract
+```
+
+The first command checks all 2582 equations against `numpy` plus the renaming and
+structural negative cases; the second checks the native topology entry itself — the
+dtype policy, the plan/pointer/`out` arguments, and a 120-equation corpus sample at
+`dim=4`.
+
 ## Where the gains come from
 
 1. **Shape specialisation** — nucleon 2pt/3pt main get purpose-built kernels, and

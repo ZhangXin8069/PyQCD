@@ -1,0 +1,49 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-11 21:10:45 +0800
+批次: pyqcd-einsum/topology-kernels
+主任务: 拓扑 kernel 性能定位：TRACE 显示 13 步均亚毫秒，瓶颈在步循环之外
+触发原因: 阶段成果
+摘要: TRACE: 13 步 0.01-0.1ms 但整调用 >90s；下一步在 topology_apply.cpp 步循环后加计时
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — TRACE 定位：耗时不在收缩步
+- 命令：`PYQCD_EINSUM_TRACE=1 python -c ...`（语料 #194，size=4，45 s 超时）
+- 关键输出：13 个 step 的 `PYQCD_EINSUM_KUPL_GEMM/PAIR` 均为 0.01–0.1 ms 量级
+  （`pack_ms` 0.005–0.014、`gemm_ms` 0.001–0.047、`total_ms` 0.014–0.096）
+- 推断：13 步累计约 0.2 ms，而整次调用 >90 s → 时间花在**步循环之外**
+  （`topology_apply.cpp` 的输出组装/地址表使用处，或某个随维度指数增长的循环/校验）
+- 证据对照（上一轮）：同尺寸通用路径 2 ms；计划 13 步、opt_cost 4.0e5
+
+## 验证与证据
+- 只读实验，未改仓库文件
+- 未验证：步循环之后的具体代码位置与根因（需要在该处加计时）
+
+## 变更与产物
+- 本日志（只读实验记录）
+
+## 风险、限制与下一步
+- 风险：修复前不得宣称拓扑路径更快
+- 下一步：在 `topology_apply.cpp` 步循环之后加计时；若为 `prod(所有标签)` 型循环，改为
+  按输出阶数循环或分块 memcpy；再用 size=4/8 与 2 ms 基线复核
+
+## Agent 全文报告
+--- report begin ---
+TRACE 显示 13 个收缩步全部在 0.01–0.1 ms，而整次调用 >90 s，因此瓶颈在步循环之外
+（输出组装/地址表使用处）。下一轮在该处加计时即可定位。
+--- report end ---
+
+[续跑补充 21:16] topology_apply.cpp 只是把计划转交 pyqcd_einsum::execute_parsed_contract（:125），因此热点在 runtime 的该函数内部，不在拓扑入口本身。
+[续跑补充 21:21] runtime.cpp 的 execute_parsed_contract 先做计划解析（resize/read_labels/unique_labels 校验），随后转交编译器/执行器；下一步在其解析段与执行段之间加计时即可定位。
+[续跑补充 21:27] runtime.cpp 解析段循环均按 rank（255/266/401-411 行），未发现按全符号求积的循环；剩余嫌疑集中在解析后的 workspace 物化/执行器初始化。
+[续跑补充 21:32] 继续在 runtime.cpp 定位 workspace 分配点（见上面 grep 输出）。
+[续跑补充 21:37] 检查 apply_plan.cpp 的分配点（见 grep 输出）。
+[续跑补充 21:43] execute_parsed_contract 的实现位置与 apply_contract.cpp 分配点见 grep 输出。
+[续跑补充 21:53] 嫌疑缩到 execute_parsed_contract 内的 try_sandwich_fast_path 或 applyCompiledQcd 的重复编译路径。
+[续跑补充 22:04] 排除 try_sandwich_fast_path（仅 O(1) 形状判断 + 一次融合 kernel）；剩余唯一嫌疑：拓扑入口每次调用经 applyCompiledQcd 重新编译计划（apply_contract.cpp:1868/:1905）。下一步在两点打点，若编译占主导则按拓扑签名缓存 execution。
+[续跑补充 22:09] 检查 applyCompiledQcd 是否每次重新 parse_plan（见 1855-1872 行）。
+[续跑补充 22:14] 确认 execute_contract 每次调用重新 parse_execution_plan（apply_contract.cpp:1855）；step 循环已证亚毫秒，剩余唯一可疑段为 parse_execution_plan。下一步：计时该函数或按计划哈希缓存 ExecutionPlan。
+[续跑补充 22:20] 本轮未再扩张排查（上下文预算趋尽）；待办：对 parse_execution_plan 计时，按计划哈希缓存 ExecutionPlan，size=4/8 对齐 2ms 基线。
+[续跑补充 22:25] 连续多轮无新增进展，按停滞保护停用空闲续跑；断点：对 parse_execution_plan 计时 → 缓存 ExecutionPlan → size=4/8 复核。

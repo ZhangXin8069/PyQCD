@@ -1,10 +1,21 @@
-"""Reusable CUDA execution context for version-2 einsum plans."""
+"""Reusable CUDA execution context for version-2 einsum plans.
+
+Two byte streams reach ``qcd_cuda_topology_apply``:
+
+* a **version-2 execution plan** (``pyqcd/einsum/_native_plan.py``): full step list,
+  used by the frozen entries and by callers that already have a path;
+* a **topology descriptor** (``_kernel_cuda._topology_descriptor``): structure only —
+  per-operand labels/shapes, output labels and the 128-bit signature digest. The
+  contraction order comes from the native precompiled step table
+  (``cpp/cuda/einsum/src/topology_steps.h``), so no path search runs at all.
+"""
 
 from __future__ import annotations
 
 import ctypes
 import os
 import threading
+from collections import namedtuple
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -18,6 +29,16 @@ _CUDA_LIBRARY_ENV = "PYQCD_EINSUM_CUDA_LIB"
 # kept numerically identical to ``cpp/cuda/einsum/include/einsum_topology.h``.
 _STATUS_OK = 0
 _TOPOLOGY_UNSUPPORTED = 4
+
+# Descriptor layout; must stay in sync with ``apply_contract.cu``.
+_DESCRIPTOR_MAGIC = 0x51435444
+_DESCRIPTOR_VERSION = 1
+_DESCRIPTOR_HEADER_WORDS = 8
+_DESCRIPTOR_DIGEST_WORDS = 4
+
+DescriptorView = namedtuple(
+    "DescriptorView",
+    "dtype_id input_shapes input_labels output_labels sizes steps")
 
 
 def _library_path() -> Path:
@@ -213,20 +234,86 @@ def _plan_buffer(plan: Any) -> np.ndarray:
     return np.ascontiguousarray(buffer)
 
 
+def _decode_descriptor(plan_data: np.ndarray) -> DescriptorView:
+    """Decode the structure-only descriptor (see ``apply_contract.cu``)."""
+    words = np.frombuffer(plan_data, dtype='<i4')
+    if words.size < _DESCRIPTOR_HEADER_WORDS + _DESCRIPTOR_DIGEST_WORDS:
+        raise ValueError("topology descriptor is truncated")
+    magic, version, total_bytes, local_dtype, num_inputs, num_labels, num_output, _ = (
+        int(value) for value in words[:8])
+    if magic != _DESCRIPTOR_MAGIC:
+        raise ValueError(f"unexpected topology descriptor magic 0x{magic:08x}")
+    if version != _DESCRIPTOR_VERSION:
+        raise ValueError(f"unsupported topology descriptor version {version}")
+    if total_bytes != plan_data.size:
+        raise ValueError(
+            f"topology descriptor length {total_bytes} != {plan_data.size} bytes")
+    if num_inputs <= 0 or num_labels < 0 or not 0 <= num_output <= num_labels:
+        raise ValueError("topology descriptor header is inconsistent")
+    offset = _DESCRIPTOR_HEADER_WORDS + _DESCRIPTOR_DIGEST_WORDS
+    input_labels: list[tuple[int, ...]] = []
+    input_shapes: list[tuple[int, ...]] = []
+    for _ in range(num_inputs):
+        if offset >= words.size:
+            raise ValueError("topology descriptor ends before its operands")
+        rank = int(words[offset])
+        offset += 1
+        if rank <= 0 or offset + 2 * rank > words.size:
+            raise ValueError(f"topology descriptor rank {rank} is out of range")
+        labels = tuple(int(value) for value in words[offset:offset + rank])
+        offset += rank
+        shape = tuple(int(value) for value in words[offset:offset + rank])
+        offset += rank
+        if any(label < 0 or label >= num_labels for label in labels):
+            raise ValueError("topology descriptor carries an out-of-range label")
+        if any(extent <= 0 for extent in shape):
+            raise ValueError("topology descriptor carries a non-positive extent")
+        input_labels.append(labels)
+        input_shapes.append(shape)
+    if offset + num_output != words.size:
+        raise ValueError("topology descriptor has trailing bytes")
+    output_labels = tuple(int(value) for value in words[offset:offset + num_output])
+
+    sizes = [-1] * num_labels
+    for labels, shape in zip(input_labels, input_shapes):
+        for label, extent in zip(labels, shape):
+            sizes[label] = max(sizes[label], extent)
+    if any(value <= 0 for value in sizes):
+        raise ValueError("topology descriptor omits the extent of a label")
+    return DescriptorView(
+        dtype_id=local_dtype,
+        input_shapes=tuple(input_shapes),
+        input_labels=tuple(input_labels),
+        output_labels=output_labels,
+        sizes=tuple(sizes),
+        steps=num_inputs - 1,
+    )
+
+
 def _plan_view(plan_data: np.ndarray) -> tuple[Any, Any, tuple, tuple]:
-    """Decode and validate a plan once per distinct byte stream."""
+    """Decode and validate a plan or descriptor once per distinct byte stream."""
     key = plan_data.tobytes()
     with _PLAN_VIEW_LOCK:
         cached = _PLAN_VIEW_CACHE.get(key)
     if cached is not None:
         return cached
-    info = decode_execution_plan(plan_data)
-    view = (
-        info,
-        dtype_from_id(info.dtype_id),
-        tuple(info.input_shapes),
-        tuple(info.sizes[label] for label in info.output_labels),
-    )
+    words = np.frombuffer(plan_data, dtype='<i4')
+    if words.size and int(words[0]) == _DESCRIPTOR_MAGIC:
+        descriptor = _decode_descriptor(plan_data)
+        view = (
+            descriptor,
+            dtype_from_id(descriptor.dtype_id),
+            tuple(descriptor.input_shapes),
+            tuple(descriptor.sizes[label] for label in descriptor.output_labels),
+        )
+    else:
+        info = decode_execution_plan(plan_data)
+        view = (
+            info,
+            dtype_from_id(info.dtype_id),
+            tuple(info.input_shapes),
+            tuple(info.sizes[label] for label in info.output_labels),
+        )
     with _PLAN_VIEW_LOCK:
         if len(_PLAN_VIEW_CACHE) >= _PLAN_VIEW_CACHE_LIMIT:
             _PLAN_VIEW_CACHE.pop(next(iter(_PLAN_VIEW_CACHE)))
@@ -240,8 +327,9 @@ def topology_apply(
     out: Any = None,
     offsets: Sequence[int] | None = None,
     library_path: Path | str | None = None,
+    info: dict[str, Any] | None = None,
 ) -> Any:
-    """Run a whole version-2 plan with one native call.
+    """Run one native call for a version-2 plan **or** a topology descriptor.
 
     ``operands`` are CuPy arrays already on the compute device, in plan order;
     ``offsets`` are optional **byte** offsets added to each device pointer so a
@@ -249,10 +337,20 @@ def topology_apply(
     runs every step: the entry only reads the device pointers it is given and
     writes the result once, so no host staging happens here either.
 
-    dtype and shape must match the plan exactly — nothing is converted
-    implicitly. Raises ``NativeUnavailable`` when the entry reports a non-zero
-    status; ``status == _TOPOLOGY_UNSUPPORTED`` means the plan itself (not the
-    arguments) is outside what the entry can execute.
+    dtype, shape and device must match the plan exactly — nothing is converted
+    implicitly. A non-contiguous operand is staged into a contiguous device copy
+    (the index is recorded in ``info``) because the entry never interprets
+    strides; ``out`` must already be contiguous, otherwise the native write
+    would land somewhere the caller cannot see.
+
+    ``info`` (optional dict) is cleared and filled with what was actually sent
+    down: plan byte count, step count, dtype id, operand count, output shape,
+    whether ``out`` was caller-provided, which operands had to be copied and the
+    raw ``offsets``.
+
+    Raises ``NativeUnavailable`` when the entry reports a non-zero status;
+    ``status == _TOPOLOGY_UNSUPPORTED`` means the plan itself (not the arguments)
+    is outside what the entry can execute.
     """
     import cupy
 
@@ -263,12 +361,13 @@ def topology_apply(
         raise NativeUnavailable("qcd_cuda_topology_apply is not exported by the archive")
 
     plan_data = _plan_buffer(plan)
-    info, native_dtype, input_shapes, output_shape = _plan_view(plan_data)
+    decoded, native_dtype, input_shapes, output_shape = _plan_view(plan_data)
     arrays = list(operands)
     if len(arrays) != len(input_shapes):
         raise ValueError(f"plan expects {len(input_shapes)} operands, got {len(arrays)}")
     device_id = int(cupy.cuda.Device().id)
     device_arrays = []
+    copied = []
     for index, (operand, shape) in enumerate(zip(arrays, input_shapes)):
         array = cupy.asarray(operand)
         if array.dtype != native_dtype:
@@ -280,6 +379,8 @@ def topology_apply(
         if int(array.device.id) != device_id:
             raise ValueError(
                 f"operand {index} is on CUDA device {int(array.device.id)}, expected {device_id}")
+        if not array.flags['C_CONTIGUOUS']:
+            copied.append(index)
         device_arrays.append(cupy.ascontiguousarray(array))
 
     if out is None:
@@ -293,16 +394,36 @@ def topology_apply(
                 f"output shape {tuple(output.shape)} does not match plan shape {output_shape}")
         if not output.flags['C_CONTIGUOUS']:
             raise ValueError("output buffer must be C-contiguous")
+        if int(output.device.id) != device_id:
+            raise ValueError(
+                f"output is on CUDA device {int(output.device.id)}, expected {device_id}")
 
     pointers = (ctypes.c_void_p * len(device_arrays))(
         *[int(array.data.ptr) for array in device_arrays])
     offset_array = None
+    raw_offsets = None
     if offsets is not None:
-        values = [int(value) for value in offsets]
-        if len(values) != len(device_arrays):
+        raw_offsets = tuple(int(value) for value in offsets)
+        if len(raw_offsets) != len(device_arrays):
             raise ValueError(
-                f"offsets must have {len(device_arrays)} entries, got {len(values)}")
-        offset_array = (ctypes.c_int64 * len(values))(*values)
+                f"offsets must have {len(device_arrays)} entries, got {len(raw_offsets)}")
+        offset_array = (ctypes.c_int64 * len(raw_offsets))(*raw_offsets)
+
+    if info is not None:
+        step_count = (int(decoded.steps) if isinstance(decoded.steps, (int, np.integer))
+                      else len(decoded.steps))
+        info.clear()
+        info.update(
+            dtype=str(native_dtype),
+            dtype_id=int(decoded.dtype_id),
+            n_operands=len(device_arrays),
+            plan_bytes=int(plan_data.size),
+            steps=step_count,
+            output_shape=tuple(output_shape),
+            out="allocated" if out is None else "provided",
+            copied=tuple(copied),
+            offsets=raw_offsets,
+        )
 
     # CuPy issues conversions on its own stream while the entry launches on the
     # default stream; wait for that stream so no operand is still being written.
@@ -315,7 +436,7 @@ def topology_apply(
             len(device_arrays),
             offset_array,
             int(output.data.ptr),
-            int(info.dtype_id),
+            int(decoded.dtype_id),
             None,
         )
     )
@@ -325,6 +446,9 @@ def topology_apply(
             if status == _TOPOLOGY_UNSUPPORTED
             else ""
         )
-        raise NativeUnavailable(
+        # 状态码随身带出（1/3 = 参数或内部错误，4 = 这条计划本入口不认）。
+        error = NativeUnavailable(
             f"qcd_cuda_topology_apply failed with status {status}{reason}")
+        error.status = status
+        raise error
     return output

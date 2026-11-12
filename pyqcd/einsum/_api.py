@@ -548,10 +548,14 @@ def _run_specialized_kernel(
         ("cuda_nucleon_2pt", _kernel_cuda,
          lambda: _kernel_cuda.try_nucleon_2pt(subscripts, operands)),
         ("cuda_3pt", _kernel_cuda, lambda: _kernel_cuda.try_three_pt(subscripts, operands)),
-        # 语料拓扑：整条收缩计划一次性交给原生入口（plan 由实际 subscripts 生成，
-        # 因此任何拓扑等价写法都能走专用路径，不要求字面拼写一致）。
+        # 语料拓扑：先走 per-拓扑 dedicated 执行器（步表缓存在 Python 侧，
+        # 热调用实测比通用路径快 20–100 倍）；它不可用时再回落 topology 入口。
+        ("kupl_dedicated", _kernel_kupl,
+         lambda: _kernel_kupl.try_dedicated(subscripts, operands)),
         ("kupl_topology", _kernel_kupl,
          lambda: _kernel_kupl.try_topology_apply(subscripts, operands)),
+        ("cuda_dedicated", _kernel_cuda,
+         lambda: _kernel_cuda.try_dedicated(subscripts, operands)),
         ("cuda_topology", _kernel_cuda,
          lambda: _kernel_cuda.try_topology_apply(subscripts, operands)),
     ):

@@ -10,13 +10,21 @@ kernel 的契约由 `cpp/kupl/einsum/include/nucleon2pt.h` 定义；本模块负
 
 实测（2026-11-08，4 线程）：Nvec=100 时 kernel 464 ms vs 通用 653 ms（1.41x）
 vs opt_einsum 3332 ms（7.17x）；数值 `rel = 3.85e-15`。
+
+另有一个**多操作数拓扑入口**（``try_topology_apply``）：一次原生调用跑完整个
+version-2 计划。它按 ``TOPOLOGY_DTYPES`` 显式声明 dtype —— 单精度是默认与首选，
+双精度必须由原生实测通过后才启用；未启用的 dtype 一律返回 ``None`` 回落，
+**绝不降级成单精度**。每次成功下发都会把 plan 字节数、操作数个数、`out` 模式、
+被复制的操作数下标与 offsets 记进 ``LAST_INFO``。
 """
 
 from __future__ import annotations
 
 import ctypes
 import os
+import struct
 import threading
+from collections import OrderedDict
 from typing import Any, Sequence
 
 import numpy as np
@@ -264,6 +272,74 @@ _TOPOLOGY_LOCK = threading.Lock()
 _entry_topology: Any = None
 _failed_topology = False
 
+# ── dtype 契约 ──────────────────────────────────────────────────────────────
+# 入口只下发这里**显式声明**的 dtype。单精度是默认与首选，恒可下发。
+TOPOLOGY_DTYPES: tuple[np.dtype, ...] = (
+    np.dtype(np.complex64), np.dtype(np.float32))
+# 双精度只在原生**实测通过**后才启用：原生分步执行器尚未实例化双精度数值路径
+# 时本入口返回 None 让上层回落通用路径 —— 绝不把 float64/complex128 降级成单精度
+# （那会静默丢精度），也绝不抛异常。原生补上双精度后无需改本文件。
+TOPOLOGY_DOUBLE_DTYPES: tuple[np.dtype, ...] = (
+    np.dtype(np.complex128), np.dtype(np.float64))
+_TOPOLOGY_DOUBLE_SUPPORT: dict[np.dtype, bool] = {}
+_TOPOLOGY_PROBE_LOCK = threading.Lock()
+
+# 最近一次成功下发时实际交给原生的参数：plan 字节数/步骤数、操作数个数、输出
+# 形状、out 是调用方提供还是新分配、哪些操作数被复制成连续、raw offsets。
+# 失败（回落）时为空 —— 调用方据此区分"跑过原生"与"根本没跑"。
+LAST_INFO: dict[str, object] = {}
+
+
+def _probe_double(dtype: np.dtype) -> bool:
+    """实测原生拓扑入口能否**正确**执行 ``dtype``（每进程每 dtype 一次）。
+
+    规模固定为 2×2 的两算子矩阵乘，与用户数据无关；结果必须与 numpy 一致才算
+    支持 —— 返回 0 却写错的原生实现不能被当成"已实现双精度"。
+    """
+    from ._api import contract_path
+    from ._native_plan import encode_execution_plan
+
+    base = np.arange(4, dtype=np.float64).reshape(2, 2) + 1.0
+    if dtype.kind == "c":
+        left = (base * (1.0 + 1.0j)).astype(dtype)
+        right = ((base - 2.0) * (1.0 - 0.5j)).astype(dtype)
+    else:
+        left = base.astype(dtype)
+        right = (base - 2.0).astype(dtype)
+    try:
+        _, path_info = contract_path("ij,jk->ik", left, right)
+        plan = encode_execution_plan(path_info.contraction_list, (left, right))
+        actual = kupl.topology_apply(plan, (left, right))
+    except Exception:  # noqa: BLE001 - 探测失败 = 双精度未实现，一律回落
+        return False
+    expected = np.einsum("ij,jk->ik", left, right)
+    if tuple(actual.shape) != tuple(expected.shape) or actual.dtype != dtype:
+        return False
+    scale = float(np.max(np.abs(expected))) or 1.0
+    return bool(float(np.max(np.abs(actual - expected))) <= 1e-9 * scale)
+
+
+def topology_dtypes() -> tuple[np.dtype, ...]:
+    """当前进程里拓扑入口可执行的 dtype（只读，不触发探测）。"""
+    return TOPOLOGY_DTYPES + tuple(
+        dtype for dtype in TOPOLOGY_DOUBLE_DTYPES
+        if _TOPOLOGY_DOUBLE_SUPPORT.get(dtype) is True)
+
+
+def _topology_dtype_enabled(dtype: np.dtype) -> bool:
+    if dtype in TOPOLOGY_DTYPES:
+        return True
+    if dtype not in TOPOLOGY_DOUBLE_DTYPES:
+        return False
+    support = _TOPOLOGY_DOUBLE_SUPPORT.get(dtype)
+    if support is None:
+        with _TOPOLOGY_PROBE_LOCK:
+            support = _TOPOLOGY_DOUBLE_SUPPORT.get(dtype)
+            if support is None:
+                support = _probe_double(dtype)
+                _TOPOLOGY_DOUBLE_SUPPORT[dtype] = support
+    return support
+
 
 def _function_topology():
     global _entry_topology, _failed_topology
@@ -304,24 +380,667 @@ def _topology_plan(key: tuple[Any, ...], subscripts: str,
 
 
 def try_topology_apply(subscripts: Any, operands: Sequence[Any],
-                       out: Any = None) -> np.ndarray | None:
+                       out: Any = None,
+                       offsets: Sequence[int] | None = None
+                       ) -> np.ndarray | None:
     """把整条收缩计划一次性交给原生拓扑入口；不满足条件即返回 ``None`` 回落。
 
     与 ``try_nucleon_2pt`` / ``try_three_pt`` 同一契约：命中且执行成功才返回结果
-    数组，否则记录一次 ``LAST_FAILURE`` 并让上层走通用路径。dtype 必须全局一致
-    （``encode_execution_plan`` 不允许混合精度），因此不做任何隐式转换。
+    数组，否则记录一次 ``LAST_FAILURE`` 并让上层走通用路径。
+
+    dtype 契约（见 ``TOPOLOGY_DTYPES`` / ``topology_dtypes``）：只下发本模块
+    显式声明的 dtype——单精度恒可下发，双精度需原生实测通过。未声明的 dtype
+    直接返回 ``None``：**绝不把 float64/complex128 转成单精度**，也绝不把异常
+    抛给调用方。
+
+    ``offsets`` 只能是 ``None``：numpy 视图的 ``ctypes.data`` 已经带着字节偏移，
+    再叠加 offsets 会双重偏移、静默读到错位数据，因此非 None 一律 fail closed。
     """
+    LAST_INFO.clear()
     if not enabled() or not isinstance(subscripts, str):
         return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
     operands = list(operands)
     if not operands or any(not isinstance(operand, np.ndarray) for operand in operands):
         return _fail("operands must be numpy arrays")
-    if len({operand.dtype.str for operand in operands}) != 1:
+    dtype = operands[0].dtype
+    if any(operand.dtype != dtype for operand in operands[1:]):
         return _fail("mixed operand dtypes are not supported by the native path")
+    # 先判库、再判 dtype：库缺失的原因是"没有原生入口"，不该被报成"dtype 未启用"。
     if _function_topology() is None:
         return _fail("topology entry point is missing from the native library")
+    if not _topology_dtype_enabled(np.dtype(dtype)):
+        supported = ", ".join(str(item) for item in topology_dtypes())
+        return _fail(
+            f"dtype {np.dtype(dtype)} is not enabled for the topology entry "
+            f"(supported: {supported}); no implicit downcast is performed")
+    if out is not None:
+        if not isinstance(out, np.ndarray):
+            return _fail("out must be a numpy array")
+        if out.dtype != dtype:
+            return _fail(f"out dtype {out.dtype} does not match operand dtype {dtype}")
+        if not out.flags["C_CONTIGUOUS"]:
+            return _fail("out buffer must be C-contiguous")
+    if offsets is not None:
+        return _fail(
+            "operand_offsets must stay unused: a numpy view's data pointer already "
+            "carries the byte offset, so a non-zero offset would double it")
     try:
         plan = _topology_plan(_topology_key(subscripts, operands), subscripts, operands)
-        return kupl.topology_apply(plan, operands, out)
+        result = kupl.topology_apply(plan, operands, out, info=LAST_INFO)
     except Exception as exc:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
-        return _fail(f"topology execution unavailable: {type(exc).__name__}: {exc}")
+        LAST_INFO.clear()
+        return _fail(f"topology execution unavailable: {type(exc).__name__}: {exc}",
+                     getattr(exc, "status", None))
+    LAST_INFO["path"] = "kupl_topology"
+    return result
+
+
+# ── 固定步表专用入口（dedicated） ───────────────────────────────────────────
+#
+# 与拓扑入口的区别：拓扑入口把整条 version-2 计划交给原生、由原生按 label 还原
+# 轴序；这里把一次 greedy 收缩**展开成 GEMM 步表**（槽位 + 轴序 + batch/M/N/K），
+# 原生只做 pack → cblas GEMM → unpack，不再做任何符号解析或路径推导。
+#
+# 步表格式见 cpp/kupl/einsum/include/dedicated_apply.h（v1）。本模块是唯一的
+# Python 生成端：``_dedicated_plan`` 负责编码，``try_dedicated`` 负责下发。
+# 精度契约：接受 float32 / float64 / complex64 / complex128，原生分别走
+# sgemm / dgemm / cgemm / zgemm（复数元素按 numpy 的交错实虚布局直传，累加在
+# 原生侧按各精度 BLAS 口径进行）。其它 dtype 一律返回 ``None`` —— **绝不隐式
+# 降精度**，也不把异常抛给调用方。
+
+_DEDICATED_MAGIC = 0x31414451
+_DEDICATED_VERSION = 1
+_DEDICATED_HEADER = struct.Struct("=8i")
+_DEDICATED_STEP_HEADER = struct.Struct("=9i4q")
+_DEDICATED_TOTAL_OFFSET = 2 * 4
+# 与 cpp/kupl/einsum/include/dedicated_apply.h 的 QCD_DEDICATED_MAX_* 逐项相同：
+# 原生超过任一上限就返回 4（UNSUPPORTED），这里提前拒绝可以省掉一次注定失败的
+# 下发，也让 LAST_FAILURE 说明真实原因。
+_DEDICATED_MAX_RANK = 32
+_DEDICATED_MAX_SLOTS = 256
+_DEDICATED_MAX_OPERANDS = 4096
+_DEDICATED_MAX_STEPS = 4096
+_DEDICATED_DTYPES: tuple[np.dtype, ...] = (
+    np.dtype(np.complex128), np.dtype(np.complex64),
+    np.dtype(np.float64), np.dtype(np.float32))
+# 与 pyqcd/einsum/_native_plan.py::_DTYPE_IDS、einsum_define.h 的 QCD_DTYPE_* 同序：
+# complex128=0, complex64=1, float64=2, float32=3。
+_DEDICATED_DTYPE_IDS = {
+    np.dtype(np.complex128): 0, np.dtype(np.complex64): 1,
+    np.dtype(np.float64): 2, np.dtype(np.float32): 3,
+}
+# 计划缓存按 (去空白方程, 各操作数形状, dtype, 优化器) 键控。语料级扫描（wick
+# 2582–8638 条拓扑，每条一个方程）里条目数远超 32：旧的 32 项 FIFO 会让**每次
+# 调用**都重跑 greedy 规划（实测 2.7 ms/条，是内核执行时间的 4–9 倍，dim≤8
+# 也一样）。这里改成真实 LRU + 字节预算：命中 move_to_end，超限/超预算淘汰最久
+# 未使用项。预算按 plan 字节的两倍计（Python bytes + ctypes 副本）；实测计划
+# 0.7–3.2 KB，32 MiB 可容纳约 5000 条，覆盖基础语料 2582 条。
+_DEDICATED_CACHE_LIMIT = 4096
+_DEDICATED_CACHE_BUDGET = 32 << 20
+_DEDICATED_PLAN_CACHE: OrderedDict[
+    tuple[Any, ...], tuple[bytes, tuple[int, ...], Any] | None] = OrderedDict()
+_DEDICATED_CACHE_BYTES = 0
+_DEDICATED_LOCK = threading.Lock()
+_entry_dedicated: Any = None
+_failed_dedicated = False
+
+
+def dedicated_dtypes() -> tuple[np.dtype, ...]:
+    """本入口可执行的 dtype（只读，不触发加载）。"""
+    return _DEDICATED_DTYPES
+
+
+def _function_dedicated():
+    global _entry_dedicated, _failed_dedicated
+    if _entry_dedicated is not None or _failed_dedicated:
+        return _entry_dedicated
+    try:
+        library = kupl._load_library()
+        entry = library.qcd_kupl_dedicated_apply
+    except Exception:  # noqa: BLE001 - 缺库/缺符号时静默回退
+        _failed_dedicated = True
+        return None
+    entry.argtypes = [ctypes.c_void_p, ctypes.c_longlong,
+                      ctypes.POINTER(ctypes.c_void_p), ctypes.c_int,
+                      ctypes.c_void_p, ctypes.c_int]
+    entry.restype = ctypes.c_int
+    _entry_dedicated = entry
+    return _entry_dedicated
+
+
+def _extent_map(terms: Sequence[str],
+                shapes: Sequence[Sequence[int]]) -> dict[str, int] | None:
+    """label → 轴长；同名 label 轴长必须一致（广播不在本入口能力内）。"""
+    sizes: dict[str, int] = {}
+    for term, shape in zip(terms, shapes):
+        for label, extent in zip(term, shape):
+            value = int(extent)
+            if value < 0:
+                return None
+            known = sizes.get(label)
+            if known is None:
+                sizes[label] = value
+            elif known != value:
+                return None
+    return sizes
+
+
+def _dedicated_step(left: str, right: str, result: str,
+                    left_shape: Sequence[int], right_shape: Sequence[int]):
+    """把一次二元 einsum 步拆成 batch/M/K/N 分组与三张轴序表。
+
+    与 ``pyqcd.testing._topology_kernel_gen.decompose`` 同一分解口径，区别是
+    这里带**真实轴长**（各轴不必等长），且不做广播：两侧同名轴长必须相等。
+    """
+    sizes = _extent_map((left, right), (left_shape, right_shape))
+    if sizes is None:
+        return None
+    left_set, right_set, out_set = set(left), set(right), set(result)
+    if len(left_set) != len(left) or len(right_set) != len(right):
+        return None                       # 单操作数内重复下标：不支持
+    batch = [ch for ch in left if ch in right_set and ch in out_set]
+    inner = [ch for ch in left if ch in right_set and ch not in out_set]
+    rows = [ch for ch in left if ch not in right_set]
+    cols = [ch for ch in right if ch not in left_set]
+    if not set(rows) <= out_set or not set(cols) <= out_set:
+        return None
+    if set(batch) | set(inner) | set(rows) != left_set:
+        return None
+    if set(batch) | set(inner) | set(cols) != right_set:
+        return None
+    if set(batch) | set(rows) | set(cols) != out_set:
+        return None
+    if len(out_set) != len(result):
+        return None
+
+    # 组内次序自由：按源轴号升序，让最后一个轴尽量取到 unit stride。
+    batch.sort(key=left.index)
+    rows.sort(key=left.index)
+    inner.sort(key=left.index)
+    cols.sort(key=right.index)
+    a_order = batch + rows + inner
+    b_order = batch + inner + cols
+    c_order = batch + rows + cols
+
+    def product(labels: Sequence[str]) -> int:
+        value = 1
+        for label in labels:
+            value *= sizes[label]
+        return value
+
+    return {
+        "a_axes": [left.index(ch) for ch in a_order],
+        "b_axes": [right.index(ch) for ch in b_order],
+        "c_axes": [c_order.index(ch) for ch in result],
+        "batch_rank": len(batch),
+        "m_rank": len(rows),
+        "k_rank": len(inner),
+        "batch": product(batch),
+        "m": product(rows),
+        "n": product(cols),
+        "k": product(inner),
+        "result_shape": tuple(sizes[ch] for ch in result),
+    }
+
+
+def _encode_shape(buffer: bytearray, shape: Sequence[int]) -> None:
+    buffer += struct.pack("=i", len(shape))
+    if shape:
+        buffer += struct.pack("=%dq" % len(shape), *[int(extent) for extent in shape])
+
+
+def _dedicated_plan(subscripts: str, shapes: Sequence[Sequence[int]],
+                    dtype_id: int,
+                    optimize: str = "greedy") -> tuple[bytes, tuple[int, ...]] | None:
+    """把一条收缩路径编码成原生步表；任何不支持的结构都返回 ``None``。
+
+    ``optimize`` 原样交给 :func:`pyqcd.einsum.contract_path`。默认 ``"greedy"``
+    只为兼容 ``_family_plan`` 的既有口径；``try_dedicated`` 传 ``"auto"``，与通用
+    路径用同一个优化器（实测两者在部分式子上差 2.9× FLOPs，见 local-sizing.md
+    的 ``[Q2b]``）。
+    """
+    text = _normalize(subscripts)
+    if "..." in text or "->" not in text:
+        return None
+    lhs, rhs = text.split("->", 1)
+    terms = lhs.split(",")
+    shapes = [tuple(int(extent) for extent in shape) for shape in shapes]
+    if len(terms) != len(shapes):
+        return None
+    if any(len(term) != len(shape) for term, shape in zip(terms, shapes)):
+        return None
+    for term in terms + [rhs]:
+        if len(set(term)) != len(term) or len(term) > _DEDICATED_MAX_RANK:
+            return None
+    sizes = _extent_map(terms, shapes)
+    if sizes is None or any(label not in sizes for label in rhs):
+        return None
+
+    from ._api import contract_path
+
+    try:
+        _, info = contract_path(text, *shapes, shapes=True, optimize=optimize)
+    except Exception:  # noqa: BLE001 - 规划失败即回落
+        return None
+    contraction_list = list(info.contraction_list)
+    if not contraction_list:
+        return None
+
+    pool_terms = list(terms)
+    pool_shapes = [tuple(shape) for shape in shapes]
+    pool_slots = list(range(len(terms)))
+    slot_shapes: list[tuple[int, ...]] = []
+    steps: list[tuple[int, int, int, dict]] = []
+    for number, (inds, _removed, einsum_str, _remaining, _blas) in enumerate(
+            contraction_list):
+        if len(inds) != 2:
+            return None                   # 一元步不在本入口能力内
+        left_text, _arrow, result_text = einsum_str.partition("->")
+        pair = left_text.split(",")
+        if len(pair) != 2 or [pool_terms[index] for index in inds] != pair:
+            return None
+        if len(result_text) > _DEDICATED_MAX_RANK:
+            return None
+        step = _dedicated_step(pair[0], pair[1], result_text,
+                               pool_shapes[inds[0]], pool_shapes[inds[1]])
+        if step is None:
+            return None
+        final = number + 1 == len(contraction_list)
+        dst_slot = -1 if final else len(slot_shapes)
+        # 槽位号必须在删除池元素之前取走。
+        a_slot = pool_slots[inds[0]]
+        b_slot = pool_slots[inds[1]]
+        steps.append((a_slot, b_slot, dst_slot, step))
+        if not final:
+            slot_shapes.append(step["result_shape"])
+        for index in sorted(inds, reverse=True):
+            del pool_terms[index]
+            del pool_shapes[index]
+            del pool_slots[index]
+        pool_terms.append(result_text)
+        pool_shapes.append(step["result_shape"])
+        # 原生槽位号：0..num_operands-1 是操作数，num_operands+s 才是中间槽 s。
+        pool_slots.append(-1 if final else len(terms) + dst_slot)
+    if pool_terms != [rhs]:
+        return None                       # 末步结果必须就是方程输出
+
+    out_shape = tuple(sizes[label] for label in rhs)
+    if steps[-1][2] != -1 or steps[-1][3]["result_shape"] != out_shape:
+        return None
+
+    # 原生上限（dedicated_apply.h 的 QCD_DEDICATED_MAX_*）：超限时原生返回 4，
+    # 这里提前拒绝，省掉一次注定失败的下发，也让 LAST_FAILURE 说清真实原因。
+    if not (1 <= len(shapes) <= _DEDICATED_MAX_OPERANDS):
+        return None
+    if len(slot_shapes) > _DEDICATED_MAX_SLOTS or len(steps) > _DEDICATED_MAX_STEPS:
+        return None
+
+    buffer = bytearray()
+    buffer += _DEDICATED_HEADER.pack(_DEDICATED_MAGIC, _DEDICATED_VERSION, 0,
+                                     len(shapes), len(slot_shapes), len(steps),
+                                     len(rhs), int(dtype_id))
+    for shape in list(shapes) + slot_shapes + [out_shape]:
+        _encode_shape(buffer, shape)
+    for a_slot, b_slot, dst_slot, step in steps:
+        buffer += _DEDICATED_STEP_HEADER.pack(
+            a_slot, b_slot, dst_slot,
+            len(step["a_axes"]), len(step["b_axes"]), len(step["c_axes"]),
+            step["batch_rank"], step["m_rank"], step["k_rank"],
+            step["batch"], step["m"], step["n"], step["k"])
+        for axes in (step["a_axes"], step["b_axes"], step["c_axes"]):
+            if axes:
+                buffer += struct.pack("=%di" % len(axes), *axes)
+    struct.pack_into("=i", buffer, _DEDICATED_TOTAL_OFFSET, len(buffer))
+    return bytes(buffer), out_shape
+
+
+def _dedicated_entry_bytes(entry) -> int:
+    """缓存项占用字节：plan 原串 + ctypes 副本；负结果（走不通）记 0。"""
+    return 0 if entry is None else 2 * len(entry[0])
+
+
+def _plan_flops(plan: bytes) -> int:
+    """步表的总乘加量 ``Σ 2·batch·m·n·k``，用于在候选计划之间择优。
+
+    执行器每步就是一次 GEMM，实测其耗时与 cblas 逐步一致（kernel/cblas =
+    0.97 @dim=8、1.01 @dim=16），所以 FLOPs 是本执行器上最直接的计划代价。
+    """
+    (_magic, _version, _total, n_operands, n_slots, n_steps,
+     _out_rank, _dtype) = _DEDICATED_HEADER.unpack_from(plan, 0)
+    position = _DEDICATED_HEADER.size
+    for _ in range(n_operands + n_slots + 1):
+        (rank,) = struct.unpack_from("=i", plan, position)
+        position += 4 + 8 * rank
+    flops = 0
+    for _ in range(n_steps):
+        fields = _DEDICATED_STEP_HEADER.unpack_from(plan, position)
+        position += _DEDICATED_STEP_HEADER.size
+        position += 4 * (fields[3] + fields[4] + fields[5])
+        flops += 2 * fields[9] * fields[10] * fields[11] * fields[12]
+    return flops
+
+
+def _cheapest_dedicated_plan(subscripts: str, shapes: Sequence[Sequence[int]],
+                             dtype_id: int):
+    """在 ``auto`` 与 ``greedy`` 之间取 FLOPs 更小的一步表（并列时取 auto）。
+
+    只用一个优化器会踩坑：实测 14 元式子上 greedy 可多做 2.9× FLOPs
+    （特化路径慢 1.76–2.28×），而 auto 在个别式子上也会更慢。两条都编码、
+    按步表 FLOPs 择优，代价只是首次多一次规划（之后按 optimize="auto" 缓存）。
+    """
+    candidates = []
+    for name in ("auto", "greedy"):
+        candidate = _dedicated_plan(subscripts, shapes, dtype_id, name)
+        if candidate is not None:
+            candidates.append((_plan_flops(candidate[0]), candidate))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: item[0])[1]
+
+
+def _dedicated_cache_store(key: tuple[Any, ...], entry) -> None:
+    """按 LRU + 字节预算写入；调用方必须已持有 ``_DEDICATED_LOCK``。"""
+    global _DEDICATED_CACHE_BYTES
+    previous = _DEDICATED_PLAN_CACHE.pop(key, None)
+    if previous is not None:
+        _DEDICATED_CACHE_BYTES -= _dedicated_entry_bytes(previous)
+    _DEDICATED_PLAN_CACHE[key] = entry
+    _DEDICATED_CACHE_BYTES += _dedicated_entry_bytes(entry)
+    while _DEDICATED_PLAN_CACHE and (
+            len(_DEDICATED_PLAN_CACHE) > _DEDICATED_CACHE_LIMIT
+            or _DEDICATED_CACHE_BYTES > _DEDICATED_CACHE_BUDGET):
+        _, evicted = _DEDICATED_PLAN_CACHE.popitem(last=False)
+        _DEDICATED_CACHE_BYTES -= _dedicated_entry_bytes(evicted)
+
+
+def _dedicated_cached(subscripts: str, shapes: Sequence[Sequence[int]],
+                      dtype: np.dtype, optimize: str):
+    key = (_normalize(subscripts),
+           tuple(tuple(int(extent) for extent in shape) for shape in shapes),
+           dtype.str, optimize)
+    with _DEDICATED_LOCK:
+        if key in _DEDICATED_PLAN_CACHE:
+            entry = _DEDICATED_PLAN_CACHE[key]
+            _DEDICATED_PLAN_CACHE.move_to_end(key)   # 真 LRU：命中即刷新
+            return entry
+    encoded = None
+    dtype_id = _DEDICATED_DTYPE_IDS.get(dtype)
+    if dtype_id is not None:
+        # "auto"（默认）在 auto 与 greedy 两条计划里按步表 FLOPs 择优，避免单一
+        # 优化器的坏计划（实测 greedy 可多做 2.9× FLOPs，特化路径因此慢 2×）。
+        if optimize == "auto":
+            encoded = _cheapest_dedicated_plan(subscripts, shapes, dtype_id)
+        else:
+            encoded = _dedicated_plan(subscripts, shapes, dtype_id, optimize)
+    if encoded is None:
+        # 负结果同样入缓存：否则每次调用都要重跑一遍 greedy 规划（大式子上是
+        # 毫秒级），而"这条路走不通"对同一 (式子, 形状, dtype, 优化器) 恒定。
+        entry = None
+    else:
+        plan, output_shape = encoded
+        # FLOPs 只在编码时算一次：它进 LAST_INFO 做诊断，不能在每次调用里重解码。
+        entry = (plan, output_shape,
+                 (ctypes.c_ubyte * len(plan)).from_buffer_copy(plan),
+                 _plan_flops(plan))
+    with _DEDICATED_LOCK:
+        _dedicated_cache_store(key, entry)
+    return entry
+
+
+def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
+                  *, optimize: str = "auto") -> np.ndarray | None:
+    """把一次多算子收缩按下发前的固定步表交给原生执行；否则返回 ``None``。
+
+    与 ``try_topology_apply`` 同一契约（fail-open、失败记录 ``LAST_FAILURE``、
+    绝不抛异常），区别只在原生吃的是**已展开的 GEMM 步表**而不是 version-2
+    计划：Python 只付一次规划 + 编码成本（按方程/形状/dtype/优化器缓存），执行期
+    没有逐步骤的 Python 调度。
+
+    ``optimize`` 默认 ``"auto"``：在 auto 与 greedy 两条计划里按步表 FLOPs 取小
+    （并列取 auto），因此相对通用路径的 auto 计划只会更省、不会更贵。步表执行
+    再快也补不回规划选错的代价——实测 greedy 在个别式子上比 auto 多做 487× FLOPs
+    （dim=16，1030–1085 ms vs 1.4–2.6 ms），见 local-sizing.md 的 ``[Q2b]``。
+
+    dtype 契约：``float32`` / ``float64`` / ``complex64`` / ``complex128``（原生分别
+    走 sgemm / dgemm / cgemm / zgemm）。其余 dtype 直接返回 ``None`` 并记录原因 ——
+    **不做隐式降精度**。原生 BLAS 缺 cgemm/zgemm 时复数档收到状态 4（UNSUPPORTED）
+    并回落通用路径，不会被当成错误。
+    """
+    LAST_INFO.clear()
+    if not enabled() or not isinstance(subscripts, str):
+        return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
+    operands = list(operands)
+    if not operands or any(not isinstance(operand, np.ndarray) for operand in operands):
+        return _fail("operands must be numpy arrays")
+    dtype = np.dtype(operands[0].dtype)
+    if any(np.dtype(operand.dtype) != dtype for operand in operands[1:]):
+        return _fail("mixed operand dtypes are not supported by the native path")
+    if dtype not in _DEDICATED_DTYPES:
+        supported = ", ".join(str(item) for item in _DEDICATED_DTYPES)
+        return _fail(
+            f"dtype {dtype} has no dedicated step-table path "
+            f"(supported: {supported}); no implicit downcast is performed")
+    if any(not operand.flags["C_CONTIGUOUS"] for operand in operands):
+        return _fail("dedicated kernel requires C-contiguous operands")
+    entry = _function_dedicated()
+    if entry is None:
+        return _fail("dedicated entry point is missing from the native library")
+
+    shapes = tuple(tuple(int(extent) for extent in operand.shape) for operand in operands)
+    cached = _dedicated_cached(subscripts, shapes, dtype, optimize)
+    if cached is None:
+        return _fail("the contraction path is not expressible as a fixed step table")
+    plan, output_shape, plan_buffer, plan_flops = cached
+
+    if out is None:
+        output = np.empty(output_shape, dtype=dtype)
+    else:
+        if not isinstance(out, np.ndarray):
+            return _fail("out must be a numpy array")
+        if np.dtype(out.dtype) != dtype:
+            return _fail(f"out dtype {out.dtype} does not match operand dtype {dtype}")
+        if tuple(output_shape) != tuple(out.shape):
+            return _fail(f"out shape {out.shape} does not match plan shape {output_shape}")
+        if not out.flags["C_CONTIGUOUS"]:
+            return _fail("out buffer must be C-contiguous")
+        output = out
+
+    pointers = (ctypes.c_void_p * len(operands))(
+        *[int(operand.ctypes.data) for operand in operands])
+    try:
+        status = int(entry(ctypes.addressof(plan_buffer), len(plan), pointers,
+                           len(operands), int(output.ctypes.data),
+                           _DEDICATED_DTYPE_IDS[dtype]))
+    except Exception as exc:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
+        return _fail(f"dedicated execution unavailable: {type(exc).__name__}: {exc}")
+    if status != 0:
+        return _fail(f"dedicated kernel returned status {status}", status)
+    LAST_INFO.update(
+        path="kupl_dedicated",
+        equation=_normalize(subscripts),
+        dtype=str(dtype),
+        dtype_id=_DEDICATED_DTYPE_IDS[dtype],
+        n_operands=len(operands),
+        plan_bytes=len(plan),
+        plan_flops=plan_flops,          # 选中计划的乘加量（诊断用，编码期算好）
+        optimize=optimize,
+        output_shape=tuple(output_shape),
+        out="allocated" if out is None else "provided",
+    )
+    return output
+
+
+# ── 25 族「可套用模板」入口（family） ────────────────────────────────────────
+#
+# 与 dedicated 的区别只在**准入条件**：dedicated 接受任意形状的二元步表；这里
+# 要求计划属于 docs/wick_kernel_families_20261111.md 的 25 族之一——按
+# (算子元数, 各操作数 rank 的多重集, 输出 rank) 命中原生侧的一个模板实例化。
+# 同族内实现是同一份模板（元数/rank/输出阶都是编译期常量），差异只在步表这份
+# 运行期数据，所以 Python 侧不需要为每条式子生成代码，只需要一份缓存计划。
+#
+# 计划字节 = 40 字节族表头 + dedicated v1 的「形状表 + 步记录」尾部。尾部直接
+# 复用 ``_dedicated_plan`` 的编码结果（同一份二分步表、同一套校验），族表头只是
+# 换 magic/版本并补两个保留字，因此这里没有第二份收缩分解代码。
+#
+# 精度契约：族模板（family_apply.cpp）只实例化了实数两档，因此这里**仍只接受
+# float32 / float64**（分别走 sgemm / dgemm），与 dedicated 入口放开的四种 dtype
+# 不同——complex 直接返回 ``None`` 并记录原因，**绝不隐式降精度**。
+
+_FAMILY_MAGIC = 0x31414651
+_FAMILY_VERSION = 1
+_FAMILY_HEADER = struct.Struct("=10i")
+_FAMILY_TOTAL_OFFSET = 2 * 4
+_FAMILY_DTYPES: tuple[np.dtype, ...] = (np.dtype(np.float32), np.dtype(np.float64))
+_FAMILY_CACHE_LIMIT = 32
+_FAMILY_PLAN_CACHE: dict[tuple[Any, ...], tuple[bytes, tuple[int, ...], Any] | None] = {}
+_FAMILY_LOCK = threading.Lock()
+_entry_family: Any = None
+_failed_family = False
+
+
+def family_dtypes() -> tuple[np.dtype, ...]:
+    """本入口可执行的 dtype（只读，不触发加载）。"""
+    return _FAMILY_DTYPES
+
+
+def _function_family():
+    global _entry_family, _failed_family
+    if _entry_family is not None or _failed_family:
+        return _entry_family
+    try:
+        library = kupl._load_library()
+        entry = library.qcd_kupl_family_apply
+    except Exception:  # noqa: BLE001 - 缺库/缺符号时静默回退
+        _failed_family = True
+        return None
+    entry.argtypes = [ctypes.c_void_p, ctypes.c_longlong,
+                      ctypes.POINTER(ctypes.c_void_p), ctypes.c_int,
+                      ctypes.c_void_p, ctypes.c_int]
+    entry.restype = ctypes.c_int
+    _entry_family = entry
+    return _entry_family
+
+
+def _family_plan(subscripts: str, shapes: Sequence[Sequence[int]],
+                 dtype_id: int) -> tuple[bytes, tuple[int, ...]] | None:
+    """去掉 dedicated 的 32 字节表头，换成 40 字节族表头（尾部逐字节不变）。"""
+    if _DEDICATED_HEADER.size != 32:
+        return None
+    encoded = _dedicated_plan(subscripts, shapes, dtype_id)
+    if encoded is None:
+        return None
+    base, output_shape = encoded
+    _, _, _, n_ops, n_slots, n_steps, out_rank, _ = _DEDICATED_HEADER.unpack_from(base, 0)
+    buffer = bytearray(_FAMILY_HEADER.pack(_FAMILY_MAGIC, _FAMILY_VERSION, 0,
+                                           n_ops, n_slots, n_steps, out_rank,
+                                           int(dtype_id), 0, 0))
+    buffer += base[_DEDICATED_HEADER.size:]
+    struct.pack_into("=i", buffer, _FAMILY_TOTAL_OFFSET, len(buffer))
+    return bytes(buffer), output_shape
+
+
+def _family_cached(subscripts: str, shapes: Sequence[Sequence[int]],
+                   dtype: np.dtype, optimize: str):
+    key = (_normalize(subscripts),
+           tuple(tuple(int(extent) for extent in shape) for shape in shapes),
+           dtype.str, optimize)
+    with _FAMILY_LOCK:
+        if key in _FAMILY_PLAN_CACHE:
+            return _FAMILY_PLAN_CACHE[key]
+    if optimize != "greedy":
+        return None                       # 目前只编码 greedy 路径
+    dtype_id = _DEDICATED_DTYPE_IDS.get(dtype)
+    if dtype_id is None:
+        return None
+    encoded = _family_plan(subscripts, shapes, dtype_id)
+    if encoded is None:
+        return None
+    plan, output_shape = encoded
+    entry = (plan, output_shape,
+             (ctypes.c_ubyte * len(plan)).from_buffer_copy(plan))
+    with _FAMILY_LOCK:
+        if len(_FAMILY_PLAN_CACHE) >= _FAMILY_CACHE_LIMIT:
+            _FAMILY_PLAN_CACHE.pop(next(iter(_FAMILY_PLAN_CACHE)))
+        _FAMILY_PLAN_CACHE[key] = entry
+    return entry
+
+
+def try_family_apply(subscripts: Any, operands: Sequence[Any], out: Any = None,
+                     *, optimize: str = "greedy") -> np.ndarray | None:
+    """把整条收缩交给「25 族模板」入口；任何不满足条件都返回 ``None`` 回落。
+
+    与 ``try_dedicated`` 同一契约（fail-open、失败记录 ``LAST_FAILURE``、绝不抛
+    异常），区别只在原生侧的准入：计划必须属于
+    ``docs/wick_kernel_families_20261111.md`` 的 25 族之一（元数 + 各操作数 rank
+    的多重集 + 输出 rank）。同族内由同一份 C++ 模板实例化执行，差异只在步表。
+
+    原生返回 4 表示"这份计划不属于 25 族"或"dtype 无本入口的数值路径"，与 1
+    （参数非法）分开记录，便于区分"正常回落"和"调用写错了"。
+
+    dtype 契约：``float32`` / ``float64``。其余 dtype（含 complex）直接返回
+    ``None`` 并记录原因——**不做隐式降精度**。
+    """
+    LAST_INFO.clear()
+    if not enabled() or not isinstance(subscripts, str):
+        return _fail("kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)")
+    operands = list(operands)
+    if not operands or any(not isinstance(operand, np.ndarray) for operand in operands):
+        return _fail("operands must be numpy arrays")
+    dtype = np.dtype(operands[0].dtype)
+    if any(np.dtype(operand.dtype) != dtype for operand in operands[1:]):
+        return _fail("mixed operand dtypes are not supported by the native path")
+    if dtype not in _FAMILY_DTYPES:
+        supported = ", ".join(str(item) for item in _FAMILY_DTYPES)
+        return _fail(
+            f"dtype {dtype} has no family-template path "
+            f"(supported: {supported}); no implicit downcast is performed")
+    if any(not operand.flags["C_CONTIGUOUS"] for operand in operands):
+        return _fail("family kernel requires C-contiguous operands")
+    entry = _function_family()
+    if entry is None:
+        return _fail("family entry point is missing from the native library")
+
+    shapes = tuple(tuple(int(extent) for extent in operand.shape) for operand in operands)
+    cached = _family_cached(subscripts, shapes, dtype, optimize)
+    if cached is None:
+        return _fail("the contraction path is not expressible as a family step table")
+    plan, output_shape, plan_buffer = cached
+
+    if out is None:
+        output = np.empty(output_shape, dtype=dtype)
+    else:
+        if not isinstance(out, np.ndarray):
+            return _fail("out must be a numpy array")
+        if np.dtype(out.dtype) != dtype:
+            return _fail(f"out dtype {out.dtype} does not match operand dtype {dtype}")
+        if tuple(output_shape) != tuple(out.shape):
+            return _fail(f"out shape {out.shape} does not match plan shape {output_shape}")
+        if not out.flags["C_CONTIGUOUS"]:
+            return _fail("out buffer must be C-contiguous")
+        output = out
+
+    pointers = (ctypes.c_void_p * len(operands))(
+        *[int(operand.ctypes.data) for operand in operands])
+    try:
+        status = int(entry(ctypes.addressof(plan_buffer), len(plan), pointers,
+                           len(operands), int(output.ctypes.data),
+                           _DEDICATED_DTYPE_IDS[dtype]))
+    except Exception as exc:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
+        return _fail(f"family execution unavailable: {type(exc).__name__}: {exc}")
+    if status != 0:
+        reason = ("the plan is not one of the 25 families"
+                  if status == 4 else "invalid arguments or an internal error")
+        return _fail(f"family kernel returned status {status} ({reason})", status)
+    LAST_INFO.update(
+        path="kupl_family",
+        equation=_normalize(subscripts),
+        dtype=str(dtype),
+        dtype_id=_DEDICATED_DTYPE_IDS[dtype],
+        n_operands=len(operands),
+        plan_bytes=len(plan),
+        output_shape=tuple(output_shape),
+        out="allocated" if out is None else "provided",
+    )
+    return output
+
+

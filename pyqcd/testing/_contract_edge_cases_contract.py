@@ -175,11 +175,17 @@ def test_kernel_skip_warns_immediately() -> None:
             return (rng.standard_normal(shape)
                     + 1j * rng.standard_normal(shape)).astype(np.complex128)
 
-        n = 8
+        # 用仍挂专用 kernel 的形态（P1，3pt-main）验证"kernel 禁用必须告警"。
+        # nucleon-2pt(E1) 已弃用（生产尺度 OOM 且无收益，见 _specialize 注释），
+        # 它现在属于 plan-cache，不再产生该告警，不能用作本条契约的被测形态。
+        n = 4
         operands = [draw(4, 4, n, n), draw(4, 4, n, n), draw(4, 4, n, n),
-                    draw(4, 4), draw(4, 4), draw(4, n, n, n), draw(4, n, n, n),
-                    draw(4, 4)]
-        equation = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"
+                    draw(4, 4, n, n), draw(4, 4, n, n), draw(4, 4),
+                    draw(4, n, n, n), draw(4, 4), draw(4, 4), draw(4, 4),
+                    draw(4, n, n, n), draw(4, 4), draw(4, n, n, n), draw(4, 4),
+                    draw(4, 4), draw(4, 4)]
+        equation = ("agbh,eqfr,ospt,cmdn,ikjl,ce,Gmo,gi,kq,Nbdf,"
+                    "NLnp,Mhj,Mlrt,ax,sy->MNGLxy")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             import contextlib

@@ -3287,3 +3287,23 @@ def test_cpu_einsums_contracts():
     if native_skipped:
         print('cpu-einsums: 原生桥不可用，native 组已跳过'
               f'（{reason[:80]}）')
+
+
+def test_topology_kernel_contracts():
+    """per-拓扑内核的 dtype/参数/内存/回落契约（含 120 条 dim=4 语料抽检）。"""
+    import unittest
+
+    from ._topology_kernel_contract import TESTS
+
+    passed = skipped = 0
+    for test in TESTS:
+        try:
+            test()
+        except unittest.SkipTest as exc:
+            print(f'SKIP {test.__name__}: {exc}')
+            skipped += 1
+        else:
+            passed += 1
+    if passed == 0:
+        raise unittest.SkipTest(
+            f'topology kernel contracts did not run ({skipped} skipped)')

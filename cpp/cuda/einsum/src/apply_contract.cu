@@ -6,6 +6,8 @@
 
 #include "../include/einsum_topology.h"
 
+#include "topology_steps.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
@@ -402,6 +404,10 @@ struct PreparedStep {
     int64_t k = 1;
     int64_t batch = 1;
     bool permute_output = false;
+    /* pack 恒等：操作数已在所需 pack 序上且形状一致，无需再拷一次。
+     * 这是 per-拓扑步表最常命中的优化——中间体本来就是上一步的规范输出。 */
+    bool left_pack_identity = false;
+    bool right_pack_identity = false;
 };
 
 bool same_labels(const std::vector<int32_t>& left, const std::vector<int32_t>& right) {
@@ -521,6 +527,12 @@ bool prepare_binary(
                         &prepared->output_permute)) {
         return false;
     }
+    /* 只有在标签序与形状都逐位一致时，pack 才是恒等拷贝：
+     * 此时 src_stride 恰好等于目标连续步长，跳过拷贝不影响任何元素。 */
+    prepared->left_pack_identity =
+        same_labels(left_pack_labels, left_labels) && left_pack_shape == left_shape;
+    prepared->right_pack_identity =
+        same_labels(right_pack_labels, right_labels) && right_pack_shape == right_shape;
     return true;
 }
 
@@ -595,6 +607,438 @@ bool prepare_execution(
         prepared->push_back(std::move(item));
     }
     return true;
+}
+
+/* -------------------------------------------------------------------------
+ * 拓扑描述符 → 预编译步表 → 执行计划
+ *
+ * 描述符（由 `pyqcd/einsum/_kernel_cuda.py` 生产）只带**结构**：dtype、每个
+ * 操作数的 rank/标签/形状、输出标签，以及拓扑签名摘要。收缩顺序不在描述符里，
+ * 而是取 `topology_steps.h` 的编译期常量步表（每拓扑一条紧凑步表）——运行期
+ * 不做 path 搜索，Python 也不逐步调度。
+ *
+ * 步表只存"位置对"（相对活表），标签在原生侧按 einsum 语义展开：
+ *   - 中间体按 (与另一操作数共享的批次标, 本侧自由标, 对侧自由标) 的规范序排布，
+ *     与 `prepare_binary` 建 pack 序的口径一致，可让下一步的 pack 判定为恒等；
+ *   - 末步输出直接取描述符给的输出标签顺序，省掉一次输出 permute；
+ *   - 任何越界/标签失配/尺寸超限都 fail closed（返回 UNSUPPORTED，由上层回落）。
+ *
+ * 摘要 key 用签名 blake2b-128 的前 8 字节（与 `_topology_registry` 同一口径），
+ * 另加规范标签流的 64 位 FNV 指纹由原生侧重算并比对：表项、摘要、实际结构三者
+ * 必须同时吻合，否则这条计划本入口不认。
+ * ---------------------------------------------------------------------- */
+
+constexpr uint32_t kTopologyDescriptorMagic = 0x51435444u; /* 'DTCQ' */
+constexpr uint32_t kTopologyDescriptorVersion = 1u;
+constexpr int32_t kTopologyDescriptorHeaderWords = 8;
+constexpr int32_t kTopologyDescriptorDigestWords = 4;
+constexpr int32_t kTopologyDescriptorMaxInputs = 64;
+constexpr int32_t kTopologyDescriptorMaxLabels = 200;
+constexpr int64_t kTopologyMaxIntermediateElements = int64_t(1) << 31;
+
+bool topology_dtype_supported(int dtype_id) {
+    return dtype_id >= QCD_DTYPE_COMPLEX128 && dtype_id <= QCD_DTYPE_FLOAT32;
+}
+
+struct TopologyDescriptor {
+    int32_t dtype_id = -1;
+    int32_t num_inputs = 0;
+    int32_t num_labels = 0;
+    uint64_t key = 0;
+    std::vector<int64_t> sizes;
+    std::vector<std::vector<int64_t>> input_shapes;
+    std::vector<std::vector<int32_t>> input_labels;
+    std::vector<int32_t> output_labels;
+};
+
+constexpr uint64_t kFnvOffsetBasis = 0xCBF29CE484222325ULL;
+constexpr uint64_t kFnvPrime = 0x100000001B3ULL;
+
+struct FnvHasher {
+    uint64_t state = kFnvOffsetBasis;
+    void byte(uint8_t value) {
+        state = (state ^ value) * kFnvPrime;
+    }
+};
+
+uint64_t topology_key_from_digest(const uint8_t* digest) {
+    uint64_t value = 0;
+    for (int32_t index = 0; index < 8; ++index) {
+        value = (value << 8) | static_cast<uint64_t>(digest[index]);
+    }
+    return value;
+}
+
+/* 与 `pyqcd/testing` 侧生成脚本同一口径：每个操作数 rank 字节 + 标签字节，
+ * 0xFF 分隔后接输出标签。 */
+uint64_t topology_structure_fingerprint(
+    const std::vector<std::vector<int32_t>>& inputs,
+    const std::vector<int32_t>& output) {
+    FnvHasher hasher;
+    for (const std::vector<int32_t>& labels : inputs) {
+        hasher.byte(static_cast<uint8_t>(labels.size()));
+        for (int32_t label : labels) {
+            hasher.byte(static_cast<uint8_t>(label));
+        }
+    }
+    hasher.byte(0xFF);
+    for (int32_t label : output) {
+        hasher.byte(static_cast<uint8_t>(label));
+    }
+    return hasher.state;
+}
+
+const qcd_topology_entry* find_topology_entry(uint64_t key, uint64_t fingerprint) {
+    int32_t low = 0;
+    int32_t high = kQcdTopoEntryCount - 1;
+    while (low <= high) {
+        const int32_t middle = low + (high - low) / 2;
+        const qcd_topology_entry& entry = kQcdTopoEntries[middle];
+        if (entry.key == key) {
+            /* 指纹与元数必须同时吻合：摘要撞车或表/代码漂移都不得静默执行。 */
+            return entry.fnv == fingerprint ? &entry : nullptr;
+        }
+        if (entry.key < key) {
+            low = middle + 1;
+        } else {
+            high = middle - 1;
+        }
+    }
+    return nullptr;
+}
+
+bool is_topology_descriptor(const void* data, long long bytes) {
+    if (data == nullptr ||
+        bytes < static_cast<long long>(kTopologyDescriptorHeaderWords * sizeof(int32_t))) {
+        return false;
+    }
+    int32_t magic = 0;
+    std::memcpy(&magic, data, sizeof(magic));
+    return magic == static_cast<int32_t>(kTopologyDescriptorMagic);
+}
+
+class DescriptorReader {
+  public:
+    DescriptorReader(const void* data, long long bytes)
+        : data_(static_cast<const uint8_t*>(data)), bytes_(bytes) {}
+
+    bool read_i32(int32_t* value) {
+        if (offset_ + static_cast<long long>(sizeof(int32_t)) > bytes_) {
+            return false;
+        }
+        std::memcpy(value, data_ + offset_, sizeof(int32_t));
+        offset_ += static_cast<long long>(sizeof(int32_t));
+        return true;
+    }
+
+    bool at_end() const { return offset_ == bytes_; }
+  private:
+    const uint8_t* data_;
+    long long bytes_;
+    long long offset_ = 0;
+};
+
+bool parse_topology_descriptor(
+    const void* data, long long bytes, TopologyDescriptor* descriptor) {
+    if (!is_topology_descriptor(data, bytes) || descriptor == nullptr) {
+        return false;
+    }
+    DescriptorReader reader(data, bytes);
+    int32_t header[kTopologyDescriptorHeaderWords] = {0};
+    for (int32_t index = 0; index < kTopologyDescriptorHeaderWords; ++index) {
+        if (!reader.read_i32(&header[index])) {
+            return false;
+        }
+    }
+    const int32_t version = header[1];
+    const int32_t total_bytes = header[2];
+    const int32_t dtype_id = header[3];
+    const int32_t num_inputs = header[4];
+    const int32_t num_labels = header[5];
+    const int32_t num_output = header[6];
+    if (version != static_cast<int32_t>(kTopologyDescriptorVersion) ||
+        total_bytes != bytes || !topology_dtype_supported(dtype_id) ||
+        num_inputs <= 0 || num_inputs > kTopologyDescriptorMaxInputs ||
+        num_labels < 0 || num_labels > kTopologyDescriptorMaxLabels ||
+        num_output < 0 || num_output > num_labels) {
+        return false;
+    }
+
+    uint8_t digest[16] = {0};
+    int32_t digest_words[kTopologyDescriptorDigestWords] = {0};
+    for (int32_t index = 0; index < kTopologyDescriptorDigestWords; ++index) {
+        if (!reader.read_i32(&digest_words[index])) {
+            return false;
+        }
+    }
+    std::memcpy(digest, digest_words, sizeof(digest));
+
+    TopologyDescriptor candidate;
+    candidate.dtype_id = dtype_id;
+    candidate.num_inputs = num_inputs;
+    candidate.num_labels = num_labels;
+    candidate.key = topology_key_from_digest(digest);
+    candidate.sizes.assign(static_cast<std::size_t>(num_labels), -1);
+    candidate.input_labels.resize(static_cast<std::size_t>(num_inputs));
+    candidate.input_shapes.resize(static_cast<std::size_t>(num_inputs));
+
+    for (int32_t input = 0; input < num_inputs; ++input) {
+        int32_t rank = 0;
+        if (!reader.read_i32(&rank) || rank <= 0 ||
+            rank > static_cast<int32_t>(QCD_CUDA_MAX_RANK)) {
+            return false;
+        }
+        std::vector<int32_t> labels;
+        labels.reserve(static_cast<std::size_t>(rank));
+        for (int32_t axis = 0; axis < rank; ++axis) {
+            int32_t label = 0;
+            if (!reader.read_i32(&label) || label < 0 || label >= num_labels ||
+                contains(labels, label)) {
+                return false;
+            }
+            labels.push_back(label);
+        }
+        std::vector<int64_t> shape(static_cast<std::size_t>(rank), 0);
+        for (int32_t axis = 0; axis < rank; ++axis) {
+            int32_t extent = 0;
+            if (!reader.read_i32(&extent) || extent <= 0) {
+                return false;
+            }
+            shape[static_cast<std::size_t>(axis)] = extent;
+            const int32_t label = labels[static_cast<std::size_t>(axis)];
+            int64_t& size = candidate.sizes[static_cast<std::size_t>(label)];
+            /* 同一标签在多个操作数里出现：允许 1 对 N 广播，其余一律拒绝。 */
+            if (size < 0) {
+                size = extent;
+            } else if (size == extent) {
+                continue;
+            } else if (extent == 1) {
+                continue;
+            } else if (size == 1) {
+                size = extent;
+            } else {
+                return false;
+            }
+        }
+        candidate.input_labels[static_cast<std::size_t>(input)] = std::move(labels);
+        candidate.input_shapes[static_cast<std::size_t>(input)] = std::move(shape);
+    }
+
+    std::vector<int32_t> output;
+    output.reserve(static_cast<std::size_t>(num_output));
+    for (int32_t axis = 0; axis < num_output; ++axis) {
+        int32_t label = 0;
+        if (!reader.read_i32(&label) || label < 0 || label >= num_labels ||
+            contains(output, label)) {
+            return false;
+        }
+        output.push_back(label);
+    }
+    candidate.output_labels = std::move(output);
+    if (!reader.at_end()) {
+        return false;
+    }
+    for (int64_t size : candidate.sizes) {
+        if (size <= 0) {
+            return false;
+        }
+    }
+    *descriptor = std::move(candidate);
+    return true;
+}
+
+struct LiveOperand {
+    std::vector<int32_t> labels;
+};
+
+bool topology_step_output_labels(
+    const std::vector<int32_t>& left,
+    const std::vector<int32_t>& right,
+    const std::vector<LiveOperand>& live,
+    std::size_t left_position,
+    std::size_t right_position,
+    const std::vector<int32_t>& final_labels,
+    std::vector<int32_t>* output) {
+    output->clear();
+    const auto survives = [&live, &final_labels, left_position, right_position](int32_t label) {
+        if (contains(final_labels, label)) {
+            return true;
+        }
+        for (std::size_t index = 0; index < live.size(); ++index) {
+            if (index == left_position || index == right_position) {
+                continue;
+            }
+            if (contains(live[index].labels, label)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    /* 规范序：批次标（两侧共享）→ 左自由标 → 右自由标，与 `prepare_binary`
+     * 构造 pack 序的顺序一致，后续步骤的 pack 更容易判定为恒等。 */
+    for (int32_t label : left) {
+        if (contains(right, label) && survives(label) && !contains(*output, label)) {
+            output->push_back(label);
+        }
+    }
+    for (int32_t label : left) {
+        if (!contains(right, label) && survives(label) && !contains(*output, label)) {
+            output->push_back(label);
+        }
+    }
+    for (int32_t label : right) {
+        if (!contains(left, label) && survives(label) && !contains(*output, label)) {
+            output->push_back(label);
+        }
+    }
+    return true;
+}
+
+bool topology_plan_from_table(
+    const TopologyDescriptor& descriptor,
+    const qcd_topology_order& order,
+    pyqcd_einsum::ExecutionPlan* plan) {
+    if (order.pairs == nullptr || order.steps <= 0 ||
+        order.steps != descriptor.num_inputs - 1) {
+        return false;
+    }
+    pyqcd_einsum::ExecutionPlan candidate;
+    candidate.dtype_id = descriptor.dtype_id;
+    candidate.num_inputs = descriptor.num_inputs;
+    candidate.output_ndim = static_cast<int32_t>(descriptor.output_labels.size());
+    candidate.sizes = descriptor.sizes;
+    candidate.input_shapes = descriptor.input_shapes;
+    candidate.output_labels = descriptor.output_labels;
+
+    std::vector<LiveOperand> live(static_cast<std::size_t>(descriptor.num_inputs));
+    for (int32_t input = 0; input < descriptor.num_inputs; ++input) {
+        live[static_cast<std::size_t>(input)].labels =
+            descriptor.input_labels[static_cast<std::size_t>(input)];
+    }
+
+    const auto shape_of = [&descriptor](const std::vector<int32_t>& labels) {
+        std::vector<int64_t> shape(labels.size(), 0);
+        for (std::size_t axis = 0; axis < labels.size(); ++axis) {
+            shape[axis] = descriptor.sizes[static_cast<std::size_t>(labels[axis])];
+        }
+        return shape;
+    };
+
+    candidate.steps.reserve(static_cast<std::size_t>(order.steps));
+    for (int32_t step_index = 0; step_index < order.steps; ++step_index) {
+        const int32_t left_position = order.pairs[2 * step_index];
+        const int32_t right_position = order.pairs[2 * step_index + 1];
+        const std::size_t live_size = live.size();
+        if (left_position < 0 || right_position < 0 ||
+            static_cast<std::size_t>(left_position) >= live_size ||
+            static_cast<std::size_t>(right_position) >= live_size ||
+            left_position == right_position) {
+            return false;
+        }
+        /* 位置对按升序记账：先擦大的，再擦小的（步表位置指的是紧凑活表）。 */
+        const std::size_t first = static_cast<std::size_t>(
+            std::min(left_position, right_position));
+        const std::size_t second = static_cast<std::size_t>(
+            std::max(left_position, right_position));
+
+        pyqcd_einsum::ExecutionStep step;
+        step.positions = {static_cast<int32_t>(first), static_cast<int32_t>(second)};
+        const std::vector<int32_t>& first_labels = live[first].labels;
+        const std::vector<int32_t>& second_labels = live[second].labels;
+        const bool last_step = step_index + 1 == order.steps;
+        std::vector<int32_t> output_labels;
+        if (last_step) {
+            output_labels = descriptor.output_labels;
+        } else if (!topology_step_output_labels(
+                       first_labels, second_labels, live, first, second,
+                       descriptor.output_labels, &output_labels)) {
+            return false;
+        }
+        step.inputs.resize(2);
+        step.inputs[0].labels = first_labels;
+        step.inputs[0].shape = shape_of(first_labels);
+        step.inputs[1].labels = second_labels;
+        step.inputs[1].shape = shape_of(second_labels);
+        step.output.labels = output_labels;
+        step.output.shape = shape_of(output_labels);
+        candidate.steps.push_back(std::move(step));
+
+        int64_t elements = 0;
+        if (!checked_product(step.output.shape, &elements) ||
+            elements > kTopologyMaxIntermediateElements) {
+            return false;
+        }
+
+        LiveOperand merged;
+        merged.labels = candidate.steps.back().output.labels;
+        live.erase(live.begin() + static_cast<std::ptrdiff_t>(second));
+        live.erase(live.begin() + static_cast<std::ptrdiff_t>(first));
+        live.push_back(std::move(merged));
+    }
+    if (candidate.steps.size() != static_cast<std::size_t>(order.steps) ||
+        candidate.steps.back().output.labels != descriptor.output_labels) {
+        return false;
+    }
+    *plan = std::move(candidate);
+    return true;
+}
+
+/* 不在语料步表里的拓扑只接受极小的链式收缩（左到右），其余一律 UNSUPPORTED
+ * 让上层回落到带真实 path 搜索的通用路径。 */
+bool topology_plan_chain(
+    const TopologyDescriptor& descriptor, pyqcd_einsum::ExecutionPlan* plan) {
+    if (descriptor.num_inputs < 1 || descriptor.num_inputs > 6) {
+        return false;
+    }
+    if (descriptor.num_inputs == 1) {
+        pyqcd_einsum::ExecutionPlan candidate;
+        candidate.dtype_id = descriptor.dtype_id;
+        candidate.num_inputs = 1;
+        candidate.output_ndim = static_cast<int32_t>(descriptor.output_labels.size());
+        candidate.sizes = descriptor.sizes;
+        candidate.input_shapes = descriptor.input_shapes;
+        candidate.output_labels = descriptor.output_labels;
+        pyqcd_einsum::ExecutionStep step;
+        step.positions = {0};
+        step.inputs.resize(1);
+        step.inputs[0].labels = descriptor.input_labels[0];
+        step.inputs[0].shape = descriptor.input_shapes[0];
+        step.output.labels = descriptor.output_labels;
+        step.output.shape.resize(descriptor.output_labels.size(), 0);
+        for (std::size_t axis = 0; axis < descriptor.output_labels.size(); ++axis) {
+            step.output.shape[axis] =
+                descriptor.sizes[static_cast<std::size_t>(descriptor.output_labels[axis])];
+        }
+        candidate.steps.push_back(std::move(step));
+        *plan = std::move(candidate);
+        return true;
+    }
+    std::vector<int8_t> pairs;
+    pairs.reserve(static_cast<std::size_t>(2 * (descriptor.num_inputs - 1)));
+    for (int32_t step = 0; step + 1 < descriptor.num_inputs; ++step) {
+        pairs.push_back(0);
+        pairs.push_back(1);
+    }
+    const qcd_topology_order order{pairs.data(),
+                                   descriptor.num_inputs - 1};
+    return topology_plan_from_table(descriptor, order, plan);
+}
+
+bool build_topology_plan(
+    const TopologyDescriptor& descriptor, pyqcd_einsum::ExecutionPlan* plan) {
+    const uint64_t fingerprint =
+        topology_structure_fingerprint(descriptor.input_labels, descriptor.output_labels);
+    const qcd_topology_entry* entry =
+        find_topology_entry(descriptor.key, fingerprint);
+    if (entry == nullptr) {
+        return topology_plan_chain(descriptor, plan);
+    }
+    if (entry->order >= static_cast<uint16_t>(sizeof(kQcdTopoOrders) /
+                                              sizeof(kQcdTopoOrders[0]))) {
+        return false;
+    }
+    return topology_plan_from_table(
+        descriptor, kQcdTopoOrders[entry->order], plan);
 }
 
 struct SandwichPlan {
@@ -1007,6 +1451,31 @@ void* offset_pointer(void* base, int64_t elements, int dtype_id) {
     return static_cast<uint8_t*>(base) + elements * size;
 }
 
+constexpr uint64_t kLayoutFnvOffset = 0xCBF29CE484222325ULL;
+constexpr uint64_t kLayoutFnvPrime = 0x100000001B3ULL;
+
+/* 步骤布局指纹：只覆盖决定 arena 尺寸与偏移的字段。布局相同即可直接复用上一次
+ * 的 arena 与偏移表；布局不同但容量够时只重算偏移，不重新分配。 */
+uint64_t layout_signature_of(const std::vector<PreparedStep>& steps) {
+    uint64_t hash = kLayoutFnvOffset;
+    const auto mix = [&hash](uint64_t value) {
+        hash = (hash ^ value) * kLayoutFnvPrime;
+    };
+    mix(steps.size());
+    for (const PreparedStep& step : steps) {
+        mix(static_cast<uint64_t>(step.kind));
+        mix(static_cast<uint64_t>(step.output_elements));
+        mix(static_cast<uint64_t>(step.m));
+        mix(static_cast<uint64_t>(step.n));
+        mix(static_cast<uint64_t>(step.k));
+        mix(static_cast<uint64_t>(step.batch));
+        mix(step.permute_output ? 1u : 2u);
+        mix(step.left_pack_identity ? 3u : 4u);
+        mix(step.right_pack_identity ? 5u : 6u);
+    }
+    return hash;
+}
+
 class CudaWorkspace {
   public:
     CudaWorkspace() = default;
@@ -1015,32 +1484,34 @@ class CudaWorkspace {
 
     ~CudaWorkspace() { release(); }
 
+    /* 换一条拓扑只换布局，不换池子：arena 仅在容量不够时才重新 cudaMalloc。
+     * `layout_signature_` 是步骤布局的指纹（步种类 + 各步 m/n/k/batch + 中间体
+     * 元素数 + pack 恒等标志），布局变了就必须重算偏移；容量不足才扩容。
+     * 这样同一进程里连续跑多条拓扑不再反复 free/alloc，也不再重建 cuBLAS 句柄。 */
     int prepare(const std::vector<PreparedStep>& prepared, int dtype_id) {
         int device = -1;
         int status = map_cuda_error(cudaGetDevice(&device));
         if (status != QCD_STATUS_OK) {
             return status;
         }
-        if (initialized_ && !sandwich_storage_ && !e4_storage_ &&
-            device_ == device && dtype_id_ == dtype_id) {
+        const uint64_t signature = layout_signature_of(prepared);
+        const bool reusable = initialized_ && !sandwich_storage_ && !e4_storage_ &&
+                              device_ == device && dtype_id_ == dtype_id &&
+                              capacity_elements_ > 0;
+        if (reusable && signature == layout_signature_) {
             return QCD_STATUS_OK;
         }
 
-        release();
-        sandwich_storage_ = false;
-        dtype_id_ = dtype_id;
-        device_ = device;
-        output_offsets_.resize(prepared.size(), 0);
+        std::vector<int64_t> output_offsets(prepared.size(), 0);
         int64_t output_elements = 0;
-        max_left_pack_ = 0;
-        max_right_pack_ = 0;
-        max_gemm_output_ = 0;
-        max_batch_ = 1;
+        int64_t max_left_pack = 0;
+        int64_t max_right_pack = 0;
+        int64_t max_gemm_output = 0;
+        int64_t max_batch = 1;
         for (std::size_t index = 0; index < prepared.size(); ++index) {
             const PreparedStep& step = prepared[index];
-            output_offsets_[index] = output_elements;
+            output_offsets[index] = output_elements;
             if (!add_checked(output_elements, step.output_elements, &output_elements)) {
-                release();
                 return QCD_STATUS_INVALID;
             }
             if (step.kind != OperationKind::kGemm) {
@@ -1050,35 +1521,84 @@ class CudaWorkspace {
             int64_t temporary = 0;
             if (!multiply_checked(step.batch, step.m, &temporary) ||
                 !multiply_checked(temporary, step.k, &elements)) {
-                release();
                 return QCD_STATUS_INVALID;
             }
-            max_left_pack_ = std::max(max_left_pack_, elements);
+            max_left_pack = std::max(max_left_pack, elements);
             if (!multiply_checked(step.batch, step.n, &temporary) ||
                 !multiply_checked(temporary, step.k, &elements)) {
-                release();
                 return QCD_STATUS_INVALID;
             }
-            max_right_pack_ = std::max(max_right_pack_, elements);
+            max_right_pack = std::max(max_right_pack, elements);
             if (!multiply_checked(step.batch, step.m, &temporary) ||
                 !multiply_checked(temporary, step.n, &elements)) {
-                release();
                 return QCD_STATUS_INVALID;
             }
-            max_gemm_output_ = std::max(max_gemm_output_, elements);
+            max_gemm_output = std::max(max_gemm_output, elements);
             const int64_t parallel_units = step.batch > 1 ? step.batch : step.m;
-            max_batch_ = std::max(max_batch_, parallel_units);
+            max_batch = std::max(max_batch, parallel_units);
         }
 
         int64_t total_elements = output_elements;
-        if (!add_checked(total_elements, max_left_pack_, &total_elements) ||
-            !add_checked(total_elements, max_right_pack_, &total_elements) ||
-            !add_checked(total_elements, max_gemm_output_, &total_elements)) {
-            release();
+        if (!add_checked(total_elements, max_left_pack, &total_elements) ||
+            !add_checked(total_elements, max_right_pack, &total_elements) ||
+            !add_checked(total_elements, max_gemm_output, &total_elements)) {
             return QCD_STATUS_INVALID;
         }
-        storage_elements_ = total_elements;
+
+        const int wanted_streams = std::max(
+            1, std::min(requested_stream_count(),
+                        static_cast<int>(std::min<int64_t>(
+                            max_batch, std::numeric_limits<int>::max()))));
+        const bool reuse_arena = reusable && total_elements <= capacity_elements_;
+
+        output_offsets_ = std::move(output_offsets);
         output_elements_ = output_elements;
+        max_left_pack_ = max_left_pack;
+        max_right_pack_ = max_right_pack;
+        max_gemm_output_ = max_gemm_output;
+        max_batch_ = max_batch;
+        dtype_id_ = dtype_id;
+        device_ = device;
+        sandwich_storage_ = false;
+        layout_signature_ = signature;
+
+        if (reuse_arena) {
+            storage_elements_ = capacity_elements_;
+            status = ensure_workers(wanted_streams, needs_gemm(prepared));
+            if (status != QCD_STATUS_OK) {
+                release();
+                return status;
+            }
+            initialized_ = true;
+            if (trace_enabled()) {
+                std::fprintf(
+                    stderr,
+                    "PYQCD_EINSUM_CUDA_WORKSPACE elements=%lld streams=%d "
+                    "mallocs=0 reused=1 needed=%lld\n",
+                    static_cast<long long>(storage_elements_), stream_count_,
+                    static_cast<long long>(total_elements));
+            }
+            return QCD_STATUS_OK;
+        }
+
+        release();
+        sandwich_storage_ = false;
+        dtype_id_ = dtype_id;
+        device_ = device;
+        output_offsets_.resize(prepared.size(), 0);
+        int64_t running = 0;
+        for (std::size_t index = 0; index < prepared.size(); ++index) {
+            output_offsets_[index] = running;
+            running += prepared[index].output_elements;
+        }
+        output_elements_ = output_elements;
+        max_left_pack_ = max_left_pack;
+        max_right_pack_ = max_right_pack;
+        max_gemm_output_ = max_gemm_output;
+        max_batch_ = max_batch;
+        layout_signature_ = signature;
+        storage_elements_ = total_elements;
+        capacity_elements_ = total_elements;
         std::size_t bytes = 0;
         if (!allocation_bytes(storage_elements_, dtype_id_, &bytes)) {
             release();
@@ -1089,55 +1609,10 @@ class CudaWorkspace {
             release();
             return status;
         }
-
-        stream_count_ = std::max(1, std::min(requested_stream_count(),
-                                             static_cast<int>(std::min<int64_t>(
-                                                 max_batch_, std::numeric_limits<int>::max()))));
-        streams_.assign(static_cast<std::size_t>(stream_count_), nullptr);
-        handles_.assign(static_cast<std::size_t>(stream_count_), nullptr);
-        if (stream_count_ > 1) {
-            done_events_.assign(static_cast<std::size_t>(stream_count_), nullptr);
-            for (int index = 0; index < stream_count_; ++index) {
-                const cudaError_t stream_error = cudaStreamCreateWithFlags(
-                    &streams_[static_cast<std::size_t>(index)], cudaStreamNonBlocking);
-                if (stream_error != cudaSuccess) {
-                    status = map_cuda_error(stream_error);
-                    release();
-                    return status;
-                }
-                const cudaError_t event_error = cudaEventCreateWithFlags(
-                    &done_events_[static_cast<std::size_t>(index)], cudaEventDisableTiming);
-                if (event_error != cudaSuccess) {
-                    status = map_cuda_error(event_error);
-                    release();
-                    return status;
-                }
-            }
-            const cudaError_t event_error =
-                cudaEventCreateWithFlags(&pack_event_, cudaEventDisableTiming);
-            if (event_error != cudaSuccess) {
-                status = map_cuda_error(event_error);
-                release();
-                return status;
-            }
-        }
-
-        if (needs_gemm(prepared)) {
-            for (int index = 0; index < stream_count_; ++index) {
-                cublasHandle_t handle = nullptr;
-                status = map_cublas_status(cublasCreate(&handle));
-                if (status != QCD_STATUS_OK) {
-                    release();
-                    return status;
-                }
-                handles_[static_cast<std::size_t>(index)] = handle;
-                status = map_cublas_status(
-                    cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_HOST));
-                if (status != QCD_STATUS_OK) {
-                    release();
-                    return status;
-                }
-            }
+        status = ensure_workers(wanted_streams, needs_gemm(prepared));
+        if (status != QCD_STATUS_OK) {
+            release();
+            return status;
         }
         initialized_ = true;
         if (trace_enabled()) {
@@ -1168,6 +1643,7 @@ class CudaWorkspace {
         device_ = device;
         sandwich_storage_ = true;
         storage_elements_ = output_elements;
+        capacity_elements_ = output_elements;
         output_elements_ = 0;
         output_offsets_.assign(1, 0);
         std::size_t bytes = 0;
@@ -1206,6 +1682,7 @@ class CudaWorkspace {
         dtype_id_ = dtype_id;
         device_ = device;
         e4_storage_ = true;
+        capacity_elements_ = 0;
         initialized_ = true;
         if (trace_enabled()) {
             std::fprintf(
@@ -1286,6 +1763,66 @@ class CudaWorkspace {
         return QCD_STATUS_OK;
     }
 
+    /* 让流/句柄池至少容纳 wanted 个 worker；只增不减，复用时不重建。 */
+    int ensure_workers(int wanted, bool with_gemm) {
+        if (wanted < 1) {
+            wanted = 1;
+        }
+        const std::size_t size = static_cast<std::size_t>(wanted);
+        if (streams_.size() < size) {
+            streams_.resize(size, nullptr);
+        }
+        if (handles_.size() < size) {
+            handles_.resize(size, nullptr);
+        }
+        if (done_events_.size() < size) {
+            done_events_.resize(size, nullptr);
+        }
+        for (int index = 0; index < wanted; ++index) {
+            const std::size_t slot = static_cast<std::size_t>(index);
+            if (wanted > 1 && streams_[slot] == nullptr) {
+                const cudaError_t error = cudaStreamCreateWithFlags(
+                    &streams_[slot], cudaStreamNonBlocking);
+                if (error != cudaSuccess) {
+                    return map_cuda_error(error);
+                }
+            }
+            if (wanted > 1 && done_events_[slot] == nullptr) {
+                const cudaError_t error = cudaEventCreateWithFlags(
+                    &done_events_[slot], cudaEventDisableTiming);
+                if (error != cudaSuccess) {
+                    return map_cuda_error(error);
+                }
+            }
+            if (with_gemm && handles_[slot] == nullptr) {
+                cublasHandle_t handle = nullptr;
+                int status = map_cublas_status(cublasCreate(&handle));
+                if (status != QCD_STATUS_OK) {
+                    return status;
+                }
+                status = map_cublas_status(
+                    cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_HOST));
+                if (status != QCD_STATUS_OK) {
+                    cublasDestroy(handle);
+                    return status;
+                }
+                handles_[slot] = handle;
+            }
+        }
+        if (wanted > 1 && pack_event_ == nullptr) {
+            const cudaError_t error = cudaEventCreateWithFlags(
+                &pack_event_, cudaEventDisableTiming);
+            if (error != cudaSuccess) {
+                return map_cuda_error(error);
+            }
+        }
+        stream_count_ = wanted;
+        return QCD_STATUS_OK;
+    }
+
+    /* 计划换了：偏移表作废，但 arena 留着（下一次 prepare 按新布局决定复用或扩容）。 */
+    void invalidate_layout() { layout_signature_ = 0; }
+
     void release() {
         if (device_ >= 0) {
             int current_device = -1;
@@ -1320,6 +1857,8 @@ class CudaWorkspace {
         }
         storage_ = nullptr;
         storage_elements_ = 0;
+        capacity_elements_ = 0;
+        layout_signature_ = 0;
         output_elements_ = 0;
         max_left_pack_ = 0;
         max_right_pack_ = 0;
@@ -1350,6 +1889,9 @@ class CudaWorkspace {
 
     void* storage_ = nullptr;
     int64_t storage_elements_ = 0;
+    /* arena 的实际容量（元素）；`storage_elements_` 只用于 trace。 */
+    int64_t capacity_elements_ = 0;
+    uint64_t layout_signature_ = 0;
     int64_t output_elements_ = 0;
     int64_t max_left_pack_ = 0;
     int64_t max_right_pack_ = 0;
@@ -1400,7 +1942,7 @@ int execute_prepared(
     CudaWorkspace* workspace,
     const std::vector<void*>& input_data,
     void* output_data) {
-    if (workspace == nullptr) {
+    if (workspace == nullptr || prepared.empty() || output_data == nullptr) {
         return QCD_STATUS_INVALID;
     }
     const int dtype_id = plan.dtype_id;
@@ -1495,19 +2037,33 @@ int execute_prepared(
                 }
                 void* left_pack = workspace->left_pack();
                 void* right_pack = workspace->right_pack();
-                status = qcd_cuda_permute(
-                    dtype_id, nodes[static_cast<std::size_t>(step.left)], left_pack,
-                    step.left_pack, nullptr);
+                /* pack 恒等就不下发拷贝 kernel：操作数已经在 [batch,free,reduce]
+                 * 的连续布局上，直接把它当 GEMM 的 A/B 用。 */
+                void* left_data = nodes[static_cast<std::size_t>(step.left)];
+                if (step.left_pack_identity) {
+                    left_pack = left_data;
+                } else {
+                    status = qcd_cuda_permute(
+                        dtype_id, left_data, left_pack, step.left_pack, nullptr);
+                }
                 if (status != QCD_STATUS_OK) {
                     destroy_timing();
                     return status;
                 }
-                status = qcd_cuda_permute(
-                    dtype_id, nodes[static_cast<std::size_t>(step.right)], right_pack,
-                    step.right_pack, nullptr);
+                void* right_data = nodes[static_cast<std::size_t>(step.right)];
+                if (step.right_pack_identity) {
+                    right_pack = right_data;
+                } else {
+                    status = qcd_cuda_permute(
+                        dtype_id, right_data, right_pack, step.right_pack, nullptr);
+                }
                 if (status != QCD_STATUS_OK) {
                     destroy_timing();
                     return status;
+                }
+                if (step_timing) {
+                    timing_skipped[step_index] =
+                        (step.left_pack_identity ? 1 : 0) + (step.right_pack_identity ? 1 : 0);
                 }
                 void* gemm_output = step.permute_output ? workspace->gemm_output() : step_output;
                 const bool split_batch = step.batch > 1;
@@ -1894,7 +2450,31 @@ struct TopologyProgram {
 
     int load(const void* plan_data, long long plan_len, int requested_dtype) {
         pyqcd_einsum::ExecutionPlan parsed;
-        if (!decode_execution_plan(plan_data, &parsed)) {
+        if (is_topology_descriptor(plan_data, plan_len)) {
+            /* 描述符：结构 + 拓扑摘要 → 预编译步表 → 执行计划。
+             * 一条 path 搜索都没有：顺序来自 topology_steps.h 的常量表。 */
+            TopologyDescriptor descriptor;
+            if (!parse_topology_descriptor(plan_data, plan_len, &descriptor)) {
+                if (trace_enabled()) {
+                    std::fprintf(stderr, "PYQCD_EINSUM_CUDA_TOPOLOGY reject=descriptor\n");
+                }
+                return QCD_TOPOLOGY_UNSUPPORTED;
+            }
+            if (descriptor.dtype_id != requested_dtype) {
+                return QCD_STATUS_INVALID;
+            }
+            if (!build_topology_plan(descriptor, &parsed)) {
+                if (trace_enabled()) {
+                    std::fprintf(
+                        stderr,
+                        "PYQCD_EINSUM_CUDA_TOPOLOGY reject=table key=0x%016llx "
+                        "arity=%d\n",
+                        static_cast<unsigned long long>(descriptor.key),
+                        descriptor.num_inputs);
+                }
+                return QCD_TOPOLOGY_UNSUPPORTED;
+            }
+        } else if (!decode_execution_plan(plan_data, &parsed)) {
             return QCD_TOPOLOGY_UNSUPPORTED;
         }
         if (parsed.dtype_id != requested_dtype) {
@@ -1914,9 +2494,8 @@ struct TopologyProgram {
         std::vector<uint8_t> candidate_bytes(
             static_cast<const uint8_t*>(plan_data),
             static_cast<const uint8_t*>(plan_data) + plan_len);
-        // 计划换了以后 arena 里的偏移表（output_offsets_/max_*）已经失效，
-        // 必须让下一次 prepare 重新分配，不能沿用旧布局。
-        workspace.release();
+        /* 计划换了：偏移表作废，但 arena 留在池子里复用（容量够就不重新 malloc）。 */
+        workspace.invalidate_layout();
         bytes = std::move(candidate_bytes);
         dtype_id = requested_dtype;
         plan = std::move(parsed);
@@ -1929,10 +2508,6 @@ struct TopologyProgram {
 TopologyProgram& topology_program() {
     static TopologyProgram program;
     return program;
-}
-
-bool topology_dtype_supported(int dtype_id) {
-    return dtype_id >= QCD_DTYPE_COMPLEX128 && dtype_id <= QCD_DTYPE_FLOAT32;
 }
 
 bool offset_pointer_checked(
@@ -1961,7 +2536,11 @@ int topology_entry(
         !topology_dtype_supported(dtype_id)) {
         return QCD_STATUS_INVALID;
     }
-    if (plan_len < static_cast<long long>(9 * sizeof(int32_t)) ||
+    const bool descriptor = is_topology_descriptor(plan_data, plan_len);
+    const long long minimum_bytes =
+        static_cast<long long>((descriptor ? kTopologyDescriptorHeaderWords
+                                           : 9) * sizeof(int32_t));
+    if (plan_len < minimum_bytes ||
         static_cast<long long>(static_cast<const int32_t*>(plan_data)[2]) != plan_len) {
         return QCD_STATUS_INVALID;
     }

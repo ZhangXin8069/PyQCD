@@ -8,7 +8,34 @@ get_mpi_tlist(find/TScatter)、get_mpi_data 八模式
 from typing import Any, Dict, List, Literal, NamedTuple, Union
 
 import numpy as np
-from mpi4py import MPI
+
+# MPI 是**可选依赖**：环境缺 mpi4py 时本模块仍可导入，但所有依赖通信的入口
+# 一律抛 ``MpiUnavailable``（明确禁用，而不是静默串行）。
+try:
+    from mpi4py import MPI
+except ImportError as _exc:                     # pragma: no cover - 环境相关
+    MPI = None
+    _MPI_IMPORT_ERROR = _exc
+else:
+    _MPI_IMPORT_ERROR = None
+
+
+class MpiUnavailable(RuntimeError):
+    """当前环境没有可用的 MPI（未安装 mpi4py 或无法初始化）。"""
+
+
+def require_mpi():
+    """返回 ``MPI`` 模块；不可用时抛 :class:`MpiUnavailable`。"""
+    if MPI is None:
+        raise MpiUnavailable(
+            "MPI support is disabled because mpi4py is unavailable "
+            f"({_MPI_IMPORT_ERROR}); install pyqcd[mpi] or the system MPI "
+            "package to enable it")
+    return MPI
+
+
+def mpi_available() -> bool:
+    return MPI is not None
 
 
 class _MPILogger:
@@ -26,9 +53,17 @@ class _MPILogger:
 
 
 _MPI_LOGGER = _MPILogger()
-_MPI_COMM: MPI.Intracomm = MPI.COMM_WORLD
-_MPI_SIZE: int = _MPI_COMM.Get_size()
-_MPI_RANK: int = _MPI_COMM.Get_rank()
+# 缺 MPI 时模块级状态退化为"单进程伪通信子"（size=1, rank=0）。这样导入、
+# 资源探测与串行路径都能工作；任何真正需要通信的入口由 :func:`require_mpi`
+# 显式拒绝，而不是静默给出错误结果。
+if MPI is not None:
+    _MPI_COMM = MPI.COMM_WORLD
+    _MPI_SIZE: int = _MPI_COMM.Get_size()
+    _MPI_RANK: int = _MPI_COMM.Get_rank()
+else:
+    _MPI_COMM = None
+    _MPI_SIZE: int = 1
+    _MPI_RANK: int = 0
 _GRID_SIZE: Union[List[int], None] = None
 _GRID_COORD: Union[List[int], None] = None
 _GRID_MAP: Literal["XYZT_FASTEST", "TZYX_FASTEST"] = "XYZT_FASTEST"

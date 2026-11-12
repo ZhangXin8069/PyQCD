@@ -780,3 +780,21 @@
 - 关键内容: 2582/2582 命中原生拓扑入口且数值正确；全量 126 passed；size≥4 执行器断崖（size=3 4ms / size=4 >90s），性能目标未达成
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pyqcd-einsum/topology-kernels - stage - 2026-11-11 20:59:57 +0800
+- 主任务: 拓扑专用 kernel 性能定位：同尺寸通用路径 2ms vs kernel >90s，缺陷收敛到 runtime 执行器
+- 日志文件: logs/v202611112059.txt
+- 文件大小: 2480 bytes
+- 触发原因: 阶段成果
+- 关键内容: size=4 对照实验：generic=2ms、kernel=>90s；计划仅 13 步/4e5 FLOP；下一步 runtime step 计时 + BLAS 装箱
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/topology-kernels - stage - 2026-11-11 21:10:45 +0800
+- 主任务: 拓扑 kernel 性能定位：TRACE 显示 13 步均亚毫秒，瓶颈在步循环之外
+- 日志文件: logs/v202611112110.txt
+- 文件大小: 1747 bytes
+- 触发原因: 阶段成果
+- 关键内容: TRACE: 13 步 0.01-0.1ms 但整调用 >90s；下一步在 topology_apply.cpp 步循环后加计时
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

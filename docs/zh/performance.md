@@ -112,6 +112,33 @@ GPU 行是**同卡对同卡**。0.05 s 以下的行在 GPU 上受带宽限制，
 `[plan-cache]` 表示只复用了计划。如果注册了 kernel 的形态拿不到 kernel，
 `pyqcd.einsum` 会**立即告警并说明原因**，而不是静默降级。
 
+## 拓扑特化内核
+
+`refer/sush/wick_12cases.md` 的十一个强子拓扑情形定义 **2582 条唯一收缩拓扑**
+（元数 6–16）。索引按**拓扑签名**而不是拼写：指标按全式首次出现顺序重编号，因此
+`ij,jk->ik`、`ij,jb->ib`、`ab,bc->ac` 是同一条目，而 `ij,kj->ik` 与 `ij,jk->ki`
+是不同条目。空白与省略输出不改变签名；**操作数顺序**和**操作数内指标顺序**会改变。
+
+命中时整条收缩计划交给一次原生调用（`qcd_kupl_topology_apply` 或
+`qcd_cuda_topology_apply`），不再在 Python 中逐步执行。命中提示区分两种情况：
+`[kernel: kupl_topology]` 表示原生拓扑入口真的执行了计划，`[plan-cache]` 表示只
+识别了形态、复用了计划——例如传了 `out=`、操作数混合 dtype，或原生入口不可用。
+回落只改变耗时，数值完全一致。
+
+这条路径尚未通过性能验证：KUPL 执行器存在**方程相关**的尺寸断崖（语料 #194、
+16 元、`dim=4` 时通用路径 2 ms、拓扑入口 >90 s），实测表仍为 `TBD`。
+语料口径、匹配与执行机制、待补数字见 `docs/topology_kernels_20261111.md`；
+在该表补齐前不要引用这条路径的倍率。
+
+```bash
+python -m pyqcd.testing._topology_equations_contract
+python -m pyqcd.testing._topology_kernel_contract
+```
+
+第一条命令把 2582 条方程逐条与 `numpy` 对照，并覆盖改名同签名与结构负例；第二条
+检查原生拓扑入口本身——dtype 策略、plan/指针/`out` 参数，以及 120 条 `dim=4` 语料
+抽检。
+
 ## 增益从哪来
 
 1. **形态特化**——核子 2pt/3pt 主项有专用 kernel；CUDA 执行器有融合的 γ 夹心 kernel

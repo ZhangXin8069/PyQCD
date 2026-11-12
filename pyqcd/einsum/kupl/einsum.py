@@ -928,6 +928,7 @@ def topology_apply(
     operands: Sequence[Any],
     out: Any = None,
     offsets: Sequence[int] | None = None,
+    info: dict[str, Any] | None = None,
 ) -> Any:
     """Run a whole version-2 plan with one native call.
 
@@ -942,18 +943,28 @@ def topology_apply(
     input is copied into a contiguous one first, exactly like
     :meth:`KuplProgram.__call__`.
 
+    ``info`` (optional dict) is cleared and filled with what was actually sent
+    down: plan byte count, step count, dtype id, operand count, output shape,
+    whether ``out`` was caller-provided, which operands had to be copied into a
+    contiguous buffer (``copied``) and the raw ``offsets``. Callers use it to
+    report a copy instead of silently paying for one.
+
     Raises :class:`NativeUnavailable` when the kernel reports a non-zero status;
     ``status == _TOPOLOGY_UNSUPPORTED`` means the plan itself (not the arguments)
     is outside what this entry can execute.
     """
     plan_data = _plan_buffer(plan)
-    info, dtype, input_shapes, output_shape = _plan_view(plan_data)
+    decoded, dtype, input_shapes, output_shape = _plan_view(plan_data)
     if len(operands) != len(input_shapes):
         raise ValueError(f"plan expects {len(input_shapes)} operands, got {len(operands)}")
-    inputs = [
-        _host_buffer(operand, dtype, shape, f"operand {index}")
-        for index, (operand, shape) in enumerate(zip(operands, input_shapes))
-    ]
+    inputs = []
+    copied = []
+    for index, (operand, shape) in enumerate(zip(operands, input_shapes)):
+        inputs.append(_host_buffer(operand, dtype, shape, f"operand {index}"))
+        # ``_host_buffer`` 用 np.ascontiguousarray 兜底；非连续输入因此被静默复制。
+        # 把下标记进 info，调用方才能发现这块额外拷贝。
+        if not (isinstance(operand, np.ndarray) and operand.flags.c_contiguous):
+            copied.append(index)
     if out is None:
         output = np.empty(output_shape, dtype=dtype)
     else:
@@ -971,11 +982,27 @@ def topology_apply(
         *[int(array.ctypes.data) for array in inputs]
     )
     offset_array = None
+    raw_offsets = None
     if offsets is not None:
-        values = [int(value) for value in offsets]
-        if len(values) != len(inputs):
-            raise ValueError(f"offsets must have {len(inputs)} entries, got {len(values)}")
-        offset_array = (_LL * len(values))(*values)
+        raw_offsets = tuple(int(value) for value in offsets)
+        if len(raw_offsets) != len(inputs):
+            raise ValueError(
+                f"offsets must have {len(inputs)} entries, got {len(raw_offsets)}")
+        offset_array = (_LL * len(raw_offsets))(*raw_offsets)
+
+    if info is not None:
+        info.clear()
+        info.update(
+            dtype=str(dtype),
+            dtype_id=int(decoded.dtype_id),
+            n_operands=len(inputs),
+            plan_bytes=int(plan_data.size),
+            steps=len(decoded.steps),
+            output_shape=tuple(output_shape),
+            out="allocated" if out is None else "provided",
+            copied=tuple(copied),
+            offsets=raw_offsets,
+        )
 
     status = int(
         load_topology()(
@@ -985,7 +1012,7 @@ def topology_apply(
             len(inputs),
             offset_array,
             int(output.ctypes.data),
-            int(info.dtype_id),
+            int(decoded.dtype_id),
         )
     )
     if status != _STATUS_OK:
@@ -994,5 +1021,10 @@ def topology_apply(
             if status == _TOPOLOGY_UNSUPPORTED
             else ""
         )
-        raise NativeUnavailable(f"native topology execution failed with status {status}{reason}")
+        # 状态码随身带出：1/3 是"调用参数或原生内部有问题"，4 是"这条计划本入口
+        # 不认"，上层据此给出不同的诊断并决定是否回落。
+        error = NativeUnavailable(
+            f"native topology execution failed with status {status}{reason}")
+        error.status = status
+        raise error
     return output

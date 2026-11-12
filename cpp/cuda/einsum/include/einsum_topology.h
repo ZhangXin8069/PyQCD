@@ -9,11 +9,32 @@
  * 参数顺序、`QCD_DTYPE_*` 枚举、返回码语义逐项相同，CUDA 侧只在末尾多一个
  * stream 尾巴（与 `qcd_cuda_pattern_3pt` 的约定一致）。
  *
- * 一次调用跑完整条 version-2 执行计划（字节格式不变，仍由
- * `pyqcd/einsum/_native_plan.py` 生产、`runtime.cpp` 解析）：逐步
- * permute/pack 到设备缓冲 + cuBLAS(cuBLASLt) batched GEMM，中间结果全部落在
- * 一块按 dtype 复用的设备 arena 里。计划在首次调用时解析一次，之后的调用只比较
- * 计划字节，命中即复用步骤描述与 arena，稳态调用不重新 cudaMalloc。
+ * ---------------------------------------------------------------------------
+ * 两种字节流（`plan` / `plan_len`）
+ * ---------------------------------------------------------------------------
+ * 1. **version-2 执行计划**（格式不变，仍由 `pyqcd/einsum/_native_plan.py` 生产、
+ *    `runtime.cpp` 解析）：逐步 permute/pack 到设备缓冲 + cuBLAS batched GEMM，
+ *    中间结果全部落在一块按 dtype 复用的设备 arena 里。
+ * 2. **拓扑描述符**（`pyqcd/einsum/_kernel_cuda.py` 生产，魔数 `0x51435444`）：
+ *    只带**结构**——dtype、每个操作数的 rank/标签/形状、输出标签，以及拓扑签名的
+ *    blake2b-128 摘要前 8 字节；**不带收缩顺序**。原生侧用摘要查
+ *    `src/topology_steps.h` 的**预编译步表**（2582 条真实语料拓扑，去重后 1052 条
+ *    不同步序），按 einsum 语义展开成 pack + cuBLAS 步序列。因此运行期既没有
+ *    path 搜索，也没有 Python 逐步调度——顺序是编译期常量，执行器是参数化的。
+ *
+ *    描述符布局（全部 int32 字，Little-endian）：
+ *      [0] 魔数 0x51435444  [1] 版本 1        [2] total_bytes（= plan_len）
+ *      [3] dtype_id        [4] num_inputs     [5] num_labels
+ *      [6] num_output      [7] 保留 0
+ *      [8..11] 签名摘要 16 字节（按字节原样搬运）
+ *      每个操作数：rank, labels[rank], shape[rank]
+ *      输出：labels[num_output]
+ *    `num_labels` 是全式不同标签数，每个标签的 extent 由各操作数形状取最大（允许
+ *    1↔N 广播）。原生会把"摘要 + 规范标签流的 FNV 指纹 + 元数"三者一起比对，任一
+ *    不吻合即返回 4（fail closed，不猜）。
+ *
+ * 计划在首次调用时解析一次，之后的调用只比较字节，命中即复用步骤描述与 arena；
+ * 换计划时 arena 留在池子里复用（容量够就不再 cudaMalloc，cuBLAS 句柄也不重建）。
  *
  * 与 `applyContractQcd` 的关系：两者共用同一份 decode/resolve/prepare 代码与同一套
  * 设备 kernel，因此对同一计划的数值结果与可行性判定逐位一致；区别只在入参形态
@@ -31,16 +52,17 @@
  * ---------------------------------------------------------------------------
  * 参数
  * ---------------------------------------------------------------------------
- *   plan             version-2 执行计划字节流；按 memcpy 取字段，不做对齐假设。
- *   plan_len         上述字节流字节数；必须与计划头 total_bytes 逐位相等。
- *   operands         长度 n_operands 的**设备**基地址数组，顺序与计划里
- *                    input_shapes 逐项对应。
- *   n_operands       操作数个数；必须等于计划头的 num_inputs。
+ *   plan             version-2 执行计划字节流或拓扑描述符字节流；按 memcpy 取
+ *                    字段，不做对齐假设。
+ *   plan_len         上述字节流字节数；必须与头部 total_bytes 逐位相等。
+ *   operands         长度 n_operands 的**设备**基地址数组，顺序与计划/描述符里
+ *                    的操作数逐项对应。
+ *   n_operands       操作数个数；必须等于头部的 num_inputs。
  *   operand_offsets  可选（可为 NULL）：每个操作数的**字节**偏移，调用时按
  *                    `operands[i] + operand_offsets[i]` 解释，用于免拷贝地指向
  *                    大张量里的一片（例如 peram 的某个时间片）。NULL 表示全 0。
- *   out              设备输出缓冲区：按计划输出下标顺序 C 行主序连续存储。
- *   dtype_id         本次调用的 dtype（见 einsum_define.h），**必须与计划头的
+ *   out              设备输出缓冲区：按计划/描述符的输出标签顺序 C 行主序连续存储。
+ *   dtype_id         本次调用的 dtype（见 einsum_define.h），**必须与字节流里的
  *                    dtype 相同**；不做任何隐式转换，不一致即返回 1。
  *   stream           目前只支持默认流：必须传 nullptr；非 nullptr 返回 1
  *                    （不假装支持外部流）。
@@ -56,8 +78,9 @@
  *      dtype_id 越界或与计划不一致、地址加偏移溢出、某操作数为空、stream 非空
  *   2  内存不足
  *   3  其它内部错误（含异常兜底；本库缺少所需 kernel 实现时也归此类）
- *   4  QCD_TOPOLOGY_UNSUPPORTED：计划本身超出本入口的可执行范围
- *      （单步 arity > 2、单个操作数内重复下标、没有步骤、尾随字节等）
+ *   4  QCD_TOPOLOGY_UNSUPPORTED：字节流本身超出本入口的可执行范围
+ *      （单步 arity > 2、单个操作数内重复下标、没有步骤、尾随字节、描述符标签
+ *      越界、摘要/指纹查不到步表、步表展开后中间体超过 2^31 元素等）
  *
  * 1 与 4 必须分开：1 是"这次的调用参数不对"，4 是"这条计划本入口不认"。
  * Python 侧对两者都回落现有路径，但诊断文案不同。与 KUPL 侧取值一致。

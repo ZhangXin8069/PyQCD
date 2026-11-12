@@ -1,0 +1,43 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-11 20:59:57 +0800
+批次: pyqcd-einsum/topology-kernels
+主任务: 拓扑专用 kernel 性能定位：同尺寸通用路径 2ms vs kernel >90s，缺陷收敛到 runtime 执行器
+触发原因: 阶段成果
+摘要: size=4 对照实验：generic=2ms、kernel=>90s；计划仅 13 步/4e5 FLOP；下一步 runtime step 计时 + BLAS 装箱
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 性能断崖的对照实验（本轮新增）
+- 对象：语料方程 #194（16 算子，`wick_12cases`）
+- 计划侧：`contract_path(optimize='greedy')` → 13 步、arity≤2，`opt_cost` size=3 为 4.71e4、
+  size=4 为 4.01e5（理论微秒级）
+- 对照：
+  - 通用路径 `contract(..., specialize=False, optimize='greedy')`，size=4 → **2 ms**
+  - 拓扑 kernel `contract(...)`（`[kernel: kupl_topology]`），size=4 → **>90 s（超时）**
+  - size=3 时 kernel 约 4 ms，通用路径同量级
+- 结论：断崖**确定在原生拓扑执行器**（`qcd_kupl_topology_apply` 调用的 runtime 侧），
+  与匹配层、计划生成、numpy 参考都无关；通用路径在同尺寸下是 2 ms，可作为性能基线
+
+## 验证与证据
+- 命令：同一脚本内分别调用两条路径，size=4，90 s 子进程超时保护
+- 结果：generic=2 ms、kernel=TIMEOUT>90s；size=3 时两者均约 4 ms
+- 未验证：runtime 内部是分配还是循环导致；CUDA 侧仍无 cupy，未实跑
+
+## 变更与产物
+- 本轮为只读对照实验，未改仓库文件；证据写入本日志
+
+## 风险、限制与下一步
+- 风险：修复前不应在文档/发布说明中声称“拓扑专用 kernel 更快”
+- 下一步：在 `cpp/kupl/einsum/src/runtime.cpp` 的 step 执行处加 `PYQCD_EINSUM_TRACE` 计时与
+  中间体尺寸打印，定位分配/循环；随后 arity-2 步接 cblas、逐元素步融合，再用 size=4/8 复核
+
+## Agent 全文报告
+--- report begin ---
+本轮完成了对性能断崖的决定性对照：同一 16 算子方程（语料 #194）在 size=4 下，
+通用路径 2 ms、拓扑 kernel >90 s（超时）；计划本身只有 13 步、约 4e5 FLOP。
+因此缺陷确定在原生拓扑执行器的 runtime 侧，与匹配层、计划生成无关。
+下一步是在 runtime 的 step 执行处加计时/尺寸追踪，定位是 workspace 分配还是朴素循环，
+再接入 BLAS 并用 size=4/8 复核。修复前不宣称该路径“更快”。
+--- report end ---
