@@ -59,7 +59,18 @@ description: Use when implementing, debugging, or benchmarking pyqcd.einsum agai
 - K-lowest 布局分析已由
   `cpp/kupl/einsum/tests/test_runtime.cpp` 的 C++ 合约测试覆盖。
 - KUPL 四 dtype、batch、广播、一元 reduce/permute 和多步收缩已 `tested`；
-  当前全量入口记录为 `111 passed, 1 skipped`。
+  全量计数以 `python -B -m pyqcd.testing` 的实际输出为准。
+- 2026-11-12 新增并接入统一套件：
+  `python -B -m pyqcd.testing.einsum.verify_python_hotpath`（全语料匹配/计划缓存）、
+  `python -B -m pyqcd.testing.einsum.verify_plan_gate`（负缓存、计划统计、
+  CPU branch-2 条件提升）。
+- 最终 full-scene 实测：CPU 六条 dedicated/generic 为 `0.459–0.982x`，其中
+  `seq=6585` 22.445 s→10.310 s；GPU 四条轻中量路径为 `0.157–0.265x`，
+  `seq=129/6585` 由超大计划门安全回退 generic。冻结库哈希、快照与完整证据见
+  `docs/einsum_production_optimization_20261112.md`。
+- 额外 43 条分层 full-scene 路径：CPU 中位 `0.861x`、42/43 不快于 generic；
+  GPU 中位 `0.276x`、42/43 不快于 generic。确认普遍加速，同时允许
+  CPU `seq=856`（1.007x）与 GPU 极小计划 `seq=6911`（1.362x）两个低收益反例。
 - CUDA 编译、动态导出与 Cython 加载已 `implemented`，但一般 cuBLAS GEMM 路径仍
   `unverified`，不得用逐元素路径通过代替 batch GEMM 通过。
 - 开发窗口 CPU T0 四条方程约 `3.0x-18x`，CUDA V100/P100 E5 约
@@ -194,7 +205,7 @@ numpy double contract  [('native', 'numpy', False, False)]
 - **E4 的体积门代价**（`z·y·x` = 8/27/64/512 时分别慢 1.4/9.7/22/26×，L24 的 13824 慢 33×）
   说明门槛必须留在 C++ 里，不能靠"形态命中就融合"。
 
-### 拓扑特化：2582 条真实拓扑按签名命中（2026-11-11）
+### 拓扑匹配：基础表 2582 条到当前语料 8638 条（2026-11-12 更新）
 
 **匹配口径**：`_specialize.canonical_signature` 按"全式首次出现顺序"把指标重编号为
 `0,1,2,…`（`...` 固定 `-1`）：先扫描全部操作数（操作数顺序、操作数内指标顺序都
@@ -206,7 +217,7 @@ numpy double contract  [('native', 'numpy', False, False)]
 旧的「字面 `REGISTRY`（9 条）→ `FAMILIES` → 语料」三段式**已删除**——那张字面表
 （`gauge-propagator(E4)`、`gamma-sandwich(E5)`、`sush-2pt(S1)`、`sush-3pt-munu(S2)`、
 `sush-2pt-mu(S3)`）是退役专用内核的遗留项，**不在** wick_12cases 语料内，留着会让
-人误以为支持的特化路径只有 5 条。现在语料 8638 条路径全部由拓扑入口服务，
+人误以为支持的特化路径只有 5 条。当前任务表共 8638 条路径，全部由拓扑入口服务，
 未命中即语料之外的方程。
 
 摘要口径必须与生成物一致：先 `canonical_signature`，再对
@@ -241,7 +252,7 @@ numpy double contract  [('native', 'numpy', False, False)]
 4. 原生实现：KUPL 走 `_kernel_kupl.try_topology_apply`，CUDA 走
    `_kernel_cuda.try_topology_apply`。契约是"成功返回结果 / 失败返回 `None` 并写
    `LAST_FAILURE`"，绝不把异常抛给调用方；dtype 必须全局一致。
-5. 验证：`_topology_equations_contract`（2582 条 + 改名同签名 + 结构负例）、
+5. 验证：`_topology_equations_contract`（基础表 2582 条 + 改名同签名 + 结构负例）、
    `_topology_kernel_contract`（dtype 声明与四类 dtype 矩阵、plan/指针/out/offsets、
    120 条 `dim=4` 语料抽检、失败回落只告警一次）、
    `python -m pyqcd.testing.einsum.verify_topology --case N --limit M`（真实语料抽样
@@ -471,7 +482,7 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
    声明 `performance-validated`。
 7. **拓扑三条线必须分开验收**（2026-11-11 补）：
    - 匹配线：`python -m pyqcd.testing._topology_equations_contract` → `6 passed`；
-     另查语料命中 2582/2582、改名同命中、随机合法非语料误命中 0（本轮 0/4000）。
+     另查当前任务表命中 8638/8638；基础表契约覆盖 2582 条改名同签名与结构负例。
    - 执行线：`PYQCD_EINSUM_TOPOLOGY_TRACE=1` 必须出现 `topology-specialized:`；
      只有 `[kernel: kupl_topology]` 标签或 `rc==0` **不算**（那可能是转发通用执行器）。
    - 数值线：参考必须用**同 dtype 的通用路径** `contract(..., specialize=False)`；
@@ -496,11 +507,11 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 - CUDA/KUPL 构建参考经验：PyQCU 原理吸收后自包含实现，不在运行时引用。
 - 报告或 PDF 验收：`pyqcd-docs`。
 
-## 拓扑特化内核（2026-11-11）
+## 拓扑特化内核：基础表阶段（2026-11-11）
 
-本节记录"把 `refer/sush/wick_12cases.md` 的 2582 条收缩路径做成 per-拓扑内核"
-这一轮的实际状态。**核心结论：匹配层已完成并验证，执行层只做到"转发"，特化数值
-路径尚未打通。** 任何"已实现特化内核"的说法都必须附执行层证据（见"命中/回落判据"）。
+本节保留 `refer/sush/wick_12cases.md` 基础表 2582 条阶段的匹配与执行证据；当前任务
+表已扩展到 8638 条，执行层也已由后文“执行层已打通”一节更正。任何“已实现特化
+内核”的说法仍必须附实际执行证据（见“命中/回落判据”）。
 
 细分内容：
 - 匹配口径与语料统计 → 本节 §1–§2
@@ -512,7 +523,7 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 - 步骤表格式、workspace、失败码细节 → `references/native-implementation.md` §8
 - 陷阱表（含四条本轮实踩） → `references/measured-pitfalls.md` §8
 
-> 与上文 `### 拓扑特化：2582 条真实拓扑按签名命中（2026-11-11）` 的关系：那一节讲
+> 与上文 `### 拓扑匹配：基础表 2582 条到当前语料 8638 条（2026-11-12 更新）` 的关系：那一节讲
 > **匹配与调用契约**，本节讲**执行层现状与实测数字**。两者不冲突；唯"KUPL 拓扑入口
 > 每次重新 parse 导致 size=4 > 90 s"一条，本轮在当前构建上**复现不出来**（见 §7）。
 
@@ -520,14 +531,16 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 
 | 项 | 值 | 证据 |
 |---|---|---|
-| 语料条数 | **2582**（情形 1/2/3/4/5/6/7/9/10/13/14 = 2/6/120/720/6/24/720/24/120/120/720） | `_parse_equations()` 长度；`logs/v202611112000.txt` |
-| 去重后拓扑签名 | **2582**（两两互异，无跨情形复用） | `len({canonical_signature(e) for e in eqs}) == 2582` |
+| 基础表条数 | **2582**（情形 1/2/3/4/5/6/7/9/10/13/14 = 2/6/120/720/6/24/720/24/120/120/720） | `_parse_equations()` 长度；`logs/v202611112000.txt` |
+| 基础表去重签名 | **2582**（两两互异，无跨情形复用） | `len({canonical_signature(e) for e in eqs}) == 2582` |
+| 当前任务表 | **8638**（基础表 2582 + 附录 6056） | `_wick_tasklist.TASKS` |
+| 当前唯一签名 | **8638/8638** | `len({canonical_signature(t.equation) for t in TASKS})` |
 | 元数分布 | 6:2, 7:6, 9:6, 10:24, 12:24, 13:360, 14:720, 16:1440 | 同上 |
 | 输出秩分布 | 0:32, 2:1830, 4:720 | `logs/v202611112000.txt` |
-| 注册表 | `TOPOLOGY_DIGESTS` 2582 条 blake2b-128 + `REPRESENTATIVES` 2582 条 | `pyqcd/einsum/_topology_registry.py` |
-| 命中 | 2582/2582 | 本轮实跑 |
-| 改名同命中 | 2582/2582（一致重命名到不相交字母） | 本轮实跑 |
-| 随机合法非语料误命中 | **0/4000** | 本轮实跑 |
+| 注册表 | **8638** 条 96 位 blake2b 摘要，按 `(元数, 槽位总数)` 分 24 桶 | `_topology_registry.N_ENTRIES` |
+| 当前任务命中 | **8638/8638** | 2026-11-12 全任务 `match()` 实跑 |
+| 基础表契约 | 2582 条数值/改名/结构负例 | `_topology_equations_contract` |
+| 随机合法非语料误命中 | **0/4000** | 2026-11-11 实测；本轮未复测 |
 
 `canonical_signature` 口径：按"全式首次出现顺序"把指标重编号为 `0,1,2,…`
 （`...` 固定 `-1`）；先扫描全部操作数（操作数顺序与操作数内指标顺序都不变），
@@ -542,23 +555,32 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 摘要口径（改动语料时必须一致）：`"|".join(",".join(map(str, term)) for term in signature)`
 → `blake2b(digest_size=16).hexdigest()`（`_specialize.py:243-246`）。
 
-签名缓存是 `lru_cache(maxsize=512)`（`_specialize.py:113` 的 `_SIGNATURE_CACHE_LIMIT`）。
+最终匹配结果由 `_match_of_normalized` 缓存，`_match_of_normalized` 与
+`_signature_of_normalized` 的上限均为 `_CORPUS_CACHE_LIMIT = 16384`，可覆盖当前
+8638 条唯一方程。只扩大签名缓存仍会重复摘要分桶，不能替代最终结果缓存。
 
-**匹配开销按工作集分档，别只报单条**（512 项 LRU 挡不住 2582 条轮转）：
+下表是 2026-11-12 对当前完整任务表的 full-shape 实跑，不涉及缩放维度或冒烟场景：
 
-| 工作集 | 实测 |
+| 工作集 | 实测（当前 8638 条语料） |
 |---|---|
-| 单条重复 | 3.45 µs/call |
-| 100 条轮转 | 5.02 µs/call |
-| **2582 条轮转** | **16.0 µs/call**（`cache_info()` 显示 `currsize=512` 持续抖动） |
-| 非语料合法方程（走完三段后 miss） | 1.91 µs/call |
-| 非法方程（立即 `None`） | 0.20 µs/call |
+| 首轮冷扫描（含惰性索引导入与 8638 项填充） | 约 0.54–0.57 s |
+| **8638 条热轮转** | **0.532 µs/call**，`currsize=8638` |
+| 8638 条 dedicated 计划热扫描 | **22.66 µs/call**，总约 0.195 s |
+
+测量环境为 48 个逻辑 CPU，8638 条轮转取 5 轮中位数。复现时先
+`source "$HOME/env.sh"`，再设 `PYQCD_EINSUM_NOTICE=0` 读取
+`_wick_tasklist.TASKS`，记录耗时与 `_match_of_normalized.cache_info()`。
+
+**性能数据门（2026-11-12）**：性能结论只接受生产场景或完整生产语料上的实跑。
+`smoke`、`--scale 16`、缩小维度和其他代理尺寸只能用于正确性/路径验证，必须丢弃
+其中的耗时与倍率，不能改写成生产性能。生产规模装不下时，正确状态是
+`unverified`，不是用较小场景替代。
 
 ### §2 语料统计速查命令
 
 ```bash
 python -m pyqcd.testing._topology_equations_contract          # 6 passed / 0 failed
-python -B -m pyqcd.testing                                    # 127 passed / 1 skipped / 0 failed
+python -B -m pyqcd.testing                                    # 实际计数以命令输出为准
 ```
 
 ### §3 执行机制：两条路线，务必区分
@@ -656,8 +678,22 @@ python -B -m pyqcd.testing                                    # 127 passed / 1 s
 | 12 | 0.96× | 0.21× | 4.32× | 18 / 40 |
 | 16 | 0.91× | 0.17× | 9.10× | 16 / 40 |
 
-**冷热差异极大**：首次调用含步表生成（冷 0.6×），命中缓存后热调用 **0.01×（快 100 倍）**。
-缓存上限 `_DEDICATED_CACHE_LIMIT = 32`，`_DEDICATED_PLAN_CACHE` 保存步表。
+**冷热差异极大**：首次调用含步表生成，命中缓存后热调用可快约 100 倍。
+`_DEDICATED_CACHE_LIMIT = 16384`、字节预算 64 MiB，当前 8638 条 full-shape
+计划实测约占 46.1 MiB，可完整常驻；若同时轮转多 dtype/多形状族，有界 LRU 仍会淘汰。
+
+**CPU complex128 的 `optimize="auto"` 包含一个保守的 branch-2 条件提升**：仅当基础
+auto/greedy 最优计划的静态 arena ≥ 8 GiB，且 branch-2 同时把 FLOPs 压到 ≤80%、
+arena 与 pack bytes 压到 ≤65% 时才替换。六序列 full-scene 中只有 `seq=6585`
+命中，CPU 从 17.537 s 降到 10.346 s（0.590x）；`seq=129` 虽 arena 更小，但 FLOPs
+从 16.94G 增到 30.05G，端到端慢 27.5%，因此不会被该门选中。CUDA 保持
+auto/greedy；complex128 先受静态 arena ≥3 GiB 的超大计划门约束，再由原生
+单步 >40G MAC 门兜底，二者都 fail-open 到 generic。不要按 seq/方程硬编码，也不要
+只按 FLOPs 或只按 arena 选计划。
+
+dedicated/topology 的确定性 `status=4` 可由线程安全负缓存复用，键必须包含
+normalized equation、完整 operand shapes、dtype、optimizer、backend；只缓存
+`UNSUPPORTED`，不得缓存 OOM/内部错误/可修复布局。
 
 ### 抽样复核：固定 15 条之外的语料（2026-11-12）
 

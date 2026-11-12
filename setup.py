@@ -33,6 +33,7 @@ from pathlib import Path
 from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
+from setuptools.command.sdist import sdist
 
 HOME = Path(__file__).resolve().parent
 RAW_BACKEND = os.environ.get("PYQCD_EINSUM_BACKEND", "auto").strip().lower()
@@ -315,6 +316,25 @@ class NativeBuildPy(build_py):
         super().run()
 
 
+class NativeSdist(sdist):
+    """Keep native files required for building from the sdist."""
+
+    _REQUIRED_NATIVE_FILES = (
+        "cpp/kupl/einsum/include/family_apply.h",
+    )
+
+    def make_release_tree(self, base_dir, files):
+        super().make_release_tree(base_dir, files)
+        for relative in self._REQUIRED_NATIVE_FILES:
+            source = HOME / relative
+            if not source.is_file():
+                raise RuntimeError(f"required native source is missing: {source}")
+            target = Path(base_dir) / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.is_file():
+                self.copy_file(str(source), str(target))
+
+
 def _extensions():
     if "cuda" not in BACKENDS:
         return []
@@ -404,6 +424,10 @@ setup(
         "pyqcd.einsum.kupl": ["libpyqcdeinsum_kupl.so"],
     },
     ext_modules=_extensions(),
-    cmdclass={"build_ext": NativeBuildExt, "build_py": NativeBuildPy},
+    cmdclass={
+        "build_ext": NativeBuildExt,
+        "build_py": NativeBuildPy,
+        "sdist": NativeSdist,
+    },
     zip_safe=False,
 )

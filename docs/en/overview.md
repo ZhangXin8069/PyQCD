@@ -8,15 +8,15 @@ package itself is the reusable tooling around that chain.
 pip install pyqcd
 ```
 
-Everything on this site is available from that single installation — no source
-checkout and no manual build step are required. Native acceleration is
-optional, and the package installs either way.
+Everything on this site is available from that single installation; no source
+checkout is required. Native acceleration is optional at runtime, but the
+default installation builds KUPL and therefore needs a C++17 toolchain.
 
 ```python
 import pyqcd
 import pyqcd.einsum as pe
 
-print(pyqcd.__version__)    # e.g. 0.3.9
+print(pyqcd.__version__)    # e.g. 0.4.0
 print(pe.build_info())      # backend / native_available / native_library
 
 info = pe.build_info()
@@ -79,18 +79,22 @@ assert np.allclose(pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))(a, b), a 
 
 | Backend | Usable for | Built during `pip install` when |
 |---|---|---|
-| KUPL | CPU | a C++17 compiler is available |
+| KUPL | CPU | a C++17 compiler is available; this is the default baseline and a missing toolchain fails the install |
 | CUDA | GPU | `nvcc` and Cython are available |
 
-When no toolchain is present the package still installs and the engine runs its
-pure-Python planner: same results, only slower.
+Use `PYQCD_SKIP_NATIVE_BUILD=1` (or `PYQCD_EINSUM_REQUIRE_NATIVE=0`) to request
+a pure-Python planner explicitly. CUDA is always opportunistic and never causes
+the installation to fail.
 
 ### Fallback invariants
 
-- A missing native library switches to the pure-Python planner: same results, slower.
+- A failed or unavailable native execution at run time switches to the generic
+  path: same results, slower.
 - `_native.py` only does `ctypes`; importing it never loads a library.
 - Any native failure emits a single warning and falls back to Python instead of
   raising.
+- A topology-specialised plan must pass CPU/GPU arena, single-GEMM and
+  pack-heavy resource gates before native allocation.
 
 ### Introspection helpers
 
@@ -105,16 +109,21 @@ assert isinstance(info, dict) and "backend" in info
 assert len(pe.specializations()) >= 1
 ```
 
-## Performance snapshot
+## 0.4.0 production snapshot
 
-Measured on a laptop RTX 4060 with `complex128`, against `opt_einsum` 3.4.0:
+Full-scene A100 evidence uses `Nx=Ny=Nz=32`, `Lt=64`, `Nev=100`, `Ns=4`,
+`Mom=8` and `complex128`. Ratios are `selected/generic`, so values below `1`
+are faster.
 
-| Workload | Ratio vs `opt_einsum` |
-|---|---|
-| Nucleon 3pt (GPU, specialised) | 9.29× (30.74 ms vs 285.40 ms) |
-| γ sandwich L24 (CPU / GPU) | 8.33× / 3.371× |
-| Nucleon 2pt (CPU, N=100) | 5.32× (22.65 ms vs 120.43 ms) |
-| perambulator × gauge L24 (GPU) | 1.016× (parity) |
+| Evidence | CPU | GPU |
+|---|---|---|
+| 43 stratified paths, median | **0.861×** | **0.276×** |
+| 43 paths, not slower than PyQCD generic | **42/43** | **42/43** |
+| 43 paths, not slower than `opt_einsum` 3.4.0 (`dp`) | **36/43** | **42/43** |
+| Core long-chain `seq=6585` | **0.459×** | fallback |
 
-See :doc:`performance` for the protocol, the aggregate production estimate and
-the cases where there is no gain.
+The full registry contains 8,638 topology paths. A plan-level audit admitted
+3,833 CPU and 2,864 GPU plans; unsafe or unprofitable plans fall back before
+native allocation. The release therefore claims broad speedups over PyQCD's
+generic route, not universal CPU superiority over `opt_einsum`. See
+:doc:`performance` for the exceptions, protocol and reproduction.

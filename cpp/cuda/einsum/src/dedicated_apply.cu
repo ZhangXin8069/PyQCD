@@ -57,7 +57,42 @@ constexpr std::uint64_t kMaxTableBytes = std::uint64_t(1) << 28;
  * 16 字节对齐上性能最好，而 float32 的累计偏移只能保证 4 字节。 */
 constexpr std::size_t kArenaAlignment = 256;
 constexpr std::size_t kMinPooledBytes = std::size_t(1) << 20;   /* 1 MiB */
-constexpr std::size_t kMaxPooledBytes = std::size_t(1) << 31;   /* 2 GiB */
+constexpr std::size_t kMinDevicePoolBytes = std::size_t(1) << 31; /* 2 GiB */
+constexpr std::int64_t kMaxComplex128GemmMacs = 40000000000LL;
+
+std::size_t device_pool_limit() {
+    static thread_local int cached_device = -1;
+    static thread_local std::size_t cached_limit = kMinDevicePoolBytes;
+
+    int device = -1;
+    if (cudaGetDevice(&device) != cudaSuccess) {
+        return cached_limit;
+    }
+    if (device == cached_device) {
+        return cached_limit;
+    }
+
+    cudaDeviceProp properties{};
+    std::size_t limit = kMinDevicePoolBytes;
+    if (cudaGetDeviceProperties(&properties, device) == cudaSuccess) {
+        double fraction = 0.75;
+        if (const char* value = std::getenv("PYQCD_EINSUM_CUDA_POOL_FRACTION")) {
+            char* end = nullptr;
+            const double parsed = std::strtod(value, &end);
+            if (end != value && parsed >= 0.0 && parsed <= 0.95) {
+                fraction = parsed;
+            }
+        }
+        const double budget =
+            static_cast<double>(properties.totalGlobalMem) * fraction;
+        if (budget >= static_cast<double>(kMinDevicePoolBytes)) {
+            limit = static_cast<std::size_t>(budget);
+        }
+    }
+    cached_device = device;
+    cached_limit = limit;
+    return cached_limit;
+}
 
 bool trace_enabled() {
     static const bool enabled = [] {
@@ -73,8 +108,12 @@ double trace_ms(TraceClock::time_point begin, TraceClock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - begin).count();
 }
 
-std::size_t align_up(std::size_t value, std::size_t alignment) {
-    return (value + alignment - 1) / alignment * alignment;
+bool checked_align_up(std::size_t value, std::size_t alignment, std::size_t* result) {
+    if (alignment == 0 || value > std::numeric_limits<std::size_t>::max() - alignment + 1) {
+        return false;
+    }
+    *result = (value + alignment - 1) / alignment * alignment;
+    return true;
 }
 
 /* ------------------------------------------------------------------ 读取器 */
@@ -233,6 +272,208 @@ bool suffix_steps(const std::int64_t* extents, int rank, std::int64_t* steps) {
 
 bool shape_strides(const Shape& shape, std::int64_t* strides) {
     return suffix_steps(shape.extents, shape.rank, strides);
+}
+
+/* Full-scene A100 measurements show that complex128 plans containing a single
+ * GEMM above 40G MAC are 1.38-2.00x slower through this explicit
+ * pack/unpack executor, while equivalent plans below the boundary remain
+ * faster (0.95-0.97x). Returning UNSUPPORTED makes the existing fail-open
+ * dispatcher use the generic cuBLAS path without changing results. */
+bool exceeds_complex128_gemm_budget(const Table& table) {
+    if (table.dtype_id != QCD_DTYPE_COMPLEX128) {
+        return false;
+    }
+    for (const Step& step : table.steps) {
+        std::int64_t macs = 0;
+        if (!checked_mul(step.batch, step.m, &macs) ||
+            !checked_mul(macs, step.n, &macs) ||
+            !checked_mul(macs, step.k, &macs)) {
+            return true;
+        }
+        if (macs > kMaxComplex128GemmMacs) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct PackScratchLayout {
+    std::size_t a_offset = 0;
+    std::size_t b_offset = 0;
+    std::size_t c_offset = 0;
+    std::size_t total_bytes = 0;
+};
+
+int pack_scratch_layout(const Step& step, std::size_t element, PackScratchLayout* layout) {
+    if (layout == nullptr) {
+        return QCD_STATUS_INVALID;
+    }
+    std::size_t used = 0;
+    std::size_t bytes = 0;
+    if (step.pack_a) {
+        std::int64_t elements = 0;
+        if (!checked_mul(step.batch, step.m, &elements) ||
+            !checked_mul(elements, step.k, &elements) ||
+            !checked_bytes(elements, element, &bytes)) {
+            return QCD_STATUS_INVALID;
+        }
+        layout->a_offset = used;
+        if (bytes > std::numeric_limits<std::size_t>::max() - used) {
+            return QCD_STATUS_INVALID;
+        }
+        used += bytes;
+    }
+    if (!checked_align_up(used, kArenaAlignment, &used)) {
+        return QCD_STATUS_INVALID;
+    }
+    if (step.pack_b) {
+        std::int64_t elements = 0;
+        if (!checked_mul(step.batch, step.k, &elements) ||
+            !checked_mul(elements, step.n, &elements) ||
+            !checked_bytes(elements, element, &bytes)) {
+            return QCD_STATUS_INVALID;
+        }
+        layout->b_offset = used;
+        if (bytes > std::numeric_limits<std::size_t>::max() - used) {
+            return QCD_STATUS_INVALID;
+        }
+        used += bytes;
+    }
+    if (!checked_align_up(used, kArenaAlignment, &used)) {
+        return QCD_STATUS_INVALID;
+    }
+    if (step.pack_c) {
+        std::int64_t elements = 0;
+        if (!checked_mul(step.batch, step.m, &elements) ||
+            !checked_mul(elements, step.n, &elements) ||
+            !checked_bytes(elements, element, &bytes)) {
+            return QCD_STATUS_INVALID;
+        }
+        layout->c_offset = used;
+        if (bytes > std::numeric_limits<std::size_t>::max() - used) {
+            return QCD_STATUS_INVALID;
+        }
+        used += bytes;
+    }
+    return checked_align_up(used, kArenaAlignment, &layout->total_bytes)
+               ? QCD_STATUS_OK
+               : QCD_STATUS_INVALID;
+}
+
+struct ArenaPlan {
+    std::vector<std::size_t> slot_offsets;
+    std::vector<std::size_t> slot_bytes;
+    std::size_t slot_arena_bytes = 0;
+    std::size_t pack_scratch_bytes = 0;
+    std::size_t total_bytes = 0;
+};
+
+struct PhysicalInterval {
+    std::size_t offset = 0;
+    std::size_t capacity = 0;
+    int last_use = -1;
+};
+
+/* 逻辑中间槽按 birth/last-use 做区间着色。一个物理区间只有在旧槽的 last-use
+ * 严格早于新槽 birth 时才能复用；这也保证当前步的目的槽绝不与当前步输入别名。 */
+int plan_arena(const Table& table, std::size_t element, ArenaPlan* plan) {
+    if (plan == nullptr) {
+        return QCD_STATUS_INVALID;
+    }
+    const std::size_t num_slots = static_cast<std::size_t>(table.num_slots);
+    plan->slot_offsets.assign(num_slots, 0);
+    plan->slot_bytes.assign(num_slots, 0);
+    plan->slot_arena_bytes = 0;
+    plan->pack_scratch_bytes = 0;
+    plan->total_bytes = 0;
+
+    std::vector<int> birth(num_slots, -1);
+    std::vector<int> last_use(num_slots, -1);
+    for (std::size_t index = 0; index < table.steps.size(); ++index) {
+        const Step& step = table.steps[index];
+        if (step.dst_slot >= 0) {
+            birth[static_cast<std::size_t>(step.dst_slot)] = static_cast<int>(index);
+        }
+        if (step.a_slot >= table.num_operands) {
+            last_use[static_cast<std::size_t>(step.a_slot - table.num_operands)] =
+                static_cast<int>(index);
+        }
+        if (step.b_slot >= table.num_operands) {
+            last_use[static_cast<std::size_t>(step.b_slot - table.num_operands)] =
+                static_cast<int>(index);
+        }
+    }
+
+    std::vector<int> order(num_slots, 0);
+    for (std::size_t index = 0; index < num_slots; ++index) {
+        order[index] = static_cast<int>(index);
+        if (birth[index] < 0 || last_use[index] < birth[index]) {
+            return QCD_STATUS_INVALID;
+        }
+        std::int64_t count = 0;
+        if (!product_shape(table.slots[index], &count) ||
+            !checked_bytes(count, element, &plan->slot_bytes[index])) {
+            return QCD_STATUS_INVALID;
+        }
+    }
+    std::sort(order.begin(), order.end(), [&birth](int left, int right) {
+        if (birth[static_cast<std::size_t>(left)] !=
+            birth[static_cast<std::size_t>(right)]) {
+            return birth[static_cast<std::size_t>(left)] <
+                   birth[static_cast<std::size_t>(right)];
+        }
+        return left < right;
+    });
+
+    std::vector<PhysicalInterval> intervals;
+    std::size_t used = 0;
+    for (int slot : order) {
+        const std::size_t index = static_cast<std::size_t>(slot);
+        const std::size_t bytes = plan->slot_bytes[index];
+        std::size_t best = intervals.size();
+        for (std::size_t candidate = 0; candidate < intervals.size(); ++candidate) {
+            const PhysicalInterval& interval = intervals[candidate];
+            if (interval.last_use >= birth[index] || interval.capacity < bytes) {
+                continue;
+            }
+            if (best == intervals.size() ||
+                interval.capacity < intervals[best].capacity) {
+                best = candidate;
+            }
+        }
+        if (best != intervals.size()) {
+            plan->slot_offsets[index] = intervals[best].offset;
+            intervals[best].last_use = last_use[index];
+            continue;
+        }
+        if (!checked_align_up(used, kArenaAlignment, &used)) {
+            return QCD_STATUS_INVALID;
+        }
+        plan->slot_offsets[index] = used;
+        if (bytes > std::numeric_limits<std::size_t>::max() - used) {
+            return QCD_STATUS_INVALID;
+        }
+        used += bytes;
+        intervals.push_back(PhysicalInterval{plan->slot_offsets[index], bytes,
+                                             last_use[index]});
+    }
+    plan->slot_arena_bytes = used;
+
+    for (const Step& step : table.steps) {
+        PackScratchLayout layout;
+        const int status = pack_scratch_layout(step, element, &layout);
+        if (status != QCD_STATUS_OK) {
+            return status;
+        }
+        plan->pack_scratch_bytes =
+            std::max(plan->pack_scratch_bytes, layout.total_bytes);
+    }
+    if (!checked_align_up(used, kArenaAlignment, &used) ||
+        plan->pack_scratch_bytes > std::numeric_limits<std::size_t>::max() - used) {
+        return QCD_STATUS_INVALID;
+    }
+    plan->total_bytes = used + plan->pack_scratch_bytes;
+    return QCD_STATUS_OK;
 }
 
 const Shape& slot_shape(const Table& table, int slot) {
@@ -536,6 +777,12 @@ class DeviceBlockPool {
                 blocks_[best] = blocks_.back();
                 blocks_.pop_back();
                 cached_ -= block.bytes;
+                if (trace_enabled()) {
+                    std::fprintf(stderr,
+                                 "[cuda-dedicated] pool acquire bytes=%zu action=reuse "
+                                 "capacity=%zu cached=%zu\n",
+                                 bytes, block.bytes, cached_);
+                }
                 *data = block.data;
                 *capacity = block.bytes;
                 return QCD_STATUS_OK;
@@ -547,6 +794,11 @@ class DeviceBlockPool {
             return error == cudaErrorMemoryAllocation ? QCD_STATUS_MEMORY
                                                       : QCD_STATUS_INTERNAL;
         }
+        if (trace_enabled()) {
+            std::fprintf(stderr,
+                         "[cuda-dedicated] pool acquire bytes=%zu action=alloc\n",
+                         bytes);
+        }
         *data = allocated;
         *capacity = bytes;
         return QCD_STATUS_OK;
@@ -556,11 +808,24 @@ class DeviceBlockPool {
         if (data == nullptr || bytes == 0) {
             return;
         }
+        const std::size_t limit = device_pool_limit();
         std::lock_guard<std::mutex> guard(mutex_);
-        if (bytes >= kMinPooledBytes && cached_ + bytes <= kMaxPooledBytes) {
+        if (bytes >= kMinPooledBytes && bytes <= limit && cached_ <= limit - bytes) {
             blocks_.push_back(PoolBlock{data, bytes});
             cached_ += bytes;
+            if (trace_enabled()) {
+                std::fprintf(stderr,
+                             "[cuda-dedicated] pool release bytes=%zu action=cache "
+                             "cached=%zu limit=%zu\n",
+                             bytes, cached_, limit);
+            }
             return;
+        }
+        if (trace_enabled()) {
+            std::fprintf(stderr,
+                         "[cuda-dedicated] pool release bytes=%zu action=free "
+                         "cached=%zu limit=%zu\n",
+                         bytes, cached_, limit);
         }
         cudaFree(data);
     }
@@ -771,6 +1036,36 @@ int map_launch(cudaError_t error) {
                ? QCD_STATUS_OK
                : (error == cudaErrorMemoryAllocation ? QCD_STATUS_MEMORY
                                                      : QCD_STATUS_INTERNAL);
+}
+
+template <typename T>
+__global__ void small_outer_kernel(const T* left, const T* right, T* result,
+                                   int m, int n, int k) {
+    const int column = blockIdx.x * blockDim.x + threadIdx.x;
+    if (column >= n) {
+        return;
+    }
+    const std::int64_t group = blockIdx.y;
+    left += group * static_cast<std::int64_t>(m) * k;
+    right += group * static_cast<std::int64_t>(k) * n;
+    result += group * static_cast<std::int64_t>(m) * n;
+
+    using Accum = typename AccumTraits<T>::accum;
+    Accum totals[8];
+    for (int row = 0; row < m; ++row) {
+        totals[row] = zero_accum(Accum{});
+    }
+    for (int inner = 0; inner < k; ++inner) {
+        const Accum scale = to_accum(right[inner * n + column]);
+        for (int row = 0; row < m; ++row) {
+            totals[row] = accum_add(
+                totals[row],
+                accum_mul(to_accum(left[row * k + inner]), scale));
+        }
+    }
+    for (int row = 0; row < m; ++row) {
+        from_accum(totals[row], &result[row * n + column]);
+    }
 }
 
 /* ------------------------------------------------------------------ BLAS 能力 */
@@ -1140,6 +1435,29 @@ int run_step_math(cublasHandle_t handle, const Step& step, const T* left, const 
             left, right, result, elements, step.n, step.k);
         return map_launch(cudaGetLastError());
     }
+    /* left/right 已由调用方 pack 成 canonical [B,M,K] / [B,K,N]；不要再检查
+     * 源布局的 pack_a/pack_b 标志，否则会漏掉“必须 pack 才 canonical”的收益步。 */
+    const std::int64_t blocks = (step.n + 255) / 256;
+    if (step.m <= 8 && step.k <= 8 && step.n >= 128 &&
+        step.batch <= 65535 && blocks <= 65535) {
+        if (trace_enabled()) {
+            std::fprintf(stderr,
+                         "[cuda-dedicated] short path: small outer canonical "
+                         "batch=%lld m=%lld n=%lld k=%lld pack_a=%d pack_b=%d\n",
+                         static_cast<long long>(step.batch),
+                         static_cast<long long>(step.m),
+                         static_cast<long long>(step.n),
+                         static_cast<long long>(step.k), step.pack_a ? 1 : 0,
+                         step.pack_b ? 1 : 0);
+        }
+        constexpr int threads = 256;
+        const dim3 grid(static_cast<unsigned int>(blocks),
+                        static_cast<unsigned int>(step.batch));
+        small_outer_kernel<T><<<grid, threads>>>(
+            left, right, result, static_cast<int>(step.m), static_cast<int>(step.n),
+            static_cast<int>(step.k));
+        return map_launch(cudaGetLastError());
+    }
     return GemmDispatch<T>::run(handle, step.batch, step.m, step.n, step.k, left, right,
                                 result);
 }
@@ -1175,74 +1493,37 @@ int zero_block(void* destination, std::int64_t elements, std::size_t element) {
                                                      : QCD_STATUS_INTERNAL);
 }
 
+bool ranges_overlap(std::size_t left_offset, std::size_t left_bytes,
+                    std::size_t right_offset, std::size_t right_bytes) {
+    if (left_bytes == 0 || right_bytes == 0) {
+        return false;
+    }
+    if (left_offset <= right_offset) {
+        return right_offset - left_offset < left_bytes;
+    }
+    return left_offset - right_offset < right_bytes;
+}
+
 template <typename T>
-int run_typed(const Table& table, void* const* operands, void* out, cublasHandle_t handle) {
+int run_typed(const Table& table, void* const* operands, void* out, cublasHandle_t handle,
+              const ArenaPlan& plan) {
     const std::size_t element = sizeof(T);
     const bool trace = trace_enabled();
     const int total_slots = table.num_operands + table.num_slots;
-
-    /* 中间槽：按全表形状一次算好 arena 偏移（256 字节对齐）。 */
-    std::vector<std::size_t> slot_offsets(static_cast<std::size_t>(table.num_slots), 0);
-    std::size_t used = 0;
-    for (int index = 0; index < table.num_slots; ++index) {
-        const Shape& shape = table.slots[static_cast<std::size_t>(index)];
-        std::int64_t count = 0;
-        std::size_t bytes = 0;
-        if (!product_shape(shape, &count) || !checked_bytes(count, element, &bytes)) {
-            return QCD_STATUS_INVALID;
-        }
-        used = align_up(used, kArenaAlignment);
-        slot_offsets[static_cast<std::size_t>(index)] = used;
-        if (bytes > std::numeric_limits<std::size_t>::max() - used) {
-            return QCD_STATUS_INVALID;
-        }
-        used += bytes;
-    }
-
-    /* pack 缓冲按全表最大尺寸各一块。 */
-    std::int64_t max_a = 0;
-    std::int64_t max_b = 0;
-    std::int64_t max_c = 0;
-    for (const Step& step : table.steps) {
-        std::int64_t elements = 0;
-        if (!checked_mul(step.batch, step.m, &elements) ||
-            !checked_mul(elements, step.k, &elements)) {
-            return QCD_STATUS_INVALID;
-        }
-        max_a = std::max(max_a, step.pack_a ? elements : 0);
-        if (!checked_mul(step.batch, step.k, &elements) ||
-            !checked_mul(elements, step.n, &elements)) {
-            return QCD_STATUS_INVALID;
-        }
-        max_b = std::max(max_b, step.pack_b ? elements : 0);
-        if (!checked_mul(step.batch, step.m, &elements) ||
-            !checked_mul(elements, step.n, &elements)) {
-            return QCD_STATUS_INVALID;
-        }
-        max_c = std::max(max_c, step.pack_c ? elements : 0);
-    }
-    std::size_t pack_a_bytes = 0;
-    std::size_t pack_b_bytes = 0;
-    std::size_t pack_c_bytes = 0;
-    if (!checked_bytes(max_a, element, &pack_a_bytes) ||
-        !checked_bytes(max_b, element, &pack_b_bytes) ||
-        !checked_bytes(max_c, element, &pack_c_bytes)) {
+    if (plan.slot_offsets.size() != static_cast<std::size_t>(table.num_slots) ||
+        plan.slot_bytes.size() != static_cast<std::size_t>(table.num_slots)) {
         return QCD_STATUS_INVALID;
     }
-    used = align_up(used, kArenaAlignment);
-    const std::size_t pack_a_offset = used;
-    used += pack_a_bytes;
-    used = align_up(used, kArenaAlignment);
-    const std::size_t pack_b_offset = used;
-    used += pack_b_bytes;
-    used = align_up(used, kArenaAlignment);
-    const std::size_t pack_c_offset = used;
-    used += pack_c_bytes;
+    std::size_t pack_scratch_offset = 0;
+    if (!checked_align_up(plan.slot_arena_bytes, kArenaAlignment,
+                          &pack_scratch_offset)) {
+        return QCD_STATUS_INVALID;
+    }
 
     const TraceClock::time_point allocation_begin =
         trace ? TraceClock::now() : TraceClock::time_point{};
     CallArena arena;
-    int status = arena.allocate(used);
+    int status = arena.allocate(plan.total_bytes);
     if (status != QCD_STATUS_OK) {
         return status;
     }
@@ -1255,23 +1536,22 @@ int run_typed(const Table& table, void* const* operands, void* out, cublasHandle
     }
     for (int index = 0; index < table.num_slots; ++index) {
         const std::size_t slot = static_cast<std::size_t>(table.num_operands + index);
-        slot_data[slot] = arena.at(slot_offsets[static_cast<std::size_t>(index)]);
+        slot_data[slot] = arena.at(plan.slot_offsets[static_cast<std::size_t>(index)]);
         slot_live[slot] = 0;
     }
-    void* const pack_a = pack_a_bytes != 0 ? arena.at(pack_a_offset) : nullptr;
-    void* const pack_b = pack_b_bytes != 0 ? arena.at(pack_b_offset) : nullptr;
-    void* const pack_c = pack_c_bytes != 0 ? arena.at(pack_c_offset) : nullptr;
 
     if (trace) {
         std::fprintf(stderr,
                      "[cuda-dedicated] alloc %.3f ms | slots=%d steps=%d element=%zu "
-                     "bytes: arena=%zu A=%zu B=%zu C=%zu\n",
+                     "bytes: arena=%zu slot_arena=%zu pack_scratch=%zu\n",
                      trace_ms(allocation_begin, TraceClock::now()), table.num_slots,
-                     static_cast<int>(table.steps.size()), element, used, pack_a_bytes,
-                     pack_b_bytes, pack_c_bytes);
+                     static_cast<int>(table.steps.size()), element, plan.total_bytes,
+                     plan.slot_arena_bytes, plan.pack_scratch_bytes);
         for (int slot_index = 0; slot_index < table.num_slots; ++slot_index) {
-            std::fprintf(stderr, "[cuda-dedicated] slot %d offset=%zu\n", slot_index,
-                         slot_offsets[static_cast<std::size_t>(slot_index)]);
+            std::fprintf(stderr, "[cuda-dedicated] slot %d offset=%zu bytes=%zu\n",
+                         slot_index,
+                         plan.slot_offsets[static_cast<std::size_t>(slot_index)],
+                         plan.slot_bytes[static_cast<std::size_t>(slot_index)]);
         }
     }
 
@@ -1288,6 +1568,22 @@ int run_typed(const Table& table, void* const* operands, void* out, cublasHandle
             destination_index = static_cast<std::size_t>(table.num_operands + step.dst_slot);
             if (slot_live[destination_index] != 0) {
                 return QCD_STATUS_INVALID;
+            }
+            const std::size_t destination_slot =
+                static_cast<std::size_t>(step.dst_slot);
+            const int input_slots[2] = {step.a_slot, step.b_slot};
+            for (const int input_slot : input_slots) {
+                if (input_slot < table.num_operands) {
+                    continue;
+                }
+                const std::size_t source_slot =
+                    static_cast<std::size_t>(input_slot - table.num_operands);
+                if (ranges_overlap(plan.slot_offsets[source_slot],
+                                   plan.slot_bytes[source_slot],
+                                   plan.slot_offsets[destination_slot],
+                                   plan.slot_bytes[destination_slot])) {
+                    return QCD_STATUS_INVALID;
+                }
             }
             destination = slot_data[destination_index];
         }
@@ -1307,6 +1603,17 @@ int run_typed(const Table& table, void* const* operands, void* out, cublasHandle
 
         const TraceClock::time_point step_begin =
             trace ? TraceClock::now() : TraceClock::time_point{};
+        PackScratchLayout scratch;
+        status = pack_scratch_layout(step, element, &scratch);
+        if (status != QCD_STATUS_OK) {
+            return status;
+        }
+        void* const pack_a =
+            step.pack_a ? arena.at(pack_scratch_offset + scratch.a_offset) : nullptr;
+        void* const pack_b =
+            step.pack_b ? arena.at(pack_scratch_offset + scratch.b_offset) : nullptr;
+        void* const pack_c =
+            step.pack_c ? arena.at(pack_scratch_offset + scratch.c_offset) : nullptr;
         /* pack/unpack 的 dtype id 与步表同值：qcd_cuda_permute 对 QCD_DTYPE_* 四种
          * 精度都实例化了搬运 kernel（含复数按交错实虚对逐元素拷贝）。 */
         const int native_dtype = table.dtype_id;
@@ -1418,6 +1725,21 @@ int run_typed(const Table& table, void* const* operands, void* out, cublasHandle
 
 /* ------------------------------------------------------------------ 入口 */
 
+std::size_t dtype_element_size(int dtype_id) {
+    switch (dtype_id) {
+        case QCD_DTYPE_FLOAT32:
+            return sizeof(float);
+        case QCD_DTYPE_FLOAT64:
+            return sizeof(double);
+        case QCD_DTYPE_COMPLEX64:
+            return sizeof(cuFloatComplex);
+        case QCD_DTYPE_COMPLEX128:
+            return sizeof(cuDoubleComplex);
+        default:
+            return 0;
+    }
+}
+
 int apply_dedicated(const void* steps, long long steps_len, void* const* operands,
                     int n_operands, void* out, int dtype_id, void* stream) {
     if (steps == nullptr || operands == nullptr || out == nullptr || stream != nullptr) {
@@ -1438,10 +1760,38 @@ int apply_dedicated(const void* steps, long long steps_len, void* const* operand
     if (n_operands != table.num_operands) {
         return QCD_STATUS_INVALID;
     }
+    ArenaPlan arena_plan;
+    bool arena_planned = false;
+    if (trace) {
+        const std::size_t element = dtype_element_size(dtype_id);
+        if (element == 0) {
+            return QCD_CUDA_DEDICATED_UNSUPPORTED;
+        }
+        const int plan_status = plan_arena(table, element, &arena_plan);
+        if (plan_status != QCD_STATUS_OK) {
+            return plan_status;
+        }
+        arena_planned = true;
+        std::fprintf(stderr,
+                     "[cuda-dedicated] planned workspace dtype=%d slots=%d "
+                     "slot_arena=%zu pack_scratch=%zu arena=%zu\n",
+                     dtype_id, table.num_slots, arena_plan.slot_arena_bytes,
+                     arena_plan.pack_scratch_bytes, arena_plan.total_bytes);
+    }
+    if (exceeds_complex128_gemm_budget(table)) {
+        return QCD_CUDA_DEDICATED_UNSUPPORTED;
+    }
     /* dtype 白名单与运行期 cuBLAS 能力必须一致：缺符号即判 UNSUPPORTED（fail open），
      * 由上层回落通用路径，绝不在 GEMM 调用点失败、也绝不降精度。 */
     if (!gemm_available(dtype_id)) {
         return QCD_CUDA_DEDICATED_UNSUPPORTED;
+    }
+    if (!arena_planned) {
+        const std::size_t element = dtype_element_size(dtype_id);
+        const int plan_status = plan_arena(table, element, &arena_plan);
+        if (plan_status != QCD_STATUS_OK) {
+            return plan_status;
+        }
     }
     for (int index = 0; index < n_operands; ++index) {
         if (operands[index] == nullptr) {
@@ -1460,13 +1810,14 @@ int apply_dedicated(const void* steps, long long steps_len, void* const* operand
     }
     switch (dtype_id) {
         case QCD_DTYPE_FLOAT32:
-            return run_typed<float>(table, operands, out, state.handle);
+            return run_typed<float>(table, operands, out, state.handle, arena_plan);
         case QCD_DTYPE_FLOAT64:
-            return run_typed<double>(table, operands, out, state.handle);
+            return run_typed<double>(table, operands, out, state.handle, arena_plan);
         case QCD_DTYPE_COMPLEX64:
-            return run_typed<cuFloatComplex>(table, operands, out, state.handle);
+            return run_typed<cuFloatComplex>(table, operands, out, state.handle, arena_plan);
         case QCD_DTYPE_COMPLEX128:
-            return run_typed<cuDoubleComplex>(table, operands, out, state.handle);
+            return run_typed<cuDoubleComplex>(table, operands, out, state.handle,
+                                              arena_plan);
         default:
             return QCD_CUDA_DEDICATED_UNSUPPORTED;
     }

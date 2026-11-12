@@ -3,7 +3,75 @@
 `pyqcd.einsum` 与 `opt_einsum` 在同一台机器、同一 dtype、同一线程设置下对比，两种实现
 **每轮交替谁先运行**，以抵消缓存与时钟漂移。下面每个数字都是实测，每张表都由同一份脚本产生。
 
-## 测量口径
+## 0.4.0 生产特化
+
+发布证据使用完整生产场景，而不是 smoke 小形状：
+
+| 项 | 设置 |
+|---|---|
+| 硬件 | A100-40GB 节点，20 个 CPU worker，`complex128` |
+| 问题 | `Nx=Ny=Nz=32`、`Lt=64`、`Nev=100`、`Ns=4`、`Mom=8` |
+| 语料 | 43 条分层路径，覆盖 case 与 6/7/9/10/12/13/14/16 元数 |
+| 内部对照 | 相同输入、相同计划上的 `contract(..., specialize=False)` |
+| 外部对照 | `opt_einsum` 3.4.0，`dp` 规划器 |
+| 线程 | `OMP_NUM_THREADS=8`、`OPENBLAS_NUM_THREADS=4` |
+| 正确性 | 每条计时路径先做数值对照 |
+
+表中为 selected/generic，小于 `1` 表示更快。
+
+| 证据 | CPU | GPU |
+|---|---|---|
+| 43 条：selected/generic 中位比 | **0.861×** | **0.276×** |
+| 43 条：不快于 PyQCD generic | **42/43** | **42/43** |
+| 43 条：比 PyQCD generic 至少快 10% | **26/43** | **40/43** |
+| 43 条：selected/`opt_einsum(dp)` 中位比 | **0.528×** | **0.125×** |
+| 43 条：不快于 `opt_einsum(dp)` | **36/43** | **42/43** |
+
+内部反例是 CPU `seq=856`（`1.0067×`，慢 0.7%）与 GPU `seq=6911`
+（`1.3615×`，由固定 launch/pack 开销主导）。CPU 慢于 `opt_einsum(dp)` 的路径为
+`seq=9,130,6070,7918,2161,1030,1562`，其中最后两条约慢 `2.50×` 与 `2.44×`；
+GPU `seq=6070` 约慢 `3.2%`。因此本版本声明的是“相对 PyQCD 通用路径的广泛加速”，
+不是“CPU 全面胜过 `opt_einsum`”。
+
+### 六条核心生产路径
+
+| `seq` | CPU / generic | GPU / generic | CPU / `opt_einsum(dp)` | GPU / `opt_einsum(dp)` |
+|---:|---:|---:|---:|---:|
+| 2584 | 0.856× | 0.265× | 0.598× | 0.152× |
+| 866 | 0.936× | 0.248× | 0.891× | 0.213× |
+| 855 | 0.982× | 0.177× | 0.842× | 0.130× |
+| 129 | 0.791× | fallback，1.017× | 1.297× | 1.179× |
+| 1863 | 0.974× | 0.157× | 0.837× | 0.025× |
+| 6585 | **0.459×** | fallback | 未完成 | 0.606×，fallback |
+
+`seq=6585` 是 CPU 上最清楚的生产收益：generic `22.445 s`，selected
+`10.310 s`。CPU 的 `opt_einsum` 对照超过 10 分钟资源上限后被取消，不作为证据。
+
+### 全部 8638 条计划的资源门
+
+完整语料只做计划审计，不分配大张量：
+
+| 门控结果 | CPU | GPU |
+|---|---:|---:|
+| 放行原生计划 | **3833** | **2864** |
+| fail-open 回退 | **4805** | **5774** |
+| 计划不可用 | **0** | **0** |
+
+CPU 拦截 arena 至少 8 GiB、单步 GEMM 至少 100G MAC，或
+`pack >= 1 GiB && FLOPs <= 1G` 的计划；GPU 阈值为 3 GiB 与 40G MAC，
+pack-heavy 规则相同。审计中最大静态 arena 约 `5.04 PB`，最大单步约
+`65.536P MAC`，因此这些是保证正确性与资源安全的门，不是装饰性启发式。
+
+43 条 full-scene 路径的最大相对误差为 CPU `6.95e-15`、GPU `6.68e-15`。
+原始证据位于
+`data/runs/einsum-opt-20261112/expanded-paths-20261112/`。
+
+```bash
+python -m pyqcd.testing.einsum.bench_opt_einsum_production --help
+python -m pyqcd.testing.einsum.verify_plan_gate
+```
+
+## 历史通用路由口径
 
 | 项 | 设置 |
 |---|---|
@@ -14,7 +82,7 @@
 | 正确性 | 每条用例先按相对最大范数与 `opt_einsum` 对齐，再计时 |
 | 机器 | 4 物理核（8 线程）+ RTX 4060 Laptop，8 GB |
 
-## case 覆盖
+## 历史 case 覆盖
 
 十五个用例，每个结构性类别各一个——不是挑出来的"高光表"：
 
@@ -31,7 +99,7 @@
 两张表用**同样的十五个用例、同样的尺寸**，因此同一行可直接跨设备比较。单次耗时
 0.003–2.4 s，每点 3 轮，每轮交替先跑顺序。
 
-### CPU（`numpy` 数组，KUPL 后端）
+### 历史 CPU 结果（`numpy` 数组，KUPL 后端）
 
 | 用例 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
 |---|---|---|---|
@@ -51,7 +119,7 @@
 | 二维矩阵乘（实数）4096² | 0.63 s | 0.63 s | 0.99× |
 | hyper-edge 2048² | 0.088 s | 0.082 s | 0.93× |
 
-### GPU（`cupy` 数组，CUDA 后端）
+### 历史 GPU 结果（`cupy` 数组，CUDA 后端）
 
 | 用例 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
 |---|---|---|---|
@@ -74,7 +142,7 @@
 GPU 行是**同卡对同卡**。0.05 s 以下的行在 GPU 上受带宽限制，倍率基本是噪声；CPU 上
 0.09 s 那几行同理。
 
-## 为什么有的行是 10–19×，有的只有 1.0×
+## 历史通用行为什么有高倍率
 
 那些大倍数**不是**普遍加速，而是三个可测的具体效应：
 
@@ -125,10 +193,10 @@ GPU 行是**同卡对同卡**。0.05 s 以下的行在 GPU 上受带宽限制，
 识别了形态、复用了计划——例如传了 `out=`、操作数混合 dtype，或原生入口不可用。
 回落只改变耗时，数值完全一致。
 
-这条路径尚未通过性能验证：KUPL 执行器存在**方程相关**的尺寸断崖（语料 #194、
-16 元、`dim=4` 时通用路径 2 ms、拓扑入口 >90 s），实测表仍为 `TBD`。
-语料口径、匹配与执行机制、待补数字见 `docs/topology_kernels_20261111.md`；
-在该表补齐前不要引用这条路径的倍率。
+早期尚未解决的尺寸断崖已由上面的 0.4.0 资源门取代。当前实现会在原生分配前
+计算完整计划指标，并在 arena、单步 GEMM 或 pack-heavy 超限时回退。43 条
+full-scene 证据是本版本的权威性能声明；`docs/topology_kernels_20261111.md`
+中的历史单路径观察不是当前发布数据。
 
 ```bash
 python -m pyqcd.testing._topology_equations_contract
@@ -141,24 +209,18 @@ python -m pyqcd.testing._topology_kernel_contract
 
 ## 增益从哪来
 
-1. **形态特化**——核子 2pt/3pt 主项有专用 kernel；CUDA 执行器有融合的 γ 夹心 kernel
-   （体积门限制：`z·y·x ≤ 1`）。
-2. **不做无用规划**——逐元素/置换类方程、以及通用 `cupy` 方程直接交回 backend。
-3. **批量执行**——存在 batch 标签时，一次批量 GEMM 取代 numpy 的逐 batch 循环。
-4. **计划缓存 + 绑定操作数**——三个以上操作数的方程会缓存收缩列表，重复调用完全跳过
-   规划。小/中型图上规划占总调用时间的 31–84%（8 算子链 0.86 ms 里占 0.76 ms），
-   解析只占 0.002 ms，所以重复调用的收益主要来自这里。
+1. **后端定向的拓扑分派**：命中后只尝试与实际数组后端对应的原生入口。
+2. **资源感知规划**：原生分配前先计算静态 arena、最大单步 GEMM 与
+   pack-heavy 低 FLOP 风险。
+3. **按生命周期复用 workspace**：CPU 与 CUDA arena 复用物理 buffer，而不是让
+   每个逻辑中间槽同时存活。
+4. **热计划缓存**：完整 8638 拓扑匹配缓存不再淘汰，专用计划缓存从 16384 项起步。
 
 ## 重复调用
 
-同方程、同形状、同 dtype、同后端的第二次及以后调用会跳过规划（三个以上操作数；
-两算子只有一步，建键比规划更贵）。每次调用中位耗时，8×8 算子：
-
-| 用例 | `pyqcd.einsum` | `opt_einsum`（`dp`） | 倍率 |
-|---|---|---|---|
-| 8 算子链 `ab,bc,cd,de,ef,fg,gh,hi->ai` | 95 µs | 291 µs | **3.07×** |
-| 3 算子链 `ij,jk,kl->il` | 51 µs | 72 µs | **1.41×** |
-| 混合秩 `ef,b,e->be` | 52 µs | 60 µs | **1.14×** |
+完整语料冷启动首轮约 `0.54–0.57 s`，之后热 `match()` 扫描约 `0.53 µs/次`。
+8638 个专用计划的热扫描约 `0.195 s`，即 `22.7 µs/计划`，缓存占用约
+`46.1 MiB`。这些是路由缓存数字，不是算子内核加速。
 
 ## 内存
 
@@ -244,7 +306,7 @@ check(
 
 | 检查 | 范围 |
 |---|---|
-| `python -m pyqcd.testing` | 124 项契约：数值边界、并发、元数据 |
+| `python -m pyqcd.testing` | 120 项契约通过，1 项因环境跳过（依赖 CUDA/TeX） |
 | 差分套件（源码仓库） | 对冻结版 `opt_einsum` 的 980 个用例 |
 | `python -m pyqcd.testing.docs_examples` | 全部文档代码块，每块自带断言 |
 | `verify_native --backend kupl\|cuda` | 原生库 vs Python 规划器 |
@@ -258,11 +320,18 @@ check(
 
 ## 复现
 
-两个基准脚本，按形状落到哪个内核来分。参数完全一致——先 `cpu|gpu`，再
-`single|double`——计时协议也一致（交错轮次、比值取中位数、每条样本约 0.3 s、
-计时前先用 `opt_einsum` 校验数值），因此两者数字可直接横向比较。
+0.4.0 的权威生产驱动只存在于源码仓库，因为它依赖 full-scene 输入构造器与计划审计。
+请在计算节点运行：
 
-### 通用内核-基准脚本（15 种通用路径）
+```bash
+python -m pyqcd.testing.einsum.bench_opt_einsum_production --device cpu --precision double --seqs 2584,866,855,129,1863,6585 --strategies dp --rounds 1 --warmup 0 --oracle installed --out /tmp/pyqcd-cpu.json
+python -m pyqcd.testing.einsum.verify_plan_gate
+```
+
+下面两个随包发布的脚本仍可用于通用路由与固定/抽样拓扑检查。参数为先
+`cpu|gpu`、再 `single|double`，使用交错轮次，并在计时前校验正确性。
+
+### 历史通用内核基准（15 种通用路径）
 
 通用路径指**不命中** `wick_12cases` 语料、走通用分步规划器的形状：
 
@@ -277,7 +346,7 @@ python -m pyqcd.einsum.bench_generic --list
 3/4 算子链、hyper-edge、批量 GEMM、ellipsis、batch×matrix、many small
 batches、trace、diagonal。
 
-### 特化内核-基准脚本（15 种特化路径）
+### 特化内核 smoke/抽样基准（15 条固定路径）
 
 特化路径指**命中**语料、走拓扑特化内核的形状：
 

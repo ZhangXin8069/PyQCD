@@ -5,7 +5,78 @@ same thread settings, with both implementations **interleaved inside one loop** 
 machine drift cancels out. Every number below is measured, not modelled, and each
 table comes with the script that produced it.
 
-## Measurement protocol
+## 0.4.0 production specialisation
+
+The release evidence uses full production scenes, not smoke shapes:
+
+| Item | Setting |
+|---|---|
+| Hardware | A100-40GB node, 20 CPU workers, `complex128` |
+| Problem | `Nx=Ny=Nz=32`, `Lt=64`, `Nev=100`, `Ns=4`, `Mom=8` |
+| Corpus | 43 stratified paths across cases and operand counts 6/7/9/10/12/13/14/16 |
+| Internal reference | `contract(..., specialize=False)` on the same inputs and plan |
+| External reference | `opt_einsum` 3.4.0 with the `dp` planner |
+| Threads | `OMP_NUM_THREADS=8`, `OPENBLAS_NUM_THREADS=4` |
+| Correctness | every timed path checked before timing |
+
+Ratios are selected/generic, so values below `1` are faster.
+
+| Evidence | CPU | GPU |
+|---|---|---|
+| 43 paths: median selected/generic | **0.861x** | **0.276x** |
+| 43 paths: not slower than PyQCD generic | **42/43** | **42/43** |
+| 43 paths: at least 10% faster than PyQCD generic | **26/43** | **40/43** |
+| 43 paths: median selected/`opt_einsum(dp)` | **0.528x** | **0.125x** |
+| 43 paths: not slower than `opt_einsum(dp)` | **36/43** | **42/43** |
+
+The two internal counterexamples are CPU `seq=856` (`1.0067x`, 0.7% slower)
+and GPU `seq=6911` (`1.3615x`, dominated by fixed launch and pack overhead).
+CPU is slower than `opt_einsum(dp)` on `seq=9,130,6070,7918,2161,1030,1562`;
+the last two are about `2.50x` and `2.44x` slower. GPU `seq=6070` is about
+`3.2%` slower than `dp`. The release therefore claims broad gains over PyQCD's
+generic route, not universal CPU superiority over `opt_einsum`.
+
+### Six core production paths
+
+| `seq` | CPU / generic | GPU / generic | CPU / `opt_einsum(dp)` | GPU / `opt_einsum(dp)` |
+|---:|---:|---:|---:|---:|
+| 2584 | 0.856x | 0.265x | 0.598x | 0.152x |
+| 866 | 0.936x | 0.248x | 0.891x | 0.213x |
+| 855 | 0.982x | 0.177x | 0.842x | 0.130x |
+| 129 | 0.791x | fallback, 1.017x | 1.297x | 1.179x |
+| 1863 | 0.974x | 0.157x | 0.837x | 0.025x |
+| 6585 | **0.459x** | fallback | not completed | 0.606x, fallback |
+
+`seq=6585` is the clearest CPU production gain: `22.445 s` generic versus
+`10.310 s` selected. The aborted CPU `opt_einsum` run exceeded the 10-minute
+resource limit and is not treated as evidence.
+
+### Resource gates for all 8,638 plans
+
+The complete corpus was plan-audited without allocating giant tensors:
+
+| Gate result | CPU | GPU |
+|---|---:|---:|
+| Native plan admitted | **3,833** | **2,864** |
+| Fail-open fallback | **4,805** | **5,774** |
+| Plan unavailable | **0** | **0** |
+
+CPU blocks plans with an arena of at least 8 GiB, a single GEMM of at least
+100G MAC, or `pack >= 1 GiB && FLOPs <= 1G`. GPU limits are 3 GiB and 40G MAC,
+with the same pack-heavy rule. The largest audited static arena was about
+`5.04 PB`, and the largest single step was about `65.536P MAC`, so these are
+correctness-preserving safety gates, not cosmetic heuristics.
+
+Full-scene maximum relative errors are `6.95e-15` on CPU and `6.68e-15` on GPU.
+Raw evidence lives in
+`data/runs/einsum-opt-20261112/expanded-paths-20261112/`.
+
+```bash
+python -m pyqcd.testing.einsum.bench_opt_einsum_production --help
+python -m pyqcd.testing.einsum.verify_plan_gate
+```
+
+## Historical generic-routing protocol
 
 | Item | Setting |
 |---|---|
@@ -16,7 +87,7 @@ table comes with the script that produced it.
 | Correctness | every case is asserted against `numpy.einsum` before it is timed |
 | Machine | 4 physical cores (8 threads) + RTX 4060 Laptop, 8 GB |
 
-## Case coverage
+## Historical case coverage
 
 Fifteen cases, one per structural category the library routes differently — not a
 hand-picked highlight reel:
@@ -35,7 +106,7 @@ Both tables use **the same fifteen cases at the same shapes**, so a row is direc
 comparable across devices. One call takes 0.003–2.4 s; three rounds per case, and the
 implementation that runs first alternates every round.
 
-### CPU (`numpy` arrays, KUPL backend)
+### Historical CPU results (`numpy` arrays, KUPL backend)
 
 | Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
 |---|---|---|---|
@@ -55,7 +126,7 @@ implementation that runs first alternates every round.
 | matmul 2D (real), 4096² | 0.63 s | 0.63 s | 0.99× |
 | hyper-edge, 2048² | 0.088 s | 0.082 s | 0.93× |
 
-### GPU (`cupy` arrays, CUDA backend)
+### Historical GPU results (`cupy` arrays, CUDA backend)
 
 | Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
 |---|---|---|---|
@@ -78,7 +149,7 @@ implementation that runs first alternates every round.
 GPU rows are GPU against GPU. Rows below ~0.05 s are bandwidth-bound on the GPU, so
 their ratios are barely above noise; the same caveat applies to the 0.09 s CPU rows.
 
-## Why some rows are 10–19× and others are 1.0×
+## Why historical generic rows differ
 
 The large ratios are **not** general speedups — they are three specific effects, each
 measurable:
@@ -136,12 +207,12 @@ was recognised but only the plan was reused — for example with `out=`, with mi
 operand dtypes, or when the native entry is unavailable. A fallback changes speed
 only; the result is identical.
 
-This path is not performance-validated yet: the KUPL executor has an equation-specific
-size cliff (corpus equation #194, 16 operands, `dim=4`: 2 ms on the generic path vs
->90 s through the topology entry) and the measurement table is still `TBD`.
-`docs/topology_kernels_20261111.md` records the corpus definition, the matching and
-execution mechanics, and the pending numbers; do not quote a speed-up for this path
-until that table is filled.
+The earlier unresolved size cliff is superseded by the 0.4.0 resource gates above.
+The current implementation evaluates the complete plan metrics before native
+allocation and falls back when arena, single-GEMM or pack-heavy limits are unsafe.
+The 43-path full-scene evidence is the authoritative performance statement;
+historical path-local observations in `docs/topology_kernels_20261111.md` are not
+current release measurements.
 
 ```bash
 python -m pyqcd.testing._topology_equations_contract
@@ -155,28 +226,21 @@ dtype policy, the plan/pointer/`out` arguments, and a 120-equation corpus sample
 
 ## Where the gains come from
 
-1. **Shape specialisation** — nucleon 2pt/3pt main get purpose-built kernels, and
-   the CUDA executor has a fused γ-sandwich kernel (volume-gated: `z·y·x ≤ 1`).
-2. **Not paying for planning where it cannot help** — element-wise/permutation
-   equations and generic `cupy` equations are handed straight to the backend.
-3. **Batched execution** — when a batch index exists, one batched GEMM replaces
-   numpy's per-batch loop (that is the 7–12× column above).
-4. **Plan cache + bound operands** — any equation with three or more operands caches
-   its contraction list, so repeated calls skip planning entirely. Planning is 31–84%
-   of call time on small/medium graphs (8-operand chain: 0.76 ms of 0.86 ms), and
-   parsing is 0.002 ms, so this is where repeated calls win.
+1. **Backend-directed topology dispatch**: a matched equation only probes the
+   native entry that corresponds to the actual array backend.
+2. **Resource-aware planning**: static arena, the largest GEMM and pack-heavy
+   low-FLOP behaviour are evaluated before native allocation.
+3. **Lifetime-based workspace reuse**: CPU and CUDA arenas reuse physical buffers
+   rather than keeping every logical intermediate alive.
+4. **Warm-plan caches**: the complete 8,638-topology match cache avoids eviction,
+   and dedicated-plan caching starts at 16,384 entries.
 
 ## Repeated calls
 
-Planning is skipped on the second and later calls with the same equation, shapes,
-dtypes and backend (three or more operands; a two-operand path is one step and the
-cache key would cost more than the plan). Median per call, 8×8 operands:
-
-| Case | `pyqcd.einsum` | `opt_einsum` (`dp`) | Rate |
-|---|---|---|---|
-| 8-operand chain `ab,bc,cd,de,ef,fg,gh,hi->ai` | 95 µs | 291 µs | **3.07×** |
-| 3-operand chain `ij,jk,kl->il` | 51 µs | 72 µs | **1.41×** |
-| mixed rank `ef,b,e->be` | 52 µs | 60 µs | **1.14×** |
+The full-corpus cache completes a warm `match()` sweep in about `0.53 µs` per
+call after a cold first pass of `0.54–0.57 s`. A warm sweep of all 8,638
+dedicated plans takes about `0.195 s`, or `22.7 µs` per plan, and uses about
+`46.1 MiB`. These are routing-cache measurements, not kernel speed-ups.
 
 ## Memory
 
@@ -270,7 +334,7 @@ check(
 
 | Check | Scope |
 |---|---|
-| `python -m pyqcd.testing` | 124 contracts: numerical edge cases, threading, metadata |
+| `python -m pyqcd.testing` | 120 contracts passed, 1 skipped (CUDA/TeX environment dependent) |
 | differential suite (source checkout) | 980 cases against a frozen `opt_einsum` |
 | `python -m pyqcd.testing.docs_examples` | every documentation block, each self-asserting |
 | `verify_native --backend kupl\|cuda` | native library vs the Python planner |
@@ -286,18 +350,24 @@ check(
 
 ## Reproduce
 
-Two benchmark scripts, named after the kernel each shape lands on. They take the
-same arguments — `cpu|gpu` then `single|double` — and use the same timing
-protocol (interleaved rounds, median of ratios, ~0.3 s per sample, correctness
-checked against `opt_einsum` before timing), so their numbers are directly
-comparable.
+The authoritative 0.4.0 production driver is source-repository-only because it
+uses the full-scene corpus builder and plan audit. Run it on a compute node:
 
-| Script | Covers | 15 paths |
+```bash
+python -m pyqcd.testing.einsum.bench_opt_einsum_production --device cpu --precision double --seqs 2584,866,855,129,1863,6585 --strategies dp --rounds 1 --warmup 0 --oracle installed --out /tmp/pyqcd-cpu.json
+python -m pyqcd.testing.einsum.verify_plan_gate
+```
+
+The two installed benchmark scripts below remain useful for generic-routing and
+fixed/sample topology checks. They take `cpu|gpu` then `single|double`, use
+interleaved rounds and verify correctness before timing.
+
+| Historical script | Covers | 15 paths |
 |---|---|---|
 | **generic-kernel benchmark** (`bench_generic`) | shapes that do **not** hit the `wick_12cases` corpus | matmul (real/complex), element-wise, outer, full/partial reduction, chain 3/4, hyper-edge, batched GEMM, ellipsis, batch×matrix, many small batches, trace, diagonal |
 | **specialized-kernel benchmark** (`bench_specialized`) | the topology-specialized corpus paths | 15 real equations, 6 to 16 operands (2pt/3pt/4pt/5pt/6pt geometry, with and without momentum projection) |
 
-### Generic-kernel benchmark (15 generic paths)
+### Historical generic-kernel benchmark (15 generic paths)
 
 ```bash
 python -m pyqcd.einsum.bench_generic cpu double
@@ -309,7 +379,7 @@ python -m pyqcd.einsum.bench_generic --list
 These run the generic pairwise planner. This is the script behind the two tables
 above.
 
-### Specialized-kernel benchmark (15 specialized paths)
+### Specialized-kernel smoke/sample benchmark (15 fixed paths)
 
 ```bash
 python -m pyqcd.einsum.bench_specialized cpu double

@@ -36,10 +36,16 @@ def _repo_root() -> Path:
 
 
 def _cuda_library_path() -> Path:
+    requested = os.environ.get("PYQCD_EINSUM_CUDA_LIB")
+    if requested:
+        return Path(requested).expanduser()
     package_path = Path(__file__).resolve().with_name("cuda") / "libpyqcdeinsum_cuda.so"
+    repo_path = _repo_root() / "cpp" / "cuda" / "einsum" / "libpyqcdeinsum_cuda.so"
     if package_path.is_file():
         return package_path
-    return _repo_root() / "cpp" / "cuda" / "einsum" / "libpyqcdeinsum_cuda.so"
+    if repo_path.is_file():
+        return repo_path
+    return package_path
 
 
 def _cuda_module() -> Any:

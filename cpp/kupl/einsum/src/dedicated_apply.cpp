@@ -12,6 +12,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <omp.h>
 #include <type_traits>
 #include <vector>
 
@@ -306,15 +307,39 @@ using CgemmFn = void (*)(int, int, int, int, int, int, const void*, const void*,
                          const void*, int, const void*, void*, int);
 using ZgemmFn = void (*)(int, int, int, int, int, int, const void*, const void*, int,
                          const void*, int, const void*, void*, int);
+using SgemmIlp64Fn = void (*)(int, int, int, std::int64_t, std::int64_t, std::int64_t,
+                              float, const void*, std::int64_t, const void*,
+                              std::int64_t, float, void*, std::int64_t);
+using DgemmIlp64Fn = void (*)(int, int, int, std::int64_t, std::int64_t, std::int64_t,
+                              double, const void*, std::int64_t, const void*,
+                              std::int64_t, double, void*, std::int64_t);
+using CgemmIlp64Fn = void (*)(int, int, int, std::int64_t, std::int64_t, std::int64_t,
+                              const void*, const void*, std::int64_t, const void*,
+                              std::int64_t, const void*, void*, std::int64_t);
+using ZgemmIlp64Fn = void (*)(int, int, int, std::int64_t, std::int64_t, std::int64_t,
+                              const void*, const void*, std::int64_t, const void*,
+                              std::int64_t, const void*, void*, std::int64_t);
+using BlasGetNumThreadsFn = int (*)();
+using BlasSetNumThreadsLocalFn = void (*)(int);
 
 struct CblasApi {
     SgemmFn sgemm = nullptr;
     DgemmFn dgemm = nullptr;
     CgemmFn cgemm = nullptr;
     ZgemmFn zgemm = nullptr;
+    SgemmIlp64Fn sgemm_ilp64 = nullptr;
+    DgemmIlp64Fn dgemm_ilp64 = nullptr;
+    CgemmIlp64Fn cgemm_ilp64 = nullptr;
+    ZgemmIlp64Fn zgemm_ilp64 = nullptr;
+    BlasGetNumThreadsFn get_num_threads = nullptr;
+    BlasSetNumThreadsLocalFn set_num_threads_local = nullptr;
+    bool ilp64 = false;
 
     /* 实数两档必须齐备；复数两档按需（缺了就让该 dtype 回落，不影响实数）。 */
-    bool complete() const { return sgemm != nullptr && dgemm != nullptr; }
+    bool complete() const {
+        return (sgemm != nullptr && dgemm != nullptr) ||
+               (sgemm_ilp64 != nullptr && dgemm_ilp64 != nullptr);
+    }
 };
 
 template <typename Function>
@@ -336,6 +361,38 @@ bool bind_pair(void* handle, CblasApi* api) {
      * parse_table 被判为 UNSUPPORTED（按 dtype 分别判定），走回落路径。 */
     bind_symbol(handle, "cblas_cgemm", &api->cgemm);
     bind_symbol(handle, "cblas_zgemm", &api->zgemm);
+    if (!bind_symbol(handle, "scipy_openblas_get_num_threads64_",
+                     &api->get_num_threads) &&
+        !bind_symbol(handle, "openblas_get_num_threads64_",
+                     &api->get_num_threads)) {
+        bind_symbol(handle, "openblas_get_num_threads", &api->get_num_threads);
+    }
+    if (!bind_symbol(handle, "openblas_set_num_threads_local",
+                     &api->set_num_threads_local)) {
+        bind_symbol(handle, "scipy_openblas_set_num_threads_local64_",
+                    &api->set_num_threads_local);
+    }
+    return real;
+}
+
+bool bind_ilp64_pair(void* handle, CblasApi* api) {
+    api->ilp64 = true;
+    const bool real =
+        bind_symbol(handle, "scipy_cblas_sgemm64_", &api->sgemm_ilp64) &&
+        bind_symbol(handle, "scipy_cblas_dgemm64_", &api->dgemm_ilp64);
+    bind_symbol(handle, "scipy_cblas_cgemm64_", &api->cgemm_ilp64);
+    bind_symbol(handle, "scipy_cblas_zgemm64_", &api->zgemm_ilp64);
+    if (!bind_symbol(handle, "scipy_openblas_get_num_threads64_",
+                     &api->get_num_threads) &&
+        !bind_symbol(handle, "openblas_get_num_threads64_",
+                     &api->get_num_threads)) {
+        bind_symbol(handle, "openblas_get_num_threads", &api->get_num_threads);
+    }
+    if (!bind_symbol(handle, "openblas_set_num_threads_local",
+                     &api->set_num_threads_local)) {
+        bind_symbol(handle, "scipy_openblas_set_num_threads_local64_",
+                    &api->set_num_threads_local);
+    }
     return real;
 }
 
@@ -345,7 +402,7 @@ CblasApi load_cblas() {
         void* handle = dlopen(requested, RTLD_NOW | RTLD_LOCAL);
         if (handle != nullptr) {
             CblasApi api;
-            if (bind_pair(handle, &api)) {
+            if (bind_pair(handle, &api) || bind_ilp64_pair(handle, &api)) {
                 return api;
             }
             dlclose(handle);
@@ -387,11 +444,15 @@ struct BlasGate {
 };
 template <>
 struct BlasGate<std::complex<float>> {
-    static bool ready(const CblasApi& api) { return api.cgemm != nullptr; }
+    static bool ready(const CblasApi& api) {
+        return api.cgemm != nullptr || api.cgemm_ilp64 != nullptr;
+    }
 };
 template <>
 struct BlasGate<std::complex<double>> {
-    static bool ready(const CblasApi& api) { return api.zgemm != nullptr; }
+    static bool ready(const CblasApi& api) {
+        return api.zgemm != nullptr || api.zgemm_ilp64 != nullptr;
+    }
 };
 
 /* ------------------------------------------------------------------ 解析 */
@@ -572,13 +633,15 @@ int parse_table(const void* data, long long length, int dtype_id, bool baseline,
         /* 只有这四种 IEEE 精度有数值路径：其它 dtype 明确报「不支持」。 */
         return QCD_DEDICATED_UNSUPPORTED;
     }
-    if (table_dtype == QCD_DTYPE_COMPLEX64 && cblas_api().cgemm == nullptr) {
+    if (table_dtype == QCD_DTYPE_COMPLEX64 &&
+        !BlasGate<std::complex<float>>::ready(cblas_api())) {
         /* 复数走 cgemm / zgemm，**按 dtype 分别放行**：只缺一边的符号时，另一边
          * 仍然可以走特化（执行期 BlasGate<T> 是同一口径的二次守卫）。
          * 缺符号时**不硬错**、也不隐式降精度，而是报 UNSUPPORTED 让上层回落。 */
         return QCD_DEDICATED_UNSUPPORTED;
     }
-    if (table_dtype == QCD_DTYPE_COMPLEX128 && cblas_api().zgemm == nullptr) {
+    if (table_dtype == QCD_DTYPE_COMPLEX128 &&
+        !BlasGate<std::complex<double>>::ready(cblas_api())) {
         return QCD_DEDICATED_UNSUPPORTED;
     }
     if (num_operands < 1 || num_operands > kMaxOperands || num_slots < 0 ||
@@ -1189,6 +1252,13 @@ void gemm_call(const CblasApi& api, int trans_a, int trans_b, int rows, int cols
                const float* a, const float* b, float* c) {
     const int lda = trans_a != 0 ? rows : inner;
     const int ldb = trans_b != 0 ? inner : cols;
+    if (api.ilp64) {
+        api.sgemm_ilp64(kCblasRowMajor,
+                        trans_a != 0 ? kCblasTrans : kCblasNoTrans,
+                        trans_b != 0 ? kCblasTrans : kCblasNoTrans,
+                        rows, cols, inner, 1.0F, a, lda, b, ldb, 0.0F, c, cols);
+        return;
+    }
     api.sgemm(kCblasRowMajor, trans_a != 0 ? kCblasTrans : kCblasNoTrans,
               trans_b != 0 ? kCblasTrans : kCblasNoTrans, rows, cols, inner, 1.0F, a, lda, b,
               ldb, 0.0F, c, cols);
@@ -1198,6 +1268,13 @@ void gemm_call(const CblasApi& api, int trans_a, int trans_b, int rows, int cols
                const double* a, const double* b, double* c) {
     const int lda = trans_a != 0 ? rows : inner;
     const int ldb = trans_b != 0 ? inner : cols;
+    if (api.ilp64) {
+        api.dgemm_ilp64(kCblasRowMajor,
+                        trans_a != 0 ? kCblasTrans : kCblasNoTrans,
+                        trans_b != 0 ? kCblasTrans : kCblasNoTrans,
+                        rows, cols, inner, 1.0, a, lda, b, ldb, 0.0, c, cols);
+        return;
+    }
     api.dgemm(kCblasRowMajor, trans_a != 0 ? kCblasTrans : kCblasNoTrans,
               trans_b != 0 ? kCblasTrans : kCblasNoTrans, rows, cols, inner, 1.0, a, lda, b,
               ldb, 0.0, c, cols);
@@ -1212,6 +1289,13 @@ void gemm_call(const CblasApi& api, int trans_a, int trans_b, int rows, int cols
     const int ldb = trans_b != 0 ? inner : cols;
     const std::complex<float> alpha(1.0F, 0.0F);
     const std::complex<float> beta(0.0F, 0.0F);
+    if (api.ilp64) {
+        api.cgemm_ilp64(kCblasRowMajor,
+                        trans_a != 0 ? kCblasTrans : kCblasNoTrans,
+                        trans_b != 0 ? kCblasTrans : kCblasNoTrans,
+                        rows, cols, inner, &alpha, a, lda, b, ldb, &beta, c, cols);
+        return;
+    }
     api.cgemm(kCblasRowMajor, trans_a != 0 ? kCblasTrans : kCblasNoTrans,
               trans_b != 0 ? kCblasTrans : kCblasNoTrans, rows, cols, inner, &alpha, a, lda, b,
               ldb, &beta, c, cols);
@@ -1224,6 +1308,13 @@ void gemm_call(const CblasApi& api, int trans_a, int trans_b, int rows, int cols
     const int ldb = trans_b != 0 ? inner : cols;
     const std::complex<double> alpha(1.0, 0.0);
     const std::complex<double> beta(0.0, 0.0);
+    if (api.ilp64) {
+        api.zgemm_ilp64(kCblasRowMajor,
+                        trans_a != 0 ? kCblasTrans : kCblasNoTrans,
+                        trans_b != 0 ? kCblasTrans : kCblasNoTrans,
+                        rows, cols, inner, &alpha, a, lda, b, ldb, &beta, c, cols);
+        return;
+    }
     api.zgemm(kCblasRowMajor, trans_a != 0 ? kCblasTrans : kCblasNoTrans,
               trans_b != 0 ? kCblasTrans : kCblasNoTrans, rows, cols, inner, &alpha, a, lda, b,
               ldb, &beta, c, cols);
@@ -1298,6 +1389,78 @@ void gemm_block(const CblasApi& api, int trans_a, int trans_b, std::int64_t batc
             }
             return;
         }
+        if (m <= 8 && k <= 8 && n >= 128) {
+            using Accum = typename Accumulator<T>::type;
+#pragma omp parallel for collapse(2) schedule(static)
+            for (std::int64_t group = 0; group < batch; ++group) {
+                for (std::int64_t column = 0; column < n; ++column) {
+                    const T* group_left = a + group * m * k;
+                    const T* group_right = b + group * k * n;
+                    T* group_out = c + group * m * n;
+                    Accum totals[8];
+                    for (std::int64_t row = 0; row < m; ++row) {
+                        totals[row] = Accum(0);
+                    }
+                    for (std::int64_t inner = 0; inner < k; ++inner) {
+                        const Accum scale =
+                            Accum(group_right[inner * n + column]);
+                        for (std::int64_t row = 0; row < m; ++row) {
+                            totals[row] +=
+                                Accum(group_left[row * k + inner]) * scale;
+                        }
+                    }
+                    for (std::int64_t row = 0; row < m; ++row) {
+                        group_out[row * n + column] = static_cast<T>(totals[row]);
+                    }
+                }
+            }
+            return;
+        }
+    }
+    /* 逐 batch 的 CBLAS 调用默认让每个小 GEMM 各自吃满 BLAS 线程。大批量时
+     * 这会把同一批线程反复串行化；改为有限的宿主线程并行，并在每个 worker
+     * 内把 BLAS 线程局部降到 1，避免 OMP×BLAS oversubscription。
+     *
+     * 只在大批量、每批工作量足够时启用；调用方已在并行区或暂缺线程控制
+     * 符号时保持原串行路径。阈值按 MAC（乘加次数）计算，不依赖 batch 单轴。 */
+    constexpr std::int64_t kMinParallelMacPerBatch = std::int64_t(32) << 20;
+    std::int64_t mac_per_batch = 0;
+    std::int64_t total_mac = 0;
+    const int omp_threads = std::min(omp_get_max_threads(), omp_get_num_procs());
+    const int blas_threads =
+        api.get_num_threads != nullptr ? api.get_num_threads() : 1;
+    const std::int64_t workers = std::min<std::int64_t>(batch, omp_threads);
+    if (batch > 1 && workers > 1 && omp_get_level() == 0 && !omp_in_parallel() &&
+        api.get_num_threads != nullptr && api.set_num_threads_local != nullptr &&
+        checked_mul(m, n, &mac_per_batch) &&
+        checked_mul(mac_per_batch, k, &mac_per_batch) &&
+        checked_mul(mac_per_batch, batch, &total_mac) &&
+        mac_per_batch >= kMinParallelMacPerBatch &&
+        total_mac >= 2 * kMinParallelMacPerBatch) {
+        if (trace_enabled()) {
+            std::fprintf(stderr,
+                         "[dedicated] batch-parallel batch=%lld workers=%lld "
+                         "omp=%d blas=%d mac_per_batch=%lld\n",
+                         static_cast<long long>(batch), static_cast<long long>(workers),
+                         omp_threads, blas_threads,
+                         static_cast<long long>(mac_per_batch));
+        }
+        const int restore_blas_threads = blas_threads > 0 ? blas_threads : 1;
+#pragma omp parallel num_threads(workers)
+        {
+            api.set_num_threads_local(1);
+#pragma omp for schedule(static)
+            for (std::int64_t group = 0; group < batch; ++group) {
+                gemm_call(api, trans_a, trans_b, static_cast<int>(m), static_cast<int>(n),
+                          static_cast<int>(k), a + group * m * k, b + group * k * n,
+                          c + group * m * n);
+            }
+            api.set_num_threads_local(restore_blas_threads);
+        }
+        /* OpenMP 的 master 线程也走过并行区；这里再把调用线程恢复一次，
+         * 避免某些 OpenBLAS 构建把 local 设置暴露成线程池的共享值。 */
+        api.set_num_threads_local(restore_blas_threads);
+        return;
     }
     for (std::int64_t group = 0; group < batch; ++group) {
         gemm_call(api, trans_a, trans_b, static_cast<int>(m), static_cast<int>(n),

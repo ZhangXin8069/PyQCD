@@ -261,13 +261,25 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
         return _fail(
             "operand_offsets must stay unused: a cupy view's data pointer already "
             "carries the byte offset, so a non-zero offset would double it")
+    from . import _kernel_kupl
+
+    shapes = tuple(tuple(int(extent) for extent in operand.shape)
+                   for operand in operands)
+    negative_key = _kernel_kupl._negative_cache_key(
+        subscripts, shapes, np.dtype(dtype), "topology", "cuda_topology")
+    cached_unsupported = _kernel_kupl._cached_unsupported(negative_key)
+    if cached_unsupported is not None:
+        return _fail(*cached_unsupported)
     try:
         plan = _topology_plan(_topology_key(subscripts, operands), subscripts, operands)
         result = native_topology_apply(plan, operands, out=out, info=LAST_INFO)
     except Exception as error:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
         LAST_INFO.clear()
-        return _fail(f"topology execution unavailable: {type(error).__name__}: {error}",
-                     getattr(error, "status", None))
+        status = getattr(error, "status", None)
+        reason = f"topology execution unavailable: {type(error).__name__}: {error}"
+        if status == 4:
+            _kernel_kupl._negative_cache_store(negative_key, reason, 4)
+        return _fail(reason, status)
     LAST_INFO["path"] = "cuda_topology"
     return result
 
@@ -300,6 +312,10 @@ _DEDICATED_DTYPE_IDS = {
     np.dtype(np.complex128): 0, np.dtype(np.complex64): 1,
     np.dtype(np.float64): 2, np.dtype(np.float32): 3,
 }
+_CUDA_PLAN_ARENA_LIMIT = 3 << 30
+_CUDA_PLAN_MAX_STEP_MACS_LIMIT = 40_000_000_000
+_CUDA_HEAVY_PACK_MIN_BYTES = 1 << 30
+_CUDA_HEAVY_PACK_MAX_FLOPS = 1_000_000_000
 _entry_dedicated: Any = None
 _failed_dedicated = False
 _dedicated_dtypes: tuple[np.dtype, ...] | None = None
@@ -321,6 +337,27 @@ def dedicated_dtypes() -> tuple[np.dtype, ...]:
         if _dedicated_dtypes is None:
             _dedicated_dtypes = _query_dedicated_dtypes()
     return _dedicated_dtypes
+
+
+def _plan_fallback_reason(dtype: Any, stats: dict[str, int]) -> str | None:
+    """Fail open for plans outside the measured A100 dedicated budget."""
+    arena_bytes = int(stats.get("plan_arena_bytes", 0))
+    max_step_macs = int(stats.get("plan_max_step_macs", 0))
+    flops = int(stats.get("plan_flops", 0))
+    pack_bytes = int(stats.get("plan_pack_bytes", 0))
+    if arena_bytes >= _CUDA_PLAN_ARENA_LIMIT:
+        return (
+            "plan arena exceeds the measured CUDA dedicated budget "
+            f"({arena_bytes} >= {_CUDA_PLAN_ARENA_LIMIT} bytes)")
+    if max_step_macs >= _CUDA_PLAN_MAX_STEP_MACS_LIMIT:
+        return (
+            "single GEMM exceeds the measured CUDA dedicated budget "
+            f"({max_step_macs} >= {_CUDA_PLAN_MAX_STEP_MACS_LIMIT} MACs)")
+    if pack_bytes >= _CUDA_HEAVY_PACK_MIN_BYTES and flops <= _CUDA_HEAVY_PACK_MAX_FLOPS:
+        return (
+            "plan is pack-bound on CUDA "
+            f"({pack_bytes} pack bytes, {flops} FLOPs)")
+    return None
 
 
 def _query_dedicated_dtypes() -> tuple[np.dtype, ...]:
@@ -394,24 +431,33 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
     dtype = np.dtype(operands[0].dtype)
     if any(np.dtype(operand.dtype) != dtype for operand in operands[1:]):
         return _fail("mixed operand dtypes are not supported by the native path")
+    from . import _kernel_kupl
+
+    optimize = _kernel_kupl._effective_dedicated_optimizer(optimize)
+    shapes = tuple(tuple(int(extent) for extent in operand.shape) for operand in operands)
+    if any(not operand.flags['C_CONTIGUOUS'] for operand in operands):
+        return _fail("dedicated kernel requires C-contiguous operands")
+    negative_key = _kernel_kupl._negative_cache_key(
+        subscripts, shapes, dtype, optimize, "cuda_dedicated")
+    cached_unsupported = _kernel_kupl._cached_unsupported(negative_key)
+    if cached_unsupported is not None:
+        return _fail(*cached_unsupported)
     supported_dtypes = dedicated_dtypes()
     if dtype not in supported_dtypes:
         supported = ", ".join(str(item) for item in supported_dtypes) or "none"
-        return _fail(
+        reason = (
             f"dtype {dtype} has no dedicated step-table path on this machine "
             f"(supported: {supported}); no implicit downcast is performed")
-    if any(not operand.flags['C_CONTIGUOUS'] for operand in operands):
-        return _fail("dedicated kernel requires C-contiguous operands")
+        _kernel_kupl._negative_cache_store(negative_key, reason, 4)
+        return _fail(reason, 4)
     entry = _function_dedicated()
     if entry is None:
         return _fail("qcd_cuda_dedicated_apply is not exported by the archive")
 
-    shapes = tuple(tuple(int(extent) for extent in operand.shape) for operand in operands)
     # 步表生成端只有一份（KUPL 侧纯 Python 编码器），这里直接复用它的缓存。
     try:
-        from . import _kernel_kupl
-
-        cached = _kernel_kupl._dedicated_cached(subscripts, shapes, dtype, optimize)
+        cached = _kernel_kupl._dedicated_cached(
+            subscripts, shapes, dtype, optimize, "cuda")
     except Exception as error:  # noqa: BLE001 - 规划失败也一律回落，绝不抛给调用方
         return _fail(f"step-table planning failed: {type(error).__name__}: {error}")
     if cached is None:
@@ -419,6 +465,11 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
     # KUPL 侧缓存返回 4 元组 (plan, output_shape, plan_buffer, plan_flops)；
     # 按 3 元组解包会抛 ValueError（在 try 之外，不会被吞成回落）。
     plan, output_shape, plan_buffer, plan_flops = cached
+    stats = _kernel_kupl._plan_statistics(plan)
+    plan_gate = _plan_fallback_reason(dtype, stats)
+    if plan_gate is not None:
+        _kernel_kupl._negative_cache_store(negative_key, plan_gate, 4)
+        return _fail(plan_gate, 4)
 
     if out is None:
         output = cupy.empty(output_shape, dtype=dtype)
@@ -442,13 +493,19 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
                            len(operands), int(output.data.ptr),
                            _DEDICATED_DTYPE_IDS[dtype], None))
     except Exception as error:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
-        return _fail(f"dedicated execution unavailable: {type(error).__name__}: {error}",
-                     getattr(error, "status", None))
+        status = getattr(error, "status", None)
+        reason = f"dedicated execution unavailable: {type(error).__name__}: {error}"
+        if status == 4:
+            _kernel_kupl._negative_cache_store(negative_key, reason, 4)
+        return _fail(reason, status)
     if status != 0:
         reason = ("the step table or this machine's cuBLAS capability is outside "
                   "the CUDA executor's range" if status == 4
                   else "invalid arguments or an internal error")
-        return _fail(f"dedicated kernel returned status {status} ({reason})", status)
+        full_reason = f"dedicated kernel returned status {status} ({reason})"
+        if status == 4:
+            _kernel_kupl._negative_cache_store(negative_key, full_reason, 4)
+        return _fail(full_reason, status)
     LAST_INFO.update(
         path="cuda_dedicated",
         equation=''.join(subscripts.split()),
@@ -457,6 +514,10 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
         n_operands=len(operands),
         plan_bytes=len(plan),
         plan_flops=plan_flops,
+        plan_max_intermediate=stats["plan_max_intermediate"],
+        plan_pack_bytes=stats["plan_pack_bytes"],
+        plan_arena_bytes=stats["plan_arena_bytes"],
+        plan_max_step_macs=stats["plan_max_step_macs"],
         optimize=optimize,
         output_shape=tuple(output_shape),
         out="allocated" if out is None else "provided",

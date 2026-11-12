@@ -17,6 +17,7 @@ include install.sh
 # Native backend sources, headers and their Makefile drivers. The build dirs
 # under cpp/ hold compiled artefacts and are pruned below.
 recursive-include cpp *.h *.cpp *.cu *.sh *.md
+include cpp/kupl/einsum/include/family_apply.h
 prune cpp/kupl/einsum/build
 prune cpp/cuda/einsum/build
 

@@ -92,7 +92,7 @@ CuPy 14.2.0。复跑命令均以 `python -B` 起，避免 `.pyc` 混入证据。
 | T3 | "CUDA 拓扑入口 dim≥8 结果不正确（dim=4 对）" | **当前树无法复现**。实测 `arity∈{6,7,9,10,12,13,14,16}`、`dim∈{4,8}` 共 32 组全部 `rel ≤ 4.1e-7`、`correct=True`；`dim=12` 亦正确（arity13 `rel=5.8e-7`、arity16 `rel=2.3e-7`），交替 6 条拓扑 × 3 轮也 0 失败。构建产物 `pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so` 已导出 `qcd_cuda_topology_apply` | 复跑：若 `correct` 判据是"与 numpy 逐元素比"，高元数 `dim≥8` 时**参考侧本身**会先超时（`np.einsum` 在 16 算子 × 8^24 上不可能算完），容易把"参考算不动"误报成"kernel 错" | 正确性门必须用**同 dtype 的通用路径**当参考（`contract(..., specialize=False)`），不要在高动量大形状上直接对 numpy。若要在 dim≥8 断言 CUDA 错误，需给出具体方程、形状与两端数值 |
 | T4 | 特化分支"看起来在跑"但结果始终是通用执行器给的 | `build_canonical_signature` 用 `step.positions` 当**输入下标**索引 `labels[position]`，而 `positions` 语义是**当前活动槽**（`cpp/kupl/einsum/src/runtime.cpp:235-243` 只校验 ≥0；执行器按 `active[...]` 取用，`apply_contract.cpp:1793-1801`）。第 5 个步之后活动槽里已有中间体，于是同一槽被读入两种 label 向量 → 签名构建失败 | 在临时副本里插桩后实测输出 `[dbg] sig: slot conflict at 4: had 4 [20,21,22,23,] now 2 [8,12,]`，随即 `miss: signature build failed`，`rc=0`（回落到通用路径仍给出正确数值，所以纯正确性测试**抓不到**） | 签名必须由 `execution.input_shapes` 顺序 + 各 input 的原始 label 构建，或用"计划里首次出现"重编号后与生成期口径对齐；不要把 `positions` 当输入序号。验证时必须同时看 trace 命中率，不能只看 `rc==0` |
 | T5 | 步表执行器"未接线"却以为已生效 | `topology_kernels.inc` 是 `.gitignore:8` 的 `*` 通配忽略项（生成物不进库），且 `make.sh` 只 glob `src/*.cpp`（`cpp/kupl/einsum/make.sh:400-413`），**不编译 `.inc`**；只有 `topology_apply.cpp` 显式 `#include "topology_kernels.inc"`（`topology_apply.cpp:17`）才会进构建 | `nm -D` 只有 `qcd_kupl_topology_apply`；`strings libpyqcdeinsum_kupl.so \| grep -c topology-specialized` → 生产库 **0**、而临时重建副本 **1** | 改生成器/执行器后必须重建并检查符号内字符串；`git status` 看不到 `.inc` 变化不代表没改。生成物不入库，全靠 `make.sh` 时的 `#include` 与本地生成步骤 |
-| T6 | 语料全扫描时匹配开销远高于单条基准 | `_signature_of_normalized` 的 `lru_cache(maxsize=512)`（`pyqcd/einsum/_specialize.py:151-153`）挡不住 2582 条轮转。实测：单条重复 3.45 µs、100 条轮转 5.02 µs、**2582 条轮转 16.0 µs**，`cache_info()` 显示 `currsize=512` 持续抖动 | 报 `match` 开销必须写清**工作集**；只报"单条 µs"会低估真实扫描成本 3–5 倍 | 基准分三档（单条 / 100 条 / 全语料）；若要做语料级吞吐，先加大缓存或改用 `frozenset` 摘要直查，不要沿用 512 项 LRU 的乐观数字 |
+| T6 | 语料全扫描时匹配开销远高于单条基准 | 旧实现只缓存 512 个签名，8638 条轮转时每轮反复算签名与摘要。2026-11-12 优化为 `_match_of_normalized` 最终结果 LRU（16384 项）后，首轮冷扫描约 0.54–0.57 s，**8638 条热轮转降到 0.532 µs/call** | 报 `match` 开销必须写清**工作集**；只扩大签名缓存仍会重复摘要/分桶，必须缓存最终 Entry | 基准必须同时报首轮冷扫描与多轮热扫描；专项契约见 `pyqcd.testing.einsum.verify_python_hotpath` |
 | T7 | dtype 能力"文档说四个都支持"与 Python 侧实际下发的集合不一致 | `TOPOLOGY_DTYPES` 只声明 `(complex64, float32)`（`_kernel_kupl.py:275`、`_kernel_cuda.py:269`）；双精度要经 `_probe_double` 实测才加入（`_kernel_kupl.py:291`）。KUPL 四 dtype 实测全通（`float64 rel=4.5e-16`、`complex128 rel=6.3e-16`），CUDA 探测后也全通 | `topology_dtypes()` 在探测前后不同：探前只有 2 项，探后 4 项 | 写"支持 double"前先跑 `_kernel_kupl.topology_dtypes()`；契约要求 double **绝不降级**，未实现时应返回 `None` 回落而不是转 float32 |
 
 ### 8.1 复现命令（逐条对应上表）
@@ -124,17 +124,23 @@ for ar in sorted(d):
 # T3/T7：CUDA 与 dtype 能力（参考必须用 specialize=False）
 python -B -c "from pyqcd.einsum import _kernel_cuda; print(_kernel_cuda.topology_dtypes())"
 
-# T6：三档匹配开销
+# T6：完整任务表冷热匹配开销（生产语料，不缩放维度）
 python -B -c "
 from pyqcd.einsum import _specialize as S
-from pyqcd.testing._topology_equations_contract import _parse_equations as P
+from pyqcd.einsum._wick_tasklist import TASKS
 import time
-eqs=P()
-for n,reps in ((1,20000),(100,100),(2582,4)):
-    seq=eqs[:n]; S.match(seq[0]); t=time.perf_counter()
-    for _ in range(reps):
-        for e in seq: S.match(e)
-    print(n, 'x', reps, '-> %.2f us/call' % ((time.perf_counter()-t)/(n*reps)*1e6))
+eqs=[task.equation for task in TASKS]
+S._match_of_normalized.cache_clear()
+S._signature_of_normalized.cache_clear()
+t=time.perf_counter()
+for e in eqs: S.match(e)
+print('cold %.3f s' % (time.perf_counter()-t))
+t=time.perf_counter()
+for _ in range(5):
+    for e in eqs: S.match(e)
+calls=5*len(eqs)
+print('hot %.3f us/call' % ((time.perf_counter()-t)/calls*1e6))
+print(S._match_of_normalized.cache_info())
 "
 ```
 
@@ -1135,3 +1141,324 @@ unpack 从 87 → 59 ms（复数）/ 39 ms（实数）。
 
 整体 15 条特化路径的中位比值：**0.44×（快 2.3 倍）**，11 条参与统计
 （4 条因双方 < 1 ms 标 `too_short` 排除）。
+
+## 21. 生产 full scene 的计划与 workspace 门（2026-11-12）
+
+### 现象
+
+历史计算节点 trace 中，`seq=6585` 的 CUDA dedicated 路径在 full scene 上约
+`0.50 s`，同场景通用路径约 `0.041 s`，即特化路径约 `12.2x` 慢。该方程只有
+16 个操作数、输入合计约 `0.218 GiB`，但 dedicated 计划物化了巨大的中间体。
+
+### 纯形状核算
+
+对 full scene 的生产形状分别编码 `auto/greedy` 与 `branch-2` 步表，得到：
+
+| 候选 | FLOPs | 最大中间体元素 | 实际 pack 字节（complex128） |
+|---|---:|---:|---:|
+| `auto/greedy` | 168,822,272,000 | 327,680,000 | 约 9.98 GiB |
+| `branch-2` | 119,302,963,200 | 163,840,000 | 约 4.57 GiB |
+
+因此：
+
+- 只按 FLOPs 选计划不够，至少还要计入最大中间体与实际 pack 字节；
+- `branch-2` 首次规划约 `0.08 s`，缓存后可直接复用；
+- 不能用小维/scale 场景证明该计划在生产规模有效，必须在 full scene 计算节点实测。
+
+### 中间槽生命周期
+
+dedicated 执行器当前预分配所有逻辑中间槽。按“每步消费后立即释放”的 lifetime 模拟：
+
+| 计划 | 全部中间槽 | 峰值同时存活 | first-fit 首次分配量 |
+|---|---:|---:|---:|
+| `auto/greedy` | 约 9.90 GiB | 约 5.29 GiB | 约 5.75 GiB |
+| `branch-2` | 约 4.67 GiB | 约 1.66 GiB | 约 2.18 GiB |
+
+逻辑 slot 不应等同于物理 allocation。CPU 与 CUDA 都应按 last-use 回收并复用物理
+buffer；这比继续微调单个 kernel 更有结构性收益。
+
+### 必守判据
+
+1. 特化路径必须先通过生产计划收益门，不能“命中拓扑就一定执行”。
+2. 计划评分至少包含 FLOPs、最大中间体、实际 pack bytes；阈值必须由 full scene
+   A/B 实测确定。
+3. 中间体与 pack buffer 的真实峰值必须用 trace/RSS/device reserved 记录，不能用
+   输入大小估算。
+4. 任何 `smoke` 或 `--scale` 结果只能验证路径与数值，不能写进生产倍率。
+
+## 22. 首轮生产节点 A/B 结果（2026-11-12）
+
+固定 full scene、dtype 与线程后，当前工作树的生产结果：
+
+### KUPL CPU
+
+| seq | generic | dedicated | 特化/通用 |
+|---:|---:|---:|---:|
+| 2584 | 3.429 ms | 2.868 ms | 0.836x |
+| 866 | 92.759 ms | 89.037 ms | 0.960x |
+| 855 | 5.772 ms | 4.706 ms | 0.815x |
+| 129 | 709.528 ms | 1,586.303 ms | 2.236x |
+| 1863 | 28.062 ms | 25.179 ms | 0.897x |
+| 6585 | 2,915.879 ms | 3,806.100 ms | 1.305x |
+
+峰值 RSS 约 14.34 GiB。当前 CBLAS 选择实际命中 NumPy bundled
+`libscipy_openblas64_`，ILP64 路径有效；历史 40 s 级退化已消失，但 14/16
+算子长链仍慢于 generic。
+
+### CUDA
+
+| seq | generic | dedicated | 特化/通用 |
+|---:|---:|---:|---:|
+| 2584 | 3.268 ms | 0.141 ms | 0.043x |
+| 866 | 2.799 ms | 1.252 ms | 0.447x |
+| 855 | 2.339 ms | 0.524 ms | 0.224x |
+| 129 | 13.733 ms | 20.004 ms | 1.457x |
+| 1863 | 3.890 ms | 0.722 ms | 0.186x |
+| 6585 | 26.952 ms | 43.082 ms | 1.598x |
+
+`small_outer_kernel` 将 `seq=6585` 的首个 `m=4,n=1,000,000,k=4` 步从历史约
+43 ms 降到亚毫秒级，是有效优化。下一步同名形状但 A 经过 pack 的
+`m=4,n=3,200,k=4` 仍约 35 ms；pack 后缓冲已经满足 canonical K-last 语义，
+因此 small-outer 判据不应要求 `!pack_a && !pack_b`，而应依据 pack 后布局。
+
+### 连续 dtype 审计陷阱
+
+首版连续 dtype 审计把 topology 的 `status=2` 覆盖到 dedicated 失败字段，误报
+complex64/float64/float32 的 dedicated 失败。独立进程复测后，四 dtype 的
+`qcd_cuda_dedicated_apply` 全部数值正确：
+
+| dtype | 最大相对误差 |
+|---|---:|
+| complex128 | 1.27e-15 |
+| complex64 | 5.31e-7 |
+| float64 | 6.77e-16 |
+| float32 | 2.50e-7 |
+
+complex128/complex64/float64 失败的是 topology 入口，不是 dedicated。
+
+审计规则：
+
+1. dedicated 与 topology 的 `LAST_FAILURE` 必须分桶，禁止共享“最后失败”字段；
+2. 每个 dtype 使用独立进程和独立 CUDA context；
+3. 记录调用前 device free/reserved、pool cached、arena 请求字节；
+4. 不得用 complex128 通过推导其余 dtype 通过，也不得把 topology 不支持写成
+   dedicated 错误。
+
+## 23. Python 全语料缓存与 backend 定向分派（2026-11-12）
+
+完整 8638 条生产拓扑在计算节点实测：
+
+| 指标 | 优化前 | 优化后 |
+|---|---:|---:|
+| 8638 条轮转 `match()` | 约 60.8 us/call | **约 0.53 us/call** |
+| 计划缓存热扫描 | 4096 项上限，持续淘汰 | **约 22.7 us/call** |
+| 8638 条计划热扫描 | 无法完整保留 | **约 0.195 s** |
+| 计划缓存 | 22.8 MiB / 4096 项 | **46.1 MiB / 8638 项** |
+
+实现要点：
+
+- `_specialize._match_of_normalized` 直接缓存规范式到 topology entry 的最终结果，
+  容量必须覆盖完整唯一签名数；
+- dedicated 计划缓存容量与字节预算必须同时覆盖全语料，只增条目上限但保留 32 MiB
+  会让完整扫描继续抖振；
+- `_run_specialized_kernel` 只尝试与输入 backend 对应的入口。numpy 输入先尝试
+  CUDA、cupy 输入先尝试 KUPL 都是无效 Python/C ABI 开销。
+
+该优化只降低分派、签名、计划构建和缓存开销；不能把 0.53 us/call 写成数值 kernel
+加速。
+
+## 24. 冻结快照的首轮 CPU/GPU A/B（2026-11-12，已被 §26 更新）
+
+测量必须绑定源码快照和文件 SHA-256；本轮快照位于
+`data/runs/einsum-opt-20261112/prod-baseline-audit-20261112t1838/snapshot-current-20261112t1858/`。
+该快照早于 CPU batch-parallel 与 branch-2 条件策略，只用于说明“命中专用路径不等于
+一定更快”；当前 CPU 结论必须读 §26/§27。
+
+| seq | CPU dedicated/generic | GPU dedicated/generic |
+|---:|---:|---:|
+| 2584 | 0.823x | 0.202x |
+| 866 | 0.941x | 0.348x |
+| 855 | 0.905x | 0.253x |
+| 129 | 1.184x | 1.094x |
+| 1863 | 0.944x | 0.255x |
+| 6585 | 1.211x | 1.475x |
+
+结论：
+
+1. topology 命中不等于特化执行更快，14/16 算子重路径仍应回退 generic 或有条件启用；
+2. GPU 轻中量路径当前已具备稳定明显收益；
+3. CPU `seq=6585` 峰值 RSS 约 28.3 GB，说明 lifetime/workspace 优化比继续微调
+   BLAS 调用更关键；
+4. 任何源码并行变化期间启动的作业只能作为 provisional，最终报告必须使用只读快照。
+
+## 25. CUDA complex128 GEMM 收益门（2026-11-12）
+
+full-scene A100 实测显示，complex128 计划中若单个 GEMM 超过约
+`40G MAC`，dedicated 的显式 pack/unpack 路径会退化；低于阈值的路径仍通常更快。
+当前 CUDA `apply_dedicated` 在 workspace 分配前检查全部步骤，超阈值返回
+`QCD_CUDA_DEDICATED_UNSUPPORTED`，由上层 fail-open 到 generic。
+
+作业 `1647800` 结果：
+
+| seq | 门控前 | 门控后 top-level | generic | 备注 |
+|---:|---:|---:|---:|---|
+| 6585 | 71.42 ms | 50.57 ms | 45.70 ms | -29.2%，仍慢 10.6% |
+| 3909 | 68.66 ms | 35.79 ms | 33.87 ms | -47.9% |
+| 3981 | - | 53.95 ms | 83.18 ms | 未触发门并保持专用优势 |
+
+关键教训：门控只解决“进入错误数值路径”的问题，不解决 Python 重复尝试成本。确定性
+unsupported 必须再做 key 级负缓存，否则每次调用仍会为不执行的 dedicated/topology
+付约 10% 预算。
+
+2026-11-12 最终 full-scene 又补了一道 Python 计划门：complex128
+`plan_arena_bytes >= 3 GiB` 时直接 fail-open。它覆盖 `seq=129`（静态 arena
+3.41 GB，实测 dedicated/generic=1.27）和原本已由 40G MAC 拒绝的 `seq=6585`；
+`seq=2584/866/855/1863` 的 arena 都小于门槛，加速路径不变。阈值仅对 A100
+full-scene 有证据，跨 GPU 架构不得直接外推。
+
+## 26. CPU batch 并行与 CUDA lifetime 复用（2026-11-12）
+
+### CPU
+
+大批量 GEMM 不再固定让每次 CBLAS 调用独立吃满 BLAS 线程。只有在
+`batch>1`、每批 MAC≥32M、总 MAC≥64M，且 OpenBLAS thread-local 控制可用时：
+
+- OpenMP 按 batch 分片；
+- worker 内 BLAS 线程局部降为 1；
+- 结束后恢复原线程数；
+- 其它情况保持原串行 CBLAS。
+
+baseline/optimized 两个冻结 `.so` 的 full-scene 三中位 A/B：
+
+| seq | generic | optimized dedicated | 比值 |
+|---:|---:|---:|---:|
+| 6585 | 22.306 s | **17.194 s** | **0.771x** |
+| 2584 | 1.533 ms | 1.290 ms | 0.841x |
+| 866 | 36.630 ms | 34.908 ms | 0.953x |
+| 855 | 24.230 ms | 23.408 ms | 0.966x |
+| 129 | 5.174 s | 4.145 s | 0.801x |
+| 1863 | 192.661 ms | 185.651 ms | 0.964x |
+
+六条生产路径全部不慢于 generic。`seq=6585` 相对误差 `1.84e-15`，最重单步
+`batch=64,m=6400,n=400,k=256` 从约 `11.27 s` 降到约 `6.05 s`。
+
+同作业对 baseline/optimized 两个冻结 `.so` 做 5 轮重复（job `1647960`）：
+`26.723 s -> 18.606 s`，比值 **0.696x**，峰值 RSS 18,834,816 KiB。另用
+`OMP=1/BLAS=4` 验证 fallback（job `1648034`）：trace 未进入 `batch-parallel`，
+generic 23.957 s、dedicated 24.025 s，比值 1.003x，数值正确。性能收益必须归因于
+并行门，而不是 CBLAS 语义变化。
+
+### CUDA
+
+逻辑中间 slot 必须按 `[birth,last_use]` 区间着色到物理 arena offset；只有旧 slot
+last-use 严格早于新 slot birth 才允许复用。pack scratch 应使用
+`max_i(A_i+B_i+C_i)`，不能把全表最大 A/B/C 直接相加。
+
+| seq | arena 降幅 |
+|---:|---:|
+| 866 | 29.7% |
+| 129 | 22.7% |
+| 1863 | 29.5% |
+| 6585 | **29.5%**（16.20→11.42 GB） |
+
+必须保留运行时别名检查；任何当前输入与新目的区间重叠都应直接判定内部错误。
+
+## 27. Unsupported 负缓存与 branch-2 判据（2026-11-12）
+
+对 dedicated/topology 的确定性 `status=4` 增加 key 级负缓存，键必须包含：
+normalized equation、全部 operand shapes、dtype、optimizer、backend。只缓存
+`UNSUPPORTED`；OOM、内部错误、非连续等可修复输入不得缓存。
+
+GPU full-scene `seq=6585`：
+
+| 模式 | 中位时间 |
+|---|---:|
+| 每次重新尝试 rejected paths | 91.846 ms |
+| 负缓存命中 | **48.218 ms** |
+
+六序列 full-scene 复测（CPU job `1648042`，GPU job `1648043`）推翻了旧的
+“CPU branch-2 无收益”结论：
+
+| seq | CPU branch-2/auto | GPU branch-2/auto |
+|---:|---:|---:|
+| 2584 | 0.925x | 0.948x |
+| 866 | 1.000x | 1.003x |
+| 855 | 1.004x | 1.003x |
+| 129 | **1.275x（明显变慢）** | 0.970x（噪声内） |
+| 1863 | 1.016x | 0.952x |
+| 6585 | **0.590x（快 41.0%）** | 两条均 fallback |
+
+`seq=129` 是必须记住的反例：branch-2 把 arena 从 3.41 GB 降到 2.73 GB，却把
+FLOPs 从 16.94G 增到 30.05G，CPU 端到端慢 27.5%。不能只看 FLOPs，也不能只看内存。
+
+最终 CPU `complex128` 自动策略同时要求：
+
+1. 当前 auto/greedy 最优计划静态 arena ≥ 8 GiB；
+2. branch-2 FLOPs ≤ 当前计划 80%；
+3. branch-2 arena ≤ 当前计划 65%；
+4. branch-2 pack bytes ≤ 当前计划 65%。
+
+六序列中只有 `seq=6585` 命中。CUDA 与其它 dtype 因证据不足，保持 auto/greedy；
+CUDA 重计划另由 40G MAC 门回退。条件是成本模型筛选，不是按 seq/方程硬编码；
+显式环境开关仍可强制 `branch-2` 做实验。
+
+## 28. 最终冻结库 full-scene 结果（2026-11-12）
+
+CPU job `1648188`，冻结 KUPL `.so` SHA-256 `78af9202...0a82`，20 CPU、
+OMP=8/BLAS=4、complex128。六条生产路径 dedicated/generic：
+
+| seq | 比值 |
+|---:|---:|
+| 2584 | 0.856x |
+| 866 | 0.936x |
+| 855 | 0.982x |
+| 129 | 0.791x |
+| 1863 | 0.974x |
+| 6585 | **0.459x** |
+
+`seq=6585` 为 22.445 s→10.310 s，快 54.1%，相对误差 `3.05e-15`。作业 4:46
+完成，source-integrity 全 OK，`verify_native` 16/16、热路径 4/4、plan-gate 10/10、
+compat 980/980。
+
+GPU job `1648207`，A100-PCIE-40GB：
+
+| seq | 路径 | dedicated/generic |
+|---:|---|---:|
+| 2584 | `cuda_dedicated` | 0.265x |
+| 866 | `cuda_dedicated` | 0.248x |
+| 855 | `cuda_dedicated` | 0.177x |
+| 129 | `plan-cache`（3 GiB arena 门） | 1.017x |
+| 1863 | `cuda_dedicated` | 0.157x |
+| 6585 | `plan-cache`（40G/arena 门） | fallback，误差 0 |
+
+结论：CPU 六条都不慢于 generic；GPU 四个轻中量路径保持 3.8–6.4x 加速，两个超大
+路径安全回退。不得把 fallback 的 generic 时间为 dedicated 记功。
+
+冻结 v9 统一套件为 `117 passed / 2 skipped / 2 failed`；两项失败都只因为环境缺少
+可选依赖 `gvar`。einsum native、热路径、plan-gate、兼容性 980/980、拓扑语料
+120/120 均通过。
+
+## 29. 43 条扩展路径的普遍加速验证（2026-11-12）
+
+在主验收 6 条外，再按所有 case 和元数 6–16 分层测试 43 条 full-scene 路径：
+
+| 设备 | 中位比 | 范围 | ≥10% 加速 | 不快于 generic |
+|---|---:|---:|---:|---:|
+| CPU | 0.861x | 0.347–1.007x | 26/43 | 42/43 |
+| GPU | 0.276x | 0.122–1.362x | 40/43 | 42/43 |
+
+极少数反例：CPU `seq=856` 慢 0.7%；GPU `seq=6911` 慢 36.2%，是极小计划固定
+launch/pack 开销导致的个例。不要为消除该个例扩大 tiny-plan 门，否则会误伤
+`seq=2583/3431` 等正常加速路径。
+
+`seq=7918` 是明确 pack-bound 反例：pack 约 1.12 GiB、FLOPs 0.25G，优化前 CPU
+慢 1.93x。新增 `pack>=1 GiB && FLOPs<=1G` fail-open 后，CPU/GPU 回退到约
+0.996x/0.958x。
+
+全 8638 条生产计划审计 job `1648360`：0 条不可编码，CPU allowed/blocked
+`3833/4805`，GPU `2864/5774`。审计看到最大静态 arena 约 5.04 PB、最大单步约
+65.536P MAC，说明拓扑命中后必须先过资源门。
+
+当前源码复验：CPU job `1648387` 的 native 16/16、plan-gate 11/11、热路径 4/4；
+GPU job `1648386` 的统一套件为 `117 passed / 2 skipped / 2 failed`，两项失败均仅
+因为环境缺 `gvar`。

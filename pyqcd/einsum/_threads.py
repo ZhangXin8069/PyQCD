@@ -50,6 +50,7 @@ from pathlib import Path
 DISABLE_ENV = "PYQCD_EINSUM_THREADS"
 OMP_ENV = "PYQCD_EINSUM_OMP_THREADS"
 BLAS_ENV = "PYQCD_EINSUM_BLAS_THREADS"
+CBLAS_ENV = "PYQCD_EINSUM_CBLAS_LIB"
 STANDARD_OMP_ENV = "OMP_NUM_THREADS"
 STANDARD_BLAS_ENV = "OPENBLAS_NUM_THREADS"
 
@@ -172,6 +173,35 @@ def _loaded_libraries() -> dict[str, str]:
     return found
 
 
+def _configure_cblas_library() -> str | None:
+    """Prefer NumPy's bundled dynamic-architecture OpenBLAS when available.
+
+    Many HPC images expose a generic single-threaded system OpenBLAS while NumPy
+    ships a much faster wheel-local build. The native KUPL loader reads this
+    environment variable before ``dlopen``; an explicit user value always wins.
+    """
+    explicit = os.environ.get(CBLAS_ENV, "").strip()
+    if explicit:
+        _state["cblas_library"] = explicit
+        return explicit
+    try:
+        import numpy
+    except ImportError:
+        return None
+    package = Path(numpy.__file__).resolve().parent
+    candidates = sorted((package.parent / "numpy.libs").glob("*openblas*.so"))
+    if candidates:
+        selected = str(candidates[0])
+        os.environ[CBLAS_ENV] = selected
+        _state["cblas_library"] = selected
+        return selected
+    loaded = _loaded_libraries().get("blas")
+    if loaded and "openblas" in loaded.lower():
+        _state["cblas_library"] = loaded
+        return loaded
+    return None
+
+
 def _set_runtime_threads(omp: int | None, blas: int | None,
                          respect_standard: bool) -> list[str]:
     """Push the values into the already-loaded runtimes; return what worked."""
@@ -224,6 +254,7 @@ def apply(profile: str = "kernel", force: bool = False) -> dict[str, object]:
 
     explicit_omp = _explicit(STANDARD_OMP_ENV) is not None
     explicit_blas = _explicit(STANDARD_BLAS_ENV) is not None
+    _configure_cblas_library()
     applied = _set_runtime_threads(omp, blas, respect_standard=explicit_omp)
 
     # 同时导出到标准变量：GOMP 在**加载时**读 OMP_NUM_THREADS，而我们的原生库

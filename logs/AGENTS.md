@@ -807,3 +807,21 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## einsum-opt-20261112 - final - 2026-11-12 20:54:20 +0800
+- 主任务: qcd-einsum KUPL/CUDA 生产特化优化
+- 日志文件: logs/v2026111220.txt
+- 文件大小: 6979 bytes
+- 触发原因: 任务完成
+- 关键内容: CPU seq6585 22.445s->10.310s; GPU 四条轻中量 0.157-0.265x; v9 suite 117/2/2, 两项仅缺 gvar
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## einsum-expanded-20261112 - stage - 2026-11-12 21:26:49 +0800
+- 主任务: qcd-einsum 扩展生产路径测试
+- 日志文件: logs/v202611122126.txt
+- 文件大小: 3687 bytes
+- 触发原因: 阶段成果
+- 关键内容: 43 条 full-scene 路径普遍加速；全 8638 条计划门审计 0 unavailable
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

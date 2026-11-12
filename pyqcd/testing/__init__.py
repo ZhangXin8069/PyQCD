@@ -2995,6 +2995,20 @@ def test_einsum_native_contracts():
     assert ok, f'native einsum failed: {tally.failed} assertion(s)'
 
 
+def test_einsum_python_hotpath_contracts():
+    """Full-corpus match/plan caches and backend-specific dispatch contracts."""
+    from .einsum.verify_python_hotpath import main
+
+    assert main() == 0
+
+
+def test_einsum_plan_gate_contracts():
+    """Deterministic negative-cache and dedicated-plan statistics contracts."""
+    from .einsum.verify_plan_gate import main
+
+    assert main() == 0
+
+
 def test_einsum_zero_extent_and_noncontiguous_contracts():
     """Empty reductions are zeros and mutable strided views are not stale."""
     import numpy as np

@@ -82,3 +82,66 @@
 | R36 | 22:10 | **0.2.3** | 用户要求"最小改动、发布支持 Python 3.8+"。用 3.8 语法解析器扫 271 个模块（0 语法错误），再在真实 3.8.20 环境安装验证 | ①最小改动：5 个模块补 `from __future__ import annotations`（`__init__`/`_plan_py`/`blas`/`helpers`/`parser`）；`_plan_py.Step` 是**模块级运行时表达式** `tuple[...] | None`，3.8 import 即 `TypeError` → 移入 `TYPE_CHECKING`（仅类型检查期需要）；②构建元数据：PEP 639 的 `license = "MIT"` 需要 setuptools≥77（不支持 3.8），改为经典 `license = {text="MIT"}` 并下调 `setuptools>=61`；`requires-python = ">=3.8"` + classifiers 3.8/3.9；③**顺带修一个真缺陷**：`python -m pyqcd --gpu-probe` 在无 cupy 安装上 `kernel_status` 为 None → `TypeError`，改为打印 "n/a — no CUDA kernel in this installation" | 真实 3.8.20 环境：`native_available=True`（KUPL .so 在 3.8 上构建并加载）、8 类收缩与核子 2pt/γ 夹心全部正确、`--gpu-probe` 给出结论而非崩溃；3.12 全量测试 121 passed/1 skipped/0 failed，docs 门禁 19 ok/2 skipped/0 failed，sphinx -W 双站 0 |
 | R37 | 21:40 | **0.2.4** | 继续查缺陷：核对"计划缓存"是否真的生效 | **发现计划缓存从未对通用方程生效**（门限写死 `specialized is not None`，只覆盖 9 个注册形态），而规划占小/中型图调用时间的 **31–84%**（8 算子链 0.86 ms 中 0.76 ms，解析仅 0.002 ms）——重复调用 8 算子链此前 0.856 ms、比 opt_einsum 的 0.29 ms 慢 3× | 新增 `_CONTRACT_PLAN_CACHE`（64→128 项 LRU，键=方程+形状+dtype+设备+优化器+memory_limit+use_blas），**≥3 算子**才启用（两算子建键比规划更贵，实测反而慢 23 µs）。效果：chain4 0.212→0.063 ms、hyper-edge 0.183→0.055 ms、8 算子 0.856→0.097 ms；对 opt_einsum 现为 1.14/1.41/3.07× 更快；换形状不复用错误计划，300 组随机差分（每组连续两次，命中缓存）0 失败 | 121 passed/1 skipped/0 failed；随机差分 300 组;docs 门禁与 sphinx -W 全绿 |
 | R38 | 11:40 | **0.2.7** | direct 模式（跳过规划器、直接调 backend.einsum）经实测判定失败：两算子慢 7–44×、三算子链慢 3900×、四算子链 10 分钟未返回；γ 夹心这类"注册但无 Python kernel"的形态慢 30× | 全部回滚：revert direct 提交（`git diff dev39 -- pyqcd/einsum` 为空）、删除 `docs/{en,zh}/usage.md` 的该节与测试、撤回格式错误的 `dev41` 标签；**0.2.7 重新发布 0.2.4 的稳定实现**（PyPI 不允许覆盖已上传文件，故用新版本号恢复），`pip install pyqcd` 现在拿到的是无 direct API 的稳定版。失败经验与绕道提醒写入 `docs/report_direct_mode_postmortem_20261111.md` | 121→（同口径）123 passed/1 skipped/0 failed（123 含 dev39 之后新增的两个无关测试）；docs_examples 19 ok/2 skipped/0 failed；sphinx -W 双站 0；form-audit PASS（17 例外/0 未预期）；PyPI 0.2.7 复验：direct API 已移除、链式结果正确 |
+
+## 2026-11-12 发布资格快照（0.3.9，历史）
+
+当时结论：**不具备正式发布条件**。该快照保留为 0.3.9 的失败证据，当前状态见下一节。
+
+| 门禁 | 当前证据 | 判定 |
+|---|---|---|
+| 版本可发布 | 本地三处版本均为 `0.3.9`；PyPI 最新版本也是 `0.3.9` | FAIL：同版本不可覆盖，必须 bump |
+| Git 清洁度 | `git describe --dirty` 为 `dev56-dirty`，核心源码、文档、测试和日志均有未提交/未跟踪改动 | FAIL |
+| PEP 561 | `Typing :: Typed` 已声明，`setup.py`/`MANIFEST.in` 也引用 `pyqcd/py.typed`，但文件当前不存在 | FAIL |
+| 统一套件 | `117 passed / 2 skipped / 2 failed`，两项均因环境缺 `gvar` | FAIL |
+| offline release_check | job `1648472`：`5/9 PASS`；缺 `build` 导致 sdist 未生成，Sphinx 中英 `-W` 均失败 | FAIL |
+| 性能声明边界 | 对 PyQCD 内部 generic，扩展 43 条 CPU/GPU 均 42/43 不慢；但对 `opt_einsum(dp)`，CPU 仅 36/43 不慢，7 条较慢，其中 2 条约 2.4–2.5× | WARN：不得宣称对所有外部 planner 全面领先 |
+
+发版前最小闭环：
+
+1. 恢复并纳入 `pyqcd/py.typed`。
+2. bump 到 PyPI 未占用的新版本。
+3. 补齐 `gvar` 或明确收缩发布测试门禁后，统一套件全绿。
+4. 安装发布工具链 `build`/`twine`/`sphinx`，`release_check --offline --with-tests` 通过。
+5. 构建 sdist、twine check、内容洁净、绝对路径审计。
+6. 提交并双远端推送后，从 PyPI 新版本做干净 venv 安装复验。
+
+## 0.4.0 发布候选闭环（进行中）
+
+用户指定目标版本为 `0.4.0`，PyPI 最新仍是 `0.3.9`，不存在同版本覆盖。
+
+| 门禁 | 0.4.0 候选状态 | 证据 |
+|---|---|---|
+| 版本三处同步 | PASS | `pyproject=pyqcd=einsum=0.4.0`，`__native_version__=0.1.0` 保持不动 |
+| PEP 561 | PASS（待打包复核） | `pyqcd/py.typed` 已恢复 |
+| 发布依赖 | PASS | `build 1.6.1`、`twine 7.0.0`、`sphinx 9.0.4`、`gvar 13.1.10` 已安装到 `qcu` |
+| 文档数据 | PASS（待 Sphinx 门禁） | README/概览/性能/安装/特化附录已切换 0.4.0；CPU 正面声明限定为相对 PyQCD generic，保留 7 条 CPU 对 `opt_einsum(dp)` 退化 |
+| CPU 发布门禁 | PASS | `release_check --offline`：`11/11`；完整测试由 GPU 作业承担 |
+| GPU 发布门禁 | PASS | 统一套件 `120 passed / 1 skipped / 0 failed`；KUPL/CUDA 均为 16/16 |
+| sdist / twine / 本地安装 | PASS | job `1648752`：隔离 sdist、`twine PASSED`、原生安装与纯 Python fallback 均通过 |
+| 双远端 / dev tag | PENDING | 全部门禁通过后执行 |
+
+性能发布口径固定为：
+
+* 43 条 full-scene：CPU 对 PyQCD generic `42/43` 不慢，中位 `0.8612x`；
+  GPU `42/43` 不慢，中位 `0.2760x`。
+* 对 `opt_einsum 3.4.0 dp`：CPU `36/43` 不慢，GPU `42/43` 不慢。
+* CPU `seq=6585`：`22.445 s -> 10.310 s`。
+* 8638 条计划全部可规划；资源门 CPU 放行 3833、GPU 放行 2864。
+* 43 条 full-scene 最大相对误差：CPU `6.95e-15`，GPU `6.68e-15`。
+
+### sdist 漏包修复
+
+首次从最终 sdist 安装时，KUPL 编译报 `family_apply.h` 缺失。该文件实际存在于
+源码与隔离副本，`MANIFEST.in` 显式 `include` 也已存在，但 setuptools 84.2.1
+隔离构建在 `get_requires_for_build_sdist` 阶段仍未看到它；直接运行
+`setup.py egg_info` 则能正确收录。为使发布不再依赖该版本相关行为，
+`NativeSdist.make_release_tree()` 现在在 manifest 处理完成后强制复制
+`cpp/kupl/einsum/include/family_apply.h`。
+
+job `1648752` 复验：
+
+* sdist `pyqcd-0.4.0.tar.gz`，1,056,739 bytes；
+* SHA-256 `032a56302b50c8b1a500a0976a66615296bec6e34cbe2fec5d00ce7da29fa25e`；
+* `twine check` PASSED，无绝对路径；
+* clean venv 从 sdist 成功构建 KUPL wheel，`backend=kupl`；
+* `PYQCD_SKIP_NATIVE_BUILD=1` clean venv 成功安装，`backend=python`。

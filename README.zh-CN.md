@@ -8,7 +8,8 @@ PyQCD 是一个用 Python 编写的格点 QCD 工具库，可选原生加速。�
 
 ## 安装
 
-需要 **Python 3.8+**（3.8 是满足所声明 `numpy`/`scipy` 下限、且仍有维护 wheel 的最老解释器）。
+需要 **Python 3.9+**。当前 PEP 639 构建元数据要求 `setuptools>=77`，因此 Python 3.8
+已不再支持。
 
 ```bash
 pip install pyqcd
@@ -35,6 +36,23 @@ python -m pyqcd --json     # machine-readable
 > 直接作用到已加载的运行时；用 `OMP_NUM_THREADS` /
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
+
+## 0.4.0 发布声明
+
+`0.4.0` 是 `pyqcd.einsum` 的生产特化版本。
+
+* 拓扑特化表覆盖 **8638 条 6–16 算子方程**，KUPL 与 CUDA 共用同一拓扑语义；
+  每个计划在原生分配前都经过 fail-open 资源门。
+* 43 条 full-scene 扩展审计中，CPU 对 PyQCD 内部通用路径 **42/43** 不慢，
+  中位 selected/generic 为 `0.861x`；CUDA **42/43** 不慢，中位 `0.276x`。
+  保留的两个反例是 CPU `seq=856`（慢 0.7%）与 GPU `seq=6911`（慢 36.2%）。
+* CPU 长链 `seq=6585` 从 **22.445 s** 降到 **10.310 s**（`0.459x`）。
+* CUDA 对 `opt_einsum 3.4.0`（`dp`）在 **42/43** 条审计路径上不慢；
+  CPU 为 **36/43**。本版本**不声明 CPU 全面胜过 `opt_einsum`**，仍有 7 条 CPU
+  路径较慢。
+
+特化是生产优化，不是“所有形态必快”的承诺。原生资源超限、pack 重而 FLOPs 低、
+内核缺失或已注册内核运行失败时会主动回退通用路径，数值结果保持不变。
 
 ## 文档
 
@@ -82,7 +100,7 @@ expr(a, b)                                           # reusable plan
 | `pyqcd.renorm` | 梯度流、Z_R、混合方案、NLO 匹配、TMD 提取 |
 | `pyqcd.analysis` | 重采样、拟合、ratio / 有效质量 / 能量分析 |
 | `pyqcd.pipeline` | 集中配置与多步管线 |
-| `pyqcd.parallel` | 资源探测与 MPI 元任务规划 |
+| `pyqcd.parallel` | CPU、内存与 GPU 的只读资源探测 |
 | `pyqcd.einsum` | 收缩引擎（本包的核心特性） |
 
 ## 收缩引擎
@@ -92,7 +110,7 @@ expr(a, b)                                           # reusable plan
   共用同一份规划核心。
 * 回退是硬性不变量：缺库、原生调用失败或形状被拒时静默降级到 Python 路径 ——
   结果永不改变。
-* 一小批格点 QCD 方程形态会走专用执行路径；默认开启，可按调用
+* 完整的 8638 条格点 QCD 拓扑语料会进入资源门控的专用分派；默认开启，可按调用
   （`contract(..., specialize=False)`）或按进程（`PYQCD_EINSUM_SPECIALIZE=0`）关闭。
 
 可查询标识：
@@ -100,41 +118,38 @@ expr(a, b)                                           # reusable plan
 ```python
 import pyqcd.einsum as pe
 
-pe.build_info()        # backend, mpi, mpi_label, native_library
-pe.mpi_enabled()       # whether the KUPL library has real MPI support
-pe.specializations()   # registered equation shapes
+pe.build_info()        # backend, native_available, array_backend, native_library
+pe.specializations()   # registered equation shapes（本版本 8638 条）
 ```
-
-MPI 分片只在 KUPL 后端实现，且只分片单个输出轴；CUDA 后端没有 MPI 实现。
 
 ## 性能
 
-十五个用例——每个结构性类别各一个，不是挑出来的高光表——对照 `opt_einsum` 3.4.0
-（`dp`），每轮交替谁先运行，每点 3 轮。两列用的是同一批用例和同一尺寸，所以 CPU 与
-GPU 两列可直接比较。
+以下均为 A100 计算节点上的 full-scene 基准，而不是 smoke 或小维合成数据。
+输入为 `Nx=Ny=Nz=32`、`Lt=64`、`Nev=100`、`Ns=4`、`Mom=8`、`complex128`；
+计时前先逐路径对照通用路径。表中为 `selected/generic`，小于 `1` 表示更快。
 
-| 用例（类别） | CPU | GPU |
+| 证据集 | CPU | GPU |
 |---|---|---|
-| 核子 2pt，nvec=112（kernel） | **18.6×** | **2.68×** |
-| 批量 GEMM 16×1024² | **11.9×** | **1.09×** |
-| ellipsis 256×512² | **9.18×** | **1.11×** |
-| γ 夹心 8192×1024（kernel） | **7.83×** | **4.04×** |
-| 大量小批量 4096×64² | **2.32×** | 0.96× |
-| 外积 8000 | **1.62×** | 1.00× |
-| 逐元素 12000² | **1.25×** | 1.02× |
-| 三操作数链 3×3072 | **1.07×** | **1.10×** |
-| 二维矩阵乘（复数）2048² | 1.04× | **1.15×** |
-| 全约简 12000² | 1.02× | **2.13×** |
-| 部分约简 16000² | 1.02× | 1.00× |
-| 批×矩阵 8×1024×512 | 1.01× | **1.13×** |
-| 四操作数链 4×2048 | 1.00× | **1.10×** |
-| 二维矩阵乘（实数）4096² | 0.99× | **1.05×** |
-| hyper-edge 2048² | 0.93× | 1.02× |
+| 43 条分层生产路径：中位比 | **0.861×** | **0.276×** |
+| 43 条：不快于 PyQCD generic | **42/43** | **42/43** |
+| 43 条：比 PyQCD generic 至少快 10% | **26/43** | **40/43** |
+| 43 条对 `opt_einsum(dp)`：不慢 | **36/43** | **42/43** |
 
-如实解读：通用形态都在同一档（0.93–1.15×）。CPU 上的两位数倍数来自两个可测效应——
-核子 2pt 网络里 `opt_einsum` 要落地 89.9 M 元素（1.44 GB）的中间体，而输入只有 11.8 M
-元素；它也不把 batch 轴变成一次批量 BLAS 调用（同一批数组上 `numpy.matmul` 0.28 s，
-它要 2.99 s）。在它确实用上 BLAS 的地方，我们是持平，不是领先 10 倍。
+六条核心路径（比值小于 `1` 表示更快）：
+
+| `seq` | CPU / generic | GPU / generic | CPU / `opt_einsum(dp)` | GPU / `opt_einsum(dp)` |
+|---:|---:|---:|---:|---:|
+| 2584 | 0.856× | 0.265× | 0.598× | 0.152× |
+| 866 | 0.936× | 0.248× | 0.891× | 0.213× |
+| 855 | 0.982× | 0.177× | 0.842× | 0.130× |
+| 129 | 0.791× | fallback，1.017× | 1.297× | 1.179× |
+| 1863 | 0.974× | 0.157× | 0.837× | 0.025× |
+| 6585 | **0.459×** | fallback | 未完成 | 0.606×，fallback |
+
+全部 **8638** 条计划另做了不执行大张量的结构审计：CPU 资源门放行 3833 条、
+拦截 4805 条；CUDA 门放行 2864 条、拦截 5774 条。超大静态 arena、超大单步
+GEMM 与“pack 重而 FLOPs 低”的计划不会进入特化路径。43 条 full-scene 路径的
+最大相对误差为 CPU `6.95e-15`、GPU `6.68e-15`。
 
 ```python
 import numpy as np
@@ -153,10 +168,10 @@ assert np.allclose(fast, base)                         # same numbers, different
   （实测 1200² 时 18→41 MB，2000² 时 73→104 MB），原因是每一步会多保留一份与输出同尺寸的
   中间量。长时间任务请据此预留内存。
 
-优势来自识别少数格点 QCD 方程形态并改用专用 kernel（融合、缓冲复用），而不是通用 BLAS 链。
-但它**不是普适的**：GPU 核子 2pt/3pt 对 `opt_einsum` 双方都已贴近硬件上限（约 1×），
-小张量会被单次调用开销吃掉，没有专用 kernel 的形态仍走通用路径。
-完整测量口径与限制：
+优势来自拓扑识别、资源感知的计划选择、收益明确时的融合/专用执行、按生命周期复用
+workspace，以及资源边界不安全时主动回退。它**不是普适的**：`opt_einsum(dp)` 仍在
+7 条审计过的 CPU 路径上更快，内部也有两个明确的 full-scene 反例；资源门会有意把
+不安全计划送回通用路径。完整口径、证据与复现方式：
 https://py-qcd.readthedocs.io/zh-cn/latest/performance.html
 
 ### PyTorch

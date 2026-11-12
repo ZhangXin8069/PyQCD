@@ -529,6 +529,25 @@ def _einsum(*operands: Any, **kwargs: Any) -> Any:
 _SPECIALIZED_KERNEL_WARNED = False
 
 
+def _specialized_kernel_attempts(
+    operands: Sequence[Any],
+) -> tuple[tuple[str, Any, Any], ...]:
+    """Return only the native entry points for this operand backend."""
+    if _cupy_operands(operands):
+        from . import _kernel_cuda
+
+        return (
+            ("cuda_dedicated", _kernel_cuda, _kernel_cuda.try_dedicated),
+            ("cuda_topology", _kernel_cuda, _kernel_cuda.try_topology_apply),
+        )
+    from . import _kernel_kupl
+
+    return (
+        ("kupl_dedicated", _kernel_kupl, _kernel_kupl.try_dedicated),
+        ("kupl_topology", _kernel_kupl, _kernel_kupl.try_topology_apply),
+    )
+
+
 def _run_specialized_kernel(
     subscripts: Any, operands: Sequence[Any]
 ) -> tuple[Any, str, dict[str, str]]:
@@ -538,22 +557,10 @@ def _run_specialized_kernel(
     per-label reasons let the caller report the *relevant* cause instead of
     whichever attempt happened to run last.
     """
-    from . import _kernel_cuda, _kernel_kupl
-
     reasons: dict[str, str] = {}
-    for label, module, attempt in (
-        # 语料拓扑：先走 per-拓扑 dedicated 执行器（步表缓存在 Python 侧，
-        # 热调用实测比通用路径快 20–100 倍）；它不可用时再回落 topology 入口。
-        ("kupl_dedicated", _kernel_kupl,
-         lambda: _kernel_kupl.try_dedicated(subscripts, operands)),
-        ("kupl_topology", _kernel_kupl,
-         lambda: _kernel_kupl.try_topology_apply(subscripts, operands)),
-        ("cuda_dedicated", _kernel_cuda,
-         lambda: _kernel_cuda.try_dedicated(subscripts, operands)),
-        ("cuda_topology", _kernel_cuda,
-         lambda: _kernel_cuda.try_topology_apply(subscripts, operands)),
-    ):
-        result = attempt()
+    for label, module, attempt in _specialized_kernel_attempts(operands):
+        # 语料拓扑：先走 per-拓扑 dedicated 执行器；它不可用时再回落 topology。
+        result = attempt(subscripts, operands)
         if result is not None:
             return result, label, reasons
         # 失败后才读原因：早读会拿到上一次调用残留的值

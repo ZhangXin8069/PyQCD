@@ -13,6 +13,7 @@
 # 2. Keep existing extensionless files
 # ==================================================
 !/LICENSE
+!/pyqcd/py.typed
 !/refer/git-rep/EasyDistillation
 !/refer/git-rep/Einsums
 !/refer/git-rep/LQCD_Master

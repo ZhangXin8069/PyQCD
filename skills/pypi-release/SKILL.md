@@ -1125,3 +1125,57 @@ git tag -a dev<N> -F /tmp/tagmsg.txt && git push origin dev<N>
 中英代码块结构一致且英文页注释为英文、`sphinx -W` 双站、PyPI 版本与项目页探针、RTD 双语言含当前版本、
 gitlab/gitee 与本地 HEAD 同步、测试套件（`--offline --with-tests` 为 10 项）。
 发布后 24 h 内发现的任何问题只能用新版本号修；远程复验输出的 `pyqcd.__file__` 必须含 `site-packages`。
+
+### 0.4.0 发版实测：性能声明与文档门禁
+
+2026-11-12 的 `0.4.0` 发布候选暴露了三类问题，后续发版直接复用以下口径：
+
+1. **PEP 561 不能只看 classifier**：`Typing :: Typed`、`package_data` 与
+   `MANIFEST.in` 都已存在时，`pyqcd/py.typed` 仍可能在工作树中丢失。发版前必须把
+   “文件实际存在”与 `tar -tzf ... | grep pyqcd/py.typed` 分成两个门检查。
+2. **安装文档必须与 `requires-python` 对齐**：README 曾写 Python 3.8+，而
+   `pyproject.toml` 已是 `>=3.9`。`release_check` 只检查 docs/en、docs/zh 的版本号，
+   不会发现 README 的 Python 下限漂移；发版前额外跑
+   `grep -RIn "Python 3\.[0-9]" README* docs/{en,zh}`。
+3. **删除的功能不能留在首页 API 示例里**：`mpi_enabled()` 已不在
+   `pyqcd.einsum.__all__`，README 仍把它当公开接口。发版前用
+   `python -c "import pyqcd.einsum as p; print(p.__all__)"` 对照 README 中所有
+   `pe.*` 示例，删除或标注历史接口。
+
+`0.4.0` 的生产性能声明固定为“相对 PyQCD generic 的普遍加速”，不能写成相对
+`opt_einsum` 全面领先：
+
+| 证据 | CPU | GPU |
+|---|---:|---:|
+| 43 条 full-scene，selected/generic 中位 | 0.8612x | 0.2760x |
+| 43 条不快于 PyQCD generic | 42/43 | 42/43 |
+| 43 条不快于 `opt_einsum 3.4.0 dp` | 36/43 | 42/43 |
+
+数据源必须带 full-scene 参数 `Nx=Ny=Nz=32, Lt=64, Nev=100, Ns=4, Mom=8`、
+`complex128`、A100 节点与资源门证据；smoke/小维合成数据只能证明路径和正确性，
+不得生成发布倍率。性能页中的旧 15-case 表必须明确标为历史通用路由数据，不能
+与 0.4.0 特化结果混在同一结论里。
+
+发布门禁同样全部提交计算节点：CPU 与 GPU 作业同时 `sbatch`，CPU 作业申请 1 卡但
+设置 `CUDA_VISIBLE_DEVICES=""`，GPU 作业正常申请 1 卡；任一作业超过 5 分钟检查
+`squeue/scontrol`，达到 10 分钟立即 `scancel`。本次 CPU `release_check --offline
+--with-tests` 与 GPU 统一套件分别使用独立作业，避免在登录节点上跑测试。
+
+### sdist 必须从 sdist 自身重建 wheel
+
+“sdist build + twine check + tar 内容抽查”仍可能漏掉只有二次构建才用到的原生源文件。
+`0.4.0` 实测：`family_apply.h` 存在于源码和隔离副本，`MANIFEST.in` 也显式
+`include`，直接 `setup.py egg_info` 能收录；但 setuptools 84.2.1 的 PEP 517
+`get_requires_for_build_sdist` 路径仍报 no files found，最终 wheel 构建失败。
+
+可靠门禁必须包含：
+
+```bash
+python -m venv /tmp/verify
+/tmp/verify/bin/pip install --no-cache-dir dist/pyqcd-<ver>.tar.gz
+/tmp/verify/bin/python -c "import pyqcd, pyqcd.einsum as pe; print(pyqcd.__file__, pe.build_info())"
+```
+
+修复采用自定义 `NativeSdist.make_release_tree()`，在 manifest 过滤后强制复制原生
+必需文件。不要把“直接 `setup.py egg_info` 能看到文件”当作 PEP 517 构建也能看到；
+也不要删除旧失败 sdist，改名留档后只发布二次构建验证通过的那一份。

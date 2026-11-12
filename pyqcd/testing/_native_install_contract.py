@@ -64,7 +64,10 @@ def _missing_library(root: Path):
             patch.object(kupl_einsum, "_LOAD_FAILURE", None), \
             patch.object(kupl_einsum, "_LOAD_FAILURE_KIND", None), \
             patch.object(kupl_einsum, "_PROGRAM_CACHE", {}), \
-            patch.dict(os.environ, {"PYQCD_EINSUM_LIB": ""}):
+            patch.dict(os.environ, {
+                "PYQCD_EINSUM_LIB": "",
+                "PYQCD_EINSUM_KUPL_LIB": "",
+            }):
         yield missing
 
 
@@ -107,7 +110,10 @@ def test_library_path_resolves_the_packaged_kupl_archive():
     with patch.object(
             kupl_einsum, "_REPO_LIB",
             Path("/__pyqcd_contract_missing__") / _ARCHIVE), \
-            patch.dict(os.environ, {"PYQCD_EINSUM_LIB": ""}):
+            patch.dict(os.environ, {
+                "PYQCD_EINSUM_LIB": "",
+                "PYQCD_EINSUM_KUPL_LIB": "",
+            }):
         resolved = kupl_einsum.library_path()
         report = kupl_einsum.library_report()
 
@@ -173,7 +179,10 @@ def test_compiler_context_failure_is_distinguished_from_a_missing_library():
                 patch.object(kupl_einsum, "_LOAD_FAILURE", None), \
                 patch.object(kupl_einsum, "_LOAD_FAILURE_KIND", None), \
                 patch.object(_api, "_native_executor", lambda: _FailingCompiler()), \
-                patch.dict(os.environ, {"PYQCD_EINSUM_LIB": ""}):
+                patch.dict(os.environ, {
+                    "PYQCD_EINSUM_LIB": "",
+                    "PYQCD_EINSUM_KUPL_LIB": "",
+                }):
             _, messages = _native_warnings(
                 lambda: pe.contract(_EQUATION, lhs, rhs))
 

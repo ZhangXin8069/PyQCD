@@ -235,14 +235,41 @@ KUPL 每步执行 = `pack`（按 `a_axes`/`b_axes` gather 成规范序）→ `cb
 CUDA 侧 **arena 复用**是其相对 CUDA 通用路径唯一的结构性优势；KUPL 侧 `BufferPool`
 跨调用保留，因此"逐步 malloc"不是主要成本项（实测 per-call 开销见 8.6）。
 
+#### 8.5.1 dedicated 计划缓存与 CPU branch-2 条件
+
+dedicated 计划缓存键包含
+`(normalized equation, all operand shapes, dtype, optimizer, backend)`，上限
+16384 项 / 64 MiB。backend 必须入键，因为 CPU auto 与 CUDA auto 使用不同选择策略。
+
+CPU `complex128` auto 先在 auto/greedy 中按 FLOPs 取小；只有静态 arena ≥8 GiB
+时再尝试 branch-2，并要求 FLOPs ≤80%、arena ≤65%、pack bytes ≤65%。full-scene
+六序列中仅 `seq=6585` 满足：CPU 17.537 s→10.346 s；`seq=129` 的 branch-2 arena
+更小但 FLOPs 更高，实测慢 27.5%，被门拒绝。CUDA auto 与其它 dtype 不启用该提升，
+保持原 auto/greedy；complex128 CUDA 先拒绝静态 arena ≥3 GiB 的超大计划，再由
+原生单步 >40G MAC 门兜底。`seq=129` 因前者回退，`seq=6585` 两道门都命中。
+
+扩展 43 条 full-scene 后，资源门统一为：
+
+- CPU：选择完 auto/greedy/branch-2 后，静态 arena ≥8 GiB、单 GEMM ≥100G MAC
+  或 `pack>=1 GiB && FLOPs<=1G` 时 fail-open。
+- CUDA：任意 dtype 的静态 arena ≥3 GiB、单 GEMM ≥40G MAC 或
+  `pack>=1 GiB && FLOPs<=1G` 时 fail-open。
+
+全 8638 条计划审计中 CPU 放行 3833、CUDA 放行 2864，0 条不可编码。43 条生产
+数值样本中 CPU/GPU 各 42 条不快于 generic；仅 CPU `seq=856` 0.7% 和 GPU 极小
+计划 `seq=6911` 36% 为保留反例。
+
+确定性 `UNSUPPORTED` 使用 backend 分桶的线程安全负缓存；OOM、内部错误和非连续
+布局不缓存。负缓存只消除重复探测，不改变数值执行路径。
+
 ### 8.6 实测（本机，RTX 4060 Laptop sm_89 + OpenBLAS dlopen + CuPy 14.2）
 
 | 项 | 数值 | 命令 |
 |---|---|---|
-| 匹配命中（语料） | 2582/2582；改名同命中 2582/2582；随机合法非语料误命中 **0/4000** | `python -B -c "from pyqcd.einsum import _specialize as S; ..."` |
-| 匹配开销（单条重复） | 3.45 µs/call | 见 pitfalls 8.1 |
-| 匹配开销（100 条轮转） | 5.02 µs/call | 同上 |
-| 匹配开销（2582 条轮转） | 16.0 µs/call（512 项 LRU 抖动） | 同上 |
+| 当前任务表命中 | 8638/8638；基础表契约覆盖 2582 条改名与结构负例；随机合法非语料误命中 **0/4000**（2026-11-11） | `python -B -c "from pyqcd.einsum import _specialize as S; ..."` |
+| 首轮冷扫描（8638 条） | 约 0.54–0.57 s，填充完整结果缓存 | 见 pitfalls 8.1，2026-11-12 |
+| 匹配热开销（8638 条轮转） | **0.532 µs/call**，`_match_of_normalized` 常驻 8638 项 | 同上 |
+| dedicated 计划热扫描（8638 条） | **22.66 µs/call**，总约 0.195 s，缓存约 46.1 MiB | 同上 |
 | 懒加载索引首次构建 | 0.87–0.90 ms（进程内一次） | `S._TOPOLOGY_DIGESTS=None; S.match(eq)` |
 | KUPL 原生入口（自身，16 算子，dim=2） | 0.077 ms/call | 直接调 `kupl.topology_apply(plan, ops)` |
 | 通用路径同题 | 0.182 ms/call | `contract(eq, *ops, specialize=False)` |
@@ -299,7 +326,7 @@ dim=12 1.7 ms、dim=16 20 ms；dim=16 的 20 ms 对应 537 MFLOP，是真实工�
 |---|---|---|
 | **机器被别的进程打满** | 同一调用从 0.30 ms 变 26 ms；单次 sgemm 0.022 ms → 10.9 ms（0.3 GFLOPS） | 当时 load average 12.45 / 8 核，numpy 自己的 `256×64×64` matmul 也从 0.027 ms 涨到 1.55 ms。**先做负载校准再报数**（`taskset -c 6` + `OPENBLAS_NUM_THREADS=1` + 同进程内 numpy matmul 基线） |
 | **numpy `optimize="greedy"` 当参考** | dim=4 就要 **20.4 s**，dim=8 直接跑不完 | numpy 把末尾若干步合成一个多操作数 `c_einsum`，朴素工作集 4^10 / 8^10。参考一律用 `contract(..., specialize=False)` 或「按步表反解出的显式 einsum_path」，**不要** `np.einsum(..., optimize="greedy")`（与 8.7 第 5 条同源） |
-| **装到 `pyqcd/einsum/kupl/` 的旧产物优先** | 改了源码不生效 | `library_path()` 先认 `pyqcd/einsum/kupl/libpyqcdeinsum_kupl.so`（打包拷件），源码树里它常常比 `build/` 旧。测新代码用 `PYQCD_EINSUM_LIB=<build>/libpyqcdeinsum_kupl.so` |
+| **装到 `pyqcd/einsum/kupl/` 的旧产物优先** | 改了源码不生效 | `library_path()` 顺序是 `PYQCD_EINSUM_KUPL_LIB`（旧别名 `PYQCD_EINSUM_LIB`）> 包内 `.so` > 仓库 `.so`；源码树里的包内拷件常比 `build/` 旧。测新代码必须显式指库，CUDA 同理用 `PYQCD_EINSUM_CUDA_LIB` |
 
 ### 9.3 本轮改的两处（都在 `cpp/kupl/einsum/src/dedicated_apply.cpp`）
 

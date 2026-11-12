@@ -1,0 +1,117 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-12 20:54:20 +0800
+批次: einsum-opt-20261112
+主任务: qcd-einsum KUPL/CUDA 生产特化优化
+触发原因: 任务完成
+摘要: CPU seq6585 22.445s->10.310s; GPU 四条轻中量 0.157-0.265x; v9 suite 117/2/2, 两项仅缺 gvar
+Git 根目录: /home/bingxing2/home/scx8080/PyQCD
+
+## 关键日志
+
+### S1 — 真实生产基线与根因定位
+- 目标: 优化 PyQCD qcd-einsum KUPL CPU 与 CUDA dedicated 路径。
+- 环境: 全部构建、测试和基准通过 sbatch 在计算节点运行，source ~/env.sh。
+- 发现: CPU seq6585 主要耗时在大批量 GEMM；CUDA 旧 dedicated 存在巨大中间体、pack 流量和不适合的 cuBLAS 形状。
+- 决策: 同时优化计划选择、缓存/分派、CPU batch 并行和 CUDA workspace/短路径。
+
+### S2 — KUPL CPU
+- 实现: NumPy bundled OpenBLAS/ILP64、小 outer 路径、大批量 GEMM OpenMP batch 并行、worker 内 BLAS 局部单线程。
+- 回退验证: job 1648034 在 OMP=1/BLAS=4 下未进入 batch-parallel，数值误差 1.84e-15。
+- 最终 job 1648188: 4:46 完成，source integrity 全 OK。
+
+### S3 — CUDA
+- 实现: small-outer canonical 路径、slot birth/last-use arena 着色、逐步 pack scratch union、动态 pool 预算。
+- 收益门: complex128 单步 40G MAC 与 Python 计划静态 arena 3 GiB 双 fail-open。
+- 结果: seq129/6585 安全回退 generic；2584/866/855/1863 保持 dedicated 加速。
+- workspace: 代表路径 arena 降低 22.7%–29.7%，性能中性。
+
+### S4 — Python 热路径与计划选择
+- match: 8638 条热轮转从约 60.73 us/call 降至 0.532 us/call。
+- plan cache: 冷 30.61 s，热扫描降至约 0.195 s，缓存约 46.1 MiB。
+- unsupported: backend/equation/shapes/dtype/optimizer 级线程安全负缓存。
+- branch-2: 仅 CPU complex128、arena >=8 GiB 且 FLOPs <=80%、arena/pack <=65% 时提升；六序列中只命中 seq6585。
+
+### S5 — 最终验证
+- CPU 六条 full-scene 全部不慢于 generic。
+- GPU 四个已验证 dedicated 路径达到 3.8–6.4x。
+- 冻结 v9 统一套件 117 passed / 2 skipped / 2 failed。
+- 两项失败均为环境缺少可选依赖 gvar。
+- form-audit(pyqcd): unexpected=0。
+
+## 验证与证据
+- CPU job 1648188: exit 0，4:46，RSS 19,121,280 KiB。
+- GPU job 1648207: 业务专项全绿，full-scene 数值全 correct。
+- GPU full-suite job 1648249: 117 passed / 2 skipped / 2 failed。
+- verify_native: CUDA/KUPL 各 16/16。
+- verify_python_hotpath: 4/4。
+- verify_plan_gate v9: 11/11。
+- verify_compat: 980/980。
+- topology corpus: 120/120 hits。
+- source manifest SHA-256: 3704fa4441e28be9880a7bb7b0ed390ea517721b93c5d7d6d2bad6907dba4191。
+- immutable source manifest SHA-256: 789f246bd33c8f8cd2feb3b3bc70e5c66ecc4897c3763a9e054d4b85d9984bea。
+- KUPL .so: 78af9202cfc7eb131d46d9c870165c8a5c482d6182d89ac02fb4b70bb8070a82。
+- v9 CUDA .so: e3e41b33848a20cf3b793b1daaa816a4d8d3a04b3de0adf2d821d77470172413。
+
+## 变更与产物
+- 修改: cpp/kupl/einsum/src/dedicated_apply.cpp。
+- 修改: cpp/cuda/einsum/src/dedicated_apply.cu。
+- 修改: pyqcd/einsum/_api.py、_kernel_kupl.py、_kernel_cuda.py、_native.py、_specialize.py、_threads.py、kupl/einsum.py。
+- 新增: pyqcd/testing/einsum/verify_python_hotpath.py、verify_plan_gate.py、bench_plan_gate.py。
+- 接入: pyqcd/testing/__init__.py、conftest.py。
+- 文档: docs/einsum_production_optimization_20261112.md。
+- 技能: skills/pyqcd-einsum/SKILL.md 与 references/measured-pitfalls.md、native-implementation.md。
+- 证据: data/runs/einsum-opt-20261112/final-20261112t195557/FINAL.md 及 jobs/**。
+- Git: 未 commit、未 push、未创建标签。
+
+## 风险、限制与下一步
+- 当前环境缺 gvar，两个非 einsum 测试失败；未修改共享环境掩盖。
+- GPU 仅实测 A100-PCIE-40GB sm_80；H100/V100/A100 80GB 未验证。
+- 性能仅覆盖当前 full scene、double 主路径与固定线程配比；single precision、其他 lattice size 和完整 8638 条端到端性能未验证。
+- CPU branch-2 与 CUDA 性能门阈值需在其他硬件和线程配比重新标定。
+
+## 用户输入指令
+resume[20261112T17**-20261112T18**]。任务目标是极致优化本库的 qcd-einsum【kupl版和cuda版】，使之特化内核生产效率最佳。派发更多子代理协助工作。所有测试任务都提交到计算节点【cpu任务与gpu任务同时开测，节约资源与时间】。环境激活参考 ~/env.sh，提交任务参考 ~/sleep.sh，注意计算节点上的任务超过5分钟则排查，超过10分钟直接终止，节约计算资源。同时本库 logs 与 docs 与 skills 可供参考。使用生产场景，不要假的性能数据。补充: 实时将收集到的所有有益经验写入相关文档与 skills。
+
+## Agent 全文报告
+--- report begin ---
+**finished**
+
+**改动内容**
+- KUPL：ILP64 CBLAS、NumPy bundled OpenBLAS、短 outer 路径、大批量 GEMM batch 并行与线程局部 BLAS 控制。
+- CUDA：small-outer canonical、slot lifetime arena 复用、pack scratch 联合上界、动态 pool 预算、complex128 40G MAC 与 3 GiB arena 双 fail-open 门。
+- Python：backend 定向分派、8638 条 match/plan 全语料缓存、status=4 负缓存、计划代价统计、CPU complex128 保守 branch-2 条件提升。
+- 新增专项契约并接入统一测试；完整经验写入 docs 与 skills。
+
+**推理依据**
+- CPU 热点是大批量 GEMM，按 MAC 阈值切换 OpenMP batch 并行可避免重复串行化和 OMP×BLAS oversubscription。
+- CUDA 逻辑 slot 不等于物理 allocation；按 birth/last-use 严格区间复用可显著降低 workspace。
+- branch-2 不能无条件启用：seq129 的 FLOPs 反增且 CPU 慢 27.5%；只有超大计划且 FLOPs、arena、pack 同时显著下降才提升。
+- CUDA 对已知亏损的超大 complex128 计划在分配前 fail-open，避免命中专用拓扑却走慢路径。
+
+**验证结果**
+| 设备 | seq | 结果 |
+|---|---:|---:|
+| CPU | 2584 | 0.856x |
+| CPU | 866 | 0.936x |
+| CPU | 855 | 0.982x |
+| CPU | 129 | 0.791x |
+| CPU | 1863 | 0.974x |
+| CPU | 6585 | 22.445 s -> 10.310 s，0.459x |
+| GPU | 2584 | 0.265x |
+| GPU | 866 | 0.248x |
+| GPU | 855 | 0.177x |
+| GPU | 1863 | 0.157x |
+| GPU | 129 | 3 GiB arena 门回退，1.017x |
+| GPU | 6585 | 40G MAC/arena 门回退 |
+
+- verify_native：CUDA/KUPL 各 16/16。
+- check_native CUDA、热路径 4/4、plan-gate 11/11、verify_compat 980/980。
+- 冻结 v9 套件：117 passed / 2 skipped / 2 failed；两项仅因环境缺少 gvar。
+- CPU job 1648188 退出 0，4:46；GPU 生产 job 1648207 业务正确性全绿。
+- form-audit(pyqcd): unexpected=0；git diff --check 通过。
+
+**后续步骤**
+- 当前生产场景下无待实施代码项。若扩展验收范围，下一步是在 H100/V100/A100 80GB、其他线程配比、single precision 和更大任务集上重标定性能门；补齐 gvar 后复跑统一套件。
+- 未 commit/push/tag。
+--- report end ---

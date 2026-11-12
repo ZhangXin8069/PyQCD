@@ -7,7 +7,12 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.3.9`. To pin it: `pip install "pyqcd==0.3.9"`.
+Current release: `0.4.0`. To pin it: `pip install "pyqcd==0.4.0"`.
+
+Release `0.4.0` adds resource-gated topology-specialised execution for 8,638
+production equations and completes the release hardening for PEP 561 metadata.
+The default install still treats KUPL as mandatory; CUDA remains opportunistic.
+Runtime native failures fall back to the generic path without changing results.
 
 There is deliberately no platform wheel on PyPI: the native library links against
 the C++ runtime of the build host, so a portable manylinux wheel would need

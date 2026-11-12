@@ -18,6 +18,7 @@ import os
 import struct
 import threading
 from collections import OrderedDict
+from functools import lru_cache
 from typing import Any, Sequence
 
 import numpy as np
@@ -44,6 +45,105 @@ def enabled() -> bool:
 
 def _normalize(subscripts: str) -> str:
     return ''.join(subscripts.split())
+
+
+_NEGATIVE_CACHE_ENV = "PYQCD_EINSUM_NEGATIVE_CACHE"
+_DEDICATED_PLAN_ENV = "PYQCD_EINSUM_DEDICATED_PLAN"
+_NEGATIVE_CACHE_LIMIT = 16_384
+_NEGATIVE_CACHE: OrderedDict[
+    tuple[Any, ...], tuple[str, int]] = OrderedDict()
+_NEGATIVE_CACHE_LOCK = threading.Lock()
+_NEGATIVE_CACHE_STATS = {
+    "hits": 0,
+    "misses": 0,
+    "stores": 0,
+    "evictions": 0,
+}
+
+
+def _negative_cache_enabled() -> bool:
+    """Whether deterministic native rejections may be reused this call."""
+    return os.environ.get(_NEGATIVE_CACHE_ENV, "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def _effective_dedicated_optimizer(optimize: str) -> str:
+    """Apply the explicit plan switch only when the caller kept the default."""
+    if optimize != "auto":
+        return optimize
+    override = os.environ.get(_DEDICATED_PLAN_ENV, "").strip()
+    return override or optimize
+
+
+def _negative_cache_key(subscripts: str, shapes: Sequence[Sequence[int]],
+                        dtype: Any, optimize: Any,
+                        backend: str) -> tuple[Any, ...]:
+    """Stable key for deterministic unsupported results.
+
+    Strides, device ids and output-buffer identity are deliberately absent: those
+    are validated before this cache is consulted and can make the same shape valid
+    or invalid on a later call.
+    """
+    return (
+        _normalize(subscripts),
+        tuple(tuple(int(extent) for extent in shape) for shape in shapes),
+        np.dtype(dtype).str,
+        str(optimize),
+        str(backend),
+    )
+
+
+def _negative_cache_lookup(key: tuple[Any, ...]) -> tuple[str, int] | None:
+    if not _negative_cache_enabled():
+        return None
+    with _NEGATIVE_CACHE_LOCK:
+        entry = _NEGATIVE_CACHE.get(key)
+        if entry is None:
+            _NEGATIVE_CACHE_STATS["misses"] += 1
+            return None
+        _NEGATIVE_CACHE.move_to_end(key)
+        _NEGATIVE_CACHE_STATS["hits"] += 1
+        return entry
+
+
+def _negative_cache_store(key: tuple[Any, ...], reason: str,
+                          status: int = 4) -> None:
+    """Cache only deterministic ``UNSUPPORTED`` rejections."""
+    if status != 4 or not _negative_cache_enabled():
+        return
+    with _NEGATIVE_CACHE_LOCK:
+        _NEGATIVE_CACHE.pop(key, None)
+        _NEGATIVE_CACHE[key] = (str(reason), int(status))
+        _NEGATIVE_CACHE_STATS["stores"] += 1
+        while len(_NEGATIVE_CACHE) > _NEGATIVE_CACHE_LIMIT:
+            _NEGATIVE_CACHE.popitem(last=False)
+            _NEGATIVE_CACHE_STATS["evictions"] += 1
+
+
+def _negative_cache_clear() -> None:
+    with _NEGATIVE_CACHE_LOCK:
+        _NEGATIVE_CACHE.clear()
+        for name in _NEGATIVE_CACHE_STATS:
+            _NEGATIVE_CACHE_STATS[name] = 0
+
+
+def negative_cache_info() -> dict[str, Any]:
+    """Expose bounded-cache state for contracts and production diagnostics."""
+    with _NEGATIVE_CACHE_LOCK:
+        return {
+            "enabled": _negative_cache_enabled(),
+            "size": len(_NEGATIVE_CACHE),
+            "maxsize": _NEGATIVE_CACHE_LIMIT,
+            **_NEGATIVE_CACHE_STATS,
+        }
+
+
+def _cached_unsupported(key: tuple[Any, ...]) -> tuple[str, int] | None:
+    cached = _negative_cache_lookup(key)
+    if cached is None:
+        return None
+    reason, status = cached
+    return f"negative-cache hit: {reason}", status
 
 
 # 多操作数拓扑入口：一次原生调用跑完整条 version-2 计划。计划字节流按
@@ -206,13 +306,23 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
         return _fail(
             "operand_offsets must stay unused: a numpy view's data pointer already "
             "carries the byte offset, so a non-zero offset would double it")
+    shapes = tuple(tuple(int(extent) for extent in operand.shape)
+                   for operand in operands)
+    negative_key = _negative_cache_key(
+        subscripts, shapes, dtype, "topology", "kupl_topology")
+    cached_unsupported = _cached_unsupported(negative_key)
+    if cached_unsupported is not None:
+        return _fail(*cached_unsupported)
     try:
         plan = _topology_plan(_topology_key(subscripts, operands), subscripts, operands)
         result = kupl.topology_apply(plan, operands, out, info=LAST_INFO)
     except Exception as exc:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
         LAST_INFO.clear()
-        return _fail(f"topology execution unavailable: {type(exc).__name__}: {exc}",
-                     getattr(exc, "status", None))
+        status = getattr(exc, "status", None)
+        reason = f"topology execution unavailable: {type(exc).__name__}: {exc}"
+        if status == 4:
+            _negative_cache_store(negative_key, reason, 4)
+        return _fail(reason, status)
     LAST_INFO["path"] = "kupl_topology"
     return result
 
@@ -256,13 +366,28 @@ _DEDICATED_DTYPE_IDS = {
 # 调用**都重跑 greedy 规划（实测 2.7 ms/条，是内核执行时间的 4–9 倍，dim≤8
 # 也一样）。这里改成真实 LRU + 字节预算：命中 move_to_end，超限/超预算淘汰最久
 # 未使用项。预算按 plan 字节的两倍计（Python bytes + ctypes 副本）；实测计划
-# 0.7–3.2 KB，32 MiB 可容纳约 5000 条，覆盖基础语料 2582 条。
-_DEDICATED_CACHE_LIMIT = 4096
-_DEDICATED_CACHE_BUDGET = 32 << 20
+# 0.7–3.2 KB。完整 8638 条 cold sweep 实测 4096 项时每轮仍全 miss，
+# 3.553 ms/call、30.61 s；64 MiB 同时覆盖条目数上限与实际字节占用。
+_DEDICATED_CACHE_LIMIT = 16_384
+_DEDICATED_CACHE_BUDGET = 64 << 20
 _DEDICATED_PLAN_CACHE: OrderedDict[
     tuple[Any, ...], tuple[bytes, tuple[int, ...], Any] | None] = OrderedDict()
 _DEDICATED_CACHE_BYTES = 0
 _DEDICATED_LOCK = threading.Lock()
+
+# branch-2 only replaces the current candidate for plans whose static arena is
+# already very large, and only when all three measured cost dimensions improve
+# materially. This avoids promoting its lower-FLOPs but sometimes slower plans
+# for ordinary contractions.
+_HEAVY_BRANCH2_MIN_ARENA_BYTES = 8 << 30
+_HEAVY_BRANCH2_MAX_FLOPS_PERCENT = 80
+_HEAVY_BRANCH2_MAX_ARENA_PERCENT = 65
+_HEAVY_BRANCH2_MAX_PACK_PERCENT = 65
+_HEAVY_BRANCH2_DTYPE_IDS = (0,)  # complex128 only; other dtypes remain unverified.
+_CPU_PLAN_ARENA_LIMIT = 8 << 30
+_CPU_PLAN_MAX_STEP_MACS_LIMIT = 100_000_000_000
+_HEAVY_PACK_MIN_BYTES = 1 << 30
+_HEAVY_PACK_MAX_FLOPS = 1_000_000_000
 _entry_dedicated: Any = None
 _failed_dedicated = False
 
@@ -500,34 +625,116 @@ def _dedicated_entry_bytes(entry) -> int:
     return 0 if entry is None else 2 * len(entry[0])
 
 
-def _plan_flops(plan: bytes) -> int:
-    """步表的总乘加量 ``Σ 2·batch·m·n·k``，用于在候选计划之间择优。
+@lru_cache(maxsize=_DEDICATED_CACHE_LIMIT)
+def _plan_statistics(plan: bytes) -> dict[str, int]:
+    """Decode plan cost, intermediate size and estimated pack traffic once.
 
     执行器每步就是一次 GEMM，实测其耗时与 cblas 逐步一致（kernel/cblas =
     0.97 @dim=8、1.01 @dim=16），所以 FLOPs 是本执行器上最直接的计划代价。
+    ``plan_pack_bytes`` 按读写双向计；恒等轴序不产生 pack/unpack 流量。
     """
     (_magic, _version, _total, n_operands, n_slots, n_steps,
      _out_rank, _dtype) = _DEDICATED_HEADER.unpack_from(plan, 0)
     position = _DEDICATED_HEADER.size
+    shapes: list[tuple[int, ...]] = []
     for _ in range(n_operands + n_slots + 1):
         (rank,) = struct.unpack_from("=i", plan, position)
-        position += 4 + 8 * rank
+        position += 4
+        shape = struct.unpack_from("=%dq" % rank, plan, position)
+        position += 8 * rank
+        shapes.append(tuple(int(extent) for extent in shape))
+    itemsize = (16, 8, 8, 4)[_dtype]
+    intermediate_shapes = shapes[n_operands:n_operands + n_slots]
+    intermediate_elements = [
+        int(np.prod(shape, dtype=np.int64)) for shape in intermediate_shapes
+    ]
     flops = 0
+    max_step_macs = 0
+    pack_elements = 0
+    max_a_elements = 0
+    max_b_elements = 0
+    max_c_elements = 0
     for _ in range(n_steps):
         fields = _DEDICATED_STEP_HEADER.unpack_from(plan, position)
         position += _DEDICATED_STEP_HEADER.size
-        position += 4 * (fields[3] + fields[4] + fields[5])
-        flops += 2 * fields[9] * fields[10] * fields[11] * fields[12]
-    return flops
+        rank_a, rank_b, rank_c = fields[3:6]
+        axes = []
+        for rank in (rank_a, rank_b, rank_c):
+            axes.append(struct.unpack_from("=%di" % rank, plan, position)
+                        if rank else ())
+            position += 4 * rank
+        batch, m, n, k = fields[9:13]
+        macs = batch * m * n * k
+        flops += 2 * macs
+        max_step_macs = max(max_step_macs, macs)
+        a_elements = batch * m * k
+        b_elements = batch * k * n
+        c_elements = batch * m * n
+        max_a_elements = max(max_a_elements, a_elements)
+        max_b_elements = max(max_b_elements, b_elements)
+        max_c_elements = max(max_c_elements, c_elements)
+        if axes[0] != tuple(range(rank_a)):
+            pack_elements += a_elements
+        if axes[1] != tuple(range(rank_b)):
+            pack_elements += b_elements
+        if axes[2] != tuple(range(rank_c)):
+            pack_elements += c_elements
+    intermediate_bytes = sum(intermediate_elements) * itemsize
+    max_intermediate_bytes = max(intermediate_elements, default=0) * itemsize
+    arena_bytes = (
+        sum(intermediate_elements)
+        + max_a_elements + max_b_elements + max_c_elements
+    ) * itemsize
+    return {
+        "plan_flops": int(flops),
+        "plan_max_intermediate": int(max(intermediate_elements, default=0)),
+        "plan_max_intermediate_bytes": int(max_intermediate_bytes),
+        "plan_intermediate_bytes": int(intermediate_bytes),
+        "plan_pack_bytes": int(2 * pack_elements * itemsize),
+        "plan_arena_bytes": int(arena_bytes),
+        "plan_max_step_macs": int(max_step_macs),
+    }
+
+
+def _plan_flops(plan: bytes) -> int:
+    """Total ``Σ 2·batch·m·n·k`` for candidate-plan selection."""
+    return int(_plan_statistics(plan)["plan_flops"])
+
+
+def _cpu_plan_fallback_reason(stats: dict[str, int]) -> str | None:
+    """Reject plans whose dedicated workspace or single GEMM is unsafe on CPU."""
+    arena_bytes = int(stats.get("plan_arena_bytes", 0))
+    max_step_macs = int(stats.get("plan_max_step_macs", 0))
+    flops = int(stats.get("plan_flops", 0))
+    pack_bytes = int(stats.get("plan_pack_bytes", 0))
+    if arena_bytes >= _CPU_PLAN_ARENA_LIMIT:
+        return (
+            "plan arena exceeds the CPU dedicated budget "
+            f"({arena_bytes} >= {_CPU_PLAN_ARENA_LIMIT} bytes)")
+    if max_step_macs >= _CPU_PLAN_MAX_STEP_MACS_LIMIT:
+        return (
+            "single GEMM exceeds the CPU dedicated budget "
+            f"({max_step_macs} >= {_CPU_PLAN_MAX_STEP_MACS_LIMIT} MACs)")
+    if pack_bytes >= _HEAVY_PACK_MIN_BYTES and flops <= _HEAVY_PACK_MAX_FLOPS:
+        return (
+            "plan is pack-bound on CPU "
+            f"({pack_bytes} pack bytes, {flops} FLOPs)")
+    return None
 
 
 def _cheapest_dedicated_plan(subscripts: str, shapes: Sequence[Sequence[int]],
-                             dtype_id: int):
+                             dtype_id: int, allow_heavy_branch2: bool = False):
     """在 ``auto`` 与 ``greedy`` 之间取 FLOPs 更小的一步表（并列时取 auto）。
 
     只用一个优化器会踩坑：实测 14 元式子上 greedy 可多做 2.9× FLOPs
     （特化路径慢 1.76–2.28×），而 auto 在个别式子上也会更慢。两条都编码、
     按步表 FLOPs 择优，代价只是首次多一次规划（之后按 optimize="auto" 缓存）。
+
+    CPU complex128 full-scene 的 ``seq=6585`` 还需要第三个收益条件：当基础计划
+    静态 arena 已超过 8 GiB，且 branch-2 同时把 FLOPs 压到 ≤80%、arena 与 pack
+    流量压到 ≤65% 时，branch-2 实测端到端快约 30%–41%。阈值避免对 ``seq=129``
+    这类“arena 小但 FLOPs 变大”的计划做错误替换；其他 dtype 尚无同口径证据，
+    继续由调用方显式选择 branch-2。
     """
     candidates = []
     for name in ("auto", "greedy"):
@@ -536,7 +743,33 @@ def _cheapest_dedicated_plan(subscripts: str, shapes: Sequence[Sequence[int]],
             candidates.append((_plan_flops(candidate[0]), candidate))
     if not candidates:
         return None
-    return min(candidates, key=lambda item: item[0])[1]
+    best = min(candidates, key=lambda item: item[0])[1]
+    if not allow_heavy_branch2 or dtype_id not in _HEAVY_BRANCH2_DTYPE_IDS:
+        return best
+
+    best_stats = _plan_statistics(best[0])
+    if best_stats["plan_arena_bytes"] < _HEAVY_BRANCH2_MIN_ARENA_BYTES:
+        return best
+    branch2 = _dedicated_plan(subscripts, shapes, dtype_id, "branch-2")
+    if branch2 is None:
+        return best
+    branch2_stats = _plan_statistics(branch2[0])
+    best_pack = best_stats["plan_pack_bytes"]
+    pack_ok = (
+        branch2_stats["plan_pack_bytes"] == 0
+        if best_pack == 0
+        else branch2_stats["plan_pack_bytes"] * 100
+        <= best_pack * _HEAVY_BRANCH2_MAX_PACK_PERCENT
+    )
+    if (
+        branch2_stats["plan_flops"] * 100
+        <= best_stats["plan_flops"] * _HEAVY_BRANCH2_MAX_FLOPS_PERCENT
+        and branch2_stats["plan_arena_bytes"] * 100
+        <= best_stats["plan_arena_bytes"] * _HEAVY_BRANCH2_MAX_ARENA_PERCENT
+        and pack_ok
+    ):
+        return branch2
+    return best
 
 
 def _dedicated_cache_store(key: tuple[Any, ...], entry) -> None:
@@ -555,10 +788,10 @@ def _dedicated_cache_store(key: tuple[Any, ...], entry) -> None:
 
 
 def _dedicated_cached(subscripts: str, shapes: Sequence[Sequence[int]],
-                      dtype: np.dtype, optimize: str):
+                      dtype: np.dtype, optimize: str, backend: str = "kupl"):
     key = (_normalize(subscripts),
            tuple(tuple(int(extent) for extent in shape) for shape in shapes),
-           dtype.str, optimize)
+           dtype.str, optimize, str(backend))
     with _DEDICATED_LOCK:
         if key in _DEDICATED_PLAN_CACHE:
             entry = _DEDICATED_PLAN_CACHE[key]
@@ -570,7 +803,8 @@ def _dedicated_cached(subscripts: str, shapes: Sequence[Sequence[int]],
         # "auto"（默认）在 auto 与 greedy 两条计划里按步表 FLOPs 择优，避免单一
         # 优化器的坏计划（实测 greedy 可多做 2.9× FLOPs，特化路径因此慢 2×）。
         if optimize == "auto":
-            encoded = _cheapest_dedicated_plan(subscripts, shapes, dtype_id)
+            encoded = _cheapest_dedicated_plan(
+                subscripts, shapes, dtype_id, str(backend) == "kupl")
         else:
             encoded = _dedicated_plan(subscripts, shapes, dtype_id, optimize)
     if encoded is None:
@@ -598,9 +832,11 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
     没有逐步骤的 Python 调度。
 
     ``optimize`` 默认 ``"auto"``：在 auto 与 greedy 两条计划里按步表 FLOPs 取小
-    （并列取 auto），因此相对通用路径的 auto 计划只会更省、不会更贵。步表执行
-    再快也补不回规划选错的代价——实测 greedy 在个别式子上比 auto 多做 487× FLOPs
-    （dim=16，1030–1085 ms vs 1.4–2.6 ms），见 local-sizing.md 的 ``[Q2b]``。
+    （并列取 auto）；仅当 CPU complex128 基础计划静态 arena 超过 8 GiB，且
+    branch-2 同时把 FLOPs 压到 ≤80%、arena/pack 压到 ≤65% 时，才条件提升
+    branch-2。这样既避免单一优化器的坏计划（greedy 在个别式子上多做 487×
+    FLOPs），也不会把 branch-2 用于 ``seq=129`` 这类 arena 更小但 FLOPs 更大、
+    实测慢 27.5% 的路径。
 
     dtype 契约：``float32`` / ``float64`` / ``complex64`` / ``complex128``（原生分别
     走 sgemm / dgemm / cgemm / zgemm）。其余 dtype 直接返回 ``None`` 并记录原因 ——
@@ -616,22 +852,35 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
     dtype = np.dtype(operands[0].dtype)
     if any(np.dtype(operand.dtype) != dtype for operand in operands[1:]):
         return _fail("mixed operand dtypes are not supported by the native path")
-    if dtype not in _DEDICATED_DTYPES:
-        supported = ", ".join(str(item) for item in _DEDICATED_DTYPES)
-        return _fail(
-            f"dtype {dtype} has no dedicated step-table path "
-            f"(supported: {supported}); no implicit downcast is performed")
+    optimize = _effective_dedicated_optimizer(optimize)
+    shapes = tuple(tuple(int(extent) for extent in operand.shape) for operand in operands)
     if any(not operand.flags["C_CONTIGUOUS"] for operand in operands):
         return _fail("dedicated kernel requires C-contiguous operands")
+    negative_key = _negative_cache_key(
+        subscripts, shapes, dtype, optimize, "kupl_dedicated")
+    cached_unsupported = _cached_unsupported(negative_key)
+    if cached_unsupported is not None:
+        return _fail(*cached_unsupported)
+    if dtype not in _DEDICATED_DTYPES:
+        supported = ", ".join(str(item) for item in _DEDICATED_DTYPES)
+        reason = (
+            f"dtype {dtype} has no dedicated step-table path "
+            f"(supported: {supported}); no implicit downcast is performed")
+        _negative_cache_store(negative_key, reason, 4)
+        return _fail(reason, 4)
     entry = _function_dedicated()
     if entry is None:
         return _fail("dedicated entry point is missing from the native library")
 
-    shapes = tuple(tuple(int(extent) for extent in operand.shape) for operand in operands)
     cached = _dedicated_cached(subscripts, shapes, dtype, optimize)
     if cached is None:
         return _fail("the contraction path is not expressible as a fixed step table")
     plan, output_shape, plan_buffer, plan_flops = cached
+    stats = _plan_statistics(plan)
+    plan_gate = _cpu_plan_fallback_reason(stats)
+    if plan_gate is not None:
+        _negative_cache_store(negative_key, plan_gate, 4)
+        return _fail(plan_gate, 4)
 
     if out is None:
         output = np.empty(output_shape, dtype=dtype)
@@ -653,9 +902,16 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
                            len(operands), int(output.ctypes.data),
                            _DEDICATED_DTYPE_IDS[dtype]))
     except Exception as exc:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
-        return _fail(f"dedicated execution unavailable: {type(exc).__name__}: {exc}")
+        status = getattr(exc, "status", None)
+        reason = f"dedicated execution unavailable: {type(exc).__name__}: {exc}"
+        if status == 4:
+            _negative_cache_store(negative_key, reason, 4)
+        return _fail(reason, status)
     if status != 0:
-        return _fail(f"dedicated kernel returned status {status}", status)
+        reason = f"dedicated kernel returned status {status}"
+        if status == 4:
+            _negative_cache_store(negative_key, reason, 4)
+        return _fail(reason, status)
     LAST_INFO.update(
         path="kupl_dedicated",
         equation=_normalize(subscripts),
@@ -663,7 +919,11 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
         dtype_id=_DEDICATED_DTYPE_IDS[dtype],
         n_operands=len(operands),
         plan_bytes=len(plan),
-        plan_flops=plan_flops,          # 选中计划的乘加量（诊断用，编码期算好）
+        plan_flops=plan_flops,
+        plan_max_intermediate=stats["plan_max_intermediate"],
+        plan_pack_bytes=stats["plan_pack_bytes"],
+        plan_arena_bytes=stats["plan_arena_bytes"],
+        plan_max_step_macs=stats["plan_max_step_macs"],
         optimize=optimize,
         output_shape=tuple(output_shape),
         out="allocated" if out is None else "provided",
@@ -843,5 +1103,3 @@ def try_family_apply(subscripts: Any, operands: Sequence[Any], out: Any = None,
         out="allocated" if out is None else "provided",
     )
     return output
-
-

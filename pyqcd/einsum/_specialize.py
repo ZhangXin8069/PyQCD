@@ -11,17 +11,14 @@
 
 命中时输出（每个进程每个形态一次）：
 
-    [pyqcd.einsum] 专用路径: gauge-propagator(E4) [fused: cuda_e4_fused]
+    [pyqcd.einsum] 专用路径: topology:xxxxxxxx [kernel: kupl_dedicated]
 
 设置 ``PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`` 可每次调用都输出。
 
-匹配分两段（:func:`match`）：
-
-1. **字面**：去空白后与 :data:`REGISTRY` 的键逐字符相同 —— 历史行为，一字不改；
-2. **拓扑**：未命中时按 :func:`canonical_signature` 的签名查 :data:`FAMILIES`，
-   于是把 ``ij,jk->ik`` 改写成 ``ij,jb->ib`` 或 ``ab,bc->ac`` 仍然命中同一形态。
-
-两段都未命中时行为与以前完全一致（回落到通用的计划缓存路径）。
+匹配只有一段（:func:`match`）：先算 :func:`canonical_signature`，再按
+``(元数, 槽位总数)`` 查当前 ``wick_12cases`` 的 8638 条拓扑语料。改名字母、
+调整空白或改写为等价的省略输出仍会命中同一拓扑；语料之外的方程回落到通用计划。
+历史上按字面 ``REGISTRY`` 匹配的旧入口已删除。
 
 人工自检（不属于测试注册文件）：
 
@@ -77,8 +74,10 @@ _ELLIPSIS_ID = -1
 # 旧的核子 2pt/3pt 专用 kernel 已整体删除，字面形态都只复用计划缓存或走拓扑入口。
 _KERNEL_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
-# 「不可能命中」也是结果，缓存它才能保证 match() 的未命中开销与旧实现同级。
-_SIGNATURE_CACHE_LIMIT = 512
+# The production corpus currently has 8638 unique equations. A smaller cache
+# forces every full-corpus pass back through signature and index construction.
+_CORPUS_CACHE_LIMIT = 16_384
+_SIGNATURE_CACHE_LIMIT = _CORPUS_CACHE_LIMIT
 
 
 def normalize(subscripts: str) -> str:
@@ -234,9 +233,20 @@ def _topology_entry(digest: str) -> Entry:
             "kernels": ("kupl_topology", "cuda_topology"),
             "subscripts": "",
         }
-        if len(_TOPOLOGY_ENTRY_CACHE) < 4096:
+        if len(_TOPOLOGY_ENTRY_CACHE) < _CORPUS_CACHE_LIMIT:
             _TOPOLOGY_ENTRY_CACHE[digest] = entry
     return entry
+
+
+@lru_cache(maxsize=_CORPUS_CACHE_LIMIT)
+def _match_of_normalized(text: str) -> Entry | None:
+    """Cache the complete topology lookup for one normalized equation."""
+    signature = _signature_of_normalized(text)
+    if signature is None:
+        return None
+    digest = _topology_hit(text, signature)
+    return _topology_entry(digest) if digest is not None else None
+
 
 _announced: set[str] = set()
 _lock = threading.Lock()
@@ -260,13 +270,7 @@ def match(subscripts: str) -> Entry | None:
     """
     if not isinstance(subscripts, str):
         return None
-    signature = _signature_of_normalized(normalize(subscripts))
-    if signature is None:
-        return None
-    digest = _topology_hit(subscripts, signature)
-    if digest is not None:
-        return _topology_entry(digest)
-    return None
+    return _match_of_normalized(normalize(subscripts))
 
 
 def announce(entry: Entry, kernel: str = "") -> None:

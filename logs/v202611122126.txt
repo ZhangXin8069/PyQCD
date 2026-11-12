@@ -1,0 +1,71 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-12 21:26:49 +0800
+批次: einsum-expanded-20261112
+主任务: qcd-einsum 扩展生产路径测试
+触发原因: 阶段成果
+摘要: 43 条 full-scene 路径普遍加速；全 8638 条计划门审计 0 unavailable
+Git 根目录: /home/bingxing2/home/scx8080/PyQCD
+
+## 关键日志
+
+### S1 — 分层抽样
+- 从原始 6 条主路径外，按 12 个 case 与元数 6/7/9/10/12/13/14/16 分层抽取 43 条路径。
+- CPU 与 GPU 均使用 full-scene、double 和同 dtype generic 参考。
+- 第一批 19 条、第二批 24 条分别通过 sbatch 并行提交。
+
+### S2 — 首轮反例与门控
+- CPU/GPU `seq=7918` 为 pack-bound；CPU 原 dedicated 慢 1.93x。
+- 增加 `pack>=1 GiB && FLOPs<=1G` fail-open 门后，CPU/GPU 回退至约 0.996x/0.958x。
+- 曾加入的 CUDA small-plan 门误伤正常加速路径 `seq=2583/3431`，已撤回。
+- 保留 GPU `seq=6911` 为极少数小计划反例。
+
+### S3 — 普遍加速结果
+- CPU 43 条：中位 0.8612x，范围 0.3471–1.0067x，26 条至少快 10%，42/43 不快于 generic。
+- GPU 43 条：中位 0.2760x，范围 0.1218–1.3615x，40 条至少快 10%，42/43 不快于 generic。
+- 唯一反例：CPU seq856 慢 0.7%；GPU seq6911 慢 36.2%。
+
+### S4 — 全计划审计
+- 完整 8638 条生产计划，0 条不可编码。
+- CPU allowed/blocked=3833/4805。
+- GPU allowed/blocked=2864/5774。
+- 最大静态 arena 约 5.04 PB，最大单步约 65.536P MAC。
+
+### S5 — 正确性
+- CPU job 1648387：native 16/16、plan-gate 11/11、热路径 4/4，源码哈希全 OK。
+- GPU job 1648386：plan-gate 12/12，统一套件 117 passed / 2 skipped / 2 failed。
+- 两项失败均仅因环境缺 gvar。
+
+## 验证与证据
+- CPU full-scene 最大相对误差 6.95e-15。
+- GPU full-scene 最大相对误差 6.68e-15。
+- 全计划结构审计 job 1648360 用时 2:45。
+- `results.json`、`summary.json`、原始 jobs、EXPERIENCE.md 和 FINAL.md 均写入 `data/runs/einsum-opt-20261112/expanded-paths-20261112/`。
+- git diff --check 通过；form-audit unexpected=0；无运行中作业。
+
+## 变更与产物
+- 修改 CPU/CUDA 计划资源门及 pack-heavy 门。
+- 新增 `pyqcd/testing/einsum/audit_plan_gates.py`。
+- 扩展 `verify_plan_gate.py`，覆盖资源门、pack-heavy 门和非 complex128 行为。
+- 更新 docs 与 skills 的 43 路径统计、全计划审计和加速规律。
+
+## 风险、限制与下一步
+- 43 条是分层生产样本，不等价于 8638 条逐条端到端性能证明。
+- GPU seq6911 仍为已知极少数反例。
+- 其他硬件、线程配比和 single precision 仍需重新标定。
+- gvar 环境缺口未通过修改共享环境掩盖。
+
+## Agent 全文报告
+--- report begin ---
+**finished**
+
+扩展测试已完成。CPU/GPU 各测试 43 条 full-scene 路径，均覆盖 12 个 case 和元数 6–16。
+
+CPU：中位 0.8612x，范围 0.3471–1.0067x，26/43 至少快 10%，42/43 不快于 generic。唯一反例 seq856 慢 0.7%。
+
+GPU：中位 0.2760x，范围 0.1218–1.3615x，40/43 至少快 10%，42/43 不快于 generic。唯一显著反例 seq6911 慢 36.2%。
+
+seq7918 的 pack-heavy 退化已通过 `pack>=1 GiB && FLOPs<=1G` 门修复，CPU/GPU 均回退。全 8638 条计划审计 0 unavailable，CPU 放行 3833、GPU 放行 2864；最大计划出现 5.04 PB 静态 arena，证明资源门必要。
+
+当前源码专项和统一套件已验证：CPU native/plan-gate/热路径全部通过；GPU 套件 117 passed / 2 skipped / 2 failed，两项仅因环境缺 gvar。详细数据见 expanded-paths-20261112 下的 results.json、summary.json、EXPERIENCE.md 与 FINAL.md。
+--- report end ---

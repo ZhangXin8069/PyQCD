@@ -9,8 +9,8 @@ contraction engine with an **`opt_einsum`-compatible API**.
 
 ## Install
 
-Requires **Python 3.8+** (3.8 is the oldest interpreter with maintained
-`numpy`/`scipy` wheels at the declared floors).
+Requires **Python 3.9+**. Python 3.8 is no longer supported because the
+current PEP 639 build metadata requires `setuptools>=77`.
 
 ```bash
 pip install pyqcd
@@ -41,6 +41,28 @@ python -m pyqcd --json     # machine-readable
 > `OMP_NUM_THREADS` / `OPENBLAS_NUM_THREADS` (or `PYQCD_EINSUM_OMP_THREADS` /
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
+
+## Release 0.4.0
+
+`0.4.0` is the production-specialisation release for `pyqcd.einsum`.
+
+* The topology-specialised registry covers **8,638 equations** with 6–16
+  operands on both KUPL and CUDA. Every plan passes a fail-open resource gate
+  before native allocation.
+* On the 43-path full-scene audit, CPU is not slower than PyQCD's internal
+  generic path on **42/43** cases (median selected/generic `0.861x`), and CUDA
+  on **42/43** cases (median `0.276x`). The two retained exceptions are
+  `seq=856` on CPU (+0.7%) and `seq=6911` on CUDA (+36.2%).
+* A representative CPU long-chain case, `seq=6585`, drops from **22.445 s** to
+  **10.310 s** (`0.459x`).
+* CUDA is not slower than `opt_einsum 3.4.0` (`dp`) on **42/43** audited paths.
+  CPU is not slower on **36/43**: this release does **not** claim universal CPU
+  superiority over `opt_einsum`; seven CPU plans remain slower.
+
+The specialised route is a production optimisation, not a promise that every
+shape is faster. Native resource limits, pack-heavy low-FLOP plans, unavailable
+kernels and registered native failures deliberately fall back to the generic
+path. Results are unchanged.
 
 ## Documentation
 
@@ -89,7 +111,7 @@ The public surface mirrors `opt_einsum`: `contract`, `contract_path`,
 | `pyqcd.renorm` | gradient flow, Z_R, hybrid scheme, NLO matching, TMD extraction |
 | `pyqcd.analysis` | resampling, fits, ratio / effective-mass / energy helpers |
 | `pyqcd.pipeline` | centralised configuration and multi-step pipeline |
-| `pyqcd.parallel` | resource detection and MPI meta-task planning |
+| `pyqcd.parallel` | read-only CPU, memory and GPU resource detection |
 | `pyqcd.einsum` | contraction engine (this package's headline feature) |
 
 ## Contraction engine
@@ -100,8 +122,8 @@ The public surface mirrors `opt_einsum`: `contract`, `contract_path`,
   the same C ABI and share one planning core.
 * Fallback is a hard invariant: a missing library, a failed native call or a
   rejected shape silently degrades to the Python path — results never change.
-* A small set of lattice-QCD equation shapes gets a specialised execution path;
-  it is enabled by default and can be turned off per call
+* The complete 8,638-equation lattice-QCD topology corpus gets resource-gated
+  specialised dispatch; it is enabled by default and can be turned off per call
   (`contract(..., specialize=False)`) or per process
   (`PYQCD_EINSUM_SPECIALIZE=0`).
 
@@ -110,45 +132,40 @@ Introspection:
 ```python
 import pyqcd.einsum as pe
 
-pe.build_info()        # backend, mpi, mpi_label, native_library
-pe.mpi_enabled()       # whether the KUPL library has real MPI support
-pe.specializations()   # registered equation shapes
+pe.build_info()        # backend, native_available, array_backend, native_library
+pe.specializations()   # registered equation shapes (8,638 in this release)
 ```
-
-MPI sharding exists only in the KUPL backend and only shards a single output
-axis; the CUDA backend has no MPI implementation.
 
 ## Performance
 
-Fifteen cases — one per structural category the library routes differently, not a
-highlight reel — measured against `opt_einsum` 3.4.0 (`dp`), alternating which
-implementation runs first every round, three rounds per case. The same cases and the
-same shapes appear in both columns, so the two device columns are directly comparable.
+These are full-scene benchmarks from an A100 node, not smoke tests. Inputs use
+`Nx=Ny=Nz=32`, `Lt=64`, `Nev=100`, `Ns=4`, `Mom=8`, `complex128`, and each
+specialised result is checked against the generic path before timing. Ratios are
+`selected/generic`; values below `1` are faster.
 
-| Case (category) | CPU | GPU |
+| Evidence set | CPU | GPU |
 |---|---|---|
-| nucleon 2pt, nvec=112 (kernel) | **18.6x** | **2.68x** |
-| batched GEMM, 16×1024² | **11.9x** | **1.09x** |
-| ellipsis, 256×512² | **9.18x** | **1.11x** |
-| γ sandwich, 8192×1024 (kernel) | **7.83x** | **4.04x** |
-| many small batches, 4096×64² | **2.32x** | 0.96x |
-| outer product, 8000 | **1.62x** | 1.00x |
-| element-wise, 12000² | **1.25x** | 1.02x |
-| chain 3 ops, 3×3072 | **1.07x** | **1.10x** |
-| matmul 2D complex, 2048² | 1.04x | **1.15x** |
-| full reduction, 12000² | 1.02x | **2.13x** |
-| partial reduction, 16000² | 1.02x | 1.00x |
-| batch × matrix, 8×1024×512 | 1.01x | **1.13x** |
-| chain 4 ops, 4×2048 | 1.00x | **1.10x** |
-| matmul 2D real, 4096² | 0.99x | **1.05x** |
-| hyper-edge, 2048² | 0.93x | 1.02x |
+| 43 stratified production paths: median ratio | **0.861x** | **0.276x** |
+| 43 paths: not slower than PyQCD generic | **42/43** | **42/43** |
+| 43 paths: at least 10% faster than PyQCD generic | **26/43** | **40/43** |
+| 43 paths vs `opt_einsum(dp)`: not slower | **36/43** | **42/43** |
 
-Read this honestly: the generic shapes sit at parity (0.93–1.15x). The double-digit
-CPU multiples come from two effects, both measured — `opt_einsum` materialises an
-89.9 M-element intermediate for the nucleon 2pt network (1.44 GB vs 11.8 M input
-elements), and it does not turn a batch axis into one batched BLAS call (2.99 s vs
-0.28 s for `numpy.matmul` on the same arrays). Where it does use BLAS, we are level
-with it, not 10× ahead.
+The six core paths (ratio `<1` means faster):
+
+| `seq` | CPU vs generic | GPU vs generic | CPU vs `opt_einsum(dp)` | GPU vs `opt_einsum(dp)` |
+|---:|---:|---:|---:|---:|
+| 2584 | 0.856x | 0.265x | 0.598x | 0.152x |
+| 866 | 0.936x | 0.248x | 0.891x | 0.213x |
+| 855 | 0.982x | 0.177x | 0.842x | 0.130x |
+| 129 | 0.791x | fallback, 1.017x | 1.297x | 1.179x |
+| 1863 | 0.974x | 0.157x | 0.837x | 0.025x |
+| 6585 | **0.459x** | fallback | not completed | 0.606x, fallback |
+
+All **8,638** plans were additionally audited without executing giant tensors:
+the CPU gate admits 3,833 plans and blocks 4,805; the CUDA gate admits 2,864 and
+blocks 5,774. This prevents plans with multi-terabyte static arenas, oversized
+single GEMMs, or pack-heavy low-FLOP work from reaching the specialised route.
+Full-scene maximum relative errors were `6.95e-15` on CPU and `6.68e-15` on GPU.
 
 ```python
 import numpy as np
@@ -168,12 +185,12 @@ switch the optimisation off; both paths must agree numerically.
   2000²), because one extra output-sized intermediate stays alive per step.
   Size long jobs accordingly.
 
-The gain comes from recognising a handful of lattice-QCD equation shapes and
-routing them to purpose-built kernels (fusion, buffer reuse) instead of a
-generic BLAS chain. It is not universal: on the GPU nucleon 2pt/3pt *against
-opt_einsum* both sides sit at the hardware limit (~1x), small tensors lose to
-per-call overhead, and shapes without a specialised kernel run the generic
-path. Full protocol and limitations:
+The gain comes from topology recognition, resource-aware plan selection, fused
+or dedicated execution where profitable, lifetime-based workspace reuse and
+fallback when the resource envelope is unsafe. It is not universal:
+`opt_einsum(dp)` still wins on seven audited CPU paths, two internal full-scene
+paths are retained as known counterexamples, and the gates intentionally send
+unsafe plans back to the generic path. Full protocol, evidence and reproduction:
 https://py-qcd.readthedocs.io/en/latest/performance.html
 
 ### PyTorch

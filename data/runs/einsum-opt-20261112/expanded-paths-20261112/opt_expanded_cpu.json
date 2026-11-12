@@ -1,0 +1,1268 @@
+{
+  "device": "cpu",
+  "dimensions": {
+    "Lt": 64,
+    "Mom": 8,
+    "Nev": 100,
+    "Ns": 4,
+    "Nx": 32
+  },
+  "opt_einsum_path": "/home/bingxing2/home/scx8080/.conda/envs/qcu/lib/python3.11/site-packages/opt_einsum",
+  "opt_einsum_version": "3.4.0",
+  "precision": "double",
+  "records": [
+    {
+      "arity": 6,
+      "equation": "cadb,menf,ac,em,bd,fn->",
+      "medians_s": {
+        "opt_einsum_dp": 0.0005464020068757236,
+        "pyqcd_generic": 0.0003195269964635372,
+        "qcd_specialized": 0.00023557498934678733
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.584783716828866,
+      "qcd_specialized_over_opt_einsum_dp": 0.4311385873082411,
+      "relative_errors": {
+        "opt_einsum_dp": 0.0,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.7833238572457578e-15
+      },
+      "seq": 1,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0005464020068757236
+        ],
+        "pyqcd_generic": [
+          0.0003195269964635372
+        ],
+        "qcd_specialized": [
+          0.00023557498934678733
+        ]
+      }
+    },
+    {
+      "arity": 7,
+      "equation": "ambn,codp,egfh,ce,mo,bdf,nph->ag",
+      "medians_s": {
+        "opt_einsum_dp": 1.2246978360053618,
+        "pyqcd_generic": 1.2239195140136871,
+        "qcd_specialized": 1.1609000159951393
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.9993644783482158,
+      "qcd_specialized_over_opt_einsum_dp": 0.9479072975107771,
+      "relative_errors": {
+        "opt_einsum_dp": 0.0,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.1934268744548613e-15
+      },
+      "seq": 3,
+      "times_s": {
+        "opt_einsum_dp": [
+          1.2246978360053618
+        ],
+        "pyqcd_generic": [
+          1.2239195140136871
+        ],
+        "qcd_specialized": [
+          1.1609000159951393
+        ]
+      }
+    },
+    {
+      "arity": 13,
+      "equation": "cadb,egfh,minj,okpl,sqtr,ac,mo,gi,qs,bd,fnp,hjl,rt->ek",
+      "medians_s": {
+        "opt_einsum_dp": 1.2277286740136333,
+        "pyqcd_generic": 1.9053120119788218,
+        "qcd_specialized": 1.3102909330045804
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 1.551899904520487,
+      "qcd_specialized_over_opt_einsum_dp": 1.0672479683324805,
+      "relative_errors": {
+        "opt_einsum_dp": 2.186950560660944e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 3.5422298584322877e-15
+      },
+      "seq": 9,
+      "times_s": {
+        "opt_einsum_dp": [
+          1.2277286740136333
+        ],
+        "pyqcd_generic": [
+          1.9053120119788218
+        ],
+        "qcd_specialized": [
+          1.3102909330045804
+        ]
+      }
+    },
+    {
+      "arity": 9,
+      "equation": "cadb,menf,gohp,ac,em,og,bd,fn,ph->",
+      "medians_s": {
+        "opt_einsum_dp": 0.0007542370003648102,
+        "pyqcd_generic": 0.00040449900552630424,
+        "qcd_specialized": 0.00026199599960818887
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.536302256890945,
+      "qcd_specialized_over_opt_einsum_dp": 0.3473656151600443,
+      "relative_errors": {
+        "opt_einsum_dp": 0.0,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 3.010576063253511e-15
+      },
+      "seq": 849,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0007542370003648102
+        ],
+        "pyqcd_generic": [
+          0.00040449900552630424
+        ],
+        "qcd_specialized": [
+          0.00026199599960818887
+        ]
+      }
+    },
+    {
+      "arity": 10,
+      "equation": "ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak",
+      "medians_s": {
+        "opt_einsum_dp": 0.08642649999819696,
+        "pyqcd_generic": 0.07756185799371451,
+        "qcd_specialized": 0.07836553599918261
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.8974314359060314,
+      "qcd_specialized_over_opt_einsum_dp": 0.9067304125565363,
+      "relative_errors": {
+        "opt_einsum_dp": 2.062786522100643e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 8.572619312626049e-16
+      },
+      "seq": 856,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.08642649999819696
+        ],
+        "pyqcd_generic": [
+          0.07756185799371451
+        ],
+        "qcd_specialized": [
+          0.07836553599918261
+        ]
+      }
+    },
+    {
+      "arity": 14,
+      "equation": "aibj,ckdl,eqfr,msnt,owpx,guhv,ce,og,ik,su,bdf,nph,jlr,tvx->aqmw",
+      "medians_s": {
+        "opt_einsum_dp": 0.4888296419812832,
+        "pyqcd_generic": 0.5997685169859324,
+        "qcd_specialized": 0.5308197669801302
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 1.226947929252001,
+      "qcd_specialized_over_opt_einsum_dp": 1.0858993019094672,
+      "relative_errors": {
+        "opt_einsum_dp": 1.4950121760347353e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.9310573940448665e-15
+      },
+      "seq": 130,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.4888296419812832
+        ],
+        "pyqcd_generic": [
+          0.5997685169859324
+        ],
+        "qcd_specialized": [
+          0.5308197669801302
+        ]
+      }
+    },
+    {
+      "arity": 12,
+      "equation": "cadb,menf,gohp,kilj,ac,em,og,ik,bd,fn,ph,jl->",
+      "medians_s": {
+        "opt_einsum_dp": 0.0009695619810372591,
+        "pyqcd_generic": 0.0005230020033195615,
+        "qcd_specialized": 0.00030699698254466057
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.5394209071193594,
+      "qcd_specialized_over_opt_einsum_dp": 0.31663471603561466,
+      "relative_errors": {
+        "opt_einsum_dp": 0.0,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.2206116077401892e-15
+      },
+      "seq": 1599,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0009695619810372591
+        ],
+        "pyqcd_generic": [
+          0.0005230020033195615
+        ],
+        "qcd_specialized": [
+          0.00030699698254466057
+        ]
+      }
+    },
+    {
+      "arity": 13,
+      "equation": "ambn,cgdh,ekfl,oqpr,isjt,ce,mo,gi,kq,bdf,np,hj,lrt->as",
+      "medians_s": {
+        "opt_einsum_dp": 0.22137229098007083,
+        "pyqcd_generic": 0.1914421219844371,
+        "qcd_specialized": 0.1835165990050882
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.8647971303765014,
+      "qcd_specialized_over_opt_einsum_dp": 0.8289953462224836,
+      "relative_errors": {
+        "opt_einsum_dp": 2.3989566226519974e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.4678962742976528e-15
+      },
+      "seq": 1623,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.22137229098007083
+        ],
+        "pyqcd_generic": [
+          0.1914421219844371
+        ],
+        "qcd_specialized": [
+          0.1835165990050882
+        ]
+      }
+    },
+    {
+      "arity": 13,
+      "equation": "cadb,egfh,mknl,oqpr,isjt,ac,mo,gi,kq,bd,fnp,hj,lrt->es",
+      "medians_s": {
+        "opt_einsum_dp": 0.028138338995631784,
+        "pyqcd_generic": 0.025211230997228995,
+        "qcd_specialized": 0.02367051600595005
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.8959743857355192,
+      "qcd_specialized_over_opt_einsum_dp": 0.8412193772214016,
+      "relative_errors": {
+        "opt_einsum_dp": 2.6181933893410276e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.3278971850361984e-15
+      },
+      "seq": 1743,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.028138338995631784
+        ],
+        "pyqcd_generic": [
+          0.025211230997228995
+        ],
+        "qcd_specialized": [
+          0.02367051600595005
+        ]
+      }
+    },
+    {
+      "arity": 16,
+      "equation": "cadb,egfh,mknl,ospt,iwjx,qurv,ac,mo,gi,kq,su,bd,fnp,hj,lr,tvx->ew",
+      "medians_s": {
+        "opt_einsum_dp": 0.018650459998752922,
+        "pyqcd_generic": 0.011717020999640226,
+        "qcd_specialized": 0.009592611022526398
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.6282430031443564,
+      "qcd_specialized_over_opt_einsum_dp": 0.514336430477737,
+      "relative_errors": {
+        "opt_einsum_dp": 1.9331794352520707e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 8.591908601120315e-16
+      },
+      "seq": 1864,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.018650459998752922
+        ],
+        "pyqcd_generic": [
+          0.011717020999640226
+        ],
+        "qcd_specialized": [
+          0.009592611022526398
+        ]
+      }
+    },
+    {
+      "arity": 16,
+      "equation": "cadb,egfh,mknl,oqpr,isjt,wuxv,ac,mo,gi,kq,uw,bd,fnp,hj,lrt,vx->es",
+      "medians_s": {
+        "opt_einsum_dp": 0.0286079189972952,
+        "pyqcd_generic": 0.025102799001615494,
+        "qcd_specialized": 0.023044111003400758
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.8774772818669158,
+      "qcd_specialized_over_opt_einsum_dp": 0.8055151094904706,
+      "relative_errors": {
+        "opt_einsum_dp": 2.4583378237162464e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 6.9498259639809025e-15
+      },
+      "seq": 879,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0286079189972952
+        ],
+        "pyqcd_generic": [
+          0.025102799001615494
+        ],
+        "qcd_specialized": [
+          0.023044111003400758
+        ]
+      }
+    },
+    {
+      "arity": 6,
+      "equation": "cadb,menf,ac,em,Mbd,Nfn->MN",
+      "medians_s": {
+        "opt_einsum_dp": 0.0010598039953038096,
+        "pyqcd_generic": 0.0007468870026059449,
+        "qcd_specialized": 0.0005427230207715183
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.7047406934825131,
+      "qcd_specialized_over_opt_einsum_dp": 0.5120975417873738,
+      "relative_errors": {
+        "opt_einsum_dp": 0.0,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.729468684377842e-15
+      },
+      "seq": 2583,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0010598039953038096
+        ],
+        "pyqcd_generic": [
+          0.0007468870026059449
+        ],
+        "qcd_specialized": [
+          0.0005427230207715183
+        ]
+      }
+    },
+    {
+      "arity": 7,
+      "equation": "agbh,codp,emfn,ce,mo,Mbdf,Nnph->MNag",
+      "medians_s": {
+        "opt_einsum_dp": 1.6484739400038961,
+        "pyqcd_generic": 1.6460179499990772,
+        "qcd_specialized": 1.635460443008924
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.998510143263282,
+      "qcd_specialized_over_opt_einsum_dp": 0.9921057308343367,
+      "relative_errors": {
+        "opt_einsum_dp": 0.0,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 0.0
+      },
+      "seq": 2590,
+      "times_s": {
+        "opt_einsum_dp": [
+          1.6484739400038961
+        ],
+        "pyqcd_generic": [
+          1.6460179499990772
+        ],
+        "qcd_specialized": [
+          1.635460443008924
+        ]
+      }
+    },
+    {
+      "arity": 9,
+      "equation": "cadb,menf,gohp,ac,em,og,Nbd,Nfn,Mph->MN",
+      "medians_s": {
+        "opt_einsum_dp": 0.0014339539920911193,
+        "pyqcd_generic": 0.0012063190224580467,
+        "qcd_specialized": 0.000757097004679963
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.8412536448947605,
+      "qcd_specialized_over_opt_einsum_dp": 0.527978588473328,
+      "relative_errors": {
+        "opt_einsum_dp": 2.0909087207578675e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.605964513984114e-15
+      },
+      "seq": 3431,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0014339539920911193
+        ],
+        "pyqcd_generic": [
+          0.0012063190224580467
+        ],
+        "qcd_specialized": [
+          0.000757097004679963
+        ]
+      }
+    },
+    {
+      "arity": 10,
+      "equation": "akbl,cidj,egfh,ompn,ce,Gmo,gi,Nbdf,Mnp,Mhjl->NMGak",
+      "medians_s": {
+        "opt_einsum_dp": 2.013547551992815,
+        "pyqcd_generic": 6.290150118991733,
+        "qcd_specialized": 2.2656546359939966
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 3.123914363366462,
+      "qcd_specialized_over_opt_einsum_dp": 1.1252054284745698,
+      "relative_errors": {
+        "opt_einsum_dp": 2.205525466079555e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.6781380659537456e-15
+      },
+      "seq": 6070,
+      "times_s": {
+        "opt_einsum_dp": [
+          2.013547551992815
+        ],
+        "pyqcd_generic": [
+          6.290150118991733
+        ],
+        "qcd_specialized": [
+          2.2656546359939966
+        ]
+      }
+    },
+    {
+      "arity": 12,
+      "equation": "cadb,menf,gohp,kilj,ac,em,og,ik,bd,Mfn,Mph,jl->M",
+      "medians_s": {
+        "opt_einsum_dp": 0.0014438139915000647,
+        "pyqcd_generic": 0.0010834260028786957,
+        "qcd_specialized": 0.0006093439878895879
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.7503916773607795,
+      "qcd_specialized_over_opt_einsum_dp": 0.42203773580037407,
+      "relative_errors": {
+        "opt_einsum_dp": 1.981287908938801e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.4586626257989054e-15
+      },
+      "seq": 6911,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0014438139915000647
+        ],
+        "pyqcd_generic": [
+          0.0010834260028786957
+        ],
+        "qcd_specialized": [
+          0.0006093439878895879
+        ]
+      }
+    },
+    {
+      "arity": 12,
+      "equation": "cidj,monp,gehf,kalb,ac,Gem,Hog,ik,bd,Mfn,Mph,jl->MGH",
+      "medians_s": {
+        "opt_einsum_dp": 0.005917990987654775,
+        "pyqcd_generic": 0.004253552004229277,
+        "qcd_specialized": 0.0015613970172125846
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.7187493210284367,
+      "qcd_specialized_over_opt_einsum_dp": 0.2638390326159227,
+      "relative_errors": {
+        "opt_einsum_dp": 1.0471562643948858e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 8.835380980831849e-16
+      },
+      "seq": 7798,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.005917990987654775
+        ],
+        "pyqcd_generic": [
+          0.004253552004229277
+        ],
+        "qcd_specialized": [
+          0.0015613970172125846
+        ]
+      }
+    },
+    {
+      "arity": 13,
+      "equation": "asbt,cqdr,ekfl,ogph,imjn,ce,Gmo,Hgi,kq,bdf,Mnp,Mhj,lrt->MGHas",
+      "medians_s": {
+        "opt_einsum_dp": 0.039810649992432445,
+        "pyqcd_generic": 0.07046173998969607,
+        "qcd_specialized": 0.07253952001337893
+      },
+      "path": "kupl_topology",
+      "pyqcd_generic_over_opt_einsum_dp": 1.769921867718564,
+      "qcd_specialized_over_opt_einsum_dp": 1.8221134301290705,
+      "relative_errors": {
+        "opt_einsum_dp": 1.7388218077089237e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 0.0
+      },
+      "seq": 7918,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.039810649992432445
+        ],
+        "pyqcd_generic": [
+          0.07046173998969607
+        ],
+        "qcd_specialized": [
+          0.07253952001337893
+        ]
+      }
+    },
+    {
+      "arity": 16,
+      "equation": "cudv,esft,mqnr,okpl,igjh,waxb,ac,mo,gi,kq,uw,Nbd,Nfnp,Mhj,Mlrt,Mvx->NMes",
+      "medians_s": {
+        "opt_einsum_dp": 1.7436785429890733,
+        "pyqcd_generic": 1.9430451200169045,
+        "qcd_specialized": 1.684528596000746
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 1.1143367725831335,
+      "qcd_specialized_over_opt_einsum_dp": 0.9660774933394944,
+      "relative_errors": {
+        "opt_einsum_dp": 2.222967511244203e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.299621563356072e-16
+      },
+      "seq": 5920,
+      "times_s": {
+        "opt_einsum_dp": [
+          1.7436785429890733
+        ],
+        "pyqcd_generic": [
+          1.9430451200169045
+        ],
+        "qcd_specialized": [
+          1.684528596000746
+        ]
+      }
+    },
+    {
+      "arity": 16,
+      "equation": "ckdl,egfh,munv,oapb,isjt,qwrx,ac,mo,gi,kq,su,bd,fnp,hj,lr,tvx->ew",
+      "medians_s": {
+        "opt_einsum_dp": 0.23956158402143046,
+        "pyqcd_generic": 0.19539977802196518,
+        "qcd_specialized": 0.18831045800470747
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.815655727190739,
+      "qcd_specialized_over_opt_einsum_dp": 0.7860628354663984,
+      "relative_errors": {
+        "opt_einsum_dp": 2.6602264270749666e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.6884851111940812e-15
+      },
+      "seq": 2139,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.23956158402143046
+        ],
+        "pyqcd_generic": [
+          0.19539977802196518
+        ],
+        "qcd_specialized": [
+          0.18831045800470747
+        ]
+      }
+    },
+    {
+      "arity": 16,
+      "equation": "ckdl,esft,mgnh,owpx,iajb,qurv,ac,mo,gi,kq,su,bd,fnp,hj,lr,tvx->ew",
+      "medians_s": {
+        "opt_einsum_dp": 1.387625234987354,
+        "pyqcd_generic": 2.4729754920117557,
+        "qcd_specialized": 2.4412478590093087
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 1.7821638218004108,
+      "qcd_specialized_over_opt_einsum_dp": 1.7592991230312678,
+      "relative_errors": {
+        "opt_einsum_dp": 2.6453768493241665e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.5233077794499572e-15
+      },
+      "seq": 2161,
+      "times_s": {
+        "opt_einsum_dp": [
+          1.387625234987354
+        ],
+        "pyqcd_generic": [
+          2.4729754920117557
+        ],
+        "qcd_specialized": [
+          2.4412478590093087
+        ]
+      }
+    },
+    {
+      "arity": 16,
+      "equation": "cadb,egfh,msnt,oupv,iwjx,qkrl,ac,mo,gi,kq,su,bd,fnp,hj,lr,tvx->ew",
+      "medians_s": {
+        "opt_einsum_dp": 0.010887014999752864,
+        "pyqcd_generic": 0.007036311988485977,
+        "qcd_specialized": 0.006200350995641202
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.6463031408191963,
+      "qcd_specialized_over_opt_einsum_dp": 0.5695179988070146,
+      "relative_errors": {
+        "opt_einsum_dp": 1.870453432885183e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.4982751938362098e-15
+      },
+      "seq": 1872,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.010887014999752864
+        ],
+        "pyqcd_generic": [
+          0.007036311988485977
+        ],
+        "qcd_specialized": [
+          0.006200350995641202
+        ]
+      }
+    },
+    {
+      "arity": 9,
+      "equation": "cadb,monp,gehf,ac,em,og,Nbd,Mfn,Mph->NM",
+      "medians_s": {
+        "opt_einsum_dp": 0.0025976430042646825,
+        "pyqcd_generic": 0.0017787429969757795,
+        "qcd_specialized": 0.001239339995663613
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.6847526754275036,
+      "qcd_specialized_over_opt_einsum_dp": 0.4771017393956466,
+      "relative_errors": {
+        "opt_einsum_dp": 1.6296107528246038e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 3.492023041767008e-16
+      },
+      "seq": 5172,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0025976430042646825
+        ],
+        "pyqcd_generic": [
+          0.0017787429969757795
+        ],
+        "qcd_specialized": [
+          0.001239339995663613
+        ]
+      }
+    },
+    {
+      "arity": 9,
+      "equation": "cedf,monp,gahb,ac,Gem,og,Nbd,Mfn,Mph->NMG",
+      "medians_s": {
+        "opt_einsum_dp": 0.007924153003841639,
+        "pyqcd_generic": 0.0035468659771140665,
+        "qcd_specialized": 0.00325494899880141
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.44760190463189464,
+      "qcd_specialized_over_opt_einsum_dp": 0.41076301747624094,
+      "relative_errors": {
+        "opt_einsum_dp": 1.0690974279005862e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 3.4790967145239417e-16
+      },
+      "seq": 6044,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.007924153003841639
+        ],
+        "pyqcd_generic": [
+          0.0035468659771140665
+        ],
+        "qcd_specialized": [
+          0.00325494899880141
+        ]
+      }
+    },
+    {
+      "arity": 9,
+      "equation": "codp,manb,gehf,ac,em,og,Nbd,Mfn,Mph->NM",
+      "medians_s": {
+        "opt_einsum_dp": 0.034885650005890056,
+        "pyqcd_generic": 0.01022620897856541,
+        "qcd_specialized": 0.009687245998065919
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.29313511363092926,
+      "qcd_specialized_over_opt_einsum_dp": 0.27768569587868747,
+      "relative_errors": {
+        "opt_einsum_dp": 1.7666013491515502e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.880545885651017e-15
+      },
+      "seq": 5175,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.034885650005890056
+        ],
+        "pyqcd_generic": [
+          0.01022620897856541
+        ],
+        "qcd_specialized": [
+          0.009687245998065919
+        ]
+      }
+    },
+    {
+      "arity": 9,
+      "equation": "codp,manb,gehf,ac,em,og,bd,fn,ph->",
+      "medians_s": {
+        "opt_einsum_dp": 0.00262342399219051,
+        "pyqcd_generic": 0.0006789269973523915,
+        "qcd_specialized": 0.0004232900100760162
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.2587942320316664,
+      "qcd_specialized_over_opt_einsum_dp": 0.1613502092441325,
+      "relative_errors": {
+        "opt_einsum_dp": 1.8884318135119664e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.6031863224745304e-16
+      },
+      "seq": 853,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.00262342399219051
+        ],
+        "pyqcd_generic": [
+          0.0006789269973523915
+        ],
+        "qcd_specialized": [
+          0.0004232900100760162
+        ]
+      }
+    },
+    {
+      "arity": 9,
+      "equation": "codp,menf,gahb,ac,em,og,bd,fn,ph->",
+      "medians_s": {
+        "opt_einsum_dp": 0.0013425530050881207,
+        "pyqcd_generic": 0.00047050099237821996,
+        "qcd_specialized": 0.0002510859922040254
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.3504524518548434,
+      "qcd_specialized_over_opt_einsum_dp": 0.18702128798821238,
+      "relative_errors": {
+        "opt_einsum_dp": 7.457479882997996e-16,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 7.457479882997996e-16
+      },
+      "seq": 854,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0013425530050881207
+        ],
+        "pyqcd_generic": [
+          0.00047050099237821996
+        ],
+        "qcd_specialized": [
+          0.0002510859922040254
+        ]
+      }
+    },
+    {
+      "arity": 9,
+      "equation": "cadb,monp,gehf,ac,em,og,bd,fn,ph->",
+      "medians_s": {
+        "opt_einsum_dp": 0.0013623030099552125,
+        "pyqcd_generic": 0.0004674119991250336,
+        "qcd_specialized": 0.0002483160060364753
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.3431042842226418,
+      "qcd_specialized_over_opt_einsum_dp": 0.18227663318797116,
+      "relative_errors": {
+        "opt_einsum_dp": 1.4318329107700488e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 3.9049988475546787e-16
+      },
+      "seq": 850,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0013623030099552125
+        ],
+        "pyqcd_generic": [
+          0.0004674119991250336
+        ],
+        "qcd_specialized": [
+          0.0002483160060364753
+        ]
+      }
+    },
+    {
+      "arity": 10,
+      "equation": "akbl,cgdh,emfn,oipj,ce,mo,gi,Nbdf,Nnp,Mhjl->MNak",
+      "medians_s": {
+        "opt_einsum_dp": 9.042994449991966,
+        "pyqcd_generic": 8.911093358998187,
+        "qcd_specialized": 8.878647859004559
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.9854140028811036,
+      "qcd_specialized_over_opt_einsum_dp": 0.9818260873766707,
+      "relative_errors": {
+        "opt_einsum_dp": 2.6517694306477516e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.8438677229639162e-15
+      },
+      "seq": 3457,
+      "times_s": {
+        "opt_einsum_dp": [
+          9.042994449991966
+        ],
+        "pyqcd_generic": [
+          8.911093358998187
+        ],
+        "qcd_specialized": [
+          8.878647859004559
+        ]
+      }
+    },
+    {
+      "arity": 13,
+      "equation": "cqdr,esft,mknl,ogph,iajb,ac,mo,gi,kq,bd,fnp,hj,lrt->es",
+      "medians_s": {
+        "opt_einsum_dp": 0.041506910987664014,
+        "pyqcd_generic": 0.015465261996723711,
+        "qcd_specialized": 0.014833485998678952
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.3725948674262953,
+      "qcd_specialized_over_opt_einsum_dp": 0.3573738841487749,
+      "relative_errors": {
+        "opt_einsum_dp": 1.423972986344997e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.1391783890759976e-15
+      },
+      "seq": 1838,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.041506910987664014
+        ],
+        "pyqcd_generic": [
+          0.015465261996723711
+        ],
+        "qcd_specialized": [
+          0.014833485998678952
+        ]
+      }
+    },
+    {
+      "arity": 13,
+      "equation": "csdt,eafb,mqnr,okpl,igjh,ac,mo,gi,kq,bd,fnp,hj,lrt->es",
+      "medians_s": {
+        "opt_einsum_dp": 0.012612118996912614,
+        "pyqcd_generic": 0.008961287006968632,
+        "qcd_specialized": 0.008196537994081154
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.7105298490414111,
+      "qcd_specialized_over_opt_einsum_dp": 0.6498938042122523,
+      "relative_errors": {
+        "opt_einsum_dp": 1.603149469439441e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.442834522495497e-15
+      },
+      "seq": 1844,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.012612118996912614
+        ],
+        "pyqcd_generic": [
+          0.008961287006968632
+        ],
+        "qcd_specialized": [
+          0.008196537994081154
+        ]
+      }
+    },
+    {
+      "arity": 13,
+      "equation": "csdt,egfh,mqnr,oapb,ikjl,ac,mo,gi,kq,bd,fnp,hj,lrt->es",
+      "medians_s": {
+        "opt_einsum_dp": 0.19658240201533772,
+        "pyqcd_generic": 0.1667315440136008,
+        "qcd_specialized": 0.16265393098001368
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.8481509143457923,
+      "qcd_specialized_over_opt_einsum_dp": 0.8274084013243623,
+      "relative_errors": {
+        "opt_einsum_dp": 2.1636421618089048e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.2730986566514185e-15
+      },
+      "seq": 1849,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.19658240201533772
+        ],
+        "pyqcd_generic": [
+          0.1667315440136008
+        ],
+        "qcd_specialized": [
+          0.16265393098001368
+        ]
+      }
+    },
+    {
+      "arity": 12,
+      "equation": "codp,manb,gihj,kelf,ac,em,og,ik,bd,Mfn,Mph,jl->M",
+      "medians_s": {
+        "opt_einsum_dp": 0.010886325006140396,
+        "pyqcd_generic": 0.002180295006837696,
+        "qcd_specialized": 0.0017337430035695434
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.20027833135680842,
+      "qcd_specialized_over_opt_einsum_dp": 0.1592587951022619,
+      "relative_errors": {
+        "opt_einsum_dp": 9.363408688845532e-16,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 0.0
+      },
+      "seq": 6924,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.010886325006140396
+        ],
+        "pyqcd_generic": [
+          0.002180295006837696
+        ],
+        "qcd_specialized": [
+          0.0017337430035695434
+        ]
+      }
+    },
+    {
+      "arity": 12,
+      "equation": "cedf,manb,gihj,kolp,ac,em,og,ik,bd,Mfn,Mph,jl->M",
+      "medians_s": {
+        "opt_einsum_dp": 0.002448412007652223,
+        "pyqcd_generic": 0.0015856499958317727,
+        "qcd_specialized": 0.0008711520058568567
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.6476238438939241,
+      "qcd_specialized_over_opt_einsum_dp": 0.35580286452368876,
+      "relative_errors": {
+        "opt_einsum_dp": 1.854601139682196e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.0864262821424702e-15
+      },
+      "seq": 6918,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.002448412007652223
+        ],
+        "pyqcd_generic": [
+          0.0015856499958317727
+        ],
+        "qcd_specialized": [
+          0.0008711520058568567
+        ]
+      }
+    },
+    {
+      "arity": 12,
+      "equation": "cidj,monp,gahb,kelf,ac,em,og,ik,bd,Mfn,Mph,jl->M",
+      "medians_s": {
+        "opt_einsum_dp": 0.01584125100634992,
+        "pyqcd_generic": 0.005833958013681695,
+        "qcd_specialized": 0.0051508109900169075
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.3682763445477361,
+      "qcd_specialized_over_opt_einsum_dp": 0.32515178175967413,
+      "relative_errors": {
+        "opt_einsum_dp": 1.8107489472263523e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.1758203327075358e-15
+      },
+      "seq": 6933,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.01584125100634992
+        ],
+        "pyqcd_generic": [
+          0.005833958013681695
+        ],
+        "qcd_specialized": [
+          0.0051508109900169075
+        ]
+      }
+    },
+    {
+      "arity": 12,
+      "equation": "cidj,monp,gahb,kelf,ac,em,og,ik,bd,fn,ph,jl->",
+      "medians_s": {
+        "opt_einsum_dp": 0.012208150001242757,
+        "pyqcd_generic": 0.0009050730150192976,
+        "qcd_specialized": 0.0005272830021567643
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.07413678689458793,
+      "qcd_specialized_over_opt_einsum_dp": 0.043191065157545436,
+      "relative_errors": {
+        "opt_einsum_dp": 9.321195248544228e-16,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 7.686454513350661e-16
+      },
+      "seq": 1621,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.012208150001242757
+        ],
+        "pyqcd_generic": [
+          0.0009050730150192976
+        ],
+        "qcd_specialized": [
+          0.0005272830021567643
+        ]
+      }
+    },
+    {
+      "arity": 12,
+      "equation": "cedf,monp,gihj,kalb,ac,em,og,ik,bd,fn,ph,jl->",
+      "medians_s": {
+        "opt_einsum_dp": 0.012118907005060464,
+        "pyqcd_generic": 0.0007084080134518445,
+        "qcd_specialized": 0.0003426189941819757
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.05845477757656166,
+      "qcd_specialized_over_opt_einsum_dp": 0.02827144345929126,
+      "relative_errors": {
+        "opt_einsum_dp": 2.1545625563516776e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 8.286779062891068e-16
+      },
+      "seq": 1608,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.012118907005060464
+        ],
+        "pyqcd_generic": [
+          0.0007084080134518445
+        ],
+        "qcd_specialized": [
+          0.0003426189941819757
+        ]
+      }
+    },
+    {
+      "arity": 12,
+      "equation": "codp,menf,gahb,kilj,ac,em,og,ik,bd,fn,ph,jl->",
+      "medians_s": {
+        "opt_einsum_dp": 0.0016673519858159125,
+        "pyqcd_generic": 0.0006793770007789135,
+        "qcd_specialized": 0.0003924999909941107
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.4074586569352739,
+      "qcd_specialized_over_opt_einsum_dp": 0.23540319880450575,
+      "relative_errors": {
+        "opt_einsum_dp": 1.605638766894453e-16,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 2.8901497804100153e-16
+      },
+      "seq": 1613,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.0016673519858159125
+        ],
+        "pyqcd_generic": [
+          0.0006793770007789135
+        ],
+        "qcd_specialized": [
+          0.0003924999909941107
+        ]
+      }
+    },
+    {
+      "arity": 16,
+      "equation": "cgdh,ekfl,mqnr,oapb,iujv,wsxt,ac,mo,gi,kq,uw,bd,fnp,hj,lrt,vx->es",
+      "medians_s": {
+        "opt_einsum_dp": 0.104227414005436,
+        "pyqcd_generic": 0.26912603600067087,
+        "qcd_specialized": 0.26081982502364554
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 2.5821041284458475,
+      "qcd_specialized_over_opt_einsum_dp": 2.5024109780757144,
+      "relative_errors": {
+        "opt_einsum_dp": 1.6963082228330893e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 0.0
+      },
+      "seq": 1030,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.104227414005436
+        ],
+        "pyqcd_generic": [
+          0.26912603600067087
+        ],
+        "qcd_specialized": [
+          0.26081982502364554
+        ]
+      }
+    },
+    {
+      "arity": 16,
+      "equation": "cudv,eqfr,mgnh,ospt,ikjl,waxb,ac,mo,gi,kq,uw,bd,fnp,hj,lrt,vx->es",
+      "medians_s": {
+        "opt_einsum_dp": 0.08559764199890196,
+        "pyqcd_generic": 0.21562851199996658,
+        "qcd_specialized": 0.20896190300118178
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 2.519094065730603,
+      "qcd_specialized_over_opt_einsum_dp": 2.4412109740577,
+      "relative_errors": {
+        "opt_einsum_dp": 1.8537295679636316e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 7.414918271854527e-16
+      },
+      "seq": 1562,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.08559764199890196
+        ],
+        "pyqcd_generic": [
+          0.21562851199996658
+        ],
+        "qcd_specialized": [
+          0.20896190300118178
+        ]
+      }
+    },
+    {
+      "arity": 16,
+      "equation": "cudv,eqfr,manb,ogph,ikjl,wsxt,ac,mo,gi,kq,uw,bd,fnp,hj,lrt,vx->es",
+      "medians_s": {
+        "opt_einsum_dp": 0.2372167049907148,
+        "pyqcd_generic": 0.18368678400292993,
+        "qcd_specialized": 0.1779958610131871
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.7743416890059233,
+      "qcd_specialized_over_opt_einsum_dp": 0.7503512917446277,
+      "relative_errors": {
+        "opt_einsum_dp": 2.2639643409136187e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.5270693027394953e-15
+      },
+      "seq": 1551,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.2372167049907148
+        ],
+        "pyqcd_generic": [
+          0.18368678400292993
+        ],
+        "qcd_specialized": [
+          0.1779958610131871
+        ]
+      }
+    },
+    {
+      "arity": 13,
+      "equation": "agbh,csdt,ekfl,oqpr,imjn,ce,mo,gi,kq,bdf,np,hj,lrt->as",
+      "medians_s": {
+        "opt_einsum_dp": 0.07254666299559176,
+        "pyqcd_generic": 0.04388745399774052,
+        "qcd_specialized": 0.03804823700920679
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.6049548274936823,
+      "qcd_specialized_over_opt_einsum_dp": 0.5244657085263695,
+      "relative_errors": {
+        "opt_einsum_dp": 1.892481226308702e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 0.0
+      },
+      "seq": 1668,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.07254666299559176
+        ],
+        "pyqcd_generic": [
+          0.04388745399774052
+        ],
+        "qcd_specialized": [
+          0.03804823700920679
+        ]
+      }
+    },
+    {
+      "arity": 13,
+      "equation": "agbh,cqdr,ekfl,ospt,imjn,ce,mo,gi,kq,bdf,np,hj,lrt->as",
+      "medians_s": {
+        "opt_einsum_dp": 0.015686549013480544,
+        "pyqcd_generic": 0.01053585801855661,
+        "qcd_specialized": 0.009403448988450691
+      },
+      "path": "kupl_dedicated",
+      "pyqcd_generic_over_opt_einsum_dp": 0.6716491950844263,
+      "qcd_specialized_over_opt_einsum_dp": 0.5994593827086921,
+      "relative_errors": {
+        "opt_einsum_dp": 1.7406685653491915e-15,
+        "pyqcd_generic": 0.0,
+        "qcd_specialized": 1.7406685653491915e-15
+      },
+      "seq": 1662,
+      "times_s": {
+        "opt_einsum_dp": [
+          0.015686549013480544
+        ],
+        "pyqcd_generic": [
+          0.01053585801855661
+        ],
+        "qcd_specialized": [
+          0.009403448988450691
+        ]
+      }
+    }
+  ],
+  "rounds": 1,
+  "scene": "full",
+  "strategies": [
+    "dp"
+  ],
+  "warmup": 0
+}

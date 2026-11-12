@@ -78,8 +78,9 @@ _NativeUnavailable = NativeUnavailable
 
 
 def library_path() -> Path:
-    """Return the archive this module would load (``PYQCD_EINSUM_LIB`` wins)."""
-    requested = os.environ.get("PYQCD_EINSUM_LIB")
+    """Return the packaged archive, with explicit/repository overrides."""
+    requested = (os.environ.get("PYQCD_EINSUM_KUPL_LIB")
+                 or os.environ.get("PYQCD_EINSUM_LIB"))
     if requested:
         return Path(requested).expanduser()
     if _PACKAGED_LIB.is_file():
