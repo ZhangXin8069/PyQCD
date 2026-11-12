@@ -796,3 +796,65 @@ python -m pyqcd.testing._topology_perf_compare       --sample 200 --dim 3
 python -m pyqcd.testing._topology_perf_compare_gpu   --sample 50  --dim 4 --rounds 2
 python -m pyqcd.testing._topology_perf_compare_gpu   --sample 20  --dim 3 --dtype complex128
 ```
+
+## 16. 复数特化验收：参考必须用 complex128 真值（2026-11-12）
+
+### 核心教训：不能用低精度结果当参考
+
+初版验收拿"通用路径的 complex64 结果"当基准，然后把特化路径判为"7 条超差
+（最差 1.48e-04）"。**这个判断是错的**，因为通用路径自身的 complex64 误差就有 1.5e-04
+（与 opt_einsum 的 complex64 同量级）。
+
+改用 **complex128 真值**（操作数升精度 + opt_einsum 固定 path）作参考后，结论完全翻转：
+
+| 指标 | 特化 c64 | 通用 c64 |
+|---|---:|---:|
+| 最大偏差（vs c128 真值） | **3.42e-05** | 1.50e-04 |
+| 更准的条数（全量 8638） | **1844** | 1045 |
+
+即**特化路径比通用路径准 4.4 倍**，之前判定的"超差"是参考选错造成的假象。
+
+### 正确判据
+
+| dtype | 判据 | 依据 |
+|---|---:|---|
+| complex128 | 1e-12 | 自身误差 ~1e-15，留 3 个数量级 |
+| **complex64** | **1e-4** | 该 dtype 在 13–16 算子链上的固有极限就是 ~3.4e-05 |
+| float64 | 1e-12 | 同上 |
+| float32 | 1e-4 | 同 §12 |
+
+**不要**对 complex64 用 1e-5——那是 float32 口径，对 14–16 算子链不成立。
+
+### 全量验收结果
+
+| dtype | 检查 | 特化真跑 | 通过 | 特化最大偏差 | 通用最大偏差 | 耗时 |
+|---|---:|---:|---:|---:|---:|---:|
+| complex128 | 8638 | 8638 | **8638** | 3.04e-14 | 1.58e-14 | 33 s |
+| complex64 | 8638 | 8638 | **8638** | **3.42e-05** | 1.50e-04 | 33 s |
+
+### 性能（10 条路径 × 3 档尺寸，opt_einsum 参考，交错 + 自洽性检查）
+
+**complex128**
+
+| dim | 工作集 | 层级 | 特化 | vs 通用 | vs opt_einsum | 最大偏差 |
+|---:|---:|---|---:|---:|---:|---:|
+| 4 | 0.04 MB | L1 | 0.09 ms | 0.36× | **0.27×** | 1.0e-15 |
+| 6 | 0.25 MB | L2 | 0.28 ms | 0.57× | **0.41×** | 1.8e-15 |
+| 8 | 0.91 MB | L3 | 0.70 ms | 0.65× | **0.50×** | 2.0e-15 |
+
+**complex64**
+
+| dim | 工作集 | 层级 | vs 通用 | vs opt_einsum | 最大偏差 |
+|---:|---:|---|---:|---:|---:|
+| 6 | 0.13 MB | L2 | 0.55× | **0.37×** | 6.6e-07 |
+| 8 | 0.46 MB | L3 | 0.60× | **0.46×** | 1.1e-06 |
+
+复数与实数的加速比同量级（2–3.7 倍），全部尺寸方向一致。
+
+### 复现
+
+```bash
+python -m pyqcd.testing._complex_specialized_verify --dtype complex128   # 全量正确性
+python -m pyqcd.testing._complex_specialized_verify --dtype complex64
+python -m pyqcd.testing._topology_perf_multidim --dtype complex128 --dims 4,6,8
+```

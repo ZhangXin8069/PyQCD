@@ -315,7 +315,6 @@ struct CblasApi {
 
     /* 实数两档必须齐备；复数两档按需（缺了就让该 dtype 回落，不影响实数）。 */
     bool complete() const { return sgemm != nullptr && dgemm != nullptr; }
-    bool complex_complete() const { return cgemm != nullptr && zgemm != nullptr; }
 };
 
 template <typename Function>
@@ -333,8 +332,8 @@ bool bind_symbol(void* handle, const char* name, Function* function) {
 bool bind_pair(void* handle, CblasApi* api) {
     const bool real = bind_symbol(handle, "cblas_sgemm", &api->sgemm) &&
                       bind_symbol(handle, "cblas_dgemm", &api->dgemm);
-    /* 复数符号是**可选**的：某些精简 BLAS 只导出实数入口。缺失时
-     * complex_complete() 为 false，复数 dtype 走回落路径。 */
+    /* 复数符号是**可选**的：某些精简 BLAS 只导出实数入口。缺失时该 dtype 在
+     * parse_table 被判为 UNSUPPORTED（按 dtype 分别判定），走回落路径。 */
     bind_symbol(handle, "cblas_cgemm", &api->cgemm);
     bind_symbol(handle, "cblas_zgemm", &api->zgemm);
     return real;
@@ -573,10 +572,13 @@ int parse_table(const void* data, long long length, int dtype_id, bool baseline,
         /* 只有这四种 IEEE 精度有数值路径：其它 dtype 明确报「不支持」。 */
         return QCD_DEDICATED_UNSUPPORTED;
     }
-    if ((table_dtype == QCD_DTYPE_COMPLEX64 || table_dtype == QCD_DTYPE_COMPLEX128) &&
-        !cblas_api().complex_complete()) {
-        /* 复数走 cgemm / zgemm。运行期 BLAS 只导出实数入口时，复数档**不硬错**、
-         * 也不隐式降精度，而是报 UNSUPPORTED 让上层回落到通用路径。 */
+    if (table_dtype == QCD_DTYPE_COMPLEX64 && cblas_api().cgemm == nullptr) {
+        /* 复数走 cgemm / zgemm，**按 dtype 分别放行**：只缺一边的符号时，另一边
+         * 仍然可以走特化（执行期 BlasGate<T> 是同一口径的二次守卫）。
+         * 缺符号时**不硬错**、也不隐式降精度，而是报 UNSUPPORTED 让上层回落。 */
+        return QCD_DEDICATED_UNSUPPORTED;
+    }
+    if (table_dtype == QCD_DTYPE_COMPLEX128 && cblas_api().zgemm == nullptr) {
         return QCD_DEDICATED_UNSUPPORTED;
     }
     if (num_operands < 1 || num_operands > kMaxOperands || num_slots < 0 ||

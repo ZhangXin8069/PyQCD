@@ -1039,3 +1039,126 @@ OpenBLAS 一定命中，**没法靠"这台机器没有复数 BLAS"来测回落**
 把操作数换成 `float64` 同样报同一句，因此与复数特化无关（属测试侧多画一个算子的笔误）。
 `_topology_kernel_contract` 在 dedicated 接管 complex64 后一度转红（§14.3 第 4 条），
 已在测试侧 patch 掉 dedicated 入口修复，现单跑 PASS。
+
+## 16. [S3] CUDA 步表入口的复数四精度实测（2026-11-12）
+
+范围：**只 CUDA**（`cpp/cuda/einsum`），KUPL 侧由 §15 记录。本机 RTX 4060 Laptop
+sm_89 + CuPy 14.2 + nvcc 12.4，`baseline=03210c3`；被测 `.so`
+`md5=948ebc80…`（加上 §16.5 的环境变量接缝后 `a42e74f6…`）。
+
+结论先说：`complex64/complex128` 的数值路径**已在 HEAD 里**（`GemmDispatch<cuFloatComplex/
+cuDoubleComplex>` + `AccumTraits` 升档），本轮工作是把它**测出来**并补上一处可测性接缝，
+不是重写。四 dtype × 20 条语料全部命中，复数精度分别落在 1e-15 / 1e-7 档。
+
+### 16.1 四 dtype 语料实测（20 条 `_wick_tasklist.TASKS`，dim 3/4 交替）
+
+语料取 `seq` 等距 20 条（1, 455, …, 8638），arity 6–16，参考值用**升精度后
+`contract(specialize=False)`** 重算（complex64→complex128、float32→float64）：
+
+| dtype | 命中 | 最大相对偏差 | 判据 | `try_dedicated` 中位（首轮含初始化） |
+|---|---|---:|---:|---:|
+| complex128 | 20/20 | **1.10e-15** | 1e-12 | 2.11 ms |
+| complex64 | 20/20 | **4.31e-07** | 1e-05 | 2.00 ms |
+| float64 | 20/20 | **8.66e-16** | 1e-12 | 1.91 ms |
+| float32 | 20/20 | **3.88e-07** | 1e-05 | 1.99 ms |
+
+`LAST_INFO['path'] == 'cuda_dedicated'`、结果 dtype 与形状逐条与参考一致。
+
+### 16.2 语料覆盖不到三条短路径，必须单独造形状
+
+16 算子方程基本都落在 GEMM 分支；`k==1 / n==1 / m==1` 与 `*StridedBatched` 要**按形状
+逼出来**，并用 `PYQCD_EINSUM_DEDICATED_TRACE=1` 的 trace 证明走的是哪条
+（trace 打印 `bmnk=` 与 `pack_a/b/c`；worktree 版本另有 `short path: scale (k==1)` /
+`reduce n==1 …` 行，按它一眼能看出进了短路径）：
+
+| 目标分支 | 造法（equation + 形状） | trace 证据 | complex64 偏差 |
+|---|---|---|---:|
+| `k==1` 纯缩放 | `ab,cb->ac`，(128,1)×(128,1) | `k=1` | 4.83e-08 |
+| `n==1` 归约 | `ab,cb->ac`，(1,4096)×(128,4096) | `bmnk=1,128,1,4096` | 3.30e-08 |
+| `m==1` 归约 | `ab,cb->ac`，(128,4096)×(1,4096) | `bmnk=1,1,128,4096` | 3.77e-08 |
+| StridedBatched | `abc,abd->acd`，(3,64,5)×(3,64,7) | batch=3 | 2.15e-07 |
+| batched+pack_c | `abc,abd->cad`，(4,32,5)×(4,32,7) | `pack_c=1` | 1.89e-07 |
+
+坑：`abc,bd->acd` 这类**只有一个操作数带 batch 轴**的式子，生成端会把 `a` 并进 `n`
+（trace 里 `bmnk=1,7,15,64`），batch 恒为 1 —— 想测 batched 分支必须让两侧**都**带
+该轴且它进输出（`abc,abd->…`）。只看"命中了 dedicated"会误以为 batch 路径被测过。
+
+### 16.3 双精度累加怎么证明（不要靠读代码）
+
+`complex64` 的归约分支升到 `cuDoubleComplex` 累加，与 KUPL 同口径。要**实测**它，
+构造单步长归约（`ab,cb->ac`，`m=n=1`，`k=65536`），再和"按存储精度累加"的模拟值对比：
+
+| dtype | CUDA 实测偏差 | 同精度累加模拟 | 分离度 |
+|---|---:|---:|---:|
+| complex64 | **1.15e-08** | 6.14e-06 | **534×** |
+| complex128 | 8.69e-15 | 8.33e-15 | 1.0（已在地板） |
+| float32 | **2.34e-08** | 2.26e-06 | **96×** |
+| float64 | 1.63e-14 | 1.79e-14 | 1.1（已在地板） |
+
+分离度 ≫ 10 就是"升档确实生效"的判据；若哪天有人把 `AccumTraits` 改回同精度，
+这两行会立刻塌到 1× 附近（而 20 条语料**照样全绿**——这就是必须单造长 k 的原因）。
+
+### 16.4 dtype 白名单 = 运行期 cuBLAS 符号，且**按 dtype 分别放行**
+
+`qcd_cuda_dedicated_dtypes()` 对 `cgemm/zgemm` 缺符号的处理比 KUPL 更细：
+KUPL 用 `complex_complete()`（c+z 必须**同时**齐备）保守地一起拒掉，
+CUDA 侧 `gemm_available(dtype)` 只看**自己那一个** dtype 的 base+StridedBatched。
+两档都是 fail open，差别只在"只剩 cgemm 的精简 BLAS"上：KUPL 拒 complex64，
+CUDA 放行 complex64。**这不是 bug，是口径差异**，改动时别互相抄。
+
+### 16.5 本轮唯一的代码改动：`PYQCD_EINSUM_CUBLAS_LIB` 接缝
+
+想测"缺符号 → status 4 → Python 返回 None"必须有反例库，但**用 `LD_LIBRARY_PATH`
+换不掉 cuBLAS**：`cpp/cuda/einsum` 链出来的 `.so` 带 `DT_RPATH=/…/miniforge3/lib`
+（`readelf -d | grep RPATH`），RPATH 优先于 `LD_LIBRARY_PATH`，塞空壳库不会生效。
+可行办法只有两条：patchelf 去掉 RPATH（本机没有），或在探测处开一个显式句柄口。
+
+故照抄 KUPL `load_cblas()` 的既有约定，加 15 行：`gemm_symbol_scope()` 读
+`PYQCD_EINSUM_CUBLAS_LIB`，命中就 `dlopen(RTLD_NOW|RTLD_LOCAL)` 并**只查该句柄**，
+否则退回 `RTLD_DEFAULT`（= 原行为，env 不设时逐位不变）。实测（三个手搓空壳库）：
+
+| 假 cuBLAS 导出 | mask | 白名单 | complex128 | complex64 | float32 |
+|---|---:|---|---|---|---|
+| 仅 `sgemm/dgemm`（无 `*StridedBatched`） | 0 | `[]` | 4 / None | 4 / None | 4 / None |
+| `+*StridedBatched` | 12 | `float64, float32` | **4 / None** | **4 / None** | 0 正常 |
+| `+cgemm(+batched)`，缺 `zgemm` | 14 | `complex64, float64, float32` | **4 / None** | 0 正常 | 0 正常 |
+
+第一行同时验证了头文件里"base 与 StridedBatched 两种变体都在才算可用"这条声明：
+只导出 base 时 mask=0。手工复现：
+
+```bash
+printf 'void cublasSgemm(void){}void cublasDgemm(void){}' > /tmp/fake_sd.c
+gcc -shared -fPIC -o /tmp/fake_sd.so /tmp/fake_sd.c
+# 只导出部分符号即可：探测只做 dlsym，不会真的调用这些函数
+PYQCD_EINSUM_CUBLAS_LIB=/tmp/fake_sd.so python -c \
+  'from pyqcd.einsum import _kernel_cuda as k; print(k.dedicated_dtypes())'
+```
+
+### 16.6 装配坑：`cpp/` 里编出来 ≠ Python 加载的那份
+
+`_cuda_library_path()` **优先**返回 `pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so`，
+`cpp/cuda/einsum/libpyqcdeinsum_cuda.so` 只是 symlink→`build/`。`make-nv.sh` 只写
+`cpp/`，不发包内那份；只编 `cpp/` 会让 Python 继续吃旧的包内 `.so`（本轮踩到：
+`build/` 已 948ebc80、包内还是更早的版本）。要么走 `setup.py` 安装流程，要么
+`cp build/libpyqcdeinsum_cuda.so pyqcd/einsum/cuda/`，然后 `md5sum` 两边对齐再测。
+另一个陷阱：本仓库可能**有别的 agent 同时在编译**（`ps -eo cmd | grep nvcc`），
+所以报告里的数字必须绑定被测 `.so` 的 md5，否则复现不出来。
+
+### 16.7 计时口径
+
+* 首次进 GEMM 的调用含 cuBLAS handle/context 初始化：本机实测 **35–45 ms**（复数）/
+  20–60 ms（实数，视上下文），第二发起回 ~2 ms。不预热就报"中位"会把初始化算进去。
+* dim 3/4 的小张量上，预热后仍只有 **0.39–0.43 ms**，慢于通用 CPU 路径的
+  **0.24–0.25 ms**（GPU 启动开销主导）。**dim 3/4 不是加速证据**，
+  不要把这里的数字写成"CUDA 更快"；`_dedicated_allowlist` 是按 dim 4/6/8 实测的
+  另一套表，勿混用。
+* 计时后必须 `cupy.cuda.get_current_stream().synchronize()`，否则测的是入队时间。
+
+### 16.8 观察到但未改的两处
+
+1. **零尺寸操作数**（如 `(0,4)×(4,3)`）走 native 会返回 status **1**（`INVALID`）而不是 4
+   （`UNSUPPORTED`）。功能上仍是 fail open（Python 拿到非 0 即回落、结果正确），
+   只是语义上"零维"不是非法参数。真实语料没有零维，故不改，仅记录。
+2. `qcd_cuda_permute/hadamard/batched_gemm` 在 `.so` 里是 **weak** 符号、被 version
+   script 隐藏（`nm -D` 看不到，`nm --defined-only` 才有）。`make-nv.sh` 用后者检查，
+   不要因为 `nm -D` 缺符号就以为 provider 没编进去。

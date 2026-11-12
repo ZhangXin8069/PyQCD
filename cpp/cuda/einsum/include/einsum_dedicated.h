@@ -118,7 +118,11 @@ QCD_CUDA_DEDICATED_API int qcd_cuda_dedicated_apply(
  *
  * Python 侧用它裁剪 `dedicated_dtypes()`：缺符号的 dtype 不进白名单，
  * `try_dedicated` 对它返回 None（fail open，回落通用路径），不会把「本机不支持」
- * 误报成「数值错误」。查询只读符号表、不建 context、不碰设备，无卡机器返回 0。 */
+ * 误报成「数值错误」。查询只读符号表、不建 context、不碰设备，无卡机器返回 0。
+ *
+ * 诊断：设 `PYQCD_EINSUM_CUBLAS_LIB=<库路径>` 时只按该库的导出符号判定（与 KUPL 侧
+ * `PYQCD_EINSUM_CBLAS_LIB` 同一约定）。真实 cuBLAS 四个 dtype 恒齐备，这个入口的
+ * 唯一用途是构造「缺符号」反例、实测回落路径；取值为空或打不开时退回默认搜索。 */
 QCD_CUDA_DEDICATED_API int qcd_cuda_dedicated_dtypes(void);
 
 #ifdef __cplusplus

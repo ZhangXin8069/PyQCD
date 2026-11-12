@@ -704,35 +704,33 @@ int reduce_blocks(std::int64_t elements) {
     return static_cast<int>(std::min<std::int64_t>(blocks, 65535));
 }
 
-/* K == 1：纯缩放 C[b][m][n] = A[b][m] * B[b][n]（无归约，不进 BLAS）。 */
+/* K == 1：纯缩放 C[b][m][n] = A[b][m] * B[b][n]（无归约，不进 BLAS）。
+ * `plane` = m*n 由宿主侧算好传入，kernel 内不做可能溢出的乘法。 */
 template <typename T>
-__global__ void scale_k1_kernel(const T* a, const T* b, T* c, std::int64_t batch,
+__global__ void scale_k1_kernel(const T* a, const T* b, T* c, std::int64_t total,
                                 std::int64_t m, std::int64_t n) {
-    const std::int64_t total = batch * m * n;
+    const std::int64_t plane = m * n;
     const std::int64_t stride = static_cast<std::int64_t>(blockDim.x) * gridDim.x;
     for (std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          index < total; index += stride) {
-        const std::int64_t group = index / (m * n);
-        const std::int64_t rest = index % (m * n);
+        const std::int64_t group = index / plane;
+        const std::int64_t rest = index - group * plane;
         const std::int64_t row = rest / n;
-        const std::int64_t column = rest % n;
-        const auto product =
-            type_mul(a[group * m + row], b[group * n + column]);
-        c[index] = product;
+        const std::int64_t column = rest - row * n;
+        c[index] = type_mul(a[group * m + row], b[group * n + column]);
     }
 }
 
 /* N == 1：C[b][m] = Σ_k A[b][m][k] · B[b][k]，**双精度累加**（见 AccumTraits）。 */
 template <typename T>
-__global__ void reduce_n1_kernel(const T* a, const T* b, T* c, std::int64_t batch,
+__global__ void reduce_n1_kernel(const T* a, const T* b, T* c, std::int64_t total,
                                  std::int64_t m, std::int64_t k) {
     using Accum = typename AccumTraits<T>::accum;
-    const std::int64_t total = batch * m;
     const std::int64_t stride = static_cast<std::int64_t>(blockDim.x) * gridDim.x;
     for (std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          index < total; index += stride) {
         const std::int64_t group = index / m;
-        const std::int64_t row = index % m;
+        const std::int64_t row = index - group * m;
         const T* left = a + (group * m + row) * k;
         const T* right = b + group * k;
         Accum total_value = zero_accum(Accum{});
@@ -747,15 +745,14 @@ __global__ void reduce_n1_kernel(const T* a, const T* b, T* c, std::int64_t batc
 
 /* M == 1：C[b][n] = Σ_k A[b][k] · B[b][k][n]，同样双精度累加。 */
 template <typename T>
-__global__ void reduce_m1_kernel(const T* a, const T* b, T* c, std::int64_t batch,
+__global__ void reduce_m1_kernel(const T* a, const T* b, T* c, std::int64_t total,
                                  std::int64_t n, std::int64_t k) {
     using Accum = typename AccumTraits<T>::accum;
-    const std::int64_t total = batch * n;
     const std::int64_t stride = static_cast<std::int64_t>(blockDim.x) * gridDim.x;
     for (std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          index < total; index += stride) {
         const std::int64_t group = index / n;
-        const std::int64_t column = index % n;
+        const std::int64_t column = index - group * n;
         const T* left = a + group * k;
         const T* right = b + group * k * n;
         Accum total_value = zero_accum(Accum{});
@@ -786,10 +783,28 @@ int map_launch(cudaError_t error) {
  * 探测用 dlsym(RTLD_DEFAULT)：本 TU 已硬链 -lcublas，正常部署一律命中；探测的价值
  * 在于把"符号是否齐备"变成**数据**，而不是让缺符号在第一次调用时才暴露。
  * 每个 dtype 都要求 base 与 StridedBatched 两种变体齐备 —— 执行器在 batch>1 时
- * 只走后者，缺它就等于该 dtype 的完整路径不存在。 */
+ * 只走后者，缺它就等于该 dtype 的完整路径不存在。
+ *
+ * `PYQCD_EINSUM_CUBLAS_LIB` 指向一份显式库时，探测只看那**一个**句柄：与 KUPL 侧
+ * `load_cblas` 的 `PYQCD_EINSUM_CBLAS_LIB` 是同一条约定、同一个用途 —— 真实 cuBLAS
+ * 四个 dtype 全齐备，没有这个入口就无法构造"缺符号"的反例，回落路径只能靠读代码
+ * 断言。取值为空或打不开时退回 RTLD_DEFAULT，正常部署行为不变。 */
+void* gemm_symbol_scope() {
+    static void* const scope = []() -> void* {
+        const char* requested = std::getenv("PYQCD_EINSUM_CUBLAS_LIB");
+        if (requested != nullptr && requested[0] != '\0') {
+            if (void* handle = dlopen(requested, RTLD_NOW | RTLD_LOCAL)) {
+                return handle;
+            }
+        }
+        return RTLD_DEFAULT;
+    }();
+    return scope;
+}
+
 template <typename Function>
 bool bind_gemm_symbol(const char* name, Function* function) {
-    void* symbol = dlsym(RTLD_DEFAULT, name);
+    void* symbol = dlsym(gemm_symbol_scope(), name);
     if (symbol == nullptr) {
         *function = nullptr;
         return false;
@@ -1071,30 +1086,58 @@ int run_step_math(cublasHandle_t handle, const Step& step, const T* left, const 
         return QCD_STATUS_OK;
     }
     if (step.k == 1) {
-        const std::int64_t elements = step.batch * step.m * step.n;
+        std::int64_t elements = 0;
+        if (!checked_mul(step.batch, step.m, &elements) ||
+            !checked_mul(elements, step.n, &elements)) {
+            return QCD_STATUS_INVALID;
+        }
         if (elements == 0) {
             return QCD_STATUS_OK;
         }
+        if (trace_enabled()) {
+            std::fprintf(stderr, "[cuda-dedicated] short path: scale (k==1) elements=%lld\n",
+                         static_cast<long long>(elements));
+        }
         scale_k1_kernel<T><<<reduce_blocks(elements), kReduceThreads>>>(
-            left, right, result, step.batch, step.m, step.n);
+            left, right, result, elements, step.m, step.n);
         return map_launch(cudaGetLastError());
     }
     if (step.n == 1) {
-        const std::int64_t elements = step.batch * step.m;
+        std::int64_t elements = 0;
+        if (!checked_mul(step.batch, step.m, &elements)) {
+            return QCD_STATUS_INVALID;
+        }
         if (elements == 0) {
             return QCD_STATUS_OK;
         }
+        if (trace_enabled()) {
+            std::fprintf(stderr,
+                         "[cuda-dedicated] short path: reduce n==1 elements=%lld k=%lld "
+                         "(double accumulate)\n",
+                         static_cast<long long>(elements),
+                         static_cast<long long>(step.k));
+        }
         reduce_n1_kernel<T><<<reduce_blocks(elements), kReduceThreads>>>(
-            left, right, result, step.batch, step.m, step.k);
+            left, right, result, elements, step.m, step.k);
         return map_launch(cudaGetLastError());
     }
     if (step.m == 1) {
-        const std::int64_t elements = step.batch * step.n;
+        std::int64_t elements = 0;
+        if (!checked_mul(step.batch, step.n, &elements)) {
+            return QCD_STATUS_INVALID;
+        }
         if (elements == 0) {
             return QCD_STATUS_OK;
         }
+        if (trace_enabled()) {
+            std::fprintf(stderr,
+                         "[cuda-dedicated] short path: reduce m==1 elements=%lld k=%lld "
+                         "(double accumulate)\n",
+                         static_cast<long long>(elements),
+                         static_cast<long long>(step.k));
+        }
         reduce_m1_kernel<T><<<reduce_blocks(elements), kReduceThreads>>>(
-            left, right, result, step.batch, step.n, step.k);
+            left, right, result, elements, step.n, step.k);
         return map_launch(cudaGetLastError());
     }
     return GemmDispatch<T>::run(handle, step.batch, step.m, step.n, step.k, left, right,
