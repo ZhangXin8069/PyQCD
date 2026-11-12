@@ -286,25 +286,41 @@ check(
 
 ## Reproduce
 
-Two benchmark scripts, split by which kernel the shape lands on. Both take the
+Two benchmark scripts, named after the kernel each shape lands on. They take the
 same arguments — `cpu|gpu` then `single|double` — and use the same timing
 protocol (interleaved rounds, median of ratios, ~0.3 s per sample, correctness
-checked against `opt_einsum` before timing), so their numbers are comparable.
+checked against `opt_einsum` before timing), so their numbers are directly
+comparable.
+
+| Script | Covers | 15 paths |
+|---|---|---|
+| **generic-kernel benchmark** (`bench_generic`) | shapes that do **not** hit the `wick_12cases` corpus | matmul (real/complex), element-wise, outer, full/partial reduction, chain 3/4, hyper-edge, batched GEMM, ellipsis, batch×matrix, many small batches, trace, diagonal |
+| **specialized-kernel benchmark** (`bench_specialized`) | the topology-specialized corpus paths | 15 real equations, 6 to 16 operands (2pt/3pt/4pt/5pt/6pt geometry, with and without momentum projection) |
+
+### Generic-kernel benchmark (15 generic paths)
 
 ```bash
 python -m pyqcd.testing.einsum.bench_generic cpu double
+python -m pyqcd.testing.einsum.bench_generic cpu single
+python -m pyqcd.testing.einsum.bench_generic gpu double
+python -m pyqcd.testing.einsum.bench_generic --list
+```
+
+These run the generic pairwise planner. This is the script behind the two tables
+above.
+
+### Specialized-kernel benchmark (15 specialized paths)
+
+```bash
 python -m pyqcd.testing.einsum.bench_specialized cpu double
+python -m pyqcd.testing.einsum.bench_specialized cpu single
+python -m pyqcd.testing.einsum.bench_specialized gpu double
 python -m pyqcd.testing.einsum.bench_specialized --list
 ```
 
-* **`bench_generic`** — 15 structural categories that do **not** hit the
-  `wick_12cases` corpus: matmul, element-wise, outer, reductions, chains,
-  batched GEMM, ellipsis, trace, diagonal. These run the generic pairwise
-  planner. This is the script behind the two tables above.
-* **`bench_specialized`** — 15 real equations drawn from the corpus, spanning
-  6 to 16 operands, dispatched to the topology-specialized kernels. The `path`
-  column reports what actually ran (`kernel: …` or `plan-cache`); a `WRONG`
-  there means the numbers are invalid.
+Each row's `path` column reports what actually ran (`kernel: …` or
+`plan-cache`); a `WRONG` there means that row's numbers are invalid. The full
+list of specialized paths is in {doc}`appendix_specialized`.
 
 Both scripts are source-checkout only (they live under `pyqcd.testing`).
 

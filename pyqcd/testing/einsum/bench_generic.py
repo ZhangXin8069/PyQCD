@@ -1,4 +1,4 @@
-"""通用内核基准脚本：15 条通用收缩路径 vs opt_einsum。
+"""通用内核-基准脚本（generic-kernel benchmark）：15 种通用路径 vs opt_einsum。
 
 「通用路径」指**不命中** wick_12cases 特化语料的形状——走的是通用分步收缩
 （计划 + BLAS/逐元素），也是 `docs/*/performance.md` 里那两张表的口径。
@@ -142,7 +142,7 @@ def run(device="cpu", precision="double", rounds=3, quick=False,
     as_numpy = (lambda value: value.get()) if device == "gpu" else np.asarray
 
     print(f"pyqcd {pyqcd.__version__} {pyqcd.__file__}")
-    print(f"通用内核基准 | {device_name} | {precision} | {len(chosen)} 条路径 "
+    print(f"通用内核-基准脚本 | {device_name} | {precision} | {len(chosen)} 条路径 "
           f"| rounds={rounds}")
     print(f"{'case':26s} {'pyqcd(s)':>9s} {'opt(s)':>9s} {'ratio':>7s}  ok")
     print("-" * 62)
@@ -195,7 +195,7 @@ def run(device="cpu", precision="double", rounds=3, quick=False,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="通用内核基准：15 条通用收缩路径 vs opt_einsum")
+        description="通用内核-基准脚本：15 种通用路径 vs opt_einsum")
     parser.add_argument("device", nargs="?", default="cpu",
                         choices=("cpu", "gpu"))
     parser.add_argument("precision", nargs="?", default="double",

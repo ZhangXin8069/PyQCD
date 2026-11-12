@@ -262,22 +262,44 @@ check(
 `single|double`——计时协议也一致（交错轮次、比值取中位数、每条样本约 0.3 s、
 计时前先用 `opt_einsum` 校验数值），因此两者数字可直接横向比较。
 
+### 通用内核-基准脚本（15 种通用路径）
+
+通用路径指**不命中** `wick_12cases` 语料、走通用分步规划器的形状：
+
 ```bash
 python -m pyqcd.testing.einsum.bench_generic cpu double
+python -m pyqcd.testing.einsum.bench_generic cpu single
+python -m pyqcd.testing.einsum.bench_generic gpu double
+python -m pyqcd.testing.einsum.bench_generic --list
+```
+
+覆盖 15 种结构类别：matmul（实/复）、逐元素、外积、全归约、部分归约、
+3/4 算子链、hyper-edge、批量 GEMM、ellipsis、batch×matrix、many small
+batches、trace、diagonal。
+
+### 特化内核-基准脚本（15 种特化路径）
+
+特化路径指**命中**语料、走拓扑特化内核的形状：
+
+```bash
 python -m pyqcd.testing.einsum.bench_specialized cpu double
+python -m pyqcd.testing.einsum.bench_specialized cpu single
+python -m pyqcd.testing.einsum.bench_specialized gpu double
 python -m pyqcd.testing.einsum.bench_specialized --list
 ```
 
-* **`bench_generic`（通用内核-基准脚本）** —— 15 个**不**命中 `wick_12cases`
-  语料的结构类别：matmul、逐元素、外积、归约、链式、批量 GEMM、ellipsis、
-  迹、对角。走通用分步规划器。上面两张表就是用这个脚本测的。
-* **`bench_specialized`（特化内核-基准脚本）** —— 15 条取自语料的真实方程，
-  覆盖 6 到 16 个算子，走拓扑特化内核。`path` 列报告实际执行了什么
-  （`kernel: …` 或 `plan-cache`），出现 `WRONG` 说明那行数字无效。
+覆盖 15 条取自语料的真实方程，跨 6 到 16 个算子（2pt/3pt/4pt/5pt/6pt 几何，
+含与不含动量投影）。每行的 `path` 列据实报告实际执行了什么
+（`kernel: …` 或 `plan-cache`），出现 `WRONG` 说明该行数字无效。支持的全部
+路径见 {doc}`appendix_specialized`。
+
+两个脚本参数一致（先 `cpu|gpu` 再 `single|double`）、计时协议一致
+（交错轮次、比值取中位数、每条样本约 0.3 s、计时前先用 `opt_einsum` 校验
+数值），因此数字可直接横向比较。
 
 两个脚本都只在源码仓库可用（位于 `pyqcd.testing` 下）。
 
-### 基准脚本
+### 基准实现
 
 ```python
 import statistics
