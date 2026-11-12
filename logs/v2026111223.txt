@@ -1,0 +1,89 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-12 23:15:59 +0800
+批次: release-0.4.0-20261112
+主任务: PyQCD 0.4.0 production specialization release
+触发原因: 任务完成
+摘要: qcd-einsum production gating, release hardening, PyPI 0.4.0 publication and dual-remote dev57 delivery
+Git 根目录: /home/bingxing2/home/scx8080/PyQCD
+
+## 关键日志
+### S1 — 生产特化优化
+- 目标: 优化 qcd-einsum KUPL CPU 与 CUDA 特化路径，使用真实 full-scene 生产数据。
+- 操作: 完成资源门、workspace 生命周期复用、后端定向分派、热匹配与计划缓存优化。
+- 证据: 43 条 full-scene；CPU 42/43 不慢于 PyQCD generic，GPU 42/43 不慢；8638 条计划全部可规划。
+- 判断: 特化相对 PyQCD generic 普遍加速；CPU 相对 opt_einsum(dp) 仍有 7 条反例，未作全面领先声明。
+
+### S2 — 发布准备与文档
+- 目标: 发布 pyqcd 0.4.0，并更新中英文文档、性能和 skills。
+- 操作: 三处版本同步为 0.4.0；恢复 pyqcd/py.typed；更新 README、overview、install、performance、specialized appendix、release audit 与 skills。
+- 判断: 性能声明只使用 full-scene 证据，并明确资源门、fallback 和已知反例。
+
+### S3 — 发布门禁
+- 操作: CPU release_check、GPU 统一套件、KUPL/CUDA native、plan gate、hotpath、form audit 全部提交计算节点。
+- 结果: offline release_check 11/11；GPU 120 passed/1 skipped/0 failed；KUPL 16/16；CUDA 16/16；plan gate 12/12；hotpath 4/4；form audit unexpected=0。
+
+### S4 — sdist 漏包修复
+- 现象: 从 sdist 重建 wheel 时缺少 cpp/kupl/einsum/include/family_apply.h。
+- 根因: setuptools 84.2.1 的 PEP 517 sdist 路径未收录该文件，而直接 setup.py egg_info 可收录。
+- 修复: NativeSdist.make_release_tree() 在 manifest 处理完成后强制复制该原生头文件。
+- 结果: job 1648752 的 sdist 在 clean venv 中成功编译 KUPL，并验证纯 Python fallback。
+
+### S5 — 发布与远端交付
+- 操作: 上传 PyPI 0.4.0；GitLab/Gitee main 推送；创建并推送 annotated dev57。
+- 结果: PyPI 只包含 pyqcd-0.4.0.tar.gz；PyPI 远程安装 backend=kupl；GitLab/Gitee main=158f8e21；dev57 对象三端一致。
+- 结果: 在线 release_check 18/18，通过 PyPI、RTD en/zh 与双远端检查。
+
+## 验证与证据
+- PyPI: https://pypi.org/project/pyqcd/0.4.0/
+- sdist: 1,056,739 bytes；SHA-256 032a56302b50c8b1a500a0976a66615296bec6e34cbe2fec5d00ce7da29fa25e。
+- 发布提交: 158f8e21953d33c9d1c787fed35b8b813db50129。
+- 标签对象: dev57 = 4d80dd3172a1bce5f573d03ba5073c7b62760ddb。
+- 性能: CPU seq=6585 22.445 s -> 10.310 s；43 条最大相对误差 CPU 6.95e-15、GPU 6.68e-15。
+- 未验证项: 历史 tag 链中 5 个既有已推送标签注释缺 follow 前缀，本任务未改写。
+
+## 变更与产物
+- 文件: qcd-einsum KUPL/CUDA 实现、资源门、测试、双语文档、release audit、skills、py.typed、setup.py、MANIFEST.in。
+- 产物: PyPI sdist pyqcd-0.4.0.tar.gz；本地 dist 保留发布候选及旧失败产物备份。
+- 未改动范围: refer/ 只读参考库未修改。
+
+## 风险、限制与下一步
+- 风险: CPU 相对 opt_einsum(dp) 并非全面领先；资源不安全计划会主动 fallback。
+- 阻塞: 无。
+- 下一步: 无必须动作；后续修正必须发布新版本或新标签，不得覆盖 0.4.0。
+
+## 用户输入指令
+- 极致优化 PyQCD qcd-einsum 的 KUPL 版和 CUDA 版，使用生产场景和真实性能数据。
+- CPU/GPU 测试同时提交计算节点；超过 5 分钟检查，超过 10 分钟终止。
+- 将有益经验实时写入 docs 与 skills。
+- 使用 conda 配置缺失环境，发布 0.4.0，并更新文档数据与新的声明。
+- 尽快解决 sdist 发布阻塞，继续完成发布并汇报进度。
+
+## Agent 全文报告
+--- report begin ---
+状态: finished
+
+PyQCD 0.4.0 已完成生产特化优化与正式发布。
+
+改动内容:
+- KUPL/CUDA 特化路径加入生产资源门、workspace 生命周期复用、后端定向分派与完整语料缓存。
+- 版本同步为 0.4.0，恢复 PEP 561 py.typed，修复 sdist 原生头文件漏包。
+- 更新中英文性能页、概览、安装页、特化附录、发布审计与相关 skills。
+- 对外性能口径限定为 full-scene；CPU 对 PyQCD generic 42/43 不慢，GPU 42/43 不慢；不宣称 CPU 全面胜过 opt_einsum(dp)。
+
+验证结果:
+- offline release_check 11/11；online release_check 18/18。
+- GPU 统一套件 120 passed/1 skipped/0 failed；跳过项仅因节点无 xelatex。
+- KUPL/CUDA native 各 16/16；plan gate 12/12；hotpath 4/4；form audit 0 unexpected。
+- PyPI 远程安装成功，版本 0.4.0，site-packages 导入，backend=kupl。
+- sdist SHA-256 032a56302b50c8b1a500a0976a66615296bec6e34cbe2fec5d00ce7da29fa25e。
+
+交付:
+- PyPI: https://pypi.org/project/pyqcd/0.4.0/
+- 发布提交: 158f8e21953d33c9d1c787fed35b8b813db50129。
+- GitLab/Gitee main 已同步。
+- annotated dev57 已推送两端，tag 对象 4d80dd3172a1bce5f573d03ba5073c7b62760ddb。
+
+遗留:
+- 历史 tag 链存在 5 个既有已推送标签注释问题；按安全约束未改写，不影响 0.4.0 已发布版本。
+--- report end ---

@@ -825,3 +825,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## release-0.4.0-20261112 - final - 2026-11-12 23:15:59 +0800
+- 主任务: PyQCD 0.4.0 production specialization release
+- 日志文件: logs/v2026111223.txt
+- 文件大小: 5239 bytes
+- 触发原因: 任务完成
+- 关键内容: qcd-einsum production gating, release hardening, PyPI 0.4.0 publication and dual-remote dev57 delivery
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+

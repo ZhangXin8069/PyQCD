@@ -105,20 +105,22 @@
 5. 构建 sdist、twine check、内容洁净、绝对路径审计。
 6. 提交并双远端推送后，从 PyPI 新版本做干净 venv 安装复验。
 
-## 0.4.0 发布候选闭环（进行中）
+## 0.4.0 发布闭环（完成）
 
-用户指定目标版本为 `0.4.0`，PyPI 最新仍是 `0.3.9`，不存在同版本覆盖。
+用户指定目标版本为 `0.4.0`；发布前 PyPI 最新为 `0.3.9`，不存在同版本覆盖。
 
 | 门禁 | 0.4.0 候选状态 | 证据 |
 |---|---|---|
 | 版本三处同步 | PASS | `pyproject=pyqcd=einsum=0.4.0`，`__native_version__=0.1.0` 保持不动 |
-| PEP 561 | PASS（待打包复核） | `pyqcd/py.typed` 已恢复 |
+| PEP 561 | PASS | `pyqcd/py.typed` 已恢复，sdist/Wheel/远程安装均包含该文件 |
 | 发布依赖 | PASS | `build 1.6.1`、`twine 7.0.0`、`sphinx 9.0.4`、`gvar 13.1.10` 已安装到 `qcu` |
-| 文档数据 | PASS（待 Sphinx 门禁） | README/概览/性能/安装/特化附录已切换 0.4.0；CPU 正面声明限定为相对 PyQCD generic，保留 7 条 CPU 对 `opt_einsum(dp)` 退化 |
+| 文档数据 | PASS | README/概览/性能/安装/特化附录已切换 0.4.0；CPU 正面声明限定为相对 PyQCD generic，保留 7 条 CPU 对 `opt_einsum(dp)` 退化 |
 | CPU 发布门禁 | PASS | `release_check --offline`：`11/11`；完整测试由 GPU 作业承担 |
 | GPU 发布门禁 | PASS | 统一套件 `120 passed / 1 skipped / 0 failed`；KUPL/CUDA 均为 16/16 |
 | sdist / twine / 本地安装 | PASS | job `1648752`：隔离 sdist、`twine PASSED`、原生安装与纯 Python fallback 均通过 |
-| 双远端 / dev tag | PENDING | 全部门禁通过后执行 |
+| PyPI 上传 / 远程安装 | PASS | 发布 `pyqcd==0.4.0`，远程安装 job `1648812` 实测 `backend=kupl` |
+| 双远端 / dev tag | PASS | GitLab/Gitee `main=158f8e21`；annotated `dev57` 已推送两端 |
+| 在线终检 | PASS | job `1648826`：`18/18`，含 PyPI、RTD en/zh 与双远端 |
 
 性能发布口径固定为：
 
@@ -145,3 +147,14 @@ job `1648752` 复验：
 * `twine check` PASSED，无绝对路径；
 * clean venv 从 sdist 成功构建 KUPL wheel，`backend=kupl`；
 * `PYQCD_SKIP_NATIVE_BUILD=1` clean venv 成功安装，`backend=python`。
+
+### 发布结果
+
+* PyPI：https://pypi.org/project/pyqcd/0.4.0/
+* PyPI 文件：仅 `pyqcd-0.4.0.tar.gz`
+* sdist SHA-256：`032a56302b50c8b1a500a0976a66615296bec6e34cbe2fec5d00ce7da29fa25e`
+* 发布提交：`158f8e21953d33c9d1c787fed35b8b813db50129`
+* 发布标签：`dev57`
+* PyPI 远程安装：`0.4.0`，导入路径位于 venv `site-packages`，
+  `native_available=True`、`backend=kupl`
+* 历史标签链自检仍报告 5 个既有已推送标签注释问题；本任务未改写这些历史标签。
