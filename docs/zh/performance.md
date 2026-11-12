@@ -286,12 +286,21 @@ python -m pyqcd.einsum.bench_specialized cpu double
 python -m pyqcd.einsum.bench_specialized cpu single
 python -m pyqcd.einsum.bench_specialized gpu double
 python -m pyqcd.einsum.bench_specialized --list
+python -m pyqcd.einsum.bench_specialized --sample 16 --seed 0
 ```
 
 覆盖 15 条取自语料的真实方程，跨 6 到 16 个算子（2pt/3pt/4pt/5pt/6pt 几何，
 含与不含动量投影）。每行的 `path` 列据实报告实际执行了什么
 （`kernel: …` 或 `plan-cache`），出现 `WRONG` 说明该行数字无效。支持的全部
 路径见 {doc}`appendix_specialized`。
+
+`--sample N` 换成按元数分层从 8638 条语料里随机抽 `N` 条（排除固定 15 条），
+`--seed` 固定同一批抽样结果。固定 15 条只能说明"挑出来的能跑"，抽样才说明
+语料整体都落在同一执行路径上。
+
+若某行的 `path` 显示 `REF-FAIL`，是 `opt_einsum` 自己在该路径上要的中间体超出内存
+（高元数路径的 dp 只按 flops 选路，不管内存；实测 seq 3186 要 95.4 GiB），该行
+不给倍率、脚本继续跑后面的用例——**这不是内核错误**。
 
 两个脚本参数一致（先 `cpu|gpu` 再 `single|double`）、计时协议一致
 （交错轮次、比值取中位数、每条样本约 0.3 s、计时前先用 `opt_einsum` 校验

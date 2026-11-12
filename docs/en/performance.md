@@ -316,11 +316,22 @@ python -m pyqcd.einsum.bench_specialized cpu double
 python -m pyqcd.einsum.bench_specialized cpu single
 python -m pyqcd.einsum.bench_specialized gpu double
 python -m pyqcd.einsum.bench_specialized --list
+python -m pyqcd.einsum.bench_specialized --sample 16 --seed 0
 ```
 
 Each row's `path` column reports what actually ran (`kernel: …` or
 `plan-cache`); a `WRONG` there means that row's numbers are invalid. The full
 list of specialized paths is in {doc}`appendix_specialized`.
+
+`--sample N` instead draws `N` paths at random from the 8638-entry corpus,
+stratified by operand count and excluding the fixed 15; `--seed` pins the same
+draw. The fixed 15 only show that the hand-picked paths run — sampling shows the
+corpus as a whole lands on the same execution path.
+
+A row whose `path` reads `REF-FAIL` means `opt_einsum` itself needed more memory
+than available for that path (dp minimises flops only; seq 3186 asked for
+95.4 GiB). The row gets no ratio and the script moves on — **that is not a kernel
+failure**.
 
 Both scripts ship with the package (they live under `pyqcd/einsum/`), so
 `pip install pyqcd` is enough — no source checkout needed.

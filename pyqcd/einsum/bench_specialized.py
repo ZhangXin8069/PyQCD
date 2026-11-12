@@ -12,8 +12,12 @@
     python -m pyqcd.einsum.bench_specialized cpu single
     python -m pyqcd.einsum.bench_specialized gpu
     python -m pyqcd.einsum.bench_specialized --list     # 只列 15 条路径
+    python -m pyqcd.einsum.bench_specialized --sample 16 --seed 0
 
 15 条路径按元数与结构从 8638 条语料中挑选，覆盖 6/7/9/10/12/13/14/16 算子。
+``--sample N`` 改为从语料里按元数分层随机抽 ``N`` 条（排除这 15 条），
+给定 ``--seed`` 可复现——固定 15 条只说明"挑出来的能跑"，抽样才说明
+"语料整体都能跑"。
 
 **维度按操作数的物理角色取自生产代码**（``refer/sush/_distillation/contraction*.py``），
 不是统一的合成尺寸：
@@ -138,13 +142,61 @@ CASES: tuple[tuple[str, int, bool], ...] = (
 )
 
 
-def case_listing() -> list[tuple[str, str, int]]:
+def case_listing(cases=None) -> list[tuple[str, str, int]]:
     """(标签, 方程, 元数)；--list 用，不导入 opt_einsum。"""
     import pyqcd.einsum._wick_tasklist as tasklist
 
     by_seq = tasklist.by_seq()
     return [(label, by_seq[seq].equation, by_seq[seq].arity)
-            for label, seq, _ in CASES]
+            for label, seq, _ in (CASES if cases is None else cases)]
+
+
+def sample_cases(count: int = 16, seed: int = 0) -> list[tuple[str, int, bool]]:
+    """从 8638 条语料里**随机抽** ``count`` 条，排除固定那 15 条。
+
+    抽样必须可复现：给定 ``seed`` 时结果稳定，便于跨机器/跨版本对照。
+    覆盖尽量分散——先按元数分层，再在层内随机，避免抽到的全是同一档。
+    """
+    import pyqcd.einsum._wick_tasklist as tasklist
+
+    if count <= 0:
+        raise ValueError(f"sample count must be positive, got {count}")
+    used = {seq for _, seq, _ in CASES}
+    pool = [task for task in tasklist.TASKS if task.seq not in used]
+    if not pool:
+        raise ValueError("no unused corpus path left to sample")
+    # 按元数分层：层内顺序由 rng 置换决定，同 seed 下稳定。
+    by_arity: dict[int, list[int]] = {}
+    for task in pool:
+        by_arity.setdefault(task.arity, []).append(task.seq)
+    arities = sorted(by_arity)
+    rng = np.random.default_rng(seed)
+    picked: list[int] = []
+    # 轮流从各元数层抽，直到凑够 count 条。
+    cursors = {arity: 0 for arity in arities}
+    shuffled = {arity: rng.permutation(by_arity[arity]).tolist()
+                for arity in arities}
+    while len(picked) < count:
+        progressed = False
+        for arity in arities:
+            if len(picked) >= count:
+                break
+            layer = shuffled[arity]
+            index = cursors[arity]
+            if index < len(layer):
+                picked.append(layer[index])
+                cursors[arity] = index + 1
+                progressed = True
+        if not progressed:
+            break
+    by_seq = tasklist.by_seq()
+    cases = []
+    for seq in picked:
+        task = by_seq[seq]
+        # 复数/实数交替，兼顾 dtype 影响。
+        cases.append((f"sampled seq={seq} ({task.arity} ops)",
+                      seq, len(cases) % 2 == 0))
+    return cases
 
 
 def _builders(device):
@@ -261,7 +313,7 @@ def run(device="cpu", precision="double", rounds=3, quick=False,
     print(f"pyqcd {pyqcd.__version__} {pyqcd.__file__}")
     print(f"特化内核-基准脚本 | {device_name} | {precision} | {len(chosen)} 条路径 "
           f"| rounds={rounds}")
-    print(describe_scene(scene))
+    print(describe_scene(scene, scale=scale))
     print(f"{'case':30s} {'pyqcd(s)':>9s} {'opt(s)':>9s} {'ratio':>7s}  path")
     print("-" * 78)
 
@@ -272,7 +324,17 @@ def run(device="cpu", precision="double", rounds=3, quick=False,
         builder = arrays["complex" if is_complex else "real"]
         operands = operands_for(equation, dims, builder, task.roles)
 
-        reference = oe.contract(equation, *operands, optimize="dp")
+        try:
+            reference = oe.contract(equation, *operands, optimize="dp")
+        except MemoryError as exc:
+            # opt_einsum(dp) 只按 flops 选路，高元数路径可能要求上百 GiB 的
+            # 单步中间体（16 算子实测要过 95 GiB）。那是参考实现的病态，
+            # 不是内核错误：标 REF-FAIL、不给倍率，继续下一条。
+            print(f"{label:30s} {'-':>9s} {'-':>9s} {'-':>7s}  "
+                  f"REF-FAIL  {exc}")
+            del operands
+            release()
+            continue
         got = pe.contract(equation, *operands)
         ours_value = as_numpy(got)
         their_value = as_numpy(reference)
@@ -336,18 +398,25 @@ def main(argv: list[str] | None = None) -> int:
                         help="生产场景档位（默认 scene；full 需约 31 GB 内存）")
     parser.add_argument("--scale", type=int, default=None,
                         help="按 scale/32 同比缩放生产维度（覆盖默认场景）")
+    parser.add_argument("--sample", type=int, default=0, metavar="N",
+                        help="从语料随机抽 N 条新路径（排除固定 15 条）")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="抽样种子（配合 --sample 复现同一批路径）")
     parser.add_argument("--list", action="store_true", help="只列路径")
     args = parser.parse_args(argv)
 
+    if args.sample < 0:
+        parser.error("--sample must be positive")
+    chosen = sample_cases(args.sample, args.seed) if args.sample else list(CASES)
     if args.list:
-        # --list 不导入 opt_einsum / numpy 之外的东西，纯安装环境也能用。
+        # --list 不导入 opt_einsum，纯安装环境也能用。
         print(describe_scene(args.scene, scale=args.scale))
         print()
-        for index, (label, equation, arity) in enumerate(case_listing(), 1):
+        for index, (label, equation, arity) in enumerate(case_listing(chosen), 1):
             print(f"{index:2d}. {label:30s} arity={arity:2d}  {equation}")
         return 0
 
-    cases = CASES[:4] if args.quick else None
+    cases = chosen[:4] if args.quick else chosen
     return run(device=args.device, precision=args.precision,
                rounds=args.rounds, quick=args.quick, cases=cases,
                scene=args.scene, scale=args.scale)

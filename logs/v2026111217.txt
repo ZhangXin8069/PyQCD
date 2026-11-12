@@ -1,0 +1,96 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-12 17:14:14 +0800
+批次: 2026-11-12 einsum 抽样复核
+主任务: einsum 抽样复核（承接 run 20261111T152611.6bhu2O）
+触发原因: 任务完成
+摘要: bench_specialized --sample + REF-FAIL 降级 + 场景内存估算修正；118 passed
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 恢复现场（resume #einsum）
+- 目标: 承接 run 20261111T152611.6bhu2O，确认上一轮断点是否仍成立
+- 命令/操作: 读 run 目录 manifest/context/idle-nudge-last；`git log --oneline -20`；读 `skills/pyqcd-einsum/SKILL.md`
+- 关键输出: 上一轮终态 finished，唯一断点为「KUPL 拓扑入口每次 parse_execution_plan，size=4 >90 s」；技能卡 2026-11-12 已更正该断点在当前构建不可复现，执行层由 `kupl_dedicated` 打通（dim=4 中位 0.19×）
+- 退出码: 0
+- 证据与判断: 断点已闭合；唯一在途工作为 `pyqcd/einsum/bench_specialized.py` 未提交的 `--sample`（mtime 2026-11-12 16:34，早于本 run 16:52）
+
+### S2 — 抽样能力收尾与契约验证
+- 目标: 补齐 `--sample N/--seed` 并验证可复现性
+- 命令/操作: 读全文 411 行 → 清理死变量 `order`、与实现不符的注释、函数内重复 `import numpy`；`case_listing` 改显式 `is None`；计数非法改 `ValueError`；CLI 拦 `--sample<0`
+- 关键输出: n=1/8/16/100 抽样唯一、不泄漏固定 15 条、元数分层覆盖 6–16；同 seed 输出 md5 一致、异 seed 不同；`--sample -1` → usage error
+- 退出码: 0（契约脚本）/ 2（CLI 负值校验，预期）
+- 证据与判断: 抽样可复现且分层，固定 15 条之外的语料可被覆盖
+
+### S3 — 默认 scene 档内存断崖（实测）
+- 目标: 取 scene 档抽样性能数字
+- 命令/操作: `python -m pyqcd.einsum.bench_specialized --sample 8 --seed 0 --scene scene`（后台）+ `free -g`、`vmstat`、`/proc/<pid>/status`
+- 关键输出: RSS 15,143,624 kB、VmSwap 5,430,120 kB、系统 swap 进出 ~80 MB/s、CPU 13%、`wchan=__folio_lock_or_retry`；10 min 仅 83 s CPU
+- 退出码: 手动终止（thrashing）
+- 证据与判断: 单张 peram（40,64,4,4,50,50 complex128）= 1.53 GiB，6 传播子光操作数 ~9 GiB；`_bench_scene.py` 原写「82 MB / scene < 1 GB」差 20 倍，已更正为 1.53 GiB 与「~14 GB（16 算子 6 传播子）」，并注明 15 GB 机器须降到 `--scale 16`
+
+### S4 — opt_einsum 参考病态与降级
+- 目标: `--scale 16` 下跑完 8 条抽样
+- 命令/操作: `python -u -m pyqcd.einsum.bench_specialized --sample 8 --seed 0 --scale 16`
+- 关键输出: 首跑在 seq 3186（14 算子）被 `ArrayMemoryError: Unable to allocate 95.4 GiB … shape (32,32,50,50,50,50) complex128` 打断，后续用例全丢；加 REF-FAIL 降级后复跑完成
+- 退出码: 首跑 1 → 复跑 0
+- 证据与判断: dp 只按 flops 选路不管内存，属参考实现病态，不是内核错；现逐行打印 `REF-FAIL <异常>`、不给倍率、继续
+
+### S5 — 表头 scale 缺陷
+- 目标: 让输出标签与实际维度一致
+- 命令/操作: 对比 `--scale 16` 表头与 `_bench_scene.dims` 实际值
+- 关键输出: 修复前表头 `scene=scene Nx=64 Nev=50 Lt=40`，实际 Nx=16 Nev=50 Lt=32；`run()` 调 `describe_scene(scene)` 漏传 `scale`
+- 退出码: 0
+- 证据与判断: 已改为 `describe_scene(scene, scale=scale)`；修复后表头 `Nx=16 Nev=50 Lt=32 Mom=4`
+
+## 验证与证据
+- 测试/检查: `python -B -m pyqcd.testing`; `python -m pyqcd.testing.docs_examples --lang zh|en`; `python -m pyqcd.testing._topology_equations_contract`; `git diff --check`
+- 结果: 118 passed / 1 skipped / 0 failed；docs 各 18 ok / 2 skipped / 0 failed；6 passed；check 干净
+- 抽样基准: `--scale 16 --sample 8 --seed 0` → 7 条出数 + 1 REF-FAIL，7/7 命中 `kupl_dedicated`、0 WRONG，可用 4 条中位 0.33×（0.91/0.45/0.16/0.22×），16 算子 seq 6585 = 0.069 s vs 0.323 s（0.22×）；冒烟档同 seed → 8/8 命中、0 WRONG，可用 3 条中位 0.14×
+- 未验证项: 默认 scene 档与 full 档在本机无法测（内存不足）；高元数路径的 opt_einsum 对照在 REF-FAIL 用例上缺失
+
+## 变更与产物
+- 文件: `pyqcd/einsum/bench_specialized.py`、`pyqcd/einsum/_bench_scene.py`、`docs/zh/performance.md`、`docs/en/performance.md`、`skills/pyqcd-einsum/SKILL.md`
+- 产物: 抽样基准可直接复现（`--sample N --seed S`）；技能卡新增「抽样复核：固定 15 条之外的语料（2026-11-12）」
+- 未改动范围: 内核 C++/CUDA 源码、语料与注册表、测试套件
+
+## 风险、限制与下一步
+- 风险: 默认 scene 档在 ≤15 GB 机器上会 thrash，属环境限制而非内核问题；opt_einsum 在高元数路径上仍可能 REF-FAIL
+- 阻塞: 无
+- 下一步: 本次提交并推送；后续若要 scene/full 档数字，需 ≥16 GB 可用内存的机器，并把 `--scale` 与表头一并记录
+
+## 用户输入指令
+- resume[#einsum
+  20261111T152611.6bhu2O]
+- 简报进度
+- 继续
+- 不要干等,注意实时查看日志
+- 同时实时将经验写入skills
+
+## Agent 全文报告
+--- report begin ---
+resume #einsum 已收敛（承接 run 20261111T152611.6bhu2O，终态 finished）。
+
+改动内容
+- `pyqcd/einsum/bench_specialized.py`：收尾 `--sample N/--seed`（按元数分层抽样、排除固定 15 条、同 seed 可复现）；清理死变量 `order`、与实现不符的注释、函数内重复 import；`case_listing` 改显式 `is None`；计数非法抛 `ValueError`、CLI 拦 `--sample<0`；表头补 `scale`；`opt_einsum` 参考失败时逐行 `REF-FAIL` 降级。
+- `pyqcd/einsum/_bench_scene.py`：修正场景内存估算——scene 单张 peram 实为 1.53 GiB（原写 82 MB），6 传播子实测峰值 RSS 14.4 GiB；表里「< 1 GB」改为「~14 GB（16 算子 6 传播子）」并注明 15 GB 机器须降到 `--scale 16`。
+- `docs/zh|en/performance.md`：记录 `--sample/--seed` 与 `REF-FAIL` 语义。
+- `skills/pyqcd-einsum/SKILL.md`：新增「抽样复核」一节，含档位内存表、`--scale 16` 实测、`REF-FAIL` 判据、表头 `scale` 坑。
+
+推理依据
+- 上一轮唯一断点「`parse_execution_plan` 导致 size=4 >90 s」在 2026-11-12 已被判定当前构建不可复现，执行层由 `kupl_dedicated` 打通（dim=4 中位 0.19×），故不再追。
+- 唯一在途工作是今天 16:34 的未提交 `--sample`；固定 15 条只证明「挑出来的能跑」，抽样才证明 8638 条语料整体落同一执行路径。
+- 默认 scene 档 thrash 与 `opt_einsum` 95.4 GiB 均为实测：前者说明该档在本机不可用，后者说明参考实现的病态会误伤整条基准。
+
+验证结果
+- `--scale 16 --sample 8 --seed 0`：7 条出数 + 1 REF-FAIL，7/7 命中 `kupl_dedicated`、0 WRONG，可用 4 条中位 0.33×；16 算子 seq 6585 = 0.069 s vs 0.323 s（0.22×）。
+- 冒烟档同 seed：8/8 命中、0 WRONG，可用 3 条中位 0.14×。
+- 抽样契约：n=1/8/16/100 唯一、不泄漏固定 15 条、元数分层覆盖 6–16；同 seed md5 一致、异 seed 不同；`count=0/-3` → ValueError；`--sample -1` → exit=2。
+- `python -B -m pyqcd.testing`：118 passed / 1 skipped / 0 failed。
+- 文档门禁 zh/en 各 18 ok / 2 skipped / 0 failed；`_topology_equations_contract` 6 passed；`git diff --check` 干净。
+
+后续步骤
+- 本次提交并推送。
+- 遗留（非阻塞）：默认 scene 档需要 ≥16 GB 可用内存；`opt_einsum` 在高元数路径上仍可能 REF-FAIL。
+--- report end ---

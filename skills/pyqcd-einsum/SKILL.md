@@ -659,6 +659,43 @@ python -B -m pyqcd.testing                                    # 127 passed / 1 s
 **冷热差异极大**：首次调用含步表生成（冷 0.6×），命中缓存后热调用 **0.01×（快 100 倍）**。
 缓存上限 `_DEDICATED_CACHE_LIMIT = 32`，`_DEDICATED_PLAN_CACHE` 保存步表。
 
+### 抽样复核：固定 15 条之外的语料（2026-11-12）
+
+`python -m pyqcd.einsum.bench_specialized --sample N --seed S` 按元数分层从 8638 条语料
+随机抽 N 条（排除固定 15 条），同 seed 结果稳定——固定 15 条只证明"挑出来的能跑"，
+抽样才证明语料整体落同一执行路径。
+
+冒烟档实跑 8 条（seq 2584/2590/3436/866/1606/2650/3186/6585，元数 6–16）：
+**8/8 命中 `[kernel: kupl_dedicated]`，0 WRONG**；其中 5 条双方均 <1 ms 标
+`too_short` 不计入，3 条可用样本中位比值 **0.14×**。抽样只用于验证执行路径与数值，
+性能结论仍须 scene/full 档多轮复测。
+
+**抽样必须在装得下的档位跑**（2026-11-12 实测，本机 15 GB RAM）：
+
+| 档 | 单张 peram（complex128） | 6 传播子路径光操作数 | 结果 |
+|---|---:|---:|---|
+| `scene`（默认） | **1.53 GiB**（102,400,000 元素） | ~9 GiB | 16 算子实测 RSS **14.4 GiB** + 换出 5.4 GiB、CPU 仅 13% → thrashing，无可用数字 |
+| `--scale 16` | 312 MiB | ~1.9 GiB | 正常跑完 |
+
+`_bench_scene.py` 原写「本档 peram = 82 MB」「scene < 1 GB」是错的（差 20 倍，
+把 1.024e8 元素当成了 1.024e7），已按实测更正。**15 GB 机器跑 16 算子必须降到
+`--scale 16` 或 `smoke`**；换页后耗时不再反映内核质量。
+
+`--scale 16 --sample 8 --seed 0` 实跑（表头 `Nx=16 Nev=50 Lt=32 Mom=4`）：
+7 条出数 + 1 条 REF-FAIL，**7/7 命中 `kupl_dedicated`、0 WRONG**；可用 4 条
+比值 0.91/0.45/0.16/0.22×，中位 **0.33×**（3 条 `too_short` 不计入）；
+16 算子 seq 6585 为 0.069 s vs 0.323 s = **0.22×**。
+
+**参考实现的病态会打断整条基准**：`--scale 16` 下 seq 3186（14 算子）让
+`opt_einsum(dp)` 要 `(32,32,50,50,50,50)` complex128 的中间体 = **95.4 GiB**，
+直接 `ArrayMemoryError`，原脚本整体退出、后面用例全丢。dp 只按 flops 选路，不管内存。
+现改为逐行 `REF-FAIL` 降级：打印 `REF-FAIL <异常>`、不给倍率、继续下一条。
+**判据：一行 `REF-FAIL` 是参考算不动，不是内核错**，不要据此改内核。
+
+**表头必须带 `scale`**：`run()` 曾调用 `describe_scene(scene)` 而漏传 `scale`，
+`--scale 16` 时表头仍打印 `scene=Nx=64…`，照日志引用就会把数字贴到错误维度。
+已改 `describe_scene(scene, scale=scale)`；读历史日志先核对表头与 `--scale` 是否一致。
+
 ### 关键教训：大尺寸慢不是内核缺陷
 
 先看 `references/local-sizing.md`：本机 L2 1.25 MB/核、L3 24 MB、DRAM 带宽 31.8 GB/s。

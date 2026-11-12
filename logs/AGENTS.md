@@ -798,3 +798,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## 2026-11-12 einsum 抽样复核 - final - 2026-11-12 17:14:14 +0800
+- 主任务: einsum 抽样复核（承接 run 20261111T152611.6bhu2O）
+- 日志文件: logs/v2026111217.txt
+- 文件大小: 7550 bytes
+- 触发原因: 任务完成
+- 关键内容: bench_specialized --sample + REF-FAIL 降级 + 场景内存估算修正；118 passed
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
