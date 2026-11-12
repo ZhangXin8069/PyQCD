@@ -1162,3 +1162,98 @@ PYQCD_EINSUM_CUBLAS_LIB=/tmp/fake_sd.so python -c \
 2. `qcd_cuda_permute/hadamard/batched_gemm` 在 `.so` 里是 **weak** 符号、被 version
    script 隐藏（`nm -D` 看不到，`nm --defined-only` 才有）。`make-nv.sh` 用后者检查，
    不要因为 `nm -D` 缺符号就以为 provider 没编进去。
+
+## 17. [S2] KUPL 复数门改为**按 dtype 分别放行**（2026-11-12）
+
+§15 复核时结论是"四项交付源码里都已具备"，本轮把"已具备"逐条**实跑**了一遍，
+唯一发现需要改的是 §15.5 记下的那处口径不一致——`parse_table` 用
+`complex_complete()`（cgemm **且** zgemm）一把闸，而执行期 `BlasGate<T>` 只查自己
+那一个符号。任务书第 2 项写的是"BLAS 缺复数符号时返回 UNSUPPORTED"（按 dtype 语义），
+不是"两档齐备才放行"，故本轮把它对齐成按 dtype 放行。
+
+### 17.1 改动（`cpp/kupl/einsum/src/dedicated_apply.cpp`）
+
+| 位置 | 改动 |
+|---|---|
+| `CblasApi` | 删除 `complex_complete()`（唯一调用点已改，留着就是第二套口径） |
+| `parse_table` 复数门 | 拆成两条：`COMPLEX64 && cgemm == nullptr` → 4；`COMPLEX128 && zgemm == nullptr` → 4 |
+| `bind_pair` 注释 | 不再引用已删的 `complex_complete()` |
+
+`_kernel_kupl.py` 本轮**零改动**：`_DEDICATED_DTYPE_IDS` 的四档
+（complex128=0 / complex64=1 / float64=2 / float32=3）已在位，与
+`einsum_define.h:31-34`、`_native_plan.py::_DTYPE_IDS` 三方一致。
+
+### 17.2 判据：假 BLAS 必须**部分**导出才测得出差别
+
+`cblas_api()` 在本机一定命中 conda OpenBLAS（c/z 都齐备），所以"缺符号"只能用假 `.so`
+经 `PYQCD_EINSUM_CBLAS_LIB` 制造。两种反例库都要编：
+
+| 假 BLAS 导出 | complex64 | complex128 | float32/float64 |
+|---|---|---|---|
+| `sgemm,dgemm`（无复数） | 4（回落） | 4（回落） | 正常特化 |
+| `sgemm,dgemm,cgemm`（**缺 zgemm**） | **特化且数值正确**（改动前是 4） | 4（回落） | 正常特化 |
+
+第二行就是本轮的判据：改成按 dtype 放行后，只带 cgemm 的精简 BLAS 上 complex64
+能真跑（自写朴素 cgemm 与 `np.einsum` 逐元素 `allclose`），complex128 仍 fail closed。
+改动前同一构件下 complex64 也是 4 —— 没有这一行就证明不了改动生效。
+
+### 17.3 定向分支实跑（此前只测过命中路径，没测分支选择）
+
+用 `PYQCD_EINSUM_DEDICATED_TRACE=1` 取原生 step 行的 `bmnk/pack/trans`，确认**真的
+下发了目标分支**再比数值（complex128 vs opt_einsum 固定 path）：
+
+| 形态 | trace（bmnk / trans） | 偏差 |
+|---|---|---:|
+| `n==1`（`ab,ab->a`） | `5,1,1,900 / 00` | 4.99e-16 |
+| `m==1`（`a,ab->b`） | `1,5,1,900 / 10` | 2.23e-15 |
+| `k==1` 缩放（`ab,bc->ac`） | `1,6,4,1 / 11` | 0.00e+00 |
+| `transA`（`ba,bc->ac`） | `1,6,5,900 / 10` | 0.00e+00 |
+| `transB`（`ab,cb->ac`） | `1,6,5,900 / 01` | 0.00e+00 |
+| `batch>1`（`bij,bjk->bik`） | `3,6,5,7 / 11` | 1.89e-16 |
+| 非恒等输出轴序（`abc,acd->bd`） | `1,5,3,8 / 10`，pack=011 | 0.00e+00 |
+| 三算子链（`ab,bc,cd->ad`） | 两步 | 0.00e+00 |
+| 标量内积（`i,i->`） | `1,1,1,7 / 00` | 9.63e-17 |
+
+`out=` 原地写入（返回同一对象 + `LAST_INFO['out']=='provided'`）、`k==0` zero-fill
+（形状 `(2,0)`、dtype 保留、全零）在 complex64/128 两档均符合。
+
+### 17.4 双精度累加：用"注入灾难性抵消"而不是"看偏差小"
+
+§15.3 用长链放大误差，本轮换成更硬的判据：`1.0` 后跟 `k-1` 个 `1e-8`，**float32
+下 `1 + 1e-8` 直接舍回 1**，所以同精度顺序累加会把小项全丢掉。k=4000：
+
+| dtype | 分支 | kernel 偏差 | 同精度逐项累加 | 倍数 |
+|---|---|---:|---:|---:|
+| complex64 | `n==1` | **5.489e-08** | 3.999e-05 | **728.6x** |
+| complex64 | `m==1` | **3.393e-06** | 3.999e-05 | 11.8x |
+| complex128 | `n==1` | 2.420e-13 | 2.420e-13 | 1.0x（同精度，预期） |
+| complex128 | `m==1` | **8.881e-15** | 2.420e-13 | 27.2x |
+
+complex128 的 `1.0x` 不是没升档：`Accumulator<complex<double>>` 本来就是自身，
+同精度累加**就是**升档累加，两者必须相同。判据要按 dtype 分开写，否则会把正确行为
+判成失败（本轮先踩了一次：拿 complex128 要求 >10x，直接假 FAIL）。
+
+### 17.5 验收数字（本机，被测 `.so` md5 `6066867f…`）
+
+* `bash cpp/kupl/einsum/make.sh` → **SUCCESS**，`build.log` 里 **0 warning**；
+  `pyqcd/einsum/kupl/libpyqcdeinsum_kupl.so` 与 `build/` 逐字节 `cmp` 相同。
+* `python -m pyqcd.testing._double_precision_contract --dtype complex128 --sample 100`
+  → 特化真跑 **100/100**、失败 **0**、最大偏差 **2.42e-14**（中位 2.44e-16，门槛 1e-12）。
+* complex64 抽检 **120** 条（rtol 1e-5）→ 命中 **120/120**、超阈 **0**、最大
+  **5.06e-07**、中位 2.28e-07，结果 dtype 逐条仍是 complex64。
+* `python -B -m pyqcd.testing` → **118 passed, 1 skipped, 0 failed**（0 FAIL）。
+  任务书写的"当前 127 passed"与实测不符：`pyqcd/testing` 的汇总口径按 TESTS 元组
+  计数，本轮工作树 HEAD 下实测就是 118（同一命令连跑两次一致），不是本轮改动导致
+  ——本轮只动了一个 `.cpp` 的闸门判据与注释，Python 侧零改动。
+
+### 17.6 两条不属本轮范围的既有事实（别改错地方）
+
+1. `python -m pyqcd.testing._complex_precision_contract` 恒有 **1 failed**：
+   `test_mixed_complex_and_real_inputs_are_rejected` 要求公共入口 `contract` 显式
+   拒绝混合 dtype，而 `_api.py` 沿用 numpy 提升语义。该文件不在本任务授权范围
+   （任务书明确"严禁改 `_api.py`"），内核层 `test_mixed_precision_kernel_fails_closed`
+   已 PASS，故只记录不动。
+2. 并发注意：本轮运行期间**有别的 agent 同时在提交**，我的两处改动被
+   `05e75a7`（"十轮巡查脚本 + 复数验收脚本"）一并收进它自己的 commit。核对改动是否
+   还在，用 `grep -n "按 dtype 分别放行" cpp/kupl/einsum/src/dedicated_apply.cpp`
+   而不是看 `git status`（工作树干净≠改动丢了）。
