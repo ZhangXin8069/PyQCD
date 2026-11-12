@@ -68,8 +68,8 @@ with the same pack-heavy rule. The largest audited static arena was about
 correctness-preserving safety gates, not cosmetic heuristics.
 
 Full-scene maximum relative errors are `6.95e-15` on CPU and `6.68e-15` on GPU.
-Raw evidence lives in
-`data/runs/einsum-opt-20261112/expanded-paths-20261112/`.
+The committed measurement registry and command recipe are in
+`docs/einsum_production_optimization_20261112.md`.
 
 ```bash
 python -m pyqcd.testing.einsum.bench_opt_einsum_production --help

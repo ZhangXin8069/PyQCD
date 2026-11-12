@@ -63,8 +63,8 @@ pack-heavy 规则相同。审计中最大静态 arena 约 `5.04 PB`，最大单�
 `65.536P MAC`，因此这些是保证正确性与资源安全的门，不是装饰性启发式。
 
 43 条 full-scene 路径的最大相对误差为 CPU `6.95e-15`、GPU `6.68e-15`。
-原始证据位于
-`data/runs/einsum-opt-20261112/expanded-paths-20261112/`。
+已提交的测量台账与命令记录见
+`docs/einsum_production_optimization_20261112.md`。
 
 ```bash
 python -m pyqcd.testing.einsum.bench_opt_einsum_production --help
