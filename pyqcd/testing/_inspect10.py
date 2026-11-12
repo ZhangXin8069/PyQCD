@@ -222,7 +222,8 @@ def round9() -> None:
                 if pathlib.Path(p).name in {
                     "_complex_specialized_verify.py", "_inspect10.py",
                     "_topology_perf_multidim.py", "_dedicated_step_tables.py",
-                    "_wick_tasklist.py", "_topology_registry.py"}}
+                    "_wick_tasklist.py", "_topology_registry.py",
+                    "bench_generic.py", "bench_specialized.py"}}
     unexpected = [p for p in untracked if p not in expected]
     record("R9", "未跟踪文件（非预期）", not unexpected,
            f"预期新增 {len(expected)} 个，非预期 {len(unexpected)} 个: {unexpected[:3]}"

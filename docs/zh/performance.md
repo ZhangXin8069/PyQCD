@@ -258,7 +258,24 @@ check(
 
 ## 复现
 
-一份脚本出两张表、两种精度：`python bench.py cpu`，再 `python bench.py gpu`（默认双精度）；第二个参数传 `single` 可跑单精度，例如 `python bench.py cpu single`、`python bench.py gpu single`。
+两个基准脚本，按形状落到哪个内核来分。参数完全一致——先 `cpu|gpu`，再
+`single|double`——计时协议也一致（交错轮次、比值取中位数、每条样本约 0.3 s、
+计时前先用 `opt_einsum` 校验数值），因此两者数字可直接横向比较。
+
+```bash
+python -m pyqcd.testing.einsum.bench_generic cpu double
+python -m pyqcd.testing.einsum.bench_specialized cpu double
+python -m pyqcd.testing.einsum.bench_specialized --list
+```
+
+* **`bench_generic`（通用内核-基准脚本）** —— 15 个**不**命中 `wick_12cases`
+  语料的结构类别：matmul、逐元素、外积、归约、链式、批量 GEMM、ellipsis、
+  迹、对角。走通用分步规划器。上面两张表就是用这个脚本测的。
+* **`bench_specialized`（特化内核-基准脚本）** —— 15 条取自语料的真实方程，
+  覆盖 6 到 16 个算子，走拓扑特化内核。`path` 列报告实际执行了什么
+  （`kernel: …` 或 `plan-cache`），出现 `WRONG` 说明那行数字无效。
+
+两个脚本都只在源码仓库可用（位于 `pyqcd.testing` 下）。
 
 ### 基准脚本
 

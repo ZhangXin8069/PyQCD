@@ -137,9 +137,14 @@ def decompose(left: str, right: str, out: str) -> dict:
     if len(set(left)) != len(left) or len(set(right)) != len(right):
         raise AssertionError(f"repeated label inside one operand: {where}")
 
-    # 组内次序自由：把源张量里靠后的轴放在组内更靠后（步长更小），让最内层拷贝
-    # 在可能时取到 unit stride。batch/行/列的次序在 A、B、C 之间必须一致，否则
-    # 批量 GEMM 的对应关系会错位。
+    # 组内次序自由，但对**打包代价**有决定性影响：某一侧的最终轴序若恰好等于它
+    # 的源轴序，那次 pack 就退化成恒等排列，执行器直接跳过拷贝。
+    #
+    # batch 与 inner 是两侧共用的组，只能选一个顺序；这里用 reverse=True（源轴上
+    # 更靠后的标签排在组内更靠后），使右侧大张量保持恒等。历史教训：早期按左操作
+    # 数升序排序，令 1M 元素的右张量走非连续 pack，单步 7.94 ms（GEMM 仅 0.5 ms）。
+    # ``pyqcd/einsum/_kernel_kupl._dedicated_step`` 用真实元素数选大张量原序，
+    # 是同一原则的数据驱动版本；两者在等长时结果一致。
     batch.sort(key=left.index, reverse=True)
     rows.sort(key=left.index, reverse=True)
     inner.sort(key=left.index, reverse=True)

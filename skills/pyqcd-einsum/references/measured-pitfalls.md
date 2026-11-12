@@ -960,3 +960,91 @@ python -c "import pyqcd.einsum as pe; print(len(pe.specializations()))"   # 8638
 python -c "from pyqcd.einsum import _specialize as S; print(hasattr(S,'REGISTRY'))"  # False
 python -m pyqcd.einsum._specialize   # 必须打印 "8638 条语料全部命中（未命中 0 条）"
 ```
+
+## 19. 轴序选择让 pack 吃掉 93% 的时间（2026-11-12，重大性能修复）
+
+### 症状
+
+写「特化内核基准脚本」时发现：**特化路径比通用路径还慢**，而且尺寸越大越糟：
+
+| n | 特化 | 通用 | 比值 |
+|---:|---:|---:|---:|
+| 8 | 0.049 ms | 0.092 ms | 0.53×（快） |
+| 16 | 0.181 ms | 0.126 ms | 1.43× |
+| 32 | 10.371 ms | 1.218 ms | **8.52×** |
+| 48 | 85.869 ms | 9.329 ms | **9.20×** |
+
+### 定位手法（可复用）
+
+原生执行器自带 trace，**先开它再看代码**：
+
+```bash
+PYQCD_EINSUM_DEDICATED_TRACE=1 PYQCD_EINSUM_NOTICE=0 python -c "…contract(…)"
+```
+
+输出直接给出结论：
+
+```
+[dedicated] summary steps=5 pack_elements=2099200 | pack 10.753 ms gemm 0.764 ms unpack 0.000 ms
+```
+
+**pack 占 93%，GEMM 只占 7%。** 随后三个对照确定责任方：
+
+| 执行器 | 同方程 n=32 |
+|---|---:|
+| Python 步表 `execute()` | **0.708 ms** |
+| 通用路径 `specialize=False` | 2.126 ms |
+| 原生 KUPL 特化 | **11.77 ms** |
+
+纯 Python 都比原生快 16 倍 → 问题 100% 在原生打包，与路径/规划无关
+（`greedy`/`dp`/`optimal` 给出完全相同的 path 与 cost）。
+
+### 根因
+
+`_dedicated_step` 里组内排序用 `inner.sort(key=left.index)`：
+
+```
+cadb,ac->db   # A=ac  B=cadb   batch=[], inner=[a,c], rows=[], cols=[d,b]
+```
+
+按**左操作数**升序排 inner 得 `[a, c]` → `b_axes = [1,0,2,3]`（`a` 与 `c` 对调）
+→ 1M 元素的 `cadb` 必须做非连续 pack（1024 次 256 B 跨步 memcpy，缓存全 miss）。
+
+而 inner 组内顺序是**自由**的：GEMM 只要求两侧 K 轴顺序一致。改成 `[c, a]`
+后 `b_axes = [0,1,2,3]` **恒等**，原生直接跳过打包，代价转移到只有 1024 元素的
+A 侧。
+
+### 修法
+
+按**整张量元素数**选大者保留原序：
+
+```python
+prefer_right = element_count(right) > element_count(left)
+ordered_shared = right_shared if prefer_right else left_shared
+batch = [ch for ch in ordered_shared if ch in batch]
+inner = [ch for ch in ordered_shared if ch in inner]
+```
+
+原则：**大张量保持恒等（零拷贝），小张量去付置换的账。**
+
+### 效果
+
+| n | 修复前 | 修复后 | 提升 |
+|---:|---:|---:|---:|
+| 32 | 10.371 ms | **0.766 ms** | 13.5× |
+| 48 | 85.869 ms | **4.158 ms** | 20.7× |
+
+与 opt_einsum 对照（修复后）：0.40–0.48×，即**稳定快 2.1–2.5 倍**；
+修复前是 8.5× 慢。全量 8638 条正确性不变（float32 8638/0、complex128
+8638/0、complex64 8638/0）。
+
+### 教训
+
+1. **先开 trace，再读代码**：`PYQCD_EINSUM_DEDICATED_TRACE=1` 一行就分出
+   pack / gemm / unpack，比读 1000 行 C++ 快。
+2. **同路径不同执行器对比能立刻定位责任方**：Python 步表 vs 原生，同一条
+   path，谁慢谁有病。
+3. **"自由"的排序不是免费的**：组内顺序不影响语义，但对打包的访存模式有
+   数量级影响。凡是可以自由排序的维度，都要按访存代价选，而不是按索引升序。
+4. 两个生成端（`_kernel_kupl._dedicated_step` 与
+   `testing/_topology_kernel_gen.decompose`）必须同口径，改一处要查另一处。

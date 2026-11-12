@@ -286,7 +286,27 @@ check(
 
 ## Reproduce
 
-One script, both tables and both precisions: `python bench.py cpu` then `python bench.py gpu` (double by default), or append `single` for a faster run: `python bench.py cpu single` / `python bench.py gpu single`.
+Two benchmark scripts, split by which kernel the shape lands on. Both take the
+same arguments — `cpu|gpu` then `single|double` — and use the same timing
+protocol (interleaved rounds, median of ratios, ~0.3 s per sample, correctness
+checked against `opt_einsum` before timing), so their numbers are comparable.
+
+```bash
+python -m pyqcd.testing.einsum.bench_generic cpu double
+python -m pyqcd.testing.einsum.bench_specialized cpu double
+python -m pyqcd.testing.einsum.bench_specialized --list
+```
+
+* **`bench_generic`** — 15 structural categories that do **not** hit the
+  `wick_12cases` corpus: matmul, element-wise, outer, reductions, chains,
+  batched GEMM, ellipsis, trace, diagonal. These run the generic pairwise
+  planner. This is the script behind the two tables above.
+* **`bench_specialized`** — 15 real equations drawn from the corpus, spanning
+  6 to 16 operands, dispatched to the topology-specialized kernels. The `path`
+  column reports what actually ran (`kernel: …` or `plan-cache`); a `WRONG`
+  there means the numbers are invalid.
+
+Both scripts are source-checkout only (they live under `pyqcd.testing`).
 
 ### The benchmark
 
