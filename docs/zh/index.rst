@@ -20,6 +20,7 @@ PyQCD 中文文档
    install
    acknowledgements
    appendix
+   appendix_specialized
 
 从哪里开始
 ----------

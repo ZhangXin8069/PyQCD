@@ -38,6 +38,12 @@ runs on NumPy/CuPy, so its numbers describe planner plus backend.
 
 ### CPU (NumPy arrays, milliseconds)
 
+> **Historic data.** The two rows marked `(kernel)` — *nucleon 2pt* and
+> *gamma sandwich* — refer to the dedicated C++/CUDA kernels that were
+> **removed** when the library moved to the generic + topology-specialized
+> design. They are kept as a record of the retired implementation and are
+> **not reproducible** on the current tree.
+
 | Case | qcd | opt | einsums |
 |---|---:|---:|---:|
 | matmul 2D (real) | 718.7 | 713.0 | 944.8 |

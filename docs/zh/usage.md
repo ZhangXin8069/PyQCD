@@ -69,8 +69,27 @@ pe.contract("ij,jk->ik", a, b, specialize=False)
 assert np.allclose(pe.contract("ij,jk->ik", a, b, specialize=False), a @ b)
 ```
 
-环境变量开关：`PYQCD_EINSUM_SPECIALIZE=0`、`PYQCD_EINSUM_DISABLE_FUSED=1`、
-`PYQCD_EINSUM_KERNEL_KUPL=0`、`PYQCD_EINSUM_KERNEL_CUDA=0`。
+### 运行时提示（首次命中）
+
+两种内核都会在**首次执行**时打印一条提示（每形态每进程一次），据此可直接判断
+某次收缩走了哪条路：
+
+```
+[pyqcd.einsum] 专用路径: topology:9f3c... [kernel: kupl_dedicated] ...
+[pyqcd.einsum] 通用路径: 未命中特化形态 (ij,jk->ik)；执行的是通用分步收缩。...
+```
+
+* `专用路径 … [kernel: ...]` —— 跑了原生专用内核（快 2–4×）。
+* `专用路径 … [plan-cache]` —— 形态已知，但只复用了计划。
+* `通用路径 …` —— 未命中特化，走通用分步收缩。
+
+用 `PYQCD_EINSUM_NOTICE=0` 可完全关闭；用
+`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 可让特化提示**每次命中**都打印。
+支持的全部形态见 {doc}`appendix_specialized`。
+
+环境变量开关：`PYQCD_EINSUM_NOTICE=0`、`PYQCD_EINSUM_SPECIALIZE=0`、
+`PYQCD_EINSUM_DISABLE_FUSED=1`、`PYQCD_EINSUM_KERNEL_KUPL=0`、
+`PYQCD_EINSUM_KERNEL_CUDA=0`。
 
 ## 格点常数与 Dirac 代数
 

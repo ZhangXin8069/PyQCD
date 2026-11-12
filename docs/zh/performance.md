@@ -370,12 +370,6 @@ CASES = [
      [(8, 1024, 512), (512, 1024)]),
     ("many small batches", "bij,bjk->bik", random_array,
      [(4096, 64, 64), (4096, 64, 64)]),
-    ("nucleon 2pt (kernel)", "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M",
-     random_complex_array,
-     [(4, 4, 112, 112), (4, 4, 112, 112), (4, 4, 112, 112), (4, 4), (4, 4),
-      (4, 112, 112, 112), (4, 112, 112, 112), (4, 4)]),
-    ("gamma sandwich (kernel)", "ab,...bce,cd->...dae", random_complex_array,
-     [(4, 4), (8192, 4, 4, 1024), (4, 4)]),
 ]
 
 print(f"{'case':26s} {'pyqcd(s)':>9s} {'opt(s)':>9s} {'ratio':>6s}")

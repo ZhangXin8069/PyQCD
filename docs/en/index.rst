@@ -24,6 +24,7 @@ repository.
    install
    acknowledgements
    appendix
+   appendix_specialized
 
 Where to start
 --------------

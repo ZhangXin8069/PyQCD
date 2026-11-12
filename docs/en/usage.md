@@ -72,9 +72,27 @@ pe.contract("ij,jk->ik", a, b, specialize=False)
 assert np.allclose(pe.contract("ij,jk->ik", a, b, specialize=False), a @ b)
 ```
 
-Environment switches: `PYQCD_EINSUM_SPECIALIZE=0`,
-`PYQCD_EINSUM_DISABLE_FUSED=1`, `PYQCD_EINSUM_KERNEL_KUPL=0`,
-`PYQCD_EINSUM_KERNEL_CUDA=0`.
+### Runtime notices (first hit)
+
+Both kernels announce themselves **once per shape per process** the first time
+they run, so you can tell from the log which path a contraction took:
+
+```
+[pyqcd.einsum] 专用路径: topology:9f3c... [kernel: kupl_dedicated] ...
+[pyqcd.einsum] 通用路径: 未命中特化形态 (ij,jk->ik)；执行的是通用分步收缩。...
+```
+
+* `专用路径 … [kernel: ...]` — a native specialized kernel ran (2–4× faster).
+* `专用路径 … [plan-cache]` — the shape is known but only its plan is reused.
+* `通用路径 …` — no specialization; the generic pairwise contraction ran.
+
+Turn the notices off with `PYQCD_EINSUM_NOTICE=0`; make the specialized one fire
+on **every** call with `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`. The full list of
+supported shapes is in {doc}`appendix_specialized`.
+
+Environment switches: `PYQCD_EINSUM_NOTICE=0`,
+`PYQCD_EINSUM_SPECIALIZE=0`, `PYQCD_EINSUM_DISABLE_FUSED=1`,
+`PYQCD_EINSUM_KERNEL_KUPL=0`, `PYQCD_EINSUM_KERNEL_CUDA=0`.
 
 ## Lattice constants and Dirac algebra
 

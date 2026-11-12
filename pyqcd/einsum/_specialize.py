@@ -42,6 +42,12 @@ from functools import lru_cache
 from typing import Any
 
 VERBOSE_ENV = "PYQCD_EINSUM_SPECIALIZE_VERBOSE"
+# 首次命中提示的总开关：默认**开启**（用户要求"首次命中应有提醒"），
+# 设 PYQCD_EINSUM_NOTICE=0 可完全关闭。与 VERBOSE_ENV 的区别：
+#   NOTICE=0  → 一条都不打（含 verbose）
+#   NOTICE=1（默认）→ 每个形态首次命中打一条
+#   VERBOSE=1 → 每次命中都打（忽略"首次"去重）
+NOTICE_ENV = "PYQCD_EINSUM_NOTICE"
 DISABLE_ENV = "PYQCD_EINSUM_SPECIALIZE"
 FUSED_DISABLE_ENV = "PYQCD_EINSUM_DISABLE_FUSED"
 
@@ -308,6 +314,8 @@ def announce(entry: Entry, kernel: str = "") -> None:
     提示里据实输出，避免把没有 kernel 的形态说成 fused。
     """
     name = entry.get("name", "unknown")
+    if not notice_enabled():
+        return
     verbose = os.environ.get(VERBOSE_ENV, "").strip().lower() in (
         "1", "true", "on", "yes")
     with _lock:
@@ -317,6 +325,38 @@ def announce(entry: Entry, kernel: str = "") -> None:
     kind = f"kernel: {kernel}" if kernel else "plan-cache"
     note = entry.get("note", "")
     print(f"[pyqcd.einsum] 专用路径: {name} [{kind}] {note}", flush=True)
+
+
+def notice_enabled() -> bool:
+    """首次命中提示是否开启（默认开启，``PYQCD_EINSUM_NOTICE=0`` 关闭）。"""
+    return os.environ.get(NOTICE_ENV, "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def announce_generic(subscripts: str = "", backend: str = "") -> None:
+    """**通用内核**首次命中时的提醒（每个进程一次，可用 NOTICE_ENV 关闭）。
+
+    与 :func:`announce` 的区别：那条讲"命中了哪个特化形态"，本条讲"这次没走特化，
+    走的是通用分步收缩"，并提示可用的加速开关——用户据此能判断自己是否漏掉了
+    专用路径。
+    """
+    if not notice_enabled():
+        return
+    verbose = os.environ.get(VERBOSE_ENV, "").strip().lower() in (
+        "1", "true", "on", "yes")
+    key = "__generic__"
+    with _lock:
+        if not verbose and key in _announced:
+            return
+        _announced.add(key)
+    where = f" backend={backend}" if backend else ""
+    equation = f" ({subscripts})" if subscripts else ""
+    print(
+        f"[pyqcd.einsum] 通用路径: 未命中特化形态{equation}{where}；"
+        f"执行的是通用分步收缩。若该方程属于蒸馏语料（wick_12cases），"
+        f"可用 `python -m pyqcd.einsum._specialize` 查看已注册形态；"
+        f"设 PYQCD_EINSUM_NOTICE=0 可关闭本提示。",
+        flush=True)
 
 
 def describe() -> list[tuple[str, str, str]]:

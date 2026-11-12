@@ -41,7 +41,7 @@ everything is reached through subpackages.
 | `pyqcd.tools` | backend switching (`set_backend`, `get_backend`, `get_backend_name`, `get_precision`), `cached_contract`, `ArraySlicer`, `creat_mom_list`, `dump_env` |
 | `pyqcd.analysis` | `Bootstrap`, `FitParams`, `AnaParams`, ratio / effective-mass / energy / FH fitting and plotting helpers |
 | `pyqcd.pipeline` | centralised configuration and multi-step pipeline; `run_pipeline` executes the numbered steps |
-| `pyqcd.parallel` | `detect_resources`, `plan_parallel`, `run_meta_task`, `run_parallel_pipeline`, `format_plan`; batch contraction: `init` + `run`, `plan_tasks` |
+| `pyqcd.parallel` | `detect_resources`, `cpu_threads`, `gpu_info` (read-only resource probing; no MPI scheduling) |
 | `pyqcd.einsum` | contraction engine: an `opt_einsum`-compatible API plus optional native backends |
 
 ## The contraction engine

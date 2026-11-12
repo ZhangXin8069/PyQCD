@@ -760,6 +760,9 @@ def contract(
                 _threads.apply_profile("kernel")
             else:
                 _threads.apply_profile("generic")
+                # 通用内核首次命中提醒（每个进程一次，PYQCD_EINSUM_NOTICE=0 可关）。
+                # 只在确实没有特化形态时打，避免和 announce() 重复。
+                _specialize.announce_generic(subscripts)
             if specialized is not None and out is None:
                 announce_kernel = ""
                 if out is None:
