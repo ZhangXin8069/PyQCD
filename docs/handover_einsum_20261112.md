@@ -31,6 +31,7 @@
 | `pyqcd/einsum/_bench_scene.py` | `full` / `scene` / `smoke` 三档维度，两个基准脚本共用 |
 | `pyqcd/einsum/bench_specialized.py` | 特化路径基准；`--sample N --seed S` 抽样；`REF-FAIL` 逐行降级 |
 | `pyqcd/einsum/bench_generic.py` | 通用路径基准（不命中语料） |
+| `pyqcd/einsum/verify_specialized.py` | 单条方程的特化路径**纯查询**（生产包，随 pip 发布，不跑数值） |
 | `cpp/kupl/einsum/src/dedicated_apply.cpp` | KUPL 特化执行器（约 1064 行） |
 | `cpp/kupl/einsum/src/topology_apply.cpp` | 拓扑入口（转发通用执行器；步表实验路线） |
 | `cpp/kupl/einsum/src/topology_gemm.h` | `BlockPool` + 模板 `run_typed<float|double>` |
@@ -113,6 +114,9 @@ python -u -m pyqcd.einsum.bench_specialized --sample 8 --seed 0 --scale 16
 
 # 单条路径验证（走特化/数值/是否真跑原生）
 python -m pyqcd.testing.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->" --dim 6
+
+# 单条路径查询（纯查询，随 pip 发布；命中 0 / 语料外 1 / 非法 2）
+python -m pyqcd.einsum.verify_specialized "agbh,cmdn,eqfr,ospt,ikjl,ce,mo,gi,kq,bdf,np,hj,lrt->as"
 
 # 契约与全量
 python -m pyqcd.testing._topology_equations_contract

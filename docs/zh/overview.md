@@ -14,7 +14,7 @@ pip install pyqcd
 import pyqcd
 import pyqcd.einsum as pe
 
-print(pyqcd.__version__)    # e.g. 0.4.0
+print(pyqcd.__version__)    # e.g. 0.4.1
 print(pe.build_info())      # backend / native_available / native_library
 
 info = pe.build_info()
@@ -102,7 +102,7 @@ assert isinstance(info, dict) and "backend" in info
 assert len(pe.specializations()) >= 1
 ```
 
-## 0.4.0 生产快照
+## 生产快照（首发于 0.4 系列）
 
 A100 full-scene 证据使用 `Nx=Ny=Nz=32`、`Lt=64`、`Nev=100`、`Ns=4`、
 `Mom=8`、`complex128`。表中为 `selected/generic`，小于 `1` 表示更快。

@@ -16,7 +16,7 @@ default installation builds KUPL and therefore needs a C++17 toolchain.
 import pyqcd
 import pyqcd.einsum as pe
 
-print(pyqcd.__version__)    # e.g. 0.4.0
+print(pyqcd.__version__)    # e.g. 0.4.1
 print(pe.build_info())      # backend / native_available / native_library
 
 info = pe.build_info()
@@ -109,7 +109,7 @@ assert isinstance(info, dict) and "backend" in info
 assert len(pe.specializations()) >= 1
 ```
 
-## 0.4.0 production snapshot
+## Production snapshot (first shipped in the 0.4 series)
 
 Full-scene A100 evidence uses `Nx=Ny=Nz=32`, `Lt=64`, `Nev=100`, `Ns=4`,
 `Mom=8` and `complex128`. Ratios are `selected/generic`, so values below `1`

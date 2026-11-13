@@ -834,3 +834,21 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## einsum-specialized-query - final - 2026-11-13 08:01:22 +0800
+- 主任务: qcd-einsum 特化路径查询入口
+- 日志文件: logs/v2026111308.txt
+- 文件大小: 7481 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增 pyqcd.einsum.verify_specialized 纯查询入口与契约，119 passed/0 failed
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## einsum-stable-0.4.1 - final - 2026-11-13 08:43:17 +0800
+- 主任务: qcd-einsum 0.4.1 冻结稳定版：特化路径查询入口
+- 日志文件: logs/v2026111308-2.txt
+- 文件大小: 7540 bytes
+- 触发原因: 任务完成
+- 关键内容: 新增 verify_specialized 纯查询、固化冻结约定、升版 0.4.1、121 passed/11-11 release_check
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+

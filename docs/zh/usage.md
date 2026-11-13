@@ -90,6 +90,38 @@ assert np.allclose(pe.contract("ij,jk->ik", a, b, specialize=False), a @ b)
 提示语言跟随 locale（`zh_*` 说中文，其余说英文），可用
 `PYQCD_EINSUM_LANG=zh|en` 强制指定。
 
+### 查询单条方程的特化路径
+
+不想跑收缩、只想确认某条方程落在哪条路径时，用 `verify_specialized` 查询：
+它是**纯查询**，不生成操作数、不调用 `contract()`、不改任何全局状态，因此
+可以直接放进生产代码的启动自检里。
+
+```python
+# 查询: 是否命中语料、摘要、声明内核、语料出处（seq / T 号 / 角色）
+import pyqcd.einsum as pe
+
+report = pe.query_specialization("agbh,cmdn,eqfr,ospt,ikjl,ce,mo,gi,kq,bdf,np,hj,lrt->as")
+assert report["matched"] is True
+assert report["name"] == "topology:" + report["digest"][:8]
+assert report["corpus"]["seq"] == 1650
+assert "kupl_topology" in report["kernels"]
+
+# 语料之外的方程照常返回，matched 为 False，走通用分步路径
+assert pe.query_specialization("ij,jk->ik")["matched"] is False
+```
+
+命令行同一入口，退出码可直接用于脚本：命中 `0`、语料外 `1`、方程非法 `2`。
+
+```bash
+python -m pyqcd.einsum.verify_specialized "agbh,cmdn,eqfr,ospt,ikjl,ce,mo,gi,kq,bdf,np,hj,lrt->as"
+python -m pyqcd.einsum.verify_specialized "<eq>" --json
+```
+
+`kernels` 是**声明**的可用内核，不代表实际执行：实际下发还受 `out=`、dtype
+与原生库可用性影响。要连数值一起验（结果是否正确、是否真跑原生内核），用
+`python -m pyqcd.testing.einsum.verify_specialized`——它属于测试侧，不随
+`pip install` 发布。
+
 环境变量开关：`PYQCD_EINSUM_NOTICE=0`、`PYQCD_EINSUM_LANG=zh|en`、`PYQCD_EINSUM_SPECIALIZE=0`、
 `PYQCD_EINSUM_DISABLE_FUSED=1`、`PYQCD_EINSUM_KERNEL_KUPL=0`、
 `PYQCD_EINSUM_KERNEL_CUDA=0`。

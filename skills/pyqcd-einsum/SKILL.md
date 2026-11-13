@@ -31,6 +31,37 @@ description: Use when implementing, debugging, or benchmarking pyqcd.einsum agai
 - 只做 API/物理缩并语义时，沿用 `pyqcd-distillation` 与
   `pyqcd-infra`，不要复制其完整规则。
 
+## 单条方程查询：生产包 vs 测试包（2026-11-12）
+
+**两个入口职责不同，不要混用**：
+
+| 入口 | 位置 | 做什么 | 随 pip 发布 |
+|---|---|---|---|
+| `python -m pyqcd.einsum.verify_specialized "<eq>"` | 生产包 | **纯查询**：命中与否、拓扑签名/摘要、声明内核、语料出处（seq/T 号/角色） | 是 |
+| `python -m pyqcd.testing.einsum.verify_specialized "<eq>"` | 测试包 | **数值验证**：实际跑 contract，比对参考、判是否真跑原生内核、计时 | 否（`MANIFEST.in` `prune pyqcd/testing`） |
+
+生产包入口刻意不调用 `contract()`、不生成操作数、不触碰 `_specialize._announced`，
+因此可在生产代码的启动自检里直接调用；库内 API 为
+`pe.query_specialization(eq)`（`__init__` 的惰性包装，返回同一 dict）。
+
+```bash
+python -m pyqcd.einsum.verify_specialized "agbh,cmdn,eqfr,ospt,ikjl,ce,mo,gi,kq,bdf,np,hj,lrt->as"
+```
+
+期望（本机实跑）：`结果: HIT`、`特化路径: topology:8006c502 [kernel(topology)]`、
+`语料出处: seq=1650  T00028  10. 重子四点函数`、退出码 `0`。
+
+退出码口径：命中 `0`、语料之外 `1`、方程非法（含非字符串）`2`。
+
+**`kernels` 字段是声明不是事实**：它来自 `_specialize._topology_entry` 的
+`kernels=("kupl_topology","cuda_topology")`，而实际下发常是 `kupl_dedicated`
+（分派顺序更靠前），且受 `out=`、dtype、`_probe_double`、原生库可用性影响。
+判"真跑了什么"只能看运行时提示行或 `LAST_INFO['path']`，不要读这个字段。
+
+**性能**：查询需要语料出处时首次建 `摘要 -> Task` 索引（8638 条，约 **0.13 s**），
+之后 O(1)（热查询实测 **0.019 ms**）。早期实现逐次线性扫描是 12.9 ms/次，
+不要退回那种写法。语料外方程不建索引，0 开销。
+
 ## 强制工作流
 
 1. **先固定兼容面**：以 `pyqcd/einsum/AGENTS.md` 和固定 opt_einsum 版本为

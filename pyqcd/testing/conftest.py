@@ -124,6 +124,7 @@ from pyqcd.testing import (  # noqa: F401
     test_matx_einsum_contracts,
     test_cpu_einsums_contracts,
     test_topology_kernel_contracts,
+    test_specialized_query_contracts,
 )
 
 

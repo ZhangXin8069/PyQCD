@@ -3104,3 +3104,13 @@ def test_topology_kernel_contracts():
     if passed == 0:
         raise unittest.SkipTest(
             f'topology kernel contracts did not run ({skipped} skipped)')
+
+
+def test_specialized_query_contracts():
+    """单条方程特化路径查询入口（生产包）的判定/退出码/无副作用契约。"""
+    from . import _specialized_query_contract as contract
+
+    for name in sorted(dir(contract)):
+        if not name.startswith("test_"):
+            continue
+        getattr(contract, name)()

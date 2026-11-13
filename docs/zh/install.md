@@ -7,10 +7,12 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.4.0`。需要固定版本时：`pip install "pyqcd==0.4.0"`。
+当前发行版：`0.4.1`。需要固定版本时：`pip install "pyqcd==0.4.1"`。
 
-`0.4.0` 为 8638 条生产方程加入资源门控的拓扑特化执行，并完成 PEP 561
-元数据等发布硬化。默认安装仍把 KUPL 视为必需基线，CUDA 仍是机会性构建；
+`0.4.1` 是 qcd-einsum 的关键稳定版本（冻结基线标签 `stab31`）：在上一版的
+资源门控拓扑特化之上新增 `python -m pyqcd.einsum.verify_specialized` 纯查询入口
+（不跑收缩、不改全局状态），并把「影响 qcd-einsum 行为的改动默认禁止」写入
+`pyqcd/einsum/AGENTS.md` §0。默认安装仍把 KUPL 视为必需基线，CUDA 仍是机会性构建；
 运行期原生失败会自动回退通用路径，数值结果不变。
 
 PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的

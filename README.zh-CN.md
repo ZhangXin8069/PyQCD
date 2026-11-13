@@ -37,6 +37,19 @@ python -m pyqcd --json     # machine-readable
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
 
+## 0.4.1 发布声明 — qcd-einsum 冻结稳定版
+
+`0.4.1` 是 `pyqcd.einsum` 的**关键稳定版本**（冻结基线标签 `stab31`）。
+
+* 新增 `python -m pyqcd.einsum.verify_specialized "<方程>"`：查询一条方程走哪条
+  特化路径——语料命中、拓扑摘要、声明内核与出处（`seq` / T 号 / 角色），
+  **不跑收缩**（不生成操作数、不改全局状态）。退出码：命中 `0`、语料外 `1`、
+  方程非法 `2`。库内接口：`pyqcd.einsum.query_specialization(eq)`。
+* 冻结约定：在下一个 qcd-einsum 关键稳定版本之前，任何影响 qcd-einsum 行为的
+  改动**默认禁止**，除非用户明确强制。三条例外见 `pyqcd/einsum/AGENTS.md` §0。
+* `0.4.0` 的资源门控拓扑特化（8638 条方程）全部保持不变；数值、分派链与原生
+  ABI 均未改动。
+
 ## 0.4.0 发布声明
 
 `0.4.0` 是 `pyqcd.einsum` 的生产特化版本。

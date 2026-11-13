@@ -6,6 +6,10 @@ API: :func:`contract_path` finds a cost minimizing contraction order,
 resulting contraction list for repeated evaluation.
 
 Only re-exports live here; the implementation is in the private modules.
+
+Stability: ``pyqcd`` 0.4.1 is a frozen qcd-einsum stable release (baseline tag
+``stab31``). Behaviour-changing edits are disallowed by default until the next
+qcd-einsum stable release; see ``AGENTS.md`` §0 for the three exceptions.
 """
 
 from __future__ import annotations
@@ -65,6 +69,7 @@ __all__ = [
     "PathInfo",
     "PathOptimizer",
     "paths",
+    "query_specialization",
     "register_path_fn",
     "shape_only",
     "shared_intermediates",
@@ -136,6 +141,17 @@ def probe() -> dict:
     from . import _probe as probe_module
 
     return probe_module.probe()
+
+
+def query_specialization(subscripts: str) -> dict:
+    """Report which specialized path ``subscripts`` takes, without contracting.
+
+    Pure query: no operands are built and no global state is touched. Returns the
+    same mapping as :func:`pyqcd.einsum.verify_specialized.query`.
+    """
+    from .verify_specialized import query
+
+    return query(subscripts)
 
 
 def format_report(report: dict) -> str:

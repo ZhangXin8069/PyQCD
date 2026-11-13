@@ -7,7 +7,7 @@
 清单由 `wick_12cases` 语料自动生成，不是手写。重新生成：
 `python -m pyqcd.testing._gen_specialized_appendix`。
 
-* pyqcd 版本：`0.4.0`（后端 `cuda`，数组后端 `numpy`）
+* pyqcd 版本：`0.4.1`（后端 `cuda`，数组后端 `numpy`）
 * 特化路径：**8638** 条（基础表 2582 + 附录变体 6056）
 * 不同拓扑签名：**8638** 个，分 **24** 个桶
 
@@ -8766,6 +8766,7 @@
 ## 5. 自行核验
 
 ```bash
+python -m pyqcd.einsum.verify_specialized "<方程>"      # 查询单条方程走哪条特化路径
 python -m pyqcd.einsum._specialize                    # 自检：8638 条必须全部命中
 python -m pyqcd.testing._topology_full_bench --dim 3  # 全语料跑一遍
 python -m pyqcd.testing._topology_perf_multidim       # 多尺寸加速比

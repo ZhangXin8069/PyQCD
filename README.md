@@ -42,6 +42,22 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
 
+## Release 0.4.1 — frozen qcd-einsum stable release
+
+`0.4.1` is the **key stable release** for `pyqcd.einsum` (baseline tag `stab31`).
+
+* New: `python -m pyqcd.einsum.verify_specialized "<eq>"` reports which
+  specialised path an equation takes — corpus hit, topology digest, declared
+  kernels and provenance (`seq` / T-id / roles) — **without contracting**:
+  no operands are built, no global state is touched. Exit codes: `0` hit,
+  `1` outside the corpus, `2` malformed equation. Library entry point:
+  `pyqcd.einsum.query_specialization(eq)`.
+* Frozen: until the next key qcd-einsum stable release, changes that affect
+  qcd-einsum behaviour are **disallowed by default** unless the user explicitly
+  forces them. See `pyqcd/einsum/AGENTS.md` §0 for the three exceptions.
+* Everything from `0.4.0` (resource-gated topology specialisation over 8,638
+  equations) is unchanged; numerics, dispatch and native ABI are untouched.
+
 ## Release 0.4.0
 
 `0.4.0` is the production-specialisation release for `pyqcd.einsum`.

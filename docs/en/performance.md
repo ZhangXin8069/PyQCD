@@ -5,7 +5,7 @@ same thread settings, with both implementations **interleaved inside one loop** 
 machine drift cancels out. Every number below is measured, not modelled, and each
 table comes with the script that produced it.
 
-## 0.4.0 production specialisation
+## Production specialisation (first shipped in the 0.4 series)
 
 The release evidence uses full production scenes, not smoke shapes:
 
@@ -207,7 +207,7 @@ was recognised but only the plan was reused — for example with `out=`, with mi
 operand dtypes, or when the native entry is unavailable. A fallback changes speed
 only; the result is identical.
 
-The earlier unresolved size cliff is superseded by the 0.4.0 resource gates above.
+The earlier unresolved size cliff is superseded by the resource gates above.
 The current implementation evaluates the complete plan metrics before native
 allocation and falls back when arena, single-GEMM or pack-heavy limits are unsafe.
 The 43-path full-scene evidence is the authoritative performance statement;
@@ -350,7 +350,7 @@ check(
 
 ## Reproduce
 
-The authoritative 0.4.0 production driver is source-repository-only because it
+The authoritative production driver for that series is source-repository-only because it
 uses the full-scene corpus builder and plan audit. Run it on a compute node:
 
 ```bash

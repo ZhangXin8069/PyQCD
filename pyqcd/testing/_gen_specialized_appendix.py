@@ -98,6 +98,7 @@ id (`seq`, 1–{total}); the entry itself is the exact equation from
 ## 5. Verifying the list yourself
 
 ```bash
+python -m pyqcd.einsum.verify_specialized "<eq>"       # query one equation
 python -m pyqcd.einsum._specialize                    # self-check: all must hit
 python -m pyqcd.testing._topology_full_bench --dim 3  # run the whole corpus
 python -m pyqcd.testing._topology_perf_multidim       # multi-size speed-up
@@ -158,6 +159,7 @@ ZH = """# 附录：所有支持的特化路径
 ## 5. 自行核验
 
 ```bash
+python -m pyqcd.einsum.verify_specialized "<方程>"      # 查询单条方程走哪条特化路径
 python -m pyqcd.einsum._specialize                    # 自检：8638 条必须全部命中
 python -m pyqcd.testing._topology_full_bench --dim 3  # 全语料跑一遍
 python -m pyqcd.testing._topology_perf_multidim       # 多尺寸加速比

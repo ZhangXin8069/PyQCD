@@ -3,6 +3,25 @@
 本文件是 `pyqcd/einsum` 子系统的**冻结契约**。任何实现必须与本文档一致；
 与 `refer/git-rep/opt_einsum` 冲突时，以 opt_einsum 3.4 的公开行为为准，并在此登记差异。
 
+## 0. 稳定版本冻结（stab31 起生效）
+
+**当前状态：`pyqcd` 0.4.1 是 qcd-einsum 的关键稳定版本，冻结基线为 Git 标签 `stab31`。**
+
+生效期间，任何**影响本版本 qcd-einsum 行为**的改动默认禁止，包括但不限于：数值结果、
+公共 API 签名与语义、分派链（elementwise → cupy 委派 → 原生执行器 → Python 分步）、
+拓扑匹配口径与语料索引、原生 ABI、提示文案、缓存与线程档语义、精度策略与回落行为。
+
+三条例外，缺一不可：
+
+1. 用户**明确强制**要求改动（明确点名该改动与本冻结冲突并接受）；或
+2. 修复**本版本自身**的正确性缺陷（数值错、崩溃、静默错答），且改动范围不超过缺陷本身；或
+3. 新增**纯增量**能力——不改动任何既有符号与执行路径，且新增行为可由 `stab31` 基线
+   逐位复核（例如本次的 `verify_specialized` 纯查询入口：不调 `contract()`、不改全局状态）。
+
+解除条件：出现下一个 qcd-einsum 关键稳定版本（新的 `stab<N>`）时自动失效，届时在
+该标签的说明里重新界定冻结范围。**任何声称"不影响原有功能"的改动，都必须附基线对比证据**
+（测试计数一致、关键数值逐位一致、行为探针输出一致），不得仅凭推理声明。
+
 ## 1. 分层与文件归属
 
 | 文件 | 职责 | 唯一负责人 |
@@ -14,6 +33,7 @@
 | `paths.py` | `register_path_fn` / `get_path_fn` / `PATH_OPTIONS` | API 组 |
 | `backends/` | `dispatch.get_func/has_einsum/has_tensordot/infer_backend` | API 组 |
 | `_sharing.py` | `shared_intermediates` | API 组 |
+| `verify_specialized.py` | 单条方程的特化路径**纯查询**（命中/签名/摘要/语料出处，不做数值） | API 组 |
 | `_plan_py.py` | 纯 Python 规划回退（greedy/optimal/branch/dp） | 规划组 |
 | `helpers.py` | `compute_size_by_dict` / `flop_count` / `find_contraction` | 规划组 |
 | `parser.py` | `get_symbol` / `parse_einsum_input` / ellipsis 展开 | 规划组 |

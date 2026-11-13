@@ -92,6 +92,41 @@ it with `PYQCD_EINSUM_LANG=zh|en`. Turn the notices off with
 `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`. The full list of supported shapes is in
 {doc}`appendix_specialized`.
 
+### Querying one equation's specialized path
+
+When you want to know which path an equation lands on without running the
+contraction, query it with `verify_specialized`. It is a **pure query**: it builds
+no operands, calls no `contract()`, and leaves no global state behind, so it is safe
+in a production start-up self-check.
+
+```python
+# Query: corpus hit, digest, declared kernels, corpus provenance (seq / T-id / roles)
+import pyqcd.einsum as pe
+
+report = pe.query_specialization("agbh,cmdn,eqfr,ospt,ikjl,ce,mo,gi,kq,bdf,np,hj,lrt->as")
+assert report["matched"] is True
+assert report["name"] == "topology:" + report["digest"][:8]
+assert report["corpus"]["seq"] == 1650
+assert "kupl_topology" in report["kernels"]
+
+# Equations outside the corpus come back as usual with matched False — generic path
+assert pe.query_specialization("ij,jk->ik")["matched"] is False
+```
+
+The same entry point on the command line, with script-friendly exit codes:
+`0` hit, `1` outside the corpus, `2` malformed equation.
+
+```bash
+python -m pyqcd.einsum.verify_specialized "agbh,cmdn,eqfr,ospt,ikjl,ce,mo,gi,kq,bdf,np,hj,lrt->as"
+python -m pyqcd.einsum.verify_specialized "<eq>" --json
+```
+
+`kernels` lists the **declared** kernels, not what actually ran: dispatch also
+depends on `out=`, dtype and native-library availability. To validate numbers as
+well (is the result right, did the native kernel really run), use
+`python -m pyqcd.testing.einsum.verify_specialized` — that one is test-side and is
+not shipped by `pip install`.
+
 Environment switches: `PYQCD_EINSUM_NOTICE=0`, `PYQCD_EINSUM_LANG=en|zh`,
 `PYQCD_EINSUM_SPECIALIZE=0`, `PYQCD_EINSUM_DISABLE_FUSED=1`,
 `PYQCD_EINSUM_KERNEL_KUPL=0`, `PYQCD_EINSUM_KERNEL_CUDA=0`.

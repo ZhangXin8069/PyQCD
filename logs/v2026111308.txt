@@ -1,0 +1,103 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-13 08:01:22 +0800
+批次: einsum-specialized-query
+主任务: qcd-einsum 特化路径查询入口
+触发原因: 任务完成
+摘要: 新增 pyqcd.einsum.verify_specialized 纯查询入口与契约，119 passed/0 failed
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 需求定性：确认功能此前不存在
+- 目标: 判定 `python -m pyqcd.einsum.verify_specialized` 是否已存在
+- 命令/操作: `python -m pyqcd.einsum.verify_specialized "<eq>"`；`ls pyqcd/einsum/verify_specialized.py`
+- 关键输出: `No module named pyqcd.einsum.verify_specialized`；`No such file or directory`
+- 退出码: 2（模块缺失）/ 2（ls 失败）
+- 证据与判断: 测试包 `pyqcd.testing.einsum.verify_specialized` 存在且可用（基线实跑 PASS、偏差 2.155e-16），但 `MANIFEST.in:28` 为 `prune pyqcd/testing`，该模块不随 pip 发布。二者不是同一入口，生产包入口需新建。
+
+### S2 — 新增生产包纯查询模块
+- 目标: 在 `pyqcd/einsum/` 下提供特化路径查询，不改执行路径
+- 命令/操作: 新建 `pyqcd/einsum/verify_specialized.py`（`query()` + CLI）
+- 关键输出: 目标方程返回 HIT / topology:8006c502 / seq=1650 T00028 / 退出码 0
+- 退出码: 0
+- 证据与判断: 只复用 `_specialize.canonical_signature/match/_signature_digest` 与 `_wick_tasklist`，不调用 `contract()`、不建操作数、不触碰 `_announced`。
+
+### S3 — 性能修正：线性扫描改索引
+- 目标: 消除重复查询的 O(N) 扫描
+- 命令/操作: 先实测逐次线性扫描，再改 `_corpus_index()` 惰性建 `摘要 -> Task` 索引
+- 关键输出: 冷 135.9 ms（建索引 127 ms）/ 热 0.019 ms；改前热 12.9 ms
+- 退出码: 0
+- 证据与判断: 12.9 ms → 0.019 ms（约 680×），语料外方程不建索引、0 开销。
+
+### S4 — 文档门禁抓到的真问题
+- 目标: 让文档示例可被 `_docs_api_contract` 验证
+- 命令/操作: 首次写 `from pyqcd.einsum.verify_specialized import query` → 门禁报错
+- 关键输出: `usage.md#4: from pyqcd.einsum import query does not exist`（该门禁只解析 `pyqcd.<子包>` 两级）
+- 退出码: 0（python -m 入口不反映失败，须读 collect()）
+- 证据与判断: 改为 `pe.query_specialization(...)`，在 `pyqcd/einsum/__init__.py` 加惰性包装并登记 `__all__`；复验 43 项 0 失败。
+
+### S5 — 契约测试：两处自伤修正
+- 目标: 新增回归契约并保证测试日志干净
+- 命令/操作: 新建 `pyqcd/testing/_specialized_query_contract.py`，经 `__init__.py` 包装函数注册到 conftest 总门
+- 关键输出: 首跑失败 `AssertionError: i->->i`（我错设了 `equation_normalized == ""` 断言）；CLI 用例直调 main() 污染 stdout
+- 退出码: 1 → 0
+- 证据与判断: 删除错误断言、给 CLI 用例加 `redirect_stdout`；复跑 contract OK。
+
+## 验证与证据
+- 测试/检查: `python -B -m pyqcd.testing`；`python -m pyqcd.testing._topology_equations_contract`；`python -m pyqcd.einsum._specialize`；`docs_examples --lang zh|en`；`_docs_api_contract`；`git diff --check`；`py_compile`
+- 结果: 119 passed / 1 skipped / 0 failed（基线 118 + 新增 1，skip 为既有 `physics.sty` 缺失）；拓扑契约 6 passed / 0 failed；自检 OK；文档 zh/en 各 19 ok / 0 failed；API 契约 43 项 0 失败；diff --check 干净；编译通过
+- 未验证项: 未跑 GPU (`cudi_topology` / `cupy`) 侧查询；查询本身不涉及数值，不影响结论
+
+## 变更与产物
+- 文件:
+  - 新增 `pyqcd/einsum/verify_specialized.py`（纯查询 + CLI，`query()`）
+  - 新增 `pyqcd/testing/_specialized_query_contract.py`（9 条契约）
+  - 修改 `pyqcd/einsum/__init__.py`（`query_specialization` 惰性包装 + `__all__`）
+  - 修改 `pyqcd/einsum/AGENTS.md`（文件归属表登记）
+  - 修改 `pyqcd/testing/__init__.py`、`pyqcd/testing/conftest.py`（契约注册）
+  - 修改 `pyqcd/testing/_gen_specialized_appendix.py`（模板，避免重生成丢内容）
+  - 修改 `docs/zh/usage.md`、`docs/en/usage.md`、`docs/zh|en/appendix_specialized.md`、`docs/handover_einsum_20261112.md`、`skills/pyqcd-einsum/SKILL.md`
+- 产物: 目标命令可运行，HIT 且给出语料出处
+- 未改动范围: `_api.py` 分派链、`_specialize.match` 判定、原生库、语料/注册表数据均未改；执行路径零改动
+
+## 风险、限制与下一步
+- 风险: `kernels` 字段是**声明**而非实际执行（实际常为 `kupl_dedicated`），文档与技能卡已明确标注，避免误读
+- 阻塞: 无
+- 下一步: 若需数值+内核实证，用测试包入口 `python -m pyqcd.testing.einsum.verify_specialized`；GPU 侧查询未验证
+
+## 用户输入指令
+参考相关的代码和文档和docs和skills和logs,为本库qcd-einsum的代码及其对应的各个文档做最小改动[绝不能影响原有功能]:添加特化路径查询功能{python -m pyqcd.einsum.verify_specialized "agbh,cmdn,eqfr,ospt,ikjl,ce,mo,gi,kq,bdf,np,hj,lrt->as"}
+（后续追问）你的意思是此功能已经存在且运行良好?
+
+## Agent 全文报告
+--- report begin ---
+结论先说：此前**不存在**该功能。你追问的那句我确认不是那个意思——我当时看到的是测试包里的同名脚本，而你要的入口在生产包下，两者不是一回事。
+
+证据：`python -m pyqcd.einsum.verify_specialized` 报 `No module named ...`，`pyqcd/einsum/verify_specialized.py` 不存在；`pyqcd/testing/einsum/verify_specialized.py` 存在但 `MANIFEST.in:28` 写着 `prune pyqcd/testing`，不随 pip 发布。
+
+我已按最小改动补齐，执行路径零改动：
+
+改动内容
+- 新增 `pyqcd/einsum/verify_specialized.py`：纯查询（命中/拓扑签名/摘要/声明内核/语料出处 seq·T号·角色），不调用 contract()、不建操作数、不碰全局提示状态。
+- 退出码：命中 0 / 语料外 1 / 非法（含非字符串）2。
+- 新增 `pe.query_specialization(eq)` 惰性包装并登记 `__all__`，供库内调用。
+- 新增 9 条契约 `pyqcd/testing/_specialized_query_contract.py`，注册进总门。
+- 同步文档：`docs/zh|en/usage.md`、附录模板与产物、`docs/handover_einsum_20261112.md`、`pyqcd/einsum/AGENTS.md`、`skills/pyqcd-einsum/SKILL.md`。
+
+推理依据
+- 生产代码禁止 import `pyqcd.testing`（`pyqcd/einsum/AGENTS.md` §8），所以查询与数值验证拆成两个入口，各司其职。
+- 查询首次要语料出处，逐次线性扫描 12.9 ms；改惰性索引后热查询 0.019 ms（冷 135 ms，一次性）。
+- `kernels` 来自注册表声明，实际下发常是 `kupl_dedicated`，故明确标注「声明不等于事实」。
+
+验证结果
+- 目标命令实跑：HIT、`topology:8006c502`、`语料出处: seq=1650 T00028 10. 重子四点函数`、退出码 0。
+- 全量：`python -B -m pyqcd.testing` → 119 passed / 1 skipped / 0 failed（基线 118 + 新增 1）。
+- 既有功能：`_specialize` 自检 OK；`_topology_equations_contract` 6 passed / 0 failed。
+- 文档门禁：zh/en 各 19 ok / 0 failed；`_docs_api_contract` 43 项 0 失败；`git diff --check` 干净。
+- 隔离验证：去掉 `pyqcd/testing` 后新入口仍可用，证明属生产包。
+
+后续步骤
+- 要连数值与「是否真跑原生内核」一起验，用 `python -m pyqcd.testing.einsum.verify_specialized`。
+- GPU（`cuda_topology` / `cupy`）侧查询未验证。
+--- report end ---

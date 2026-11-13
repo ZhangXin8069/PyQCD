@@ -8,7 +8,7 @@ whitespace or output-order differences do not matter.
 The list is generated from the `wick_12cases` corpus, not typed by hand. Run
 `python -m pyqcd.testing._gen_specialized_appendix` to regenerate it.
 
-* pyqcd version: `0.4.0` (backend `cuda`, array backend `numpy`)
+* pyqcd version: `0.4.1` (backend `cuda`, array backend `numpy`)
 * specialized paths: **8638** (2582 base table + 6056 appendix variants)
 * distinct topology signatures: **8638**, indexed in **24** buckets
 
@@ -8769,6 +8769,7 @@ id (`seq`, 1–8638); the entry itself is the exact equation from
 ## 5. Verifying the list yourself
 
 ```bash
+python -m pyqcd.einsum.verify_specialized "<eq>"       # query one equation
 python -m pyqcd.einsum._specialize                    # self-check: all must hit
 python -m pyqcd.testing._topology_full_bench --dim 3  # run the whole corpus
 python -m pyqcd.testing._topology_perf_multidim       # multi-size speed-up
