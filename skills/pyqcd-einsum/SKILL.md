@@ -99,8 +99,8 @@ python -m pyqcd.einsum.verify_specialized "agbh,cmdn,eqfr,ospt,ikjl,ce,mo,gi,kq,
   `seq=6585` 22.445 s→10.310 s；GPU 四条轻中量路径为 `0.157–0.265x`，
   `seq=129/6585` 由超大计划门安全回退 generic。冻结库哈希、快照与完整证据见
   `docs/einsum_production_optimization_20261112.md`。
-- 额外 43 条分层 full-scene 路径：CPU 中位 `0.861x`、42/43 不快于 generic；
-  GPU 中位 `0.276x`、42/43 不快于 generic。确认普遍加速，同时允许
+- 额外 43 条分层 full-scene 路径：CPU 中位 `0.861x`、42/43 不慢于 generic；
+  GPU 中位 `0.276x`、42/43 不慢于 generic。确认普遍加速，同时允许
   CPU `seq=856`（1.007x）与 GPU 极小计划 `seq=6911`（1.362x）两个低收益反例。
 - CUDA 编译、动态导出与 Cython 加载已 `implemented`，但一般 cuBLAS GEMM 路径仍
   `unverified`，不得用逐元素路径通过代替 batch GEMM 通过。

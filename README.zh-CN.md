@@ -144,7 +144,7 @@ pe.specializations()   # registered equation shapes（本版本 8638 条）
 | 证据集 | CPU | GPU |
 |---|---|---|
 | 43 条分层生产路径：中位比 | **0.861×** | **0.276×** |
-| 43 条：不快于 PyQCD generic | **42/43** | **42/43** |
+| 43 条：不慢于 PyQCD generic | **42/43** | **42/43** |
 | 43 条：比 PyQCD generic 至少快 10% | **26/43** | **40/43** |
 | 43 条对 `opt_einsum(dp)`：不慢 | **36/43** | **42/43** |
 

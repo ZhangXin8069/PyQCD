@@ -1148,8 +1148,8 @@ gitlab/gitee 与本地 HEAD 同步、测试套件（`--offline --with-tests` 为
 | 证据 | CPU | GPU |
 |---|---:|---:|
 | 43 条 full-scene，selected/generic 中位 | 0.8612x | 0.2760x |
-| 43 条不快于 PyQCD generic | 42/43 | 42/43 |
-| 43 条不快于 `opt_einsum 3.4.0 dp` | 36/43 | 42/43 |
+| 43 条不慢于 PyQCD generic | 42/43 | 42/43 |
+| 43 条不慢于 `opt_einsum 3.4.0 dp` | 36/43 | 42/43 |
 
 数据源必须带 full-scene 参数 `Nx=Ny=Nz=32, Lt=64, Nev=100, Ns=4, Mom=8`、
 `complex128`、A100 节点与资源门证据；smoke/小维合成数据只能证明路径和正确性，

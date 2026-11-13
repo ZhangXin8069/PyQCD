@@ -256,7 +256,7 @@ CPU `complex128` auto 先在 auto/greedy 中按 FLOPs 取小；只有静态 aren
   `pack>=1 GiB && FLOPs<=1G` 时 fail-open。
 
 全 8638 条计划审计中 CPU 放行 3833、CUDA 放行 2864，0 条不可编码。43 条生产
-数值样本中 CPU/GPU 各 42 条不快于 generic；仅 CPU `seq=856` 0.7% 和 GPU 极小
+数值样本中 CPU/GPU 各 42 条不慢于 generic；仅 CPU `seq=856` 0.7% 和 GPU 极小
 计划 `seq=6911` 36% 为保留反例。
 
 确定性 `UNSUPPORTED` 使用 backend 分桶的线程安全负缓存；OOM、内部错误和非连续
