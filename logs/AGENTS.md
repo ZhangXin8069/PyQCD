@@ -861,3 +861,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## einsum-release-0.4.2 - final - 2026-11-13 11:03:15 +0800
+- 主任务: 发布 pyqcd 0.4.2（冻结稳定版文档修正）
+- 日志文件: logs/v2026111311.txt
+- 文件大小: 4068 bytes
+- 触发原因: 任务完成
+- 关键内容: 0.4.2 发布：三处版本同步、release_check 11/11、远程安装复验通过、双远端推送
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+

@@ -1,0 +1,68 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-13 11:03:15 +0800
+批次: einsum-release-0.4.2
+主任务: 发布 pyqcd 0.4.2（冻结稳定版文档修正）
+触发原因: 任务完成
+摘要: 0.4.2 发布：三处版本同步、release_check 11/11、远程安装复验通过、双远端推送
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 确认发布内容
+- 目标: 判断 0.4.2 需要发布什么
+- 命令/操作: 解包已发布的 0.4.1 sdist，与当前源码树逐文件比对
+- 关键输出: `pyqcd/` 无差异；唯一差异是 `README.zh-CN.md:147` 的「不快于」→「不慢于」
+- 证据与判断: 本版是纯文档修正补丁，代码、数值、分派链、原生 ABI 全部不变
+
+### S2 — 版本与文档同步
+- 关键输出: 三处版本 0.4.1 → **0.4.2**（`__native_version__` 保持 0.1.0）；README 中英各加 0.4.2 声明并保留 0.4.1 历史条目；docs zh/en 的 install/overview 同步；附录由生成器重生成
+- 证据与判断: 冻结表述改为「自 stab31 起冻结（首个冻结版 0.4.1，0.4.2 仅修正文档措辞）」，落点 AGENTS.md §0 / 包 docstring / _specialize docstring
+
+### S3 — 门禁
+- 命令/操作: `release_check --offline`；`python -B -m pyqcd.testing`；`twine check`
+- 关键输出: release_check **11/11 passed**（`docs version pinned` = 0.4.2）；**121 passed / 1 skipped / 0 failed**；twine check PASSED
+- 证据与判断: 首次把 `docs version pinned` 一次性做到位（沿用上轮结论：docs/{en,zh} 内不允许出现非当前版本号）
+
+### S4 — 发布与推送
+- 命令/操作: `twine upload`（进程内 DNS 补丁）；`git push` 到 gitlab 与 gitee
+- 关键输出: PyPI 0.4.2 上传成功（1162770 bytes，约 5 s 后 JSON API 可见）；gitlab `5ce2a90..39bfc57`；gitee `5ce2a90..39bfc57`
+- 证据与判断: 远程 venv 安装复验：版本 0.4.2、11 子包、backend=cuda、8638 特化、查询 seq=1650
+
+## 验证与证据
+- 测试/检查: release_check --offline；全量测试；twine check；sdist 内文核验；远程安装自检；三端 ls-remote
+- 结果: 11/11；121 passed/1 skipped/0 failed；twine PASSED；产物中 `README.zh-CN.md:159` 为「43 条：不慢于 PyQCD generic」；远程安装全部断言通过
+- 未验证项: GPU 侧专项（本版无代码改动，沿用 0.4.1 结论）
+
+## 变更与产物
+- 文件: 版本三处、README 中英、docs zh/en install+overview、附录 zh/en、`pyqcd/einsum/{AGENTS.md,__init__.py,_specialize.py}`
+- 产物: `dist/pyqcd-0.4.2.tar.gz`；PyPI 0.4.2；Git 提交 `39bfc57`
+- 未改动范围: 全部 `pyqcd/**` 逻辑代码（仅 docstring 措辞）、原生 C++/CUDA、语料与注册表
+
+## 风险、限制与下一步
+- 风险: 本机 WSL DNS 仍失效；用进程内 DNS 补丁与 SSH 直连 IP 绕过，未修改系统配置
+- 阻塞: 无
+- 下一步: 删除临时物 `/tmp/dnsfix`、`/tmp/rv042`；`stab31` 冻结继续有效，本版不新增标签
+
+## 用户输入指令
+发布新版本
+
+## Agent 全文报告
+--- report begin ---
+已发布 **pyqcd 0.4.2**：这是 0.4.1（qcd-einsum 冻结稳定版）的纯文档修正版。
+
+改动内容
+- 三处版本 → 0.4.2；README 中英新增 0.4.2 声明并保留 0.4.1 历史条目；docs zh/en 的 install/overview 同步；附录重生成。
+- 冻结表述更新为「自 stab31 起冻结（首个冻结版 0.4.1，0.4.2 仅修正文档措辞）」。
+
+推理依据
+- 解包 PyPI 上的 0.4.1 与当前树逐文件比对：`pyqcd/` 无差异，唯一差异就是上轮修正的「不快于 → 不慢于」，因此本版不含任何行为变化。
+
+验证结果
+- release_check 11/11；全量 121 passed / 1 skipped / 0 failed；twine check PASSED。
+- PyPI 0.4.2 已发布并从远程 venv 安装复验：11 子包、backend=cuda、8638 特化、查询 seq=1650；产物 README 已是「不慢于」。
+- gitlab 与 gitee 均已推送到 `39bfc57`。
+
+后续步骤
+- 临时物可删；`stab31` 冻结继续有效，本次未打新标签（如需要可再打 `stab31_1`）。
+--- report end ---
