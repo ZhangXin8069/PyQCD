@@ -879,3 +879,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## einsum-dev58-push - general - 2026-11-13 13:07:17 +0800
+- 主任务: 推送 dev58 与 main 到 origin
+- 日志文件: logs/v20261113130717.txt
+- 文件大小: 3714 bytes
+- 触发原因: 一般记录
+- 关键内容: dev58 与 main 推送成功；WSL 默认 DNS 不响应，间歇失败靠重试通过；远端对象与本地一致
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

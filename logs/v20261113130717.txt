@@ -1,0 +1,59 @@
+[日志元数据]
+日志类型: general
+生成时间: 2026-11-13 13:07:17 +0800
+批次: einsum-dev58-push
+主任务: 推送 dev58 与 main 到 origin
+触发原因: 一般记录
+摘要: dev58 与 main 推送成功；WSL 默认 DNS 不响应，间歇失败靠重试通过；远端对象与本地一致
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 推送授权与网络诊断
+- 目标: 按用户「是dev,现在推送」把 main 与 dev58 同步到 origin
+- 命令/操作: `git push origin main`；`getent hosts` / Python UDP DNS 探测 / `cat /etc/resolv.conf`；`ping -c1 10.255.255.254`
+- 关键输出: 首次 push 报 `ssh: Could not resolve hostname gitlab.itp.ac.cn`；网关 10.255.255.254 ping 0.049 ms 可达；对 10.255.255.254:53 查询 3.00 s 超时，对 223.5.5.5:53 与 114.114.114.114:53 均 0.05 s 返回 answers=1
+- 退出码: 128（首次 push）/ 0（DNS 探测）
+- 证据与判断: WSL 自动生成的 `/etc/resolv.conf` 仅指向 10.255.255.254，该服务器不响应 UDP 53，属环境层解析故障，不是仓库状态或 SSH 权限问题；未修改系统级 resolv.conf（系统级配置改动需显式授权）
+
+### S2 — 重试推送 main 与 dev58
+- 目标: 在解析间歇失败条件下完成同步
+- 命令/操作: 各 3–5 次循环重试 `git push`，`GIT_SSH_COMMAND='ssh -o ConnectTimeout=8 -o BatchMode=yes'`
+- 关键输出: main 第 2 次成功 `343d0cc..6ff2819  main -> main`；dev58 第 2 次成功 `* [new tag] dev58 -> dev58`
+- 退出码: 0
+- 证据与判断: 故障为间歇性 DNS 超时，重试即通过；标签为新增而非改写，未触发需显式确认的破坏性操作
+
+### S3 — 远端对象核验
+- 目标: 确认远端内容与本地逐位一致
+- 命令/操作: `git ls-remote --tags origin refs/tags/dev58 'refs/tags/dev58^{}'`；`git ls-remote origin refs/heads/main`；`tag-chain.sh --check --remote origin`
+- 关键输出: `refs/tags/dev58 = 121dd20`（peeled `343d0cc`）与本地一致；`refs/heads/main = 6ff2819` = 本地 HEAD；历史链自检 `PASS: follow 链、提交祖先关系，远端 origin 对象一致均正常。`（131 个管理标签）
+- 退出码: 0
+- 证据与判断: 同步闭环，标签对象与目标提交均被远端正确接收
+
+## 验证与证据
+- 测试/检查: `ls-remote` 对象比对、`tag-chain.sh --check --remote origin`（首次因 DNS 超时重试后通过）
+- 结果: PASS
+- 未验证项: 无（DNS 解析仍不稳定，后续 fetch/push 可能仍需重试）
+
+## 变更与产物
+- 文件: 新增本日志与 `logs/AGENTS.md` 索引条目
+- 产物: 已推送分支 main `6ff2819`、已推送注释标签 `dev58`（`121dd20` → `343d0cc`）
+- 未改动范围: 未改写任何既有标签、未 force push、未修改系统 DNS 配置
+
+## 风险、限制与下一步
+- 风险: WSL 默认 DNS 不响应，git 网络操作可能间歇失败需重试；如需根治要改 `/etc/resolv.conf`（系统级，需用户显式授权）
+- 阻塞: 无
+- 下一步: 无（任务闭环）；其他机器执行 `git fetch --tags` 获取 dev58
+
+## 用户输入指令
+是dev,现在推送
+
+## Agent 全文报告
+--- report begin ---
+✓ 推送完成
+- main: 343d0cc..6ff2819 → origin/main（第 2 次重试成功）
+- 标签: dev58（121dd20 → 343d0cc）已作为远端新标签推送
+- 远端核验: refs/tags/dev58 = 121dd20、peeled = 343d0cc，与本地逐位一致；refs/heads/main = 6ff2819 = 本地 HEAD
+- 标签链: tag-chain.sh --check --remote origin PASS（131 标签，远端对象一致）
+- 环境: WSL 默认 DNS 10.255.255.254 不响应（UDP 53 超时 3s），公共 DNS 0.05s 正常；两次 push 与一次 ls-remote 全靠重试通过，未改系统配置
+--- report end ---
