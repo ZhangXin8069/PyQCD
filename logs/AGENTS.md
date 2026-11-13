@@ -852,3 +852,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## einsum-release-0.4.1 - final - 2026-11-13 08:49:18 +0800
+- 主任务: qcd-einsum 0.4.1 发布与 stab31 稳定标签
+- 日志文件: logs/v2026111308-3.txt
+- 文件大小: 6336 bytes
+- 触发原因: 任务完成
+- 关键内容: PyPI 0.4.1 发布 + stab31 + 双远端同步 + 冻结约定固化
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+

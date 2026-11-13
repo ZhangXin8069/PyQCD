@@ -1,0 +1,85 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-13 08:49:18 +0800
+批次: einsum-release-0.4.1
+主任务: qcd-einsum 0.4.1 发布与 stab31 稳定标签
+触发原因: 任务完成
+摘要: PyPI 0.4.1 发布 + stab31 + 双远端同步 + 冻结约定固化
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 真实基线发现
+- 目标: 确认本地工作基于哪个发布线
+- 命令/操作: `git fetch origin`（SSH 直连 IP 绕过失效 DNS）；查询 PyPI JSON
+- 关键输出: 远端 main `59bd02b` 含 0.4.0 发布三提交；本地落后 3、领先 0；PyPI 最新 0.4.0（0.3.9 已发布）
+- 证据与判断: 本地改动基于旧基线；`stash` → `merge --ff-only origin/main` → `stash pop`，仅 `logs/AGENTS.md` 索引冲突（两侧新增条目，全保留）
+
+### S2 — 0.4.0 sdist 缺文件确认
+- 目标: 核对 0.4.0 发布产物完整性
+- 命令/操作: 下载 PyPI 0.4.0 sdist 并比对源码树
+- 关键输出: 0.4.0 **缺** `pyqcd/tools/_torch_backend.py`；0.4.1 sdist 已含该文件
+- 证据与判断: 属 0.4.0 打包遗漏，0.4.1 顺带修复
+
+### S3 — 版本推进
+- 目标: 确定发布版本号
+- 关键输出: 三处版本 0.4.0 → **0.4.1**（`pyproject.toml`/`pyqcd/__init__.py`/`pyqcd/einsum/_version.py`），`__native_version__` 保持 0.1.0
+- 证据与判断: 同版本不可覆盖；经用户裁决取 0.4.1
+
+### S4 — 文档版本门禁三轮回修
+- 目标: 通过 `docs version pinned`
+- 关键输出: 依次 stale `appendix_specialized/install.md` → `overview.md/performance.md` → 清零
+- 证据与判断: 该门禁要求 `docs/{en,zh}` 内无任何非当前版本号（无豁免）。附录由生成器重生成；历史证据章节改写为「首发于 0.4 系列」保留史实；README 新增 0.4.1 声明并保留 0.4.0 历史条目
+
+### S5 — 发布与推送
+- 目标: PyPI 上传 + 双远端推送 + 稳定标签
+- 命令/操作: `twine upload`（进程内 DNS 补丁）；`git push origin main/stab31`；`git push gitee main/stab31`
+- 关键输出: PyPI `0.4.1` 上传成功（1161624 bytes，2026-11-13T00:46:38Z）；gitlab 与 gitee 均 `59bd02b..fa03b00`、`* [new tag] stab31`
+- 三端一致性: tag `47578301854bb2744b927c96ef55727de0439e9d`、main `fa03b003e1709cdddc824e30217fa0827a59fc90` 三端完全相同
+- 证据与判断: 远程安装复验（`/tmp/rv041`）版本 0.4.1、11 子包齐全、`__file__` 含 site-packages、backend=cuda、specializations=8638、查询 seq=1650、`_torch_backend` 在位
+
+### S6 — 冻结约定落地
+- 目标: 把「本版本为 qcd-einsum 关键稳定版本，行为改动默认禁止」写入文档与注释
+- 落点: `pyqcd/einsum/AGENTS.md` §0（三条例外 + 解除条件 + 证据要求）、`pyqcd/einsum/__init__.py` 与 `_specialize.py` docstring、README 中英、`docs/{en,zh}` install/usage/appendix
+- 证据与判断: sdist 中 `AGENTS.md` 按既有策略被 `global-exclude` 排除（内部契约不入包），面向用户的说明在 README 与 docs
+
+## 验证与证据
+- 测试/检查: `python -B -m pyqcd.testing`；`release_check --offline`；`_docs_api_contract`；`_topology_equations_contract`；`docs_examples` zh/en；`git diff --check`；隔离 venv 安装；远程安装自检；三端 ls-remote
+- 结果: **121 passed / 1 skipped / 0 failed**；release_check **11/11**；API 契约 0 失败；拓扑 6/6；docs zh/en 各 19 ok/0 failed；diff 干净；远程安装全部断言通过；三端 tag/main 哈希一致
+- 未验证项: GPU 侧查询入口未单独验证；`github.com` 远端未推送（仓库只配置 gitlab + gitee）
+
+## 变更与产物
+- 文件: 新增 `pyqcd/einsum/verify_specialized.py`、`pyqcd/testing/_specialized_query_contract.py`；修改 `pyqcd/einsum/{__init__,_specialize,AGENTS.md,_version}`、`pyqcd/testing/{__init__,conftest,_gen_specialized_appendix}`、版本三处、README、docs zh/en、skills
+- 产物: `dist/pyqcd-0.4.1.tar.gz`；PyPI 0.4.1；Git 提交 `fa03b00`；标签 `stab31`
+- 未改动范围: 分派链、执行器、原生 C++/CUDA、语料与注册表数据
+
+## 风险、限制与下一步
+- 风险: 本机 WSL DNS（10.255.255.254）仍失效；本轮用 SSH 直连 IP 与进程内 DNS 补丁绕过，**未修改系统配置**。备份在 `~/resolv.conf.pyqcd-bak`，恢复 DNS 后直接删除临时补丁即可
+- 阻塞: 无
+- 下一步: DNS 恢复后，正常 `twine`/`git` 无需任何绕过；冻结期内的改动须按 §0 三条例外并附基线证据
+
+## 用户输入指令
+继续后续步骤,反复检查确认无误后推送并发布[将此版本定为qcd-einsum关键的稳定版本,在下一个qcd-einsum关键的稳定版本之前,任何影响本版本qcd-einsum的行为默认禁止,除非用户明确强制改动,将此约定写入相关文档与注释]最后~tag[stab]
+（裁决）版本号：升到 0.4.1 发布；网络修复：授权临时改 /etc/resolv.conf（实际无免密 sudo，改用等价绕过）
+
+## Agent 全文报告
+--- report begin ---
+已完成并发布：**pyqcd 0.4.1 = qcd-einsum 关键稳定版本**，标签 `stab31`，双远端与 PyPI 三处一致。
+
+改动内容
+- 新增 `python -m pyqcd.einsum.verify_specialized "<eq>"`（纯查询，不跑收缩、不改全局状态；退出码 0/1/2）与库接口 `pe.query_specialization(eq)`。
+- 冻结约定写入 `pyqcd/einsum/AGENTS.md` §0、包与 `_specialize` docstring、README 中英、docs install/usage/appendix。
+- 新增 9 条契约；版本三处 → 0.4.1；顺带修复 0.4.0 sdist 缺 `pyqcd/tools/_torch_backend.py`。
+
+推理依据
+- 发现 PyPI 已有 0.4.0 且本地落后 3 提交：先 fast-forward 再叠加，本地改动全为纯新增（未覆盖 0.4.0 代码）。
+- 版本必须前进（同版本不可覆盖），经裁决取 0.4.1。
+
+验证结果
+- 全量 121 passed / 1 skipped / 0 failed；release_check 离线 11/11；API 0 失败；拓扑 6/6。
+- PyPI 0.4.1 上传成功并从远程 venv 安装复验：11 子包、backend=cuda、8638 特化、查询 seq=1650、`_torch_backend` 在位。
+- 三端一致性：tag `4757830…`、main `fa03b00…` 在本地/gitlab/gitee 完全相同。
+
+后续步骤
+- 本机 DNS 仍坏（未改系统配置，用 SSH 直连 IP + 进程内补丁绕过）；恢复后可删除 `/tmp/dnsfix` 与 `/tmp/rv041`。冻结期改动须遵循 §0。
+--- report end ---
