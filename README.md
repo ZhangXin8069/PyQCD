@@ -42,6 +42,21 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
 
+## Release 0.4.2 — documentation fix for the frozen stable release
+
+`0.4.2` corrects a reversed wording in the localised documentation and changes
+nothing else.
+
+* Code, numerics, dispatch and native ABI are identical to `0.4.1`; no behaviour
+  change.
+* The Chinese pages said "不快于" ("not faster than") where the data and the
+  English text say **"not slower than"** — the sentence contradicted its own
+  table (CPU median `0.861x`, 26/43 at least 10% faster, the only counterexample
+  0.7% slower). Thirteen occurrences are fixed; the failure-branch wording in
+  `_topology_perf_multidim.py` was already correct and is unchanged.
+* The freeze from `stab31` still stands: behaviour-changing edits to qcd-einsum
+  remain disallowed by default until the next key stable release.
+
 ## Release 0.4.1 — frozen qcd-einsum stable release
 
 `0.4.1` is the **key stable release** for `pyqcd.einsum` (baseline tag `stab31`).

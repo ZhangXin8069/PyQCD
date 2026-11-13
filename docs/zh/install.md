@@ -7,13 +7,14 @@
 pip install pyqcd
 ```
 
-当前发行版：`0.4.1`。需要固定版本时：`pip install "pyqcd==0.4.1"`。
+当前发行版：`0.4.2`。需要固定版本时：`pip install "pyqcd==0.4.2"`。
 
-`0.4.1` 是 qcd-einsum 的关键稳定版本（冻结基线标签 `stab31`）：在上一版的
-资源门控拓扑特化之上新增 `python -m pyqcd.einsum.verify_specialized` 纯查询入口
-（不跑收缩、不改全局状态），并把「影响 qcd-einsum 行为的改动默认禁止」写入
-`pyqcd/einsum/AGENTS.md` §0。默认安装仍把 KUPL 视为必需基线，CUDA 仍是机会性构建；
-运行期原生失败会自动回退通用路径，数值结果不变。
+`0.4.2` 是 qcd-einsum 关键稳定版本的文档修正版：代码与数值行为与上一版完全一致，
+只纠正中英文档里「不快于 / not slower than」的语义反转（应为「不慢于」）。
+关键稳定版本自 `stab31` 起冻结：在下一个 qcd-einsum 关键稳定版本之前，任何影响
+qcd-einsum 行为的改动默认禁止，除非用户明确强制（见 `pyqcd/einsum/AGENTS.md` §0）。
+默认安装仍把 KUPL 视为必需基线，CUDA 仍是机会性构建；运行期原生失败会自动回退
+通用路径，数值结果不变。
 
 PyPI 上**有意不发平台 wheel**：原生库链接的是构建主机的 C++ 运行时，要产出可移植的
 manylinux wheel 需要 `auditwheel` 修补。因此首次安装会编译一次（笔记本上约一分钟），

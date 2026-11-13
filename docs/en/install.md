@@ -7,13 +7,15 @@ it locally, which is also when the native kernels are compiled on your machine.
 pip install pyqcd
 ```
 
-Current release: `0.4.1`. To pin it: `pip install "pyqcd==0.4.1"`.
+Current release: `0.4.2`. To pin it: `pip install "pyqcd==0.4.2"`.
 
-`0.4.1` is the frozen qcd-einsum stable release (baseline tag `stab31`): on top of
-the resource-gated topology specialisation of the previous release it adds the pure
-`python -m pyqcd.einsum.verify_specialized` query entry point (no contraction, no
-global state) and records in `pyqcd/einsum/AGENTS.md` §0 that behaviour-changing
-edits to qcd-einsum are disallowed by default.
+`0.4.2` is the documentation-fix release of the frozen qcd-einsum stable version:
+code and numerical behaviour are identical to the previous release; the only change
+is correcting the reversed "不快于 / not slower than" wording (it must read
+"not slower"). The key stable version has been frozen since `stab31`: until the next
+key qcd-einsum stable release, changes affecting qcd-einsum behaviour are
+disallowed by default unless the user explicitly forces them
+(see `pyqcd/einsum/AGENTS.md` §0).
 The default install still treats KUPL as mandatory; CUDA remains opportunistic.
 Runtime native failures fall back to the generic path without changing results.
 

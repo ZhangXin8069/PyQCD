@@ -37,6 +37,18 @@ python -m pyqcd --json     # machine-readable
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
 
+## 0.4.2 发布声明 — 冻结稳定版的文档修正
+
+`0.4.2` 只纠正本地化文档中的一处语义反转，其余完全不变。
+
+* 代码、数值、分派链与原生 ABI 与 `0.4.1` 完全一致，无行为变化。
+* 中文页面把英文与数据都指向的 **"not slower than"（不慢于）** 写成了
+  「不快于」（不更快），与同表数据自相矛盾（CPU 中位 `0.861x`、26/43 至少快
+  10%、唯一反例仅慢 0.7%）。共修正 13 处；`_topology_perf_multidim.py` 失败
+  分支里的「不快于」语义本就正确，未改动。
+* `stab31` 起的关键稳定版本冻结继续有效：在下一个 qcd-einsum 关键稳定版本之前，
+  任何影响 qcd-einsum 行为的改动仍默认禁止。
+
 ## 0.4.1 发布声明 — qcd-einsum 冻结稳定版
 
 `0.4.1` 是 `pyqcd.einsum` 的**关键稳定版本**（冻结基线标签 `stab31`）。

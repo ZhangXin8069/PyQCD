@@ -7,9 +7,10 @@ resulting contraction list for repeated evaluation.
 
 Only re-exports live here; the implementation is in the private modules.
 
-Stability: ``pyqcd`` 0.4.1 is a frozen qcd-einsum stable release (baseline tag
-``stab31``). Behaviour-changing edits are disallowed by default until the next
-qcd-einsum stable release; see ``AGENTS.md`` §0 for the three exceptions.
+Stability: the qcd-einsum stable line has been frozen since tag ``stab31``
+(first frozen release 0.4.1; 0.4.2 only fixes documentation wording and keeps
+code and numerics unchanged). Behaviour-changing edits are disallowed by
+default until the next qcd-einsum stable release; see ``AGENTS.md`` §0.
 """
 
 from __future__ import annotations
