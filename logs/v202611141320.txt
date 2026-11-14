@@ -1,0 +1,56 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-14 13:20:14 +0800
+批次: pyqcd-einsum/concurrency-and-coverage
+主任务: einsum 懒加载加锁 + dim≥5/GPU 并发覆盖 + 各 dtype 加速简报
+触发原因: 阶段成果
+摘要: 124 passed 0 failed；冷启动并发可重入；CUDA 四 dtype 全赢、CPU 普遍略慢
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 懒加载加锁（加载期并发）
+- 目标: 让"冷启动即并发"成为契约，而不是靠预热绕过
+- 命令/操作: `_kernel_kupl` 新增 `_ENTRY_LOCK`，`_function_topology` / `_function_dedicated` 双检锁；`_kernel_cuda._function_dedicated` 同构拆出 `_function_dedicated_locked`
+- 关键输出: 未预热直接 8 线程并发首调 → 16/16 成功（此前静默终止）
+- 退出码: 0
+
+### S2 — 覆盖扩展：dim≥5、GPU 并发
+- `_topology_kernel_contract` 新增 `test_higher_dims_and_larger_extents_hold_for_all_dtypes`：dim∈{5,6,8,12} × 3 条 seq × 四 dtype = 48 格，全命中且 rel ≤ 容差
+- `_einsum_semantics_contract` 新增 cold-start 专项与 GPU 并发用例（阈值改为"与 host 容差比 + 并发彼此逐位相同"，因为 cuBLAS 与 CPU BLAS 累加顺序本就不同）
+- 退出码: 0
+
+### S3 — 生产档各 dtype 加速比（10 轮中位）
+- CUDA V100：16/16 ≤ generic；中位 c128 0.51×、c64 0.37×、f64 0.32×、f32 0.31×（单精度加速更大）
+- KUPL CPU：中位 c128 0.92×、c64 0.82×、f64 0.83×、f32 0.80×（普遍更慢，仅 seq=1623/1863 赚）；float32 在 seq=129 最差（3.56×）
+- 结论：加速效果随**方程**变化、不随 dtype；CPU 与 GPU 结论相反（GPU 省 kernel 启动，CPU 把大 GEMM 拆小）
+
+## 验证与证据
+- 隔离 CUDA 环境全量：**124 passed / 1 skipped / 0 failed**
+- 拓扑契约 19 项（含新增 dim≥5）；语义组 13 项（含冷启动与 GPU 并发）
+- 未覆盖项: 跨卡/多 stream、`offsets` 非零（已由既有契约判为 fail closed）
+
+## 变更与产物
+- 文件: `_kernel_kupl.py`(锁)、`_kernel_cuda.py`(锁)、`_topology_kernel_contract.py`(dim≥5)、`_einsum_semantics_contract.py`(冷启动/GPU 并发)、`SKILL.md`(§4e)
+
+## 风险、限制与下一步
+- 风险: CPU 侧专用步表在重路径上系统性偏慢，选路应按方程代价门
+- 阻塞: 无
+- 下一步: 把 CPU 亏损格（129/3461）纳入 allowlist 之外的代价门候选
+
+## 用户输入指令
+1. 继续"显式注册制…；加载期并发…；dim≥5、n>8、GPU 侧并发"
+2. 同时简报新版特化内核的各个dtype的普遍加速效果
+
+## Agent 全文报告
+--- report begin ---
+完成三项待办并给出各 dtype 加速简报。
+
+**懒加载加锁**：`_kernel_kupl` / `_kernel_cuda` 的入口绑定（dlopen + ctypes argtypes）此前无锁，并发首调会重复 dlopen 并交叉改写 argtypes，实测静默终止进程。现改为双检锁，未预热直接 8 线程并发首调 16/16 成功；冷启动用例不再靠预热通过。
+
+**覆盖扩展**：新增 dim∈{5,6,8,12} × 3 seq × 四 dtype 契约（48 格全命中、rel 在容差内）；新增 GPU 并发用例——判据定为"与 host 容差比 + 并发彼此逐位相同"，因为 cuBLAS 与 CPU BLAS 的累加顺序本就不同，逐位相等是错的口径。
+
+**加速效果**：CUDA（V100 scene 10 轮）16/16 不慢于通用，按 dtype 中位 c128 0.51×、c64 0.37×、f64 0.32×、f32 0.31×（单精度受益更大）。CPU（KUPL）相反：四类中位 0.80–0.92× 即普遍略慢，仅 seq=1623/1863 赚，float32 在 seq=129 最差（3.56×）。机理：GPU 上专用步表省掉大量小 kernel 启动；CPU 上通用路径本已是大 BLAS，专用步表把大 GEMM 拆小。所以加速随**方程**变化、不随 dtype，CPU 选路必须按方程代价门。
+
+隔离环境全量 **124 passed / 1 skipped / 0 failed**。
+--- report end ---

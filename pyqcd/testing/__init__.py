@@ -3106,6 +3106,87 @@ def test_topology_kernel_contracts():
             f'topology kernel contracts did not run ({skipped} skipped)')
 
 
+def test_einsum_dispatch_contracts():
+    """分派门顺序与归属：元素级/形状特化/原生计划/kwargs 绕过（四类 dtype）。"""
+    from . import _einsum_dispatch_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
+def test_einsum_cache_contracts():
+    """缓存 LRU/字节预算/键完整性，以及输入不可变、输出不别名、块池存活。"""
+    from . import _einsum_cache_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
+def test_einsum_optimize_callable_contracts():
+    """callable/PathOptimizer 不得被计划缓存静默忽略，同一实例仍须命中缓存。"""
+    from . import _einsum_optimize_callable_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
+def test_production_perf_gate_contracts():
+    """性能结论只认生产场景：场景规模、档位可辨、分类器与历史误判清单。"""
+    from . import _production_perf_gate_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
+def test_bench_scene_distill_contracts():
+    """蒸馏生产场景的来源锁定：两个 Nev/两个 Mom、无 Nx/Lt 轴、旧档逐项未变。"""
+    from . import _bench_scene_distill_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
+def test_dedicated_routing_contracts():
+    """CPU 步表选路判据：allowlist 可用性/口径边界、代价门无法分辨亏损路径。"""
+    from . import _dedicated_routing_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
+def test_opt_einsum_parity_contracts():
+    """以 opt_einsum 为对照：数值、路径代价、expression/缓存、错误行为与退化门。"""
+    from . import _opt_einsum_parity_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
+def test_einsum_semantics_contracts():
+    """收缩语义的代数恒等式、随机方程、缓存/确定性与并发（四类 dtype）。"""
+    from . import _einsum_semantics_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
+def test_shape_paths_contracts():
+    """形状特化路径（非语料，如 x,ax,bx,cx->abc）的匹配/数值/回落契约。"""
+    from . import _shape_paths_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
 def test_specialized_query_contracts():
     """单条方程特化路径查询入口（生产包）的判定/退出码/无副作用契约。"""
     from . import _specialized_query_contract as contract

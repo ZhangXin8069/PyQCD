@@ -1,0 +1,60 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-14 13:55:40 +0800
+批次: pyqcd-einsum/opt-einsum-parity
+主任务: 新增 opt_einsum 对照测试组（数值/路径/行为/退化门）
+触发原因: 阶段成果
+摘要: 9 项；全量 125 passed 0 failed；修正脚手架开销导致的 13x 误报
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 新增 opt_einsum 对照组
+- 目标: 后续测试组中加入 opt_einsum 作为对照
+- 命令/操作: 新建 `pyqcd/testing/_opt_einsum_parity_contract.py`（9 项），注册进 `pyqcd/testing/__init__.py` 与 `conftest.py`
+- 覆盖: 数值（11 形态 × 3 optimize × 四 dtype）、专用路径（语料拓扑 + 形状特化）、路径代价（opt_cost/largest_intermediate/步数，含语料抽样）、contract_expression 复用、shared_intermediates、错误行为、性能退化门、oracle 溯源
+- 退出码: 0
+
+### S2 — 修掉一个测量缺陷（否则会误报 13×）
+- 现象: 首版只给 pyqcd 套 `_quiet()`，oracle 裸调，倍率 12–15×，触发退化门
+- 根因: `_quiet` 内部 `redirect_stdout` + `patch.dict` 每调用约 0.7 ms，全被算进 pyqcd
+- 修法: 计时循环外一次性设 `PYQCD_EINSUM_NOTICE=0`，循环内两边都不套壳
+- 修正后真实比值: 0.93–4.22×（matmul 2.20 / batch 4.22 / chain 1.06 / implicit 1.97 / ellipsis 3.52 / hadamard 0.94 / four-way 0.93）
+- 退出码: 0
+
+### S3 — 全量回归
+- 隔离 CUDA 环境：**125 passed / 1 skipped / 0 failed**（原 124，+9 项后重算）
+- oracle 来源: `installed:3.4.0`（`refer/git-rep/opt_einsum` submodule 未检出，已回退并在输出中显式打印）
+
+## 验证与证据
+- 对照组单跑 9 passed / 0 failed
+- 全量 125 passed / 1 skipped / 0 failed
+- 性能数字标注为"仅用于退化门"，不作性能结论（性能见 §4e scene 档 10 轮）
+
+## 变更与产物
+- 新增: `pyqcd/testing/_opt_einsum_parity_contract.py`
+- 修改: `pyqcd/testing/__init__.py`、`conftest.py`、`skills/pyqcd-einsum/SKILL.md`(§4g)
+
+## 风险、限制与下一步
+- 风险: oracle 用站点包 3.4.0 而非仓库内 submodule，版本漂移时差分意义下降（已用断言暴露来源）
+- 阻塞: 无
+- 下一步: 检出 `refer/git-rep/opt_einsum` submodule 后可切回 `PYQCD_EINSUM_ORACLE=frozen`
+
+## 用户输入指令
+1. 后续测试组中添加opt_einsum作为对照
+
+## Agent 全文报告
+--- report begin ---
+新增 `_opt_einsum_parity_contract`（9 项），把"兼容替代 opt_einsum"拆成三层可验断言：
+
+- **数值**：11 种形态 × 3 种 optimize × 四类 dtype，与 oracle 一致（双精度 1e-12、单精度 1e-4）。
+- **专用路径**：语料拓扑 seq 2584/2588/4305 与形状特化 `x,ax,bx,cx->abc` 也对照 oracle，防"专用内核自洽但偏离标准"。
+- **路径**：`opt_cost`、`largest_intermediate`、步数逐项相等（greedy/optimal + 语料抽样 13 条），专抓"规划器退化只改耗时、数值测不到"。
+- **行为**：`contract_expression` 复用、`shared_intermediates`、非法方程两边都报错。
+- **退化门**：交替计时取中位，ratio ≥ 8 视为数量级退化；刻意不设"必须更快"。
+- **溯源**：断言并打印 oracle 来源，实际为站点包 opt_einsum **3.4.0**（`refer/git-rep/opt_einsum` submodule 本 checkout 为空）。
+
+过程中修掉一个测量缺陷：首版只给 pyqcd 套 `_quiet()`（内部 redirect_stdout + patch.dict，每调用约 0.7 ms），oracle 裸调，导致倍率虚高到 12–15× 并误报退化。改为计时循环外一次性设环境变量后，真实比值 0.93–4.22×。
+
+全量 **125 passed / 1 skipped / 0 failed**。这些毫秒数只用于退化判断，性能结论仍以 §4e 的 scene 档 10 轮为准。
+--- report end ---

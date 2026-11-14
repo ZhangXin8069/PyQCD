@@ -2,10 +2,12 @@
 
 四件事必须同时成立，缺一不可：
 
-1. **dtype**：入口只下发**显式声明**的 dtype（``TOPOLOGY_DTYPES``）。单精度
-   （``complex64``/``float32``）是默认与首选，恒可下发；双精度只在原生**实测
-   正确**后才启用，否则返回 ``None`` 回落 —— 任何情况下都**不得**把
-   ``float64``/``complex128`` 转成单精度，也不得把异常抛给调用方。
+1. **dtype**：入口只下发**契约内**的 dtype（``TOPOLOGY_DTYPES`` 的四类：
+   ``complex128`` / ``complex64`` / ``float64`` / ``float32``）。四类**完全平权**
+   ——没有主精度、没有默认精度；每一类都必须由原生 2×2 实测（``_probe_dtype``）
+   自证正确后才启用，否则返回 ``None`` 回落。任何情况下都**不得**把一类 dtype
+   转成另一类精度，也不得把异常抛给调用方。"探测没过"与"契约外 dtype"必须是两条
+   可区分、可行动的原因。
 2. **参数与内存**：交给原生的 plan 字节流、操作数**顺序**、``operand_offsets``、
    ``out`` 缓冲区必须与 numpy/cupy 数组逐项一致；非连续输入要么复制成连续
    （下标记进 ``LAST_INFO['copied']``）要么回落，非连续 ``out`` 一律回落。
@@ -31,6 +33,7 @@ from ..einsum import _kernel_cuda, _kernel_kupl
 from ..einsum import contract
 from ..einsum._native_plan import dtype_id as native_dtype_id
 from ..einsum.kupl import einsum as kupl_einsum
+from ..einsum import _wick_tasklist as tasklist
 from ._topology_equations_contract import _parse_equations
 
 # 原生支持的四类 dtype（id 0..3），一个都不能漏。
@@ -43,6 +46,24 @@ TOLERANCES = {
 }
 SAMPLE_SIZE = 120          # 语料抽检下限是 100，留 20 条余量
 DIM = 4                    # per-拓扑 kernel 的固定维数
+# 拓扑入口只服务 wick 语料的编译期步表（语料外一律 status=4，不兜底）。因此凡是
+# 想验"真的下发成功"的用例，方程必须来自语料；``ij,jk->ik`` 这类语料外方程只能
+# 用来验"应当回落"。这两个常量就是"语料内最小元数"的那一条。
+PROBE_EQUATION = "cadb,menf,ac,em,bd,fn->"
+PROBE_TERMS = PROBE_EQUATION.split("->")[0].split(",")
+
+
+def probe_operands(dim: int, dtype: Any, seed: int = 0) -> list[np.ndarray]:
+    """``PROBE_EQUATION`` 的操作数（所有轴长 = dim，满足等长超立方体前提）。"""
+    rng = np.random.default_rng(seed)
+    values = []
+    for term in PROBE_TERMS:
+        shape = (dim,) * len(term)
+        data = rng.standard_normal(shape)
+        if np.dtype(dtype).kind == "c":
+            data = data + 1j * rng.standard_normal(shape)
+        values.append(np.ascontiguousarray(data.astype(dtype)))
+    return values
 _PROBE_KEYS = (
     "dtype", "dtype_id", "n_operands", "plan_bytes",
     "steps", "output_shape", "out", "copied", "offsets", "path",
@@ -119,6 +140,46 @@ def _shapes(equation: str, dim: int = DIM) -> list[tuple[int, ...]]:
     return [tuple(dim for _ in term) for term in terms]
 
 
+def _reset_kernel_globals() -> tuple[Any, ...]:
+    """隔离进程级缓存：入口缓存、dtype 探测缓存与负缓存都会把别的用例的结论
+    带到本模块。
+
+    返回快照，调用方在 ``finally`` 里用 :func:`_restore_kernel_globals` 还回去，
+    避免反过来污染后续用例。
+    """
+    saved = (
+        _kernel_kupl._entry_topology,
+        _kernel_kupl._failed_topology,
+        dict(_kernel_kupl._TOPOLOGY_DTYPE_SUPPORT),
+        dict(_kernel_cuda._TOPOLOGY_DTYPE_SUPPORT),
+    )
+    _kernel_kupl._entry_topology = None
+    _kernel_kupl._failed_topology = False
+    _kernel_kupl._TOPOLOGY_DTYPE_SUPPORT.clear()
+    _kernel_cuda._TOPOLOGY_DTYPE_SUPPORT.clear()
+    _kernel_kupl._negative_cache_clear()
+    return saved
+
+
+def _restore_kernel_globals(saved: tuple[Any, ...]) -> None:
+    (_kernel_kupl._entry_topology, _kernel_kupl._failed_topology,
+     kupl_support, cuda_support) = saved
+    _kernel_kupl._TOPOLOGY_DTYPE_SUPPORT.clear()
+    _kernel_kupl._TOPOLOGY_DTYPE_SUPPORT.update(kupl_support)
+    _kernel_cuda._TOPOLOGY_DTYPE_SUPPORT.clear()
+    _kernel_cuda._TOPOLOGY_DTYPE_SUPPORT.update(cuda_support)
+    _kernel_kupl._negative_cache_clear()
+
+
+def _allow_dtype(module: Any, dtype: Any) -> None:
+    """显式放行某 dtype，避免"宿主机探测健康度"劫持被测分支。
+
+    只在**patch 了原生入口**的用例里用：那里探测本身不可能成功（探测也会走
+    被替换的入口），再让门控去探测就变成测宿主机而不是测契约。
+    """
+    module._TOPOLOGY_DTYPE_SUPPORT[np.dtype(dtype)] = True
+
+
 def _require_kupl() -> None:
     if _kernel_kupl._function_topology() is None:
         raise unittest.SkipTest(
@@ -163,29 +224,31 @@ def _clear_kernel_warnings() -> None:
 
 # ── 1. dtype 声明 ───────────────────────────────────────────────────────────
 
-def test_dtype_declaration_is_explicit_and_single_precision_first():
-    """两个入口都必须显式声明 dtype：单精度恒在，双精度必须留待实测。"""
-    single = {np.dtype(np.complex64), np.dtype(np.float32)}
-    double = {np.dtype(np.complex128), np.dtype(np.float64)}
+def test_dtype_contract_is_uniform_across_all_four_dtypes():
+    """两个入口的 dtype 契约必须是四类**平权**，不设主精度或默认精度。
+
+    ``TOPOLOGY_DTYPES`` 是契约本身（四类都在），``topology_dtypes()`` 只是它的
+    只读视图且**不得**顺手触发探测；``topology_enabled_dtypes()`` 才回答"本进程
+    实测通过哪些"，四类走同一把尺子。
+    """
     for module in (_kernel_kupl, _kernel_cuda):
-        declared = module.TOPOLOGY_DTYPES
+        declared = tuple(module.TOPOLOGY_DTYPES)
         assert all(isinstance(item, np.dtype) for item in declared), declared
-        assert single <= set(declared), (module.__name__, declared)
-        assert set(declared).isdisjoint(double), \
-            f"{module.__name__}: 双精度不得直接写进声明集，必须先实测"
+        assert set(declared) == {np.dtype(item) for item in ALL_DTYPES}, (
+            f"{module.__name__}: 契约必须是四类平权 dtype，实际 {declared}")
+        # 顺序与 QCD_DTYPE_* 同值，Python/C++ 两侧才能直接互传 dtype id。
+        assert declared == tuple(np.dtype(item) for item in ALL_DTYPES), declared
 
-        saved = dict(module._TOPOLOGY_DOUBLE_SUPPORT)
-        module._TOPOLOGY_DOUBLE_SUPPORT.clear()
+        saved = dict(module._TOPOLOGY_DTYPE_SUPPORT)
+        module._TOPOLOGY_DTYPE_SUPPORT.clear()
         try:
-            # 未实测时不得把双精度报成可用，也不得顺手触发探测。
-            enabled = tuple(module.topology_dtypes())
-            assert enabled == tuple(declared), enabled
+            # 只读视图：未探测时不把任何一类报成可用，也不触发探测。
+            assert tuple(module.topology_dtypes()) == declared
+            assert module._TOPOLOGY_DTYPE_SUPPORT == {}, \
+                f"{module.__name__}: topology_dtypes() 不得触发探测"
         finally:
-            module._TOPOLOGY_DOUBLE_SUPPORT.update(saved)
-
-        enabled = set(module.topology_dtypes())
-        assert set(declared) <= enabled, (module.__name__, enabled)
-        assert enabled <= set(declared) | double, (module.__name__, enabled)
+            module._TOPOLOGY_DTYPE_SUPPORT.clear()
+            module._TOPOLOGY_DTYPE_SUPPORT.update(saved)
 
 
 # ── 2. dtype 矩阵 ───────────────────────────────────────────────────────────
@@ -194,19 +257,20 @@ def _check_dtype_matrix(module: Any, path: str, to_array: Callable[[Any], Any],
                         to_host: Callable[[Any], Any]) -> list[str]:
     """四类 dtype 的完整行为矩阵；返回被接受的 dtype 名字列表。
 
-    ``status == 4``（QCD_TOPOLOGY_UNSUPPORTED）表示"这条计划本入口不认"，是合法的
-    未实现状态：诊断正确即通过，但单精度也一条都跑不起来时必须跳过，不能把"原生
-    还没实现"误报成契约破坏；1/3（参数或内部错误）仍然直接失败。
+    四类 dtype 完全平权，判定口径也只有一条：命中要求数值/元数据全对；回落要求
+    留下原因、不写 ``LAST_INFO``、不改写操作数 dtype，并且原因必须是
+    "探测没过"（该 dtype 不在 ``_TOPOLOGY_DTYPE_SUPPORT`` 的 True 集合里）或
+    ``status == 4``（这条计划本入口不认）。1/3（参数或内部错误）一律失败。
     """
     accepted = []
     for dtype in ALL_DTYPES:
-        numpy_operands = _make_operands([(3, 4), (4, 5)], dtype, seed=11)
-        left, right = (to_array(item) for item in numpy_operands)
+        numpy_operands = probe_operands(2, dtype, seed=11)
+        operands = [to_array(item) for item in numpy_operands]
         module.LAST_INFO.clear()
         module.LAST_FAILURE.update({"reason": "", "status": None})
-        result = module.try_topology_apply("ij,jk->ik", [left, right])
-        expected = np.einsum("ij,jk->ik", *(to_host(item) for item in (left, right)))
-        declared = set(module.topology_dtypes())
+        result = module.try_topology_apply(PROBE_EQUATION, operands)
+        expected = np.einsum(
+            PROBE_EQUATION, *(to_host(item) for item in operands))
 
         if result is None:
             reason = str(module.LAST_FAILURE.get("reason", ""))
@@ -216,23 +280,18 @@ def _check_dtype_matrix(module: Any, path: str, to_array: Callable[[Any], Any],
             assert not module.LAST_INFO, \
                 f"{path}: 回落时不得留下 LAST_INFO（说明根本没跑原生）"
             # 回落绝不等于降级：原数组的 dtype 必须原封不动。
-            assert left.dtype == np.dtype(dtype) and right.dtype == np.dtype(dtype)
-            if name in ("complex64", "float32"):
-                # 单精度恒可下发，因此只允许"这条计划本入口不认"（status=4）这一种
-                # 合法回落；1/3 说明参数或内部实现坏了，必须报错。
-                assert status == 4, (
-                    f"{path}: 单精度只允许以 status=4（计划不支持）回落，"
-                    f"实际 status={status}: {reason}")
-            else:
-                assert np.dtype(dtype) not in declared, (
-                    f"{path}: {np.dtype(dtype)} 声明为可用却回落了：{reason}")
+            assert all(np.dtype(item.dtype) == np.dtype(dtype) for item in operands)
+            probed_out = module._TOPOLOGY_DTYPE_SUPPORT.get(np.dtype(dtype)) is False
+            assert probed_out or status == 4, (
+                f"{path}: {name} 回落必须给出可分辨的原因（探测没过或 status=4），"
+                f"实际 status={status}: {reason}")
             continue
 
         accepted.append(np.dtype(dtype).name)
         assert result.dtype == np.dtype(dtype), \
             f"{path}: {np.dtype(dtype)} 的结果被改成了 {result.dtype}"
-        assert np.dtype(dtype) in set(module.topology_dtypes()), \
-            f"{path}: {np.dtype(dtype)} 命中却不在声明集里"
+        assert module._TOPOLOGY_DTYPE_SUPPORT.get(np.dtype(dtype)) is True, \
+            f"{path}: {np.dtype(dtype)} 命中却不在实测通过的集合里"
         error = _relative_error(to_host(result), expected)
         assert error <= TOLERANCES[np.dtype(dtype).name], (
             f"{path}: {np.dtype(dtype)} 数值错误 rel={error:.3e}")
@@ -242,7 +301,7 @@ def _check_dtype_matrix(module: Any, path: str, to_array: Callable[[Any], Any],
         assert not missing, f"{path}: LAST_INFO 缺 {missing}"
         assert info["dtype"] == str(np.dtype(dtype))
         assert info["dtype_id"] == native_dtype_id(dtype)
-        assert info["n_operands"] == 2
+        assert info["n_operands"] == len(PROBE_TERMS)
         assert info["steps"] >= 1
         assert tuple(info["output_shape"]) == tuple(expected.shape)
         assert info["out"] == "allocated"
@@ -252,10 +311,7 @@ def _check_dtype_matrix(module: Any, path: str, to_array: Callable[[Any], Any],
 
     if not accepted:
         raise unittest.SkipTest(
-            f"{path}: 这个原生构建没有可执行 dtype（单精度 status=4，待实现）")
-    # 单精度是默认与首选：只要这个构建还能跑，就必须至少覆盖一个单精度 dtype。
-    assert any(name in ("complex64", "float32") for name in accepted), \
-        f"{path}: 单精度必须命中，实际 {accepted}"
+            f"{path}: 这个原生构建没有可执行 dtype（四类全部 status=4，待实现）")
     return accepted
 
 
@@ -274,26 +330,26 @@ def test_dtype_matrix_cuda():
     _check_dtype_matrix(_kernel_cuda, "cuda_topology", cupy.asarray, cupy.asnumpy)
 
 
-def test_double_is_never_narrowed_to_single():
-    """未实测通过的双精度必须直接回落，且绝不把数组降级成单精度。"""
+def test_probe_failed_dtype_is_never_narrowed_to_another():
+    """探测没过的 dtype 必须直接回落，且绝不把数组降级成别的精度。"""
     module = _kernel_kupl
     _require_kupl()
     dtype = np.dtype(np.complex128)
     left, right = _make_operands([(3, 4), (4, 5)], dtype, seed=13)
     calls = []
-    saved = dict(module._TOPOLOGY_DOUBLE_SUPPORT)
-    module._TOPOLOGY_DOUBLE_SUPPORT[dtype] = False
+    saved = dict(module._TOPOLOGY_DTYPE_SUPPORT)
+    module._TOPOLOGY_DTYPE_SUPPORT[dtype] = False
     try:
         with patch.object(kupl_einsum, "topology_apply",
                           side_effect=lambda *a, **k:
                           calls.append(a) or np.zeros((3, 5))):
             result = module.try_topology_apply("ij,jk->ik", [left, right])
     finally:
-        module._TOPOLOGY_DOUBLE_SUPPORT.clear()
-        module._TOPOLOGY_DOUBLE_SUPPORT.update(saved)
+        module._TOPOLOGY_DTYPE_SUPPORT.clear()
+        module._TOPOLOGY_DTYPE_SUPPORT.update(saved)
 
-    assert result is None, "不可用的双精度必须返回 None"
-    assert calls == [], "不可用的 dtype 不得下发原生，更不得降级成单精度后下发"
+    assert result is None, "探测没过的 dtype 必须返回 None"
+    assert calls == [], "不可用的 dtype 不得下发原生，更不得降级成别的精度后下发"
     assert left.dtype == dtype and right.dtype == dtype, "输入 dtype 被改动"
     reason = str(module.LAST_FAILURE.get("reason", ""))
     assert "complex128" in reason and "downcast" in reason, reason
@@ -314,6 +370,7 @@ def test_native_arguments_carry_plan_order_and_out_buffer():
     out = np.empty((3, 5), dtype=np.complex64)
 
     entry, record = _entry_status_recorder(status=1)
+    _allow_dtype(module, np.complex64)
     with patch.object(kupl_einsum, "load_topology", lambda: entry):
         assert module.try_topology_apply("ij,jk->ik", [slab, right], out=out) is None
     assert "status 1" in str(module.LAST_FAILURE["reason"]), module.LAST_FAILURE
@@ -350,6 +407,7 @@ def test_cuda_arguments_carry_plan_order_and_out_buffer():
 
     from ..einsum.cuda import _program
 
+    _allow_dtype(_kernel_cuda, np.complex64)
     left = cupy.asarray(np.arange(12, dtype=np.float32).reshape(3, 4)
                         + 1j * np.ones((3, 4), dtype=np.float32))
     right = cupy.asarray((np.arange(20, dtype=np.float32).reshape(4, 5)
@@ -394,6 +452,7 @@ def test_offsets_are_never_forwarded():
     def forbidden(*_args, **_kwargs):
         raise AssertionError("operand_offsets 非 None 时不得调用原生")
 
+    _allow_dtype(module, np.complex64)   # 探测也会走被替换的 topology_apply
     with patch.object(kupl_einsum, "topology_apply", forbidden):
         assert module.try_topology_apply(
             "ij,jk->ik", [left, right], offsets=[4, 0]) is None
@@ -496,6 +555,7 @@ def test_unencodable_plan_falls_back_without_raising():
             import cupy
 
             operand = cupy.asarray(np.eye(4, dtype=np.complex64))
+            _allow_dtype(_kernel_cuda, np.complex64)
         assert module.try_topology_apply("ii->i", [operand]) is None
         reason = str(module.LAST_FAILURE.get("reason", ""))
         assert "repeated" in reason or "unavailable" in reason, reason
@@ -577,6 +637,7 @@ def test_native_failure_falls_back_with_one_warning():
     expected = contract(equation, *operands, specialize=False)
 
     entry, record = _entry_status_recorder(status=1)
+    _allow_dtype(_kernel_kupl, np.complex64)
     _clear_kernel_warnings()
     # 分派链里 `kupl_dedicated` 排在 `kupl_topology` 之前：不屏蔽它的话，
     # dedicated 会先成功接手，`load_topology` 根本不会被调用，本契约就测不到
@@ -602,13 +663,248 @@ def test_native_failure_falls_back_with_one_warning():
     assert "status 1" in message, message
 
 
+# ── 5. dtype 探测：容器化、缓存与原因可分辨（2026-11-14 补） ────────────────
+
+def _reset_dtype_support(module: Any) -> dict[np.dtype, bool]:
+    """清空探测缓存；返回快照供调用方恢复（不得污染后续用例）。"""
+    saved = dict(module._TOPOLOGY_DTYPE_SUPPORT)
+    module._TOPOLOGY_DTYPE_SUPPORT.clear()
+    return saved
+
+
+def _restore_dtype_support(module: Any, saved: dict[np.dtype, bool]) -> None:
+    module._TOPOLOGY_DTYPE_SUPPORT.clear()
+    module._TOPOLOGY_DTYPE_SUPPORT.update(saved)
+
+
+def test_dtype_probe_contains_exceptions_and_is_cached():
+    """探测体任何异常都只返回 ``False``；失败结果被缓存，第二次不再重探。
+
+    回归点：CUDA 侧 ``cupy.arange`` 曾在 ``try`` 之外，NVRTC 架构不匹配时把
+    ``CompileException`` 抛给调用方 —— 四类 dtype 同等受害，且失败结果无法缓存、
+    每次调用都重探。四类 dtype 一起验，不做任何一类豁免。
+    """
+    from ..einsum import _api
+
+    for module in (_kernel_kupl, _kernel_cuda):
+        with patch.object(_api, "contract_path", side_effect=RuntimeError("boom")):
+            assert module._probe_dtype(np.dtype(np.complex128)) is False, \
+                f"{module.__name__}: 探测抛异常时必须返回 False，不得外泄异常"
+
+        saved = _reset_dtype_support(module)
+        calls = []
+
+        def exploding_probe(dtype, _calls=calls):
+            _calls.append(dtype)
+            raise RuntimeError("probe exploded")
+
+        try:
+            with patch.object(module, "_probe_dtype", exploding_probe):
+                first = module._topology_dtype_enabled(np.dtype(np.complex128))
+                second = module._topology_dtype_enabled(np.dtype(np.complex128))
+            assert first is False and second is False, module.__name__
+            assert len(calls) == 1, (
+                f"{module.__name__}: 探测失败必须缓存，实际探测 {len(calls)} 次")
+            assert module._TOPOLOGY_DTYPE_SUPPORT[np.dtype(np.complex128)] is False
+            assert np.dtype(np.complex128) not in set(
+                module.topology_enabled_dtypes())
+        finally:
+            _restore_dtype_support(module, saved)
+
+
+def test_topology_dtype_reasons_are_distinguishable():
+    """契约外 dtype 与"探测没过"必须给出不同且可行动的原因。
+
+    回归点：两者原先共用一句 ``dtype ... is not enabled ... (supported:
+    complex64, float32)``，用户读成"complex128 永远不支持"。
+    """
+    for module, hint in ((_kernel_kupl, "cpp/kupl/einsum/make.sh"),
+                         (_kernel_cuda, "cpp/cuda/einsum/make-nv.sh")):
+        saved = _reset_dtype_support(module)
+        try:
+            with patch.object(module, "_probe_dtype", lambda dtype: False):
+                probe_failed = module._topology_dtype_reason(np.dtype(np.complex128))
+                real_double = module._topology_dtype_reason(np.dtype(np.float64))
+            outside = module._topology_dtype_reason(np.dtype(np.int64))
+            single = module._topology_dtype_reason(np.dtype(np.float32))
+        finally:
+            _restore_dtype_support(module, saved)
+
+        # 单精度不豁免探测：本机探测通过才可下发，没通过就报同款可恢复原因。
+        if module._topology_dtype_enabled(np.dtype(np.float32)):
+            assert single is None, f"{module.__name__}: 探测通过时 float32 可下发"
+        else:
+            assert single is not None and "probe failed" in single, single
+        assert probe_failed is not None, module.__name__
+        assert "probe failed" in probe_failed, probe_failed
+        assert "complex128" in probe_failed and hint in probe_failed, probe_failed
+        assert outside is not None, module.__name__
+        assert "outside the topology dtype contract" in outside, outside
+        assert probe_failed != outside, "两种拒绝必须可分辨"
+        assert real_double is not None and "probe failed" in real_double, real_double
+
+        # 四类 dtype 平权：任一类探测失败都必须报同一类"可恢复"原因。
+        saved = _reset_dtype_support(module)
+        try:
+            with patch.object(module, "_probe_dtype", lambda dtype: False):
+                for dtype in ALL_DTYPES:
+                    reason = module._topology_dtype_reason(np.dtype(dtype))
+                    assert reason is not None and "probe failed" in reason, (
+                        module.__name__, dtype, reason)
+        finally:
+            _restore_dtype_support(module, saved)
+
+
+def test_try_topology_apply_reports_probe_failure_without_raising():
+    """探测失败时入口只回落并记真实原因，绝不抛异常、绝不报成"dtype 不支持"。"""
+    _require_kupl()
+    dtype = np.dtype(np.complex128)
+    operands = _make_operands([(2, 2), (2, 2)], dtype, seed=5)
+    saved = _reset_dtype_support(_kernel_kupl)
+    _kernel_kupl.LAST_INFO.clear()
+    _kernel_kupl.LAST_FAILURE.update({"reason": "", "status": None})
+    try:
+        with patch.object(_kernel_kupl, "_probe_dtype", lambda item: False):
+            result = _kernel_kupl.try_topology_apply("ij,jk->ik", operands)
+        reason = str(_kernel_kupl.LAST_FAILURE.get("reason", ""))
+        assert not _kernel_kupl.LAST_INFO, "回落时不得留下 LAST_INFO（说明根本没跑原生）"
+    finally:
+        _restore_dtype_support(_kernel_kupl, saved)
+    assert result is None, "探测失败时必须回落通用路径"
+    assert "probe failed" in reason, reason
+    assert "not enabled" not in reason, reason
+
+
+def test_wide_output_topologies_are_not_transposed():
+    """输出秩 >= 4 的拓扑必须逐元素对上：分块转置的指数曾写反过。
+
+    回归点：``topology_gemm.h`` 的"二维互换"快捷路径把两侧分块指数写反
+    （``dim^split`` 应为 ``dim^(rank-split)``），只有 ``split == rank/2`` 时才
+    恰好等效。120 条等距抽样与 2582 条基础表契约都覆盖不到，全语料对拍在 16 条
+    4 输出轴拓扑上给出 rel≈1（值对但被错误转置）。这里按语料里真实的 4 输出轴
+    方程直接钉住，抽样再少也不会漏。
+    """
+    _require_kupl()
+    # 只取**基础表**（seq <= base_table_count）：附录条目没有编译期步表，
+    # 去兜底后它们一律 status=4，那是设计意图而不是回归。
+    # 步表只由基础表前 2582 条生成（见 `_topology_kernel_gen.MAX_KERNELS`）。
+    wide = [task for task in tasklist.TASKS
+            if task.seq <= 2582 and task.equation
+            and len(task.equation.split("->")[-1]) >= 4]
+    assert wide, "语料里应当存在 4 输出轴的拓扑"
+    checked = 0
+    for task in wide[::max(1, len(wide) // 12)]:
+        for dim in (2, 3):
+            operands = _make_operands(
+                [(dim,) * len(term)
+                 for term in task.equation.split("->")[0].split(",")],
+                np.complex128, seed=task.seq + dim)
+            expected = contract(task.equation, *operands, specialize=False)
+            _kernel_kupl.LAST_INFO.clear()
+            result = _kernel_kupl.try_topology_apply(task.equation, operands)
+            assert result is not None, (
+                f"seq={task.seq} dim={dim} 拓扑入口应当命中："
+                f"{_kernel_kupl.LAST_FAILURE.get('reason')}")
+            error = _relative_error(result, expected)
+            assert error <= TOLERANCES["complex128"], (
+                f"seq={task.seq} dim={dim} 4 输出轴拓扑转置错 rel={error:.3e}")
+            checked += 1
+    assert checked >= 12, checked
+
+
+def test_higher_dims_and_larger_extents_hold_for_all_dtypes():
+    """dim ∈ {5,6,8,12} × 四 dtype：命中、dtype 保真、数值在容差内。
+
+    ``dim=4`` 是语料基准与 ``_dedicated_allowlist`` 的标定尺寸，但内核的轴长是
+    ``dim`` 这个标量而不是常量，越界的尺寸最容易暴露"按 4 写死"的假设。这里不
+    追求生产尺寸（那是 ``bench_dtype_matrix --scene`` 的职责），只钉住结构正确性。
+    """
+    _require_kupl()
+    checked = 0
+    for dtype in ALL_DTYPES:
+        name = np.dtype(dtype).name
+        # 步表只由**基础表 2582 条**生成（`_topology_kernel_gen.MAX_KERNELS=2582`,
+        # seq 1..2582）；附录（2583+）没有步表，去兜底后恒 status=4。
+        for seq in (2, 2000):
+            task = tasklist.lookup(seq)
+            for dim in (5, 6, 8, 12):
+                operands = _make_operands(
+                    [(dim,) * len(term)
+                     for term in task.equation.split("->")[0].split(",")],
+                    dtype, seed=task.seq + dim)
+                expected = contract(task.equation, *operands, specialize=False)
+                _kernel_kupl.LAST_INFO.clear()
+                result = _kernel_kupl.try_topology_apply(task.equation, operands)
+                assert result is not None, (
+                    f"{name} seq={seq} dim={dim} 拓扑入口应当命中："
+                    f"{_kernel_kupl.LAST_FAILURE.get('reason')}")
+                assert np.dtype(result.dtype) == np.dtype(dtype), (name, dim)
+                error = _relative_error(result, expected)
+                assert error <= TOLERANCES[name], (
+                    f"{name} seq={seq} dim={dim} rel={error:.3e}")
+                checked += 1
+    assert checked == len(ALL_DTYPES) * 2 * 4, checked
+
+
+def test_every_dtype_is_native_when_its_probe_passes():
+    """四类 dtype 各自的活证据：探测通过 ⇒ 必须真的走原生拓扑入口。
+
+    判定对四类完全一样——``LAST_INFO['path']`` 命中、dtype 保真、数值在容差内。
+    没有"某一类只要不崩就算支持"的豁免。
+    """
+    _require_kupl()
+    checked = []
+    for dtype in ALL_DTYPES:
+        dtype = np.dtype(dtype)
+        if not _kernel_kupl._topology_dtype_enabled(dtype):
+            continue                      # 这个原生构建缺该类 GEMM，跳过即可
+        assert dtype in set(_kernel_kupl.topology_dtypes())
+
+        operands = probe_operands(2, dtype, seed=17)
+        expected = np.einsum(PROBE_EQUATION, *operands)
+        _kernel_kupl.LAST_INFO.clear()
+        _kernel_kupl.LAST_FAILURE.update({"reason": "", "status": None})
+        result = _kernel_kupl.try_topology_apply(PROBE_EQUATION, operands)
+        assert result is not None, (
+            f"{dtype} 探测通过却回落：{_kernel_kupl.LAST_FAILURE.get('reason')}")
+        assert result.dtype == dtype, f"{dtype}: 结果 dtype 被改成 {result.dtype}"
+        assert _relative_error(result, expected) <= TOLERANCES[dtype.name], dtype
+        assert _kernel_kupl.LAST_INFO.get("path") == "kupl_topology", \
+            (dtype, _kernel_kupl.LAST_INFO.get("path"))
+        checked.append(dtype.name)
+
+    if not checked:
+        raise unittest.SkipTest("native KUPL build cannot execute any dtype")
+
+
 # ── 入口 ────────────────────────────────────────────────────────────────────
 
-TESTS = (
-    test_dtype_declaration_is_explicit_and_single_precision_first,
+def _isolated(test: Callable[[], None]) -> Callable[[], None]:
+    """每个用例都从干净的入口缓存/负缓存开始，跑完还原，避免跨模块串味。"""
+
+    def runner() -> None:
+        saved = _reset_kernel_globals()
+        try:
+            test()
+        finally:
+            _restore_kernel_globals(saved)
+
+    runner.__name__ = test.__name__
+    runner.__doc__ = test.__doc__
+    return runner
+
+
+TESTS = tuple(_isolated(test) for test in (
+    test_dtype_contract_is_uniform_across_all_four_dtypes,
     test_dtype_matrix_kupl,
     test_dtype_matrix_cuda,
-    test_double_is_never_narrowed_to_single,
+    test_probe_failed_dtype_is_never_narrowed_to_another,
+    test_dtype_probe_contains_exceptions_and_is_cached,
+    test_topology_dtype_reasons_are_distinguishable,
+    test_try_topology_apply_reports_probe_failure_without_raising,
+    test_wide_output_topologies_are_not_transposed,
+    test_higher_dims_and_larger_extents_hold_for_all_dtypes,
+    test_every_dtype_is_native_when_its_probe_passes,
     test_native_arguments_carry_plan_order_and_out_buffer,
     test_cuda_arguments_carry_plan_order_and_out_buffer,
     test_offsets_are_never_forwarded,
@@ -618,7 +914,7 @@ TESTS = (
     test_unencodable_plan_falls_back_without_raising,
     test_corpus_sample_matches_generic_path,
     test_native_failure_falls_back_with_one_warning,
-)
+))
 
 
 def main() -> int:

@@ -888,3 +888,102 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## pyqcd-einsum/dtype-parity - final - 2026-11-14 09:16:56 +0800
+- 主任务: qcd-einsum complex128 支持修补与四类 dtype 平权/正确性/生产性能
+- 日志文件: logs/v2026111409.txt
+- 文件大小: 8744 bytes
+- 触发原因: 任务完成
+- 关键内容: 四类 dtype 平权+复数步表；全语料对拍抓到并修好 unpack 转置 bug；生产档性能按方程分化
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## pyqcd-einsum/dtype-parity-cuda - stage - 2026-11-14 09:46:06 +0800
+- 主任务: CUDA 生产档四 dtype 复测（V100，隔离 mamba 环境）
+- 日志文件: logs/v202611140946.txt
+- 文件大小: 5290 bytes
+- 触发原因: 阶段成果
+- 关键内容: V100 生产档 16 单元格全部不慢于通用；CUDA 对拍 600 条 0 失配；基础环境已恢复
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/dtype-parity-cuda-v100 - stage - 2026-11-14 10:01:42 +0800
+- 主任务: V100 CUDA 生产档四 dtype 复测与单精度判据纠偏
+- 日志文件: logs/v202611141001.txt
+- 文件大小: 5507 bytes
+- 触发原因: 阶段成果
+- 关键内容: 16/16 不慢于通用；双精度全量 0 失配；float32 临界格证明特化更准；基础环境已恢复
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/optimization-hardening - stage - 2026-11-14 12:21:06 +0800
+- 主任务: einsum 攻坚：#1/#3/#4 评估、out= 与 cuBLAS 双副本两个 bug、生产档复测
+- 日志文件: logs/v202611141221.txt
+- 文件大小: 6709 bytes
+- 触发原因: 阶段成果
+- 关键内容: #4 采纳(热 14.6us/条)、#1 否决回退、#3 不做；修 out= 丢虚部与 cuBLAS 双副本；121 passed 0 failed
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/four-dtype-coverage - stage - 2026-11-14 12:32:08 +0800
+- 主任务: einsum 测试面扩到四 dtype + 生产档 10 轮
+- 日志文件: logs/v202611141232.txt
+- 文件大小: 4981 bytes
+- 触发原因: 阶段成果
+- 关键内容: verify_native 16→49 项、plan_gate/topology 四 dtype；修两处测试口径；生产档 10 轮 16/16 不慢
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/more-test-groups - stage - 2026-11-14 12:55:18 +0800
+- 主任务: einsum 新增三组结构契约（语义/分派/缓存）四 dtype
+- 日志文件: logs/v202611141255.txt
+- 文件大小: 3594 bytes
+- 触发原因: 阶段成果
+- 关键内容: 新增 25 项；套件 124 passed 0 failed；修三个测试自身缺陷
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/concurrency-and-coverage - stage - 2026-11-14 13:20:14 +0800
+- 主任务: einsum 懒加载加锁 + dim≥5/GPU 并发覆盖 + 各 dtype 加速简报
+- 日志文件: logs/v202611141320.txt
+- 文件大小: 3885 bytes
+- 触发原因: 阶段成果
+- 关键内容: 124 passed 0 failed；冷启动并发可重入；CUDA 四 dtype 全赢、CPU 普遍略慢
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/full-metrics - stage - 2026-11-14 13:25:33 +0800
+- 主任务: einsum 生产档完整数据表（绝对耗时 + 规模）
+- 日志文件: logs/v202611141325.txt
+- 文件大小: 3507 bytes
+- 触发原因: 阶段成果
+- 关键内容: 两表 32 格全量数据；CPU 重路径偏慢/轻路径赚，CUDA 16/16 全赢
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/topology-no-fallback - stage - 2026-11-14 13:50:27 +0800
+- 主任务: 去掉 KUPL 拓扑兜底，两侧 topology 语义统一
+- 日志文件: logs/v202611141350.txt
+- 文件大小: 4819 bytes
+- 触发原因: 阶段成果
+- 关键内容: 去兜底；连带修探测方程与容差；124 passed 0 failed；基表 44/44 命中
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/opt-einsum-parity - stage - 2026-11-14 13:55:40 +0800
+- 主任务: 新增 opt_einsum 对照测试组（数值/路径/行为/退化门）
+- 日志文件: logs/v202611141355.txt
+- 文件大小: 3777 bytes
+- 触发原因: 阶段成果
+- 关键内容: 9 项；全量 125 passed 0 failed；修正脚手架开销导致的 13x 误报
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## pyqcd-einsum/routing-evidence - stage - 2026-11-14 14:04:33 +0800
+- 主任务: 修 allowlist 惰性解析 bug + CPU 步表选路证据标定
+- 日志文件: logs/v202611141404.txt
+- 文件大小: 3647 bytes
+- 触发原因: 阶段成果
+- 关键内容: 修 NameError 真 bug；三个判据假设被否；126 passed 0 failed
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

@@ -1,0 +1,63 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-14 13:50:27 +0800
+批次: pyqcd-einsum/topology-no-fallback
+主任务: 去掉 KUPL 拓扑兜底，两侧 topology 语义统一
+触发原因: 阶段成果
+摘要: 去兜底；连带修探测方程与容差；124 passed 0 failed；基表 44/44 命中
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 去掉 KUPL 拓扑入口的兜底
+- 目标: 让 `topology` 一列在 CPU/CUDA 两侧同义（查不到步表 = status 4）
+- 命令/操作: `topology_apply.cpp::apply_topology` 末尾改为直接 `return QCD_TOPOLOGY_UNSUPPORTED`，删除 `execute_parsed_contract` 兜底
+- 关键输出: 重建 SUCCESS；`ij,jk->ik`（语料外）现在如实 missing，端到端回落 `kupl_dedicated` 且 rel=0
+- 退出码: 0
+
+### S2 — 连带修复两个死锁/误判
+- **探测方程必须来自语料**：`_PROBE_EQUATION` 由 `ij,jk->ik` 改为 `cadb,menf,ac,em,bd,fn->`。旧方程靠兜底才探测通过，去兜底后恒 status 4 → dtype 永不启用 → 语料方程也被拦住（实测四类全部 MISS）
+- **探测容差按精度分档**：统一 1e-9 会把正确的 complex64 判成不支持（实测 rel=3.6e-7）。改为 c128/f64 1e-9、c64/f32 1e-4
+- 关键输出: 四类 probe 全 True；enabled 四类齐全
+- 退出码: 0
+
+### S3 — 契约改用语料内方程
+- `_topology_kernel_contract`：新增 `PROBE_EQUATION`/`probe_operands()`；dtype 矩阵、每-dtype 活证据、宽输出、高等维四处改用语料方程；边界按**步表真实范围 seq<=2582**（`MAX_KERNELS=2582`，附录 2583+ 无步表）
+- `_einsum_semantics_contract`：冷启动与负缓存用例改用语料方程
+- 关键输出: 拓扑契约 16 passed / 3 skipped / 0 failed；全量 **124 passed / 1 skipped / 0 failed**
+
+### S4 — 重测并更新表
+- KUPL scene 10 轮：`topology` 列全部 MISS（不再兜底），`dedicated` 数据与之前一致（seq=129 c128 180.89 ms / 1.46×；1623 0.69–0.81× 赚；3461 1.19–1.65× 亏）
+- 真实覆盖率：基表抽样 44/44 命中 0 失配；跨附录 26/88（miss 全来自 2583+）
+
+## 验证与证据
+- 隔离 CUDA 环境全量：**124 passed / 1 skipped / 0 failed**
+- 基表 44/44 命中；端到端回落路径 rel=0
+- 未验证: CUDA 侧同类"覆盖边界"未重测（本次未改 CUDA 行为）
+
+## 变更与产物
+- 文件: `cpp/kupl/einsum/src/topology_apply.cpp`、`pyqcd/einsum/_kernel_kupl.py`(探测方程+容差)、`pyqcd/einsum/_kernel_cuda.py`(容差)、`_topology_kernel_contract.py`、`_einsum_semantics_contract.py`、`SKILL.md`(§4e 新表 + §4f)
+
+## 风险、限制与下一步
+- 风险: 去掉兜底后，异形轴（生产 scene）在 CPU 上不再有任何"拓扑"路径可走，只能 dedicated/generic —— 这是有意的诚实化
+- 阻塞: 无
+- 下一步: 若要 CPU 生产档也享受步表，需要步表支持异形轴（步长表替代 dim 幂次）
+
+## 用户输入指令
+1. 立即"KUPL 的兜底也去掉，让 topology 这一列在两侧同义"
+2. 同时提问:为什么旧表的cpu的"dedicated │ topology"耗时相差这么多?
+
+## Agent 全文报告
+--- report begin ---
+已按指令去掉 KUPL 拓扑入口的兜底，两侧语义统一为"查不到步表 = status 4"。
+
+**旧表 CPU 的 dedicated 与 topology 差 89 ms 的原因**：那不是两条步表路径的差异，而是 `topology` 当时根本没进步表——scene 是异形轴，`run_specialized` 第一关就卡在 `uniform_dimension()`（步表要求所有轴长等于同一 `dim`），于是走了兜底 `execute_parsed_contract`，也就是 generic 用的同一个原生执行器，只省掉 Python 逐步 dispatch（120.00 → 97.61 ms）。而 `dedicated` 真跑了步表，每步都要 pack/unpack，seq=129 的 `plan_pack_bytes` 是 524.6 MiB，那 89 ms 全部是打包成本。旁证：轻路径 seq=1623（pack 仅 29.2 MiB）两者接近（5.03 vs 5.35 ms）。
+
+**改动**：`apply_topology` 末尾不再兜底，直接返回 UNSUPPORTED。
+
+**连带必须修的两处**（否则死锁）：① 探测方程 `ij,jk->ik` 不在语料步表里，之前靠兜底才"通过"，去兜底后探测恒失败→dtype 永不启用→连语料方程也被拦住；改为语料第一条 `cadb,menf,ac,em,bd,fn->`。② 探测容差统一 1e-9 会把正确的 complex64 判错（实测 rel=3.6e-7），改为按精度分档。
+
+**契约连带约束**：验"真的下发成功"的用例，方程必须来自基础表前 2582 条（步表真实边界），附录 2583+ 一律 status 4；相关三处契约已改写。
+
+**结果**：基表抽样 44/44 命中、0 失配；跨附录 26/88；全量 **124 passed / 1 skipped / 0 failed**。KUPL scene 表的 `topology` 列现在全部 MISS（诚实反映"异形轴不在步表覆盖内"），`dedicated` 数据不变。
+--- report end ---

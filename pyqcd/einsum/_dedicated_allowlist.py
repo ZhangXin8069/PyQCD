@@ -1346,23 +1346,33 @@ _BLOCKS: dict[int, str] = {
 """,
 }
 
-ALLOW: dict[int, frozenset[str]]
+def _resolved() -> dict[int, frozenset[str]]:
+    """解析（并缓存）``dim -> frozenset(seq)`` 视图。
+
+    **不能写成在函数里直接引用 ``ALLOW``**：``ALLOW`` 只在 ``__getattr__`` 里对
+    *外部* ``module.ALLOW`` 惰性注入，模块内的全局查找不会触发 ``__getattr__``，
+    于是 ``allow()``/``seqs()`` 一调用就 ``NameError: name 'ALLOW' is not defined``。
+    这个缺陷在热路径上是致命且隐蔽的——白名单只用于选路，普通数值测试不会碰它。
+    """
+    value = globals().get("ALLOW")
+    if value is None:
+        value = {dim: frozenset(block.split()) for dim, block in _BLOCKS.items()}
+        globals()["ALLOW"] = value
+    return value
 
 
 def __getattr__(name: str):
     """惰性解析：只有真正访问 ``ALLOW`` 时才 split 数据块。"""
     if name == "ALLOW":
-        value = {dim: frozenset(block.split()) for dim, block in _BLOCKS.items()}
-        globals()["ALLOW"] = value
-        return value
+        return _resolved()
     raise AttributeError(name)
 
 
 def allow(dim: int, seq: int) -> bool:
     """该 dim 下 ``seq`` 是否实测"专用更快"。"""
-    return str(int(seq)) in ALLOW[int(dim)]
+    return str(int(seq)) in _resolved()[int(dim)]
 
 
 def seqs(dim: int) -> tuple[int, ...]:
     """该 dim 下全部白名单 ``seq``（升序，整数视图）。"""
-    return tuple(sorted(int(token) for token in ALLOW[int(dim)]))
+    return tuple(sorted(int(token) for token in _resolved()[int(dim)]))

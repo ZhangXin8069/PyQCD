@@ -170,6 +170,31 @@ class CudaProgram:
         return output
 
 
+def _bind_host_cublas() -> None:
+    """让宿主（cupy / torch）先把它自己的 ``libcublas`` 绑进本进程。
+
+    背景：CUDA 归档带绝对 RUNPATH（conda 的编译器 wrapper 注入），其中 ``NEEDED``
+    是 ``libcublas.so.12``。如果先 dlopen 归档，动态加载器会按 RUNPATH 找到**构建
+    机那份**（例如 12.4），于是进程里同时存在两份 cuBLAS。实测症状：调用过拓扑/
+    步表入口之后，cupy 的 **complex64** GEMM 恒报 ``CUBLAS_STATUS_NOT_SUPPORTED``
+    （c128/f32/f64 不受影响），看起来像"内核算错"，其实是两份 cuBLAS 抢同一份
+    进程级状态。
+
+    先让宿主加载它自己那份，``libcublas.so.12`` 这个 soname 就已有映射，归档的
+    ``NEEDED`` 会复用它，不会拉第二份。任何一步失败都静默跳过——这只是"尽量避开
+    双份"，不是正确性依赖。
+    """
+    for importer in (
+        lambda: __import__("cupy_backends.cuda.libs.cublas", fromlist=["cublas"]),
+        lambda: __import__("torch", fromlist=["torch"]),
+    ):
+        try:
+            importer()
+            return
+        except Exception:  # noqa: BLE001 - 宿主不存在就换下一个
+            continue
+
+
 class TopologyBinding:
     """ctypes bridge for ``qcd_cuda_topology_apply``.
 
@@ -180,6 +205,7 @@ class TopologyBinding:
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = Path(path) if path is not None else _library_path()
+        _bind_host_cublas()
         self.library = ctypes.CDLL(str(self.path))
         self.apply = self.library.qcd_cuda_topology_apply
         self.apply.argtypes = [

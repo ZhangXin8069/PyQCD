@@ -108,6 +108,8 @@ bool add_offset(int64_t base, int64_t offset, int64_t* result) {
  * 广播（轴长 1）或不等长输入都不在这个前提内。
  */
 constexpr int kSpecializedMiss = -1;
+/* ``ExecutionPlan.sizes`` 的上限：语料实测最多 27 个 label，留足余量。 */
+constexpr int kMaxSizes = 256;
 #if PYQCD_TOPO_STEP_TABLE
 constexpr char kSignatureDigits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
 
@@ -120,29 +122,6 @@ uint64_t signature_hash(const std::string& text) {
     return value;
 }
 
-bool uniform_dimension(const pyqcd_einsum::ExecutionPlan& execution, int64_t* dim) {
-    if (execution.sizes.empty() || execution.input_shapes.empty()) {
-        return false;
-    }
-    const int64_t first = execution.sizes[0];
-    if (first <= 0) {
-        return false;
-    }
-    for (int64_t size : execution.sizes) {
-        if (size != first) {
-            return false;
-        }
-    }
-    for (const std::vector<int64_t>& shape : execution.input_shapes) {
-        for (int64_t extent : shape) {
-            if (extent != first) {
-                return false;
-            }
-        }
-    }
-    *dim = first;
-    return true;
-}
 
 bool build_canonical_signature(const pyqcd_einsum::ExecutionPlan& execution,
                                std::string* signature) {
@@ -254,10 +233,6 @@ int run_specialized(const pyqcd_einsum::ExecutionPlan& execution,
         return kSpecializedMiss;
     }
 
-    int64_t dim = 0;
-    if (!uniform_dimension(execution, &dim)) {
-        return kSpecializedMiss;
-    }
     std::string signature;
     if (!build_canonical_signature(execution, &signature)) {
         return kSpecializedMiss;
@@ -271,10 +246,27 @@ int run_specialized(const pyqcd_einsum::ExecutionPlan& execution,
         record->out_rank != execution.output_labels.size()) {
         return kSpecializedMiss;
     }
-    int64_t output_elements = 0;
-    if (!pyqcd_einsum::topology_gemm::checked_power(
-            dim, static_cast<int>(record->out_rank), &output_elements)) {
+    /* 切到 v3 执行器：轴长来自 ``execution.sizes``（label→size），不再要求等长轴。
+     * 生产 scene 的轴长是 `{4,5,40,50}` 混杂，v2 的 ``uniform_dimension`` 会把它们
+     * 一律判 miss —— 那是把步表锁死在小型等长测试形状上。 */
+    if (record->version != 3) {
+        if (trace_enabled()) {
+            std::fprintf(stderr,
+                         "[pyqcd.einsum] topology-step-miss: record version %u is not v3\n",
+                         static_cast<unsigned>(record->version));
+        }
         return kSpecializedMiss;
+    }
+    if (execution.sizes.empty() ||
+        execution.sizes.size() > static_cast<std::size_t>(kMaxSizes)) {
+        return kSpecializedMiss;
+    }
+    int64_t label_sizes[kMaxSizes];
+    for (std::size_t index = 0; index < execution.sizes.size(); ++index) {
+        if (execution.sizes[index] <= 0) {
+            return kSpecializedMiss;
+        }
+        label_sizes[index] = execution.sizes[index];
     }
     std::vector<const void*> operands(addresses.size(), nullptr);
     for (std::size_t index = 0; index < addresses.size(); ++index) {
@@ -284,19 +276,18 @@ int run_specialized(const pyqcd_einsum::ExecutionPlan& execution,
     const uint8_t* code =
         reinterpret_cast<const uint8_t*>(pyqcd_einsum::topology_table::kTopoCode) +
         record->code_offset;
-    const int status = pyqcd_einsum::topology_gemm::run(
-        *record, code, operands.data(), out, elem_kind, dim);
+    const int status = pyqcd_einsum::topology_gemm::run_v3(
+        *record, code, operands.data(), out, elem_kind, label_sizes,
+        static_cast<int>(execution.sizes.size()));
     if (status != QCD_STATUS_OK) {
         return kSpecializedMiss;
     }
     if (trace_enabled()) {
         std::fprintf(stderr,
-                     "[pyqcd.einsum] topology-specialized: %s dim=%lld dtype=%d "
-                     "steps=%d\n",
-                     record->signature, static_cast<long long>(dim), dtype_id,
-                     static_cast<int>(record->step_count));
+                     "[pyqcd.einsum] topology-specialized: %s dtype=%d steps=%d sizes=%zu\n",
+                     record->signature, dtype_id, static_cast<int>(record->step_count),
+                     execution.sizes.size());
     }
-    (void)output_elements;
     return QCD_STATUS_OK;
 #endif
 }

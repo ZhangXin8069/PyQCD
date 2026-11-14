@@ -3,10 +3,11 @@
 两条路径的契约都按 dtype / 形状 / 连续性 / 设备严格校验，任一不满足即返回
 ``None`` 回落，绝不猜测或放宽：
 
-* ``try_topology_apply``：多操作数拓扑入口，按 ``TOPOLOGY_DTYPES`` 显式声明
-  dtype（单精度默认与首选，双精度须原生实测通过），未启用的 dtype 返回
-  ``None`` 回落且**绝不降级**；成功下发时把 plan 字节数、操作数个数、``out``
-  模式与复制下标记进 ``LAST_INFO``。
+* ``try_topology_apply``：多操作数拓扑入口，dtype 契约是 ``TOPOLOGY_DTYPES`` 与
+  ``TOPOLOGY_DTYPES`` 的四类 dtype，**完全平权**（没有主精度）：每一类都必须由
+  原生 2x2 实测通过后才启用。未启用的 dtype 返回
+  ``None`` 回落且**绝不降级**，"探测没过"与"契约外 dtype"必须给出可区分的原因；
+  成功下发时把 plan 字节数、操作数个数、``out`` 模式与复制下标记进 ``LAST_INFO``。
 * ``try_dedicated``：与 KUPL 侧共用同一份 GEMM 步表字节流。
 """
 
@@ -15,6 +16,7 @@ from __future__ import annotations
 import ctypes
 import os
 import threading
+from collections import OrderedDict
 from typing import Any, Sequence
 
 import numpy as np
@@ -41,8 +43,11 @@ def enabled() -> bool:
 # 结构：每个操作数的标签与形状、输出标签、签名摘要），收缩顺序来自原生库里的
 # 预编译步表 `cpp/cuda/einsum/src/topology_steps.h` —— 这里不再做 path 搜索，
 # 也不再逐步骤调度。描述符按 (方程, 各操作数形状, dtype) 缓存，重复调用零规划。
-_TOPOLOGY_CACHE_LIMIT = 32
-_TOPOLOGY_PLAN_CACHE: dict[tuple[Any, ...], bytes] = {}
+# 与 KUPL 侧同口径：真 LRU + 字节预算。32 项 FIFO 会让语料扫描每轮全 miss。
+_TOPOLOGY_CACHE_LIMIT = 16_384
+_TOPOLOGY_CACHE_BUDGET = 64 << 20
+_TOPOLOGY_PLAN_CACHE: "OrderedDict[tuple[Any, ...], bytes]" = OrderedDict()
+_TOPOLOGY_CACHE_BYTES = 0
 _TOPOLOGY_LOCK = threading.Lock()
 
 # 描述符字节流的魔数与版本，必须与 `cpp/cuda/einsum/src/apply_contract.cu` 同步。
@@ -52,70 +57,104 @@ _DESCRIPTOR_HEADER_WORDS = 8
 _DESCRIPTOR_MAX_EXTENT = 2 ** 31 - 1
 
 # ── dtype 契约 ──────────────────────────────────────────────────────────────
-# 入口只下发这里**显式声明**的 dtype。单精度是默认与首选，恒可下发。
+# 四类 dtype **完全平权**：没有"默认精度"或"主精度"。每一类都必须由同一个 2x2
+# 实测（``_probe_dtype``）自证可用才允许下发；没通过的那一类只回落它自己，不影响
+# 其它三类，更不会降级成另一类精度。顺序与 ``QCD_DTYPE_*`` 同值。
 TOPOLOGY_DTYPES: tuple[np.dtype, ...] = (
-    np.dtype(np.complex64), np.dtype(np.float32))
-# 双精度只在原生**实测通过**后才启用：设备侧分步执行器尚未实例化双精度数值路径
-# 时本入口返回 None 让上层回落通用路径 —— 绝不把 float64/complex128 降级成单精度
-# （那会静默丢精度），也绝不抛异常。
-TOPOLOGY_DOUBLE_DTYPES: tuple[np.dtype, ...] = (
-    np.dtype(np.complex128), np.dtype(np.float64))
-_TOPOLOGY_DOUBLE_SUPPORT: dict[np.dtype, bool] = {}
+    np.dtype(np.complex128), np.dtype(np.complex64),
+    np.dtype(np.float64), np.dtype(np.float32))
+_TOPOLOGY_DTYPE_SUPPORT: dict[np.dtype, bool] = {}
 _TOPOLOGY_PROBE_LOCK = threading.Lock()
+_PROBE_EQUATION = "ij,jk->ik"
+_REBUILD_HINT = "bash cpp/cuda/einsum/make-nv.sh"
+# 与 KUPL 侧同口径：单精度按 1e-4，双精度 1e-9（见 _kernel_kupl._PROBE_TOLERANCE）。
+_PROBE_TOLERANCE = {"complex128": 1e-9, "float64": 1e-9,
+                    "complex64": 1e-4, "float32": 1e-4}
 
 # 最近一次成功下发时实际交给原生的参数（见 `_kernel_kupl.LAST_INFO`）。
 LAST_INFO: dict[str, object] = {}
 
 
-def _probe_double(dtype: np.dtype) -> bool:
-    """实测设备侧拓扑入口能否**正确**执行 ``dtype``（每进程每 dtype 一次）。"""
-    import cupy
+def _probe_dtype(dtype: np.dtype) -> bool:
+    """实测设备侧拓扑入口能否**正确**执行 ``dtype``（四类 dtype 同一把尺子）。
 
-    from ._api import contract_path
-    from ._native_plan import encode_execution_plan
-    from .cuda._program import topology_apply as native_topology_apply
-
-    base = cupy.arange(4, dtype=cupy.float64).reshape(2, 2) + 1.0
-    if dtype.kind == "c":
-        left = (base * (1.0 + 1.0j)).astype(dtype)
-        right = ((base - 2.0) * (1.0 - 0.5j)).astype(dtype)
-    else:
-        left = base.astype(dtype)
-        right = (base - 2.0).astype(dtype)
+    与 KUPL 侧同一口径：探测本身必须 fail closed。``import cupy``、构建设备侧
+    操作数、规划、原生下发与参考比较全部在 ``try`` 里 —— 历史上 ``cupy.arange``
+    在 ``try`` 之外，NVRTC 架构不匹配时会把 ``CompileException`` 抛给调用方，
+    于是 complex128 的 dtype 决策变成硬崩溃，而且失败结果无法缓存、每次调用都
+    重探。任何异常现在只等价于"该 dtype 不可用"。
+    """
     try:
-        _, path_info = contract_path("ij,jk->ik", left, right)
+        import cupy
+
+        from ._api import contract_path
+        from ._native_plan import encode_execution_plan
+        from .cuda._program import topology_apply as native_topology_apply
+
+        base = cupy.arange(4, dtype=cupy.float64).reshape(2, 2) + 1.0
+        if dtype.kind == "c":
+            left = (base * (1.0 + 1.0j)).astype(dtype)
+            right = ((base - 2.0) * (1.0 - 0.5j)).astype(dtype)
+        else:
+            left = base.astype(dtype)
+            right = (base - 2.0).astype(dtype)
+        _, path_info = contract_path(_PROBE_EQUATION, left, right)
         plan = encode_execution_plan(path_info.contraction_list, (left, right))
         actual = cupy.asnumpy(native_topology_apply(plan, (left, right)))
-    except Exception:  # noqa: BLE001 - 探测失败 = 双精度未实现，一律回落
+        expected = np.einsum(
+            _PROBE_EQUATION, cupy.asnumpy(left), cupy.asnumpy(right))
+        if actual.shape != expected.shape or actual.dtype != dtype:
+            return False
+        scale = float(np.max(np.abs(expected))) or 1.0
+        tolerance = _PROBE_TOLERANCE[dtype.name]
+        return bool(float(np.max(np.abs(actual - expected))) <= tolerance * scale)
+    except Exception:  # noqa: BLE001 - 探测失败 = 该 dtype 不可用，一律回落
         return False
-    expected = np.einsum(
-        "ij,jk->ik", cupy.asnumpy(left), cupy.asnumpy(right))
-    if actual.shape != expected.shape or actual.dtype != dtype:
-        return False
-    scale = float(np.max(np.abs(expected))) or 1.0
-    return bool(float(np.max(np.abs(actual - expected))) <= 1e-9 * scale)
 
 
 def topology_dtypes() -> tuple[np.dtype, ...]:
-    """当前进程里拓扑入口可执行的 dtype（只读，不触发探测）。"""
-    return TOPOLOGY_DTYPES + tuple(
-        dtype for dtype in TOPOLOGY_DOUBLE_DTYPES
-        if _TOPOLOGY_DOUBLE_SUPPORT.get(dtype) is True)
+    """契约内的 dtype（四类平权；只读，不触发探测）。"""
+    return TOPOLOGY_DTYPES
+
+
+def topology_enabled_dtypes() -> tuple[np.dtype, ...]:
+    """本进程**已实测通过**的 dtype（会按需探测，每 dtype 一次）。"""
+    return tuple(dtype for dtype in TOPOLOGY_DTYPES
+                 if _topology_dtype_enabled(dtype))
 
 
 def _topology_dtype_enabled(dtype: np.dtype) -> bool:
-    if dtype in TOPOLOGY_DTYPES:
-        return True
-    if dtype not in TOPOLOGY_DOUBLE_DTYPES:
+    if dtype not in TOPOLOGY_DTYPES:
         return False
-    support = _TOPOLOGY_DOUBLE_SUPPORT.get(dtype)
+    support = _TOPOLOGY_DTYPE_SUPPORT.get(dtype)
     if support is None:
         with _TOPOLOGY_PROBE_LOCK:
-            support = _TOPOLOGY_DOUBLE_SUPPORT.get(dtype)
+            support = _TOPOLOGY_DTYPE_SUPPORT.get(dtype)
             if support is None:
-                support = _probe_double(dtype)
-                _TOPOLOGY_DOUBLE_SUPPORT[dtype] = support
+                try:
+                    support = _probe_dtype(dtype)
+                except Exception:  # noqa: BLE001 - 探测器契约是不抛异常，这里再兜一层
+                    support = False
+                _TOPOLOGY_DTYPE_SUPPORT[dtype] = support
     return support
+
+
+def _topology_dtype_reason(dtype: np.dtype) -> str | None:
+    """``None`` 表示该 dtype 可以下发；否则给出**真实**的拒绝原因。
+
+    两种拒绝必须能分辨（与 KUPL 侧同一口径）：契约外 dtype 只能改代码；契约内
+    但探测没过的 dtype 重建原生归档即可恢复。
+    """
+    if dtype not in TOPOLOGY_DTYPES:
+        declared = ", ".join(str(item) for item in TOPOLOGY_DTYPES)
+        return (f"dtype {dtype} is outside the topology dtype contract "
+                f"(declared: {declared}); no implicit downcast is performed")
+    if _topology_dtype_enabled(dtype):
+        return None
+    return (f"dtype {dtype} is inside the topology dtype contract but its native "
+            f"probe failed (2x2 matmul disagreed with numpy); falling back to the "
+            f"generic path with no implicit downcast. Rebuild the native archive "
+            f"({_REBUILD_HINT}) to re-enable it")
 
 
 def _topology_key(subscripts: str, operands: Sequence[Any]) -> tuple[Any, ...]:
@@ -193,17 +232,27 @@ def _topology_descriptor(subscripts: str, shapes: Sequence[Sequence[int]],
 def _topology_plan(key: tuple[Any, ...], subscripts: str,
                    operands: Sequence[Any]) -> bytes:
     """返回描述符字节流；首次遇到 (方程, 形状, dtype) 时构造，之后直接复用。"""
+    global _TOPOLOGY_CACHE_BYTES
     with _TOPOLOGY_LOCK:
         plan = _TOPOLOGY_PLAN_CACHE.get(key)
-    if plan is not None:
-        return plan
+        if plan is not None:
+            _TOPOLOGY_PLAN_CACHE.move_to_end(key)      # 真 LRU：命中即刷新
+            return plan
     plan = _topology_descriptor(
         subscripts, [tuple(int(extent) for extent in operand.shape)
                      for operand in operands], operands[0].dtype)
     with _TOPOLOGY_LOCK:
-        if len(_TOPOLOGY_PLAN_CACHE) >= _TOPOLOGY_CACHE_LIMIT:
-            _TOPOLOGY_PLAN_CACHE.pop(next(iter(_TOPOLOGY_PLAN_CACHE)))
+        previous = _TOPOLOGY_PLAN_CACHE.pop(key, None)
+        if previous is not None:
+            _TOPOLOGY_CACHE_BYTES -= len(previous)
         _TOPOLOGY_PLAN_CACHE[key] = plan
+        _TOPOLOGY_CACHE_BYTES += len(plan)
+        while (len(_TOPOLOGY_PLAN_CACHE) > _TOPOLOGY_CACHE_LIMIT
+               or _TOPOLOGY_CACHE_BYTES > _TOPOLOGY_CACHE_BUDGET):
+            _, dropped = _TOPOLOGY_PLAN_CACHE.popitem(last=False)
+            _TOPOLOGY_CACHE_BYTES -= len(dropped)
+            if not _TOPOLOGY_PLAN_CACHE:
+                break
     return plan
 
 
@@ -215,8 +264,8 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
     与 ``try_dedicated`` 同一契约：命中且执行成功才返回
     ``cupy`` 数组，否则记录一次 ``LAST_FAILURE`` 并让上层走通用路径。
 
-    dtype 契约（见 ``TOPOLOGY_DTYPES`` / ``topology_dtypes``）：只下发显式声明
-    的 dtype——单精度恒可下发，双精度需原生实测通过。未声明的 dtype 直接返回
+    dtype 契约（见 ``TOPOLOGY_DTYPES`` / ``topology_dtypes``）：只下发契约内
+    （四类、平权）且原生 2x2 实测通过的 dtype。未启用的 dtype 直接返回
     ``None``，**绝不把 float64/complex128 转成单精度**，也绝不抛异常。
 
     ``offsets`` 只能是 ``None``：``cupy`` 视图的 ``data.ptr`` 已经带着字节偏移，
@@ -243,11 +292,9 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
 
     if topology_binding() is None:
         return _fail("qcd_cuda_topology_apply is not exported by the archive")
-    if not _topology_dtype_enabled(np.dtype(dtype)):
-        supported = ", ".join(str(item) for item in topology_dtypes())
-        return _fail(
-            f"dtype {np.dtype(dtype)} is not enabled for the topology entry "
-            f"(supported: {supported}); no implicit downcast is performed")
+    dtype_reason = _topology_dtype_reason(np.dtype(dtype))
+    if dtype_reason is not None:
+        return _fail(dtype_reason)
     if out is not None:
         if not isinstance(out, cupy.ndarray):
             return _fail("out must be a cupy array")
@@ -363,7 +410,11 @@ def _plan_fallback_reason(dtype: Any, stats: dict[str, int]) -> str | None:
 def _query_dedicated_dtypes() -> tuple[np.dtype, ...]:
     try:
         from ._native import _cuda_library_path
+        from .cuda._program import _bind_host_cublas
 
+        # 先绑宿主自己的 libcublas，避免归档的绝对 RUNPATH 拉进第二份（见
+        # ``cuda._program._bind_host_cublas`` 的完整说明）。
+        _bind_host_cublas()
         library = ctypes.CDLL(str(_cuda_library_path()))
         query = library.qcd_cuda_dedicated_dtypes
     except Exception:  # noqa: BLE001 - 缺库/缺符号即视为入口不可用
@@ -378,13 +429,27 @@ def _query_dedicated_dtypes() -> tuple[np.dtype, ...]:
                  if mask & (1 << _DEDICATED_DTYPE_IDS[dtype]))
 
 
+# 与 KUPL 侧同因：dlopen + argtypes 必须是幂等单次的（见 _kernel_kupl._ENTRY_LOCK）。
+_ENTRY_LOCK = threading.Lock()
+
+
 def _function_dedicated():
+    global _entry_dedicated, _failed_dedicated
+    if _entry_dedicated is not None or _failed_dedicated:
+        return _entry_dedicated
+    with _ENTRY_LOCK:
+        return _function_dedicated_locked()
+
+
+def _function_dedicated_locked():
     global _entry_dedicated, _failed_dedicated
     if _entry_dedicated is not None or _failed_dedicated:
         return _entry_dedicated
     try:
         from ._native import _cuda_library_path
+        from .cuda._program import _bind_host_cublas
 
+        _bind_host_cublas()
         library = ctypes.CDLL(str(_cuda_library_path()))
         entry = library.qcd_cuda_dedicated_apply
     except Exception:  # noqa: BLE001 - 缺库/缺符号时静默回退

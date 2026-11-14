@@ -175,10 +175,47 @@ def decompose(left: str, right: str, out: str) -> dict:
 
 
 def encode_steps(equation: str) -> bytes:
-    steps, _terms, out = plan_steps(equation)
+    """编码一条方程的步表（v3）。
+
+    v3 = **label 块 + v2 逐步描述 + 每步 c_labels**。v2 只存轴序（4 bit/轴），
+    轴长靠 ``dim`` 幂次反推，因此只能服务"所有轴长相等"的超立方体；生产 scene
+    的轴长是 ``{4,5,40,50}`` 混杂，v2 直接拒绝。v3 把 label 带上，运行期用
+    ``sizes[label]`` 取真实长度即可：中间体长度**无法**由轴序拼接推出（拼接结果
+    与真实 label 长度不同），这是 v3 必须存在的理由。
+
+    段首::
+
+        uint8 arity
+        逐操作数: uint8 rank + rank×uint8 label_id（canonical 编号，与
+                  ``canonical_signature`` / symbol_order 同口径）
+
+    每步沿用 v2 的 6 字节头 + 轴序 nibble 流，紧随其后追加::
+
+        uint8 c_labels[rank_c]     该步输出张量**目标轴序**的 label id
+
+    中间体经 unpack 后按 ``step["out"]`` 的轴序存放，所以后续步骤按位置引用它时
+    拿到的正是这张表；记成 b 序会在下一步对不上（实测 step1 产出 ``aedf`` 的
+    b 序是 ``['a','f','d','e']``，而 step3 引用时是 ``['a','e','f','d']``）。
+    """
+    steps, terms, out = plan_steps(equation)
     if not steps or steps[-1]["out"] != out:
         raise AssertionError(f"{equation}: last step does not produce the output")
+
+    order: list[str] = []
+    for term in list(terms) + [out]:
+        for ch in term:
+            if ch not in order:
+                order.append(ch)
+    if len(order) > 255:
+        raise AssertionError(f"{equation}: {len(order)} labels exceed uint8")
+    labels = {ch: index for index, ch in enumerate(order)}
+
     stream = bytearray()
+    stream.append(len(terms))
+    for term in terms:
+        stream.append(len(term))
+        stream.extend(labels[ch] for ch in term)
+
     for step in steps:
         spec = decompose(step["left"], step["right"], step["out"])
         for key in ("a_src", "b_src", "dst"):
@@ -195,6 +232,7 @@ def encode_steps(equation: str) -> bytes:
             high = axes[index] & 0x0F
             low = axes[index + 1] & 0x0F if index + 1 < len(axes) else 0
             stream.append((high << 4) | low)
+        stream.extend(labels[ch] for ch in step["out"])
     return bytes(stream)
 
 
@@ -239,7 +277,7 @@ def render(records: list[dict], kernels: list[dict], total_code: int) -> str:
     for entry in records:
         out.append(
             '    {{0x{hash:016x}ULL, "{sig}", {offset}, {size}, {arity}, {out_rank}, '
-            "{steps}}},".format(hash=entry["hash"], sig=entry["signature"],
+            "{steps}, 3}},".format(hash=entry["hash"], sig=entry["signature"],
                                 offset=entry["offset"], size=len(entry["blob"]),
                                 arity=entry["arity"], out_rank=entry["out_rank"],
                                 steps=entry["steps"]))
@@ -355,8 +393,20 @@ def main() -> int:
 
 
 def _step_count(blob: bytes) -> int:
-    """步数：按格式走一遍（跳过 nibble 流），用于记录校验。"""
-    position = 0
+    """步数：按 v3 格式走一遍（跳过 label 块、nibble 流与 c_labels），用于记录校验。"""
+    if not blob:
+        raise AssertionError("empty step table")
+    arity = blob[0]
+    if arity <= 0:
+        raise AssertionError(f"invalid arity {arity}")
+    position = 1
+    for _ in range(arity):
+        if position >= len(blob):
+            raise AssertionError("truncated label block")
+        rank = blob[position]
+        position += 1 + rank
+        if position > len(blob):
+            raise AssertionError("truncated label block")
     count = 0
     while position < len(blob):
         if position + 6 > len(blob):
@@ -364,7 +414,9 @@ def _step_count(blob: bytes) -> int:
         rank_a = blob[position + 3] >> 4
         rank_b = blob[position + 3] & 0x0F
         rank_c = blob[position + 4]
-        position += 6 + (rank_a + rank_b + rank_c + 1) // 2
+        position += 6 + (rank_a + rank_b + rank_c + 1) // 2 + rank_c
+        if position > len(blob):
+            raise AssertionError("truncated step body")
         count += 1
     if position != len(blob):
         raise AssertionError("step table does not divide evenly")

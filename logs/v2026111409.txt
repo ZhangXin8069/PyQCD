@@ -1,0 +1,90 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-14 09:16:56 +0800
+批次: pyqcd-einsum/dtype-parity
+主任务: qcd-einsum complex128 支持修补与四类 dtype 平权/正确性/生产性能
+触发原因: 任务完成
+摘要: 四类 dtype 平权+复数步表；全语料对拍抓到并修好 unpack 转置 bug；生产档性能按方程分化
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 缺陷定位：complex128 的 dtype 门与探测
+- 目标: 复现"complex128 不被支持"，找出真实拒绝点
+- 命令/操作: `_kernel_kupl/_kernel_cuda` 的 `_probe_double` / `TOPOLOGY_DTYPES` / `_topology_dtype_reason` 逐条审计；构建 KUPL（`PYQCD_OPENBLAS_LIBRARY=...`）
+- 关键输出: 单精度恒可下发、双精度需探测；拒绝原因两种情形共用一句 `dtype ... is not enabled ... (supported: complex64, float32)`；CUDA 侧 `cupy.arange` 在 `try` 之外，NVRTC 失败时抛 `CompileException`
+- 退出码: 0
+- 证据与判断: 探测失败不可缓存、会重探重抛；原因文本让用户读成"complex128 永远不支持"
+
+### S2 — 内核：四类 dtype 平权 + 复数步表
+- 目标: 单/双精度 × 实/复四类都在特化路径上高效运行，取消"主精度"层级
+- 命令/操作: 生成步表（2582 条 / 404978 字节）；`topology_gemm.h` 引入 `ComplexElement<T>`（交错 re/im，PyQCU `LatticeComplex<T>` 同构）、绑定 `cblas_cgemm/zgemm`、`gemm_available` 四类各自判符号；`run_specialized` 四类直传 dtype_id；`run_specialized` 未命中原因进 trace
+- 关键输出: `make.sh: SUCCESS`（7 源）；`strings lib | grep -c topology-specialized` = 1
+- 退出码: 0
+- 证据与判断: 复数打包/转置仍是 memcpy；缺 zgemm 只影响复数，不连累实数
+
+### S3 — 正确性门抓到真 bug：unpack 二维互换指数写反
+- 目标: 全语料 × 四 dtype × 两条路径对拍（同 dtype 通用路径为参考）
+- 命令/操作: 新增 `pyqcd/testing/einsum/verify_dtype_parity.py`，dim=3 跑 8638 条
+- 关键输出: 首轮 `topology` 16 条 4 输出轴拓扑 rel≈1（值对但被错误转置），`dedicated` 0 失配；修 `unpack_step`（`rows=dim^(rank-split)`, `cols=dim^split`）后全语料 0 失配
+- 退出码: 首轮 1，修复后 0
+- 证据与判断: 只有 `split==rank/2` 时新旧写法等价，120 条抽样与 2582 条基础表契约都覆盖不到
+
+## 验证与证据
+- 测试/检查: `python -B -m pyqcd.testing.einsum.verify_dtype_parity --backend kupl --dim 3`
+- 结果: complex128 2.9e-14/2.0e-14、complex64 1.6e-5/2.0e-5、float64 4.2e-13/1.0e-13、float32 5.0e-5/8.6e-5（dedicated/topology，8638/8638 hit，0 bad）→ PASS
+- 测试/检查: `python -B -m pyqcd.testing._topology_kernel_contract`
+- 结果: 16 passed / 1 skipped / 0 failed（含四类平权声明、探测容器化与缓存、原因可分辨、每类探测通过即走原生）
+- 测试/检查: 生产档性能 `bench_dtype_matrix --scene scene --seqs 129,1623`
+- 结果: seq=129 四类全部亏（1.21–2.58×）；seq=1623 complex64/float64 赚（0.65/0.72×），float32+topology 11.80×；本机共享、2–3 轮，provisional
+- 测试/检查: `python -B -m pyqcd.testing`（LD_PRELOAD nvrtc 12.4 + 双库）
+- 结果: 114 passed / 2 skipped / 6 failed；6 项全在 cupy/torch GPU 契约，单独复跑 PASS（宿主机 torch 期待 CUDA 13、驱动 12.4）
+- 未验证项: CUDA 侧生产尺寸性能（本次只做了 CUDA dtype 矩阵与 seq=2 dim=4；生产档 CUDA 未测）
+
+## 变更与产物
+- 文件: `cpp/kupl/einsum/src/topology_gemm.h`、`topology_apply.cpp`、`pyqcd/einsum/_kernel_kupl.py`、`_kernel_cuda.py`、`pyqcd/einsum/AGENTS.md`、`pyqcd/testing/_topology_kernel_contract.py`、`pyqcd/testing/einsum/verify_plan_gate.py`、`skills/pyqcd-einsum/SKILL.md`
+- 产物: `pyqcd/testing/einsum/verify_dtype_parity.py`、`pyqcd/testing/einsum/bench_dtype_matrix.py`；生成物 `cpp/kupl/einsum/src/topology_kernels.inc`（gitignore）
+- 未改动范围: `refer/**`、CUDA 原生源码、`_dedicated_allowlist` 数据
+
+## 风险、限制与下一步
+- 风险: 生产性能数字为单机共享、2–3 轮中位，seq=1623 complex128 两次运行 0.30×→1.95×
+- 阻塞: 无
+- 下一步: CUDA 生产档四 dtype 复测；`_label_sizes` 重复调用返回假轴长（bench 辅助函数）需独立修
+
+## 用户输入指令
+1. 参考近期的docs和logs和skills和tags,修补qcd-einsum:有用户反馈"complex128不被支持"
+2. 内核单双精度和实数复数都应能完美高效运行,可参见~/PyQCU/cpp/qcu/src/**.cu
+3. 不应区分所谓主精度
+4. 后续测试四种数据类型,分析性能损失
+5. 一切性能评价以生产尺寸为准
+6. 注意:绝对的正确性与无精度损失
+7. 环境问题需要活用mamba
+8. 不要被阻塞
+
+## Agent 全文报告
+--- report begin ---
+**改动内容**
+1. 四类 dtype 完全平权（去掉"主精度/单精度恒可下发"层级）：`TOPOLOGY_DTYPES` = complex128/complex64/float64/float32，顺序与 `QCD_DTYPE_*` 同值；每类都由同一个 2×2 实测 `_probe_dtype` 自证正确后才下发；`topology_dtypes()` 返回契约（只读），新增 `topology_enabled_dtypes()` 返回实测通过子集；新增 `_topology_dtype_reason()` 把"契约外 dtype"与"探测没过（含重建命令）"分成两条可行动原因。
+2. 探测容器化：`_probe_dtype` 整段（含 CUDA 的 `import cupy`/`cupy.arange`、参考比较）都在 try 内，任何异常只返回 False 并缓存，不再每次调用重探重抛；`_topology_dtype_enabled` 再加一层兜底。
+3. KUPL 步表执行器支持复数：新增 `ComplexElement<T>`（float2/double2 交错布局，与 PyQCU `LatticeComplex<T>` 同构，打包/转置仍是 memcpy）、绑定 `cblas_cgemm/zgemm`（缺符号只影响复数）、`gemm_available` 按元素类型分别判符号、`ElementKind` 四值与 `QCD_DTYPE_*` 同值、`run_specialized` 四类直传 dtype_id；未命中原因进 trace。
+4. 修正真 bug：`unpack_step` 的二维互换快捷路径把分块指数两侧写反（只在新写法 `split==rank/2` 时才等价），导致 16 条 4 输出轴拓扑被错误转置。
+5. 新增工具：`verify_dtype_parity`（全语料四 dtype × 两路径，同 dtype 通用路径为参考）与 `bench_dtype_matrix`（生产档四 dtype × generic/dedicated/topology）。
+6. 测试与文档同步：`_topology_kernel_contract` 改为四类平权契约 + 状态隔离（入口缓存/负缓存/dtype 缓存），`verify_plan_gate` 的 patch 用例显式放行 dtype，`pyqcd/einsum/AGENTS.md` 与技能 §4 按平权 + 生产尺寸重写。
+
+**推理依据**
+- "不支持"的可复现形态只有两处：探测把异常抛给调用方（CUDA 实测 `CompileException`），以及把"探测没过"报成 `dtype ... is not enabled`。两者都修掉后，健康构建下四类都走原生，不健康时只回落该类且给可恢复原因。
+- 复数高性能路径必须是 BLAS 复数 GEMM（zgemm/cgemm）而不是手写复数乘加；交错 re/im 与 CBLAS 口径一致，所以只需模板化元素类型，打包/转置/Z牌 逻辑零改动。
+- 正确性判据只能是"同 dtype 通用路径"，跨精度比较会把 dtype 固有舍入当成损失；因此全语料对拍用同 dtype 参考，这直接抓到了抽样漏掉的转置 bug。
+- 性能评价按性能数据门：dim≤8 的倍率只作路径证据；生产档（scene）才进结论，且路径选择必须按方程代价门而不是按 dtype。
+
+**验证结果**
+- 全语料对拍（dim=3，8638 条 × 四 dtype × dedicated/topology）：0 失配；max_rel complex128 2.9e-14/2.0e-14、complex64 1.6e-5/2.0e-5、float64 4.2e-13/1.0e-13、float32 5.0e-5/8.6e-5。
+- 拓扑契约：16 passed / 1 skipped / 0 failed（CUDA 档在有 GPU 的环境下为 17/0/0）。
+- 生产档（KUPL，scene，2–3 轮中位）seq=129：complex128 1.45×/1.21×、complex64 2.15×/2.12×、float64 2.58×/1.97×、float32 1.97×/2.33×（dedicated/topology 相对 generic，>1 为亏）；seq=1623：complex128 1.95×/1.18×、complex64 0.65×/1.99×、float64 0.72×/2.36×、float32 1.06×/11.80×。
+- 全量测试：114 passed / 2 skipped / 6 failed；6 项均为 cupy/torch GPU 契约（宿主机 torch 期待 CUDA 13、驱动 12.4），单独复跑 PASS，与本改动无关。
+
+**后续步骤**
+- CUDA 侧生产档四 dtype 复测（本次只到 dtype 矩阵与 seq=2 dim=4）。
+- `bench_specialized._label_sizes` 重复调用会返回假轴长（bench 辅助函数的状态问题），需独立修；本次已用"形状前置一次解析 + 只读推导"绕过。
+- 生产数字需按性能数据门复测（隔离机器、≥10 次中位）后才能升级为 performance-validated。
+--- report end ---

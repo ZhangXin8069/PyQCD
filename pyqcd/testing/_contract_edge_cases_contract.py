@@ -84,6 +84,35 @@ def test_out_argument() -> None:
     assert np.allclose(np.asarray(result), a @ b)
 
 
+def test_out_dtype_mismatch_fails_closed() -> None:
+    """``out=`` 只有"会丢虚部"必须失败；实数间收窄是有损舍入，保持与 numpy 一致。
+
+    回归点：``_execute.py`` 曾直接 ``out[...] = new_view``，complex→float 会静默
+    丢虚部（只发一条 ComplexWarning）。现在那条方向显式 ValueError；而
+    float64→float32 这类实数收窄仍然放行（torch 后端用 float32 缓冲承接 float64
+    结果且数值正确，numpy 自己也允许）。
+    """
+    a = RNG.standard_normal((2, 3))
+    b = RNG.standard_normal((3, 4))
+    narrower = np.zeros((2, 4), dtype=np.float32)
+    assert pe.contract("ij,jk->ik", a, b, out=narrower) is narrower
+    assert np.allclose(narrower, a @ b, atol=1e-6)
+
+    complex_a = a + 1j * a
+    real_out = np.zeros((2, 4))
+    try:
+        pe.contract("ij,jk->ik", complex_a, b, out=real_out)
+    except ValueError as error:
+        assert "imaginary part" in str(error), error
+    else:
+        raise AssertionError("complex 结果写进实缓冲会把虚部丢掉，必须失败")
+    assert not np.any(real_out), "失败路径不得写坏调用方的缓冲区"
+
+    matching = np.zeros((2, 4))
+    assert pe.contract("ij,jk->ik", a, b, out=matching) is matching
+    assert np.allclose(matching, a @ b)
+
+
 def test_expression_and_cache() -> None:
     a = RNG.standard_normal((2, 3))
     b = RNG.standard_normal((3, 4))

@@ -13,6 +13,23 @@ from pyqcd.einsum import _native
 from pyqcd.einsum import contract, contract_expression
 
 RELATIVE_TOLERANCE = 1e-12
+# 四类 dtype 一视同仁地覆盖；容差按元素精度取（单精度链上有固有散射）。
+ALL_DTYPES = (np.complex128, np.complex64, np.float64, np.float32)
+TOLERANCE = {'complex128': 1e-12, 'float64': 1e-12,
+             'complex64': 1e-4, 'float32': 1e-4}
+
+
+def _tolerance(dtype: Any) -> float:
+    return TOLERANCE[np.dtype(dtype).name]
+
+
+def _operand(shape, dtype, seed: int = 0) -> np.ndarray:
+    """确定性操作数；复数才有虚部。"""
+    rng = np.random.default_rng(seed)
+    data = rng.normal(size=shape)
+    if np.dtype(dtype).kind == 'c':
+        data = data + 1j * rng.normal(size=shape)
+    return np.ascontiguousarray(data.astype(dtype))
 
 
 class Tally:
@@ -45,11 +62,20 @@ def _host(value: Any) -> np.ndarray:
 
 
 def _relative_error(actual: Any, expected: np.ndarray) -> float:
+    """按**输出最大幅值**归一的最大绝对偏差。
+
+    曾经逐元素除以 ``|expected|``：sandwich 这类输出含近零元素（除零被 tiny 兜住）
+    时，单个元素的微小绝对差会被放大成 1e-4 量级，把正确的 float32 结果判成失败。
+    归一化口径必须与 ``_topology_kernel_contract`` / ``verify_dtype_parity`` 一致。
+    """
     actual_host = _host(actual)
     if actual_host.shape != expected.shape:
         return float('inf')
-    denominator = np.maximum(np.abs(expected), np.finfo(float).tiny)
-    return float(np.max(np.abs(actual_host - expected) / denominator, initial=0.0))
+    scale = float(np.max(np.abs(expected), initial=0.0))
+    difference = float(np.max(np.abs(actual_host - expected), initial=0.0))
+    if scale == 0.0:
+        return 0.0 if difference == 0.0 else float('inf')
+    return difference / scale
 
 
 def _to_backend(array: np.ndarray, backend: str) -> Any:
@@ -85,80 +111,97 @@ def _run_dtype_cases(tally: Tally, backend: str) -> None:
 
 
 def _run_equation_cases(tally: Tally, backend: str) -> None:
-    rng = np.random.default_rng(20261106)
-
-    def complex_operand(shape):
-        return (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(np.complex128)
-
+    """五类形态 × 四类 dtype：形态矩阵不能只在 complex128 上验。"""
     cases = [
-        ('chain', 'ab,bc,cd->ad', [complex_operand((2, 3)), complex_operand((3, 4)), complex_operand((4, 5))]),
-        ('batch', 'bij,bjk->bik', [complex_operand((2, 3, 4)), complex_operand((2, 4, 5))]),
-        ('unary-permute', '...ij->...ji', [complex_operand((2, 3, 4))]),
-        ('dot', 'ij,ij->', [complex_operand((4, 5)), complex_operand((4, 5))]),
-        ('sandwich', 'ab,...bce,cd->...dae', [
-            complex_operand((4, 4)), complex_operand((1, 1, 1, 3, 2, 4, 4, 20)),
-            complex_operand((4, 4)),
-        ]),
+        ('chain', 'ab,bc,cd->ad', [(2, 3), (3, 4), (4, 5)]),
+        ('batch', 'bij,bjk->bik', [(2, 3, 4), (2, 4, 5)]),
+        ('unary-permute', '...ij->...ji', [(2, 3, 4)]),
+        ('dot', 'ij,ij->', [(4, 5), (4, 5)]),
+        ('sandwich', 'ab,...bce,cd->...dae',
+         [(4, 4), (1, 1, 1, 3, 2, 4, 4, 20), (4, 4)]),
     ]
-    for name, equation, hosts in cases:
-        expected = np.einsum(equation, *hosts, optimize='greedy')
-        operands = [_to_backend(array, backend) for array in hosts]
-        actual = contract(
-            equation, *operands, optimize='greedy',
-            backend='cupy' if backend == 'cuda' else 'numpy')
-        error = _relative_error(actual, expected)
-        tally.check(error <= RELATIVE_TOLERANCE, f'{backend}/{name}', f'error={error:.3e}')
+    for dtype in ALL_DTYPES:
+        name_of = np.dtype(dtype).name
+        for name, equation, shapes in cases:
+            hosts = [_operand(shape, dtype, seed=index + 1)
+                     for index, shape in enumerate(shapes)]
+            expected = np.einsum(equation, *hosts, optimize='greedy')
+            operands = [_to_backend(array, backend) for array in hosts]
+            actual = contract(
+                equation, *operands, optimize='greedy',
+                backend='cupy' if backend == 'cuda' else 'numpy')
+            error = _relative_error(actual, expected)
+            kept = str(_host(actual).dtype) == name_of
+            tally.check(error <= _tolerance(dtype) and kept,
+                        f'{backend}/{name}/{name_of}',
+                        f'error={error:.3e}, dtype={_host(actual).dtype}')
 
 
 def _run_mutation_and_out(tally: Tally, backend: str) -> None:
-    for value in (1.0, 2.0, 3.0):
-        left_host = np.full((2, 3), value, dtype=np.complex128)
-        right_host = np.ones((3, 4), dtype=np.complex128)
-        actual = contract(
+    for dtype in ALL_DTYPES:
+        name_of = np.dtype(dtype).name
+        for value in (1.0, 2.0, 3.0):
+            left_host = np.full((2, 3), value, dtype=dtype)
+            right_host = np.ones((3, 4), dtype=dtype)
+            actual = contract(
+                'ij,jk->ik', _to_backend(left_host, backend),
+                _to_backend(right_host, backend), optimize='greedy',
+                backend='cupy' if backend == 'cuda' else 'numpy')
+            expected = np.full((2, 4), 3.0 * value, dtype=dtype)
+            error = _relative_error(actual, expected)
+            tally.check(error <= _tolerance(dtype),
+                        f'{backend}/cache-value-{value:g}/{name_of}',
+                        f'error={error:.3e}')
+
+        left_host = np.arange(6, dtype=dtype).reshape(2, 3)
+        right_host = np.arange(12, dtype=dtype).reshape(3, 4)
+        if backend == 'cuda':
+            import cupy
+
+            output = cupy.empty((2, 4), dtype=dtype)
+            backend_name = 'cupy'
+        else:
+            output = np.empty((2, 4), dtype=dtype)
+            backend_name = 'numpy'
+        returned = contract(
             'ij,jk->ik', _to_backend(left_host, backend),
-            _to_backend(right_host, backend), optimize='greedy',
-            backend='cupy' if backend == 'cuda' else 'numpy')
-        expected = np.full((2, 4), 3.0 * value, dtype=np.complex128)
-        error = _relative_error(actual, expected)
-        tally.check(error <= RELATIVE_TOLERANCE, f'{backend}/cache-value-{value:g}', f'error={error:.3e}')
-
-    left_host = np.arange(6, dtype=np.complex128).reshape(2, 3)
-    right_host = np.arange(12, dtype=np.complex128).reshape(3, 4)
-    if backend == 'cuda':
-        import cupy
-
-        output = cupy.empty((2, 4), dtype=cupy.complex128)
-        backend_name = 'cupy'
-    else:
-        output = np.empty((2, 4), dtype=np.complex128)
-        backend_name = 'numpy'
-    returned = contract(
-        'ij,jk->ik', _to_backend(left_host, backend), _to_backend(right_host, backend),
-        out=output, optimize='greedy', backend=backend_name)
-    expected = np.einsum('ij,jk->ik', left_host, right_host, optimize='greedy')
-    tally.check(returned is output and _relative_error(output, expected) <= RELATIVE_TOLERANCE,
-                f'{backend}/out-contract')
+            _to_backend(right_host, backend), out=output, optimize='greedy',
+            backend=backend_name)
+        expected = np.einsum('ij,jk->ik', left_host, right_host, optimize='greedy')
+        tally.check(
+            returned is output
+            and _relative_error(output, expected) <= _tolerance(dtype)
+            and str(_host(output).dtype) == name_of,
+            f'{backend}/out-contract/{name_of}',
+            f'dtype={_host(output).dtype}')
 
 
 def _run_expression_and_fallback(tally: Tally, backend: str) -> None:
-    left_host = np.arange(6, dtype=np.complex128).reshape(2, 3)
-    right_host = np.arange(12, dtype=np.complex128).reshape(3, 4)
-    expression = contract_expression(
-        'ij,jk->ik', left_host.shape, right_host.shape, optimize='greedy')
-    actual = expression(
-        _to_backend(left_host, backend), _to_backend(right_host, backend),
-        backend='cupy' if backend == 'cuda' else 'numpy')
-    expected = left_host @ right_host
-    tally.check(_relative_error(actual, expected) <= RELATIVE_TOLERANCE,
-                f'{backend}/contract-expression')
+    for dtype in ALL_DTYPES:
+        name_of = np.dtype(dtype).name
+        left_host = np.arange(6, dtype=dtype).reshape(2, 3)
+        right_host = np.arange(12, dtype=dtype).reshape(3, 4)
+        expression = contract_expression(
+            'ij,jk->ik', left_host.shape, right_host.shape, optimize='greedy')
+        actual = expression(
+            _to_backend(left_host, backend), _to_backend(right_host, backend),
+            backend='cupy' if backend == 'cuda' else 'numpy')
+        expected = left_host @ right_host
+        tally.check(
+            _relative_error(actual, expected) <= _tolerance(dtype)
+            and str(_host(actual).dtype) == name_of,
+            f'{backend}/contract-expression/{name_of}',
+            f'dtype={_host(actual).dtype}')
 
-    diagonal_host = np.arange(9, dtype=np.complex128).reshape(3, 3)
-    fallback = contract(
-        'ii->', _to_backend(diagonal_host, backend), optimize='greedy',
-        backend='cupy' if backend == 'cuda' else 'numpy')
-    tally.check(
-        _relative_error(fallback, np.einsum('ii->', diagonal_host, optimize='greedy')) <= RELATIVE_TOLERANCE,
-        f'{backend}/repeated-axis-fallback')
+        diagonal_host = np.arange(9, dtype=dtype).reshape(3, 3)
+        fallback = contract(
+            'ii->', _to_backend(diagonal_host, backend), optimize='greedy',
+            backend='cupy' if backend == 'cuda' else 'numpy')
+        tally.check(
+            _relative_error(
+                fallback,
+                np.einsum('ii->', diagonal_host, optimize='greedy')) <= _tolerance(dtype),
+            f'{backend}/repeated-axis-fallback/{name_of}')
 
 
 def run_mixed_backends() -> tuple[bool, str]:
@@ -178,24 +221,27 @@ def run_mixed_backends() -> tuple[bool, str]:
 
     original = os.environ.get('PYQCD_EINSUM_NATIVE')
     try:
-        left = np.arange(6, dtype=np.complex128).reshape(2, 3)
-        right = np.arange(12, dtype=np.complex128).reshape(3, 4)
-        os.environ['PYQCD_EINSUM_NATIVE'] = 'kupl'
-        host = contract('ij,jk->ik', left, right, backend='numpy')
-        os.environ['PYQCD_EINSUM_NATIVE'] = 'cuda'
-        device = contract(
-            'ij,jk->ik', cupy.asarray(left), cupy.asarray(right), backend='cupy'
-        )
-        cupy.cuda.Device().synchronize()
-        error = _relative_error(device, left @ right)
+        worst = 0.0
+        for dtype in ALL_DTYPES:
+            left = np.arange(6, dtype=dtype).reshape(2, 3)
+            right = np.arange(12, dtype=dtype).reshape(3, 4)
+            os.environ['PYQCD_EINSUM_NATIVE'] = 'kupl'
+            host = contract('ij,jk->ik', left, right, backend='numpy')
+            os.environ['PYQCD_EINSUM_NATIVE'] = 'cuda'
+            device = contract(
+                'ij,jk->ik', cupy.asarray(left), cupy.asarray(right), backend='cupy'
+            )
+            cupy.cuda.Device().synchronize()
+            error = _relative_error(device, left @ right)
+            worst = max(worst, error / _tolerance(dtype))
         with open('/proc/self/maps', encoding='utf-8') as handle:
             maps = handle.read()
         loaded = (
             'libpyqcdeinsum_kupl.so' in maps
             and 'libpyqcdeinsum_cuda.so' in maps
         )
-        return loaded and error <= RELATIVE_TOLERANCE, (
-            f'both_loaded={loaded}, relative error={error:.3e}, '
+        return loaded and worst <= 1.0, (
+            f'both_loaded={loaded}, worst_error/tolerance={worst:.3e}, '
             f'host_norm={np.linalg.norm(host):.3e}'
         )
     finally:

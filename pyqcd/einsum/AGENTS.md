@@ -132,13 +132,78 @@ void applyEndQcd(long long set_ptrs, long long params);
 
 ## 6. 精度与数值口径
 
-- dtype：`complex128` 为主，`complex64`、`float64` 必须支持；混合精度 **fail closed**。
-- 数值验收：与 `numpy.einsum` / `opt_einsum` 逐元素 `rel ≤ 1e-12`（complex128）。
+- dtype：`complex128` / `complex64` / `float64` / `float32` **四类完全平权**，
+  不设主精度或默认精度；混合精度 **fail closed**，任何情况下不得把一类 dtype
+  静默转成另一类精度。每类的启用条件相同：由原生 2×2 实测自证正确（每进程每
+  dtype 一次），没通过只回落该类；拒绝原因必须区分“契约外 dtype”与“探测没过”。
+- 数值验收：与 `numpy.einsum` / `opt_einsum` 逐元素 `rel ≤ 1e-12`
+  （`complex128`/`float64`）与 `rel ≤ 1e-4`（`complex64`/`float32`，含 13–16
+  算子链的固有误差）。
 - 性能验收：同后端、同 dtype、同线程数，`median(≥10 次)`；CPU 对 CPU、GPU 对 GPU。
+- **性能依据只认生产尺寸（强制，2026-11-14 依 `refer/sush/sush-einsum.py` 重写）**：
+  生产尺寸的唯一来源是该基准脚本的实际张量（详见 §6.1）：
+  `Nev_src=100`/`Nev_curr=400`、`Mom_src=1`/`Mom_curr=3`、`Ns=4`、`Nc=3`。
+  该脚本张量没有空间轴（`Nx`/`Lt`/`lattice` 全文匹配数为 0），因此**两条口径互不
+  替代**，任何性能结论必须写明用的是哪一条：
+  `distill`（`distill`/`distill_curr` 档，主口径，蒸馏收缩）与
+  `spatial`（`scene`/`full` 档，仅"空间×本征模展平"的矩阵乘）。
+  小尺寸（`dim ≤ 8`、`n ≤ 8`、`smoke`、`--scale`、超立方体 `dim` 扫描）**只能用于
+  路径与正确性证据，其倍率一律不得写成性能结论**，也不得用于选路门限的标定；
+  把 `spatial` 的倍率写成蒸馏结论、或用 `_label_sizes` 反推的 `distill` 形状
+  （它表达不出蒸馏轴）当生产形状，同样作废。违反此条的产物必须在报告里显式标
+  `unverified`，**不允许**用缩小档替代。
+  可执行闸门：`python -m pyqcd.testing._production_perf_gate_contract`。
 - 二元收缩规范布局：左 `[B,M,K]`、右 `[B,N,K]`，K 必须是两侧最低连续维；GEMM
   执行语义为 `out[B,M,N] = left[B,M,K] @ right[B,N,K]^T`。
 - 稳定基准入口应缓存计划/compiled context，不缓存输入内容；同一 plan 的重复调用必须
   使用本次输入指针且不能返回旧数据。
+
+### 6.1 生产场景的来源与各维度依据（2026-11-14 增补，只读核对）
+
+两套生产参数并存，**不要混用**，也不要把一档的值搬到另一档：
+
+* `PRODUCTION` / `DEFAULT_SCENE` / `SMOKE_SCENE`（`Nx`/`Lt` 为主尺度）来自
+  `refer/sush/_distillation/contraction.py` 的 peram 展平描述；
+* `PRODUCTION_DISTILL` / `DISTILL_SCENE`（`distill`） / `DISTILL_CURR_SCENE`
+  （`distill_curr`）**逐字**取自基准脚本 `refer/sush/sush-einsum.py`，规模只由
+  `Nev`（100/400）、`Mom`（1/3）、`Ns=4` 决定。该脚本里 `Nx`、`Lt`、`lattice`
+  的 grep 匹配数为 **0** —— 蒸馏张量没有空间轴，`Lt` 也不是张量轴（peram 按
+  `(tq,ta)` 逐对注册，`peram` 本身没有时间维）。
+
+| 维度 | 值 | 出处（`refer/sush/sush-einsum.py`） | 为什么 |
+|---|---|---|---|
+| `Nev_src` | 100 | `:170` `nev_src = 100` | sink/source 端的本征模数 |
+| `Nev_curr` | 400 | `:171` `nev_curr = 400` | 每个 current 端点（tcur0/tcur1）用 400；**Nev 是两个值，不能合成一个** |
+| `Mom_src` | 1 | `:172` `n_mom_src = 1` | 源端只取一个动量 |
+| `Mom_curr` | 3 | `:173` `n_mom_curr = 3` | current 端三个动量（分配 `(3,400,400)`，`:224`） |
+| `Ns` | 4 | `:200` peram `(4,4,nev,nev)`；`:248` `gamma(4)` 4×4 | Dirac 旋量维 |
+| `Nc` | 3 | `refer/sush/_distillation/constant.py:1` | 色数；**不是**本脚本的张量轴（色已在 peram 内收缩） |
+| `Nt_labels` | 4 | `:179` `times = (tsink,tsrc,tcur0,tcur1)` | 注册表键个数，不是张量轴 |
+| `Nx` | 无 | 该文件无匹配 | 蒸馏张量没有空间轴；`dims("distill")` 用 `Nx=1` 作"无此轴"占位 |
+| `Lt` | 无 | 该文件无匹配 | 同上；`Lt=1` 为占位 |
+
+`nev_by_time = {tsink:100, tsrc:100, tcur0:400, tcur1:400}`（`:184-189`），因此
+`peram[tq,ta] = (4, 4, nev[tq], nev[ta])`（`:200`）在同一张图里出现
+`(4,4,100,100)`、`(4,4,100,400)`、`(4,4,400,100)`、`(4,4,400,400)` **四种异形轴长**。
+`distill_tensor_shapes()` / `distill_memory()` 给的就是这组真实形状与内存估算
+（`3pt` 段 0.327 GiB、`6peram` 段 0.194 GiB；最坏可信 6pt 峰值下界 5.16 GiB < 15 GiB）。
+
+已知口径差异（**不要**在没有依据时"顺手修正"）：
+
+1. `bench_specialized._label_sizes` 把 `VVV` 当 `(Lt, Mom, Nev, Nev, Nev)`、`VDV` 当
+   `(Lt, Mom, Nev, Nev)`，并且全方程只有一个 `Nev` —— 这两点都与参考脚本不符
+   （无 `Lt` 轴、两个 `Nev`）。实测后果：拿 `dims("distill")` 喂 `_label_sizes`，
+   `Nx/Lt=1` 的占位与 `Mom`（1 或 3）会作为**真实轴长**漏进 peram 的轴
+   （seq 3 得到 `(4,100,100,100)`、`(100,4,1,1)` 之类），与参考脚本的
+   `(4,4,100,400)` 无关。因此 **`--scene distill` 经 `_label_sizes` 的形状只能当
+   path-only 证据，不得写成蒸馏生产结论**；真实形状只认 `distill_tensor_shapes()`。
+   该限制由 `_bench_scene_distill_contract.test_label_sizes_cannot_express_distill_axes`
+   锁定；修 `_label_sizes` 归规划/语料组，改了会让该契约失败并提醒同步本节。
+2. `VVV` 分配 `(1,100,100,100)`（`:209`）但注册时用 `host_vvv_sink[0]` 切片（`:241`），
+   进 einsum 的是 `(100,100,100)`；`VDV` 保留动量轴（`:243-245`）→ `(1,100,100)` /
+   `(3,400,400)`。两者不对称，照抄参考脚本即可。
+3. 语料里 `VDV` 的 term 只有 2 个标签（seq 1/855），而参考脚本注册的 `VDV` 是 3 轴；
+   这需要在 `lqcddb` 侧核对，本库不擅自决定。
 
 ## 7. 回退不变量
 
@@ -165,3 +230,59 @@ PYQCD_EINSUM_ORACLE=installed PYQCD_EINSUM_NATIVE=kupl \
 
 `T0/T0n` 是 overhead 诊断 profile；`T1/T2` 是性能验收 profile。安装 oracle 模式必须
 在产物中保留 `frozen=false`，不能替代冻结子模块证据。
+
+#### CUDA 用例必须用 mamba 环境跑（2026-11-14 记录，踩过一次）
+
+凡是会触发 **nvrtc JIT** 的用例（`_einsum_semantics_contract` 的
+`test_gpu_side_concurrency_matches_host` 等），必须用：
+
+```bash
+mamba run -n pyqcd-einsum-cu124 python -B -m pyqcd.testing
+```
+
+用系统 `python` 会得到
+`CompileException: nvrtc: error: invalid value for --gpu-architecture (-arch)`：
+系统 `cupy 14.2.0` 配的是 **nvrtc 13.2**（CUDA 13 已移除 `sm_60`/`sm_70`），而
+mamba 环境配的是 **nvrtc 12.9**，与 `cupy.cuda.runtime` 的 `12090` 一致。同一份代码
+在 mamba 环境 `13 passed / 0 failed`，在系统 python 会 1 个 ERROR。
+
+这**不是**产品缺陷，也不是"必须降 arch"——不要为此改 `CUDAARCHS` 或
+`CUPY_NVCC_GENERATE_CODE`，换环境即可。
+
+### 6.2 已知缺陷：v3 步表的收缩序按 `PROBE_DIM=2` 定型（2026-11-14 记录，未修）
+
+`pyqcd/testing/_topology_kernel_gen.py:43` 用 `PROBE_DIM = 2` 且 `optimize="greedy"`
+生成步表，于是**收缩序由 dim=2 的超立方体决定**，与生产异形轴无关。实测在验收用的
+6 个 seq 上是病态序：
+
+| seq | 探针序 MAC | 生产形状 MAC | 倍数 |
+|---|---:|---:|---:|
+| 500 | 2.287e9 | 1.912e8 | **11.97×** |
+| 1700 | 1.490e7 | 1.444e6 | 10.31× |
+| 1000 | 3.051e6 | 3.833e5 | 7.96× |
+
+同样 13 步做约 12 倍的乘加，`M=15625 K=1600 N=25` 这类巨中间体即由此而来
+（`dedicated` 的同规模步是 `625×625×400`）。后果：实数 dtype 的 topology 路径在
+seq=500 / scene scale=8 上是 **246.8 ms vs dedicated 4.7 ms（52.9×）**。
+
+**已采取的措施（方案 B）**：`_kernel_kupl._TOPOLOGY_DECLINED_DTYPES` 在**分派层**
+拒绝 `float64`/`float32`（`status=4`，原因含 `declined by policy`），实数交给
+`kupl_dedicated`（它在 `_api` 的分派顺序里更靠前）。设
+`PYQCD_EINSUM_TOPOLOGY_REAL=1` 可强制放开做 A/B 对照。复数是"能力支持但原生未实现"
+的另一层问题，见下条。
+
+**不要**把这当成"v3 已经修好"。以下三条是**已被实测推翻**的说法，禁止再写进报告：
+
+1. "complex 走 v3 步表且与 dedicated 持平" —— `topology_apply.cpp:232` 对非
+   float32/float64 直接 `return kSpecializedMiss`，随后 `:346` 仍调
+   `execute_parsed_contract`（**v2 通用执行器**）。所以复数测到的 12.7 ms 是 v2 的
+   耗时，与 v3 无关；`try_topology_apply` 对复数返回非 None 只是 v2 兜底命中。
+2. "v3 缺 batch 并行，补上就能提速" —— 验收用的 105 步里 `batch_rank > 0` 为 **0 步**
+   （全语料 121724 步中有 11990 步带 batch，但不在这批 seq），补了是死代码；且
+   `packed_b` 是 `[batch][K][N]`，折平成 `[K, batch*N]` 的 memcpy 前提不成立。
+3. "步表已按真实轴长还原" —— 轴长还原（v3 的 `label_sizes`）是对的，但**收缩序**
+   仍来自 dim=2 探针，两者是不同层面的问题。
+
+正解（需单独授权，会改"步表是静态生成产物"这个设计前提）：让步表按生产 label 尺寸
+定型，或运行期按真实 `label_sizes` 重排收缩序（等价于用 dedicated 的 `auto` 计划）。
+改动面：`_topology_kernel_gen.py` + 重生成 `topology_kernels.inc` + 全语料对拍。

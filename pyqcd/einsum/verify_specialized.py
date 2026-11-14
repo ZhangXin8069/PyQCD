@@ -8,7 +8,8 @@
 
 判据（任一不满足即非零退出）：
 
-1. **命中**：拓扑签名在语料索引里（``_specialize.match``）；
+1. **命中**：先查形状特化路径（``_shape_paths``，如 ``x,ax,bx,cx->abc``），
+   再查语料索引（``_specialize.match``，8638 条 wick 拓扑）；
 2. **可解析**：``canonical_signature`` 非空；
 3. **未命中**时退出码为 1，但输出仍说明这是语料之外的方程、会走通用路径。
 
@@ -69,9 +70,23 @@ def query(subscripts: str) -> dict[str, Any]:
     report["digest"] = _specialize._signature_digest(signature)
     report["output_rank"] = len(signature[-1])
 
+    from . import _shape_paths
+
+    shape = _shape_paths.entry(subscripts)
+    if shape is not None:
+        report.update({
+            "matched": True,
+            "name": shape["name"],
+            "kind": shape["kind"],
+            "kernels": list(shape.get("kernels", ())),
+            "note": shape.get("note", ""),
+        })
+        return report
+
     entry = _specialize.match(subscripts)
     if entry is None:
-        report["reason"] = "不在 wick_12cases 语料里，走通用分步路径（无特化内核）"
+        report["reason"] = ("既不在 wick_12cases 语料里，也没有形状特化路径，"
+                            "走通用分步路径（无特化内核）")
         return report
 
     report.update({

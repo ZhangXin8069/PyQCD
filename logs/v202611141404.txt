@@ -1,0 +1,56 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-14 14:04:33 +0800
+批次: pyqcd-einsum/routing-evidence
+主任务: 修 allowlist 惰性解析 bug + CPU 步表选路证据标定
+触发原因: 阶段成果
+摘要: 修 NameError 真 bug；三个判据假设被否；126 passed 0 failed
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 修 allowlist 的真 bug
+- 现象: `_dedicated_allowlist.allow(4, 129)` 抛 `NameError: name 'ALLOW' is not defined`
+- 根因: `ALLOW` 只在模块 `__getattr__` 里对**外部** `module.ALLOW` 惰性注入；模块内的全局查找不触发 `__getattr__`
+- 修法: 内部统一走 `_resolved()`（`globals().get("ALLOW")` → 首次解析并缓存），`__getattr__` 复用
+- 验证: `seqs(4)` = 8055 条、`allow(4,129)=True`、不存在的 seq 为 False
+- 退出码: 0
+
+### S2 — 标定 CPU 步表选路（三个假设被实测否掉）
+- ❌ `pack/flops` 当判据: seq=129 0.572 vs 1623 0.281，只差 2×，却一个亏 1.53× 一个赚 0.86×
+- ❌ arena 绝对量: 275 MiB vs 19 MiB，差 14×，不到数量级
+- ❌ 规模拐点: seq=129 沿 scale 8→32 的 ded/gen = 1.68/1.96/2.00/2.30/2.12×，**全程都亏**
+- 结论: seq=129/3461 属"4 输出轴 + arity≥14"的结构性不适用，**加尺寸门槛修不了**，只能按拓扑选路
+- 退出码: 0
+
+### S3 — 新增选路契约并回归
+- 新建 `_dedicated_routing_contract`（5 项）：allowlist 可调用性、覆盖率与 docstring 一致、非生产 oracle（129 与 1623 都是 True）、代价门无法分辨、亏损路径共享"4 输出轴+高元数"特征（并显式断言样本不足）
+- 注册进 `__init__.py` 与 `conftest.py`
+- 全量: **126 passed / 1 skipped / 0 failed**
+
+## 验证与证据
+- 选路契约 5 passed / 0 failed
+- 隔离 CUDA 环境全量 126 passed / 1 skipped / 0 failed
+- 未验证: 4 样本不足以支撑运行时门限，故本次**未改**运行时选路行为
+
+## 变更与产物
+- 文件: `pyqcd/einsum/_dedicated_allowlist.py`（修惰性解析）、新增 `pyqcd/testing/_dedicated_routing_contract.py`、`__init__.py`、`conftest.py`、`SKILL.md`(§4h)
+
+## 风险、限制与下一步
+- 风险: CPU 生产档重路径仍会走 dedicated（亏损 1.18–1.62×），本次只固化判据未改行为
+- 阻塞: 无
+- 下一步: 跑全语料 census（dim 与 scene 双口径）后再决定是否引入"输出秩≥4 且 arity≥14"的 CPU 选路门
+
+## 用户输入指令
+1. 继续
+
+## Agent 全文报告
+--- report begin ---
+本轮修掉一个真 bug 并完成 CPU 步表选路的证据标定。
+
+**真 bug**：`_dedicated_allowlist.allow()/seqs()` 一调用就 `NameError: name 'ALLOW' is not defined`。`ALLOW` 只在模块 `__getattr__` 里对外部 `module.ALLOW` 惰性注入，模块内全局查找不触发它。白名单不参与数值计算，该缺陷能一直躺到有人真的用它选路。已改为内部统一走 `_resolved()`，`seqs(4)` 恢复为 8055 条。
+
+**三个假设被实测否掉**（都写成了断言）：① `pack/flops` 当判据不行（129 是 0.572、1623 是 0.281，只差 2×）；② arena 绝对量不行（275 vs 19 MiB）；③ 规模拐点不存在（seq=129 沿 scale 8→32 的 ded/gen 稳定在 1.68–2.30×，**全程都亏**）。因此 seq=129/3461 这类"4 输出轴 + arity≥14"的拓扑对 CPU 步表是结构性不适用，**加尺寸门槛修不了**，只能按拓扑选路。但候选判据只有 2 亏 + 2 赚共 4 个样本，不足以改运行时行为——这一点也做成了断言。
+
+新增 `_dedicated_routing_contract`（5 项），全量 **126 passed / 1 skipped / 0 failed**。
+--- report end ---

@@ -14,7 +14,7 @@ from typing import Any
 from . import paths
 from ._pathinfo import PathInfo
 from ._sharing import einsum_cache_wrap
-from . import _specialize, _threads
+from . import _shape_paths, _specialize, _threads
 from .backends import dispatch as backends
 from .backends.dispatch import get_func, parse_backend
 
@@ -810,6 +810,14 @@ def contract(
         elementwise_backend = parse_backend(operands, backend)
         return _backend_einsum(elementwise_backend, subscripts, operands)
 
+    # 形状特化路径：少量结构特殊的方程（语料之外）用一次性推导出的固定算法，
+    # 不规划、不建步表。只接管无 out=/无 kwargs 的调用；前置条件不满足即回落。
+    if (isinstance(subscripts, str) and out is None and not kwargs
+            and specialize is not False):
+        shape_result = _shape_paths.try_execute(subscripts, operands)
+        if shape_result is not None:
+            return shape_result
+
     global _LAST_CONTRACT_SIGNATURE, _LAST_CONTRACT_PROGRAM
 
     operands_list = [subscripts] + list(operands)
@@ -879,7 +887,7 @@ def contract(
     if isinstance(subscripts, str) and not kwargs and len(operands) >= 3:
         plan_key = _contract_program_key(
             subscripts, operands, parse_backend(operands, backend),
-            optimize_key, memory_limit, use_blas,
+            _plan_cache_optimize_key(optimize, optimize_key), memory_limit, use_blas,
         )
     cached_plan = _cached_contract_plan(plan_key)
     if cached_plan is not None:
@@ -1375,7 +1383,10 @@ def _optimize_cache_key(optimize: Any) -> Any | None:
     ``None`` means "not cacheable". Strings, booleans and tuples are already
     immutable, so they double as their own token; an explicit ``path`` given as
     a list of step tuples is frozen into a tuple so that later edits of the list
-    cannot hit a stale program (opt_einsum accepts both spellings).
+    cannot hit a stale program (opt_einsum accepts both spellings). Callables and
+    ``PathOptimizer`` instances get ``None`` here (no mutation proof exists, so
+    the program cache stays off); the plan cache keys them by identity instead,
+    see :func:`_plan_cache_optimize_key`.
     """
     if optimize is None or isinstance(optimize, (str, bool)):
         return optimize
@@ -1391,6 +1402,53 @@ def _optimize_cache_key(optimize: Any) -> Any | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+class _OptimizeIdentity:
+    """Identity token for a ``callable`` / ``PathOptimizer`` ``optimize``.
+
+    Two different optimizers must never share a cached plan, and the plain
+    ``id()`` of an object is not a valid cache key on its own: once the object
+    is collected its id can be handed out again to a different optimizer, which
+    would make the stale plan look like a hit. The token therefore compares by
+    *object identity* (so even a recycled id only produces a harmless hash
+    collision) and keeps a strong reference to the optimizer (so an entry stays
+    meaningful, and comparable, for as long as it is cached). Repeated calls with
+    the same object build a new token that is equal and hashes alike, hence they
+    hit. The retained reference is bounded by the cache limits and is released
+    together with the entry.
+    """
+
+    __slots__ = ("optimizer", "token")
+
+    def __init__(self, optimizer: Any) -> None:
+        self.optimizer = optimizer
+        self.token = id(optimizer)
+
+    def __hash__(self) -> int:
+        return self.token
+
+    def __eq__(self, other: Any) -> bool:
+        return (isinstance(other, _OptimizeIdentity)
+                and other.optimizer is self.optimizer)
+
+    def __repr__(self) -> str:
+        return f"<optimize {type(self.optimizer).__name__} at {self.token:#x}>"
+
+
+def _plan_cache_optimize_key(optimize: Any, optimize_key: Any) -> Any | None:
+    """Cache token for ``optimize`` inside the plan cache key.
+
+    ``optimize_key`` is reused as-is when it exists (immutable argument). A
+    callable/``PathOptimizer`` has no mutation proof token, but its identity is
+    enough to keep different optimizers apart while still caching the plan of a
+    repeated call, so it is replaced by an :class:`_OptimizeIdentity`. Everything
+    else stays uncacheable (``None``), matching ``cache_enabled``: an unknown
+    ``optimize`` argument disables caching.
+    """
+    if optimize_key is not None:
+        return optimize_key
+    return _OptimizeIdentity(optimize) if callable(optimize) else None
 
 
 def _contract_signature(

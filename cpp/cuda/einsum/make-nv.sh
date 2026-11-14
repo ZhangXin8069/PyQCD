@@ -247,6 +247,23 @@ printf '  OpenBLAS: %s\n' "$_OPENBLAS_SUMMARY"
 printf '  sources:  %s\n' "$(for source in "${SOURCES[@]}"; do printf '%s ' "${source##*/}"; done)"
 printf '  output:   %s\n' "$PUBLIC_LIBRARY"
 
+# conda 的 LDFLAGS 里带 ``-Wl,-rpath,<prefix>/lib``，nvcc 会把它透传给链接器，
+# 于是产物带上**构建机绝对 RUNPATH**。后果不是"多一条无害路径"，而是进程里
+# 出现第二份 libcublas（构建机 12.4 与宿主 cupy 的 12.9 并存）；实测症状是调过
+# 本库之后 cupy 的 complex64 GEMM 恒报 CUBLAS_STATUS_NOT_SUPPORTED —— 两份
+# cuBLAS 抢同一份进程级状态，不是内核算错。这里屏蔽掉注入源，产物不带 RPATH。
+# 另外注意：不要用反引号写"行内注释"，shell 会把它当命令执行（exit 127）。
+# 产物必须不带绝对 RUNPATH：conda 的 LDFLAGS 会注入 -Wl,-rpath,<prefix>/lib，
+# 那会让进程里同时存在两份 libcublas（构建机 12.4 与宿主 cupy 的 12.9），
+# 实测症状是调过本库之后 cupy 的 complex64 GEMM 恒报 CUBLAS_STATUS_NOT_SUPPORTED。
+CUDA_EINSUM_SAVED_LDFLAGS=${LDFLAGS-}
+CUDA_EINSUM_SAVED_LD_RUN_PATH=${LD_RUN_PATH-}
+unset LDFLAGS LD_RUN_PATH
+restore_link_env() {
+    if [ -n "$CUDA_EINSUM_SAVED_LDFLAGS" ]; then export LDFLAGS=$CUDA_EINSUM_SAVED_LDFLAGS; fi
+    if [ -n "$CUDA_EINSUM_SAVED_LD_RUN_PATH" ]; then export LD_RUN_PATH=$CUDA_EINSUM_SAVED_LD_RUN_PATH; fi
+}
+
 set +e
 "$NVCC" -O3 -std=c++17 --shared \
     -Xcompiler -fPIC -Xcompiler -fvisibility=hidden \
@@ -260,6 +277,7 @@ set +e
     -Xlinker -soname -Xlinker libpyqcdeinsum_cuda.so \
     -o "$TEMP_LIBRARY" 2>&1 | tee "$BUILD_LOG"
 STATUS=${PIPESTATUS[0]}
+restore_link_env
 set -e
 
 if [ "$STATUS" -ne 0 ]; then
@@ -287,6 +305,20 @@ if [ ${#MISSING[@]} -gt 0 ]; then
     if [ "$REQUIRE_KERNELS" = "1" ]; then
         printf 'error: --require-kernels forbids a planning-only archive\n' >&2
         exit 1
+    fi
+fi
+
+# conda 的编译器 wrapper 无条件注入绝对 RUNPATH（连空 .so 都带），会拉进第二份
+# libcublas，导致同进程里 cupy 的 complex64 GEMM 恒报 CUBLAS_STATUS_NOT_SUPPORTED。
+# LDFLAGS 屏蔽与 -Xlinker -rpath 覆盖都拦不住 wrapper，所以链接后原地裁掉。
+# 绝对 RUNPATH 会拉进第二份 libcublas（构建机 12.4 与宿主 cupy 的 12.9 并存），
+# 实测症状是调过本库之后 cupy 的 complex64 GEMM 恒报 CUBLAS_STATUS_NOT_SUPPORTED。
+# 但这不等于"清空 RUNPATH"就好：本机清空后连 libcublas 都找不到、topology 入口整体
+# miss。真正的修法在 Python 侧（先让宿主绑定自己的 libcublas，见
+# pyqcd/einsum/cuda/_program.py::_bind_host_cublas），这里只保留一个可选的强剪开关。
+if [ "${PYQCD_EINSUM_STRIP_RPATH:-0}" = "1" ]; then
+    if ! python3 "$SCRIPT_DIR/strip_rpath.py" "$TEMP_LIBRARY"; then
+        printf 'warning: could not strip the absolute RUNPATH\n' >&2
     fi
 fi
 

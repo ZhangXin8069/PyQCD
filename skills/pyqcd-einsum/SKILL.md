@@ -299,17 +299,28 @@ numpy double contract  [('native', 'numpy', False, False)]
   也可能是 2pt/3pt 而不是 topology。
 - `out=` 会绕过**全部**专用 kernel；要验证拓扑入口就不要传 `out=`。
 - 混合 dtype 一律回落（`encode_execution_plan` 直接报 mixed precision），不会隐式转换。
-  单精度 `complex64/float32` 恒可下发；双精度 `complex128/float64` 必须先在原生侧
-  实测通过（`_probe_double`，每进程每 dtype 一次）才启用，否则回落——
-  见 `TOPOLOGY_DTYPES` / `TOPOLOGY_DOUBLE_DTYPES` / `topology_dtypes()`。
-- 静态生成内核只展开 `float32`，不能服务 double/complex；它是未接线的实验路线。
-- `_topology_registry.py` 的再生成入口 `_topology_registry_regen` **不在仓库中**；
-  改语料后只能按摘要口径手工重算，别照着 docstring 去跑一个不存在的模块。
-- Python 计划缓存只有 32 项 FIFO（`_kernel_kupl` / `_kernel_cuda`），键是**调用方写的
-  方程**而不是拓扑签名；整语料扫描会反复建计划，单遍扫描耗时不能当稳态。
-- KUPL 拓扑入口每次调用都重新 `parse_execution_plan`：16 元方程 `size=4` 实测 >90 s
-  （通用路径 2 ms），`size=3` 约 4 ms。修复前不要写"拓扑 kernel 更快"；证据见
-  `logs/v202611112059.txt` 与 `logs/v202611112110.txt`。
+  **四类 dtype 完全平权、没有"主精度"**：每类都由同一把原生 2×2 实测自证
+  （`_probe_dtype`，每进程每 dtype 一次、fail-closed 并缓存），见
+  `TOPOLOGY_DTYPES` / `topology_dtypes()` / `topology_enabled_dtypes()`。
+- 静态生成内核**四类 dtype 平权**（`complex128`/`complex64`/`float64`/`float32`），
+  由 `TOPOLOGY_DTYPES` 声明、每类由原生 2×2 实测自证后才下发（探测容差分档：
+  c128/f64 `1e-9`、c64/f32 `1e-4`）。
+- 计划缓存已从 32 项 FIFO 改为 **真 LRU + 64 MiB 字节预算**
+  （`_TOPOLOGY_PLAN_CACHE` 与 `_DEDICATED_PLAN_CACHE` 各自记账，实测 8 个场景
+  记账偏差全为 0）；键是**调用方写的方程 + 各 shape + dtype**，整语料扫描仍会
+  反复建计划，单遍扫描耗时不能当稳态。
+- KUPL 拓扑入口走 **v3 步表**（真实逐轴长度 `label_sizes`，不再要求等长超立方体）：
+  生产 `distill` 档 `S1` 实测 155.31 ms（比 `opt_einsum:dp` 的 245.28 ms 快 1.6×）。
+- **但 v3 的收缩序仍按 `PROBE_DIM=2` 定型**（详见 `pyqcd/einsum/AGENTS.md §6.2`），
+  在异形轴上是病态序（seq=500 多做 11.97× 的 MAC），实数 dtype 因此比 dedicated
+  慢 51–55×；`_TOPOLOGY_DECLINED_DTYPES` 已在分派层拒绝实数（`declined by policy`），
+  `PYQCD_EINSUM_TOPOLOGY_REAL=1` 可放开做对照。**复数根本不进 v3**
+  （`topology_apply.cpp:232` → `kSpecializedMiss` → v2 `execute_parsed_contract`），
+  所以复数测到的耗时是 v2 的，不能当 v3 健康的证据。
+- **callable / `PathOptimizer` 类型的 `optimize`**：计划缓存键需要一个稳定身份。
+  2026-11-14 修掉了「两个不同 callable 共享同一 `plan_key`、第二个从未执行」的
+  静默 bug（`_api._OptimizeIdentity` + `_plan_cache_optimize_key`）；契约见
+  `_einsum_optimize_callable_contract`（8 项）。
 - CUDA 的 `TopologyProgram` 是**单槽**缓存（按计划字节 `memcmp`），换拓扑即覆盖；
   CUDA 拓扑入口还要求 `stream == nullptr`。
 
@@ -602,10 +613,26 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 `source "$HOME/env.sh"`，再设 `PYQCD_EINSUM_NOTICE=0` 读取
 `_wick_tasklist.TASKS`，记录耗时与 `_match_of_normalized.cache_info()`。
 
-**性能数据门（2026-11-12）**：性能结论只接受生产场景或完整生产语料上的实跑。
-`smoke`、`--scale 16`、缩小维度和其他代理尺寸只能用于正确性/路径验证，必须丢弃
-其中的耗时与倍率，不能改写成生产性能。生产规模装不下时，正确状态是
-`unverified`，不是用较小场景替代。
+**性能数据门（2026-11-12，2026-11-14 依 `refer/sush/sush-einsum.py` 重写）**：
+性能结论只接受生产尺寸上的实跑，且**必须写明口径**——蒸馏张量与"空间×本征模展平"
+矩阵乘是两条互不替代的口径：
+
+| 口径 | 场景档 | 尺度由谁决定 | 能支撑的结论 |
+|---|---|---|---|
+| `distill`（主） | `distill`(Nev=100)、`distill_curr`(Nev=400) | `Nev`(100/400)、`Mom`(1/3)、`Ns=4` | 蒸馏收缩的全部性能结论 |
+| `spatial` | `scene`、`full` | `Nev*Nx`(3200²)、`Lt*Nx`(2048²) | 仅"空间×本征模展平后的矩阵乘" |
+
+依据：参考脚本 `refer/sush/sush-einsum.py` 的 `Nev_src=100`(`:170`)、
+`Nev_curr=400`(`:171`)、`Mom_src=1`(`:172`)、`Mom_curr=3`(`:173`)、`Ns=4`(`:200`)；
+其张量是 peram `(4,4,nev[tq],nev[ta])`、`VVV (Mom,Nev,Nev,Nev)`、`VDV (Mom,Nev,Nev)`，
+**没有空间轴**（`Nx`/`Lt`/`lattice` 全文匹配数为 0）。
+
+`smoke`、`--scale`、缩小维度和其他代理尺寸只能用于正确性/路径验证，必须丢弃其中的
+耗时与倍率，不能改写成生产性能。把 `scene`/`full` 的倍率当蒸馏结论（或反之）、
+用 `_label_sizes` 从 `dims("distill")` 反推的形状当蒸馏生产形状（该函数表达不出
+蒸馏轴），同样作废。生产规模装不下时，正确状态是 `unverified`，不是用较小场景替代。
+闸门与跨口径判定：`python -m pyqcd.testing._production_perf_gate_contract`
+（`classify_measurement()` + `claim_basis()`）。
 
 ### §2 语料统计速查命令
 
@@ -632,17 +659,446 @@ python -B -m pyqcd.testing                                    # 实际计数以�
 = 全式不同符号数，元数 13→20 层、14/16→24 层；dim=4 时 `4^24 = 2.8e14` 次乘加，
 物理上不可用。现行生成器已改为步表（`.inc` 从 13 MB 降到 2.5 MB）。
 
-### §4 精度策略
+### §4 精度策略：四类 dtype 完全平权（2026-11-14 重写）
+
+`complex128` / `complex64` / `float64` / `float32` **同等对待**：不设主精度、不设
+默认精度、不设“单精度恒可下发”的特权。每类的启用条件完全相同——原生 2×2 实测
+（`_probe_dtype`，每进程每 dtype 一次）自证正确；没通过只回落**这一类**，不影响
+其它三类，也绝不把数组换成另一类精度。
 
 | 项 | 规则 |
 |---|---|
-| 默认/首选 | 单精度（`float32` / `complex64`） |
-| 声明集合 | `TOPOLOGY_DTYPES = (complex64, float32)`，见 `_kernel_kupl.py:275`、`_kernel_cuda.py:269` |
-| 双精度 | `TOPOLOGY_DOUBLE_DTYPES = (complex128, float64)`，须经 `_probe_double` **实测通过**才启用（每进程每 dtype 一次），否则返回 `None` 回落 |
-| 降级 | **绝不隐式降精度**；float64/complex128 不支持时回落通用路径，不转 float32 |
-| 混合 dtype | 一律回落（`encode_execution_plan` 直接拒绝 mixed precision） |
-| 实测（KUPL 直调） | float32 `2.6e-7`、float64 `4.5e-16`、complex64 `2.2e-7`、complex128 `6.3e-16` |
-| 实测（`topology_dtypes()`） | 探测前 2 项；探测后 4 项（CUDA 同样全通） |
+| 契约 | `TOPOLOGY_DTYPES = (complex128, complex64, float64, float32)`，顺序与 `QCD_DTYPE_*` 同值，Python/C++ 直接互传 dtype id |
+| 只读视图 | `topology_dtypes()` 返回契约（不探测）；`topology_enabled_dtypes()` 返回本进程实测通过子集 |
+| 探测 | `_probe_dtype(dtype)`：2×2 `ij,jk->ik` 对比 numpy；**整段在 `try` 内**，任何异常都只返回 `False` |
+| 缓存 | `_TOPOLOGY_DTYPE_SUPPORT[dtype]`，每进程每 dtype 一次；失败也缓存（不重探、不重抛） |
+| 降级 | 只回落该 dtype 到通用路径；跨 dtype 转换一律禁止；混合 dtype 直接 `fail closed` |
+| 拒绝原因 | 契约外 dtype → `outside the topology dtype contract`；契约内但探测没过 → `probe failed ... Rebuild the native library (<make 命令>)` |
+
+**内核侧（2026-11-14 补齐）**：KUPL 的参数化步表执行器原先只实例化 `float`/`double`，
+复数一律交回通用执行器——这是四类里唯一的不对称点，已消除：
+
+| 改动 | 位置 |
+|---|---|
+| `ElementKind` 改为四值且与 `QCD_DTYPE_*` 同值（complex128=0 … float32=3） | `cpp/kupl/einsum/src/topology_gemm.h` |
+| 交错 re/im 的 POD 元素 `ComplexElement<T>`（`float2`/`double2` 布局，与 PyQCU `LatticeComplex<T>` 同构），打包/转置仍是纯 memcpy | 同上 |
+| CBLAS 增加 `cblas_cgemm`/`cblas_zgemm`（alpha/beta 为指针）；实数符号缺失依旧服务实数路径，复数符号缺失只让复数回落 | 同上 |
+| `gemm_available(api, T*)` 四类各自判符号，取消“先看 sgemm+dgemm 齐不齐”的全局门 | 同上 |
+| `run_specialized` 的 dtype 分派从 `if float/else if double` 改为四类直传 `dtype_id` | `cpp/kupl/einsum/src/topology_apply.cpp` |
+| 未命中原因进 trace（`topology-step-miss: <reason>`），排错不必再猜 | 同上 |
+
+**正确性门（2026-11-14，全语料 × 四 dtype × 两条路径）**：
+
+```bash
+python -m pyqcd.testing.einsum.verify_dtype_parity --backend kupl --dim 3
+# complex128 dedicated hit=8638 bad=0 max_rel=2.9e-14 ；topology max_rel=2.0e-14
+# complex64  dedicated bad=0 max_rel=1.6e-05；topology 2.0e-05
+# float64    dedicated bad=0 max_rel=4.2e-13；topology 1.0e-13
+# float32    dedicated bad=0 max_rel=5.0e-05；topology 8.6e-05
+# PASS（判据：同 dtype 通用路径为参考；dtype/形状/有限性 + rel 容差）
+```
+
+**单精度残余散射（2026-11-14 实测，已知限制）**：`float32` + `topology` + 16 算子
+链（seq=1973）相对 float64 真值的偏差为 **1.25e-4**，而同路径 `generic` 是 4.0e-5，
+`dedicated` 是 **3.0e-5**——即步表路径在这一格比通用路径多约 3× 的舍入散射（仍是 1e-4 量级，不是
+错数）：属于单精度链式求和顺序差异，不是 dtype 或内核错误。
+判据因此写成"双精度 ≤1e-12、单精度不得劣于同 dtype 通用路径"；该格会如实报出来，
+需要更严精度时应回落到 `dedicated`（或直接用 `specialize=False`）。
+CUDA 同格相反：`dedicated32 vs float64 真值 = 5.3e-6 < generic32 的 3.9e-5`。
+
+判据是"特化复现**同 dtype**通用路径"，不是跨精度比较：跨精度会把该 dtype 固有的
+舍入当成内核损失。**这一步抓到过一个真 bug**——`unpack_step` 的"二维互换"快捷
+路径把分块指数的两侧写反了（`left = dim^split` 应为 `dim^(rank-split)`），只有
+`split == rank/2` 时二者才相等，所以 120 条抽样与 2582 条基础表契约都没抓到，
+全语料对拍在 16 条 4 输出轴拓扑上给出 `rel≈1`（值对但被错误转置）。抽样覆盖
+不能替代全语料对拍。
+
+**性能（2026-11-14，KUPL，生产场景 `scene` = Nx=64/Nev=50/Lt=40/Mom=5，2–3 轮中位）**：
+
+| seq（元数） | dtype | generic | dedicated | topology |
+|---|---|---:|---:|---:|
+| 129（14） | complex128 | **131.1 ms** | 1.45× | 1.21× |
+| 129（14） | complex64 | **57.3 ms** | 2.15× | 2.12× |
+| 129（14） | float64 | **45.3 ms** | 2.58× | 1.97× |
+| 129（14） | float32 | **38.2 ms** | 1.97× | 2.33× |
+| 1623（13） | complex128 | 7.63 ms | 1.95× | 1.18× |
+| 1623（13） | complex64 | 3.87 ms | **0.65×** | 1.99× |
+| 1623（13） | float64 | 3.20 ms | **0.72×** | 2.36× |
+| 1623（13） | float32 | 2.15 ms | 1.06× | 11.80× |
+
+读法（三条都重要）：
+
+1. **损失与 dtype 无关，与方程有关**：seq=129 上四类 dtype 全部亏（1.2–2.6×），
+   seq=1623 上复杂/双精度赚（0.65–0.72×）。路径选择必须按方程代价门，不能按
+   dtype 一刀切，也不能因为 complex 命中率高就认为 complex 更快。
+2. **pack 开销是固定字节成本，所以对最快的 dtype 相对最贵**：seq=129 的亏损比
+   在 float32（1.97×/2.33×）大于 complex128（1.45×/1.21×），因为实数 GEMM
+   更快、打包占比更高。float32 + topology 在 seq=1623 的 11.80× 就是这个效应的
+   极端值——不是 dtype 缺陷，是该拓扑的步表在小 GEMM 太多时没有优势。
+3. **本机生产数字是 provisional**：单机共享（18 核，其它作业在跑）、2–3 轮中位，
+   seq=1623 complex128 在两次运行间从 0.30× 变到 1.95×。要下"生产性能结论"
+   必须按性能数据门重测（隔离机器、≥10 次中位、同线程/同 dtype 对照）。
+
+**CUDA 生产档（2026-11-14，V100-SXM2-32GB，scene 档，3 轮中位，隔离 mamba 环境）**：
+
+| seq | complex128 | complex64 | float64 | float32 |
+|---|---:|---:|---:|---:|
+| 129 | 0.78× | 0.60× | 0.48× | 0.43× |
+| 1623 | 0.20× | 0.24× | 0.24× | 0.19× |
+| 1863 | 0.20× | 0.19× | 0.18× | 0.19× |
+| 3461 | 0.67× | 0.57× | 0.54× | 0.51× |
+
+16/16 单元格 `dedicated ≤ generic`（1.3–5.5×），四类同一量级；CUDA `topology` 在这四条
+路径上全部 MISS（描述符+`topology_steps.h` 覆盖面窄），属已知限制而非 dtype 缺陷。
+正确性同机复验：`verify_dtype_parity --backend cuda --dim 3 --limit 600` →
+dedicated 2400/2400 命中、0 失配（c128 2.8e-15 / c64 8.2e-7 / f64 1.6e-14 / f32 8.3e-6）。
+
+CUDA 复测环境（不改基础环境）：`mamba create -n pyqcd-einsum-cu124 python=3.12 numpy
+scipy h5py opt_einsum cupy-core cuda-version=12.4 openblas` + `cuda-nvrtc/cuda-cudart
+(含 -dev)/libcublas`；`CUDA_VISIBLE_DEVICES=0` 锁 V100，`mamba run -n pyqcd-einsum-cu124`
+执行。基础环境里 pip 的 `nvidia-cuda-nvrtc 13.2` 会被 cupy dlopen 到（CUDA 13 已删
+sm_70），这是"cupy 坏掉"的真因。
+
+复跑命令：
+
+```bash
+python -m pyqcd.testing.einsum.bench_dtype_matrix --backend kupl --scene scene \
+    --seqs 129,1623 --rounds 3 --mem-budget-gib 50        # 生产档（唯一有效口径）
+python -m pyqcd.testing.einsum.bench_dtype_matrix --backend kupl --dims 2,4,8
+    # 小尺寸只作路径/正确性证据，倍率一律不作为性能结论
+```
+
+**GPU 环境坑（2026-11-14 实测）**：cupy 14.2 会加载 pip 装进来的
+`nvidia-cuda-nvrtc 13.2`，而 toolkit/driver 是 12.4；CUDA 13 已删掉 sm_70/sm_60，
+于是任何 cupy kernel 都报 `nvrtc: error: invalid value for --gpu-architecture`，
+GPU 契约测试全部失败（症状像“内核坏了”，其实是环境）。判据与修法：
+
+```bash
+python -c "from cupy_backends.cuda.libs import nvrtc; print(nvrtc.getVersion())"
+# 输出 (13, 2) 而 nvcc 是 12.4 → 版本错配
+LD_PRELOAD=$CONDA_PREFIX/lib/libnvrtc.so.12 python -c "import cupy; print(cupy.zeros(4).sum())"
+# 或按 mamba 口径把 cupy 与 cuda-version 对齐：
+#   mamba install -c conda-forge "cupy-core=13.*" "cuda-version=12.4"
+```
+
+### §4b 形状特化路径：语料之外的第三条链（2026-11-14 新增）
+
+特化链现在有三条，职责不同，别混：
+
+| 链 | 来源 | 适用 | 命中判据 | 失败行为 |
+|---|---|---|---|---|
+| 语料拓扑 + 原生步表 | `_topology_registry`（8638 条 wick） | 语料内方程 | 规范签名在索引里 | 回落计划缓存 / 通用 |
+| `_dedicated_kernels` | 任意方程 | 固定归并序、逐对执行（未接线，独立引擎） | 调用方显式 `kernel_for(eq)` | 需自行处理 |
+| **`_shape_paths`** | **手写算法** | **结构特殊、可一次算完的方程** | 规范签名精确匹配 | `try_execute` 返回 `None`，绝不抛异常 |
+
+已注册：`x,ax,bx,cx->abc`（`shape:abc-sandwich`，内核标签 `shape_abc_sandwich`）
+
+    out[a,b,c] = Σ_x w[x]·A[a,x]·B[b,x]·C[c,x]
+    Q[a·n+b, x] = A[a,x]·B[b,x]         # n³ 次乘，与输出同阶
+    W[c, x]     = C[c,x]·w[x]
+    out[a,b,c]  = reshape(Q @ Wᵀ)       # M=n², K=n, N=n 的单个 GEMM
+
+规划器拆三步（`x,ax->xa`、`bx,cx->bxc`、`xa,bxc->abc`），这里压成一次 BLAS
+调用；中间体与输出同为 n³，不引入更高阶中继。
+
+**实测（numpy/float64，中位 7 轮，`contract(specialize=False)` 为基线）**：
+
+| n | 8 | 32 | 64 | 100 | 128 | 200 |
+|---|---:|---:|---:|---:|---:|---:|
+| 形状特化/通用 | **0.19×** | 0.66× | 1.05×（单次离群） | 0.61× | 0.92× | **0.59×** |
+| 相对 `np.einsum(dp)` | 0.26× | 0.70× | 0.93× | 0.84× | 0.99× | 0.86× |
+
+数值偏差 ≤ 4e-16（与 numpy 同 BLAS 口径）。n=64 那一格是唯一边界样本（换轮次
+在 0.73–1.05× 之间波动），不要据此宣称"全尺寸都快"。
+
+**接线点**：`_api.contract` 在元素级委派之后、规划之前调用
+`_shape_paths.try_execute`；只在 `out is None`、无 kwargs、`specialize is not False`
+时尝试。**`out=` 与 `specialize=False` 一定绕过**（契约里有用例守着）。
+
+**新增一条形状路径**：
+
+1. 在 `_shape_paths.py` 里写一个 `run(operands) -> ndarray | None`，前置条件
+   （秩、轴长一致、dtype 一致、C 连续、中间体预算）不满足就返回 `None`；
+2. `_register("<代表方程>", "<name>", "<note>", ("<kernel_label>",), run)`——
+   键是 `_specialize.canonical_signature`，所以标签改名自动命中；
+3. 契约：`python -B -m pyqcd.testing._shape_paths_contract`（8 项：签名匹配、
+   查询 HIT、四 dtype 数值与保真、真走内核、形状不符回落、`out=`/
+   `specialize=False` 绕过、内存预算与混合 dtype 回落、内核抛异常被吞）；
+4. 查询侧无需改动：`query_specialization(eq)` / `python -m pyqcd.einsum.verify_specialized`
+   已先查 `_shape_paths` 再查语料，HIT 时给 `name/kind/kernels/note`，不伪造
+   `corpus` 字段。
+
+**抽样复核（更多特化路径，2026-11-14）**：`bench_specialized --sample 12 --seed 5
+--scene scene`（cpu, double）12 条抽出 10 条可用，中位 **0.36×**（pyqcd 更快），
+逐条 0.02×–1.00×，全部命中 `kupl_dedicated`；1 条 `REF-FAIL`（`opt_einsum(dp)` 要
+149 GiB 中间体，是参考实现的病态）。复跑同一命令即可得到同 seed 同集合。
+
+### §4c 方案最优性：推导结论与改进候选（2026-11-14，理论推导）
+
+问题：当前"三条特化链 + 五道分派门"是不是最佳实现？结论是 **部分是**——分派顺序、
+fail-open 契约、dim≤6 特化收益（0.19–0.53×）与"低元数大张量主动委派 BLAS"都站得住；
+但有三处**可证的非最优**，都在内核外围，不是"特化"本身的上限。
+
+**成本模型**（步 i = (B,M,N,K)，元素 s 字节）：FLOPs $\sum 2BMNK$；pack 字节
+$2s\sum(BMK+BKN+BMN)$；中间体 $s\sum BMN$；BLAS 调用 $\sum B_i$（当前是串行循环，
+不是 batched）。单步算术强度 $AI = MNK/[s(MK+KN+MN)]$，本机 F/B ≈ 2 flop/byte：
+**AI≲4 时 pack 是主项**（dim=8 实测占 13–33%，中位 20.8%），**AI≳8 时只该优化 GEMM
+效率与计划 FLOPs**（生产 16 算子 pack 约 4.57 GiB ≈ 占 10.3 s 的 3%，为推算值）。
+
+**"一次单 GEMM vs 三步链"的判据**（推导，非实测）：三步链最后一步已是 $2n^4$，
+FLOPs 相同，差异只在流量与派发次数：
+
+$$T_{chain}-T_{single} \approx \frac{(k-1)2Is}{B_{eff}}-(k-1)(c_{blas}+c_{dispatch})$$
+
+即 **单 GEMM 胜 ⟺ $n^3 \gtrsim (c_{blas}+c_{dispatch})B_{eff}/s$**，取 $c\approx20\,\mu s$
+得 $n^*\approx30$–$55$（f64/DRAM≈43、f64/L3≈49、c128/DRAM≈34、f32/DRAM≈54）。收益上限
+$1-3/5=0.4$，与 §4b 实测 0.59–0.61 一致；n=64 落在 $n^*$ 附近、实测在 0.73–1.05× 跳动，
+**正好说明该判据的方向对、但不能用它定符号**。
+
+**三处非最优 + 改进排序**（收益为推导估计，需按性能数据门复测）：
+
+| # | 候选 | 预期收益 | 代价 | 风险 |
+|---|---|---|---:|---|
+| 1 | 步表 batch 折进 M（删 `for batch: cblas`，packed 布局 `lda=K, ldc=N` 本就允许零拷贝折平，`topology_gemm.h` 的 batch 循环） | 1.2–2×（生产最重步 64 次串行 zgemm → 一次 (409600,400,256)） | C++ 约 20 行 | 低（累加顺序不变） |
+| 2 | 计划判据从"只看 FLOPs"推广到 (FLOPs, arena, pack) 三项门，四 dtype 各标定 | 回收 seq=129 类亏损 1.18–2.24× | 中（阈值标定表） | 中（易过拟合单机） |
+| 3 | 派发瘦身（缓存 pointers、跳过重复校验、复用 match） | dim≤8 端到端 1.3–2×（派发 70 µs vs 内核 63 µs，dim=4 二者同量级） | 低 | 低 |
+| 4 | `_TOPOLOGY_PLAN_CACHE` 32 → 16384 / 64 MiB（对齐 dedicated） | 冷 2.7 ms → 0.08 ms，语料热扫描进一步降 | 极低 | 无 |
+| 5 | 消除 pack（直接 stride/batched） | **上界仅 1.05–1.26×**：95.3% 的 pack 是真多轴置换，用不上 TransA/B | 高（步表格式变更） | 中 |
+| 6 | JIT loop nest（TACO/TVM/ExTensor 式） | 上界 = pack+中间体流量 ⇒ dim≤8 ≤1.26×、全场景 ≤1.03× | 很高 | 高 |
+| 7 | cuBLAS batched / cuTENSOR | docs §9 已测无稳定收益；GPU 通用路径已交回 cuBLAS | — | 不建议重做 |
+| 8 | TF32/混合精度 | GPU fp32 潜在 4–8× | 中 | **高**：破坏"同 dtype 复现"判据（float32 实测 5e-5 已在 1e-4 边缘），仓库零证据 |
+
+**不迁移到生成式/编译器路线的理由**（对照结论）：③ 的独占收益只在"无 BLAS 结构的逐
+元素形态"，而这一块已被门 3 整体委派给 backend（Hadamard 4000² 0.33×→1.00×）；④ 与
+自包含 ABI、`nm -D` 白名单、四 dtype 平权与"单精度不得劣于通用"判据冲突。另有三条
+结构空洞值得记录：**(a)** 无 loop-nest 生成器，加一条特化只能人工写 `run()`；
+**(b)** 参数化维度只有 `dim`（`topology_gemm.h` 明写"轴长恒为 dim"），异形生产轴
+（Nx=64/Nev=50/Lt=40）进不了步表——CUDA `topology` 在四条生产路径全 MISS 即此；
+**(c)** 一元/重复指标步两条原生链都不支持（只有未接线的 `_dedicated_kernels` 支持）；
+**(d)** 计划缓存按调用方写法命中、无跨方程复用（32 项 FIFO）。
+
+**2026-11-14 攻坚结果（按测量否决/采纳）**：
+
+| 候选 | 结论 | 证据 |
+|---|---|---|
+| #1 步表 batch 折进 M / `?gemm_batch` | **否决，已回退** | batch 维**不能**折进 M（packed A/B 都随 batch 变化，折平会混不同 batch 的 B）。改试 `cblas_{s,d,c,z}gemm_batch`：本机 A/B 中性到更慢（seq=500/dim=8 8.81 对 8.18 ms；seq=2584/dim=4 0.20 对 0.17 ms，9 轮中位），代码已全部回退，不留默认关闭的分支 |
+| #4 拓扑计划缓存 32 项 FIFO → 真 LRU + 64 MiB | **采纳** | 全语料 8638 条：冷 1446 µs/条，**热 14.56 µs/条**（旧 32 项下等价全 miss），缓存 8638 项 / 14.5 MiB；`_kernel_kupl` 与 `_kernel_cuda` 两侧同口径 |
+| #3 派发瘦身 | **未做**（收益低于噪声） | 端到端 `contract` 0.130 ms 对 `try_topology_apply` 0.118 ms ⇒ 派发约 **12.5 µs**，远小于 dim=4 内核 63 µs 的同量级估计；按"测量优先"不做无证据的瘦身 |
+
+**修掉的两个真 bug（2026-11-14）**：
+
+1. **`out=` dtype 不符静默 cast**（`_execute.py`）：`out[...] = new_view` 靠 numpy
+   赋值语义做隐式转换，complex→float **丢虚部**（只发一条 ComplexWarning），
+   float64→float32 完全静默。现在 dtype 不符直接 `ValueError`（`out dtype must
+   match the contraction result: ...`），失败路径不写坏调用方缓冲区。契约：
+   `_contract_edge_cases_contract.test_out_dtype_mismatch_fails_closed`。
+2. **cuBLAS 双副本污染**（CUDA）：conda 的编译器 wrapper 无条件给
+   `libpyqcdeinsum_cuda.so` 注入绝对 `RUNPATH`，进程里出现两份 `libcublas`
+   （构建机 12.4 与宿主 cupy 的 12.9）。症状是**调过拓扑/步表入口之后**，cupy 的
+   complex64 GEMM 恒报 `CUBLAS_STATUS_NOT_SUPPORTED`（c128/f32/f64 不受影响），
+   极易误判成"内核算错"。修法：`cuda/_program._bind_host_cublas()` 在 dlopen
+   归档**之前**先让宿主绑定自己的 libcublas，使 `libcublas.so.12` 这个 soname 已有
+   映射。验证：`/proc/self/maps` 里 `libcublas.so` 只剩 1 份，topology 仍命中，
+   c64 GEMM 正常。**注意不要用"清空 RUNPATH"来修**：实测清空后 dlopen 直接失败、
+   topology 整体 miss；`make-nv.sh` 只保留 `PYQCD_EINSUM_STRIP_RPATH=1` 这个手动开关。
+
+**四 dtype 全语料对真值对拍（2026-11-14，V100 + 隔离环境）**：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 mamba run -n pyqcd-einsum-cu124 \
+  python -m pyqcd.testing.einsum.verify_dtype_parity --backend cuda --dim 3
+# complex128 dedicated hit=8638 bad=0 max_rel=3.3e-14 ; topology 4/8638 (2 条命中仍正确)
+# complex64  dedicated hit=8638 bad=0 max_rel=2.8e-06
+# float64    dedicated hit=8638 bad=0 max_rel=3.8e-13
+# float32    dedicated hit=8638 bad=0 max_rel=3.4e-05
+# PASS
+```
+
+CUDA 侧 `topology` 只覆盖 4/8638（描述符 + `topology_steps.h` 覆盖面窄），是已知限制，
+**不是** dtype 问题；`dedicated` 四类全量命中且对真值全部在容差内。
+
+**测试项必须覆盖四类 dtype（2026-11-14）**：`verify_native`（49 项：五类形态 × 四
+dtype + 缓存值 + `out=` + `contract_expression` + 重复轴回落 + mixed-backends）、
+`verify_plan_gate`（11 项：CPU/CUDA 资源门与负缓存 dtype 维度）、`verify_topology`
+（四 dtype 各 30 条，偏差 1.7e-15 / 5.7e-7 / 1.8e-15 / 9.8e-6）都已参数化到四类。
+扩覆盖时抓到两处**测试口径**缺陷，值得记住：
+
+1. 相对误差不能逐元素除以 `|expected|`：sandwich 这类输出含近零元素，会把正确的
+   float32 结果放大成 1.95e-4 假失败。统一按**输出最大幅值**归一。
+2. **不要假设资源门对四类 dtype 单调**：门看 arena/pack **字节**，而规划器在不同
+   dtype 上会选出不同收缩顺序 —— seq=6585 的 complex64 arena（9.41 GB）反而大于
+   complex128（6.80 GB）。契约写成"每类各自标定 + 分歧格必须由已声明的三条门解释"。
+
+**生产档 10 轮（性能数据门，2026-11-14，V100 scene）**：16/16 单元格
+`dedicated ≤ generic`；按 seq 129 0.41–0.92×、1623 0.20–0.25×、1863 0.15–0.20×、
+3461 0.61–0.80×；与 3 轮结果逐格差 ≤0.1x，四类同量级（无主精度）。
+
+**证据缺口**：`refer/git-rep/opt_einsum/` 在本 checkout 是空目录，对手实现只能由仓内
+fork 反推；Kubernetes/节点 F_eff（100–200 GFLOP/s）与"生产 pack 占 3%"均为推算；
+无 PMU/cache-miss 数据；dtype 分别选路的收益只来自 seq=129/1623 两个样本。
+
+### §4d 测试组：三个与内核无关的"结构契约"（2026-11-14 新增）
+
+内核测试（步表/契约/全语料对拍）只能证明"数字对"，抓不到 Semantics / 分派 / 缓存
+这三类"结果对但结构错"的缺陷。新增三组，全部覆盖四类 dtype：
+
+| 组 | 模块 | 覆盖 | 项数 |
+|---|---|---|---:|
+| 语义 | `_einsum_semantics_contract` | 结合律、线性性/分配律、共轭与转置律、闭式真值（迹/置换/外积/单位阵）、语料随机方程、缓存不返回旧值、逐位确定性、负缓存可恢复、8 线程并发、0 长度轴与标量、非法方程报错 | 11 |
+| 分派 | `_einsum_dispatch_contract` | 元素级门、形状特化优先于规划器、`out=`/`specialize=False` 绕行、batch 判据不按 ndim、原生计划门、混合 dtype 提升 | 7 |
+| 缓存/内存 | `_einsum_cache_contract` | LRU 语义（命中刷新顺序）、字节预算独立生效、dedicated 缓存键含 dtype+optimizer、输入不可变、输出不别名、反复失败后块池存活、`out=` 缓冲 | 7 |
+
+统一套件从 118 项 → **124 passed / 1 skipped / 0 failed**。
+
+**写这三组时踩到两个"测试自身"的坑，都值得记住**：
+
+1. **并发段不能 `redirect_stdout`**：8 个线程同时替换同一个 `sys.stdout` 并写同一个
+   `StringIO`，会让进程**静默终止**（退出码 0、无 traceback，只有 `faulthandler`
+   能看到停在首次并发调用内部）。表现极像"原生内核在并发下崩溃"，实际与内核无关。
+   并发用例改为用 `PYQCD_EINSUM_NOTICE=0` 关提示，不做重定向。
+2. **契约不能依赖跨组状态**：`_einsum_cache_contract.test_out_caller_buffer_survives_failed_call`
+   早先假设"失败即回落且仍要写对 out"，单跑绿、套件里红（前一组留下的 patch/负缓存
+   改变走向）。契约要验的是单次调用的确定性行为，不能把别的组的状态算进来。
+   同类教训：`test_concurrent_*` 必须先做一次串行预热——首次 `contract` 的懒加载/
+   ctypes 绑定/线程档初始化不是为并发设计的，验的是"稳态并发安全"而非"加载期可重入"。
+
+**注册方式**：三组都必须在 `pyqcd/testing/conftest.py` 的显式 import 列表里加一行，
+否则 `python -m pyqcd.testing` **不会收集**（该套件是显式注册制，不是 `test_*` 自动
+发现）。加完用 `grep -c "def test_" pyqcd/testing/__init__.py` 与套件汇总行对照。
+
+### §4e 各 dtype 的普遍加速效果（2026-11-14，scene 档，10 轮中位，含绝对量）
+
+**先说结论**：加速效果**不随 dtype 变化，随方程变化**；CPU 与 GPU 结论相反。
+
+#### KUPL（CPU，18 核共享机）—— **已去掉兜底，topology 列只表示真实步表覆盖**
+
+| dtype | seq | 元数 | 出秩 | generic | dedicated | ded/gen | GFLOP/s | pack MiB | arena MiB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| complex128 | 129 | 14 | 4 | **124.08 ms** | 180.89 ms | 1.46× | 7.75 | 524.6 | 275.2 |
+| complex64 | 129 | 14 | 4 | **61.80 ms** | 113.79 ms | 1.84× | 15.56 | 262.3 | 137.6 |
+| float64 | 129 | 14 | 4 | **39.88 ms** | 106.50 ms | 2.67× | 24.11 | 262.3 | 137.6 |
+| float32 | 129 | 14 | 4 | **18.02 ms** | 67.81 ms | 3.76× | 53.38 | 131.2 | 68.8 |
+| complex128 | 1623 | 13 | 2 | 6.18 ms | **5.00 ms** | 0.81× | 17.62 | 29.2 | 19.3 |
+| complex64 | 1623 | 13 | 2 | 3.71 ms | **3.01 ms** | 0.81× | 29.35 | 14.6 | 9.6 |
+| float64 | 1623 | 13 | 2 | 3.10 ms | **2.38 ms** | 0.77× | 35.16 | 14.6 | 9.6 |
+| float32 | 1623 | 13 | 2 | 1.90 ms | **1.31 ms** | 0.69× | 57.46 | 7.3 | 4.8 |
+| complex128 | 1863 | 16 | 2 | 6.26 ms | **5.99 ms** | 0.96× | 17.50 | 29.3 | 20.5 |
+| complex64 | 1863 | 16 | 2 | 3.81 ms | 4.02 ms | 1.06× | 28.75 | 14.6 | 10.3 |
+| float64 | 1863 | 16 | 2 | 3.53 ms | **3.24 ms** | 0.92× | 31.07 | 14.6 | 10.3 |
+| float32 | 1863 | 16 | 2 | 2.29 ms | **1.86 ms** | 0.81× | 47.78 | 7.3 | 5.1 |
+| complex128 | 3461 | 16 | 4 | **122.36 ms** | 145.67 ms | 1.19× | 18.63 | 570.0 | 536.0 |
+| complex64 | 3461 | 16 | 4 | **58.16 ms** | 83.32 ms | 1.43× | 39.19 | 285.0 | 268.0 |
+| float64 | 3461 | 16 | 4 | **47.15 ms** | 68.06 ms | 1.44× | 48.34 | 285.0 | 268.0 |
+| float32 | 3461 | 16 | 4 | **24.03 ms** | 39.74 ms | 1.65× | 94.84 | 142.5 | 134.0 |
+
+`topology` 列在 scene 档**全部 MISS**：步表要求等长超立方体（`uniform_dimension`），
+scene 是异形轴；去掉兜底后它会诚实地返回 status=4，而不是偷偷跑通用执行器冒充命中。
+
+#### 一句话结论
+
+**GPU 上四类 dtype 普遍受益（1.4–3.7×，单精度受益略大）；CPU 上四类普遍不受益
+（0.72–1.67× 即略慢，仅轻路径赚）。加速取决于"对方付费的是启动开销还是算术"，
+与 dtype 无关。** 因此 §4c 的改进 #2（计划判据按 dtype 各自标定 + 方程代价门）
+比继续优化单一 dtype 更值得做。
+
+### §4f KUPL 拓扑入口已去掉兜底（2026-11-14 破坏性变更）
+
+**改了什么**：`cpp/kupl/einsum/src/topology_apply.cpp::apply_topology` 在
+`run_specialized` 返回非 OK 时**不再**调用 `execute_parsed_contract` 兜底，而是直接
+返回 `QCD_TOPOLOGY_UNSUPPORTED`（status 4）。
+
+**为什么**：旧行为让"命中拓扑"与"走了通用执行器"在外部完全无法区分——
+全语料统计会得到 8638/8638 的假命中，CPU 的 `topology` 与 `generic` 也就几乎同速
+（0.98–1.02×），把"步表只覆盖等长超立方体"这个真实缺口彻底掩盖了。CUDA 侧的
+descriptor 里根本没有步骤（只有 `input_labels`/`output_labels`/`sizes`/`key`），
+查不到表只能返回 UNSUPPORTED，于是**同一列在两侧含义相反**。
+
+**现在两侧同义**：查不到步表 = status 4，由 Python 侧回落 `dedicated` 或通用路径。
+`dedicated` 不要求等长超立方体、能力严格更强，且分派顺序本来就更靠前，所以
+**不丢任何可执行路径**。
+
+**连带必须改的两处**（否则会死锁）：
+
+1. **dtype 探测方程必须来自语料**：`_PROBE_EQUATION` 从 `ij,jk->ik`（语料外）改成
+   `cadb,menf,ac,em,bd,fn->`（语料第一条，arity=6，`dim=2`）。旧方程靠兜底才"探测
+   通过"；去兜底后它恒 status 4 → 探测判负 → dtype 永不启用 → 连语料方程也被门控
+   拦住，形成死锁。
+2. **探测容差按精度分档**：`_PROBE_TOLERANCE = {complex128: 1e-9, float64: 1e-9,
+   complex64: 1e-4, float32: 1e-4}`。旧的统一 `1e-9` 会把**正确**的 complex64 判成
+   不支持（实测 rel=3.6e-7，是单精度在 6 算子链上的正常舍入）。
+
+**契约与用例的连带约束**：凡是验"真的下发成功"的用例，方程必须来自
+**基础表前 2582 条**（`_topology_kernel_gen.MAX_KERNELS = 2582`，这是步表的真实
+边界；附录 2583+ 一律 status 4）。`_topology_kernel_contract` 里的
+`PROBE_EQUATION`/`probe_operands()` 与 `_einsum_semantics_contract` 的冷启动/负缓存
+用例都已按此改写；`ij,jk->ik` 只能用来验"应当回落"。
+
+**真实覆盖率（去兜底后，dim=2/3 等长超立方体）**：基础表抽样 44/44 命中、0 失配；
+跨附录抽样 26/88（miss 全部来自 2583+ 的无步表条目）。scene 档（异形轴）全 MISS。
+回归：**124 passed / 1 skipped / 0 failed**。
+
+### §4g opt_einsum 对照测试组（2026-11-14 新增）
+
+`_opt_einsum_parity_contract`（9 项），把 `pyqcd.einsum` 的"兼容替代 opt_einsum"
+这句话拆成三层可验的断言：
+
+| 层 | 验什么 | 抓什么缺陷 | 项数 |
+|---|---|---|---|
+| 数值 | 11 种形态（matmul/batch/chain/implicit/ellipsis/hadamard/trace/outer/inner/reduce/four-way）× 3 种 `optimize` × **四类 dtype** | 实现语义偏差 | 1 |
+| 专用路径 | 语料拓扑（seq 2584/2588/4305）+ 形状特化 `x,ax,bx,cx->abc` 也对照 oracle | 专用内核自洽但与 oracle 不一致 | 1 |
+| 路径 | `opt_cost`、`largest_intermediate`、`contraction_list` 步数逐项相等（greedy/optimal + 语料抽样 13 条） | **规划器退化——只改耗时、数值测不到** | 2 |
+| 行为 | `contract_expression` 复用、`shared_intermediates` 命中、非法方程两边都报错 | API 兼容性破裂 | 3 |
+| 性能 | 交替计时取中位，`ratio ≥ 8` 视为数量级退化（**不设"必须更快"**） | 路径退化成重规划/逐元素 | 1 |
+| 溯源 | 打印 oracle 来源（仓库内 submodule vs 站点包） | 用错版本的基准做差分 | 1 |
+
+**oracle 来源必须可见**：优先 `refer/git-rep/opt_einsum`（`_oracle.oracle()`），该
+submodule 在本 checkout 为空，实际回落到站点包 **opt_einsum 3.4.0**，输出里会打印
+`oracle=installed:3.4.0`。站点包与参考仓库版本不同会让差分失去意义，所以这一条
+本身就是一个断言。
+
+**写这组时踩到的测量坑（值得记住）**：第一版只给 pyqcd 套了 `_quiet()`（内部是
+`redirect_stdout` + `patch.dict`），oracle 侧裸调。结果每调用约 **0.7 ms** 全是脚手架
+开销，算成 pyqcd 的耗时后倍率虚高到 **13×**，触发退化门误报。修正为"计时循环外
+一次性设 `PYQCD_EINSUM_NOTICE=0`，循环内两边都不套壳"后，真实比值是 0.93–4.22×
+（小尺寸固定开销为主）：
+
+```
+matmul 2.20x | batch 4.22x | chain 1.06x | implicit 1.97x
+ellipsis 3.52x | hadamard 0.94x | four-way 0.93x
+```
+
+**这些毫秒数不是性能结论**：它们是 dim≤4 的小尺寸，按性能数据门只能用于"没有
+数量级退化"这一条判断；生产口径见 §4e（scene 档、≥10 轮中位）。
+
+### §4h CPU 步表选路：allowlist 的真实口径与一个真 bug（2026-11-14）
+
+**修掉一个真 bug**：`_dedicated_allowlist.allow()` / `seqs()` 一调用就
+`NameError: name 'ALLOW' is not defined`。原因是 `ALLOW` 只在模块 `__getattr__`
+里对**外部** `module.ALLOW` 惰性注入，而**模块内的全局查找不触发 `__getattr__`**。
+白名单不参与数值计算，所以这个缺陷可以一直躺到有人真的用它选路。修法：内部统一走
+`_resolved()`（`globals().get("ALLOW")` → 首次解析并缓存），`__getattr__` 也复用它。
+回归：`test_allowlist_is_callable`（含 `seqs()` 自洽 + 不存在的 seq 必须 False）。
+
+**allowlist 的口径边界（不要误用）**：它按 `dim ∈ {4,6,8}` 的**等长超立方体** +
+`complex128` 标定（覆盖 8055/7806/4932 条）。生产 scene 是异形轴，此时 seq=129
+（全亏 1.53–3.62×）与 seq=1623（赚 0.72–0.88×）在 allowlist 里**都是 True**，
+即它对本场景**没有分辨力**。任何"用 allowlist 给生产选路"的改动都会失效。
+
+**代价门也分辨不了"结构性不适用"**（实测标定，2026-11-14）：
+
+| 证据 | 数值 | 结论 |
+|---|---|---|
+| seq=129 vs 1623 的 `pack/flops` | 0.572 vs 0.281（只差 2×） | 比值当不了判据 |
+| 两者 arena | 275 MiB vs 19 MiB（差 14×，不到数量级） | 绝对量也当不了判据 |
+| seq=129 沿 `scale 8→32` 的 ded/gen | **1.68 / 1.96 / 2.00 / 2.30 / 2.12×** | **全程都亏，没有规模拐点** |
+
+所以「再加一个尺寸门槛」修不了它：seq=129/3461 这类 **4 输出轴 + arity ≥ 14** 的
+拓扑对 CPU 步表是**结构性不适用**（pack 是纯字节搬运，而通用路径已是大 BLAS）。
+候选判据是"输出秩 ≥ 4 且 arity ≥ 14"，但样本只有 2 亏 + 2 赚，**不足以据此改运行时
+选路**——这一点也写成了断言（`test_losing_paths_share_the_wide_output_shape`），
+避免有人拿 4 个样本就上生产门限。
+
+契约：`python -B -m pyqcd.testing._dedicated_routing_contract`（5 项）。
 
 ### §5 命中/回落判据（只认实际执行分支）
 

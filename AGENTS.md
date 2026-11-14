@@ -341,6 +341,30 @@ docs/analy_dev7_20260823.pdf（29 页 Overfull=0/Float=0/Missing=0）。
 - 后端：numpy/cupy/torch 三后端（`pyqcd.tools.set_backend`；torch 详见上文小节）。
 - 编译：docs 与 logs 的 tex 一律 xelatex（中文）；`\quad` 后跟中文需空格。
 - 测试：无 pytest 框架依赖，`python -m pyqcd.testing` 直接运行。
+- **性能依据只认生产尺寸（强制，2026-11-14 依 `refer/sush/sush-einsum.py` 重写）**：
+  生产尺寸的唯一来源是该基准脚本的**实际张量**——`Nev_src=100`(`:170`)、
+  `Nev_curr=400`(`:171`)、`Mom_src=1`(`:172`)、`Mom_curr=3`(`:173`)、`Ns=4`(`:200`)、
+  `Nc=3`(`refer/sush/_distillation/constant.py:1`)；形状为 peram
+  `(4,4,nev[tq],nev[ta])`、`VVV (Mom,Nev,Nev,Nev)`、`VDV (Mom,Nev,Nev)`。
+  该脚本张量**没有空间轴**：`Nx`/`Lt`/`lattice` 在其全文的匹配数为 **0**。
+
+  因此存在**两条互不替代的生产口径**，任何性能结论必须写明用哪一条：
+
+  | 口径 | 场景档 | 尺度由谁决定 | 能支撑的结论 |
+  |---|---|---|---|
+  | `distill`（主） | `distill`(Nev=100)、`distill_curr`(Nev=400) | `Nev`(100/400)、`Mom`(1/3)、`Ns` | 蒸馏收缩的全部性能结论 |
+  | `spatial` | `scene`、`full` | `Nev*Nx`(3200²)、`Lt*Nx`(2048²) | 仅"空间×本征模展平后的矩阵乘"，**不得**当蒸馏结论 |
+
+  硬性禁止（违反即该数字作废、报告标 `unverified`）：
+  1. 把 `smoke`、任意 `--scale`、`dim ≤ 8` 等长超立方体扫描的倍率写成性能结论；
+  2. 把 `scene`/`full` 的倍率写成蒸馏（`distill`）性能结论，反之亦然；
+  3. 用 `_label_sizes` 从 `dims("distill")` 反推的形状当蒸馏生产形状——该函数表达
+     不出蒸馏轴（`Nx/Lt` 占位、`Mom` 漏进 peram 轴），真实形状只认
+     `_bench_scene.distill_tensor_shapes()`；
+  4. 任何形式的"等长 `dim` 假设"或用"把各轴设成同一长度"来凑规模。
+
+  做不到生产尺寸时必须显式写 `unverified`，**不允许**用缩小档替代。
+  闸门：`python -m pyqcd.testing._production_perf_gate_contract`。
 - refer/ 只读参考：pyqcd 逻辑照抄但不 import。
 - git tag 约定：stab<N>/dev<N>/bug<N>/test<N>，按序号递增；当前发布快照以最新 dev 标签为准。
 - tag 消息统一为 `follow <前一标签>, 1. ...; 2. ...; [<agent>].`：每项以 `;` 结尾，

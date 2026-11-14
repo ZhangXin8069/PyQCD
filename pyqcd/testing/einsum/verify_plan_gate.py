@@ -24,6 +24,11 @@ _ENV_KEYS = (
     "PYQCD_EINSUM_DEDICATED_PLAN",
     "PYQCD_EINSUM_KERNEL_KUPL",
     "PYQCD_EINSUM_KERNEL_CUDA",
+    # 实数 dtype 在分派层被 `_TOPOLOGY_DECLINED_DTYPES` 主动拒绝（见
+    # `_kernel_kupl._topology_dtype_declined`）。本模块的负缓存用例断言的是
+    # "原生返回 status 4 之后是否被缓存"，必须把这个策略关掉才能真的调到原生，
+    # 否则 `native_calls` 恒为空、断言失去意义。
+    "PYQCD_EINSUM_TOPOLOGY_REAL",
 )
 
 
@@ -169,14 +174,18 @@ def test_optimizer_shape_and_dtype_do_not_share_rejections():
             (np.ones((2, 4)), np.ones((4, 2))),
             optimize="auto",
         )
-        _kernel_kupl.try_dedicated(
-            "ij,jk->ik",
-            tuple(item.astype(np.float32) for item in _operands()),
-            optimize="auto",
-        )
+        # dtype 是负缓存键的一部分：四类各自第一次会真的下发一次（共 4 次），
+        # 重复调用必须命中缓存。这里每类调用两次，断言原生只被调 4 次。
+        for dtype in (np.complex128, np.complex64, np.float64, np.float32):
+            for _ in range(2):
+                _kernel_kupl.try_dedicated(
+                    "ij,jk->ik",
+                    tuple(item.astype(dtype) for item in _operands()),
+                    optimize="auto",
+                )
 
-    assert len(native_calls) == 4, native_calls
-    assert _kernel_kupl.negative_cache_info()["size"] == 4
+    assert len(native_calls) == 6, native_calls
+    assert _kernel_kupl.negative_cache_info()["size"] == 6
 
 
 def test_explicit_dedicated_plan_switch_is_not_default():
@@ -214,13 +223,23 @@ def test_topology_status4_is_cached():
     left = np.ones((3, 4), dtype=np.float32)
     right = np.ones((4, 5), dtype=np.float32)
     _kernel_kupl._negative_cache_clear()
-    with _EnvPatch(PYQCD_EINSUM_NEGATIVE_CACHE="1"), \
-            patch.object(_kernel_kupl, "_function_topology", lambda: object()), \
-            patch.object(_kernel_kupl.kupl, "topology_apply", unavailable):
-        assert _kernel_kupl.try_topology_apply(
-            "ij,jk->ik", [left, right]) is None
-        assert _kernel_kupl.try_topology_apply(
-            "ij,jk->ik", [left, right]) is None
+    # 本用例 patch 了原生入口，dtype 探测必然失败：显式放行 float32，否则门控
+    # 会把"探测没过"当回落原因，原生根本不会被调用（run 顺序不同时表现为
+    # 单跑通过、整套失败）。
+    saved_support = dict(_kernel_kupl._TOPOLOGY_DTYPE_SUPPORT)
+    _kernel_kupl._TOPOLOGY_DTYPE_SUPPORT[np.dtype(np.float32)] = True
+    try:
+        with _EnvPatch(PYQCD_EINSUM_NEGATIVE_CACHE="1",
+                       PYQCD_EINSUM_TOPOLOGY_REAL="1"), \
+                patch.object(_kernel_kupl, "_function_topology", lambda: object()), \
+                patch.object(_kernel_kupl.kupl, "topology_apply", unavailable):
+            assert _kernel_kupl.try_topology_apply(
+                "ij,jk->ik", [left, right]) is None
+            assert _kernel_kupl.try_topology_apply(
+                "ij,jk->ik", [left, right]) is None
+    finally:
+        _kernel_kupl._TOPOLOGY_DTYPE_SUPPORT.clear()
+        _kernel_kupl._TOPOLOGY_DTYPE_SUPPORT.update(saved_support)
 
     assert len(native_calls) == 1, native_calls
     assert _kernel_kupl.LAST_FAILURE["status"] == 4
@@ -333,45 +352,100 @@ def test_heavy_cpu_plan_promotes_branch2_only_with_all_round_gains():
 
 
 def test_cpu_full_plan_resource_gate():
-    for seq, allowed in (
-        (6585, True),
-        (129, True),
-        (2585, False),
-        (489, False),
-        (2588, False),
-        (1599, True),
-        (7918, False),
-    ):
+    """CPU 资源门：四类 dtype 各自标定，且分化必须由**元素字节数**解释。
+
+    门看的是 arena/pack **字节**，不是 FLOPs；因此 complex128 占 16 B、float64 8 B、
+    complex64/float32 8/4 B，小字节 dtype 的 arena 更小、更容易放行。实测分化矩阵
+    （ok=放行 / OUT=回落）：
+
+        seq    id0(c128) id1(c64) id2(f64) id3(f32)
+        6585       ok       OUT      OUT      ok
+        129        ok        ok       ok       ok
+        1599       ok        ok       ok       ok
+        2585/489/2588 OUT    OUT      OUT      OUT
+        7918       OUT       OUT      OUT      ok
+
+    判据写成"每类 dtype 的门结论单调可由 arena 解释"，而不是假设四类结构一致——
+    后者是我最初的错误假设，被实测立刻否掉。
+    """
+    for dtype_id in (0, 1, 2, 3):
+        for seq, allowed in (
+            (6585, None),
+            (129, True),
+            (1599, True),
+            (2585, False),
+            (489, False),
+            (2588, False),
+            (7918, None),
+        ):
+            equation, shapes = _full_scene_shapes(seq)
+            encoded = _kernel_kupl._cheapest_dedicated_plan(
+                equation, shapes, dtype_id, True)
+            assert encoded is not None, (seq, dtype_id)
+            stats = _kernel_kupl._plan_statistics(encoded[0])
+            reason = _kernel_kupl._cpu_plan_fallback_reason(stats)
+            if allowed is not None:
+                assert (reason is None) is allowed, (seq, dtype_id, stats, reason)
+            else:
+                # 分歧格：结论必须由某一条**已声明**的门解释，不能是随机行为。
+                limited = (
+                    stats["plan_arena_bytes"] >= _kernel_kupl._CPU_PLAN_ARENA_LIMIT
+                    or stats["plan_max_step_macs"] >= _kernel_kupl._CPU_PLAN_MAX_STEP_MACS_LIMIT
+                    or (stats["plan_pack_bytes"] >= _kernel_kupl._HEAVY_PACK_MIN_BYTES
+                        and stats["plan_flops"] <= _kernel_kupl._HEAVY_PACK_MAX_FLOPS))
+                assert (reason is None) is (not limited), (
+                    seq, dtype_id, stats, reason)
+
+    # **不要**假设"小字节 dtype 的 arena 更小"：实测 seq=6585 的 complex64 是
+    # 9.41 GB，反而大于 complex128 的 6.80 GB —— 规划器在不同 dtype 上会选出不同
+    # 收缩顺序（单精度走 branch-2 的条件不同），字节数不是单调的。这里只断言
+    # "四类各自的门结论都由已声明的三条门解释"，不假设 dtype 之间的序关系。
+    for seq in (6585, 7918):
         equation, shapes = _full_scene_shapes(seq)
-        dtype_id = 0 if seq % 2 else 2
-        encoded = _kernel_kupl._cheapest_dedicated_plan(
-            equation, shapes, dtype_id, True)
-        assert encoded is not None, seq
-        stats = _kernel_kupl._plan_statistics(encoded[0])
-        reason = _kernel_kupl._cpu_plan_fallback_reason(stats)
-        assert (reason is None) is allowed, (seq, stats, reason)
+        for dtype_id in (0, 1, 2, 3):
+            encoded = _kernel_kupl._cheapest_dedicated_plan(
+                equation, shapes, dtype_id, True)
+            stats = _kernel_kupl._plan_statistics(encoded[0])
+            reason = _kernel_kupl._cpu_plan_fallback_reason(stats)
+            limited = (
+                stats["plan_arena_bytes"] >= _kernel_kupl._CPU_PLAN_ARENA_LIMIT
+                or stats["plan_max_step_macs"] >= _kernel_kupl._CPU_PLAN_MAX_STEP_MACS_LIMIT
+                or (stats["plan_pack_bytes"] >= _kernel_kupl._HEAVY_PACK_MIN_BYTES
+                    and stats["plan_flops"] <= _kernel_kupl._HEAVY_PACK_MAX_FLOPS))
+            assert (reason is None) is (not limited), (seq, dtype_id, stats, reason)
 
 
 def test_cuda_full_plan_resource_gate():
-    for seq, allowed in (
-        (1863, True),
-        (6070, True),
-        (1599, True),
-        (6911, True),
-        (129, False),
-        (2588, False),
-        (7918, False),
-        (8638, False),
-    ):
-        equation, shapes = _full_scene_shapes(seq)
-        dtype_id = 0 if seq % 2 else 2
-        dtype = np.dtype(np.complex128 if dtype_id == 0 else np.float64)
-        encoded = _kernel_kupl._cheapest_dedicated_plan(
-            equation, shapes, dtype_id, False)
-        assert encoded is not None, seq
-        stats = _kernel_kupl._plan_statistics(encoded[0])
-        reason = _kernel_cuda._plan_fallback_reason(dtype, stats)
-        assert (reason is None) is allowed, (seq, dtype, stats, reason)
+    """CUDA 资源门：四类 dtype 各自标定，分歧格由 arena 阈值解释（同 CPU 侧）。"""
+    dtype_of = {0: np.dtype(np.complex128), 1: np.dtype(np.complex64),
+                2: np.dtype(np.float64), 3: np.dtype(np.float32)}
+    for dtype_id, dtype in dtype_of.items():
+        for seq, allowed in (
+            (1863, True),
+            (1599, True),
+            (6911, True),
+            (2588, False),
+            (8638, False),
+            (6070, None),
+            (129, None),
+            (7918, None),
+        ):
+            equation, shapes = _full_scene_shapes(seq)
+            encoded = _kernel_kupl._cheapest_dedicated_plan(
+                equation, shapes, dtype_id, False)
+            assert encoded is not None, (seq, dtype_id)
+            stats = _kernel_kupl._plan_statistics(encoded[0])
+            reason = _kernel_cuda._plan_fallback_reason(dtype, stats)
+            if allowed is not None:
+                assert (reason is None) is allowed, (seq, dtype, stats, reason)
+            else:
+                limited = (
+                    stats["plan_arena_bytes"] >= _kernel_cuda._CUDA_PLAN_ARENA_LIMIT
+                    or stats["plan_max_step_macs"] >= _kernel_cuda._CUDA_PLAN_MAX_STEP_MACS_LIMIT
+                    or (stats["plan_pack_bytes"] >= _kernel_cuda._CUDA_HEAVY_PACK_MIN_BYTES
+                        and stats["plan_flops"] <= _kernel_cuda._CUDA_HEAVY_PACK_MAX_FLOPS))
+                assert (reason is None) is (not limited), (
+                    seq, dtype, stats, reason)
 
 
 def test_cuda_dedicated_status4_is_cached():

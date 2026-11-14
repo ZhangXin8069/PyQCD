@@ -132,6 +132,28 @@ _tensordot = tensordot_cache_wrap(_tensordot)
 _einsum = einsum_cache_wrap(_einsum)
 
 
+def _loses_imaginary_part(out: Any, result: Any) -> bool:
+    """``out=`` 写入是否会丢掉结果的虚部（跨 numpy / torch / cupy 的判定）。
+
+    只有"复数结果写进实数缓冲"算错误：numpy 会在那里静默丢掉虚部（仅一条
+    ComplexWarning）。实数之间收窄（float64→float32）是有损舍入，与 numpy 自身
+    ``out=`` 的语义一致，保持放行。torch 的 ``dtype`` 没有 ``kind``，因此按
+    ``is_complex()`` / ``kind`` 两种能力探测。
+    """
+    def is_complex(dtype: Any) -> bool:
+        kind = getattr(dtype, "kind", None)
+        if isinstance(kind, str):
+            return kind == "c"
+        probe = getattr(dtype, "is_complex", None)
+        if callable(probe):
+            return bool(probe())
+        name = str(dtype)
+        return "complex" in name
+
+    return is_complex(getattr(result, "dtype", None)) and not is_complex(
+        getattr(out, "dtype", None))
+
+
 def execute_plan(
     contraction_list: Sequence[tuple],
     operands: Sequence[Any],
@@ -168,6 +190,16 @@ def execute_plan(
                 transpose = tuple(tensor_result.index(s) for s in results_index)
                 new_view = _transpose(new_view, transpose, backend)
                 if handle_out:
+                    # ``out`` 的契约是"shape 与 dtype 必须同上"（见 contract 的
+                    # docstring）。这里曾经直接 ``out[...] = new_view``：dtype 不符
+                    # 时靠赋值语义静默 cast。**复数的虚部被丢掉**是真正的错误，
+                    # 必须显式失败；实数之间收敛到更窄的浮点只是有损舍入，既有
+                    # 用例（torch 后端用 float32 缓冲承接 float64 结果）依赖它，
+                    # 而且 numpy 自己的 ``out=`` 也允许，所以保持放行。
+                    if _loses_imaginary_part(out, new_view):
+                        raise ValueError(
+                            "out dtype must keep the imaginary part: result is "
+                            f"{new_view.dtype} but out is {out.dtype}")
                     out[...] = new_view
         else:
             new_view = _einsum(

@@ -1,0 +1,61 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-14 12:32:08 +0800
+批次: pyqcd-einsum/four-dtype-coverage
+主任务: einsum 测试面扩到四 dtype + 生产档 10 轮
+触发原因: 阶段成果
+摘要: verify_native 16→49 项、plan_gate/topology 四 dtype；修两处测试口径；生产档 10 轮 16/16 不慢
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 测试项统一覆盖四类 dtype
+- 目标: 按"测试项应覆盖四种 dtype"把形态矩阵从"只测 complex128"扩到四类
+- 命令/操作: `verify_native` 的五类形态/缓存值/out/contract_expression/重复轴回落/mixed-backends 全部参数化到四 dtype；`verify_plan_gate` 的 CPU 与 CUDA 资源门、负缓存 dtype 维度扩到四类；`verify_topology` 四 dtype 各跑一遍
+- 关键输出: verify_native **49 passed**（原 16）；verify_plan_gate **11 passed / 1 skipped**；verify_topology 四 dtype 各 30/30 PASS，max deviation 1.7e-15(c128) / 5.7e-7(c64) / 1.8e-15(f64) / 9.8e-6(f32)
+- 退出码: 0
+- 证据与判断: 覆盖扩到四类后立刻抓到两处**测试自身的口径缺陷**（见 S2）
+
+### S2 — 扩 dtype 时抓到两处测试口径缺陷
+- `verify_native._relative_error` 逐元素除以 |expected|：sandwich 输出含近零元素时，float32 被放大成 1.95e-4 假失败。改为按输出最大幅值归一（与 `_topology_kernel_contract`/`verify_dtype_parity` 一致）
+- 我最初假设"资源门的结论对四类 dtype 结构性一致"，实测立刻否掉：门的判据是 arena/pack **字节**，而规划器在不同 dtype 上选出**不同收缩顺序**，seq=6585 的 complex64 arena（9.41 GB）反而大于 complex128（6.80 GB）。契约最终写成"每类各自标定 + 分歧格必须由已声明的三条门解释"，并显式记录"不要假设 dtype 之间单调"
+- 退出码: 0（修正后）
+- 证据与判断: 两次都是"我的假设错、实现对"，按实测改测试而不是改实现
+
+### S3 — 生产档 ≥10 轮（性能数据门）
+- 命令: `bench_dtype_matrix --backend cuda --scene scene --seqs 129,1623,1863,3461 --rounds 10`
+- 结果: 16/16 单元格 dedicated ≤ generic；按 seq 分组 129 0.41–0.92×、1623 0.20–0.25×、1863 0.15–0.20×、3461 0.61–0.80×；四类同量级（无主精度）
+- 与 3 轮结果对比: 每格波动 ≤0.1x，结论稳定（seq=129 c128 0.78→0.92、float32 0.43→0.41 等）
+- 退出码: 0
+
+## 验证与证据
+- 隔离 CUDA 环境全量：**121 passed / 1 skipped / 0 failed**（四 dtype 覆盖后仍全绿）
+- verify_native 49 passed / verify_plan_gate 11 passed / verify_topology 四 dtype 各 30/30
+- 生产档 V100 scene 10 轮：16/16 不慢于通用
+- 未完成项: CUDA 对真值全量对拍仍在后台（每条多一次真值收缩，成本翻倍）
+
+## 变更与产物
+- 文件: `pyqcd/testing/einsum/verify_native.py`、`verify_plan_gate.py`（四 dtype + 两处口径修正）
+- 产物: 本日志、生产档 10 轮表
+
+## 风险、限制与下一步
+- 风险: 生产档仍是单机共享环境的"同机对照"，绝对吞吐不作为峰值结论
+- 阻塞: 无
+- 下一步: CUDA 对真值全量对拍收尾；float32+topology 的 1.25e-4 若要消掉需步表与 generic 同序累加（实测该形态 topology 在 seq=129 反而慢 1.37×，可考虑让单精度直接走 dedicated）
+
+## 用户输入指令
+1. 继续"CUDA「对真值」全量对拍未跑…；若要消掉 float32+topology 的 1.25e-4…；生产数字仍需按性能数据门复测"
+2. 测试项目应覆盖四种dtype
+
+## Agent 全文报告
+--- report begin ---
+按"测试项目应覆盖四种 dtype"把测试面补齐，并在补齐过程中抓到自己两处**测试口径**缺陷（不是实现缺陷）。
+
+**覆盖扩展**：`verify_native` 49 passed（原 16，五类形态 × 4 dtype + 缓存值 + out= + contract_expression + 重复轴回落 + mixed-backends）；`verify_plan_gate` 11 passed（CPU/CUDA 资源门与负缓存 dtype 维度都扩到四类）；`verify_topology` 四 dtype 各 30/30 PASS，偏差随精度单调（1.7e-15 / 5.7e-7 / 1.8e-15 / 9.8e-6）。
+
+**两处口径缺陷**：① `_relative_error` 逐元素除以 |expected|，sandwich 输出含近零元素时把正确的 float32 判成 1.95e-4 假失败，改为按最大幅值归一；② 我假设"资源门结论对四类 dtype 结构一致"是错的——门看 arena/pack 字节，而规划器在不同 dtype 下选不同收缩顺序，seq=6585 的 complex64 arena（9.41 GB）竟大于 complex128（6.80 GB）。契约改为"每类各自标定 + 分歧格须由已声明的三条门解释"，并把"不要假设 dtype 单调"写进注释。
+
+**生产档 10 轮**（V100 scene）：16/16 dedicated ≤ generic，129 0.41–0.92×、1623 0.20–0.25×、1863 0.15–0.20×、3461 0.61–0.80×；与 3 轮结果逐格差 ≤0.1x，结论稳定。
+
+隔离环境全量 **121 passed / 1 skipped / 0 failed**。CUDA 对真值全量对拍仍在后台跑。
+--- report end ---
