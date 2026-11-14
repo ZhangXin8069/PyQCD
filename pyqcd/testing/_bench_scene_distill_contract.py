@@ -25,25 +25,31 @@
 """
 from __future__ import annotations
 
+import math
 import unittest
 
 from ..einsum import _bench_scene
 
 # ── 1. 参考脚本的字面值（来源锁定；左边是键，右边是 (值, 出处)） ───────────────
+#: ``Mom_curr``/``n_mom_curr`` 在生产里是**可变量**（3 与 9 都在用，用户 2026-11-14
+#: 确认），因此它不参与字面锁定，只校验"取值属于 :data:`_bench_scene.
+#: DISTILL_MOM_CURR_VALUES` 且不小于 3"，见 :func:`test_distill_literals_match_reference`。
 REF_LITERALS = {
     "Nev_src": (100, "refer/sush/sush-einsum.py:170"),
     "Nev_curr": (400, "refer/sush/sush-einsum.py:171"),
     "Mom_src": (1, "refer/sush/sush-einsum.py:172"),
-    "Mom_curr": (3, "refer/sush/sush-einsum.py:173"),
     "Ns": (4, "refer/sush/sush-einsum.py:200"),
     "Nc": (3, "refer/sush/_distillation/constant.py:1"),
     "Nt_labels": (4, "refer/sush/sush-einsum.py:179"),
 }
 
 # dims() 返回的两个蒸馏档（Nx/Lt = 1 表示「该轴不存在」的占位，不是缩小值）。
+#: ``distill_curr`` 的 ``Mom`` 取当前生产值（``PRODUCTION_DISTILL["Mom_curr"]``），
+#: 不写成字面量——它是可变量。
 DISTILL_DIMS = {
     "distill": {"Nx": 1, "Lt": 1, "Nev": 100, "Ns": 4, "Mom": 1},
-    "distill_curr": {"Nx": 1, "Lt": 1, "Nev": 400, "Ns": 4, "Mom": 3},
+    "distill_curr": {"Nx": 1, "Lt": 1, "Nev": 400, "Ns": 4,
+                     "Mom": _bench_scene.PRODUCTION_DISTILL["Mom_curr"]},
 }
 
 # ── 2. 改动前的基线（2026-11-14 逐项 dump，先记录后改动） ──────────────────────
@@ -78,14 +84,18 @@ LEGACY_DESCRIBE_SCALE = {
 LEGACY_PRODUCTION = {"Nx": 32, "Lt": 64, "Nev": 100, "Ns": 4, "Mom": 8}
 
 # ── 3. 参考脚本的真实张量形状（硬编码副本，出处见注释） ───────────────────────
+#: ``VDV_0@tcur0|tcur1`` 的首轴是 ``Mom_curr``（可变量），因此这里不写字面量：
+#: 取值集合由 :data:`_bench_scene.DISTILL_MOM_CURR_VALUES` 生成。
 REF_TENSOR_SHAPES_3PT = {
     "peram[...]": {(4, 4, 100, 100), (4, 4, 100, 400), (4, 4, 400, 100),
                    (4, 4, 400, 400)},                       # :200 + :184-189
     "VVV_0@tsink": {(100, 100, 100)},                       # :209 分配 → :241 切动量轴
     "VVV_0@tsrc": {(100, 100, 100)},                        # :214 → :242
     "VDV_0@tsrc": {(1, 100, 100)},                          # :219 → :243
-    "VDV_0@tcur0": {(3, 400, 400)},                         # :224 → :244
-    "VDV_0@tcur1": {(3, 400, 400)},                         # :245
+    "VDV_0@tcur0": {(mom, 400, 400)                         # :224 → :244
+                    for mom in _bench_scene.DISTILL_MOM_CURR_VALUES},
+    "VDV_0@tcur1": {(mom, 400, 400)                         # :245
+                    for mom in _bench_scene.DISTILL_MOM_CURR_VALUES},
     "gamma_4": {(4, 4)},                                    # :248
     "gamma_7": {(4, 4)},                                    # :249
     "gamma_curr": {(4, 4, 4)},                              # :250
@@ -93,10 +103,18 @@ REF_TENSOR_SHAPES_3PT = {
 
 
 def test_distill_literals_match_reference():
-    """``PRODUCTION_DISTILL`` 每个数字都必须等于参考脚本字面值。"""
+    """``PRODUCTION_DISTILL`` 的固定维度必须等于参考脚本字面值。
+
+    ``Mom_curr`` 是**可变量**（生产 3 与 9 都在用），故不参与字面锁定，只要求取值
+    落在 :data:`_bench_scene.DISTILL_MOM_CURR_VALUES` 且不小于 3（下限即"current 端
+    至少三个动量"，低于它才是真的把生产参数调小了）。
+    """
     for key, (value, source) in REF_LITERALS.items():
         actual = _bench_scene.PRODUCTION_DISTILL[key]
         assert actual == value, (key, actual, value, source)
+    mom_curr = _bench_scene.PRODUCTION_DISTILL["Mom_curr"]
+    assert mom_curr in _bench_scene.DISTILL_MOM_CURR_VALUES, mom_curr
+    assert mom_curr >= min(_bench_scene.DISTILL_MOM_CURR_VALUES), mom_curr
     assert tuple(_bench_scene.DISTILL_TIMES) == ("tsink", "tsrc", "tcur0", "tcur1")
     assert dict(_bench_scene.DISTILL_NEV_BY_TIME) == {
         "tsink": 100, "tsrc": 100, "tcur0": 400, "tcur1": 400}
@@ -116,7 +134,8 @@ def test_distill_scene_dims_lock_the_two_nev():
             assert key in table, (scene, key)
         # 两个 Nev 不能合并成一个：distill 用 100、distill_curr 用 400。
         assert table["Nev_src"] == 100 and table["Nev_curr"] == 400, scene
-        assert table["Mom_src"] == 1 and table["Mom_curr"] == 3, scene
+        assert table["Mom_src"] == 1, scene
+        assert table["Mom_curr"] in _bench_scene.DISTILL_MOM_CURR_VALUES, scene
     assert _bench_scene.dims("distill")["Nev"] == 100
     assert _bench_scene.dims("distill_curr")["Nev"] == 400
 
@@ -165,9 +184,10 @@ def test_scale_path_is_unchanged():
 def test_describe_keeps_legacy_prefix_for_distill():
     """蒸馏档的说明必须仍以旧格式开头，并额外印出两个 Nev / 两个 Mom。"""
     text = _bench_scene.describe("distill")
+    mom_curr = _bench_scene.PRODUCTION_DISTILL["Mom_curr"]
     assert text.startswith("scene=distill  Nx=1 Nev=100 Lt=1 Mom=1 Ns=4  "), text
     assert "(production: Nx=32 Nev=100 Lt=64 Mom=8 Ns=4)" in text, text
-    for needle in ("Nev_src=100", "Nev_curr=400", "Mom_src=1", "Mom_curr=3",
+    for needle in ("Nev_src=100", "Nev_curr=400", "Mom_src=1", f"Mom_curr={mom_curr}",
                    "Nc=3", "无 Nx/Lt 轴"):
         assert needle in text, (needle, text)
 
@@ -184,7 +204,8 @@ def test_distill_tensor_shapes_are_literal_and_anisotropic():
     # 异形：至少一张张量内部轴长不相等（混合 4 / 100 / 400）。
     assert any(len(set(shape)) > 1 and max(shape) > 4 for shape in shapes.values())
     assert (4, 4, 100, 400) in perams
-    assert (3, 400, 400) in {shapes["VDV_0@tcur0"], shapes["VDV_0@tcur1"]}
+    mom_curr = _bench_scene.PRODUCTION_DISTILL["Mom_curr"]
+    assert (mom_curr, 400, 400) in {shapes["VDV_0@tcur0"], shapes["VDV_0@tcur1"]}
 
     legacy = _bench_scene.distill_tensor_shapes("6peram")
     assert sum(name.startswith("peram") for name in legacy) == 6      # :377-382
@@ -200,11 +221,16 @@ def test_distill_footprint_fits_memory_budget():
     three = _bench_scene.distill_memory("3pt")
     six = _bench_scene.distill_memory("6peram")
     assert three["itemsize"] == 16 and six["itemsize"] == 16     # :177 complex128
-    assert three["total_elements"] == 21_940_096, three["total_elements"]
+    # ``3pt`` 段随 ``Mom_curr`` 线性变化（可变量），故由形状表自身求和校验，
+    # 不写死某个字面量——否则一改动量数就会误报失败。
+    three_expected = sum(math.prod(shape) for shape in
+                         _bench_scene.distill_tensor_shapes("3pt").values())
+    assert three["total_elements"] == three_expected, (
+        three["total_elements"], three_expected)
     assert six["total_elements"] == 13_020_064, six["total_elements"]
     for memory in (three, six):
         assert memory["total_gib"] < limit, memory["total_gib"]
-    assert abs(three["total_gib"] - 0.327) < 0.001, three["total_gib"]
+    assert abs(three["total_gib"] - three_expected * 16 / 2 ** 30) < 1e-9
     assert abs(six["total_gib"] - 0.194) < 0.001, six["total_gib"]
     # 单张最大张量也远小于上限（不存在"单张就爆内存"的档）。
     for memory in (three, six):
@@ -234,7 +260,7 @@ def test_label_sizes_cannot_express_distill_axes():
 
     它把 ``VVV`` 当 ``(Lt, Mom, Nev, Nev, Nev)``、``VDV`` 当 ``(Lt, Mom, Nev, Nev)``，
     且全方程只有一个 ``Nev``；``dims("distill*")`` 里 ``Nx=Lt=1``（无此轴占位）、
-    ``Mom`` 是 1 或 3，于是这些占位会作为**真实轴长**漏进 peram 的轴里，
+    ``Mom`` 是 1 或 ``Mom_curr``（可变量），于是这些占位会作为**真实轴长**漏进 peram 的轴里，
     与参考脚本的 ``(4,4,100,400)`` 之类形状无关。
     结论：``bench_specialized --scene distill`` 的形状只能当 path-only 证据；
     真实蒸馏形状必须用 :func:`_bench_scene.distill_tensor_shapes`。
@@ -246,7 +272,7 @@ def test_label_sizes_cannot_express_distill_axes():
     terms = task.equation.split("->")[0].split(",")
     sizes = _label_sizes(terms, task.roles, _bench_scene.dims("distill"))
     shapes = [tuple(sizes[c] for c in term) for term in terms]
-    # 占位/动量值 1 与 3 漏进了操作数轴（真实蒸馏形状里没有 1 或 3 的酉空间轴）。
+    # 占位/动量值 1 漏进了操作数轴（真实蒸馏形状里没有 1 的酉空间轴）。
     assert any(1 in shape for shape in shapes), shapes
     real = _bench_scene.distill_tensor_shapes("3pt")
     eigen_shapes = [shape for name, shape in real.items() if name.startswith("peram[")]

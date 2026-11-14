@@ -343,8 +343,8 @@ docs/analy_dev7_20260823.pdf（29 页 Overfull=0/Float=0/Missing=0）。
 - 测试：无 pytest 框架依赖，`python -m pyqcd.testing` 直接运行。
 - **性能依据只认生产尺寸（强制，2026-11-14 依 `refer/sush/sush-einsum.py` 重写）**：
   生产尺寸的唯一来源是该基准脚本的**实际张量**——`Nev_src=100`(`:170`)、
-  `Nev_curr=400`(`:171`)、`Mom_src=1`(`:172`)、`Mom_curr=3`(`:173`)、`Ns=4`(`:200`)、
-  `Nc=3`(`refer/sush/_distillation/constant.py:1`)；形状为 peram
+  `Nev_curr=400`(`:171`)、`Mom_src=1`(`:172`)、`Mom_curr=3/9`(`:173`，**可变量**，
+  生产里两者都在用)、`Ns=4`(`:200`)、`Nc=3`(`refer/sush/_distillation/constant.py:1`)；形状为 peram
   `(4,4,nev[tq],nev[ta])`、`VVV (Mom,Nev,Nev,Nev)`、`VDV (Mom,Nev,Nev)`。
   该脚本张量**没有空间轴**：`Nx`/`Lt`/`lattice` 在其全文的匹配数为 **0**。
 

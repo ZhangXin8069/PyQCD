@@ -3,7 +3,8 @@
 这个脚本照抄参考脚本的**协议**，不是照抄它的依赖：
 
 * **尺寸**逐字取自 ``refer/sush/sush-einsum.py``（见 ``_bench_scene.PRODUCTION_DISTILL``）：
-  ``Nev_src=100``/``Nev_curr=400``、``Mom_src=1``/``Mom_curr=9``、``Ns=4``、``Nc=3``、
+  ``Nev_src=100``/``Nev_curr=400``、``Mom_src=1``/``Mom_curr=9``（``Mom_curr`` 是
+  **可变量**，生产里 3 与 9 都在用，本脚本取 9）、``Ns=4``、``Nc=3``、
   ``dtype=complex64``。**没有空间轴**（该脚本 ``Nx``/``Lt``/``lattice`` 匹配数为 0）。
 * **计时协议**照抄参考脚本 ``main()`` 的循环（见 ``:256-320``）：
   ``plan_seconds`` 是**首次调用**（含路径搜索、原生步表编译）的耗时，

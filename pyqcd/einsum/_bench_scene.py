@@ -44,7 +44,9 @@
 ``Nev_curr``               400    ``:171`` ``nev_curr = 400``；每个 current 端点
                                    （tcur0/tcur1）用 400 —— **Nev 是两个值，不是一个**
 ``Mom_src``（n_mom_src）   1      ``:172`` ``n_mom_src = 1``；源端只有一个动量
-``Mom_curr``（n_mom_curr） 3      ``:173`` ``n_mom_curr = 3``；current 端三个动量
+``Mom_curr``（n_mom_curr） 3/9    ``:173`` ``n_mom_curr = 3``；current 端动量数**可变**，
+                                  生产里 3 与 9 都在用，本档采用 9（见
+                                  :data:`DISTILL_MOM_CURR_VALUES`）
 ``Ns``                     4      ``:200`` peram 前两轴 ``(4, 4, nev, nev)`` + ``:248``
                                   ``gamma(4)`` 是 4x4；旋量维
 ``Nc``                     3      ``refer/sush/_distillation/constant.py:1`` ``Nc = 3``；
@@ -66,7 +68,8 @@
 * ``VVV`` 分配 ``(n_mom, nev, nev, nev)``（``:209``/``:214``），注册时 sink 用
   ``host_vvv_sink[0]`` 切掉动量轴（``:241``）→ 进入 einsum 的是 ``(nev, nev, nev)``；
 * ``VDV`` 分配 ``(n_mom, nev, nev)``，注册时**保留**动量轴（``:243-245``）→
-  ``(1, 100, 100)`` 与 ``(3, 400, 400)``；
+  ``(1, 100, 100)`` 与 ``(Mom_curr, 400, 400)``；``Mom_curr`` 在生产里是**可变量**，
+  3 与 9 都在用，本档按 :data:`PRODUCTION_DISTILL` 取 9；
 * ``gamma`` ``(4, 4)``（``:248-249``），``gamma_curr`` 是 4 个 gamma 的堆叠 ``(4, 4, 4)``
   （``:250``）。
 
@@ -75,8 +78,9 @@
 2 个 ``VDV_shape = (3, 100, 100)``（``:391``）——这一段**保留**了动量轴。
 
 两段都是 ``complex128``（``:177`` → 16 B/元素），即使 ``Nev_curr = 400`` 也装得下：
-见 :func:`distill_memory` —— ``3pt`` 段全部操作数合计 21,940,096 元素 / **0.327 GiB**，
-``6peram`` 段 13,020,064 元素 / **0.194 GiB**（分配态与注册态都算上，是上界）。
+见 :func:`distill_memory` —— ``3pt`` 段全部操作数合计 25,780,096 元素 / **0.384 GiB**，
+``6peram`` 段 13,020,064 元素 / **0.194 GiB**（分配态与注册态都算上，是上界；
+``3pt`` 段随可变量 ``Mom_curr`` 线性变化，上值对应本档 ``Mom_curr=9``）。
 最坏可信情形（6pt 16 算子、三个 current 区都取 ``Nev_curr = 400``、VDV 保留动量轴）
 按 ``optimize="dp"`` 规划：最大中间量 2.56e8 元素 = 3.82 GiB、操作数 1.35 GiB，
 峰值下界 **5.16 GiB < 15 GiB** —— 所以 ``Nev_curr = 400`` **不需要缩小档**。
@@ -130,6 +134,10 @@ PRODUCTION_DISTILL = {
     "Nt_labels": 4,     # refer/sush/sush-einsum.py:179 times = (tsink,tsrc,tcur0,tcur1)
                         # 这是注册表键个数，不是张量轴
 }
+
+#: ``n_mom_curr`` 是**可变量**：生产里 3 与 9 都在用（用户 2026-11-14 确认）。
+#: 本档采用 9，另一取值登记在 :data:`DISTILL_HEAD_VARIANT`，报告引用时须写明用哪个。
+DISTILL_MOM_CURR_VALUES = (3, 9)
 
 # 仓库 HEAD 里参考脚本的另一组取值。**只用于核对差异，不得用于生产结论**。
 DISTILL_HEAD_VARIANT = {
@@ -349,9 +357,10 @@ def distill_memory(kind: str = "3pt",
     "total_elements", "total_bytes", "total_gib", "largest"}``。
 
     ``3pt`` 段的总量是**保守上界**：把分配态（``host:``）与注册态都算上，实测
-    21,940,096 元素 / 0.327 GiB；``6peram`` 段 13,020,064 元素 / 0.194 GiB。
+    25,780,096 元素 / 0.384 GiB；``6peram`` 段 13,020,064 元素 / 0.194 GiB。
     两者都远低于 :data:`DISTILL_MEMORY_LIMIT_GIB`，所以 ``Nev_curr = 400``
     不需要缩小档（峰值中间量见模块 docstring：最坏可信情形 5.16 GiB）。
+    ``3pt`` 段随可变量 ``Mom_curr`` 线性变化，默认取值见 :data:`PRODUCTION_DISTILL`。
     """
     size = DISTILL_SETTINGS["itemsize"] if itemsize is None else itemsize
     detail = {}

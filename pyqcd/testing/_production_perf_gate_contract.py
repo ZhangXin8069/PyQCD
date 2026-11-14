@@ -58,17 +58,20 @@ BASES = {
 PRODUCTION_SCENES = tuple(scene for scenes in BASES.values() for scene in scenes)
 # 每个口径的生产参数下限：低于它就只能算路径证据。逐项取自对应来源的实际值，
 # 这样一旦有人把生产参数改小，本闸门会直接失败而不是静默放宽。
+# `Mom_curr` 是**可变量**（生产里 3 与 9 都在用，用户 2026-11-14 确认），因此它既不是
+# 字面锁定值也不是固定下限——只要求不小于 3（current 端至少三个动量）。
 MIN_PRODUCTION = {
     "distill": {"Nev_src": 100, "Nev_curr": 400, "Mom_src": 1,
-                "Mom_curr": 3, "Ns": 4, "Nc": 3},
+                "Mom_curr": min(_bench_scene.DISTILL_MOM_CURR_VALUES),
+                "Ns": 4, "Nc": 3},
     "spatial": {"Nx": 32, "Nev": 100, "Lt": 64, "Ns": 4, "Mom": 8},
 }
 # 基准脚本 `refer/sush/sush-einsum.py` 里的字面值（来源锁定：脚本改了这里才会失败）。
+#: ``Mom_curr`` 不在此表内——它是可变量，见 :data:`_bench_scene.DISTILL_MOM_CURR_VALUES`。
 REFERENCE_DIMENSIONS = {
     "Nev_src": 100,      # :170  nev_src = 100
     "Nev_curr": 400,     # :171  nev_curr = 400
     "Mom_src": 1,        # :172  n_mom_src = 1
-    "Mom_curr": 3,       # :173  n_mom_curr = 3
     "Ns": 4,             # :200  peram (4,4,nev,nev)
     "Nc": 3,             # _distillation/constant.py:1
 }
@@ -136,11 +139,13 @@ def test_distill_scene_matches_reference_script_literals():
             assert table.get(key) == expected, (scene, key, table.get(key), expected)
         for key, floor in MIN_PRODUCTION["distill"].items():
             assert table.get(key, 0) >= floor, (scene, key, table.get(key), floor)
-    # 两档的差别只有 `Nev`/`Mom` 这一组：源端 100/1，current 端 400/3。
+    # 两档的差别只有 `Nev`/`Mom` 这一组：源端 100/1，current 端 400/`Mom_curr`
+    # （`Mom_curr` 是可变量，取当前生产值，不写字面量）。
     src = _bench_scene.dims("distill")
     curr = _bench_scene.dims("distill_curr")
+    mom_curr = _bench_scene.PRODUCTION_DISTILL["Mom_curr"]
     assert (src["Nev"], src["Mom"]) == (100, 1), (src["Nev"], src["Mom"])
-    assert (curr["Nev"], curr["Mom"]) == (400, 3), (curr["Nev"], curr["Mom"])
+    assert (curr["Nev"], curr["Mom"]) == (400, mom_curr), (curr["Nev"], curr["Mom"])
 
 
 def test_distill_scene_has_no_spatial_axis():

@@ -623,7 +623,8 @@ kernel，否则一次 n 元调 `backend.einsum`，跳过规划与内存重划分
 | `spatial` | `scene`、`full` | `Nev*Nx`(3200²)、`Lt*Nx`(2048²) | 仅"空间×本征模展平后的矩阵乘" |
 
 依据：参考脚本 `refer/sush/sush-einsum.py` 的 `Nev_src=100`(`:170`)、
-`Nev_curr=400`(`:171`)、`Mom_src=1`(`:172`)、`Mom_curr=3`(`:173`)、`Ns=4`(`:200`)；
+`Nev_curr=400`(`:171`)、`Mom_src=1`(`:172`)、`Mom_curr=3/9`(`:173`，**可变量**，
+生产里两者都在用)、`Ns=4`(`:200`)；
 其张量是 peram `(4,4,nev[tq],nev[ta])`、`VVV (Mom,Nev,Nev,Nev)`、`VDV (Mom,Nev,Nev)`，
 **没有空间轴**（`Nx`/`Lt`/`lattice` 全文匹配数为 0）。
 

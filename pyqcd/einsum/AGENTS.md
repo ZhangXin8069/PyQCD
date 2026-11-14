@@ -142,7 +142,8 @@ void applyEndQcd(long long set_ptrs, long long params);
 - 性能验收：同后端、同 dtype、同线程数，`median(≥10 次)`；CPU 对 CPU、GPU 对 GPU。
 - **性能依据只认生产尺寸（强制，2026-11-14 依 `refer/sush/sush-einsum.py` 重写）**：
   生产尺寸的唯一来源是该基准脚本的实际张量（详见 §6.1）：
-  `Nev_src=100`/`Nev_curr=400`、`Mom_src=1`/`Mom_curr=3`、`Ns=4`、`Nc=3`。
+  `Nev_src=100`/`Nev_curr=400`、`Mom_src=1`/`Mom_curr=3/9`（**可变量**，生产里两者
+  都在用，本档取 9）、`Ns=4`、`Nc=3`。
   该脚本张量没有空间轴（`Nx`/`Lt`/`lattice` 全文匹配数为 0），因此**两条口径互不
   替代**，任何性能结论必须写明用的是哪一条：
   `distill`（`distill`/`distill_curr` 档，主口径，蒸馏收缩）与
@@ -175,7 +176,7 @@ void applyEndQcd(long long set_ptrs, long long params);
 | `Nev_src` | 100 | `:170` `nev_src = 100` | sink/source 端的本征模数 |
 | `Nev_curr` | 400 | `:171` `nev_curr = 400` | 每个 current 端点（tcur0/tcur1）用 400；**Nev 是两个值，不能合成一个** |
 | `Mom_src` | 1 | `:172` `n_mom_src = 1` | 源端只取一个动量 |
-| `Mom_curr` | 3 | `:173` `n_mom_curr = 3` | current 端三个动量（分配 `(3,400,400)`，`:224`） |
+| `Mom_curr` | 3/9（可变量） | `:173` `n_mom_curr = 3` | current 端动量数**可变**，生产里 3 与 9 都在用；本档取 9（分配 `(9,400,400)`，`:224`）。引用时须写明用的哪个 |
 | `Ns` | 4 | `:200` peram `(4,4,nev,nev)`；`:248` `gamma(4)` 4×4 | Dirac 旋量维 |
 | `Nc` | 3 | `refer/sush/_distillation/constant.py:1` | 色数；**不是**本脚本的张量轴（色已在 peram 内收缩） |
 | `Nt_labels` | 4 | `:179` `times = (tsink,tsrc,tcur0,tcur1)` | 注册表键个数，不是张量轴 |
@@ -186,14 +187,15 @@ void applyEndQcd(long long set_ptrs, long long params);
 `peram[tq,ta] = (4, 4, nev[tq], nev[ta])`（`:200`）在同一张图里出现
 `(4,4,100,100)`、`(4,4,100,400)`、`(4,4,400,100)`、`(4,4,400,400)` **四种异形轴长**。
 `distill_tensor_shapes()` / `distill_memory()` 给的就是这组真实形状与内存估算
-（`3pt` 段 0.327 GiB、`6peram` 段 0.194 GiB；最坏可信 6pt 峰值下界 5.16 GiB < 15 GiB）。
+（`3pt` 段 0.384 GiB、`6peram` 段 0.194 GiB；最坏可信 6pt 峰值下界 5.16 GiB < 15 GiB）。
+`3pt` 段总量随可变量 `Mom_curr` 线性变化，上值对应本档 `Mom_curr=9`。
 
 已知口径差异（**不要**在没有依据时"顺手修正"）：
 
 1. `bench_specialized._label_sizes` 把 `VVV` 当 `(Lt, Mom, Nev, Nev, Nev)`、`VDV` 当
    `(Lt, Mom, Nev, Nev)`，并且全方程只有一个 `Nev` —— 这两点都与参考脚本不符
    （无 `Lt` 轴、两个 `Nev`）。实测后果：拿 `dims("distill")` 喂 `_label_sizes`，
-   `Nx/Lt=1` 的占位与 `Mom`（1 或 3）会作为**真实轴长**漏进 peram 的轴
+   `Nx/Lt=1` 的占位与 `Mom`（1 或 `Mom_curr`）会作为**真实轴长**漏进 peram 的轴
    （seq 3 得到 `(4,100,100,100)`、`(100,4,1,1)` 之类），与参考脚本的
    `(4,4,100,400)` 无关。因此 **`--scene distill` 经 `_label_sizes` 的形状只能当
    path-only 证据，不得写成蒸馏生产结论**；真实形状只认 `distill_tensor_shapes()`。
@@ -201,7 +203,7 @@ void applyEndQcd(long long set_ptrs, long long params);
    锁定；修 `_label_sizes` 归规划/语料组，改了会让该契约失败并提醒同步本节。
 2. `VVV` 分配 `(1,100,100,100)`（`:209`）但注册时用 `host_vvv_sink[0]` 切片（`:241`），
    进 einsum 的是 `(100,100,100)`；`VDV` 保留动量轴（`:243-245`）→ `(1,100,100)` /
-   `(3,400,400)`。两者不对称，照抄参考脚本即可。
+   `(Mom_curr,400,400)`（本档 `Mom_curr=9`，即 `(9,400,400)`）。两者不对称，照抄参考脚本即可。
 3. 语料里 `VDV` 的 term 只有 2 个标签（seq 1/855），而参考脚本注册的 `VDV` 是 3 轴；
    这需要在 `lqcddb` 侧核对，本库不擅自决定。
 
