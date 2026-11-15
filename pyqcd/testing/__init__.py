@@ -3121,6 +3121,15 @@ def test_dedicated_routing_contracts():
             getattr(contract_module, name)()
 
 
+def test_label_sizes_contracts():
+    """``_label_sizes`` 的两形态映射：基础表逐位不变、附录动量轴→Mom、形态不明即报错。"""
+    from . import _label_sizes_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
 def test_opt_einsum_parity_contracts():
     """以 opt_einsum 为对照：数值、路径代价、expression/缓存、错误行为与退化门。"""
     from . import _opt_einsum_parity_contract as contract_module

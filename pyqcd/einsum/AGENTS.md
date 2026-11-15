@@ -192,20 +192,28 @@ void applyEndQcd(long long set_ptrs, long long params);
 
 已知口径差异（**不要**在没有依据时"顺手修正"）：
 
-1. `bench_specialized._label_sizes` 把 `VVV` 当 `(Lt, Mom, Nev, Nev, Nev)`、`VDV` 当
-   `(Lt, Mom, Nev, Nev)`，并且全方程只有一个 `Nev` —— 这两点都与参考脚本不符
-   （无 `Lt` 轴、两个 `Nev`）。实测后果：拿 `dims("distill")` 喂 `_label_sizes`，
+1. `bench_specialized._label_sizes` 的形状口径有**两种形态**（附录形态的错位绑法已于
+   2026-11-15 修正，见 §6.2 之后的「附录动量轴」小节）：
+   * **基础表**（seq 1..2582，指标段纯小写）：`VVV` 当 `(Lt, Mom, Nev, Nev, Nev)`、
+     `VDV` 当 `(Lt, Mom, Nev, Nev)` —— 参考脚本里**没有** `Lt` 轴，这是历史约定，
+     逐位未改；
+   * **附录形态**（seq ≥ 2583，指标段 `<大写动量标签><小写>...`）：`(Mom, Nev, ...)`，
+     与参考脚本注册的 `VDV = (Mom_curr, 400, 400)`、`VVV = (Mom, Nev, Nev, Nev)` 一致。
+   仍然表达不出、也不该由它表达的只有一条：**同一方程里只有一个 `Nev`**（源端 100 与
+   current 端 400 无法共存）。实测后果：拿 `dims("distill")` 喂**基础表**的 seq 3，
    `Nx/Lt=1` 的占位与 `Mom`（1 或 `Mom_curr`）会作为**真实轴长**漏进 peram 的轴
-   （seq 3 得到 `(4,100,100,100)`、`(100,4,1,1)` 之类），与参考脚本的
-   `(4,4,100,400)` 无关。因此 **`--scene distill` 经 `_label_sizes` 的形状只能当
+   （得到 `(4,100,100,100)`、`(100,4,1,1)` 之类），与参考脚本的
+   `(4,4,100,400)` 无关。因此 **`--scene distill` 经 `_label_sizes` 的基础表形状只能当
    path-only 证据，不得写成蒸馏生产结论**；真实形状只认 `distill_tensor_shapes()`。
    该限制由 `_bench_scene_distill_contract.test_label_sizes_cannot_express_distill_axes`
-   锁定；修 `_label_sizes` 归规划/语料组，改了会让该契约失败并提醒同步本节。
+   锁定；附录形态的绑法由 `_label_sizes_contract` 锁定。
 2. `VVV` 分配 `(1,100,100,100)`（`:209`）但注册时用 `host_vvv_sink[0]` 切片（`:241`），
    进 einsum 的是 `(100,100,100)`；`VDV` 保留动量轴（`:243-245`）→ `(1,100,100)` /
    `(Mom_curr,400,400)`（本档 `Mom_curr=9`，即 `(9,400,400)`）。两者不对称，照抄参考脚本即可。
-3. 语料里 `VDV` 的 term 只有 2 个标签（seq 1/855），而参考脚本注册的 `VDV` 是 3 轴；
-   这需要在 `lqcddb` 侧核对，本库不擅自决定。
+3. 语料里**基础表**的 `VDV` term 只有 2 个标签（seq 1/855 的 `bd`/`fn`），附录形态则是
+   3 个（`Nbd`，动量标签打头）——后者才与参考脚本注册的 3 轴 `VDV` 对齐；基础表那两个
+   标签就是「无动量轴」的旧约定（首轴 `Lt`、次轴 `Mom`）。两形态的判据与逐轴长度见
+   `pyqcd/testing/_label_sizes_contract.py`。
 
 ## 7. 回退不变量
 
@@ -285,7 +293,8 @@ dtype 的正确性，选路偏置由 `test_dedicated_routing_contracts` 负责�
 2. 优化器从 `"greedy"` 改为 `"auto"`（`_OPTIMIZE`），与 `try_dedicated` 同口径：
    实测 seq=646 上 greedy 4.08e8 MAC vs auto 1.08e8 MAC（26%）。
 
-**收益**（抽样 21 条、distill 尺寸、MAC 口径）：
+**收益**（抽样 21 条、distill 尺寸、**MAC 口径**——这是收缩序本身的改善，
+与执行器实现无关，因此不受下面 v3/v2 路线混算的影响）：
 
 | 项 | 值 |
 |---|---:|
@@ -308,7 +317,8 @@ dedicated 相同：pack ≥ 1 GiB 且 FLOPs ≤ 1e9 即劝回落），于是该�
 
 **第三处：输入侧缺 direct 直连（2026-11-15 补，这是 32× 的真实根因）**
 
-上一条说"小规模 6–9× 是拓扑入口固定开销"**只对中位数成立，对离群格是错的**。
+上一条说"小规模 6–9× 是拓扑入口固定开销"**只对中位数成立，对离群格是错的**，
+而且那个 6–9× 本身混入了附录格（见下面的口径警告）。
 逐层追 seq=3（`ambn,codp,egfh,ce,mo,bdf,nph->ag`，distill 尺寸）发现：该式 6 步里
 有 **7 个输入侧非恒等**，第 2 步 `nph,egfh->npegf` 把 4,000,000 元素的中间体整块
 gather，实测 **topology 49 ms vs dedicated 1.49 ms（32×）**，同一路径同一输入。
@@ -323,17 +333,25 @@ gather，实测 **topology 49 ms vs dedicated 1.49 ms（32×）**，同一路径
 `gemm_call_trans`（`kCblasTrans=112`）直接读源张量。首版保守限制
 `count_batch == 1`，其余仍走 pack（下一条把这条限制放开）。
 
-效果（同口径 20 seq × 4 dtype，产物 `topo_vs_dedicated_distill_20261115132117`）：
+效果（**只统计 route == `kupl_topology` 的真 v3 命中**，13 条基础表 seq × 4 dtype，
+distill 尺寸，热态 3 轮中位；产物见 `bench_topology_vs_dedicated`）：
 
-| dtype | 中位 前→后 | **最差 前→后** | 快于 dedicated |
-|---|---|---:|---:|
-| complex128 | 8.18 → **4.89** | 24.63 → **15.04** | 5/19 → 6/19 |
-| complex64 | 6.56 → 6.47 | 48.95 → **13.24** | 6/19 → 6/19 |
-| float64 | 6.80 → 6.94 | 56.22 → **12.73** | 5/19 → 6/19 |
-| float32 | 6.73 → 6.67 | 62.19 → **13.79** | 5/20 → 6/20 |
+| dtype | n | 中位 | 最优 | 最差 | 快于 dedicated |
+|---|---:|---:|---:|---:|---:|
+| complex128 | 12 | 2.71× | 0.12× | 4.72× | 3/12 |
+| complex64 | 12 | 2.89× | 0.04× | 4.70× | 3/12 |
+| float64 | 12 | 2.88× | 0.14× | 4.29× | 3/12 |
+| float32 | 13 | 3.03× | 0.20× | 4.40× | 3/13 |
 
-**最差比值全面收敛到 ~13×**（原 49–62×），病态格子消失；中位数变化小是因为多数
-格子本来就没有非恒等输入侧。seq=3 从 49 ms 降到 5.52 ms（3.84×）。
+**口径警告（2026-11-15 更正）**：此前本节写的是「中位 4.89–8.18×、最差 12.7–15.0×」，
+那是用 20 条 seq 的抽样算的，而其中 **13 条是附录（seq>2582）**——它们**不在** v3
+编译表内，实际走 `kupl_topology_v2`（v2 通用执行器）。把两类混在一起取中位会同时
+抬高中心与尾部。现在 `try_topology_apply` 会写 `LAST_INFO["specialized"]` 与
+`path=kupl_topology|kupl_topology_v2`，引用该 bench 的数字**必须按 route 分组**。
+
+按 seq 看差异来源（真 v3）：seq=9 只有 0.045–0.195×（v3 大幅胜出），
+seq=1700/2000 是 0.26–0.79×，其余 9 条是 2.0–4.7×（v3 慢于 dedicated）。
+即「v3 胜在特定大规模拓扑，常规规模仍走 dedicated」。
 
 **第四处：批直连（2026-11-15 补，放开上面的 `count_batch == 1`）**
 
@@ -352,7 +370,8 @@ gather，实测 **topology 49 ms vs dedicated 1.49 ms（32×）**，同一路径
 不满足的布局（batch 轴与 M/K 交错、或轴序既非恒等也非组交换）**仍走 pack**：
 那时块在源里不连续，`lda`/`ldb` 表达不出来。诊断开关
 `PYQCD_EINSUM_TOPOLOGY_TRACE=1` 现在会逐步打印
-`topology-gemm-step batch=… M=… K=… N=… a=plain|trans|pack b=… path=direct|pack`。
+`topology-gemm-step batch=… M=… K=… N=… a=plain|trans|pack b=… path=direct|pack`
+（2026-11-15 起 `path` 变成三态 `direct|direct-a|direct-b|pack`，见第五处）。
 
 **这条路径在编译表里跑不到**：`topology_kernels.inc` 只含语料 seq 1..2582
 （`MAX_KERNELS`），其中 `batch_rank > 0` 的步为 **0**；全语料 121724 步里有 11858
@@ -380,6 +399,80 @@ gather，实测 **topology 49 ms vs dedicated 1.49 ms（32×）**，同一路径
 整体中位比值 5.33–6.22×、最差 11.72–14.86× 在噪声内。
 实数档仍被 `_TOPOLOGY_DECLINED_DTYPES` 拒绝，四 dtype 对照需
 `PYQCD_EINSUM_TOPOLOGY_REAL=1`。
+
+**上面那句「distill 口径没有 `count_batch > 1` 的步」的适用范围（2026-11-15 补）**
+
+它成立**只因为 `distill` 档 `Mom_src=1`**：附录形态里每个 batch 轴都是动量标签，
+故 `count_batch = Mom ** batch_rank`；`Mom=1` 时恒为 1，与"有没有 batch 步"无关。
+早前 `_label_sizes` 把附录形态（seq ≥ 2583）的大写动量标签错绑成 `Lt`（`distill*`
+档 `Lt=1`），于是 `distill_curr` 档（`Mom_curr=9`）也被算成 1 —— 「附录语料没有真正
+可批的步」是那个错绑的**口径产物**。修正后实测：`distill_curr` 档 seq=2591/3437 出现
+`count_batch=9`、seq=2711 出现 `count_batch=81`（双 batch 轴 M×N）。编译表
+（seq 1..2582）的 `batch_rank > 0` 步数仍是 **0**，所以「批直连在编译表里跑不到」
+这一条不变。互证见 `pyqcd/testing/_label_sizes_contract.py`。
+
+**第五处：单侧直连（2026-11-15 补，不再让两侧一起 pack）**
+
+`v3_run_step` 原先的 `use_direct` 要求**两侧**都命中恒等/组交换排列，否则两侧一起
+`gather_extents`。现在拆成两个独立判定 `a_direct` / `b_direct`：
+
+1. 可直连的一侧零拷贝用源张量，另一侧 gather 到 `packed_a`/`packed_b`；
+2. `trans_a`/`trans_b` 与 `lda`/`ldb` 按**各自**的直连方式算：直连 plain → 不转置、
+   `lda=K`（A）/ `ldb=N`（B）；直连 trans → 转置、`lda=M` / `ldb=K`；pack 侧已落成
+   规范序 → 不转置、`lda=K`、`ldb=N`；
+3. batch 偏移逐侧：直连侧 `base + batch*block`（源里的连续板），pack 侧
+   `packed_x + batch*block`（规范序缓冲里的板），两侧 block 同值
+   （`count_rows*count_inner` / `count_inner*count_cols`）；
+4. 越界兜底（`block>0 && block<=total && count_batch<=total/block`）**逐侧**只作用于
+   真正直连的那一侧：某侧不满足就只把该侧转 pack；两侧都不满足时与旧版完全一致
+   （一次 BLAS 调用、`lda=K`、`ldb=N`、不转置）；
+5. 归还只针对真正 acquire 过的一侧；B 侧分配失败时先归还已分配的 A 侧，任何早退
+   路径都不泄漏。
+
+诊断开关打印**三态**路径：`path=direct`（双侧直连）/ `direct-a`（仅 A）/
+`direct-b`（仅 B）/ `pack`（两侧都 pack）；`a=`/`b=` 仍是该侧自己的轴序标签。
+
+**正确性**（`tests/topology_batch_direct.cpp` 扩到 16 用例）：手工编单步 v3 段，
+覆盖 plain/pack、pack/plain、trans/pack、pack/trans 四种单侧组合（共用几何
+M=2×3、K=4、N=2×5）、`count_batch`=1/2/3/6、双 batch 轴 2×3 上的单侧步、双侧都
+不可直连的 pack/pack，以及原有双侧组合与 M 组两轴。64 格全绿（double 类 ≤2.9e-16、
+single 类 ≤1.3e-7）。驱动内置一份与执行器同口径的路径分类并**断言**每个用例真的
+落在预期档位——混合档不会悄悄退化成双侧直连。变异测试（逐个单独注入、驱动当场
+报错，恢复即全绿）：A 直连 batch 偏移写死 0 → `rel=1.02`；pack 侧 A 误用
+`count_rows` 当 lda → `rel=1.42`；pack 侧 B 误用 `count_inner` 当 ldb →
+`rel=1.00`；B 的 batch 偏移误用 `a_block` → `rel=1.49`。
+
+端到端（真值 `np.einsum(optimize="greedy")`，容差 1e-9 / 1e-4）：语料 seq
+1/3/4/5/6/7/8/9/10/11/12/13 × 四 dtype 共 48 格 0 超容差（complex128 ≤1.3e-15、
+complex64 ≤7.3e-7、float64 ≤8.3e-16、float32 ≤8.8e-7），route 全为
+`kupl_topology`；trace 里四种 path 与四种单侧组合都出现（plain/pack 136 步、
+pack/plain 28、trans/pack 16、pack/trans 52）。
+
+**语料静态账**（`plan_steps` + `decompose`，distill 尺寸；逐侧判定已与运行期 trace
+在 seq 3/7/9/855/1599 的 44 步上逐行核对一致）：全语料 121724 步中 **65053 步**
+是「恰好一侧可直连」（编译表内 17542、附录 47511）。但**基线本来就在两侧都可直连
+时跳过 pack**，所以真实节省比步数小得多：
+
+| 范围 | pack 元素数 改前 → 改后 | 省 |
+|---|---|---|
+| 编译表 seq ≤ 2582（v3 实际执行） | 2,697,418,831 → 2,693,526,513 | **0.14%** |
+| 附录 seq 2583..8638（表里没有，走 v2） | 30,532,268,767 → 29,471,359,333 | 3.47% |
+
+表内单 seq 最大节省 20,232 元素（seq=433）；bench 里 8 个 v3 活跃 seq 只省
+32–532 元素。
+
+**性能：distill 口径无可分辨变化**（与上表一致）。交错 A/B（base/new `.so` 每轮
+互换、5 对、`--rounds 9`、8 个 v3 活跃 seq × 4 dtype = 32 格）：中位比值 1.025、
+最快 0.835、最慢 1.120；同一次测量的噪声地板为 base/base 中位 0.988（p10 0.731、
+p90 1.290）、new/new 0.980（0.685/1.106）、base/new 0.984（0.698/1.344）——跨变体
+分布与同变体分布重合，**不得**把这 +2.5% 读成退化。真实收益要等步表覆盖到
+seq > 2582（附录那 3.47%）才会显形。
+
+**顺带核实的 bench 覆盖口径**：`bench_topology_vs_dedicated` 的 `DEFAULT_SEQS`
+20 个 seq 里 13 个 > 2582（步表只到 2582），对 v3 恒 miss；distill 口径的 20 格里
+只有 6 格真正命中 v3（1/3/9/849/855/1599），seq=129 被 pack-bound 守卫拒绝，其余
+13 格的 route 标签是 `kupl_topology_v2`。引用该 bench 的"四 dtype 中位比值"时必须
+按 route 区分，不能只看 `LAST_INFO['path']` 是否以 `kupl_topology` 开头。
 
 **三条必须记住的事实**（禁止写成相反结论）：
 
@@ -459,15 +552,53 @@ CUDA 拓扑入口是**另一套实现**（`cpp/cuda/einsum/src/apply_contract.cu
 更不能像 KUPL 那样用 `count_batch == 1` 放开 trans）。再补 `kDirectTrans` 的收益
 上限约 0.1%，不值得动。
 
-**收缩序：确认病态，但本轮不改（无生成器）**。`topology_steps.h` 的步序由均匀
-dim=4 的 greedy 定型，而生产轴长是 `{1,4,100}` 混杂。按真实步表逐条复算
-（语料每 41 条抽样，63 条，distill 尺寸，`contract_path` 的 `opt_cost` 口径）：
-**生产序更优 55 / 持平 2 / 更差 6，中位比值 0.020**（即生产序便宜约 50×），
-最差样本 seq=489 表内序 `2.0010e+12` vs 生产序 `8.1811e+08`。V100 实测：
-seq=489 topology 中位 **149.79 ms**，其中单步 `m=n=k=10000` 的 sgemm 参考耗时
-**141.94 ms** —— 病态步几乎吃掉全部时间（对照 seq=3 为 1.21 ms、seq=1700 1.31 ms）。
-**不能本轮硬改**：仓库里**没有**生成 `topology_steps.h` 的脚本
-（`_topology_kernel_gen.TARGET` 只写 `cpp/kupl/einsum/src/topology_kernels.inc`，
-且它不含 blake2b-128 key 与 CUDA 的 FNV 指纹口径；该文件本身也禁止改）。重定型
-需要先补一个生成器（复用 `plan_steps(equation, sizes=…)` +
-`_label_sizes(roles, dims("distill"))`），再重生成 1052 条常量表。
+**收缩序：确认病态，本轮用「病态即 fail closed」守卫止损（2026-11-15）**。
+`topology_steps.h` 的步序由均匀 dim=4 的 greedy 定型，而生产轴长是 `{1,4,100}`
+混杂。全语料 2582 条 × `dims("distill")`、两种序用**同一套 MAC 记账**（每步「两侧
+标签并集」元素数，与执行器的 pack + GEMM 一一对应）实跑
+`python -m pyqcd.testing.einsum.analyze_cuda_topology_order`（产物
+`pyqcd/testing/einsum/artifacts/cuda_topology_order_<时间戳>/`）：
+
+* 表内序 ÷ 生产 `optimize="auto"` 序：**中位 59.9×、p90 9521×、最差 3.81e4×**
+  （seq=510/654，arity=14：`4.004e12` vs `1.051e8` MAC；单步中间体 **4e8 元素**
+  = complex128 6.4 GB，而 `kTopologyMaxIntermediateElements` 只挡 2^31 —— 挡得住
+  越界、挡不住病态）；更差/更好/持平 = 2388/178/16，>2× 1836、>10× 1724、
+  >100× 1138 条；
+* 交叉核对（`contract_path` 的 `opt_cost` 口径）同为中位 59.9×，即差异来自收缩序
+  而不是记账口径；上一轮 63 条抽样（中位 0.020）的方向与量级一致；
+* **成因坐实**：表内序与 `contract_path(optimize="greedy")` 在**均匀 dim=4** 下的
+  路径逐位相同 **2582/2582 = 100%**，而它与生产序相同只有 1/2582。
+
+**修法（不碰 4724 行常量表，也不改 Python 生成端）**：`apply_contract.cu` 的
+`build_topology_plan` 增加一道**只用描述符自带 sizes** 的体检
+`topology_order_acceptable` —— 用「最小并集乘加优先」贪心算出参考序（每步 O(n²)
+候选、n ≤ 16，每个计划只算一次），表内序劣化超过 `kTopologyOrderTolerance = 8` 倍
+即返回 `QCD_TOPOLOGY_UNSUPPORTED`（status 4，trace 记 `reject=order-pathological`），
+由上层回落带真实 path 搜索的通用路径并进负缓存。阈值 8 与 16 在语料上落在同一
+空档（被拒条数同为 1540/2582），判据对取值不敏感；参考序相对生产
+`optimize="auto"` 中位只差 1.1%，足够当尺子。
+
+**证据**（V100、`CUDA_VISIBLE_DEVICES` 临时指定、`PYQCD_CUDA_ARCHITECTURES=7.0`）：
+
+* `python -m pyqcd.testing.einsum.verify_cuda_topology_order`（distill 尺寸）：
+  complex128 全 2582 条放行 1042 / 拒绝 1540，与 Python 侧预测**逐条一致**
+  （mismatch=0），放行格子对 `np.einsum(optimize="greedy")` 最差相对误差
+  **1.537e-14**（≤1e-9）；complex64/float64/float32 各 80 格（40 放行 + 40 拒绝）
+  0 失败，最差 4.87e-06 / 5.14e-15 / 3.76e-06（限 1e-4 / 1e-9 / 1e-4）。
+* **不误伤等长探针**：`dim=2` 等长时守卫一条都不拒（表内序 ÷ 贪心 中位 0.385、
+  最差 2.87 < 8），上一轮「dim=2 命中 2582/2582」的结论不变。
+* **真实暴露面**（distill、complex128，逐条先试 dedicated）：2582 条里 dedicated
+  命中 1902，**topology 入口只被触达 680 条（全部 arity=14）**，其中守卫放行 332 /
+  拒绝 348 —— 本次行为变化面是 348 条，不是 1540 条。
+* **端到端收益**（`bench_cuda_topology_order_guard`，distill、complex128、首调
+  丢弃、3 轮中位；`--label` 区分同一脚本在两次构建上的测量）：seq=510 守卫关
+  **5.0999 s** → 守卫开 **0.0063 s**（806×）；被 dedicated 接住的 5 条对照格
+  （2565/869/1859/3/853，0.4–1.3 ms）两次测量持平。
+* 回归：`python -B -m pyqcd.testing` → **127 passed / 1 skipped / 0 failed**。
+
+**仍未解（后续单独立项）**：整表重定型需要先补一个能写出 `topology_steps.h` 的
+生成器（blake2b-128 key + 规范标签流 FNV 指纹 + `kQcdTopoOrders` 索引三件套；仓库
+里**没有**这份脚本，`_topology_kernel_gen.TARGET` 只写 KUPL 的 `.inc`）。守卫已经
+在二进制里算出生产尺寸的贪心序，把它从「只做判据」改成「直接作为执行序」是两行
+改动，可把被拒的 348 条也留在原生路径上（贪心序相对 auto 中位 0.99×）；是否改由
+后续单独决策。

@@ -894,6 +894,237 @@ bool topology_step_output_labels(
     return true;
 }
 
+/* -------------------------------------------------------------------------
+ * 收缩序体检：表内序 vs 本描述符真实尺寸上的贪心参考序
+ *
+ * `topology_steps.h` 的文件头写明步序取自语料在**均匀 dim=4 超立方体**上的
+ * greedy。等长时全部轴长相同、路径代价与轴长无关，因此任何等长探针都看不出
+ * 问题；生产轴却是异形的（`Nev=100` / `Ns=4` / `Mom=1`），同一条步序可能多做
+ * 几万倍乘加，还会把中间体顶到 4e8 元素 —— `kTopologyMaxIntermediateElements`
+ * 只挡 2^31，挡得住越界、挡不住病态。
+ *
+ * 实测（`python -m pyqcd.testing.einsum.analyze_cuda_topology_order`，语料
+ * 2582 条 × `dims("distill")`）：表内序相对 `contract_path(optimize="auto")`
+ * 中位 60 倍、p90 9521 倍、最差 3.8e4 倍（seq=510/654，14 操作数，中间体
+ * 4e8 元素）；相对本文件的贪心参考序中位 55 倍。参考序本身相对最优序中位只差
+ * 1.1%，因此足以当尺子。
+ *
+ * 判据只用描述符自带的 sizes，没有任何机器相关常量：MAC = 每步「两侧标签并集」
+ * 的元素数（与执行器的 pack + cuBLAS GEMM 一致）。表内序劣化超过
+ * `kTopologyOrderTolerance` 倍就 fail closed，让上层回落带真实 path 搜索的
+ * 通用路径 —— 与 KUPL 的 `_topology_pack_bound_reason` 同一思路。
+ * ---------------------------------------------------------------------- */
+constexpr int64_t kTopologyCostSaturation = int64_t(1) << 62;
+/*: 表内序最多允许是参考序的多少倍。取 8：语料上该阈值与 16 落在同一个空档，
+ * 被拒条数完全相同（1540/2582），因此判据对阈值取值不敏感。 */
+constexpr int64_t kTopologyOrderTolerance = 8;
+
+int64_t topology_saturating_product(const TopologyDescriptor& descriptor,
+                                    const std::vector<int32_t>& labels) {
+    int64_t value = 1;
+    for (int32_t label : labels) {
+        const int64_t extent = descriptor.sizes[static_cast<std::size_t>(label)];
+        if (extent <= 0) {
+            return 0;
+        }
+        if (value > kTopologyCostSaturation / extent) {
+            return kTopologyCostSaturation;
+        }
+        value *= extent;
+    }
+    return value;
+}
+
+/*: 一步二元收缩的乘加数：`prod(左 ∪ 右)`。执行器把它拆成 batch/M/K/N 后正是
+ * 这一步的 GEMM 乘加数，因此两条序之间只有「谁和谁先缩」的差异。 */
+int64_t topology_step_cost(const TopologyDescriptor& descriptor,
+                           const std::vector<int32_t>& left,
+                           const std::vector<int32_t>& right) {
+    int64_t value = topology_saturating_product(descriptor, left);
+    for (int32_t label : right) {
+        if (contains(left, label)) {
+            continue;
+        }
+        const int64_t extent = descriptor.sizes[static_cast<std::size_t>(label)];
+        if (extent <= 0) {
+            return 0;
+        }
+        if (value > kTopologyCostSaturation / extent) {
+            return kTopologyCostSaturation;
+        }
+        value *= extent;
+    }
+    return value;
+}
+
+/*: 一条位置对序列在**本描述符尺寸**下的总乘加数。标签存活规则与
+ * `topology_step_output_labels` 完全一致（最后一步取描述符的输出标签）。 */
+bool topology_order_cost(const TopologyDescriptor& descriptor,
+                         const int8_t* pairs, int32_t steps, int64_t* cost) {
+    if (pairs == nullptr || steps <= 0 || cost == nullptr) {
+        return false;
+    }
+    std::vector<LiveOperand> live(static_cast<std::size_t>(descriptor.num_inputs));
+    for (int32_t input = 0; input < descriptor.num_inputs; ++input) {
+        live[static_cast<std::size_t>(input)].labels =
+            descriptor.input_labels[static_cast<std::size_t>(input)];
+    }
+    int64_t total = 0;
+    for (int32_t step = 0; step < steps; ++step) {
+        const int32_t left_position = pairs[2 * step];
+        const int32_t right_position = pairs[2 * step + 1];
+        if (left_position < 0 || right_position < 0 ||
+            static_cast<std::size_t>(left_position) >= live.size() ||
+            static_cast<std::size_t>(right_position) >= live.size() ||
+            left_position == right_position) {
+            return false;
+        }
+        const std::size_t first =
+            static_cast<std::size_t>(std::min(left_position, right_position));
+        const std::size_t second =
+            static_cast<std::size_t>(std::max(left_position, right_position));
+        const int64_t step_cost = topology_step_cost(
+            descriptor, live[first].labels, live[second].labels);
+        if (step_cost <= 0) {
+            return false;
+        }
+        if (total > kTopologyCostSaturation - step_cost) {
+            total = kTopologyCostSaturation;
+        } else {
+            total += step_cost;
+        }
+        std::vector<int32_t> output_labels;
+        if (step + 1 == steps) {
+            output_labels = descriptor.output_labels;
+        } else if (!topology_step_output_labels(
+                       live[first].labels, live[second].labels, live, first, second,
+                       descriptor.output_labels, &output_labels)) {
+            return false;
+        }
+        live.erase(live.begin() + static_cast<std::ptrdiff_t>(second));
+        live.erase(live.begin() + static_cast<std::ptrdiff_t>(first));
+        LiveOperand merged;
+        merged.labels = std::move(output_labels);
+        live.push_back(std::move(merged));
+    }
+    *cost = total;
+    return true;
+}
+
+/*: 贪心参考序：每步挑「省下内存最多」的一对 —— 判据与 ``opt_einsum`` greedy 的
+ * ``memory-removed`` 同口径 ``size12 - size1 - size2``（越小越省），并列时先比
+ * 并集元素数、再比位置下标。全程只用描述符尺寸，不做任何路径空间搜索。
+ *
+ * 为什么不用「并集乘加最小」：语料里 ``Mom=1`` / ``Lt=1`` 让大量并集乘加数相等，
+ * 「最小值」这类判据会先做一堆零成本的外积，参考序本身就能比生产最优序差 1.5e3 倍，
+ * 于是守卫在该族上**漏放** 184 条实为 100 倍劣化的表序。改用 ``memory-removed``
+ * 后同一语料漏放降到 32 条、误拒仍为 0（两条判据在同一份 2582 条语料上的对照见
+ * ``pyqcd/testing/einsum/analyze_cuda_topology_order.py`` 的注释与产物）。
+ *
+ * 代价 O(steps · n² · 活表标签数)，且每个计划只算一次 —— V100 上实测 arity=16 的
+ * 条目整条计划构建（含描述符解析）约 1.4 ms，相对「不体检」的 arity=7 条目仅多约
+ * 0.45 ms，与执行期开销（µs 到 s 量级）相比可忽略。 */
+bool topology_greedy_order(const TopologyDescriptor& descriptor,
+                           std::vector<int8_t>* pairs) {
+    if (pairs == nullptr || descriptor.num_inputs < 2) {
+        return false;
+    }
+    std::vector<LiveOperand> live(static_cast<std::size_t>(descriptor.num_inputs));
+    for (int32_t input = 0; input < descriptor.num_inputs; ++input) {
+        live[static_cast<std::size_t>(input)].labels =
+            descriptor.input_labels[static_cast<std::size_t>(input)];
+    }
+    pairs->clear();
+    pairs->reserve(static_cast<std::size_t>(2 * (descriptor.num_inputs - 1)));
+    while (live.size() > 1) {
+        int32_t best_left = -1;
+        int32_t best_right = -1;
+        int64_t best_cost = 0;
+        int64_t best_size = 0;
+        for (std::size_t left = 0; left < live.size(); ++left) {
+            for (std::size_t right = left + 1; right < live.size(); ++right) {
+                const int64_t size12 = topology_step_cost(
+                    descriptor, live[left].labels, live[right].labels);
+                if (size12 <= 0) {
+                    return false;
+                }
+                const int64_t size1 = topology_saturating_product(
+                    descriptor, live[left].labels);
+                const int64_t size2 = topology_saturating_product(
+                    descriptor, live[right].labels);
+                /* size1 + size2 可能饱和；两侧都 ≤ kTopologyCostSaturation，
+                 * 因此差值落在 [-cap, cap] 内，不会溢出。 */
+                const int64_t footprint =
+                    (size1 > kTopologyCostSaturation - size2)
+                        ? kTopologyCostSaturation
+                        : size1 + size2;
+                const int64_t cost = size12 - footprint;
+                /* 严格小于：并列时下标小者优先，结果与实现无关、可复现。 */
+                const bool better = best_left < 0 || cost < best_cost ||
+                                    (cost == best_cost && size12 < best_size);
+                if (better) {
+                    best_left = static_cast<int32_t>(left);
+                    best_right = static_cast<int32_t>(right);
+                    best_cost = cost;
+                    best_size = size12;
+                }
+            }
+        }
+        if (best_left < 0 ||
+            best_left > std::numeric_limits<int8_t>::max() ||
+            best_right > std::numeric_limits<int8_t>::max()) {
+            return false;
+        }
+        pairs->push_back(static_cast<int8_t>(best_left));
+        pairs->push_back(static_cast<int8_t>(best_right));
+        const std::size_t first = static_cast<std::size_t>(best_left);
+        const std::size_t second = static_cast<std::size_t>(best_right);
+        std::vector<int32_t> output_labels;
+        if (live.size() == 2) {
+            output_labels = descriptor.output_labels;
+        } else if (!topology_step_output_labels(
+                       live[first].labels, live[second].labels, live, first, second,
+                       descriptor.output_labels, &output_labels)) {
+            return false;
+        }
+        live.erase(live.begin() + static_cast<std::ptrdiff_t>(second));
+        live.erase(live.begin() + static_cast<std::ptrdiff_t>(first));
+        LiveOperand merged;
+        merged.labels = std::move(output_labels);
+        live.push_back(std::move(merged));
+    }
+    return true;
+}
+
+/*: 表内序是否还值得执行。无法判定时一律返回 true（保持原行为，由
+ * `topology_plan_from_table` 自己的越界/尺寸检查去兜底）。 */
+bool topology_order_acceptable(const TopologyDescriptor& descriptor,
+                               const qcd_topology_order& order) {
+    if (order.pairs == nullptr || order.steps <= 0 ||
+        order.steps != descriptor.num_inputs - 1) {
+        return true;
+    }
+    int64_t table_cost = 0;
+    if (!topology_order_cost(descriptor, order.pairs, order.steps, &table_cost)) {
+        return true;
+    }
+    std::vector<int8_t> greedy;
+    if (!topology_greedy_order(descriptor, &greedy) || greedy.size() < 2) {
+        return true;
+    }
+    int64_t greedy_cost = 0;
+    if (!topology_order_cost(descriptor, greedy.data(),
+                             static_cast<int32_t>(greedy.size() / 2), &greedy_cost)) {
+        return true;
+    }
+    if (greedy_cost <= 0 ||
+        table_cost >= kTopologyCostSaturation ||
+        greedy_cost >= kTopologyCostSaturation) {
+        return true;                     /* 饱和后无法比较，不因不确定而拒绝 */
+    }
+    return table_cost <= kTopologyOrderTolerance * greedy_cost;
+}
+
 bool topology_plan_from_table(
     const TopologyDescriptor& descriptor,
     const qcd_topology_order& order,
@@ -1025,20 +1256,36 @@ bool topology_plan_chain(
 }
 
 bool build_topology_plan(
-    const TopologyDescriptor& descriptor, pyqcd_einsum::ExecutionPlan* plan) {
+    const TopologyDescriptor& descriptor, pyqcd_einsum::ExecutionPlan* plan,
+    const char** reason = nullptr) {
     const uint64_t fingerprint =
         topology_structure_fingerprint(descriptor.input_labels, descriptor.output_labels);
     const qcd_topology_entry* entry =
         find_topology_entry(descriptor.key, fingerprint);
     if (entry == nullptr) {
+        if (reason != nullptr) {
+            *reason = "table-miss";
+        }
         return topology_plan_chain(descriptor, plan);
     }
     if (entry->order >= static_cast<uint16_t>(sizeof(kQcdTopoOrders) /
                                               sizeof(kQcdTopoOrders[0]))) {
+        if (reason != nullptr) {
+            *reason = "order-index";
+        }
         return false;
     }
-    return topology_plan_from_table(
-        descriptor, kQcdTopoOrders[entry->order], plan);
+    const qcd_topology_order& order = kQcdTopoOrders[entry->order];
+    /* 表内序由均匀 dim=4 定型，到异形生产轴上可能病态（见上面的体检说明）。
+     * 病态即 fail closed：上层回落带真实 path 搜索的通用路径，而不是把一条
+     * 多做几万倍乘加的步序列当真。 */
+    if (!topology_order_acceptable(descriptor, order)) {
+        if (reason != nullptr) {
+            *reason = "order-pathological";
+        }
+        return false;
+    }
+    return topology_plan_from_table(descriptor, order, plan);
 }
 
 struct SandwichPlan {
@@ -2463,13 +2710,13 @@ struct TopologyProgram {
             if (descriptor.dtype_id != requested_dtype) {
                 return QCD_STATUS_INVALID;
             }
-            if (!build_topology_plan(descriptor, &parsed)) {
+            const char* reason = "";
+            if (!build_topology_plan(descriptor, &parsed, &reason)) {
                 if (trace_enabled()) {
                     std::fprintf(
                         stderr,
-                        "PYQCD_EINSUM_CUDA_TOPOLOGY reject=table key=0x%016llx "
-                        "arity=%d\n",
-                        static_cast<unsigned long long>(descriptor.key),
+                        "PYQCD_EINSUM_CUDA_TOPOLOGY reject=%s key=0x%016llx arity=%d\n",
+                        reason, static_cast<unsigned long long>(descriptor.key),
                         descriptor.num_inputs);
                 }
                 return QCD_TOPOLOGY_UNSUPPORTED;

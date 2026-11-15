@@ -59,6 +59,26 @@
  * 1 与 4 必须分开：1 是"这次的调用参数不对"，4 是"这条计划本入口不认"。
  * Python 侧对两者都回落现有路径，但诊断文案不同。
  *
+ * **0 有两种来源**：命中编译期步表（v3，per-拓扑 GEMM 分步）与未命中后交给
+ * version-2 通用执行器。两者的数值都正确，但只有前者是"拓扑特化"，性能含义完全
+ * 不同，因此调用方若需要区分，必须在每次成功调用之后、**在同一线程上**查询
+ * ``qcd_kupl_topology_last_specialized()``（见下）。
+ *
+ * ---------------------------------------------------------------------------
+ * 路线查询
+ * ---------------------------------------------------------------------------
+ *   int qcd_kupl_topology_last_specialized(void);
+ *
+ * 返回**本线程**最近一次 ``qcd_kupl_topology_apply`` 实际走的路线，取值见
+ * ``QCD_TOPOLOGY_ROUTE_*``。语义是"最近一次"，因此：
+ *   * 必须在 apply 之后立刻查询，中间插入任何 apply 都会改写它；
+ *   * 早退（1/4）或执行失败（2/3）之后返回 ``QCD_TOPOLOGY_ROUTE_UNKNOWN``——
+ *     那次调用没有产生可信输出，路线无从谈起；
+ *   * 状态按 OS 线程保存（``thread_local``），并发调用的线程互不干扰。
+ *
+ * 这一项是**契约的一部分**，不是调试开关：没有它，上层只能看到"成功"，无法区分
+ * v3 与 v2，进而把 v2 的耗时当成 v3 的性能结论。
+ *
  * ---------------------------------------------------------------------------
  * dtype（见 einsum_define.h）
  * ---------------------------------------------------------------------------
@@ -85,6 +105,13 @@ enum {
     QCD_TOPOLOGY_UNSUPPORTED = 4
 };
 
+enum {
+    /* qcd_kupl_topology_last_specialized() 的取值。 */
+    QCD_TOPOLOGY_ROUTE_UNKNOWN = -1,  /* 本线程还没有一次成功的 apply */
+    QCD_TOPOLOGY_ROUTE_V2 = 0,        /* 未命中编译期步表，已由 v2 通用执行器完成 */
+    QCD_TOPOLOGY_ROUTE_V3 = 1         /* 命中编译期步表，由 per-拓扑 GEMM 步完成 */
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -93,6 +120,8 @@ QCD_EINSUM_API int qcd_kupl_topology_apply(const void* plan, long long plan_len,
                                            void* const* operands, int n_operands,
                                            const long long* operand_offsets, void* out,
                                            int dtype_id);
+
+QCD_EINSUM_API int qcd_kupl_topology_last_specialized(void);
 
 #ifdef __cplusplus
 }

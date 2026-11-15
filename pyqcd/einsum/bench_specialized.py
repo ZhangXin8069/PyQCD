@@ -28,15 +28,19 @@
 ``peram_u``       ``(Lt, Nt, Ns, Ns, Nev, Nev)``     ``contraction.py:123``
                   = ``(64, 32, 4, 4, 100, 100)``
 ``VVV``           ``(Lt, Mom_len, Nev, Nev, Nev)``   ``contraction.NN.2pt.py:68``
-                  = ``(64, 8, 100, 100, 100)``
+                  基础表形态 = ``(64, 8, 100, 100, 100)``
 ``VDV``           ``(Lt, Mom_len, Nev, Nev)``       同上（注释行）
-                  = ``(64, 8, 100, 100)``
+                  基础表形态 = ``(64, 8, 100, 100)``
 ``gamma_*``       ``(Ns, Ns)`` = ``(4, 4)``          ``Nc = 3`` → ``Ns = 4``
 ===============  =================================  ============================
 
 生产参数：``lattice_size = [32, 32, 32, 64]``（``Nx = 32``、``Lt = 64``）、
 ``Nev_src = 100``、``Nc = 3``、``Mom_len = 8``。这是「每个指标一个真实维度」，
 所以同一个标签在不同操作数里必定同长，与真实收缩一致。
+
+顶点张量（``VVV``/``VDV``）的指标段有两种形态，尺寸见 :func:`_label_sizes`：
+基础表（纯小写）是 ``(Lt, Mom, Nev, ...)``，附录形态（``Vindex`` 引入的大写动量
+标签打头）是 ``(Mom, Nev, ...)``——后者没有 ``Lt`` 轴，与参考脚本注册的形状一致。
 """
 
 from __future__ import annotations
@@ -56,15 +60,52 @@ import numpy as np
 from ._bench_scene import dims as scene_dims, describe as describe_scene
 
 
+def _vertex_axes(term: str, role: str, dims) -> tuple[int, ...]:
+    """一个 ``VDV`` / ``VVV`` 操作数的逐轴物理长度。
+
+    语料里这两种顶点张量的指标段有**两种形态**，按 label 的大小写区分：
+
+    * **基础表**（纯小写，如 ``bd`` / ``fnp``）：``(Lt, Mom, Nev, ...)`` ——
+      首两轴 ``Lt`` / ``Mom``，其余 ``Nev``；
+    * **附录形态**（大写动量标签打头，如 ``Nbd`` / ``Nfnp``）：
+      ``(Mom, Nev, Nev, ...)`` —— 打头那个大写标签就是 ``Vindex`` 引入的
+      **外部动量**轴（``refer/sush/wick_12cases.md:2784``，样例 ``:2820``
+      ``cadb,menf,ac,em,Mbd,Nfn->MN``），附录形态里这些张量**没有** ``Lt`` 轴。
+
+    历史缺陷：早前两种形态共用同一个 ``zip(term, (Lt, Mom, Nev, ...))``，附录形态
+    因此整体错位一格——大写动量标签被绑成 ``Lt``、真正的第一个收缩标签被绑成
+    ``Mom``。``distill`` 档 ``Lt=1``，于是 ``seq=2591`` 的 ``Nbd`` 被算成
+    ``(1, 9, 400)``，物理上是 ``(9, 400, 400)``。
+
+    既非纯小写、也非大写打头的指标段一律报错：那说明语料形态变了，猜比报错危险。
+    """
+    arity = 2 if role.startswith("VDV") else 3
+    if term[:1].isupper():
+        if len(term) != arity + 1:
+            raise ValueError(
+                f"{role}: momentum form {term!r} must carry {arity + 1} axes "
+                f"(<momentum> + {arity} contracted), got {len(term)}")
+        return (dims["Mom"],) + (dims["Nev"],) * arity
+    if term.islower():
+        if len(term) != arity:
+            raise ValueError(
+                f"{role}: base form {term!r} must carry {arity} axes, got {len(term)}")
+        return (dims["Lt"], dims["Mom"]) + (dims["Nev"],) * (arity - 2)
+    raise ValueError(
+        f"{role}: {term!r} is neither all-lowercase nor momentum-prefixed; "
+        f"the corpus vertex form changed, refusing to guess")
+
+
 def _label_sizes(terms, roles, dims) -> dict[str, int]:
     """由**角色**反推每个标签的物理尺寸。
 
     规则来自参考实现的结构，不是猜的：
 
     * ``gamma_*`` / ``C * gamma_*`` 是 ``(Ns, Ns)``（旋量 4x4），它们出现的标签
-      一律 ``Ns``；这包括 peram 里与 gamma 共享的那些轴。
-    * ``VVV`` = ``(Lt, Mom, Nev, Nev, Nev)``、``VDV`` = ``(Lt, Mom, Nev, Nev)``，
-      它们贡献 ``Lt`` / ``Mom`` / ``Nev``。
+      一律 ``Ns``；这包括 peram 里与 gamma 共享的那些轴，以及 ``Gindex`` 引入的
+      ``G`` / ``H``（流 gamma 的 Lorentz 分量轴，与旋量轴同为 4）。
+    * ``VVV`` / ``VDV`` 的形状按指标段形态取自 :func:`_vertex_axes`：基础表
+      ``(Lt, Mom, Nev, ...)``、附录形态 ``(Mom, Nev, ...)``。
     * ``peram_u`` 独有的标签是酉空间维 ``Nev``。
 
     实测校验（seq 1/3/129/855）：peram 里与 gamma 共享的轴恰好是旋量轴，
@@ -86,15 +127,8 @@ def _label_sizes(terms, roles, dims) -> dict[str, int]:
         if "gamma" in role:
             for label in term:
                 bind(label, dims["Ns"], role)
-        elif role.startswith("VVV"):
-            # (Lt, Mom, Nev, Nev, Nev)
-            for label, extent in zip(term, (dims["Lt"], dims["Mom"],
-                                            dims["Nev"], dims["Nev"], dims["Nev"])):
-                bind(label, extent, role)
-        elif role.startswith("VDV"):
-            # (Lt, Mom, Nev, Nev)
-            for label, extent in zip(term, (dims["Lt"], dims["Mom"],
-                                            dims["Nev"], dims["Nev"])):
+        elif role.startswith(("VVV", "VDV")):
+            for label, extent in zip(term, _vertex_axes(term, role, dims)):
                 bind(label, extent, role)
         else:
             raise ValueError(f"unknown role {role!r}")

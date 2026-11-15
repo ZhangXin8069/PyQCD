@@ -1102,7 +1102,11 @@ inline int v3_run_step(const Step& step, const CblasApi& api, const Slot& left,
      * batch 无关。
      *
      * 其余布局（batch 轴与 M/K 交错、或轴序既非恒等也非组交换）仍走 pack：那时
-     * 块在源里不连续，BLAS 的 lda/ldb 表达不出来。 */
+     * 块在源里不连续，BLAS 的 lda/ldb 表达不出来。
+     *
+     * 判定**按侧独立**：两侧各自的上面这条判据只决定该侧是否 gather，互不牵连。
+     * 语料静态统计（``_topology_kernel_gen`` 全 8638 条方程、distill 尺寸）121724 步
+     * 里有 65053 步「一侧可直连、另一侧不可」，旧写法把它们整块双 pack。 */
     const int row_rank = step.row_rank();
     const int col_rank = step.col_rank();
     bool a_direct_plain = true;
@@ -1135,21 +1139,22 @@ inline int v3_run_step(const Step& step, const CblasApi& api, const Slot& left,
             b_direct_trans = false;
         }
     }
-    /* 每 batch 一块的元素数，也是直连时的源偏移步长。 */
+    /* 每 batch 一块的元素数，直连与 pack 两侧共用同一个 batch 偏移步长：直连侧是源
+     * 里的连续板（``count_rows*count_inner`` / ``count_inner*count_cols``），pack 侧
+     * 恰好是规范序缓冲里同样的板。 */
     const int64_t a_block = info.count_rows * info.count_inner;
     const int64_t b_block = info.count_inner * info.count_cols;
-    /* 越界兜底：纯轴置换下 ``count_batch * a_block`` 应**恰好**等于源元素数，
-     * 不等就说明轴序/长度推演与源不一致 —— fail closed 交给 pack（再错由调用方
+    /* **逐侧独立判定**：一侧能直连就只打包另一侧，不再因为另一侧不可直连而把两侧
+     * 一起 gather。``a_direct_plain``/``a_direct_trans`` 是轴序判据，下面的越界兜底
+     * 也是逐侧的：纯轴置换下 ``count_batch * block`` 应**恰好**等于该侧源元素数，
+     * 不等就说明轴序/长度推演与源不一致 —— 该侧 fail closed 转 pack（再错由调用方
      * 回落通用执行器），绝不让 BLAS 读到源张量之外。 */
-    const bool use_direct = (a_direct_plain || a_direct_trans) &&
-                            (b_direct_plain || b_direct_trans) &&
-                            info.count_rows <= std::numeric_limits<int>::max() &&
-                            info.count_cols <= std::numeric_limits<int>::max() &&
-                            info.count_inner <= std::numeric_limits<int>::max() &&
-                            a_block > 0 && a_block <= a_total &&
-                            info.count_batch <= a_total / a_block &&
-                            b_block > 0 && b_block <= b_total &&
-                            info.count_batch <= b_total / b_block;
+    const bool a_direct = (a_direct_plain || a_direct_trans) &&
+                          a_block > 0 && a_block <= a_total &&
+                          info.count_batch <= a_total / a_block;
+    const bool b_direct = (b_direct_plain || b_direct_trans) &&
+                          b_block > 0 && b_block <= b_total &&
+                          info.count_batch <= b_total / b_block;
 
     if (step_trace_enabled()) {
         std::fprintf(stderr,
@@ -1161,55 +1166,66 @@ inline int v3_run_step(const Step& step, const CblasApi& api, const Slot& left,
                      static_cast<long long>(info.count_cols),
                      a_direct_plain ? "plain" : (a_direct_trans ? "trans" : "pack"),
                      b_direct_plain ? "plain" : (b_direct_trans ? "trans" : "pack"),
-                     use_direct ? "direct" : "pack");
+                     (a_direct && b_direct)
+                         ? "direct"
+                         : (a_direct ? "direct-a" : (b_direct ? "direct-b" : "pack")));
     }
 
-    if (use_direct) {
-        /* lda/ldb 是源的行长：plain 时 A 是 [M][K]（行长 K）、B 是 [K][N]（行长 N）；
-         * trans 时 A 的源是 [K][M]（行长 M）、B 的源是 [N][K]（行长 K）。 */
-        const int lda = a_direct_plain ? static_cast<int>(info.count_inner)
-                                       : static_cast<int>(info.count_rows);
-        const int ldb = b_direct_plain ? static_cast<int>(info.count_cols)
-                                       : static_cast<int>(info.count_inner);
-        const bool trans_a = a_direct_trans && !a_direct_plain;
-        const bool trans_b = b_direct_trans && !b_direct_plain;
-        const T* a_base = static_cast<const T*>(left.read());
-        const T* b_base = static_cast<const T*>(right.read());
-        const int64_t c_block = info.count_rows * info.count_cols;
-        for (int64_t batch = 0; batch < info.count_batch; ++batch) {
-            gemm_call_trans(api, static_cast<int>(info.count_rows),
-                            static_cast<int>(info.count_cols),
-                            static_cast<int>(info.count_inner), a_base + batch * a_block,
-                            b_base + batch * b_block, packed_output + batch * c_block,
-                            trans_a, trans_b, lda, ldb);
+    /* 每侧各自决定 base 指针、行长与转置标志：
+     *   直连 plain：源即规范序 ``[batch][M][K]`` / ``[batch][K][N]``，行长 K / N；
+     *   直连 trans：源是组交换序 ``[batch][K][M]`` / ``[batch][N][K]``，行长 M / K，
+     *              用 ``kCblasTrans`` 吸收；
+     *   pack      ：gather 后就是规范序，恒为 plain，行长 K / N。 */
+    const T* a_base = static_cast<const T*>(left.read());
+    const T* b_base = static_cast<const T*>(right.read());
+    int lda = static_cast<int>(info.count_inner);
+    int ldb = static_cast<int>(info.count_cols);
+    bool trans_a = false;
+    bool trans_b = false;
+    if (a_direct && a_direct_trans && !a_direct_plain) {
+        trans_a = true;
+        lda = static_cast<int>(info.count_rows);
+    }
+    if (b_direct && b_direct_trans && !b_direct_plain) {
+        trans_b = true;
+        ldb = static_cast<int>(info.count_inner);
+    }
+
+    std::size_t a_bytes = 0;
+    std::size_t b_bytes = 0;
+    T* packed_a = nullptr;
+    T* packed_b = nullptr;
+    if (!a_direct) {
+        a_bytes = static_cast<std::size_t>(a_count) * sizeof(T);
+        packed_a = reinterpret_cast<T*>(block_pool().acquire(a_bytes, &a_bytes));
+        if (packed_a == nullptr) {
+            return QCD_STATUS_MEMORY;
         }
-        return QCD_STATUS_OK;
+        gather_extents<T>(static_cast<const T*>(left.read()), a_stride, step.rank_a,
+                          a_labels_len, packed_a, a_count);
+        a_base = packed_a;
+    }
+    if (!b_direct) {
+        b_bytes = static_cast<std::size_t>(b_count) * sizeof(T);
+        packed_b = reinterpret_cast<T*>(block_pool().acquire(b_bytes, &b_bytes));
+        if (packed_b == nullptr) {
+            block_pool().release(reinterpret_cast<uint8_t*>(packed_a), a_bytes);
+            return QCD_STATUS_MEMORY;
+        }
+        gather_extents<T>(static_cast<const T*>(right.read()), b_stride, step.rank_b,
+                          b_labels_len, packed_b, b_count);
+        b_base = packed_b;
     }
 
-    std::size_t a_bytes = static_cast<std::size_t>(a_count) * sizeof(T);
-    T* packed_a = reinterpret_cast<T*>(block_pool().acquire(a_bytes, &a_bytes));
-    if (packed_a == nullptr) {
-        return QCD_STATUS_MEMORY;
-    }
-    gather_extents<T>(static_cast<const T*>(left.read()), a_stride, step.rank_a,
-                      a_labels_len, packed_a, a_count);
-
-    std::size_t b_bytes = static_cast<std::size_t>(b_count) * sizeof(T);
-    T* packed_b = reinterpret_cast<T*>(block_pool().acquire(b_bytes, &b_bytes));
-    if (packed_b == nullptr) {
-        block_pool().release(reinterpret_cast<uint8_t*>(packed_a), a_bytes);
-        return QCD_STATUS_MEMORY;
-    }
-    gather_extents<T>(static_cast<const T*>(right.read()), b_stride, step.rank_b,
-                      b_labels_len, packed_b, b_count);
-
+    const int64_t c_block = info.count_rows * info.count_cols;
     for (int64_t batch = 0; batch < info.count_batch; ++batch) {
-        const T* a_part = packed_a + batch * a_block;
-        const T* b_part = packed_b + batch * b_block;
-        T* c_part = packed_output + batch * info.count_rows * info.count_cols;
-        gemm_call(api, static_cast<int>(info.count_rows), static_cast<int>(info.count_cols),
-                  static_cast<int>(info.count_inner), a_part, b_part, c_part);
+        gemm_call_trans(api, static_cast<int>(info.count_rows),
+                        static_cast<int>(info.count_cols),
+                        static_cast<int>(info.count_inner), a_base + batch * a_block,
+                        b_base + batch * b_block, packed_output + batch * c_block,
+                        trans_a, trans_b, lda, ldb);
     }
+    /* 只有真正分配过的一侧需要归还；release(nullptr) 本身也安全。 */
     block_pool().release(reinterpret_cast<uint8_t*>(packed_a), a_bytes);
     block_pool().release(reinterpret_cast<uint8_t*>(packed_b), b_bytes);
     return QCD_STATUS_OK;

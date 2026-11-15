@@ -225,6 +225,7 @@ cat > "$VERSION_SCRIPT" <<'MAP'
     applyInitQcd;
     applyEndQcd;
     qcd_kupl_topology_apply;
+    qcd_kupl_topology_last_specialized;
     qcd_kupl_dedicated_apply;
     qcd_kupl_family_apply;
   local:

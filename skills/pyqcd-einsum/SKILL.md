@@ -258,10 +258,16 @@ numpy double contract  [('native', 'numpy', False, False)]
 
 | 提示 | 含义 |
 |---|---|
-| `[kernel: kupl_topology]` | 整条 v2 计划由 `qcd_kupl_topology_apply` 执行成功 |
-| `[kernel: cuda_topology]` | 同一入口的 CUDA 实现执行成功 |
+| `[kernel: kupl_topology]` | 整条计划由 `qcd_kupl_topology_apply` 执行成功；是否走 **v3 编译期步表** 看 `LAST_INFO["path"]`：`kupl_topology` = 真 v3（`specialized=True`），`kupl_topology_v2` = 步表未命中、回落 v2 通用执行器（`specialized=False`） |
+| `[kernel: cuda_topology]` | 同一入口的 CUDA 实现执行成功；CUDA 侧步表未命中直接返回 status=4，因此只要成功就是真命中 |
 | `[kernel: kupl_nucleon_2pt]` / `[kernel: kupl_3pt]` 等 | 实际跑的是分派顺序更靠前的形态专用 kernel，不是拓扑入口 |
 | `[plan-cache]` | 命中了形态但没有专用 kernel 成功执行：`out=` 非空、缺库/缺符号、操作数混合 dtype、计划超出 v2 单步 arity≤2 模型、或 kernel 内部报错；只复用计划，数值不变 |
+
+**v3 与 v2 必须分开统计（2026-11-15 起强制）**：`topology_kernels.inc` 只覆盖语料
+**基础表 2582 条**（`_topology_kernel_gen.MAX_KERNELS`），附录 6056 条不在表内。所以
+`try_topology_apply` 对附录方程会静默走 v2，而历史上它仍报 `path=kupl_topology`，
+导致 benchmark 把两类实现混在一起取中位。现在 `LAST_INFO` 增加 `specialized`，
+`path` 区分两个值；引用任何 topology 性能数字前先按 route 分组，否则结论不成立。
 
 复核方式：`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 看每次调用的标签；或先调用再读
 `_kernel_kupl.LAST_FAILURE`（**必须在调用之后读**，早读是上一次的残留值；且要按
@@ -309,20 +315,41 @@ numpy double contract  [('native', 'numpy', False, False)]
   （`_TOPOLOGY_PLAN_CACHE` 与 `_DEDICATED_PLAN_CACHE` 各自记账，实测 8 个场景
   记账偏差全为 0）；键是**调用方写的方程 + 各 shape + dtype**，整语料扫描仍会
   反复建计划，单遍扫描耗时不能当稳态。
-- KUPL 拓扑入口走 **v3 步表**（真实逐轴长度 `label_sizes`，不再要求等长超立方体）：
-  生产 `distill` 档 `S1` 实测 155.31 ms（比 `opt_einsum:dp` 的 245.28 ms 快 1.6×）。
-- **但 v3 的收缩序仍按 `PROBE_DIM=2` 定型**（详见 `pyqcd/einsum/AGENTS.md §6.2`），
-  在异形轴上是病态序（seq=500 多做 11.97× 的 MAC），实数 dtype 因此比 dedicated
-  慢 51–55×；`_TOPOLOGY_DECLINED_DTYPES` 已在分派层拒绝实数（`declined by policy`），
-  `PYQCD_EINSUM_TOPOLOGY_REAL=1` 可放开做对照。**复数根本不进 v3**
-  （`topology_apply.cpp:232` → `kSpecializedMiss` → v2 `execute_parsed_contract`），
-  所以复数测到的耗时是 v2 的，不能当 v3 健康的证据。
+- KUPL 拓扑入口走 **v3 步表**（真实逐轴长度 `label_sizes`，不要求等长超立方体）：
+  生产 `distill` 档 `S1` 实测 153.04 ms（比 `opt_einsum:dp` 的 271.49 ms 快 1.8×）。
+  **注意**：`S1` 不在 2582 条基础表内，该数字实为 `kupl_topology_v2`（v2 通用
+  执行器），引用时必须标注 route。
+- **收缩序已改为按生产尺寸定型**（2026-11-15，`plan_steps(equation, sizes)` +
+  `optimize` 固定 `auto`）：抽样 21 条语料，MAC 中位改善 222×、最差 42738×，
+  更优/持平/更差 = 17/4/0。
+- **复数已真正进入 v3**：`run_specialized` 的 dtype→`elem_kind` 覆盖四类，
+  复数额外过 `cblas_api().complex_complete()` 闸门（缺 cgemm/zgemm 时 fail closed
+  回落 v2，绝不降精度）。证据：`PYQCD_EINSUM_TOPOLOGY_TRACE=1` 下复数打印
+  `topology-specialized: ... dtype=0/1`；契约
+  `test_complex_dtypes_reach_the_v3_step_table` 钉住这一点。
+- **v3 输入侧有 direct 直连**（`kDirectPlain`/`kDirectTrans` 的运行期等价物，
+  含 `count_batch > 1` 与单侧直连）：原先只有输出侧恒等检测，输入侧无条件
+  `gather_extents`，seq=3 为此多付 32×（49 ms vs dedicated 1.49 ms）。
+- **topology 有 CPU pack-bound 守卫** `_topology_pack_bound_reason()`：按步表逐侧
+  记账（只算真正 pack 的一侧、输出侧非恒等才计 unpack），pack ≥ 1 GiB 且
+  FLOPs ≤ 1e9 即 fail closed 回落。仍被拒的例子 seq=646（绕过守卫直调原生 8.9 s
+  vs 通用 0.39 s）。
+- **真 v3 的性能口径**（只算 `path=kupl_topology`，13 条基础表 seq × 4 dtype，
+  distill，热态 3 轮中位）：中位 2.71–3.03×、最差 4.29–4.72× vs dedicated；
+  快于 dedicated 的格子 3/12（seq=9 达 0.045–0.195×，seq=1700/2000 为 0.26–0.79×）。
+- **CUDA 侧收缩序守卫**（`topology_order_acceptable`）：表内序相对"最小并集乘加
+  贪心参考序"劣化超 8× 即 fail closed。语料 2582 条中拒 1692 条；seq=510 守卫
+  关闭时 5099.88 ms、开启后回落通用路径 13.7 ms。
 - **callable / `PathOptimizer` 类型的 `optimize`**：计划缓存键需要一个稳定身份。
   2026-11-14 修掉了「两个不同 callable 共享同一 `plan_key`、第二个从未执行」的
   静默 bug（`_api._OptimizeIdentity` + `_plan_cache_optimize_key`）；契约见
   `_einsum_optimize_callable_contract`（8 项）。
 - CUDA 的 `TopologyProgram` 是**单槽**缓存（按计划字节 `memcmp`），换拓扑即覆盖；
   CUDA 拓扑入口还要求 `stream == nullptr`。
+- CUDA 描述符摘要必须用 blake2b-**128**（`_descriptor_words`）：`_specialize`
+  的索引摘要只有 96 位，零填充后前 12 字节相同、后 4 字节不同 ⇒ key 恒查不到表，
+  语料元数 7–16 的方程全部 status=4。契约
+  `test_cuda_descriptor_reaches_the_step_table_for_high_arity` 钉住这条。
 
 ### 线程档：kernel / generic 双档
 

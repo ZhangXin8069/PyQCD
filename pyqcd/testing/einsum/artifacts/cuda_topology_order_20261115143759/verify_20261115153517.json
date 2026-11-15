@@ -1,0 +1,31 @@
+{
+  "artifact": "/home/zhangxin/PyQCD/pyqcd/testing/einsum/artifacts/cuda_topology_order_20261115143759",
+  "stamp": "20261115153517",
+  "tolerance": 8,
+  "dims": {
+    "Nev": 100,
+    "Ns": 4,
+    "Mom": 1,
+    "Lt": 1,
+    "Nx": 1
+  },
+  "predicted_keep": 890,
+  "predicted_decline": 1692,
+  "runs": [
+    {
+      "dtype": "complex128",
+      "runs": 2582,
+      "accepted": 890,
+      "rejected": 1692,
+      "prediction_mismatch": 0,
+      "numeric_failures": 0,
+      "worst_relative_error": 9.896890348498893e-15,
+      "worst_seq": 1594,
+      "tolerance": 1e-09,
+      "elapsed_seconds": 967.069,
+      "failures": []
+    }
+  ],
+  "selected": 2582,
+  "seqs": []
+}

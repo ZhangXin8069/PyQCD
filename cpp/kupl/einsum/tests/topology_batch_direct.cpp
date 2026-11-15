@@ -5,10 +5,13 @@
  * 这条路只能用手工步表钉住。这里覆盖：
  *
  *   * 四种布局组合（plain/plain、trans/plain、plain/trans、trans/trans）；
+ *   * **单侧直连**四种组合（plain/pack、pack/plain、trans/pack、pack/trans）：
+ *     一侧零拷贝、另一侧必须 gather，两侧各自决定 lda/ldb 与 batch 偏移；
  *   * ``count_batch`` = 1 / 2 / 3 / 6（含 ``batch_rank == 2`` 的双 batch 轴，
  *     extents 2x3 —— 多 batch 轴的展平次序是最容易写错的地方）；
  *   * 异形轴（M/K/N 各不相等，另一例 M 组含两个轴）；
- *   * 一类**非直连**轴序（源为 [b,M1,K,M0]），确认回落 pack 后仍然正确；
+ *   * 两侧都**非直连**的轴序（A 源为 [b,M1,K,M0]，B 源为 [b,N1,N0,K]），确认
+ *     回落双 pack 后仍然正确；
  *   * 四类 dtype 各一条路径（float/double/complex64/complex128）。
  *
  * 用法（不参与库构建，纯开发期驱动）：
@@ -22,6 +25,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 #include <type_traits>
 #include <vector>
@@ -52,6 +56,14 @@ struct Step {
     bool trans_a = false;
     bool trans_b = false;
     bool scrambled_a = false;         /* 非直连轴序，见 fill_axes */
+    /* 显式轴序覆盖（canonical 轴 -> 源轴位）：用来构造**单侧**不可直连的布局。 */
+    const int* a_layout = nullptr;
+    const int* b_layout = nullptr;
+    int a_layout_rank = 0;
+    int b_layout_rank = 0;
+    /* 该用例**应当**落在哪条执行路径上：direct / direct-a / direct-b / pack。
+     * 用例名与路径无关，靠这条断言保证混合档真的被覆盖（而不是悄悄退回双侧直连）。 */
+    const char* expected = "direct";
     const char* name = "";
 };
 
@@ -69,7 +81,12 @@ void fill_axes(const Step& step, int* a_axes, int* b_axes) {
     const int row = step.row_rank;
     const int inner = step.inner_rank;
     const int col = step.col_rank;
-    if (step.scrambled_a) {
+    if (step.a_layout != nullptr) {
+        require(step.a_layout_rank == batch + row + inner, "a_layout rank mismatch");
+        for (int axis = 0; axis < batch + row + inner; ++axis) {
+            a_axes[axis] = step.a_layout[axis];
+        }
+    } else if (step.scrambled_a) {
         require(batch == 1 && row == 2 && inner == 1,
                 "scrambled layout is only defined for batch=1,row=2,inner=1");
         /* canonical [b,M0,M1,K] → 源 [b,M1,K,M0]：既非恒等也非组交换，必须 pack。 */
@@ -85,11 +102,18 @@ void fill_axes(const Step& step, int* a_axes, int* b_axes) {
                                : axis;
         }
     }
-    for (int axis = 0; axis < batch + inner + col; ++axis) {
-        b_axes[axis] = step.trans_b
-                           ? (axis < batch ? axis
-                                           : (axis < batch + inner ? axis + col : axis - inner))
-                           : axis;
+    if (step.b_layout != nullptr) {
+        require(step.b_layout_rank == batch + inner + col, "b_layout rank mismatch");
+        for (int axis = 0; axis < batch + inner + col; ++axis) {
+            b_axes[axis] = step.b_layout[axis];
+        }
+    } else {
+        for (int axis = 0; axis < batch + inner + col; ++axis) {
+            b_axes[axis] = step.trans_b
+                               ? (axis < batch ? axis
+                                               : (axis < batch + inner ? axis + col : axis - inner))
+                               : axis;
+        }
     }
 }
 
@@ -298,9 +322,57 @@ std::vector<Ref> reference(const std::vector<Ref>& a_packed, const std::vector<R
     return out;
 }
 
+/* 与 ``topology_gemm.h`` 的判据同口径复算一遍：给出该步实际会走哪条路径。
+ * 这是独立实现（只看轴序与分组秩），用来断言用例真的覆盖到预期档位。 */
+const char* step_path(const Step& step) {
+    int a_axes[tg::kMaxRank];
+    int b_axes[tg::kMaxRank];
+    fill_axes(step, a_axes, b_axes);
+    const int batch = step.batch_rank;
+    const int row = step.row_rank;
+    const int inner = step.inner_rank;
+    const int col = step.col_rank;
+    bool a_plain = true;
+    bool a_trans = true;
+    bool b_plain = true;
+    bool b_trans = true;
+    for (int axis = 0; axis < batch + row + inner; ++axis) {
+        if (a_axes[axis] != axis) {
+            a_plain = false;
+        }
+        const int swapped = axis < batch ? axis
+                                        : (axis < batch + row ? axis + inner : axis - row);
+        if (a_axes[axis] != swapped) {
+            a_trans = false;
+        }
+    }
+    for (int axis = 0; axis < batch + inner + col; ++axis) {
+        if (b_axes[axis] != axis) {
+            b_plain = false;
+        }
+        const int swapped = axis < batch ? axis
+                                        : (axis < batch + inner ? axis + col : axis - inner);
+        if (b_axes[axis] != swapped) {
+            b_trans = false;
+        }
+    }
+    const bool a_direct = a_plain || a_trans;
+    const bool b_direct = b_plain || b_trans;
+    if (a_direct && b_direct) {
+        return "direct";
+    }
+    return a_direct ? "direct-a" : (b_direct ? "direct-b" : "pack");
+}
+
 /* 跑一个用例 + 一个 dtype。``T`` 与 ``Ref`` 元素布局必须二进制同构（直传 BLAS）。 */
 template <typename T, typename Ref>
 void run_case(const Step& step, int elem_kind, double tolerance) {
+    const char* path = step_path(step);
+    if (std::strcmp(path, step.expected) != 0) {
+        std::fprintf(stderr, "FAIL: %s classified as %s, case expects %s\n", step.name, path,
+                     step.expected);
+        std::exit(1);
+    }
     const Blob blob = build_blob(step);
     const int batch = product(step.batch_extent, step.batch_rank);
     const int rows = product(step.row_extent, step.row_rank);
@@ -375,7 +447,7 @@ void run_case(const Step& step, int elem_kind, double tolerance) {
         std::fprintf(stderr, "FAIL: %s rel=%.3e > %.0e\n", step.name, worst, tolerance);
         std::exit(1);
     }
-    std::printf("  ok  %-32s rel=%.3e\n", step.name, worst);
+    std::printf("  ok  %-34s %-9s rel=%.3e\n", step.name, path, worst);
 }
 
 }  // namespace
@@ -385,9 +457,20 @@ int main() {
     require(api.complete(), "this BLAS must export cblas_sgemm/cblas_dgemm");
     require(api.complex_complete(), "this BLAS must export cblas_cgemm/cblas_zgemm");
 
+    /* 非直连轴序（rank 4）：既非恒等也非组交换，该侧必须 gather。
+     *   A: canonical [b,M0,M1,K] → 源 [b,M1,K,M0]
+     *   B: canonical [b,K,N0,N1] → 源 [b,N0,K,N1] */
+    static const int kAPack[4] = {0, 3, 1, 2};
+    static const int kBPack[4] = {0, 2, 1, 3};
+    /* 双 batch 轴的非直连轴序：batch 被 M/N 轴隔开，块在源里不连续。
+     *   A: canonical [b0,b1,M,K] → 源 [b0,M,b1,K]
+     *   B: canonical [b0,b1,K,N] → 源 [b0,N,b1,K] */
+    static const int kAPack2[4] = {0, 2, 1, 3};
+    static const int kBPack2[4] = {0, 2, 3, 1};
+
     std::vector<Step> cases;
     auto add = [&](const char* name, int batch_rank, int batch0, int batch1, bool trans_a,
-                   bool trans_b) {
+                   bool trans_b, const char* expected = "direct") {
         Step step;
         step.name = name;
         step.batch_rank = batch_rank;
@@ -395,6 +478,7 @@ int main() {
         step.batch_extent[1] = batch1;
         step.trans_a = trans_a;
         step.trans_b = trans_b;
+        step.expected = expected;
         cases.push_back(step);
     };
     /* 单 batch 轴：M=3、K=4、N=2（全部异形），四种布局组合。 */
@@ -406,9 +490,68 @@ int main() {
     /* 双 batch 轴：2x3 → count_batch = 6，展平次序必须与规范 batch 序一致。 */
     add("batch2 plain/plain", 2, 2, 3, false, false);
     add("batch2 trans/trans", 2, 2, 3, true, true);
+
+    /* ---- 单侧直连：一侧恒等/组交换、另一侧轴序不可直连 ----------------
+     * 共用几何：单 batch 轴、M 组两轴（2x3=6）、K=4、N 组两轴（2x5=10），
+     * 全部异形，且 count_batch > 1 时 batch 偏移必须逐侧正确。 */
+    auto add_mixed = [&](const char* name, int batch_extent, bool trans_a, bool trans_b,
+                         const int* a_layout, const int* b_layout, const char* expected) {
+        Step step;
+        step.name = name;
+        step.batch_rank = 1;
+        step.batch_extent[0] = batch_extent;
+        step.row_rank = 2;
+        step.row_extent[0] = 2;
+        step.row_extent[1] = 3;
+        step.inner_rank = 1;
+        step.inner_extent[0] = 4;
+        step.col_rank = 2;
+        step.col_extent[0] = 2;
+        step.col_extent[1] = 5;
+        step.trans_a = trans_a;
+        step.trans_b = trans_b;
+        step.a_layout = a_layout;
+        step.b_layout = b_layout;
+        step.a_layout_rank = a_layout != nullptr ? 4 : 0;
+        step.b_layout_rank = b_layout != nullptr ? 4 : 0;
+        step.expected = expected;
+        cases.push_back(step);
+    };
+    add_mixed("batch1 plain/pack", 3, false, false, nullptr, kBPack, "direct-a");
+    add_mixed("batch1 pack/plain", 3, false, false, kAPack, nullptr, "direct-b");
+    add_mixed("batch1 trans/pack", 3, true, false, nullptr, kBPack, "direct-a");
+    add_mixed("batch1 pack/trans", 3, false, true, kAPack, nullptr, "direct-b");
+    add_mixed("batch1 pack/pack", 2, false, false, kAPack, kBPack, "pack");
+
+    /* 双 batch 轴（2x3 → count_batch = 6）上的单侧直连：直连侧的 batch 偏移按
+     * 展平后的 row-major 线性下标递增，pack 侧按 packed 缓冲的板递增。 */
+    auto add_mixed_batch2 = [&](const char* name, bool trans_a, bool trans_b,
+                                const int* a_layout, const int* b_layout, const char* expected) {
+        Step step;
+        step.name = name;
+        step.batch_rank = 2;
+        step.batch_extent[0] = 2;
+        step.batch_extent[1] = 3;
+        step.row_rank = 1;
+        step.row_extent[0] = 3;
+        step.inner_rank = 1;
+        step.inner_extent[0] = 4;
+        step.col_rank = 1;
+        step.col_extent[0] = 5;
+        step.trans_a = trans_a;
+        step.trans_b = trans_b;
+        step.a_layout = a_layout;
+        step.b_layout = b_layout;
+        step.a_layout_rank = a_layout != nullptr ? 4 : 0;
+        step.b_layout_rank = b_layout != nullptr ? 4 : 0;
+        step.expected = expected;
+        cases.push_back(step);
+    };
+    add_mixed_batch2("batch2 plain/pack", false, false, nullptr, kBPack2, "direct-a");
+    add_mixed_batch2("batch2 pack/trans", false, true, kAPack2, nullptr, "direct-b");
     {
-        Step step;                                  /* 非直连 → 必须回落 pack */
-        step.name = "batch1 scrambled/pack";
+        Step step;                    /* A 非直连、B 恒等 → 单侧（B 侧）直连 */
+        step.name = "batch1 scrambled-A/plain-B";
         step.batch_rank = 1;
         step.batch_extent[0] = 2;
         step.row_rank = 2;
@@ -419,6 +562,7 @@ int main() {
         step.col_rank = 1;
         step.col_extent[0] = 2;
         step.scrambled_a = true;
+        step.expected = "direct-b";
         cases.push_back(step);
     }
     {

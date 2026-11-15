@@ -14,6 +14,13 @@
 dedicated 5.3e-6、两者互差 4.5e-5–1.9e-4），拿固定 1e-4 卡"互差"会把更准的那条
 判成错。判"不劣于通用"才是这条门的语义。
 
+**topology 命中按原生路线拆分**（2026-11-15 修复）：拓扑入口对"命中编译期 v3 步表"
+与"未命中后回落 v2 通用执行器"返回同样的成功码，``LAST_INFO['specialized']`` 才是
+路线。因此 ``v3_hit`` 与 ``v2_fallback`` 分开计数——把后者算成 topology 命中，正是
+"用 v2 的耗时给 v3 下结论"的来源。附录语料（seq>2582）没有步表，切到 ``--limit``
+或全量跑时出现 ``v2_fallback`` 属预期，仍会做数值检查，但不计入命中。
+CUDA 后端目前不报告路线（``route_unknown``），如实标出而不是假设成 v3。
+
 用法::
 
     python -m pyqcd.testing.einsum.verify_dtype_parity                 # KUPL, 全语料
@@ -87,7 +94,8 @@ def verify(backend: str = "kupl", dim: int = 3,
     for dtype in DTYPES:
         name = np.dtype(dtype).name
         tolerance = TOLERANCE[name]
-        stats = {label: {"hit": 0, "miss": 0, "bad": 0, "max": 0.0}
+        stats = {label: {"hit": 0, "miss": 0, "bad": 0, "max": 0.0,
+                         "v3": 0, "v2": 0, "route_unknown": 0}
                  for label, _ in entries}
         for task in selected:
             host_operands = _operands(task.equation, dim, dtype, task.seq)
@@ -119,6 +127,15 @@ def verify(backend: str = "kupl", dim: int = 3,
                     continue
                 actual = _as_host(result)
                 stats[label]["hit"] += 1
+                if label == "topology":
+                    # 返回非 None ≠ 命中 v3：语料外方程一律由 v2 通用执行器完成。
+                    route = module.LAST_INFO.get("specialized")
+                    if route is True:
+                        stats[label]["v3"] += 1
+                    elif route is False:
+                        stats[label]["v2"] += 1
+                    else:
+                        stats[label]["route_unknown"] += 1
                 if np.dtype(actual.dtype) != np.dtype(dtype) or \
                         actual.shape != reference.shape or \
                         not np.isfinite(actual).all():
@@ -141,7 +158,13 @@ def verify(backend: str = "kupl", dim: int = 3,
                           f"{limit:.0e} (generic vs truth {baseline:.0e})")
         for label, _ in entries:
             item = stats[label]
-            print(f"{name:11s} {label:10s} hit={item['hit']:5d} "
+            if label == "topology":
+                # topology 行不给"hit"，只给可分辨的两条路线：v2 回落不是命中。
+                head = (f"v3_hit={item['v3']:5d} v2_fallback={item['v2']:5d} "
+                        f"route_unknown={item['route_unknown']:4d}")
+            else:
+                head = f"hit={item['hit']:5d}"
+            print(f"{name:11s} {label:10s} {head} "
                   f"miss={item['miss']:5d} bad={item['bad']:3d} "
                   f"max_rel={item['max']:.2e} tol={tolerance:.0e}")
     print("PASS" if failures == 0 else f"FAIL ({failures} cells)")

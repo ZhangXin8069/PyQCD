@@ -8,7 +8,10 @@
   由原生 2x2 实测通过后才启用。未启用的 dtype 一律返回 ``None`` 回落，**绝不降级成
   单精度**，而且"探测没过"与"契约外 dtype"必须给出可区分的原因。每次成功下发都会
   把 plan 字节数、操作数个数、`out` 模式、被复制的操作数下标与 offsets 记进
-  ``LAST_INFO``。
+  ``LAST_INFO``；其中 ``specialized`` 是路线：``True`` + ``path='kupl_topology'``
+  表示真的命中了编译期 v3 步表，``False`` + ``path='kupl_topology_v2'`` 表示未命中
+  步表、由 v2 通用执行器完成。**两条路的返回码与数值都相同**，只有性能含义不同，
+  所以任何"拓扑性能"结论都必须先看这个字段。
   **能力与选路是两层**：``TOPOLOGY_DTYPES`` / ``topology_dtypes()`` 声明"原生能跑
   哪四类"，``_TOPOLOGY_DECLINED_DTYPES`` 才是"分派要不要真的走它"。实数档当前被
   策略挡在分派层（见 ``_topology_dtype_declined``），设
@@ -337,66 +340,189 @@ def _topology_dtype_reason(dtype: np.dtype) -> str | None:
 _ENTRY_LOCK = threading.Lock()
 
 
-def _topology_pack_bound_reason(subscripts: str,
-                                operands: Sequence[Any]) -> str | None:
-    """topology 路径的 CPU 预算守卫：pack 流量压倒 GEMM 时劝回落。
+def _label_product(labels: Sequence[Any], sizes: dict[Any, int]) -> int:
+    """一张按 ``labels`` 张开的张量有多少元素（``sizes`` 缺项返回 0）。"""
+    total = 1
+    for label in labels:
+        extent = sizes.get(label)
+        if extent is None:
+            return 0
+        total *= int(extent)
+    return total
 
-    与 :func:`_cpu_plan_fallback_reason` 同一判据（``pack_bytes`` 超 1 GiB 且
-    FLOPs 不足 1e9 即"pack-bound"），区别是这里喂给它的是 **version-2 计划**的
-    步序列——两套 plan 格式不通用（v2 magic ``0x51434532`` vs dedicated
-    ``0x31414451``），所以统计必须自己算。
 
-    为什么需要这道门：seq=646（``amwq`` 四轴各 100，distill 尺寸）的输出本身就是
-    1e8 元素，而它只做 1.08e8 次乘加。任何实现都得写下这 800 MB，但 topology 还会
-    在中间体上做整块 pack/unpack，实测 5.2 s；dedicated 早就被同一个判据拒掉，
-    topology 缺这道门就会把它当成"命中最优路径"，比回落通用路径还慢。
+def _side_input_kind(axes: Sequence[int], batch_rank: int,
+                     first_rank: int, second_rank: int) -> str:
+    """一侧输入的布局类别，判据与 ``v3_run_step`` 逐行同口径。
+
+    原生在 ``topology_gemm.h::v3_run_step`` 里对每一侧独立判两件事：
+
+    * ``plain``：``a_axes[axis] == axis``，源本身即规范序，直接交给 BLAS；
+    * ``trans``：源是「组交换」序——batch 轴保持在前，后两组整体互换
+      （A 是 ``[batch][K][M]``、B 是 ``[batch][N][K]``），由 ``kCblasTrans`` 吸收。
+
+    两者都不满足就是 ``pack``：必须 gather 成规范序，那才是唯一要计的 pack 流量。
+    ``first_rank``/``second_rank`` 是该侧规范序里前/后两组的秩：A 侧为
+    ``(M, K)``、B 侧为 ``(K, N)``，所以两侧共用这一个实现（原生的两段循环也只差
+    这两个秩）。返回的字符串与原生诊断行的 ``a=``/``b=`` 字段逐字相同。
     """
-    from ._api import contract_path
-    from ._native_plan import _simulate_plan
+    plain = True
+    trans = True
+    for axis, source in enumerate(axes):
+        if source != axis:
+            plain = False
+        if axis < batch_rank:
+            swapped = axis
+        elif axis < batch_rank + first_rank:
+            swapped = axis + second_rank
+        else:
+            swapped = axis - first_rank
+        if source != swapped:
+            trans = False
+    if plain:
+        return "plain"
+    return "trans" if trans else "pack"
+
+
+def _topology_step_records(plan: Any) -> list[dict[str, Any]] | None:
+    """解 plan → 逐步的 GEMM 分组、两侧直连判定与输出是否规范序。
+
+    这是**唯一**把 :func:`_gemm_layout`（轴序分组，与 dedicated/步表同口径）与
+    :func:`_side_input_kind`（``v3_run_step`` 的直连判据）组合起来的地方：
+    :func:`_topology_pack_bound_reason` 只做记账，契约用例把同一批记录与原生
+    ``PYQCD_EINSUM_TOPOLOGY_TRACE=1`` 的逐步诊断行逐行对账，因此两边的判定
+    不可能各写一套。字段与原生诊断行一一对应：
+
+    ``batch``/``m``/``k``/``n``    —— ``batch=.. M=.. K=.. N=..``
+    ``a_kind``/``b_kind``          —— ``a=plain|trans|pack``（仅轴序判据）
+    ``path``                       —— ``path=direct|direct-a|direct-b|pack``
+                                      （含越界兜底后的最终结论）
+    ``output_canonical``           —— ``run_typed_v3`` 的 ``direct``：GEMM 直接落
+                                      进目的缓冲区、没有 unpack。
+
+    一元步没有 GEMM，直接跳过；任何结构推不出来（plan 解不开、分组对不上）就
+    返回 ``None`` —— 不猜，交给原生自己判断。
+    """
+    from ._native_plan import decode_execution_plan
 
     try:
-        _, info = contract_path(subscripts, *operands)
-        _, slots, steps, sizes = _simulate_plan(info.contraction_list, operands)
+        decoded = decode_execution_plan(plan)
     except Exception:                     # noqa: BLE001 - 诊断失败不阻断下发
         return None
-    itemsize = np.dtype(operands[0].dtype).itemsize
+    sizes = {index: int(extent) for index, extent in enumerate(decoded.sizes)}
+    records: list[dict[str, Any]] = []
+    for step in decoded.steps:
+        if len(step.inputs) != 2:
+            continue                      # 一元步没有 GEMM，按通用路径计
+        left, right = step.inputs
+        result = step.output
+        layout = _gemm_layout(left, right, result, sizes)
+        if layout is None:
+            return None                   # 结构推不出来：不猜，交给原生判断
+        batch_rank = layout["batch_rank"]
+        row_rank, inner_rank = layout["m_rank"], layout["k_rank"]
+        col_rank = len(right) - batch_rank - inner_rank
+        count_batch = layout["batch"]
+        a_block = layout["m"] * layout["k"]
+        b_block = layout["k"] * layout["n"]
+        a_total = _label_product(left, sizes)
+        b_total = _label_product(right, sizes)
+        a_kind = _side_input_kind(layout["a_axes"], batch_rank, row_rank, inner_rank)
+        b_kind = _side_input_kind(layout["b_axes"], batch_rank, inner_rank, col_rank)
+        # 轴序判据之外还有原生的越界兜底：纯轴置换下 ``count_batch * block`` 应
+        # 恰好等于该侧元素数，不等就说明推演与源不一致 —— 原生据此 fail closed
+        # 转 pack，这里同步按"要 pack"计，绝不低估。
+        a_direct = (a_kind != "pack" and 0 < a_block <= a_total
+                    and count_batch <= a_total // a_block)
+        b_direct = (b_kind != "pack" and 0 < b_block <= b_total
+                    and count_batch <= b_total // b_block)
+        if a_direct and b_direct:
+            path = "direct"
+        elif a_direct:
+            path = "direct-a"
+        elif b_direct:
+            path = "direct-b"
+        else:
+            path = "pack"
+        records.append({
+            "batch": count_batch,
+            "m": layout["m"], "k": layout["k"], "n": layout["n"],
+            "a_kind": a_kind,
+            "b_kind": b_kind,
+            "path": path,
+            "output_canonical": layout["c_axes"] == list(range(len(result))),
+            "a_direct": a_direct,
+            "b_direct": b_direct,
+            "a_elements": count_batch * a_block,
+            "b_elements": count_batch * b_block,
+            "c_elements": count_batch * layout["m"] * layout["n"],
+        })
+    return records
+
+
+def _topology_pack_bound_reason(plan: Any, itemsize: int) -> str | None:
+    """topology 路径的 CPU 预算守卫：pack 流量压倒 GEMM 时劝回落。
+
+    判据与 :func:`_cpu_plan_fallback_reason` 相同（``pack_bytes`` 超 1 GiB 且
+    FLOPs 不足 1e9 即"pack-bound"），但**流量模型必须与原生执行器同口径**，
+    否则结构上本来零拷贝的计划会被误拒。三点逐条对齐 ``topology_gemm.h``：
+
+    1. **步序来自真正下发的 plan**：``decode_execution_plan`` 解的就是
+       :func:`_topology_plan` 编码、交给原生同一份字节流，而不是另跑一遍
+       ``_simulate_plan``。v3 步表与这份 plan 同源（``_topology_kernel_gen.plan_steps``
+       用同一个 ``contract_path(optimize="auto")`` 在生产尺寸上求序，再 ``decompose``
+       出 ``a_axes``/``b_axes``/``c_axes``）。**必须按生产尺寸**：步表的收缩序在
+       生成期定型，等长小 dim 下 greedy 的次序会不同（实测 seq=379 在 dim=3 就换了
+       一条路径），而生产尺寸下两者逐步一致 —— 契约用例对 seq=3/855/2 的生产尺寸
+       逐 step 与原生 ``PYQCD_EINSUM_TOPOLOGY_TRACE=1`` 对账（本修复期间对
+       seq=379/646 也做过同样的全 13 步对账）。
+    2. **输入侧逐侧判直连**（``v3_run_step``）：恒等序或组交换序的一侧零拷贝，
+       只有另一侧真的要 gather。旧实现按"两侧都 pack"估上界，而语料里大量步骤
+       是单侧直连（``_topology_kernel_gen`` 的静态统计：121724 步中 65053 步
+       "一侧可直连、另一侧不可"）。
+    3. **输出侧**（``run_typed_v3`` 的 ``direct = step_output_is_canonical(step)``）：
+       ``c_axes`` 恒等于规范序时 GEMM 直接落进目的缓冲区，没有 unpack 流量。
+       旧实现无条件给最终输出记 2×，于是 seq=379/845 这类"输入全直连 + 输出全
+       规范序"的计划被算成 3.04 GiB 判死，而原生实测流量只有 0.0007 GiB。
+       这一项与 dedicated 的 ``_plan_statistics`` 同口径（它也只在 ``c_axes``
+       非恒等时计 ``c_elements``）。
+    4. **FLOPs 按真实 GEMM 循环计**：``count_batch * rows * cols * inner`` 次乘加
+       —— ``v3_run_step`` 对每个 batch 调一次 ``M×N×K`` 的 gemm。旧写法里 ``m``/
+       ``n`` 已经含了 batch，再乘一次 batch，高 batch 计划因此被高估、门槛等于被
+       架空；对齐后 6 条高 batch 的附录 seq 在 ``distill_curr`` 下重新落进判据内
+       （``distill`` 下 0 条）。
+
+    为什么需要这道门：seq=646（``amwq`` 四轴各 100，distill 尺寸）的输出本身就是
+    1e8 元素且末步 ``c_axes=[2,3,1,0]``（必须 unpack），只用 1.08e8 次乘加。任何
+    实现都得写下这 800 MB，但 topology 还会在中间体上整块 pack/unpack：绕过守卫
+    直调原生实测 **8.9 s**，而通用路径 0.39 s（23×）。dedicated 早就被同一个判据
+    拒掉，topology 缺这道门就会把它当成"命中最优路径"——修复后它仍然被拒
+    （末步 3.05 GiB unpack 流量）。seq=369/845 同属这一类：它们的**输入侧**确实
+    全可直连（因此新口径把估算从 3.36 GB 降到 3.20 GB），但末步同样是 1e8 元素的
+    非规范序输出，原生实测 7.8/8.0 s vs 通用路径 0.57 s —— 只修输入侧就放行会把
+    13–14× 的回归当成收益。
+
+    口径的边界：本模型描述的是 **v3 步表执行器**。未命中步表时走 v2 通用执行器
+    （``run_step`` 两侧都 gather），那条路线的流量只会更多，因此这里是它的下界。
+    两档生产尺寸下逐 seq 实测（同一判据）：
+    ``distill`` 放行 32 条（全部是 v3 命中的基础 seq，0 条转为拒绝）；
+    ``distill_curr`` 放行 62 条（2 条基础 seq + 60 条附录 v2），另有 6 条附录 seq
+    转为拒绝（全部来自上面第 4 点）。放行的附录 seq 走 v2，实测与通用路径持平
+    （seq=7822 155.5 vs 149.3 ms，seq=7989 130.5 vs 127.6 ms），没有因此变慢。
+    """
+    records = _topology_step_records(plan)
+    if records is None:
+        return None                       # 推不出结构：不猜，交给原生判断
     flops = 0
     pack_bytes = 0
-    for _positions, terms, result in steps:
-        if len(terms) != 2:
-            continue                      # 一元步没有 GEMM，按通用路径计
-        left, right = terms
-        extent = {}
-        missing = False
-        for label in set(left) | set(right) | set(result):
-            if label not in sizes:
-                missing = True
-                break
-            extent[label] = int(sizes[label])
-        if missing:
-            continue                      # 标签尺寸不全：不猜，交给原生自己判断
-        seen = set(left) & set(right)
-        batch = [ch for ch in left if ch in seen and ch in result]
-        inner = [ch for ch in left if ch in seen and ch not in result]
-        rows = [ch for ch in left if ch not in seen]
-        cols = [ch for ch in right if ch not in seen]
-
-        def count(labels: Sequence[str]) -> int:
-            total = 1
-            for ch in labels:
-                total *= extent[ch]
-            return total
-
-        m, n, k = count(batch) * count(rows), count(batch) * count(cols), count(inner)
-        flops += 2 * m * n * k
-        # pack 只在对**非恒等**轴序时发生；这里保守按两侧都需 pack 计（上界）。
-        pack_bytes += 2 * itemsize * (count(left) + count(right))
-    # 中间体也要进出 pack 缓冲区：seq=646 的 1.67 GB 几乎全在这里，只算输入
-    # 张量会得到 0.06 GiB 而漏判。``slots`` 是每一步的中间结果形状。
-    for slot in slots:
-        shape = tuple(int(extent) for extent in getattr(slot, "shape", ()) or ())
-        if shape:
-            pack_bytes += 2 * itemsize * int(np.prod(shape, dtype=np.int64))
+    for record in records:
+        flops += 2 * record["batch"] * record["m"] * record["n"] * record["k"]
+        if not record["a_direct"]:
+            pack_bytes += 2 * itemsize * record["a_elements"]
+        if not record["b_direct"]:
+            pack_bytes += 2 * itemsize * record["b_elements"]
+        if not record["output_canonical"]:
+            pack_bytes += 2 * itemsize * record["c_elements"]
     if pack_bytes >= _HEAVY_PACK_MIN_BYTES and flops <= _HEAVY_PACK_MAX_FLOPS:
         return (f"pack-bound on CPU ({pack_bytes} pack bytes, {flops} FLOPs): "
                 f"the layout traffic dominates the arithmetic; "
@@ -417,6 +543,56 @@ def _function_topology():
             _failed_topology = True
             return None
     return _entry_topology
+
+
+# ── 路线查询：本次下发到底走了 v3 步表还是 v2 通用执行器 ─────────────────────
+# 命中编译期步表（v3，per-拓扑 GEMM 分步）与未命中后交给 version-2 通用执行器，
+# 原生返回码都是 0、数值也都正确，**返回值区分不了两者**。旧实现因此无条件写
+# ``LAST_INFO['path'] = 'kupl_topology'``：2026-11-15 的 77 格蒸馏基准里 52 格
+# （语料附录 seq>2582）实际跑的是 v2，却被当成 v3 的性能结论。
+# 原生为此提供 ``qcd_kupl_topology_last_specialized()``（线程内、语义为"最近一次
+# apply"）。缺这个符号就**无法证实**路线，入口 fail closed：宁可回落通用路径，也
+# 不给一个无法证实的 ``kupl_topology`` 标签。
+_TOPOLOGY_ROUTE_V3 = 1
+_TOPOLOGY_ROUTE_V2 = 0
+_TOPOLOGY_ROUTE_PATHS = {True: "kupl_topology", False: "kupl_topology_v2"}
+_entry_topology_route: Any = None
+_failed_topology_route = False
+
+
+def _function_topology_route():
+    """绑定 ``qcd_kupl_topology_last_specialized``；失败返回 ``None``。"""
+    global _entry_topology_route, _failed_topology_route
+    if _entry_topology_route is not None or _failed_topology_route:
+        return _entry_topology_route
+    with _ENTRY_LOCK:                       # 同 _function_topology：绑定必须单次
+        if _entry_topology_route is not None or _failed_topology_route:
+            return _entry_topology_route
+        try:
+            entry = kupl._load_library().qcd_kupl_topology_last_specialized
+        except Exception:  # noqa: BLE001 - 旧库没有这个符号
+            _failed_topology_route = True
+            return None
+        entry.argtypes = []
+        entry.restype = ctypes.c_int
+        _entry_topology_route = entry
+    return _entry_topology_route
+
+
+def _topology_specialized(entry) -> bool | None:
+    """把原生路线码翻成 ``True``(v3)/``False``(v2)；``None`` = 没有结论。
+
+    必须是**紧接 apply 之后**的同一线程调用：原生按线程保存"最近一次"的路线。
+    """
+    try:
+        value = int(entry())
+    except Exception:  # noqa: BLE001 - 查询失败等价于"没有结论"
+        return None
+    if value == _TOPOLOGY_ROUTE_V3:
+        return True
+    if value == _TOPOLOGY_ROUTE_V2:
+        return False
+    return None
 
 
 def _topology_key(subscripts: str, operands: Sequence[Any]) -> tuple[Any, ...]:
@@ -479,6 +655,11 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
 
     ``offsets`` 只能是 ``None``：numpy 视图的 ``ctypes.data`` 已经带着字节偏移，
     再叠加 offsets 会双重偏移、静默读到错位数据，因此非 None 一律 fail closed。
+
+    路线（见 ``LAST_INFO``）：``specialized=True`` 且 ``path='kupl_topology'`` 才
+    表示真的走了编译期 v3 步表；未命中步表而由 v2 通用执行器完成时写成
+    ``specialized=False`` / ``path='kupl_topology_v2'``。**两者数值都正确**，只有
+    性能含义不同 —— 把后者当成"拓扑特化"就是这条契约要防的错误结论。
     """
     LAST_INFO.clear()
     if not enabled() or not isinstance(subscripts, str):
@@ -516,6 +697,13 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
         return _fail(
             "operand_offsets must stay unused: a numpy view's data pointer already "
             "carries the byte offset, so a non-zero offset would double it")
+    # 路线查询必须在执行前就绪：拿不到它就只能给出无法证实的标签，那正是本契约要防的。
+    route_query = _function_topology_route()
+    if route_query is None:
+        return _fail(
+            "the native library cannot report whether the v3 step table ran "
+            "(qcd_kupl_topology_last_specialized missing), so a v2 fallback would be "
+            f"indistinguishable from a v3 hit; rebuild it: {_REBUILD_HINT}")
     shapes = tuple(tuple(int(extent) for extent in operand.shape)
                    for operand in operands)
     negative_key = _negative_cache_key(
@@ -525,11 +713,20 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
         return _fail(*cached_unsupported)
     try:
         plan = _topology_plan(_topology_key(subscripts, operands), subscripts, operands)
-        heavy = _topology_pack_bound_reason(subscripts, operands)
+        heavy = _topology_pack_bound_reason(plan, np.dtype(dtype).itemsize)
         if heavy is not None:
             _negative_cache_store(negative_key, f"topology declined: {heavy}", 4)
             return _fail(f"topology declined: {heavy}", 4)
         result = kupl.topology_apply(plan, operands, out, info=LAST_INFO)
+        specialized = _topology_specialized(route_query)
+        if specialized is None:
+            # 原生返回 0 却给不出路线：这次输出不能贴任何"拓扑特化"标签。丢弃结果
+            # 并让调用方走通用路径，比留下一个无法证实的 kupl_topology 更安全。
+            LAST_INFO.clear()
+            return _fail(
+                "the native topology entry returned success but did not report its "
+                "route (v3 step table vs v2 fallback), so the result cannot be "
+                "labelled; falling back to the generic path")
     except Exception as exc:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
         LAST_INFO.clear()
         status = getattr(exc, "status", None)
@@ -537,7 +734,8 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
         if status == 4:
             _negative_cache_store(negative_key, reason, 4)
         return _fail(reason, status)
-    LAST_INFO["path"] = "kupl_topology"
+    LAST_INFO["specialized"] = specialized
+    LAST_INFO["path"] = _TOPOLOGY_ROUTE_PATHS[specialized]
     return result
 
 
@@ -649,16 +847,19 @@ def _extent_map(terms: Sequence[str],
     return sizes
 
 
-def _dedicated_step(left: str, right: str, result: str,
-                    left_shape: Sequence[int], right_shape: Sequence[int]):
-    """把一次二元 einsum 步拆成 batch/M/K/N 分组与三张轴序表。
+def _gemm_layout(left: Sequence[Any], right: Sequence[Any], result: Sequence[Any],
+                 sizes: dict[Any, int]):
+    """把一次二元 einsum 步拆成 batch/M/K/N 分组与三张轴序表（**唯一**实现）。
 
     与 ``pyqcd.testing._topology_kernel_gen.decompose`` 同一分解口径，区别是
     这里带**真实轴长**（各轴不必等长），且不做广播：两侧同名轴长必须相等。
+
+    ``left``/``right``/``result`` 只按"可哈希、可比对、可 ``.index``"使用，
+    ``sizes`` 是 label → 轴长。于是同一套次序规则既能服务 ``_dedicated_step``
+    （label 是字符、轴长来自操作数形状），也能服务 :func:`_topology_pack_bound_reason`
+    （label 是 plan 的 symbol id、轴长来自 plan 的 size 表）——两条路径的轴序
+    必须逐位相同，否则 pack 估算会与原生执行对不上。
     """
-    sizes = _extent_map((left, right), (left_shape, right_shape))
-    if sizes is None:
-        return None
     left_set, right_set, out_set = set(left), set(right), set(result)
     if len(left_set) != len(left) or len(right_set) != len(right):
         return None                       # 单操作数内重复下标：不支持
@@ -676,6 +877,8 @@ def _dedicated_step(left: str, right: str, result: str,
         return None
     if len(out_set) != len(result):
         return None
+    if any(label not in sizes for label in left_set | right_set):
+        return None                       # 轴长缺项：不猜
 
     # 组内次序自由（batch/rows/inner/cols 组内谁先谁后不影响 GEMM 语义），但对
     # **打包代价**有决定性影响：某一侧的最终轴序若恰好等于它的源轴序，那次 pack
@@ -686,7 +889,7 @@ def _dedicated_step(left: str, right: str, result: str,
     # 实测（n=32，`cadb,ac->db`，m_rank=0）：原先按左操作数升序排 inner 得到
     # `[a, c]`，令 1M 元素的 `cadb` 走非连续 pack，耗时 7.94 ms；改取右操作数
     # 原序 `[c, a]` 后 `b_axes` 恒等，pack 归零，整条收缩 11.8 ms → 1.6 ms。
-    def element_count(labels: Sequence[str]) -> int:
+    def element_count(labels: Sequence[Any]) -> int:
         total = 1
         for label in labels:
             total *= sizes[label]
@@ -705,7 +908,7 @@ def _dedicated_step(left: str, right: str, result: str,
     b_order = batch + inner + cols
     c_order = batch + rows + cols
 
-    def product(labels: Sequence[str]) -> int:
+    def product(labels: Sequence[Any]) -> int:
         value = 1
         for label in labels:
             value *= sizes[label]
@@ -724,6 +927,15 @@ def _dedicated_step(left: str, right: str, result: str,
         "k": product(inner),
         "result_shape": tuple(sizes[ch] for ch in result),
     }
+
+
+def _dedicated_step(left: str, right: str, result: str,
+                    left_shape: Sequence[int], right_shape: Sequence[int]):
+    """``_gemm_layout`` 的操作数形状入口（dedicated 步表用）。"""
+    sizes = _extent_map((left, right), (left_shape, right_shape))
+    if sizes is None:
+        return None
+    return _gemm_layout(left, right, result, sizes)
 
 
 def _encode_shape(buffer: bytearray, shape: Sequence[int]) -> None:

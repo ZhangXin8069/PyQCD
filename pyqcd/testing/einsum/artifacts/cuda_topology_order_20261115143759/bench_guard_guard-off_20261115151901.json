@@ -1,0 +1,87 @@
+{
+  "label": "guard-off",
+  "stamp": "20261115151901",
+  "dtype": "complex128",
+  "dims": {
+    "Nev": 100,
+    "Ns": 4,
+    "Mom": 1,
+    "Lt": 1,
+    "Nx": 1
+  },
+  "rounds": 3,
+  "cells": [
+    {
+      "seq": 510,
+      "arity": 14,
+      "equation": "asbt,cidj,ewfx,mqnr,oupv,gkhl,ce,og,ik,su,bdf,nph,jlr,tvx->awmq",
+      "route": "cuda_topology",
+      "median_seconds": 5.099877530999947,
+      "rounds": 3,
+      "table_mac": 4004108168128,
+      "auto_mac": 105083584,
+      "ratio_vs_greedy": 381.3416750362363,
+      "table_largest": 400000000
+    },
+    {
+      "seq": 2565,
+      "arity": 16,
+      "equation": "cwdx,eufv,mgnh,oapb,ikjl,qsrt,ac,mo,gi,kq,su,bd,fnp,hj,lr,tvx->ew",
+      "route": "cuda_dedicated",
+      "median_seconds": 0.0006636000034632161,
+      "rounds": 3,
+      "table_mac": 1637023392,
+      "auto_mac": 102192,
+      "ratio_vs_greedy": 19461.961052856837,
+      "table_largest": 4000000
+    },
+    {
+      "seq": 869,
+      "arity": 10,
+      "equation": "aibj,cgdh,emfn,okpl,ce,mo,gi,bdf,np,hjl->ak",
+      "route": "cuda_dedicated",
+      "median_seconds": 0.0005703999995603226,
+      "rounds": 3,
+      "table_mac": 420248064,
+      "auto_mac": 83856,
+      "ratio_vs_greedy": 5011.544361763023,
+      "table_largest": 4000000
+    },
+    {
+      "seq": 1859,
+      "arity": 13,
+      "equation": "csdt,eqfr,mgnh,oapb,ikjl,ac,mo,gi,kq,bd,fnp,hj,lrt->es",
+      "route": "cuda_dedicated",
+      "median_seconds": 0.0005900999967707321,
+      "rounds": 3,
+      "table_mac": 452213328,
+      "auto_mac": 84384,
+      "ratio_vs_greedy": 5384.453509555277,
+      "table_largest": 4000000
+    },
+    {
+      "seq": 3,
+      "arity": 7,
+      "equation": "ambn,codp,egfh,ce,mo,bdf,nph->ag",
+      "route": "cuda_dedicated",
+      "median_seconds": 0.0004138999938732013,
+      "rounds": 3,
+      "table_mac": 4241664,
+      "auto_mac": 4081728,
+      "ratio_vs_greedy": 1.046877776593098,
+      "table_largest": 40000
+    },
+    {
+      "seq": 853,
+      "arity": 9,
+      "equation": "codp,manb,gehf,ac,em,og,bd,fn,ph->",
+      "route": "cuda_dedicated",
+      "median_seconds": 0.0004126999992877245,
+      "rounds": 3,
+      "table_mac": 290,
+      "auto_mac": 275,
+      "ratio_vs_greedy": 1.0,
+      "table_largest": 16
+    }
+  ]
+}

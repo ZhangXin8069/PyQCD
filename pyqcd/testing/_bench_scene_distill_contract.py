@@ -258,7 +258,9 @@ def test_consumers_can_consume_distill_dims():
 def test_label_sizes_cannot_express_distill_axes():
     """已知限制（锁定）：``_label_sizes`` 的等长口径**表达不出**蒸馏轴长。
 
-    它把 ``VVV`` 当 ``(Lt, Mom, Nev, Nev, Nev)``、``VDV`` 当 ``(Lt, Mom, Nev, Nev)``，
+    以**基础表**形态为准（seq 3；附录形态的大写动量标签自 2026-11-15 起绑到
+    ``Mom``，见 :mod:`pyqcd.testing._label_sizes_contract`）：它把 ``VVV`` 当
+    ``(Lt, Mom, Nev, Nev, Nev)``、``VDV`` 当 ``(Lt, Mom, Nev, Nev)``，
     且全方程只有一个 ``Nev``；``dims("distill*")`` 里 ``Nx=Lt=1``（无此轴占位）、
     ``Mom`` 是 1 或 ``Mom_curr``（可变量），于是这些占位会作为**真实轴长**漏进 peram 的轴里，
     与参考脚本的 ``(4,4,100,400)`` 之类形状无关。

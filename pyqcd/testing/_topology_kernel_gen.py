@@ -420,14 +420,19 @@ def _production_sizes(equation: str, roles: tuple[str, ...]) -> dict[str, int]:
     """由语料 ``roles`` + 生产 dims 反推每个 label 的真实长度。
 
     直接复用 ``pyqcd.einsum.bench_specialized._label_sizes``：那是本库**唯一**
-    的「角色 → 物理尺寸」权威实现（``gamma*``→``Ns``、``VVV``→``(Lt,Mom,Nev,Nev,
-    Nev)``、``VDV``→``(Lt,Mom,Nev,Nev)``、peram 剩余轴→``Nev``）。在这里另写
-    一份必然与之漂移。
+    的「角色 → 物理尺寸」权威实现（``gamma*``→``Ns``、基础表 ``VVV``/``VDV``→
+    ``(Lt, Mom, Nev, ...)``、附录形态 ``VVV``/``VDV``→``(Mom, Nev, ...)``、peram
+    剩余轴→``Nev``）。在这里另写一份必然与之漂移。
 
     生产 dims 取 ``distill`` 档（参考脚本 ``sink/source`` 端：``Nev=100``,
     ``Mom=1``）——那是语料里 peram/VVV/VDV 实际运行的那套尺寸。不取
     ``distill_curr``：两档的 label 集合一致，收缩序只取决于各轴长**相对**大小，
     ``Nev`` 从 100 变 400 是所有 peram 轴同比放大，不改变 greedy 的取舍。
+
+    口径边界：本函数只服务编译表，而 ``MAX_KERNELS = 2582`` 恰好是**基础表**的
+    全部（seq 1..2582，指标段纯小写）。附录形态（seq ≥ 2583，动量标签打头）不进
+    编译表，所以 ``_label_sizes`` 对附录形态的修正（2026-11-15）**不改变**
+    ``topology_kernels.inc`` 的字节（实测重新生成后 md5 一致）。
     """
     from ..einsum._bench_scene import dims as scene_dims
     from ..einsum.bench_specialized import _label_sizes

@@ -36,6 +36,18 @@ constexpr std::size_t kHeaderBytes = 9 * sizeof(int32_t);
 constexpr uint64_t kMaxPlanBytes = uint64_t(1) << 30;
 constexpr int32_t kMaxInputs = 1 << 16;
 
+/* 最近一次成功执行的**路线**，由 ``qcd_kupl_topology_last_specialized()`` 对上层公开。
+ *
+ * 为什么必须有这个出口：命中编译期步表（v3）与回落 v2 通用执行器的返回码都是
+ * ``QCD_STATUS_OK``，返回值与输出的数值也都正确，调用方从返回码上无法区分两者。
+ * 于是 Python 侧曾把**所有**成功下发都标成 ``kupl_topology``，v2 的耗时就记到了
+ * v3 头上（2026-11-15 的 77 格基准里 52 格实际走 v2）。
+ *
+ * 用 ``thread_local`` 而不是进程级全局量：ctypes 调用发生在调用方的 OS 线程上，
+ * 因此"先 apply 再查"读到的必然是本次调用的结果，多线程并发不会串味。
+ */
+thread_local int g_last_specialized = QCD_TOPOLOGY_ROUTE_UNKNOWN;
+
 struct PlanHeader {
     int32_t magic;
     int32_t version;
@@ -320,6 +332,9 @@ int run_specialized(const pyqcd_einsum::ExecutionPlan& execution,
 
 int apply_topology(const void* plan, long long plan_len, void* const* operands, int n_operands,
                    const long long* operand_offsets, void* out, int dtype_id) {
+    /* 任何一次新调用都先把路线重置成"未知"：早退（参数非法 / 计划不认）不会执行
+     * 任何一步，此时上一条计划的结论对调用方没有意义，绝不能让它读到。 */
+    g_last_specialized = QCD_TOPOLOGY_ROUTE_UNKNOWN;
     if (plan == nullptr || operands == nullptr || out == nullptr) {
         return QCD_STATUS_INVALID;
     }
@@ -363,14 +378,21 @@ int apply_topology(const void* plan, long long plan_len, void* const* operands, 
     }
     int64_t output_address = static_cast<int64_t>(reinterpret_cast<std::intptr_t>(out));
     /* 语料拓扑优先走编译期步表（per-拓扑 GEMM 分步）；不适配就保持原有语义，
-     * 交给 version-2 通用执行器。 */
+     * 交给 version-2 通用执行器。两条路的返回码都是 0，路线只能通过下面这个
+     * 线程内标记对上层可见——否则"v2 回落"会被读成"v3 命中"。 */
     const int specialized = run_specialized(execution, addresses, out, dtype_id);
     if (specialized == QCD_STATUS_OK) {
+        g_last_specialized = QCD_TOPOLOGY_ROUTE_V3;
         return QCD_STATUS_OK;
     }
-    return pyqcd_einsum::execute_parsed_contract(
+    const int status = pyqcd_einsum::execute_parsed_contract(
         execution, static_cast<long long>(reinterpret_cast<std::intptr_t>(addresses.data())),
         static_cast<long long>(reinterpret_cast<std::intptr_t>(&output_address)));
+    /* v2 成功才算"数是算出来的、路线是回落"；v2 也失败时保持"未知"，调用方本就会
+     * 收到非 0 状态并放弃这次结果。 */
+    g_last_specialized = (status == QCD_STATUS_OK) ? QCD_TOPOLOGY_ROUTE_V2
+                                                  : QCD_TOPOLOGY_ROUTE_UNKNOWN;
+    return status;
 }
 
 }  // namespace
@@ -388,4 +410,13 @@ extern "C" QCD_EINSUM_API int qcd_kupl_topology_apply(
     } catch (...) {
         return QCD_STATUS_INTERNAL;
     }
+}
+
+/* 查询**本线程**最近一次 ``qcd_kupl_topology_apply`` 实际走的路线。
+ *
+ * 调用方必须在一次成功（返回 0）的 apply 之后、且在同一线程上查询；中间夹进任何
+ * 别的 apply 都会改写这个值。失败或早退的 apply 让本函数返回
+ * ``QCD_TOPOLOGY_ROUTE_UNKNOWN``，此时那次调用没有产生可信的输出，路线也就无从谈起。 */
+extern "C" QCD_EINSUM_API int qcd_kupl_topology_last_specialized(void) {
+    return g_last_specialized;
 }

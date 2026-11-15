@@ -5,7 +5,19 @@
 ``distill``（``Nev=100``、``Mom=1``，见 :data:`pyqcd.einsum._bench_scene.PRODUCTION_DISTILL`）
 ——蒸馏收缩的性能结论只能用这一条，**不得**用 smoke／等长超立方体扫描替代。
 轴长由语料的 ``roles`` 反推（:func:`pyqcd.einsum.bench_specialized._label_sizes`），
-不使用 ``_label_sizes`` 的等长假设。
+不使用统一 ``dim`` 的等长假设。
+
+**route 必须分开读**（2026-11-15 补）。``DEFAULT_SEQS`` 跨两种语料形态，两条路径的
+执行器不同，``summarize()`` 的中位数是**混合口径**：
+
+* seq ≤ 2582（基础表）→ 编译表 ``path=kupl_topology``（v3 步表）；
+* seq ≥ 2583（附录形态，指标段带大写动量标签）→ ``path=kupl_topology_v2``（v2 通用
+  执行器；编译表只到 2582，对它们恒 miss）。
+
+引用这些数字时必须按 route 拆开，不能当成同一条路径的结论。同日
+``_label_sizes`` 修正了附录形态的错位绑法（大写动量标签→``Mom``、其余→``Nev``，
+见 :mod:`pyqcd.testing._label_sizes_contract`），因此附录 seq 的轴长与**此前**
+产物里的数字不再可比（此前 ``Nbd`` 被算成 ``(Lt, Mom, Nev)``）。
 
 为什么需要这个脚本
 ------------------

@@ -134,7 +134,8 @@ ENGINE_NOTES = {
     "pyqcd:generic": "specialize=False 的通用分步收缩",
     "pyqcd:auto": "默认分派（特化→原生→通用）",
     "pyqcd:dedicated": "原生固定步表（try_dedicated）",
-    "pyqcd:topology": "原生拓扑下发（try_topology_apply）",
+    "pyqcd:topology": ("原生拓扑下发（try_topology_apply）；命中判定看原生路线"
+                       "LAST_INFO['specialized']：v3=编译期步表，v2=通用执行器回落"),
     "opt_einsum:dp": "opt_einsum 动态规划路径",
     "opt_einsum:greedy": "opt_einsum 贪心路径",
     "opt_einsum:optimal": ("opt_einsum 穷举最优路径——**指数级**搜索空间，"
@@ -307,6 +308,33 @@ def _miss_kind(reason: str) -> str:
     return f"MISS({reason[:80]})"
 
 
+def _topology_route(engine: str, kupl) -> dict:
+    """本次下发实际走的路线；只有 ``pyqcd:topology`` 能给出确定结论。
+
+    原生对"命中 v3 编译期步表"与"回落 v2 通用执行器"**返回码相同、数值都正确**，
+    所以"够到非 None 就是命中"是错的判定（2026-11-15 之前的 77 格基准里有 52 格
+    因此把 v2 的耗时记到了 v3 头上）。路线只能读 ``LAST_INFO['specialized']``；
+    其它引擎会混用多个 kernel，最后写入的 LAST_INFO 未必属于本次测量，故不猜。
+    """
+    if engine != "pyqcd:topology":
+        return {"kernel_path": None, "specialized": None}
+    info = dict(kupl.LAST_INFO)
+    specialized = info.get("specialized")
+    return {"kernel_path": info.get("path"),
+            "specialized": None if specialized is None else bool(specialized)}
+
+
+def _topology_evidence(record: dict) -> str:
+    """把路线渲染成可读证据：**v2 回落不得显示成命中**。"""
+    specialized = record.get("specialized")
+    kernel_path = record.get("kernel_path") or "unknown"
+    if specialized is True:
+        return f"HIT(v3 step table) {kernel_path}"
+    if specialized is False:
+        return f"V2-FALLBACK {kernel_path}: 通用执行器，不是步表命中"
+    return "route unverified（原生没有报告 v3/v2）"
+
+
 # --------------------------------------------------------------------------- #
 # 子进程侧：一个 (scene, 方程, 引擎) 的阶段账本
 # --------------------------------------------------------------------------- #
@@ -392,7 +420,8 @@ def _worker_main(spec_path: Path) -> int:
                "notice": notice.getvalue()[-1500:],
                "path": _path_from_output(notice.getvalue()),
                "last_failure": str(kupl.LAST_FAILURE.get("reason", "")),
-               "reference_seconds": reference_seconds}
+               "reference_seconds": reference_seconds,
+               **_topology_route(engine, kupl)}
     _append_ledger(ledger, payload)
     del value, output, reference
 
@@ -498,6 +527,11 @@ def _format_row(engine: str, result: dict, flops: int, tolerance: float,
         base["rel"] = plan.get("rel")
         base["path"] = plan.get("path")
         base["last_failure"] = plan.get("last_failure")
+        base["kernel_path"] = plan.get("kernel_path")
+        base["specialized"] = plan.get("specialized")
+        if engine == "pyqcd:topology":
+            # 只有真的命中 v3 步表才算"拓扑命中"；v2 回落是通用执行器。
+            base["topology_hit"] = plan.get("specialized") is True
     if hot:
         base["samples"] = hot.get("samples")
 
@@ -540,10 +574,14 @@ def _format_row(engine: str, result: dict, flops: int, tolerance: float,
     base["ok"] = ok
     plan_ms = (plan.get("plan_seconds") or 0.0) * 1e3
     evidence = plan.get("path") or ""
-    if not evidence:
-        # dedicated/topology 返回了结果就是命中（它们的 LAST_FAILURE 为空）；
+    if engine == "pyqcd:topology":
+        # topology 的"命中"只能由原生路线判定：返回非 None 也可能是 v2 回落
+        # （语料外方程没有编译期步表），把它当命中就是本条基准历史上的错误结论。
+        evidence = _topology_evidence(plan)
+    elif not evidence:
+        # dedicated 返回了结果就是命中（它的 LAST_FAILURE 为空）；
         # specialize=False 的通用路径本来就没有提示，如实标注。
-        if engine in ("pyqcd:dedicated", "pyqcd:topology"):
+        if engine == "pyqcd:dedicated":
             evidence = "HIT"
         elif engine == "pyqcd:generic":
             evidence = "generic(specialize=False)"
@@ -661,6 +699,18 @@ def run(equations, scene_names, dtype, optimize, engines, rounds, warmup,
             print(f"  {key[0]:<14s} {key[1]:<6s} {best_py[key]:10.2f} "
                   f"{best_oe[key]:10.2f} {ratio:10.2f}")
     print("=" * 96)
+    topology_rows = [row for row in records
+                     if row.get("engine") == "pyqcd:topology"
+                     and row.get("status") == "OK"]
+    if topology_rows:
+        v3 = sum(1 for row in topology_rows if row.get("specialized") is True)
+        v2 = sum(1 for row in topology_rows if row.get("specialized") is False)
+        unknown = len(topology_rows) - v3 - v2
+        print(f"拓扑入口路线：v3 编译期步表 {v3} 格 / v2 通用执行器回落 {v2} 格"
+              + (f" / 原生未报告 {unknown} 格" if unknown else ""))
+        if v2:
+            print("  ! v2 回落的格子**不得**计入「v3 拓扑性能」"
+                  "（语料外方程没有编译期步表，那条路走的是通用执行器）")
     print(f"数值失败 {failures} 项；因内存预算跳过 {budget_hit} 项")
     if timed_out:
         print(f"TIMEOUT 未验证 {len(timed_out)} 项（不计入通过，也不当作失败）:")
