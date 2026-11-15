@@ -632,6 +632,106 @@ def test_verbose_names_the_route_that_actually_ran():
     assert "generic" in _route_of({}, "en"), _route_of({}, "en")
 
 
+def test_tolerance_is_atol_plus_rtol_and_rtol_is_reported():
+    """判定式必须是 ``rel <= atol + rtol``，且 atol/rtol 都要进报告。
+
+    回归点（2026-11-15 第三轮巡查实证）：原式是 ``rel <= atol + rtol * rel``，
+    等价于 ``rel * (1 - rtol) <= atol``。后果有二：
+
+    1. **``rtol >= 1`` 时左边恒 <= 0 → 判定无条件通过**（假 PASS）。实测
+       complex64 语料方程 rel=1.82e-07：``--rtol 0.999`` FAIL、``--rtol 1.0`` PASS。
+    2. ``rtol < 1`` 时又被无端收紧：``--rtol 0.999`` 把有效阈值压成
+       ``atol / 0.001``，用户要的"99.9% 容差"根本没生效。
+
+    本条用固定 rel 验证语义，并检查报告字段。
+    """
+    # 语义：两个相对量相加，与 rel 无关地线性放宽。
+    atol, rtol = 1e-12, 0.5
+    assert 1.8e-7 <= atol + rtol        # 0.5 的容差能放过 1.8e-7
+    assert not (1.8e-7 <= atol + 0.0)   # rtol=0 时按 atol 严格判
+    # 旧式的病：rtol>=1 恒真，且 rtol<1 反被收紧。
+    assert 1.8e-7 <= atol + 1.0 * 1.8e-7, "旧式在 rtol=1 时恒真（这正是被修的 bug）"
+    assert not (1.8e-7 <= atol + 0.999 * 1.8e-7), "旧式在 rtol=0.999 时误判 FAIL"
+
+    # 报告字段：atol/rtol/tolerance 必须都在。
+    import contextlib
+    import io
+    import json
+    import tempfile
+
+    from pyqcd.einsum import test as cli
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = f"{tmp}/r.json"
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            code = cli.main([
+                "--equation", "ij,jk->ik", "--shape", "[8,8],[8,8]->[8,8]",
+                "--device", "cpu", "--dtype", "complex128",
+                "--compare", "opt_einsum", "--rounds", "1", "--warmup", "1",
+                "--atol", "1e-12", "--rtol", "0.25", "--json", path,
+            ])
+        assert code == 0, code
+        report = json.load(open(path, encoding="utf-8"))
+    for key in ("atol", "rtol", "tolerance"):
+        assert key in report, f"报告缺 {key}：{sorted(report)}"
+    assert report["atol"] == 1e-12, report["atol"]
+    assert report["rtol"] == 0.25, report["rtol"]
+    assert abs(report["tolerance"] - (1e-12 + 0.25)) < 1e-18, report["tolerance"]
+
+
+def test_equations_the_library_accepts_are_also_accepted_by_the_cli():
+    """测试入口不得比被测库更严：对角 / 带空格 / ellipsis 三种写法都必须能跑。
+
+    回归点（2026-11-15 第三轮巡查 A-1/A-2/C-1）：CLI 曾在三道校验上用
+    ``_dedicated_kernels.parse_equation``（给原生下发的保守校验：拒绝操作数内
+    重复标签、拒绝省略号、不去空格）与裸 ``split(",")``，于是
+
+    * ``ii->i``（对角）→ rc=2，而 ``ii->i --shape "[4,4]->[4]"`` PASS；
+    * ``"ij, jk -> ik"``（逗号后有空格）→ 报"秩是 4"；
+    * ``...ij,...jk->...ik``（ellipsis）→ 所有写法都 rc=2。
+
+    三者 ``contract()`` 本身全都支持（``parser.py`` 去空格 + 展开 ellipsis）。
+    本条锁住"测试入口与库同口径"。
+    """
+    import contextlib
+    import io
+
+    from pyqcd.einsum import test as cli
+
+    cases = [
+        ("ii->i", "[4,4]", None),                       # 对角，省略输出段
+        ("ii->i", "[4,4]->[4]", None),                  # 对角，显式输出段
+        ("ij, jk -> ik", "[4,4],[4,4]", None),          # 逗号后空格
+        ("...ij,...jk->...ik", "[2,4,4],[2,4,4]", None),  # ellipsis
+    ]
+    for equation, shape, _unused in cases:
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            try:
+                code = cli.main([
+                    "--equation", equation, "--shape", shape,
+                    "--device", "cpu", "--compare", "none", "--rounds", "1",
+                ])
+            except SystemExit as exc:
+                code = exc.code
+        assert code == 0, f"{equation!r} {shape!r} 应当通过，得到 {code}"
+
+    # 反例仍必须报错（别把校验改松到什么都放行）。
+    for equation, shape in [("ii->i", "[4,5]"),        # 对角要求 4==5
+                            ("ij,jk->ik", "[4,4]")]:   # 操作数个数不符
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            try:
+                code = cli.main([
+                    "--equation", equation, "--shape", shape,
+                    "--device", "cpu", "--compare", "none", "--rounds", "1",
+                ])
+            except SystemExit as exc:
+                code = exc.code
+        assert code == 2, f"{equation!r} {shape!r} 应当报错，得到 {code}"
+
+
 def test_help_lists_specialize_and_verbose_reports_it():
     """``--help`` 是用户唯一权威来源：缺省值表必须有 ``--specialize``。
 
@@ -1128,6 +1228,8 @@ TESTS = (
     test_shape_spec_without_arrow_derives_the_output_from_the_equation,
     test_shape_spec_mismatches_are_usage_errors_not_crashes,
     test_verbose_names_the_route_that_actually_ran,
+    test_tolerance_is_atol_plus_rtol_and_rtol_is_reported,
+    test_equations_the_library_accepts_are_also_accepted_by_the_cli,
     test_help_lists_specialize_and_verbose_reports_it,
     test_compare_optimize_default_reproduces_the_old_reference_behaviour,
     test_compare_optimize_dp_reaches_the_opt_einsum_reference,

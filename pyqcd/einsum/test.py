@@ -85,10 +85,19 @@ class UsageError(SystemExit):
     写的"0 通过 / 1 数值或形状不符 / 2 参数或环境错误"一致。裸
     ``SystemExit(str)`` 的退出码是 1，会与"数值失败"混淆——脚本据此判断是
     "结果不对"还是"命令写错了"。
+
+    **消息必须自己打印**：解释器只在 ``SystemExit.code`` 是 **str** 时把它写进
+    stderr；这里 code 是 int 2，于是 ``args`` 里的文案会被**静默丢弃**——
+    21 处用法错误全都只返回 2、一个字都不说（2026-11-15 第三轮巡查实证：
+    ``--shape`` 与方程不符时 rc=2 且 stdout/stderr 皆空）。所以这里显式打到
+    stderr，并且**保留文案**在 ``args[0]`` 里供进程内捕获。
     """
 
+    code = 2
+
     def __init__(self, message: str) -> None:
-        super().__init__(message)
+        super().__init__(2, message)
+        self.message = message
         self.code = 2
 
 
@@ -458,6 +467,10 @@ MESSAGES: dict[str, dict[str, str]] = {
               "{first} vs {second}",
         "zh": "标签 {label!r} 在各操作数里的长度冲突：{first} vs {second}",
     },
+    "error.shape_equation_unparsable": {
+        "en": "cannot derive the output shape from the equation {equation!r}: {exc}",
+        "zh": "无法从方程 {equation!r} 推导输出形状：{exc}",
+    },
     "error.bracket_nested": {
         "en": "{where}: nested '[' found, {text!r}",
         "zh": "{where}: 出现嵌套的 '[', {text!r}",
@@ -748,12 +761,33 @@ def _out_shape_from_equation(equation: str, inputs: Sequence[tuple[int, ...]],
                              language: str) -> tuple[int, ...]:
     """按方程输出段，从各输入形状里查出每个输出标签的长度。
 
-    方程与输入个数必须匹配；同一标签在多个输入里出现时，길이必须一致（否则报错，
-    不静默取第一个）。``->`` 右侧为空则真的是整式归约，返回 ``()``。
-    """
-    from pyqcd.einsum._dedicated_kernels import parse_equation
+    **用库自己的子脚本解析器，不要用更严的 ``parse_equation``。**
+    ``_dedicated_kernels.parse_equation`` 是给原生下发的保守校验：它拒绝
+    "同一操作数内重复标签"（对角 ``ii->i``）、拒绝省略号、且不做去空格。
+    而 ``contract()`` 本身支持这三种写法（``parser.py`` 先 ``replace(" ","")``，
+    再按需要展开 ellipsis）。原先这里用它，导致**同一个方程**省略输出段时 rc=2、
+    补上 ``->[...]`` 却 PASS——测试入口比被测库更严，属功能缺口
+    （2026-11-15 第三轮巡查实证：``ii->i`` 配 ``[4,4]`` rc=2，配 ``[4,4]->[4]`` PASS）。
 
-    terms, output = parse_equation(equation)
+    这里走 ``parser.parse_einsum_input``：它做去空格与 ellipsis 展开，返回
+    ``(输入子脚本串, 输出子脚本串, 形状)``，与 ``contract`` 同一口径。对角标签在
+    一个操作数内重复出现时，按**该操作数自己的轴长**校验一致性（``[4,5]`` 配
+    ``ii`` 必须报错，因为它要求 4==5）。
+    """
+    from pyqcd.einsum import parser as _parser
+
+    try:
+        lhs, rhs, parsed_shapes = _parser.parse_einsum_input(
+            [equation] + [tuple(int(d) for d in shape) for shape in inputs],
+            shapes=True)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(translate("error.shape_equation_unparsable", language,
+                                   equation=equation, exc=exc)) from exc
+    terms = lhs.split(",") if lhs else []
+    # ``parser.parse_einsum_input`` 只对**整串**去空格，逗号两侧的空格会留在每个
+    # 子脚本首尾（``"ij, jk -> ik"`` 的第二个是 ``" jk "``）。原先直接 ``split(",")``
+    # 就把空格算进秩里，报"秩是 4"（2026-11-15 第三轮巡查实证 A-2）。
+    terms = [term.strip() for term in terms]
     if len(terms) != len(inputs):
         raise ValueError(translate("error.shape_count", language,
                                    given=len(inputs), expected=len(terms)))
@@ -766,11 +800,18 @@ def _out_shape_from_equation(equation: str, inputs: Sequence[tuple[int, ...]],
         for ch, extent in zip(term, shape):
             previous = label_sizes.get(ch)
             if previous is not None and previous != extent:
+                # 同一标签在不同位置长度必须一致（含 ``ii`` 这种操作数内重复）。
                 raise ValueError(translate("error.shape_conflict", language,
                                            label=ch, first=previous,
                                            second=extent))
             label_sizes[ch] = int(extent)
-    return tuple(label_sizes[ch] for ch in output)
+    try:
+        return tuple(label_sizes[ch] for ch in rhs)
+    except KeyError as missing:
+        raise ValueError(translate("error.shape_equation_unparsable", language,
+                                   equation=equation,
+                                   exc=f"output label {missing.args[0]!r} "
+                                       f"has no length")) from None
 
 
 def _parse_bracket_list(text: str, where: str, language: str = "zh"
@@ -818,11 +859,29 @@ def _parse_bracket_list(text: str, where: str, language: str = "zh"
 
 def _validate_against_equation(equation: str, shapes: Sequence[tuple[int, ...]],
                                language: str = "zh") -> None:
-    """操作数个数、秩、同标签等长——任一不符直接报错。"""
+    """操作数个数、秩、同标签等长——任一不符直接报错。
+
+    **方程侧要先按库的口径归一**（去空格 + 展开 ellipsis），否则同一个方程会因为
+    多写了个空格就被判"秩是 4"（``"ij, jk -> ik"`` 的第二个子脚本是 ``" jk "``，
+    长度 4 而形状是 ``(4,4)``），而它在 ``contract()`` 里完全合法。
+    2026-11-15 第三轮巡查实证 A-2 / C-1。
+
+    归一用 ``parser.parse_einsum_input``——与 ``contract`` 同一实现，因此对角
+    （``ii->i``）、带空格、ellipsis 三种写法都与被测库一致。归一失败时按原样
+    校验，让更具体的错误（缺 ``->``、个数不符）先报出来。
+    """
     if "->" not in equation:
         raise UsageError(translate("error.equation_needs_arrow", language))
     lhs, rhs = equation.split("->", 1)
-    terms = lhs.split(",")
+    try:
+        from pyqcd.einsum import parser as _parser
+        normalized_lhs, normalized_rhs, _ = _parser.parse_einsum_input(
+            [equation] + [tuple(int(d) for d in shape) for shape in shapes],
+            shapes=True)
+        lhs, rhs = normalized_lhs, normalized_rhs
+    except (ValueError, TypeError):
+        pass                        # 保持原样，交给下面的逐项校验报具体原因
+    terms = [term.strip() for term in lhs.split(",")]
     if len(terms) != len(shapes):
         raise UsageError(translate("error.operand_count", language,
                                    n_terms=len(terms), n_shapes=len(shapes)))
@@ -1018,9 +1077,19 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         report["rel"] = _relative_error(got_host, reference)
         report["max_abs_diff"] = float(np.max(
             np.abs(np.asarray(got_host) - np.asarray(reference)))) if np.size(got_host) else 0.0
+        # 判定式必须是 ``rel <= atol + rtol``（两者同量纲，都是**相对**量）。
+        #
+        # 原先是 ``rel <= atol + rtol * rel``，即 ``rel * (1 - rtol) <= atol``：
+        # **``rtol >= 1`` 时左边恒 <= 0，判定无条件通过**——一个能造出假 PASS 的
+        # 缺陷（2026-11-15 第三轮巡查实证：complex64 语料方程 rel=1.82e-07，
+        # ``--rtol 0.999`` FAIL 而 ``--rtol 1.0`` PASS）。而且 rtol 原先不进报告，
+        # 同一个 PASS 无法复现。现在 atol/rtol/合成阈值三项都进报告。
+        report["atol"] = float(atol)
+        report["rtol"] = float(rtol)
+        report["tolerance"] = float(atol + rtol)
         report["ok"] = bool(
             report["actual_shape"] == list(out_shape)
-            and report["rel"] <= atol + rtol * report["rel"])
+            and report["rel"] <= report["tolerance"])
         if report["rel"] != report["rel"]:      # NaN
             report["ok"] = False
     else:
@@ -1666,4 +1735,10 @@ def _peek_language(argv: Sequence[str] | None) -> str | None:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # ``UsageError`` 的退出码是 int 2，解释器不会打印 ``args`` 里的文案，所以
+    # 在这里统一把它写进 stderr（21 处 raise 点无需各自打印）。
+    try:
+        raise SystemExit(main())
+    except UsageError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
