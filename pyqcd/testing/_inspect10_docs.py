@@ -140,7 +140,8 @@ def d5() -> None:
 # ── D6 弃用内容无残留 ───────────────────────────────────────────────
 def d6() -> None:
     patterns = {
-        # 只禁 pyqcd 自己的 API 名；第三方库 Einsums 与其桥目录 cpu-einsums 保留
+        # 只禁 pyqcd 自己的 API 名（第三方库 Einsums/MatX 的桥已于 2026-11-15 移除，
+        # 这两个词现在指的是 qcd-einsum 的对外接口，仍必须无残留）
         "einsums / plan_einsums":
             r"pe\.einsums|pyqcd.*einsums\(|plan_einsums|"
             r"`einsums`|parallel_einsums|bench-einsums",

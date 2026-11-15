@@ -121,8 +121,6 @@ from pyqcd.testing import (  # noqa: F401
     test_native_install_diagnostics_contracts,
     test_einsum_zero_extent_and_noncontiguous_contracts,
     test_einsum_mixed_native_backends,
-    test_matx_einsum_contracts,
-    test_cpu_einsums_contracts,
     test_topology_kernel_contracts,
     test_specialized_query_contracts,
     test_production_perf_gate_contracts,
