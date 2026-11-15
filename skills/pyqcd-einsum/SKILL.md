@@ -75,6 +75,7 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--backend` | `auto` | auto / numpy / cupy / torch / kupl / cuda |
 | `--compare` | `numpy` | numpy / opt_einsum / **backend**（跨后端互证）/ none |
 | `--optimize` | `auto` | 同 `contract(optimize=...)` |
+| `--specialize` | `auto` | auto / true / false：auto 跟随 `PYQCD_EINSUM_SPECIALIZE`；true 强制特化；**false 强制通用路径**（排查原生内核问题的第一手段） |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一） |
 | `--rtol` | `0` | 附加相对余量 |
 | `--rounds` | `5` | 计时轮数（中位） |

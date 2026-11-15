@@ -4,6 +4,9 @@ Reads raw timings produced by ``bench_public_ab.py`` and writes
 ``docs/report_einsum_benchmark_20261109.md``; the same tables can be printed
 standalone for any JSON file. The per-case record of the published run lives in
 ``logs/einsum-benchmark-20261109.txt`` (``logs/`` tracks ``*.txt`` only).
+
+Per-equation checks go through ``python -m pyqcd.einsum.test`` (the only sanctioned
+single-equation entry since 2026-11-15); this script only renders tables/reports.
 """
 
 from __future__ import annotations

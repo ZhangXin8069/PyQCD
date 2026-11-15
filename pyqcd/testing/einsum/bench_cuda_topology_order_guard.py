@@ -18,6 +18,9 @@
     python -m pyqcd.testing.einsum.bench_cuda_topology_order_guard
     python -m pyqcd.testing.einsum.bench_cuda_topology_order_guard \
         --seqs 510,2565,869,1859,3,853 --rounds 3 --label guard-off
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本脚本负责守卫开关的批量端到端对比。
 """
 
 from __future__ import annotations

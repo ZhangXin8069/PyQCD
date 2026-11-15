@@ -262,8 +262,8 @@ def test_help_lists_every_option_with_defaults():
     parser = cli.build_parser()
     text = parser.format_help()
     for token in ("--equation", "--shape", "--scene", "--device", "--dtype",
-                  "--backend", "--compare", "--optimize", "--atol", "--rtol",
-                  "--rounds", "--warmup", "--seed", "--verbose", "--json"):
+                  "--backend", "--compare", "--specialize", "--optimize", "--atol",
+                  "--rtol", "--rounds", "--warmup", "--seed", "--verbose", "--json"):
         assert token in text, token
     # 缺省值要能在 help 里看到
     for token in ("1e-12", "complex128", "cpu"):
@@ -278,6 +278,153 @@ def test_run_end_to_end_on_cpu():
     assert result["actual_shape"] == [16, 16], result
     assert result["rel"] <= cli.DEFAULT_ATOL, result["rel"]
     assert result["seconds"] > 0, result
+
+
+# ── --specialize 三态 ───────────────────────────────────────────────────────
+#: 语料 seq=1（distill 尺寸）：在 ``_specialize`` 索引里，专供"专用路径开/关"对照。
+SPECIALIZE_EQUATION = "cadb,menf,ac,em,bd,fn->"
+SPECIALIZE_SHAPES = [(4, 4, 1, 1), (4, 4, 1, 1), (4, 4), (4, 4), (1, 1), (1, 1)]
+
+
+def _specialize_env():
+    import os
+
+    from pyqcd.einsum import _specialize
+
+    return os, _specialize
+
+
+def test_specialize_tri_state_maps_to_contract_argument():
+    """``--specialize auto/true/false`` 必须映射成 ``None/True/False`` 三态。
+
+    ``auto`` 是 ``None`` 的别名（跟随 ``PYQCD_EINSUM_SPECIALIZE``），不是 ``True``：
+    写成 ``True`` 会把环境变量关掉的专用路径强行打开，等于换了缺省行为。
+    """
+    assert cli.DEFAULT_SPECIALIZE == "auto", cli.DEFAULT_SPECIALIZE
+    assert set(cli.SPECIALIZE_MODES) == {"auto", "true", "false"}, cli.SPECIALIZE_MODES
+
+    assert cli.parse_specialize("auto") is None
+    assert cli.parse_specialize(None) is None
+    assert cli.parse_specialize("true") is True
+    assert cli.parse_specialize(True) is True
+    assert cli.parse_specialize("false") is False
+    assert cli.parse_specialize(False) is False
+    # 大小写与常见真/假写法（与 --verbose 同口径）
+    assert cli.parse_specialize("AUTO") is None
+    assert cli.parse_specialize("TRUE") is True
+    assert cli.parse_specialize("off") is False
+
+    for bad in ("bogus", "specialize", 1.5):
+        try:
+            cli.parse_specialize(bad)
+        except cli.UsageError as exc:
+            assert exc.code == 2, exc.code
+        else:
+            raise AssertionError(f"{bad!r} 本应被拒绝")
+
+
+def test_specialize_false_really_disables_the_native_path():
+    """**核心保险丝**：``--specialize false`` 必须真的不碰任何原生入口。
+
+    用一条**语料内**方程（seq=1，拓扑命中原生命中）。若 ``specialize`` 没被传到
+    ``contract()`` 底下，``LAST_INFO`` 会留下原生命中，本契约立刻失败。
+
+    反方向（auto/true 命中）只在原生库可用的机器上断言——没有 ``.so`` 的机器本来
+    就没有可命中的路径，那不算本契约的失败面。
+    """
+    os, _specialize = _specialize_env()
+    saved = os.environ.pop(_specialize.FUSED_DISABLE_ENV, None)
+    try:
+        auto = cli.run(equation=SPECIALIZE_EQUATION, shapes=SPECIALIZE_SHAPES,
+                       out_shape=(), compare="none", specialize=None,
+                       rounds=2, warmup=1)
+        assert auto["ok"], auto
+        assert auto["specialize"] == "auto", auto
+        # auto 的"实际是否启用"必须等于库自己的判定（即真的跟随了环境变量）
+        assert auto["specialize_effective"] is _specialize.enabled(None), auto
+
+        forced_off = cli.run(equation=SPECIALIZE_EQUATION, shapes=SPECIALIZE_SHAPES,
+                             out_shape=(), compare="none", specialize=False,
+                             rounds=2, warmup=1)
+        assert forced_off["ok"], forced_off
+        assert forced_off["specialize"] == "false", forced_off
+        assert forced_off["specialize_effective"] is False, forced_off
+        # 关掉专用路径后，两个原生入口都不该留下任何记录
+        assert forced_off["kernel_info"] == {}, forced_off["kernel_info"]
+        assert "specialize_warning" not in forced_off, forced_off["specialize_warning"]
+
+        if auto["kernel_info"]:
+            # 本机有原生库：auto 必须留下 path，强制 true 必须与 auto 一致
+            for info in auto["kernel_info"].values():
+                assert "path" in info, auto["kernel_info"]
+            forced_on = cli.run(equation=SPECIALIZE_EQUATION, shapes=SPECIALIZE_SHAPES,
+                                out_shape=(), compare="none", specialize=True,
+                                rounds=2, warmup=1)
+            assert forced_on["ok"], forced_on
+            assert forced_on["specialize"] == "true", forced_on
+            assert forced_on["specialize_effective"] is True, forced_on
+            assert forced_on["kernel_info"] == auto["kernel_info"], (
+                forced_on["kernel_info"], auto["kernel_info"])
+    finally:
+        os.environ.pop(_specialize.FUSED_DISABLE_ENV, None)
+        if saved is not None:
+            os.environ[_specialize.FUSED_DISABLE_ENV] = saved
+
+
+def test_specialize_is_forwarded_to_the_compare_backend_reference():
+    """``--compare backend`` 的参照路径必须拿到**同一个** ``specialize``。
+
+    否则跨后端互证会把"专用 vs 通用"当成后端差异来比较，结论失真。用同一条语料
+    方程（它会命中原生命中）双向验证：``None`` 留下 ``path``，``False`` 什么都不留。
+    """
+    import numpy as np
+
+    from pyqcd.einsum import _kernel_cuda, _kernel_kupl
+
+    operands = [np.ones(shape, dtype=np.complex128) for shape in SPECIALIZE_SHAPES]
+
+    cli._clear_kernel_info()
+    auto = cli.pe_contract(SPECIALIZE_EQUATION, operands, "numpy", None)
+    assert np.shape(auto) == (), np.shape(auto)
+    hit_kernel_info = dict(_kernel_kupl.LAST_INFO)
+    hit_cuda_info = dict(_kernel_cuda.LAST_INFO)
+
+    cli._clear_kernel_info()
+    off = cli.pe_contract(SPECIALIZE_EQUATION, operands, "numpy", False)
+    assert np.shape(off) == (), np.shape(off)
+    # 关掉专用路径：两个原生入口都不该留下记录（不论本机是否装了原生库）
+    assert _kernel_kupl.LAST_INFO == {}, _kernel_kupl.LAST_INFO
+    assert _kernel_cuda.LAST_INFO == {}, _kernel_cuda.LAST_INFO
+
+    if hit_kernel_info or hit_cuda_info:
+        # 本机有原生库：auto 必须留下 path，即上面那次断言不是空转
+        assert "path" in hit_kernel_info or "path" in hit_cuda_info, (
+            hit_kernel_info, hit_cuda_info)
+
+
+def test_help_lists_specialize_and_verbose_reports_it():
+    """``--help`` 是用户唯一权威来源：缺省值表必须有 ``--specialize``。
+
+    同时 verbose 必须打印"我要什么 / 实际是什么"，否则用户无法判断选项是否生效。
+    """
+    text = cli.build_parser().format_help()
+    assert "--specialize" in text, text
+    for token in ("auto", "true", "false", "第一手段"):
+        assert token in text, token
+
+    import contextlib
+    import io
+
+    for label, expected_effective in (("false", "False"), ("true", "True")):
+        buffer = io.StringIO()
+        with contextlib.redirect_stderr(buffer):
+            result = cli.run(equation="ij,jk->ik", shapes=[(8, 8), (8, 8)],
+                             out_shape=(8, 8), compare="none", rounds=2, warmup=1,
+                             specialize=(label == "true"), verbose=True)
+        assert result["ok"], result
+        printed = buffer.getvalue()
+        assert f"specialize: {label}（实际 {expected_effective}）" in printed, printed
+        assert "kernel   :" in printed, printed
 
 
 TESTS = (
@@ -297,6 +444,10 @@ TESTS = (
     test_single_entry_point_policy_is_declared_everywhere,
     test_help_lists_every_option_with_defaults,
     test_run_end_to_end_on_cpu,
+    test_specialize_tri_state_maps_to_contract_argument,
+    test_specialize_false_really_disables_the_native_path,
+    test_specialize_is_forwarded_to_the_compare_backend_reference,
+    test_help_lists_specialize_and_verbose_reports_it,
 )
 
 

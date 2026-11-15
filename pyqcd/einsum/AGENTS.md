@@ -275,6 +275,7 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--backend` | `auto` | 原样传给 `contract(backend=...)`；可选 auto/numpy/cupy/torch/kupl/cuda |
 | `--compare` | `numpy` | 参照：numpy / opt_einsum / **backend**（跨后端互证）/ none |
 | `--optimize` | `auto` | 同 `contract(optimize=...)` |
+| `--specialize` | `auto` | 专用内核三态：`auto`=跟随 `PYQCD_EINSUM_SPECIALIZE`；`true`=强制特化路径；`false`=**强制通用路径**（排查原生内核问题的第一手段）。主路径与 `--compare backend` 的参照路径同时生效 |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一，不是逐元素绝对阈值） |
 | `--rtol` | `0` | 附加相对余量 |
 | `--rounds` | `5` | 计时轮数（中位） |
@@ -286,6 +287,15 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 
 `--compare backend` 是**跨后端互证**：主路径跑 `--device`，参照在另一个后端上跑
 同一批张量（CPU↔GPU）。这是唯一能同时验证"两条原生路径都给对答案"的模式。
+
+`--specialize` 是**专用路径 vs 通用路径**的对照开关，三态直传
+`contract(specialize=...)`（`pyqcd/einsum/_api.py`）。实测用例：seq=856 走 dedicated
+要 8662.7 ms，`--specialize false` 的通用路径只要 2330 ms——没有这个开关就只能靠改
+环境变量，且 `--compare backend` 无法与主路径保持同一策略。`--verbose true` 会打印
+`specialize: <选择>（实际 <bool>）`，且 `false` 时 `kernel` 行必须是
+`无原生命中（通用路径）`；若仍出现 `kupl_dedicated`/`cuda_topology`，说明该参数没
+传到底层，属于必须修的 bug（契约
+`test_specialize_false_really_disables_the_native_path` 钉住）。
 
 **两条硬性口径**（改它就是改规范）：
 
@@ -474,8 +484,8 @@ dedicated 相同：pack ≥ 1 GiB 且 FLOPs ≤ 1e9 即劝回落），于是该�
 `pack_bytes`/`flops` 两个原始数。标定（complex128，`distill`/`distill_curr` 各
 32 格语料）：比值双峰，`distill` 放行格最高 0.313 / 被拒格最低 4.976，
 `distill_curr` 放行格最高 0.937 / 被拒格最低 1.748，1.0 落在两处空档内。该判据
-只作用于 dedicated；`_topology_pack_bound_reason` 仍只有绝对判据（它的流量是按步表
-重算的下界，比值阈值尚未在该口径标定）。
+只作用于 dedicated；topology 侧的比值阈值按它自己的口径单独标定，见下面
+「topology 侧跟进」一段（两条口径量的不是同一份账，数值不能互相搬）。
 
 **已知副作用（实测，未修）**：比值不看绝对规模，`distill` 下 pack 只有 KB–MB 的小
 计划也会超限——32 格里新拒 18 格。默认路径 `contract()` 实测改前→改后：
@@ -485,6 +495,60 @@ ms 等，绝对差 ≤0.55 ms），回落目标 `kupl_topology` 的入口开销�
 持平，但 seq=880（比值 1.748）4.4→10.3 ms（**2.3× 慢**）。要去掉这类误伤，把比值
 判据与 `pack_bytes >= _HEAVY_PACK_MIN_BYTES` 并列即可：新拒降到 `distill` 0 格 /
 `distill_curr` 3 格（全是 7.9 GiB 级），seq=856 仍被拒。
+
+**topology 侧跟进：`pack/flops` 比值判据（2026-11-15 补）**。`_topology_pack_bound_reason`
+现在也有两条判据，形态与 dedicated 逐字对齐：比值**与**
+`pack_bytes >= _HEAVY_PACK_MIN_BYTES`（1 GiB）并列、`flops <= 0` 时跳过、拒绝理由
+写明 `pack/flops` / `pack_bytes` / `flops` 三个数。阈值不照搬 1.0，按本口径重新标定为
+`_TOPOLOGY_PACK_RATIO_LIMIT = 2.5`。
+
+标定（全语料 8638 条 × 两档，complex128；只统计 `pack >= 1 GiB` 且 `flops > 1e9`
+的格子，绝对判据已拒的那一侧到不了这条门）：
+
+| 档 | 格数 | 比值范围 | 空档 | 1.0 / 2.0 / 2.5 / 4.0 新拒 |
+|---|---:|---|---|---:|
+| `distill` | 3802 | 0.0016..0.3222（绝对判据拒的 688 格全 ≥ 14.69） | 0.322..14.69 | 0 / 0 / **0** / 0 |
+| `distill_curr` | 5873 | 2.5e-5..15.93 | 4.07..11.57（最宽，但会放过 3.95） | 991 / 215 / **213** / 131 |
+
+`distill_curr` 没有单一空档，2.5 落在次宽空档 2.15..2.77 内、对 seq=856 的 3.950
+留 1.45 余量（3.9 只有 0.011），且不碰 `[1.0,2.15)` 那 776 格。全语料放行计数：
+`distill` 3802/3802（新拒 0）、`distill_curr` 5660/5873（新拒 213，全部
+`pack >= 7.65 GiB`）。契约：
+`_topology_kernel_contract.test_pack_ratio_guard_declines_the_pathological_plan`
+（含"抬高绝对底后必须放行"的并列性断言 + 三条不误杀反例 + 两条变异验证）。
+
+**这一步的已知代价（已实测，根因在原生侧）**：`distill_curr` 上被新拒的那一族
+（比值 ≈ 3.95、pack 8.28 GB、FLOPs 2.10e9）**不齐性**。同一份原始代码配对测
+（`python -m pyqcd.einsum.test`，`--rounds 5` 中位；kernel 开 = topology vs
+`PYQCD_EINSUM_KERNEL_KUPL=0` = 通用）：拒掉 seq=856/14/20 分别省 **4.3–9.0× / 4.1×
+/ 3.3×**，而 seq=9/3/5 分别亏 **2.3× / 5.0× / 5.3×** —— 3 快 3 慢、量级相当。
+根因不在比值：**非 `distill` 尺寸下原生步表的收缩序与运行期 plan 不是同一条路径**
+（`PYQCD_EINSUM_TOPOLOGY_TRACE=1` 实测 seq=3 原生 `M=9 K=400 N=640000`、Python 推演
+`M=4 K=640000 N=400`；seq=9/856 同样对不上）——步表在生成期按 `distill` 定型，尺寸
+一变 `auto` 就换序。所以该比值在 `distill_curr` 上量的是"另一条计划"，只有
+`distill` 口径（seq 3/855/2 逐步与原生对账通过）才是它的有效域，而那里这条门一格
+都不拒。真正的修法在原生侧：按尺寸重生成步表，或像 CUDA 侧 §6.3 那样加一道
+「收缩序可接受」守卫。
+
+**CUDA 侧同一条比值判据（2026-11-15 补）**：`_kernel_cuda._plan_fallback_reason` 原先
+只有绝对那一条，现加第四条 `_CUDA_HEAVY_PACK_RATIO_LIMIT`，形态与 CPU 侧逐字对齐
+（`flops > 0` 且 `pack >= _CUDA_HEAVY_PACK_MIN_BYTES` 且 `pack >= limit * flops`），
+阈值**按 CUDA 口径重标、不照搬 CPU 的 1.0**：complex128、语料 arity 6..16、
+`distill`/`distill_curr` 各 8638 条，在"旧三条门放行且 pack ≥ 1 GiB"的 1734 条里
+`distill` 最高 0.617、`distill_curr` 中位 1.728 / p90 1.813 / p99 2.101 / 最高 2.388，
+靶子 3.950 → 取 **3.0**（空档 2.388–3.950 内，两侧留 1.26×/1.32×）。降到 1.0 会新拒
+`distill_curr` 500 条生产计划（pack 2.1–3.1 GB）、2.0 仍新拒 30 条；这两族里 GPU 实测
+过的两格都是**好计划**（seq=8513 比值 2.388 → `cuda_dedicated` **1.249 ms** vs
+opt_einsum 531.2 ms；seq=7900 比值 2.101 → **1.133 ms** vs 338.0 ms），所以阈值必须
+高于 2.388，1.0/2.0 不取。**与 CPU 侧的一处实测差异（勿照抄 CPU 用例的断言）**：CUDA
+的 arena 底只有 3 GiB，seq=856 的 CUDA 计划 arena 是 4,219,857,152 B，所以它在这一条
+判据加进来**之前就已经被 arena 门拒掉**（GPU 实测走 `cuda_topology`，改前 21.2 ms /
+改后 21.0–27.4 ms 三样本，rel 1.08e-15，路径未变）；比值判据的价值是让结论不再依赖
+"arena 恰好超了"——归零 arena/单步 MACs 后只剩它能拒。语料层面这条门新拒 **0 格**
+（`distill` 0/8638、`distill_curr` 0/8638），即它今天只对"arena 底以下但 pack/flops
+超限"的计划生效，而这一类在生产语料里尚未出现。
+契约：`pyqcd.testing._topology_kernel_contract.test_cuda_plan_gate_rejects_pack_traffic_per_flop`
+（纯计划统计，无设备也跑）。
 
 **第三处：输入侧缺 direct 直连（2026-11-15 补，这是 32× 的真实根因）**
 

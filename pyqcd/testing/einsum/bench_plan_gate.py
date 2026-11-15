@@ -1,4 +1,8 @@
-"""Full-scene plan metrics and same-version A/B for the dedicated plan gate."""
+"""Full-scene plan metrics and same-version A/B for the dedicated plan gate.
+
+Per-equation checks go through ``python -m pyqcd.einsum.test`` (the only sanctioned
+single-equation entry since 2026-11-15); this script covers the whole scene / A-B matrix.
+"""
 
 from __future__ import annotations
 

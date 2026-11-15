@@ -26,6 +26,9 @@
     python -m pyqcd.testing.einsum.simple.workflow
     python -m pyqcd.testing.einsum.simple.workflow --nt 64 --tsep 8 --calls 3
     python -m pyqcd.testing.einsum.simple.workflow --mode run --nt 2 --tsep 1
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本脚本负责工作流级调用数折算，不替代那个入口。
 """
 
 from __future__ import annotations

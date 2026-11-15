@@ -17,6 +17,9 @@
 
     python -m pyqcd.testing.einsum.bench_dtype_matrix --backend kupl
     python -m pyqcd.testing.einsum.bench_dtype_matrix --backend cuda --dims 2,4,8
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本脚本负责 dtype×路径矩阵对比，不替代那个入口。
 """
 from __future__ import annotations
 

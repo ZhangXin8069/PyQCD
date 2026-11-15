@@ -50,6 +50,10 @@
   **另一个后端**（CPU↔GPU 互证）；``none`` 只跑不比对。
 * **形状**：``--shape`` 与 ``--equation`` 的操作数个数必须一致，且同一标签在各
   操作数里长度必须相同；不符直接报错，**不做广播猜测**。
+* **专用路径**：``--specialize auto``（缺省）跟随环境变量
+  ``PYQCD_EINSUM_SPECIALIZE``；``false`` **强制通用路径**，是排查原生内核问题的
+  第一手段；``true`` 强制走特化路径，不让它静默回落。三态的选择与"实际生效"的
+  布尔值都会写进报告与 ``--verbose true`` 的明细。
 """
 from __future__ import annotations
 
@@ -62,7 +66,8 @@ from typing import Any, Sequence
 
 import numpy as np
 
-__all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES", "DEVICES"]
+__all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES", "DEVICES",
+           "SPECIALIZE_MODES", "parse_specialize"]
 
 class UsageError(SystemExit):
     """参数或环境错误。
@@ -86,10 +91,13 @@ DEVICES = ("cpu", "gpu", "cuda")
 BACKENDS = ("auto", "numpy", "cupy", "torch", "kupl", "cuda")
 #: ``--compare``：参照实现。
 COMPARE_MODES = ("numpy", "opt_einsum", "backend", "none")
+#: ``--specialize``：三态。``auto``→(None) 跟随环境变量，``true``/``false`` 强制。
+SPECIALIZE_MODES = ("auto", "true", "false")
 
 DEFAULT_DEVICE = "cpu"
 DEFAULT_DTYPE = "complex128"
 DEFAULT_BACKEND = "auto"
+DEFAULT_SPECIALIZE = "auto"
 DEFAULT_ATOL = 1e-12
 DEFAULT_RTOL = 0.0
 DEFAULT_ROUNDS = 5
@@ -262,14 +270,20 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         rtol: float = DEFAULT_RTOL, compare: str = DEFAULT_COMPARE,
         optimize: Any = DEFAULT_OPTIMIZE, rounds: int = DEFAULT_ROUNDS,
         warmup: int = DEFAULT_WARMUP, seed: int = 0, verbose: bool = DEFAULT_VERBOSE,
+        specialize: bool | None = None,
         expected_shape: tuple[int, ...] | None = None) -> dict[str, Any]:
-    """跑一条方程的完整检查，返回结构化结果（供 CLI 与外部脚本消费）。"""
+    """跑一条方程的完整检查，返回结构化结果（供 CLI 与外部脚本消费）。
+
+    ``specialize`` 三态直传 ``contract(specialize=...)``：``None`` 跟随环境变量
+    ``PYQCD_EINSUM_SPECIALIZE``，``False`` 强制通用路径，``True`` 强制特化路径。
+    """
     import pyqcd.einsum as pe
 
     if dtype not in DTYPES:
         raise UsageError(f"error: --dtype 必须是 {DTYPES} 之一，得到 {dtype!r}")
     if compare not in COMPARE_MODES:
         raise UsageError(f"error: --compare 必须是 {COMPARE_MODES} 之一，得到 {compare!r}")
+    specialize = parse_specialize(specialize)
     if warmup < 1:
         raise UsageError(
             "error: --warmup 不能为 0：首调包含 plan 缓存/原生库绑定/JIT，"
@@ -301,6 +315,8 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         "rounds": rounds,
         "warmup": warmup,
         "optimize": str(optimize),
+        "specialize": _specialize_label(specialize),
+        "specialize_effective": _specialize_effective(specialize),
         "n_operands": len(shapes),
         "input_elements": int(sum(int(np.prod(item, dtype=np.int64)) for item in shapes)),
         "output_elements": int(np.prod(out_shape, dtype=np.int64)) if out_shape else 1,
@@ -308,8 +324,10 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
 
     # 主路径
     def call():
-        return pe.contract(equation, *operands, backend=backend, optimize=optimize)
+        return pe.contract(equation, *operands, backend=backend, optimize=optimize,
+                           specialize=specialize)
 
+    _clear_kernel_info()
     try:
         got = call()
     except Exception as exc:                    # noqa: BLE001
@@ -326,12 +344,13 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         "inputs_delta": _memory_delta(memory_before, memory_loaded),
         "peak": _memory_delta(memory_before, _memory_snapshot(xp)),
     }
+    _check_specialize_took_effect(report)
 
     # 参照
     if compare != "none":
         reference, ref_seconds, ref_note = _reference(
             compare, equation, host, operands, out_shape, np_dtype, xp,
-            optimize, rounds, warmup, device)
+            optimize, rounds, warmup, device, specialize)
         report["reference"] = ref_note
         report["reference_seconds"] = ref_seconds
         if reference is None:
@@ -364,6 +383,66 @@ def _to_host(value):
     return np.asarray(value)
 
 
+# ── 专用路径（--specialize） ────────────────────────────────────────────────
+def parse_specialize(value: bool | None | str) -> bool | None:
+    """把 ``auto|true|false``（或 ``None``/``bool``）规范成 ``bool | None``。
+
+    ``None`` 与 ``auto`` 等价（跟随 ``PYQCD_EINSUM_SPECIALIZE``），**不做**环境变量
+    读取——是否真正启用由 ``contract()`` 决定，本入口只负责传递意图。
+    """
+    if value is None or value is False or value is True:
+        return value
+    text = str(value).strip().lower()
+    if text == "auto":
+        return None
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off"):
+        return False
+    raise UsageError(
+        f"error: --specialize 必须是 {SPECIALIZE_MODES} 之一，得到 {value!r}")
+
+
+def _specialize_label(specialize: bool | None) -> str:
+    """``bool | None`` → CLI 口径的三态名。"""
+    if specialize is None:
+        return "auto"
+    return "true" if specialize else "false"
+
+
+def _specialize_effective(specialize: bool | None) -> bool:
+    """本次调用实际是否启用专用路径（``auto`` 时读库的判定，不重复解释环境变量）。"""
+    from pyqcd.einsum import _specialize as specialize_module
+    return bool(specialize_module.enabled(specialize))
+
+
+def _clear_kernel_info() -> None:
+    """清空原生入口的 ``LAST_INFO``，让报告只反映**本次**调用。
+
+    原生路径本身在每次下发前会 ``clear()``，但 ``specialize=False`` 根本不会进原生
+    路径，残留的上一次记录会被误读成"关掉专用路径后仍然命中"。
+    """
+    from pyqcd.einsum import _kernel_cuda, _kernel_kupl
+
+    for module in (_kernel_kupl, _kernel_cuda):
+        info = getattr(module, "LAST_INFO", None)
+        if isinstance(info, dict):
+            info.clear()
+
+
+def _check_specialize_took_effect(report: dict[str, Any]) -> None:
+    """``specialize=false`` 却留下原生命中 = 参数没传下去，必须显式记下。
+
+    这条只在 ``--specialize false`` 时有意义：关闭专用路径的调用不该碰任何原生
+    入口，因此 ``kernel`` 字段必须为空。
+    """
+    if report.get("specialize_effective") or not report.get("kernel_info"):
+        return
+    report["specialize_warning"] = (
+        "specialize=false 本应强制通用路径，但仍观察到原生命中 "
+        f"{sorted(report['kernel_info'])}——--specialize 没有传到底层 contract()")
+
+
 def _kernel_info() -> dict[str, Any]:
     """读 KUPL/CUDA 入口最近一次调用的路线信息（不触发加载）。"""
     info: dict[str, Any] = {}
@@ -379,7 +458,7 @@ def _kernel_info() -> dict[str, Any]:
 
 
 def _reference(compare, equation, host, operands, out_shape, dtype, xp,
-               optimize, rounds, warmup, device):
+               optimize, rounds, warmup, device, specialize=None):
     """按 ``--compare`` 取参照结果，返回 ``(数组或 None, 秒数或 None, 说明)``。"""
     if compare == "numpy":
         def call():
@@ -411,20 +490,26 @@ def _reference(compare, equation, host, operands, out_shape, dtype, xp,
                      else [other_xp.asarray(item) for item in host])
 
         def call():
-            return pe_contract(equation, other_ops, other)
+            return pe_contract(equation, other_ops, other, specialize)
         try:
             seconds = _timed(call, warmup, rounds)
             result = _to_host(call())
-            return result, seconds, f"pyqcd.contract(backend={other!r}, {other})"
+            return result, seconds, (
+                f"pyqcd.contract(backend={other!r}, {other}, "
+                f"specialize={_specialize_label(specialize)})")
         except Exception as exc:                # noqa: BLE001
             return None, None, f"对方后端执行失败：{type(exc).__name__}: {exc}"
     return None, None, f"未知 compare 模式 {compare!r}"
 
 
-def pe_contract(equation, operands, backend):
-    """``compare='backend'`` 用：在指定后端上跑同一批张量。"""
+def pe_contract(equation, operands, backend, specialize=None):
+    """``compare='backend'`` 用：在指定后端上跑同一批张量。
+
+    ``specialize`` 与主路径同源——否则 ``--compare backend`` 会把"专用路径 vs 通用
+    路径"当成跨后端差异来比较，结论失真。
+    """
     import pyqcd.einsum as pe
-    return pe.contract(equation, *operands, backend=backend)
+    return pe.contract(equation, *operands, backend=backend, specialize=specialize)
 
 
 def _install_info() -> dict[str, Any]:
@@ -508,6 +593,10 @@ def _print_detail(report: dict[str, Any]) -> None:
     print(f"operands : {report['n_operands']} 个，共 "
           f"{report['input_elements']:,} 元素；输出 {report['out_shape']} "
           f"({report['output_elements']:,} 元素)", file=out)
+    if "specialize" in report:
+        effective = "unknown" if "specialize_effective" not in report else str(
+            bool(report["specialize_effective"]))
+        print(f"specialize: {report['specialize']}（实际 {effective}）", file=out)
     if "seconds" in report:
         print(f"time     : {report['seconds'] * 1000:.3f} ms "
               f"（warmup={report['warmup']}，rounds={report['rounds']}，中位）", file=out)
@@ -549,8 +638,10 @@ def _print_detail(report: dict[str, Any]) -> None:
     if install.get("version"):
         print(f"pyqcd    : {install['version']}  {install.get('package', '?')}",
               file=out)
-    if report.get("kernel_info"):
-        print(f"kernel   : {report['kernel_info']}", file=out)
+    if report.get("specialize_warning"):
+        print(f"warning  : {report['specialize_warning']}", file=out)
+    if "kernel_info" in report:
+        print(f"kernel   : {report['kernel_info'] or '无原生命中（通用路径）'}", file=out)
 
 
 # ── 语料反推（不写 --shape 时） ──────────────────────────────────────────────
@@ -596,8 +687,11 @@ def build_parser() -> argparse.ArgumentParser:
             "--scene distill\n\n"
             "口径: --atol 是**相对**容差（按 max|expected| 归一）；耗时先丢 --warmup "
             "次再取 --rounds 次中位，warmup 不允许 0。\n"
+            "对照: --specialize auto（跟随 PYQCD_EINSUM_SPECIALIZE）/ true（强制特化）"
+            "/ false（强制通用，排查原生内核问题的第一手段）。\n"
             "输出: 默认一行 PASS 里带 pyqcd 耗时、参照耗时、比值与内存增量；"
-            "--verbose true 另给逐项明细（含 ref time / memory / peak / pyqcd 来源）。\n"
+            "--verbose true 另给逐项明细（含 specialize 实际取值 / ref time / memory / "
+            "peak / pyqcd 来源）。\n"
             "内存采样只在计时循环之外（构造前/构造后/收尾），不影响计时。\n"
             "退出码: 0 通过 / 1 数值或形状不符 / 2 参数或环境错误。\n"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -622,6 +716,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help=("参照实现：numpy=np.einsum(greedy)、"
                               "opt_einsum=oe.contract、backend=另一后端互证、"
                               f"none=只跑不比。缺省 {DEFAULT_COMPARE}"))
+    parser.add_argument("--specialize", default=DEFAULT_SPECIALIZE,
+                        choices=SPECIALIZE_MODES,
+                        help=("专用内核三态。auto=跟随环境变量 "
+                              "PYQCD_EINSUM_SPECIALIZE（现有行为，缺省）；"
+                              "true=强制走特化路径，不让它静默回落；"
+                              "false=强制通用路径，是排查原生内核问题的第一手段"
+                              f"（--verbose true 中 kernel 应为空）。缺省 "
+                              f"{DEFAULT_SPECIALIZE}；主路径与 --compare backend 的"
+                              "参照路径同时生效"))
     parser.add_argument("--optimize", default=DEFAULT_OPTIMIZE,
                         help=(f"收缩序优化器（auto/optimal/dp/greedy/branch-*，"
                               f"或显式 path）。缺省 {DEFAULT_OPTIMIZE}"))
@@ -671,8 +774,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         atol=args.atol, rtol=args.rtol, compare=args.compare,
         optimize=args.optimize, rounds=args.rounds, warmup=args.warmup,
         seed=args.seed, verbose=_as_bool(args.verbose),
+        specialize=parse_specialize(args.specialize),
     )
     result["shape_source"] = report_note
+    if result.get("specialize_warning"):
+        print(f"warning: {result['specialize_warning']}", file=sys.stderr)
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as handle:

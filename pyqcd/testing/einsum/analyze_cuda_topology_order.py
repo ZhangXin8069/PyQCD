@@ -30,6 +30,9 @@
 
 产物（默认）：``pyqcd/testing/einsum/artifacts/cuda_topology_order_<时间戳>/``
 下 ``result.json``、``table.tsv``、``report.md``。
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本脚本只做语料级的顺序劣化量化。
 """
 
 from __future__ import annotations

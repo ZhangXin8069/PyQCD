@@ -39,6 +39,9 @@ v3 头上。复数接通 v3（cgemm/zgemm）后必须重测才能用于选路。
     python -m pyqcd.testing.einsum.bench_topology_vs_dedicated
     PYQCD_EINSUM_TOPOLOGY_REAL=1 \
         python -m pyqcd.testing.einsum.bench_topology_vs_dedicated --dtypes complex128
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本脚本负责批量／矩阵对比，不替代那个入口。
 """
 from __future__ import annotations
 

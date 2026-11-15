@@ -367,6 +367,21 @@ _CUDA_PLAN_ARENA_LIMIT = 3 << 30
 _CUDA_PLAN_MAX_STEP_MACS_LIMIT = 40_000_000_000
 _CUDA_HEAVY_PACK_MIN_BYTES = 1 << 30
 _CUDA_HEAVY_PACK_MAX_FLOPS = 1_000_000_000
+# pack_bytes / flops：每做 1 次浮点运算要搬多少字节的布局流量（读+写各计一次）。
+# 与 CPU 侧 ``_HEAVY_PACK_RATIO_LIMIT`` **同形不同值**：绝对判据（≥1 GiB 且 ≤1e9
+# FLOPs）漏掉"活干得也多"的病态计划，seq=856（`ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,
+# np,hjl->ak`，形状 `[400,4,1,1],[4,4,9,1],[4,400,400,400],...`）的 CUDA 计划
+# pack 8.28 GB、FLOPs 2.10e9、比值 3.95，绝对判据因 `flops > 1e9` 放行。
+# 阈值按 CUDA 口径重新标定，**不照搬 CPU 的 1.0**（GPU 的 FLOP/字节比 CPU 高得多，
+# 同样一份布局流量相对代价更低）：complex128、语料 arity 6..16、`distill` /
+# `distill_curr` 各 8638 条，在"旧三条门放行且 pack >= 1 GiB"的 1734 条里，
+# `distill` 最高 0.617，`distill_curr` 中位 1.728 / p90 1.813 / p99 2.101 / 最高
+# 2.388；靶子 3.950。3.0 落在空档 (2.388, 3.950) 内：对语料最高值留 1.26×、
+# 对靶子留 1.32×。作为对照，CPU 的 1.0 会新拒 `distill_curr` 500 条生产计划
+# （pack 2.1–3.1 GB），2.0 仍新拒 30 条；这两族里被实测过的两格在 GPU 上都是
+# **好计划**（seq=8513 比值 2.388 → `cuda_dedicated` 1.249 ms vs opt_einsum
+# 531.2 ms；seq=7900 比值 2.101 → 1.133 ms vs 338.0 ms），所以阈值必须高于 2.388。
+_CUDA_HEAVY_PACK_RATIO_LIMIT = 3.0
 _entry_dedicated: Any = None
 _failed_dedicated = False
 _dedicated_dtypes: tuple[np.dtype, ...] | None = None
@@ -391,7 +406,22 @@ def dedicated_dtypes() -> tuple[np.dtype, ...]:
 
 
 def _plan_fallback_reason(dtype: Any, stats: dict[str, int]) -> str | None:
-    """Fail open for plans outside the measured A100 dedicated budget."""
+    """Fail open for plans outside the measured A100 dedicated budget.
+
+    Four independent criteria. The two pack ones exist because an absolute byte
+    budget alone lets through plans that move gigabytes *and* do the arithmetic
+    to hide it:
+
+    * absolute: ``pack_bytes >= 1 GiB`` while ``flops <= 1e9`` — the layout
+      traffic dwarfs the work regardless of scale;
+    * ratio: ``pack_bytes / flops >= _CUDA_HEAVY_PACK_RATIO_LIMIT`` — the plan
+      spends several bytes of layout traffic per FLOP, so it is bandwidth-bound
+      even when the absolute FLOPs look large (see the constant for the
+      calibration that keeps the two populations apart).
+
+    ``flops == 0`` makes the ratio meaningless (zero-work plan), so only the
+    absolute criterion applies there.
+    """
     arena_bytes = int(stats.get("plan_arena_bytes", 0))
     max_step_macs = int(stats.get("plan_max_step_macs", 0))
     flops = int(stats.get("plan_flops", 0))
@@ -408,6 +438,16 @@ def _plan_fallback_reason(dtype: Any, stats: dict[str, int]) -> str | None:
         return (
             "plan is pack-bound on CUDA "
             f"({pack_bytes} pack bytes, {flops} FLOPs)")
+    # 比值判据**与绝对底并列**，不是独立生效：单看比值会把极小计划全判死
+    # （极小/全 1 张量的 pack/flops 恒在 8–26 且与规模无关，纯调阈值排除不掉）。
+    if (flops > 0
+            and pack_bytes >= _CUDA_HEAVY_PACK_MIN_BYTES
+            and pack_bytes >= _CUDA_HEAVY_PACK_RATIO_LIMIT * flops):
+        return (
+            "plan pack traffic per FLOP exceeds the CUDA dedicated budget "
+            f"(pack/flops = {pack_bytes / flops:.3f} >= "
+            f"{_CUDA_HEAVY_PACK_RATIO_LIMIT} bytes per FLOP: "
+            f"{pack_bytes} pack bytes, {flops} FLOPs)")
     return None
 
 

@@ -1,4 +1,8 @@
-"""Audit CPU/CUDA dedicated plan gates over the complete production corpus."""
+"""Audit CPU/CUDA dedicated plan gates over the complete production corpus.
+
+Per-equation checks go through ``python -m pyqcd.einsum.test`` (the only sanctioned
+single-equation entry since 2026-11-15); this script covers the corpus-wide audit.
+"""
 
 from __future__ import annotations
 

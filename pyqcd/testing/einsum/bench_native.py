@@ -4,6 +4,9 @@
 先行导入 NumPy。默认 process 隔离模式会再用本入口启动两个独立 worker，
 分别预热和计时两个实现。固定 oracle 子模块缺失时，必须显式设置
 ``PYQCD_EINSUM_ORACLE=installed`` 才会使用站点包，产物会标记为非冻结。
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本入口只是基准的进程隔离壳，不替代那个入口。
 """
 from __future__ import annotations
 

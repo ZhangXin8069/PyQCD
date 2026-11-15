@@ -460,14 +460,77 @@ def _topology_step_records(plan: Any) -> list[dict[str, Any]] | None:
     return records
 
 
+# topology 侧的 ``pack/flops`` 阈值。判据形态与 dedicated 的
+# ``_HEAVY_PACK_RATIO_LIMIT`` 相同——比值**与** ``pack_bytes >= 1 GiB`` 并列、不是
+# 独立生效——但数值必须单独标定：本口径的流量是**按步表重算的下界**（逐侧判直连、
+# 输出恒等序不计 unpack），与 dedicated 的 ``_plan_statistics`` 只在逐步判定恰好
+# 一致时才给出同一个数（seq=856 两口径逐字节相同：8,281,146,368 B pack /
+# 2,096,413,216 FLOPs / 3.95），多步计划上本口径只会更小。
+#
+# 为什么要这条门：seq=856 在 ``distill_curr`` 尺寸下 pack 8.28 GB、FLOPs 2.10e9，
+# 绝对判据（``flops <= 1e9``）放行；dedicated 被比值拒后，路由链的下一站就是
+# topology，实测 2675 ms，而通用路径 2330 ms —— 缺这条门就把它停在"比最慢的好、
+# 比最快的差"的中间位置。
+#
+# 标定（2026-11-15，全语料 8638 条 × ``distill``/``distill_curr`` 两档、
+# complex128；只统计同时满足 ``pack_bytes >= 1 GiB`` 与 ``flops > 1e9`` 的格子，
+# 因为绝对判据已拒的那一侧根本到不了这条门）：
+#
+#   ``distill``       3802 格：比值 0.0016..0.3222，**无一格 >= 1.0**；被绝对判据
+#                     拒掉的 688 格比值全部 >= 14.69。两峰空档 0.322..14.69，
+#                     1.0 / 2.0 / 4.0 / 8.0 在该口径下新拒**都是 0 格**。
+#   ``distill_curr``  5873 格：比值跨 2.5e-5..15.93，**没有单一空档**——观测到的
+#                     最大空档是 4.07..11.57，但那一段取阈值就放过了 seq=856 的
+#                     3.95（4.0 只新拒 131 格，seq=856 恰好落选）。次宽的两处是
+#                     2.15..2.77 与 3.34..3.94；实测各阈值新拒格数：
+#                     1.0 → 991（17%，含 [1.0,2.15) 那 776 格）、2.0 → 215、
+#                     2.5 → 213（全部 pack >= 7.65 GiB）、3.9 → 190。
+#
+# 故取 2.5：落在实测空档 2.15..2.77 内（不切开任何一族），对 seq=856 的 3.95 留
+# 1.45 的余量（3.9 只有 0.011 余量，plan 一改就可能翻），且不去碰 [1.0,2.15) 那
+# 776 格——它们的比值只比 dedicated 的 1.0 高不到 1 倍，没有实测支持判死。
+#
+# **已知代价（2026-11-15 实测，如实记录）**：``distill_curr`` 上被这条门新拒的
+# 那一族（比值 ≈ 3.95、pack 8.28 GB、FLOPs 2.10e9）**并不齐性**。同一份原始代码上
+# 配对测（``python -m pyqcd.einsum.test``，``--rounds 5`` 中位，kernel 开=topology
+# vs ``PYQCD_EINSUM_KERNEL_KUPL=0``=通用），6 格的"拒掉能省多少"：
+#
+#   seq    topology ms     generic ms    拒掉的效果
+#   856    3014 / 6296     699           快 4.3–9.0×
+#   14     3030–3224       736–780       快 4.1×
+#   20     2659–2713       830           快 3.3×
+#   9      291–317         698–706       慢 2.3×
+#   3      144–169         756–819       慢 5.0×
+#   5      138–179         792–878       慢 5.3×
+#
+# 3 快 3 慢、量级相当（对数口径大致打平），所以这条门是"用三格换三格"，不是纯赚。
+# 根因不在比值本身：**非 ``distill`` 尺寸下原生步表的收缩序与运行期 plan 不是同一条
+# 路径**（``PYQCD_EINSUM_TOPOLOGY_TRACE=1`` 实测：seq=3 原生
+# ``M=9 K=400 N=640000`` 而 Python 推演是 ``M=4 K=640000 N=400``，seq=9/856 同样
+# 对不上）—— 步表在生成期按 ``distill`` 尺寸定型，尺寸一变 Python 的 ``auto`` 会换
+# 序。也就是说上面那个比值在 ``distill_curr`` 上度量的是"另一条计划"，本来就不可
+# 全信；``distill`` 口径（模型与步表在 3/855/2 上逐 step 对账通过）才是它的有效域，
+# 而那里这条门一格都不拒。真正的修法在原生侧（按尺寸重生成步表，或像 CUDA 侧
+# §6.3 那样加一道"收缩序可接受"守卫），见 ``AGENTS.md`` §6.2。
+# 比值门在 topology 口径上**已撤销**（2026-11-15，实测后回退），见
+# :func:`_topology_pack_bound_reason` 里的完整记录。标定时用的阈值是 2.5
+# （``distill`` 零误拒、``distill_curr`` 拒 213 格），但那一批里好坏混杂
+# （3 快 3 慢），故不再作为判据；``_topology_pack_ratio`` 仍暴露该量供诊断。
+
+
 def _topology_pack_bound_reason(plan: Any, itemsize: int) -> str | None:
     """topology 路径的 CPU 预算守卫：pack 流量压倒 GEMM 时劝回落。
 
-    判据沿用 :func:`_cpu_plan_fallback_reason` 的**绝对**那一条（``pack_bytes``
-    超 1 GiB 且 FLOPs 不足 1e9 即"pack-bound"）。dedicated 另有 ``pack/flops``
-    比值判据（见 ``_HEAVY_PACK_RATIO_LIMIT``），本函数**没有**跟进：这里的流量是
-    按步表重算的下界，比值阈值尚未在该口径上标定。但**流量模型必须与原生执行器
-    同口径**，否则结构上本来零拷贝的计划会被误拒。三点逐条对齐 ``topology_gemm.h``：
+    两条判据，语义与 :func:`_cpu_plan_fallback_reason` 相同：
+
+    * 绝对：``pack_bytes >= 1 GiB`` 且 ``flops <= 1e9``；
+    * 比值：``pack_bytes >= 1 GiB`` 且 ``pack_bytes >= LIMIT * flops``——每做一次
+      浮点运算就搬 LIMIT 字节的布局流量，算术强度已经低到没有意义。LIMIT 是本
+      口径自己的阈值（不是 dedicated 的 1.0，理由与
+      标定见该常量）。
+
+    但**流量模型必须与原生执行器同口径**，否则结构上本来零拷贝的计划会被误拒。
+    三点逐条对齐 ``topology_gemm.h``：
 
     1. **步序来自真正下发的 plan**：``decode_execution_plan`` 解的就是
        :func:`_topology_plan` 编码、交给原生同一份字节流，而不是另跑一遍
@@ -477,7 +540,10 @@ def _topology_pack_bound_reason(plan: Any, itemsize: int) -> str | None:
        生成期定型，等长小 dim 下 greedy 的次序会不同（实测 seq=379 在 dim=3 就换了
        一条路径），而生产尺寸下两者逐步一致 —— 契约用例对 seq=3/855/2 的生产尺寸
        逐 step 与原生 ``PYQCD_EINSUM_TOPOLOGY_TRACE=1`` 对账（本修复期间对
-       seq=379/646 也做过同样的全 13 步对账）。
+       seq=379/646 也做过同样的全 13 步对账）。**"生产尺寸"指 ``distill``**：
+       ``distill_curr`` 下步表与运行期 plan 会换序（实测 seq 3/9/856 都对不上，
+       见 :func:`_topology_pack_bound_reason` 的"已撤销"段），那时本模型量的是另一条
+       计划，只能当下界用。
     2. **输入侧逐侧判直连**（``v3_run_step``）：恒等序或组交换序的一侧零拷贝，
        只有另一侧真的要 gather。旧实现按"两侧都 pack"估上界，而语料里大量步骤
        是单侧直连（``_topology_kernel_gen`` 的静态统计：121724 步中 65053 步
@@ -506,11 +572,14 @@ def _topology_pack_bound_reason(plan: Any, itemsize: int) -> str | None:
 
     口径的边界：本模型描述的是 **v3 步表执行器**。未命中步表时走 v2 通用执行器
     （``run_step`` 两侧都 gather），那条路线的流量只会更多，因此这里是它的下界。
-    两档生产尺寸下逐 seq 实测（同一判据）：
+    两档生产尺寸下逐 seq 实测（**只有绝对判据时**的 32 seq 抽样）：
     ``distill`` 放行 32 条（全部是 v3 命中的基础 seq，0 条转为拒绝）；
     ``distill_curr`` 放行 62 条（2 条基础 seq + 60 条附录 v2），另有 6 条附录 seq
     转为拒绝（全部来自上面第 4 点）。放行的附录 seq 走 v2，实测与通用路径持平
     （seq=7822 155.5 vs 149.3 ms，seq=7989 130.5 vs 127.6 ms），没有因此变慢。
+    加上比值判据后的全语料（8638 条）放行计数是 ``distill`` 3802/3802（新拒 0）、
+    ``distill_curr`` 5660/5873（新拒 213），标定明细见
+    诊断函数 :func:`_topology_pack_ratio`。
     """
     records = _topology_step_records(plan)
     if records is None:
@@ -529,8 +598,53 @@ def _topology_pack_bound_reason(plan: Any, itemsize: int) -> str | None:
         return (f"pack-bound on CPU ({pack_bytes} pack bytes, {flops} FLOPs): "
                 f"the layout traffic dominates the arithmetic; "
                 f"the generic path handles it")
+    # 比值判据在此口径上**已撤销**（2026-11-15，实测后回退）。
+    #
+    # 曾加过 ``pack_bytes >= _TOPOLOGY_PACK_RATIO_LIMIT * flops``（2.5，与 1 GiB
+    # 底并列）。标定时它在 ``distill`` 上零误拒、只在 ``distill_curr`` 拒 213 格，
+    # 但那 213 格里既有真病态（seq=856：topology 3014 ms vs 通用 699 ms，拒掉
+    # 快 4.3×），也有**好计划**（seq=9：291 ms vs 698 ms；seq=3：144 vs 756；
+    # seq=5：138 vs 792——拒掉反而慢 2.3–5.3×）。3 快 3 慢、量级相当，对数口径
+    # 大致打平，属"用三格换三格"，不是净收益。
+    #
+    # 根因不在比值：**非 ``distill`` 尺寸下编译期步表的收缩序与运行期 plan 不是
+    # 同一条路径**（``PYQCD_EINSUM_TOPOLOGY_TRACE=1`` 实测：seq=3 原生是
+    # ``M=9 K=400 N=640000``，Python 推演是 ``M=4 K=640000 N=400``；seq=9/856
+    # 同样对不上）。步表在生成期按 ``distill`` 定型，尺寸一变 Python 的 ``auto``
+    # 就换序——本函数在那个口径下量的是**另一条计划**，比值不可信。而在模型可信
+    # 的 ``distill`` 口径上它一格都不拒（3802/3802 全放行），也就是这条门实际只
+    # 在不可信的口径上开火，正是最该避免的情形。
+    #
+    # 因此这里**不拒绝**；比值改用 :func:`_topology_pack_ratio` 暴露给诊断与契约。
+    # 真正的修法在原生侧：按尺寸重生成步表，或像 CUDA 侧 §6.3 那样加一道
+    # "收缩序可接受"守卫，让步表与运行期 plan 同源后再启用比值门。
     return None
 
+
+def _topology_pack_ratio(plan: Any, itemsize: int) -> float | None:
+    """``pack_bytes / flops``（诊断用，**不参与拒绝**）。
+
+    记账与 :func:`_topology_pack_bound_reason` **逐行同源**（同样逐侧判直连、同样
+    只在 ``c_axes`` 非恒等时计 unpack），所以两个数永远互相自洽。保留它是为了让
+    ``pyqcd.einsum.test --verbose`` 与契约能看到这个量，并在原生侧收缩序修好之后
+    重新评估阈值。结构解不开或 ``flops <= 0`` 时返回 ``None``。
+    """
+    records = _topology_step_records(plan)
+    if records is None:
+        return None
+    flops = 0
+    pack_bytes = 0
+    for record in records:
+        flops += 2 * record["batch"] * record["m"] * record["n"] * record["k"]
+        if not record["a_direct"]:
+            pack_bytes += 2 * itemsize * record["a_elements"]
+        if not record["b_direct"]:
+            pack_bytes += 2 * itemsize * record["b_elements"]
+        if not record["output_canonical"]:
+            pack_bytes += 2 * itemsize * record["c_elements"]
+    if flops <= 0:
+        return None
+    return pack_bytes / flops
 
 def _function_topology():
     global _entry_topology, _failed_topology

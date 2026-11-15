@@ -55,6 +55,9 @@
 
 退出码：0 = 全部数值与形状断言通过；1 = 有对照失败；2 = 生产规模装不下（内存守卫）；
 3 = 有引擎 ``TIMEOUT``（如实标 unverified，不当作通过）。
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本脚本负责批量引擎对比，不替代那个入口。
 """
 from __future__ import annotations
 

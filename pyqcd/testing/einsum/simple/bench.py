@@ -7,6 +7,9 @@
 
 口径：同 profile、同 dtype、同线程、同 planner（各自规划一次，只计稳态执行），
 预热后取中位数；双方中位耗时都低于 100 ms 的组标 `too_short`，不参与倍率判定。
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本脚本负责 profile 级批量对照。
 """
 
 from __future__ import annotations

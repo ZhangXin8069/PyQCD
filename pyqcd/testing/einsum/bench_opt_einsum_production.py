@@ -1,4 +1,8 @@
-"""Compare PyQCD specialized/generic paths with opt_einsum on real equations."""
+"""Compare PyQCD specialized/generic paths with opt_einsum on real equations.
+
+Per-equation checks go through ``python -m pyqcd.einsum.test`` (the only sanctioned
+single-equation entry since 2026-11-15); this script covers batch path comparison.
+"""
 
 from __future__ import annotations
 

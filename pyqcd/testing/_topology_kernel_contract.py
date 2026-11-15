@@ -1445,6 +1445,199 @@ def test_pack_bound_guard_matches_the_native_step_layout_trace():
     print(f"layout trace: {len(cases)} equations, {total} steps matched")
 
 
+# ── 7b. topology 侧的 pack/flops 比值判据（2026-11-15） ─────────────────────
+#
+# 绝对判据（>=1 GiB 且 <=1e9 FLOPs）漏掉"活干得也多"的病态计划：seq=856 在
+# ``distill_curr`` 尺寸下 pack 8.28 GB、FLOPs 2.10e9，绝对判据放行，而它在 topology
+# 上实测 3014 ms、通用路径 699 ms。曾为它加过比值门（阈值 2.5），但实测那批里
+# 3 快 3 慢、对数口径打平，且根因是步表与运行期 plan 换序（见函数 docstring），
+# 故**已撤销**：比值只由 ``_topology_pack_ratio`` 暴露给诊断，不参与拒绝。
+
+#: 比值判据的验收 plan：``distill_curr`` 尺寸下 pack 8,281,146,368 B、
+#: FLOPs 2,096,413,216、比值 3.950 —— 绝对判据要求 ``flops <= 1e9``（不满足），
+#: 所以它只可能被比值那一条拒。
+#: 病态样例 seq=856 的方程与生产形状（CUDA 与 topology 两侧契约共用）：
+#: ``distill_curr`` 尺寸下 pack 8,281,198,592 B、FLOPs 2,096,413,216、比值 3.950。
+_PACK_RATIO_PATHOLOGICAL_EQUATION = "ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak"
+_PACK_RATIO_PATHOLOGICAL_SHAPES = (
+    (400, 4, 1, 1), (4, 4, 9, 1), (4, 400, 400, 400), (4, 4, 9, 9),
+    (4, 4), (4, 4), (4, 4), (1, 9, 400), (1, 9), (1, 9, 400))
+
+_RATIO_PATHOLOGICAL_SEQ = 856
+#: 反例一（"比值高但规模小"）：比值 12.65 远超阈值，pack 却只有 10,752 B。
+_RATIO_TINY_SEQ = 2
+#: 反例二（"规模大但算术密度正常"）：pack 1.03 GiB 已过绝对底，比值只有 0.028。
+_RATIO_DENSE_SEQ = 2584
+
+
+def test_topology_pack_ratio_is_diagnostic_only():
+    """topology 侧的 ``pack/flops`` **只作诊断，不参与拒绝**（2026-11-15 实测后回退）。
+
+    回归点：曾按 dedicated 的形态加了比值门（阈值 2.5，与 1 GiB 绝对底并列）。
+    标定显示它在 ``distill`` 上零误拒、只在 ``distill_curr`` 拒 213 格；但**那批
+    里好坏混杂**——同一口径的配对测（``pyqcd.einsum.test``，``--rounds 5`` 中位）：
+
+    =========  ===============  ============  ==============
+    seq        topology ms      generic ms    拒掉的效果
+    =========  ===============  ============  ==============
+    856        3014             699           快 4.3x
+    14         3030-3224        736-780       快 4.1x
+    20         2659-2713        830           快 3.3x
+    9          291-317          698-706       **慢 2.3x**
+    3          144-169          756-819       **慢 5.0x**
+    5          138-179          792-878       **慢 5.3x**
+    =========  ===============  ============  ==============
+
+    3 快 3 慢、量级相当，属"用三格换三格"，不是净收益。
+
+    根因不在比值：**非 ``distill`` 尺寸下编译期步表的收缩序与运行期 plan 不是同
+    一条路径**（``PYQCD_EINSUM_TOPOLOGY_TRACE=1`` 实测：seq=3 原生
+    ``M=9 K=400 N=640000``，而 Python 推演 ``M=4 K=640000 N=400``；seq=9/856
+    同样对不上）。步表按 ``distill`` 定型，尺寸一变 ``auto`` 就换序，于是守卫在
+    那个口径下量的是**另一条计划**。而在模型可信的 ``distill`` 口径上该门一格都
+    不拒（3802/3802 全放行）——即它只会在不可信的口径上开火。
+
+    因此现在：``_topology_pack_bound_reason`` 只保留绝对判据；比值由
+    ``_topology_pack_ratio`` 暴露给诊断。本条同时钉住"不拒绝"与"仍能算出比值"，
+    防止有人不加标定就把比值门装回去。
+    """
+    _require_kupl()
+
+    # 1) 病态样例（比值 3.95）在**模型不可信**的 distill_curr 口径上也不得被拒。
+    _equation, plan, _plan_shapes = _production_plan(
+        _RATIO_PATHOLOGICAL_SEQ, "distill_curr")
+    reason = _kernel_kupl._topology_pack_bound_reason(plan, 16)
+    assert reason is None, (
+        f"seq={_RATIO_PATHOLOGICAL_SEQ} 的比值门已撤销，不该再拒绝：{reason}")
+
+    # 2) 比值仍必须能算出来（诊断价值保留）。
+    ratio = _kernel_kupl._topology_pack_ratio(plan, 16)
+    assert ratio is not None, "诊断用的 pack/flops 应当可算"
+    assert 3.5 < ratio < 4.5, (
+        f"seq={_RATIO_PATHOLOGICAL_SEQ} 的比值应约 3.95，得到 {ratio}")
+
+    # 3) 小 plan 与正常大 plan 都不拒绝（绝对判据的门槛没被误动）。
+    for seq, scene in ((9, "distill"), (_RATIO_DENSE_SEQ, "distill_curr"),
+                       (2, "distill_curr")):
+        _eq, other, _s = _production_plan(seq, scene)
+        assert _kernel_kupl._topology_pack_bound_reason(other, 16) is None, (seq, scene)
+
+    # 4) 绝对判据仍然有效：seq=646 是它标定的病态格，必须仍被拒。
+    _eq, heavy, _s = _production_plan(646, "distill")
+    absolute = _kernel_kupl._topology_pack_bound_reason(heavy, 16)
+    assert absolute is not None, "绝对 pack 判据被误删了"
+    assert "pack-bound on CPU" in absolute, absolute
+
+
+def _cuda_dedicated_stats(equation: str, shapes: Sequence[Sequence[int]]) -> dict[str, int]:
+    """按 **CUDA 口径**编码步表并取统计（``allow_heavy_branch2=False``，与
+    ``_kernel_cuda.try_dedicated`` 的 ``_dedicated_cached(..., "cuda")`` 一致）。
+
+    纯计划统计、不分配 GPU 张量，所以无设备也能跑。
+    """
+    cached = _kernel_kupl._cheapest_dedicated_plan(
+        equation, tuple(tuple(int(extent) for extent in shape) for shape in shapes),
+        0, False)
+    assert cached is not None, f"{equation} 无法编码成步表"
+    return _kernel_kupl._plan_statistics(cached[0])
+
+
+def _scene_dedicated_stats(seq: int, scene: str = "distill_curr") -> dict[str, int]:
+    """按语料 roles 的生产尺寸取该 seq 的 CUDA 口径计划统计（零分配）。"""
+    task = tasklist.lookup(seq)
+    assert task is not None, f"seq {seq} 不在语料里"
+    terms = task.equation.split("->", 1)[0].split(",")
+    sizes = _label_sizes(terms, task.roles, scene_dims(scene))
+    shapes = [tuple(sizes[label] for label in term) for term in terms]
+    return _cuda_dedicated_stats(task.equation, shapes)
+
+
+def test_cuda_plan_gate_rejects_pack_traffic_per_flop():
+    """CUDA 计划守卫：pack/flops 超限被拒，GEMM 主导与生产边界放行。
+
+    靶子是 seq=856（``ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak``）：CUDA 计划
+    ``pack_bytes=8,281,198,592`` / ``flops=2,096,413,216`` = **3.950 B/FLOP**，
+    绝对判据因 ``flops > 1e9`` 放行（CPU 侧同一条计划实测 dedicated 8662.7 ms vs
+    通用路径 2330 ms）。
+
+    **与 CPU 侧的一处实测差异（不要照抄 CPU 用例的断言）**：CUDA 的 arena 底只有
+    3 GiB，而该计划的 CUDA arena 是 4,219,857,152 B，所以它在本条判据加进来之前
+    **已经**被第一条门（arena）拒掉了。比值判据的作用是让结论不再依赖"arena 恰好
+    超了"：把 arena 与单步 MACs 归零后，只剩比值门能拒它。两条判据都独立成立。
+
+    标定（complex128，语料 arity 6..16、``distill``/``distill_curr`` 各 8638 条）：
+    旧三条门放行且 ``pack >= 1 GiB`` 的 1734 条里，``distill`` 最高 0.617、
+    ``distill_curr`` 中位 1.728 / p90 1.813 / p99 2.101 / 最高 2.388。3.0 落在空档
+    (2.388, 3.950) 内；把阈值降到 CPU 的 1.0 会新拒 ``distill_curr`` 的 500 条生产
+    计划（pack 2.1–3.1 GB），2.0 仍新拒 30 条——而这两族里 GPU 实测过的两格都是
+    **好计划**（seq=8513 比值 2.388 → ``cuda_dedicated`` 1.249 ms vs opt_einsum
+    531.2 ms；seq=7900 比值 2.101 → 1.133 ms vs 338.0 ms），所以不取。
+    """
+    dtype = np.dtype(np.complex128)
+    pathological = _cuda_dedicated_stats(
+        _PACK_RATIO_PATHOLOGICAL_EQUATION, _PACK_RATIO_PATHOLOGICAL_SHAPES)
+    pack_bytes = pathological["plan_pack_bytes"]
+    flops = pathological["plan_flops"]
+    ratio = pack_bytes / flops
+    assert ratio >= _kernel_cuda._CUDA_HEAVY_PACK_RATIO_LIMIT, (
+        f"seq=856 的比值 {ratio:.3f} 低于阈值 "
+        f"{_kernel_cuda._CUDA_HEAVY_PACK_RATIO_LIMIT}，本条用例失去靶子：{pathological}")
+
+    # 1. 真门今天给的是 arena 理由（实测差异见 docstring），但计划确实被拒。
+    reason = _kernel_cuda._plan_fallback_reason(dtype, pathological)
+    assert reason is not None, ("seq=856 的 CUDA 计划必须被拒", pathological)
+    assert "arena" in reason, reason
+
+    # 2. 归零 arena / 单步 MACs 后只剩比值门：证明该判据独立成立、不是搭便车。
+    isolated = dict(pathological, plan_arena_bytes=0, plan_max_step_macs=0)
+    reason = _kernel_cuda._plan_fallback_reason(dtype, isolated)
+    assert reason is not None, (
+        "只剩比值门时必须仍然拒绝 seq=856", isolated)
+    for token in ("pack/flops", str(pack_bytes), str(flops)):
+        assert token in reason, (token, reason)
+
+    # 3. 生产边界不许误伤：distill_curr 里"旧门放行且 pack >= 1 GiB"比值最高的几格
+    #    （8513/8499 = 2.388，7900 = 2.101，21 = 1.813）必须仍然放行。
+    for seq in (8513, 8499, 7900, 21):
+        stats = _scene_dedicated_stats(seq)
+        allowed_ratio = stats["plan_pack_bytes"] / stats["plan_flops"]
+        assert allowed_ratio < _kernel_cuda._CUDA_HEAVY_PACK_RATIO_LIMIT, (seq, stats)
+        assert _kernel_cuda._plan_fallback_reason(dtype, stats) is None, (
+            f"seq={seq}（比值 {allowed_ratio:.3f}）是生产计划，不得被新判据误拒",
+            stats)
+
+    # 4. 正常 GEMM / 小规模收缩必须放行（否则新判据会把通用收缩也打回外围路径）。
+    for equation, shapes in (
+            ("bij,bjk->bik", ((64, 512, 512), (64, 512, 512))),
+            ("ij,jk->ik", ((1000, 1000), (1000, 1000))),
+            ("am,mb->ab", ((256, 256), (256, 256)))):
+        stats = _cuda_dedicated_stats(equation, shapes)
+        gemm_ratio = stats["plan_pack_bytes"] / stats["plan_flops"]
+        assert gemm_ratio < 0.2, (equation, stats)
+        assert _kernel_cuda._plan_fallback_reason(dtype, stats) is None, (
+            f"{equation} 是 GEMM 主导计划，不得被拒", stats)
+
+    # 5. 绝对底是**并列项**而不是装饰：seq=1599（``full`` 尺寸）pack 只有 1.1 MB 但
+    #    比值 17.0，没有 1 GiB 底就会被比值判据误杀（CPU 侧在语料上实测误拒 56% 的
+    #    同一种病）。注意场景必须写 ``full``：同一 seq 在 ``distill_curr`` 下是小计划，
+    #    比值只有 2.6，构不成反例。
+    tiny = _scene_dedicated_stats(1599, "full")
+    assert tiny["plan_pack_bytes"] < _kernel_cuda._CUDA_HEAVY_PACK_MIN_BYTES, tiny
+    assert tiny["plan_pack_bytes"] >= (
+        _kernel_cuda._CUDA_HEAVY_PACK_RATIO_LIMIT * tiny["plan_flops"]), tiny
+    assert _kernel_cuda._plan_fallback_reason(dtype, tiny) is None, (
+        "pack 不到 1 GiB 的小计划不得被比值判据拒", tiny)
+
+    # 6. flops == 0 时比值无意义：只走绝对判据，且不得除零。
+    zero_work = {"plan_flops": 0, "plan_pack_bytes": 0,
+                 "plan_arena_bytes": 0, "plan_max_step_macs": 0}
+    assert _kernel_cuda._plan_fallback_reason(dtype, zero_work) is None
+    zero_work["plan_pack_bytes"] = _kernel_cuda._CUDA_HEAVY_PACK_MIN_BYTES
+    reason = _kernel_cuda._plan_fallback_reason(dtype, zero_work)
+    assert reason is not None and "pack-bound" in reason, reason
+    assert "pack/flops" not in reason, reason
+
+
 # ── 入口 ────────────────────────────────────────────────────────────────────
 def _isolated(test: Callable[[], None]) -> Callable[[], None]:
     """每个用例都从干净的入口缓存/负缓存开始，跑完还原，避免跨模块串味。"""
@@ -1536,7 +1729,9 @@ TESTS = tuple(_isolated(test) for test in (
     test_corpus_sample_matches_generic_path,
     test_native_failure_falls_back_with_one_warning,
     test_pack_bound_guard_only_counts_the_sides_that_pack,
+    test_topology_pack_ratio_is_diagnostic_only,
     test_pack_bound_guard_matches_the_native_step_layout_trace,
+    test_cuda_plan_gate_rejects_pack_traffic_per_flop,
 ))
 
 

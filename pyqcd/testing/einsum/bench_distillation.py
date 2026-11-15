@@ -11,6 +11,9 @@
   切回进程内 ABBA 交错计时；
 * GPU 每次计时前后均同步，计时外校验逐元素 max relative error；
 * qcd-einsum 低于 3x、数值失败或任何对照错误均返回非零。
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本脚本负责蒸馏实战批量对比，不替代那个入口。
 """
 from __future__ import annotations
 

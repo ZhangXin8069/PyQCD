@@ -14,6 +14,9 @@ Protocol
   relative-to-max-norm criterion (element-wise `atol` misjudges near-zero entries).
 
 Usage: python bench.py cpu|gpu [--rounds N] [--out results.json]
+
+Per-equation checks go through ``python -m pyqcd.einsum.test`` (the only sanctioned
+single-equation entry since 2026-11-15); this script covers the published A/B matrix.
 """
 
 from __future__ import annotations

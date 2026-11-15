@@ -24,6 +24,9 @@
 
 注意：``spatial=1`` 下 E4/E5 通常在 <100 ms 量级，双方都低于 100 ms 的行标
 ``too_short``，**只作诊断**，不构成生产性能结论。
+
+单条方程的排查请用 ``python -m pyqcd.einsum.test --help``（2026-11-15 起的唯一合法
+入口，口径以它的缺省值为准）；本脚本负责 ``specialize`` 开关的批量 A/B。
 """
 
 from __future__ import annotations
