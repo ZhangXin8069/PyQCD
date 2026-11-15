@@ -74,7 +74,8 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--dtype` | `complex128` | complex128 / complex64 / float64 / float32（四类平权） |
 | `--backend` | `auto` | auto / numpy / cupy / torch / kupl / cuda |
 | `--compare` | `numpy` | numpy / opt_einsum / **backend**（跨后端互证）/ none |
-| `--optimize` | `auto` | 同 `contract(optimize=...)` |
+| `--compare-optimize` | `auto` | **只作用于参照**的优化器：auto / greedy / dp / optimal / branch-all / branch-2 / branch-1。auto = 沿用旧行为（numpy→`greedy`；opt_einsum→`greedy` 或跟随 `--optimize`）。**不跨库重映射**：numpy 只认 `greedy`/`optimal`（`dp`/`branch-*` 报用法错误，退出码 2），opt_einsum 按 `oe.paths` 注册表校验；`--compare backend`/`none` 下无效（仅提示） |
+| `--optimize` | `auto` | 同 `contract(optimize=...)`，**只管主路径** |
 | `--specialize` | `auto` | auto / true / false：auto 跟随 `PYQCD_EINSUM_SPECIALIZE`；true 强制特化；**false 强制通用路径**（排查原生内核问题的第一手段） |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一） |
 | `--rtol` | `0` | 附加相对余量 |
@@ -82,6 +83,7 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--warmup` | `1` | 预热丢弃次数，**不允许 0** |
 | `--seed` | `0` | 操作数随机种子 |
 | `--verbose` | `false` | 明细打到 stderr |
+| `--language` | `auto` | 输出语言：`auto` / `en` / `zh-cn`。`auto` 只在 `PYQCD_EINSUM_LANG` 显式设了时跟随（`en*`/`zh*`），未设时为**中文**（缺省行为零变化，不跟随 locale）；只改文案，不改结果、不改 `--compare`、不写环境变量 |
 | `--shape` | 省略 | 省略则按 `--scene`（缺省 distill）从语料 roles 反推 |
 | `--json` | 无 | 完整结果落盘 |
 

@@ -274,7 +274,8 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--dtype` | `complex128` | 四类平权：complex128/complex64/float64/float32 |
 | `--backend` | `auto` | 原样传给 `contract(backend=...)`；可选 auto/numpy/cupy/torch/kupl/cuda |
 | `--compare` | `numpy` | 参照：numpy / opt_einsum / **backend**（跨后端互证）/ none |
-| `--optimize` | `auto` | 同 `contract(optimize=...)` |
+| `--compare-optimize` | `auto` | **只看参照**的收缩序优化器：auto / greedy / dp / optimal / branch-all / branch-2 / branch-1。`auto` = 沿用旧行为（numpy→`greedy`，opt_einsum→`greedy` 或跟随 `--optimize`）。两库名字不通用、**不做跨库重映射**：numpy 只认 `greedy`/`optimal`（`dp`/`branch-*` 报用法错误，退出码 2）；opt_einsum 按 `oe.paths` 注册表校验。`--compare backend`/`none` 下无效（verbose 提示，不报错） |
+| `--optimize` | `auto` | 同 `contract(optimize=...)`，**只管主路径** |
 | `--specialize` | `auto` | 专用内核三态：`auto`=跟随 `PYQCD_EINSUM_SPECIALIZE`；`true`=强制特化路径；`false`=**强制通用路径**（排查原生内核问题的第一手段）。主路径与 `--compare backend` 的参照路径同时生效 |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一，不是逐元素绝对阈值） |
 | `--rtol` | `0` | 附加相对余量 |
@@ -282,11 +283,33 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--warmup` | `1` | 丢弃的预热次数，**不允许 0** |
 | `--seed` | `0` | 操作数随机种子（各路径同一批数据） |
 | `--verbose` | `false` | true 时把逐项明细打到 stderr |
+| `--language` | `auto` | 本入口的**输出语言**：`auto` / `en` / `zh-cn`。`auto` 只在 `PYQCD_EINSUM_LANG` **显式设了**时才跟随它（`en*`→英文，`zh*`→中文），未设时保持历史行为**中文**；因此缺省行为零变化。它**不跟随系统 locale**（本机 `LANG=C.UTF-8`，跟随 locale 会让不传选项的输出从中文变英文），全程复用 `_specialize.notice_language()` 的那一个环境变量，不另立开关。只影响文案：不改任何计算结果、不改 `--compare` 的选择、**不写**任何环境变量（同进程后续调用不受影响）。缺 key 时 `translate` 直接抛 `KeyError`，不做静默兜底 |
 | `--shape` | 省略 | 省略时按 `--scene`（缺省 `distill`）从语料 `roles` 反推生产尺寸 |
 | `--json` | 无 | 完整结果落盘 |
 
 `--compare backend` 是**跨后端互证**：主路径跑 `--device`，参照在另一个后端上跑
 同一批张量（CPU↔GPU）。这是唯一能同时验证"两条原生路径都给对答案"的模式。
+
+`--compare-optimize` 是**参照侧**的收缩序开关，与主路径的 `--optimize` 完全独立：
+改它绝不改主路径的收缩序。为什么必须分开——两条参照路径的名字空间不同，且 opt_einsum
+内部 greedy 与 dp 的差距是实打实的（seq=856、`--rounds 5` 中位，同一台共享机上两组
+配对样本：`greedy` 1848.2 / 1578.0 ms vs `dp` 1591.2 / 1274.1 ms，即 dp 快
+**14–24%**；绝对值随机器负载漂移，**比值方向稳定**），而旧入口在 `--optimize auto`
+下会把参照也按 `greedy` 跑，无法单独指定 `dp`。**不做跨库重映射**：
+
+* `--compare numpy`：`np.einsum` 源码只认 `greedy`/`optimal`，其余一律
+  `KeyError('Path name %s not found')`（numpy 2.5.4 实测，`dp`/`branch-*`/`auto`
+  全部抛错）。所以传 `dp` 是**用法错误**（退出码 2），不是"退回 greedy"；
+* `--compare opt_einsum`：按 `oe.paths._PATH_OPTIONS` 注册表校验，`dp`/`greedy`/
+  `optimal`/`branch-all`/`branch-2`/`branch-1`/`auto` 均可用；
+* `--compare backend`/`none`：没有可设的优化器，显式非 `auto` 值只在 stderr 提示
+  无效（不报错）。
+
+报告里有 `compare_optimize`（要什么）与 `compare_optimize_effective`（实际用了什么）；
+verbose 的 `ref opt` 行与 `reference` 串都打**参照实际用的**，一行式 PASS 带
+`ref …ms@dp`。缺省 `auto` 逐字复现旧行为，契约
+`test_compare_optimize_default_reproduces_the_old_reference_behaviour` 钉住这一点——
+缺省悄悄改动就会改掉所有历史对照结论。
 
 `--specialize` 是**专用路径 vs 通用路径**的对照开关，三态直传
 `contract(specialize=...)`（`pyqcd/einsum/_api.py`）。实测用例：seq=856 走 dedicated

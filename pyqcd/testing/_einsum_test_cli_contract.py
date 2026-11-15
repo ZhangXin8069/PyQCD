@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 import unittest
 
 import numpy as np
@@ -427,6 +428,451 @@ def test_help_lists_specialize_and_verbose_reports_it():
         assert "kernel   :" in printed, printed
 
 
+# ── --compare-optimize：只作用于参照，缺省不得改既有结论 ─────────────────────
+#: 三条链的方程：足够多步，``greedy`` 与 ``dp`` 会选出不同的收缩序。
+COMPARE_OPT_EQUATION = "ij,jk,kl,lm,mn->in"
+COMPARE_OPT_SHAPES = [(24, 24)] * 5
+
+
+def _compare_opt_run(**kwargs):
+    """跑一条小方程并返回报告（rounds 压到 2，本组不验性能）。"""
+    return cli.run(equation=COMPARE_OPT_EQUATION, shapes=COMPARE_OPT_SHAPES,
+                   out_shape=(24, 24), rounds=2, warmup=1, **kwargs)
+
+
+def test_compare_optimize_default_reproduces_the_old_reference_behaviour():
+    """**最重要的一条**：缺省 ``auto`` 下参照的实际优化器与改动前逐字一致。
+
+    改动前的参照是：``numpy`` 恒 ``greedy``；``opt_einsum`` 在
+    ``--optimize`` 为 auto/None 时 ``greedy``、否则跟随 ``--optimize``。
+    这两条断言就是那个旧行为的拷贝——只要有人"顺手改成 dp"或让参照跟随新选项，
+    本条立刻红，避免悄悄改掉所有历史对照结论。
+    """
+    assert cli.DEFAULT_COMPARE_OPTIMIZE == "auto", cli.DEFAULT_COMPARE_OPTIMIZE
+    assert set(cli.COMPARE_OPTIMIZERS) == {
+        "auto", "greedy", "dp", "optimal", "branch-all", "branch-2", "branch-1",
+    }, cli.COMPARE_OPTIMIZERS
+
+    # numpy 参照：恒 greedy（旧行为），与主路径 --optimize 无关
+    for optimize in ("auto", "dp", "optimal", "greedy"):
+        report = _compare_opt_run(compare="numpy", optimize=optimize)
+        assert report["ok"], report
+        assert report["compare_optimize"] == "auto", report
+        assert report["compare_optimize_effective"] == "greedy", report
+        assert "optimize='greedy'" in report["reference"], report["reference"]
+
+    # opt_einsum 参照：auto → greedy；显式 --optimize 则跟随（旧行为逐字保留）
+    report = _compare_opt_run(compare="opt_einsum", optimize="auto")
+    assert report["ok"], report
+    assert report["compare_optimize_effective"] == "greedy", report
+    assert "optimize='greedy'" in report["reference"], report["reference"]
+
+    report = _compare_opt_run(compare="opt_einsum", optimize="optimal")
+    assert report["ok"], report
+    assert report["compare_optimize_effective"] == "optimal", report
+    assert "optimize='optimal'" in report["reference"], report["reference"]
+
+    # 解析层同样逐字对照（不需要真的跑收缩）
+    assert cli.resolve_compare_optimize("numpy", "auto", "auto") == "greedy"
+    assert cli.resolve_compare_optimize("numpy", None, None) == "greedy"
+    assert cli.resolve_compare_optimize("opt_einsum", "auto", "auto") == "greedy"
+    assert cli.resolve_compare_optimize("opt_einsum", "dp", "auto") == "dp"
+    assert cli.resolve_compare_optimize("backend", "auto", "auto") is None
+    assert cli.resolve_compare_optimize("none", "auto", "auto") is None
+
+
+def test_compare_optimize_dp_reaches_the_opt_einsum_reference():
+    """显式 ``dp`` 必须真的到达 ``oe.contract``，并写进报告与 verbose。
+
+    ``dp`` 是 opt_einsum 的路径名、numpy 没有——所以这条只能走 opt_einsum。
+    同时确认它**不再**跟随主路径的 ``--optimize auto``（那正是缺口本身）。
+    """
+    report = _compare_opt_run(compare="opt_einsum", optimize="auto",
+                              compare_optimize="dp")
+    assert report["ok"], report
+    assert report["compare_optimize"] == "dp", report
+    assert report["compare_optimize_effective"] == "dp", report
+    assert "optimize='dp'" in report["reference"], report["reference"]
+    # 主路径的字段没被这个选项改写
+    assert report["optimize"] == "auto", report
+
+    import contextlib
+    import io
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stderr(buffer):
+        cli.run(equation=COMPARE_OPT_EQUATION, shapes=COMPARE_OPT_SHAPES,
+                out_shape=(24, 24), rounds=2, warmup=1, verbose=True,
+                compare="opt_einsum", optimize="auto", compare_optimize="dp")
+    printed = buffer.getvalue()
+    # verbose 的 reference 行打的是**参照实际用的**优化器
+    assert "reference: opt_einsum.contract(optimize='dp')" in printed, printed
+    assert "ref opt  : 要 dp" in printed, printed
+
+
+def test_compare_optimize_rejects_names_the_reference_cannot_honour():
+    """不支持的名字必须报 ``UsageError``（退出码 2），**不做静默回退**。
+
+    numpy 侧实测只认 ``greedy``/``optimal``：源码里就这两个分支，其余抛
+    ``KeyError('Path name %s not found', ...)``。把 ``dp`` 硬映射成 ``greedy``
+    会让"对照实验"给出一个完全不相关的数字，比报错危险得多。
+    """
+    for bad in ("dp", "branch-all", "branch-2", "branch-1"):
+        try:
+            _compare_opt_run(compare="numpy", compare_optimize=bad)
+        except cli.UsageError as exc:
+            assert exc.code == 2, exc.code
+            assert "numpy" in str(exc), exc
+        else:
+            raise AssertionError(f"numpy 参照本应拒绝 {bad!r}")
+
+    # 完全不在枚举里的值，两条参照都要拒绝
+    for bad in ("bogus", "auto-hq", ""):
+        for compare in ("numpy", "opt_einsum"):
+            try:
+                _compare_opt_run(compare=compare, compare_optimize=bad)
+            except cli.UsageError as exc:
+                assert exc.code == 2, exc.code
+            else:
+                raise AssertionError(f"{compare} 参照本应拒绝 {bad!r}")
+
+    # numpy 支持的两个名字必须放行，且真的传到 np.einsum
+    for good in cli.NUMPY_COMPARE_OPTIMIZERS:
+        report = _compare_opt_run(compare="numpy", compare_optimize=good)
+        assert report["ok"], report
+        assert report["compare_optimize_effective"] == good, report
+        assert f"optimize='{good}'" in report["reference"], report["reference"]
+
+
+def test_compare_optimize_does_not_touch_the_main_path():
+    """该选项**只影响参照**：同一方程在 greedy 与 dp 下主路径的计划不变。
+
+    断言主路径的 ``optimize`` 字段与 ``kernel_info``/``actual_shape`` 完全一致——
+    主路径的收缩序由 ``--optimize`` 管，参照优化器改了也不该动它。耗时只做宽松界，
+    不做精确性能断言（``--rounds 2`` 的噪声远大于本改动能带来的差异）。
+    """
+    runs = [_compare_opt_run(compare="opt_einsum", optimize="optimal",
+                             compare_optimize=value)
+            for value in ("greedy", "dp")]
+    first, second = runs
+    for item in runs:
+        assert item["ok"], item
+
+    assert first["optimize"] == second["optimize"] == "optimal", runs
+    assert first["actual_shape"] == second["actual_shape"] == [24, 24], runs
+    assert first["kernel_info"] == second["kernel_info"], runs
+    assert first["specialize_effective"] == second["specialize_effective"], runs
+    # 参照侧确实换了：这条与上一条一起说明"变的是参照，不是主路径"
+    assert first["compare_optimize_effective"] == "greedy", first
+    assert second["compare_optimize_effective"] == "dp", second
+    # 数值必须一致（换的只是收缩序）
+    assert abs(first["rel"] - second["rel"]) < 1e-10, (first["rel"], second["rel"])
+
+    scale = max(first["seconds"], second["seconds"]) / max(
+        min(first["seconds"], second["seconds"]), 1e-12)
+    assert scale < 4.0, (first["seconds"], second["seconds"])
+
+
+def test_compare_optimize_is_inert_for_backend_and_none():
+    """``backend``/``none`` 没有可设的优化器：非 auto 值不报错，只标无效。
+
+    这两条参照路径的耗时不该被该选项影响；报告里 ``compare_optimize_effective``
+    为 ``None``，``reference`` 串里不出现优化器名。
+    """
+    for compare in ("backend", "none"):
+        report = _compare_opt_run(compare=compare, compare_optimize="dp")
+        assert report["ok"], report
+        assert report["compare_optimize"] == "dp", report
+        assert report["compare_optimize_effective"] is None, report
+        if compare == "backend":
+            assert "optimize" not in report["reference"], report["reference"]
+        else:
+            assert "reference" not in report, report
+
+        auto = _compare_opt_run(compare=compare, compare_optimize="auto")
+        assert auto["ok"], auto
+        assert auto["compare_optimize_effective"] is None, auto
+
+    # 解析层同样不报错（无效但合法），且返回 None
+    for compare in ("backend", "none"):
+        for value in cli.COMPARE_OPTIMIZERS:
+            assert cli.resolve_compare_optimize(compare, "auto", value) is None, (
+                compare, value)
+
+
+def test_help_lists_compare_optimize():
+    """``--help`` 是唯一权威来源：选项名、全部取值与缺省值都必须出现。"""
+    text = cli.build_parser().format_help()
+    assert "--compare-optimize" in text, text
+    for value in cli.COMPARE_OPTIMIZERS:
+        assert value in text, value
+    # 缺省值要与 DEFAULT_COMPARE_OPTIMIZE 一致地出现在 help 文本里
+    assert f"缺省 {cli.DEFAULT_COMPARE_OPTIMIZE}" in text, text[-1500:]
+    # 必须写明它只管参照，否则用户会以为它改主路径
+    assert "只影响参照" in text, text
+    # 必须写明不跨库重映射（这条是本选项最容易被误解的地方）
+    assert "重映射" in text, text
+
+
+# ── --language：只翻译、不改行为 ────────────────────────────────────────────
+#: 中日韩统一表意文字：``--language en`` 的 help 里一个都不许出现。
+CJK = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _help_text(language: str) -> str:
+    return cli.build_parser(language=language).format_help()
+
+
+def test_language_modes_and_default_are_documented():
+    """``--language`` 的取值与缺省必须是规范端的一部分。
+
+    缺省 ``auto`` **不等于** ``notice_language()``：它只在 ``PYQCD_EINSUM_LANG``
+    显式设了时才跟随，未设时保持本入口的历史行为（中文）。直接跟随 locale 会让
+    ``LANG=C.UTF-8`` 的机器上不传选项的输出从中文变英文——那是无声的破坏。
+    """
+    assert cli.DEFAULT_LANGUAGE == "auto", cli.DEFAULT_LANGUAGE
+    assert set(cli.LANGUAGE_MODES) == {"auto", "en", "zh-cn"}, cli.LANGUAGE_MODES
+    assert cli.LANGUAGE_ENV == "PYQCD_EINSUM_LANG", cli.LANGUAGE_ENV
+
+    text = _help_text("zh")
+    assert "--language" in text, text
+    for value in cli.LANGUAGE_MODES:
+        assert value in text, value
+    assert cli.LANGUAGE_ENV in text, text
+    # 必须写明只改输出、不写环境变量
+    assert "环境变量" in text, text
+
+
+def test_language_help_is_localised():
+    """``--language en`` 的 help 里不许有中文；``zh-cn`` 必须有。"""
+    english = _help_text("en")
+    assert not CJK.search(english), CJK.findall(english)[:20]
+    # 英文 help 仍要保留规范端身份与全部选项（翻译不是删条款）
+    assert "only sanctioned entry point" in english, english[:400]
+    for token in ("--equation", "--shape", "--scene", "--device", "--dtype",
+                  "--backend", "--compare", "--compare-optimize", "--specialize",
+                  "--optimize", "--atol", "--rtol", "--rounds", "--warmup",
+                  "--seed", "--verbose", "--json", "--language"):
+        assert token in english, token
+
+    chinese = _help_text("zh")
+    assert CJK.search(chinese), chinese[:400]
+    assert "唯一合法接口" in chinese, chinese[:400]
+    # 不传语言时仍是中文（缺省行为零变化，见上一条的 docstring）
+    assert cli.build_parser().format_help() == chinese
+
+
+def test_language_resolution_follows_the_env_var_only_when_auto():
+    """``resolve_language``：显式值确定；``auto`` 只看 ``PYQCD_EINSUM_LANG``。
+
+    刻意**不**跟随 locale：本机的 ``LANG`` 是 ``C.UTF-8``（``notice_language()``
+    返回 ``en``），若 ``auto`` 跟随 locale，缺省输出就会从中文变英文。
+    """
+    import os
+
+    saved = os.environ.pop(cli.LANGUAGE_ENV, None)
+    try:
+        assert cli.resolve_language(None) == "zh"
+        assert cli.resolve_language("auto") == "zh"
+        assert cli.resolve_language("en") == "en"
+        assert cli.resolve_language("zh-cn") == "zh"
+        assert cli.resolve_language("zh") == "zh"     # 与 notice_language 同口径
+        assert cli.resolve_language("EN") == "en"
+
+        os.environ[cli.LANGUAGE_ENV] = "en"
+        assert cli.resolve_language("auto") == "en"
+        os.environ[cli.LANGUAGE_ENV] = "zh"
+        assert cli.resolve_language("auto") == "zh"
+        # 显式选项**压过**环境变量
+        os.environ[cli.LANGUAGE_ENV] = "zh"
+        assert cli.resolve_language("en") == "en"
+        os.environ[cli.LANGUAGE_ENV] = "en"
+        assert cli.resolve_language("zh-cn") == "zh"
+    finally:
+        os.environ.pop(cli.LANGUAGE_ENV, None)
+        if saved is not None:
+            os.environ[cli.LANGUAGE_ENV] = saved
+
+    for bad in ("fr", "zh-tw", "jp", "zh_cn"):
+        try:
+            cli.resolve_language(bad)
+        except cli.UsageError as exc:
+            assert exc.code == 2, exc.code
+        else:
+            raise AssertionError(f"{bad!r} 本应被拒绝")
+
+
+def test_language_rejects_unknown_values_with_exit_code_two():
+    """非法 ``--language`` 必须退出码 2（用法错误），不是数值失败。
+
+    走 argparse 的 ``choices``（``--help`` 里列的就是这三个），错误信息可见；
+    同时 ``--language fr --help`` 仍要打印 help 并以 2 退出，不能被提前吞掉。
+    """
+    import contextlib
+    import io
+
+    for argv in (["--equation", "ij,jk->ik", "--shape", "[4,4],[4,4]->[4,4]",
+                  "--language", "fr"],
+                 ["--equation", "ij,jk->ik", "--shape", "[4,4],[4,4]->[4,4]",
+                  "--language=zh-tw"]):
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            try:
+                cli.main(argv)
+            except SystemExit as exc:
+                assert exc.code == 2, exc.code
+            else:
+                raise AssertionError(f"{argv[-1]!r} 本应被拒绝")
+        assert "--language" in errors.getvalue(), errors.getvalue()
+
+    # ``--language fr --help`` 必须仍然失败（2），不能被 --help 短路成 0
+    errors = io.StringIO()
+    with contextlib.redirect_stderr(errors), contextlib.redirect_stdout(io.StringIO()):
+        try:
+            cli.main(["--language", "fr", "--help"])
+        except SystemExit as exc:
+            assert exc.code == 2, exc.code
+        else:
+            raise AssertionError("--language fr --help 本应以 2 退出")
+    assert "--language" in errors.getvalue(), errors.getvalue()
+
+    # 直接调 run 也必须按语言报错（run 是外部脚本的入口，绕过 argparse）
+    try:
+        cli.run(equation="ij,jk->ik", shapes=[(2, 2), (2, 2)], out_shape=(2, 2),
+                compare="none", language="fr")
+    except cli.UsageError as exc:
+        assert exc.code == 2, exc.code
+    else:
+        raise AssertionError("run(language='fr') 本应被拒绝")
+
+
+def test_language_does_not_change_results():
+    """**核心保险丝**：同一个方程在 en 与 zh-cn 下的数值结果必须完全一致。
+
+    翻译只该改文案。若有人顺手在某一分支里改了容差、参照或收缩序，本条立刻红。
+    """
+    equation = "ij,jk,kl->il"
+    shapes = [(32, 32), (32, 32), (32, 32)]
+    runs = [cli.run(equation=equation, shapes=shapes, out_shape=(32, 32),
+                    compare="numpy", rounds=2, warmup=1, seed=7, language=lang)
+            for lang in ("en", "zh-cn")]
+    english, chinese = runs
+    for item in runs:
+        assert item["ok"], item
+    assert english["rel"] == chinese["rel"], (english["rel"], chinese["rel"])
+    assert english["ok"] == chinese["ok"], runs
+    assert english["actual_shape"] == chinese["actual_shape"], runs
+    assert english["ok"] is True, english
+
+    # 报告里的机器可读字段完全一致；只有文案字段允许不同
+    for field in ("equation", "shapes", "out_shape", "device", "dtype", "backend",
+                  "compare", "atol", "rounds", "warmup", "optimize",
+                  "compare_optimize", "compare_optimize_effective", "specialize",
+                  "specialize_effective", "n_operands", "input_elements",
+                  "output_elements", "kernel_info", "actual_shape"):
+        assert english[field] == chinese[field], (field, english[field],
+                                                  chinese[field])
+
+
+def test_language_only_changes_the_verbose_wording():
+    """``--verbose true`` 的键名不变，值按语言翻译；数值不变。"""
+    import contextlib
+    import io
+
+    reports = {}
+    for lang in ("en", "zh-cn"):
+        buffer = io.StringIO()
+        with contextlib.redirect_stderr(buffer):
+            reports[lang] = cli.run(equation="ij,jk->ik",
+                                    shapes=[(8, 8), (8, 8)], out_shape=(8, 8),
+                                    compare="numpy", rounds=2, warmup=1,
+                                    verbose=True, language=lang)
+        reports[lang]["_printed"] = buffer.getvalue()
+
+    english, chinese = reports["en"], reports["zh-cn"]
+    for lang, report in reports.items():
+        text = report["_printed"]
+        # 键名是稳定的机器可读标签，两种语言都必须保留
+        for key in ("equation", "device", "operands", "specialize", "time",
+                    "ref opt", "reference", "ref time", "rel", "memory", "peak",
+                    "pyqcd", "kernel"):
+            assert f"{key}" in text, (lang, key, text)
+        assert "PASS" not in text, text          # 结果行在 stdout，不在明细里
+
+    en_text = english["_printed"]
+    zh_text = chinese["_printed"]
+    assert not CJK.search(en_text), CJK.findall(en_text)[:20]
+    assert CJK.search(zh_text), zh_text[:400]
+    # 值是翻译过的，不是同一串
+    assert "operand(s)" in en_text, en_text
+    assert "个，共" in zh_text, zh_text
+    assert "no native hit (generic path)" in en_text or "kernel   : {" in en_text, \
+        en_text
+    # 数值一致
+    assert english["rel"] == chinese["rel"], (english["rel"], chinese["rel"])
+    assert english["n_operands"] == chinese["n_operands"] == 2, reports
+
+
+def test_language_does_not_pollute_the_environment():
+    """``--language`` 只影响本次输出，**不写** ``PYQCD_EINSUM_LANG``。
+
+    若它去写环境变量，同进程后续调用（包括库里的 ``notice_language()``）会被
+    悄悄改掉语言，而调用方根本无法预期。
+    """
+    import os
+
+    saved = os.environ.pop(cli.LANGUAGE_ENV, None)
+    try:
+        before = dict(os.environ)
+        for argv in (["--equation", "ij,jk->ik", "--shape", "[4,4],[4,4]->[4,4]",
+                      "--language", "en", "--compare", "none"],
+                     ["--equation", "ij,jk->ik", "--shape", "[4,4],[4,4]->[4,4]",
+                      "--compare", "none"]):
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                assert cli.main(argv) == 0, argv
+            assert cli.LANGUAGE_ENV not in os.environ, sorted(os.environ)
+            assert dict(os.environ) == before, "main() 改了环境变量"
+    finally:
+        os.environ.pop(cli.LANGUAGE_ENV, None)
+        if saved is not None:
+            os.environ[cli.LANGUAGE_ENV] = saved
+
+
+def test_translate_fails_loudly_on_missing_keys_and_variants():
+    """``translate`` 缺 key / 缺语言必须抛 KeyError，**不静默返回 key 本身**。
+
+    静默兜底会让漏翻的字符串以"看似正常的英文"混进输出里，比直接崩更难发现。
+    同时钉住"每条文案都有 en/zh 两份"，否则某一语言下必然漏字。
+    """
+    for key, variants in cli.MESSAGES.items():
+        assert set(variants) == {"en", "zh"}, (key, sorted(variants))
+        for lang in ("en", "zh"):
+            assert variants[lang].strip(), (key, lang)
+
+    try:
+        cli.translate("no.such.key", "en")
+    except KeyError as exc:
+        assert "no.such.key" in str(exc), exc
+    else:
+        raise AssertionError("缺 key 本应抛 KeyError")
+
+    try:
+        cli.translate("help.equation", "fr")
+    except KeyError as exc:
+        assert "fr" in str(exc), exc
+    else:
+        raise AssertionError("缺语言变体本应抛 KeyError")
+
+    # ``zh-cn``/``zh`` 与 ``en`` 都是接受的别名，不该被当成未知语言
+    assert cli.translate("detail.kernel_none", "zh-cn") == \
+        cli.translate("detail.kernel_none", "zh")
+    assert cli.translate("detail.kernel_none", "EN") == \
+        cli.translate("detail.kernel_none", "en")
+
+
 TESTS = (
     test_shape_spec_round_trip,
     test_shape_spec_scalar_and_reduction,
@@ -448,6 +894,20 @@ TESTS = (
     test_specialize_false_really_disables_the_native_path,
     test_specialize_is_forwarded_to_the_compare_backend_reference,
     test_help_lists_specialize_and_verbose_reports_it,
+    test_compare_optimize_default_reproduces_the_old_reference_behaviour,
+    test_compare_optimize_dp_reaches_the_opt_einsum_reference,
+    test_compare_optimize_rejects_names_the_reference_cannot_honour,
+    test_compare_optimize_does_not_touch_the_main_path,
+    test_compare_optimize_is_inert_for_backend_and_none,
+    test_help_lists_compare_optimize,
+    test_language_modes_and_default_are_documented,
+    test_language_help_is_localised,
+    test_language_resolution_follows_the_env_var_only_when_auto,
+    test_language_rejects_unknown_values_with_exit_code_two,
+    test_language_does_not_change_results,
+    test_language_only_changes_the_verbose_wording,
+    test_language_does_not_pollute_the_environment,
+    test_translate_fails_loudly_on_missing_keys_and_variants,
 )
 
 
