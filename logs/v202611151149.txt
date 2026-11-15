@@ -1,0 +1,112 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-15 11:49:34 +0800
+批次: parallel-A-B
+主任务: 并行攻坚：cpu-einsums native 组 + v3 步表复数支持
+触发原因: 阶段成果
+摘要: native 组 17/17 PASS（原整组 SKIP），169/169；复数接通 v3，rel ≤1.4e-15/7.9e-07；全量 129/1/0
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 并行派发两项子任务
+- 目标: 同时攻坚 {cpp/cpu/cpu-einsums native 组} 与 {v3 步表复数支持}
+- 命令/操作: 确认 agent-dispatch.sh 可用；核对两任务文件边界
+- 关键输出: 任务A 限 cpp/cpu/cpu-einsums/；任务B 限 cpp/kupl/einsum/ + 相关 py 文件；
+  两集合无交集，可安全并行
+- 退出码: 0
+- 证据与判断: 用 agent-dispatch.sh --task-file 分别派发，超时 40m / 60m，
+  各得独立 run_id（20261115T112224.WdRz6z / .TCAXW8）
+
+### S2 — 子代理A：cpu-einsums 桩库构建
+- 命令/操作: CXX=x86_64-conda-linux-gnu-g++ bash cpp/cpu/cpu-einsums/make.sh
+- 关键输出: SUCCESS，产出 build/libpyqceinsums.so（21104 bytes）+ 稳定软链；
+  导出 4 符号，SONAME libpyqceinsums.so，不依赖 Einsums/BLAS
+- 退出码: 0
+- 证据与判断: make.sh 期望的是独立项目 Einsums（github.com/Einsums/Einsums）头文件，
+  非 NVIDIA 的 MatX；无头文件时走桩库属设计行为（fail-closed 返回 UNAVAILABLE）
+- 契约重跑: doc-case 66/66、spec 42/42、contract 44/44、**native 17/17 PASS**
+  （原整组 SKIP），合计 169/169 PASS / SKIP 7
+- 未解: 真后端 backend_enabled=True 本机不可构建——refer/git-rep/Einsums 子模块
+  未初始化（find 计数 0）、无外网（git ls-remote 超时 exit=124）、缺 cmake/ninja/
+  fmt/cpptrace/apiary/spdlog/mimalloc/catch2
+
+### S3 — 子代理B：v3 步表接通复数
+- 命令/操作: 改 run_specialized 的 dtype→elem_kind switch；加 complex_complete() 闸门；
+  topology_gemm.h 加 static_assert
+- 关键输出: 原生 trace 打印 topology-specialized dtype=0/1（原先是直接 miss）；
+  桩 BLAS 下改为 topology-step-miss 且实数不受影响
+- 退出码: 0
+- 证据与判断: v3 执行器本就是模板化的，run_v3() 已实例化 ComplexElement<float|double>，
+  gemm_call 对复数传 cgemm/zgemm；缺的只有分派层那一行 return kSpecializedMiss
+- 数值对拍: complex128 最大 rel 1.37e-15（容差 1e-9）、complex64 7.89e-07（容差 1e-4）
+- 变异验证: 回退 topology_apply.cpp 后新用例 FAIL，恢复后 PASS
+
+### S4 — 主 agent 独立复验（不采信代理自述）
+- 命令/操作: 重建 KUPL 库；独立写校验脚本跑 2 类复数 × 7 条语料；
+  独立跑 cpu_einsums.verify；检查越界改动
+- 关键输出: 复数 12/14 命中 kupl_topology（seq=500 无步表属预期），
+  rel ≤ 8.4e-16 (complex128) / 4.3e-07 (complex64)；
+  cpu-einsums native 17/17 独立确认；git status 显示两代理均未越界
+- 退出码: 0
+- 证据与判断: 两任务的成果均属实，非代理自我声称
+
+### S5 — 合并后全量回归
+- 命令/操作: python -B -m pyqcd.testing（锁定单一 GPU）
+- 关键输出: 129 passed / 1 skipped / 0 failed
+- 退出码: 0
+- 证据与判断: 两项改动互不干扰，均无回退
+
+## 验证与证据
+- 测试/检查: python -B -m pyqcd.testing；python -m pyqcd.testing.cpu_einsums.verify；
+  独立复数校验脚本；原生 trace 抓取
+- 结果: 全量 129 passed / 1 skipped / 0 failed；cpu-einsums 169/169 PASS
+  （native 组 17/17，原整组 SKIP）；复数 12/14 命中 v3 且容差内
+- 未验证项: Einsums 真后端（backend_enabled=True）本机不可构建，已给出缺失依赖
+  与无外网的证据；复合复数性能数字作废，未产出新数字
+
+## 变更与产物
+- 文件: cpp/kupl/einsum/src/topology_apply.cpp、cpp/kupl/einsum/src/topology_gemm.h、
+  pyqcd/testing/_topology_kernel_contract.py、pyqcd/einsum/_kernel_kupl.py、
+  pyqcd/einsum/AGENTS.md
+- 产物: cpp/cpu/cpu-einsums/build/libpyqceinsums.so（21104 bytes，桩库，被 .gitignore 忽略）、
+  cpp/kupl/einsum/libpyqcdeinsum_kupl.so（含复数支持）
+- 未改动范围: _TOPOLOGY_DECLINED_DTYPES、cpp/cuda/einsum/、cpp/cpu/cpu-einsums 源码
+
+## 风险、限制与下一步
+- 风险: 无源码级回退；桩库只提供 fail-closed 语义，不提供 Einsums 真实算力
+- 阻塞: Einsums 真后端需初始化子模块 + 新建 conda 环境 + 完整 CMake，均越出本轮授权边界
+- 下一步: 已提交 51f3a172。可选：初始化 refer/git-rep/Einsums 子模块后重建真后端；
+  或按生产尺寸口径重测复数接通 v3 后的性能以更新选路策略
+
+## 用户输入指令
+同时派发多个子代理分别攻坚{构建 cpp/cpu/cpu-einsums 补齐 native 组，或让 v3 步表支持复数（需在 topology_apply.cpp 增加 cgemm/zgemm 分支）}
+
+## Agent 全文报告
+--- report begin ---
+两项任务已并行派发给两个子代理，各自完成并经主 agent 独立复验。
+
+任务A（cpu-einsums）：构建出桩库 libpyqceinsums.so（21104 bytes）。契约测试的 native 组
+从整组 SKIP 变为 17/17 PASS，合计 169/169 PASS / SKIP 7。源码零改动——make.sh 的桩库
+分支就是设计行为，它期望的是独立项目 Einsums 的头文件，不是 NVIDIA MatX。真后端
+（backend_enabled=True）判定本机不可构建，证据是子模块未初始化（find 计数 0）、
+无外网（git ls-remote 超时 exit=124）、缺 cmake/ninja/fmt/cpptrace/apiary/spdlog/
+mimalloc/catch2 全套依赖。
+
+任务B（v3 复数）：复数现在真的走 kupl_topology（v3 步表），不再静默回落 v2。
+根因是 run_specialized 只给 float32/float64 赋 elem_kind，复数直接 return
+kSpecializedMiss——而这条回落对上层不可见，LAST_INFO['path'] 仍写 kupl_topology、
+数值也正确，所以历史上"复数走 v3"的结论一直被误信。v3 执行器本就是模板化的、
+run_v3() 已实例化 ComplexElement<float|double>，所以修复面很小：分派 switch 覆盖四类
+dtype + complex_complete() 闸门 + 一个 static_assert 钉住交错实虚布局。
+
+验证：complex128 最大 rel 1.37e-15（容差 1e-9）、complex64 7.89e-07（容差 1e-4）；
+新增契约用例用子进程抓原生 trace 钉住这条，并做了变异验证（回退修复则 FAIL）。
+全量回归 129 passed / 1 skipped / 0 failed。
+
+同时作废旧结论：注释里"复数 6-7x、seq=1700 complex64 0.15x"测的是 v2，接通 v3 后
+必须按生产尺寸口径重测才能用于选路。
+
+后续：已提交 51f3a172。可选方向是初始化 refer/git-rep/Einsums 子模块后重建真后端，
+或按生产尺寸重测复数性能以更新选路策略。
+--- report end ---

@@ -1014,3 +1014,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## parallel-A-B - stage - 2026-11-15 11:49:34 +0800
+- 主任务: 并行攻坚：cpu-einsums native 组 + v3 步表复数支持
+- 日志文件: logs/v202611151149.txt
+- 文件大小: 6737 bytes
+- 触发原因: 阶段成果
+- 关键内容: native 组 17/17 PASS（原整组 SKIP），169/169；复数接通 v3，rel ≤1.4e-15/7.9e-07；全量 129/1/0
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
