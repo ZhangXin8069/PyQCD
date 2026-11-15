@@ -818,31 +818,47 @@ def test_higher_dims_and_larger_extents_hold_for_all_dtypes():
     ``dim=4`` 是语料基准与 ``_dedicated_allowlist`` 的标定尺寸，但内核的轴长是
     ``dim`` 这个标量而不是常量，越界的尺寸最容易暴露"按 4 写死"的假设。这里不
     追求生产尺寸（那是 ``bench_dtype_matrix --scene`` 的职责），只钉住结构正确性。
+
+    实数档在**分派层**被 ``_TOPOLOGY_DECLINED_DTYPES`` 主动挡掉（性能选路，不是
+    能力缺失，见 ``_kernel_kupl`` 模块注释），所以本用例在作用域内打开
+    ``PYQCD_EINSUM_TOPOLOGY_REAL=1``——它要验的是"原生步表对四类 dtype 都正确"，
+    而不是当前的选路偏置；选路本身由 ``test_dedicated_routing_contracts`` 负责。
     """
     _require_kupl()
+    import os
+
+    override = "PYQCD_EINSUM_TOPOLOGY_REAL"
+    saved_override = os.environ.get(override)
+    os.environ[override] = "1"
     checked = 0
-    for dtype in ALL_DTYPES:
-        name = np.dtype(dtype).name
-        # 步表只由**基础表 2582 条**生成（`_topology_kernel_gen.MAX_KERNELS=2582`,
-        # seq 1..2582）；附录（2583+）没有步表，去兜底后恒 status=4。
-        for seq in (2, 2000):
-            task = tasklist.lookup(seq)
-            for dim in (5, 6, 8, 12):
-                operands = _make_operands(
-                    [(dim,) * len(term)
-                     for term in task.equation.split("->")[0].split(",")],
-                    dtype, seed=task.seq + dim)
-                expected = contract(task.equation, *operands, specialize=False)
-                _kernel_kupl.LAST_INFO.clear()
-                result = _kernel_kupl.try_topology_apply(task.equation, operands)
-                assert result is not None, (
-                    f"{name} seq={seq} dim={dim} 拓扑入口应当命中："
-                    f"{_kernel_kupl.LAST_FAILURE.get('reason')}")
-                assert np.dtype(result.dtype) == np.dtype(dtype), (name, dim)
-                error = _relative_error(result, expected)
-                assert error <= TOLERANCES[name], (
-                    f"{name} seq={seq} dim={dim} rel={error:.3e}")
-                checked += 1
+    try:
+        for dtype in ALL_DTYPES:
+            name = np.dtype(dtype).name
+            # 步表只由**基础表 2582 条**生成（`_topology_kernel_gen.MAX_KERNELS=2582`,
+            # seq 1..2582）；附录（2583+）没有步表，去兜底后恒 status=4。
+            for seq in (2, 2000):
+                task = tasklist.lookup(seq)
+                for dim in (5, 6, 8, 12):
+                    operands = _make_operands(
+                        [(dim,) * len(term)
+                         for term in task.equation.split("->")[0].split(",")],
+                        dtype, seed=task.seq + dim)
+                    expected = contract(task.equation, *operands, specialize=False)
+                    _kernel_kupl.LAST_INFO.clear()
+                    result = _kernel_kupl.try_topology_apply(task.equation, operands)
+                    assert result is not None, (
+                        f"{name} seq={seq} dim={dim} 拓扑入口应当命中："
+                        f"{_kernel_kupl.LAST_FAILURE.get('reason')}")
+                    assert np.dtype(result.dtype) == np.dtype(dtype), (name, dim)
+                    error = _relative_error(result, expected)
+                    assert error <= TOLERANCES[name], (
+                        f"{name} seq={seq} dim={dim} rel={error:.3e}")
+                    checked += 1
+    finally:
+        if saved_override is None:
+            os.environ.pop(override, None)
+        else:
+            os.environ[override] = saved_override
     assert checked == len(ALL_DTYPES) * 2 * 4, checked
 
 
@@ -851,27 +867,43 @@ def test_every_dtype_is_native_when_its_probe_passes():
 
     判定对四类完全一样——``LAST_INFO['path']`` 命中、dtype 保真、数值在容差内。
     没有"某一类只要不崩就算支持"的豁免。
+
+    与 ``test_higher_dims_and_larger_extents_hold_for_all_dtypes`` 同理：实数档的
+    回落是**分派策略**（``_TOPOLOGY_DECLINED_DTYPES``，性能选路），不是探测失败，
+    所以本用例在作用域内打开 ``PYQCD_EINSUM_TOPOLOGY_REAL=1`` 后验"探测通过即
+    下发"这条契约本身。
     """
     _require_kupl()
-    checked = []
-    for dtype in ALL_DTYPES:
-        dtype = np.dtype(dtype)
-        if not _kernel_kupl._topology_dtype_enabled(dtype):
-            continue                      # 这个原生构建缺该类 GEMM，跳过即可
-        assert dtype in set(_kernel_kupl.topology_dtypes())
+    import os
 
-        operands = probe_operands(2, dtype, seed=17)
-        expected = np.einsum(PROBE_EQUATION, *operands)
-        _kernel_kupl.LAST_INFO.clear()
-        _kernel_kupl.LAST_FAILURE.update({"reason": "", "status": None})
-        result = _kernel_kupl.try_topology_apply(PROBE_EQUATION, operands)
-        assert result is not None, (
-            f"{dtype} 探测通过却回落：{_kernel_kupl.LAST_FAILURE.get('reason')}")
-        assert result.dtype == dtype, f"{dtype}: 结果 dtype 被改成 {result.dtype}"
-        assert _relative_error(result, expected) <= TOLERANCES[dtype.name], dtype
-        assert _kernel_kupl.LAST_INFO.get("path") == "kupl_topology", \
-            (dtype, _kernel_kupl.LAST_INFO.get("path"))
-        checked.append(dtype.name)
+    override = "PYQCD_EINSUM_TOPOLOGY_REAL"
+    saved_override = os.environ.get(override)
+    os.environ[override] = "1"
+    checked = []
+    try:
+        for dtype in ALL_DTYPES:
+            dtype = np.dtype(dtype)
+            if not _kernel_kupl._topology_dtype_enabled(dtype):
+                continue                  # 这个原生构建缺该类 GEMM，跳过即可
+            assert dtype in set(_kernel_kupl.topology_dtypes())
+
+            operands = probe_operands(2, dtype, seed=17)
+            expected = np.einsum(PROBE_EQUATION, *operands)
+            _kernel_kupl.LAST_INFO.clear()
+            _kernel_kupl.LAST_FAILURE.update({"reason": "", "status": None})
+            result = _kernel_kupl.try_topology_apply(PROBE_EQUATION, operands)
+            assert result is not None, (
+                f"{dtype} 探测通过却回落：{_kernel_kupl.LAST_FAILURE.get('reason')}")
+            assert result.dtype == dtype, f"{dtype}: 结果 dtype 被改成 {result.dtype}"
+            assert _relative_error(result, expected) <= TOLERANCES[dtype.name], dtype
+            assert _kernel_kupl.LAST_INFO.get("path") == "kupl_topology", \
+                (dtype, _kernel_kupl.LAST_INFO.get("path"))
+            checked.append(dtype.name)
+    finally:
+        if saved_override is None:
+            os.environ.pop(override, None)
+        else:
+            os.environ[override] = saved_override
 
     if not checked:
         raise unittest.SkipTest("native KUPL build cannot execute any dtype")

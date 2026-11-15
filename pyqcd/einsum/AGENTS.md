@@ -251,6 +251,24 @@ mamba 环境配的是 **nvrtc 12.9**，与 `cupy.cuda.runtime` 的 `12090` 一�
 这**不是**产品缺陷，也不是"必须降 arch"——不要为此改 `CUDAARCHS` 或
 `CUPY_NVCC_GENERATE_CODE`，换环境即可。
 
+#### 测试不得假设"本机看不见 GPU"（2026-11-15 记录）
+
+`CUDA_VISIBLE_DEVICES=""` **只在 CUDA 运行时首次初始化前生效**。套件里只要有任何
+更早的用例碰过 cupy，把它设成空串就没有任何效果，`_probe.probe()` 仍会看到真实
+设备并给出 `ok` / `fallback` / `call-failed` / `mismatch`。因此
+`_contract_edge_cases_contract.test_gpu_probe_survives_missing_device` 断言的是
+"**给出可读结论而不是 traceback**"这一契约，允许集合必须覆盖全部合法状态
+（含 `fallback`：本机没构建 CUDA 原生库时 `qcd_cuda_topology_apply` 不导出，
+探测如实报 `fallback`）。
+
+同理，`_TOPOLOGY_DECLINED_DTYPES` 的实数回落是**分派选路**而非能力缺失，所以
+`_topology_kernel_contract` 里两个"四 dtype 都要命中原生"的用例在作用域内临时
+打开 `PYQCD_EINSUM_TOPOLOGY_REAL=1`，验完即恢复——它们要钉的是原生步表对四类
+dtype 的正确性，选路偏置由 `test_dedicated_routing_contracts` 负责。
+
+**不要**把具体 GPU 型号/UUID 写进代码、测试默认值或文档结论：本机实测用的
+`CUDA_VISIBLE_DEVICES` 只是运行的临时环境变量，发布物保持设备无关。
+
 ### 6.2 已知缺陷：v3 步表的收缩序按 `PROBE_DIM=2` 定型（2026-11-14 记录，未修）
 
 `pyqcd/testing/_topology_kernel_gen.py:43` 用 `PROBE_DIM = 2` 且 `optimize="greedy"`

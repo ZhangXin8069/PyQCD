@@ -212,7 +212,14 @@ def test_kernel_skip_warns_immediately() -> None:
 
 
 def test_gpu_probe_survives_missing_device() -> None:
-    """装了 cupy 却没有可见 GPU 时，`--gpu-probe` 必须给结论而不是 traceback。"""
+    """`--gpu-probe` 在任何环境下都必须给结论而不是 traceback。
+
+    这里**不假设**进程看不到 GPU：``CUDA_VISIBLE_DEVICES`` 只在 CUDA 运行时首次
+    初始化前生效，套件里只要有更早的用例碰过 cupy，把它设成空串就没有任何效果，
+    探测仍会看到真实设备。因此断言的是"给出可读结论"这一契约，而不是某一个
+    具体状态——``fallback``/``call-failed``/``mismatch`` 同样是通过诊断得到的
+    合法结论（例如本机没构建 CUDA 原生库时就是 ``fallback``）。
+    """
     import os
 
     from pyqcd.einsum import _probe
@@ -227,8 +234,12 @@ def test_gpu_probe_survives_missing_device() -> None:
         else:
             os.environ["CUDA_VISIBLE_DEVICES"] = saved
     assert isinstance(report, dict) and report.get("verdict"), report
-    assert report["kernel_status"]["state"] in {"no-device", "ok", "probe-failed",
-                                                "cupy-missing", "disabled"}
+    status = report["kernel_status"]
+    assert status["state"] in {"no-device", "ok", "probe-failed", "cupy-missing",
+                               "disabled", "fallback", "call-failed", "mismatch"}, status
+    assert isinstance(status.get("detail"), str) and status["detail"], status
+    text = _probe.format_report(report)
+    assert "kernel status" in text
 
 
 def test_probe_reports_without_raising() -> None:
