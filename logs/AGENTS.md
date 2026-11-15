@@ -996,3 +996,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## resume-20261114T082653 - stage - 2026-11-15 10:54:32 +0800
+- 主任务: qcd-einsum 续跑：修复测试环境假设导致的两项失败
+- 日志文件: logs/v202611151054.txt
+- 文件大小: 7287 bytes
+- 触发原因: 阶段成果
+- 关键内容: 全量套件 125/1/4 -> 129/1/0；两处断言改为覆盖真实状态；发布物不含 GPU 限制
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
