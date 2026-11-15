@@ -40,8 +40,23 @@ from ._topology_equations_contract import _parse_equations
 
 MAX_KERNELS = 2582
 MAX_RANK = 15
-# 生成期探针尺寸：步序列的结构与 dim 无关（所有轴等长），取 2 即可。
+# 生成期探针尺寸：**仅在没有生产尺寸可用时**才退回等长探针。
+#
+# 历史教训（2026-11-14 实测）：早期无条件用 ``PROBE_DIM = 2`` 生成收缩序，于是
+# 步序列由 dim=2 的超立方体决定。等长时全部轴长相同，收缩序的代价与轴长无关，
+# 看不出问题；一到生产异形轴（``Ns=4``/``Nev=100``/``Mom``/``Lt``）就暴露：
+# 同样 13 步可能多做 12 倍的乘加，巨中间体如 ``M=15625 K=1600 N=25``（而
+# dedicated 的同规模步是 ``625×625×400``）。生产方程上实测 topology 路径
+# 246.8 ms vs dedicated 4.7 ms。
+#
+# 正解是用语料自带的 ``roles`` 反推每个 label 的真实尺寸
+# （``pyqcd.einsum.bench_specialized._label_sizes``），再在该尺寸下求路径。
 PROBE_DIM = 2
+#: 生成期路径优化器。``"auto"`` 与 ``_kernel_kupl.try_dedicated`` 同口径
+#: （它传 ``"auto"``，见 ``_dedicated_plan`` 的说明）：两者在部分式子上差 2.9×
+#: FLOPs，实测 seq=646 上 greedy 4.08e8 MAC vs auto 1.08e8 MAC（26%）。
+#: 用 ``"greedy"`` 生成会白白让步表多做 4 倍的乘加。
+_OPTIMIZE = "auto"
 TARGET = "cpp/kupl/einsum/src/topology_kernels.inc"
 
 _B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
@@ -83,11 +98,26 @@ def fnv1a(text: str) -> int:
     return value
 
 
-def plan_steps(equation: str) -> tuple[list[dict], list[str], str]:
-    """镜像一次 greedy 收缩，返回每步的两侧项、输出项与源槽位。"""
+def plan_steps(equation: str, sizes: dict[str, int] | None = None
+               ) -> tuple[list[dict], list[str], str]:
+    """镜像一次 greedy 收缩，返回每步的两侧项、输出项与源槽位。
+
+    ``sizes`` 给出每个 label 的**真实生产长度**时，收缩序就在该异形轴上定型；
+    缺省则退回 ``PROBE_DIM`` 等长探针（仅用于没有 roles 的临时调用）。两者的
+    步序列**结构**相同（操作数个数与最后一步都产出整条方程的输出），差别只在
+    二元步的结合次序——那正是决定 GEMM 形状与中间体大小的东西。
+    """
     terms, out = parse(equation)
-    shapes = [(PROBE_DIM,) * len(term) for term in terms]
-    _, info = contract_path(equation, *shapes, shapes=True, optimize="greedy")
+    if sizes is None:
+        shapes = [(PROBE_DIM,) * len(term) for term in terms]
+    else:
+        try:
+            shapes = [tuple(int(sizes[ch]) for ch in term) for term in terms]
+        except KeyError as missing:
+            raise AssertionError(
+                f"{equation}: label {missing.args[0]!r} has no production size; "
+                f"the corpus roles must bind every label") from None
+    _, info = contract_path(equation, *shapes, shapes=True, optimize=_OPTIMIZE)
 
     pool_terms = list(terms)
     pool_slots = list(range(len(terms)))
@@ -174,8 +204,11 @@ def decompose(left: str, right: str, out: str) -> dict:
     return spec
 
 
-def encode_steps(equation: str) -> bytes:
+def encode_steps(equation: str, sizes: dict[str, int] | None = None) -> bytes:
     """编码一条方程的步表（v3）。
+
+    ``sizes`` 为该方程每个 label 的真实生产长度（见 :func:`plan_steps`）。给了
+    它，收缩序就按生产异形轴定型；``None`` 退回等长探针。
 
     v3 = **label 块 + v2 逐步描述 + 每步 c_labels**。v2 只存轴序（4 bit/轴），
     轴长靠 ``dim`` 幂次反推，因此只能服务"所有轴长相等"的超立方体；生产 scene
@@ -197,7 +230,7 @@ def encode_steps(equation: str) -> bytes:
     拿到的正是这张表；记成 b 序会在下一步对不上（实测 step1 产出 ``aedf`` 的
     b 序是 ``['a','f','d','e']``，而 step3 引用时是 ``['a','e','f','d']``）。
     """
-    steps, terms, out = plan_steps(equation)
+    steps, terms, out = plan_steps(equation, sizes)
     if not steps or steps[-1]["out"] != out:
         raise AssertionError(f"{equation}: last step does not produce the output")
 
@@ -351,16 +384,48 @@ def render(records: list[dict], kernels: list[dict], total_code: int) -> str:
     return "\n".join(out)
 
 
+def _production_sizes(equation: str, roles: tuple[str, ...]) -> dict[str, int]:
+    """由语料 ``roles`` + 生产 dims 反推每个 label 的真实长度。
+
+    直接复用 ``pyqcd.einsum.bench_specialized._label_sizes``：那是本库**唯一**
+    的「角色 → 物理尺寸」权威实现（``gamma*``→``Ns``、``VVV``→``(Lt,Mom,Nev,Nev,
+    Nev)``、``VDV``→``(Lt,Mom,Nev,Nev)``、peram 剩余轴→``Nev``）。在这里另写
+    一份必然与之漂移。
+
+    生产 dims 取 ``distill`` 档（参考脚本 ``sink/source`` 端：``Nev=100``,
+    ``Mom=1``）——那是语料里 peram/VVV/VDV 实际运行的那套尺寸。不取
+    ``distill_curr``：两档的 label 集合一致，收缩序只取决于各轴长**相对**大小，
+    ``Nev`` 从 100 变 400 是所有 peram 轴同比放大，不改变 greedy 的取舍。
+    """
+    from ..einsum._bench_scene import dims as scene_dims
+    from ..einsum.bench_specialized import _label_sizes
+
+    terms, _out = parse(equation)
+    return _label_sizes(terms, roles, scene_dims("distill"))
+
+
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parents[2]
     equations = _parse_equations()
     assert len(equations) <= MAX_KERNELS, len(equations)
 
+    from ..einsum import _wick_tasklist as tasklist
+
+    tasks = tasklist.by_seq()
+    if len(tasks) < len(equations):
+        raise AssertionError(
+            f"corpus roles unavailable: {len(tasks)} tasks for {len(equations)} equations")
+
     entries: list[dict] = []
     seen_hash: dict[int, str] = {}
-    for equation in equations:
+    for seq, equation in enumerate(equations, start=1):
         terms, out = parse(equation)
-        blob = encode_steps(equation)
+        task = tasks.get(seq)
+        if task is None or task.equation != equation:
+            raise AssertionError(
+                f"seq={seq}: tasklist does not agree with the parsed corpus")
+        sizes = _production_sizes(equation, task.roles)
+        blob = encode_steps(equation, sizes)
         signature = canonical_signature(terms, out)
         digest = fnv1a(signature)
         if digest in seen_hash:

@@ -71,8 +71,12 @@ def _canonical_map(terms: list[str], out: str) -> dict[str, int]:
     return {ch: index for index, ch in enumerate(order)}
 
 
-def encode_v3(equation: str) -> bytes:
-    """把一条方程编码成 v3 字节流（label 块 + v2 逐步 + 每步 c_labels）。"""
+def encode_v3(equation: str, sizes: dict[str, int] | None = None) -> bytes:
+    """把一条方程编码成 v3 字节流（label 块 + v2 逐步 + 每步 c_labels）。
+
+    ``sizes`` 透传给 :func:`plan_steps`：给了真实生产标签长度，收缩序就按生产
+    异形轴定型；缺省退回等长探针（仅供结构测试）。
+    """
     terms, out = parse(equation)
     labels = _canonical_map(terms, out)
     if len(labels) > MAX_LABELS:
@@ -85,7 +89,7 @@ def encode_v3(equation: str) -> bytes:
         stream.append(len(term))
         stream.extend(labels[ch] for ch in term)
 
-    steps, _terms, _out = plan_steps(equation)
+    steps, _terms, _out = plan_steps(equation, sizes)
     for step in steps:
         spec = decompose(step["left"], step["right"], step["out"])
         stream.append(step["a_src"] & 0xFF)
@@ -287,7 +291,12 @@ def test_v3_serves_production_heterogeneous_shapes():
         operands = [np.ascontiguousarray(rng.standard_normal(shape))
                     for shape in shapes]
         sizes = _label_sizes_map(task.equation, shapes)
-        got = execute_v3(decode_v3(encode_v3(task.equation)), operands, sizes)
+        # 收缩序必须按**生产**标签长度定型（与 ``_topology_kernel_gen.main`` 的
+        # ``_production_sizes`` 同口径），否则验的是探针序而不是真正下发的步表。
+        shipped_sizes = _label_sizes(task.equation.split("->")[0].split(","),
+                                     task.roles, table)
+        got = execute_v3(decode_v3(encode_v3(task.equation, shipped_sizes)),
+                         operands, sizes)
         expected = np.einsum(task.equation, *operands, optimize="greedy")
         scale = float(np.max(np.abs(expected))) or 1.0
         error = float(np.max(np.abs(got - expected))) / scale

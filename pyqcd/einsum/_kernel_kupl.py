@@ -188,12 +188,18 @@ _PROBE_TOLERANCE = {"complex128": 1e-9, "float64": 1e-9,
 
 # ── 分派策略层（与上面的 dtype 能力契约**正交**）─────────────────────────────
 # 为什么要有这一层：``TOPOLOGY_DTYPES`` 回答的是"原生能不能正确执行这类 dtype"，
-# 与"分派时该不该把它交给拓扑入口"是两件事。实测（seq=500，scene scale=8，3 轮中位）
-# 实数档的拓扑入口慢于 dedicated 步表 52.9×（float64 246.8 ms vs 4.7 ms）与
-# 53.1×（float32 140.5 ms vs 2.6 ms），根因是原生 v3 执行器的 GEMM 形状退化；而
-# 复数档两者等价（1.05× / 0.99×），且 dedicated 在 ``_api`` 的分派顺序里本就靠前。
-# 所以这里**只**把实数档挡在分派层：契约仍四类平权，``topology_dtypes()`` 仍返回
-# 四类，探测（``_probe_dtype``）语义不变，复数档行为完全不动。
+# 与"分派时该不该把它交给拓扑入口"是两件事。
+#
+# 2026-11-15 收缩序修复后的复测（distill 尺寸，3 轮中位）：
+#   * seq=500 float32：169.5 ms vs dedicated 155.0 ms = **1.09×**（修复前 53.1×）；
+#   * seq=1700 float64：16.0 ms vs 10.7 ms = 1.49×；
+#   * seq=1291/1936/2581 这类小规模：6–9×，但绝对差只有 ~1.8 ms——那是拓扑入口
+#     的固定开销（签名哈希 + plan 缓存查找），不是 GEMM 形状退化；
+#   * 复数档同规模同量级（6–7×），唯 seq=1700 上复数反超（complex64 0.15×）。
+#
+# 所以结论没变、**原因变了**：实数档仍走 dedicated（它仍在 ``_api`` 分派顺序里
+# 更靠前，且没有那 ~2 ms 固定开销），但这不再是"步表病态"的问题。契约仍四类平权，
+# ``topology_dtypes()`` 仍返回四类，探测（``_probe_dtype``）语义不变。
 _TOPOLOGY_REAL_ENV = "PYQCD_EINSUM_TOPOLOGY_REAL"
 _TOPOLOGY_DECLINED_DTYPES: tuple[np.dtype, ...] = (
     np.dtype(np.float64), np.dtype(np.float32))
@@ -318,6 +324,73 @@ def _topology_dtype_reason(dtype: np.dtype) -> str | None:
 _ENTRY_LOCK = threading.Lock()
 
 
+def _topology_pack_bound_reason(subscripts: str,
+                                operands: Sequence[Any]) -> str | None:
+    """topology 路径的 CPU 预算守卫：pack 流量压倒 GEMM 时劝回落。
+
+    与 :func:`_cpu_plan_fallback_reason` 同一判据（``pack_bytes`` 超 1 GiB 且
+    FLOPs 不足 1e9 即"pack-bound"），区别是这里喂给它的是 **version-2 计划**的
+    步序列——两套 plan 格式不通用（v2 magic ``0x51434532`` vs dedicated
+    ``0x31414451``），所以统计必须自己算。
+
+    为什么需要这道门：seq=646（``amwq`` 四轴各 100，distill 尺寸）的输出本身就是
+    1e8 元素，而它只做 1.08e8 次乘加。任何实现都得写下这 800 MB，但 topology 还会
+    在中间体上做整块 pack/unpack，实测 5.2 s；dedicated 早就被同一个判据拒掉，
+    topology 缺这道门就会把它当成"命中最优路径"，比回落通用路径还慢。
+    """
+    from ._api import contract_path
+    from ._native_plan import _simulate_plan
+
+    try:
+        _, info = contract_path(subscripts, *operands)
+        _, slots, steps, sizes = _simulate_plan(info.contraction_list, operands)
+    except Exception:                     # noqa: BLE001 - 诊断失败不阻断下发
+        return None
+    itemsize = np.dtype(operands[0].dtype).itemsize
+    flops = 0
+    pack_bytes = 0
+    for _positions, terms, result in steps:
+        if len(terms) != 2:
+            continue                      # 一元步没有 GEMM，按通用路径计
+        left, right = terms
+        extent = {}
+        missing = False
+        for label in set(left) | set(right) | set(result):
+            if label not in sizes:
+                missing = True
+                break
+            extent[label] = int(sizes[label])
+        if missing:
+            continue                      # 标签尺寸不全：不猜，交给原生自己判断
+        seen = set(left) & set(right)
+        batch = [ch for ch in left if ch in seen and ch in result]
+        inner = [ch for ch in left if ch in seen and ch not in result]
+        rows = [ch for ch in left if ch not in seen]
+        cols = [ch for ch in right if ch not in seen]
+
+        def count(labels: Sequence[str]) -> int:
+            total = 1
+            for ch in labels:
+                total *= extent[ch]
+            return total
+
+        m, n, k = count(batch) * count(rows), count(batch) * count(cols), count(inner)
+        flops += 2 * m * n * k
+        # pack 只在对**非恒等**轴序时发生；这里保守按两侧都需 pack 计（上界）。
+        pack_bytes += 2 * itemsize * (count(left) + count(right))
+    # 中间体也要进出 pack 缓冲区：seq=646 的 1.67 GB 几乎全在这里，只算输入
+    # 张量会得到 0.06 GiB 而漏判。``slots`` 是每一步的中间结果形状。
+    for slot in slots:
+        shape = tuple(int(extent) for extent in getattr(slot, "shape", ()) or ())
+        if shape:
+            pack_bytes += 2 * itemsize * int(np.prod(shape, dtype=np.int64))
+    if pack_bytes >= _HEAVY_PACK_MIN_BYTES and flops <= _HEAVY_PACK_MAX_FLOPS:
+        return (f"pack-bound on CPU ({pack_bytes} pack bytes, {flops} FLOPs): "
+                f"the layout traffic dominates the arithmetic; "
+                f"the generic path handles it")
+    return None
+
+
 def _function_topology():
     global _entry_topology, _failed_topology
     if _entry_topology is not None or _failed_topology:
@@ -410,10 +483,10 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
     # "策略拒绝"而不是"探测没过"，否则用户会去重建一份本来就没问题的原生库。
     if _topology_dtype_declined(np.dtype(dtype)):
         return _fail(
-            f"real dtype topology is declined by policy: the step table is slower "
-            f"than dedicated for real inputs (measured 53x at seq=500, scene "
-            f"scale=8: 246.8 ms vs 4.7 ms for float64, 140.5 ms vs 2.6 ms for "
-            f"float32); dedicated handles it and is dispatched first. Set "
+            f"real dtype topology is declined by policy: dedicated is dispatched "
+            f"first and carries no step-table overhead (after the 2026-11-15 order "
+            f"fix the gap is 1.09x at seq=500 scale, and the remaining 6-9x on small "
+            f"shapes is a fixed ~2 ms entry cost, not GEMM degradation). Set "
             f"{_TOPOLOGY_REAL_ENV}=1 to force it back on for an A/B comparison",
             4)
     dtype_reason = _topology_dtype_reason(np.dtype(dtype))
@@ -439,6 +512,10 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
         return _fail(*cached_unsupported)
     try:
         plan = _topology_plan(_topology_key(subscripts, operands), subscripts, operands)
+        heavy = _topology_pack_bound_reason(subscripts, operands)
+        if heavy is not None:
+            _negative_cache_store(negative_key, f"topology declined: {heavy}", 4)
+            return _fail(f"topology declined: {heavy}", 4)
         result = kupl.topology_apply(plan, operands, out, info=LAST_INFO)
     except Exception as exc:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
         LAST_INFO.clear()

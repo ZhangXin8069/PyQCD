@@ -269,40 +269,56 @@ dtype 的正确性，选路偏置由 `test_dedicated_routing_contracts` 负责�
 **不要**把具体 GPU 型号/UUID 写进代码、测试默认值或文档结论：本机实测用的
 `CUDA_VISIBLE_DEVICES` 只是运行的临时环境变量，发布物保持设备无关。
 
-### 6.2 已知缺陷：v3 步表的收缩序按 `PROBE_DIM=2` 定型（2026-11-14 记录，未修）
+### 6.2 已修复：v3 步表的收缩序按 `PROBE_DIM=2` 定型（2026-11-15 修复）
 
-`pyqcd/testing/_topology_kernel_gen.py:43` 用 `PROBE_DIM = 2` 且 `optimize="greedy"`
-生成步表，于是**收缩序由 dim=2 的超立方体决定**，与生产异形轴无关。实测在验收用的
-6 个 seq 上是病态序：
+**原缺陷**：`_topology_kernel_gen.py` 曾用 `PROBE_DIM = 2` + `optimize="greedy"`
+生成步表，于是**收缩序由 dim=2 的超立方体决定**，与生产异形轴无关。等长时全部轴
+同长，路径代价与轴长无关，48/48 全绿恰好掩盖了它；一到生产异形轴
+（`Ns=4`/`Nev=100`/`Mom`/`Lt`）就暴露。
 
-| seq | 探针序 MAC | 生产形状 MAC | 倍数 |
-|---|---:|---:|---:|
-| 500 | 2.287e9 | 1.912e8 | **11.97×** |
-| 1700 | 1.490e7 | 1.444e6 | 10.31× |
-| 1000 | 3.051e6 | 3.833e5 | 7.96× |
+**修复**（`_topology_kernel_gen.py`）：
 
-同样 13 步做约 12 倍的乘加，`M=15625 K=1600 N=25` 这类巨中间体即由此而来
-（`dedicated` 的同规模步是 `625×625×400`）。后果：实数 dtype 的 topology 路径在
-seq=500 / scene scale=8 上是 **246.8 ms vs dedicated 4.7 ms（52.9×）**。
+1. `plan_steps(equation, sizes=None)` 接受真实 label 长度；`main()` 用
+   `_production_sizes()` 从语料自带的 `roles` + `distill` 生产 dims 反推每个 label
+   的尺寸，直接复用 `pyqcd.einsum.bench_specialized._label_sizes`（本库唯一的
+   「角色→物理尺寸」权威实现，另写一份必然漂移）。
+2. 优化器从 `"greedy"` 改为 `"auto"`（`_OPTIMIZE`），与 `try_dedicated` 同口径：
+   实测 seq=646 上 greedy 4.08e8 MAC vs auto 1.08e8 MAC（26%）。
 
-**已采取的措施（方案 B）**：`_kernel_kupl._TOPOLOGY_DECLINED_DTYPES` 在**分派层**
-拒绝 `float64`/`float32`（`status=4`，原因含 `declined by policy`），实数交给
-`kupl_dedicated`（它在 `_api` 的分派顺序里更靠前）。设
-`PYQCD_EINSUM_TOPOLOGY_REAL=1` 可强制放开做 A/B 对照。复数是"能力支持但原生未实现"
-的另一层问题，见下条。
+**收益**（抽样 21 条、distill 尺寸、MAC 口径）：
 
-**不要**把这当成"v3 已经修好"。以下三条是**已被实测推翻**的说法，禁止再写进报告：
+| 项 | 值 |
+|---|---:|
+| 更优 / 持平 / 更差 | **17 / 4 / 0** |
+| 中位改善 | **222×** |
+| 均值改善 | 4558× |
+| 最坏改善 | 42738×（seq=259） |
 
-1. "complex 走 v3 步表且与 dedicated 持平" —— `topology_apply.cpp:232` 对非
-   float32/float64 直接 `return kSpecializedMiss`，随后 `:346` 仍调
-   `execute_parsed_contract`（**v2 通用执行器**）。所以复数测到的 12.7 ms 是 v2 的
-   耗时，与 v3 无关；`try_topology_apply` 对复数返回非 None 只是 v2 兜底命中。
+端到端：seq=500 float32 由 **169.5 ms vs dedicated 155.0 ms（1.09×）**，修复前是
+53.1×。小规模 seq（1291/1936/2581）仍有 6–9×，但绝对差只有 ~1.8 ms——那是拓扑
+入口的固定开销（签名哈希 + plan 缓存查找），**不是** GEMM 形状退化。
+
+**同批修复的第二处**：topology 路径原先**没有** CPU pack-bound 守卫，而
+`_cpu_plan_fallback_reason` 只服务 dedicated。seq=646（`amwq` 四轴各 100，distill
+尺寸）输出本身 1e8 元素、只做 2.16e8 FLOPs，topology 在中间体上做 1.67 GB
+pack/unpack，实测 **5.2 s**。新增 `_kernel_kupl._topology_pack_bound_reason()`
+（用 `_native_plan._simulate_plan` 的步序列与中间槽位形状算 pack 流量，判据与
+dedicated 相同：pack ≥ 1 GiB 且 FLOPs ≤ 1e9 即劝回落），于是该例如实
+`status=4` + `topology declined: pack-bound on CPU`，交给通用路径。
+
+**仍成立的三条事实**（禁止写成相反结论）：
+
+1. "complex 走 v3 步表" —— `topology_apply.cpp:232` 对非 float32/float64 直接
+   `return kSpecializedMiss`，随后 `:346` 仍调 `execute_parsed_contract`（**v2 通用
+   执行器**）。所以复数测到的耗时是 v2 的，`try_topology_apply` 对复数返回非 None
+   只是 v2 兜底命中。**v3 步表迄今只服务 float32/float64。**
 2. "v3 缺 batch 并行，补上就能提速" —— 验收用的 105 步里 `batch_rank > 0` 为 **0 步**
    （全语料 121724 步中有 11990 步带 batch，但不在这批 seq），补了是死代码；且
    `packed_b` 是 `[batch][K][N]`，折平成 `[K, batch*N]` 的 memcpy 前提不成立。
-3. "步表已按真实轴长还原" —— 轴长还原（v3 的 `label_sizes`）是对的，但**收缩序**
-   仍来自 dim=2 探针，两者是不同层面的问题。
+3. "实数档不再被分派层拒绝" —— 仍被 `_TOPOLOGY_DECLINED_DTYPES` 拒绝；**原因已变**：
+   不再因为步表病态，而是 dedicated 没有那 ~2 ms 固定开销（见
+   `_kernel_kupl` 的模块注释）。
 
-正解（需单独授权，会改"步表是静态生成产物"这个设计前提）：让步表按生产 label 尺寸
-定型，或运行期按真实 `label_sizes` 重排收缩序（等价于用 dedicated 的 `auto` 计划）。
-改动面：`_topology_kernel_gen.py` + 重生成 `topology_kernels.inc` + 全语料对拍。
+**重新生成步表**：`python -m pyqcd.testing._topology_kernel_gen`（约 4 s，产出
+`cpp/kupl/einsum/src/topology_kernels.inc`，**该文件被 gitignore，是构建产物**；
+`topology_apply.cpp:25` 无条件 include 它，所以干净树必须先跑生成器再编原生库）。
