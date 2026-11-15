@@ -515,6 +515,71 @@ def test_verbose_lists_every_operand_shape():
     assert len(parsed) == 16, f"明细无法回填 --shape：{parsed}"
 
 
+def test_shape_spec_without_arrow_derives_the_output_from_the_equation():
+    """``--shape`` 省略 ``->…`` 时，输出形状必须按**方程输出段**推导，不是当标量。
+
+    回归点（2026-11-15 用户实测）：用户给了 16 个输入形状、没写输出段，方程是
+    ``...->es``。旧实现一律把输出当 ``()``，于是 ``operands`` 行显示
+    ``输出 [] (1 元素)``、最终报 ``actual shape=[100, 100] expected=[]``，
+    而 ``rel`` 其实早已达标。
+
+    这条同时锁"真的整式归约仍然成立"：方程 ``ij,jk->`` 配 ``[4,4],[4,4]``
+    必须仍得 ``()``。
+    """
+    from pyqcd.einsum import test as cli
+
+    # 1) 有输出段：从输入形状里查出 e=100、s=7。
+    _shapes, out = cli.parse_shape_spec(
+        "[100,4,3,5], [7,5]", equation="eabc,sc->es")
+    assert out == (100, 7), f"输出应为 (100, 7)，得到 {out}"
+
+    # 2) 真整式归约：输出段为空 → ()。
+    _shapes, out = cli.parse_shape_spec("[4,4],[4,4]", equation="ij,jk->")
+    assert out == (), f"整式归约的输出应为 ()，得到 {out}"
+
+    # 3) 显式给了输出段时以它为准（不被方程覆盖）。
+    _shapes, out = cli.parse_shape_spec("[4,4],[4,4]->[4,4]",
+                                        equation="ij,jk->ik")
+    assert out == (4, 4), out
+
+
+def test_shape_spec_mismatches_are_usage_errors_not_crashes():
+    """``--shape`` 与方程不符时必须是 ``UsageError``（退出码 2），不是裸 ValueError。
+
+    ``--help`` 承诺"0 通过 / 1 数值失败 / 2 参数错误"。旧实现让
+    ``parse_shape_spec`` 的 ValueError 直接冒泡，退出码变成 1，脚本无法区分
+    "改命令行"与"查算法"。
+    """
+    from pyqcd.einsum import test as cli
+
+    cases = [
+        ("[4,4]", "ij,jk->ik"),                    # 操作数个数不符
+        ("[4,4],[4,4,4]", "ij,jk->ik"),            # 秩不符
+        ("[4,4],[5,4]", "ij,jk->ik"),              # 同一标签长度冲突
+    ]
+    for spec, equation in cases:
+        try:
+            cli.parse_shape_spec(spec, equation=equation)
+        except ValueError as exc:
+            assert not isinstance(exc, SystemExit), exc
+            # main() 负责把它转成 UsageError；这里直接验 main 的退出码。
+        else:
+            raise AssertionError(f"{spec} vs {equation} 应当报错")
+        import contextlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            try:
+                code = cli.main([
+                    "--equation", equation, "--shape", spec,
+                    "--device", "cpu", "--compare", "none",
+                ])
+            except SystemExit as exc:
+                code = exc.code
+        assert code == 2, f"{spec} vs {equation} 的退出码应为 2，得到 {code}"
+
+
 def test_help_lists_specialize_and_verbose_reports_it():
     """``--help`` 是用户唯一权威来源：缺省值表必须有 ``--specialize``。
 
@@ -1008,6 +1073,8 @@ TESTS = (
     test_corpus_shape_inference_does_not_import_the_testing_package,
     test_corpus_shape_inference_reports_non_scalar_output_shape,
     test_verbose_lists_every_operand_shape,
+    test_shape_spec_without_arrow_derives_the_output_from_the_equation,
+    test_shape_spec_mismatches_are_usage_errors_not_crashes,
     test_help_lists_specialize_and_verbose_reports_it,
     test_compare_optimize_default_reproduces_the_old_reference_behaviour,
     test_compare_optimize_dp_reaches_the_opt_einsum_reference,

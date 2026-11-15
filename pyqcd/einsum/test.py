@@ -430,6 +430,22 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "--shape must not be empty",
         "zh": "--shape 不能为空",
     },
+    "error.shape_count": {
+        "en": "--shape gave {given} operand shape(s) but the equation has "
+              "{expected} operand(s)",
+        "zh": "--shape 给了 {given} 个操作数形状，但方程有 {expected} 个操作数",
+    },
+    "error.shape_rank": {
+        "en": "--shape operand {term!r} has {rank} label(s) but the given shape "
+              "is {shape} (rank {given})",
+        "zh": "--shape 中操作数 {term!r} 有 {rank} 个标签，但给定形状是 "
+              "{shape}（秩 {given}）",
+    },
+    "error.shape_conflict": {
+        "en": "label {label!r} has conflicting lengths across operands: "
+              "{first} vs {second}",
+        "zh": "标签 {label!r} 在各操作数里的长度冲突：{first} vs {second}",
+    },
     "error.bracket_nested": {
         "en": "{where}: nested '[' found, {text!r}",
         "zh": "{where}: 出现嵌套的 '[', {text!r}",
@@ -678,12 +694,18 @@ def translate(key: str, language: str, **kwargs: Any) -> str:
 
 
 # ── 形状解析 ────────────────────────────────────────────────────────────────
-def parse_shape_spec(spec: str, *, language: str = "zh"
-                     ) -> tuple[list[tuple[int, ...]], tuple[int, ...]]:
+def parse_shape_spec(spec: str, *, language: str = "zh",
+                     equation: str | None = None
+                     ) -> tuple[list[tuple[int, ...]], tuple[int, ...] | None]:
     """把 ``'[..],[..]->[..]'`` 解析成 (输入形状列表, 输出形状)。
 
     只接受你给的这种纯数字形态；任何解析失败都**直接报错**，不猜。
-    也允许省略 ``->…``（此时输出形状为 ``()``，表示整式归约）。
+
+    **省略 ``->`` 时不再直接当成整式归约**（返回 ``None``，由调用方按方程输出段
+    推导）。这是 2026-11-15 用户实测暴露的缺陷：他用 ``--shape "[4,4,1,1],..."`
+    （16 个输入形状、没写输出段）跑 ``...->es``，方程明明指定了输出 ``e`` 与 ``s``，
+    却被判成标量而报 ``actual shape=[100, 100] expected=[]``。给了 ``equation``
+    时按它的输出段从输入形状里查长度；查不到就报错，不猜。
 
     ``language`` 只影响错误文案（``"en"``/``"zh"``），缺省 ``"zh"`` 保持旧行为。
     """
@@ -702,10 +724,41 @@ def parse_shape_spec(spec: str, *, language: str = "zh"
         if len(outputs) != 1:
             raise ValueError(translate("error.shape_output_count", language,
                                        n=len(outputs)))
-        out_shape = outputs[0]
+        out_shape: tuple[int, ...] | None = outputs[0]
+    elif equation is not None:
+        out_shape = _out_shape_from_equation(equation, inputs, language)
     else:
         out_shape = ()
     return inputs, out_shape
+
+
+def _out_shape_from_equation(equation: str, inputs: Sequence[tuple[int, ...]],
+                             language: str) -> tuple[int, ...]:
+    """按方程输出段，从各输入形状里查出每个输出标签的长度。
+
+    方程与输入个数必须匹配；同一标签在多个输入里出现时，길이必须一致（否则报错，
+    不静默取第一个）。``->`` 右侧为空则真的是整式归约，返回 ``()``。
+    """
+    from pyqcd.einsum._dedicated_kernels import parse_equation
+
+    terms, output = parse_equation(equation)
+    if len(terms) != len(inputs):
+        raise ValueError(translate("error.shape_count", language,
+                                   given=len(inputs), expected=len(terms)))
+    label_sizes: dict[str, int] = {}
+    for term, shape in zip(terms, inputs):
+        if len(term) != len(shape):
+            raise ValueError(translate("error.shape_rank", language,
+                                       term=term, rank=len(term),
+                                       shape=list(shape), given=len(shape)))
+        for ch, extent in zip(term, shape):
+            previous = label_sizes.get(ch)
+            if previous is not None and previous != extent:
+                raise ValueError(translate("error.shape_conflict", language,
+                                           label=ch, first=previous,
+                                           second=extent))
+            label_sizes[ch] = int(extent)
+    return tuple(label_sizes[ch] for ch in output)
 
 
 def _parse_bracket_list(text: str, where: str, language: str = "zh"
@@ -1462,9 +1515,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_note = translate("note.shape_from_corpus", language,
                                 scene=args.scene)
     else:
-        shapes, declared_out = parse_shape_spec(args.shape, language=language)
+        # 传 equation 进去：``--shape`` 省略 ``->…`` 时按方程输出段推导输出形状，
+        # 而不是一律当标量（否则 ``...->es`` 这类会误报 expected=[]）。
+        try:
+            shapes, declared_out = parse_shape_spec(
+                args.shape, language=language, equation=args.equation)
+        except ValueError as exc:
+            # 参数错误必须走 UsageError（退出码 2），不能裸 ValueError（退出码 1）。
+            # 否则脚本里"改命令行"与"查算法"两类失败无法区分（--help 承诺 2）。
+            raise UsageError(str(exc)) from exc
         report_note = translate("note.shape_from_flag", language)
         out_shape = declared_out
+        if out_shape is None:                     # 没有 equation 时的旧语义
+            out_shape = ()
 
     result = run(
         equation=args.equation, shapes=shapes,
