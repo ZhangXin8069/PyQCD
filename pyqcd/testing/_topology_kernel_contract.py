@@ -315,6 +315,62 @@ def _check_dtype_matrix(module: Any, path: str, to_array: Callable[[Any], Any],
     return accepted
 
 
+def test_cuda_descriptor_reaches_the_step_table_for_high_arity():
+    """CUDA：元数 >6 的语料拓扑必须真的查到 ``topology_steps.h`` 的步表。
+
+    回归点（2026-11-15 修复）：``_kernel_cuda._descriptor_words`` 原先把
+    ``_specialize._signature_digest`` 的 **96 位**摘要零填充成 128 位，而步表的 key
+    是 blake2b-**128** 的前 8 字节。前 12 字节相同、后 4 字节不同 ⇒ 原生算出的 key
+    恒查不到表，于是退到 ``topology_plan_chain`` 的「左到右链式」兜底；该兜底只接受
+    ``num_inputs <= 6``，而语料 99.9% 的元数是 7..16，所以**除 arity=6 的 2 条外整张
+    表都取不到**，一律 ``status=4`` 回落。
+
+    旧用例没抓到它，是因为 ``PROBE_EQUATION`` 恰好就是 arity=6 的那条、而
+    ``_sample_equations`` 的 arity 集合断言只要求 ``{6, 13}`` 是子集 —— arity=6 单独
+    命中就会让"命中数 > 0"成立。这里显式钉住**高元数**：arity 必须 > 6，命中还必须
+    走原生步表（``LAST_INFO['path'] == 'cuda_topology'`` 且 ``steps`` 等于表里的步数）。
+    """
+    _require_cuda()
+    import cupy
+
+    # arity 13/14/16 各取一条：全部超出链式兜底的 num_inputs <= 6 上限。
+    wanted = []
+    seen = set()
+    for task in tasklist.TASKS:
+        if task.seq > 2582 or task.arity <= 6 or task.arity in seen:
+            continue
+        seen.add(task.arity)
+        wanted.append(task)
+        if len(wanted) >= 3:
+            break
+    assert len(wanted) >= 3 and all(task.arity > 6 for task in wanted), wanted
+
+    for task in wanted:
+        dim = 2
+        operands = _make_operands(
+            [(dim,) * len(term)
+             for term in task.equation.split("->")[0].split(",")],
+            np.float64, seed=task.seq)
+        expected = np.einsum(task.equation, *operands)
+        devices = [cupy.asarray(item) for item in operands]
+        _allow_dtype(_kernel_cuda, np.float64)
+        _kernel_kupl._NEGATIVE_CACHE.clear()
+        _kernel_cuda.LAST_INFO.clear()
+        _kernel_cuda.LAST_FAILURE.update({"reason": "", "status": None})
+        result = _kernel_cuda.try_topology_apply(task.equation, devices)
+        assert result is not None, (
+            f"seq={task.seq} arity={task.arity}: 高元数语料拓扑必须命中原生步表，"
+            f"实际回落：{_kernel_cuda.LAST_FAILURE.get('reason')}")
+        info = _kernel_cuda.LAST_INFO
+        assert info.get("path") == "cuda_topology", info
+        assert int(info.get("steps", 0)) == task.arity - 1, (
+            f"seq={task.seq}: 步数 {info.get('steps')} 与 arity-1={task.arity - 1} 不符，"
+            f"说明命中的不是这条拓扑的步表")
+        error = _relative_error(cupy.asnumpy(result), expected)
+        assert error <= TOLERANCES["float64"], (
+            f"seq={task.seq} arity={task.arity}: rel={error:.3e}")
+
+
 def test_dtype_matrix_kupl():
     """KUPL：四类 dtype 的命中/回落矩阵与 LAST_INFO 全字段一致。"""
     _require_kupl()
@@ -1003,6 +1059,7 @@ def _isolated(test: Callable[[], None]) -> Callable[[], None]:
 
 TESTS = tuple(_isolated(test) for test in (
     test_dtype_contract_is_uniform_across_all_four_dtypes,
+    test_cuda_descriptor_reaches_the_step_table_for_high_arity,
     test_dtype_matrix_kupl,
     test_dtype_matrix_cuda,
     test_probe_failed_dtype_is_never_narrowed_to_another,

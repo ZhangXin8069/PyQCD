@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 import threading
 from collections import OrderedDict
@@ -193,12 +194,15 @@ def _descriptor_words(
         len(output),
         0,                                  # reserved
     ]
-    from . import _specialize
-
-    # 索引侧摘要已截到 96 位（源码更小、冷启动更快），而 CUDA 描述符固定按
-    # 128 位（4×int32）打包，因此这里零填充到 16 字节。零填充是单射，
-    # 不影响唯一性；C++ 侧格式不变。
-    digest = bytes.fromhex(_specialize._signature_digest(signature)).ljust(16, b"\0")
+    # 描述符里的摘要必须与 `topology_steps.h` 的建表口径**逐位相同**：那张表的
+    # key 是 blake2b-**128** 的前 8 字节（生成端 `blake2b(payload, digest_size=16)`）。
+    # `_specialize._signature_digest` 是 96 位（索引侧为省源码体积而截断），
+    # 它**不能**用零填充冒充 128 位：前 12 字节相同、后 4 字节不同，会把
+    # `topology_key_from_digest` 算成另一个 key，于是步表恒 miss，语料拓扑
+    # （元数 7..16）全部退化成 status=4。这里按 128 位原地重算，payload 口径
+    # 与 `_signature_digest` 完全一致。
+    payload = "|".join(",".join(map(str, term)) for term in signature)
+    digest = hashlib.blake2b(payload.encode(), digest_size=16).digest()
     if len(digest) != 16:
         raise ValueError("topology digest must be 128 bits")
     words.extend(int(value) for value in np.frombuffer(digest, dtype='<i4'))
