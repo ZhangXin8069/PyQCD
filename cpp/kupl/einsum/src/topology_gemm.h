@@ -62,6 +62,14 @@ struct ComplexElement {
     T imag;
 };
 
+/* numpy 的 complex64/complex128 是**交错实虚**的连续数组，元素字节数必须与
+ * numpy 的 itemsize 相等，v3 的打包/解包才能按元素 memcpy 直通 CBLAS 的复数口径
+ * （CBLAS 的 lda/ldb/ldc 以**复数元素**为单位，不是实标量）。 */
+static_assert(sizeof(ComplexElement<float>) == 2 * sizeof(float),
+              "complex64 must be two adjacent floats, like numpy");
+static_assert(sizeof(ComplexElement<double>) == 2 * sizeof(double),
+              "complex128 must be two adjacent doubles, like numpy");
+
 /* 步表里 rank 用 4 bit 存（生成期断言 <= 15），轴位置同样 4 bit。 */
 enum : int { kMaxRank = 15 };
 /* 单条拓扑的中间槽位数上限（语料实测 <= 16），用于栈上定长槽表。 */

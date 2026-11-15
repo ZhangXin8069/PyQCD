@@ -306,12 +306,24 @@ pack/unpack，实测 **5.2 s**。新增 `_kernel_kupl._topology_pack_bound_reaso
 dedicated 相同：pack ≥ 1 GiB 且 FLOPs ≤ 1e9 即劝回落），于是该例如实
 `status=4` + `topology declined: pack-bound on CPU`，交给通用路径。
 
-**仍成立的三条事实**（禁止写成相反结论）：
+**三条必须记住的事实**（禁止写成相反结论）：
 
-1. "complex 走 v3 步表" —— `topology_apply.cpp:232` 对非 float32/float64 直接
-   `return kSpecializedMiss`，随后 `:346` 仍调 `execute_parsed_contract`（**v2 通用
-   执行器**）。所以复数测到的耗时是 v2 的，`try_topology_apply` 对复数返回非 None
-   只是 v2 兜底命中。**v3 步表迄今只服务 float32/float64。**
+1. "complex **曾经**完全没进 v3 步表" —— 2026-11-15 之前的 `topology_apply.cpp`
+   把 `elem_kind` 只赋给 `QCD_DTYPE_FLOAT32` / `QCD_DTYPE_FLOAT64`，复数直接
+   `return kSpecializedMiss`，随后仍调 `execute_parsed_contract`（**v2 通用执行
+   器**）。回落对上层不可见：`LAST_INFO['path']` 是 Python 侧无条件写的
+   `kupl_topology`，数值也正确，只是全部耗时都来自 v2。
+   **现已修复**：`run_specialized` 对四类 dtype 都给出 `elem_kind`（与
+   `QCD_DTYPE_*` 逐项同值），复数另过一道 `cblas_api().complex_complete()`——cgemm/
+   zgemm 在 `bind_pair` 里是可选符号，缺符号时在分派层就 fail closed 回落 v2，
+   绝不隐式降精度。v3 的 pack/unpack 按 `ComplexElement<T>`
+   （`static_assert(sizeof == 2 * sizeof(T))`，与 numpy 的交错实虚布局同构）整元素
+   搬运，GEMM 侧 lda/ldb/ldc 以**复数元素**为单位直传 `cgemm` / `zgemm`。
+   证据：`PYQCD_EINSUM_TOPOLOGY_TRACE=1` 下复数打印
+   `topology-specialized: 0123,...-> dtype=0 steps=5 sizes=8`（dtype 0/1 =
+   complex128/complex64）；契约用例
+   `_topology_kernel_contract.test_complex_dtypes_reach_the_v3_step_table` 把这条
+   钉住（子进程抓 trace：`trace_enabled()` 的结果被静态缓存，同进程改环境变量已晚）。
 2. "v3 缺 batch 并行，补上就能提速" —— 验收用的 105 步里 `batch_rank > 0` 为 **0 步**
    （全语料 121724 步中有 11990 步带 batch，但不在这批 seq），补了是死代码；且
    `packed_b` 是 `[batch][K][N]`，折平成 `[K, batch*N]` 的 memcpy 前提不成立。

@@ -223,13 +223,38 @@ int run_specialized(const pyqcd_einsum::ExecutionPlan& execution,
     (void)dtype_id;
     return kSpecializedMiss;
 #else
+    /* 四类 dtype 平权：``elem_kind`` 与 ``QCD_DTYPE_*`` 逐项同值，执行器按
+     * ``{s,d,c,z}gemm`` 各自的符号分别实例化，缺哪一类的符号就只回落那一类。
+     *
+     * 复数还要额外过一道 ``complex_complete()``：cgemm/zgemm 在 ``bind_pair`` 里是
+     * **可选**符号（只导出实数的 BLAS 仍服务 float/double），缺符号时在这里就判
+     * 不匹配，不进入步表执行器——fail closed，绝不隐式降精度。 */
     int elem_kind = 0;
-    if (dtype_id == QCD_DTYPE_FLOAT32) {
-        elem_kind = pyqcd_einsum::topology_gemm::kFloat;
-    } else if (dtype_id == QCD_DTYPE_FLOAT64) {
-        elem_kind = pyqcd_einsum::topology_gemm::kDouble;
-    } else {
-        /* 复数没有特化步表：绝不隐式降精度，直接回落通用路径。 */
+    switch (dtype_id) {
+        case QCD_DTYPE_COMPLEX128:
+            elem_kind = pyqcd_einsum::topology_gemm::kComplex128;
+            break;
+        case QCD_DTYPE_COMPLEX64:
+            elem_kind = pyqcd_einsum::topology_gemm::kComplex64;
+            break;
+        case QCD_DTYPE_FLOAT64:
+            elem_kind = pyqcd_einsum::topology_gemm::kDouble;
+            break;
+        case QCD_DTYPE_FLOAT32:
+            elem_kind = pyqcd_einsum::topology_gemm::kFloat;
+            break;
+        default:
+            return kSpecializedMiss;
+    }
+    if ((elem_kind == pyqcd_einsum::topology_gemm::kComplex128 ||
+         elem_kind == pyqcd_einsum::topology_gemm::kComplex64) &&
+        !pyqcd_einsum::topology_gemm::cblas_api().complex_complete()) {
+        if (trace_enabled()) {
+            std::fprintf(stderr,
+                         "[pyqcd.einsum] topology-step-miss: dtype=%d needs cblas "
+                         "cgemm/zgemm, which this BLAS does not export\n",
+                         dtype_id);
+        }
         return kSpecializedMiss;
     }
 

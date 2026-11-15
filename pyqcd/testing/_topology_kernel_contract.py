@@ -909,6 +909,81 @@ def test_every_dtype_is_native_when_its_probe_passes():
         raise unittest.SkipTest("native KUPL build cannot execute any dtype")
 
 
+# ``topology-specialized`` 只由 v3 步表命中时打印（``topology_apply.cpp`` 的
+# ``run_specialized`` 尾部）。子进程里跑，因为 ``trace_enabled()`` 的结果在首次
+# 调用后就被静态缓存，同进程内改环境变量已经晚了。
+_TRACE_CHILD = """
+import numpy as np
+from pyqcd.einsum import _kernel_kupl as kk
+
+equation = "cadb,menf,ac,em,bd,fn->"
+for dtype in (np.complex128, np.complex64):
+    rng = np.random.default_rng(11)
+    operands = []
+    for term in equation.split("->")[0].split(","):
+        shape = (2,) * len(term)
+        values = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        operands.append(np.ascontiguousarray(values.astype(dtype)))
+    expected = np.einsum(equation, *operands)
+    got = kk.try_topology_apply(equation, operands)
+    assert got is not None, (dtype, kk.LAST_FAILURE.get("reason"))
+    scale = float(np.max(np.abs(expected))) or 1.0
+    error = float(np.max(np.abs(got - expected))) / scale
+    print("RESULT", np.dtype(dtype).name, error)
+"""
+
+
+def test_complex_dtypes_reach_the_v3_step_table():
+    """复数必须真的走进 v3 步表（cgemm/zgemm 执行），而不是回落 v2 通用执行器。
+
+    回归点：``topology_apply.cpp::run_specialized`` 曾把 ``elem_kind`` 只赋给
+    ``QCD_DTYPE_FLOAT32`` / ``QCD_DTYPE_FLOAT64``，其余一律 ``return
+    kSpecializedMiss``，于是复数一路落到 ``execute_parsed_contract``（**v2**）。
+    这条回落对上层是不可见的：``LAST_INFO['path']`` 仍写 ``kupl_topology``（那是
+    Python 侧的标记），数值同样正确，只是慢。唯一可区分处是原生 trace——只有
+    v3 命中才打印 ``topology-specialized``，于是这里用子进程抓它，并要求两类
+    复数（dtype_id 0/1）各有一条，且没有"缺 cgemm/zgemm"的 miss 行。
+
+    复数能力缺失的构建（BLAS 不导出 cgemm/zgemm）跳过：契约是"能跑就必须走 v3"，
+    不是"每台机器都必须能跑复数"。
+    """
+    _require_kupl()
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    if not _kernel_kupl.enabled():
+        raise unittest.SkipTest("KUPL kernel dispatch is disabled by environment")
+    if not all(_kernel_kupl._topology_dtype_enabled(np.dtype(dtype))
+               for dtype in (np.complex128, np.complex64)):
+        raise unittest.SkipTest(
+            "native KUPL build cannot execute complex dtypes "
+            "(cblas cgemm/zgemm missing), so no v3 step table can be reached")
+
+    root = str(pathlib.Path(__file__).resolve().parents[2])
+    environment = dict(os.environ)
+    environment["PYQCD_EINSUM_TOPOLOGY_TRACE"] = "1"
+    environment.pop("PYQCD_EINSUM_TOPOLOGY_REAL", None)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [root] + [item for item in [environment.get("PYTHONPATH")] if item])
+    completed = subprocess.run(
+        [sys.executable, "-B", "-c", _TRACE_CHILD], cwd=root, env=environment,
+        capture_output=True, text=True, timeout=300)
+    assert completed.returncode == 0, (
+        f"complex topology child failed: {completed.stderr[-800:]}")
+    assert "RESULT complex128" in completed.stdout, completed.stdout
+    assert "RESULT complex64" in completed.stdout, completed.stdout
+
+    trace = completed.stderr
+    for dtype_id, name in ((0, "complex128"), (1, "complex64")):
+        assert "topology-specialized:" in trace and \
+            f" dtype={dtype_id} steps=" in trace, (
+            f"{name} 没有命中 v3 步表；原生 trace 只有：\n{trace}")
+    assert "needs cblas cgemm/zgemm" not in trace, (
+        f"复数在缺 cgemm/zgemm 的构建里不应被下发：\n{trace}")
+
+
 # ── 入口 ────────────────────────────────────────────────────────────────────
 
 def _isolated(test: Callable[[], None]) -> Callable[[], None]:
@@ -937,6 +1012,7 @@ TESTS = tuple(_isolated(test) for test in (
     test_wide_output_topologies_are_not_transposed,
     test_higher_dims_and_larger_extents_hold_for_all_dtypes,
     test_every_dtype_is_native_when_its_probe_passes,
+    test_complex_dtypes_reach_the_v3_step_table,
     test_native_arguments_carry_plan_order_and_out_buffer,
     test_cuda_arguments_carry_plan_order_and_out_buffer,
     test_offsets_are_never_forwarded,
