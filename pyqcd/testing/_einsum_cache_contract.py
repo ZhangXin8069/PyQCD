@@ -142,6 +142,36 @@ def test_allocated_output_does_not_alias_inputs():
         assert np.array_equal(left, _data((4, 5), dtype, 13)), (name, "aliased left")
 
 
+def test_last_contract_memo_is_a_single_atomic_tuple():
+    """快路径的 (签名, 程序) 必须是**单次赋值**的元组，不能是两个独立全局。
+
+    回归点（2026-11-15 巡查实证）：原实现是 ``_LAST_CONTRACT_SIGNATURE`` 与
+    ``_LAST_CONTRACT_PROGRAM`` 两个无锁全局，靠"先写签名、再写程序"维持配对。
+    快路径却是"先读签名比较、后读程序"两步——中间若被别的线程换掉程序，就会把
+    **A 的签名配上 B 的程序**执行。程序只校验操作数个数/形状/dtype，**不校验
+    方程**，于是静默算出另一个方程的答案且不抛异常。合成元组后读写各是一次原子
+    引用操作，撕裂窗口消失。
+
+    本条锁三件事：①只存在一个 memo 符号；②它的值（若有）是二元组；
+    ③第 0 元可哈希（是签名）、第 1 元可调用（是程序）。
+    """
+    import pyqcd.einsum._api as api
+
+    assert not hasattr(api, "_LAST_CONTRACT_SIGNATURE"), (
+        "独立的签名全局必须被删除，否则撕裂窗口会回来")
+    assert not hasattr(api, "_LAST_CONTRACT_PROGRAM"), (
+        "独立的程序全局必须被删除，否则撕裂窗口会回来")
+    assert hasattr(api, "_LAST_CONTRACT"), "缺少合并后的 memo"
+
+    memo = api._LAST_CONTRACT
+    assert memo is None or (isinstance(memo, tuple) and len(memo) == 2), (
+        f"memo 必须是 (签名, 程序) 二元组或 None，得到 {type(memo).__name__}")
+    if memo is not None:
+        signature, program = memo
+        hash(signature)                      # 签名必须可哈希
+        assert callable(program), "第 1 元必须是可调用的程序"
+
+
 def test_block_pool_survives_repeated_failed_calls():
     """重复失败（原生拒执行）之后仍能正常分配，不泄漏块池。"""
     for dtype in DTYPES:
@@ -189,6 +219,7 @@ TESTS = (
     test_dedicated_plan_cache_key_includes_dtype_and_optimizer,
     test_inputs_are_never_mutated,
     test_allocated_output_does_not_alias_inputs,
+    test_last_contract_memo_is_a_single_atomic_tuple,
     test_block_pool_survives_repeated_failed_calls,
     test_out_caller_buffer_survives_failed_call,
 )

@@ -35,8 +35,15 @@ _CONTRACT_PROGRAM_CACHE_LIMIT = 64
 _CONTRACT_PLAN_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
 _CONTRACT_PLAN_CACHE_LIMIT = 128
 _FUSED_ENV_OWNED = False
-_LAST_CONTRACT_SIGNATURE: tuple[Any, ...] | None = None
-_LAST_CONTRACT_PROGRAM: Any | None = None
+# 最近一次成功调用的 (签名, 程序)，**必须单次赋值**。
+#
+# 原先是 ``_LAST_CONTRACT_SIGNATURE`` 与 ``_LAST_CONTRACT_PROGRAM`` 两个独立
+# 全局，靠「先写签名、再写程序」维持配对。但快路径是「先读签名比较、后读程序」，
+# 两步之间若被别的线程换掉程序，就会把 **A 的签名配上 B 的程序**直接执行——
+# 程序只校验操作数个数/形状/dtype，**不校验方程**，于是静默算错方程且无异常
+# （2026-11-15 巡查实证）。合成一个元组后，读与写各是一次原子引用操作，
+# 撕裂窗口消失。
+_LAST_CONTRACT: tuple[tuple[Any, ...], Any] | None = None
 _NATIVE_DISABLED: set[tuple[Any, ...]] = set()
 _NATIVE_WARNING_EMITTED = False
 
@@ -818,7 +825,7 @@ def contract(
         if shape_result is not None:
             return shape_result
 
-    global _LAST_CONTRACT_SIGNATURE, _LAST_CONTRACT_PROGRAM
+    global _LAST_CONTRACT
 
     operands_list = [subscripts] + list(operands)
 
@@ -842,14 +849,14 @@ def contract(
         last_signature = _contract_signature(
             subscripts, resolved_backend, optimize_key, use_blas, memory_limit, operands
         )
-        if last_signature == _LAST_CONTRACT_SIGNATURE and _LAST_CONTRACT_PROGRAM is not None:
+        memo = _LAST_CONTRACT
+        if memo is not None and last_signature == memo[0]:
             try:
-                return _LAST_CONTRACT_PROGRAM(list(operands), out=out)
+                return memo[1](list(operands), out=out)
             except Exception:
                 # Shapes, dtypes or devices changed under the same objects: drop
                 # the memo and fall through to the shape keyed lookup.
-                _LAST_CONTRACT_SIGNATURE = None
-                _LAST_CONTRACT_PROGRAM = None
+                _LAST_CONTRACT = None
         cached_key = _contract_program_key(
             subscripts, operands, resolved_backend, optimize_key, memory_limit, use_blas
         )
@@ -857,8 +864,7 @@ def contract(
         if cached_program is not None:
             try:
                 result = cached_program(list(operands), out=out)
-                _LAST_CONTRACT_SIGNATURE = last_signature
-                _LAST_CONTRACT_PROGRAM = cached_program
+                _LAST_CONTRACT = (last_signature, cached_program)
                 return result
             except Exception:
                 if cached_key is not None:
@@ -928,11 +934,10 @@ def contract(
             _cache_contract_program(cached_key, program)
             try:
                 result = program(list(operands_prepped), out=out)
-                _LAST_CONTRACT_SIGNATURE = _contract_signature(
+                _LAST_CONTRACT = (_contract_signature(
                     subscripts, resolved_backend, optimize_key, use_blas,
                     memory_limit, operands_prepped,
-                )
-                _LAST_CONTRACT_PROGRAM = program
+                ), program)
                 return result
             except Exception:
                 _CONTRACT_PROGRAM_CACHE.pop(cached_key, None)

@@ -46,8 +46,7 @@ def _fresh_native_state():
             patch.object(_api, "_NATIVE_PLAN_CACHE", OrderedDict()), \
             patch.object(_api, "_CONTRACT_PROGRAM_CACHE", OrderedDict()), \
             patch.object(_api, "_CONTRACT_PLAN_CACHE", OrderedDict()), \
-            patch.object(_api, "_LAST_CONTRACT_SIGNATURE", None), \
-            patch.object(_api, "_LAST_CONTRACT_PROGRAM", None):
+            patch.object(_api, "_LAST_CONTRACT", None):
         yield
 
 

@@ -217,6 +217,50 @@ def test_specialize_false_only_disables_the_specialized_paths():
 
 # ── 6. 混合 dtype 的边界 ────────────────────────────────────────────────────
 
+def test_torch_backend_honours_the_out_parameter():
+    """torch 后端必须真的把结果写进调用方的 ``out=``（2026-11-15 巡查实证的静默错答）。
+
+    回归点：``_torch_einsum`` 原先用 ``**kwargs`` 静默丢弃 ``out``，于是
+    ``_wrap_einsum`` 的 ``except TypeError`` 补偿永不触发，``execute_plan`` 末尾
+    ``return out`` 把**一个字节都没写**的缓冲区交回调用方——实测 buf 全 NaN 而
+    ``r is buf`` 为真，无异常无告警。两处都要修才通：①``_torch_einsum`` 对 ``out``
+    显式抛 ``TypeError``；②``_SHIMS`` 里的 ``einsum`` 过 ``_wrap_einsum``（静态表
+    会跳过 ``get_func`` 的包装）。
+
+    本条锁两条入口：``optimize=False``（不走 BLAS 分步）与普通路径。
+    """
+    try:
+        import torch
+    except ImportError:
+        raise unittest.SkipTest("torch 不可用")
+
+    import numpy as np
+
+    import pyqcd.einsum as pe
+
+    base = np.arange(9, dtype=np.float64).reshape(3, 3)
+    tensor = torch.tensor(base + 1j * base, dtype=torch.complex128)
+    expected = np.einsum("ij,ij->ij", base + 1j * base, base + 1j * base)
+
+    for kwargs in ({}, {"optimize": False}):
+        buf = torch.full((3, 3), complex(float("nan"), float("nan")),
+                         dtype=torch.complex128)
+        result = pe.contract("ij,ij->ij", tensor, tensor, backend="torch",
+                             out=buf, **kwargs)
+        assert result is buf, (
+            f"kwargs={kwargs}: 返回的必须是调用方缓冲区本身")
+        assert not bool(torch.all(torch.isnan(buf))), (
+            f"kwargs={kwargs}: out 缓冲区一个字节都没写（全 NaN）——这正是静默错答")
+        assert np.allclose(buf.cpu().numpy(), expected), (
+            f"kwargs={kwargs}: 回填的数值不对")
+
+    # numpy 后端同样必须写进 out=（同一条补偿链的另一侧，防止只有 torch 被照顾）。
+    buf = np.full((3, 3), np.nan, dtype=np.complex128)
+    result = pe.contract("ij,ij->ij", base + 1j * base, base + 1j * base,
+                         backend="numpy", out=buf)
+    assert result is buf and np.allclose(buf, expected), "numpy 后端的 out= 也要写对"
+
+
 def test_mixed_dtype_promotion_is_explicit():
     """混合 dtype 由 numpy 规则提升（不是静默降级），且不是内核路径。"""
     real_left = _data((3, 4), np.float32, 19)
@@ -234,6 +278,7 @@ TESTS = (
     test_native_plan_door_depends_on_batch_structure_not_ndim,
     test_out_and_kwargs_bypass_specialized_kernels,
     test_specialize_false_only_disables_the_specialized_paths,
+    test_torch_backend_honours_the_out_parameter,
     test_mixed_dtype_promotion_is_explicit,
 )
 

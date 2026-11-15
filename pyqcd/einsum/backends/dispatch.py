@@ -99,7 +99,17 @@ def _torch_transpose(a: Any, axes: Sequence[int]) -> Any:
 
 
 def _torch_einsum(equation: str, *operands: Any, **kwargs: Any) -> Any:
-    # ``out``/``dtype``/``casting``/``order`` have no torch equivalent
+    # ``out``/``dtype``/``casting``/``order`` have no torch equivalent.
+    #
+    # ``out`` 必须**显式拒绝**，不能静默丢弃（2026-11-15 巡查实证的静默错答）：
+    # ``_wrap_einsum`` 靠 ``except TypeError`` + ``"out" in str(exc)`` 触发回填补偿，
+    # 而本函数原先用 ``**kwargs`` 悄悄吃掉 ``out``、从不抛错，于是补偿永不生效、
+    # 调用方缓冲区一个字节都没写，函数却正常返回 ``out``（实测 buf 全 NaN 而
+    # ``r is buf`` 为真）。抛出与 numpy 同形的错误文本即可让补偿按设计工作。
+    if "out" in kwargs:
+        raise TypeError(
+            "einsum() got an unexpected keyword argument 'out' "
+            "(the torch backend has no out= equivalent)")
     return _torch_module().einsum(_ascii_equation(equation), *operands)
 
 
@@ -138,15 +148,20 @@ def _torch_tensordot(x: Any, y: Any, axes: Any = 2) -> Any:
 
 
 # numpy-compatible wrappers for backends whose top level API differs
+#
+# ``einsum`` 一律过 :func:`_wrap_einsum`：只有它知道怎么把 ``out=`` 补偿给没有该
+# 参数的 backend（先算再回填）。``_SHIMS`` 是**静态表**，``get_func`` 对它会跳过
+# 第 200 行的包装，所以这里必须显式包一层——否则 ``_torch_einsum`` 抛出的
+# ``TypeError`` 无处可接，调用方拿到异常而非回填结果（2026-11-15 巡查实证）。
 _SHIMS: dict[str, dict[str, Callable[..., Any]]] = {
     "torch": {
         "transpose": _torch_transpose,
-        "einsum": _torch_einsum,
+        "einsum": _wrap_einsum(_torch_einsum),
         "tensordot": _torch_tensordot,
     },
     "pytorch": {
         "transpose": _torch_transpose,
-        "einsum": _torch_einsum,
+        "einsum": _wrap_einsum(_torch_einsum),
         "tensordot": _torch_tensordot,
     },
 }

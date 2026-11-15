@@ -81,9 +81,8 @@ def reset_target_state():
         cache = getattr(api, name, None)
         if cache is not None and hasattr(cache, 'clear'):
             cache.clear()
-    for name in ('_LAST_CONTRACT_SIGNATURE', '_LAST_CONTRACT_PROGRAM'):
-        if hasattr(api, name):
-            setattr(api, name, None)
+    if hasattr(api, '_LAST_CONTRACT'):
+        api._LAST_CONTRACT = None
 
 
 def _reset_announcements():
