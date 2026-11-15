@@ -150,8 +150,13 @@ def plan_steps(equation: str, sizes: dict[str, int] | None = None
     return steps, terms, out
 
 
-def decompose(left: str, right: str, out: str) -> dict:
-    """把二元 einsum 步拆成 GEMM 的 batch/M/K/N 分组与轴序。"""
+def decompose(left: str, right: str, out: str,
+              sizes: dict[str, int] | None = None) -> dict:
+    """把二元 einsum 步拆成 GEMM 的 batch/M/K/N 分组与轴序。
+
+    ``sizes`` 给出每个 label 的真实长度时，按**元素数**决定组内轴序（见下），与
+    ``_kernel_kupl._dedicated_step`` 同口径；缺省则用保守的固定 ``reverse`` 顺序。
+    """
     sl, sr, so = set(left), set(right), set(out)
     batch = [ch for ch in left if ch in sr and ch in so]
     inner = [ch for ch in left if ch in sr and ch not in so]
@@ -175,10 +180,37 @@ def decompose(left: str, right: str, out: str) -> dict:
     # 数升序排序，令 1M 元素的右张量走非连续 pack，单步 7.94 ms（GEMM 仅 0.5 ms）。
     # ``pyqcd/einsum/_kernel_kupl._dedicated_step`` 用真实元素数选大张量原序，
     # 是同一原则的数据驱动版本；两者在等长时结果一致。
-    batch.sort(key=left.index, reverse=True)
-    rows.sort(key=left.index, reverse=True)
-    inner.sort(key=left.index, reverse=True)
-    cols.sort(key=right.index, reverse=True)
+    #
+    # 2026-11-15 补：固定 ``reverse`` 只照顾右张量，左张量明显更大时反而让**大**
+    # 的一侧去付置换的账。实测 seq=3（``ambn,codp,egfh,ce,mo,bdf,nph->ag``）第 2 步
+    # ``nph,egfh->npegf``：左侧 100 元素、右侧 4,000,000 元素，固定序给出
+    # ``c_axes=[1,0,4,3,2]``（非恒等），要求 unpack 整个 4M 中间体；改按元素数取
+    # 大张量原序后 ``c_axes=[0,1,2,3,4]``（恒等，零拷贝），该步 42.6 ms → 1.6 ms。
+    # 传入 ``sizes`` 时走数据驱动，与 dedicated 的选法一致。
+    if sizes is not None:
+        # 与 ``_kernel_kupl._dedicated_step`` 逐行同口径：共用组取**元素数更大
+        # 那一侧**的原序（大张量零拷贝），rows/cols 各自按源序**升序**。升序是
+        # 关键——只有升序才让 ``rows`` 与 ``left``、``cols`` 与 ``right`` 的
+        # 相对次序一致，从而 ``c_axes`` 有机会退化成恒等（``[0,1,2,...]``）。
+        def element_count(labels: list[str]) -> int:
+            total = 1
+            for label in labels:
+                total *= int(sizes[label])
+            return total
+
+        shared = set(batch) | set(inner)
+        left_shared = [ch for ch in left if ch in shared]
+        right_shared = [ch for ch in right if ch in shared]
+        ordered = right_shared if element_count(right) > element_count(left) else left_shared
+        batch = [ch for ch in ordered if ch in batch]
+        inner = [ch for ch in ordered if ch in inner]
+        rows.sort(key=left.index)
+        cols.sort(key=right.index)
+    else:
+        batch.sort(key=left.index, reverse=True)
+        rows.sort(key=left.index, reverse=True)
+        inner.sort(key=left.index, reverse=True)
+        cols.sort(key=right.index, reverse=True)
 
     a_order = batch + rows + inner
     b_order = batch + inner + cols
@@ -250,7 +282,7 @@ def encode_steps(equation: str, sizes: dict[str, int] | None = None) -> bytes:
         stream.extend(labels[ch] for ch in term)
 
     for step in steps:
-        spec = decompose(step["left"], step["right"], step["out"])
+        spec = decompose(step["left"], step["right"], step["out"], sizes)
         for key in ("a_src", "b_src", "dst"):
             if not -128 <= step[key] <= 127:
                 raise AssertionError(f"{equation}: slot {key}={step[key]} does not fit int8")

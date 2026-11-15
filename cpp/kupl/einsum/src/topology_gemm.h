@@ -253,7 +253,8 @@ enum {
     /* CBLAS 枚举值，与 <cblas.h> 一致：make.sh 允许构建期找不到 OpenBLAS 头文件
      * （运行期 dlopen），因此这里不 include <cblas.h>。 */
     kCblasRowMajor = 101,
-    kCblasNoTrans = 111
+    kCblasNoTrans = 111,
+    kCblasTrans = 112
 };
 
 inline bool checked_power(int64_t dim, int exponent, int64_t* result) {
@@ -477,6 +478,51 @@ inline void gemm_call(const CblasApi& api, int rows, int cols, int inner,
     api.zgemm(kCblasRowMajor, kCblasNoTrans, kCblasNoTrans, rows, cols, inner,
               static_cast<const void*>(alpha), static_cast<const void*>(a), inner,
               static_cast<const void*>(b), cols, static_cast<const void*>(beta),
+              static_cast<void*>(c), cols);
+}
+
+/* 「组交换」直连：源按 [batch][K][M]（A）或 [batch][N][K]（B）存放，交给 BLAS 的
+ * trans 参数吸收，省掉一次整块 pack。lda 是**源**的行长：RowMajor 下 A^T 的源行数
+ * 是 K、行跨度是 M，B^T 的源行数是 N、行跨度是 K。 */
+inline void gemm_call_trans(const CblasApi& api, int rows, int cols, int inner,
+                            const float* a, const float* b, float* c, bool trans_a,
+                            bool trans_b, int lda, int ldb) {
+    api.sgemm(kCblasRowMajor, trans_a ? kCblasTrans : kCblasNoTrans,
+              trans_b ? kCblasTrans : kCblasNoTrans, rows, cols, inner, 1.0f, a, lda, b,
+              ldb, 0.0f, c, cols);
+}
+
+inline void gemm_call_trans(const CblasApi& api, int rows, int cols, int inner,
+                            const double* a, const double* b, double* c, bool trans_a,
+                            bool trans_b, int lda, int ldb) {
+    api.dgemm(kCblasRowMajor, trans_a ? kCblasTrans : kCblasNoTrans,
+              trans_b ? kCblasTrans : kCblasNoTrans, rows, cols, inner, 1.0, a, lda, b,
+              ldb, 0.0, c, cols);
+}
+
+inline void gemm_call_trans(const CblasApi& api, int rows, int cols, int inner,
+                            const ComplexElement<float>* a, const ComplexElement<float>* b,
+                            ComplexElement<float>* c, bool trans_a, bool trans_b,
+                            int lda, int ldb) {
+    const float alpha[2] = {1.0f, 0.0f};
+    const float beta[2] = {0.0f, 0.0f};
+    api.cgemm(kCblasRowMajor, trans_a ? kCblasTrans : kCblasNoTrans,
+              trans_b ? kCblasTrans : kCblasNoTrans, rows, cols, inner,
+              static_cast<const void*>(alpha), static_cast<const void*>(a), lda,
+              static_cast<const void*>(b), ldb, static_cast<const void*>(beta),
+              static_cast<void*>(c), cols);
+}
+
+inline void gemm_call_trans(const CblasApi& api, int rows, int cols, int inner,
+                            const ComplexElement<double>* a, const ComplexElement<double>* b,
+                            ComplexElement<double>* c, bool trans_a, bool trans_b,
+                            int lda, int ldb) {
+    const double alpha[2] = {1.0, 0.0};
+    const double beta[2] = {0.0, 0.0};
+    api.zgemm(kCblasRowMajor, trans_a ? kCblasTrans : kCblasNoTrans,
+              trans_b ? kCblasTrans : kCblasNoTrans, rows, cols, inner,
+              static_cast<const void*>(alpha), static_cast<const void*>(a), lda,
+              static_cast<const void*>(b), ldb, static_cast<const void*>(beta),
               static_cast<void*>(c), cols);
 }
 
@@ -997,6 +1043,76 @@ inline int v3_run_step(const Step& step, const CblasApi& api, const Slot& left,
         stride[axis] = source_stride[source_axis];
         a_count *= a_labels_len[axis];
     }
+
+    /* 输入侧直连判定（与 ``dedicated_apply.cpp`` 的 ``kDirectPlain`` /
+     * ``kDirectTrans`` 同口径，但**在运行期判定**，步表格式不变）。
+     *
+     * ``a_axes[axis] == axis`` 时源本身就是规范序 ``[M][K]``，可以零拷贝交给 BLAS；
+     * 若是「组交换」``[K][M]``，则用 ``kCblasTrans`` 吸收，同样零拷贝。
+     *
+     * 为什么必须有这条路：实测 seq=3（``ambn,codp,egfh,ce,mo,bdf,nph->ag``，
+     * distill 尺寸）6 步里有 7 个输入侧非恒等，第 2 步要 gather 4,000,000 元素
+     * 的中间体，topology 49 ms 而 dedicated 1.49 ms（32×）——差距全在这里。
+     *
+     * batch 维度不参与直连：``gemm_call`` 的循环按 ``[batch][M][K]`` 连续切片推进，
+     * 只在 ``count_batch == 1``（或 batch 轴恰好最外且与规范序一致）时等价。这里
+     * 保守地只对 ``count_batch == 1`` 启用，其余仍走 pack，避免把语义改错。 */
+    const int row_rank = step.row_rank();
+    const int col_rank = step.col_rank();
+    bool a_direct_plain = true;
+    bool a_direct_trans = true;
+    for (int axis = 0; axis < step.rank_a; ++axis) {
+        if (a_axes[axis] != axis) {
+            a_direct_plain = false;
+        }
+        const int swapped = axis < step.batch_rank
+                                ? axis
+                                : (axis < step.batch_rank + row_rank
+                                       ? axis + step.inner_rank
+                                       : axis - row_rank);
+        if (a_axes[axis] != swapped) {
+            a_direct_trans = false;
+        }
+    }
+    bool b_direct_plain = true;
+    bool b_direct_trans = true;
+    for (int axis = 0; axis < step.rank_b; ++axis) {
+        if (b_axes[axis] != axis) {
+            b_direct_plain = false;
+        }
+        const int swapped = axis < step.batch_rank
+                                ? axis
+                                : (axis < step.batch_rank + step.inner_rank
+                                       ? axis + col_rank
+                                       : axis - step.inner_rank);
+        if (b_axes[axis] != swapped) {
+            b_direct_trans = false;
+        }
+    }
+    const bool use_direct = info.count_batch == 1 &&
+                            (a_direct_plain || a_direct_trans) &&
+                            (b_direct_plain || b_direct_trans) &&
+                            info.count_rows <= std::numeric_limits<int>::max() &&
+                            info.count_cols <= std::numeric_limits<int>::max() &&
+                            info.count_inner <= std::numeric_limits<int>::max();
+
+    if (use_direct) {
+        /* lda/ldb 是源的行长：plain 时 A 是 [M][K]（行长 K）、B 是 [K][N]（行长 N）；
+         * trans 时 A 的源是 [K][M]（行长 M）、B 的源是 [N][K]（行长 K）。 */
+        const int lda = a_direct_plain ? static_cast<int>(info.count_inner)
+                                       : static_cast<int>(info.count_rows);
+        const int ldb = b_direct_plain ? static_cast<int>(info.count_cols)
+                                       : static_cast<int>(info.count_inner);
+        gemm_call_trans(api, static_cast<int>(info.count_rows),
+                        static_cast<int>(info.count_cols),
+                        static_cast<int>(info.count_inner),
+                        static_cast<const T*>(left.read()),
+                        static_cast<const T*>(right.read()), packed_output,
+                        a_direct_trans && !a_direct_plain,
+                        b_direct_trans && !b_direct_plain, lda, ldb);
+        return QCD_STATUS_OK;
+    }
+
     std::size_t a_bytes = static_cast<std::size_t>(a_count) * sizeof(T);
     T* packed_a = reinterpret_cast<T*>(block_pool().acquire(a_bytes, &a_bytes));
     if (packed_a == nullptr) {

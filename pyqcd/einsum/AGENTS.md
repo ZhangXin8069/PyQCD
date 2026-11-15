@@ -306,6 +306,36 @@ pack/unpack，实测 **5.2 s**。新增 `_kernel_kupl._topology_pack_bound_reaso
 dedicated 相同：pack ≥ 1 GiB 且 FLOPs ≤ 1e9 即劝回落），于是该例如实
 `status=4` + `topology declined: pack-bound on CPU`，交给通用路径。
 
+**第三处：输入侧缺 direct 直连（2026-11-15 补，这是 32× 的真实根因）**
+
+上一条说"小规模 6–9× 是拓扑入口固定开销"**只对中位数成立，对离群格是错的**。
+逐层追 seq=3（`ambn,codp,egfh,ce,mo,bdf,nph->ag`，distill 尺寸）发现：该式 6 步里
+有 **7 个输入侧非恒等**，第 2 步 `nph,egfh->npegf` 把 4,000,000 元素的中间体整块
+gather，实测 **topology 49 ms vs dedicated 1.49 ms（32×）**，同一路径同一输入。
+
+根因：`dedicated_apply.cpp` 有 `kDirectPlain`（源即规范序）与 `kDirectTrans`
+（组交换，交给 BLAS 的 trans 吸收），两者都**零拷贝**；而 `topology_gemm.h` 的
+`v3_run_step` 原先**只有输出侧**的 `step_output_is_canonical`，输入侧无条件
+`gather_extents`。
+
+修法（`topology_gemm.h`，**运行期判定，步表格式不变**）：`v3_run_step` 内检查
+`a_axes`/`b_axes` 是否等于恒等排列或组交换排列，命中则走新增的
+`gemm_call_trans`（`kCblasTrans=112`）直接读源张量。保守限制 `count_batch == 1`
+——batch 下 `gemm_call` 的连续切片前提不成立，其余仍走 pack。
+
+效果（同口径 20 seq × 4 dtype，产物 `topo_vs_dedicated_distill_20261115132117`）：
+
+| dtype | 中位 前→后 | **最差 前→后** | 快于 dedicated |
+|---|---|---|---:|
+| complex128 | 8.18 → **4.89** | 24.63 → **15.04** | 5/19 → 6/19 |
+| complex64 | 6.56 → 6.47 | 48.95 → **13.24** | 6/19 → 6/19 |
+| float64 | 6.80 → 6.94 | 56.22 → **12.73** | 5/19 → 6/19 |
+| float32 | 6.73 → 6.67 | 62.19 → **13.79** | 5/20 → 6/20 |
+
+**最差比值全面收敛到 ~13×**（原 49–62×），病态格子消失；中位数变化小是因为多数
+格子本来就没有非恒等输入侧。seq=3 从 49 ms 降到 5.52 ms（3.84×）。
+语料 214 步中只有 16 步带 batch，故 `count_batch == 1` 的限制覆盖面很小。
+
 **三条必须记住的事实**（禁止写成相反结论）：
 
 1. "complex **曾经**完全没进 v3 步表" —— 2026-11-15 之前的 `topology_apply.cpp`
