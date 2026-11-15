@@ -1032,3 +1032,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## v3-direct-input - stage - 2026-11-15 13:22:53 +0800
+- 主任务: v3 输入侧 direct 直连
+- 日志文件: logs/v202611151322.txt
+- 文件大小: 5518 bytes
+- 触发原因: 阶段成果
+- 关键内容: 补 gemm_call_trans + 运行期 direct 判定；最差比值 62x→13.8x，seq=3 49ms→5.52ms；全量 127/1/0
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

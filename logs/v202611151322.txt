@@ -1,0 +1,101 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-15 13:22:53 +0800
+批次: v3-direct-input
+主任务: v3 输入侧 direct 直连
+触发原因: 阶段成果
+摘要: 补 gemm_call_trans + 运行期 direct 判定；最差比值 62x→13.8x，seq=3 49ms→5.52ms；全量 127/1/0
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 定位 32× 差距的真实根因
+- 目标: 查清 seq=3 上 topology 49 ms vs dedicated 1.49 ms 的原因
+- 命令/操作: 步级分解；检查每步 a_axes/b_axes 是否恒等；对比 dedicated 的 direct 判定
+- 关键输出: 6 步里 7 个输入侧非恒等；第 2 步 nph,egfh->npegf 要 gather 4,000,000
+  元素中间体；dedicated_apply.cpp 有 kDirectPlain/kDirectTrans（零拷贝），
+  topology_gemm.h 的 v3_run_step 只有输出侧 step_output_is_canonical
+- 退出码: 0
+- 证据与判断: 上一轮"小规模 6-9x 是固定开销"只对中位数成立、对离群格是错的。
+  真实根因是输入侧缺 direct 直连。cProfile 显示瓶颈在原生 topology_apply
+  （tottime 0.135/3 次），排除 Python 侧。
+
+### S2 — 实现 direct 直连（运行期判定，不改步表格式）
+- 命令/操作: 加 kCblasTrans=112；加四 dtype 的 gemm_call_trans；在 v3_run_step 内
+  判 a_axes/b_axes 是否恒等或组交换；保守限制 count_batch == 1
+- 关键输出: 首次构建 exit=1（kCblasTrans 未定义），补常量后 exit=0
+- 退出码: 1 → 0
+- 证据与判断: 选择运行期判定而非步表加标志位，避免格式变更与全语料重生成；
+  batch 下 gemm_call 的连续切片前提不成立，故保守排除（语料 214 步仅 16 步带
+  batch，覆盖面损失很小）
+
+### S3 — 顺带修正生成器的轴序选择
+- 命令/操作: decompose 接受 sizes，按元素数选共用组顺序 + rows/cols 升序
+- 关键输出: seq=3 第 2 步 c_axes 由 [1,0,4,3,2] 变为 [0,1,2,3,4]（恒等）
+- 退出码: 0
+- 证据与判断: 与 _kernel_kupl._dedicated_step 逐行同口径。注意：该改动本身**没有**
+  解决 32x（输出侧 unpack 不是瓶颈），真正起作用的是输入侧 direct；两者都保留
+
+### S4 — 验证与量化
+- 命令/操作: 复数 13 seq × 2 dtype 与 numpy 对拍；全量回归；
+  bench_topology_vs_dedicated 两次运行
+- 关键输出: 0 个超容差（float64 的 MISS 是分派策略拒绝实数）；
+  127 passed / 1 skipped / 0 failed；
+  最差比值 complex64 48.95→13.24、float64 56.22→12.73、float32 62.19→13.79；
+  complex128 中位 8.18→4.89；seq=3 由 49 ms 降到 5.52 ms
+- 退出码: 0 / 0 / 0
+- 证据与判断: 病态格子消失；中位变化小是因为多数格子本无非恒等输入侧，
+  收益集中在此前的最差格上
+
+## 验证与证据
+- 测试/检查: python -B -m pyqcd.testing；numpy 对拍；基准脚本
+- 结果: 127 passed / 1 skipped / 0 failed；对拍 0 超容差；最差收敛到 ~13x
+- 未验证项: count_batch > 1 的步（16/214）仍走 pack，未做 direct；
+  CUDA 侧未同步（走另一套机制）
+
+## 变更与产物
+- 文件: cpp/kupl/einsum/src/topology_gemm.h（gemm_call_trans + direct 判定）、
+  pyqcd/testing/_topology_kernel_gen.py（decompose 按 sizes 选序）、
+  pyqcd/einsum/AGENTS.md（§6.2 增补第三处）
+- 产物: pyqcd/testing/einsum/artifacts/topo_vs_dedicated_distill_20261115132117/result.json
+- 未改动范围: 步表字节格式、_TOPOLOGY_DECLINED_DTYPES、CUDA 侧
+
+## 风险、限制与下一步
+- 风险: direct 判定依赖 gemm_call_trans 的 lda/ldb 口径正确；已用四 dtype × 13 seq
+  对拍验证
+- 阻塞: 无
+- 下一步: 已提交 c2b782a0。可选：让 count_batch > 1 也走 direct（需按 batch 前缀
+  连续性细化判据）；或同步 CUDA 侧
+
+## 用户输入指令
+继续推进
+
+## Agent 全文报告
+--- report begin ---
+v3 输入侧的 direct 直连补上了，病态格子消失。
+
+**根因（修正上一轮的判断）**：我上轮说"小规模 6–9× 是拓扑入口固定开销"，那只对
+中位数成立，对离群格是错的。逐层追 seq=3 发现 6 步里有 7 个输入侧非恒等，第 2 步
+要把 4,000,000 元素的中间体整块 gather。dedicated 有 kDirectPlain/kDirectTrans
+（零拷贝直连 BLAS），而 v3_run_step 只有输出侧的恒等检测，输入侧无条件 pack。
+
+**改动**：在 v3_run_step 内做运行期 direct 判定（不改步表格式）——轴序是恒等排列
+走 plain、是组交换走新增的 gemm_call_trans，两者都直接读源张量。保守限制
+count_batch == 1。另外把生成器的轴序选择改成与 dedicated 同口径（按元素数选大
+张量原序 + 升序）。
+
+**效果**（distill 口径 20 seq × 4 dtype）：
+  dtype       中位 前→后      最差 前→后      快于 dedicated
+  complex128  8.18 → 4.89    24.63 → 15.04      5/19 → 6/19
+  complex64   6.56 → 6.47    48.95 → 13.24      6/19 → 6/19
+  float64     6.80 → 6.94    56.22 → 12.73      5/19 → 6/19
+  float32     6.73 → 6.67    62.19 → 13.79      5/20 → 6/20
+
+**最差全面收敛到 ~13×（原 49–62×）**，seq=3 由 49 ms 降到 5.52 ms。中位变化小是
+因为多数格子本来就没有非恒等输入侧，收益集中在此前的最差格上。
+
+**验证**：复数 13 seq × 2 dtype 与 numpy 对拍 0 个超容差；全量 127 passed /
+1 skipped / 0 failed；基准脚本两次运行结论一致。
+
+**未验证**：count_batch > 1 的步（16/214）仍走 pack；CUDA 侧未同步。
+--- report end ---
