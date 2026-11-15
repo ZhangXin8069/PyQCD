@@ -1,0 +1,5030 @@
+# einsum 独立复测产物归档（2026-11-15，只读子代理）
+# 原路径 pyqcd/testing/einsum/artifacts/retest_dev60_20261115/
+# 移到此处的原因：该路径名含 git tag 形目录（dev60），违反 form 规范 TAG_NAME_IN_PATH
+
+===== report.md =====
+# dev60 独立复测（2026-11-15，agent: configure 子代理）
+
+只读复测，未修改任何生产代码。产物：本目录下 JSON + 日志。
+
+## 0. 口径与一个必须记录的环境事实
+
+| 项 | 值 |
+|---|---|
+| 复测对象 | `HEAD = aa048e8a`（dev60，修复提交 `82641d51`） |
+| 生产尺寸 | `_bench_scene.dims("distill")` = Nev 100 / Ns 4 / Mom 1 / Lt 1；`dims("distill_curr")` = Nev 400 / Mom 9 |
+| KUPL 原生库 | **由本代理用 HEAD 源码在隔离目录重建**：`git archive HEAD cpp/kupl/einsum` → `python -m pyqcd.testing._topology_kernel_gen`（md5 `16f3c3d426d996b2b9e79fbb41e46975`，2582 kernels，与 dev60 日志记录的 `16f3c3d4…` 一致）→ `make.sh`（SUCCESS，35 s） |
+| 为什么要重建 | 复测开始约 30 分钟后，**并行任务把 `cpp/kupl/einsum/src/topology_kernels.inc` 扩到 8638 条并重建了仓库内的 `.so`**（17:48/17:49，`.so` 4.8 MB）。此后仓库内库的路线分类变成 **19 v3 / 0 v2 / 1 declined**（见 `log_expanded_lib_default20.log`），dev60 的 v3/v2 分野不复存在。为公平复测 dev60，全程用 `PYQCD_EINSUM_KUPL_LIB=<隔离重建的 2582 表库>` |
+| CUDA 侧 | 锁定 V100（`CUDA_VISIBLE_DEVICES=GPU-be23deb4-…`）。**必须 `LD_PRELOAD` NVRTC 12.4**（`/home/zhangxin/miniforge3/lib/libnvrtc.so.12.4.127`）：本机 conda 环境的 NVRTC 12.9 对 `sm_70` 报 `invalid value for --gpu-architecture`，任何 cupy 逐元素 kernel（含 `_probe_dtype`）都会失败并 fail closed。这是环境限制，不是代码缺陷（证据：`cupy.arange(4)` 在 3 块卡上全部 `CompileException`） |
+
+## A. `_label_sizes` 轴位绑定与 batch 能力
+
+（`part_a_label_sizes.json`；口径：`_label_sizes` + `_vertex_axes` + `plan_steps` + `kupl._dedicated_step`/`decompose` 双口径互校）
+
+| seq | 形态 | 档 | 顶点指标段 | 绑定 | `max count_batch` | `batch_rank` |
+|---|---|---|---|---|---|---|
+| 2591 | 附录 | distill | `Nbd` / `Nfnp` / `Mhjl` / `Mrt` | 大写→Mom=1，其余→Nev=100 | 1 | 1 |
+| 2591 | 附录 | distill_curr | 同上 | 大写→Mom=**9**，其余→Nev=400 | **9** | 1 |
+| 3437 | 附录 | distill_curr | `Nbdf` / `Nnp` / `Mhjl` | 同上 | **9** | 1 |
+| 2711 | 附录 | distill_curr | `Nbdf`/`Nnph`/`Mjlr`/`Mtvx` | 同上 | **81** | 2 |
+| 1 / 3 / 9 | 基础表 | distill & distill_curr | `bd`→(1,1)/(1,9)、`fnp`→(1,1,100)/(1,9,400) | 首两轴 Lt, Mom | **1** | **0（恒）** |
+
+反证（基础表）：seq 1/3/9 在两档下**每一步** `batch_rank == 0`、`count_batch == 1`，未被修复波及。
+`count_batch` 的两个口径（`_dedicated_step["batch"]` 乘积 vs `decompose` 轴数×自算乘积）逐 step 相等。
+
+## B. topology 路线与真 v3 性能（dev60 的 2582 表库）
+
+### B1 route 分类（`DEFAULT_SEQS` 20 条，distill，`PYQCD_EINSUM_TOPOLOGY_REAL=1`）
+
+| dtype | v3 | v2 | declined | v3 seq |
+|---|---|---|---|---|
+| complex128 | 6 | 13 | 1 | 1,3,9,849,855,1599 |
+| complex64 | 6 | 13 | 1 | 同上 |
+| float64 | 6 | 13 | 1 | 同上 |
+| float32 | 7 | 13 | 0 | 1,3,9,**129**,849,855,1599 |
+
+declined = seq 129，`status=4`，理由 `topology declined: pack-bound on CPU (3456077824 pack bytes, 216326912 FLOPs)`（float32 因 4 B/元素只到 0.86 GiB 而放行）。
+
+### B2 真 v3 的 topology/dedicated 比值（13 条基础表 seq × 4 dtype，热态 3 轮中位）
+
+我的 13 seq：`1,3,9,129,849,855,1599,1623,1700,1743,1863,2000,2582`（seq≤2582 全在编译表内）。
+
+| dtype | n | 中位 | 最优 | 最差 | 快于 dedicated |
+|---|---:|---:|---:|---:|---:|
+| complex128 | 12 | 2.24× | 0.21× | 4.56× | 4/12 |
+| complex64 | 12 | 2.41× | 0.09× | 3.95× | 3/12 |
+| float64 | 12 | 2.60× | 0.24× | 4.01× | 3/12 |
+| float32 | 13 | 2.85× | 0.34× | 5.48× | 3/13 |
+
+逐 seq（complex128）：seq9 0.212、seq3 0.513、seq1700 0.768、seq2000 0.728（v3 胜），其余 2.2–4.6×。
+数值对拍：全部格子与 dedicated 输出一致（rel ≤ 1.4e-15 / 复数单精度 ≤ 6.4e-7），0 超容差。
+
+### B3 trace 交叉验证（`PYQCD_EINSUM_TOPOLOGY_TRACE=1`，逐 seq 独立进程）
+
+| seq | route | trace 是否打出该方程的 `topology-specialized:` |
+|---|---|---|
+| 1 / 9 / 855（v3） | `kupl_topology` | **打出**（`steps=5/12/9`） |
+| 2583 / 2591（v2） | `kupl_topology_v2` | **不打出**（只有探针那行 `0123,4567,10,54,32,76-> steps=5`） |
+
+另：把路线符号的绑定缓存伪造成"缺失"后，`try_topology_apply` 返回 `None` 并给出
+`… qcd_kupl_topology_last_specialized missing …`，**不写任何 `kupl_topology` 标签**（fail closed 成立）。
+
+## C. CUDA 侧（V100，NVRTC 12.4 预载）
+
+### C1 高元数（arity>6）命中（对比 `cupy.einsum`，生产 distill 尺寸）
+
+| seq | arity | dtype | path | rel |
+|---|---:|---|---|---|
+| 3 | 7 | complex128 / complex64 | `cuda_topology` | 8.25e-16 / 4.57e-07 |
+| 849 | 9 | 同上 | `cuda_topology` | 6.72e-16 / 7.21e-08 |
+| 9 | 13 | 同上 | `cuda_topology` | 7.79e-16 / **4.41e-07** |
+| 1599 | 12 | 同上 | `cuda_topology` | 5.14e-16 / 1.89e-07 |
+| 855 | 10 | 同上 | **status=4 拒绝** | — |
+| 1863 | 16 | 同上 | **status=4 拒绝** | — |
+
+855 / 1863 的拒绝与预测一致：`result.json` 的 `ratio_vs_greedy` = 60.57 / 52.89（> 8）。
+
+### C2 收缩序守卫（`table.tsv` 的 ratio 最小/最大各 2 条）
+
+| seq | arity | table ratio | ratio_vs_greedy | 实测 | 与预测一致 |
+|---|---:|---:|---:|---|---|
+| 9 | 13 | 0.528 | 1.042 | accepted | ✅ |
+| 15 | 13 | 0.528 | 1.042 | accepted | ✅ |
+| 630 | 14 | 38104 | 3.81e4 | **status=4 rejected** | ✅ |
+| 654 | 14 | 38104 | 3.81e4 | **status=4 rejected** | ✅ |
+
+（`>8 拒、≤8 放行` 在 6 个格子上全部命中：上面 4 格 + C1 的 855/1863。）
+
+### C3 三路径耗时（5 轮中位，含 deviceSync；生产 distill / distill_curr）
+
+| seq | 档 | arity | 操作数 | generic | dedicated | topology | topology path |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 1 | distill | 6 | 0.0 MiB | 0.716 ms | 0.362 ms | 1.141 ms | `cuda_topology` |
+| 849 | distill | 9 | 0.0 MiB | 1.058 ms | 0.483 ms | 1.115 ms | `cuda_topology` |
+| 1599 | distill | 12 | 0.0 MiB | 1.592 ms | 0.490 ms | 1.291 ms | `cuda_topology` |
+| 9 | distill | 13 | 61.0 MiB | 2.294 ms | 0.916 ms | 1.690 ms | `cuda_topology` |
+| 855 | distill | 10 | 0.6 MiB | 1.938 ms | 0.545 ms | 拒绝(status 4) | — |
+| 9 | distill_curr | 13 | 976.6 MiB | 5.249 ms | 5.706 ms | 6.945 ms | `cuda_topology` |
+
+这三条路径的 rel（vs generic）：topology ≤ 4e-16（complex128）/ ≤ 7e-7（单精度）。
+
+## D. CPU pack-bound 守卫的「逐侧记账」
+
+D1：把 `_topology_step_records` 的逐步判定与原生 `topology-gemm-step` 诊断行逐行对账
+（生产 distill 尺寸）：
+
+| seq | python 步数 / 原生行数 | 逐行一致 | path 序列 |
+|---|---|---|---|
+| 3 | 6 / 6 | 6/6 | 一致 |
+| 855 | 9 / 9 | 9/9 | 一致 |
+| 2 | 5 / 5 | 5/5 | 一致 |
+
+D3：逐侧记账 vs 「两侧都 pack」的旧上界（complex128, distill）：
+
+| seq | 步数 | 全直连步 | 逐侧字节 | 两侧上界 | 差 |
+|---|---:|---:|---:|---:|---:|
+| 3 | 6 | 2 | 359,936 | 130,953,984 | **364×** |
+| 9 | 12 | 4 | 2,910,400 | 134,130,816 | 46× |
+| 2582 | 15 | 4 | 424,992 | 3,112,416 | 7.3× |
+| 855 | 9 | 3 | 411,168 | 1,778,016 | 4.3× |
+| 1863 | 15 | 3 | 450,624 | 2,498,016 | 5.5× |
+| 2000 | 15 | 6 | 129,012,800 | 132,930,528 | 1.03× |
+
+D2：seq 129 的守卫字节数与「按记录逐侧求和」完全相等（complex128 3,456,077,824；
+c64/f64 1,728,038,912；f32 864,019,456），且 f32 低于 1 GiB 门槛因此**不**被拒。
+
+## 结论速览（6 项修复逐条）
+
+| # | 修复 | 复测结论 |
+|---|---|---|
+| 1 | `_label_sizes` 轴位绑定 | **确认**（附录大写→Mom、其余→Nev；基础表逐位不变；count_batch 9/9/81） |
+| 2 | topology 路线可观测性 | **确认**（v3/v2 分流准确 + trace 交叉验证 + 缺符号 fail closed） |
+| 3 | CUDA 摘要 96→128 位 | **确认**（arity 7/9/12/13 全部命中 `cuda_topology`，rel 1e-16/1e-7） |
+| 4 | v3 输入侧 direct 直连 | **确认（单侧/trans 分支）**；`count_batch > 1` 分支在 dev60 表内**不可达**（基础表 batch_rank 恒 0），与文档自述一致 |
+| 5 | CPU pack-bound 逐侧记账 | **确认**（逐行与原生 trace 相同；量级差 1.03×–364×） |
+| 6 | CUDA 收缩序守卫（>8 拒） | **确认**（6/6 与预测量化一致；2582 条语料拒 1692 的结论与此一致） |
+
+**不一致 / 需注意**：文档那 4 行真 v3 比值表所用的 13 条 seq 列表**未被归档**，
+我用自己选定的 13 条基础表 seq 复测得到方向一致但绝对值不同的分布
+（中位 2.24–2.85× vs 文档 2.71–3.03×，最优 0.09–0.34× vs 0.04–0.20×，
+最差 3.95–5.48× vs 4.29–4.72×）。同 `n` 模式（12/12/12/13）与「seq=129 仅对
+float32 不被拒」这一细节完全复现，说明两套 seq 选择规则相同，差异来自具体 seq
+与计时噪声，不是口径错误。
+
+**附带发现（旧 v2 数字已作废，不属于本轮 6 项修复）**：`_label_sizes` 修正后，
+附录 seq 的 `distill` 形状从错绑的 `(1,1,100)` 变成物理的 `(1,100,100)`，
+v2 通用执行器的耗时随之上抬 3 个数量级 —— seq=2591 complex128（操作数 160 MiB）
+本次 **首调 11.9 s / 热态中位 12.17 s（3 轮）**，而
+`artifacts/topo_vs_dedicated_distill_20261115132117`（13:21，修复前）记的是 **7.5 ms**；
+同一格 dedicated 直接以「plan arena 19.6 GB > 8 GiB 预算」拒绝。
+因此凡引用那份旧产物里的 v2 格倍数（以及混合中位 4.89–8.18×）都不再可信；
+v3 格不受影响（基础表绑定逐位未变，复测的 v3 耗时全在 0.3–24 ms 量级）。
+
+
+===== 数据文件清单 =====
+--- part_a_label_sizes.json ---
+{
+ "scenes": {
+  "distill": {
+   "Nx": 1,
+   "Lt": 1,
+   "Nev": 100,
+   "Ns": 4,
+   "Mom": 1,
+   "Nev_src": 100,
+   "Nev_curr": 400,
+   "Mom_src": 1,
+   "Mom_curr": 9
+  },
+  "distill_curr": {
+   "Nx": 1,
+   "Lt": 1,
+   "Nev": 400,
+   "Ns": 4,
+   "Mom": 9,
+   "Nev_src": 100,
+   "Nev_curr": 400,
+   "Mom_src": 1,
+   "Mom_curr": 9
+  }
+ },
+ "appendix": {
+  "2591": {
+   "distill": {
+    "arity": 13,
+    "equation": "cadb,egfh,minj,okpl,sqtr,ac,mo,gi,qs,Nbd,Nfnp,Mhjl,Mrt->NMek",
+    "shapes": [
+     [
+      4,
+      4,
+      100,
+      100
+     ],
+     [
+      100,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      100,
+      100,
+      100
+     ],
+     [
+      4,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      1,
+      100,
+      100
+     ],
+     [
+      1,
+      100,
+      100,
+      100
+     ],
+     [
+      1,
+      100,
+      100,
+      100
+     ],
+     [
+      1,
+      100,
+      100
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VDV_0",
+      "term": "Nbd",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100
+      ],
+      "head_label": "N",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100
+      ]
+     },
+     {
+      "role": "VVV_1",
+      "term": "Nfnp",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "head_label": "N",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100,
+       100
+      ]
+     },
+     {
+      "role": "VVV_2",
+      "term": "Mhjl",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "head_label": "M",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100,
+       100
+      ]
+     },
+     {
+      "role": "VDV_3",
+      "term": "Mrt",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100
+      ],
+      "head_label": "M",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100
+      ]
+     }
+    ],
+    "steps": 12,
+    "max_count_batch": 1,
+    "max_batch_rank": 0,
+    "widest_step": "Nbd,cadb->Nca",
+    "ranks": [
+     0,
+     1
+    ],
+    "sum_count_batch": 12,
+    "profile": [
+     {
+      "eq": "Nbd,cadb->Nca",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "Mrt,sqtr->Msq",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "Nca,ac->N",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "Msq,qs->M",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mo,minj->oinj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "oinj,gi->onjg",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "N,Nfnp->Nfnp",
+      "count_batch": 1,
+      "batch_rank": 1,
+      "gen_count": 1
+     },
+     {
+      "eq": "M,Mhjl->Mhjl",
+      "count_batch": 1,
+      "batch_rank": 1,
+      "gen_count": 1
+     },
+     {
+      "eq": "Nfnp,onjg->Nfpojg",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "Nfpojg,egfh->Npojeh",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "Npojeh,Mhjl->NpoeMl",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "NpoeMl,okpl->NMek",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     }
+    ]
+   },
+   "distill_curr": {
+    "arity": 13,
+    "equation": "cadb,egfh,minj,okpl,sqtr,ac,mo,gi,qs,Nbd,Nfnp,Mhjl,Mrt->NMek",
+    "shapes": [
+     [
+      4,
+      4,
+      400,
+      400
+     ],
+     [
+      400,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      400,
+      400,
+      400
+     ],
+     [
+      4,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      9,
+      400,
+      400
+     ],
+     [
+      9,
+      400,
+      400,
+      400
+     ],
+     [
+      9,
+      400,
+      400,
+      400
+     ],
+     [
+      9,
+      400,
+      400
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VDV_0",
+      "term": "Nbd",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400
+      ],
+      "head_label": "N",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400
+      ]
+     },
+     {
+      "role": "VVV_1",
+      "term": "Nfnp",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "head_label": "N",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400,
+       400
+      ]
+     },
+     {
+      "role": "VVV_2",
+      "term": "Mhjl",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "head_label": "M",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400,
+       400
+      ]
+     },
+     {
+      "role": "VDV_3",
+      "term": "Mrt",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400
+      ],
+      "head_label": "M",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400
+      ]
+     }
+    ],
+    "steps": 12,
+    "max_count_batch": 9,
+    "max_batch_rank": 1,
+    "widest_step": "N,Nfnp->Nfnp",
+    "ranks": [
+     0,
+     1
+    ],
+    "sum_count_batch": 28,
+    "profile": [
+     {
+      "eq": "ac,cadb->db",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "qs,sqtr->tr",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "db,Nbd->N",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "tr,Mrt->M",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mo,minj->oinj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "oinj,gi->onjg",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "N,Nfnp->Nfnp",
+      "count_batch": 9,
+      "batch_rank": 1,
+      "gen_count": 9
+     },
+     {
+      "eq": "M,Mhjl->Mhjl",
+      "count_batch": 9,
+      "batch_rank": 1,
+      "gen_count": 9
+     },
+     {
+      "eq": "Nfnp,onjg->Nfpojg",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "Nfpojg,egfh->Npojeh",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "Npojeh,Mhjl->NpoeMl",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "NpoeMl,okpl->NMek",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     }
+    ]
+   }
+  },
+  "3437": {
+   "distill": {
+    "arity": 10,
+    "equation": "ambn,cgdh,eifj,okpl,ce,mo,gi,Nbdf,Nnp,Mhjl->MNak",
+    "shapes": [
+     [
+      100,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      100,
+      100,
+      100
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      1,
+      100,
+      100,
+      100
+     ],
+     [
+      1,
+      100,
+      100
+     ],
+     [
+      1,
+      100,
+      100,
+      100
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VVV_0",
+      "term": "Nbdf",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "head_label": "N",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100,
+       100
+      ]
+     },
+     {
+      "role": "VDV_1",
+      "term": "Nnp",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100
+      ],
+      "head_label": "N",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100
+      ]
+     },
+     {
+      "role": "VVV_2",
+      "term": "Mhjl",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "head_label": "M",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100,
+       100
+      ]
+     }
+    ],
+    "steps": 9,
+    "max_count_batch": 1,
+    "max_batch_rank": 0,
+    "widest_step": "ce,cgdh->egdh",
+    "ranks": [
+     0,
+     1
+    ],
+    "sum_count_batch": 9,
+    "profile": [
+     {
+      "eq": "ce,cgdh->egdh",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gi,eifj->gefj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mo,ambn->oabn",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "Nnp,okpl->Nnokl",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "egdh,Nbdf->eghNbf",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "eghNbf,gefj->hNbj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "hNbj,Mhjl->NbMl",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "NbMl,oabn->NMloan",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "NMloan,Nnokl->MNak",
+      "count_batch": 1,
+      "batch_rank": 1,
+      "gen_count": 1
+     }
+    ]
+   },
+   "distill_curr": {
+    "arity": 10,
+    "equation": "ambn,cgdh,eifj,okpl,ce,mo,gi,Nbdf,Nnp,Mhjl->MNak",
+    "shapes": [
+     [
+      400,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      400,
+      400,
+      400
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      9,
+      400,
+      400,
+      400
+     ],
+     [
+      9,
+      400,
+      400
+     ],
+     [
+      9,
+      400,
+      400,
+      400
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VVV_0",
+      "term": "Nbdf",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "head_label": "N",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400,
+       400
+      ]
+     },
+     {
+      "role": "VDV_1",
+      "term": "Nnp",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400
+      ],
+      "head_label": "N",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400
+      ]
+     },
+     {
+      "role": "VVV_2",
+      "term": "Mhjl",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "head_label": "M",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400,
+       400
+      ]
+     }
+    ],
+    "steps": 9,
+    "max_count_batch": 9,
+    "max_batch_rank": 1,
+    "widest_step": "NbMl,Nnokl->NbMnok",
+    "ranks": [
+     0,
+     1
+    ],
+    "sum_count_batch": 17,
+    "profile": [
+     {
+      "eq": "ce,cgdh->egdh",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gi,eifj->gefj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mo,ambn->oabn",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "Nnp,okpl->Nnokl",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "egdh,Nbdf->eghNbf",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "eghNbf,gefj->hNbj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "hNbj,Mhjl->NbMl",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "NbMl,Nnokl->NbMnok",
+      "count_batch": 9,
+      "batch_rank": 1,
+      "gen_count": 9
+     },
+     {
+      "eq": "NbMnok,oabn->MNak",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     }
+    ]
+   }
+  },
+  "2711": {
+   "distill": {
+    "arity": 14,
+    "equation": "aibj,ckdl,eqfr,msnt,oupv,gwhx,ce,og,ik,su,Nbdf,Nnph,Mjlr,Mtvx->NMaqmw",
+    "shapes": [
+     [
+      100,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      100,
+      100,
+      100
+     ],
+     [
+      100,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      4,
+      100,
+      100
+     ],
+     [
+      4,
+      100,
+      100,
+      100
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      1,
+      100,
+      100,
+      100
+     ],
+     [
+      1,
+      100,
+      100,
+      100
+     ],
+     [
+      1,
+      100,
+      100,
+      100
+     ],
+     [
+      1,
+      100,
+      100,
+      100
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VVV_0",
+      "term": "Nbdf",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "head_label": "N",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100,
+       100
+      ]
+     },
+     {
+      "role": "VVV_1",
+      "term": "Nnph",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "head_label": "N",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100,
+       100
+      ]
+     },
+     {
+      "role": "VVV_2",
+      "term": "Mjlr",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "head_label": "M",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100,
+       100
+      ]
+     },
+     {
+      "role": "VVV_3",
+      "term": "Mtvx",
+      "form": "momentum",
+      "axes": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "shape": [
+       1,
+       100,
+       100,
+       100
+      ],
+      "head_label": "M",
+      "head_extent": 1,
+      "tail_extents": [
+       100,
+       100,
+       100
+      ]
+     }
+    ],
+    "steps": 13,
+    "max_count_batch": 1,
+    "max_batch_rank": 0,
+    "widest_step": "ce,ckdl->ekdl",
+    "ranks": [
+     0,
+     2
+    ],
+    "sum_count_batch": 13,
+    "profile": [
+     {
+      "eq": "ce,ckdl->ekdl",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "og,oupv->gupv",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "ekdl,ik->edli",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gupv,su->gpvs",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "edli,Nbdf->eliNbf",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gpvs,Nnph->gvsNnh",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "eliNbf,aibj->elNfaj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "elNfaj,Mjlr->eNfaMr",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "eNfaMr,eqfr->NaMq",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gvsNnh,msnt->gvNhmt",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gvNhmt,Mtvx->gNhmMx",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gNhmMx,gwhx->NmMw",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "NmMw,NaMq->NMaqmw",
+      "count_batch": 1,
+      "batch_rank": 2,
+      "gen_count": 1
+     }
+    ]
+   },
+   "distill_curr": {
+    "arity": 14,
+    "equation": "aibj,ckdl,eqfr,msnt,oupv,gwhx,ce,og,ik,su,Nbdf,Nnph,Mjlr,Mtvx->NMaqmw",
+    "shapes": [
+     [
+      400,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      400,
+      400,
+      400
+     ],
+     [
+      400,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      4,
+      400,
+      400
+     ],
+     [
+      4,
+      400,
+      400,
+      400
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      9,
+      400,
+      400,
+      400
+     ],
+     [
+      9,
+      400,
+      400,
+      400
+     ],
+     [
+      9,
+      400,
+      400,
+      400
+     ],
+     [
+      9,
+      400,
+      400,
+      400
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VVV_0",
+      "term": "Nbdf",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "head_label": "N",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400,
+       400
+      ]
+     },
+     {
+      "role": "VVV_1",
+      "term": "Nnph",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "head_label": "N",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400,
+       400
+      ]
+     },
+     {
+      "role": "VVV_2",
+      "term": "Mjlr",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "head_label": "M",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400,
+       400
+      ]
+     },
+     {
+      "role": "VVV_3",
+      "term": "Mtvx",
+      "form": "momentum",
+      "axes": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "shape": [
+       9,
+       400,
+       400,
+       400
+      ],
+      "head_label": "M",
+      "head_extent": 9,
+      "tail_extents": [
+       400,
+       400,
+       400
+      ]
+     }
+    ],
+    "steps": 13,
+    "max_count_batch": 81,
+    "max_batch_rank": 2,
+    "widest_step": "NmMw,NaMq->NMaqmw",
+    "ranks": [
+     0,
+     2
+    ],
+    "sum_count_batch": 93,
+    "profile": [
+     {
+      "eq": "ce,ckdl->ekdl",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "og,oupv->gupv",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "ekdl,ik->edli",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gupv,su->gpvs",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "edli,Nbdf->eliNbf",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gpvs,Nnph->gvsNnh",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "eliNbf,aibj->elNfaj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "elNfaj,Mjlr->eNfaMr",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "eNfaMr,eqfr->NaMq",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gvsNnh,msnt->gvNhmt",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gvNhmt,Mtvx->gNhmMx",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gNhmMx,gwhx->NmMw",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "NmMw,NaMq->NMaqmw",
+      "count_batch": 81,
+      "batch_rank": 2,
+      "gen_count": 81
+     }
+    ]
+   }
+  }
+ },
+ "base": {
+  "1": {
+   "distill": {
+    "arity": 6,
+    "equation": "cadb,menf,ac,em,bd,fn->",
+    "shapes": [
+     [
+      4,
+      4,
+      1,
+      1
+     ],
+     [
+      4,
+      4,
+      1,
+      1
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      1,
+      1
+     ],
+     [
+      1,
+      1
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VDV_0",
+      "term": "bd",
+      "form": "base",
+      "axes": [
+       1,
+       1
+      ],
+      "shape": [
+       1,
+       1
+      ],
+      "head_label": "b",
+      "head_extent": 1,
+      "tail_extents": [
+       1
+      ]
+     },
+     {
+      "role": "VDV_1",
+      "term": "fn",
+      "form": "base",
+      "axes": [
+       1,
+       1
+      ],
+      "shape": [
+       1,
+       1
+      ],
+      "head_label": "f",
+      "head_extent": 1,
+      "tail_extents": [
+       1
+      ]
+     }
+    ],
+    "steps": 5,
+    "max_count_batch": 1,
+    "max_batch_rank": 0,
+    "widest_step": "ac,cadb->db",
+    "ranks": [
+     0
+    ],
+    "sum_count_batch": 5,
+    "profile": [
+     {
+      "eq": "ac,cadb->db",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "db,bd->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "em,menf->nf",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "nf,fn->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": ",->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     }
+    ]
+   },
+   "distill_curr": {
+    "arity": 6,
+    "equation": "cadb,menf,ac,em,bd,fn->",
+    "shapes": [
+     [
+      4,
+      4,
+      9,
+      1
+     ],
+     [
+      4,
+      4,
+      9,
+      1
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      1,
+      9
+     ],
+     [
+      1,
+      9
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VDV_0",
+      "term": "bd",
+      "form": "base",
+      "axes": [
+       1,
+       9
+      ],
+      "shape": [
+       1,
+       9
+      ],
+      "head_label": "b",
+      "head_extent": 1,
+      "tail_extents": [
+       9
+      ]
+     },
+     {
+      "role": "VDV_1",
+      "term": "fn",
+      "form": "base",
+      "axes": [
+       1,
+       9
+      ],
+      "shape": [
+       1,
+       9
+      ],
+      "head_label": "f",
+      "head_extent": 1,
+      "tail_extents": [
+       9
+      ]
+     }
+    ],
+    "steps": 5,
+    "max_count_batch": 1,
+    "max_batch_rank": 0,
+    "widest_step": "ac,cadb->db",
+    "ranks": [
+     0
+    ],
+    "sum_count_batch": 5,
+    "profile": [
+     {
+      "eq": "ac,cadb->db",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "db,bd->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "em,menf->nf",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "nf,fn->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": ",->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     }
+    ]
+   }
+  },
+  "3": {
+   "distill": {
+    "arity": 7,
+    "equation": "ambn,codp,egfh,ce,mo,bdf,nph->ag",
+    "shapes": [
+     [
+      100,
+      4,
+      1,
+      1
+     ],
+     [
+      4,
+      4,
+      1,
+      1
+     ],
+     [
+      4,
+      100,
+      100,
+      100
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      1,
+      1,
+      100
+     ],
+     [
+      1,
+      1,
+      100
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VVV_0",
+      "term": "bdf",
+      "form": "base",
+      "axes": [
+       1,
+       1,
+       100
+      ],
+      "shape": [
+       1,
+       1,
+       100
+      ],
+      "head_label": "b",
+      "head_extent": 1,
+      "tail_extents": [
+       1,
+       100
+      ]
+     },
+     {
+      "role": "VVV_1",
+      "term": "nph",
+      "form": "base",
+      "axes": [
+       1,
+       1,
+       100
+      ],
+      "shape": [
+       1,
+       1,
+       100
+      ],
+      "head_label": "n",
+      "head_extent": 1,
+      "tail_extents": [
+       1,
+       100
+      ]
+     }
+    ],
+    "steps": 6,
+    "max_count_batch": 1,
+    "max_batch_rank": 0,
+    "widest_step": "mo,codp->mcdp",
+    "ranks": [
+     0
+    ],
+    "sum_count_batch": 6,
+    "profile": [
+     {
+      "eq": "mo,codp->mcdp",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mcdp,ce->mdpe",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "nph,egfh->npegf",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "npegf,bdf->npegbd",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "npegbd,mdpe->ngbm",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "ngbm,ambn->ag",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     }
+    ]
+   },
+   "distill_curr": {
+    "arity": 7,
+    "equation": "ambn,codp,egfh,ce,mo,bdf,nph->ag",
+    "shapes": [
+     [
+      400,
+      4,
+      1,
+      1
+     ],
+     [
+      4,
+      4,
+      9,
+      9
+     ],
+     [
+      4,
+      400,
+      400,
+      400
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      1,
+      9,
+      400
+     ],
+     [
+      1,
+      9,
+      400
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VVV_0",
+      "term": "bdf",
+      "form": "base",
+      "axes": [
+       1,
+       9,
+       400
+      ],
+      "shape": [
+       1,
+       9,
+       400
+      ],
+      "head_label": "b",
+      "head_extent": 1,
+      "tail_extents": [
+       9,
+       400
+      ]
+     },
+     {
+      "role": "VVV_1",
+      "term": "nph",
+      "form": "base",
+      "axes": [
+       1,
+       9,
+       400
+      ],
+      "shape": [
+       1,
+       9,
+       400
+      ],
+      "head_label": "n",
+      "head_extent": 1,
+      "tail_extents": [
+       9,
+       400
+      ]
+     }
+    ],
+    "steps": 6,
+    "max_count_batch": 1,
+    "max_batch_rank": 0,
+    "widest_step": "mo,codp->mcdp",
+    "ranks": [
+     0
+    ],
+    "sum_count_batch": 6,
+    "profile": [
+     {
+      "eq": "mo,codp->mcdp",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mcdp,ce->mdpe",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mdpe,nph->mdenh",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mdenh,bdf->menhbf",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "menhbf,egfh->mnbg",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mnbg,ambn->ag",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     }
+    ]
+   }
+  },
+  "9": {
+   "distill": {
+    "arity": 13,
+    "equation": "cadb,egfh,minj,okpl,sqtr,ac,mo,gi,qs,bd,fnp,hjl,rt->ek",
+    "shapes": [
+     [
+      4,
+      4,
+      1,
+      1
+     ],
+     [
+      100,
+      4,
+      1,
+      1
+     ],
+     [
+      4,
+      4,
+      1,
+      1
+     ],
+     [
+      4,
+      100,
+      100,
+      100
+     ],
+     [
+      4,
+      4,
+      1,
+      1
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      1,
+      1
+     ],
+     [
+      1,
+      1,
+      100
+     ],
+     [
+      1,
+      1,
+      100
+     ],
+     [
+      1,
+      1
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VDV_0",
+      "term": "bd",
+      "form": "base",
+      "axes": [
+       1,
+       1
+      ],
+      "shape": [
+       1,
+       1
+      ],
+      "head_label": "b",
+      "head_extent": 1,
+      "tail_extents": [
+       1
+      ]
+     },
+     {
+      "role": "VVV_1",
+      "term": "fnp",
+      "form": "base",
+      "axes": [
+       1,
+       1,
+       100
+      ],
+      "shape": [
+       1,
+       1,
+       100
+      ],
+      "head_label": "f",
+      "head_extent": 1,
+      "tail_extents": [
+       1,
+       100
+      ]
+     },
+     {
+      "role": "VVV_2",
+      "term": "hjl",
+      "form": "base",
+      "axes": [
+       1,
+       1,
+       100
+      ],
+      "shape": [
+       1,
+       1,
+       100
+      ],
+      "head_label": "h",
+      "head_extent": 1,
+      "tail_extents": [
+       1,
+       100
+      ]
+     },
+     {
+      "role": "VDV_3",
+      "term": "rt",
+      "form": "base",
+      "axes": [
+       1,
+       1
+      ],
+      "shape": [
+       1,
+       1
+      ],
+      "head_label": "r",
+      "head_extent": 1,
+      "tail_extents": [
+       1
+      ]
+     }
+    ],
+    "steps": 12,
+    "max_count_batch": 1,
+    "max_batch_rank": 0,
+    "widest_step": "ac,cadb->db",
+    "ranks": [
+     0
+    ],
+    "sum_count_batch": 12,
+    "profile": [
+     {
+      "eq": "ac,cadb->db",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "qs,sqtr->tr",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mo,minj->oinj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "oinj,gi->onjg",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "onjg,egfh->onjefh",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "db,bd->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "tr,rt->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "onjefh,fnp->ojehp",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "hjl,okpl->hjokp",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "hjokp,ojehp->ke",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": ",->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": ",ke->ek",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     }
+    ]
+   },
+   "distill_curr": {
+    "arity": 13,
+    "equation": "cadb,egfh,minj,okpl,sqtr,ac,mo,gi,qs,bd,fnp,hjl,rt->ek",
+    "shapes": [
+     [
+      4,
+      4,
+      9,
+      1
+     ],
+     [
+      400,
+      4,
+      1,
+      1
+     ],
+     [
+      4,
+      4,
+      9,
+      9
+     ],
+     [
+      4,
+      400,
+      400,
+      400
+     ],
+     [
+      4,
+      4,
+      9,
+      1
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      4,
+      4
+     ],
+     [
+      1,
+      9
+     ],
+     [
+      1,
+      9,
+      400
+     ],
+     [
+      1,
+      9,
+      400
+     ],
+     [
+      1,
+      9
+     ]
+    ],
+    "vertex": [
+     {
+      "role": "VDV_0",
+      "term": "bd",
+      "form": "base",
+      "axes": [
+       1,
+       9
+      ],
+      "shape": [
+       1,
+       9
+      ],
+      "head_label": "b",
+      "head_extent": 1,
+      "tail_extents": [
+       9
+      ]
+     },
+     {
+      "role": "VVV_1",
+      "term": "fnp",
+      "form": "base",
+      "axes": [
+       1,
+       9,
+       400
+      ],
+      "shape": [
+       1,
+       9,
+       400
+      ],
+      "head_label": "f",
+      "head_extent": 1,
+      "tail_extents": [
+       9,
+       400
+      ]
+     },
+     {
+      "role": "VVV_2",
+      "term": "hjl",
+      "form": "base",
+      "axes": [
+       1,
+       9,
+       400
+      ],
+      "shape": [
+       1,
+       9,
+       400
+      ],
+      "head_label": "h",
+      "head_extent": 1,
+      "tail_extents": [
+       9,
+       400
+      ]
+     },
+     {
+      "role": "VDV_3",
+      "term": "rt",
+      "form": "base",
+      "axes": [
+       1,
+       9
+      ],
+      "shape": [
+       1,
+       9
+      ],
+      "head_label": "r",
+      "head_extent": 1,
+      "tail_extents": [
+       9
+      ]
+     }
+    ],
+    "steps": 12,
+    "max_count_batch": 1,
+    "max_batch_rank": 0,
+    "widest_step": "ac,cadb->db",
+    "ranks": [
+     0
+    ],
+    "sum_count_batch": 12,
+    "profile": [
+     {
+      "eq": "ac,cadb->db",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "qs,sqtr->tr",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "db,bd->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "tr,rt->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "mo,minj->oinj",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "oinj,gi->onjg",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "onjg,fnp->ojgfp",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "ojgfp,hjl->ogfphl",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "ogfphl,okpl->gfhk",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": "gfhk,egfh->ke",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": ",->",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     },
+     {
+      "eq": ",ke->ek",
+      "count_batch": 1,
+      "batch_rank": 0,
+      "gen_count": 1
+     }
+    ]
+   }
+  }
+ }
+}
+--- part_b_base13_dev60lib.json ---
+{
+ "scene": "distill",
+ "seqs": [
+  1,
+  3,
+  9,
+  129,
+  849,
+  855,
+  1599,
+  1623,
+  1700,
+  1743,
+  1863,
+  2000,
+  2582
+ ],
+ "mode": "both",
+ "kupl_lib": "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/dev60lib/cpp/kupl/einsum/build/libpyqcdeinsum_kupl.so",
+ "real_dtype_override": true,
+ "table": {
+  "Nx": 1,
+  "Lt": 1,
+  "Nev": 100,
+  "Ns": 4,
+  "Mom": 1,
+  "Nev_src": 100,
+  "Nev_curr": 400,
+  "Mom_src": 1,
+  "Mom_curr": 9,
+  "Nc": 3,
+  "Nt_labels": 4
+ },
+ "classification": [
+  {
+   "seq": 1,
+   "dtype": "complex128",
+   "arity": 6,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 15.838
+  },
+  {
+   "seq": 3,
+   "dtype": "complex128",
+   "arity": 7,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 9.593
+  },
+  {
+   "seq": 9,
+   "dtype": "complex128",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 7.353
+  },
+  {
+   "seq": 129,
+   "dtype": "complex128",
+   "arity": 14,
+   "path": null,
+   "specialized": null,
+   "status": 4,
+   "reason": "topology declined: pack-bound on CPU (3456077824 pack bytes, 216326912 FLOPs): the layout traffic dominates th",
+   "ms": 2.234
+  },
+  {
+   "seq": 849,
+   "dtype": "complex128",
+   "arity": 9,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 1.39
+  },
+  {
+   "seq": 855,
+   "dtype": "complex128",
+   "arity": 10,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.229
+  },
+  {
+   "seq": 1599,
+   "dtype": "complex128",
+   "arity": 12,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 1.93
+  },
+  {
+   "seq": 1623,
+   "dtype": "complex128",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.557
+  },
+  {
+   "seq": 1700,
+   "dtype": "complex128",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 42.708
+  },
+  {
+   "seq": 1743,
+   "dtype": "complex128",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 3.72
+  },
+  {
+   "seq": 1863,
+   "dtype": "complex128",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 3.045
+  },
+  {
+   "seq": 2000,
+   "dtype": "complex128",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 31.066
+  },
+  {
+   "seq": 2582,
+   "dtype": "complex128",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 3.151
+  },
+  {
+   "seq": 1,
+   "dtype": "complex64",
+   "arity": 6,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.707
+  },
+  {
+   "seq": 3,
+   "dtype": "complex64",
+   "arity": 7,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 6.33
+  },
+  {
+   "seq": 9,
+   "dtype": "complex64",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 4.622
+  },
+  {
+   "seq": 129,
+   "dtype": "complex64",
+   "arity": 14,
+   "path": null,
+   "specialized": null,
+   "status": 4,
+   "reason": "topology declined: pack-bound on CPU (1728038912 pack bytes, 216326912 FLOPs): the layout traffic dominates th",
+   "ms": 2.371
+  },
+  {
+   "seq": 849,
+   "dtype": "complex64",
+   "arity": 9,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 1.259
+  },
+  {
+   "seq": 855,
+   "dtype": "complex64",
+   "arity": 10,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.143
+  },
+  {
+   "seq": 1599,
+   "dtype": "complex64",
+   "arity": 12,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 1.502
+  },
+  {
+   "seq": 1623,
+   "dtype": "complex64",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.546
+  },
+  {
+   "seq": 1700,
+   "dtype": "complex64",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 11.018
+  },
+  {
+   "seq": 1743,
+   "dtype": "complex64",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.67
+  },
+  {
+   "seq": 1863,
+   "dtype": "complex64",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.73
+  },
+  {
+   "seq": 2000,
+   "dtype": "complex64",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 11.382
+  },
+  {
+   "seq": 2582,
+   "dtype": "complex64",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.866
+  },
+  {
+   "seq": 1,
+   "dtype": "float64",
+   "arity": 6,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.724
+  },
+  {
+   "seq": 3,
+   "dtype": "float64",
+   "arity": 7,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 16.538
+  },
+  {
+   "seq": 9,
+   "dtype": "float64",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 4.578
+  },
+  {
+   "seq": 129,
+   "dtype": "float64",
+   "arity": 14,
+   "path": null,
+   "specialized": null,
+   "status": 4,
+   "reason": "topology declined: pack-bound on CPU (1728038912 pack bytes, 216326912 FLOPs): the layout traffic dominates th",
+   "ms": 2.798
+  },
+  {
+   "seq": 849,
+   "dtype": "float64",
+   "arity": 9,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 1.266
+  },
+  {
+   "seq": 855,
+   "dtype": "float64",
+   "arity": 10,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.136
+  },
+  {
+   "seq": 1599,
+   "dtype": "float64",
+   "arity": 12,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 1.739
+  },
+  {
+   "seq": 1623,
+   "dtype": "float64",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.579
+  },
+  {
+   "seq": 1700,
+   "dtype": "float64",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 11.285
+  },
+  {
+   "seq": 1743,
+   "dtype": "float64",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.502
+  },
+  {
+   "seq": 1863,
+   "dtype": "float64",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.773
+  },
+  {
+   "seq": 2000,
+   "dtype": "float64",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 11.122
+  },
+  {
+   "seq": 2582,
+   "dtype": "float64",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 3.071
+  },
+  {
+   "seq": 1,
+   "dtype": "float32",
+   "arity": 6,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.814
+  },
+  {
+   "seq": 3,
+   "dtype": "float32",
+   "arity": 7,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 5.486
+  },
+  {
+   "seq": 9,
+   "dtype": "float32",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 3.754
+  },
+  {
+   "seq": 129,
+   "dtype": "float32",
+   "arity": 14,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 5098.078
+  },
+  {
+   "seq": 849,
+   "dtype": "float32",
+   "arity": 9,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 1.531
+  },
+  {
+   "seq": 855,
+   "dtype": "float32",
+   "arity": 10,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 1.895
+  },
+  {
+   "seq": 1599,
+   "dtype": "float32",
+   "arity": 12,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 1.661
+  },
+  {
+   "seq": 1623,
+   "dtype": "float32",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.507
+  },
+  {
+   "seq": 1700,
+   "dtype": "float32",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 6.517
+  },
+  {
+   "seq": 1743,
+   "dtype": "float32",
+   "arity": 13,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.484
+  },
+  {
+   "seq": 1863,
+   "dtype": "float32",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.58
+  },
+  {
+   "seq": 2000,
+   "dtype": "float32",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 6.726
+  },
+  {
+   "seq": 2582,
+   "dtype": "float32",
+   "arity": 16,
+   "path": "kupl_topology",
+   "specialized": true,
+   "status": null,
+   "reason": null,
+   "ms": 2.793
+  }
+ ],
+ "ratios": [
+  {
+   "seq": 1,
+   "dtype": "complex128",
+   "arity": 6,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.3188999980920926,
+   "dedicated_ms": 0.0855999969644472,
+   "ratio": 3.725,
+   "rel_vs_dedicated": 7.043e-16,
+   "rel_vs_numpy": 4.226e-16,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 3,
+   "dtype": "complex128",
+   "arity": 7,
+   "input_mib": 61.05,
+   "topology_path": "kupl_topology",
+   "topology_ms": 4.005599999800324,
+   "dedicated_ms": 7.815799996023998,
+   "ratio": 0.513,
+   "rel_vs_dedicated": 0.0,
+   "rel_vs_numpy": 7.957e-16,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 9,
+   "dtype": "complex128",
+   "arity": 13,
+   "input_mib": 61.05,
+   "topology_path": "kupl_topology",
+   "topology_ms": 4.719899996416643,
+   "dedicated_ms": 22.245600004680455,
+   "ratio": 0.212,
+   "rel_vs_dedicated": 1.392e-15,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 129,
+   "dtype": "complex128",
+   "arity": 14,
+   "input_mib": 122.09,
+   "topology_path": null,
+   "topology_ms": null,
+   "dedicated_ms": null,
+   "ratio": null,
+   "rel_vs_dedicated": null,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": null,
+   "topology_declined": "negative-cache hit: topology declined: pack-bound on CPU (3456077824 pack bytes, 216326912",
+   "topology_status": 4,
+   "dedicated_declined": "plan is pack-bound on CPU (3456086272 pack bytes, 216326912 FLOPs)"
+  },
+  {
+   "seq": 849,
+   "dtype": "complex128",
+   "arity": 9,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.41170000622514635,
+   "dedicated_ms": 0.115999995614402,
+   "ratio": 3.549,
+   "rel_vs_dedicated": 6.007e-16,
+   "rel_vs_numpy": 4.247e-16,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 855,
+   "dtype": "complex128",
+   "arity": 10,
+   "input_mib": 0.64,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.7232000061776489,
+   "dedicated_ms": 0.3223999956389889,
+   "ratio": 2.243,
+   "rel_vs_dedicated": 1.909e-16,
+   "rel_vs_numpy": 5.104e-16,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1599,
+   "dtype": "complex128",
+   "arity": 12,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.4929999995511025,
+   "dedicated_ms": 0.10809999366756529,
+   "ratio": 4.561,
+   "rel_vs_dedicated": 4.991e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1623,
+   "dtype": "complex128",
+   "arity": 13,
+   "input_mib": 0.65,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.8309999975608662,
+   "dedicated_ms": 0.3808000037679449,
+   "ratio": 2.182,
+   "rel_vs_dedicated": 3.755e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1700,
+   "dtype": "complex128",
+   "arity": 13,
+   "input_mib": 61.05,
+   "topology_path": "kupl_topology",
+   "topology_ms": 16.700899999705143,
+   "dedicated_ms": 21.736099995905533,
+   "ratio": 0.768,
+   "rel_vs_dedicated": 7.288e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1743,
+   "dtype": "complex128",
+   "arity": 13,
+   "input_mib": 0.65,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.8702000050107017,
+   "dedicated_ms": 0.3904000041075051,
+   "ratio": 2.229,
+   "rel_vs_dedicated": 5.577e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1863,
+   "dtype": "complex128",
+   "arity": 16,
+   "input_mib": 0.65,
+   "topology_path": "kupl_topology",
+   "topology_ms": 1.0093000018969178,
+   "dedicated_ms": 0.4267000040272251,
+   "ratio": 2.365,
+   "rel_vs_dedicated": 6.516e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 2000,
+   "dtype": "complex128",
+   "arity": 16,
+   "input_mib": 61.05,
+   "topology_path": "kupl_topology",
+   "topology_ms": 16.93689999228809,
+   "dedicated_ms": 23.253300998476334,
+   "ratio": 0.728,
+   "rel_vs_dedicated": 8.049e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 2582,
+   "dtype": "complex128",
+   "arity": 16,
+   "input_mib": 0.65,
+   "topology_path": "kupl_topology",
+   "topology_ms": 1.1491000041132793,
+   "dedicated_ms": 0.38720000884495676,
+   "ratio": 2.968,
+   "rel_vs_dedicated": 8.373e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1,
+   "dtype": "complex64",
+   "arity": 6,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.35069999285042286,
+   "dedicated_ms": 0.08869999146554619,
+   "ratio": 3.954,
+   "rel_vs_dedicated": 1.798e-07,
+   "rel_vs_numpy": 2.166e-07,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 3,
+   "dtype": "complex64",
+   "arity": 7,
+   "input_mib": 30.52,
+   "topology_path": "kupl_topology",
+   "topology_ms": 1.9287000031908974,
+   "dedicated_ms": 1.5837999962968752,
+   "ratio": 1.218,
+   "rel_vs_dedicated": 0.0,
+   "rel_vs_numpy": 3.59e-07,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 9,
+   "dtype": "complex64",
+   "arity": 13,
+   "input_mib": 30.52,
+   "topology_path": "kupl_topology",
+   "topology_ms": 2.5295000086771324,
+   "dedicated_ms": 27.30140100175049,
+   "ratio": 0.093,
+   "rel_vs_dedicated": 6.355e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 129,
+   "dtype": "complex64",
+   "arity": 14,
+   "input_mib": 61.05,
+   "topology_path": null,
+   "topology_ms": null,
+   "dedicated_ms": null,
+   "ratio": null,
+   "rel_vs_dedicated": null,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": null,
+   "topology_declined": "negative-cache hit: topology declined: pack-bound on CPU (1728038912 pack bytes, 216326912",
+   "topology_status": 4,
+   "dedicated_declined": "plan is pack-bound on CPU (1728043136 pack bytes, 216326912 FLOPs)"
+  },
+  {
+   "seq": 849,
+   "dtype": "complex64",
+   "arity": 9,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.410699998610653,
+   "dedicated_ms": 0.1086000120267272,
+   "ratio": 3.782,
+   "rel_vs_dedicated": 1.487e-07,
+   "rel_vs_numpy": 1.442e-07,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 855,
+   "dtype": "complex64",
+   "arity": 10,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.6241999944904819,
+   "dedicated_ms": 0.2626999921631068,
+   "ratio": 2.376,
+   "rel_vs_dedicated": 1.591e-07,
+   "rel_vs_numpy": 3.655e-07,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1599,
+   "dtype": "complex64",
+   "arity": 12,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.4721999866887927,
+   "dedicated_ms": 0.15110000094864517,
+   "ratio": 3.125,
+   "rel_vs_dedicated": 1.655e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1623,
+   "dtype": "complex64",
+   "arity": 13,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.8212000102503225,
+   "dedicated_ms": 0.3355999942868948,
+   "ratio": 2.447,
+   "rel_vs_dedicated": 4.101e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1700,
+   "dtype": "complex64",
+   "arity": 13,
+   "input_mib": 30.52,
+   "topology_path": "kupl_topology",
+   "topology_ms": 8.8162000029115,
+   "dedicated_ms": 27.588400000240654,
+   "ratio": 0.32,
+   "rel_vs_dedicated": 2.838e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1743,
+   "dtype": "complex64",
+   "arity": 13,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.796199994510971,
+   "dedicated_ms": 0.3479000006336719,
+   "ratio": 2.289,
+   "rel_vs_dedicated": 3.048e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1863,
+   "dtype": "complex64",
+   "arity": 16,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.9653999877627939,
+   "dedicated_ms": 0.33310000435449183,
+   "ratio": 2.898,
+   "rel_vs_dedicated": 3.505e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 2000,
+   "dtype": "complex64",
+   "arity": 16,
+   "input_mib": 30.52,
+   "topology_path": "kupl_topology",
+   "topology_ms": 9.279799996875226,
+   "dedicated_ms": 26.73680000589229,
+   "ratio": 0.347,
+   "rel_vs_dedicated": 2.559e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 2582,
+   "dtype": "complex64",
+   "arity": 16,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 1.2346000003162771,
+   "dedicated_ms": 0.31370000215247273,
+   "ratio": 3.936,
+   "rel_vs_dedicated": 6.357e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1,
+   "dtype": "float64",
+   "arity": 6,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.341799997841008,
+   "dedicated_ms": 0.08519999391864985,
+   "ratio": 4.012,
+   "rel_vs_dedicated": 6.032e-16,
+   "rel_vs_numpy": 2.011e-16,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 3,
+   "dtype": "float64",
+   "arity": 7,
+   "input_mib": 30.52,
+   "topology_path": "kupl_topology",
+   "topology_ms": 1.806799991754815,
+   "dedicated_ms": 1.7328000103589147,
+   "ratio": 1.043,
+   "rel_vs_dedicated": 0.0,
+   "rel_vs_numpy": 5.922e-16,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 9,
+   "dtype": "float64",
+   "arity": 13,
+   "input_mib": 30.52,
+   "topology_path": "kupl_topology",
+   "topology_ms": 2.4548000073991716,
+   "dedicated_ms": 10.19260000612121,
+   "ratio": 0.241,
+   "rel_vs_dedicated": 7.551e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 129,
+   "dtype": "float64",
+   "arity": 14,
+   "input_mib": 61.05,
+   "topology_path": null,
+   "topology_ms": null,
+   "dedicated_ms": null,
+   "ratio": null,
+   "rel_vs_dedicated": null,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": null,
+   "topology_declined": "negative-cache hit: topology declined: pack-bound on CPU (1728038912 pack bytes, 216326912",
+   "topology_status": 4,
+   "dedicated_declined": "plan is pack-bound on CPU (1728043136 pack bytes, 216326912 FLOPs)"
+  },
+  {
+   "seq": 849,
+   "dtype": "float64",
+   "arity": 9,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.3808000037679449,
+   "dedicated_ms": 0.10689999908208847,
+   "ratio": 3.562,
+   "rel_vs_dedicated": 1.719e-15,
+   "rel_vs_numpy": 8.595e-16,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 855,
+   "dtype": "float64",
+   "arity": 10,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.6091999966884032,
+   "dedicated_ms": 0.2609000075608492,
+   "ratio": 2.335,
+   "rel_vs_dedicated": 5.853e-16,
+   "rel_vs_numpy": 3.512e-16,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1599,
+   "dtype": "float64",
+   "arity": 12,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.483600000734441,
+   "dedicated_ms": 0.12790001346729696,
+   "ratio": 3.781,
+   "rel_vs_dedicated": 5.268e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1623,
+   "dtype": "float64",
+   "arity": 13,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.7410999969579279,
+   "dedicated_ms": 0.28589999419637024,
+   "ratio": 2.592,
+   "rel_vs_dedicated": 2.956e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1700,
+   "dtype": "float64",
+   "arity": 13,
+   "input_mib": 30.52,
+   "topology_path": "kupl_topology",
+   "topology_ms": 8.77040000341367,
+   "dedicated_ms": 10.651499993400648,
+   "ratio": 0.823,
+   "rel_vs_dedicated": 8.278e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1743,
+   "dtype": "float64",
+   "arity": 13,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.7965999975567684,
+   "dedicated_ms": 0.3056999994441867,
+   "ratio": 2.606,
+   "rel_vs_dedicated": 5.305e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1863,
+   "dtype": "float64",
+   "arity": 16,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.9565999935148284,
+   "dedicated_ms": 0.3603000077418983,
+   "ratio": 2.655,
+   "rel_vs_dedicated": 3.917e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 2000,
+   "dtype": "float64",
+   "arity": 16,
+   "input_mib": 30.52,
+   "topology_path": "kupl_topology",
+   "topology_ms": 9.093400003621355,
+   "dedicated_ms": 10.584199990262277,
+   "ratio": 0.859,
+   "rel_vs_dedicated": 8.155e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 2582,
+   "dtype": "float64",
+   "arity": 16,
+   "input_mib": 0.32,
+   "topology_path": "kupl_topology",
+   "topology_ms": 1.1251999967498705,
+   "dedicated_ms": 0.3178000042680651,
+   "ratio": 3.541,
+   "rel_vs_dedicated": 3.258e-16,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1,
+   "dtype": "float32",
+   "arity": 6,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.3668999997898936,
+   "dedicated_ms": 0.10469999688211828,
+   "ratio": 3.504,
+   "rel_vs_dedicated": 0.0,
+   "rel_vs_numpy": 2.159e-07,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 3,
+   "dtype": "float32",
+   "arity": 7,
+   "input_mib": 15.26,
+   "topology_path": "kupl_topology",
+   "topology_ms": 1.2541000032797456,
+   "dedicated_ms": 0.8367000118596479,
+   "ratio": 1.499,
+   "rel_vs_dedicated": 0.0,
+   "rel_vs_numpy": 3.709e-07,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 9,
+   "dtype": "float32",
+   "arity": 13,
+   "input_mib": 15.26,
+   "topology_path": "kupl_topology",
+   "topology_ms": 1.6278000111924484,
+   "dedicated_ms": 4.857299994910136,
+   "ratio": 0.335,
+   "rel_vs_dedicated": 4.054e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 129,
+   "dtype": "float32",
+   "arity": 14,
+   "input_mib": 30.52,
+   "topology_path": "kupl_topology",
+   "topology_ms": 5148.570512988954,
+   "dedicated_ms": 939.624502992956,
+   "ratio": 5.479,
+   "rel_vs_dedicated": 6.199e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 849,
+   "dtype": "float32",
+   "arity": 9,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.4929999995511025,
+   "dedicated_ms": 0.0968000094871968,
+   "ratio": 5.093,
+   "rel_vs_dedicated": 3.296e-07,
+   "rel_vs_numpy": 7.251e-07,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 855,
+   "dtype": "float32",
+   "arity": 10,
+   "input_mib": 0.16,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.5933999927947298,
+   "dedicated_ms": 0.22450000687967986,
+   "ratio": 2.643,
+   "rel_vs_dedicated": 2.514e-07,
+   "rel_vs_numpy": 6.285e-07,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1599,
+   "dtype": "float32",
+   "arity": 12,
+   "input_mib": 0.0,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.46469998778775334,
+   "dedicated_ms": 0.15870000061113387,
+   "ratio": 2.928,
+   "rel_vs_dedicated": 1.414e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1623,
+   "dtype": "float32",
+   "arity": 13,
+   "input_mib": 0.16,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.8262000046670437,
+   "dedicated_ms": 0.28780000866390765,
+   "ratio": 2.871,
+   "rel_vs_dedicated": 5.29e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1700,
+   "dtype": "float32",
+   "arity": 13,
+   "input_mib": 15.26,
+   "topology_path": "kupl_topology",
+   "topology_ms": 3.87139999656938,
+   "dedicated_ms": 5.400900001404807,
+   "ratio": 0.717,
+   "rel_vs_dedicated": 6.349e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1743,
+   "dtype": "float32",
+   "arity": 13,
+   "input_mib": 0.16,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.7721000001765788,
+   "dedicated_ms": 0.27129999944008887,
+   "ratio": 2.846,
+   "rel_vs_dedicated": 6.835e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 1863,
+   "dtype": "float32",
+   "arity": 16,
+   "input_mib": 0.16,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.8937999955378473,
+   "dedicated_ms": 0.3648999991128221,
+   "ratio": 2.449,
+   "rel_vs_dedicated": 1.682e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 2000,
+   "dtype": "float32",
+   "arity": 16,
+   "input_mib": 15.26,
+   "topology_path": "kupl_topology",
+   "topology_ms": 4.168200001004152,
+   "dedicated_ms": 4.61669999640435,
+   "ratio": 0.903,
+   "rel_vs_dedicated": 3.01e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  },
+  {
+   "seq": 2582,
+   "dtype": "float32",
+   "arity": 16,
+   "input_mib": 0.16,
+   "topology_path": "kupl_topology",
+   "topology_ms": 0.9415999957127497,
+   "dedicated_ms": 0.24240001221187413,
+   "ratio": 3.884,
+   "rel_vs_dedicated": 1.749e-07,
+   "rel_vs_numpy": null,
+   "within_tolerance_vs_dedicated": true,
+   "topology_declined": null,
+   "topology_status": null,
+   "dedicated_declined": null
+  }
+ ]
+}
+--- part_c_cuda_v100.json ---
+{
+ "device": "Tesla V100-SXM2-32GB",
+ "sections": {
+  "c1_high_arity": [
+   {
+    "seq": 3,
+    "arity": 7,
+    "dtype": "complex128",
+    "input_mib": 61.05,
+    "path": "cuda_topology",
+    "cuda_steps": 6,
+    "rel": 8.253e-16,
+    "within_tolerance": true,
+    "out_shape": [
+     100,
+     100
+    ]
+   },
+   {
+    "seq": 3,
+    "arity": 7,
+    "dtype": "complex64",
+    "input_mib": 30.52,
+    "path": "cuda_topology",
+    "cuda_steps": 6,
+    "rel": 4.569e-07,
+    "within_tolerance": true,
+    "out_shape": [
+     100,
+     100
+    ]
+   },
+   {
+    "seq": 849,
+    "arity": 9,
+    "dtype": "complex128",
+    "input_mib": 0.0,
+    "path": "cuda_topology",
+    "cuda_steps": 8,
+    "rel": 6.716e-16,
+    "within_tolerance": true,
+    "out_shape": []
+   },
+   {
+    "seq": 849,
+    "arity": 9,
+    "dtype": "complex64",
+    "input_mib": 0.0,
+    "path": "cuda_topology",
+    "cuda_steps": 8,
+    "rel": 7.211e-08,
+    "within_tolerance": true,
+    "out_shape": []
+   },
+   {
+    "seq": 855,
+    "arity": 10,
+    "dtype": "complex128",
+    "input_mib": 0.64,
+    "path": null,
+    "cuda_steps": null,
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)"
+   },
+   {
+    "seq": 855,
+    "arity": 10,
+    "dtype": "complex64",
+    "input_mib": 0.32,
+    "path": null,
+    "cuda_steps": null,
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)"
+   },
+   {
+    "seq": 9,
+    "arity": 13,
+    "dtype": "complex128",
+    "input_mib": 61.05,
+    "path": "cuda_topology",
+    "cuda_steps": 12,
+    "rel": 7.787e-16,
+    "within_tolerance": true,
+    "out_shape": [
+     100,
+     100
+    ]
+   },
+   {
+    "seq": 9,
+    "arity": 13,
+    "dtype": "complex64",
+    "input_mib": 30.52,
+    "path": "cuda_topology",
+    "cuda_steps": 12,
+    "rel": 4.407e-07,
+    "within_tolerance": true,
+    "out_shape": [
+     100,
+     100
+    ]
+   },
+   {
+    "seq": 1599,
+    "arity": 12,
+    "dtype": "complex128",
+    "input_mib": 0.0,
+    "path": "cuda_topology",
+    "cuda_steps": 11,
+    "rel": 5.136e-16,
+    "within_tolerance": true,
+    "out_shape": []
+   },
+   {
+    "seq": 1599,
+    "arity": 12,
+    "dtype": "complex64",
+    "input_mib": 0.0,
+    "path": "cuda_topology",
+    "cuda_steps": 11,
+    "rel": 1.893e-07,
+    "within_tolerance": true,
+    "out_shape": []
+   },
+   {
+    "seq": 1863,
+    "arity": 16,
+    "dtype": "complex128",
+    "input_mib": 0.65,
+    "path": null,
+    "cuda_steps": null,
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)"
+   },
+   {
+    "seq": 1863,
+    "arity": 16,
+    "dtype": "complex64",
+    "input_mib": 0.32,
+    "path": null,
+    "cuda_steps": null,
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)"
+   }
+  ],
+  "c2_order_guard": [
+   {
+    "seq": 9,
+    "arity": 13,
+    "table_ratio": 0.528046,
+    "ratio_vs_greedy": 1.0416289073955254,
+    "table_mac": 4251699,
+    "greedy_mac": 4081779,
+    "equation": "cadb,egfh,minj,okpl,sqtr,ac,mo,gi,qs,bd,fnp,hjl,rt->ek",
+    "measured": "accepted",
+    "status": null,
+    "reason": null,
+    "guard_expectation": "accept",
+    "agrees": true,
+    "rel": 6.09e-16
+   },
+   {
+    "seq": 15,
+    "arity": 13,
+    "table_ratio": 0.528046,
+    "ratio_vs_greedy": 1.0416289073955254,
+    "table_mac": 4251699,
+    "greedy_mac": 4081779,
+    "equation": "cadb,eifj,mgnh,okpl,sqtr,ac,mo,gi,qs,bd,fnp,hjl,rt->ek",
+    "measured": "accepted",
+    "status": null,
+    "reason": null,
+    "guard_expectation": "accept",
+    "agrees": true,
+    "rel": 5.543e-16
+   },
+   {
+    "seq": 630,
+    "arity": 14,
+    "table_ratio": 38104.0,
+    "ratio_vs_greedy": 38104.03124552737,
+    "table_mac": 4004108168128,
+    "greedy_mac": 105083584,
+    "equation": "aubv,cidj,ewfx,mqnr,ospt,gkhl,ce,og,ik,su,bdf,nph,jlr,tvx->awmq",
+    "measured": "rejected",
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as ",
+    "guard_expectation": "reject",
+    "agrees": true
+   },
+   {
+    "seq": 654,
+    "arity": 14,
+    "table_ratio": 38104.0,
+    "ratio_vs_greedy": 38104.03124552737,
+    "table_mac": 4004108168128,
+    "greedy_mac": 105083584,
+    "equation": "aubv,ckdl,ewfx,mqnr,ospt,gihj,ce,og,ik,su,bdf,nph,jlr,tvx->awmq",
+    "measured": "rejected",
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as ",
+    "guard_expectation": "reject",
+    "agrees": true
+   }
+  ],
+  "c3_three_paths": [
+   {
+    "seq": 1,
+    "scene": "distill",
+    "arity": 6,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.0,
+    "generic_ms": 0.705,
+    "dedicated_ms": 0.411,
+    "topology_ms": 1.168,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": "cuda_topology",
+    "dedicated_declined": null,
+    "topology_declined": null,
+    "dedicated_over_generic": 0.582,
+    "topology_over_dedicated": 2.846,
+    "topology_over_generic": 1.656,
+    "topology_rel": 3.687e-16,
+    "dedicated_rel": 1.008e-15
+   },
+   {
+    "seq": 855,
+    "scene": "distill",
+    "arity": 10,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.64,
+    "generic_ms": 1.984,
+    "dedicated_ms": 0.506,
+    "topology_ms": 0.275,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": null,
+    "dedicated_declined": null,
+    "topology_declined": "negative-cache hit: topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with sta",
+    "dedicated_over_generic": 0.255,
+    "topology_over_dedicated": 0.545,
+    "topology_over_generic": 0.139,
+    "dedicated_rel": 6.882e-16
+   },
+   {
+    "seq": 1863,
+    "scene": "distill",
+    "arity": 16,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.65,
+    "generic_ms": 3.444,
+    "dedicated_ms": 1.464,
+    "topology_ms": 0.254,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": null,
+    "dedicated_declined": null,
+    "topology_declined": "negative-cache hit: topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with sta",
+    "dedicated_over_generic": 0.425,
+    "topology_over_dedicated": 0.174,
+    "topology_over_generic": 0.074,
+    "dedicated_rel": 8.592e-16
+   },
+   {
+    "seq": 1,
+    "scene": "distill_curr",
+    "arity": 6,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 400,
+     "Ns": 4,
+     "Mom": 9
+    },
+    "input_mib": 0.01,
+    "generic_ms": 0.947,
+    "dedicated_ms": 0.303,
+    "topology_ms": 1.002,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": "cuda_topology",
+    "dedicated_declined": null,
+    "topology_declined": null,
+    "dedicated_over_generic": 0.32,
+    "topology_over_dedicated": 3.305,
+    "topology_over_generic": 1.058,
+    "topology_rel": 1.904e-16,
+    "dedicated_rel": 1.904e-16
+   }
+  ]
+ },
+ "dtypes_enabled": [
+  "complex128",
+  "complex64",
+  "float64",
+  "float32"
+ ]
+}
+--- part_c_cuda_v100_c3.json ---
+{
+ "device": "Tesla V100-SXM2-32GB",
+ "sections": {
+  "c1_high_arity": [],
+  "c2_order_guard": [],
+  "c3_three_paths": [
+   {
+    "seq": 1,
+    "scene": "distill",
+    "arity": 6,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.0,
+    "generic_ms": 0.716,
+    "dedicated_ms": 0.362,
+    "topology_ms": 1.141,
+    "topology_status": null,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": "cuda_topology",
+    "dedicated_declined": null,
+    "topology_declined": null,
+    "dedicated_over_generic": 0.505,
+    "topology_over_dedicated": 3.156,
+    "topology_over_generic": 1.593,
+    "topology_rel": 3.687e-16,
+    "dedicated_rel": 1.008e-15
+   },
+   {
+    "seq": 849,
+    "scene": "distill",
+    "arity": 9,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.0,
+    "generic_ms": 1.058,
+    "dedicated_ms": 0.483,
+    "topology_ms": 1.115,
+    "topology_status": null,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": "cuda_topology",
+    "dedicated_declined": null,
+    "topology_declined": null,
+    "dedicated_over_generic": 0.457,
+    "topology_over_dedicated": 2.306,
+    "topology_over_generic": 1.054,
+    "topology_rel": 7.139e-16,
+    "dedicated_rel": 3.003e-16
+   },
+   {
+    "seq": 1599,
+    "scene": "distill",
+    "arity": 12,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.0,
+    "generic_ms": 1.592,
+    "dedicated_ms": 0.49,
+    "topology_ms": 1.291,
+    "topology_status": null,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": "cuda_topology",
+    "dedicated_declined": null,
+    "topology_declined": null,
+    "dedicated_over_generic": 0.308,
+    "topology_over_dedicated": 2.633,
+    "topology_over_generic": 0.811,
+    "topology_rel": 5.289e-16,
+    "dedicated_rel": 3.526e-16
+   },
+   {
+    "seq": 9,
+    "scene": "distill",
+    "arity": 13,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 61.05,
+    "generic_ms": 2.294,
+    "dedicated_ms": 0.916,
+    "topology_ms": 1.69,
+    "topology_status": null,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": "cuda_topology",
+    "dedicated_declined": null,
+    "topology_declined": null,
+    "dedicated_over_generic": 0.399,
+    "topology_over_dedicated": 1.845,
+    "topology_over_generic": 0.737,
+    "topology_rel": 7.751e-16,
+    "dedicated_rel": 1.103e-15
+   },
+   {
+    "seq": 855,
+    "scene": "distill",
+    "arity": 10,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.64,
+    "generic_ms": 1.938,
+    "dedicated_ms": 0.545,
+    "topology_ms": null,
+    "topology_status": 4,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": null,
+    "dedicated_declined": null,
+    "topology_declined": "negative-cache hit: topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with sta",
+    "dedicated_over_generic": 0.281,
+    "topology_over_dedicated": null,
+    "dedicated_rel": 6.882e-16
+   },
+   {
+    "seq": 9,
+    "scene": "distill_curr",
+    "arity": 13,
+    "dtype": "float32",
+    "dims": {
+     "Nev": 400,
+     "Ns": 4,
+     "Mom": 9
+    },
+    "input_mib": 976.6,
+    "generic_ms": 5.249,
+    "dedicated_ms": 5.706,
+    "topology_ms": 6.945,
+    "topology_status": null,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": "cuda_topology",
+    "dedicated_declined": null,
+    "topology_declined": null,
+    "dedicated_over_generic": 1.087,
+    "topology_over_dedicated": 1.217,
+    "topology_over_generic": 1.323,
+    "topology_rel": 8.184e-07,
+    "dedicated_rel": 1.394e-06
+   }
+  ]
+ },
+ "dtypes_enabled": [
+  "complex128",
+  "complex64",
+  "float64",
+  "float32"
+ ]
+}
+--- part_d_pack_bound.json ---
+{
+ "kupl_lib": "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/dev60lib/cpp/kupl/einsum/build/libpyqcdeinsum_kupl.so",
+ "heavy_bytes": 1073741824,
+ "heavy_flops": 1000000000,
+ "trace": [
+  {
+   "seq": 3,
+   "dtype": "complex128",
+   "steps_python": 6,
+   "steps_native": 6,
+   "rows_matching": 6,
+   "native_paths": [
+    "direct-a",
+    "direct-b",
+    "direct",
+    "direct",
+    "pack",
+    "pack"
+   ],
+   "python_paths": [
+    "direct-a",
+    "direct-b",
+    "direct",
+    "direct",
+    "pack",
+    "pack"
+   ],
+   "native_ab": [
+    [
+     "plain",
+     "pack"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ]
+   ],
+   "python_ab": [
+    [
+     "plain",
+     "pack"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ]
+   ]
+  },
+  {
+   "seq": 855,
+   "dtype": "complex128",
+   "steps_python": 9,
+   "steps_native": 9,
+   "rows_matching": 9,
+   "native_paths": [
+    "direct",
+    "direct-a",
+    "direct-b",
+    "pack",
+    "direct-a",
+    "direct",
+    "direct",
+    "direct-a",
+    "pack"
+   ],
+   "python_paths": [
+    "direct",
+    "direct-a",
+    "direct-b",
+    "pack",
+    "direct-a",
+    "direct",
+    "direct",
+    "direct-a",
+    "pack"
+   ],
+   "native_ab": [
+    [
+     "trans",
+     "plain"
+    ],
+    [
+     "plain",
+     "pack"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "trans",
+     "pack"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "plain",
+     "plain"
+    ],
+    [
+     "trans",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ]
+   ],
+   "python_ab": [
+    [
+     "trans",
+     "plain"
+    ],
+    [
+     "plain",
+     "pack"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "trans",
+     "pack"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "plain",
+     "plain"
+    ],
+    [
+     "trans",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ]
+   ]
+  },
+  {
+   "seq": 2,
+   "dtype": "complex128",
+   "steps_python": 5,
+   "steps_native": 5,
+   "rows_matching": 5,
+   "native_paths": [
+    "direct",
+    "direct-b",
+    "pack",
+    "pack",
+    "direct"
+   ],
+   "python_paths": [
+    "direct",
+    "direct-b",
+    "pack",
+    "pack",
+    "direct"
+   ],
+   "native_ab": [
+    [
+     "plain",
+     "plain"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "plain",
+     "plain"
+    ]
+   ],
+   "python_ab": [
+    [
+     "plain",
+     "plain"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "plain",
+     "plain"
+    ]
+   ]
+  }
+ ],
+ "guard_seq129": [
+  {
+   "seq": 129,
+   "dtype": "complex128",
+   "itemsize": 16,
+   "per_side_bytes": 3456077824,
+   "both_sides_bytes": 3462547968,
+   "flops": 216326912,
+   "guard_reason": "pack-bound on CPU (3456077824 pack bytes, 216326912 FLOPs): the layout traffic dominates the arithmetic; the generic path handles it",
+   "per_side_over_limit": true,
+   "both_sides_over_limit": true,
+   "dispatched": false,
+   "path": null
+  },
+  {
+   "seq": 129,
+   "dtype": "complex64",
+   "itemsize": 8,
+   "per_side_bytes": 1728038912,
+   "both_sides_bytes": 1731273984,
+   "flops": 216326912,
+   "guard_reason": "pack-bound on CPU (1728038912 pack bytes, 216326912 FLOPs): the layout traffic dominates the arithmetic; the generic path handles it",
+   "per_side_over_limit": true,
+   "both_sides_over_limit": true,
+   "dispatched": false,
+   "path": null
+  },
+  {
+   "seq": 129,
+   "dtype": "float64",
+   "itemsize": 8,
+   "per_side_bytes": 1728038912,
+   "both_sides_bytes": 1731273984,
+   "flops": 216326912,
+   "guard_reason": "pack-bound on CPU (1728038912 pack bytes, 216326912 FLOPs): the layout traffic dominates the arithmetic; the generic path handles it",
+   "per_side_over_limit": true,
+   "both_sides_over_limit": true,
+   "dispatched": false,
+   "path": null
+  },
+  {
+   "seq": 129,
+   "dtype": "float32",
+   "itemsize": 4,
+   "per_side_bytes": 864019456,
+   "both_sides_bytes": 865636992,
+   "flops": 216326912,
+   "guard_reason": null,
+   "per_side_over_limit": false,
+   "both_sides_over_limit": false,
+   "dispatched": false,
+   "path": null
+  }
+ ],
+ "per_side_vs_both_sides": [
+  {
+   "seq": 1,
+   "per_side_bytes": 1088,
+   "both_sides_bytes": 2400,
+   "flops": 70,
+   "steps": 5,
+   "direct_steps": 1
+  },
+  {
+   "seq": 3,
+   "per_side_bytes": 359936,
+   "both_sides_bytes": 130953984,
+   "flops": 8163456,
+   "steps": 6,
+   "direct_steps": 2
+  },
+  {
+   "seq": 9,
+   "per_side_bytes": 2910400,
+   "both_sides_bytes": 134130816,
+   "flops": 16103526,
+   "steps": 12,
+   "direct_steps": 4
+  },
+  {
+   "seq": 849,
+   "per_side_bytes": 1632,
+   "both_sides_bytes": 3648,
+   "flops": 106,
+   "steps": 8,
+   "direct_steps": 2
+  },
+  {
+   "seq": 855,
+   "per_side_bytes": 411168,
+   "both_sides_bytes": 1778016,
+   "flops": 168288,
+   "steps": 9,
+   "direct_steps": 3
+  },
+  {
+   "seq": 1599,
+   "per_side_bytes": 2176,
+   "both_sides_bytes": 4896,
+   "flops": 142,
+   "steps": 11,
+   "direct_steps": 3
+  },
+  {
+   "seq": 1863,
+   "per_side_bytes": 450624,
+   "both_sides_bytes": 2498016,
+   "flops": 198018,
+   "steps": 15,
+   "direct_steps": 3
+  },
+  {
+   "seq": 2000,
+   "per_side_bytes": 129012800,
+   "both_sides_bytes": 132930528,
+   "flops": 8230146,
+   "steps": 15,
+   "direct_steps": 6
+  },
+  {
+   "seq": 2582,
+   "per_side_bytes": 424992,
+   "both_sides_bytes": 3112416,
+   "flops": 217218,
+   "steps": 15,
+   "direct_steps": 4
+  }
+ ]
+}
+
+===== 日志文件清单（末尾 40 行）=====
+--- log_cuda_c1c2c3.log ---
+== C1 高元数 topology 命中与对拍 ==
+  seq=3     arity= 7 complex128  path=cuda_topology  rel=8.253e-16 
+  seq=3     arity= 7 complex64   path=cuda_topology  rel=4.569e-07 
+  seq=849   arity= 9 complex128  path=cuda_topology  rel=6.716e-16 
+  seq=849   arity= 9 complex64   path=cuda_topology  rel=7.211e-08 
+  seq=855   arity=10 complex128  path=None           rel=declined status=4 topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)
+  seq=855   arity=10 complex64   path=None           rel=declined status=4 topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)
+  seq=9     arity=13 complex128  path=cuda_topology  rel=7.787e-16 
+  seq=9     arity=13 complex64   path=cuda_topology  rel=4.407e-07 
+  seq=1599  arity=12 complex128  path=cuda_topology  rel=5.136e-16 
+  seq=1599  arity=12 complex64   path=cuda_topology  rel=1.893e-07 
+  seq=1863  arity=16 complex128  path=None           rel=declined status=4 topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)
+  seq=1863  arity=16 complex64   path=None           rel=declined status=4 topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)
+
+== C2 收缩序守卫（表内最大/最小 ratio 各 2 条）==
+  seq=9     arity=13 table_ratio=0.528046   vs_greedy=1.042      measured=accepted status=None agrees=True
+  seq=15    arity=13 table_ratio=0.528046   vs_greedy=1.042      measured=accepted status=None agrees=True
+  seq=630   arity=14 table_ratio=38104      vs_greedy=3.81e+04   measured=rejected status=4 agrees=True
+  seq=654   arity=14 table_ratio=38104      vs_greedy=3.81e+04   measured=rejected status=4 agrees=True
+
+== C3 三路径耗时（生产口径）==
+  seq=1     distill      arity= 6 in=    0.0MiB generic=    0.705ms dedicated=0.411ms topology=1.168ms path=cuda_topology
+  seq=855   distill      arity=10 in=    0.6MiB generic=    1.984ms dedicated=0.506ms topology=0.275ms path=None
+  seq=1863  distill      arity=16 in=    0.7MiB generic=    3.444ms dedicated=1.464ms topology=0.254ms path=None
+  seq=1     distill_curr arity= 6 in=    0.0MiB generic=    0.947ms dedicated=0.303ms topology=1.002ms path=cuda_topology
+
+wrote pyqcd/testing/einsum/artifacts/retest_dev60_20261115/part_c_cuda_v100.json
+
+--- log_cuda_c3_scales.log ---
+== C1 高元数 topology 命中与对拍 ==
+
+== C2 收缩序守卫（表内最大/最小 ratio 各 2 条）==
+
+== C3 三路径耗时（生产口径）==
+  seq=1     distill      arity= 6 in=    0.0MiB generic=    0.716ms dedicated=0.362ms topology=1.141ms path=cuda_topology
+  seq=849   distill      arity= 9 in=    0.0MiB generic=    1.058ms dedicated=0.483ms topology=1.115ms path=cuda_topology
+  seq=1599  distill      arity=12 in=    0.0MiB generic=    1.592ms dedicated=0.49ms topology=1.291ms path=cuda_topology
+  seq=9     distill      arity=13 in=   61.0MiB generic=    2.294ms dedicated=0.916ms topology=1.69ms path=cuda_topology
+  seq=855   distill      arity=10 in=    0.6MiB generic=    1.938ms dedicated=0.545ms topology=Nonems path=None
+  seq=9     distill_curr arity=13 in=  976.6MiB generic=    5.249ms dedicated=5.706ms topology=6.945ms path=cuda_topology
+
+wrote pyqcd/testing/einsum/artifacts/retest_dev60_20261115/part_c_cuda_v100_c3.json
+
+--- log_dev60lib_base13.log ---
+float64     seq=849   arity= 9 path=kupl_topology     topo=    0.381ms ded=    0.107ms ratio= 3.562 rel_ded= 1.719e-15
+float64     seq=855   arity=10 path=kupl_topology     topo=    0.609ms ded=    0.261ms ratio= 2.335 rel_ded= 5.853e-16
+float64     seq=1599  arity=12 path=kupl_topology     topo=    0.484ms ded=    0.128ms ratio= 3.781 rel_ded= 5.268e-16
+float64     seq=1623  arity=13 path=kupl_topology     topo=    0.741ms ded=    0.286ms ratio= 2.592 rel_ded= 2.956e-16
+float64     seq=1700  arity=13 path=kupl_topology     topo=    8.770ms ded=   10.651ms ratio= 0.823 rel_ded= 8.278e-16
+float64     seq=1743  arity=13 path=kupl_topology     topo=    0.797ms ded=    0.306ms ratio= 2.606 rel_ded= 5.305e-16
+float64     seq=1863  arity=16 path=kupl_topology     topo=    0.957ms ded=    0.360ms ratio= 2.655 rel_ded= 3.917e-16
+float64     seq=2000  arity=16 path=kupl_topology     topo=    9.093ms ded=   10.584ms ratio= 0.859 rel_ded= 8.155e-16
+float64     seq=2582  arity=16 path=kupl_topology     topo=    1.125ms ded=    0.318ms ratio= 3.541 rel_ded= 3.258e-16
+float32     seq=1     arity= 6 path=kupl_topology     topo=    0.367ms ded=    0.105ms ratio= 3.504 rel_ded=       0.0
+float32     seq=3     arity= 7 path=kupl_topology     topo=    1.254ms ded=    0.837ms ratio= 1.499 rel_ded=       0.0
+float32     seq=9     arity=13 path=kupl_topology     topo=    1.628ms ded=    4.857ms ratio= 0.335 rel_ded= 4.054e-07
+float32     seq=129   arity=14 path=kupl_topology     topo= 5148.571ms ded=  939.625ms ratio= 5.479 rel_ded= 6.199e-07
+float32     seq=849   arity= 9 path=kupl_topology     topo=    0.493ms ded=    0.097ms ratio= 5.093 rel_ded= 3.296e-07
+float32     seq=855   arity=10 path=kupl_topology     topo=    0.593ms ded=    0.225ms ratio= 2.643 rel_ded= 2.514e-07
+float32     seq=1599  arity=12 path=kupl_topology     topo=    0.465ms ded=    0.159ms ratio= 2.928 rel_ded= 1.414e-07
+float32     seq=1623  arity=13 path=kupl_topology     topo=    0.826ms ded=    0.288ms ratio= 2.871 rel_ded=  5.29e-07
+float32     seq=1700  arity=13 path=kupl_topology     topo=    3.871ms ded=    5.401ms ratio= 0.717 rel_ded= 6.349e-07
+float32     seq=1743  arity=13 path=kupl_topology     topo=    0.772ms ded=    0.271ms ratio= 2.846 rel_ded= 6.835e-07
+float32     seq=1863  arity=16 path=kupl_topology     topo=    0.894ms ded=    0.365ms ratio= 2.449 rel_ded= 1.682e-07
+float32     seq=2000  arity=16 path=kupl_topology     topo=    4.168ms ded=    4.617ms ratio= 0.903 rel_ded=  3.01e-07
+float32     seq=2582  arity=16 path=kupl_topology     topo=    0.942ms ded=    0.242ms ratio= 3.884 rel_ded= 1.749e-07
+
+[ratios done, total 37.2s]
+
+=== route 分类（ratio 13 seqs）===
+complex128  v3=12 v2= 0 declined= 1 | v3=[1, 3, 9, 849, 855, 1599, 1623, 1700, 1743, 1863, 2000, 2582] | declined=[129]
+complex64   v3=12 v2= 0 declined= 1 | v3=[1, 3, 9, 849, 855, 1599, 1623, 1700, 1743, 1863, 2000, 2582] | declined=[129]
+float32     v3=13 v2= 0 declined= 0 | v3=[1, 3, 9, 129, 849, 855, 1599, 1623, 1700, 1743, 1863, 2000, 2582] | declined=[]
+float64     v3=12 v2= 0 declined= 1 | v3=[1, 3, 9, 849, 855, 1599, 1623, 1700, 1743, 1863, 2000, 2582] | declined=[129]
+
+=== 真 v3 的 topology/dedicated 比值（ratio 13 seqs）===
+      dtype   n       中位       最优       最差     快于 dedicated
+ complex128  12    2.24x    0.21x    4.56x        4/12     
+  complex64  12    2.41x    0.09x    3.95x        3/12     
+    float32  13    2.85x    0.34x    5.48x        3/13     
+    float64  12    2.60x    0.24x    4.01x        3/12     
+数值全部在容差内（vs dedicated）
+
+wrote pyqcd/testing/einsum/artifacts/retest_dev60_20261115/part_b_base13_dev60lib.json
+
+--- log_dev60lib_default20_classify.log ---
+float32     seq=129   arity=14 path=kupl_topology     ms= 3590.648
+float32     seq=849   arity= 9 path=kupl_topology     ms=    1.588
+float32     seq=855   arity=10 path=kupl_topology     ms=    1.950
+float32     seq=1599  arity=12 path=kupl_topology     ms=    1.674
+float32     seq=2583  arity= 6 path=kupl_topology_v2  ms=    2.502
+float32     seq=2591  arity=13 path=kupl_topology_v2  ms= 2836.084
+float32     seq=3431  arity= 9 path=kupl_topology_v2  ms=   29.987
+float32     seq=3461  arity=16 path=kupl_topology_v2  ms=  109.085
+float32     seq=4301  arity= 9 path=kupl_topology_v2  ms=   12.063
+float32     seq=4331  arity=16 path=kupl_topology_v2  ms=   93.894
+float32     seq=5051  arity=13 path=kupl_topology_v2  ms=   78.945
+float32     seq=6911  arity=12 path=kupl_topology_v2  ms=    2.779
+float32     seq=6935  arity=13 path=kupl_topology_v2  ms=    5.339
+float32     seq=7055  arity=16 path=kupl_topology_v2  ms=    4.760
+float32     seq=7775  arity=12 path=kupl_topology_v2  ms=    2.855
+float32     seq=7791  arity=12 path=kupl_topology_v2  ms=    2.673
+float32     seq=7919  arity=16 path=kupl_topology_v2  ms=    6.101
+
+[classification done in 43.9s]
+
+=== route 分类（DEFAULT 20 seqs）===
+complex128  v3= 6 v2=13 declined= 1 | v3=[1, 3, 9, 849, 855, 1599] | declined=[129]
+complex64   v3= 6 v2=13 declined= 1 | v3=[1, 3, 9, 849, 855, 1599] | declined=[129]
+float32     v3= 7 v2=13 declined= 0 | v3=[1, 3, 9, 129, 849, 855, 1599] | declined=[]
+float64     v3= 6 v2=13 declined= 1 | v3=[1, 3, 9, 849, 855, 1599] | declined=[129]
+
+=== 真 v3 的 topology/dedicated 比值（DEFAULT 20 seqs）===
+      dtype   n       中位       最优       最差     快于 dedicated
+[stderr] Traceback (most recent call last):
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 178, in <module>
+[stderr]     main(sys.argv[1:])
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 168, in main
+[stderr]     summarize(payload["classification"], f"DEFAULT {len(seqs)} seqs")
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 144, in summarize
+[stderr]     values = sorted(row["ratio"] for row in rows
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 145, in <genexpr>
+[stderr]     if row["dtype"] == name and row["topology_path"] == "kupl_topology"
+                                ~~~^^^^^^^^[stderr] ^^^^^^^^^
+KeyError: 'topology_path'
+
+--- log_expanded_lib_default20.log ---
+float32     seq=129   arity=14 path=kupl_topology     ms= 3612.876
+float32     seq=849   arity= 9 path=kupl_topology     ms=    1.506
+float32     seq=855   arity=10 path=kupl_topology     ms=    1.788
+float32     seq=1599  arity=12 path=kupl_topology     ms=    1.577
+float32     seq=2583  arity= 6 path=kupl_topology     ms=    2.140
+float32     seq=2591  arity=13 path=kupl_topology     ms= 2656.611
+float32     seq=3431  arity= 9 path=kupl_topology     ms=    2.006
+float32     seq=3461  arity=16 path=kupl_topology     ms=  104.146
+float32     seq=4301  arity= 9 path=kupl_topology     ms=    2.226
+float32     seq=4331  arity=16 path=kupl_topology     ms=  126.247
+float32     seq=5051  arity=13 path=kupl_topology     ms=  115.573
+float32     seq=6911  arity=12 path=kupl_topology     ms=    2.315
+float32     seq=6935  arity=13 path=kupl_topology     ms=    7.296
+float32     seq=7055  arity=16 path=kupl_topology     ms=    3.913
+float32     seq=7775  arity=12 path=kupl_topology     ms=    2.397
+float32     seq=7791  arity=12 path=kupl_topology     ms=    2.600
+float32     seq=7919  arity=16 path=kupl_topology     ms=    4.856
+
+[classification done in 52.4s]
+
+=== route 分类（DEFAULT 20 seqs）===
+complex128  v3=19 v2= 0 declined= 1 | v3=[1, 3, 9, 849, 855, 1599, 2583, 2591, 3431, 3461, 4301, 4331, 5051, 6911, 6935, 7055, 7775, 7791, 7919] | declined=[129]
+complex64   v3=19 v2= 0 declined= 1 | v3=[1, 3, 9, 849, 855, 1599, 2583, 2591, 3431, 3461, 4301, 4331, 5051, 6911, 6935, 7055, 7775, 7791, 7919] | declined=[129]
+float32     v3=20 v2= 0 declined= 0 | v3=[1, 3, 9, 129, 849, 855, 1599, 2583, 2591, 3431, 3461, 4301, 4331, 5051, 6911, 6935, 7055, 7775, 7791, 7919] | declined=[]
+float64     v3=19 v2= 0 declined= 1 | v3=[1, 3, 9, 849, 855, 1599, 2583, 2591, 3431, 3461, 4301, 4331, 5051, 6911, 6935, 7055, 7775, 7791, 7919] | declined=[129]
+
+=== 真 v3 的 topology/dedicated 比值（DEFAULT 20 seqs）===
+      dtype   n       中位       最优       最差     快于 dedicated
+Traceback (most recent call last):
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 174, in <module>
+    main(sys.argv[1:])
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 164, in main
+    summarize(payload["classification"], f"DEFAULT {len(seqs)} seqs")
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 140, in summarize
+    values = sorted(row["ratio"] for row in rows
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 141, in <genexpr>
+    if row["dtype"] == name and row["topology_path"] == "kupl_topology"
+                                ~~~^^^^^^^^^^^^^^^^^
+KeyError: 'topology_path'
+
+--- log_part_d_pack_bound.log ---
+== D1 逐 step 布局与原生 trace 对账（生产 distill 尺寸）==
+  seq=3    steps=6/6 逐行一致 6/6 path 序列 一致
+  seq=855  steps=9/9 逐行一致 9/9 path 序列 一致
+  seq=2    steps=5/5 逐行一致 5/5 path 序列 一致
+
+== D2 守卫记账：逐侧 vs 两侧上界（seq=129, distill）==
+
+  seq  dtype       itemsize  逐侧字节   两侧口径字节   FLOPs        守卫结论
+  129  complex128      16   3456077824    3462547968    216326912  declined (dispatched=False)
+  129  complex64        8   1728038912    1731273984    216326912  declined (dispatched=False)
+  129  float64          8   1728038912    1731273984    216326912  declined (dispatched=False)
+  129  float32          4    864019456     865636992    216326912  passed (dispatched=False)
+
+== D3 逐侧 vs 两侧上界的记账差（complex128, distill）==
+  seq=1     steps= 5 全直连步= 1 逐侧=      1088 两侧=      2400 差=2.206x
+  seq=3     steps= 6 全直连步= 2 逐侧=    359936 两侧= 130953984 差=363.826x
+  seq=9     steps=12 全直连步= 4 逐侧=   2910400 两侧= 134130816 差=46.087x
+  seq=849   steps= 8 全直连步= 2 逐侧=      1632 两侧=      3648 差=2.235x
+  seq=855   steps= 9 全直连步= 3 逐侧=    411168 两侧=   1778016 差=4.324x
+  seq=1599  steps=11 全直连步= 3 逐侧=      2176 两侧=      4896 差=2.250x
+  seq=1863  steps=15 全直连步= 3 逐侧=    450624 两侧=   2498016 差=5.543x
+  seq=2000  steps=15 全直连步= 6 逐侧= 129012800 两侧= 132930528 差=1.030x
+  seq=2582  steps=15 全直连步= 4 逐侧=    424992 两侧=   3112416 差=7.323x
+
+wrote pyqcd/testing/einsum/artifacts/retest_dev60_20261115/part_d_pack_bound.json
+
