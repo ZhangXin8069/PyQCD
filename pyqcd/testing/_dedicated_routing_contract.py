@@ -124,12 +124,71 @@ def test_losing_paths_share_the_wide_output_shape():
     assert len(losing) == 2 and len(winning) == 2
 
 
+def test_cpu_plan_gate_rejects_plans_with_excess_pack_traffic_per_flop():
+    """``pack/flops`` 比值判据：病态计划被拒、GEMM 主导的计划放行。
+
+    实测（2026-11-15，本机 CPU complex128）：seq=856 的 dedicated 计划
+    ``pack_bytes=8,281,198,592`` / ``flops=2,096,413,216`` = **3.95 B/FLOP**，
+    只有 step 0 就把 ``ekfl``(3.9 GiB) 整块重排成扁平 GEMM 布局。绝对判据
+    （``pack >= 1 GiB`` 且 ``flops <= 1e9``）对它是**放行**的，于是
+    ``try_dedicated`` 实测 8662.7 ms，而 `specialize=False` 的通用路径 2330 ms、
+    改后实际回落的 `kupl_topology` 2675 ms（3.24×）。
+    比值判据要挡的正是这种"活干得也多、但搬得更多"的计划。
+
+    对照组是真正的 GEMM 主导计划（``ij,jk->ik`` 4000x4000）：比值 0.012，
+    必须仍然放行——否则新判据会把正常收缩也打回通用路径。
+    """
+    equation = "ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak"
+    shapes = ((400, 4, 1, 1), (4, 4, 9, 1), (4, 400, 400, 400), (4, 4, 9, 9),
+              (4, 4), (4, 4), (4, 4), (1, 9, 400), (1, 9), (1, 9, 400))
+    cached = _kernel_kupl._dedicated_cached(
+        equation, shapes, np.dtype(np.complex128), "auto", "kupl")
+    assert cached is not None, equation
+    stats = _kernel_kupl._plan_statistics(cached[0])
+    ratio = stats["plan_pack_bytes"] / stats["plan_flops"]
+
+    assert ratio >= _kernel_kupl._HEAVY_PACK_RATIO_LIMIT, stats
+    # 绝对判据单独看会放行它：这条用例之所以存在，就是因为旧判据漏掉了它。
+    absolute_only = (
+        stats["plan_arena_bytes"] >= _kernel_kupl._CPU_PLAN_ARENA_LIMIT
+        or stats["plan_max_step_macs"] >= _kernel_kupl._CPU_PLAN_MAX_STEP_MACS_LIMIT
+        or (stats["plan_pack_bytes"] >= _kernel_kupl._HEAVY_PACK_MIN_BYTES
+            and stats["plan_flops"] <= _kernel_kupl._HEAVY_PACK_MAX_FLOPS))
+    assert absolute_only is False, stats
+
+    reason = _kernel_kupl._cpu_plan_fallback_reason(stats)
+    assert reason is not None, ("比值超限的计划必须被拒", stats)
+    for token in ("pack/flops", str(stats["plan_pack_bytes"]),
+                  str(stats["plan_flops"])):
+        assert token in reason, (token, reason)
+
+    # 对照组：GEMM 主导（比值 ≪ 1）必须放行。
+    gemm = _kernel_kupl._dedicated_cached(
+        "ij,jk->ik", ((4000, 4000), (4000, 4000)),
+        np.dtype(np.complex128), "auto", "kupl")
+    assert gemm is not None
+    gemm_stats = _kernel_kupl._plan_statistics(gemm[0])
+    gemm_ratio = gemm_stats["plan_pack_bytes"] / gemm_stats["plan_flops"]
+    assert gemm_ratio < 0.1, gemm_stats
+    assert _kernel_kupl._cpu_plan_fallback_reason(gemm_stats) is None, gemm_stats
+
+    # ``flops == 0`` 时比值无意义：只走绝对判据，且不得除零。
+    zero_work = {"plan_flops": 0, "plan_pack_bytes": 0,
+                 "plan_arena_bytes": 0, "plan_max_step_macs": 0}
+    assert _kernel_kupl._cpu_plan_fallback_reason(zero_work) is None
+    zero_work["plan_pack_bytes"] = _kernel_kupl._HEAVY_PACK_MIN_BYTES
+    reason = _kernel_kupl._cpu_plan_fallback_reason(zero_work)
+    assert reason is not None and "pack-bound" in reason, reason
+    assert "pack/flops" not in reason, reason
+
+
 TESTS = (
     test_allowlist_is_callable,
     test_allowlist_coverage_matches_its_docstring,
     test_allowlist_is_not_a_production_routing_oracle,
     test_cost_gate_cannot_separate_the_losing_paths,
     test_losing_paths_share_the_wide_output_shape,
+    test_cpu_plan_gate_rejects_plans_with_excess_pack_traffic_per_flop,
 )
 
 

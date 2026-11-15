@@ -78,9 +78,15 @@ def test_contract_still_matches_numpy() -> None:
     task = _wick_tasklist.lookup(2584)
     terms = task.equation.split("->", 1)[0].split(",")
     rng = np.random.default_rng(20261112)
+    # 轴长不能取 1（2026-11-15 起）：全 1 张量只有 1 个元素，计划的
+    # ``pack_bytes`` 仍是 ``2 x 元素数 x 16 B``（复杂 128），而 ``flops`` 只有 10，
+    # 比值 25.6 直接撞上 ``_HEAVY_PACK_RATIO_LIMIT``，dedicated 会让位给 topology，
+    # 本用例要钉的"专用路径确实跑了"就失效。实测该方程等长 dim 的比值：
+    # dim=1 25.6 / 2 8.36 / 3 4.30 / 4 2.66 / 6 1.32 / 8 0.79 / 12 0.38，取 12。
+    dim = 12
     operands = [
-        rng.standard_normal((1,) * len(term))
-        + 1j * rng.standard_normal((1,) * len(term))
+        rng.standard_normal((dim,) * len(term))
+        + 1j * rng.standard_normal((dim,) * len(term))
         for term in terms
     ]
     expected = np.einsum(task.equation, *operands, optimize="greedy")

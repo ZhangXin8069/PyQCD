@@ -463,9 +463,11 @@ def _topology_step_records(plan: Any) -> list[dict[str, Any]] | None:
 def _topology_pack_bound_reason(plan: Any, itemsize: int) -> str | None:
     """topology 路径的 CPU 预算守卫：pack 流量压倒 GEMM 时劝回落。
 
-    判据与 :func:`_cpu_plan_fallback_reason` 相同（``pack_bytes`` 超 1 GiB 且
-    FLOPs 不足 1e9 即"pack-bound"），但**流量模型必须与原生执行器同口径**，
-    否则结构上本来零拷贝的计划会被误拒。三点逐条对齐 ``topology_gemm.h``：
+    判据沿用 :func:`_cpu_plan_fallback_reason` 的**绝对**那一条（``pack_bytes``
+    超 1 GiB 且 FLOPs 不足 1e9 即"pack-bound"）。dedicated 另有 ``pack/flops``
+    比值判据（见 ``_HEAVY_PACK_RATIO_LIMIT``），本函数**没有**跟进：这里的流量是
+    按步表重算的下界，比值阈值尚未在该口径上标定。但**流量模型必须与原生执行器
+    同口径**，否则结构上本来零拷贝的计划会被误拒。三点逐条对齐 ``topology_gemm.h``：
 
     1. **步序来自真正下发的 plan**：``decode_execution_plan`` 解的就是
        :func:`_topology_plan` 编码、交给原生同一份字节流，而不是另跑一遍
@@ -800,6 +802,27 @@ _CPU_PLAN_ARENA_LIMIT = 8 << 30
 _CPU_PLAN_MAX_STEP_MACS_LIMIT = 100_000_000_000
 _HEAVY_PACK_MIN_BYTES = 1 << 30
 _HEAVY_PACK_MAX_FLOPS = 1_000_000_000
+# pack_bytes / flops：每做 1 次浮点运算要搬多少字节的布局流量（读+写各计一次）。
+# 为什么不只看绝对值：绝对判据（≥1 GiB 且 ≤1e9 FLOPs）漏掉"活干得也多"的病态
+# 计划——实测 seq=856（`ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak`，形状
+# `[400,4,1,1],[4,4,9,1],[4,400,400,400],...`）pack 8.2 GB、FLOPs 2.1e9，绝对判据
+# 放行，dedicated 实测 8662.7 ms，而 `specialize=False` 的通用路径 2330 ms（干净进程
+# 5 轮中位）、改后实际回落的 `kupl_topology` 2675 ms（3.24×）；它 step 0 就要把
+# `ekfl`(3.9 GiB) 整块重排成扁平 GEMM 布局，流量/算术 = 3.95 B/FLOP。
+# 为什么取 1.0：CPU 上 1 B/FLOP 已经等于"算术强度 1"，任何 GEMM 都是带宽支配；
+# 实测两档生产尺寸（complex128）的比值是双峰分布，1.0 落在峰间空档——
+# `distill` 放行格最高 0.313、被拒格最低 4.976；`distill_curr` 放行格最高 0.937、
+# 被拒格最低 1.748。取 0.5 会开始切进 `distill_curr` 的正常格一侧，取 2.0 会放过
+# 1.748 那一族，故 1.0 是当前语料上最宽的空档。
+# 已知副作用（如实记录，默认路径 `contract()` 实测改前→改后）：比值不看绝对规模，
+# `distill` 下 pack 只有 KB–MB 的小计划也会超限——32 格里新拒 18 格，实测 10 个小格
+# 变慢 1.9–4.1×（0.11→0.38、0.13→0.44、0.15→0.60、0.33→0.88 ms，绝对差 ≤0.55 ms），
+# 因为回落目标 `kupl_topology` 自带入口开销。`distill_curr` 侧：seq=855
+# 41.7→5.2 ms（8.0× 快）、seq=3431 34.9→30.3 ms（1.15×）、seq=2583 持平，
+# 但 seq=880（比值 1.748）4.4→10.3 ms（2.3× 慢）。
+# 若要消除这类误伤，把本条与 `pack_bytes >= 1 GiB` 并列即可；实测新拒会降到
+# `distill` 0 格 / `distill_curr` 3 格（全是 7.9 GiB 级），seq=856 仍被拒。
+_HEAVY_PACK_RATIO_LIMIT = 1.0
 _entry_dedicated: Any = None
 _failed_dedicated = False
 
@@ -1131,7 +1154,22 @@ def _plan_flops(plan: bytes) -> int:
 
 
 def _cpu_plan_fallback_reason(stats: dict[str, int]) -> str | None:
-    """Reject plans whose dedicated workspace or single GEMM is unsafe on CPU."""
+    """Reject plans whose dedicated workspace, single GEMM or layout traffic is unsafe.
+
+    Two independent pack criteria, because an absolute byte budget alone lets
+    through plans that move gigabytes *and* do the arithmetic to hide it:
+
+    * absolute: ``pack_bytes >= 1 GiB`` while ``flops <= 1e9`` — the layout
+      traffic dwarfs the work regardless of scale;
+    * ratio: ``pack_bytes / flops >= _HEAVY_PACK_RATIO_LIMIT`` — the plan spends
+      at least one byte of layout traffic per FLOP, so it is bandwidth-bound
+      even when the absolute FLOPs look large.  Calibrated on the corpus in both
+      production scenes (see ``_HEAVY_PACK_RATIO_LIMIT``): the free/limited
+      populations are separated by a gap that contains 1.0.
+
+    ``flops == 0`` makes the ratio meaningless (zero-work plan), so only the
+    absolute criterion applies there.
+    """
     arena_bytes = int(stats.get("plan_arena_bytes", 0))
     max_step_macs = int(stats.get("plan_max_step_macs", 0))
     flops = int(stats.get("plan_flops", 0))
@@ -1148,6 +1186,20 @@ def _cpu_plan_fallback_reason(stats: dict[str, int]) -> str | None:
         return (
             "plan is pack-bound on CPU "
             f"({pack_bytes} pack bytes, {flops} FLOPs)")
+    # 比值判据**与绝对底并列**，不是独立生效。单看比值会误杀大量小计划：
+    # 实测（2026-11-15，语料 32 seq × 2 档、complex128）独立生效时新拒
+    # distill 18/32、distill_curr 17/32（56%），其中大半 pack 只有数百字节；
+    # 而极小/全 1 张量的比值恒在 8–26 且**与规模无关**（等长 dim 1→12 依次
+    # 25.6 / 8.36 / 4.30 / 2.66 / 1.32 / 0.79 / 0.376），纯调阈值排除不掉，
+    # 只能配绝对底。加上该底后新拒降到 0/32 与 3/32（3 格全是 7.9 GiB 级），
+    # 而病态本例（pack 8.28 GB、flops 2.10e9、比值 3.95）仍被拒。
+    if (flops > 0
+            and pack_bytes >= _HEAVY_PACK_MIN_BYTES
+            and pack_bytes >= _HEAVY_PACK_RATIO_LIMIT * flops):
+        return (
+            "plan pack traffic per FLOP exceeds the CPU dedicated budget "
+            f"(pack/flops = {pack_bytes / flops:.3f} >= {_HEAVY_PACK_RATIO_LIMIT} "
+            f"bytes per FLOP: {pack_bytes} pack bytes, {flops} FLOPs)")
     return None
 
 

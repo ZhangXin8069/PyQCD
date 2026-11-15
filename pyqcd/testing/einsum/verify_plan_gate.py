@@ -351,6 +351,27 @@ def test_heavy_cpu_plan_promotes_branch2_only_with_all_round_gains():
     }
 
 
+def _cpu_declared_limit(stats: dict[str, int]) -> bool:
+    """本模块镜像 CPU 侧**已声明的四条门**（本文件不重复实现判据，只按常量复算）。
+
+    2026-11-15 起多了第四条 ``pack/flops`` 比值门（``_HEAVY_PACK_RATIO_LIMIT``），
+    并且它**与绝对底 ``_HEAVY_PACK_MIN_BYTES`` 并列**而非独立生效——单看比值会把
+    极小计划（pack 只有几百字节但 flops 更小）全判死，实测语料 32 seq × 2 档下
+    误拒 56%。此前这里只有三条内联表达式、且写了两遍，新增判据时两处都会静默
+    失真——现在收敛成一个函数，与
+    :func:`pyqcd.einsum._kernel_kupl._cpu_plan_fallback_reason` 一一对应。
+    """
+    return (
+        stats["plan_arena_bytes"] >= _kernel_kupl._CPU_PLAN_ARENA_LIMIT
+        or stats["plan_max_step_macs"] >= _kernel_kupl._CPU_PLAN_MAX_STEP_MACS_LIMIT
+        or (stats["plan_pack_bytes"] >= _kernel_kupl._HEAVY_PACK_MIN_BYTES
+            and stats["plan_flops"] <= _kernel_kupl._HEAVY_PACK_MAX_FLOPS)
+        or (stats["plan_flops"] > 0
+            and stats["plan_pack_bytes"] >= _kernel_kupl._HEAVY_PACK_MIN_BYTES
+            and stats["plan_pack_bytes"]
+            >= _kernel_kupl._HEAVY_PACK_RATIO_LIMIT * stats["plan_flops"]))
+
+
 def test_cpu_full_plan_resource_gate():
     """CPU 资源门：四类 dtype 各自标定，且分化必须由**元素字节数**解释。
 
@@ -364,6 +385,13 @@ def test_cpu_full_plan_resource_gate():
         1599       ok        ok       ok       ok
         2585/489/2588 OUT    OUT      OUT      OUT
         7918       OUT       OUT      OUT      ok
+
+    **seq=1599 曾在 2026-11-15 短暂由 ok 变 OUT，现已恢复 ok。** 原因是比值门
+    最初**独立生效**：四类 dtype 的 ``pack/flops`` = 16.996/8.498/8.498/4.249
+    全 ≥ 1.0，于是被拒；但该计划本身极小（complex128 只有 1,116,160 字节 pack、
+    65,670 FLOPs），实测 dedicated 0.165 ms vs 通用 0.328 ms —— 纯误伤。
+    现在比值门**与绝对底并列**（``pack_bytes >= 1 GiB`` AND 比值超限），
+    极小计划不再命中比值门，本条恢复 ``ok``。
 
     判据写成"每类 dtype 的门结论单调可由 arena 解释"，而不是假设四类结构一致——
     后者是我最初的错误假设，被实测立刻否掉。
@@ -388,18 +416,14 @@ def test_cpu_full_plan_resource_gate():
                 assert (reason is None) is allowed, (seq, dtype_id, stats, reason)
             else:
                 # 分歧格：结论必须由某一条**已声明**的门解释，不能是随机行为。
-                limited = (
-                    stats["plan_arena_bytes"] >= _kernel_kupl._CPU_PLAN_ARENA_LIMIT
-                    or stats["plan_max_step_macs"] >= _kernel_kupl._CPU_PLAN_MAX_STEP_MACS_LIMIT
-                    or (stats["plan_pack_bytes"] >= _kernel_kupl._HEAVY_PACK_MIN_BYTES
-                        and stats["plan_flops"] <= _kernel_kupl._HEAVY_PACK_MAX_FLOPS))
-                assert (reason is None) is (not limited), (
+                assert (reason is None) is (not _cpu_declared_limit(stats)), (
                     seq, dtype_id, stats, reason)
 
     # **不要**假设"小字节 dtype 的 arena 更小"：实测 seq=6585 的 complex64 是
     # 9.41 GB，反而大于 complex128 的 6.80 GB —— 规划器在不同 dtype 上会选出不同
     # 收缩顺序（单精度走 branch-2 的条件不同），字节数不是单调的。这里只断言
-    # "四类各自的门结论都由已声明的三条门解释"，不假设 dtype 之间的序关系。
+    # "四类各自的门结论都由已声明的四条门解释"（见 :func:`_cpu_declared_limit`），
+    # 不假设 dtype 之间的序关系。
     for seq in (6585, 7918):
         equation, shapes = _full_scene_shapes(seq)
         for dtype_id in (0, 1, 2, 3):
@@ -407,12 +431,8 @@ def test_cpu_full_plan_resource_gate():
                 equation, shapes, dtype_id, True)
             stats = _kernel_kupl._plan_statistics(encoded[0])
             reason = _kernel_kupl._cpu_plan_fallback_reason(stats)
-            limited = (
-                stats["plan_arena_bytes"] >= _kernel_kupl._CPU_PLAN_ARENA_LIMIT
-                or stats["plan_max_step_macs"] >= _kernel_kupl._CPU_PLAN_MAX_STEP_MACS_LIMIT
-                or (stats["plan_pack_bytes"] >= _kernel_kupl._HEAVY_PACK_MIN_BYTES
-                    and stats["plan_flops"] <= _kernel_kupl._HEAVY_PACK_MAX_FLOPS))
-            assert (reason is None) is (not limited), (seq, dtype_id, stats, reason)
+            assert (reason is None) is (not _cpu_declared_limit(stats)), (
+                seq, dtype_id, stats, reason)
 
 
 def test_cuda_full_plan_resource_gate():

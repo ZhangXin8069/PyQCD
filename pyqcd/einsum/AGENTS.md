@@ -460,6 +460,32 @@ pack/unpack，实测 **5.2 s**。新增 `_kernel_kupl._topology_pack_bound_reaso
 dedicated 相同：pack ≥ 1 GiB 且 FLOPs ≤ 1e9 即劝回落），于是该例如实
 `status=4` + `topology declined: pack-bound on CPU`，交给通用路径。
 
+**dedicated 侧新增 `pack/flops` 比值判据（2026-11-15 补）**：上面那条是**绝对**字节
+门槛，"活干得也多"的病态计划从它下面漏过去——seq=856
+（`ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak`，形状
+`[400,4,1,1],[4,4,9,1],[4,400,400,400],[4,4,9,9],[4,4],[4,4],[4,4],[1,9,400],[1,9],[1,9,400]`）
+`pack_bytes = 8,281,198,592`、`flops = 2,096,413,216`，`pack >= 1 GiB` 成立但
+`flops > 1e9`，因此放行；dedicated 实测 **8662.7 ms**（step 0 就要把 `ekfl` 的
+3.9 GiB 整块重排成扁平 GEMM 布局），而 `specialize=False` 的通用路径 **2330 ms**
+（干净进程 5 轮中位，样本 2116–2538）、改后实际回落的 `kupl_topology` **2675 ms**。
+
+现加 `_HEAVY_PACK_RATIO_LIMIT = 1.0`（每 1 次 FLOP 至少搬 1 字节布局流量即视为
+带宽支配），**仅在 `flops > 0` 时比较**；拒绝理由写明 `pack/flops` 比值与
+`pack_bytes`/`flops` 两个原始数。标定（complex128，`distill`/`distill_curr` 各
+32 格语料）：比值双峰，`distill` 放行格最高 0.313 / 被拒格最低 4.976，
+`distill_curr` 放行格最高 0.937 / 被拒格最低 1.748，1.0 落在两处空档内。该判据
+只作用于 dedicated；`_topology_pack_bound_reason` 仍只有绝对判据（它的流量是按步表
+重算的下界，比值阈值尚未在该口径标定）。
+
+**已知副作用（实测，未修）**：比值不看绝对规模，`distill` 下 pack 只有 KB–MB 的小
+计划也会超限——32 格里新拒 18 格。默认路径 `contract()` 实测改前→改后：
+`distill` 10 个小格变慢 **1.9–4.1×**（0.11→0.38、0.13→0.44、0.15→0.60、0.33→0.88
+ms 等，绝对差 ≤0.55 ms），回落目标 `kupl_topology` 的入口开销所致；`distill_curr`
+侧 seq=855 **41.7→5.2 ms（8.0× 快）**、seq=3431 34.9→30.3 ms（1.15×）、seq=2583
+持平，但 seq=880（比值 1.748）4.4→10.3 ms（**2.3× 慢**）。要去掉这类误伤，把比值
+判据与 `pack_bytes >= _HEAVY_PACK_MIN_BYTES` 并列即可：新拒降到 `distill` 0 格 /
+`distill_curr` 3 格（全是 7.9 GiB 级），seq=856 仍被拒。
+
 **第三处：输入侧缺 direct 直连（2026-11-15 补，这是 32× 的真实根因）**
 
 上一条说"小规模 6–9× 是拓扑入口固定开销"**只对中位数成立，对离群格是错的**，
