@@ -1041,3 +1041,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## parallel-CD - stage - 2026-11-15 14:30:19 +0800
+- 主任务: 并行子任务：batch direct + CUDA 同步
+- 日志文件: logs/v202611151430.txt
+- 文件大小: 6434 bytes
+- 触发原因: 阶段成果
+- 关键内容: batch direct 放开（语料内 batch 步为 0，无性能变化）；CUDA 摘要 96→128 位修复恒 miss（对照 miss→hit）；全量 127/1/0
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

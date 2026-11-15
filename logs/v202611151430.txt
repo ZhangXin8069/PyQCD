@@ -1,0 +1,116 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-15 14:30:19 +0800
+批次: parallel-CD
+主任务: 并行子任务：batch direct + CUDA 同步
+触发原因: 阶段成果
+摘要: batch direct 放开（语料内 batch 步为 0，无性能变化）；CUDA 摘要 96→128 位修复恒 miss（对照 miss→hit）；全量 127/1/0
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 并行派发两项子任务
+- 目标: 同时攻坚 {batch > 1 的 direct 直连} 与 {CUDA 侧同步}
+- 命令/操作: 核查文件边界后分别 dispatch
+- 关键输出: 任务D 限 cpp/kupl/einsum/ + 相关 py；任务E 限 cpp/cuda/einsum/ +
+  _kernel_cuda.py；两集合无交集
+- 退出码: 0
+- 证据与判断: 各得独立 run_id（D=20261115T132749.WoJPPm，E=20261115T132749.jY08gh）
+
+### S2 — 任务D：batch direct 放开
+- 命令/操作: 判据细化为「两侧都命中恒等/组交换 + 逐 batch 偏移不越界」；
+  A/B 用各自 stride；新增 step_trace_enabled 与逐步诊断
+- 关键输出: 临时步表 8 方程 × 4 dtype = 32 格，0 超容差
+  （complex128 1.73e-15 / complex64 2.02e-06 / float64 2.33e-15 / float32 8.99e-07）
+- 退出码: 0
+- 证据与判断: 变异测试（A 的 batch 偏移写死 0）令 6 个直连方程全部报错，
+  pack 方程仍通过，证明用例有牙齿
+
+### S3 — 关键事实核实：语料内 batch 步为 0
+- 命令/操作: 独立统计 seq 1..2582 全部步的 batch 深度
+- 关键输出: 35854 步中 batch>1 = 0，batch==1 = 0
+- 退出码: 0
+- 证据与判断: 任务D 自述的「编译表无 batch 步」属实。因此该工作在当前语料下
+  无性能收益，是**能力补齐 + 未来语料扩大后的预备**，不得报成提速
+
+### S4 — 任务E 超时但留下真实 bug 修复
+- 命令/操作: 任务E 在 60m 上限被 kill（exit=124），无最终报告
+- 关键输出: 它已改 _kernel_cuda.py 与 _topology_kernel_contract.py
+- 退出码: 124
+- 证据与判断: 改动是真实修复——_signature_digest 是 96 位（digest_size=12），
+  CUDA 表 key 是 blake2b-128，零填充后前 12 字节相同、后 4 字节不同 ⇒ 恒 miss。
+  兜底链式只接受 num_inputs <= 6，而语料 99.9% 元数为 7..16，故除 arity=6 两条外
+  整张表取不到
+
+### S5 — 主 agent 独立验证（不采信代理自述）
+- 命令/操作: 独立编译 dev 驱动并运行；stash 对照验证 CUDA 修复前后；
+  全量回归
+- 关键输出: dev 驱动 topology_batch_direct: PASS；
+  CUDA 修复前 path=None ok=False（miss），修复后 path=cuda_topology rel=4.4e-07；
+  127 passed / 1 skipped / 0 failed
+- 退出码: 0 / 0 / 0
+- 证据与判断: 两项成果均属实。特别确认 CUDA 那条是**真实 bug**（不是推测），
+  对照实验有明确前后差异
+
+## 验证与证据
+- 测试/检查: python -B -m pyqcd.testing；dev 驱动独立编译运行；stash 对照
+- 结果: 127 passed / 1 skipped / 0 failed；驱动 PASS；CUDA miss→hit 有对照
+- 未验证项: 单侧直连（3334 个 batch 步仍整块 pack）未做；
+  CUDA 侧 topology_steps.h 按 dim=4 均匀定型的收缩序未量化验证（任务E 超时未及）
+- 性能: distill 口径无 batch>1 步，故 batch direct 无性能变化（如实报告，不报比例）
+
+## 变更与产物
+- 文件: cpp/kupl/einsum/src/topology_gemm.h（batch direct）、
+  cpp/kupl/einsum/tests/topology_batch_direct.cpp（新增 dev 驱动）、
+  pyqcd/einsum/AGENTS.md（第四处：批直连）、
+  pyqcd/einsum/_kernel_cuda.py（摘要改 128 位）、
+  pyqcd/testing/_topology_kernel_contract.py（新增高元数回归用例）
+- 产物: 无新增 artifacts（性能无变化，未跑新基准）
+- 未改动范围: 步表字节格式、_TOPOLOGY_DECLINED_DTYPES、topology_steps.h
+
+## 风险、限制与下一步
+- 风险: batch direct 在 CI 里无自动门（语料无 batch 步），当前门是 dev-only 驱动
+- 阻塞: 无
+- 下一步: 已提交 29f8cb61、1006860c。可选：
+  1) 放开单侧直连（一侧 direct + 另一侧 pack），涉 3334 个 batch 步；
+  2) 量化 CUDA topology_steps.h 按 dim=4 定型的收缩序在异形轴上是否病态
+
+## 用户输入指令
+派发多个子代理,同步进行"让 count_batch > 1 也走 direct（需细化 batch 前缀连续性判据）；CUDA 侧同步（走另一套机制，未验证）"
+
+## Agent 全文报告
+--- report begin ---
+两项并行派发完成。任务 D 正常收尾；任务 E 在 60 分钟上限被 kill，但它留下的改动
+经我独立验证是**真实 bug 修复**。
+
+## 任务 D：batch > 1 的 direct 直连
+
+判据细化为：A/B 两侧都须命中「恒等」或「组交换」排列（两者都把 batch 轴放在源轴
+前端，M/K 全在其后，源 C 连续时每个 batch 元素的块连续），并新增越界兜底
+（count_batch*(rows*inner) 不得超过操作数元素数）。batch 与 M/K 交错的布局仍走 pack。
+
+验证：临时步表 8 方程 × 4 dtype = 32 格，0 超容差；trace 证明命中走 direct、不可
+直连的如实 path=pack；变异测试（batch 偏移写死 0）令 6 个直连方程全部报错，用例
+有牙齿。dev-only 驱动我独立编译运行，PASS。
+
+**重要事实核实**：我独立统计 seq 1..2582 的 35854 步，batch>1 与 batch==1 **都是 0**。
+所以这项改动在当前语料下**没有性能变化**，是能力补齐与未来语料扩大后的预备。
+不报成提速。
+
+## 任务 E：CUDA 侧（超时，但产出真实修复）
+
+它在 60m 上限被 kill，没有最终报告。但它改了 _kernel_cuda.py——这是真实 bug：
+`_signature_digest` 是 96 位（digest_size=12），而 CUDA 表 key 是 blake2b-128；
+零填充后前 12 字节相同、后 4 字节不同，原生算出的 key 恒查不到表，退到只接受
+num_inputs <= 6 的链式兜底，于是除 arity=6 的两条外语料全部 status=4 回落。
+
+我用 stash 做了对照：同一方程修复前 `path=None, ok=False`（miss），修复后
+`path=cuda_topology, rel=4.4e-07`。这是明确的 miss→hit。
+
+回归：127 passed / 1 skipped / 0 failed。
+
+## 未完成
+- 单侧直连（一侧 direct + 另一侧 pack）未做，涉 3334 个 batch 步；
+- CUDA 侧 topology_steps.h 按 dim=4 均匀定型的收缩序是否在生产异形轴病态，
+  任务 E 超时未及量化——这个与 KUPL 侧本轮修掉的 PROBE_DIM=2 是同类问题，值得跟进。
+--- report end ---
