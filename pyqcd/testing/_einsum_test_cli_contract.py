@@ -645,13 +645,63 @@ def test_tolerance_is_atol_plus_rtol_and_rtol_is_reported():
 
     本条用固定 rel 验证语义，并检查报告字段。
     """
-    # 语义：两个相对量相加，与 rel 无关地线性放宽。
-    atol, rtol = 1e-12, 0.5
-    assert 1.8e-7 <= atol + rtol        # 0.5 的容差能放过 1.8e-7
-    assert not (1.8e-7 <= atol + 0.0)   # rtol=0 时按 atol 严格判
-    # 旧式的病：rtol>=1 恒真，且 rtol<1 反被收紧。
-    assert 1.8e-7 <= atol + 1.0 * 1.8e-7, "旧式在 rtol=1 时恒真（这正是被修的 bug）"
-    assert not (1.8e-7 <= atol + 0.999 * 1.8e-7), "旧式在 rtol=0.999 时误判 FAIL"
+    # **必须真正驱动 run() 的判定分支**，否则契约是空壳：第一版只在这里验证
+    # 自己写的算术（`1.8e-7 <= 1e-12 + 0.5`），把公式改回 `atol + rtol*rel`
+    # 契约照样通过（2026-11-15 第 2 轮复查的变异测试抓出来的）。
+    #
+    # 做法：monkeypatch `_relative_error` 注入一个**受控的 rel**，选在两式结论
+    # 相反的区间——
+    #   新式 `rel <= atol + rtol`；旧式 `rel <= atol + rtol*rel` == `rel*(1-rtol) <= atol`
+    # 取 rel = 0.05、atol = 1e-9、rtol = 0.25：
+    #   新式 0.05 <= 1e-9 + 0.25 = 0.25            → PASS
+    #   旧式 0.05*(1-0.25)=0.0375 <= 1e-9          → FAIL
+    # 两式结论必须相反，因此这条断言能钉死公式。
+    import contextlib
+    import io
+
+    from pyqcd.einsum import test as cli
+
+    injected = 0.05
+    original = cli._relative_error
+    cli._relative_error = lambda actual, expected: injected
+    try:
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(stderr):
+            code = cli.main([
+                "--equation", "ij,jk->ik", "--shape", "[8,8],[8,8]->[8,8]",
+                "--device", "cpu", "--dtype", "complex128",
+                "--compare", "numpy", "--rounds", "1", "--warmup", "1",
+                "--atol", "1e-9", "--rtol", "0.25",
+            ])
+    finally:
+        cli._relative_error = original
+    assert code == 0, (
+        f"rel={injected} 应满足 rel <= atol + rtol（=0.25），得到退出码 {code}；"
+        f"若为 1 说明判定式退化成了 atol + rtol*rel（旧式的 bug）。"
+        f"stderr={stderr.getvalue()[:200]}")
+
+    # 第二个方向：``rtol > 1`` 时旧式**恒真**（``rel*(1-rtol)`` 是负数，恒 <= atol）。
+    # 选 rel = 3.0、atol = 1e-12、rtol = 2.0：
+    #   新式 3.0 <= 1e-12 + 2.0 = 2.0   → **FAIL**（正确：超出 2.0 的容差）
+    #   旧式 3.0*(1-2.0) = -3.0 <= 1e-12 → PASS（假 PASS，正是被修的坑）
+    # 所以"必须 FAIL"这条断言能钉死旧式。
+    injected = 3.0
+    cli._relative_error = lambda actual, expected: injected
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            code = cli.main([
+                "--equation", "ij,jk->ik", "--shape", "[8,8],[8,8]->[8,8]",
+                "--device", "cpu", "--dtype", "complex128",
+                "--compare", "numpy", "--rounds", "1", "--warmup", "1",
+                "--atol", "1e-12", "--rtol", "2.0",
+            ])
+    finally:
+        cli._relative_error = original
+    assert code == 1, (
+        f"rel={injected} 超过 atol+rtol=2.0，必须 FAIL；得到 {code} 说明判定式退化成"
+        f" atol+rtol*rel（rtol>1 时恒真）。")
 
     # 报告字段：atol/rtol/tolerance 必须都在。
     import contextlib
