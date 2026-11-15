@@ -190,19 +190,29 @@ _PROBE_TOLERANCE = {"complex128": 1e-9, "float64": 1e-9,
 # 为什么要有这一层：``TOPOLOGY_DTYPES`` 回答的是"原生能不能正确执行这类 dtype"，
 # 与"分派时该不该把它交给拓扑入口"是两件事。
 #
-# 2026-11-15 收缩序修复后的复测（distill 尺寸，3 轮中位）：
-#   * seq=500 float32：169.5 ms vs dedicated 155.0 ms = **1.09×**（修复前 53.1×）；
-#   * seq=1700 float64：16.0 ms vs 10.7 ms = 1.49×；
-#   * seq=1291/1936/2581 这类小规模：6–9×，但绝对差只有 ~1.8 ms——那是拓扑入口
-#     的固定开销（签名哈希 + plan 缓存查找），不是 GEMM 形状退化；
-#   * 复数档同规模同量级（6–7×），唯 seq=1700 上复数反超（complex64 0.15×）——
-#     **这一行已作废**：当时复数根本进不了 v3 步表（``run_specialized`` 对非
-#     float32/float64 直接 miss，落到 v2 通用执行器），测到的是 v2 的耗时。复数
-#     接通 v3 之后必须重测，才能用于选路比较。
+# 四类 dtype 平权后的实测（2026-11-15，``distill`` 口径即 Nev=100/Mom=1，轴长由语料
+# roles 反推，热态 3 轮中位；脚本
+# ``python -m pyqcd.testing.einsum.bench_topology_vs_dedicated``，产物在
+# ``pyqcd/testing/einsum/artifacts/topo_vs_dedicated_*``）：
 #
-# 所以结论没变、**原因变了**：实数档仍走 dedicated（它仍在 ``_api`` 分派顺序里
-# 更靠前，且没有那 ~2 ms 固定开销），但这不再是"步表病态"的问题。契约仍四类平权，
-# ``topology_dtypes()`` 仍返回四类，探测（``_probe_dtype``）语义不变。
+#   dtype        n   中位    最优    最差   快于 dedicated
+#   complex128  19  8.18x  0.17x  24.63x      5/19
+#   complex64   19  6.56x  0.09x  48.95x      6/19
+#   float64     19  6.80x  0.30x  56.22x      5/19
+#   float32     20  6.73x  0.48x  62.19x      5/20
+#
+# 三点结论：
+#   1. **复数与实数没有系统差异**（中位 6.6x vs 6.7–6.8x）——这正是复数接通 v3
+#      （cgemm/zgemm）生效的证据。此前"复数 6–7x、seq=1700 complex64 0.15x"的旧注释
+#      测的是 **v2**（当时 ``run_specialized`` 对复数直接 miss），已作废。
+#   2. 小规模格子上 6–9x 的来源是拓扑入口的固定开销（签名哈希 + plan 缓存查找，
+#      约 1–2 ms），**不是** GEMM 形状退化；绝对差很小。
+#   3. **16 算子的大规模语料上拓扑反超**（最优 0.09–0.48x，共 21/77 格快于 dedicated）：
+#      v3 的静态步表省掉了 dedicated 每步的路径规划，规模一大就摊薄了入口开销。
+#
+# 因此实数档仍走 dedicated：它没有那 ~2 ms 固定开销，且小规模是本库日常用例的主体。
+# 契约仍四类平权，``topology_dtypes()`` 仍返回四类，探测（``_probe_dtype``）语义不变。
+# 若将来要让大规模场景自动改走拓扑，正确做法是按 ``seq``/元素数选路，而不是按 dtype。
 _TOPOLOGY_REAL_ENV = "PYQCD_EINSUM_TOPOLOGY_REAL"
 _TOPOLOGY_DECLINED_DTYPES: tuple[np.dtype, ...] = (
     np.dtype(np.float64), np.dtype(np.float32))
