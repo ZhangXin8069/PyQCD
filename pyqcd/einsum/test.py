@@ -1319,23 +1319,39 @@ def _print_detail(report: dict[str, Any], language: str = "zh") -> None:
 
 
 # ── 语料反推（不写 --shape 时） ──────────────────────────────────────────────
-def shapes_from_corpus(equation: str, scene: str) -> tuple[list[tuple[int, ...]], bool]:
-    """按语料 ``roles`` + 生产 dims 反推形状；返回 (形状, 是否真的是生产口径)。"""
+def shapes_from_corpus(equation: str, scene: str
+                       ) -> tuple[list[tuple[int, ...]], bool, dict[str, int]]:
+    """按语料 ``roles`` + 生产 dims 反推形状。
+
+    返回 ``(每个操作数的形状, 是否命中语料, label → 尺寸表)``。第三项让调用方能
+    按方程输出段拼出**正确的输出形状**——少了它，省略 ``--shape`` 的非标量输出
+    会被当成 ``()`` 而误判形状不符（见 :func:`main` 里的说明）。
+
+    **不得 import ``pyqcd.testing``**（本库反模式：生产代码不与测试包耦合，见
+    ``AGENTS.md`` 反模式节）。这里原先是
+    ``from pyqcd.testing._topology_kernel_gen import parse``，而
+    ``pyqcd/testing/__init__.py`` 顶层 ``from scipy.linalg import expm``——于是在
+    没装 scipy 的运行环境里，一个**不需要 scipy 的纯 einsum 方程反推**会直接
+    ``ModuleNotFoundError: No module named 'scipy'``（2026-11-15 用户实测）。
+    改用生产侧既有的 :func:`pyqcd.einsum._dedicated_kernels.parse_equation`：
+    它比测试侧那个两行 ``split`` 更严格（拒绝重复标签、输出标签缺失、省略号），
+    正是这里该有的校验。
+    """
     from pyqcd.einsum import _bench_scene
     from pyqcd.einsum import _wick_tasklist as tasklist
+    from pyqcd.einsum._dedicated_kernels import parse_equation
     from pyqcd.einsum.bench_specialized import _label_sizes
-    from pyqcd.testing._topology_kernel_gen import parse
 
     table = _bench_scene.dims(scene)
     for seq in range(1, len(tasklist.by_seq()) + 1):
         task = tasklist.lookup(seq)
         if task is None or task.equation != equation:
             continue
-        terms, _out = parse(equation)
+        terms, _out = parse_equation(equation)
         sizes = _label_sizes(terms, task.roles, table)
         shapes = [tuple(sizes[ch] for ch in term) for term in terms]
-        return shapes, True
-    return [], False
+        return shapes, True, {str(k): int(v) for k, v in sizes.items()}
+    return [], False, {}
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -1412,14 +1428,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     language = resolve_language(args.language)
 
     if args.shape is None:
-        shapes, matched = shapes_from_corpus(args.equation, args.scene)
+        shapes, matched, label_sizes = shapes_from_corpus(args.equation, args.scene)
         if not matched:
             raise UsageError(translate("error.corpus_miss", language,
                                        equation=args.equation, scene=args.scene))
+        # 输出形状必须从**反推出的形状**推导，不能留空。
+        #
+        # 原先把 ``out_shape`` 设成 ``None``、下面再兜成 ``()``，于是任何省略
+        # ``--shape`` 且输出非标量的方程都会误报
+        # ``actual shape=[100, 100] expected=[]``（2026-11-15 用户实测
+        # ``...vx->es`` 命中）。这里按方程输出段从 label→尺寸表拼出来。
         _, rhs = args.equation.split("->", 1)
+        out_shape = tuple(label_sizes[ch] for ch in rhs.replace(" ", ""))
         report_note = translate("note.shape_from_corpus", language,
                                 scene=args.scene)
-        out_shape = None
     else:
         shapes, declared_out = parse_shape_spec(args.shape, language=language)
         report_note = translate("note.shape_from_flag", language)
@@ -1427,7 +1449,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     result = run(
         equation=args.equation, shapes=shapes,
-        out_shape=out_shape if out_shape is not None else (),
+        out_shape=tuple(out_shape),
         device=args.device, dtype=args.dtype, backend=args.backend,
         atol=args.atol, rtol=args.rtol, compare=args.compare,
         optimize=args.optimize, rounds=args.rounds, warmup=args.warmup,

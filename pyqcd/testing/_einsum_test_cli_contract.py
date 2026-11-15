@@ -403,6 +403,72 @@ def test_specialize_is_forwarded_to_the_compare_backend_reference():
             hit_kernel_info, hit_cuda_info)
 
 
+def test_corpus_shape_inference_does_not_import_the_testing_package():
+    """省略 ``--shape`` 时的形状反推**不得**依赖 ``pyqcd.testing``（连带 scipy）。
+
+    回归点（2026-11-15 用户实测）：``shapes_from_corpus`` 曾
+    ``from pyqcd.testing._topology_kernel_gen import parse``，而
+    ``pyqcd/testing/__init__.py`` 顶层 ``from scipy.linalg import expm``。于是
+    在没装 scipy 的环境里，一个**根本不需要 scipy** 的纯 einsum 形状反推直接
+    ``ModuleNotFoundError: No module named 'scipy'``。这同时违反本库反模式
+    "生产代码不 import ``pyqcd.testing``"。
+
+    本条锁两件事：①源码里不存在该 import；②输出形状按方程输出段**真的推对**
+    （原实现把它兜成 ``()``，导致非标量输出误报 ``actual shape=[100,100]
+    expected=[]``）。
+    """
+    import inspect
+
+    from pyqcd.einsum import test as test_module
+
+    # 只查**代码行**，跳过 docstring 与注释（说明文字里本该能提到它）。
+    import ast
+
+    tree = ast.parse(inspect.getsource(test_module.shapes_from_corpus))
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+        elif isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+    offenders = [name for name in imported if name.startswith("pyqcd.testing")]
+    assert not offenders, (
+        f"shapes_from_corpus 不得 import pyqcd.testing（会连带 scipy）：{offenders}")
+
+    # 语料内的 16 操作数方程，输出是 [e,s] 而非标量。
+    equation = "cqdr,eafb,mknl,oupv,igjh,wsxt,ac,mo,gi,kq,uw,bd,fnp,hj,lrt,vx->es"
+    shapes, matched, label_sizes = test_module.shapes_from_corpus(equation, "distill")
+    assert matched, f"{equation} 应在语料里"
+    assert len(shapes) == 16
+    assert tuple(label_sizes[ch] for ch in "es") == (100, 100), (
+        f"输出 [e,s] 应为 (100, 100)，得到 {label_sizes}")
+    assert shapes[1] == (100, 4, 1, 1), f"第二个操作数形状不对：{shapes[1]}"
+
+
+def test_corpus_shape_inference_reports_non_scalar_output_shape():
+    """省略 ``--shape`` 时，非标量输出的形状必须被正确报告（不能兜成 ``[]``）。
+
+    回归点同上：``main`` 曾把 ``out_shape`` 设成 ``None`` 再兜成 ``()``，
+    于是 ``rel`` 达标却因形状不符判 FAIL。
+    """
+    import contextlib
+    import io
+
+    from pyqcd.einsum import test as test_module
+
+    equation = "cqdr,eafb,mknl,oupv,igjh,wsxt,ac,mo,gi,kq,uw,bd,fnp,hj,lrt,vx->es"
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(io.StringIO()):
+        code = test_module.main([
+            "--equation", equation, "--scene", "distill",
+            "--device", "cpu", "--backend", "numpy", "--dtype", "complex128",
+            "--compare", "none", "--rounds", "1", "--warmup", "1",
+        ])
+    output = buffer.getvalue()
+    assert code == 0, f"应当通过，得到退出码 {code}：{output}"
+    assert "expected=[]" not in output, f"输出形状被兜成空元组：{output}"
+
+
 def test_help_lists_specialize_and_verbose_reports_it():
     """``--help`` 是用户唯一权威来源：缺省值表必须有 ``--specialize``。
 
@@ -893,6 +959,8 @@ TESTS = (
     test_specialize_tri_state_maps_to_contract_argument,
     test_specialize_false_really_disables_the_native_path,
     test_specialize_is_forwarded_to_the_compare_backend_reference,
+    test_corpus_shape_inference_does_not_import_the_testing_package,
+    test_corpus_shape_inference_reports_non_scalar_output_shape,
     test_help_lists_specialize_and_verbose_reports_it,
     test_compare_optimize_default_reproduces_the_old_reference_behaviour,
     test_compare_optimize_dp_reaches_the_opt_einsum_reference,
