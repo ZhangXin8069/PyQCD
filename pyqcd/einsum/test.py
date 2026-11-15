@@ -49,6 +49,20 @@ import numpy as np
 
 __all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES", "DEVICES"]
 
+class UsageError(SystemExit):
+    """参数或环境错误。
+
+    继承 ``SystemExit`` 以便顶层直接终止，但把退出码固定成 **2**，与 ``--help`` 里
+    写的"0 通过 / 1 数值或形状不符 / 2 参数或环境错误"一致。裸
+    ``SystemExit(str)`` 的退出码是 1，会与"数值失败"混淆——脚本据此判断是
+    "结果不对"还是"命令写错了"。
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.code = 2
+
+
 #: 四类 dtype 平权（与 ``_kernel_kupl.TOPOLOGY_DTYPES`` 同集合）。
 DTYPES = ("complex128", "complex64", "float64", "float32")
 #: ``--device``：决定数组落在哪里。``cpu``→numpy，``gpu``/``cuda``→cupy。
@@ -136,30 +150,30 @@ def _parse_bracket_list(text: str, where: str) -> list[tuple[int, ...]]:
 def _validate_against_equation(equation: str, shapes: Sequence[tuple[int, ...]]) -> None:
     """操作数个数、秩、同标签等长——任一不符直接报错。"""
     if "->" not in equation:
-        raise SystemExit(
+        raise UsageError(
             "error: --equation 必须带显式 '->'（隐式输出会与 --shape 的输出段冲突）")
     lhs, rhs = equation.split("->", 1)
     terms = lhs.split(",")
     if len(terms) != len(shapes):
-        raise SystemExit(
+        raise UsageError(
             f"error: --equation 有 {len(terms)} 个操作数，--shape 给了 {len(shapes)} 个")
     sizes: dict[str, int] = {}
     for term, shape in zip(terms, shapes):
         if len(term) != len(shape):
-            raise SystemExit(
+            raise UsageError(
                 f"error: 操作数 {term!r} 的秩是 {len(term)}，形状 {shape} 的秩是 "
                 f"{len(shape)}")
         for label, extent in zip(term, shape):
             if extent <= 0:
-                raise SystemExit(f"error: 操作数 {term!r} 的轴长必须为正，得到 {extent}")
+                raise UsageError(f"error: 操作数 {term!r} 的轴长必须为正，得到 {extent}")
             known = sizes.setdefault(label, extent)
             if known != extent:
-                raise SystemExit(
+                raise UsageError(
                     f"error: 标签 {label!r} 在不同操作数里长度不一致"
                     f"（{known} vs {extent}）——本工具不做广播猜测")
     for label in rhs:
         if label not in sizes:
-            raise SystemExit(f"error: 输出标签 {label!r} 未在任何输入里出现")
+            raise UsageError(f"error: 输出标签 {label!r} 未在任何输入里出现")
 
 
 # ── 设备与张量 ──────────────────────────────────────────────────────────────
@@ -170,16 +184,16 @@ def _xp_for_device(device: str):
     try:
         import cupy
     except Exception as exc:                    # noqa: BLE001
-        raise SystemExit(
+        raise UsageError(
             f"error: --device {device!r} 需要 cupy，但导入失败：{type(exc).__name__}: "
             f"{exc}\n  提示: --device cpu 可在无 GPU 时运行") from exc
     try:
         count = int(cupy.cuda.runtime.getDeviceCount())
     except Exception as exc:                    # noqa: BLE001
-        raise SystemExit(
+        raise UsageError(
             f"error: cupy 无法枚举 CUDA 设备：{type(exc).__name__}: {exc}") from exc
     if count == 0:
-        raise SystemExit(
+        raise UsageError(
             "error: --device gpu 但本进程看不到任何 CUDA 设备"
             "（检查 CUDA_VISIBLE_DEVICES / 驱动）")
     return cupy
@@ -238,17 +252,17 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     import pyqcd.einsum as pe
 
     if dtype not in DTYPES:
-        raise SystemExit(f"error: --dtype 必须是 {DTYPES} 之一，得到 {dtype!r}")
+        raise UsageError(f"error: --dtype 必须是 {DTYPES} 之一，得到 {dtype!r}")
     if compare not in COMPARE_MODES:
-        raise SystemExit(f"error: --compare 必须是 {COMPARE_MODES} 之一，得到 {compare!r}")
+        raise UsageError(f"error: --compare 必须是 {COMPARE_MODES} 之一，得到 {compare!r}")
     if warmup < 1:
-        raise SystemExit(
+        raise UsageError(
             "error: --warmup 不能为 0：首调包含 plan 缓存/原生库绑定/JIT，"
             "不丢弃会让耗时完全失真")
     if rounds < 1:
-        raise SystemExit("error: --rounds 必须 ≥ 1")
+        raise UsageError("error: --rounds 必须 ≥ 1")
     if expected_shape is not None and tuple(expected_shape) != tuple(out_shape):
-        raise SystemExit(
+        raise UsageError(
             f"error: 方程输出与 --shape 的输出段不一致：{tuple(out_shape)} vs "
             f"{tuple(expected_shape)}")
 
@@ -504,7 +518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.shape is None:
         shapes, matched = shapes_from_corpus(args.equation, args.scene)
         if not matched:
-            raise SystemExit(
+            raise UsageError(
                 "error: 省略 --shape 时方程必须在语料里（用于按 roles 反推生产尺寸），"
                 f"但 {args.equation!r} 不在 {args.scene} 语料中。请显式给 --shape。")
         _, rhs = args.equation.split("->", 1)

@@ -146,6 +146,40 @@ def test_defaults_are_documented_values():
     assert set(cli.COMPARE_MODES) == {"numpy", "opt_einsum", "backend", "none"}
 
 
+def test_exit_codes_distinguish_usage_from_numeric_failure():
+    """退出码必须区分"命令写错了"与"结果不对"：2 用法/环境，1 数值，0 通过。
+
+    裸 ``SystemExit(str)`` 的退出码是 1，会把两类错误混成一个数字；脚本无法据此
+    判断该修命令行还是该查算法。``UsageError`` 固定 code=2。
+    """
+    assert cli.UsageError("x").code == 2, cli.UsageError("x").code
+    for bad_call in (
+        lambda: cli._validate_against_equation("ij,jk->ik", [(2, 2)]),
+        lambda: cli._validate_against_equation("i,i->i", [(4,), (5,)]),
+        lambda: cli._validate_against_equation("ij,jk", [(2, 2), (2, 2)]),
+        lambda: cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)],
+                        out_shape=(4, 4), warmup=0, compare="none"),
+        lambda: cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)],
+                        out_shape=(4, 4), dtype="int8", compare="none"),
+        lambda: cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)],
+                        out_shape=(4, 4), compare="bogus"),
+    ):
+        try:
+            bad_call()
+        except cli.UsageError as exc:
+            assert exc.code == 2, exc.code
+        else:
+            raise AssertionError("本应抛 UsageError")
+
+    # 数值失败由 main 的返回值表达（1），不是异常。
+    result = cli.run(equation="ij,jk,kl->il",
+                     shapes=[(64, 64)] * 3, out_shape=(64, 64),
+                     dtype="float32", atol=1e-30, compare="numpy",
+                     rounds=2, warmup=1)
+    assert result["ok"] is False, result
+    assert result["rel"] > 1e-30, result["rel"]
+
+
 def test_help_lists_every_option_with_defaults():
     """``--help`` 必须能跑，且列出全部选项（它是用户唯一的规范来源）。"""
     parser = cli.build_parser()
@@ -180,6 +214,7 @@ TESTS = (
     test_warmup_zero_is_refused,
     test_atol_is_relative_not_elementwise,
     test_defaults_are_documented_values,
+    test_exit_codes_distinguish_usage_from_numeric_failure,
     test_help_lists_every_option_with_defaults,
     test_run_end_to_end_on_cpu,
 )
