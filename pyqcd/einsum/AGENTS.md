@@ -321,6 +321,45 @@ mamba 环境配的是 **nvrtc 12.9**，与 `cupy.cuda.runtime` 的 `12090` 一�
 这**不是**产品缺陷，也不是"必须降 arch"——不要为此改 `CUDAARCHS` 或
 `CUPY_NVCC_GENERATE_CODE`，换环境即可。
 
+**根因（2026-11-15 查清）**：base 环境的 **pip 侧**装了 `cuda-toolkit 13.2.2` 与
+`nvidia-*` 系列，它们优先于 conda 的 12.4，于是 `nvrtc.getVersion()` 返回
+`(13, 2)`，而 `cupy.cuda.runtime` 是 `12090`、V100 是 `sm_70`——CUDA 13 已移除
+`sm_70`，任何 cupy 逐元素 kernel（含 `_probe_dtype`）都报
+`invalid value for --gpu-architecture`。检查命令：
+
+```bash
+python -c "from cupy_backends.cuda.libs import nvrtc; print(nvrtc.getVersion())"
+# 期望 (12, x)；若打印 (13, x) 就是这个坑
+```
+
+#### 用户实测专用环境 `pyqcd-test`（2026-11-15 建）
+
+```bash
+conda create -y -n pyqcd-test python=3.12
+conda install -y -n pyqcd-test -c conda-forge "numpy=2" openblas gxx_linux-64=12 \
+    cupy opt_einsum "cuda-version=12"          # 锁 CUDA 12，避开 pip 侧 13.x
+conda run -n pyqcd-test python -m pip install -e /path/to/PyQCD \
+    --no-deps --no-build-isolation
+```
+
+要点：
+- **用 `conda` 而不是 `mamba`**：2026-11-15 一次 `mamba create` 在本机 segfault，
+  留下一个没有 `python` 二进制的残缺环境（只能 `conda env remove -n` 清掉重建）。
+- **必须 `cuda-version=12`**：不锁的话 conda 可能配到 13.x，重现上面那条 nvrtc
+  `(13, 2)` 的错误。装完用上面那条 `nvrtc.getVersion()` 自检。
+- **必须装 `openblas`**（含 `cblas.h` 与 `libopenblas.so` 软链）：KUPL 的每个 GEMM
+  都走 cblas，缺开发包会让 `pip install` 在原生构建阶段直接失败（exit 3）。
+  只有运行时 `libopenblas.so.0` 不够。
+- 实测结果（V100，`--device gpu --backend cupy`）：
+  `ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak` 走 `cuda_topology` 9 步，
+  **20.3 ms**，rel 1.08e-15。
+
+`--verbose true` 现在会额外打印实际加载的 pyqcd 版本与包路径
+（`pyqcd : 0.4.2  /home/zhangxin/PyQCD/pyqcd/__init__.py`）。这是为了对付
+"装的到底是哪个 pyqcd"——base 环境曾同时存在 `site-packages/pyqcd 0.1.3` 与仓库源码，
+在仓库目录外跑 `-m pyqcd.einsum.test` 会直接 `No module named`，而 verbose 一行
+就能看出用的是哪个。
+
 #### 测试不得假设"本机看不见 GPU"（2026-11-15 记录）
 
 `CUDA_VISIBLE_DEVICES=""` **只在 CUDA 运行时首次初始化前生效**。套件里只要有任何

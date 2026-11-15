@@ -303,6 +303,7 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     report["seconds"] = seconds
     report["actual_shape"] = list(np.shape(got_host))
     report["kernel_info"] = _kernel_info()
+    report["install"] = _install_info()
 
     # 参照
     if compare != "none":
@@ -404,6 +405,25 @@ def pe_contract(equation, operands, backend):
     return pe.contract(equation, *operands, backend=backend)
 
 
+def _install_info() -> dict[str, Any]:
+    """报告**实际被加载的** pyqcd 版本与包路径。
+
+    为什么需要它：``python -m pyqcd.einsum.test`` 用哪一个 pyqcd 由 ``sys.path``
+    决定，而 conda 环境里可能同时存在 ``site-packages/pyqcd``（旧版本普通安装）
+    与仓库源码。用户实际踩过：base 环境装的是 pyqcd 0.1.3，在仓库目录外运行
+    ``-m pyqcd.einsum.test`` 直接 ``No module named``。版本与路径打到 verbose 里，
+    这类问题一眼可见。
+    """
+    info: dict[str, Any] = {}
+    try:
+        import pyqcd
+        info["version"] = getattr(pyqcd, "__version__", "?")
+        info["package"] = pyqcd.__file__
+    except Exception as exc:                    # noqa: BLE001
+        info["error"] = f"{type(exc).__name__}: {exc}"
+    return info
+
+
 def _print_detail(report: dict[str, Any]) -> None:
     """``--verbose true`` 时的人类可读明细。"""
     out = sys.stderr
@@ -420,6 +440,10 @@ def _print_detail(report: dict[str, Any]) -> None:
         print(f"reference: {report['reference']}", file=out)
     if "rel" in report:
         print(f"rel      : {report['rel']:.3e}  (atol={report['atol']:g})", file=out)
+    install = report.get("install") or {}
+    if install.get("version"):
+        print(f"pyqcd    : {install['version']}  {install.get('package', '?')}",
+              file=out)
     if report.get("kernel_info"):
         print(f"kernel   : {report['kernel_info']}", file=out)
 

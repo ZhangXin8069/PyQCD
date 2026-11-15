@@ -1461,7 +1461,58 @@ def _isolated(test: Callable[[], None]) -> Callable[[], None]:
     return runner
 
 
+def test_appendix_equations_reach_the_v3_step_table():
+    """附录形态（动量标签打头，seq ≥ 2583）必须命中 v3 步表，而不是回落 v2。
+
+    回归点（2026-11-15）：编译表曾只含基础表 2582 条（``MAX_KERNELS``），附录
+    6056 条命中签名后 ``run_specialized`` 返回 miss、静默走 v2。现在
+    ``MAX_KERNELS = 8638``（= 整个语料），这些方程应当由 v3 执行。
+
+    判据用 ``LAST_INFO['path']``：附录格必须是 ``kupl_topology`` 且
+    ``specialized`` 为真。若有人把 ``MAX_KERNELS`` 改回 2582 并重生成步表，
+    本条立刻失败 —— 这是"扩表没被退回去"的保险丝。
+    """
+    _require_kupl()
+    from pyqcd.einsum import _bench_scene
+    from pyqcd.einsum.bench_specialized import _label_sizes
+    from pyqcd.testing._topology_kernel_gen import parse as parse_equation
+
+    #: 附录前两条（arity=6，单条 <50 ms），保证用例快速、可进常规套件。
+    cases = (2583, 2584)
+    table = _bench_scene.dims("distill")
+    checked = 0
+    for seq in cases:
+        task = tasklist.lookup(seq)
+        assert task is not None, seq
+        terms, _out = parse_equation(task.equation)
+        sizes = _label_sizes(terms, task.roles, table)
+        shapes = [tuple(sizes[ch] for ch in term) for term in terms]
+        rng = np.random.default_rng(seq)
+        operands = [
+            np.ascontiguousarray(
+                (rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+                .astype(np.complex128))
+            for shape in shapes]
+        _kernel_kupl.LAST_INFO.clear()
+        _kernel_kupl.LAST_FAILURE.update({"reason": "", "status": None})
+        result = _kernel_kupl.try_topology_apply(task.equation, operands)
+        if result is None:
+            raise AssertionError(
+                f"seq={seq}（附录）在扩表后应命中 v3，实际回落："
+                f"{_kernel_kupl.LAST_FAILURE.get('reason')}")
+        path = _kernel_kupl.LAST_INFO.get("path")
+        assert path == "kupl_topology", (seq, path)
+        assert _kernel_kupl.LAST_INFO.get("specialized") is True, seq
+        expected = np.einsum(task.equation, *operands, optimize="greedy")
+        scale = float(np.max(np.abs(expected))) or 1.0
+        error = float(np.max(np.abs(result - expected))) / scale
+        assert error <= 1e-9, (seq, error)
+        checked += 1
+    assert checked == len(cases), checked
+
+
 TESTS = tuple(_isolated(test) for test in (
+    test_appendix_equations_reach_the_v3_step_table,
     test_dtype_contract_is_uniform_across_all_four_dtypes,
     test_cuda_descriptor_reaches_the_step_table_for_high_arity,
     test_dtype_matrix_kupl,
