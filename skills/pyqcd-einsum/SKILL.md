@@ -263,11 +263,17 @@ numpy double contract  [('native', 'numpy', False, False)]
 | `[kernel: kupl_nucleon_2pt]` / `[kernel: kupl_3pt]` 等 | 实际跑的是分派顺序更靠前的形态专用 kernel，不是拓扑入口 |
 | `[plan-cache]` | 命中了形态但没有专用 kernel 成功执行：`out=` 非空、缺库/缺符号、操作数混合 dtype、计划超出 v2 单步 arity≤2 模型、或 kernel 内部报错；只复用计划，数值不变 |
 
-**v3 与 v2 必须分开统计（2026-11-15 起强制）**：`topology_kernels.inc` 只覆盖语料
-**基础表 2582 条**（`_topology_kernel_gen.MAX_KERNELS`），附录 6056 条不在表内。所以
-`try_topology_apply` 对附录方程会静默走 v2，而历史上它仍报 `path=kupl_topology`，
-导致 benchmark 把两类实现混在一起取中位。现在 `LAST_INFO` 增加 `specialized`，
-`path` 区分两个值；引用任何 topology 性能数字前先按 route 分组，否则结论不成立。
+**v3 与 v2 必须分开统计（2026-11-15 起强制）**：`topology_kernels.inc` **已于
+2026-11-15 扩到全语料 8638 条**（`_topology_kernel_gen.MAX_KERNELS = 8638`，
+基础表 2582 + 附录 6056）。在此之前的版本只含基础表，附录会静默走 v2 且仍报
+`path=kupl_topology`，导致 benchmark 把两类实现混在一起取中位 —— 那段历史数字
+（中位 4.89–8.18×）已作废。现在 `LAST_INFO` 带 `specialized`，`path` 区分
+`kupl_topology`（真 v3）与 `kupl_topology_v2`（回落）；引用任何 topology 性能数字
+前先按 route 分组。
+
+**步表以 gzip 入库**（`src/topology_kernels.inc.gz`，约 1.8 MB）：裸 `.inc` 是
+13.8 MB，超过本库 10 MB 单文件限制，而 `topology_apply.cpp` 无条件 include 它。
+`make.sh` 编译前自动解压；重新生成后用 `gzip -9 -c` 覆盖 `.gz`。
 
 复核方式：`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 看每次调用的标签；或先调用再读
 `_kernel_kupl.LAST_FAILURE`（**必须在调用之后读**，早读是上一次的残留值；且要按
@@ -317,8 +323,9 @@ numpy double contract  [('native', 'numpy', False, False)]
   反复建计划，单遍扫描耗时不能当稳态。
 - KUPL 拓扑入口走 **v3 步表**（真实逐轴长度 `label_sizes`，不要求等长超立方体）：
   生产 `distill` 档 `S1` 实测 153.04 ms（比 `opt_einsum:dp` 的 271.49 ms 快 1.8×）。
-  **注意**：`S1` 不在 2582 条基础表内，该数字实为 `kupl_topology_v2`（v2 通用
-  执行器），引用时必须标注 route。
+  **证明于 2582 条表时代**：`S1` 当时不在表内，该数字实为 `kupl_topology_v2`
+  （v2 通用执行器）。扩表后附录方程已进表，重测应得 `kupl_topology`；引用旧数字
+  时仍须标注它测的是 v2。
 - **收缩序已改为按生产尺寸定型**（2026-11-15，`plan_steps(equation, sizes)` +
   `optimize` 固定 `auto`）：抽样 21 条语料，MAC 中位改善 222×、最差 42738×，
   更优/持平/更差 = 17/4/0。

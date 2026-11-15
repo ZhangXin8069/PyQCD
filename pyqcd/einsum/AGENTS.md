@@ -373,9 +373,14 @@ seq=1700/2000 是 0.26–0.79×，其余 9 条是 2.0–4.7×（v3 慢于 dedica
 `topology-gemm-step batch=… M=… K=… N=… a=plain|trans|pack b=… path=direct|pack`
 （2026-11-15 起 `path` 变成三态 `direct|direct-a|direct-b|pack`，见第五处）。
 
-**这条路径在编译表里跑不到**：`topology_kernels.inc` 只含语料 seq 1..2582
-（`MAX_KERNELS`），其中 `batch_rank > 0` 的步为 **0**；全语料 121724 步里有 11858
-步带 batch，但都在 seq 2583 以后。因此批直连的正确性由两条互补证据给出：
+**编译表已扩到全语料（2026-11-15）**：`topology_kernels.inc` 现在含 **8638 条**
+（`MAX_KERNELS` = 基础表 2582 + 附录 6056），不再是 seq 1..2582。因此
+`batch_rank > 0` 的步（全语料 121724 步里 11858 步，全部在 seq ≥ 2583）**已经
+在表内可跑**——附录形态的 `count_batch` 正是 `Mom` 的幂（`distill_curr` 下
+seq=2591/3437 为 9、seq=2711 为 81，见 `_label_sizes_contract`）。
+
+扩表前的证据链仍保留如下，作为"与编译表无关"的独立验证（它手工编步表、不依赖
+`.inc`，所以即便表再变也不失效）：
 
 * `cpp/kupl/einsum/tests/topology_batch_direct.cpp`（dev-only 驱动，手工编单步 v3
   段，不需要编译表）：
@@ -602,3 +607,46 @@ CUDA 拓扑入口是**另一套实现**（`cpp/cuda/einsum/src/apply_contract.cu
 在二进制里算出生产尺寸的贪心序，把它从「只做判据」改成「直接作为执行序」是两行
 改动，可把被拒的 348 条也留在原生路径上（贪心序相对 auto 中位 0.99×）；是否改由
 后续单独决策。
+
+### 6.4 编译表扩到全语料 8638 条，步表以 gzip 入库（2026-11-15）
+
+`topology_kernels.inc` 此前只含**基础表 2582 条**（`MAX_KERNELS`），附录 6056 条
+（动量标签打头，如 `Mbd`/`Nfnp`）不在表内 —— 它们命中 `_topology_signature` 后
+`run_specialized` 返回 miss，静默回落 v2 通用执行器（route 记为
+`kupl_topology_v2`）。
+
+**改动**：`MAX_KERNELS` 2582 → 8638，`main()` 改用
+`_parse_equations(include_momentum=True)`；该函数默认仍只读基础表，加参数才追加
+文件末尾"动量指标与流分量指标"一节。实测 8638 条与 `_wick_tasklist` **逐条零失配**。
+`kTopoRecordOfEquation` 用 `uint16`，8638 < 65535 安全。
+
+**入库形式是 gzip**（`src/topology_kernels.inc.gz`，1794207 字节）。原因：裸 `.inc`
+是 13835244 字节，超过本库 10 MB 单文件限制（`form-large-files-check` 会拦截），
+而 `topology_apply.cpp` 无条件 `#include` 它 —— 裸检出必须能拿到，不能只依赖生成器。
+
+* `.gitignore` 只豁免 `src/topology_kernels.inc.gz` 这一条精确路径，裸 `.inc` 仍忽略；
+* `cpp/kupl/einsum/make.sh` 在编译前解压（仅当 `.inc` 缺失或比 `.gz` 旧），
+  解压结果与生成器输出 md5 一致（`b4e107ca…`）；裸检出实测打印
+  `unpacking topology_kernels.inc.gz` 后构建成功（34 s）；
+* 重新生成仍是 `python -m pyqcd.testing._topology_kernel_gen`（12 s / 8638 kernels /
+  2645582 步表字节），生成后需 `gzip -9 -c` 覆盖 `.inc.gz`。
+
+**收益（热态中位，distill，complex128；单次测量会被首调开销误导）**：
+
+| seq | arity | v3 | generic | 比值 |
+|---|---:|---:|---:|---:|
+| 2583 | 6 | 0.56 ms | 1.58 ms | **0.35×** |
+| 2584 | 6 | 4.05 ms | 8.26 ms | **0.49×** |
+| 3431 | 9 | 0.68 ms | 1.16 ms | **0.58×** |
+| 4301 | 9 | 0.70 ms | 1.18 ms | **0.59×** |
+
+即附录方程现在比 v2 回落路径快 1.7–2.9×。**但 dedicated 仍更快**（0.27–0.37 ms），
+与"常规规模走 dedicated"的既有结论一致 —— 扩表解决的是"附录根本没有 v3"，不是
+"v3 该取代 dedicated"。
+
+**注意单次测量的陷阱**：seq=2583 的**首次**调用是 45 ms（plan 缓存 + 签名哈希），
+而 generic 的 5 ms 是热路径；只测一次会得出"v3 慢 9×"的错误结论。任何对比都必须
+先丢弃一次 warmup 再取中位。
+
+**回归**：`python -B -m pyqcd.testing` → 128 passed / 1 skipped / 0 failed；
+`form-large-files-check` 通过（5 个暂存文件，无超限）。
