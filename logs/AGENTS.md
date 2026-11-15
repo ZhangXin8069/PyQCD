@@ -1050,3 +1050,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## release-dev60 - final - 2026-11-15 17:29:58 +0800
+- 主任务: 整理核查改动 + 更新性能文档 + 发布 dev60
+- 日志文件: logs/v2026111517.txt
+- 文件大小: 6093 bytes
+- 触发原因: 任务完成
+- 关键内容: 按 route 分组更正 topology 性能数据；128/1/0 全绿；提交 82641d51、push main、打并推 dev60，标签链 PASS
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
