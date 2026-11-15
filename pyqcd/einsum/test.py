@@ -354,6 +354,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "(no operands)",
         "zh": "（无操作数）",
     },
+    "detail.route_generic": {
+        "en": "generic (no native hit: Python steps / numpy.einsum / BLAS)",
+        "zh": "通用（无原生命中：Python 分步 / numpy.einsum / BLAS）",
+    },
+    "detail.route_specialized": {
+        "en": "specialized - native {symbol} (path={path})",
+        "zh": "特化 · 原生 {symbol}（path={path}）",
+    },
+    "detail.route_joiner": {
+        "en": " + ",
+        "zh": " + ",
+    },
     "detail.time": {
         "en": "{ms:.3f} ms (warmup={warmup}, rounds={rounds}, median)",
         "zh": "{ms:.3f} ms （warmup={warmup}，rounds={rounds}，中位）",
@@ -1388,6 +1400,56 @@ def _print_detail(report: dict[str, Any], language: str = "zh") -> None:
     if "kernel_info" in report:
         kernel = report["kernel_info"] or translate("detail.kernel_none", language)
         print(f"kernel   : {kernel}", file=out)
+        # 把"实际走的入口"单独拎成一行：``kernel`` 那个嵌套 dict 要读两层才看得懂，
+        # 而形态提示（``topology:xxxx``）说的是**形态**、不承诺本次走哪条入口。
+        # 这一行才是"到底跑了什么"的权威答案（2026-11-15 用户要求）。
+        route = _route_of(report.get("kernel_info"), language)
+        if route:
+            print(f"route    : {route}", file=out)
+
+
+def _route_of(kernel_info: Any, language: str = "zh") -> str:
+    """把 ``kernel_info`` 翻译成一句人话：**通用内核还是特化内核**，以及哪个原生入口。
+
+    用户要的是"到底跑了什么"，而 ``kernel`` 那个嵌套 dict 要读两层才看得懂，
+    形态提示（``topology:xxxx``）说的又是**形态**、不承诺本次走哪条入口。
+    这里按 ``LAST_INFO['path']`` 给出确定答案：
+
+    =========================  ========================  ==========================
+    ``path``                   执行层                     底层符号
+    =========================  ========================  ==========================
+    ``kupl_dedicated``         原生 · 特化（展开步表）    ``qcd_kupl_dedicated_apply``
+    ``kupl_topology``          原生 · 特化（v3 步表）     ``qcd_kupl_topology_apply``
+    ``kupl_topology_v2``       原生 · 特化（v2 回落）     ``qcd_kupl_topology_apply``
+    ``cuda_dedicated``         原生 · 特化（CUDA 步表）   ``qcd_cuda_dedicated_apply``
+    ``cuda_topology``          原生 · 特化（CUDA 拓扑）   ``qcd_cuda_topology_apply``
+    （无 path）                 通用（Python/numpy/BLAS）  ``numpy.einsum``/BLAS
+    =========================  ========================  ==========================
+
+    返回形如 ``特化 · 原生 qcd_kupl_dedicated_apply`` 或 ``通用（无原生命中）``。
+    """
+    if not isinstance(kernel_info, dict) or not kernel_info:
+        return translate("detail.route_generic", language)
+    native_symbols = {
+        "kupl_dedicated": "qcd_kupl_dedicated_apply",
+        "kupl_topology": "qcd_kupl_topology_apply",
+        "kupl_topology_v2": "qcd_kupl_topology_apply",
+        "cuda_dedicated": "qcd_cuda_dedicated_apply",
+        "cuda_topology": "qcd_cuda_topology_apply",
+    }
+    joiner = translate("detail.route_joiner", language)
+    labels: list[str] = []
+    for _backend, info in kernel_info.items():
+        path = info.get("path") if isinstance(info, dict) else info
+        if not path:
+            continue
+        symbol = native_symbols.get(str(path), str(path))
+        labels.append(translate("detail.route_specialized", language,
+                                symbol=symbol, path=path))
+    if not labels:
+        return translate("detail.route_generic", language)
+    return joiner.join(labels)
+    return "; ".join(labels) if labels else "通用（无原生命中）"
 
 
 # ── 语料反推（不写 --shape 时） ──────────────────────────────────────────────

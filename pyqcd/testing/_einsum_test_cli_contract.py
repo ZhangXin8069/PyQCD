@@ -580,6 +580,58 @@ def test_shape_spec_mismatches_are_usage_errors_not_crashes():
         assert code == 2, f"{spec} vs {equation} 的退出码应为 2，得到 {code}"
 
 
+def test_verbose_names_the_route_that_actually_ran():
+    """``--verbose`` 必须给出**实际执行入口**，且形态提示不得与它矛盾。
+
+    回归点（2026-11-15 用户实测）：提示行写
+    ``specialized path: topology:3fd782ac [kernel: kupl_dedicated] 真实语料拓扑
+    （整条计划交给原生拓扑入口；不支持时回落计划缓存）``——括号里是实际内核
+    ``kupl_dedicated``，文案却说"交给拓扑入口"。原因是
+    ``_specialized_kernel_attempts`` 先试 ``*_dedicated``、失败才试 ``*_topology``，
+    而形态条目的 ``note`` 是按形态写死的、不承诺本次走哪条。
+
+    本条锁两件事：①``route`` 行列出了实际 path；②形态提示不再声称"整条计划
+    交给原生拓扑入口"这种与 dedicated 命中相矛盾的说法。
+    """
+    import contextlib
+    import io
+
+    from pyqcd.einsum import _specialize
+    from pyqcd.einsum import test as cli
+
+    # 1) 形态条目文案必须与"先 dedicated 后 topology"的实际顺序一致。
+    entry = _specialize._topology_entry("0" * 32)
+    note = entry.get("note", "")
+    assert "拓扑入口" not in note or "dedicated" in note, (
+        f"形态文案仍宣称走拓扑入口、与实际顺序矛盾：{note!r}")
+    assert entry.get("name", "").startswith("topology:"), entry
+
+    # 2) route 行必须报出实际 path。
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        code = cli.main([
+            "--equation", "cqdr,eafb,mknl,oupv,igjh,wsxt,ac,mo,gi,kq,uw,bd,fnp,hj,lrt,vx->es",
+            "--shape", "[4,4,9,9], [100,4,9,9], [4,4,9,9], [4,4,100,9], [4,4,9,9], "
+                       "[4,100,9,100], [4,4], [4,4], [4,4], [4,4], [4,4], [9,9], "
+                       "[9,9,100], [9,9], [9,9,100], [9,9]",
+            "--device", "cpu", "--backend", "auto", "--dtype", "complex128",
+            "--compare", "none", "--rounds", "1", "--warmup", "1",
+            "--verbose", "true", "--specialize", "true",
+        ])
+    text = err.getvalue()
+    assert code == 0, f"应当通过，得到 {code}：{text}"
+    routes = [ln for ln in text.splitlines() if ln.startswith("route    :")]
+    assert routes, f"缺少 route 行：{text}"
+    # 必须点名**特化 + 原生符号**，让人一眼看出不是通用内核。
+    assert "qcd_kupl_dedicated_apply" in routes[0] or \
+        "qcd_kupl_topology_apply" in routes[0], f"route 应给出原生符号：{routes[0]}"
+    assert "特化" in routes[0], f"route 应标明是特化内核：{routes[0]}"
+    # 通用路径必须明确说"通用"，不能留空或含糊。
+    from pyqcd.einsum.test import _route_of
+    assert "通用" in _route_of({}), _route_of({})
+    assert "generic" in _route_of({}, "en"), _route_of({}, "en")
+
+
 def test_help_lists_specialize_and_verbose_reports_it():
     """``--help`` 是用户唯一权威来源：缺省值表必须有 ``--specialize``。
 
@@ -1075,6 +1127,7 @@ TESTS = (
     test_verbose_lists_every_operand_shape,
     test_shape_spec_without_arrow_derives_the_output_from_the_equation,
     test_shape_spec_mismatches_are_usage_errors_not_crashes,
+    test_verbose_names_the_route_that_actually_ran,
     test_help_lists_specialize_and_verbose_reports_it,
     test_compare_optimize_default_reproduces_the_old_reference_behaviour,
     test_compare_optimize_dp_reaches_the_opt_einsum_reference,

@@ -234,7 +234,14 @@ def _topology_entry(digest: str) -> Entry:
         entry = {
             "name": "topology:" + digest[:8],
             "kind": "kernel(topology)",
-            "note": "真实语料拓扑（整条计划交给原生拓扑入口；不支持时回落计划缓存）",
+            # 这句是**形态级**说明，不承诺本次实际走哪条入口：同一形态下
+            # `_specialized_kernel_attempts` 会先试 `*_dedicated`、失败才试
+            # `*_topology`（见 `_api.py`）。原先写"整条计划交给原生拓扑入口"，
+            # 于是在 dedicated 命中时提示与实际执行矛盾（2026-11-15 用户实测：
+            # 提示说拓扑入口，`kernel` 行却是 `kupl_dedicated`）。
+            # 实际路线一律以 `kernel` 行 / `LAST_INFO['path']` 为准。
+            "note": "真实语料形态（先试展开式 dedicated 步表，不行再试 v3 拓扑步表；"
+                    "实际走的入口见 kernel 行）",
             "kernels": ("kupl_topology", "cuda_topology"),
             "subscripts": "",
         }
