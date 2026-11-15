@@ -38,14 +38,26 @@ description: Use when implementing, debugging, or benchmarking pyqcd.einsum agai
 | 入口 | 位置 | 做什么 | 随 pip 发布 |
 |---|---|---|---|
 | `python -m pyqcd.einsum.verify_specialized "<eq>"` | 生产包 | **纯查询**：命中与否、拓扑签名/摘要、声明内核、语料出处（seq/T 号/角色） | 是 |
-| **`python -m pyqcd.einsum.test`** | **生产包** | **单方程数值验证 + 计时**（见下节，日后默认规范端） | 是 |
+| **`python -m pyqcd.einsum.test`** | **生产包** | **单方程验证 + 计时（唯一合法入口）** | 是 |
 | `python -m pyqcd.testing.einsum.verify_specialized "<eq>"` | 测试包 | **数值验证**：实际跑 contract，比对参考、判是否真跑原生内核、计时 | 否（`MANIFEST.in` `prune pyqcd/testing`） |
 
-## 单方程快捷验证 `python -m pyqcd.einsum.test`（2026-11-15，**日后默认规范端**）
+## 单方程测试的唯一接口 `python -m pyqcd.einsum.test`（2026-11-15，**强制**）
 
-凡"这条方程、这组形状、这个 dtype、这块设备算得对不对、多快"的验证，**一律走这个
-入口**，不要在 `testing/` 或 `/tmp` 里另写临时脚本。临时脚本的通病是 warmup、
-容差口径、参照实现各写各的，结论无法互相比对。
+> ⛔ **硬性规定**：`qcd-einsum` 的**单方程验证 / 复现 / 性能对比**只有这一个合法入口。
+> **禁止**新增 `/tmp/*.py`、scratchpad 脚本、一次性 `python -c`、或
+> `pyqcd/testing/` 下的临时脚本替代它。违反者的验证结论**不予采信**，不得写进报告、
+> 文档或 tag 消息。
+
+唯一例外是整库回归 `python -m pyqcd.testing`——它答"整库有没有退化"，本入口答
+"这一条方程对不对、多快"。**除此之外没有第三个入口。**
+
+强制理由（三次实测教训，不是形式主义）：
+
+| 教训 | 实测 |
+|---|---|
+| warmup 口径不一 | 临时脚本普遍测单次；首调含 plan 缓存 + 原生库绑定 + JIT，seq=2583 首调 45 ms vs 热态 0.56 ms（**80×**） |
+| 容差口径不一 | `np.allclose` 的逐元素绝对阈值误判近零元素；本入口统一相对容差（按 `max\|expected\|` 归一） |
+| 参照不固定 | 有人比 `np.einsum`、有人比 `opt_einsum`、有人不比，结论无法互比 |
 
 ```bash
 python -m pyqcd.einsum.test --help      # 全部选项与缺省值，以 --help 为准

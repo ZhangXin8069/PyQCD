@@ -224,6 +224,39 @@ def test_reference_seconds_are_reported():
     assert plain.get("reference_seconds") is None, plain
 
 
+def test_single_entry_point_policy_is_declared_everywhere():
+    """`python -m pyqcd.einsum.test` 是**唯一合法**的单方程测试入口，三处声明必须一致。
+
+    这条规定（2026-11-15）要求同时落在：模块 docstring、`--help` 描述、
+    `pyqcd/einsum/AGENTS.md` 与 `skills/pyqcd-einsum/SKILL.md`。任一处被删掉或
+    改回建议性语气（"日后默认"之类）就说明规范被弱化，本契约失败。
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+
+    # 1) 模块 docstring
+    doc = cli.__doc__ or ""
+    assert "唯一合法接口" in doc, doc[:200]
+    assert "强制" in doc, doc[:200]
+    for forbidden in ("日后默认", "建议使用", "可选入口"):
+        assert forbidden not in doc, f"docstring 里残留弱化措辞 {forbidden!r}"
+
+    # 2) --help 描述
+    help_text = cli.build_parser().format_help()
+    assert "唯一合法接口" in help_text, help_text[:400]
+    assert "禁止" in help_text, help_text[:400]
+
+    # 3) 两份文档
+    for relative in ("pyqcd/einsum/AGENTS.md", "skills/pyqcd-einsum/SKILL.md"):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "python -m pyqcd.einsum.test" in text, relative
+        assert "强制" in text, relative
+        assert "唯一" in text, relative
+        # 规范一旦被降级成"日后默认/建议"，就失去约束力
+        assert "日后默认规范端" not in text, relative
+
+
 def test_help_lists_every_option_with_defaults():
     """``--help`` 必须能跑，且列出全部选项（它是用户唯一的规范来源）。"""
     parser = cli.build_parser()
@@ -261,6 +294,7 @@ TESTS = (
     test_exit_codes_distinguish_usage_from_numeric_failure,
     test_memory_snapshot_is_outside_the_timed_region,
     test_reference_seconds_are_reported,
+    test_single_entry_point_policy_is_declared_everywhere,
     test_help_lists_every_option_with_defaults,
     test_run_end_to_end_on_cpu,
 )

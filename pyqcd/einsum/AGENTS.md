@@ -230,10 +230,24 @@ void applyEndQcd(long long set_ptrs, long long params);
 
 ## 9. 当前验证入口
 
-### 9.0 单方程快捷验证 —— **日后默认的测试规范端**
+### 9.0 单方程测试的唯一接口：`python -m pyqcd.einsum.test`（强制）
+
+> **硬性规定（2026-11-15 起）**：`qcd-einsum` 的**单方程验证/复现/性能对比**只有
+> 一个合法入口 —— `python -m pyqcd.einsum.test`。
+> 不得新增 `/tmp/*.py`、`scratchpad/*.py`、一次性 `python -c`、或
+> `pyqcd/testing/` 下的临时脚本去替代它。违反此规定的验证结论**不予采信**，
+> 也不得写进报告、文档或 tag 消息。
+
+强制的原因不是形式主义，是三次实测教训：
+
+1. **warmup 口径不一**：临时脚本普遍测单次，而首调含 plan 缓存 + 原生库绑定 + JIT，
+   实测 seq=2583 首调 45 ms vs 热态 0.56 ms（**80×**），单次测量完全失真。
+2. **容差口径不一**：`np.allclose` 的逐元素绝对阈值会误判接近零的元素；本入口统一用
+   相对容差（按 `max|expected|` 归一）。
+3. **参照不固定**：有人比 `np.einsum`、有人比 `opt_einsum`、有人不比，结论无法互比。
 
 ```bash
-python -m pyqcd.einsum.test --help      # 全部选项与缺省值
+python -m pyqcd.einsum.test --help      # 全部选项与缺省值（唯一权威来源）
 
 python -m pyqcd.einsum.test --device gpu --dtype complex128 \
     --equation 'ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak' \
@@ -241,9 +255,16 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
     --atol 1e-12 --backend cupy --verbose true --compare opt_einsum
 ```
 
-**这是"单条方程、这组形状、这个 dtype、这块设备，算得对不对、多快"的唯一规范端。**
-此前这类验证靠临时脚本，warmup/容差/参照各写各的，结论无法互比。以后新增的
-单方程验证一律走它，不要在 `testing/` 里另立临时脚本。
+**唯一例外**：整库回归仍用 `python -m pyqcd.testing`（它答"整库有没有退化"，
+本入口答"这一条方程对不对、多快"）。两者互补，不可互相替代；除此之外没有第三个入口。
+
+**违规如何被发现**：本规定由契约
+`pyqcd/testing/_einsum_test_cli_contract.py` 护航（形状解析、参数校验、相对容差口径、
+缺省值、`--help` 完整性、退出码语义、内存采样不在计时循环内）。新增/修改本入口必须
+同步该契约，否则套件红。
+
+**“这是唯一规范端”的意义**：本入口是"单条方程、这组形状、这个 dtype、这块设备，
+算得对不对、多快"的唯一规范端——不要再另立第二套口径。
 
 缺省值（`--help` 同源）：
 
