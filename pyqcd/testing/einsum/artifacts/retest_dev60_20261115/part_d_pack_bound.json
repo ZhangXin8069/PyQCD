@@ -1,0 +1,380 @@
+{
+ "kupl_lib": "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/dev60lib/cpp/kupl/einsum/build/libpyqcdeinsum_kupl.so",
+ "heavy_bytes": 1073741824,
+ "heavy_flops": 1000000000,
+ "trace": [
+  {
+   "seq": 3,
+   "dtype": "complex128",
+   "steps_python": 6,
+   "steps_native": 6,
+   "rows_matching": 6,
+   "native_paths": [
+    "direct-a",
+    "direct-b",
+    "direct",
+    "direct",
+    "pack",
+    "pack"
+   ],
+   "python_paths": [
+    "direct-a",
+    "direct-b",
+    "direct",
+    "direct",
+    "pack",
+    "pack"
+   ],
+   "native_ab": [
+    [
+     "plain",
+     "pack"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ]
+   ],
+   "python_ab": [
+    [
+     "plain",
+     "pack"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ]
+   ]
+  },
+  {
+   "seq": 855,
+   "dtype": "complex128",
+   "steps_python": 9,
+   "steps_native": 9,
+   "rows_matching": 9,
+   "native_paths": [
+    "direct",
+    "direct-a",
+    "direct-b",
+    "pack",
+    "direct-a",
+    "direct",
+    "direct",
+    "direct-a",
+    "pack"
+   ],
+   "python_paths": [
+    "direct",
+    "direct-a",
+    "direct-b",
+    "pack",
+    "direct-a",
+    "direct",
+    "direct",
+    "direct-a",
+    "pack"
+   ],
+   "native_ab": [
+    [
+     "trans",
+     "plain"
+    ],
+    [
+     "plain",
+     "pack"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "trans",
+     "pack"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "plain",
+     "plain"
+    ],
+    [
+     "trans",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ]
+   ],
+   "python_ab": [
+    [
+     "trans",
+     "plain"
+    ],
+    [
+     "plain",
+     "pack"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "trans",
+     "pack"
+    ],
+    [
+     "plain",
+     "trans"
+    ],
+    [
+     "plain",
+     "plain"
+    ],
+    [
+     "trans",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ]
+   ]
+  },
+  {
+   "seq": 2,
+   "dtype": "complex128",
+   "steps_python": 5,
+   "steps_native": 5,
+   "rows_matching": 5,
+   "native_paths": [
+    "direct",
+    "direct-b",
+    "pack",
+    "pack",
+    "direct"
+   ],
+   "python_paths": [
+    "direct",
+    "direct-b",
+    "pack",
+    "pack",
+    "direct"
+   ],
+   "native_ab": [
+    [
+     "plain",
+     "plain"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "plain",
+     "plain"
+    ]
+   ],
+   "python_ab": [
+    [
+     "plain",
+     "plain"
+    ],
+    [
+     "pack",
+     "plain"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "pack",
+     "pack"
+    ],
+    [
+     "plain",
+     "plain"
+    ]
+   ]
+  }
+ ],
+ "guard_seq129": [
+  {
+   "seq": 129,
+   "dtype": "complex128",
+   "itemsize": 16,
+   "per_side_bytes": 3456077824,
+   "both_sides_bytes": 3462547968,
+   "flops": 216326912,
+   "guard_reason": "pack-bound on CPU (3456077824 pack bytes, 216326912 FLOPs): the layout traffic dominates the arithmetic; the generic path handles it",
+   "per_side_over_limit": true,
+   "both_sides_over_limit": true,
+   "dispatched": false,
+   "path": null
+  },
+  {
+   "seq": 129,
+   "dtype": "complex64",
+   "itemsize": 8,
+   "per_side_bytes": 1728038912,
+   "both_sides_bytes": 1731273984,
+   "flops": 216326912,
+   "guard_reason": "pack-bound on CPU (1728038912 pack bytes, 216326912 FLOPs): the layout traffic dominates the arithmetic; the generic path handles it",
+   "per_side_over_limit": true,
+   "both_sides_over_limit": true,
+   "dispatched": false,
+   "path": null
+  },
+  {
+   "seq": 129,
+   "dtype": "float64",
+   "itemsize": 8,
+   "per_side_bytes": 1728038912,
+   "both_sides_bytes": 1731273984,
+   "flops": 216326912,
+   "guard_reason": "pack-bound on CPU (1728038912 pack bytes, 216326912 FLOPs): the layout traffic dominates the arithmetic; the generic path handles it",
+   "per_side_over_limit": true,
+   "both_sides_over_limit": true,
+   "dispatched": false,
+   "path": null
+  },
+  {
+   "seq": 129,
+   "dtype": "float32",
+   "itemsize": 4,
+   "per_side_bytes": 864019456,
+   "both_sides_bytes": 865636992,
+   "flops": 216326912,
+   "guard_reason": null,
+   "per_side_over_limit": false,
+   "both_sides_over_limit": false,
+   "dispatched": false,
+   "path": null
+  }
+ ],
+ "per_side_vs_both_sides": [
+  {
+   "seq": 1,
+   "per_side_bytes": 1088,
+   "both_sides_bytes": 2400,
+   "flops": 70,
+   "steps": 5,
+   "direct_steps": 1
+  },
+  {
+   "seq": 3,
+   "per_side_bytes": 359936,
+   "both_sides_bytes": 130953984,
+   "flops": 8163456,
+   "steps": 6,
+   "direct_steps": 2
+  },
+  {
+   "seq": 9,
+   "per_side_bytes": 2910400,
+   "both_sides_bytes": 134130816,
+   "flops": 16103526,
+   "steps": 12,
+   "direct_steps": 4
+  },
+  {
+   "seq": 849,
+   "per_side_bytes": 1632,
+   "both_sides_bytes": 3648,
+   "flops": 106,
+   "steps": 8,
+   "direct_steps": 2
+  },
+  {
+   "seq": 855,
+   "per_side_bytes": 411168,
+   "both_sides_bytes": 1778016,
+   "flops": 168288,
+   "steps": 9,
+   "direct_steps": 3
+  },
+  {
+   "seq": 1599,
+   "per_side_bytes": 2176,
+   "both_sides_bytes": 4896,
+   "flops": 142,
+   "steps": 11,
+   "direct_steps": 3
+  },
+  {
+   "seq": 1863,
+   "per_side_bytes": 450624,
+   "both_sides_bytes": 2498016,
+   "flops": 198018,
+   "steps": 15,
+   "direct_steps": 3
+  },
+  {
+   "seq": 2000,
+   "per_side_bytes": 129012800,
+   "both_sides_bytes": 132930528,
+   "flops": 8230146,
+   "steps": 15,
+   "direct_steps": 6
+  },
+  {
+   "seq": 2582,
+   "per_side_bytes": 424992,
+   "both_sides_bytes": 3112416,
+   "flops": 217218,
+   "steps": 15,
+   "direct_steps": 4
+  }
+ ]
+}

@@ -1,0 +1,27 @@
+== C1 高元数 topology 命中与对拍 ==
+  seq=3     arity= 7 complex128  path=cuda_topology  rel=8.253e-16 
+  seq=3     arity= 7 complex64   path=cuda_topology  rel=4.569e-07 
+  seq=849   arity= 9 complex128  path=cuda_topology  rel=6.716e-16 
+  seq=849   arity= 9 complex64   path=cuda_topology  rel=7.211e-08 
+  seq=855   arity=10 complex128  path=None           rel=declined status=4 topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)
+  seq=855   arity=10 complex64   path=None           rel=declined status=4 topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)
+  seq=9     arity=13 complex128  path=cuda_topology  rel=7.787e-16 
+  seq=9     arity=13 complex64   path=cuda_topology  rel=4.407e-07 
+  seq=1599  arity=12 complex128  path=cuda_topology  rel=5.136e-16 
+  seq=1599  arity=12 complex64   path=cuda_topology  rel=1.893e-07 
+  seq=1863  arity=16 complex128  path=None           rel=declined status=4 topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)
+  seq=1863  arity=16 complex64   path=None           rel=declined status=4 topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)
+
+== C2 收缩序守卫（表内最大/最小 ratio 各 2 条）==
+  seq=9     arity=13 table_ratio=0.528046   vs_greedy=1.042      measured=accepted status=None agrees=True
+  seq=15    arity=13 table_ratio=0.528046   vs_greedy=1.042      measured=accepted status=None agrees=True
+  seq=630   arity=14 table_ratio=38104      vs_greedy=3.81e+04   measured=rejected status=4 agrees=True
+  seq=654   arity=14 table_ratio=38104      vs_greedy=3.81e+04   measured=rejected status=4 agrees=True
+
+== C3 三路径耗时（生产口径）==
+  seq=1     distill      arity= 6 in=    0.0MiB generic=    0.705ms dedicated=0.411ms topology=1.168ms path=cuda_topology
+  seq=855   distill      arity=10 in=    0.6MiB generic=    1.984ms dedicated=0.506ms topology=0.275ms path=None
+  seq=1863  distill      arity=16 in=    0.7MiB generic=    3.444ms dedicated=1.464ms topology=0.254ms path=None
+  seq=1     distill_curr arity= 6 in=    0.0MiB generic=    0.947ms dedicated=0.303ms topology=1.002ms path=cuda_topology
+
+wrote pyqcd/testing/einsum/artifacts/retest_dev60_20261115/part_c_cuda_v100.json

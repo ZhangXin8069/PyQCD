@@ -1,0 +1,13 @@
+== C1 高元数 topology 命中与对拍 ==
+
+== C2 收缩序守卫（表内最大/最小 ratio 各 2 条）==
+
+== C3 三路径耗时（生产口径）==
+  seq=1     distill      arity= 6 in=    0.0MiB generic=    0.716ms dedicated=0.362ms topology=1.141ms path=cuda_topology
+  seq=849   distill      arity= 9 in=    0.0MiB generic=    1.058ms dedicated=0.483ms topology=1.115ms path=cuda_topology
+  seq=1599  distill      arity=12 in=    0.0MiB generic=    1.592ms dedicated=0.49ms topology=1.291ms path=cuda_topology
+  seq=9     distill      arity=13 in=   61.0MiB generic=    2.294ms dedicated=0.916ms topology=1.69ms path=cuda_topology
+  seq=855   distill      arity=10 in=    0.6MiB generic=    1.938ms dedicated=0.545ms topology=Nonems path=None
+  seq=9     distill_curr arity=13 in=  976.6MiB generic=    5.249ms dedicated=5.706ms topology=6.945ms path=cuda_topology
+
+wrote pyqcd/testing/einsum/artifacts/retest_dev60_20261115/part_c_cuda_v100_c3.json

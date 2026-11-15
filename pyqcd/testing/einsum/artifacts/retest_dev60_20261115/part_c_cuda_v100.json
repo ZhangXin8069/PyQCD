@@ -1,0 +1,309 @@
+{
+ "device": "Tesla V100-SXM2-32GB",
+ "sections": {
+  "c1_high_arity": [
+   {
+    "seq": 3,
+    "arity": 7,
+    "dtype": "complex128",
+    "input_mib": 61.05,
+    "path": "cuda_topology",
+    "cuda_steps": 6,
+    "rel": 8.253e-16,
+    "within_tolerance": true,
+    "out_shape": [
+     100,
+     100
+    ]
+   },
+   {
+    "seq": 3,
+    "arity": 7,
+    "dtype": "complex64",
+    "input_mib": 30.52,
+    "path": "cuda_topology",
+    "cuda_steps": 6,
+    "rel": 4.569e-07,
+    "within_tolerance": true,
+    "out_shape": [
+     100,
+     100
+    ]
+   },
+   {
+    "seq": 849,
+    "arity": 9,
+    "dtype": "complex128",
+    "input_mib": 0.0,
+    "path": "cuda_topology",
+    "cuda_steps": 8,
+    "rel": 6.716e-16,
+    "within_tolerance": true,
+    "out_shape": []
+   },
+   {
+    "seq": 849,
+    "arity": 9,
+    "dtype": "complex64",
+    "input_mib": 0.0,
+    "path": "cuda_topology",
+    "cuda_steps": 8,
+    "rel": 7.211e-08,
+    "within_tolerance": true,
+    "out_shape": []
+   },
+   {
+    "seq": 855,
+    "arity": 10,
+    "dtype": "complex128",
+    "input_mib": 0.64,
+    "path": null,
+    "cuda_steps": null,
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)"
+   },
+   {
+    "seq": 855,
+    "arity": 10,
+    "dtype": "complex64",
+    "input_mib": 0.32,
+    "path": null,
+    "cuda_steps": null,
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)"
+   },
+   {
+    "seq": 9,
+    "arity": 13,
+    "dtype": "complex128",
+    "input_mib": 61.05,
+    "path": "cuda_topology",
+    "cuda_steps": 12,
+    "rel": 7.787e-16,
+    "within_tolerance": true,
+    "out_shape": [
+     100,
+     100
+    ]
+   },
+   {
+    "seq": 9,
+    "arity": 13,
+    "dtype": "complex64",
+    "input_mib": 30.52,
+    "path": "cuda_topology",
+    "cuda_steps": 12,
+    "rel": 4.407e-07,
+    "within_tolerance": true,
+    "out_shape": [
+     100,
+     100
+    ]
+   },
+   {
+    "seq": 1599,
+    "arity": 12,
+    "dtype": "complex128",
+    "input_mib": 0.0,
+    "path": "cuda_topology",
+    "cuda_steps": 11,
+    "rel": 5.136e-16,
+    "within_tolerance": true,
+    "out_shape": []
+   },
+   {
+    "seq": 1599,
+    "arity": 12,
+    "dtype": "complex64",
+    "input_mib": 0.0,
+    "path": "cuda_topology",
+    "cuda_steps": 11,
+    "rel": 1.893e-07,
+    "within_tolerance": true,
+    "out_shape": []
+   },
+   {
+    "seq": 1863,
+    "arity": 16,
+    "dtype": "complex128",
+    "input_mib": 0.65,
+    "path": null,
+    "cuda_steps": null,
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)"
+   },
+   {
+    "seq": 1863,
+    "arity": 16,
+    "dtype": "complex64",
+    "input_mib": 0.32,
+    "path": null,
+    "cuda_steps": null,
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)"
+   }
+  ],
+  "c2_order_guard": [
+   {
+    "seq": 9,
+    "arity": 13,
+    "table_ratio": 0.528046,
+    "ratio_vs_greedy": 1.0416289073955254,
+    "table_mac": 4251699,
+    "greedy_mac": 4081779,
+    "equation": "cadb,egfh,minj,okpl,sqtr,ac,mo,gi,qs,bd,fnp,hjl,rt->ek",
+    "measured": "accepted",
+    "status": null,
+    "reason": null,
+    "guard_expectation": "accept",
+    "agrees": true,
+    "rel": 6.09e-16
+   },
+   {
+    "seq": 15,
+    "arity": 13,
+    "table_ratio": 0.528046,
+    "ratio_vs_greedy": 1.0416289073955254,
+    "table_mac": 4251699,
+    "greedy_mac": 4081779,
+    "equation": "cadb,eifj,mgnh,okpl,sqtr,ac,mo,gi,qs,bd,fnp,hjl,rt->ek",
+    "measured": "accepted",
+    "status": null,
+    "reason": null,
+    "guard_expectation": "accept",
+    "agrees": true,
+    "rel": 5.543e-16
+   },
+   {
+    "seq": 630,
+    "arity": 14,
+    "table_ratio": 38104.0,
+    "ratio_vs_greedy": 38104.03124552737,
+    "table_mac": 4004108168128,
+    "greedy_mac": 105083584,
+    "equation": "aubv,cidj,ewfx,mqnr,ospt,gkhl,ce,og,ik,su,bdf,nph,jlr,tvx->awmq",
+    "measured": "rejected",
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as ",
+    "guard_expectation": "reject",
+    "agrees": true
+   },
+   {
+    "seq": 654,
+    "arity": 14,
+    "table_ratio": 38104.0,
+    "ratio_vs_greedy": 38104.03124552737,
+    "table_mac": 4004108168128,
+    "greedy_mac": 105083584,
+    "equation": "aubv,ckdl,ewfx,mqnr,ospt,gihj,ce,og,ik,su,bdf,nph,jlr,tvx->awmq",
+    "measured": "rejected",
+    "status": 4,
+    "reason": "topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with status 4 (plan not executable as ",
+    "guard_expectation": "reject",
+    "agrees": true
+   }
+  ],
+  "c3_three_paths": [
+   {
+    "seq": 1,
+    "scene": "distill",
+    "arity": 6,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.0,
+    "generic_ms": 0.705,
+    "dedicated_ms": 0.411,
+    "topology_ms": 1.168,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": "cuda_topology",
+    "dedicated_declined": null,
+    "topology_declined": null,
+    "dedicated_over_generic": 0.582,
+    "topology_over_dedicated": 2.846,
+    "topology_over_generic": 1.656,
+    "topology_rel": 3.687e-16,
+    "dedicated_rel": 1.008e-15
+   },
+   {
+    "seq": 855,
+    "scene": "distill",
+    "arity": 10,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.64,
+    "generic_ms": 1.984,
+    "dedicated_ms": 0.506,
+    "topology_ms": 0.275,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": null,
+    "dedicated_declined": null,
+    "topology_declined": "negative-cache hit: topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with sta",
+    "dedicated_over_generic": 0.255,
+    "topology_over_dedicated": 0.545,
+    "topology_over_generic": 0.139,
+    "dedicated_rel": 6.882e-16
+   },
+   {
+    "seq": 1863,
+    "scene": "distill",
+    "arity": 16,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 100,
+     "Ns": 4,
+     "Mom": 1
+    },
+    "input_mib": 0.65,
+    "generic_ms": 3.444,
+    "dedicated_ms": 1.464,
+    "topology_ms": 0.254,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": null,
+    "dedicated_declined": null,
+    "topology_declined": "negative-cache hit: topology execution unavailable: NativeUnavailable: qcd_cuda_topology_apply failed with sta",
+    "dedicated_over_generic": 0.425,
+    "topology_over_dedicated": 0.174,
+    "topology_over_generic": 0.074,
+    "dedicated_rel": 8.592e-16
+   },
+   {
+    "seq": 1,
+    "scene": "distill_curr",
+    "arity": 6,
+    "dtype": "complex128",
+    "dims": {
+     "Nev": 400,
+     "Ns": 4,
+     "Mom": 9
+    },
+    "input_mib": 0.01,
+    "generic_ms": 0.947,
+    "dedicated_ms": 0.303,
+    "topology_ms": 1.002,
+    "dedicated_path": "cuda_dedicated",
+    "topology_path": "cuda_topology",
+    "dedicated_declined": null,
+    "topology_declined": null,
+    "dedicated_over_generic": 0.32,
+    "topology_over_dedicated": 3.305,
+    "topology_over_generic": 1.058,
+    "topology_rel": 1.904e-16,
+    "dedicated_rel": 1.904e-16
+   }
+  ]
+ },
+ "dtypes_enabled": [
+  "complex128",
+  "complex64",
+  "float64",
+  "float32"
+ ]
+}

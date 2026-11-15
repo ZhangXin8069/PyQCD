@@ -1,0 +1,25 @@
+== D1 逐 step 布局与原生 trace 对账（生产 distill 尺寸）==
+  seq=3    steps=6/6 逐行一致 6/6 path 序列 一致
+  seq=855  steps=9/9 逐行一致 9/9 path 序列 一致
+  seq=2    steps=5/5 逐行一致 5/5 path 序列 一致
+
+== D2 守卫记账：逐侧 vs 两侧上界（seq=129, distill）==
+
+  seq  dtype       itemsize  逐侧字节   两侧口径字节   FLOPs        守卫结论
+  129  complex128      16   3456077824    3462547968    216326912  declined (dispatched=False)
+  129  complex64        8   1728038912    1731273984    216326912  declined (dispatched=False)
+  129  float64          8   1728038912    1731273984    216326912  declined (dispatched=False)
+  129  float32          4    864019456     865636992    216326912  passed (dispatched=False)
+
+== D3 逐侧 vs 两侧上界的记账差（complex128, distill）==
+  seq=1     steps= 5 全直连步= 1 逐侧=      1088 两侧=      2400 差=2.206x
+  seq=3     steps= 6 全直连步= 2 逐侧=    359936 两侧= 130953984 差=363.826x
+  seq=9     steps=12 全直连步= 4 逐侧=   2910400 两侧= 134130816 差=46.087x
+  seq=849   steps= 8 全直连步= 2 逐侧=      1632 两侧=      3648 差=2.235x
+  seq=855   steps= 9 全直连步= 3 逐侧=    411168 两侧=   1778016 差=4.324x
+  seq=1599  steps=11 全直连步= 3 逐侧=      2176 两侧=      4896 差=2.250x
+  seq=1863  steps=15 全直连步= 3 逐侧=    450624 两侧=   2498016 差=5.543x
+  seq=2000  steps=15 全直连步= 6 逐侧= 129012800 两侧= 132930528 差=1.030x
+  seq=2582  steps=15 全直连步= 4 逐侧=    424992 两侧=   3112416 差=7.323x
+
+wrote pyqcd/testing/einsum/artifacts/retest_dev60_20261115/part_d_pack_bound.json

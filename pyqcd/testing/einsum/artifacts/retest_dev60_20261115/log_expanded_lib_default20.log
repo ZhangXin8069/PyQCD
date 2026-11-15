@@ -1,0 +1,103 @@
+complex128  seq=1     arity= 6 path=kupl_topology     ms=   15.867
+complex128  seq=3     arity= 7 path=kupl_topology     ms=    9.451
+complex128  seq=9     arity=13 path=kupl_topology     ms=    6.829
+complex128  seq=129   arity=14 path=None              ms=    2.389  status=4 topology declined: pack-bound on CPU (3456077824 pack bytes,
+complex128  seq=849   arity= 9 path=kupl_topology     ms=    1.422
+complex128  seq=855   arity=10 path=kupl_topology     ms=    2.212
+complex128  seq=1599  arity=12 path=kupl_topology     ms=    1.884
+complex128  seq=2583  arity= 6 path=kupl_topology     ms=    2.283
+complex128  seq=2591  arity=13 path=kupl_topology     ms=18227.638
+complex128  seq=3431  arity= 9 path=kupl_topology     ms=    2.061
+complex128  seq=3461  arity=16 path=kupl_topology     ms=  432.153
+complex128  seq=4301  arity= 9 path=kupl_topology     ms=    2.154
+complex128  seq=4331  arity=16 path=kupl_topology     ms=  996.150
+complex128  seq=5051  arity=13 path=kupl_topology     ms=  672.710
+complex128  seq=6911  arity=12 path=kupl_topology     ms=    2.490
+complex128  seq=6935  arity=13 path=kupl_topology     ms=   20.832
+complex128  seq=7055  arity=16 path=kupl_topology     ms=    7.707
+complex128  seq=7775  arity=12 path=kupl_topology     ms=    2.592
+complex128  seq=7791  arity=12 path=kupl_topology     ms=    2.782
+complex128  seq=7919  arity=16 path=kupl_topology     ms=    9.642
+complex64   seq=1     arity= 6 path=kupl_topology     ms=    3.321
+complex64   seq=3     arity= 7 path=kupl_topology     ms=    6.698
+complex64   seq=9     arity=13 path=kupl_topology     ms=    4.903
+complex64   seq=129   arity=14 path=None              ms=    3.682  status=4 topology declined: pack-bound on CPU (1728038912 pack bytes,
+complex64   seq=849   arity= 9 path=kupl_topology     ms=    2.463
+complex64   seq=855   arity=10 path=kupl_topology     ms=    3.198
+complex64   seq=1599  arity=12 path=kupl_topology     ms=    2.892
+complex64   seq=2583  arity= 6 path=kupl_topology     ms=    3.402
+complex64   seq=2591  arity=13 path=kupl_topology     ms= 8930.334
+complex64   seq=3431  arity= 9 path=kupl_topology     ms=    2.338
+complex64   seq=3461  arity=16 path=kupl_topology     ms=  219.580
+complex64   seq=4301  arity= 9 path=kupl_topology     ms=    2.143
+complex64   seq=4331  arity=16 path=kupl_topology     ms=  367.127
+complex64   seq=5051  arity=13 path=kupl_topology     ms=  329.399
+complex64   seq=6911  arity=12 path=kupl_topology     ms=    2.466
+complex64   seq=6935  arity=13 path=kupl_topology     ms=   12.779
+complex64   seq=7055  arity=16 path=kupl_topology     ms=    5.526
+complex64   seq=7775  arity=12 path=kupl_topology     ms=    2.435
+complex64   seq=7791  arity=12 path=kupl_topology     ms=    2.789
+complex64   seq=7919  arity=16 path=kupl_topology     ms=    6.292
+float64     seq=1     arity= 6 path=kupl_topology     ms=    3.219
+float64     seq=3     arity= 7 path=kupl_topology     ms=    6.837
+float64     seq=9     arity=13 path=kupl_topology     ms=    5.021
+float64     seq=129   arity=14 path=None              ms=    2.673  status=4 topology declined: pack-bound on CPU (1728038912 pack bytes,
+float64     seq=849   arity= 9 path=kupl_topology     ms=    1.550
+float64     seq=855   arity=10 path=kupl_topology     ms=    2.647
+float64     seq=1599  arity=12 path=kupl_topology     ms=    1.747
+float64     seq=2583  arity= 6 path=kupl_topology     ms=    2.136
+float64     seq=2591  arity=13 path=kupl_topology     ms= 6553.760
+float64     seq=3431  arity= 9 path=kupl_topology     ms=    2.032
+float64     seq=3461  arity=16 path=kupl_topology     ms=  168.188
+float64     seq=4301  arity= 9 path=kupl_topology     ms=    1.923
+float64     seq=4331  arity=16 path=kupl_topology     ms=  259.981
+float64     seq=5051  arity=13 path=kupl_topology     ms=  247.832
+float64     seq=6911  arity=12 path=kupl_topology     ms=    2.318
+float64     seq=6935  arity=13 path=kupl_topology     ms=   11.492
+float64     seq=7055  arity=16 path=kupl_topology     ms=    5.635
+float64     seq=7775  arity=12 path=kupl_topology     ms=    2.386
+float64     seq=7791  arity=12 path=kupl_topology     ms=    2.508
+float64     seq=7919  arity=16 path=kupl_topology     ms=    6.110
+float32     seq=1     arity= 6 path=kupl_topology     ms=    3.127
+float32     seq=3     arity= 7 path=kupl_topology     ms=    5.657
+float32     seq=9     arity=13 path=kupl_topology     ms=    3.619
+float32     seq=129   arity=14 path=kupl_topology     ms= 3612.876
+float32     seq=849   arity= 9 path=kupl_topology     ms=    1.506
+float32     seq=855   arity=10 path=kupl_topology     ms=    1.788
+float32     seq=1599  arity=12 path=kupl_topology     ms=    1.577
+float32     seq=2583  arity= 6 path=kupl_topology     ms=    2.140
+float32     seq=2591  arity=13 path=kupl_topology     ms= 2656.611
+float32     seq=3431  arity= 9 path=kupl_topology     ms=    2.006
+float32     seq=3461  arity=16 path=kupl_topology     ms=  104.146
+float32     seq=4301  arity= 9 path=kupl_topology     ms=    2.226
+float32     seq=4331  arity=16 path=kupl_topology     ms=  126.247
+float32     seq=5051  arity=13 path=kupl_topology     ms=  115.573
+float32     seq=6911  arity=12 path=kupl_topology     ms=    2.315
+float32     seq=6935  arity=13 path=kupl_topology     ms=    7.296
+float32     seq=7055  arity=16 path=kupl_topology     ms=    3.913
+float32     seq=7775  arity=12 path=kupl_topology     ms=    2.397
+float32     seq=7791  arity=12 path=kupl_topology     ms=    2.600
+float32     seq=7919  arity=16 path=kupl_topology     ms=    4.856
+
+[classification done in 52.4s]
+
+=== route 分类（DEFAULT 20 seqs）===
+complex128  v3=19 v2= 0 declined= 1 | v3=[1, 3, 9, 849, 855, 1599, 2583, 2591, 3431, 3461, 4301, 4331, 5051, 6911, 6935, 7055, 7775, 7791, 7919] | declined=[129]
+complex64   v3=19 v2= 0 declined= 1 | v3=[1, 3, 9, 849, 855, 1599, 2583, 2591, 3431, 3461, 4301, 4331, 5051, 6911, 6935, 7055, 7775, 7791, 7919] | declined=[129]
+float32     v3=20 v2= 0 declined= 0 | v3=[1, 3, 9, 129, 849, 855, 1599, 2583, 2591, 3431, 3461, 4301, 4331, 5051, 6911, 6935, 7055, 7775, 7791, 7919] | declined=[]
+float64     v3=19 v2= 0 declined= 1 | v3=[1, 3, 9, 849, 855, 1599, 2583, 2591, 3431, 3461, 4301, 4331, 5051, 6911, 6935, 7055, 7775, 7791, 7919] | declined=[129]
+
+=== 真 v3 的 topology/dedicated 比值（DEFAULT 20 seqs）===
+      dtype   n       中位       最优       最差     快于 dedicated
+Traceback (most recent call last):
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 174, in <module>
+    main(sys.argv[1:])
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 164, in main
+    summarize(payload["classification"], f"DEFAULT {len(seqs)} seqs")
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 140, in summarize
+    values = sorted(row["ratio"] for row in rows
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/commandcode-1000/-home-zhangxin-PyQCD/709d5c24-7fa1-49dc-aad4-b35e3de62f89/scratchpad/retest_b2.py", line 141, in <genexpr>
+    if row["dtype"] == name and row["topology_path"] == "kupl_topology"
+                                ~~~^^^^^^^^^^^^^^^^^
+KeyError: 'topology_path'
