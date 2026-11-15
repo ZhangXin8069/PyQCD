@@ -127,6 +127,7 @@ from pyqcd.testing import (  # noqa: F401
     test_bench_scene_distill_contracts,
     test_dedicated_routing_contracts,
     test_label_sizes_contracts,
+    test_einsum_test_cli_contracts,
     test_opt_einsum_parity_contracts,
     test_einsum_semantics_contracts,
     test_einsum_dispatch_contracts,

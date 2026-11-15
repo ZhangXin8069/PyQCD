@@ -3130,6 +3130,15 @@ def test_label_sizes_contracts():
             getattr(contract_module, name)()
 
 
+def test_einsum_test_cli_contracts():
+    """``python -m pyqcd.einsum.test`` 规范端：形状解析、参数校验、相对容差口径。"""
+    from . import _einsum_test_cli_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
 def test_opt_einsum_parity_contracts():
     """以 opt_einsum 为对照：数值、路径代价、expression/缓存、错误行为与退化门。"""
     from . import _opt_einsum_parity_contract as contract_module

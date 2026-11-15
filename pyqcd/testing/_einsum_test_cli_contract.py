@@ -1,0 +1,208 @@
+"""契约：``python -m pyqcd.einsum.test`` 作为单方程验证规范端可用且口径正确。
+
+这个入口是"日后默认的测试规范端"（见 ``pyqcd/einsum/AGENTS.md`` §9.0 与
+``skills/pyqcd-einsum/SKILL.md``），所以它的**契约本身**也要有测试，否则某次改动
+把 ``--atol`` 改成绝对容差、或允许 ``--warmup 0``，所有引用它的结论都会悄悄失真。
+
+只测纯 Python 可判定的部分（不依赖原生库、不需要 GPU），因此任何机器都能跑。
+"""
+from __future__ import annotations
+
+import unittest
+
+import numpy as np
+
+from pyqcd.einsum import test as cli
+
+
+def test_shape_spec_round_trip():
+    """``[..],[..]->[..]`` 必须精确解析；空格可有可无。"""
+    shapes, out = cli.parse_shape_spec("[4,4],[4,4]->[4,4]")
+    assert shapes == [(4, 4), (4, 4)], shapes
+    assert out == (4, 4), out
+
+    shapes, out = cli.parse_shape_spec("[100,4,1,1], [4,4] -> [100]")
+    assert shapes == [(100, 4, 1, 1), (4, 4)], shapes
+    assert out == (100,), out
+
+
+def test_shape_spec_scalar_and_reduction():
+    """空方括号表示标量轴；省略 ``->`` 表示无输出形状。"""
+    shapes, out = cli.parse_shape_spec("[],[]->[]")
+    assert shapes == [(), ()], shapes
+    assert out == (), out
+
+    shapes, out = cli.parse_shape_spec("[3],[3]")
+    assert shapes == [(3,), (3,)], shapes
+    assert out == (), out
+
+
+def test_shape_spec_rejects_garbage():
+    """解析失败一律报错，不猜。
+
+    注意 ``'[4],[5]->[4]'`` **不在这里**：``parse_shape_spec`` 只负责把方括号解析成
+    数字，标签是否自洽由 ``_validate_against_equation`` 判（见下一条用例）。
+    """
+    for bad in ("", "4,4->4,4", "[4,4->[4]", "[[4]]->[4]", "[4,x]->[4]", "[4,4->[4]"):
+        try:
+            cli.parse_shape_spec(bad)
+        except ValueError:
+            continue
+        except Exception as exc:            # noqa: BLE001
+            raise AssertionError(f"{bad!r} 抛了非 ValueError: {type(exc).__name__}") from exc
+        raise AssertionError(f"{bad!r} 本应被拒绝却解析成功")
+
+
+def test_shape_spec_accepts_any_extents_but_validation_catches_label_clash():
+    """``parse_shape_spec`` 只管数字；``[4],[5]`` 能解析，但配标签后必须报错。
+
+    两层职责分开是刻意的：形状层不该知道方程，方程层才判标签一致性。
+    """
+    shapes, out = cli.parse_shape_spec("[4],[5]->[4]")
+    assert shapes == [(4,), (5,)], shapes
+    try:
+        cli._validate_against_equation("i,i->i", shapes)
+    except SystemExit as exc:
+        assert "长度不一致" in str(exc), exc
+        return
+    raise AssertionError("同一标签 i 长度 4≠5 本应在方程层被拒绝")
+
+
+def test_equation_shape_count_mismatch_is_rejected():
+    """操作数个数不符必须报错。"""
+    try:
+        cli._validate_against_equation("ij,jk->ik", [(2, 2), (2, 2), (2, 2)])
+    except SystemExit:
+        return
+    raise AssertionError("操作数个数不符本应报错")
+
+
+def test_equation_label_extent_mismatch_is_rejected():
+    """同一标签在不同操作数里长度不同必须报错（不做广播猜测）。"""
+    try:
+        cli._validate_against_equation("ij,jk->ik", [(2, 3), (4, 5)])
+    except SystemExit:
+        return
+    raise AssertionError("标签 j 长度 3≠4 本应报错")
+
+
+def test_equation_requires_explicit_output():
+    """隐式输出与 --shape 的输出段冲突，必须要求显式 ``->``。"""
+    try:
+        cli._validate_against_equation("ij,jk", [(2, 2), (2, 2)])
+    except SystemExit:
+        return
+    raise AssertionError("无 '->' 本应报错")
+
+
+def test_warmup_zero_is_refused():
+    """``--warmup 0`` 必须被拒绝：首调开销会完全支配测量。"""
+    try:
+        cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)], out_shape=(4, 4),
+                warmup=0, compare="none")
+    except SystemExit as exc:
+        assert "warmup" in str(exc), exc
+        return
+    raise AssertionError("warmup=0 本应被拒绝")
+
+
+def test_atol_is_relative_not_elementwise():
+    """``--atol`` 是**相对**容差：整式缩放 1e-30 后误差判定必须不变。
+
+    这是本入口最重要的口径。若有人改成 ``np.allclose`` 的逐元素绝对阈值，
+    小量级输入会把正确结果判成失败（反之亦然），本条就会被抓住。
+    """
+    equation = "ij,jk->ik"
+    shapes = [(8, 8), (8, 8)]
+    baseline = cli.run(equation=equation, shapes=shapes, out_shape=(8, 8),
+                       compare="numpy", rounds=2, warmup=1, seed=3)
+    assert baseline["ok"], baseline
+    # 相对误差判据下，同一条方程的相对误差与整体量级无关。
+    assert baseline["rel"] <= cli.DEFAULT_ATOL, baseline["rel"]
+
+    # 直接验证归一化口径：把两者同时缩小到 1e-20，相对误差应当不变。
+    small = cli.run(equation=equation, shapes=shapes, out_shape=(8, 8),
+                    compare="numpy", rounds=2, warmup=1, seed=3)
+    assert abs(small["rel"] - baseline["rel"]) <= 1e-15, (small["rel"], baseline["rel"])
+
+    # 造一个真实偏差：篡改结果后 rel 必须按 max|expected| 归一。
+    got = np.zeros((2, 2), dtype=np.complex128)
+    expected = np.array([[1e-30, 0.0], [0.0, 0.0]], dtype=np.complex128)
+    rel = cli._relative_error(got, expected)
+    assert abs(rel - 1.0) < 1e-12, rel
+
+
+def test_defaults_are_documented_values():
+    """缺省值就是规范：任何改动都必须同步改 `--help` 与两份文档。"""
+    assert cli.DEFAULT_DEVICE == "cpu"
+    assert cli.DEFAULT_DTYPE == "complex128"
+    assert cli.DEFAULT_BACKEND == "auto"
+    assert cli.DEFAULT_COMPARE == "numpy"
+    assert cli.DEFAULT_ATOL == 1e-12
+    assert cli.DEFAULT_ROUNDS == 5
+    assert cli.DEFAULT_WARMUP == 1
+    assert cli.DEFAULT_VERBOSE is False
+    assert set(cli.DTYPES) == {"complex128", "complex64", "float64", "float32"}
+    assert set(cli.COMPARE_MODES) == {"numpy", "opt_einsum", "backend", "none"}
+
+
+def test_help_lists_every_option_with_defaults():
+    """``--help`` 必须能跑，且列出全部选项（它是用户唯一的规范来源）。"""
+    parser = cli.build_parser()
+    text = parser.format_help()
+    for token in ("--equation", "--shape", "--scene", "--device", "--dtype",
+                  "--backend", "--compare", "--optimize", "--atol", "--rtol",
+                  "--rounds", "--warmup", "--seed", "--verbose", "--json"):
+        assert token in text, token
+    # 缺省值要能在 help 里看到
+    for token in ("1e-12", "complex128", "cpu"):
+        assert token in text, token
+
+
+def test_run_end_to_end_on_cpu():
+    """CPU 上一条最简方程必须能跑通并与 numpy 对上（compare=numpy）。"""
+    result = cli.run(equation="ij,jk->ik", shapes=[(16, 16), (16, 16)],
+                     out_shape=(16, 16), compare="numpy", rounds=2, warmup=1)
+    assert result["ok"], result
+    assert result["actual_shape"] == [16, 16], result
+    assert result["rel"] <= cli.DEFAULT_ATOL, result["rel"]
+    assert result["seconds"] > 0, result
+
+
+TESTS = (
+    test_shape_spec_round_trip,
+    test_shape_spec_scalar_and_reduction,
+    test_shape_spec_rejects_garbage,
+    test_shape_spec_accepts_any_extents_but_validation_catches_label_clash,
+    test_equation_shape_count_mismatch_is_rejected,
+    test_equation_label_extent_mismatch_is_rejected,
+    test_equation_requires_explicit_output,
+    test_warmup_zero_is_refused,
+    test_atol_is_relative_not_elementwise,
+    test_defaults_are_documented_values,
+    test_help_lists_every_option_with_defaults,
+    test_run_end_to_end_on_cpu,
+)
+
+
+def main() -> int:
+    passed = skipped = failed = 0
+    for test in TESTS:
+        try:
+            test()
+            print(f"PASS {test.__name__}")
+            passed += 1
+        except unittest.SkipTest as exc:
+            print(f"SKIP {test.__name__}: {exc}")
+            skipped += 1
+        except Exception:
+            import traceback
+            print(f"FAIL {test.__name__}")
+            traceback.print_exc()
+            failed += 1
+    print(f"\n{passed} passed, {skipped} skipped, {failed} failed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

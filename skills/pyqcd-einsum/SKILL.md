@@ -38,7 +38,57 @@ description: Use when implementing, debugging, or benchmarking pyqcd.einsum agai
 | 入口 | 位置 | 做什么 | 随 pip 发布 |
 |---|---|---|---|
 | `python -m pyqcd.einsum.verify_specialized "<eq>"` | 生产包 | **纯查询**：命中与否、拓扑签名/摘要、声明内核、语料出处（seq/T 号/角色） | 是 |
+| **`python -m pyqcd.einsum.test`** | **生产包** | **单方程数值验证 + 计时**（见下节，日后默认规范端） | 是 |
 | `python -m pyqcd.testing.einsum.verify_specialized "<eq>"` | 测试包 | **数值验证**：实际跑 contract，比对参考、判是否真跑原生内核、计时 | 否（`MANIFEST.in` `prune pyqcd/testing`） |
+
+## 单方程快捷验证 `python -m pyqcd.einsum.test`（2026-11-15，**日后默认规范端**）
+
+凡"这条方程、这组形状、这个 dtype、这块设备算得对不对、多快"的验证，**一律走这个
+入口**，不要在 `testing/` 或 `/tmp` 里另写临时脚本。临时脚本的通病是 warmup、
+容差口径、参照实现各写各的，结论无法互相比对。
+
+```bash
+python -m pyqcd.einsum.test --help      # 全部选项与缺省值，以 --help 为准
+
+python -m pyqcd.einsum.test --device gpu --dtype complex128 \
+    --equation 'ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak' \
+    --shape '[400,4,1,1],[4,4,9,1],[4,400,400,400],[4,4,9,9],[4,4],[4,4],[4,4],[1,9,400],[1,9],[1,9,400]->[400,400]' \
+    --atol 1e-12 --backend cupy --verbose true --compare opt_einsum
+```
+
+| 选项 | 缺省 | 可选 |
+|---|---|---|
+| `--device` | `cpu` | cpu / gpu / cuda |
+| `--dtype` | `complex128` | complex128 / complex64 / float64 / float32（四类平权） |
+| `--backend` | `auto` | auto / numpy / cupy / torch / kupl / cuda |
+| `--compare` | `numpy` | numpy / opt_einsum / **backend**（跨后端互证）/ none |
+| `--optimize` | `auto` | 同 `contract(optimize=...)` |
+| `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一） |
+| `--rtol` | `0` | 附加相对余量 |
+| `--rounds` | `5` | 计时轮数（中位） |
+| `--warmup` | `1` | 预热丢弃次数，**不允许 0** |
+| `--seed` | `0` | 操作数随机种子 |
+| `--verbose` | `false` | 明细打到 stderr |
+| `--shape` | 省略 | 省略则按 `--scene`（缺省 distill）从语料 roles 反推 |
+| `--json` | 无 | 完整结果落盘 |
+
+**两条不可协商的口径**：
+
+1. `--atol` 是**相对**容差，不是 `np.allclose` 的逐元素绝对阈值（后者误判近零元素）。
+2. **warmup 不得为 0**：实测 seq=2583 首调 45 ms、热态 0.56 ms，差 80×；
+   首调包含 plan 缓存 + 原生库绑定 + JIT，单次测量完全失真。
+
+**输出里的 `kernel` 字段最有用**：直接给出实际原生路线
+（`kupl_dedicated` / `cuda_topology` / `kupl_topology` / `kupl_topology_v2`），
+不必再翻 `LAST_INFO`。`kupl_topology_v2` 意味着**回落 v2 通用执行器**、不是 v3 步表。
+
+实测基准（本条方程 10 操作数 / 2.56 亿输入元素 / 输出 `(400,400)`）：
+
+| 设备 | backend | 路线 | 耗时 | rel |
+|---|---|---|---:|---:|
+| CPU | numpy | `kupl_dedicated` | **7205.2 ms** | 3.30e-15 |
+| GPU (V100) | cupy | `cuda_topology`（9 步） | **20.6 ms** | 1.17e-15 |
+
 
 生产包入口刻意不调用 `contract()`、不生成操作数、不触碰 `_specialize._announced`，
 因此可在生产代码的启动自检里直接调用；库内 API 为

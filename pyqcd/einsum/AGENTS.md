@@ -230,6 +230,68 @@ void applyEndQcd(long long set_ptrs, long long params);
 
 ## 9. 当前验证入口
 
+### 9.0 单方程快捷验证 —— **日后默认的测试规范端**
+
+```bash
+python -m pyqcd.einsum.test --help      # 全部选项与缺省值
+
+python -m pyqcd.einsum.test --device gpu --dtype complex128 \
+    --equation 'ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak' \
+    --shape '[400,4,1,1],[4,4,9,1],[4,400,400,400],[4,4,9,9],[4,4],[4,4],[4,4],[1,9,400],[1,9],[1,9,400]->[400,400]' \
+    --atol 1e-12 --backend cupy --verbose true --compare opt_einsum
+```
+
+**这是"单条方程、这组形状、这个 dtype、这块设备，算得对不对、多快"的唯一规范端。**
+此前这类验证靠临时脚本，warmup/容差/参照各写各的，结论无法互比。以后新增的
+单方程验证一律走它，不要在 `testing/` 里另立临时脚本。
+
+缺省值（`--help` 同源）：
+
+| 选项 | 缺省 | 说明 |
+|---|---|---|
+| `--device` | `cpu` | `cpu`→numpy，`gpu`/`cuda`→cupy |
+| `--dtype` | `complex128` | 四类平权：complex128/complex64/float64/float32 |
+| `--backend` | `auto` | 原样传给 `contract(backend=...)`；可选 auto/numpy/cupy/torch/kupl/cuda |
+| `--compare` | `numpy` | 参照：numpy / opt_einsum / **backend**（跨后端互证）/ none |
+| `--optimize` | `auto` | 同 `contract(optimize=...)` |
+| `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一，不是逐元素绝对阈值） |
+| `--rtol` | `0` | 附加相对余量 |
+| `--rounds` | `5` | 计时轮数（中位） |
+| `--warmup` | `1` | 丢弃的预热次数，**不允许 0** |
+| `--seed` | `0` | 操作数随机种子（各路径同一批数据） |
+| `--verbose` | `false` | true 时把逐项明细打到 stderr |
+| `--shape` | 省略 | 省略时按 `--scene`（缺省 `distill`）从语料 `roles` 反推生产尺寸 |
+| `--json` | 无 | 完整结果落盘 |
+
+`--compare backend` 是**跨后端互证**：主路径跑 `--device`，参照在另一个后端上跑
+同一批张量（CPU↔GPU）。这是唯一能同时验证"两条原生路径都给对答案"的模式。
+
+**两条硬性口径**（改它就是改规范）：
+
+1. `--atol` 是相对容差。`np.allclose` 那种逐元素绝对阈值会误判接近零的元素。
+2. **warmup 不可为 0**。实测 seq=2583 首调 45 ms、热态 0.56 ms（差 80×），
+   单次测量会被 plan 缓存 + 原生库绑定 + JIT 完全支配。
+
+典型输出（本条方程 10 操作数 / 2.56 亿输入元素）：
+
+```
+# CPU (--device cpu --backend numpy)
+PASS ... rel=3.30e-15 vs opt_einsum.contract(optimize='greedy')  7205.226ms
+kernel: {'kupl': {'path': 'kupl_dedicated', 'dtype': 'complex128'}}
+
+# GPU (--device gpu --backend cupy)
+PASS ... rel=1.17e-15 vs opt_einsum.contract(optimize='greedy')  20.558ms
+kernel: {'cuda': {'path': 'cuda_topology', 'steps': 9, 'copied': ()}}
+```
+
+`kernel` 字段直接暴露走的哪条原生路线（`kupl_dedicated` / `cuda_topology` /
+`kupl_topology` / `kupl_topology_v2`），省去再翻 `LAST_INFO`。
+
+**分工**：本入口负责"单点排查"；`python -m pyqcd.testing` 负责"全量回归"。
+两者不可互相替代——前者答一条方程对不对、多快，后者答整库有没有退化。
+
+其余验证入口（整库级）：
+
 ```bash
 python -m pyqcd.testing.einsum.verify_native --backend kupl
 python -m pyqcd.testing.einsum.verify_native --backend cuda
