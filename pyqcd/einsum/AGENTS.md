@@ -320,13 +320,13 @@ gather，实测 **topology 49 ms vs dedicated 1.49 ms（32×）**，同一路径
 
 修法（`topology_gemm.h`，**运行期判定，步表格式不变**）：`v3_run_step` 内检查
 `a_axes`/`b_axes` 是否等于恒等排列或组交换排列，命中则走新增的
-`gemm_call_trans`（`kCblasTrans=112`）直接读源张量。保守限制 `count_batch == 1`
-——batch 下 `gemm_call` 的连续切片前提不成立，其余仍走 pack。
+`gemm_call_trans`（`kCblasTrans=112`）直接读源张量。首版保守限制
+`count_batch == 1`，其余仍走 pack（下一条把这条限制放开）。
 
 效果（同口径 20 seq × 4 dtype，产物 `topo_vs_dedicated_distill_20261115132117`）：
 
 | dtype | 中位 前→后 | **最差 前→后** | 快于 dedicated |
-|---|---|---|---:|
+|---|---|---:|---:|
 | complex128 | 8.18 → **4.89** | 24.63 → **15.04** | 5/19 → 6/19 |
 | complex64 | 6.56 → 6.47 | 48.95 → **13.24** | 6/19 → 6/19 |
 | float64 | 6.80 → 6.94 | 56.22 → **12.73** | 5/19 → 6/19 |
@@ -334,7 +334,52 @@ gather，实测 **topology 49 ms vs dedicated 1.49 ms（32×）**，同一路径
 
 **最差比值全面收敛到 ~13×**（原 49–62×），病态格子消失；中位数变化小是因为多数
 格子本来就没有非恒等输入侧。seq=3 从 49 ms 降到 5.52 ms（3.84×）。
-语料 214 步中只有 16 步带 batch，故 `count_batch == 1` 的限制覆盖面很小。
+
+**第四处：批直连（2026-11-15 补，放开上面的 `count_batch == 1`）**
+
+判据（仍然运行期判定、步表格式不变）：
+
+1. A/B 两侧都必须命中恒等排列或组交换排列。这两种排列把 batch 轴固定在源轴位
+   `[0, batch_rank)`（组交换对 `axis < batch_rank` 是恒等映射），M/K（或 K/M）轴
+   全部排在它们之后；
+2. 于是源里每个 batch 元素的块是**恰好** `count_rows*count_inner`（A）/
+   `count_inner*count_cols`（B）个元素的连续板，且按 batch 的 row-major 线性下标
+   递增（源是 C 连续的），逐 batch 取 `base + batch * block` 即可 —— 与
+   `dedicated_apply.cpp` 的批循环偏移公式逐字一致，`lda`/`ldb` 与 batch 无关；
+3. 越界兜底：`count_batch * block` 超过该操作数的元素数（或 block ≤ 0）就 fail
+   closed 走 pack，绝不让 BLAS 读到源之外。
+
+不满足的布局（batch 轴与 M/K 交错、或轴序既非恒等也非组交换）**仍走 pack**：
+那时块在源里不连续，`lda`/`ldb` 表达不出来。诊断开关
+`PYQCD_EINSUM_TOPOLOGY_TRACE=1` 现在会逐步打印
+`topology-gemm-step batch=… M=… K=… N=… a=plain|trans|pack b=… path=direct|pack`。
+
+**这条路径在编译表里跑不到**：`topology_kernels.inc` 只含语料 seq 1..2582
+（`MAX_KERNELS`），其中 `batch_rank > 0` 的步为 **0**；全语料 121724 步里有 11858
+步带 batch，但都在 seq 2583 以后。因此批直连的正确性由两条互补证据给出：
+
+* `cpp/kupl/einsum/tests/topology_batch_direct.cpp`（dev-only 驱动，手工编单步 v3
+  段，不需要编译表）：
+  `g++ -O2 -std=c++17 -I ../src -I ../include topology_batch_direct.cpp -o /tmp/tbd -ldl`
+  → 9 用例 × 4 dtype 全绿（double 类 ≤1.2e-16、single 类 ≤1.2e-7），覆盖
+  plain/plain、trans/plain、plain/trans、trans/trans、`count_batch`=1/2/3/6
+  （含双 batch 轴 2×3）、M 组两轴，以及一类非直连轴序 `[b,M1,K,M0]`（回落 pack）。
+  变异测试（把 A 的 batch 偏移写死成 0）立刻在该驱动上报 `rel=1.02` 而 pack 用例
+  不变 —— 用例有牙齿。
+* 端到端（真值 `np.einsum(..., optimize="greedy")`）：用 `_topology_kernel_gen`
+  临时生成只含 batch 方程的步表，语料 seq 3437/4206/6953/6933/4295/3461/2955/6836
+  八个方程 × 四类 dtype 全部在容差内（双精度 ≤2.3e-15、单精度 ≤3.2e-6），trace 里
+  `batch=2/3/6 … path=direct` 与 `batch=3/6 … path=pack` 两类都出现。
+  **该表是临时产物**：验证后已用标准生成器恢复，逐字节一致（`cmp` 通过）。
+
+**性能：distill 口径无可分辨变化**（符合预期，该口径没有 `count_batch > 1` 的步）。
+5 次 A/B（改前 2 次、改后 3 次，20 seq × 2 复 dtype，`--rounds 3`）：
+同配置重复运行 |Δ|中位 3.9–10.9%、最大 37%；改前/改后配对 |Δ|中位 3.3–14.1%、
+最大 37%。首轮改前样本系统性偏慢（`before → before2` 自身就差 −10.9%），
+以 warmed 的 `before2` 为基准时改前→改后中位 −0.7%/−1.2%/−1.1%，
+整体中位比值 5.33–6.22×、最差 11.72–14.86× 在噪声内。
+实数档仍被 `_TOPOLOGY_DECLINED_DTYPES` 拒绝，四 dtype 对照需
+`PYQCD_EINSUM_TOPOLOGY_REAL=1`。
 
 **三条必须记住的事实**（禁止写成相反结论）：
 
@@ -357,6 +402,9 @@ gather，实测 **topology 49 ms vs dedicated 1.49 ms（32×）**，同一路径
 2. "v3 缺 batch 并行，补上就能提速" —— 验收用的 105 步里 `batch_rank > 0` 为 **0 步**
    （全语料 121724 步中有 11990 步带 batch，但不在这批 seq），补了是死代码；且
    `packed_b` 是 `[batch][K][N]`，折平成 `[K, batch*N]` 的 memcpy 前提不成立。
+   **2026-11-15 补充**：批**并行**仍然没有（也不该有）；新增的只是批**直连**
+   （零拷贝喂 BLAS，逐 batch 调一次），它同样不在这张编译表里 —— 见上面「第四处」，
+   证据来自 dev-only 驱动与一次临时步表的端到端对拍，**不是**来自生产语料。
 3. "实数档不再被分派层拒绝" —— 仍被 `_TOPOLOGY_DECLINED_DTYPES` 拒绝；**原因已变**：
    不再因为步表病态，而是 dedicated 没有那 ~2 ms 固定开销（见
    `_kernel_kupl` 的模块注释）。
@@ -364,3 +412,62 @@ gather，实测 **topology 49 ms vs dedicated 1.49 ms（32×）**，同一路径
 **重新生成步表**：`python -m pyqcd.testing._topology_kernel_gen`（约 4 s，产出
 `cpp/kupl/einsum/src/topology_kernels.inc`，**该文件被 gitignore，是构建产物**；
 `topology_apply.cpp:25` 无条件 include 它，所以干净树必须先跑生成器再编原生库）。
+
+### 6.3 已修复：CUDA 拓扑描述符的摘要位宽错配（2026-11-15 修复）
+
+CUDA 拓扑入口是**另一套实现**（`cpp/cuda/einsum/src/apply_contract.cu`，与 KUPL
+`topology_gemm.h` 无关）：描述符只带结构，收缩序取编译期常量表
+`cpp/cuda/einsum/src/topology_steps.h`（2582 条 ↔ 1052 条不同步序）。
+
+**原缺陷**：`_kernel_cuda._descriptor_words` 用
+`_specialize._signature_digest(...).ljust(16, b"\0")` 拼描述符摘要，而那张表的 key
+是 blake2b-**128**（`digest_size=16`）的前 8 字节。96 位摘要零填充到 128 位后前
+12 字节相同、后 4 字节不同，`topology_key_from_digest` 于是算出另一个 key，
+`find_topology_entry` 恒查不到 → 落到 `topology_plan_chain` 的「左到右链式」兜底，
+而该兜底只接受 `num_inputs <= 6`。语料的元数分布是 13/14/16 占 99.9%
+（7..16 全部 > 6），因此**除 arity=6 的 2 条外整张表都取不到**，一律 `status=4`
+回落。旧契约用例恰好只用 `ij,jk->ik`（arity=2）与 arity=6 抽样，所以没抓到。
+
+**修法**：描述符里按 128 位原地重算摘要（payload 口径与 `_signature_digest` 完全
+一致），不碰索引侧的 96 位口径，也不改 C++ 格式。
+
+**证据**（V100、`CUDA_VISIBLE_DEVICES` 临时指定、`PYQCD_CUDA_ARCHITECTURES=7.0`）：
+
+* 全语料 2582 条 × 四类 dtype（dim=2，真值 `np.einsum(..., optimize="greedy")`）：
+  **每类 dtype 都是 2582/2582 = 100% 命中**（`path=cuda_topology`），miss=0、bad=0；
+  最坏相对误差 complex128 1.296e-14 / complex64 6.547e-06 / float64 5.341e-14 /
+  float32 9.581e-05，全部在 1e-9 / 1e-4 / 1e-9 / 1e-4 容差内。修复前只有 arity≤6
+  的 2 条能命中（其余 `status=4`）。
+* 无隐式升降精度：同一个 arity=7 方程、把首个操作数放大 1e8 制造量级差后，
+  float64 rel=2.616e-15 而 float32 rel=1.000e-06（差 9 个量级）——两者确实各走
+  自己的 BLAS 精度，没有互相冒充。
+* 复数确实走 cuBLAS 的 c/z gemm：`batched_gemm.cu` 的 `qcd_cuda_batched_gemm`
+  按 `QCD_DTYPE_*` 分派到 `cublasZgemmStridedBatched` / `Cgemm` / `Dgemm` / `Sgemm`
+  （`cublasLt` 只在 cuBLAS 返回 `NOT_SUPPORTED` 时兜底，且其 compute type 同样按
+  dtype 选 `COMPUTE_64F`/`32F`，不做降精度）。
+* 回归：`python -B -m pyqcd.testing` → **128 passed / 1 skipped / 0 failed**
+  （新增 1 条 `test_cuda_descriptor_reaches_the_step_table_for_high_arity`；
+  变异验证：把 `_descriptor_words` 换回 96 位零填充后该用例立刻
+  `AssertionError: seq=3 arity=7 ... failed with status 4`，恢复后 PASS）。
+
+**另一项：CUDA 侧已有 pack 恒等直连，但不需要 KUPL 的 `kDirectTrans`**。
+`prepare_binary` 早就设了 `left_pack_identity` / `right_pack_identity`，执行时整段
+跳过 `qcd_cuda_permute`（trace 的 `pack_skipped` 计数）。按真实步表统计（语料每 7
+条抽样、5121 步）：恒等已覆盖左脚 20.1% / 右脚 21.1%，而**组交换只有左 0.1% /
+右 0.0%** —— CUDA 的 pack 目标是 `[batch][free][reduce]` 三级分组，不是 KUPL 的两级
+`[M][K]`，所以「组交换」这个类别在这里几乎不存在（92.2% 的步还带非空 batch，
+更不能像 KUPL 那样用 `count_batch == 1` 放开 trans）。再补 `kDirectTrans` 的收益
+上限约 0.1%，不值得动。
+
+**收缩序：确认病态，但本轮不改（无生成器）**。`topology_steps.h` 的步序由均匀
+dim=4 的 greedy 定型，而生产轴长是 `{1,4,100}` 混杂。按真实步表逐条复算
+（语料每 41 条抽样，63 条，distill 尺寸，`contract_path` 的 `opt_cost` 口径）：
+**生产序更优 55 / 持平 2 / 更差 6，中位比值 0.020**（即生产序便宜约 50×），
+最差样本 seq=489 表内序 `2.0010e+12` vs 生产序 `8.1811e+08`。V100 实测：
+seq=489 topology 中位 **149.79 ms**，其中单步 `m=n=k=10000` 的 sgemm 参考耗时
+**141.94 ms** —— 病态步几乎吃掉全部时间（对照 seq=3 为 1.21 ms、seq=1700 1.31 ms）。
+**不能本轮硬改**：仓库里**没有**生成 `topology_steps.h` 的脚本
+（`_topology_kernel_gen.TARGET` 只写 `cpp/kupl/einsum/src/topology_kernels.inc`，
+且它不含 blake2b-128 key 与 CUDA 的 FNV 指纹口径；该文件本身也禁止改）。重定型
+需要先补一个生成器（复用 `plan_steps(equation, sizes=…)` +
+`_label_sizes(roles, dims("distill"))`），再重生成 1052 条常量表。

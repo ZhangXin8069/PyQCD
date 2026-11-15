@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
@@ -986,6 +987,18 @@ inline bool v3_resolve_step(const Step& step, const uint8_t* a_labels,
            info->count_cols > 0;
 }
 
+/* 诊断开关：``PYQCD_EINSUM_TOPOLOGY_TRACE=1`` 时逐步打印输入侧布局判定结果，
+ * 用来证明某一步走的到底是零拷贝直连还是 pack 回落。与 ``topology_apply.cpp``
+ * 的同名开关同语义（该 TU 的 ``trace_enabled()`` 在匿名命名空间里，无法跨 TU
+ * 复用，这里按同样口径自带一份；两者都在首次调用时静态缓存）。 */
+inline bool step_trace_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("PYQCD_EINSUM_TOPOLOGY_TRACE");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
 /* 打包 + 批量 GEMM（v3：长度全部来自 ``V3StepInfo``）。 */
 /* ``a_source_len`` / ``b_source_len`` 是 A/B 操作数**按自身轴序**的逐轴长度
  * （即 ``slot_lengths[slot]``）；``a_labels_len`` / ``b_labels_len`` 是它们在
@@ -1033,30 +1046,63 @@ inline int v3_run_step(const Step& step, const CblasApi& api, const Slot& left,
         source_stride[axis] = total;
         total *= a_source_len[axis];
     }
-    int64_t stride[kMaxRank];
+    const int64_t a_total = total;
+    int64_t a_stride[kMaxRank];
     int64_t a_count = 1;
     for (int axis = 0; axis < step.rank_a; ++axis) {
         const int source_axis = a_axes[axis];
         if (source_axis < 0 || source_axis >= a_source_rank) {
             return QCD_STATUS_INVALID;
         }
-        stride[axis] = source_stride[source_axis];
+        a_stride[axis] = source_stride[source_axis];
         a_count *= a_labels_len[axis];
+    }
+
+    /* B 侧同样按源自身轴序算，且**提前到直连判定之前**：判据要用 ``b_total``
+     * 校验逐 batch 偏移不会越界，pack 路径随后直接复用这份结果。 */
+    int64_t b_source_stride[kMaxRank];
+    total = 1;
+    for (int axis = b_source_rank - 1; axis >= 0; --axis) {
+        if (b_source_len[axis] <= 0) {
+            return QCD_STATUS_INVALID;
+        }
+        b_source_stride[axis] = total;
+        total *= b_source_len[axis];
+    }
+    const int64_t b_total = total;
+    int64_t b_stride[kMaxRank];
+    int64_t b_count = 1;
+    for (int axis = 0; axis < step.rank_b; ++axis) {
+        const int source_axis = b_axes[axis];
+        if (source_axis < 0 || source_axis >= b_source_rank) {
+            return QCD_STATUS_INVALID;
+        }
+        b_stride[axis] = b_source_stride[source_axis];
+        b_count *= b_labels_len[axis];
     }
 
     /* 输入侧直连判定（与 ``dedicated_apply.cpp`` 的 ``kDirectPlain`` /
      * ``kDirectTrans`` 同口径，但**在运行期判定**，步表格式不变）。
      *
-     * ``a_axes[axis] == axis`` 时源本身就是规范序 ``[M][K]``，可以零拷贝交给 BLAS；
-     * 若是「组交换」``[K][M]``，则用 ``kCblasTrans`` 吸收，同样零拷贝。
+     * ``a_axes[axis] == axis`` 时源本身就是规范序 ``[batch][M][K]``，可以零拷贝交给
+     * BLAS；若是「组交换」``[batch][K][M]``，则用 ``kCblasTrans`` 吸收，同样零拷贝。
      *
      * 为什么必须有这条路：实测 seq=3（``ambn,codp,egfh,ce,mo,bdf,nph->ag``，
      * distill 尺寸）6 步里有 7 个输入侧非恒等，第 2 步要 gather 4,000,000 元素
      * 的中间体，topology 49 ms 而 dedicated 1.49 ms（32×）——差距全在这里。
      *
-     * batch 维度不参与直连：``gemm_call`` 的循环按 ``[batch][M][K]`` 连续切片推进，
-     * 只在 ``count_batch == 1``（或 batch 轴恰好最外且与规范序一致）时等价。这里
-     * 保守地只对 ``count_batch == 1`` 启用，其余仍走 pack，避免把语义改错。 */
+     * **batch 也能直连**（原先只放行 ``count_batch == 1``，现按下列判据放开）：
+     * 恒等排列把 batch 轴放在规范位 ``[0, batch_rank)``；组交换排列对
+     * ``axis < batch_rank`` 是恒等映射，batch 轴同样落在源轴前端。两种排列下
+     * M/K（或 K/M）轴都排在 batch 轴之后，于是源里每个 batch 元素的块是**恰好**
+     * ``count_rows*count_inner``（A）/ ``count_inner*count_cols``（B）个元素的连续板，
+     * 且按 batch 的 row-major 线性下标递增排列（源是 C 连续的）。所以逐 batch 取
+     * ``base + batch * block`` 即可，与 ``dedicated_apply.cpp`` 的批循环偏移公式
+     * 逐字一致（见该文件 ``kDirectPlain``/``kDirectTrans`` 处注释），lda/ldb 也与
+     * batch 无关。
+     *
+     * 其余布局（batch 轴与 M/K 交错、或轴序既非恒等也非组交换）仍走 pack：那时
+     * 块在源里不连续，BLAS 的 lda/ldb 表达不出来。 */
     const int row_rank = step.row_rank();
     const int col_rank = step.col_rank();
     bool a_direct_plain = true;
@@ -1089,12 +1135,34 @@ inline int v3_run_step(const Step& step, const CblasApi& api, const Slot& left,
             b_direct_trans = false;
         }
     }
-    const bool use_direct = info.count_batch == 1 &&
-                            (a_direct_plain || a_direct_trans) &&
+    /* 每 batch 一块的元素数，也是直连时的源偏移步长。 */
+    const int64_t a_block = info.count_rows * info.count_inner;
+    const int64_t b_block = info.count_inner * info.count_cols;
+    /* 越界兜底：纯轴置换下 ``count_batch * a_block`` 应**恰好**等于源元素数，
+     * 不等就说明轴序/长度推演与源不一致 —— fail closed 交给 pack（再错由调用方
+     * 回落通用执行器），绝不让 BLAS 读到源张量之外。 */
+    const bool use_direct = (a_direct_plain || a_direct_trans) &&
                             (b_direct_plain || b_direct_trans) &&
                             info.count_rows <= std::numeric_limits<int>::max() &&
                             info.count_cols <= std::numeric_limits<int>::max() &&
-                            info.count_inner <= std::numeric_limits<int>::max();
+                            info.count_inner <= std::numeric_limits<int>::max() &&
+                            a_block > 0 && a_block <= a_total &&
+                            info.count_batch <= a_total / a_block &&
+                            b_block > 0 && b_block <= b_total &&
+                            info.count_batch <= b_total / b_block;
+
+    if (step_trace_enabled()) {
+        std::fprintf(stderr,
+                     "[pyqcd.einsum] topology-gemm-step batch=%lld M=%lld K=%lld N=%lld "
+                     "a=%s b=%s path=%s\n",
+                     static_cast<long long>(info.count_batch),
+                     static_cast<long long>(info.count_rows),
+                     static_cast<long long>(info.count_inner),
+                     static_cast<long long>(info.count_cols),
+                     a_direct_plain ? "plain" : (a_direct_trans ? "trans" : "pack"),
+                     b_direct_plain ? "plain" : (b_direct_trans ? "trans" : "pack"),
+                     use_direct ? "direct" : "pack");
+    }
 
     if (use_direct) {
         /* lda/ldb 是源的行长：plain 时 A 是 [M][K]（行长 K）、B 是 [K][N]（行长 N）；
@@ -1103,13 +1171,18 @@ inline int v3_run_step(const Step& step, const CblasApi& api, const Slot& left,
                                        : static_cast<int>(info.count_rows);
         const int ldb = b_direct_plain ? static_cast<int>(info.count_cols)
                                        : static_cast<int>(info.count_inner);
-        gemm_call_trans(api, static_cast<int>(info.count_rows),
-                        static_cast<int>(info.count_cols),
-                        static_cast<int>(info.count_inner),
-                        static_cast<const T*>(left.read()),
-                        static_cast<const T*>(right.read()), packed_output,
-                        a_direct_trans && !a_direct_plain,
-                        b_direct_trans && !b_direct_plain, lda, ldb);
+        const bool trans_a = a_direct_trans && !a_direct_plain;
+        const bool trans_b = b_direct_trans && !b_direct_plain;
+        const T* a_base = static_cast<const T*>(left.read());
+        const T* b_base = static_cast<const T*>(right.read());
+        const int64_t c_block = info.count_rows * info.count_cols;
+        for (int64_t batch = 0; batch < info.count_batch; ++batch) {
+            gemm_call_trans(api, static_cast<int>(info.count_rows),
+                            static_cast<int>(info.count_cols),
+                            static_cast<int>(info.count_inner), a_base + batch * a_block,
+                            b_base + batch * b_block, packed_output + batch * c_block,
+                            trans_a, trans_b, lda, ldb);
+        }
         return QCD_STATUS_OK;
     }
 
@@ -1118,41 +1191,24 @@ inline int v3_run_step(const Step& step, const CblasApi& api, const Slot& left,
     if (packed_a == nullptr) {
         return QCD_STATUS_MEMORY;
     }
-    gather_extents<T>(static_cast<const T*>(left.read()), stride, step.rank_a,
+    gather_extents<T>(static_cast<const T*>(left.read()), a_stride, step.rank_a,
                       a_labels_len, packed_a, a_count);
 
-    total = 1;
-    for (int axis = b_source_rank - 1; axis >= 0; --axis) {
-        if (b_source_len[axis] <= 0) {
-            return QCD_STATUS_INVALID;
-        }
-        source_stride[axis] = total;
-        total *= b_source_len[axis];
-    }
-    int64_t b_count = 1;
-    for (int axis = 0; axis < step.rank_b; ++axis) {
-        const int source_axis = b_axes[axis];
-        if (source_axis < 0 || source_axis >= b_source_rank) {
-            return QCD_STATUS_INVALID;
-        }
-        stride[axis] = source_stride[source_axis];
-        b_count *= b_labels_len[axis];
-    }
     std::size_t b_bytes = static_cast<std::size_t>(b_count) * sizeof(T);
     T* packed_b = reinterpret_cast<T*>(block_pool().acquire(b_bytes, &b_bytes));
     if (packed_b == nullptr) {
         block_pool().release(reinterpret_cast<uint8_t*>(packed_a), a_bytes);
         return QCD_STATUS_MEMORY;
     }
-    gather_extents<T>(static_cast<const T*>(right.read()), stride, step.rank_b,
+    gather_extents<T>(static_cast<const T*>(right.read()), b_stride, step.rank_b,
                       b_labels_len, packed_b, b_count);
 
     for (int64_t batch = 0; batch < info.count_batch; ++batch) {
-        const T* a_block = packed_a + batch * info.count_rows * info.count_inner;
-        const T* b_block = packed_b + batch * info.count_inner * info.count_cols;
-        T* c_block = packed_output + batch * info.count_rows * info.count_cols;
+        const T* a_part = packed_a + batch * a_block;
+        const T* b_part = packed_b + batch * b_block;
+        T* c_part = packed_output + batch * info.count_rows * info.count_cols;
         gemm_call(api, static_cast<int>(info.count_rows), static_cast<int>(info.count_cols),
-                  static_cast<int>(info.count_inner), a_block, b_block, c_block);
+                  static_cast<int>(info.count_inner), a_part, b_part, c_part);
     }
     block_pool().release(reinterpret_cast<uint8_t*>(packed_a), a_bytes);
     block_pool().release(reinterpret_cast<uint8_t*>(packed_b), b_bytes);
