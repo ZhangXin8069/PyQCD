@@ -38,7 +38,11 @@ import pathlib
 from ..einsum import contract_path
 from ._topology_equations_contract import _parse_equations
 
-MAX_KERNELS = 2582
+#: 编译表覆盖的方程上限 = **整个语料**（基础表 2582 + 附录 6056）。
+#: 2026-11-15 从 2582 扩到 8638：附录形态（动量标签打头，如 ``Mbd``/``Nfnp``）
+#: 此前不在表内，`try_topology_apply` 只能静默回落 v2 通用执行器。扩表后它们
+#: 走真正的 v3 步表。``kTopoRecordOfEquation`` 是 uint16（上限 65535），8638 安全。
+MAX_KERNELS = 8638
 MAX_RANK = 15
 # 生成期探针尺寸：**仅在没有生产尺寸可用时**才退回等长探针。
 #
@@ -429,10 +433,9 @@ def _production_sizes(equation: str, roles: tuple[str, ...]) -> dict[str, int]:
     ``distill_curr``：两档的 label 集合一致，收缩序只取决于各轴长**相对**大小，
     ``Nev`` 从 100 变 400 是所有 peram 轴同比放大，不改变 greedy 的取舍。
 
-    口径边界：本函数只服务编译表，而 ``MAX_KERNELS = 2582`` 恰好是**基础表**的
-    全部（seq 1..2582，指标段纯小写）。附录形态（seq ≥ 2583，动量标签打头）不进
-    编译表，所以 ``_label_sizes`` 对附录形态的修正（2026-11-15）**不改变**
-    ``topology_kernels.inc`` 的字节（实测重新生成后 md5 一致）。
+    口径边界：本函数服务**整个语料**（``MAX_KERNELS = 8638``：基础表 2582 + 附录
+    6056）。附录形态（动量标签打头）的轴位与基础表不同，由 ``_vertex_axes`` 按
+    label 大小写分流，因此这里不需要再区分两段——直接交给 ``_label_sizes`` 即可。
     """
     from ..einsum._bench_scene import dims as scene_dims
     from ..einsum.bench_specialized import _label_sizes
@@ -443,7 +446,7 @@ def _production_sizes(equation: str, roles: tuple[str, ...]) -> dict[str, int]:
 
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parents[2]
-    equations = _parse_equations()
+    equations = _parse_equations(include_momentum=True)
     assert len(equations) <= MAX_KERNELS, len(equations)
 
     from ..einsum import _wick_tasklist as tasklist

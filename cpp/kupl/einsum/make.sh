@@ -213,6 +213,29 @@ fi
 
 SOURCES=("${CORE_SOURCES[@]}" "${BACKEND_SOURCES[@]}")
 
+# 拓扑步表：`topology_apply.cpp` 无条件 `#include "topology_kernels.inc"`。
+# 该文件由 `python -m pyqcd.testing._topology_kernel_gen` 生成（8638 条 ≈ 13.8 MB），
+# 入库时以 gzip 形式保存（`.inc.gz`，约 1/8 体积），避免仓库里放一个超过单文件
+# 限制的生成物。这里在编译前解压：**只在 `.inc` 缺失或比 `.inc.gz` 旧时**才做，
+# 于是本地刚生成过 `.inc` 的工作树不会被无谓覆盖（生成器输出的字节与解压结果一致，
+# 校验见 pyqcd/testing/_topology_kernel_contract.py 的可复现性用例）。
+STEP_TABLE="$SCRIPT_DIR/src/topology_kernels.inc"
+STEP_TABLE_GZ="$STEP_TABLE.gz"
+if [ ! -f "$STEP_TABLE" ] || { [ -f "$STEP_TABLE_GZ" ] && [ "$STEP_TABLE_GZ" -nt "$STEP_TABLE" ]; }; then
+    if [ -f "$STEP_TABLE_GZ" ]; then
+        _pyqcd_notify "KUPL (CPU): unpacking topology_kernels.inc.gz"
+        if ! gzip -dc "$STEP_TABLE_GZ" > "$STEP_TABLE"; then
+            printf 'error: failed to unpack %s\n' "$STEP_TABLE_GZ" >&2
+            exit 1
+        fi
+    elif [ ! -f "$STEP_TABLE" ]; then
+        _pyqcd_fail "topology step table" \
+            "topology_apply.cpp includes topology_kernels.inc unconditionally" \
+            "python -m pyqcd.testing._topology_kernel_gen (writes the .inc)" \
+            "or unpack the tracked topology_kernels.inc.gz next to it"
+    fi
+fi
+
 mkdir -p "$BUILD_DIR"
 cat > "$VERSION_SCRIPT" <<'MAP'
 {

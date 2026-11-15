@@ -33,12 +33,32 @@ _NCASE_ROWS = (2, 6, 120, 720, 6, 24, 720, 24, 120, 120, 720)
 _MIN_CASE_ROWS = 2582
 
 
-def _parse_equations() -> list[str]:
-    """按文件顺序返回全部拓扑类方程（去重前）。"""
+def _parse_equations(include_momentum: bool = False) -> list[str]:
+    """按文件顺序返回拓扑类方程（去重前）。
+
+    ``include_momentum=False``（默认）只取 ``_TOPOLOGY_SECTION_MARKER`` **之前**的
+    **基础表**（2582 条）——那是纯小写缩并指标形态。
+
+    ``include_momentum=True`` 追加文件末尾"动量指标与流分量指标"一节的
+    **附录**（6056 条），它们的 VDV/VVV 指标段带大写动量标签（如 ``Mbd``）。
+    两段表格格式相同（``| T号 | 图号 | `方程` | 角色 |``），所以用同一个行解析器。
+    合计 8638 条，与 ``_wick_tasklist`` / ``_topology_registry`` 的任务总数一致。
+
+    注意：附录形态的轴位与基础表**不同**（见
+    ``bench_specialized._vertex_axes``），因此消费方在构造形状时必须让
+    ``_label_sizes`` 走附录分支，不能把两段混用同一套轴位假设。
+    """
     text = CASES_PATH.read_text(encoding="utf-8")
-    head = text.split(_TOPOLOGY_SECTION_MARKER)[0]
+    if include_momentum:
+        body = text
+        marker = "## 动量指标与流分量指标"
+        if marker not in text:
+            raise AssertionError(
+                f"{CASES_PATH.name} 缺少 {marker!r} 一节，无法读取附录方程")
+    else:
+        body = text.split(_TOPOLOGY_SECTION_MARKER)[0]
     equations: list[str] = []
-    for line in head.splitlines():
+    for line in body.splitlines():
         if not line.startswith("| T"):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
