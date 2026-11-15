@@ -1,0 +1,132 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-15 11:20:43 +0800
+批次: v3-order-fix
+主任务: v3 收缩序按生产尺寸定型 + CUDA 原生库构建
+触发原因: 阶段成果
+摘要: 步表收缩序改生产尺寸定型（中位 222x）；topology 补 pack-bound 守卫；CUDA 原生库建成，GPU 侧 topology 可用
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 恢复断点并确认真实待办
+- 目标: 续跑 qcd-einsum 攻坚的剩余两项（v3 收缩序、CUDA 原生库）
+- 命令/操作: 读 run 目录与 ~/.commandcode 会话记录；核对仓库与标签
+- 关键输出: 断点会话 36657a83 于第 1916 行截断；仓库已提交并打 dev59；工作树干净
+- 退出码: 0
+- 证据与判断: 续跑点为 AGENTS.md §6.2 记录的 v3 收缩序缺陷与 cpp/cuda/einsum 未构建
+
+### S2 — 定位步表为构建产物并重建原生库
+- 命令/操作: git check-ignore 确认 topology_kernels.inc 被 gitignore；
+  bash cpp/kupl/einsum/make.sh；mamba install gxx_linux-64
+- 关键输出: .inc 由 python -m pyqcd.testing._topology_kernel_gen 生成（3.7 MB,
+  2582 kernels）；首次构建 exit=3（缺 g++），装编译器后 exit=0
+- 退出码: 3 → 0
+- 证据与判断: topology_apply.cpp:25 无条件 include 该 .inc，干净树必须先跑生成器；
+  全天量套件由 125/1/4 变为 127/1/2
+
+### S3 — 量化收缩序缺陷
+- 命令/操作: 写诊断脚本，对比 PROBE_DIM=2 探针序与 roles 反推生产尺寸序的 MAC
+- 关键输出: 抽样 21 条，旧序中位多付 222x，最坏 42738x（seq=259）；
+  seq=646 探针序 1.0008e12 MAC vs 生产序 4.08e8
+- 退出码: 0
+- 证据与判断: 语料 roles + bench_specialized._label_sizes 可把每个 label 绑到
+  真实 Ns/Nev/Mom/Lt，这是修复的正确输入
+
+### S4 — 实施收缩序修复
+- 命令/操作: plan_steps 增加 sizes 参数；main 新增 _production_sizes；
+  优化器 greedy→auto；encode_v3 透传 sizes
+- 关键输出: 重新生成 .inc（3926145 bytes, 746298 步表字节）
+- 退出码: 0
+- 证据与判断: 生产尺寸下 9/9 正确（rel ≤ 1e-15）；MAC 对比 更优 17/持平 4/更差 0，
+  中位 222x；auto 比 greedy 再省 74%（seq=646 1.08e8 vs 4.08e8）
+
+### S5 — 发现并修复 topology 缺 pack-bound 守卫
+- 命令/操作: 实测 seq=646 → topology 5095 ms；对比 dedicated 立即返回
+- 关键输出: dedicated 的拒绝原因是 negative-cache: plan is pack-bound on CPU
+  (1666300992 pack bytes, 216250112 FLOPs)；该数字与 topology 完全一致
+- 退出码: 0
+- 证据与判断: seq=646 的输出本身就是 1e8 元素（amwq 四轴各 100），任何实现都要
+  写 800 MB；但 topology 还在中间体上做 1.67 GB pack/unpack。_cpu_plan_fallback_reason
+  只服务 dedicated，topology 缺同一道门。新增 _topology_pack_bound_reason()
+  用 _simulate_plan 的步序列与中间槽位算 pack 流量（首版漏算中间体，得 0.06 GiB
+  漏判；补上 slots 后与 dedicated 数字一致）。
+
+### S6 — 构建 CUDA 原生库
+- 命令/操作: 依次补 mamba install cuda-crt / libcublas-dev / cuda-nvcc-dev；
+  建 targets/x86_64-linux/nvvm 软链接；PYQCD_CUDA_ARCHITECTURES=7.0 重建
+- 关键输出: 首次 exit=1 缺 crt/host_config.h；再缺 cublas_v2.h；再缺 cicc
+  （nvvm 路径错配）；再缺 fatbinary_section.h（cuda-nvcc-dev）；最终 exit=0，
+  arch 7.0，40s
+- 退出码: 1 → 1 → 127 → 1 → 0
+- 证据与判断: 均为 conda CUDA 包拆分不完整，非代码缺陷；软链接只在环境内，不改系统
+
+### S7 — 最终验证
+- 命令/操作: python -B -m pyqcd.testing（锁定 V100 / 不锁定两种）；
+  python -m pyqcd.testing._topology_v3_prototype；四 dtype A/B
+- 关键输出: 两种跑法均 129 passed / 1 skipped / 0 failed；原型 3 passed；
+  CUDA topology 2x2 实测 path=cuda_topology 且数值精确匹配，probe state=ok；
+  seq=500 float32 由 53.1x 降至 1.09x，seq=1700 complex64 反超 0.15x
+- 退出码: 0 / 0 / 0
+- 证据与判断: 收缩序修复彻底且无回退；GPU 侧 topology 从"符号未导出"变为真正可用
+
+## 验证与证据
+- 测试/检查: python -B -m pyqcd.testing（mamba pyqcd-einsum-cu124）
+- 结果: 129 passed / 1 skipped / 0 failed（两种 GPU 锁定方式一致）；
+  _topology_v3_prototype 3 passed；sush 语料 9 条生产尺寸正确性 rel ≤ 1e-15
+- 未验证项: cpp/cpu/cpu-einsums 原生桥仍未构建（native 组 SKIP）；
+  v3 步表仍只服务 float32/float64（复数在 topology_apply.cpp:232 直接 miss）
+
+## 变更与产物
+- 文件: pyqcd/testing/_topology_kernel_gen.py、pyqcd/testing/_topology_v3_prototype.py、
+  pyqcd/einsum/_kernel_kupl.py、pyqcd/einsum/AGENTS.md
+- 产物: cpp/kupl/einsum/src/topology_kernels.inc（gitignore 的构建产物）、
+  cpp/kupl/einsum/libpyqcdeinsum_kupl.so、cpp/cuda/einsum/libpyqcdeinsum_cuda.so
+- 未改动范围: 内核 C++ 执行器逻辑、分派顺序、任何设备相关默认值
+
+## 风险、限制与下一步
+- 风险: 步表字节数由 695818 增至 750538（+7.9%），属预期代价
+- 阻塞: 无
+- 下一步: 已提交 034b560c。可选：构建 cpp/cpu/cpu-einsums 补齐 native 组；
+  或让 v3 支持复数（需 topology_apply.cpp 增加 cgemm/zgemm 分支）
+
+## 用户输入指令
+继续推进 v3 收缩序按 PROBE_DIM=2 定型的已知缺陷，需要修改 _topology_kernel_gen.py 并重新生成 topology_kernels.inc；或构建 cpp/cuda/einsum，让 GPU 侧 topology 真正生效。
+注意发布时不含上述的GPU限制
+
+## Agent 全文报告
+--- report begin ---
+两项都完成了。v3 收缩序改按生产尺寸定型，CUDA 原生库也建成，GPU 侧 topology 从"符号未导出"变为真正可用。
+
+改动内容：
+1. pyqcd/testing/_topology_kernel_gen.py — plan_steps 接受真实 label 长度；main 新增
+   _production_sizes() 从语料 roles + distill 生产 dims 反推尺寸（复用
+   bench_specialized._label_sizes）；优化器 greedy→auto。
+2. pyqcd/testing/_topology_v3_prototype.py — encode_v3 透传 sizes，异形轴用例改按
+   生产尺寸验证真正下发的步表。
+3. pyqcd/einsum/_kernel_kupl.py — 新增 _topology_pack_bound_reason()，给 topology 路径
+   补上与 dedicated 一致的 CPU pack-bound 守卫；更新过时的策略说明与提示文本。
+4. pyqcd/einsum/AGENTS.md — §6.2 由"已知缺陷"改写为"已修复"。
+
+推理依据：收缩序原先由 dim=2 等长超立方体定型。等长时全轴同长、路径代价与轴长
+无关，所以 48/48 全绿恰好掩盖了它；一到生产异形轴（Ns=4/Nev=100/Mom/Lt）就暴露。
+语料自带 roles，配合 bench_specialized._label_sizes 就能把每个 label 绑到真实长度，
+不必新写一份映射。
+
+验证结果（全部本次实测）：
+- python -B -m pyqcd.testing：129 passed / 1 skipped / 0 failed，锁定 V100 与不锁定
+  两种跑法一致；
+- 收缩序收益（21 条抽样、MAC 口径）：更优 17 / 持平 4 / 更差 0，中位 222x，
+  均值 4558x，最坏 42738x；
+- 端到端 seq=500 float32：169.5 ms vs dedicated 155.0 ms = 1.09x（修复前 53.1x）；
+- 顺带发现 topology 缺 pack-bound 守卫：seq=646 输出本身 1e8 元素、只做 2.16e8
+  FLOPs，却在中间体上做 1.67 GB pack/unpack，实测 5.2 s；补守卫后如实 status=4 回落；
+- CUDA 侧：2x2 实测 path=cuda_topology 且数值精确匹配，probe state=ok。
+
+发布物不含 GPU 限制：V100 只以临时环境变量（UUID 与 PYQCD_CUDA_ARCHITECTURES=7.0）
+用于本次实测，代码、测试默认值、文档结论均保持设备无关。conda 环境里建的 nvvm 软链接
+只在本地环境中，未改系统配置。
+
+后续步骤：已提交 034b560c。剩余可选方向是构建 cpp/cpu/cpu-einsums 补齐 native 组，
+或让 v3 步表支持复数（需在 topology_apply.cpp 增加 cgemm/zgemm 分支）。
+--- report end ---
