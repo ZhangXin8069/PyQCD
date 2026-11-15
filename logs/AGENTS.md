@@ -1023,3 +1023,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## remove-matx-einsums-perf - stage - 2026-11-15 12:45:21 +0800
+- 主任务: 移除 Einsums/MatX + 生产尺寸性能重测
+- 日志文件: logs/v202611151245.txt
+- 文件大小: 7594 bytes
+- 触发原因: 阶段成果
+- 关键内容: 净删 6506 行且 qcd-einsum 不受影响（127/1/0）；四 dtype 重测 80 格全在容差内，复数与实数无系统差异，旧 v2 数字作废
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

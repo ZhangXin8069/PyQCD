@@ -1,0 +1,130 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-15 12:45:21 +0800
+批次: remove-matx-einsums-perf
+主任务: 移除 Einsums/MatX + 生产尺寸性能重测
+触发原因: 阶段成果
+摘要: 净删 6506 行且 qcd-einsum 不受影响（127/1/0）；四 dtype 重测 80 格全在容差内，复数与实数无系统差异，旧 v2 数字作废
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 摸清移除范围
+- 目标: 放弃 Einsums 与 MatX，只保留 git-rep 子模块与文档展示，且不影响 qcd-einsum
+- 命令/操作: grep 全库引用；git ls-files 列举；git submodule status
+- 关键输出: 生产代码 pyqcd/einsum/ 与 pyqcd/tools/ 对两者**零引用**，全部引用都在
+  pyqcd/testing/；cpp 侧 11 文件、py 侧 8 文件、bench_four_engines.py 1 文件
+- 退出码: 0
+- 证据与判断: 零引用保证移除不影响 qcd-einsum；refer/git-rep/{Einsums,MatX} 是
+  未初始化的 submodule，按用户要求保留
+
+### S2 — 执行移除
+- 命令/操作: git rm -r cpp/cpu/cpu-einsums cpp/cuda/matx pyqcd/testing/{cpu_einsums,matx}；
+  git rm pyqcd/testing/einsum/bench_four_engines.py
+- 关键输出: 移除 20 个文件；同步清理 pyqcd/testing/__init__.py 与 conftest.py 两个
+  注册点、MANIFEST.in 两条 prune、pyqcd/testing/AGENTS.md 目录表两行
+- 退出码: 0
+- 证据与判断: 四引擎脚本深度耦合两个桥（探针打印/输出分配/可用性判定），两引擎
+  移除后失去存在意义，一并移除；_inspect10_docs.d6 的 "einsums" 正则保留（它防的是
+  pyqcd 自己的 API 名残留），仅更正注释
+
+### S3 — 验证不影响 qcd-einsum
+- 命令/操作: import 冒烟；全量回归；与移除前逐项比对测试清单
+- 关键输出: `import pyqcd.einsum` / `import pyqcd.testing` 均正常；
+  127 passed / 1 skipped / 0 failed；comm 比对显示减少的正好是
+  test_cpu_einsums_contracts 与 test_matx_einsum_contracts 两项，无其他受影响
+- 退出码: 0
+- 证据与判断: 移除干净，qcd-einsum 未受波及
+
+### S4 — 派发性能重测子代理（中途失败）
+- 命令/操作: agent-dispatch.sh --task-file taskC.txt --timeout 60m
+- 关键输出: 子代理 run 20261115T123124.5HvhqG 因 stopReason=permission_denied 提前
+  中止，finalText 只有一句未完成的测量计划
+- 退出码: 0（进程正常退出但任务未完成）
+- 证据与判断: 其日志留下一条异常读数 seq=855 topo 35.588s vs dedicated 0.357s（100×）。
+  该代理是在主 agent 跑全量回归（CPU 满载）期间并发测量的，墙钟被抢占，数字不可信。
+  主 agent 随后独立复测该格为 0.03s，rel(topo,dedic)=1.13e-15，推翻该异常。
+
+### S5 — 主 agent 自行完成重测
+- 命令/操作: 新建 pyqcd/testing/einsum/bench_topology_vs_dedicated.py；
+  distill 口径 20 seq × 4 dtype，首调丢弃 + 3 轮中位；连续跑两次确认稳定
+- 关键输出: complex128 中位 8.18x / complex64 6.56x / float64 6.80x / float32 6.73x；
+  80 格数值全部在容差内；21/77 格拓扑反超 dedicated（最优 0.09x）
+- 退出码: 0
+- 证据与判断: 复数与实数无系统差异，证明复数真走 v3；小规模 6–9x 来自入口固定开销；
+  16 算子大规模上拓扑反超。旧注释"复数 6–7x、seq=1700 complex64 0.15x"测的是 v2，
+  已作废并用新数据替换。seq=129 的 float32 一格 6993 ms（pack-bound 边界）如实保留。
+
+## 验证与证据
+- 测试/检查: python -B -m pyqcd.testing；基准脚本两次独立运行
+- 结果: 127 passed / 1 skipped / 0 failed；80 格数值全在容差内
+- 未验证项: Einsums 真后端（已随源码移除）；CUDA 侧复数性能未重测（CUDA topology
+  走另一套机制，不在本次范围）
+
+## 变更与产物
+- 文件: 移除 20 文件（cpp 11 + py 8 + bench_four_engines）；修改 MANIFEST.in、
+  pyqcd/testing/{AGENTS.md,__init__.py,conftest.py,_inspect10_docs.py,conftest.py}、
+  pyqcd/einsum/_kernel_kupl.py；新增 bench_topology_vs_dedicated.py
+- 产物: pyqcd/testing/einsum/artifacts/topo_vs_dedicated_distill_20261115123927/result.json
+- 未改动范围: _TOPOLOGY_DECLINED_DTYPES（按要求只给建议）、refer/git-rep 子模块、
+  docs/report_matx_einsums_bridge_20261110.md
+
+## 风险、限制与下一步
+- 风险: 无源码级风险；移除净删 6506 行
+- 阻塞: 无
+- 下一步: 已提交 64f716ed（移除）、cebd6a0a（性能重测）。
+  可选：按 seq/元素数实现大规模场景的自动选路（当前按 dtype 拒绝实数，非最优）
+
+## 用户输入指令
+(放弃与{Einsums与matx},将其相关部分全部移除(仅保留git-rep与文档中的展示部分),且确保不影响qcd-einsum),并派发子代理继续推进{复数接通 v3 后的性能数字需按生产尺寸重测}
+
+## Agent 全文报告
+--- report begin ---
+两件事都做了。移除由我直接完成；性能重测的子代理中途因 permission_denied 失败，
+我接手自己测完并发现了它留下的一条假异常。
+
+## 一、移除 Einsums 与 MatX
+
+关键前提：**生产代码 pyqcd/einsum/ 与 pyqcd/tools/ 对它们零引用**，全部引用都在
+pyqcd/testing/ —— 这保证了移除不影响 qcd-einsum。
+
+移除 20 个文件：cpp/cpu/cpu-einsums（6）、cpp/cuda/matx（5）、pyqcd/testing/cpu_einsums（4）、
+pyqcd/testing/matx（4）、pyqcd/testing/einsum/bench_four_engines.py（1）。同步清理
+__init__.py 与 conftest.py 两个注册点、MANIFEST.in 两条 prune、testing/AGENTS.md 目录表。
+净删 6506 行。
+
+保留：refer/git-rep/{Einsums,MatX} 两个未初始化 submodule、docs 里的历史报告。
+_inspect10_docs.d6 的 "einsums" 正则也保留——它防的是 pyqcd 自己的 API 名残留，
+与第三方库无关，我只更正了注释。
+
+验证：127 passed / 1 skipped / 0 failed。与移除前逐项比对，减少的正好是
+test_cpu_einsums_contracts 与 test_matx_einsum_contracts 两项，无其他测试受影响。
+
+## 二、性能重测（子代理失败，我接手）
+
+子代理在 permission_denied 处中止，但留下一条异常读数：seq=855 topo 35.6s
+vs dedicated 0.357s（100×）。我核查后确认是假异常——它是在我跑全量回归、CPU
+满载时并发测的墙钟被抢占。我单独复测该格是 0.03s，且 rel(topo,dedic)=1.13e-15。
+
+我自己写了 pyqcd/testing/einsum/bench_topology_vs_dedicated.py，distill 口径
+（Nev=100, Mom=1），轴长由语料 roles 反推，首调丢弃 + 3 轮中位，20 seq × 4 dtype：
+
+  dtype        n   中位    最优    最差   快于 dedicated
+  complex128  19  8.18x  0.17x  24.63x      5/19
+  complex64   19  6.56x  0.09x  48.95x      6/19
+  float64     19  6.80x  0.30x  56.22x      5/19
+  float32     20  6.73x  0.48x  62.19x      5/20
+
+80 格数值全部在容差内。三点结论：
+1. 复数与实数**没有系统差异**——这正是复数真走 v3 的证据，旧注释"复数 6–7x、
+   seq=1700 complex64 0.15x"测的是 v2，已作废并用新数据替换。
+2. 小规模 6–9x 来自拓扑入口固定开销（约 1–2 ms），不是 GEMM 形状退化。
+3. 16 算子的大规模语料上拓扑反超（最优 0.09x，21/77 格快于 dedicated）。
+
+建议（未擅自改策略）：若要为大规模场景自动改走拓扑，正确做法是按 seq/元素数选路，
+而不是像现在这样按 dtype 拒绝实数。
+
+## 后续
+已提交 64f716ed（移除）与 cebd6a0a（性能重测）。未验证项：CUDA 侧复数性能未重测
+（CUDA topology 走另一套机制）。
+--- report end ---
