@@ -467,6 +467,10 @@ MESSAGES: dict[str, dict[str, str]] = {
               "{first} vs {second}",
         "zh": "标签 {label!r} 在各操作数里的长度冲突：{first} vs {second}",
     },
+    "error.json_unwritable": {
+        "en": "cannot write --json to {path!r}: {exc}",
+        "zh": "无法把 --json 写到 {path!r}：{exc}",
+    },
     "error.shape_equation_unparsable": {
         "en": "cannot derive the output shape from the equation {equation!r}: {exc}",
         "zh": "无法从方程 {equation!r} 推导输出形状：{exc}",
@@ -1683,8 +1687,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr)
 
     if args.json:
-        with open(args.json, "w", encoding="utf-8") as handle:
-            json.dump(result, handle, indent=1, ensure_ascii=False)
+        # 写不进去属于**参数/环境错误**（退出码 2），不是数值失败（1）。
+        # 原先裸 ``open()`` 让 ``FileNotFoundError``/``PermissionError`` 冒泡，
+        # traceback + rc=1，脚本会以为是"结果不对"（2026-11-15 第六轮复查实证）。
+        try:
+            with open(args.json, "w", encoding="utf-8") as handle:
+                json.dump(result, handle, indent=1, ensure_ascii=False)
+        except OSError as exc:
+            raise UsageError(translate("error.json_unwritable", language,
+                                       path=args.json,
+                                       exc=f"{type(exc).__name__}: {exc}")) from exc
         print(f"wrote {args.json}")
 
     if not result.get("ok"):

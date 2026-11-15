@@ -782,6 +782,32 @@ def test_equations_the_library_accepts_are_also_accepted_by_the_cli():
         assert code == 2, f"{equation!r} {shape!r} 应当报错，得到 {code}"
 
 
+def test_unwritable_json_path_is_a_usage_error():
+    """``--json`` 写不进去必须是退出码 2（参数/环境错误），不是 1。
+
+    回归点（2026-11-15 第六轮复查实证）：裸 ``open()`` 让
+    ``FileNotFoundError`` 冒泡成 traceback + rc=1，脚本会误判成"结果不对"。
+    ``--help`` 明确承诺 2 = 参数或环境错误。
+    """
+    import contextlib
+    import io
+
+    from pyqcd.einsum import test as cli
+
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(stderr):
+        try:
+            code = cli.main([
+                "--equation", "ij,jk->ik", "--shape", "[4,4],[4,4]->[4,4]",
+                "--device", "cpu", "--compare", "none", "--rounds", "1",
+                "--json", "/nonexistent_dir_xyz/x.json",
+            ])
+        except SystemExit as exc:
+            code = exc.code
+    assert code == 2, f"应为 2，得到 {code}"
+
+
 def test_help_lists_specialize_and_verbose_reports_it():
     """``--help`` 是用户唯一权威来源：缺省值表必须有 ``--specialize``。
 
@@ -1280,6 +1306,7 @@ TESTS = (
     test_verbose_names_the_route_that_actually_ran,
     test_tolerance_is_atol_plus_rtol_and_rtol_is_reported,
     test_equations_the_library_accepts_are_also_accepted_by_the_cli,
+    test_unwritable_json_path_is_a_usage_error,
     test_help_lists_specialize_and_verbose_reports_it,
     test_compare_optimize_default_reproduces_the_old_reference_behaviour,
     test_compare_optimize_dp_reaches_the_opt_einsum_reference,
