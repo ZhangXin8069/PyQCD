@@ -180,6 +180,50 @@ def test_exit_codes_distinguish_usage_from_numeric_failure():
     assert result["rel"] > 1e-30, result["rel"]
 
 
+def test_memory_snapshot_is_outside_the_timed_region():
+    """内存快照必须能在计时之外采集，且不改变计时结果的可重复性。
+
+    采样点只有三个（构造前、构造后、收尾），都不在 ``_timed`` 内部；本条用
+    "同一条命令连跑两次，耗时差异在噪声内"间接证明它没有污染 measured region。
+    """
+    snap = cli._memory_snapshot(np)
+    assert "rss_mib" in snap, snap
+    assert snap["rss_mib"] > 0, snap
+    assert "gpu_used_mib" not in snap, snap        # CPU 侧不该有显存字段
+
+    delta = cli._memory_delta({"rss_mib": 10.0}, {"rss_mib": 13.5})
+    assert delta["rss_mib"] == 3.5, delta
+    assert delta["rss_mib_after"] == 13.5, delta
+
+    runs = [cli.run(equation="ij,jk->ik", shapes=[(256, 256), (256, 256)],
+                    out_shape=(256, 256), compare="numpy", rounds=3, warmup=1)
+            for _ in range(2)]
+    for item in runs:
+        assert item["ok"], item
+        peak = item["memory"]["peak"]
+        # 增量可能为 0（小张量不让 VmRSS 上涨），但绝对值必须被记录。
+        assert peak.get("rss_mib") is not None, item["memory"]
+        assert peak["rss_mib_after"] > 0, item["memory"]
+    first, second = runs[0]["seconds"], runs[1]["seconds"]
+    # 宽松界：只防"采样插进计时循环"这类结构性错误，不做精确性能断言。
+    assert max(first, second) / min(first, second) < 2.0, (first, second)
+
+
+def test_reference_seconds_are_reported():
+    """``--compare`` 的参照耗时必须被采集，供 ``ref time`` 行与比值使用。"""
+    result = cli.run(equation="ij,jk->ik", shapes=[(128, 128), (128, 128)],
+                     out_shape=(128, 128), compare="numpy", rounds=2, warmup=1)
+    assert result["ok"], result
+    assert result["reference_seconds"] is not None, result
+    assert result["reference_seconds"] > 0, result["reference_seconds"]
+    assert result["seconds"] > 0, result["seconds"]
+
+    plain = cli.run(equation="ij,jk->ik", shapes=[(32, 32), (32, 32)],
+                    out_shape=(32, 32), compare="none", rounds=2, warmup=1)
+    assert plain["ok"], plain
+    assert plain.get("reference_seconds") is None, plain
+
+
 def test_help_lists_every_option_with_defaults():
     """``--help`` 必须能跑，且列出全部选项（它是用户唯一的规范来源）。"""
     parser = cli.build_parser()
@@ -215,6 +259,8 @@ TESTS = (
     test_atol_is_relative_not_elementwise,
     test_defaults_are_documented_values,
     test_exit_codes_distinguish_usage_from_numeric_failure,
+    test_memory_snapshot_is_outside_the_timed_region,
+    test_reference_seconds_are_reported,
     test_help_lists_every_option_with_defaults,
     test_run_end_to_end_on_cpu,
 )

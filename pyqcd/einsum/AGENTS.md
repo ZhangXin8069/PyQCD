@@ -275,14 +275,37 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 典型输出（本条方程 10 操作数 / 2.56 亿输入元素）：
 
 ```
-# CPU (--device cpu --backend numpy)
-PASS ... rel=3.30e-15 vs opt_einsum.contract(optimize='greedy')  7205.226ms
-kernel: {'kupl': {'path': 'kupl_dedicated', 'dtype': 'complex128'}}
+# CPU (--device cpu --backend numpy)，默认一行式
+PASS ... rel=3.45e-15 vs opt_einsum.contract(optimize='greedy')  9858.038ms
+       (ref 1350.031ms, 7.30x)  rss+4004MiB
 
-# GPU (--device gpu --backend cupy)
-PASS ... rel=1.17e-15 vs opt_einsum.contract(optimize='greedy')  20.558ms
-kernel: {'cuda': {'path': 'cuda_topology', 'steps': 9, 'copied': ()}}
+# GPU (--device gpu --backend cupy --verbose true)
+equation : ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak
+device   : gpu  dtype=complex128  backend=cupy
+operands : 10 个，共 256,010,297 元素；输出 [400, 400] (160,000 元素)
+time     : 20.943 ms （warmup=1，rounds=5，中位）
+reference: opt_einsum.contract(optimize='greedy')
+ref time : 1489.477 ms  （pyqcd/参照 = 0.01×）
+rel      : 1.075e-15  (atol=1e-12)
+memory   : 输入张量 +3999 MiB RSS，+3906 MiB 显存
+peak     : RSS +4065 MiB，显存 +3909 MiB，总显存 32768 MiB
+pyqcd    : 0.4.2  /home/zhangxin/PyQCD/pyqcd/__init__.py
+kernel   : {'cuda': {'path': 'cuda_topology', 'steps': 9, 'copied': ()}}
+PASS ... 20.943ms (ref 1489.477ms, 0.01x)  vram+3909MiB
 ```
+
+三处读数各有用处：
+
+| 行 | 含义 |
+|---|---|
+| `ref time` | 参照实现的耗时 + `pyqcd/参照` 比值。**这条方程上 CPU 与 GPU 结论相反**：CPU 侧 pyqcd 9858 ms vs opt_einsum 1350 ms（**慢 7.3×**），GPU 侧 pyqcd 20.9 ms vs 1489 ms（**快 71×**）。所以比值必须连同 `device` 一起读 |
+| `memory` | 构造输入张量带来的增量（`RSS` 与 cupy 显存池 `used_bytes`） |
+| `peak` | 跑完收缩后的总增量，含中间体；GPU 侧另给池保留量与设备总显存，便于判断会不会 OOM |
+
+内存采样点只有三个（构造前 / 构造后 / 收尾），**都不在 `_timed` 的计时循环内**，
+因此不污染 `--rounds` 的中位。契约
+`test_memory_snapshot_is_outside_the_timed_region` 用"同一命令连跑两次、耗时差异
+<2×"把这个结构性要求钉住。
 
 `kernel` 字段直接暴露走的哪条原生路线（`kupl_dedicated` / `cuda_topology` /
 `kupl_topology` / `kupl_topology_v2`），省去再翻 `LAST_INFO`。

@@ -269,7 +269,10 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     _validate_against_equation(equation, shapes)
     xp = _xp_for_device(device)
     np_dtype = np.dtype(dtype)
+    # 构造前先拍一次快照，用来算"本次运行新增了多少内存/显存"。
+    memory_before = _memory_snapshot(xp)
     operands, host = _make_operands(xp, shapes, np_dtype, seed)
+    memory_loaded = _memory_snapshot(xp)
 
     report: dict[str, Any] = {
         "equation": equation,
@@ -304,6 +307,10 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     report["actual_shape"] = list(np.shape(got_host))
     report["kernel_info"] = _kernel_info()
     report["install"] = _install_info()
+    report["memory"] = {
+        "inputs_delta": _memory_delta(memory_before, memory_loaded),
+        "peak": _memory_delta(memory_before, _memory_snapshot(xp)),
+    }
 
     # 参照
     if compare != "none":
@@ -424,6 +431,59 @@ def _install_info() -> dict[str, Any]:
     return info
 
 
+def _memory_snapshot(xp) -> dict[str, Any]:
+    """采集进程内存与显存占用。
+
+    只在**计时循环之外**调用（操作数构造后、收尾时各一次），因此不进入任何
+    measured region，不污染 ``--rounds`` 的中位数。三项都是 O(1) 查询或一次
+    ``/proc`` 读取，开销在微秒量级：
+
+    * ``rss_mib``：进程常驻集（``/proc/self/status`` 的 VmRSS，不受 allocator
+      缓存假象影响）；
+    * ``gpu_used_mib``：cupy 显存池**已分配**总量（``memory_pool().used_bytes()``）；
+    * ``gpu_total_mib``：该设备总显存。
+    """
+    info: dict[str, Any] = {}
+    try:
+        with open("/proc/self/status", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    info["rss_mib"] = round(int(line.split()[1]) / 1024.0, 1)
+                    break
+    except OSError:
+        pass
+    if xp is not np:
+        try:
+            import cupy
+            pool = cupy.get_default_memory_pool()
+            info["gpu_used_mib"] = round(pool.used_bytes() / 2 ** 20, 1)
+            info["gpu_reserved_mib"] = round(pool.total_bytes() / 2 ** 20, 1)
+            free, total = cupy.cuda.runtime.memGetInfo()
+            info["gpu_total_mib"] = round(total / 2 ** 20, 1)
+            info["gpu_free_mib"] = round(free / 2 ** 20, 1)
+        except Exception as exc:                # noqa: BLE001
+            info["gpu_error"] = f"{type(exc).__name__}: {exc}"
+    return info
+
+
+def _memory_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """前后快照相减，得到本次运行的内存占用增量，并保留绝对值。
+
+    为什么两者都要：小规模张量（如 256×256 = 1 MiB）的 RSS 增量可能是 **0**——
+    Python 进程的 arena 早已持有足够内存，分配器不需要向 OS 再要一页，``VmRSS``
+    就不会涨。只看增量会误以为"没占内存"。绝对值 ``*_after`` 让读者仍能看到规模。
+    """
+    delta: dict[str, Any] = {}
+    for key in ("rss_mib", "gpu_used_mib"):
+        if before.get(key) is not None and after.get(key) is not None:
+            delta[key] = round(after[key] - before[key], 1)
+            delta[f"{key}_after"] = after[key]
+    for key in ("gpu_total_mib", "gpu_free_mib"):
+        if after.get(key) is not None:
+            delta[key] = after[key]
+    return delta
+
+
 def _print_detail(report: dict[str, Any]) -> None:
     """``--verbose true`` 时的人类可读明细。"""
     out = sys.stderr
@@ -438,8 +498,38 @@ def _print_detail(report: dict[str, Any]) -> None:
               f"（warmup={report['warmup']}，rounds={report['rounds']}，中位）", file=out)
     if report.get("reference"):
         print(f"reference: {report['reference']}", file=out)
+    ref_seconds = report.get("reference_seconds")
+    own_seconds = report.get("seconds")
+    if ref_seconds is not None:
+        ratio = ""
+        if own_seconds:
+            ratio = f"  （pyqcd/参照 = {own_seconds / ref_seconds:.2f}×）"
+        print(f"ref time : {ref_seconds * 1000:.3f} ms{ratio}", file=out)
     if "rel" in report:
         print(f"rel      : {report['rel']:.3e}  (atol={report['atol']:g})", file=out)
+    memory = report.get("memory") or {}
+    inputs_delta = memory.get("inputs_delta") or {}
+    peak = memory.get("peak") or {}
+    parts = []
+    if inputs_delta.get("rss_mib") is not None:
+        parts.append(f"输入张量 +{inputs_delta['rss_mib']:.0f} MiB RSS")
+    if inputs_delta.get("gpu_used_mib") is not None:
+        parts.append(f"+{inputs_delta['gpu_used_mib']:.0f} MiB 显存")
+    if parts:
+        print(f"memory   : {'，'.join(parts)}", file=out)
+    parts = []
+    if peak.get("rss_mib") is not None:
+        after = peak.get("rss_mib_after")
+        suffix = f"（进程共 {after:.0f} MiB）" if after is not None else ""
+        parts.append(f"RSS +{peak['rss_mib']:.0f} MiB{suffix}")
+    if peak.get("gpu_used_mib") is not None:
+        parts.append(f"显存 +{peak['gpu_used_mib']:.0f} MiB")
+    if peak.get("gpu_reserved_mib") is not None:
+        parts.append(f"（池保留 {peak['gpu_reserved_mib']:.0f} MiB）")
+    if peak.get("gpu_total_mib") is not None:
+        parts.append(f"总显存 {peak['gpu_total_mib']:.0f} MiB")
+    if parts:
+        print(f"peak     : {'，'.join(parts)}", file=out)
     install = report.get("install") or {}
     if install.get("version"):
         print(f"pyqcd    : {install['version']}  {install.get('package', '?')}",
@@ -488,6 +578,9 @@ def build_parser() -> argparse.ArgumentParser:
             "--scene distill\n\n"
             "口径: --atol 是**相对**容差（按 max|expected| 归一）；耗时先丢 --warmup "
             "次再取 --rounds 次中位，warmup 不允许 0。\n"
+            "输出: 默认一行 PASS 里带 pyqcd 耗时、参照耗时、比值与内存增量；"
+            "--verbose true 另给逐项明细（含 ref time / memory / peak / pyqcd 来源）。\n"
+            "内存采样只在计时循环之外（构造前/构造后/收尾），不影响计时。\n"
             "退出码: 0 通过 / 1 数值或形状不符 / 2 参数或环境错误。\n"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -582,6 +675,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         detail = f" rel={result['rel']:.2e} vs {result['reference']}"
     if "seconds" in result:
         detail += f"  {result['seconds'] * 1000:.3f}ms"
+        ref_seconds = result.get("reference_seconds")
+        if ref_seconds:
+            detail += f" (ref {ref_seconds * 1000:.3f}ms, {result['seconds'] / ref_seconds:.2f}x)"
+        peak = (result.get("memory") or {}).get("peak") or {}
+        if peak.get("gpu_used_mib") is not None:
+            detail += f"  vram+{peak['gpu_used_mib']:.0f}MiB"
+        elif peak.get("rss_mib") is not None:
+            detail += f"  rss+{peak['rss_mib']:.0f}MiB"
     print(f"PASS {args.equation}{detail}")
     return 0
 
