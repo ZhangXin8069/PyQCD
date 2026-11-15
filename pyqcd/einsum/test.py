@@ -346,6 +346,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "{requested} (effective {effective})",
         "zh": "{requested}（实际 {effective}）",
     },
+    "detail.shape": {
+        "en": "{n} operand shape(s), left to right, in the equation's own order",
+        "zh": "共 {n} 个操作数形状（按方程中从左到右的顺序）",
+    },
+    "detail.shape_empty": {
+        "en": "(no operands)",
+        "zh": "（无操作数）",
+    },
     "detail.time": {
         "en": "{ms:.3f} ms (warmup={warmup}, rounds={rounds}, median)",
         "zh": "{ms:.3f} ms （warmup={warmup}，rounds={rounds}，中位）",
@@ -1249,6 +1257,17 @@ def _print_detail(report: dict[str, Any], language: str = "zh") -> None:
         "detail.operands", language, n=report["n_operands"],
         elements=report["input_elements"], out_shape=report["out_shape"],
         out_elements=report["output_elements"]), file=out)
+    # 每个操作数的**完整形状**单独一行：``operands`` 那行只给总数与输出，
+    # 排查"哪一路的轴长不对"时必须看到逐个形状（2026-11-15 用户要求）。
+    shapes = report.get("shapes") or []
+    if shapes:
+        # 用 ", " 分隔（不随语言变），便于直接复制粘贴回 --shape。
+        rendered = ", ".join("[" + ",".join(str(int(d)) for d in shape) + "]"
+                             for shape in shapes)
+        print("shape    : " + translate("detail.shape", language, n=len(shapes)), file=out)
+        print("           " + rendered, file=out)
+    else:
+        print("shape    : " + translate("detail.shape_empty", language), file=out)
     if "specialize" in report:
         effective = "unknown" if "specialize_effective" not in report else str(
             bool(report["specialize_effective"]))

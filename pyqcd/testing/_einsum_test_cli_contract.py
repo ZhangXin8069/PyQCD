@@ -469,6 +469,52 @@ def test_corpus_shape_inference_reports_non_scalar_output_shape():
     assert "expected=[]" not in output, f"输出形状被兜成空元组：{output}"
 
 
+def test_verbose_lists_every_operand_shape():
+    """``--verbose true`` 必须逐个列出操作数形状，且格式可直接回填 ``--shape``。
+
+    回归点（2026-11-15 用户要求）：明细原先只有一行 ``operands``（总数 + 输出形状），
+    排查"哪一路轴长不对"时看不到逐个形状。现在多一行 ``shape``。
+
+    断言：①行存在；②每个操作数的形状都出现；③用 ", " 分隔且每项形如 ``[d1,d2]``，
+    于是可以原样粘回 ``--shape``。
+    """
+    import contextlib
+    import io
+    import re
+
+    from pyqcd.einsum import test as test_module
+
+    equation = "cqdr,eafb,mknl,oupv,igjh,wsxt,ac,mo,gi,kq,uw,bd,fnp,hj,lrt,vx->es"
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        code = test_module.main([
+            "--equation", equation, "--scene", "distill",
+            "--device", "cpu", "--backend", "numpy", "--dtype", "complex128",
+            "--compare", "none", "--rounds", "1", "--warmup", "1",
+            "--verbose", "true",
+        ])
+    text = err.getvalue()
+    assert code == 0, f"应当通过，得到 {code}：{text}"
+    lines = [ln for ln in text.splitlines() if ln.startswith("shape    :")]
+    assert lines, f"缺少 shape 行：{text}"
+
+    # 形状明细在紧随其后的续行里（以空白缩进）。
+    match = re.search(r"^shape    :.*\n\s+(\[.*)$", text, re.MULTILINE)
+    assert match, f"缺少形状明细续行：{text}"
+    rendered = match.group(1).strip()
+    tokens = rendered.split(", ")
+    assert len(tokens) == 16, f"应列出 16 个操作数形状，得到 {len(tokens)}：{rendered}"
+    for token in tokens:
+        assert re.fullmatch(r"\[\d+(,\d+)*\]", token), f"形状格式不对：{token}"
+    # 第一个与第二个操作数的形状必须真的出现在里面（语料 distill 口径）。
+    assert "[4,4,1,1]" in tokens and "[100,4,1,1]" in tokens, (
+        f"形状内容不对：{tokens}")
+
+    # 该明细本身必须能当 --shape 的输入段用（输出段另加）。
+    parsed, _out = test_module.parse_shape_spec(rendered + "->[1]", language="en")
+    assert len(parsed) == 16, f"明细无法回填 --shape：{parsed}"
+
+
 def test_help_lists_specialize_and_verbose_reports_it():
     """``--help`` 是用户唯一权威来源：缺省值表必须有 ``--specialize``。
 
@@ -961,6 +1007,7 @@ TESTS = (
     test_specialize_is_forwarded_to_the_compare_backend_reference,
     test_corpus_shape_inference_does_not_import_the_testing_package,
     test_corpus_shape_inference_reports_non_scalar_output_shape,
+    test_verbose_lists_every_operand_shape,
     test_help_lists_specialize_and_verbose_reports_it,
     test_compare_optimize_default_reproduces_the_old_reference_behaviour,
     test_compare_optimize_dp_reaches_the_opt_einsum_reference,
