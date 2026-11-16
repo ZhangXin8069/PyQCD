@@ -263,7 +263,8 @@ def test_help_lists_every_option_with_defaults():
     parser = cli.build_parser()
     text = parser.format_help()
     for token in ("--equation", "--shape", "--scene", "--device", "--dtype",
-                  "--backend", "--compare", "--specialize", "--optimize", "--atol",
+                  "--backend", "--compare", "--specialize", "--equivalence",
+                  "--optimize", "--atol",
                   "--rtol", "--rounds", "--warmup", "--seed", "--verbose", "--json"):
         assert token in text, token
     # 缺省值要能在 help 里看到
@@ -1278,6 +1279,245 @@ def test_translate_fails_loudly_on_missing_keys_and_variants():
         cli.translate("detail.kernel_none", "en")
 
 
+# ── --equivalence：等价写法报告（只影响报告，不改执行） ──────────────────────
+#: 未命中语料、但只差第 0 个操作数的轴序即可落到 seq=1 上的方程。
+#: 语料里是 ``cadb,menf,ac,em,bd,fn->``；这里把前两位 ``c``/``a`` 对调。
+EQUIV_AXES_EQUATION = "adcb,menf,ac,em,bd,fn->"
+EQUIV_AXES_SHAPES = [(4, 1, 4, 1), (4, 4, 1, 1), (4, 4), (4, 4), (1, 1), (1, 1)]
+
+#: 未命中语料、只差**输出段**轴序的方程（对应 ``->MNag``，本处写 ``->aMNg``）。
+#: 这一族必须验证**输出侧**回填，否则用户改完输入会拿到轴序错了的答案。
+EQUIV_OUTPUT_EQUATION = "ambn,codp,egfh,ce,mo,Mbdf,Nnph->aMNg"
+EQUIV_OUTPUT_SHAPES = [(2, 2, 2, 2), (2, 2, 2, 2), (2, 2, 2, 2), (2, 2), (2, 2),
+                       (2, 2, 2, 2), (2, 2, 2, 2)]
+EQUIV_OUTPUT_SHAPE = (2, 2, 2, 2)
+
+#: 语料命中的方程（seq=1）。它**不该**出现等价写法那一段。
+EQUIV_HIT_EQUATION = "cadb,menf,ac,em,bd,fn->"
+EQUIV_HIT_SHAPES = [(4, 4, 1, 1), (4, 4, 1, 1), (4, 4), (4, 4), (1, 1), (1, 1)]
+
+
+def _equivalence_env():
+    import os
+
+    return os, cli.EQUIVALENCE_ENV
+
+
+def _verbose_text(equation, shapes, out_shape, **kwargs):
+    """跑一次 ``main``，返回 (退出码, 明细文本)。明细在 stderr。"""
+    import contextlib
+    import io
+
+    argv = ["--equation", equation,
+            "--shape", ",".join("[" + ",".join(str(d) for d in shape) + "]"
+                                for shape in shapes)
+                       + "->[" + ",".join(str(d) for d in out_shape) + "]",
+            "--device", "cpu", "--backend", "numpy",
+            "--compare", "none", "--rounds", "1", "--warmup", "1",
+            "--verbose", "true"]
+    argv += kwargs.pop("extra", [])
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(buffer):
+        code = cli.main(argv)
+    return code, buffer.getvalue()
+
+
+def test_equivalence_reports_both_the_input_and_the_output_side():
+    """``--equivalence true``：明细必须给出等价写法，且**输入与输出两侧都在**。
+
+    用户的原话是"转换输入的同时也有对应变换输出，正确性必须确保"——只报"怎么改
+    张量"而不报"结果怎么回填"，照着做会得到一个轴序错了的答案。所以两侧都要检查：
+
+    * ``operand-axes`` 族：``张量：transpose(...), -, ...`` + ``结果：-``（输出不变）
+    * ``output-axes`` 族：``张量：-`` + ``结果：transpose(...)``（输入不变）
+    """
+    code, text = _verbose_text(EQUIV_AXES_EQUATION, EQUIV_AXES_SHAPES, (),
+                               extra=["--equivalence", "true"])
+    assert code == 0, f"应当通过，得到 {code}：{text}"
+    equiv_lines = [line for line in text.splitlines() if line.startswith("equiv    :")]
+    assert equiv_lines, f"缺少 equiv 行：{text}"
+    assert "存在等价写法" in equiv_lines[0], equiv_lines
+    assert "operand-axes" in equiv_lines[0], equiv_lines
+    # 改写后的方程必须点名语料里的写法
+    assert "cadb,menf,ac,em,bd,fn->" in text, text
+    # 输入侧：第 0 个操作数转置，其余用 '-' 占位
+    assert "transpose(2, 0, 1, 3)" in text, text
+    assert "张量：" in text and "-" in text, text
+    # 输出侧必须在场（该族为空时明确写 '-'，不能整行省略）
+    assert "结果：" in text, text
+    assert "逐元素相同" in text, text
+
+    code, text = _verbose_text(EQUIV_OUTPUT_EQUATION, EQUIV_OUTPUT_SHAPES,
+                               EQUIV_OUTPUT_SHAPE,
+                               extra=["--equivalence", "true"])
+    assert code == 0, f"应当通过，得到 {code}：{text}"
+    assert "output-axes" in text, text
+    assert "张量：-" in text, text
+    # 输出侧的真实置换必须出现——这是"正确性"的一半
+    assert "结果：transpose(2, 0, 1, 3)" in text, text
+    # 该置换必须能用 numpy 语义复现原方程的结果（不只是"看起来有"）
+    operands = [np.ones(shape, dtype=np.complex128)
+                for shape in EQUIV_OUTPUT_SHAPES]
+    direct = np.einsum("ambn,codp,egfh,ce,mo,Mbdf,Nnph->aMNg", *operands)
+    rewritten = np.einsum("ambn,codp,egfh,ce,mo,Mbdf,Nnph->MNag", *operands)
+    assert np.array_equal(direct, rewritten.transpose((2, 0, 1, 3))), (
+        "报出来的输出置换与本模块的语义不一致")
+
+
+def test_equivalence_false_removes_the_section_and_the_json_field():
+    """``--equivalence false``：明细里没有该段，``--json`` 里没有该字段。"""
+    import json
+    import tempfile
+
+    code, text = _verbose_text(EQUIV_AXES_EQUATION, EQUIV_AXES_SHAPES, (),
+                               extra=["--equivalence", "false"])
+    assert code == 0, f"应当通过，得到 {code}：{text}"
+    assert not [line for line in text.splitlines()
+                if line.startswith("equiv    :")], text
+    assert "存在等价写法" not in text, text
+
+    with tempfile.TemporaryDirectory() as folder:
+        for label, flag, present in (("off", "false", False), ("on", "true", True)):
+            path = f"{folder}/{label}.json"
+            code, text = _verbose_text(EQUIV_AXES_EQUATION, EQUIV_AXES_SHAPES, (),
+                                       extra=["--equivalence", flag,
+                                              "--json", path])
+            assert code == 0, f"应当通过，得到 {code}：{text}"
+            with open(path, encoding="utf-8") as handle:
+                report = json.load(handle)
+            assert ("equivalence" in report) is present, (label, sorted(report))
+            if present:
+                payload = report["equivalence"]
+                # 结构化字段是脚本化流程要的东西，名字必须稳定
+                for field in ("equation", "rewritten", "kind", "operand_order",
+                              "operand_permutations", "output_permutation",
+                              "description"):
+                    assert field in payload, (field, sorted(payload))
+                assert payload["kind"] == "operand-axes", payload
+                assert payload["operand_permutations"][0] == [2, 0, 1, 3], payload
+
+
+def test_equivalence_auto_follows_the_environment_variable_only():
+    """缺省 ``auto`` 只跟随 ``PYQCD_EINSUM_EQUIVALENCE``；``0`` 等同 ``false``。
+
+    与 ``--specialize``/``--language`` 同口径：``auto`` 是 ``None``（跟随环境变量），
+    不是 ``True``——写成 ``True`` 会把用户用环境变量关掉的报告强行打开。
+    """
+    os, env_name = _equivalence_env()
+    assert cli.DEFAULT_EQUIVALENCE == "auto", cli.DEFAULT_EQUIVALENCE
+    assert set(cli.EQUIVALENCE_MODES) == {"auto", "true", "false"}, cli.EQUIVALENCE_MODES
+    assert env_name == "PYQCD_EINSUM_EQUIVALENCE", env_name
+
+    assert cli.parse_equivalence("auto") is None
+    assert cli.parse_equivalence(None) is None
+    assert cli.parse_equivalence("true") is True
+    assert cli.parse_equivalence("TRUE") is True
+    assert cli.parse_equivalence("off") is False
+    for bad in ("bogus", "equivalence", 1.5):
+        try:
+            cli.parse_equivalence(bad)
+        except cli.UsageError as exc:
+            assert exc.code == 2, exc.code
+        else:
+            raise AssertionError(f"{bad!r} 本应被拒绝")
+
+    saved = os.environ.pop(env_name, None)
+    try:
+        # 未设 → 开启（缺省行为）
+        assert cli.equivalence_enabled(None) is True
+        # 显式选项压过环境变量
+        os.environ[env_name] = "0"
+        assert cli.equivalence_enabled(None) is False
+        assert cli.equivalence_enabled(True) is True
+        os.environ[env_name] = "1"
+        assert cli.equivalence_enabled(None) is True
+        assert cli.equivalence_enabled(False) is False
+
+        # 端到端：环境变量 0 时明细里没有该段（缺省 auto）
+        os.environ[env_name] = "0"
+        code, text = _verbose_text(EQUIV_AXES_EQUATION, EQUIV_AXES_SHAPES, ())
+        assert code == 0, text
+        assert "存在等价写法" not in text, text
+        # 显式 true 仍然压过环境变量
+        code, text = _verbose_text(EQUIV_AXES_EQUATION, EQUIV_AXES_SHAPES, (),
+                                   extra=["--equivalence", "true"])
+        assert code == 0, text
+        assert "存在等价写法" in text, text
+    finally:
+        os.environ.pop(env_name, None)
+        if saved is not None:
+            os.environ[env_name] = saved
+
+
+def test_equivalence_never_changes_numbers_shapes_or_route():
+    """**核心保险丝**：该选项只加报告，``rel``/``out_shape``/``ok`` 必须完全相同。
+
+    它若被顺手接进 ``contract()``（例如"自动改用等价方程再算"），耗时会变、路径
+    会变，而且一旦改写有误数值也会变——本条只断言**数值与形状**，不断言耗时具体值
+    （耗时本来就只要求"可差"，不承诺相等）。
+    """
+    shapes = [(8, 8), (8, 8)]
+    equation = "ij,jk->ik"
+    for equation_, shapes_, out_shape in (
+            ("ij,jk->ik", shapes, (8, 8)),
+            (EQUIV_AXES_EQUATION, EQUIV_AXES_SHAPES, ()),
+            (EQUIV_OUTPUT_EQUATION, EQUIV_OUTPUT_SHAPES, EQUIV_OUTPUT_SHAPE)):
+        runs = {flag: cli.run(equation=equation_, shapes=shapes_, out_shape=out_shape,
+                             compare="numpy", rounds=2, warmup=1, seed=5,
+                             equivalence=flag)
+                for flag in (True, False)}
+        on, off = runs[True], runs[False]
+        for report in runs.values():
+            assert report["ok"], report
+        for field in ("rel", "out_shape", "ok", "actual_shape", "max_abs_diff",
+                      "kernel_info", "specialize_effective", "n_operands"):
+            assert on[field] == off[field], (equation_, field, on[field], off[field])
+        # 只有报告字段不同
+        assert "equivalence" in on, (equation_, sorted(on))
+        assert "equivalence" not in off, (equation_, sorted(off))
+
+
+def test_equivalence_section_is_absent_when_the_equation_already_hits():
+    """已命中特化路径时**不出**该段：不干扰正常输出。"""
+    code, text = _verbose_text(EQUIV_HIT_EQUATION, EQUIV_HIT_SHAPES, (),
+                               extra=["--equivalence", "true"])
+    assert code == 0, f"应当通过，得到 {code}：{text}"
+    assert not [line for line in text.splitlines()
+                if line.startswith("equiv    :")], text
+    assert "存在等价写法" not in text, text
+
+    report = cli.run(equation=EQUIV_HIT_EQUATION, shapes=EQUIV_HIT_SHAPES,
+                     out_shape=(), compare="none", rounds=2, warmup=1,
+                     equivalence=True)
+    assert report["ok"], report
+    assert "equivalence" not in report, sorted(report)
+
+
+def test_equivalence_says_none_when_no_equivalence_exists():
+    """没有任何等价写法时，明细必须**明说无**，而不是悄悄不打印。"""
+    code, text = _verbose_text("ij,jk->ik", [(4, 4), (4, 4)], (4, 4),
+                               extra=["--equivalence", "true"])
+    assert code == 0, f"应当通过，得到 {code}：{text}"
+    lines = [line for line in text.splitlines() if line.startswith("equiv    :")]
+    assert lines, f"缺少 equiv 行：{text}"
+    assert "无" in lines[0] and "等价写法" in lines[0], lines
+    assert "transpose" not in lines[0], lines
+
+
+def test_help_lists_equivalence():
+    """``--help`` 是唯一权威来源：选项名、取值、环境变量与缺省值都要出现。"""
+    for language in ("zh", "en"):
+        text = _help_text(language)
+        assert "--equivalence" in text, language
+        for value in cli.EQUIVALENCE_MODES:
+            assert value in text, (language, value)
+        assert cli.EQUIVALENCE_ENV in text, language
+        # 必须写明"只做报告"
+        assert "只做报告" in text or "Report only" in text, language
+    # 中文 epilog 也要提到它
+    assert cli.EQUIVALENCE_ENV in _help_text("zh"), _help_text("zh")
+
+
 TESTS = (
     test_shape_spec_round_trip,
     test_shape_spec_scalar_and_reduction,
@@ -1322,6 +1562,13 @@ TESTS = (
     test_language_only_changes_the_verbose_wording,
     test_language_does_not_pollute_the_environment,
     test_translate_fails_loudly_on_missing_keys_and_variants,
+    test_equivalence_reports_both_the_input_and_the_output_side,
+    test_equivalence_false_removes_the_section_and_the_json_field,
+    test_equivalence_auto_follows_the_environment_variable_only,
+    test_equivalence_never_changes_numbers_shapes_or_route,
+    test_equivalence_section_is_absent_when_the_equation_already_hits,
+    test_equivalence_says_none_when_no_equivalence_exists,
+    test_help_lists_equivalence,
 )
 
 

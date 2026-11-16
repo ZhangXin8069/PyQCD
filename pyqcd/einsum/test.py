@@ -76,7 +76,8 @@ __all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES",
            "COMPARE_OPTIMIZERS", "NUMPY_COMPARE_OPTIMIZERS", "DEVICES",
            "SPECIALIZE_MODES", "parse_specialize", "resolve_compare_optimize",
            "translate", "resolve_language", "LANGUAGE_ENV", "LANGUAGE_MODES",
-           "DEFAULT_LANGUAGE"]
+           "DEFAULT_LANGUAGE", "EQUIVALENCE_MODES", "EQUIVALENCE_ENV",
+           "DEFAULT_EQUIVALENCE", "parse_equivalence", "equivalence_enabled"]
 
 class UsageError(SystemExit):
     """参数或环境错误。
@@ -119,11 +120,18 @@ COMPARE_OPTIMIZERS = ("auto", "greedy", "dp", "optimal",
 NUMPY_COMPARE_OPTIMIZERS = ("greedy", "optimal")
 #: ``--specialize``：三态。``auto``→(None) 跟随环境变量，``true``/``false`` 强制。
 SPECIALIZE_MODES = ("auto", "true", "false")
+#: ``--equivalence``：三态。``auto`` 跟随 ``PYQCD_EINSUM_EQUIVALENCE``（缺省开启）。
+#: **只影响报告**，绝不改 ``contract()`` 的行为、耗时或任何数值。
+EQUIVALENCE_MODES = ("auto", "true", "false")
+#: 等价映射报告的开关。缺省**开启**（与 ``_specialize.NOTICE_ENV`` 同口径：
+#: 只有 ``0/false/off/no`` 才关闭）。
+EQUIVALENCE_ENV = "PYQCD_EINSUM_EQUIVALENCE"
 
 DEFAULT_DEVICE = "cpu"
 DEFAULT_DTYPE = "complex128"
 DEFAULT_BACKEND = "auto"
 DEFAULT_SPECIALIZE = "auto"
+DEFAULT_EQUIVALENCE = "auto"
 DEFAULT_ATOL = 1e-12
 DEFAULT_RTOL = 0.0
 DEFAULT_ROUNDS = 5
@@ -200,6 +208,12 @@ MESSAGES: dict[str, dict[str, str]] = {
                "end), so it never perturbs timings.\n"
                "Language: --language auto (follows PYQCD_EINSUM_LANG; Chinese when it "
                "is unset) / en / zh-cn.\n"
+               "Equivalence report: --equivalence auto (follows "
+               "PYQCD_EINSUM_EQUIVALENCE, on by default) / true / false. When the "
+               "equation misses\nevery specialised path but an equivalent spelling hits "
+               "one, --verbose true lists the tensor-side\nand result-side adjustments "
+               "needed to use it. Report only: contract() behaviour, timings and\n"
+               "numbers are never changed.\n"
                "Exit codes: 0 pass / 1 numeric or shape mismatch / 2 usage or "
                "environment error.\n"),
         "zh": ("示例:\n"
@@ -225,6 +239,11 @@ MESSAGES: dict[str, dict[str, str]] = {
                "内存采样只在计时循环之外（构造前/构造后/收尾），不影响计时。\n"
                "语言: --language auto（跟随 PYQCD_EINSUM_LANG，未设时为中文）/ en / "
                "zh-cn。\n"
+               "等价映射: --equivalence auto（跟随 PYQCD_EINSUM_EQUIVALENCE，缺省开启）"
+               "/ true / false。方程未命中任何特化路径、但存在能命中"
+               "的等价写法时，--verbose true 会给出改用该写法所需"
+               "的输入侧张量调整与输出侧结果回填。"
+               "只做报告：不改 contract() 行为、不改耗时、不改任何数值。\n"
                "退出码: 0 通过 / 1 数值或形状不符 / 2 参数或环境错误。\n"),
     },
     # --help：各选项
@@ -345,6 +364,21 @@ MESSAGES: dict[str, dict[str, str]] = {
                "只影响输出文案——不改任何计算结果、不改 --compare 的选择、"
                "不写任何环境变量。缺省 {default}"),
     },
+    "help.equivalence": {
+        "en": ("Equivalence report tri-state. auto=follow {env} (on by default, which "
+               "only 0/false/off/no turns off); true=always look for an equivalent "
+               "spelling; false=never. When the equation misses every specialised path "
+               "but an equivalent spelling hits one, --verbose true shows the "
+               "tensor-side adjustments AND the result-side permutation needed to use "
+               "it. Report only: it never changes contract() behaviour, timings or any "
+               "number. Default {default}"),
+        "zh": ("等价映射报告三态。auto=跟随 {env}（缺省开启，只有 "
+               "0/false/off/no 才关闭）；true=总是查等价写法；false=不查。"
+               "方程未命中任何特化路径、但存在能命中的等价写法时，"
+               "--verbose true 会同时给出**输入侧的张量调整**与**输出侧的结果回填**。"
+               "只做报告：不改 contract() 行为、不改耗时、不改任何数值。"
+               "缺省 {default}"),
+    },
     # --verbose true 的明细
     "detail.operands": {
         "en": "{n} operand(s), {elements:,} elements in total; output {out_shape} "
@@ -422,6 +456,43 @@ MESSAGES: dict[str, dict[str, str]] = {
     "detail.joiner": {
         "en": ", ",
         "zh": "，",
+    },
+    # 等价映射（--equivalence）：只在「未命中特化 + 存在等价写法」时出现。
+    # 键名固定 `equiv`，值按语言翻译；输入侧与输出侧**都必须出现**，
+    # 缺失的一侧明确写 `-`——只报输入侧会让用户漏掉结果回填而算错。
+    "detail.equiv_header": {
+        "en": "an equivalent spelling exists ({kind})",
+        "zh": "存在等价写法（{kind}）",
+    },
+    "detail.equiv_none": {
+        "en": "none (this equation has no equivalent spelling known to land on a "
+              "specialised form)",
+        "zh": "无（该方程不存在可落到已知形式的等价写法）",
+    },
+    "detail.equiv_equation": {
+        "en": "use this equation: {equation}",
+        "zh": "方程：{equation}",
+    },
+    "detail.equiv_tensors": {
+        "en": "tensors: {adjustments}   (per operand, in the rewritten equation's order)",
+        "zh": "张量：{adjustments}（按改写后方程的操作数次序）",
+    },
+    "detail.equiv_result": {
+        "en": "result: {perm}   (apply to the rewritten result to get the original "
+              "answer; '-' means the rewritten axis order already matches)",
+        "zh": "结果：{perm}（对改写后的结果做此转置才是原方程的答案；"
+              "'-' 表示改写后轴序已一致）",
+    },
+    "detail.equiv_note": {
+        "en": "note: convert the tensors exactly as above, then call contract() with the "
+              "equivalent equation to reach the specialised path; the result is "
+              "element-wise identical to the direct spelling",
+        "zh": "说明：按上述调整后用等价方程调用，可走上特化路径；"
+              "结果与直接写法逐元素相同",
+    },
+    "detail.equiv_unavailable": {
+        "en": "equivalence layer unavailable ({exc})",
+        "zh": "等价映射层不可用（{exc}）",
     },
     # 结果行与警告
     "result.fail_rel": {
@@ -582,6 +653,10 @@ MESSAGES: dict[str, dict[str, str]] = {
     "error.specialize": {
         "en": "--specialize must be one of {values}, got {value!r}",
         "zh": "--specialize 必须是 {values} 之一，得到 {value!r}",
+    },
+    "error.equivalence": {
+        "en": "--equivalence must be one of {values}, got {value!r}",
+        "zh": "--equivalence 必须是 {values} 之一，得到 {value!r}",
     },
     "error.compare_optimize": {
         "en": "--compare-optimize must be one of {values}, got {value!r}",
@@ -980,6 +1055,7 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         warmup: int = DEFAULT_WARMUP, seed: int = 0, verbose: bool = DEFAULT_VERBOSE,
         specialize: bool | None = None,
         compare_optimize: str = DEFAULT_COMPARE_OPTIMIZE,
+        equivalence: bool | None = None,
         expected_shape: tuple[int, ...] | None = None,
         language: str | None = None) -> dict[str, Any]:
     """跑一条方程的完整检查，返回结构化结果（供 CLI 与外部脚本消费）。
@@ -989,6 +1065,12 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
 
     ``compare_optimize`` **只影响参照实现**（``--compare numpy/opt_einsum``），
     主路径的收缩序仍由 ``optimize`` 决定。缺省 ``auto`` = 沿用旧行为。
+
+    ``equivalence`` 三态**只影响报告**：``None`` 跟随 ``PYQCD_EINSUM_EQUIVALENCE``，
+    ``True``/``False`` 强制。开启且方程未命中任何特化路径时，报告多一个
+    ``equivalence`` 字段（``_equivalence.explain()`` 的返回值），供 verbose 明细与
+    ``--json`` 使用。它**不改** ``contract()`` 的入参、耗时与任何数值，且在计时
+    结束之后才算，不进入计时区域。
 
     ``language`` 只影响错误文案与 ``verbose`` 明细（``None`` = 走
     :func:`resolve_language`，即 ``--language auto``），不改任何计算结果。
@@ -1002,6 +1084,7 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         raise UsageError(translate("error.compare", lang, values=COMPARE_MODES,
                                    value=compare))
     specialize = parse_specialize(specialize)
+    equivalence = parse_equivalence(equivalence, lang)
     ref_optimize = resolve_compare_optimize(compare, optimize, compare_optimize,
                                             language=lang)
     if warmup < 1:
@@ -1099,6 +1182,12 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     else:
         report["ok"] = bool(report["actual_shape"] == list(out_shape))
 
+    # 等价映射报告：**在全部计时与判定之后**才查，且只写报告字段，
+    # 不进 contract() 的入参。关闭（--equivalence false / 环境变量 0）时不写该字段。
+    equivalent = _equivalence_of(equation, equivalence)
+    if equivalent is not None:
+        report["equivalence"] = equivalent
+
     if verbose:
         _print_detail(report, lang)
     return report
@@ -1139,6 +1228,102 @@ def _specialize_label(specialize: bool | None) -> str:
     if specialize is None:
         return "auto"
     return "true" if specialize else "false"
+
+
+# ── 等价映射报告（--equivalence） ───────────────────────────────────────────
+def parse_equivalence(value: bool | None | str,
+                      language: str = "zh") -> bool | None:
+    """把 ``auto|true|false``（或 ``None``/``bool``）规范成 ``bool | None``。
+
+    与 :func:`parse_specialize` 同口径：``None`` 与 ``auto`` 等价（跟随
+    ``PYQCD_EINSUM_EQUIVALENCE``），**不做**环境变量读取——是否真正开启由
+    :func:`equivalence_enabled` 决定。
+    """
+    if value is None or value is False or value is True:
+        return value
+    text = str(value).strip().lower()
+    if text == "auto":
+        return None
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off"):
+        return False
+    raise UsageError(translate("error.equivalence", language,
+                               values=EQUIVALENCE_MODES, value=value))
+
+
+def equivalence_enabled(requested: bool | None = None) -> bool:
+    """本次调用是否报告等价写法。``None`` 时跟随 ``PYQCD_EINSUM_EQUIVALENCE``。
+
+    写法照抄 ``_specialize.notice_enabled()``：缺省开启，只有 ``0/false/off/no``
+    关闭。这是**纯报告开关**——关闭时只是不查等价写法、不打印那一段，
+    ``contract()`` 的行为、耗时与数值一概不变。
+    """
+    if requested is not None:
+        return bool(requested)
+    return os.environ.get(EQUIVALENCE_ENV, "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def _equivalence_of(equation: str, requested: bool | None = None
+                    ) -> dict[str, Any] | None:
+    """查该方程的等价写法，供报告使用；关闭时返回 ``None``。
+
+    ``requested`` 是 ``--equivalence`` 的三态（``None`` = ``auto``）。返回
+    ``_equivalence.explain()`` 的原始字典——这是该模块的稳定公开形态，本函数
+    只读，不碰它的内部实现，也**绝不**替换或改写 ``contract()`` 收到的方程。
+
+    **只在未命中任何特化路径时才查**：已命中的方程没有必要看等价写法（那一段
+    也不该出现，以免干扰正常输出），且能省掉这次查询。``_specialize.match``
+    的判据就是"是否命中特化路径"，与 ``route`` 行同源。
+    """
+    if not equivalence_enabled(requested):
+        return None
+    try:
+        from pyqcd.einsum import _specialize
+
+        if _specialize.match(equation) is not None:
+            return None
+        from pyqcd.einsum import _equivalence
+
+        return _equivalence.explain(equation)
+    except Exception as exc:                    # noqa: BLE001 - 报告层不许影响主流程
+        return {"equation": equation, "rewritten": False,
+                "unavailable": f"{type(exc).__name__}: {exc}"}
+
+
+def _format_operand_adjustments(equivalent: dict[str, Any]) -> str:
+    """把 ``operand_order`` + ``operand_permutations`` 渲染成一行张量调整说明。
+
+    输出形如 ``transpose(1, 0, 2, 3), -, -, -, -, -``：逐操作数一条，按**改写后**
+    方程的操作数次序，不需要动的那一路明确写 ``-``。``operand_order`` 非空时
+    前置 ``order=[...]``，说明张量列表本身要怎么重排。
+    """
+    parts: list[str] = []
+    order = equivalent.get("operand_order")
+    if order:
+        parts.append(f"order={list(order)}")
+    permutations = equivalent.get("operand_permutations") or ()
+    rendered = [
+        "-" if perm is None else "transpose(" + ", ".join(str(i) for i in perm) + ")"
+        for perm in permutations
+    ]
+    if rendered:
+        parts.append(", ".join(rendered))
+    return "  ".join(parts) if parts else "-"
+
+
+def _format_output_adjustment(equivalent: dict[str, Any]) -> str:
+    """输出侧回填：``transpose(1, 2, 0, 3)``，没有则 ``-``。
+
+    这一侧**不许省略**：输入调整后不改结果轴序，用户会拿到一个形状/顺序不对的
+    答案。``output_permutation`` 缺字段（旧版 ``_equivalence``）时同样写 ``-``，
+    绝不猜。
+    """
+    perm = equivalent.get("output_permutation")
+    if not perm:
+        return "-"
+    return "transpose(" + ", ".join(str(i) for i in perm) + ")"
 
 
 # ── 参照的优化器（--compare-optimize） ─────────────────────────────────────
@@ -1479,6 +1664,39 @@ def _print_detail(report: dict[str, Any], language: str = "zh") -> None:
         route = _route_of(report.get("kernel_info"), language)
         if route:
             print(f"route    : {route}", file=out)
+    equivalent = report.get("equivalence")
+    if equivalent is not None:
+        _print_equivalence(equivalent, language)
+
+
+def _print_equivalence(equivalent: dict[str, Any], language: str = "zh") -> None:
+    """打印``--equivalence`` 的明细段（只在未命中特化时由 ``run()`` 写入）。
+
+    键名固定 ``equiv``，值按语言翻译。**输入侧与输出侧必须同时报出**：只给
+    "怎么改张量"而不给"结果怎么回填"，用户会拿到轴序错了的答案。某一侧为空时
+    明确写 ``-``（不省略整行）。
+    """
+    out = sys.stderr
+    indent = " " * 11
+    # 该模块不可用时（例如旧版 _equivalence 尚未提供 explain）如实报告，
+    # 不让报告层的问题伪装成"没有等价写法"。
+    if equivalent.get("unavailable"):
+        print("equiv    : " + translate("detail.equiv_unavailable", language,
+                                        exc=equivalent["unavailable"]), file=out)
+        return
+    if not equivalent.get("rewritten"):
+        print("equiv    : " + translate("detail.equiv_none", language), file=out)
+        return
+    print("equiv    : " + translate("detail.equiv_header", language,
+                                    kind=equivalent.get("kind", "-")), file=out)
+    print(indent + translate("detail.equiv_equation", language,
+                             equation=equivalent.get("equation", "-")), file=out)
+    print(indent + translate("detail.equiv_tensors", language,
+                             adjustments=_format_operand_adjustments(equivalent)),
+          file=out)
+    print(indent + translate("detail.equiv_result", language,
+                             perm=_format_output_adjustment(equivalent)), file=out)
+    print(indent + translate("detail.equiv_note", language), file=out)
 
 
 def _route_of(kernel_info: Any, language: str = "zh") -> str:
@@ -1599,6 +1817,10 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
     parser.add_argument("--specialize", default=DEFAULT_SPECIALIZE,
                         choices=SPECIALIZE_MODES,
                         help=t("help.specialize", default=DEFAULT_SPECIALIZE))
+    parser.add_argument("--equivalence", default=DEFAULT_EQUIVALENCE,
+                        choices=EQUIVALENCE_MODES,
+                        help=t("help.equivalence", env=EQUIVALENCE_ENV,
+                               default=DEFAULT_EQUIVALENCE))
     parser.add_argument("--optimize", default=DEFAULT_OPTIMIZE,
                         help=t("help.optimize", default=DEFAULT_OPTIMIZE))
     parser.add_argument("--atol", type=float, default=DEFAULT_ATOL,
@@ -1673,6 +1895,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=args.seed, verbose=_as_bool(args.verbose),
         specialize=parse_specialize(args.specialize, language),
         compare_optimize=args.compare_optimize,
+        equivalence=parse_equivalence(args.equivalence, language),
         language=language,
     )
     result["shape_source"] = report_note

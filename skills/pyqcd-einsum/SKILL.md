@@ -77,6 +77,7 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--compare-optimize` | `auto` | **只作用于参照**的优化器：auto / greedy / dp / optimal / branch-all / branch-2 / branch-1。auto = 沿用旧行为（numpy→`greedy`；opt_einsum→`greedy` 或跟随 `--optimize`）。**不跨库重映射**：numpy 只认 `greedy`/`optimal`（`dp`/`branch-*` 报用法错误，退出码 2），opt_einsum 按 `oe.paths` 注册表校验；`--compare backend`/`none` 下无效（仅提示） |
 | `--optimize` | `auto` | 同 `contract(optimize=...)`，**只管主路径** |
 | `--specialize` | `auto` | auto / true / false：auto 跟随 `PYQCD_EINSUM_SPECIALIZE`；true 强制特化；**false 强制通用路径**（排查原生内核问题的第一手段） |
+| `--equivalence` | `auto` | auto / true / false：auto 跟随 `PYQCD_EINSUM_EQUIVALENCE`（缺省开启，`0` 关闭）。未命中特化但存在等价写法时，`--verbose true` 给出改写后的方程 + **输入侧张量调整** + **输出侧结果回填**（无则 `-`）；已命中不出该段，无等价写法明写「无」。`--json` 带 `equivalence` 字段。**只做报告**：不改 `contract()` 行为、耗时与数值 |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一） |
 | `--rtol` | `0` | 附加相对余量 |
 | `--rounds` | `5` | 计时轮数（中位） |
@@ -111,12 +112,49 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 
 ```bash
 python -m pyqcd.einsum.verify_specialized "agbh,cmdn,eqfr,ospt,ikjl,ce,mo,gi,kq,bdf,np,hj,lrt->as"
+python -m pyqcd.einsum.verify_specialized "<eq>" --language en     # 输出语言 auto/en/zh-cn
+python -m pyqcd.einsum.verify_specialized "<eq>" --equivalence false  # 关掉等价段（原因回到旧版措辞）
+python -m pyqcd.einsum.verify_specialized "<eq>" --json             # equivalence 字段随开关有无
 ```
 
 期望（本机实跑）：`结果: HIT`、`特化路径: topology:8006c502 [kernel(topology)]`、
 `语料出处: seq=1650  T00028  10. 重子四点函数`、退出码 `0`。
 
 退出码口径：命中 `0`、语料之外 `1`、方程非法（含非字符串）`2`。
+
+`--language {auto,en,zh-cn}`（缺省 `auto`）只改人读文案：`auto` 只在
+`PYQCD_EINSUM_LANG` 显式设了时跟随（未设保持中文，**不跟随系统 locale**）；
+判定、退出码、`--json` 的结构化字段都不受影响（`--json` 仍是 `query()` 的原样
+序列化，`reason` 恒为历史中文文案，另有语言无关的 `reason_key`/`reason_args`）。
+
+`--equivalence {auto,true,false}`（缺省 `auto`）只管等价段：`auto` 跟随
+`PYQCD_EINSUM_EQUIVALENCE`（未设即开启），`true`/`false` 强制开关并**压过**环境变量。
+开启时 MISS 多一段「等价写法 + `张量调整`（输入侧）+ `结果调整`（输出侧）」——两行
+恒在，某侧无需调整写 `-`（输出侧为 `-（改写后输出轴序已一致）`）；关闭时整段消失、
+MISS 原因回到旧版措辞。`--json` 的 `equivalence` 字段开启时总是写、关闭时缺省。
+**不改判定与退出码**（同一方程 true/false 下退出码相同）。
+
+### 等价映射开关：`PYQCD_EINSUM_EQUIVALENCE`（2026-11-16）
+
+MISS 时本入口会查"换个写法能不能命中特化路径"（`pyqcd/einsum/_equivalence.py`），
+覆盖五族变换：单操作数轴序 / 操作数位置 / 输出段轴序 / 字母重命名 /
+**复合变换**（位置次序与轴序同时变，如 `cadb,menf,db,em,ac,fn->` ↔
+`cadb,menf,ac,em,bd,fn->`）。
+
+| 环境变量 | 缺省 | 关闭取值 | 说明 |
+|---|---|---|---|
+| `PYQCD_EINSUM_EQUIVALENCE` | `"1"`（**开启**） | `0` / `false` / `off` / `no` | **只影响查询报告，不影响任何数值计算**：`contract()` 仍按调用方给的方程走 |
+
+- **调用时**读环境变量（不在 import 时求值），同进程内改即时生效。
+- 关闭后 `normalize_equation()` → `None`（零枚举）、`find_equivalents()` → `[]`、
+  MISS 报告回到**没有本功能时**的原措辞且不含 `equivalence` 字段
+  （契约逐字符比对 `fd26357e` 的实跑原文）。
+- 枚举**有界**：位置次序只取两两互换（秩 ≤ 4 才补全排列）、同时改轴序的位置个数
+  只取 1 或 2、预算按 (档位, 位置次序) 均分（6000）再受总量 20000 约束。实测
+  16 操作数秩 4 方程 12174 候选 / 95 ms。**不是全覆盖**：3 个及以上位置同时改
+  轴序不枚举；秩 > 4 的操作数只试整段逆序 / 首尾互换 / 循环移位。
+- 契约：`python -B -m pyqcd.testing._einsum_equivalence_contract`（21 项，含真实
+  生产形状对拍与 7 项变异验证）。
 
 **`kernels` 字段是声明不是事实**：它来自 `_specialize._topology_entry` 的
 `kernels=("kupl_topology","cuda_topology")`，而实际下发常是 `kupl_dedicated`

@@ -3183,3 +3183,12 @@ def test_specialized_query_contracts():
         if not name.startswith("test_"):
             continue
         getattr(contract, name)()
+
+
+def test_einsum_verify_specialized_contracts():
+    """``verify_specialized --language``：缺省零行为变化、双语报告、--json 不变。"""
+    from . import _einsum_verify_specialized_contract as contract
+
+    for name in sorted(dir(contract)):
+        if name.startswith("test_"):
+            getattr(contract, name)()

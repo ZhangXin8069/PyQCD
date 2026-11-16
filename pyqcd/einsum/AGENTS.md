@@ -230,6 +230,55 @@ void applyEndQcd(long long set_ptrs, long long params);
 
 ## 9. 当前验证入口
 
+`python -m pyqcd.einsum.verify_specialized "<eq>"` 支持 `--language {auto,en,zh-cn}`
+（缺省 `auto`：只在 `PYQCD_EINSUM_LANG` 显式设了时跟随，未设时保持中文，**不跟随
+系统 locale**）。它只改人读文案，不改判定、退出码或 `--json` 的结构化字段
+（`--json` 仍是 `query()` 的原样序列化）。契约：
+`pyqcd/testing/_einsum_verify_specialized_contract.py`。
+
+同一个入口支持 `--equivalence {auto,true,false}`（缺省 `auto`：跟随
+`PYQCD_EINSUM_EQUIVALENCE`，未设即开启；`true`/`false` 强制开关并**压过**环境变量，
+`true` 连 `_equivalence.enabled()` 那道内部开关也压）。开启时未命中的方程多一段
+「等价写法 + `张量调整`（输入侧）+ `结果调整`（输出侧）」——**两行恒在**，某侧无需
+调整就写 `-`，输出侧不需要回填时写 `-（改写后输出轴序已一致）`；关闭时该段整段消失、
+MISS 原因逐字回到引入前的原文。`--json` 的 `equivalence` 字段开启时**总是**写
+（没有改写也写 `rewritten=false`，用来区分"查过"与"没查"），关闭时**缺该字段**
+（与 `test.py` 同口径）。它只是附加信息：不改 `matched`、不改退出码、不改执行路径。
+
+### 9.1 等价映射 `_equivalence.py` 的开关 `PYQCD_EINSUM_EQUIVALENCE`（2026-11-16）
+
+`pyqcd/einsum/_equivalence.py` 把"同一个收缩换了个写法"映射回语料规范形式，覆盖
+五族变换：**单操作数轴序 / 操作数位置 / 输出段轴序 / 字母重命名（由
+`canonical_signature` 负责）/ 复合变换**（位置次序与轴序同时变，如
+`cadb,menf,db,em,ac,fn->` ↔ `cadb,menf,ac,em,bd,fn->`）。
+
+| 项 | 值 |
+|---|---|
+| 环境变量 | `PYQCD_EINSUM_EQUIVALENCE`（`_equivalence.EQUIVALENCE_ENV`） |
+| 缺省 | `"1"` —— **开启** |
+| 关闭 | `0` / `false` / `off` / `no`（大小写不敏感，去首尾空白） |
+| 求值时机 | **调用时**读 `os.environ`（与 `_specialize.notice_enabled()` 同风格），同进程内改环境变量即时生效 |
+| 影响面 | **只影响查询报告，不影响任何数值计算**：`contract()` 仍按调用方给的方程走 |
+
+关闭后行为与"没有这个功能"完全一致：`normalize_equation()` 返回 `None`（零枚举、
+零 `probe` 调用）、`find_equivalents()` 返回 `[]`、`explain()` 返回
+`{"rewritten": False, "reason": "等价映射已关闭（PYQCD_EINSUM_EQUIVALENCE=0）"}`，
+`verify_specialized` 的 MISS 报告回到原措辞
+（"既不在 wick_12cases 语料里，也没有形状特化路径，走通用分步路径（无特化内核）"），
+报告里**不出现** `equivalence` 字段。契约用例
+`test_disabled_verify_specialized_output_matches_the_pre_change_original` 用
+`fd26357e` 实跑抓取的原文逐字符比对钉住这一点。
+
+复合枚举**有界**（16 操作数 = 120 个两两互换；全排列 × 全轴排列是天文数字）：
+位置次序取两两互换（秩 ≤ 4 才补全排列，`_MAX_POSITION_ORDERS=128`），同时改轴序的
+位置个数只取 1 或 2（`_MAX_COMPOSITE_POSITIONS=2`），预算按
+(档位, 位置次序) **均分**（`_MAX_COMPOSITE_CANDIDATES=6000`）而不是先到先得，
+总量再受 `_MAX_CANDIDATES=20000` 约束。实测 16 操作数秩 4 方程 12174 候选 / 95 ms。
+**不是全覆盖**：3 个及以上位置同时改轴序不枚举；秩 > 4 的操作数只试整段逆序 /
+首尾互换 / 循环移位。契约：
+`pyqcd/testing/_einsum_equivalence_contract.py`（21 项，含真实生产形状对拍与
+7 项变异验证）。
+
 ### 9.0 单方程测试的唯一接口：`python -m pyqcd.einsum.test`（强制）
 
 > **硬性规定（2026-11-15 起）**：`qcd-einsum` 的**单方程验证/复现/性能对比**只有
@@ -277,6 +326,7 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--compare-optimize` | `auto` | **只看参照**的收缩序优化器：auto / greedy / dp / optimal / branch-all / branch-2 / branch-1。`auto` = 沿用旧行为（numpy→`greedy`，opt_einsum→`greedy` 或跟随 `--optimize`）。两库名字不通用、**不做跨库重映射**：numpy 只认 `greedy`/`optimal`（`dp`/`branch-*` 报用法错误，退出码 2）；opt_einsum 按 `oe.paths` 注册表校验。`--compare backend`/`none` 下无效（verbose 提示，不报错） |
 | `--optimize` | `auto` | 同 `contract(optimize=...)`，**只管主路径** |
 | `--specialize` | `auto` | 专用内核三态：`auto`=跟随 `PYQCD_EINSUM_SPECIALIZE`；`true`=强制特化路径；`false`=**强制通用路径**（排查原生内核问题的第一手段）。主路径与 `--compare backend` 的参照路径同时生效 |
+| `--equivalence` | `auto` | 等价写法报告三态：`auto`=跟随 `PYQCD_EINSUM_EQUIVALENCE`（**缺省开启**，只有 `0/false/off/no` 才关闭）；`true`=总是查；`false`=不查。方程未命中任何特化路径、但存在能命中的等价写法时，`--verbose true` 的明细多一段 `equiv`：改写后的方程 + **输入侧张量调整**（`transpose(perm)` / `order=[...]`，无调整写 `-`）+ **输出侧结果回填**（`transpose(perm)`，无则写 `-`）。已命中特化的方程不出该段；没有等价写法时明写「无」。`--json` 多一个 `equivalence` 字段（`_equivalence.explain()` 原样），关闭时缺该字段。**只做报告**：不改 `contract()` 行为、不进计时区域、不改任何数值与耗时 |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一，不是逐元素绝对阈值） |
 | `--rtol` | `0` | 附加相对余量 |
 | `--rounds` | `5` | 计时轮数（中位） |
