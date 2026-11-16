@@ -1,0 +1,122 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-16 12:46:09 +0800
+批次: einsum-guide-resume
+主任务: 恢复 run 20261115T103110.iHuxVq：einsum 用户手册同步到 aeea4faf 并修正查询开销数字
+触发原因: 任务完成
+摘要: 手册口径核对+点名校验入口复跑（41/107 全绿）+查询开销按 arity 重测（0.32-2.54ms）
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 恢复现场：定位上一轮（run 20261115T103110.iHuxVq）的未完成产物
+- 目标: 判断 resume 的断点在哪里
+- 命令/操作: 读 run manifest/state/events；`git status --short`；`git log --oneline -5`
+- 关键输出:
+  - manifest: `state=stopped`、`last_exit=143`、`last_reason=收到终止信号`、`turn=1`、`cwd=/home/zhangxin/PyQCD`、`model=deepseek/deepseek-v4.1-flash`
+  - events.jsonl 只有 session-created / session-start / turn-start / tui-idle-nudge-armed / session-stop，无任务正文
+  - 仓库: `M docs/einsum_user_guide_20261116.md`（+530/−272），HEAD=`aeea4faf`
+- 退出码: 0
+- 证据与判断: 上一轮最后动作是 12:02 的大提交（aeea4faf: einsum 等价层重写 + 手册 + 性能测量日志），12:14 又改了手册，12:29 被杀。断点 = 手册相对新 HEAD 的同步改动未落地，未提交
+
+### S2 — 核对未提交文档是否半成品（结构 + 源码行号引用）
+- 目标: 排除"写了一半"的可能
+- 命令/操作: 统计代码围栏、二级/三级标题、交叉引用；抽查文档里的 `文件:行号` 是否与 HEAD 实际内容一致
+- 关键输出:
+  - 1094 行、82 个围栏（偶数，闭合）、`## 0..10` 十一段齐全、无悬空 hunk
+  - `test.py:1414-1425` → 实际就是 `_kernel_info()`，逐行吻合
+  - `test.py:1724-1730` → `native_symbols` 五个键（含 `kupl_topology_v2` 映射到 `qcd_kupl_topology_apply`），吻合
+  - `test.py:1731-1742` → `joiner` + `labels` 拼接，吻合
+- 退出码: 0
+- 证据与判断: 文档是完整的一版（对新 HEAD 的行号、`--equivalence`、`--language`、组合改写均已覆盖），不是半成品；差异性质是"整体重写同步"，不是中断残留
+
+### S3 — 重跑手册点名的验证入口
+- 目标: 确认手册记录的实跑结论在当前树仍成立
+- 命令/操作:
+  - `python -B -m pyqcd.testing._einsum_equivalence_contract`
+  - `python -B -m pyqcd.testing.einsum.verify_equivalence`
+  - `python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill --verbose true`
+- 关键输出:
+  - `41 passed, 0 skipped, 0 failed`（与手册 §10-17 记录一致）
+  - `合计: PASS 107 / FAIL 0 / 未验证 0（共 107 条）`，`结论: 全部通过`（与 §10-18 一致）
+  - 手册示例: `time 0.107 ms` / `ref 0.207 ms`、`rel=1.218e-16`、`route: 特化 · 原生 qcd_kupl_dedicated_apply`、`PASS`（耗时属当次浮动，结构与手册一致）
+- 退出码: 0
+- 证据与判断: 手册点名的两个校验入口 100% 复现；示例命令的 route/字段结构与手册 §1.2 相同
+
+### S4 — 发现并修正过时的查询开销数字
+- 目标: 校验手册 §3.6 行「之后单次查询 ~0.3 ms」与 §10-19
+- 命令/操作: 自写计时脚本（8 档 arity 6/7/9/10/12/13/14/16，swap01 变体；warmup=2、9 次中位），冷启动单独在进程首调测量
+- 关键输出:
+  - 冷启动建索引: 814.9 ms
+  - 需改写的查询: min 0.315 / 中位 0.585 / max 2.537 ms（arity 6→0.315、7→0.407、9→0.509、10→0.421、12→0.662、13→2.537、14→1.147、16→1.964）
+  - identity（已命中）查询: 0.0064–0.0104 ms
+  - 旧版对照: 重写前同一接口 23.5–60.1 ms（`logs/einsum-equivalence-gain-20261116.txt` §5.1），即重写后快 30–130×
+  - `seq3` 的 swap01 现返回 `kind=operand-order+axes`（旧版明确不支持组合改写）
+- 退出码: 0
+- 证据与判断: 「~0.3 ms」只对应最小 arity 的一格，对 arity 13/16 低估 8 倍。手册 §3.6 行与 §10-19 两处改为 arity 显式区间 0.32–2.54 ms + identity 0.007–0.010 ms + 索引 0.8–1.1 s，并注明"不要按 ~0.3 ms 估大方程"
+
+### S5 — 甄别套件失败是环境还是回归
+- 目标: 三个 einsum 契约套件非全绿时判断归因
+- 命令/操作: 逐个跑并保留完整输出；按异常类型归类
+- 关键输出:
+  - `_einsum_equivalence_contract`: 41 passed
+  - `_einsum_test_cli_contract`: 49 passed / 1 failed —— `test_compare_optimize_is_inert_for_backend_and_none`
+  - `_einsum_verify_specialized_contract`: 118 passed / 2 skipped / 10 failed（该模块 `__main__` 走 `conftest.main()`，实际跑的是全量套件）
+  - 失败原文: `cupy_backends.cuda.libs.nvrtc.NVRTCError: NVRTC_ERROR_INVALID_OPTION (5)`、`CompileException: nvrtc: error: invalid value for --gpu-architecture (-arch)`、torch 警告 `CUDA initialization: The NVIDIA driver ... too old (found version 12040)`
+  - 计数: 36 处 CompileException / 35 处 nvrtc 报错；10 个 FAIL 全部紧邻 nvrtc/cupy 报错
+- 退出码: 非零（1 与 10 个用例失败）
+- 证据与判断: 全部失败根因是本机 GPU 栈（cupy/nvrtc 的 arch 与驱动不匹配），不涉及本次文档改动，也不涉及 einsum 主路径（等价契约 41/41 全绿、手册示例 PASS）
+
+### S6 — markdown 结构与 diff 检查
+- 命令/操作: `git diff --check`；围栏配对、表格列数、尾管道检查
+- 关键输出: `diff-check-exit=0`；fences 82（偶数）；表格行全部带尾管道；改动的两行均为 3 列
+- 退出码: 0
+
+## 验证与证据
+- 测试/检查: `_einsum_equivalence_contract`（41/41）、`verify_equivalence`（107/107）、手册示例命令、`git diff --check`、markdown 结构自检
+- 结果: 全部通过；两个非全绿的套件已定位为 cupy/nvrtc 环境问题（非本次改动引入）
+- 未验证项:
+  - 全量 `python -m pyqcd.testing` 未在干净 GPU 环境复跑（本机 GPU 栈不可用，10 个失败均为同一环境根因）
+  - 手册 §5.3（`--specialize false` 倍率）与 §7 的 `kupl_topology*` route 展示仍按上一轮标注为"未复跑/取自源码"
+  - 旧性能测量 `logs/einsum-equivalence-gain-20261116.txt` 的 §5.1/§1.4 结论针对**重写前**实现，未回写勘误（属历史测量归档）
+
+## 变更与产物
+- 文件:
+  - `docs/einsum_user_guide_20261116.md`：§3.6 开销行、§10 第 19 条按实测改写（其余 530+/272− 的同步改动来自上一轮，本次一并落地）
+  - `logs/<本次日志>`、`logs/AGENTS.md`（索引）
+- 产物: 本次计时脚本仅存在于会话 scratchpad，未入仓库
+- 未改动范围: `pyqcd/**` 源码、原生库、`skills/**` 均未改动
+
+## 风险、限制与下一步
+- 风险: 手册里的耗时数字都是当次实测，跨机/跨负载会浮动，已用区间而非单点表述
+- 阻塞: 无（GPU 侧失败不影响文档交付）
+- 下一步:
+  1. 若要把重写后的收益写进正式性能报告，需照旧报告的 16 样本 × 四组合口径整体重测一遍（本次只重测了接口开销）
+  2. 本机 GPU 栈（cupy/nvrtc arch 与驱动）需修复后才能复跑 GPU 侧契约
+  3. `--compare backend`（手册 §10-23）在本机当前环境会因 cupy 编译失败退出非 0，属环境漂移，未改文档
+
+## 用户输入指令
+resume[20261115T103110.iHuxVq]
+
+## Agent 全文报告
+--- report begin ---
+恢复 run 20261115T103110.iHuxVq 的断点：上一轮的产物是 `docs/einsum_user_guide_20261116.md`
+相对新 HEAD（aeea4faf）的整体重写（+530/−272），12:14 改完后未提交即被终止（12:29，exit 143）。
+
+本轮完成的工作与证据：
+1. 结构核对：1094 行、82 个围栏闭合、`## 0..10` 十一段齐全，抽查的 `test.py:1414-1425`（`_kernel_info`）、
+   `:1724-1730`（`native_symbols`）、`:1731-1742`（`route_joiner`）三处行号引用与 HEAD 逐行吻合，确认不是半成品。
+2. 手册点名的验证入口复跑：`_einsum_equivalence_contract` 41 passed；`verify_equivalence` PASS 107 / FAIL 0；
+   手册示例命令 route=`kupl_dedicated`、`PASS`、字段结构与 §1.2 一致。
+3. 修正一处过时数字：手册 §3.6 与 §10-19 写的「之后单次查询 ~0.3 ms」只对应最小 arity。按 8 档 arity 重测，
+   需改写的查询是 0.32–2.54 ms（中位 0.59），identity 命中 0.007–0.010 ms，冷启动建索引 0.8–1.1 s；
+   已改为 arity 显式区间并注明「不要按 ~0.3 ms 估大方程」。顺带实测确认等价层重写把开销从旧版
+   23.5–60.1 ms 降到亚毫秒~2.5 ms，且 `seq3` 的 swap 变体现在能给出 `operand-order+axes` 组合映射。
+4. 环境侧失败甄别：`_einsum_test_cli_contract` 1 failed、`_einsum_verify_specialized_contract` 118/2/10
+   （该模块 `__main__` 跑的是全量套件）全部指向本机 cupy/nvrtc（`NVRTC_ERROR_INVALID_OPTION`、
+   `nvrtc: error: invalid value for --gpu-architecture (-arch)`，torch 报驱动 12040 过旧），与文档改动无关。
+5. 交付：`git diff --check` 退出 0，markdown 围栏/表格结构自检通过；改动限于该文档。
+
+未验证：干净 GPU 环境下的全量套件；重写后性能报告全量重测（本次只重测接口开销）；
+旧测量归档 `logs/einsum-equivalence-gain-20261116.txt` 的 §5.1/§1.4 针对重写前实现，未回写勘误。
+--- report end ---

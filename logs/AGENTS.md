@@ -1059,3 +1059,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## einsum-guide-resume - final - 2026-11-16 12:46:09 +0800
+- 主任务: 恢复 run 20261115T103110.iHuxVq：einsum 用户手册同步到 aeea4faf 并修正查询开销数字
+- 日志文件: logs/v2026111612.txt
+- 文件大小: 9349 bytes
+- 触发原因: 任务完成
+- 关键内容: 手册口径核对+点名校验入口复跑（41/107 全绿）+查询开销按 arity 重测（0.32-2.54ms）
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
