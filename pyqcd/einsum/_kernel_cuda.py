@@ -40,6 +40,27 @@ def enabled() -> bool:
         '0', 'false', 'off', 'no')
 
 
+def bypass_negative_cache():
+    """上下文内忽略负缓存；用于强制内核时"强制即真试一次"。
+
+    本模块**没有自己的**负缓存，因此这里不新造第二套机制：``try_topology_apply``
+    与 ``try_dedicated`` 的 status=4 拒绝都读写 ``_kernel_kupl`` 的
+    ``_NEGATIVE_CACHE``（键里的 backend 是 ``cuda_topology`` / ``cuda_dedicated``，
+    与 KUPL 侧分开记，见本文件对 ``_cached_unsupported`` /
+    ``_negative_cache_store`` 的调用点）。所以只把 KUPL 侧的同名上下文管理器转
+    出去 —— 否则强制 ``cuda_*`` 时仍会被
+    ``negative-cache hit: ... qcd_cuda_topology_apply ... status 4`` 挡住，与
+    "强制即真试一次"矛盾。
+
+    返回的是同一个生成器上下文管理器，语义（嵌套计数的进入/退出、不碰环境变量、
+    旁路期间不读也不写缓存）与 ``_kernel_kupl.bypass_negative_cache`` 完全一致；
+    未进入旁路时本模块行为与改动前逐字相同。
+    """
+    from . import _kernel_kupl
+
+    return _kernel_kupl.bypass_negative_cache()
+
+
 # 多操作数拓扑入口：一次原生调用跑完整条计划。下发的是**拓扑描述符**（只带
 # 结构：每个操作数的标签与形状、输出标签、签名摘要），收缩顺序来自原生库里的
 # 预编译步表 `cpp/cuda/einsum/src/topology_steps.h` —— 这里不再做 path 搜索，

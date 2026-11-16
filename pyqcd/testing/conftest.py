@@ -135,6 +135,22 @@ from pyqcd.testing import (  # noqa: F401
     test_einsum_optimize_callable_contracts,
 )
 
+# 强制指定内核契约（`kernel=` / `PYQCD_EINSUM_KERNEL_FORCE`）：
+# 直接导入套件入口，`main()` 的 globals 扫描即可发现并运行它。
+from pyqcd.testing._einsum_kernel_force_contract import (
+    test_einsum_kernel_force_contracts,
+)
+from pyqcd.testing._einsum_as_equivalence_cache_contract import (
+    test_einsum_as_equivalence_cache_contracts,
+)
+
+#: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
+#: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。
+TESTS = (
+    test_einsum_kernel_force_contracts,
+    test_einsum_as_equivalence_cache_contracts,
+)
+
 
 def main():
     """Run every test registered by the central testing package."""

@@ -8,24 +8,43 @@ import numpy as np
 
 import pyqcd.einsum as pe
 from pyqcd.einsum import _api
+from pyqcd.einsum import _cache
 from pyqcd.einsum import _kernel_kupl
 from pyqcd.einsum import _specialize
 from pyqcd.einsum import _wick_tasklist
 
 
 def test_full_corpus_match_cache() -> None:
+    """两条命中路径都要钉住：首答由内层 lru_cache 产出，重问由外层 LRU 拦下。
+
+    2026-11-16 起 ``_specialize.match`` 外面套了一层 :class:`._cache.LRUCache`
+    （``_MATCH_CACHE``，键是入参原始字符串、负结果也缓存）。因此**第二次全语料
+    扫描根本到不了** ``_match_of_normalized``：内层 hits 应当**不再增长**，增量
+    全部体现为外层 ``specialize.match`` 的 hits。旧断言写的是"第二次内层多出
+    N 个 hit"，那是没有外层缓存时的口径。
+    """
     equations = [task.equation for task in _wick_tasklist.TASKS]
     _specialize._match_of_normalized.cache_clear()
     _specialize._signature_of_normalized.cache_clear()
     _specialize._TOPOLOGY_ENTRY_CACHE.clear()
+    _specialize._MATCH_CACHE.clear()
+    outer_before = _cache.stats()["caches"]["specialize.match"]
 
     assert all(_specialize.match(equation) is not None for equation in equations)
     first = _specialize._match_of_normalized.cache_info()
     assert first.currsize == len(equations)
+    outer_first = _cache.stats()["caches"]["specialize.match"]
+    assert outer_first["stores"] >= len(equations)
+    assert outer_first["hits"] == outer_before["hits"]
 
     assert all(_specialize.match(equation) is not None for equation in equations)
     second = _specialize._match_of_normalized.cache_info()
-    assert second.hits - first.hits == len(equations)
+    outer_second = _cache.stats()["caches"]["specialize.match"]
+    # 内层不再被调用：hits 与 currsize 都不变。
+    assert second.hits == first.hits
+    assert second.currsize == first.currsize
+    # 增量全部落在新增的外层缓存上。
+    assert outer_second["hits"] - outer_first["hits"] == len(equations)
     assert len(_specialize._TOPOLOGY_ENTRY_CACHE) == len(equations)
 
 

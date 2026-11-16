@@ -1192,7 +1192,10 @@ def test_layer_imports_stay_inside_the_declared_set():
         tree = ast.parse(handle.read())
     allowed_absolute = {"__future__", "os", "collections", "dataclasses",
                         "itertools", "typing"}
-    allowed_relative = {"_specialize", "_wick_tasklist"}
+    # ``_cache`` 是**只依赖标准库**的缓存原语层（没有执行层依赖），2026-11-16 起
+    # 允许本层直接 import；执行层（``_api`` / ``_kernel_*`` / ``_shape_paths``）
+    # 仍然一律不放行。
+    allowed_relative = {"_cache", "_specialize", "_wick_tasklist"}
     offenders = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

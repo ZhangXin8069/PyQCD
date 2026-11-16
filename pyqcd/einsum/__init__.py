@@ -20,7 +20,7 @@ import importlib
 from typing import Any
 
 from . import backends, paths
-from ._api import contract, contract_path
+from ._api import cache_clear, cache_stats, contract, contract_path
 from ._expr import ContractExpression, contract_expression, format_const_einsum_str, shape_only
 from ._pathinfo import PathInfo
 from ._specialize import describe as specializations
@@ -51,6 +51,8 @@ __all__ = [
     "build_info",
     "blas",
     "ContractExpression",
+    "cache_clear",
+    "cache_stats",
     "contract",
     "contract_expression",
     "contract_path",

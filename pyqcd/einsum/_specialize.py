@@ -43,6 +43,8 @@ import threading
 from functools import lru_cache
 from typing import Any
 
+from ._cache import LRUCache
+
 VERBOSE_ENV = "PYQCD_EINSUM_SPECIALIZE_VERBOSE"
 # 首次命中提示的总开关：默认**开启**（用户要求"首次命中应有提醒"），
 # 设 PYQCD_EINSUM_NOTICE=0 可完全关闭。与 VERBOSE_ENV 的区别：
@@ -83,6 +85,15 @@ _KERNEL_LABELS: tuple[tuple[str, tuple[str, ...]], ...] = ()
 # forces every full-corpus pass back through signature and index construction.
 _CORPUS_CACHE_LIMIT = 16_384
 _SIGNATURE_CACHE_LIMIT = _CORPUS_CACHE_LIMIT
+
+# :func:`match` 的**结果**缓存：键是调用方给的原始方程字符串（含空白，未归一化），
+# 值是返回的形态条目或 ``None``（负结果同样缓存——语料外的方程占调用的大头）。
+# 容量与签名缓存同量级：键数上限就是调用方写过的不同写法数。
+# 线程安全与统计由 :class:`._cache.LRUCache` 负责，本模块不加锁。
+_MATCH_CACHE = LRUCache("specialize.match", maxsize=_CORPUS_CACHE_LIMIT)
+
+# 缓存缺省值哨兵：与"命中且值恰为 None（负结果）"区分开。
+_CACHE_MISS = object()
 
 
 def normalize(subscripts: str) -> str:
@@ -272,17 +283,30 @@ def enabled(specialize: bool | None = None) -> bool:
         "0", "false", "off", "no")
 
 
-def match(subscripts: str) -> Entry | None:
+def match(subscripts: str, *, use: bool | None = None) -> Entry | None:
     """返回命中的专用路径描述，未命中返回 None。
 
     唯一判据是**拓扑签名**：算出 :func:`canonical_signature` 后查语料索引
     （:mod:`._topology_registry`，覆盖 wick_12cases 的全部 8638 条路径）。
     因此 ``ij,jk->ik`` 与 ``ij,jb->ib`` 走同一条路，改字母、加空格、换输出宽度
     都不影响命中。未命中即语料之外的方程，调用方照旧走通用路径。
+
+    结果缓存与命中统计
+    ------------------
+    本函数的结果（**含未命中的 ``None``**）进 ``_MATCH_CACHE``，键是入参原始字符串；
+    命中统计读 ``_cache.stats()['caches']['specialize.match']`` 的
+    ``hits/misses/stores/size``。``use`` 为 ``None`` 时跟随总开关
+    ``PYQCD_EINSUM_CACHE``；显式 ``use=False`` 表示这一次**既不读也不写**缓存
+    （返回值与缓存开启时相同）。非字符串入参直接返回 ``None``，不进缓存。
     """
     if not isinstance(subscripts, str):
         return None
-    return _match_of_normalized(normalize(subscripts))
+    cached = _MATCH_CACHE.get(subscripts, _CACHE_MISS, use=use)
+    if cached is not _CACHE_MISS:
+        return cached
+    entry = _match_of_normalized(normalize(subscripts))
+    _MATCH_CACHE.put(subscripts, entry, use=use)
+    return entry
 
 
 def announce(entry: Entry, kernel: str = "") -> None:

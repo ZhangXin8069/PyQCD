@@ -61,7 +61,8 @@ Step = tuple[
 
 ```python
 contract(subscripts, *operands, out=None, use_blas=True, optimize="auto",
-         memory_limit=None, backend="auto", **kwargs)
+         memory_limit=None, backend="auto", specialize=None,
+         kernel_force=None, **kwargs)
 
 contract_path(subscripts, *operands, use_blas=True, optimize="auto",
               memory_limit=None, shapes=False, **kwargs) -> tuple[list, PathInfo]
@@ -305,6 +306,110 @@ MISS 原因逐字回到引入前的原文。`--json` 的 `equivalence` 字段开
 不做副本时的落点按 dtype 二选一：**复数**档被拒后落 `kupl_topology`（该层没有操作数
 连续性门，在原生边界静默复制一次并记 `LAST_INFO["copied"]`）；**实数**档（float64 /
 float32）直接落通用分步路径（`_TOPOLOGY_DECLINED_DTYPES`）。
+
+### 9.1b 强制指定专用内核 `kernel_force=` / `PYQCD_EINSUM_KERNEL_FORCE`（2026-11-16）
+
+强制内核是**纯选路**语义：数值永远等价于通用路径，所以普通数值测试抓不到它的
+缺陷（标签解析错了只是"强制没生效"，分派错了只是"跑成了别的内核"）。约定与踩坑
+记在这里；用法与排查见 `skills/pyqcd-einsum/SKILL.md`，用户视角见
+`docs/einsum_user_guide_20261116.md` §11。
+
+**三态取值**（`_kernel_force.parse`，`:97`）：
+
+| 取值 | `forced_labels()` | 分派行为 |
+|---|---|---|
+| `auto` / `None` / 空串 | `None` | 原次序（`*_dedicated` → `*_topology`），失败**只** `RuntimeWarning` + 回落 |
+| `generic` | `()` | 完全不调 `_run_specialized_kernel`、不发 warning，直接通用路径 |
+| `<label>[,<label>]` | `(label, ...)` | **只**试这些、按书写次序；一个都没跑成 → `KernelUnavailableError` |
+
+`KERNEL_LABELS`（`:57`）恰为 `_api._specialized_kernel_attempts` 的四个标签：
+`cuda_dedicated` / `cuda_topology` / `kupl_dedicated` / `kupl_topology`。解析细节：
+去空白、大小写不敏感、保序去重、`auto` 在列表里被忽略（`auto,kupl_dedicated`
+等价于 `kupl_dedicated`）；`generic` 与具体标签同时出现抛 `ValueError`；未知标签抛
+`ValueError` 且**列出合法集合**——静默忽略拼写错误会让用户以为强制生效了。
+
+**优先级**：显式 `kernel_force=` > `PYQCD_EINSUM_KERNEL_FORCE` > 未设（= `auto`），
+由 `_kernel_force.resolve`（`:133`）判定。取值在**调用时**解析，同进程内改环境变量
+即时生效。注意 `--kernel-force auto` 与"不给"不同：显式 `auto` 会把环境变量**压掉**
+（`resolve("auto")` → `()`，而 `resolve(None)` 仍读环境变量）。
+
+**接线**（`_api.contract`）：`forced = _kernel_force.forced_labels(kernel_force)`
+（`:857`）之后分三条互斥分支——
+
+- `forced == ()`：命中特化形态只 `_specialize.announce`，不进专用分支（`:894`）；
+- `forced` 非空：`_run_forced_kernel`（`:628`）按 `requested` 次序真试，失败即抛
+  （`:897`、`:926` 两处，后者覆盖"语料没命中却强制了标签"）；
+- `forced is None`：原有分支逐字不变（`:903`）。
+
+**与既有开关的关系**（不是互斥，是不同层）：
+
+| 开关 | 管什么 | 与强制的交互 |
+|---|---|---|
+| `PYQCD_EINSUM_KERNEL_KUPL=0` / `_CUDA=0` | **关掉**该后端原生入口 | 能同时给；此时强制该后端的标签 → `KernelUnavailableError`，原因 `kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)` |
+| `specialize=False` / `PYQCD_EINSUM_SPECIALIZE=0` | **整体跳过**专用路径 | 与具体标签**冲突**，`ValueError` 早失败（`:932`） |
+| `kernel_force=...` | **只准跑这个** | —— |
+| `out=` | 禁用专用路径 | 与具体标签冲突，`ValueError` 早失败（`:864`） |
+
+三条早失败都是"一次内核都没试就抛"（`_LAST_KERNEL` 未被写），由
+`test_kernel_force_conflicts_fail_early` 钉住。`kernel_force="generic"` 与
+`out=` / `specialize=False` **不冲突**（generic 本就不走专用路径）。
+
+**负缓存必须旁路**：`PYQCD_EINSUM_NEGATIVE_CACHE`（`_kernel_kupl.py:59`，缺省开）
+会把 status=4 之类的确定性拒绝记下来，于是第二次调用连试都不试、原因变成
+`negative-cache hit: ...`。强制的语义是"强制即真试一次"，所以
+`_run_specialized_kernel` 在每个 attempt 前套上模块自己的 `bypass_negative_cache()`
+（`_kernel_kupl.py:88`；`_kernel_cuda.py:43` 只是把 KUPL 侧那个转出去——CUDA
+**没有**自己的负缓存，键里的 backend 已把两者分开）。旁路由**模块内计数器**实现、
+不碰 `os.environ`（环境变量是调用方与并发线程共享的状态），进入 +1/退出 −1 支持嵌套，
+旁路期间**既不读也不写**缓存，退出后 `negative_cache_info()` 与进入前逐项相同。
+
+**可观测记录**：`_LAST_KERNEL` + `last_kernel()`（`_api.py:541`），字段
+`requested`（`None`=自动 / `()`=只走通用 / 标签元组）/ `ran` / `attempted` /
+`reasons`。每次走进专用分支**整体覆盖写**（`:890`），所以读到的永远是最近一次调用，
+不会残留上一次的命中。注意它**没有**在包级 `__all__` 导出，要
+`from pyqcd.einsum._api import last_kernel`。
+
+**报告行**（两个 CLI 共用同一格式，机器可读、**不随** `--language` 翻译）：
+
+```
+kernel : requested=<auto|generic|label,...>  ran=<label|none>  attempted=<label,...>
+```
+
+- `requested` 恒有值（来自本次解析，`auto` 时反映那一刻环境变量的生效值）；
+- `ran` / `attempted` 取不到写 `unknown`（"没观测到"，不是"没有"）；
+- 与既有 `kernel   :` 行（注意三空格对齐）**是两回事**：那个是 `kernel_info` 的
+  dict（`LAST_INFO` 汇总），`ran` 才是"这次真跑了哪个"。
+
+**踩坑**：`verify_specialized --kernel-force` **不做收缩**，所以它的 `ran` 恒为
+`unknown`——`--kernel-force` 在那儿只决定报告里出不出这一行、以及 `requested=`
+显示什么。要真跑内核只能用 `python -m pyqcd.einsum.test --kernel-force <label>`。
+契约：`pyqcd/testing/_einsum_kernel_force_contract.py`（**9 项**，纯选路断言、
+零计时）。
+
+### 9.1c 自动施加等价写法 + 缓存（2026-11-16）
+
+**自动施加**（`as_equivalence`）：`contract(..., as_equivalence=None)` 缺省跟随
+`PYQCD_EINSUM_AS_EQUIVALENCE`（缺省开启）；`--as-equivalence` 是它的 CLI 三态。
+开启且方程未命中特化形态时，`_contract_via_equivalence` 会：按 `operand_order`
+重排操作数 → 按 `operand_permutations` 转置并落连续副本（视图会被 dedicated 的
+连续门拒）→ 递归 `contract(..., as_equivalence=False)` → 按 `output_permutation`
+把结果转回。**返回的永远是原方程的答案**，并有一道独立输出形状守卫
+（`_expected_output_shape`），算得出原形状却对不上时抛 `RuntimeError` 而不是交出
+错结果。两道硬闸不可被显式 `True` 压过：`PYQCD_EINSUM_EQUIVALENCE=0` 与
+`specialize=False`。不施加：非字符串方程、`out=`、额外 `kwargs`、逐元素方程、
+cupy 通用委派、`optimize` 为 callable 或显式 `list/tuple`（字符串/布尔优化器**仍会**
+施加）。**代价**：小形状上改写+副本开销占主导（实测 2.92 ms vs 0.28 ms），批量小
+收缩建议关掉。
+
+**缓存**：`_cache.LRUCache` 提供有界线程安全 LRU + `hits/misses/stores/evictions`，
+实例化即注册。当前三处：`specialize.match`（键=原始方程串，**含未命中**）、
+`equivalence.normalize`（键=原始方程串，**含 `None` 负结果**；`probe=` 路径不缓存）、
+`api.find_path`（键含 optimize/输入集合/输出集合/size_dict/memory_limit/eq/形状/
+use_blas；callable 与显式路径不缓存，返回值按**只读**复用）。总开关
+`PYQCD_EINSUM_CACHE`；`contract(..., cache=)` / `contract_path(..., cache=)` 三态；
+`cache=False` 时 `LRUCache.get/put` 既不读也不写（统计零变化）。
+`pyqcd.einsum.cache_stats()` / `cache_clear()` 是公开入口；CLI `--cache` 只在显式
+给出时打印 `cache    : enabled=... hits=... misses=... hit_rate=...`。
 
 ### 9.0 单方程测试的唯一接口：`python -m pyqcd.einsum.test`（强制）
 

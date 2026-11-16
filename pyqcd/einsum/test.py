@@ -59,6 +59,18 @@
   ``PYQCD_EINSUM_SPECIALIZE``；``false`` **强制通用路径**，是排查原生内核问题的
   第一手段；``true`` 强制走特化路径，不让它静默回落。三态的选择与"实际生效"的
   布尔值都会写进报告与 ``--verbose true`` 的明细。
+* **强制内核**：``--kernel-force auto|generic|<label>[,...]``。``auto``（缺省）保持原
+  分派次序，失败只 ``warning`` + 回落；``generic`` 完全跳过专用内核；具体标签
+  （``kupl_*`` / ``cuda_*``，可逗号分隔多个、按书写次序尝试）强制**真试一次**，
+  跑不成就抛 ``KernelUnavailableError`` 并以非零退出码结束——**绝不**静默回落。
+  显式 ``--kernel-force`` 压过环境变量 ``PYQCD_EINSUM_KERNEL_FORCE``。明细里的
+  ``kernel :`` 行给出 ``requested`` / ``ran`` / ``attempted``。
+* **缓存**：``--cache auto|true|false``。``auto``（缺省）跟随环境变量
+  ``PYQCD_EINSUM_CACHE``（只有 ``0/false/off/no`` 才关闭）；显式 ``true``/``false``
+  压过环境变量，后者让底层**既不读也不写**任何 einsum 缓存（不留半热状态、不污染
+  统计）。显式给出 ``true``/``false`` 时，``--verbose true`` 的报告**追加**一行
+  ``cache    : enabled=... hits=... misses=... hit_rate=...``；``auto`` 与省略该
+  选项等价，不写这一行——既有输出逐字节不变。
 """
 from __future__ import annotations
 
@@ -77,7 +89,13 @@ __all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES",
            "SPECIALIZE_MODES", "parse_specialize", "resolve_compare_optimize",
            "translate", "resolve_language", "LANGUAGE_ENV", "LANGUAGE_MODES",
            "DEFAULT_LANGUAGE", "EQUIVALENCE_MODES", "EQUIVALENCE_ENV",
-           "DEFAULT_EQUIVALENCE", "parse_equivalence", "equivalence_enabled"]
+           "AS_EQUIVALENCE_MODES", "AS_EQUIVALENCE_ENV", "DEFAULT_AS_EQUIVALENCE",
+           "parse_as_equivalence",
+           "DEFAULT_EQUIVALENCE", "parse_equivalence", "equivalence_enabled",
+           "DEFAULT_KERNEL", "KERNEL_LABELS", "KERNEL_FORCE_ENV",
+           "kernel_labels", "kernel_requested", "kernel_force_line",
+           "CACHE_MODES", "CACHE_ENV", "DEFAULT_CACHE", "parse_cache",
+           "cache_enabled", "cache_line"]
 
 class UsageError(SystemExit):
     """参数或环境错误。
@@ -126,12 +144,26 @@ EQUIVALENCE_MODES = ("auto", "true", "false")
 #: 等价映射报告的开关。缺省**开启**（与 ``_specialize.NOTICE_ENV`` 同口径：
 #: 只有 ``0/false/off/no`` 才关闭）。
 EQUIVALENCE_ENV = "PYQCD_EINSUM_EQUIVALENCE"
+#: ``--cache``：三态。``auto`` 跟随 ``PYQCD_EINSUM_CACHE``（缺省开启）。
+#: 与前两个三态不同，它**真的改变底层行为**：``false`` 时缓存既不读也不写。
+CACHE_MODES = ("auto", "true", "false")
+#: 缓存总开关的环境变量。与 ``_cache.CACHE_ENV`` 同值；写字面量是为了 ``_cache``
+#: 缺席时 ``--help`` 仍能说清 `auto` 跟随什么。
+CACHE_ENV = "PYQCD_EINSUM_CACHE"
+#: ``--as-equivalence``：三态。``auto`` 跟随 ``PYQCD_EINSUM_AS_EQUIVALENCE``（缺省开启）。
+#: 与 ``--equivalence`` 不同，它**真的改变执行路径**：开启时命中映射就改写方程跑，
+#: 再把结果转回原输出轴序（返回数组仍是原方程的答案）。
+AS_EQUIVALENCE_MODES = ("auto", "true", "false")
+#: 自动施加等价映射的开关，与 ``_equivalence.AS_EQUIVALENCE_ENV`` 同值。
+AS_EQUIVALENCE_ENV = "PYQCD_EINSUM_AS_EQUIVALENCE"
 
 DEFAULT_DEVICE = "cpu"
 DEFAULT_DTYPE = "complex128"
 DEFAULT_BACKEND = "auto"
 DEFAULT_SPECIALIZE = "auto"
 DEFAULT_EQUIVALENCE = "auto"
+DEFAULT_CACHE = "auto"
+DEFAULT_AS_EQUIVALENCE = "auto"
 DEFAULT_ATOL = 1e-12
 DEFAULT_RTOL = 0.0
 DEFAULT_ROUNDS = 5
@@ -323,6 +355,32 @@ MESSAGES: dict[str, dict[str, str]] = {
                "{default}；主路径与 --compare backend 的"
                "参照路径同时生效"),
     },
+    "help.kernel": {
+        "en": ("Which specialised kernel may run. Three kinds of value: auto = keep "
+               "the original dispatch (dedicated, then topology) and, when none runs, "
+               "only warn and fall back to the generic path (default); generic = skip "
+               "the specialised kernels entirely (no warning); <label> = force exactly "
+               "these ({labels}, comma separated, tried in the order written). "
+               "An explicit --kernel-force wins over the {env} environment variable. "
+               "Forcing a label makes the kernel really try once (its negative cache "
+               "is bypassed) and, when it does not run, raises KernelUnavailableError "
+               "with a non-zero exit code — it never falls back to the generic path. "
+               "Main path only: the --compare backend reference keeps its own dispatch "
+               "(forcing a label on the other backend cannot work). A kernel that is "
+               "not available is reported as an error, never as a warning. An unknown "
+               "label exits with code 2. Default {default}"),
+        "zh": ("允许跑哪个专用内核。三种取值：auto = 保持原分派次序（dedicated → "
+               "topology），跑不成只 warning 后回落到通用路径（缺省）；generic = "
+               "完全跳过专用内核（不产生 warning）；<label> = 强制只跑这些"
+               "（{labels}，可用逗号给多个、按书写次序尝试）。"
+               "显式 --kernel-force 优先于环境变量 {env}。"
+               "强制具体内核时会**真试一次**（旁路负缓存），跑不成即抛 "
+               "KernelUnavailableError 并以非零退出码结束——绝不回落成通用路径。"
+               "只作用于主路径：--compare backend 的参照仍走自己的分派"
+               "（在另一个后端上强制标签必然不可用）。"
+               "强制跑不成一律报错，不会降级成 warning。未知标签以退出码 2 结束。"
+               "缺省 {default}"),
+    },
     "help.optimize": {
         "en": ("Contraction-order optimiser (auto/optimal/dp/greedy/branch-*, or an "
                "explicit path). Default {default}"),
@@ -364,6 +422,21 @@ MESSAGES: dict[str, dict[str, str]] = {
                "只影响输出文案——不改任何计算结果、不改 --compare 的选择、"
                "不写任何环境变量。缺省 {default}"),
     },
+    "help.as_equivalence": {
+        "en": ("Apply an equivalent spelling automatically: auto=follow {env} "
+               "(on by default, only 0/false/off/no turns it off); true=rewrite when a "
+               "mapping exists; false=never. When on and the equation misses every "
+               "specialised path, the operands are permuted, the equivalent spelling is "
+               "contracted, and the result is transposed back — the returned array is "
+               "still the answer to the ORIGINAL equation (same shape, same dtype). "
+               "Skipped for out=, extra kwargs, element-wise equations and explicit "
+               "optimizer paths. Default {default}"),
+        "zh": ("自动施加等价写法：auto=跟随 {env}（缺省开启，只有 0/false/off/no 才关闭）；"
+               "true=存在映射就改写；false=不改写。开启且方程未命中任何特化路径时，"
+               "会重排操作数、按等价写法收缩、再把结果转回原输出轴序——"
+               "返回的数组仍是**原方程**的答案（形状与 dtype 都不变）。"
+               "out=、额外 kwargs、逐元素方程与显式优化器路径不施加。缺省 {default}"),
+    },
     "help.equivalence": {
         "en": ("Equivalence report tri-state. auto=follow {env} (on by default, which "
                "only 0/false/off/no turns off); true=always look for an equivalent "
@@ -376,7 +449,27 @@ MESSAGES: dict[str, dict[str, str]] = {
                "0/false/off/no 才关闭）；true=总是查等价写法；false=不查。"
                "方程未命中任何特化路径、但存在能命中的等价写法时，"
                "--verbose true 会同时给出**输入侧的张量调整**与**输出侧的结果回填**。"
-               "只做报告：不改 contract() 行为、不改耗时、不改任何数值。"
+                "只做报告：不改 contract() 行为、不改耗时、不改任何数值。"
+                "缺省 {default}"),
+    },
+    "help.cache": {
+        "en": ("Einsum cache tri-state. auto=follow {env} (on by default; only "
+               "0/false/off/no turns it off, the same rule as the library); true=force "
+               "the cache on for this call; false=force it off, in which case the "
+               "matchers and the planner neither read nor write any cache, so nothing "
+               "is warmed up or poisoned. An explicit true/false wins over {env}. "
+               "Caching only reuses pure-function results: numbers, shapes and routes "
+               "are never changed. With an explicit true/false, --verbose true adds one "
+               "machine-readable line 'cache    : enabled=<true|false>  hits=<n>  "
+               "misses=<n>  hit_rate=<0.00|none>' (auto is identical to leaving the "
+               "option out and prints no such line). Default {default}"),
+        "zh": ("einsum 缓存三态。auto=跟随环境变量 {env}（缺省开启，与库同口径："
+               "只有 0/false/off/no 才关闭）；true=本次强制开启；false=本次强制关闭，"
+               "此时匹配器与规划器**既不读也不写**任何缓存，不会预热也不会污染统计。"
+               "显式 true/false 压过 {env}。缓存只复用纯函数的结果：数值、形状与"
+               "实际走的路线一概不变。显式给出 true/false 时，--verbose true 会追加"
+               "一行机器可读统计 'cache    : enabled=<true|false>  hits=<n>  "
+               "misses=<n>  hit_rate=<0.00|none>'（auto 与省略该选项等价，不写这一行）。"
                "缺省 {default}"),
     },
     # --verbose true 的明细
@@ -510,6 +603,10 @@ MESSAGES: dict[str, dict[str, str]] = {
     "result.warning": {
         "en": "warning: {message}",
         "zh": "warning: {message}",
+    },
+    "result.error": {
+        "en": "error: {message}",
+        "zh": "错误：{message}",
     },
     "result.warning_compare_optimize_inert": {
         "en": ("--compare-optimize {value} has no effect for --compare {compare} "
@@ -654,9 +751,23 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "--specialize must be one of {values}, got {value!r}",
         "zh": "--specialize 必须是 {values} 之一，得到 {value!r}",
     },
+    "error.kernel": {
+        "en": ("--kernel-force must be 'auto', 'generic', or one of {labels} "
+               "(comma separated for several), got {value!r}"),
+        "zh": ("--kernel-force 必须是 'auto'、'generic' 或 {labels} 之一"
+               "（多个用逗号分隔），得到 {value!r}"),
+    },
+    "error.as_equivalence": {
+        "en": "--as-equivalence must be one of {values}, got {value!r}",
+        "zh": "--as-equivalence 必须是 {values} 之一，得到 {value!r}",
+    },
     "error.equivalence": {
         "en": "--equivalence must be one of {values}, got {value!r}",
         "zh": "--equivalence 必须是 {values} 之一，得到 {value!r}",
+    },
+    "error.cache": {
+        "en": "--cache must be one of {values}, got {value!r}",
+        "zh": "--cache 必须是 {values} 之一，得到 {value!r}",
     },
     "error.compare_optimize": {
         "en": "--compare-optimize must be one of {values}, got {value!r}",
@@ -1056,6 +1167,9 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         specialize: bool | None = None,
         compare_optimize: str = DEFAULT_COMPARE_OPTIMIZE,
         equivalence: bool | None = None,
+        as_equivalence: bool | None | str = None,
+        kernel_force: str | None = None,
+        cache: bool | None = None,
         expected_shape: tuple[int, ...] | None = None,
         language: str | None = None) -> dict[str, Any]:
     """跑一条方程的完整检查，返回结构化结果（供 CLI 与外部脚本消费）。
@@ -1074,6 +1188,16 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
 
     ``language`` 只影响错误文案与 ``verbose`` 明细（``None`` = 走
     :func:`resolve_language`，即 ``--language auto``），不改任何计算结果。
+
+    ``kernel`` 是 ``--kernel-force`` 的原始取值（``None`` = 缺省 ``auto``），解析后原样
+    传给 ``contract(kernel_force=...)``。强制具体标签而没跑成时，``KernelUnavailableError``
+    **不被吞掉**：它带着 requested/attempted/逐标签原因向上抛，由 :func:`main`
+    打印正文并非零退出。``auto`` 模式仍只 warning + 回落，行为逐字不变。
+
+    ``cache`` 三态直传 ``contract(cache=...)``：``None``（``auto``）跟随
+    ``PYQCD_EINSUM_CACHE``，``False`` 让底层缓存**既不读也不写**。与 ``equivalence``
+    不同，它**真的改变底层行为**，所以报告里既记生效布尔值 ``"cache"``，也记
+    ``_cache.stats()`` 的原始快照 ``"cache_stats"``（取不到就是 ``None``）。
     """
     import pyqcd.einsum as pe
 
@@ -1085,6 +1209,18 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
                                    value=compare))
     specialize = parse_specialize(specialize)
     equivalence = parse_equivalence(equivalence, lang)
+    as_equivalence_value = parse_as_equivalence(as_equivalence, lang)
+    # ``--cache`` 是唯一改变底层行为的三态：显式 ``true``/``false`` 压过环境变量。
+    # ``cache_requested``（bool | None）**原样**交给 ``contract(cache=...)``；
+    # ``cache_effective`` 是本次真正生效的布尔值，报告用它而不是 ``stats()['enabled']``
+    # ——后者是环境变量口径，``--cache false`` 时它会说 True，那样报告就自相矛盾。
+    cache_requested = parse_cache(cache, lang)
+    cache_effective = cache_enabled(cache_requested)
+    cache_explicit = cache_requested is not None
+    # ``--kernel-force`` 先解析：非法标签必须在构造任何操作数之前就报成用法错误。
+    # 规范化后的字符串**原样**给 ``contract(kernel_force=...)``，报告里的 ``requested=``
+    # 也用同一处解析结果，二者不会各说各话。
+    kernel_value = ",".join(kernel_labels(kernel_force, lang))
     ref_optimize = resolve_compare_optimize(compare, optimize, compare_optimize,
                                             language=lang)
     if warmup < 1:
@@ -1120,6 +1256,9 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         "compare_optimize_effective": ref_optimize,
         "specialize": _specialize_label(specialize),
         "specialize_effective": _specialize_effective(specialize),
+        "kernel_force": kernel_value or DEFAULT_KERNEL,
+        "cache": cache_effective,
+        "cache_explicit": cache_explicit,
         "n_operands": len(shapes),
         "input_elements": int(sum(int(np.prod(item, dtype=np.int64)) for item in shapes)),
         "output_elements": int(np.prod(out_shape, dtype=np.int64)) if out_shape else 1,
@@ -1128,20 +1267,33 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     # 主路径
     def call():
         return pe.contract(equation, *operands, backend=backend, optimize=optimize,
-                           specialize=specialize)
+                           specialize=specialize, kernel_force=kernel_value or None,
+                           as_equivalence=as_equivalence_value,
+                           cache=cache_requested)
 
     _clear_kernel_info()
+    _reset_last_kernel()
     try:
         got = call()
     except Exception as exc:                    # noqa: BLE001
+        # 强制内核没跑成必须**透传**：这是本入口的本职（告知"跑不了"），把它降级
+        # 成报告里的 ``ok=False`` 会让 CLI 只打印一行 FAIL，用户看不到 requested /
+        # attempted / 逐标签原因。其余异常仍按原样收进报告。
+        force = _kernel_force_module()
+        unavailable = getattr(force, "KernelUnavailableError", None) if force else None
+        if unavailable is not None and isinstance(exc, unavailable):
+            raise
         report["ok"] = False
         report["error"] = f"{type(exc).__name__}: {exc}"
+        report["cache_stats"] = _cache_stats()
         return report
     seconds = _timed(call, warmup, rounds)
     got_host = got if xp is np else _to_host(got)
     report["seconds"] = seconds
     report["actual_shape"] = list(np.shape(got_host))
     report["kernel_info"] = _kernel_info()
+    report["kernel_force"] = kernel_force_fields(
+        _last_kernel(), report["kernel_force"], kernel_labels(kernel_force, lang))
     report["install"] = _install_info()
     report["memory"] = {
         "inputs_delta": _memory_delta(memory_before, memory_loaded),
@@ -1153,13 +1305,15 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     if compare != "none":
         reference, ref_seconds, ref_note = _reference(
             compare, equation, host, operands, out_shape, np_dtype, xp,
-            rounds, warmup, device, specialize, ref_optimize, language=lang)
+            rounds, warmup, device, specialize, ref_optimize, language=lang,
+            cache=cache_requested)
         report["reference"] = ref_note
         report["reference_seconds"] = ref_seconds
         if reference is None:
             report["ok"] = False
             report["error"] = translate("reference.unavailable", lang,
                                         compare=compare, note=ref_note)
+            report["cache_stats"] = _cache_stats()
             return report
         report["rel"] = _relative_error(got_host, reference)
         report["max_abs_diff"] = float(np.max(
@@ -1184,9 +1338,13 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
 
     # 等价映射报告：**在全部计时与判定之后**才查，且只写报告字段，
     # 不进 contract() 的入参。关闭（--equivalence false / 环境变量 0）时不写该字段。
-    equivalent = _equivalence_of(equation, equivalence)
+    equivalent = _equivalence_of(equation, equivalence, cache=cache_requested)
     if equivalent is not None:
         report["equivalence"] = equivalent
+
+    # 命中统计必须在**全部** contract() 调用之后取快照，否则本次运行刚挣到的命中
+    # 不在里面，"缓存到底开没开"就还是看不出。
+    report["cache_stats"] = _cache_stats()
 
     if verbose:
         _print_detail(report, lang)
@@ -1230,6 +1388,180 @@ def _specialize_label(specialize: bool | None) -> str:
     return "true" if specialize else "false"
 
 
+# ── 强制内核（--kernel-force） ─────────────────────────────────────────────────────
+#: 缺省：保持原分派次序（失败只 warning + 回落）。与 ``_kernel_force.AUTO_LABEL``
+#: 同值；本模块不 import 它，免得 ``_kernel_force`` 缺席时整个入口起不来。
+DEFAULT_KERNEL = "auto"
+#: ``last_kernel()`` 取不到时的占位。**机器可读**，不随 ``--language`` 变——
+#: 它说的是"没观测到"，不是一句说明文字。
+KERNEL_UNKNOWN = "unknown"
+#: 可强制的内核标签（与 ``_kernel_force.KERNEL_LABELS`` 同集合）。写字面量是为了
+#: 该模块缺席时 ``--help`` 仍能列出合法集合。
+KERNEL_LABELS = frozenset({
+    "cuda_dedicated",
+    "cuda_topology",
+    "kupl_dedicated",
+    "kupl_topology",
+})
+#: 强制内核的环境变量（与 ``_kernel_force.KERNEL_FORCE_ENV`` 同名）。
+KERNEL_FORCE_ENV = "PYQCD_EINSUM_KERNEL_FORCE"
+
+
+def _kernel_force_module():
+    """取 ``_kernel_force`` 模块；取不到返回 ``None``（降级成旧行为，不半强制）。"""
+    try:
+        from pyqcd.einsum import _kernel_force as force
+    except ImportError:                         # pragma: no cover - 旧版库
+        return None
+    return force
+
+
+def _kernel_label_names() -> tuple[str, ...]:
+    """合法标签集合：优先用 ``_kernel_force`` 的权威定义，取不到用本模块字面量。"""
+    force = _kernel_force_module()
+    live = getattr(force, "KERNEL_LABELS", None) if force is not None else None
+    return tuple(sorted(live or KERNEL_LABELS))
+
+
+class _NeverRaised(Exception):
+    """``_kernel_force`` 缺席时占据 ``except`` 子句的占位类型（永不匹配）。"""
+
+
+def _kernel_unavailable_error() -> type[BaseException]:
+    """``except`` 用的类型：``KernelUnavailableError``，取不到就是永不匹配的占位。
+
+    必须在 ``except`` 里用一个**表达式**而不是直接 import：``_kernel_force`` 是
+    延迟取用的（与 ``_api`` 分属不同改动批次），它缺席时本入口仍要能跑。
+    """
+    force = _kernel_force_module()
+    error = getattr(force, "KernelUnavailableError", None) if force else None
+    return error if isinstance(error, type) and issubclass(
+        error, BaseException) else _NeverRaised
+
+
+def kernel_labels(value: str | None, language: str = "zh") -> tuple[str, ...]:
+    """解析生效的 ``--kernel-force``：显式取值优先于 ``PYQCD_EINSUM_KERNEL_FORCE``。
+
+    返回 ``_kernel_force.resolve`` 的原始元组（``()`` = 自动分派，
+    ``("generic",)`` = 只走通用路径，其余为要强制的标签）。非法标签抛
+    ``UsageError``（退出码 2）并列出合法集合——静默忽略拼写错误会让用户以为
+    强制生效了，而他其实还在跑 auto。
+    """
+    force = _kernel_force_module()
+    if force is None:
+        text = DEFAULT_KERNEL if value is None else str(value).strip()
+        return () if text in ("", DEFAULT_KERNEL) else (text,)
+    try:
+        return tuple(force.resolve(value))
+    except ValueError as exc:
+        raise UsageError(translate("error.kernel", language, value=value,
+                                   labels=", ".join(_kernel_label_names()))) from exc
+
+
+def kernel_requested(value: str | None, language: str = "zh") -> str:
+    """报告里 ``requested=`` 的取值：``auto`` / ``generic`` / ``label,...``。
+
+    与真正传给 ``contract(kernel_force=...)`` 的口径同源（都从这里解析出来），所以这一格
+    回答的是"这次到底要求了什么"，而不是"命令行上写了什么"——``auto`` 时它还会
+    跟随 ``PYQCD_EINSUM_KERNEL_FORCE``，报告必须反映那一刻的生效值。
+    """
+    labels = kernel_labels(value, language)
+    return ",".join(labels) if labels else DEFAULT_KERNEL
+
+
+def _reset_last_kernel() -> None:
+    """把 ``_api`` 的"最近一次内核"记录清空，让报告只反映**本次**调用。
+
+    与 :func:`_clear_kernel_info` 同口径、同理由：``contract()`` 只在确实走进专用
+    分支时才写记录，``--specialize false`` 这类调用一条都不写，残留的上一次记录
+    会被读成"这次跑了它"。只清**存在**的字段，旧版 ``_api`` 没有它就不管。
+    """
+    try:
+        from pyqcd.einsum import _api
+    except ImportError:                         # pragma: no cover - 旧版库
+        return
+    if getattr(_api, "last_kernel", None) is None:
+        return
+    if hasattr(_api, "_LAST_KERNEL"):
+        try:
+            _api._LAST_KERNEL = None
+        except Exception:                       # noqa: BLE001 - 清不掉就靠下面的校验
+            pass
+
+
+def _last_kernel() -> dict[str, Any] | None:
+    """读 ``_api.last_kernel()``；接口缺失或状态不对时返回 ``None``。
+
+    **必须容忍缺失**：本入口与 ``_api`` 分属不同改动批次，取不到就走退化显示
+    （``ran=unknown attempted=unknown``）。绝不凭 ``LAST_INFO`` / ``kernel_info``
+    反推一个"看起来合理"的 ran——那是编造观测。
+    """
+    try:
+        from pyqcd.einsum import _api
+    except ImportError:                         # pragma: no cover - 旧版库
+        return None
+    probe = getattr(_api, "last_kernel", None)
+    if probe is None:
+        return None
+    try:
+        record = probe()
+    except Exception:                           # noqa: BLE001 - 报告层不许影响主流程
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _forced_of(labels: tuple[str, ...]) -> tuple[str, ...] | None:
+    """``resolve`` 的元组 → ``last_kernel()['requested']`` 的形状。
+
+    ``None`` 自动分派；``()`` 只走通用路径；其余为强制标签。自己算而不调
+    ``_kernel_force.forced_labels``，是为了该模块缺席时也能校验记录归属。
+    """
+    if not labels:
+        return None
+    if labels == ("generic",):
+        return ()
+    return labels
+
+
+def kernel_force_fields(record: dict[str, Any] | None, requested: str,
+                        expected: tuple[str, ...]) -> dict[str, Any]:
+    """把 ``last_kernel()`` 的记录整理成报告要的三段；取不到的一律 ``None``。
+
+    ``expected`` 是本次请求的标签元组，用来挡掉**不属于本次调用**的记录：记录的
+    ``requested`` 与它对不上就不认。宁可显示 ``unknown``，也不显示一条没法归因的
+    观测。
+    """
+    fields: dict[str, Any] = {"requested": requested, "ran": None, "attempted": None}
+    if record is None:
+        return fields
+    recorded = record.get("requested")
+    recorded = None if recorded is None else tuple(str(item) for item in recorded)
+    if recorded != _forced_of(expected):
+        return fields
+    if "ran" in record:
+        ran = record.get("ran")
+        fields["ran"] = str(ran) if ran else "none"
+    attempted = record.get("attempted")
+    if attempted is not None:
+        labels = [str(item) for item in attempted if str(item)]
+        fields["attempted"] = ",".join(labels) if labels else "none"
+    return fields
+
+
+def kernel_force_line(fields: dict[str, Any]) -> str:
+    """拼 ``kernel : requested=... ran=... attempted=...`` 那一行。
+
+    这一行是**机器可读**的（同 ``route :``/``kernel   :``），不进 :data:`MESSAGES`：
+    三个字段名与 ``none``/``unknown`` 都是稳定取值，跟着 ``--language`` 翻译会让
+    脚本解析不到。三段各自独立退化——``requested`` 总会有值（来自本入口的解析），
+    ``ran`` / ``attempted`` 取不到时写 ``unknown``。
+    """
+    return ("kernel : requested={}  ran={}  attempted={}".format(
+        fields.get("requested") or DEFAULT_KERNEL,
+        fields.get("ran") or KERNEL_UNKNOWN,
+        fields.get("attempted") or KERNEL_UNKNOWN))
+
+
 # ── 等价映射报告（--equivalence） ───────────────────────────────────────────
 def parse_equivalence(value: bool | None | str,
                       language: str = "zh") -> bool | None:
@@ -1252,6 +1584,28 @@ def parse_equivalence(value: bool | None | str,
                                values=EQUIVALENCE_MODES, value=value))
 
 
+def parse_as_equivalence(value: bool | None | str,
+                         language: str = "zh") -> bool | None:
+    """把 ``auto|true|false``（或 ``None``/``bool``）规范成 ``bool | None``。
+
+    与 :func:`parse_equivalence` 同口径：``None`` 与 ``auto`` 等价（跟随
+    ``PYQCD_EINSUM_AS_EQUIVALENCE``），本函数**不读**环境变量——真正是否施加由
+    :func:`pyqcd.einsum._equivalence.as_equivalence_enabled` 在调用时决定。
+    """
+    if value is None or value is False or value is True:
+        return value
+    text = str(value).strip().lower()
+    if text == "auto":
+        return None
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off"):
+        return False
+    raise UsageError(translate("error.as_equivalence", language,
+                               values=", ".join(AS_EQUIVALENCE_MODES),
+                               value=value))
+
+
 def equivalence_enabled(requested: bool | None = None) -> bool:
     """本次调用是否报告等价写法。``None`` 时跟随 ``PYQCD_EINSUM_EQUIVALENCE``。
 
@@ -1265,8 +1619,8 @@ def equivalence_enabled(requested: bool | None = None) -> bool:
         "0", "false", "off", "no")
 
 
-def _equivalence_of(equation: str, requested: bool | None = None
-                    ) -> dict[str, Any] | None:
+def _equivalence_of(equation: str, requested: bool | None = None,
+                    cache: bool | None = None) -> dict[str, Any] | None:
     """查该方程的等价写法，供报告使用；关闭时返回 ``None``。
 
     ``requested`` 是 ``--equivalence`` 的三态（``None`` = ``auto``）。返回
@@ -1276,13 +1630,16 @@ def _equivalence_of(equation: str, requested: bool | None = None
     **只在未命中任何特化路径时才查**：已命中的方程没有必要看等价写法（那一段
     也不该出现，以免干扰正常输出），且能省掉这次查询。``_specialize.match``
     的判据就是"是否命中特化路径"，与 ``route`` 行同源。
+
+    ``cache`` 与主路径同源并原样转发给 ``match(use=...)``：``--cache false`` 时
+    报告层**也不许**读/写缓存，否则统计会被"只是查一下报告"的调用污染。
     """
     if not equivalence_enabled(requested):
         return None
     try:
         from pyqcd.einsum import _specialize
 
-        if _specialize.match(equation) is not None:
+        if _specialize.match(equation, use=cache) is not None:
             return None
         from pyqcd.einsum import _equivalence
 
@@ -1324,6 +1681,111 @@ def _format_output_adjustment(equivalent: dict[str, Any]) -> str:
     if not perm:
         return "-"
     return "transpose(" + ", ".join(str(i) for i in perm) + ")"
+
+
+# ── 缓存开关与命中统计（--cache） ───────────────────────────────────────────
+def parse_cache(value: bool | None | str, language: str = "zh") -> bool | None:
+    """把 ``auto|true|false``（或 ``None``/``bool``）规范成 ``bool | None``。
+
+    与 :func:`parse_specialize` / :func:`parse_equivalence` 同口径：``None`` 与
+    ``auto`` 等价（跟随 ``PYQCD_EINSUM_CACHE``），**不做**环境变量读取——真正的
+    生效值由 :func:`cache_enabled` 决定。非法取值抛 ``UsageError``（退出码 2）。
+    """
+    if value is None or value is False or value is True:
+        return value
+    text = str(value).strip().lower()
+    if text == "auto":
+        return None
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off"):
+        return False
+    raise UsageError(translate("error.cache", language,
+                               values=CACHE_MODES, value=value))
+
+
+def cache_enabled(requested: bool | None = None) -> bool:
+    """本次调用实际是否启用缓存。``None`` 时跟随 ``PYQCD_EINSUM_CACHE``。
+
+    判定**委托给库**（``_cache.enabled``）：报告里的 ``enabled=`` 必须与底层真正用的
+    那一套口径一致，本模块不另立一份环境变量解释。``_cache`` 缺席（旧版库）时才退回
+    同一规则的本地实现（缺省开启，只有 ``0/false/off/no`` 关闭）。
+    """
+    if requested is not None:
+        return bool(requested)
+    try:
+        from pyqcd.einsum import _cache
+    except ImportError:                         # pragma: no cover - 旧版库
+        return os.environ.get(CACHE_ENV, "1").strip().lower() not in (
+            "0", "false", "off", "no")
+    return bool(_cache.enabled(None))
+
+
+def _cache_stats() -> dict[str, Any] | None:
+    """读 ``pyqcd.einsum._cache.stats()`` 的原始快照；取不到返回 ``None``。
+
+    **绝不伪造**：模块、函数或返回形态任一不符就如实给 ``None``（报告里显示
+    ``unknown``），不凭命中提示反推一个"看起来合理"的数字。异常同样吞掉——报告层
+    的任何问题都不许影响主流程。
+    """
+    try:
+        from pyqcd.einsum import _cache
+    except ImportError:                         # pragma: no cover - 旧版库
+        return None
+    probe = getattr(_cache, "stats", None)
+    if probe is None:
+        return None
+    try:
+        snapshot = probe()
+    except Exception:                           # noqa: BLE001 - 报告层不许影响主流程
+        return None
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def _cache_totals(stats: dict[str, Any] | None
+                  ) -> tuple[int | None, int | None, float | None]:
+    """把 ``stats()['caches']`` 汇总成 ``(hits, misses, hit_rate)``。
+
+    统计按**全部已注册缓存**求和：用户问的是"这个入口到底命中了没有"，不是某一个
+    内部缓存的名字。没有任何查询时 ``hit_rate`` 为 ``None``（不写 ``0.00``——那会把
+    "没问过"说成"问过但一次没中"）。``stats`` 缺失或不完整时三项都是 ``None``。
+    """
+    if not isinstance(stats, dict):
+        return None, None, None
+    per_cache = stats.get("caches")
+    if not isinstance(per_cache, dict):
+        return None, None, None
+    hits = misses = 0
+    for info in per_cache.values():
+        if not isinstance(info, dict):
+            continue
+        hits += int(info.get("hits") or 0)
+        misses += int(info.get("misses") or 0)
+    queries = hits + misses
+    return hits, misses, (hits / queries if queries else None)
+
+
+def cache_line(report: dict[str, Any]) -> str:
+    """拼 ``cache    : enabled=... hits=... misses=... hit_rate=...`` 那一行。
+
+    这一行是**机器可读**的（同 ``kernel :``），字段名与 ``none``/``unknown`` 都是稳定
+    取值，不进 :data:`MESSAGES`——跟着 ``--language`` 翻译会让脚本解析不到。``enabled``
+    取 ``report['cache']``（本次**生效**的布尔值），不是 ``stats()['enabled']``：后者
+    是环境变量口径，``--cache false`` 时它会如实说 ``true``，用错就是自相矛盾的报告。
+    """
+    enabled = report.get("cache")
+    enabled_text = "unknown" if enabled is None else ("true" if enabled else "false")
+    if enabled is False:
+        # 本次关闭时**本次调用没有发生任何缓存读写**；``cache_stats()`` 里那些数字
+        # 来自报告层自己的只读查询（例如 ``explain()`` 的匹配器调用），把它们印在
+        # ``enabled=false`` 后面会让人以为"关了还在命中"，所以这里如实报 0。
+        return "cache    : enabled=false  hits=0  misses=0  hit_rate=none"
+    hits, misses, rate = _cache_totals(report.get("cache_stats"))
+    return ("cache    : enabled={}  hits={}  misses={}  hit_rate={}".format(
+        enabled_text,
+        "unknown" if hits is None else hits,
+        "unknown" if misses is None else misses,
+        "none" if rate is None else f"{rate:.2f}"))
 
 
 # ── 参照的优化器（--compare-optimize） ─────────────────────────────────────
@@ -1427,12 +1889,15 @@ def _kernel_info() -> dict[str, Any]:
 
 def _reference(compare, equation, host, operands, out_shape, dtype, xp,
                rounds, warmup, device, specialize=None,
-               ref_optimize=None, language: str = "zh"):
+               ref_optimize=None, language: str = "zh", cache=None):
     """按 ``--compare`` 取参照结果，返回 ``(数组或 None, 秒数或 None, 说明)``。
 
     ``ref_optimize`` 是 ``resolve_compare_optimize`` 解析出的**参照实际用的**优化器
     （``None`` = 该模式不设优化器）。本函数刻意**不读主路径的 ``optimize``**——参照
     借用主路径的选择会让对照实验失去独立性。
+
+    ``cache`` 与主路径同源（``--compare backend`` 也会调用 ``contract()``）：
+    ``--cache false`` 不该被参照这一路偷偷预热或污染统计。
 
     ``language`` 只影响失败说明的文案。
     """
@@ -1469,7 +1934,7 @@ def _reference(compare, equation, host, operands, out_shape, dtype, xp,
                      else [other_xp.asarray(item) for item in host])
 
         def call():
-            return pe_contract(equation, other_ops, other, specialize)
+            return pe_contract(equation, other_ops, other, specialize, cache)
         try:
             seconds = _timed(call, warmup, rounds)
             result = _to_host(call())
@@ -1483,14 +1948,16 @@ def _reference(compare, equation, host, operands, out_shape, dtype, xp,
                                  compare=compare)
 
 
-def pe_contract(equation, operands, backend, specialize=None):
+def pe_contract(equation, operands, backend, specialize=None, cache=None):
     """``compare='backend'`` 用：在指定后端上跑同一批张量。
 
-    ``specialize`` 与主路径同源——否则 ``--compare backend`` 会把"专用路径 vs 通用
-    路径"当成跨后端差异来比较，结论失真。
+    ``specialize`` 与 ``cache`` 都与主路径同源——否则 ``--compare backend`` 会把
+    "专用路径 vs 通用路径"当成跨后端差异来比较，结论失真；``cache=false`` 也会被
+    参照这一路绕过。
     """
     import pyqcd.einsum as pe
-    return pe.contract(equation, *operands, backend=backend, specialize=specialize)
+    return pe.contract(equation, *operands, backend=backend, specialize=specialize,
+                       cache=cache)
 
 
 def _install_info() -> dict[str, Any]:
@@ -1664,9 +2131,17 @@ def _print_detail(report: dict[str, Any], language: str = "zh") -> None:
         route = _route_of(report.get("kernel_info"), language)
         if route:
             print(f"route    : {route}", file=out)
+    # 强制内核的三段当然也要在：``kernel`` 行说的是原生入口留下的信息，
+    # 分不清"要求了什么/到底跑没跑成"。这一行**追加**在 route 之后，不动既有行序。
+    if "kernel_force" in report:
+        print(kernel_force_line(report["kernel_force"]), file=out)
     equivalent = report.get("equivalence")
     if equivalent is not None:
         _print_equivalence(equivalent, language)
+    # 缓存统计**追加**在最后：既有行的顺序与内容一律不动（契约逐字符比对）。
+    # 只在 ``--cache true|false`` 显式给出时出现——``auto``/省略时多一行就是破坏。
+    if report.get("cache_explicit"):
+        print(cache_line(report), file=out)
 
 
 def _print_equivalence(equivalent: dict[str, Any], language: str = "zh") -> None:
@@ -1817,10 +2292,26 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
     parser.add_argument("--specialize", default=DEFAULT_SPECIALIZE,
                         choices=SPECIALIZE_MODES,
                         help=t("help.specialize", default=DEFAULT_SPECIALIZE))
+    # ``default=None`` 是刻意的，不是 ``DEFAULT_KERNEL``：``_kernel_force`` 里
+    # **显式参数优先于环境变量**，把缺省写成 ``"auto"`` 就等于每次都显式给了 auto，
+    # ``PYQCD_EINSUM_KERNEL_FORCE`` 会被永久压住。``None`` 才代表"用户没给"。
+    parser.add_argument("--kernel-force", default=None,
+                        help=t("help.kernel", default=DEFAULT_KERNEL,
+                               env=KERNEL_FORCE_ENV,
+                               labels=", ".join(_kernel_label_names())))
+    parser.add_argument("--as-equivalence", default=DEFAULT_AS_EQUIVALENCE,
+                        choices=AS_EQUIVALENCE_MODES,
+                        help=t("help.as_equivalence", env=AS_EQUIVALENCE_ENV,
+                               default=DEFAULT_AS_EQUIVALENCE))
     parser.add_argument("--equivalence", default=DEFAULT_EQUIVALENCE,
                         choices=EQUIVALENCE_MODES,
                         help=t("help.equivalence", env=EQUIVALENCE_ENV,
                                default=DEFAULT_EQUIVALENCE))
+    # ``default=None`` 与 ``--kernel-force`` 同理：``None`` 代表"用户没给"，
+    # 只有显式 ``true``/``false`` 才写 ``cache :`` 报告行（``auto`` 与省略等价）。
+    parser.add_argument("--cache", default=None, choices=CACHE_MODES,
+                        help=t("help.cache", env=CACHE_ENV,
+                               default=DEFAULT_CACHE))
     parser.add_argument("--optimize", default=DEFAULT_OPTIMIZE,
                         help=t("help.optimize", default=DEFAULT_OPTIMIZE))
     parser.add_argument("--atol", type=float, default=DEFAULT_ATOL,
@@ -1886,18 +2377,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         if out_shape is None:                     # 没有 equation 时的旧语义
             out_shape = ()
 
-    result = run(
-        equation=args.equation, shapes=shapes,
-        out_shape=tuple(out_shape),
-        device=args.device, dtype=args.dtype, backend=args.backend,
-        atol=args.atol, rtol=args.rtol, compare=args.compare,
-        optimize=args.optimize, rounds=args.rounds, warmup=args.warmup,
-        seed=args.seed, verbose=_as_bool(args.verbose),
-        specialize=parse_specialize(args.specialize, language),
-        compare_optimize=args.compare_optimize,
-        equivalence=parse_equivalence(args.equivalence, language),
-        language=language,
-    )
+    try:
+        result = run(
+            equation=args.equation, shapes=shapes,
+            out_shape=tuple(out_shape),
+            device=args.device, dtype=args.dtype, backend=args.backend,
+            atol=args.atol, rtol=args.rtol, compare=args.compare,
+            optimize=args.optimize, rounds=args.rounds, warmup=args.warmup,
+            seed=args.seed, verbose=_as_bool(args.verbose),
+            specialize=parse_specialize(args.specialize, language),
+            compare_optimize=args.compare_optimize,
+            equivalence=parse_equivalence(args.equivalence, language),
+            as_equivalence=args.as_equivalence,
+            kernel_force=args.kernel_force,
+            cache=parse_cache(args.cache, language),
+            language=language,
+        )
+    except _kernel_unavailable_error() as exc:
+        # 强制内核没跑成：这是**环境**问题（原生库/驱动/形态不支持），不是数值不符，
+        # 因此按 ``--help`` 的承诺用退出码 2。异常正文已经写清 requested / attempted /
+        # 逐标签原因，**原样**打出来即可——降级成一行 warning + 通用路径会让用户以为
+        # 强制生效了。
+        print(translate("result.error", language, message=exc), file=sys.stderr)
+        return 2
     result["shape_source"] = report_note
     if result.get("specialize_warning"):
         print(translate("result.warning", language,

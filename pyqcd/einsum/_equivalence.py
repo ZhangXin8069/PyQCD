@@ -95,9 +95,13 @@ from dataclasses import dataclass
 from itertools import combinations, permutations, product
 from typing import Any, Iterator, Sequence
 
+from . import _cache
+
 __all__ = [
+    "AS_EQUIVALENCE_ENV",
     "EQUIVALENCE_ENV",
     "Equivalence",
+    "as_equivalence_enabled",
     "enabled",
     "normalize_equation",
     "find_equivalents",
@@ -112,6 +116,11 @@ EQUIVALENCE_ENV = "PYQCD_EINSUM_EQUIVALENCE"
 
 #: 开关关闭时 :func:`explain` 附带的说明（机器可读别名见 ``disabled_reason``）。
 DISABLED_REASON = "等价映射已关闭（PYQCD_EINSUM_EQUIVALENCE=0）"
+
+#: **自动施加**映射的开关：``contract(..., as_equivalence=...)`` 的三态缺省值。
+#: 默认开启（``"1"``）：命中映射时 :func:`pyqcd.einsum.contract` 会就地改写方程、
+#: 重排操作数、跑完再把结果转回调用方要求的输出轴序。设 ``0`` 退回"只报告不施加"。
+AS_EQUIVALENCE_ENV = "PYQCD_EINSUM_AS_EQUIVALENCE"
 
 # 单个候选的同构搜索节点上限。真实语料高度刚性（实测每候选几微秒），触发这个
 # 上界意味着桶键撞上了一条结构相近但不同构的方程；此时放弃该候选即可——放弃
@@ -145,6 +154,17 @@ _SHAPE_CACHE_LIMIT = 4096
 # 已解析写法的缓存（桶内排序要逐条读语料写法）。
 _PARSED: dict[str, tuple[list[str], str]] = {}
 
+# :func:`normalize_equation` 的**结果**缓存：键是调用方给的原始方程字符串（含空白、
+# 未归一化），值是 :class:`Equivalence` 或 ``None``。负结果同样缓存——"语料里没有
+# 等价写法"一样要跑结构分桶 + 构造式同构，并不便宜。容量与结构描述缓存同量级：
+# 键数上限就是调用方写过的不同写法数；线程安全与命中统计由
+# :class:`._cache.LRUCache` 负责，本模块不加锁。
+_NORMALIZE_CACHE = _cache.LRUCache("equivalence.normalize",
+                                   maxsize=_SHAPE_CACHE_LIMIT)
+
+# 缓存缺省值哨兵：与"命中且值恰为 None（负结果）"区分开。
+_CACHE_MISS = object()
+
 
 def enabled() -> bool:
     """等价映射是否启用（默认开启，``PYQCD_EINSUM_EQUIVALENCE=0`` 关闭）。
@@ -152,6 +172,18 @@ def enabled() -> bool:
     在**调用时**读环境变量（不在 import 时求值），因此同进程内改环境变量即时生效。
     """
     return os.environ.get(EQUIVALENCE_ENV, "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def as_equivalence_enabled(value: bool | None = None) -> bool:
+    """``as_equivalence=`` 的三态解析：显式 ``True``/``False`` 优先，``None`` 读环境变量。
+
+    与 :func:`enabled` 一样在**调用时**求值（不在 import 时快照），因此同进程内改
+    ``PYQCD_EINSUM_AS_EQUIVALENCE`` 即时生效。缺省开启。
+    """
+    if value is not None:
+        return bool(value)
+    return os.environ.get(AS_EQUIVALENCE_ENV, "1").strip().lower() not in (
         "0", "false", "off", "no")
 
 
@@ -892,7 +924,8 @@ def _normalize(equation: str, probe: Any) -> Equivalence | None:
 
 
 def normalize_equation(equation: str,
-                       probe: Any = None) -> Equivalence | None:
+                       probe: Any = None, *,
+                       use: bool | None = None) -> Equivalence | None:
     """把方程改写成与某个"已知可用形式"完全相同的写法。
 
     默认（``probe is None``）走语料索引：先算结构不变量桶键，再在桶内用构造式
@@ -901,11 +934,39 @@ def normalize_equation(equation: str,
     已经是目标形式。显式给出时退回有界改写枚举（语料索引对自定义目标帮不上忙）。
 
     **本函数只改写方程与给出张量调整建议，绝不替调用方执行。**
-    关闭（``PYQCD_EINSUM_EQUIVALENCE=0``）时直接返回 ``None``：零查询、零枚举。
+
+    结果缓存与命中统计
+    ------------------
+    重复问同一条方程是最常见的情形（``contract`` 的默认路径就会问），因此默认路径
+    的结果按**调用方原始方程字符串**缓存（含空白、不做归一化，一字之差即另一条
+    键），``None`` 也缓存——"语料里没有等价写法"同样要跑结构分桶与构造式同构。
+    命中后只剩一次字典查找。缓存的 :class:`Equivalence` 是 ``frozen=True`` 的
+    dataclass，字段全为字符串/元组，**同一个实例可以安全共享**，不必复制。
+
+    不缓存的两个例外：
+
+    * 显式 ``probe=``：目标形态由调用方决定（可以任意闭包），键表达不了；
+    * 非 ``str`` 输入：保持"非法输入只返回 ``None``、绝不抛异常"的旧行为。
+
+    ``use`` 是缓存总开关的三态覆盖（``True``/``False`` 压过环境变量
+    ``PYQCD_EINSUM_CACHE``，``None`` 跟随环境变量、缺省开启），原样转发给
+    :class:`._cache.LRUCache`；关闭时**既不读也不写**，统计也不会留下假命中。
+    命中/未命中/写入次数见 ``pyqcd.einsum._cache.stats()["caches"]
+    ["equivalence.normalize"]``。
+
+    关闭（``PYQCD_EINSUM_EQUIVALENCE=0``）时直接返回 ``None``：零查询、零枚举、
+    **也零缓存读写**——统计不因这个被关掉的入口而变动。
     """
     if not enabled():
         return None
-    return _normalize(equation, probe)
+    if probe is not None or not isinstance(equation, str):
+        return _normalize(equation, probe)
+    cached = _NORMALIZE_CACHE.get(equation, _CACHE_MISS, use=use)
+    if cached is not _CACHE_MISS:
+        return cached
+    result = _normalize(equation, probe)
+    _NORMALIZE_CACHE.put(equation, result, use=use)
+    return result
 
 
 def _normal_form(terms: Sequence[Sequence[str]], out: str) -> str | None:

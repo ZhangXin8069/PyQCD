@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import struct
@@ -69,8 +70,51 @@ _NEGATIVE_CACHE_STATS = {
 }
 
 
+# ── 负缓存旁路（强制内核专用）───────────────────────────────────────────────
+# 负缓存只服务"自动分派时不必反复重试确定性拒绝"，而**强制**内核的语义是
+# "强制即真试一次"：用户明确要求跑某个 label 时，上一次的 status=4 不能变成
+# ``negative-cache hit: ...`` 把他挡回去。旁路用模块内计数器表达（0 = 不旁路，
+# 支持嵌套），**不改 ``os.environ``** —— 环境变量是调用方与并发线程共享的状态，
+# 为一次调用改它会把 ``PYQCD_EINSUM_NEGATIVE_CACHE`` 的取值泄漏出去。
+# 读取是一次整数比较（不加锁；GIL 下读到旧值只会让旁路晚一次生效，不会死锁），
+# 写入在 ``_NEGATIVE_CACHE_BYPASS_LOCK`` 内。**不能复用**
+# ``_NEGATIVE_CACHE_LOCK``：``negative_cache_info`` 就是在该锁内调
+# ``_negative_cache_enabled``，同一把非重入锁会自锁死。
+_NEGATIVE_CACHE_BYPASS = 0
+_NEGATIVE_CACHE_BYPASS_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def bypass_negative_cache():
+    """上下文内忽略负缓存；用于强制内核时"强制即真试一次"。
+
+    进入只把计数器 +1，退出（含异常路径）在 ``finally`` 里 -1，因此嵌套进入/退出
+    天然配平：内层退出后仍处于旁路状态，外层退出才恢复。
+
+    旁路期间**既不读也不写**负缓存。读被跳过，同一个（方程, 形状, dtype, 优化器）
+    会真的再下发一次原生；写也被跳过，失败不会以"以后都别试"的形式留下，退出后
+    ``negative_cache_info()`` 与进入前逐项相同（连 ``hits``/``misses``/``stores``
+    都不动）。
+    """
+    global _NEGATIVE_CACHE_BYPASS
+    with _NEGATIVE_CACHE_BYPASS_LOCK:
+        _NEGATIVE_CACHE_BYPASS += 1
+    try:
+        yield
+    finally:
+        with _NEGATIVE_CACHE_BYPASS_LOCK:
+            _NEGATIVE_CACHE_BYPASS -= 1
+
+
 def _negative_cache_enabled() -> bool:
-    """Whether deterministic native rejections may be reused this call."""
+    """Whether deterministic native rejections may be reused this call.
+
+    ``bypass_negative_cache()`` 期间恒为 ``False``：旁路标志**先于**环境变量判定，
+    所以强制内核时即使 ``PYQCD_EINSUM_NEGATIVE_CACHE=1`` 也会真试一次；两者互不
+    覆盖 —— 旁路只在本上下文内生效，退出后回到环境变量原本的取值。
+    """
+    if _NEGATIVE_CACHE_BYPASS:
+        return False
     return os.environ.get(_NEGATIVE_CACHE_ENV, "1").strip().lower() not in (
         "0", "false", "off", "no")
 
@@ -116,7 +160,11 @@ def _negative_cache_lookup(key: tuple[Any, ...]) -> tuple[str, int] | None:
 
 def _negative_cache_store(key: tuple[Any, ...], reason: str,
                           status: int = 4) -> None:
-    """Cache only deterministic ``UNSUPPORTED`` rejections."""
+    """Cache only deterministic ``UNSUPPORTED`` rejections.
+
+    旁路期间不写（见 :func:`bypass_negative_cache`）：强制内核的那次失败不能被
+    记成"以后都别试"，否则退出旁路后缓存状态与进入前不一致。
+    """
     if status != 4 or not _negative_cache_enabled():
         return
     with _NEGATIVE_CACHE_LOCK:

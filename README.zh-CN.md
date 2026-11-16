@@ -37,6 +37,34 @@ python -m pyqcd --json     # machine-readable
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
 
+## 0.4.4 发布声明 — qcd-einsum：强制内核、自动等价改写、缓存
+
+`0.4.4` 是**下一个关键 qcd-einsum 稳定版本**，`stab31` 声明的冻结由本次发布解除。
+下列三处行为改动正是它作为关键版本（而非补丁）的原因。
+
+* **强制指定内核**：`contract(..., kernel_force="cuda_topology")`、
+  `PYQCD_EINSUM_KERNEL_FORCE`、两个 CLI 的 `--kernel-force`。与自动分派不同，
+  强制而跑不成时抛 `KernelUnavailableError`（CLI 退出码 2），**不再** warning 后
+  静默回落到通用路径；强制会旁路负缓存，保证真试一次；`last_kernel()` 给出
+  `requested` / `ran` / `attempted` 与逐标签 `reasons`。
+* **自动施加等价写法**：`contract(..., as_equivalence=)`、`PYQCD_EINSUM_AS_EQUIVALENCE`、
+  `--as-equivalence`（**缺省开启**）。命中映射时改写方程、重排操作数、把结果转回
+  原输出轴序，使未命中任何特化形态的收缩仍能走到特化路径。**返回的数组始终是原
+  方程的答案**；另有独立的输出形状守卫，形状不符即报错而不是交出错结果。
+  `out=`、额外 kwargs、逐元素方程、显式优化器路径与 `specialize=False` 时不施加。
+* **带命中统计的缓存**：`_cache` 为匹配器（`specialize.match`）、等价查询
+  （`equivalence.normalize`）与规划器（`api.find_path`）提供有界、线程安全的 LRU，
+  并统计 `hits/misses/stores/evictions`；`PYQCD_EINSUM_CACHE`、`contract(..., cache=)`、
+  `--cache`、`cache_stats()`、`cache_clear()` 控制与查看；`cache=False` 既不读也不写。
+* **修复**：同桶存在多条同构写法时，优先选**无需操作数/输出转置**的那条
+  （8638/8638 条 order 变体为零代价，修前为 772/8638），不再凭空制造被原生
+  dedicated 连续门拒掉的非连续视图。
+
+验证：einsum 各契约模块全绿（等价映射 44、强制内核 9、as-equivalence/缓存 7、
+分派 8、缓存 8、拓扑 25、路由 6、查询子集 8、CLI 49 且含其既有 1 项失败）；
+全套为 `120 passed, 2 skipped, 10 failed`——这 10 项是既有 GPU 环境问题
+（nvrtc 不接受 `compute_70`），与本版无关。
+
 ## 0.4.2 发布声明 — 冻结稳定版的文档修正
 
 `0.4.2` 只纠正本地化文档中的一处语义反转，其余完全不变。

@@ -42,6 +42,43 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
 
+## Release 0.4.4 — qcd-einsum: kernel forcing, automatic equivalence, caches
+
+`0.4.4` is the **next key qcd-einsum stable release**, so the freeze declared at
+`stab31` is lifted by this release. The three behaviour changes below are the
+reason it is a key release rather than a patch.
+
+* **Forcing a kernel.** `contract(..., kernel_force="cuda_topology")`,
+  `PYQCD_EINSUM_KERNEL_FORCE`, and `--kernel-force` on both CLIs constrain which
+  specialised kernel may run. Unlike the automatic dispatch, a forced kernel that
+  cannot run raises `KernelUnavailableError` (CLI exit code 2) instead of warning
+  and silently falling back; the forced attempt bypasses the negative cache so it
+  really tries once, and `last_kernel()` reports `requested` / `ran` / `attempted`
+  / per-label `reasons`.
+* **Applying an equivalent spelling automatically.** `contract(..., as_equivalence=)`,
+  `PYQCD_EINSUM_AS_EQUIVALENCE` and `--as-equivalence` (on by default) let the
+  equivalence layer rewrite the equation, permute the operands and transpose the
+  result back, so a contraction that misses every specialised form can still reach
+  one. The **returned array is always the answer to the original equation**; an
+  independent output-shape guard raises rather than hand back a mis-shaped result.
+  It is skipped for `out=`, extra kwargs, element-wise equations, explicit
+  optimizer paths and `specialize=False`.
+* **Caches with hit statistics.** `_cache` provides bounded, thread-safe LRUs with
+  `hits/misses/stores/evictions` for the matcher (`specialize.match`), the
+  equivalence lookup (`equivalence.normalize`) and the planner (`api.find_path`).
+  `PYQCD_EINSUM_CACHE`, `contract(..., cache=)`, `--cache`, `cache_stats()` and
+  `cache_clear()` control and inspect them; `cache=False` neither reads nor writes.
+* **Fix:** when several corpus spellings are isomorphic, the equivalence layer now
+  prefers one that needs no operand/output transpose (8638/8638 order variants are
+  zero-cost; it was 772/8638 before), so the mapping no longer manufactures a
+  non-contiguous view that the dedicated kernel's contiguity gate rejects.
+
+Verification: every einsum contract module is green (equivalence 44, kernel force
+9, as-equivalence/cache 7, dispatch 8, cache 8, topology 25, routing 6, query
+subset 8, CLI 49 with its one pre-existing failure) and the full suite is
+`120 passed, 2 skipped, 10 failed` — the 10 failures are the pre-existing GPU
+environment ones (nvrtc refuses `compute_70`), unchanged by this release.
+
 ## Release 0.4.2 — documentation fix for the frozen stable release
 
 `0.4.2` corrects a reversed wording in the localised documentation and changes

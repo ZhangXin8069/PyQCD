@@ -8,7 +8,7 @@
 | 适用范围 | `pyqcd/einsum` 的**用户可见入口**（`python -m pyqcd.einsum.test`、`python -m pyqcd.einsum.verify_specialized`、`pyqcd.einsum.contract`） |
 | 版本基线 | `HEAD = aeea4faf9befac174c8e8f15d3c0138f2958851f`（2026-11-16，`pyqcd 0.4.3`），工作树干净 |
 | 校验方式 | 文中**每条命令、每个输出块都在该 HEAD 上实跑过**（清单见 §10）。源码行号一律指该 HEAD |
-| 本版重点 | `--equivalence` / `PYQCD_EINSUM_EQUIVALENCE` / `--language` 三条能力**已全部合入**；等价映射层已重写为"结构不变量分桶 + 桶内构造同构"，**输入侧与输出侧必须同时改写**这一条是本手册最重要的一节（§4） |
+| 本版重点 | `--equivalence` / `PYQCD_EINSUM_EQUIVALENCE` / `--language` 三条能力**已全部合入**；等价映射层已重写为"结构不变量分桶 + 桶内构造同构"，**输入侧与输出侧必须同时改写**这一条是本手册最重要的一节（§4）。另新增 §11：强制指定专用内核（`--kernel-force` / `PYQCD_EINSUM_KERNEL_FORCE`）——**只改选路、不改数值** |
 | 不覆盖 | 内部契约（`pyqcd/einsum/AGENTS.md` §9）、领域知识（`skills/pyqcd-einsum/SKILL.md`）、CUDA 构建流程 |
 
 ---
@@ -20,6 +20,7 @@
 | 知道这条方程会走哪条路 / 快不快 / 对不对 | `python -m pyqcd.einsum.test` | **会真的算**，出耗时与容差结论 |
 | 只想知道它命不命中语料特化，不想跑数值 | `python -m pyqcd.einsum.verify_specialized` | **纯查询**，不构造张量、不调 `contract()`、无副作用 |
 | 确认"换一种写法结果还一样吗"（等价映射） | 先看 §3，再照 §4 复算 | 映射只给建议，**正确性由你复算保证** |
+| 只准跑某个内核 / 完全不用原生内核 | 看 §11 | **选路**开关，不改数值；跑不成会明确报错而不是 warning |
 | 整库有没有退化 | `python -m pyqcd.testing` | 全量回归。与上面三条互补，**不可互相替代** |
 
 `python -m pyqcd.einsum.test` 是 qcd-einsum 单方程验证/复现/性能对比的**唯一合法入口**
@@ -1103,6 +1104,7 @@ python -m pyqcd.einsum.test … --json /nonexistent/x.json # error: 无法把 --
 | `PYQCD_EINSUM_LANG` | **未设** | `_specialize.notice_language()`（库提示）与两个 CLI 的 `--language auto` | `PYQCD_EINSUM_LANG=en` / `zh` | **只改文案**。两条入口的 `auto` 语义不同（见 §7.1） |
 | `PYQCD_EINSUM_TOPOLOGY_REAL` | **未设**（`float64`/`float32` 被策略排除在拓扑入口外） | `_kernel_kupl._topology_dtype_declined`：`=1`（`true/on/yes`）解除该策略 | `PYQCD_EINSUM_TOPOLOGY_REAL=1` 做 A/B | **绕过选路做对照实验**，**不是**能力开关 |
 | `PYQCD_EINSUM_KERNEL_KUPL` | **开** | KUPL 原生入口（dedicated + topology）是否参与下发 | `=0` 完全不用 KUPL 原生库 | **能力开关（模块级）**。与 `--specialize false` 的区别：后者是"这次别用"，前者是"这个入口别用" |
+| **`PYQCD_EINSUM_KERNEL_FORCE`** | **未设**（= `auto`） | 强制指定专用内核，取值 `auto` / `generic` / `<label>[,<label>]`。**调用时**解析。显式 `--kernel-force` / `kernel_force=` 可**压过**它 | `=kupl_topology` 只准跑它；`=generic` 完全跳过专用内核 | **选路开关**。不改数值；强制失败会抛 `KernelUnavailableError` 而不是 warning（见 §11） |
 | `PYQCD_EINSUM_TOPOLOGY_TRACE` | **关** | 原生 C++ 侧的逐步诊断行（`topology-gemm-step …`、`topology-specialized: …`） | `=1` 排查 v3 步表是否真的在跑 | **诊断日志**。`trace_enabled()` 在原生侧**静态缓存**：同进程里改环境变量已经晚了，必须一开始就设 |
 
 ### 7.1 `--language auto` 不读 locale（反直觉点，必须记住）
@@ -1265,6 +1267,362 @@ verify_specialized 报 MISS
 | 35 | `_specialize` 语料规模 | `len(TASKS) == 8638` |
 | 36 | `--specialize true`（seq=129、complex128） | `specialize 实际 True` 但 `kernel` 为空、`route` 通用，`PASS`、退出码 0；stderr 给出 `pack-bound on CPU (3456077824 pack bytes, …)` 拒绝理由 |
 | 37 | §3.7 的三条复算（`seq=3` 的 `axes` 变体 `egfh→hgfe`，`dims("distill")`） | 映射给 `perm=(None,None,(3,1,2,0),…)`；视图路线 `path=kupl_topology`（`failure='dedicated kernel requires C-contiguous operands'`）、副本路线 `path=kupl_dedicated`，两者 `rel=6.747e-16`，均退出码 0 |
+| 38 | `--kernel-force {kupl_dedicated,kupl_topology,generic}`（`cadb,menf,ac,em,bd,fn->`） | 依次 `ran=kupl_dedicated` / `ran=kupl_topology`（`path=kupl_topology`，`steps=5`）/ `ran=none` + `route` 通用（§11.2） |
+| 39 | numpy 操作数 + `--kernel-force cuda_topology`；`--kernel-force nope` | 前者退出码 2 + "未尝试（标签与本次操作数后端不匹配）"；后者退出码 2 + 合法集合（§11.1、§11.3） |
+| 40 | float64 + `--kernel-force kupl_topology` | 退出码 2，原因 `real dtype topology is declined by policy`（§11.3） |
+| 41 | `PYQCD_EINSUM_KERNEL_FORCE=kupl_dedicated`，再显式给 `--kernel-force generic` | 显式参数压过环境变量：`requested=generic`（§11.1） |
+| 42 | `--specialize false` + `--kernel-force kupl_dedicated`；`out=` + 强制（API） | 均 `ValueError` 早失败；CLI 侧表现为 `FAIL` + 退出码 1（§11.5） |
+| 43 | `PYQCD_EINSUM_KERNEL_KUPL=0` + 强制 `kupl_dedicated` | `KernelUnavailableError`，原因 `kernel disabled (…)`；退出码 2（§11.5） |
+| 44 | 同一进程内连调两次（seq=129 方程） | 第 2 次 `reasons` 变 `negative-cache hit: …`；强制路径两次都报原始原因（§11.4） |
+| 45 | `verify_specialized "<eq>" --kernel-force cuda_topology` | `强制内核    : requested=cuda_topology  ran=unknown  attempted=unknown`，结果仍 `HIT`、退出码 0（§11.7） |
+| 46 | `python -m pyqcd --gpu-probe`（V100） | `kernel status: fallback`，与 §11.6 强制模式给出的失败原因一致 |
+| 47 | `python -B -m pyqcd.testing._einsum_kernel_force_contract` | `9 passed, 0 skipped, 0 failed` |
 
 **未复跑项（已在上文逐处标注）**：§5.3 的 `auto vs false` 倍率（数据作废，标
 `unverified`）、§5.4 引用的 AGENTS.md `80×` warmup 数字、`kupl_topology*` 的 route 展示。
+
+---
+
+## 11. 我要指定（或排除）某个专用内核
+
+**这一节回答一个问题：这次到底准不准跑某个内核。** 它**不改任何数值**——走哪条路
+结果都一样，改的只是"谁在算"。
+
+### 11.1 三步操作
+
+**第 1 步：先看这次实际跑了什么。** 别猜，读记录：
+
+```bash
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill --verbose true
+# kernel   : {'kupl': {'path': 'kupl_dedicated', 'dtype': 'complex128'}}
+# route    : 特化 · 原生 qcd_kupl_dedicated_apply（path=kupl_dedicated）
+```
+
+（`kernel   :` 是**三空格**对齐的那个字段，值是 `LAST_INFO` 汇总的 dict。）
+
+**第 2 步：想强制就加 `--kernel-force`**，取值有三种：
+
+```bash
+# 只准跑 kupl_topology；它跑不成就报错，不回落
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill \
+    --verbose true --kernel-force kupl_topology
+
+# 完全跳过专用内核（不产生 warning），走通用路径
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill \
+    --verbose true --kernel-force generic
+
+# 多个标签：按你写的次序试
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill \
+    --verbose true --kernel-force kupl_topology,kupl_dedicated
+```
+
+合法标签只有四个：`cuda_dedicated` / `cuda_topology` / `kupl_dedicated` /
+`kupl_topology`。写错不会被静默忽略：
+
+```bash
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill --kernel-force nope
+# error: --kernel-force 必须是 'auto'、'generic' 或 cuda_dedicated, cuda_topology,
+#        kupl_dedicated, kupl_topology 之一（多个用逗号分隔），得到 'nope'   → 退出码 2
+```
+
+**第 3 步：读 `kernel :` 行确认。**
+
+```
+kernel : requested=kupl_topology  ran=kupl_topology  attempted=kupl_topology
+```
+
+| 字段 | 回答什么 |
+|---|---|
+| `requested` | 你**要求**了什么（`auto` 时反映那一刻环境变量的生效值） |
+| `ran` | **真的**跑了哪个；`none` = 一个都没跑成（`generic` 下恒为 `none`） |
+| `attempted` | 按次序真正**试过**哪些（标签与后端不匹配的不在里面） |
+
+这行只在 `--verbose true` 的明细里出现，且 `ran`/`attempted` 取不到时写 `unknown`
+（"没观测到"，不是"没有"）。**它是机器可读的，不随 `--language` 翻译**；要写脚本
+就解析它，别解析 `route` 那句人话。
+
+### 11.2 一个完整例子（本机实跑）
+
+同一条方程（语料 `seq=3`，`cadb,menf,ac,em,bd,fn->`），三种取值三条命令：
+
+```bash
+cd /home/zhangxin/PyQCD
+export PYTHONPATH=$PWD PYQCD_EINSUM_NOTICE=0
+
+# ① 缺省 auto：原次序（dedicated → topology）
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill --verbose true \
+  2>&1 | grep -E "^kernel|^route"
+```
+
+```
+kernel   : {'kupl': {'path': 'kupl_dedicated', 'dtype': 'complex128'}}
+route    : 特化 · 原生 qcd_kupl_dedicated_apply（path=kupl_dedicated）
+kernel : requested=auto  ran=kupl_dedicated  attempted=kupl_dedicated
+```
+
+```bash
+# ② 强制 topology：绕过 dedicated，直接跑步表那条
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill --verbose true \
+    --kernel-force kupl_topology 2>&1 | grep -E "^kernel|^route"
+```
+
+```
+kernel   : {'kupl': {'path': 'kupl_topology', 'specialized': True, 'steps': 5, 'dtype': 'complex128', 'copied': ()}}
+route    : 特化 · 原生 qcd_kupl_topology_apply（path=kupl_topology）
+kernel : requested=kupl_topology  ran=kupl_topology  attempted=kupl_topology
+```
+
+```bash
+# ③ generic：完全不走专用内核
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill --verbose true \
+    --kernel-force generic 2>&1 | grep -E "^kernel|^route"
+```
+
+```
+kernel   : 无原生命中（通用路径）
+route    : 通用（无原生命中：Python 分步 / numpy.einsum / BLAS）
+kernel : requested=generic  ran=none  attempted=none
+```
+
+三条命令的 `PASS`/`rel` 是同一量级（本机分别 `1.22e-16` / `1.22e-16` / 见 §5 口径），
+差别只在**路线**。这就是"强制内核不改数值"的具体样子。
+
+### 11.3 强制失败长什么样（两个真实例子）
+
+**① 标签和操作数后端不匹配**——numpy 数组上强制 CUDA 标签：
+
+```bash
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill \
+    --kernel-force cuda_topology     # 退出码 2
+```
+
+```
+错误：强制内核 cuda_topology 没有跑成：equation 'cadb,menf,ac,em,bd,fn->'
+未尝试：cuda_topology（标签与本次操作数后端不匹配）
+恢复自动分派：PYQCD_EINSUM_KERNEL_FORCE=auto；让失败不被缓存：PYQCD_EINSUM_NEGATIVE_CACHE=0；检查 GPU 栈：python -m pyqcd --gpu-probe
+```
+
+注意"**未尝试**"——标签压根没进候选表，所以没有逐条原因，只有这一句。想跑
+CUDA 内核必须让操作数真的在 GPU 上（`--device gpu --backend cupy`）。
+
+**② 内核真的存在但跑不成**——`ran=none` 之外的另一种形态，原因会逐条列出：
+
+```bash
+python -m pyqcd.einsum.test --equation "ambn,codp,egfh,ce,mo,bdf,nph->ag" --scene distill \
+    --dtype float64 --kernel-force kupl_topology    # 退出码 2
+```
+
+```
+错误：强制内核 kupl_topology 没有跑成：equation 'ambn,codp,egfh,ce,mo,bdf,nph->ag'
+实际尝试：kupl_topology
+  - kupl_topology: real dtype topology is declined by policy: …
+恢复自动分派：PYQCD_EINSUM_KERNEL_FORCE=auto；让失败不被缓存：PYQCD_EINSUM_NEGATIVE_CACHE=0；检查 GPU 栈：python -m pyqcd --gpu-probe
+```
+
+（实数档被策略排除在拓扑入口外，`PYQCD_EINSUM_TOPOLOGY_REAL=1` 可解开——见 §7。）
+
+### 11.4 ⚠️ 负缓存的坑：为什么第二次"连试都不试"
+
+`PYQCD_EINSUM_NEGATIVE_CACHE`（缺省开）会把"这条计划这条后端确定不行"记下来，
+省掉重复尝试。副作用是**同一进程里第二次调用的原因会变成 `negative-cache hit:`**：
+
+```bash
+cd /home/zhangxin/PyQCD && export PYTHONPATH=$PWD PYQCD_EINSUM_NOTICE=0
+python - <<'PY' 2>/dev/null
+import numpy as np
+from pyqcd.einsum import _bench_scene, _wick_tasklist, bench_specialized, contract
+from pyqcd.einsum._api import last_kernel
+
+task = _wick_tasklist.by_seq()[129]          # 这条方程两个原生入口都被 pack-bound 拒
+dims, rng = _bench_scene.dims("distill"), np.random.default_rng(1)
+build = lambda *s: (rng.standard_normal(s) + 1j * rng.standard_normal(s)).astype(complex)
+ops = bench_specialized.operands_for(task.equation, dims, build, task.roles)
+
+for i in (0, 1):
+    contract(task.equation, *ops)
+    rec = last_kernel()
+    print(f"call {i}: ran={rec['ran']}")
+    for label, why in rec["reasons"].items():
+        print(f"         {label} -> {why.split('(')[0].strip()}")
+PY
+```
+
+```
+call 0: ran=None
+         kupl_dedicated -> plan is pack-bound on CPU
+         kupl_topology -> topology declined: pack-bound on CPU
+call 1: ran=None
+         kupl_dedicated -> negative-cache hit: plan is pack-bound on CPU
+         kupl_topology -> negative-cache hit: topology declined: pack-bound on CPU
+```
+
+第二次那两个原因**不是新的失败，是上一次的复印件**。所以排查时：
+
+- **强制路径自动旁路负缓存**（"强制即真试一次"），所以
+  `--kernel-force <label>` 下不该看到 `negative-cache hit:`——看到就是旁路没生效；
+- 想彻底排除缓存干扰，显式关掉它再复核一次：
+  `PYQCD_EINSUM_NEGATIVE_CACHE=0 python -m pyqcd.einsum.test …`。
+
+### 11.5 和既有开关一起用（三条例外会早失败）
+
+强制**不是**和别的开关互斥，它们是不同的层——但下面三种组合会让内核根本到不了，
+所以库选择**早失败**而不是静默绕过：
+
+| 组合 | 结果 |
+|---|---|
+| `PYQCD_EINSUM_KERNEL_KUPL=0` + 强制 `kupl_*` | `KernelUnavailableError`：`kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)` |
+| `--specialize false` / `PYQCD_EINSUM_SPECIALIZE=0` + 强制具体标签 | `ValueError`（`test.py` 里是 `FAIL` + 退出码 1） |
+| `out=` + 强制具体标签 | `ValueError` |
+| `--kernel-force generic` + 上面任意一个 | **不冲突**（generic 本就不走专用路径） |
+
+```bash
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill \
+    --specialize false --kernel-force kupl_dedicated     # 退出码 1
+#  error: ValueError: specialize=False / PYQCD_EINSUM_SPECIALIZE=0 关掉了专用内核路径，
+#         不能与强制指定内核同时使用；把 specialize 恢复为 None 或 True 再强制
+```
+
+判断口诀：`PYQCD_EINSUM_KERNEL_KUPL=0` 是"**关掉这个后端**"，`specialize=False` 是
+"**整体跳过**"，`--kernel-force` 是"**只准跑这个**"。
+
+### 11.6 我的内核在远端集群上 `status 4`，怎么自查
+
+典型报错（CUDA 侧）：
+
+```
+qcd_cuda_topology_apply failed with status 4 (plan not executable as version-2 steps)
+```
+
+`status 4` 在 CUDA 侧同时覆盖"步表不认这条计划"和"顺序守卫拒绝了这条计划"，
+**只看状态码分不出来**。自查顺序：
+
+```bash
+# ① 先确认它到底能不能跑（能跑就说明之前只是自动分派选了别的入口）
+PYQCD_EINSUM_KERNEL_FORCE=cuda_topology python -m pyqcd.einsum.test \
+    --device gpu --backend cupy --equation "cadb,menf,ac,em,bd,fn->" --scene distill --verbose true
+
+# ② 不能跑时，上面那条命令会给出逐标签原因 + 三条恢复建议，按它走
+#    ③ 再往下才是设备与构建面：
+python -m pyqcd --gpu-probe
+```
+
+本机实跑 ②（V100，complex128）给出的是"该 dtype 的 2×2 自检没过 → 重建原生库"，
+而不是含糊的 `status 4`：
+
+```
+错误：强制内核 cuda_topology 没有跑成：equation 'cadb,menf,ac,em,bd,fn->'
+实际尝试：cuda_topology
+  - cuda_topology: dtype complex128 is inside the topology dtype contract but its native probe failed (2x2 matmul disagreed with numpy); falling back to the generic path with no implicit downcast. Rebuild the native archive (bash cpp/cuda/einsum/make-nv.sh) to re-enable it
+恢复自动分派：PYQCD_EINSUM_KERNEL_FORCE=auto；让失败不被缓存：PYQCD_EINSUM_NEGATIVE_CACHE=0；检查 GPU 栈：python -m pyqcd --gpu-probe
+```
+
+`python -m pyqcd --gpu-probe` 本机同一时刻的输出（节选）：
+
+```
+  device         : Tesla V100-SXM2-32GB (compute 7.0)
+  kernel enabled : True
+  kernel status  : fallback — topology entry did not run: dtype complex64 is inside the topology dtype contract but its native probe failed …
+  verdict        : CUDA fast path is NOT active — results fall back
+```
+
+即**两者一致**：强制模式把"到底哪一环没过"说清楚了，probe 给的是同一件事的
+设备视角。`PYQCD_CUDA_ARCHITECTURES` 是**构建期**变量（架构不匹配时内核根本编不
+进来），与这里的运行期 probe 失败不是一回事。
+
+### 11.7 `verify_specialized --kernel-force` **不能**验证内核能跑
+
+那个入口是**纯查询、不做收缩**，所以：
+
+```bash
+python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->" --kernel-force cuda_topology
+# 强制内核    : requested=cuda_topology  ran=unknown  attempted=unknown
+# 结果        : HIT
+```
+
+`ran=unknown` 是**如实**的"本进程没跑过任何内核"，不是"跑了但不知道"。规则：
+
+- `--kernel-force` 在那儿**只**决定报告里出不出 `kernel` 这一行、以及
+  `requested=` 显示什么；
+- `PYQCD_EINSUM_KERNEL_FORCE` 在 `verify_specialized` 里**完全不起作用**（它不执行）；
+- 不给 `--kernel-force` 时这行**不出现**，缺省输出与改造前逐字节相同；
+- 真要验证"能跑"，只能用 §11.2 的 `python -m pyqcd.einsum.test --kernel-force`。
+
+### 11.8 快速对照表
+
+| 我想… | 敲什么 |
+|---|---|
+| 看这次跑了哪个内核 | `--verbose true`，读 `kernel :` 行的 `ran=` |
+| 只准跑某一个 | `--kernel-force <label>`（多标签用逗号，按次序） |
+| 完全不用专用内核 | `--kernel-force generic`（或 `--specialize false`） |
+| 整进程都生效 | `PYQCD_EINSUM_KERNEL_FORCE=<label>` |
+| 排除缓存干扰 | 加 `PYQCD_EINSUM_NEGATIVE_CACHE=0` |
+| 检查 GPU 栈 | `python -m pyqcd --gpu-probe` |
+| 在代码里读结果 | `from pyqcd.einsum._api import last_kernel`（**未**在包级导出） |
+
+## 12. 自动改写与缓存：让 MISS 的方程也能走特化、让重复查询不再重复算
+
+`0.4.4` 起有两件事会**自动**发生（都可关）。它们都属于"底层优化"，但都有代价，
+所以本节把"什么时候该关"写清楚。
+
+### 12.1 自动施加等价写法（`--as-equivalence`，缺省开启）
+
+以前 `--equivalence` 只**报告**"换个写法就能命中"，动手要你自己来。现在缺省会把
+这件事做完：重排操作数 → 按需转置并落成连续副本 → 用等价方程收缩 → 把结果转回你
+要的输出轴序。
+
+```bash
+# 缺省就开着；显式写出来只是为了让报告里出现判断依据
+python -m pyqcd.einsum.test --equation "menf,cadb,ac,em,bd,fn->" \
+  --shape "[2,2,2,2],[2,2,2,2],[2,2],[2,2],[2,2],[2,2]->" \
+  --rounds 2 --warmup 1 --verbose true --as-equivalence true
+# route    : 特化 · 原生 qcd_kupl_dedicated_apply（path=kupl_dedicated）
+# kernel   : requested=auto  ran=kupl_dedicated  attempted=kupl_dedicated
+# PASS … rel=2.35e-16
+
+python -m pyqcd.einsum.test --equation "menf,cadb,ac,em,bd,fn->" --shape "…同上…" \
+  --rounds 2 --warmup 1 --verbose true --as-equivalence false
+# route    : 通用（无原生命中：Python 分步 / numpy.einsum / BLAS）
+# PASS … rel=3.99e-16          # 数值一样，只是没走特化
+```
+
+**返回的数组永远是原方程的答案**：改写只发生在内部，形状与 dtype 都不变；万一映射
+层给出的轴序对不上，会直接抛 `RuntimeError` 而不是把错结果交给你。
+
+不施加的场合：`out=`、额外的 `**kwargs`、逐元素方程、cupy 的通用委派、
+`--specialize false`、以及 `optimize` 传了 callable 或显式路径（它们绑定原操作数
+次序）。注意：`PYQCD_EINSUM_EQUIVALENCE=0` 是**硬闸**，显式 `--as-equivalence true`
+也压不过它。
+
+**什么时候该关**：小形状、高频重复。实测同一条方程 `true` 2.92 ms / `false` 0.28 ms
+（约 10×），因为改写与副本开销在微秒级方程上占主导。批量小收缩建议：
+
+```bash
+PYQCD_EINSUM_AS_EQUIVALENCE=0 python your_batch.py   # 或 --as-equivalence false
+```
+
+### 12.2 缓存与命中统计（`--cache`，缺省开启）
+
+三处缓存：匹配器（`specialize.match`，含"没命中"这个结果）、等价查询
+（`equivalence.normalize`，含 `None`）、规划器（`api.find_path`）。
+
+```bash
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill \
+  --rounds 2 --warmup 1 --verbose true --cache true
+# cache    : enabled=true  hits=4  misses=3  hit_rate=0.57
+```
+
+- 不带 `--cache` 时**不会**出现这一行（旧输出逐字节不变）。
+- `--cache false` 时该次调用**既不读也不写**，所以那行会如实写
+  `enabled=false  hits=0  misses=0  hit_rate=none`。
+- 在 Python 里：`pyqcd.einsum.cache_stats()` 看全部缓存，
+  `contract(..., cache=False)` 单次关闭，`pyqcd.einsum.cache_clear()` 清空。
+
+### 12.3 两者的典型组合
+
+| 我想… | 敲什么 |
+|---|---|
+| 让 MISS 的方程也尽量命中特化 | 什么都不用做（缺省开启），`--verbose true` 看 `route :` |
+| 排查"到底是不是映射帮上忙" | 对照跑 `--as-equivalence true` / `false` 看 `route :` 行 |
+| 小方程批量跑，怕被改写拖慢 | `PYQCD_EINSUM_AS_EQUIVALENCE=0` |
+| 怀疑缓存串味 | `--cache false` 单次对照，或 `PYQCD_EINSUM_CACHE=0` |
+| 看缓存有没有真的生效 | `--cache true` 读 `cache :` 行，或 `cache_stats()` |

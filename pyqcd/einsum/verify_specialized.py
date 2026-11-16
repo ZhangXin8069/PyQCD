@@ -48,6 +48,19 @@
 结果调整（输出侧）」——两侧**必须**同时在场，只按输入侧改写会拿到轴序错了的结果；
 关闭时该段完全消失，MISS 的 ``原因`` 回到引入本功能之前的原文。它只是**附加信息**：
 不改 ``matched``、不改退出码、不改任何执行路径。
+
+强制内核（``--kernel-force {auto,generic,<label>[,...]}``，缺省 ``auto``）：取值语义与
+``python -m pyqcd.einsum.test --kernel-force`` 完全一致——``auto`` 保持原分派次序、
+``generic`` 跳过专用内核、具体标签（``kupl_*`` / ``cuda_*``，可逗号分隔多个、按书写
+次序尝试）强制只跑这些；显式取值压过 ``PYQCD_EINSUM_KERNEL_FORCE``；非法标签退出码
+``2`` 并列出合法集合。
+
+**执行边界**：本模块是纯查询（不生成操作数、不调 ``contract()``），所以它**不跑**
+任何内核，强制失败也不可能在这里发生——``--kernel-force`` 只决定报告里出不出 ``kernel :``
+那一行，``ran`` / ``attempted`` 只读 ``_api.last_kernel()``，本进程没跑过就如实写
+``unknown``（不猜）。不给 ``--kernel-force`` 时该行**不出现**，缺省输出与改造前逐字节相同。
+真要强制跑内核请用 ``python -m pyqcd.einsum.test --kernel-force <label>``（那条路径失败时
+打印 ``KernelUnavailableError`` 正文并非零退出）。
 """
 
 from __future__ import annotations
@@ -65,6 +78,11 @@ __all__ = [
     "translate",
     "resolve_language",
     "resolve_equivalence",
+    "resolve_kernel",
+    "kernel_requested",
+    "kernel_force_section",
+    "last_kernel",
+    "render_kernel_force",
     "build_parser",
     "MESSAGES",
     "LANGUAGE_MODES",
@@ -73,6 +91,9 @@ __all__ = [
     "EQUIVALENCE_MODES",
     "DEFAULT_EQUIVALENCE",
     "EQUIVALENCE_ENV",
+    "DEFAULT_KERNEL",
+    "KERNEL_LABELS",
+    "KERNEL_FORCE_ENV",
 ]
 
 #: ``--language``：输出语言。``auto`` 见 :func:`resolve_language`。
@@ -88,6 +109,21 @@ DEFAULT_EQUIVALENCE = "auto"
 #: 这里写字面量而不是 import：``_equivalence`` 是**延迟导入**的（只在真正要查等价
 #: 写法时才碰它），契约用例钉住两者相等。
 EQUIVALENCE_ENV = "PYQCD_EINSUM_EQUIVALENCE"
+
+#: ``--kernel-force``：缺省 ``auto``（保持原分派次序）。与 ``_kernel_force.AUTO_LABEL``
+#: 同值；本模块不 import 该模块，免得它缺席时查询入口起不来。
+DEFAULT_KERNEL = "auto"
+#: 可强制的内核标签（与 ``_kernel_force.KERNEL_LABELS`` 同集合）。
+KERNEL_LABELS = frozenset({
+    "cuda_dedicated",
+    "cuda_topology",
+    "kupl_dedicated",
+    "kupl_topology",
+})
+#: 与 ``_kernel_force.KERNEL_FORCE_ENV`` 同名的环境变量。
+KERNEL_FORCE_ENV = "PYQCD_EINSUM_KERNEL_FORCE"
+#: ``last_kernel()`` 取不到时的占位：说的是"没观测到"，不是一句说明文字。
+KERNEL_UNKNOWN = "unknown"
 
 #: 文案表：``key -> {"en": ..., "zh": ...}``。缺 key 或缺语言**直接报错**，
 #: 不静默返回 key 本身——那样会以"看起来很正常的英文"混进中文输出里。
@@ -151,6 +187,9 @@ MESSAGES: dict[str, dict[str, str]] = {
                "Declared kernels only mean the contract allows them; whether they "
                "actually run depends\n"
                "on out=, dtype and native-library availability.\n"
+               "This module never contracts, so --kernel-force only records what was "
+               "requested; use\n"
+               "python -m pyqcd.einsum.test --kernel-force <label> to actually force one.\n"
                "Numeric verification: python -m pyqcd.testing.einsum.verify_specialized"),
         "zh": ("退出码：\n"
                "  0  命中特化路径（语料 / 形状特化）\n"
@@ -159,7 +198,37 @@ MESSAGES: dict[str, dict[str, str]] = {
                "\n"
                "「声明内核」只表示契约允许；实际是否下发取决于 out=、dtype、"
                "原生库可用性。\n"
+               "本模块不做任何收缩，所以 --kernel-force 只记录「要求了什么」；"
+               "真要强制跑内核请用\n"
+               "python -m pyqcd.einsum.test --kernel-force <label>。\n"
                "数值验证：python -m pyqcd.testing.einsum.verify_specialized"),
+    },
+    "help.kernel": {
+        "en": ("which specialised kernel is requested: auto / generic / "
+               "<label>[,...]. "
+               "auto keeps the original dispatch (when none runs it only warns and "
+               "falls back); generic skips the specialised kernels entirely; a label "
+               "such as {labels} (comma separated for several, tried in the order "
+               "written) forces exactly those and reports a failure instead of falling "
+               "back, never a warning. Same meaning as test.py --kernel-force; the explicit "
+               "value wins over the {env} environment variable, and an unknown label "
+               "exits with code 2. "
+               "This module never contracts, so it cannot run a kernel: the kernel line "
+               "shows requested= from this value, and ran=/attempted= only when a "
+               "kernel actually ran in this process (otherwise 'unknown', never a "
+               "guess). Omit the option and that line is absent, so the default report "
+               "stays byte-identical. To really force one use "
+               "python -m pyqcd.einsum.test --kernel-force <label>. Default {default}"),
+        "zh": ("要求哪个专用内核：auto / generic / <label>[,...]。"
+               "auto 保持原分派次序（跑不成只 warning 后回落）；generic 完全跳过专用"
+               "内核；具体标签如 {labels}（多个用逗号分隔，按书写次序尝试）强制只跑"
+               "这些，跑不成即报错而不回落，不会降级成 warning。"
+               "与 test.py --kernel-force 同义；显式取值优先于环境变量 {env}，未知标签退出码 2。"
+               "本模块不做任何收缩、跑不了内核：kernel 行里 requested= 来自该取值，"
+               "ran=/attempted= 只有本进程真的跑过内核时才给"
+               "（否则写 unknown，绝不猜）。不给该选项时整行不出现，"
+               "缺省报告保持逐字节不变。真要强制跑内核请用 "
+               "python -m pyqcd.einsum.test --kernel-force <label>。缺省 {default}"),
     },
     # 字段标签（自带对齐空格，冒号前 12 列）
     "field.equation": {"en": "equation    ", "zh": "方程        "},
@@ -183,6 +252,9 @@ MESSAGES: dict[str, dict[str, str]] = {
     "field.operand_order": {"en": "  ordering  ", "zh": "  张量次序  "},
     "field.output_perm": {"en": "  output    ", "zh": "  结果调整  "},
     "field.hint": {"en": "  hint      ", "zh": "  提示      "},
+    # 强制内核：``requested`` / ``ran`` / ``attempted`` 三段恒在同一行。
+    # 标签自带对齐空格（冒号前 12 列），与其余 ``field.*`` 同宽。
+    "field.kernel_force": {"en": "kernel      ", "zh": "强制内核    "},
     # 值
     "value.arity_slots": {
         "en": "{arity} operands / {slots} index slots (output rank {output_rank})",
@@ -257,6 +329,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "equation is not parsable (illegal character, empty operand, more than "
               "one ->, or an invalid output index)",
         "zh": "方程无法解析（非法字符、空操作数、多重 -> 或输出指标不合法）",
+    },
+    # 参数错误：非法 --kernel-force 取值（退出码 2，与 argparse 的 choices 同档）
+    "error.kernel": {
+        "en": ("--kernel-force must be 'auto', 'generic', or one of {labels} "
+               "(comma separated for several), got {value!r}"),
+        "zh": ("--kernel-force 必须是 'auto'、'generic' 或 {labels} 之一"
+               "（多个用逗号分隔），得到 {value!r}"),
     },
     "reason.equivalent_rewrite": {
         "en": "the literal spelling is not in the corpus, but an equivalent spelling "
@@ -393,6 +472,141 @@ def _equivalence_enabled() -> bool:
     return True if probe is None else bool(probe())
 
 
+def _kernel_force_module():
+    """取 ``_kernel_force`` 模块；取不到返回 ``None``（降级成旧行为，不半强制）。"""
+    try:
+        from . import _kernel_force as force
+    except ImportError:                         # pragma: no cover - 旧版库
+        return None
+    return force
+
+
+def _kernel_label_names() -> tuple[str, ...]:
+    """合法标签集合：优先用 ``_kernel_force`` 的权威定义，取不到用本模块字面量。"""
+    force = _kernel_force_module()
+    live = getattr(force, "KERNEL_LABELS", None) if force is not None else None
+    return tuple(sorted(live or KERNEL_LABELS))
+
+
+def resolve_kernel(requested: str | None = None) -> tuple[str, ...]:
+    """把 ``--kernel-force`` 解析成标签元组：``()`` 自动 / ``("generic",)`` / 具体标签。
+
+    语义完全交给 :func:`pyqcd.einsum._kernel_force.resolve`（显式取值优先于
+    ``PYQCD_EINSUM_KERNEL_FORCE``），本模块只负责把非法取值变成 ``ValueError``
+    ——CLI 侧由 :func:`main` 转成退出码 2 并打印合法集合。该模块暂时缺席时按
+    ``auto`` 处理：失败关闭，降级成旧行为。
+    """
+    force = _kernel_force_module()
+    if force is None:
+        text = DEFAULT_KERNEL if requested is None else str(requested).strip()
+        return () if text in ("", DEFAULT_KERNEL) else (text,)
+    try:
+        return tuple(force.resolve(requested))
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def kernel_requested(requested: str | None = None) -> str:
+    """报告里 ``requested=`` 的取值：``auto`` / ``generic`` / ``label,...``。
+
+    与真正会传给 ``contract(kernel_force=...)`` 的口径同源（同一处解析），所以 ``auto``
+    时会反映那一刻 ``PYQCD_EINSUM_KERNEL_FORCE`` 的生效值。
+    """
+    labels = resolve_kernel(requested)
+    return ",".join(labels) if labels else DEFAULT_KERNEL
+
+
+def last_kernel() -> dict[str, Any] | None:
+    """读 ``_api.last_kernel()``；接口缺失或状态不对时返回 ``None``。
+
+    **必须容忍缺失**：本模块与 ``_api`` 分属不同改动批次，取不到就走退化显示
+    （``ran=unknown attempted=unknown``）。绝不凭声明内核或 ``LAST_INFO`` 反推一个
+    "看起来合理"的 ran——本模块压根不执行，那是编造观测。
+    """
+    try:
+        from . import _api
+    except ImportError:                         # pragma: no cover - 旧版库
+        return None
+    probe = getattr(_api, "last_kernel", None)
+    if probe is None:
+        return None
+    try:
+        record = probe()
+    except Exception:                           # noqa: BLE001 - 报告层不许影响查询
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _forced_of(labels: tuple[str, ...]) -> tuple[str, ...] | None:
+    """``resolve`` 的元组 → ``last_kernel()['requested']`` 的形状。
+
+    ``None`` 自动分派；``()`` 只走通用路径；其余为强制标签。
+    """
+    if not labels:
+        return None
+    if labels == ("generic",):
+        return ()
+    return labels
+
+
+def kernel_force_fields(requested: str, labels: tuple[str, ...],
+                        record: dict[str, Any] | None = None
+                        ) -> dict[str, Any]:
+    """整理报告三段：``requested`` 来自本模块解析，``ran``/``attempted`` 来自记录。
+
+    ``labels`` 用来挡掉**不属于本次请求**的残留记录（记录的 ``requested`` 对不上
+    就不认）：宁可写 ``unknown``，也不显示一条无法归因的观测。
+    """
+    fields: dict[str, Any] = {"requested": requested, "ran": None, "attempted": None}
+    if record is None:
+        return fields
+    recorded = record.get("requested")
+    recorded = None if recorded is None else tuple(str(item) for item in recorded)
+    if recorded != _forced_of(labels):
+        return fields
+    if "ran" in record:
+        ran = record.get("ran")
+        fields["ran"] = str(ran) if ran else "none"
+    attempted = record.get("attempted")
+    if attempted is not None:
+        names = [str(item) for item in attempted if str(item)]
+        fields["attempted"] = ",".join(names) if names else "none"
+    return fields
+
+
+def kernel_force_section(kernel_force: str | None = None) -> dict[str, Any] | None:
+    """本次查询要给出 ``kernel :`` 段吗？给就返回三段，否则 ``None``。
+
+    **只在 ``--kernel-force`` 被显式给出时才出现**，理由是两条都不能让步：
+
+    * 本模块的缺省输出是历史原文，由 ``_einsum_verify_specialized_contract``
+      逐字节钉住，无条件多一行就是破坏性变更；
+    * 本模块**不执行**任何内核，所以 ``PYQCD_EINSUM_KERNEL_FORCE`` 在这里完全
+      不起作用——把它写进 ``requested=`` 会让人以为"有东西被强制了"，而实际上
+      什么都没跑。要强制就用 ``python -m pyqcd.einsum.test --kernel-force <label>``。
+
+    值方面：``requested`` 是本模块解析出的取值；``ran`` / ``attempted`` 只认
+    :func:`last_kernel`，取不到写 ``unknown``——本模块不跑内核，绝不反推。
+    """
+    if kernel_force is None:
+        return None
+    labels = resolve_kernel(kernel_force)
+    requested = ",".join(labels) if labels else DEFAULT_KERNEL
+    return kernel_force_fields(requested, labels, last_kernel())
+
+
+def render_kernel_force(fields: dict[str, Any]) -> str:
+    """``requested=... ran=... attempted=...`` 的值（字段名一律不翻译）。
+
+    这一行是机器可读的：三个字段名与 ``none``/``unknown`` 都是稳定取值，跟着
+    ``--language`` 翻译会让脚本解析不到；只有左边的标签走 :data:`MESSAGES`。
+    """
+    return "requested={}  ran={}  attempted={}".format(
+        fields.get("requested") or DEFAULT_KERNEL,
+        fields.get("ran") or KERNEL_UNKNOWN,
+        fields.get("attempted") or KERNEL_UNKNOWN)
+
+
 def _explain(subscripts: str, forced_on: bool) -> dict[str, Any]:
     """调 ``_equivalence.explain()``；``--equivalence true`` 时压过它的环境开关。
 
@@ -429,15 +643,21 @@ def _reason(key: str, **args: Any) -> dict[str, Any]:
     }
 
 
-def query(subscripts: str, equivalence: str | bool | None = None) -> dict[str, Any]:
+def query(subscripts: str, equivalence: str | bool | None = None,
+          kernel_force: str | None = None) -> dict[str, Any]:
     """返回该方程的语料归属与执行契约（纯查询，无副作用）。
 
     ``equivalence`` 是 ``--equivalence`` 的三态（``None`` = ``auto``，见
     :func:`resolve_equivalence`）。它只决定"未命中时要不要查等价写法"，
     **不参与** ``matched`` 的判定，因此也不影响退出码。
+
+    ``kernel`` 是 ``--kernel-force`` 的原始取值（``None`` = 未给）。给了就在报告里多一个
+    ``kernel_force`` 字段（``requested`` / ``ran`` / ``attempted``）；不给则**没有**
+    该字段，报告与改造前逐字段相同。它同样不参与判定、不影响退出码。
     """
+    force_section = kernel_force_section(kernel_force)
     if not isinstance(subscripts, str):
-        return {
+        report: dict[str, Any] = {
             "equation": subscripts,
             "equation_normalized": "",
             "parsable": False,
@@ -445,15 +665,20 @@ def query(subscripts: str, equivalence: str | bool | None = None) -> dict[str, A
             "specialize_enabled": _specialize.enabled(),
             **_reason("reason.not_a_string", type_name=type(subscripts).__name__),
         }
+        if force_section is not None:
+            report["kernel_force"] = force_section
+        return report
     normalized = _specialize.normalize(subscripts)
     signature = _specialize.canonical_signature(subscripts)
-    report: dict[str, Any] = {
+    report = {
         "equation": subscripts,
         "equation_normalized": normalized,
         "parsable": signature is not None,
         "matched": False,
         "specialize_enabled": _specialize.enabled(),
     }
+    if force_section is not None:
+        report["kernel_force"] = force_section
     if signature is None:
         report.update(_reason("reason.unparsable"))
         return report
@@ -635,6 +860,11 @@ def _print_report(report: dict[str, Any], language: str = "zh") -> None:
     print(f"{t('field.specialize')}: "
           + t("value.specialize_on" if report['specialize_enabled']
               else "value.specialize_off"))
+    # ``--kernel-force`` 只在显式给出时才有这一段（``query()`` 的 kernel_force 字段）：
+    # 缺省报告必须与改造前逐字节相同，所以这一行不能无条件出现。
+    kernel_force = report.get("kernel_force")
+    if kernel_force is not None:
+        print(f"{t('field.kernel_force')}: {render_kernel_force(kernel_force)}")
 
     if not report["matched"]:
         print(f"{t('field.result')}: MISS")
@@ -697,6 +927,14 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
                         choices=EQUIVALENCE_MODES,
                         help=t("help.equivalence", env=EQUIVALENCE_ENV,
                                default=DEFAULT_EQUIVALENCE))
+    # 故意不设 ``choices``：取值允许逗号分隔的多个标签，合法性由
+    # ``resolve_kernel``（即 ``_kernel_force.parse``）统一判，报错能列出合法集合。
+    # ``default=None`` 是刻意的：``None`` 表示"用户没给"，报告里就不出 kernel 行，
+    # 缺省输出才与改造前逐字节相同。
+    parser.add_argument("--kernel-force", default=None,
+                        help=t("help.kernel", default=DEFAULT_KERNEL,
+                               env=KERNEL_FORCE_ENV,
+                               labels=", ".join(_kernel_label_names())))
     return parser
 
 
@@ -724,7 +962,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     language = resolve_language(args.language)
 
-    report = query(args.equation, equivalence=args.equivalence)
+    # --kernel-force 在这里就校验：非法标签属于**参数错误**（退出码 2），必须在做任何
+    # 查询之前报出来，并把合法集合一并写上——否则用户只会拿到一句 argparse 的
+    # "invalid choice"，不知道能填什么。
+    if args.kernel_force is not None:
+        try:
+            resolve_kernel(args.kernel_force)
+        except ValueError:
+            print(translate("error.kernel", language, value=args.kernel_force,
+                            labels=", ".join(_kernel_label_names())),
+                  file=sys.stderr)
+            return 2
+
+    report = query(args.equation, equivalence=args.equivalence,
+                   kernel_force=args.kernel_force)
     if args.json:
         # 机器读：query() 的结果与语言无关，--language 影响不到任何结构化字段。
         print(json.dumps(report, ensure_ascii=False, indent=2))
