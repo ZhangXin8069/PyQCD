@@ -1,0 +1,355 @@
+================================================================================
+旧性能测量报告的勘误说明
+logs/einsum-equivalence-gain-20261116-errata.txt
+撰写时间 : 2026-11-16 (+0800)
+勘误基准 : commit 02fdd54b（当前 HEAD，tag dev61）
+--------------------------------------------------------------------------------
+对象     : logs/einsum-equivalence-gain-20261116.txt（609 行，已在 commit aeea4faf 中
+           提交的**历史测量归档**）
+被测实现 : pyqcd/einsum/_equivalence.py
+           —— 旧报告测的是**重写前**的版本（"枚举候选方程 → 逐个 probe"）；
+              同一 commit 里它已整体重写为"结构不变量分桶 + 桶内构造式同构"。
+范围     : 只读核实 + 勘误。**本文件只做勘误，未修改旧报告，未修改任何源码。**
+           未修改 pyqcd/**、refer/**、skills/**、原生库；未做任何 git 操作。
+GPU      : **未验证（环境不可用）** —— 本机 cupy/nvrtc 报
+           `invalid value for --gpu-architecture`，按任务要求不修复该环境，
+           因此旧报告所有 GPU 侧数字在本文件中一律标 `unverified`。
+环境     : cd /home/zhangxin/PyQCD && export PYTHONPATH=$PWD PYQCD_EINSUM_NOTICE=0
+           python = 系统 Python 3.12.4；本机 18 核，**未独占**（同机另有作业，
+           且另有一次并行测量在跑，故本文件的查询开销只引用本轮已测值，见 A7）。
+================================================================================
+
+
+零、为什么旧报告会过时（一句话）
+--------------------------------------------------------------------------------
+旧报告的全部"开销/收益/覆盖"结论都建立在两个已消失的实现事实上：
+  (i) `_candidate_equations` 把 3.8k–9.8k 条候选**先全部物化**再 probe；
+  (ii) 三族改写（操作数位置 / 操作数内轴序 / 输出轴序）是**并列**枚举，不做叠加。
+新实现两者都不复存在：默认路径**零枚举**，三族改写由构造式同构**任意复合**。
+
+
+一、A 类：结论已作废（9 条）
+================================================================================
+
+A1. §1.4「组合改写不被支持」→ **现已支持（实测两族叠加）**
+--------------------------------------------------------------------------------
+旧说法（原文件 149–161 行）：`swap + axes` / `swap + output` 这类同时改两族的写法，
+`normalize_equation` 返回 `None`，`explain` 给 `rewritten=False`；原因是
+`_candidate_equations` 的三段并列枚举"每段都是在原文上改一处，没有做两段叠加"。
+现状：**明确不成立。** 用旧报告自己的样本 seq=3 的方程取 swap01 变体，返回的
+`kind` 直接是 `operand-order+axes`（两族叠加），且 `rewritten=True`：
+
+$ python $COMMANDCODE_SCRATCHPAD/probe_combo.py        # 退出码 0
+  canon  : ambn,codp,egfh,ce,mo,bdf,nph->ag
+  variant: codp,ambn,egfh,ce,mo,bdf,nph->ag
+  variant == canon: False
+  --- normalize_equation(variant) ---
+  kind               : operand-order+axes
+  equation           : ambn,codp,egfh,ce,om,bdf,pnh->ag
+  operand_order      : (1, 0, 2, 3, 4, 5, 6)
+  operand_permutations: (None, None, None, None, (1, 0), None, (1, 0, 2))
+  output_permutation : None
+  description        : 操作数次序改为 [1, 0, 2, 3, 4, 5, 6] 且 操作数 4 轴序改为 om
+                       （张量需 transpose(1, 0)） 且 操作数 6 轴序改为 pnh（张量需 transpose(1, 0, 2)）
+  --- explain(variant) ---
+  rewritten: True
+  kind     : operand-order+axes
+  reason   : None
+（说明：脚本按"只做一次调用、不做中位计时"的要求写成，只调 1 次
+ `normalize_equation` + 1 次 `explain`，全程不计时，避免与并行测量互相污染。
+ 脚本落在会话级 scratchpad，未写入仓库。）
+
+源码侧同向证据（三族复合的标签是显式写死的）：
+$ grep -n 'operand-order+axes' pyqcd/einsum/_equivalence.py       # 退出码 0
+  549:        return "operand-order+axes+output-axes"
+  551:        return "operand-order+axes"
+→ `_kind`（541–562 行）把 7 种单族/复合形态全部列出，含 `operand-order+axes+
+output-axes` 三族叠加；模块 docstring 第 14 行也写明"5. **以上任意复合**：
+位置、轴序、输出轴序**同时**变化"。
+
+A2. §1.2 跳过表「「组合改写」变体 / 全样本 / 一次只给一族改写」
+--------------------------------------------------------------------------------
+旧说法（原文件 74 行）：组合改写变体全样本被跳过，理由是"swap+axes、swap+output
+这类组合不被映射"。现状：该跳过理由**消失**，组合变体现在可以正常纳入测量
+（A1 已实测）。注意这只否掉"为什么被跳过"，**不**代表组合变体的收益已重测
+——那属 C1。
+
+A3. §7.2 场景表末行「需要交换操作数 + 改轴序组合改写 → 不可用」
+--------------------------------------------------------------------------------
+旧说法（原文件 544 行）：`_equivalence` 不支持组合，故该场景判"不可用"。
+现状：**该行结论作废**，改为"可用"，依据同 A1。该行的收益仍属 unverified（C1）。
+
+A4. §5.1「97% 的时间在 `_candidate_equations`」+ 候选数 3.8k–9.8k
+--------------------------------------------------------------------------------
+旧说法（原文件 24–25、411–419 行）：拆解为
+`_candidate_equations 46 444 µs (6433 个候选)` / `_specialize.match 0.4 µs × 6433`，
+结论"97% 的时间在纯 Python 枚举与字符串拼接上"。
+现状：`_candidate_equations` **已不存在**，该函数、其候选数与时间占比一并作废。
+
+$ grep -n '_candidate_equations\|_MAX_CANDIDATES\|orders\[:96\]' pyqcd/einsum/_equivalence.py
+  （退出码 0；**仅命中 docstring 两行，无任何代码**）
+  21:旧实现的做法是"枚举等价写法 → 逐个 probe"，再用一堆上界（``orders[:96]``、
+  22:``_MAX_CANDIDATES`` 等）防止爆炸；...
+
+$ grep -rn '_candidate_equations' pyqcd/            # 退出码 0（命中全是注释/断言文本）
+  pyqcd/testing/einsum/verify_equivalence.py:41: ...``_candidate_equations`` 一旦拿来用，
+  pyqcd/testing/_einsum_equivalence_contract.py:380: 口径变更（2026-11-16）：本用例原先断言 ``_candidate_equations`` /
+  pyqcd/testing/_einsum_equivalence_contract.py:1132:def test_default_path_never_enumerates_candidate_equations():
+  pyqcd/testing/_einsum_equivalence_contract.py:1149:    assert not hasattr(_equivalence, "_candidate_equations"), \
+  （另有 4 个 __pycache__/*.pyc 二进制命中，非源码）
+
+$ grep -rn 'orders\[:96\]' pyqcd/                   # 退出码 0（3 处，全在文档/注释）
+  pyqcd/einsum/_equivalence.py:21
+  pyqcd/testing/_einsum_equivalence_contract.py:975
+  pyqcd/testing/_einsum_equivalence_contract.py:1083
+
+现状机制（新实现，关键行号）：
+  19–37   模块 docstring：算法改为"结构不变量分桶 + 构造式同构（**不枚举候选方程**）"
+  107     `_MAX_SEARCH_NODES = 4096`（单候选的**同构搜索**节点上限，非候选数上界）
+  111     `_MAX_LABEL_OPTIONS = 512`（单操作数内标签配对上限）
+  114     `_MAX_PROBE_CANDIDATES = 2048`（**仅**显式 probe 兼容路径用）
+  565–584 `_index()`：结构键摘要 → [(seq, 方程)]，首次查询建一次并缓存
+  679–731 `_probe_candidates()`：唯一还带"有界枚举"的地方，只服务显式 `probe`
+  751–799 `_normalize()`：默认路径 = `_specialize.match` 早退（765–768）
+           → 查桶 `_index().get(query.key)`（770）→ 桶内 `_match`/`_build`，
+           **没有任何候选枚举**
+配平条款（避免误读）：有界枚举在新实现里**没有完全消失**，它被收窄到
+"调用方自己给了 `probe`"的兼容路径（docstring 62–67 行写明"默认路径零枚举"）。
+旧的 `_candidate_equations` 这个名字与语义（无界全量物化 + 三段并列改写）确已删除。
+
+A5. §5.1「命中得早就便宜在这里不成立」及其归因
+--------------------------------------------------------------------------------
+旧说法（原文件 421–425 行）：`swap` 变体"理论上应该很早命中"，实测耗时与"枚举到底
+仍然失败"几乎相同（seq 855：40.0 vs 40.8 ms），原因是 `_candidate_equations` 先把
+全部候选物化成 list。现状：该现象与归因**同时作废**——不再有"物化全部候选"这一步，
+默认路径一旦在某条桶内候选上构造出同构就立即返回（`_normalize` 776–783 行：
+`for seq, text in entries: ... return result`）。该条不再有任何实测依据。
+
+A6. §5.1「按 arity 分」开销表（arity 6→23.5–25.4 ms … arity 14→58.3–60.1 ms）
+--------------------------------------------------------------------------------
+旧表（原文件 398–409 行）整体作废，换成本轮已测值（口径见 A7）：
+| arity | 旧报告 `normalize_equation` ms | 本轮重写后 ms（swap01 变体） |
+|---:|---:|---:|
+| 6  | 23.5 – 25.4 | 0.315 |
+| 7  | 30.1        | 0.407 |
+| 9  | 36.6 – 39.1 | 0.509 |
+| 10 | 39.2 – 40.8 | 0.421 |
+| 12 | 40.1 – 41.5 | 0.662 |
+| 13 | 42.4 – 44.3 | 2.537 |
+| 14 | 58.3 – 60.1 | 1.147 |
+| 16 | 45.7 – 46.8 | 1.964 |
+同档比较：arity 6 约 **75–81×** 更快、arity 14 约 **51–52×**、arity 16 约 **23×**。
+另注意旧表右列"候选数 `find_equivalents` = 3815–9826"也作废：`find_equivalents`
+现在返回常数级条数（docstring 842–844 行："条数是常数级，与元数无关"）。
+
+A7. §5.1「映射开销是 ms 级、不是 µs 级（中位 39.4 ms，区间 23.5–60.1 ms）」
+--------------------------------------------------------------------------------
+这条要拆开看，**数值作废、定性残句仍成立**：
+  作废部分：中位 39.4 ms → **0.585 ms**（下降约 67×），"ms 级"的量级描述已被打破
+  （8 档里 7 档 < 1 ms）。
+  仍成立部分：它**仍然不是 µs 级**——中位 0.585 ms = 585 µs，identity 路径才是 10 µs 级。
+本轮实测值（任务给定的唯一可引用口径，**本轮实测（2026-11-16，本机 18 核，未独占）**；
+8 档 arity、swap01 变体、warmup=2 + 9 次中位、identity 命中路径单列）：
+  * 冷启动建索引（同进程首测）：**814.9 ms**（另一次独立运行为 0.93–1.07 s 区间记录）
+  * 需改写的查询：min **0.315** / 中位 **0.585** / max **2.537** ms
+    （arity 6→0.315、7→0.407、9→0.509、10→0.421、12→0.662、13→2.537、14→1.147、16→1.964）
+  * identity（已命中）：**0.0064–0.0104 ms**
+交叉核对（与已同步的手册一致，非我另测）：
+$ sed -n '1074p' docs/einsum_user_guide_20261116.md     # 退出码 0
+  | 19 | 等价查询计时（arity 6/7/9/10/12/13/14/16 逐档） | 首次 0.8–1.1 s（建索引）；
+  之后需改写的查询 0.32–2.54 ms（中位 0.59），identity 0.007–0.010 ms |
+→ 手册该行与上述本轮值同源，且**旧报告里完全没有"冷启动建索引"这一项**（见 A9）。
+
+A8. §5.1 identity 路径「4.3–5.4 µs / `explain` 6.3–8.1 µs」
+--------------------------------------------------------------------------------
+旧数值被本轮同口径值更新：identity 现测 **0.0064–0.0104 ms（6.4–10.4 µs）**，
+约为旧值的 1.2–2.4 倍。机制**没变**（`_specialize.match` 先命中就直接返回
+`kind="identity"`，`_equivalence.py` 765–768 行），旧报告"只有已命中的方程才 µs 级"
+的定性仍然成立；只有数字需要替换。
+
+A9. §7.3 建议 2「`_candidate_equations` 改成惰性生成器 + 提前返回」
+--------------------------------------------------------------------------------
+建议作废：**对象已不存在**（A4 证据）。默认路径现在根本不进枚举循环，"约 1 行
+`yield` 改造"没有落点。其代替品是 `_index()`（结构键桶）+ `_normalize()` 的
+查桶早退，已由契约测试钉住：
+$ sed -n '1149,1150p' pyqcd/testing/_einsum_equivalence_contract.py    # 退出码 0
+  assert not hasattr(_equivalence, "_candidate_equations"), \
+      "旧的候选枚举入口还在"
+（该测试还用 monkeypatch 把 `_probe_candidates` 换成"一调用就抛异常"，
+ 证明默认路径连显式 probe 的那份有界枚举都不会碰：1132–1148 行。）
+
+A 类附记（**新增**，旧报告没有这一项）
+--------------------------------------------------------------------------------
+新接口多了一项一次性成本：**首次查询要建 8638 条语料的结构键索引，本轮 814.9 ms**
+（另一独立运行 0.93–1.07 s）。旧实现是"每次查询现枚举"，没有建索引阶段，所以旧
+报告的盈亏平衡表里根本没有这一项。含义：**单进程只查一两次时，新接口反而可能比
+旧接口更亏**（旧 ~39 ms/次 vs 新 0.8 s 首查）；一旦进程内查 ≥ 2 次即反超。
+（这一条属"新事实"，不参与 A 类计数。）
+
+
+二、B 类：仍然成立（6 条，均已亲自核实）
+================================================================================
+
+B1. 机制一：`try_dedicated` 的第一道门就是 C_CONTIGUOUS → **仍成立**
+--------------------------------------------------------------------------------
+旧说法（原文件 324–341 行）：`try_dedicated` 第一道门要求所有操作数 C 连续，
+`transpose` 视图因此被拒、落到路由链下一站。
+证据 1（源码，门在函数内、且在计划/缓存之前）：
+$ grep -n 'C_CONTIGUOUS' pyqcd/einsum/_kernel_kupl.py pyqcd/einsum/_kernel_cuda.py
+  （退出码 0）
+  pyqcd/einsum/_kernel_kupl.py:810:  if not out.flags["C_CONTIGUOUS"]:
+  pyqcd/einsum/_kernel_kupl.py:1452: if any(not operand.flags["C_CONTIGUOUS"] for operand in operands):
+  pyqcd/einsum/_kernel_kupl.py:1489 / 1653 / 1674 ...
+  pyqcd/einsum/_kernel_cuda.py:307 / 547 / 592 ...
+$ grep -n '^def try_dedicated' pyqcd/einsum/_kernel_kupl.py pyqcd/einsum/_kernel_cuda.py
+  （退出码 0）
+  pyqcd/einsum/_kernel_kupl.py:1420:def try_dedicated(...)
+  pyqcd/einsum/_kernel_cuda.py:510:def try_dedicated(...)
+→ 1420 行的函数体里，1452–1453 就是那道门，位置在 `_negative_cache_key`(1454) 与
+  dtype 判定(1459) 之前；`_kernel_cuda.py` 对应 547–548 行，措辞逐字相同。
+证据 2（一次性路线打印，**不计时**）：
+$ python $COMMANDCODE_SCRATCHPAD/route_check.py        # 退出码 0
+  --- 1) 连续操作数 ---
+  returned: ndarray
+  reason  : None
+  b_view.flags['C_CONTIGUOUS']: False
+  --- 2) 第二操作数为 transpose 视图 ---
+  returned: None
+  reason  : dedicated kernel requires C-contiguous operands
+  --- 3) 同一视图 ascontiguousarray 之后 ---
+  returned: ndarray
+→ 同一方程、同一 shape、同一 dtype，唯一差别是 `transpose` 视图 vs 连续副本：
+  视图被拒（`None` + 明确 reason），副本命中。**"视图 vs 连续副本走不同路线"这条
+  机制与 `_equivalence` 的重写无关，现在仍然成立。**
+（透明度说明：该脚本首版误按 `r.ok` 取返回值 —— `try_dedicated` 成功时直接返回
+ ndarray、失败返回 None，原因写在 `LAST_FAILURE` ——首次运行退出码 1
+ `AttributeError: 'numpy.ndarray' object has no attribute 'ok'`；改用
+ `LAST_FAILURE["reason"]` 后退出码 0，上面是修正后的输出。）
+
+B2. §7.3 建议 1「文档必须写明 `ascontiguousarray`」→ **建议本身仍成立；"未实施"已过期（见下方更正）**
+--------------------------------------------------------------------------------
+旧说法（原文件 548–550 行）：当前文档只说"张量需 transpose"，按字面用就是最差路径。
+核实（**执行时点**：本条写于并行子任务落地之前）：
+`_equivalence` 的字段文档**仍然只写 transpose**，用户指南当时亦无 `ascontiguousarray`：
+$ sed -n '147,150p' pyqcd/einsum/_equivalence.py        # 退出码 0
+  ``operand_permutations``
+      每个操作数（**按改写后的次序**）自己的轴置换：``perm[j]`` 表示该操作数
+      新轴 j 取旧轴 perm[j]（numpy ``transpose(perm)`` 语义）。...
+$ grep -n 'ascontiguousarray' docs/einsum_user_guide_20261116.md    # **退出码 1，无命中**
+$ grep -c 'transpose' docs/einsum_user_guide_20261116.md            # 退出码 0 → 26
+  指南中 310 / 419 / 582 / 627 行都是 `transpose` 口径（如 310 行
+  "| `operand_permutations` | 逐操作数 `transpose` 置换（按**改写后**次序），或 `null` |"）
+→ 建议 1 的对象仍在、内容仍有效。
+  但旧报告给该建议配的收益数字（"消掉 14/16 的视图倒亏与最坏的 75×"）属 C6。
+
+【更正 · 2026-11-16，同一轮并行子任务落地后】
+上面那条 `grep` 的"无命中"**已经过期**，其余核实要点不变：
+$ grep -c 'ascontiguousarray' docs/einsum_user_guide_20261116.md   # 退出码 0 → 4
+$ grep -n '^| 37 |' docs/einsum_user_guide_20261116.md             # 退出码 0 → 1267 行
+用户指南已新增 `### 3.7 照做之前先落一份副本：transpose 是视图，视图会绕过 dedicated`
+（+176 行，插入在 §3.6 之后），并把复算结果登记为 §10 清单第 37 行：
+视图路线 `path=kupl_topology` + `failure='dedicated kernel requires C-contiguous operands'`，
+副本路线 `path=kupl_dedicated`，两路 `rel=6.747e-16`。
+因此"建议 1 未实施"这半句**作废**（仅指用户指南这一侧）；
+"`_equivalence` 的**字段 docstring** 仍只写 transpose"这半句**仍成立**
+（源码本批次未改，字段文档也没改）。
+附带提醒：§3.7 于第 571 行插入后，指南里**571 行之后的旧行号整体 +175**，
+上文出现的 582 / 627 两个行号引用已随之失效。
+
+
+B3. §7.3 建议 3「视图输入应显式判负」→ **仍成立，且仍未实施**
+--------------------------------------------------------------------------------
+旧说法（原文件 554–557 行）：`try_dedicated` 的失败原因写得很清楚，但
+`try_topology_apply` 会在 CPU 上默默接住（常常更慢）、在 GPU 上失败后掉到 generic；
+建议把"不连续 → 复制或拒绝"做成显式策略。
+核实：门只 `_fail(...)`、**不做任何复制**（`_kernel_kupl.py` 1452–1453，`_fail` 定义在
+43–46 行只记录 `LAST_FAILURE` 并返回 None），因此"拒绝后由路由链下一站接住"的行为
+结构上未变；`try_topology_apply` 在两个 kernel 里都仍然存在
+（`_kernel_kupl.py:750`、`_kernel_cuda.py:263`）。
+→ "不连续 → 复制或拒绝"作为**显式策略**仍未落地，建议依旧有效。
+  该建议涉及的性能后果（topology 比 dedicated 慢多少）属 C6。
+
+B4. §1.1/§5.2「严格交错 A/B 会污染小方程计时」的**方法论结论** → 仍成立
+--------------------------------------------------------------------------------
+旧说法（原文件 50–57、427–436 行）：`contract()` 在命中/未命中之间切换
+OpenMP/BLAS 线程档，严格交错计时会把切换代价算进被测格子。
+核实：档切换机制仍在：
+$ grep -n 'def apply_profile' pyqcd/einsum/_threads.py   # 退出码 0
+  278:def apply_profile(profile: str) -> None:
+→ 因此"每格独立连续块计时、不可严格交错 A/B"这条**方法学**要求对任何后续重跑
+  仍然有效（这也是本勘误 C 类重跑口径的一部分）。
+  但旧报告给的 **3.8 ms / 26× 具体数值本次未重测**，不作复现声明。
+
+B5. §7.4 两条定性判断 → 仍成立
+--------------------------------------------------------------------------------
+  * "1.9× 是特化路径的收益**上界**，不是功能结论" —— 与 `_equivalence` 实现无关，
+    仍成立（且新接口的开销虽降了 67×，也仍然不构成"映射能提速 1.9×"的证明）。
+  * "不支持「映射开销可忽略」" —— 仍成立：identity 才 6.4–10.4 µs，而真正要改写的
+    查询中位 585 µs（A7）。
+  * 另注：`_equivalence` 的**文档契约**（`operand_order` / `operand_permutations` /
+    `output_permutation` 语义、`output_permutation` 已存逆置换）未因重写改变，
+    旧报告 §1.3 对 c4v/c4c 的定义因此仍然有效（这两点我按源码 137–190、499–512 行核对）。
+
+B6. §1.1「每格独立连续块计时」这一应对措施 → 仍成立
+--------------------------------------------------------------------------------
+与 B4 同源：只要档切换机制还在（`_threads.apply_profile`，278 行），就必须用
+连续块计时；这条对 C 类所有待重跑的格子直接适用。
+
+
+三、C 类：无法判定 / 必须重测（8 条，一律 `unverified`）
+================================================================================
+共同原因：这些数字全部是"16 样本 × 四/五组合"的**实际耗时与比值**，而
+(a) 其中 c4v/c4c 两列必须靠 `normalize_equation` 给出的**具体映射文本**去构造，
+    重写后返回的语料条目与置换可能与旧版不同（A1 已证明 kind 都会变），
+    计划缓存与线程档状态随之改变；(b) GPU 侧本轮**完全不可用**。
+因此以下一律标 `unverified`，**不得**在新文档里当既有结论引用。
+
+C1. §2.1 / §2.2 全部四组合（+1）耗时表（CPU 59 格 / GPU 53 格）—— unverified
+C2. §2.3 axes / order / output 三族汇总（n、gainV 中位、gainC 中位、<1 计数）—— unverified
+C3. §3.1 min / p25 / 中位 / max 分布（含"CPU 上理论上界 0/59 变慢"）—— unverified
+C4. §3.2「收益 < 1 的 18 格 / 4 格 / 15 格」逐行清单 —— unverified
+    （连带 §2.1/§2.2 里的**粗体**判负行，全部需重跑后才可再标注）
+C5. §5.3 盈亏平衡表（CPU 14 行 + GPU n=46 分布）—— unverified，且**分子与分母都变了**：
+    分子（映射开销）由 23.5–60.1 ms 变为 0.315–2.537 ms（A7），分母（每次省下的
+    c3−c4）也因映射文本变化而需重测。旧表"中位 139 次 / GPU 32 次"不可再用。
+C6. §4.2 `kupl_topology` 视图代价表（14/16 慢、中位 2.6×、最坏 75×）—— unverified
+    （B1/B3 只核实了"会落到 topology"这条**路线**事实，未核实任何**倍率**）
+C7. §6.1 / §6.2 / §6.3 全部 GPU 相关结论 —— **未验证（环境不可用）**：
+    含"映射开销 CPU 与 GPU 同值"、"6/53 变慢"、"seq 2583 特化慢 2.4×"、
+    "`cuda_topology` 单次 295.6 ms"等。GPU 一侧本次没有任何新证据。
+C8. §2.4 强制入口复核（0.322 ms 特化 / 0.464 ms 通用，1.44×）—— unverified
+    （与 `_equivalence` 无关的 c1/c2 对比，但仍属需重跑才能复现的计时值）
+
+C 类的统一重跑口径（任务指定的硬约束，重跑者必须逐条遵守）
+--------------------------------------------------------------------------------
+1. **生产尺寸的唯一来源是 `_bench_scene.dims("distill")`**
+   （Nev_src=100 / Nev_curr=400 / Mom_src=1 / Mom_curr=9 / Ns=4 / Nc=3）；
+   **禁止** `smoke`、禁止任意 `--scale`、禁止"把各轴设成同一长度"的等长 `dim`。
+   形状由 `bench_specialized._label_sizes(terms, task.roles, dims)` 反推。
+2. **每格独立连续块计时**（blocked），**不可严格交错 A/B**——理由见 B4/B6。
+3. GPU 侧在本机不可用；重跑需另备可用环境，否则维持"未验证（环境不可用）"。
+4. 每次映射前后要记录 `normalize_equation` 返回的 `kind`，因为重写后复合形态的
+   `kind` 与旧版不同（A1），按旧版 `kind` 分族汇总会错配。
+5. 新接口要单列**冷启动建索引**（本轮 814.9 ms）与 identity 路径，别混进"需改写查询"。
+
+
+四、计数与遗留
+================================================================================
+A 类（结论已作废）：**9 条**（A1–A9；另附 1 条"新增事实"附记，不计入 A 类）
+B 类（仍然成立）  ：**6 条**（B1–B6）
+C 类（unverified） ：**8 条**（C1–C8）
+
+无法核实/明确不做的：
+  * GPU 侧任何数字 —— 环境不可用（cupy/nvrtc: `invalid value for --gpu-architecture`），
+    按要求不修复、不猜测。
+  * C 类全部倍率 —— 需要整套 16 样本 × 四组合重跑，本轮只做只读核实，不做重跑。
+  * 旧报告 §5.2 的 3.8 ms / 26× —— 未重测（机制已在 B4 核实存在，数值不声明）。
+
+复跑本勘误用到的两个一次性脚本（会话级 scratchpad，**未写入仓库**）：
+  probe_combo.py  —— A1 的组合改写核实（1 次 normalize_equation + 1 次 explain，不计时）
+  route_check.py  —— B1/B3 的 C_CONTIGUOUS 路线核实（3 次 try_dedicated，不计时）
+
+================================================================================
+本文件只做勘误：未修改 logs/einsum-equivalence-gain-20261116.txt，未修改任何源码、
+文档或原生库；未执行任何 git 操作。
+================================================================================

@@ -1,0 +1,89 @@
+[日志元数据]
+日志类型: stage
+生成时间: 2026-11-16 15:18:38 +0800
+批次: einsum-guide-resume
+主任务: 并行子代理推进：旧报告勘误 + 手册补 §3.7 + GPU 栈诊断
+触发原因: 阶段成果
+摘要: 3 路并行（勘误 A9/B6/C8、手册+176行、GPU 诊断定位到 nvrtc 13.2 错位）；产物均经本机复跑复核
+Git 根目录: /home/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 派发通道与任务切分
+- 目标: 并行推进 resume 后剩下的三件事，同时保证计时类任务不被污染
+- 命令/操作: 检查 `/home/zhangxin/configure/bin/agent-dispatch.sh`（可用，默认继承父 provider/model/strength）；
+  把任务写成三个独立 task 文件（A 勘误 / B 手册 / C GPU 诊断），三件互不改同一文件、均不做中位计时
+- 关键输出: 三次 `agent-dispatch.sh --task-file ... --cwd /home/zhangxin/PyQCD --timeout 30m|20m --text`
+  分别返回 exit 0
+- 证据与判断: 计时类（全量性能重测）单独留到第二轮，理由是本机 18 核共享、并行会污染中位数
+
+### S2 — 子任务 A（勘误）结果与我的复核
+- 关键输出: 新建 `logs/einsum-equivalence-gain-20261116-errata.txt`（25,282 B），分类 A=9 / B=6 / C=8
+- 复核（我亲自跑）:
+  - `sed -n '541,562p' pyqcd/einsum/_equivalence.py` → `_kind` 七种形态齐全，含
+    `operand-order+axes+output-axes` / `operand-order+axes`（A1 成立）
+  - `find_equivalents` docstring 原话「条数是常数级，与元数无关」（A6 成立）
+  - 我上一轮实测 seq3 swap01 返回 `operand-order+axes`，与 A1 一致
+- 判断: A 类作废结论成立；C 类全部标 `unverified` 属正确处置
+
+### S3 — 子任务 B（手册）结果与我的复核
+- 关键输出: `docs/einsum_user_guide_20261116.md` 新增 `### 3.7`（+176 行、0 删除）+ §10 第 37 行
+- 复核（我把 §3.7 的三个 bash 块原样抽出来执行）:
+  - block1 exit=0 → `kind: operand-axes`、`perm=(None,None,(3,1,2,0),...)`、`C_CONTIGUOUS False`
+  - block2 exit=0 → `path: kupl_topology`、`failure: 'dedicated kernel requires C-contiguous operands'`、`rel=6.746673840372554e-16`
+  - block3 exit=0 → `path: kupl_dedicated`、`failure: ''`、同一 rel
+  - 三块输出与文档记录**逐字一致**
+  - 行号引用核对: `_equivalence.py:147-150`（transpose 语义）、`_kernel_kupl.py:1452-1453`（C_CONTIGUOUS 门）、
+    `_api.py:552-555`（kupl 两站次序）全部命中
+- 判断: 文档新增内容可信，且是"视图绕过 dedicated"这条机制的首个用户侧书面口径
+
+### S4 — 并行导致的一处自相矛盾，定点更正
+- 问题: A 的 B2 条写着「用户指南仍无 `ascontiguousarray`，`grep` 退出码 1」——那是 B 落地**之前**的事实，
+  两条并行后成了假陈述
+- 命令/操作: `grep -c 'ascontiguousarray' docs/einsum_user_guide_20261116.md` → 4；`grep -n '^| 37 |'` → 1267 行
+- 处理: 在 B2 打入带时间戳的【更正】块：说明"未实施"半句作废（仅指用户指南一侧）、
+  "字段 docstring 仍只写 transpose"半句仍成立（源码本批次未改）、并提示 §3.7 插入使 571 行之后
+  的旧行号整体 +175
+- 退出码: 0
+
+### S5 — 子任务 C（GPU 只读诊断）结论
+- 关键输出（原文摘要）: 错位在**解释器**不在驱动——base Python 被换成 CUDA 13.2 栈（nvrtc 13.2 + torch 2.15.0+cu132），
+  驱动 551.78（CUDA 12.4）、卡为 sm_60/sm_70；nvrtc 13.2 只接受 compute_75+，故 compute_70/60 一律 `INVALID_OPTION(5)`
+- 之前能跑的原因: 2026-11-15/16 的测量走 `mamba run -n pyqcd-einsum-cu124`，该 env 的 cupy 解析到 nvrtc 12.4.127
+- 恢复路径（未执行）: ① `LD_PRELOAD=.../libnvrtc.so.12.4.127`（进程级，无需授权）；② 切 cu124 env；
+  ③ 重装 cu12 轮 torch 或升驱动（需授权）
+- 附带发现: GPU1（PCI 04:00.0）`Unknown Error`，dmesg `dxgkio_reserve_gpu_va: Ioctl failed: -75`，CUDA 只见 2 卡
+- 关键: 子代理明确声明"未做任何修改"
+
+### S6 — 交付前检查
+- `git diff --check` → 退出 0
+- 手册围栏 `grep -c '^```'` = 96（偶数）
+- 勘误文件内所有 `$ 命令` 均带退出码，GPU 结论统一标注 `unverified`
+
+## Agent 全文报告
+--- report begin ---
+本轮把 resume 后剩下的三件事并行派给三个子代理（走 `agent-dispatch.sh`，继承父 provider/model/strength），
+三件互不改同一文件，且都刻意避开中位计时（计时会让并行互相污染）。
+
+1) 勘误（A）：新建 `logs/einsum-equivalence-gain-20261116-errata.txt`（25,282 B），
+   把旧性能报告的结论按 A（已作废 9 条）/ B（仍成立 6 条）/ C（需重测 8 条，全部 `unverified`）分类。
+   核心作废项：`_candidate_equations` 已不存在、组合改写现已支持（seq3 swap01 返回
+   `operand-order+axes`）、开销从 39.4 ms 中位降到 0.585 ms。我复核了 `_kind` 的七种形态与
+   `find_equivalents` 的"常数级"docstring，均成立。
+
+2) 手册（B）：`docs/einsum_user_guide_20261116.md` 新增 `### 3.7 照做之前先落一份副本：transpose 是视图，
+   视图会绕过 dedicated`（+176 行、0 删除），并在 §10 清单补第 37 行。我把该节三个 bash 块原样抽出来
+   执行，输出与文档逐字一致：视图 → `kupl_topology`（failure 明写要 C-contiguous），
+   副本 → `kupl_dedicated`，两路 `rel=6.747e-16`。三处源码行号引用也逐个对上了。
+
+3) 并行冲突的一处修正：A 写的「指南仍无 `ascontiguousarray`」在 B 落地后变成假陈述，
+   我已在 B2 打入带时间戳的【更正】块，并注明 §3.7 插入使 571 行之后的旧行号 +175。
+
+4) GPU 诊断（C，只读）：失败不在驱动而在解释器——base Python 现在是 CUDA 13.2 栈（nvrtc 13.2），
+   而驱动 551.78 只到 CUDA 12.4、卡是 sm_60/sm_70，nvrtc 13.2 只认 compute_75+。
+   之前能跑是因为走 `pyqcd-einsum-cu124` env（nvrtc 12.4.127）。
+   最小恢复：进程级 `LD_PRELOAD=libnvrtc.so.12.4.127`（无需授权）或切该 env；重装/升驱动需授权。
+   附带发现第二块 P100 处于 `Unknown Error`。子代理声明未做任何修改。
+
+未验证：GPU 侧全部性能数字（环境不可用）；旧报告 §2 的 16 样本 × 四组合收益表需独占重测（下一轮）。
+--- report end ---

@@ -1068,3 +1068,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## einsum-guide-resume - stage - 2026-11-16 15:18:38 +0800
+- 主任务: 并行子代理推进：旧报告勘误 + 手册补 §3.7 + GPU 栈诊断
+- 日志文件: logs/v202611161518.txt
+- 文件大小: 6405 bytes
+- 触发原因: 阶段成果
+- 关键内容: 3 路并行（勘误 A9/B6/C8、手册+176行、GPU 诊断定位到 nvrtc 13.2 错位）；产物均经本机复跑复核
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

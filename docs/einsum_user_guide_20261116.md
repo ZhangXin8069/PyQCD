@@ -568,6 +568,181 @@ python -m pyqcd.einsum.verify_specialized \
 | 显式 `probe=` 路径 | 只有调用方**自己传 `probe`** 时才退回有界枚举（`_MAX_PROBE_CANDIDATES=2048`、`_PROBE_FULL_PERM_LIMIT=6`）。**两个 CLI 都不传** | `_probe_candidates`（`:679-731`） |
 | 查询开销 | 首次调用要建语料索引：本机实测 **0.8–1.1 s**（两次独立运行）；之后**需改写**的查询 **0.32–2.54 ms**（arity 6→16 逐档，中位 0.59）；**已命中**（`kind=identity`）的查询 **0.007–0.010 ms**。开销随 arity 增长，**不要按 ~0.3 ms 估大方程** | 本机计时，8 档 arity |
 
+### 3.7 照做之前先落一份副本：`transpose` 是视图，视图会绕过 dedicated
+
+**判断规则**：映射给出 `operand_permutations` 时，**先 `np.ascontiguousarray`**，
+否则 `try_dedicated` 的 `C_CONTIGUOUS` 门会把这条路径挡掉。
+
+原因全在源码里，只有两处：
+
+- `operand_permutations` 的语义是 `transpose(perm)`（`pyqcd/einsum/_equivalence.py:147-150`），
+  而 `np.transpose` 返回的是**视图**——除恒等与两两交换外都不连续；
+- `try_dedicated` 在**进规划之前**就先查这一点（`pyqcd/einsum/_kernel_kupl.py:1452-1453`）：
+
+```python
+if any(not operand.flags["C_CONTIGUOUS"] for operand in operands):
+    return _fail("dedicated kernel requires C-contiguous operands")
+```
+
+于是按"直接 transpose"的直觉做法，即使映射成功，也会在路由链的第一站被拒，
+落到下一站——`pyqcd/einsum/_api.py:552-555` 的次序是
+`kupl_dedicated` → `kupl_topology` → 通用。这不是"映射失败"，而是
+"映射成功后按最自然的用法走，走的路和规范写法不一样"。
+
+下面三条命令（本机 CPU、`HEAD=02fdd54b`、`python` 3.12.4 / base 环境、numpy 2.5.4、
+complex128）在语料 `seq=3` 的 `axes` 族变体上逐段复现。变体只改一处：把操作数
+`egfh` 反转为 `hgfe`（全轴 >1、秩 4、无重复标签，符合 §3.6 的边界）；形状取自
+生产口径 `_bench_scene.dims("distill")`，不用任何缩小档。
+
+**(1) 先看映射给了什么**
+
+```bash
+cd /home/zhangxin/PyQCD
+export PYTHONPATH=$PWD PYQCD_EINSUM_NOTICE=0
+python - <<'PY'
+import numpy as np
+from pyqcd.einsum import _bench_scene, _equivalence, _wick_tasklist, bench_specialized
+
+task = _wick_tasklist.by_seq()[3]                      # 语料 seq=3
+dims = _bench_scene.dims("distill")                    # 唯一生产尺寸口径
+rng = np.random.default_rng(0)
+build = lambda *s: (rng.standard_normal(s)
+                    + 1j * rng.standard_normal(s)).astype(np.complex128)
+ops = bench_specialized.operands_for(task.equation, dims, build, task.roles)
+variant = task.equation.replace("egfh", "hgfe")        # axes 族：反转该操作数轴序
+vops = list(ops)
+vops[2] = np.transpose(ops[2], (3, 2, 1, 0))
+
+equ = _equivalence.normalize_equation(variant)
+print("variant :", variant)
+print("mapped  :", equ.equation, "| kind:", equ.kind)
+print("perm    :", equ.operand_permutations)
+print("output  :", equ.output_permutation)
+print("op2     :", vops[2].shape, "C_CONTIGUOUS",
+      vops[2].flags["C_CONTIGUOUS"])
+PY
+```
+
+退出码 **0**：
+
+```
+variant : ambn,codp,hgfe,ce,mo,bdf,nph->ag
+mapped  : ambn,codp,egfh,ce,mo,bdf,nph->ag | kind: operand-axes
+perm    : (None, None, (3, 1, 2, 0), None, None, None, None)
+output  : None
+op2     : (100, 100, 100, 4) C_CONTIGUOUS False
+```
+
+最后一行是要点：映射要的那个张量此刻是**非连续视图**（`C_CONTIGUOUS False`）。
+
+**(2) 路线 A：照文档直接 `transpose`（视图）**
+
+```bash
+cd /home/zhangxin/PyQCD
+export PYTHONPATH=$PWD PYQCD_EINSUM_NOTICE=0
+python - <<'PY'
+import numpy as np
+from pyqcd.einsum import (_bench_scene, _equivalence, _kernel_kupl,
+                          _wick_tasklist, bench_specialized, contract)
+
+task = _wick_tasklist.by_seq()[3]
+dims = _bench_scene.dims("distill")
+rng = np.random.default_rng(0)
+build = lambda *s: (rng.standard_normal(s)
+                    + 1j * rng.standard_normal(s)).astype(np.complex128)
+ops = bench_specialized.operands_for(task.equation, dims, build, task.roles)
+variant = task.equation.replace("egfh", "hgfe")
+vops = list(ops)
+vops[2] = np.transpose(ops[2], (3, 2, 1, 0))
+
+equ = _equivalence.normalize_equation(variant)
+adjusted = [t if p is None else np.transpose(t, p)      # 视图，未落副本
+            for t, p in zip(vops, equ.operand_permutations)]
+print("C_CONTIGUOUS:", [t.flags["C_CONTIGUOUS"] for t in adjusted])
+got = contract(equ.equation, *adjusted)
+if equ.output_permutation is not None:
+    got = np.transpose(got, equ.output_permutation)
+print("path    :", _kernel_kupl.LAST_INFO.get("path"))
+print("failure :", repr(_kernel_kupl.LAST_FAILURE["reason"]))
+ref = np.einsum(variant, *vops, optimize="greedy")
+print("max|d|  :", float(np.max(np.abs(got - ref))),
+      "| rel:", float(np.max(np.abs(got - ref)) / np.max(np.abs(ref))))
+PY
+```
+
+退出码 **0**：
+
+```
+C_CONTIGUOUS: [True, True, False, True, True, True, True]
+path    : kupl_topology
+failure : 'dedicated kernel requires C-contiguous operands'
+max|d|  : 5.820766091346741e-11 | rel: 6.746673840372554e-16
+```
+
+**(3) 路线 B：同一份置换，外面套一层 `np.ascontiguousarray`（副本）**
+
+```bash
+cd /home/zhangxin/PyQCD
+export PYTHONPATH=$PWD PYQCD_EINSUM_NOTICE=0
+python - <<'PY'
+import numpy as np
+from pyqcd.einsum import (_bench_scene, _equivalence, _kernel_kupl,
+                          _wick_tasklist, bench_specialized, contract)
+
+task = _wick_tasklist.by_seq()[3]
+dims = _bench_scene.dims("distill")
+rng = np.random.default_rng(0)
+build = lambda *s: (rng.standard_normal(s)
+                    + 1j * rng.standard_normal(s)).astype(np.complex128)
+ops = bench_specialized.operands_for(task.equation, dims, build, task.roles)
+variant = task.equation.replace("egfh", "hgfe")
+vops = list(ops)
+vops[2] = np.transpose(ops[2], (3, 2, 1, 0))
+
+equ = _equivalence.normalize_equation(variant)
+adjusted = [t if p is None else np.ascontiguousarray(np.transpose(t, p))
+            for t, p in zip(vops, equ.operand_permutations)]   # 落一份连续副本
+print("C_CONTIGUOUS:", [t.flags["C_CONTIGUOUS"] for t in adjusted])
+got = contract(equ.equation, *adjusted)
+if equ.output_permutation is not None:
+    got = np.transpose(got, equ.output_permutation)
+print("path    :", _kernel_kupl.LAST_INFO.get("path"))
+print("failure :", repr(_kernel_kupl.LAST_FAILURE["reason"]))
+ref = np.einsum(variant, *vops, optimize="greedy")
+print("max|d|  :", float(np.max(np.abs(got - ref))),
+      "| rel:", float(np.max(np.abs(got - ref)) / np.max(np.abs(ref))))
+PY
+```
+
+退出码 **0**：
+
+```
+C_CONTIGUOUS: [True, True, True, True, True, True, True]
+path    : kupl_dedicated
+failure : ''
+max|d|  : 5.820766091346741e-11 | rel: 6.746673840372554e-16
+```
+
+对照：
+
+| 路线 | 传进去的张量 | `LAST_INFO['path']` | 数值（vs `np.einsum`，`optimize="greedy"`） |
+|---|---|---|---|
+| A 直接 `transpose` | 1 个非连续视图 | **`kupl_topology`** | `rel=6.747e-16` |
+| B `ascontiguousarray` | 全部连续 | **`kupl_dedicated`** | `rel=6.747e-16` |
+
+两条路线的**数值一致**（只差浮点舍入），差别只在**路线**；而路线一旦错了，
+"用映射换特化收益"这件事就没发生。这个格子上两条路线的耗时曾差 75×
+（`logs/einsum-equivalence-gain-20261116.txt` §4.2 的 seq 3 `egfh` 行：
+`kupl_topology` 117.776 ms vs `kupl_dedicated` 1.570 ms）——**该数字来自那份日志，
+本手册未复跑**，只作"差多少"的量级参考。
+
+**代价**：副本要**额外一份同大小内存**与**一次拷贝时间**，所以
+**只有当你确实要重路径收益时才值得**；小方程上拷贝本身可能就把收益吃掉，
+不确定就先按 §5 的方法量一次再决定。
+
+**边界**（与 §3.5 同一口径）：本层的映射只给"方程与张量调整方案"，**是否落副本
+由调用方决定**——库不会替你复制，也不会替你改写输入。
+
 ---
 
 ## 4. 如何验证映射是否可信（正确性必读）
@@ -1089,6 +1264,7 @@ verify_specialized 报 MISS
 | 34 | `--scene {distill,distill_curr,scene,full}` 的形状 | §1.6 的四行表；`distill_curr` 给 `[4,4,9,1]` 而**不是** `(4,4,100,400)` |
 | 35 | `_specialize` 语料规模 | `len(TASKS) == 8638` |
 | 36 | `--specialize true`（seq=129、complex128） | `specialize 实际 True` 但 `kernel` 为空、`route` 通用，`PASS`、退出码 0；stderr 给出 `pack-bound on CPU (3456077824 pack bytes, …)` 拒绝理由 |
+| 37 | §3.7 的三条复算（`seq=3` 的 `axes` 变体 `egfh→hgfe`，`dims("distill")`） | 映射给 `perm=(None,None,(3,1,2,0),…)`；视图路线 `path=kupl_topology`（`failure='dedicated kernel requires C-contiguous operands'`）、副本路线 `path=kupl_dedicated`，两者 `rel=6.747e-16`，均退出码 0 |
 
 **未复跑项（已在上文逐处标注）**：§5.3 的 `auto vs false` 倍率（数据作废，标
 `unverified`）、§5.4 引用的 AGENTS.md `80×` warmup 数字、`kupl_topology*` 的 route 展示。
