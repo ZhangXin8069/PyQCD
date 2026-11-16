@@ -3139,6 +3139,15 @@ def test_einsum_test_cli_contracts():
             getattr(contract_module, name)()
 
 
+def test_einsum_equivalence_contracts():
+    """等价映射接口层：轴序/操作数位置两族改写的数值等价性与保守性。"""
+    from . import _einsum_equivalence_contract as contract_module
+
+    for name in sorted(dir(contract_module)):
+        if name.startswith("test_"):
+            getattr(contract_module, name)()
+
+
 def test_opt_einsum_parity_contracts():
     """以 opt_einsum 为对照：数值、路径代价、expression/缓存、错误行为与退化门。"""
     from . import _opt_einsum_parity_contract as contract_module

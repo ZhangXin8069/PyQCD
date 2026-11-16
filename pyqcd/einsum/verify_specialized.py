@@ -85,8 +85,22 @@ def query(subscripts: str) -> dict[str, Any]:
 
     entry = _specialize.match(subscripts)
     if entry is None:
-        report["reason"] = ("既不在 wick_12cases 语料里，也没有形状特化路径，"
-                            "走通用分步路径（无特化内核）")
+        # 未直接命中：查是否存在**数学等价**的写法能落到语料/形状特化上。
+        # 只做轴序 / 操作数位置 / 字母重命名三族改写（逐元素等价，2026-11-16 实测），
+        # 不改任何执行路径——本模块仍只输出报告。
+        from . import _equivalence
+
+        equivalent = _equivalence.explain(subscripts)
+        if equivalent.get("rewritten"):
+            report["equivalent"] = equivalent
+            report["reason"] = (
+                "直接写法不在语料里，但存在等价写法可命中特化路径"
+                f"（{equivalent['description']}）；需按给出的张量调整同步转换后再算，"
+                "结果与直接写逐元素相同")
+        else:
+            report["reason"] = ("既不在 wick_12cases 语料里，也没有形状特化路径，"
+                                "且不存在可落到已知形式的等价写法，走通用分步路径"
+                                "（无特化内核）")
         return report
 
     report.update({
@@ -158,6 +172,24 @@ def _print_report(report: dict[str, Any]) -> None:
     if not report["matched"]:
         print(f"结果        : MISS")
         print(f"  原因      : {report['reason']}")
+        equivalent = report.get("equivalent")
+        if equivalent:
+            print(f"  等价写法  : {equivalent['equation']}")
+            print(f"  变换类型  : {equivalent['kind']}")
+            print(f"  变换说明  : {equivalent['description']}")
+            perms = equivalent.get("operand_permutations")
+            if perms:
+                shown = ", ".join(
+                    "-" if perm is None else f"transpose{tuple(perm)}"
+                    for perm in perms)
+                print(f"  张量调整  : {shown}")
+            order = equivalent.get("operand_order")
+            if order:
+                print(f"  张量次序  : 按 {order} 重排操作数")
+            print("  提示      : 等价改写只改「方程怎么写」，不改任何执行路径；"
+                  "按上面的张量调整同步转换后，")
+            print("              用等价方程调用 contract() 即可走上特化路径，"
+                  "结果与直接写法逐元素相同。")
         return
 
     print(f"结果        : HIT")
