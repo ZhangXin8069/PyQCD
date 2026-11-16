@@ -145,9 +145,9 @@ class Equivalence:
         张量列表的新次序：``operand_order[i]`` 表示"改写后第 i 个操作数应取
         调用方原始张量的第几个"。``None`` 表示不需要重排。
     ``operand_permutations``
-        每个操作数（**按改写后的次序**）自己的轴置换：``perm[j]`` 表示该操作数
-        新轴 j 取旧轴 perm[j]（numpy ``transpose(perm)`` 语义）。``None`` 表示
-        该操作数不需要转置。
+        每个操作数（**按改写后的次序**）自己的轴置换：``perm[j]`` 表示该操作数新轴 j 取旧轴 perm[j]（numpy ``transpose(perm)`` 语义）。``None`` 表示该操作数不需要转置。
+        **注意 ``transpose`` 返回视图、通常不连续，而原生特化入口要求 C 连续（``_kernel_kupl.try_dedicated`` 第一道门），
+        若目标是那条路径请先 ``np.ascontiguousarray``**，否则会被拒后落到 topology/通用。
     ``output_permutation``
         输出结果的轴置换，**已是逆置换**（``transpose`` 用的就是它）。非 ``None``
         时，调用方拿到改写后的结果需 ``result.transpose(output_permutation)``
