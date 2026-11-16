@@ -143,12 +143,24 @@ from pyqcd.testing._einsum_kernel_force_contract import (
 from pyqcd.testing._einsum_as_equivalence_cache_contract import (
     test_einsum_as_equivalence_cache_contracts,
 )
+# 回落留痕契约：形状特化/原生编译失败的可观测性，以及两个 `_warn_*_once`
+# 从"进程级一次"改成"每类失败一次"（2026-11-16）。
+from pyqcd.testing._einsum_fallback_visibility_contract import (
+    test_native_expression_compile_failure_leaves_a_warning,
+    test_native_fallback_warns_once_per_reason,
+    test_shape_path_failure_is_recorded_and_announced_once,
+    test_specialized_kernel_warns_once_per_distinct_failure,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。
 TESTS = (
     test_einsum_kernel_force_contracts,
     test_einsum_as_equivalence_cache_contracts,
+    test_native_expression_compile_failure_leaves_a_warning,
+    test_native_fallback_warns_once_per_reason,
+    test_shape_path_failure_is_recorded_and_announced_once,
+    test_specialized_kernel_warns_once_per_distinct_failure,
 )
 
 

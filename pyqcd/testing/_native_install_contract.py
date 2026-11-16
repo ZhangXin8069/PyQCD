@@ -39,7 +39,7 @@ _EQUATION = "bij,bjk->bik"
 @contextmanager
 def _fresh_native_state():
     """Reset every process-wide native cache the fallback warning depends on."""
-    with patch.object(_api, "_NATIVE_WARNING_EMITTED", False), \
+    with patch.object(_api, "_NATIVE_WARNED_REASONS", set()), \
             patch.object(_api, "_NATIVE_CONTEXT_UNAVAILABLE", set()), \
             patch.object(_api, "_NATIVE_DISABLED", set()), \
             patch.object(_api, "_NATIVE_CONTEXT_CACHE", OrderedDict()), \

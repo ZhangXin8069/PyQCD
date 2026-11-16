@@ -155,6 +155,12 @@ def entry(subscripts: Any) -> dict[str, Any] | None:
 
 
 try_execute_announced: set[str] = set()
+#: 最近一次形状特化失败的 ``{"name": ..., "reason": ...}``；成功执行不会清除它，
+#: 因为"最后一次失败"本身就是要留给调用方观测的信息。
+LAST_FAILURE: dict[str, str] = {}
+#: 失败提示按 ``(形态名, 异常类型)`` 去重：同一类失败只提示一次，不同类型各提示一次
+#: ——只用一个布尔会把"第二种失败"整个吞掉（见 2026-11-16 的审计）。
+_execute_failed_announced: set[tuple[str, str]] = set()
 
 
 def try_execute(subscripts: Any, operands: Sequence[Any]) -> Any | None:
@@ -164,7 +170,19 @@ def try_execute(subscripts: Any, operands: Sequence[Any]) -> Any | None:
         return None
     try:
         result = found["run"](operands)
-    except Exception:  # noqa: BLE001 - 形状特化失败必须回落，绝不抛给调用方
+    except Exception as exc:  # noqa: BLE001 - 形状特化失败必须回落，绝不抛给调用方
+        # 回落是对的，但**必须留痕**：否则"在表里却走了通用路径"与"根本没注册"
+        # 完全无法区分。这里写 LAST_FAILURE 并在首个同类失败时提示一行。
+        name = found["name"]
+        reason = f"{type(exc).__name__}: {exc}"
+        LAST_FAILURE.clear()
+        LAST_FAILURE.update({"name": name, "reason": reason})
+        if _notice_enabled():
+            key = (name, type(exc).__name__)
+            if key not in _execute_failed_announced:
+                _execute_failed_announced.add(key)
+                print(f"[pyqcd.einsum] 形状特化失败、已回落通用路径：{name}"
+                      f"（{reason}）", flush=True)
         return None
     if result is not None and _notice_enabled():
         name = found["name"]

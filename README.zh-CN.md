@@ -37,6 +37,26 @@ python -m pyqcd --json     # machine-readable
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
 
+## 0.4.5 发布声明 — qcd-einsum：静默回落开始留痕
+
+`0.4.5` 是诊断修复：过去有四处**回落到通用路径却不留任何痕迹**，或只报
+"进程内第一次"故障——长跑作业里第二个**不同原因**的失败会被吞掉，而唯一的提示仍指向
+第一个原因，于是照着它修永远修不好。
+
+* `_shape_paths.try_execute` 现在写 `LAST_FAILURE`（`{"name", "reason"}`），并对
+  已注册形状的首次失败按 `(形态, 异常类型)` 提示一行，不再吞异常。"在表里但回落了"
+  与"根本没注册"从此可区分。
+* `_compile_native_expression` 不再无声返回 `None`：原生表达式编译失败会带上异常
+  类型与消息告警，于是"表达式建好了、但每次调用都慢一个量级"这种情形有了线索。
+* `_warn_native_fallback_once` 与 `_warn_specialized_kernel_once` 改为按**根因**去重，
+  不再用一个进程级布尔：每个不同根因各报一次（`NativeUnavailable: …` 签名 / 异常
+  类型+消息），同一根因重复不报。同因噪声保留（库缺失仍只报一条），而**不同**故障
+  不会再被吞。
+* 新增契约 `_einsum_fallback_visibility_contract`（4 项）钉住以上全部，含"两个不同的
+  原生根因各报一次"与"编译层与执行层的同一根因只报一次"。
+
+不改任何数值行为，不改分派次序。
+
 ## 0.4.4 发布声明 — qcd-einsum：强制内核、自动等价改写、缓存
 
 `0.4.4` 是**下一个关键 qcd-einsum 稳定版本**，`stab31` 声明的冻结由本次发布解除。

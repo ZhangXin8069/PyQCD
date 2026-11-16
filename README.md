@@ -42,6 +42,33 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
 
+## Release 0.4.5 — qcd-einsum: silent fallbacks now leave a trace
+
+`0.4.5` is a diagnostics fix: four places used to fall back to the generic path
+**without leaving any trace**, or reported only the *first* failure of a process —
+so a long-running job could keep failing for a second, different reason while the
+only message pointed at the first one.
+
+* `_shape_paths.try_execute` now records `LAST_FAILURE` (`{"name", "reason"}`) and
+  prints one line per `(shape, exception type)` the first time a registered shape
+  fails, instead of swallowing the exception. "Registered but fell back" is now
+  distinguishable from "not registered at all".
+* `_compile_native_expression` no longer returns `None` in silence: a failed native
+  expression compilation warns with the exception type and message, so the
+  "expression compiled, but every call is an order of magnitude slower" case has a
+  pointer.
+* `_warn_native_fallback_once` and `_warn_specialized_kernel_once` dedupe by
+  **root cause** instead of a single process-wide flag: one warning per distinct
+  cause (`NativeUnavailable: …` signature / exception type+message), no warning
+  for a repeat of the same cause. Same-cause noise is preserved (a missing library
+  still yields exactly one warning), while a *different* failure is no longer
+  swallowed.
+* New contract `_einsum_fallback_visibility_contract` (4 cases) pins all of the
+  above, including "two distinct native reasons each warn once" and "the same
+  cause across the compile and execute layers warns once".
+
+No numerical behaviour changes; no dispatch-order changes.
+
 ## Release 0.4.4 — qcd-einsum: kernel forcing, automatic equivalence, caches
 
 `0.4.4` is the **next key qcd-einsum stable release**, so the freeze declared at

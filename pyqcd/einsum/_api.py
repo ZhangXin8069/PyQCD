@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
+import re
 import threading
 import warnings
 from collections import OrderedDict
@@ -49,7 +50,7 @@ _FUSED_ENV_OWNED = False
 # 撕裂窗口消失。
 _LAST_CONTRACT: tuple[tuple[Any, ...], Any] | None = None
 _NATIVE_DISABLED: set[tuple[Any, ...]] = set()
-_NATIVE_WARNING_EMITTED = False
+_NATIVE_WARNED_REASONS: set[str] = set()
 
 # Compiled native contexts reused by plain ``contract()`` calls. Without this
 # cache every non-expression call rebuilt the backend context from the plan bytes
@@ -596,7 +597,7 @@ def last_kernel() -> dict[str, Any] | None:
     return None if _LAST_KERNEL is None else dict(_LAST_KERNEL)
 
 
-_SPECIALIZED_KERNEL_WARNED = False
+_SPECIALIZED_KERNEL_WARNED: set[tuple[str, str]] = set()
 
 
 def _specialized_kernel_attempts(
@@ -743,11 +744,16 @@ def _warn_kernel_skipped_once(entry: dict[str, Any], reasons: list[str]) -> None
 
 
 def _warn_specialized_kernel_once(exc: BaseException) -> None:
-    global _SPECIALIZED_KERNEL_WARNED
+    """专用内核抛异常时告警，**每个不同的失败各报一次**。
 
-    if _SPECIALIZED_KERNEL_WARNED:
+    与 :func:`_warn_kernel_skipped_once` 同一粒度（那里用 ``(形态, 原因)`` 作键）。
+    先前这里是进程级布尔：先来一个无关异常，后面真正的失败就再也报不出来——用户会
+    照着那条无关的提示去排查。
+    """
+    key = (type(exc).__name__, str(exc)[:120])
+    if key in _SPECIALIZED_KERNEL_WARNED:
         return
-    _SPECIALIZED_KERNEL_WARNED = True
+    _SPECIALIZED_KERNEL_WARNED.add(key)
     warnings.warn(
         "pyqcd.einsum specialized kernel failed; using the generic path: "
         f"{type(exc).__name__}: {exc}",
@@ -1355,13 +1361,39 @@ def _native_plan_key(
     )
 
 
-def _warn_native_fallback_once(message: str) -> None:
-    """Emit the one-time native fallback warning."""
-    global _NATIVE_WARNING_EMITTED
-    if _NATIVE_WARNING_EMITTED:
+def _fallback_signature(message: str, reason: str | None) -> str:
+    """回落告警的去重签名：**同一个根因只报一次**。
+
+    不能直接拿整条文案当键——同一个 ``NativeUnavailable``（例如库缺失）会在"编译"
+    与"执行"两个层各自拼出不同措辞，于是同一根因报两次；反过来也不能只用一个
+    进程级布尔，那样第二个**不同**故障会被吞掉。折中：优先用根因里稳定的那段
+    （``NativeUnavailable: …`` 到分号/换行），没有就退回整条文案。
+    """
+    if reason:
+        return reason
+    # 同一根因在不同层会有不同措辞（"compile failed with status 7" vs
+    # "execution failed with status 7"），所以优先归一到状态码。
+    status = re.search(r"status\s*[= ]\s*(\d+)", message)
+    if status is not None:
+        return f"native-status-{status.group(1)}"
+    match = re.search(r"NativeUnavailable:[^;\n]+", message)
+    if match is not None:
+        return match.group(0).strip()
+    return message
+
+
+def _warn_native_fallback_once(message: str, reason: str | None = None) -> None:
+    """Emit a native fallback warning, **once per distinct root cause**.
+
+    早期实现是一个进程级布尔：第二个**不同原因**的失败会被彻底吞掉，于是长进程里
+    用户只看到第一条原因、照着它去修却永远修不好。现在按 :func:`_fallback_signature`
+    去重——同一根因只报一次，不同根因各报一次。
+    """
+    key = _fallback_signature(message, reason)
+    if key in _NATIVE_WARNED_REASONS:
         return
+    _NATIVE_WARNED_REASONS.add(key)
     warnings.warn(message, RuntimeWarning, stacklevel=4)
-    _NATIVE_WARNING_EMITTED = True
 
 
 # 原生编译失败的一次性诊断：库缺失、库无法 dlopen、库没有可复用编译入口是三种不同的
@@ -1706,7 +1738,13 @@ def _compile_native_expression(
 
         plan = encode_execution_plan(contraction_list, operands)
         return _native_executor().compile(plan, backend=native_backend)
-    except Exception:
+    except Exception as exc:                             # noqa: BLE001
+        # 编译失败是可回落的，但**必须留痕**：否则调用方只会看到"表达式建好了，
+        # 但每次执行都慢一个量级"，而没有任何线索指向这里。
+        _warn_native_fallback_once(
+            "pyqcd.einsum: native expression compilation failed; using the "
+            f"generic path: {type(exc).__name__}: {exc}",
+            reason=f"expression-compile:{type(exc).__name__}:{exc}")
         return None
 
 
