@@ -186,6 +186,9 @@ def _print_report(report: dict[str, Any]) -> None:
             order = equivalent.get("operand_order")
             if order:
                 print(f"  张量次序  : 按 {order} 重排操作数")
+            out_perm = equivalent.get("output_permutation")
+            if out_perm:
+                print(f"  结果调整  : 拿到结果后需 transpose{tuple(out_perm)}")
             print("  提示      : 等价改写只改「方程怎么写」，不改任何执行路径；"
                   "按上面的张量调整同步转换后，")
             print("              用等价方程调用 contract() 即可走上特化路径，"

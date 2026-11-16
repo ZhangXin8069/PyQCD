@@ -87,6 +87,66 @@ def test_operand_order_mapping_is_numerically_equivalent():
     assert float(np.max(np.abs(via - direct))) <= 1e-12 * scale, "映射后数值不一致"
 
 
+def test_output_axis_permutation_mapping_is_numerically_equivalent():
+    """输出段轴序改写：结果需对输出做 transpose。第三族变换，原先漏掉了。
+
+    用户报的第二个场景：`...->GMHew`（MISS）与 `...->MGHew`（HIT）只差输出轴
+    前两位。收缩完全相同，结果互为 transpose。
+
+    断言三件事：①映射出 `output-axes` 且置换正确；②按置换转回后与直接算逐元素
+    相同；③映射后的方程真的能命中语料。
+    """
+    target = ("cwdx,eufv,mknl,oapb,isjt,qgrh,ac,mo,Ggi,Hkq,su,bd,fnp,Mhj,Mlr,tvx"
+              "->GMHew")
+    corpus = target.replace("->GMHew", "->MGHew")
+    assert _specialize.match(target) is None, "该写法本不应命中"
+    assert _specialize.match(corpus) is not None, "语料式应当命中"
+
+    result = _equivalence.normalize_equation(target)
+    assert result is not None, "接口层没找到等价写法"
+    assert result.equation == corpus, result.equation
+    assert result.kind == "output-axes", result.kind
+    assert result.output_permutation == (1, 0, 2, 3, 4), result.output_permutation
+
+    # 数值等价：16 个操作数、每字母长 2 的最小形状
+    letters = {ch for ch in target.split("->")[0] if ch.isalpha()}
+    sizes = {ch: 2 for ch in letters}
+    lhs = target.split("->")[0].split(",")
+    rng = np.random.default_rng(20261116)
+    ops = [rng.standard_normal(tuple(sizes[c] for c in term)) for term in lhs]
+
+    direct = pe.contract(target, *ops, backend="numpy", optimize="greedy")
+    via = pe.contract(result.equation, *ops, backend="numpy", optimize="greedy")
+    restored = np.transpose(via, result.output_permutation)
+    scale = max(float(np.max(np.abs(direct))), 1e-300)
+    assert restored.shape == direct.shape, f"{restored.shape} vs {direct.shape}"
+    assert float(np.max(np.abs(restored - direct))) <= 1e-10 * scale, "转回后不等价"
+
+
+def test_output_axis_family_covers_pairwise_rotation_and_cycle():
+    """输出轴序族必须覆盖三种常见形态，而不只是两两互换。
+
+    用户实测：`->GMHew`（两两）、`->MGHwe`（整体轮转）、`->HMGew`（子段三循环
+    `(2,0,1,3,4)`）、`->wMGHe`（另一种轮转）都要能映射到语料式。
+    第一版只做两两互换 + 秩<=4 全排列，后两种全落空。
+    """
+    base = ("cwdx,eufv,mknl,oapb,isjt,qgrh,ac,mo,Ggi,Hkq,su,bd,fnp,Mhj,Mlr,tvx"
+            "->MGHew")
+    for permuted in ("GMHew", "MGHwe", "HMGew", "wMGHe"):
+        equation = base.replace("->MGHew", "->" + permuted)
+        result = _equivalence.normalize_equation(equation)
+        assert result is not None, f"->{permuted} 找不到等价写法"
+        assert result.equation == base, f"->{permuted} 映射到 {result.equation}"
+        assert _specialize.match(result.equation) is not None
+
+
+def test_identity_output_needs_no_permutation():
+    """输出轴序与原式相同时不该产生 output_permutation。"""
+    result = _equivalence.normalize_equation("cadb,menf,ac,em,bd,fn->")
+    assert result is not None and result.kind == "identity", result
+    assert result.output_permutation is None, result.output_permutation
+
+
 def test_mapping_really_reaches_the_specialized_path():
     """映射的**目的**：等价写法能命中语料，直接写法不能。
 
@@ -164,6 +224,9 @@ def test_verify_specialized_json_carries_the_equivalence():
 TESTS = (
     test_axis_permutation_mapping_is_numerically_equivalent,
     test_operand_order_mapping_is_numerically_equivalent,
+    test_output_axis_permutation_mapping_is_numerically_equivalent,
+    test_output_axis_family_covers_pairwise_rotation_and_cycle,
+    test_identity_output_needs_no_permutation,
     test_mapping_really_reaches_the_specialized_path,
     test_invalid_or_unmappable_inputs_do_not_raise,
     test_already_matching_equation_is_not_rewritten,

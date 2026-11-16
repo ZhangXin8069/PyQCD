@@ -58,6 +58,9 @@ class Equivalence:
         每个操作数（**按改写后的次序**）自己的轴置换：``perm[j]`` 表示该操作数
         新轴 j 取旧轴 perm[j]（numpy ``transpose(perm)`` 语义）。``None`` 表示
         该操作数不需要转置。
+    ``output_permutation``
+        输出结果的轴置换。非 ``None`` 时，调用方拿到改写后的结果，还需
+        ``result.transpose(output_permutation)`` 才是原方程的答案。
     ``description``
         人类可读的说明，用于报告。
     """
@@ -65,6 +68,7 @@ class Equivalence:
     equation: str
     operand_order: tuple[int, ...] | None = None
     operand_permutations: tuple[tuple[int, ...] | None, ...] = ()
+    output_permutation: tuple[int, ...] | None = None
     description: str = ""
     kind: str = ""
 
@@ -76,6 +80,8 @@ class Equivalence:
             "operand_permutations": [
                 None if perm is None else list(perm)
                 for perm in self.operand_permutations] or None,
+            "output_permutation": (None if self.output_permutation is None
+                                   else list(self.output_permutation)),
             "description": self.description,
             "kind": self.kind,
         }
@@ -149,8 +155,11 @@ def _candidate_equations(equation: str) -> list[Equivalence]:
     def add(new_terms: list[str],
             order: tuple[int, ...] | None,
             perms: list[tuple[int, ...] | None],
-            description: str, kind: str) -> None:
-        candidate = ",".join(new_terms) + "->" + out
+            description: str, kind: str,
+            output_permutation: tuple[int, ...] | None = None,
+            new_out: str | None = None) -> None:
+        out_text = out if new_out is None else new_out
+        candidate = ",".join(new_terms) + "->" + out_text
         if candidate == equation or candidate in seen:
             return
         seen.add(candidate)
@@ -158,6 +167,7 @@ def _candidate_equations(equation: str) -> list[Equivalence]:
             equation=candidate,
             operand_order=order,
             operand_permutations=tuple(perms) if any(perms) else (),
+            output_permutation=output_permutation,
             description=description,
             kind=kind,
         ))
@@ -195,6 +205,50 @@ def _candidate_equations(equation: str) -> list[Equivalence]:
                 "operand-axes")
         if len(results) > _MAX_CANDIDATES:
             break
+
+    # ---- ③ 输出段轴序（改写后需对**结果**做 transpose）----
+    #
+    # ``...->MGHew`` 与 ``...->GMHew`` 只差输出轴的前两位，收缩本身完全相同，
+    # 结果互为 transpose（2026-11-16 实测：``ij,jk->ik`` 与 ``ij,jk->ki`` 在相同
+    # 输入上满足 ``r2 == r1.T``）。这一族原先漏掉了，导致 `->GMHew` 这类"只换了
+    # 输出顺序"的写法被判"不存在等价写法"。
+    if len(out) > 1:
+        out_perms: list[tuple[int, ...]] = []
+        indices = list(range(len(out)))
+        # 两两互换（最常见：只调换两个输出轴）
+        for i in range(len(out)):
+            for j in range(i + 1, len(out)):
+                perm = list(indices)
+                perm[i], perm[j] = perm[j], perm[i]
+                out_perms.append(tuple(perm))
+        # 循环移位（整体轮转）
+        for shift in range(1, len(out)):
+            out_perms.append(tuple(indices[shift:] + indices[:shift]))
+            out_perms.append(tuple(indices[-shift:] + indices[:-shift]))
+        # **子段三循环**：任意 [i, j, k] 三个位置的轮转（如 MGHew -> HMGew 是
+        # 前三个字母 `(2,0,1,3,4)`）。整体轮转覆盖不到它，而这是用户实际遇到的形态。
+        # 两个方向都列：(i<-j, j<-k, k<-i) 与 (i<-k, k<-j, j<-i)。
+        for i in range(len(out)):
+            for j in range(i + 1, len(out)):
+                for k in range(j + 1, len(out)):
+                    for a, b, c in (((j, k, i)), ((k, i, j))):
+                        perm = list(indices)
+                        perm[i], perm[j], perm[k] = a, b, c
+                        entry = tuple(perm)
+                        if entry not in out_perms:
+                            out_perms.append(entry)
+        # 短输出段才做全排列（秩 <= 4 时 24 种，秩 5 就 120 种、秩 6 是 720 种）
+        if len(out) <= _MAX_FULL_PERM_RANK:
+            for perm in itertools.permutations(indices):
+                if perm not in out_perms and list(perm) != indices:
+                    out_perms.append(perm)
+        for perm in out_perms[:96]:
+            new_out = "".join(out[i] for i in perm)
+            add(list(terms), None, [None] * len(terms),
+                f"输出轴序改为 {new_out}（结果需 transpose{perm}）",
+                "output-axes", output_permutation=perm, new_out=new_out)
+            if len(results) > _MAX_CANDIDATES:
+                break
     return results
 
 
