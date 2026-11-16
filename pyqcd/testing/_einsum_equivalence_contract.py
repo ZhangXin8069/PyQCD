@@ -2,7 +2,8 @@
 
 本层是**纯接口层**：只把方程改写成等价形式并给出张量调整建议，不改任何执行路径。
 契约因此只断言五件事：
-1. 五族变换（含**复合**）的**数学等价性**（用 numpy 真值对拍，不是断言实现细节）；
+1. 三族改写（操作数位置 / 单操作数轴序 / 输出段轴序，**任意复合**）的**数学等价性**
+   （用 numpy 真值对拍，不是断言实现细节）；
 2. 报告的**保守性**（非法/无解输入不崩、不猜、已命中的不改写、最小改动优先）；
 3. `verify_specialized` 的输出里这些字段真的出现，且复合变换的"次序"与"轴序"
    两行**同时**出现且自洽；
@@ -1209,6 +1210,116 @@ def test_layer_imports_stay_inside_the_declared_set():
     assert not offenders, f"等价映射层 import 了执行层模块：{sorted(set(offenders))}"
 
 
+# ---------------------- 8. 条目选择：零代价（不转置）优先于"字母巧合"
+#
+# 同一结构桶里常有多条**结构同构**的语料写法（语料本身就是同构重排的集合，最大桶
+# 384 条），挑哪条只影响"调用方要动什么"。`_alignment` 的第三分量 `shared` 只数
+# **逐位置的字面字母交集**，会把"被重排位置上的字母巧合"当成"更接近"：于是一个只
+# 换了两个操作数位置的查询可能挑到一条"还得再转置两个操作数"的写法。而
+# `transpose` 返回的是**视图**、通常非 C 连续，`_kernel_kupl.try_dedicated` 的第一
+# 道门就拒非连续操作数——同桶明明有零代价写法，却把查询推出了特化路径。
+#
+# 这一节钉住修复后的口径，两个方向都要：
+#   * 有零代价写法时必须挑它（`operand_permutations` 空 + `output_permutation` 空）；
+#   * 没有零代价写法时必须**一字不改**地退回旧选择，且新扫描的候选上界显式有界
+#     （最大桶 384 条，绝不允许"无界扫完整个桶"）。
+
+#: 主 agent 实测样例：语料 seq=3 把前两个操作数交换。桶内 4 条同构写法中
+#: seq=5 ``aobp,cmdn,…`` 的 align=(7, 7, 20)（字母巧合更高）但要转置第 4/6 个
+#: 操作数，seq=3 ``ambn,codp,…`` 的 align=(7, 7, 16) 且零置换——应选后者。
+ZERO_COST_QUERY = "codp,ambn,egfh,ce,mo,bdf,nph->ag"
+#: 期望选中的语料写法（= seq=3，只换两个操作数位置，不转任何轴）。
+ZERO_COST_EXPECTED = "ambn,codp,egfh,ce,mo,bdf,nph->ag"
+
+
+def _ordered_bucket(equation):
+    """按实现口径取出同桶条目：``_alignment`` 降序（同值按 seq 升序）。
+
+    契约自己复算这个次序，是为了能同时问"新口径挑了哪条"与"旧口径会挑哪条"
+    ——只断言最终结果的话，"偏好被撤掉、恰好又挑中同一条"会静默通过。
+    """
+    terms, out = _parse(equation)
+    query = _equivalence._Shape(terms, out)
+    entries = _equivalence._index().get(query.key, ())
+    if len(entries) > 1:
+        entries = sorted(entries, key=lambda item: (
+            tuple(-value for value in _equivalence._alignment(terms, out, item[1])),
+            item[0]))
+    return terms, out, query, entries
+
+
+def test_zero_cost_mapping_is_preferred_over_the_axis_transposing_neighbour():
+    """**零置换优先**：同桶里不转任何轴的写法必须压过"字母更巧但要转置"的那条。
+
+    样例来自主 agent 的实测：修复前选中 seq=5（``operand_permutations`` 里第 4 个
+    操作数要 ``transpose(1, 0)``、第 6 个要 ``transpose(1, 0, 2)``），修复后必须选
+    seq=3，``operand_permutations`` 为空、``output_permutation`` 为 ``None``，只保留
+    免费的 ``operand_order``（换个实参次序，张量本身不动、仍是 C 连续）。
+
+    断言五件事：①挑中的是哪条；②三个置换字段都零代价；③它真的命中语料；④**旧口径
+    确实要转置**（否则这条用例在偏好被撤掉时会假绿）；⑤数值仍逐元素等价 rel<=1e-12。
+    """
+    terms, out, query, entries = _ordered_bucket(ZERO_COST_QUERY)
+    assert len(entries) > 1, "契约前提：该样例必须落在多条同构写法的桶里"
+    previous = _equivalence._first_mapping(entries, terms, out, query)
+    assert previous is not None, "旧口径应当也能给出映射（否则无从比较偏好）"
+    assert any(perm is not None for perm in previous.operand_permutations), (
+        f"契约前提失效：旧口径挑的 {previous.equation} 本就是零代价的，"
+        "这条用例区分不了偏好")
+
+    result = _equivalence.normalize_equation(ZERO_COST_QUERY)
+    assert result is not None, "接口层没找到等价写法"
+    assert result.equation == ZERO_COST_EXPECTED, result.equation
+    assert not any(perm is not None for perm in result.operand_permutations), \
+        result.operand_permutations
+    assert result.output_permutation is None, result.output_permutation
+    assert tuple(result.operand_order) == (1, 0, 2, 3, 4, 5, 6), result.operand_order
+    assert result.kind == "operand-order", result.kind
+    assert _specialize.match(result.equation) is not None, "等价写法应当命中语料"
+    _assert_structure(ZERO_COST_QUERY, result, "零置换优先")
+
+    # 数值验收：标签长度 2/3/4 交错，轴序用反会改变形状或数值
+    labels = sorted({ch for term in terms for ch in term} | set(out))
+    sizes = {label: 2 + index % 3 for index, label in enumerate(labels)}
+    reference, via = _run_mapping(ZERO_COST_QUERY, result, sizes)
+    _assert_same(reference, via, "零置换优先", tol=1e-12)
+
+
+def test_zero_cost_preference_degrades_to_the_previous_selection():
+    """桶内**没有**零代价映射时，必须一字不改地退回旧选择（不是挑一条更差的）。
+
+    ``THREE_LAYER`` 要求第 4 个操作数换轴序、输出段换轴序，桶里因此不存在零代价
+    候选；此时返回的四个字段必须与"不设偏好"的 :func:`_equivalence._first_mapping`
+    完全相同——退化路径不能引入任何新的取舍。
+    """
+    terms, out, query, entries = _ordered_bucket(THREE_LAYER)
+    previous = _equivalence._first_mapping(entries, terms, out, query)
+    result = _equivalence.normalize_equation(THREE_LAYER)
+    assert previous is not None and result is not None, "两边都应当给出映射"
+    assert (result.equation, result.operand_order, result.operand_permutations,
+            result.output_permutation, result.kind) == (
+        previous.equation, previous.operand_order, previous.operand_permutations,
+        previous.output_permutation, previous.kind), result
+    # 这条退化路径必须**真的**有代价，否则"退化"没有意义
+    assert (any(perm is not None for perm in result.operand_permutations)
+            or result.output_permutation is not None), result
+    _assert_structure(THREE_LAYER, result, "退化路径")
+    reference, via = _run_mapping(THREE_LAYER, result, _user_label_sizes())
+    _assert_same(reference, via, "退化路径", tol=1e-12)
+
+
+def test_zero_cost_scan_is_bounded_below_the_largest_bucket():
+    """新扫描的候选上界必须显式命名且**远小于**最大桶——绝不"无界扫完整个桶"。
+
+    这是唯一能执行的界保障：上界是模块级常量，最大桶 384 条由语料索引现算。
+    """
+    index = _equivalence._index()
+    largest = max(len(bucket) for bucket in index.values())
+    assert largest > 16, f"最大桶只有 {largest} 条，该上界的取值依据需重估"
+    assert 1 < _equivalence._MAX_ZERO_COST_SCAN < largest, (
+        _equivalence._MAX_ZERO_COST_SCAN, largest)
+
+
 TESTS = (
     test_axis_permutation_mapping_is_numerically_equivalent,
     test_operand_order_mapping_is_numerically_equivalent,
@@ -1253,6 +1364,10 @@ TESTS = (
     test_default_path_never_enumerates_candidate_equations,
     test_index_build_and_lookup_stay_inside_their_budgets,
     test_layer_imports_stay_inside_the_declared_set,
+    # 第 8 节：条目选择（零代价优先 / 退化到旧行为 / 上界）
+    test_zero_cost_mapping_is_preferred_over_the_axis_transposing_neighbour,
+    test_zero_cost_preference_degrades_to_the_previous_selection,
+    test_zero_cost_scan_is_bounded_below_the_largest_bucket,
 )
 
 

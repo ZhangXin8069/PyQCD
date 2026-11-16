@@ -39,6 +39,18 @@ O(incidence) 的判定：
 由于第 3 步的回放自检，本层**只会给出可验证的映射**：桶键撞了（两条不同构的方程
 落进同一桶）也只会被拒绝，不会把错映射交出去。
 
+同桶多条同构写法怎么挑
+----------------------
+一个桶里常有多条**结构同构**的语料写法（语料本身就是同构重排的集合，最大桶 384
+条），挑哪条只影响"调用方要动什么"。:func:`_select_mapping` 的口径是**零代价优先**：
+先在前 :data:`_MAX_ZERO_COST_SCAN` 条里找"零操作数轴置换且零输出置换"的映射（只改
+``operand_order`` 不算代价，那只是换个实参次序；每条先用 :attr:`_Shape.axis_key`
+这道必要条件筛过），找不到才在同一排序下取第一条成功者。理由是转置返回视图、通常
+非 C 连续，``_kernel_kupl.try_dedicated`` 的连续性门会直接拒掉它——同桶明明有零代价
+写法，却因为 :func:`_alignment` 把"被重排位置上的字母巧合"当成"更接近"而挑了要转置
+的那条，等于把查询推出特化路径。零代价档内仍按 :func:`_alignment` 排序，保留"改动
+最小 / 最好读"的取向。
+
 返回值口径
 ----------
 ``equivalence.equation`` 用的是**调用方的字母**、语料的**结构写法**：收缩结构与
@@ -68,7 +80,7 @@ O(incidence) 的判定：
 
 设计上的保守点
 --------------
-* 只在**能构造出精确同构**时给映射（轴序 / 位置 / 输出轴序 / 改名），绝不做
+* 只在**能构造出精确同构**时给映射（轴序 / 位置 / 输出轴序），绝不做
   "看起来差不多"的猜测；``ij,jk->i`` 与 ``ij,jk->ik`` 这类真正不同的收缩不会被
   当成等价；
 * 不做代数化简（如把 ``ij,jk->ik`` 合并成矩阵乘），那是改变计划的范畴；
@@ -109,6 +121,15 @@ _MAX_SEARCH_NODES = 4096
 # 单个操作数内"标签配对"的候选上限（秩 k 时有 k! 种）。语料全部操作数秩 ≤ 4
 # （24 种），所以该上限只对语料外的高秩方程生效，且只影响是否继续尝试。
 _MAX_LABEL_OPTIONS = 512
+
+# 默认路径"零代价优先"这一趟最多看多少条同桶条目（见 :func:`_select_mapping`）。
+# 依据：对语料 8638 条各做一次"交换前两个操作数"的 order 变体全量扫描，首个零代价
+# 映射在对齐序里的名次**最大是 1**（6870 条落在第 0 位、1768 条落在第 1 位），
+# 而最大桶有 384 条；取 64 既远大于实测的最坏名次（留出余量给语料将来长胖），又
+# 只占最大桶的 1/6，第一趟不可能扫完整个桶（"未命中就退回旧行为"的代价因此有界）。
+# 触发这个上界只会**降级到旧行为**（同一排序下取第一条成功者），不会误判：本层
+# 每条映射都要过 :func:`_build` 的符号回放自检，"挑哪条"只影响报告的代价。
+_MAX_ZERO_COST_SCAN = 64
 
 # 显式 ``probe`` 兼容路径的枚举上界（默认路径不用）。
 _MAX_PROBE_CANDIDATES = 2048
@@ -270,9 +291,17 @@ class _Shape:
     ``pairs``
         共现计数（同构剪枝要用）。构建时已经算出来，直接留着——只有真正被保留的
         ``_Shape``（查询式 + 桶内比对过的条目）会占这份内存，索引本身只存摘要。
+    ``axis_key``
+        **轴序敏感**的结构指纹 ``(每个操作数按轴序排列的标签签名多重集, 输出段按轴序
+        排列的标签签名)``。与 ``key`` 相反，它对操作数内轴序与输出轴序**敏感**：零代价
+        映射（不转任何轴）要求目标的第 j 个轴对应调用方某操作数的第 j 个轴，而签名与
+        字母名无关，所以两边的指纹必须逐位相等（操作数之间至多差一个位置置换、故比
+        多重集；输出段没有位置可换、故逐位比）。这是**必要条件**，不是判据——真正是否
+        零代价仍由 :func:`_build` 的结果说话；不相等就一定不可能零代价，用它先筛一遍
+        可以免得为注定要转置的候选白跑同构搜索。
     """
 
-    __slots__ = ("terms", "out", "sig", "classes", "key", "pairs")
+    __slots__ = ("terms", "out", "sig", "classes", "key", "pairs", "axis_key")
 
     def __init__(self, terms: Sequence[Sequence[str]], out: Sequence[str]) -> None:
         self.terms = tuple(tuple(term) for term in terms)
@@ -299,6 +328,10 @@ class _Shape:
             for term in self.terms)
         self.key = hash((tuple(sorted(self.classes)),
                          tuple(sorted(self.sig[label] for label in self.out))))
+        self.axis_key = (
+            tuple(sorted(tuple(self.sig[label] for label in term)
+                         for term in self.terms)),
+            tuple(self.sig[label] for label in self.out))
 
 
 def _search_order(query: _Shape, sizes: dict[Any, int]) -> list[int]:
@@ -748,6 +781,73 @@ def _describe_rewrite(order: tuple[int, ...] | None, rewritten: Sequence[str],
     return " 且 ".join(parts) or "无需改写：本身已命中"
 
 
+def _is_zero_cost(result: Equivalence) -> bool:
+    """映射是否"零代价"：既不动任何操作数的内部轴序，也不动输出轴序。
+
+    **只改 ``operand_order``（位置）不算代价**：调用方只是换个实参次序，张量本身
+    不动、仍然 C 连续。而轴序 / 输出轴序要 ``transpose``，那返回的是**视图**、通常
+    非 C 连续，``_kernel_kupl.try_dedicated`` 的第一道门就会把它拒掉——本来能走
+    特化的查询反而被打回通用路径。
+    """
+    return (result.output_permutation is None
+            and not any(perm is not None for perm in result.operand_permutations))
+
+
+def _mapping_of(target: _Shape, query: _Shape, query_terms: Sequence[Sequence[str]],
+                query_out: str) -> Equivalence | None:
+    """一条桶内条目 → 一条通过自检的映射；不可映射返回 ``None``。
+
+    与改造前 ``_normalize`` 的循环体逐句相同（``_match`` 失败或 ``_build`` 自检不过
+    就跳过该条目），只是抽成函数给两趟扫描共用。
+    """
+    found = _match(target, query)
+    if found is None:
+        return None
+    return _build(query_terms, query_out, target, *found)
+
+
+def _first_mapping(entries: Sequence[tuple[int, str]],
+                   query_terms: Sequence[Sequence[str]], query_out: str,
+                   query: _Shape) -> Equivalence | None:
+    """**旧行为**：按给定次序取第一条通过自检的映射（改造前的循环逐句保留）。"""
+    for seq, text in entries:
+        result = _mapping_of(_shape_of(seq, text), query, query_terms, query_out)
+        if result is not None:
+            return result
+    return None
+
+
+def _select_mapping(entries: Sequence[tuple[int, str]],
+                    query_terms: Sequence[Sequence[str]], query_out: str,
+                    query: _Shape) -> Equivalence | None:
+    """在同桶条目里挑一条映射：**零代价优先**，给不出来就原样走旧行为。
+
+    为什么需要偏好：同一桶里常有多条结构同构的语料写法（语料本身就是同构重排的
+    集合，最大桶 384 条），而 :func:`_alignment` 的第三分量 ``shared`` 只数"逐位置
+    的字面字母交集"，把**被重排位置上的字母巧合**也算成"更接近"。于是一个只换了
+    两个操作数位置的查询可能挑到一条"还得再转置两个操作数"的写法（实例：
+    ``codp,ambn,…`` 命中 seq=5 的 ``aobp,cmdn,…``，而同桶 seq=3 的
+    ``ambn,codp,…`` 零置换）——转置是非连续视图，恰好被原生特化入口的连续性门
+    挡住。:func:`_alignment` 因此只在**同一档内**起作用。
+
+    这趟扫描是**纯附加**的：命中就多给一条零代价映射，没命中就一字不改地退回
+    :func:`_first_mapping`，所以"找不到零代价"时结果与改动前逐字段相同。
+    代价两层上界：候选条数封顶 :data:`_MAX_ZERO_COST_SCAN` 条，且每条先用
+    :attr:`_Shape.axis_key` 这个**廉价必要条件**筛（不满足就绝不可能零代价），
+    只有筛过的才跑 ``_match`` + ``_build``——绝不对整个桶做无界的同构搜索。
+    """
+    wanted = query.axis_key
+    for index in range(min(len(entries), _MAX_ZERO_COST_SCAN)):
+        seq, text = entries[index]
+        target = _shape_of(seq, text)
+        if target.axis_key != wanted:
+            continue                     # 保守筛选：只会漏掉"更好的那条"，不会错选
+        result = _mapping_of(target, query, query_terms, query_out)
+        if result is not None and _is_zero_cost(result):
+            return result
+    return _first_mapping(entries, query_terms, query_out, query)
+
+
 def _normalize(equation: str, probe: Any) -> Equivalence | None:
     """查表本体（**不含开关判定**）：语料索引 + 构造式同构，或显式 probe 的改写枚举。
 
@@ -773,15 +873,7 @@ def _normalize(equation: str, probe: Any) -> Equivalence | None:
                 tuple(-value for value in _alignment(query_terms, query_out,
                                                      item[1])),
                 item[0]))
-        for seq, text in entries:
-            target = _shape_of(seq, text)
-            found = _match(target, query)
-            if found is None:
-                continue
-            result = _build(query_terms, query_out, target, *found)
-            if result is not None:
-                return result
-        return None
+        return _select_mapping(entries, query_terms, query_out, query)
 
     try:
         if probe(equation):
@@ -883,8 +975,8 @@ def explain(equation: str, probe: Any = None) -> dict[str, Any]:
         report["disabled"] = True
         report["disabled_reason"] = DISABLED_REASON
     if normalized is None:
-        report["reason"] = ("没有任何等价写法能落到已知形式上（本层只做轴序 / "
-                            "操作数位置 / 字母重命名的等价改写）")
+        report["reason"] = ("没有任何等价写法能落到已知形式上（本层只做单操作数轴序 / "
+                            "操作数位置 / 输出段轴序的等价改写）")
         return report
     report.update(normalized.as_dict())
     if normalized.kind == "identity":

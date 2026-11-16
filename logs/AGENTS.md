@@ -636,6 +636,14 @@
 - 关键内容: T1 蒸馏实例：KUPL 四项 PASS；CUDA E4/E5 PASS，E1/E2 未达 3x；CUDA MPI 降轴路径测试失败待修
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## resume-20261105T211848 - general - 2026-11-07 10:48:06 +0800
+- 主任务: pyqcd-einsum 跨平台续跑引导（source run 20261105T211848.lHpHeY）
+- 日志文件: logs/resume_20261105T211848.lHpHeY.txt
+- 文件大小: 19458 bytes
+- 触发原因: 一般记录
+- 关键内容: resume bootstrap：run/agent/model 元数据 + 已证实事实与推断分类，供任意 agent 无历史接手；源会话状态 running（无 turn-end/session-end）
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
 ## pyqcd/einsum - stage - 2026-11-08 05:24:29 +0800
 - 主任务: pyqcd-einsum: CUDA/KUPL 原生收缩引擎构建、正确性验证与 3x 性能基线
 - 日志文件: logs/v202611080524.txt
@@ -660,6 +668,14 @@
 - 关键内容: 最小复现 abcde,cedb->ac；根因 axes.empty() 提前返回；修复后 E2 三 planner 全对
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## resume-20261108T053500 - general - 2026-11-08 07:21:22 +0800
+- 主任务: pyqcd-einsum CUDA + KUPL 高性能化续跑包（generated_at 2026-11-08T05:35:00）
+- 日志文件: logs/resume_20261108T053500_pyqcd-einsum.txt
+- 文件大小: 19588 bytes
+- 触发原因: 一般记录
+- 关键内容: 用户指令全集与已实测结果/经验合并归档；head=eff826b、worktree clean、未验证项标【推断】
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
 ## pyqcd/einsum - general - 2026-11-08 07:33:54 +0800
 - 主任务: CUDA 后端缺陷排查与专用路径开关缓存键修复
 - 日志文件: logs/v20261108073355.txt
@@ -668,6 +684,30 @@
 - 关键内容: 400+ 随机差分全通过；修复 specialize 开关缓存键（CUDA/KUPL 双向生效）
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
+## pypi-hardening-dev34 - final - 2026-11-09 09:42:38 +0800
+- 主任务: PyQCD PyPI / Read the Docs 发布硬化（cron 自动循环 22 轮 R0-R21）
+- 日志文件: logs/pypi-hardening-20261108.txt
+- 文件大小: 16934 bytes
+- 触发原因: 任务完成
+- 关键内容: 0.1.3→0.1.11 版本轨迹（11:46-17:47，约 6 h），每轮含发现与处置；结项 tag dev34（cae654c0→42cda20）
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## einsum-benchmark-024 - stage - 2026-11-11 09:46:51 +0800
+- 主任务: qcd-einsum 0.2.4 基准原始记录（CPU + RTX 4060 Laptop）
+- 日志文件: logs/einsum-benchmark-20261109.txt
+- 文件大小: 8566 bytes
+- 触发原因: 阶段成果
+- 关键内容: 逐 case 7 轮交替顺序，pyqcd 0.2.4 vs opt_einsum 3.4.0 的 pyqcd_s/opt_s/ratio/rmin/rmax/inner/rel_err；JSON 由 bench_public_ab 重新生成
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+## einsum-four-engine - stage - 2026-11-11 09:46:51 +0800
+- 主任务: 四引擎 15-case 基准（2026-11-10 修正版）
+- 日志文件: logs/einsum-four-engine-20261110.txt
+- 文件大小: 6859 bytes
+- 触发原因: 阶段成果
+- 关键内容: qcd/opt/einsums 三引擎 CPU+GPU 逐 case ms（rounds=3、交替顺序、inner 0.3 s、CPU 8 线程固定）+ Einsums 引擎与分配耗时拆分
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
 ## pyqcd-einsum/direct-mode-rollback - final - 2026-11-11 10:12:40 +0800
 - 主任务: 承接 resume 20261108T044254.N2qMUN：核实 direct 模式回滚与 0.2.7/dev41 状态，把失败经验写入 skills 并修正记录失真
 - 日志文件: logs/v2026111110.txt
@@ -1059,6 +1099,24 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## einsum-retest-dev60 - stage - 2026-11-16 00:52:23 +0800
+- 主任务: dev60（HEAD aa048e8a）只读独立复测归档（复测作业日 2026-11-15）
+- 日志文件: logs/einsum-retest-20261115.txt
+- 文件大小: 108093 bytes
+- 触发原因: 阶段成果
+- 关键内容: A `_label_sizes`/batch 口径、B topology 路线与真 v3 性能、C CUDA（V100+NVRTC 12.4 预载）、D pack-bound 逐侧记账；隔离重建 2582 表 KUPL 库，附 6 项修复结论速览
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## einsum-equivalence-gain - stage - 2026-11-16 10:47:03 +0800
+- 主任务: 等价映射层（`pyqcd/einsum/_equivalence.py`）实际性能收益量化（只读测量，重写前实现）
+- 日志文件: logs/einsum-equivalence-gain-20261116.txt
+- 文件大小: 40598 bytes
+- 触发原因: 阶段成果
+- 关键内容: 609 行；理论上界中位 1.86×/1.92×，视图口径映射仅 1.83×/1.70× 且 18/59、15/53 格变慢；`normalize_equation` 中位 39.4 ms（97% 在候选枚举），盈亏平衡 CPU 139 次 / GPU 32 次
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
 ## einsum-guide-resume - final - 2026-11-16 12:46:09 +0800
 - 主任务: 恢复 run 20261115T103110.iHuxVq：einsum 用户手册同步到 aeea4faf 并修正查询开销数字
 - 日志文件: logs/v2026111612.txt
@@ -1068,6 +1126,15 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
 
+## einsum-equivalence-gain-errata - stage - 2026-11-16 15:18:05 +0800
+- 主任务: 旧性能测量报告勘误（勘误基准 commit 02fdd54b，tag dev61）
+- 日志文件: logs/einsum-equivalence-gain-20261116-errata.txt
+- 文件大小: 25282 bytes
+- 触发原因: 阶段成果
+- 关键内容: A/B/C 三类：已作废 9 / 仍成立 6 / 需重测 8；旧报告测的是 aeea4faf 重写前的实现，GPU 全标 unverified（本机 cupy/nvrtc `--gpu-architecture` 报错）
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
 ## einsum-guide-resume - stage - 2026-11-16 15:18:38 +0800
 - 主任务: 并行子代理推进：旧报告勘误 + 手册补 §3.7 + GPU 栈诊断
 - 日志文件: logs/v202611161518.txt
@@ -1075,5 +1142,14 @@
 - 触发原因: 阶段成果
 - 关键内容: 3 路并行（勘误 A9/B6/C8、手册+176行、GPU 诊断定位到 nvrtc 13.2 错位）；产物均经本机复跑复核
 - 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+
+## einsum-equivalence-gain-v2 - stage - 2026-11-16 17:41:00 +0800
+- 主任务: 等价映射重写后的收益全量重测（CPU 独占、重写后实现；对照 logs/einsum-equivalence-gain-20261116.txt）
+- 日志文件: logs/einsum-equivalence-gain-v2-20261116.txt
+- 文件大小: 38023 bytes（原始 35248 + 同日追加的「十、勘误」）
+- 触发原因: 阶段成果
+- 关键内容: gainV 中位 1.73 / gainC 1.62 / bound 1.69（16 格仅 seq 3 <1，且是本机"特化比通用慢"而非视图问题）；映射开销中位 0.50 ms vs 旧 39.4 ms（≈79×），盈亏平衡 139 次→4 次；冷启动 805 ms 未解决；§4.2 发现 `_alignment` 用"共有字母数"压过了零置换写法
+- 验证: path, size, required sections, conflict markers；勘误见文末「十」（2589/256 是 seq 1..2589 前缀口径，全语料为 772/8638=8.9%）
 - 批次状态: in-progress
 

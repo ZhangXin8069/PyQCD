@@ -248,9 +248,13 @@ MISS 原因逐字回到引入前的原文。`--json` 的 `equivalence` 字段开
 ### 9.1 等价映射 `_equivalence.py` 的开关 `PYQCD_EINSUM_EQUIVALENCE`（2026-11-16）
 
 `pyqcd/einsum/_equivalence.py` 把"同一个收缩换了个写法"映射回语料规范形式，覆盖
-五族变换：**单操作数轴序 / 操作数位置 / 输出段轴序 / 字母重命名（由
-`canonical_signature` 负责）/ 复合变换**（位置次序与轴序同时变，如
-`cadb,menf,db,em,ac,fn->` ↔ `cadb,menf,ac,em,bd,fn->`）。
+三族改写：**操作数位置 / 单操作数轴序 / 输出段轴序**；三族**可任意复合**（如
+`cadb,menf,db,em,ac,fn->` ↔ `cadb,menf,ac,em,bd,fn->`），`kind` 用 `+` 连接
+（`operand-order+axes` / `operand-order+axes+output-axes` 等，见 `_kind`）。
+`_kind` 的完整取值共 8 个：`identity` / `operand-order` / `operand-axes` /
+`output-axes`，加三族的两两复合与三层复合共四种；`find_equivalents()` 另有
+`normal-form`，不由 `_kind` 产生。
+字母重命名不归本层，由 `canonical_signature` 负责。
 
 | 项 | 值 |
 |---|---|
@@ -269,15 +273,38 @@ MISS 原因逐字回到引入前的原文。`--json` 的 `equivalence` 字段开
 `test_disabled_verify_specialized_output_matches_the_pre_change_original` 用
 `fd26357e` 实跑抓取的原文逐字符比对钉住这一点。
 
-复合枚举**有界**（16 操作数 = 120 个两两互换；全排列 × 全轴排列是天文数字）：
-位置次序取两两互换（秩 ≤ 4 才补全排列，`_MAX_POSITION_ORDERS=128`），同时改轴序的
-位置个数只取 1 或 2（`_MAX_COMPOSITE_POSITIONS=2`），预算按
-(档位, 位置次序) **均分**（`_MAX_COMPOSITE_CANDIDATES=6000`）而不是先到先得，
-总量再受 `_MAX_CANDIDATES=20000` 约束。实测 16 操作数秩 4 方程 12174 候选 / 95 ms。
-**不是全覆盖**：3 个及以上位置同时改轴序不枚举；秩 > 4 的操作数只试整段逆序 /
-首尾互换 / 循环移位。契约：
-`pyqcd/testing/_einsum_equivalence_contract.py`（21 项，含真实生产形状对拍与
-7 项变异验证）。
+**默认路径零枚举**（2026-11-16 重写）：结构不变量分桶（`_Shape`）+ 桶内构造式同构
+（`_match`），复杂度 O(incidence + Σ Σ|term|²)，产出三个纯置换字段。位置次序取两两
+互换、同时改轴序的位置只取 1 或 2 这类**叠加限制在默认路径上已不存在**——三族任意
+复合都走同一条同构搜索（`probe=` 兼容路径仍保留 `changed∈{0,1,2}` 这类有界枚举）。
+`_MAX_SEARCH_NODES=4096` / `_MAX_LABEL_OPTIONS=512` 是**同构搜索**上限（不是覆盖面
+上限），触发只会漏判、不会误判；`512` 同时用于 `probe=` 路径的排列截断。
+旧实现的 `_candidate_equations` /
+`_MAX_CANDIDATES` / `orders[:96]` 已全部删除；只有调用方显式传 `probe=` 时才退回
+有界改写枚举（`_MAX_PROBE_CANDIDATES=2048`、`_PROBE_FULL_PERM_LIMIT=6`），两个 CLI
+都不传。契约：
+`pyqcd/testing/_einsum_equivalence_contract.py`（**44 项**，含按
+`_label_sizes`+`dims("distill")` 取的 seq=1 形状数值对拍、4 个置换方向判别用例，以及
+"零代价优先 / 退化到旧选择 / 上界小于最大桶"三条选择策略用例）。
+
+> 形状口径提醒：`_label_sizes` 反推的形状**不是**蒸馏生产形状（见根 `AGENTS.md`
+> 硬性禁止 #3；真实形状只认 `_bench_scene.distill_tensor_shapes()`），这里只当
+> "一组真实量级的形状"用。
+
+**同桶多条同构写法怎么挑**（2026-11-16）：桶里常有多条结构同构的语料条目。先按
+`_alignment`（逐位置同集合 / 逐位置同文本 / 共有字母数）排序，再在前
+`_MAX_ZERO_COST_SCAN=64` 条里用轴序敏感指纹 `_Shape.axis_key` 预筛，取**第一条零操作数
+轴置换且零输出置换**的映射；找不到才退回"按对齐序取第一条成功者"。`operand_order`
+不计代价——它只是换实参次序，张量仍 C 连续。修前 8638 条 order 变体里 772 条带轴置换
+且桶内均有零代价替代，修后为 0。
+
+映射给出 `operand_permutations` 时注意它是 `transpose(perm)` 语义、返回**视图**而
+通常非 C 连续，而 `_kernel_kupl.try_dedicated` 的连续门（`_kernel_kupl.py:1452`，
+位于 enabled/类型/dtype/optimize/shapes 五项轻量检查**之后**）会拒非连续操作数：
+目标是原生特化路径就先落一份 `np.ascontiguousarray`（代价：一份额外内存 + 一次拷贝）。
+不做副本时的落点按 dtype 二选一：**复数**档被拒后落 `kupl_topology`（该层没有操作数
+连续性门，在原生边界静默复制一次并记 `LAST_INFO["copied"]`）；**实数**档（float64 /
+float32）直接落通用分步路径（`_TOPOLOGY_DECLINED_DTYPES`）。
 
 ### 9.0 单方程测试的唯一接口：`python -m pyqcd.einsum.test`（强制）
 

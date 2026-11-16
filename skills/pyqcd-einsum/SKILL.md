@@ -137,9 +137,9 @@ MISS 原因回到旧版措辞。`--json` 的 `equivalence` 字段开启时总是
 ### 等价映射开关：`PYQCD_EINSUM_EQUIVALENCE`（2026-11-16）
 
 MISS 时本入口会查"换个写法能不能命中特化路径"（`pyqcd/einsum/_equivalence.py`），
-覆盖五族变换：单操作数轴序 / 操作数位置 / 输出段轴序 / 字母重命名 /
-**复合变换**（位置次序与轴序同时变，如 `cadb,menf,db,em,ac,fn->` ↔
-`cadb,menf,ac,em,bd,fn->`）。
+覆盖**三族改写**：操作数位置 / 单操作数轴序 / 输出段轴序；三族可任意复合（如
+`cadb,menf,db,em,ac,fn->` ↔ `cadb,menf,ac,em,bd,fn->`），`kind` 用 `+` 连接。
+字母重命名不归本层，由 `canonical_signature` 负责。
 
 | 环境变量 | 缺省 | 关闭取值 | 说明 |
 |---|---|---|---|
@@ -149,12 +149,25 @@ MISS 时本入口会查"换个写法能不能命中特化路径"（`pyqcd/einsum
 - 关闭后 `normalize_equation()` → `None`（零枚举）、`find_equivalents()` → `[]`、
   MISS 报告回到**没有本功能时**的原措辞且不含 `equivalence` 字段
   （契约逐字符比对 `fd26357e` 的实跑原文）。
-- 枚举**有界**：位置次序只取两两互换（秩 ≤ 4 才补全排列）、同时改轴序的位置个数
-  只取 1 或 2、预算按 (档位, 位置次序) 均分（6000）再受总量 20000 约束。实测
-  16 操作数秩 4 方程 12174 候选 / 95 ms。**不是全覆盖**：3 个及以上位置同时改
-  轴序不枚举；秩 > 4 的操作数只试整段逆序 / 首尾互换 / 循环移位。
-- 契约：`python -B -m pyqcd.testing._einsum_equivalence_contract`（21 项，含真实
-  生产形状对拍与 7 项变异验证）。
+- **默认路径零枚举**（2026-11-16 重写）：结构不变量分桶 + 桶内构造式同构，复杂度
+  O(incidence + Σ Σ|term|²)；位置/轴序的「只取两两互换、位置个数只取 1 或 2」这类
+  叠加限制**在默认路径上**已不存在，三族任意复合走同一条搜索（`probe=` 兼容路径仍
+  保留 `changed∈{0,1,2}`）。`_MAX_SEARCH_NODES=4096` / `_MAX_LABEL_OPTIONS=512` 是
+  **同构搜索**上限，触发只会漏判、不会误判；旧实现的 `_candidate_equations` /
+  `_MAX_CANDIDATES` / `orders[:96]` 已删除，只有显式传 `probe=` 才退回有界改写枚举
+  （`_MAX_PROBE_CANDIDATES=2048`），两个 CLI 都不传。
+- **同桶多条同构写法怎么挑**：先按 `_alignment` 排序，再在前
+  `_MAX_ZERO_COST_SCAN=64` 条里用轴序敏感指纹 `_Shape.axis_key` 预筛，取**第一条零
+  操作数轴置换且零输出置换**的映射；找不到才退回"按对齐序取第一条成功者"。
+  `operand_order` 不计代价（只换实参次序，张量仍 C 连续）。
+- 映射给出 `operand_permutations` 时，它是 `transpose(perm)` 语义、返回**视图**而
+  通常非 C 连续；若目标是原生特化路径，先落一份 `np.ascontiguousarray`（代价：一份
+  额外内存 + 一次拷贝）。不做副本时落点按 dtype 二选一：**复数**落 `kupl_topology`
+  （该层无操作数连续性门，在原生边界静默复制一次）；**实数**（float64/float32）
+  直接落通用分步路径。
+- 契约：`python -B -m pyqcd.testing._einsum_equivalence_contract`（**44 项**，含按
+  `_label_sizes`+`dims("distill")` 取的形状对拍、4 个置换方向判别用例；该形状**不是**
+  蒸馏生产形状，见根 `AGENTS.md` 硬性禁止 #3）。
 
 **`kernels` 字段是声明不是事实**：它来自 `_specialize._topology_entry` 的
 `kernels=("kupl_topology","cuda_topology")`，而实际下发常是 `kupl_dedicated`
