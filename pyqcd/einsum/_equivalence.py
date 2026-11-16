@@ -59,8 +59,17 @@ class Equivalence:
         新轴 j 取旧轴 perm[j]（numpy ``transpose(perm)`` 语义）。``None`` 表示
         该操作数不需要转置。
     ``output_permutation``
-        输出结果的轴置换。非 ``None`` 时，调用方拿到改写后的结果，还需
-        ``result.transpose(output_permutation)`` 才是原方程的答案。
+        输出结果的轴置换，**已是逆置换**（``transpose`` 用的就是它）。非 ``None``
+        时，调用方拿到改写后的结果需 ``result.transpose(output_permutation)``
+        才是原方程的答案。
+
+        为什么存逆置换：设原输出段 ``out``、改写后 ``new_out[j] == out[perm[j]]``。
+        ``result_new`` 的轴 j 对应标签 ``new_out[j]``，要还原成 ``result_old``
+        需要 ``new_out[axes[k]] == out[k]``，即 ``perm[axes[k]] == k``，故
+        ``axes = perm⁻¹``。**对两两互换 perm 自逆、两者相同，所以测不出方向错误**
+        ——必须用三循环这类置换验证（2026-11-16 实测：``MGHew -> HMGew`` 的
+        perm 是 ``(2,0,1,3,4)``、逆是 ``(1,2,0,3,4)``，用错方向形状会从
+        ``(2,3,4,5,6)`` 变成 ``(3,4,2,5,6)``）。
     ``description``
         人类可读的说明，用于报告。
     """
@@ -85,6 +94,14 @@ class Equivalence:
             "description": self.description,
             "kind": self.kind,
         }
+
+
+def _perm_inverse(perm: Sequence[int]) -> tuple[int, ...]:
+    """逆置换：``perm[j]`` 是"新轴 j 取旧轴 perm[j]"，逆置换满足 ``inv[perm[j]] = j``。"""
+    inverse = [0] * len(perm)
+    for j, source in enumerate(perm):
+        inverse[source] = j
+    return tuple(inverse)
 
 
 def _split(equation: str) -> tuple[list[str], str] | None:
@@ -244,9 +261,11 @@ def _candidate_equations(equation: str) -> list[Equivalence]:
                     out_perms.append(perm)
         for perm in out_perms[:96]:
             new_out = "".join(out[i] for i in perm)
+            # 存**逆置换**：``transpose`` 要的就是它。见字段 docstring 的推导。
+            inverse = _perm_inverse(perm)
             add(list(terms), None, [None] * len(terms),
-                f"输出轴序改为 {new_out}（结果需 transpose{perm}）",
-                "output-axes", output_permutation=perm, new_out=new_out)
+                f"输出轴序改为 {new_out}（结果需 transpose{inverse}）",
+                "output-axes", output_permutation=inverse, new_out=new_out)
             if len(results) > _MAX_CANDIDATES:
                 break
     return results
