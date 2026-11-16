@@ -18,6 +18,12 @@ include install.sh
 # under cpp/ hold compiled artefacts and are pruned below.
 recursive-include cpp *.h *.cpp *.cu *.sh *.md
 include cpp/kupl/einsum/include/family_apply.h
+# v3 拓扑步表（**必须随 sdist 发布**）：`make.sh` 在裸检出时从这份 .gz 解压出
+# `topology_kernels.inc` 再编译。上面的 `recursive-include cpp` 只收
+# `*.h *.cpp *.cu *.sh *.md`，`.inc.gz` 不在其中——第一版 0.4.3 sdist 因此漏掉了它
+# （2026-11-15 发布前的 sdist 内容校验发现：194 个文件里只有 tests/ 的 .cpp，
+# 没有 src/ 的 .gz）。用精确路径收，避免把将来可能出现的其它 .inc 也带进包。
+include cpp/kupl/einsum/src/topology_kernels.inc.gz
 prune cpp/kupl/einsum/build
 prune cpp/cuda/einsum/build
 
