@@ -1667,7 +1667,13 @@ def contract(
                 # 语料里），所以这个标签不可重放；但必须如实标注，别沿用初始值
                 # ``generic``——那会把"改写+topology"谎报成"通用路径"（实跑复现过）。
                 if info is not None:
-                    info["kernel"] = _EQUIVALENCE_LABEL
+                    # 记录**可重放的那个选择**：调用方显式强制了内核时，强制值本身
+                    # 就是合法且可复现的建议（`generic` 实测比 topology 快 7 倍，丢掉
+                    # 它等于让缓存永远学不到这条）。只有"没强制、纯靠改写跑成"才记
+                    # `equivalence`——它在原方程上强制内核必然"未尝试"，不可重放。
+                    _text = "" if kernel_force is None else str(kernel_force).strip().lower()
+                    info["kernel"] = (_text if _text and _text != _kernel_force.AUTO_LABEL
+                                      else _EQUIVALENCE_LABEL)
                 return _profile_end(info, equivalence_result, started)
 
     global _LAST_CONTRACT
