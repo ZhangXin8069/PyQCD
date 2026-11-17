@@ -8,11 +8,17 @@
 （``_api`` / ``_kernel_*`` / ``_shape_paths``）、不解析方程、不碰张量，也**不做计时**
 ——``init_ms`` / ``compute_ms`` 全部由调用方测好给进来。
 
-两份表，读写口径不同
+三份表，读写口径不同
 --------------------
 * :data:`PROFILE_NAME`（``profile.csv``）——**读 + 写**。进程内由 :func:`load` 一次
   读进内存索引，:func:`best` 是纯字典查找；:func:`record` 默认只更新内存，把"值得
   落盘"的行攒进队列，由 :func:`flush`（或进程退出 ``atexit``）一次追加写。
+* :data:`EQUIVALENCE_NAME`（``profile_equivalence.csv``）——**读 + 写**，但比主表
+  更稀：键仍是 :data:`KEY_FIELDS`，一个 (键, ``state``) 只留一行
+  （:func:`record_equivalence` / :func:`equivalence_marker`）。``state`` 取
+  ``"ok"``（该键**可以**改写过去）或 ``"none"``（找不到可用改写）；同键两种 state
+  允许并存，:func:`equivalence_marker` **``ok`` 优先**——能改写的正向证据比"没有"
+  更有信息量，也更值得被上层拿去改道。
 * :data:`COMPARE_NAME`（``profile_compare.csv``）——**只写不读**。它是"下次同类方程
   可以直接套用等价改写、省掉匹配时间"的旁证，写出去就有人看，因此**不为它建索引、
   不为它做加载**，一次都不读。
@@ -90,6 +96,8 @@ __all__ = [
     "COMPARE_NAME",
     "DEFAULT_DIR",
     "DIR_ENV",
+    "EQUIVALENCE_COLUMNS",
+    "EQUIVALENCE_NAME",
     "KEY_FIELDS",
     "PROFILE_COLUMNS",
     "PROFILE_ENV",
@@ -98,12 +106,14 @@ __all__ = [
     "configure",
     "enabled",
     "ensure_configured",
+    "equivalence_marker",
     "flush",
     "format_shape",
     "load",
     "notice",
     "record",
     "record_compare",
+    "record_equivalence",
     "summary",
 ]
 
@@ -121,6 +131,9 @@ PROFILE_NAME = "profile.csv"
 
 #: 旁证表（只写不读）：等价改写/参照耗时。
 COMPARE_NAME = "profile_compare.csv"
+
+#: 等价改写标记表（读 + 写）：一个 (键, ``state``) 一行。
+EQUIVALENCE_NAME = "profile_equivalence.csv"
 
 #: 主表键字段（顺序即键序）；``shape`` 必须先过 :func:`format_shape` 归一化。
 KEY_FIELDS = (
@@ -179,12 +192,31 @@ COMPARE_COLUMNS = (
     "pyqcd_version",
 )
 
+#: 标记表表头：键字段（同一套 :data:`KEY_FIELDS`）+ 标记本身。
+EQUIVALENCE_COLUMNS = (
+    "host",
+    "user_device",
+    "backend",
+    "dtype",
+    "equation",
+    "shape",
+    "device",
+    "state",
+    "kind",
+    "updated_at",
+    "pyqcd_version",
+)
+
 # 新观测必须快过该键当前最优的这个比例才值得落盘（严格小于才写）。
 _IMPROVE_RATIO = 0.95
 #: **不可重放**的 kernel 取值：``equivalence`` 只说明"这次是改写跑成的"，在原方程上
 #: 强制具体内核必然"未尝试"，不能当建议。``generic``/``backend`` 都**可**重放，
 #: 必须参与选优（实测某 10 操作数方程 generic 385 ms vs topology 2735 ms）。
 _NON_REPLAYABLE = frozenset({"", "equivalence"})
+
+#: 标记状态的可信度排序（**查表优先级**，不是权重）：``ok`` 说"这条路走得通"，
+#: ``none`` 只说"这次没找到"。能改写的正向证据更有价值，同键并存时 ``ok`` 先返回。
+_STATE_RANK = {"ok": 0, "none": 1}
 
 # 待写队列攒到这个长度就顺手冲一次，避免长跑进程里无限涨。
 _FLUSH_THRESHOLD = 512
@@ -228,6 +260,13 @@ _pending: list[dict[str, str]] = []
 
 #: compare 的 60 s 去重表：键 → 上次写盘时刻（``time.monotonic``）。
 _compare_recent: dict[tuple[str, ...], float] = {}
+
+#: 键 → {``state``: 该状态的标记行}；同键 ``none`` / ``ok`` 允许并存。
+_equivalence: dict[tuple[str, ...], dict[str, dict[str, str]]] = {}
+
+#: 攒着准备追加写的标记行。与 :data:`_pending` 走**同一条** flush/atexit 路径，
+#: 但分开放：主表的孤儿裁剪按 ``(kernel, optimize)`` 判定，标记行混进去会被误删。
+_equiv_pending: list[dict[str, str]] = []
 
 #: 是否已尝试加载过（``force=True`` 可重来）。
 _loaded = False
@@ -317,6 +356,7 @@ def configure(directory=None) -> str:
         _last_error = None
         if previous != path:                     # 换目录 = 换一张表，索引不能沿用
             _index.clear()
+            _equivalence.clear()
             _compare_recent.clear()
             _loaded, _loaded_rows = False, 0
             _disk_rows = -1
@@ -413,7 +453,27 @@ def best(key: Mapping[str, Any]) -> dict[str, str] | None:
         return None if row is None else dict(row)
 
 
-def record(row: Mapping[str, Any]) -> bool:
+def equivalence_marker(key: Mapping[str, Any]) -> dict[str, str] | None:
+    """按键查等价改写标记（整行，值全是字符串）；未标记/关闭返回 ``None``。
+
+    纯内存查表，不做 IO（索引由 :func:`load` 一次建好，与主表同一份加载标记）。
+    同键可能同时存在 ``none`` 与 ``ok`` 两条：**``ok`` 优先**——"这条路走得通"比
+    "这次没找到"更有信息量，也才是上层能拿去改道的那一条；同 state 有多条时取
+    ``updated_at`` 新者。返回的是**副本**（含内存计数 ``hits``：同键同 state 被
+    记录过几次，只在本进程有效——标记表不重复写行，所以它不落盘）。
+    """
+    if not enabled() or not isinstance(key, Mapping):
+        return None
+    with _LOCK:
+        _ensure_locked()
+        if _dir_ok:
+            _load_locked(False)
+        slot = _equivalence.get(_key_of(key))
+        row = _marker_pick(slot.values()) if slot else None
+        return None if row is None else dict(row)
+
+
+def record(row: Mapping[str, Any], *, force_write: bool = False) -> bool:
     """记一次观测；返回是否**真的排队写盘**（稀疏口径，见模块文档）。
 
     两种才写：该键第一次出现，或 ``compute_ms`` 比该键当前最优严格快过 5%。
@@ -452,7 +512,7 @@ def record(row: Mapping[str, Any]) -> bool:
                                  if previous else "1")
 
         current = _pick(slot.values())
-        worth = new_key
+        worth = bool(force_write) or new_key
         if not worth and current is not None:
             worth = (_ms_value(prepared.get("compute_ms"))
                      < _ms_value(current.get("compute_ms")) * _IMPROVE_RATIO)
@@ -510,9 +570,61 @@ def record_compare(row: Mapping[str, Any]) -> bool:
         return True
 
 
-def flush() -> int:
-    """把攒下的主表行一次追加写盘，返回写出的行数；失败降级、不抛异常。
+def record_equivalence(key: Mapping[str, Any], state: str, kind: str = "",
+                       *, compute_ms: float | None = None) -> bool:
+    """写一条等价改写标记；返回是否**真的排队写盘**（稀疏口径）。
 
+    ``state`` 只接受 ``"none"``（找不到可用改写）与 ``"ok"``（该键可以改写过去，
+    ``kind`` 说明是哪一类改写），其他取值一律返回 ``False``。稀疏口径是**按
+    (键, state)** 的：同键同 state 已有标记时只更新内存里的计数与 ``updated_at``
+    （:func:`equivalence_marker` 立刻能看到），**不再追加一行**——这张表要回答
+    "能不能改写"，不是流水账。同键的 ``none`` 与 ``ok`` 可以并存（查表时 ``ok``
+    优先），所以 ``ok`` 第一次出现仍然会写。
+
+    键与主表同一套 :data:`KEY_FIELDS`（``shape`` 归一化复用 :func:`format_shape`）；
+    缺省字段自动补齐 ``host`` / ``updated_at`` / ``pyqcd_version``。
+    ``compute_ms`` 只为与 :func:`record` 的调用方签名对齐而接收：标记表**不做计时**，
+    它既不落盘、也不参与任何结论。
+
+    关闭、目录不可用、``key``/``state`` 不可解析一律返回 ``False``，**不抛异常**。
+    """
+    if not enabled() or not isinstance(key, Mapping):
+        return False
+    wanted = _text(state).lower()
+    if wanted not in _STATE_RANK:
+        return False
+    with _LOCK:
+        _ensure_locked()
+        if not _dir_ok:
+            return False
+        _load_locked(False)                      # 盘上已有的标记也算"已存在"（稀疏口径）
+        try:
+            row = _equivalence_row(key, wanted, _text(kind))
+        except Exception as exc:                 # noqa: BLE001 - 画像缓存绝不外抛
+            _degrade_locked(exc)
+            return False
+
+        slot = _equivalence.get(_key_of(row))
+        if slot is None:
+            slot = _equivalence[_key_of(row)] = {}
+        current = slot.get(wanted)
+        if current is not None:                  # 同键同 state：只记计数与时间
+            current["hits"] = str(_int(current.get("hits")) + 1)
+            current["updated_at"] = row["updated_at"]
+            return False
+        row["hits"] = "1"
+        slot[wanted] = row
+        _equiv_pending.append(dict(row))
+        if len(_equiv_pending) >= _FLUSH_THRESHOLD:
+            _flush_locked()
+        return True
+
+
+def flush() -> int:
+    """把攒下的行一次追加写盘（主表 + 标记表），返回**主表**写出的行数。
+
+    标记表走同一次调用（同一把锁、同一条降级路径），但它的行数不计入返回值——
+    主表的返回值是既有口径（契约与 ``summary()["rows"]`` 都按它对齐）。
     进程退出时由 ``atexit`` 自动调一次；``compare`` 行是即时追加的，不在这里。
     """
     if not enabled():
@@ -523,14 +635,16 @@ def flush() -> int:
 
 def summary() -> dict[str, Any]:
     """当前状态快照：``{"dir","file","enabled","requires_configure","rows","keys",
-    "loaded","skipped_rows","truncated_fields","dropped_rows","max_rows_per_key",
-    "last_error"}``。
+    "equivalence_rows","equivalence_keys","loaded","skipped_rows","truncated_fields",
+    "dropped_rows","max_rows_per_key","last_error"}``。
 
     ``dir`` 是生效目录的**绝对路径**，``enabled`` 是有效可用性（开关 AND 目录可用），
     ``requires_configure`` 恒为 ``False``（目录可显式配置，但**不需要**先配置）；
-    ``rows`` 是索引里的 (键, 配置) 行数、``keys`` 是不同键数、``loaded`` 是是否已
-    尝试加载；``skipped_rows`` 是最近一次读盘跳过的坏行数、``truncated_fields`` 是
-    累计截断的超长字段数、``dropped_rows`` 是累计被"每键最快 K 条"裁剪掉的行数、
+    ``rows`` 是索引里的 (键, 配置) 行数、``keys`` 是不同键数；``equivalence_rows``
+    是标记表里的 (键, state) 条数、``equivalence_keys`` 是其中有标记的不同键数
+    （``ok``/``none`` 并存只算一个键）；``loaded`` 是是否已尝试加载；``skipped_rows``
+    是最近一次读盘跳过的坏行数（主表与标记表合计）、``truncated_fields`` 是累计截断
+    的超长字段数、``dropped_rows`` 是累计被"每键最快 K 条"裁剪掉的行数、
     ``max_rows_per_key`` 是那个 K；任何降级原因都在 ``last_error``（没有就是
     ``None``）。开关关着时不建目录、不读文件。
     """
@@ -547,6 +661,9 @@ def summary() -> dict[str, Any]:
             "requires_configure": False,
             "rows": sum(len(slot) for slot in _index.values()) if on else 0,
             "keys": len(_index) if on else 0,
+            "equivalence_rows": (sum(len(slot) for slot in _equivalence.values())
+                                 if on else 0),
+            "equivalence_keys": len(_equivalence) if on else 0,
             "loaded": _loaded if on else False,
             "skipped_rows": _skipped_rows if on else 0,
             "truncated_fields": _truncated_fields if on else 0,
@@ -627,6 +744,22 @@ def _compare_row(source: Mapping[str, Any]) -> dict[str, str]:
     return _clip_row(row)
 
 
+def _equivalence_row(key: Mapping[str, Any], state: str,
+                     kind: str) -> dict[str, str]:
+    """把一次标记装配成一整行（列序见 :data:`EQUIVALENCE_COLUMNS`）。
+
+    键走 :func:`_key_of`——与主表**同一套**归一化（``shape`` → ``2x3|3x4``，
+    ``host`` 缺省补本机名），否则同一个 (方程, 形状) 会在两张表里对不上。
+    """
+    values = dict(zip(KEY_FIELDS, _key_of(key)))
+    row = {name: values.get(name, "") for name in EQUIVALENCE_COLUMNS}
+    row["state"] = state
+    row["kind"] = kind
+    row["updated_at"] = _now()
+    row["pyqcd_version"] = _version()
+    return row
+
+
 def _clip_row(row: dict[str, str]) -> dict[str, str]:
     """按 :data:`_CLIP_LIMITS` 截断超长文本字段（读写两侧共用同一口径）。"""
     for name in _CLIP_LIMITS:
@@ -695,6 +828,27 @@ def _pick(rows: Iterable[dict[str, str]]) -> dict[str, str] | None:
     return chosen
 
 
+def _marker_pick(rows: Iterable[dict[str, str]]) -> dict[str, str] | None:
+    """查表选标记：``ok`` 先于 ``none`` → 再取 ``updated_at`` 新者（纯比较）。
+
+    ``none`` 是**否定**证据（"这次没找到等价改写"），``ok`` 是**肯定**证据
+    （"这个键能改写过去"）。两者并存时回答 ``ok``：上层据此改道才有收益，回答
+    ``none`` 只会把一次已知可行的改写藏起来。给不出可解释 ``state`` 的行一律不参与。
+    """
+    chosen: dict[str, str] | None = None
+    chosen_rank: tuple[int, float, str] | None = None
+    for row in rows:
+        state = _text(row.get("state")).lower()
+        rank_state = _STATE_RANK.get(state)
+        if rank_state is None:
+            continue
+        rank = (rank_state, -_stamp(row.get("updated_at")),
+                _text(row.get("kind")))
+        if chosen_rank is None or rank < chosen_rank:
+            chosen, chosen_rank = row, rank
+    return chosen
+
+
 def _prune_slot(slot: dict[tuple[str, str], dict[str, str]]) -> int:
     """每键只留 ``compute_ms`` 最快的 :data:`_MAX_ROWS_PER_KEY` 条，返回丢掉的条数。"""
     global _dropped_rows
@@ -731,6 +885,7 @@ def _load_locked(force: bool) -> int:
     if _loaded and not force:
         return _loaded_rows
     _index.clear()
+    _equivalence.clear()
     try:
         with open(_profile_path(), "rb") as handle:
             raw = handle.read(_MAX_LOAD_BYTES)
@@ -739,18 +894,23 @@ def _load_locked(force: bool) -> int:
     except Exception as exc:                     # noqa: BLE001 - 读失败只记原因
         _error_locked(exc)
         _merge_pending_locked()                  # 读失败也不能丢掉内存里的观测
+        _merge_equivalence_locked()
         _loaded, _loaded_rows, _skipped_rows, _disk_rows = True, 0, 0, -1
         return 0
     text, skipped = _decode_table(raw)
     count, bad = _parse_table(text)
-    skipped += bad
+    table_skipped = skipped + bad
+    # 标记表与主表共用同一份加载标记（:func:`load` 一次把两张表都读进来），
+    # 坏行同样只跳过并计入 ``skipped_rows``；但盘上行数只按主表算。
+    equivalence_skipped = _load_equivalence_locked()
     for slot in _index.values():                 # 旧文件可能攒了重复行：读入即裁剪
         _prune_slot(slot)
     _merge_pending_locked()                      # 未落盘的更优观测不能被重读冲掉
+    _merge_equivalence_locked()
     _loaded = True
     _loaded_rows = count
-    _skipped_rows = skipped
-    _disk_rows = count + skipped                 # 盘上实际有这么多数据行
+    _skipped_rows = table_skipped + equivalence_skipped
+    _disk_rows = count + table_skipped           # 盘上主表数据行数
     return count
 
 
@@ -759,6 +919,26 @@ def _merge_pending_locked() -> None:
     for row in _pending:
         _merge(_index.setdefault(_key_of(row), {}),
                (row["kernel"], row["optimize"]), dict(row))
+
+
+def _merge_equivalence_locked() -> None:
+    """把还没落盘的标记并回 :data:`_equivalence`（持锁调用）。
+
+    与 :func:`_merge_pending_locked` 同口径：重读文件不得把内存里刚记下、还没
+    ``flush`` 的标记冲掉。内容取 ``updated_at`` 新者，计数相加。
+    """
+    for row in _equiv_pending:
+        state = _text(row.get("state")).lower()
+        slot = _equivalence.setdefault(_key_of(row), {})
+        current = slot.get(state)
+        if current is None:
+            slot[state] = dict(row)
+            continue
+        hits = _int(current.get("hits")) + _int(row.get("hits"))
+        keep = (dict(row) if _stamp(row.get("updated_at"))
+                >= _stamp(current.get("updated_at")) else dict(current))
+        keep["hits"] = str(hits)
+        slot[state] = keep
 
 
 def _decode_table(raw: bytes) -> tuple[str, int]:
@@ -811,6 +991,71 @@ def _parse_table(text: str) -> tuple[int, int]:
     return count, skipped
 
 
+def _load_equivalence_locked() -> int:
+    """把标记表读进 :data:`_equivalence`（持锁调用）；返回跳过的坏行数。
+
+    与主表同一套读侧口径：文件不存在算"还没标记过"（返回 ``0``、不建文件），
+    整份打不开只记 ``last_error``、**不**把目录判死，坏行逐行跳过并计数。
+    """
+    try:
+        with open(_equivalence_path(), "rb") as handle:
+            raw = handle.read(_MAX_LOAD_BYTES)
+    except FileNotFoundError:
+        return 0
+    except Exception as exc:                     # noqa: BLE001 - 读失败只记原因
+        _error_locked(exc)
+        return 0
+    text, skipped = _decode_table(raw)
+    return skipped + _parse_equivalence(text)
+
+
+def _parse_equivalence(text: str) -> int:
+    """逐行解析标记进 :data:`_equivalence`；返回跳过行数。
+
+    一个 (键, state) 只留一行：历史上重复追加的同一标记在这里合并（时间取新、
+    计数相加），``state`` 不是 ``none``/``ok`` 的行按坏行跳过。
+    """
+    expected = list(EQUIVALENCE_COLUMNS)
+    skipped = streak = 0
+    reader = csv.reader(io.StringIO(text))
+    while True:
+        try:
+            fields = next(reader)
+        except StopIteration:
+            break
+        except Exception as exc:                 # noqa: BLE001 - 坏行只跳过
+            skipped += 1
+            streak += 1
+            if streak >= _MAX_CONSECUTIVE_ERRORS:
+                _error_locked(exc)               # csv 流已不可用，停止读取
+                break
+            continue
+        streak = 0
+        if fields == expected:                   # 表头（重复出现的也只当表头）
+            continue
+        if not any(field.strip() for field in fields):
+            continue                             # 空行
+        if len(fields) != len(expected):
+            skipped += 1                         # 列数不对：这一行坏了
+            continue
+        mapped = dict(zip(expected, fields))
+        row = {name: _text(mapped.get(name)) for name in EQUIVALENCE_COLUMNS}
+        row["shape"] = format_shape(row.get("shape"))
+        row["state"] = row["state"].lower()
+        if row["state"] not in _STATE_RANK:
+            skipped += 1                         # 解释不了的 state：这一行坏了
+            continue
+        row["hits"] = "1"
+        slot = _equivalence.setdefault(_key_of(row), {})
+        current = slot.get(row["state"])
+        if current is not None:
+            row["hits"] = str(_int(current.get("hits")) + 1)
+            if _stamp(row.get("updated_at")) < _stamp(current.get("updated_at")):
+                row = current                    # 重复行：留时间更新的那条
+        slot[row["state"]] = row
+    return skipped
+
+
 def _flush_locked() -> int:
     """把待写队列一次追加写盘（持锁）；失败即降级，队列丢弃。
 
@@ -820,19 +1065,39 @@ def _flush_locked() -> int:
     :data:`_REWRITE_GROWTH` 行才重写：每次 flush 都整表重写等于写放大。
     """
     global _disk_rows
-    if not _dir_ok or not _pending:
+    if not _dir_ok:
         return 0
-    count = _disk_rows if _disk_rows >= 0 else _count_raw_rows()
-    if (count + len(_pending) > _MAX_ROWS
-            and count >= _rewrite_rows + _REWRITE_GROWTH):
-        return _rewrite_locked()
-    rows, _pending[:] = list(_pending), []
+    written = 0
+    if _pending:
+        count = _disk_rows if _disk_rows >= 0 else _count_raw_rows()
+        if (count + len(_pending) > _MAX_ROWS
+                and count >= _rewrite_rows + _REWRITE_GROWTH):
+            written = _rewrite_locked()
+        else:
+            rows, _pending[:] = list(_pending), []
+            try:
+                _append(_profile_path(), PROFILE_COLUMNS, rows)
+            except Exception as exc:             # noqa: BLE001 - 写失败即降级
+                _degrade_locked(exc)
+                return 0
+            _disk_rows = count + len(rows)
+            written = len(rows)
+    # 标记表跟主表走同一条 flush/atexit 路径，但**不参与**主表的行数上限与整表
+    # 重写（它自己按 (键, state) 稀疏，规模由键数决定，不是观测次数）。
+    _flush_equivalence_locked()
+    return written
+
+
+def _flush_equivalence_locked() -> int:
+    """把待写的标记行一次追加写盘（持锁）；失败即降级、队列丢弃。"""
+    if not _dir_ok or not _equiv_pending:
+        return 0
+    rows, _equiv_pending[:] = list(_equiv_pending), []
     try:
-        _append(_profile_path(), PROFILE_COLUMNS, rows)
+        _append(_equivalence_path(), EQUIVALENCE_COLUMNS, rows)
     except Exception as exc:                     # noqa: BLE001 - 写失败即降级
         _degrade_locked(exc)
         return 0
-    _disk_rows = count + len(rows)
     return len(rows)
 
 
@@ -937,13 +1202,15 @@ def _reset_after_fork() -> None:
 
     ``threading.Lock`` 不随 ``fork`` 重置：父进程里某线程持锁时 fork，子进程第一次
     进 :func:`summary` / :func:`record` 就会**永久阻塞**。子进程也不该替父进程
-    flush，所以待写队列直接丢弃；索引与目录探测标记一并复位（fork 可能发生在
-    ``record`` 改到一半的时刻，继承来的内存视图不可信），首次使用时按文件重建。
+    flush，所以待写队列（主表与标记表）直接丢弃；索引与目录探测标记一并复位（fork 可能
+    发生在 ``record`` 改到一半的时刻，继承来的内存视图不可信），首次使用时按文件重建。
     """
     global _LOCK, _index, _pending, _ready, _dir_ok, _disk_rows, _loaded, _loaded_rows
     _LOCK = threading.Lock()
     _index.clear()
     _pending.clear()
+    _equivalence.clear()
+    _equiv_pending.clear()
     _ready = False
     _dir_ok = False
     _disk_rows = -1
@@ -998,6 +1265,11 @@ def _profile_path() -> str:
 def _compare_path() -> str:
     """``profile_compare.csv`` 的绝对路径。"""
     return os.path.join(_dir or _dir_text(), COMPARE_NAME)
+
+
+def _equivalence_path() -> str:
+    """``profile_equivalence.csv`` 的绝对路径。"""
+    return os.path.join(_dir or _dir_text(), EQUIVALENCE_NAME)
 
 
 def _ensure_locked() -> None:

@@ -899,11 +899,66 @@ def _expected_output_shape(subscripts: str,
         return None
 
 
+##### 等价改写的跨进程负标记
+
+#: ``as_equivalence=`` 的第四个取值：**忽略**负标记，真的再查一次等价映射，并在查完
+#: 后刷新标记。API 与 CLI 都可能直接把这个字符串传进来。
+_AS_EQ_FORCE = "force"
+
+
+def _equivalence_marked_none(key: dict[str, Any] | None) -> bool:
+    """``key`` 是否被标记成"查过、无法等价改写"。
+
+    标记只是**省时间**的提示：查询/写入都是可选能力（``_profile_cache`` 不提供这两个
+    函数时用 ``getattr`` 降级），任何异常、任何非字典返回值都按"未标记"处理——读不到
+    就必须照常往下查，绝不因为一个可选缓存把等价步骤整段关掉。
+    """
+    if key is None:
+        return False
+    lookup = getattr(_profile_cache, "equivalence_marker", None)
+    if lookup is None:
+        return False
+    try:
+        marker = lookup(key)
+    except Exception:                                    # noqa: BLE001 - 标记绝不外抛
+        return False
+    if not isinstance(marker, dict):
+        return False
+    return str(marker.get("state", "")).strip().lower() == "none"
+
+
+def _record_equivalence(key: dict[str, Any] | None, mapping: Any) -> None:
+    """把一次查询的结论落成标记：``mapping is None`` → ``"none"``，否则 ``"ok"``。
+
+    ``as_equivalence="force"`` 走的是同一条路径，因此旧标记会被新结论覆盖（刷新）。
+    写失败、未实现、``key is None``（画像关闭）都静默跳过。
+    """
+    if key is None:
+        return
+    record = getattr(_profile_cache, "record_equivalence", None)
+    if record is None:
+        return
+    state = "none" if mapping is None else "ok"
+    kind = "" if mapping is None else str(getattr(mapping, "kind", ""))
+    try:
+        record(key, state, kind=kind)
+    except Exception:                                    # noqa: BLE001 - 标记绝不外抛
+        return
+
+
+def _note_equivalence_skipped() -> None:
+    """VERBOSE 下说明"这一步是按缓存标记跳过的"，免得把跳过看成"查过但没找到"。"""
+    if _profile_verbose():
+        print("[pyqcd.einsum] equivalence 已跳过（缓存标记：此 equation 无法等价改写）",
+              flush=True)
+
+
 def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
                               use_blas: bool, optimize: Any, memory_limit: Any,
                               backend: str, specialize: bool,
                               kernel_force: str | None,
-                              cache: bool | None = None) -> Any | None:
+                              cache: bool | None = None,
+                              marker_key: dict[str, Any] | None = None) -> Any | None:
     """用等价写法跑一次并把结果转回原输出轴序；不适用时返回 ``None``。
 
     只在真正的通用收缩路径上被调用（逐元素与 cupy 委派早已返回）。任何一步不满足
@@ -911,6 +966,11 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
 
     ``specialize`` 是调用方**已求值**的开关（``_specialize.enabled()`` 只算一次），
     因此这里是纯布尔判断，不再重复读环境变量。
+
+    ``marker_key`` 是画像键（``None`` = 画像关闭、不碰标记）：真的查过之后把结论
+    记成跨进程标记，下一次同类调用就可能在
+    :func:`_equivalence_marked_none` 那道廉价门上直接跳过。标记只影响"要不要花时间
+    查映射"，命中/跳过都不改方程、dtype、形状或结果。
     """
     if not _equivalence.enabled():
         return None
@@ -921,7 +981,11 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
     try:
         mapping = _equivalence.normalize_equation(subscripts, use=cache)
     except Exception:                                    # noqa: BLE001 - 不许影响数值
+        # 查崩了不算结论：不落标记，下一次照常重查（标记宁缺勿错）。
         return None
+    # 查完就落标记（force 也走这里 → 旧标记被新结论覆盖）：下次同类调用可在廉价门上
+    # 直接跳过。写入失败/未实现都静默，绝不影响本次结果。
+    _record_equivalence(marker_key, mapping)
     if mapping is None or mapping.kind == "identity":
         return None
     if not (mapping.operand_order or mapping.operand_permutations
@@ -974,6 +1038,8 @@ _PROFILE_READY: str | None = None    # 已 load() 的**绝对目录**；None = �
 #: 等价改写跑成时记录的标签：**不可重放**（原方程上强制具体内核必然"未尝试"），
 #: 但必须如实标注——沿用 `generic` 会把"改写+topology"谎报成"通用路径"。
 _EQUIVALENCE_LABEL = "equivalence"
+#: ``--tune`` 期间为真：记录时绕过 5% 稀疏门，留下整张地图。
+_PROFILE_TUNE = False
 _PROFILE_LOCK = threading.Lock()
 
 # 命中提示的去重表：每 (方程, 形状, 配置) 每进程只打一行（VERBOSE 打开了就每次必打）。
@@ -1189,7 +1255,10 @@ def _profile_record(info: dict[str, Any]) -> None:
     已经施加了命中的调用没有新信息，不重复记录；命中被丢弃/回退的调用照记，
     让"实际跑成的那条配置"有机会在下一次胜出。
     """
-    if info.get("hit") is not None and not info.get("fallback"):
+    applied_hit = (info.get("hit") is not None
+                   and (info.get("force") is not None
+                        or info.get("backend") is not None))
+    if applied_hit and not info.get("fallback"):
         return
     _profile_cache.record({
         **info["key"],
@@ -1198,7 +1267,7 @@ def _profile_record(info: dict[str, Any]) -> None:
         "init_ms": info["init_ms"],
         "compute_ms": info["compute_ms"],
         "note": info.get("note", ""),
-    })
+    }, force_write=_PROFILE_TUNE)
 
 
 def _profile_end(info: dict[str, Any] | None, result: Any,
@@ -1241,7 +1310,7 @@ def contract(
     backend: str = "auto",
     specialize: bool | None = None,
     kernel_force: str | None = None,
-    as_equivalence: bool | None = None,
+    as_equivalence: bool | str | None = None,
     cache: bool | None = None,
     profile: bool | None = None,
     profile_dir: str | None = None,
@@ -1293,16 +1362,23 @@ def contract(
         ``kernel_force`` wins over ``PYQCD_EINSUM_KERNEL_FORCE``; both are resolved
         on every call. Forcing any value contradicts ``out=`` and
         ``specialize=False``, which raise ``ValueError``.
-    as_equivalence : bool | None
+    as_equivalence : bool | str | None
         ``None`` (default) follows ``PYQCD_EINSUM_AS_EQUIVALENCE`` (on by default);
-        ``False`` disables the automatic rewrite for this call. When on and the
+        ``False`` disables the automatic rewrite for this call; ``"force"`` enables
+        it and **ignores the cross-process negative marker** (see below), really
+        querying the equivalence table again. When on and the
         equation does not already run on a specialised form, the equivalence layer
         rewrites it into a corpus spelling, permutes the operands accordingly and
         transposes the result back — **the returned array is the answer to the
         original equation**, with the original shape and dtype, so callers never
         see the rewrite. Skipped for ``out=``, extra ``**kwargs``, element-wise and
         cupy-delegated equations, ``specialize=False``, and explicit optimizer
-        paths (those bind the original operand order).
+        paths (those bind the original operand order). Every real lookup records a
+        cross-process marker (``none`` / ``ok``) in the profile cache; with the
+        profile on, a ``none`` marker lets later calls of the same
+        ``(device, backend, dtype, equation, shape)`` skip the lookup entirely —
+        skipping changes no equation, dtype, shape or number, only the time spent
+        looking. ``profile=False`` neither reads nor writes the marker.
     cache : bool | None
         ``None`` (default) follows ``PYQCD_EINSUM_CACHE`` (on by default); ``False``
         disables every einsum cache for this call — matchers
@@ -1571,18 +1647,28 @@ def contract(
             and _equivalence.as_equivalence_enabled(as_equivalence)
             and specialized is None
             and specialize_on):
-        started = _profile_clock(info)
-        equivalence_result = _contract_via_equivalence(
-            subscripts, operands, use_blas=use_blas, optimize=optimize,
-            memory_limit=memory_limit, backend=backend, specialize=specialize_on,
-            kernel_force=kernel_force, cache=cache)
-        if equivalence_result is not None:
-            # 本次是**等价改写**跑成的：原方程上强制具体内核会失败（它本来就不在
-            # 语料里），所以这个标签不可重放；但必须如实标注，别沿用初始值
-            # ``generic``——那会把"改写+topology"谎报成"通用路径"（实跑复现过）。
-            if info is not None:
-                info["kernel"] = _EQUIVALENCE_LABEL
-            return _profile_end(info, equivalence_result, started)
+        # 廉价门（在 ``_split`` / ``_Shape`` / 语料索引之前）：长跑里同一条语料外方程
+        # 会被反复问"有没有等价写法"，答案却不变。跨进程标记说"这条查过、没有"时直接
+        # 放弃等价步骤——**只省时间**：标记不参与方程、dtype、形状或结果。
+        # ``as_equivalence="force"`` = 不信标记、再查一遍（查完照常刷新标记）；
+        # 画像关闭时 ``info`` 为 ``None``，此处既不查也不写标记（零 IO）。
+        marker_key = info.get("key") if info is not None else None
+        if (as_equivalence != _AS_EQ_FORCE
+                and _equivalence_marked_none(marker_key)):
+            _note_equivalence_skipped()
+        else:
+            started = _profile_clock(info)
+            equivalence_result = _contract_via_equivalence(
+                subscripts, operands, use_blas=use_blas, optimize=optimize,
+                memory_limit=memory_limit, backend=backend, specialize=specialize_on,
+                kernel_force=kernel_force, cache=cache, marker_key=marker_key)
+            if equivalence_result is not None:
+                # 本次是**等价改写**跑成的：原方程上强制具体内核会失败（它本来就不在
+                # 语料里），所以这个标签不可重放；但必须如实标注，别沿用初始值
+                # ``generic``——那会把"改写+topology"谎报成"通用路径"（实跑复现过）。
+                if info is not None:
+                    info["kernel"] = _EQUIVALENCE_LABEL
+                return _profile_end(info, equivalence_result, started)
 
     global _LAST_CONTRACT
 
