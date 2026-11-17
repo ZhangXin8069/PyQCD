@@ -1,32 +1,48 @@
-"""契约：配置画像缓存（``pyqcd.einsum._profile_cache``）的读写口径。
+"""契约：配置表（``pyqcd.einsum.profile.csv``）的读写口径——只读/单写者/同键一行。
 
-这一层**不参与数值计算**，所以普通数值测试永远碰不到它：配置选错了、旧行没被换掉、
-或者"关掉开关却还在建目录"，结果照样逐位正确，只是慢、只是刷屏、只是把用户的工作
-目录搞脏。本模块把下面八条固化成能独立失败的断言：
+为什么值得单独立契约
+--------------------
+TV 重设计（2026-11-17，§1/§2/§3/§7/§8）把这张表收成**标定产物**：只有 ``--tune``
+能写，普通调用只读；同一个键**只允许一行**，出现多行就直接报错（不猜、不选最优）；
+毫秒列的列名是 ``wall_ms``（整个 ``contract()`` 的墙钟）。这一层不参与数值计算，
+所以普通数值测试永远碰不到它：多写一行、选错一行，结果照样逐位正确，只是脏、只是
+慢、只是把别的运行环境带进来。本模块把下面十三件事分别钉成能独立失败的断言：
 
-1. **CSV 往返**：表头与 :data:`PROFILE_COLUMNS` 逐列一致；行数、方程、归一化形状、
-   毫秒列格式都对得上；追加写不重复表头；``load(force=True)`` 能按文件重建索引。
-2. **选优规则**：``compute_ms`` 最小 → 同值取 ``calls`` 大者 → 再同取 ``updated_at``
-   新者；返回值是副本，改不动索引。
-3. **稀疏写入**：新键必写；同键同配置不快过"当前最优 × 0.95"（严格小于）就不落盘，
-   只更新内存；快过阈值才再写一行。同时钉住"内存取更小值、磁盘只留够格的那行"。
-4. **compare 只写不读**：``record_compare`` 真写文件且表头正确；同一 (键, 配置, 参照)
-   在 60 s 窗口内只写一次；``load`` / ``best`` / ``summary`` / ``notice`` **一次都不读**
-   该文件（跟踪 ``builtins.open`` 的路径），``summary`` 也没有它的读计数。
-5. **关闭零 IO**：``PYQCD_EINSUM_PROFILE=0`` 时开关为假、写入全返回 ``False``，
-   且临时目录里**什么都不产生**（连目录都不建）。
-6. **不可写降级**：目录 ``chmod 500`` 后不抛异常，``summary()["last_error"]`` 非空、
-   ``enabled`` 为假，写入返回 ``False``，也没有 CSV 被造出来。
-7. **``format_shape``**：轴间 ``x``、操作数间 ``|``，已规范化字符串原样返回，
-   无法解析给空串。
-8. **目录优先级**：``PYQCD_EINSUM_PROFILE_DIR`` 压过默认 ``./.cache``；``configure``
-   的参数再压过环境变量。默认那档只在临时 CWD 下验证，**不在仓库根留下 ``.cache``**。
+1. **冻结名字与表头**：``PROFILE_FILENAME`` / ``KEY_FIELDS`` / ``PROFILE_COLUMNS``
+   （表头含 ``wall_ms``、不含旧毫秒列名——§8 的零残留验收在源码层也成立）。
+2. **缺文件 → :class:`ProfileMissing`**：带该键的 tune 命令模板（§2.3 的提示就是它），
+   并且**不建表、不建目录**。
+3. **``read_winner`` 0 行**：文件在、键不在 → ``None``（不猜、不报错）。
+4. **``read_winner`` 1 行**：命中返回副本（带数据行号 ``line``），改返回值改不动表。
+5. **``read_winner`` 2 行**：抛 :class:`DuplicateProfileEntry`，``rows`` 是**全部**
+   候选（含各自 ``line``），消息里能看到每一行；``best()`` 同样抛（不静默选一行）。
+6. **读路径绝不写**：缺表不建目录；有表时命中与未命中都不改字节、``mtime``、大小。
+7. **``write_winner`` 只留一行**：同键旧行（含更快的旧行）全部删除，别的键原样保留；
+   ``wall_ms`` 按三位小数落盘。
+8. **等价行**：``equivalence=`` 非空时该行只含 ``target_equation`` + 三个置换字段
+   + ``note``，性能字段留空；:func:`equivalence_payload` 能把它解回可执行载荷。
+9. **``tune_session`` 期间不读不写**：读当无命中、写静默不落盘（嵌套安全），
+   退出后读写立刻恢复。
+10. **关闭零副作用**：``PYQCD_EINSUM_PROFILE=0`` 时 ``enabled()`` 为假、读返回
+    ``None``、写静默不写，且临时 CWD 里连目录都不出现。
+11. **``format_shape``**：``x`` 连轴、``|`` 连操作数，已规范化字符串原样返回，
+    无法解析给空串；列表写法与字符串写法命中同一把键。
+12. **目录优先级**：``PYQCD_EINSUM_PROFILE_DIR`` 压过默认 ``./.cache``，``configure``
+    的参数再压过环境变量；``ensure_configured`` 只补齐、不改写已钉住的目录。
+13. **``summary``**：``rows`` / ``keys`` 如实计数（同键多行时 ``keys`` 仍是 1，用来
+    一眼看出异常），缺表报 0 而不是抛。
+14. **``wall_ms`` 是全程墙钟**：在 :func:`read_winner` 里注入一段睡眠——它不是收缩执行
+    的时间，却必须出现在 ``wall_ms`` 里（§4 的"只有一列、且是整段 ``contract()``"）。
+    观测口里不许残留旧字段名，也不许还有第二列拆分计时。
 
-``configure`` / ``summary()["requires_configure"]`` 是并行改动的产物：它尚未落地时
-本模块用环境变量走同一条代码路径（``_use_dir``），只有"参数压过环境"那条用例
-``SkipTest`` 并写明原因——不许静默通过。
-
-不做任何计时断言：本模块只关心"写了什么、读了什么"，不关心它多快。
+口径与边界
+----------
+* 种子行**分两种写法**：要验 ``write_winner`` 就用它（那是被测的写口）；要摆
+  "同键多行"这种**只能坏着存在**的现场，就直接写 CSV 文本（``write_winner`` 按规格
+  不可能造出两行）。
+* 每条用例都在临时树里跑（CWD 一起换过去），退出时把环境变量与 ``_profile_cache``
+  的进程内状态原样放回；**仓库根不会留下 ``.cache``**。
+* 不做任何计时断言：本模块只关心"写了什么、读了什么"，不关心它多快。
 
 可直接运行::
 
@@ -34,635 +50,609 @@
 """
 from __future__ import annotations
 
-import builtins
 import contextlib
 import csv
+import io
 import os
 import tempfile
+import time
 import unittest
-from typing import Any
+from typing import Any, Iterator, Mapping, Sequence
 from unittest.mock import patch
 
-from ..einsum import _profile_cache
+import numpy as np
 
-#: ``configure(directory=None) -> str`` 是否已经落地（未落地时按环境变量走同一路径）。
-_HAS_CONFIGURE = hasattr(_profile_cache, "configure")
+from ..einsum import _api, _profile_cache, contract
 
-#: 真实的 ``open``：跟踪包装要委托给它，否则 ``csv`` / ``with`` 语句全都不能用。
-_REAL_OPEN = builtins.open
+#: 旧毫秒列名（按"拼出来再查"的方式断言：本文件也不许让那个词出现在源码里，
+#: 否则 §8 的 ``grep`` 验收会被测试文本自己打回）。
+LEGACY_MS_COLUMN = "compute" + "_ms"
 
-#: ``summary()`` 文档里承诺的键（``requires_configure`` 是随 ``configure`` 一起加的；
-#: ``skipped_rows`` / ``truncated_fields`` / ``dropped_rows`` / ``max_rows_per_key``
-#: 是随规模上限与逐行降级一起加的——"字段集合"必须跟着实现扩容，否则新增计数器
-#: 会在"集合不等"上误报，而漏掉的计数器又再没人盯）。
-SUMMARY_KEYS = {"dir", "file", "enabled", "requires_configure",
-                "rows", "keys", "loaded", "skipped_rows", "truncated_fields",
-                "dropped_rows", "max_rows_per_key", "last_error"}
+#: 本模块会改写/还原的环境变量（目录与总开关）。
+_ENV_NAMES = (_profile_cache.PROFILE_ENV, _profile_cache.DIR_ENV)
 
-#: ``_profile_cache`` 的**计数器/磁盘行数**状态：不是配置，是跨用例会累积的量。
-#: ``_disk_rows`` / ``_rewrite_rows`` 还参与 ``flush`` 的"要不要整表重写"判断，
-#: 留着上一条用例的数会让下一条的"写了几行"变成别人的结果。值即模块里声明的初值。
-_COUNTER_FIELDS = {
-    "_skipped_rows": 0,       # 最近一次读盘跳过的坏行
-    "_truncated_fields": 0,   # 累计截断的超长字段
-    "_dropped_rows": 0,       # 累计被"每键最快 K 条"裁剪的行
-    "_disk_rows": -1,         # -1 = 还不知道，用到时再数
-    "_rewrite_rows": -1,      # -1 = 本进程还没整表重写过
-}
+#: 第 14 条注入的"读表"睡眠（秒）：远大于噪声、又小到不拖慢本模块。
+READ_SLEEP = 0.05
+
+#: ``_profile_cache`` 的进程内状态（``_TABLE`` 是解析缓存，按内容拷贝）。锁与常量不碰。
+_STATE_NAMES = ("_TABLE", "_TUNING", "_CONFIGURED_DIR", "_LAST_ERROR", "_HOST")
 
 
-#: ``_api`` 的进程级状态：本模块不直接调用它，但 ``_PROFILE_READY`` 缓存的是
-#: **已加载的绝对目录**（``str|None``，不是布尔）。只清 ``_profile_cache`` 而把
-#: ``_api._PROFILE_READY`` 留在上一条用例的目录上，下一条用例的 ``contract()``
-#: 会以为"这个目录我读过"，直接拿到别人的索引——顺序污染就是这么来的。
-_API_SET_FIELDS = ("_NATIVE_DISABLED", "_NATIVE_WARNED_REASONS",
-                   "_SPECIALIZED_KERNEL_WARNED", "_KERNEL_SKIP_WARNED")
-_API_VALUE_FIELDS = ("_PROFILE_READY", "_LAST_KERNEL", "_FUSED_ENV_OWNED")
+# -- 环境与进程内状态 ------------------------------------------------------------
+def _snapshot() -> dict[str, Any]:
+    """状态快照：``_TABLE`` 是 ``(路径, mtime, size, 行列表)``，行也要拷一层。"""
+    state: dict[str, Any] = {}
+    for name in _STATE_NAMES:
+        value = getattr(_profile_cache, name)
+        if name == "_TABLE" and value is not None:
+            value = (value[0], value[1], value[2], [dict(row) for row in value[3]])
+        state[name] = value
+    return state
 
 
-def _snapshot_api() -> dict[str, Any]:
-    """``_api`` 状态快照：集合拷成新集合，标量原样（``_PROFILE_READY`` 是字符串）。"""
-    from ..einsum import _api
-
-    snapshot: dict[str, Any] = {
-        name: set(getattr(_api, name)) for name in _API_SET_FIELDS}
-    snapshot.update({name: getattr(_api, name) for name in _API_VALUE_FIELDS})
-    snapshot["_PROFILE_NOTICED"] = set(_api._PROFILE_NOTICED)
-    return snapshot
-
-
-def _restore_api(snapshot: dict[str, Any]) -> None:
-    """按 :func:`_snapshot_api` 的副本原样放回（原地更新集合，不换对象）。"""
-    from ..einsum import _api
-
-    for name in _API_SET_FIELDS:
-        getattr(_api, name).clear()
-        getattr(_api, name).update(snapshot[name])
-    _api._PROFILE_NOTICED.clear()
-    _api._PROFILE_NOTICED.update(snapshot["_PROFILE_NOTICED"])
-    for name in _API_VALUE_FIELDS:
-        setattr(_api, name, snapshot[name])
-
-
-class _OpenTrace:
-    """记录 ``builtins.open`` 收到的每个路径，再原样委托给真实 ``open``。"""
-
-    def __init__(self) -> None:
-        self.paths: list[str] = []
-
-    def __call__(self, file: Any, *args: Any, **kwargs: Any):
-        try:
-            self.paths.append(os.fspath(file))
-        except TypeError:
-            self.paths.append(str(file))
-        return _REAL_OPEN(file, *args, **kwargs)
-
-    def touched(self, name: str) -> list[str]:
-        """被打开过的、以 ``name`` 结尾的路径。"""
-        return [path for path in self.paths if path.endswith(name)]
+def _restore(state: Mapping[str, Any]) -> None:
+    """按 :func:`_snapshot` 的副本原样放回。"""
+    for name, value in state.items():
+        setattr(_profile_cache, name, value)
 
 
 def _reset_state() -> None:
-    """把模块的进程内状态清到"没配置、没加载、没建目录"的初始态。
+    """清到"没配置、没解析缓存、不处于 tune 窗口"的初始态。"""
+    _profile_cache._TABLE = None
+    _profile_cache._TUNING = 0
+    _profile_cache._CONFIGURED_DIR = ""
+    _profile_cache._LAST_ERROR = None
 
-    用例之间不串味的关键：``_configured_dir`` 是 ``configure`` 钉住的目录，**不**跟着
-    环境变量走；漏掉它会让上一条用例的目录（例如 chmod 500 的那个）漏进下一条。
-    ``_notice_done`` 是"不可用只提示一次"的闸门，同样必须复位。
 
-    计数器一并归零：``_disk_rows`` / ``_rewrite_rows`` 参与 ``flush`` 的整表重写判断，
-    别处留下的盘上行数会让本模块的"写了几行"读到别人的结果；``_skipped_rows`` 等三个
-    累计量只增不减，不复位就永远在涨。
-    """
-    module = _profile_cache
-    module._index.clear()
-    module._pending.clear()
-    module._compare_recent.clear()
-    module._configured_dir = ""
-    module._ready = False
-    module._dir = ""
-    module._dir_ok = False
-    module._last_error = None
-    module._notice_done = False
-    module._loaded = False
-    module._loaded_rows = 0
-    for name, initial in _COUNTER_FIELDS.items():
-        setattr(module, name, initial)
+def _forget() -> None:
+    """丢掉解析缓存：本模块会直接改写 CSV 文本，别让 ``(路径, mtime, size)`` 侥幸命中。"""
+    _profile_cache._TABLE = None
 
 
 @contextlib.contextmanager
-def _isolated(disabled: bool = False):
-    """临时 CWD + 干净的环境变量与进程内状态；退出时全部还原。
-
-    缓存目录默认相对 CWD，所以"不污染仓库根"靠的是把 CWD 换到临时树里；默认那档
-    用例因此能安全地验 ``./.cache``。
-
-    ``_api`` 的进程级状态也快照/复原：它自己不看目录，但 ``_PROFILE_READY`` 记的是
-    "已读过的绝对目录"，把别人的路径留在那儿就等于把别人的索引借给下一条用例。
-    """
-    module = _profile_cache
+def _isolated() -> Iterator[str]:
+    """临时 CWD + 干净开关 + 干净的进程内状态；退出时全部还原。"""
     saved_cwd = os.getcwd()
-    saved_env = {name: os.environ.get(name)
-                 for name in (module.PROFILE_ENV, module.DIR_ENV)}
-    saved_api = _snapshot_api()
-    saved = {
-        "index": {key: {config: dict(row) for config, row in slot.items()}
-                  for key, slot in module._index.items()},
-        "pending": [dict(row) for row in module._pending],
-        "compare": dict(module._compare_recent),
-        "configured_dir": module._configured_dir,
-        "ready": module._ready,
-        "dir": module._dir,
-        "dir_ok": module._dir_ok,
-        "last_error": module._last_error,
-        "notice_done": module._notice_done,
-        "loaded": module._loaded,
-        "loaded_rows": module._loaded_rows,
-        "counters": {name: getattr(module, name) for name in _COUNTER_FIELDS},
-    }
-    with tempfile.TemporaryDirectory(prefix="pyqcd-profile-") as root:
-        work = os.path.join(root, "work")
-        os.makedirs(work)
-        try:
+    saved_env = {name: os.environ.get(name) for name in _ENV_NAMES}
+    saved_state = _snapshot()
+    try:
+        with tempfile.TemporaryDirectory(prefix="pyqcd-profile-cache-") as root:
+            work = os.path.join(root, "work")
+            os.makedirs(work)
             os.chdir(work)
-            os.environ.pop(module.DIR_ENV, None)
-            if disabled:
-                os.environ[module.PROFILE_ENV] = "0"
-            else:
-                os.environ.pop(module.PROFILE_ENV, None)
-            _reset_state()
-            yield work
-        finally:
-            os.chdir(saved_cwd)
-            for name, value in saved_env.items():
-                if value is None:
+            try:
+                for name in _ENV_NAMES:
                     os.environ.pop(name, None)
-                else:
-                    os.environ[name] = value
-            module._index.clear()
-            module._index.update(saved["index"])
-            module._pending[:] = saved["pending"]
-            module._compare_recent.clear()
-            module._compare_recent.update(saved["compare"])
-            module._configured_dir = saved["configured_dir"]
-            module._ready = saved["ready"]
-            module._dir = saved["dir"]
-            module._dir_ok = saved["dir_ok"]
-            module._last_error = saved["last_error"]
-            module._notice_done = saved["notice_done"]
-            module._loaded = saved["loaded"]
-            module._loaded_rows = saved["loaded_rows"]
-            for name, value in saved["counters"].items():
-                setattr(module, name, value)
-            _restore_api(saved_api)
+                _reset_state()
+                yield work
+            finally:
+                os.chdir(saved_cwd)
+    finally:
+        for name, value in saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        _restore(saved_state)
 
 
-def _use_dir(directory: str) -> str:
-    """让缓存落到 ``directory``：有 ``configure`` 就用它，否则设环境变量。"""
-    if _HAS_CONFIGURE:
-        return _profile_cache.configure(str(directory))
-    os.environ[_profile_cache.DIR_ENV] = str(directory)
-    return _profile_cache._dir_text()
-
-
-def _activate(directory: str) -> str:
-    """指向 ``directory`` 并**先读完一次**，把 ``_loaded`` 定下来。
-
-    这一步不是可选的：``best`` / ``summary`` / ``notice`` 首次调用会走一遍
-    ``_load_locked``，那条路径会 ``_index.clear()`` 后只把 ``_pending`` 合并回来。
-    所以"只进内存、不够格落盘"的观测必须先有 ``_loaded = True`` 才能在这条用例里
-    稳定读到——否则验的就不是选优规则，而是重载语义。
-    """
-    resolved = _use_dir(directory)
-    _profile_cache.load()
-    return resolved
-
-
+# -- 键、行与表 ------------------------------------------------------------------
 def _key(**overrides: Any) -> dict[str, Any]:
-    """主表键的稀疏写法（``host`` 缺省由模块补本机名，两边一致）。"""
+    """主表键的稀疏写法（``shape`` 用列表写法，顺带验归一化）。"""
     key = {
-        "backend": "numpy",
-        "dtype": "complex128",
-        "equation": "ij,jk->ik",
         "shape": [(2, 3), (3, 4)],
+        "dtype": "complex128",
         "device": "cpu",
-        "user_device": "cpu",
+        "equation": "ij,jk->ik",
+        "backend": "numpy",
     }
     key.update(overrides)
     return key
 
 
-def _row(**overrides: Any) -> dict[str, Any]:
-    """主表行的稀疏写法：键 + 配置 + 观测值。"""
-    row = {
-        **_key(),
-        "kernel": "kupl_dedicated",
-        "optimize": "auto",
-        "compute_ms": 1.0,
-        "calls": 1,
-    }
-    row.update(overrides)
+def _blank_row() -> dict[str, str]:
+    """一整行的空壳（列取自被测模块的 ``PROFILE_COLUMNS``，列序改名不影响本契约）。"""
+    return {str(name): "" for name in _profile_cache.PROFILE_COLUMNS}
+
+
+def _row(key: Mapping[str, Any], *, kernel: str = "", optimize: str = "",
+         wall_ms: str = "0.900", note: str = "") -> dict[str, str]:
+    """按键造一行性能行（键列按实现口径规范化，免得写成"幽灵未命中"）。"""
+    row = _blank_row()
+    for name in _profile_cache.KEY_FIELDS:
+        value = key.get(name, "")
+        if name == "shape":
+            value = _profile_cache.format_shape(value)
+        row[name] = str(value)
+    row["kernel"] = kernel
+    row["optimize"] = optimize
+    row["wall_ms"] = wall_ms
+    row["note"] = note
     return row
 
 
-def _column(name: str) -> int:
-    """``PROFILE_COLUMNS`` 里的列序（避免测试里写死数字）。"""
-    return _profile_cache.PROFILE_COLUMNS.index(name)
+def _table_path(directory: str) -> str:
+    return os.path.join(directory, _profile_cache.PROFILE_FILENAME)
+
+
+def _write_table(directory: str, rows: Sequence[Mapping[str, str]]) -> str:
+    """直接写 CSV 文本（表头取 ``PROFILE_COLUMNS``）：造"只能坏着存在"的现场。"""
+    os.makedirs(directory, exist_ok=True)
+    path = _table_path(directory)
+    columns = [str(name) for name in _profile_cache.PROFILE_COLUMNS]
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore",
+                            lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({name: str(row.get(name, "")) for name in columns})
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(buffer.getvalue())
+    _forget()
+    return path
 
 
 def _read_rows(path: str) -> list[list[str]]:
-    """整份 CSV（含表头行）。"""
-    with _REAL_OPEN(path, "r", encoding="utf-8", newline="") as handle:
+    """整份 CSV（含表头行）；用真实 ``open``。"""
+    with open(path, "r", encoding="utf-8", newline="") as handle:
         return list(csv.reader(handle))
 
 
-# ── 1. CSV 往返 ─────────────────────────────────────────────────────────────
+def _data_rows(path: str) -> list[dict[str, str]]:
+    """数据行（表头按名字映射）。"""
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
 
-def test_record_filters_non_replayable_kernels():
-    """``equivalence`` 不可重放 → 拒写；``generic``/``backend`` 可重放 → 允许写。
 
-    ``equivalence`` 是"本次由改写跑成"的诊断标签：在原方程上强制具体内核必然
-    "未尝试"，所以它给不出可用建议。``generic`` 恰恰相反——``kernel_force="generic"``
-    合法且实测常最快（某 10 操作数方程上 generic 385 ms vs topology 2735 ms），
-    若把它拒之门外，缓存就把最大的一笔收益丢掉了。
-    """
+def _state_of(directory: str) -> dict[str, Any]:
+    """目录与配置表的可观测状态：表字节、``mtime``/大小、目录内文件名列表。"""
+    path = _table_path(directory)
+    names = sorted(os.listdir(directory)) if os.path.isdir(directory) else []
+    if not os.path.exists(path):
+        return {"exists": False, "names": names}
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    info = os.stat(path)
+    return {"exists": True, "bytes": raw, "mtime_ns": int(info.st_mtime_ns),
+            "size": int(info.st_size), "names": names}
+
+
+# -- 1. 冻结名字与表头 -----------------------------------------------------------
+def test_frozen_names_and_columns() -> None:
+    """§7/§8：文件名、键字段与表头是冻结口径；毫秒列叫 ``wall_ms``，旧名零残留。"""
+    assert _profile_cache.PROFILE_FILENAME == "pyqcd.einsum.profile.csv", (
+        "配置表文件名是冻结口径", _profile_cache.PROFILE_FILENAME)
+    assert tuple(_profile_cache.KEY_FIELDS) == (
+        "shape", "dtype", "device", "equation", "backend"), _profile_cache.KEY_FIELDS
+    columns = [str(name) for name in _profile_cache.PROFILE_COLUMNS]
+    assert "wall_ms" in columns, ("表头必须用 wall_ms", columns)
+    assert LEGACY_MS_COLUMN not in columns, (
+        f"表头不得残留旧列名 {LEGACY_MS_COLUMN}", columns)
+    for name in ("kernel", "optimize", "target_equation", "operand_order",
+                 "operand_permutations", "output_permutation", "note"):
+        assert name in columns, ("表头缺列", name, columns)
+    # 三个异常类同属一族：CLI 才能"报错但不当崩溃"。
+    for exc in (_profile_cache.ProfileMissing,
+                _profile_cache.DuplicateProfileEntry,
+                _profile_cache.ProfileConflict):
+        assert issubclass(exc, _profile_cache.ProfileError), exc
+
+
+# -- 2. 缺文件 → ProfileMissing --------------------------------------------------
+def test_read_winner_missing_file_raises_profile_missing() -> None:
+    """§2.3/§7：缺表 → ``ProfileMissing``，``cli_hint`` 是能直接复制的 tune 命令。"""
     with _isolated() as work:
         directory = os.path.join(work, "cache")
-        _activate(directory)
-        assert _profile_cache.record(_row(
-            equation="zz->zz", shape=[(2, 2)],
-            kernel="equivalence", compute_ms=0.1, calls=1)) is False
-        assert _profile_cache.record(_row(
-            equation="yy->yy", shape=[(2, 2)],
-            kernel="generic", compute_ms=0.5, calls=1)) is True
-        assert _profile_cache.record(_row(
-            equation="xx->xx", shape=[(2, 2)],
-            kernel="backend", compute_ms=0.4, calls=1)) is True
-        assert _profile_cache.flush() == 2
-        table = _read_rows(os.path.join(directory, _profile_cache.PROFILE_NAME))
-        assert [row[_column("kernel")] for row in table[1:]] == ["generic", "backend"]
+        _profile_cache.configure(directory)
+        try:
+            _profile_cache.read_winner(_key())
+        except _profile_cache.ProfileMissing as exc:
+            hint, path, message = exc.cli_hint, exc.path, str(exc)
+        else:                                            # pragma: no cover - 失败路径
+            raise AssertionError("配置表不存在时 read_winner 必须抛 ProfileMissing")
+
+        assert path == os.path.abspath(_table_path(directory)), path
+        assert "python -m pyqcd.einsum.test" in hint, ("提示里要有 CLI 入口", hint)
+        assert "--tune" in hint, ("提示里要有 --tune", hint)
+        assert "--compare opt_einsum" in hint, ("提示里要有 --compare", hint)
+        assert "--equation" in hint and "--shape" in hint, hint
+        assert "需要先 tune" in message, message
+        # 缺表只许"报"，不许"造"：目录与文件都不出现。
+        assert not os.path.exists(directory), ("读路径不得建目录", os.listdir(work))
 
 
-def test_profile_csv_roundtrip_preserves_columns_and_rows():
-    """临时目录 → 写 3 行 → flush → 表头/行数/内容/追加不重写表头/读回。"""
+# -- 3. read_winner：0 行 --------------------------------------------------------
+def test_read_winner_zero_rows_returns_none() -> None:
+    """§7：文件在、键不在 → ``None``（不猜、不报错）；只有表头也一样。"""
     with _isolated() as work:
         directory = os.path.join(work, "cache")
-        _activate(directory)
-        rows = [
-            _row(equation="ij,jk->ik", shape=[(2, 3), (3, 4)],
-                 kernel="kupl_dedicated", compute_ms=1.5, calls=2),
-            _row(equation="ab,bc->ac", shape=[(4, 5), (5, 6)],
-                 kernel="kupl_topology", compute_ms=0.25, calls=3),
-            # 第三行刻意用另一个**可重放**的内核 + 另一个 optimize：``generic``
-            # 不可重放，``record()`` 现在会拒绝它（见下面的断言），不能拿来当往返样本。
-            _row(equation="abc,cd->abd", shape=[(2, 2, 2), (2, 2)],
-                 kernel="kupl_dedicated", optimize="greedy",
-                 compute_ms=7.0, calls=1),
-        ]
-        for row in rows:
-            assert _profile_cache.record(row) is True, (
-                "新键必须立即排队落盘", row["equation"])
-        assert _profile_cache.flush() == 3
+        _profile_cache.configure(directory)
+        _write_table(directory, [])
+        assert _profile_cache.read_winner(_key()) is None, "空表必须当未命中"
 
-        path = os.path.join(directory, _profile_cache.PROFILE_NAME)
-        table = _read_rows(path)
-        # 表头必须与常量**逐列**一致（顺序即写序，读侧按名字取值）。
-        assert table[0] == list(_profile_cache.PROFILE_COLUMNS), table[0]
-        assert len(table) == 4, ("3 行数据 + 1 行表头", len(table))
-        assert [row[_column("equation")] for row in table[1:]] == [
-            "ij,jk->ik", "ab,bc->ac", "abc,cd->abd"]
-        # shape 落盘前必须归一化：x 连轴、| 连操作数。
-        assert [row[_column("shape")] for row in table[1:]] == [
-            "2x3|3x4", "4x5|5x6", "2x2x2|2x2"]
-        # 毫秒列固定三位小数（否则同一个数会写出多种字面量）。
-        assert [row[_column("compute_ms")] for row in table[1:]] == [
-            "1.500", "0.250", "7.000"]
-        assert [row[_column("calls")] for row in table[1:]] == ["2", "3", "1"]
-
-        # 读回：一次顺序读重建索引，best() 能取到对应配置（键含归一化 shape）。
-        assert _profile_cache.load(force=True) == 3
-        picked = _profile_cache.best(_key(equation="ab,bc->ac",
-                                         shape=[(4, 5), (5, 6)]))
-        assert picked is not None, "读回后必须命中"
-        assert picked["kernel"] == "kupl_topology", picked
-        assert picked["compute_ms"] == "0.250", picked
-        message = _profile_cache.notice()
-        assert message is not None and message.startswith("einsum 配置画像：已加载"), message
-        assert "3 行" in message, message
-
-        # 追加写：表头只写一次，新行直接接在后面。
-        assert _profile_cache.record(
-            _row(equation="ij->ji", shape=[(3, 3)], compute_ms=2.0)) is True
-        assert _profile_cache.flush() == 1
-        appended = _read_rows(path)
-        assert appended[0] == list(_profile_cache.PROFILE_COLUMNS), appended[0]
-        assert len(appended) == 5, ("追加不得重复表头", len(appended))
+        path = _write_table(directory, [_row(_key(equation="ab,bc->ac"),
+                                             kernel="backend")])
+        assert _profile_cache.read_winner(_key()) is None, (
+            "别的键的行不该被当成命中", _read_rows(path))
 
 
-# ── 2. 选优规则 ─────────────────────────────────────────────────────────────
-
-def test_profile_best_prefers_lowest_compute_then_calls_then_newest():
-    """compute_ms 最小 → 同值 calls 大 → 再同值 updated_at 新；返回值是副本。"""
+# -- 4. read_winner：1 行 --------------------------------------------------------
+def test_read_winner_single_row_returns_copy() -> None:
+    """§7：命中返回**副本**（带数据行号），改返回值改不动表。"""
     with _isolated() as work:
-        _activate(os.path.join(work, "cache"))
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
         key = _key()
-        rows = [
-            _row(kernel="k_slow", compute_ms=5.0, calls=1,
-                 updated_at="2026-01-01T00:00:00+00:00"),
-            _row(kernel="k_best_calls_low", compute_ms=2.0, calls=1,
-                 updated_at="2026-01-01T00:00:01+00:00"),
-            _row(kernel="k_best_calls_high", compute_ms=2.0, calls=9,
-                 updated_at="2026-01-02T00:00:00+00:00"),
-        ]
-        for row in rows:
-            _profile_cache.record(row)          # 返回值是稀疏口径，这里不关心
+        _profile_cache.write_winner(key, {"kernel": "kupl_dedicated",
+                                         "optimize": "greedy", "wall_ms": 0.25})
+        _forget()
 
-        picked = _profile_cache.best(key)
-        assert picked is not None
-        # 主判据：compute_ms 最小（5.0 那行必须被淘汰，哪怕它 calls 也小）。
-        assert float(picked["compute_ms"]) == 2.0, picked
-        # 并列判据一：calls 大者胜（9 > 1）。
-        assert picked["kernel"] == "k_best_calls_high", picked
-        assert picked["calls"] == "9", picked
+        row = _profile_cache.read_winner(key)
+        assert isinstance(row, dict), row
+        assert row["kernel"] == "kupl_dedicated", row
+        assert row["optimize"] == "greedy", row
+        assert row["wall_ms"] == "0.250", ("三位小数落盘", row["wall_ms"])
+        assert row["equation"] == "ij,jk->ik", row
+        assert row["shape"] == "2x3|3x4", ("键列按归一化形状存", row["shape"])
+        assert row["line"] == "1", ("命中要能钉到具体记录", row)
 
-        # 并列判据二：compute_ms 与 calls 都相同 → updated_at 新者胜。
-        _profile_cache.record(
-            _row(kernel="k_tie_newest", compute_ms=2.0, calls=9,
-                 updated_at="2026-03-01T00:00:00+00:00"))
-        newest = _profile_cache.best(key)
-        assert newest is not None and newest["kernel"] == "k_tie_newest", newest
-        assert newest["updated_at"] == "2026-03-01T00:00:00+00:00", newest
-
-        # 副本语义：改返回值不得污染索引。
-        newest["kernel"] = "hacked"
-        assert _profile_cache.best(key)["kernel"] == "k_tie_newest"
-
-        # 未命中返回 None（而不是空字典）。
-        assert _profile_cache.best(_key(equation="zz->z")) is None
+        row["kernel"] = "tampered"
+        again = _profile_cache.read_winner(key)
+        assert again["kernel"] == "kupl_dedicated", ("返回值必须是副本", again)
 
 
-# ── 3. 稀疏写入 ─────────────────────────────────────────────────────────────
-
-def test_profile_record_is_sparse():
-    """同键同配置不快过"当前最优 × 0.95"→ False 且不落盘；快过 → True 再写一行。"""
+# -- 5. read_winner：2 行 → 报错并列候选 -----------------------------------------
+def test_read_winner_duplicate_rows_raise_with_all_candidates() -> None:
+    """§2.2/§7：同键多行 → 抛错并给出**全部**候选行（含行号），不挑、不猜。"""
     with _isolated() as work:
         directory = os.path.join(work, "cache")
-        _activate(directory)
-        path = os.path.join(directory, _profile_cache.PROFILE_NAME)
-        base = _row(compute_ms=100.0, calls=1)
+        _profile_cache.configure(directory)
+        key = _key()
+        other = dict(key, equation="ab,bc->ac")
+        _write_table(directory, [
+            _row(key, kernel="kupl_dedicated", optimize="auto", note="旧行"),
+            _row(other, kernel="backend"),
+            _row(key, kernel="kupl_topology", optimize="greedy", note="新行"),
+        ])
+        try:
+            _profile_cache.read_winner(key)
+        except _profile_cache.DuplicateProfileEntry as exc:
+            rows = [dict(item) for item in exc.rows]
+            message = str(exc)
+        else:                                            # pragma: no cover - 失败路径
+            raise AssertionError("同键 2 行时 read_winner 必须抛 DuplicateProfileEntry")
 
-        # 新键：必写。
-        assert _profile_cache.record(base) is True
-        # 只是排队，还没落盘。
-        assert not os.path.exists(path), "record() 只该更新内存/队列，不该直接写盘"
-
-        # 同样耗时：不够格。
-        assert _profile_cache.record(_row(compute_ms=100.0, calls=1)) is False, "同耗时不该再写"
-        # 更慢：不够格。
-        assert _profile_cache.record(_row(compute_ms=140.0, calls=1)) is False, "更慢不该写"
-        # 边界：恰好 95%（严格小于才算改进），不够格。
-        assert _profile_cache.record(_row(compute_ms=95.0, calls=1)) is False, "95% 不算改进"
-        assert not os.path.exists(path), "不够格的观测不得落盘"
-
-        # 内存取更小值：这些"不够格写盘"的观测仍然参与选优。
-        assert _profile_cache.best(_key())["compute_ms"] == "95.000", _profile_cache.best(_key())
-        assert _profile_cache.flush() == 1
-        table = _read_rows(path)
-        assert len(table) == 2, ("表头 + 1 行", table)
-        # 磁盘只留"够格"的那行——写入口径与内存口径本来就是两回事。
-        assert [row[_column("compute_ms")] for row in table[1:]] == ["100.000"], table
-
-        # 快过 5%（89.0 < 95.0 * 0.95 = 90.25）：值得再写一行。
-        assert _profile_cache.record(_row(compute_ms=89.0, calls=1)) is True, "快过 5% 必须写"
-        assert _profile_cache.flush() == 1
-        table = _read_rows(path)
-        assert len(table) == 3, ("表头 + 2 行", table)
-        assert table[0] == list(_profile_cache.PROFILE_COLUMNS), table[0]
-        assert [row[_column("compute_ms")] for row in table[1:]] == [
-            "100.000", "89.000"], table
-        assert _profile_cache.best(_key())["compute_ms"] == "89.000"
+        assert len(rows) == 2, ("候选行必须是全部、且不含别的键", len(rows), rows)
+        assert [row.get("line") for row in rows] == ["1", "3"], (
+            "候选行要带文件里的数据行号", [row.get("line") for row in rows])
+        for text in ("kupl_dedicated", "kupl_topology", "旧行", "新行"):
+            assert text in message, ("报错里要能看到这一行", text, message)
+        assert "只允许 1 行" in message, message
+        # 便利读法也不能偷偷选一行：数据错误照旧抛。
+        try:
+            _profile_cache.best(key)
+        except _profile_cache.DuplicateProfileEntry:
+            pass
+        else:                                            # pragma: no cover - 失败路径
+            raise AssertionError("best() 也不许多行时猜一行")
+        # 同键多行只让**那个键**不可用：别的键仍然读得到。
+        assert _profile_cache.read_winner(other) is not None, "异键必须仍可读"
 
 
-# ── 4. compare 只写不读 ─────────────────────────────────────────────────────
+# -- 6. 读路径绝不写 -------------------------------------------------------------
+def test_read_winner_never_writes() -> None:
+    """§1/§7：读路径零写入——缺表不建目录，有表时命中/未命中都不改文件。"""
+    with _isolated() as work:
+        missing = os.path.join(work, "missing")
+        _profile_cache.configure(missing)
+        try:
+            _profile_cache.read_winner(_key())
+        except _profile_cache.ProfileMissing:
+            pass
+        assert not os.path.exists(missing), ("读路径不得建目录", os.listdir(work))
 
-def test_profile_compare_is_write_only():
-    """compare 真写且表头正确；窗口内去重；load/best/summary/notice 一次都不读它。"""
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
+        key = _key()
+        _profile_cache.write_winner(key, {"kernel": "generic", "optimize": "auto",
+                                         "wall_ms": 1.5})
+        _forget()
+        before = _state_of(directory)
+
+        for _ in range(3):
+            assert _profile_cache.read_winner(key) is not None
+        assert _profile_cache.read_winner(_key(equation="ab,bc->ac")) is None
+        assert _profile_cache.best(_key(equation="ab,bc->ac")) is None
+        _profile_cache.summary()
+
+        after = _state_of(directory)
+        assert before["bytes"] == after["bytes"], "读路径改动了配置表的字节内容"
+        assert before["mtime_ns"] == after["mtime_ns"], (
+            "读路径重写了配置表（mtime 变了）")
+        assert before["size"] == after["size"], "配置表大小变了"
+        assert before["names"] == after["names"], (
+            "读路径在配置目录里新建/删除了文件", before["names"], after["names"])
+
+
+# -- 7. write_winner：同键只留一行 -----------------------------------------------
+def test_write_winner_keeps_single_row_and_drops_same_key() -> None:
+    """§3.3/§7：写前先删同键**所有**行（含更快的旧行），别的键原样保留。"""
     with _isolated() as work:
         directory = os.path.join(work, "cache")
-        _activate(directory)
-        first = {
-            **_key(equation="ab,bc->ac"),
-            "kernel": "kupl_dedicated",
-            "optimize": "auto",
-            "compare": "ij,jk->ik",
-            "ref_ms": 3.0,
-            "compute_ms": 1.5,
-            "equivalence": {"kind": "permute", "equation": "ij,jk->ik",
-                            "operand_order": [1, 0]},
+        _profile_cache.configure(directory)
+        key = _key()
+        other = dict(key, equation="ab,bc->ac")
+        _write_table(directory, [
+            _row(key, kernel="stale_fast", optimize="auto", wall_ms="0.010"),
+            _row(other, kernel="backend", optimize="auto", wall_ms="5.000"),
+            _row(key, kernel="stale_slow", optimize="greedy", wall_ms="9.000"),
+        ])
+        path = _table_path(directory)
+        _profile_cache.write_winner(key, {"kernel": "kupl_dedicated",
+                                         "optimize": "optimal", "wall_ms": 2.0})
+        _forget()
+
+        table = _data_rows(path)
+        same = [row for row in table if row["equation"] == "ij,jk->ik"]
+        assert len(same) == 1, ("同键只许留 1 行", len(same), table)
+        assert same[0]["kernel"] == "kupl_dedicated", same[0]
+        assert same[0]["optimize"] == "optimal", same[0]
+        assert same[0]["wall_ms"] == "2.000", same[0]
+        assert "stale_fast" not in {row["kernel"] for row in table}, (
+            "更快的旧行也必须被删（防异环境污染）", table)
+        kept = [row for row in table if row["equation"] == "ab,bc->ac"]
+        assert len(kept) == 1 and kept[0]["kernel"] == "backend", (
+            "别的键的行不许被冲掉", table)
+
+        # 整表重写（不是追加）：表头只出现一次。
+        raw = _read_rows(path)
+        assert raw[0] == [str(name) for name in _profile_cache.PROFILE_COLUMNS], raw[0]
+        assert sum(1 for line in raw if line and line[0] == "shape") == 1, raw
+
+
+# -- 8. 等价行只写载荷 -----------------------------------------------------------
+def test_write_winner_equivalence_row_has_payload_only() -> None:
+    """§3.3b/§7：等价行只写载荷 + ``note``，性能字段留空；能被解回可执行改写。"""
+    with _isolated() as work:
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
+        key = _key()
+        payload = {
+            "target_equation": "cadb,ac,bd->",
+            "operand_order": [1, 0],
+            "operand_permutations": [None, [1, 0]],
+            "output_permutation": None,
         }
-        second = {
-            **_key(equation="abc->acb"),
-            "kernel": "kupl_topology",
-            "optimize": "greedy",
-            "compare": "abc->acb",
-            "ref_ms": 2.0,
-            "compute_ms": 1.0,
-        }
-        assert _profile_cache.record_compare(first) is True
-        assert _profile_cache.record_compare(second) is True
+        _profile_cache.write_winner(key, {"kernel": "generic", "wall_ms": 0.1})
+        _profile_cache.write_winner(key, equivalence=payload)
+        _forget()
 
-        compare_path = os.path.join(directory, _profile_cache.COMPARE_NAME)
-        assert os.path.exists(compare_path), "compare 行必须即时落盘（不进队列）"
-        table = _read_rows(compare_path)
-        assert table[0] == list(_profile_cache.COMPARE_COLUMNS), table[0]
-        assert len(table) == 3, ("表头 + 2 行", len(table))
-        equations = [row[_profile_cache.COMPARE_COLUMNS.index("equation")]
-                     for row in table[1:]]
-        assert equations == ["ab,bc->ac", "abc->acb"], equations
-        # equivalence 报告（explain 的字典）可以直接塞进来，字段被摊平落盘。
-        kinds = [row[_profile_cache.COMPARE_COLUMNS.index("equivalence_kind")]
-                 for row in table[1:]]
-        assert kinds[0] == "permute", kinds
+        table = _data_rows(_table_path(directory))
+        assert len(table) == 1, ("等价行也该删掉同键的性能行", table)
+        row = table[0]
+        assert row["target_equation"] == "cadb,ac,bd->", row
+        assert row["note"] == _profile_cache.EQUIVALENCE_NOTE, (
+            "缺省备注就是冻结文案", row["note"])
+        for name in _profile_cache.PERFORMANCE_FIELDS:
+            assert row[name] == "", ("等价行不许带性能配置", name, row)
 
-        # 同一 (键, 配置, 参照) 在 60 s 窗口内只写一次（写入侧的稀疏口径）。
-        assert _profile_cache.record_compare(dict(first)) is False, "窗口内重复应被去重"
-        assert len(_read_rows(compare_path)) == 3, "窗口内重复行不得再写一次"
+        decoded = _profile_cache.equivalence_payload(row)
+        assert isinstance(decoded, dict), decoded
+        assert decoded["target_equation"] == "cadb,ac,bd->", decoded
+        assert tuple(decoded["operand_order"]) == (1, 0), decoded
+        assert decoded["operand_permutations"][0] is None, decoded
+        assert tuple(decoded["operand_permutations"][1]) == (1, 0), decoded
+        assert decoded["output_permutation"] is None, decoded
+        assert decoded["note"] == _profile_cache.EQUIVALENCE_NOTE, decoded
 
-        # 只写不读：跟踪 open，四个读入口都不许碰 compare 文件。
-        trace = _OpenTrace()
-        with patch("builtins.open", trace):
-            _profile_cache.load(force=True)
-            _profile_cache.best(_key(equation="ab,bc->ac"))
-            state = _profile_cache.summary()
-            _profile_cache.notice()
-        assert not trace.touched(_profile_cache.COMPARE_NAME), (
-            "compare 表必须一次都不读", trace.touched(_profile_cache.COMPARE_NAME))
-        # 主表确实被读过（否则上面的"没读 compare"可能只是整个 IO 都没发生）。
-        assert trace.touched(_profile_cache.PROFILE_NAME), trace.paths
-
-        # summary 里也没有 compare 的读取计数（没有"读了多少 compare 行"这种字段），
-        # 文档承诺的键必须齐全。
-        assert not [name for name in state if "compare" in name], list(state)
-        assert SUMMARY_KEYS <= set(state), (SUMMARY_KEYS - set(state), list(state))
-        # 目录可显式配置，但**不需要**先配置：这个提示位恒为假。
-        assert state["requires_configure"] is False, state
+        # 性能行解不出载荷：不会被误当成可执行改写。
+        _profile_cache.write_winner(key, {"kernel": "generic", "wall_ms": 0.1})
+        _forget()
+        assert _profile_cache.equivalence_payload(
+            _profile_cache.read_winner(key)) is None, "性能行不该被解成载荷"
 
 
-# ── 5. 关闭零 IO ────────────────────────────────────────────────────────────
+# -- 9. tune_session：期间不读不写 -----------------------------------------------
+def test_tune_session_blocks_reads_and_writes() -> None:
+    """§3.1/§7：``tune_session`` 期间读当无命中、写静默不落盘；退出即恢复。"""
+    with _isolated() as work:
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
+        key = _key()
+        _profile_cache.write_winner(key, {"kernel": "generic", "optimize": "auto",
+                                         "wall_ms": 1.0})
+        _forget()
+        before = _state_of(directory)
+        assert _profile_cache.read_winner(key) is not None, "会话之前读得到"
 
-def test_profile_disabled_does_no_io():
-    """``PYQCD_EINSUM_PROFILE=0``：开关假、写入假、临时目录里不产生任何文件。"""
-    with _isolated(disabled=True) as work:
+        with _profile_cache.tune_session():
+            assert _profile_cache.read_winner(key) is None, (
+                "遍历期间读表会把'照表施加'混进被测配置")
+            _profile_cache.write_winner(key, {"kernel": "kupl_topology",
+                                             "optimize": "greedy", "wall_ms": 0.001})
+            _profile_cache.write_winner(key, equivalence={
+                "target_equation": "cadb,ac,bd->", "operand_order": [1, 0]})
+            with _profile_cache.tune_session():          # 嵌套：仍然不读不写
+                assert _profile_cache.read_winner(key) is None
+            assert _profile_cache.read_winner(key) is None, "内层退出不该提前恢复"
+            during = _state_of(directory)
+            assert during["bytes"] == before["bytes"], "遍历期间配置表被改写了"
+            assert during["mtime_ns"] == before["mtime_ns"], (
+                "遍历期间配置表被重写了")
+
+        after_row = _profile_cache.read_winner(key)
+        assert after_row is not None, "会话退出后读必须恢复"
+        assert after_row["kernel"] == "generic", ("遍历期间的写不该落盘", after_row)
+        assert _state_of(directory)["bytes"] == before["bytes"], (
+            "会话期间一个字都不许落盘")
+        _profile_cache.write_winner(key, {"kernel": "backend", "wall_ms": 9.0})
+        _forget()
+        assert _profile_cache.read_winner(key)["kernel"] == "backend", (
+            "会话退出后写必须恢复")
+
+
+# -- 10. 关闭零副作用 ------------------------------------------------------------
+def test_disabled_profile_reads_nothing_and_writes_nothing() -> None:
+    """§1/§6：``PYQCD_EINSUM_PROFILE=0`` → 读返回 ``None``、写静默、零目录。"""
+    with _isolated() as work:
+        os.environ[_profile_cache.PROFILE_ENV] = "0"
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
         assert _profile_cache.enabled() is False
-        # 显式参数只回答开关本身（压过环境里的 0）。
-        assert _profile_cache.enabled(True) is True
-        assert _profile_cache.enabled(False) is False
+        assert _profile_cache.read_winner(_key()) is None, (
+            "关闭时读当无命中（不抛 ProfileMissing）")
+        assert _profile_cache.write_winner(_key(), {"kernel": "backend"}) is None
+        assert _profile_cache.best(_key()) is None
 
-        assert _profile_cache.record(_row()) is False
-        assert _profile_cache.record_compare({**_key(), "compare": "ij->ji"}) is False
-        assert _profile_cache.load() == 0
-        assert _profile_cache.flush() == 0
         state = _profile_cache.summary()
         assert state["enabled"] is False, state
         assert state["rows"] == 0 and state["keys"] == 0, state
-        assert state["loaded"] is False, state
-        assert _profile_cache.notice() is None
-
-        # 关闭时连目录都不建：临时 CWD 里必须还是空的。
-        assert os.listdir(work) == [], os.listdir(work)
-        assert not os.path.exists(os.path.join(work, _profile_cache.DEFAULT_DIR))
+        assert os.listdir(work) == [], ("关闭时不得产生任何文件", os.listdir(work))
+        assert not os.path.exists(directory), "关闭时不许建目录"
 
 
-# ── 6. 不可写降级 ───────────────────────────────────────────────────────────
-
-def test_profile_unwritable_directory_degrades():
-    """chmod 500 的目录：不抛、``last_error`` 非空、写入返回 False、不造 CSV。"""
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        raise unittest.SkipTest("以 root 运行，chmod 挡不住写入，本契约不可验")
-
+# -- 11. format_shape ------------------------------------------------------------
+def test_format_shape_normalizes() -> None:
+    """§7：``x`` 连轴、``|`` 连操作数；字符串原样、无法解析给空串。"""
+    assert _profile_cache.format_shape([(2, 3), (3, 4)]) == "2x3|3x4"
+    assert _profile_cache.format_shape([[2, 3], [3, 4]]) == "2x3|3x4"
+    assert _profile_cache.format_shape([(2, 3)]) == "2x3"
+    assert _profile_cache.format_shape(" 2x3|3x4 ") == "2x3|3x4"
+    assert _profile_cache.format_shape(_profile_cache.format_shape(
+        [(2, 3), (3, 4)])) == "2x3|3x4", "归一化必须幂等"
+    assert _profile_cache.format_shape(None) == ""
+    assert _profile_cache.format_shape(object()) == "", "不可解析必须给空串"
+    assert _profile_cache.format_shape([2, 3]) == "2|3", (
+        "裸轴长列表会被读成两个 0 维操作数（入参必须是操作数列表）")
+    # 归一化之后是同一把键：列表写法与字符串写法命中同一行。
     with _isolated() as work:
-        directory = os.path.join(work, "readonly")
-        os.makedirs(directory)
-        os.chmod(directory, 0o500)
-        try:
-            # 定位/建目录不得把异常抛给调用方。
-            _use_dir(directory)
-            _profile_cache.load()
-
-            state = _profile_cache.summary()
-            assert state["last_error"], ("不可写必须留下原因", state)
-            assert state["enabled"] is False, ("有效可用性必须为假", state)
-            assert state["dir"] == os.path.abspath(directory), state
-
-            assert _profile_cache.record(_row()) is False
-            assert _profile_cache.record_compare({**_key(), "compare": "ij->ji"}) is False
-            assert _profile_cache.flush() == 0
-            # 一行提示，且必须说明"不可用"（不刷屏、也不假装有缓存）。
-            message = _profile_cache.notice()
-            assert message is not None and "不可用" in message, message
-
-            # 目录本身可读：确认没有任何 CSV 被造出来。
-            assert sorted(os.listdir(directory)) == [], os.listdir(directory)
-        finally:
-            os.chmod(directory, 0o700)
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
+        _profile_cache.write_winner(_key(shape=[(2, 3), (3, 4)]),
+                                   {"kernel": "backend"})
+        _forget()
+        assert _profile_cache.read_winner(_key(shape="2x3|3x4")) is not None, (
+            "两种形状写法必须落到同一把键上")
 
 
-# ── 7. format_shape ────────────────────────────────────────────────────────
-
-def test_profile_format_shape():
-    """``[(2,3),(3,4)]`` → ``2x3|3x4``；已规范化字符串原样返回；怪输入不抛。"""
-    format_shape = _profile_cache.format_shape
-    assert format_shape([(2, 3), (3, 4)]) == "2x3|3x4"
-    assert format_shape([[2, 3], [3, 4]]) == "2x3|3x4"
-    assert format_shape([(2, 3)]) == "2x3"
-    # 已规范化的字符串只去空白（幂等：写回读回都落到同一个键）。
-    assert format_shape(" 2x3|3x4 ") == "2x3|3x4"
-    assert format_shape(format_shape([(2, 3), (3, 4)])) == "2x3|3x4"
-    # 无法解析给空串，归一化不因为怪输入把调用方拖崩。
-    assert format_shape(None) == ""
-    assert format_shape(7) == ""
-    # 语义提醒：入参必须是"操作数列表"，裸轴长列表 ``[2, 3]`` 会被读成两个 0 维操作数。
-    assert format_shape([2, 3]) == "2|3"
-
-
-# ── 8. 目录优先级 ───────────────────────────────────────────────────────────
-
-def test_profile_directory_priority_env_over_default():
-    """环境变量压过默认 ``./.cache``；默认那档只落在临时 CWD 下。"""
+# -- 12. 目录优先级 --------------------------------------------------------------
+def test_directory_priority_env_over_default_and_configure_over_env() -> None:
+    """§7：参数 > ``PYQCD_EINSUM_PROFILE_DIR`` > 默认 ``./.cache``；ensure 只补齐。"""
     with _isolated() as work:
-        module = _profile_cache
-        default_dir = os.path.abspath(os.path.join(work, module.DEFAULT_DIR))
-        # 1) 都没设：默认是 CWD 下的 .cache（不是仓库根）。
-        state = module.summary()
-        assert state["dir"] == default_dir, state
-        assert state["file"] == os.path.join(default_dir, module.PROFILE_NAME), state
-        assert state["dir"].startswith(os.path.abspath(work)), (
-            "默认目录必须落在临时 CWD 下，仓库根不许出现 .cache", state)
+        default = os.path.join(os.path.abspath(work), _profile_cache.DEFAULT_DIR)
+        assert _profile_cache.ensure_configured() == default, (
+            "缺省目录是 CWD 下的 .cache", _profile_cache.ensure_configured())
+        assert _profile_cache.profile_path() == _table_path(default)
 
-        # 2) 环境变量覆盖默认：改完即时生效（重启目录解析）。
         env_dir = os.path.join(work, "env_cache")
-        os.environ[module.DIR_ENV] = env_dir
-        _reset_state()
-        state = module.summary()
-        assert state["dir"] == os.path.abspath(env_dir), state
-        assert state["file"] == os.path.join(os.path.abspath(env_dir),
-                                            module.PROFILE_NAME), state
+        os.environ[_profile_cache.DIR_ENV] = env_dir
+        assert _profile_cache.configure(None) == os.path.abspath(env_dir), (
+            "环境变量压过默认目录")
+        assert _profile_cache.ensure_configured() == os.path.abspath(env_dir)
 
-        # 3) 真的写到环境变量指定的目录里（路径解析与落盘是同一份口径）。
-        assert module.record(_row()) is True
-        assert module.flush() == 1
-        assert os.path.exists(os.path.join(env_dir, module.PROFILE_NAME))
-        assert not os.path.exists(os.path.join(default_dir, module.PROFILE_NAME)), (
-            "环境变量生效时不得再往默认目录写")
+        pinned = os.path.join(work, "pinned")
+        assert _profile_cache.configure(pinned) == os.path.abspath(pinned), (
+            "参数压过环境变量")
+        assert _profile_cache.ensure_configured() == os.path.abspath(pinned), (
+            "ensure_configured 不得用环境变量改写已钉住的目录")
+        assert not os.path.exists(pinned), "configure 只解析路径，读路径不建目录"
+        assert not os.path.exists(env_dir), "只解析路径，不得按环境变量建目录"
+
+        os.environ.pop(_profile_cache.DIR_ENV, None)
+        assert _profile_cache.configure(None) == default, (
+            "configure(None) 才按'env > 默认'重算")
 
 
-def test_profile_configure_parameter_beats_environment():
-    """``configure(directory)`` 的参数压过 ``PYQCD_EINSUM_PROFILE_DIR``。"""
-    if not _HAS_CONFIGURE:
-        raise unittest.SkipTest(
-            "_profile_cache.configure 尚未落地（模块 __all__ 里没有它）；"
-            "参数优先级不可验，其余七条已用环境变量走同一条代码路径")
-
+# -- 13. summary 的行/键计数 ------------------------------------------------------
+def test_summary_counts_rows_and_keys() -> None:
+    """§7：``summary`` 如实报行数/键数（同键多行时 keys 仍是 1）；缺表报 0。"""
     with _isolated() as work:
-        module = _profile_cache
-        env_dir = os.path.join(work, "env_cache")
-        param_dir = os.path.join(work, "param_cache")
-        os.environ[module.DIR_ENV] = env_dir
-        _reset_state()
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
+        empty = _profile_cache.summary()
+        assert empty["rows"] == 0 and empty["keys"] == 0, empty
+        assert empty["file"] == os.path.abspath(_table_path(directory)), empty
+        assert empty["enabled"] is True, empty
+        assert empty["last_error"] is None, empty
 
-        returned = module.configure(param_dir)
-        assert isinstance(returned, str), type(returned).__name__
-        assert returned == os.path.abspath(param_dir), returned
+        key = _key()
+        _profile_cache.write_winner(key, {"kernel": "backend", "wall_ms": 1.0})
+        _profile_cache.write_winner(dict(key, equation="ab,bc->ac"),
+                                   {"kernel": "generic", "wall_ms": 2.0})
+        _forget()
+        state = _profile_cache.summary()
+        assert state["rows"] == 2 and state["keys"] == 2, state
 
-        # 参数压过环境：落盘真的去了 param_dir，而不是 env_dir。
-        assert module.record(_row()) is True
-        assert module.flush() == 1
-        assert os.path.exists(os.path.join(param_dir, module.PROFILE_NAME))
-        assert not os.path.exists(os.path.join(env_dir, module.PROFILE_NAME)), (
-            "configure 的参数必须压过环境变量")
-
-        # configure(None) 走回环境变量/默认值；至少必须给出一个绝对路径。
-        fallback = module.configure(None)
-        assert isinstance(fallback, str) and os.path.isabs(fallback), fallback
+        _write_table(directory, [_row(key, kernel="a"), _row(key, kernel="b")])
+        broken = _profile_cache.summary()
+        assert broken["rows"] == 2, broken
+        assert broken["keys"] == 1, ("同键多行时 keys 仍应是 1", broken)
 
 
+# -- 14. wall_ms = 整个 contract() 的墙钟 ---------------------------------------
+def test_wall_ms_covers_the_whole_contract_call() -> None:
+    """§4/§8：``wall_ms`` 是**整段** ``contract()`` 的墙钟（含读表这条腿）。
+
+    在 :func:`read_winner` 里注入 :data:`READ_SLEEP` 秒：它不是"收缩执行"的时间，却
+    必须出现在 ``wall_ms`` 里。旧的拆分计时会把它算进另一列（该列已随 §4 删除），
+    所以这条断言正好钉住"只有一列、且是全程"。
+    """
+    with _isolated() as work:
+        directory = os.path.join(work, "cache")
+        operands = [np.arange(12, dtype=np.complex128).reshape(3, 4),
+                    np.arange(20, dtype=np.complex128).reshape(4, 5)]
+        real = _profile_cache.read_winner
+        calls: list[dict[str, Any]] = []
+
+        def slow(key: Mapping[str, Any]) -> Any:
+            calls.append(dict(key))
+            time.sleep(READ_SLEEP)
+            return real(key)
+
+        with patch.object(_profile_cache, "read_winner", slow), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = contract("ij,jk->ik", *operands, profile=True,
+                              profile_dir=directory)
+
+        assert tuple(np.shape(result)) == (3, 5), np.shape(result)
+        info = _api.last_profile()
+        assert calls, "开启画像的普通调用必须经 read_winner"
+        assert isinstance(info, dict), ("画像调用必须留下观测口", info)
+        assert "wall_ms" in info, ("观测口必须用 wall_ms", sorted(info))
+        assert LEGACY_MS_COLUMN not in info, ("观测口不得残留旧字段名", sorted(info))
+        assert "init_ms" not in info, ("拆分计时已删除（§4）", sorted(info))
+        assert float(info["wall_ms"]) >= READ_SLEEP * 1000.0 * 0.8, (
+            "注入的读表耗时必须计入 wall_ms", info["wall_ms"])
+        assert float(info["wall_ms"]) < 60_000.0, info["wall_ms"]
+        # 表列名与观测口同名：写方按名字取值，改名会静默丢数字。
+        assert "wall_ms" in _profile_cache.PERFORMANCE_FIELDS, (
+            _profile_cache.PERFORMANCE_FIELDS)
+
+
+#: 本契约的用例清单（``main`` 与 ``conftest`` 共用）。
 TESTS = (
-    test_profile_csv_roundtrip_preserves_columns_and_rows,
-    test_record_filters_non_replayable_kernels,
-    test_profile_best_prefers_lowest_compute_then_calls_then_newest,
-    test_profile_record_is_sparse,
-    test_profile_compare_is_write_only,
-    test_profile_disabled_does_no_io,
-    test_profile_unwritable_directory_degrades,
-    test_profile_format_shape,
-    test_profile_directory_priority_env_over_default,
-    test_profile_configure_parameter_beats_environment,
+    test_frozen_names_and_columns,
+    test_read_winner_missing_file_raises_profile_missing,
+    test_read_winner_zero_rows_returns_none,
+    test_read_winner_single_row_returns_copy,
+    test_read_winner_duplicate_rows_raise_with_all_candidates,
+    test_read_winner_never_writes,
+    test_write_winner_keeps_single_row_and_drops_same_key,
+    test_write_winner_equivalence_row_has_payload_only,
+    test_tune_session_blocks_reads_and_writes,
+    test_disabled_profile_reads_nothing_and_writes_nothing,
+    test_format_shape_normalizes,
+    test_directory_priority_env_over_default_and_configure_over_env,
+    test_summary_counts_rows_and_keys,
+    test_wall_ms_covers_the_whole_contract_call,
 )
 
 
-def test_einsum_profile_cache_contracts():
-    """注册入口：逐条运行 ``TESTS``；全跳过时也 SkipTest（不许静默通过）。"""
+def test_einsum_profile_cache_contracts() -> None:
+    """套件入口：跑完 :data:`TESTS` 的每一条，任何一条失败就抛出汇总。"""
+    failures: list[str] = []
     passed = skipped = 0
-    failures = []
     for test in TESTS:
         try:
             test()
@@ -677,7 +667,7 @@ def test_einsum_profile_cache_contracts():
             print(f"PASS {test.__name__}", flush=True)
     if failures:
         raise AssertionError(
-            f"{len(failures)} 条配置画像缓存契约失败：" + "; ".join(failures))
+            f"{len(failures)} 条配置表读写契约失败：" + "; ".join(failures))
     if passed == 0:
         raise unittest.SkipTest(
             f"profile cache contracts did not run ({skipped} skipped)")

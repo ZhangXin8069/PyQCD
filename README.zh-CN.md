@@ -37,57 +37,44 @@ python -m pyqcd --json     # machine-readable
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
 
+## 未发布 — qcd-einsum：只有 `--tune` 能写配置表
+
+* **一张表：`pyqcd.einsum.profile.csv`**。旧名 `profile.csv` 已废弃；`profile_equivalence.csv`
+  **已删除**——不再创建、不再读取。等价结论只以这张表里的**等价行**存在。
+* **只有 `--tune` 能写；`contract()` 只读**。这张表是**标定产物**：普通调用也能写的话，
+  不同机器、不同负载、不同版本的观测会互相覆盖，表就不再是任何一台机器上的可信结论。
+  未 tune 时调用会警告一次、打印该配置的 tune 命令，然后**继续执行**（按未命中处理）。
+* **同键只允许 1 行**：同一 `(shape, dtype, device, equation, backend)` 出现 2 行以上 →
+  读侧**报错**并打印全部候选行、非零退出；不猜、不选"最新"。
+* **命中不得覆盖显式请求**：显式且非 `auto` 的 `kernel_force` / `optimize` /
+  `as_equivalence` 与命中行不一致 → **报错**（打印键、表值、请求值与行位置）。
+  `--compare` 不算；显式写 `auto` 等于没给。
+* **`wall_ms` 是唯一计时列**：整个 `pyqcd.einsum.contract(...)` 调用的墙钟——含等价转换、
+  缓存读写与未命中时的规划-匹配；**不含** compare 参考与收尾落盘。
+* **`as_equivalence` 缺省 `auto`**：只有表里有 tune 写下的等价行时才改写，否则不改写；
+  `true` / `false` 强制旧行为，`force` 供 `--tune` 刷新。
+* **`--tune`**：整轮遍历关闭缓存（`tune_session()`）；每次调用受 `--tune-timeout`
+  （缺省 **30 s**）约束；异常 / 超时 / 数值 MISMATCH **只打印、不退出**。遍历
+  `as_equivalence ∈ {true,false}` × `optimize ∈ {auto, none, compare 目标}`（10 组），
+  写入选优行并**删除该键其它所有行**——包括更快的历史行，防止异环境污染。
+
 ## 0.5.3 发布声明 — qcd-einsum：等价路由表、`--tune` 加固
 
-* **`profile_equivalence.csv` 升级为路由表（schema v2）**：能改写的行除 `state/kind` 外，还存
-  `target_equation` **与三个置换字段**（`operand_order`/`operand_permutations`/`output_permutation`），
-  命中即可**直接施加、不再重跑同构搜索**。行带 `schema_version`；同键多行时**版本号大者优先**，
-  再 `ok` 优于 `none`，再取 `updated_at` 新者。
-* **方案 A**：改写后的内层调用以 `target_equation` 记录，于是 `profile.csv` 里有语料写法的行，
-  可按它复用最快内核/optimize。
-* `--as-equivalence force` 忽略备忘并刷新。
-* **`--tune`**：**每一次** einsum 调用受 `--tune-timeout`（默认 100 s）约束，整轮受 `--tune-budget`；
-  冲突参数**警告后忽略**（退出码 0）；超时/异常/数值超 `atol` 的组合**从缓存撤回**。
+> 已被上面的"未发布"条目取代：带 `schema_version` 的独立等价表、"版本号大者优先"规则
+> 与 100 s 的 tune 超时都不存在了。
+
 * **强制 `generic`/`backend` 不再做特化匹配与等价改写**（对通用收缩毫无帮助）；提示整句单语
   （`PYQCD_EINSUM_LANG`）；画像命中只打**一行**（含缓存文件与命中行号），`route :`/`kernel :`
   这类证据行保留。
 
 ## 0.5.2 发布声明 — qcd-einsum：`--tune`、等价备忘、诚实的缓存行
 
-* **`--tune`**：锁定 `equation/shape/dtype/device/backend`，遍历
-  `kernel_force × as_equivalence × optimize`（≤30 组，`compare` 固定 `none`）。
-  每一次 einsum 调用受 `--tune-timeout`（默认 100 s）约束，整轮受 `--tune-budget`
-  （默认 0=不限）。与遍历冲突的参数一律警告后忽略（退出码 0），不再报用法错误。
-* tune 记录整张地图：遍历期间 `record(..., force_write=True)` 绕过 5% 稀疏门（每键
-  上限仍裁到最快 4 条）。超时 / 抛异常 / 数值超 `atol` 的组合会被 `drop()` 从缓存
-  撤回，避免坏配置日后胜出。
-* 等价备忘（`profile_equivalence.csv`）：证明确实改写不了的方程会被记住，后续调用
-  跳过等价步骤；`as_equivalence="force"` / `--as-equivalence force` 忽略备忘并刷新
-  ——拓扑注册表新增支持后用它可以强制重查。
-* 修复：显式指定 `kernel_force` 且经等价改写跑成的调用，过去被记成 `equivalence`
-  （不可重放）而观测被丢弃，导致默认调用永远不命中；现在记录生效的 kernel_force
-  （例如 generic：同一条 10 操作数方程上 364 ms vs kupl_topology 2792 ms）。
-* 修复：`_profile_record` 过去只要键上有任意缓存行就跳过记录，使 30 组遍历只落 1 行
-  （3%）；现在只跳过真正按命中执行的调用。
-
-无数值变化；`--tune` 的输出是单次运行实测，不是基准。
+> 已被上面的"未发布"条目取代：30 组遍历、5% 稀疏写门（每键 4 条）与
+> `profile_equivalence.csv` 都不存在了。
 
 ## 0.5.1 发布声明 — qcd-einsum：画像缓存不再推荐走不通的路
 
-`0.5.1` 修掉 0.5.0 画像缓存的三个缺陷（均由一次真实生产运行 `ambn,cgdh,…->ka`
-（10 操作数）暴露）：
-
-* 经**等价改写**跑成的调用，过去被记成初始值 `generic`——缓存说"走的通用路径"，
-  而内层其实跑的是 `kupl_topology`。现在如实标为 `equivalence`，且这类行**不落盘**
-  （在原方程上强制 `topology` 必然"未尝试"，它不是可重放的建议）。
-* `generic` 与 `backend` 行**保留**在缓存里并参与 `best()` 选优：同一条 10 操作数方程上
-  generic 实测 **385 ms**、`kupl_topology` **2735 ms**，把它排除等于丢掉最大的一笔收益。
-  只有 `equivalence` 这个诊断标签既不落盘也不参与选优。
-* CLI 的命中行在建议**未被采纳**（`generic` 行）时不再说"命中"，改为
-  `命中但未采纳 → kernel=generic（该取值不可重放，本次仍走原分派）`；
-  真正换了路的建议仍打 `命中 →`。
-
-无数值变化，无接口变化。
+> 已被上面的"未发布"条目取代：缓存不再存任何观测——只有 `--tune` 会写它。
 
 ## 0.5.0 发布声明 — qcd-einsum：profile 缓存、`kernel_force` 收窄、详解模式
 
@@ -106,14 +93,8 @@ python -m pyqcd --json     # machine-readable
 与等价改写。`LAST_INFO['path']` 里的运行时路径名（`kupl_dedicated` 等）**不变**——那是观测值，
 不是输入。
 
-**profile 画像缓存**（`pyqcd/einsum/_profile_cache.py`，默认开启）：为
-`(host, user_device, backend, dtype, equation, shape, device)` 记录一行 CSV，含实际使用的
-kernel/optimize 与实测 `compute_ms`；下次对同一键直接选最快的那条记录。`profile.csv` 读写、
-`profile_compare.csv` 只写不读（compare 与 equivalence 字段）。目录优先级：
-`profile_dir=` > `PYQCD_EINSUM_PROFILE_DIR` > `./.cache`；关闭时**不读、不写、不建目录**。
-写入是**稀疏**的：只有"新键"或"比该键最优快 >5%（`_IMPROVE_RATIO=0.95`）"才落盘，
-性能接近的配置不会把文件撑大。每键最多保留 4 条、文件超过 5 万行会重写一次、
-坏行跳过；模块用 `os.register_at_fork` 处理 fork，MPI rank 不会因父进程持锁而死锁。
+**profile 配置表**：现行设计（单张 `pyqcd.einsum.profile.csv`、只有 `--tune` 写、
+`wall_ms` 是唯一计时列）见顶部"未发布"条目；0.5.0 的读写 + 稀疏写行为已不适用。
 
 **详解模式**：`--explain` 在**首次**调用时打印 `plan :`（怎么匹配到/没匹配到）、
 `kernel :`（选了谁）、`why :`（为什么放弃专用内核：不可用 / 连续门 / dtype 策略 /
@@ -158,8 +139,9 @@ profile 认为 backend 更快）。之后的调用只打一行：命中、未命
   静默回落到通用路径；强制会旁路负缓存，保证真试一次；`last_kernel()` 给出
   `requested` / `ran` / `attempted` 与逐标签 `reasons`。
 * **自动施加等价写法**：`contract(..., as_equivalence=)`、`PYQCD_EINSUM_AS_EQUIVALENCE`、
-  `--as-equivalence`（**缺省开启**）。命中映射时改写方程、重排操作数、把结果转回
-  原输出轴序，使未命中任何特化形态的收缩仍能走到特化路径。**返回的数组始终是原
+  `--as-equivalence`。命中映射时改写方程、重排操作数、把结果转回原输出轴序，使未命中
+  任何特化形态的收缩仍能走到特化路径。（0.4.4 的"缺省总是尝试"已改为 `auto`：只有
+  配置表里有 tune 写下的等价行才改写，见顶部"未发布"条目。）**返回的数组始终是原
   方程的答案**；另有独立的输出形状守卫，形状不符即报错而不是交出错结果。
   `out=`、额外 kwargs、逐元素方程、显式优化器路径与 `specialize=False` 时不施加。
 * **带命中统计的缓存**：`_cache` 为匹配器（`specialize.match`）、等价查询

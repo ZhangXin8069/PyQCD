@@ -16,13 +16,23 @@
 
 命中时输出（每个进程每个形态一次），整句只用**一种**语言：
 
-    [pyqcd.einsum] 专用路径: topology:xxxxxxxx [内核: kupl_dedicated]
-    [pyqcd.einsum] specialized path: topology:xxxxxxxx [kernel: kupl_dedicated]
+    [pyqcd.einsum] 专用路径: topology:xxxxxxxx [match: topology] [kernel: kupl_dedicated]
+    [pyqcd.einsum] specialized path: topology:xxxxxxxx [match: topology] [kernel: kupl_dedicated]
+
+``[match: …]`` 是**命中的形态族**（拓扑签名匹配），``[kernel: …]`` 是**这次真正执行**
+的内核路线（取自执行侧 ``LAST_INFO['path']``），没跑成内核时写作 ``[plan-cache]``。
+两者必须分开读：语料形态默认**先试展开式 ``*_dedicated`` 步表**、失败才试
+``*_topology``（分派顺序见 ``_api._specialized_kernel_attempts``），所以
+"``[match: topology]`` + ``[kernel: kupl_dedicated]``"是正常且常见的结果——它说的是
+命中的是**拓扑形态**，不是走了拓扑内核。2026-11-17 之前这里只打 ``[内核: …]``，
+命中拓扑形态却显示 ``kupl_dedicated``，读起来像标签取错了（实际执行确实是
+dedicated，缺的是"命中什么"那一半）。
 
 语言由 ``PYQCD_EINSUM_LANG`` / CLI 的 ``--language`` 决定（见
-:func:`notice_language`）：``zh`` 用中文标签（``[计划缓存]`` / ``[内核: …]``）配中文
-说明，``en`` 全英文。``[pyqcd.einsum]`` 前缀与形态名是**机器可解析**的稳定部分，
-两种语言逐字相同；**绝不**把英文标签拼在中文解释前面（或反之）。
+:func:`notice_language`）：``zh`` 用中文动词（``专用路径``）配中文说明，``en`` 全英文。
+``[pyqcd.einsum]`` 前缀、形态名与 ``[match: …]`` / ``[kernel: …]`` / ``[plan-cache]``
+三个机器段是**稳定部分**，两种语言逐字相同（所以它们不翻译）；
+**绝不**把英文标签拼在中文解释前面（或反之）。
 
 设置 ``PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`` 可每次调用都输出。
 
@@ -45,6 +55,7 @@ from __future__ import annotations
 import hashlib
 import os
 import string
+import sys
 import threading
 from functools import lru_cache
 from typing import Any
@@ -320,16 +331,46 @@ def match(subscripts: str, *, use: bool | None = None) -> Entry | None:
     return entry
 
 
+def executed_path(kernel: str) -> str:
+    """``kernel`` attempt 标签对应的**实际执行路线**；取不到就退回标签本身。
+
+    拓扑入口有两条路线：``kupl_topology``（真的走了编译期 v3 步表）与
+    ``kupl_topology_v2``（v2 通用执行器完成，见 ``_kernel_kupl._TOPOLOGY_ROUTE_PATHS``），
+    光看 attempt 标签分不出来；执行侧自己写的 ``LAST_INFO['path']`` 才是结论。
+    模块不在 ``sys.modules`` 里说明本次没有内核能留下记录（专用内核才 import 它），
+    此时直接退回标签，绝不为了读一个提示去 import 原生模块。
+    """
+    if not kernel:
+        return ""
+    if kernel.startswith("cuda_"):
+        module_name = f"{__package__}._kernel_cuda"
+    elif kernel.startswith("kupl_"):
+        module_name = f"{__package__}._kernel_kupl"
+    else:
+        return kernel                  # ``backend`` 之类没有原生 LAST_INFO
+    module = sys.modules.get(module_name)
+    path = getattr(module, "LAST_INFO", {}).get("path")
+    return path if isinstance(path, str) and path else kernel
+
+
 def announce(entry: Entry, kernel: str = "") -> None:
     """命中时打印提示；默认每形态每个进程只打印一次。
 
-    ``kernel`` 是**实际执行**的专用内核名（空串表示只命中计划缓存），
-    提示里据实输出，避免把没有 kernel 的形态说成 fused。
+    ``kernel`` 是本次真的跑成的 attempt 标签（空串表示一个专用内核都没跑），
+    打印前经 :func:`executed_path` 换成执行侧的 ``LAST_INFO['path']``——
+    拓扑形态下的 ``kupl_topology`` / ``kupl_topology_v2`` 只有执行侧分得清。
 
-    整句只用**一种**语言（:func:`notice_language`）：``zh`` 用中文标签
-    （``[计划缓存]`` / ``[内核: …]``）配 ``note``，``en`` 用英文标签配 ``note_en``。
-    ``[pyqcd.einsum]`` 前缀与形态名（``topology:<摘要>``）是**机器可解析**的稳定
-    部分，两种语言逐字相同。原先英文标签后面直接拼中文 ``note``，一行里两种语言
+    提示把**命中形态**与**执行内核**分成两段：``[match: …]`` 是命中的形态族，
+    ``[kernel: …]`` 是实际执行的路线（没跑内核时 ``[plan-cache]``）。语料形态默认
+    先试 ``*_dedicated`` 步表、失败才试 ``*_topology``，所以
+    ``[match: topology] [kernel: kupl_dedicated]`` 是正常结果；只打 ``[kernel: …]``
+    会让人以为标签取错了（2026-11-17 用户报告）。
+
+    整句只用**一种**语言（:func:`notice_language`）：``zh`` 用中文动词配 ``note``，
+    ``en`` 用英文动词配 ``note_en``。``[pyqcd.einsum]`` 前缀、形态名
+    （``topology:<摘要>``）与 ``[match: …]`` / ``[kernel: …]`` / ``[plan-cache]``
+    三个机器段是**稳定部分**，两种语言逐字相同（``_einsum_notice_kernel_label_contract``
+    逐字比对这三段）。原先英文标签后面直接拼中文 ``note``，一行里两种语言
     （2026-11-17 用户实测）。
     """
     name = entry.get("name", "unknown")
@@ -343,18 +384,23 @@ def announce(entry: Entry, kernel: str = "") -> None:
         if not verbose and name in _announced:
             return
         _announced.add(name)
-    # 整句必须**单语**：标签与说明各自跟语言走（zh 用 ``note``，en 用 ``note_en``）。
-    # 原先英文标签后面直接拼中文说明，一行两种语言，用户明确反馈难看。
-    # ``[pyqcd.einsum]`` 前缀与形态名两种语言逐字相同——脚本靠它们抓这一行（``_api``
-    # 的画像命中行用的是同一前缀），翻译掉就没人能解析。
+    # 机器段先算好：两种语言逐字相同，所以只算一次、不跟着语言分支走。
+    # ``[match: …]`` 取形态名前缀（``topology:<摘要>`` → ``topology``），它回答"命中的
+    # 是什么形态"；``[kernel: …]`` 回答"实际执行的是谁"。两者缺一个就会把
+    # "命中拓扑形态"读成"走了拓扑内核"。
+    strategy = str(name).split(":", 1)[0]
+    path = executed_path(kernel)
+    executed = f"[kernel: {path}]" if path else "[plan-cache]"
+    route = f"[match: {strategy}] {executed}"
+    # 整句必须**单语**：动词与说明各自跟语言走（zh 用 ``note``，en 用 ``note_en``）。
+    # ``[pyqcd.einsum]`` 前缀与上面的机器段两种语言逐字相同——脚本靠它们抓这一行
+    # （``_api`` 的画像命中行用的是同一前缀），翻译掉就没人能解析。
     if notice_language() == "zh":
-        kind = f"内核: {kernel}" if kernel else "计划缓存"
         note = str(entry.get("note", ""))
-        message = f"[pyqcd.einsum] 专用路径: {name} [{kind}]"
+        message = f"[pyqcd.einsum] 专用路径: {name} {route}"
     else:
-        kind = f"kernel: {kernel}" if kernel else "plan-cache"
         note = str(entry.get("note_en", ""))
-        message = f"[pyqcd.einsum] specialized path: {name} [{kind}]"
+        message = f"[pyqcd.einsum] specialized path: {name} {route}"
     print(f"{message} {note}" if note else message, flush=True)
 
 

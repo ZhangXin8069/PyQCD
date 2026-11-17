@@ -89,6 +89,50 @@ scale_list, naive_cost, opt_cost, speedup, size_list, size_dict, shapes, eq,
 largest_intermediate`；
 `naive_cost/opt_cost/speedup/largest_intermediate` 用 `decimal.Decimal`。
 
+### 3.1 对外 `optimize` 取值（硬性约定，2026-11-17）
+
+> **qcd-einsum 对外提供的 `optimize` 取值只有 6 个：`auto / none / greedy / optimal / dp / branch`。**
+> `auto` 为默认值（选择器：按算子数查表，≤8 算子且 opt_einsum 可用时改用其 DP 结果）。
+> `none` = 按方程原序（亦可用 `optimize=False` 表示）。`branch` = 全宽分支定界（≡ 内部 `branch_all`）。
+> 内部另有窄宽变体 `branch_1` / `branch_2`，**仅供 `auto` 使用，不属于对外取值**。
+> `auto-hq`（≡`auto`）、`eager`/`opportunistic`/`random-greedy`/`random-greedy-128`（≡`greedy`）
+> 为**退化别名**，不属于对外约定；`branch-1`/`branch-2`/`branch-all` 属**待清除的历史名字**。
+
+**现状（2026-11-17 核对）**：`paths.PATH_OPTIONS` 有 14 个名字，
+`PATH_OPTIONS − {auto, greedy, optimal, dp, branch}` **恰好**是下面 9 个；
+`none` **不在**注册表 —— `_api._normalize_optimize("none")`（`_api.py:146`）把它归一成
+`False`，与 `optimize=False` 共用"整条链一次 n 元 einsum"那条路径（`_api.py:281` 早返回，
+**不会**走到 `get_path_fn`）。所以 `paths.get_path_fn("none")` 现在**抛 `KeyError`**，
+这是现状、不是缺陷：对外 6 个里只有它不经注册表。
+
+| 名字 | 现状标注 |
+|---|---|
+| `auto-hq` | 退化别名 ≡ `auto`（同一函数对象） |
+| `dynamic-programming` | 退化别名 ≡ `dp`（同一函数对象） |
+| `eager` | 退化别名 ≡ `greedy`（同一函数对象） |
+| `opportunistic` | 退化别名 ≡ `greedy`（同一函数对象） |
+| `random-greedy` | 退化别名 ≡ `greedy`（同一函数对象） |
+| `random-greedy-128` | 退化别名 ≡ `greedy`（同一函数对象） |
+| `branch-all` | 待清除（≡ `branch`，全宽；注册表里仍是独立名字） |
+| `branch-1` | 待清除（窄宽变体 `nbranch=1`，仅供 `auto`） |
+| `branch-2` | 待清除（窄宽变体 `nbranch=2`，仅供 `auto`） |
+
+**判据不是"能跑就行"**：`_plan_py._AUTO_CHOICES`（`_plan_py.py:769-777`）用
+1–4→`optimal`、5–6→`branch_all`、7–8→`branch_2`、9–14→`branch_1`、≥15→`greedy` 查表，
+之后 `auto` 再用 `_reference_dp_path`（`_plan_py.py:794`，`len(inputs) > 8` 即放弃）覆盖成
+`opt_einsum` 的 DP 结果——这就是"按算子数查表 + ≤8 算子改用 DP"那两句话的实现。
+`branch-1`/`branch-2` 只出现在这张表里，任何对外入口传这两个名字都属于越界。
+
+**清理顺序（有一条真实依赖，别直接删）**：`_kernel_kupl.py:1396` 的
+`_dedicated_plan(subscripts, shapes, dtype_id, "branch-2")` 把历史名字原样送进
+`contract_path`（`_kernel_kupl.py:1132-1137`），它是 heavy-arena 条件提升的唯一入口。
+删 `branch-2` 之前先把这里改成内部 `_plan_py.branch_2` 可调用对象，否则那条提升会
+静默失效（`_dedicated_plan` 的 `try` 会把异常吞成 `None`）。
+
+契约：`pyqcd/testing/_einsum_optimize_surface_contract.py`（**4 项**：`get_path_fn` 解析、
+`contract()` 六名字数值 rel ≤1e-12、集合**恰好**这 6 个且多余名字逐条标注、
+三份文档逐字一致）。清理这 9 个名字时**先改契约的 `DEGENERATE` / `TO_BE_REMOVED`**再改实现。
+
 ## 4. 规划器内部接口
 
 ```python
@@ -344,6 +388,14 @@ float32）直接落通用分步路径（`_TOPOLOGY_DECLINED_DTYPES`）。
 `cuda_dedicated` / `cuda_topology` 在那里是**运行时真实路径名**，由执行层写入（也是
 `kernel   :` 那行的值），不是用户输入，不随这次取值收窄而改名。
 
+**命中提示是两段，别把 `[match: …]` 读成执行内核**：`[match: <形态族>]` 是命中的形态
+（`topology:<摘要>` 的族名），`[kernel: <路线>]` 才是实际执行的路线（值取自
+`LAST_INFO['path']`；没跑成内核写 `[plan-cache]`）。语料形态默认**先试 `*_dedicated`、
+失败才试 `*_topology`**，所以最常见的输出 `[match: topology] [kernel: kupl_dedicated]`
+是正常结果——不是标签取错（2026-11-17 用户按旧格式 `[内核: …]` 报告过这一点）。
+两段与 `[pyqcd.einsum]` 前缀、形态名一样是**机器段**，`en`/`zh` 逐字相同；改
+`_specialize.announce` 的格式必须同步改 `_einsum_notice_kernel_label_contract`。
+
 **优先级**：显式 `kernel_force=` > `PYQCD_EINSUM_KERNEL_FORCE` > 未设（= `auto`），
 由 `_kernel_force.resolve`（`:171`）判定。取值在**调用时**解析，同进程内改环境变量
 即时生效。注意 `--kernel-force auto` 与"不给"不同：显式 `auto` 会把环境变量**压掉**
@@ -436,18 +488,20 @@ kernel : requested=<auto|generic|label,...>  ran=<label|none>  attempted=<label,
 
 ### 9.1c 自动施加等价写法 + 缓存（2026-11-16）
 
-**自动施加**（`as_equivalence`）：`contract(..., as_equivalence=None)` 缺省跟随
-`PYQCD_EINSUM_AS_EQUIVALENCE`（缺省开启）；`--as-equivalence` 是它的 CLI 三态。
-开启且方程未命中特化形态时，`_contract_via_equivalence` 会：按 `operand_order`
+**自动施加**（`as_equivalence`）：取值 **`auto`（缺省）/ `true` / `false`**，另有 tune
+内部使用的 `force`（刷新语义）。**`auto` 只按配置表的等价行改写**：原 equation 的键上有
+tune 写下的标记行（三个置换字段 + `note`，"走等价转换后的配置性能更佳"）才施加；表缺失 /
+缓存关闭 / 未命中 / 没有标记行 → **不改写**（无信息就不猜）。`true` 总是尝试（旧语义），
+`false` 从不改写。真正施加时 `_contract_via_equivalence` 会：按 `operand_order`
 重排操作数 → 按 `operand_permutations` 转置并落连续副本（视图会被 dedicated 的
 连续门拒）→ 递归 `contract(..., as_equivalence=False)` → 按 `output_permutation`
 把结果转回。**返回的永远是原方程的答案**，并有一道独立输出形状守卫
 （`_expected_output_shape`），算得出原形状却对不上时抛 `RuntimeError` 而不是交出
-错结果。两道硬闸不可被显式 `True` 压过：`PYQCD_EINSUM_EQUIVALENCE=0` 与
+错结果。两道硬闸不可被显式 `true` 压过：`PYQCD_EINSUM_EQUIVALENCE=0` 与
 `specialize=False`。不施加：非字符串方程、`out=`、额外 `kwargs`、逐元素方程、
 cupy 通用委派、`optimize` 为 callable 或显式 `list/tuple`（字符串/布尔优化器**仍会**
-施加）。**代价**：小形状上改写+副本开销占主导（实测 2.92 ms vs 0.28 ms），批量小
-收缩建议关掉。
+施加）。**代价**：显式 `true`（或确有等价行）时，改写+副本开销在小方程上可能占主导，
+批量小收缩用 `false`。
 
 **缓存**：`_cache.LRUCache` 提供有界线程安全 LRU + `hits/misses/stores/evictions`，
 实例化即注册。当前三处：`specialize.match`（键=原始方程串，**含未命中**）、
@@ -459,10 +513,12 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
 `pyqcd.einsum.cache_stats()` / `cache_clear()` 是公开入口；CLI `--cache` 只在显式
 给出时打印 `cache    : enabled=... hits=... misses=... hit_rate=...`。
 
-**跨进程的等价结论落在画像里**（`profile_equivalence.csv`，v2 起是路由表）：
-`_api._record_equivalence` 在每次**真查过**之后落 `none`/`ok`，`_equivalence_marked_none`
-是下次的廉价门；`as_equivalence="force"` 绕过这道门并刷新标记。表结构、优先序与
-"命中 ok 直接套用"的口径见 §9.1e。
+**等价结论不再有独立的跨进程表**（2026-11-17 TV 重设计，规格 §0）：`profile_equivalence.csv`
+已**废除**——文件不再创建、不再读取，`equivalence_marker` / `record_equivalence` /
+`schema_version` 那一套代码随之删除，普通 `contract()` 也**不写**任何等价结论。跨调用
+只剩两处：本进程内 `equivalence.normalize` 的 LRU，以及 **tune** 写进主表的**等价行**
+（只有 `operand_order` / `operand_permutations` / `output_permutation` 与备注，没有性能
+配置，见 §9.1e）。`as_equivalence="force"` 仍表示"这次不信任何历史结论、真查一遍"。
 
 **计划/匹配的耗时数字不在此处复述**——它们只有一处权威：
 `docs/einsum_production_optimization_20261112.md:183-194`（§8，含 `match()` 热调用、
@@ -474,76 +530,124 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
 的 `memcmp` 比对、`:2782` 的 stream 前置条件）。本文件只定义**口径**（怎么测、什么算数），
 不复制数值。
 
-### 9.1d 配置画像缓存 `_profile_cache.py`（2026-11-17）
+### 9.1d 配置表 `pyqcd.einsum.profile.csv`（2026-11-17 TV 重设计）
 
-画像层**只给建议、不参与数值计算**：配置选错、旧行没被换掉、"关掉开关还在建目录"，
-结果都照样逐位正确——普通数值测试永远抓不到它。它把 `(host, user_device, backend,
-dtype, equation, shape, device)` 的历史观测落成 CSV，下次开工用**一次顺序读**换掉
-重复的试跑与匹配时间。它不 import 执行层、不解析方程、不碰张量、**不做计时**
-（`init_ms` / `compute_ms` 由 `_api` 测好给进来）。契约
-`pyqcd/testing/_einsum_profile_cache_contract.py`（8 条，含"关闭零 IO"与"compare 一次都不读"）。
+画像层**只给建议、不参与数值计算**：配置选错、表是空的、行与你的显式参数打架，
+结果都照样逐位正确——普通数值测试永远抓不到它。它把
+`(shape, dtype, device, equation, backend)` 的历史观测落成一张 CSV，下一次同键调用用
+**一次顺序读**换掉重复的试跑与匹配时间。它不 import 执行层、不解析方程、不碰张量、
+**不做计时**（`wall_ms` 由 tune 在 `_api` 侧整段量好给进来）。契约
+`pyqcd/testing/_einsum_profile_readonly_contract.py`（5 条：同键多行 / 缺表警告 /
+普通调用不写 / 冲突 / 数值 rel ≤ 1e-12）。
+
+**文件与唯一写者**（规格 §0/§1/§7，冻结）：
+
+* 文件名 **`pyqcd.einsum.profile.csv`**（`PROFILE_FILENAME`）。旧名 `profile.csv` **废弃**；
+  `profile_compare.csv` 与 `profile_equivalence.csv` **已删除**——不再创建、不再读取。
+  `record_compare` / `equivalence_marker` / `record_equivalence` / `drop` / `flush` /
+  `load` 这些入口已从模块里删掉（`summary` / `best` 保留：前者只读状态，后者是
+  "把缺表当未命中"的报告层读法）。
+* **只有 tune 能写**（`write_winner`）。普通 `contract()` 走 `read_winner`，**只读**：
+  没有 append、没有 merge、没有待写队列、没有 `atexit` 落盘、没有稀疏写门。**为什么**：
+  配置表是**标定产物**，普通调用也写会让不同运行环境/负载的观测互相覆盖，表就不再是
+  任何一台机器上的可信结论。
+* **同键只允许 1 行**：读侧精确匹配，遇到多行不猜、不选最优，直接把**全部**候选行打到
+  stderr 再抛 `DuplicateProfileEntry`（非零退出）；写侧 `write_winner` 先删同键所有行
+  再写 1 行。**"并列取新"已废除**：不再有"版本号大者 / 时间新者 / 快者胜"这一层。
+* 三个异常：`DuplicateProfileEntry(rows)`、`ProfileMissing(cli_hint)`、
+  `ProfileConflict`（后两个的处置见下表"读侧""冲突"两行）。
+* `tune_session()`：遍历期间 `read_winner` 一律当未命中（**不读文件**）、`write_winner`
+  **静默不写**（不排队推迟）——胜出配置必须在 `with` 块**之外**写一次。
 
 | 项 | 口径（以 `_profile_cache.py` 为准） |
 |---|---|
 | 开关 | `PYQCD_EINSUM_PROFILE`（缺省 `"1"` 开；`0/false/off/no` 关）、`contract(profile=)`、CLI `test.py --profile {auto,true,false}`（缺省 `auto` → `None`，跟随环境变量）与 `--profile-dir DIR`。`verify_specialized.py` **没有**这两个选项（它不做收缩、也从不读画像） |
-| 关闭语义 | 不读、不写、**连目录都不建**。`PYQCD_EINSUM_PROFILE=0` / `profile=False` / `--profile false` 都走这条路；`PYQCD_EINSUM_PROFILE=0` 时连 `profile=True` 也不会产生 IO（`configure` 在 `_switch_on()` 为假时直接返回，`load/best` 走无参 `enabled()`） |
-| 目录 | **首次解析**：`profile_dir` > `PYQCD_EINSUM_PROFILE_DIR` > `./.cache`（按 CWD 取绝对路径；`None` 与空白在**解析**时都不挤掉下一级，`_resolve_dir_text`，`:959-969`）；不存在就 `makedirs`；不可写 → 降级不缓存，原因进 `summary()["last_error"]`、`enabled` 转 `False`、`notice()` 只提示一次（本模块从不主动打印） |
-| 目录"保持"语义 | **省略** `profile_dir` 不会回到环境变量/默认目录，而是**保持已钉住的目录**：`_api._profile_begin` 只在 `profile_dir` 为真时调 `configure(profile_dir)`，否则调 `ensure_configured()`（`_api.py:1114-1115`）；后者"只补齐、不改写"（`_profile_cache.py:331-344`）。想换只能显式传**另一个**目录——换目录 = 换一张表：先 flush 旧目录待写行，再清索引/载入标记/compare 去重表（`configure()`，`:305-319`）。只有**从未配置过**的首次调用才解析优先级 |
-| `profile.csv` | **读 + 写**。键 7 列如上；`shape` 规范化成 `2x3\|3x4`（`x` 连轴、`\|` 连操作数）；选优 `compute_ms` 最小 → 同值 `calls` 大 → 再同 `updated_at` 新 |
-| `profile_compare.csv` | **只写不读**（`record_compare`；同一 `(键,配置,参照,参照优化器)` 60 s 内只写一次）。**当前没有生产调用点**（只有契约用例调用），所以正常跑 `contract()` 不会生成这个文件 |
-| 稀疏写盘 | `record()` 只在**新键**或比该键当前最优**严格快 >5%**（阈值 `_IMPROVE_RATIO = 0.95`，`:183`；判据 `compute_ms < 最优 × _IMPROVE_RATIO`，见 `record()` 内的 `worth = ...`）时才入待写队列；其余只更新内存索引。`flush()` / 攒满 `_FLUSH_THRESHOLD = 512`（`:186`）条 / `atexit` 才真正追加写 |
-| 规模上限 | 每键只留 `compute_ms` 最快的 `_MAX_ROWS_PER_KEY = 4` 条（`:195`；内存与落盘同一口径，`_prune_slot` 在写入后与读入后都裁，`:682-692`、`:731-732`），裁掉条数累计进 `summary()["dropped_rows"]`。`profile.csv` 盘上数据行 + 本次待写超 `_MAX_ROWS = 50000`（`:198`）时 `flush()` 先整表重写成"每键最快 K 条"（判据 `count + len(_pending) > _MAX_ROWS`，`:810-812`）；重写后仍超限（键太多，K 条压不下去）要再涨 `_REWRITE_GROWTH = _MAX_ROWS // 10 = 5000` 行才重写下一次（`:202`），否则每次 flush 都整表重写等于写放大 |
-| 截断与坏行 | `_CLIP_LIMITS = {"note": 200, "equivalence_equation": 512}`（`:205`）按字符截断，读写两侧共用同一刀（`_clip_row`，`:623-628`），次数进 `summary()["truncated_fields"]`。长度/编码/列数不对的行**逐行**跳过，计数进 `summary()["skipped_rows"]`（`:706-738`）；csv 流连续 `_MAX_CONSECUTIVE_ERRORS = 8` 次解析异常（`:214`、`:777-779`）才停止读取并只记 `last_error`——列数不对只计 skip、不计 streak（`:781-788`） |
-| 并发与退出 | 索引与待写队列共用**一把** `threading.Lock`；POSIX 下 `os.register_at_fork(after_in_child=_reset_after_fork)`（`:940`）在子进程重建锁并清空索引/队列（`:919-934`），否则父进程持锁时 fork 会让子进程首次 `summary`/`record` 永久阻塞；Windows 无此钩子。`atexit` 兜底 flush 最多等锁 `_EXIT_LOCK_TIMEOUT_S = 2.0` 秒（`:208`、`:908-910`），拿不到就丢弃待写行。单次读盘封顶 `_MAX_LOAD_BYTES = 64 << 20`（64 MiB，`:211`、`:720`；`_count_raw_rows` 同封顶，`:878`） |
-| 跨进程可见性 | **跨进程只认已落盘的记录**：`_load_locked()` 只读 `profile.csv`（`_profile_path()`），只进过内存索引的观测随进程消失。所以"同进程内 `best()` 已能返回更优配置、下次开工却没有它"是预期行为；要跨开工复用必须先 `flush()`，或让进程正常退出由 `atexit` 写一次 |
-| 施加面 | 每个目录一次 `configure + load`（同目录不重读；换目录时 `load(force=True)`）；命中**只**填两个槽：`kernel_force` 与 `backend`。三个记录都**可重放**：`dedicated` / `topology`（具体标签经 `rpartition("_")` 反推逻辑名，`_api._profile_force_label`）、`generic`（→ `kernel_force="generic"`，合法且实测常最快；代价是这条方程不再进专用分派、因此没有"内核没跑成"的诊断，需要诊断时显式 `auto`）、`backend`（→ 直接走 `backend.einsum`，在 `_specialize.match` 与 `find_path` **之前**返回，跳过**本库的**形态匹配、等价改写与收缩规划；`_backend_einsum` 仍给后端传 `optimize=True`）。不可重放的只有 `equivalence`（原方程上强制内核必然"未尝试"）。调用方/env 已给 `kernel_force`、`out=`、`specialize=False` 时命中**只记录不施加** |
-| 命中输出契约 | 命中并**施加**时只打**一行**：`[pyqcd.einsum] profile hit: <profile.csv 绝对路径>:<数据行号> kernel=… optimize=… compute_ms=… (applied)`（中文口径 `profile 命中：…（已套用）`，实现见 `_api._profile_notice`）。这一行之后本次调用**不再**打 `announce_generic` / `announce` / 等价说明（`quiet_profile` 是**纯输出**开关，不改方程/dtype/形状/数值）；`route :` / `kernel :` 等**结果行照旧**。`--explain true` / `--verbose true`（→ `_specialize.set_detail(True)`）或 `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 恢复详解。**行号只在从文件读入的行上有**：本进程刚 `record`、还没落盘的那条没有 `line`（`_parse_table` 才写），所以第一次跑是 `…/profile.csv kernel=…`，第二次才是 `…/profile.csv:1 kernel=…`（实跑对照）。同一 `(方程, 形状, kernel, optimize)` 每进程只打一行；`PYQCD_EINSUM_NOTICE=0` 整条静音 |
-| 失败 | 画像建议跑不成 → `_profile_retry` 带 `profile=False` 退回原分派一次，**不**向调用方抛 `KernelUnavailableError`（显式强制仍照旧抛） |
-| 记录抑制 | 已施加命中且没回退的调用不再记一条；回退的照记，让实际跑成的那条配置下次有机会胜出 |
+| 关闭语义 | 不读、不写、**连目录都不建**。`PYQCD_EINSUM_PROFILE=0` / `profile=False` / `--profile false` 都走这条路；总开关关着时连 `profile=True` 也不产生 IO |
+| 目录 | **首次解析**：`profile_dir` > `PYQCD_EINSUM_PROFILE_DIR` > `./.cache`（按 CWD 取绝对路径；`None` 与空白都算"未给"，逐级下退）。目录只由 `write_winner`（tune）在写盘时 `makedirs`；**读侧不建目录、不写探针**，不可读就按未命中 |
+| 目录"保持"语义 | **省略** `profile_dir` 不回到环境变量/默认目录，而是**保持已钉住的目录**：`_api` 只在 `profile_dir` 为真时调 `configure(profile_dir)`，否则调 `ensure_configured()`（"只补齐、不改写"）。想换只能显式传**另一个**目录——换目录 = 换一张表（解析缓存按路径失效） |
+| 键 | `KEY_FIELDS = (shape, dtype, device, equation, backend)`；`host` 记在行里但**不参与匹配**；`shape` 规范化成 `2x3\|3x4`（`x` 连轴、`\|` 连操作数），`equation` 去掉全部空白 |
+| 列 | 键 5 列 + 性能载荷 `kernel` / `optimize` / `wall_ms` + 等价载荷 `target_equation` / `operand_order` / `operand_permutations` / `output_permutation` + `note` / `host` / `updated_at` / `pyqcd_version`（列序见 `PROFILE_COLUMNS`）。**性能行**留空等价四列；**等价行**留空性能三列并带一句 `note`（缺省"走等价转换后的配置性能更佳"） |
+| 读侧（普通调用） | 0 行 → `None`（按现有逻辑执行）；1 行 → 该行副本（带 `line`：数据行号，1-based）；多行 → `DuplicateProfileEntry`（stderr 打印全部候选后向上冒泡）；**文件不存在 → `ProfileMissing`，`_api` 每进程一次警告"需要先 tune"+ 该键的 tune CLI 命令，然后继续无命中执行**。其他读失败只记 `last_error()` 并按未命中 |
+| 写侧（只有 tune） | `write_winner(key, config, equivalence=None, note="")`：读整表 → 删同键所有行 → 只写 1 行 → 临时文件 + `os.replace` 原子替换。**绝不 append**：这就是"同键只允许 1 行"的唯一实现 |
+| 未 tune 时 | 表**本来就是空的**（文件都不存在）。缺表不是错误、也不会顺手建表：读侧每进程警告一次"需要先 tune" + 该键的 tune 命令，然后**继续无命中执行** |
+| 冲突 | 命中行的 `kernel` / `optimize` / 等价载荷与**用户显式给的** `kernel_force=` / `optimize=` / `as_equivalence=` 冲突 → 抛 `ProfileConflict`（消息带表值与请求值、记录所在 `<file>:<行号>`），**向上冒泡到 CLI**（非零退出），不静默让任何一方胜出。判据只算**显式且非 `auto`** 的实参：`--compare` 不参与，显式 `auto` 等于没给；`out=` / `specialize=False` 只让内核建议"不施加"，不是冲突 |
+| 施加面 | 命中只填三个槽：`force`（内核逻辑名，`_api._profile_force_label` 从具体标签反推）、`optimize`、`equivalence`（等价行→可直接施加的改写载荷）。**方程、dtype、形状与数值一概不动**；调用方已给 `kernel_force` / `out=` / `specialize=False` 时命中只记录不施加（显式要求优先） |
+| 失败回退 | 画像建议跑不成 → `_profile_retry` 带 `profile=False` 退回原分派一次，**不**向调用方抛 `KernelUnavailableError`（用户自己强制的标签仍照旧抛） |
+| 命中输出 | 命中并施加时只打一行，钉到具体记录：`[pyqcd.einsum] profile hit: <pyqcd.einsum.profile.csv 绝对路径>:<数据行号> kernel=… optimize=… wall_ms=… (applied)`（中文口径 `profile 命中：…（已套用）`）。同一 `(方程, 形状, kernel, optimize)` **每进程一行**；`PYQCD_EINSUM_NOTICE=0` 整条静音；`route :` / `kernel :` 等结果行照旧 |
+| 观测口 | 普通调用**不落盘**也不攒待写行：本次观测只留在 `_api.last_profile()`（`wall_ms` / `hit` / `fallback` / `note` 等），供诊断与 `--explain` 读 |
+| 坏行与上限 | 列数不对/编码坏的行逐行跳过（只丢那一行）；`note` 按 200 字符截断；单次读盘封顶 64 MiB。**没有**每键 K 条裁剪、没有 `calls` 列、没有 `schema_version`、没有整表重写（这些随"每键多条"一起删除） |
+| 并发与 fork | 解析缓存与目录状态共用**一把** `threading.Lock`；POSIX 下 `os.register_at_fork(after_in_child=...)` 在子进程重建锁（`threading.Lock` 不随 fork 重置，父进程持锁时 fork 会让子进程首次读表永久阻塞） |
 
 **踩坑（都是这一层特有的）**：
 
 1. **`.cache/` 不参与发布产物、也不要提交**：默认目录 `./.cache`（`_profile_cache.DEFAULT_DIR`）
-   记录**主机名、方程与形状**，已由根 `.gitignore` 的 `.*` 规则忽略（`.gitignore:73`，`git check-ignore -v .cache/profile.csv` 复核）。
-   `MANIFEST.in` 只 `recursive-include pyqcd *.py *.pyx *.pxd *.pyi`（`:31`）、不收录任何缓存目录，
-   所以它既不进 sdist/wheel，也不该为了"留证据"进版本库。
-2. **CSV 行数 ≠ 调用次数**：稀疏写只留"新键"与"快过 5%"那几行（口径见上表，判据在 `record()`）。
-   实测同一方程连调 3 次 `contract()` 后 `flush()` 只写出 1 行，且该行 `calls` 是落盘那一刻的值。
-   想统计真实调用次数要看内存索引或自己打点，不要数行。
-3. **降级是运行时状态**：不可写/CSV 损坏/写失败一律不外抛，只把原因写进
-   `summary()["last_error"]`；它**不改** `PYQCD_EINSUM_PROFILE` 的语义。
-4. **换目录等于换一张表**：`configure()` 先把旧目录待写行冲掉，再清索引与 compare 去重表。
-   反过来，**省略 `profile_dir` 不触发换表**——它保持当前钉住的目录（见上表"目录保持语义"）。
-5. `record_compare` 的 `equivalence=` 可以直接塞 `_equivalence.explain()` 的报告字典
-   （只读它的 `kind` / `equation` / 三个置换字段）。
+   记录**主机名、方程与形状**，已由根 `.gitignore` 的 `.*` 规则忽略
+   （`git check-ignore -v .cache/pyqcd.einsum.profile.csv` 复核）。`MANIFEST.in` 只
+   `recursive-include pyqcd *.py …`，不收录任何缓存目录。
+2. **行数 = 键数**（**每键多条已废除**：每个键恰好 1 行）：没有稀疏写、没有 `calls` 列，
+   所以"表里有几行"就是"tune 过几个键"。要统计调用次数请自己打点，别数行。
+3. **读写失败不对称**：读失败（权限、坏 CSV）只记 `last_error()` 并按未命中；**写失败
+   如实外抛**——唯一调用方是 tune，它打印"写配置表失败"后继续。两者都不改
+   `PYQCD_EINSUM_PROFILE` 的语义。
+4. **换目录等于换一张表**：`configure()` 换路径即清空解析缓存；不存在"先把旧目录待写行
+   冲掉"这一步（没有待写队列）。反过来，**省略 `profile_dir` 不触发换表**——它保持当前
+   钉住的目录。
+5. **旧文件不会被读**：`profile.csv` 是改名前的旧名，`profile_compare.csv` /
+   `profile_equivalence.csv` **已删除**——三者对新代码都不可见（等于"没 tune 过"）。
+   要复用必须重新 tune；不存在跨口径混比。
 
-### 9.1e 等价路由表 `profile_equivalence.csv`（schema v2，2026-11-17）
+### 9.1e 等价行（在主表里，不再有第二张表）
 
-`_profile_cache` 的第二张读写表（`EQUIVALENCE_NAME`）。v2 起
-（`EQUIVALENCE_SCHEMA_VERSION = 2`）它不再只是"标记"，而是**可直接照着执行的等价路由**：
-`state=ok` 的行带 `target_equation`（语料写法）与三个置换字段
-（`_PERMUTATION_FIELDS = ("operand_order", "operand_permutations",
-"output_permutation")`，按模块文档为 **JSON 字符串**，`null`/空串 = 这一步不需要动），
-上层据此**直接构造**改写，不必再调 `_equivalence.normalize_equation`。`schema_version`
-列的用途就是区分"这条结论带不带可复用载荷"；缺列的旧行按 `0` 读入、不丢。
-`profile_compare.csv` 里同名的三个字段与本表**语义相同**（`record_compare` 可直接吃
-`_equivalence.explain()` 的报告字典）。
+等价结论既不再有独立文件，也不再由普通调用记录：**只有 tune** 会写。规格 §3.3 的第二种
+情形（最优组来自 `as_equivalence=true`）写两行：
 
-| 规则 | 口径（以 `_profile_cache.py` 模块文档 + `EQUIVALENCE_COLUMNS` 为准） |
-|---|---|
-| 列 | 键 7 列（同主表 `KEY_FIELDS`）+ `state` / `kind` / `updated_at` / `pyqcd_version` + v2 在**末尾追加**的 `target_equation` / `operand_order` / `operand_permutations` / `output_permutation` / `schema_version`；旧列一字未改 |
-| 状态 | 只接受 `ok` / `none`（`_STATE_RANK`），其他取值按坏行跳过；同键的 `ok` 与 `none` **可以并存** |
-| 选行优先序 | **先版本、后状态**：`schema_version` 大者胜 → 同版本内 `ok` 先于 `none` → 再同取 `updated_at` 新者 |
-| 稀疏口径 | 按 **(键, state)**：同键同 state 已有标记时只更新内存计数（`hits`）与 `updated_at`，**不再追加一行**——这张表回答"能不能改写"，不是流水账 |
-| 关闭 | 画像关闭（`profile=False` / `--profile false` / `PYQCD_EINSUM_PROFILE=0`）时**不读不写**：`_api` 侧 `marker_key` 为 `None`，既不查标记也不落标记（零 IO） |
-| 无文件 / 无键 | 正常查 `_equivalence.normalize_equation`，查完落一条标记 |
-| 命中 `none` | 跳过等价步骤（`_equivalence_marked_none` 的廉价门）。**只省时间**：标记不参与方程、dtype、形状或结果 |
-| 命中 `ok` | 直接套用载荷（跳过匹配） |
-| `--as-equivalence force` | `_api._AS_EQ_FORCE = "force"`：不信 `none` 标记、真的再查一次，并用新结论覆盖旧标记（刷新走同一条 `_record_equivalence`） |
+| 行 | 键（equation 列） | 内容 |
+|---|---|---|
+| 性能行 | **`target_equation`**（改写后、语料真正支持的那条） | `kernel` / `optimize` / `wall_ms` 完整性能配置 |
+| 等价行 | **原 equation** | 只写 `operand_order` / `operand_permutations` / `output_permutation`（+ `target_equation` 与一句 `note`），性能三列留空 |
+
+读侧看到等价行（性能三列全空、置换字段可用）就**按它改写**——但只在 `as_equivalence`
+为 `auto`（缺省）或 `true` 时；显式 `false` 一律不改写。改写时不提内核、不改 `optimize`；
+`_profile_cache.equivalence_payload()` 负责把三个 JSON 列解成可直接执行的元组
+（`null` = 这一步不需要动）；结构不对/缺列一律返回 `None` → 退回正常匹配（**绝不抛**）。
+每一行都受"同键一行"约束：tune 写它之前先删同键其它所有行。
 
 **别踩**：`as_equivalence="force"` 与 `kernel_force="generic"` 放在一起时，等价那一段
-**整段不执行**（`and not generic_only`）——force 也没机会重查；要 refresh 就先别强制
-`generic`（或用 `--as-equivalence force --kernel-force auto`）。
+**整段不执行**（`and not generic_only`）——要 refresh 就先别强制 `generic`。
+
+### 9.1f `wall_ms` 的口径与 `--tune` 的读写边界（2026-11-17，覆盖旧"拆分计时"）
+
+这一层**只影响"挑哪条建议"和"报告怎么说"，不改任何数值**——口径错了照样逐位正确，
+所以普通数值测试抓不到。用户视角见 `docs/einsum_user_guide_20261116.md` §13.3c。
+
+**口径（冻结，规格 §4/§8）**：`wall_ms` = **整个 `pyqcd.einsum.contract(***)` 的墙钟
+时间**，含等价转换（若有）、缓存命中与读写（若有）、未命中时的规划-匹配。起点在
+`contract()` 第一行取，收尾在 `_profile_end` 落 `info["wall_ms"]`。它是**选优的唯一
+输入**：
+
+* 旧的"拆分计时"（`init_ms` = 规划/匹配、另一列只包收缩执行）**已删除**；`init_ms`
+  若在某处还出现只作诊断，**不得参与选优**，也不得与 `wall_ms` 相加或混比。
+* 表头与代码标识一律 `wall_ms`，旧毫秒列名**零残留**：交付前用 `grep` 核验
+  `pyqcd/` 与 `docs/` 的文本文件（排除 `.pdf`）——除 `wall_ms` 外不得再有第二个毫秒列名。
+* 选优不再发生在读侧：读侧只做精确匹配（同键 ≤1 行，多行即报错）。tune 在遍历中按
+  `wall_ms` 挑最优，然后**只写那一条**。
+
+**`--tune` 的读写边界（规格 §3，冻结）**：
+
+1. 整轮遍历包在 `with _profile_cache.tune_session():` 里——**不读、不写**配置表：读侧
+   一律未命中（量的是被测配置自己的耗时，不是历史命中），写侧**静默不写**（不排队）：
+   胜出配置在 `with` 块**之外**写一次。
+2. 锁定键 `(shape, dtype, device, equation, backend)`，遍历其余性能维度：
+   `kernel_force ∈ {auto, dedicated, topology, generic, backend}` ×
+   `as_equivalence ∈ {true, false}` × `optimize ∈ {auto, greedy, optimal}`，共 **30 组**
+   （`test.tune_combos()`；CLI 的 `--tune` 报错上限也是 30）。
+3. 单次调用 `timeout` 缺省 **30 s**（`--tune-timeout`）；**异常 / 超时 / MISMATCH 只打印、
+   不退出**，继续遍历下一组。
+4. 遍历结束按 `wall_ms` 选最优，按 §3.3 三种情形写行（最优来自不等价 → 原 equation 写
+   性能行；来自等价 → `target_equation` 写性能行 + 原 equation 写等价行）；两种情况都
+   **先删同键其它所有行**（含更快的历史行，防止异环境污染）。
+5. 写不进去（目录不可写等）**如实外抛**，由 tune 打印"写配置表失败"后继续（不进
+   `last_error()`）；tune 结束打印最终写入行与删除行数。
 
 ### 9.0 单方程测试的唯一接口：`python -m pyqcd.einsum.test`（强制）
 

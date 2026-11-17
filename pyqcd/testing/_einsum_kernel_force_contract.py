@@ -60,12 +60,10 @@ _API_SET_FIELDS = (
 )
 
 #: ``_profile_cache`` 的进程状态：``contract()`` 缺省开着画像，一次调用就会改它们。
-#: 值即模块初值。
+#: 值即模块初值（TV 重设计后只剩"钉住的目录 / 解析缓存 / 遍历计数"）。
 _CACHE_PLAIN_FIELDS = {
-    "_configured_dir": "", "_ready": False, "_dir": "", "_dir_ok": False,
-    "_last_error": None, "_notice_done": False, "_loaded": False,
-    "_loaded_rows": 0, "_skipped_rows": 0, "_truncated_fields": 0,
-    "_dropped_rows": 0, "_disk_rows": -1, "_rewrite_rows": -1,
+    "_CONFIGURED_DIR": "", "_LAST_ERROR": None, "_HOST": None,
+    "_TABLE": None, "_TUNING": 0,
 }
 
 #: 语料内方程：与 ``_kernel_kupl._PROBE_EQUATION`` 同一条，dim=2 下 proposed
@@ -135,7 +133,7 @@ def _isolated_state():
     覆盖四块：
 
     * ``os.environ``：强制开关、fused 开关、画像开关/目录与两个标准线程变量；
-    * ``_api``：``_LAST_KERNEL`` / ``_FUSED_ENV_OWNED`` / ``_PROFILE_READY`` 与五个
+    * ``_api``：``_LAST_KERNEL`` / ``_FUSED_ENV_OWNED`` 与五个
       "只报一次"的去重集合。第 4 条要"零告警"、第 8 条要"告警一次"——两个方向都
       会被上一条用例留下的去重记录判反；
     * ``_profile_cache``：``contract()`` 缺省开着画像，一次调用就会改索引、目录与
@@ -153,7 +151,6 @@ def _isolated_state():
     saved = {
         "last_kernel": _api._LAST_KERNEL,
         "fused_owned": _api._FUSED_ENV_OWNED,
-        "profile_ready": _api._PROFILE_READY,
         "api_sets": {name: set(getattr(_api, name)) for name in _API_SET_FIELDS},
         "env": {name: os.environ.get(name) for name in (
             FORCE_ENV, _specialize.FUSED_DISABLE_ENV,
@@ -161,10 +158,6 @@ def _isolated_state():
             _threads.STANDARD_OMP_ENV, _threads.STANDARD_BLAS_ENV)},
         "failure": dict(_kernel_kupl.LAST_FAILURE),
         "info": dict(_kernel_kupl.LAST_INFO),
-        "cache_index": {key: {config: dict(row) for config, row in slot.items()}
-                        for key, slot in _profile_cache._index.items()},
-        "cache_pending": [dict(row) for row in _profile_cache._pending],
-        "cache_compare": dict(_profile_cache._compare_recent),
         "cache_plain": {name: getattr(_profile_cache, name)
                         for name in _CACHE_PLAIN_FIELDS},
         "threads": dict(_threads._state),
@@ -180,7 +173,6 @@ def _isolated_state():
     finally:
         _api._LAST_KERNEL = saved["last_kernel"]
         _api._FUSED_ENV_OWNED = saved["fused_owned"]
-        _api._PROFILE_READY = saved["profile_ready"]
         for name, value in saved["api_sets"].items():
             getattr(_api, name).clear()
             getattr(_api, name).update(value)
@@ -189,11 +181,6 @@ def _isolated_state():
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
-        _profile_cache._index.clear()
-        _profile_cache._index.update(saved["cache_index"])
-        _profile_cache._pending[:] = saved["cache_pending"]
-        _profile_cache._compare_recent.clear()
-        _profile_cache._compare_recent.update(saved["cache_compare"])
         for name, value in saved["cache_plain"].items():
             setattr(_profile_cache, name, value)
         _threads._state.clear()
@@ -210,17 +197,13 @@ def _isolated_state():
 
 
 def _reset_profile_state() -> None:
-    """把画像缓存清到"没配置、没加载、没建目录"的初始态；不改环境变量。
+    """把配置表清到"没配置、没缓存、没遍历"的初始态；不改环境变量。
 
-    ``_PROFILE_READY`` 必须置回 ``None``（而不是 ``False``）：它记的是"已加载的绝对
-    目录"（``str|None``），``False`` 既不等于任何路径、也不是"没读过"的哨兵值。
+    ``_TABLE`` 是解析缓存（按 ``(路径, mtime, size)`` 失效），必须置回 ``None``：
+    留着上一条用例的表就等于把别人的行当成本用例的结果。
     """
-    _profile_cache._index.clear()
-    _profile_cache._pending[:] = []
-    _profile_cache._compare_recent.clear()
     for name, initial in _CACHE_PLAIN_FIELDS.items():
         setattr(_profile_cache, name, initial)
-    _api._PROFILE_READY = None
 
 
 def _expect_value_error(call, token: str, what: str) -> str:

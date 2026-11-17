@@ -11,7 +11,7 @@
    必须完全相同，相对偏差 ``max|a-b| / max|ref|`` ≤ :data:`RTOL`。``dedicated``
    在本机不可用（原生库缺失、被 ``PYQCD_EINSUM_KERNEL_KUPL=0`` 关掉、或 dtype 被
    策略拒绝）时抛 ``SkipTest`` 并写明原因与已经对上的那两路，**不伪造通过**。
-2. **画像命中不改答案**：临时目录写一条 ``kernel=backend`` 的记录（``compute_ms``
+2. **画像命中不改答案**：临时目录写一条 ``kernel=backend`` 的记录（``wall_ms``
    极小）→ ``contract(..., profile=True, profile_dir=tmp)`` 与
    ``kernel_force="backend"`` 直接调用**逐元素全等**，且
    ``last_kernel()["ran"] == "backend"``：既证明答案没变，也证明路真的换了。
@@ -84,14 +84,10 @@ _ENV_NAMES = (
 )
 
 #: ``_profile_cache`` 的进程级状态字段：用例之间不串味的关键。
-#: 尾部五个是**计数器/磁盘行数**：``_skipped_rows`` / ``_truncated_fields`` /
-#: ``_dropped_rows`` 只增不减，``_disk_rows`` / ``_rewrite_rows`` 参与 ``flush``
-#: 的整表重写判断——不复原就会让"本用例写了什么"读到别人的结果。
+#: TV 重设计后配置表只保留"钉住的目录 / 解析缓存 / 遍历计数"三样状态，
+#: 旧的索引、待写队列与计数器随 append/merge/flush 写路径一并删除。
 _CACHE_FIELDS = (
-    "_index", "_pending", "_compare_recent", "_configured_dir", "_ready",
-    "_dir", "_dir_ok", "_last_error", "_notice_done", "_loaded", "_loaded_rows",
-    "_skipped_rows", "_truncated_fields", "_dropped_rows", "_disk_rows",
-    "_rewrite_rows",
+    "_CONFIGURED_DIR", "_LAST_ERROR", "_HOST", "_TABLE", "_TUNING",
 )
 
 #: ``_api`` 的集合型进程状态：去重告警闸门，留着就等于让下一条用例"已经警告过"。
@@ -143,56 +139,27 @@ def _reason_text(exc: BaseException) -> str:
 
 
 def _snapshot_cache() -> dict[str, Any]:
-    """深拷一份画像缓存的进程状态（索引/队列/目录/载入标记）。"""
-    state: dict[str, Any] = {}
-    for name in _CACHE_FIELDS:
-        value = getattr(_profile_cache, name)
-        if name == "_index":
-            value = {key: {config: dict(row) for config, row in slot.items()}
-                     for key, slot in value.items()}
-        elif name == "_pending":
-            value = [dict(row) for row in value]
-        elif name == "_compare_recent":
-            value = dict(value)
-        state[name] = value
-    return state
+    """深拷一份配置表的进程状态（钉住的目录 / 解析缓存 / 遍历计数）。"""
+    return {name: getattr(_profile_cache, name) for name in _CACHE_FIELDS}
 
 
 def _restore_cache(state: dict[str, Any]) -> None:
     """按 :func:`_snapshot_cache` 的副本原样放回。"""
-    _profile_cache._index.clear()
-    _profile_cache._index.update(state["_index"])
-    _profile_cache._pending[:] = state["_pending"]
-    _profile_cache._compare_recent.clear()
-    _profile_cache._compare_recent.update(state["_compare_recent"])
-    for name in _CACHE_FIELDS[3:]:
-        setattr(_profile_cache, name, state[name])
+    for name, value in state.items():
+        setattr(_profile_cache, name, value)
 
 
 def _reset_cache() -> None:
-    """清到"没配置、没加载、没建目录"的初始态。
+    """清到"没钉目录、没有解析缓存、不在遍历中"的初始态。
 
-    ``_pending`` 必须清：``configure`` 换目录时会先把旧队列冲进**旧**目录，留着它
-    等于让本条用例往别人的目录里写行（本仓库根的 ``.cache`` 就是这么长出来的）。
-    计数器也归零：``_disk_rows`` 参与 ``flush`` 的整表重写判断，别人的盘上行数会让
-    本用例的"写了几行"失真。
+    ``_TABLE`` 必须清：它是按 ``(路径, mtime, size)`` 失效的解析缓存，留着上一条用例
+    的表就等于把别人的行当成本用例的结果。
     """
-    _profile_cache._index.clear()
-    _profile_cache._pending[:] = []
-    _profile_cache._compare_recent.clear()
-    _profile_cache._configured_dir = ""
-    _profile_cache._dir = ""
-    _profile_cache._ready = False
-    _profile_cache._dir_ok = False
-    _profile_cache._last_error = None
-    _profile_cache._notice_done = False
-    _profile_cache._loaded = False
-    _profile_cache._loaded_rows = 0
-    _profile_cache._skipped_rows = 0
-    _profile_cache._truncated_fields = 0
-    _profile_cache._dropped_rows = 0
-    _profile_cache._disk_rows = -1
-    _profile_cache._rewrite_rows = -1
+    _profile_cache._CONFIGURED_DIR = ""
+    _profile_cache._LAST_ERROR = None
+    _profile_cache._HOST = None
+    _profile_cache._TABLE = None
+    _profile_cache._TUNING = 0
 
 
 @contextlib.contextmanager
@@ -203,10 +170,9 @@ def _isolated():
 
     * **临时树**：记录写在这里，``profile_dir`` 也指这里，仓库根不会多出 ``.cache``；
     * **``chdir`` 进临时树**：画像目录默认相对 CWD，这是"绝不落到仓库根"的兜底；
-    * **复原 ``_api`` 的进程级状态**：``_PROFILE_READY`` 是"本进程只读一次画像"的
-      闸门，存的是**已加载的绝对目录**（``str|None``，不是布尔）；不复位就根本走不到
-      ``configure``，本模块验的会变成"上一条用例留下的目录"。四个去重告警集合同理：
-      别人打过的告警会让本模块的"零告警"断言变成空断言；
+    * **复原 ``_api`` 的进程级状态**：``_PROFILE_MISSING_NOTICED`` 是"缺表只提示
+      一次"的闸门；不复位就等于让本模块的"缺表要提示"读到别人的结论。四个去重告警
+      集合同理：别人打过的告警会让本模块的"零告警"断言变成空断言；
     * **复原 ``_threads`` 的进程状态**：``contract()`` 会按形态切线程档位并写
       ``os.environ``，``reset()`` 只复位 applied/omp/blas/source，其余字段和两个标准
       线程变量会一直留着。
@@ -216,7 +182,7 @@ def _isolated():
     saved_cache = _snapshot_cache()
     saved_api = {name: set(getattr(_api, name)) for name in _API_SET_FIELDS}
     saved_api.update({
-        "ready": _api._PROFILE_READY,
+        "missing_noticed": getattr(_api, "_PROFILE_MISSING_NOTICED", False),
         "last": _api._LAST_KERNEL,
         "fused": _api._FUSED_ENV_OWNED,
     })
@@ -235,7 +201,7 @@ def _isolated():
         os.environ[_profile_cache.DIR_ENV] = directory
         os.environ[_specialize.NOTICE_ENV] = "0"
         _reset_cache()
-        _api._PROFILE_READY = None       # "还没读过任何目录"，不是 False
+        _api._PROFILE_MISSING_NOTICED = False   # "这次还没提示过缺表"，不是 False
         yield directory
     finally:
         os.chdir(saved_cwd)
@@ -245,7 +211,7 @@ def _isolated():
             else:
                 os.environ[name] = value
         _restore_cache(saved_cache)
-        _api._PROFILE_READY = saved_api["ready"]
+        _api._PROFILE_MISSING_NOTICED = saved_api["missing_noticed"]
         _api._LAST_KERNEL = saved_api["last"]
         _api._FUSED_ENV_OWNED = saved_api["fused"]
         for name in _API_SET_FIELDS:
@@ -264,9 +230,9 @@ def _isolated():
 def _key(operands) -> dict[str, Any]:
     """``_profile_begin`` 查表用的键（numpy / CPU / 单一 dtype 的固定写法）。
 
-    与实现同源：``dtype`` 按操作数次序去重后用 ``+`` 连接、``shape`` 走
-    :func:`_profile_cache.format_shape`。键对不上，下面的用例会静默变成空断言，
-    所以 :func:`_seed` 必须再用 :func:`_profile_cache.best` 反查一次。
+    与实现同源：``KEY_FIELDS`` 由被测模块给出，``dtype`` 按操作数次序去重后用 ``+``
+    连接、``shape`` 走 :func:`_profile_cache.format_shape`。键对不上，下面的用例会静默
+    变成空断言，所以 :func:`_seed` 必须再用 :func:`_profile_cache.read_winner` 反查一次。
     """
     names: list[str] = []
     for operand in operands:
@@ -274,23 +240,20 @@ def _key(operands) -> dict[str, Any]:
         if text not in names:
             names.append(text)
     return {
-        "user_device": "cpu",
-        "backend": "numpy",
-        "dtype": "+".join(names),
-        "equation": "".join(EQUATION.split()),
         "shape": _profile_cache.format_shape([o.shape for o in operands]),
+        "dtype": "+".join(names),
         "device": "cpu",
+        "equation": "".join(EQUATION.split()),
+        "backend": "numpy",
     }
 
 
-def _seed(kernel: str, compute_ms: float, operands) -> dict[str, Any]:
-    """往当前（已隔离的）画像目录写一条记录，并确认它真是该键的最优行。"""
+def _seed(kernel: str, wall_ms: float, operands) -> dict[str, Any]:
+    """往当前（已隔离的）配置表写**唯一**一行，并确认它能按同一个键查回。"""
     key = _key(operands)
-    row = {**key, "kernel": kernel, "optimize": "auto",
-           "compute_ms": compute_ms, "calls": 1}
-    assert _profile_cache.record(row) is True, ("新键的首条记录必须排队落盘", key)
-    assert _profile_cache.flush() == 1, "flush 必须把这条记录真的写进 profile.csv"
-    picked = _profile_cache.best(key)
+    _profile_cache.write_winner(
+        key, {"kernel": kernel, "optimize": "auto", "wall_ms": wall_ms})
+    picked = _profile_cache.read_winner(key)
     assert picked is not None, ("记录必须能被同一个键查回（键算错了）", key)
     assert picked["kernel"] == kernel, (kernel, picked)
     return key
@@ -334,7 +297,7 @@ def test_profile_hit_switches_to_backend_without_changing_the_answer():
     operands = _operands()
     with _isolated() as directory:
         direct = contract(EQUATION, *operands, kernel_force="backend", profile=False)
-        _seed("backend", compute_ms=0.001, operands=operands)
+        _seed("backend", wall_ms=0.001, operands=operands)
 
         hit = contract(EQUATION, *operands, profile=True, profile_dir=directory)
 
@@ -354,7 +317,7 @@ def test_profile_hit_keeps_dtype_and_shape():
     operands = _operands()
     with _isolated() as directory:
         baseline = contract(EQUATION, *operands, kernel_force="generic", profile=False)
-        _seed("backend", compute_ms=0.001, operands=operands)
+        _seed("backend", wall_ms=0.001, operands=operands)
 
         hit = contract(EQUATION, *operands, profile=True, profile_dir=directory)
 
@@ -373,7 +336,7 @@ def test_profile_disabled_leaves_the_dispatch_untouched():
     operands = _operands()
     with _isolated():
         baseline = contract(EQUATION, *operands, kernel_force="generic", profile=False)
-        key = _seed("backend", compute_ms=0.001, operands=operands)
+        key = _seed("backend", wall_ms=0.001, operands=operands)
 
         off = contract(EQUATION, *operands, profile=False)
 
@@ -388,7 +351,7 @@ def test_profile_disabled_leaves_the_dispatch_untouched():
         assert _rel_max(off, baseline) <= RTOL, (
             "profile=False 的结果必须与通用基线一致", _rel_max(off, baseline))
         # 记录确实一直在（否则上面几条就是空断言）。
-        assert _profile_cache.best(key) is not None, "签名用的记录不见了"
+        assert _profile_cache.read_winner(key) is not None, "签名用的记录不见了"
         # 关闭就是关闭：连默认的 ./.cache 都不许造出来。
         assert not os.path.exists(os.path.join(os.getcwd(), _profile_cache.DEFAULT_DIR)), (
             "profile=False 不许在 CWD 下建缓存目录", os.listdir(os.getcwd()))
@@ -403,7 +366,7 @@ def test_unavailable_profile_kernel_degrades_without_raising():
         baseline = contract(EQUATION, *operands, kernel_force="generic", profile=False)
         # ``cuda_topology`` 在 numpy 操作数上按角色解析成逻辑名 ``topology``；把本后端
         # 的原生入口关掉，它就成了确定不可用的建议。
-        _seed("cuda_topology", compute_ms=0.0001, operands=operands)
+        _seed("cuda_topology", wall_ms=0.0001, operands=operands)
 
         os.environ[_kernel_kupl._DISABLE_ENV] = "0"
         try:

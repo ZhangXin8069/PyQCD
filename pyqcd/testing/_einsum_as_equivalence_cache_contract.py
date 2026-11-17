@@ -58,17 +58,17 @@ _API_SET_FIELDS = (
     "_KERNEL_SKIP_WARNED", "_PROFILE_NOTICED",
 )
 
-#: ``_api`` 的标量/引用型状态：``_PROFILE_READY`` 存的是**已加载的绝对目录**
-#: （``str|None``，不是布尔），``_LAST_KERNEL`` 是最近一次分派记录。
-_API_VALUE_FIELDS = ("_PROFILE_READY", "_LAST_KERNEL", "_FUSED_ENV_OWNED")
+#: ``_api`` 的标量/引用型状态：``_PROFILE_MISSING_NOTICED`` 是"缺表只提示一次"
+#: 的闸门，``_LAST_KERNEL`` 是最近一次分派记录，``_LAST_PROFILE`` 是最近一次观测。
+_API_VALUE_FIELDS = ("_PROFILE_MISSING_NOTICED", "_LAST_KERNEL", "_FUSED_ENV_OWNED",
+                     "_LAST_PROFILE")
 
-#: ``_profile_cache`` 的进程状态：本模块的用例会经 ``contract()`` 走到画像层
-#: （``profile`` 缺省为开），所以画像的索引/目录/计数器都会被改写。值即模块初值。
+#: ``_profile_cache`` 的进程状态：本模块的用例会经 ``contract()`` 走到配置表层
+#: （``profile`` 缺省为开），所以目录、解析缓存与遍历计数都会被改写。值即模块初值
+#: （TV 重设计后表只保留这三类状态；索引/待写队列随写路径一并删除）。
 _CACHE_PLAIN_FIELDS = {
-    "_configured_dir": "", "_ready": False, "_dir": "", "_dir_ok": False,
-    "_last_error": None, "_notice_done": False, "_loaded": False,
-    "_loaded_rows": 0, "_skipped_rows": 0, "_truncated_fields": 0,
-    "_dropped_rows": 0, "_disk_rows": -1, "_rewrite_rows": -1,
+    "_CONFIGURED_DIR": "", "_LAST_ERROR": None, "_HOST": None,
+    "_TABLE": None, "_TUNING": 0,
 }
 
 LABEL_SIZES = {
@@ -84,12 +84,12 @@ def _isolated_state() -> Iterator[None]:
     """快照/复原本模块会触碰的**全部**进程级状态，并清空统一缓存。
 
     光清环境与 ``_LAST_KERNEL`` 不够——``contract()`` 缺省开着画像（``profile=None``），
-    走一次就会改 ``_api._PROFILE_READY`` / ``_PROFILE_NOTICED``、``_profile_cache`` 的
-    索引与计数器，以及 ``_threads`` 的线程档位。这些都没人复原时，单跑永远通过、
-    全套偶发失败：前一个模块把 ``_PROFILE_READY`` 钉在它自己的目录上（那是**绝对路径
-    字符串**，不是布尔），本模块的第一次 ``contract()`` 便以为"这个目录读过了"，
-    直接拿别人的索引，于是预热调用走了缓存里的 ``kernel=backend`` 建议、
-    ``specialize.match`` 一直是 0，``test_contract_cache_false…`` 的逐字段比对就崩了。
+    走一次就会改 ``_api._PROFILE_NOTICED`` / ``_LAST_PROFILE``、``_profile_cache`` 的
+    目录与解析缓存，以及 ``_threads`` 的线程档位。这些都没人复原时，单跑永远通过、
+    全套偶发失败：前一个模块把 ``_profile_cache._CONFIGURED_DIR`` 钉在它自己的目录上，
+    本模块的第一次 ``contract()`` 就会按那张别人的表选路，于是预热调用走了表里的
+    ``kernel=backend`` 建议、``specialize.match`` 一直是 0，
+    ``test_contract_cache_false…`` 的逐字段比对就崩了。
 
     因此这里**进入前快照、退出后恢复**（不是清空了事）：任何字段被用例改坏，退出时
     都回到进入前的值，下一条用例（以及下一个模块）看到的是干净世界。
@@ -116,14 +116,8 @@ def _isolated_state() -> Iterator[None]:
     saved_env = {name: os.environ.get(name) for name in env_names}
     saved_api = {name: set(getattr(_api, name)) for name in _API_SET_FIELDS}
     saved_api.update({name: getattr(_api, name) for name in _API_VALUE_FIELDS})
-    saved_cache = {
-        "index": {key: {config: dict(row) for config, row in slot.items()}
-                  for key, slot in _profile_cache._index.items()},
-        "pending": [dict(row) for row in _profile_cache._pending],
-        "compare": dict(_profile_cache._compare_recent),
-        "plain": {name: getattr(_profile_cache, name)
-                  for name in _CACHE_PLAIN_FIELDS},
-    }
+    saved_cache = {name: getattr(_profile_cache, name)
+                   for name in _CACHE_PLAIN_FIELDS}
     saved_threads = dict(_threads._state)
     pe.cache_clear()
     try:
@@ -144,12 +138,7 @@ def _isolated_state() -> Iterator[None]:
             getattr(_api, name).update(saved_api[name])
         for name in _API_VALUE_FIELDS:
             setattr(_api, name, saved_api[name])
-        _profile_cache._index.clear()
-        _profile_cache._index.update(saved_cache["index"])
-        _profile_cache._pending[:] = saved_cache["pending"]
-        _profile_cache._compare_recent.clear()
-        _profile_cache._compare_recent.update(saved_cache["compare"])
-        for name, value in saved_cache["plain"].items():
+        for name, value in saved_cache.items():
             setattr(_profile_cache, name, value)
         _threads._state.clear()
         _threads._state.update(saved_threads)
@@ -159,15 +148,12 @@ def _isolated_state() -> Iterator[None]:
 def _reset_profile_state() -> None:
     """把画像缓存清到"没配置、没加载、没建目录"的初始态；不改环境变量。
 
-    ``_PROFILE_READY`` 必须置回 ``None``（而不是 ``False``）：它记的是"已加载的绝对
-    目录"，``False`` 既不等于任何路径、又与"没读过"的哨兵不是一个值。
+    ``_TABLE`` 是解析缓存（按 ``(路径, mtime, size)`` 失效），必须置回 ``None``：
+    留着上一条用例的表就等于把别人的行当成本用例的结果。
     """
-    _profile_cache._index.clear()
-    _profile_cache._pending[:] = []
-    _profile_cache._compare_recent.clear()
     for name, initial in _CACHE_PLAIN_FIELDS.items():
         setattr(_profile_cache, name, initial)
-    _api._PROFILE_READY = None
+    _api._PROFILE_MISSING_NOTICED = False
 
 
 def _prepare_contract_environment() -> None:

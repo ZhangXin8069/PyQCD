@@ -174,11 +174,33 @@ from pyqcd.testing._einsum_profile_robustness_contract import (
 from pyqcd.testing._einsum_tune_equivalence_contract import (
     test_einsum_tune_equivalence_contracts,
 )
-# 等价路由表 v2 契约：ok 行带 target_equation + 三置换字段（payload）+ schema_version，
-# 二次命中零匹配、内层按 target_equation 画像、版本优先、坏 JSON 退回重查、
-# state=none 门仍然有效、force 刷新、profile=False 零 IO（2026-11-17）。
-from pyqcd.testing._einsum_equivalence_route_contract import (
-    test_einsum_equivalence_route_contracts,
+# 配置表只读契约（TV 重设计 2026-11-17）：同键多行→报错并列出全部候选、缺文件→
+# 警告"需要先 tune"+命令模板且继续执行、普通调用只读不写（文件字节不变）、命中与
+# 用户显式配置冲突→`ProfileConflict`、数值 rel ≤ 1e-12。
+from pyqcd.testing._einsum_profile_readonly_contract import (
+    test_einsum_profile_readonly_contracts,
+)
+# 计时口径契约（§4 冻结）：只有 `wall_ms` 一列，量的是**整个** `contract()` 的墙钟
+# （含规划与等价改写准备），不许拆回两列（旧的拆分列与更早的毫秒列都已删除，
+# 名字见该模块的 `LEGACY_TIMING_COLUMNS`；源码里不留旧词，§8 的 grep 零残留）。
+from pyqcd.testing._einsum_profile_timing_contract import (
+    test_einsum_profile_timing_contracts,
+)
+# `optimize="none"` 契约：字符串拼写与 `False` 完全等价（path 相同、数值 rel≤1e-15），
+# 且配置表的 `optimize` 列双向一致（`False` 写 `none`，表里的 `none` 读回 `False`）。
+from pyqcd.testing._einsum_optimize_none_contract import (
+    test_einsum_optimize_none_contracts,
+)
+# optimize 对外取值契约：对外**恰好** 6 个（auto/none/greedy/optimal/dp/branch），
+# 注册表里另外 9 个名字逐条标注（退化别名 / 待清除），三份文档逐字一致（2026-11-17）。
+from pyqcd.testing._einsum_optimize_surface_contract import (
+    test_einsum_optimize_surface_contracts,
+)
+# 命中通知标签契约：通知里的内核名必须等于 `LAST_INFO['path']`，topology 提示出现
+# dedicated 时必须同时给出 `[match: topology]` 上下文，且机器段跨语言逐字相同
+# （2026-11-17 用户报告"topology 命中却打印 kupl_dedicated"）。
+from pyqcd.testing._einsum_notice_kernel_label_contract import (
+    test_einsum_notice_kernel_label_contracts,
 )
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
@@ -190,7 +212,11 @@ TESTS = (
     test_einsum_dispatch_invariance_contracts,
     test_einsum_profile_robustness_contracts,
     test_einsum_tune_equivalence_contracts,
-    test_einsum_equivalence_route_contracts,
+    test_einsum_profile_readonly_contracts,
+    test_einsum_profile_timing_contracts,
+    test_einsum_optimize_none_contracts,
+    test_einsum_optimize_surface_contracts,
+    test_einsum_notice_kernel_label_contracts,
     test_native_expression_compile_failure_leaves_a_warning,
     test_native_fallback_warns_once_per_reason,
     test_shape_path_failure_is_recorded_and_announced_once,

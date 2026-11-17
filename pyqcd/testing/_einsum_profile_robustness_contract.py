@@ -1,32 +1,31 @@
-"""契约：配置画像缓存的**并发/健壮性**口径（``pyqcd.einsum._profile_cache``）。
+"""契约：配置表缓存的**并发/健壮性**口径（``pyqcd.einsum._profile_cache``）。
 
-``_einsum_profile_cache_contract`` 钉住的是"写了什么、读了什么"（CSV 往返、选优、
-稀疏写入、只写不读、关闭零 IO、目录优先级）。本模块钉住的是另一半——**坏环境下
-还能不能活着回来**，这七条都不会让数值结果变一位，所以普通数值测试永远碰不到：
+``_einsum_profile_cache_contract`` 钉住的是"写了什么、读了什么"（冻结名字、单写者、
+同键一行、``wall_ms``、``tune_session``、目录优先级）。本模块钉住的是另一半——
+**坏环境下还能不能活着回来**。这六条都不会让数值结果变一位，所以普通数值测试永远
+碰不到：
 
-1. **``ensure_configured`` 只补齐、不改写**：:func:`configure` 钉住 A 之后，
-   ``ensure_configured()`` 必须仍是 A（哪怕 ``PYQCD_EINSUM_PROFILE_DIR`` 指向别处）；
-   只有 ``configure(None)`` 才按"env > 默认"重算，清空环境后回到 ``./.cache``
-   ——默认那档只在临时 CWD 下验证，**不在仓库根留下 ``.cache``**。
-2. **坏行只丢那一行**：往 ``profile.csv`` 追加"非法 UTF-8（含 NUL）"与"列数不足"两行，
-   ``load(force=True)`` 不抛、``skipped_rows`` 两条都计、好行照常 ``best()`` 命中，
-   且 ``enabled()`` 仍为真（一行坏数据不许把整张表判死）。
-3. **超长字段写盘前截断**：5000 字符的 ``note`` 落盘 ≤ 200（本契约钉死 ``== 200``），
-   ``equivalence_equation`` ≤ 512，截断计数（``truncated_fields``）随之增加；
-   内存里也是截断后的值（读写同一口径）。
-4. **每键最快 K 条**：同键写 10 个不同 ``(kernel, optimize)``，内存与落盘都只剩
-   ``compute_ms`` 最快的 :data:`_MAX_ROWS_PER_KEY` 条，被裁掉的行**不许**借待写队列
-   漏进磁盘（``flush()`` 的行数与索引一致）。
+1. **``configure`` 只解析路径（不建目录）**：钉住 A 之后 ``ensure_configured()`` 必须
+   仍是 A（哪怕 ``PYQCD_EINSUM_PROFILE_DIR`` 指向别处）；只有 ``configure(None)`` 才按
+   "env > 默认"重算，清空环境后回到 ``./.cache``——默认那档只在临时 CWD 下验证，
+   **不在仓库根留下 ``.cache``**。
+2. **坏行只丢那一行**：往主表尾部追加"非法 UTF-8（含 NUL）"与"列数不足"两行，
+   读表不抛、好行照常 :func:`read_winner` 命中、``summary()["rows"]`` 仍只数好行，
+   且 :func:`enabled` 仍为真、``last_error`` 仍为空（一行坏数据不许把整张表判死）。
+3. **超长 ``note`` 写盘前截断**：5000 字符的备注落盘恰好 ``_CLIP_LIMITS["note"]``
+   个字符，读回来也是截断后的值（读写同一口径）。
+4. **同键只留一行**：同一个键连写 10 次，磁盘上永远只有 1 行（最后一次胜出），
+   别的键不受牵动——"每键多条 + 选优"已废除（§2.2/§7）。
 5. **``fork`` 安全**：父进程某线程持着 ``_LOCK`` 时 ``fork``，子进程的 ``summary()``
    必须**返回**（父进程 1 s 内等到子进程退出即通过）。这是一条**活性**判定，不是
    性能结论：``threading.Lock`` 不随 ``fork`` 重置，缺 ``os.register_at_fork`` 钩子时
    子进程会永久阻塞，超时即判失败。
-6. **关闭零副作用**：``PYQCD_EINSUM_PROFILE=0`` 时开关为假、``record`` 返回 ``False``、
+6. **关闭零副作用**：``PYQCD_EINSUM_PROFILE=0`` 时开关为假、写静默、读返回 ``None``、
    ``summary()["enabled"]`` 为假，且临时 CWD 里连目录都不出现。
 
 不做任何性能断言：第 5 条只问"是不是 1 s 内**返回**"，不问快慢；其余用例不测时间。
-每个用例都用 ``tempfile`` + 临时 CWD，退出时还原环境变量与模块状态（含累计计数器），
-所以既不在仓库根留 ``.cache``，也不让上一条用例的目录/计数漏进下一条。
+每个用例都用 ``tempfile`` + 临时 CWD，退出时还原环境变量与模块状态，
+所以既不在仓库根留 ``.cache``，也不让上一条用例的目录/解析缓存漏进下一条。
 
 可直接运行::
 
@@ -56,74 +55,42 @@ _LIVENESS_S = 1.0
 #: 持锁线程就位/释放、以及父进程等持锁线程退出的兜底上限（防止契约自己卡住）。
 _HANDOFF_S = 30.0
 
-#: 模块里需要按用例隔离的进程内状态（含三个累计计数器——它们只增不减，
-#: 不还原就会让下一条用例的"增量"断言失去意义）。
-_STATE_NAMES = (
-    "_configured_dir",
-    "_ready",
-    "_dir",
-    "_dir_ok",
-    "_last_error",
-    "_notice_done",
-    "_loaded",
-    "_loaded_rows",
-    "_skipped_rows",
-    "_truncated_fields",
-    "_dropped_rows",
-    "_disk_rows",
-    "_rewrite_rows",
-)
+#: 模块里需要按用例隔离的进程内状态（``_TABLE`` 是解析缓存，按内容拷贝）。
+_STATE_NAMES = ("_CONFIGURED_DIR", "_LAST_ERROR", "_HOST", "_TABLE", "_TUNING")
 
 
 # ── 状态隔离 ────────────────────────────────────────────────────────────────
 
 def _snapshot(module: Any) -> dict[str, Any]:
-    """把模块的进程内状态抄一份（索引/队列/去重表按值拷贝）。"""
-    return {
-        "attrs": {name: getattr(module, name) for name in _STATE_NAMES},
-        "index": {key: {config: dict(row) for config, row in slot.items()}
-                  for key, slot in module._index.items()},
-        "pending": [dict(row) for row in module._pending],
-        "compare": dict(module._compare_recent),
-    }
+    """把模块的进程内状态抄一份（``_TABLE`` 的行列表也拷一层）。"""
+    saved: dict[str, Any] = {}
+    for name in _STATE_NAMES:
+        value = getattr(module, name)
+        if name == "_TABLE" and value is not None:
+            value = (value[0], value[1], value[2], [dict(row) for row in value[3]])
+        saved[name] = value
+    return saved
 
 
 def _restore(module: Any, saved: dict[str, Any]) -> None:
-    """把 :func:`_snapshot` 抄下来的状态放回去（含累计计数器）。"""
-    for name, value in saved["attrs"].items():
+    """把 :func:`_snapshot` 抄下来的状态放回去。"""
+    for name, value in saved.items():
         setattr(module, name, value)
-    module._index.clear()
-    module._index.update(saved["index"])
-    module._pending[:] = saved["pending"]
-    module._compare_recent.clear()
-    module._compare_recent.update(saved["compare"])
 
 
 def _reset(module: Any) -> None:
-    """把模块清到"没配置、没加载、没建目录、计数器归零"的初始态。"""
-    module._index.clear()
-    module._pending.clear()
-    module._compare_recent.clear()
-    module._configured_dir = ""
-    module._ready = False
-    module._dir = ""
-    module._dir_ok = False
-    module._last_error = None
-    module._notice_done = False
-    module._loaded = False
-    module._loaded_rows = 0
-    module._skipped_rows = 0
-    module._truncated_fields = 0
-    module._dropped_rows = 0
-    module._disk_rows = -1
-    module._rewrite_rows = -1
+    """把模块清到"没配置、没解析缓存、不处于 tune 窗口"的初始态。"""
+    module._TABLE = None
+    module._TUNING = 0
+    module._CONFIGURED_DIR = ""
+    module._LAST_ERROR = None
 
 
 @contextlib.contextmanager
 def _isolated(disabled: bool = False):
     """临时 CWD + 干净的环境变量与进程内状态；退出时全部还原。
 
-    缓存目录可以是相对路径（默认 ``./.cache`` 就是），所以"不在仓库根留垃圾"靠的
+    配置目录可以是相对路径（默认 ``./.cache`` 就是），所以"不在仓库根留垃圾"靠的
     是把 CWD 换进临时树；两个环境变量与 :data:`_STATE_NAMES` 一律还原，
     避免污染同进程里其它契约（它们也在读同一份模块级状态）。
     """
@@ -157,35 +124,21 @@ def _isolated(disabled: bool = False):
 # ── 小工具 ──────────────────────────────────────────────────────────────────
 
 def _key(**overrides: Any) -> dict[str, Any]:
-    """主表键的稀疏写法（``host`` 缺省由模块补本机名，读写两侧一致）。"""
+    """主表键的稀疏写法（``shape`` 用列表写法，与实现同口径归一化）。"""
     key = {
         "backend": "numpy",
         "dtype": "complex128",
         "equation": "ij,jk->ik",
         "shape": [(2, 3), (3, 4)],
         "device": "cpu",
-        "user_device": "cpu",
     }
     key.update(overrides)
     return key
 
 
-def _row(**overrides: Any) -> dict[str, Any]:
-    """主表行的稀疏写法：键 + 配置 + 观测值。"""
-    row = {
-        **_key(),
-        "kernel": "kupl_dedicated",
-        "optimize": "auto",
-        "compute_ms": 1.0,
-        "calls": 1,
-    }
-    row.update(overrides)
-    return row
-
-
-def _column(name: str) -> int:
-    """``PROFILE_COLUMNS`` 里的列序（避免在测试里写死数字）。"""
-    return _profile_cache.PROFILE_COLUMNS.index(name)
+def _forget() -> None:
+    """丢掉解析缓存：本模块会直接往文件尾部追加坏字节。"""
+    _profile_cache._TABLE = None
 
 
 def _read_rows(path: str) -> list[list[str]]:
@@ -272,7 +225,7 @@ def _fork_summary_while_lock_held(module: Any, deadline_s: float):
     return status, payload
 
 
-# ── 1. ensure_configured 只补齐、不改写 ─────────────────────────────────────
+# ── 1. configure 只解析路径、ensure_configured 不改写 ────────────────────────
 
 def test_ensure_configured_keeps_pinned_dir():
     """``configure(A)`` 后 ``ensure_configured()`` 仍是 A；只有 ``configure`` 会重算。"""
@@ -280,10 +233,11 @@ def test_ensure_configured_keeps_pinned_dir():
         module = _profile_cache
         pinned = os.path.join(work, "pinned")
         env_dir = os.path.join(work, "env_cache")
-        default = os.path.join(work, module.DEFAULT_DIR)
+        default = os.path.join(os.path.abspath(work), module.DEFAULT_DIR)
 
         assert module.configure(pinned) == os.path.abspath(pinned)
-        assert os.path.isdir(pinned), "configure 必须就位（建出目录）"
+        assert not os.path.exists(pinned), (
+            "configure 只解析路径：读路径不建目录，建目录只发生在 write_winner")
 
         # 1) 已钉住的目录不被改写——哪怕环境变量指向别处。
         os.environ[module.DIR_ENV] = env_dir
@@ -293,7 +247,7 @@ def test_ensure_configured_keeps_pinned_dir():
         state = module.summary()
         assert state["dir"] == os.path.abspath(pinned), state
         assert state["file"] == os.path.join(os.path.abspath(pinned),
-                                            module.PROFILE_NAME), state
+                                            module.PROFILE_FILENAME), state
         assert not os.path.exists(env_dir), (
             "ensure_configured 只管补齐，不得按环境变量另建目录")
 
@@ -303,10 +257,10 @@ def test_ensure_configured_keeps_pinned_dir():
             "configure(None) 必须回到默认 ./.cache", module.summary())
         state = module.summary()
         assert state["dir"] == default, state
-        assert state["file"] == os.path.join(default, module.PROFILE_NAME), state
+        assert state["file"] == os.path.join(default, module.PROFILE_FILENAME), state
         assert state["dir"].startswith(os.path.abspath(work)), (
             "默认目录必须落在临时 CWD 下，仓库根不许出现 .cache", state)
-        assert os.path.isdir(default), "configure(None) 必须真就位"
+        assert not os.path.exists(default), "只解析路径，不得顺手建出默认目录"
 
         # 3) 再调 ensure：沿用当前目录，不重算。
         assert module.ensure_configured() == default, module.summary()
@@ -315,134 +269,99 @@ def test_ensure_configured_keeps_pinned_dir():
 # ── 2. 坏行只丢那一行 ───────────────────────────────────────────────────────
 
 def test_corrupt_rows_are_skipped_not_fatal():
-    """追加非法 UTF-8（含 NUL）与列数不足两行：不抛、计数、好行照常命中。"""
+    """追加非法 UTF-8（含 NUL）与列数不足两行：不抛、好行照常命中、表不被判死。"""
     with _isolated() as work:
         module = _profile_cache
         directory = os.path.join(work, "cache")
         module.configure(directory)
-        module.load()
-        assert module.record(_row(equation="ij,jk->ik", kernel="good_fast",
-                                  compute_ms=1.0)) is True
-        assert module.record(_row(equation="ab,bc->ac", shape=[(4, 5), (5, 6)],
-                                  kernel="good_slow", compute_ms=9.0)) is True
-        assert module.flush() == 2
-
-        path = os.path.join(directory, module.PROFILE_NAME)
+        module.write_winner(_key(equation="ij,jk->ik"),
+                            {"kernel": "good_fast", "wall_ms": 1.0})
+        module.write_winner(_key(equation="ab,bc->ac", shape=[(4, 5), (5, 6)]),
+                            {"kernel": "good_slow", "wall_ms": 9.0})
+        path = os.path.join(directory, module.PROFILE_FILENAME)
         assert len(_read_rows(path)) == 3, ("表头 + 2 行", _read_rows(path))
 
         # 两行坏数据：一行非法 UTF-8（首字节是 NUL，还带 0xFF/0xFE），一行列数不足。
         with open(path, "ab") as handle:
             handle.write(b"\x00\xff\xfe garbage row after NUL\n")
             handle.write(b"too,few,fields\n")
+        _forget()
 
-        assert module.load(force=True) == 2, (
-            "坏行之外的两行必须照常读入", module.summary())
         state = module.summary()
-        assert state["skipped_rows"] >= 2, (
-            "两条坏行都必须计入 skipped_rows（编码 1 + 列数 1）", state)
         assert state["rows"] == 2, ("好行不能被坏行带走", state)
+        assert state["keys"] == 2, state
         # 关键：坏行只降级"那一行"，不许把整张表判死。
         assert state["enabled"] is True, ("坏行不得关掉缓存", state)
         assert module.enabled() is True, state
         assert state["last_error"] is None, ("读侧的坏行不是目录不可用", state)
 
-        picked = module.best(_key(equation="ij,jk->ik"))
-        assert picked is not None, "坏行之后仍必须 best() 到好行"
+        picked = module.read_winner(_key(equation="ij,jk->ik"))
+        assert picked is not None, "坏行之后仍必须命中好行"
         assert picked["kernel"] == "good_fast", picked
-        assert float(picked["compute_ms"]) == 1.0, picked
+        assert picked["wall_ms"] == "1.000", picked
+        assert module.read_winner(
+            _key(equation="ab,bc->ac", shape=[(4, 5), (5, 6)]))["kernel"] == "good_slow"
 
 
 # ── 3. 超长字段写盘前截断 ───────────────────────────────────────────────────
 
 def test_overlong_text_fields_are_clipped():
-    """5000 字符 note → 落盘 200；equivalence_equation → 512；计数随之增加。"""
+    """5000 字符 note → 落盘恰好 ``_CLIP_LIMITS["note"]`` 个字符（读回同一口径）。"""
     with _isolated() as work:
         module = _profile_cache
         directory = os.path.join(work, "cache")
         module.configure(directory)
-        module.load()
-        assert module._CLIP_LIMITS["note"] == 200, module._CLIP_LIMITS
-        assert module._CLIP_LIMITS["equivalence_equation"] == 512, (
-            module._CLIP_LIMITS)
+        limit = module._CLIP_LIMITS["note"]
+        assert limit == 200, ("备注的写盘上限就是 200", module._CLIP_LIMITS)
 
-        before = module.summary()["truncated_fields"]
         long_note = "N" * 5000
-        assert module.record(_row(note=long_note)) is True
-        state = module.summary()
-        assert state["truncated_fields"] >= before + 1, (
-            "截断必须计数", before, state)
+        module.write_winner(_key(), equivalence={
+            "target_equation": "cadb,ac,bd->", "operand_order": [1, 0]},
+            note=long_note)
+        _forget()
 
-        assert module.flush() == 1
-        table = _read_rows(os.path.join(directory, module.PROFILE_NAME))
+        table = _read_rows(os.path.join(directory, module.PROFILE_FILENAME))
         assert len(table) == 2, ("表头 + 1 行", table)
-        note_cell = table[1][_column("note")]
-        assert len(note_cell) == 200, ("落盘 note 必须是 200 字符", len(note_cell))
-        assert note_cell == "N" * 200, note_cell[-16:]
-        # 内存与落盘同一口径（读写两侧共用 _clip_row）。
-        picked = module.best(_key())
-        assert picked is not None and len(picked["note"]) == 200, picked
-
-        # compare 表的超长方程用同一个截断器（512）——旁证表也不许被撑坏。
-        mid = module.summary()["truncated_fields"]
-        assert module.record_compare({
-            **_key(equation="ab,bc->ac"),
-            "kernel": "kupl_dedicated",
-            "optimize": "auto",
-            "compare": "ij,jk->ik",
-            "equivalence": {"kind": "permute", "equation": "E" * 5000},
-        }) is True
-        after = module.summary()["truncated_fields"]
-        assert after >= mid + 1, ("compare 的截断同样要计数", mid, after)
-
-        compare_table = _read_rows(os.path.join(directory, module.COMPARE_NAME))
-        assert len(compare_table) == 2, ("表头 + 1 行", compare_table)
-        equation_cell = compare_table[1][
-            module.COMPARE_COLUMNS.index("equivalence_equation")]
-        assert len(equation_cell) == 512, (
-            "落盘 equivalence_equation 必须是 512 字符", len(equation_cell))
+        note_cell = table[1][module.PROFILE_COLUMNS.index("note")]
+        assert len(note_cell) == limit, ("落盘 note 必须是 200 字符", len(note_cell))
+        assert note_cell == "N" * limit, note_cell[-16:]
+        # 内存与落盘同一口径（读回来也是截断后的值）。
+        picked = module.read_winner(_key())
+        assert picked is not None and len(picked["note"]) == limit, picked
 
 
-# ── 4. 每键最快 K 条 ────────────────────────────────────────────────────────
+# ── 4. 同键只留一行 ─────────────────────────────────────────────────────────
 
-def test_per_key_cap_keeps_fastest_k_in_memory_and_on_disk():
-    """同键 10 个配置 → 内存与落盘都只剩最快的 4 条，落选行不许漏进磁盘。"""
+def test_repeated_writes_keep_a_single_row_per_key():
+    """同键连写 10 次 → 磁盘上永远 1 行（最后一次胜出），别的键不受牵动。"""
     with _isolated() as work:
         module = _profile_cache
-        cap = module._MAX_ROWS_PER_KEY
-        assert cap == 4, ("每键上限就是 4", cap)
         directory = os.path.join(work, "cache")
         module.configure(directory)
-        module.load()
+        key = _key()
+        other = _key(equation="ab,bc->ac")
+        module.write_winner(other, {"kernel": "backend", "wall_ms": 5.0})
 
-        # 由慢到快写 10 个不同 (kernel, optimize)：每个都比当前最优快 >5%，
-        # 因此每个都**够格排队**——落选行只能靠"每键最快 K 条"剔除。
         observed = [float(10 - index) for index in range(10)]      # 10.0 … 1.0
         for ms in observed:
-            assert module.record(
-                _row(kernel=f"k{int(ms):02d}", optimize="auto",
-                     compute_ms=ms)) is True, ms
+            module.write_winner(key, {"kernel": f"k{int(ms):02d}",
+                                      "optimize": "auto", "wall_ms": ms})
+            _forget()
+            state = module.summary()
+            assert state["rows"] == 2, ("同键永远只留 1 行", state)
+            assert state["keys"] == 2, state
 
-        state = module.summary()
-        assert state["rows"] == cap, ("内存只留最快 K 条", state)
-        assert state["keys"] == 1, state
-        assert state["max_rows_per_key"] == cap, state
-        assert state["dropped_rows"] >= len(observed) - cap, (
-            "被裁掉的条数必须可见", state)
-        assert module.best(_key())["compute_ms"] == "1.000", module.best(_key())
-
-        # 落盘与内存同一口径：待写队列里的落选行必须被剔除。
-        assert module.flush() == cap, (
-            "flush 的行数必须与索引一致（被裁掉的行不得漏进磁盘）",
-            module.summary())
-        table = _read_rows(os.path.join(directory, module.PROFILE_NAME))
-        assert len(table) == cap + 1, ("表头 + K 行", len(table))
-        kept = sorted(float(row[_column("compute_ms")]) for row in table[1:])
-        assert kept == [1.0, 2.0, 3.0, 4.0], ("留下的必须是最快的 4 条", kept)
-
-        # 重读一遍：文件里也只有 K 行，索引不反弹。
-        assert module.load(force=True) == cap, module.summary()
-        assert module.summary()["rows"] == cap, module.summary()
-        assert module.best(_key())["compute_ms"] == "1.000"
+        table = _read_rows(os.path.join(directory, module.PROFILE_FILENAME))
+        assert len(table) == 3, ("表头 + 2 行（每个键 1 行）", len(table))
+        kept = [row for row in table[1:]
+                if row[module.PROFILE_COLUMNS.index("equation")] == "ij,jk->ik"]
+        assert len(kept) == 1, kept
+        assert kept[0][module.PROFILE_COLUMNS.index("kernel")] == "k01", (
+            "留下的是最后一次写入（不是最快的那次）", kept)
+        assert kept[0][module.PROFILE_COLUMNS.index("wall_ms")] == "1.000", kept
+        assert module.read_winner(key)["kernel"] == "k01", module.read_winner(key)
+        assert module.read_winner(other)["kernel"] == "backend", (
+            "别的键不许被牵动", module.read_winner(other))
 
 
 # ── 5. fork 安全（活性判定） ────────────────────────────────────────────────
@@ -457,11 +376,10 @@ def test_fork_child_can_summarize_while_parent_holds_lock():
         module = _profile_cache
         directory = os.path.join(work, "cache")
         module.configure(directory)
-        module.load()
-        # 先落一行：子进程复位 _loaded/_index 后要从文件真的读回来，才能证明
-        # 它拿到的不是"父进程那一刻的内存快照"。
-        assert module.record(_row(kernel="forked_row", compute_ms=2.0)) is True
-        assert module.flush() == 1
+        # 先落一行：子进程重建锁后要从文件真的读回来，才能证明它拿到的不是
+        # "父进程那一刻的内存快照"。
+        module.write_winner(_key(), {"kernel": "forked_row", "wall_ms": 2.0})
+        _forget()
 
         status, payload = _fork_summary_while_lock_held(module, _LIVENESS_S)
 
@@ -471,31 +389,32 @@ def test_fork_child_can_summarize_while_parent_holds_lock():
             "子进程里的 summary() 抛异常了", payload.decode("utf-8", "replace"))
         decoded = json.loads(payload.decode("utf-8"))
         assert decoded["enabled"] is True, decoded
-        assert decoded["keys"] == 1, ("子进程必须按文件重建索引", decoded)
-        assert decoded["rows"] >= 1, ("子进程必须真的读回那一行", decoded)
+        assert decoded["keys"] == 1, ("子进程必须按文件重建解析结果", decoded)
+        assert decoded["rows"] == 1, ("子进程必须真的读回那一行", decoded)
         assert decoded["dir"] == os.path.abspath(directory), decoded
 
         # 父进程这边：持锁线程已退出，锁完好可用（钩子只重建子进程的锁）。
         assert module.summary()["dir"] == os.path.abspath(directory)
+        assert module.read_winner(_key())["kernel"] == "forked_row", (
+            "父进程的读路径也必须仍然可用")
 
 
 # ── 6. 关闭零副作用 ─────────────────────────────────────────────────────────
 
 def test_disabled_profile_leaves_no_trace():
-    """``PYQCD_EINSUM_PROFILE=0``：不建目录、``record()`` False、``summary`` 为假。"""
+    """``PYQCD_EINSUM_PROFILE=0``：不建目录、写静默、读 ``None``、``summary`` 为假。"""
     with _isolated(disabled=True) as work:
         module = _profile_cache
         assert module.enabled() is False
-        assert module.record(_row()) is False
-        assert module.record_compare({**_key(), "compare": "ij->ji"}) is False
-        assert module.load() == 0
-        assert module.flush() == 0
+        assert module.write_winner(_key(), {"kernel": "backend"}) is None
+        assert module.write_winner(_key(), equivalence={
+            "target_equation": "cadb,ac,bd->", "operand_order": [1, 0]}) is None
+        assert module.read_winner(_key()) is None, "关闭时读当无命中"
 
         state = module.summary()
         assert state["enabled"] is False, state
         assert state["rows"] == 0 and state["keys"] == 0, state
-        assert state["loaded"] is False, state
-        assert module.notice() is None, "关闭时不该有提示"
+        assert state["last_error"] is None, state
 
         # 零副作用：整个临时 CWD 里连目录都不许出现。
         assert os.listdir(work) == [], ("关闭时不得产生任何文件", os.listdir(work))
@@ -507,7 +426,7 @@ TESTS = (
     test_ensure_configured_keeps_pinned_dir,
     test_corrupt_rows_are_skipped_not_fatal,
     test_overlong_text_fields_are_clipped,
-    test_per_key_cap_keeps_fastest_k_in_memory_and_on_disk,
+    test_repeated_writes_keep_a_single_row_per_key,
     test_fork_child_can_summarize_while_parent_holds_lock,
     test_disabled_profile_leaves_no_trace,
 )

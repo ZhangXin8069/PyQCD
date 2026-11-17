@@ -1671,6 +1671,12 @@ bool trace_enabled() {
     return enabled;
 }
 
+// 融合路径探针：只有显式设 PYQCD_CUDA_TRACE_FUSED 时才打印，避免污染生产日志。
+bool fused_trace_enabled() {
+    static const bool enabled = std::getenv("PYQCD_CUDA_TRACE_FUSED") != nullptr;
+    return enabled;
+}
+
 int requested_stream_count() {
     const char* value = std::getenv("PYQCD_EINSUM_CUDA_STREAMS");
     if (value == nullptr || *value == '\0') {
@@ -2584,14 +2590,23 @@ int execute_context(
 
     std::lock_guard<std::mutex> lock(context->mutex);
     if (context->e4_fused.matched && qcd_cuda_e4_fused != nullptr) {
+        if (fused_trace_enabled()) {
+            std::fprintf(stderr, "[fused-hit] e4_fused\n");
+        }
         return execute_e4_fused(
             context->plan, context->e4_fused, &context->workspace,
             input_data, output_data);
     }
     if (context->sandwich.matched && qcd_cuda_sandwich != nullptr) {
+        if (fused_trace_enabled()) {
+            std::fprintf(stderr, "[fused-hit] sandwich\n");
+        }
         return execute_sandwich(
             context->plan, context->prepared, context->sandwich,
             &context->workspace, input_data, output_data);
+    }
+    if (fused_trace_enabled()) {
+        std::fprintf(stderr, "[fused-hit] prepared\n");
     }
     return execute_prepared(
         context->plan, context->prepared, &context->workspace, input_data, output_data);

@@ -6,11 +6,12 @@ import importlib
 import inspect
 import os
 import re
+import sys
 import threading
 import time
 import warnings
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from . import paths
@@ -21,7 +22,8 @@ from . import (_cache, _equivalence, _kernel_force, _profile_cache, _shape_paths
 from .backends import dispatch as backends
 from .backends.dispatch import get_func, parse_backend
 
-__all__ = ["contract", "contract_path", "last_kernel", "cache_clear", "cache_stats"]
+__all__ = ["contract", "contract_path", "last_kernel", "last_profile",
+           "cache_clear", "cache_stats"]
 
 _EINSUM_SYMBOLS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _EINSUM_PUNCTUATION = ",->."
@@ -127,6 +129,23 @@ def _choose_memory_arg(memory_limit: Any, size_list: Sequence[int]) -> int | Non
         raise ValueError("Memory limit must be larger than 0, or -1")
 
     return int(memory_limit)
+
+
+def _normalize_optimize(optimize: Any) -> Any:
+    """Public ``optimize`` spelling → the value the planner understands.
+
+    ``"none"`` (case insensitive, surrounding blanks ignored) means *no optimizer*,
+    which is exactly ``False``: one n-ary einsum, no pairwise planning. Both entry
+    points (:func:`contract_path` and :func:`contract`) run through here so the two
+    cannot drift apart.
+
+    Every other value — other strings, ``False``/``True``/``None``, callables and
+    explicit path lists — is returned **unchanged**; unknown optimizer names must
+    keep raising in :func:`_find_path` instead of being silently swallowed here.
+    """
+    if isinstance(optimize, str) and optimize.strip().lower() == "none":
+        return False
+    return optimize
 
 
 def _filter_einsum_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -451,9 +470,10 @@ def contract_path(
         subscripts: Specifies the subscripts for summation.
         *operands: The arrays (or, with ``shapes=True``, the shapes) to contract.
         use_blas: Whether pairwise contractions may be dispatched to BLAS.
-        optimize: ``False`` for a single n-ary einsum, an explicit path, the name
-            of a registered path optimizer, a ``PathOptimizer`` instance, or
-            ``True``/``None``/``"auto"`` to let the planner decide.
+        optimize: ``False`` (or the string ``"none"``, case insensitive) for a
+            single n-ary einsum, an explicit path, the name of a registered path
+            optimizer, a ``PathOptimizer`` instance, or ``True``/``None``/``"auto"``
+            to let the planner decide.
         memory_limit: Upper bound on the number of elements of any intermediate.
             ``None``/``-1`` means unlimited and ``"max_input"`` means the largest
             input tensor.
@@ -464,6 +484,7 @@ def contract_path(
     Returns:
         ``(path, PathInfo)``: the contraction order and a printable summary.
     """
+    optimize = _normalize_optimize(optimize)
     if (optimize is True) or (optimize is None):
         optimize = "auto"
 
@@ -899,66 +920,33 @@ def _expected_output_shape(subscripts: str,
         return None
 
 
-##### 等价改写的跨进程路由表（标记 + 可执行载荷）
-
-#: ``as_equivalence=`` 的第四个取值：**忽略**标记，真的再查一次等价映射，并在查完
-#: 后刷新标记。API 与 CLI 都可能直接把这个字符串传进来。
-_AS_EQ_FORCE = "force"
+##### 等价改写：表里的可执行载荷
 
 #: 已经做过**数值自检**的载荷（token 见 :func:`_equivalence_token`）。首次套用一条
 #: 载荷时要与"重新匹配一次"的结果对拍，通过后同一份载荷不再付这份代价。
 _EQUIVALENCE_VERIFIED: set[tuple[Any, ...]] = set()
-#: 自检失败的载荷：本进程内**不再套用**（每次都退回重新匹配），但那份表格内容仍会
-#: 被重新匹配的结论刷新（见 :func:`_payload_result`）。
+#: 自检失败的载荷：本进程内**不再套用**（每次都退回重新匹配）。表是**只读**的，所以
+#: 这里只影响本进程，不写回——"这条载荷不可信"由下次 tune 重新测量。
 _EQUIVALENCE_REJECTED: set[tuple[Any, ...]] = set()
 _EQUIVALENCE_LOCK = threading.Lock()
 #: 自检的容差：两份结果来自同一条收缩的两种写法，只该差舍入。
 _EQUIVALENCE_SELF_CHECK_RTOL = 1e-12
 
 
-def _equivalence_marker(key: dict[str, Any] | None) -> dict[str, Any] | None:
-    """读该键的标记行（``profile_equivalence.csv`` 的同键最优一行）；读不到返回 ``None``。
+def _equivalence_payload(row: dict[str, Any] | None) -> Any | None:
+    """配置表的一行 → **可直接施加**的 :class:`~._equivalence.Equivalence`；不可用时 ``None``。
 
-    标记只是**省时间/省匹配**的提示：查询是可选能力（``_profile_cache`` 不提供这个
-    函数时用 ``getattr`` 降级），任何异常、任何非字典返回值都按"没有标记"处理——
-    读不到就必须照常往下查，绝不因为一个可选缓存把等价步骤整段关掉。
+    载荷四列由 :func:`._profile_cache.equivalence_payload` 解码（JSON → 元组），这里只把
+    解出来的字段装成与 :func:`._equivalence.normalize_equation` 同形的对象，于是"照表
+    施加"与"查完再施加"共用同一段骨架（:func:`_apply_equivalence`）。
+
+    不是等价行（没有 ``target_equation`` / 没有可动字段）、坏 JSON 一律返回 ``None``：
+    调用方据此**退回重新匹配**，绝不抛异常（表只影响选路，坏了只该慢一点）。
     """
-    if key is None:
-        return None
-    lookup = getattr(_profile_cache, "equivalence_marker", None)
-    if lookup is None:
+    if not isinstance(row, dict):
         return None
     try:
-        marker = lookup(key)
-    except Exception:                                    # noqa: BLE001 - 标记绝不外抛
-        return None
-    return marker if isinstance(marker, dict) else None
-
-
-def _equivalence_marked_none(marker: dict[str, Any] | None) -> bool:
-    """该标记是否说明"查过、无法等价改写"（``state=none`` 的廉价门）。"""
-    if not isinstance(marker, dict):
-        return False
-    return str(marker.get("state", "")).strip().lower() == "none"
-
-
-def _equivalence_payload(marker: dict[str, Any] | None) -> Any | None:
-    """标记行 → **可直接施加**的 :class:`~._equivalence.Equivalence`；不可用时 ``None``。
-
-    载荷的三列由 :func:`._profile_cache.equivalence_payload` 解码（JSON → 元组），
-    这里只把解出来的字段装成与 :func:`._equivalence.normalize_equation` 同形的对象，
-    于是"照表施加"与"查完再施加"共用同一段骨架（:func:`_apply_equivalence`）。
-
-    坏 JSON、缺列、缺 ``schema_version`` 的旧行、``state != "ok"`` 一律返回 ``None``：
-    调用方据此**退回重新匹配**，绝不抛异常（表是可选缓存，坏了只该慢一点）。
-    """
-    if not isinstance(marker, dict):
-        return None
-    load = getattr(_profile_cache, "equivalence_payload", None)
-    if load is None:
-        return None
-    try:
-        payload = load(marker)
+        payload = _profile_cache.equivalence_payload(row)
     except Exception:                                    # noqa: BLE001 - 载荷绝不外抛
         return None
     if not isinstance(payload, dict):
@@ -971,52 +959,9 @@ def _equivalence_payload(marker: dict[str, Any] | None) -> Any | None:
         operand_order=payload.get("operand_order"),
         operand_permutations=payload.get("operand_permutations") or (),
         output_permutation=payload.get("output_permutation"),
-        description="profile 路由表载荷（跳过匹配，直接施加）",
-        kind=str(payload.get("kind") or ""),
+        description="配置表的等价行（跳过匹配，直接施加）",
+        kind="",
     )
-
-
-def _mapping_payload(mapping: Any) -> dict[str, Any]:
-    """一条映射 → ``record_equivalence`` 的四个载荷关键字（``None`` = 没有映射）。"""
-    if mapping is None:
-        return {}
-    return {
-        "target_equation": str(getattr(mapping, "equation", "") or ""),
-        "operand_order": getattr(mapping, "operand_order", None),
-        "operand_permutations": getattr(mapping, "operand_permutations", None) or None,
-        "output_permutation": getattr(mapping, "output_permutation", None),
-    }
-
-
-def _record_equivalence(key: dict[str, Any] | None, mapping: Any) -> None:
-    """把一次查询的结论落成标记行：``mapping is None`` → ``"none"``，否则 ``"ok"`` + 载荷。
-
-    ``ok`` 行同时写下**可直接执行**的改写载荷（``target_equation`` + 三个置换字段），
-    下一次同类调用就能跳过 :func:`._equivalence.normalize_equation`（见
-    :func:`_contract_via_equivalence` 的载荷分支）。
-
-    ``as_equivalence="force"`` 走的是同一条路径，因此旧标记会被新结论覆盖（刷新：
-    载荷变了就连同新载荷再写一行，见 :func:`._profile_cache.record_equivalence`）。
-    写失败、未实现、``key is None``（画像关闭）都静默跳过。
-    """
-    if key is None:
-        return
-    record = getattr(_profile_cache, "record_equivalence", None)
-    if record is None:
-        return
-    state = "none" if mapping is None else "ok"
-    kind = "" if mapping is None else str(getattr(mapping, "kind", ""))
-    try:
-        record(key, state, kind=kind, **_mapping_payload(mapping))
-    except Exception:                                    # noqa: BLE001 - 标记绝不外抛
-        return
-
-
-def _note_equivalence_skipped() -> None:
-    """VERBOSE 下说明"这一步是按缓存标记跳过的"，免得把跳过看成"查过但没找到"。"""
-    if _profile_verbose():
-        print("[pyqcd.einsum] equivalence 已跳过（缓存标记：此 equation 无法等价改写）",
-              flush=True)
 
 
 def _apply_equivalence(subscripts: str, operands: Sequence[Any], mapping: Any, *,
@@ -1028,12 +973,15 @@ def _apply_equivalence(subscripts: str, operands: Sequence[Any], mapping: Any, *
     ``mapping`` 只需要有 ``equation`` / ``operand_order`` / ``operand_permutations``
     / ``output_permutation`` / ``kind`` 五个字段——既可以是
     :func:`._equivalence.normalize_equation` 给的 :class:`~._equivalence.Equivalence`，
-    也可以是由 ``profile_equivalence.csv`` 载荷装出来的同形对象。这里**不查映射、
-    不写标记**，任何一步不适用（含"轴序对不上张量秩"这类不可信字段）都返回
-    ``None``——绝不降级成"半个改写"。
+    也可以是由配置表的等价行装出来的同形对象。这里**不查映射、不读表**，任何一步不
+    适用（含"轴序对不上张量秩"这类不可信字段）都返回 ``None``——绝不降级成"半个改写"。
 
-    ``profile`` 是内层递归调用的画像开关：走**路由表载荷**时打开（载荷里的 equation
-    就是语料写法，它的画像才值得记），走"查完再施加"时保持原来的关闭。
+    ``profile`` 是内层递归调用的画像开关：走**等价行载荷**时打开（载荷里的 equation
+    就是语料写法，它的配置行才值得读），走"查完再施加"时保持原来的关闭。
+
+    计时不在这里做：``wall_ms`` 的口径是**整个** ``contract()`` 的墙钟时间
+    （含本函数的重排与收尾），由外层那一次调用负责，所以这里没有"只计内部收缩"
+    的分段计时，也没有可以与之相加的第二列。
     """
     if mapping.kind == "identity":
         return None
@@ -1112,15 +1060,16 @@ def _results_agree(left: Any, right: Any,
 
 def _payload_result(subscripts: str, operands: Sequence[Any], mapping: Any,
                     applied: Any, token: tuple[Any, ...], *,
-                    marker_key: dict[str, Any] | None, cache: bool | None,
-                    call: dict[str, Any]) -> Any | None:
-    """首次套用一条路由载荷时的**数值自检**：与"重新匹配一次"的结果对拍。
+                    cache: bool | None, call: dict[str, Any]) -> Any | None:
+    """首次套用一条表里的载荷时的**数值自检**：与"重新匹配一次"的结果对拍。
 
-    表里的载荷是别的进程写下的，中间可能换过语料/改过映射层。第一次真拿它跑出来的
-    结果，必须和"现在重新匹配一次再施加"的结果一致（rel <= 1e-12）才继续相信它；
-    不一致、或者现在根本匹配不到，就**降级为重新匹配的结果**并把表里那行刷新成新结论
-    （``_record_equivalence`` 会带新载荷再写一行）。匹配抛异常同样按失败处理：宁可多
-    查一次，也不返回未经验证的改写。
+    表里的载荷可能是别的机器/别的语料版本写下的，中间也许换过映射层。第一次真拿它
+    跑出来的结果，必须和"现在重新匹配一次再施加"的结果一致（rel <= 1e-12）才继续
+    相信它；不一致、或者现在根本匹配不到，就**降级为重新匹配的结果**（本进程内不再
+    套用这条载荷）。匹配抛异常同样按失败处理：宁可多查一次，也不返回未经验证的改写。
+
+    表是**只读**的（§1 唯一写者是 tune），所以这里刷新不了那一行：不一致只在**本
+    进程**里生效，磁盘上的旧载荷留给下次 tune 重新测量。
     """
     call = dict(call)
     try:
@@ -1135,7 +1084,6 @@ def _payload_result(subscripts: str, operands: Sequence[Any], mapping: Any,
         return applied
     with _EQUIVALENCE_LOCK:
         _EQUIVALENCE_REJECTED.add(token)
-    _record_equivalence(marker_key, fresh)
     return fresh_result
 
 
@@ -1144,7 +1092,6 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
                               backend: str, specialize: bool,
                               kernel_force: str | None,
                               cache: bool | None = None,
-                              marker_key: dict[str, Any] | None = None,
                               payload: Any = None) -> Any | None:
     """用等价写法跑一次并把结果转回原输出轴序；不适用时返回 ``None``。
 
@@ -1154,16 +1101,13 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
     ``specialize`` 是调用方**已求值**的开关（``_specialize.enabled()`` 只算一次），
     因此这里是纯布尔判断，不再重复读环境变量。
 
-    ``payload`` 是 ``profile_equivalence.csv`` 给出的**可执行改写**
-    （``state=ok`` 且载荷列齐全时由 :func:`_equivalence_payload` 装出）：给了它就直接
-    套用、**不调用** :func:`._equivalence.normalize_equation`——首次套用会做一次数值
-    自检（见 :func:`_payload_result`），之后同一份载荷连自检都省掉。载荷不可用
-    （缺列 / 坏 JSON / 与张量秩对不上）时静默退回下面那条"真的查一次"的路径。
+    ``payload`` 是配置表等价行给出的**可执行改写**（:func:`_equivalence_payload` 装出）：
+    给了它就直接套用、**不调用** :func:`._equivalence.normalize_equation`——首次套用会做
+    一次数值自检（见 :func:`_payload_result`），之后同一份载荷连自检都省掉。载荷不可用
+    （缺字段 / 与张量秩对不上）时静默退回下面那条"真的查一次"的路径。
 
-    ``marker_key`` 是画像键（``None`` = 画像关闭、不碰标记）：真的查过之后把结论
-    记成跨进程标记，下一次同类调用就可能在 :func:`_equivalence_marked_none` 那道
-    廉价门上直接跳过，或者（``state=ok``）直接被载荷接管。标记只影响"要不要花时间
-    查映射"，命中/跳过/照表施加都不改方程、dtype、形状或结果。
+    表只读：这里**不写**任何结论，所以一次查询的结论不会跨进程留下来——下次同类调用
+    照常重查，直到有人为这条键 tune。
     """
     if not _equivalence.enabled():
         return None
@@ -1183,8 +1127,8 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
                 applied = _apply_equivalence(subscripts, operands, payload,
                                              profile=True, **call)
             except Exception:                            # noqa: BLE001 - 见下
-                # 表里的载荷是**别的进程**写下的：字段自洽不等于真的对得上这批张量
-                # （输出形状守卫抛错就是这种情形）。任何异常都按"这条载荷不可信"
+                # 表里的载荷可能是**别的进程**写下的：字段自洽不等于真的对得上这批
+                # 张量（输出形状守卫抛错就是这种情形）。任何异常都按"这条载荷不可信"
                 # 处理——记进本进程的拒绝表、退回下面真的查一次。查一次若也失败，
                 # 那个异常会照常抛给调用方，所以这里不会把**真实缺陷**吞掉。
                 with _EQUIVALENCE_LOCK:
@@ -1194,17 +1138,13 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
             if token in _EQUIVALENCE_VERIFIED:
                 return applied           # 已自检过：纯施加，一次匹配都不做
             return _payload_result(subscripts, operands, payload, applied, token,
-                                   marker_key=marker_key, cache=cache, call=call)
+                                   cache=cache, call=call)
         # 载荷不可用（缺字段 / 轴序对不上 / 之前自检失败）：退回真的查一次。
 
     try:
         mapping = _equivalence.normalize_equation(subscripts, use=cache)
     except Exception:                                    # noqa: BLE001 - 不许影响数值
-        # 查崩了不算结论：不落标记，下一次照常重查（标记宁缺勿错）。
         return None
-    # 查完就落标记（force 也走这里 → 旧标记被新结论覆盖）：下次同类调用可在廉价门上
-    # 直接跳过，或照 ``ok`` 行里的载荷直接施加。写入失败/未实现都静默。
-    _record_equivalence(marker_key, mapping)
     if mapping is None:
         return None
     return _apply_equivalence(subscripts, operands, mapping, **call)
@@ -1212,26 +1152,40 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
 
 ##### 配置画像（profile）接线
 
-# 本进程**已 load() 的目录**（绝对路径）。每个目录只读一次；目录换了就重读，
-# 目录不变就纯内存查表：`_profile_cache.best` / `record` 在 `_loaded` 与目录就位后
-# 都不再碰磁盘。
-_PROFILE_READY: str | None = None    # 已 load() 的**绝对目录**；None = 尚未加载
-#: 等价改写跑成时记录的标签：**不可重放**（原方程上强制具体内核必然"未尝试"），
-#: 但必须如实标注——沿用 `generic` 会把"改写+topology"谎报成"通用路径"。
+#: 等价改写跑成时用的标签：**不可重放**（原方程上强制具体内核必然"未尝试"），
+#: 只用于 :func:`last_profile` 的诊断输出。
 _EQUIVALENCE_LABEL = "equivalence"
-#: ``--tune`` 期间为真：记录时绕过 5% 稀疏门，留下整张地图。
-_PROFILE_TUNE = False
-_PROFILE_LOCK = threading.Lock()
 
 # 命中提示的去重表：每 (方程, 形状, 配置) 每进程只打一行（VERBOSE 打开了就每次必打）。
 _PROFILE_NOTICED: set[tuple[Any, ...]] = set()
+#: "配置表文件不存在"的提示：**每进程只打一次**。缺的是同一张表，同一句话按每个键
+#: 重复一遍没有新信息，只把日志冲掉。
+_PROFILE_MISSING_NOTICED = False
 _PROFILE_NOTICE_LOCK = threading.Lock()
+
+#: 最近一次画像调用的观测（:func:`last_profile` 读出；含整段 ``contract()`` 的 ``wall_ms``）。
+_LAST_PROFILE: dict[str, Any] | None = None
+
+
+def last_profile() -> dict[str, Any] | None:
+    """最近一次**画像**调用的观测副本；本进程还没有画像调用时 ``None``。
+
+    字段：``key`` / ``kernel`` / ``optimize`` / ``requested_optimize`` / ``hit`` /
+    ``force`` / ``equivalence`` / ``note`` / ``fallback`` / ``wall_ms``。
+
+    ``wall_ms`` 是**整个** :func:`contract` 调用的墙钟：含等价改写（若有）、读表
+    （若有）与未命中时的规划-匹配——就是配置表 ``wall_ms`` 那一列的口径（§4），
+    tune 据此选最优。``profile=False`` 的调用不更新它。
+    """
+    return None if _LAST_PROFILE is None else dict(_LAST_PROFILE)
 
 
 def _profile_devices(operands: Sequence[Any], backend_name: str) -> tuple[str, str]:
     """``(device, user_device)``：具体计算设备与用户视角的设备口径。
 
-    两者都只用来建键，取不到就给空串——画像缓存不该因为一个怪后端抛错。
+    ``device`` 是**建键**用的那一列（cupy 的设备对象只有编号、torch 的 device 是
+    ``cpu`` / ``cuda:0``）；``user_device`` 只给调用方（CLI 复现同一把键）参考。
+    两者都取不到就给空串——画像缓存不该因为一个怪后端抛错。
     """
     raw = getattr(operands[0], "device", None)
     if raw is None:
@@ -1254,11 +1208,49 @@ def _profile_dtype(operands: Sequence[Any]) -> str:
     return "+".join(names)
 
 
+#: 配置表 ``optimize`` 列里"不用优化器"的写法：可读、可重放（读回即 ``False``）。
+_OPTIMIZE_NONE_LABEL = "none"
+
+
 def _profile_optimize(optimize: Any) -> str:
-    """optimize 列：字符串/布尔原样，callable 与 PathOptimizer 只记类型名。"""
-    if isinstance(optimize, (str, bool)) or optimize is None:
-        return str(optimize)
-    return type(optimize).__name__
+    """``optimize`` 列的文本：字符串原样，``False`` → ``none``，callable 只记类型名。
+
+    ``False`` 写成 ``none`` 而不是 ``str(False)``：这一列是给人看、也要能重放的，
+    而 ``none`` 正是 :func:`_normalize_optimize` 认得的输入写法（读回见
+    :func:`_profile_optimize_value`），于是"写进去的"和"能填回来的"是同一种拼写。
+    """
+    normalized = _normalize_optimize(optimize)
+    if normalized is False:
+        return _OPTIMIZE_NONE_LABEL
+    if isinstance(normalized, (str, bool)) or normalized is None:
+        return str(normalized)
+    return type(normalized).__name__
+
+
+def _profile_optimize_is_default(optimize: Any) -> bool:
+    """调用方是否**没给** ``optimize``（``None``/``True``/``"auto"``/空串）。
+
+    只有"没给"时才允许表里的 ``optimize`` 生效；显式给了就别拿缓存覆盖用户。
+    """
+    if optimize is None or optimize is True:
+        return True
+    return isinstance(optimize, str) and optimize.strip().lower() in ("", "auto")
+
+
+def _profile_optimize_value(value: Any) -> Any:
+    """表里的 ``optimize`` → 可施加的值；缺省/不可用返回 ``None``。
+
+    ``auto`` 是**缺省值**（不是"表给出的选择"），``none``（表里 ``False`` 的写法，
+    见 :func:`_profile_optimize`）读回成 ``False``，其余取值必须在
+    :data:`pyqcd.einsum.paths.PATH_OPTIONS` 里才施加——表里写了个怪名字时宁可退回
+    调用方的值，也绝不因为一行缓存把调用打崩。
+    """
+    text = _profile_optimize(value).strip().lower()
+    if text == _OPTIMIZE_NONE_LABEL:
+        return False                     # 双向：读回的表值与调用方写法同一个意思
+    if not text or text in (_kernel_force.AUTO_LABEL, "true", "false"):
+        return None
+    return text if text in paths.PATH_OPTIONS else None
 
 
 def _profile_force_label(kernel: str) -> str | None:
@@ -1304,6 +1296,14 @@ def _profile_verbose() -> bool:
     return _specialize.verbose_enabled()
 
 
+def _profile_ms_text(row: Mapping[str, Any]) -> str:
+    """行里的耗时原文（``wall_ms``）；没有就空串。
+
+    只用于提示行与报告——这一列的口径永远是"整次 ``contract()`` 的墙钟"（§4）。
+    """
+    return str(row.get("wall_ms") or "")
+
+
 def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
                     applied: bool = False) -> None:
     """一行提示：**施加**了的命中每形态每进程打一次；其余只在 VERBOSE 时打。
@@ -1312,9 +1312,9 @@ def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
     （``out=`` / 调用方已强制内核等）。后两种默认静默，免得把"有一条记录"说成
     "已经按它执行"。
 
-    **已施加**时只打一行，且把记录钉到 ``<profile.csv 绝对路径>:<数据行号>``
-    （行号由 :func:`._profile_cache.load` 写进索引行）：同一个 ``kernel=`` 可能出现在
-    许多行里，没有行号用户翻不到"到底是哪一条在生效"（2026-11-17 用户实测）。
+    **已施加**时只打一行，且把记录钉到 ``<pyqcd.einsum.profile.csv 绝对路径>:<数据行号>``
+    （行号由 :func:`._profile_cache.read_winner` 与行一起返回）：同一个 ``kernel=`` 可能
+    出现在许多行里，没有行号用户翻不到"到底是哪一条在生效"（2026-11-17 用户实测）。
     这一行之后本次调用**不再**打 ``announce_generic`` / ``announce`` / 等价解释，
     除非 ``--explain true`` / ``--verbose true``（见 :func:`_profile_verbose`）。
     """
@@ -1331,7 +1331,7 @@ def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
             return
         _PROFILE_NOTICED.add(token)
     if applied and row is not None:
-        source = _profile_cache.summary().get("file", _profile_cache.PROFILE_NAME)
+        source = _profile_cache.profile_path()
         line = str(row.get("line") or "").strip()
         where = f"{source}:{line}" if line else source
         if _specialize.notice_language() == "zh":
@@ -1339,7 +1339,7 @@ def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
                 f"[pyqcd.einsum] profile 命中：{where}"
                 f" kernel={row.get('kernel', '')}"
                 f" optimize={row.get('optimize', '')}"
-                f" compute_ms={row.get('compute_ms', '')}（已套用）",
+                f" wall_ms={_profile_ms_text(row)}（已套用）",
                 flush=True,
             )
         else:
@@ -1347,7 +1347,7 @@ def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
                 f"[pyqcd.einsum] profile hit: {where}"
                 f" kernel={row.get('kernel', '')}"
                 f" optimize={row.get('optimize', '')}"
-                f" compute_ms={row.get('compute_ms', '')} (applied)",
+                f" wall_ms={_profile_ms_text(row)} (applied)",
                 flush=True,
             )
     elif row is not None:
@@ -1361,131 +1361,213 @@ def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
         print(
             f"[pyqcd.einsum] profile 未命中：backend={info['key']['backend']}"
             f" equation={info['key']['equation']} shape={info['key']['shape']}"
-            "（按现有逻辑规划，结果已记入内存）",
+            "（按现有逻辑执行；这条键要进表得先 tune）",
             flush=True,
         )
+
+
+
+def _profile_read(key: dict[str, Any]) -> dict[str, Any] | None:
+    """读该键**唯一**的一行；三种结局按 §2 处理。
+
+    * 命中 1 行 → 返回它；
+    * 同键多行 → 把**全部**候选行打到 stderr，然后让
+      :class:`~._profile_cache.DuplicateProfileEntry` 向上冒泡（不猜、不选最优）；
+    * 文件不存在 → 一行警告"需要先 tune" + 该配置的 tune 命令模板，返回 ``None``
+      让调用方**继续**按无命中执行；其他读失败也按无命中（表坏了只该慢一点）。
+    """
+    try:
+        return _profile_cache.read_winner(key)
+    except _profile_cache.DuplicateProfileEntry as exc:
+        print(f"[pyqcd.einsum] {exc}", file=sys.stderr, flush=True)
+        raise
+    except _profile_cache.ProfileMissing as exc:
+        _warn_profile_missing(exc)
+        return None
+    except Exception:                                    # noqa: BLE001 - 表坏了只该慢一点
+        return None
+
+
+def _warn_profile_missing(exc: BaseException) -> None:
+    """配置表不存在：**每进程一次**警告 + 现成的 tune 命令，然后继续无命中执行。"""
+    global _PROFILE_MISSING_NOTICED
+    with _PROFILE_NOTICE_LOCK:
+        if _PROFILE_MISSING_NOTICED:
+            return
+        _PROFILE_MISSING_NOTICED = True
+    print(f"[pyqcd.einsum] 警告：{exc}\n  本次按未命中执行（方程、dtype、形状与数值都不受影响）。",
+          file=sys.stderr, flush=True)
+
+
+def _profile_conflict_message(key: Mapping[str, Any], row: Mapping[str, Any],
+                              field: str, recorded: str, requested: str) -> str:
+    """冲突的报错正文：键、表里的值、用户给的值、那一行在哪、怎么解决。"""
+    source = _profile_cache.profile_path()
+    line = str(row.get("line") or "").strip()
+    where = f"{source}:{line}" if line else source
+    return (
+        "einsum 配置表命中行与你的显式配置冲突（不猜、不覆盖）：\n"
+        f"  键: shape={key.get('shape', '')} dtype={key.get('dtype', '')}"
+        f" device={key.get('device', '')} equation={key.get('equation', '')}"
+        f" backend={key.get('backend', '')}\n"
+        f"  冲突: {field}  表中={recorded!r}  显式={requested!r}  （{where}）\n"
+        "  处理：去掉该显式参数，或删掉/改正那一行；也可以 profile=False 让本次不读表。")
+
+
+def _profile_check_conflict(key: dict[str, Any], row: dict[str, Any], *,
+                            caller_force: tuple[str, ...] | None, optimize: Any,
+                            as_equivalence: bool | str | None,
+                            has_equivalence: bool) -> None:
+    """用户**显式**配置与命中行冲突 → 抛 :class:`~._profile_cache.ProfileConflict`。
+
+    只比"用户真的给了的"三个维度（``kernel_force`` / ``optimize`` /
+    ``as_equivalence``）：显式要求既不能被静默忽略，也不能被表悄悄改掉。``out=`` /
+    ``specialize=False`` 只是"不施加"，不是冲突；``optimize="auto"`` 是缺省值，不算
+    显式。
+    """
+    recorded_kernel = _profile_force_label(str(row.get("kernel") or ""))
+    if caller_force is not None and recorded_kernel is not None:
+        # ``caller_force == ()`` 是 ``kernel_force="generic"`` 的解析结果（见
+        # :func:`._kernel_force.forced_labels`：``generic`` → 空元组），它是一个**显式**
+        # 要求，不是"没给"。过滤掉它会让"显式 generic 撞上表中 topology"静默通过，
+        # 正好违反 §2.4——所以这里要把它还原成 ``{"generic"}`` 再比。
+        allowed = ({_kernel_force.GENERIC_LABEL} if caller_force == ()
+                   else {label for label in caller_force
+                         if label != _kernel_force.AUTO_LABEL})
+        if allowed and recorded_kernel not in allowed:
+            requested = ",".join(caller_force) or _kernel_force.GENERIC_LABEL
+            raise _profile_cache.ProfileConflict(
+                _profile_conflict_message(key, row, "kernel_force",
+                                          recorded_kernel, requested),
+                field="kernel_force", recorded=recorded_kernel,
+                requested=requested, key=key)
+
+    recorded_optimize = _profile_optimize_value(row.get("optimize"))
+    if recorded_optimize is not None and not _profile_optimize_is_default(optimize):
+        # 两侧都先归到同一拼写再比：表里记 ``none``、调用方写 ``"none"`` 是同一个要求，
+        # 不能因为一边是 ``False``、另一边是字符串就报冲突。
+        requested_optimize = _profile_optimize(optimize).strip().lower()
+        recorded_text = _profile_optimize(recorded_optimize).strip().lower()
+        if requested_optimize != recorded_text:
+            raise _profile_cache.ProfileConflict(
+                _profile_conflict_message(key, row, "optimize",
+                                          recorded_text, requested_optimize),
+                field="optimize", recorded=recorded_text,
+                requested=requested_optimize, key=key)
+
+    if (has_equivalence and as_equivalence is not None
+            and not _equivalence.as_equivalence_enabled(as_equivalence)):
+        raise _profile_cache.ProfileConflict(
+            _profile_conflict_message(
+                key, row, "as_equivalence",
+                "该键的等价行（走等价转换后更快）", str(as_equivalence)),
+            field="as_equivalence", recorded="equivalence-row",
+            requested=str(as_equivalence), key=key)
 
 
 def _profile_begin(profile: bool | None, profile_dir: str | None, subscripts: Any,
                    operands: Sequence[Any], *, backend: str, out: Any,
                    specialize_on: bool, caller_force: tuple[str, ...] | None,
-                   optimize: Any) -> dict[str, Any] | None:
+                   optimize: Any,
+                   as_equivalence: bool | str | None = None) -> dict[str, Any] | None:
     """画像入口：返回本次调用的记录槽，``None`` 表示本次不画像（零副作用）。
 
-    开关与目录的分辨率**完全**交给 :mod:`._profile_cache`（显式参数 >
+    开关与目录的解析**完全**交给 :mod:`._profile_cache`（显式参数 >
     ``PYQCD_EINSUM_PROFILE[_DIR]`` > 默认 ``./.cache``）。``profile=False`` 在第一个
-    判断就返回：不 ``configure``、不 ``load``、不 ``record``，也不建目录。
+    判断就返回：不 ``configure``、不读表、不建目录——**零 IO**。
 
-    进程内只做**一次** IO（``configure`` + ``load``）。命中只填 ``force`` /
-    ``backend`` 两个槽位——方程、dtype、形状与数值一概不动。``caller_force`` 非
-    ``None``（调用方参数或环境变量已经指定了内核）、``out=``、``specialize=False``
-    这些情形下命中只被记下而不施加：显式要求永远压过画像建议。
+    读表只有三种结局（见 :func:`_profile_read`）：命中 1 行、同键多行（报错并输出
+    全部候选）、文件不存在（警告 + tune 命令模板后继续）。命中只填 ``force`` /
+    ``optimize`` / ``equivalence`` 三个槽位——方程、dtype、形状与数值一概不动。
+
+    用户显式给了 ``kernel_force`` / ``optimize`` / ``as_equivalence`` 且与命中行冲突时
+    抛 :class:`~._profile_cache.ProfileConflict`（向上冒泡到 CLI）。``out=`` /
+    ``specialize=False`` 只让内核建议"不施加"，不是冲突。
+
+    这一层**不写表**：配置表只有 tune 能写（§1）。
     """
-    global _PROFILE_READY
     if not _profile_cache.enabled(profile):
         return None
     if not isinstance(subscripts, str) or not operands:
         return None                     # 交错/字典形式没有可作键的方程文本
     if any(not hasattr(o, "shape") or not hasattr(o, "dtype") for o in operands):
         return None
-    # 门闸必须按**已配置的目录**判定，不能用一个单向布尔：同一进程里
-    # ``profile_dir`` 从 A 换到 B 时，布尔会让 B 被完全忽略（继续用 A 的索引）。
-    # ``configure`` 自己幂等（路径不变就只做一次字符串比较，变了就冲队列+清索引），
-    # 所以这里每调用一次它，代价是几个字符串操作；``load`` 只在目录真的变了时跑。
-    resolved_dir = (_profile_cache.configure(profile_dir) if profile_dir
-                    else _profile_cache.ensure_configured())
-    if _PROFILE_READY != resolved_dir:
-        with _PROFILE_LOCK:
-            if _PROFILE_READY != resolved_dir:
-                _profile_cache.load(force=True)
-                _PROFILE_READY = resolved_dir
+    if profile_dir:
+        _profile_cache.configure(profile_dir)   # 显式目录优先；切换是幂等的
+    else:
+        _profile_cache.ensure_configured()
     backend_name = parse_backend(operands, backend)
-    device, user_device = _profile_devices(operands, backend_name)
+    device, _user_device = _profile_devices(operands, backend_name)
     key = {
-        "user_device": user_device,
-        "backend": backend_name,
-        "dtype": _profile_dtype(operands),
-        "equation": "".join(subscripts.split()),
         "shape": _profile_cache.format_shape([o.shape for o in operands]),
+        "dtype": _profile_dtype(operands),
         "device": device,
+        "equation": "".join(subscripts.split()),
+        "backend": backend_name,
     }
-    row = _profile_cache.best(key)
+    row = _profile_read(key)
     info: dict[str, Any] = {
         "key": key,
-        "optimize": _profile_optimize(optimize),
-        "init_ms": 0.0,
-        "compute_ms": 0.0,
+        "requested_optimize": _profile_optimize(optimize),
+        "optimize": None,               # 命中行给出的 optimize（能施加时）
+        "wall_ms": 0.0,
         "kernel": "generic",
         "note": "",
         "hit": row,
         "force": None,
-        "backend": None,
+        "equivalence": None,
         "fallback": False,
     }
     if row is None:
         _profile_notice(info)
         return info
+
+    payload = _equivalence_payload(row)
+    info["equivalence"] = payload
+    _profile_check_conflict(key, row, caller_force=caller_force, optimize=optimize,
+                            as_equivalence=as_equivalence,
+                            has_equivalence=payload is not None)
+
     label = str(row.get("kernel") or "")
     force = _profile_force_label(label)
+    recorded_optimize = _profile_optimize_value(row.get("optimize"))
+    if recorded_optimize is not None and _profile_optimize_is_default(optimize):
+        info["optimize"] = recorded_optimize
+    if force is None and recorded_optimize is None:
+        # 等价行（或没有可用性能载荷的行）：只提供改写，不提内核、不施加开关。
+        info["note"] = ("profile 等价行：按表改写" if payload is not None
+                        else "profile 命中但没有可用配置")
+        if payload is None:
+            _profile_notice(info, row=row)
+        return info
     if force is None or caller_force is not None or out is not None \
             or not specialize_on:
         info["note"] = f"profile 命中未施加（kernel={label or '?'}）"
         _profile_notice(info, row=row)
         return info
     info["force"] = force
-    if str(backend or "").strip().lower() in ("", "auto"):
-        recorded = str(row.get("backend") or "")
-        if recorded and recorded != _kernel_force.AUTO_LABEL:
-            info["backend"] = recorded
     info["note"] = f"profile 命中：kernel={label or '?'}"
     _profile_notice(info, row=row, applied=True)
     return info
 
 
-def _profile_clock(info: dict[str, Any] | None) -> float | None:
-    """计算段的起点；未画像时返回 ``None``，调用点据此整段跳过。"""
-    return None if info is None else time.perf_counter()
+def _profile_end(info: dict[str, Any] | None, result: Any) -> Any:
+    """收尾：把**整个** ``contract()`` 的墙钟记进 ``wall_ms``，原样返回结果。
 
+    §4 的口径：``wall_ms`` 就是这一次 ``contract()`` 的墙钟——含等价转换（若有）、
+    读表（若有）与未命中时的规划-匹配。没有第二列计时可以与它相加或混比，也没有
+    "只算收缩执行"的拆分（旧的拆分计时已删除）。起点由 :func:`contract` 在**函数
+    第一行**取，所以这里量到的必然是整段调用。
 
-def _profile_spend(info: dict[str, Any] | None, started: float | None) -> None:
-    """把一段"规划/绑定"耗时累进 ``init_ms``（命中缓存的那一段不进来）。"""
-    if info is not None and started is not None:
-        info["init_ms"] += (time.perf_counter() - started) * 1000.0
-
-
-def _profile_record(info: dict[str, Any]) -> None:
-    """把本次观测写进内存（不落盘：落不落盘由 :mod:`._profile_cache` 的稀疏口径定）。
-
-    命中并已施加的调用**同样要记**：它带来的是"这个配置在当前机器上还是不是最优"的最新证据。
-    合并侧（`_profile_cache._merge`）已保证同配置"耗时取小、calls 取大、updated_at 取新"，
-    所以更慢的新样本不会污染最优值；而"永远不记录"会让缓存冻结在第一次写下的数字，
-    实测里就会出现 `compute_ms=865.496` 跑多少次都不再更新。
+    这里**不写表**（配置表只有 tune 能写），观测只留在 :func:`last_profile`。
     """
-    if info.get("hit") is not None and info.get("fallback"):
-        pass                                  # 回退也照记（实际跑成的那条可能是最优）
-
-    _profile_cache.record({
-        **info["key"],
-        "kernel": info.get("kernel") or "generic",
-        "optimize": info["optimize"],
-        "init_ms": info["init_ms"],
-        "compute_ms": info["compute_ms"],
-        "note": info.get("note", ""),
-    }, force_write=_PROFILE_TUNE)
-
-
-def _profile_end(info: dict[str, Any] | None, result: Any,
-                 started: float | None = None) -> Any:
-    """记录本次观测并原样返回结果；``info is None`` 时就是一次普通返回。
-
-    ``compute_ms`` 只覆盖 ``started`` 之后的那一段——解析、键构造、规划与绑定都
-    不在计时区里（规划/绑定另记 ``init_ms``）。
-    """
+    global _LAST_PROFILE
     if info is None:
         return result
+    started = info.get("started")
     if started is not None:
-        info["compute_ms"] = (time.perf_counter() - started) * 1000.0
-    _profile_record(info)
+        info["wall_ms"] = (time.perf_counter() - started) * 1000.0
+    _LAST_PROFILE = info
     return result
 
 
@@ -1494,14 +1576,13 @@ def _profile_retry(info: dict[str, Any], subscripts: Any, operands: Sequence[Any
     """画像建议跑不成：退回**原**分派一次，绝不把异常抛给调用方。
 
     只在 ``KernelUnavailableError`` 由画像强制引起时调用（用户自己强制的标签
-    仍然照旧抛出）。重试带 ``profile=False``：本次观测由外层统一记录，不重复。
+    仍然照旧抛出）。重试带 ``profile=False``：本次观测由外层统一收尾，不重复。
     """
     info["fallback"] = True
     info["force"] = None
     info["note"] = "profile 建议不可用，已回退自动分派"
-    started = time.perf_counter()
     result = contract(subscripts, *operands, profile=False, **call)
-    return _profile_end(info, result, started)
+    return _profile_end(info, result)
 
 
 def contract(
@@ -1539,7 +1620,8 @@ def contract(
     use_blas : bool
         Allow pairwise contractions to be dispatched to BLAS (default ``True``).
     optimize : bool | str | list | PathOptimizer
-        ``False`` for a single n-ary einsum, an explicit path, the name of a
+        ``False`` (or the string ``"none"``, case insensitive, surrounding blanks
+        ignored) for a single n-ary einsum, an explicit path, the name of a
         registered optimizer (``"greedy"``/``"optimal"``/``"dp"``), or
         ``True``/``None``/``"auto"`` (default) to let the planner decide.
     memory_limit : int | str | None
@@ -1572,23 +1654,24 @@ def contract(
         would contradict what was asked for.
     as_equivalence : bool | str | None
         ``None`` (default) follows ``PYQCD_EINSUM_AS_EQUIVALENCE`` (on by default);
-        ``False`` disables the automatic rewrite for this call; ``"force"`` enables
-        it and **ignores the cross-process negative marker** (see below), really
-        querying the equivalence table again. When on and the
-        equation does not already run on a specialised form, the equivalence layer
-        rewrites it into a corpus spelling, permutes the operands accordingly and
-        transposes the result back — **the returned array is the answer to the
-        original equation**, with the original shape and dtype, so callers never
-        see the rewrite. Skipped for ``out=``, extra ``**kwargs``, element-wise and
-        cupy-delegated equations, ``specialize=False``, ``kernel_force="generic"``
-        (the rewrite exists to reach a specialised form, which that call refuses)
-        and explicit optimizer
-        paths (those bind the original operand order). Every real lookup records a
-        cross-process marker (``none`` / ``ok``) in the profile cache; with the
-        profile on, a ``none`` marker lets later calls of the same
-        ``(device, backend, dtype, equation, shape)`` skip the lookup entirely —
-        skipping changes no equation, dtype, shape or number, only the time spent
-        looking. ``profile=False`` neither reads nor writes the marker.
+        ``False`` disables the automatic rewrite for this call; ``"force"`` is
+        accepted as ``True``. When on and the equation does not already run on a
+        specialised form, the equivalence layer rewrites it into a corpus spelling,
+        permutes the operands accordingly and transposes the result back — **the
+        returned array is the answer to the original equation**, with the original
+        shape and dtype, so callers never see the rewrite. Skipped for ``out=``,
+        extra ``**kwargs``, element-wise and cupy-delegated equations,
+        ``specialize=False``, ``kernel_force="generic"`` (the rewrite exists to
+        reach a specialised form, which that call refuses) and explicit optimizer
+        paths (those bind the original operand order).
+
+        With the profile on, a **configuration table row for this key** can carry an
+        executable payload (``target_equation`` + the three permutation columns);
+        a hit is then applied directly, skipping the equivalence search. The table
+        is **read-only for ordinary calls** — nothing is written back, so a lookup
+        is never turned into a stored conclusion; only ``--tune`` writes rows. An
+        explicit ``as_equivalence`` that disagrees with such a row raises
+        :class:`~._profile_cache.ProfileConflict` (see ``profile``).
     cache : bool | None
         ``None`` (default) follows ``PYQCD_EINSUM_CACHE`` (on by default); ``False``
         disables every einsum cache for this call — matchers
@@ -1599,36 +1682,50 @@ def contract(
     profile : bool | None
         ``None`` (default) follows ``PYQCD_EINSUM_PROFILE`` (on by default); ``False``
         turns the configuration profile off for this call with **no side effect at
-        all** — no ``configure``, no ``load``, no ``record``, not even a directory.
-        When on, the profile is read **once per process**
-        (``_profile_cache.configure`` + ``load``) and the best recorded
-        ``(host, device, backend, dtype, equation, shape)`` row decides **only** which
-        specialised kernel is forced (``kernel_force``) and which backend is chosen —
-        the equation, dtype, shape and numbers are untouched. A suggestion that does
-        not run falls back to the original dispatch once (never raising
-        ``KernelUnavailableError`` at the caller); an adopted hit prints **one** line
-        naming the applied row as ``<absolute profile.csv>:<data-row number>``, and
-        that line replaces the incidental notices of this call (``announce_generic`` /
+        all** — no directory, no read, no write: **zero IO**. When on, the
+        configuration table ``pyqcd.einsum.profile.csv`` is read by **exact key**
+        ``(shape, dtype, device, equation, backend)`` and the single row found
+        decides **only** which specialised kernel is forced, which planner
+        ``optimize`` is used and whether a stored equivalence payload is applied —
+        the equation, dtype, shape and numbers are untouched.
+
+        * **One row per key.** Two or more rows for the same key raise
+          :class:`~._profile_cache.DuplicateProfileEntry` and print **every**
+          candidate row; the winner is never guessed.
+        * **Missing table.** One warning ("tune first") plus a ready-to-run tune
+          command template, then the call proceeds exactly as if there were no hit.
+        * **Explicit configuration wins — or fails loudly.** A caller/env supplied
+          ``kernel_force``, ``optimize`` or ``as_equivalence`` that **contradicts**
+          the row raises :class:`~._profile_cache.ProfileConflict` (never silently
+          ignored, never silently overridden).
+
+        A suggestion that does not run falls back to the original dispatch once
+        (never raising ``KernelUnavailableError`` at the caller); an adopted hit
+        prints **one** line naming the applied row as
+        ``<absolute pyqcd.einsum.profile.csv>:<data-row number>``, and that line
+        replaces the incidental notices of this call (``announce_generic`` /
         ``announce`` / equivalence). Raising the detail level
         (``PYQCD_EINSUM_SPECIALIZE_VERBOSE=1``, or the CLI's ``--explain true`` /
-        ``--verbose true`` through ``_specialize.set_detail``) restores them. A recorded
-        *specialised* kernel (``kupl_dedicated`` / ``cuda_topology`` …) is replayed as
-        ``dedicated`` / ``topology``; a recorded **``backend``** is also replayed — it
-        means "the backend own ``einsum`` was fastest here", which is a legitimate
-        conclusion on small shapes and is the whole point of keeping a profile. A
-        recorded ``generic`` is replayed too (``kernel_force="generic"`` is legal and is
-        often the fastest recorded configuration), at the cost of the auto-dispatch
-        diagnostics for that equation. A caller/env supplied ``kernel_force`` always wins
-        over the profile.
+        ``--verbose true`` through ``_specialize.set_detail``) restores them. A
+        recorded *specialised* kernel (``kupl_dedicated`` / ``cuda_topology`` …) is
+        replayed as ``dedicated`` / ``topology``; a recorded ``generic`` is replayed
+        too (``kernel_force="generic"`` is legal and is often the fastest recorded
+        configuration), at the cost of the auto-dispatch diagnostics for that
+        equation.
+
+        **Timing.** The table has exactly one clock: ``wall_ms`` = the wall clock
+        of the **whole** ``contract()`` call — equivalence rewrite, table read and
+        planning/matching included. It is *not* "the contraction only", there is no
+        second column to add to it, and tune is the only writer that fills it. The
+        observation of the current call is available from :func:`last_profile`.
     profile_dir : str | None
-        Directory of the profile cache. Resolution order: this parameter,
+        Directory of the configuration table. Resolution order: this parameter,
         ``PYQCD_EINSUM_PROFILE_DIR``, then ``./.cache`` (relative to the current
         working directory). Ignored when the profile is off. Passing a **different**
-        directory switches to that table for the rest of the process (the index and
-        the pending queue are flushed/reset accordingly); **omitting** it keeps
-        whatever directory is already pinned (``None``/empty means "not given", never
-        "go back to the environment/default"). Only a first, never-configured call
-        resolves the default.
+        directory switches to that table for the rest of the process; **omitting**
+        it keeps whatever directory is already pinned (``None``/empty means "not
+        given", never "go back to the environment/default"). Only a first,
+        never-configured call resolves the default.
     **kwargs
         Forwarded to the underlying backend.
 
@@ -1650,6 +1747,13 @@ def contract(
     KernelUnavailableError
         A specific ``kernel_force`` label was forced but did not run. Carries the
         requested/attempted labels and each label's failure reason.
+    pyqcd.einsum._profile_cache.DuplicateProfileEntry
+        The configuration table holds more than one row for this key. All candidate
+        rows are printed and the exception propagates — the winner is never guessed.
+    pyqcd.einsum._profile_cache.ProfileConflict
+        An explicit ``kernel_force`` / ``optimize`` / ``as_equivalence`` contradicts
+        the configuration row matched for this key. Delete the explicit argument,
+        fix/remove that row, or pass ``profile=False`` for this call.
 
     Notes
     -----
@@ -1659,6 +1763,11 @@ def contract(
     stay correct. Set ``PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`` to log every hit.
     :func:`last_kernel` reports which kernel the most recent call actually ran.
     """
+    # §4：``wall_ms`` 量的是**整段** ``contract()``（含等价转换、读表、规划-匹配），
+    # 所以起点就在函数的第一个语句取。
+    entry_started = time.perf_counter()
+
+    optimize = _normalize_optimize(optimize)
     if (optimize is True) or (optimize is None):
         optimize = "auto"
 
@@ -1687,22 +1796,25 @@ def contract(
                 "out= 会禁用专用内核，不能与强制指定内核同时使用："
                 "去掉 out=，或把 kernel_force 设回 'auto'")
 
-    # 配置画像：本进程首次进入且画像开启时读一次；命中只决定内核目标与后端选择，
-    # 方程/dtype/形状/数值一概不动（失败回退见 _profile_retry）。调用方/环境已经
-    # 指定了内核的调用不受画像影响——那才是真正的"显式优先"。
+    # 配置画像：命中只决定内核目标、收缩序与等价改写，方程/dtype/形状/数值一概不动
+    # （冲突报错见 _profile_check_conflict，建议跑不成的回退见 _profile_retry）。
+    # 这一层**只读**：配置表只有 tune 能写。
     info = _profile_begin(profile, profile_dir, subscripts, operands,
                           backend=backend, out=out, specialize_on=specialize_on,
-                          caller_force=forced, optimize=optimize)
+                          caller_force=forced, optimize=optimize,
+                          as_equivalence=as_equivalence)
     requested_backend, requested_kernel_force = backend, kernel_force
     requested_forced = forced
     forced_by_profile = False
     if info is not None:
+        info["started"] = entry_started        # wall_ms 的起点：整个 contract()
         if info["force"] is not None:
             kernel_force = info["force"]
             forced = _kernel_force.forced_labels(kernel_force)
             forced_by_profile = True
-        if info["backend"] is not None:
-            backend = info["backend"]
+        if info.get("optimize") is not None:
+            optimize = info["optimize"]
+
 
     if forced == (_kernel_force.BACKEND_LABEL,):
         # ``backend`` = "别走专用内核，直接调后端自己的 einsum"。它既不进专用
@@ -1713,12 +1825,11 @@ def contract(
             "attempted": (),
             "reasons": {},
         }
-        started = _profile_clock(info)
         backend_result = _backend_einsum(
             parse_backend(operands, backend), subscripts, operands)
         if info is not None:
             info["kernel"] = _kernel_force.BACKEND_LABEL
-        return _profile_end(info, backend_result, started)
+        return _profile_end(info, backend_result)
 
     # ``kernel_force="generic"`` 解析成 ``()``：调用方**明确要求**不走专用内核。匹配与
     # 等价改写的唯一目的都是命中特化形态，这条路上两者都不需要——跳过它们只是省时间
@@ -1737,8 +1848,7 @@ def contract(
     # announce / 等价提示一律静音（``--explain true`` / ``--verbose true`` 恢复）。
     # 这是**纯输出**开关，不改变方程、dtype、形状或任何数值。
     quiet_profile = bool(
-        info is not None
-        and (info.get("force") is not None or info.get("backend") is not None)
+        info is not None and info.get("force") is not None
         and not _profile_verbose())
 
     # 方程形态专用路径：命中时打印提示；specialize=False 关闭本次调用的专用执行。
@@ -1785,7 +1895,6 @@ def contract(
                             _specialize.announce(specialized)
                     elif forced:
                         # 强制具体标签：按用户给的次序真试一次，跑不成即抛。
-                        started = _profile_clock(info)
                         try:
                             kernel_result = _run_forced_kernel(
                                 subscripts, operands, forced, record)
@@ -1802,13 +1911,12 @@ def contract(
                             info["kernel"] = record["ran"] or "generic"
                         if not quiet_profile:
                             _specialize.announce(specialized, record["ran"] or "")
-                        return _profile_end(info, kernel_result, started)
+                        return _profile_end(info, kernel_result)
                     else:
                         # 专用 kernel 失败必须回退通用路径（契约：原生失败只 warning
                         # 一次，不把异常抛给调用方）。
                         announce_kernel = ""
                         kernel_reasons: dict[str, str] = {}
-                        started = _profile_clock(info)
                         try:
                             kernel_result, announce_kernel, kernel_reasons = _run_specialized_kernel(
                                 subscripts, operands)
@@ -1824,7 +1932,7 @@ def contract(
                         if not quiet_profile:
                             _specialize.announce(specialized, announce_kernel)
                         if kernel_result is not None:
-                            return _profile_end(info, kernel_result, started)
+                            return _profile_end(info, kernel_result)
                         if str(specialized.get("kind", "")).startswith("kernel"):
                             relevant = _kernel_labels_for(specialized)
                             reasons = [kernel_reasons.get(label, "")
@@ -1833,7 +1941,6 @@ def contract(
                 elif forced:
                     # 语料没命中却强制了具体标签：旧行为是静默走通用路径，这里必须真试
                     # 一次，并明确报出"未尝试"或具体原因。
-                    started = _profile_clock(info)
                     try:
                         kernel_result = _run_forced_kernel(
                             subscripts, operands, forced, record)
@@ -1848,7 +1955,7 @@ def contract(
                             as_equivalence=as_equivalence, cache=cache, **kwargs)
                     if info is not None:
                         info["kernel"] = record["ran"] or "generic"
-                    return _profile_end(info, kernel_result, started)
+                    return _profile_end(info, kernel_result)
         else:
             if forced:
                 raise ValueError(
@@ -1862,32 +1969,29 @@ def contract(
     # 在规划之前就委派，连契约解析的开销也省掉。
     if (isinstance(subscripts, str) and out is None and not kwargs
             and _cupy_operands(operands) and not _cuda_fused_shape(subscripts)):
-        started = _profile_clock(info)
         cupy_result = _backend_einsum("cupy", subscripts, operands)
         if info is not None:
             info["kernel"] = _kernel_force.BACKEND_LABEL
-        return _profile_end(info, cupy_result, started)
+        return _profile_end(info, cupy_result)
 
     # 逐元素/纯置换类方程没有 BLAS 结构：直接交给 backend 的原生 einsum，
     # 比逐步执行 + 计划缓存更快（实测 Hadamard 4000² 89 ms -> 29 ms）。
     if (isinstance(subscripts, str) and out is None and not kwargs
             and _is_elementwise_equation(subscripts)):
         elementwise_backend = parse_backend(operands, backend)
-        started = _profile_clock(info)
         elementwise_result = _backend_einsum(
             elementwise_backend, subscripts, operands)
         if info is not None:
             info["kernel"] = _kernel_force.BACKEND_LABEL
-        return _profile_end(info, elementwise_result, started)
+        return _profile_end(info, elementwise_result)
 
     # 形状特化路径：少量结构特殊的方程（语料之外）用一次性推导出的固定算法，
     # 不规划、不建步表。只接管无 out=/无 kwargs 的调用；前置条件不满足即回落。
     if (isinstance(subscripts, str) and out is None and not kwargs
             and specialize is not False):
-        started = _profile_clock(info)
         shape_result = _shape_paths.try_execute(subscripts, operands)
         if shape_result is not None:
-            return _profile_end(info, shape_result, started)
+            return _profile_end(info, shape_result)
 
     # 等价映射自动施加（``as_equivalence``，缺省跟随 PYQCD_EINSUM_AS_EQUIVALENCE，
     # 默认开启）：方程不是语料写法时，改写成等价写法跑一次，再把结果转回原输出轴序。
@@ -1903,40 +2007,31 @@ def contract(
             and specialized is None
             and specialize_on
             and not generic_only):
-        # 廉价门（在 ``_split`` / ``_Shape`` / 语料索引之前）：长跑里同一条语料外方程
-        # 会被反复问"有没有等价写法"，答案却不变。跨进程标记说"这条查过、没有"时直接
-        # 放弃等价步骤——**只省时间**：标记不参与方程、dtype、形状或结果。
-        # ``as_equivalence="force"`` = 不信标记、再查一遍（查完照常刷新标记）；
-        # 画像关闭时 ``info`` 为 ``None``，此处既不查也不写标记（零 IO）。
+        # 唯一可能省下匹配的输入是**配置表的等价行**（tune 判出"走等价转换后更快"时
+        # 写下的那一行）：它带着可执行的改写载荷，命中它就照表施加、连
+        # ``normalize_equation`` 都不必调（载荷首次套用时做一次数值自检，见
+        # ``_payload_result``）。载荷缺失/坏 JSON/对不上张量一律退回真的查一次。
         #
-        # 标记是**路由表**（schema v2）的另一半：``state=ok`` 的行带着可执行的改写载荷，
-        # 命中它就照表施加、连 ``normalize_equation`` 都不必调（载荷首次套用时做一次
-        # 数值自检，见 ``_payload_result``）。载荷缺失/坏 JSON/对不上张量一律退回查一次。
-        marker_key = info.get("key") if info is not None else None
-        marker = (None if as_equivalence == _AS_EQ_FORCE
-                  else _equivalence_marker(marker_key))
-        if _equivalence_marked_none(marker):
-            _note_equivalence_skipped()
-        else:
-            started = _profile_clock(info)
-            equivalence_result = _contract_via_equivalence(
-                subscripts, operands, use_blas=use_blas, optimize=optimize,
-                memory_limit=memory_limit, backend=backend, specialize=specialize_on,
-                kernel_force=kernel_force, cache=cache, marker_key=marker_key,
-                payload=_equivalence_payload(marker))
-            if equivalence_result is not None:
-                # 本次是**等价改写**跑成的：原方程上强制具体内核会失败（它本来就不在
-                # 语料里），所以这个标签不可重放；但必须如实标注，别沿用初始值
-                # ``generic``——那会把"改写+topology"谎报成"通用路径"（实跑复现过）。
-                if info is not None:
-                    # 记录**可重放的那个选择**：调用方显式强制了内核时，强制值本身
-                    # 就是合法且可复现的建议（`generic` 实测比 topology 快 7 倍，丢掉
-                    # 它等于让缓存永远学不到这条）。只有"没强制、纯靠改写跑成"才记
-                    # `equivalence`——它在原方程上强制内核必然"未尝试"，不可重放。
-                    _text = "" if kernel_force is None else str(kernel_force).strip().lower()
-                    info["kernel"] = (_text if _text and _text != _kernel_force.AUTO_LABEL
-                                      else _EQUIVALENCE_LABEL)
-                return _profile_end(info, equivalence_result, started)
+        # 表是**只读**的：这里不写任何"查过没有"的标记，所以一次查询的结论不会跨进程
+        # 留下来——要留下就得为这条键 tune（§1 唯一写者）。画像关闭时 ``info`` 为
+        # ``None``，本段连表都不碰（零 IO）。
+        payload = info.get("equivalence") if info is not None else None
+        equivalence_result = _contract_via_equivalence(
+            subscripts, operands, use_blas=use_blas, optimize=optimize,
+            memory_limit=memory_limit, backend=backend, specialize=specialize_on,
+            kernel_force=kernel_force, cache=cache, payload=payload)
+        if equivalence_result is not None:
+            # 本次是**等价改写**跑成的：原方程上强制具体内核会失败（它本来就不在
+            # 语料里），所以这个标签不可重放；但必须如实标注，别沿用初始值
+            # ``generic``——那会把"改写+topology"谎报成"通用路径"（实跑复现过）。
+            if info is not None:
+                # 记录**可重放的那个选择**：调用方显式强制了内核时，强制值本身
+                # 就是合法且可复现的建议。只有"没强制、纯靠改写跑成"才记
+                # `equivalence`——它在原方程上强制内核必然"未尝试"，不可重放。
+                _text = "" if kernel_force is None else str(kernel_force).strip().lower()
+                info["kernel"] = (_text if _text and _text != _kernel_force.AUTO_LABEL
+                                  else _EQUIVALENCE_LABEL)
+            return _profile_end(info, equivalence_result)
 
     global _LAST_CONTRACT
 
@@ -1968,34 +2063,31 @@ def contract(
         memo = _LAST_CONTRACT
         if memo is not None and last_signature == memo[0]:
             try:
-                started = _profile_clock(info)
                 memo_result = memo[1](list(operands), out=out)
             except Exception:
                 # Shapes, dtypes or devices changed under the same objects: drop
                 # the memo and fall through to the shape keyed lookup.
                 _LAST_CONTRACT = None
             else:
-                return _profile_end(info, memo_result, started)
+                return _profile_end(info, memo_result)
         cached_key = _contract_program_key(
             subscripts, operands, resolved_backend, optimize_key, memory_limit, use_blas
         )
         cached_program = _cached_contract_program(cached_key)
         if cached_program is not None:
             try:
-                started = _profile_clock(info)
                 program_result = cached_program(list(operands), out=out)
             except Exception:
                 if cached_key is not None:
                     _CONTRACT_PROGRAM_CACHE.pop(cached_key, None)
             else:
                 _LAST_CONTRACT = (last_signature, cached_program)
-                return _profile_end(info, program_result, started)
+                return _profile_end(info, program_result)
 
     # if no optimization, run pure einsum
     if optimize is False:
         input_subscripts, output_subscript, arrays = _parser().parse_einsum_input(operands_list)
         selected_backend = parse_backend(arrays, backend)
-        started = _profile_clock(info)
         plain_result = _einsum(
             f"{input_subscripts}->{output_subscript}",
             *arrays,
@@ -2003,7 +2095,7 @@ def contract(
             out=out,
             **kwargs,
         )
-        return _profile_end(info, plain_result, started)
+        return _profile_end(info, plain_result)
 
     # grab non-einsum kwargs
     gen_expression = kwargs.pop("_gen_expression", False)
@@ -2018,7 +2110,6 @@ def contract(
             subscripts, operands, parse_backend(operands, backend),
             _plan_cache_optimize_key(optimize, optimize_key), memory_limit, use_blas,
         )
-    planning = _profile_clock(info)
     cached_plan = _cached_contract_plan(plan_key)
     if cached_plan is not None:
         try:
@@ -2038,8 +2129,6 @@ def contract(
             use_blas=use_blas,
         )
         _cache_contract_plan(plan_key, contraction_list)
-        # 命中计划缓存的这一次不记 init_ms（没有任何规划/绑定发生）。
-        _profile_spend(info, planning)
 
     if gen_expression:
         from ._expr import ContractExpression
@@ -2054,15 +2143,12 @@ def contract(
                 subscripts, operands_prepped, resolved_backend, optimize_key,
                 memory_limit, use_blas,
             )
-        compiling = _profile_clock(info)
         program = _compile_native_expression(
             contraction_list, operands_prepped, resolved_backend
         )
-        _profile_spend(info, compiling)
         if program is not None:
             _cache_contract_program(cached_key, program)
             try:
-                started = _profile_clock(info)
                 compiled_result = program(list(operands_prepped), out=out)
             except Exception:
                 _CONTRACT_PROGRAM_CACHE.pop(cached_key, None)
@@ -2071,15 +2157,14 @@ def contract(
                     subscripts, resolved_backend, optimize_key, use_blas,
                     memory_limit, operands_prepped,
                 ), program)
-                return _profile_end(info, compiled_result, started)
+                return _profile_end(info, compiled_result)
 
-    started = _profile_clock(info)
     core_result = _core_contract(operands_prepped, contraction_list, backend=backend,
                                  out=out,
                                  batch_like=_has_batch_index(subscripts),
                                  equation=subscripts if isinstance(subscripts, str) else None,
                                  **kwargs)
-    return _profile_end(info, core_result, started)
+    return _profile_end(info, core_result)
 
 
 def _run_step(step: Any, operands: list[Any], backend: str, out: Any, kwargs: dict[str, Any]) -> Any:

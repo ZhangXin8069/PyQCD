@@ -42,20 +42,41 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
 
+## Unreleased — qcd-einsum: only `--tune` writes the config table
+
+* **One table: `pyqcd.einsum.profile.csv`.** The old name `profile.csv` is deprecated, and
+  `profile_equivalence.csv` is **deleted** — it is no longer created or read. Equivalence
+  conclusions survive only as *equivalence rows* inside that single table.
+* **Only `--tune` writes it; `contract()` is read-only.** The table is a **calibration
+  artefact**: if ordinary calls could append, observations from different machines, load
+  levels and versions would overwrite each other, and the table would stop being a
+  trustworthy result for any of them. Without a tune, a call warns once, prints the tune
+  command for that exact key, and **continues** (treated as a miss).
+* **One row per key.** Two or more rows for the same
+  `(shape, dtype, device, equation, backend)` fail the read: every candidate row is printed
+  and the process exits non-zero — no guessing, no "newest wins".
+* **A hit never overrides an explicit request.** An explicit, non-`auto` `kernel_force` /
+  `optimize` / `as_equivalence` that disagrees with the hit row is an error (key, table
+  value, requested value and row location are printed). `--compare` does not count, and
+  passing `auto` explicitly counts as "not given".
+* **`wall_ms` is the only timing column**: the wall clock of the whole
+  `pyqcd.einsum.contract(...)` call, including the equivalence rewrite, cache reads and, on
+  a miss, planning/matching. It excludes the compare reference and the final write.
+* **`as_equivalence` defaults to `auto`.** `auto` rewrites only when the table holds a
+  tune-written equivalence row for the original equation; otherwise nothing is rewritten.
+  `true` / `false` force the old behaviour, `force` (used by `--tune`) refreshes.
+* **`--tune`** turns the cache off for the whole sweep (`tune_session()`), bounds each call
+  with `--tune-timeout` (default **30 s**), and treats an exception, a timeout or a
+  numerical MISMATCH as a printed note instead of an exit. It sweeps
+  `as_equivalence ∈ {true,false}` × `optimize ∈ {auto, none, compare target}` (10
+  combinations), writes the winning row and **deletes every other row of that key** —
+  including faster historical ones, so a foreign environment cannot contaminate it.
+
 ## Release 0.5.3 — qcd-einsum: equivalence routing table, `--tune` hardening
 
-* **`profile_equivalence.csv` is now a routing table (schema v2).** A row that can be
-  rewritten stores `target_equation` **plus the three permutation fields**
-  (`operand_order` / `operand_permutations` / `output_permutation`), so a hit applies the
-  rewrite **without re-running the isomorphism search**. Rows carry `schema_version`;
-  when a key has several rows the **highest version wins**, then `ok` over `none`, then the
-  newest `updated_at`.
-* **Plan A:** the rewritten (inner) call records under `target_equation`, so `profile.csv`
-  has a row for the corpus spelling and the fastest kernel/optimize can be reused for it.
-* `--as-equivalence force` ignores the memo and refreshes it.
-* **`--tune`:** every **single** einsum call is bounded by `--tune-timeout` (default 100 s);
-  the sweep by `--tune-budget`. Conflicting options are **warned about and ignored**
-  (exit 0). Combos that time out, raise, or miss `atol` are **dropped from the cache**.
+> Superseded by the unreleased entry above: the separate equivalence table with
+> `schema_version`, its "highest version wins" rule, and the 100 s tune timeout are gone.
+
 * **Forcing `generic`/`backend` no longer runs the specialised match or the equivalence
   rewrite** — they cannot help a generic contraction. Notice wording is single-language
   (`PYQCD_EINSUM_LANG`), and a profile hit prints **one** line with the cache file and the
@@ -63,47 +84,13 @@ python -m pyqcd --json     # machine-readable
 
 ## Release 0.5.2 — qcd-einsum: `--tune`, equivalence memo, honest cache rows
 
-* **`--tune`** locks `equation/shape/dtype/device/backend` and sweeps
-  `kernel_force x as_equivalence x optimize` (<=30 combos, `compare` fixed to `none`).
-  Each **single** einsum call is bounded by `--tune-timeout` (default 100 s); the whole
-  sweep by `--tune-budget` (default 0 = unlimited). Conflicting options are **warned
-  about and ignored** (exit code 0), not rejected.
-* Tune records the **whole map**: while tuning, `record(..., force_write=True)` bypasses
-  the 5% sparse gate (the per-key cap still trims to the four fastest). Combos that time
-  out, raise, or miss `atol` are **removed from the cache** (`drop()`), so a bogus config
-  can never win later.
-* **Equivalence memo** (`profile_equivalence.csv`): an equation that proved
-  un-rewritable is remembered and the equivalence step is skipped on later calls.
-  `as_equivalence="force"` / `--as-equivalence force` ignores the memo and refreshes it —
-  use it after the topology registry gains new shapes.
-* **Fixed:** a run with an explicit `kernel_force` that went through the equivalence
-  rewrite was recorded as `equivalence` (non-replayable), so the observation was thrown
-  away and the next default run never hit. It now records the effective `kernel_force`
-  (e.g. `generic`: 364 ms against `kupl_topology` 2792 ms on a 10-operand equation).
-* **Fixed:** `_profile_record` skipped every call whose key had any cached row, so a tune
-  sweep persisted 1 row out of 30 (3%). It now skips only calls that applied the hit.
-
-No numerical change. `--tune` output is a single-run measurement, not a benchmark.
+> Superseded by the unreleased entry above: the 30-combination sweep, the sparse write gate
+> (per-key four rows) and `profile_equivalence.csv` no longer exist.
 
 ## Release 0.5.1 — qcd-einsum: profile cache stops recommending dead ends
 
-`0.5.1` fixes three defects in the new profile cache, all found from a real
-production run (`ambn,cgdh,…->ka`, 10 operands):
-
-* A run whose contraction was reached through the **equivalence rewrite** used to be
-  recorded with the initial label `generic`, i.e. the cache said "generic path" while
-  the inner call had actually run `kupl_topology`. It is now labelled `equivalence`,
-  and such rows are never persisted (forcing `topology` on the *original* equation
-  cannot work, so it is not a replayable suggestion).
-* `generic` and `backend` rows stay replayable and keep taking part in `best()`: on the
-  same 10-operand equation the generic path measured **385 ms** against
-  `kupl_topology` at **2735 ms**, so excluding it would throw the largest win away.
-  Only the `equivalence` diagnostic label is excluded from storage and from `best()`.
-* The CLI hit line claimed "profile hit" even when the suggestion was **not adopted**
-  (a `generic` row). It now prints `命中但未采纳 → kernel=generic（该取值不可重放，
-  本次仍走原分派）` and keeps `命中 →` for suggestions that really changed the path.
-
-No numerical change; no API change.
+> Superseded by the unreleased entry above: the cache no longer stores observations at all —
+> only `--tune` writes it.
 
 ## Release 0.5.0 — qcd-einsum: profile cache, narrowed `kernel_force`, explain mode
 
@@ -126,18 +113,9 @@ the specialised dispatch and the equivalence rewrite. Runtime path names in
 `LAST_INFO['path']` (`kupl_dedicated`, …) are unchanged — they are observations,
 not inputs.
 
-**Profile cache** (`pyqcd/einsum/_profile_cache.py`, on by default). Records one CSV
-row per `(host, user_device, backend, dtype, equation, shape, device)` with the
-kernel/optimize actually used and its measured `compute_ms`; the next run picks the
-fastest recorded configuration for the same key. `profile.csv` is read+writ;
-`profile_compare.csv` is write-only (compare + equivalence fields, never read).
-Directory: `profile_dir=` > `PYQCD_EINSUM_PROFILE_DIR` > `./.cache`; disabling never
-reads, writes or creates it. Writes are **sparse**: a row is flushed only for a new
-key or when it beats the key's best by more than 5% (`_IMPROVE_RATIO=0.95`), so a
-near-tied configuration never grows the file. Per key at most four configurations
-survive, the file is rewritten past 50k rows, bad lines are skipped, and the module
-is fork-safe (`os.register_at_fork`) so an MPI rank never deadlocks on a lock held
-by its parent.
+**Profile cache.** The current design (one `pyqcd.einsum.profile.csv`, written only by
+`--tune`, `wall_ms` as the single timing column) is described in the unreleased entry at the
+top; the 0.5.0 read+writ/sparse-write behaviour no longer applies.
 
 **Explain mode.** `--explain` (API: `explain=` on the CLI layer only) prints, on the
 first call, how the equation matched (`plan :`), which kernel was chosen
@@ -198,13 +176,14 @@ reason it is a key release rather than a patch.
   really tries once, and `last_kernel()` reports `requested` / `ran` / `attempted`
   / per-label `reasons`.
 * **Applying an equivalent spelling automatically.** `contract(..., as_equivalence=)`,
-  `PYQCD_EINSUM_AS_EQUIVALENCE` and `--as-equivalence` (on by default) let the
-  equivalence layer rewrite the equation, permute the operands and transpose the
-  result back, so a contraction that misses every specialised form can still reach
-  one. The **returned array is always the answer to the original equation**; an
-  independent output-shape guard raises rather than hand back a mis-shaped result.
-  It is skipped for `out=`, extra kwargs, element-wise equations, explicit
-  optimizer paths and `specialize=False`.
+  `PYQCD_EINSUM_AS_EQUIVALENCE` and `--as-equivalence` let the equivalence layer rewrite
+  the equation, permute the operands and transpose the result back, so a contraction that
+  misses every specialised form can still reach one. (The 0.4.4 default of "always try"
+  has since been replaced by `auto`: see the unreleased entry at the top.) The
+  **returned array is always the answer to the original equation**; an independent
+  output-shape guard raises rather than hand back a mis-shaped result. It is skipped for
+  `out=`, extra kwargs, element-wise equations, explicit optimizer paths and
+  `specialize=False`.
 * **Caches with hit statistics.** `_cache` provides bounded, thread-safe LRUs with
   `hits/misses/stores/evictions` for the matcher (`specialize.match`), the
   equivalence lookup (`equivalence.normalize`) and the planner (`api.find_path`).
