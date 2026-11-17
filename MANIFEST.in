@@ -16,8 +16,12 @@ include install.sh
 
 # Native backend sources, headers and their Makefile drivers. The build dirs
 # under cpp/ hold compiled artefacts and are pruned below.
-recursive-include cpp *.h *.cpp *.cu *.sh *.md
+recursive-include cpp *.h *.cpp *.cu *.sh *.md *.py
 include cpp/kupl/einsum/include/family_apply.h
+# `cpp/` 下的**构建辅助脚本**也是 sdist 的一部分：`make-nv.sh:320` 会调用
+# `cpp/cuda/einsum/strip_rpath.py`，而旧的 `recursive-include` 只收
+# `*.h *.cpp *.cu *.sh *.md`——0.5.0 的 sdist 内容校验发现该文件缺失，
+# 从 sdist 构建 CUDA 时 strip rpath 这一步直接失败（仅 warning，产物仍出）。
 # v3 拓扑步表（**必须随 sdist 发布**）：`make.sh` 在裸检出时从这份 .gz 解压出
 # `topology_kernels.inc` 再编译。上面的 `recursive-include cpp` 只收
 # `*.h *.cpp *.cu *.sh *.md`，`.inc.gz` 不在其中——第一版 0.4.3 sdist 因此漏掉了它

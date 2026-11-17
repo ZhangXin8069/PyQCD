@@ -42,6 +42,58 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
 
+## Release 0.5.0 — qcd-einsum: profile cache, narrowed `kernel_force`, explain mode
+
+`0.5.0` is a **minor** release because one public surface changes incompatibly
+(`kernel_force`). Everything else is additive.
+
+**Breaking — `kernel_force` values.** The five logical values are
+`auto | dedicated | topology | generic | backend`. The concrete labels are gone and
+now raise:
+
+| old | new |
+|---|---|
+| `kupl_dedicated`, `cuda_dedicated` | `dedicated` |
+| `kupl_topology`, `cuda_topology` | `topology` |
+
+`dedicated`/`topology` resolve against the operand backend (numpy → kupl,
+cupy → cuda). `backend` is new and means "do not use a specialised kernel at all":
+it calls `backend.einsum` directly, inherits the caller's `optimize`, and skips both
+the specialised dispatch and the equivalence rewrite. Runtime path names in
+`LAST_INFO['path']` (`kupl_dedicated`, …) are unchanged — they are observations,
+not inputs.
+
+**Profile cache** (`pyqcd/einsum/_profile_cache.py`, on by default). Records one CSV
+row per `(host, user_device, backend, dtype, equation, shape, device)` with the
+kernel/optimize actually used and its measured `compute_ms`; the next run picks the
+fastest recorded configuration for the same key. `profile.csv` is read+writ;
+`profile_compare.csv` is write-only (compare + equivalence fields, never read).
+Directory: `profile_dir=` > `PYQCD_EINSUM_PROFILE_DIR` > `./.cache`; disabling never
+reads, writes or creates it. Writes are **sparse**: a row is flushed only for a new
+key or when it beats the key's best by more than 5% (`_IMPROVE_RATIO=0.95`), so a
+near-tied configuration never grows the file. Per key at most four configurations
+survive, the file is rewritten past 50k rows, bad lines are skipped, and the module
+is fork-safe (`os.register_at_fork`) so an MPI rank never deadlocks on a lock held
+by its parent.
+
+**Explain mode.** `--explain` (API: `explain=` on the CLI layer only) prints, on the
+first call, how the equation matched (`plan :`), which kernel was chosen
+(`kernel :`) and why a specialised kernel was abandoned (`why :` — unavailable /
+contiguity gate / dtype policy / profile says backend is faster). Later calls print
+one line: cache hit, cache miss, or "profile disabled". Existing output lines are
+untouched — new ones are appended only when the flag is set.
+
+**Hot-path cuts** (measured structurally, not by wall clock): the contract plan cache
+now covers 2-operand non-corpus equations (was ≥3), the equivalence gate is skipped
+when the corpus already matched, and the thread-profile switch has a fast path with
+**zero environment reads and zero `/proc` reads** when the profile does not change
+(was 5 env reads per call).
+
+**Fixed:** profile directory switching inside one process was silently ignored (a
+single boolean gate); `cache=False` could still register a matcher hit through the
+equivalence layer; a pinned `profile_dir` was reset to `./.cache` when the parameter
+was omitted.
+
 ## Release 0.4.5 — qcd-einsum: silent fallbacks now leave a trace
 
 `0.4.5` is a diagnostics fix: four places used to fall back to the generic path

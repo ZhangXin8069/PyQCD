@@ -49,11 +49,12 @@
 关闭时该段完全消失，MISS 的 ``原因`` 回到引入本功能之前的原文。它只是**附加信息**：
 不改 ``matched``、不改退出码、不改任何执行路径。
 
-强制内核（``--kernel-force {auto,generic,<label>[,...]}``，缺省 ``auto``）：取值语义与
-``python -m pyqcd.einsum.test --kernel-force`` 完全一致——``auto`` 保持原分派次序、
-``generic`` 跳过专用内核、具体标签（``kupl_*`` / ``cuda_*``，可逗号分隔多个、按书写
-次序尝试）强制只跑这些；显式取值压过 ``PYQCD_EINSUM_KERNEL_FORCE``；非法标签退出码
-``2`` 并列出合法集合。
+强制内核（``--kernel-force {auto,generic,dedicated,topology,backend}``，缺省 ``auto``）：
+取值语义与 ``python -m pyqcd.einsum.test --kernel-force`` 完全一致——``auto`` 保持原分派
+次序、``generic`` 跳过专用内核、``dedicated`` / ``topology`` 只允许**当前后端的**那一个
+（numpy → ``kupl_*``，cupy → ``cuda_*``，可逗号分隔多个、按书写次序尝试）、``backend``
+直接调后端自己的 ``einsum``（与其它标签互斥）；显式取值压过
+``PYQCD_EINSUM_KERNEL_FORCE``；非法取值退出码 ``2`` 并列出合法集合。
 
 **执行边界**：本模块是纯查询（不生成操作数、不调 ``contract()``），所以它**不跑**
 任何内核，强制失败也不可能在这里发生——``--kernel-force`` 只决定报告里出不出 ``kernel :``
@@ -61,6 +62,13 @@
 ``unknown``（不猜）。不给 ``--kernel-force`` 时该行**不出现**，缺省输出与改造前逐字节相同。
 真要强制跑内核请用 ``python -m pyqcd.einsum.test --kernel-force <label>``（那条路径失败时
 打印 ``KernelUnavailableError`` 正文并非零退出）。
+
+**详解（``--explain {auto,true,false}``，缺省 ``auto``）**：本模块不收缩，所以它给不出
+"实测"的放弃原因，只把**会怎样**写进报告——``plan``（命中了哪个形态 / 声明了哪些内核 /
+存在哪条等价写法）、``kernel``（``requested`` / ``attempted`` / ``ran``，只认本进程真跑过
+的记录）、``why``（有记录时按 ``kept`` / ``contiguity`` / ``dtype-policy`` /
+``kernel-unavailable`` 归类，没记录时如实写 ``not-run``）。``auto`` 等于关闭：缺省输出
+与改造前**逐字节相同**（``auto`` 不跟随任何环境变量，本模块也没有 ``--verbose``）。
 """
 
 from __future__ import annotations
@@ -79,10 +87,12 @@ __all__ = [
     "resolve_language",
     "resolve_equivalence",
     "resolve_kernel",
+    "resolve_explain",
     "kernel_requested",
     "kernel_force_section",
     "last_kernel",
     "render_kernel_force",
+    "render_explain_kernel",
     "build_parser",
     "MESSAGES",
     "LANGUAGE_MODES",
@@ -91,6 +101,8 @@ __all__ = [
     "EQUIVALENCE_MODES",
     "DEFAULT_EQUIVALENCE",
     "EQUIVALENCE_ENV",
+    "EXPLAIN_MODES",
+    "DEFAULT_EXPLAIN",
     "DEFAULT_KERNEL",
     "KERNEL_LABELS",
     "KERNEL_FORCE_ENV",
@@ -113,17 +125,24 @@ EQUIVALENCE_ENV = "PYQCD_EINSUM_EQUIVALENCE"
 #: ``--kernel-force``：缺省 ``auto``（保持原分派次序）。与 ``_kernel_force.AUTO_LABEL``
 #: 同值；本模块不 import 该模块，免得它缺席时查询入口起不来。
 DEFAULT_KERNEL = "auto"
-#: 可强制的内核标签（与 ``_kernel_force.KERNEL_LABELS`` 同集合）。
+#: 可强制的内核标签（与 ``_kernel_force.KERNEL_LABELS`` 同集合：**逻辑名**，运行时按
+#: 操作数后端解析成 ``*_dedicated`` / ``*_topology``）。
 KERNEL_LABELS = frozenset({
-    "cuda_dedicated",
-    "cuda_topology",
-    "kupl_dedicated",
-    "kupl_topology",
+    "dedicated",
+    "topology",
 })
+#: 不产生强制、只切换路线的两个取值（与 ``_kernel_force`` 同名）。
+GENERIC_LABEL = "generic"
+BACKEND_LABEL = "backend"
 #: 与 ``_kernel_force.KERNEL_FORCE_ENV`` 同名的环境变量。
 KERNEL_FORCE_ENV = "PYQCD_EINSUM_KERNEL_FORCE"
 #: ``last_kernel()`` 取不到时的占位：说的是"没观测到"，不是一句说明文字。
 KERNEL_UNKNOWN = "unknown"
+
+#: ``--explain``：三态。``auto``（缺省）**等于关闭**——本模块没有 ``--verbose``，
+#: 缺省输出必须与改造前逐字节相同；``true`` 才把"会怎样"写进报告。
+EXPLAIN_MODES = ("auto", "true", "false")
+DEFAULT_EXPLAIN = "auto"
 
 #: 文案表：``key -> {"en": ..., "zh": ...}``。缺 key 或缺语言**直接报错**，
 #: 不静默返回 key 本身——那样会以"看起来很正常的英文"混进中文输出里。
@@ -178,6 +197,31 @@ MESSAGES: dict[str, dict[str, str]] = {
                "只影响报告：不改判定、不改退出码。\n"
                "缺省 {default}"),
     },
+    "help.explain": {
+        "en": ("explain what WOULD happen: auto / true / false.\n"
+               "auto (default) is off — this module has no --verbose, so the default "
+               "report stays byte-identical;\n"
+               "true adds three lines to the report: plan (which form is hit, or which "
+               "equivalent spelling exists),\n"
+               "kernel (requested / attempted / ran — read from a real run in this "
+               "process only) and why\n"
+               "(kept / contiguity / dtype-policy / kernel-unavailable when a record "
+               "exists, otherwise not-run).\n"
+               "This module never contracts: every value here is a plan or a recorded "
+               "observation, never a\n"
+               "measurement of this query. It changes no verdict and no exit code. "
+               "Default {default}"),
+        "zh": ("报告「会怎样」：auto / true / false。\n"
+               "auto（缺省）等于关闭——本模块没有 --verbose，缺省报告必须与改造前"
+               "逐字节相同；\n"
+               "true 时报告多三行：plan（命中了哪个形态，或存在哪条等价写法）、"
+               "kernel（requested / attempted /\n"
+               "ran，只认本进程真跑过的记录）、why（有记录时按 kept / contiguity / "
+               "dtype-policy /\n"
+               "kernel-unavailable 归类，没记录时如实写 not-run）。\n"
+               "本模块不做任何收缩：这里的每个值都是「计划」或「记录值」，不是本次"
+               "查询的实测。不改判定、不改退出码。缺省 {default}"),
+    },
     "help.epilog": {
         "en": ("Exit codes:\n"
                "  0  hit a specialised (corpus/shape) path\n"
@@ -189,7 +233,7 @@ MESSAGES: dict[str, dict[str, str]] = {
                "on out=, dtype and native-library availability.\n"
                "This module never contracts, so --kernel-force only records what was "
                "requested; use\n"
-               "python -m pyqcd.einsum.test --kernel-force <label> to actually force one.\n"
+               "python -m pyqcd.einsum.test --kernel-force <value> to actually force one.\n"
                "Numeric verification: python -m pyqcd.testing.einsum.verify_specialized"),
         "zh": ("退出码：\n"
                "  0  命中特化路径（语料 / 形状特化）\n"
@@ -200,35 +244,40 @@ MESSAGES: dict[str, dict[str, str]] = {
                "原生库可用性。\n"
                "本模块不做任何收缩，所以 --kernel-force 只记录「要求了什么」；"
                "真要强制跑内核请用\n"
-               "python -m pyqcd.einsum.test --kernel-force <label>。\n"
+               "python -m pyqcd.einsum.test --kernel-force <value>。\n"
                "数值验证：python -m pyqcd.testing.einsum.verify_specialized"),
     },
     "help.kernel": {
-        "en": ("which specialised kernel is requested: auto / generic / "
-               "<label>[,...]. "
+        "en": ("which specialised kernel is requested: auto / generic / dedicated / "
+               "topology / backend. "
                "auto keeps the original dispatch (when none runs it only warns and "
-               "falls back); generic skips the specialised kernels entirely; a label "
-               "such as {labels} (comma separated for several, tried in the order "
-               "written) forces exactly those and reports a failure instead of falling "
-               "back, never a warning. Same meaning as test.py --kernel-force; the explicit "
-               "value wins over the {env} environment variable, and an unknown label "
-               "exits with code 2. "
+               "falls back); generic skips the specialised kernels entirely; "
+               "dedicated / topology allow exactly that kernel of the operand backend "
+               "(numpy -> kupl, cupy -> cuda; comma separated for both, tried in the "
+               "order written) and report a failure instead of falling back, never a "
+               "warning; backend calls the backend's own einsum and skips the "
+               "specialised dispatch (cannot be combined with other values). Same "
+               "meaning as test.py --kernel-force; the explicit value wins over the "
+               "{env} environment variable, and an unknown value exits with code 2. "
                "This module never contracts, so it cannot run a kernel: the kernel line "
                "shows requested= from this value, and ran=/attempted= only when a "
                "kernel actually ran in this process (otherwise 'unknown', never a "
                "guess). Omit the option and that line is absent, so the default report "
                "stays byte-identical. To really force one use "
-               "python -m pyqcd.einsum.test --kernel-force <label>. Default {default}"),
-        "zh": ("要求哪个专用内核：auto / generic / <label>[,...]。"
+               "python -m pyqcd.einsum.test --kernel-force <value>. Default {default}"),
+        "zh": ("要求哪个专用内核：auto / generic / dedicated / topology / backend。"
                "auto 保持原分派次序（跑不成只 warning 后回落）；generic 完全跳过专用"
-               "内核；具体标签如 {labels}（多个用逗号分隔，按书写次序尝试）强制只跑"
-               "这些，跑不成即报错而不回落，不会降级成 warning。"
-               "与 test.py --kernel-force 同义；显式取值优先于环境变量 {env}，未知标签退出码 2。"
+               "内核；dedicated / topology 只允许当前后端的对应内核（numpy → kupl，"
+               "cupy → cuda；可用逗号给两个，按书写次序尝试），跑不成即报错而不回落，"
+               "不会降级成 warning；backend 直接调后端自己的 einsum、不走专用分派"
+               "（不可与其它取值混用）。"
+               "与 test.py --kernel-force 同义；显式取值优先于环境变量 {env}，未知取值"
+               "退出码 2。"
                "本模块不做任何收缩、跑不了内核：kernel 行里 requested= 来自该取值，"
                "ran=/attempted= 只有本进程真的跑过内核时才给"
                "（否则写 unknown，绝不猜）。不给该选项时整行不出现，"
                "缺省报告保持逐字节不变。真要强制跑内核请用 "
-               "python -m pyqcd.einsum.test --kernel-force <label>。缺省 {default}"),
+               "python -m pyqcd.einsum.test --kernel-force <value>。缺省 {default}"),
     },
     # 字段标签（自带对齐空格，冒号前 12 列）
     "field.equation": {"en": "equation    ", "zh": "方程        "},
@@ -255,6 +304,63 @@ MESSAGES: dict[str, dict[str, str]] = {
     # 强制内核：``requested`` / ``ran`` / ``attempted`` 三段恒在同一行。
     # 标签自带对齐空格（冒号前 12 列），与其余 ``field.*`` 同宽。
     "field.kernel_force": {"en": "kernel      ", "zh": "强制内核    "},
+    # 详解（--explain true）：本模块只报"会怎样"，不执行收缩。
+    "field.explain_plan": {"en": "explain/plan", "zh": "详解/计划   "},
+    "field.explain_kernel": {"en": "explain/kern", "zh": "详解/内核   "},
+    "field.explain_why": {"en": "explain/why ", "zh": "详解/原因   "},
+    # 值
+    "value.explain_source_shape": {
+        "en": "shape-specialised",
+        "zh": "形状特化",
+    },
+    "value.explain_source_corpus": {
+        "en": "corpus form",
+        "zh": "语料形态",
+    },
+    "value.explain_plan_hit": {
+        "en": "{source} {name}  [{kind}] → declared kernels {kernels}",
+        "zh": "{source} {name}  [{kind}] → 声明内核 {kernels}",
+    },
+    "value.explain_plan_none": {
+        "en": "no specialised form (generic step-by-step path) → nothing to dispatch",
+        "zh": "未命中任何特化形态（走通用分步路径） → 没有可下发的原生内核",
+    },
+    "value.explain_plan_equiv": {
+        "en": " → equivalent spelling exists ({kind}): {equation}   tensors: "
+              "{adjustments}   result: {perm}",
+        "zh": " → 存在等价写法（{kind}）：{equation}   张量：{adjustments}   结果：{perm}",
+    },
+    "value.explain_plan_equiv_unavailable": {
+        "en": " → equivalence layer unavailable ({exc})",
+        "zh": " → 等价映射层不可用（{exc}）",
+    },
+    "value.explain_plan_no_equiv": {
+        "en": " → no equivalent spelling reaches a known form",
+        "zh": " → 不存在可落到已知形式的等价写法",
+    },
+    "value.explain_why_kept": {
+        "en": "kept: {detail} (recorded by a real run in this process)",
+        "zh": "保留：{detail}（本进程真的跑过的记录）",
+    },
+    "value.explain_why_contiguity": {
+        "en": "contiguity: {detail}",
+        "zh": "连续性问题：{detail}",
+    },
+    "value.explain_why_dtype": {
+        "en": "dtype-policy: real dtype declined ({detail})",
+        "zh": "dtype 策略：实型被拒绝（{detail}）",
+    },
+    "value.explain_why_kernel_unavailable": {
+        "en": "kernel-unavailable: {detail}",
+        "zh": "内核不可用：{detail}",
+    },
+    "value.explain_why_not_run": {
+        "en": ("not run: this module never contracts, so this query has no abandon "
+               "reason (use python -m pyqcd.einsum.test --explain true for a measured "
+               "one)"),
+        "zh": ("未执行：本模块不收缩张量，因此本次查询没有放弃原因"
+               "（实测请用 python -m pyqcd.einsum.test --explain true）"),
+    },
     # 值
     "value.arity_slots": {
         "en": "{arity} operands / {slots} index slots (output rank {output_rank})",
@@ -332,10 +438,10 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     # 参数错误：非法 --kernel-force 取值（退出码 2，与 argparse 的 choices 同档）
     "error.kernel": {
-        "en": ("--kernel-force must be 'auto', 'generic', or one of {labels} "
-               "(comma separated for several), got {value!r}"),
-        "zh": ("--kernel-force 必须是 'auto'、'generic' 或 {labels} 之一"
-               "（多个用逗号分隔），得到 {value!r}"),
+        "en": ("--kernel-force must be one of {labels} (comma separated for several; "
+               "backend cannot be combined with other labels), got {value!r}"),
+        "zh": ("--kernel-force 必须是 {labels} 之一"
+               "（多个用逗号分隔；backend 不可与其它标签混用），得到 {value!r}"),
     },
     "reason.equivalent_rewrite": {
         "en": "the literal spelling is not in the corpus, but an equivalent spelling "
@@ -450,6 +556,30 @@ def resolve_equivalence(requested: str | bool | None = None) -> bool:
         f"--equivalence must be one of {EQUIVALENCE_MODES}, got {requested!r}")
 
 
+def resolve_explain(requested: str | bool | None = None) -> bool:
+    """把 ``--explain`` 解析成本次是否把"会怎样"写进报告。
+
+    ``auto``（缺省，``None`` 等价）**恒为关闭**：本模块没有 ``--verbose`` 可跟随，
+    而缺省报告由 ``_einsum_verify_specialized_contract`` **逐字节**钉住，无条件多
+    三行就是破坏性变更。``true``/``false`` 强制开关（也接受 ``bool`` 与
+    ``1/0/yes/no/on/off``）。非法值抛 ``ValueError``；CLI 侧由 argparse 的
+    ``choices`` 拦成退出码 2。
+    """
+    if requested is None:
+        return False
+    if isinstance(requested, bool):
+        return requested
+    text = str(requested).strip().lower()
+    if text == "auto":
+        return False
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off"):
+        return False
+    raise ValueError(
+        f"--explain must be one of {EXPLAIN_MODES}, got {requested!r}")
+
+
 def _forced_on(requested: str | bool | None) -> bool:
     """``--equivalence true`` 的**显式**强制开启（区别于 ``auto`` 跟随环境变量）。
 
@@ -482,10 +612,15 @@ def _kernel_force_module():
 
 
 def _kernel_label_names() -> tuple[str, ...]:
-    """合法标签集合：优先用 ``_kernel_force`` 的权威定义，取不到用本模块字面量。"""
+    """合法取值全集：优先用 ``_kernel_force`` 的权威定义，取不到用本模块字面量。
+
+    含 ``auto`` / ``generic`` / ``backend`` —— 报错文案要列的是**能写什么**。
+    """
     force = _kernel_force_module()
     live = getattr(force, "KERNEL_LABELS", None) if force is not None else None
-    return tuple(sorted(live or KERNEL_LABELS))
+    names = set(live or KERNEL_LABELS)
+    names |= {DEFAULT_KERNEL, GENERIC_LABEL, BACKEND_LABEL}
+    return tuple(sorted(names))
 
 
 def resolve_kernel(requested: str | None = None) -> tuple[str, ...]:
@@ -634,6 +769,118 @@ def _explain(subscripts: str, forced_on: bool) -> dict[str, Any]:
             os.environ[EQUIVALENCE_ENV] = saved
 
 
+def _explain_why(fields: dict[str, Any],
+                 reasons: dict[str, Any]) -> dict[str, str]:
+    """``why`` 段：本模块**不执行**，所以只有真跑过的记录才配给"放弃原因"。
+
+    四类判据与 ``python -m pyqcd.einsum.test`` 完全同源（``contiguity`` →
+    ``dtype-policy`` → ``kernel-unavailable``；兜底类必须最后判，否则前两类细因
+    永远出不来）。没有记录时如实写 ``not-run``——绝不把"没查过"说成"没命中"。
+    """
+    ran = fields.get("ran")
+    if ran:
+        return {"kind": "kept", "detail": str(ran)}
+    items = [(str(label), str(text)) for label, text in (reasons or {}).items()
+             if str(text)]
+    for label, text in items:
+        if "contiguous" in text.lower():
+            return {"kind": "contiguity", "detail": f"{label}: {text}"}
+    for label, text in items:
+        lowered = text.lower()
+        if ("real dtype" in lowered and "declin" in lowered) \
+                or "dtype-policy" in lowered:
+            return {"kind": "dtype-policy", "detail": f"{label}: {text}"}
+    if items:
+        return {"kind": "kernel-unavailable",
+                "detail": "; ".join(f"{label}: {text}" for label, text in items)}
+    return {"kind": "not-run", "detail": ""}
+
+
+def _explain_section(report: dict[str, Any], kernel_force: str | None,
+                     source: str) -> dict[str, Any]:
+    """``--explain`` 的报告段：``plan`` / ``kernel`` / ``why``（全部只读）。
+
+    ``source`` 是命中的来源（``shape`` / ``corpus`` / ``none``），由 :func:`query`
+    在判定时给出——报告层不再重新查一遍（两次查询说两套话的坑不值得踩）。
+    ``kernel`` 的三段与 ``--kernel-force`` 那一行**同源**（:func:`kernel_force_fields`），
+    因此 ``ran`` / ``attempted`` 只可能来自本进程真跑过的记录；取不到写 ``unknown``。
+    """
+    labels = resolve_kernel(kernel_force)
+    requested = ",".join(labels) if labels else DEFAULT_KERNEL
+    record = last_kernel()
+    fields = kernel_force_fields(requested, labels, record)
+    reasons = dict((record or {}).get("reasons") or {}) if fields.get("ran") else {}
+    return {
+        "plan": {
+            "matched": bool(report.get("matched")),
+            "source": source,
+            "name": report.get("name"),
+            "kind": report.get("kind"),
+            "kernels": list(report.get("kernels") or ()),
+            "equivalence": report.get("equivalence"),
+        },
+        "kernel": {
+            "requested": requested,
+            "ran": fields.get("ran"),
+            "attempted": fields.get("attempted"),
+            "reasons": reasons,
+        },
+        "why": _explain_why(fields, reasons),
+    }
+
+
+def render_explain_kernel(kernel: dict[str, Any]) -> str:
+    """``requested=... → attempted=... → ran=...``（字段名一律不翻译）。
+
+    与 ``test.py`` 的同名行同口径：三段稳定可解析，跟着 ``--language`` 翻译会让
+    脚本解析不到。缺值写 ``unknown``/``none``，绝不空着。
+    """
+    return "requested={}  → attempted={}  → ran={}".format(
+        kernel.get("requested") or DEFAULT_KERNEL,
+        kernel.get("attempted") or KERNEL_UNKNOWN,
+        kernel.get("ran") or KERNEL_UNKNOWN)
+
+
+def _explain_plan_text(plan: dict[str, Any], language: str = "zh") -> str:
+    """``plan`` 段的一行人话：命中了什么 / 没命中时有没有等价写法。"""
+    if plan.get("matched"):
+        source = plan.get("source")
+        source_key = ("value.explain_source_shape" if source == "shape"
+                      else "value.explain_source_corpus")
+        return translate("value.explain_plan_hit", language,
+                         source=translate(source_key, language),
+                         name=plan.get("name") or "-",
+                         kind=plan.get("kind") or "-",
+                         kernels=", ".join(plan.get("kernels") or ()) or "-")
+    line = translate("value.explain_plan_none", language)
+    equivalent = plan.get("equivalence")
+    if isinstance(equivalent, dict):
+        if equivalent.get("unavailable"):
+            line += translate("value.explain_plan_equiv_unavailable", language,
+                              exc=equivalent["unavailable"])
+        elif equivalent.get("rewritten"):
+            line += translate("value.explain_plan_equiv", language,
+                              kind=equivalent.get("kind", "-"),
+                              equation=equivalent.get("equation", "-"),
+                              adjustments=_format_operand_adjustments(equivalent),
+                              perm=_format_output_adjustment(equivalent, language))
+        else:
+            line += translate("value.explain_plan_no_equiv", language)
+    return line
+
+
+def _explain_why_text(why: dict[str, Any], language: str = "zh") -> str:
+    """``why`` 段的一行人话；四类 + ``not-run``，未知类别也明确写出来。"""
+    kind = str(why.get("kind") or "not-run")
+    key = {
+        "kept": "value.explain_why_kept",
+        "contiguity": "value.explain_why_contiguity",
+        "dtype-policy": "value.explain_why_dtype",
+        "kernel-unavailable": "value.explain_why_kernel_unavailable",
+    }.get(kind, "value.explain_why_not_run")
+    return translate(key, language, detail=why.get("detail") or "-")
+
+
 def _reason(key: str, **args: Any) -> dict[str, Any]:
     """``reason`` 相关字段：历史中文文案 + 语言无关的 key/参数。"""
     return {
@@ -644,7 +891,8 @@ def _reason(key: str, **args: Any) -> dict[str, Any]:
 
 
 def query(subscripts: str, equivalence: str | bool | None = None,
-          kernel_force: str | None = None) -> dict[str, Any]:
+          kernel_force: str | None = None,
+          explain: str | bool | None = None) -> dict[str, Any]:
     """返回该方程的语料归属与执行契约（纯查询，无副作用）。
 
     ``equivalence`` 是 ``--equivalence`` 的三态（``None`` = ``auto``，见
@@ -654,7 +902,14 @@ def query(subscripts: str, equivalence: str | bool | None = None,
     ``kernel`` 是 ``--kernel-force`` 的原始取值（``None`` = 未给）。给了就在报告里多一个
     ``kernel_force`` 字段（``requested`` / ``ran`` / ``attempted``）；不给则**没有**
     该字段，报告与改造前逐字段相同。它同样不参与判定、不影响退出码。
+
+    ``explain`` 是 ``--explain`` 的三态（``None`` = ``auto`` = 关闭，见
+    :func:`resolve_explain`）。开启时报告多一个 ``explain`` 字段（``plan`` /
+    ``kernel`` / ``why``），描述"**会怎样**"——本模块不执行收缩，所以那里没有任何
+    实测数字；``ran``/``attempted`` 只可能来自本进程真跑过的记录。它同样不参与
+    判定、不影响退出码，也不改变 ``--json`` 之外的任何字段。
     """
+    explain_on = resolve_explain(explain)
     force_section = kernel_force_section(kernel_force)
     if not isinstance(subscripts, str):
         report: dict[str, Any] = {
@@ -700,6 +955,8 @@ def query(subscripts: str, equivalence: str | bool | None = None,
             "kernels": list(shape.get("kernels", ())),
             "note": shape.get("note", ""),
         })
+        if explain_on:
+            report["explain"] = _explain_section(report, kernel_force, "shape")
         return report
 
     entry = _specialize.match(subscripts)
@@ -711,6 +968,8 @@ def query(subscripts: str, equivalence: str | bool | None = None,
         # 并回到**没有本功能时**的原版措辞，报告里也没有 `equivalence` 字段。
         if not resolve_equivalence(equivalence):
             report.update(_reason("reason.no_specialized_path_disabled"))
+            if explain_on:
+                report["explain"] = _explain_section(report, kernel_force, "none")
             return report
 
         equivalent = _explain(subscripts, _forced_on(equivalence))
@@ -722,6 +981,8 @@ def query(subscripts: str, equivalence: str | bool | None = None,
                                   description=equivalent["description"]))
         else:
             report.update(_reason("reason.no_specialized_path"))
+        if explain_on:
+            report["explain"] = _explain_section(report, kernel_force, "none")
         return report
 
     report.update({
@@ -733,6 +994,8 @@ def query(subscripts: str, equivalence: str | bool | None = None,
     corpus = _corpus_entry(signature)
     if corpus is not None:
         report["corpus"] = corpus
+    if explain_on:
+        report["explain"] = _explain_section(report, kernel_force, "corpus")
     return report
 
 
@@ -865,6 +1128,16 @@ def _print_report(report: dict[str, Any], language: str = "zh") -> None:
     kernel_force = report.get("kernel_force")
     if kernel_force is not None:
         print(f"{t('field.kernel_force')}: {render_kernel_force(kernel_force)}")
+    # ``--explain true`` 的三段：本模块不执行，所以这里全是"会怎样"而不是实测。
+    # 缺省（``auto``）没有该字段，报告与改造前逐字节相同。
+    explain = report.get("explain")
+    if explain is not None:
+        plan = explain.get("plan") or {}
+        print(f"{t('field.explain_plan')}: {_explain_plan_text(plan, language)}")
+        print(f"{t('field.explain_kernel')}: "
+              + render_explain_kernel(explain.get("kernel") or {}))
+        print(f"{t('field.explain_why')}: "
+              + _explain_why_text(explain.get("why") or {}, language))
 
     if not report["matched"]:
         print(f"{t('field.result')}: MISS")
@@ -935,6 +1208,9 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
                         help=t("help.kernel", default=DEFAULT_KERNEL,
                                env=KERNEL_FORCE_ENV,
                                labels=", ".join(_kernel_label_names())))
+    # ``default='auto'`` = 关闭：本模块没有 --verbose 可跟随，缺省报告必须逐字节不变。
+    parser.add_argument("--explain", default=DEFAULT_EXPLAIN, choices=EXPLAIN_MODES,
+                        help=t("help.explain", default=DEFAULT_EXPLAIN))
     return parser
 
 
@@ -975,7 +1251,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     report = query(args.equation, equivalence=args.equivalence,
-                   kernel_force=args.kernel_force)
+                   kernel_force=args.kernel_force, explain=args.explain)
     if args.json:
         # 机器读：query() 的结果与语言无关，--language 影响不到任何结构化字段。
         print(json.dumps(report, ensure_ascii=False, indent=2))

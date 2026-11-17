@@ -120,6 +120,8 @@ DISABLED_REASON = "等价映射已关闭（PYQCD_EINSUM_EQUIVALENCE=0）"
 #: **自动施加**映射的开关：``contract(..., as_equivalence=...)`` 的三态缺省值。
 #: 默认开启（``"1"``）：命中映射时 :func:`pyqcd.einsum.contract` 会就地改写方程、
 #: 重排操作数、跑完再把结果转回调用方要求的输出轴序。设 ``0`` 退回"只报告不施加"。
+#: 它只是**第二层**开关：``PYQCD_EINSUM_EQUIVALENCE=0`` 时本层根本产不出映射，
+#: 显式 ``as_equivalence=True`` 也压不过去（见 :func:`as_equivalence_enabled`）。
 AS_EQUIVALENCE_ENV = "PYQCD_EINSUM_AS_EQUIVALENCE"
 
 # 单个候选的同构搜索节点上限。真实语料高度刚性（实测每候选几微秒），触发这个
@@ -159,6 +161,10 @@ _PARSED: dict[str, tuple[list[str], str]] = {}
 # 等价写法"一样要跑结构分桶 + 构造式同构，并不便宜。容量与结构描述缓存同量级：
 # 键数上限就是调用方写过的不同写法数；线程安全与命中统计由
 # :class:`._cache.LRUCache` 负责，本模块不加锁。
+# 显式 ``probe=`` 与非法输入**不进这张表**：前者目标形态由调用方闭包决定，同一条
+# 方程配不同 probe 答案可能不同，键里装不下闭包；后者要维持"非法输入只返回 None、
+# 绝不抛"的旧口径。键不做归一化也是同一取向：归一化本身就要付 ``_split`` 的代价，
+# 而"一字之差即另一条键"只是多存一条，换来命中路径上只剩一次字典查找。
 _NORMALIZE_CACHE = _cache.LRUCache("equivalence.normalize",
                                    maxsize=_SHAPE_CACHE_LIMIT)
 
@@ -180,6 +186,13 @@ def as_equivalence_enabled(value: bool | None = None) -> bool:
 
     与 :func:`enabled` 一样在**调用时**求值（不在 import 时快照），因此同进程内改
     ``PYQCD_EINSUM_AS_EQUIVALENCE`` 即时生效。缺省开启。
+
+    **只压得过 ``PYQCD_EINSUM_AS_EQUIVALENCE``，压不过 :func:`enabled`**：
+    ``PYQCD_EINSUM_EQUIVALENCE=0`` 是硬闸，显式 ``True`` 也过不去——调用方
+    ``_api._contract_via_equivalence`` 进门第一句就再查一次 :func:`enabled`，
+    于是"闸关了"表现为干净的不施加，而不是靠下游返回 ``None`` 偶然兜住。两层问的
+    不是同一件事（"要不要自动施加" vs "本层是否存在"）：本层关掉时
+    :func:`normalize_equation` 只会给 ``None``，硬压过去也只是白跑一次。
     """
     if value is not None:
         return bool(value)
@@ -880,7 +893,8 @@ def _select_mapping(entries: Sequence[tuple[int, str]],
     return _first_mapping(entries, query_terms, query_out, query)
 
 
-def _normalize(equation: str, probe: Any) -> Equivalence | None:
+def _normalize(equation: str, probe: Any,
+               *, use: bool | None = None) -> Equivalence | None:
     """查表本体（**不含开关判定**）：语料索引 + 构造式同构，或显式 probe 的改写枚举。
 
     开关只在 :func:`normalize_equation` 判；:func:`explain` 是纯报告，不走开关
@@ -894,7 +908,7 @@ def _normalize(equation: str, probe: Any) -> Equivalence | None:
     if probe is None:
         from . import _specialize
 
-        if _specialize.match(equation) is not None:
+        if _specialize.match(equation, use=use) is not None:
             return Equivalence(equation=equation,
                                description="无需改写：本身已命中",
                                kind="identity")
@@ -951,6 +965,9 @@ def normalize_equation(equation: str,
     ``use`` 是缓存总开关的三态覆盖（``True``/``False`` 压过环境变量
     ``PYQCD_EINSUM_CACHE``，``None`` 跟随环境变量、缺省开启），原样转发给
     :class:`._cache.LRUCache`；关闭时**既不读也不写**，统计也不会留下假命中。
+    ``use=False`` 只关**缓存**、不关本层：映射照给，只是这一次不读也不写——本层
+    是否存在只看 ``PYQCD_EINSUM_EQUIVALENCE``（连 ``contract(..., cache=False)``
+    也仍在用映射，别把两者当成同一个开关）。
     命中/未命中/写入次数见 ``pyqcd.einsum._cache.stats()["caches"]
     ["equivalence.normalize"]``。
 
@@ -964,7 +981,7 @@ def normalize_equation(equation: str,
     cached = _NORMALIZE_CACHE.get(equation, _CACHE_MISS, use=use)
     if cached is not _CACHE_MISS:
         return cached
-    result = _normalize(equation, probe)
+    result = _normalize(equation, probe, use=use)
     _NORMALIZE_CACHE.put(equation, result, use=use)
     return result
 

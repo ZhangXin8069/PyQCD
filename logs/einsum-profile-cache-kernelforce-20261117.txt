@@ -1,0 +1,433 @@
+================================================================================
+qcd-einsum 0.4.4→0.4.5 与 profile-cache / kernel-force 收窄：可复用经验
+logs/einsum-profile-cache-kernelforce-20261117.txt
+生成时间: 2026-11-17 13:24:45 +0800
+核实对象: commit 900e734d (0.4.4)、commit 3138ecd0 (0.4.5)、当前未提交工作树
+范围    : 只读核实 + 官方单方程入口复跑 + PyPI JSON 查询；未跑全套测试，未做 git
+          操作，未改 pyqcd/**、docs/**、skills/**、refer/**、其它 logs/**；
+          本任务只新增本文件并编辑 logs/AGENTS.md
+计时口径: 本机 CPU、numpy 后端、python -m pyqcd.einsum.test --rounds 2 --warmup 1
+          （除另注外）。所有数字都是本机单次会话测量，不是生产尺寸性能结论。
+================================================================================
+
+## 关键日志
+
+### 1. 先复扫再采信子代理：前缀不是全量
+- 结论: 子代理报告「全语料 256/2589（9.9%）」是 `seq 1..2589` 前缀口径；
+  v2 日志记录的独立复扫是全语料 772/8638（8.9%）。数字本身在前缀内没算错，错在
+  把它标成「全语料」。
+- 证据: `logs/einsum-equivalence-gain-v2-20261116.txt:8-10` 的【勘误】与
+  `:536-542` 的 E1 条；本次复核基数
+  `python -c "from pyqcd.einsum import _wick_tasklist as w; print(len(w.TASKS))"`
+  → `8638`（772 的映射复扫结果以 v2 日志 E1 为准，本次未重跑）。
+- 核实状态: verified（v2 日志的复扫记录 + 本次 8638 基数复核）。
+- 可复用判据: 任何「全量 / 全语料」数字必须同时写明数据集与基数；复扫要走
+  `_wick_tasklist.TASKS` 这类真实全集，不用序号前缀或抽样脚本的输出冒充全量。
+
+### 2. 加缓存会打破「内层命中」型契约
+- 结论: 旧的 `test_full_corpus_match_cache` 断言第二次全语料扫描时内层
+  `lru_cache` 的 hits 再增加 `len(equations)`（即 +8638）。外层 `_MATCH_CACHE`
+  上线后，第二次扫描在 `_specialize.match` 就被外层拦下，根本到不了
+  `_match_of_normalized`，旧断言必然失败。正确做法是把契约改成两层口径，而不是
+  删断言：内层 hits/currsize 不再增长，外层 hits 增加 `len(equations)`。
+- 证据: 父提交里的旧断言
+  `git show 900e734d^:pyqcd/testing/einsum/verify_python_hotpath.py | nl -ba`
+  → 第 28 行 `assert second.hits - first.hits == len(equations)`；
+  当前文件 `pyqcd/testing/einsum/verify_python_hotpath.py:44-47` 改为
+  `assert second.hits == first.hits`、`assert second.currsize == first.currsize`、
+  `assert outer_second["hits"] - outer_first["hits"] == len(equations)`；
+  `900e734d` 的提交消息也写明「verify_python_hotpath 的全语料缓存契约改为两层口径」。
+- 核实状态: verified（核实时该文件不在修改列表，断言文本可直接读）。
+- 可复用判据: 在新缓存层套在旧缓存外时，把契约改写成「内层不增长 + 外层 +N」，
+  并保留「谁命中、命中多少」的可观测性；不要用删除断言来消除红灯。
+
+### 3. 去重键不能按文案
+- 结论: `_warn_native_fallback_once` 早期按整条 message 去重时，同一 `status 7`
+  会被编译层（"compile failed with status 7"）与执行层（"execution failed with
+  status 7"）各报一次；后来改成按根因签名去重：优先用显式 `reason`，否则把
+  `status N` 归一成 `native-status-N`，再否则取 `NativeUnavailable: ...` 的稳定
+  文本，最后才退回整条文案。这样同一根因只报一次，不同根因各报一次。
+- 证据: `pyqcd/einsum/_api.py:1411-1428`（`_fallback_signature`，其中
+  `:1423` 为 `status` 正则、`:1425-1427` 为 `NativeUnavailable` 正则）、
+  `:53`（`_NATIVE_WARNED_REASONS`）、`:1439-1442`（查集/入集后再 warn）；
+  commit `3138ecd0` 的提交消息明确记录「native_install_diagnostics 是"按文案去重"
+  导致同一 status 7 报两次——已改为按 status 归一，复跑转绿」；
+  契约 `pyqcd/testing/_einsum_fallback_visibility_contract.py:31-46` 钉住
+  「同 reason 去重、不同 reason 各一次」。
+- 核实状态: verified（根因签名与契约可读；原始重复告警已修复，不能在本机重现，
+  事件本身以 0.4.5 提交消息为准）。
+- 可复用判据: 告警/日志去重先归一到稳定根因（状态码 → 异常类型/稳定文本 →
+  整条消息），并同时保留「不同根因不得被吞」的契约。
+
+### 4. PyPI：本项目 0.4.1–0.4.5 全是 sdist only
+- 结论: PyPI JSON 显示 0.4.1、0.4.2、0.4.3、0.4.4、0.4.5 的 `packagetype`
+  都只有 `sdist`（0.4.0 及更早的 0.3.x 同样只有 sdist）。本项目发版政策也是
+  只传 `dist/pyqcd-<ver>.tar.gz`：本机 `.so` 依赖构建主机的
+  `libstdc++.so.6` / `libgomp.so.1`，直接打 `linux_x86_64` 轮子到别的机器会缺
+  符号；可移植的 manylinux 轮子需要 `auditwheel repair` + `patchelf`，本机没有；
+  发 `py3-none-any` 轮子更糟（pip 会优先选它，所有用户退化成纯 Python）。
+- 证据:
+  `timeout 30 curl -s https://pypi.org/pypi/pyqcd/json | python -c "..."`（2026-11-17）
+  → `0.4.1 ['sdist']` … `0.4.5 ['sdist']`；
+  `skills/pypi-release/SKILL.md:29`（上传物只有 sdist）、`:106-115`（只上传
+  sdist，不传 wheel）、`:455-460`（为什么本项目不发 wheel）；
+  `docs/pypi_release_audit_20261108.md:14`（A2：只发布 sdist，wheel 标签对
+  `.so` 不成立）。
+- 核实状态: verified（sdist-only 事实与政策）；**unverified**：任务书里的
+  「上传裸 `linux_x86_64` wheel 会返回 HTTP 400」——仓库内没有本项目的上传抓包，
+  外部资料只证明 twine/PyPI 会以 `unsupported platform tag 'linux_x86_64'` 拒绝，
+  具体 HTTP 状态码未在本仓库复核。操作结论不受影响：本项目本来就不传 wheel。
+- 可复用判据: 发版只把 `dist/pyqcd-<ver>.tar.gz` 交给 twine，不要让 `dist/*`
+  把 wheel 带上去；判断「能不能发 wheel」先看 `.so` 的 `ldd` 依赖与是否有
+  auditwheel/patchelf，而不是只看本地能 build。
+
+### 5. 版本号与在跑的测试有竞态
+- 结论: `release_metadata` 契约会在运行时重新读 `pyproject.toml`，再与进程内
+  `pyqcd.__version__`、`pyqcd.einsum._version.__version__` 比对。若测试进程已经
+  import 了旧版本，随后三处版本号被升到新值，磁盘上的 `pyproject.toml` 已是新值、
+  进程内常量仍是旧值，于是报假失败；重跑（新进程）即过。升版本要先把三处都改完，
+  再启动/重跑测试，不能边升边跑。
+- 证据: `pyqcd/testing/_release_metadata_contract.py:32-39`
+  （`_pyproject()` 每次读盘，`pyqcd.__version__` 是 import 期常量）；
+  三处版本位点 `pyproject.toml:11`、`pyqcd/__init__.py:53`、
+  `pyqcd/einsum/_version.py:3`（当前均为 `0.4.5`）；
+  commit `3138ecd0` 的提交消息明确记录「release_metadata 是升版本与在跑测试的
+  竞态（重跑即过）」。
+- 核实状态: verified（代码机制可读；事件以 0.4.5 提交消息为准）。
+- 可复用判据: 版本三处同步 → 重启测试进程 → 再跑 `release_metadata`；不要把
+  「升版后旧进程里的版本不一致」当成打包/元数据回归。
+
+### 6. `--kernel` 是 `--kernel-force` 的无歧义前缀
+- 结论: 源码里没有 `"--kernel"` 这个字面量，但 `argparse.ArgumentParser` 默认
+  `allow_abbrev=True`，且没有第二个以 `--kernel` 开头的选项，所以
+  `--kernel generic` 会被解析成 `--kernel-force generic`。实测报告行
+  `kernel : requested=generic  ran=none  attempted=none`，证明缩写确实生效。
+- 证据: `pyqcd/einsum/test.py:2286-2291`（`ArgumentParser(...)` 未设置
+  `allow_abbrev=False`）、`:2314-2317`（唯一的 `--kernel-force` 定义）；
+  `grep -c -- '"--kernel"' pyqcd/einsum/test.py` → `0`；
+  `grep -n allow_abbrev pyqcd/einsum/test.py` → 无匹配（rc=1）；
+  命令
+  `python -m pyqcd.einsum.test --kernel generic --equation "ij,jk->ik" --shape "[4,4],[4,4]->[4,4]" --rounds 2 --warmup 1 --verbose true`
+  → `PASS …` 与 `kernel : requested=generic  ran=none  attempted=none`。
+- 核实状态: verified（实测）。
+- 可复用判据: 不要用「源码里没有旧 flag」证明用户用不了它；先检查 argparse
+  缩写与是否存在其他同前缀选项，必要时显式 `allow_abbrev=False` 或加弃用别名。
+
+### 7. 强制内核必须旁路负缓存
+- 结论: 「强制」的语义是「真试一次」，但自动分派的负缓存会把确定性拒绝记下来，
+  第二次直接以 `negative-cache hit: ... status 4` 挡住。正确做法是在每个 attempt
+  前套内核模块自己的 `bypass_negative_cache()`：模块内计数器（0 = 不旁路，可嵌套），
+  进入/退出配平，**不改 `os.environ`**（环境变量是调用方与并发线程共享的状态），
+  旁路期间既不读也不写负缓存。CUDA 侧没有自己的负缓存，直接转出 KUPL 侧同名
+  上下文管理器，避免造第二套机制。
+- 证据: `pyqcd/einsum/_kernel_kupl.py:88`（`bypass_negative_cache`，注释从
+  `:80` 起说明计数器/嵌套/不改 env）、`:112`（旁路先于环境变量判定）、
+  `:165`（旁路期间不写负缓存）；`pyqcd/einsum/_api.py:659,664`（每个 attempt
+  前 `bypass = getattr(...)` / `with bypass():`）；
+  `pyqcd/einsum/_kernel_cuda.py:43-61`（转出 KUPL 的上下文管理器）；
+  契约 `pyqcd/testing/_einsum_kernel_force_contract.py:370+`
+  （连续两次强制都不许出现 `negative-cache hit`）。
+- 核实状态: verified（实现与契约可读）。
+- 可复用判据: 「强制」类开关要把旁路放在 attempt 边界，用模块内可嵌套计数器，
+  不靠改环境变量；旁路期间既不读也不写缓存，退出后缓存计数逐项不变。
+
+### 8. `as_equivalence` 的成本是形状相关的
+- 结论: 文档示例方程 `menf,cadb,ac,em,bd,fn->`（dim=2）实测 `true` 3.281 ms /
+  `false` 0.249 ms（≈13×），复现了文档记录的 2.92 ms / 0.28 ms（≈10×）量级；
+  dim=8 为 2.880 / 0.270 ms（≈10.7×），dim=16 为 3.835 / 0.594 ms（≈6.5×）。
+  这说明成本是一笔约 2.6–2.9 ms 的近固定开销：小形状下它占主导，形状变大后被
+  计算量摊薄，所以「大批量小收缩应关闭、大方程可相对忽略」的判据成立。
+- 关键限定（与文档的因果归因不同）: 这笔开销在 `--kernel generic` 下仍然存在
+  （`--equivalence false` 时 true 2.948 ms / false 0.245 ms），因此它不是原生
+  `kupl_dedicated` 内核本身；dim=2 只有 48 个元素，也不支持「副本带宽主导」的
+  解释。具体落在映射查询、匹配查询还是递归 contract 的哪一步，本次没有逐函数
+  拆解，标 unverified。
+- 证据: `docs/einsum_user_guide_20261116.md:1596`（2.92/0.28 原文）；
+  本次命令与输出见「## 验证与证据」的 E8 组；统一条件为本机 CPU、numpy、
+  `--rounds 2 --warmup 1`、`--equivalence false`（除首条按文档默认外）。
+- 核实状态: verified（量级与「形状相关」判据）；**unverified**（把开销归因于
+  「改写与副本」的机制说明）。
+- 可复用判据: 小形状、高频重复的批处理关闭 `as_equivalence`；判断「大方程可忽略」
+  时看固定开销与计算量的比值，不要只看绝对毫秒，也不要在没有逐函数拆解时把成本
+  归因于张量副本。
+
+### 9. `_label_sizes` 反推的形状不是蒸馏生产形状
+- 结论: 根 `AGENTS.md` 的硬性禁止 #3 明确写着：不能用 `_label_sizes` 从
+  `dims("distill")` 反推的形状当蒸馏生产形状——该函数表达不出蒸馏轴
+  （`Nx/Lt` 占位、`Mom` 漏进 peram 轴），真实形状只认
+  `_bench_scene.distill_tensor_shapes()`。因此文档/报告里不能把这种反推形状写成
+  「生产形状对拍」。
+- 证据: `AGENTS.md:358-364`（硬性禁止 #1–#4，其中 #3 为 `_label_sizes`）；
+  `pyqcd/einsum/bench_specialized.py:99`（`_label_sizes` 定义）；
+  `pyqcd/einsum/_bench_scene.py:287`（`distill_tensor_shapes` 定义）；
+  反例：`pyqcd/testing/einsum/bench_cuda_topology_order_guard.py:9-11` 的
+  docstring 仍宣称「`dims("distill")` … 经 `_label_sizes` 反推。这是本库对蒸馏
+  收缩唯一认可的性能口径」，与根 `AGENTS.md` 的硬性禁止 #3 冲突（该文件本轮未改，
+  仅记录）。
+- 核实状态: verified（规则与代码位置可读；反例 docstring 可直接读）。
+- 可复用判据: 任何「生产形状」主张必须引用 `_bench_scene.distill_tensor_shapes()`；
+  用 `_label_sizes` 反推的形状只能标 smoke / unverified，不能写成生产对拍。
+
+### 10. 会话 scratchpad 会被清理
+- 结论: 当前会话 scratchpad 目录是空的（0 项）；对不存在的脚本执行
+  `bash $COMMANDCODE_SCRATCHPAD/does-not-exist.sh` 返回 127。机制上，放在那里的
+  观察者脚本/任务书在后续会话或清理后不可依赖。
+- 证据: `ls -A "$COMMANDCODE_SCRATCHPAD" | wc -l` → `0`；
+  `bash "$COMMANDCODE_SCRATCHPAD/does-not-exist.sh"` → `No such file or directory`，
+  `rc=127`。**unverified**：任务书说的「本次会话曾有脚本因此 127」属于派发上下文，
+  仓库内没有独立记录；本次只复核了「空目录 + 缺失脚本 127」这一机制。
+- 核实状态: 机制 verified；历史事件 unverified。
+- 可复用判据: 任务书要么内联，要么放 `/tmp` 并在派发前落盘；不要把 scratchpad
+  当成跨会话持久的交付位置。
+
+### 附注 A：共享工作树的快照会过期
+- 结论: 本次核实的同一小时内，`git status --short` 从 3 个修改文件（`_api.py`、
+  `_kernel_force.py`、`test.py`）变成 11 个修改 + 1 个未跟踪
+  `pyqcd/einsum/_profile_cache.py`；`_einsum_kernel_force_contract.py` 与
+  `_einsum_as_equivalence_cache_contract.py` 也已被并发更新为逻辑名
+  （`dedicated` / `topology` / `backend`）。按早期快照写日志/索引会立刻过期。
+- 证据: 约 13:19 与约 13:23 两次 `git status --short` 输出（见「## 验证与证据」A 组）；
+  `git diff pyqcd/testing/_einsum_kernel_force_contract.py` 显示旧具体标签
+  `kupl_dedicated` 已被改成 `dedicated` 并加 `backend` 互斥用例。
+- 核实状态: verified（两次快照）。
+- 可复用判据: 共享工作树里，写日志/索引前重新读一次 `git status` 与目标文件尾部，
+  并在产物里标注快照时间；不要把未提交状态当成最终交付。
+
+### 附注 B：profile-cache 的当前设计口径（未提交、未验证）
+- 结论: 新文件 `pyqcd/einsum/_profile_cache.py`（未跟踪）把「配置画像」抽成独立层：
+  只给建议、不 import 执行层、不解析方程、不碰张量、不做计时；`profile.csv`
+  读+写、`profile_compare.csv` 只写不读；主表键为
+  `(host, user_device, backend, dtype, equation, shape, device)`；稀疏写入只在
+  「新键」或「比当前最优快 >5%」时发生；目录不可写/CSV 损坏/写盘失败一律降级成
+  不缓存，只留 `summary()['last_error']`，`notice()` 只给一行；索引与待写队列共用
+  一把锁。该文件尚未提交、尚未跑契约，本轮只做静态阅读。
+- 证据: `pyqcd/einsum/_profile_cache.py:13-16`（两份表读写口径）、`:96`
+  （`PROFILE_NAME`）、`:99`（`COMPARE_NAME`）、`:159`（`_IMPROVE_RATIO=0.95`）、
+  `:248`（`load`）、`:264`（`best`）、`:284`（`record`）、`:331`
+  （`record_compare`）、`:374`（`flush`）。
+- 核实状态: unverified（未提交、未运行；只记录设计意图，不作为已验收结论）。
+- 可复用判据: 配置画像缓存必须与数值计算解耦；读写表与只写表分开；稀疏写入；
+  失败降级且只提示一行；不要为一次查询引入第二套执行路径。
+
+## 验证与证据
+
+### A. 工作树快照（证明第 2、5、6、9 条与附注 A 的阅读对象与快照边界）
+约 13:19 首次快照：
+```text
+ M pyqcd/einsum/_api.py
+ M pyqcd/einsum/_kernel_force.py
+ M pyqcd/einsum/test.py
+```
+约 13:23 复核快照（并发任务已推进）：
+```text
+ M docs/einsum_user_guide_20261116.md
+ M pyqcd/einsum/AGENTS.md
+ M pyqcd/einsum/_api.py
+ M pyqcd/einsum/_cache.py
+ M pyqcd/einsum/_equivalence.py
+ M pyqcd/einsum/_kernel_force.py
+ M pyqcd/einsum/test.py
+ M pyqcd/einsum/verify_specialized.py
+ M pyqcd/testing/_einsum_as_equivalence_cache_contract.py
+ M pyqcd/testing/_einsum_kernel_force_contract.py
+ M skills/pyqcd-einsum/SKILL.md
+?? pyqcd/einsum/_profile_cache.py
+```
+说明：本日志只对上述「已提交内容 + 可复核命令」下结论；未提交文件的状态不作为
+交付结论。
+
+### B. 语料基数与旧契约（第 1、2 条）
+```bash
+python -c "from pyqcd.einsum import _wick_tasklist as w; print('TASKS', len(w.TASKS))"
+# TASKS 8638
+
+git show 900e734d^:pyqcd/testing/einsum/verify_python_hotpath.py | nl -ba | sed -n '28p'
+# 28  assert second.hits - first.hits == len(equations)
+
+sed -n '40,48p' pyqcd/testing/einsum/verify_python_hotpath.py
+# 44  assert second.hits == first.hits
+# 45  assert second.currsize == first.currsize
+# 47  assert outer_second["hits"] - outer_first["hits"] == len(equations)
+```
+
+### C. 回落告警去重（第 3 条）
+```bash
+sed -n '1411,1443p' pyqcd/einsum/_api.py
+# _fallback_signature: reason -> status N -> NativeUnavailable:... -> 整条
+# _warn_native_fallback_once: key in _NATIVE_WARNED_REASONS 则 return
+
+git log -1 --format=%B 3138ecd0 | grep -n "status 7"
+# native_install_diagnostics 是"按文案去重"导致同一 status 7 报两次
+# ——已改为按 status 归一，复跑转绿。
+```
+
+### D. PyPI sdist-only（第 4 条）
+```bash
+timeout 30 curl -s https://pypi.org/pypi/pyqcd/json | python -c "
+import sys, json
+d = json.load(sys.stdin)
+print('latest', d['info']['version'])
+for v in ('0.4.1','0.4.2','0.4.3','0.4.4','0.4.5'):
+    print(v, sorted({f['packagetype'] for f in d['releases'][v]}))
+"
+# latest 0.4.5
+# 0.4.1 ['sdist']
+# 0.4.2 ['sdist']
+# 0.4.3 ['sdist']
+# 0.4.4 ['sdist']
+# 0.4.5 ['sdist']
+```
+说明：第 4 条的 HTTP 400 细节未在本仓库复核，已在正文标 unverified；外部资料只能
+证明 twine/PyPI 拒绝 `unsupported platform tag 'linux_x86_64'`。
+
+### E. 版本竞态（第 5 条）
+```bash
+sed -n '32,39p' pyqcd/testing/_release_metadata_contract.py
+# declared = project["project"]["version"]      # 每次读 pyproject.toml
+# assert declared == pyqcd.__version__          # import 期常量
+# assert declared == _version.__version__       # import 期常量
+
+grep -n '^version' pyproject.toml
+grep -n '__version__' pyqcd/__init__.py pyqcd/einsum/_version.py
+# pyproject.toml:11          version = "0.4.5"
+# pyqcd/__init__.py:53       __version__ = "0.4.5"
+# pyqcd/einsum/_version.py:3 __version__ = "0.4.5"
+```
+
+### F. `--kernel` 缩写（第 6 条）
+```bash
+grep -c -- '"--kernel"' pyqcd/einsum/test.py
+# 0
+grep -n allow_abbrev pyqcd/einsum/test.py
+# 无匹配，rc=1（未显式关闭 argparse 默认缩写）
+
+python -m pyqcd.einsum.test --kernel generic \
+  --equation "ij,jk->ik" --shape "[4,4],[4,4]->[4,4]" \
+  --rounds 2 --warmup 1 --verbose true
+# PASS ij,jk->ik rel=0.00e+00 ...
+# kernel : requested=generic  ran=none  attempted=none
+```
+
+### G. 负缓存旁路（第 7 条）
+```bash
+grep -n "def bypass_negative_cache" pyqcd/einsum/_kernel_kupl.py \
+  pyqcd/einsum/_kernel_cuda.py
+# _kernel_kupl.py:88
+# _kernel_cuda.py:43
+
+grep -n "bypass = getattr\|with bypass()" pyqcd/einsum/_api.py
+# 659:            bypass = getattr(module, "bypass_negative_cache", None)
+# 664:                    with bypass():
+
+grep -n "def test_kernel_force_bypasses_negative_cache" \
+  pyqcd/testing/_einsum_kernel_force_contract.py
+# 370
+```
+
+### H. `as_equivalence` 成本（第 8 条）
+统一条件：本机 CPU、numpy、`--rounds 2 --warmup 1`；方程
+`menf,cadb,ac,em,bd,fn->`，输出标量；文档示例块用默认 equivalence 报告，其余块
+均加 `--equivalence false`。
+```bash
+# 文档示例（dim=2），默认 equivalence 报告
+python -m pyqcd.einsum.test --equation "menf,cadb,ac,em,bd,fn->" \
+  --shape "[2,2,2,2],[2,2,2,2],[2,2],[2,2],[2,2],[2,2]->" \
+  --rounds 2 --warmup 1 --as-equivalence false
+# PASS ... 0.249ms
+
+python -m pyqcd.einsum.test --equation "menf,cadb,ac,em,bd,fn->" \
+  --shape "[2,2,2,2],[2,2,2,2],[2,2],[2,2],[2,2],[2,2]->" \
+  --rounds 2 --warmup 1 --as-equivalence true
+# PASS ... 3.281ms（route: 特化 · kupl_dedicated）
+
+# 隔离原生内核：强制 generic，并关掉 equivalence 报告
+python -m pyqcd.einsum.test --kernel generic --equivalence false \
+  --equation "menf,cadb,ac,em,bd,fn->" \
+  --shape "[2,2,2,2],[2,2,2,2],[2,2],[2,2],[2,2],[2,2]->" \
+  --rounds 2 --warmup 1 --as-equivalence false
+# PASS ... 0.245ms
+python -m pyqcd.einsum.test --kernel generic --equivalence false \
+  --equation "menf,cadb,ac,em,bd,fn->" \
+  --shape "[2,2,2,2],[2,2,2,2],[2,2],[2,2],[2,2],[2,2]->" \
+  --rounds 2 --warmup 1 --as-equivalence true
+# PASS ... 2.948ms
+
+# 形状放大：dim=8 / dim=16（同方程，把形状里的 2 换成 8/16，其余参数不变）
+# dim=8 : false 0.270ms / true 2.880ms
+# dim=16: false 0.594ms / true 3.835ms
+```
+结论：约 2.6–2.9 ms 的近固定开销；小形状约 10×，dim=16 已降到约 6.5×。开销在
+`--kernel generic` 下仍在，故不是原生内核本身；副本带宽无法解释 48 元素上的
+2.6 ms，具体内部归因未拆解（unverified）。
+
+### I. 生产形状口径（第 9 条）
+```bash
+sed -n '358,363p' AGENTS.md
+# 硬性禁止 #3：用 _label_sizes 从 dims("distill") 反推的形状当蒸馏生产形状 ...
+# 真实形状只认 _bench_scene.distill_tensor_shapes()
+
+grep -n "def _label_sizes" pyqcd/einsum/bench_specialized.py
+# 99
+grep -n "def distill_tensor_shapes" pyqcd/einsum/_bench_scene.py
+# 287
+
+sed -n '9,11p' pyqcd/testing/einsum/bench_cuda_topology_order_guard.py
+# 仍宣称 _label_sizes 是"本库对蒸馏收缩唯一认可的性能口径"（与根 AGENTS.md 冲突）
+```
+
+### J. scratchpad（第 10 条）
+```bash
+echo "SCRATCH=$COMMANDCODE_SCRATCHPAD"
+ls -A "$COMMANDCODE_SCRATCHPAD" | wc -l
+# 0
+bash "$COMMANDCODE_SCRATCHPAD/does-not-exist.sh"
+# bash: .../does-not-exist.sh: No such file or directory
+# rc=127
+```
+
+### K. 产物自检（本文件与索引）
+```bash
+test -f logs/einsum-profile-cache-kernelforce-20261117.txt
+stat -c %s logs/einsum-profile-cache-kernelforce-20261117.txt
+grep -c '^## 关键日志$\|^## 验证与证据$\|^## 变更与产物$\|^## 风险、限制与下一步$' \
+  logs/einsum-profile-cache-kernelforce-20261117.txt
+# 4
+grep -n '^<<<<<<<\|^=======$\|^>>>>>>>' \
+  logs/einsum-profile-cache-kernelforce-20261117.txt
+# 无匹配（无冲突标记）
+```
+索引条目里的「文件大小」以 `stat -c %s` 的实际值为准，见 `logs/AGENTS.md` 末尾。
+
+## 变更与产物
+- 新建：`logs/einsum-profile-cache-kernelforce-20261117.txt`（本文件）。
+- 编辑：`logs/AGENTS.md` 末尾追加一条
+  `## einsum-profile-cache-kernelforce - stage - 2026-11-17 …`，字段与同家族
+  既有条目一致；`文件大小` 由 `stat -c %s` 复核后填写。
+- 未改：代码（`pyqcd/**`）、`docs/**`、`skills/**`、`refer/**`、其它 `logs/**`；
+  本任务只新增本文件并编辑 `logs/AGENTS.md`。
+- 未做：全套测试、git 提交/推送/打标签、性能结论。
+
+## 风险、限制与下一步
+1. **unverified 清单**
+   - 第 4 条：上传裸 `linux_x86_64` wheel 的精确 HTTP 400 状态码——仓库内无抓包；
+     已复核的只有「0.4.1–0.4.5 全是 sdist」与「本项目政策只发 sdist」。
+   - 第 8 条：`as_equivalence` 约 2.6–2.9 ms 开销的内部归因（映射查询 / 匹配查询 /
+     递归 contract 的哪一步）——本次只做了端到端测量，没有逐函数拆解。
+   - 第 10 条：「本次会话曾有脚本在 scratchpad 导致 127」的历史事件——只有派发
+     上下文，仓库内无独立记录；机制（空目录 + 缺失脚本 rc=127）已复核。
+   - 附注 B：`_profile_cache.py` 未提交、未跑契约，只做静态阅读，不能当已验收结论。
+2. **工作树是移动目标**：核实时有并发任务在改 `_api.py`、`_kernel_force.py`、
+   `test.py`、契约与 `_profile_cache.py`。本日志只对可复核的已提交内容与命令输出
+   下结论；未提交状态可能在阅读后继续变化。
+3. **数字口径**：本次所有耗时都是本机 CPU、numpy、`--rounds 2 --warmup 1` 的
+   单次会话测量，不是生产尺寸性能结论；引用时保留方程与形状。
+4. **待办（不属于本日志任务）**：
+   - `pyqcd/testing/einsum/bench_cuda_topology_order_guard.py:9-11` 的
+     `_label_sizes`「唯一认可口径」表述与根 `AGENTS.md:358-364` 冲突，需在后续
+     代码/文档任务中修正。
+   - 等 profile-cache / kernel-force 收窄稳定后，跑目标契约
+     `_einsum_kernel_force_contract`、`_einsum_fallback_visibility_contract`、
+     `_einsum_as_equivalence_cache_contract` 与 `verify_python_hotpath`（本轮按
+     任务要求不跑全套，也没有在并发编辑中抢跑契约）。
+   - 若发版：三处版本号先同步，再重建 sdist、`twine check`、只上传
+     `dist/pyqcd-<ver>.tar.gz`，最后从 PyPI 远程 venv 复验。

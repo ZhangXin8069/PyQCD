@@ -1153,3 +1153,12 @@
 - 验证: path, size, required sections, conflict markers；勘误见文末「十」（2589/256 是 seq 1..2589 前缀口径，全语料为 772/8638=8.9%）
 - 批次状态: in-progress
 
+## einsum-profile-cache-kernelforce - stage - 2026-11-17 13:24:45 +0800
+- 主任务: qcd-einsum 0.4.4→0.4.5 与 profile-cache/kernel-force 收窄的可复用经验落盘并登记索引
+- 日志文件: logs/einsum-profile-cache-kernelforce-20261117.txt
+- 文件大小: 25628 bytes
+- 触发原因: 阶段成果
+- 关键内容: 10 条经验 + 2 条附注；复扫 8638 语料基数（772/8638=8.9%）、两层 _MATCH_CACHE 契约（内层不增长/外层 +8638）、status 7 根因去重、0.4.1–0.4.5 sdist-only（PyPI JSON）、版本竞态、--kernel 缩写、bypass_negative_cache、as_equivalence ~2.9ms 固定开销、_label_sizes 禁则、scratchpad 127；4 项 unverified 明列
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

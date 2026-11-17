@@ -22,6 +22,13 @@ profile               OMP        BLAS       tuned for
 ``kernel``, everything else uses ``generic``) and only touches the runtimes when
 the profile actually changes.
 
+The per-call decision is cached: the machine topology (``physical_cores()`` →
+``/proc/cpuinfo``) and the environment verdict (disabled / pinned) are computed
+once per process and reused. Editing ``OMP_NUM_THREADS`` / ``OPENBLAS_NUM_THREADS``
+/ ``PYQCD_EINSUM_THREADS`` at runtime is rare, so it is **not** polled: call
+``invalidate()`` (``apply(force=True)`` and ``reset()`` do it for you) to drop
+the snapshot.
+
 Priority (highest wins)
 -----------------------
 1. ``OMP_NUM_THREADS`` / ``OPENBLAS_NUM_THREADS`` (the standard variables)
@@ -46,6 +53,7 @@ from __future__ import annotations
 import ctypes
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 DISABLE_ENV = "PYQCD_EINSUM_THREADS"
 OMP_ENV = "PYQCD_EINSUM_OMP_THREADS"
@@ -63,13 +71,39 @@ _state: dict[str, object] = {"applied": False, "omp": None, "blas": None,
 _runtime_complete = False
 
 
-def _disabled() -> bool:
-    return os.environ.get(DISABLE_ENV, "").strip().lower() in {"0", "off", "no",
-                                                              "false", "none"}
+class _Env(NamedTuple):
+    """Process-lifetime snapshot of the environment-controlled decision."""
+
+    disabled: bool
+    pinned: tuple[int | None, int | None] | None
+    source: str
+    standard_omp: int | None
+    standard_blas: int | None
 
 
-def physical_cores() -> int:
-    """Physical (not hyper-thread) core count, with a portable fallback."""
+_env_snapshot: _Env | None = None
+_cores: int | None = None
+_profiles: dict[str, tuple[int, int]] | None = None
+_generation = 0                          # bumped by invalidate()
+_applied_generation = -1                 # generation _state was computed from
+
+
+def invalidate() -> None:
+    """Drop the cached environment/topology snapshot.
+
+    Call this after changing ``OMP_NUM_THREADS`` / ``OPENBLAS_NUM_THREADS`` /
+    ``PYQCD_EINSUM_THREADS`` at runtime: the snapshot is otherwise computed once
+    per process and never re-read. The next ``apply_profile()`` / ``apply()``
+    re-resolves and re-pushes the values.
+    """
+    global _env_snapshot, _cores, _profiles, _generation
+    _env_snapshot = None
+    _cores = None
+    _profiles = None
+    _generation += 1
+
+
+def _detect_cores() -> int:
     try:
         text = Path("/proc/cpuinfo").read_text()
     except OSError:
@@ -89,6 +123,14 @@ def physical_cores() -> int:
     return max(detected // 2, 1) if detected > 1 else 1
 
 
+def physical_cores() -> int:
+    """Physical (not hyper-thread) core count, with a portable fallback."""
+    global _cores
+    if _cores is None:
+        _cores = _detect_cores()
+    return _cores
+
+
 def _explicit(name: str) -> int | None:
     value = os.environ.get(name)
     if value is None or not value.strip():
@@ -103,22 +145,12 @@ def _explicit(name: str) -> int | None:
     return threads if threads > 0 else None
 
 
-def profiles() -> dict[str, tuple[int, int]]:
-    """Return ``{name: (omp, blas)}`` scaled to this machine."""
-    cores = max(physical_cores(), 1)
-    kernel_omp = min(cores, _MAX_OMP)
-    kernel_blas = min(max(cores // 2, 1), _MAX_BLAS)
-    generic_omp = min(max(cores // 2, 1), _MAX_OMP)
-    generic_blas = min(max(cores, 2), _MAX_BLAS)
-    return {"kernel": (kernel_omp, kernel_blas),
-            "generic": (generic_omp, generic_blas)}
-
-
-def _pinned() -> tuple[int | None, int | None] | None:
-    """Return the user's explicit thread request, or ``None`` when unpinned."""
+def _detect_env() -> _Env:
+    """Read the environment; the rules here are the ones ``resolve()`` documents."""
     omp = _explicit(STANDARD_OMP_ENV)
     blas = _explicit(STANDARD_BLAS_ENV)
     source = "standard environment" if (omp is not None or blas is not None) else ""
+    standard_omp, standard_blas = omp, blas
     if omp is None:
         omp = _explicit(OMP_ENV)
         if omp is not None:
@@ -127,32 +159,59 @@ def _pinned() -> tuple[int | None, int | None] | None:
         blas = _explicit(BLAS_ENV)
         if blas is not None:
             source = source or BLAS_ENV
-    if omp is None and blas is None:
-        return None
-    return omp, blas
+    pinned = None if omp is None and blas is None else (omp, blas)
+    return _Env(
+        disabled=os.environ.get(DISABLE_ENV, "").strip().lower()
+        in {"0", "off", "no", "false", "none"},
+        pinned=pinned,
+        source=source if pinned is not None else "",
+        standard_omp=standard_omp,
+        standard_blas=standard_blas,
+    )
+
+
+def _env() -> _Env:
+    """Return the cached snapshot, computing it once per process."""
+    global _env_snapshot
+    cached = _env_snapshot
+    if cached is None:
+        cached = _env_snapshot = _detect_env()
+    return cached
+
+
+def profiles() -> dict[str, tuple[int, int]]:
+    """Return ``{name: (omp, blas)}`` scaled to this machine."""
+    global _profiles
+    cached = _profiles
+    if cached is None:
+        cores = max(physical_cores(), 1)
+        kernel_omp = min(cores, _MAX_OMP)
+        kernel_blas = min(max(cores // 2, 1), _MAX_BLAS)
+        generic_omp = min(max(cores // 2, 1), _MAX_OMP)
+        generic_blas = min(max(cores, 2), _MAX_BLAS)
+        cached = _profiles = {"kernel": (kernel_omp, kernel_blas),
+                              "generic": (generic_omp, generic_blas)}
+    return dict(cached)
+
+
+def _resolve(profile: str, snapshot: _Env) -> tuple[int | None, int | None, str]:
+    """Pure resolution; no environment access."""
+    if snapshot.disabled:
+        return None, None, f"disabled by {DISABLE_ENV}"
+    table = profiles()
+    omp, blas = table.get(profile, table["kernel"])
+    if snapshot.pinned is None:
+        cores = max(physical_cores(), 1)
+        return omp, blas, f"auto {profile} ({cores} physical cores)"
+    pinned_omp, pinned_blas = snapshot.pinned
+    return (pinned_omp if pinned_omp is not None else omp,
+            pinned_blas if pinned_blas is not None else blas,
+            snapshot.source)
 
 
 def resolve(profile: str = "kernel") -> tuple[int | None, int | None, str]:
     """Return ``(omp_threads, blas_threads, source)`` for ``profile``."""
-    if _disabled():
-        return None, None, f"disabled by {DISABLE_ENV}"
-    pinned = _pinned()
-    table = profiles()
-    omp, blas = table.get(profile, table["kernel"])
-    if pinned is None:
-        cores = max(physical_cores(), 1)
-        return omp, blas, f"auto {profile} ({cores} physical cores)"
-    pinned_omp, pinned_blas = pinned
-    if (_explicit(STANDARD_OMP_ENV) is not None
-            or _explicit(STANDARD_BLAS_ENV) is not None):
-        source = "standard environment"
-    elif _explicit(OMP_ENV) is not None:
-        source = OMP_ENV
-    else:
-        source = BLAS_ENV
-    return (pinned_omp if pinned_omp is not None else omp,
-            pinned_blas if pinned_blas is not None else blas,
-            source)
+    return _resolve(profile, _detect_env())
 
 
 def _loaded_libraries() -> dict[str, str]:
@@ -241,25 +300,37 @@ def _set_runtime_threads(omp: int | None, blas: int | None,
     return applied
 
 
+def _settled(profile: str) -> bool:
+    """True when ``_state`` already reflects ``profile`` for this generation."""
+    return (_state.get("applied") is True
+            and _state.get("profile") == profile
+            and _applied_generation == _generation)
+
+
 def apply(profile: str = "kernel", force: bool = False) -> dict[str, object]:
     """Apply one profile; safe to call repeatedly (cheap when unchanged)."""
-    if _state["applied"] and not force and _state.get("profile") == profile:
+    global _applied_generation
+    if force:
+        invalidate()
+    elif _settled(profile):
         return dict(_state)
-    omp, blas, source = resolve(profile)
+    snapshot = _env()
+    omp, blas, source = _resolve(profile, snapshot)
     if omp is None and blas is None:
         _state.update({"applied": True, "profile": profile, "omp": None,
                        "blas": None, "source": source,
                        "runtime_applied": []})
+        _applied_generation = _generation
         return dict(_state)
 
-    explicit_omp = _explicit(STANDARD_OMP_ENV) is not None
-    explicit_blas = _explicit(STANDARD_BLAS_ENV) is not None
+    explicit_omp = snapshot.standard_omp is not None
+    explicit_blas = snapshot.standard_blas is not None
     _configure_cblas_library()
     applied = _set_runtime_threads(omp, blas, respect_standard=explicit_omp)
 
     # 同时导出到标准变量：GOMP 在**加载时**读 OMP_NUM_THREADS，而我们的原生库
     # 是延迟 dlopen 的，导出后它初始化时就能拿到正确值（运行时 API 只对已加载的库有效）。
-    # 记录在 _state["exported_env"]，_pinned() 会忽略这些值，档位切换不会失效。
+    # 记录在 _state["exported_env"]，_explicit() 会忽略这些值，档位切换不会失效。
     exported = dict(_state.get("exported_env") or {})
     if not explicit_omp and omp is not None:
         os.environ[STANDARD_OMP_ENV] = str(omp)
@@ -272,14 +343,16 @@ def apply(profile: str = "kernel", force: bool = False) -> dict[str, object]:
     _state.update({"applied": True, "profile": profile, "omp": omp, "blas": blas,
                    "source": source,
                    "runtime_applied": applied})
+    _applied_generation = _generation
     return dict(_state)
 
 
 def apply_profile(profile: str) -> None:
     """Switch to ``profile`` when nothing is pinned and the profile changed."""
-    if _disabled() or _pinned() is not None:
-        return
-    if _state.get("applied") and _state.get("profile") == profile:
+    if _settled(profile):
+        return                           # 最快路径：档位不变，不读 env、不读 /proc
+    snapshot = _env()
+    if snapshot.disabled or snapshot.pinned is not None:
         return
     apply(profile)
 
@@ -302,6 +375,7 @@ def describe() -> str:
 
 
 def reset() -> None:  # pragma: no cover - test helper
+    invalidate()
     _state.update({"applied": False, "omp": None, "blas": None,
                    "source": "not applied"})
 
@@ -321,7 +395,7 @@ def ensure_runtime() -> None:
     if attempts > 3:                     # 三次仍没成（例如库还没加载）就放弃
         _runtime_complete = True
         return
-    respect = _explicit(STANDARD_OMP_ENV) is not None
+    respect = _env().standard_omp is not None
     applied = _set_runtime_threads(_state["omp"], _state["blas"],
                                    respect_standard=respect)
     if applied:

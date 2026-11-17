@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import tempfile
 import unittest
 import warnings
 from typing import Any, Iterator
@@ -29,7 +30,8 @@ from unittest.mock import patch
 import numpy as np
 
 import pyqcd.einsum as pe
-from ..einsum import _api, _cache, _equivalence, _kernel_force, _specialize
+from ..einsum import (_api, _cache, _equivalence, _kernel_force, _profile_cache,
+                      _specialize, _threads)
 
 
 # 同一语料族的三种查询：只换操作数位置、只换输出轴序、两者同时发生。
@@ -49,6 +51,26 @@ REQUIRED_CACHE_FIELDS = {
     "size", "maxsize", "hits", "misses", "stores", "evictions", "hit_rate",
 }
 
+#: ``_api`` 的集合型进程状态：都是"只报一次"的去重闸门，留着就等于让下一条用例
+#: 静默通过（它以为告警已经打过了）。
+_API_SET_FIELDS = (
+    "_NATIVE_DISABLED", "_NATIVE_WARNED_REASONS", "_SPECIALIZED_KERNEL_WARNED",
+    "_KERNEL_SKIP_WARNED", "_PROFILE_NOTICED",
+)
+
+#: ``_api`` 的标量/引用型状态：``_PROFILE_READY`` 存的是**已加载的绝对目录**
+#: （``str|None``，不是布尔），``_LAST_KERNEL`` 是最近一次分派记录。
+_API_VALUE_FIELDS = ("_PROFILE_READY", "_LAST_KERNEL", "_FUSED_ENV_OWNED")
+
+#: ``_profile_cache`` 的进程状态：本模块的用例会经 ``contract()`` 走到画像层
+#: （``profile`` 缺省为开），所以画像的索引/目录/计数器都会被改写。值即模块初值。
+_CACHE_PLAIN_FIELDS = {
+    "_configured_dir": "", "_ready": False, "_dir": "", "_dir_ok": False,
+    "_last_error": None, "_notice_done": False, "_loaded": False,
+    "_loaded_rows": 0, "_skipped_rows": 0, "_truncated_fields": 0,
+    "_dropped_rows": 0, "_disk_rows": -1, "_rewrite_rows": -1,
+}
+
 LABEL_SIZES = {
     "i": 2, "j": 3, "k": 4,
     "c": 2, "a": 3, "d": 4, "b": 5,
@@ -59,7 +81,25 @@ LABEL_SIZES = {
 
 @contextlib.contextmanager
 def _isolated_state() -> Iterator[None]:
-    """恢复本模块会触碰的环境与最近内核记录，并清空统一缓存。"""
+    """快照/复原本模块会触碰的**全部**进程级状态，并清空统一缓存。
+
+    光清环境与 ``_LAST_KERNEL`` 不够——``contract()`` 缺省开着画像（``profile=None``），
+    走一次就会改 ``_api._PROFILE_READY`` / ``_PROFILE_NOTICED``、``_profile_cache`` 的
+    索引与计数器，以及 ``_threads`` 的线程档位。这些都没人复原时，单跑永远通过、
+    全套偶发失败：前一个模块把 ``_PROFILE_READY`` 钉在它自己的目录上（那是**绝对路径
+    字符串**，不是布尔），本模块的第一次 ``contract()`` 便以为"这个目录读过了"，
+    直接拿别人的索引，于是预热调用走了缓存里的 ``kernel=backend`` 建议、
+    ``specialize.match`` 一直是 0，``test_contract_cache_false…`` 的逐字段比对就崩了。
+
+    因此这里**进入前快照、退出后恢复**（不是清空了事）：任何字段被用例改坏，退出时
+    都回到进入前的值，下一条用例（以及下一个模块）看到的是干净世界。
+
+    画像目录也换到临时树：``contract()`` 缺省走画像（``profile=None``），不隔离目录时
+    它会读环境变量指向的、或 CWD 下的 ``./.cache``——那里可能躺着别人写下的
+    ``kernel=backend`` 建议，命中后预热调用根本不进 ``specialize.match``，
+    ``test_contract_cache_false…`` 的逐字段比对就会看到全 0。同时这挡住了本模块
+    往仓库根的 ``.cache/profile.csv`` 追加行（那是真实发生过的副作用）。
+    """
     env_names = (
         _cache.CACHE_ENV,
         _equivalence.AS_EQUIVALENCE_ENV,
@@ -68,22 +108,66 @@ def _isolated_state() -> Iterator[None]:
         _specialize.DISABLE_ENV,
         _specialize.NOTICE_ENV,
         _specialize.FUSED_DISABLE_ENV,
+        _profile_cache.PROFILE_ENV,
+        _profile_cache.DIR_ENV,
+        _threads.STANDARD_OMP_ENV,
+        _threads.STANDARD_BLAS_ENV,
     )
     saved_env = {name: os.environ.get(name) for name in env_names}
-    saved_last_kernel = _api._LAST_KERNEL
-    saved_fused_owned = _api._FUSED_ENV_OWNED
+    saved_api = {name: set(getattr(_api, name)) for name in _API_SET_FIELDS}
+    saved_api.update({name: getattr(_api, name) for name in _API_VALUE_FIELDS})
+    saved_cache = {
+        "index": {key: {config: dict(row) for config, row in slot.items()}
+                  for key, slot in _profile_cache._index.items()},
+        "pending": [dict(row) for row in _profile_cache._pending],
+        "compare": dict(_profile_cache._compare_recent),
+        "plain": {name: getattr(_profile_cache, name)
+                  for name in _CACHE_PLAIN_FIELDS},
+    }
+    saved_threads = dict(_threads._state)
     pe.cache_clear()
     try:
-        yield
+        with tempfile.TemporaryDirectory(prefix="pyqcd-as-equivalence-") as root:
+            os.environ[_profile_cache.DIR_ENV] = os.path.join(root, "profile")
+            # 画像与线程档位都是"进程只读/只设一次"的口径，先复位才能验本模块自己。
+            _reset_profile_state()
+            _threads.reset()
+            yield
     finally:
-        _api._LAST_KERNEL = saved_last_kernel
-        _api._FUSED_ENV_OWNED = saved_fused_owned
         for name, value in saved_env.items():
             if value is None:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+        for name in _API_SET_FIELDS:
+            getattr(_api, name).clear()
+            getattr(_api, name).update(saved_api[name])
+        for name in _API_VALUE_FIELDS:
+            setattr(_api, name, saved_api[name])
+        _profile_cache._index.clear()
+        _profile_cache._index.update(saved_cache["index"])
+        _profile_cache._pending[:] = saved_cache["pending"]
+        _profile_cache._compare_recent.clear()
+        _profile_cache._compare_recent.update(saved_cache["compare"])
+        for name, value in saved_cache["plain"].items():
+            setattr(_profile_cache, name, value)
+        _threads._state.clear()
+        _threads._state.update(saved_threads)
         pe.cache_clear()
+
+
+def _reset_profile_state() -> None:
+    """把画像缓存清到"没配置、没加载、没建目录"的初始态；不改环境变量。
+
+    ``_PROFILE_READY`` 必须置回 ``None``（而不是 ``False``）：它记的是"已加载的绝对
+    目录"，``False`` 既不等于任何路径、又与"没读过"的哨兵不是一个值。
+    """
+    _profile_cache._index.clear()
+    _profile_cache._pending[:] = []
+    _profile_cache._compare_recent.clear()
+    for name, initial in _CACHE_PLAIN_FIELDS.items():
+        setattr(_profile_cache, name, initial)
+    _api._PROFILE_READY = None
 
 
 def _prepare_contract_environment() -> None:
@@ -206,23 +290,29 @@ def test_equivalence_only_returns_the_answer_to_the_original_equation():
 
 
 def test_contract_cache_false_leaves_every_cache_field_unchanged():
-    """预热后以 ``cache=False`` 重跑同一方程，所有缓存字段逐项完全相等。"""
+    """预热后以 ``cache=False`` 重跑同一方程，所有缓存字段逐项完全相等。
+
+    预热必须用**非逐元素**方程：``2026-11-17`` 起逐元素/纯置换方程在
+    ``contract()`` 里提前委派给后端 ``einsum``（它们没有 BLAS 结构，也不可能有
+    专用形态），因此不会再碰 ``specialize.match`` 与规划器。用 ``ij,ij->ij``
+    预热会让"所有缓存都为 0"，下面的逐字段比对就退化成空断言。
+    """
+    warm_equation = "ij,jk->ik"
     with _isolated_state():
         _prepare_contract_environment()
-        left = _operands(CACHE_EQUATION)[0]
-        right = _operands(CACHE_EQUATION, seed=20261117)[0]
+        warm = _operands(warm_equation)
         pe.cache_clear()
 
         with _quiet():
-            pe.contract(CACHE_EQUATION, left, right, cache=True)
+            pe.contract(warm_equation, *warm, cache=True)
         before = _cache_snapshot()
-        assert before["specialize.match"]["size"] == 1, before
+        assert before["specialize.match"]["size"] >= 1, before
 
         for info in before.values():
             assert set(info) == REQUIRED_CACHE_FIELDS, info
 
         with _quiet():
-            pe.contract(CACHE_EQUATION, left, right, cache=False)
+            pe.contract(warm_equation, *warm, cache=False)
         after = _cache_snapshot()
         assert after == before, (before, after)
 
@@ -300,10 +390,10 @@ def test_contract_path_cache_switch_and_global_clear_semantics():
 
 
 def test_explicit_kernel_force_auto_overrides_cuda_environment():
-    """环境写 ``cuda_topology`` 时，显式 auto 仍走 numpy 后端自动分派。"""
+    """环境写 ``topology`` 时，显式 auto 仍走 numpy 后端自动分派。"""
     with _isolated_state():
         _prepare_contract_environment()
-        os.environ[_kernel_force.KERNEL_FORCE_ENV] = "cuda_topology"
+        os.environ[_kernel_force.KERNEL_FORCE_ENV] = "topology"
         operands = _operands(CORPUS_EQUATION)
         expected = np.einsum(CORPUS_EQUATION, *operands)
 
@@ -313,7 +403,7 @@ def test_explicit_kernel_force_auto_overrides_cuda_environment():
                     CORPUS_EQUATION, *operands, kernel_force="auto")
         except _kernel_force.KernelUnavailableError as exc:
             raise AssertionError(
-                "显式 kernel_force='auto' 不得继承 cuda_topology 环境强制") from exc
+                "显式 kernel_force='auto' 不得继承 topology 环境强制") from exc
 
         record = _api.last_kernel()
         assert record is not None, record

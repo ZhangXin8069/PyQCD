@@ -78,12 +78,19 @@ class LRUCache:
         self._data: OrderedDict[Any, Any] = OrderedDict()
         self._lock = threading.Lock()
         self._hits = self._misses = self._stores = self._evictions = 0
+        # 实例化即注册（而不是让调用方再显式挂一次）：:func:`stats` / :func:`clear`
+        # 才能对全部缓存一视同仁，"新加一个缓存却忘了挂统计"这类漏无从发生。代价是
+        # 名字即键——后建的同名实例会顶掉前者，所以名字一律带模块前缀
+        # （``specialize.match`` / ``equivalence.normalize``）。
         _REGISTRY[self.name] = self
 
     # -- 读写 ---------------------------------------------------------------
     def get(self, key: Any, default: Any = None,
             *, use: bool | None = None) -> Any:
         """取值；未命中返回 ``default``（关闭时一律返回 ``default``）。"""
+        # 开关判定必须排在碰 ``_data`` 与计数器之前：关闭就意味着**既不读也不计**。
+        # 曾经把计数放在判定之后，报告里于是出现 ``enabled=false`` 却带非零 misses 的
+        # 自相矛盾行，排查时会被引向"缓存没关干净"的错误结论。
         if not enabled(use):
             return default
         with self._lock:
@@ -96,6 +103,8 @@ class LRUCache:
 
     def put(self, key: Any, value: Any, *, use: bool | None = None) -> None:
         """写入；关闭时直接丢弃（不写、不计数）。"""
+        # 与 ``get`` 对称：不写，也不累计 stores/evictions。否则关闭期间 stores 一直
+        # 在涨而 size 恒为 0，两个字段各自看都"合理"，比 get 的假未命中更难发现。
         if not enabled(use):
             return
         with self._lock:
@@ -129,6 +138,11 @@ class LRUCache:
                 "misses": self._misses,
                 "stores": self._stores,
                 "evictions": self._evictions,
+                # 口径是 ``hits / (hits + misses)``：分母只含**查询**，``stores`` 不参与
+                # ——命中率回答的是"这次查询省下计算了吗"。负结果（值为 ``None``）照样
+                # 算命中，``_equivalence._NORMALIZE_CACHE`` 就存这类值：语料里没有等价
+                # 写法一样要跑结构分桶与构造式同构，未命中并不便宜。没有查询时给
+                # ``None``，不拿 0 冒充"全都没命中"。
                 "hit_rate": (self._hits / queries) if queries else None,
             }
 

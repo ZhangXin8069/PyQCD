@@ -59,10 +59,12 @@
   ``PYQCD_EINSUM_SPECIALIZE``；``false`` **强制通用路径**，是排查原生内核问题的
   第一手段；``true`` 强制走特化路径，不让它静默回落。三态的选择与"实际生效"的
   布尔值都会写进报告与 ``--verbose true`` 的明细。
-* **强制内核**：``--kernel-force auto|generic|<label>[,...]``。``auto``（缺省）保持原
-  分派次序，失败只 ``warning`` + 回落；``generic`` 完全跳过专用内核；具体标签
-  （``kupl_*`` / ``cuda_*``，可逗号分隔多个、按书写次序尝试）强制**真试一次**，
-  跑不成就抛 ``KernelUnavailableError`` 并以非零退出码结束——**绝不**静默回落。
+* **强制内核**：``--kernel-force auto|generic|dedicated|topology|backend``。``auto``
+  （缺省）保持原分派次序，失败只 ``warning`` + 回落；``generic`` 完全跳过专用内核；
+  ``dedicated`` / ``topology`` 只允许**当前后端的**那一个（numpy → ``kupl_*``，
+  cupy → ``cuda_*``），可逗号分隔多个、按书写次序尝试，强制**真试一次**，跑不成就抛
+  ``KernelUnavailableError`` 并以非零退出码结束——**绝不**静默回落；``backend``
+  直接调后端自己的 ``einsum``（与其它标签互斥）。
   显式 ``--kernel-force`` 压过环境变量 ``PYQCD_EINSUM_KERNEL_FORCE``。明细里的
   ``kernel :`` 行给出 ``requested`` / ``ran`` / ``attempted``。
 * **缓存**：``--cache auto|true|false``。``auto``（缺省）跟随环境变量
@@ -71,6 +73,16 @@
   统计）。显式给出 ``true``/``false`` 时，``--verbose true`` 的报告**追加**一行
   ``cache    : enabled=... hits=... misses=... hit_rate=...``；``auto`` 与省略该
   选项等价，不写这一行——既有输出逐字节不变。
+* **首次详解**：``--explain auto|true|false``。``auto``（缺省）跟随 ``--verbose``；
+  ``true`` 即使不开 ``--verbose`` 也打印；``false`` 一律不打印。本次进程**第一次**
+  且画像未命中时，在既有明细**之后追加**三段（``plan`` → ``kernel`` → ``why``，
+  用 ``→`` 串因果）；之后每次只加一行画像状态（命中 / 未命中已记录 / 关闭）。
+  默认（非 verbose、非 explain）一个字都不多打。
+* **配置画像**：``--profile auto|true|false`` 与 ``--profile-dir DIR`` 原样交给
+  ``contract(profile=..., profile_dir=...)``。``auto`` 跟随
+  ``PYQCD_EINSUM_PROFILE``；``false`` 让本次**既不读也不写**画像 CSV（连目录都不建）。
+  画像只**建议**配置：方程、dtype、形状与数值一概不改；报告里给出的 ms 一律是
+  **记录值**，不是本次实测。
 """
 from __future__ import annotations
 
@@ -95,7 +107,11 @@ __all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES",
            "DEFAULT_KERNEL", "KERNEL_LABELS", "KERNEL_FORCE_ENV",
            "kernel_labels", "kernel_requested", "kernel_force_line",
            "CACHE_MODES", "CACHE_ENV", "DEFAULT_CACHE", "parse_cache",
-           "cache_enabled", "cache_line"]
+           "cache_enabled", "cache_line",
+           "EXPLAIN_MODES", "DEFAULT_EXPLAIN", "parse_explain",
+           "resolve_explain", "explain_kernel_line",
+           "PROFILE_MODES", "DEFAULT_PROFILE", "PROFILE_ENV", "PROFILE_DIR_ENV",
+           "parse_profile"]
 
 class UsageError(SystemExit):
     """参数或环境错误。
@@ -150,6 +166,18 @@ CACHE_MODES = ("auto", "true", "false")
 #: 缓存总开关的环境变量。与 ``_cache.CACHE_ENV`` 同值；写字面量是为了 ``_cache``
 #: 缺席时 ``--help`` 仍能说清 `auto` 跟随什么。
 CACHE_ENV = "PYQCD_EINSUM_CACHE"
+#: ``--explain``：三态。``auto``（缺省）跟随 ``--verbose``；``true`` 强制详解，
+#: ``false`` 一律不打印。它只决定**输出**，不改任何执行路径。
+EXPLAIN_MODES = ("auto", "true", "false")
+DEFAULT_EXPLAIN = "auto"
+#: ``--profile``：三态，直传 ``contract(profile=...)``。``auto`` = ``None``
+#: （跟随 ``PYQCD_EINSUM_PROFILE``）；``false`` 让底层既不读也不写画像 CSV。
+PROFILE_MODES = ("auto", "true", "false")
+DEFAULT_PROFILE = "auto"
+#: 画像缓存的开关与目录环境变量（与 ``_profile_cache.PROFILE_ENV``/``DIR_ENV``
+#: 同值）。写字面量是为了该模块缺席时 ``--help`` 仍说得清 `auto` 跟随什么。
+PROFILE_ENV = "PYQCD_EINSUM_PROFILE"
+PROFILE_DIR_ENV = "PYQCD_EINSUM_PROFILE_DIR"
 #: ``--as-equivalence``：三态。``auto`` 跟随 ``PYQCD_EINSUM_AS_EQUIVALENCE``（缺省开启）。
 #: 与 ``--equivalence`` 不同，它**真的改变执行路径**：开启时命中映射就改写方程跑，
 #: 再把结果转回原输出轴序（返回数组仍是原方程的答案）。
@@ -356,29 +384,34 @@ MESSAGES: dict[str, dict[str, str]] = {
                "参照路径同时生效"),
     },
     "help.kernel": {
-        "en": ("Which specialised kernel may run. Three kinds of value: auto = keep "
-               "the original dispatch (dedicated, then topology) and, when none runs, "
+        "en": ("Which specialised kernel may run. Kinds of value: auto = keep the "
+               "original dispatch (dedicated, then topology) and, when none runs, "
                "only warn and fall back to the generic path (default); generic = skip "
-               "the specialised kernels entirely (no warning); <label> = force exactly "
-               "these ({labels}, comma separated, tried in the order written). "
+               "the specialised kernels entirely (no warning); dedicated / topology = "
+               "allow exactly that kernel of the operand backend (numpy -> kupl, "
+               "cupy -> cuda), comma separated to allow both, tried in the order "
+               "written; backend = call the backend's own einsum and skip the "
+               "specialised dispatch (cannot be combined with other labels). "
                "An explicit --kernel-force wins over the {env} environment variable. "
-               "Forcing a label makes the kernel really try once (its negative cache "
+               "Forcing a kernel makes it really try once (its negative cache "
                "is bypassed) and, when it does not run, raises KernelUnavailableError "
                "with a non-zero exit code — it never falls back to the generic path. "
                "Main path only: the --compare backend reference keeps its own dispatch "
-               "(forcing a label on the other backend cannot work). A kernel that is "
+               "(forcing a kernel on the other backend cannot work). A kernel that is "
                "not available is reported as an error, never as a warning. An unknown "
-               "label exits with code 2. Default {default}"),
-        "zh": ("允许跑哪个专用内核。三种取值：auto = 保持原分派次序（dedicated → "
+               "value exits with code 2. Default {default}"),
+        "zh": ("允许跑哪个专用内核。取值有几种：auto = 保持原分派次序（dedicated → "
                "topology），跑不成只 warning 后回落到通用路径（缺省）；generic = "
-               "完全跳过专用内核（不产生 warning）；<label> = 强制只跑这些"
-               "（{labels}，可用逗号给多个、按书写次序尝试）。"
+               "完全跳过专用内核（不产生 warning）；dedicated / topology = 只允许"
+               "当前后端的对应内核（numpy → kupl，cupy → cuda），可用逗号给两个、"
+               "按书写次序尝试；backend = 直接调后端自己的 einsum、不走专用分派"
+               "（不可与其它标签混用）。"
                "显式 --kernel-force 优先于环境变量 {env}。"
                "强制具体内核时会**真试一次**（旁路负缓存），跑不成即抛 "
                "KernelUnavailableError 并以非零退出码结束——绝不回落成通用路径。"
                "只作用于主路径：--compare backend 的参照仍走自己的分派"
-               "（在另一个后端上强制标签必然不可用）。"
-               "强制跑不成一律报错，不会降级成 warning。未知标签以退出码 2 结束。"
+               "（在另一个后端上强制内核必然不可用）。"
+               "强制跑不成一律报错，不会降级成 warning。未知取值以退出码 2 结束。"
                "缺省 {default}"),
     },
     "help.optimize": {
@@ -472,6 +505,56 @@ MESSAGES: dict[str, dict[str, str]] = {
                "misses=<n>  hit_rate=<0.00|none>'（auto 与省略该选项等价，不写这一行）。"
                "缺省 {default}"),
     },
+    "help.explain": {
+        "en": ("First-call explanation: auto / true / false.\n"
+               "auto follows --verbose (default); true prints the explanation even "
+               "without --verbose; false never prints it.\n"
+               "The first call in this process that does not hit the configuration "
+               "profile appends three sections\n"
+               "after the existing lines, chained with '->': plan (which form was hit, "
+               "or which equivalent\n"
+               "spelling exists), kernel (requested / attempted / ran) and why (the "
+               "abandon reason, one of\n"
+               "contiguity / dtype-policy / kernel-unavailable / profile-backend, or "
+               "'kept: <label>').\n"
+               "Every later call adds exactly one '[pyqcd.einsum] profile ...' line. "
+               "The ms values shown\n"
+               "are recorded values, never a measurement of this run. "
+               "Default {default}"),
+        "zh": ("首次详解：auto / true / false。\n"
+               "auto 跟随 --verbose（缺省）；true 即使不开 --verbose 也打印；"
+               "false 一律不打印。\n"
+               "本次进程第一次、且未命中配置画像时，在既有行之后追加三段并用 → "
+               "串因果：\n"
+               "plan（命中了哪个形态，或存在哪条等价写法）、kernel（requested / "
+               "attempted / ran）、\n"
+               "why（放弃原因，四类之一：contiguity / dtype-policy / "
+               "kernel-unavailable / profile-backend，\n"
+               "或最终保留专用内核时的 kept: <具体标签>）。\n"
+               "之后每次只加一行 [pyqcd.einsum] profile …。其中出现的 ms 一律是"
+               "记录值，不是本次实测。缺省 {default}"),
+    },
+    "help.profile": {
+        "en": ("Configuration-profile cache: auto / true / false, passed straight to "
+               "contract(profile=...).\n"
+               "auto follows {env} (on by default); true forces it on for this call; "
+               "false forces it off,\n"
+               "in which case nothing is read or written and no directory is created. "
+               "The profile only\n"
+               "proposes a configuration: the equation, dtype, shapes and every number "
+               "stay untouched. Default {default}"),
+        "zh": ("配置画像缓存：auto / true / false，原样交给 contract(profile=...)。\n"
+               "auto 跟随 {env}（缺省开启）；true 本次强制开启；false 本次强制关闭，"
+               "此时既不读也不写、\n"
+               "连目录都不建。画像只**建议**配置：方程、dtype、形状与任何数值都不改。"
+               "缺省 {default}"),
+    },
+    "help.profile_dir": {
+        "en": ("Directory of the configuration profile (passed to "
+               "contract(profile_dir=...)); default {env} or ./.cache"),
+        "zh": ("配置画像目录（传给 contract(profile_dir=...)）；"
+               "缺省 {env} 或 ./.cache"),
+    },
     # --verbose true 的明细
     "detail.operands": {
         "en": "{n} operand(s), {elements:,} elements in total; output {out_shape} "
@@ -497,6 +580,11 @@ MESSAGES: dict[str, dict[str, str]] = {
     "detail.route_specialized": {
         "en": "specialized - native {symbol} (path={path})",
         "zh": "特化 · 原生 {symbol}（path={path}）",
+    },
+    "detail.route_backend": {
+        "en": ("backend einsum (--kernel-force backend: the specialised dispatch "
+               "never ran)"),
+        "zh": ("后端 einsum（--kernel-force backend：未走专用内核分派）"),
     },
     "detail.route_joiner": {
         "en": " + ",
@@ -586,6 +674,78 @@ MESSAGES: dict[str, dict[str, str]] = {
     "detail.equiv_unavailable": {
         "en": "equivalence layer unavailable ({exc})",
         "zh": "等价映射层不可用（{exc}）",
+    },
+    # 首次详解（--explain）：只在「本进程第一次且画像未命中」时出现的三段。
+    # 段间用 `→` 串因果：形态 → 尝试 → 结论。`kept`/`contiguity`/`dtype-policy`/
+    # `kernel-unavailable` 是**稳定前缀**（脚本可解析），两种语言逐字相同。
+    "explain.plan_shape": {
+        "en": "shape-specialised {name}  [{kind}] → declared kernels {kernels}",
+        "zh": "形状特化 {name}  [{kind}] → 声明内核 {kernels}",
+    },
+    "explain.plan_corpus": {
+        "en": "corpus form {name}  [{kind}] → declared kernels {kernels}",
+        "zh": "语料形态 {name}  [{kind}] → 声明内核 {kernels}",
+    },
+    "explain.plan_none": {
+        "en": "no specialised form (generic step-by-step path) → nothing to dispatch",
+        "zh": "未命中任何特化形态（走通用分步路径） → 没有可下发的原生内核",
+    },
+    "explain.plan_equiv": {
+        "en": "equivalent spelling exists ({kind}): {equation}   tensors: {adjustments}"
+              "   result: {perm}",
+        "zh": "存在等价写法（{kind}）：{equation}   张量：{adjustments}"
+              "   结果：{perm}",
+    },
+    "explain.plan_equiv_unavailable": {
+        "en": "equivalence layer unavailable ({exc})",
+        "zh": "等价映射层不可用（{exc}）",
+    },
+    "explain.why_kept": {
+        "en": "kept: {label}",
+        "zh": "kept: {label}",
+    },
+    "explain.why_contiguity": {
+        "en": "contiguity: {reason}",
+        "zh": "contiguity: {reason}",
+    },
+    "explain.why_dtype": {
+        "en": "dtype-policy: real dtype declined",
+        "zh": "dtype-policy: real dtype declined",
+    },
+    "explain.why_unavailable": {
+        "en": "kernel-unavailable: {reasons}",
+        "zh": "kernel-unavailable: {reasons}",
+    },
+    "explain.why_profile": {
+        "en": ("profile-backend: profile suggestion (not measured in this run) — the "
+               "cache records backend faster ({backend_ms} vs {kernel_ms})"),
+        "zh": ("profile-backend: profile 建议（非本次实测）——缓存记录 backend 更快"
+               "（{backend_ms} vs {kernel_ms}）"),
+    },
+    "explain.why_none": {
+        "en": "none: no specialised kernel was attempted in this call "
+              "(requested={requested})",
+        "zh": "none：本次没有尝试专用内核（requested={requested}）",
+    },
+    # 之后每次只打一行（`[pyqcd.einsum]` 前缀与 `→` 是稳定形态，脚本可解析）
+    "explain.status_hit": {
+        "en": "[pyqcd.einsum] profile hit → backend={backend} kernel={kernel}  "
+              "(compute_ms={compute_ms})",
+        "zh": "[pyqcd.einsum] profile 命中 → backend={backend} kernel={kernel} "
+              "（compute_ms={compute_ms}）",
+    },
+    "explain.status_miss": {
+        "en": "[pyqcd.einsum] profile miss → recorded (rows={rows})",
+        "zh": "[pyqcd.einsum] profile 未命中 → 已记录（rows={rows}）",
+    },
+    "explain.status_off": {
+        "en": "[pyqcd.einsum] profile off → replanned on every call",
+        "zh": "[pyqcd.einsum] profile 关闭 → 每次重新规划",
+    },
+    "explain.status_unknown": {
+        "en": "[pyqcd.einsum] profile unknown → key not reproducible "
+              "(execution unaffected)",
+        "zh": "[pyqcd.einsum] profile 未知 → 无法复现键（不影响本次执行）",
     },
     # 结果行与警告
     "result.fail_rel": {
@@ -752,10 +912,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "--specialize 必须是 {values} 之一，得到 {value!r}",
     },
     "error.kernel": {
-        "en": ("--kernel-force must be 'auto', 'generic', or one of {labels} "
-               "(comma separated for several), got {value!r}"),
-        "zh": ("--kernel-force 必须是 'auto'、'generic' 或 {labels} 之一"
-               "（多个用逗号分隔），得到 {value!r}"),
+        "en": ("--kernel-force must be one of {labels} (comma separated for several; "
+               "backend cannot be combined with other labels), got {value!r}"),
+        "zh": ("--kernel-force 必须是 {labels} 之一"
+               "（多个用逗号分隔；backend 不可与其它标签混用），得到 {value!r}"),
     },
     "error.as_equivalence": {
         "en": "--as-equivalence must be one of {values}, got {value!r}",
@@ -768,6 +928,14 @@ MESSAGES: dict[str, dict[str, str]] = {
     "error.cache": {
         "en": "--cache must be one of {values}, got {value!r}",
         "zh": "--cache 必须是 {values} 之一，得到 {value!r}",
+    },
+    "error.explain": {
+        "en": "--explain must be one of {values}, got {value!r}",
+        "zh": "--explain 必须是 {values} 之一，得到 {value!r}",
+    },
+    "error.profile": {
+        "en": "--profile must be one of {values}, got {value!r}",
+        "zh": "--profile 必须是 {values} 之一，得到 {value!r}",
     },
     "error.compare_optimize": {
         "en": "--compare-optimize must be one of {values}, got {value!r}",
@@ -1170,6 +1338,9 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         as_equivalence: bool | None | str = None,
         kernel_force: str | None = None,
         cache: bool | None = None,
+        explain: bool | None = None,
+        profile: bool | None = None,
+        profile_dir: str | None = None,
         expected_shape: tuple[int, ...] | None = None,
         language: str | None = None) -> dict[str, Any]:
     """跑一条方程的完整检查，返回结构化结果（供 CLI 与外部脚本消费）。
@@ -1198,6 +1369,15 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     ``PYQCD_EINSUM_CACHE``，``False`` 让底层缓存**既不读也不写**。与 ``equivalence``
     不同，它**真的改变底层行为**，所以报告里既记生效布尔值 ``"cache"``，也记
     ``_cache.stats()`` 的原始快照 ``"cache_stats"``（取不到就是 ``None``）。
+
+    ``explain`` 三态（``None`` = ``auto``）只决定**输出**：``auto`` 跟随
+    ``verbose``，``True`` 在不开 verbose 时也打详解，``False`` 一律不打。详解是
+    **追加**在既有明细之后的（既有行一字不动）：本进程第一次且画像未命中时给三段
+    ``plan`` / ``kernel`` / ``why``，之后每次只给一行画像状态。
+
+    ``profile`` / ``profile_dir`` 三态直传 ``contract(profile=..., profile_dir=...)``；
+    ``False`` 时底层既不读也不写画像 CSV、连目录都不建。画像状态在**主调用之前**
+    取快照（``_profile_snapshot``），否则读到的会是本次调用自己刚记进去的"命中"。
     """
     import pyqcd.einsum as pe
 
@@ -1217,6 +1397,10 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     cache_requested = parse_cache(cache, lang)
     cache_effective = cache_enabled(cache_requested)
     cache_explicit = cache_requested is not None
+    # ``--explain`` 只决定输出；``--profile`` 才真的改变底层行为（直传 contract）。
+    explain_on = resolve_explain(parse_explain(explain, lang), bool(verbose))
+    profile_requested = parse_profile(profile, lang)
+    profile_kwargs = _contract_profile_kwargs(profile_requested, profile_dir)
     # ``--kernel-force`` 先解析：非法标签必须在构造任何操作数之前就报成用法错误。
     # 规范化后的字符串**原样**给 ``contract(kernel_force=...)``，报告里的 ``requested=``
     # 也用同一处解析结果，二者不会各说各话。
@@ -1269,7 +1453,15 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         return pe.contract(equation, *operands, backend=backend, optimize=optimize,
                            specialize=specialize, kernel_force=kernel_value or None,
                            as_equivalence=as_equivalence_value,
-                           cache=cache_requested)
+                           cache=cache_requested, **profile_kwargs)
+
+    # 画像状态必须在**第一次 contract() 之前**取：本次调用一旦跑完，它自己刚记下
+    # 的观测就在表里，之后再看必然是"命中"——那是自证，不是缓存给的。
+    # 只在真的要打详解时取：关闭详解时**一次都不碰**画像层（不 configure、不 load、
+    # 不建目录），既有调用路径的副作用因此逐字不变。
+    profile_state = (_profile_snapshot(
+        report, profile_requested, profile_dir,
+        supported="profile" in profile_kwargs) if explain_on else {})
 
     _clear_kernel_info()
     _reset_last_kernel()
@@ -1348,6 +1540,10 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
 
     if verbose:
         _print_detail(report, lang)
+    # 详解**只追加**在既有明细之后（既有行顺序与内容一字不动，契约逐字符比对）。
+    # 首次三段 / 之后一行由 `_take_explain_first()` 决定；画像命中时只出一行。
+    if explain_on:
+        _print_explain(report, profile_state, lang, first=_take_explain_first())
     return report
 
 
@@ -1395,14 +1591,16 @@ DEFAULT_KERNEL = "auto"
 #: ``last_kernel()`` 取不到时的占位。**机器可读**，不随 ``--language`` 变——
 #: 它说的是"没观测到"，不是一句说明文字。
 KERNEL_UNKNOWN = "unknown"
-#: 可强制的内核标签（与 ``_kernel_force.KERNEL_LABELS`` 同集合）。写字面量是为了
-#: 该模块缺席时 ``--help`` 仍能列出合法集合。
+#: 可强制的内核标签（与 ``_kernel_force.KERNEL_LABELS`` 同集合：**逻辑名**，运行时按
+#: 操作数后端解析成 ``*_dedicated`` / ``*_topology``）。写字面量是为了该模块缺席时
+#: ``--help`` 仍能列出合法集合。
 KERNEL_LABELS = frozenset({
-    "cuda_dedicated",
-    "cuda_topology",
-    "kupl_dedicated",
-    "kupl_topology",
+    "dedicated",
+    "topology",
 })
+#: 不产生强制、只切换路线的两个取值（与 ``_kernel_force`` 同名）。
+GENERIC_LABEL = "generic"
+BACKEND_LABEL = "backend"
 #: 强制内核的环境变量（与 ``_kernel_force.KERNEL_FORCE_ENV`` 同名）。
 KERNEL_FORCE_ENV = "PYQCD_EINSUM_KERNEL_FORCE"
 
@@ -1417,10 +1615,16 @@ def _kernel_force_module():
 
 
 def _kernel_label_names() -> tuple[str, ...]:
-    """合法标签集合：优先用 ``_kernel_force`` 的权威定义，取不到用本模块字面量。"""
+    """合法取值全集：优先用 ``_kernel_force`` 的权威定义，取不到用本模块字面量。
+
+    含 ``auto`` / ``generic`` / ``backend`` —— 报错文案要列的是**能写什么**，不是
+    "可强制的内核标签"子集，只列 ``dedicated, topology`` 会漏掉两个合法取值。
+    """
     force = _kernel_force_module()
     live = getattr(force, "KERNEL_LABELS", None) if force is not None else None
-    return tuple(sorted(live or KERNEL_LABELS))
+    names = set(live or KERNEL_LABELS)
+    names |= {DEFAULT_KERNEL, GENERIC_LABEL, BACKEND_LABEL}
+    return tuple(sorted(names))
 
 
 class _NeverRaised(Exception):
@@ -1443,7 +1647,8 @@ def kernel_labels(value: str | None, language: str = "zh") -> tuple[str, ...]:
     """解析生效的 ``--kernel-force``：显式取值优先于 ``PYQCD_EINSUM_KERNEL_FORCE``。
 
     返回 ``_kernel_force.resolve`` 的原始元组（``()`` = 自动分派，
-    ``("generic",)`` = 只走通用路径，其余为要强制的标签）。非法标签抛
+    ``("generic",)`` = 只走通用路径，其余为要强制的**逻辑名**：``dedicated`` /
+    ``topology`` / ``backend``）。非法标签抛
     ``UsageError``（退出码 2）并列出合法集合——静默忽略拼写错误会让用户以为
     强制生效了，而他其实还在跑 auto。
     """
@@ -1788,6 +1993,423 @@ def cache_line(report: dict[str, Any]) -> str:
         "none" if rate is None else f"{rate:.2f}"))
 
 
+# ── 首次详解与画像状态（--explain / --profile） ──────────────────────────────
+#: 「首次详解是否已经打过」：进程级。首次 = 本进程第一次进入详解**且**画像未命中。
+_EXPLAIN_SHOWN = False
+
+
+def parse_explain(value: bool | None | str, language: str = "zh") -> bool | None:
+    """把 ``auto|true|false``（或 ``None``/``bool``）规范成 ``bool | None``。
+
+    与 :func:`parse_cache` 同口径：``None`` 与 ``auto`` 等价（跟随 ``--verbose``，
+    见 :func:`resolve_explain`），**不做**环境变量读取。非法取值抛 ``UsageError``
+    （退出码 2）——静默忽略拼写错误会让用户以为详解生效了。
+    """
+    if value is None or value is False or value is True:
+        return value
+    text = str(value).strip().lower()
+    if text == "auto":
+        return None
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off"):
+        return False
+    raise UsageError(translate("error.explain", language,
+                               values=EXPLAIN_MODES, value=value))
+
+
+def resolve_explain(requested: bool | None = None,
+                    verbose: bool = False) -> bool:
+    """本次是否打印详解：``None``（``auto``）跟随 ``--verbose``，显式值压过它。"""
+    return bool(verbose) if requested is None else bool(requested)
+
+
+def parse_profile(value: bool | None | str, language: str = "zh") -> bool | None:
+    """把 ``auto|true|false``（或 ``None``/``bool``）规范成 ``bool | None``。
+
+    ``None`` 表示"用户没给"，交给 :mod:`pyqcd.einsum._profile_cache` 跟随
+    ``PYQCD_EINSUM_PROFILE``；``False`` 让底层**既不读也不写**画像 CSV、连目录都
+    不建。非法取值抛 ``UsageError``（退出码 2）。
+    """
+    if value is None or value is False or value is True:
+        return value
+    text = str(value).strip().lower()
+    if text == "auto":
+        return None
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off"):
+        return False
+    raise UsageError(translate("error.profile", language,
+                               values=PROFILE_MODES, value=value))
+
+
+def _contract_profile_kwargs(profile: bool | None,
+                             profile_dir: str | None) -> dict[str, Any]:
+    """只在底层 ``contract()`` 真的接这两个参数时才传（旧版库上退化，不伪造）。
+
+    本入口与 ``_api`` 分属不同改动批次：``profile=``/``profile_dir=`` 是后加的
+    关键字参数。硬传会在旧版库上抛 ``TypeError``；这里按实际签名过滤，缺席就当
+    "没有画像层"（详解里的画像状态随之降级成 ``unknown``，绝不假装命中/未命中）。
+    """
+    import inspect
+
+    import pyqcd.einsum as pe
+
+    try:
+        names = inspect.signature(pe.contract).parameters
+    except (TypeError, ValueError):             # pragma: no cover - 装饰器/扩展
+        return {}
+    kwargs: dict[str, Any] = {}
+    if "profile" in names:
+        kwargs["profile"] = profile
+    if "profile_dir" in names and profile_dir is not None:
+        kwargs["profile_dir"] = profile_dir
+    return kwargs
+
+
+def _profile_module():
+    """取 ``_profile_cache`` 模块；取不到返回 ``None``（退回"未知"，绝不编）。"""
+    try:
+        from pyqcd.einsum import _profile_cache as cache
+    except ImportError:                         # pragma: no cover - 旧版库
+        return None
+    return cache
+
+
+def _profile_summary() -> dict[str, Any] | None:
+    """读 ``_profile_cache.summary()`` 的原始快照；模块/函数/形态不符就给 ``None``。"""
+    cache = _profile_module()
+    probe = getattr(cache, "summary", None) if cache is not None else None
+    if probe is None:
+        return None
+    try:
+        snapshot = probe()
+    except Exception:                           # noqa: BLE001 - 报告层不许影响主流程
+        return None
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def _profile_key(report: dict[str, Any], cache) -> dict[str, Any] | None:
+    """复现 ``_api`` 构造的画像键；复现不了（GPU/原生后端）返回 ``None``。
+
+    ``_api`` 用**操作数对象**的 ``device`` 建键（cupy 只有设备编号、torch 是
+    ``cuda:0``），而 CLI 在收缩之后已经拿不到那个对象。所以这里只复现**确定的
+    CPU 口径**：``device=cpu`` 且后端是 numpy。其余一律交回 ``unknown``——宁可说
+    不知道，也不能凭猜测报"命中/未命中"。
+    """
+    device = str(report.get("device") or "")
+    backend = str(report.get("backend") or DEFAULT_BACKEND).strip().lower()
+    if backend in ("", "auto"):
+        backend = "numpy" if device == "cpu" else ""
+    if device != "cpu" or backend not in ("numpy", "cpu"):
+        return None
+    formatter = getattr(cache, "format_shape", None)
+    shapes = [tuple(int(item) for item in shape)
+              for shape in (report.get("shapes") or [])]
+    return {
+        "user_device": "cpu",
+        "backend": backend,
+        "dtype": str(report.get("dtype") or ""),
+        "equation": "".join(str(report.get("equation") or "").split()),
+        "shape": formatter(shapes) if callable(formatter) else "",
+        "device": "cpu",
+    }
+
+
+def _profile_snapshot(report: dict[str, Any], requested: bool | None,
+                      profile_dir: str | None,
+                      supported: bool = True) -> dict[str, Any]:
+    """本次调用**开工前**的画像状态：``off`` / ``hit`` / ``miss`` / ``unknown``。
+
+    必须在 ``contract()`` **之前**取。底层在第一次调用里没命中就把观测记进内存，
+    之后再查必然是"命中"——那是本次调用自己刚写进去的，不是缓存给的。CLI 的
+    "命中/未命中"说的是"开工时这条键在不在表里"，与调用方看到的行为一致。
+
+    ``profile=False``（或环境变量关闭）在第一个判断就返回，**不 configure、不
+    load、不建目录**——与 ``_api._profile_begin`` 的零副作用口径一致。
+    ``supported=False``（底层 ``contract()`` 没有 ``profile=``）时同样返回
+    ``unknown``：参数都递不进去，就不能声称自己知道画像状态。
+    """
+    state: dict[str, Any] = {"status": "unknown", "row": None, "rows": None,
+                             "last_error": None}
+    if not supported:
+        return state
+    cache = _profile_module()
+    if cache is None:
+        return state                            # 旧版库：没有画像层，如实说不知道
+    try:
+        if not cache.enabled(requested):
+            state["status"] = "off"
+            return state
+    except Exception as exc:                    # noqa: BLE001 - 报告层不许影响主流程
+        state["last_error"] = f"{type(exc).__name__}: {exc}"
+        return state
+    key = _profile_key(report, cache)
+    if key is None:
+        return state                            # GPU/原生后端：键不可复现
+    try:
+        if profile_dir:
+            cache.configure(profile_dir)
+        row = cache.best(key)
+        summary = cache.summary()
+    except Exception as exc:                    # noqa: BLE001
+        state["last_error"] = f"{type(exc).__name__}: {exc}"
+        return state
+    if isinstance(summary, dict):
+        state["rows"] = summary.get("rows")
+        state["last_error"] = summary.get("last_error") or state["last_error"]
+        if not summary.get("enabled", True):
+            state["status"] = "off"
+            return state
+    if row is None:
+        state["status"] = "miss"
+    else:
+        state["status"] = "hit"
+        state["row"] = dict(row)
+    return state
+
+
+def _profile_rows() -> list[dict[str, str]]:
+    """读画像 CSV 的原始行（**只读**，绝不写）。取不到就给空表。
+
+    只用于 ``why`` 的第 ④ 类：把"缓存记录 backend 更快"写成**建议**。字段名来自
+    ``_profile_cache.PROFILE_COLUMNS`` 那一套（``kernel``/``compute_ms``/...），
+    这里按列名取值，不依赖列序。
+    """
+    import csv
+
+    summary = _profile_summary()
+    if not summary or not summary.get("enabled"):
+        return []
+    path = summary.get("file")
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8", newline="") as handle:
+            return [dict(row) for row in csv.DictReader(handle) if row]
+    except OSError:
+        return []
+
+
+def _ms_of(row: dict[str, Any]) -> float:
+    """``compute_ms`` 列的数值（缺失/坏值按"无穷慢"处理，选优时永远排最后）。"""
+    try:
+        value = float(row.get("compute_ms") or "")
+    except (TypeError, ValueError):
+        return float("inf")
+    return value if value == value else float("inf")
+
+
+def _profile_backend_advice(report: dict[str, Any]) -> tuple[str, str | None] | None:
+    """画像里**同方程**的历史记录：backend 是否比专用内核更快？是就给两个记录值。
+
+    只读 CSV，不碰执行路径。数字是**记录值**，不是本次实测——报告里必须这么写
+    （``profile 建议（非本次实测）``）。没有 backend 记录、或 backend 并不更快时返回
+    ``None``：不为了"有话说"编一条结论。
+    """
+    equation = "".join(str(report.get("equation") or "").split())
+    rows = [row for row in _profile_rows()
+            if "".join(str(row.get("equation") or "").split()) == equation]
+    backend_rows = [row for row in rows
+                    if str(row.get("kernel") or "").strip() == BACKEND_LABEL]
+    if not backend_rows:
+        return None
+    kernel_rows = [row for row in rows
+                   if str(row.get("kernel") or "").strip()
+                   not in ("", BACKEND_LABEL, GENERIC_LABEL)]
+    best_backend = min(backend_rows, key=_ms_of)
+    if not kernel_rows:
+        return str(best_backend.get("compute_ms") or ""), None
+    best_kernel = min(kernel_rows, key=_ms_of)
+    if _ms_of(best_backend) >= _ms_of(best_kernel):
+        return None
+    return (str(best_backend.get("compute_ms") or ""),
+            str(best_kernel.get("compute_ms") or ""))
+
+
+def _classify_reasons(reasons: dict[str, Any] | None) -> tuple[str, str] | None:
+    """把逐标签失败原因归到 ``why`` 的四类之一（互斥，只出命中的那类）。
+
+    ``contiguity`` → ``dtype-policy`` → ``kernel-unavailable``。**兜底类必须最后判**：
+    先判它会让前两类细因永远出不来（它们本身就是"内核不可用"的一种），四类也就
+    退化成一类。判定用的是内核自己写的失败原文（``LAST_FAILURE['reason']`` /
+    异常文本），不做二次解释。
+    """
+    items = [(str(label), str(text)) for label, text in (reasons or {}).items()
+             if str(text)]
+    for label, text in items:
+        if "contiguous" in text.lower():
+            return "contiguity", f"{label}: {text}"
+    for label, text in items:
+        lowered = text.lower()
+        if ("real dtype" in lowered and "declin" in lowered) \
+                or "dtype-policy" in lowered:
+            return "dtype-policy", f"{label}: {text}"
+    if items:
+        return "kernel-unavailable", "; ".join(f"{label}: {text}"
+                                               for label, text in items)
+    return None
+
+
+def _plan_of(report: dict[str, Any], language: str = "zh") -> str:
+    """``plan`` 段：命中了哪个形态（或哪条等价写法），以及它声明了哪些内核。
+
+    ``_shape_paths`` 先查（形状特化比语料更具体），再查语料索引
+    （``_specialize.match``，与 ``route`` 行同源）。都未命中时才看等价写法——
+    这一段的字段与 ``equiv`` 段同源（``report['equivalence']``），不做二次查询。
+    """
+    equation = str(report.get("equation") or "")
+    entry: dict[str, Any] | None = None
+    source = ""
+    try:
+        from pyqcd.einsum import _shape_paths
+        entry = _shape_paths.entry(equation)
+        source = "shape"
+    except Exception:                           # noqa: BLE001 - 报告层不许影响主流程
+        entry, source = None, ""
+    if entry is None:
+        try:
+            from pyqcd.einsum import _specialize
+            entry = _specialize.match(equation, use=report.get("cache"))
+            source = "corpus"
+        except Exception:                       # noqa: BLE001
+            entry = None
+    if isinstance(entry, dict):
+        kernels = ", ".join(str(item) for item in (entry.get("kernels") or ())) or "-"
+        return translate("explain.plan_shape" if source == "shape"
+                         else "explain.plan_corpus", language,
+                         name=entry.get("name", "-"),
+                         kind=entry.get("kind", "-"), kernels=kernels)
+    line = translate("explain.plan_none", language)
+    equivalent = report.get("equivalence")
+    if isinstance(equivalent, dict):
+        if equivalent.get("unavailable"):
+            line += " → " + translate("explain.plan_equiv_unavailable", language,
+                                      exc=equivalent["unavailable"])
+        elif equivalent.get("rewritten"):
+            line += " → " + translate(
+                "explain.plan_equiv", language,
+                kind=equivalent.get("kind", "-"),
+                equation=equivalent.get("equation", "-"),
+                adjustments=_format_operand_adjustments(equivalent),
+                perm=_format_output_adjustment(equivalent))
+    return line
+
+
+def _explain_kernel_fields(report: dict[str, Any]) -> dict[str, Any]:
+    """详解用的三段：优先用 ``run()`` 整理好的 ``report['kernel_force']``。
+
+    早退路径没有那个字段，此时退到 ``last_kernel()``；再取不到就写 ``unknown``——
+    绝不从 ``kernel_info`` 反推一个"看起来合理"的 ran。
+    """
+    fields = report.get("kernel_force")
+    if isinstance(fields, dict):
+        return fields
+    requested = report.get("kernel_force")
+    result: dict[str, Any] = {
+        "requested": requested if isinstance(requested, str) else DEFAULT_KERNEL,
+        "ran": None, "attempted": None}
+    record = _last_kernel()
+    if isinstance(record, dict):
+        ran = record.get("ran")
+        result["ran"] = str(ran) if ran else "none"
+        attempted = [str(item) for item in (record.get("attempted") or ())
+                     if str(item)]
+        result["attempted"] = ",".join(attempted) or "none"
+    return result
+
+
+def explain_kernel_line(fields: dict[str, Any]) -> str:
+    """``kernel : requested=... → attempted=... → ran=...``（选路的因果链）。
+
+    与 :func:`kernel_force_line` 同源（同一份 ``last_kernel()`` 整理结果），但用
+    ``→`` 表达"要求了什么 → 真试了哪些 → 最后跑成哪个"。字段名与 ``none``/
+    ``unknown`` 是稳定取值，不进 :data:`MESSAGES`——跟着 ``--language`` 翻译会让
+    脚本解析不到。
+    """
+    return ("kernel : requested={}  → attempted={}  → ran={}".format(
+        fields.get("requested") or DEFAULT_KERNEL,
+        fields.get("attempted") or KERNEL_UNKNOWN,
+        fields.get("ran") or KERNEL_UNKNOWN))
+
+
+def _why_line(report: dict[str, Any], state: dict[str, Any],
+              language: str = "zh") -> str:
+    """``why`` 段：本次为什么没走（或最终保留了）专用内核。
+
+    优先级：**最终跑成了专用内核**（``kept: <具体标签>``）> 四类放弃原因
+    （``contiguity`` / ``dtype-policy`` / ``kernel-unavailable`` / ``profile-backend``）
+    > ``none``（本次根本没尝试）。原因只读 ``last_kernel()['reasons']``，
+    不重新跑、不重新解释。
+    """
+    record = _last_kernel() or {}
+    ran = record.get("ran")
+    if ran:
+        return translate("explain.why_kept", language, label=str(ran))
+    classified = _classify_reasons(record.get("reasons"))
+    if classified is not None:
+        kind, detail = classified
+        if kind == "contiguity":
+            return translate("explain.why_contiguity", language, reason=detail)
+        if kind == "dtype-policy":
+            return translate("explain.why_dtype", language)
+        return translate("explain.why_unavailable", language, reasons=detail)
+    advice = (_profile_backend_advice(report)
+              if state.get("status") in ("hit", "miss") else None)
+    if advice is not None:
+        return translate("explain.why_profile", language,
+                         backend_ms=advice[0] or KERNEL_UNKNOWN,
+                         kernel_ms=advice[1] or KERNEL_UNKNOWN)
+    requested = report.get("kernel_force")
+    return translate("explain.why_none", language,
+                     requested=requested if isinstance(requested, str)
+                     else DEFAULT_KERNEL)
+
+
+def _profile_status_line(state: dict[str, Any], language: str = "zh") -> str:
+    """之后每次那**一行**：命中 / 未命中已记录 / 关闭 / 未知。"""
+    status = state.get("status")
+    if status == "hit":
+        row = state.get("row") or {}
+        return translate("explain.status_hit", language,
+                         backend=row.get("backend") or KERNEL_UNKNOWN,
+                         kernel=row.get("kernel") or KERNEL_UNKNOWN,
+                         compute_ms=row.get("compute_ms") or KERNEL_UNKNOWN)
+    if status == "miss":
+        rows = state.get("rows")
+        return translate("explain.status_miss", language,
+                         rows=KERNEL_UNKNOWN if rows is None else rows)
+    if status == "off":
+        return translate("explain.status_off", language)
+    return translate("explain.status_unknown", language)
+
+
+def _take_explain_first() -> bool:
+    """本进程第一次详解返回 ``True``（并置位），之后一律 ``False``。"""
+    global _EXPLAIN_SHOWN
+    if _EXPLAIN_SHOWN:
+        return False
+    _EXPLAIN_SHOWN = True
+    return True
+
+
+def _print_explain(report: dict[str, Any], state: dict[str, Any],
+                   language: str = "zh", first: bool = True) -> None:
+    """``--explain`` 的输出：首次三段（``plan`` → ``kernel`` → ``why``），之后一行。
+
+    全部写 stderr（与既有明细同流），**只追加**、不改既有行：调用点在
+    ``_print_detail`` 之后。画像命中时**不**打三段——这是"之后只打一行"的口径，
+    命中本身已经说明了配置来自缓存。
+    """
+    out = sys.stderr
+    if first and state.get("status") != "hit":
+        print("plan   : " + _plan_of(report, language), file=out)
+        print(explain_kernel_line(_explain_kernel_fields(report)), file=out)
+        print("why    : " + _why_line(report, state, language), file=out)
+    print(_profile_status_line(state, language), file=out)
+
+
 # ── 参照的优化器（--compare-optimize） ─────────────────────────────────────
 def resolve_compare_optimize(compare: str, optimize: Any,
                              compare_optimize: str | None,
@@ -2128,7 +2750,8 @@ def _print_detail(report: dict[str, Any], language: str = "zh") -> None:
         # 把"实际走的入口"单独拎成一行：``kernel`` 那个嵌套 dict 要读两层才看得懂，
         # 而形态提示（``topology:xxxx``）说的是**形态**、不承诺本次走哪条入口。
         # 这一行才是"到底跑了什么"的权威答案（2026-11-15 用户要求）。
-        route = _route_of(report.get("kernel_info"), language)
+        route = _route_of(report.get("kernel_info"), language,
+                          report.get("kernel_force"))
         if route:
             print(f"route    : {route}", file=out)
     # 强制内核的三段当然也要在：``kernel`` 行说的是原生入口留下的信息，
@@ -2174,7 +2797,8 @@ def _print_equivalence(equivalent: dict[str, Any], language: str = "zh") -> None
     print(indent + translate("detail.equiv_note", language), file=out)
 
 
-def _route_of(kernel_info: Any, language: str = "zh") -> str:
+def _route_of(kernel_info: Any, language: str = "zh",
+              force_fields: Any = None) -> str:
     """把 ``kernel_info`` 翻译成一句人话：**通用内核还是特化内核**，以及哪个原生入口。
 
     用户要的是"到底跑了什么"，而 ``kernel`` 那个嵌套 dict 要读两层才看得懂，
@@ -2193,7 +2817,15 @@ def _route_of(kernel_info: Any, language: str = "zh") -> str:
     =========================  ========================  ==========================
 
     返回形如 ``特化 · 原生 qcd_kupl_dedicated_apply`` 或 ``通用（无原生命中）``。
+
+    ``force_fields`` 是 ``report['kernel_force']`` 整理后的三段（可选）。它只在
+    ``--kernel-force backend`` 那一支改变结论：那一路**直接**调后端 ``einsum``、
+    一次原生入口都不碰，``kernel_info`` 自然为空——只按 ``kernel_info`` 判会把它
+    说成"通用（无原生命中）"，而真实路线是**后端 einsum**。这不是新增一行，是把
+    既有 ``route`` 行的结论在"确实走了 backend"时说准。
     """
+    if isinstance(force_fields, dict) and force_fields.get("ran") == BACKEND_LABEL:
+        return translate("detail.route_backend", language)
     if not isinstance(kernel_info, dict) or not kernel_info:
         return translate("detail.route_generic", language)
     native_symbols = {
@@ -2324,6 +2956,17 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
                         help=t("help.warmup", default=DEFAULT_WARMUP))
     parser.add_argument("--seed", type=int, default=0, help=t("help.seed"))
     parser.add_argument("--verbose", default="false", help=t("help.verbose"))
+    # ``auto`` 是 ``None``（跟随 --verbose），显式 true/false 压过它；缺省值写进
+    # help，用户不必猜"为什么不开 verbose 也打印"。
+    parser.add_argument("--explain", default=DEFAULT_EXPLAIN, choices=EXPLAIN_MODES,
+                        help=t("help.explain", default=DEFAULT_EXPLAIN))
+    # ``default='auto'`` = 没给：底层跟随 PYQCD_EINSUM_PROFILE。写成 ``None`` 会与
+    # "用户显式关掉"混成一个值，所以这里用三态名，和 --specialize/--cache 同口径。
+    parser.add_argument("--profile", default=DEFAULT_PROFILE, choices=PROFILE_MODES,
+                        help=t("help.profile", env=PROFILE_ENV,
+                               default=DEFAULT_PROFILE))
+    parser.add_argument("--profile-dir", default=None,
+                        help=t("help.profile_dir", env=PROFILE_DIR_ENV))
     parser.add_argument("--json", default=None, help=t("help.json"))
     parser.add_argument("--language", default=DEFAULT_LANGUAGE,
                         choices=LANGUAGE_MODES,
@@ -2391,6 +3034,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             as_equivalence=args.as_equivalence,
             kernel_force=args.kernel_force,
             cache=parse_cache(args.cache, language),
+            explain=parse_explain(args.explain, language),
+            profile=parse_profile(args.profile, language),
+            profile_dir=args.profile_dir,
             language=language,
         )
     except _kernel_unavailable_error() as exc:

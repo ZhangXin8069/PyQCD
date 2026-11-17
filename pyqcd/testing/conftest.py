@@ -1,5 +1,7 @@
 """PyQCD 集成测试入口：``python -m pyqcd.testing`` 或 pytest。"""
 
+import os
+
 from pyqcd.testing import (  # noqa: F401
     test_gamma_basis,
     test_gevp_preserves_complex_hermitian_data,
@@ -143,6 +145,16 @@ from pyqcd.testing._einsum_kernel_force_contract import (
 from pyqcd.testing._einsum_as_equivalence_cache_contract import (
     test_einsum_as_equivalence_cache_contracts,
 )
+# 配置画像缓存契约：CSV 往返、选优、稀疏写入、compare 只写不读、关闭零 IO、
+# 不可写降级、形状归一化与目录优先级（2026-11-17）。
+from pyqcd.testing._einsum_profile_cache_contract import (
+    test_einsum_profile_cache_contracts,
+)
+# 换路不换答案契约（R4）：generic/dedicated/backend 三路对拍，以及画像命中、
+# 关闭、建议不可用降级三条路径都不许改变结果与 dtype/形状（2026-11-17）。
+from pyqcd.testing._einsum_dispatch_invariance_contract import (
+    test_einsum_dispatch_invariance_contracts,
+)
 # 回落留痕契约：形状特化/原生编译失败的可观测性，以及两个 `_warn_*_once`
 # 从"进程级一次"改成"每类失败一次"（2026-11-16）。
 from pyqcd.testing._einsum_fallback_visibility_contract import (
@@ -151,12 +163,20 @@ from pyqcd.testing._einsum_fallback_visibility_contract import (
     test_shape_path_failure_is_recorded_and_announced_once,
     test_specialized_kernel_warns_once_per_distinct_failure,
 )
+# 画像缓存的并发/健壮性契约：fork 锁重建、坏行跳过、字段截断、每键上限、
+# ensure_configured 语义、关闭零副作用（2026-11-17）。
+from pyqcd.testing._einsum_profile_robustness_contract import (
+    test_einsum_profile_robustness_contracts,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。
 TESTS = (
     test_einsum_kernel_force_contracts,
     test_einsum_as_equivalence_cache_contracts,
+    test_einsum_profile_cache_contracts,
+    test_einsum_dispatch_invariance_contracts,
+    test_einsum_profile_robustness_contracts,
     test_native_expression_compile_failure_leaves_a_warning,
     test_native_fallback_warns_once_per_reason,
     test_shape_path_failure_is_recorded_and_announced_once,
@@ -165,24 +185,39 @@ TESTS = (
 
 
 def main():
-    """Run every test registered by the central testing package."""
+    """Run every test registered by the central testing package.
+
+    跑测试期间**强制关掉画像缓存**（``PYQCD_EINSUM_PROFILE=0``）：它的缺省目录是
+    CWD 下的 ``./.cache``，而普通 ``contract()`` 调用会**读**它来决定选路——如果
+    上一次测试往仓库根写了行，下一次测试就可能因为"缓存建议 backend"而换了路径，
+    表现为"单跑通过、全套偶发失败"。需要画像的契约自己用 ``profile=True`` + 临时
+    目录显式开启（显式参数压过环境变量），所以关掉不损失覆盖。
+    """
     import traceback
     import unittest
 
+    saved_profile = os.environ.get("PYQCD_EINSUM_PROFILE")
+    os.environ["PYQCD_EINSUM_PROFILE"] = "0"
     passed = skipped = failed = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith('test_') and callable(fn):
-            try:
-                fn()
-                print(f"PASS {name}")
-                passed += 1
-            except unittest.SkipTest as exc:
-                print(f"SKIP {name}: {exc}")
-                skipped += 1
-            except Exception:
-                print(f"FAIL {name}")
-                traceback.print_exc()
-                failed += 1
+    try:
+        for name, fn in sorted(globals().items()):
+            if name.startswith('test_') and callable(fn):
+                try:
+                    fn()
+                    print(f"PASS {name}")
+                    passed += 1
+                except unittest.SkipTest as exc:
+                    print(f"SKIP {name}: {exc}")
+                    skipped += 1
+                except Exception:
+                    print(f"FAIL {name}")
+                    traceback.print_exc()
+                    failed += 1
+    finally:
+        if saved_profile is None:
+            os.environ.pop("PYQCD_EINSUM_PROFILE", None)
+        else:
+            os.environ["PYQCD_EINSUM_PROFILE"] = saved_profile
     print(f"\n{passed} passed, {skipped} skipped, {failed} failed")
     return 1 if failed else 0
 

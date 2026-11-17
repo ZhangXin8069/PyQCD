@@ -314,41 +314,67 @@ float32）直接落通用分步路径（`_TOPOLOGY_DECLINED_DTYPES`）。
 记在这里；用法与排查见 `skills/pyqcd-einsum/SKILL.md`，用户视角见
 `docs/einsum_user_guide_20261116.md` §11。
 
-**三态取值**（`_kernel_force.parse`，`:97`）：
+**取值**（`_kernel_force.parse`，`:127`）：
 
 | 取值 | `forced_labels()` | 分派行为 |
 |---|---|---|
 | `auto` / `None` / 空串 | `None` | 原次序（`*_dedicated` → `*_topology`），失败**只** `RuntimeWarning` + 回落 |
 | `generic` | `()` | 完全不调 `_run_specialized_kernel`、不发 warning，直接通用路径 |
-| `<label>[,<label>]` | `(label, ...)` | **只**试这些、按书写次序；一个都没跑成 → `KernelUnavailableError` |
+| `dedicated` / `topology` | `(label, ...)` | **只**试这些、按书写次序；跑不成就抛 `KernelUnavailableError` |
+| `backend` | `('backend',)` | **不进**专用分派，直接 `_backend_einsum(parse_backend(...), …)`：跳过 `_specialize` 与等价改写，也不沿用调用方 `optimize=`（多操作数时 `_backend_einsum` 自己传 `optimize=True`，见 `:804`）；与其它标签互斥 |
 
-`KERNEL_LABELS`（`:57`）恰为 `_api._specialized_kernel_attempts` 的四个标签：
-`cuda_dedicated` / `cuda_topology` / `kupl_dedicated` / `kupl_topology`。解析细节：
-去空白、大小写不敏感、保序去重、`auto` 在列表里被忽略（`auto,kupl_dedicated`
-等价于 `kupl_dedicated`）；`generic` 与具体标签同时出现抛 `ValueError`；未知标签抛
-`ValueError` 且**列出合法集合**——静默忽略拼写错误会让用户以为强制生效了。
+`dedicated` / `topology` 是**逻辑名**，`KERNEL_LABELS`（`:64`）恰为这两个；具体标签由
+操作数后端在 `_api._resolve_forced_labels`（`:676`）里解析：numpy →
+`kupl_dedicated` / `kupl_topology`，cupy → `cuda_dedicated` / `cuda_topology`（角色取自
+`label.rpartition("_")[2]`，不写死第二份后端表，解析只发生在 attempt 过滤处）。
+解析细节：去空白、大小写不敏感、保序去重、`auto` 在列表里被忽略（`auto,topology`
+等价于 `topology`）；`generic` 与 `backend` 都**不许**与其它标签混写（`ValueError`）；
+未知标签抛 `ValueError` 且**列出合法集合** `auto, backend, dedicated, generic, topology`
+——静默忽略拼写错误会让用户以为强制生效了。旧的具体标签（`kupl_dedicated` 等）已
+不再被接受（`ALLOWED_LABELS`，`:70`）。
+
+**迁移表**（旧 → 新，只有这四条）：
+
+| 旧取值（当作 `kernel_force=` 传入已报 `ValueError`） | 新取值 |
+|---|---|
+| `kupl_dedicated` / `cuda_dedicated` | `dedicated` |
+| `kupl_topology` / `cuda_topology` | `topology` |
+
+**别顺手改 `LAST_INFO['path']`**：`kupl_dedicated` / `kupl_topology` / `kupl_topology_v2` /
+`cuda_dedicated` / `cuda_topology` 在那里是**运行时真实路径名**，由执行层写入（也是
+`kernel   :` 那行的值），不是用户输入，不随这次取值收窄而改名。
 
 **优先级**：显式 `kernel_force=` > `PYQCD_EINSUM_KERNEL_FORCE` > 未设（= `auto`），
-由 `_kernel_force.resolve`（`:133`）判定。取值在**调用时**解析，同进程内改环境变量
+由 `_kernel_force.resolve`（`:171`）判定。取值在**调用时**解析，同进程内改环境变量
 即时生效。注意 `--kernel-force auto` 与"不给"不同：显式 `auto` 会把环境变量**压掉**
 （`resolve("auto")` → `()`，而 `resolve(None)` 仍读环境变量）。
 
 **接线**（`_api.contract`）：`forced = _kernel_force.forced_labels(kernel_force)`
-（`:857`）之后分三条互斥分支——
+（`:1080`）之后分四条互斥分支——
 
-- `forced == ()`：命中特化形态只 `_specialize.announce`，不进专用分支（`:894`）；
-- `forced` 非空：`_run_forced_kernel`（`:628`）按 `requested` 次序真试，失败即抛
-  （`:897`、`:926` 两处，后者覆盖"语料没命中却强制了标签"）；
-- `forced is None`：原有分支逐字不变（`:903`）。
+- `forced == ('backend',)`：**早返回**，`_backend_einsum(parse_backend(operands, backend), …)`
+  一步也不进 `_specialize` / 等价改写（`:1091`）；
+- `forced == ()`：命中特化形态只 `_specialize.announce`，不进专用分支（`:1127`）；
+- `forced` 非空：`_run_forced_kernel`（`:699`）先按后端把逻辑名解析成具体标签
+  （`_resolve_forced_labels`，`:676`）再按次序真试，失败即抛
+  （`:1132`、`:1162` 两处，后者覆盖"语料没命中却强制了标签"）；
+- `forced is None`：原有分支逐字不变（`:1136`）。
+
+> **与 `docs/einsum_production_optimization_*` 的一致性（2026-11-17 核对）**：那两份文档
+> 早于 `kernel_force` 取值收窄（`auto/dedicated/topology/generic/backend`），通篇**只**
+> 出现 `generic` / `dedicated` 这类**运行时路径名**（`kupl_dedicated` 等），没有任何
+> "旧取值可作输入"的表述——所以**不存在冲突**。判断标准只有一条：**输入侧**只认
+> `ALLOWED_LABELS`（`:70`）这五个；**输出侧**（`LAST_INFO['path']`、`kernel   :` 行、
+> `route :` 行）仍是 `kupl_*` / `cuda_*` 具体标签，不随取值收窄而改名。代码为准。
 
 **与既有开关的关系**（不是互斥，是不同层）：
 
 | 开关 | 管什么 | 与强制的交互 |
 |---|---|---|
-| `PYQCD_EINSUM_KERNEL_KUPL=0` / `_CUDA=0` | **关掉**该后端原生入口 | 能同时给；此时强制该后端的标签 → `KernelUnavailableError`，原因 `kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)` |
-| `specialize=False` / `PYQCD_EINSUM_SPECIALIZE=0` | **整体跳过**专用路径 | 与具体标签**冲突**，`ValueError` 早失败（`:932`） |
+| `PYQCD_EINSUM_KERNEL_KUPL=0` / `_CUDA=0` | **关掉**该后端原生入口 | 能同时给；此时强制该后端的 `dedicated` / `topology` → `KernelUnavailableError`，原因 `kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)` |
+| `specialize=False` / `PYQCD_EINSUM_SPECIALIZE=0` | **整体跳过**专用路径 | 与任何强制取值（含 `backend`）**冲突**，`ValueError` 早失败（`:1166`） |
 | `kernel_force=...` | **只准跑这个** | —— |
-| `out=` | 禁用专用路径 | 与具体标签冲突，`ValueError` 早失败（`:864`） |
+| `out=` | 禁用专用路径 | 与任何强制取值冲突，`ValueError` 早失败（`:1089`） |
 
 三条早失败都是"一次内核都没试就抛"（`_LAST_KERNEL` 未被写），由
 `test_kernel_force_conflicts_fail_early` 钉住。`kernel_force="generic"` 与
@@ -382,7 +408,7 @@ kernel : requested=<auto|generic|label,...>  ran=<label|none>  attempted=<label,
 
 **踩坑**：`verify_specialized --kernel-force` **不做收缩**，所以它的 `ran` 恒为
 `unknown`——`--kernel-force` 在那儿只决定报告里出不出这一行、以及 `requested=`
-显示什么。要真跑内核只能用 `python -m pyqcd.einsum.test --kernel-force <label>`。
+显示什么。要真跑内核只能用 `python -m pyqcd.einsum.test --kernel-force <value>`。
 契约：`pyqcd/testing/_einsum_kernel_force_contract.py`（**9 项**，纯选路断言、
 零计时）。
 
@@ -410,6 +436,58 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
 `cache=False` 时 `LRUCache.get/put` 既不读也不写（统计零变化）。
 `pyqcd.einsum.cache_stats()` / `cache_clear()` 是公开入口；CLI `--cache` 只在显式
 给出时打印 `cache    : enabled=... hits=... misses=... hit_rate=...`。
+
+**计划/匹配的耗时数字不在此处复述**——它们只有一处权威：
+`docs/einsum_production_optimization_20261112.md:183-194`（§8，含 `match()` 热调用、
+8638 条轮转、计划缓存热扫描与占用）；`seq=6585` 的"首次规划耗时 + 可按
+`(equation, shapes, dtype, optimizer, backend)` 缓存"这条结论同样只在该文件的 `:47`。
+计划缓存的"32 项 FIFO"（`docs/handover_einsum_20261112.md:76-77`）是**历史状态**，
+现行为真 LRU + 64 MiB（`_kernel_kupl.py:210-213`）；"CUDA `TopologyProgram` 单槽 +
+`stream == nullptr`"（同文件 `:82-83`）**仍然成立**（`cpp/cuda/einsum/src/apply_contract.cu:2695`
+的 `memcmp` 比对、`:2782` 的 stream 前置条件）。本文件只定义**口径**（怎么测、什么算数），
+不复制数值。
+
+### 9.1d 配置画像缓存 `_profile_cache.py`（2026-11-17）
+
+画像层**只给建议、不参与数值计算**：配置选错、旧行没被换掉、"关掉开关还在建目录"，
+结果都照样逐位正确——普通数值测试永远抓不到它。它把 `(host, user_device, backend,
+dtype, equation, shape, device)` 的历史观测落成 CSV，下次开工用**一次顺序读**换掉
+重复的试跑与匹配时间。它不 import 执行层、不解析方程、不碰张量、**不做计时**
+（`init_ms` / `compute_ms` 由 `_api` 测好给进来）。契约
+`pyqcd/testing/_einsum_profile_cache_contract.py`（8 条，含"关闭零 IO"与"compare 一次都不读"）。
+
+| 项 | 口径（以 `_profile_cache.py` 为准） |
+|---|---|
+| 开关 | `PYQCD_EINSUM_PROFILE`（缺省 `"1"` 开；`0/false/off/no` 关）、`contract(profile=)`、CLI `test.py --profile {auto,true,false}`（缺省 `auto` → `None`，跟随环境变量）与 `--profile-dir DIR`。`verify_specialized.py` **没有**这两个选项（它不做收缩、也从不读画像） |
+| 关闭语义 | 不读、不写、**连目录都不建**。`PYQCD_EINSUM_PROFILE=0` / `profile=False` / `--profile false` 都走这条路；`PYQCD_EINSUM_PROFILE=0` 时连 `profile=True` 也不会产生 IO（`configure` 在 `_switch_on()` 为假时直接返回，`load/best` 走无参 `enabled()`） |
+| 目录 | **首次解析**：`profile_dir` > `PYQCD_EINSUM_PROFILE_DIR` > `./.cache`（按 CWD 取绝对路径；`None` 与空白在**解析**时都不挤掉下一级，`_resolve_dir_text`，`:959-969`）；不存在就 `makedirs`；不可写 → 降级不缓存，原因进 `summary()["last_error"]`、`enabled` 转 `False`、`notice()` 只提示一次（本模块从不主动打印） |
+| 目录"保持"语义 | **省略** `profile_dir` 不会回到环境变量/默认目录，而是**保持已钉住的目录**：`_api._profile_begin` 只在 `profile_dir` 为真时调 `configure(profile_dir)`，否则调 `ensure_configured()`（`_api.py:1114-1115`）；后者"只补齐、不改写"（`_profile_cache.py:331-344`）。想换只能显式传**另一个**目录——换目录 = 换一张表：先 flush 旧目录待写行，再清索引/载入标记/compare 去重表（`configure()`，`:305-319`）。只有**从未配置过**的首次调用才解析优先级 |
+| `profile.csv` | **读 + 写**。键 7 列如上；`shape` 规范化成 `2x3\|3x4`（`x` 连轴、`\|` 连操作数）；选优 `compute_ms` 最小 → 同值 `calls` 大 → 再同 `updated_at` 新 |
+| `profile_compare.csv` | **只写不读**（`record_compare`；同一 `(键,配置,参照,参照优化器)` 60 s 内只写一次）。**当前没有生产调用点**（只有契约用例调用），所以正常跑 `contract()` 不会生成这个文件 |
+| 稀疏写盘 | `record()` 只在**新键**或比该键当前最优**严格快 >5%**（阈值 `_IMPROVE_RATIO = 0.95`，`:183`；判据 `compute_ms < 最优 × _IMPROVE_RATIO`，见 `record()` 内的 `worth = ...`）时才入待写队列；其余只更新内存索引。`flush()` / 攒满 `_FLUSH_THRESHOLD = 512`（`:186`）条 / `atexit` 才真正追加写 |
+| 规模上限 | 每键只留 `compute_ms` 最快的 `_MAX_ROWS_PER_KEY = 4` 条（`:195`；内存与落盘同一口径，`_prune_slot` 在写入后与读入后都裁，`:682-692`、`:731-732`），裁掉条数累计进 `summary()["dropped_rows"]`。`profile.csv` 盘上数据行 + 本次待写超 `_MAX_ROWS = 50000`（`:198`）时 `flush()` 先整表重写成"每键最快 K 条"（判据 `count + len(_pending) > _MAX_ROWS`，`:810-812`）；重写后仍超限（键太多，K 条压不下去）要再涨 `_REWRITE_GROWTH = _MAX_ROWS // 10 = 5000` 行才重写下一次（`:202`），否则每次 flush 都整表重写等于写放大 |
+| 截断与坏行 | `_CLIP_LIMITS = {"note": 200, "equivalence_equation": 512}`（`:205`）按字符截断，读写两侧共用同一刀（`_clip_row`，`:623-628`），次数进 `summary()["truncated_fields"]`。长度/编码/列数不对的行**逐行**跳过，计数进 `summary()["skipped_rows"]`（`:706-738`）；csv 流连续 `_MAX_CONSECUTIVE_ERRORS = 8` 次解析异常（`:214`、`:777-779`）才停止读取并只记 `last_error`——列数不对只计 skip、不计 streak（`:781-788`） |
+| 并发与退出 | 索引与待写队列共用**一把** `threading.Lock`；POSIX 下 `os.register_at_fork(after_in_child=_reset_after_fork)`（`:940`）在子进程重建锁并清空索引/队列（`:919-934`），否则父进程持锁时 fork 会让子进程首次 `summary`/`record` 永久阻塞；Windows 无此钩子。`atexit` 兜底 flush 最多等锁 `_EXIT_LOCK_TIMEOUT_S = 2.0` 秒（`:208`、`:908-910`），拿不到就丢弃待写行。单次读盘封顶 `_MAX_LOAD_BYTES = 64 << 20`（64 MiB，`:211`、`:720`；`_count_raw_rows` 同封顶，`:878`） |
+| 跨进程可见性 | **跨进程只认已落盘的记录**：`_load_locked()` 只读 `profile.csv`（`_profile_path()`），只进过内存索引的观测随进程消失。所以"同进程内 `best()` 已能返回更优配置、下次开工却没有它"是预期行为；要跨开工复用必须先 `flush()`，或让进程正常退出由 `atexit` 写一次 |
+| 施加面 | 每个目录一次 `configure + load`（同目录不重读；换目录时 `load(force=True)`，`_api.py:1116-1120`）；命中**只**填两个槽：`kernel_force`（具体标签经 `rpartition("_")` 反推逻辑名，`_api._profile_force_label`，`:1014-1035`）与 `backend`。`generic` **刻意不回放**（它会静默关掉"自动分派失败要告警一次"这条诊断）；`backend` **会被采纳**——命中记录 `kernel=backend` 时本次调用直接走 `backend.einsum`，在 `_specialize.match` 与 `find_path` **之前**返回，跳过**本库的**形态匹配、等价改写与收缩规划，直接调后端 `einsum`（`_backend_einsum` 仍给后端传 `optimize=True`，后端内部可能再自行优化，`:799-812`）。调用方/env 已给 `kernel_force`、`out=`、`specialize=False` 时命中**只记录不施加**（`:1149-1153`） |
+| 失败 | 画像建议跑不成 → `_profile_retry` 带 `profile=False` 退回原分派一次，**不**向调用方抛 `KernelUnavailableError`（显式强制仍照旧抛） |
+| 记录抑制 | 已施加命中且没回退的调用不再记一条；回退的照记，让实际跑成的那条配置下次有机会胜出 |
+
+**踩坑（都是这一层特有的）**：
+
+1. **`.cache/` 不参与发布产物、也不要提交**：默认目录 `./.cache`（`_profile_cache.DEFAULT_DIR`）
+   记录**主机名、方程与形状**，已由根 `.gitignore` 的 `.*` 规则忽略（`.gitignore:73`，`git check-ignore -v .cache/profile.csv` 复核）。
+   `MANIFEST.in` 只 `recursive-include pyqcd *.py *.pyx *.pxd *.pyi`（`:31`）、不收录任何缓存目录，
+   所以它既不进 sdist/wheel，也不该为了"留证据"进版本库。
+2. **CSV 行数 ≠ 调用次数**：稀疏写只留"新键"与"快过 5%"那几行（口径见上表，判据在 `record()`）。
+   实测同一方程连调 3 次 `contract()` 后 `flush()` 只写出 1 行，且该行 `calls` 是落盘那一刻的值。
+   想统计真实调用次数要看内存索引或自己打点，不要数行。
+3. **降级是运行时状态**：不可写/CSV 损坏/写失败一律不外抛，只把原因写进
+   `summary()["last_error"]`；它**不改** `PYQCD_EINSUM_PROFILE` 的语义。
+4. **换目录等于换一张表**：`configure()` 先把旧目录待写行冲掉，再清索引与 compare 去重表。
+   反过来，**省略 `profile_dir` 不触发换表**——它保持当前钉住的目录（见上表"目录保持语义"）。
+5. `record_compare` 的 `equivalence=` 可以直接塞 `_equivalence.explain()` 的报告字典
+   （只读它的 `kind` / `equation` / 三个置换字段）。
 
 ### 9.0 单方程测试的唯一接口：`python -m pyqcd.einsum.test`（强制）
 
@@ -505,7 +583,7 @@ verbose 的 `ref opt` 行与 `reference` 串都打**参照实际用的**，一�
 **两条硬性口径**（改它就是改规范）：
 
 1. `--atol` 是相对容差。`np.allclose` 那种逐元素绝对阈值会误判接近零的元素。
-2. **warmup 不可为 0**。实测 seq=2583 首调 45 ms、热态 0.56 ms（差 80×），
+2. **warmup 不可为 0**。实测依据见 §9.0 的 `seq=2583` 首调/热态对比（本文件 `:481`），
    单次测量会被 plan 缓存 + 原生库绑定 + JIT 完全支配。
 
 典型输出（本条方程 10 操作数 / 2.56 亿输入元素）：
@@ -1084,7 +1162,7 @@ CUDA 拓扑入口是**另一套实现**（`cpp/cuda/einsum/src/apply_contract.cu
 与"常规规模走 dedicated"的既有结论一致 —— 扩表解决的是"附录根本没有 v3"，不是
 "v3 该取代 dedicated"。
 
-**注意单次测量的陷阱**：seq=2583 的**首次**调用是 45 ms（plan 缓存 + 签名哈希），
+**注意单次测量的陷阱**：seq=2583 的首次调用会被首调开销支配（同一现象与数字见 §9.0 `:481`），
 而 generic 的 5 ms 是热路径；只测一次会得出"v3 慢 9×"的错误结论。任何对比都必须
 先丢弃一次 warmup 再取中位。
 

@@ -18,12 +18,15 @@
 =================  ==========================================================
 ``auto``（缺省）    保持原分派次序（dedicated → topology）；失败仍只 warning + 回落
 ``generic``        完全跳过专用 kernel（等价 ``specialize=False``），不产生 warning
-``<label>``        只允许该 label；跑不成就抛 :class:`KernelUnavailableError`
+``dedicated``      只允许**当前后端的** dedicated（numpy → kupl，cupy → cuda）
+``topology``       只允许**当前后端的** topology
+``backend``        直接调用 ``backend.einsum``，不进专用内核分派
 =================  ==========================================================
 
-合法的 ``<label>`` 与 ``_api._specialized_kernel_attempts`` 给出的标签一致：
-``cuda_dedicated`` / ``cuda_topology`` / ``kupl_dedicated`` / ``kupl_topology``。
-可以用逗号给多个（按书写次序即尝试次序）。
+``dedicated`` / ``topology`` 是**逻辑名**：具体标签由操作数后端决定
+（``kupl_dedicated`` / ``cuda_dedicated`` / ``kupl_topology`` / ``cuda_topology``），
+解析发生在 ``_api`` 的 attempt 过滤处，本模块只负责名字。可以用逗号给多个（按书写
+次序即尝试次序）；``backend`` 与其它标签**互斥**（混写抛 ``ValueError``）。
 
 优先级：显式参数 ``kernel_force=`` > 环境变量 ``PYQCD_EINSUM_KERNEL_FORCE`` > 未设置
 （等价 ``auto``）。取值在**调用时**解析，同进程内改环境变量即时生效。
@@ -34,7 +37,9 @@ from __future__ import annotations
 import os
 
 __all__ = [
+    "ALLOWED_LABELS",
     "AUTO_LABEL",
+    "BACKEND_LABEL",
     "GENERIC_LABEL",
     "KERNEL_FORCE_ENV",
     "KERNEL_LABELS",
@@ -52,14 +57,17 @@ KERNEL_FORCE_ENV = "PYQCD_EINSUM_KERNEL_FORCE"
 AUTO_LABEL = "auto"
 #: 完全跳过专用 kernel。
 GENERIC_LABEL = "generic"
+#: 直接调用 ``backend.einsum``，不进专用内核分派；与其它标签互斥。
+BACKEND_LABEL = "backend"
 
-#: 可强制的专用内核标签，与 ``_api._specialized_kernel_attempts`` 的返回一致。
+#: 可强制的**逻辑**标签：运行时按操作数后端解析成 ``*_dedicated`` / ``*_topology``。
 KERNEL_LABELS = frozenset({
-    "cuda_dedicated",
-    "cuda_topology",
-    "kupl_dedicated",
-    "kupl_topology",
+    "dedicated",
+    "topology",
 })
+
+#: 全部合法取值（含不产生强制的 ``auto`` / ``generic``）：报错时按此集合列出。
+ALLOWED_LABELS = frozenset(KERNEL_LABELS | {AUTO_LABEL, BACKEND_LABEL, GENERIC_LABEL})
 
 
 class KernelUnavailableError(RuntimeError):
@@ -67,23 +75,31 @@ class KernelUnavailableError(RuntimeError):
 
     只在**强制**模式下抛出（``auto`` 模式仍是 warning + 回落，保持既有数值契约）。
     携带足以定位问题的字段，避免用户再去翻 ``LAST_FAILURE`` 或负缓存内部状态。
+
+    ``requested`` 是逻辑名（``dedicated`` / ``topology``），``attempted`` 与
+    ``reasons`` 的键是**具体**标签（``kupl_dedicated`` …）：消息里两者并列，用户既能
+    对上自己写的取值，也能直接看到哪个入口真的被下发过。
     """
 
     def __init__(self, requested: tuple[str, ...], subscripts: str,
-                 reasons: dict[str, str], attempted: tuple[str, ...] = ()) -> None:
+                 reasons: dict[str, str], attempted: tuple[str, ...] = (),
+                 resolved: dict[str, tuple[str, ...]] | None = None) -> None:
         self.requested = tuple(requested)
         self.subscripts = str(subscripts)
         self.reasons = dict(reasons)
         self.attempted = tuple(attempted)
+        self.resolved = {name: tuple(labels)
+                         for name, labels in (resolved or {}).items()}
 
         label = ", ".join(self.requested) or "(none)"
         lines = [f"强制内核 {label} 没有跑成：equation {self.subscripts!r}"]
         if self.attempted:
-            lines.append("实际尝试：" + ", ".join(self.attempted))
+            lines.append("实际尝试：" + ", ".join(
+                self._annotate(name) for name in self.attempted))
         for name in self.attempted:
             reason = self.reasons.get(name) or "（该内核未留下原因）"
-            lines.append(f"  - {name}: {reason}")
-        missing = [name for name in self.requested if name not in self.attempted]
+            lines.append(f"  - {self._annotate(name)}: {reason}")
+        missing = [name for name in self.requested if not self._was_attempted(name)]
         if missing:
             lines.append("未尝试：" + ", ".join(missing)
                          + "（标签与本次操作数后端不匹配）")
@@ -93,13 +109,28 @@ class KernelUnavailableError(RuntimeError):
             "检查 GPU 栈：python -m pyqcd --gpu-probe")
         super().__init__("\n".join(lines))
 
+    def _annotate(self, concrete: str) -> str:
+        """``kupl_dedicated`` → ``kupl_dedicated（dedicated）``：具体标签与逻辑名对照。"""
+        for name, labels in self.resolved.items():
+            if concrete in labels:
+                return f"{concrete}（{name}）"
+        return concrete
+
+    def _was_attempted(self, name: str) -> bool:
+        """该逻辑名是否真的下发过：看它解析出的具体标签有没有进 attempt 表。"""
+        labels = self.resolved.get(name)
+        if labels:
+            return any(label in self.attempted for label in labels)
+        return name in self.attempted
+
 
 def parse(spec: object) -> tuple[str, ...]:
     """把一处取值解析成有序标签元组。
 
     ``None`` / 空串 / ``auto`` / ``0`` / ``false`` / ``off`` / ``no`` → ``()``（不强制）；
-    ``generic`` → ``(GENERIC_LABEL,)``；其余按逗号切分、去空白、保序去重。未知标签抛
-    ``ValueError`` 并列出合法集合——静默忽略拼写错误会让用户以为强制生效了。
+    ``generic`` → ``(GENERIC_LABEL,)``；其余按逗号切分、去空白、保序去重，返回**逻辑名**
+    （``dedicated`` / ``topology`` / ``backend``）。未知标签抛 ``ValueError`` 并列出合法
+    集合——静默忽略拼写错误会让用户以为强制生效了。
     """
     if spec is None:
         return ()
@@ -120,12 +151,17 @@ def parse(spec: object) -> tuple[str, ...]:
             continue
         if name == AUTO_LABEL:
             continue
-        if name != GENERIC_LABEL and name not in KERNEL_LABELS:
-            allowed = ", ".join(sorted(KERNEL_LABELS | {GENERIC_LABEL, AUTO_LABEL}))
+        if name not in ALLOWED_LABELS:
+            allowed = ", ".join(sorted(ALLOWED_LABELS))
             raise ValueError(
                 f"未知的内核标签 {part.strip()!r}；合法取值：{allowed}")
         if name not in labels:
             labels.append(name)
+    # ``backend`` 是"别用专用内核"，与"只准跑某个专用内核"没有折中解释。先查它：
+    # 只要列表里有 ``backend``，报的就是这条更具体的冲突（``backend,generic`` 亦然）。
+    if BACKEND_LABEL in labels and len(labels) > 1:
+        raise ValueError(
+            f"{BACKEND_LABEL} 不能与其它内核标签同时给出：{labels}")
     if GENERIC_LABEL in labels and len(labels) > 1:
         raise ValueError(
             f"{GENERIC_LABEL} 不能与具体内核标签同时给出：{labels}")
@@ -140,7 +176,7 @@ def resolve(kernel_force: object = None) -> tuple[str, ...]:
 
 
 def forced_labels(kernel_force: object = None) -> tuple[str, ...] | None:
-    """需要强制的标签；``None`` 表示按原次序自动分派。"""
+    """需要强制的逻辑标签；``None`` 表示按原次序自动分派。"""
     labels = resolve(kernel_force)
     if not labels:
         return None

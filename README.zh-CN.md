@@ -37,6 +37,44 @@ python -m pyqcd --json     # machine-readable
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
 
+## 0.5.0 发布声明 — qcd-einsum：profile 缓存、`kernel_force` 收窄、详解模式
+
+`0.5.0` 是 **minor** 版本，因为有一处公开接口不兼容（`kernel_force`）。其余均为新增。
+
+**破坏性变更 —— `kernel_force` 取值**：逻辑值收敛为
+`auto | dedicated | topology | generic | backend`，具体标签已删除且会报错：
+
+| 旧 | 新 |
+|---|---|
+| `kupl_dedicated`、`cuda_dedicated` | `dedicated` |
+| `kupl_topology`、`cuda_topology` | `topology` |
+
+`dedicated`/`topology` 按操作数后端解析（numpy → kupl，cupy → cuda）。`backend` 是新增值，
+含义是"完全不用专用内核"：直接调 `backend.einsum`、继承调用方的 `optimize`，并跳过专用分派
+与等价改写。`LAST_INFO['path']` 里的运行时路径名（`kupl_dedicated` 等）**不变**——那是观测值，
+不是输入。
+
+**profile 画像缓存**（`pyqcd/einsum/_profile_cache.py`，默认开启）：为
+`(host, user_device, backend, dtype, equation, shape, device)` 记录一行 CSV，含实际使用的
+kernel/optimize 与实测 `compute_ms`；下次对同一键直接选最快的那条记录。`profile.csv` 读写、
+`profile_compare.csv` 只写不读（compare 与 equivalence 字段）。目录优先级：
+`profile_dir=` > `PYQCD_EINSUM_PROFILE_DIR` > `./.cache`；关闭时**不读、不写、不建目录**。
+写入是**稀疏**的：只有"新键"或"比该键最优快 >5%（`_IMPROVE_RATIO=0.95`）"才落盘，
+性能接近的配置不会把文件撑大。每键最多保留 4 条、文件超过 5 万行会重写一次、
+坏行跳过；模块用 `os.register_at_fork` 处理 fork，MPI rank 不会因父进程持锁而死锁。
+
+**详解模式**：`--explain` 在**首次**调用时打印 `plan :`（怎么匹配到/没匹配到）、
+`kernel :`（选了谁）、`why :`（为什么放弃专用内核：不可用 / 连续门 / dtype 策略 /
+profile 认为 backend 更快）。之后的调用只打一行：命中、未命中、或"profile 已关闭"。
+既有输出行不动，新行只在显式开启时追加。
+
+**热路径削减**（按结构计数，不按墙钟）：计划缓存覆盖到 **2 算子非语料**方程（原 ≥3）、
+语料已命中时跳过等价门链、线程档不变时走**零环境变量读、零 `/proc` 读**的快路径
+（原每调用 5 次环境变量读）。
+
+**修复**：同进程内切换 `profile_dir` 会被静默忽略（单布尔门闸）；`cache=False` 仍可能经
+等价层登记一次匹配缓存命中；省略 `profile_dir` 参数时会把已钉住的目录重置回 `./.cache`。
+
 ## 0.4.5 发布声明 — qcd-einsum：静默回落开始留痕
 
 `0.4.5` 是诊断修复：过去有四处**回落到通用路径却不留任何痕迹**，或只报
