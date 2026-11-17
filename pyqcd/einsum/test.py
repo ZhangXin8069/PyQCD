@@ -83,14 +83,37 @@
   ``PYQCD_EINSUM_PROFILE``；``false`` 让本次**既不读也不写**画像 CSV（连目录都不建）。
   画像只**建议**配置：方程、dtype、形状与数值一概不改；报告里给出的 ms 一律是
   **记录值**，不是本次实测。
+* **自动施加等价写法**：``--as-equivalence auto|true|false|force``。前三态同
+  ``--equivalence``；``force`` 是第四态，**忽略负标记**：画像里"该方程查过、无法
+  等价改写"的跨进程标记不再拦住这次查询，而是真的再查一遍并刷新结论（``true``
+  会尊重该标记）。字符串 ``"force"`` 原样交给 ``contract(as_equivalence=...)``。
+* **遍历调优**：``--tune``（缺省关）在**同一条**方程/形状/dtype/设备/后端上遍历
+  ``kernel_force × as_equivalence × optimize``（5×2×3 = 30 组，硬上限 30，超了报
+  用法错误而不是截断），``--compare`` 固定 ``none``。这三轴由 ``--tune`` 自己给，
+  所以同时再显式给 ``--kernel-force`` / ``--as-equivalence`` / ``--optimize``
+  （非 ``auto``）时**各打一行 stderr 警告后忽略它**（每个参数一行），遍历照常进行、
+  退出码仍为 0。每组沿用 ``--warmup``/``--rounds`` 取中位，结果全部写进配置画像并在
+  打印前 ``flush()``；表格按中位升序（前 5 行 + 最优行标记）打到 stderr，既有输出行
+  一字不动。报的是**单次运行的实测，不是基准**。
+* **超时与预算**：``--tune-timeout``（缺省 100 秒）是**每一次** ``contract()`` 调用的
+  上限（warmup 与每一轮都算）：任一次超时 → 该组记 ``timeout``、**不写画像**、继续下一
+  组，中位只由全部成功且未超时的调用构成（不拿部分样本凑）。``--tune-budget``（缺省
+  ``0`` = 不限）是整轮上限，用尽即停止遍历并报"已测 N/M"。实现用
+  ``signal.setitimer`` + ``SIGALRM``：**可能打断原生内核，建议在新进程里跑 tune**
+  （信号只在主线程可用；装不上定时器时退化成"跑完再按耗时判定"）。
+  坏组合——超时、抛异常、``rel > atol+rtol``——都会被 ``_profile_cache.drop()`` 从
+  内存索引与待写队列里撤回（落盘层是追加写，历史行删不掉，那种情形如实标注）。
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import signal
 import statistics
 import sys
+import threading
 import time
 from typing import Any, Sequence
 
@@ -111,7 +134,11 @@ __all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES",
            "EXPLAIN_MODES", "DEFAULT_EXPLAIN", "parse_explain",
            "resolve_explain", "explain_kernel_line",
            "PROFILE_MODES", "DEFAULT_PROFILE", "PROFILE_ENV", "PROFILE_DIR_ENV",
-           "parse_profile"]
+           "parse_profile",
+           "TUNE_KERNEL_FORCE", "TUNE_AS_EQUIVALENCE", "TUNE_OPTIMIZERS",
+           "TUNE_MAX_COMBOS", "TUNE_AXES", "tune_combos", "tune_conflicts",
+           "DEFAULT_TUNE_TIMEOUT", "DEFAULT_TUNE_BUDGET",
+           "run_tune", "print_tune", "tune_best"]
 
 class UsageError(SystemExit):
     """参数或环境错误。
@@ -178,10 +205,13 @@ DEFAULT_PROFILE = "auto"
 #: 同值）。写字面量是为了该模块缺席时 ``--help`` 仍说得清 `auto` 跟随什么。
 PROFILE_ENV = "PYQCD_EINSUM_PROFILE"
 PROFILE_DIR_ENV = "PYQCD_EINSUM_PROFILE_DIR"
-#: ``--as-equivalence``：三态。``auto`` 跟随 ``PYQCD_EINSUM_AS_EQUIVALENCE``（缺省开启）。
-#: 与 ``--equivalence`` 不同，它**真的改变执行路径**：开启时命中映射就改写方程跑，
-#: 再把结果转回原输出轴序（返回数组仍是原方程的答案）。
-AS_EQUIVALENCE_MODES = ("auto", "true", "false")
+#: ``--as-equivalence``：**四态**。``auto`` 跟随 ``PYQCD_EINSUM_AS_EQUIVALENCE``
+#: （缺省开启）。与 ``--equivalence`` 不同，它**真的改变执行路径**：开启时命中映射就
+#: 改写方程跑，再把结果转回原输出轴序（返回数组仍是原方程的答案）。``force`` 是
+#: ``true`` 之上多出的一档：**忽略负标记**（画像里"查过、无法等价改写"的跨进程标记），
+#: 真的再查一次并刷新该标记——字符串 ``"force"`` 原样交给
+#: ``contract(as_equivalence="force")``。
+AS_EQUIVALENCE_MODES = ("auto", "true", "false", "force")
 #: 自动施加等价映射的开关，与 ``_equivalence.AS_EQUIVALENCE_ENV`` 同值。
 AS_EQUIVALENCE_ENV = "PYQCD_EINSUM_AS_EQUIVALENCE"
 
@@ -204,6 +234,24 @@ DEFAULT_VERBOSE = False
 #: ``--language``：输出语言。``auto`` 见 :func:`resolve_language`。
 LANGUAGE_MODES = ("auto", "en", "zh-cn")
 DEFAULT_LANGUAGE = "auto"
+
+# ── 遍历调优（--tune） ──────────────────────────────────────────────────────
+#: ``--tune`` 遍历的三个轴，**顺序即报告顺序**。``as_equivalence`` 只遍历
+#: ``true``/``false``：``auto`` 是"跟随环境变量"、``force`` 是"不信负标记"，两者都
+#: 不是可比的性能档。
+TUNE_KERNEL_FORCE = ("auto", "dedicated", "topology", "generic", "backend")
+TUNE_AS_EQUIVALENCE = ("true", "false")
+TUNE_OPTIMIZERS = ("auto", "greedy", "optimal")
+#: 组合数**硬上限**：超了直接报用法错误，**绝不静默截断**——截断会让"最优"变成
+#: "某个被截断的网格里最好"，而报告字面上完全看不出这一点。
+TUNE_MAX_COMBOS = 30
+#: 被 ``--tune`` 自行遍历的三维（报告与警告文案要用它说明"为什么你给的值被忽略"）。
+TUNE_AXES = "kernel_force × as_equivalence × optimize"
+#: ``--tune-timeout``：**每一次** ``contract()`` 调用（warmup 与每一轮都算）的上限
+#: 秒数。``<= 0`` = 不设上限。超时的那一组记 ``timeout``、不写画像、继续下一组。
+DEFAULT_TUNE_TIMEOUT = 100.0
+#: ``--tune-budget``：整轮遍历的上限秒数，``0`` = 不限。用尽即停止遍历并报"已测 N/M"。
+DEFAULT_TUNE_BUDGET = 0.0
 
 
 # ── 输出语言（--language） ──────────────────────────────────────────────────
@@ -456,19 +504,89 @@ MESSAGES: dict[str, dict[str, str]] = {
                "不写任何环境变量。缺省 {default}"),
     },
     "help.as_equivalence": {
-        "en": ("Apply an equivalent spelling automatically: auto=follow {env} "
-               "(on by default, only 0/false/off/no turns it off); true=rewrite when a "
-               "mapping exists; false=never. When on and the equation misses every "
-               "specialised path, the operands are permuted, the equivalent spelling is "
-               "contracted, and the result is transposed back — the returned array is "
-               "still the answer to the ORIGINAL equation (same shape, same dtype). "
-               "Skipped for out=, extra kwargs, element-wise equations and explicit "
-               "optimizer paths. Default {default}"),
-        "zh": ("自动施加等价写法：auto=跟随 {env}（缺省开启，只有 0/false/off/no 才关闭）；"
-               "true=存在映射就改写；false=不改写。开启且方程未命中任何特化路径时，"
-               "会重排操作数、按等价写法收缩、再把结果转回原输出轴序——"
+        "en": ("Apply an equivalent spelling automatically. Kinds of value: auto=follow "
+               "{env} (on by default, only 0/false/off/no turns it off); true=rewrite "
+               "when a mapping exists; false=never; force=rewrite as true does, but "
+               "**ignore the negative mark**.\n"
+               "The four states are not three: a lookup that found nothing leaves a "
+               "cross-process mark on this equation, and plain true honours it (so the "
+               "mapping is not looked up again for that equation). force ignores that "
+               "mark, looks the mapping up again and refreshes the mark with this "
+               "lookup's verdict — use it when the mapping tables changed and the old "
+               "'nothing here' verdict is stale.\n"
+               "When the rewrite happens, the operands are permuted, the equivalent "
+               "spelling is contracted and the result is transposed back — the returned "
+               "array is still the answer to the ORIGINAL equation (same shape, same "
+               "dtype). Skipped for out=, extra kwargs, element-wise equations and "
+               "explicit optimizer paths. Default {default}"),
+        "zh": ("自动施加等价写法。取值有四档：auto=跟随 {env}（缺省开启，只有 "
+               "0/false/off/no 才关闭）；true=存在映射就改写；false=不改写；"
+               "**force=与 true 一样改写，但忽略负标记**。\n"
+               "四档不是三档：查过却没有映射时会在该方程上留下跨进程负标记，"
+               "普通 true 会尊重它（此后同一方程不再重查）；force 无视这个标记，"
+               "真的再查一次并用本次结论刷新标记——映射表更新过、旧的"
+               "「这里没有」已过期时用它。\n"
+               "改写发生时：重排操作数、按等价写法收缩、再把结果转回原输出轴序，"
                "返回的数组仍是**原方程**的答案（形状与 dtype 都不变）。"
                "out=、额外 kwargs、逐元素方程与显式优化器路径不施加。缺省 {default}"),
+    },
+    "help.tune": {
+        "en": ("Sweep kernel_force × as_equivalence × optimize and report the median of "
+               "THIS run for every combination. The equation, shapes, dtype, device and "
+               "backend are FIXED (they are this run's invariants); --compare is fixed "
+               "to none, so no reference is timed. The three swept axes are supplied by "
+               "--tune itself, so an explicit --kernel-force / --as-equivalence / "
+               "--optimize other than auto is IGNORED with one warning line per option "
+               "on stderr (the sweep still runs and the exit code stays 0). The grid is "
+               "5 × 2 × 3 = 30 combinations (hard cap 30; more is a usage error, never a "
+               "silent truncation). Each combination reuses --warmup / --rounds and the "
+               "median is what was measured now — a single-run measurement, NOT a "
+               "benchmark. Every combination is recorded into the configuration profile "
+               "(force_write), and a bad one — timeout, exception, or rel above "
+               "--atol/--rtol — is withdrawn from the profile again; the table goes to "
+               "stderr (existing lines unchanged): header lines + the 5 fastest rows + "
+               "the fastest row of EVERY kernel_force value + the best row, and without "
+               "--verbose only the header and the best line. A "
+               "combination that raises is marked error=<type>, one that exceeds "
+               "--tune-timeout is marked timeout, one whose rel exceeds --atol/--rtol is "
+               "marked MISMATCH, and none of them can win. Default off"),
+        "zh": ("遍历 kernel_force × as_equivalence × optimize，逐组给出**本次**实测中位。"
+               "方程、形状、dtype、设备与后端**固定不动**（它们是本次的不变量）；"
+               "--compare 固定为 none，因此不额外计时参照。被遍历的三维由 --tune 自己"
+               "提供：显式 --kernel-force / --as-equivalence / --optimize 只要不是 auto，"
+               "就会**被忽略**，每个参数在 stderr 上给一行警告（遍历照常进行，退出码仍为 "
+               "0）。网格为 5 × 2 × 3 = 30 组（硬上限 30，超出即用法错误，"
+               "**绝不静默截断**）。每组沿用 --warmup / --rounds，中位就是此刻测到的值——"
+               "**单次运行的实测，不是基准**。每组都会写进配置画像（force_write），"
+               "坏组合——超时、抛异常、rel 超 --atol/--rtol——会被重新撤回；"
+               "表格打到 stderr（既有输出行不动）：表头 + 最快 5 行 + 每个 kernel_force 取值的最快一行 + 最优行；"
+               "不加 --verbose 时只给表头与最优行。抛异常的组合标 error=<类型>，"
+               "超过 --tune-timeout 的标 timeout，rel 超 --atol/--rtol 的标 MISMATCH，"
+               "三者都不参与选优。缺省关闭"),
+    },
+    "help.tune_timeout": {
+        "en": ("Upper bound, in seconds, for EACH contract() call of --tune (warmup and "
+               "every round count). A combination whose call exceeds it is marked "
+               "timeout, is NOT written to the profile, and the sweep continues; the "
+               "median is taken over all calls that succeeded within the bound (a "
+               "partial sample set never becomes a median). 0 or negative disables the "
+               "bound. Implemented with signal.setitimer + SIGALRM, which MAY INTERRUPT "
+               "A NATIVE KERNEL — prefer running tune in a fresh process. Signals are "
+               "only available on the main thread; where no timer can be armed the call "
+               "is measured first and judged afterwards. Default {default}"),
+        "zh": ("--tune 的**每一次** contract() 调用的上限秒数（warmup 与每一轮都算）。"
+               "任一次超过它 → 该组记 timeout、**不写画像**、继续下一组；中位只由全部"
+               "在上限内成功的调用构成（不拿部分样本凑中位）。0 或负数 = 不设上限。"
+               "实现用 signal.setitimer + SIGALRM：**可能打断原生内核**，建议在新进程里"
+               "跑 tune。信号只在主线程可用；装不上定时器时退化成「先跑完、再按耗时判定」。"
+               "缺省 {default}"),
+    },
+    "help.tune_budget": {
+        "en": ("Upper bound, in seconds, for the WHOLE --tune sweep. When it is used up "
+               "the remaining combinations are skipped and the report says how many were "
+               "measured out of the total. 0 = no bound. Default {default}"),
+        "zh": ("整轮 --tune 遍历的上限秒数。用尽即跳过剩余组合，并在报告里给出"
+               "「已测 N/M」。0 = 不限。缺省 {default}"),
     },
     "help.equivalence": {
         "en": ("Equivalence report tri-state. auto=follow {env} (on by default, which "
@@ -780,6 +898,53 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": ("--compare-optimize {value!r} 对 "
                "--compare {compare} 无效（该模式没有可设的优化器）"),
     },
+    # --tune 的表格。表头/字段名与 `tune best :` 行是**机器可读**的稳定形态
+    # （同 `kernel :`），不翻译；只有说明性文字（这一行）跟 --language 走。
+    "tune.caption": {
+        "en": ("{combos} combinations on the SAME equation/shape/dtype/device/backend; "
+               "compare=none (fixed); warmup={warmup}, rounds={rounds}, median of THIS "
+               "run; rel vs {reference}. Single-run measurement of this process, "
+               "NOT a benchmark."),
+        "zh": ("{combos} 组，方程/形状/dtype/设备/后端全部固定；compare=none（固定）；"
+               "warmup={warmup}、rounds={rounds}，取**本次**中位；rel 对 {reference}。"
+               "这是**单次运行的实测，不是基准**。"),
+    },
+    "tune.skip": {
+        "en": ("excluded from best: MISMATCH={mismatch} error={error} timeout={timeout} "
+               "(a mismatched, failed or timed-out combination never wins)"),
+        "zh": ("不参与选优：MISMATCH={mismatch} error={error} timeout={timeout}"
+               "（数值不符、跑不成或超时的组合一律不参与最优选择）"),
+    },
+    "tune.none": {
+        "en": "no usable combination: every one errored, timed out or mismatched",
+        "zh": "没有任何可用组合：全部报错、超时或数值不符",
+    },
+    "tune.ignored": {
+        "en": ("--tune sweeps {swept} itself, so the value you gave is ignored: {given!r}"),
+        "zh": "--tune 会自行遍历 {swept}，已忽略你给的 {given!r}",
+    },
+    "tune.signal_note": {
+        "en": ("per-call timeout uses SIGALRM — it may interrupt a native kernel; "
+               "prefer running tune in a fresh process"),
+        "zh": ("单次超时用 SIGALRM 实现——可能打断原生内核，建议在新进程里跑 tune"),
+    },
+    "tune.posthoc_note": {
+        "en": ("no timer available here: each call is timed first and judged "
+               "afterwards, so a slow one still runs to completion"),
+        "zh": ("本环境装不上定时器：每次调用先跑完再按耗时判定，超时的那次仍会跑完"),
+    },
+    "tune.stop": {
+        "en": ("measured {measured}/{total} ({skipped} combination(s) skipped): "
+               "--tune-budget {budget:g}s used up"),
+        "zh": ("已测 {measured}/{total}（跳过 {skipped} 组）：--tune-budget {budget:g}s 已用尽"),
+    },
+    "tune.history_kept": {
+        "en": ("{n} bad combination(s) could not be erased from disk: profile.csv is "
+               "append-only and keeps historical rows (in-memory index and pending queue "
+               "were withdrawn)"),
+        "zh": ("{n} 组坏组合没能从磁盘上抹掉：profile.csv 是追加写、会保留历史行"
+               "（内存索引与待写队列已撤回）"),
+    },
     # 用法/环境错误
     "error.shape_empty": {
         "en": "--shape must not be empty",
@@ -942,6 +1107,21 @@ MESSAGES: dict[str, dict[str, str]] = {
     "error.profile": {
         "en": "--profile must be one of {values}, got {value!r}",
         "zh": "--profile 必须是 {values} 之一，得到 {value!r}",
+    },
+    "error.tune_timeout": {
+        "en": "--tune-timeout must be >= 0 seconds (0 disables the bound), got {value!r}",
+        "zh": "--tune-timeout 必须 ≥ 0 秒（0 = 不设上限），得到 {value!r}",
+    },
+    "error.tune_budget": {
+        "en": "--tune-budget must be >= 0 seconds (0 disables the bound), got {value!r}",
+        "zh": "--tune-budget 必须 ≥ 0 秒（0 = 不限），得到 {value!r}",
+    },
+    "error.tune_grid": {
+        "en": ("--tune would run {count} combinations, above the hard cap of {limit}; "
+               "refusing to truncate silently (a truncated grid would make 'best' "
+               "meaningless)"),
+        "zh": ("--tune 需要跑 {count} 组，超过硬上限 {limit}；拒绝静默截断"
+               "（截断后的网格会让「最优」失去意义）"),
     },
     "error.compare_optimize": {
         "en": "--compare-optimize must be one of {values}, got {value!r}",
@@ -1796,12 +1976,17 @@ def parse_equivalence(value: bool | None | str,
 
 
 def parse_as_equivalence(value: bool | None | str,
-                         language: str = "zh") -> bool | None:
-    """把 ``auto|true|false``（或 ``None``/``bool``）规范成 ``bool | None``。
+                         language: str = "zh") -> bool | None | str:
+    """把 ``auto|true|false|force``（或 ``None``/``bool``）规范成取值。
 
-    与 :func:`parse_equivalence` 同口径：``None`` 与 ``auto`` 等价（跟随
-    ``PYQCD_EINSUM_AS_EQUIVALENCE``），本函数**不读**环境变量——真正是否施加由
-    :func:`pyqcd.einsum._equivalence.as_equivalence_enabled` 在调用时决定。
+    ``None`` 与 ``auto`` 等价（跟随 ``PYQCD_EINSUM_AS_EQUIVALENCE``），本函数**不读**
+    环境变量——真正是否施加由 :func:`pyqcd.einsum._equivalence.as_equivalence_enabled`
+    在调用时决定。
+
+    ``force`` 是**第四态**，不是布尔值：它被**原样**返回（字符串 ``"force"``），由
+    ``contract(as_equivalence="force")`` 解释成"忽略跨进程负标记、真的再查一次并
+    刷新标记"。压成 ``True`` 会让它退化成 ``true``（尊重负标记），那正是它要绕过的那
+    道门，所以这里绝不归一成布尔。
     """
     if value is None or value is False or value is True:
         return value
@@ -1812,6 +1997,8 @@ def parse_as_equivalence(value: bool | None | str,
         return True
     if text in ("false", "0", "no", "off"):
         return False
+    if text == "force":
+        return "force"
     raise UsageError(translate("error.as_equivalence", language,
                                values=", ".join(AS_EQUIVALENCE_MODES),
                                value=value))
@@ -2862,6 +3049,691 @@ def _route_of(kernel_info: Any, language: str = "zh",
     return "; ".join(labels) if labels else "通用（无原生命中）"
 
 
+# ── 遍历调优（--tune） ──────────────────────────────────────────────────────
+def tune_combos(language: str = "zh") -> list[tuple[str, str, str]]:
+    """``--tune`` 的完整网格：``(kernel_force, as_equivalence, optimize)`` 三元组。
+
+    组合数超过 :data:`TUNE_MAX_COMBOS` 时抛 ``UsageError``（退出码 2），**绝不**截断
+    ——截断后的"最优"不再是这张网格里的最优，而报告里看不出来。
+    """
+    combos = [(kernel, as_equiv, optimize)
+              for kernel in TUNE_KERNEL_FORCE
+              for as_equiv in TUNE_AS_EQUIVALENCE
+              for optimize in TUNE_OPTIMIZERS]
+    if len(combos) > TUNE_MAX_COMBOS:
+        raise UsageError(translate("error.tune_grid", language,
+                                   count=len(combos), limit=TUNE_MAX_COMBOS))
+    return combos
+
+
+def tune_conflicts(*, kernel_force: str | None = None,
+                   as_equivalence: bool | None | str = None,
+                   optimize: Any = None, language: str = "zh") -> list[str]:
+    """``--tune`` 与"它自己会遍历的三维"撞车时：**每个参数打一行警告，然后忽略它**。
+
+    为什么是警告而不是用法错误：``--tune`` 的价值就在于"别再让我手动挑内核/等价/
+    收缩序"，用户顺手写上一维（尤其脚本里统一传 ``--kernel-force dedicated``）不该
+    让整轮遍历以退出码 2 收场；而**悄悄**忽略又会让用户以为那一维真的生效了。折中：
+    每个撞车的参数在 stderr 上给**一行**（``--tune 会自行遍历 …，已忽略你给的 '<值>'``），
+    遍历照常进行、退出码仍为 0，报告里也能看到网格覆盖了哪些取值。
+
+    ``kernel_force`` 只有解析出**具体标签**才算撞车：``auto``（以及 ``None``）与网格的
+    第一档同义，显式写它不改变任何东西，也就没有可警告的。非法标签仍按原来的用法错误
+    报（退出码 2）——那是拼写问题，不是"被忽略"。
+
+    返回被忽略的三轴名（``["--kernel-force"]`` 之类），供调用方/测试断言。
+    """
+    ignored: list[str] = []
+    if kernel_force is not None and kernel_labels(kernel_force, language):
+        ignored.append("--kernel-force")
+        _warn_tune_ignored(translate("tune.ignored", language, swept=TUNE_AXES,
+                                     given=f"--kernel-force={kernel_force}"),
+                           language)
+    if as_equivalence is not None:
+        if as_equivalence is True:
+            text = "true"
+        elif as_equivalence is False:
+            text = "false"
+        else:
+            text = str(as_equivalence).strip().lower()
+        if text != "auto":
+            ignored.append("--as-equivalence")
+            _warn_tune_ignored(translate("tune.ignored", language, swept=TUNE_AXES,
+                                         given=f"--as-equivalence={text}"), language)
+    if optimize is not None and str(optimize).strip().lower() != "auto":
+        ignored.append("--optimize")
+        _warn_tune_ignored(translate("tune.ignored", language, swept=TUNE_AXES,
+                                     given=f"--optimize={optimize}"), language)
+    return ignored
+
+
+def _warn_tune_ignored(message: str, language: str = "zh") -> None:
+    """一行 stderr 警告（与 ``result.warning`` 同一前缀，既有输出行不动）。"""
+    print(translate("result.warning", language, message=message), file=sys.stderr)
+
+
+def _tune_reference(equation: str, host: Sequence[Any]) -> tuple[Any, str]:
+    """``--tune`` 的唯一参照：``np.einsum(optimize="greedy")``（与缺省 ``--compare numpy`` 同源）。
+
+    只算一次、且不进任何一组的计时区：``--tune`` 把 ``compare`` 固定成 ``none``，
+    为的就是别把 30 份参照耗时再算一遍。算不出来时返回 ``(None, 原因)``——此时所有
+    组合的 ``rel`` 都是 ``None``，也就不做 MISMATCH 判定（如实标注，不猜）。
+    """
+    try:
+        return np.einsum(equation, *host, optimize="greedy"), "np.einsum(optimize='greedy')"
+    except Exception as exc:                    # noqa: BLE001 - 参照失败不该中断遍历
+        return None, f"n/a ({type(exc).__name__}: {exc})"
+
+
+def _tune_route(fields: dict[str, Any], kernel_info: Any) -> str:
+    """本组实际走的路线：**稳定短标签**（``generic`` / ``backend`` / 原生 path / ``unavailable``）。
+
+    这一列是机器可读的（同 ``kernel :`` 行），**不跟 ``--language`` 翻译**——表格要能
+    用脚本筛。取值只来自 ``last_kernel()`` 与原生入口的 ``LAST_INFO['path']``：
+    跑成了就给具体标签（``kupl_dedicated`` 之类），没跑成但有尝试记录给
+    ``unavailable``，两者都没有才是 ``generic``——绝不从报告字段反推。
+    """
+    ran = str(fields.get("ran") or "").strip()
+    if ran and ran != "none":
+        return ran
+    paths = [str(info.get("path") or "")
+             for info in (kernel_info or {}).values() if isinstance(info, dict)]
+    paths = [path for path in paths if path]
+    if paths:
+        return "+".join(paths)
+    attempted = str(fields.get("attempted") or "").strip()
+    if attempted and attempted != "none":
+        return "unavailable"
+    return "generic"
+
+
+def _tune_ms(row: dict[str, Any]) -> str:
+    """表格里的中位列：没测到就写 ``-``（不写 0，0 会被读成"极快"）。"""
+    value = row.get("median_ms")
+    return "-" if value is None else f"{value:.6f}ms"
+
+
+def _tune_rel(row: dict[str, Any]) -> str:
+    """表格里的 rel 列：没参照或没测到就写 ``-``。"""
+    value = row.get("rel")
+    return "-" if value is None else f"{value:.3e}"
+
+
+def tune_best(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    """最快且**可用**的那一组。
+
+    ``error``（跑不成）、``timeout``（单次超上限）、``budget``（被整轮预算截断）与
+    ``mismatch``（数值不符）一律不参选：它们的 ``median_ms`` 要么不存在、要么不来自
+    一份完整且合格的样本集。
+    """
+    usable = [row for row in rows
+              if row.get("median_ms") is not None
+              and not row.get("error") and not row.get("mismatch")
+              and not row.get("timeout") and not row.get("budget")]
+    return min(usable, key=lambda row: row["median_ms"]) if usable else None
+
+
+# ── 单次超时与整轮预算（--tune-timeout / --tune-budget） ─────────────────────
+class _TuneTimeout(BaseException):
+    """某一次 ``contract()`` 调用超过了 ``--tune-timeout``。
+
+    刻意继承 ``BaseException`` 而不是 ``Exception``：库里有若干 ``except Exception``
+    的"丢掉这次尝试、回退再跑一遍"（例如计划缓存的 memo 失效分支）。若把超时降级成
+    普通异常，那些分支会把它吞掉再跑一遍，超时形同虚设。``KeyboardInterrupt`` 也是
+    同一个理由。
+    """
+
+
+class _TuneBudget(BaseException):
+    """整轮 ``--tune-budget`` 用尽（同样必须穿透库内的 ``except Exception``）。"""
+
+
+def _tune_timer_available() -> bool:
+    """能不能给单次调用装 ``SIGALRM`` 定时器（``setitimer`` 只在主线程可用）。"""
+    return (hasattr(signal, "setitimer") and hasattr(signal, "SIGALRM")
+            and threading.current_thread() is threading.main_thread())
+
+
+class _AlarmWindow:
+    """一次受保护调用的窗口：抛什么、以及这次调用**还在不在**窗口里。
+
+    ``armed`` 在收尾时先置 ``False``，之后才换回上一层窗口——这样"信号已生成、配送
+    落在收尾之后"的那一次会被安静地忽略，而不是打到下一次调用头上。注意**不能**拿
+    ``getitimer()`` 当判据：一次性定时器触发后剩余时间本来就归零，用它会连真正该抛
+    的那一次也吞掉（实测过：0.5 ms 上限、300 次调用一次都没抛）。
+    """
+
+    __slots__ = ("error", "message", "armed")
+
+    def __init__(self, error: type[BaseException], message: str) -> None:
+        self.error = error
+        self.message = message
+        self.armed = True
+
+
+#: 当前窗口；``None`` = 没有调用在受保护。处理器读它而不是闭包捕获——这样一个
+#: 处理器就能服务所有调用，不必每次换（换处理器会留出"信号已在路上、处理器却已
+#: 恢复默认"的窗口，而 ``SIGALRM`` 的默认动作是终止进程）。
+_ALARM_WINDOW: _AlarmWindow | None = None
+
+
+def _alarm_handler(_signum, _frame):
+    """``SIGALRM`` 的唯一处理器：窗口内抛对应异常，其余一律**忽略**。
+
+    忽略而不是回落到默认动作，是因为迟到的一次闹钟不该杀掉进程（``SIGALRM`` 的默认
+    动作就是终止）。处理器装上就不摘，代价见 :func:`_call_alarm`。
+    """
+    window = _ALARM_WINDOW
+    if window is None or not window.armed:
+        return
+    raise window.error(window.message)
+
+
+@contextlib.contextmanager
+def _call_alarm(seconds: float, error: type[BaseException]):
+    """给**一次**调用装 ``SIGALRM`` 上限，退出时无条件解除定时器。
+
+    解除是硬要求：一次超时之后本进程还要继续跑剩下的组合（以及调用方自己的代码），
+    残留的 itimer 会在几十秒后的某个无关调用里抛异常，那时没人能把它归因到这里。
+
+    处理器**装一次就不再摘**（见 :func:`_alarm_handler`）：每次调用都换回旧处理器会
+    留下一段"信号已在路上、处理器却已恢复默认"的窗口，而 ``SIGALRM`` 的默认动作是
+    终止进程。代价是 tune 之后本进程里没有受保护调用时 ``SIGALRM`` 被忽略而不是
+    终止——对一个自己装闹钟的宿主程序来说，这个差异是刻意选择的（宁可忽略一次，
+    也不要莫名其妙地被杀掉）。
+    """
+    global _ALARM_WINDOW
+    message = (f"单次 contract() 超过 --tune-timeout {seconds:g}s"
+               if error is _TuneTimeout
+               else f"整轮超过 --tune-budget（本次调用被截断于 {seconds:g}s）")
+    if signal.getsignal(signal.SIGALRM) is not _alarm_handler:
+        signal.signal(signal.SIGALRM, _alarm_handler)
+    window = _AlarmWindow(error, message)
+    previous_window = _ALARM_WINDOW
+    _ALARM_WINDOW = window
+    interval, remaining = signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        try:
+            if remaining > 0.0:                 # 调用前就存在的定时器原样还回去
+                signal.setitimer(signal.ITIMER_REAL, interval, remaining)
+        finally:
+            # 关窗口这一句就是"迟到的信号算不算数"的分界；放进内层 finally，
+            # 中途被信号打断也不会让一次超时永久留在模块状态里。
+            window.armed = False
+            _ALARM_WINDOW = previous_window
+
+
+def _guarded_call(call, limit: float | None, deadline: float | None) -> None:
+    """跑一次 ``call()``；超过 ``limit`` 秒（单次上限）或整轮 ``deadline`` 即中止。
+
+    装得上定时器就**中断**；装不上（非主线程 / 无 ``SIGALRM``）就退化成"先跑完、再按
+    耗时判定"——仍然如实判超时，只是没能省下那段墙钟。预算比单次上限更紧时按预算截断，
+    并抛 :class:`_TuneBudget`（它说明的是"整轮没时间了"，不是"这一组太慢"）。
+    """
+    seconds = limit
+    error: type[BaseException] = _TuneTimeout
+    if deadline is not None:
+        left = deadline - time.monotonic()
+        if left <= 0.0:
+            raise _TuneBudget("整轮 --tune-budget 已用尽")
+        if seconds is None or left < seconds:
+            seconds, error = left, _TuneBudget
+    if seconds is None:
+        call()
+        return
+    if not _tune_timer_available():
+        started = time.perf_counter()
+        call()
+        if time.perf_counter() - started > seconds:
+            raise error(f"单次调用耗时超过上限 {seconds:g}s（未能中断，已跑完）")
+        return
+    with _call_alarm(seconds, error):
+        call()
+
+
+def _profile_tune(on: bool) -> bool | None:
+    """把"tune 期间强制记录"的开关设成 ``on``，返回**设置前**的取值。
+
+    底层是 ``_api._PROFILE_TUNE``（``_api._profile_record`` 每次记录时**现读**它，
+    所以模块级赋值就够了，与 :func:`_reset_last_kernel` 写 ``_api._LAST_KERNEL``
+    同一手法）。库若提供 ``set_profile_tune()`` 就优先用它。返回 ``None`` = 这个开关
+    根本不存在（旧版库）：tune 仍会跑，但记录退回稀疏口径，报告里照实标注。
+    """
+    try:
+        from pyqcd.einsum import _api
+    except ImportError:                         # pragma: no cover - 旧版库
+        return None
+    setter = getattr(_api, "set_profile_tune", None)
+    if callable(setter):
+        setter(bool(on))
+        return not bool(on)                     # 没有读值接口：按二态恢复
+    if hasattr(_api, "_PROFILE_TUNE"):
+        previous = bool(getattr(_api, "_PROFILE_TUNE"))
+        _api._PROFILE_TUNE = bool(on)
+        return previous
+    return None
+
+
+class _ProfileRecordProbe:
+    """截获 ``_profile_cache.record``，记下**这一组**到底把哪几条写进了画像。
+
+    为什么必须截获而不是事后反推：``_api`` 记录的 ``kernel`` 是**具体标签**
+    （``kupl_dedicated`` / ``backend`` / ``generic`` / ``equivalence``），而这一组请求
+    的是逻辑名（``dedicated`` / ``auto`` …）。超时或数值不符时手上只剩一个结果，
+    靠 ``last_kernel()`` 反推在 auto 分派与等价改写下会指错行；包装一层直接拿到实参，
+    撤回时一一对得上。
+
+    只在 :func:`run_tune` 期间生效（CLI 单线程路径），退出时**原样恢复**：``_api``
+    是 ``import`` 模块对象后调 ``_profile_cache.record``，替换模块属性即可生效。
+    """
+
+    def __init__(self) -> None:
+        self.cache = _profile_module()
+        self.original = (getattr(self.cache, "record", None)
+                         if self.cache is not None else None)
+        self.rows: list[tuple[dict[str, Any], str, str]] = []
+        self._active = False
+
+    def __enter__(self) -> "_ProfileRecordProbe":
+        if self.cache is None or not callable(self.original):
+            return self          # 旧版库：没有可记的东西，也不假装记了
+
+        def wrapper(row, *, force_write: bool = False):
+            stored = self.original(row, force_write=force_write)
+            label = str(row.get("kernel") or "").strip().lower()
+            # 不可重放的标签（空 / equivalence）在 record 里**早退**、根本不进索引，
+            # 收进来只会让撤回多报一条"没撤回"。
+            if stored or label not in ("", "equivalence"):
+                self.rows.append((dict(row), str(row.get("kernel") or ""),
+                                  str(row.get("optimize") or "")))
+            return stored
+
+        self.cache.record = wrapper
+        self._active = True
+        return self
+
+    def __exit__(self, *_exc_info) -> bool:
+        if self._active and self.cache is not None:
+            self.cache.record = self.original
+            self._active = False
+        return False
+
+    def pairs(self) -> list[tuple[dict[str, Any], str, str]]:
+        """去重后的 ``(键, kernel, optimize)`` 列表（保持首次出现次序）。"""
+        seen: set[tuple[Any, ...]] = set()
+        unique: list[tuple[dict[str, Any], str, str]] = []
+        for key, kernel, optimize in self.rows:
+            token = (key.get("host"), key.get("user_device"), key.get("backend"),
+                     key.get("dtype"), key.get("equation"), key.get("shape"),
+                     key.get("device"), kernel, optimize)
+            if token in seen:
+                continue
+            seen.add(token)
+            unique.append((key, kernel, optimize))
+        return unique
+
+    def configs(self) -> set[tuple[str, str]]:
+        """本组写过的 ``(kernel, optimize)`` 集合。"""
+        return {(kernel, optimize) for _key, kernel, optimize in self.rows}
+
+
+def _withdraw_records(probe: _ProfileRecordProbe,
+                      good: set[tuple[str, str]]) -> tuple[int, int]:
+    """撤回本组写进画像的坏记录，返回 ``(撤掉, 未撤回)``。
+
+    ``good`` 是**已成功且合格**的组合写过的 ``(kernel, optimize)``：同一个
+    ``(键, kernel, optimize)`` 也可能由另一组写下来（``auto`` 分派跑成
+    ``kupl_dedicated`` 与显式 ``dedicated`` 会落到同一行），那种行绝不能删——它背后
+    有一次合格的实测。
+
+    ``drop()`` 返回 ``False`` 有两种含义：本来就没有这一条，或盘上仍有历史行
+    （``profile.csv`` 是追加写、没有删改接口）。这里都记作"未撤回"，由报告如实说明。
+    """
+    cache = probe.cache
+    drop = getattr(cache, "drop", None) if cache is not None else None
+    if not callable(drop):
+        return 0, 0
+    removed = kept = 0
+    for key, kernel, optimize in probe.pairs():
+        if (kernel, optimize) in good:
+            continue
+        try:
+            ok = bool(drop(key, kernel, optimize))
+        except Exception:                       # noqa: BLE001 - 撤回失败不该中断遍历
+            ok = False
+        if ok:
+            removed += 1
+        else:
+            kept += 1
+    return removed, kept
+
+
+def _profile_effective(requested: bool | None) -> bool | None:
+    """本次调用画像是否真的生效：``False`` 一律不生效，其余看库的有效可用性。
+
+    与 :func:`cache_line` 同一条原则——报**本次生效值**，不报 ``summary()['enabled']``
+    那个环境变量口径。否则 ``--profile false`` 会印出 ``enabled=true``（表里有行、
+    环境变量也开着），与本次"既不读也不写"自相矛盾。
+    """
+    if requested is False:
+        return False
+    cache = _profile_module()
+    probe = getattr(cache, "enabled", None) if cache is not None else None
+    if not callable(probe):
+        return None
+    try:
+        return bool(probe())
+    except Exception:                           # noqa: BLE001 - 报告层不许影响主流程
+        return None
+
+
+def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
+             device: str = DEFAULT_DEVICE, dtype: str = DEFAULT_DTYPE,
+             backend: str = DEFAULT_BACKEND, atol: float = DEFAULT_ATOL,
+             rtol: float = DEFAULT_RTOL, rounds: int = DEFAULT_ROUNDS,
+             warmup: int = DEFAULT_WARMUP, seed: int = 0,
+             specialize: bool | None = None, cache: bool | None = None,
+             profile: bool | None = None,
+             profile_kwargs: dict[str, Any] | None = None,
+             timeout: float = DEFAULT_TUNE_TIMEOUT,
+             budget: float = DEFAULT_TUNE_BUDGET,
+             language: str | None = None) -> dict[str, Any]:
+    """遍历网格并返回 ``{"rows", "best", "profile", "flushed", ...}``（表格由 :func:`print_tune` 打）。
+
+    **不变量**：方程、形状、dtype、设备、后端都只在这里取一次；每组只换
+    ``kernel_force`` / ``as_equivalence`` / ``optimize``。``compare`` 不参与（调用方
+    已固定 ``none``）。
+
+    每组直接调 ``pe.contract()``（不走 :func:`run`）有两个理由：①``run`` 每组都会再
+    算一遍参照与等价报告，30 组就是 30 份无用功；②画像观测本来就是 ``contract()``
+    自己记的，调它才是"真的产生了观测"，不需要也不应该由这里手工写行。
+
+    ``timeout`` 是**每一次** ``contract()`` 调用（warmup 与每一轮都算）的上限秒数，
+    ``budget`` 是整轮上限（``0`` = 不限）。任一次调用超时 → 该组记 ``timeout``；中位
+    只由全部成功且未超时的调用构成（``_timed`` 一抛出来就没有中位，不拿部分样本凑）。
+    预算用尽 → 立刻停止遍历，返回值里 ``stopped``/``measured`` 给出"已测 N/M"。
+
+    任一组合抛异常（含强制内核的 ``KernelUnavailableError``）只在该行记
+    ``error=<类型>`` 并继续——一次遍历不该因为一个不可用的内核整段作废。超时、异常与
+    数值不符（``rel > atol+rtol``）三类组合写进画像的记录都会被撤回（``drop()``）；
+    记录在 tune 期间是**强制**的（``force_write``），否则"坏的没留下"就无从证明。
+    """
+    global _ALARM_WINDOW
+
+    import pyqcd.einsum as pe
+
+    lang = resolve_language(language)
+    if warmup < 1:
+        raise UsageError(translate("error.warmup_zero", lang))
+    if rounds < 1:
+        raise UsageError(translate("error.rounds", lang))
+    if float(timeout) < 0.0:
+        raise UsageError(translate("error.tune_timeout", lang, value=timeout))
+    if float(budget) < 0.0:
+        raise UsageError(translate("error.tune_budget", lang, value=budget))
+    combos = tune_combos(lang)          # 超上限在构造任何张量之前就报错
+    xp = _xp_for_device(device, lang)
+    np_dtype = np.dtype(dtype)
+    # 操作数只构造一次：30 组看到的必须是同一批数据，否则"哪组更快"混进了数据差异。
+    operands, host = _make_operands(xp, shapes, np_dtype, seed)
+    reference, reference_note = _tune_reference(equation, host)
+    extra = dict(profile_kwargs or {})
+    tolerance = float(atol) + float(rtol)
+    # ``limit`` = 每一次 contract() 调用的上限；``deadline`` = 整轮的上限。
+    # ``0``/负数都是"不设上限"（CLI 已校验非负，这里的 0 是合法取值）。
+    limit = float(timeout) if float(timeout) > 0.0 else None
+    deadline = (time.monotonic() + float(budget)) if float(budget) > 0.0 else None
+    rows: list[dict[str, Any]] = []
+    # 已成功且合格的组合写过哪些 (kernel, optimize)：坏组合撤回时不能误删这些行。
+    good: set[tuple[str, str]] = set()
+    measured = 0
+    unwithdrawn = 0
+    stopped = False
+    # tune 期间记录是**强制**的（整张地图才有比较价值），坏组合随后由 drop() 撤回。
+    # 这个开关是过程级状态，``finally`` 里原样还回去，别让后面的调用继续强制写盘。
+    previous_tune = _profile_tune(True)
+    try:
+        for kernel, as_equiv, optimize in combos:
+            if deadline is not None and time.monotonic() >= deadline:
+                stopped = True
+                break
+            row: dict[str, Any] = {
+                "kernel_force": kernel,
+                "as_equivalence": as_equiv,
+                "optimize": optimize,
+                "median_ms": None,
+                "route": KERNEL_UNKNOWN,
+                "rel": None,
+            }
+            holder: list[Any] = []
+
+            def call(kernel=kernel, as_equiv=as_equiv, optimize=optimize,
+                     holder=holder):
+                got = pe.contract(equation, *operands, backend=backend,
+                                  optimize=optimize, specialize=specialize,
+                                  kernel_force=kernel,
+                                  as_equivalence=(as_equiv == "true"),
+                                  cache=cache, **extra)
+                # 只留**最近一次**结果：append 会把 warmup+rounds 份中间结果全留活，
+                # 生产尺寸上那是把峰值内存乘上轮数。
+                holder[:] = [got]
+                return got
+
+            _clear_kernel_info()
+            _reset_last_kernel()
+            probe = _ProfileRecordProbe()
+            bad = False
+            seconds: float | None = None
+            # 记录本组到底往画像里写了哪几条：超时/异常/数值不符时按它撤回。
+            with probe:
+                try:
+                    seconds = _timed(
+                        lambda: _guarded_call(call, limit, deadline), warmup, rounds)
+                except _TuneTimeout:
+                    row["timeout"] = True
+                    bad = True
+                except _TuneBudget:
+                    row["budget"] = True
+                    bad = True
+                    stopped = True
+                except Exception as exc:        # noqa: BLE001 - 单组失败不中断遍历
+                    row["error"] = type(exc).__name__
+                    bad = True
+            row["route"] = _tune_route(
+                kernel_force_fields(_last_kernel(), kernel,
+                                    kernel_labels(kernel, lang)),
+                _kernel_info())
+            if not bad and seconds is not None:
+                row["median_ms"] = round(seconds * 1000.0, 6)
+                measured += 1
+                if reference is not None and holder:
+                    row["rel"] = _relative_error(_to_host(holder[-1]), reference)
+                    if not (row["rel"] <= tolerance):
+                        row["mismatch"] = True
+                        bad = True
+            holder.clear()                      # 别把上一组的结果留到下一组
+            if bad:
+                # 超时 / 异常 / MISMATCH：这三类**不能**留在画像里。
+                removed, kept = _withdraw_records(probe, good)
+                row["profile_dropped"] = removed
+                row["profile_kept"] = kept
+                unwithdrawn += kept
+            else:
+                good |= probe.configs()
+            rows.append(row)
+            if stopped:                         # 预算用尽：不再开新的一组
+                break
+    finally:
+        if previous_tune is not None:
+            _profile_tune(previous_tune)
+        # 闹钟窗口是模块级状态：单次调用若正好在收尾时被迟到的信号打断，那句"关窗口"
+        # 可能少走一次。整轮结束时无条件清空，别把这个状态留给后面的人。
+        _ALARM_WINDOW = None
+
+    # 写回画像：``contract()`` 已经把每组的观测记进内存，这里只负责落盘并如实报告
+    # 它自己的统计（rows/keys）。flush 失败/模块缺席都只降级，不影响本次结论。
+    flushed: int | None = None
+    cache_module = _profile_module()
+    flush = getattr(cache_module, "flush", None) if cache_module is not None else None
+    if callable(flush):
+        try:
+            flushed = int(flush())
+        except Exception:                       # noqa: BLE001 - 报告层不许影响主流程
+            flushed = None
+    return {
+        "rows": rows,
+        "best": tune_best(rows),
+        "profile": _profile_summary(),
+        "profile_requested": "auto" if profile is None else (
+            "true" if profile else "false"),
+        "profile_enabled": _profile_effective(profile),
+        "profile_forced": previous_tune is not None,
+        "flushed": flushed,
+        "reference": reference_note,
+        "combos": len(combos),
+        "measured": measured,
+        "total": len(combos),
+        "stopped": stopped,
+        "skipped": len(combos) - measured,
+        "unwithdrawn": unwithdrawn,
+        "timeout": limit,
+        "budget": float(budget),
+        "timer": "sigalrm" if (limit is not None and _tune_timer_available())
+                 else ("posthoc" if limit is not None else "off"),
+        "warmup": warmup,
+        "rounds": rounds,
+        "compare": "none",
+        "axes": {
+            "kernel_force": list(TUNE_KERNEL_FORCE),
+            "as_equivalence": list(TUNE_AS_EQUIVALENCE),
+            "optimize": list(TUNE_OPTIMIZERS),
+        },
+    }
+
+
+def _bold(text: str) -> str:
+    """最优行的加粗标记：只在 stderr 是终端时加 ANSI，重定向到日志时保持纯文本。"""
+    if not sys.stderr.isatty():
+        return text
+    return f"\033[1m{text}\033[0m"
+
+
+def _tune_line(row: dict[str, Any], best: dict[str, Any] | None) -> str:
+    """一行结果。``*`` 是**稳定**的最优标记（终端里另加粗），便于脚本筛。
+
+    ``MISMATCH`` / ``timeout`` / ``error=<类型>`` 是三类"不参与选优"的稳定标号，
+    与 ``tune hdr`` 里的字段名一样**不跟 --language 翻译**（脚本要能筛）。
+    """
+    marker = "*" if row is best else " "
+    text = ("{} median={:>11s}  kernel_force={:<9s}  as_equivalence={:<5s}  "
+            "optimize={:<7s}  rel={:>9s}  route={}").format(
+        marker, _tune_ms(row), row["kernel_force"], row["as_equivalence"],
+        row["optimize"], _tune_rel(row), row.get("route") or KERNEL_UNKNOWN)
+    if row.get("mismatch"):
+        text += "  MISMATCH"
+    if row.get("timeout"):
+        text += "  timeout"
+    if row.get("budget"):
+        text += "  budget"
+    if row.get("error"):
+        text += f"  error={row['error']}"
+    return text
+
+
+def print_tune(tune: dict[str, Any], language: str = "zh",
+               verbose: bool = DEFAULT_VERBOSE) -> None:
+    """把 ``--tune`` 的表打到 **stderr**（既有输出行一字不动）。
+
+    顺序：说明行 → 超时实现说明 → 遍历覆盖的取值 → 列名 → 分隔线（这几行是表头）
+    → 最快 5 行 + 每个 ``kernel_force`` 取值的最快一行（``--verbose`` 才有）→
+    被排除的组合计数 → 画像 rows/keys → 预算截断/撤回提示 → ``tune best :``
+    （**最后一行**）。不加 ``--verbose`` 时只有表头、画像行与最优行，避免 30 行刷屏。
+    """
+    out = sys.stderr
+    rows = list(tune.get("rows") or [])
+    best = tune.get("best")
+    print("tune      : " + translate(
+        "tune.caption", language, combos=tune.get("combos"),
+        warmup=tune.get("warmup"), rounds=tune.get("rounds"),
+        reference=tune.get("reference")), file=out)
+    # 超时是怎么实现的必须写在报告里：SIGALRM 可能打断原生内核，用户据此决定是否
+    # 换个干净进程再跑。装不上定时器时同样要说，否则"没超时"会被误读成"够快"。
+    timer = tune.get("timer")
+    if timer == "sigalrm":
+        print("tune note : " + translate("tune.signal_note", language), file=out)
+    elif timer == "posthoc":
+        print("tune note : " + translate("tune.posthoc_note", language), file=out)
+    # 网格覆盖了哪些取值：用户显式写的 --kernel-force 等被忽略后，光看"最快 5 行"
+    # 无法确认那一维到底遍历过没有，这一行把它钉死（机器可读，固定字段名）。
+    axes = tune.get("axes") or {}
+    print("tune axes : kernel_force={}  as_equivalence={}  optimize={}".format(
+        ",".join(str(item) for item in (axes.get("kernel_force") or ())) or "-",
+        ",".join(str(item) for item in (axes.get("as_equivalence") or ())) or "-",
+        ",".join(str(item) for item in (axes.get("optimize") or ())) or "-"),
+        file=out)
+    print("tune hdr  : median_ms  kernel_force  as_equivalence  optimize  rel  "
+          "route", file=out)
+    print("tune ---- : " + "-" * 88, file=out)
+    if verbose:
+        measured = sorted((row for row in rows if row.get("median_ms") is not None),
+                          key=lambda row: row["median_ms"])
+        for row in measured[:5]:
+            print("tune row  : " + (_bold(_tune_line(row, best))
+                                    if row is best else _tune_line(row, best)),
+                  file=out)
+        # 「最快 5 行」会被某一个 kernel_force 取值整体占满（实测有这样的方程：
+        # generic 比其它取值快一个量级时，5 行全是 generic，另外四档在表里一次都不
+        # 出现——而用户正是想知道"那一档到底跑没跑、跑多快"）。所以再补每个
+        # kernel_force 取值的最快一行（已在前 5 行里的不重复打）。
+        shown = {id(row) for row in measured[:5]}
+        for kernel in TUNE_KERNEL_FORCE:
+            candidates = [row for row in measured if row["kernel_force"] == kernel]
+            if not candidates or id(candidates[0]) in shown:
+                continue
+            print("tune row  : " + _tune_line(candidates[0], best), file=out)
+        # 坏组合也要露脸（哪怕不带 --verbose 时无人可见）：只把它们打在这里，
+        # 30 行全打会刷屏，但"哪个组合被排除、为什么"必须能查到。
+        for row in rows:
+            if row.get("error") or row.get("timeout") or row.get("budget"):
+                print("tune row  : " + _tune_line(row, best), file=out)
+    skipped = [row for row in rows if row.get("error") or row.get("mismatch")]
+    if skipped or any(row.get("timeout") for row in rows):
+        print("tune skip : " + translate(
+            "tune.skip", language,
+            mismatch=sum(1 for row in skipped if row.get("mismatch")),
+            error=sum(1 for row in skipped if row.get("error")),
+            timeout=sum(1 for row in rows if row.get("timeout"))), file=out)
+    profile = tune.get("profile") or {}
+    enabled = tune.get("profile_enabled")
+    print("tune prof : profile={}  enabled={}  rows={}  keys={}  flushed={}{}".format(
+        tune.get("profile_requested") or KERNEL_UNKNOWN,
+        KERNEL_UNKNOWN if enabled is None else str(bool(enabled)).lower(),
+        KERNEL_UNKNOWN if profile.get("rows") is None else profile["rows"],
+        KERNEL_UNKNOWN if profile.get("keys") is None else profile["keys"],
+        KERNEL_UNKNOWN if tune.get("flushed") is None else tune["flushed"],
+        f"  last_error={profile['last_error']}" if profile.get("last_error") else ""),
+        file=out)
+    # 坏组合没能从磁盘上抹掉时如实说明：profile.csv 是追加写，历史行删不掉。
+    if tune.get("unwithdrawn"):
+        print("tune cache: " + translate("tune.history_kept", language,
+                                        n=tune["unwithdrawn"]), file=out)
+    # 预算用尽 → 必须报"已测 N/M"：不说清有多少组没测，"最优"就会被读成全局最优。
+    if tune.get("stopped"):
+        print("tune stop : " + translate(
+            "tune.stop", language, measured=tune.get("measured"),
+            total=tune.get("total"), skipped=tune.get("skipped"),
+            budget=float(tune.get("budget") or 0.0)), file=out)
+    if best is None:
+        print("tune best : none  (" + translate("tune.none", language) + ")", file=out)
+        return
+    print("tune best : kernel_force={}  as_equivalence={}  optimize={}  "
+          "median={:.6f}ms".format(best["kernel_force"], best["as_equivalence"],
+                                   best["optimize"], best["median_ms"]), file=out)
+
+
 # ── 语料反推（不写 --shape 时） ──────────────────────────────────────────────
 def shapes_from_corpus(equation: str, scene: str
                        ) -> tuple[list[tuple[int, ...]], bool, dict[str, int]]:
@@ -2947,6 +3819,17 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
                         choices=AS_EQUIVALENCE_MODES,
                         help=t("help.as_equivalence", env=AS_EQUIVALENCE_ENV,
                                default=DEFAULT_AS_EQUIVALENCE))
+    # ``--tune`` 是开关：``nargs="?"`` 让 ``--tune``、``--tune true``、``--tune false``
+    # 三种写法都成立（与 ``--verbose`` 同风格），缺省关闭。
+    parser.add_argument("--tune", nargs="?", const="true", default="false",
+                        help=t("help.tune"))
+    # 超时/预算只在 --tune 下有语义：缺省值写进 --help，用户不必猜"没写会跑多久"。
+    parser.add_argument("--tune-timeout", type=float, default=DEFAULT_TUNE_TIMEOUT,
+                        help=t("help.tune_timeout",
+                               default=f"{DEFAULT_TUNE_TIMEOUT:g}"))
+    parser.add_argument("--tune-budget", type=float, default=DEFAULT_TUNE_BUDGET,
+                        help=t("help.tune_budget",
+                               default=f"{DEFAULT_TUNE_BUDGET:g}"))
     parser.add_argument("--equivalence", default=DEFAULT_EQUIVALENCE,
                         choices=EQUIVALENCE_MODES,
                         help=t("help.equivalence", env=EQUIVALENCE_ENV,
@@ -3001,6 +3884,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser(language=language)
     args = parser.parse_args(argv)
     language = resolve_language(args.language)
+    # ``--tune`` 自己会遍历这三轴：显式非 auto 取值只**警告 + 忽略**（每个参数一行），
+    # 遍历照常进行、退出码仍为 0——顺手写上的一维不该让整轮 tune 变成用法错误。
+    tune_on = _as_bool(args.tune)
+    if tune_on:
+        tune_conflicts(kernel_force=args.kernel_force,
+                       as_equivalence=args.as_equivalence,
+                       optimize=args.optimize, language=language)
 
     if args.shape is None:
         shapes, matched, label_sizes = shapes_from_corpus(args.equation, args.scene)
@@ -3032,6 +3922,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if out_shape is None:                     # 没有 equation 时的旧语义
             out_shape = ()
 
+    # 这三个取值先在本地解析一次：主路径与 ``--tune`` 必须看到**同一套**语义
+    # （尤其 ``--cache false`` 不许被遍历那一路绕过）。
+    specialize_value = parse_specialize(args.specialize, language)
+    cache_value = parse_cache(args.cache, language)
+    profile_value = parse_profile(args.profile, language)
     try:
         result = run(
             equation=args.equation, shapes=shapes,
@@ -3040,14 +3935,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             atol=args.atol, rtol=args.rtol, compare=args.compare,
             optimize=args.optimize, rounds=args.rounds, warmup=args.warmup,
             seed=args.seed, verbose=_as_bool(args.verbose),
-            specialize=parse_specialize(args.specialize, language),
+            specialize=specialize_value,
             compare_optimize=args.compare_optimize,
             equivalence=parse_equivalence(args.equivalence, language),
             as_equivalence=args.as_equivalence,
             kernel_force=args.kernel_force,
-            cache=parse_cache(args.cache, language),
+            cache=cache_value,
             explain=parse_explain(args.explain, language),
-            profile=parse_profile(args.profile, language),
+            profile=profile_value,
             profile_dir=args.profile_dir,
             language=language,
         )
@@ -3068,6 +3963,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             "result.warning_compare_optimize_inert", language,
             value=result["compare_optimize"], compare=args.compare)),
             file=sys.stderr)
+
+    # ``--tune``：在主路径既有输出之后**追加**遍历（表格走 stderr，既有行不动）。
+    # 放在 ``--json`` 之前，``report['tune']`` 才会一起落进 JSON。
+    if tune_on:
+        tune = run_tune(
+            equation=args.equation, shapes=shapes,
+            device=args.device, dtype=args.dtype, backend=args.backend,
+            atol=args.atol, rtol=args.rtol, rounds=args.rounds,
+            warmup=args.warmup, seed=args.seed, specialize=specialize_value,
+            cache=cache_value, profile=profile_value,
+            profile_kwargs=_contract_profile_kwargs(profile_value, args.profile_dir),
+            timeout=args.tune_timeout, budget=args.tune_budget,
+            language=language,
+        )
+        result["tune"] = tune["rows"]
+        print_tune(tune, language, verbose=_as_bool(args.verbose))
 
     if args.json:
         # 写不进去属于**参数/环境错误**（退出码 2），不是数值失败（1）。

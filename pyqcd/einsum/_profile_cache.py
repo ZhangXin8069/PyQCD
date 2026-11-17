@@ -104,6 +104,7 @@ __all__ = [
     "PROFILE_NAME",
     "best",
     "configure",
+    "drop",
     "enabled",
     "ensure_configured",
     "equivalence_marker",
@@ -620,6 +621,56 @@ def record_equivalence(key: Mapping[str, Any], state: str, kind: str = "",
         return True
 
 
+def drop(key: Mapping[str, Any], kernel: str, optimize: str) -> bool:
+    """从内存索引与待写队列里撤回一条 ``(键, kernel, optimize)``。
+
+    为什么需要它：``--tune`` 会**强制**记录每一组（``force_write=True``，为的是留下
+    整张地图），但坏组合——超时、抛异常、``rel`` 超 ``atol+rtol``——不该留在画像里：
+    它们要么没跑完、要么数值就是错的，留下来只会占名额、误导 :func:`best`。撤回只
+    覆盖**本进程**的两处状态：
+
+    * 内存索引（:func:`best` / :func:`summary` 立刻看不到这条）；
+    * 待写队列（下次 :func:`flush` 不会再把它追加进 CSV）。
+
+    **落盘层不删历史行**：``profile.csv`` 是追加写的，本模块没有删改接口
+    （:func:`_rewrite_locked` 只按"每键最快 K 条"裁剪，不认好坏）。因此盘上**已经**
+    有同一条 ``(键, kernel, optimize)`` 行时——早先的进程写下的，或本进程已 flush
+    过——内存里撤回也挡不住下次 :func:`load` 再把它读回来：这种情形返回 ``False``，
+    让调用方如实说明"历史行仍在 CSV 里"，不要把它说成已经清干净。
+
+    返回 ``True`` = 内存索引与待写队列都没有这条了，且盘上也没有同一条行。
+    关闭、目录不可用、本来就没有这条、盘上仍有历史行 → ``False``。**不抛异常**
+    （画像层任何失败都不该影响调用方）。
+    """
+    if not enabled() or not isinstance(key, Mapping):
+        return False
+    with _LOCK:
+        _ensure_locked()
+        if not _dir_ok:
+            return False
+        _load_locked(False)                      # 盘上已有的行也进索引了，一并撤
+        token = _key_of(key)
+        config = (_text(kernel), _text(optimize))
+        removed = False
+        slot = _index.get(token)
+        if slot is not None:
+            if slot.pop(config, None) is not None:
+                removed = True
+            if not slot:
+                _index.pop(token, None)
+        kept: list[dict[str, str]] = []
+        for row in _pending:
+            if (_key_of(row) == token
+                    and (row.get("kernel"), row.get("optimize")) == config):
+                removed = True
+                continue
+            kept.append(row)
+        _pending[:] = kept
+        if not removed:
+            return False
+        return _count_history_rows(token, config) == 0
+
+
 def flush() -> int:
     """把攒下的行一次追加写盘（主表 + 标记表），返回**主表**写出的行数。
 
@@ -873,6 +924,39 @@ def _drop_orphans_locked() -> None:
 
 
 # -- 内部：加载与落盘 -------------------------------------------------------
+def _count_history_rows(token: tuple[str, ...], config: tuple[str, str]) -> int:
+    """盘上还有多少条同 ``(键, 配置)`` 的行（只读、不写；坏行按读侧口径跳过）。
+
+    :func:`drop` 只撤回内存与待写队列，删不掉已经追加进 ``profile.csv`` 的历史行。
+    这里数一遍，让那条撤回能如实回答"清干净了没有"——文件不存在算 0 行。整份读失败
+    只记 ``last_error``（与 :func:`_load_locked` 同口径），按 0 行返回：撤回本身
+    已经完成，读不出历史行不该把它改判成失败。
+    """
+    try:
+        with open(_profile_path(), "rb") as handle:
+            raw = handle.read(_MAX_LOAD_BYTES)
+    except FileNotFoundError:
+        return 0
+    except Exception as exc:                     # noqa: BLE001 - 读失败只记原因
+        _error_locked(exc)
+        return 0
+    text, _skipped = _decode_table(raw)
+    expected = list(PROFILE_COLUMNS)
+    count = 0
+    try:
+        for fields in csv.reader(io.StringIO(text)):
+            if fields == expected or len(fields) != len(expected):
+                continue                     # 表头 / 坏行（读侧同样是跳过）
+            mapped = dict(zip(expected, fields))
+            if (mapped.get("kernel"), mapped.get("optimize")) != config:
+                continue
+            if _key_of(mapped) == token:
+                count += 1
+    except Exception as exc:                     # noqa: BLE001 - csv 流坏了就按已数的算
+        _error_locked(exc)
+    return count
+
+
 def _load_locked(force: bool) -> int:
     """:func:`load` 的本体（持锁）。
 

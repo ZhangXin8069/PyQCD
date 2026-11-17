@@ -37,6 +37,26 @@ python -m pyqcd --json     # machine-readable
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
 
+## 0.5.2 发布声明 — qcd-einsum：`--tune`、等价备忘、诚实的缓存行
+
+* **`--tune`**：锁定 `equation/shape/dtype/device/backend`，遍历
+  `kernel_force × as_equivalence × optimize`（≤30 组，`compare` 固定 `none`）。
+  每一次 einsum 调用受 `--tune-timeout`（默认 100 s）约束，整轮受 `--tune-budget`
+  （默认 0=不限）。与遍历冲突的参数一律警告后忽略（退出码 0），不再报用法错误。
+* tune 记录整张地图：遍历期间 `record(..., force_write=True)` 绕过 5% 稀疏门（每键
+  上限仍裁到最快 4 条）。超时 / 抛异常 / 数值超 `atol` 的组合会被 `drop()` 从缓存
+  撤回，避免坏配置日后胜出。
+* 等价备忘（`profile_equivalence.csv`）：证明确实改写不了的方程会被记住，后续调用
+  跳过等价步骤；`as_equivalence="force"` / `--as-equivalence force` 忽略备忘并刷新
+  ——拓扑注册表新增支持后用它可以强制重查。
+* 修复：显式指定 `kernel_force` 且经等价改写跑成的调用，过去被记成 `equivalence`
+  （不可重放）而观测被丢弃，导致默认调用永远不命中；现在记录生效的 kernel_force
+  （例如 generic：同一条 10 操作数方程上 364 ms vs kupl_topology 2792 ms）。
+* 修复：`_profile_record` 过去只要键上有任意缓存行就跳过记录，使 30 组遍历只落 1 行
+  （3%）；现在只跳过真正按命中执行的调用。
+
+无数值变化；`--tune` 的输出是单次运行实测，不是基准。
+
 ## 0.5.1 发布声明 — qcd-einsum：画像缓存不再推荐走不通的路
 
 `0.5.1` 修掉 0.5.0 画像缓存的三个缺陷（均由一次真实生产运行 `ambn,cgdh,…->ka`

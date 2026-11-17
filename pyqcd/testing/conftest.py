@@ -168,6 +168,12 @@ from pyqcd.testing._einsum_fallback_visibility_contract import (
 from pyqcd.testing._einsum_profile_robustness_contract import (
     test_einsum_profile_robustness_contracts,
 )
+# 等价负标记契约 + `--tune` 遍历契约：state=none 跳过等价步骤、无标记照常查、
+# `as_equivalence="force"` 刷新标记、`profile=False` 零 IO、`--tune` 与它自己
+# 遍历的三维互斥、组合数硬上限、最快但 MISMATCH 的组合不得当选（2026-11-17）。
+from pyqcd.testing._einsum_tune_equivalence_contract import (
+    test_einsum_tune_equivalence_contracts,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。
@@ -177,6 +183,7 @@ TESTS = (
     test_einsum_profile_cache_contracts,
     test_einsum_dispatch_invariance_contracts,
     test_einsum_profile_robustness_contracts,
+    test_einsum_tune_equivalence_contracts,
     test_native_expression_compile_failure_leaves_a_warning,
     test_native_fallback_warns_once_per_reason,
     test_shape_path_failure_is_recorded_and_announced_once,

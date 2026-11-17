@@ -42,6 +42,30 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
 
+## Release 0.5.2 — qcd-einsum: `--tune`, equivalence memo, honest cache rows
+
+* **`--tune`** locks `equation/shape/dtype/device/backend` and sweeps
+  `kernel_force x as_equivalence x optimize` (<=30 combos, `compare` fixed to `none`).
+  Each **single** einsum call is bounded by `--tune-timeout` (default 100 s); the whole
+  sweep by `--tune-budget` (default 0 = unlimited). Conflicting options are **warned
+  about and ignored** (exit code 0), not rejected.
+* Tune records the **whole map**: while tuning, `record(..., force_write=True)` bypasses
+  the 5% sparse gate (the per-key cap still trims to the four fastest). Combos that time
+  out, raise, or miss `atol` are **removed from the cache** (`drop()`), so a bogus config
+  can never win later.
+* **Equivalence memo** (`profile_equivalence.csv`): an equation that proved
+  un-rewritable is remembered and the equivalence step is skipped on later calls.
+  `as_equivalence="force"` / `--as-equivalence force` ignores the memo and refreshes it —
+  use it after the topology registry gains new shapes.
+* **Fixed:** a run with an explicit `kernel_force` that went through the equivalence
+  rewrite was recorded as `equivalence` (non-replayable), so the observation was thrown
+  away and the next default run never hit. It now records the effective `kernel_force`
+  (e.g. `generic`: 364 ms against `kupl_topology` 2792 ms on a 10-operand equation).
+* **Fixed:** `_profile_record` skipped every call whose key had any cached row, so a tune
+  sweep persisted 1 row out of 30 (3%). It now skips only calls that applied the hit.
+
+No numerical change. `--tune` output is a single-run measurement, not a benchmark.
+
 ## Release 0.5.1 — qcd-einsum: profile cache stops recommending dead ends
 
 `0.5.1` fixes three defects in the new profile cache, all found from a real
