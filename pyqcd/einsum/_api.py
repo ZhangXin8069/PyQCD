@@ -1456,14 +1456,14 @@ def _profile_spend(info: dict[str, Any] | None, started: float | None) -> None:
 def _profile_record(info: dict[str, Any]) -> None:
     """把本次观测写进内存（不落盘：落不落盘由 :mod:`._profile_cache` 的稀疏口径定）。
 
-    已经施加了命中的调用没有新信息，不重复记录；命中被丢弃/回退的调用照记，
-    让"实际跑成的那条配置"有机会在下一次胜出。
+    命中并已施加的调用**同样要记**：它带来的是"这个配置在当前机器上还是不是最优"的最新证据。
+    合并侧（`_profile_cache._merge`）已保证同配置"耗时取小、calls 取大、updated_at 取新"，
+    所以更慢的新样本不会污染最优值；而"永远不记录"会让缓存冻结在第一次写下的数字，
+    实测里就会出现 `compute_ms=865.496` 跑多少次都不再更新。
     """
-    applied_hit = (info.get("hit") is not None
-                   and (info.get("force") is not None
-                        or info.get("backend") is not None))
-    if applied_hit and not info.get("fallback"):
-        return
+    if info.get("hit") is not None and info.get("fallback"):
+        pass                                  # 回退也照记（实际跑成的那条可能是最优）
+
     _profile_cache.record({
         **info["key"],
         "kernel": info.get("kernel") or "generic",
