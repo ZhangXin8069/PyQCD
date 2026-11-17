@@ -181,6 +181,10 @@ COMPARE_COLUMNS = (
 
 # 新观测必须快过该键当前最优的这个比例才值得落盘（严格小于才写）。
 _IMPROVE_RATIO = 0.95
+#: **不可重放**的 kernel 取值：``equivalence`` 只说明"这次是改写跑成的"，在原方程上
+#: 强制具体内核必然"未尝试"，不能当建议。``generic``/``backend`` 都**可**重放，
+#: 必须参与选优（实测某 10 操作数方程 generic 385 ms vs topology 2735 ms）。
+_NON_REPLAYABLE = frozenset({"", "equivalence"})
 
 # 待写队列攒到这个长度就顺手冲一次，避免长跑进程里无限涨。
 _FLUSH_THRESHOLD = 512
@@ -435,6 +439,9 @@ def record(row: Mapping[str, Any]) -> bool:
 
         key = _key_of(prepared)
         config = (prepared["kernel"], prepared["optimize"])
+        if str(prepared["kernel"]).strip().lower() in _NON_REPLAYABLE:
+            # 只观测不落盘：它给不出下次可用的建议，留下来只会占名额、误导 best()。
+            return False
         slot = _index.get(key)
         new_key = slot is None
         if slot is None:
@@ -669,10 +676,19 @@ def _rank(row: Mapping[str, Any]) -> tuple[float, int, float]:
 
 
 def _pick(rows: Iterable[dict[str, str]]) -> dict[str, str] | None:
-    """选优：``compute_ms`` 最小 → ``calls`` 大 → ``updated_at`` 新（纯比较）。"""
+    """选优：``compute_ms`` 最小 → ``calls`` 大 → ``updated_at`` 新（纯比较）。
+
+    **不可重放的建议不参与选优**：``equivalence`` 只说明"这次是改写跑成的"
+    （在原方程上强制具体内核必然"未尝试"），无法据此改道。``generic`` **是**可
+    重放的（``kernel_force="generic"`` 合法且实测常最快，例如某 10 操作数方程
+    generic 385 ms vs topology 2735 ms），必须参与选优——把它排除等于把 7 倍
+    收益丢掉。
+    """
     chosen: dict[str, str] | None = None
     chosen_rank: tuple[float, int, float] | None = None
     for row in rows:
+        if str(row.get("kernel", "")).strip().lower() in _NON_REPLAYABLE:
+            continue
         rank = _rank(row)
         if chosen_rank is None or rank < chosen_rank:
             chosen, chosen_rank = row, rank

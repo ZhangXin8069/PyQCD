@@ -971,6 +971,9 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
 # 目录不变就纯内存查表：`_profile_cache.best` / `record` 在 `_loaded` 与目录就位后
 # 都不再碰磁盘。
 _PROFILE_READY: str | None = None    # 已 load() 的**绝对目录**；None = 尚未加载
+#: 等价改写跑成时记录的标签：**不可重放**（原方程上强制具体内核必然"未尝试"），
+#: 但必须如实标注——沿用 `generic` 会把"改写+topology"谎报成"通用路径"。
+_EQUIVALENCE_LABEL = "equivalence"
 _PROFILE_LOCK = threading.Lock()
 
 # 命中提示的去重表：每 (方程, 形状, 配置) 每进程只打一行（VERBOSE 打开了就每次必打）。
@@ -1016,18 +1019,26 @@ def _profile_force_label(kernel: str) -> str | None:
 
     具体专用内核（``kupl_dedicated`` / ``cuda_topology`` …）按角色归一成
     ``dedicated`` / ``topology``；``backend`` **也会被返回**——"后端 einsum 最快"
-    是画像的合法结论，缓存存在的意义就是复用它。``generic`` 仍**不返回**：它会
-    静默关掉"自动分派失败要告警一次"的诊断，代价由调用方显式选择才合理。
+    是画像的合法结论，缓存存在的意义就是复用它。``generic`` **也会被返回**：它同样
+    可重放（``kernel_force="generic"`` 合法），而且实测常是最快的一条（10 操作数方程
+    上 generic 385 ms vs topology 2735 ms）。代价是它不再进入专用分派、因此不会为
+    这家方程打"内核没跑成"的诊断——按缓存选最快时必须接受这个取舍。
     """
     label = kernel.strip().lower()
     if not label:
         return None
     if label == _kernel_force.BACKEND_LABEL:
-        # 例外：``backend`` 是"记录里这条最快"的合法结论——大规模生产里 backend.einsum
+        # ``backend`` 是"记录里这条最快"的合法结论——大规模生产里 backend.einsum
         # 常常真的比专用内核快（小算子上尤其是）。既然缓存存在的意义就是复用它，
         # 这里必须允许把 backend 作为建议交出去；调用方显式给了 kernel_force 或
         # 有 out= 时仍会被上层挡住（见 _profile_begin 的 caller_force/out 判定）。
         return _kernel_force.BACKEND_LABEL
+    if label == "generic":
+        # ``generic`` 同样可重放（``kernel_force="generic"`` 是合法取值），而且实测
+        # 常是最快的一条：10 操作数方程上 generic 385 ms vs topology 2735 ms。
+        # 代价是它不再进入专用分派、因此不会为这家方程打"内核没跑成"的诊断——
+        # 这是"按缓存选最快"必须接受的取舍，且用户可在需要诊断时显式设 auto。
+        return "generic"
     role = label.rpartition("_")[2]          # ``kupl_dedicated`` → ``dedicated``
     for name in (role, label):
         if name in _kernel_force.KERNEL_LABELS:
@@ -1566,6 +1577,11 @@ def contract(
             memory_limit=memory_limit, backend=backend, specialize=specialize_on,
             kernel_force=kernel_force, cache=cache)
         if equivalence_result is not None:
+            # 本次是**等价改写**跑成的：原方程上强制具体内核会失败（它本来就不在
+            # 语料里），所以这个标签不可重放；但必须如实标注，别沿用初始值
+            # ``generic``——那会把"改写+topology"谎报成"通用路径"（实跑复现过）。
+            if info is not None:
+                info["kernel"] = _EQUIVALENCE_LABEL
             return _profile_end(info, equivalence_result, started)
 
     global _LAST_CONTRACT

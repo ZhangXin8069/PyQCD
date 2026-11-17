@@ -277,6 +277,31 @@ def _read_rows(path: str) -> list[list[str]]:
 
 # ── 1. CSV 往返 ─────────────────────────────────────────────────────────────
 
+def test_record_filters_non_replayable_kernels():
+    """``equivalence`` 不可重放 → 拒写；``generic``/``backend`` 可重放 → 允许写。
+
+    ``equivalence`` 是"本次由改写跑成"的诊断标签：在原方程上强制具体内核必然
+    "未尝试"，所以它给不出可用建议。``generic`` 恰恰相反——``kernel_force="generic"``
+    合法且实测常最快（某 10 操作数方程上 generic 385 ms vs topology 2735 ms），
+    若把它拒之门外，缓存就把最大的一笔收益丢掉了。
+    """
+    with _isolated() as work:
+        directory = os.path.join(work, "cache")
+        _activate(directory)
+        assert _profile_cache.record(_row(
+            equation="zz->zz", shape=[(2, 2)],
+            kernel="equivalence", compute_ms=0.1, calls=1)) is False
+        assert _profile_cache.record(_row(
+            equation="yy->yy", shape=[(2, 2)],
+            kernel="generic", compute_ms=0.5, calls=1)) is True
+        assert _profile_cache.record(_row(
+            equation="xx->xx", shape=[(2, 2)],
+            kernel="backend", compute_ms=0.4, calls=1)) is True
+        assert _profile_cache.flush() == 2
+        table = _read_rows(os.path.join(directory, _profile_cache.PROFILE_NAME))
+        assert [row[_column("kernel")] for row in table[1:]] == ["generic", "backend"]
+
+
 def test_profile_csv_roundtrip_preserves_columns_and_rows():
     """临时目录 → 写 3 行 → flush → 表头/行数/内容/追加不重写表头/读回。"""
     with _isolated() as work:
@@ -287,8 +312,11 @@ def test_profile_csv_roundtrip_preserves_columns_and_rows():
                  kernel="kupl_dedicated", compute_ms=1.5, calls=2),
             _row(equation="ab,bc->ac", shape=[(4, 5), (5, 6)],
                  kernel="kupl_topology", compute_ms=0.25, calls=3),
+            # 第三行刻意用另一个**可重放**的内核 + 另一个 optimize：``generic``
+            # 不可重放，``record()`` 现在会拒绝它（见下面的断言），不能拿来当往返样本。
             _row(equation="abc,cd->abd", shape=[(2, 2, 2), (2, 2)],
-                 kernel="generic", compute_ms=7.0, calls=1),
+                 kernel="kupl_dedicated", optimize="greedy",
+                 compute_ms=7.0, calls=1),
         ]
         for row in rows:
             assert _profile_cache.record(row) is True, (
@@ -619,6 +647,7 @@ def test_profile_configure_parameter_beats_environment():
 
 TESTS = (
     test_profile_csv_roundtrip_preserves_columns_and_rows,
+    test_record_filters_non_replayable_kernels,
     test_profile_best_prefers_lowest_compute_then_calls_then_newest,
     test_profile_record_is_sparse,
     test_profile_compare_is_write_only,

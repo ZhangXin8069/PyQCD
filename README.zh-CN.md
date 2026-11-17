@@ -37,6 +37,23 @@ python -m pyqcd --json     # machine-readable
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
 
+## 0.5.1 发布声明 — qcd-einsum：画像缓存不再推荐走不通的路
+
+`0.5.1` 修掉 0.5.0 画像缓存的三个缺陷（均由一次真实生产运行 `ambn,cgdh,…->ka`
+（10 操作数）暴露）：
+
+* 经**等价改写**跑成的调用，过去被记成初始值 `generic`——缓存说"走的通用路径"，
+  而内层其实跑的是 `kupl_topology`。现在如实标为 `equivalence`，且这类行**不落盘**
+  （在原方程上强制 `topology` 必然"未尝试"，它不是可重放的建议）。
+* `generic` 与 `backend` 行**保留**在缓存里并参与 `best()` 选优：同一条 10 操作数方程上
+  generic 实测 **385 ms**、`kupl_topology` **2735 ms**，把它排除等于丢掉最大的一笔收益。
+  只有 `equivalence` 这个诊断标签既不落盘也不参与选优。
+* CLI 的命中行在建议**未被采纳**（`generic` 行）时不再说"命中"，改为
+  `命中但未采纳 → kernel=generic（该取值不可重放，本次仍走原分派）`；
+  真正换了路的建议仍打 `命中 →`。
+
+无数值变化，无接口变化。
+
 ## 0.5.0 发布声明 — qcd-einsum：profile 缓存、`kernel_force` 收窄、详解模式
 
 `0.5.0` 是 **minor** 版本，因为有一处公开接口不兼容（`kernel_force`）。其余均为新增。

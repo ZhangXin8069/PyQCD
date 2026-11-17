@@ -734,6 +734,12 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "[pyqcd.einsum] profile 命中 → backend={backend} kernel={kernel} "
               "（compute_ms={compute_ms}）",
     },
+    "explain.status_hit_inert": {
+        "en": "[pyqcd.einsum] profile hit but not adopted → kernel={kernel} "
+              "(not replayable; this call kept the original dispatch)",
+        "zh": "[pyqcd.einsum] profile 命中但未采纳 → kernel={kernel} "
+              "（该取值不可重放，本次仍走原分派）",
+    },
     "explain.status_miss": {
         "en": "[pyqcd.einsum] profile miss → recorded (rows={rows})",
         "zh": "[pyqcd.einsum] profile 未命中 → 已记录（rows={rows}）",
@@ -2372,6 +2378,12 @@ def _profile_status_line(state: dict[str, Any], language: str = "zh") -> str:
     status = state.get("status")
     if status == "hit":
         row = state.get("row") or {}
+        kernel = str(row.get("kernel") or "").strip().lower()
+        # ``generic`` 不可重放：`_api._profile_force_label` 不会采纳它，这一行若还写
+        # "命中 →" 就会让人以为换了路（用户实跑里正是这么误解的）。
+        if kernel in ("", "generic"):
+            return translate("explain.status_hit_inert", language,
+                             kernel=row.get("kernel") or KERNEL_UNKNOWN)
         return translate("explain.status_hit", language,
                          backend=row.get("backend") or KERNEL_UNKNOWN,
                          kernel=row.get("kernel") or KERNEL_UNKNOWN,

@@ -42,6 +42,26 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
 
+## Release 0.5.1 — qcd-einsum: profile cache stops recommending dead ends
+
+`0.5.1` fixes three defects in the new profile cache, all found from a real
+production run (`ambn,cgdh,…->ka`, 10 operands):
+
+* A run whose contraction was reached through the **equivalence rewrite** used to be
+  recorded with the initial label `generic`, i.e. the cache said "generic path" while
+  the inner call had actually run `kupl_topology`. It is now labelled `equivalence`,
+  and such rows are never persisted (forcing `topology` on the *original* equation
+  cannot work, so it is not a replayable suggestion).
+* `generic` and `backend` rows stay replayable and keep taking part in `best()`: on the
+  same 10-operand equation the generic path measured **385 ms** against
+  `kupl_topology` at **2735 ms**, so excluding it would throw the largest win away.
+  Only the `equivalence` diagnostic label is excluded from storage and from `best()`.
+* The CLI hit line claimed "profile hit" even when the suggestion was **not adopted**
+  (a `generic` row). It now prints `命中但未采纳 → kernel=generic（该取值不可重放，
+  本次仍走原分派）` and keeps `命中 →` for suggestions that really changed the path.
+
+No numerical change; no API change.
+
 ## Release 0.5.0 — qcd-einsum: profile cache, narrowed `kernel_force`, explain mode
 
 `0.5.0` is a **minor** release because one public surface changes incompatibly
