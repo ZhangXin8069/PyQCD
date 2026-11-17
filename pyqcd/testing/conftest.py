@@ -174,6 +174,12 @@ from pyqcd.testing._einsum_profile_robustness_contract import (
 from pyqcd.testing._einsum_tune_equivalence_contract import (
     test_einsum_tune_equivalence_contracts,
 )
+# 等价路由表 v2 契约：ok 行带 target_equation + 三置换字段（payload）+ schema_version，
+# 二次命中零匹配、内层按 target_equation 画像、版本优先、坏 JSON 退回重查、
+# state=none 门仍然有效、force 刷新、profile=False 零 IO（2026-11-17）。
+from pyqcd.testing._einsum_equivalence_route_contract import (
+    test_einsum_equivalence_route_contracts,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。
@@ -184,6 +190,7 @@ TESTS = (
     test_einsum_dispatch_invariance_contracts,
     test_einsum_profile_robustness_contracts,
     test_einsum_tune_equivalence_contracts,
+    test_einsum_equivalence_route_contracts,
     test_native_expression_compile_failure_leaves_a_warning,
     test_native_fallback_warns_once_per_reason,
     test_shape_path_failure_is_recorded_and_announced_once,

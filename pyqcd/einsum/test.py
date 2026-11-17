@@ -435,7 +435,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": ("Which specialised kernel may run. Kinds of value: auto = keep the "
                "original dispatch (dedicated, then topology) and, when none runs, "
                "only warn and fall back to the generic path (default); generic = skip "
-               "the specialised kernels entirely (no warning); dedicated / topology = "
+               "the specialised kernels entirely (no warning), and skip the corpus "
+               "shape lookup and the equivalence rewrite with them — both exist only "
+               "to reach a specialised form, so the generic notice is not printed "
+               "either; dedicated / topology = "
                "allow exactly that kernel of the operand backend (numpy -> kupl, "
                "cupy -> cuda), comma separated to allow both, tried in the order "
                "written; backend = call the backend's own einsum and skip the "
@@ -450,7 +453,9 @@ MESSAGES: dict[str, dict[str, str]] = {
                "value exits with code 2. Default {default}"),
         "zh": ("允许跑哪个专用内核。取值有几种：auto = 保持原分派次序（dedicated → "
                "topology），跑不成只 warning 后回落到通用路径（缺省）；generic = "
-               "完全跳过专用内核（不产生 warning）；dedicated / topology = 只允许"
+               "完全跳过专用内核（不产生 warning），并连语料形态匹配与等价改写一起"
+               "跳过——两者都只为命中特化形态，因此也不再打通用路径提示；dedicated / "
+               "topology = 只允许"
                "当前后端的对应内核（numpy → kupl，cupy → cuda），可用逗号给两个、"
                "按书写次序尝试；backend = 直接调后端自己的 einsum、不走专用分派"
                "（不可与其它标签混用）。"
@@ -1566,8 +1571,14 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     取快照（``_profile_snapshot``），否则读到的会是本次调用自己刚记进去的"命中"。
     """
     import pyqcd.einsum as pe
+    from pyqcd.einsum import _specialize
 
     lang = resolve_language(language)
+    # 把本次的语言**推进库内**：库自己的提示（``_specialize.announce`` /
+    # ``announce_generic`` / 画像命中行）与报告正文必须同语言，否则一次运行里会同时
+    # 出现英文标签与中文解释（2026-11-17 用户实测）。它只改进程内状态、**不写任何
+    # 环境变量**（``--language`` 承诺只影响输出）。
+    _specialize.set_language(lang)
     if dtype not in DTYPES:
         raise UsageError(translate("error.dtype", lang, values=DTYPES, value=dtype))
     if compare not in COMPARE_MODES:
@@ -1585,12 +1596,22 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     cache_explicit = cache_requested is not None
     # ``--explain`` 只决定输出；``--profile`` 才真的改变底层行为（直传 contract）。
     explain_on = resolve_explain(parse_explain(explain, lang), bool(verbose))
+    # 完整详解档：``--explain true`` / ``--verbose true`` 恢复库内的解释性提示
+    # （画像命中时那唯一一行之外的部分）；两者都没给时回到环境变量口径，
+    # 因此 ``PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`` 仍然有效。
+    _specialize.set_detail(True if (verbose or explain_on) else None)
     profile_requested = parse_profile(profile, lang)
     profile_kwargs = _contract_profile_kwargs(profile_requested, profile_dir)
     # ``--kernel-force`` 先解析：非法标签必须在构造任何操作数之前就报成用法错误。
     # 规范化后的字符串**原样**给 ``contract(kernel_force=...)``，报告里的 ``requested=``
     # 也用同一处解析结果，二者不会各说各话。
     kernel_value = ",".join(kernel_labels(kernel_force, lang))
+    # ``generic`` / ``backend`` 是**路线**不是内核，原样交给 contract()：前者在库里解析
+    # 成空强制集，于是 ``_specialize.match`` 与等价改写整段都不必做——这两件事的唯一
+    # 目的都是命中特化形态，而调用方已经明确不要形态；后者更早返回，一次原生入口都不碰。
+    # 跳过的是**耗时与提示**（一次语料查询 + 一次改写查询，外加"通用路径/专用路径"
+    # 两条自相矛盾的提示），方程、dtype、形状与数值一概不变；``route`` 行仍按
+    # ``kernel_force`` 如实报出路线，所以"没查"不等于"少了一条证据"。
     ref_optimize = resolve_compare_optimize(compare, optimize, compare_optimize,
                                             language=lang)
     if warmup < 1:
@@ -2038,6 +2059,8 @@ def _equivalence_of(equation: str, requested: bool | None = None,
         from pyqcd.einsum import _specialize
 
         if _specialize.match(equation, use=cache) is not None:
+            # 命中形态就到此为止：改写只为命中形态，已命中再改写只是把同一个答案换个
+            # 写法报告出来，还会多出一段 equiv 干扰正常输出（本函数只读，绝不改方程）。
             return None
         from pyqcd.einsum import _equivalence
 
@@ -2560,15 +2583,37 @@ def _why_line(report: dict[str, Any], state: dict[str, Any],
                      else DEFAULT_KERNEL)
 
 
+def _profile_replayable(kernel: Any) -> bool:
+    """画像该行的 ``kernel`` 能否被 ``contract()`` 重放（建议是谁的裁决归谁）。
+
+    判据**不在这里另立一份**：直接问 ``_api._profile_force_label``（它决定命中的
+    ``kernel`` 能不能变成 ``kernel_force=``）。取不到该函数时才退回 ``_profile_cache``
+    的 "不可重放" 集合口径（空 / ``equivalence``）。
+
+    这里曾经把 ``generic`` 硬编码成"不可重放"，于是画像真的按 ``generic`` 执行了
+    （命中行写着"已套用"），下一行却说"命中但未采纳"——两句自相矛盾
+    （2026-11-17 用户实测）。
+    """
+    text = str(kernel or "")
+    try:
+        from pyqcd.einsum import _api
+
+        resolve = getattr(_api, "_profile_force_label", None)
+        if callable(resolve):
+            return resolve(text) is not None
+    except Exception:                           # noqa: BLE001 - 报告层不许影响主流程
+        pass
+    return text.strip().lower() not in ("", "equivalence")
+
+
 def _profile_status_line(state: dict[str, Any], language: str = "zh") -> str:
     """之后每次那**一行**：命中 / 未命中已记录 / 关闭 / 未知。"""
     status = state.get("status")
     if status == "hit":
         row = state.get("row") or {}
-        kernel = str(row.get("kernel") or "").strip().lower()
-        # ``generic`` 不可重放：`_api._profile_force_label` 不会采纳它，这一行若还写
-        # "命中 →" 就会让人以为换了路（用户实跑里正是这么误解的）。
-        if kernel in ("", "generic"):
+        # 建议能不能重放由 ``_api`` 裁决（``generic``/``backend`` 都可重放），
+        # 否则"已套用"的命中会被下一行说成"未采纳"。
+        if not _profile_replayable(row.get("kernel")):
             return translate("explain.status_hit_inert", language,
                              kernel=row.get("kernel") or KERNEL_UNKNOWN)
         return translate("explain.status_hit", language,
@@ -2606,6 +2651,12 @@ def _print_explain(report: dict[str, Any], state: dict[str, Any],
         print("plan   : " + _plan_of(report, language), file=out)
         print(explain_kernel_line(_explain_kernel_fields(report)), file=out)
         print("why    : " + _why_line(report, state, language), file=out)
+    # 命中时只留这一行：① 记录定位已经由库提示的 ``<profile.csv>:<数据行号>``
+    # （``state['row']['line']``，1-based）钉住——同一个 ``kernel=`` 会出现在许多行里，
+    # 没有行号用户翻不到具体哪一条在生效；② ``route :`` / ``kernel :`` 这类**结果**行
+    # 不在此列：它们是本次实测的证据、不是对分派的解释，由 ``_print_detail`` 照旧输出；
+    # ③ 详解档（``--explain true`` / ``--verbose true``）恢复的是库内提示，不是给一条
+    # 由缓存给定、本次没有规划过的路线补理由。
     print(_profile_status_line(state, language), file=out)
 
 
@@ -3464,8 +3515,11 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     global _ALARM_WINDOW
 
     import pyqcd.einsum as pe
+    from pyqcd.einsum import _specialize
 
     lang = resolve_language(language)
+    # 遍历期间库内的提示也必须与报告同语言（见 :func:`run` 处的说明）。
+    _specialize.set_language(lang)
     if warmup < 1:
         raise UsageError(translate("error.warmup_zero", lang))
     if rounds < 1:

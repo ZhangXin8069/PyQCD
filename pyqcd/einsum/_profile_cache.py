@@ -16,9 +16,23 @@
 * :data:`EQUIVALENCE_NAME`（``profile_equivalence.csv``）——**读 + 写**，但比主表
   更稀：键仍是 :data:`KEY_FIELDS`，一个 (键, ``state``) 只留一行
   （:func:`record_equivalence` / :func:`equivalence_marker`）。``state`` 取
-  ``"ok"``（该键**可以**改写过去）或 ``"none"``（找不到可用改写）；同键两种 state
-  允许并存，:func:`equivalence_marker` **``ok`` 优先**——能改写的正向证据比"没有"
-  更有信息量，也更值得被上层拿去改道。
+  ``"ok"``（该键**可以**改写过去）或 ``"none"``（找不到可用改写）。
+
+  这张表自 :data:`EQUIVALENCE_SCHEMA_VERSION` = 2 起同时是**等价路由表**：
+  ``state=ok`` 的行除了 ``kind`` 之外还带 ``target_equation``（语料写法，即特化支持的
+  那条 equation）与三个置换字段（``operand_order`` / ``operand_permutations`` /
+  ``output_permutation``，JSON 字符串，``null`` 表示"这一步不需要动"）。上层据此
+  **直接构造**改写，不必再调 :func:`._equivalence.normalize_equation`；这就是
+  ``schema_version`` 列的用途——同一行在旧版本里可能只有 ``state``，靠版本号区分
+  "这条结论是否带了可复用的改写载荷"。缺列的旧行按版本 ``0`` 读入（见
+  :func:`_parse_equivalence`），不会被当成坏行丢掉。
+
+  同键多行时的优先序是**先版本、后状态**：``schema_version`` 大者胜（缺列老行视为
+  ``0``，所以新写的载荷永远压得过旧结论）；同版本内 ``ok`` 先于 ``none``——能改写的
+  正向证据比"没有"更有信息量，也更值得被上层拿去改道；再同则取 ``updated_at`` 新者。
+  读侧用 :func:`equivalence_payload` 把一行解成可执行的改写（坏 JSON / 缺列的旧行
+  一律返回 ``None``，由上层退回重新匹配）；写侧在同一 (键, state) 的载荷或 ``kind``
+  变化时**再追加一行**——那是"更正"，读侧取 ``updated_at`` 新者即可生效。
 * :data:`COMPARE_NAME`（``profile_compare.csv``）——**只写不读**。它是"下次同类方程
   可以直接套用等价改写、省掉匹配时间"的旁证，写出去就有人看，因此**不为它建索引、
   不为它做加载**，一次都不读。
@@ -83,6 +97,7 @@ import atexit
 import csv
 import datetime
 import io
+import json
 import os
 import socket
 import sys
@@ -98,6 +113,7 @@ __all__ = [
     "DIR_ENV",
     "EQUIVALENCE_COLUMNS",
     "EQUIVALENCE_NAME",
+    "EQUIVALENCE_SCHEMA_VERSION",
     "KEY_FIELDS",
     "PROFILE_COLUMNS",
     "PROFILE_ENV",
@@ -108,6 +124,7 @@ __all__ = [
     "enabled",
     "ensure_configured",
     "equivalence_marker",
+    "equivalence_payload",
     "flush",
     "format_shape",
     "load",
@@ -133,8 +150,12 @@ PROFILE_NAME = "profile.csv"
 #: 旁证表（只写不读）：等价改写/参照耗时。
 COMPARE_NAME = "profile_compare.csv"
 
-#: 等价改写标记表（读 + 写）：一个 (键, ``state``) 一行。
+#: 等价改写标记表（读 + 写）：一个 (键, ``state``) 一行；同时是**等价路由表**。
 EQUIVALENCE_NAME = "profile_equivalence.csv"
+
+#: 标记表的 schema 版本（写侧固定写这个值）。v2 起每行带 ``target_equation`` 与三个
+#: 置换字段，可从表里**直接构造**改写；缺列的旧行按 ``0`` 读入。
+EQUIVALENCE_SCHEMA_VERSION = 2
 
 #: 主表键字段（顺序即键序）；``shape`` 必须先过 :func:`format_shape` 归一化。
 KEY_FIELDS = (
@@ -193,7 +214,12 @@ COMPARE_COLUMNS = (
     "pyqcd_version",
 )
 
-#: 标记表表头：键字段（同一套 :data:`KEY_FIELDS`）+ 标记本身。
+#: 标记表表头：键字段（同一套 :data:`KEY_FIELDS`）+ 标记本身 + 路由载荷。
+#:
+#: ``target_equation`` / 三个置换字段是 **v2 新增列**（旧列一字未改，只往后追加）：
+#: ``state=ok`` 时它们足以重建整条改写，上层因此不必再调
+#: :func:`._equivalence.normalize_equation`。三个置换字段一律存 JSON 字符串，
+#: ``null``（或空串）表示"这一步不需要动"。
 EQUIVALENCE_COLUMNS = (
     "host",
     "user_device",
@@ -206,7 +232,22 @@ EQUIVALENCE_COLUMNS = (
     "kind",
     "updated_at",
     "pyqcd_version",
+    "target_equation",
+    "operand_order",
+    "operand_permutations",
+    "output_permutation",
+    "schema_version",
 )
+
+#: 路由载荷的三个置换字段（JSON 字符串）；``target_equation`` 是它们的方程侧。
+_PERMUTATION_FIELDS = ("operand_order", "operand_permutations", "output_permutation")
+
+#: 一份可执行改写需要的全部载荷列：``target_equation`` + 三个置换字段。
+#: 写侧（:func:`record_equivalence`）与读侧（:func:`equivalence_payload`）共用它。
+_PAYLOAD_FIELDS = ("target_equation",) + _PERMUTATION_FIELDS
+
+#: "这个单元格解不出可用值"的哨兵——与"解出来正好是 ``None``"（不需要动）区分开。
+_BAD_CELL = object()
 
 # 新观测必须快过该键当前最优的这个比例才值得落盘（严格小于才写）。
 _IMPROVE_RATIO = 0.95
@@ -424,6 +465,10 @@ def load(force: bool = False) -> int:
     坏行是**逐行**跳过的（长度/编码/列数不对只丢那一行，计数见
     ``summary()["skipped_rows"]``），读失败只记 ``last_error``、不关掉缓存。
     关闭、目录不可用、文件不存在都返回 ``0``，**不抛异常**。
+
+    每一行进索引时都带上 ``line``（该表第几条数据行，1-based；见
+    :func:`_parse_table`），于是 :func:`best` / :func:`equivalence_marker` 返回的行
+    能直接报出 ``profile.csv:<行号>``——命中提示据此钉到具体记录。
     """
     if not enabled():
         return 0
@@ -439,7 +484,8 @@ def best(key: Mapping[str, Any]) -> dict[str, str] | None:
 
     纯字典查找，不做 IO：索引由 :func:`load` 一次建好。选优口径见模块文档
     （``compute_ms`` 最小 → ``calls`` 大 → ``updated_at`` 新）。返回的是**副本**，
-    调用方改了也不会污染索引。
+    调用方改了也不会污染索引。行里可能带 ``line``（该表第几条数据行，1-based），
+    只用于把命中提示钉到具体记录；只有从文件读进来的行才有它。
     """
     if not enabled() or not isinstance(key, Mapping):
         return None
@@ -458,10 +504,13 @@ def equivalence_marker(key: Mapping[str, Any]) -> dict[str, str] | None:
     """按键查等价改写标记（整行，值全是字符串）；未标记/关闭返回 ``None``。
 
     纯内存查表，不做 IO（索引由 :func:`load` 一次建好，与主表同一份加载标记）。
-    同键可能同时存在 ``none`` 与 ``ok`` 两条：**``ok`` 优先**——"这条路走得通"比
-    "这次没找到"更有信息量，也才是上层能拿去改道的那一条；同 state 有多条时取
-    ``updated_at`` 新者。返回的是**副本**（含内存计数 ``hits``：同键同 state 被
-    记录过几次，只在本进程有效——标记表不重复写行，所以它不落盘）。
+    同键可能同时存在 ``none`` 与 ``ok`` 两条（甚至同 state 的多条历史行）：选行口径见
+    :func:`_marker_pick`——**``schema_version`` 大者胜**（带载荷的新行压过旧结论），
+    同版本内 ``ok`` 先于 ``none``（"这条路走得通"比"这次没找到"更有信息量，也才是
+    上层能拿去改道的那一条），再同取 ``updated_at`` 新者。返回的是**副本**（含内存
+    计数 ``hits``：同键同 state 被记录过几次，只在本进程有效——标记表不重复写行，所以
+    它不落盘）；从文件读进来的行还带 ``line``（该表第几条数据行，1-based）。
+    行里的载荷列可用 :func:`equivalence_payload` 解成可执行的改写。
     """
     if not enabled() or not isinstance(key, Mapping):
         return None
@@ -572,7 +621,11 @@ def record_compare(row: Mapping[str, Any]) -> bool:
 
 
 def record_equivalence(key: Mapping[str, Any], state: str, kind: str = "",
-                       *, compute_ms: float | None = None) -> bool:
+                       *, compute_ms: float | None = None,
+                       target_equation: Any = None,
+                       operand_order: Any = None,
+                       operand_permutations: Any = None,
+                       output_permutation: Any = None) -> bool:
     """写一条等价改写标记；返回是否**真的排队写盘**（稀疏口径）。
 
     ``state`` 只接受 ``"none"``（找不到可用改写）与 ``"ok"``（该键可以改写过去，
@@ -582,10 +635,21 @@ def record_equivalence(key: Mapping[str, Any], state: str, kind: str = "",
     "能不能改写"，不是流水账。同键的 ``none`` 与 ``ok`` 可以并存（查表时 ``ok``
     优先），所以 ``ok`` 第一次出现仍然会写。
 
+    ``target_equation`` / ``operand_order`` / ``operand_permutations`` /
+    ``output_permutation`` 是 v2 的**路由载荷**：``state=ok`` 时它们足以重建整条改写
+    （三个置换字段按 :func:`_payload_cell` 写成 JSON，``None`` → ``null``），
+    :func:`equivalence_payload` 按同一份口径读回。
+
+    **修正会落一行新的**：同键同 state 但 ``kind`` 或载荷与已存的那行不同，说明这是
+    对旧结论的更正（典型来源：上层自检发现载荷跑出来的数不对，重新匹配后回写），
+    此时更新内存行并把这一行排进待写队列，返回 ``True``；内容完全相同才是"重复观测"，
+    只加计数、返回 ``False``。读侧按 ``updated_at`` 新者胜，所以追加这一行不会让旧载荷
+    再被读出来。
+
     键与主表同一套 :data:`KEY_FIELDS`（``shape`` 归一化复用 :func:`format_shape`）；
-    缺省字段自动补齐 ``host`` / ``updated_at`` / ``pyqcd_version``。
-    ``compute_ms`` 只为与 :func:`record` 的调用方签名对齐而接收：标记表**不做计时**，
-    它既不落盘、也不参与任何结论。
+    缺省字段自动补齐 ``host`` / ``updated_at`` / ``pyqcd_version``，并固定写上
+    ``schema_version``。``compute_ms`` 只为与 :func:`record` 的调用方签名对齐而接收：
+    标记表**不做计时**，它既不落盘、也不参与任何结论。
 
     关闭、目录不可用、``key``/``state`` 不可解析一律返回 ``False``，**不抛异常**。
     """
@@ -604,15 +668,29 @@ def record_equivalence(key: Mapping[str, Any], state: str, kind: str = "",
         except Exception as exc:                 # noqa: BLE001 - 画像缓存绝不外抛
             _degrade_locked(exc)
             return False
+        row["target_equation"] = _text(target_equation)
+        row["operand_order"] = _payload_cell(operand_order)
+        row["operand_permutations"] = _payload_cell(operand_permutations)
+        row["output_permutation"] = _payload_cell(output_permutation)
 
         slot = _equivalence.get(_key_of(row))
         if slot is None:
             slot = _equivalence[_key_of(row)] = {}
         current = slot.get(wanted)
-        if current is not None:                  # 同键同 state：只记计数与时间
-            current["hits"] = str(_int(current.get("hits")) + 1)
+        if current is not None:                  # 同键同 state：同一条结论
+            hits = _int(current.get("hits")) + 1
+            changed = any(_text(current.get(name)) != row.get(name)
+                          for name in ("kind",) + _PAYLOAD_FIELDS)
+            current["hits"] = str(hits)
             current["updated_at"] = row["updated_at"]
-            return False
+            if not changed:
+                return False                     # 重复观测：只加计数，不追加行
+            row["hits"] = str(hits)              # 修正：内存与盘上都要换成新的这条
+            slot[wanted] = row
+            _equiv_pending.append(dict(row))
+            if len(_equiv_pending) >= _FLUSH_THRESHOLD:
+                _flush_locked()
+            return True
         row["hits"] = "1"
         slot[wanted] = row
         _equiv_pending.append(dict(row))
@@ -801,6 +879,8 @@ def _equivalence_row(key: Mapping[str, Any], state: str,
 
     键走 :func:`_key_of`——与主表**同一套**归一化（``shape`` → ``2x3|3x4``，
     ``host`` 缺省补本机名），否则同一个 (方程, 形状) 会在两张表里对不上。
+    写侧固定写上 :data:`EQUIVALENCE_SCHEMA_VERSION`：缺列的旧行读入时是 ``0``，
+    于是"本进程写下的新结论"在 :func:`_marker_pick` 里永远压得过旧结论。
     """
     values = dict(zip(KEY_FIELDS, _key_of(key)))
     row = {name: values.get(name, "") for name in EQUIVALENCE_COLUMNS}
@@ -808,7 +888,103 @@ def _equivalence_row(key: Mapping[str, Any], state: str,
     row["kind"] = kind
     row["updated_at"] = _now()
     row["pyqcd_version"] = _version()
+    row["schema_version"] = str(EQUIVALENCE_SCHEMA_VERSION)
     return row
+
+
+def _payload_cell(value: Any) -> str:
+    """置换/次序载荷的单元格编码：``None`` → ``"null"``，其余一律 JSON 文本。
+
+    ``null`` 与空串在 :func:`equivalence_payload` 里都读成"这一步不需要动"，所以
+    一个无法编码的怪值降级成空串就是安全的——它只会让上层退回重新匹配。
+    """
+    if value is None:
+        return "null"
+    try:
+        return json.dumps(value, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _cell_value(cell: Any) -> Any:
+    """单元格 → Python 值（``None`` = 不需要动）；坏 JSON 返回 :data:`_BAD_CELL`。"""
+    text = _text(cell)
+    if not text or text == "null":
+        return None
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError):
+        return _BAD_CELL
+
+
+def _int_sequence(value: Any) -> tuple[int, ...] | None:
+    """JSON 值 → 整型元组；``None`` 原样返回，类型不符返回 :data:`_BAD_CELL`。"""
+    if value is None or value is _BAD_CELL:
+        return value
+    if not isinstance(value, (list, tuple)):
+        return _BAD_CELL
+    items: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            return _BAD_CELL
+        items.append(int(item))
+    return tuple(items)
+
+
+def _int_matrix(value: Any) -> tuple[tuple[int, ...] | None, ...] | None:
+    """``operand_permutations`` 的 JSON 值 → 元组的元组（元素可以是 ``None``）。"""
+    if value is None or value is _BAD_CELL:
+        return value
+    if not isinstance(value, (list, tuple)):
+        return _BAD_CELL
+    rows: list[tuple[int, ...] | None] = []
+    for item in value:
+        row = _int_sequence(item)
+        if row is _BAD_CELL:
+            return _BAD_CELL
+        rows.append(row)
+    return tuple(rows)
+
+
+def equivalence_payload(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """从 ``state=ok`` 的标记行解出**可直接执行**的改写载荷；不可用时返回 ``None``。
+
+    返回 ``{"target_equation", "operand_order", "operand_permutations",
+    "output_permutation", "kind"}``，三个置换字段是元组（``None`` / 空元组 =
+    "这一步不需要动"）。上层据此**直接构造**改写，不必再调
+    :func:`._equivalence.normalize_equation`。
+
+    只做**结构**校验：``state`` 必须是 ``ok``、``target_equation`` 非空且带 ``->``、
+    三个置换字段必须是 JSON 数组或 ``null``，且至少有一个字段真的要求动张量（否则
+    没有可执行的改写）。"数组长度对不对得上张量秩"需要张量本身，是调用方的责任。
+
+    坏 JSON、缺列、**缺 ``schema_version`` 的旧行**（版本 ``0``：那时还没有载荷列）、
+    非 ``ok`` 行一律返回 ``None``——调用方据此退回重新匹配，**绝不抛**。
+    """
+    if not isinstance(row, Mapping):
+        return None
+    if _text(row.get("state")).lower() != "ok":
+        return None
+    if _int(row.get("schema_version")) < EQUIVALENCE_SCHEMA_VERSION:
+        return None
+    equation = _text(row.get("target_equation"))
+    if not equation or "->" not in equation:
+        return None
+    order = _int_sequence(_cell_value(row.get("operand_order")))
+    permutations = _int_matrix(_cell_value(row.get("operand_permutations")))
+    output = _int_sequence(_cell_value(row.get("output_permutation")))
+    for value in (order, permutations, output):
+        if value is _BAD_CELL:
+            return None
+    if order is None and not permutations and output is None:
+        return None                      # 没有可执行的改写（identity / 只有 kind）
+    return {
+        "target_equation": equation,
+        "operand_order": order,
+        "operand_permutations": permutations or (),
+        "output_permutation": output,
+        "kind": _text(row.get("kind")),
+    }
 
 
 def _clip_row(row: dict[str, str]) -> dict[str, str]:
@@ -880,21 +1056,29 @@ def _pick(rows: Iterable[dict[str, str]]) -> dict[str, str] | None:
 
 
 def _marker_pick(rows: Iterable[dict[str, str]]) -> dict[str, str] | None:
-    """查表选标记：``ok`` 先于 ``none`` → 再取 ``updated_at`` 新者（纯比较）。
+    """查表选标记：``schema_version`` 大 → ``ok`` 先于 ``none`` → ``updated_at`` 新 → ``kind``。
 
-    ``none`` 是**否定**证据（"这次没找到等价改写"），``ok`` 是**肯定**证据
-    （"这个键能改写过去"）。两者并存时回答 ``ok``：上层据此改道才有收益，回答
-    ``none`` 只会把一次已知可行的改写藏起来。给不出可解释 ``state`` 的行一律不参与。
+    **版本优先于状态**：``schema_version`` 是这一行的**载荷契约**版本，v2 起
+    ``state=ok`` 的行带 ``target_equation`` + 三个置换字段，上层可据此直接构造改写。
+    因此"带载荷的新行"永远压得过"没有载荷的旧结论"，哪怕旧结论更晚写下、或它恰好是
+    ``ok``——旧 ``ok`` 给不出可执行载荷，让它胜出只会让一层已经能省掉的匹配重新跑一遍
+    （缺列的旧行按版本 ``0`` 读入，见 :func:`_parse_equivalence`）。
+
+    同版本内 ``ok`` 仍先于 ``none``：``none`` 是**否定**证据（"这次没找到等价改写"），
+    ``ok`` 是**肯定**证据（"这个键能改写过去"）。两者并存时回答 ``ok``：上层据此改道
+    才有收益，回答 ``none`` 只会把一次已知可行的改写藏起来。同版本同 state 再取
+    ``updated_at`` 新者；最后用 ``kind`` 兜住全序，保证同一批行每次选出同一条。
+    给不出可解释 ``state`` 的行一律不参与。
     """
     chosen: dict[str, str] | None = None
-    chosen_rank: tuple[int, float, str] | None = None
+    chosen_rank: tuple[int, int, float, str] | None = None
     for row in rows:
         state = _text(row.get("state")).lower()
         rank_state = _STATE_RANK.get(state)
         if rank_state is None:
             continue
-        rank = (rank_state, -_stamp(row.get("updated_at")),
-                _text(row.get("kind")))
+        rank = (-_int(row.get("schema_version")), rank_state,
+                -_stamp(row.get("updated_at")), _text(row.get("kind")))
         if chosen_rank is None or rank < chosen_rank:
             chosen, chosen_rank = row, rank
     return chosen
@@ -1042,7 +1226,14 @@ def _decode_table(raw: bytes) -> tuple[str, int]:
 
 
 def _parse_table(text: str) -> tuple[int, int]:
-    """逐行解析进索引（持锁调用）；返回 ``(读入行数, 跳过行数)``。"""
+    """逐行解析进索引（持锁调用）；返回 ``(读入行数, 跳过行数)``。
+
+    每一行都带上 ``line``（**该表第几条数据行，1-based**，表头与空行不计），供
+    ``_api`` 的命中提示直接写出 ``profile.csv:<行号>``——用户据此能一眼翻到那一条
+    记录。同一 ``(键, 配置)`` 有多条历史行时，``line`` 指向**最新**的那一条（内容
+    仍按 :func:`_merge` 的选优口径取最快的那条）：追加写的表里，最新行才是"这只
+    配置眼前的样子"。
+    """
     expected = list(PROFILE_COLUMNS)
     count = skipped = streak = 0
     reader = csv.reader(io.StringIO(text))
@@ -1069,9 +1260,11 @@ def _parse_table(text: str) -> tuple[int, int]:
         mapped = dict(zip(expected, fields))
         row = {name: _text(mapped.get(name)) for name in PROFILE_COLUMNS}
         row["shape"] = format_shape(row.get("shape"))
-        _merge(_index.setdefault(_key_of(row), {}),
-               (row["kernel"], row["optimize"]), _clip_row(row))
         count += 1
+        row["line"] = str(count)
+        merged = _merge(_index.setdefault(_key_of(row), {}),
+                        (row["kernel"], row["optimize"]), _clip_row(row))
+        merged["line"] = row["line"]             # 指向最新那条同配置的历史行
     return count, skipped
 
 
@@ -1098,9 +1291,13 @@ def _parse_equivalence(text: str) -> int:
 
     一个 (键, state) 只留一行：历史上重复追加的同一标记在这里合并（时间取新、
     计数相加），``state`` 不是 ``none``/``ok`` 的行按坏行跳过。
+
+    ``line`` 与主表同口径（**该表第几条数据行，1-based**，表头/空行不计），指向
+    该 (键, state) **最新**的那一行：标记表同样追加写，同一标记重复出现时最新行
+    才是"眼前的样子"。
     """
     expected = list(EQUIVALENCE_COLUMNS)
-    skipped = streak = 0
+    skipped = streak = count = 0
     reader = csv.reader(io.StringIO(text))
     while True:
         try:
@@ -1136,6 +1333,8 @@ def _parse_equivalence(text: str) -> int:
             row["hits"] = str(_int(current.get("hits")) + 1)
             if _stamp(row.get("updated_at")) < _stamp(current.get("updated_at")):
                 row = current                    # 重复行：留时间更新的那条
+        count += 1
+        row["line"] = str(count)
         slot[row["state"]] = row
     return skipped
 

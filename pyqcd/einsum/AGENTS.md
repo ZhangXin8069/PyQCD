@@ -354,7 +354,15 @@ float32）直接落通用分步路径（`_TOPOLOGY_DECLINED_DTYPES`）。
 
 - `forced == ('backend',)`：**早返回**，`_backend_einsum(parse_backend(operands, backend), …)`
   一步也不进 `_specialize` / 等价改写（`:1091`）；
-- `forced == ()`：命中特化形态只 `_specialize.announce`，不进专用分支（`:1127`）；
+- `forced == ()` 且**不是**画像给的（`generic_only`）：**不匹配、不改写、不提示**——
+  `_specialize.match` 一次都不调、等价改写整段跳过（`and not generic_only` 那道门）、
+  `announce` / `announce_generic` 都不打；只把线程档设成 `generic`，并把 `_LAST_KERNEL`
+  记成 `requested=generic / ran=None / attempted=()`（"一次没试"要如实）。省的是
+  **时间**：方程、dtype、形状与结果一个不动；
+- `forced == ()` 但**来自画像**（`forced_by_profile`）：执行路线**逐字不变**（照旧匹配、
+  照旧可能改写），只由 `quiet_profile` 静音提示。画像的 `generic` 是**计时结论**，
+  不是"关掉等价改写"这种语义指令——把它当指令会顺手关掉一条独立开关
+  （`_einsum_as_equivalence_cache_contract` 要求 env=1 时仍真的查一次映射）；
 - `forced` 非空：`_run_forced_kernel`（`:699`）先按后端把逻辑名解析成具体标签
   （`_resolve_forced_labels`，`:676`）再按次序真试，失败即抛
   （`:1132`、`:1162` 两处，后者覆盖"语料没命中却强制了标签"）；
@@ -372,13 +380,16 @@ float32）直接落通用分步路径（`_TOPOLOGY_DECLINED_DTYPES`）。
 | 开关 | 管什么 | 与强制的交互 |
 |---|---|---|
 | `PYQCD_EINSUM_KERNEL_KUPL=0` / `_CUDA=0` | **关掉**该后端原生入口 | 能同时给；此时强制该后端的 `dedicated` / `topology` → `KernelUnavailableError`，原因 `kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)` |
-| `specialize=False` / `PYQCD_EINSUM_SPECIALIZE=0` | **整体跳过**专用路径 | 与任何强制取值（含 `backend`）**冲突**，`ValueError` 早失败（`:1166`） |
+| `specialize=False` / `PYQCD_EINSUM_SPECIALIZE=0` | **整体跳过**专用路径 | 与 `dedicated` / `topology` **冲突**，`ValueError` 早失败（`:1166`）；`generic` / `backend` 不冲突 |
 | `kernel_force=...` | **只准跑这个** | —— |
-| `out=` | 禁用专用路径 | 与任何强制取值冲突，`ValueError` 早失败（`:1089`） |
+| `out=` | 禁用专用路径 | 与 `dedicated` / `topology` / `backend` 冲突，`ValueError` 早失败（`:1089`）；`generic` 不冲突 |
 
 三条早失败都是"一次内核都没试就抛"（`_LAST_KERNEL` 未被写），由
 `test_kernel_force_conflicts_fail_early` 钉住。`kernel_force="generic"` 与
-`out=` / `specialize=False` **不冲突**（generic 本就不走专用路径）。
+`out=` / `specialize=False` **不冲突**（generic 本就不走专用路径，`forced == ()`
+让两道早失败的门都不触发）；`backend` 与 `specialize=False` 也不冲突——它在
+`specialize` 判定**之前**早返回（实测 `--kernel-force backend --specialize false`
+退出码 0、`route : backend einsum`）。
 
 **负缓存必须旁路**：`PYQCD_EINSUM_NEGATIVE_CACHE`（`_kernel_kupl.py:59`，缺省开）
 会把 status=4 之类的确定性拒绝记下来，于是第二次调用连试都不试、原因变成
@@ -405,6 +416,17 @@ kernel : requested=<auto|generic|label,...>  ran=<label|none>  attempted=<label,
 - `ran` / `attempted` 取不到写 `unknown`（"没观测到"，不是"没有"）；
 - 与既有 `kernel   :` 行（注意三空格对齐）**是两回事**：那个是 `kernel_info` 的
   dict（`LAST_INFO` 汇总），`ran` 才是"这次真跑了哪个"。
+
+**提示语言（2026-11-17）**：库内提示**整句单语**，判定单点是
+`_specialize.notice_language()`：显式 `set_language()`（CLI `--language`）>
+`PYQCD_EINSUM_LANG` > locale（`LC_ALL`/`LC_MESSAGES`/`LANG`，`zh*` → 中文、其余 →
+英文；都没有 → 英文）。`announce` / `announce_generic` / 画像命中行共用这一档——
+**不许**出现"英文标签 + 中文说明"混排（`_specialize` 模块文档给出了两种语言的完整
+样例）。`[pyqcd.einsum]` 前缀、形态名（`topology:<摘要>`）、`route :` / `kernel :` 的
+字段名与 `auto|generic|none|unknown` 这些取值是**机器可解析**部分，两种语言**逐字
+相同**。`set_language` 只改进程内状态、**绝不写** `PYQCD_EINSUM_LANG`：写环境变量会
+悄悄改掉同进程后续调用与调用方自己的子进程。已知例外：`_api._note_equivalence_skipped`
+（`--verbose` 下"等价改写已跳过"）仍是中文，不受该开关影响。
 
 **踩坑**：`verify_specialized --kernel-force` **不做收缩**，所以它的 `ran` 恒为
 `unknown`——`--kernel-force` 在那儿只决定报告里出不出这一行、以及 `requested=`
@@ -436,6 +458,11 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
 `cache=False` 时 `LRUCache.get/put` 既不读也不写（统计零变化）。
 `pyqcd.einsum.cache_stats()` / `cache_clear()` 是公开入口；CLI `--cache` 只在显式
 给出时打印 `cache    : enabled=... hits=... misses=... hit_rate=...`。
+
+**跨进程的等价结论落在画像里**（`profile_equivalence.csv`，v2 起是路由表）：
+`_api._record_equivalence` 在每次**真查过**之后落 `none`/`ok`，`_equivalence_marked_none`
+是下次的廉价门；`as_equivalence="force"` 绕过这道门并刷新标记。表结构、优先序与
+"命中 ok 直接套用"的口径见 §9.1e。
 
 **计划/匹配的耗时数字不在此处复述**——它们只有一处权威：
 `docs/einsum_production_optimization_20261112.md:183-194`（§8，含 `match()` 热调用、
@@ -469,7 +496,8 @@ dtype, equation, shape, device)` 的历史观测落成 CSV，下次开工用**�
 | 截断与坏行 | `_CLIP_LIMITS = {"note": 200, "equivalence_equation": 512}`（`:205`）按字符截断，读写两侧共用同一刀（`_clip_row`，`:623-628`），次数进 `summary()["truncated_fields"]`。长度/编码/列数不对的行**逐行**跳过，计数进 `summary()["skipped_rows"]`（`:706-738`）；csv 流连续 `_MAX_CONSECUTIVE_ERRORS = 8` 次解析异常（`:214`、`:777-779`）才停止读取并只记 `last_error`——列数不对只计 skip、不计 streak（`:781-788`） |
 | 并发与退出 | 索引与待写队列共用**一把** `threading.Lock`；POSIX 下 `os.register_at_fork(after_in_child=_reset_after_fork)`（`:940`）在子进程重建锁并清空索引/队列（`:919-934`），否则父进程持锁时 fork 会让子进程首次 `summary`/`record` 永久阻塞；Windows 无此钩子。`atexit` 兜底 flush 最多等锁 `_EXIT_LOCK_TIMEOUT_S = 2.0` 秒（`:208`、`:908-910`），拿不到就丢弃待写行。单次读盘封顶 `_MAX_LOAD_BYTES = 64 << 20`（64 MiB，`:211`、`:720`；`_count_raw_rows` 同封顶，`:878`） |
 | 跨进程可见性 | **跨进程只认已落盘的记录**：`_load_locked()` 只读 `profile.csv`（`_profile_path()`），只进过内存索引的观测随进程消失。所以"同进程内 `best()` 已能返回更优配置、下次开工却没有它"是预期行为；要跨开工复用必须先 `flush()`，或让进程正常退出由 `atexit` 写一次 |
-| 施加面 | 每个目录一次 `configure + load`（同目录不重读；换目录时 `load(force=True)`，`_api.py:1116-1120`）；命中**只**填两个槽：`kernel_force`（具体标签经 `rpartition("_")` 反推逻辑名，`_api._profile_force_label`，`:1014-1035`）与 `backend`。`generic` **刻意不回放**（它会静默关掉"自动分派失败要告警一次"这条诊断）；`backend` **会被采纳**——命中记录 `kernel=backend` 时本次调用直接走 `backend.einsum`，在 `_specialize.match` 与 `find_path` **之前**返回，跳过**本库的**形态匹配、等价改写与收缩规划，直接调后端 `einsum`（`_backend_einsum` 仍给后端传 `optimize=True`，后端内部可能再自行优化，`:799-812`）。调用方/env 已给 `kernel_force`、`out=`、`specialize=False` 时命中**只记录不施加**（`:1149-1153`） |
+| 施加面 | 每个目录一次 `configure + load`（同目录不重读；换目录时 `load(force=True)`）；命中**只**填两个槽：`kernel_force` 与 `backend`。三个记录都**可重放**：`dedicated` / `topology`（具体标签经 `rpartition("_")` 反推逻辑名，`_api._profile_force_label`）、`generic`（→ `kernel_force="generic"`，合法且实测常最快；代价是这条方程不再进专用分派、因此没有"内核没跑成"的诊断，需要诊断时显式 `auto`）、`backend`（→ 直接走 `backend.einsum`，在 `_specialize.match` 与 `find_path` **之前**返回，跳过**本库的**形态匹配、等价改写与收缩规划；`_backend_einsum` 仍给后端传 `optimize=True`）。不可重放的只有 `equivalence`（原方程上强制内核必然"未尝试"）。调用方/env 已给 `kernel_force`、`out=`、`specialize=False` 时命中**只记录不施加** |
+| 命中输出契约 | 命中并**施加**时只打**一行**：`[pyqcd.einsum] profile hit: <profile.csv 绝对路径>:<数据行号> kernel=… optimize=… compute_ms=… (applied)`（中文口径 `profile 命中：…（已套用）`，实现见 `_api._profile_notice`）。这一行之后本次调用**不再**打 `announce_generic` / `announce` / 等价说明（`quiet_profile` 是**纯输出**开关，不改方程/dtype/形状/数值）；`route :` / `kernel :` 等**结果行照旧**。`--explain true` / `--verbose true`（→ `_specialize.set_detail(True)`）或 `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 恢复详解。**行号只在从文件读入的行上有**：本进程刚 `record`、还没落盘的那条没有 `line`（`_parse_table` 才写），所以第一次跑是 `…/profile.csv kernel=…`，第二次才是 `…/profile.csv:1 kernel=…`（实跑对照）。同一 `(方程, 形状, kernel, optimize)` 每进程只打一行；`PYQCD_EINSUM_NOTICE=0` 整条静音 |
 | 失败 | 画像建议跑不成 → `_profile_retry` 带 `profile=False` 退回原分派一次，**不**向调用方抛 `KernelUnavailableError`（显式强制仍照旧抛） |
 | 记录抑制 | 已施加命中且没回退的调用不再记一条；回退的照记，让实际跑成的那条配置下次有机会胜出 |
 
@@ -488,6 +516,34 @@ dtype, equation, shape, device)` 的历史观测落成 CSV，下次开工用**�
    反过来，**省略 `profile_dir` 不触发换表**——它保持当前钉住的目录（见上表"目录保持语义"）。
 5. `record_compare` 的 `equivalence=` 可以直接塞 `_equivalence.explain()` 的报告字典
    （只读它的 `kind` / `equation` / 三个置换字段）。
+
+### 9.1e 等价路由表 `profile_equivalence.csv`（schema v2，2026-11-17）
+
+`_profile_cache` 的第二张读写表（`EQUIVALENCE_NAME`）。v2 起
+（`EQUIVALENCE_SCHEMA_VERSION = 2`）它不再只是"标记"，而是**可直接照着执行的等价路由**：
+`state=ok` 的行带 `target_equation`（语料写法）与三个置换字段
+（`_PERMUTATION_FIELDS = ("operand_order", "operand_permutations",
+"output_permutation")`，按模块文档为 **JSON 字符串**，`null`/空串 = 这一步不需要动），
+上层据此**直接构造**改写，不必再调 `_equivalence.normalize_equation`。`schema_version`
+列的用途就是区分"这条结论带不带可复用载荷"；缺列的旧行按 `0` 读入、不丢。
+`profile_compare.csv` 里同名的三个字段与本表**语义相同**（`record_compare` 可直接吃
+`_equivalence.explain()` 的报告字典）。
+
+| 规则 | 口径（以 `_profile_cache.py` 模块文档 + `EQUIVALENCE_COLUMNS` 为准） |
+|---|---|
+| 列 | 键 7 列（同主表 `KEY_FIELDS`）+ `state` / `kind` / `updated_at` / `pyqcd_version` + v2 在**末尾追加**的 `target_equation` / `operand_order` / `operand_permutations` / `output_permutation` / `schema_version`；旧列一字未改 |
+| 状态 | 只接受 `ok` / `none`（`_STATE_RANK`），其他取值按坏行跳过；同键的 `ok` 与 `none` **可以并存** |
+| 选行优先序 | **先版本、后状态**：`schema_version` 大者胜 → 同版本内 `ok` 先于 `none` → 再同取 `updated_at` 新者 |
+| 稀疏口径 | 按 **(键, state)**：同键同 state 已有标记时只更新内存计数（`hits`）与 `updated_at`，**不再追加一行**——这张表回答"能不能改写"，不是流水账 |
+| 关闭 | 画像关闭（`profile=False` / `--profile false` / `PYQCD_EINSUM_PROFILE=0`）时**不读不写**：`_api` 侧 `marker_key` 为 `None`，既不查标记也不落标记（零 IO） |
+| 无文件 / 无键 | 正常查 `_equivalence.normalize_equation`，查完落一条标记 |
+| 命中 `none` | 跳过等价步骤（`_equivalence_marked_none` 的廉价门）。**只省时间**：标记不参与方程、dtype、形状或结果 |
+| 命中 `ok` | 直接套用载荷（跳过匹配） |
+| `--as-equivalence force` | `_api._AS_EQ_FORCE = "force"`：不信 `none` 标记、真的再查一次，并用新结论覆盖旧标记（刷新走同一条 `_record_equivalence`） |
+
+**别踩**：`as_equivalence="force"` 与 `kernel_force="generic"` 放在一起时，等价那一段
+**整段不执行**（`and not generic_only`）——force 也没机会重查；要 refresh 就先别强制
+`generic`（或用 `--as-equivalence force --kernel-force auto`）。
 
 ### 9.0 单方程测试的唯一接口：`python -m pyqcd.einsum.test`（强制）
 

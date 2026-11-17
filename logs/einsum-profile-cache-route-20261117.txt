@@ -1,0 +1,329 @@
+================================================================================
+qcd-einsum 画像路由 / 缓存：本轮 8 条可复用经验（0.5.2 + 未提交工作树）
+logs/einsum-profile-cache-route-20261117.txt
+生成时间: 2026-11-17 18:21:46 +0800
+核实对象: commit 625d115e (0.5.2)、1d4a47f9 / 6571b48f / 747d9d2a (0.5.1–0.5.2 修复链)、
+          当前未提交工作树（profile 路由、提示单语、--tune / 撤回相关改动）
+范围    : 只读核实 + 官方单方程入口 `python -m pyqcd.einsum.test` 复跑 + 画像验收脚本
+          `pyqcd/testing/einsum/acceptance_cache_tune.py`。未改 pyqcd/**、docs/**、
+          pyqcd/testing/**、其它 logs/**；未做任何 git 操作（未 add / commit / tag / push）
+计时口径: 本机 CPU、numpy 后端；画像里的 `compute_ms` 是单次调用观测，**不是基准**。
+          本文件引用的毫秒数只用于"同一台机器、同一天、同一方程上的相对比较"。
+================================================================================
+
+## 关键日志
+
+### 1. "命中即跳过"是错的：判据是"本次真的按命中执行了"
+- 结论: `--tune` 的 30 组共用同一个画像键（方程/形状/dtype/设备/后端全锁死）。早期
+  `_profile_record` 只要 `info["hit"]` 非空就 `return`，于是第 1 组写入后其余 29 组全部
+  被当成"命中"丢弃——**30 组只落 1 行（3%）**。正确判据不是"有没有命中"，而是
+  "**这次调用真的按命中执行了**"（命中且 `force`/`backend` 已设、且没有回退）。只该关掉
+  "同一条建议的重复记账"，而不是关掉记录本身。
+- 证据: `pyqcd/einsum/_api.py:1275-1293` 的 `_profile_record`：
+  `applied_hit = info.get("hit") is not None and (info.get("force") is not None or
+  info.get("backend") is not None)`，`if applied_hit and not info.get("fallback"): return`；
+  commit `1d4a47f9` 提交消息「V15 实测 30 组 --tune 只落 1 行（3%）……改为只在**真的按
+  命中执行**时跳过」；`README.zh-CN.md:53-54` 同一口径。
+- 核实状态: verified（代码 + 提交消息 + README；并以 `--tune` 实跑对照，见"验证与证据 B"）。
+- 可复用判据: 缓存/画像类"命中就跳过"必须问"这次是否**消费**了命中"；把"记录"和
+  "重复记录的抑制"分开，别用"键上已有行"当代理判据。
+
+### 2. `generic` 在内部是空元组 `()`：`if forced` 会把它误判成"没强制"
+- 结论: `_kernel_force.parse("generic")` 返回 `("generic",)`，但**调用点用的是
+  `forced_labels()`**，它对 `generic` 特意返回 `()`（因为 generic 是"一个内核都不许跑"，
+  与"没有强制"共用同一个空集表示）。于是任何 `if forced:` / `bool(forced)` 的判断都会把
+  "明确要求通用"当成"调用方没说话"。第一版修复就是这样失效的——代码改了，分支却走进
+  了"未强制"那条。要区分必须写 `forced == ()` 或 `_kernel_force.generic_only()`。
+- 证据: `pyqcd/einsum/_kernel_force.py:178-185`（`forced_labels`：
+  `if labels == (GENERIC_LABEL,): return ()`）、`:188-190`（`generic_only`）；
+  `pyqcd/einsum/_api.py:1553`（`generic_only = forced == () and not forced_by_profile`）；
+  commit `6571b48f` 提交消息「注意 generic 在内部表示是空元组，不能用真值判断
+  （我第一版就踩了这个坑）」；本机复核 `forced_labels('generic')` → `()`、`bool` → `False`。
+- 核实状态: verified（代码 + 提交消息 + 本机运行时输出，见"验证与证据 C"）。
+- 可复用判据: 用"空集"表达某一档取值时，永远不要再用真值判断"有没有给"；要么给
+  哨兵（`None` vs `()`），要么提供 `*_only()` 谓词。
+
+### 3. 可重放性只有一条边界：`equivalence` 不可，`generic` / `backend` 可
+- 结论: 画像该行能不能变成下次的 `kernel_force=`，判据是"这个标签在**原方程**上重放是否
+  有意义"。`equivalence` 只说明"这次是等价改写跑成的"，在原方程上强制任何具体内核必然
+  "未尝试"，所以它既不落盘也不参与选优；`generic`、`backend`、`dedicated`、`topology`
+  都是合法且可复现的建议，必须参与 `best()`。实测同一条 10 操作数方程
+  `generic` **364 / 385 ms** 对 `topology`（`kupl_topology`）**2792 / 2735 ms**——
+  把 `generic` 判成不可重放等于把最大的一笔（约 7 倍）收益丢掉。
+- 证据: `pyqcd/einsum/_profile_cache.py:241-244`
+  （`_NON_REPLAYABLE = frozenset({"", "equivalence"})`，注释即写明 10 操作数方程
+  385 vs 2735 ms）、`:902-908`（`_pick` 跳过不可重放行）；
+  `pyqcd/einsum/_api.py:1083-1112`（`_profile_force_label`：`generic` / `backend` 都返回
+  自己，`equivalence` / 空 / 未知具体标签返回 `None`）；
+  commit `747d9d2a`（0.5.1：385 ms vs 2735 ms）、commit `6571b48f` 与
+  `README.zh-CN.md:54`（0.5.2：364 ms vs 2792 ms）。
+- 核实状态: verified（判据与两个数值点均在库内可读）；派发单里的 "344 ms" 在仓库中
+  **未找到出处 → unverified**，本文件只用 364–385 / 2735–2792 这一组。
+- 可复用判据: 缓存标签分两类——**结论型**（可重放，参与选优）与**诊断型**（不可重放，
+  只观测）。判据只有一处实现（`_profile_force_label`），报告层不许另立一份。
+
+### 4. 稀疏写适合稳态、不适合遍历：tune 要 `force_write` + 每键上限配合
+- 结论: 主表的稀疏口径是"新键，或比该键当前最优严格快过 5% 才落盘"，这对"长期同一
+  批方程反复跑"是对的，对"一次遍历几十组配置"是灾难——第二组起几乎全部不够格。
+  `--tune` 因此显式 `record(..., force_write=True)` 绕过 5% 门，只留"每键最多 4 条配置"
+  这道上限来兜规模。反过来，稳态调用**不能**开 force_write，否则每次调用都追加一行。
+- 证据: `pyqcd/einsum/_profile_cache.py:239-240`（`_IMPROVE_RATIO = 0.95`）、
+  `:511-562`（`record(..., force_write=False)`；`worth = bool(force_write) or new_key`）、
+  `:260`（`_MAX_ROWS_PER_KEY = 4`）、`:937-947`（`_prune_slot`）、
+  `:950-957`（`_drop_orphans_locked`：被裁掉的配置行同时从待写队列剔除）；
+  `pyqcd/einsum/_api.py:1042`（`_PROFILE_TUNE`）与 `:1293`
+  （`force_write=_PROFILE_TUNE`）；`pyqcd/einsum/test.py:242-247`
+  （5 内核 × 2 as_equivalence × 3 optimize = 30 = `TUNE_MAX_COMBOS`）、`:3348-3368`
+  （`_profile_tune` 开关）。
+- 核实状态: verified（代码 + 契约 + 本机实跑）。实跑口径见"验证与证据 B"：30 组 →
+  CSV **15 条数据行**、重载后索引 **4 个 `(kernel, optimize)` 配置**。
+- 可复用判据: 稀疏写是**稳态**策略；"遍历型"用法必须显式绕过它，并另外给容量上限，
+  否则报表要么只有 1 行、要么把文件写成流水账。
+
+### 5. 坏组合必须能撤回：超时 / 异常 / MISMATCH 留在缓存里会被当建议
+- 结论: `--tune` 期间是强制写，所以"跑坏的组合"也会进画像。超时、抛异常、
+  `rel > atol+rtol` 三类都不能留：它们要么没跑完、要么数值就是错的，留下来会占名额并
+  在 `best()` 里胜出。做法是跑完后用 `_profile_cache.drop(key, kernel, optimize)` 撤回，
+  而不是"事后祈祷它不最快"。注意 `drop()` 的边界：它只清**内存索引 + 待写队列**，
+  `profile.csv` 是追加写、没有删改接口，盘上已有同一条历史行时返回 `False`（如实告诉
+  调用方"历史行还在"，不要说成已经清干净）。
+- 证据: `pyqcd/einsum/_profile_cache.py:658-705`（`drop`，docstring 明写两类撤回面与
+  `False` 的两种含义）、`pyqcd/einsum/test.py:104`、`:3434-3462`（`_withdraw_records`：
+  `good` 里的 `(kernel, optimize)` 不撤，避免删掉另一组合格的实测）；
+  三条契约 `test_tune_keeps_no_row_for_a_timed_out_combination` /
+  `..._a_raising_combination` / `..._a_mismatching_combination`
+  （`pyqcd/testing/_einsum_tune_equivalence_contract.py:998-1124`，其中 MISMATCH 用例
+  注入假耗时让坏组变成"最快"，因此有区分力）。
+- 核实状态: verified（代码 + 契约 11 passed，见"验证与证据 E"）。
+- 可复用判据: 任何"强制记录"的遍历都要配一条撤回路径，并明确"撤回"能否穿透到持久层；
+  不能穿透时必须在输出里说清楚。
+
+### 6. 提示语不得撒谎：未采纳就说"未采纳"，generic 强制时不再做特化匹配
+- 结论: 两处"说了假话"的形态：
+  (a) 命中但没施加（调用方已显式给 `kernel_force`、或 `out=` / `specialize=False`）时，
+  若仍打"命中"，用户会以为换了路。现在库内打 `profile 命中未施加：…（本次的显式开关
+  优先）`，CLI 报告层打 `profile 命中但未采纳 → kernel=…（该取值不可重放，本次仍走原分派）`。
+  (b) `--kernel-force generic` 是"一个专用内核都不许跑"的**语义指令**，此时若照旧做
+  `_specialize.match` 与等价改写，同一次输出里会同时出现"通用路径：未命中特化形态"与
+  "专用路径: topology:…"（外层 generic 提示 + 内层改写命中），**自相矛盾**。现在
+  `generic_only` 直接跳过匹配与改写，两条提示都不打。
+  另外报告层不许另立"可重放"判据：`generic` 变成可重放后，0.5.1 的硬编码
+  `if kernel in ("", "generic")` 会把"已套用"的命中在下一行说成"未采纳"（本轮实见）。
+- 证据: `pyqcd/einsum/_api.py:1126-1185`（`_profile_notice` 三分支；未施加在缺省静音、
+  `--verbose`/`--explain` 时如实打印）、`:1553-1562`（`generic_only` / `quiet_profile`）、
+  `:1724`（`and not generic_only` 的等价改写门）、`:1172-1178`；
+  `pyqcd/einsum/test.py:2586-2600`（`_profile_replayable`：判据委派给
+  `_api._profile_force_label`，注释写明"两句自相矛盾"）、`:860-864`
+  （`explain.status_hit_inert`）；
+  改动前（HEAD=625d115e）确实两条都会打：`git show HEAD:pyqcd/einsum/_api.py` 的
+  `:1524`（`announce_generic`）与 `:1534`（`announce(specialized)`），且 `:1649` 的等价
+  改写门没有 `not generic_only`。
+- 核实状态: verified（当前行为实跑：`--kernel-force generic --verbose true` 输出**零条**
+  路径提示，只有 `kernel : requested=generic ran=none attempted=none`；未采纳分支用旧
+  标签 `kupl_nucleon_2pt` 手工造行实跑复现，见"验证与证据 D"）。
+- 可复用判据: 提示的每个形容词都要能被"本次是否真的执行了它"验证；"命中"≠"采纳"，
+  "要求通用"≠"没要求"。语义指令必须同时关掉为它服务的那条优化（否则提示互斥）。
+
+### 7. "少打日志"必须配反向断言：否则会把诊断一起砍掉
+- 结论: 为了让命中行"只剩一条"，本轮加了两处抑制（`quiet_profile` 静音
+  `announce` / `announce_generic` / 等价说明；命中去重表）。这类"让输出变安静"的改动
+  最容易顺手砍掉诊断，而且**只测'它沉默了'永远抓不到**。唯一可靠的办法是同时写
+  "该打的仍然打"的反向断言：缓存为空 / 没有命中时，通用路径提示必须照旧出现；显式
+  `--explain true` / `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 必须恢复详解。
+- 证据: `pyqcd/einsum/_specialize.py:413-419`（`notice_enabled` 的注释：
+  "关掉提示等于删掉诊断。任何新增的抑制条件都必须同时配一条**反向断言**'该打的仍然
+  打'"）；验收脚本第 4 步 `pyqcd/testing/einsum/acceptance_cache_tune.py:160-172`
+  （空缓存 + 不强制内核 → `generic path:` 仍在，本轮实跑 PASS）；
+  `pyqcd/testing/_einsum_tune_equivalence_contract.py:652`
+  （`test_without_a_marker_the_equivalence_step_still_runs`：没有标记时等价步骤照跑）。
+- 核实状态: verified（反向断言存在且本轮实跑 11/11 PASS，见"验证与证据 A"）。
+- 可复用判据: 任何 `return` / 静音 / 去重分支都要有一条"反方向"用例；只写"沉默"用例
+  等于给诊断能力发空头支票。
+
+### 8. 子代理会超时、输出会被清理：报告必须同时写 durable 路径
+- 结论: 并行子代理的返回值可能丢掉（超时、被主流程截断、会话结束），shell/stdout 里
+  的结论随时会消失。凡是"结论要被人后续引用"的交付，必须**同时**写进仓库内的 durable
+  路径（`logs/**`、`skills/**`、`docs/**`），报告文件只是加速转交的副本；反过来，
+  只有报告、没有 durable 落盘，等于没产出。本轮的反面实例：派发的多份任务单都注明
+  "上一任未产出文件"，`/tmp/kf-tasks` 下 9 个任务单、**0 个 `*.report.md`**。
+- 证据: 本机 `/tmp/kf-tasks` 目录清单（9 个 `*.md` 任务单，无 `*.report.md`）；
+  `W3b.md` / `TH2.md` / `TG2.md` 三份任务单原文均含"上一任未产出文件"；
+  `logs/AGENTS.md` 的批次索引正是这套 durable 口径的落地形式（本文件即按其字段登记）。
+- 核实状态: partially verified —— "报告缺失 / 任务单标注未产出"已核；派发单所称
+  "本轮 6 路 0 B 日志"在 `/tmp` 与 `~/.commandcode` 下**找不到可核对的 0 字节日志文件**
+  → 该具体数字标 **unverified**（本条结论不依赖它）。
+- 可复用判据: 交付物分级——durable（仓库内，被索引）> 报告（临时目录）> stdout。
+  任何"只写报告"的承诺都视为未交付；派发单里要写明 durable 路径。
+
+## 验证与证据
+
+### A. 画像/路由验收脚本：11/11 PASS（本机 2026-11-17 18:19）
+```bash
+python -B -m pyqcd.testing.einsum.acceptance_cache_tune
+```
+```text
+[1] 种子：--kernel-force generic 记录到画像
+PASS 1a profile.csv 落盘  /tmp/pyqcd-accept-cache-.../profile.csv flushed=1
+PASS 1b 至少一行 kernel=generic  rows=1 generic=1
+[2] 命中并施加：不带 kernel_force 的默认调用
+PASS 2a 命中后施加 generic（requested=()）  last_kernel={'requested': (), 'ran': None, 'attempted': (), 'reasons': {}}
+PASS 2b 未跑专用内核（ran=None）
+PASS 2c 数值对拍 rel<=1e-12  rel=4.256e-16
+[3] 输出形态：命中提示恰好一行、带行号、无特化提示
+PASS 3a 命中提示恰好一行  lines=1
+     ['[pyqcd.einsum] profile hit: /tmp/.../profile.csv:1 kernel=generic optimize=auto compute_ms=1.084 (applied)']
+PASS 3b 提示含 profile.csv:<行号>  line=1 rows=1
+PASS 3c generic 下无 specialized 提示
+[4] 反向证明：空缓存 + 不强制内核时 generic path 仍在
+PASS 4 无缓存时通用路径提示仍在  [pyqcd.einsum] generic path: no specialized shape matched (...)
+[5] --tune：CLI 子进程写多行
+PASS 5a CLI --tune 退出码 0   returncode=0
+PASS 5b tune 写入多行  rows=15
+11/11 PASS, 0 FAIL        （elapsed 2.95 s）
+```
+说明：3a 的"恰好一行"是第 6 条的证据；第 4 步是第 7 条的反向断言；5b 的 15 行是第 4 条
+的实测量。
+
+### B. 稀疏门 vs 强制写：30 组 → 15 条数据行 → 4 个配置（第 1、4 条）
+```bash
+python -B -m pyqcd.einsum.test --equation 'ambn,codp,egfh,ce,mo,bdf,nph->ga' \
+  --shape '[2,2,2,2],[2,2,2,2],[2,2,2,2],[2,2],[2,2],[2,2,2],[2,2,2]->[2,2]' \
+  --tune --profile-dir <tmp>/table --rounds 1 --warmup 1
+```
+```text
+data rows: 15
+per (kernel,optimize): {('kupl_dedicated','auto'):4, ('kupl_dedicated','greedy'):4,
+                        ('kupl_dedicated','optimal'):4, ('generic','optimal'):3}
+summary（重载后）: rows=4 keys=1 dropped_rows=0 max_rows_per_key=4 skipped_rows=0
+```
+读法：**30 组网格**（5 内核 × 2 as_equivalence × 3 optimize）在文件里留下 15 条**观测行**，
+但去重后只有 **4 个 `(kernel, optimize)` 配置**——正是 `_MAX_ROWS_PER_KEY = 4` 的上限；
+同一配置被重复观测时仍各追加一行（追加写在文件层不做去重，重载时由 `_merge` 合并）。
+对比：关掉 force_write 时同一键只落 **1 行**（契约
+`test_tune_flag_writes_the_whole_map_and_sparse_keeps_a_single_row`：
+开 = `min(组数, 4)` 行、关 = 1 行）。
+
+### C. `generic` 的内部表示与可重放性（第 2、3 条）
+```bash
+python -c "
+from pyqcd.einsum import _kernel_force as k, _api, _profile_cache as pc
+print(k.parse('generic'), k.forced_labels('generic'), bool(k.forced_labels('generic')))
+print(k.generic_only('generic'), k.forced_labels('auto'))
+for lab in ('generic','backend','equivalence','kupl_dedicated',''):
+    print(lab, '->', _api._profile_force_label(lab))
+print(pc._NON_REPLAYABLE, pc._MAX_ROWS_PER_KEY)"
+```
+```text
+('generic',) () False
+True None
+generic -> generic
+backend -> backend
+equivalence -> None
+kupl_dedicated -> dedicated
+(空) -> None
+frozenset({'', 'equivalence'}) 4
+```
+`bool(()) is False` 就是第 2 条的全部理由；`generic`/`backend` 返回自身、`equivalence`
+返回 `None` 是第 3 条的全部判据（只有一处实现）。
+
+### D. 提示语的三种形态（第 6 条）
+```bash
+# (a) 强制 generic：两条自相矛盾的提示都不出现（改动前 HEAD 会同时出现）
+python -B -m pyqcd.einsum.test --equation 'ambn,codp,egfh,ce,mo,bdf,nph->ga' \
+  --shape '...->[2,2]' --kernel-force generic --profile false \
+  --rounds 1 --warmup 1 --verbose true
+# kernel : requested=generic  ran=none  attempted=none      ← 只有这一行，无路径提示
+
+# (b) 命中已施加：只打一行，且钉到 profile.csv:<数据行号>
+# [pyqcd.einsum] profile hit: /tmp/.../profile.csv:1 kernel=generic optimize=auto compute_ms=1.084 (applied)
+
+# (c) 命中但没采纳（手工把历史行改成旧标签 kupl_nucleon_2pt → _profile_force_label=None）
+# [pyqcd.einsum] profile 命中未施加：backend=numpy equation=... kernel=kupl_nucleon_2pt（本次的显式开关优先）
+# [pyqcd.einsum] profile 命中但未采纳 → kernel=kupl_nucleon_2pt （该取值不可重放，本次仍走原分派）
+# PASS ... rel=2.09e-16 vs np.einsum(optimize='greedy')
+```
+说明：(c) 用"旧缓存里的具体内核标签"造出不可重放行——这正是 0.4.x 缓存升级到 0.5.x 后
+会遇到的情形，也是 `status_hit_inert` 唯一还能触发的路径。
+
+### E. 相关契约（本机全绿，证明上述口径是当前代码的契约而非解读）
+```bash
+PYQCD_EINSUM_PROFILE=0 python -B -m pyqcd.testing._einsum_profile_cache_contract
+#  10 passed, 0 skipped, 0 failed
+PYQCD_EINSUM_PROFILE=0 python -B -m pyqcd.testing._einsum_tune_equivalence_contract
+#  11 passed, 0 skipped, 0 failed
+PYQCD_EINSUM_PROFILE=0 python -B -m pyqcd.testing._einsum_kernel_force_contract
+#   9 passed, 0 skipped, 0 failed
+```
+tune 契约里与本轮直接相关的三条：`test_tune_flag_writes_the_whole_map_and_sparse_keeps_
+a_single_row`、`test_tune_keeps_no_row_for_a_{timed_out,raising,mismatching}_combination`。
+
+### F. 改动边界（只新增本文件 + 索引一条 + 技能一小节）
+```bash
+git -C /home/zhangxin/PyQCD status --short
+#  M docs/einsum_user_guide_20261116.md      ← 本任务开始前既有（其它路未提交的代码/文档改动）
+#  M pyqcd/einsum/AGENTS.md                  ← 同上
+#  M pyqcd/einsum/_api.py                    ← 同上
+#  M pyqcd/einsum/_profile_cache.py          ← 同上
+#  M pyqcd/einsum/_specialize.py             ← 同上
+#  M pyqcd/einsum/test.py                    ← 同上
+# ?? pyqcd/testing/einsum/acceptance_cache_tune.py  ← 同上（既有未跟踪文件）
+#  M pyqcd/testing/conftest.py               ← 同上，且是**并发写入**：本任务复核期间才出现
+# ?? pyqcd/testing/_einsum_equivalence_route_contract.py ← 同上（并发出现，路由表契约）
+#  M logs/AGENTS.md                          ← 本任务（追加一条索引）
+#  M skills/pyqcd-einsum/SKILL.md            ← 本任务（只加一小节）
+# ?? logs/einsum-profile-cache-route-20261117.txt   ← 本任务（新文件）
+```
+说明：工作树在本任务开始前就有 6 个已修改 + 1 个未跟踪文件，任务禁止触碰；复核期间
+另一路代理又写入 `pyqcd/testing/conftest.py`（+7 行）与
+`pyqcd/testing/_einsum_equivalence_route_contract.py`，工作树处于**并发变化**中。
+本任务只碰上述三处（新增本文件、`logs/AGENTS.md` 追加一条、`SKILL.md` 加一小节）；
+`git diff --stat` 的其余条目全部来自那批并发/既有改动，不是本任务产物。
+未执行任何 git 写操作（未 add / commit / tag / push）。
+
+### G. 本文件大小（与 `logs/AGENTS.md` 条目的"文件大小"必须一致）
+```bash
+stat -c '%n %s' logs/einsum-profile-cache-route-20261117.txt
+# logs/einsum-profile-cache-route-20261117.txt 24475
+```
+（最终数值以落盘后的 `stat` 为准；索引条目写入的是同一次实测结果。）
+
+## 变更与产物
+
+- 新增 `logs/einsum-profile-cache-route-20261117.txt`（本文件）：8 条经验 + 7 组证据。
+- `logs/AGENTS.md`：追加一条批次索引（字段照抄同家族：主任务 / 日志文件 / 文件大小 /
+  触发原因 / 关键内容 / 验证 / 批次状态），大小取 `stat -c %s` 实测值。
+- `skills/pyqcd-einsum/SKILL.md`：在"配置画像缓存：怎么用 / 怎么排查（2026-11-17）"
+  末尾加一小节「画像路由的五条硬判据」，只覆盖可复用判据，不复制本文件的证据。
+- **未改动**：`pyqcd/**`（含 `pyqcd/einsum/**`、`pyqcd/testing/**`，含既有的未跟踪
+  验收脚本）、`docs/**`、`refer/**`、其它 `logs/**`；未生成/删除任何缓存目录。
+- **未做 git 操作**：无 add / commit / tag / push / reset。
+
+## 风险、限制与下一步
+
+1. **数值口径**：本文件所有毫秒数都是"本机、单次会话、小样本"；`--tune` 的输出本身是
+   **单次运行实测，不是基准**（README 的原话）。要下性能结论仍须按性能数据门
+   （生产尺寸、交错计时、≥10 轮中位）重测，本文件的 364–385 / 2735–2792 只用于
+   "同一个 10 操作数方程上的相对量级"。
+2. **`344 ms` 无出处**：派发单里的 "generic 344 ms" 在仓库（代码注释、README、AGENTS）
+   中均未找到；本条只保留 364 / 385 两个实测点。标 **unverified**。
+3. **"6 路 0 B 日志" 无实物**：`/tmp/kf-tasks`（9 个任务单、0 个 `*.report.md`）与
+   `~/.commandcode` 下都没有可直接核对的 0 字节日志文件；该数字标 **unverified**，
+   第 8 条的结论改用"报告缺失 + 任务单注明上一任未产出"作为证据。
+4. **`drop()` 撤不回落盘历史行**：`profile.csv` 是追加写，没有删改接口。盘上已有同一条
+   `(键, kernel, optimize)` 时 `drop()` 返回 `False`——此时"撤回"只对本进程的
+   `best()` 生效，下次 `load()` 会把它读回来。需要在报告里如实说明，不要写成已清除。
+5. **强制写会放大文件**：`force_write` + 每键 4 条只是"配置数"的上限，同一配置被多次
+   观测仍会各追加一行（本轮实测 30 组 → 15 条观测行）。长跑脚本不要开 force_write；
+   全表上限仍是 50000 行（`_MAX_ROWS`），超限才整表重写。
+6. **静音的风险**：`quiet_profile` 是**纯输出**开关（不改方程/dtype/形状/数值），但它确实
+   会遮住"该形态内核没跑成"的诊断。需要诊断时用 `--explain true` / `--verbose true` /
+   `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 恢复；`kernel_force="generic"` 的取舍与此相同
+   （按缓存选最快就必须接受"这条方程不再进专用分派"）。
+7. **未提交状态**：本轮代码改动（`_api.py` / `_profile_cache.py` / `_specialize.py` /
+   `test.py` / `pyqcd/einsum/AGENTS.md` / `docs/einsum_user_guide_20261116.md` +
+   未跟踪的 `acceptance_cache_tune.py`）仍在工作树里。本文件记录的是"该状态实测通过"的
+   事实；提交前应重跑全量 `python -B -m pyqcd.testing`，并决定验收脚本是否注册进
+   `pyqcd/testing/conftest.py`（当前**未**注册，只能手工单跑）。
+8. **下一步（按优先级）**：① 把本轮未提交改动过一遍全量回归；② 决定 `acceptance_cache_tune`
+   的归属（注册 vs 明确标注"手工验收"）；③ 清理 `/tmp/kf-tasks` 式"只写报告"的交付习惯，
+   派发单统一要求 durable 路径 + 报告副本。

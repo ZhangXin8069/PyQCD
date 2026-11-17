@@ -37,6 +37,21 @@ python -m pyqcd --json     # machine-readable
 > `OPENBLAS_NUM_THREADS`（或 `PYQCD_EINSUM_OMP_THREADS` / `PYQCD_EINSUM_BLAS_THREADS`）覆盖，
 > `PYQCD_EINSUM_THREADS=off` 关闭，`pyqcd.einsum.thread_info()` 查看。
 
+## 0.5.3 发布声明 — qcd-einsum：等价路由表、`--tune` 加固
+
+* **`profile_equivalence.csv` 升级为路由表（schema v2）**：能改写的行除 `state/kind` 外，还存
+  `target_equation` **与三个置换字段**（`operand_order`/`operand_permutations`/`output_permutation`），
+  命中即可**直接施加、不再重跑同构搜索**。行带 `schema_version`；同键多行时**版本号大者优先**，
+  再 `ok` 优于 `none`，再取 `updated_at` 新者。
+* **方案 A**：改写后的内层调用以 `target_equation` 记录，于是 `profile.csv` 里有语料写法的行，
+  可按它复用最快内核/optimize。
+* `--as-equivalence force` 忽略备忘并刷新。
+* **`--tune`**：**每一次** einsum 调用受 `--tune-timeout`（默认 100 s）约束，整轮受 `--tune-budget`；
+  冲突参数**警告后忽略**（退出码 0）；超时/异常/数值超 `atol` 的组合**从缓存撤回**。
+* **强制 `generic`/`backend` 不再做特化匹配与等价改写**（对通用收缩毫无帮助）；提示整句单语
+  （`PYQCD_EINSUM_LANG`）；画像命中只打**一行**（含缓存文件与命中行号），`route :`/`kernel :`
+  这类证据行保留。
+
 ## 0.5.2 发布声明 — qcd-einsum：`--tune`、等价备忘、诚实的缓存行
 
 * **`--tune`**：锁定 `equation/shape/dtype/device/backend`，遍历

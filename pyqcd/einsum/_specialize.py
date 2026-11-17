@@ -14,9 +14,15 @@
 2. 环境变量 ``PYQCD_EINSUM_SPECIALIZE=0`` —— 进程级关闭；
 3. 默认开启。
 
-命中时输出（每个进程每个形态一次）：
+命中时输出（每个进程每个形态一次），整句只用**一种**语言：
 
-    [pyqcd.einsum] 专用路径: topology:xxxxxxxx [kernel: kupl_dedicated]
+    [pyqcd.einsum] 专用路径: topology:xxxxxxxx [内核: kupl_dedicated]
+    [pyqcd.einsum] specialized path: topology:xxxxxxxx [kernel: kupl_dedicated]
+
+语言由 ``PYQCD_EINSUM_LANG`` / CLI 的 ``--language`` 决定（见
+:func:`notice_language`）：``zh`` 用中文标签（``[计划缓存]`` / ``[内核: …]``）配中文
+说明，``en`` 全英文。``[pyqcd.einsum]`` 前缀与形态名是**机器可解析**的稳定部分，
+两种语言逐字相同；**绝不**把英文标签拼在中文解释前面（或反之）。
 
 设置 ``PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`` 可每次调用都输出。
 
@@ -253,6 +259,11 @@ def _topology_entry(digest: str) -> Entry:
             # 实际路线一律以 `kernel` 行 / `LAST_INFO['path']` 为准。
             "note": "真实语料形态（先试展开式 dedicated 步表，不行再试 v3 拓扑步表；"
                     "实际走的入口见 kernel 行）",
+            # **英文同义说明**：``announce`` 在 ``en`` 下用它，绝不把中文解释拼到
+            # 英文标签后面（那样一行里就有两种语言）。
+            "note_en": "corpus form (tries the expanded dedicated step table first, "
+                       "then the v3 topology table; the kernel line reports which "
+                       "entry actually ran)",
             "kernels": ("kupl_topology", "cuda_topology"),
             "subscripts": "",
         }
@@ -314,41 +325,110 @@ def announce(entry: Entry, kernel: str = "") -> None:
 
     ``kernel`` 是**实际执行**的专用内核名（空串表示只命中计划缓存），
     提示里据实输出，避免把没有 kernel 的形态说成 fused。
+
+    整句只用**一种**语言（:func:`notice_language`）：``zh`` 用中文标签
+    （``[计划缓存]`` / ``[内核: …]``）配 ``note``，``en`` 用英文标签配 ``note_en``。
+    ``[pyqcd.einsum]`` 前缀与形态名（``topology:<摘要>``）是**机器可解析**的稳定
+    部分，两种语言逐字相同。原先英文标签后面直接拼中文 ``note``，一行里两种语言
+    （2026-11-17 用户实测）。
     """
     name = entry.get("name", "unknown")
+    # 下面两个 return 都是**抑制**：总开关关闭（``NOTICE_ENV``）/ 同一形态本进程已打过
+    # （去重，免得一次运行把屏刷满）。``verbose`` 只解除去重、不解除总开关——两者的区别
+    # 是"每次都打"与"一条都不打"（``verbose_enabled`` / ``notice_enabled`` 各管一头）。
     if not notice_enabled():
         return
-    verbose = os.environ.get(VERBOSE_ENV, "").strip().lower() in (
-        "1", "true", "on", "yes")
+    verbose = verbose_enabled()
     with _lock:
         if not verbose and name in _announced:
             return
         _announced.add(name)
-    kind = f"kernel: {kernel}" if kernel else "plan-cache"
-    note = entry.get("note", "")
+    # 整句必须**单语**：标签与说明各自跟语言走（zh 用 ``note``，en 用 ``note_en``）。
+    # 原先英文标签后面直接拼中文说明，一行两种语言，用户明确反馈难看。
+    # ``[pyqcd.einsum]`` 前缀与形态名两种语言逐字相同——脚本靠它们抓这一行（``_api``
+    # 的画像命中行用的是同一前缀），翻译掉就没人能解析。
     if notice_language() == "zh":
-        print(f"[pyqcd.einsum] 专用路径: {name} [{kind}] {note}", flush=True)
+        kind = f"内核: {kernel}" if kernel else "计划缓存"
+        note = str(entry.get("note", ""))
+        message = f"[pyqcd.einsum] 专用路径: {name} [{kind}]"
     else:
-        print(f"[pyqcd.einsum] specialized path: {name} [{kind}] {note}",
-              flush=True)
+        kind = f"kernel: {kernel}" if kernel else "plan-cache"
+        note = str(entry.get("note_en", ""))
+        message = f"[pyqcd.einsum] specialized path: {name} [{kind}]"
+    print(f"{message} {note}" if note else message, flush=True)
 
 
 LANGUAGE_ENV = "PYQCD_EINSUM_LANG"
 
+#: 显式指定的提示语言（``"zh"`` / ``"en"``；``None`` = 按环境变量/locale 现算）。
+#: ``--language``（CLI）经 :func:`set_language` 走这里——**不写环境变量**：改写
+#: ``PYQCD_EINSUM_LANG`` 会污染同进程后续调用与调用方自己的子进程。
+_LANGUAGE_OVERRIDE: str | None = None
+
+#: 显式要求/关闭"完整详解"（``None`` = 按 :data:`VERBOSE_ENV` 现算）。
+_DETAIL_OVERRIDE: bool | None = None
+
+
+def set_language(language: str | None) -> str | None:
+    """显式指定提示语言，返回设置前的取值（``None`` = 按 env/locale）。
+
+    ``--language`` 是**本次输出**的选择，所以这里只改进程内状态，绝不写
+    ``PYQCD_EINSUM_LANG``：写环境变量会让同进程后续调用（以及调用方自己的子进程）
+    被悄悄改掉语言，而调用方无法预期。传入无法识别的取值（含 ``auto``/``None``）
+    即回到"按环境变量"的口径。
+    """
+    global _LANGUAGE_OVERRIDE
+    previous = _LANGUAGE_OVERRIDE
+    text = "" if language is None else str(language).strip().lower()
+    if text.startswith("zh"):
+        _LANGUAGE_OVERRIDE = "zh"
+    elif text.startswith("en"):
+        _LANGUAGE_OVERRIDE = "en"
+    else:
+        _LANGUAGE_OVERRIDE = None
+    return previous
+
+
+def set_detail(enabled: bool | None) -> bool | None:
+    """显式设定"完整详解"档，返回设置前的取值（``None`` = 按 ``VERBOSE_ENV``）。
+
+    CLI 的 ``--explain true`` / ``--verbose true`` 用它恢复完整提示（包括画像命中时
+    那唯一一行之外的解释）；不传或传 ``None`` 时回到环境变量口径，所以调用方不必
+    猜"库现在的默认值是什么"。
+    """
+    global _DETAIL_OVERRIDE
+    previous = _DETAIL_OVERRIDE
+    _DETAIL_OVERRIDE = None if enabled is None else bool(enabled)
+    return previous
+
+
+def verbose_enabled() -> bool:
+    """是否**每次**命中都打提示（``VERBOSE_ENV`` 或显式的 :func:`set_detail`）。"""
+    if _DETAIL_OVERRIDE is not None:
+        return _DETAIL_OVERRIDE
+    return os.environ.get(VERBOSE_ENV, "").strip().lower() in (
+        "1", "true", "on", "yes")
+
 
 def notice_enabled() -> bool:
     """首次命中提示是否开启（默认开启，``PYQCD_EINSUM_NOTICE=0`` 关闭）。"""
+    # 关掉提示等于删掉诊断。任何新增的抑制条件都必须同时配一条**反向断言**"该打的
+    # 仍然打"：只验"它能沉默"，沉默本身就会把诊断能力一起砍掉（本轮就出现过"默认
+    # 路径的通用提示不见了"的疑点，靠反向实测才排除，而不是靠读代码相信它）。
     return os.environ.get(NOTICE_ENV, "1").strip().lower() not in (
         "0", "false", "off", "no")
 
 
 def notice_language() -> str:
-    """提示语言：``PYQCD_EINSUM_LANG`` 优先，否则跟随 ``LC_ALL``/``LANG``。
+    """提示语言：显式 :func:`set_language` > ``PYQCD_EINSUM_LANG`` > locale。
 
-    显式设成 ``en``/``zh`` 时一直用它；未设时，环境 locale 是中文（``zh*``）就说
-    中文，其余（含 ``C``/``C.UTF-8``/``en_US``）说英文——英文环境的用户不该在日志里
-    看到中文。
+    ``--language``（CLI）走 :func:`set_language`，因此**同一次运行的库内提示与报告
+    正文是同一语言**；显式设成 ``en``/``zh`` 时一直用它。都没设时，环境 locale 是
+    中文（``zh*``）就说中文，其余（含 ``C``/``C.UTF-8``/``en_US``）说英文——英文
+    环境的用户不该在日志里看到中文。
     """
+    if _LANGUAGE_OVERRIDE is not None:
+        return _LANGUAGE_OVERRIDE
     explicit = os.environ.get(LANGUAGE_ENV, "").strip().lower()
     if explicit.startswith("zh"):
         return "zh"
@@ -366,12 +446,12 @@ def announce_generic(subscripts: str = "", backend: str = "") -> None:
 
     与 :func:`announce` 的区别：那条讲"命中了哪个特化形态"，本条讲"这次没走特化，
     走的是通用分步收缩"，并提示可用的加速开关——用户据此能判断自己是否漏掉了
-    专用路径。
+    专用路径。与 :func:`announce` 同口径：整句只用一种语言，``[pyqcd.einsum]``
+    前缀与方程/命令名是两种语言共有的稳定部分。
     """
     if not notice_enabled():
         return
-    verbose = os.environ.get(VERBOSE_ENV, "").strip().lower() in (
-        "1", "true", "on", "yes")
+    verbose = verbose_enabled()
     key = "__generic__"
     with _lock:
         if not verbose and key in _announced:
@@ -379,6 +459,8 @@ def announce_generic(subscripts: str = "", backend: str = "") -> None:
         _announced.add(key)
     where = f" backend={backend}" if backend else ""
     equation = f" ({subscripts})" if subscripts else ""
+    # 与 :func:`announce` 同一条规矩：整句单语，``[pyqcd.einsum]`` 前缀与方程/命令名
+    # 不翻译——提示和报告正文必须是同一种语言，否则一次运行里两套说法。
     if notice_language() == "zh":
         message = (
             f"[pyqcd.einsum] 通用路径: 未命中特化形态{equation}{where}；"

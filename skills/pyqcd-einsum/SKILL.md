@@ -501,6 +501,28 @@ host,user_device,real_device,backend,dtype,equation,shape,device,kernel,optimize
 想确认进程内到底加载了什么：在长跑脚本开头调一次 `p.summary()`（一次 `load`，之后
 `best()` 是纯字典查找）。
 
+### 画像路由的五条硬判据（2026-11-17 实测）
+
+完整证据（含 30 组 tune 实跑、验收脚本 11/11）见
+`logs/einsum-profile-cache-route-20261117.txt`；这里只留判据。
+
+- **"命中即跳过"是错的**：`--tune` 的 30 组共用一个画像键，按"键上有行就跳过"记账会只落
+  1 行（3%）。判据是"**本次真的按命中执行了**"（`_api._profile_record`：命中且
+  `force`/`backend` 已设、且未回退），只关重复记账，不关记录本身。
+- **`generic` 在内部是空元组**：`_kernel_force.forced_labels("generic") == ()`，所以
+  `if forced:` 会把"明确要求通用"误判成"没有强制"（第一版修复就因此失效）。要区分就用
+  `forced == ()` / `generic_only()`，不要用真值。
+- **可重放性只有一条边界**：`equivalence` 不可重放（原方程上强制内核必然"未尝试"），
+  `generic` / `backend` / `dedicated` / `topology` 都可重放。实测同一 10 操作数方程
+  `generic` 364–385 ms vs `topology` 2735–2792 ms——把 `generic` 判成不可重放等于丢掉
+  约 7 倍收益。判据只有一处：`_api._profile_force_label`，报告层不许另立一份。
+- **tune 遍历要绕过稀疏门**：`record(..., force_write=True)` + 每键上限 4 条；坏组合
+  （超时 / 异常 / `rel` 超 `atol+rtol`）用 `_profile_cache.drop()` 撤回——它只清内存索引
+  与待写队列，**盘上已追加的历史行删不掉**，此时返回 `False`，报告里必须如实说明。
+- **提示语不得撒谎**：命中未采纳必须写"未采纳"；`--kernel-force generic` 下不再做
+  `_specialize.match` 与等价改写（否则"通用路径 / 专用路径"两条提示自相矛盾）。每一处
+  静音都要配一条反向断言（验收脚本第 4 步：空缓存时 `generic path:` 必须仍在）。
+
 ## 强制工作流
 
 1. **先固定兼容面**：以 `pyqcd/einsum/AGENTS.md` 和固定 opt_einsum 版本为

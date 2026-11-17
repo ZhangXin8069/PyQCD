@@ -1143,6 +1143,32 @@ PYQCD_EINSUM_LANG=en python -m pyqcd.einsum.test … --language zh-cn
 # [pyqcd.einsum] specialized path: topology:a1c49862 …   ← 库提示仍是英文
 ```
 
+### 7.1b 一条提示只用一种语言（`[pyqcd.einsum]` 前缀不变）
+
+库内提示不再出现"英文标签 + 中文解释"拼在同一行：**整句**按
+`_specialize.notice_language()` 单语输出——显式 `--language`（走
+`_specialize.set_language`，只改进程内状态、**不写环境变量**）> `PYQCD_EINSUM_LANG` >
+locale（`LC_ALL`/`LC_MESSAGES`/`LANG`）。
+
+```bash
+# 英文：整句英文
+PYQCD_EINSUM_PROFILE=0 PYQCD_EINSUM_LANG=en python -m pyqcd.einsum.test \
+    --equation "cadb,menf,ac,em,bd,fn->" --scene distill --rounds 1 --warmup 1
+# [pyqcd.einsum] specialized path: topology:a1c49862 [kernel: kupl_dedicated] corpus form (…)
+
+# 中文：整句中文
+PYQCD_EINSUM_PROFILE=0 PYQCD_EINSUM_LANG=zh python -m pyqcd.einsum.test \
+    --equation "cadb,menf,ac,em,bd,fn->" --scene distill --rounds 1 --warmup 1
+# [pyqcd.einsum] 专用路径: topology:a1c49862 [内核: kupl_dedicated] 真实语料形态（…）
+```
+
+**脚本可解析的部分两种语言逐字相同**：`[pyqcd.einsum]` 前缀、`topology:<摘要>` 形态名，
+以及 `route :` / `kernel :` 行的字段名与 `auto|generic|none|unknown` 这些取值都**不翻译**
+（§6.4 稳定性契约）。跟着语言变的只有标签与说明文字。
+
+已知例外（实测）：`--verbose` 下"等价改写已跳过"那条（`_api._note_equivalence_skipped`）
+目前仍是中文，不受 `PYQCD_EINSUM_LANG` 影响。
+
 ### 7.2 存在但本手册不展开的变量
 
 以下变量在源码里可查（`git grep` 定位；本版逐名核对过全部存在），属于构建/线程/探测层：
@@ -1591,6 +1617,55 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->" --kernel-for
 | 检查 GPU 栈 | `python -m pyqcd --gpu-probe` |
 | 在代码里读结果 | `from pyqcd.einsum._api import last_kernel`（**未**在包级导出） |
 
+### 11.9 强制 `generic` / `backend` 到底省了什么
+
+`--kernel-force generic`（或 `contract(kernel_force="generic")` /
+`PYQCD_EINSUM_KERNEL_FORCE=generic`）不是"少用一点内核"，而是**整段跳过选路**：
+
+- **不做形态匹配**：一次 `_specialize.match` 都不调，语料索引也不查；
+- **不做等价改写**：`as_equivalence` 那一步整段跳过（改写的唯一目的就是命中特化形态，
+  而你已经明确要通用）；
+- **不发那两条提示**：「专用路径」与「通用路径」都不打——已经要求通用，再提示一遍
+  等于自说自话；
+- 直接进通用收缩（Python 分步 / `numpy.einsum` / BLAS）。
+
+`--kernel-force backend` 更极端：不进专用分派，直接调后端自己的 `einsum`，
+本库的形态匹配、等价改写与收缩规划一概不参与（`route :` 行会写明 `backend einsum`）。
+
+**这是省时间，不是省正确性。** 两条路算的是同一个方程，结果逐位可比（下面两条 `rel`
+都在 1e-16 量级），所以做性能对照时它是最干净的"通用基线"。
+
+```bash
+EQ="cadb,menf,ac,em,bd,fn->"
+
+# ① generic：不匹配、不改写、不提示
+PYQCD_EINSUM_PROFILE=0 python -m pyqcd.einsum.test --equation "$EQ" --scene distill \
+    --rounds 2 --warmup 1 --kernel-force generic --verbose true
+# kernel   : no native hit (generic path)
+# route    : generic (no native hit: Python steps / numpy.einsum / BLAS)
+# kernel : requested=generic  ran=none  attempted=none
+# PASS … rel=6.35e-16
+
+# ② backend：直接后端 einsum
+PYQCD_EINSUM_PROFILE=0 python -m pyqcd.einsum.test --equation "$EQ" --scene distill \
+    --rounds 2 --warmup 1 --kernel-force backend --verbose true
+# route    : backend einsum (--kernel-force backend: the specialised dispatch never ran)
+# kernel : requested=backend  ran=backend  attempted=none
+# PASS … rel=0.00e+00
+```
+
+读 `kernel :` 时记住 `ran=none attempted=none` 是**如实**的：一次内核都没试，
+不是"试了没成功"。不给 `--verbose true` 时这些行都不出现，输出里连提示也没有。
+
+两个容易混的点：
+
+- **`generic` 与 `specialize=false` 不等价**：前者保留 `_LAST_KERNEL` 的如实记录
+  （`requested=generic`、一次没试），后者只是把专用路径整体关掉；两者可以同时给，
+  不冲突（`generic` 本来就不走专用路径）。
+- **画像建议的 `generic` 不走这条路**：那是**计时结论**，不是"语义指令"——它不会顺手
+  关掉等价改写（那条是独立开关），只把提示静音。区别见 §13.4 的"上次成功，这次却没被
+  强制"一行。
+
 ## 12. 自动改写与缓存：让 MISS 的方程也能走特化、让重复查询不再重复算
 
 `0.4.4` 起有两件事会**自动**发生（都可关）。它们都属于"底层优化"，但都有代价，
@@ -1631,6 +1706,10 @@ python -m pyqcd.einsum.test --equation "menf,cadb,ac,em,bd,fn->" --shape "…同
 ```bash
 PYQCD_EINSUM_AS_EQUIVALENCE=0 python your_batch.py   # 或 --as-equivalence false
 ```
+
+改写结论会记进画像的**等价路由表**（`profile_equivalence.csv`）：命中 `none` 下次直接
+跳过查询，命中 `ok` 下次直接套用改写载荷，`--as-equivalence force` 则不信那张表、强制
+重查并刷新。四条规则与表结构见 §13.3b。
 
 ### 12.2 缓存与命中统计（`--cache`，缺省开启）
 
@@ -1681,13 +1760,32 @@ python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill
 
 - `profile.csv`（**读 + 写**）——主表；
 - `profile_compare.csv`（**只写不读**）——旁证表。当前**没有生产调用点**，所以正常跑
-  `contract()` 不会生成它（只有契约用例调 `record_compare`）。
+  `contract()` 不会生成它（只有契约用例调 `record_compare`）；
+- `profile_equivalence.csv`（**读 + 写**）——等价路由表，见 §13.3b。
 
-命中时库提示会打一行（`PYQCD_EINSUM_NOTICE=0` 会把它静音）：
+**命中并施加时只打一行**，而且钉到具体记录（`<profile.csv 绝对路径>:<数据行号>`）：
 
 ```
-[pyqcd.einsum] profile 命中：backend=numpy kernel=kupl_dedicated compute_ms=…（来自 …/.cache/profile.csv）
+[pyqcd.einsum] profile hit: <dir>/profile.csv:12 kernel=kupl_dedicated optimize=auto compute_ms=14.456 (applied)
+[pyqcd.einsum] profile 命中：<dir>/profile.csv:12 kernel=kupl_dedicated optimize=auto compute_ms=14.456（已套用）
 ```
+
+（上面是实跑输出，路径换成占位；`compute_ms` 随本机变化，语言见 §7.1b。）
+
+这一行的契约：
+
+| 项 | 行为 |
+|---|---|
+| 条数 | 每个 `(方程, 形状, kernel, optimize)` **每进程一行**；`--verbose true` 时每次调用都打 |
+| 行号 | 只有**从文件读入**的行才有 `:<行号>`；本进程刚记录、还没落盘的那条**没有**行号（`_parse_table` 才写 `line`） |
+| 静音 | 同一形态**每进程一次**；`PYQCD_EINSUM_NOTICE=0` 整条关掉 |
+| 抑制 | 这一行之后本次调用**不再**打解释性提示（`announce_generic` / `announce` / 等价说明） |
+| 保留 | `route :` / `kernel   :` / `kernel :` 等**结果行照旧**（它们是 CLI 报告行，不是库提示） |
+| 恢复详解 | `--explain true` / `--verbose true`（→ `_specialize.set_detail(True)`），或 `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` |
+
+`--explain true` 只恢复**库内**解释性提示；CLI 自己在命中时仍只补一行画像状态
+（`[pyqcd.einsum] profile hit → backend=… kernel=… (compute_ms=…)`），三段式
+`plan` / `kernel` / `why` **不会**在命中时出现——命中本身就是解释。
 
 `kernel=` 是**具体标签**（`kupl_dedicated`），回放时会翻成逻辑名 `dedicated` 交给
 `kernel_force=`；所以你在 §11 里读到的"逻辑名 / 具体标签"两套说法在这里同时出现。
@@ -1767,6 +1865,57 @@ ls -l .cache/                 # profile.csv（以及调用过 record_compare 时
 head -1 .cache/profile.csv    # 表头
 ```
 
+### 13.3b `profile_equivalence.csv`：等价路由表（schema v2）
+
+主表只记"哪个内核最快"；**这条方程能不能改写成语料写法**记在另一张表
+`profile_equivalence.csv`（`_profile_cache.EQUIVALENCE_NAME`）。v2 起它不只是"标记"，
+而是**可直接照着执行的等价路由表**（`EQUIVALENCE_SCHEMA_VERSION = 2`）：
+
+```
+host,user_device,backend,dtype,equation,shape,device,state,kind,updated_at,pyqcd_version,target_equation,operand_order,operand_permutations,output_permutation,schema_version
+```
+
+| 列 | 含义 |
+|---|---|
+| `state` | 只有两个取值：`ok`（这条方程**可以**改写过去）/ `none`（找不到可用改写） |
+| `target_equation` | 语料写法——即特化真正支持的那条 equation |
+| `operand_order` | 改写后第 i 个操作数取原第几个（`null` = 不重排） |
+| `operand_permutations` | 每个操作数（按**改写后**次序）自己的轴置换，`transpose` 语义（`null` = 不转置） |
+| `output_permutation` | 结果转回原输出轴序用的置换，**已存逆置换**（`transpose` 直接用） |
+| `schema_version` | 这条结论带不带可复用载荷：缺列的旧行按 `0` 读入，不会被当坏行丢掉 |
+
+**同键多行的优先序：先版本、后状态**——`schema_version` 大者胜（新写的载荷压得过旧
+结论）；同版本内 `ok` 先于 `none`；再同取 `updated_at` 新者。
+
+四条规则：
+
+| 情形 | 会做什么 | 代价 / 说明 |
+|---|---|---|
+| 画像关闭（`PYQCD_EINSUM_PROFILE=0` / `profile=False` / `--profile false`） | 不读也不写这张表，每次按 `--as-equivalence` 原逻辑查映射 | 零 IO；重复查询照旧 |
+| 表不存在 / 表里没有这个键 | 正常查 `_equivalence.normalize_equation`，查完把结论记进去 | 一次查询；结论下次可复用 |
+| 命中 `none` | **跳过等价步骤**（不再查映射） | 只省一次查询的时间，不改任何结果 |
+| 命中 `ok` | **直接套用载荷**（跳过匹配）：按 `target_equation` + 三个置换字段改写 | 省掉匹配与查询；返回的仍是原方程的答案 |
+
+`--as-equivalence force`（`contract(as_equivalence="force")`）是"不信这张表"的一档：
+即使命中 `none` 也**真的再查一次**，并用新结论覆盖原标记（刷新）。
+
+只有**语料外**的方程才会走等价步骤（`specialized is not None` 时那一段整段跳过），
+所以下面用一条需要改写的方程：
+
+```bash
+PYQCD_EINSUM_PROFILE_DIR=/tmp/einsum-profile python -m pyqcd.einsum.test \
+    --equation "menf,cadb,ac,em,bd,fn->" \
+    --shape "[2,2,2,2],[2,2,2,2],[2,2],[2,2],[2,2],[2,2]->" \
+    --rounds 2 --warmup 1 --as-equivalence force --verbose true
+
+# 跑完就有这张表；v2 表头（最后 5 列是新增的，旧列一字未改）
+head -1 /tmp/einsum-profile/profile_equivalence.csv
+# host,user_device,backend,dtype,equation,shape,device,state,kind,updated_at,pyqcd_version,target_equation,operand_order,operand_permutations,output_permutation,schema_version
+```
+
+这张表与主表同口径：**只影响"要不要花时间查 / 怎么改写"**，跳过与不跳过的答案逐位
+相同；画像关闭时既不读也不写（零 IO）。
+
 ### 13.4 排查：没生效 / 没文件 / 目录不可写
 
 ```python
@@ -1805,7 +1954,7 @@ p.flush()    # 把内存里攒着的观测写盘（进程退出时 atexit 也会
 | `summary()["enabled"]` 为 `False`、`last_error` 非空 | 目录不可写 / CSV 读失败 / 写盘失败。换个目录或修权限；不影响数值 |
 | 表里没有我这次的方程 | 稀疏写：只有新键或快过 5% 才落盘；也可能还在待写队列（`flush()` 或退出后才写） |
 | 命中被记下但没施加 | 调用方/环境已经给了 `kernel_force`，或这次带 `out=` / `specialize=False`——显式要求永远压过画像 |
-| 上次成功，这次却没被强制 | 只有 `dedicated` / `topology` 会被回放成 `kernel_force=`；`generic` **刻意不回放**（会静默关掉"自动分派失败要告警一次"这条诊断）。`backend` 是例外：**会被采纳**，命中后本次调用直接走 `backend.einsum`，跳过本库的形态匹配、等价改写与收缩规划（在 `_specialize.match` / `find_path` 之前返回，`_api.py:1404-1418`；后端自己的 einsum 内部仍可能 `optimize=True`） |
+| 上次成功，这次却没被强制 | 三类记录**都会被回放**：`dedicated` / `topology`（具体标签 `kupl_dedicated` → 逻辑名 `dedicated`）填 `kernel_force=`；`generic` 回放成 `kernel_force="generic"`（合法且实测常最快，代价是不再进专用分派，因此这条方程不会再有"内核没跑成"的诊断，需要诊断时显式设 `--kernel-force auto`）；`backend` 回放成直接调后端 `einsum`，跳过本库的形态匹配、等价改写与收缩规划（后端自己的 einsum 内部仍可能 `optimize=True`）。调用方/环境显式给的 `kernel_force` 永远压过回放 |
 | 画像的建议跑不成 | 自动退回原分派一次（内部用 `profile=False` 重试），**不抛** `KernelUnavailableError`；回退会照记，下次有机会替换那条建议 |
 | 想把画像整个作废 | 删掉 `profile.csv`（或换 `PYQCD_EINSUM_PROFILE_DIR`） |
 

@@ -1162,3 +1162,12 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## einsum-profile-cache-route-20261117 - stage - 2026-11-17 18:21:46 +0800
+- 主任务: qcd-einsum 画像路由/缓存的经验落盘（8 条：命中判据、generic 空元组、可重放性、稀疏写与 force_write/drop、提示诚实、反向断言、子代理交付）
+- 日志文件: logs/einsum-profile-cache-route-20261117.txt
+- 文件大小: 24475 bytes
+- 触发原因: 阶段成果
+- 关键内容: 30 组 tune 只落 1 行（3%）→按"真正按命中执行"跳过；generic 内部为 ()、if forced 误判；equivalence 不可重放 vs generic/backend 可重放（10 操作数 364–385 ms vs 2735–2792 ms）；force_write + 每键 4 条；drop 撤不回已落盘历史行；命中未采纳与 generic 强制的提示矛盾；反向断言 + durable 报告；2 项 unverified 明列
+- 验证: path, size, required sections, conflict markers
+- 批次状态: in-progress
+

@@ -42,6 +42,25 @@ python -m pyqcd --json     # machine-readable
 > `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
 > `pyqcd.einsum.thread_info()`.
 
+## Release 0.5.3 — qcd-einsum: equivalence routing table, `--tune` hardening
+
+* **`profile_equivalence.csv` is now a routing table (schema v2).** A row that can be
+  rewritten stores `target_equation` **plus the three permutation fields**
+  (`operand_order` / `operand_permutations` / `output_permutation`), so a hit applies the
+  rewrite **without re-running the isomorphism search**. Rows carry `schema_version`;
+  when a key has several rows the **highest version wins**, then `ok` over `none`, then the
+  newest `updated_at`.
+* **Plan A:** the rewritten (inner) call records under `target_equation`, so `profile.csv`
+  has a row for the corpus spelling and the fastest kernel/optimize can be reused for it.
+* `--as-equivalence force` ignores the memo and refreshes it.
+* **`--tune`:** every **single** einsum call is bounded by `--tune-timeout` (default 100 s);
+  the sweep by `--tune-budget`. Conflicting options are **warned about and ignored**
+  (exit 0). Combos that time out, raise, or miss `atol` are **dropped from the cache**.
+* **Forcing `generic`/`backend` no longer runs the specialised match or the equivalence
+  rewrite** — they cannot help a generic contraction. Notice wording is single-language
+  (`PYQCD_EINSUM_LANG`), and a profile hit prints **one** line with the cache file and the
+  matched row number; `route :` / `kernel :` (evidence) stay.
+
 ## Release 0.5.2 — qcd-einsum: `--tune`, equivalence memo, honest cache rows
 
 * **`--tune`** locks `equation/shape/dtype/device/backend` and sweeps
