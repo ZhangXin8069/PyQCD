@@ -101,6 +101,7 @@ send it back to the generic path. For what actually ran, read the `route` /
   wall clock of the whole `contract()` call). `--kernel-force` takes a single
   logical value (`generic` / `dedicated` / `topology` / `backend`). Tune sweeps an
   ordered per-branch list with `min_wall_ms` pruning and writes just the winner.
+* **0.5.4** — topology step tables unified on `ROLE_SHAPES`: `production` (anisotropic axes) and `uniform` (equal-length `dim=4` probe) are deleted, `sizes` is mandatory; `optimize` is exactly seven underscore leaves; both tables are generated with `auto`; `kupl_topology_v2`, `--backend kupl|cuda` and `--compare numpy` removed; `--tune` no longer hangs on the reference contraction and rewrites before forcing a kernel.
 * **0.5.3** — equivalence routing table, single-language notices, tune hardening.
 * **0.5.2** — `--tune` and the equivalence memo introduced.
 * **0.5.1** — the profile cache stops recommending dead ends.

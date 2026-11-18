@@ -86,6 +86,7 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
   只有一列计时（`wall_ms` = 整次 `contract()` 的墙钟）。`--kernel-force`
   只接受单个逻辑值（`generic` / `dedicated` / `topology` / `backend`）。
   tune 按分支的有序清单遍历，`min_wall_ms` 剪枝，只写胜出的一组。
+* **0.5.4** — 拓扑步表统一到 `ROLE_SHAPES`：`production`（生产异形轴）与 `uniform`（等长 `dim=4` 探针）**已删除**，`sizes` 改为必填；`optimize` 恰为七个下划线叶子；两张表统一用 `auto` 生成；删除 `kupl_topology_v2`、`--backend kupl|cuda`、`--compare numpy`；`--tune` 不再因参照收缩卡死，且**先改写再强制内核**。
 * **0.5.3** — 等价路由表、提示整句单语、`--tune` 加固。
 * **0.5.2** — 引入 `--tune` 与等价备忘。
 * **0.5.1** — 画像缓存不再推荐走不通的路。
