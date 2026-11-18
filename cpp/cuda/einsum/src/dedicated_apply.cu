@@ -1,6 +1,7 @@
 #include "einsum_dedicated.h"
 
 #include <cuComplex.h>
+#include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
@@ -34,7 +35,7 @@ static_assert(sizeof(cuDoubleComplex) == 2 * sizeof(double),
  * 与 KUPL `src/dedicated_apply.cpp` 的分工完全相同——步表已展开到
  * 「槽位 + 轴序 + batch/M/N/K」，本 TU 只做 pack → GEMM → unpack：
  *
- *   * pack / unpack 复用 `pack.cu` 的 `qcd_cuda_permute`（通用 strided gather，
+ *   * pack / unpack 复用 `qcd_cuda_permute`（通用 strided gather，
  *     `shape` 给目标连续形状、`src_stride` 给源步长），不重复写搬运 kernel；
  *   * GEMM 用 cuBLAS：batch == 1 走 `cublasSgemm` / `cublasDgemm`，batch > 1 走
  *     对应的 `*StridedBatched`（单精度只进 32F 计算，双精度只进 64F，绝不混用）；
@@ -1228,7 +1229,7 @@ int ensure_handle(HandleState* state) {
 /* 精度契约：float32 只进 cublasSgemm（32F 计算），float64 只进 cublasDgemm
  * （64F 计算），两条路径互不相通；batch > 1 用同名 *StridedBatched 变体。
  *
- * 行主序 → cuBLAS（列主序）的换法：与 `batched_gemm.cu` 同一条恒等式
+ * 行主序 → cuBLAS（列主序）的换法：与本文件的 `qcd_cuda_batched_gemm` 同一条恒等式
  *
  *     C_rm(m×n) = A_rm(m×k) · B_rm(k×n)
  *  ⇔  C^T_col(n×m) = B^T_col(n×k) · A^T_col(k×m)
@@ -1798,7 +1799,7 @@ int apply_dedicated(const void* steps, long long steps_len, void* const* operand
             return QCD_STATUS_INVALID;
         }
     }
-    /* pack / unpack 复用 pack.cu 的实现；缺实现时明确失败，不伪造成功。 */
+    /* pack / unpack 复用本文件的 qcd_cuda_permute 实现；缺实现时明确失败，不伪造成功。 */
     if (qcd_cuda_permute == nullptr) {
         return QCD_STATUS_INTERNAL;
     }
@@ -1821,6 +1822,623 @@ int apply_dedicated(const void* steps, long long steps_len, void* const* operand
         default:
             return QCD_CUDA_DEDICATED_UNSUPPORTED;
     }
+}
+
+
+/* ------------------------------------------ 搬运 / 归约 / GEMM provider 辅助
+ * 与下方 provider 入口同源：它们是这四个入口的 device kernel 与校验逻辑，
+ * 只在本 TU 内可见（匿名 namespace），不影响其它翻译单元。 */
+constexpr int kPackThreads = 256;
+constexpr int64_t kMaxGridBlocks = 65535;
+constexpr int kTransposeTile = 32;
+
+struct TransposeAxes {
+    int32_t inner = -1;
+    int32_t outer = -1;
+};
+
+template <typename Type>
+struct ScalarTraits;
+
+template <>
+struct ScalarTraits<float> {
+    __device__ static __forceinline__ float zero() { return 0.0f; }
+    __device__ static __forceinline__ float mul(float left, float right) { return left * right; }
+    __device__ static __forceinline__ float add(float left, float right) { return left + right; }
+};
+
+template <>
+struct ScalarTraits<double> {
+    __device__ static __forceinline__ double zero() { return 0.0; }
+    __device__ static __forceinline__ double mul(double left, double right) { return left * right; }
+    __device__ static __forceinline__ double add(double left, double right) { return left + right; }
+};
+
+template <>
+struct ScalarTraits<cuFloatComplex> {
+    __device__ static __forceinline__ cuFloatComplex zero() { return make_cuFloatComplex(0.0f, 0.0f); }
+    __device__ static __forceinline__ cuFloatComplex mul(cuFloatComplex left, cuFloatComplex right) {
+        return cuCmulf(left, right);
+    }
+    __device__ static __forceinline__ cuFloatComplex add(cuFloatComplex left, cuFloatComplex right) {
+        return cuCaddf(left, right);
+    }
+};
+
+template <>
+struct ScalarTraits<cuDoubleComplex> {
+    __device__ static __forceinline__ cuDoubleComplex zero() {
+        return make_cuDoubleComplex(0.0, 0.0);
+    }
+    __device__ static __forceinline__ cuDoubleComplex mul(cuDoubleComplex left, cuDoubleComplex right) {
+        return cuCmul(left, right);
+    }
+    __device__ static __forceinline__ cuDoubleComplex add(cuDoubleComplex left, cuDoubleComplex right) {
+        return cuCadd(left, right);
+    }
+};
+
+__device__ __forceinline__ int64_t source_offset(
+    int64_t linear, const int64_t* shape, const int64_t* stride, int32_t rank) {
+    int64_t offset = 0;
+    for (int32_t axis = rank - 1; axis >= 0; --axis) {
+        const int64_t extent = shape[axis];
+        const int64_t coordinate = linear % extent;
+        linear /= extent;
+        offset += coordinate * stride[axis];
+    }
+    return offset;
+}
+
+template <typename Type>
+__global__ void pack_kernel(
+    const Type* src, Type* dst, qcd_cuda_copy_spec spec) {
+    const int64_t step = static_cast<int64_t>(gridDim.x) * blockDim.x;
+    for (int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         index < spec.elements; index += step) {
+        dst[index] = src[source_offset(index, spec.shape, spec.src_stride, spec.rank)];
+    }
+}
+
+template <typename Type>
+__global__ void transpose_pack_kernel(
+    const Type* src,
+    Type* dst,
+    qcd_cuda_copy_spec spec,
+    TransposeAxes axes) {
+    __shared__ Type tile[kTransposeTile][kTransposeTile + 1];
+
+    int64_t inner_stride = 1;
+    int64_t outer_stride = 1;
+    for (int32_t axis = axes.inner + 1; axis < spec.rank; ++axis) {
+        inner_stride *= spec.shape[axis];
+    }
+    for (int32_t axis = axes.outer + 1; axis < spec.rank; ++axis) {
+        outer_stride *= spec.shape[axis];
+    }
+
+    int64_t batch_index = blockIdx.z;
+    int64_t source_base = 0;
+    int64_t destination_base = 0;
+    int64_t destination_stride = 1;
+    for (int32_t axis = spec.rank - 1; axis >= 0; --axis) {
+        if (axis == axes.inner || axis == axes.outer) {
+            destination_stride *= spec.shape[axis];
+            continue;
+        }
+        const int64_t coordinate = batch_index % spec.shape[axis];
+        batch_index /= spec.shape[axis];
+        source_base += coordinate * spec.src_stride[axis];
+        destination_base += coordinate * destination_stride;
+        destination_stride *= spec.shape[axis];
+    }
+
+    const int64_t source_inner = static_cast<int64_t>(blockIdx.x) * kTransposeTile +
+                                 threadIdx.x;
+    for (int32_t local_outer = threadIdx.y; local_outer < kTransposeTile;
+         local_outer += blockDim.y) {
+        const int64_t source_outer =
+            static_cast<int64_t>(blockIdx.y) * kTransposeTile + local_outer;
+        if (source_inner < spec.shape[axes.inner] &&
+            source_outer < spec.shape[axes.outer]) {
+            const int64_t offset = source_base +
+                                   source_inner * spec.src_stride[axes.inner] +
+                                   source_outer * spec.src_stride[axes.outer];
+            tile[local_outer][threadIdx.x] = src[offset];
+        }
+    }
+    __syncthreads();
+
+    const int64_t destination_outer = static_cast<int64_t>(blockIdx.y) *
+                                      kTransposeTile + threadIdx.x;
+    for (int32_t local_inner = threadIdx.y; local_inner < kTransposeTile;
+         local_inner += blockDim.y) {
+        const int64_t destination_inner =
+            static_cast<int64_t>(blockIdx.x) * kTransposeTile + local_inner;
+        if (destination_inner < spec.shape[axes.inner] &&
+            destination_outer < spec.shape[axes.outer]) {
+            const int64_t offset = destination_base +
+                                   destination_inner * inner_stride +
+                                   destination_outer * outer_stride;
+            dst[offset] = tile[threadIdx.x][local_inner];
+        }
+    }
+}
+
+template <typename Type>
+__global__ void hadamard_kernel(
+    const Type* left, const Type* right, Type* dst, qcd_cuda_hadamard_spec spec) {
+    const int64_t step = static_cast<int64_t>(gridDim.x) * blockDim.x;
+    for (int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         index < spec.elements; index += step) {
+        int64_t linear = index;
+        int64_t left_offset = 0;
+        int64_t right_offset = 0;
+        for (int32_t axis = spec.rank - 1; axis >= 0; --axis) {
+            const int64_t coordinate = linear % spec.shape[axis];
+            linear /= spec.shape[axis];
+            left_offset += coordinate * spec.left_stride[axis];
+            right_offset += coordinate * spec.right_stride[axis];
+        }
+        dst[index] = ScalarTraits<Type>::mul(left[left_offset], right[right_offset]);
+    }
+}
+
+template <typename Type>
+__global__ void reduce_kernel(
+    const Type* src, Type* dst, qcd_cuda_reduce_spec spec) {
+    const int64_t step = static_cast<int64_t>(gridDim.x) * blockDim.x;
+    for (int64_t output_index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         output_index < spec.output_elements; output_index += step) {
+        int64_t linear = output_index;
+        int64_t base = 0;
+        for (int32_t axis = spec.output_rank - 1; axis >= 0; --axis) {
+            const int64_t coordinate = linear % spec.output_shape[axis];
+            linear /= spec.output_shape[axis];
+            base += coordinate * spec.output_src_stride[axis];
+        }
+
+        Type sum = ScalarTraits<Type>::zero();
+        for (int64_t reduction_index = 0; reduction_index < spec.reduction_elements;
+             ++reduction_index) {
+            int64_t reduction_linear = reduction_index;
+            int64_t offset = base;
+            for (int32_t axis = spec.reduction_rank - 1; axis >= 0; --axis) {
+                const int64_t coordinate = reduction_linear % spec.reduction_extent[axis];
+                reduction_linear /= spec.reduction_extent[axis];
+                offset += coordinate * spec.reduction_src_stride[axis];
+            }
+            sum = ScalarTraits<Type>::add(sum, src[offset]);
+        }
+        dst[output_index] = sum;
+    }
+}
+
+bool checked_product(const int64_t* values, int32_t count, int64_t* product) {
+    int64_t total = 1;
+    for (int32_t index = 0; index < count; ++index) {
+        if (values[index] < 0 || (values[index] != 0 &&
+                                  total > std::numeric_limits<int64_t>::max() / values[index])) {
+            return false;
+        }
+        total *= values[index];
+    }
+    *product = total;
+    return true;
+}
+
+bool valid_copy_spec(const qcd_cuda_copy_spec& spec) {
+    if (spec.rank < 0 || spec.rank > QCD_CUDA_MAX_PACKED_RANK || spec.elements < 0) {
+        return false;
+    }
+    int64_t product = 0;
+    if (!checked_product(spec.shape, spec.rank, &product) || product != spec.elements) {
+        return false;
+    }
+    for (int32_t index = 0; index < spec.rank; ++index) {
+        if (spec.src_stride[index] < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool valid_hadamard_spec(const qcd_cuda_hadamard_spec& spec) {
+    if (spec.rank < 0 || spec.rank > QCD_CUDA_MAX_RANK || spec.elements < 0) {
+        return false;
+    }
+    int64_t product = 0;
+    if (!checked_product(spec.shape, spec.rank, &product) || product != spec.elements) {
+        return false;
+    }
+    for (int32_t index = 0; index < spec.rank; ++index) {
+        if (spec.left_stride[index] < 0 || spec.right_stride[index] < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool valid_reduce_spec(const qcd_cuda_reduce_spec& spec) {
+    if (spec.output_rank < 0 || spec.output_rank > QCD_CUDA_MAX_RANK ||
+        spec.reduction_rank < 0 || spec.reduction_rank > QCD_CUDA_MAX_RANK ||
+        spec.output_elements < 0 || spec.reduction_elements < 0) {
+        return false;
+    }
+    int64_t product = 0;
+    if (!checked_product(spec.output_shape, spec.output_rank, &product) ||
+        product != spec.output_elements ||
+        !checked_product(spec.reduction_extent, spec.reduction_rank, &product) ||
+        product != spec.reduction_elements) {
+        return false;
+    }
+    for (int32_t index = 0; index < spec.output_rank; ++index) {
+        if (spec.output_src_stride[index] < 0) {
+            return false;
+        }
+    }
+    for (int32_t index = 0; index < spec.reduction_rank; ++index) {
+        if (spec.reduction_src_stride[index] < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+unsigned int grid_size(int64_t elements) {
+    const int64_t blocks = (elements + kPackThreads - 1) / kPackThreads;
+    return static_cast<unsigned int>(blocks > kMaxGridBlocks ? kMaxGridBlocks : blocks);
+}
+
+bool find_transpose_axes(const qcd_cuda_copy_spec& spec, TransposeAxes* axes) {
+    int32_t inner = -1;
+    int64_t inner_stride = 1;
+    for (int32_t axis = 0; axis < spec.rank; ++axis) {
+        if (spec.shape[axis] > 1 && spec.src_stride[axis] == 1) {
+            inner = axis;
+            inner_stride = spec.src_stride[axis];
+            break;
+        }
+    }
+    if (inner < 0) {
+        return false;
+    }
+
+    int32_t outer = -1;
+    int64_t best_stride = 0;
+    for (int32_t axis = inner + 1; axis < spec.rank; ++axis) {
+        const int64_t stride = spec.src_stride[axis];
+        if (spec.shape[axis] <= 1 || stride <= inner_stride) {
+            continue;
+        }
+        if (outer < 0 || stride < best_stride) {
+            outer = axis;
+            best_stride = stride;
+        }
+    }
+    if (outer < 0) {
+        return false;
+    }
+    axes->inner = inner;
+    axes->outer = outer;
+    return true;
+}
+
+int cuda_status(cudaError_t error) {
+    return error == cudaSuccess ? QCD_STATUS_OK : QCD_STATUS_INTERNAL;
+}
+
+template <typename Type>
+int launch_pack(
+    const void* src, void* dst, qcd_cuda_copy_spec spec, cudaStream_t stream) {
+    if (spec.elements == 0) {
+        return QCD_STATUS_OK;
+    }
+    TransposeAxes axes;
+    if (find_transpose_axes(spec, &axes)) {
+        const int64_t inner_extent = spec.shape[axes.inner];
+        const int64_t outer_extent = spec.shape[axes.outer];
+        const int64_t matrix_elements = inner_extent * outer_extent;
+        const int64_t batches = spec.elements / matrix_elements;
+        const unsigned int tiles_inner = static_cast<unsigned int>(
+            (inner_extent + kTransposeTile - 1) / kTransposeTile);
+        const unsigned int tiles_outer = static_cast<unsigned int>(
+            (outer_extent + kTransposeTile - 1) / kTransposeTile);
+        if (matrix_elements > 1 && batches > 1 && batches <= kMaxGridBlocks &&
+            tiles_inner <= kMaxGridBlocks && tiles_outer <= kMaxGridBlocks) {
+            const dim3 threads(kTransposeTile, kTransposeTile / 4);
+            const dim3 blocks(tiles_inner, tiles_outer, static_cast<unsigned int>(batches));
+            transpose_pack_kernel<Type><<<blocks, threads, 0, stream>>>(
+                static_cast<const Type*>(src), static_cast<Type*>(dst), spec, axes);
+            return cuda_status(cudaGetLastError());
+        }
+    }
+    pack_kernel<Type><<<grid_size(spec.elements), kPackThreads, 0, stream>>>(
+        static_cast<const Type*>(src), static_cast<Type*>(dst), spec);
+    return cuda_status(cudaGetLastError());
+}
+
+template <typename Type>
+int launch_hadamard(
+    const void* left, const void* right, void* dst, qcd_cuda_hadamard_spec spec,
+    cudaStream_t stream) {
+    if (spec.elements == 0) {
+        return QCD_STATUS_OK;
+    }
+    hadamard_kernel<Type><<<grid_size(spec.elements), kPackThreads, 0, stream>>>(
+        static_cast<const Type*>(left), static_cast<const Type*>(right), static_cast<Type*>(dst), spec);
+    return cuda_status(cudaGetLastError());
+}
+
+template <typename Type>
+int launch_reduce(
+    const void* src, void* dst, qcd_cuda_reduce_spec spec, cudaStream_t stream) {
+    if (spec.output_elements == 0) {
+        return QCD_STATUS_OK;
+    }
+    reduce_kernel<Type><<<grid_size(spec.output_elements), kPackThreads, 0, stream>>>(
+        static_cast<const Type*>(src), static_cast<Type*>(dst), spec);
+    return cuda_status(cudaGetLastError());
+}
+
+int map_cuda_error(cudaError_t error) {
+    if (error == cudaSuccess) {
+        return QCD_STATUS_OK;
+    }
+    return error == cudaErrorMemoryAllocation ? QCD_STATUS_MEMORY : QCD_STATUS_INTERNAL;
+}
+
+int map_cublas_status(cublasStatus_t status) {
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        return QCD_STATUS_OK;
+    }
+    return status == CUBLAS_STATUS_ALLOC_FAILED ? QCD_STATUS_MEMORY : QCD_STATUS_INTERNAL;
+}
+
+template <typename Function>
+bool bind_lt_symbol(void* library, const char* name, Function* function) {
+    void* symbol = dlsym(library, name);
+    if (symbol == nullptr) {
+        return false;
+    }
+    static_assert(sizeof(Function) == sizeof(symbol), "function pointer size mismatch");
+    std::memcpy(function, &symbol, sizeof(Function));
+    return true;
+}
+
+struct LtApi {
+    void* library = nullptr;
+    decltype(&cublasLtCreate) create = nullptr;
+    decltype(&cublasLtDestroy) destroy = nullptr;
+    decltype(&cublasLtMatmulDescCreate) create_operation = nullptr;
+    decltype(&cublasLtMatmulDescDestroy) destroy_operation = nullptr;
+    decltype(&cublasLtMatmulDescSetAttribute) set_operation_attribute = nullptr;
+    decltype(&cublasLtMatrixLayoutCreate) create_layout = nullptr;
+    decltype(&cublasLtMatrixLayoutDestroy) destroy_layout = nullptr;
+    decltype(&cublasLtMatrixLayoutSetAttribute) set_layout_attribute = nullptr;
+    decltype(&cublasLtMatmul) matmul = nullptr;
+
+    bool available() const {
+        return create != nullptr && destroy != nullptr && create_operation != nullptr &&
+               destroy_operation != nullptr && set_operation_attribute != nullptr &&
+               create_layout != nullptr &&
+               destroy_layout != nullptr && set_layout_attribute != nullptr && matmul != nullptr;
+    }
+};
+
+const LtApi& lt_api() {
+    static const LtApi api = [] {
+        LtApi loaded;
+        loaded.library = dlopen("libcublasLt.so.12", RTLD_NOW | RTLD_LOCAL);
+        if (loaded.library == nullptr) {
+            loaded.library = dlopen("libcublasLt.so", RTLD_NOW | RTLD_LOCAL);
+        }
+        if (loaded.library == nullptr) {
+            return loaded;
+        }
+        bind_lt_symbol(loaded.library, "cublasLtCreate", &loaded.create);
+        bind_lt_symbol(loaded.library, "cublasLtDestroy", &loaded.destroy);
+        bind_lt_symbol(loaded.library, "cublasLtMatmulDescCreate", &loaded.create_operation);
+        bind_lt_symbol(loaded.library, "cublasLtMatmulDescDestroy", &loaded.destroy_operation);
+        bind_lt_symbol(loaded.library, "cublasLtMatmulDescSetAttribute",
+                       &loaded.set_operation_attribute);
+        bind_lt_symbol(loaded.library, "cublasLtMatrixLayoutCreate", &loaded.create_layout);
+        bind_lt_symbol(loaded.library, "cublasLtMatrixLayoutDestroy", &loaded.destroy_layout);
+        bind_lt_symbol(loaded.library, "cublasLtMatrixLayoutSetAttribute",
+                       &loaded.set_layout_attribute);
+        bind_lt_symbol(loaded.library, "cublasLtMatmul", &loaded.matmul);
+        return loaded;
+    }();
+    return api;
+}
+
+cublasStatus_t set_batch_layout(
+    const LtApi& api,
+    cublasLtMatrixLayout_t layout,
+    int32_t batch_count,
+    int64_t stride) {
+    cublasStatus_t status = api.set_layout_attribute(
+        layout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count));
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        return status;
+    }
+    return api.set_layout_attribute(
+        layout, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &stride, sizeof(stride));
+}
+
+cublasStatus_t cublas_lt_batched_gemm(
+    int dtype_id,
+    const void* left,
+    const void* right,
+    void* dst,
+    int64_t m,
+    int64_t n,
+    int64_t k,
+    int64_t batch,
+    int64_t stride_left,
+    int64_t stride_right,
+    int64_t stride_dst,
+    cudaStream_t stream) {
+    const LtApi& api = lt_api();
+    if (!api.available()) {
+        return CUBLAS_STATUS_NOT_SUPPORTED;
+    }
+
+    cudaDataType_t data_type = CUDA_R_32F;
+    cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
+    switch (dtype_id) {
+        case QCD_DTYPE_COMPLEX128:
+            data_type = CUDA_C_64F;
+            compute_type = CUBLAS_COMPUTE_64F;
+            break;
+        case QCD_DTYPE_COMPLEX64:
+            data_type = CUDA_C_32F;
+            compute_type = CUBLAS_COMPUTE_32F;
+            break;
+        case QCD_DTYPE_FLOAT64:
+            data_type = CUDA_R_64F;
+            compute_type = CUBLAS_COMPUTE_64F;
+            break;
+        case QCD_DTYPE_FLOAT32:
+            data_type = CUDA_R_32F;
+            compute_type = CUBLAS_COMPUTE_32F;
+            break;
+        default:
+            return CUBLAS_STATUS_INVALID_VALUE;
+    }
+
+    cublasLtHandle_t handle = nullptr;
+    cublasLtMatmulDesc_t operation = nullptr;
+    cublasLtMatrixLayout_t right_layout = nullptr;
+    cublasLtMatrixLayout_t left_layout = nullptr;
+    cublasLtMatrixLayout_t output_layout = nullptr;
+    cublasStatus_t status = api.create(&handle);
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        status = api.create_operation(&operation, compute_type, data_type);
+    }
+    const cublasOperation_t transpose = CUBLAS_OP_T;
+    const cublasOperation_t no_transpose = CUBLAS_OP_N;
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        status = api.set_operation_attribute(
+            operation, CUBLASLT_MATMUL_DESC_TRANSA, &transpose, sizeof(transpose));
+    }
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        status = api.set_operation_attribute(
+            operation, CUBLASLT_MATMUL_DESC_TRANSB, &no_transpose, sizeof(no_transpose));
+    }
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        status = api.create_layout(
+            &right_layout, data_type, static_cast<uint64_t>(k), static_cast<uint64_t>(n),
+            static_cast<int64_t>(k));
+    }
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        status = api.create_layout(
+            &left_layout, data_type, static_cast<uint64_t>(k), static_cast<uint64_t>(m),
+            static_cast<int64_t>(k));
+    }
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        status = api.create_layout(
+            &output_layout, data_type, static_cast<uint64_t>(n), static_cast<uint64_t>(m),
+            static_cast<int64_t>(n));
+    }
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        status = set_batch_layout(api, right_layout, static_cast<int32_t>(batch), stride_right);
+    }
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        status = set_batch_layout(api, left_layout, static_cast<int32_t>(batch), stride_left);
+    }
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        status = set_batch_layout(api, output_layout, static_cast<int32_t>(batch), stride_dst);
+    }
+
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        if (dtype_id == QCD_DTYPE_COMPLEX128) {
+            const cuDoubleComplex alpha = make_cuDoubleComplex(1.0, 0.0);
+            const cuDoubleComplex beta = make_cuDoubleComplex(0.0, 0.0);
+            status = api.matmul(
+                handle, operation, &alpha, right, right_layout, left, left_layout, &beta,
+                dst, output_layout, dst, output_layout, nullptr, nullptr, 0, stream);
+        } else if (dtype_id == QCD_DTYPE_COMPLEX64) {
+            const cuFloatComplex alpha = make_cuFloatComplex(1.0f, 0.0f);
+            const cuFloatComplex beta = make_cuFloatComplex(0.0f, 0.0f);
+            status = api.matmul(
+                handle, operation, &alpha, right, right_layout, left, left_layout, &beta,
+                dst, output_layout, dst, output_layout, nullptr, nullptr, 0, stream);
+        } else if (dtype_id == QCD_DTYPE_FLOAT64) {
+            const double alpha = 1.0;
+            const double beta = 0.0;
+            status = api.matmul(
+                handle, operation, &alpha, right, right_layout, left, left_layout, &beta,
+                dst, output_layout, dst, output_layout, nullptr, nullptr, 0, stream);
+        } else {
+            const float alpha = 1.0f;
+            const float beta = 0.0f;
+            status = api.matmul(
+                handle, operation, &alpha, right, right_layout, left, left_layout, &beta,
+                dst, output_layout, dst, output_layout, nullptr, nullptr, 0, stream);
+        }
+    }
+
+    if (output_layout != nullptr) {
+        api.destroy_layout(output_layout);
+    }
+    if (left_layout != nullptr) {
+        api.destroy_layout(left_layout);
+    }
+    if (right_layout != nullptr) {
+        api.destroy_layout(right_layout);
+    }
+    if (operation != nullptr) {
+        api.destroy_operation(operation);
+    }
+    if (handle != nullptr) {
+        api.destroy(handle);
+    }
+    return status;
+}
+
+bool multiply_checked(int64_t left, int64_t right, int64_t* product) {
+    if (left < 0 || right < 0 ||
+        (left != 0 && right > std::numeric_limits<int64_t>::max() / left)) {
+        return false;
+    }
+    *product = left * right;
+    return true;
+}
+
+int zero_output(
+    int dtype_id, void* dst, int64_t m, int64_t n, int64_t batch,
+    cudaStream_t stream) {
+    int64_t elements = 0;
+    int64_t matrices = 0;
+    if (!multiply_checked(m, n, &elements) || !multiply_checked(elements, batch, &matrices)) {
+        return QCD_STATUS_INVALID;
+    }
+    std::size_t element_size = 0;
+    switch (dtype_id) {
+        case QCD_DTYPE_COMPLEX128:
+            element_size = sizeof(cuDoubleComplex);
+            break;
+        case QCD_DTYPE_COMPLEX64:
+            element_size = sizeof(cuFloatComplex);
+            break;
+        case QCD_DTYPE_FLOAT64:
+            element_size = sizeof(double);
+            break;
+        case QCD_DTYPE_FLOAT32:
+            element_size = sizeof(float);
+            break;
+        default:
+            return QCD_STATUS_INVALID;
+    }
+    if (matrices == 0) {
+        return QCD_STATUS_OK;
+    }
+    if (static_cast<uint64_t>(matrices) > std::numeric_limits<std::size_t>::max() / element_size) {
+        return QCD_STATUS_INVALID;
+    }
+    return map_cuda_error(cudaMemsetAsync(
+        dst, 0, static_cast<std::size_t>(matrices) * element_size, stream));
 }
 
 }  // namespace
@@ -1848,4 +2466,237 @@ extern "C" QCD_CUDA_DEDICATED_API int qcd_cuda_dedicated_dtypes(void) {
     } catch (...) {
         return 0;
     }
+}
+
+/* ------------------------------------- 搬运 / 归约 / GEMM provider 入口
+ * 本 TU 是这四个 provider 的唯一消费者（上方 run_typed 用 qcd_cuda_permute
+ * 做 pack/unpack），实现与消费者同居一处；接口声明仍由
+ * include/einsum_cuda.h 冻结，apply_contract.cu 跨 TU 调用不变。 */
+extern "C" QCD_CUDA_LOCAL int qcd_cuda_permute(
+    int dtype_id, const void* src, void* dst, qcd_cuda_copy_spec spec,
+    cudaStream_t stream) {
+    if (!valid_copy_spec(spec)) {
+        return QCD_STATUS_INVALID;
+    }
+    if (spec.elements > 0 && (src == nullptr || dst == nullptr)) {
+        return QCD_STATUS_INVALID;
+    }
+    switch (dtype_id) {
+        case QCD_DTYPE_COMPLEX128:
+            return launch_pack<cuDoubleComplex>(src, dst, spec, stream);
+        case QCD_DTYPE_COMPLEX64:
+            return launch_pack<cuFloatComplex>(src, dst, spec, stream);
+        case QCD_DTYPE_FLOAT64:
+            return launch_pack<double>(src, dst, spec, stream);
+        case QCD_DTYPE_FLOAT32:
+            return launch_pack<float>(src, dst, spec, stream);
+        default:
+            return QCD_STATUS_INVALID;
+    }
+}
+
+extern "C" QCD_CUDA_LOCAL int qcd_cuda_hadamard(
+    int dtype_id, const void* left, const void* right, void* dst,
+    qcd_cuda_hadamard_spec spec, cudaStream_t stream) {
+    if (!valid_hadamard_spec(spec)) {
+        return QCD_STATUS_INVALID;
+    }
+    if (spec.elements > 0 && (left == nullptr || right == nullptr || dst == nullptr)) {
+        return QCD_STATUS_INVALID;
+    }
+    switch (dtype_id) {
+        case QCD_DTYPE_COMPLEX128:
+            return launch_hadamard<cuDoubleComplex>(left, right, dst, spec, stream);
+        case QCD_DTYPE_COMPLEX64:
+            return launch_hadamard<cuFloatComplex>(left, right, dst, spec, stream);
+        case QCD_DTYPE_FLOAT64:
+            return launch_hadamard<double>(left, right, dst, spec, stream);
+        case QCD_DTYPE_FLOAT32:
+            return launch_hadamard<float>(left, right, dst, spec, stream);
+        default:
+            return QCD_STATUS_INVALID;
+    }
+}
+
+extern "C" QCD_CUDA_LOCAL int qcd_cuda_reduce(
+    int dtype_id, const void* src, void* dst, qcd_cuda_reduce_spec spec,
+    cudaStream_t stream) {
+    if (!valid_reduce_spec(spec)) {
+        return QCD_STATUS_INVALID;
+    }
+    if (spec.output_elements > 0 && (src == nullptr || dst == nullptr)) {
+        return QCD_STATUS_INVALID;
+    }
+    switch (dtype_id) {
+        case QCD_DTYPE_COMPLEX128:
+            return launch_reduce<cuDoubleComplex>(src, dst, spec, stream);
+        case QCD_DTYPE_COMPLEX64:
+            return launch_reduce<cuFloatComplex>(src, dst, spec, stream);
+        case QCD_DTYPE_FLOAT64:
+            return launch_reduce<double>(src, dst, spec, stream);
+        case QCD_DTYPE_FLOAT32:
+            return launch_reduce<float>(src, dst, spec, stream);
+        default:
+            return QCD_STATUS_INVALID;
+    }
+}
+
+extern "C" QCD_CUDA_LOCAL int qcd_cuda_batched_gemm(
+    int dtype_id,
+    cublasHandle_t handle,
+    const void* left,
+    const void* right,
+    void* dst,
+    int64_t m,
+    int64_t n,
+    int64_t k,
+    int64_t batch,
+    cudaStream_t stream) {
+    if (handle == nullptr || m < 0 || n < 0 || k < 0 || batch < 0 ||
+        m > std::numeric_limits<int>::max() || n > std::numeric_limits<int>::max() ||
+        k > std::numeric_limits<int>::max() || batch > std::numeric_limits<int>::max()) {
+        return QCD_STATUS_INVALID;
+    }
+    if (m == 0 || n == 0 || batch == 0) {
+        return QCD_STATUS_OK;
+    }
+    if (k == 0) {
+        if (dst == nullptr) {
+            return QCD_STATUS_INVALID;
+        }
+        return zero_output(dtype_id, dst, m, n, batch, stream);
+    }
+    if (left == nullptr || right == nullptr || dst == nullptr) {
+        return QCD_STATUS_INVALID;
+    }
+
+    const int cublas_m = static_cast<int>(n);
+    const int cublas_n = static_cast<int>(m);
+    const int cublas_k = static_cast<int>(k);
+    const int cublas_batch = static_cast<int>(batch);
+    int64_t stride_left = 0;
+    int64_t stride_right = 0;
+    int64_t stride_dst = 0;
+    if (!multiply_checked(m, k, &stride_left) ||
+        !multiply_checked(k, n, &stride_right) ||
+        !multiply_checked(m, n, &stride_dst)) {
+        return QCD_STATUS_INVALID;
+    }
+
+    int status = map_cublas_status(cublasSetStream(handle, stream));
+    if (status != QCD_STATUS_OK) {
+        return status;
+    }
+    status = map_cublas_status(cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_HOST));
+    if (status != QCD_STATUS_OK) {
+        return status;
+    }
+
+    cublasStatus_t result = CUBLAS_STATUS_NOT_INITIALIZED;
+    switch (dtype_id) {
+        case QCD_DTYPE_COMPLEX128: {
+            const cuDoubleComplex alpha = make_cuDoubleComplex(1.0, 0.0);
+            const cuDoubleComplex beta = make_cuDoubleComplex(0.0, 0.0);
+            result = cublasZgemmStridedBatched(
+                handle,
+                CUBLAS_OP_T,
+                CUBLAS_OP_N,
+                cublas_m,
+                cublas_n,
+                cublas_k,
+                &alpha,
+                static_cast<const cuDoubleComplex*>(right),
+                cublas_k,
+                stride_right,
+                static_cast<const cuDoubleComplex*>(left),
+                cublas_k,
+                stride_left,
+                &beta,
+                static_cast<cuDoubleComplex*>(dst),
+                cublas_m,
+                stride_dst,
+                cublas_batch);
+            break;
+        }
+        case QCD_DTYPE_COMPLEX64: {
+            const cuFloatComplex alpha = make_cuFloatComplex(1.0f, 0.0f);
+            const cuFloatComplex beta = make_cuFloatComplex(0.0f, 0.0f);
+            result = cublasCgemmStridedBatched(
+                handle,
+                CUBLAS_OP_T,
+                CUBLAS_OP_N,
+                cublas_m,
+                cublas_n,
+                cublas_k,
+                &alpha,
+                static_cast<const cuFloatComplex*>(right),
+                cublas_k,
+                stride_right,
+                static_cast<const cuFloatComplex*>(left),
+                cublas_k,
+                stride_left,
+                &beta,
+                static_cast<cuFloatComplex*>(dst),
+                cublas_m,
+                stride_dst,
+                cublas_batch);
+            break;
+        }
+        case QCD_DTYPE_FLOAT64: {
+            const double alpha = 1.0;
+            const double beta = 0.0;
+            result = cublasDgemmStridedBatched(
+                handle,
+                CUBLAS_OP_T,
+                CUBLAS_OP_N,
+                cublas_m,
+                cublas_n,
+                cublas_k,
+                &alpha,
+                static_cast<const double*>(right),
+                cublas_k,
+                stride_right,
+                static_cast<const double*>(left),
+                cublas_k,
+                stride_left,
+                &beta,
+                static_cast<double*>(dst),
+                cublas_m,
+                stride_dst,
+                cublas_batch);
+            break;
+        }
+        case QCD_DTYPE_FLOAT32: {
+            const float alpha = 1.0f;
+            const float beta = 0.0f;
+            result = cublasSgemmStridedBatched(
+                handle,
+                CUBLAS_OP_T,
+                CUBLAS_OP_N,
+                cublas_m,
+                cublas_n,
+                cublas_k,
+                &alpha,
+                static_cast<const float*>(right),
+                cublas_k,
+                stride_right,
+                static_cast<const float*>(left),
+                cublas_k,
+                stride_left,
+                &beta,
+                static_cast<float*>(dst),
+                cublas_m,
+                stride_dst,
+                cublas_batch);
+            break;
+        }
+        default:
+            return QCD_STATUS_INVALID;
+    }
+    if (result == CUBLAS_STATUS_NOT_SUPPORTED) {
+        result = cublas_lt_batched_gemm(
+            dtype_id, left, right, dst, m, n, k, batch,
+            stride_left, stride_right, stride_dst, stream);
+    }
+    return map_cublas_status(result);
 }

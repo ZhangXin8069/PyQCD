@@ -5,9 +5,9 @@
 影响结果。本模块把下面八条固化成可独立失败的断言：
 
 1. **取值矩阵**：``parse`` / ``forced_labels`` / ``generic_only`` 对
-   ``None``/``auto``/``generic``/单标签/多标签/带空格/混合大小写的返回；非法标签与
-   ``generic`` 混写必须抛 ``ValueError``，且消息里能查到合法集合。本条按"纯解析"与
-   "三态判定 + 环境/参数优先级"拆成两个用例（所以 ``TESTS`` 是 9 条对应下面 8 点）。
+   ``None``/``generic``/单标签/带逗号链/带空格/混合大小写的返回；非法标签（含已删除的
+   ``auto``）与逗号链式必须抛 ``ValueError``，且消息里能查到合法集合。本条按"纯解析"与
+   "取值判定 + 环境/参数优先级"拆成两个用例（``TESTS`` 因此是 9 条对应下面 8 点）。
 2. **``generic`` 与 ``specialize=False`` 等价**：同一条语料方程两者逐元素一致，
    且都不发"specialised kernel did not run"告警。
 3. **逻辑名按后端解析**：``dedicated`` / ``topology`` 在 numpy 操作数上必须解析成
@@ -25,8 +25,9 @@
    （``requested == ('topology',)``）。
 7. **冲突早失败**：``out=`` / ``specialize=False`` 与具体标签组合必须抛
    ``ValueError``，且**一次内核都没试**（``_LAST_KERNEL`` 未被写过）。
-8. **回归**：不强制时仍是"尝试 → 失败 → 一次告警 → 回落"，结果与 numpy 一致；
-   进程内的形态告警去重不得让自动分派变成"静默回落"。
+8. **缺省即 ``generic``**：不传 ``kernel_force=`` 时一次内核都不试、**不发任何告警**
+   （没有"尝试 → 告警 → 回落"这条自动分派链了），结果与 numpy 一致；真正下发过的
+   标签只在显式强制时出现，跑不成是 ``KernelUnavailableError`` 而不是静默回落。
 
 不做任何计时/性能断言：本模块只关心"选了哪条路"，不关心它有多快。
 
@@ -220,35 +221,61 @@ def _expect_value_error(call, token: str, what: str) -> str:
 
 # ── 1. 取值矩阵 ─────────────────────────────────────────────────────────────
 
+def _expect_rejected_multiple(spec: str) -> str:
+    """逗号链式已取消：``parse`` 必须抛错，正文说明"只接受单个值"并列出合法集合。"""
+    try:
+        _kernel_force.parse(spec)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError(f"{spec!r}（逗号链式）必须抛 ValueError")
+    assert "单个值" in message, (spec, message)
+    for label in sorted(_kernel_force.ALLOWED_LABELS):
+        assert label in message, (spec, label, message)
+    return message
+
+
 def test_kernel_force_parse_matrix():
-    """``parse`` 的取值矩阵：缺省/auto/generic/单标签/多标签/空格/大小写/去重。"""
+    """``parse`` 的取值矩阵：缺省/generic/单标签/空格/大小写/逗号链/已删除的 auto。"""
     parse = _kernel_force.parse
     generic = _kernel_force.GENERIC_LABEL
     backend = _kernel_force.BACKEND_LABEL
 
-    assert parse(None) == ()
-    assert parse("") == ()
-    assert parse("   ") == ()
-    assert parse("auto") == ()
-    assert parse("AUTO") == ()
+    # 缺省即**强制通用路径**：``None``/空串不再表示"不强制"，而是一个具体取值。
+    assert parse(None) == (generic,)
+    assert parse("") == (generic,)
+    assert parse("   ") == (generic,)
     assert parse("generic") == (generic,)
     assert parse(" Generic ") == (generic,)
+    # 生态里"关掉这个功能"的既有拼写同样落到 generic（不是 auto 的替身）。
+    for off in ("0", "false", "OFF", "no"):
+        assert parse(off) == (generic,), off
     # 单标签 + 混合大小写 + 去空白：返回的是**逻辑名**，不是具体内核标签。
     assert parse("dedicated") == ("dedicated",)
     assert parse("  DEDICATED ") == ("dedicated",)
+    assert parse("topology") == ("topology",)
     assert parse("backend") == (backend,)
-    # 多标签：按书写次序（尝试次序就是这个次序）
-    assert parse("topology,dedicated") == ("topology", "dedicated")
-    assert parse(" TOPOLOGY , dedicated ") == ("topology", "dedicated")
-    # 重复标签保序去重（同一次调用不该重复试同一入口）
-    assert parse("topology,topology") == ("topology",)
-    # 多标签里写 auto 等价于没写
-    assert parse("auto,topology") == ("topology",)
-    assert parse("auto,backend") == (backend,)
+
+    # 逗号链式（"按书写次序依次尝试"）已取消：单值才说得清"谁说了算"。
+    for bad in ("topology,dedicated", " TOPOLOGY , dedicated ",
+                "topology,topology", "generic,dedicated", "backend,dedicated"):
+        _expect_rejected_multiple(bad)
+
+    # 已删除的 auto：它与任何拼错的名字得到同一条"只接受强制值"的消息。
+    for bad in ("auto", "AUTO", " Auto "):
+        try:
+            parse(bad)
+        except ValueError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError(f"已删除的取值 {bad!r} 必须抛 ValueError")
+        assert "tune" in message, (bad, message)
+        for label in sorted(_kernel_force.ALLOWED_LABELS):
+            assert label in message, (bad, label, message)
 
     # 非法标签：必须抛 ValueError，且消息里能查到完整合法集合。旧的具体内核标签
     # 已被移除，必须是非法值——静默接受会让"标签改窄"名存实亡。
-    for bad in ("kupl", "cuda_topolog", "kupl-dedicated", "generic,nope",
+    for bad in ("kupl", "cuda_topolog", "kupl-dedicated", "nope",
                 "kupl_dedicated", "kupl_topology", "cuda_dedicated",
                 "cuda_topology"):
         try:
@@ -259,41 +286,18 @@ def test_kernel_force_parse_matrix():
             raise AssertionError(f"未知标签 {bad!r} 必须抛 ValueError")
         for label in sorted(_kernel_force.ALLOWED_LABELS):
             assert label in message, (bad, label, message)
-        assert generic in message and _kernel_force.AUTO_LABEL in message, (
-            bad, message)
-        assert backend in message, (bad, message)
-
-    # generic 与具体标签混写没有"半强制"解释，必须早失败而不是悄悄挑一个。
-    for bad in ("generic,dedicated", "topology,generic"):
-        try:
-            parse(bad)
-        except ValueError as exc:
-            message = str(exc)
-        else:
-            raise AssertionError(f"{bad!r}（generic 与具体标签混写）必须抛 ValueError")
-        assert generic in message, (bad, message)
-
-    # backend 是"别用专用内核"，与"只准跑某个专用内核"互斥，同样早失败。
-    for bad in ("backend,dedicated", "topology,backend"):
-        try:
-            parse(bad)
-        except ValueError as exc:
-            message = str(exc)
-        else:
-            raise AssertionError(f"{bad!r}（backend 与其它标签混写）必须抛 ValueError")
-        assert backend in message, (bad, message)
+        assert generic in message and backend in message, (bad, message)
 
 
 def test_kernel_force_forced_labels_and_generic_only():
-    """``forced_labels``/``generic_only`` 的三态判定与"显式参数优先于环境"。"""
+    """``forced_labels``/``generic_only`` 的判定与"显式参数优先于环境"。"""
     with _isolated_state():
         os.environ.pop(FORCE_ENV, None)
-        # 未设环境 → 自动分派
-        assert _kernel_force.forced_labels() is None
-        assert _kernel_force.generic_only() is False
+        # 未设环境 → 缺省 generic：没有专用内核要试，因此 forced_labels() 是 ()。
+        assert _kernel_force.forced_labels() == ()
+        assert _kernel_force.generic_only() is True
+        assert _kernel_force.resolve() == (_kernel_force.GENERIC_LABEL,)
         # 显式取值压过环境（环境此刻未设）
-        assert _kernel_force.forced_labels("auto") is None
-        assert _kernel_force.generic_only("auto") is False
         assert _kernel_force.forced_labels("generic") == ()
         assert _kernel_force.generic_only("generic") is True
         # 逻辑名原样返回：解析成具体标签是 ``_api`` 的职责，不在这里。
@@ -307,9 +311,7 @@ def test_kernel_force_forced_labels_and_generic_only():
         os.environ[FORCE_ENV] = "generic"
         assert _kernel_force.forced_labels() == ()
         assert _kernel_force.generic_only() is True
-        # 显式 auto 必须压过环境里的 generic
-        assert _kernel_force.forced_labels("auto") is None
-        assert _kernel_force.generic_only("auto") is False
+        assert _kernel_force.forced_labels("dedicated") == ("dedicated",)
 
         os.environ[FORCE_ENV] = " Topology "
         assert _kernel_force.forced_labels() == ("topology",)
@@ -318,15 +320,13 @@ def test_kernel_force_forced_labels_and_generic_only():
         assert _kernel_force.forced_labels("generic") == ()
         assert _kernel_force.generic_only("generic") is True
 
-        # 环境里的拼写错误同样要早失败，不能静默当 auto；旧的具体内核标签也在此列。
-        os.environ[FORCE_ENV] = "topolog"
-        _expect_value_error(
-            _kernel_force.forced_labels, "topology",
-            f"{FORCE_ENV} 里的非法标签")
-        os.environ[FORCE_ENV] = "kupl_topology"
-        _expect_value_error(
-            _kernel_force.forced_labels, "topology",
-            f"{FORCE_ENV} 里的旧标签")
+        # 环境里的拼写错误同样要早失败，不能静默当 generic；已删除的 auto 与旧的
+        # 具体内核标签也在此列。
+        for bad in ("topolog", "kupl_topology", "auto"):
+            os.environ[FORCE_ENV] = bad
+            _expect_value_error(
+                _kernel_force.forced_labels, "topology",
+                f"{FORCE_ENV} 里的非法标签 {bad!r}")
 
 
 # ── 2. generic ≡ specialize=False ───────────────────────────────────────────
@@ -370,21 +370,24 @@ def test_kernel_force_resolves_labels_per_backend():
 
     用户写的是逻辑名，具体标签由操作数后端决定：numpy → ``kupl_*``、cupy →
     ``cuda_*``。后者不需要真 GPU——解析只看操作数的模块名，用 ``_cupy_operands``
-    的桩把两个方向都钉住。
+    的桩把两个方向都钉住。逗号链式取消后解析入口是**单值**的
+    ``_api._resolve_forced_label(name, operands)``。
     """
     _require_specialized_path()
     operands = _operands()
-    resolved = _api._resolve_forced_labels(("dedicated", "topology"), operands)
-    assert resolved == {"dedicated": ("kupl_dedicated",),
-                        "topology": ("kupl_topology",)}, resolved
+    for name, expected in (("dedicated", "kupl_dedicated"),
+                           ("topology", "kupl_topology")):
+        resolved = _api._resolve_forced_label(name, operands)
+        assert resolved == expected, (name, resolved, expected)
 
     with patch.object(_api, "_cupy_operands", return_value=True):
-        gpu = _api._resolve_forced_labels(("topology", "dedicated"), operands)
-    assert gpu == {"topology": ("cuda_topology",),
-                   "dedicated": ("cuda_dedicated",)}, gpu
+        for name, expected in (("dedicated", "cuda_dedicated"),
+                               ("topology", "cuda_topology")):
+            resolved = _api._resolve_forced_label(name, operands)
+            assert resolved == expected, (name, resolved, expected)
 
     # backend 不是专用内核角色，不产生任何 attempt 映射。
-    assert _api._resolve_forced_labels(("backend",), operands) == {}
+    assert _api._resolve_forced_label("backend", operands) is None
 
 
 # ── 4. 真跑一次 dedicated ───────────────────────────────────────────────────
@@ -561,43 +564,59 @@ def test_kernel_force_conflicts_fail_early():
         assert rel <= 1e-12, rel
 
 
-# ── 8. 回归：自动分派仍是"告警 + 回落" ─────────────────────────────────────
+# ── 8. 缺省即 generic：一次内核都不试 ───────────────────────────────────────
 
-def test_kernel_force_auto_mode_keeps_warning_and_fallback():
-    """不强制时行为与改动前一致：仍可能告警 + 回落，结果始终正确。"""
+def test_kernel_force_default_is_generic_without_dispatch():
+    """不传 ``kernel_force=``：缺省即 ``generic``——不匹配、不试内核、不告警。
+
+    旧行为（"未指定 → 自动分派 → 失败则告警一次并回落"）已随 ``auto`` 一并删除：
+    自动选路交给 ``--tune`` 的实测结论（配置表），运行时不再猜分派次序。所以缺省调用
+    的观测是"请求 generic、一次都没下发、零告警"，而**真正下发**只在显式强制时发生，
+    且跑不成时抛 ``KernelUnavailableError`` 而不是静默回落。
+    """
     _require_specialized_path()
     operands = _operands()
     expected = _reference(operands)
 
     with _isolated_state():
-        # (a) 真实自动分派：记录结构不变、requested 为 None、结果与 numpy 一致。
-        result, _caught = _capture(lambda: contract(EQUATION, *operands))
+        result, caught = _capture(lambda: contract(EQUATION, *operands))
         record = _api.last_kernel()
+
         assert record is not None, record
-        assert record["requested"] is None, ("auto 的 requested 必须是 None", record)
-        assert record["ran"] in (None, "kupl_dedicated", "kupl_topology"), record
-        assert isinstance(record["attempted"], tuple), record
-        assert isinstance(record["reasons"], dict), record
+        # ``requested`` 报的是**解析后的路线**：generic 不产生专用尝试，故为 ()。
+        assert record["requested"] == (), ("缺省即 generic", record)
+        assert record["ran"] is None and record["attempted"] == (), record
+        assert record["reasons"] == {}, record
+        # 缺省路径是正常路径，不该有任何告警（尤其不该有"没跑成"）。
+        assert not caught, [str(w.message) for w in caught]
+        assert not _skip_warnings(caught), [str(w.message) for w in caught]
         rel = _rel_max(result, expected)
         assert rel <= 1e-12, rel
 
-        # (b) 两个入口都失败：必须仍发一次"没跑成"的告警并回落到通用路径。
-        calls = []
+        # 对照（"牙齿"）：显式强制 dedicated 时**真的下发**，跑不成就是硬错误。
+        # 把该入口桩成 None，模拟"本机跑不了这个内核"。
+        _api._LAST_KERNEL = None
         with patch.object(_kernel_kupl, "try_dedicated", return_value=None), \
-                patch.object(_kernel_kupl, "try_topology_apply", return_value=None), \
-                patch.object(_api, "_warn_kernel_skipped_once",
-                             side_effect=lambda *args, **kwargs: calls.append(args)):
-            fallback, _ = _capture(lambda: contract(EQUATION, *operands))
-        record = _api.last_kernel()
+                warnings.catch_warnings(record=True) as forced_warnings:
+            warnings.simplefilter("always")
+            try:
+                _capture(lambda: contract(EQUATION, *operands,
+                                          kernel_force="dedicated"))
+            except _kernel_force.KernelUnavailableError as exc:
+                message = " ".join(str(exc).split())
+            else:
+                raise AssertionError(
+                    "强制 dedicated 跑不成必须抛 KernelUnavailableError，不许回落")
+        forced_record = _api.last_kernel()
 
-    assert len(calls) == 1, ("自动分派失败必须告警一次", len(calls))
-    entry, reasons = calls[0]
-    assert str(entry.get("kind", "")).startswith("kernel"), entry
-    assert isinstance(reasons, list) and len(reasons) == 2, reasons
-    assert record is not None and record["ran"] is None, record
-    assert record["attempted"] == ("kupl_dedicated", "kupl_topology"), record
-    rel = _rel_max(fallback, expected)
-    assert rel <= 1e-12, rel
+    assert forced_record is not None, forced_record
+    assert forced_record["requested"] == ("dedicated",), forced_record
+    assert forced_record["ran"] is None, forced_record
+    assert forced_record["attempted"] == ("kupl_dedicated",), forced_record
+    assert "kupl_dedicated（dedicated）" in message, message
+    # 强制路径抛错，不再有"warning + 回落"：告警一条都不该发。
+    assert not [item for item in forced_warnings
+                if "specialised kernel did not run" in str(item.message)]
 
 
 TESTS = (
@@ -609,7 +628,7 @@ TESTS = (
     test_kernel_force_bypasses_negative_cache,
     test_kernel_force_parameter_beats_environment,
     test_kernel_force_conflicts_fail_early,
-    test_kernel_force_auto_mode_keeps_warning_and_fallback,
+    test_kernel_force_default_is_generic_without_dispatch,
 )
 
 

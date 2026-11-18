@@ -17,8 +17,10 @@
 /* per-拓扑 GEMM 步表（由 pyqcd/testing/_topology_kernel_gen.py 生成）。生成物自带
  * 执行器头，因此这里只需要在 parse 之后按"规范指纹"查表即可。
  *
- * 生成物被 .gitignore 忽略（约 2.5 MB 源码、40 万字节步表），干净树里可能不存在：
- * 此时保持旧行为（整条计划交给 version-2 通用执行器），编译与数值语义都不变。
+ * 生成物以 ``topology_kernels.inc.gz`` 入库，``make.sh`` 在编译前解压，因此
+ * 正常构建里这个头一定存在。真的缺了它时**整条 topology 入口不可用**（每次调用
+ * 都返回 ``QCD_TOPOLOGY_UNSUPPORTED``）——不再有"交给 version-2 通用执行器"的
+ * 回落，理由见 einsum_topology.h 的"只有一条执行路线"一节。
  * 生成命令：``python -m pyqcd.testing._topology_kernel_gen``。 */
 #if defined(__has_include)
 #if __has_include("topology_kernels.inc")
@@ -35,18 +37,6 @@ namespace {
 constexpr std::size_t kHeaderBytes = 9 * sizeof(int32_t);
 constexpr uint64_t kMaxPlanBytes = uint64_t(1) << 30;
 constexpr int32_t kMaxInputs = 1 << 16;
-
-/* 最近一次成功执行的**路线**，由 ``qcd_kupl_topology_last_specialized()`` 对上层公开。
- *
- * 为什么必须有这个出口：命中编译期步表（v3）与回落 v2 通用执行器的返回码都是
- * ``QCD_STATUS_OK``，返回值与输出的数值也都正确，调用方从返回码上无法区分两者。
- * 于是 Python 侧曾把**所有**成功下发都标成 ``kupl_topology``，v2 的耗时就记到了
- * v3 头上（2026-11-15 的 77 格基准里 52 格实际走 v2）。
- *
- * 用 ``thread_local`` 而不是进程级全局量：ctypes 调用发生在调用方的 OS 线程上，
- * 因此"先 apply 再查"读到的必然是本次调用的结果，多线程并发不会串味。
- */
-thread_local int g_last_specialized = QCD_TOPOLOGY_ROUTE_UNKNOWN;
 
 struct PlanHeader {
     int32_t magic;
@@ -223,12 +213,13 @@ bool trace_enabled() {
 }
 #endif  /* PYQCD_TOPO_STEP_TABLE */
 
-/* 命中步表就把整条收缩交给参数化 GEMM 执行器；任何不适配都返回 kSpecializedMiss
- * 让调用方走 version-2 通用执行器（fail closed，绝不猜测）。 */
+/* 命中步表就把整条收缩交给参数化 GEMM 执行器；任何不适配都返回 kSpecializedMiss，
+ * 由调用方判成 ``QCD_TOPOLOGY_UNSUPPORTED``（fail closed，绝不猜测，也绝不改投
+ * 别的执行器）。 */
 int run_specialized(const pyqcd_einsum::ExecutionPlan& execution,
                     const std::vector<int64_t>& addresses, void* out, int dtype_id) {
 #if !PYQCD_TOPO_STEP_TABLE
-    /* 干净树（没有生成的步表）保持旧行为。 */
+    /* 干净树（没有生成的步表）：没有可执行的东西，整条入口 fail closed。 */
     (void)execution;
     (void)addresses;
     (void)out;
@@ -236,11 +227,12 @@ int run_specialized(const pyqcd_einsum::ExecutionPlan& execution,
     return kSpecializedMiss;
 #else
     /* 四类 dtype 平权：``elem_kind`` 与 ``QCD_DTYPE_*`` 逐项同值，执行器按
-     * ``{s,d,c,z}gemm`` 各自的符号分别实例化，缺哪一类的符号就只回落那一类。
+     * ``{s,d,c,z}gemm`` 各自的符号分别实例化，缺哪一类的符号就只拒那一类。
      *
      * 复数还要额外过一道 ``complex_complete()``：cgemm/zgemm 在 ``bind_pair`` 里是
      * **可选**符号（只导出实数的 BLAS 仍服务 float/double），缺符号时在这里就判
-     * 不匹配，不进入步表执行器——fail closed，绝不隐式降精度。 */
+     * 不匹配。注：KUPL 的构建期已强制要求 BLAS（make.sh 找不到 BLAS 直接失败），
+     * 因此这条分支只是防御性的，正常构建里不会命中。 */
     int elem_kind = 0;
     switch (dtype_id) {
         case QCD_DTYPE_COMPLEX128:
@@ -283,9 +275,9 @@ int run_specialized(const pyqcd_einsum::ExecutionPlan& execution,
         record->out_rank != execution.output_labels.size()) {
         return kSpecializedMiss;
     }
-    /* 切到 v3 执行器：轴长来自 ``execution.sizes``（label→size），不再要求等长轴。
-     * 生产 scene 的轴长是 `{4,5,40,50}` 混杂，v2 的 ``uniform_dimension`` 会把它们
-     * 一律判 miss —— 那是把步表锁死在小型等长测试形状上。 */
+    /* 轴长来自 ``execution.sizes``（label→size）：步表按**真实轴长**实例化，
+     * 不要求等长轴。生产 scene 的轴长是 `{4,5,40,50}` 混杂，任何"等长超立方体"
+     * 前提都会把步表锁死在小型测试形状上。 */
     if (record->version != 3) {
         if (trace_enabled()) {
             std::fprintf(stderr,
@@ -332,9 +324,6 @@ int run_specialized(const pyqcd_einsum::ExecutionPlan& execution,
 
 int apply_topology(const void* plan, long long plan_len, void* const* operands, int n_operands,
                    const long long* operand_offsets, void* out, int dtype_id) {
-    /* 任何一次新调用都先把路线重置成"未知"：早退（参数非法 / 计划不认）不会执行
-     * 任何一步，此时上一条计划的结论对调用方没有意义，绝不能让它读到。 */
-    g_last_specialized = QCD_TOPOLOGY_ROUTE_UNKNOWN;
     if (plan == nullptr || operands == nullptr || out == nullptr) {
         return QCD_STATUS_INVALID;
     }
@@ -376,23 +365,14 @@ int apply_topology(const void* plan, long long plan_len, void* const* operands, 
             return QCD_STATUS_INVALID;
         }
     }
-    int64_t output_address = static_cast<int64_t>(reinterpret_cast<std::intptr_t>(out));
-    /* 语料拓扑优先走编译期步表（per-拓扑 GEMM 分步）；不适配就保持原有语义，
-     * 交给 version-2 通用执行器。两条路的返回码都是 0，路线只能通过下面这个
-     * 线程内标记对上层可见——否则"v2 回落"会被读成"v3 命中"。 */
-    const int specialized = run_specialized(execution, addresses, out, dtype_id);
-    if (specialized == QCD_STATUS_OK) {
-        g_last_specialized = QCD_TOPOLOGY_ROUTE_V3;
-        return QCD_STATUS_OK;
+    /* 编译期步表是**唯一**执行器：命中就在步表内跑完整条收缩，未命中一律判
+     * "本入口不支持"。刻意不保留"交给 version-2 通用执行器"的回落：KUPL 的每次
+     * GEMM 都走 cblas，``make.sh`` 找不到 BLAS 时构建期直接失败，所以缺 BLAS 的
+     * 兜底在 KUPL 上不可达；留着只会让两条性能含义完全不同的路线共享返回码 0。 */
+    if (run_specialized(execution, addresses, out, dtype_id) != QCD_STATUS_OK) {
+        return QCD_TOPOLOGY_UNSUPPORTED;
     }
-    const int status = pyqcd_einsum::execute_parsed_contract(
-        execution, static_cast<long long>(reinterpret_cast<std::intptr_t>(addresses.data())),
-        static_cast<long long>(reinterpret_cast<std::intptr_t>(&output_address)));
-    /* v2 成功才算"数是算出来的、路线是回落"；v2 也失败时保持"未知"，调用方本就会
-     * 收到非 0 状态并放弃这次结果。 */
-    g_last_specialized = (status == QCD_STATUS_OK) ? QCD_TOPOLOGY_ROUTE_V2
-                                                  : QCD_TOPOLOGY_ROUTE_UNKNOWN;
-    return status;
+    return QCD_STATUS_OK;
 }
 
 }  // namespace
@@ -410,13 +390,4 @@ extern "C" QCD_EINSUM_API int qcd_kupl_topology_apply(
     } catch (...) {
         return QCD_STATUS_INTERNAL;
     }
-}
-
-/* 查询**本线程**最近一次 ``qcd_kupl_topology_apply`` 实际走的路线。
- *
- * 调用方必须在一次成功（返回 0）的 apply 之后、且在同一线程上查询；中间夹进任何
- * 别的 apply 都会改写这个值。失败或早退的 apply 让本函数返回
- * ``QCD_TOPOLOGY_ROUTE_UNKNOWN``，此时那次调用没有产生可信的输出，路线也就无从谈起。 */
-extern "C" QCD_EINSUM_API int qcd_kupl_topology_last_specialized(void) {
-    return g_last_specialized;
 }

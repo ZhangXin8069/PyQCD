@@ -142,10 +142,85 @@ def _normalize_optimize(optimize: Any) -> Any:
     Every other value — other strings, ``False``/``True``/``None``, callables and
     explicit path lists — is returned **unchanged**; unknown optimizer names must
     keep raising in :func:`_find_path` instead of being silently swallowed here.
+
+    ``"none"`` is normalised **without** knowing the kernel, so it stays usable
+    for the topology kernel too: that one is handed its order by the kernel and
+    never consults ``optimize`` for planning. See :func:`_resolve_optimize`.
     """
     if isinstance(optimize, str) and optimize.strip().lower() == "none":
         return False
     return optimize
+
+
+def _resolve_optimize(optimize: Any, forced: tuple[str, ...]) -> Any:
+    """``optimize`` after accounting for the kernel that will actually run.
+
+    ``optimize="none"`` has a second meaning for the **topology** kernel, which
+    is the one kernel that cannot take an external order: its step order comes
+    from the kernel itself. For that kernel ``"none"`` is the only legal
+    ``optimize`` value ("the kernel decides the order"), so it is accepted as
+    written. Everywhere else — ``generic`` / ``backend`` / ``dedicated`` — the
+    same spelling is simply "no optimizer", i.e. :func:`_normalize_optimize`'s
+    ``False``: the equation's own operand order, no planning.
+
+    ``forced`` is :func:`pyqcd.einsum._kernel_force.forced_labels`' result.
+    """
+    if isinstance(optimize, str) and optimize.strip().lower() == "none":
+        if forced == ("topology",):
+            return "none"            # 顺序由内核决定：这是唯一合法的 optimize 输入
+        return False                 # 其余对象：等同于不使用 optimize
+    return _normalize_optimize(optimize)
+
+
+def _normalize_optimize_topology_v2(value: Any) -> str:
+    """``optimize_topology_v2`` 的合法拼写 → 7 个叶子之一；非法值当场抛。
+
+    与 ``_profile_cache`` 读表时同一口径（大小写与首尾空白不敏感，连字符旧写法
+    ``branch-1`` 归一成 ``branch_1``），因为它填的正是配置表里同名的那一列；两边
+    认不同的拼写会让同一次 tune 结论读回来时被判非法。
+
+    非法值**必须早失败**：这个参数唯一的作用就是决定 v2 回落时生成哪份计划，
+    静默退回 ``greedy`` 会让"我要 optimal"变成一句无声的空话，而报告里看不出
+    差别——那正是本参数要消除的不确定性。
+
+    ``None`` 同样按非法值报错，**不能**用 ``str(None)`` 归一：那恰好等于
+    ``"none"``（7 个叶子之一），会把"没给"静默解释成"不规划"，于是在 v2 上换掉
+    整份计划。"没给"只有一种写法——不写这个参数（签名缺省 ``greedy``）。
+    """
+    if not isinstance(value, str):
+        raise ValueError(
+            f"optimize_topology_v2={value!r} 必须是字符串（7 个叶子之一）："
+            f"{'/'.join(_profile_cache.OPTIMIZE_LEAVES)}；缺省由签名给出（greedy）。"
+            "它只决定 topology 回落到 v2 通用执行器时采用的收缩序，不影响 v3 "
+            "步表命中的调用。")
+    text = value.strip().lower().replace("-", "_")
+    if text not in _profile_cache.OPTIMIZE_LEAVES:
+        raise ValueError(
+            f"optimize_topology_v2={value!r} 不是合法取值：只能是 "
+            f"{'/'.join(_profile_cache.OPTIMIZE_LEAVES)} 之一。它只决定 topology "
+            f"回落到 v2 通用执行器时采用的收缩序，不影响 v3 步表命中的调用。")
+    return text
+
+
+def _normalize_as_equivalence(value: Any) -> bool | None:
+    """``as_equivalence`` 的三态归一：显式布尔、可识别字符串，或 ``None``（跟随环境）。
+
+    存在的理由是一个**反转开关**陷阱：``bool("false")`` 是 ``True``，所以直接把字符串
+    交给布尔判定会让"关掉改写"变成"强制改写"。这里显式映射 ``true/false/1/0``
+    （大小写与首尾空白不敏感），``force`` 与 ``true`` 同义（CLI 的第四态，
+    见 :func:`pyqcd.einsum.test.parse_as_equivalence`）；其余字符串一律 ``ValueError``
+    ——既不是开也不是关的取值必须由调用方改写，不许猜。
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("true", "1", "force"):
+        return True
+    if text in ("false", "0"):
+        return False
+    raise ValueError(
+        f"as_equivalence={value!r} 不可识别：用 True/False（或 ``true``/``false``/"
+        "``1``/``0``），``None`` 表示跟随 PYQCD_EINSUM_AS_EQUIVALENCE")
 
 
 def _filter_einsum_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -608,17 +683,26 @@ _LAST_KERNEL: dict[str, Any] | None = None
 
 
 def last_kernel() -> dict[str, Any] | None:
-    """最近一次专用内核尝试的记录：``requested`` / ``ran`` / ``attempted`` / ``reasons``。
+    """最近一次调用的选路记录：``requested`` / ``ran`` / ``attempted`` / ``reasons``。
 
-    ``requested`` 是本次调用要求的**逻辑名**（``None`` = 自动分派，``()`` = 只走通用
-    路径，``dedicated`` / ``topology`` / ``backend`` = 强制），``ran`` 是实际跑成的
-    标签（``None`` = 一个都没跑成；``backend`` 表示直接走了后端自己的 einsum），
-    ``attempted`` 是按尝试次序排列的具体标签（``kupl_dedicated`` …），``reasons`` 是
-    逐标签的失败原因（与 ``KernelUnavailableError.reasons`` 同源）。记录在每次
-    ``contract()`` 走进专用分支时**整体覆盖**，因此读到的一定是最近一次调用的结果，
-    不会残留上一次的命中——"到底跑了哪个内核"不必再去翻 ``LAST_FAILURE`` 或负缓存的
-    内部状态。``requested`` 只报**调用方**的要求（参数或 ``PYQCD_EINSUM_KERNEL_FORCE``）；
-    配置画像给出的建议不是调用方的要求，它的命中由自己的一行提示报告。
+    ``requested`` 是本次调用要求的**逻辑名**：``None`` = 调用方没给 ``kernel_force``
+    （按缺省 ``generic`` 执行）；``()`` = 明确要求 ``generic``（不试专用内核）；
+    ``("dedicated",)`` / ``("topology",)`` / ``("backend",)`` = 强制该条路线。
+
+    **``None`` 只可能来自"调用方没给"**：``_kernel_force.forced_labels`` 永不返回
+    ``None``，缺省同样解析成 ``()``。所以这两个字段是同一条事实的两种拼写，报告里
+    要判断"用户是否真的点名"只能看这里记录的那个值照抄了哪个输入，不能用它反推
+    显式性（见 ``_kernel_force.forced_labels`` 的 docstring）。
+
+    ``ran`` 是实际跑成的标签（``None`` = 一个都没跑成；``backend`` 表示直接走了后端
+    自己的 einsum），``attempted`` 是真正下发过的具体标签（``kupl_dedicated`` …），
+    ``reasons`` 是逐标签的失败原因（与 ``KernelUnavailableError.reasons`` 同源）。
+
+    记录在每次 ``contract()`` 走到选路处**整体覆盖**，因此读到的一定是最近一次调用的
+    结果，不会残留上一次的命中——"到底跑了哪个内核"不必再去翻 ``LAST_FAILURE`` 或负
+    缓存的内部状态。``requested`` 只报**调用方**的要求（参数或
+    ``PYQCD_EINSUM_KERNEL_FORCE``）；配置画像给出的建议不是调用方的要求，它的命中由
+    自己的一行提示报告。
     """
     return None if _LAST_KERNEL is None else dict(_LAST_KERNEL)
 
@@ -645,109 +729,97 @@ def _specialized_kernel_attempts(
     )
 
 
-def _run_specialized_kernel(
-    subscripts: Any,
+def _resolve_forced_label(
+    name: str,
     operands: Sequence[Any],
-    allowed: tuple[str, ...] | None = None,
-) -> tuple[Any, str, dict[str, str]]:
-    """依次尝试各专用 kernel。
-
-    ``allowed`` 决定允许走哪些标签：
-
-    * ``None``（缺省）→ 旧分派逐字不变：``*_dedicated`` → ``*_topology``，第一个成功者胜。
-    * ``()`` → 一次也不尝试，立即返回 ``(None, "", {})``。
-    * ``(label, ...)`` → **只**尝试这些标签，次序按 ``allowed`` 的书写次序（强制内核时
-      "用户先写的先试"）；attempt 表里没有的标签直接跳过，由调用方报告"未尝试"。
-      强制模式下每个 attempt 前套上内核模块自己的 ``bypass_negative_cache()``
-      （"强制即真试一次"；模块没提供就照旧），并把 attempt 抛出的异常收成该标签的
-      失败原因继续试下一个——强制模式不接受静默跳过。
-
-    Returns ``(result or None, hit label or "", {label: failure reason})`` — the
-    per-label reasons let the caller report the *relevant* cause instead of
-    whichever attempt happened to run last.
-    """
-    reasons: dict[str, str] = {}
-    if allowed is not None and not allowed:
-        return None, "", {}
-    attempts = _specialized_kernel_attempts(operands)
-    if allowed is None:
-        ordered = attempts
-    else:
-        by_label = {entry[0]: entry for entry in attempts}
-        ordered = tuple(by_label[label] for label in allowed if label in by_label)
-    for label, module, attempt in ordered:
-        if allowed is None:
-            # 自动分派：异常照旧向上抛，由 contract 的 warning + 回落兜住。
-            result = attempt(subscripts, operands)
-        else:
-            bypass = getattr(module, "bypass_negative_cache", None)
-            try:
-                if bypass is None:
-                    result = attempt(subscripts, operands)
-                else:
-                    with bypass():
-                        result = attempt(subscripts, operands)
-            except Exception as exc:  # noqa: BLE001 - 收成原因，最后统一抛
-                reasons[label] = f"{type(exc).__name__}: {exc}"
-                continue
-        if result is not None:
-            return result, label, reasons
-        # 失败后才读原因：早读会拿到上一次调用残留的值
-        reasons[label] = str(module.LAST_FAILURE.get("reason", ""))
-    return None, "", reasons
-
-
-def _resolve_forced_labels(
-    forced: Sequence[str],
-    operands: Sequence[Any],
-) -> dict[str, tuple[str, ...]]:
-    """把逻辑名解析成本次操作数后端的 attempt 标签。
+) -> str | None:
+    """逻辑名 → 本次操作数后端的 attempt 标签。
 
     ``dedicated`` → ``kupl_dedicated``（numpy 操作数）/ ``cuda_dedicated``（cupy），
     ``topology`` 同理。角色从标签后缀取（``kupl_dedicated`` → ``dedicated``），所以
     映射跟着 ``_specialized_kernel_attempts`` 的当前后端走，不写死第二份后端表。
-    ``forced`` 里出现尝试表没有的角色时**不给映射**——调用方按"未尝试"报告，
-    不猜一个可能跑不了的入口。
+    ``name`` 不在尝试表里时返回 ``None``——调用方按"未尝试"报告，不猜一个可能跑不了
+    的入口。
     """
-    by_role: dict[str, str] = {}
     for label, _module, _attempt in _specialized_kernel_attempts(operands):
-        by_role[label.rpartition("_")[2]] = label
-    resolved: dict[str, tuple[str, ...]] = {}
-    for name in forced:
-        concrete = by_role.get(name)
-        if concrete is not None:
-            resolved[name] = (concrete,)
-    return resolved
+        if label.rpartition("_")[2] == name:
+            return label
+    return None
+
+
+def _attempt_kernel(label: str, module: Any, attempt: Any, subscripts: Any,
+                    operands: Sequence[Any],
+                    optimize_topology_v2: str = "greedy") -> tuple[Any, str]:
+    """旁路负缓存后**真试一次**；返回 ``(result or None, 失败原因)``。
+
+    "强制即真试一次"：强制模式下不许被上一次的失败记录挡住，所以每个 attempt 前套上
+    内核模块自己的 ``bypass_negative_cache()``（模块没提供就照旧）。异常收成该标签的
+    原因向上报告，绝不静默跳过。
+
+    ``optimize_topology_v2`` **只**交给 ``*_topology`` 入口：那是"v2 回落时的收缩序"，
+    与 ``try_dedicated`` 的 ``optimize``（步表编码器的计划选择）同名不同义，串给
+    dedicated 会换掉它的计划口径。判别用 attempt 标签的后缀（表本身来自
+    ``_specialized_kernel_attempts``），不另立第二份后端表。
+    """
+    extra = ({"optimize": optimize_topology_v2}
+             if label.rpartition("_")[2] == "topology" else {})
+    bypass = getattr(module, "bypass_negative_cache", None)
+    try:
+        if bypass is None:
+            result = attempt(subscripts, operands, **extra)
+        else:
+            with bypass():
+                result = attempt(subscripts, operands, **extra)
+    except Exception as exc:  # noqa: BLE001 - 收成原因，由调用方统一报告
+        return None, f"{type(exc).__name__}: {exc}"
+    if result is not None:
+        return result, ""
+    # 失败后才读原因：早读会拿到上一次调用残留的值
+    return None, str(module.LAST_FAILURE.get("reason", ""))
 
 
 def _run_forced_kernel(
     subscripts: Any,
     operands: Sequence[Any],
-    requested: tuple[str, ...],
+    requested: str,
     record: dict[str, Any],
-) -> Any:
-    """强制内核的唯一执行点：按 ``requested`` 次序真试一次，跑不成即抛。
+    optimize_topology_v2: str = "greedy",
+) -> Any:  # noqa: D401 - 见 docstring
+    """强制内核的唯一执行点：真试一次，跑不成即抛。
 
-    ``requested`` 是**逻辑名**（``dedicated`` / ``topology``），先按操作数后端解析成
-    具体标签再下发；失败时把"逻辑名 → 具体标签"的对照一并交给异常，消息里两种名字
+    ``requested`` 是**单个逻辑名**（``dedicated`` / ``topology``）：先按操作数后端解析
+    成具体标签再下发。失败时把"逻辑名 → 具体标签"的对照一并交给异常，消息里两种名字
     都在（用户对得上自己写的取值，也看得见哪个入口真的被试过）。
 
-    与 auto 分派只有两点不同：①每个 attempt 前旁路负缓存（"强制即真试一次"，
-    不再被上一次的失败记录挡住）；②一个都没跑成时抛
-    :class:`~._kernel_force.KernelUnavailableError`，而不是 warning + 回落。
-    跑成时的结果与 auto 命中完全同源（同一个 ``attempt`` 入口），不改任何数值。
+    没有"依次尝试多个"的分支：逗号链式已取消（见 :mod:`._kernel_force`），一个调用
+    只有一条被要求的路线，跑不成就是跑不成。
+
+    ``optimize_topology_v2`` 原样交给 :func:`_attempt_kernel`（只有 ``*_topology``
+    入口会收到它）：v3 命中时它被忽略，v2 回落时它决定计划次序。
     """
-    resolved = _resolve_forced_labels(requested, operands)
-    allowed = tuple(label for labels in resolved.values() for label in labels)
-    result, ran, reasons = _run_specialized_kernel(
-        subscripts, operands, allowed=allowed)
-    record["ran"] = ran or None
-    record["attempted"] = tuple(reasons) + ((ran,) if ran else ())
+    concrete = _resolve_forced_label(requested, operands)
+    if concrete is not None:
+        by_label = {entry[0]: entry for entry in _specialized_kernel_attempts(operands)}
+        _label, module, attempt = by_label[concrete]
+        result, reason = _attempt_kernel(
+            concrete, module, attempt, subscripts, operands, optimize_topology_v2)
+        record["attempted"] = (concrete,)
+        if result is not None:
+            record["ran"] = concrete
+            record["reasons"] = {}
+            return result
+        reasons = {concrete: reason}
+        resolved = {requested: (concrete,)}
+    else:
+        # 该后端没有这条路线（例如只有 ``kupl_*`` 的尝试表里查 ``cuda_*``）：
+        # 一次都没下发，如实报"未尝试"，不猜一个跑不了的入口。
+        reasons = {}
+        resolved = {}
+        record["attempted"] = ()
+    record["ran"] = None
     record["reasons"] = dict(reasons)
-    if result is None:
-        raise _kernel_force.KernelUnavailableError(
-            requested, subscripts, reasons, record["attempted"], resolved)
-    return result
+    raise _kernel_force.KernelUnavailableError(
+        requested, subscripts, reasons, record["attempted"], resolved)
 
 
 _KERNEL_SKIP_WARNED: set[tuple[str, str]] = set()
@@ -967,6 +1039,7 @@ def _equivalence_payload(row: dict[str, Any] | None) -> Any | None:
 def _apply_equivalence(subscripts: str, operands: Sequence[Any], mapping: Any, *,
                        use_blas: bool, optimize: Any, memory_limit: Any,
                        backend: str, specialize: bool, kernel_force: str | None,
+                       optimize_topology_v2: str = "greedy",
                        profile: bool = False) -> Any | None:
     """把一条改写**照做**：重排 → 按需 transpose + 连续副本 → 递归 → 按需转回。
 
@@ -1013,6 +1086,7 @@ def _apply_equivalence(subscripts: str, operands: Sequence[Any], mapping: Any, *
                       optimize=optimize, memory_limit=memory_limit,
                       backend=backend, specialize=specialize,
                       kernel_force=kernel_force, as_equivalence=False,
+                      optimize_topology_v2=optimize_topology_v2,
                       profile=profile)
     if mapping.output_permutation is not None:
         result = result.transpose(tuple(mapping.output_permutation))
@@ -1091,6 +1165,7 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
                               use_blas: bool, optimize: Any, memory_limit: Any,
                               backend: str, specialize: bool,
                               kernel_force: str | None,
+                              optimize_topology_v2: str = "greedy",
                               cache: bool | None = None,
                               payload: Any = None) -> Any | None:
     """用等价写法跑一次并把结果转回原输出轴序；不适用时返回 ``None``。
@@ -1117,7 +1192,8 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
         return None          # 映射的目的是命中特化形态，关掉就没意义
 
     call = dict(use_blas=use_blas, optimize=optimize, memory_limit=memory_limit,
-                backend=backend, specialize=specialize, kernel_force=kernel_force)
+                backend=backend, specialize=specialize, kernel_force=kernel_force,
+                optimize_topology_v2=optimize_topology_v2)
 
     if payload is not None:
         token = _equivalence_token(subscripts, payload)
@@ -1248,7 +1324,9 @@ def _profile_optimize_value(value: Any) -> Any:
     text = _profile_optimize(value).strip().lower()
     if text == _OPTIMIZE_NONE_LABEL:
         return False                     # 双向：读回的表值与调用方写法同一个意思
-    if not text or text in (_kernel_force.AUTO_LABEL, "true", "false"):
+    # ``auto`` 是 ``optimize`` 的**缺省值**（不是表给出的选择），读回时不可施加；
+    # 它与内核标签的 ``auto`` 无关——那一档已被删除，这里保留的是合法取值本身。
+    if not text or text in ("auto", "true", "false"):
         return None
     return text if text in paths.PATH_OPTIONS else None
 
@@ -1417,23 +1495,29 @@ def _profile_conflict_message(key: Mapping[str, Any], row: Mapping[str, Any],
 def _profile_check_conflict(key: dict[str, Any], row: dict[str, Any], *,
                             caller_force: tuple[str, ...] | None, optimize: Any,
                             as_equivalence: bool | str | None,
-                            has_equivalence: bool) -> None:
+                            has_equivalence: bool,
+                            caller_force_given: bool | None = None) -> None:
     """用户**显式**配置与命中行冲突 → 抛 :class:`~._profile_cache.ProfileConflict`。
 
     只比"用户真的给了的"三个维度（``kernel_force`` / ``optimize`` /
     ``as_equivalence``）：显式要求既不能被静默忽略，也不能被表悄悄改掉。``out=`` /
     ``specialize=False`` 只是"不施加"，不是冲突；``optimize="auto"`` 是缺省值，不算
     显式。
+
+    ``caller_force`` 是**解析出的**强制集，``caller_force_given`` 是"调用方真的给过"的
+    显式位（``None`` = 由 ``caller_force is not None`` 推，兼容只有解析结果的调用方）。
+    两者必须分开：缺省取值同样解析成 ``generic``（``()``），只看取值就会让每一次默认
+    调用都撞上表里的具体标签。
     """
+    if caller_force_given is None:
+        caller_force_given = caller_force is not None
     recorded_kernel = _profile_force_label(str(row.get("kernel") or ""))
-    if caller_force is not None and recorded_kernel is not None:
-        # ``caller_force == ()`` 是 ``kernel_force="generic"`` 的解析结果（见
-        # :func:`._kernel_force.forced_labels`：``generic`` → 空元组），它是一个**显式**
-        # 要求，不是"没给"。过滤掉它会让"显式 generic 撞上表中 topology"静默通过，
-        # 正好违反 §2.4——所以这里要把它还原成 ``{"generic"}`` 再比。
+    if caller_force_given and caller_force is not None and recorded_kernel is not None:
+        # ``caller_force == ()`` 是一个**显式**要求（"只走通用路径"），不是"没给"。
+        # 过滤掉它会让"显式 generic 撞上表中 topology"静默通过，正好违反 §2.4——
+        # 所以这里要把它还原成 ``{"generic"}`` 再比。
         allowed = ({_kernel_force.GENERIC_LABEL} if caller_force == ()
-                   else {label for label in caller_force
-                         if label != _kernel_force.AUTO_LABEL})
+                   else set(caller_force))
         if allowed and recorded_kernel not in allowed:
             requested = ",".join(caller_force) or _kernel_force.GENERIC_LABEL
             raise _profile_cache.ProfileConflict(
@@ -1468,7 +1552,7 @@ def _profile_check_conflict(key: dict[str, Any], row: dict[str, Any], *,
 def _profile_begin(profile: bool | None, profile_dir: str | None, subscripts: Any,
                    operands: Sequence[Any], *, backend: str, out: Any,
                    specialize_on: bool, caller_force: tuple[str, ...] | None,
-                   optimize: Any,
+                   caller_force_given: bool, optimize: Any,
                    as_equivalence: bool | str | None = None) -> dict[str, Any] | None:
     """画像入口：返回本次调用的记录槽，``None`` 表示本次不画像（零副作用）。
 
@@ -1484,7 +1568,9 @@ def _profile_begin(profile: bool | None, profile_dir: str | None, subscripts: An
     抛 :class:`~._profile_cache.ProfileConflict`（向上冒泡到 CLI）。``out=`` /
     ``specialize=False`` 只让内核建议"不施加"，不是冲突。
 
-    这一层**不写表**：配置表只有 tune 能写（§1）。
+    ``caller_force`` 是解析出的强制集（``generic`` → ``()``），``caller_force_given``
+    是"调用方真的给过"的显式位。两者必须分开：缺省取值同样解析成 ``()``，拿它当
+    "显式要求"会让每一次默认调用都走进"未施加"分支。
     """
     if not _profile_cache.enabled(profile):
         return None
@@ -1526,7 +1612,8 @@ def _profile_begin(profile: bool | None, profile_dir: str | None, subscripts: An
     info["equivalence"] = payload
     _profile_check_conflict(key, row, caller_force=caller_force, optimize=optimize,
                             as_equivalence=as_equivalence,
-                            has_equivalence=payload is not None)
+                            has_equivalence=payload is not None,
+                            caller_force_given=caller_force_given)
 
     label = str(row.get("kernel") or "")
     force = _profile_force_label(label)
@@ -1540,8 +1627,7 @@ def _profile_begin(profile: bool | None, profile_dir: str | None, subscripts: An
         if payload is None:
             _profile_notice(info, row=row)
         return info
-    if force is None or caller_force is not None or out is not None \
-            or not specialize_on:
+    if force is None or caller_force_given or out is not None or not specialize_on:
         info["note"] = f"profile 命中未施加（kernel={label or '?'}）"
         _profile_notice(info, row=row)
         return info
@@ -1591,6 +1677,7 @@ def contract(
     out: Any = None,
     use_blas: bool = True,
     optimize: Any = "auto",
+    optimize_topology_v2: str = "greedy",
     memory_limit: Any = None,
     backend: str = "auto",
     specialize: bool | None = None,
@@ -1624,6 +1711,17 @@ def contract(
         ignored) for a single n-ary einsum, an explicit path, the name of a
         registered optimizer (``"greedy"``/``"optimal"``/``"dp"``), or
         ``True``/``None``/``"auto"`` (default) to let the planner decide.
+    optimize_topology_v2 : str
+        Contraction order used **only when the ``topology`` kernel falls back to
+        its v2 generic executor** (``LAST_INFO['path'] == 'kupl_topology_v2'``).
+        One of ``greedy`` (default), ``optimal``, ``dp``, ``branch_1``,
+        ``branch_2``, ``branch_all``, ``none``; anything else (including ``None``,
+        which would otherwise read as the ``"none"`` leaf) raises ``ValueError`` —
+        never a silent fallback to ``greedy``. It is deliberately **separate from**
+        ``optimize``: that one is handed to every other kernel and stays at "no
+        planning" for ``topology``. On a v3 hit (``kupl_topology``) the compiled
+        step table supplies the order and ignores the plan's step order, so the
+        value cannot change that call's route or numbers.
     memory_limit : int | str | None
         Upper bound on any intermediate's element count. ``None``/``-1`` means
         unlimited, ``"max_input"`` means the largest input tensor.
@@ -1634,14 +1732,14 @@ def contract(
         ``None`` (default) follows ``PYQCD_EINSUM_SPECIALIZE``; ``False`` forces
         the generic path for this call; ``True`` forces the specialized path.
     kernel_force : str | None
-        Which specialised kernel may run. ``None``/``"auto"`` (default) keeps the
-        original dispatch: try ``*_dedicated`` then ``*_topology``, and fall back
-        to the generic path with one ``RuntimeWarning`` when none of them runs.
-        ``"generic"`` skips the specialised kernels entirely (no warning).
-        ``"dedicated"``/``"topology"`` allow exactly that kernel **of the operand
-        backend** (``kupl_*`` for numpy, ``cuda_*`` for cupy), comma separated to
-        allow both, tried in the order written; forcing bypasses the kernels'
-        negative cache, and a kernel that does not run raises
+        Which specialised kernel **must** run. All four values are forced ones —
+        there is no ``"auto"`` (automatic routing belongs to ``--tune``'s measured
+        winner, see :mod:`._kernel_force`): ``None`` (default) resolves to
+        ``"generic"``. ``"generic"`` skips the specialised kernels entirely (no
+        warning). ``"dedicated"``/``"topology"`` allow exactly that kernel **of the
+        operand backend** (``kupl_*`` for numpy, ``cuda_*`` for cupy); **one value
+        only**, a comma-separated chain raises ``ValueError``. Forcing bypasses the
+        kernels' negative cache, and a kernel that does not run raises
         ``KernelUnavailableError`` instead of falling back silently. ``"backend"``
         leaves the specialised dispatch altogether and calls the backend's own
         ``einsum``; it cannot be combined with the other labels. An explicit
@@ -1767,9 +1865,20 @@ def contract(
     # 所以起点就在函数的第一个语句取。
     entry_started = time.perf_counter()
 
-    optimize = _normalize_optimize(optimize)
-    if (optimize is True) or (optimize is None):
-        optimize = "auto"
+    # ``optimize`` 的归一化要等**内核定型**：``"none"`` 对 topology 是"顺序由内核
+    # 决定"（该内核唯一合法的 optimize 输入），对其余内核是"不使用 optimize"。
+    # 因此这里只记下原值，解析放在 ``forced`` 求值之后（见 ``_resolve_optimize``）。
+    requested_optimize = optimize
+
+    # ``optimize_topology_v2`` 在**入口**就校验：它只在 topology 回落到 v2 时才被
+    # 读到，若等到那时才报错，非法拼写就会随"这次没走 topology"而静默通过——同一份
+    # 调用换个内核才炸，等于把一个取值错误变成路径问题。归一后的值是唯一会下发到
+    # 原生计划的那个（见 ``_attempt_kernel``），``optimize`` 不参与。
+    optimize_topology_v2 = _normalize_optimize_topology_v2(optimize_topology_v2)
+
+    # ``as_equivalence`` 先归一成三态：``bool("false")`` 是 ``True``，直接把字符串交给
+    # 布尔判定会**反转**这个开关（本文件所有判定都只认布尔/None）。
+    as_equivalence = _normalize_as_equivalence(as_equivalence)
 
     global _FUSED_ENV_OWNED, _LAST_KERNEL
 
@@ -1780,11 +1889,20 @@ def contract(
     # 避免每次调用重复读环境变量。
     specialize_on = _specialize.enabled(specialize)
 
-    # 强制内核：显式 ``kernel_force=`` 优先于 ``PYQCD_EINSUM_KERNEL_FORCE``。三态语义：
-    # ``None`` = 自动分派（旧行为逐字不变）；``()`` = 完全跳过专用内核；
-    # 非空元组 = 只允许这些**逻辑名**（按书写次序，运行时按后端解析成具体标签），
-    # 跑不成就抛 KernelUnavailableError。
+    # 强制内核：显式 ``kernel_force=`` 优先于 ``PYQCD_EINSUM_KERNEL_FORCE``。取值**单值**：
+    # ``generic``（缺省）→ ``()``；``dedicated`` / ``topology`` / ``backend`` → 长度 1 的
+    # 元组。没有"未指定 → 自动分派"的档（自动选路交给 tune 的实测结论）。
+    #
+    # ``caller_force_given`` 是"**用户真的给过**"的显式位，在解析与任何默认填充之前取：
+    # 缺省取值同样解析成 ``generic``，拿解析结果反过来判断显式性，会把每一次默认调用都
+    # 当成"用户点名了 generic"（画像命中因此永远不施加，那唯一一行 ``<file>:<行号>``
+    # 提示也就永远走不到）。环境变量那一路不需要这个位：它与表冲突时照样由
+    # ``_profile_check_conflict`` 抛 ``ProfileConflict``（见 ``caller_force == ()`` 分支）。
+    caller_force_given = kernel_force is not None
     forced = _kernel_force.forced_labels(kernel_force)
+    optimize = _resolve_optimize(requested_optimize, forced)
+    if (optimize is True) or (optimize is None):
+        optimize = "auto"
     if forced:
         # "强制即真试一次"：凡是会让专用内核根本跑不到的开关，一律早失败，
         # 不做"半强制"的静默回落。
@@ -1793,15 +1911,16 @@ def contract(
                 "kernel_force= 只能用于字符串方程；交错/字典形式的输入没有专用内核可强制")
         if out is not None:
             raise ValueError(
-                "out= 会禁用专用内核，不能与强制指定内核同时使用："
-                "去掉 out=，或把 kernel_force 设回 'auto'")
+                "out= 会禁用专用内核，不能与强制指定内核同时使用：去掉 out=，"
+                f"或把 kernel_force 设为 {_kernel_force.GENERIC_LABEL!r}")
 
     # 配置画像：命中只决定内核目标、收缩序与等价改写，方程/dtype/形状/数值一概不动
     # （冲突报错见 _profile_check_conflict，建议跑不成的回退见 _profile_retry）。
     # 这一层**只读**：配置表只有 tune 能写。
     info = _profile_begin(profile, profile_dir, subscripts, operands,
                           backend=backend, out=out, specialize_on=specialize_on,
-                          caller_force=forced, optimize=optimize,
+                          caller_force=forced,
+                          caller_force_given=caller_force_given, optimize=optimize,
                           as_equivalence=as_equivalence)
     requested_backend, requested_kernel_force = backend, kernel_force
     requested_forced = forced
@@ -1897,7 +2016,8 @@ def contract(
                         # 强制具体标签：按用户给的次序真试一次，跑不成即抛。
                         try:
                             kernel_result = _run_forced_kernel(
-                                subscripts, operands, forced, record)
+                                subscripts, operands, forced[0], record,
+                                optimize_topology_v2)
                         except _kernel_force.KernelUnavailableError:
                             if not forced_by_profile:
                                 raise
@@ -1906,7 +2026,8 @@ def contract(
                                 optimize=optimize, memory_limit=memory_limit,
                                 backend=requested_backend, specialize=specialize,
                                 kernel_force=requested_kernel_force,
-                                as_equivalence=as_equivalence, cache=cache, **kwargs)
+                                as_equivalence=as_equivalence, cache=cache,
+                                optimize_topology_v2=optimize_topology_v2, **kwargs)
                         if info is not None:
                             info["kernel"] = record["ran"] or "generic"
                         if not quiet_profile:
@@ -1941,9 +2062,35 @@ def contract(
                 elif forced:
                     # 语料没命中却强制了具体标签：旧行为是静默走通用路径，这里必须真试
                     # 一次，并明确报出"未尝试"或具体原因。
+                    #
+                    # **先做等价改写**（``as_equivalence`` 开启时）：改写的唯一目的就是
+                    # 命中特化形态，而"原方程不在语料里"正是改写能帮上忙的场景。此前
+                    # 直接拿原方程去强制内核，必然 ``KernelUnavailableError``，改写
+                    # 根本没机会生效（2026-11-18 用户实测：
+                    # `kernel_force=topology` + `as_equivalence=true` 必定失败，而同一条
+                    # 改写后的方程单独跑 ``try_topology_apply`` 却成功）。
+                    if (isinstance(subscripts, str) and out is None and not kwargs
+                            and not callable(optimize)
+                            and not isinstance(optimize, (list, tuple))
+                            and _equivalence.as_equivalence_enabled(as_equivalence)
+                            and specialize_on):
+                        rewritten = _contract_via_equivalence(
+                            subscripts, operands, use_blas=use_blas, optimize=optimize,
+                            memory_limit=memory_limit, backend=backend,
+                            specialize=specialize_on, kernel_force=kernel_force,
+                            optimize_topology_v2=optimize_topology_v2,
+                            cache=cache,
+                            payload=info.get("equivalence") if info is not None else None)
+                        if rewritten is not None:
+                            if info is not None:
+                                info["kernel"] = ("" if kernel_force is None
+                                                  else str(kernel_force).strip().lower()
+                                                  ) or _EQUIVALENCE_LABEL
+                            return _profile_end(info, rewritten)
                     try:
                         kernel_result = _run_forced_kernel(
-                            subscripts, operands, forced, record)
+                            subscripts, operands, forced[0], record,
+                            optimize_topology_v2)
                     except _kernel_force.KernelUnavailableError:
                         if not forced_by_profile:
                             raise
@@ -1952,7 +2099,8 @@ def contract(
                             optimize=optimize, memory_limit=memory_limit,
                             backend=requested_backend, specialize=specialize,
                             kernel_force=requested_kernel_force,
-                            as_equivalence=as_equivalence, cache=cache, **kwargs)
+                            as_equivalence=as_equivalence, cache=cache,
+                            optimize_topology_v2=optimize_topology_v2, **kwargs)
                     if info is not None:
                         info["kernel"] = record["ran"] or "generic"
                     return _profile_end(info, kernel_result)
@@ -2019,18 +2167,18 @@ def contract(
         equivalence_result = _contract_via_equivalence(
             subscripts, operands, use_blas=use_blas, optimize=optimize,
             memory_limit=memory_limit, backend=backend, specialize=specialize_on,
-            kernel_force=kernel_force, cache=cache, payload=payload)
+            kernel_force=kernel_force, optimize_topology_v2=optimize_topology_v2,
+            cache=cache, payload=payload)
         if equivalence_result is not None:
             # 本次是**等价改写**跑成的：原方程上强制具体内核会失败（它本来就不在
             # 语料里），所以这个标签不可重放；但必须如实标注，别沿用初始值
             # ``generic``——那会把"改写+topology"谎报成"通用路径"（实跑复现过）。
             if info is not None:
-                # 记录**可重放的那个选择**：调用方显式强制了内核时，强制值本身
-                # 就是合法且可复现的建议。只有"没强制、纯靠改写跑成"才记
+                # 记录**可重放的那个选择**：调用方（或画像）给了内核时，那个值本身
+                # 就是合法且可复现的建议。只有"没给、纯靠改写跑成"才记
                 # `equivalence`——它在原方程上强制内核必然"未尝试"，不可重放。
                 _text = "" if kernel_force is None else str(kernel_force).strip().lower()
-                info["kernel"] = (_text if _text and _text != _kernel_force.AUTO_LABEL
-                                  else _EQUIVALENCE_LABEL)
+                info["kernel"] = _text or _EQUIVALENCE_LABEL
             return _profile_end(info, equivalence_result)
 
     global _LAST_CONTRACT
@@ -2127,6 +2275,10 @@ def contract(
             memory_limit=memory_limit,
             einsum_call=True,
             use_blas=use_blas,
+            # ``cache=False`` 的公开语义是"本次调用所有 einsum 缓存既不读也不写"，
+            # 规划缓存（``api.find_path``）也在其中；这里不把开关传下去，那半句话就
+            # 只剩匹配器成立（诊断用的 cache=False 调用仍会热身/污染规划缓存）。
+            cache=cache,
         )
         _cache_contract_plan(plan_key, contraction_list)
 
@@ -2215,7 +2367,13 @@ def _native_compatible(operands: Sequence[Any], backend: str, kwargs: dict[str, 
 
 
 def _fused_disabled() -> bool:
-    """当前调用是否禁用原生融合路径（specialize=False 时由 env 标记）。"""
+    """当前调用是否禁用原生融合路径（specialize=False 时由 env 标记）。
+
+    它现在**只进缓存键**（``_native_plan_key`` 与 ``_try_native_contract`` /
+    ``_compile_native_expression`` 各自的 key），不再决定"跑不跑融合核"——CUDA
+    融合核已删除。**不要**因为"名字还在、语义没人读"就删掉它：删掉会让两种
+    ``specialize`` 状态共用同一份原生计划/编译缓存。
+    """
     return os.environ.get(_specialize.FUSED_DISABLE_ENV) is not None
 
 
@@ -2472,7 +2630,13 @@ _CUDA_FUSED_EQUATIONS = ("ab,...bce,cd->...dae",)
 
 
 def _cuda_fused_shape(equation: str | None) -> bool:
-    """True when the CUDA executor has a fused kernel for this equation."""
+    """True when the CUDA executor has a fused kernel for this equation.
+
+    这个名单是**CUDA 执行器的准入证**，不是"融合核存在性"的记录：名单里的方程会被
+    放行进原生执行器，名单外的直接回落 ``cupy.einsum``（实测在 16×1024² 的
+    complex128 上快约 5 倍）。逐项改动它等于改选路，不是改注释——加方程前先确认
+    原生侧确实有对应的步表。
+    """
     if not equation:
         return True                       # 未知时保持原生（保守）
     normalised = equation.replace(" ", "")
@@ -2582,6 +2746,11 @@ def _try_native_contract(
     if native_cache is None and key in _NATIVE_CONTEXT_UNAVAILABLE:
         return _execute_native_plan(plan, key, operands, out, native_backend)
 
+    if native_backend == "cuda":
+        # CUDA 没有可复用的编译上下文：compiled-context ABI 已随融合 kernel 一起删除。
+        # 逐次下发同一份计划（``contract_plan``），数值与形状不变。
+        return _execute_native_plan(plan, key, operands, out, native_backend)
+
     try:
         program = _native_executor().compile(plan, backend=native_backend)
     except Exception as exc:
@@ -2617,6 +2786,10 @@ def _compile_native_expression(
         return None
     native_backend = _native_backend(backend)
     if native_backend is None:
+        return None
+    if native_backend == "cuda":
+        # CUDA 没有可复用的编译上下文（该 ABI 已随融合 kernel 删除）：每次调用都由
+        # ``_try_native_contract`` 下发同一份计划，因此这里没有"预编译程序"可返回。
         return None
     try:
         from ._native_plan import encode_execution_plan

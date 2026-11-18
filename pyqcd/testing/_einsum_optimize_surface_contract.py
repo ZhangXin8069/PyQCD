@@ -1,25 +1,29 @@
-"""契约：`optimize` 的**对外取值恰好 6 个**（`auto / none / greedy / optimal / dp / branch`）。
+"""契约：``optimize`` 的**对外取值面**——7 个叶子，三份文档逐字同一段约定。
 
 为什么值得单独立契约
---------------------
-``paths.PATH_OPTIONS`` 目前装着 14 个名字，其中 9 个**不是**对外约定：6 个是退化别名
-（与某个对外名字是**同一个函数对象**），3 个是待清除的历史名字（``branch-*``）。
-名字一多，症状都很安静：``contract(optimize="eager")`` 能跑、数值也对，于是"对外只有
-6 个"就变成一句没人能验证的宣言。数值测试抓不到"名字面"是否收窄，所以这里钉四条能
-各自独立失败的断言：
+-------------------
+名字面是数值测试永远抓不到的缺口：``contract(optimize="eager")`` 能跑、数值也对，
+于是"对外只有哪几个名字"就变成一句没人能验证的宣言；反过来 ``branch`` 这种
+"看起来合理"的拼写会直接 ``KeyError``，用户只能靠试。所以这里同时钉住**两侧**：
 
-1. 5 个注册表名字都能被 ``paths.get_path_fn`` 解析；``none`` **不在**注册表，靠
-   ``_api._normalize_optimize("none") -> False`` 与 ``optimize=False`` 共用同一条
-   单步路径（现状，数值等价由 ``_einsum_optimize_none_contract`` 单独钉住）；
-2. 6 个名字都能被 ``contract(..., optimize=<v>)`` 成功执行，数值 ``rel <= 1e-12``；
-3. **反向**：``paths.PATH_OPTIONS`` 去掉这 6 个之后，剩下的名字**恰好**是契约里登记的
-   那 9 个，且每个都在三份文档里被逐条标注为 ``退化别名`` 或 ``待清除``——多一个、
-   少一个、改了标注都失败，不许沉默；
-4. 三份文档（``pyqcd/einsum/AGENTS.md``、``docs/einsum_user_guide_20261116.md``、
-   ``skills/pyqcd-einsum/SKILL.md``）里那段约定**逐字相同**。
+1. 文档侧——:data:`SURFACE_BLOCK` 那段约定在三份文档（``pyqcd/einsum/AGENTS.md``、
+   ``docs/einsum_user_guide_20261116.md``、``skills/pyqcd-einsum/SKILL.md``）里
+   **逐字相同**，首行声明的名字清单就是那 7 个（顺序也一致）；
+2. 代码侧——``paths.PATH_OPTIONS`` 去掉运行时注册的名字与兼容别名之后**恰好**是
+   这 7 个；多一个、少一个都失败，不许沉默。
 
-清理那 9 个名字时先改 ``DEGENERATE`` / ``TO_BE_REMOVED`` 与本契约、再改实现；
-否则第 3 条立刻红——这正是它存在的理由。
+7 个叶子（:data:`PUBLIC_OPTIMIZE`）：``greedy`` / ``optimal`` / ``dp`` /
+``branch_1`` / ``branch_2`` / ``branch_all`` / ``none``。
+
+``auto`` **不在此列**：它是 ``contract(optimize=...)`` 的签名缺省值、也是
+``paths._IMPLICIT_DEFAULT_NAMES`` 里的内部归一结果，``paths.get_path_fn("auto")``
+照旧抛 ``KeyError``；CLI 的 ``--optimize`` 也因此不接受它（缺省值是 ``None`` =
+"未指定"，内部再归一回 ``auto``）。
+
+与 :mod:`._einsum_optimize_leaves_contract` 的分工：那个契约钉**运行时**名字面
+（解析结果 ``is`` 同一个对象、``PATH_OPTIONS_MAIN``、已删拼写必须抛错、``none``
+的内核语义）；本契约钉**对外文档**那一面（逐字一致 + 文档清单与注册表一致），
+外加"7 个名字都解析得出来、都跑得通"这两条端到端保险。
 
 可直接运行::
 
@@ -27,7 +31,6 @@
 """
 from __future__ import annotations
 
-import inspect
 import re
 import unittest
 from pathlib import Path
@@ -35,54 +38,37 @@ from typing import Any
 
 import numpy as np
 
-from ..einsum import _api, _plan_py, contract, contract_path, paths
+from ..einsum import _api, contract, contract_path, paths
 
 #: 对外取值（顺序即文档里的写法，**逐字**比对）。
-PUBLIC_OPTIMIZE = ("auto", "none", "greedy", "optimal", "dp", "branch")
+PUBLIC_OPTIMIZE: tuple[str, ...] = (
+    "greedy", "optimal", "dp", "branch_1", "branch_2", "branch_all", "none",
+)
 
-#: 必须在 ``paths.PATH_OPTIONS`` 里的那几个（``none`` 不在注册表，见模块 docstring）。
-REGISTRY_OPTIMIZE = tuple(name for name in PUBLIC_OPTIMIZE if name != "none")
+#: 兼容别名 → 主名：必须解析到**同一个**函数对象。
+#: 2026-11-18 用户裁定"拼写统一下划线"后，连字符 ``branch-*`` 与
+#: ``dynamic-programming`` **全部删除**——保留两条拼写会让 README、配置表与
+#: ``--help`` 各写一套。此表因此为空，保留常量只为让"不允许别名"可被断言。
+ALIASES: dict[str, str] = {}
 
-#: 退化别名：值与目标是**同一个函数对象**（``get_path_fn(name) is get_path_fn(target)``）。
-DEGENERATE: dict[str, str] = {
-    "auto-hq": "auto",
-    "dynamic-programming": "dp",
-    "eager": "greedy",
-    "opportunistic": "greedy",
-    "random-greedy": "greedy",
-    "random-greedy-128": "greedy",
-}
-
-#: 待清除的历史名字：有独立实现（窄宽分支或全宽的 partial 包装），但不在对外约定里。
-TO_BE_REMOVED: frozenset[str] = frozenset({"branch-all", "branch-1", "branch-2"})
-
-#: 每个多余名字在文档里的**唯一**标注行（三份文档共用，逐字一致；表格竖线保留）。
-EXTRA_LABEL_ROWS: dict[str, str] = {
-    "auto-hq": "| `auto-hq` | 退化别名 ≡ `auto`（同一函数对象） |",
-    "dynamic-programming":
-        "| `dynamic-programming` | 退化别名 ≡ `dp`（同一函数对象） |",
-    "eager": "| `eager` | 退化别名 ≡ `greedy`（同一函数对象） |",
-    "opportunistic": "| `opportunistic` | 退化别名 ≡ `greedy`（同一函数对象） |",
-    "random-greedy": "| `random-greedy` | 退化别名 ≡ `greedy`（同一函数对象） |",
-    "random-greedy-128":
-        "| `random-greedy-128` | 退化别名 ≡ `greedy`（同一函数对象） |",
-    "branch-all": "| `branch-all` | 待清除（≡ `branch`，全宽；注册表里仍是独立名字） |",
-    "branch-1": "| `branch-1` | 待清除（窄宽变体 `nbranch=1`，仅供 `auto`） |",
-    "branch-2": "| `branch-2` | 待清除（窄宽变体 `nbranch=2`，仅供 `auto`） |",
-}
+#: 每个别名在三份文档里的**唯一**标注行（逐字一致；表格竖线保留）。
+EXTRA_LABEL_ROWS: dict[str, str] = {}
 
 #: 那段约定的**逐字**文本（六行；文档里允许带 ``> `` 引用前缀与不同标题层级）。
 SURFACE_BLOCK: tuple[str, ...] = (
-    "**qcd-einsum 对外提供的 `optimize` 取值只有 6 个："
-    "`auto / none / greedy / optimal / dp / branch`。**",
-    "`auto` 为默认值（选择器：按算子数查表，≤8 算子且 opt_einsum 可用时改用其 DP 结果）。",
+    "**qcd-einsum 对外提供的 `optimize` 取值只有 7 个："
+    "`greedy / optimal / dp / branch_1 / branch_2 / branch_all / none`。**",
+    "不写 `optimize` 时走内置选择器 `auto`（按算子数查表，≤8 算子且 opt_einsum 可用时"
+    "改用其 DP 结果）；`auto` 是**缺省值而不是可写取值**，CLI 与配置表都不接受它。",
     "`none` = 按方程原序（亦可用 `optimize=False` 表示）。"
-    "`branch` = 全宽分支定界（≡ 内部 `branch_all`）。",
-    "内部另有窄宽变体 `branch_1` / `branch_2`，**仅供 `auto` 使用，不属于对外取值**。",
-    "`auto-hq`（≡`auto`）、"
-    "`eager`/`opportunistic`/`random-greedy`/`random-greedy-128`（≡`greedy`）",
-    "为**退化别名**，不属于对外约定；"
-    "`branch-1`/`branch-2`/`branch-all` 属**待清除的历史名字**。",
+    "`branch_1` / `branch_2` / `branch_all` = 分支定界的窄/全宽变体，三者都是对外取值。",
+    "`branch-1` / `branch-2` / `branch-all`（下划线主名的连字符拼写）与 "
+    "`dynamic-programming`（≡ `dp`）是**兼容别名**，与主名解析到同一个函数对象，"
+    "不算独立名字。",
+    "`auto-hq` / `eager` / `opportunistic` / `random-greedy` / `random-greedy-128` 已"
+    "**从名字面删除**，`paths.get_path_fn` 一律抛 `KeyError`。",
+    "契约：`pyqcd/testing/_einsum_optimize_surface_contract.py`（本节逐字一致）与 "
+    "`_einsum_optimize_leaves_contract.py`（运行时名字面）。",
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -152,30 +138,26 @@ def _find_block(lines: list[str]) -> int:
         "SURFACE_BLOCK 原样贴回，不要改写措辞")
 
 
-# ── 1. get_path_fn：5 个走注册表，none 走 False 归一化 ────────────────────────
+# ── 1. get_path_fn：7 个名字都解析得出来 ──────────────────────────────────────
 def test_get_path_fn_resolves_every_public_name() -> None:
-    """6 个对外名字都能落到"一条可执行的规划路径"上（``none`` 经 False 归一化）。"""
-    for name in REGISTRY_OPTIMIZE:
+    """7 个对外名字都能落到"一条可执行的规划路径"上（含 ``none`` 的哨兵）。"""
+    for name in PUBLIC_OPTIMIZE:
         resolved = paths.get_path_fn(name)
-        assert callable(resolved), ("注册表名字必须解析成可调用对象", name, resolved)
+        assert callable(resolved), ("optimize 名字必须解析成可调用对象", name, resolved)
 
-    assert _api._normalize_optimize("none") is False, (
-        "现状：none 不进注册表，由 _api._normalize_optimize 归一成 False",)
-    assert _api._normalize_optimize("  NoNe  ") is False, "大小写/空白也要归一"
-    assert _api._normalize_optimize("greedy") == "greedy", "别的名字不许被这条归一吞掉"
-
-    try:
-        resolved_none = paths.get_path_fn("none")
-    except KeyError as exc:
-        # 现状的合法形态：注册表里没有 none，只有归一化那一条路。
-        assert "none" in str(exc), ("KeyError 必须点名 none，别静默变成别的名字", str(exc))
-    else:                                   # 将来把 none 注册进表也必须继续可用
-        assert callable(resolved_none), ("none 若进了注册表，也必须可调用", resolved_none)
+    # ``none`` 是"不规划"的哨兵，不是某个真的优化器 —— 否则上面那条会因为
+    # "反正能调用"而失去意义。
+    assert paths.get_path_fn("none") is paths._NO_PATH, (
+        "optimize='none' 必须解析成 _NO_PATH 哨兵", paths.get_path_fn("none"))
+    for name in PUBLIC_OPTIMIZE:
+        if name != "none":
+            assert paths.get_path_fn(name) is not paths._NO_PATH, (
+                "none 不该与真的优化器共用同一个对象", name)
 
 
-# ── 2. contract()：6 个名字都跑得通且数值一致 ────────────────────────────────
+# ── 2. contract()：7 个名字都跑得通且数值一致 ────────────────────────────────
 def test_contract_runs_every_public_name() -> None:
-    """``contract(..., optimize=<v>)`` 对 6 个取值都成功，数值 ``rel <= 1e-12``。"""
+    """``contract(..., optimize=<v>)`` 对 7 个取值都成功，数值 ``rel <= 1e-12``。"""
     operands = _operands()
     expected = np.einsum(EQUATION, *operands)
     assert _relative_error(expected, expected) == 0.0, "参照本身不可信"
@@ -200,64 +182,74 @@ def test_contract_runs_every_public_name() -> None:
         "该方程上 greedy 与 none 的 path 相同，这条断言区分不出名字是否生效",
         greedy_path)
 
+    # ``branch_all`` 与 ``branch_1`` 必须是**不同**的计划，否则"窄/全宽是三个名字"
+    # 只是文档上的说法（``branch_all`` = ``nbranch=None``，``branch_1`` = 1）。
+    branch_paths = {name: [tuple(step) for step in
+                           contract_path(EQUATION, *operands, optimize=name,
+                                         cache=False)[0]]
+                    for name in ("branch_1", "branch_2", "branch_all")}
+    assert len({tuple(value) for value in branch_paths.values()}) >= 2, (
+        "三个 branch 变体解析成了同一条计划，名字区分没有意义", branch_paths)
 
-# ── 3. 反向：对外集合恰好这 6 个，多余的逐个有标注 ──────────────────────────
-def test_public_surface_is_exactly_the_six() -> None:
-    """``PATH_OPTIONS`` 去掉 6 个对外名字后，剩下的**恰好**是登记的那 9 个。"""
-    extra_expected = set(DEGENERATE) | set(TO_BE_REMOVED)
-    extras = set(paths.PATH_OPTIONS) - set(PUBLIC_OPTIMIZE)
 
-    assert set(REGISTRY_OPTIMIZE) <= set(paths.PATH_OPTIONS), (
-        "对外名字缺在注册表里", sorted(set(REGISTRY_OPTIMIZE) - set(paths.PATH_OPTIONS)))
-    assert extras == extra_expected, (
+# ── 3. 反向：对外集合恰好这 7 个（别名不算），文档清单逐份一致 ───────────────
+def test_public_surface_is_exactly_the_seven() -> None:
+    """``PATH_OPTIONS`` 去掉运行时注册与别名后**恰好**是这 7 个。"""
+    registered = set(paths._REGISTERED)      # 调用方可以注册自己的名字
+    declared = set(paths.PATH_OPTIONS) - registered
+    aliases = set(ALIASES)
+    leaves = set(PUBLIC_OPTIMIZE)
+
+    assert leaves <= declared, (
+        "对外名字缺在注册表里", sorted(leaves - declared))
+    assert declared - aliases == leaves, (
         "PATH_OPTIONS 的名字面与约定不符",
-        "多出（未登记，不许沉默）", sorted(extras - extra_expected),
-        "缺登记", sorted(extra_expected - extras))
+        "多出（未登记，不许沉默）", sorted(declared - aliases - leaves),
+        "缺少", sorted(leaves - (declared - aliases)))
+    assert not (set(ALIASES) & leaves), ("别名不许混进叶子清单", sorted(set(ALIASES) & leaves))
 
-    # 退化别名必须真的是**同一个函数对象**，不是"另一份实现碰巧等价"。
-    for name, target in sorted(DEGENERATE.items()):
-        assert paths.get_path_fn(name) is paths.get_path_fn(target), (
-            "退化别名必须与目标解析到同一个函数对象", name, target,
-            paths.get_path_fn(name), paths.get_path_fn(target))
+    assert set(paths.PATH_OPTIONS_MAIN) == leaves, (
+        "主清单必须恰好是这 7 个叶子",
+        sorted(set(paths.PATH_OPTIONS_MAIN) - leaves),
+        sorted(leaves - set(paths.PATH_OPTIONS_MAIN)))
 
-    # branch = 全宽分支定界：默认 nbranch=None，等价于内部的 branch_all。
-    branch_sig = inspect.signature(_plan_py.branch)
-    assert branch_sig.parameters["nbranch"].default is None, (
-        "对外 branch 必须是全宽（nbranch=None）", branch_sig)
-    assert _plan_py.branch_all.func is _plan_py.branch, "内部 branch_all 必须是 branch 的包装"
-    assert dict(_plan_py.branch_all.keywords) == {"nbranch": None}, (
-        "内部 branch_all 必须是 branch 的全宽 partial", dict(_plan_py.branch_all.keywords))
-    assert paths.get_path_fn("branch") is _plan_py.branch, (
-        "对外 branch 必须直接落到 _plan_py.branch")
+    # ``auto`` 不在名字面，但规划器必须仍认得它（否则每次缺省调用都 KeyError）。
+    assert "auto" not in paths.PATH_OPTIONS, "auto 是缺省值，不是可写的名字"
+    for spelling in ("auto", "AUTO"):
+        assert paths.is_builtin_path_name(spelling), (
+            "auto 必须仍被规划器承接，否则缺省 contract() 会 KeyError", spelling)
+    assert _api._normalize_optimize("auto") == "auto", (
+        "显式 'auto' 只被规划器承接，不该被归一成某个叶子",
+        _api._normalize_optimize("auto"))
 
-    # 待清除的两个窄宽变体：仅供 auto 查表用，取值与对外名字不同。
-    for name, width in (("branch-1", 1), ("branch-2", 2)):
-        assert name in TO_BE_REMOVED, name
-        resolved = paths.get_path_fn(name)
-        assert callable(resolved), (name, resolved)
-        assert dict(resolved.keywords) == {"nbranch": width}, (
-            "窄宽变体的 nbranch 不对", name, dict(resolved.keywords))
-        assert resolved is not paths.get_path_fn("branch"), (
-            "窄宽变体不该与全宽 branch 是同一个对象", name)
+    # 缺省档（``None`` / ``True``）与显式 ``auto`` 走同一个选择器：三者都必须能收缩。
+    operands = _operands()
+    expected = np.einsum(EQUATION, *operands)
+    for default in (None, True, "auto"):
+        got = contract(EQUATION, *operands, optimize=default, specialize=False,
+                       cache=False, profile=False)
+        error = _relative_error(got, expected)
+        assert error <= RTOL, ("缺省 optimize 必须仍能收缩", default, error)
 
-    auto_values = list(_plan_py._AUTO_CHOICES.values())
-    for narrow in (_plan_py.branch_1, _plan_py.branch_2, _plan_py.branch_all):
-        assert any(value is narrow for value in auto_values), (
-            "窄宽/全宽 branch 变体只应由 auto 的选择器使用", narrow)
+    # 别名必须是**同一个函数对象**，不是"另一份实现碰巧等价"。
+    for alias, target in sorted(ALIASES.items()):
+        assert paths.get_path_fn(alias) is paths.get_path_fn(target), (
+            "兼容别名必须与主名解析到同一个函数对象", alias, target,
+            paths.get_path_fn(alias), paths.get_path_fn(target))
 
-    # 文档侧：三份文档的清单必须就是这 6 个（顺序也一致），且 9 个多余名字逐个有标注。
+    # 文档侧：三份文档的清单必须就是这 7 个（顺序也一致），别名逐个有标注。
     for doc in DOCS:
         assert doc.exists(), ("约定的文档不见了", str(doc))
         lines = _normalized_lines(doc)
         start = _find_block(lines)
-        declared = _declared_names(lines[start])
-        assert declared == PUBLIC_OPTIMIZE, (
-            "文档里的对外清单与代码不一致", str(doc), declared, PUBLIC_OPTIMIZE)
+        names = _declared_names(lines[start])
+        assert names == PUBLIC_OPTIMIZE, (
+            "文档里的对外清单与代码不一致", str(doc), names, PUBLIC_OPTIMIZE)
         known = set(lines)
-        for name in sorted(extras):
+        for name in sorted(ALIASES):
             row = _squash(EXTRA_LABEL_ROWS[name])
             assert row in known, (
-                "文档没有逐条标注这个多余的 optimize 名字", str(doc), name, row)
+                "文档没有逐条标注这个兼容别名", str(doc), name, row)
 
 
 # ── 4. 三份文档逐字一致 ─────────────────────────────────────────────────────
@@ -285,7 +277,7 @@ def test_three_docs_agree_verbatim() -> None:
 TESTS = (
     test_get_path_fn_resolves_every_public_name,
     test_contract_runs_every_public_name,
-    test_public_surface_is_exactly_the_six,
+    test_public_surface_is_exactly_the_seven,
     test_three_docs_agree_verbatim,
 )
 

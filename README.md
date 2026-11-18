@@ -2,404 +2,118 @@
 
 **English** | [中文](https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD/-/blob/main/README.zh-CN.md)
 
-PyQCD is a lattice-QCD toolkit in Python with optional native acceleration.
-It provides building blocks for propagator and operator contractions, gradient
-flow, renormalisation and gluon TMD-PDF extraction, plus a self-contained
-contraction engine with an **`opt_einsum`-compatible API**.
+PyQCD is a lattice-QCD toolkit in Python with optional native acceleration. It
+provides building blocks for propagator and operator contractions, gradient flow,
+renormalisation and gluon TMD-PDF extraction, plus a self-contained contraction
+engine with an **`opt_einsum`-compatible API**.
 
 ## Install
 
-Requires **Python 3.9+**. Python 3.8 is no longer supported because the
-current PEP 639 build metadata requires `setuptools>=77`.
-
 ```bash
-pip install pyqcd
+pip install -U pyqcd
 ```
 
-The **KUPL native kernel is required by default**: `pip install` compiles it and
-aborts with an actionable message if no C++ toolchain is available, instead of
-silently handing you a package that falls back to the pure-Python planner.
-Install `g++`/`c++` plus `bash` and `binutils`, or opt into the pure-Python
-planner explicitly with `PYQCD_SKIP_NATIVE_BUILD=1 pip install pyqcd`
-(`PYQCD_EINSUM_REQUIRE_NATIVE=0` does the same). CUDA stays opportunistic: a
-missing `nvcc` only costs you the GPU kernels.
+**Read what the installer prints — every line.** Native kernels (KUPL on CPU,
+CUDA on GPU) are compiled at install time, so the output tells you whether they
+were built, which toolchain or driver was missing, and which optional dependencies
+were skipped. Ignoring those lines is how you end up with a pure-Python package
+while believing you have native acceleration. Requires Python 3.9+.
 
 Check what you actually got (no imports needed):
 
 ```bash
-python -m pyqcd            # version, native backend, optional deps, subpackages
-python -m pyqcd --json     # machine-readable
+python -m pyqcd           # version, native backend, optional deps, subpackages
+python -m pyqcd --json    # machine-readable
 ```
 
-> **CUDA builds.** The build auto-detects your GPU (`nvidia-smi compute_cap`) and
-> always embeds PTX, so current cards work out of the box; set
-> `PYQCD_CUDA_ARCHITECTURES=<cap>` (e.g. `8.9`) to get native SASS, or when building on a
-> GPU-less login node for a known target.
-
-> **Threads are tuned per call.** Two profiles are switched automatically (`kernel` for the
-> specialised shapes, `generic` for BLAS chains) on the already-loaded runtimes; override with
-> `OMP_NUM_THREADS` / `OPENBLAS_NUM_THREADS` (or `PYQCD_EINSUM_OMP_THREADS` /
-> `PYQCD_EINSUM_BLAS_THREADS`), disable with `PYQCD_EINSUM_THREADS=off`, inspect with
-> `pyqcd.einsum.thread_info()`.
-
-## Unreleased — qcd-einsum: only `--tune` writes the config table
-
-* **One table: `pyqcd.einsum.profile.csv`.** The old name `profile.csv` is deprecated, and
-  `profile_equivalence.csv` is **deleted** — it is no longer created or read. Equivalence
-  conclusions survive only as *equivalence rows* inside that single table.
-* **Only `--tune` writes it; `contract()` is read-only.** The table is a **calibration
-  artefact**: if ordinary calls could append, observations from different machines, load
-  levels and versions would overwrite each other, and the table would stop being a
-  trustworthy result for any of them. Without a tune, a call warns once, prints the tune
-  command for that exact key, and **continues** (treated as a miss).
-* **One row per key.** Two or more rows for the same
-  `(shape, dtype, device, equation, backend)` fail the read: every candidate row is printed
-  and the process exits non-zero — no guessing, no "newest wins".
-* **A hit never overrides an explicit request.** An explicit, non-`auto` `kernel_force` /
-  `optimize` / `as_equivalence` that disagrees with the hit row is an error (key, table
-  value, requested value and row location are printed). `--compare` does not count, and
-  passing `auto` explicitly counts as "not given".
-* **`wall_ms` is the only timing column**: the wall clock of the whole
-  `pyqcd.einsum.contract(...)` call, including the equivalence rewrite, cache reads and, on
-  a miss, planning/matching. It excludes the compare reference and the final write.
-* **`as_equivalence` defaults to `auto`.** `auto` rewrites only when the table holds a
-  tune-written equivalence row for the original equation; otherwise nothing is rewritten.
-  `true` / `false` force the old behaviour, `force` (used by `--tune`) refreshes.
-* **`--tune`** turns the cache off for the whole sweep (`tune_session()`), bounds each call
-  with `--tune-timeout` (default **30 s**), and treats an exception, a timeout or a
-  numerical MISMATCH as a printed note instead of an exit. It sweeps
-  `as_equivalence ∈ {true,false}` × `optimize ∈ {auto, none, compare target}` (10
-  combinations), writes the winning row and **deletes every other row of that key** —
-  including faster historical ones, so a foreign environment cannot contaminate it.
-
-## Release 0.5.3 — qcd-einsum: equivalence routing table, `--tune` hardening
-
-> Superseded by the unreleased entry above: the separate equivalence table with
-> `schema_version`, its "highest version wins" rule, and the 100 s tune timeout are gone.
-
-* **Forcing `generic`/`backend` no longer runs the specialised match or the equivalence
-  rewrite** — they cannot help a generic contraction. Notice wording is single-language
-  (`PYQCD_EINSUM_LANG`), and a profile hit prints **one** line with the cache file and the
-  matched row number; `route :` / `kernel :` (evidence) stay.
-
-## Release 0.5.2 — qcd-einsum: `--tune`, equivalence memo, honest cache rows
-
-> Superseded by the unreleased entry above: the 30-combination sweep, the sparse write gate
-> (per-key four rows) and `profile_equivalence.csv` no longer exist.
-
-## Release 0.5.1 — qcd-einsum: profile cache stops recommending dead ends
-
-> Superseded by the unreleased entry above: the cache no longer stores observations at all —
-> only `--tune` writes it.
-
-## Release 0.5.0 — qcd-einsum: profile cache, narrowed `kernel_force`, explain mode
-
-`0.5.0` is a **minor** release because one public surface changes incompatibly
-(`kernel_force`). Everything else is additive.
-
-**Breaking — `kernel_force` values.** The five logical values are
-`auto | dedicated | topology | generic | backend`. The concrete labels are gone and
-now raise:
-
-| old | new |
-|---|---|
-| `kupl_dedicated`, `cuda_dedicated` | `dedicated` |
-| `kupl_topology`, `cuda_topology` | `topology` |
-
-`dedicated`/`topology` resolve against the operand backend (numpy → kupl,
-cupy → cuda). `backend` is new and means "do not use a specialised kernel at all":
-it calls `backend.einsum` directly, inherits the caller's `optimize`, and skips both
-the specialised dispatch and the equivalence rewrite. Runtime path names in
-`LAST_INFO['path']` (`kupl_dedicated`, …) are unchanged — they are observations,
-not inputs.
-
-**Profile cache.** The current design (one `pyqcd.einsum.profile.csv`, written only by
-`--tune`, `wall_ms` as the single timing column) is described in the unreleased entry at the
-top; the 0.5.0 read+writ/sparse-write behaviour no longer applies.
-
-**Explain mode.** `--explain` (API: `explain=` on the CLI layer only) prints, on the
-first call, how the equation matched (`plan :`), which kernel was chosen
-(`kernel :`) and why a specialised kernel was abandoned (`why :` — unavailable /
-contiguity gate / dtype policy / profile says backend is faster). Later calls print
-one line: cache hit, cache miss, or "profile disabled". Existing output lines are
-untouched — new ones are appended only when the flag is set.
-
-**Hot-path cuts** (measured structurally, not by wall clock): the contract plan cache
-now covers 2-operand non-corpus equations (was ≥3), the equivalence gate is skipped
-when the corpus already matched, and the thread-profile switch has a fast path with
-**zero environment reads and zero `/proc` reads** when the profile does not change
-(was 5 env reads per call).
-
-**Fixed:** profile directory switching inside one process was silently ignored (a
-single boolean gate); `cache=False` could still register a matcher hit through the
-equivalence layer; a pinned `profile_dir` was reset to `./.cache` when the parameter
-was omitted.
-
-## Release 0.4.5 — qcd-einsum: silent fallbacks now leave a trace
-
-`0.4.5` is a diagnostics fix: four places used to fall back to the generic path
-**without leaving any trace**, or reported only the *first* failure of a process —
-so a long-running job could keep failing for a second, different reason while the
-only message pointed at the first one.
-
-* `_shape_paths.try_execute` now records `LAST_FAILURE` (`{"name", "reason"}`) and
-  prints one line per `(shape, exception type)` the first time a registered shape
-  fails, instead of swallowing the exception. "Registered but fell back" is now
-  distinguishable from "not registered at all".
-* `_compile_native_expression` no longer returns `None` in silence: a failed native
-  expression compilation warns with the exception type and message, so the
-  "expression compiled, but every call is an order of magnitude slower" case has a
-  pointer.
-* `_warn_native_fallback_once` and `_warn_specialized_kernel_once` dedupe by
-  **root cause** instead of a single process-wide flag: one warning per distinct
-  cause (`NativeUnavailable: …` signature / exception type+message), no warning
-  for a repeat of the same cause. Same-cause noise is preserved (a missing library
-  still yields exactly one warning), while a *different* failure is no longer
-  swallowed.
-* New contract `_einsum_fallback_visibility_contract` (4 cases) pins all of the
-  above, including "two distinct native reasons each warn once" and "the same
-  cause across the compile and execute layers warns once".
-
-No numerical behaviour changes; no dispatch-order changes.
-
-## Release 0.4.4 — qcd-einsum: kernel forcing, automatic equivalence, caches
-
-`0.4.4` is the **next key qcd-einsum stable release**, so the freeze declared at
-`stab31` is lifted by this release. The three behaviour changes below are the
-reason it is a key release rather than a patch.
-
-* **Forcing a kernel.** `contract(..., kernel_force="cuda_topology")`,
-  `PYQCD_EINSUM_KERNEL_FORCE`, and `--kernel-force` on both CLIs constrain which
-  specialised kernel may run. Unlike the automatic dispatch, a forced kernel that
-  cannot run raises `KernelUnavailableError` (CLI exit code 2) instead of warning
-  and silently falling back; the forced attempt bypasses the negative cache so it
-  really tries once, and `last_kernel()` reports `requested` / `ran` / `attempted`
-  / per-label `reasons`.
-* **Applying an equivalent spelling automatically.** `contract(..., as_equivalence=)`,
-  `PYQCD_EINSUM_AS_EQUIVALENCE` and `--as-equivalence` let the equivalence layer rewrite
-  the equation, permute the operands and transpose the result back, so a contraction that
-  misses every specialised form can still reach one. (The 0.4.4 default of "always try"
-  has since been replaced by `auto`: see the unreleased entry at the top.) The
-  **returned array is always the answer to the original equation**; an independent
-  output-shape guard raises rather than hand back a mis-shaped result. It is skipped for
-  `out=`, extra kwargs, element-wise equations, explicit optimizer paths and
-  `specialize=False`.
-* **Caches with hit statistics.** `_cache` provides bounded, thread-safe LRUs with
-  `hits/misses/stores/evictions` for the matcher (`specialize.match`), the
-  equivalence lookup (`equivalence.normalize`) and the planner (`api.find_path`).
-  `PYQCD_EINSUM_CACHE`, `contract(..., cache=)`, `--cache`, `cache_stats()` and
-  `cache_clear()` control and inspect them; `cache=False` neither reads nor writes.
-* **Fix:** when several corpus spellings are isomorphic, the equivalence layer now
-  prefers one that needs no operand/output transpose (8638/8638 order variants are
-  zero-cost; it was 772/8638 before), so the mapping no longer manufactures a
-  non-contiguous view that the dedicated kernel's contiguity gate rejects.
-
-Verification: every einsum contract module is green (equivalence 44, kernel force
-9, as-equivalence/cache 7, dispatch 8, cache 8, topology 25, routing 6, query
-subset 8, CLI 49 with its one pre-existing failure) and the full suite is
-`120 passed, 2 skipped, 10 failed` — the 10 failures are the pre-existing GPU
-environment ones (nvrtc refuses `compute_70`), unchanged by this release.
-
-## Release 0.4.2 — documentation fix for the frozen stable release
-
-`0.4.2` corrects a reversed wording in the localised documentation and changes
-nothing else.
-
-* Code, numerics, dispatch and native ABI are identical to `0.4.1`; no behaviour
-  change.
-* The Chinese pages said "不快于" ("not faster than") where the data and the
-  English text say **"not slower than"** — the sentence contradicted its own
-  table (CPU median `0.861x`, 26/43 at least 10% faster, the only counterexample
-  0.7% slower). Thirteen occurrences are fixed; the failure-branch wording in
-  `_topology_perf_multidim.py` was already correct and is unchanged.
-* The freeze from `stab31` still stands: behaviour-changing edits to qcd-einsum
-  remain disallowed by default until the next key stable release.
-
-## Release 0.4.1 — frozen qcd-einsum stable release
-
-`0.4.1` is the **key stable release** for `pyqcd.einsum` (baseline tag `stab31`).
-
-* New: `python -m pyqcd.einsum.verify_specialized "<eq>"` reports which
-  specialised path an equation takes — corpus hit, topology digest, declared
-  kernels and provenance (`seq` / T-id / roles) — **without contracting**:
-  no operands are built, no global state is touched. Exit codes: `0` hit,
-  `1` outside the corpus, `2` malformed equation. Library entry point:
-  `pyqcd.einsum.query_specialization(eq)`.
-* Frozen: until the next key qcd-einsum stable release, changes that affect
-  qcd-einsum behaviour are **disallowed by default** unless the user explicitly
-  forces them. See `pyqcd/einsum/AGENTS.md` §0 for the three exceptions.
-* Everything from `0.4.0` (resource-gated topology specialisation over 8,638
-  equations) is unchanged; numerics, dispatch and native ABI are untouched.
-
-## Release 0.4.0
-
-`0.4.0` is the production-specialisation release for `pyqcd.einsum`.
-
-* The topology-specialised registry covers **8,638 equations** with 6–16
-  operands on both KUPL and CUDA. Every plan passes a fail-open resource gate
-  before native allocation.
-* On the 43-path full-scene audit, CPU is not slower than PyQCD's internal
-  generic path on **42/43** cases (median selected/generic `0.861x`), and CUDA
-  on **42/43** cases (median `0.276x`). The two retained exceptions are
-  `seq=856` on CPU (+0.7%) and `seq=6911` on CUDA (+36.2%).
-* A representative CPU long-chain case, `seq=6585`, drops from **22.445 s** to
-  **10.310 s** (`0.459x`).
-* CUDA is not slower than `opt_einsum 3.4.0` (`dp`) on **42/43** audited paths.
-  CPU is not slower on **36/43**: this release does **not** claim universal CPU
-  superiority over `opt_einsum`; seven CPU plans remain slower.
-
-The specialised route is a production optimisation, not a promise that every
-shape is faster. Native resource limits, pack-heavy low-FLOP plans, unavailable
-kernels and registered native failures deliberately fall back to the generic
-path. Results are unchanged.
-
-## Documentation
-
-* English — https://py-qcd.readthedocs.io/en/latest/usage.html
-* 中文 — https://py-qcd.readthedocs.io/zh-cn/latest/usage.html
-
-## Repositories
-
-| Platform | Role | URL |
-|---|---|---|
-| GitLab (gitlab.itp.ac.cn) | 国内开发 — primary development | https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD |
-| Gitee | 国内发布 — China release mirror | https://gitee.com/zhangxin8069/PyQCD |
-| GitHub | 国外发布 — global release mirror | https://github.com/zhangxin8069/PyQCD |
+Build steps, CUDA architectures, thread and environment knobs are maintained in
+`pyqcd/einsum/AGENTS.md`; this README does not repeat them.
 
 ## Quick start
 
 ```python
-import numpy as np
-import pyqcd.einsum as pe
-
-a = np.arange(6.0).reshape(2, 3)
-b = np.arange(12.0).reshape(3, 4)
-
-pe.contract("ij,jk->ik", a, b)                       # like a @ b
-path, info = pe.contract_path("ij,jk->ik", a, b)     # (path, PathInfo)
-int(info.opt_cost)
-
-expr = pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))
-expr(a, b)                                           # reusable plan
+import numpy as np, pyqcd.einsum as pe
+a, b = np.ones((2, 3)), np.ones((3, 4))
+c = pe.contract("ij,jk->ik", a, b)      # same as a @ b
 ```
 
 The public surface mirrors `opt_einsum`: `contract`, `contract_path`,
 `contract_expression`, `shared_intermediates`, `PathInfo`, `paths`, `backends`,
 `helpers`, `parser`, `blas`.
 
-## What is inside
+## Performance: measure it, then tune
 
-| Subpackage | Content |
-|---|---|
-| `pyqcd.lattice` | lattice constants, DeGrand–Rossi `gamma`, SU(2) Clebsch–Gordan |
-| `pyqcd.gauge` | Wilson/Polyakov loops, Clover field strength, topological charge |
-| `pyqcd.smear` | HYP and Stout smearing |
-| `pyqcd.operator` | Clover / dual field strength, flowed gluon OPE operators |
-| `pyqcd.vertex` | VdV/VVV vertices, momentum smearing, eigenvector compression |
-| `pyqcd.contraction` | Wick contraction, baryon operators, distillation contractions |
-| `pyqcd.renorm` | gradient flow, Z_R, hybrid scheme, NLO matching, TMD extraction |
-| `pyqcd.analysis` | resampling, fits, ratio / effective-mass / energy helpers |
-| `pyqcd.pipeline` | centralised configuration and multi-step pipeline |
-| `pyqcd.parallel` | read-only CPU, memory and GPU resource detection |
-| `pyqcd.einsum` | contraction engine (this package's headline feature) |
+> **Strongly recommended before production use:**
+> `python -m pyqcd.einsum.test --tune --equation "<your equation>" --shape "<your operand shapes>"`
+>
+> **Every performance figure must come from your own measurement. This README
+> quotes no speed-ups, no ratios and no benchmark tables — any number copied from
+> elsewhere is about someone else's machine, shapes and load.**
 
-## Contraction engine
+`--tune` is the **only writer** of the configuration table. On a fixed equation /
+shape / dtype / device / backend it walks an *ordered* list of
+`kernel_force × as_equivalence × optimize` combinations (22 groups for the two
+specialisable branches, 21 for the generic one), prunes any group slower than the
+current `min_wall_ms` bound, and writes the single winning row. Ordinary calls
+only read that table; with no table they warn once, print the tune command for the
+key, and continue unchanged.
 
-* Pure-Python planning (`greedy` / `optimal` / `branch` / `dp`) is always
-  available.
-* Two optional native backends: **KUPL** (CPU) and **CUDA** (GPU). Both export
-  the same C ABI and share one planning core.
-* Fallback is a hard invariant: a missing library, a failed native call or a
-  rejected shape silently degrades to the Python path — results never change.
-* The complete 8,638-equation lattice-QCD topology corpus gets resource-gated
-  specialised dispatch; it is enabled by default and can be turned off per call
-  (`contract(..., specialize=False)`) or per process
-  (`PYQCD_EINSUM_SPECIALIZE=0`).
-
-Introspection:
-
-```python
-import pyqcd.einsum as pe
-
-pe.build_info()        # backend, native_available, array_backend, native_library
-pe.specializations()   # registered equation shapes (8,638 in this release)
-```
-
-## Performance
-
-These are full-scene benchmarks from an A100 node, not smoke tests. Inputs use
-`Nx=Ny=Nz=32`, `Lt=64`, `Nev=100`, `Ns=4`, `Mom=8`, `complex128`, and each
-specialised result is checked against the generic path before timing. Ratios are
-`selected/generic`; values below `1` are faster.
-
-| Evidence set | CPU | GPU |
-|---|---|---|
-| 43 stratified production paths: median ratio | **0.861x** | **0.276x** |
-| 43 paths: not slower than PyQCD generic | **42/43** | **42/43** |
-| 43 paths: at least 10% faster than PyQCD generic | **26/43** | **40/43** |
-| 43 paths vs `opt_einsum(dp)`: not slower | **36/43** | **42/43** |
-
-The six core paths (ratio `<1` means faster):
-
-| `seq` | CPU vs generic | GPU vs generic | CPU vs `opt_einsum(dp)` | GPU vs `opt_einsum(dp)` |
-|---:|---:|---:|---:|---:|
-| 2584 | 0.856x | 0.265x | 0.598x | 0.152x |
-| 866 | 0.936x | 0.248x | 0.891x | 0.213x |
-| 855 | 0.982x | 0.177x | 0.842x | 0.130x |
-| 129 | 0.791x | fallback, 1.017x | 1.297x | 1.179x |
-| 1863 | 0.974x | 0.157x | 0.837x | 0.025x |
-| 6585 | **0.459x** | fallback | not completed | 0.606x, fallback |
-
-All **8,638** plans were additionally audited without executing giant tensors:
-the CPU gate admits 3,833 plans and blocks 4,805; the CUDA gate admits 2,864 and
-blocks 5,774. This prevents plans with multi-terabyte static arenas, oversized
-single GEMMs, or pack-heavy low-FLOP work from reaching the specialised route.
-Full-scene maximum relative errors were `6.95e-15` on CPU and `6.68e-15` on GPU.
-
-```python
-import numpy as np
-import pyqcd.einsum as pe
-
-expr = "gahb,mcnd,oepf,ac,og,Mbdf,Mnph,em->M"   # nucleon 2pt
-fast = pe.contract(expr, *operands)                    # specialised path (default)
-base = pe.contract(expr, *operands, specialize=False)  # general path
-assert np.allclose(fast, base)                         # same numbers, different speed
-```
-
-Per-call `specialize=False` and the process-wide `PYQCD_EINSUM_SPECIALIZE=0`
-switch the optimisation off; both paths must agree numerically.
-
-- **Memory.** The Python execution path peaks at roughly 1.4–2× the RSS of
-  `opt_einsum` on the same shape (measured 18→41 MB at 1200², 73→104 MB at
-  2000²), because one extra output-sized intermediate stays alive per step.
-  Size long jobs accordingly.
-
-The gain comes from topology recognition, resource-aware plan selection, fused
-or dedicated execution where profitable, lifetime-based workspace reuse and
-fallback when the resource envelope is unsafe. It is not universal:
-`opt_einsum(dp)` still wins on seven audited CPU paths, two internal full-scene
-paths are retained as known counterexamples, and the gates intentionally send
-unsafe plans back to the generic path. Full protocol, evidence and reproduction:
-https://py-qcd.readthedocs.io/en/latest/performance.html
-
-### PyTorch
-
-PyTorch tensors are supported through `pip install "pyqcd[torch]"`: `contract()`
-dispatches on the operand type, so `torch.Tensor` in → `torch.Tensor` out on the same
-device (executed by `torch.einsum`, not by the native libraries). Convert to numpy or
-cupy at the boundary if you want the native kernels. Full matrix and examples:
-https://py-qcd.readthedocs.io/en/latest/usage.html#using-pytorch-tensors
-
-## Tests
-
-These suites live in `pyqcd/testing/`, which is **not** part of the PyPI
-distribution; run them from a source checkout:
+For any single equation, `python -m pyqcd.einsum.test` is the only sanctioned
+entry point — one-off scripts are not accepted as evidence:
 
 ```bash
-python -m pyqcd.testing                       # integration suite
-bash pyqcd/testing/simple/run-all.sh          # per-function API parity vs opt_einsum
-bash pyqcd/testing/einsum/simple/run-all.sh   # einsum sub-system suite
+python -m pyqcd.einsum.test --equation "ij,jk->ik" --shape "[4,4],[4,4]->[4,4]"
+# PASS ij,jk->ik  <measured>ms  rss+<N>MiB
+
+python -m pyqcd.einsum.test --equation "cadb,menf,ac,em,bd,fn->" --scene distill --verbose true
 ```
+
+It really contracts, checks the tolerance and reports the route that ran. Exit
+codes: `0` pass, `1` numeric or shape mismatch, `2` bad arguments. `--json <path>`
+writes the full record, `--verbose true` prints the per-field detail including the
+`route` / `kernel` evidence lines. Omit `--shape` and `--scene` infers shapes from
+the corpus roles — those are path/correctness evidence, never production sizes.
+
+## Specialised paths: ask before you assume
+
+```bash
+python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
+```
+
+Strongly recommended before chasing a specialised route. It is a **pure query**:
+no operands are built, `contract()` is not called, no global state changes. It
+matches shape specialisations → the 8,638-equation corpus → the equivalence layer,
+and reports either `HIT` (with digest, corpus provenance and declared kernels) or
+`MISS` (plus an equivalent spelling, with the operand and output permutations,
+when one exists). Exit codes: `0` hit, `1` miss, `2` malformed equation. `--json`
+gives the machine-readable form with language-independent `reason_key` /
+`reason_args`.
+
+A `HIT` means "the corpus knows this topology", **not** "a native kernel will
+run": resource gates, dtype policy, contiguity and library availability can all
+send it back to the generic path. For what actually ran, read the `route` /
+`kernel` lines of `python -m pyqcd.einsum.test`.
+
+## Version summary
+
+* **Unreleased** — the configuration table is written **only** by `--tune`;
+  `contract()` is read-only. One row per key, one timing column (`wall_ms`, the
+  wall clock of the whole `contract()` call). `--kernel-force` takes a single
+  logical value (`generic` / `dedicated` / `topology` / `backend`). Tune sweeps an
+  ordered per-branch list with `min_wall_ms` pruning and writes just the winner.
+* **0.5.3** — equivalence routing table, single-language notices, tune hardening.
+* **0.5.2** — `--tune` and the equivalence memo introduced.
+* **0.5.1** — the profile cache stops recommending dead ends.
+* **0.5.0** — profile cache, narrowed `kernel_force` logical names, explain mode.
+* **0.4.x** — native specialised dispatch over the 8,638-equation corpus, with a
+  hard fallback invariant: results never change, only the route does.
+
+## Documentation and repositories
+
+* Docs — https://py-qcd.readthedocs.io/en/latest/usage.html
+* GitLab (primary) — https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD
+* Gitee — https://gitee.com/zhangxin8069/PyQCD
+* GitHub — https://github.com/zhangxin8069/PyQCD
 
 ## License
 

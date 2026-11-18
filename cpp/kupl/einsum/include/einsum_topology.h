@@ -10,14 +10,16 @@
  *
  * 一次调用跑完整条 version-2 执行计划：计划字节流仍由
  * pyqcd/einsum/_native_plan.py 生产（格式不变），本入口在 C++ 内部按步执行，
- * 逐步做打包(permute/copy) + CBLAS 调用，中间结果走进程内 BufferPool 复用，
+ * 逐步做打包(permute/copy) + CBLAS 调用，中间结果走进程内 block_pool() 复用，
  * 因此不再需要调用方在 Python 侧逐步调度每一步。
  *
- * 与 applyContractQcd 的关系：两者执行同一个解析器与同一套数值内核
- * （src/runtime.cpp + src/apply_contract.cpp）。区别只在**入参形态**：
+ * 与 applyContractQcd 的关系：两者共用同一个计划解析器（src/runtime.cpp +
+ * src/plan_core.cpp），执行器不同——applyContractQcd 按计划的步骤逐条执行
+ * （src/apply_contract.cpp::execute_parsed_contract），本入口只认**编译期步表**
+ * （src/topology_gemm.h 的 per-拓扑 GEMM 分步）。入参形态也不同：
  * applyContractQcd 走冻结的 (plan, tensors[], out[], params[]) 四参数字形式，
  * 本入口直接收操作数指针数组、明文 dtype 与可选字节偏移，便于上层用一次
- * ctypes 调用把整条收缩发下来。数值语义与 applyContractQcd 逐位一致。
+ * ctypes 调用把整条收缩发下来。命中步表的拓扑在两侧数值一致。
  *
  * ---------------------------------------------------------------------------
  * 入口
@@ -53,31 +55,23 @@
  *      dtype_id 越界或与计划不一致、地址加偏移溢出、某操作数缺数据等
  *   2  内存不足
  *   3  其它内部错误（含异常兜底）
- *   4  QCD_TOPOLOGY_UNSUPPORTED：计划本身超出本入口的可执行范围
+ *   4  QCD_TOPOLOGY_UNSUPPORTED：这条计划不由本入口服务——未命中编译期步表、
+ *      步表没有编进本库、dtype 在步表里没有可执行实例，或步表执行器中途失败
  *      （单步 arity > 2、单个操作数内重复下标、没有步骤、尾随字节等）
  *
  * 1 与 4 必须分开：1 是"这次的调用参数不对"，4 是"这条计划本入口不认"。
- * Python 侧对两者都回落现有路径，但诊断文案不同。
- *
- * **0 有两种来源**：命中编译期步表（v3，per-拓扑 GEMM 分步）与未命中后交给
- * version-2 通用执行器。两者的数值都正确，但只有前者是"拓扑特化"，性能含义完全
- * 不同，因此调用方若需要区分，必须在每次成功调用之后、**在同一线程上**查询
- * ``qcd_kupl_topology_last_specialized()``（见下）。
+ * 两者都 fail closed（不写 out），调用方按同一个非 0 结论放弃这次结果。
  *
  * ---------------------------------------------------------------------------
- * 路线查询
+ * 只有一条执行路线：编译期步表
  * ---------------------------------------------------------------------------
- *   int qcd_kupl_topology_last_specialized(void);
- *
- * 返回**本线程**最近一次 ``qcd_kupl_topology_apply`` 实际走的路线，取值见
- * ``QCD_TOPOLOGY_ROUTE_*``。语义是"最近一次"，因此：
- *   * 必须在 apply 之后立刻查询，中间插入任何 apply 都会改写它；
- *   * 早退（1/4）或执行失败（2/3）之后返回 ``QCD_TOPOLOGY_ROUTE_UNKNOWN``——
- *     那次调用没有产生可信输出，路线无从谈起；
- *   * 状态按 OS 线程保存（``thread_local``），并发调用的线程互不干扰。
- *
- * 这一项是**契约的一部分**，不是调试开关：没有它，上层只能看到"成功"，无法区分
- * v3 与 v2，进而把 v2 的耗时当成 v3 的性能结论。
+ * 返回 0 只可能来自命中编译期步表（per-拓扑 GEMM 分步），未命中就是 4 ——
+ * **没有**"交给 version-2 通用执行器"的回落。理由（2026-11-18 用户裁定）：
+ * KUPL 的每一次 GEMM 都经由 cblas，``cpp/kupl/einsum/make.sh`` 在找不到 BLAS 时
+ * **构建期直接失败**（make.sh 的 ``_discover_openblas`` 段），所以"能装但一算就
+ * 回落"的构建并不存在，缺 BLAS 的兜底分支在 KUPL 上不可达；而保留回落会让两条
+ * 性能含义完全不同的路线共享返回码 0，调用方只能靠额外的线程内查询去猜。
+ * 为此提供的 ``qcd_kupl_topology_last_specialized()`` 路线查询随回落分支一并删除。
  *
  * ---------------------------------------------------------------------------
  * dtype（见 einsum_define.h）
@@ -91,25 +85,19 @@
  * ---------------------------------------------------------------------------
  * workspace 与线程
  * ---------------------------------------------------------------------------
- * 中间缓冲来自 src/apply_contract.cpp 的进程级 BufferPool：同一次调用内被
- * 释放的中间块会被后续步骤直接复用，跨调用也保留（只涨不缩），因此逐步收缩
- * 不会"每步重新分配"大块内存。
+ * 中间缓冲来自 src/topology_gemm.h 的进程级 block_pool()：同一次调用内被释放的
+ * 中间块会被后续步骤直接复用，跨调用也保留（只涨不缩），因此逐步收缩不会
+ * "每步重新分配"大块内存。
  *
- * 入口本身无可变全局状态，可多线程并发调用；BufferPool 与 CBLAS 句柄分别由
+ * 入口本身无可变全局状态，可多线程并发调用；block_pool() 与 CBLAS 句柄分别由
  * 互斥量与 std::call_once 保护。OpenMP 只按调用方给定的线程数使用。
  */
 
 enum {
-    /* 本入口专有的补充状态码：计划结构超出 version-2 的单步 arity ≤ 2 模型。
-     * 不写进冻结的 einsum_define.h，避免改动与 CUDA 侧逐字节镜像的 ABI。 */
+    /* 本入口专有的补充状态码：这条计划不由本入口服务（未命中步表、步表未编进
+     * 本库、dtype 不可执行、步表执行失败）。不写进冻结的 einsum_define.h，
+     * 避免改动与 CUDA 侧逐字节镜像的 ABI。 */
     QCD_TOPOLOGY_UNSUPPORTED = 4
-};
-
-enum {
-    /* qcd_kupl_topology_last_specialized() 的取值。 */
-    QCD_TOPOLOGY_ROUTE_UNKNOWN = -1,  /* 本线程还没有一次成功的 apply */
-    QCD_TOPOLOGY_ROUTE_V2 = 0,        /* 未命中编译期步表，已由 v2 通用执行器完成 */
-    QCD_TOPOLOGY_ROUTE_V3 = 1         /* 命中编译期步表，由 per-拓扑 GEMM 步完成 */
 };
 
 #ifdef __cplusplus
@@ -121,8 +109,6 @@ QCD_EINSUM_API int qcd_kupl_topology_apply(const void* plan, long long plan_len,
                                            const long long* operand_offsets, void* out,
                                            int dtype_id);
 
-QCD_EINSUM_API int qcd_kupl_topology_last_specialized(void);
-
 #ifdef __cplusplus
 }
 
@@ -131,8 +117,8 @@ namespace pyqcd_einsum {
 struct ExecutionPlan;
 
 /* 定义在 src/apply_contract.cpp：按步骤执行一条已解析的 version-2 计划。
- * 本入口复用它，从而与 applyContractQcd 共享打包/BLAS 内核与 workspace 池，
- * 不另起一套数值实现。 */
+ * 通用入口（applyContractQcd / 编译入口）在用，因此声明保留；拓扑入口本身
+ * 不再调用它——那条"未命中步表就交回通用执行器"的回落已删除。 */
 int execute_parsed_contract(const ExecutionPlan& execution, long long tensors_address,
                             long long out_address);
 

@@ -1,5 +1,13 @@
 """Corpus-wide correctness and performance gate for ``pyqcd.einsum.contract``.
 
+INVALID (2026-11-18): the timings and ratios printed by this script rest on a
+**retired** topology-step-table calibration (KUPL "production heterogeneous axes" /
+CUDA "uniform dim=4 probe"). The current calibration is ROLE_SHAPES
+(peram[4,4,100,100] gamma[4,4] VDV[100,100] VVV[100,100,100,100]); both tables have
+been recomputed wholesale. **Do not cite the old numbers as current results.**
+``--bench`` only reports measurements (no expected values); its ``--size`` uniform
+probe is the retired caliber, and the correctness gate is unaffected.
+
 Every ``result_indx`` equation of ``refer/sush/wick_12cases.md`` is contracted with
 deterministic single-precision operands and compared against ``numpy.einsum``;
 the canonical topology signature is checked for stability under a random

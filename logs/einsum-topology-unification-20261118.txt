@@ -1,0 +1,196 @@
+================================================================================
+einsum 拓扑步表统一：口径 / 生成 / 交付 —— 归档（2026-11-18）
+================================================================================
+
+范围：pyqcd/einsum/{_topology_gen_common,topology_steps_gen,wick_tasklist_gen,
+      _wick_tasklist,_specialize}.py 与两张生成表 cpp/{kupl,cuda}/einsum/src/。
+性质：只归档文档与注释（本轮未改任何可执行语句，证据见 §6）。
+判据与流程：docs/einsum_topology_unification_20261118.md
+精炼约定：pyqcd/einsum/AGENTS.md §10.5、skills/pyqcd-einsum/SKILL.md §[T3]
+
+--------------------------------------------------------------------------------
+0. 素材与缺口（先说清楚哪些结论不是转述、是实测）
+--------------------------------------------------------------------------------
+已读：logs/kf/WORKMAP.md、GEN_UNIFY.report.md、GEN_AUTO.md、TASKLIST_GEN.report.md、
+      CUDA_SYNC.report.md、V2_DEL.report.md、NOTICE_FIX.report.md、
+      INVALIDATE_OLD.report.md、SHAPE_EQUIV.report.md
+
+缺失（不要从本文件里找它们的"结论"）：
+  * logs/kf/GEN_ROLES.report.md —— 只有派发文本 GEN_ROLES.md（"默认形状源改 roles"）；
+  * logs/kf/GEN_AUTO.report.md  —— 只有 .launch（一行时间戳：2026-11-18-17-16-03）；
+  * logs/kf/U5.report.md        —— 不存在，仅在 EXP2.md 的素材清单里被点名。
+
+因此"roles 是否真的参与求序""生成侧 auto 是否生效""两次生成是否确定"，本归档
+一律按**当前源码 + 当前产物实测**记录（§2/§3），不转述缺失报告。
+
+--------------------------------------------------------------------------------
+1. 时间线（本地时间，取自 logs/kf/*.md 的 mtime，不是任务内部计时）
+--------------------------------------------------------------------------------
+15:07-15:33  V2_DEL       删除 kupl_topology_v2 回落路线；拓扑入口只剩编译期步表
+                          （未命中 → status 4，fail closed）。
+15:12-15:49  CUDA_SYNC    CUDA 表 2582 → 8638，重编译，GPU 抽样 40+20 条通过。
+16:18-16:25  INVALIDATE_OLD  旧口径（KUPL production / CUDA 均匀 dim=4）数字全部
+                          标记作废，禁止再引用为新结论。
+16:28-16:31  GEN_UNIFY    新建 _topology_gen_common.py + topology_steps_gen.py；
+                          两个旧入口变 deprecated 转发；产物逐字节不变。
+16:33        GEN_ROLES    用户裁定：ROLE_SHAPES 作为默认且唯一形状源，两表整体重算。
+16:59-17:13  TASKLIST_GEN 图纸 → _wick_tasklist.py 生成器 + _wick_extra.jsonl 合并；
+                          --normalize 规范化（编号符换 '-'、角色名去空格）。
+17:08-17:20  NOTICE_FIX   kernel_force 删 auto 后，提示语改为按现场事实分三档。
+17:16        GEN_AUTO     生成侧统一 optimize="auto"；删除"均匀 dim=4"探针口径。
+17:28        两表最终重生成（当前工作区产物 mtime）。
+17:43        EXP2（本归档）派发；17:45-17:52 复核实测见 §3/§6。
+
+--------------------------------------------------------------------------------
+2. 口径现状（源码常量 + 表头自述，均当场读取）
+--------------------------------------------------------------------------------
+$ grep -n 'KUPL_OPTIMIZE\|CUDA_OPTIMIZE\|DEFAULT_SHAPE_SOURCE' \
+       pyqcd/einsum/_topology_gen_common.py
+KUPL_OPTIMIZE = "auto"          # 与 _kernel_kupl.try_dedicated 同口径
+CUDA_OPTIMIZE = "auto"          # 用户裁定 2026-11-18，与 KUPL 统一
+DEFAULT_SHAPE_SOURCE = "roles"
+
+形状源唯一（ROLE_SHAPES）：
+    peram [4,4,100,100]   gamma [4,4]   VDV [100,100]   VVV [100,100,100,100]
+生产代码里已无 production / uniform / PROBE_DIM / probe_dim 口径：
+$ grep -rn 'PROBE_DIM\|probe_dim\|shape_source="uniform"' pyqcd/einsum/*.py
+（0 命中）
+
+KUPL .inc 表头（前 6 行）：
+    由 pyqcd/testing/_topology_kernel_gen.py 生成，请勿手工编辑。
+    覆盖 refer/sush/wick_12cases.md 的 8638 条收缩路径；每条由
+    pyqcd.einsum.contract_path(optimize='auto') 求出的「打包 → cblas GEMM
+    → 解包」步序列描述，执行器见 src/topology_gemm.h。
+    形状源 ROLE_SHAPES（--shape-source roles）；roles = ROLE_SHAPES 角色形状。
+    步表共 2560888 字节：每条拓扑的 (code_offset, code_bytes) 定位一段。
+
+CUDA .h 表头（第 8-10 行）：
+    语料 8638 条，去重后 3477 条不同步序；顺序取自
+    优化器 auto（形状源 ROLE_SHAPES，--shape-source roles）；roles = ROLE_SHAPES 角色形状。
+
+注：两处 banner 仍写**历史入口名**（旧入口现在是转发本模块的薄包装）。这是有意的：
+改名会让产物与已发布表差一行注释。已在 render_kupl / render_cuda 就地写明"别顺手改"。
+
+--------------------------------------------------------------------------------
+3. 验收实测（本次会话 17:45-17:52 重跑，命令可复现）
+--------------------------------------------------------------------------------
+3.1 旧/新 sha256 必须不同（"改了默认值"≠"口径生效"）
+
+$ git show HEAD:cpp/cuda/einsum/src/topology_steps.h | sha256sum
+8b564dc2bb16cbae0d732b2476645622a30ad9de3759b3e57f5846e405102c18  -
+$ sha256sum cpp/cuda/einsum/src/topology_steps.h
+2fdc0e81cbc21d054333f8c9f1e2a6aa757c80d1d82bbcbcd1cfa0d4e112a0ec  ...
+-> 不同（旧的 1044605 B，新的 1113387 B）
+
+$ git show HEAD:cpp/kupl/einsum/src/topology_kernels.inc.gz | gzip -dc | sha256sum
+5586b7b35daea9d144fb71dd02b993e696ed2bf42413225ea2721c5af0ecbcd1  -
+$ sha256sum cpp/kupl/einsum/src/topology_kernels.inc
+fc7dfbad8524b28dfaf4614807431f633833f93b5c93b9bd00bc2e8f1ba71352  ...
+-> 不同（旧的 13835244 B，新的 13485987 B）
+
+3.2 同一输入两次生成必须相同（生成确定性）
+
+$ for i in 1 2; do
+    python -B -m pyqcd.einsum.topology_steps_gen --target kupl --no-gzip --output /tmp/inc_$i.inc
+    python -B -m pyqcd.einsum.topology_steps_gen --target cuda --no-gzip --output /tmp/h_$i.h
+  done
+kupl: ... entries=8638 steps=2560888  in 11.46s / 8.36s
+cuda: ... entries=8638 orders=3477 pairs=49153 in 6.41s / 7.66s
+
+$ sha256sum /tmp/inc_1.inc /tmp/inc_2.inc /tmp/h_1.h /tmp/h_2.h
+fc7dfbad...  inc_1.inc      fc7dfbad...  inc_2.inc
+2fdc0e81...  h_1.h          2fdc0e81...  h_2.h
+-> 两次相同，且与工作区表逐字节一致（表不是手改的，是生成器产出的）。
+
+3.3 表自校验（CUDA 侧逐条比对 key → (步序, fnv, arity)）
+
+$ python -B -m pyqcd.einsum.topology_steps_gen --target cuda --verify
+compared 8638 entries against .../topology_steps.h:
+missing=0 extra=0 mismatch=0 orders 3477/3477 match=True covers_file=True
+exit=0
+
+3.4 静默兜底必须已经消失
+
+$ python -B -c "from pyqcd.einsum._topology_gen_common import solve_path; \
+                solve_path('cadb,menf,ac,em,bd,fn->')"
+TypeError: solve_path() missing 1 required positional argument: 'sizes'
+（早先会静默退回等长探针；现在缺 sizes 直接失败。）
+
+3.5 --shape-source 只剩一个取值
+
+$ python -B -m pyqcd.einsum.topology_steps_gen --help
+... [--shape-source {roles}] ...
+  --shape-source {roles}
+    形状源：roles=ROLE_SHAPES 角色形状（唯一取值）；production（生产异形轴）与
+    uniform（等长探针）两条旧口径已删除
+
+3.6 .gz 载荷与本体一致
+
+$ gzip -dc cpp/kupl/einsum/src/topology_kernels.inc.gz | sha256sum   # fc7dfbad...
+$ gzip -dc cpp/cuda/einsum/src/topology_steps.h.gz      | sha256sum   # 2fdc0e81...
+
+体积：KUPL 13,485,987 B → 1,658,036 B（8.13×）；CUDA 1,113,387 B → 250,476 B（4.44×）。
+
+3.7 构建侧解压条件（两侧对称，代码现读）
+
+cpp/kupl/einsum/make.sh:224-236 与 cpp/cuda/einsum/make-nv.sh:222-235 都是
+    [ ! -f "$STEP_TABLE" ] || { [ -f "$STEP_TABLE_GZ" ] && [ "$STEP_TABLE_GZ" -nt "$STEP_TABLE" ]; }
+即"本体缺失 **或** .gz 更新"才解压；本地刚生成过的表不会被覆盖。
+CUDA 侧早年没有这段（一旦只发布 .h.gz 就构建失败），CUDA_SYNC 后已补齐。
+
+--------------------------------------------------------------------------------
+4. 本轮一并修掉的过时文档（只改 docstring/注释）
+--------------------------------------------------------------------------------
+* _topology_gen_common.py：补"生成器两条验收判据"+ 两表不可互译的边界。
+* topology_steps_gen.py：
+  - 模块 docstring 里那段 "DEPRECATED 的口径（代码保留…）：" 后面是**空列表**
+    ——生产/均匀口径已删除，改为"已删除 + 旧表全部作废 + 重生成验收顺序"；
+  - collect_kupl / collect_cuda 仍写"DEPRECATED 的历史口径，只由显式 --shape-source 选中"
+    （已无此分支）→ 改为"形状源固定 roles"；
+  - step_pairs 的 "sizes 缺省时退回 ROLE_SHAPES 口径，必须传 sizes" 自相矛盾 → 改为必填；
+  - layout() 补确定性说明；两处 gzip.compress 补 mtime=0 的理由；两处 banner 补"别改名"。
+* wick_tasklist_gen.py：
+  - "--normalize … 默认**关闭**" 与代码（build_rows(normalize=True)、--no-normalize）相反
+    → 改为默认开启，并写明现行 _BLOB 就是规范化后的形态；
+  - 补"整表改格式时用 normalize(旧行)==新行 逐行不动点验收"（8638/8638）；
+  - _COUNT_PATTERNS 旁注明"不要替换『但只有 9142 行』"（那是图纸行号）；
+  - build_rows 补"seq 只能连续给，不能由 T 号推"；render() 补"不要整文件重渲染"。
+* _wick_tasklist.py docstring：补"手改必被擦除，只能走追加文件"与"用 --check 而非
+  与图纸逐字节比"；顺手修好一处断句（"生成时\n=「图纸条目」…"）。
+* _specialize.py：executed_path / announce 的 docstring 仍指向已删除的
+  `_kernel_kupl._TOPOLOGY_ROUTE_PATHS` 与 `kupl_topology_v2` 回退路线（V2_DEL 已删），
+  改为"KUPL 拓扑入口只有一条路线"；`_topology_entry` 的 `kernels` 元组补"[match] 是
+  形态、[kernel] 才是执行"的就地说明。
+
+--------------------------------------------------------------------------------
+5. 已知遗留（本轮范围外，登记不修）
+--------------------------------------------------------------------------------
+1. 文档/注释仍指旧入口（旧入口是转发，命令仍有效）：
+   pyqcd/einsum/AGENTS.md、skills/pyqcd-einsum/SKILL.md、
+   cpp/kupl/einsum/make.sh:217,234、.gitignore:39、src/topology_apply.cpp:17,24、
+   topology_steps.h:1 / topology_kernels.inc:1（banner）。
+2. cpp/cuda/einsum/src/topology_steps.h 仍被 git 跟踪（.gitignore 白名单 !*.h），
+   而新产出的 topology_steps.h.gz 被 * 规则忽略：当前是"本体入库、压缩件不入库"，
+   与 KUPL 相反。属构建/仓库侧裁定，未动。
+3. skills/pyqcd-einsum/SKILL.md 另有一处（非本任务）把 kupl_topology_v2 描述成
+   第二条执行路线，与 V2_DEL 后的代码不符；本轮只在自己的 [T3] 小节给出正确口径，
+   没有改那一段（避免抢占正在改该文件的代理）。
+4. 全套测试的既有失败（paths/_profile_cache/tune 区域、并行代理在改）与本轮无关；
+   本轮没有触碰任何可执行语句（§6 用 AST 证明），因此不新增失败面。
+
+--------------------------------------------------------------------------------
+6. 不改可执行语句的证据
+--------------------------------------------------------------------------------
+对五个文件做 ast.parse → 递归剥掉 docstring → ast.dump 比较（注释本来就不进 AST）：
+
+SAME  pyqcd/einsum/_topology_gen_common.py  (executable AST, docstrings stripped)
+SAME  pyqcd/einsum/topology_steps_gen.py
+SAME  pyqcd/einsum/wick_tasklist_gen.py
+SAME  pyqcd/einsum/_wick_tasklist.py
+SAME  pyqcd/einsum/_specialize.py
+exit=0
+
+$ python -B -c "import pyqcd.einsum, pyqcd.einsum._topology_gen_common, \
+                pyqcd.einsum.topology_steps_gen, pyqcd.einsum.wick_tasklist_gen"
+imports OK 8638 roles 7
+================================================================================

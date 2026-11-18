@@ -63,11 +63,16 @@ def test_profile_switching_is_observable() -> None:
 
     import numpy as np
     import pyqcd.einsum as pe
+    from ..einsum import _kernel_force
 
     with _env(OMP_NUM_THREADS=None, OPENBLAS_NUM_THREADS=None,
-              PYQCD_EINSUM_OMP_THREADS=None, PYQCD_EINSUM_BLAS_THREADS=None):
+              PYQCD_EINSUM_OMP_THREADS=None, PYQCD_EINSUM_BLAS_THREADS=None,
+              **{_kernel_force.KERNEL_FORCE_ENV: None}):
         _threads.reset()
-        # 取一条真实语料方程：它是拓扑特化路径，命中即切到 kernel 档。
+        # 取一条真实语料方程：它有拓扑/专用形态。缺省 ``kernel_force`` 已是
+        # ``generic``（``auto`` 已删除），那条路**不匹配**专用形态，因此切到的是
+        # generic 档；要观测 kernel 档必须显式强制一条专用内核——切档发生在下发
+        # 之前，所以本机原生库跑不成也不影响这条断言。
         # 每条指标一个固定尺寸，同一指标在不同操作数里必须同长。
         from ..einsum import _wick_tasklist
 
@@ -84,15 +89,24 @@ def test_profile_switching_is_observable() -> None:
                 sizes.setdefault(label, 2 + (ord(label) % 2))
         registered = [draw(*(sizes[label] for label in term))
                       for term in expr.split("->")[0].split(",")]
-        with contextlib.redirect_stdout(io.StringIO()):
-            pe.contract(expr, *registered)
-        assert _threads.current()["profile"] == "kernel"
+
+        def run(force=None):
+            kwargs = {} if force is None else {"kernel_force": force}
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    pe.contract(expr, *registered, **kwargs)
+            except _kernel_force.KernelUnavailableError:
+                pass          # 切档在真试内核之前完成，跑不成不改变本契约的结论
+            return _threads.current()["profile"]
+
+        # 缺省（generic）：不匹配 → generic 档。
+        assert run() == "generic"
+        # 强制专用内核：命中形态 → kernel 档。
+        assert run("dedicated") == "kernel"
         a, b, c = (rng.standard_normal((64, 64)) for _ in range(3))
         pe.contract("ij,jk,kl->il", a, b, c)
         assert _threads.current()["profile"] == "generic"
-        with contextlib.redirect_stdout(io.StringIO()):
-            pe.contract(expr, *registered)
-        assert _threads.current()["profile"] == "kernel"
+        assert run("dedicated") == "kernel"
 
 
 def test_disable_switch() -> None:

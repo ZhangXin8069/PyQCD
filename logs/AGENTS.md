@@ -1171,3 +1171,20 @@
 - 验证: path, size, required sections, conflict markers
 - 批次状态: in-progress
 
+## einsum-framework-convergence - stage - 2026-11-18 12:00:00 +0800
+- 主任务: qcd-einsum 收敛重构的 12 条经验落盘（只写文档与注释，不改可执行代码）
+- 日志文件: logs/einsum-framework-convergence-20261118.txt
+- 文件大小: 14913 bytes
+- 触发原因: 阶段成果
+- 关键内容: 死代码判据（入口可达，非"看起来没人用"）、弱符号 Python 侧 0 命中是常态、git archive 隔离 A/B、删符号先 grep、forced_labels(None)==() 的显式布尔位、bool("false")==True、--help 不渲染 markdown、基线不可跨环境、kupl_topology 与 v2 是路线、optimize=auto 同名不同义；配套 docs/einsum_framework_convergence_20261118.md
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
+## einsum-topology-unification - final - 2026-11-18 17:51:00 +0800
+- 主任务: 拓扑步表统一的口径 / 生成 / 交付经验归档（只写文档与代码注释）
+- 日志文件: logs/einsum-topology-unification-20261118.txt
+- 文件大小: 12205 bytes
+- 触发原因: 阶段成果
+- 关键内容: ROLE_SHAPES 唯一形状源、旧表作废；判据=新旧 sha256 必须不同 + 两次生成必须相同 + --verify 全零；两表不可互译（cblas 字节码 vs int8 活表位置对）；.gz 入库与双侧解压（mtime=0）；图纸生成物纪律与 seq 连续 1..N；[match]/[kernel] 分离与"删功能同步改提示"；配套 docs/einsum_topology_unification_20261118.md
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

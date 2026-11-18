@@ -778,7 +778,15 @@ for i in range(9, 15):
 
 
 def auto(inputs, output, size_dict, memory_limit=None):
-    """Pick an optimizer from the number of input tensors (``greedy`` from 15 on).
+    """``optimize`` 的**缺省**选择器，不是可写的优化器名字。
+
+    ``auto`` 已从 ``paths.PATH_OPTIONS`` 删除（``paths.get_path_fn("auto")`` 抛
+    ``KeyError``）；这个函数留着只因为 ``optimize`` 的缺省值就是它：
+    ``_api.contract``/``contract_path`` 把 ``True``/``None`` 归一成 ``"auto"``，
+    再经 ``paths.is_builtin_path_name`` 走到本模块的规划分支。选路本身由 ``--tune``
+    的实测结论负责，这里的按算子数查表只是"没有画像时的兜底"。
+
+    Pick an optimizer from the number of input tensors (``greedy`` from 15 on).
 
     For small graphs the result is cross-checked against ``opt_einsum``'s dynamic
     programming path. Equal-cost paths are not equally fast in practice: on
@@ -820,16 +828,16 @@ def _reference_dp_path(inputs, output, size_dict, memory_limit=None):
 
 
 _PATH_FNS: dict = {
+    # 拼写统一为**下划线**（用户裁定 2026-11-18）：连字符与
+    # ``dynamic-programming`` 已删除，见 :mod:`pyqcd.einsum.paths`。
+    # ``auto`` 留在这里只作**缺省值**（``True``/``None`` 的归一结果），不是可写名字。
     "auto": auto,
     "optimal": optimal,
-    "branch-all": branch_all,
-    "branch-2": branch_2,
-    "branch-1": branch_1,
+    "branch_all": branch_all,
+    "branch_2": branch_2,
+    "branch_1": branch_1,
     "greedy": greedy,
-    "eager": greedy,
-    "opportunistic": greedy,
     "dp": dynamic_programming,
-    "dynamic-programming": dynamic_programming,
 }
 
 

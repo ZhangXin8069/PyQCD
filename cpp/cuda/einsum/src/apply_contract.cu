@@ -1288,365 +1288,6 @@ bool build_topology_plan(
     return topology_plan_from_table(descriptor, order, plan);
 }
 
-struct SandwichPlan {
-    bool matched = false;
-    int32_t tensor_input = -1;
-    int32_t left_matrix_input = -1;
-    int32_t right_matrix_input = -1;
-    qcd_cuda_sandwich_spec spec{};
-};
-
-bool all_distinct(const std::vector<int32_t>& values) {
-    for (std::size_t left = 0; left < values.size(); ++left) {
-        for (std::size_t right = left + 1; right < values.size(); ++right) {
-            if (values[left] == values[right]) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-bool same_label_set(
-    const std::vector<int32_t>& left,
-    const std::vector<int32_t>& right) {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    for (int32_t label : left) {
-        if (!contains(right, label)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool sandwich_dimensions(
-    const pyqcd_einsum::ExecutionPlan& plan,
-    int32_t a,
-    int32_t b,
-    int32_t c,
-    int32_t d,
-    int32_t e,
-    const std::vector<int32_t>& prefix_labels,
-    qcd_cuda_sandwich_spec* spec) {
-    std::vector<int32_t> role_labels = prefix_labels;
-    role_labels.insert(role_labels.end(), {a, b, c, d, e});
-    if (!all_distinct(role_labels)) {
-        return false;
-    }
-    int64_t prefix = 1;
-    for (int32_t label : prefix_labels) {
-        if (label < 0 || static_cast<std::size_t>(label) >= plan.sizes.size() ||
-            !multiply_checked(prefix, plan.sizes[static_cast<std::size_t>(label)],
-                              &prefix)) {
-            return false;
-        }
-    }
-    for (int32_t label : {a, b, c, d, e}) {
-        if (label < 0 || static_cast<std::size_t>(label) >= plan.sizes.size() ||
-            plan.sizes[static_cast<std::size_t>(label)] <= 0) {
-            return false;
-        }
-    }
-    qcd_cuda_sandwich_spec candidate{};
-    candidate.prefix = prefix;
-    candidate.left = plan.sizes[static_cast<std::size_t>(a)];
-    candidate.contracted_left = plan.sizes[static_cast<std::size_t>(b)];
-    candidate.contracted_right = plan.sizes[static_cast<std::size_t>(c)];
-    candidate.right = plan.sizes[static_cast<std::size_t>(d)];
-    candidate.lane = plan.sizes[static_cast<std::size_t>(e)];
-    int64_t elements = 1;
-    int64_t temporary = 1;
-    if (!multiply_checked(candidate.prefix, candidate.contracted_left, &temporary) ||
-        !multiply_checked(temporary, candidate.contracted_right, &elements) ||
-        !multiply_checked(elements, candidate.lane, &temporary) ||
-        !multiply_checked(candidate.left, candidate.contracted_left, &elements) ||
-        !multiply_checked(candidate.contracted_right, candidate.right, &elements) ||
-        !multiply_checked(candidate.prefix, candidate.right, &elements) ||
-        !multiply_checked(elements, candidate.left, &temporary) ||
-        !multiply_checked(temporary, candidate.lane, &elements)) {
-        return false;
-    }
-    *spec = candidate;
-    return true;
-}
-
-bool match_sandwich(
-    const pyqcd_einsum::ExecutionPlan& plan,
-    const std::vector<ResolvedStep>& resolved,
-    SandwichPlan* sandwich) {
-    *sandwich = SandwichPlan{};
-    if (plan.num_inputs != 3 || plan.steps.size() != 2 || resolved.size() != 2) {
-        return false;
-    }
-    const pyqcd_einsum::ExecutionStep& first = plan.steps[0];
-    const pyqcd_einsum::ExecutionStep& second = plan.steps[1];
-    if (first.inputs.size() != 2 || second.inputs.size() != 2) {
-        return false;
-    }
-
-    for (int tensor_operand = 0; tensor_operand < 2; ++tensor_operand) {
-        const int matrix_operand = 1 - tensor_operand;
-        const int32_t tensor_input = resolved[0].operands[tensor_operand];
-        const int32_t first_matrix_input = resolved[0].operands[matrix_operand];
-        if (tensor_input < 0 || tensor_input >= plan.num_inputs ||
-            first_matrix_input < 0 || first_matrix_input >= plan.num_inputs ||
-            tensor_input == first_matrix_input) {
-            continue;
-        }
-        int32_t remaining_matrix_input = -1;
-        for (int32_t input = 0; input < plan.num_inputs; ++input) {
-            if (input != tensor_input && input != first_matrix_input) {
-                remaining_matrix_input = input;
-                break;
-            }
-        }
-        if (remaining_matrix_input < 0) {
-            continue;
-        }
-
-        const std::vector<int32_t>& tensor_labels =
-            first.inputs[tensor_operand].labels;
-        const std::vector<int32_t>& first_matrix_labels =
-            first.inputs[matrix_operand].labels;
-        if (tensor_labels.size() < 3 || first_matrix_labels.size() != 2) {
-            continue;
-        }
-        const std::size_t prefix_rank = tensor_labels.size() - 3;
-        const int32_t b = tensor_labels[prefix_rank];
-        const int32_t c = tensor_labels[prefix_rank + 1];
-        const int32_t e = tensor_labels[prefix_rank + 2];
-        std::vector<int32_t> prefix_labels(tensor_labels.begin(),
-                                           tensor_labels.begin() +
-                                               static_cast<std::ptrdiff_t>(prefix_rank));
-
-        bool left_matrix_first = false;
-        bool right_matrix_first = false;
-        int32_t a = -1;
-        int32_t d = -1;
-        std::vector<int32_t> first_output;
-        std::vector<int32_t> other_matrix_labels;
-        if (first_matrix_labels[1] == b) {
-            a = first_matrix_labels[0];
-            left_matrix_first = true;
-            first_output = prefix_labels;
-            first_output.insert(first_output.end(), {c, e, a});
-        } else if (first_matrix_labels[0] == c) {
-            d = first_matrix_labels[1];
-            right_matrix_first = true;
-            first_output = prefix_labels;
-            first_output.insert(first_output.end(), {d, b, e});
-        } else {
-            continue;
-        }
-        if (!same_label_set(first.output.labels, first_output)) {
-            continue;
-        }
-
-        int intermediate_operand = -1;
-        int remaining_matrix_operand = -1;
-        for (int operand = 0; operand < 2; ++operand) {
-            const int32_t node = resolved[1].operands[operand];
-            if (node == plan.num_inputs) {
-                intermediate_operand = operand;
-            } else if (node == remaining_matrix_input) {
-                remaining_matrix_operand = operand;
-            }
-        }
-        if (intermediate_operand < 0 || remaining_matrix_operand < 0 ||
-            intermediate_operand == remaining_matrix_operand) {
-            continue;
-        }
-        other_matrix_labels =
-            second.inputs[remaining_matrix_operand].labels;
-        if (other_matrix_labels.size() != 2 ||
-            second.inputs[intermediate_operand].labels != first.output.labels ||
-            (left_matrix_first && other_matrix_labels[0] != c) ||
-            (right_matrix_first && other_matrix_labels[1] != b)) {
-            continue;
-        }
-        if (left_matrix_first) {
-            d = other_matrix_labels[1];
-        } else {
-            a = other_matrix_labels[0];
-        }
-
-        std::vector<int32_t> expected_output = prefix_labels;
-        expected_output.insert(expected_output.end(), {d, a, e});
-        if (second.output.labels != expected_output ||
-            plan.output_labels != expected_output) {
-            continue;
-        }
-
-        SandwichPlan candidate;
-        if (!sandwich_dimensions(plan, a, b, c, d, e, prefix_labels,
-                                 &candidate.spec)) {
-            continue;
-        }
-        candidate.matched = true;
-        candidate.tensor_input = tensor_input;
-        candidate.left_matrix_input =
-            left_matrix_first ? first_matrix_input : remaining_matrix_input;
-        candidate.right_matrix_input =
-            left_matrix_first ? remaining_matrix_input : first_matrix_input;
-        *sandwich = candidate;
-        return true;
-    }
-    return false;
-}
-
-struct E4FusedPlan {
-    bool matched = false;
-    qcd_cuda_e4_spec spec{};
-};
-
-bool exact_input_shape(
-    const std::vector<int32_t>& labels,
-    const std::vector<int64_t>& shape,
-    const std::vector<int64_t>& sizes) {
-    if (labels.size() != shape.size()) {
-        return false;
-    }
-    for (std::size_t axis = 0; axis < labels.size(); ++axis) {
-        const int32_t label = labels[axis];
-        if (label < 0 || static_cast<std::size_t>(label) >= sizes.size() ||
-            shape[axis] != sizes[static_cast<std::size_t>(label)]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool recover_input_terms(
-    const pyqcd_einsum::ExecutionPlan& plan,
-    const std::vector<ResolvedStep>& resolved,
-    std::vector<std::vector<int32_t>>* terms) {
-    if (resolved.size() != plan.steps.size()) {
-        return false;
-    }
-    terms->assign(static_cast<std::size_t>(plan.num_inputs), {});
-    std::vector<int32_t> uses(static_cast<std::size_t>(plan.num_inputs), 0);
-    for (std::size_t step_index = 0; step_index < plan.steps.size(); ++step_index) {
-        const pyqcd_einsum::ExecutionStep& step = plan.steps[step_index];
-        if (step.inputs.size() != resolved[step_index].operands.size()) {
-            return false;
-        }
-        for (std::size_t operand = 0; operand < step.inputs.size(); ++operand) {
-            const int32_t node = resolved[step_index].operands[operand];
-            if (node < 0) {
-                return false;
-            }
-            if (node >= plan.num_inputs) {
-                continue;
-            }
-            const std::vector<int32_t>& labels = step.inputs[operand].labels;
-            if (uses[static_cast<std::size_t>(node)] != 0 &&
-                (*terms)[static_cast<std::size_t>(node)] != labels) {
-                return false;
-            }
-            (*terms)[static_cast<std::size_t>(node)] = labels;
-            ++uses[static_cast<std::size_t>(node)];
-        }
-    }
-    return std::all_of(uses.begin(), uses.end(), [](int32_t count) {
-        return count == 1;
-    });
-}
-
-constexpr int64_t kE4FusedMaxSpatialVolume = 1;
-
-bool match_e4_fused(
-    const pyqcd_einsum::ExecutionPlan& plan,
-    const std::vector<ResolvedStep>& resolved,
-    E4FusedPlan* fused) {
-    *fused = E4FusedPlan{};
-    if (plan.num_inputs != 4 || plan.steps.size() != 3 || resolved.size() != 3) {
-        return false;
-    }
-    for (std::size_t step_index = 0; step_index < plan.steps.size(); ++step_index) {
-        if (plan.steps[step_index].inputs.size() != 2 ||
-            resolved[step_index].operands.size() != 2) {
-            return false;
-        }
-    }
-
-    std::vector<std::vector<int32_t>> terms;
-    if (!recover_input_terms(plan, resolved, &terms)) {
-        return false;
-    }
-    const std::vector<int32_t>& a_labels = terms[0];
-    const std::vector<int32_t>& b_labels = terms[1];
-    const std::vector<int32_t>& gamma_labels = terms[2];
-    const std::vector<int32_t>& c_labels = terms[3];
-    if (a_labels.size() != 8 || b_labels.size() != 8 ||
-        gamma_labels.size() != 3 || c_labels.size() != 6) {
-        return false;
-    }
-
-    const int32_t z = a_labels[0];
-    const int32_t y = a_labels[1];
-    const int32_t x = a_labels[2];
-    const int32_t c = a_labels[3];
-    const int32_t t = a_labels[4];
-    const int32_t a = a_labels[5];
-    const int32_t b = a_labels[6];
-    const int32_t n = a_labels[7];
-    const int32_t input_g = b_labels[3];
-    const int32_t d = b_labels[5];
-    const int32_t e = b_labels[6];
-    const int32_t f = b_labels[7];
-    const int32_t output_g = gamma_labels[0];
-
-    if (b_labels != std::vector<int32_t>{z, y, x, input_g, t, d, e, f} ||
-        gamma_labels != std::vector<int32_t>{output_g, a, e} ||
-        c_labels != std::vector<int32_t>{t, z, y, x, input_g, c}) {
-        return false;
-    }
-    const std::vector<int32_t> output_labels{t, output_g, d, b, f, n};
-    if (plan.output_labels != output_labels ||
-        !all_distinct({z, y, x, c, t, a, b, n, input_g, output_g, d, e, f})) {
-        return false;
-    }
-    if (!exact_input_shape(a_labels, plan.input_shapes[0], plan.sizes) ||
-        !exact_input_shape(b_labels, plan.input_shapes[1], plan.sizes) ||
-        !exact_input_shape(gamma_labels, plan.input_shapes[2], plan.sizes) ||
-        !exact_input_shape(c_labels, plan.input_shapes[3], plan.sizes)) {
-        return false;
-    }
-
-    E4FusedPlan candidate;
-    candidate.spec.z = plan.sizes[static_cast<std::size_t>(z)];
-    candidate.spec.y = plan.sizes[static_cast<std::size_t>(y)];
-    candidate.spec.x = plan.sizes[static_cast<std::size_t>(x)];
-    candidate.spec.c = plan.sizes[static_cast<std::size_t>(c)];
-    candidate.spec.t = plan.sizes[static_cast<std::size_t>(t)];
-    candidate.spec.a = plan.sizes[static_cast<std::size_t>(a)];
-    candidate.spec.b = plan.sizes[static_cast<std::size_t>(b)];
-    candidate.spec.n = plan.sizes[static_cast<std::size_t>(n)];
-    candidate.spec.input_g = plan.sizes[static_cast<std::size_t>(input_g)];
-    candidate.spec.output_g = plan.sizes[static_cast<std::size_t>(output_g)];
-    candidate.spec.d = plan.sizes[static_cast<std::size_t>(d)];
-    candidate.spec.e = plan.sizes[static_cast<std::size_t>(e)];
-    candidate.spec.f = plan.sizes[static_cast<std::size_t>(f)];
-    const std::vector<int64_t> output_shape{
-        candidate.spec.t, candidate.spec.output_g, candidate.spec.d,
-        candidate.spec.b, candidate.spec.f, candidate.spec.n};
-    if (!checked_product(output_shape, &candidate.spec.output_elements)) {
-        return false;
-    }
-    // 收益判据（实测，2026-11-08）：staged 融合 kernel 只在空间体积为 1 时占优
-    // （z*y*x=1 → 快的 3.6x；z*y*x=8/27/64/512 → 慢 1.4x/9.7x/22x/26x；
-    //  L24 的 z*y*x=13824 → 慢 33x）。超出阈值即回落通用多步，避免灾难性退化。
-    if (candidate.spec.z * candidate.spec.y * candidate.spec.x >
-        kE4FusedMaxSpatialVolume) {
-        return false;
-    }
-    candidate.matched = true;
-    *fused = candidate;
-    return true;
-}
-
 int map_cuda_error(cudaError_t error) {
     if (error == cudaSuccess) {
         return QCD_STATUS_OK;
@@ -1668,12 +1309,6 @@ std::shared_mutex context_lifecycle_mutex;
 // TODO: streams are scoped to one CUDA device; multi-device scheduling is not implemented.
 bool trace_enabled() {
     static const bool enabled = std::getenv("PYQCD_EINSUM_TRACE") != nullptr;
-    return enabled;
-}
-
-// 融合路径探针：只有显式设 PYQCD_CUDA_TRACE_FUSED 时才打印，避免污染生产日志。
-bool fused_trace_enabled() {
-    static const bool enabled = std::getenv("PYQCD_CUDA_TRACE_FUSED") != nullptr;
     return enabled;
 }
 
@@ -1748,8 +1383,8 @@ class CudaWorkspace {
             return status;
         }
         const uint64_t signature = layout_signature_of(prepared);
-        const bool reusable = initialized_ && !sandwich_storage_ && !e4_storage_ &&
-                              device_ == device && dtype_id_ == dtype_id &&
+        const bool reusable = initialized_ && device_ == device &&
+                              dtype_id_ == dtype_id &&
                               capacity_elements_ > 0;
         if (reusable && signature == layout_signature_) {
             return QCD_STATUS_OK;
@@ -1812,7 +1447,6 @@ class CudaWorkspace {
         max_batch_ = max_batch;
         dtype_id_ = dtype_id;
         device_ = device;
-        sandwich_storage_ = false;
         layout_signature_ = signature;
 
         if (reuse_arena) {
@@ -1835,7 +1469,6 @@ class CudaWorkspace {
         }
 
         release();
-        sandwich_storage_ = false;
         dtype_id_ = dtype_id;
         device_ = device;
         output_offsets_.resize(prepared.size(), 0);
@@ -1873,75 +1506,6 @@ class CudaWorkspace {
                 stderr,
                 "PYQCD_EINSUM_CUDA_WORKSPACE elements=%lld streams=%d mallocs=1\n",
                 static_cast<long long>(storage_elements_), stream_count_);
-        }
-        return QCD_STATUS_OK;
-    }
-
-    int prepare_sandwich(int64_t output_elements, int dtype_id) {
-        if (output_elements <= 0) {
-            return QCD_STATUS_INVALID;
-        }
-        int device = -1;
-        int status = map_cuda_error(cudaGetDevice(&device));
-        if (status != QCD_STATUS_OK) {
-            return status;
-        }
-        if (initialized_ && sandwich_storage_ && device_ == device &&
-            dtype_id_ == dtype_id && storage_elements_ == output_elements) {
-            return QCD_STATUS_OK;
-        }
-
-        release();
-        dtype_id_ = dtype_id;
-        device_ = device;
-        sandwich_storage_ = true;
-        storage_elements_ = output_elements;
-        capacity_elements_ = output_elements;
-        output_elements_ = 0;
-        output_offsets_.assign(1, 0);
-        std::size_t bytes = 0;
-        if (!allocation_bytes(storage_elements_, dtype_id_, &bytes)) {
-            release();
-            return QCD_STATUS_INVALID;
-        }
-        status = map_cuda_error(cudaMalloc(&storage_, bytes));
-        if (status != QCD_STATUS_OK) {
-            release();
-            return status;
-        }
-        initialized_ = true;
-        if (trace_enabled()) {
-            std::fprintf(
-                stderr,
-                "PYQCD_EINSUM_CUDA_WORKSPACE mode=sandwich elements=%lld "
-                "streams=1 mallocs=1\n",
-                static_cast<long long>(storage_elements_));
-        }
-        return QCD_STATUS_OK;
-    }
-
-    int prepare_e4(int dtype_id) {
-        int device = -1;
-        int status = map_cuda_error(cudaGetDevice(&device));
-        if (status != QCD_STATUS_OK) {
-            return status;
-        }
-        if (initialized_ && e4_storage_ && device_ == device &&
-            dtype_id_ == dtype_id) {
-            return QCD_STATUS_OK;
-        }
-
-        release();
-        dtype_id_ = dtype_id;
-        device_ = device;
-        e4_storage_ = true;
-        capacity_elements_ = 0;
-        initialized_ = true;
-        if (trace_enabled()) {
-            std::fprintf(
-                stderr,
-                "PYQCD_EINSUM_CUDA_WORKSPACE mode=e4 elements=0 "
-                "streams=1 mallocs=0\n");
         }
         return QCD_STATUS_OK;
     }
@@ -2120,8 +1684,6 @@ class CudaWorkspace {
         stream_count_ = 1;
         device_ = -1;
         dtype_id_ = -1;
-        sandwich_storage_ = false;
-        e4_storage_ = false;
         pack_event_ = nullptr;
         output_offsets_.clear();
         done_events_.clear();
@@ -2153,8 +1715,6 @@ class CudaWorkspace {
     int dtype_id_ = -1;
     int device_ = -1;
     int stream_count_ = 1;
-    bool sandwich_storage_ = false;
-    bool e4_storage_ = false;
     bool initialized_ = false;
     cudaEvent_t pack_event_ = nullptr;
     std::vector<int64_t> output_offsets_;
@@ -2420,115 +1980,11 @@ int execute_prepared(
     return map_cuda_error(sync_error);
 }
 
-int execute_sandwich(
-    const pyqcd_einsum::ExecutionPlan& plan,
-    const std::vector<PreparedStep>& prepared,
-    const SandwichPlan& sandwich,
-    CudaWorkspace* workspace,
-    const std::vector<void*>& input_data,
-    void* output_data) {
-    if (workspace == nullptr || prepared.empty() || qcd_cuda_sandwich == nullptr) {
-        return QCD_STATUS_INTERNAL;
-    }
-    const int64_t output_elements = prepared.back().output_elements;
-    int status = workspace->prepare_sandwich(output_elements, plan.dtype_id);
-    if (status != QCD_STATUS_OK) {
-        return status;
-    }
-    void* workspace_output = workspace->output(0);
-    status = qcd_cuda_sandwich(
-        plan.dtype_id,
-        input_data[static_cast<std::size_t>(sandwich.left_matrix_input)],
-        input_data[static_cast<std::size_t>(sandwich.tensor_input)],
-        input_data[static_cast<std::size_t>(sandwich.right_matrix_input)],
-        workspace_output,
-        sandwich.spec,
-        nullptr);
-    if (status != QCD_STATUS_OK) {
-        cudaDeviceSynchronize();
-        return status;
-    }
-
-    std::size_t output_bytes = 0;
-    if (!allocation_bytes(output_elements, plan.dtype_id, &output_bytes)) {
-        return QCD_STATUS_INVALID;
-    }
-    const cudaError_t copy_error = cudaMemcpyAsync(
-        output_data, workspace_output, output_bytes,
-        cudaMemcpyDeviceToDevice, nullptr);
-    if (copy_error != cudaSuccess) {
-        return map_cuda_error(copy_error);
-    }
-    if (trace_enabled()) {
-        std::fprintf(
-            stderr,
-            "PYQCD_EINSUM_CUDA_SANDWICH prefix=%lld left=%lld middle=%lld "
-            "right=%lld lane=%lld kernel=1\n",
-            static_cast<long long>(sandwich.spec.prefix),
-            static_cast<long long>(sandwich.spec.left),
-            static_cast<long long>(sandwich.spec.contracted_left),
-            static_cast<long long>(sandwich.spec.right),
-            static_cast<long long>(sandwich.spec.lane));
-    }
-    return map_cuda_error(cudaDeviceSynchronize());
-}
-
-int execute_e4_fused(
-    const pyqcd_einsum::ExecutionPlan& plan,
-    const E4FusedPlan& fused,
-    CudaWorkspace* workspace,
-    const std::vector<void*>& input_data,
-    void* output_data) {
-    if (workspace == nullptr || !fused.matched || qcd_cuda_e4_fused == nullptr ||
-        input_data.size() != 4) {
-        return QCD_STATUS_INTERNAL;
-    }
-    int status = workspace->prepare_e4(plan.dtype_id);
-    if (status != QCD_STATUS_OK) {
-        return status;
-    }
-    status = qcd_cuda_e4_fused(
-        plan.dtype_id,
-        input_data[0],
-        input_data[1],
-        input_data[2],
-        input_data[3],
-        output_data,
-        fused.spec,
-        nullptr);
-    if (status != QCD_STATUS_OK) {
-        cudaDeviceSynchronize();
-        return status;
-    }
-    if (trace_enabled()) {
-        std::fprintf(
-            stderr,
-            "PYQCD_EINSUM_CUDA_E4 z=%lld y=%lld x=%lld c=%lld t=%lld "
-            "a=%lld b=%lld n=%lld g=%lld G=%lld d=%lld e=%lld f=%lld kernel=1\n",
-            static_cast<long long>(fused.spec.z),
-            static_cast<long long>(fused.spec.y),
-            static_cast<long long>(fused.spec.x),
-            static_cast<long long>(fused.spec.c),
-            static_cast<long long>(fused.spec.t),
-            static_cast<long long>(fused.spec.a),
-            static_cast<long long>(fused.spec.b),
-            static_cast<long long>(fused.spec.n),
-            static_cast<long long>(fused.spec.input_g),
-            static_cast<long long>(fused.spec.output_g),
-            static_cast<long long>(fused.spec.d),
-            static_cast<long long>(fused.spec.e),
-            static_cast<long long>(fused.spec.f));
-    }
-    return map_cuda_error(cudaDeviceSynchronize());
-}
-
 struct CompiledContext {
     uint64_t magic = kCompiledContextMagic;
     pyqcd_einsum::ExecutionPlan plan;
     std::vector<ResolvedStep> resolved;
     std::vector<PreparedStep> prepared;
-    SandwichPlan sandwich;
-    E4FusedPlan e4_fused;
     CudaWorkspace workspace;
     std::mutex mutex;
 
@@ -2550,13 +2006,6 @@ bool initialize_context(const void* plan_data, CompiledContext* context) {
     if (!prepare_execution(context->plan, context->resolved, &context->prepared) ||
         context->prepared.size() != context->plan.steps.size()) {
         return false;
-    }
-    // specialize=False 时由 Python 侧设置该变量，强制走通用多步路径以便 A/B 对照。
-    if (std::getenv("PYQCD_EINSUM_DISABLE_FUSED") == nullptr) {
-        match_sandwich(context->plan, context->resolved, &context->sandwich);
-        match_e4_fused(context->plan, context->resolved, &context->e4_fused);
-    } else if (trace_enabled()) {
-        std::fprintf(stderr, "PYQCD_EINSUM_FUSED_DISABLED\n");
     }
     return true;
 }
@@ -2589,25 +2038,6 @@ int execute_context(
     }
 
     std::lock_guard<std::mutex> lock(context->mutex);
-    if (context->e4_fused.matched && qcd_cuda_e4_fused != nullptr) {
-        if (fused_trace_enabled()) {
-            std::fprintf(stderr, "[fused-hit] e4_fused\n");
-        }
-        return execute_e4_fused(
-            context->plan, context->e4_fused, &context->workspace,
-            input_data, output_data);
-    }
-    if (context->sandwich.matched && qcd_cuda_sandwich != nullptr) {
-        if (fused_trace_enabled()) {
-            std::fprintf(stderr, "[fused-hit] sandwich\n");
-        }
-        return execute_sandwich(
-            context->plan, context->prepared, context->sandwich,
-            &context->workspace, input_data, output_data);
-    }
-    if (fused_trace_enabled()) {
-        std::fprintf(stderr, "[fused-hit] prepared\n");
-    }
     return execute_prepared(
         context->plan, context->prepared, &context->workspace, input_data, output_data);
 }

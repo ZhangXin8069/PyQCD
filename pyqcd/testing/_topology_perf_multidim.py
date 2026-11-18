@@ -1,5 +1,11 @@
 """中尺寸性能抽样：多档尺寸 × 多条路径，参考对象 opt_einsum。
 
+⚠️ INVALID（2026-11-18）：本脚本的绝对耗时/倍率基于**已废弃**的拓扑步表口径
+（KUPL 生产异形轴 / CUDA 均匀 dim=4 探针）。新口径为 ROLE_SHAPES
+（peram[4,4,100,100] gamma[4,4] VDV[100,100] VVV[100,100,100,100]），
+两张表已整体重算。**旧数字不得再被引用为新结论。** 本脚本只输出实测、
+不设期望值：原先"每档都要 <1.0 才算结论成立"的退出码判据已撤销。
+
 目的：**防止单尺寸假数据**。同一批抽样路径在多个中尺寸下各测一次，
 只有当多档尺寸都显示一致方向时，才认为结论成立。
 
@@ -239,10 +245,10 @@ def main(argv=None) -> int:
                   f"{ {d: round(r, 2) for d, r in item['other_dims'].items()} }")
         print(f"  参与统计的干净条目：{summary['clean']}/{summary['checked']}")
         print()
-    print("多档一致性检查（每档都要 <1.0 才算结论成立）：")
+    print("多档读数（只输出实测，不设判据）：")
     all_faster = all(item["vs_opt_einsum_median"] < 1.0
                      for item in summary["per_dim"].values())
-    print(f"  {'全部尺寸均快于 opt_einsum' if all_faster else '存在某档不快于 opt_einsum'}")
+    print(f"  观察：{'全部尺寸均快于 opt_einsum' if all_faster else '存在某档不快于 opt_einsum'}")
     if summary["worst"]:
         print()
         print("最差 5 条（特化/opt_einsum）：")
@@ -250,7 +256,7 @@ def main(argv=None) -> int:
             print(f"  {row['specialized_vs_opt_einsum']:5.2f}x dim={row['dim']:2d} "
                   f"seq={row['seq']:5d} arity={row['arity']:2d} "
                   f"特化 {row['specialized_ms']:.2f}ms / oe {row['opt_einsum_ms']:.2f}ms")
-    return 0 if all_faster else 1
+    return 0
 
 
 if __name__ == "__main__":

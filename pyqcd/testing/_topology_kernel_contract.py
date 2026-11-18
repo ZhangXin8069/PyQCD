@@ -29,11 +29,12 @@ from unittest.mock import patch
 
 import numpy as np
 
-from ..einsum import _kernel_cuda, _kernel_kupl
+from ..einsum import _kernel_cuda, _kernel_force, _kernel_kupl
 from ..einsum import contract, contract_path
 from ..einsum._bench_scene import dims as scene_dims
 from ..einsum._native_plan import dtype_id as native_dtype_id
 from ..einsum._native_plan import encode_execution_plan
+from ..einsum._topology_gen_common import role_sizes
 from ..einsum.bench_specialized import _label_sizes
 from ..einsum.kupl import einsum as kupl_einsum
 from ..einsum import _wick_tasklist as tasklist
@@ -72,9 +73,8 @@ _PROBE_KEYS = (
     "dtype", "dtype_id", "n_operands", "plan_bytes",
     "steps", "output_shape", "out", "copied", "offsets", "path",
 )
-# KUPL 侧多一项路线标记（``specialized``）：命中编译期 v3 步表与回落 v2 通用执行器
-# 的返回码与数值完全相同，只有这个字段能区分——「拓扑命中」的一切判定都靠它。
-_KUPL_EXTRA_PROBE_KEYS = ("specialized",)
+# KUPL 侧不再多一项路线标记：原生入口只执行编译期步表（未命中即 status 4），
+# ``path`` 恒为 ``kupl_topology``，「拓扑命中」与「真的跑了步表」是同一件事。
 
 
 # ── 工具 ────────────────────────────────────────────────────────────────────
@@ -157,15 +157,11 @@ def _reset_kernel_globals() -> tuple[Any, ...]:
     saved = (
         _kernel_kupl._entry_topology,
         _kernel_kupl._failed_topology,
-        _kernel_kupl._entry_topology_route,
-        _kernel_kupl._failed_topology_route,
         dict(_kernel_kupl._TOPOLOGY_DTYPE_SUPPORT),
         dict(_kernel_cuda._TOPOLOGY_DTYPE_SUPPORT),
     )
     _kernel_kupl._entry_topology = None
     _kernel_kupl._failed_topology = False
-    _kernel_kupl._entry_topology_route = None
-    _kernel_kupl._failed_topology_route = False
     _kernel_kupl._TOPOLOGY_DTYPE_SUPPORT.clear()
     _kernel_cuda._TOPOLOGY_DTYPE_SUPPORT.clear()
     _kernel_kupl._negative_cache_clear()
@@ -174,7 +170,6 @@ def _reset_kernel_globals() -> tuple[Any, ...]:
 
 def _restore_kernel_globals(saved: tuple[Any, ...]) -> None:
     (_kernel_kupl._entry_topology, _kernel_kupl._failed_topology,
-     _kernel_kupl._entry_topology_route, _kernel_kupl._failed_topology_route,
      kupl_support, cuda_support) = saved
     _kernel_kupl._TOPOLOGY_DTYPE_SUPPORT.clear()
     _kernel_kupl._TOPOLOGY_DTYPE_SUPPORT.update(kupl_support)
@@ -197,27 +192,6 @@ def _require_kupl() -> None:
         raise unittest.SkipTest(
             f"native KUPL topology entry unavailable: "
             f"{_kernel_kupl.LAST_FAILURE.get('reason', '')}")
-    if _kernel_kupl._function_topology_route() is None:
-        raise unittest.SkipTest(
-            "this native KUPL build cannot report which route it took "
-            "(qcd_kupl_topology_last_specialized missing), so v3 and v2 are "
-            f"indistinguishable: {_kernel_kupl._REBUILD_HINT}")
-
-
-def _assert_route(info: dict, label: str) -> bool | None:
-    """路线标记必须与 ``path`` 自洽；CUDA 侧还没有该标记时返回 ``None``。
-
-    ``path`` 是本契约的对外口径：``kupl_topology`` 只在**真的走了 v3 编译期步表**
-    时出现，未命中步表而由 v2 通用执行器完成时写 ``kupl_topology_v2``。两者返回码
-    与数值都一样，**只有**这个标记能区分，所以任何"命中"断言都必须先过这里。
-    """
-    if "specialized" not in info:
-        return None
-    specialized = info["specialized"]
-    assert isinstance(specialized, bool), (label, specialized)
-    expected = "kupl_topology" if specialized else "kupl_topology_v2"
-    assert info.get("path") == expected, (label, info.get("path"), specialized)
-    return specialized
 
 
 def _require_cuda() -> None:
@@ -330,7 +304,7 @@ def _check_dtype_matrix(module: Any, path: str, to_array: Callable[[Any], Any],
             f"{path}: {np.dtype(dtype)} 数值错误 rel={error:.3e}")
 
         info = module.LAST_INFO
-        keys = _PROBE_KEYS + (_KUPL_EXTRA_PROBE_KEYS if module is _kernel_kupl else ())
+        keys = _PROBE_KEYS
         missing = [key for key in keys if key not in info]
         assert not missing, f"{path}: LAST_INFO 缺 {missing}"
         assert info["dtype"] == str(np.dtype(dtype))
@@ -342,14 +316,9 @@ def _check_dtype_matrix(module: Any, path: str, to_array: Callable[[Any], Any],
         assert tuple(info["copied"]) == ()
         assert info["offsets"] is None
         if module is _kernel_kupl:
-            specialized = _assert_route(info, path)
-            if specialized is False:
-                raise unittest.SkipTest(
-                    "this native KUPL build has no compile-time step table "
-                    "(topology_kernels.inc absent), so every plan falls back to v2: "
-                    f"{_kernel_kupl._REBUILD_HINT}")
-            # PROBE_EQUATION 是语料 seq=1，必须在 2582 条基础步表里。
-            assert specialized is True, (path, info.get("specialized"))
+            # PROBE_EQUATION 是语料 seq=1，必须在基础步表里；步表是原生唯一路线，
+            # 未命中即 status 4、根本走不到这条成功分支。
+            assert info.get("path") == path, (path, info.get("path"))
         assert info["path"] == path, info["path"]
 
     if not accepted:
@@ -588,14 +557,19 @@ def test_noncontiguous_operands_are_copied_and_recorded():
 
 
 def test_out_buffer_contract():
-    """out：连续同 dtype/shape 必须复用，其余一律回落且不改缓冲区。"""
+    """out：连续同 dtype/shape 必须复用，其余一律回落且不改缓冲区。
+
+    用 ``PROBE_EQUATION``（语料 seq=1，输出是标量）：步表是原生唯一执行器，
+    ``ij,jk->ik`` 这类语料外方程现在直接 status 4，根本到不了 out 的写入路径。
+    """
     module = _kernel_kupl
     _require_kupl()
-    left, right = _make_operands([(3, 4), (4, 5)], np.complex64, seed=19)
-    expected = np.einsum("ij,jk->ik", left, right)
+    operands = probe_operands(2, np.complex64, seed=19)
+    expected = np.einsum(PROBE_EQUATION, *operands)
+    assert expected.shape == (), expected.shape
 
-    buffer = np.full((3, 5), np.nan + 1j * np.nan, dtype=np.complex64)
-    result = module.try_topology_apply("ij,jk->ik", [left, right], out=buffer)
+    buffer = np.full((), np.nan + 1j * np.nan, dtype=np.complex64)
+    result = module.try_topology_apply(PROBE_EQUATION, operands, out=buffer)
     if result is None:
         reason = str(module.LAST_FAILURE.get("reason", ""))
         assert module.LAST_FAILURE.get("status") == 4, (reason, module.LAST_FAILURE)
@@ -607,8 +581,8 @@ def test_out_buffer_contract():
     assert _relative_error(buffer, expected) <= 1e-5
 
     rejected = {
-        "dtype": np.zeros((3, 5), dtype=np.float32),
-        "contiguous": np.zeros((3, 10), dtype=np.complex64)[:, ::2],
+        "dtype": np.zeros((), dtype=np.float32),
+        "contiguous": np.zeros((2, 4), dtype=np.complex64)[:, ::2],
         "numpy array": [(0.0,) * 5] * 3,
     }
     for label, buffer_value in rejected.items():
@@ -617,7 +591,7 @@ def test_out_buffer_contract():
             filler[...] = np.nan
         module.LAST_INFO.clear()
         assert module.try_topology_apply(
-            "ij,jk->ik", [left, right], out=filler) is None, label
+            PROBE_EQUATION, operands, out=filler) is None, label
         reason = str(module.LAST_FAILURE.get("reason", ""))
         assert label in reason, (label, reason)
         assert module.LAST_INFO == {}
@@ -625,7 +599,8 @@ def test_out_buffer_contract():
             assert np.isnan(filler).all(), f"{label}: 被拒绝的 out 不得被写入"
 
     shape_bad = np.zeros((5, 3), dtype=np.complex64)
-    assert module.try_topology_apply("ij,jk->ik", [left, right], out=shape_bad) is None
+    assert module.try_topology_apply(
+        PROBE_EQUATION, operands, out=shape_bad) is None
     assert "output shape" in str(module.LAST_FAILURE.get("reason", ""))
     assert not shape_bad.any(), "shape 不匹配的 out 不得被写入"
 
@@ -634,13 +609,13 @@ def test_allocated_output_does_not_alias_operands():
     """不指定 out 时必须新分配结果，不能把输入别名交给调用方。"""
     module = _kernel_kupl
     _require_kupl()
-    left, right = _make_operands([(4, 4), (4, 4)], np.float32, seed=23)
-    result = module.try_topology_apply("ij,jk->ik", [left, right])
+    operands = probe_operands(4, np.complex64, seed=23)
+    result = module.try_topology_apply(PROBE_EQUATION, operands)
     if result is None:
         raise unittest.SkipTest(f"topology entry declined: {module.LAST_FAILURE}")
     assert module.LAST_INFO["out"] == "allocated"
-    assert not np.shares_memory(result, left) and not np.shares_memory(result, right)
-    assert _relative_error(result, np.einsum("ij,jk->ik", left, right)) <= 1e-5
+    assert not any(np.shares_memory(result, operand) for operand in operands)
+    assert _relative_error(result, np.einsum(PROBE_EQUATION, *operands)) <= 1e-5
 
 
 def test_unencodable_plan_falls_back_without_raising():
@@ -728,8 +703,14 @@ def _topology_equation() -> str:
     raise unittest.SkipTest("语料里找不到拓扑入口服务的方程")
 
 
-def test_native_failure_falls_back_with_one_warning():
-    """原生返回错误码：结果仍正确，且同一形态只发一条警告。"""
+def test_native_failure_raises_instead_of_falling_back():
+    """原生返回错误码：强制 ``topology`` 必须**抛错**，不许静默回落到通用路径。
+
+    旧契约钉的是"失败 → 一条 warning → 回落"，那条自动分派链已随 ``auto`` 一起删除
+    （缺省 ``kernel_force`` 就是 ``generic``，它压根不下发内核）。现在"跑不成"只有一种
+    语义：``KernelUnavailableError``，正文里带具体标签与原生状态码——用户才不会以为
+    自己要的内核跑过了。
+    """
     _require_kupl()
     equation = _topology_equation()
     operands = _make_operands(_shapes(equation, dim=2), np.complex64, seed=29)
@@ -738,28 +719,29 @@ def test_native_failure_falls_back_with_one_warning():
     entry, record = _entry_status_recorder(status=1)
     _allow_dtype(_kernel_kupl, np.complex64)
     _clear_kernel_warnings()
-    # 分派链里 `kupl_dedicated` 排在 `kupl_topology` 之前：不屏蔽它的话，
-    # dedicated 会先成功接手，`load_topology` 根本不会被调用，本契约就测不到
-    # "拓扑入口失败后的回落"。这里把 dedicated 显式禁用，只留 topology 路径。
+    # 强制单值标签：只下发 `kupl_topology`（不再有"先 dedicated 再 topology"的次序），
+    # 于是这条断言精确盯住拓扑入口的失败语义。
     with patch.object(kupl_einsum, "load_topology", lambda: entry), \
-            patch.object(_kernel_kupl, "try_dedicated",
-                         lambda *args, **kwargs: None), \
-            patch.object(_kernel_cuda, "enabled", lambda: False), \
             warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        first = _quiet(lambda: contract(equation, *operands, specialize=True))
-        second = _quiet(lambda: contract(equation, *operands, specialize=True))
+        try:
+            _quiet(lambda: contract(equation, *operands, kernel_force="topology"))
+        except _kernel_force.KernelUnavailableError as exc:
+            message = " ".join(str(exc).split())
+        else:
+            raise AssertionError(
+                "强制 topology 跑不成必须抛 KernelUnavailableError（不许回落）")
 
-    assert record, "原生入口必须真的被调用过（否则这条契约没测到回落）"
-    assert _relative_error(first, expected) <= TOLERANCES["complex64"]
-    assert _relative_error(second, expected) <= TOLERANCES["complex64"]
-    runtime = [item for item in caught if issubclass(item.category, RuntimeWarning)]
-    assert len(runtime) == 1, (
-        f"同一形态的回落只应警告一次，实际 {len(runtime)}: "
-        f"{[str(item.message)[:80] for item in runtime]}")
-    message = str(runtime[0].message)
-    assert "falls back" in message and "topology:" in message, message
+    assert record, "原生入口必须真的被调用过（否则这条契约没测到失败语义）"
+    assert "kupl_topology（topology）" in message, message
     assert "status 1" in message, message
+    # 抛错路径不发"回落"告警：那种说法暗示还有一条自动回退，已经不存在了。
+    runtime = [item for item in caught if issubclass(item.category, RuntimeWarning)]
+    assert not [item for item in runtime if "falls back" in str(item.message)], (
+        [str(item.message)[:80] for item in runtime])
+    # 通用路径的数值仍然正确（对照组，证明本机的方程/形状没问题）。
+    assert _relative_error(expected, np.einsum(equation, *operands)) <= \
+        TOLERANCES["complex64"]
 
 
 # ── 5. dtype 探测：容器化、缓存与原因可分辨（2026-11-14 补） ────────────────
@@ -996,12 +978,7 @@ def test_every_dtype_is_native_when_its_probe_passes():
             assert result.dtype == dtype, f"{dtype}: 结果 dtype 被改成 {result.dtype}"
             assert _relative_error(result, expected) <= TOLERANCES[dtype.name], dtype
             info = dict(_kernel_kupl.LAST_INFO)
-            specialized = _assert_route(info, dtype.name)
-            if specialized is False:
-                raise unittest.SkipTest(
-                    "this native KUPL build has no compile-time step table "
-                    f"(topology_kernels.inc absent): {_kernel_kupl._REBUILD_HINT}")
-            assert specialized is True, (dtype, info.get("specialized"))
+            # 原生只执行编译期步表：失败就不会有 LAST_INFO，能到这里就是命中。
             assert info.get("path") == "kupl_topology", (dtype, info.get("path"))
             checked.append(dtype.name)
     finally:
@@ -1039,18 +1016,19 @@ for dtype in (np.complex128, np.complex64):
 
 
 def test_complex_dtypes_reach_the_v3_step_table():
-    """复数必须真的走进 v3 步表（cgemm/zgemm 执行），而不是回落 v2 通用执行器。
+    """复数必须真的走进编译期步表（cgemm/zgemm 执行）。
 
     回归点：``topology_apply.cpp::run_specialized`` 曾把 ``elem_kind`` 只赋给
     ``QCD_DTYPE_FLOAT32`` / ``QCD_DTYPE_FLOAT64``，其余一律 ``return
-    kSpecializedMiss``，于是复数一路落到 ``execute_parsed_contract``（**v2**）。
-    这条回落对上层是不可见的：``LAST_INFO['path']`` 仍写 ``kupl_topology``（那是
-    Python 侧的标记），数值同样正确，只是慢。唯一可区分处是原生 trace——只有
-    v3 命中才打印 ``topology-specialized``，于是这里用子进程抓它，并要求两类
-    复数（dtype_id 0/1）各有一条，且没有"缺 cgemm/zgemm"的 miss 行。
+    kSpecializedMiss``，于是复数落到了当时还存在的 version-2 通用执行器回路上。
+    那条回路对上层是不可见的：``LAST_INFO['path']`` 仍写 ``kupl_topology``，
+    数值同样正确，只是慢。现在回落已删除，miss 就是 status 4，但"是否真的由
+    步表执行"仍只由原生 trace 证实——只有命中才打印 ``topology-specialized``，
+    于是这里用子进程抓它，并要求两类复数（dtype_id 0/1）各有一条，且没有
+    "缺 cgemm/zgemm"的 miss 行。
 
-    复数能力缺失的构建（BLAS 不导出 cgemm/zgemm）跳过：契约是"能跑就必须走 v3"，
-    不是"每台机器都必须能跑复数"。
+    复数能力缺失的构建（BLAS 不导出 cgemm/zgemm）跳过：契约是"能跑就必须走
+    步表"，不是"每台机器都必须能跑复数"。
     """
     _require_kupl()
     import os
@@ -1089,7 +1067,7 @@ def test_complex_dtypes_reach_the_v3_step_table():
         f"复数在缺 cgemm/zgemm 的构建里不应被下发：\n{trace}")
 
 
-#: 语料内抽样（基础步表 seq ≤ 2582）：必须命中 v3。
+#: 语料内抽样（基础步表 seq ≤ 2582）：必须命中编译期步表。
 _CORPUS_CASES = (1, 2, 9)
 #: 语料外的生产方程：sush 8 算子 2pt（S1）与 15 算子 3pt（P1），步表里没有它们。
 _OUTSIDE_CASES = (
@@ -1099,7 +1077,8 @@ _OUTSIDE_CASES = (
 
 # 子进程里跑：``trace_enabled()`` 首次调用后就被静态缓存，同进程内改环境变量已经
 # 太晚。每条方程前后打 ``CASE`` 标记（flush 过），父进程据此把原生 trace 切段，
-# 从而能逐条对账"标记为 v3 的必须有 topology-specialized，标记为 v2 的必须没有"。
+# 从而能逐条对账"成功的必须有 topology-specialized，失败的必须没有"——原生只在
+# 命中编译期步表时打印那一行。
 _ROUTE_CHILD = """
 import sys
 
@@ -1120,33 +1099,34 @@ def operands(equation, dim=2):
     return values
 
 
-# 预热：dtype 探测自己会命中 v3 并打一行 trace，它落在第一个 CASE 之前，
+# 预热：dtype 探测自己会命中步表并打一行 trace，它落在第一个 CASE 之前，
 # 因此不会被算到任何一条方程头上。
 kk.try_topology_apply(CASES[0][1], operands(CASES[0][1]))
 
 for index, (kind, equation) in enumerate(CASES):
     print("CASE", index, kind, flush=True, file=sys.stderr)
+    kk.LAST_INFO.clear()
     result = kk.try_topology_apply(equation, operands(equation))
-    assert result is not None, (equation, kk.LAST_FAILURE)
-    flag = kk.LAST_INFO.get("specialized")
-    print("ROUTE", index, -1 if flag is None else int(bool(flag)),
-          kk.LAST_INFO.get("path"), flush=True)
+    print("OUTCOME", index, 0 if result is None else 1,
+          kk.LAST_INFO.get("path") or "-",
+          (kk.LAST_FAILURE.get("status") if result is None else "-"),
+          flush=True)
 """
 
 
-def test_v2_fallback_is_reported_and_matches_the_native_trace():
-    """语料内方程必须标 v3，语料外（无步表）必须标 v2，且与原生 trace 逐条一致。
+def test_step_table_hits_succeed_and_outside_equations_are_unsupported():
+    """语料内必须命中步表；语料外一律 status 4，且与原生 trace 逐条对账。
 
     回归点（2026-11-15）：``apply_topology`` 在步表未命中时把整条计划静默交给
     ``execute_parsed_contract``（v2），返回码却仍是 0，而 Python 侧无条件写
     ``LAST_INFO['path'] = 'kupl_topology'``。于是**任何**成功执行都被报成"拓扑
-    特化"：S1/P1 这类不在 2582 条步表里的生产方程也成了命中，77 格蒸馏基准里有
-    52 格（seq>2582 的附录）因此把 v2 的耗时算到了 v3 头上。
+    特化"：S1/P1 这类不在步表里的生产方程也成了命中，77 格蒸馏基准里有 52 格
+    （seq>2582 的附录）因此把回落路线的耗时算到了步表头上。
 
-    现在路线由原生 ``qcd_kupl_topology_last_specialized()`` 报告：v3 命中写
-    ``kupl_topology`` / ``specialized=True``，v2 回落写 ``kupl_topology_v2`` /
-    ``specialized=False``。原生只在 v3 命中时打印 ``topology-specialized:``，所以
-    这个标记能与 trace 逐条对账——这是本条用例作为"保险丝"的核心。
+    2026-11-18 删除回落之后只剩一条判据：**成功 = 命中编译期步表**，失败 =
+    ``QCD_TOPOLOGY_UNSUPPORTED``（status 4，``LAST_FAILURE`` 带原因、``LAST_INFO``
+    为空）。本用例因此只断言"成功/失败"两侧，并用原生 trace 交叉验证——只有命中
+    步表才打印 ``topology-specialized:``，这条保险丝仍然有效。
     """
     _require_kupl()
     import os
@@ -1170,12 +1150,12 @@ def test_v2_fallback_is_reported_and_matches_the_native_trace():
     assert completed.returncode == 0, (
         f"route child failed: {completed.stderr[-800:]}")
 
-    flags: dict[int, tuple[int, str]] = {}
+    outcomes: dict[int, tuple[int, str, str]] = {}
     for line in completed.stdout.splitlines():
-        if line.startswith("ROUTE "):
-            _, index, flag, path = line.split()
-            flags[int(index)] = (int(flag), path)
-    assert len(flags) == len(cases), completed.stdout
+        if line.startswith("OUTCOME "):
+            _, index, hit, path, status = line.split()
+            outcomes[int(index)] = (int(hit), path, status)
+    assert len(outcomes) == len(cases), completed.stdout
 
     segments: list[list[str]] = []
     for line in completed.stderr.splitlines():
@@ -1186,17 +1166,24 @@ def test_v2_fallback_is_reported_and_matches_the_native_trace():
     assert len(segments) == len(cases), completed.stderr[-1200:]
 
     for index, (kind, equation) in enumerate(cases):
-        flag, path = flags[index]
+        hit, path, status = outcomes[index]
         expected = 1 if kind == "corpus" else 0
-        assert flag == expected, (
-            f"{kind} 方程 {equation!r}: specialized 标记={flag}，期望 {expected}")
-        assert path == ("kupl_topology" if expected else "kupl_topology_v2"), (
-            f"{kind} 方程 {equation!r}: path={path!r}")
+        assert hit == expected, (
+            f"{kind} 方程 {equation!r}: 结果={'成功' if hit else '回落'}，"
+            f"期望 {'成功' if expected else '回落'}（status={status}）")
+        if expected:
+            assert path == "kupl_topology", (
+                f"{kind} 方程 {equation!r}: path={path!r}，成功即命中步表")
+        else:
+            assert path == "-", (
+                f"{kind} 方程 {equation!r}: 回落不得留下 LAST_INFO（path={path!r}）")
+            assert status == "4", (
+                f"{kind} 方程 {equation!r}: 步表未命中必须是 status 4，得到 {status}")
         hits = sum("topology-specialized:" in line for line in segments[index])
         assert hits == expected, (
             f"{kind} 方程 {equation!r}: 原生 trace 出现 {hits} 行 "
-            f"topology-specialized，与 specialized={bool(flag)} 不一致"
-            f"（v3 命中才打印这一行）：\n{''.join(segments[index])}")
+            f"topology-specialized，与{'命中' if expected else '回落'}不一致"
+            f"（命中步表才打印这一行）：\n{''.join(segments[index])}")
 
 
 # ── 7. pack-bound 守卫的流量模型：只计真正要 pack 的那一侧（2026-11-15） ────
@@ -1221,7 +1208,12 @@ class _ShapedOperand:
 
 
 def _production_plan(seq: int, scene: str = "distill"):
-    """按语料 roles 的生产尺寸编码该 seq 的 plan（零分配）。"""
+    """按 ``--scene`` 档（``_bench_scene.dims`` + ``_label_sizes``）编码该 seq 的 plan。
+
+    只用于**守卫记账模型**的规模敏感性（pack 判据、比值诊断）：那里量的是一条计划
+    自身的字节数/FLOPs，不涉及原生 trace。要与编译期步表对账请用
+    :func:`_role_plan_shapes`——步表是 ``ROLE_SHAPES`` 口径，两套形状不可互换。
+    """
     task = tasklist.lookup(seq)
     assert task is not None, f"seq {seq} 不在语料里"
     terms, _out = parse(task.equation)
@@ -1232,6 +1224,27 @@ def _production_plan(seq: int, scene: str = "distill"):
     plan = encode_execution_plan(
         info.contraction_list, [_ShapedOperand(shape, dtype) for shape in shapes])
     return task.equation, plan, shapes
+
+
+def _role_plan_shapes(seq: int) -> tuple[str, list[tuple[int, ...]]]:
+    """按 :data:`ROLE_SHAPES` 取该 seq 的操作数形状（**步表生成侧的同一口径**）。
+
+    两张编译期步表都由 ``topology_steps_gen`` 用 ``role_sizes``（= ``ROLE_SHAPES``：
+    ``peram[4,4,100,100]`` / ``gamma[4,4]`` / ``VDV[100,100]`` /
+    ``VVV[100,100,100,100]``）定型收缩序，并把这个**配对**写死进表里。原生执行器
+    执行的是表里的配对，尺寸向量却取自本次下发的 plan —— 两套形状一旦不是同一套，
+    trace 就是"表的配对 + 调用方的尺寸"，产物既不属于表也不属于调用方。
+
+    任何"Python 判定 vs 原生 trace"的比对都必须用这里的形状（2026-11-18 实测：
+    用 ``_label_sizes`` 的 scene 口径去比，seq=3 的原生第一步被算成
+    ``N=1000000``——那是表里第一步的左/右项按 scene 尺寸向量算出来的
+    ``g*f*h = 100*100*100``，与调用方 plan 的 ``N=4`` 毫无关系）。
+    """
+    task = tasklist.lookup(seq)
+    assert task is not None, f"seq {seq} 不在语料里"
+    terms, _out = parse(task.equation)
+    sizes = role_sizes(terms, task.roles)
+    return task.equation, [tuple(sizes[label] for label in term) for term in terms]
 
 
 def test_pack_bound_guard_only_counts_the_sides_that_pack():
@@ -1328,7 +1341,6 @@ def emit(text):
 # 先跑一遍 dtype 探测：它自己会做一次原生 apply 并打出 trace，落在第一个 CASE
 # 之前，因此不会被算到任何一条方程头上。
 kk._topology_dtype_enabled(np.dtype(np.complex128))
-entry = kk._function_topology_route()
 
 for equation, shapes in CASES:
     rng = np.random.default_rng(11)
@@ -1346,17 +1358,17 @@ for equation, shapes in CASES:
             record["batch"], record["m"], record["k"], record["n"],
             record["a_kind"], record["b_kind"], record["path"],
             int(record["output_canonical"])))
+    # 步表是原生唯一路线：跑不出来会抛 NativeUnavailable（status 4），
+    # 子进程直接失败——因此这些逐步行只可能来自步表执行器。
     native.topology_apply(plan, operands)
-    flag = None if entry is None else kk._topology_specialized(entry)
-    emit("ROUTE %d" % (-1 if flag is None else int(bool(flag))))
     del operands, plan
 """
 
 #: 便宜且结构互补的三条基础语料（生产 ``distill`` 尺寸下 v3 分别 28 ms / 0.5 ms /
 #: 0.3 ms，峰值内存 < 0.3 GiB）：它们合起来覆盖 ``path`` 的四种取值与一次真实
-#: unpack（seq=855 末步 ``c_axes=[1,0]``）。**必须用生产尺寸**：v3 步表的收缩序是
-#: 生成期按生产尺寸定型的，等长 dim=3 下 greedy 的次序不同（实测 seq=379 在 dim=3
-#: 的原生逐步行与本 plan 的推演就不一致），那样比对的是两条不同的路径。
+#: unpack（seq=855 末步 ``c_axes=[1,0]``）。**形状必须取 ``ROLE_SHAPES``**：v3 步表
+#: 的收缩序是生成期在 ``role_sizes`` 上定型的，原生执行表里的配对却读调用方 plan 的
+#: 尺寸向量；换成别的口径比的是"表 + 别的尺寸"这个既非表也非调用方的东西。
 _LAYOUT_SEQS = (3, 855, 2)
 
 
@@ -1366,8 +1378,18 @@ def test_pack_bound_guard_matches_the_native_step_layout_trace():
     守卫的账全靠 Python 侧推演，唯一的可信证据是原生在**同一条 plan** 上打出的
     ``batch=/M=/K=/N= a=plain|trans|pack b=.. path=direct|direct-a|direct-b|pack``。
     只要有一处判定与原生不一致，pack 估算就与真实流量脱节 —— 那正是"静态高估"
-    的来源（旧守卫把单侧直连也计成两侧 pack）。这里逐行对账，并同时钉住路线：
-    ``ROUTE 1`` 表示这些行确实来自编译期 v3 步表，不是 v2 通用执行器。
+    的来源（旧守卫把单侧直连也计成两侧 pack）。这里逐行对账。路线不再是变量：
+    回落已删除，步表是原生唯一执行器，跑不出来子进程就失败，所以这些逐步行
+    只可能来自步表执行器。
+
+    **形状口径（2026-11-18 定位并修正）**：本用例原先把 ``_label_sizes`` 的 scene
+    尺寸喂给子进程，与步表的生成口径不是同一套，于是 seq=3 的原生第一步被读成
+    ``M=4 K=4 N=1000000`` 而 Python 推演是 ``N=4``。差值不是"旧表"，是原生把
+    **表里的左/右项配对**套在**调用方 plan 的尺寸向量**上：表里该步的右项含
+    ``g,f,h`` 三个 100 长标签（``100^3 = 1000000``），而调用方的 plan 在同一步是
+    另一对操作数。改用 :func:`_role_plan_shapes`（= :data:`ROLE_SHAPES`）后，三条
+    语料的每一步（6/9/5 步）都与原生逐字相同——即一侧本来错在**形状源**，不在守卫
+    的判定。
     """
     _require_kupl()
     import os
@@ -1377,7 +1399,7 @@ def test_pack_bound_guard_matches_the_native_step_layout_trace():
 
     cases = []
     for seq in _LAYOUT_SEQS:
-        equation, _plan, shapes = _production_plan(seq)
+        equation, shapes = _role_plan_shapes(seq)
         cases.append((equation, [list(shape) for shape in shapes]))
     assert len({equation for equation, _ in cases}) == len(cases), cases
 
@@ -1398,7 +1420,7 @@ def test_pack_bound_guard_matches_the_native_step_layout_trace():
     for line in completed.stderr.splitlines():
         if line.startswith("CASE "):
             segments.append({"equation": line[len("CASE "):], "records": [],
-                             "native": [], "route": None})
+                             "native": []})
         elif line.startswith("PYC ") and segments:
             batch, m, k, n, a_kind, b_kind, path, canonical = line.split()[1:]
             segments[-1]["records"].append({
@@ -1406,8 +1428,6 @@ def test_pack_bound_guard_matches_the_native_step_layout_trace():
                 "a_kind": a_kind, "b_kind": b_kind, "path": path,
                 "output_canonical": bool(int(canonical)),
             })
-        elif line.startswith("ROUTE ") and segments:
-            segments[-1]["route"] = int(line.split()[1])
         elif "topology-gemm-step" in line and segments:
             segments[-1]["native"].append(line)
     assert len(segments) == len(cases), (
@@ -1419,9 +1439,6 @@ def test_pack_bound_guard_matches_the_native_step_layout_trace():
         assert segment["equation"] == equation, (segment["equation"], equation)
         records = segment["records"]
         assert records, f"{equation}: Python 侧没有推演出任何 GEMM 步"
-        assert segment["route"] == 1, (
-            f"{equation}: 原生没有命中 v3 步表（route={segment['route']}），"
-            f"这条用例要求的是步表执行器")
         assert len(segment["native"]) == len(records), (
             f"{equation}: 原生 {len(segment['native'])} 行逐步诊断 vs "
             f"Python 推演 {len(records)} 步（步序不同就说明 plan 与步表不是同一条"
@@ -1655,15 +1672,15 @@ def _isolated(test: Callable[[], None]) -> Callable[[], None]:
 
 
 def test_appendix_equations_reach_the_v3_step_table():
-    """附录形态（动量标签打头，seq ≥ 2583）必须命中 v3 步表，而不是回落 v2。
+    """附录形态（动量标签打头，seq ≥ 2583）必须命中编译期步表。
 
     回归点（2026-11-15）：编译表曾只含基础表 2582 条（``MAX_KERNELS``），附录
-    6056 条命中签名后 ``run_specialized`` 返回 miss、静默走 v2。现在
-    ``MAX_KERNELS = 8638``（= 整个语料），这些方程应当由 v3 执行。
+    6056 条命中签名后 ``run_specialized`` 返回 miss、静默走 version-2 通用执行器。
+    现在 ``MAX_KERNELS = 8638``（= 整个语料），这些方程应当由步表执行。
 
-    判据用 ``LAST_INFO['path']``：附录格必须是 ``kupl_topology`` 且
-    ``specialized`` 为真。若有人把 ``MAX_KERNELS`` 改回 2582 并重生成步表，
-    本条立刻失败 —— 这是"扩表没被退回去"的保险丝。
+    判据用 ``LAST_INFO['path']``：附录格必须是 ``kupl_topology``。回落已删除，
+    所以"能跑成功"与"命中了步表"是同一件事；若有人把 ``MAX_KERNELS`` 改回 2582
+    并重生成步表，本条立刻失败——这是"扩表没被退回去"的保险丝。
     """
     _require_kupl()
     from pyqcd.einsum import _bench_scene
@@ -1695,7 +1712,6 @@ def test_appendix_equations_reach_the_v3_step_table():
                 f"{_kernel_kupl.LAST_FAILURE.get('reason')}")
         path = _kernel_kupl.LAST_INFO.get("path")
         assert path == "kupl_topology", (seq, path)
-        assert _kernel_kupl.LAST_INFO.get("specialized") is True, seq
         expected = np.einsum(task.equation, *operands, optimize="greedy")
         scale = float(np.max(np.abs(expected))) or 1.0
         error = float(np.max(np.abs(result - expected))) / scale
@@ -1718,7 +1734,7 @@ TESTS = tuple(_isolated(test) for test in (
     test_higher_dims_and_larger_extents_hold_for_all_dtypes,
     test_every_dtype_is_native_when_its_probe_passes,
     test_complex_dtypes_reach_the_v3_step_table,
-    test_v2_fallback_is_reported_and_matches_the_native_trace,
+    test_step_table_hits_succeed_and_outside_equations_are_unsupported,
     test_native_arguments_carry_plan_order_and_out_buffer,
     test_cuda_arguments_carry_plan_order_and_out_buffer,
     test_offsets_are_never_forwarded,
@@ -1727,7 +1743,7 @@ TESTS = tuple(_isolated(test) for test in (
     test_allocated_output_does_not_alias_operands,
     test_unencodable_plan_falls_back_without_raising,
     test_corpus_sample_matches_generic_path,
-    test_native_failure_falls_back_with_one_warning,
+    test_native_failure_raises_instead_of_falling_back,
     test_pack_bound_guard_only_counts_the_sides_that_pack,
     test_topology_pack_ratio_is_diagnostic_only,
     test_pack_bound_guard_matches_the_native_step_layout_trace,

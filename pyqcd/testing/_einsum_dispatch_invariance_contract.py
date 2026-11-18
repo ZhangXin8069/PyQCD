@@ -344,8 +344,10 @@ def test_profile_disabled_leaves_the_dispatch_untouched():
         assert record is not None, "关闭画像的调用也要有分派记录"
         assert record["ran"] != _kernel_force.BACKEND_LABEL, (
             "profile=False 时记录里的 backend 绝不能被施加", record)
-        # 记录是"画像的建议"，不是"调用方的要求"：requested 必须仍是 None。
-        assert record["requested"] is None, record
+        # 记录是"画像的建议"，不是"调用方的要求"：这次没传 kernel_force，缺省即
+        # ``generic``，所以 requested 是**解析后的空尝试列表** ``()``（``auto`` 已删除，
+        # 没有 ``None`` 这种"未指定"的哨兵）。
+        assert record["requested"] == (), record
         assert _signature(off) == _signature(baseline), (
             _signature(off), _signature(baseline))
         assert _rel_max(off, baseline) <= RTOL, (

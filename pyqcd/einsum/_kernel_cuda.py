@@ -283,7 +283,9 @@ def _topology_plan(key: tuple[Any, ...], subscripts: str,
 
 def try_topology_apply(subscripts: Any, operands: Sequence[Any],
                        out: Any = None,
-                       offsets: Sequence[int] | None = None) -> Any:
+                       offsets: Sequence[int] | None = None,
+                       *,
+                       optimize: str = "greedy") -> Any:
     """把整条收缩计划一次性交给 CUDA 拓扑入口；不满足条件即返回 ``None`` 回落。
 
     与 ``try_dedicated`` 同一契约：命中且执行成功才返回
@@ -295,6 +297,13 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
 
     ``offsets`` 只能是 ``None``：``cupy`` 视图的 ``data.ptr`` 已经带着字节偏移，
     再叠加 offsets 会双重偏移、静默读到错位数据，因此非 None 一律 fail closed。
+
+    ``optimize`` 与 KUPL 侧同名同默认值，**但本入口用不到它**：CUDA 下发的是
+    **拓扑描述符**（结构 + 签名摘要，见 :func:`_topology_descriptor`），里面根本
+    没有收缩顺序——顺序由原生 ``topology_steps.h`` 的编译期步表决定，也没有
+    "v2 通用执行器回落"这条路线可参数化。参数只为让 ``_api`` 对两个后端用同一个
+    调用形状（否则 ``*_topology`` 会出现"一个吃、一个不吃"的签名分叉）。收下而
+    不用，比假装它改变了什么更诚实；真要在 CUDA 上选次序，改的是步表生成端。
     """
     LAST_INFO.clear()
     if not enabled() or not isinstance(subscripts, str):

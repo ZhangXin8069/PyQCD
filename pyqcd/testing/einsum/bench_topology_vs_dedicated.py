@@ -1,5 +1,12 @@
 """按生产尺寸口径对比 ``topology`` 与 ``dedicated``（四类 dtype）。
 
+⚠️ INVALID（2026-11-18）：本脚本的绝对耗时/倍率基于**已废弃**的拓扑步表口径
+（KUPL 生产异形轴 / CUDA 均匀 dim=4 探针）。新口径为 ROLE_SHAPES
+（peram[4,4,100,100] gamma[4,4] VDV[100,100] VVV[100,100,100,100]），
+两张表已整体重算。**旧数字不得再被引用为新结论。** 轴长仍走
+``_label_sizes`` 反推（旧口径，未迁移到 ROLE_SHAPES），故本脚本只输出实测、
+不设期望值；历史产物里的数字只能当"曾经错误"的证据。
+
 口径
 ----
 ``distill``（``Nev=100``、``Mom=1``，见 :data:`pyqcd.einsum._bench_scene.PRODUCTION_DISTILL`）

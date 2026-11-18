@@ -1,0 +1,360 @@
+# qcd-einsum 收敛重构：经验落盘时间线（2026-11-18）
+
+配套文档：`docs/einsum_framework_convergence_20261118.md`（判据与流程）。
+本文件只做**追溯**：关键命令 + 输出摘要 + 当时的判定。所有计数均在本工作树复跑过；
+凡无法复现的第三方数字，明确标 `[转述]`。
+
+素材：`logs/kf/{DCA,B2,A1,A2,SPEC6,CUDA_MIG,CL1}.report.md`（同一轮并行代理的巡查/执行报告）。
+
+---
+
+## 00 · 背景
+
+同一时间窗内多路代理在改 `pyqcd/einsum`（分派层、画像缓存层、`test.py`）与
+`cpp/cuda/einsum`（删融合核、迁移 provider 符号）。要落盘的教训分两类：
+
+1. **判定类**：怎样才算"死代码"、怎样才算"删了零回归"；
+2. **语义类**：三态/四态参数的坑、字符串开关、文案渲染。
+
+---
+
+## 01 · 死代码判据：`e4_fused` / `sandwich` 曾被误判
+
+`[转述 DCA.report.md §0]` 任务背景声称两核在 `optimize="greedy"` 下"结构不可达"。
+实测推翻：
+
+```
+GREEDY FIRST: (3, 6, 3, 6) [('compile',), ('native', 'ab,...bce,cd->...dae', True)]
+[fused-skip] fused paths disabled (set PYQCD_CUDA_FUSED=1 to enable)   # 默认
+[fused-hit] prepared                                                   # 默认（另一条门）
+[fused-hit] sandwich                                                   # PYQCD_CUDA_FUSED=1
+```
+
+判定：**活代码**（入口可达，只是藏在环境门后面）。
+另发现**源码与产物不一致**：包内 `.so` 比 `apply_contract.cu` 旧 5 分钟，且含源码里
+根本不存在的 `PYQCD_CUDA_FUSED` 字符串。
+
+教训：结构不可达 = 入口本身不存在；不是"入口藏在环境变量后面"。
+源码/产物不匹配时，任何"产物里有哪些分支"的结论都不可靠。
+
+---
+
+## 02 · provider 符号：Python 侧 0 命中是常态
+
+复跑（本工作树）：
+
+```bash
+$ grep -rn '\bqcd_cuda_permute\b' pyqcd/ --include=*.py | wc -l
+0
+$ grep -rn '\bqcd_cuda_permute\b' cpp/cuda/einsum/src | wc -l
+16
+$ nm --defined-only pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so \
+    | awk '$3 ~ /^qcd_cuda_(permute|hadamard|reduce|batched_gemm)$/ {print $3}' | sort
+qcd_cuda_batched_gemm
+qcd_cuda_hadamard
+qcd_cuda_permute
+qcd_cuda_reduce
+```
+
+判定：`QCD_CUDA_LOCAL` + `visibility("hidden")` 的 provider 模式，只被 C++ 内部消费
+（`dedicated_apply.cu` 的打包/解包走 `qcd_cuda_permute`；`apply_contract.cu` 另有
+15 处跨 TU 引用）。**Python 侧 0 命中不构成死代码证据。**
+
+`pack.cu` 尤其危险：`dedicated` 的打包/解包依赖 `qcd_cuda_permute`，误删会让
+`dedicated` **静默失效**（不是崩溃，只是每次都回落）。反向自查：凡"删了以后不报错、
+只是变慢"的候选，一律按活代码处理。
+
+---
+
+## 03 · 删 C++ 的验证：`git archive` 隔离 A/B
+
+`[转述 B2.report.md §5.4]` 任务给的基线 `129 passed / 2 skipped / 10 failed`
+在本机不可复现。改做隔离 A/B（Python 固定为 HEAD 树，只换 `.so`）：
+
+| 组合 | passed | skipped | failed |
+|---|---:|---:|---:|
+| A. HEAD Python + **删除前**存档 | 144 | 1 | 0 |
+| B. HEAD Python + **删除后**存档 | 144 | 1 | 0 |
+| C. 当前树（含并行 Python 改动）+ 删除后存档 | 134 | 1 | 11 |
+| D. 当前树 + 删除前存档（`LD_PRELOAD`） | 132 | 1 | 13 |
+
+A vs B 完全一致 → 删除本身零回归；C 的 11 项失败 100% 来自并行 Python 改动。
+D 受双 cuBLAS 污染（conda 12.4 与 cupy 12.9），不作结论。
+
+容量影响（如实记账）：`[8,8,64,300,300]` 在删除后 OOM——
+张量 5.49 GiB + 同尺寸中间体 5.49 GiB ≥ 11 GiB > 设备 8 GiB。缩到 scale=64 后
+rel `1.169e-15 → 7.122e-16`（`max_abs` 两侧同为 722.7071716785214）。
+
+---
+
+## 04 · 本轮复跑的计数（AUTO_LABEL / 融合核残留）
+
+```bash
+$ grep -rn 'AUTO_LABEL' pyqcd/ --include=*.py | wc -l
+0
+$ grep -rn 'e4_fused\|sandwich' cpp/cuda/einsum/src cpp/cuda/einsum/include | wc -l
+0
+$ strings pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so | grep -cE 'e4_fused|sandwich|PYQCD_CUDA_FUSED'
+0
+```
+
+判定：三处残留（`_api.py:1251/:1436/:2032` 的 `AUTO_LABEL`）已由并行代理接线清掉；
+C++ 侧融合核与产物字符串均为 0。`A2` 里曾记录"删除 `AUTO_LABEL` 后 `_api` 三处引用
+命中即 `AttributeError`"，本轮以复跑计数确认该回归不再存在。
+
+教训：**删符号先 `grep` 全仓引用**（含 `pyqcd/testing/**` 契约），否则 tune 写出的
+每一行配置都会在第一个命中键上崩掉。
+
+### 本轮附带发现（`git diff` 看不到的并行改动）
+
+`paths._BUILTIN_ATTRS` 在本次会话期间被其它代理重排（`branch_all`/`branch_2`/
+`branch_1` 的**下划线写法成为主拼写**、连字符写法降为别名），并补了
+"名字必须能在 `_plan_py` 上查到"的理由注释。重新读文件后再编辑（只追加 2 行注释），
+没有覆盖对方的改动。
+
+教训：同一工作树多代理并行时，**编辑前必须重读**；`git diff` 会把别人的未提交改动
+一起显示，别把那些当成自己的。
+
+---
+
+## 05 · 三态语义：`forced_labels(None) == ()`
+
+复跑（`mamba run -n pyqcd-test`）：
+
+```
+forced_labels(None) = ()
+resolve(None)       = ('generic',)
+parse("auto")            -> ValueError
+parse("dedicated,generic") -> ValueError
+tuple("dedicated")       = ('d', 'e', 'd', 'i', 'c', 'a', 't', 'e', 'd')
+```
+
+后果链（`[转述 A1/A2/SPEC6]`）：
+`_api._profile_begin` 用 `caller_force is not None` 判"用户是否显式给过"，而
+`forced_labels` 永不返回 `None` → **默认调用被判成"显式 generic"** →
+① 命中行只要 `kernel≠generic` 就抛 `ProfileConflict`；
+② `info["force"]` 永不赋值 → 画像 `force` 槽与 `_profile_retry` 整段不可达；
+③ `generic_only` 恒 `True` → `as_equivalence=True` 静默失效。
+
+修法（现落点 `_api.py:1805`）：
+
+```python
+caller_force_given = kernel_force is not None   # 显式布尔位，在解析之前取
+forced = _kernel_force.forced_labels(kernel_force)
+```
+
+教训：**区分"用户真的给过"必须用显式布尔位**，不能拿解析结果反推——
+`tuple("dedicated")` 那行说明"逼调用方自己包元组"也会静默变成单字符序列。
+
+### 同族缺陷：`(requested,)` 多包一层
+
+`KernelUnavailableError.requested` 按"序列"设计时，调用点照抄 `(requested,)` 多包一层，
+`", ".join(self.requested)` 拿到元组的元组：
+
+```
+TypeError: sequence item 0: expected str instance, tuple found
+    File "pyqcd/einsum/_kernel_force.py", line 134, in __init__
+        label = ", ".join(self.requested) or "(none)"
+```
+
+一条 `TypeError` 连带 5 项契约连锁失败。现在的收口是
+`self.requested = (requested,) if isinstance(requested, str) else tuple(requested)`：
+**字符串入参自动包成 1 元组，调用方不必自己包**。
+
+教训：`", ".join(x)` 前先确认 `x` 的层级（本轮以"入参归一"根治，而不是四处加断言）。
+
+---
+
+## 06 · 字符串开关：`bool("false") == True`
+
+复跑：
+
+```
+bool("false")                    = True
+_profile_cache.enabled("false")  = True     <-- 与直觉相反
+_profile_cache.enabled(False)    = False
+_kernel_force.parse("false")     -> generic  （已显式解析，正确）
+```
+
+`_normalize_as_equivalence`（`_api.py:151`）是正确写法：显式映射
+`true/1/force` 与 `false/0`，其余抛 `ValueError`。
+
+教训：字符串开关必须显式解析，否则一处字符串就能反转行为。
+
+---
+
+## 07 · 文案渲染：`--help` 不认 markdown
+
+复跑：
+
+```bash
+$ python -m pyqcd.einsum.test --help | grep -c '\*\*'
+22                      # 仍有 markdown 粗体原样打出
+$ python -m pyqcd.einsum.test --help | grep -n '`' | wc -l
+0                       # 反引号 0（``x`` 只在源码里）
+```
+
+同时确认 `--kernel-force auto` 的报错路径（`verify_specialized --kernel-force auto`
+实测 `rc=0` 但原因是缺 equation 参数——真正拒绝 `auto` 的是 `_kernel_force.parse`，
+已由 §05 单测覆盖）。
+
+教训：**改文案也要验证渲染**；`argparse.RawDescriptionHelpFormatter` 原样输出。
+
+---
+
+## 08 · 基线数字与环境绑定
+
+复跑：
+
+```
+$ mamba run -n pyqcd-test          python -c "import scipy"   -> ModuleNotFoundError: No module named 'scipy'
+$ mamba run -n pyqcd-einsum-cu124  python -c "import scipy"   -> 1.17.1
+```
+
+判定：`pyqcd-test` 跑不了全套（import 期即失败），可运行环境是 `pyqcd-einsum-cu124`。
+任务给的 `129/2/10` 与 `134/1/11` 都是**别处的**基线；本链路统一以本机实测为基线做
+"改前/改后同环境"对比（`[转述 B2]` 145/1/0 = HEAD 树实测）。
+
+教训：基线数字不可跨环境假设；写报告必须带上环境。
+
+---
+
+## 09 · `kupl_topology` vs `kupl_topology_v2`（路线 ≠ 内核）
+
+`[转述 CUDA_MIG / _kernel_kupl.py:712-725]` 两条路线**返回值相同、数值都正确**，
+只有性能含义不同。判据是原生 `run_specialized` 的 5 道门（`topology_apply.cpp:228`）：
+
+1. `dtype` 在四类平权契约内（且复数还要 `complex_complete()`）；
+2. `cblas` 符号齐全（缺 `cgemm/zgemm` 只回落复数档）；
+3. 规范化签名一致（`build_canonical_signature` + `topo_find` 命中且签名逐字相等）；
+4. **编译步表命中**（`record->version == 3`，且 arity / out_rank / sizes 匹配）；
+5. 秩/尺寸匹配（轴长来自 `execution.sizes`，不再要求等长轴）。
+
+`2582/2583` 只是历史基准的观察值（基础表 2582 条 → 扩表 8638 条的分界），
+**不是判据**。旧实现无条件写 `path='kupl_topology'`，导致 2026-11-15 的 77 格里
+52 格实际跑 v2 却被当成 v3 的性能结论。
+
+教训：路线必须由原生自证（`qcd_kupl_topology_last_specialized()`），不可由"返回码 0"
+推断；缺该符号就 fail closed。
+
+---
+
+## 10 · `optimize="auto"` 同名不同义
+
+| 内核 | `auto` 的真实算法 |
+|---|---|
+| `generic`（`_plan_py.py:769-791`） | 按算子数查 `_AUTO_CHOICES`（1–4→optimal / 5–6→branch-all / 7–8→branch-2 / 9–14→branch-1 / ≥15→greedy）；≤8 算子再用 opt_einsum DP 交叉校验 |
+| `dedicated`（`_kernel_kupl.py:1471-1491` + `_effective_dedicated_optimizer:122`） | 在 `auto` 与 `greedy` 两条计划里按步表 FLOPs 取小（并列取 auto）；仅 CPU complex128 且基础 plan arena > 8 GiB、branch-2 同时把 FLOPs 压到 ≤80%、arena/pack ≤65% 时条件提升 branch-2 |
+
+另有 `PYQCD_EINSUM_DEDICATED_PLAN` 只在调用方保留缺省时才覆盖（`optimize != "auto"`
+一律不覆盖）。
+
+教训：同一个名字在两处是两套算法，报告里看不出"实际跑了什么"——这正是要用 tune
+实测结论替代它的理由。
+
+---
+
+## 11 · 迁移完整性（`pack.cu` / `batched_gemm.cu` → `dedicated_apply.cu`）
+
+`[转述 CUDA_MIG]` 三条同时成立：
+
+```
+qcd_cuda_permute       src-defs=1  so-defs=1
+qcd_cuda_hadamard      src-defs=1  so-defs=1
+qcd_cuda_reduce        src-defs=1  so-defs=1
+qcd_cuda_batched_gemm  src-defs=1  so-defs=1
+$ nm -u libpyqcdeinsum_cuda.so | grep -i qcd_cuda
+（空）
+```
+
+动态符号表 10 个 ABI 入口与删除前一致；`make-nv.sh` 的源列表是 glob，删文件无需改脚本。
+既有遗漏如实记录：`PROVIDER_SYMBOLS` 里没有 `qcd_cuda_reduce`（HEAD 就缺，非本次引入）。
+
+教训：迁移的验收是"唯一定义 + 无未解析符号 + 导出表无增减"，不是"编译通过"。
+
+---
+
+## 12 · 本轮结论与落点
+
+| 判据 | 落点 |
+|---|---|
+| 死代码判据：沿调用链走到入口且入口可达 | `docs/einsum_framework_convergence_20261118.md` §1–§2 |
+| 隔离 A/B 验证法 | 同上 §3.1 |
+| 三态语义 / 显式布尔位 | 同上 §2.4 + `_api.py:1805` 注释 |
+| 字符串开关 | 同上 §4.2 |
+| 文案渲染 | 同上 §5 + `test.py` 注释 |
+| 基线不可跨环境 | 同上 §6 |
+| 六条规格的验收证据法 | 同上 §7 |
+| 迁移完整性 | 同上 §8 |
+| 路线 ≠ 内核 | 同上 §4.1 + `_kernel_kupl.py:712-725` 注释 |
+| `optimize=auto` 同名不同义 | 同上 §4.1 |
+| 删符号先 grep | 同上 §3.3 |
+| 删死码给前后计数 | 同上 §3.4 |
+| `(requested,)` 元组层级 | 同上 §4.4 |
+
+---
+
+## 13 · 落盘后的自检（本轮实测）
+
+只写文档/注释，因此验证分两层：**结构上"没有可执行行被改"** 与 **行为上"CLI/契约不变"**。
+
+### 13.1 结构：逐次编辑的代码 AST 不变
+
+对本次 10 处编辑，把工作树文本**反向撤销**回编辑前，再比较两侧"剥掉 docstring 后
+`ast.unparse`"的结果（其它代理的未提交改动在两侧相同，不影响判定）：
+
+```
+comment-only  pyqcd/einsum/_profile_cache.py  (1 edit)
+comment-only  pyqcd/einsum/_kernel_force.py   (1 edit)
+comment-only  pyqcd/einsum/_api.py            (4 edits)
+comment-only  pyqcd/einsum/test.py            (1 edit)
+comment-only  pyqcd/einsum/paths.py           (1 edit)
+comment-only  pyqcd/einsum/_kernel_kupl.py    (2 edits)
+failures: 0
+```
+
+另用 AST 校验"插入的每一行都落在注释行或 docstring 跨度内"：`failures: 0`。
+`python -m compileall` 六个文件：`COMPILE OK`。
+
+### 13.2 行为：CLI 与两条相关契约
+
+```
+# 关掉配置表（仓库内 .cache/pyqcd.einsum.profile.csv 是并行代理 tune 出来的命中行）
+$ PYQCD_EINSUM_PROFILE=0 python -m pyqcd.testing._einsum_test_cli_contract
+50 passed, 0 skipped, 0 failed
+
+# 不关表时（同一命令）
+47 passed, 0 skipped, 3 failed
+```
+
+3 条失败的正文全部是同一件事——**命中行冲突**，与注释无关：
+
+```
+error: einsum 配置表命中行与你的显式配置冲突（不猜、不覆盖）：
+  冲突: kernel_force  表中='backend'  显式='generic'
+  （.../.cache/pyqcd.einsum.profile.csv:4）
+```
+
+`.cache/**` 被 `.gitignore:73` 忽略，是并行代理本轮 tune 的产物（mtime 13:21），
+不在任何代理的交付范围内。**判据**：关表后 50/0/0 即证明这 3 条与代码改动无关。
+
+```
+$ PYQCD_EINSUM_PROFILE=0 python -m pyqcd.testing._einsum_kernel_force_explicit_contract
+5 passed, 0 skipped, 0 failed
+```
+
+### 13.3 文档一致性检查（本轮唯一"改字"的副作用）
+
+改完 `_api.contract` 的 `kernel_force` docstring 后实跑：
+
+```
+$ python -c "import inspect, pyqcd.einsum as pe; d=inspect.getdoc(pe.contract)"
+no-comma: True      # 旧的 "comma separated to allow both" 已不存在
+has-must: True      # 新文案 "must** run" 生效
+$ python -m pyqcd.einsum.test --help >/dev/null; echo $?
+0
+```
+
+**未修**（属可执行字符串字面量，本轮禁改）：`test.py:64/482/498/1195/1200` 的
+`--kernel-force` 文案仍写"可逗号分隔多个"，与 `_kernel_force.parse`（只接受单值，
+`_einsum_kernel_force_contract:225` 已钉住）矛盾。**留给接线者**：替换为单值口径。

@@ -1,8 +1,15 @@
 """量化 CUDA ``topology_steps.h`` 的收缩序在生产尺寸下的劣化倍数（只读分析）。
 
+⚠️ INVALID（2026-11-18）：本脚本产出的劣化倍数基于**已废弃**的拓扑步表口径
+（KUPL 生产异形轴 / CUDA 均匀 dim=4 探针）。新口径为 ROLE_SHAPES
+（peram[4,4,100,100] gamma[4,4] VDV[100,100] VVV[100,100,100,100]），
+两张表已整体重算。**旧数字不得再被引用为新结论。** 脚本只输出实测、不设期望值；
+``_label_sizes`` 反推轴长同样是旧口径，未迁移到 ROLE_SHAPES。
+
 问题
 ----
-``cpp/cuda/einsum/src/topology_steps.h`` 的 2582 条步表按文件头自述，顺序取自
+``cpp/cuda/einsum/src/topology_steps.h`` 的 8638 条步表（基础表 2582 + 附录 6056，
+生成端见 ``pyqcd/testing/_cuda_topology_steps_gen.py``）按文件头自述，顺序取自
 ``opt_einsum greedy`` 在**均匀 dim=4 超立方体**上的结果。生产尺寸却是异形的
 （``Nev=100``、``Ns=4``、``Mom=1``、``Lt=1``，见
 :func:`pyqcd.einsum._bench_scene.dims`)：等长时全部轴长相同、路径代价与轴长
@@ -10,7 +17,7 @@
 
 本脚本**不改任何常量表**，只做三件事：
 
-1. 按 CUDA 同口径把语料 2582 条方程映射到表项：``key`` = 签名
+1. 按 CUDA 同口径把语料 8638 条方程映射到表项：``key`` = 签名
    blake2b-**128** 的前 8 字节（大端），``arity`` 必须与方程一致
    （``fnv`` 指纹只用于运行期把表项绑到下发的标签流，量化不依赖它）；
 2. 用**同一套 MAC 记账**比较两种收缩序在生产尺寸下的乘加数：
@@ -75,7 +82,7 @@ _ENTRY_RE = re.compile(
 
 
 def parse_header(path: pathlib.Path) -> dict[str, Any]:
-    """解析 ``topology_steps.h``：位置对序列、``order`` 索引表与 2582 条表项。"""
+    """解析 ``topology_steps.h``：位置对序列、``order`` 索引表与全部表项。"""
     text = path.read_text(encoding="utf-8")
     arrays = {
         int(index): tuple(int(value) for value in body.replace(" ", "").split(",") if value)
@@ -232,7 +239,7 @@ def greedy_pairs(terms: Sequence[Sequence[int]], output: Sequence[int],
 
 # ── 语料 ────────────────────────────────────────────────────────────────────
 def corpus_rows(limit: int | None = None) -> list[dict[str, Any]]:
-    """语料 2582 条的 (seq, 方程, 元数, 生产尺寸形状)。"""
+    """语料的 (seq, 方程, 元数, 生产尺寸形状)。"""
     tasks = tasklist.by_seq()
     dims = scene_dims("distill")
     rows: list[dict[str, Any]] = []
@@ -568,7 +575,7 @@ def write_artifacts(directory: pathlib.Path, payload: dict[str, Any],
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=None,
-                        help="只分析前 N 条语料（默认全量 2582）")
+                        help="只分析前 N 条语料（默认全量 8638）")
     parser.add_argument("--json", default=None,
                         help="产物目录（默认 artifacts/cuda_topology_order_<时间戳>/）")
     parser.add_argument("--quiet", action="store_true")
@@ -602,7 +609,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     directory = (pathlib.Path(args.json) if args.json else
                  ARTIFACTS / f"cuda_topology_order_{stamp}")
-    # 每步明细只在最差样本与代表样本上落盘：全量 2582 条 × 两套步表会到几十 MB，
+    # 每步明细只在最差样本与代表样本上落盘：全量 8638 条 × 两套步表会到几十 MB，
     # 而量化只需要聚合数字 + 可追溯的少量样例。
     keep_details = {summary["worst"]["seq"] if summary["worst"] else None}
     keep_details |= {row["seq"] for row in payload["representative"]}

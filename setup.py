@@ -319,9 +319,7 @@ class NativeBuildPy(build_py):
 class NativeSdist(sdist):
     """Keep native files required for building from the sdist."""
 
-    _REQUIRED_NATIVE_FILES = (
-        "cpp/kupl/einsum/include/family_apply.h",
-    )
+    _REQUIRED_NATIVE_FILES = ()
 
     def make_release_tree(self, base_dir, files):
         super().make_release_tree(base_dir, files)

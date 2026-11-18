@@ -48,6 +48,12 @@
 * **参照**：``--compare`` 决定与谁比。``numpy`` 用 ``np.einsum(optimize=...)``；
   ``opt_einsum`` 用 ``oe.contract(optimize=...)``；``backend`` 用同一批张量上的
   **另一个后端**（CPU↔GPU 互证）；``none`` 只跑不比对。
+* **主路径的优化器**：``--optimize`` 只认 **7 个叶子**（``greedy``/``optimal``/``dp``/
+  ``branch_1``/``branch_2``/``branch_all``/``none``，``choices`` 由
+  ``_profile_cache.OPTIMIZE_LEAVES`` 给）。``auto`` **不是可写取值**——它是
+  ``contract(optimize=...)`` 的签名缺省值、由内置选择器实现，所以该选项的缺省值是
+  ``None``（"未指定"），``main`` 再还原成 ``auto`` 交给 ``run()``；显式写 ``auto``
+  以退出码 2 结束。
 * **参照的优化器**：``--compare-optimize`` 只管**参照**，与主路径的 ``--optimize``
   互不影响。缺省 ``auto`` = 沿用旧行为（numpy→``greedy``；opt_einsum→``greedy``
   或跟随 ``--optimize``）。两边的名字不同——numpy 实测只认 ``greedy``/``optimal``
@@ -59,14 +65,15 @@
   ``PYQCD_EINSUM_SPECIALIZE``；``false`` **强制通用路径**，是排查原生内核问题的
   第一手段；``true`` 强制走特化路径，不让它静默回落。三态的选择与"实际生效"的
   布尔值都会写进报告与 ``--verbose true`` 的明细。
-* **强制内核**：``--kernel-force auto|generic|dedicated|topology|backend``。``auto``
-  （缺省）保持原分派次序，失败只 ``warning`` + 回落；``generic`` 完全跳过专用内核；
-  ``dedicated`` / ``topology`` 只允许**当前后端的**那一个（numpy → ``kupl_*``，
-  cupy → ``cuda_*``），可逗号分隔多个、按书写次序尝试，强制**真试一次**，跑不成就抛
+* **强制内核**：``--kernel-force generic|dedicated|topology|backend``（**全部是强制值，
+  没有 auto**）。``generic``（缺省）完全跳过专用内核；``dedicated`` / ``topology``
+  只允许**当前后端的**那一个（numpy → ``kupl_*``，cupy → ``cuda_*``），**只接受单个值**
+  （逗号链式已取消，写多个直接报用法错误），强制**真试一次**，跑不成就抛
   ``KernelUnavailableError`` 并以非零退出码结束——**绝不**静默回落；``backend``
-  直接调后端自己的 ``einsum``（与其它标签互斥）。
-  显式 ``--kernel-force`` 压过环境变量 ``PYQCD_EINSUM_KERNEL_FORCE``。明细里的
-  ``kernel :`` 行给出 ``requested`` / ``ran`` / ``attempted``。
+  直接调后端自己的 ``einsum``（与其它标签互斥）。写 ``auto``（或任何未知取值）报用法错误
+  （退出码 2），消息点名交给 ``--tune`` 并列出合法集合——自动选路只由 tune 的实测结论决定。
+  显式 ``--kernel-force`` 压过环境变量 ``PYQCD_EINSUM_KERNEL_FORCE``（未设 = ``generic``）。
+  明细里的 ``kernel :`` 行给出 ``requested`` / ``ran`` / ``attempted``。
 * **缓存**：``--cache auto|true|false``。``auto``（缺省）跟随环境变量
   ``PYQCD_EINSUM_CACHE``（只有 ``0/false/off/no`` 才关闭）；显式 ``true``/``false``
   压过环境变量，后者让底层**既不读也不写**任何 einsum 缓存（不留半热状态、不污染
@@ -82,26 +89,54 @@
   ``contract(profile=..., profile_dir=...)``。``auto`` 跟随
   ``PYQCD_EINSUM_PROFILE``；``false`` 让本次**既不读也不写**画像 CSV（连目录都不建）。
   画像只**建议**配置：方程、dtype、形状与数值一概不改；报告里给出的 ms 一律是
-  **记录值**，不是本次实测。
+  **记录值**，不是本次实测。缺表时的 ``需要先 tune：`` 提示用**本次命令行的实参**
+  构造（``--device``/``--dtype``/``--equation``/``--shape``（含 ``->[…]`` 输出段）/
+  ``--backend``），``--compare`` 只在用户原命令给过时才写——提示必须能原样复制执行，
+  而不是把人引到另一条配置上（2026-11-18 用户实测：GPU 跑却提示 ``--device cpu``）。
 * **自动施加等价写法**：``--as-equivalence auto|true|false|force``。前三态同
   ``--equivalence``；``force`` 是第四态，**忽略负标记**：画像里"该方程查过、无法
   等价改写"的跨进程标记不再拦住这次查询，而是真的再查一遍并刷新结论（``true``
   会尊重该标记）。字符串 ``"force"`` 原样交给 ``contract(as_equivalence=...)``。
+* **结果行**：``PASS <equation>  <实际耗时>ms  min_wall_ms=<最优值>ms
+  best=kernel_force=… as_equivalence=… optimize=…  vram+…``。``--tune`` 时把**剪枝上界**
+  与**最终 best 配置**一并写进这一行——数值相同也要都显示，因为"上界确实来自最优组"
+  正是靠这两个数相等来确认的（2026-11-18 用户要求）。
 * **遍历调优**：``--tune``（缺省关）在**同一条**方程/形状/dtype/设备/后端上遍历
-   ``kernel_force × as_equivalence × optimize``（5×2×3 = 30 组，硬上限 30，超了报
-  用法错误而不是截断），``--compare`` **缺省关闭**（不给就不跑参考基准；显式给出时
-  主路径照旧跑一次，遍历本身不为它多算一遍）。这三轴由 ``--tune`` 自己给，
-  所以同时再显式给 ``--kernel-force`` / ``--as-equivalence`` / ``--optimize``
-  （非 ``auto``）时**各打一行 stderr 警告后忽略它**（每个参数一行），遍历照常进行、
-  退出码仍为 0。每组沿用 ``--warmup``/``--rounds`` 取中位；``--verbose`` 时另按中位
-  升序给前 5 行 + 每个 ``kernel_force`` 取值的最快一行，既有输出行一字不动。报的是
-  **单次运行的实测，不是基准**。
+  三轴 ``kernel_force × as_equivalence × optimize``。**不是笛卡尔积**：清单按分支
+  给出且**逐项有序**（共同前缀 ``dedicated`` → ``generic`` → 分支专属 ``topology``
+  一条 → 尾部 ``backend``；每个内核内 ``greedy/branch_1/branch_2/dp/branch_all/
+   optimal/none``），B1/B2 = 22 组、B3 = 21 组（硬上限 30，超了报用法错误而不是
+   截断）。分组判据只看两件事：原方程能否特化、以及等价写法能否特化——只探测、
+   不计时、不写表。``--compare`` **缺省关闭**（不给就不跑参考基准；显式给出时
+   主路径照旧跑一次，遍历本身不为它多算一遍）。这三轴由 ``--tune`` 自己给，
+   所以同时再显式给 ``--kernel-force`` / ``--as-equivalence`` / ``--optimize``
+   （其中 ``--kernel-force`` 非 ``generic``、``--as-equivalence`` 非 ``auto``、
+   ``--optimize`` 只要写了就与网格不同——它的 ``auto`` 根本不在可写集合里）
+   时**各打一行 stderr
+   警告后忽略它**（每个参数一行），遍历照常进行、
+   退出码仍为 0。每组沿用 ``--warmup``/``--rounds`` 取中位；``--verbose`` 时另按中位
+   升序给前 5 行 + 每个 ``kernel_force`` 取值的最快一行，既有输出行一字不动。报的是
+   **单次运行的实测，不是基准**。
+* **``min_wall_ms`` 剪枝**：上界初值 = ``--tune-timeout``；任一组的单次 ``contract()``
+  耗时超过当前上界即**终止该组**（原文 ``耗时大于min_wall_ms,此组被终止``，并附
+  ``wall_ms`` 与 ``min_wall_ms`` 两个数值）、继续下一组、**不写缓存**；某组测到更小耗时
+  则**立刻**把上界降为该值（后续所有组都用新上界剪枝）。``best`` 就是记录的最小耗时
+  那一组。剪枝不豁免任何组——包括清单最前面的那几组。
+* **遍历前先探测再裁剪**（规格 §18，2026-11-18）：``dedicated`` / ``topology`` 会在
+  跑任何一组之前查一次**准入**——``dedicated`` 复用内核自己的 ``enabled()`` /
+  ``dedicated_dtypes()`` / ``_dedicated_cached()`` / ``*_plan_fallback_reason()``
+  （**计划 arena 超预算**的原文与阈值都来自内核，不在本模块另立数字），``topology``
+  用 ``_specialize.match(方程或等价改写)``。判为不可用的内核**整档**不跑，表里给一行
+  ``状态=skip``（**不是** ``error``：``error`` 只留给真正的意外），表尾另有
+  ``skipped-kernels:`` 逐条点名；``1/N`` 的 ``N`` 是**裁剪后**实际遍历的组数，
+  ``tune hdr`` / ``tune plan`` 两行写明"计划多少 → 实际多少"。
 * **tune 的输出必须完整**（规格 §12/§13，2026-11-17）：遍历期间**每一组都给一行**
   ``tune comb : 序号/总数  kernel_force=…  as_equivalence=…  optimize=…  backend=…
-  dtype=…  device=…  wall_ms=…  状态=<ok|timeout|error|mismatch>  原因=…``（后三项是该组
-  **实际下发**的性能配置），与 ``--verbose`` 无关、不去重、不截断。
-  ``timeout`` / ``error`` / ``mismatch`` 的**原因原文**逐字打出：原文含换行时逐行续打
-  （``tune due  :``），绝不折叠成"…等 N 项"，也不只报首个。保存信息同样完整：配置表
+  dtype=…  device=…  wall_ms=…  状态=<ok|timeout|error|mismatch|pruned|skip>  原因=…``
+  （后三项是该组 **实际下发**的性能配置），与 ``--verbose`` 无关、不去重、不截断。
+  ``timeout`` / ``error`` / ``mismatch`` / ``pruned`` 的**原因原文**逐字打出：原文含
+  换行时逐行续打（``tune due  :``），绝不折叠成"…等 N 项"，也不只报首个。保存信息
+  同样完整：配置表
   **绝对路径**（``tune file :``）、写入的每一行（键各字段 + 配置字段 + ``wall_ms`` +
   ``note``，``tune wrote:``）、删除的行数与**每一被删行的键**（``tune del  :`` /
   ``tune delrow:``），以及是否因"同键多行"做过清理（``tune dup  :``）。临时关闭缓存、
@@ -143,6 +178,8 @@ from typing import Any, Sequence
 
 import numpy as np
 
+from . import _tune_axes
+
 __all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES",
            "COMPARE_OPTIMIZERS", "NUMPY_COMPARE_OPTIMIZERS", "DEVICES",
            "SPECIALIZE_MODES", "parse_specialize", "resolve_compare_optimize",
@@ -163,8 +200,13 @@ __all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES",
            "TUNE_MAX_COMBOS", "TUNE_AXES", "tune_combos", "tune_conflicts",
            "DEFAULT_TUNE_TIMEOUT", "DEFAULT_TUNE_BUDGET",
            "TUNE_STATUSES", "TUNE_STATUS_OK", "TUNE_STATUS_TIMEOUT",
-           "TUNE_STATUS_ERROR", "TUNE_STATUS_MISMATCH", "tune_status",
-           "tune_comb_lines",
+           "TUNE_STATUS_ERROR", "TUNE_STATUS_MISMATCH", "TUNE_STATUS_SKIP",
+           "tune_status", "tune_comb_lines", "tune_skip_line",
+           "TUNE_BRANCHES", "TUNE_BRANCH_RAW", "TUNE_BRANCH_EQUIVALENT",
+           "TUNE_BRANCH_NONE", "tune_branch", "tune_plan",
+           "tune_unavailable_kernels", "tune_plan_trimmed",
+           "tune_plan_sizes_trimmed",
+           "TERMINATION_MESSAGE",
            "run_tune", "print_tune", "tune_best"]
 
 class UsageError(SystemExit):
@@ -195,9 +237,12 @@ DTYPES = ("complex128", "complex64", "float64", "float32")
 #: ``--device``：决定数组落在哪里。``cpu``→numpy，``gpu``/``cuda``→cupy。
 DEVICES = ("cpu", "gpu", "cuda")
 #: ``--backend``：原样传给 ``contract(backend=...)``。``auto`` 让库自己判。
-BACKENDS = ("auto", "numpy", "cupy", "torch", "kupl", "cuda")
-#: ``--compare``：参照实现。
-COMPARE_MODES = ("numpy", "opt_einsum", "backend", "none")
+#: 只有计算库（numpy/cupy/torch）是合法后端；KUPL/CUDA 原生特化走
+#: ``--kernel-force dedicated|topology``（正交维度），不是后端。
+BACKENDS = ("auto", "numpy", "cupy", "torch")
+#: ``--compare``：参照实现。``backend`` 以 ``--backend`` 的解析结果为参照
+#: （原 ``--compare numpy`` 的等价写法是 ``--backend numpy --compare backend``）。
+COMPARE_MODES = ("opt_einsum", "backend", "none")
 #: ``--compare-optimize``：**只看参照**的收缩序优化器。``auto`` 沿用旧行为。
 #: 名字不跨库通用：``numpy`` 实测只认 ``greedy``/``optimal``（其余 ``KeyError``），
 #: ``opt_einsum`` 按自己的 ``paths._PATH_OPTIONS`` 注册表认 ``dp``/``branch-*`` 等。
@@ -253,7 +298,7 @@ DEFAULT_ATOL = 1e-12
 DEFAULT_RTOL = 0.0
 DEFAULT_ROUNDS = 5
 DEFAULT_WARMUP = 1
-DEFAULT_COMPARE = "numpy"
+DEFAULT_COMPARE = "none"
 DEFAULT_COMPARE_OPTIMIZE = "auto"
 DEFAULT_OPTIMIZE = "auto"
 DEFAULT_SCENE = "distill"
@@ -263,12 +308,11 @@ LANGUAGE_MODES = ("auto", "en", "zh-cn")
 DEFAULT_LANGUAGE = "auto"
 
 # ── 遍历调优（--tune） ──────────────────────────────────────────────────────
-#: ``--tune`` 遍历的三个轴，**顺序即报告顺序**。``as_equivalence`` 只遍历
-#: ``true``/``false``：``auto`` 是"跟随环境变量"、``force`` 是"不信负标记"，两者都
-#: 不是可比的性能档。
-TUNE_KERNEL_FORCE = ("auto", "dedicated", "topology", "generic", "backend")
-TUNE_AS_EQUIVALENCE = ("true", "false")
-TUNE_OPTIMIZERS = ("auto", "greedy", "optimal")
+#: 三轴的取值与**有序清单**都由 :mod:`pyqcd.einsum._tune_axes` 给出（唯一声明处）：
+#: 顺序即执行顺序（共同前缀 → 分支专属 → 尾部），不是笛卡尔积。
+TUNE_KERNEL_FORCE = _tune_axes.TUNE_KERNEL_FORCE
+TUNE_AS_EQUIVALENCE = _tune_axes.TUNE_AS_EQUIVALENCE
+TUNE_OPTIMIZERS = _tune_axes.TUNE_OPTIMIZERS
 #: 组合数**硬上限**：超了直接报用法错误，**绝不静默截断**——截断会让"最优"变成
 #: "某个被截断的网格里最好"，而报告字面上完全看不出这一点。
 TUNE_MAX_COMBOS = 30
@@ -402,9 +446,11 @@ MESSAGES: dict[str, dict[str, str]] = {
                "scene / full），缺省 {default}"),
     },
     "help.device": {
-        "en": ("Where the arrays live: cpu→numpy, gpu/cuda→cupy. "
-               "Default {default}"),
-        "zh": "数组落在哪：cpu→numpy，gpu/cuda→cupy。缺省 {default}",
+        "en": ("Where the arrays live: cpu→numpy, gpu/cuda→cupy; "
+               "`cuda` here is a DEVICE name (= gpu), not a backend; "
+               "backends are chosen by --backend. Default {default}"),
+        "zh": ("数组落在哪：cpu→numpy，gpu/cuda→cupy；此处 cuda 是设备名"
+               "（等价于 gpu），不是后端名；后端由 --backend 选择。缺省 {default}"),
     },
     "help.dtype": {
         "en": "Four dtypes on equal footing, default {default}",
@@ -412,11 +458,12 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "help.backend": {
         "en": ("Passed straight to contract(backend=...). auto lets the library "
-               "decide; numpy/cupy/torch pick the array library; kupl/cuda pick the "
-               "native entry. Default {default}"),
-        "zh": ("传给 contract(backend=...)。auto 让库自判；"
-               "numpy/cupy/torch 指定数组库；kupl/cuda 指定原生入口。"
-               "缺省 {default}"),
+               "decide; numpy/cupy/torch pick the array library. Native "
+               "specialisation is selected by --kernel-force "
+               "(dedicated/topology), NOT by --backend. Default {default}"),
+        "zh": ("传给 contract(backend=...)。auto 让库自判；numpy/cupy/torch 指定"
+               "数组库。原生特化由 --kernel-force（dedicated/topology）选择，"
+               "并非 --backend。缺省 {default}"),
     },
     "help.compare": {
         "en": ("Reference implementation: numpy=np.einsum(optimize=...), "
@@ -461,45 +508,50 @@ MESSAGES: dict[str, dict[str, str]] = {
                "参照路径同时生效"),
     },
     "help.kernel": {
-        "en": ("Which specialised kernel may run. Kinds of value: auto = keep the "
-               "original dispatch (dedicated, then topology) and, when none runs, "
-               "only warn and fall back to the generic path (default); generic = skip "
-               "the specialised kernels entirely (no warning), and skip the corpus "
-               "shape lookup and the equivalence rewrite with them — both exist only "
-               "to reach a specialised form, so the generic notice is not printed "
-               "either; dedicated / topology = "
-               "allow exactly that kernel of the operand backend (numpy -> kupl, "
-               "cupy -> cuda), comma separated to allow both, tried in the order "
-               "written; backend = call the backend's own einsum and skip the "
-               "specialised dispatch (cannot be combined with other labels). "
-               "An explicit --kernel-force wins over the {env} environment variable. "
-               "Forcing a kernel makes it really try once (its negative cache "
-               "is bypassed) and, when it does not run, raises KernelUnavailableError "
-               "with a non-zero exit code — it never falls back to the generic path. "
-               "Main path only: the --compare backend reference keeps its own dispatch "
-               "(forcing a kernel on the other backend cannot work). A kernel that is "
-               "not available is reported as an error, never as a warning. An unknown "
-               "value exits with code 2. Default {default}"),
-        "zh": ("允许跑哪个专用内核。取值有几种：auto = 保持原分派次序（dedicated → "
-               "topology），跑不成只 warning 后回落到通用路径（缺省）；generic = "
+        "en": ("Which kernel to FORCE (there is no 'auto' value: the route is chosen by "
+               "measurement — --tune writes the winner into the profile table — not "
+               "guessed at dispatch time). generic = skip the specialised kernels "
+               "entirely (no warning), and skip the corpus shape lookup and the "
+               "equivalence rewrite with them — both exist only to reach a specialised "
+               "form, so the generic notice is not printed either; dedicated / topology "
+               "= allow exactly that kernel of the operand backend (numpy -> kupl, cupy "
+               "-> cuda), comma separated to allow both, tried in the order written; "
+               "backend = call the backend's own einsum and skip the specialised "
+               "dispatch (cannot be combined with other labels). Forcing a kernel makes "
+               "it really try once (its negative cache is bypassed) and, when it does "
+               "not run, raises KernelUnavailableError with a non-zero exit code — it "
+               "never falls back to the generic path. An unknown value (including the "
+               "removed 'auto') exits with code 2 and names --tune plus the legal "
+               "values. An explicit --kernel-force wins over the {env} environment "
+               "variable; leaving the option out runs with generic but is NOT the same "
+               "as writing generic (the kernel layer still sees 'not given', so a tuned "
+               "profile row such as kernel=backend is applied). Main path only: the "
+               "--compare backend "
+               "reference keeps its own dispatch (forcing a kernel on the other backend "
+               "cannot work). Default {default}"),
+        "zh": ("强制跑哪个内核（没有 auto：路线由实测决定——--tune 把胜出的那一组"
+               "写进配置表，而不是运行时猜分派次序）。generic = "
                "完全跳过专用内核（不产生 warning），并连语料形态匹配与等价改写一起"
                "跳过——两者都只为命中特化形态，因此也不再打通用路径提示；dedicated / "
                "topology = 只允许"
                "当前后端的对应内核（numpy → kupl，cupy → cuda），可用逗号给两个、"
                "按书写次序尝试；backend = 直接调后端自己的 einsum、不走专用分派"
                "（不可与其它标签混用）。"
-               "显式 --kernel-force 优先于环境变量 {env}。"
-               "强制具体内核时会**真试一次**（旁路负缓存），跑不成即抛 "
+               "强制内核时会真试一次（旁路负缓存），跑不成即抛 "
                "KernelUnavailableError 并以非零退出码结束——绝不回落成通用路径。"
+               "未知取值（含已删除的 auto）以退出码 2 结束，消息点名 --tune 并列出"
+               "合法集合。显式 --kernel-force 优先于环境变量 {env}；不写该选项时按 "
+               "generic 执行，但那不等于显式写了 generic（内核层仍视为未指定，已 tune 的"
+               "配置表里 kernel=backend 这类行因此照常套用）。"
                "只作用于主路径：--compare backend 的参照仍走自己的分派"
-               "（在另一个后端上强制内核必然不可用）。"
-               "强制跑不成一律报错，不会降级成 warning。未知取值以退出码 2 结束。"
-               "缺省 {default}"),
+               "（在另一个后端上强制内核必然不可用）。缺省 {default}"),
     },
     "help.optimize": {
-        "en": ("Contraction-order optimiser (auto/optimal/dp/greedy/branch-*, or an "
-               "explicit path). Default {default}"),
-        "zh": "收缩序优化器（auto/optimal/dp/greedy/branch-*，或显式 path）。缺省 {default}",
+        "en": ("Contraction-order optimiser: one of {values}. 'auto' is not a "
+               "value - it is the built-in default selector (used when the option "
+               "is omitted), so writing it is a usage error."),
+        "zh": "收缩序优化器：{values} 之一。auto 不是可写取值——它是内置的缺省选择器"
+              "（不写该选项时就用它），显式写它属于用法错误。",
     },
     "help.atol": {
         "en": "**Relative** tolerance (normalised by max|expected|). Default {default}",
@@ -572,12 +624,25 @@ MESSAGES: dict[str, dict[str, str]] = {
                "explicitly, in which case the main path times it once). The three swept "
                "axes are supplied by "
                "--tune itself, so an explicit --kernel-force / --as-equivalence / "
-               "--optimize other than auto is IGNORED with one warning line per option "
-               "on stderr (the sweep still runs and the exit code stays 0). The grid is "
-               "5 × 2 × 3 = 30 combinations (hard cap 30; more is a usage error, never a "
-               "silent truncation). Each combination reuses --warmup / --rounds and the "
-               "median is what was measured now — a single-run measurement, NOT a "
-               "benchmark; that median IS the wall_ms of the winning row.\n"
+               "--optimize outside the grid (--kernel-force other than generic, the "
+               "other two other than auto) is IGNORED with one warning line per option "
+               "on stderr (the sweep still runs and the exit code stays 0). The "
+               "combinations are NOT a cartesian product: they form an ordered list per "
+               "branch (common prefix dedicated -> generic, then one branch-specific "
+               "topology combination, then the backend tail; inside each kernel "
+               "greedy/branch_1/branch_2/dp/branch_all/optimal/none) with 22 "
+               "combinations for B1/B2 and 21 for B3 (the branch is probed from whether "
+               "the original equation and its equivalent spelling can be specialised; "
+               "probing does not time anything). Hard cap 30; more is a usage error, "
+               "never a silent truncation. Each combination reuses --warmup / --rounds "
+               "and the median is what was measured now — a single-run measurement, NOT "
+               "a benchmark; that median IS the wall_ms of the winning row.\n"
+               "min_wall_ms pruning: the bound starts at --tune-timeout; a combination "
+               "whose single contract() call is slower than the current bound is "
+               "TERMINATED (reported as 'pruned', never written) and the sweep "
+               "continues; any combination that measures faster lowers the bound "
+               "immediately, so every later combination is pruned against it. The best "
+               "row is the smallest recorded wall_ms.\n"
                "The whole sweep runs inside the cache's tune session, so the "
                "configuration table is neither read nor written while measuring. After "
                "the sweep ONLY the winning combination is written: if it came from "
@@ -601,11 +666,20 @@ MESSAGES: dict[str, dict[str, str]] = {
                "方程、形状、dtype、设备与后端**固定不动**（它们是本次的不变量）；"
                "--compare 在 --tune 下**缺省关闭**（不给就不跑参考基准；显式给出时由"
                "主路径照旧跑一次）。被遍历的三维由 --tune 自己"
-               "提供：显式 --kernel-force / --as-equivalence / --optimize 只要不是 auto，"
+               "提供：显式 --kernel-force / --as-equivalence / --optimize 只要不在网格里"
+               "（--kernel-force 非 generic，另两轴非 auto），"
                "就会**被忽略**，每个参数在 stderr 上给一行警告（遍历照常进行，退出码仍为 "
-               "0）。网格为 5 × 2 × 3 = 30 组（硬上限 30，超出即用法错误，"
-               "**绝不静默截断**）。每组沿用 --warmup / --rounds，中位就是此刻测到的值——"
+               "0）。组合**不是笛卡尔积**：按分支给出**有序清单**（共同前缀 dedicated "
+               "→ generic，再一条分支专属 topology，最后 backend 尾部；每个内核内 "
+               "greedy/branch_1/branch_2/dp/branch_all/optimal/none），B1/B2 = 22 组、"
+               "B3 = 21 组（分支由「原方程能否特化、等价写法能否特化」探测得出，"
+               "探测不计时）。硬上限 30，超出即用法错误，**绝不静默截断**。"
+               "每组沿用 --warmup / --rounds，中位就是此刻测到的值——"
                "**单次运行的实测，不是基准**，那个中位**就是**胜出行里的 wall_ms。\n"
+               "min_wall_ms 剪枝：上界初值 = --tune-timeout；某组的单次 contract() 耗时"
+               "超过当前上界即**终止该组**（标 pruned、绝不写表）并继续下一组；任何一组"
+               "测到更小耗时都**立刻**压低上界，后续所有组都用它剪枝。最优行就是记录到的"
+               "最小 wall_ms。\n"
                "整轮遍历在缓存的 tune session 里跑，期间配置表**既不读也不写**。遍历结束"
                "只写**胜出的那一组**：胜出组 as_equivalence=false → 以原方程写该配置；"
                "胜出组 as_equivalence=true → 以 target_equation 为方程写一条完整性能配置，"
@@ -973,6 +1047,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": ("不参与选优：MISMATCH={mismatch} error={error} timeout={timeout}"
                "（数值不符、跑不成或超时的组合一律不参与最优选择）"),
     },
+    # ``min_wall_ms`` 剪枝的一句话摘要：逐组的原文本已由 ``tune comb`` 的
+    # ``原因=`` 逐字给出（含 ``耗时大于min_wall_ms,此组被终止``），这里只报总数与
+    # 当时的最终上界——"哪些组被砍了"在明细里，不在这里重算一遍。
+    "tune.prune": {
+        "en": ("{pruned} combination(s) terminated early (slower than min_wall_ms); "
+               "final min_wall_ms={min_wall_ms}; set by {config}"),
+        "zh": ("{pruned} 组因超过 min_wall_ms 被提前终止；最终上界 min_wall_ms={min_wall_ms}，"
+               "由 {config} 设定"),
+    },
     "tune.none": {
         "en": "no usable combination: every one errored, timed out or mismatched",
         "zh": "没有任何可用组合：全部报错、超时或数值不符",
@@ -1173,9 +1256,13 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "error.kernel": {
         "en": ("--kernel-force must be one of {labels} (comma separated for several; "
-               "backend cannot be combined with other labels), got {value!r}"),
+               "backend cannot be combined with other labels), got {value!r}. "
+               "kernel_force only accepts forced values: automatic dispatch has been "
+               "replaced by tune (run --tune and pin the winner)"),
         "zh": ("--kernel-force 必须是 {labels} 之一"
-               "（多个用逗号分隔；backend 不可与其它标签混用），得到 {value!r}"),
+               "（多个用逗号分隔；backend 不可与其它标签混用），得到 {value!r}。"
+               "kernel_force 只接受强制值，自动分派已由 tune 取代"
+               "（用 --tune 实测出最快路线后再写死）"),
     },
     "error.as_equivalence": {
         "en": "--as-equivalence must be one of {values}, got {value!r}",
@@ -1635,10 +1722,14 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     ``language`` 只影响错误文案与 ``verbose`` 明细（``None`` = 走
     :func:`resolve_language`，即 ``--language auto``），不改任何计算结果。
 
-    ``kernel`` 是 ``--kernel-force`` 的原始取值（``None`` = 缺省 ``auto``），解析后原样
-    传给 ``contract(kernel_force=...)``。强制具体标签而没跑成时，``KernelUnavailableError``
+    ``kernel`` 是 ``--kernel-force`` 的原始取值（``None`` = 用户没指定）。**显式性原样
+    传下去**：``None`` 一路传到 ``contract(kernel_force=None)``，由 ``_api`` 自己回落
+    （环境变量 > ``generic``）——它用 ``kernel_force is not None`` 判断"用户真的给过"，
+    CLI 若在这里填上 ``generic``，每次不写该选项的调用都会被判成显式冲突，配置表里
+    ``kernel=backend`` 这类命中行就再也套不上。解析出的名字只用于报告（``requested=``）。
+    强制标签而没跑成时，``KernelUnavailableError``
     **不被吞掉**：它带着 requested/attempted/逐标签原因向上抛，由 :func:`main`
-    打印正文并非零退出。``auto`` 模式仍只 warning + 回落，行为逐字不变。
+    打印正文并非零退出——没有"warning + 回落"这一档。
 
     ``cache`` 三态直传 ``contract(cache=...)``：``None``（``auto``）跟随
     ``PYQCD_EINSUM_CACHE``，``False`` 让底层缓存**既不读也不写**。与 ``equivalence``
@@ -1687,9 +1778,14 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     profile_requested = parse_profile(profile, lang)
     profile_kwargs = _contract_profile_kwargs(profile_requested, profile_dir)
     # ``--kernel-force`` 先解析：非法标签必须在构造任何操作数之前就报成用法错误。
-    # 规范化后的字符串**原样**给 ``contract(kernel_force=...)``，报告里的 ``requested=``
-    # 也用同一处解析结果，二者不会各说各话。
+    # 规范化后的字符串只用于报告（``requested=``）；**传给 contract 的是显式性本身**
+    # ——见下面的 ``kernel_passthrough``。
     kernel_value = ",".join(kernel_labels(kernel_force, lang))
+    # "用户没指定"必须以 ``None`` 抵达 ``_api``：它用 ``kernel_force is not None`` 取
+    # ``caller_force_given``，填上 ``generic`` 就等于声称"用户点名了 generic"，配置表
+    # 里 ``kernel=backend`` 的命中行会被判成显式冲突（``ProfileConflict``）。回落值
+    # （环境变量 > ``generic``）由 ``_api`` 自己算，与 CLI 侧解析同源。
+    kernel_passthrough = None if kernel_force is None else (kernel_value or None)
     # ``generic`` / ``backend`` 是**路线**不是内核，原样交给 contract()：前者在库里解析
     # 成空强制集，于是 ``_specialize.match`` 与等价改写整段都不必做——这两件事的唯一
     # 目的都是命中特化形态，而调用方已经明确不要形态；后者更早返回，一次原生入口都不碰。
@@ -1742,7 +1838,7 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     # 主路径
     def call():
         return pe.contract(equation, *operands, backend=backend, optimize=optimize,
-                           specialize=specialize, kernel_force=kernel_value or None,
+                           specialize=specialize, kernel_force=kernel_passthrough,
                            as_equivalence=as_equivalence_value,
                            cache=cache_requested, **profile_kwargs)
 
@@ -1765,6 +1861,12 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         force = _kernel_force_module()
         unavailable = getattr(force, "KernelUnavailableError", None) if force else None
         if unavailable is not None and isinstance(exc, unavailable):
+            raise
+        # 配置表的**数据/冲突**错误同样透传：``ProfileError`` 说的是"表里的记录与你的
+        # 显式输入冲突"或"同键多行"，不是"数值不对"。折进 ``ok=False`` 会让 CLI 打一行
+        # ``FAIL``（退出码 1），把一次**用法/配置**失败说成算法失败；``main`` 据类型
+        # 打印正文并以 2 退出（§5 的"报错并退出"）。
+        if isinstance(exc, _profile_error()):
             raise
         report["ok"] = False
         report["error"] = f"{type(exc).__name__}: {exc}"
@@ -1876,9 +1978,9 @@ def _specialize_label(specialize: bool | None) -> str:
 
 
 # ── 强制内核（--kernel-force） ─────────────────────────────────────────────────────
-#: 缺省：保持原分派次序（失败只 warning + 回落）。与 ``_kernel_force.AUTO_LABEL``
-#: 同值；本模块不 import 它，免得 ``_kernel_force`` 缺席时整个入口起不来。
-DEFAULT_KERNEL = "auto"
+#: 缺省：强制通用路径。与 ``_kernel_force.DEFAULT_LABEL`` 同值；本模块不 import 它，
+#: 免得 ``_kernel_force`` 缺席时整个入口起不来。
+DEFAULT_KERNEL = "generic"
 #: ``last_kernel()`` 取不到时的占位。**机器可读**，不随 ``--language`` 变——
 #: 它说的是"没观测到"，不是一句说明文字。
 KERNEL_UNKNOWN = "unknown"
@@ -1908,13 +2010,12 @@ def _kernel_force_module():
 def _kernel_label_names() -> tuple[str, ...]:
     """合法取值全集：优先用 ``_kernel_force`` 的权威定义，取不到用本模块字面量。
 
-    含 ``auto`` / ``generic`` / ``backend`` —— 报错文案要列的是**能写什么**，不是
-    "可强制的内核标签"子集，只列 ``dedicated, topology`` 会漏掉两个合法取值。
+    报错文案要列的是**能写什么**：四个强制值（``generic`` / ``dedicated`` /
+    ``topology`` / ``backend``），不含已删除的 ``auto``。
     """
     force = _kernel_force_module()
-    live = getattr(force, "KERNEL_LABELS", None) if force is not None else None
-    names = set(live or KERNEL_LABELS)
-    names |= {DEFAULT_KERNEL, GENERIC_LABEL, BACKEND_LABEL}
+    live = getattr(force, "ALLOWED_LABELS", None) if force is not None else None
+    names = set(live or (KERNEL_LABELS | {GENERIC_LABEL, BACKEND_LABEL}))
     return tuple(sorted(names))
 
 
@@ -1937,16 +2038,15 @@ def _kernel_unavailable_error() -> type[BaseException]:
 def kernel_labels(value: str | None, language: str = "zh") -> tuple[str, ...]:
     """解析生效的 ``--kernel-force``：显式取值优先于 ``PYQCD_EINSUM_KERNEL_FORCE``。
 
-    返回 ``_kernel_force.resolve`` 的原始元组（``()`` = 自动分派，
-    ``("generic",)`` = 只走通用路径，其余为要强制的**逻辑名**：``dedicated`` /
-    ``topology`` / ``backend``）。非法标签抛
+    返回 ``_kernel_force.resolve`` 的原始元组（``("generic",)`` = 只走通用路径，
+    其余为要强制的**逻辑名**：``dedicated`` / ``topology`` / ``backend``）。非法标签抛
     ``UsageError``（退出码 2）并列出合法集合——静默忽略拼写错误会让用户以为
-    强制生效了，而他其实还在跑 auto。
+    强制生效了。
     """
     force = _kernel_force_module()
     if force is None:
-        text = DEFAULT_KERNEL if value is None else str(value).strip()
-        return () if text in ("", DEFAULT_KERNEL) else (text,)
+        text = DEFAULT_KERNEL if value is None else str(value).strip().lower()
+        return (GENERIC_LABEL,) if text in ("", DEFAULT_KERNEL) else (text,)
     try:
         return tuple(force.resolve(value))
     except ValueError as exc:
@@ -1955,11 +2055,11 @@ def kernel_labels(value: str | None, language: str = "zh") -> tuple[str, ...]:
 
 
 def kernel_requested(value: str | None, language: str = "zh") -> str:
-    """报告里 ``requested=`` 的取值：``auto`` / ``generic`` / ``label,...``。
+    """报告里 ``requested=`` 的取值：``generic`` 或 ``label,...``。
 
     与真正传给 ``contract(kernel_force=...)`` 的口径同源（都从这里解析出来），所以这一格
-    回答的是"这次到底要求了什么"，而不是"命令行上写了什么"——``auto`` 时它还会
-    跟随 ``PYQCD_EINSUM_KERNEL_FORCE``，报告必须反映那一刻的生效值。
+    回答的是"这次到底要求了什么"，而不是"命令行上写了什么"——没给时它同样反映
+    ``PYQCD_EINSUM_KERNEL_FORCE`` 或缺省 ``generic``。
     """
     labels = kernel_labels(value, language)
     return ",".join(labels) if labels else DEFAULT_KERNEL
@@ -2006,15 +2106,13 @@ def _last_kernel() -> dict[str, Any] | None:
     return record if isinstance(record, dict) else None
 
 
-def _forced_of(labels: tuple[str, ...]) -> tuple[str, ...] | None:
+def _forced_of(labels: tuple[str, ...]) -> tuple[str, ...]:
     """``resolve`` 的元组 → ``last_kernel()['requested']`` 的形状。
 
-    ``None`` 自动分派；``()`` 只走通用路径；其余为强制标签。自己算而不调
+    ``generic`` → ``()``（不进专用分派、没有尝试可记）；其余原样。自己算而不调
     ``_kernel_force.forced_labels``，是为了该模块缺席时也能校验记录归属。
     """
-    if not labels:
-        return None
-    if labels == ("generic",):
+    if labels == (GENERIC_LABEL,):
         return ()
     return labels
 
@@ -2375,6 +2473,40 @@ def _profile_module():
     except ImportError:                         # pragma: no cover - 旧版库
         return None
     return cache
+
+
+def _optimize_choices() -> tuple[str, ...] | None:
+    """``--optimize`` 的**可写取值**：配置表的 7 个叶子（唯一来源，不抄第二份）。
+
+    ``auto`` **不在此列**：它是 ``contract(optimize=...)`` 的签名缺省值、也是
+    ``paths._IMPLICIT_DEFAULT_NAMES`` 里的内部归一结果，``paths.get_path_fn("auto")``
+    照旧抛 ``KeyError``。于是 CLI 层不接受用户写 ``auto``，而 API 的缺省行为一个字
+    都不用改——``--optimize`` 的缺省值是 ``None``（"未指定"），``main`` 把它还原成
+    :data:`DEFAULT_OPTIMIZE` 再交给 ``run()``。
+
+    旧版库没有这个常量时返回 ``None``：argparse 不设 ``choices``（与旧行为一致），
+    不做任何本地硬编码的"七叶子"副本。
+    """
+    cache = _profile_module()
+    leaves = getattr(cache, "OPTIMIZE_LEAVES", None) if cache is not None else None
+    return tuple(leaves) if leaves else None
+
+
+def _profile_error() -> type[BaseException]:
+    """配置表的**数据/冲突**错误基类（``ProfileError``）；库缺席时给一个永不命中的占位。
+
+    ``run`` 据此把"表里同键多行"与"命中行和显式输入冲突"从"数值不符"里分出来
+    向上透传，``main`` 打印正文并以退出码 2 结束（缺表 ``ProfileMissing`` 走的是
+    "警告 + 继续"那一路，不会到这里）。返回值**总是**一个类：``except`` 与
+    ``isinstance`` 都要它，``None`` 在这两处都不可用。
+    """
+    cache = _profile_module()
+    error = getattr(cache, "ProfileError", None) if cache is not None else None
+    return error if isinstance(error, type) else _NoProfileError
+
+
+class _NoProfileError(Exception):
+    """``_profile_cache`` 缺席时的占位异常类（永远不会被抛出）。"""
 
 
 def _profile_file() -> str | None:
@@ -2813,7 +2945,7 @@ def _print_explain(report: dict[str, Any], state: dict[str, Any],
         print("plan   : " + _plan_of(report, language), file=out)
         print(explain_kernel_line(_explain_kernel_fields(report)), file=out)
         print("why    : " + _why_line(report, state, language), file=out)
-    # 命中时只留这一行：① 记录定位已经由库提示的 ``<profile.csv>:<数据行号>``
+    # 命中时只留这一行：① 记录定位已经由库提示的 ``<pyqcd.einsum.profile.csv>:<数据行号>``
     # （``state['row']['line']``，1-based）钉住——同一个 ``kernel=`` 会出现在许多行里，
     # 没有行号用户翻不到具体哪一条在生效；② ``route :`` / ``kernel :`` 这类**结果**行
     # 不在此列：它们是本次实测的证据、不是对分派的解释，由 ``_print_detail`` 照旧输出；
@@ -3263,20 +3395,238 @@ def _route_of(kernel_info: Any, language: str = "zh",
 
 
 # ── 遍历调优（--tune） ──────────────────────────────────────────────────────
-def tune_combos(language: str = "zh") -> list[tuple[str, str, str]]:
-    """``--tune`` 的完整网格：``(kernel_force, as_equivalence, optimize)`` 三元组。
+#: 三个分支的稳定名（**机器可读**，不翻译），见 ``_tune_axes``。
+TUNE_BRANCH_RAW = _tune_axes.TUNE_BRANCH_RAW
+TUNE_BRANCH_EQUIVALENT = _tune_axes.TUNE_BRANCH_EQUIVALENT
+TUNE_BRANCH_NONE = _tune_axes.TUNE_BRANCH_NONE
+TUNE_BRANCHES = _tune_axes.TUNE_BRANCHES
+#: 剪枝时的固定原文（用户口径，逐字不可改写）。
+TERMINATION_MESSAGE = _tune_axes.TERMINATION_MESSAGE
+#: ``原因=`` 的拼装：固定原文 + ``wall_ms`` 与 ``min_wall_ms`` 两个数值。
+prune_reason = _tune_axes.prune_reason
+#: ``分支 → 有序清单``（组数与逐项顺序的唯一声明处）。
+tune_plan = _tune_axes.tune_plan
 
-    组合数超过 :data:`TUNE_MAX_COMBOS` 时抛 ``UsageError``（退出码 2），**绝不**截断
-    ——截断后的"最优"不再是这张网格里的最优，而报告里看不出来。
+
+def tune_branch(equation: str, language: str = "zh") -> dict[str, Any]:
+    """**只探测、不计时**：这条方程该走哪一条遍历清单（规格 §2）。
+
+    三条判据都用库自己的两个入口，不自己解析方程：
+
+    * ``raw_ok = _specialize.match(equation) is not None`` —— 原方程的形态能否特化；
+    * ``mapping = _equivalence.normalize_equation(equation)``、
+      ``equiv_eq = mapping.equation``、
+      ``equiv_ok = mapping is not None and _specialize.match(equiv_eq) is not None``.
+
+    两个都为假说明这条方程既没有特化形态、也没有能落到特化形态的等价写法，于是
+    ``topology`` 那一组根本不该试（试了也只能报不可用）。
+    探测**不写配置表、不构造张量、不计时**——它是判定，不是测量。
     """
-    combos = [(kernel, as_equiv, optimize)
-              for kernel in TUNE_KERNEL_FORCE
-              for as_equiv in TUNE_AS_EQUIVALENCE
-              for optimize in TUNE_OPTIMIZERS]
+    from pyqcd.einsum import _equivalence, _specialize
+
+    raw_ok = _specialize.match(equation) is not None
+    mapping = None
+    equiv_eq = None
+    equiv_ok = False
+    try:
+        mapping = _equivalence.normalize_equation(equation)
+    except Exception:                           # noqa: BLE001 - 探测失败按"无映射"
+        mapping = None
+    if mapping is not None:
+        equiv_eq = str(getattr(mapping, "equation", "") or "")
+        try:
+            equiv_ok = bool(equiv_eq) and _specialize.match(equiv_eq) is not None
+        except Exception:                       # noqa: BLE001 - 同上
+            equiv_ok = False
+    if raw_ok:
+        branch = TUNE_BRANCH_RAW
+    elif equiv_ok:
+        branch = TUNE_BRANCH_EQUIVALENT
+    else:
+        branch = TUNE_BRANCH_NONE
+    return {
+        "branch": branch,
+        "raw_ok": raw_ok,
+        "equiv_ok": equiv_ok,
+        "target_equation": equiv_eq or None,
+    }
+
+
+def tune_combos(language: str = "zh", *,
+                equation: str | None = None) -> list[tuple[str, str, str]]:
+    """``--tune`` 的**有序**组合清单：``(kernel_force, as_equivalence, optimize)``。
+
+    不再是笛卡尔积：清单按"最可能快"排序（共同前缀 → 分支专属 → ``backend`` 尾部），
+    好让 :class:`_tune_axes.MinWall` 的上界尽早被压低、后面的格子一超界就被终止。
+    顺序与组数是冻结口径，见 :mod:`pyqcd.einsum._tune_axes`。
+
+    ``equation`` 省略时按"两轴都不可特化"的分支（``B3``）给清单——这是**不依赖任何
+    方程**的最小清单，供只需要"有哪些格子"的调用方使用；真跑 tune 一律显式传方程。
+
+    组数超过 :data:`TUNE_MAX_COMBOS` 时抛 ``UsageError``（退出码 2），**绝不**截断
+    ——截断后的"最优"不再是这张清单里的最优，而报告里看不出来。
+    """
+    if equation is None:
+        combos = _tune_axes.tune_plan(TUNE_BRANCH_NONE)
+    else:
+        combos = _tune_axes.tune_plan(
+            tune_branch(equation, language)["branch"])
     if len(combos) > TUNE_MAX_COMBOS:
         raise UsageError(translate("error.tune_grid", language,
                                    count=len(combos), limit=TUNE_MAX_COMBOS))
     return combos
+
+
+def _tune_combos_for(equation: str,
+                     language: str) -> list[tuple[str, str, str]]:
+    """本轮的清单来源：等价写法是 ``tune_combos(language, equation=equation)``。
+
+    为什么单独一层：既有契约用 ``cli.tune_combos`` 的**一元**替身
+    （``lambda language="zh": [...]``）注入小清单，好让"坏组合不留配置行"那几条断言
+    跑在 3 组上而不是 21 组上。替身不收 ``equation``，于是这里退回只传语言——注入的
+    清单与真清单走的是同一条路径（都是"一串三元组"），不改变遍历语义。
+    """
+    try:
+        return tune_combos(language, equation=equation)
+    except TypeError:
+        return tune_combos(language)
+
+
+#: 一组的"**遍历前就判不可用**"状态（机器可读、**不翻译**）。它与 ``error`` 是两件
+#: 事：``error`` 说的是"这一组跑出了意外"，而 ``skip`` 说的是"该内核对这个形状本来
+#: 就没有路"——后者逐组跑一遍只会得到同一句错误的 N 份副本（2026-11-18 用户实测：
+#: 22 组里 8 组是这种噪音，真正的问题被淹掉）。
+TUNE_STATUS_SKIP = "skip"
+
+
+def _dedicated_unavailable_reason(equation: str, shapes: Sequence[Sequence[int]],
+                                 dtype: Any, backend: str,
+                                 device: str = "cpu") -> str | None:
+    """``dedicated`` 在**这条方程/形状/dtype/后端**上能不能用（只查准入，不执行）。
+
+    判据全部复用内核自己的函数，**不新造阈值**：``enabled()``（原生库/开关）、
+    ``dedicated_dtypes()``（dtype 有没有步表路径）、``_dedicated_cached()``（这条
+    收缩能不能编码成固定步表，只规划不下发）、
+    ``_cpu_plan_fallback_reason`` / ``_plan_fallback_reason``（**计划 arena 超预算**
+    这一类拒绝，原文里就带着阈值与两个数字，报告里逐字打出来）。
+
+    返回 ``None`` = 可用；否则返回内核自己的**原文**（用户能与内核日志里同一句话对上）。
+    探测自身出错时同样返回 ``None``：宁可照旧逐组跑（看得见错误），也不凭一次失败
+    的探测把一个其实可用的内核整组裁掉。
+    """
+    try:
+        from pyqcd.einsum import _kernel_cuda, _kernel_kupl
+
+        name = str(backend or "").strip().lower()
+        if name in ("", "auto"):
+            # ``--backend auto`` 时真正生效的后端由设备定（与 ``_tune_key`` 的口径一致）：
+            # 拿错后端等于用另一个内核的预算去判它（CPU 8 GiB vs CUDA 3 GiB）。
+            gpu = str(device or "").strip().lower() in ("gpu", "cuda")
+            name = "cupy" if gpu else "numpy"
+        cupy = name in ("cupy", "cuda", "gpu")
+        if not cupy and name not in ("numpy", "cpu", "torch"):
+            return None                   # 未知后端：不猜，交给逐组实测
+        module = _kernel_cuda if cupy else _kernel_kupl
+        if cupy:
+            try:
+                import cupy  # noqa: F401 - 只探"装没装"
+            except ImportError:
+                return "cupy is not installed"
+        enabled = getattr(module, "enabled", None)
+        if not callable(enabled) or not enabled():
+            return ("kernel disabled (native library missing, or "
+                    "PYQCD_EINSUM_KERNEL_* = 0)")
+        if not cupy and name == "torch":
+            # ``try_dedicated`` 只吃 numpy / cupy 数组，torch 后端的步表路径因此恒不可用。
+            return "operands must be numpy arrays"
+        np_dtype = np.dtype(dtype)
+        dedicated_dtypes = getattr(module, "dedicated_dtypes", None)
+        supported = tuple(dedicated_dtypes()) if callable(dedicated_dtypes) else ()
+        if supported and np_dtype not in supported:
+            return ("dtype {} has no dedicated step-table path (supported: {}); "
+                    "no implicit downcast is performed".format(
+                        np_dtype, ", ".join(str(item) for item in supported)))
+        optimize = _kernel_kupl._effective_dedicated_optimizer("auto")
+        entry = _kernel_kupl._dedicated_cached(
+            equation, tuple(tuple(int(axis) for axis in shape) for shape in shapes),
+            np_dtype, optimize, "cuda" if cupy else "kupl")
+        if entry is None:
+            return "the contraction path is not expressible as a fixed step table"
+        stats = _kernel_kupl._plan_statistics(entry[0])
+        gate = (module._plan_fallback_reason(np_dtype, stats) if cupy
+                else module._cpu_plan_fallback_reason(stats))
+        return None if gate is None else str(gate)
+    except Exception:                     # noqa: BLE001 - 探测失败不许裁掉可用内核
+        return None
+
+
+def _topology_unavailable_reason(equation: str,
+                                 branch: dict[str, Any] | None) -> str | None:
+    """``topology`` 只在这条方程（或其等价改写）能特化时可用。
+
+    判据就是分支探测用的那两个 ``_specialize.match``：原方程能特化 → ``B1`` 的
+    ``as_equivalence=false`` 那组可用；只有等价写法能特化 → ``B2`` 的
+    ``as_equivalence=true`` 那组可用；两者都不行 → 整组跳过（试了也只能报不可用）。
+    """
+    try:
+        from pyqcd.einsum import _specialize
+    except ImportError:                   # pragma: no cover - 旧版库
+        return None
+    probe = branch or tune_branch(equation)
+    try:
+        if probe.get("raw_ok"):
+            return None
+        target = str(probe.get("target_equation") or "")
+        if target and _specialize.match(target) is not None:
+            return None
+    except Exception:                     # noqa: BLE001 - 探测失败不裁
+        return None
+    return ("the equation is not specializable and neither is its equivalent "
+            "spelling (_specialize.match missed)")
+
+
+def tune_unavailable_kernels(*, equation: str,
+                             shapes: Sequence[Sequence[int]] | None = None,
+                             dtype: Any = None, backend: str = "auto",
+                             device: str = "cpu",
+                             branch: dict[str, Any] | None = None
+                             ) -> dict[str, str]:
+    """遍历**前**的准入探测：``{kernel_force: 不可用原因}``（不执行任何收缩）。
+
+    ``generic`` / ``backend`` 恒可用（它们就是通用路径与后端 einsum），所以这里只探
+    ``dedicated`` 与 ``topology``，别的内核名不猜。``shapes`` 缺失时只探 topology
+    ——``dedicated`` 的准入必须知道形状（步表按形状编码）。``backend`` 是 ``auto``
+    时由 ``device`` 定实际内核（GPU/``cuda`` → CUDA，其余 → KUPL），否则两个内核的
+    预算（3 GiB / 8 GiB）会张冠李戴。
+    """
+    reasons: dict[str, str] = {}
+    for kernel in TUNE_KERNEL_FORCE:
+        reason: str | None = None
+        if kernel == "dedicated":
+            if shapes is not None and dtype is not None:
+                reason = _dedicated_unavailable_reason(
+                    equation, shapes, dtype, backend, device)
+        elif kernel == "topology":
+            reason = _topology_unavailable_reason(equation, branch)
+        if reason:
+            reasons[kernel] = str(reason)
+    return reasons
+
+
+def tune_plan_trimmed(branch: str,
+                      unavailable: Sequence[str] | None = None
+                      ) -> list[tuple[str, str, str]]:
+    """:func:`tune_plan` **裁剪后**的清单（去掉 ``unavailable`` 里那些内核的组）。"""
+    kept, _dropped = _tune_axes.plan_without(
+        _tune_axes.tune_plan(branch), unavailable)
+    return kept
+
+
+def tune_plan_sizes_trimmed(unavailable: Sequence[str] | None = None
+                            ) -> dict[str, int]:
+    """三个分支**裁剪后**的组数（``B1``/``B2``/``B3`` 各自算，不共享一个数）。"""
+    return {branch: _tune_axes.trimmed_plan_size(branch, unavailable)
+            for branch in TUNE_BRANCHES}
 
 
 def tune_conflicts(*, kernel_force: str | None = None,
@@ -3290,14 +3640,16 @@ def tune_conflicts(*, kernel_force: str | None = None,
     每个撞车的参数在 stderr 上给**一行**（``--tune 会自行遍历 …，已忽略你给的 '<值>'``），
     遍历照常进行、退出码仍为 0，报告里也能看到网格覆盖了哪些取值。
 
-    ``kernel_force`` 只有解析出**具体标签**才算撞车：``auto``（以及 ``None``）与网格的
-    第一档同义，显式写它不改变任何东西，也就没有可警告的。非法标签仍按原来的用法错误
+    ``kernel_force`` 只有解析出**具体内核**才算撞车：``generic`` 是缺省值、且网格本身
+    就遍历它，显式写它不改变任何东西，也就没有可警告的。非法标签仍按原来的用法错误
     报（退出码 2）——那是拼写问题，不是"被忽略"。
 
     返回被忽略的三轴名（``["--kernel-force"]`` 之类），供调用方/测试断言。
     """
     ignored: list[str] = []
-    if kernel_force is not None and kernel_labels(kernel_force, language):
+    kernel_labels_value = (kernel_labels(kernel_force, language)
+                           if kernel_force is not None else ())
+    if kernel_labels_value and kernel_labels_value != (GENERIC_LABEL,):
         ignored.append("--kernel-force")
         _warn_tune_ignored(translate("tune.ignored", language, swept=TUNE_AXES,
                                      given=f"--kernel-force={kernel_force}"),
@@ -3325,6 +3677,13 @@ def _warn_tune_ignored(message: str, language: str = "zh") -> None:
     print(translate("result.warning", language, message=message), file=sys.stderr)
 
 
+#: ``--tune`` 里真实参照（一次完整 ``np.einsum``）的**输入元素总数上限**。
+#: 超过就跳过参照、改用"首个成功组合"的自洽校验：生产形状上的完整收缩可能几分钟
+#: 且不可中断，而 tune 不该为了一次参照把整轮拖死（2026-11-18 用户实测卡死）。
+#: 200 万元素（complex128 约 32 MB）足以覆盖契约与中小方程，同时把大方程挡在外面。
+TUNE_REFERENCE_MAX_ELEMENTS = 2_000_000
+
+
 def _tune_reference(equation: str, host: Sequence[Any]) -> tuple[Any, str]:
     """``--tune`` 的唯一参照：``np.einsum(optimize="greedy")``（与缺省 ``--compare numpy`` 同源）。
 
@@ -3332,6 +3691,17 @@ def _tune_reference(equation: str, host: Sequence[Any]) -> tuple[Any, str]:
     为的就是别把 30 份参照耗时再算一遍。算不出来时返回 ``(None, 原因)``——此时所有
     组合的 ``rel`` 都是 ``None``，也就不做 MISMATCH 判定（如实标注，不猜）。
     """
+    # 大规模形状上**不跑**参照：这是一次完整的 ``np.einsum`` 收缩，生产尺寸上可能
+    # 算几分钟且**不可中断**（SIGALRM 打不断原生代码）。它就发生在任何超时保护之外，
+    # 是"tune 卡死无输出"的直接原因。规模上限按**输入元素总数**判，小形状仍做真参照
+    # （数值校验因此保留；大形状退化成首个成功组合的自洽校验，见遍历循环）。
+    total = 0
+    for item in host:
+        size = getattr(item, "size", None)
+        total += int(size) if size is not None else 0
+    if total > TUNE_REFERENCE_MAX_ELEMENTS:
+        return None, (f"n/a (inputs {total} elements > "
+                      f"{TUNE_REFERENCE_MAX_ELEMENTS}, reference skipped)")
     try:
         return np.einsum(equation, *host, optimize="greedy"), "np.einsum(optimize='greedy')"
     except Exception as exc:                    # noqa: BLE001 - 参照失败不该中断遍历
@@ -3372,23 +3742,33 @@ def _tune_rel(row: dict[str, Any]) -> str:
     return "-" if value is None else f"{value:.3e}"
 
 
-#: 一组的分类取值（规格 §12.1 冻结，机器可读、**不翻译**）。
+#: 一组的分类取值（规格 §12.1 冻结，机器可读、**不翻译**）。``pruned`` 是
+#: ``min_wall_ms`` 剪枝：这一组**没被测完**（它比当前上界慢），因此同样不参与选优。
+#: ``skip`` 是**遍历前**就判定"该内核对这个形状没有路"（计划 arena 超预算、方程不可
+#: 特化……）：它既不是异常也不是"太慢"，不该混进 ``error``。
 TUNE_STATUS_OK = "ok"
 TUNE_STATUS_TIMEOUT = "timeout"
 TUNE_STATUS_ERROR = "error"
 TUNE_STATUS_MISMATCH = "mismatch"
+TUNE_STATUS_PRUNED = "pruned"
 TUNE_STATUSES = (TUNE_STATUS_OK, TUNE_STATUS_TIMEOUT, TUNE_STATUS_ERROR,
-                 TUNE_STATUS_MISMATCH)
+                 TUNE_STATUS_MISMATCH, TUNE_STATUS_PRUNED, TUNE_STATUS_SKIP)
 
 
 def tune_status(row: dict[str, Any]) -> str:
-    """一组的状态：``ok`` / ``timeout`` / ``error`` / ``mismatch``（规格 §12.1）。
+    """一组的状态：``ok`` / ``timeout`` / ``error`` / ``mismatch`` / ``pruned`` / ``skip``。
 
     ``budget`` 归 ``timeout``：那一组是被**整轮**时间上限截断的（不是它自己太慢），
     而 §12.1 只给了四个取值；记成别的字面量会让"为什么这一格没有数"看不出是时间
-    原因。没有中位、又没有任何标记的行同样不可能算 ``ok``——那一行本来就不该出现，
-    真出现了也只能如实标成 ``error``。
+    原因。``pruned`` 单独成一档（不折进 ``timeout``）：它说的是"比当前最快的那一组
+    还慢"，与"这一组自己超过 ``--tune-timeout``"是两件不同的事，混在一起就没法回答
+    "到底是卡死了还是单纯不快"。``skip`` 同样单独成一档：它是**遍历前**的准入结论
+    （不是测量结果），折进 ``error`` 会让一次正常遍历看起来像 8 次意外。
     """
+    if row.get("pruned"):
+        return TUNE_STATUS_PRUNED
+    if row.get("skip"):
+        return TUNE_STATUS_SKIP
     if row.get("timeout") or row.get("budget"):
         return TUNE_STATUS_TIMEOUT
     if row.get("error"):
@@ -3427,17 +3807,41 @@ def tune_comb_lines(index: int, total: int, row: dict[str, Any]) -> list[str]:
             + ["tune due  : " + extra for extra in lines[1:]])
 
 
+def tune_skip_line(row: dict[str, Any],
+                   dispatched: dict[str, Any] | None = None) -> list[str]:
+    """被**遍历前**排除的内核：一行说清"哪一档、几组、为什么"（状态是 ``skip``）。
+
+    与 :func:`tune_comb_lines` 同一套字段名（``kernel_force`` / ``backend`` / ``dtype``
+    / ``device`` / ``wall_ms`` / ``状态`` / ``原因``），区别只有两处：``序号`` 写 ``skip``
+    （它不在 ``1/N`` 的编号里——那 N 是裁剪后**实际遍历**的组数），``组数=`` 给这一档
+    被去掉多少组。原因保持内核原文，一行一行打出去（多行原文逐行续打）。
+
+    为什么整档一行而不是每组一行：同一句 "plan arena 超预算" 重复 7 遍只会把真正的
+    异常挤出屏幕，而"这一档跑没跑"照样一眼可见。
+    """
+    fields = dispatched or {}
+    head = ("skip  kernel_force={}  组数={}  backend={}  dtype={}  device={}  "
+            "wall_ms=-  状态={}  原因=").format(
+        row.get("kernel_force") or "-", int(row.get("combos") or 0),
+        fields.get("backend") or "-", fields.get("dtype") or "-",
+        fields.get("device") or "-", tune_status(row))
+    lines = str(row.get("reason") or "-").splitlines() or ["-"]
+    return (["tune comb : " + head + lines[0]]
+            + ["tune due  : " + extra for extra in lines[1:]])
+
+
 def tune_best(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
     """最快且**可用**的那一组。
 
-    ``error``（跑不成）、``timeout``（单次超上限）、``budget``（被整轮预算截断）与
-    ``mismatch``（数值不符）一律不参选：它们的 ``median_ms`` 要么不存在、要么不来自
-    一份完整且合格的样本集。
+    ``error``（跑不成）、``timeout``（单次超上限）、``budget``（被整轮预算截断）、
+    ``pruned``（超过当时的 ``min_wall_ms``、被终止）与 ``mismatch``（数值不符）一律
+    不参选：它们的 ``median_ms`` 要么不存在、要么不来自一份完整且合格的样本集。
     """
     usable = [row for row in rows
               if row.get("median_ms") is not None
               and not row.get("error") and not row.get("mismatch")
-              and not row.get("timeout") and not row.get("budget")]
+              and not row.get("timeout") and not row.get("budget")
+              and not row.get("pruned")]
     return min(usable, key=lambda row: row["median_ms"]) if usable else None
 
 
@@ -3524,6 +3928,13 @@ def tune_table_lines(tune: dict[str, Any],
     if reason:
         footer += "  reason=" + reason
     lines.append(footer)
+    # 遍历前被排除的内核：**表尾**必须逐条点名（内核 + 被去掉的组数 + 内核原文）。
+    # 它们不在上面的表格里（那 N 是裁剪后实际遍历的组数），所以不写这一段，"为什么
+    # 少了 8 组"就永远查不到。
+    for item in tune.get("skipped_kernels") or []:
+        lines.append("skipped-kernels: kernel_force={}  组数={}  原因={}".format(
+            item.get("kernel_force") or "-", int(item.get("combos") or 0),
+            str(item.get("reason") or "-").replace("\n", " ")))
     return lines
 
 
@@ -3540,6 +3951,52 @@ class _TuneTimeout(BaseException):
 
 class _TuneBudget(BaseException):
     """整轮 ``--tune-budget`` 用尽（同样必须穿透库内的 ``except Exception``）。"""
+
+
+class _TunePruned(BaseException):
+    """这一组的单次耗时超过了当前 ``min_wall_ms``：**终止该组**，继续下一组。
+
+    同样继承 ``BaseException``：剪枝必须穿透库内那些 ``except Exception`` 的
+    "丢掉这次尝试、回退再跑一遍"，否则被终止的那一组会以通用路径重跑一遍，
+    "终止"就成了空话。它带两个数值，供 ``原因=`` 原样打出（不留一个只能靠猜的标记）。
+    """
+
+    def __init__(self, wall_ms: float, min_wall_ms: float | None) -> None:
+        super().__init__(prune_reason(wall_ms, min_wall_ms))
+        self.wall_ms = float(wall_ms)
+        self.min_wall_ms = None if min_wall_ms is None else float(min_wall_ms)
+
+
+def _measure(call, limit: float | None, deadline: float | None,
+             min_wall: Any) -> None:
+    """跑一次 ``call()``，并把这**一次**的耗时与当前 ``min_wall_ms`` 比较。
+
+    单次上限（``--tune-timeout``）与整轮预算（``--tune-budget``）由
+    :func:`_guarded_call` 负责；这里只加一条用户规则：这一次调用比当前上界还慢
+    → 抛 :class:`_TunePruned`，**终止该组**（不再跑完它的 warmup/rounds）。
+
+    为什么按**单次**剪枝却按**中位**抬高上界：规则原文两句说的就是这两件事——
+    "每一组的单次 contract() 调用耗时与 min_wall_ms 比较，超过即终止该组"，而
+    "某组某次调用得到更小 wall_ms → 立即更新"。上界取该组的实测中位（= 报表与配置表
+    里的 ``wall_ms``），于是"最终 best"与"记录的最小 wall_ms"是同一个数，不会出现
+    "best 说 A、上界说 B"的两套账。
+    """
+    started = time.perf_counter()
+    _guarded_call(call, limit, deadline)
+    wall_ms = (time.perf_counter() - started) * 1000.0
+    if min_wall is not None and min_wall.exceeds(wall_ms):
+        raise _TunePruned(wall_ms, min_wall.ms)
+
+
+def _contract_optimize(optimize: str) -> Any:
+    """清单标签 → ``contract(optimize=...)`` 的取值。
+
+    ``none`` 在**配置表**里是稳定写法（读侧按它比对），但库要的是 ``False``
+    （``"none"`` 是 ``opt_einsum`` 的路径名，不是"不做收缩序优化"）。这两件事必须
+    分开：清单与报表用字符串，调用用布尔。
+    """
+    text = str(optimize).strip().lower()
+    return False if text == "none" else text
 
 
 def _tune_timer_available() -> bool:
@@ -3638,6 +4095,14 @@ def _guarded_call(call, limit: float | None, deadline: float | None) -> None:
     if seconds is None:
         call()
         return
+    # 硬超时走**子进程**：SIGALRM 只在 Python 字节码之间派发，一旦调用进入原生
+    # C/CUDA 代码（不返回解释器）就永远不触发——实测 10 算子方程的 `--tune` 会
+    # 在 CPU 100%、GPU 0% 状态下无限期挂着，`--tune-timeout` 完全失效。
+    # 子进程被父进程 kill 是唯一能真正打断原生代码的方式。
+    # 子进程隔离（fork）试过并**已回退**：CUDA 上下文不跨 fork 复用，GPU 上必然
+    # ``cudaErrorInitializationError``（2026-11-18 实测 22 组全 error）。因此这里
+    # 仍是 SIGALRM——它能打断 Python 长循环，但打不断原生 C/CUDA 代码，
+    # 这一点在 --help 里如实写明。
     if not _tune_timer_available():
         started = time.perf_counter()
         call()
@@ -3747,8 +4212,8 @@ def _tune_kernel_label(row: dict[str, Any]) -> str:
 
     配置表里的 ``kernel`` 要能被 ``contract()`` 重放（``_api._profile_force_label`` 认得
     ``kupl_dedicated`` 这类具体名、``generic`` 与 ``backend``），所以先把路线过一遍那张
-    映射表——``kupl_topology_v2`` 这类带版本后缀的名字自己映射不出来。``auto`` 不是可
-    重放取值（命中了只会被记录、不施加），只有连路线都取不到时才写下它。
+    映射表——``kupl_topology_v2`` 这类带版本后缀的名字自己映射不出来。连路线都取不到时
+    才写下缺省 ``generic``（没有专用内核可记）。
     """
     route = str(row.get("route") or "").strip()
     requested = str(row.get("kernel_force") or "").strip()
@@ -4055,6 +4520,16 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     写会给 29 组没被选中的组合留下垃圾行。遍历结束后只写胜出的那一组
     （:func:`_tune_persist`，规格 §3.3）。
 
+    遍历的是**有序清单**而不是笛卡尔积（:func:`tune_combos` + :mod:`._tune_axes`）：
+    分支（原方程可特化 / 只有等价写法可特化 / 都不可特化）在**探测阶段**定下来，
+    只探测、不计时、不写表；``topology`` 那一组只在分支允许时才出现。
+
+    ``min_wall_ms`` 剪枝（用户规则）：初值 = ``timeout``（``--tune-timeout``，秒→毫秒），
+    每一组的单次 ``contract()`` 耗时与它比较，**超过即终止该组**（原文
+    ``耗时大于min_wall_ms,此组被终止``）+ 继续下一组 + 该组**不写缓存**；某组测到更小
+    耗时则**立刻**把 ``min_wall_ms`` 降为该值（后续所有组都用新上界剪枝）。``best`` 就是
+    记录的最小耗时那一组。
+
     ``timeout`` 是**每一次** ``contract()`` 调用（warmup 与每一轮都算）的上限秒数，
     ``budget`` 是整轮上限（``0`` = 不限）。任一次调用超时 → 该组记 ``timeout``；
     中位只由全部成功且未超时的调用构成（``_timed`` 一抛出来就没有中位，不拿部分样本凑）。
@@ -4081,14 +4556,33 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
         raise UsageError(translate("error.tune_timeout", lang, value=timeout))
     if float(budget) < 0.0:
         raise UsageError(translate("error.tune_budget", lang, value=budget))
-    combos = tune_combos(lang)          # 超上限在构造任何张量之前就报错
-    xp = _xp_for_device(device, lang)
+    # 分支探测**先做**：只探测、不计时、不写表；清单与组数都由它定。
+    branch = tune_branch(equation, lang)
+    combos = _tune_combos_for(equation, lang)  # 超上限在构造任何张量之前就报错
     np_dtype = np.dtype(dtype)
-    # 操作数只构造一次：30 组看到的必须是同一批数据，否则"哪组更快"混进了数据差异。
+    # 规格 §18「先探测再裁剪」：该内核对这个形状**本质上没有路**时（计划 arena 超预算、
+    # 方程不可特化……），整组跳过并在报告里写成 ``skip``——逐组跑一遍只会得到同一句
+    # 错误的 N 份副本，把真正的异常淹掉（2026-11-18 用户实测）。
+    planned = len(combos)
+    unavailable = tune_unavailable_kernels(
+        equation=equation, shapes=shapes, dtype=np_dtype, backend=backend,
+        device=device, branch=branch)
+    combos, dropped = _tune_axes.plan_without(combos, unavailable)
+    skipped_rows: list[dict[str, Any]] = [
+        {"kernel_force": kernel, "skip": True, "status": TUNE_STATUS_SKIP,
+         "combos": int(count),
+         "reason": f"skip: {kernel} 不可用（{unavailable.get(kernel) or '未知原因'}）"}
+        for kernel, count in dropped.items()]
+    xp = _xp_for_device(device, lang)
+    # 操作数只构造一次：每组看到的必须是同一批数据，否则"哪组更快"混进了数据差异。
     operands, host = _make_operands(xp, shapes, np_dtype, seed)
     # 实际下发的三列（§13.2）：整轮不变，但每组那行都要带着印出来。
     dispatched = _dispatched_config(operands, equation=equation, backend=backend,
-                                    device=device, dtype=dtype)
+                                     device=device, dtype=dtype)
+    # 参照**总是尝试**，但由 :data:`TUNE_REFERENCE_MAX_ELEMENTS` 挡住大形状：
+    # 小形状照旧做真实 ``np.einsum``（数值校验保留），大形状跳过（那一次完整收缩
+    # 可能几分钟且不可中断——2026-11-18 用户实测"tune 卡死无输出"的根因）。
+    # ``--compare`` 只影响**普通调用**要不要另跑参照基准，不是 tune 的数值校验开关。
     reference, reference_note = _tune_reference(equation, host)
     extra = dict(profile_kwargs or {})
     tolerance = float(atol) + float(rtol)
@@ -4096,6 +4590,10 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     # ``0``/负数都是"不设上限"（CLI 已校验非负，这里的 0 是合法取值）。
     limit = float(timeout) if float(timeout) > 0.0 else None
     deadline = (time.monotonic() + float(budget)) if float(budget) > 0.0 else None
+    # ``min_wall_ms`` 初值 = ``--tune-timeout``（秒 → 毫秒）；``0`` = 不设上界。
+    min_wall = _tune_axes.MinWall(
+        ms=None if limit is None else limit * 1000.0,
+        source="--tune-timeout")
     rows: list[dict[str, Any]] = []
     measured = 0
     stopped = False
@@ -4132,7 +4630,8 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                 def call(kernel=kernel, as_equiv=as_equiv, optimize=optimize,
                          holder=holder):
                     got = pe.contract(equation, *operands, backend=backend,
-                                      optimize=optimize, specialize=specialize,
+                                      optimize=_contract_optimize(optimize),
+                                      specialize=specialize,
                                       kernel_force=kernel,
                                       as_equivalence=(as_equiv == "true"),
                                       cache=cache, **extra)
@@ -4146,8 +4645,25 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                 bad = False
                 seconds: float | None = None
                 try:
+                    # 整组（warmup + rounds）在**一个组级 SIGALRM 窗口**里跑：能打断
+                    # Python 侧的长循环（例如 ``optimal`` 的穷举规划，实测 6.5 s），
+                    # 但**打不断原生 C/CUDA 代码**——CUDA 上下文不能跨 fork 复用，
+                    # 子进程方案在 GPU 上必然 ``cudaErrorInitializationError``
+                    # （2026-11-18 实测）。这一点写进 --help，不假装能做到。
+                    group_limit = (None if limit is None
+                                   else float(limit) * float(1 + warmup + rounds))
                     seconds = _timed(
-                        lambda: _guarded_call(call, limit, deadline), warmup, rounds)
+                        lambda: _guarded_call(
+                            lambda: _measure(call, None, deadline, min_wall),
+                            group_limit, deadline),
+                        warmup, rounds)
+                except _TunePruned as exc:
+                    # 用户规则 §4：超过当前 ``min_wall_ms`` 的这一组**终止**、继续下一组，
+                    # 并且不写缓存。原文与两个数值都进 ``reason``，一字不改地打出来。
+                    row["pruned"] = True
+                    row["wall_ms"] = round(float(exc.wall_ms), 6)
+                    row["reason"] = prune_reason(exc.wall_ms, exc.min_wall_ms)
+                    bad = True
                 except _TuneTimeout as exc:
                     # 超时只打印：遍历继续，这一组不参与选优、也不会被写进配置表。
                     # ``reason`` 存**原文**（类型 + 异常正文），报告里一字不改地打出来。
@@ -4173,6 +4689,14 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                     row["median_ms"] = round(seconds * 1000.0, 6)
                     row["wall_ms"] = row["median_ms"]
                     measured += 1
+                    # 参照：``compare`` 显式给出时用真实参照；``none``（``--tune``
+                    # 缺省）时退化为**首个成功组合的结果**做自洽校验。后者成本为零，
+                    # 却仍能检出"不同内核/规划器算出不同数"这一类真实分歧——否则
+                    # 跳过参照会让 MISMATCH 永远检不出来（2026-11-18 实测：契约
+                    # ``rel 超容差必须判 MISMATCH`` 变成恒假）。
+                    if reference is None and holder:
+                        reference = _to_host(holder[-1])
+                        reference_note = "self(first ok combination)"
                     if reference is not None and holder:
                         row["rel"] = _relative_error(_to_host(holder[-1]), reference)
                         if not (row["rel"] <= tolerance):
@@ -4183,6 +4707,12 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                                     row["rel"], tolerance, float(atol), float(rtol),
                                     reference_note))
                             bad = True
+                    # 用户规则 §4：这一组的中位比当前上界更小 → **立即**压低上界，
+                    # 后续所有组都用它剪枝。只在"可用"的组上压低：数值不符/跑不成
+                    # 的那些不该定义"要多快才算值得跑"。
+                    if not bad and min_wall.observe(
+                            row["median_ms"], (kernel, as_equiv, optimize)):
+                        row["min_wall"] = True
                 row["status"] = tune_status(row)
                 holder.clear()                  # 别把上一组的结果留到下一组
                 rows.append(row)
@@ -4211,9 +4741,19 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
         "combos": len(combos),
         "measured": measured,
         "total": len(combos),
+        "planned": planned,
+        "trimmed": planned - len(combos),
+        # 遍历前被排除的内核（每条一行：内核 + 被去掉的组数 + 内核自己的原文）。
+        "skipped_kernels": skipped_rows,
         "stopped": stopped,
         "skipped": len(combos) - measured,
         "timeout": limit,
+        # ``min_wall_ms`` 剪枝的记账：初值来源、当前上界、压低它的那一组。
+        "min_wall_ms": min_wall.ms,
+        "min_wall_source": min_wall.source,
+        "min_wall_config": (None if min_wall.config is None
+                            else list(min_wall.config)),
+        "min_wall_ms_initial": None if limit is None else float(limit) * 1000.0,
         "budget": float(budget),
         "timer": "sigalrm" if (limit is not None and _tune_timer_available())
                  else ("posthoc" if limit is not None else "off"),
@@ -4222,6 +4762,9 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
         "compare": str(compare or "none"),
         # 本次遍历实际下发的三列（§13.2）：表格与 JSON 共用同一份取值。
         "dispatched": dict(dispatched),
+        # 分支判定（只探测、不计时）：B1 原方程可特化 / B2 只有等价写法可特化 /
+        # B3 都不可特化。它决定清单里有没有 ``topology`` 那一组。
+        "branch": branch,
         "axes": {
             "kernel_force": list(TUNE_KERNEL_FORCE),
             "as_equivalence": list(TUNE_AS_EQUIVALENCE),
@@ -4250,6 +4793,8 @@ def _tune_line(row: dict[str, Any], best: dict[str, Any] | None) -> str:
         row["optimize"], _tune_rel(row), row.get("route") or KERNEL_UNKNOWN)
     if row.get("mismatch"):
         text += "  MISMATCH"
+    if row.get("pruned"):
+        text += "  pruned"
     if row.get("timeout"):
         text += "  timeout"
     if row.get("budget"):
@@ -4421,14 +4966,46 @@ def print_tune(tune: dict[str, Any], language: str = "zh",
         ",".join(str(item) for item in (axes.get("as_equivalence") or ())) or "-",
         ",".join(str(item) for item in (axes.get("optimize") or ())) or "-"),
         file=out)
+    # 分支判定（只探测、不计时）：它决定清单里有没有 ``topology`` 那一组，
+    # 以及"为什么这一轮没试它"到底是什么原因。机器可读，字段名不翻译。
+    branch = tune.get("branch") or {}
+    if branch:
+        print("tune branch: branch={}  raw_ok={}  equiv_ok={}  "
+              "target_equation={}".format(
+                  branch.get("branch") or "-",
+                  str(bool(branch.get("raw_ok"))).lower(),
+                  str(bool(branch.get("equiv_ok"))).lower(),
+                  branch.get("target_equation") or "-"), file=out)
+    # 遍历前的准入探测改了**组数**：``1/N`` 的 ``N`` 是裁剪后**实际会被遍历**的组数，
+    # 所以这一行必须说清"计划多少、实际多少、哪些内核被排除"（机器可读，字段名不翻译）。
+    skipped_kernels = [dict(item) for item in (tune.get("skipped_kernels") or [])]
+    planned = tune.get("planned")
+    kept = tune.get("total")
+    if planned is not None and kept is not None:
+        print("tune plan : planned={}  kept={}  trimmed={}  skipped-kernels={}".format(
+            int(planned), int(kept), int(tune.get("trimmed") or 0),
+            ",".join(str(item.get("kernel_force")) for item in skipped_kernels) or "-"),
+            file=out)
     print("tune hdr  : 序号/总数  kernel_force  as_equivalence  optimize  wall_ms  "
-          "状态(ok|timeout|error|mismatch)  原因", file=out)
+          "状态(ok|timeout|error|mismatch|pruned|skip)  原因"
+          + ("  （总数 = 裁剪后可用组数：计划 {} → 实际 {}{}）".format(
+              int(planned), int(kept),
+              "；已排除内核见 skipped-kernels: " + ",".join(
+                  str(item.get("kernel_force")) for item in skipped_kernels)
+              if skipped_kernels else "")
+             if planned is not None and kept is not None else ""), file=out)
     print("tune ---- : " + "-" * 88, file=out)
     # 规格 §12.1：**每组一行、全部列出**——不受 --verbose 控制、不去重、不截断。
-    # 坏组（timeout / error / mismatch）一样在这一段里，原因原文跟在 ``原因=`` 之后。
+    # 坏组（timeout / error / mismatch / pruned）一样在这一段里，原因原文跟在
+    # ``原因=`` 之后。
     total = len(rows)
     for index, row in enumerate(rows, 1):
         for line in tune_comb_lines(index, total, row):
+            print(line, file=out)
+    # 被排除的内核**整组一行**（不是每组一行）：同一个原因重复 7 遍只会把表格淹掉，
+    # 而"这一档到底跑没跑、为什么没跑"仍然看得见（状态是 ``skip``，不是 ``error``）。
+    for row in skipped_kernels:
+        for line in tune_skip_line(row, dispatched=tune.get("dispatched") or {}):
             print(line, file=out)
     if verbose:
         measured = sorted((row for row in rows if row.get("median_ms") is not None),
@@ -4456,6 +5033,14 @@ def print_tune(tune: dict[str, Any], language: str = "zh",
             mismatch=sum(1 for row in skipped if row.get("mismatch")),
             error=sum(1 for row in skipped if row.get("error")),
             timeout=sum(1 for row in rows if row.get("timeout"))), file=out)
+    pruned = [row for row in rows if row.get("pruned")]
+    if pruned:
+        print("tune prune: " + translate(
+            "tune.prune", language, pruned=len(pruned),
+            min_wall_ms=tune.get("min_wall_ms"),
+            config="-" if not tune.get("min_wall_config") else (
+                "kernel_force={}  as_equivalence={}  optimize={}".format(
+                    *tune["min_wall_config"]))), file=out)
     profile = tune.get("profile") or {}
     enabled = tune.get("profile_enabled")
     write = tune.get("write") or {}
@@ -4493,13 +5078,100 @@ def print_tune(tune: dict[str, Any], language: str = "zh",
 
 
 # ── 语料反推（不写 --shape 时） ──────────────────────────────────────────────
-def shapes_from_corpus(equation: str, scene: str
+def restore_original_shapes(mapping: Any,
+                            rewritten_shapes: Sequence[tuple[int, ...]],
+                            original_terms: Sequence[str],
+                            sizes: dict[str, int]
+                            ) -> list[tuple[int, ...]] | None:
+    """把"等价写法"算出的形状按 ``mapping`` **反向还原**成用户原方程的轴序。
+
+    为什么必须还原：``_equivalence.normalize_equation`` 给出的 ``mapping.equation``
+    是**语料那条写法**的轴序（操作数位置、每个操作数的轴序、输出轴序都可能被改），
+    ``roles`` 也是配着那条写法的。直接拿它的形状去跑用户的方程，等于把
+    ``(100,4,1,1)`` 喂给本该是 ``(4,100,1,100)`` 的操作数——**形状看起来都合法**，
+    只有数值悄悄错位。所以这里只给"能证明对得上"的答案。
+
+    三个字段的用法（语义见 :class:`pyqcd.einsum._equivalence.Equivalence`）：
+
+    * ``operand_order[i]`` = 改写后第 i 个操作数取自用户张量的第几个 → 逆映射回位置；
+    * ``operand_permutations[i]`` = 该操作数的 ``transpose`` 参数（``new[j]=old[perm[j]]``）
+      → 形状按 ``old[k]=new[perm⁻¹[k]]`` 逆推；
+    * ``output_permutation`` **不参与**：它只动输出轴序，而输出形状由
+      ``main`` 按用户方程的 ``->`` 段从 ``sizes`` 拼，本来就不会错。
+
+    最后再拿 ``sizes`` 按**用户方程**的指标段重算一遍逐轴比对（``sizes`` 的键就是
+    用户的字母，映射只在语料内部做字母双射）：两者不逐轴相等说明这条 mapping 与
+    方程不自洽（例如被外部改过），此时返回 ``None`` —— 调用方按"未命中"报错，
+    **绝不**返回一份错位的形状。``None`` 也覆盖字段缺失/长度不符/``perm`` 不是置换
+    这些"无法反向施加"的情形。
+    """
+    count = len(rewritten_shapes)
+    if len(original_terms) != count:
+        return None
+    order = mapping.operand_order
+    if order is None:
+        order = tuple(range(count))
+    elif len(order) != count or sorted(order) != list(range(count)):
+        return None
+    # ``_build`` 在"没有任何操作数需要转置"时把该字段留成空元组，两种写法等价。
+    perms = tuple(mapping.operand_permutations) or (None,) * count
+    if len(perms) != count:
+        return None
+    restored: list[tuple[int, ...] | None] = [None] * count
+    for index, rewritten in enumerate(rewritten_shapes):
+        perm = perms[index]
+        if perm is None:
+            original = tuple(rewritten)
+        else:
+            if len(perm) != len(rewritten) or sorted(perm) != list(range(len(perm))):
+                return None             # 不是置换：反向施加没有定义
+            inverse = [0] * len(perm)
+            for axis, source in enumerate(perm):
+                inverse[source] = axis
+            original = tuple(rewritten[axis] for axis in inverse)
+        target = original_terms[order[index]]
+        if len(original) != len(target):
+            return None
+        try:
+            expected = tuple(sizes[label] for label in target)
+        except KeyError:                # mapping 与方程不同字：无从校验
+            return None
+        if original != expected:
+            return None                 # 字段与方程不自洽，宁可不给
+        restored[order[index]] = original
+    if any(shape is None for shape in restored):
+        return None
+    return [shape for shape in restored if shape is not None]
+
+
+def shapes_from_corpus(equation: str, scene: str,
+                       detail: dict[str, Any] | None = None
                        ) -> tuple[list[tuple[int, ...]], bool, dict[str, int]]:
     """按语料 ``roles`` + 生产 dims 反推形状。
 
     返回 ``(每个操作数的形状, 是否命中语料, label → 尺寸表)``。第三项让调用方能
     按方程输出段拼出**正确的输出形状**——少了它，省略 ``--shape`` 的非标量输出
     会被当成 ``()`` 而误判形状不符（见 :func:`main` 里的说明）。
+
+    三阶段匹配（次序固定）
+    ----------------------
+    1. **直接匹配**：语料里有方程的**逐字**同一条（``task.equation == equation``）；
+    2. **等价转换后匹配**：``mapping = _equivalence.normalize_equation(equation)``，
+       再用 ``mapping.equation`` 去语料里找。轴序变体（换操作数位置 / 转置某个
+       操作数 / 换输出轴序）在这一步命中，形状再按 :func:`restore_original_shapes`
+       **反向还原**成用户原方程的轴序——还原不出来就退回第 3 步的报错；
+    3. 两者都没有 → ``matched=False``，由 :func:`main` 报 ``error.corpus_miss``。
+
+    ``detail`` 是**出参**（省略即不需要）：命中后写入
+    ``{"matched_via": "direct"|"equivalence", "target_equation": 命中的那条语料方程}``，
+    供 ``--explain``/``--verbose`` 打印"形状是从哪来的"。返回值保持三元组不变——
+    既有调用方与契约按三元组解包，加第四个元素会把它们一起弄红。
+
+    形状口径
+    --------
+    标签 → 尺寸仍由 :func:`pyqcd.einsum.bench_specialized._label_sizes` 按
+    ``task.roles`` + 场景 dims 给出（本函数只决定用**哪条 roles**）。
+    口径本身的切换（``_topology_gen_common.ROLE_SHAPES``）由那一侧负责，不在本函数。
 
     **不得 import ``pyqcd.testing``**（本库反模式：生产代码不与测试包耦合，见
     ``AGENTS.md`` 反模式节）。这里原先是
@@ -4512,20 +5184,49 @@ def shapes_from_corpus(equation: str, scene: str
     正是这里该有的校验。
     """
     from pyqcd.einsum import _bench_scene
+    from pyqcd.einsum import _equivalence
     from pyqcd.einsum import _wick_tasklist as tasklist
     from pyqcd.einsum._dedicated_kernels import parse_equation
     from pyqcd.einsum.bench_specialized import _label_sizes
 
     table = _bench_scene.dims(scene)
-    for seq in range(1, len(tasklist.by_seq()) + 1):
-        task = tasklist.lookup(seq)
-        if task is None or task.equation != equation:
-            continue
-        terms, _out = parse_equation(equation)
+
+    def find_task(text: str) -> Any:
+        for seq in range(1, len(tasklist.by_seq()) + 1):
+            task = tasklist.lookup(seq)
+            if task is not None and task.equation == text:
+                return task
+        return None
+
+    def shapes_of(text: str, task: Any
+                  ) -> tuple[list[tuple[int, ...]], dict[str, int]]:
+        terms, _out = parse_equation(text)
         sizes = _label_sizes(terms, task.roles, table)
-        shapes = [tuple(sizes[ch] for ch in term) for term in terms]
+        return [tuple(sizes[label] for label in term) for term in terms], sizes
+
+    # ① 直接匹配（命中口径与旧实现完全相同：逐字相等）
+    task = find_task(equation)
+    if task is not None:
+        shapes, sizes = shapes_of(equation, task)
+        if detail is not None:
+            detail.update(matched_via="direct", target_equation=task.equation)
         return shapes, True, {str(k): int(v) for k, v in sizes.items()}
-    return [], False, {}
+
+    # ② 等价转换后匹配：`normalize_equation` 自己带开关，闸关时只给 None。
+    mapping = _equivalence.normalize_equation(equation)
+    if mapping is None:
+        return [], False, {}
+    task = find_task(mapping.equation)
+    if task is None:
+        return [], False, {}
+    rewritten_shapes, sizes = shapes_of(mapping.equation, task)
+    original_terms, _out = parse_equation(equation)
+    shapes = restore_original_shapes(mapping, rewritten_shapes, original_terms, sizes)
+    if shapes is None:
+        return [], False, {}            # 还原不可靠：按未命中报错，不给错位形状
+    if detail is not None:
+        detail.update(matched_via="equivalence", target_equation=task.equation)
+    return shapes, True, {str(k): int(v) for k, v in sizes.items()}
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -4545,6 +5246,9 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
         prog="python -m pyqcd.einsum.test",
         description=t("help.description"),
         epilog=t("help.epilog"),
+        # 排版由这段文案自己负责：argparse **不渲染** markdown，`**x**` 与双反引号
+        # 都会原样打进终端（实测 `--help` 里仍有 22 处 `**`）。所以 MESSAGES 里只准用
+        # 纯文本换行缩进；改完文案务必实跑一次 `--help` 看渲染，别只读源码。
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--equation", required=True, help=t("help.equation"))
@@ -4570,9 +5274,12 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
     parser.add_argument("--specialize", default=DEFAULT_SPECIALIZE,
                         choices=SPECIALIZE_MODES,
                         help=t("help.specialize", default=DEFAULT_SPECIALIZE))
-    # ``default=None`` 是刻意的，不是 ``DEFAULT_KERNEL``：``_kernel_force`` 里
-    # **显式参数优先于环境变量**，把缺省写成 ``"auto"`` 就等于每次都显式给了 auto，
-    # ``PYQCD_EINSUM_KERNEL_FORCE`` 会被永久压住。``None`` 才代表"用户没给"。
+    # ``default=None`` 是刻意的：``None`` = "用户没指定"，不是"显式 generic"。
+    # ``_api._profile_begin`` 用 ``kernel_force is not None`` 判断显式性，argparse 缺省
+    # 一填 ``DEFAULT_KERNEL``，每一次不写该选项的调用都会被判成显式 generic，配置表里
+    # ``kernel=backend`` 的命中行就抛 ``ProfileConflict``（2026-11-18 用户实测）。
+    # 真正生效的回落值（``generic``）仍显示在帮助文案里——它是"未指定时按 generic 执行"，
+    # 不是"用户点名了 generic"。
     parser.add_argument("--kernel-force", default=None,
                         help=t("help.kernel", default=DEFAULT_KERNEL,
                                env=KERNEL_FORCE_ENV,
@@ -4601,8 +5308,13 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
     parser.add_argument("--cache", default=None, choices=CACHE_MODES,
                         help=t("help.cache", env=CACHE_ENV,
                                default=DEFAULT_CACHE))
-    parser.add_argument("--optimize", default=DEFAULT_OPTIMIZE,
-                        help=t("help.optimize", default=DEFAULT_OPTIMIZE))
+    # 可写取值 = 配置表的 7 个叶子（``auto`` 不在其中，见 :func:`_optimize_choices`）。
+    # ``default=None`` 是"用户没给"：``main`` 再把它还原成 ``DEFAULT_OPTIMIZE``，
+    # 与 ``--kernel-force``/``--cache`` 同款三态，API 的缺省行为因此不变。
+    optimize_choices = _optimize_choices()
+    parser.add_argument("--optimize", default=None, choices=optimize_choices,
+                        help=t("help.optimize",
+                               values=" / ".join(optimize_choices or ())))
     parser.add_argument("--atol", type=float, default=DEFAULT_ATOL,
                         help=t("help.atol", default=f"{DEFAULT_ATOL:g}"))
     parser.add_argument("--rtol", type=float, default=DEFAULT_RTOL,
@@ -4654,16 +5366,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     # 参照"，不改遍历维度（tune 自己仍遍历 {auto,none,greedy}）。
     compare_value = args.compare if args.compare is not None else (
         "none" if tune_on else DEFAULT_COMPARE)
+    # ``--optimize`` 的 ``None`` 是"用户没给"（``auto`` 已从 CLI 可写集合里删除）：
+    # 这里还原成签名缺省值，报告行与 ``run()`` 看到的值与上一版逐字相同。
+    optimize_value = args.optimize if args.optimize is not None else DEFAULT_OPTIMIZE
     if tune_on:
         tune_conflicts(kernel_force=args.kernel_force,
                        as_equivalence=args.as_equivalence,
                        optimize=args.optimize, language=language)
 
     if args.shape is None:
-        shapes, matched, label_sizes = shapes_from_corpus(args.equation, args.scene)
+        # ``corpus_detail`` 是出参：命中来源（direct/equivalence）与命中的那条语料
+        # 方程。返回值仍是三元组，见 ``shapes_from_corpus`` 的说明。
+        corpus_detail: dict[str, Any] = {}
+        shapes, matched, label_sizes = shapes_from_corpus(
+            args.equation, args.scene, corpus_detail)
         if not matched:
             raise UsageError(translate("error.corpus_miss", language,
                                        equation=args.equation, scene=args.scene))
+        # 形状来自等价写法的反演时**必须说清**：形状是它给的，读者要知道那条
+        # 语料方程是谁（否则形状与自己的方程轴序看着对不上，无从核对）。
+        if corpus_detail.get("matched_via") == "equivalence" and resolve_explain(
+                parse_explain(args.explain, language), _as_bool(args.verbose)):
+            print(f"shape source: corpus(equivalence) via "
+                  f"{corpus_detail['target_equation']}")
         # 输出形状必须从**反推出的形状**推导，不能留空。
         #
         # 原先把 ``out_shape`` 设成 ``None``、下面再兜成 ``()``，于是任何省略
@@ -4694,13 +5419,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     specialize_value = parse_specialize(args.specialize, language)
     cache_value = parse_cache(args.cache, language)
     profile_value = parse_profile(args.profile, language)
+    # 缺表提示要用**本次命令行**的真实参数（提示里原先按键重建，GPU 下会退成
+    # ``--device cpu``、形状也没有输出段——2026-11-18 用户实测）。
+    _install_cli_hint(args, compare_given=args.compare is not None)
     try:
         result = run(
             equation=args.equation, shapes=shapes,
             out_shape=tuple(out_shape),
             device=args.device, dtype=args.dtype, backend=args.backend,
             atol=args.atol, rtol=args.rtol, compare=compare_value,
-            optimize=args.optimize, rounds=args.rounds, warmup=args.warmup,
+            optimize=optimize_value, rounds=args.rounds, warmup=args.warmup,
             seed=args.seed, verbose=_as_bool(args.verbose),
             specialize=specialize_value,
             compare_optimize=args.compare_optimize,
@@ -4720,6 +5448,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         # 强制生效了。
         print(translate("result.error", language, message=exc), file=sys.stderr)
         return 2
+    except _profile_error() as exc:
+        # 配置表的数据/冲突错误（§4 同键多行、§5 命中行与显式输入冲突）：正文已经由
+        # ``_api`` 拼好（键、表中值、显式值、记录的文件行号、怎么处理，以及**全部**
+        # 候选行），这里只**原样**打印，绝不加 traceback、不改写成 ``FAIL``。
+        # 退出码 2：脚本据此区分"改命令行/改表"与"算法结果不对"（后者是 1）。
+        # 同键多行那份正文 ``_api`` 已经打过一遍（列全部候选是它的职责），这里不再重复
+        # 第二遍——两段一模一样的话只会让人以为是两次独立的失败。
+        cache = _profile_module()
+        duplicate = getattr(cache, "DuplicateProfileEntry", None) if cache else None
+        if not (isinstance(duplicate, type) and isinstance(exc, duplicate)):
+            print(f"error: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        # CLI 上下文只服务**本次**调用：同进程的下一次调用（测试、脚本循环）不该
+        # 继承上一条命令行的 device/shape。
+        _clear_cli_hint()
     result["shape_source"] = report_note
     if result.get("specialize_warning"):
         print(translate("result.warning", language,
@@ -4733,8 +5477,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # ``--tune``：在主路径既有输出之后**追加**遍历（表格走 stderr，既有行不动）。
     # 放在 ``--json`` 之前，``report['tune']`` 才会一起落进 JSON。
+    tune_summary: dict[str, Any] | None = None
     if tune_on:
-        tune = run_tune(
+        tune_summary = run_tune(
             equation=args.equation, shapes=shapes,
             device=args.device, dtype=args.dtype, backend=args.backend,
             atol=args.atol, rtol=args.rtol, rounds=args.rounds,
@@ -4745,8 +5490,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             compare=compare_value,
             language=language,
         )
-        result["tune"] = tune["rows"]
-        print_tune(tune, language, verbose=_as_bool(args.verbose))
+        result["tune"] = tune_summary["rows"]
+        print_tune(tune_summary, language, verbose=_as_bool(args.verbose))
 
     if args.json:
         # 写不进去属于**参数/环境错误**（退出码 2），不是数值失败（1）。
@@ -4785,12 +5530,73 @@ def main(argv: Sequence[str] | None = None) -> int:
             detail += (f" (ref {ref_seconds * 1000:.3f}ms{tag}, "
                        f"{result['seconds'] / ref_seconds:.2f}x)")
         peak = (result.get("memory") or {}).get("peak") or {}
+        if tune_summary is not None:
+            detail += _tune_pass_detail(tune_summary)
         if peak.get("gpu_used_mib") is not None:
             detail += f"  vram+{peak['gpu_used_mib']:.0f}MiB"
         elif peak.get("rss_mib") is not None:
             detail += f"  rss+{peak['rss_mib']:.0f}MiB"
     print(f"PASS {args.equation}{detail}")
     return 0
+
+
+def _tune_pass_detail(tune: dict[str, Any]) -> str:
+    """``PASS`` 行里追加的 ``min_wall_ms=…`` 与最终 ``best`` 配置（用户要求，2026-11-18）。
+
+    为什么两个都写：``min_wall_ms`` 是**剪枝上界**（遍历中被最小组压低到哪），``best``
+    是**最终选中的配置**。两者数值相同也要并列显示——那正是"上界确实来自最优组"的
+    唯一直接证据；只写一个，读者无法分辨"上界被压低"与"碰巧选到"。
+
+    ``--tune-timeout 0``（不设上界）时 ``min_wall_ms`` 是 ``None``，此时退回 ``best``
+    的实测中位：报告里给的是"这个数"，而不是一个 ``None`` 让人以为没测到。
+    """
+    best = tune.get("best")
+    bound = tune.get("min_wall_ms")
+    if bound is None and isinstance(best, dict):
+        bound = best.get("median_ms")
+    text = "  min_wall_ms=" + ("-" if bound is None else f"{float(bound):.6f}") + "ms"
+    if not isinstance(best, dict):
+        return text + "  best=none"
+    return text + "  best=kernel_force={} as_equivalence={} optimize={}".format(
+        best.get("kernel_force") or "-",
+        best.get("as_equivalence") or "-",
+        best.get("optimize") or "-")
+
+
+def _install_cli_hint(args: Any, *, compare_given: bool) -> None:
+    """把**本次命令行**的实参交给缺表提示（``需要先 tune：`` 那一段）。
+
+    为什么不让提示按键重建：键里没有"用户给的 ``--shape``（含 ``->[…]`` 输出段）"与
+    "用户给没给 ``--compare``"，而 GPU 下 ``device`` 列是 ``cupy:0``。只按键重建，
+    用户在 GPU 上跑却收到一条 ``--device cpu``、形状还少一段的命令（2026-11-18 实测）。
+    这里递过去的全是 argparse 的实参，提示因此与"他刚才怎么跑的"逐字对得上。
+
+    环境变量/旧版库没有这个接口时**静默跳过**：提示退化成键重建（仍可用），
+    绝不因为一个提示接口缺失而挡住主流程。
+    """
+    cache = _profile_module()
+    install = getattr(cache, "set_cli_hint_context", None) if cache is not None else None
+    if not callable(install):
+        return
+    try:
+        install(device=str(args.device or ""), dtype=str(args.dtype or ""),
+                equation=str(args.equation or ""), shape=args.shape,
+                backend=str(args.backend or ""),
+                compare=(str(args.compare) if compare_given else None))
+    except Exception:                       # noqa: BLE001 - 提示层不许影响主流程
+        return
+
+
+def _clear_cli_hint() -> None:
+    """丢掉 CLI 上下文（一次 CLI 调用结束；同进程的下一次调用不该继承它）。"""
+    cache = _profile_module()
+    clear = getattr(cache, "clear_cli_hint_context", None) if cache is not None else None
+    if not callable(clear):
+        return
+    try:
+        clear()
+    except Exception:                       # noqa: BLE001 - 同上
+        return
 
 
 def _peek_language(argv: Sequence[str] | None) -> str | None:

@@ -116,14 +116,14 @@ def test_atol_is_relative_not_elementwise():
     equation = "ij,jk->ik"
     shapes = [(8, 8), (8, 8)]
     baseline = cli.run(equation=equation, shapes=shapes, out_shape=(8, 8),
-                       compare="numpy", rounds=2, warmup=1, seed=3)
+                       compare="opt_einsum", rounds=2, warmup=1, seed=3)
     assert baseline["ok"], baseline
     # 相对误差判据下，同一条方程的相对误差与整体量级无关。
     assert baseline["rel"] <= cli.DEFAULT_ATOL, baseline["rel"]
 
     # 直接验证归一化口径：把两者同时缩小到 1e-20，相对误差应当不变。
     small = cli.run(equation=equation, shapes=shapes, out_shape=(8, 8),
-                    compare="numpy", rounds=2, warmup=1, seed=3)
+                    compare="opt_einsum", rounds=2, warmup=1, seed=3)
     assert abs(small["rel"] - baseline["rel"]) <= 1e-15, (small["rel"], baseline["rel"])
 
     # 造一个真实偏差：篡改结果后 rel 必须按 max|expected| 归一。
@@ -138,13 +138,15 @@ def test_defaults_are_documented_values():
     assert cli.DEFAULT_DEVICE == "cpu"
     assert cli.DEFAULT_DTYPE == "complex128"
     assert cli.DEFAULT_BACKEND == "auto"
-    assert cli.DEFAULT_COMPARE == "numpy"
+    # ``--compare`` 缺省**关闭**（``none``）：不给就不跑参考基准。``numpy`` 档已删除，
+    # 它原来的等价写法是 ``--backend numpy --compare backend``。
+    assert cli.DEFAULT_COMPARE == "none"
     assert cli.DEFAULT_ATOL == 1e-12
     assert cli.DEFAULT_ROUNDS == 5
     assert cli.DEFAULT_WARMUP == 1
     assert cli.DEFAULT_VERBOSE is False
     assert set(cli.DTYPES) == {"complex128", "complex64", "float64", "float32"}
-    assert set(cli.COMPARE_MODES) == {"numpy", "opt_einsum", "backend", "none"}
+    assert set(cli.COMPARE_MODES) == {"opt_einsum", "backend", "none"}
 
 
 def test_exit_codes_distinguish_usage_from_numeric_failure():
@@ -175,7 +177,7 @@ def test_exit_codes_distinguish_usage_from_numeric_failure():
     # 数值失败由 main 的返回值表达（1），不是异常。
     result = cli.run(equation="ij,jk,kl->il",
                      shapes=[(64, 64)] * 3, out_shape=(64, 64),
-                     dtype="float32", atol=1e-30, compare="numpy",
+                     dtype="float32", atol=1e-30, compare="opt_einsum",
                      rounds=2, warmup=1)
     assert result["ok"] is False, result
     assert result["rel"] > 1e-30, result["rel"]
@@ -197,7 +199,7 @@ def test_memory_snapshot_is_outside_the_timed_region():
     assert delta["rss_mib_after"] == 13.5, delta
 
     runs = [cli.run(equation="ij,jk->ik", shapes=[(256, 256), (256, 256)],
-                    out_shape=(256, 256), compare="numpy", rounds=3, warmup=1)
+                    out_shape=(256, 256), compare="opt_einsum", rounds=3, warmup=1)
             for _ in range(2)]
     for item in runs:
         assert item["ok"], item
@@ -213,7 +215,7 @@ def test_memory_snapshot_is_outside_the_timed_region():
 def test_reference_seconds_are_reported():
     """``--compare`` 的参照耗时必须被采集，供 ``ref time`` 行与比值使用。"""
     result = cli.run(equation="ij,jk->ik", shapes=[(128, 128), (128, 128)],
-                     out_shape=(128, 128), compare="numpy", rounds=2, warmup=1)
+                     out_shape=(128, 128), compare="opt_einsum", rounds=2, warmup=1)
     assert result["ok"], result
     assert result["reference_seconds"] is not None, result
     assert result["reference_seconds"] > 0, result["reference_seconds"]
@@ -275,7 +277,7 @@ def test_help_lists_every_option_with_defaults():
 def test_run_end_to_end_on_cpu():
     """CPU 上一条最简方程必须能跑通并与 numpy 对上（compare=numpy）。"""
     result = cli.run(equation="ij,jk->ik", shapes=[(16, 16), (16, 16)],
-                     out_shape=(16, 16), compare="numpy", rounds=2, warmup=1)
+                     out_shape=(16, 16), compare="opt_einsum", rounds=2, warmup=1)
     assert result["ok"], result
     assert result["actual_shape"] == [16, 16], result
     assert result["rel"] <= cli.DEFAULT_ATOL, result["rel"]
@@ -608,6 +610,9 @@ def test_verbose_names_the_route_that_actually_ran():
     assert entry.get("name", "").startswith("topology:"), entry
 
     # 2) route 行必须报出实际 path。
+    # ``--kernel-force dedicated`` 是必须的：``kernel_force`` 的缺省值已是 ``generic``
+    # （``auto`` 已删除），那条路不匹配、不下发内核，route 只会写"通用"——这条断言
+    # 就变成空断言。
     err = io.StringIO()
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
         code = cli.main([
@@ -618,6 +623,7 @@ def test_verbose_names_the_route_that_actually_ran():
             "--device", "cpu", "--backend", "auto", "--dtype", "complex128",
             "--compare", "none", "--rounds", "1", "--warmup", "1",
             "--verbose", "true", "--specialize", "true",
+            "--kernel-force", "dedicated",
         ])
     text = err.getvalue()
     assert code == 0, f"应当通过，得到 {code}：{text}"
@@ -672,7 +678,7 @@ def test_tolerance_is_atol_plus_rtol_and_rtol_is_reported():
             code = cli.main([
                 "--equation", "ij,jk->ik", "--shape", "[8,8],[8,8]->[8,8]",
                 "--device", "cpu", "--dtype", "complex128",
-                "--compare", "numpy", "--rounds", "1", "--warmup", "1",
+                "--compare", "opt_einsum", "--rounds", "1", "--warmup", "1",
                 "--atol", "1e-9", "--rtol", "0.25",
             ])
     finally:
@@ -695,7 +701,7 @@ def test_tolerance_is_atol_plus_rtol_and_rtol_is_reported():
             code = cli.main([
                 "--equation", "ij,jk->ik", "--shape", "[8,8],[8,8]->[8,8]",
                 "--device", "cpu", "--dtype", "complex128",
-                "--compare", "numpy", "--rounds", "1", "--warmup", "1",
+                "--compare", "opt_einsum", "--rounds", "1", "--warmup", "1",
                 "--atol", "1e-12", "--rtol", "2.0",
             ])
     finally:
@@ -853,23 +859,21 @@ def test_compare_optimize_default_reproduces_the_old_reference_behaviour():
     ``--optimize`` 为 auto/None 时 ``greedy``、否则跟随 ``--optimize``。
     这两条断言就是那个旧行为的拷贝——只要有人"顺手改成 dp"或让参照跟随新选项，
     本条立刻红，避免悄悄改掉所有历史对照结论。
+
+    注意：``--compare numpy`` 这一档已从 CLI 删除（numpy 参照的等价写法是
+    ``--backend numpy --compare backend``，那条路**没有**优化器可设）。旧规则仍以
+    纯函数形式保留在 :func:`cli.resolve_compare_optimize` 里，供直接调用方使用，
+    所以下面按"端到端只能走 opt_einsum、解析层两条都钉"来分组。
     """
     assert cli.DEFAULT_COMPARE_OPTIMIZE == "auto", cli.DEFAULT_COMPARE_OPTIMIZE
     assert set(cli.COMPARE_OPTIMIZERS) == {
         "auto", "greedy", "dp", "optimal", "branch-all", "branch-2", "branch-1",
     }, cli.COMPARE_OPTIMIZERS
 
-    # numpy 参照：恒 greedy（旧行为），与主路径 --optimize 无关
-    for optimize in ("auto", "dp", "optimal", "greedy"):
-        report = _compare_opt_run(compare="numpy", optimize=optimize)
-        assert report["ok"], report
-        assert report["compare_optimize"] == "auto", report
-        assert report["compare_optimize_effective"] == "greedy", report
-        assert "optimize='greedy'" in report["reference"], report["reference"]
-
     # opt_einsum 参照：auto → greedy；显式 --optimize 则跟随（旧行为逐字保留）
     report = _compare_opt_run(compare="opt_einsum", optimize="auto")
     assert report["ok"], report
+    assert report["compare_optimize"] == "auto", report
     assert report["compare_optimize_effective"] == "greedy", report
     assert "optimize='greedy'" in report["reference"], report["reference"]
 
@@ -881,6 +885,7 @@ def test_compare_optimize_default_reproduces_the_old_reference_behaviour():
     # 解析层同样逐字对照（不需要真的跑收缩）
     assert cli.resolve_compare_optimize("numpy", "auto", "auto") == "greedy"
     assert cli.resolve_compare_optimize("numpy", None, None) == "greedy"
+    assert cli.resolve_compare_optimize("numpy", "auto", "optimal") == "optimal"
     assert cli.resolve_compare_optimize("opt_einsum", "auto", "auto") == "greedy"
     assert cli.resolve_compare_optimize("opt_einsum", "dp", "auto") == "dp"
     assert cli.resolve_compare_optimize("backend", "auto", "auto") is None
@@ -922,29 +927,41 @@ def test_compare_optimize_rejects_names_the_reference_cannot_honour():
     numpy 侧实测只认 ``greedy``/``optimal``：源码里就这两个分支，其余抛
     ``KeyError('Path name %s not found', ...)``。把 ``dp`` 硬映射成 ``greedy``
     会让"对照实验"给出一个完全不相关的数字，比报错危险得多。
+
+    ``--compare numpy`` 已从 CLI 删除，所以"numpy 拒绝 dp"只能在**解析层**钉
+    （:func:`cli.resolve_compare_optimize` 仍保留那条旧规则）；端到端的用法错误
+    走 ``opt_einsum``。
     """
+    # 解析层：numpy 参照的旧规则照旧拒绝 dp/branch-*（纯函数，无 CLI 档位也成立）
     for bad in ("dp", "branch-all", "branch-2", "branch-1"):
         try:
-            _compare_opt_run(compare="numpy", compare_optimize=bad)
+            cli.resolve_compare_optimize("numpy", "auto", bad)
         except cli.UsageError as exc:
             assert exc.code == 2, exc.code
             assert "numpy" in str(exc), exc
         else:
             raise AssertionError(f"numpy 参照本应拒绝 {bad!r}")
 
-    # 完全不在枚举里的值，两条参照都要拒绝
+    # 完全不在枚举里的值，端到端与解析层都要拒绝
     for bad in ("bogus", "auto-hq", ""):
-        for compare in ("numpy", "opt_einsum"):
-            try:
-                _compare_opt_run(compare=compare, compare_optimize=bad)
-            except cli.UsageError as exc:
-                assert exc.code == 2, exc.code
-            else:
-                raise AssertionError(f"{compare} 参照本应拒绝 {bad!r}")
+        try:
+            _compare_opt_run(compare="opt_einsum", compare_optimize=bad)
+        except cli.UsageError as exc:
+            assert exc.code == 2, exc.code
+        else:
+            raise AssertionError(f"opt_einsum 参照本应拒绝 {bad!r}")
+        try:
+            cli.resolve_compare_optimize("numpy", "auto", bad)
+        except cli.UsageError as exc:
+            assert exc.code == 2, exc.code
+        else:
+            raise AssertionError(f"解析层的 numpy 参照本应拒绝 {bad!r}")
 
-    # numpy 支持的两个名字必须放行，且真的传到 np.einsum
+    # numpy 支持的两个名字在解析层放行；端到端用 opt_einsum 验证同名取值真的到位
+    assert set(cli.NUMPY_COMPARE_OPTIMIZERS) == {"greedy", "optimal"}
     for good in cli.NUMPY_COMPARE_OPTIMIZERS:
-        report = _compare_opt_run(compare="numpy", compare_optimize=good)
+        assert cli.resolve_compare_optimize("numpy", "auto", good) == good
+        report = _compare_opt_run(compare="opt_einsum", compare_optimize=good)
         assert report["ok"], report
         assert report["compare_optimize_effective"] == good, report
         assert f"optimize='{good}'" in report["reference"], report["reference"]
@@ -954,8 +971,9 @@ def test_compare_optimize_does_not_touch_the_main_path():
     """该选项**只影响参照**：同一方程在 greedy 与 dp 下主路径的计划不变。
 
     断言主路径的 ``optimize`` 字段与 ``kernel_info``/``actual_shape`` 完全一致——
-    主路径的收缩序由 ``--optimize`` 管，参照优化器改了也不该动它。耗时只做宽松界，
-    不做精确性能断言（``--rounds 2`` 的噪声远大于本改动能带来的差异）。
+    主路径的收缩序由 ``--optimize`` 管，参照优化器改了也不该动它。**不做任何耗时
+    断言**：``--rounds 2`` 的噪声（实测同一对调用的比值可到 4.01）远大于本改动能的
+    差异，性能数字不是正确性判据。
     """
     runs = [_compare_opt_run(compare="opt_einsum", optimize="optimal",
                              compare_optimize=value)
@@ -974,9 +992,10 @@ def test_compare_optimize_does_not_touch_the_main_path():
     # 数值必须一致（换的只是收缩序）
     assert abs(first["rel"] - second["rel"]) < 1e-10, (first["rel"], second["rel"])
 
-    scale = max(first["seconds"], second["seconds"]) / max(
-        min(first["seconds"], second["seconds"]), 1e-12)
-    assert scale < 4.0, (first["seconds"], second["seconds"])
+    # 刻意**不**断言两次的耗时比值：参照侧的优化器只改收缩序，主路径逐字相同，
+    # 而 ``--rounds 2`` 的计时噪声（实测同一对调用比值在 1.0–4.01 之间抖动）远大于
+    # 本改动能带来的差异。性能数字不做 CI 判据——上面五条相等性断言才是"只动参照"
+    # 的证据。
 
 
 def test_compare_optimize_is_inert_for_backend_and_none():
@@ -1160,7 +1179,7 @@ def test_language_does_not_change_results():
     equation = "ij,jk,kl->il"
     shapes = [(32, 32), (32, 32), (32, 32)]
     runs = [cli.run(equation=equation, shapes=shapes, out_shape=(32, 32),
-                    compare="numpy", rounds=2, warmup=1, seed=7, language=lang)
+                    compare="opt_einsum", rounds=2, warmup=1, seed=7, language=lang)
             for lang in ("en", "zh-cn")]
     english, chinese = runs
     for item in runs:
@@ -1191,7 +1210,7 @@ def test_language_only_changes_the_verbose_wording():
         with contextlib.redirect_stderr(buffer):
             reports[lang] = cli.run(equation="ij,jk->ik",
                                     shapes=[(8, 8), (8, 8)], out_shape=(8, 8),
-                                    compare="numpy", rounds=2, warmup=1,
+                                    compare="opt_einsum", rounds=2, warmup=1,
                                     verbose=True, language=lang)
         reports[lang]["_printed"] = buffer.getvalue()
 
@@ -1463,7 +1482,7 @@ def test_equivalence_never_changes_numbers_shapes_or_route():
             (EQUIV_AXES_EQUATION, EQUIV_AXES_SHAPES, ()),
             (EQUIV_OUTPUT_EQUATION, EQUIV_OUTPUT_SHAPES, EQUIV_OUTPUT_SHAPE)):
         runs = {flag: cli.run(equation=equation_, shapes=shapes_, out_shape=out_shape,
-                             compare="numpy", rounds=2, warmup=1, seed=5,
+                             compare="opt_einsum", rounds=2, warmup=1, seed=5,
                              equivalence=flag)
                 for flag in (True, False)}
         on, off = runs[True], runs[False]

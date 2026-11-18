@@ -49,12 +49,11 @@
 关闭时该段完全消失，MISS 的 ``原因`` 回到引入本功能之前的原文。它只是**附加信息**：
 不改 ``matched``、不改退出码、不改任何执行路径。
 
-强制内核（``--kernel-force {auto,generic,dedicated,topology,backend}``，缺省 ``auto``）：
-取值语义与 ``python -m pyqcd.einsum.test --kernel-force`` 完全一致——``auto`` 保持原分派
-次序、``generic`` 跳过专用内核、``dedicated`` / ``topology`` 只允许**当前后端的**那一个
-（numpy → ``kupl_*``，cupy → ``cuda_*``，可逗号分隔多个、按书写次序尝试）、``backend``
-直接调后端自己的 ``einsum``（与其它标签互斥）；显式取值压过
-``PYQCD_EINSUM_KERNEL_FORCE``；非法取值退出码 ``2`` 并列出合法集合。
+强制内核（``--kernel-force {generic,dedicated,topology,backend}``，缺省 ``generic``）：
+取值语义与 ``python -m pyqcd.einsum.test --kernel-force`` 完全一致——``generic`` 跳过专用
+内核、``dedicated`` / ``topology`` 只允许**当前后端的**那一个（numpy → ``kupl_*``，cupy →
+``cuda_*``）、``backend`` 直接调后端自己的 ``einsum``。只接受**单个**取值，逗号链式已取消；
+显式取值压过 ``PYQCD_EINSUM_KERNEL_FORCE``；非法取值退出码 ``2`` 并列出合法集合。
 
 **执行边界**：本模块是纯查询（不生成操作数、不调 ``contract()``），所以它**不跑**
 任何内核，强制失败也不可能在这里发生——``--kernel-force`` 只决定报告里出不出 ``kernel :``
@@ -122,9 +121,9 @@ DEFAULT_EQUIVALENCE = "auto"
 #: 写法时才碰它），契约用例钉住两者相等。
 EQUIVALENCE_ENV = "PYQCD_EINSUM_EQUIVALENCE"
 
-#: ``--kernel-force``：缺省 ``auto``（保持原分派次序）。与 ``_kernel_force.AUTO_LABEL``
-#: 同值；本模块不 import 该模块，免得它缺席时查询入口起不来。
-DEFAULT_KERNEL = "auto"
+#: ``--kernel-force``：缺省 ``generic``（与 ``_kernel_force.DEFAULT_LABEL`` 同值）。
+#: 没有"未指定 → 自动分派"的档：自动选路交给 ``--tune`` 的实测结论。
+DEFAULT_KERNEL = "generic"
 #: 可强制的内核标签（与 ``_kernel_force.KERNEL_LABELS`` 同集合：**逻辑名**，运行时按
 #: 操作数后端解析成 ``*_dedicated`` / ``*_topology``）。
 KERNEL_LABELS = frozenset({
@@ -248,15 +247,13 @@ MESSAGES: dict[str, dict[str, str]] = {
                "数值验证：python -m pyqcd.testing.einsum.verify_specialized"),
     },
     "help.kernel": {
-        "en": ("which specialised kernel is requested: auto / generic / dedicated / "
-               "topology / backend. "
-               "auto keeps the original dispatch (when none runs it only warns and "
-               "falls back); generic skips the specialised kernels entirely; "
+        "en": ("which specialised kernel is requested: generic / dedicated / topology / "
+               "backend. "
+               "generic skips the specialised kernels entirely; "
                "dedicated / topology allow exactly that kernel of the operand backend "
-               "(numpy -> kupl, cupy -> cuda; comma separated for both, tried in the "
-               "order written) and report a failure instead of falling back, never a "
-               "warning; backend calls the backend's own einsum and skips the "
-               "specialised dispatch (cannot be combined with other values). Same "
+               "(numpy -> kupl, cupy -> cuda) and report a failure instead of falling "
+               "back, never a warning; backend calls the backend's own einsum and skips "
+               "the specialised dispatch. Exactly one label, never several. Same "
                "meaning as test.py --kernel-force; the explicit value wins over the "
                "{env} environment variable, and an unknown value exits with code 2. "
                "This module never contracts, so it cannot run a kernel: the kernel line "
@@ -265,12 +262,11 @@ MESSAGES: dict[str, dict[str, str]] = {
                "guess). Omit the option and that line is absent, so the default report "
                "stays byte-identical. To really force one use "
                "python -m pyqcd.einsum.test --kernel-force <value>. Default {default}"),
-        "zh": ("要求哪个专用内核：auto / generic / dedicated / topology / backend。"
-               "auto 保持原分派次序（跑不成只 warning 后回落）；generic 完全跳过专用"
-               "内核；dedicated / topology 只允许当前后端的对应内核（numpy → kupl，"
-               "cupy → cuda；可用逗号给两个，按书写次序尝试），跑不成即报错而不回落，"
-               "不会降级成 warning；backend 直接调后端自己的 einsum、不走专用分派"
-               "（不可与其它取值混用）。"
+        "zh": ("要求哪个专用内核：generic / dedicated / topology / backend。"
+               "generic 完全跳过专用内核；dedicated / topology 只允许当前后端的对应内核"
+               "（numpy → kupl，cupy → cuda），跑不成即报错而不回落，不会降级成 "
+               "warning；backend 直接调后端自己的 einsum、不走专用分派。"
+               "只接受单个取值，逗号链式已取消。"
                "与 test.py --kernel-force 同义；显式取值优先于环境变量 {env}，未知取值"
                "退出码 2。"
                "本模块不做任何收缩、跑不了内核：kernel 行里 requested= 来自该取值，"
@@ -438,10 +434,9 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     # 参数错误：非法 --kernel-force 取值（退出码 2，与 argparse 的 choices 同档）
     "error.kernel": {
-        "en": ("--kernel-force must be one of {labels} (comma separated for several; "
-               "backend cannot be combined with other labels), got {value!r}"),
-        "zh": ("--kernel-force 必须是 {labels} 之一"
-               "（多个用逗号分隔；backend 不可与其它标签混用），得到 {value!r}"),
+        "en": ("--kernel-force must be one of {labels} (exactly one label), "
+               "got {value!r}"),
+        "zh": ("--kernel-force 必须是 {labels} 之一（只接受单个取值），得到 {value!r}"),
     },
     "reason.equivalent_rewrite": {
         "en": "the literal spelling is not in the corpus, but an equivalent spelling "

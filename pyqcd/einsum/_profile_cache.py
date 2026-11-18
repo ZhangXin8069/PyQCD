@@ -27,8 +27,37 @@ CSV，普通 ``contract()`` 就用**一次顺序读**（进程内再加一层按
 记在行里但**不参与匹配**——同一张表可以被复制到别的机器上继续用。``shape`` 统一
 规范成 ``2x3|3x4``（``x`` 连轴、``|`` 连操作数，见 :func:`format_shape`），否则
 ``[2,3]`` / ``2x3`` / ``(2,3)`` 三种写法会把同一个形状拆成三个键；``equation`` 去掉
-全部空白。``kernel`` / ``optimize`` / ``wall_ms`` / 三个置换字段都是这条记录的
-**载荷**，不是键。
+全部空白。``kernel`` / ``optimize`` / ``optimize_topology_v2`` / ``wall_ms`` / 三个置换
+字段都是这条记录的**载荷**，不是键。
+
+两列 ``optimize``（7 叶子，冻结）
+--------------------------------
+``optimize`` 与紧随其后的 ``optimize_topology_v2`` 都只认这 **7 个叶子**
+（:data:`OPTIMIZE_LEAVES`）：
+
+* ``greedy`` / ``optimal`` / ``dp`` / ``branch_1`` / ``branch_2`` / ``branch_all`` /
+  ``none``。
+
+``optimize`` 是主执行器的收缩序；``optimize_topology_v2`` 是**历史列**（保留以兼容旧表）：
+它原本记的是"当 topology 回落到 v2 通用执行器时采用的
+收缩序"。后者留空 = 没有单独结论，按 :data:`DEFAULT_OPTIMIZE`（``greedy``）处理。
+
+读写口径：
+
+* 大小写不敏感（:func:`read_winner` 读回时已归一成小写）；
+* **连字符旧写法**（``branch-1`` / ``branch-all`` / ``branch-2``）读入时归一成下划线，
+  **不视为非法**——老表照旧能用；
+* ``auto``（这个词已从规划器删除）与其它任何拼写都**非法**：读侧**警告一次**（同一
+  路径 + 列 + 值只报一遍，:data:`_WARNED_CELLS`），并且**该行不参与匹配**——绝不静默
+  把它当成 ``greedy``。写侧遇到非法值不写那一格（留空 = 缺省），同样只警告一次；
+  写进去的永远是 7 个叶子之一或空。
+
+``schema_version`` 列
+----------------------
+:data:`PROFILE_SCHEMA_VERSION` 记**写这一行时的列集合版本**（本版 ``3``：``optimize``
+之后多了 ``optimize_topology_v2``）。老文件没有这一列，读回按
+:data:`LEGACY_SCHEMA_VERSION`（``0``）处理；老行**既不降级也不删除**，缺的列按空读，
+于是"老表 + 新列"能一起用。
 
 **同键只允许 1 行**，而且是硬约束：读侧遇到同键多行不猜、不选最优，直接抛
 :class:`DuplicateProfileEntry` 并带上全部候选行（见 :func:`read_winner`）。写侧
@@ -101,22 +130,30 @@ import json
 import os
 import socket
 import threading
+import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 __all__ = [
     "DEFAULT_DIR",
+    "DEFAULT_OPTIMIZE",
     "DIR_ENV",
     "DuplicateProfileEntry",
     "EQUIVALENCE_NOTE",
     "KEY_FIELDS",
+    "LEGACY_SCHEMA_VERSION",
+    "OPTIMIZE_FIELDS",
+    "OPTIMIZE_LEAVES",
     "PROFILE_COLUMNS",
     "PROFILE_ENV",
     "PROFILE_FILENAME",
+    "PROFILE_SCHEMA_VERSION",
     "ProfileConflict",
     "ProfileError",
     "ProfileMissing",
+    "TOPOLOGY_V2_FIELD",
     "best",
+    "clear_cli_hint_context",
     "configure",
     "enabled",
     "ensure_configured",
@@ -125,6 +162,7 @@ __all__ = [
     "last_error",
     "profile_path",
     "read_winner",
+    "set_cli_hint_context",
     "summary",
     "tune_session",
     "write_winner",
@@ -145,8 +183,28 @@ PROFILE_FILENAME = "pyqcd.einsum.profile.csv"
 #: 键字段（顺序即键序）；``shape`` 必须先过 :func:`format_shape` 归一化。
 KEY_FIELDS = ("shape", "dtype", "device", "equation", "backend")
 
+#: 配置表 schema 版本：**列集合**每变一次 +1。本版 ``3`` = ``optimize`` 之后新增
+#: ``optimize_topology_v2``（``2`` 及以前没有这一列）。写侧把它记进 ``schema_version``。
+PROFILE_SCHEMA_VERSION = 3
+
+#: 老行的 ``schema_version``：本版之前写的行没有那一列（或那一格为空）。
+LEGACY_SCHEMA_VERSION = 0
+
+#: 两列 ``optimize`` 的 **7 个合法叶子**（字符串存储；大小写与连字符写法读入时归一）。
+#: ``auto`` 不在这里——它已从规划器删除，出现在表里属于非法值（读侧警告 + 该行不匹配）。
+OPTIMIZE_LEAVES = ("greedy", "optimal", "dp", "branch_1", "branch_2", "branch_all", "none")
+
+#: ``optimize_topology_v2`` 留空（没有单独结论）时的缺省值。
+DEFAULT_OPTIMIZE = "greedy"
+
+#: "topology 回落到 v2 通用执行器时采用的 optimize"那一列（紧跟 ``optimize`` 之后）。
+TOPOLOGY_V2_FIELD = "optimize_topology_v2"
+
+#: 必须落在 :data:`OPTIMIZE_LEAVES` 里的两列（其余拼写一律非法）。
+OPTIMIZE_FIELDS = ("optimize", TOPOLOGY_V2_FIELD)
+
 #: 性能载荷列：只有"性能行"带它们的值，等价行一律留空。
-PERFORMANCE_FIELDS = ("kernel", "optimize", "wall_ms")
+PERFORMANCE_FIELDS = ("kernel", "optimize", TOPOLOGY_V2_FIELD, "wall_ms")
 
 #: 置换载荷列（JSON 字符串；``null`` = 这一步不需要动）。
 PERMUTATION_FIELDS = ("operand_order", "operand_permutations", "output_permutation")
@@ -158,8 +216,9 @@ EQUIVALENCE_FIELDS = ("target_equation",) + PERMUTATION_FIELDS
 EQUIVALENCE_NOTE = "走等价转换后的配置性能更佳"
 
 #: 表头（顺序即写序，读侧按**名字**取值，所以容忍列序不同与多余列）。
+#: ``optimize_topology_v2`` 紧跟 ``optimize``；``schema_version`` 在最后一列。
 PROFILE_COLUMNS = (KEY_FIELDS + PERFORMANCE_FIELDS + EQUIVALENCE_FIELDS
-                   + ("note", "host", "updated_at", "pyqcd_version"))
+                   + ("note", "host", "updated_at", "pyqcd_version", "schema_version"))
 
 #: 超长文本字段的写盘上限（撑坏整张表的是这类字段，不是方程本身）。
 _CLIP_LIMITS = {"note": 200}
@@ -187,6 +246,15 @@ _LAST_ERROR: str | None = None
 
 #: 主机名只探测一次。
 _HOST: str | None = None
+
+#: 待打印的非法单元格：``(去重签名, 文案)``。解析/装配在锁里跑，警告只在**出锁后**发。
+_PENDING_WARNINGS: list[tuple[tuple[str, str, str], str]] = []
+
+#: 已经警告过的 ``(路径, 列, 值)``：同一件事只该说一遍（读盘解析会被重复触发）。
+_WARNED_CELLS: set[tuple[str, str, str]] = set()
+
+#: 行上的私有标记（不是列）：这一行的 ``optimize`` 两列有非法值，**不参与匹配**。
+_SKIP_FIELD = "_skip"
 
 
 # -- 异常 -------------------------------------------------------------------
@@ -334,6 +402,10 @@ def read_winner(key: Mapping[str, Any]) -> dict[str, str] | None:
     总开关关闭、:func:`tune_session` 进行中一律返回 ``None``（不读文件：tune 量到的
     必须是被测配置本身的耗时）。返回的是**副本**，额外带 ``line``（该行在配置表里的
     数据行号，1-based），只用于把命中提示钉到具体记录。
+
+    ``optimize`` / ``optimize_topology_v2`` 两列已归一成 7 叶子之一或空（空 = 缺省
+    :data:`DEFAULT_OPTIMIZE`）；**有非法值的那一行不参与匹配**（``auto`` 这类旧值会触发
+    一次警告，绝不静默当成 ``greedy``）。
     """
     if not enabled():
         return None
@@ -349,23 +421,32 @@ def read_winner(key: Mapping[str, Any]) -> dict[str, str] | None:
         except (OSError, csv.Error) as exc:
             _error_locked(exc)
             return None
-        matches = [row for row in rows if _row_key(row) == token]
+        matches = [row for row in rows
+                   if not _skipped(row) and _row_key(row) == token]
+    _flush_warnings()
     if not matches:
         return None
     if len(matches) > 1:
         raise DuplicateProfileEntry(matches, key=key, path=path)
-    return dict(matches[0])
+    row = dict(matches[0])
+    row.pop(_SKIP_FIELD, None)
+    return row
 
 
 def write_winner(key: Mapping[str, Any], config: Mapping[str, Any] | None = None,
                  equivalence: Any = None, note: str = "") -> None:
     """写**唯一**获胜配置：先删掉同键所有行，再只写 1 行。**只有 tune 调用它**。
 
-    ``equivalence`` 为空 → 写性能配置（``kernel`` / ``optimize`` / ``wall_ms``）；
-    非空 → 该行只含等价字段（``target_equation`` + 三个置换字段）+ ``note``，性能
-    字段留空（``note`` 为空时写 :data:`EQUIVALENCE_NOTE`）。``equivalence`` 可以是
-    映射，也可以是带 ``equation``/``operand_order``/``operand_permutations``/
-    ``output_permutation`` 属性的对象（例如 :class:`._equivalence.Equivalence`）。
+    ``equivalence`` 为空 → 写性能配置（``kernel`` / ``optimize`` / ``optimize_topology_v2``
+    / ``wall_ms``）；非空 → 该行只含等价字段（``target_equation`` + 三个置换字段）+
+    ``note``，性能字段留空（``note`` 为空时写 :data:`EQUIVALENCE_NOTE`）。
+    ``equivalence`` 可以是映射，也可以是带 ``equation``/``operand_order``/
+    ``operand_permutations``/``output_permutation`` 属性的对象（例如
+    :class:`._equivalence.Equivalence`）。
+
+    两列 ``optimize`` 只写 7 个叶子之一（:data:`OPTIMIZE_LEAVES`）：连字符旧写法归一成
+    下划线，其余拼写（含 ``auto``）**不写那一格**（留空 = 缺省，警告一次）——写一行
+    永远匹配不上的记录比空着更坏。``schema_version`` 一律写 :data:`PROFILE_SCHEMA_VERSION`。
 
     写盘是"临时文件 + ``os.replace``"的原子替换，中途失败不会留下半张表。目录不存在
     时在这里创建。写失败（含无权限、磁盘满）**如实外抛**——唯一调用方是 tune，它负责
@@ -380,6 +461,7 @@ def write_winner(key: Mapping[str, Any], config: Mapping[str, Any] | None = None
             return None
         row = _compose_row(token, config, equivalence, note)
         _store_locked(token, row)
+    _flush_warnings()
     return None
 
 
@@ -417,16 +499,17 @@ def best(key: Mapping[str, Any]) -> dict[str, str] | None:
 
 
 def summary() -> dict[str, Any]:
-    """当前状态快照：``{"dir","file","enabled","rows","keys","last_error"}``。
+    """当前状态快照：``{"dir","file","enabled","rows","keys","invalid","last_error"}``。
 
-    ``rows`` 是配置表里的有效数据行数、``keys`` 是不同键数（两者在"每键一行"下相等，
-    分开报只是为了同键多行时能一眼看出异常）。读失败按 0 行报，原因进 ``last_error``。
-    **只读**：不建目录、不写文件。
+    ``rows`` 是配置表里的数据行数、``keys`` 是不同键数（两者在"每键一行"下相等，
+    分开报只是为了同键多行时能一眼看出异常）；``invalid`` 是 ``optimize`` 两列含非法值、
+    因此**不参与匹配**的行数（``read_winner`` 只认 ``rows - invalid`` 那些行）。读失败按
+    0 行报，原因进 ``last_error``。**只读**：不建目录、不写文件。
     """
     path = profile_path()
     if not _switch_on():
         return {"dir": _dir_text(), "file": path, "enabled": False,
-                "rows": 0, "keys": 0, "last_error": _LAST_ERROR}
+                "rows": 0, "keys": 0, "invalid": 0, "last_error": _LAST_ERROR}
     rows: list[dict[str, str]] = []
     try:
         with _LOCK:
@@ -435,12 +518,15 @@ def summary() -> dict[str, Any]:
         pass
     except (OSError, csv.Error) as exc:
         _error_locked(exc)
+    _flush_warnings()
+    usable = [row for row in rows if not _skipped(row)]
     return {
         "dir": _dir_text(),
         "file": path,
         "enabled": True,
         "rows": len(rows),
-        "keys": len({_row_key(row) for row in rows}) if rows else 0,
+        "keys": len({_row_key(row) for row in usable}) if usable else 0,
+        "invalid": len(rows) - len(usable),
         "last_error": _LAST_ERROR,
     }
 
@@ -504,9 +590,13 @@ def _compose_row(token: tuple[str, ...], config: Mapping[str, Any] | None,
                  equivalence: Any, note: str) -> dict[str, str]:
     """把键 + 载荷装配成一整行（列序见 :data:`PROFILE_COLUMNS`）。
 
-    ``equivalence`` 非空就是**等价行**：只写等价字段 + ``note``，性能字段留空。给了
-    等价载荷却解不出可执行的改写（没有目标方程，或三个置换字段全空）时抛
-    :class:`ProfileError`——写一行两不靠的垃圾行比不写更坏。
+    ``equivalence`` 非空就是**等价行**：只写等价字段 + ``note``，性能字段留空（含
+    ``optimize_topology_v2``——等价行没有"topology 回落到 v2"的结论）。给了等价载荷却
+    解不出可执行的改写（没有目标方程，或三个置换字段全空）时抛 :class:`ProfileError`
+    ——写一行两不靠的垃圾行比不写更坏。
+
+    两列 ``optimize`` 走 :func:`_optimize_cell`：只落 7 叶子之一，非法拼写留空并记一条
+    待发警告。``schema_version`` 一律写 :data:`PROFILE_SCHEMA_VERSION`。
     """
     row = {name: "" for name in PROFILE_COLUMNS}
     for name, value in zip(KEY_FIELDS, token):
@@ -514,6 +604,7 @@ def _compose_row(token: tuple[str, ...], config: Mapping[str, Any] | None,
     row["host"] = _host_name()
     row["updated_at"] = _now()
     row["pyqcd_version"] = _version()
+    row["schema_version"] = str(PROFILE_SCHEMA_VERSION)
 
     if _has_equivalence(equivalence):
         fields = _equivalence_fields(equivalence)
@@ -530,7 +621,8 @@ def _compose_row(token: tuple[str, ...], config: Mapping[str, Any] | None,
 
     source = config if isinstance(config, Mapping) else {}
     row["kernel"] = _text(source.get("kernel"))
-    row["optimize"] = _text(source.get("optimize"))
+    for name in OPTIMIZE_FIELDS:
+        row[name] = _optimize_cell(name, source.get(name))
     row["wall_ms"] = _number(source.get("wall_ms"))
     row["note"] = _clip("note", _text(note))
     return row
@@ -577,6 +669,85 @@ def _row_key(row: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(_canonical(name, row.get(name)) for name in KEY_FIELDS)
 
 
+def _skipped(row: Mapping[str, Any]) -> bool:
+    """该行是否**不参与匹配**（``optimize`` 两列含非法值，见 :func:`_parse_rows`）。"""
+    return bool(row.get(_SKIP_FIELD))
+
+
+def _normalize_optimize(value: Any) -> str:
+    """``optimize`` 单元格 → 7 叶子之一；非法拼写（含 ``auto``）返回空串。
+
+    大小写与首尾空白不敏感；**连字符旧写法归一成下划线**（``branch-1`` → ``branch_1``），
+    所以老表读上来仍然可用。空单元格（"这一列没有结论"）也返回空串。
+    """
+    text = _text(value).lower().replace("-", "_")
+    return text if text in OPTIMIZE_LEAVES else ""
+
+
+def _normalize_optimize_row(row: dict[str, str], path: str) -> None:
+    """把读出来的一行的两列 ``optimize`` 归一；有非法值就标记该行不参与匹配。
+
+    为什么整行作废而不是只丢那一格：读侧无法判断"``optimize=auto`` + 某个内核"这条记录
+    原本是被谁写的、按什么语义写的，静默改成 ``greedy`` 会把一个**不是** tune 结论的值
+    当成结论施加。警告说清原因，行留着（不删老行），只是不参与匹配。
+
+    非法单元格**保持原样**写回（不做归一）：tune 改写别的键时整表会重写，把 ``auto``
+    悄悄洗成空串就等于替用户改了记录——它该一直坏着，直到有人真的重新 tune 这个键。
+    """
+    for name in OPTIMIZE_FIELDS:
+        raw = row.get(name, "")
+        normalized = _normalize_optimize(raw)
+        if raw and not normalized:
+            row[_SKIP_FIELD] = "1"
+            _queue_warning(
+                (path, name, raw),
+                f"einsum 配置表 {path or '（内存）'} 的数据行 {row.get('line', '?')} 里 "
+                f"{name}={raw!r} 不是合法取值：这一列只认 "
+                f"{'/'.join(OPTIMIZE_LEAVES)}。该行**不参与匹配**（也不会被静默当成 "
+                f"{DEFAULT_OPTIMIZE}）；改成合法叶子或重新 tune 即可。")
+            continue
+        row[name] = normalized
+
+
+def _optimize_cell(name: str, value: Any) -> str:
+    """写盘用的叶子单元格：连字符归一成下划线，非法值留空并记一条待发警告。
+
+    空单元格 = "这一列没有结论"（读侧按 :data:`DEFAULT_OPTIMIZE` 处理）。把非法拼写原样
+    写进去只会造出一行**永远不参与匹配**的记录，所以宁可不写。
+    """
+    text = _normalize_optimize(value)
+    if text:
+        return text
+    raw = _text(value)
+    if raw:
+        _queue_warning(
+            (f"{profile_path()}|write", name, raw),
+            f"einsum 配置表的 {name}={raw!r} 不是合法取值：这一列只认 "
+            f"{'/'.join(OPTIMIZE_LEAVES)}，本次**没有写进**那一格（留空 = 缺省 "
+            f"{DEFAULT_OPTIMIZE}）。")
+    return ""
+
+
+def _queue_warning(signature: tuple[str, str, str], message: str) -> None:
+    """登记一条待发警告（持锁调用）：警告本身留到**出锁后**再打。"""
+    _PENDING_WARNINGS.append((signature, message))
+
+
+def _flush_warnings() -> None:
+    """把登记的警告逐条发出，**同一 (路径, 列, 值) 只发一次**。
+
+    为什么不在解析里直接 ``warnings.warn``：解析跑在 :data:`_LOCK` 里，而调用方可能给
+    ``warnings`` 装了会重入本模块的钩子——那把锁不可重入，重入就是死锁。
+    """
+    with _LOCK:
+        pending, _PENDING_WARNINGS[:] = list(_PENDING_WARNINGS), []
+        fresh = [(signature, message) for signature, message in pending
+                 if signature not in _WARNED_CELLS]
+        _WARNED_CELLS.update(signature for signature, _ in fresh)
+    for _signature, message in fresh:
+        warnings.warn(message, RuntimeWarning, stacklevel=3)
+
+
 def _canonical(name: str, value: Any) -> str:
     """单个键字段的规范写法（读写两侧共用，少一处不一致就少一种"幽灵未命中"）。
 
@@ -605,13 +776,22 @@ def _table_locked(path: str) -> list[dict[str, str]]:
         return _TABLE[3]
     with open(path, "rb") as handle:
         raw = handle.read(_MAX_LOAD_BYTES)
-    rows = _parse_rows(raw)
+    rows = _parse_rows(raw, path)
     _TABLE = (stamp[0], stamp[1], stamp[2], rows)
     return rows
 
 
-def _parse_rows(raw: bytes) -> list[dict[str, str]]:
-    """整份字节 → 行列表（表头按**名字**取值；列数不对的行跳过）。"""
+def _parse_rows(raw: bytes, path: str = "") -> list[dict[str, str]]:
+    """整份字节 → 行列表（表头按**名字**取值；列数不对的行跳过）。
+
+    每一行都补齐 :data:`PROFILE_COLUMNS` 的全部列（**缺列老文件按空读**，``shape`` /
+    ``equation`` 按同一口径归一），并做两件与 schema 有关的事：
+
+    * ``schema_version`` 为空 → :data:`LEGACY_SCHEMA_VERSION`（老行照样可用）；
+    * ``optimize`` 两列归一成 7 叶子或空（:func:`_normalize_optimize`）。出现非法值
+      （``auto`` 等）的行打上 :data:`_SKIP_FIELD`——``read_winner`` 不认它——并把一条
+      待发警告登记到 :data:`_PENDING_WARNINGS`（同一路径 + 列 + 值只报一次）。
+    """
     if not raw.strip():
         return []
     text = raw.decode("utf-8", "replace")
@@ -631,7 +811,10 @@ def _parse_rows(raw: bytes) -> list[dict[str, str]]:
         row = {name: _text(mapped.get(name)) for name in PROFILE_COLUMNS}
         row["shape"] = format_shape(row["shape"])
         row["equation"] = "".join(row["equation"].split())
+        row["schema_version"] = (row["schema_version"]
+                                 or str(LEGACY_SCHEMA_VERSION))
         row["line"] = str(len(rows) + 1)             # 该表第几条**有效**数据行
+        _normalize_optimize_row(row, path)
         rows.append(row)
     return rows
 
@@ -681,7 +864,12 @@ def _write_rows(path: str, rows: Sequence[Mapping[str, Any]]) -> None:
 
 # -- 内部：目录与格式 -------------------------------------------------------
 def _switch_on() -> bool:
-    """总开关本身（只看 ``PYQCD_EINSUM_PROFILE``）。"""
+    """总开关本身（只看 ``PYQCD_EINSUM_PROFILE``）。
+
+    显式解析而不是 ``bool(text)``：``bool("false")`` 是 ``True``，把环境变量原样交给
+    布尔判定会让"关掉配置表"变成"强制打开"。同一个坑在 :func:`enabled` 的显式
+    ``value`` 上也存在（那里直接 ``bool(value)``，所以**只该传布尔**）。
+    """
     return os.environ.get(PROFILE_ENV, "1").strip().lower() not in (
         "0", "false", "off", "no")
 
@@ -691,11 +879,15 @@ def _resolve_dir_text(directory: Any = None) -> str:
 
     空白与 ``None`` 都算"未给"——``""`` 不会挤掉环境变量、空环境变量不会挤掉默认值，
     这样 CLI 传空串与不传的行为一致。只算字符串，不建目录。
+
+    ``~`` / ``~user`` 先展开再取绝对路径：``os.path.abspath`` 会把 ``~`` 当字面量，
+    ``--profile-dir ~/.cache`` 于是解析成 ``<cwd>/~/.cache``，与 ``_api`` 侧
+    （``DIR_ENV`` / ``./.cache``）不是同一张表，CLI 的目录参数**静默失效**。
     """
     for candidate in (directory, os.environ.get(DIR_ENV)):
         text = _text(candidate)
         if text:
-            return os.path.abspath(text)
+            return os.path.abspath(os.path.expanduser(text))
     return os.path.abspath(DEFAULT_DIR)
 
 
@@ -761,26 +953,118 @@ def _int_matrix(value: Any) -> tuple[tuple[int, ...] | None, ...] | None:
     return tuple(rows)
 
 
+#: **本次命令行**的真实参数（由 ``pyqcd.einsum.test`` 装上，见 :func:`set_cli_hint_context`）。
+#: ``None`` = 没有 CLI 上下文（库内直调缺表）：此时 :func:`_cli_hint` 退回按键重建。
+_CLI_HINT: dict[str, Any] | None = None
+
+_CLI_HINT_LOCK = threading.Lock()
+
+
+def set_cli_hint_context(*, device: str = "", dtype: str = "", equation: str = "",
+                        shape: Any = None, backend: str = "",
+                        compare: Any = None) -> None:
+    """记录**本次调用**的真实参数，供缺表提示逐字复现这条命令。
+
+    为什么需要它：键里没有"用户给的 ``--shape``（含输出段）"与"用户给没给
+    ``--compare``"这两件事，而 GPU 下键里的 ``device`` 是 ``cupy:0`` 而不是命令行上的
+    ``gpu``。只按键重建，提示就会变成"在 CPU 上重跑一遍、形状还少一段"的命令
+    （2026-11-18 用户实测）。装上上下文后提示取实参；没有上下文时才退回键重建。
+
+    ``shape``/``compare`` 传 ``None`` 表示**用户没给**：命令里也就不写这两个选项。
+    """
+    global _CLI_HINT
+    context = {
+        "device": _text(device),
+        "dtype": _text(dtype),
+        "equation": "".join(_text(equation).split()),
+        "shape": None if shape is None else _text(shape),
+        "backend": _text(backend),
+        "compare": None if compare is None else _text(compare),
+    }
+    with _CLI_HINT_LOCK:
+        _CLI_HINT = context
+
+
+def clear_cli_hint_context() -> None:
+    """丢掉 CLI 上下文（一次 CLI 调用结束时调用，避免串到同进程的下一次调用）。"""
+    global _CLI_HINT
+    with _CLI_HINT_LOCK:
+        _CLI_HINT = None
+
+
+def _cli_hint_context(token: tuple[str, ...]) -> dict[str, Any] | None:
+    """与这把键**同一条方程**的 CLI 上下文（没有上下文/方程不同则返回 ``None``）。"""
+    context = _CLI_HINT
+    if not context:
+        return None
+    if context["equation"] and token[3] and context["equation"] != token[3]:
+        return None
+    return dict(context)
+
+
 def _cli_hint(token: tuple[str, ...]) -> str:
-    """该键的 tune CLI 命令（可直接复制执行；缺文件时打给用户）。"""
-    shape, dtype, device, equation, _backend = token
-    return " ".join((
+    """该键的 tune CLI 命令（可直接复制执行；缺文件时打给用户）。
+
+    有 CLI 上下文时**逐字复现用户的命令**：``--device`` / ``--dtype`` / ``--equation``
+    / ``--shape``（含输出段）都取实参，``--backend`` 只在 ``cupy``/``numpy``/``torch``
+    时写，``--compare`` 只在用户原命令给过时写（``--tune`` 缺省不跑参照基准）。
+
+    没有上下文（库内直调、缺表）时才按键重建：键里没有输出段与 ``--compare`` 的显式
+    位，所以这条模板保持旧口径（``--compare opt_einsum``），形状按方程**推**输出段。
+    """
+    context = _cli_hint_context(token)
+    if context is not None:
+        return _cli_hint_from_context(context, token)
+    shape, dtype, device, equation, backend = token
+    parts = [
         "python -m pyqcd.einsum.test",
         f"--device {_cli_device(device)}",
         f"--dtype {_cli_dtype(dtype)}",
         f'--equation "{equation}"',
-        f'--shape "{_cli_shapes(shape)}"',
-        "--tune",
-        "--compare opt_einsum",
-    ))
+        f'--shape "{_cli_shapes(shape, equation)}"',
+    ]
+    backend_flag = _cli_backend(backend)
+    if backend_flag:
+        parts.append(backend_flag)
+    parts.extend(["--tune", "--compare opt_einsum"])
+    return " ".join(parts)
+
+
+def _cli_hint_from_context(context: dict[str, Any],
+                           token: tuple[str, ...]) -> str:
+    """CLI 上下文 → 可直接复制执行的命令（用户怎么跑的就怎么给）。
+
+    ``--backend`` 取用户的显式值；用户没给（``auto``）时退回**键里实际生效**的后端
+    （``cupy``/``numpy``/``torch``）——后端影响选路，省略它等于让下一次跑在另一条路上。
+    """
+    parts = [
+        "python -m pyqcd.einsum.test",
+        f"--device {_cli_device(context.get('device'))}",
+        f"--dtype {_cli_dtype(context.get('dtype'))}",
+        f'--equation "{context.get("equation") or ""}"',
+    ]
+    shape = context.get("shape")
+    if shape:
+        parts.append(f'--shape "{shape}"')
+    backend_flag = _cli_backend(context.get("backend")) or _cli_backend(token[4])
+    if backend_flag:
+        parts.append(backend_flag)
+    compare = context.get("compare")
+    if compare:
+        parts.append(f"--compare {compare}")
+    parts.append("--tune")
+    return " ".join(parts)
 
 
 def _cli_device(device: str) -> str:
-    """键里的 ``device`` → ``--device`` 的合法取值（``cpu`` / ``gpu`` / ``cuda``）。"""
+    """键里的 ``device`` → ``--device`` 的合法取值（``cpu`` / ``gpu`` / ``cuda``）。
+
+    ``cupy:0``（cupy 只给设备编号）与 ``torch.cuda:0`` 都是 GPU：只认 ``cuda`` 前缀会
+    把 ``cupy:0`` 落成 ``cpu``，于是 GPU 用户收到一条"在 CPU 上重 tune"的命令
+    （2026-11-18 实测）。
+    """
     text = _text(device).lower()
-    if text.startswith("cuda"):
-        return "cuda"
-    if text.startswith("gpu"):
+    if "cuda" in text or text.startswith(("cupy", "gpu")):
         return "gpu"
     return "cpu"
 
@@ -791,13 +1075,67 @@ def _cli_dtype(dtype: str) -> str:
     return text.rsplit(".", 1)[-1] if text else "float64"
 
 
-def _cli_shapes(shape: str) -> str:
-    """规范形状 ``2x3|3x4`` → ``--shape`` 的 ``[2,3],[3,4]`` 写法（输出段可省略）。"""
+def _cli_backend(backend: Any) -> str:
+    """``--backend`` 片段：只有具名后端（``cupy``/``numpy``/``torch``）才写。
+
+    ``auto``（与空串）是"按操作数判"的缺省，写进命令只会多一个不改变选路的参数。
+    """
+    text = _text(backend).lower()
+    return f"--backend {text}" if text in ("cupy", "numpy", "torch") else ""
+
+
+def _cli_shapes(shape: str, equation: str = "") -> str:
+    """规范形状 ``2x3|3x4`` → ``--shape`` 的 ``[2,3],[3,4]`` 写法（**带输出段**）。
+
+    输出段按方程的输出指标从**同一把键的**操作数尺寸里取：``ab,bc->ac`` + ``40x4|4x400``
+    → ``->[40,400]``。推不出来（含 ``...``、指标数与轴数不符、输出指标没有尺寸）就
+    不写输出段——宁可让用户自己补，也不猜一个数字。
+    """
+    text = _text(shape)
+    if not text:
+        return ""
+    axes_per_operand: list[list[str]] = []
     parts: list[str] = []
-    for operand in _text(shape).split("|"):
-        axes = [axis for axis in operand.split("x") if axis.strip()]
+    for operand in text.split("|"):
+        axes = [axis.strip() for axis in operand.split("x") if axis.strip()]
+        axes_per_operand.append(axes)
         parts.append("[" + ",".join(axes) + "]")
-    return ",".join(parts)
+    output = _cli_output_axes(axes_per_operand, equation)
+    joined = ",".join(parts)
+    return f"{joined}->[{','.join(output)}]" if output else joined
+
+
+def _cli_output_axes(axes_per_operand: Sequence[Sequence[str]],
+                     equation: str) -> list[str]:
+    """方程的输出指标 → 各轴尺寸（按操作数里的同一指标取值）。推不出来返回空表。"""
+    text = "".join(_text(equation).split())
+    if not text or "..." in text or text.count("->") > 1:
+        return []
+    left, arrow, right = text.partition("->")
+    terms = left.split(",")
+    if len(terms) != len(axes_per_operand):
+        return []
+    sizes: dict[str, str] = {}
+    for term, axes in zip(terms, axes_per_operand):
+        if len(term) != len(axes):
+            return []
+        for label, axis in zip(term, axes):
+            if not label.isalpha():
+                return []
+            if sizes.setdefault(label, axis) != axis:
+                return []                 # 同一指标两种长度：方程与形状本就不符，不猜
+    if arrow:
+        labels = list(right)
+    else:
+        # einsum 隐含输出：只出现一次的指标，按字母序（numpy 的同一规则）。
+        counts: dict[str, int] = {}
+        for label in left:
+            if label.isalpha():
+                counts[label] = counts.get(label, 0) + 1
+        labels = sorted(label for label, count in counts.items() if count == 1)
+    if not labels or any(label not in sizes for label in labels):
+        return []
+    return [sizes[label] for label in labels]
 
 
 def _host_name() -> str:
@@ -858,12 +1196,15 @@ def _reset_after_fork() -> None:
 
     ``threading.Lock`` 不随 ``fork`` 重置：父进程里某线程持锁时 fork，子进程第一次
     读表就会**永久阻塞**。子进程也不该继承父进程的"遍历中"标记（fork 可能发生在
-    tune 窗口里），解析缓存同理——首次使用时按文件重建。
+    tune 窗口里），解析缓存同理——首次使用时按文件重建。待发警告与"已警告过"的集合
+    也一起清空：子进程的输出是独立的，父进程发过的警告不该在这里被吞掉。
     """
     global _LOCK, _TABLE, _TUNING
     _LOCK = threading.Lock()
     _TABLE = None
     _TUNING = 0
+    _PENDING_WARNINGS.clear()
+    _WARNED_CELLS.clear()
 
 
 if hasattr(os, "register_at_fork"):                  # POSIX；Windows 没有这个钩子

@@ -1,5 +1,11 @@
 """在真实 GPU 上核对：「表内序病态即 fail closed」守卫是否按量化预测动作。
 
+⚠️ INVALID（2026-11-18）：本脚本沿用的 ``ratio_vs_greedy`` 预测来自**已废弃**的
+拓扑步表口径（KUPL 生产异形轴 / CUDA 均匀 dim=4 探针）。新口径为 ROLE_SHAPES
+（peram[4,4,100,100] gamma[4,4] VDV[100,100] VVV[100,100,100,100]），
+两张表已整体重算。**旧数字不得再被引用为新结论。** 本脚本只输出实测与
+预测/实测的一致性，不设性能期望值（``TOLERANCE=8`` 是 C++ 守卫阈值本身的镜像）。
+
 被验证的行为（``cpp/cuda/einsum/src/apply_contract.cu`` 的
 :func:`topology_order_acceptable`）：
 

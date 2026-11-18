@@ -325,8 +325,8 @@ def test_profile_duplicate_rows_are_reported() -> None:
     with _isolated() as work:
         cache_dir = os.path.join(work, "cache")
         key = _capture_key(cache_dir, EQUATION, _operands())
-        first = _row(key, kernel="generic", optimize="auto", timing="1.500", note="旧行")
-        second = _row(key, kernel="topology", optimize="greedy", timing="0.700", note="新行")
+        first = _row(key, kernel="generic", optimize="greedy", timing="1.500", note="旧行")
+        second = _row(key, kernel="topology", optimize="optimal", timing="0.700", note="新行")
         other_key = dict(key)
         other_key["equation"] = "ij,jk->ik"
         _write_table(cache_dir, [first, _row(other_key, kernel="backend"),
@@ -342,8 +342,11 @@ def test_profile_duplicate_rows_are_reported() -> None:
         assert len(rows) == 2, ("候选行必须全部给出（不含别的键的行）", len(rows), rows)
         assert [row.get("line") for row in rows] == ["1", "3"], (
             "候选行要带文件里的数据行号", [row.get("line") for row in rows])
-        for kernel, optimize, note in (("generic", "auto", "旧行"),
-                                       ("topology", "greedy", "新行")):
+        # 两行的 ``optimize`` 取**不同**的合法叶子：``auto`` 已从 ``OPTIMIZE_LEAVES``
+        # 删除（写进表里的行会被判非法、直接不参与匹配），用它造行等于让这条契约
+        # 失去被测对象；两行取值不同也顺带证明报错逐行照抄、没有互相覆盖。
+        for kernel, optimize, note in (("generic", "greedy", "旧行"),
+                                       ("topology", "optimal", "新行")):
             for text in (kernel, optimize, note):
                 assert text in message, ("报错里要能看到这一行", text, message)
 
@@ -385,7 +388,7 @@ def test_ordinary_call_never_writes() -> None:
         # （§8 的验收是 `grep -rn` 零命中，连测试文本都算）。
         legacy = "compute" + "_ms"
         assert legacy not in columns, (f"表头不得残留旧列名 {legacy}", columns)
-        _write_table(cache_dir, [_row(key, kernel="generic", optimize="auto")])
+        _write_table(cache_dir, [_row(key, kernel="generic", optimize="greedy")])
         before = _table_state(cache_dir)
 
         with _quiet():
@@ -413,7 +416,7 @@ def test_profile_conflict_raises() -> None:
         cache_dir = os.path.join(work, "cache")
         key = _capture_key(cache_dir, EQUATION, _operands())
         recorded, requested = "generic", "dedicated"
-        _write_table(cache_dir, [_row(key, kernel=recorded, optimize="auto")])
+        _write_table(cache_dir, [_row(key, kernel=recorded, optimize="greedy")])
 
         with _quiet():
             try:
@@ -435,7 +438,7 @@ def test_profile_readonly_keeps_numbers() -> None:
         expected = np.einsum(EQUATION, *operands)
         cache_dir = os.path.join(work, "cache")
         key = _capture_key(cache_dir, EQUATION, operands)
-        _write_table(cache_dir, [_row(key, kernel="generic", optimize="auto")])
+        _write_table(cache_dir, [_row(key, kernel="generic", optimize="greedy")])
 
         with _quiet():
             hit = _run(cache_dir, operands=operands)

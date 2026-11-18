@@ -13,17 +13,18 @@ compiled-context 三入口。冻结契约见 `pyqcd/einsum/AGENTS.md` §5 与
 | `include/einsum_cuda.h` | pack/reduce/GEMM/stream 内部接口 | 原生组 |
 | `src/apply_plan.cu` | `applyPlanQcd` 薄适配与会话钩子 | 原生组 |
 | `src/apply_contract.cu` | version-2 计划、compiled context、stream pool、workspace | 原生组 |
-| `src/pack.cu` | pack/transpose/reduce/hadamard CUDA kernel | 原生组 |
-| `src/batched_gemm.cu` | cuBLAS K-last batched GEMM | 原生组 |
+| `src/dedicated_apply.cu` | 步表执行器 + pack/transpose/reduce/hadamard kernel + K-last batched GEMM | 原生组 |
 | `make-nv.sh` | nvcc 直编 + 原子软链发布 | 装配组（本组） |
 | `include/einsum_define.h` | 冻结 C ABI 的**逐字节镜像**（不属本组，勿改） | 原生组（规划） |
-| `include/einsum_permute.h`、`src/permute.cu` | `qcd_cuda_permute` / `qcd_cuda_hadamard` | A 组 |
-| `include/einsum_batched_gemm.h`、`src/batched_gemm.cu` | `qcd_cuda_batched_gemm` | B 组 |
+| `include/einsum_cuda.h` | `qcd_cuda_permute` / `qcd_cuda_hadamard` / `qcd_cuda_reduce` / `qcd_cuda_batched_gemm` 声明 | A 组 |
 | `python/pyqcdeinsum.h` | Cython 侧的平坦 C 声明 | API 组 |
 | `build/`、`libpyqcdeinsum_cuda.so` | 产物与稳定软链（不提交） | — |
 
-本组只写第一行三件 + 本文件；`src/permute.cu`、`src/batched_gemm.cu`、
-两个 kernel 头文件、`include/einsum_define.h`、`cpp/kupl/**` 一律不碰。
+四个 provider 的实现全部在 `src/dedicated_apply.cu`（它是唯一消费者）：
+`pack.cu` / `batched_gemm.cu` 已并入该文件并删除，`make-nv.sh` 的源列表是
+`src/*.cu` glob，增删文件不需要改脚本。
+
+本组只写第一行三件 + 本文件；`include/einsum_define.h`、`cpp/kupl/**` 一律不碰。
 
 ## 2. 不变量
 

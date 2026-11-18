@@ -192,6 +192,12 @@ reason instead of silently degrading.
 
 ## Topology-specialised kernels
 
+> ⚠️ INVALID (2026-11-18): the topology timings/ratios quoted from historical docs rest
+> on a **retired** topology-step-table calibration (KUPL "production heterogeneous axes" /
+> CUDA "uniform dim=4 probe"). The current calibration is ROLE_SHAPES
+> (peram[4,4,100,100] gamma[4,4] VDV[100,100] VVV[100,100,100,100]); both tables have
+> been recomputed wholesale. **Do not cite the old numbers as current results.**
+
 The eleven hadron-topology cases in `refer/sush/wick_12cases.md` define **2582 unique
 contraction topologies** with 6–16 operands. They are indexed by *topology signature*,
 not by spelling: labels are renumbered by first appearance across the whole equation,

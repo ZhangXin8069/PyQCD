@@ -2,8 +2,9 @@
 
 为什么要单独立契约
 ------------------
-语料形态默认**先试展开式 ``*_dedicated`` 步表**、失败才试 ``*_topology``
-（``_api._specialized_kernel_attempts`` 的次序）。于是最常见的命中是
+命中提示只在**真的下发内核**时打：``kernel_force`` 的缺省值已是 ``generic``
+（``auto`` 已删除），那条路既不做形态匹配也不下发内核，因此根本不提示；本契约因此
+显式强制 ``dedicated``（单值强制，一次调用只下发这一个）。于是最常见的命中是
 
     [pyqcd.einsum] 专用路径: topology:a1c49862 [内核: kupl_dedicated]
 
@@ -79,8 +80,8 @@ def _isolated_state(language: str):
 
     语言走 :func:`_specialize.set_language`（``--language`` 用同一入口）而不只改环境
     变量：别的契约可能已经把进程档钉成某一语言，只改 env 会被它压住。
-    强制内核/拓扑强制/专用路径开关一并清掉——它们会把本次调用换成别的路，
-    而本契约要看的正是缺省的自动分派。
+    环境里的强制内核/拓扑强制/专用路径开关一并清掉：本契约用**显式参数**强制内核
+    （见 :func:`_run_corpus`），残留的环境值只会让"谁说了算"变得不可读。
     """
     removals = (
         _kernel_force.KERNEL_FORCE_ENV,
@@ -123,17 +124,28 @@ def _isolated_state(language: str):
 def _run_corpus(language: str) -> tuple[str, dict[str, Any]]:
     """跑一次语料方程，返回（提示行原文, 本次调用后的 ``LAST_INFO`` 快照）。
 
+    **必须显式强制内核**：``kernel_force`` 的缺省值现在是 ``generic``（``auto`` 已删除），
+    那条路按设计**不匹配、不提示**，因此"命中提示"根本不会打。强制 ``dedicated`` 才会
+    真的下发内核并打那条两段式提示，本契约要核对的正是它。
+
     ``LAST_INFO`` 必须在 ``contract`` 返回后**立刻**取：它是执行侧对"最近一次下发"
     的记录，任何后续内核调用都会覆盖它。
     """
     key = _kernel_force.KERNEL_FORCE_ENV
     with _isolated_state(language), warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        assert key not in os.environ, "强制内核会换路，本契约要的是缺省自动分派"
+        assert key not in os.environ, "环境里的强制值会盖过本契约的显式参数"
         _kernel_kupl.LAST_INFO.clear()
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
-            contract(EQUATION, *_operands())
+            try:
+                contract(EQUATION, *_operands(), kernel_force="dedicated")
+            except _kernel_force.KernelUnavailableError as exc:
+                detail = "; ".join(f"{label}: {reason}"
+                                   for label, reason in (exc.reasons or {}).items())
+                raise unittest.SkipTest(
+                    "本机没有可用的 KUPL dedicated 内核，命中提示不可达："
+                    + (detail or str(exc)))
         info = dict(_kernel_kupl.LAST_INFO)
     lines = [line for line in buffer.getvalue().splitlines()
              if line.startswith(PREFIX) and ("专用路径" in line or "specialized path" in line)]
@@ -177,7 +189,7 @@ def test_topology_notice_keeps_topology_context() -> None:
         route = ROUTE_PATTERN.search(line).group(0)
         assert "[match: topology]" in line, f"（{language}）语料提示缺少命中族上下文：{line!r}"
         assert match == "topology", f"（{language}）命中族应当取自形态名：{match!r}"
-        # 只看**机器段**：形态说明本身可能出现 "dedicated"（它讲的正是先试 dedicated 步表），
+        # 只看**机器段**：形态说明本身可能出现 "dedicated"（强制时它写的就是刚跑的内核），
         # 那属于解释文字，不该被当成"裸 dedicated 标签"。
         if "dedicated" in route:
             assert "topology" in route, (

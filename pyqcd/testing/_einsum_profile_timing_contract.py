@@ -313,6 +313,30 @@ def test_only_one_timing_column_exists() -> None:
 
 # ── 契约 2：算的是整段调用（含规划与改写准备） ───────────────────────────────
 
+def _seed_generic_profile(equation: str, operands, directory: str) -> None:
+    """在 ``directory`` 写一行 ``kernel=generic``，让缺省的 generic 走**画像**分支。
+
+    为什么需要它：``kernel_force`` 的缺省值现在是 ``generic``（``auto`` 已删除），普通
+    调用在 ``_api.contract`` 的 ``generic_only`` 分支里整段跳过匹配与等价改写，于是
+    "改写准备"那段根本不会发生。画像给出的 ``generic`` 是**计时结论**、不是"关掉改写"
+    的语义指令（见 ``_api.contract`` 里 ``generic_only`` 的注释），那条路照旧匹配 +
+    改写，本用例的 ``prep`` 钩子才有机会被调用。
+    """
+    _profile_cache.configure(directory)
+    key = {
+        "shape": _profile_cache.format_shape([o.shape for o in operands]),
+        "dtype": _api._profile_dtype(operands),
+        "device": "cpu",
+        "equation": "".join(equation.split()),
+        "backend": "numpy",
+    }
+    _profile_cache.write_winner(
+        key, {"kernel": _kernel_force.GENERIC_LABEL, "optimize": "auto",
+              "wall_ms": 0.001})
+    picked = _profile_cache.read_winner(key)
+    assert picked is not None, ("画像行必须能被同一个键查回（键算错了）", key)
+
+
 def test_wall_clock_includes_planning_and_rewrite_prep() -> None:
     """规划与改写准备各自拖慢 50 ms 后都必须落在墙钟里（热态基线远小于下界）。
 
@@ -321,6 +345,10 @@ def test_wall_clock_includes_planning_and_rewrite_prep() -> None:
       ``target_equation`` 直接命中语料特化，规划根本不会发生（实测 find=0）；
     * ``_api._contiguous_copy``（改写准备）只在**等价改写**路径上跑。
     把它们混在一条调用里，必然有一段是空断言。
+
+    "改写"那一路必须先让匹配/改写可达：缺省 ``kernel_force`` 已是 ``generic``
+    （``auto`` 已删除）时 ``contract()`` 整段跳过它们，所以这里先写一行
+    ``kernel=generic`` 的画像记录（见 :func:`_seed_generic_profile`）。
     """
     assert _specialize.match(REWRITE_EQUATION) is None, (
         "例方程必须是**语料外**写法，否则根本不会走等价改写", REWRITE_EQUATION)
@@ -336,6 +364,9 @@ def test_wall_clock_includes_planning_and_rewrite_prep() -> None:
         expected = np.einsum(equation, *operands)
         with _isolated() as work:
             cache = os.path.join(work, "cache")
+            if hook == "prep":
+                # 缺省 generic 会整段跳过匹配/改写：先让匹配与改写可达（见上）。
+                _seed_generic_profile(equation, operands, cache)
 
             # 预热：首调含原生库加载/绑定（实测 1 s 量级），与"规划/改写准备"无关。
             # 不先走一遍，基线会被首调开销淹没，"基线远小于下界"就成了噪声。
@@ -396,6 +427,9 @@ def test_every_timing_path_keeps_the_numbers() -> None:
             operands = _operands(equation, seed=20261117 + index)
             expected = np.einsum(equation, *operands)
             directory = os.path.join(work, f"case{index}")
+            if equation == REWRITE_EQUATION:
+                # 这一路要真的走改写：缺省 generic 会整段跳过匹配/改写。
+                _seed_generic_profile(equation, operands, directory)
             with _quiet():
                 actual = contract(equation, *operands,
                                   profile=True, profile_dir=directory)

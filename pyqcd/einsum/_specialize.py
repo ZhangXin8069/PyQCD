@@ -19,14 +19,19 @@
     [pyqcd.einsum] 专用路径: topology:xxxxxxxx [match: topology] [kernel: kupl_dedicated]
     [pyqcd.einsum] specialized path: topology:xxxxxxxx [match: topology] [kernel: kupl_dedicated]
 
-``[match: …]`` 是**命中的形态族**（拓扑签名匹配），``[kernel: …]`` 是**这次真正执行**
-的内核路线（取自执行侧 ``LAST_INFO['path']``），没跑成内核时写作 ``[plan-cache]``。
-两者必须分开读：语料形态默认**先试展开式 ``*_dedicated`` 步表**、失败才试
-``*_topology``（分派顺序见 ``_api._specialized_kernel_attempts``），所以
-"``[match: topology]`` + ``[kernel: kupl_dedicated]``"是正常且常见的结果——它说的是
-命中的是**拓扑形态**，不是走了拓扑内核。2026-11-17 之前这里只打 ``[内核: …]``，
-命中拓扑形态却显示 ``kupl_dedicated``，读起来像标签取错了（实际执行确实是
-dedicated，缺的是"命中什么"那一半）。
+``[match: …]`` 是**命中的形态族**，``[kernel: …]`` 是**这次真正执行**的内核路线
+（取自执行侧 ``LAST_INFO['path']``），没跑成内核时写作 ``[plan-cache]``。两段回答的是
+两个不同的问题：命中的是拓扑**形态**，不代表走了拓扑**内核**，所以
+"``[match: topology]`` + ``[kernel: kupl_dedicated]``"说的是"拓扑形态这次由 dedicated
+内核执行"，不是标签取错。
+
+``kernel_force`` **只接受单值强制**（``backend`` / ``dedicated`` / ``generic`` /
+``topology``，缺省 ``generic``），**不存在"依次尝试多个内核"**：强制了哪个就只下发哪个，
+跑不成就报错或回落。默认 ``generic`` 时一个专用内核都不试——语料命中只换来这一行形态
+提示，执行仍是通用分步收缩。行尾说明因此按**本次执行语义**分三档拼（见
+``_NOTE_ZH`` / ``_NOTE_EN`` 与 :func:`_execution_semantics`）：强制跑成的写"已按
+kernel_force 强制走 <kernel>"，没强制的写"仅形态匹配，按 generic 执行"，强制后没跑成
+而回落的写"已回落 generic"。
 
 语言由 ``PYQCD_EINSUM_LANG`` / CLI 的 ``--language`` 决定（见
 :func:`notice_language`）：``zh`` 用中文动词（``专用路径``）配中文说明，``en`` 全英文。
@@ -244,16 +249,6 @@ def _topology_hit(subscripts: str, signature: tuple) -> str | None:
     return digest if registry.contains(digest, arity, slots) else None
 
 
-def _topology_index():
-    """兼容旧接口：返回全部摘要的并集（仅诊断用，热路径不要调）。"""
-    from . import _topology_registry as registry
-    merged: set[str] = set()
-    for key in registry._BUCKETS:
-        raw = registry.bucket_raw(key)
-        merged |= {raw[i:i + 16].hex() for i in range(0, len(raw), 16)}
-    return frozenset(merged)
-
-
 def _topology_entry(digest: str) -> Entry:
     """语料拓扑的形态条目；代表写法第一次用到时才读。"""
     entry = _TOPOLOGY_ENTRY_CACHE.get(digest)
@@ -262,19 +257,19 @@ def _topology_entry(digest: str) -> Entry:
         entry = {
             "name": "topology:" + digest[:8],
             "kind": "kernel(topology)",
-            # 这句是**形态级**说明，不承诺本次实际走哪条入口：同一形态下
-            # `_specialized_kernel_attempts` 会先试 `*_dedicated`、失败才试
-            # `*_topology`（见 `_api.py`）。原先写"整条计划交给原生拓扑入口"，
-            # 于是在 dedicated 命中时提示与实际执行矛盾（2026-11-15 用户实测：
-            # 提示说拓扑入口，`kernel` 行却是 `kupl_dedicated`）。
-            # 实际路线一律以 `kernel` 行 / `LAST_INFO['path']` 为准。
-            "note": "真实语料形态（先试展开式 dedicated 步表，不行再试 v3 拓扑步表；"
-                    "实际走的入口见 kernel 行）",
+            # 这句只回答"命中了什么形态"，**不承诺**本次走哪条入口：实际路线一律以
+            # `kernel` 行 / `LAST_INFO['path']` 为准。原先这里写死"dedicated 步表优先、
+            # 拓扑步表兜底"，那是 `auto` 时代的分派次序；`auto` 删除后
+            # `kernel_force` 只接受单值强制，一次调用不会连试两个内核，那句话既过时
+            # 又会让读者误以为专用内核还在自动选路（2026-11-18 用户报告）。
+            # 本次到底强制与否由 `announce` 按现场事实补上（见 `_NOTE_ZH`）。
+            "note": "真实语料形态",
             # **英文同义说明**：``announce`` 在 ``en`` 下用它，绝不把中文解释拼到
             # 英文标签后面（那样一行里就有两种语言）。
-            "note_en": "corpus form (tries the expanded dedicated step table first, "
-                       "then the v3 topology table; the kernel line reports which "
-                       "entry actually ran)",
+            "note_en": "corpus form",
+            # ``kernels`` 是这种形态**可能**由哪些执行条目服务，不是本次实际执行的那个：
+            # 命中形态与执行路线是两个问题，``[match: X]`` + ``[kernel: Y]`` 里 X≠Y
+            # 是正常结果（X 是形态族，Y 才是 ``LAST_INFO['path']``）。
             "kernels": ("kupl_topology", "cuda_topology"),
             "subscripts": "",
         }
@@ -334,9 +329,11 @@ def match(subscripts: str, *, use: bool | None = None) -> Entry | None:
 def executed_path(kernel: str) -> str:
     """``kernel`` attempt 标签对应的**实际执行路线**；取不到就退回标签本身。
 
-    拓扑入口有两条路线：``kupl_topology``（真的走了编译期 v3 步表）与
-    ``kupl_topology_v2``（v2 通用执行器完成，见 ``_kernel_kupl._TOPOLOGY_ROUTE_PATHS``），
-    光看 attempt 标签分不出来；执行侧自己写的 ``LAST_INFO['path']`` 才是结论。
+    attempt 标签只说明"试着下发哪个内核"，执行侧写的 ``LAST_INFO['path']`` 才是结论
+    （``kupl_topology`` / ``cuda_topology`` / ``*_dedicated``）。KUPL 的拓扑入口**只有
+    一条路线**：命中编译期步表就写 ``kupl_topology``，未命中直接 fail closed（status 4
+    → 上层回落），既没有 ``kupl_topology_v2`` 这条回退路线，也没有路线查询符号可读
+    ——不要再按 ``_kernel_kupl._TOPOLOGY_ROUTE_PATHS`` 去找（该符号已删除）。
     模块不在 ``sys.modules`` 里说明本次没有内核能留下记录（专用内核才 import 它），
     此时直接退回标签，绝不为了读一个提示去 import 原生模块。
     """
@@ -353,18 +350,69 @@ def executed_path(kernel: str) -> str:
     return path if isinstance(path, str) and path else kernel
 
 
+#: ``announce`` 行尾说明的**执行语义**分档：条目里只写"命中了什么形态"，本次到底有没有
+#: 强制内核只有调用现场知道，所以说明文字在这里按档存模板。``{kernel}`` 填实际执行路线，
+#: ``{requested}`` 填用户强制的逻辑名（``dedicated`` / ``topology``）。
+_NOTE_ZH = {
+    "forced": "（已按 kernel_force 强制走 {kernel}）",
+    "generic": "（仅形态匹配；未强制内核，按 generic 执行）",
+    "fallback": "（已按 kernel_force 强制走 {requested}，但没跑成，已回落 generic）",
+}
+_NOTE_EN = {
+    "forced": " (kernel_force forced {kernel})",
+    "generic": " (shape match only; no kernel forced, running generic)",
+    "fallback": " (kernel_force forced {requested} but it did not run; "
+                "fell back to generic)",
+}
+
+
+def _execution_semantics(kernel: str) -> tuple[str, str]:
+    """本次提示的执行语义：``(档, 用户强制的逻辑名)``，档取 ``_NOTE_ZH`` 的键。
+
+    只有 ``kernel`` 一个输入，所以结论全部来自**可观测事实**，不猜分派次序
+    （``kernel_force`` 单值强制，每次调用至多下发一个内核）：
+
+    - ``kernel`` 非空：这个专用内核真的执行了。``_api`` 里带非空标签调 :func:`announce`
+      的只有"强制即真试一次"那条路，所以档是 ``forced``，逻辑名取标签后缀
+      （``kupl_dedicated`` → ``dedicated``）。
+    - ``kernel`` 为空：一个专用内核都没跑。``_LAST_KERNEL['requested']`` 只在调用方
+      **显式要求**非 ``generic`` 时非空（缺省与显式 ``generic`` 都是空），它非空而
+      ``ran`` 为空，说明强制的那条没跑成、已回落通用路径，档是 ``fallback``；
+      其余情况只是形态命中，档是 ``generic``。
+    """
+    if kernel:
+        return "forced", kernel.rpartition("_")[2]
+    api = sys.modules.get(f"{__package__}._api")
+    record = getattr(api, "_LAST_KERNEL", None) or {}
+    requested = tuple(record.get("requested") or ())
+    if requested and not record.get("ran"):
+        return "fallback", ", ".join(requested)
+    return "generic", ""
+
+
+def _note_text(entry: Entry, key: str, table: dict[str, str], kernel: str) -> str:
+    """条目文案 + 本次执行语义；条目没写文案时只打机器段（保持旧行为）。"""
+    base = str(entry.get(key, ""))
+    if not base:
+        return ""
+    semantics, requested = _execution_semantics(kernel)
+    return base + table[semantics].format(
+        kernel=executed_path(kernel), requested=requested)
+
+
 def announce(entry: Entry, kernel: str = "") -> None:
     """命中时打印提示；默认每形态每个进程只打印一次。
 
     ``kernel`` 是本次真的跑成的 attempt 标签（空串表示一个专用内核都没跑），
     打印前经 :func:`executed_path` 换成执行侧的 ``LAST_INFO['path']``——
-    拓扑形态下的 ``kupl_topology`` / ``kupl_topology_v2`` 只有执行侧分得清。
+    attempt 标签是逻辑名（``dedicated`` / ``topology``），执行侧写的是真实路线名
+    （``kupl_topology`` 等），两者不是一回事。
 
     提示把**命中形态**与**执行内核**分成两段：``[match: …]`` 是命中的形态族，
-    ``[kernel: …]`` 是实际执行的路线（没跑内核时 ``[plan-cache]``）。语料形态默认
-    先试 ``*_dedicated`` 步表、失败才试 ``*_topology``，所以
-    ``[match: topology] [kernel: kupl_dedicated]`` 是正常结果；只打 ``[kernel: …]``
-    会让人以为标签取错了（2026-11-17 用户报告）。
+    ``[kernel: …]`` 是实际执行的路线（没跑内核时 ``[plan-cache]``）。两段不互相蕴含：
+    命中拓扑形态却写 ``[kernel: kupl_dedicated]``，说的是"拓扑形态这次由 dedicated
+    内核执行"，不是标签取错。条目里只写"命中了什么形态"，行尾说明由
+    :func:`_execution_semantics` 按本次语义现场补上（强制跑成 / 未强制 / 强制失败回落）。
 
     整句只用**一种**语言（:func:`notice_language`）：``zh`` 用中文动词配 ``note``，
     ``en`` 用英文动词配 ``note_en``。``[pyqcd.einsum]`` 前缀、形态名
@@ -396,10 +444,10 @@ def announce(entry: Entry, kernel: str = "") -> None:
     # ``[pyqcd.einsum]`` 前缀与上面的机器段两种语言逐字相同——脚本靠它们抓这一行
     # （``_api`` 的画像命中行用的是同一前缀），翻译掉就没人能解析。
     if notice_language() == "zh":
-        note = str(entry.get("note", ""))
+        note = _note_text(entry, "note", _NOTE_ZH, kernel)
         message = f"[pyqcd.einsum] 专用路径: {name} {route}"
     else:
-        note = str(entry.get("note_en", ""))
+        note = _note_text(entry, "note_en", _NOTE_EN, kernel)
         message = f"[pyqcd.einsum] specialized path: {name} {route}"
     print(f"{message} {note}" if note else message, flush=True)
 

@@ -37,32 +37,6 @@ struct qcd_cuda_reduce_spec {
     int64_t reduction_src_stride[QCD_CUDA_MAX_RANK];
 };
 
-struct qcd_cuda_sandwich_spec {
-    int64_t prefix;
-    int64_t left;
-    int64_t contracted_left;
-    int64_t contracted_right;
-    int64_t right;
-    int64_t lane;
-};
-
-struct qcd_cuda_e4_spec {
-    int64_t z;
-    int64_t y;
-    int64_t x;
-    int64_t c;
-    int64_t t;
-    int64_t a;
-    int64_t b;
-    int64_t n;
-    int64_t input_g;
-    int64_t output_g;
-    int64_t d;
-    int64_t e;
-    int64_t f;
-    int64_t output_elements;
-};
-
 #if defined(_WIN32)
 #define QCD_CUDA_LOCAL
 #define QCD_CUDA_WEAK
@@ -81,25 +55,6 @@ extern "C" QCD_CUDA_WEAK int qcd_cuda_hadamard(
 
 extern "C" QCD_CUDA_WEAK int qcd_cuda_reduce(
     int dtype_id, const void* src, void* dst, qcd_cuda_reduce_spec spec,
-    cudaStream_t stream);
-
-extern "C" QCD_CUDA_WEAK int qcd_cuda_sandwich(
-    int dtype_id,
-    const void* left_matrix,
-    const void* tensor,
-    const void* right_matrix,
-    void* dst,
-    qcd_cuda_sandwich_spec spec,
-    cudaStream_t stream);
-
-extern "C" QCD_CUDA_WEAK int qcd_cuda_e4_fused(
-    int dtype_id,
-    const void* a,
-    const void* b,
-    const void* gamma,
-    const void* c,
-    void* dst,
-    qcd_cuda_e4_spec spec,
     cudaStream_t stream);
 
 extern "C" QCD_CUDA_WEAK int qcd_cuda_batched_gemm(

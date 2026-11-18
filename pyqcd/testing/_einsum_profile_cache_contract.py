@@ -34,6 +34,13 @@ TV 重设计（2026-11-17，§1/§2/§3/§7/§8）把这张表收成**标定产�
 14. **``wall_ms`` 是全程墙钟**：在 :func:`read_winner` 里注入一段睡眠——它不是收缩执行
     的时间，却必须出现在 ``wall_ms`` 里（§4 的"只有一列、且是整段 ``contract()``"）。
     观测口里不许残留旧字段名，也不许还有第二列拆分计时。
+15. **``optimize`` 两列的 7 叶子**（``optimize`` / ``optimize_topology_v2``）：7 个叶子
+    写入读回一致；连字符旧写法（``branch-1``）读入归一成下划线、**不**视为非法。
+16. **``auto`` 是非法值**：读侧只警告**一次**，该行**不参与** ``read_winner`` 匹配
+    （不静默当 ``greedy``）；``summary()`` 的 ``invalid`` 如实计数。
+17. **缺 ``optimize_topology_v2`` 列的老文件**照样能读：该列按空处理 = 缺省 ``greedy``。
+18. **``schema_version``**：新写为 :data:`PROFILE_SCHEMA_VERSION`（``3``），老行（文件里
+    没有这一列）读回 ``0`` 且仍可用；老行不降级、不删除。
 
 口径与边界
 ----------
@@ -57,6 +64,7 @@ import os
 import tempfile
 import time
 import unittest
+import warnings
 from typing import Any, Iterator, Mapping, Sequence
 from unittest.mock import patch
 
@@ -75,7 +83,9 @@ _ENV_NAMES = (_profile_cache.PROFILE_ENV, _profile_cache.DIR_ENV)
 READ_SLEEP = 0.05
 
 #: ``_profile_cache`` 的进程内状态（``_TABLE`` 是解析缓存，按内容拷贝）。锁与常量不碰。
-_STATE_NAMES = ("_TABLE", "_TUNING", "_CONFIGURED_DIR", "_LAST_ERROR", "_HOST")
+#: 待发警告与"已警告过"的集合也要隔离：否则上一个用例发出的警告会把本用例的吞掉。
+_STATE_NAMES = ("_TABLE", "_TUNING", "_CONFIGURED_DIR", "_LAST_ERROR", "_HOST",
+                "_PENDING_WARNINGS", "_WARNED_CELLS")
 
 
 # -- 环境与进程内状态 ------------------------------------------------------------
@@ -86,6 +96,10 @@ def _snapshot() -> dict[str, Any]:
         value = getattr(_profile_cache, name)
         if name == "_TABLE" and value is not None:
             value = (value[0], value[1], value[2], [dict(row) for row in value[3]])
+        elif isinstance(value, list):
+            value = list(value)
+        elif isinstance(value, set):
+            value = set(value)
         state[name] = value
     return state
 
@@ -97,11 +111,13 @@ def _restore(state: Mapping[str, Any]) -> None:
 
 
 def _reset_state() -> None:
-    """清到"没配置、没解析缓存、不处于 tune 窗口"的初始态。"""
+    """清到"没配置、没解析缓存、不处于 tune 窗口、没有待发/已发警告"的初始态。"""
     _profile_cache._TABLE = None
     _profile_cache._TUNING = 0
     _profile_cache._CONFIGURED_DIR = ""
     _profile_cache._LAST_ERROR = None
+    _profile_cache._PENDING_WARNINGS = []
+    _profile_cache._WARNED_CELLS = set()
 
 
 def _forget() -> None:
@@ -310,7 +326,7 @@ def test_read_winner_duplicate_rows_raise_with_all_candidates() -> None:
         key = _key()
         other = dict(key, equation="ab,bc->ac")
         _write_table(directory, [
-            _row(key, kernel="kupl_dedicated", optimize="auto", note="旧行"),
+            _row(key, kernel="kupl_dedicated", optimize="dp", note="旧行"),
             _row(other, kernel="backend"),
             _row(key, kernel="kupl_topology", optimize="greedy", note="新行"),
         ])
@@ -354,7 +370,7 @@ def test_read_winner_never_writes() -> None:
         directory = os.path.join(work, "cache")
         _profile_cache.configure(directory)
         key = _key()
-        _profile_cache.write_winner(key, {"kernel": "generic", "optimize": "auto",
+        _profile_cache.write_winner(key, {"kernel": "generic", "optimize": "optimal",
                                          "wall_ms": 1.5})
         _forget()
         before = _state_of(directory)
@@ -383,8 +399,8 @@ def test_write_winner_keeps_single_row_and_drops_same_key() -> None:
         key = _key()
         other = dict(key, equation="ab,bc->ac")
         _write_table(directory, [
-            _row(key, kernel="stale_fast", optimize="auto", wall_ms="0.010"),
-            _row(other, kernel="backend", optimize="auto", wall_ms="5.000"),
+            _row(key, kernel="stale_fast", optimize="dp", wall_ms="0.010"),
+            _row(other, kernel="backend", optimize="branch_1", wall_ms="5.000"),
             _row(key, kernel="stale_slow", optimize="greedy", wall_ms="9.000"),
         ])
         path = _table_path(directory)
@@ -459,7 +475,7 @@ def test_tune_session_blocks_reads_and_writes() -> None:
         directory = os.path.join(work, "cache")
         _profile_cache.configure(directory)
         key = _key()
-        _profile_cache.write_winner(key, {"kernel": "generic", "optimize": "auto",
+        _profile_cache.write_winner(key, {"kernel": "generic", "optimize": "greedy",
                                          "wall_ms": 1.0})
         _forget()
         before = _state_of(directory)
@@ -630,6 +646,152 @@ def test_wall_ms_covers_the_whole_contract_call() -> None:
             _profile_cache.PERFORMANCE_FIELDS)
 
 
+# -- 15. 7 叶子：写入读回一致 + 连字符旧写法归一 -------------------------------
+def _write_table_with_columns(directory: str, rows: Sequence[Mapping[str, str]],
+                              columns: Sequence[str]) -> str:
+    """按**指定列**写 CSV（造"老文件缺列"的现场：``PROFILE_COLUMNS`` 少几列）。"""
+    os.makedirs(directory, exist_ok=True)
+    path = _table_path(directory)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(columns), extrasaction="ignore",
+                            lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({name: str(row.get(name, "")) for name in columns})
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(buffer.getvalue())
+    _forget()
+    return path
+
+
+def test_optimize_leaves_roundtrip_and_legacy_hyphen_normalizes() -> None:
+    """§15：7 个叶子写入读回一致；连字符旧写法读入归一成下划线（不算非法）。"""
+    assert tuple(_profile_cache.OPTIMIZE_LEAVES) == (
+        "greedy", "optimal", "dp", "branch_1", "branch_2", "branch_all", "none"), (
+        "7 叶子是冻结口径", _profile_cache.OPTIMIZE_LEAVES)
+    assert _profile_cache.DEFAULT_OPTIMIZE == "greedy", _profile_cache.DEFAULT_OPTIMIZE
+    with _isolated() as work:
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
+        key = _key()
+        for leaf in _profile_cache.OPTIMIZE_LEAVES:
+            _profile_cache.write_winner(key, {"kernel": "generic", "optimize": leaf,
+                                             _profile_cache.TOPOLOGY_V2_FIELD: leaf,
+                                             "wall_ms": 0.5})
+            _forget()
+            row = _profile_cache.read_winner(key)
+            assert row is not None, ("写进去的叶子必须能读回", leaf)
+            assert row["optimize"] == leaf, ("写入读回必须一致", leaf, row)
+            assert row[_profile_cache.TOPOLOGY_V2_FIELD] == leaf, (leaf, row)
+
+        # 连字符旧写法（手工写进表）：读入归一为下划线，**不**视为非法。
+        _write_table(directory, [_row(key, kernel="generic", optimize="branch-1")])
+        row = _profile_cache.read_winner(key)
+        assert row is not None, "连字符旧写法不是非法值（向后兼容）"
+        assert row["optimize"] == "branch_1", ("连字符必须归一成下划线", row)
+
+        # 写侧同样归一：大小写与连字符都折成叶子。
+        _profile_cache.write_winner(key, {"kernel": "generic",
+                                          "optimize": " Branch-All "})
+        _forget()
+        assert _profile_cache.read_winner(key)["optimize"] == "branch_all"
+
+
+# -- 16. ``auto`` 旧值：警告一次 + 该行不参与匹配 --------------------------------
+def test_auto_row_warns_once_and_is_not_matched() -> None:
+    """§16：``auto`` 非法——读侧只警告一次，该行不匹配（绝不静默当 ``greedy``）。"""
+    with _isolated() as work:
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
+        key = _key()
+        _write_table(directory, [_row(key, kernel="kupl_dedicated", optimize="auto")])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert _profile_cache.read_winner(key) is None, (
+                "auto 行**不参与**匹配（不能被当成 greedy 命中）")
+            assert _profile_cache.read_winner(key) is None, "第二次读也不该命中"
+            state = _profile_cache.summary()
+        assert len(caught) == 1, (
+            "同一个非法值只警告一次", len(caught), [str(item.message) for item in caught])
+        message = str(caught[0].message)
+        assert "auto" in message and "不参与匹配" in message, message
+        assert issubclass(caught[0].category, RuntimeWarning), caught[0].category
+        assert state["rows"] == 1, ("行还在表里（不删老行）", state)
+        assert state["invalid"] == 1, ("无效行要如实计数", state)
+
+
+# -- 17. 缺 ``optimize_topology_v2`` 列的老文件 --------------------------------
+def test_legacy_file_without_topology_v2_column_still_reads() -> None:
+    """§17：老表没有新列也能读；该列按空处理 = 缺省 ``greedy``。"""
+    with _isolated() as work:
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
+        key = _key()
+        columns = [name for name in _profile_cache.PROFILE_COLUMNS
+                   if name != _profile_cache.TOPOLOGY_V2_FIELD]
+        assert _profile_cache.TOPOLOGY_V2_FIELD not in columns
+        _write_table_with_columns(
+            directory, [_row(key, kernel="backend", optimize="dp")], columns)
+
+        row = _profile_cache.read_winner(key)
+        assert row is not None, "缺新列的老文件必须照旧能读（不降级、不丢行）"
+        assert row["kernel"] == "backend", row
+        assert row["optimize"] == "dp", row
+        assert row[_profile_cache.TOPOLOGY_V2_FIELD] == "", (
+            "缺列的老行按空读", row)
+        assert (row[_profile_cache.TOPOLOGY_V2_FIELD]
+                or _profile_cache.DEFAULT_OPTIMIZE) == "greedy", (
+            "空 = 缺省 greedy", row)
+        # 老列一行不少地还在（新列只是**多**出来的一格）。
+        for name in _profile_cache.PROFILE_COLUMNS:
+            assert name in row, ("读回来的行必须补齐全部列", name, sorted(row))
+
+
+# -- 18. ``schema_version``：新写 3，老行 0 且仍可用 ---------------------------
+def test_schema_version_written_three_and_legacy_rows_read_zero() -> None:
+    """§18：``schema_version`` 新行写 3；老文件（无该列）读回 0 且照旧命中。"""
+    assert _profile_cache.PROFILE_SCHEMA_VERSION == 3, (
+        _profile_cache.PROFILE_SCHEMA_VERSION)
+    assert _profile_cache.LEGACY_SCHEMA_VERSION == 0, (
+        _profile_cache.LEGACY_SCHEMA_VERSION)
+    with _isolated() as work:
+        directory = os.path.join(work, "cache")
+        _profile_cache.configure(directory)
+        key = _key()
+        _profile_cache.write_winner(key, {"kernel": "generic", "optimize": "dp",
+                                         _profile_cache.TOPOLOGY_V2_FIELD: "greedy",
+                                         "wall_ms": 1.0})
+        _forget()
+        written = _data_rows(_table_path(directory))[0]
+        assert written["schema_version"] == "3", ("新行写 3", written)
+        assert written[_profile_cache.TOPOLOGY_V2_FIELD] == "greedy", written
+        row = _profile_cache.read_winner(key)
+        assert row["schema_version"] == "3", row
+        # 等价行也带 schema 版本（它同样按这一版的列集合写）。
+        _profile_cache.write_winner(key, equivalence={
+            "target_equation": "cadb,ac,bd->", "operand_order": [1, 0]})
+        _forget()
+        assert _profile_cache.read_winner(key)["schema_version"] == "3", (
+            "等价行也要记 schema 版本")
+
+        # 老文件：连 ``schema_version`` 这一列都没有。
+        legacy_columns = [name for name in _profile_cache.PROFILE_COLUMNS
+                          if name not in (_profile_cache.TOPOLOGY_V2_FIELD,
+                                          "schema_version")]
+        _write_table_with_columns(
+            directory, [_row(key, kernel="backend", optimize="greedy")],
+            legacy_columns)
+        old = _profile_cache.read_winner(key)
+        assert old is not None, "老行必须仍可用（不降级、不删）"
+        assert old["schema_version"] == "0", ("老行的版本号读作 0", old)
+        assert old["kernel"] == "backend", old
+        assert _read_rows(_table_path(directory))[0] == [
+            "shape", "dtype", "device", "equation", "backend", "kernel", "optimize",
+            "wall_ms", "target_equation", "operand_order", "operand_permutations",
+            "output_permutation", "note", "host", "updated_at", "pyqcd_version"], (
+            "老文件的表头不该被读路径改写")
+
+
 #: 本契约的用例清单（``main`` 与 ``conftest`` 共用）。
 TESTS = (
     test_frozen_names_and_columns,
@@ -646,6 +808,10 @@ TESTS = (
     test_directory_priority_env_over_default_and_configure_over_env,
     test_summary_counts_rows_and_keys,
     test_wall_ms_covers_the_whole_contract_call,
+    test_optimize_leaves_roundtrip_and_legacy_hyphen_normalizes,
+    test_auto_row_warns_once_and_is_not_matched,
+    test_legacy_file_without_topology_v2_column_still_reads,
+    test_schema_version_written_three_and_legacy_rows_read_zero,
 )
 
 

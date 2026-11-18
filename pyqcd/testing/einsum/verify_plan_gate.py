@@ -88,7 +88,7 @@ def test_negative_cache_key_has_all_required_dimensions():
             "ij,jk->ik", ((2, 3), (3, 4)), np.float32, "auto",
             "kupl_dedicated"),
         _kernel_kupl._negative_cache_key(
-            "ij,jk->ik", ((2, 3), (3, 4)), np.float64, "branch-2",
+            "ij,jk->ik", ((2, 3), (3, 4)), np.float64, "branch_2",
             "kupl_dedicated"),
         _kernel_kupl._negative_cache_key(
             "ij,jk->ik", ((2, 3), (3, 4)), np.float64, "auto",
@@ -167,7 +167,7 @@ def test_optimizer_shape_and_dtype_do_not_share_rejections():
             patch.object(_kernel_kupl, "_plan_statistics", _fake_plan_stats), \
             patch.object(_kernel_kupl, "_function_dedicated", lambda: entry):
         _kernel_kupl.try_dedicated("ij,jk->ik", _operands(), optimize="auto")
-        _kernel_kupl.try_dedicated("ij,jk->ik", _operands(), optimize="branch-2")
+        _kernel_kupl.try_dedicated("ij,jk->ik", _operands(), optimize="branch_2")
         _kernel_kupl.try_dedicated("ij,jk->ik", _operands(), optimize="auto")
         _kernel_kupl.try_dedicated(
             "ij,jk->ik",
@@ -201,14 +201,14 @@ def test_explicit_dedicated_plan_switch_is_not_default():
             patch.object(_kernel_kupl, "_function_dedicated", lambda: object()):
         _kernel_kupl.try_dedicated("ij,jk->ik", _operands())
 
-    with _EnvPatch(PYQCD_EINSUM_DEDICATED_PLAN="branch-2"), \
+    with _EnvPatch(PYQCD_EINSUM_DEDICATED_PLAN="branch_2"), \
             patch.object(_kernel_kupl, "_dedicated_cached", planner), \
             patch.object(_kernel_kupl, "_function_dedicated", lambda: object()):
         _kernel_kupl.try_dedicated("ij,jk->ik", _operands())
         _kernel_kupl.try_dedicated(
             "ij,jk->ik", _operands(), optimize="greedy")
 
-    assert seen == ["auto", "branch-2", "greedy"], seen
+    assert seen == ["auto", "branch_2", "greedy"], seen
 
 
 def test_topology_status4_is_cached():
@@ -301,7 +301,7 @@ def test_heavy_cpu_plan_promotes_branch2_only_with_all_round_gains():
     auto = _kernel_kupl._dedicated_plan(
         equation, shapes, dtype_id, "auto")
     branch2 = _kernel_kupl._dedicated_plan(
-        equation, shapes, dtype_id, "branch-2")
+        equation, shapes, dtype_id, "branch_2")
     selected = _kernel_kupl._cheapest_dedicated_plan(
         equation, shapes, dtype_id, True)
 
@@ -323,7 +323,7 @@ def test_heavy_cpu_plan_promotes_branch2_only_with_all_round_gains():
         auto_stats, branch2_stats)
 
     branch2_complex64 = _kernel_kupl._dedicated_plan(
-        equation, shapes, 1, "branch-2")
+        equation, shapes, 1, "branch_2")
     selected_complex64 = _kernel_kupl._cheapest_dedicated_plan(
         equation, shapes, 1, True)
     assert branch2_complex64 is not None, "seq6585 complex64 branch-2 plan unavailable"
@@ -336,7 +336,7 @@ def test_heavy_cpu_plan_promotes_branch2_only_with_all_round_gains():
     equation, shapes = _full_scene_shapes(129)
     best = _kernel_kupl._cheapest_dedicated_plan(
         equation, shapes, dtype_id, False)
-    branch2 = _kernel_kupl._dedicated_plan(equation, shapes, dtype_id, "branch-2")
+    branch2 = _kernel_kupl._dedicated_plan(equation, shapes, dtype_id, "branch_2")
     selected = _kernel_kupl._cheapest_dedicated_plan(
         equation, shapes, dtype_id, True)
     assert best is not None, "seq129 auto/greedy plan unavailable"

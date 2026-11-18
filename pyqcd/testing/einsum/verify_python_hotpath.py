@@ -109,7 +109,10 @@ def test_contract_still_matches_numpy() -> None:
         for term in terms
     ]
     expected = np.einsum(task.equation, *operands, optimize="greedy")
-    got = pe.contract(task.equation, *operands)
+    # 必须显式强制 ``dedicated``：``kernel_force`` 的缺省值已是 ``generic``
+    # （``auto`` 已删除），那条路按设计不下发任何专用内核，``LAST_INFO['path']``
+    # 也就永远是空的——"专用路径确实跑了"这条断言会变成空断言。
+    got = pe.contract(task.equation, *operands, kernel_force="dedicated")
     assert got.shape == expected.shape
     assert np.allclose(got, expected, rtol=1e-10, atol=1e-12)
     assert _kernel_kupl.LAST_INFO.get("path") == "kupl_dedicated"

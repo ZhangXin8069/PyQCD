@@ -213,6 +213,27 @@ for architecture in $ARCHITECTURES; do
     ARCH_LABELS+=("$architecture")
 done
 
+# 拓扑步表：`src/apply_contract.cu` 无条件 `#include "topology_steps.h"`。
+# 该文件由 `python -m pyqcd.einsum.topology_steps_gen --target cuda` 生成，
+# 入库时以 gzip 形式保存（`.h.gz`），这里在编译前解压：
+# **只在 `.h` 缺失或比 `.h.gz` 旧时**才做，于是本地刚生成过 `.h` 的工作树不会被覆盖。
+STEP_TABLE="$SCRIPT_DIR/src/topology_steps.h"
+STEP_TABLE_GZ="$STEP_TABLE.gz"
+if [ ! -f "$STEP_TABLE" ] || { [ -f "$STEP_TABLE_GZ" ] && [ "$STEP_TABLE_GZ" -nt "$STEP_TABLE" ]; }; then
+    if [ -f "$STEP_TABLE_GZ" ]; then
+        _pyqcd_notify "CUDA: unpacking topology_steps.h.gz"
+        if ! gzip -dc "$STEP_TABLE_GZ" > "$STEP_TABLE"; then
+            printf 'error: failed to unpack %s\n' "$STEP_TABLE_GZ" >&2
+            exit 1
+        fi
+    elif [ ! -f "$STEP_TABLE" ]; then
+        printf 'error: topology step table missing: %s\n' "$STEP_TABLE" >&2
+        printf '      generate it: python -m pyqcd.einsum.topology_steps_gen --target cuda\n' >&2
+        printf '      or restore the tracked %s next to it\n' "$(basename "$STEP_TABLE_GZ")" >&2
+        exit 1
+    fi
+fi
+
 mkdir -p "$BUILD_DIR"
 cat > "$VERSION_SCRIPT" <<'MAP'
 {

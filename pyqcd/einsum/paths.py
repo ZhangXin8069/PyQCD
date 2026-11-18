@@ -19,23 +19,76 @@ __all__ = [
 # Public name -> candidate attribute names in ``_plan_py`` (first hit wins).
 # Later candidates are documented fallbacks used when the planner does not
 # provide the specialized variant.
+#
+# The primary spelling uses **underscores** because it is the module attribute
+# spelling (``_plan_py.branch_1``): a name that cannot be looked up exports a
+# ``KeyError`` from ``get_path_fn`` for a perfectly reasonable input.
+# ``branch_1`` first, its hyphen spelling as an alias below.
+#
+# 表里只有**七个叶子**，**拼写统一为下划线**（用户裁定 2026-11-18：
+# "branch* 统一使用下划线，通用性更强"）。连字符拼写 ``branch-1`` 等**不再是可写名字**，
+# 解析时抛 ``KeyError``——保留它只会让同一路径有两条拼写，README 里写哪个、配置表里
+# 存哪个都会漂移。
+#
+# 已删除的名字一律抛 ``KeyError``：``auto``/``auto-hq``（缺省值，不是可写名字，见
+# :data:`_IMPLICIT_DEFAULT_NAMES`）、``eager``/``opportunistic``/``random-greedy``/
+# ``random-greedy-128``（静默等同 ``greedy``）、``branch``（全宽 ``branch_all`` 的
+# 重复入口）、三个连字符 ``branch-*``。
 _BUILTIN_ATTRS: dict[str, tuple[str, ...]] = {
     "optimal": ("optimal",),
     "greedy": ("greedy",),
-    "branch": ("branch",),
-    "branch-all": ("branch_all", "branch"),
-    "branch-2": ("branch_2", "branch"),
-    "branch-1": ("branch_1", "branch"),
+    "branch_all": ("branch_all", "branch"),
+    "branch_2": ("branch_2", "branch"),
+    "branch_1": ("branch_1", "branch"),
     "dp": ("dynamic_programming", "dp", "optimal"),
-    "dynamic-programming": ("dynamic_programming", "dp", "optimal"),
-    "auto": ("auto", "greedy"),
-    "auto-hq": ("auto_hq", "auto", "optimal"),
-    "random-greedy": ("random_greedy", "greedy"),
-    "random-greedy-128": ("random_greedy_128", "random_greedy", "greedy"),
-    "eager": ("greedy",),
-    "opportunistic": ("greedy",),
 }
 
+
+#: ``optimize="none"`` = *no optimizer*. It is not a path search: the caller
+#: sends the one n-ary contraction step (``optimize=False``). The sentinel is a
+#: callable so it survives the "resolves to something callable" contract, and
+#: ``_api`` recognises it instead of asking the planner for a step table.
+def _no_path(
+    inputs: list[Any],
+    output: Any,
+    size_dict: dict[str, int],
+    memory_limit: int | None = None,
+) -> list[tuple[int, ...]]:
+    """The "no optimizer" path: one single step over every operand, in order."""
+    return [tuple(range(len(inputs)))]
+
+
+_NO_PATH = _no_path
+
+_BUILTIN_ATTRS["none"] = ()
+
+#: Names that are **only** ever an implicit default, never a writable spelling:
+#: ``_api.contract``/``contract_path`` normalise ``True``/``None`` to ``"auto"``,
+#: so the planner must still plan it. It is deliberately kept out of
+#: :data:`_BUILTIN_ATTRS` (hence out of :data:`PATH_OPTIONS`) so that
+#: ``get_path_fn("auto")`` raises like every other removed name — ``_api._find_path``
+#: decides "planner or registry" with :func:`is_builtin_path_name`, which is the
+#: one place that has to know about this entry.
+_IMPLICIT_DEFAULT_NAMES: frozenset[str] = frozenset({"auto"})
+
+#: The **advertised** names — the ones a caller should write. Hyphen spellings are
+#: aliases, not part of this list; they resolve to the same objects as their
+#: underscore counterparts.
+PATH_OPTIONS_MAIN: frozenset[str] = frozenset({
+    "greedy",
+    "optimal",
+    "dp",
+    "branch_1",
+    "branch_2",
+    "branch_all",
+    "none",
+})
+
+#: Every name :func:`get_path_fn` answers: the seven leaves plus the spellings kept
+#: for existing callers — the hyphen aliases ``branch-1``/``branch-2``/``branch-all``
+#: and ``dp``'s ``dynamic-programming``. Nothing else is in here: the degenerate
+#: aliases (``eager``, ``opportunistic``, ``random-greedy*``), ``branch`` and the
+#: default-only ``auto``/``auto-hq`` all raise ``KeyError``.
 PATH_OPTIONS: set[str] = set(_BUILTIN_ATTRS)
 
 _REGISTERED: dict[str, Callable[..., Any]] = {}
@@ -94,9 +147,17 @@ PathOptimizer = _path_optimizer_base()
 
 
 def is_builtin_path_name(name: str) -> bool:
-    """Whether ``name`` is served by :mod:`pyqcd.einsum._plan_py`."""
+    """Whether ``name`` is planned by :mod:`pyqcd.einsum._plan_py`.
+
+    True for the registered builtins **and** for :data:`_IMPLICIT_DEFAULT_NAMES`
+    (``auto``): the planner does serve the default value, it just is not a name a
+    caller may write. Registered names are not builtin — ``register_path_fn`` must
+    keep overriding a name that the planner could otherwise also answer.
+    """
     key = name.lower()
-    return key in _BUILTIN_ATTRS and key not in _REGISTERED
+    if key in _REGISTERED:
+        return False
+    return key in _BUILTIN_ATTRS or key in _IMPLICIT_DEFAULT_NAMES
 
 
 def register_path_fn(name: str, fn: Callable[..., Any]) -> None:
@@ -110,13 +171,27 @@ def register_path_fn(name: str, fn: Callable[..., Any]) -> None:
 
 
 def get_path_fn(name: str) -> Any:
-    """Get the path finding function registered as ``name``."""
+    """Get the path finding function registered as ``name``.
+
+    Every name in :data:`PATH_OPTIONS` resolves: the seven leaves, the hyphen
+    aliases (``branch-1`` ≡ ``branch_1``: the **same** object, not a second
+    implementation), ``dynamic-programming`` ≡ ``dp``, and ``none``, which
+    resolves to :data:`_NO_PATH` — the "no optimizer" sentinel — instead of
+    raising ``KeyError``.
+
+    ``auto`` is **not** a name: it is ``optimize``'s default value
+    (:data:`_IMPLICIT_DEFAULT_NAMES`), so it raises like any other removed
+    spelling. Every removed name raises ``KeyError`` listing the legal options.
+    """
     key = name.lower()
 
     try:
         return _REGISTERED[key]
     except KeyError:
         pass
+
+    if key == "none":
+        return _NO_PATH
 
     candidates = _BUILTIN_ATTRS.get(key)
     if candidates is not None:

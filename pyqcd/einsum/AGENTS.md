@@ -91,47 +91,43 @@ largest_intermediate`；
 
 ### 3.1 对外 `optimize` 取值（硬性约定，2026-11-17）
 
-> **qcd-einsum 对外提供的 `optimize` 取值只有 6 个：`auto / none / greedy / optimal / dp / branch`。**
-> `auto` 为默认值（选择器：按算子数查表，≤8 算子且 opt_einsum 可用时改用其 DP 结果）。
-> `none` = 按方程原序（亦可用 `optimize=False` 表示）。`branch` = 全宽分支定界（≡ 内部 `branch_all`）。
-> 内部另有窄宽变体 `branch_1` / `branch_2`，**仅供 `auto` 使用，不属于对外取值**。
-> `auto-hq`（≡`auto`）、`eager`/`opportunistic`/`random-greedy`/`random-greedy-128`（≡`greedy`）
-> 为**退化别名**，不属于对外约定；`branch-1`/`branch-2`/`branch-all` 属**待清除的历史名字**。
+> **qcd-einsum 对外提供的 `optimize` 取值只有 7 个：`greedy / optimal / dp / branch_1 / branch_2 / branch_all / none`。**
+> 不写 `optimize` 时走内置选择器 `auto`（按算子数查表，≤8 算子且 opt_einsum 可用时改用其 DP 结果）；`auto` 是**缺省值而不是可写取值**，CLI 与配置表都不接受它。
+> `none` = 按方程原序（亦可用 `optimize=False` 表示）。`branch_1` / `branch_2` / `branch_all` = 分支定界的窄/全宽变体，三者都是对外取值。
+> `branch-1` / `branch-2` / `branch-all`（下划线主名的连字符拼写）与 `dynamic-programming`（≡ `dp`）是**兼容别名**，与主名解析到同一个函数对象，不算独立名字。
+> `auto-hq` / `eager` / `opportunistic` / `random-greedy` / `random-greedy-128` 已**从名字面删除**，`paths.get_path_fn` 一律抛 `KeyError`。
+> 契约：`pyqcd/testing/_einsum_optimize_surface_contract.py`（本节逐字一致）与 `_einsum_optimize_leaves_contract.py`（运行时名字面）。
 
-**现状（2026-11-17 核对）**：`paths.PATH_OPTIONS` 有 14 个名字，
-`PATH_OPTIONS − {auto, greedy, optimal, dp, branch}` **恰好**是下面 9 个；
-`none` **不在**注册表 —— `_api._normalize_optimize("none")`（`_api.py:146`）把它归一成
-`False`，与 `optimize=False` 共用"整条链一次 n 元 einsum"那条路径（`_api.py:281` 早返回，
-**不会**走到 `get_path_fn`）。所以 `paths.get_path_fn("none")` 现在**抛 `KeyError`**，
-这是现状、不是缺陷：对外 6 个里只有它不经注册表。
+**现状（2026-11-18 核对）**：`paths.PATH_OPTIONS` 有 11 个名字 = 7 叶子 + 4 个兼容
+别名（下表）。`paths.PATH_OPTIONS_MAIN` **恰好**是那 7 个叶子；`none` 在注册表里的
+值是 ``paths._NO_PATH`` 哨兵（"不规划"），与 ``optimize=False`` 共用"整条链一次
+n 元 einsum"那条路径（``_api._normalize_optimize("none")`` 归一成 ``False``）。
+`auto` **不在**名字面（``paths.get_path_fn("auto")`` 抛 ``KeyError``），只在
+``paths._IMPLICIT_DEFAULT_NAMES`` 里供缺省调用使用。
 
 | 名字 | 现状标注 |
 |---|---|
-| `auto-hq` | 退化别名 ≡ `auto`（同一函数对象） |
-| `dynamic-programming` | 退化别名 ≡ `dp`（同一函数对象） |
-| `eager` | 退化别名 ≡ `greedy`（同一函数对象） |
-| `opportunistic` | 退化别名 ≡ `greedy`（同一函数对象） |
-| `random-greedy` | 退化别名 ≡ `greedy`（同一函数对象） |
-| `random-greedy-128` | 退化别名 ≡ `greedy`（同一函数对象） |
-| `branch-all` | 待清除（≡ `branch`，全宽；注册表里仍是独立名字） |
-| `branch-1` | 待清除（窄宽变体 `nbranch=1`，仅供 `auto`） |
-| `branch-2` | 待清除（窄宽变体 `nbranch=2`，仅供 `auto`） |
+| `branch-1` | 兼容别名 ≡ `branch_1`（同一函数对象） |
+| `branch-2` | 兼容别名 ≡ `branch_2`（同一函数对象） |
+| `branch-all` | 兼容别名 ≡ `branch_all`（同一函数对象） |
+| `dynamic-programming` | 兼容别名 ≡ `dp`（同一函数对象） |
 
-**判据不是"能跑就行"**：`_plan_py._AUTO_CHOICES`（`_plan_py.py:769-777`）用
+**判据不是"能跑就行"**：``_plan_py._AUTO_CHOICES`` 用
 1–4→`optimal`、5–6→`branch_all`、7–8→`branch_2`、9–14→`branch_1`、≥15→`greedy` 查表，
-之后 `auto` 再用 `_reference_dp_path`（`_plan_py.py:794`，`len(inputs) > 8` 即放弃）覆盖成
+之后 `auto` 再用 ``_reference_dp_path``（``len(inputs) > 8`` 即放弃）覆盖成
 `opt_einsum` 的 DP 结果——这就是"按算子数查表 + ≤8 算子改用 DP"那两句话的实现。
-`branch-1`/`branch-2` 只出现在这张表里，任何对外入口传这两个名字都属于越界。
+``auto`` 只作为**缺省值**存在于这条链上，任何对外入口传它都属于越界（CLI 的
+``--optimize`` 因此把它列在 ``choices`` 之外，缺省值写 ``None`` = "未指定"）。
 
-**清理顺序（有一条真实依赖，别直接删）**：`_kernel_kupl.py:1396` 的
-`_dedicated_plan(subscripts, shapes, dtype_id, "branch-2")` 把历史名字原样送进
-`contract_path`（`_kernel_kupl.py:1132-1137`），它是 heavy-arena 条件提升的唯一入口。
-删 `branch-2` 之前先把这里改成内部 `_plan_py.branch_2` 可调用对象，否则那条提升会
-静默失效（`_dedicated_plan` 的 `try` 会把异常吞成 `None`）。
+**生成侧 ``auto`` ≠ 用户侧 7 叶子**：两张编译期步表（``_topology_gen_common``）在
+**生成期**固定用 ``auto`` 定型收缩序，那是"求最好序"的选择器；用户侧能写的仍是
+这 7 个叶子，该写哪个由 ``--tune`` 的实测结论决定。
 
 契约：`pyqcd/testing/_einsum_optimize_surface_contract.py`（**4 项**：`get_path_fn` 解析、
-`contract()` 六名字数值 rel ≤1e-12、集合**恰好**这 6 个且多余名字逐条标注、
-三份文档逐字一致）。清理这 9 个名字时**先改契约的 `DEGENERATE` / `TO_BE_REMOVED`**再改实现。
+`contract()` 七名字数值 rel ≤1e-12、集合**恰好**这 7 个且别名逐条标注、
+三份文档逐字一致）与 `_einsum_optimize_leaves_contract.py`（**8 项**：运行时名字面、
+``PATH_OPTIONS_MAIN``、已删拼写必须抛错、``none`` 的内核语义、``auto`` 只是缺省值）。
+改名字面时**先改这两个契约**再改实现。
 
 ## 4. 规划器内部接口
 
@@ -358,24 +354,32 @@ float32）直接落通用分步路径（`_TOPOLOGY_DECLINED_DTYPES`）。
 记在这里；用法与排查见 `skills/pyqcd-einsum/SKILL.md`，用户视角见
 `docs/einsum_user_guide_20261116.md` §11。
 
-**取值**（`_kernel_force.parse`，`:127`）：
+**取值**（`_kernel_force.parse`）——**四个强制值，没有 `auto`**：
 
-| 取值 | `forced_labels()` | 分派行为 |
-|---|---|---|
-| `auto` / `None` / 空串 | `None` | 原次序（`*_dedicated` → `*_topology`），失败**只** `RuntimeWarning` + 回落 |
-| `generic` | `()` | 完全不调 `_run_specialized_kernel`、不发 warning，直接通用路径 |
-| `dedicated` / `topology` | `(label, ...)` | **只**试这些、按书写次序；跑不成就抛 `KernelUnavailableError` |
-| `backend` | `('backend',)` | **不进**专用分派，直接 `_backend_einsum(parse_backend(...), …)`：跳过 `_specialize` 与等价改写，也不沿用调用方 `optimize=`（多操作数时 `_backend_einsum` 自己传 `optimize=True`，见 `:804`）；与其它标签互斥 |
+| 取值 | `resolve()` 返回 | `forced_labels()` | 分派行为 |
+|---|---|---|---|
+| `generic`（缺省） | `('generic',)` | `()` | 完全不调 `_run_specialized_kernel`、不发 warning，直接通用路径 |
+| `dedicated` / `topology` | `(label, ...)` | `(label, ...)` | **只**试这些、按书写次序；跑不成就抛 `KernelUnavailableError` |
+| `backend` | `('backend',)` | `('backend',)` | **不进**专用分派，直接 `_backend_einsum(parse_backend(...), …)`：跳过 `_specialize` 与等价改写，也不沿用调用方 `optimize=`（多操作数时 `_backend_einsum` 自己传 `optimize=True`）；与其它标签互斥 |
 
-`dedicated` / `topology` 是**逻辑名**，`KERNEL_LABELS`（`:64`）恰为这两个；具体标签由
-操作数后端在 `_api._resolve_forced_labels`（`:676`）里解析：numpy →
+**为什么不提供 `auto`（2026-11-18 用户决策）**：`kernel_force` 是**强制**属性，不该带
+一个"未指定 → 自动分派"的隐藏档。自动选路交给 `--tune` 的**实测结论**：tune 在同一
+方程/形状/dtype/设备/后端上遍历 `kernel_force × as_equivalence × optimize`，把胜出的那一组
+写进配置表（`_profile_cache`），普通调用按表施加。留 `auto` 会让同一进程里出现两套互相
+竞争的选路规则（运行时猜的分派次序 vs 表里的实测结论），而"到底谁说了算"在报告里看不
+出来。现在写 `auto`（大写、或混在逗号列表里）直接 `ValueError`，正文点名 **tune** 并列出
+`backend, dedicated, generic, topology`；拼错的标签得到同一条消息。
+
+`dedicated` / `topology` 是**逻辑名**，`KERNEL_LABELS` 恰为这两个；具体标签由
+操作数后端在 `_api._resolve_forced_labels` 里解析：numpy →
 `kupl_dedicated` / `kupl_topology`，cupy → `cuda_dedicated` / `cuda_topology`（角色取自
 `label.rpartition("_")[2]`，不写死第二份后端表，解析只发生在 attempt 过滤处）。
-解析细节：去空白、大小写不敏感、保序去重、`auto` 在列表里被忽略（`auto,topology`
-等价于 `topology`）；`generic` 与 `backend` 都**不许**与其它标签混写（`ValueError`）；
-未知标签抛 `ValueError` 且**列出合法集合** `auto, backend, dedicated, generic, topology`
+解析细节：`None`/空串 → `generic`（缺省即强制通用路径）；`0/false/off/no` 是生态里
+"关掉这个功能"的既有拼写，同样落到 `generic`（**不是** `auto` 的替身）；去空白、
+大小写不敏感、保序去重；`generic` 与 `backend` 都**不许**与其它标签混写（`ValueError`）；
+未知标签抛 `ValueError` 且**列出合法集合** `backend, dedicated, generic, topology`
 ——静默忽略拼写错误会让用户以为强制生效了。旧的具体标签（`kupl_dedicated` 等）已
-不再被接受（`ALLOWED_LABELS`，`:70`）。
+不再被接受（`ALLOWED_LABELS`）。
 
 **迁移表**（旧 → 新，只有这四条）：
 
@@ -388,6 +392,19 @@ float32）直接落通用分步路径（`_TOPOLOGY_DECLINED_DTYPES`）。
 `cuda_dedicated` / `cuda_topology` 在那里是**运行时真实路径名**，由执行层写入（也是
 `kernel   :` 那行的值），不是用户输入，不随这次取值收窄而改名。
 
+`kupl_topology_v2` 是 `topology` 的回退路线，不是独立内核。用户视角（与
+`docs/einsum_user_guide_20261116.md` §1.3、`skills/pyqcd-einsum/SKILL.md` 同一口径）：
+
+> **用户只需要选 `topology`。** `topology` 内部有两条执行路线：
+> ① 命中编译期步表 → **v3**（per-拓扑 GEMM 分步，快）；
+> ② 该拓扑/形状没有编译步表 → 回落通用执行器 → **v2**（仍为原生执行，无 Python 逐步骤调度）。
+> 两条都是**同一个内核**，用户不可选、也不需要选；`LAST_INFO['path']` / `route` 会如实显示
+> 实际走了哪条（`kupl_topology` = v3，`kupl_topology_v2` = v2 回落）。
+> **`kupl_topology_v2` 不是独立内核，不出现在 `kernel_force` 里。**
+
+维护者归因时仍要按这两个 `path` 分组（§9 的 v3/v2 统计口径照旧），只是别把它当成
+第二个可选项。
+
 **命中提示是两段，别把 `[match: …]` 读成执行内核**：`[match: <形态族>]` 是命中的形态
 （`topology:<摘要>` 的族名），`[kernel: <路线>]` 才是实际执行的路线（值取自
 `LAST_INFO['path']`；没跑成内核写 `[plan-cache]`）。语料形态默认**先试 `*_dedicated`、
@@ -396,36 +413,36 @@ float32）直接落通用分步路径（`_TOPOLOGY_DECLINED_DTYPES`）。
 两段与 `[pyqcd.einsum]` 前缀、形态名一样是**机器段**，`en`/`zh` 逐字相同；改
 `_specialize.announce` 的格式必须同步改 `_einsum_notice_kernel_label_contract`。
 
-**优先级**：显式 `kernel_force=` > `PYQCD_EINSUM_KERNEL_FORCE` > 未设（= `auto`），
-由 `_kernel_force.resolve`（`:171`）判定。取值在**调用时**解析，同进程内改环境变量
-即时生效。注意 `--kernel-force auto` 与"不给"不同：显式 `auto` 会把环境变量**压掉**
-（`resolve("auto")` → `()`，而 `resolve(None)` 仍读环境变量）。
+**优先级**：显式 `kernel_force=` > `PYQCD_EINSUM_KERNEL_FORCE` > 缺省 `generic`，
+由 `_kernel_force.resolve` 判定。取值在**调用时**解析，同进程内改环境变量即时生效。
+`resolve()` **永远返回非空元组**——"未指定"不是第四态，它就是 `generic`；`forced_labels()`
+不再返回 `None`（`generic` → `()`，表示没有专用内核要试）。CLI 的 `--kernel-force` 缺省
+也已是 `generic`（不再是 `None`），所以 CLI 总以显式值参战；环境变量对
+`contract(kernel_force=None)` 的 **API** 调用仍然生效。
 
-**接线**（`_api.contract`）：`forced = _kernel_force.forced_labels(kernel_force)`
-（`:1080`）之后分四条互斥分支——
+**接线**（`_api.contract`）：`forced = _kernel_force.forced_labels(kernel_force)` 之后分
+三条互斥分支（没有"未强制"的分支了）——
 
 - `forced == ('backend',)`：**早返回**，`_backend_einsum(parse_backend(operands, backend), …)`
-  一步也不进 `_specialize` / 等价改写（`:1091`）；
-- `forced == ()` 且**不是**画像给的（`generic_only`）：**不匹配、不改写、不提示**——
+  一步也不进 `_specialize` / 等价改写；
+- `forced == ()`（`generic`，**缺省即此**）：**不匹配、不改写、不提示**——
   `_specialize.match` 一次都不调、等价改写整段跳过（`and not generic_only` 那道门）、
   `announce` / `announce_generic` 都不打；只把线程档设成 `generic`，并把 `_LAST_KERNEL`
-  记成 `requested=generic / ran=None / attempted=()`（"一次没试"要如实）。省的是
-  **时间**：方程、dtype、形状与结果一个不动；
-- `forced == ()` 但**来自画像**（`forced_by_profile`）：执行路线**逐字不变**（照旧匹配、
-  照旧可能改写），只由 `quiet_profile` 静音提示。画像的 `generic` 是**计时结论**，
-  不是"关掉等价改写"这种语义指令——把它当指令会顺手关掉一条独立开关
-  （`_einsum_as_equivalence_cache_contract` 要求 env=1 时仍真的查一次映射）；
-- `forced` 非空：`_run_forced_kernel`（`:699`）先按后端把逻辑名解析成具体标签
-  （`_resolve_forced_labels`，`:676`）再按次序真试，失败即抛
-  （`:1132`、`:1162` 两处，后者覆盖"语料没命中却强制了标签"）；
-- `forced is None`：原有分支逐字不变（`:1136`）。
+  记成 `requested=() / ran=None / attempted=()`（"一次没试"要如实）。省的是
+  **时间**：方程、dtype、形状与结果一个不动。画像给出的 `generic` 建议走同一条执行
+  路线、只多一层提示静音（画像的 `generic` 是**计时结论**，不是"关掉等价改写"这种
+  语义指令——把它当指令会顺手关掉一条独立开关）；
+- `forced` 非空：`_run_forced_kernel` 先按后端把逻辑名解析成具体标签
+  （`_resolve_forced_labels`）再按次序真试，**跑不成即抛** `KernelUnavailableError`
+  （含"语料没命中却强制了标签"那条路径）——不做静默回落，也没有"未强制 → warning
+  回落"的兼容分支。
 
-> **与 `docs/einsum_production_optimization_*` 的一致性（2026-11-17 核对）**：那两份文档
-> 早于 `kernel_force` 取值收窄（`auto/dedicated/topology/generic/backend`），通篇**只**
-> 出现 `generic` / `dedicated` 这类**运行时路径名**（`kupl_dedicated` 等），没有任何
-> "旧取值可作输入"的表述——所以**不存在冲突**。判断标准只有一条：**输入侧**只认
-> `ALLOWED_LABELS`（`:70`）这五个；**输出侧**（`LAST_INFO['path']`、`kernel   :` 行、
-> `route :` 行）仍是 `kupl_*` / `cuda_*` 具体标签，不随取值收窄而改名。代码为准。
+> **与 `docs/einsum_production_optimization_*` 的一致性（2026-11-18 复核）**：那两份文档
+> 通篇**只**出现 `generic` / `dedicated` 这类**运行时路径名**（`kupl_dedicated` 等），
+> 没有任何"旧取值可作输入"的表述——所以**不存在冲突**。判断标准只有一条：**输入侧**
+> 只认 `ALLOWED_LABELS` 这四个强制值（`backend, dedicated, generic, topology`）；
+> **输出侧**（`LAST_INFO['path']`、`kernel   :` 行、`route :` 行）仍是 `kupl_*` /
+> `cuda_*` 具体标签，不随取值收窄而改名。代码为准。
 
 **与既有开关的关系**（不是互斥，是不同层）：
 
@@ -483,8 +500,11 @@ kernel : requested=<auto|generic|label,...>  ran=<label|none>  attempted=<label,
 **踩坑**：`verify_specialized --kernel-force` **不做收缩**，所以它的 `ran` 恒为
 `unknown`——`--kernel-force` 在那儿只决定报告里出不出这一行、以及 `requested=`
 显示什么。要真跑内核只能用 `python -m pyqcd.einsum.test --kernel-force <value>`。
-契约：`pyqcd/testing/_einsum_kernel_force_contract.py`（**9 项**，纯选路断言、
-零计时）。
+契约：`pyqcd/testing/_einsum_kernel_force_explicit_contract.py`（**5 项**，取值口径：
+`auto` 报错并点名 tune、`None`/空串 → `generic`、CLI 缺省 `generic`、环境变量 `auto` 同样
+报错、四个合法标签按书写次序）。`pyqcd/testing/_einsum_kernel_force_contract.py`（旧 9 项，
+含 `auto` 三态、`requested is None` 的断言）与 2026-11-18 决策冲突，其 auto 相关用例
+**须随 `_api` 接线合并时重基线**——代码以本节为准。
 
 ### 9.1c 自动施加等价写法 + 缓存（2026-11-16）
 
@@ -570,7 +590,7 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
 | 读侧（普通调用） | 0 行 → `None`（按现有逻辑执行）；1 行 → 该行副本（带 `line`：数据行号，1-based）；多行 → `DuplicateProfileEntry`（stderr 打印全部候选后向上冒泡）；**文件不存在 → `ProfileMissing`，`_api` 每进程一次警告"需要先 tune"+ 该键的 tune CLI 命令，然后继续无命中执行**。其他读失败只记 `last_error()` 并按未命中 |
 | 写侧（只有 tune） | `write_winner(key, config, equivalence=None, note="")`：读整表 → 删同键所有行 → 只写 1 行 → 临时文件 + `os.replace` 原子替换。**绝不 append**：这就是"同键只允许 1 行"的唯一实现 |
 | 未 tune 时 | 表**本来就是空的**（文件都不存在）。缺表不是错误、也不会顺手建表：读侧每进程警告一次"需要先 tune" + 该键的 tune 命令，然后**继续无命中执行** |
-| 冲突 | 命中行的 `kernel` / `optimize` / 等价载荷与**用户显式给的** `kernel_force=` / `optimize=` / `as_equivalence=` 冲突 → 抛 `ProfileConflict`（消息带表值与请求值、记录所在 `<file>:<行号>`），**向上冒泡到 CLI**（非零退出），不静默让任何一方胜出。判据只算**显式且非 `auto`** 的实参：`--compare` 不参与，显式 `auto` 等于没给；`out=` / `specialize=False` 只让内核建议"不施加"，不是冲突 |
+| 冲突 | 命中行的 `kernel` / `optimize` / 等价载荷与**用户显式给的** `kernel_force=` / `optimize=` / `as_equivalence=` 冲突 → 抛 `ProfileConflict`（消息带表值与请求值、记录所在 `<file>:<行号>`），**向上冒泡到 CLI**（非零退出），不静默让任何一方胜出。判据只算**显式**的实参：`--compare` 不参与；`optimize` 的 `auto` 等于没给（`kernel_force` 已无 `auto` 档，`None` 即 `generic`）；`out=` / `specialize=False` 只让内核建议"不施加"，不是冲突 |
 | 施加面 | 命中只填三个槽：`force`（内核逻辑名，`_api._profile_force_label` 从具体标签反推）、`optimize`、`equivalence`（等价行→可直接施加的改写载荷）。**方程、dtype、形状与数值一概不动**；调用方已给 `kernel_force` / `out=` / `specialize=False` 时命中只记录不施加（显式要求优先） |
 | 失败回退 | 画像建议跑不成 → `_profile_retry` 带 `profile=False` 退回原分派一次，**不**向调用方抛 `KernelUnavailableError`（用户自己强制的标签仍照旧抛） |
 | 命中输出 | 命中并施加时只打一行，钉到具体记录：`[pyqcd.einsum] profile hit: <pyqcd.einsum.profile.csv 绝对路径>:<数据行号> kernel=… optimize=… wall_ms=… (applied)`（中文口径 `profile 命中：…（已套用）`）。同一 `(方程, 形状, kernel, optimize)` **每进程一行**；`PYQCD_EINSUM_NOTICE=0` 整条静音；`route :` / `kernel :` 等结果行照旧 |
@@ -638,9 +658,10 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
    一律未命中（量的是被测配置自己的耗时，不是历史命中），写侧**静默不写**（不排队）：
    胜出配置在 `with` 块**之外**写一次。
 2. 锁定键 `(shape, dtype, device, equation, backend)`，遍历其余性能维度：
-   `kernel_force ∈ {auto, dedicated, topology, generic, backend}` ×
-   `as_equivalence ∈ {true, false}` × `optimize ∈ {auto, greedy, optimal}`，共 **30 组**
-   （`test.tune_combos()`；CLI 的 `--tune` 报错上限也是 30）。
+   `kernel_force ∈ {generic, dedicated, topology, backend}` ×
+   `as_equivalence ∈ {true, false}` × `optimize ∈ {auto, greedy, optimal}`，共 **24 组**
+   （`test.tune_combos()`；CLI 的 `--tune` 报错上限仍是 30）。`auto` 已从
+   `kernel_force` 轴删除（2026-11-18）：该轴现在遍历的就是全部四个强制值。
 3. 单次调用 `timeout` 缺省 **30 s**（`--tune-timeout`）；**异常 / 超时 / MISMATCH 只打印、
    不退出**，继续遍历下一组。
 4. 遍历结束按 `wall_ms` 选最优，按 §3.3 三种情形写行（最优来自不等价 → 原 equation 写
@@ -694,7 +715,7 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--backend` | `auto` | 原样传给 `contract(backend=...)`；可选 auto/numpy/cupy/torch/kupl/cuda |
 | `--compare` | `numpy` | 参照：numpy / opt_einsum / **backend**（跨后端互证）/ none |
 | `--compare-optimize` | `auto` | **只看参照**的收缩序优化器：auto / greedy / dp / optimal / branch-all / branch-2 / branch-1。`auto` = 沿用旧行为（numpy→`greedy`，opt_einsum→`greedy` 或跟随 `--optimize`）。两库名字不通用、**不做跨库重映射**：numpy 只认 `greedy`/`optimal`（`dp`/`branch-*` 报用法错误，退出码 2）；opt_einsum 按 `oe.paths` 注册表校验。`--compare backend`/`none` 下无效（verbose 提示，不报错） |
-| `--optimize` | `auto` | 同 `contract(optimize=...)`，**只管主路径** |
+| `--optimize` | 不写（内部按 `auto`） | 7 叶子之一：`greedy`/`optimal`/`dp`/`branch_1`/`branch_2`/`branch_all`/`none`，**只管主路径**。`auto` 不在 `choices` 里（它是缺省选择器，显式写它以退出码 2 结束）；缺省值是 `None` = "未指定"，`main` 再还原成 `auto` 交给 `run()` |
 | `--specialize` | `auto` | 专用内核三态：`auto`=跟随 `PYQCD_EINSUM_SPECIALIZE`；`true`=强制特化路径；`false`=**强制通用路径**（排查原生内核问题的第一手段）。主路径与 `--compare backend` 的参照路径同时生效 |
 | `--equivalence` | `auto` | 等价写法报告三态：`auto`=跟随 `PYQCD_EINSUM_EQUIVALENCE`（**缺省开启**，只有 `0/false/off/no` 才关闭）；`true`=总是查；`false`=不查。方程未命中任何特化路径、但存在能命中的等价写法时，`--verbose true` 的明细多一段 `equiv`：改写后的方程 + **输入侧张量调整**（`transpose(perm)` / `order=[...]`，无调整写 `-`）+ **输出侧结果回填**（`transpose(perm)`，无则写 `-`）。已命中特化的方程不出该段；没有等价写法时明写「无」。`--json` 多一个 `equivalence` 字段（`_equivalence.explain()` 原样），关闭时缺该字段。**只做报告**：不改 `contract()` 行为、不进计时区域、不改任何数值与耗时 |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一，不是逐元素绝对阈值） |
@@ -782,7 +803,8 @@ PASS ... 20.943ms (ref 1489.477ms, 0.01x)  vram+3909MiB
 <2×"把这个结构性要求钉住。
 
 `kernel` 字段直接暴露走的哪条原生路线（`kupl_dedicated` / `cuda_topology` /
-`kupl_topology` / `kupl_topology_v2`），省去再翻 `LAST_INFO`。
+`kupl_topology` / `kupl_topology_v2`），省去再翻 `LAST_INFO`。`kupl_topology_v2` 是
+`topology` 的回退路线，不是独立内核（用户只选 `topology`，见 §9.1b）。
 
 **分工**：本入口负责"单点排查"；`python -m pyqcd.testing` 负责"全量回归"。
 两者不可互相替代——前者答一条方程对不对、多快，后者答整库有没有退化。
@@ -1328,3 +1350,91 @@ CUDA 拓扑入口是**另一套实现**（`cpp/cuda/einsum/src/apply_contract.cu
 
 **回归**：`python -B -m pyqcd.testing` → 128 passed / 1 skipped / 0 failed；
 `form-large-files-check` 通过（5 个暂存文件，无超限）。
+
+### 6.5 语料追加：`python -m pyqcd.einsum.wick_tasklist_add`（2026-11-18）
+
+`pyqcd/einsum/_wick_tasklist.py` 是图纸 `refer/sush/wick_12cases.md` 的**生成物**
+（8638 条、2.3 MB），请勿手改。新增特化方程走独立 CLI，**不是**给那份文件加 `--add`：
+
+```bash
+python -m pyqcd.einsum.wick_tasklist_add "<描述> <case 名> <equation> <roles 逗号分隔>"
+```
+
+参数是**一个整串**，按空白切分后：含 `->` 的 token 是 `equation`（必须恰好一个 `->`
+且输入数 == roles 数，否则退出码 2 且不写盘）；其后唯一 token 是 `roles`；其前最后一个
+token 是 case 名（写 `subsection`）；更前面的全部是描述（写 `section`）。
+
+- **顺延**：`seq = N + 1`、`tid = f"T{seq:05d}"`；**已有条目一律不重排**（seq 稳定）。
+- **`line = 0`** 是「非图纸来源」哨兵（图纸从 1 起编号）。因此
+  `base_table_count()` 的判据是 `0 < line <= 2805`——加下界是为了让哨兵行**不**被
+  算进基础表 2582 条；改那个函数时别把下界去掉。
+- **幂等**：同 `equation` + 同 `section` 已存在 → 打印既有条目、退出 0、不写盘。
+- **条数同步**：docstring 的 `共 **8638** 条` 与 `（1…8638）` 随写入自动 +1。
+- **形状**：`peram → [4,4,100,100]`、`gamma`（含 `C*gamma_*`）→ `[4,4]`、
+  `VDV → [100,100]`、`VVV → [100,100,100,100]`；按**前缀**匹配，绑定次序同
+  `bench_specialized._label_sizes`——先 gamma/VDV/VVV 钉标签，`peram` 只补余。
+  标签个数由 equation 决定（实测：`peram` 恒 4；基础表 `gamma` 2 / `VDV` 2 /
+  `VVV` 3；附录 `gamma` 2–3 / `VDV` 2–3 / `VVV` 3–4），**不按标称轴数硬卡**。
+  语料里前缀写作 `C * gamma_B`（带空格），两种拼写都接受。
+
+**追加会使生成物失配**：`_dedicated_step_tables.verify_alignment()` 比对的是
+`equation` 串联 crc32 **且** `len(_lines()) == N_TASKS`，追加一条后新增方程既无
+步表行、crc32 也变（实测 8639 行 → crc32 3103478534 ≠ `FINGERPRINT` 1337506964），
+该校验立刻返回 False。同理 `_topology_registry.N_ENTRIES = 8638` 与
+`_topology_kernel_gen.MAX_KERNELS = 8638` 都是定值。**追加只登记"待实现"的式子**，
+要让新方程真走原生路径必须重跑三个生成器（见 §6.4 / `skills/pyqcd-einsum`）。
+
+## 10. 收敛重构经验（2026-11-18）
+
+判据与流程的全文见 `docs/einsum_framework_convergence_20261118.md`，
+时间线与原始输出见 `logs/einsum-framework-convergence-20261118.txt`。
+
+### 10.1 死代码判据
+
+- **入口可达 ≠ 看起来没人用**：`e4_fused`/`sandwich` 藏在 `PYQCD_CUDA_FUSED` 门后，
+  探针打开后真实打印 `[fused-hit]`。判死要"沿调用链走到入口且入口可达"。
+- **`QCD_CUDA_LOCAL`/弱符号在 Python 侧 grep 为 0 是常态**：`qcd_cuda_permute`
+  （pack/unpack）等 4 个 provider 由 `dedicated_apply.cu` 消费，Python 命中 0 不判死。
+- **源码与产物不一致时先重建再判**：`.so` 比源码旧、或产物含源码中不存在的字符串时，
+  任何"产物里有哪些分支"的结论都不可靠。
+
+### 10.2 删除与迁移
+
+- **删 C++ 只认隔离 A/B**：`git archive <HEAD>` 建树 + 只换 `.so`，两组计数须一致；
+  只跑当前工作树会被并行 Python 改动带偏（本例 144/1/0 vs 144/1/0）。
+- **删符号先 `grep` 全仓**（含 `pyqcd/testing/**` 契约）：`AUTO_LABEL` 删后 `_api`
+  三处引用让每个带 `optimize` 列的命中行都撞 `AttributeError`。
+- **删死码要给 grep 前后计数**；**迁移验收**＝唯一定义 + `nm -u` 无未解析 + 导出表无增减。
+
+### 10.3 三态/开关语义
+
+- **"用户真的给过"要用显式布尔位**：`forced_labels(None)` 返回 `()` 与"显式 generic"
+  同值，拿取值反推会让默认调用被判成显式（`_api.py:1805` 的 `caller_force_given`）。
+- **字符串开关必须显式解析**：`bool("false") == True`；`_normalize_as_equivalence`
+  是正确写法，读侧把外部字符串直接交给 `bool()` 都是 bug。
+- **`optimize="auto"` 在两个内核是两套算法**（generic 按算子数查表；dedicated 按 FLOPs
+  取小 + 极端 arena 提升 branch-2）——同名不同义正是要用 tune 实测结论替代它的理由。
+
+### 10.4 路线、文案与基线
+
+- **`kupl_topology` vs `kupl_topology_v2` 是路线不是内核**：判据是原生 `run_specialized`
+  的 5 道门，`2582/2583` 只是历史观察值；缺自证符号就 fail closed。
+- **改文案要跑 `--help`**：`RawDescriptionHelpFormatter` 不渲染 markdown，`**x**` 原样打出；
+  方程里的 `->x` 还会被 shell 当重定向（`src/todbfn` 即由此产生）。
+- **基线只在同一环境可比**：`pyqcd-test` 缺 scipy 跑不了全套；本机实测 134/1/11 才是
+  基线，须做"改前/改后同环境"对比（145/1/0）。
+
+### 10.5 拓扑步表：口径、生成与交付（2026-11-18）
+
+- **形状源只有一个 `ROLE_SHAPES`**：`production`（异形轴）与 `uniform`（探针 dim=4）
+  已删除，旧表全部作废；重算后 `sha256` **必须**与旧表不同，相同即说明默认路径没换。
+- **两表不可互译**：`.inc` 是"打包→cblas→解包"字节码，`.h` 是 `int8` 活表位置对；
+  能复用的只有"语料枚举 + 路径求解"上游，格式层各写各的。
+- **同一输入两次生成必须同 `sha256`**；"去重步序数每次不同"是生成器不确定，修生成器。
+- **`.gz` 入库 + 构建时解压**：条件是"本体缺失**或** `.gz` 更新"，KUPL 与 CUDA 两侧
+  构建脚本必须对称（CUDA 侧曾缺 `gzip` 分支，只发布 `.h.gz` 就构建失败）。
+- **生成物不可手改**：`_wick_tasklist.py` 只经 `_wick_extra.jsonl` 追加；`seq` 连续
+  1..N（T 号在基础表/附录各起 `T00001`，720 个重复），整表改格式用
+  `normalize(旧行) == 新行` 对全部行验收。
+- 判据、检查单与未收敛边界：`docs/einsum_topology_unification_20261118.md`；时间线：
+  `logs/einsum-topology-unification-20261118.txt`。

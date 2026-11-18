@@ -145,6 +145,12 @@ from pyqcd.testing._einsum_kernel_force_contract import (
 from pyqcd.testing._einsum_as_equivalence_cache_contract import (
     test_einsum_as_equivalence_cache_contracts,
 )
+# 显式强制契约（2026-11-18）：`kernel_force` 没有 `auto`——传 `auto` 报错并点名 tune，
+# 缺省（`None`/空串/CLI 不给该选项/环境变量未设）一律 `generic`，四个合法标签按书写
+# 次序解析。与 `_einsum_kernel_force_contract`（九项，选路接线）互补。
+from pyqcd.testing._einsum_kernel_force_explicit_contract import (
+    test_einsum_kernel_force_explicit_contracts,
+)
 # 配置画像缓存契约：CSV 往返、选优、稀疏写入、compare 只写不读、关闭零 IO、
 # 不可写降级、形状归一化与目录优先级（2026-11-17）。
 from pyqcd.testing._einsum_profile_cache_contract import (
@@ -174,6 +180,18 @@ from pyqcd.testing._einsum_profile_robustness_contract import (
 from pyqcd.testing._einsum_tune_equivalence_contract import (
     test_einsum_tune_equivalence_contracts,
 )
+# `--tune` **分支化有序遍历 + min_wall_ms 剪枝**（2026-11-18）：B1/B2 = 22、B3 = 21 组
+# 且逐项顺序固定；上界初值 = --tune-timeout、被更小实测值立刻压低；超过上界的组被终止
+# （原文 `耗时大于min_wall_ms,此组被终止`）、不写缓存；best = 最小耗时组。
+from pyqcd.testing._einsum_tune_plan_contract import (
+    test_einsum_tune_plan_contracts,
+)
+# `--tune` 报告的**用户实测**三缺陷（2026-11-18）：缺表提示必须复现本次实参（GPU 仍 GPU、
+# `--shape` 带输出段、不替用户加 `--compare`）、准入不过的内核整档 `skip` 而非逐组
+# `error`、`N` 用裁剪后组数、末行 `PASS` 带 `min_wall_ms=` 与 `best=`。
+from pyqcd.testing._einsum_tune_report_contract import (
+    test_einsum_tune_report_contracts,
+)
 # 配置表只读契约（TV 重设计 2026-11-17）：同键多行→报错并列出全部候选、缺文件→
 # 警告"需要先 tune"+命令模板且继续执行、普通调用只读不写（文件字节不变）、命中与
 # 用户显式配置冲突→`ProfileConflict`、数值 rel ≤ 1e-12。
@@ -196,27 +214,57 @@ from pyqcd.testing._einsum_optimize_none_contract import (
 from pyqcd.testing._einsum_optimize_surface_contract import (
     test_einsum_optimize_surface_contracts,
 )
+# optimize 叶子名字契约：`branch_1`/`branch_2`/`branch_all`/`none` 都解得出来（连字符
+# 别名与下划线主名是同一对象），七个名字都能跑，`none` 对 topology 是唯一合法取值、
+# 对其余内核等价 `False`，主清单恰好那七个（2026-11-18）。
+from pyqcd.testing._einsum_optimize_leaves_contract import (
+    test_einsum_optimize_leaves_contracts,
+)
 # 命中通知标签契约：通知里的内核名必须等于 `LAST_INFO['path']`，topology 提示出现
 # dedicated 时必须同时给出 `[match: topology]` 上下文，且机器段跨语言逐字相同
 # （2026-11-17 用户报告"topology 命中却打印 kupl_dedicated"）。
 from pyqcd.testing._einsum_notice_kernel_label_contract import (
     test_einsum_notice_kernel_label_contracts,
 )
+# 命中提示的**执行语义**契约（2026-11-18）：`kernel_force` 只接受单值强制，默认
+# `generic` 不试专用内核，所以提示不许再说"先 dedicated 后 topology"；强制了哪个就必须
+# 点名哪个，三档文案（强制跑成 / 未强制 / 强制失败回落）在 zh/en 下机器段逐字相同。
+from pyqcd.testing._einsum_notice_forced_semantics_contract import (
+    test_einsum_notice_forced_semantics_contracts,
+)
+# CLI 默认值契约（2026-11-18 用户实测）：`--kernel-force` 不给时 argparse 是 `None`
+# （未指定，帮助仍显示回落值 generic），已 tune 的 `kernel=backend` 行因此能套用；
+# `--profile-dir ~/.cache` 先展开 `~` 再取绝对路径（与 `_api` 侧同一张表）。
+from pyqcd.testing._einsum_cli_defaults_contract import (
+    test_einsum_cli_defaults_contracts,
+)
+# 省略 `--shape` 时的**语料等价匹配**（2026-11-18）：轴序变体（换操作数位置 / 转置某操作数）
+# 必须经 `_equivalence.normalize_equation` 命中语料，形状按 mapping **逐轴还原**成用户原方程的
+# 轴序，还原不可靠时仍报 `corpus_miss`（五项断言，见该模块）。
+from pyqcd.testing._einsum_shape_from_corpus_equiv_contract import (
+    test_einsum_shape_from_corpus_equiv_contracts,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。
 TESTS = (
     test_einsum_kernel_force_contracts,
+    test_einsum_kernel_force_explicit_contracts,
     test_einsum_as_equivalence_cache_contracts,
     test_einsum_profile_cache_contracts,
     test_einsum_dispatch_invariance_contracts,
     test_einsum_profile_robustness_contracts,
     test_einsum_tune_equivalence_contracts,
+    test_einsum_tune_plan_contracts,
+    test_einsum_tune_report_contracts,
     test_einsum_profile_readonly_contracts,
     test_einsum_profile_timing_contracts,
     test_einsum_optimize_none_contracts,
     test_einsum_optimize_surface_contracts,
+    test_einsum_optimize_leaves_contracts,
     test_einsum_notice_kernel_label_contracts,
+    test_einsum_notice_forced_semantics_contracts,
+    test_einsum_cli_defaults_contracts,
     test_native_expression_compile_failure_leaves_a_warning,
     test_native_fallback_warns_once_per_reason,
     test_shape_path_failure_is_recorded_and_announced_once,

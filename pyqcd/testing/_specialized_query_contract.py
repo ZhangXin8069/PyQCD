@@ -42,7 +42,8 @@ def test_specialized_query_hits_corpus() -> None:
     assert report["kernels"] == ["kupl_topology", "cuda_topology"], report["kernels"]
     corpus = report["corpus"]
     assert corpus["seq"] == 1650 and corpus["tid"] == "T00028", corpus
-    assert corpus["case"].startswith("10."), corpus["case"]
+    # 情形序号与名称之间是**连字符**（本轮规范化：``10.`` → ``10-``）。
+    assert corpus["case"].startswith("10-"), corpus["case"]
     assert corpus["equation"] == EQUATION, corpus["equation"]
     assert len(corpus["roles"]) == report["arity"], corpus["roles"]
 

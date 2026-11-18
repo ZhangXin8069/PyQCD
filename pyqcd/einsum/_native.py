@@ -100,34 +100,6 @@ def available() -> bool:
     return backend_name() != "python"
 
 
-def load_plan_symbol(backend: str | None = None) -> Any:
-    """Load the planning entry point for a backend, or raise NativeUnavailable."""
-    selection = requested_backend() if backend is None or backend == "auto" else backend
-    if selection not in (*_BACKENDS, "auto"):
-        raise ValueError(f"unknown einsum backend: {selection!r}")
-    for name in (("cuda", "kupl") if selection == "auto" else (selection,)):
-        entry = _cuda_entry() if name == "cuda" else _kupl_entry()
-        if entry is not None:
-            return entry
-    raise NativeUnavailable(f"native einsum planner is unavailable for {selection!r}")
-
-
-def load_contract_symbol(backend: str | None = None) -> Any:
-    """Load the native contract entry point, or raise NativeUnavailable."""
-    selection = requested_backend() if backend is None or backend == "auto" else backend
-    if selection not in (*_BACKENDS, "auto"):
-        raise ValueError(f"unknown einsum backend: {selection!r}")
-    for name in (("cuda", "kupl") if selection == "auto" else (selection,)):
-        entry = (
-            _cuda_entry("applyContractQcd")
-            if name == "cuda"
-            else _kupl_entry("applyContractQcd")
-        )
-        if entry is not None:
-            return entry
-    raise NativeUnavailable(f"native einsum contract is unavailable for {selection!r}")
-
-
 def plan(inputs, output, sizes, planner_id=0, memory_limit=None):
     """Plan with the first usable native backend, or return ``None``."""
     from .kupl import einsum as kupl
@@ -184,12 +156,6 @@ def compile(plan_data, backend: str = "auto"):
         except NativeUnavailable:
             if selection == "kupl":
                 raise
-    if selection in ("auto", "cuda"):
-        compiled = _cuda_module()
-        if compiled is not None and hasattr(compiled, "applyCompileQcd"):
-            from .cuda._program import CudaProgram
-
-            return CudaProgram(plan_data)
     raise NativeUnavailable(f"native einsum compiler is unavailable for {selection!r}")
 
 

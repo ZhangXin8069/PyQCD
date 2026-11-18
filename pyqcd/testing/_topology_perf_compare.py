@@ -1,5 +1,11 @@
 """性能对照：pyqcd 特化路径 vs pyqcd 通用路径 vs opt_einsum。
 
+⚠️ INVALID（2026-11-18）：本脚本的绝对耗时/倍率基于**已废弃**的拓扑步表口径
+（KUPL 生产异形轴 / CUDA 均匀 dim=4 探针）。新口径为 ROLE_SHAPES
+（peram[4,4,100,100] gamma[4,4] VDV[100,100] VVV[100,100,100,100]），
+两张表已整体重算。**旧数字不得再被引用为新结论。** 默认 ``--dim`` 等长探针
+同属旧口径，故本脚本只输出实测、不设期望值。
+
 三个对照臂（同一批操作数、同机、同 dtype、交错计时）：
 
 * ``specialized``：``pyqcd.einsum.contract(eq, *ops)``（走 ``kupl_dedicated``）

@@ -4,12 +4,13 @@
 仍然选错路径：显式参数没有压过环境、缓存关闭后仍被读写、或强制内核错误地覆盖
 自动分派。本模块只断言这些可观察语义，不做计时：
 
-1. ``as_equivalence`` 的 ``None``/``True``/``False`` 三态与 spy 调用证据；
+1. ``as_equivalence`` 的显式取值（``True`` / ``False`` / 字符串 ``"false"``）与 spy
+   调用证据；
 2. 操作数顺序、输出轴序及二者复合映射返回的仍是原方程答案；
 3. ``contract(..., cache=False)`` 不改变任一缓存统计字段；
 4. ``specialize.match`` / ``equivalence.normalize`` 的负结果缓存命中；
 5. ``contract_path(..., cache=...)`` 的规划缓存与统一清空语义；
-6. 环境强制 CUDA 时，显式 ``kernel_force='auto'`` 仍走自动分派；
+6. ``kernel_force='auto'`` 已删除：显式取值与环境变量两条路都必须抛 ``ValueError``；
 7. ``kernel_force='generic'`` 与 ``out=`` / ``specialize=False`` 的非冲突组合。
 
 可直接运行::
@@ -98,7 +99,7 @@ def _isolated_state() -> Iterator[None]:
     它会读环境变量指向的、或 CWD 下的 ``./.cache``——那里可能躺着别人写下的
     ``kernel=backend`` 建议，命中后预热调用根本不进 ``specialize.match``，
     ``test_contract_cache_false…`` 的逐字段比对就会看到全 0。同时这挡住了本模块
-    往仓库根的 ``.cache/profile.csv`` 追加行（那是真实发生过的副作用）。
+    往仓库根的 ``.cache/pyqcd.einsum.profile.csv`` 追加行（那是真实发生过的副作用）。
     """
     env_names = (
         _cache.CACHE_ENV,
@@ -223,28 +224,78 @@ def _normalize_spy() -> Iterator[list[tuple[tuple[Any, ...], dict[str, Any]]]]:
         yield calls
 
 
-def test_as_equivalence_three_state_controls_the_normalization_path():
-    """``None`` 跟随环境，显式 True/False 分别压过环境 0/1，并由 spy 计数。"""
+def _profile_key(equation: str, operands: list[np.ndarray]) -> dict[str, Any]:
+    """``_api._profile_begin`` 查表用的键（numpy / CPU / 单一 dtype 的固定写法）。"""
+    return {
+        "shape": _profile_cache.format_shape([o.shape for o in operands]),
+        "dtype": _api._profile_dtype(operands),
+        "device": "cpu",
+        "equation": "".join(equation.split()),
+        "backend": "numpy",
+    }
+
+
+@contextlib.contextmanager
+def _profile_suggests_generic(equation: str, operands: list[np.ndarray]) -> Iterator[None]:
+    """开画像并写一行 ``kernel=generic``，让缺省的 ``generic`` 走**画像**分支。
+
+    为什么需要这一层：``kernel_force`` 的缺省值现在就是 ``generic``（``auto`` 已删除），
+    所以普通调用在 ``_api.contract`` 的 ``generic_only`` 分支里**整段跳过**匹配与等价
+    改写——本模块要观测的 ``as_equivalence`` / ``specialize.match`` 都不可达。画像给出的
+    ``generic`` 是**计时结论**、不是"关掉等价改写"这种语义指令（见 ``_api.contract``
+    里 ``generic_only`` 的注释），因此这条路径照旧匹配 + 改写，正是能观测开关的那条。
+
+    表写在 ``_isolated_state`` 已指到临时树的 ``PYQCD_EINSUM_PROFILE_DIR`` 里：进出都
+    复位表状态，仓库根不会多出 ``.cache``。
+    """
+    saved = os.environ.get(_profile_cache.PROFILE_ENV)
+    os.environ[_profile_cache.PROFILE_ENV] = "1"
+    try:
+        _reset_profile_state()
+        key = _profile_key(equation, operands)
+        _profile_cache.write_winner(
+            key, {"kernel": _kernel_force.GENERIC_LABEL, "optimize": "auto",
+                  "wall_ms": 0.001})
+        picked = _profile_cache.read_winner(key)
+        assert picked is not None, ("画像行必须能被同一个键查回（键算错了）", key)
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop(_profile_cache.PROFILE_ENV, None)
+        else:
+            os.environ[_profile_cache.PROFILE_ENV] = saved
+        _reset_profile_state()
+
+
+def test_as_equivalence_value_controls_the_normalization_path():
+    """显式 ``True`` 施加改写、``False`` 不施加；字符串 ``"false"`` 不得被当成真。
+
+    缺省 ``kernel_force`` 已是 ``generic``（``auto`` 已删除），普通调用整段跳过匹配与
+    改写，所以这里借画像给出的 ``generic`` 建议把这条路径打开（见
+    :func:`_profile_suggests_generic`）；断言仍然只看 ``normalize_equation`` 是否真被
+    调用，以及结果是不是原方程的答案。
+    """
     with _isolated_state():
         _prepare_contract_environment()
         operands = _operands(OPERAND_ORDER_EQUATION)
         expected = np.einsum(OPERAND_ORDER_EQUATION, *operands)
         cases = (
-            ("env=0 follows", None, "0", 0),
-            ("env=1 follows", None, "1", 1),
-            ("explicit True overrides env=0", True, "0", 1),
-            ("explicit False overrides env=1", False, "1", 0),
+            ("explicit True applies", True, 1),
+            ("explicit False skips", False, 0),
+            # ``bool("false")`` 是 ``True``：把字符串原样交给布尔判定会**反转**开关。
+            ("string 'false' skips", "false", 0),
         )
 
-        for label, value, env_value, expected_calls in cases:
-            os.environ[_equivalence.AS_EQUIVALENCE_ENV] = env_value
+        for label, value, expected_calls in cases:
             pe.cache_clear()
-            with _normalize_spy() as calls, _quiet():
+            with _profile_suggests_generic(OPERAND_ORDER_EQUATION, operands), \
+                    _normalize_spy() as calls, _quiet():
                 actual = pe.contract(
                     OPERAND_ORDER_EQUATION,
                     *operands,
                     as_equivalence=value,
                     cache=True,
+                    profile=True,
                 )
             assert len(calls) == expected_calls, (label, len(calls), calls)
             if expected_calls:
@@ -282,6 +333,11 @@ def test_contract_cache_false_leaves_every_cache_field_unchanged():
     ``contract()`` 里提前委派给后端 ``einsum``（它们没有 BLAS 结构，也不可能有
     专用形态），因此不会再碰 ``specialize.match`` 与规划器。用 ``ij,ij->ij``
     预热会让"所有缓存都为 0"，下面的逐字段比对就退化成空断言。
+
+    缺省 ``kernel_force`` 已是 ``generic``（``auto`` 已删除）时，``contract()`` 整段
+    跳过匹配与改写，``specialize.match`` / ``equivalence.normalize`` 根本不会被写；
+    这里借画像给出的 ``generic`` 建议把两条缓存都预热起来（见
+    :func:`_profile_suggests_generic`），三个字段才是真的可观测。
     """
     warm_equation = "ij,jk->ik"
     with _isolated_state():
@@ -289,18 +345,29 @@ def test_contract_cache_false_leaves_every_cache_field_unchanged():
         warm = _operands(warm_equation)
         pe.cache_clear()
 
-        with _quiet():
-            pe.contract(warm_equation, *warm, cache=True)
+        with _profile_suggests_generic(warm_equation, warm), _quiet():
+            pe.contract(warm_equation, *warm, cache=True, profile=True)
         before = _cache_snapshot()
-        assert before["specialize.match"]["size"] >= 1, before
+        # 两个匹配器缓存必须真的被暖起来，否则下面的逐字段比对是空断言。
+        # ``api.find_path`` 可能被**别的**用例预先暖过（进程内的计划缓存不在
+        # ``cache_clear`` 的范围内），所以对它只断言"不再写"，不断言"已经写过"。
+        for name in ("specialize.match", "equivalence.normalize"):
+            assert before[name]["size"] >= 1, (name, before)
+            assert before[name]["stores"] >= 1, (name, before)
 
         for info in before.values():
             assert set(info) == REQUIRED_CACHE_FIELDS, info
 
         with _quiet():
-            pe.contract(warm_equation, *warm, cache=False)
+            pe.contract(warm_equation, *warm, cache=False, profile=True)
         after = _cache_snapshot()
         assert after == before, (before, after)
+        # 逐项再说一遍"关闭就是不写"：stores 只许原地不动，绝不许增长。
+        for name in CACHE_NAMES:
+            assert after[name]["stores"] <= before[name]["stores"], (
+                name, before[name], after[name])
+            assert after[name]["size"] <= before[name]["size"], (
+                name, before[name], after[name])
 
 
 def test_negative_results_are_cached_with_miss_then_hit():
@@ -375,27 +442,47 @@ def test_contract_path_cache_switch_and_global_clear_semantics():
             assert info["hit_rate"] is None, (name, info)
 
 
-def test_explicit_kernel_force_auto_overrides_cuda_environment():
-    """环境写 ``topology`` 时，显式 auto 仍走 numpy 后端自动分派。"""
+def test_kernel_force_auto_is_rejected():
+    """``auto`` 已删除：显式取值与环境变量两条路都抛 ``ValueError``。
+
+    自动选路已交给 ``--tune`` 的实测结论（配置表）。这里钉两件事：正文必须点名
+    "只接受强制值"并列出合法集合；对照调用（显式 ``generic``）仍然可用——报错是
+    "这个取值不存在"，不是把整条路封死。
+    """
     with _isolated_state():
         _prepare_contract_environment()
         os.environ[_kernel_force.KERNEL_FORCE_ENV] = "topology"
         operands = _operands(CORPUS_EQUATION)
+
+        def _expect_rejected(**kwargs: Any) -> str:
+            try:
+                with _quiet():
+                    pe.contract(CORPUS_EQUATION, *operands, **kwargs)
+            except ValueError as exc:
+                message = str(exc)
+            else:
+                raise AssertionError(f"{kwargs} 必须抛 ValueError（auto 已删除）")
+            assert "只接受强制值" in message, message
+            for label in sorted(_kernel_force.ALLOWED_LABELS):
+                assert label in message, (label, message)
+            return message
+
+        # 显式 auto（大小写都算）：即使环境里写着 topology 也照样报错，不被环境救活。
+        for value in ("auto", "AUTO"):
+            _expect_rejected(kernel_force=value)
+        # 环境变量里的 auto 同样报错（与显式参数一条消息）。
+        os.environ[_kernel_force.KERNEL_FORCE_ENV] = "auto"
+        _expect_rejected()
+
+        # 对照：显式 generic 仍然生效，结果与 numpy 一致。
+        os.environ[_kernel_force.KERNEL_FORCE_ENV] = "topology"
         expected = np.einsum(CORPUS_EQUATION, *operands)
-
-        try:
-            with _quiet():
-                actual = pe.contract(
-                    CORPUS_EQUATION, *operands, kernel_force="auto")
-        except _kernel_force.KernelUnavailableError as exc:
-            raise AssertionError(
-                "显式 kernel_force='auto' 不得继承 topology 环境强制") from exc
-
+        with _quiet():
+            actual = pe.contract(
+                CORPUS_EQUATION, *operands, kernel_force="generic")
         record = _api.last_kernel()
-        assert record is not None, record
-        assert record["requested"] is None, record
-        assert all(label.startswith("kupl_") for label in record["attempted"]), record
-        _assert_original_answer(actual, expected, "kernel_force=auto")
+        assert record is not None and record["requested"] == (), record
+        _assert_original_answer(actual, expected, "kernel_force=generic")
 
 
 def test_generic_kernel_force_composes_with_out_and_specialize_false():
@@ -424,12 +511,12 @@ def test_generic_kernel_force_composes_with_out_and_specialize_false():
 
 
 TESTS = (
-    test_as_equivalence_three_state_controls_the_normalization_path,
+    test_as_equivalence_value_controls_the_normalization_path,
     test_equivalence_only_returns_the_answer_to_the_original_equation,
     test_contract_cache_false_leaves_every_cache_field_unchanged,
     test_negative_results_are_cached_with_miss_then_hit,
     test_contract_path_cache_switch_and_global_clear_semantics,
-    test_explicit_kernel_force_auto_overrides_cuda_environment,
+    test_kernel_force_auto_is_rejected,
     test_generic_kernel_force_composes_with_out_and_specialize_false,
 )
 

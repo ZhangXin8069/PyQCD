@@ -23,9 +23,10 @@
 
 TV 重设计删除的旧口径（本模块不再断言）
 --------------------------------------
-* ``profile_equivalence.csv`` 的**负标记表**（``equivalence_marker`` /
-  ``record_equivalence`` / ``as_equivalence="force"`` 刷新标记）——规格 §0/§5 已废除该
-  表；`auto` 的"有没有等价信息"改由主表的等价行回答（§10）。
+* 已被废除的**等价负标记表**（``equivalence_marker`` /
+  ``record_equivalence`` / ``as_equivalence="force"`` 刷新标记）——规格 §0/§5 已废除那
+  张表；`auto` 的"有没有等价信息"改由主表（``pyqcd.einsum.profile.csv``）的等价行
+  回答（§10）。
 * tune 期间的**强制写整张地图**开关（``_api.set_profile_tune`` /
   ``_api._PROFILE_TUNE`` / ``_profile_cache.drop()``）——被 §1/§3.3 "只有 tune 能写，
   且只写胜出的那一行"取代。
@@ -76,8 +77,10 @@ TUNE_EQUATION = "ij,jk,kl->il"
 TUNE_SHAPES = [(6, 6), (6, 6), (6, 6)]
 
 #: 本模块自己用的小网格：同一个键、同一个通用内核，**只有 ``optimize`` 不同**。
-#: 用它跑第 4 条（不碰 30 组的生产网格）。
-SMALL_TUNE_COMBOS = (("generic", "false", "auto"),
+#: 用它跑第 4 条（不碰生产网格）。取值必须是配置表的 7 个合法叶子之一
+#: （``_profile_cache.OPTIMIZE_LEAVES``）：``auto`` 不是叶子，写进表里会被清空，
+#: 于是"写下的那一行"读回来 .optimize 为空，正对照就无从比对。
+SMALL_TUNE_COMBOS = (("generic", "false", "none"),
                      ("generic", "false", "greedy"),
                      ("generic", "false", "optimal"))
 
@@ -308,7 +311,9 @@ def _tune_grid(combos: Sequence[tuple[str, str, str]]
     网格本身（三轴取值、上限）由第 1/2 条单独钉，这里只借它当输入。
     """
     cli = _cli()
-    with patch.object(cli, "tune_combos", lambda language="zh": list(combos)):
+    # 替身必须收 ``*args, **kwargs``：``run_tune`` 走 ``_tune_combos_for(...)``，
+    # 它按新签名 ``tune_combos(language, equation=...)`` 调用（2026-11-18 起）。
+    with patch.object(cli, "tune_combos", lambda *args, **kwargs: list(combos)):
         yield list(combos)
 
 
@@ -467,17 +472,25 @@ def test_tune_refuses_more_than_the_combination_cap():
     combos = list(cli.tune_combos())
     bundle = (len(cli.TUNE_KERNEL_FORCE) * len(cli.TUNE_AS_EQUIVALENCE)
               * len(cli.TUNE_OPTIMIZERS))
-    assert len(combos) == bundle == len(set(combos)) <= limit, (
-        "缺省网格必须是三轴笛卡尔积、无重复、且不超过上限",
-        len(combos), bundle, limit)
+    # 2026-11-18 起缺省清单**不再**是三轴笛卡尔积：它按分支给**有序清单**
+    # （B1/B2 = 22、B3 = 21，逐项顺序见 `_einsum_tune_plan_contract`）。
+    # 这里只钉"无重复、不超过上限、且真的比笛卡尔积短"，组数与顺序由那条契约负责
+    # ——两处都断言同一件事，早晚会打架。
+    assert len(combos) == len(set(combos)) <= limit, (
+        "缺省清单不得重复、且不超过上限", len(combos), len(set(combos)), limit)
+    assert 0 < len(combos) < bundle, (
+        "有序清单必须真的比笛卡尔积短（否则'完全替换'没有发生）",
+        len(combos), bundle)
 
-    # 构造一个**必然**超过上限的网格：给 optimize 轴加两个取值。
-    widened = tuple(cli.TUNE_OPTIMIZERS) + ("dp", "branch-all")
-    expected = (len(cli.TUNE_KERNEL_FORCE) * len(cli.TUNE_AS_EQUIVALENCE)
-                * len(widened))
-    assert expected > limit, ("本用例必须构造出超限网格", expected, limit)
+    # 构造一个**必然**超过上限的清单：把 ``_tune_axes.tune_plan`` 换成返回超长清单的
+    # 假实现——注入点必须是那个纯函数，否则验的是替身自己而不是真正的上限校验。
+    base = list(cli.tune_combos(cli.TUNE_BRANCH_NONE))
+    huge = [base[index % len(base)] for index in range(limit + 5)]
+    expected = len(huge)
+    assert expected > limit, ("本用例必须构造出超限清单", expected, limit)
 
-    with patch.object(cli, "TUNE_OPTIMIZERS", widened):
+    with patch.object(cli._tune_axes, "tune_plan",
+                      lambda *args, **kwargs: list(huge)):
         try:
             got = list(cli.tune_combos())
         except SystemExit as exc:
@@ -515,18 +528,20 @@ def test_tune_excludes_a_mismatching_combination_from_best():
             "而本契约不许用真实计时做排序结论）")
     combos = list(cli.tune_combos())
     if not combos:
-        raise unittest.SkipTest("--tune 的网格为空，最优选择不可验")
-    # 从实现自己的网格里挑两组：只差 ``as_equivalence``、且内核不是"本机可能不可用"
-    # 的强制档（否则注入的数值不符会被更早的 KernelUnavailableError 顶掉）。
+        raise unittest.SkipTest("--tune 的清单为空，最优选择不可验")
+    # 从实现自己的清单里挑两组：内核不是"本机可能不可用"的强制档（否则注入的数值
+    # 不符会被更早的 KernelUnavailableError 顶掉），且 ``optimize`` 不同。2026-11-18
+    # 起清单是**分支化的有序清单**——``as_equivalence=true`` 只出现在 B2 分支
+    # （``tune_combos()`` 的缺省清单是 B3，里面全是 false），拿它当区分列会无解。
     available = [index for index, combo in enumerate(combos)
                  if combo[0] not in ("dedicated", "topology")]
-    bad = next((index for index in available if combos[index][1] == "false"), None)
+    bad = available[0] if available else None
     winner = next((index for index in available
-                   if index != bad and combos[index][1] == "true"), None)
+                   if index != bad and combos[index][2] != combos[bad][2]), None)
     if bad is None or winner is None:
         raise unittest.SkipTest(
-            "网格里没有 as_equivalence=true/false 两档，无法构造数值不符的对照组："
-            f"{sorted({combo[1] for combo in combos})}")
+            "清单里没有 optimize 两档，无法构造数值不符的对照组："
+            f"{sorted({combo[2] for combo in combos})}")
     assert bad != winner, (bad, winner)
     bad_combo = combos[bad]
 
@@ -611,9 +626,9 @@ def test_tune_excludes_a_mismatching_combination_from_best():
     assert f"kernel_force={combos[winner][0]}" in best_line, best_line
     assert f"as_equivalence={combos[winner][1]}" in best_line, best_line
     assert f"optimize={combos[winner][2]}" in best_line, best_line
-    assert combos[bad][1] != combos[winner][1], (
+    assert combos[bad][2] != combos[winner][2], (
         "对照组与最优组必须在打印字段上可区分", combos[bad], combos[winner])
-    assert f"as_equivalence={combos[bad][1]}" not in best_line, (
+    assert f"optimize={combos[bad][2]}" not in best_line, (
         "MISMATCH 组不得出现在最优行", best_line)
     assert not [line for line in printed.splitlines()
                 if line.startswith("tune row")], (

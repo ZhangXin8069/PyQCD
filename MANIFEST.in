@@ -17,7 +17,6 @@ include install.sh
 # Native backend sources, headers and their Makefile drivers. The build dirs
 # under cpp/ hold compiled artefacts and are pruned below.
 recursive-include cpp *.h *.cpp *.cu *.sh *.md *.py
-include cpp/kupl/einsum/include/family_apply.h
 # `cpp/` 下的**构建辅助脚本**也是 sdist 的一部分：`make-nv.sh:320` 会调用
 # `cpp/cuda/einsum/strip_rpath.py`，而旧的 `recursive-include` 只收
 # `*.h *.cpp *.cu *.sh *.md`——0.5.0 的 sdist 内容校验发现该文件缺失，
