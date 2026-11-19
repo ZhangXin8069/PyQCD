@@ -133,7 +133,7 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
     import numpy as np
 
     import pyqcd.einsum as pe
-    from pyqcd.einsum import _api
+    from pyqcd.einsum import _api, _sync
 
     equation = str(job["equation"])
     device = str(job.get("device") or "cpu")
@@ -197,9 +197,16 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
         time.sleep(float(sleep))
 
     def measured() -> float:
-        """一次受测调用 → 秒；超过 ``min_wall_ms`` 抛 :class:`Pruned`。"""
+        """一次受测调用 → 秒（**含设备同步**）；超过 ``min_wall_ms`` 抛 :class:`Pruned`。
+
+        同步是硬要求：``cupy`` / ``torch(cuda)`` 异步下发，不同步就只量到入队时间
+        （2026-11-19 用户实测：同一组 GPU 收缩脚本里约 900 ms、这里 0.32 ms，还被
+        当成 ``best`` 写进了配置表）。CPU 上 ``_sync.synchronize`` 是空操作。
+        """
+        _sync.synchronize(*operands)
         started = time.perf_counter()
         got = pe.contract(equation, *operands, **kwargs)
+        _sync.synchronize(*operands)
         wall_s = time.perf_counter() - started
         if min_wall_ms is not None and wall_s * 1000.0 > min_wall_ms:
             raise Pruned(wall_s * 1000.0, min_wall_ms)

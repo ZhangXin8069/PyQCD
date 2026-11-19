@@ -292,7 +292,9 @@ def _fake_timed(durations: dict[int, float], counter: dict[str, int]):
 
     排序结论只认注入值，所以本契约能断言"哪一组该最优"却完全不测时间。
     """
-    def fake(call: Any, warmup: int, rounds: int) -> float:
+    def fake(call: Any, warmup: int, rounds: int, sync: Any = None) -> float:
+        # ``sync`` 是 0.5.9 起 ``_timed`` 的第 4 个参数（设备同步）。替身必须收下它：
+        # 不收会在真实现调用时抛 TypeError，而报错看起来像"tune 全挂了"。
         index = counter["index"]
         counter["index"] = index + 1
         call()
@@ -326,7 +328,8 @@ def _scripted_timed(seconds: dict[int, float],
     """
     counter = {"index": 0}
 
-    def fake(call: Any, warmup: int, rounds: int) -> float:
+    def fake(call: Any, warmup: int, rounds: int, sync: Any = None) -> float:
+        # 同 ``_fake_timed``：``sync`` 必须收下（0.5.9 的 ``_timed`` 有第 4 个参数）。
         index = counter["index"]
         counter["index"] = index + 1
         call()

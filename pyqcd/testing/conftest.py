@@ -257,6 +257,12 @@ from pyqcd.testing._einsum_tune_timeout_doc_contract import (
 from pyqcd.testing._einsum_tune_isolation_contract import (
     test_einsum_tune_isolation_contracts,
 )
+# 计时与参照的**三处失真**（2026-11-19 用户实测）：`--compare opt_einsum` 只走 numpy
+# 后端、异步后端只量到入队时间（同一条方程脚本 900 ms / tune 表里 0.32 ms）、
+# `--warmup 1` 盖不住 GPU 冷启动。八项断言钉住修复后的可观测证据（无 GPU 时 SKIP）。
+from pyqcd.testing._einsum_timing_compare_contract import (
+    test_einsum_timing_compare_contracts,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。
@@ -272,6 +278,7 @@ TESTS = (
     test_einsum_tune_report_contracts,
     test_einsum_tune_timeout_doc_contracts,
     test_einsum_tune_isolation_contracts,
+    test_einsum_timing_compare_contracts,
     test_einsum_profile_readonly_contracts,
     test_einsum_profile_timing_contracts,
     test_einsum_optimize_none_contracts,

@@ -952,6 +952,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "{ms:.3f} ms (warmup={warmup}, rounds={rounds}, median)",
         "zh": "{ms:.3f} ms （warmup={warmup}，rounds={rounds}，中位）",
     },
+    "detail.warmup_raised": {
+        "en": ("accelerated device: warmup raised {requested} -> {used} (at least "
+               "{minimum} calls are discarded, because the first call also builds the "
+               "context/handles/workspace); the median below is measured with "
+               "warmup={used}"),
+        "zh": ("加速设备：warmup 由 {requested} 抬到 {used}（至少丢弃 {minimum} 次调用，"
+               "因为首调还要建上下文/句柄/workspace）；下面那个中位是 warmup={used} "
+               "测的"),
+    },
     "detail.ref_opt": {
         "en": "requested {requested} → reference actually uses {shown}",
         "zh": "要 {requested} → 参照实际用 {shown}",
@@ -1504,6 +1513,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": "opt_einsum execution failed: {exc_type}: {exc}",
         "zh": "opt_einsum 执行失败：{exc_type}: {exc}",
     },
+    "reference.opt_einsum_backend_missing": {
+        "en": ("opt_einsum has no registered backend {backend!r}, so it cannot act "
+               "as a reference on these operands; install/enable that backend or run "
+               "the comparison on CPU. Falling back to numpy would measure a different "
+               "machine, not a reference"),
+        "zh": ("opt_einsum 没有注册 {backend!r} 后端，无法在这些操作数上作参照；"
+               "请安装/启用该后端，或改到 CPU 上做对照。退回 numpy 等于在另一台机器上"
+               "参照，那不叫参照"),
+    },
     "reference.other_backend_unavailable": {
         "en": "the other backend is unavailable: {exc}",
         "zh": "对方后端不可用：{exc}",
@@ -1823,16 +1841,70 @@ def _make_operands(xp, shapes, dtype: np.dtype, seed: int):
 
 
 # ── 计时 ────────────────────────────────────────────────────────────────────
-def _timed(call, warmup: int, rounds: int) -> float:
-    """丢弃 ``warmup`` 次后取 ``rounds`` 次中位（秒）。"""
+def _timed(call, warmup: int, rounds: int, sync: Any = None) -> float:
+    """丢弃 ``warmup`` 次后取 ``rounds`` 次中位（秒），**含设备同步**。
+
+    为什么必须同步：``cupy`` / ``torch(cuda)`` 是异步下发，``call()`` 返回时 GEMM
+    可能还在队列里，``perf_counter`` 已经停表——量到的是**入队时间**而非计算时间。
+    2026-11-19 用户实测：同一段代码脚本里约 900 ms，而本函数的旧实现把 GPU 组量成
+    **0.32 ms**，并被 tune 当成 ``best`` 写进配置表。
+
+    ``sync`` 是"同步器"（``_sync.synchronize``）：进计时区前后各调一次，把队列排空
+    计入这一次的耗时。CPU 上它是空操作（没有依赖 import、没有系统调用），所以缺省
+    ``None`` 与旧行为逐字相同；需要量 GPU 的调用方传 ``functools.partial(synchronize, *operands)``。
+    """
+    if sync is None:
+        sync = _no_sync
     for _ in range(warmup):
         call()
     samples = []
     for _ in range(rounds):
+        sync()
         start = time.perf_counter()
         call()
+        sync()
         samples.append(time.perf_counter() - start)
     return statistics.median(samples)
+
+
+def _no_sync() -> None:
+    """``sync=None`` 时的占位：CPU 上没有队列可等，也不该为此引入任何依赖。"""
+
+
+def _sync_for(operands: Sequence[Any]) -> Any:
+    """这些操作数对应的设备同步器（CPU 上仍是空操作，见 :mod:`._sync`）。
+
+    按**操作数自己的类型**判断而不是命令行 ``--device``：``contract()`` 的后端由
+    操作数决定，``--device cpu`` 收 cupy 数组时真正在跑的仍是 GPU。返回一个零参数
+    可调用对象（``_timed`` 每个样本前后各调一次）。
+    """
+    from . import _sync
+
+    def sync() -> None:
+        _sync.synchronize(*operands)
+
+    return sync
+
+
+#: 加速设备上**至少**丢弃的调用次数。首调在 GPU 上要多付一次上下文/句柄/workspace
+#: 建立（cuBLAS handle、`cudaMalloc` 的 cudaMallocAsync 池、原生步表加载），一次
+#: warmup 盖不住——2026-11-19 用户实测：同一组方程脚本里约 900 ms，而 `--warmup 1`
+#: 的中位比它低一截，差异正是这段冷启动。
+ACCELERATED_MIN_WARMUP = 2
+
+
+def _effective_warmup(warmup: int, operands: Sequence[Any]) -> tuple[int, bool]:
+    """加速设备上把 ``warmup`` 抬到 :data:`ACCELERATED_MIN_WARMUP`。
+
+    返回 ``(实际用的 warmup, 是否被抬高)``。CPU 上原样返回、不改变任何既有数字。
+    """
+    from . import _sync
+
+    accelerated = any(_sync.tensor_backend(item) in ("cupy", "torch")
+                      for item in operands)
+    if accelerated and warmup < ACCELERATED_MIN_WARMUP:
+        return ACCELERATED_MIN_WARMUP, True
+    return warmup, False
 
 
 def _relative_error(actual, expected) -> float:
@@ -2032,7 +2104,10 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         report["error"] = f"{type(exc).__name__}: {exc}"
         report["cache_stats"] = _cache_stats()
         return report
-    seconds = _timed(call, warmup, rounds)
+    effective_warmup, warmup_raised = _effective_warmup(warmup, operands)
+    seconds = _timed(call, effective_warmup, rounds, _sync_for(operands))
+    report["warmup_effective"] = effective_warmup
+    report["warmup_raised"] = warmup_raised
     got_host = got if xp is np else _to_host(got)
     report["seconds"] = seconds
     report["actual_shape"] = list(np.shape(got_host))
@@ -3214,6 +3289,46 @@ def _kernel_info() -> dict[str, Any]:
     return info
 
 
+def _operand_backend(operands: Sequence[Any]) -> str:
+    """操作数自己的后端名（``numpy`` / ``cupy`` / ``torch`` / 模块名）。
+
+    **看数组类型，不看命令行**：``contract()`` 的后端由操作数决定，这是它与
+    ``--device`` 唯一可靠的口径来源（与 :func:`_sync_for` 同一条理由）。
+    """
+    for operand in operands:
+        module = type(operand).__module__.split(".", 1)[0]
+        if module:
+            return module
+    return "numpy"
+
+
+def _opt_einsum_backend(operands: Sequence[Any], xp: Any) -> str | None:
+    """``opt_einsum.contract(backend=...)`` 该填什么；该后端它不支持时给 ``None``。
+
+    ``opt_einsum`` 的 ``backend`` 缺省是 ``'auto'``，按**数组模块**选后端——所以
+    只传 numpy 数组就永远走 numpy。GPU 上那不是"参照"，那是"另一台机器上的参照"。
+    这里按操作数类型显式给出后端名，只有 ``opt_einsum`` 真的认它才放行
+    （不认就如实报"这个后端 opt_einsum 不支持"，绝不悄悄退回 numpy）。
+
+    判据用 ``oe.backends.has_backend``（公开接口）；探测失败时只信任 ``numpy``。
+    """
+    name = _operand_backend(operands)
+    if name == "numpy":
+        return "numpy"
+    try:
+        import opt_einsum as oe
+
+        probe = getattr(oe.backends, "has_backend", None)
+        if callable(probe) and probe(name):
+            return name
+        funcs = getattr(oe.backends, "_FUNCS_BACKENDS", {})
+        if name in funcs:
+            return name
+    except Exception:                           # noqa: BLE001 - 探测失败按不支持
+        return None
+    return None
+
+
 def _reference(compare, equation, host, operands, out_shape, dtype, xp,
                rounds, warmup, device, specialize=None,
                ref_optimize=None, language: str = "zh", cache=None):
@@ -3223,17 +3338,23 @@ def _reference(compare, equation, host, operands, out_shape, dtype, xp,
     （``None`` = 该模式不设优化器）。本函数刻意**不读主路径的 ``optimize``**——参照
     借用主路径的选择会让对照实验失去独立性。
 
+    **参照跑在与主路径同一个后端上**：``opt_einsum`` 的 ``backend=`` 显式传给
+    ``oe.contract``。此前只传 ``host``（numpy），GPU 上跑 ``--device gpu --compare
+    opt_einsum`` 时"参照"其实在 CPU 上算（2026-11-19 用户实测：`oe.contract` 的
+    ``backend`` 缺省 ``'auto'`` 按**数组类型**选，numpy 输入必然走 numpy 后端），
+    两个耗时不可比。
+
     ``cache`` 与主路径同源（``--compare backend`` 也会调用 ``contract()``）：
     ``--cache false`` 不该被参照这一路偷偷预热或污染统计。
 
     ``language`` 只影响失败说明的文案。
     """
     if compare == "numpy":
-        path = "greedy" if ref_optimize is None else ref_optimize
-
-        def call():
-            return np.einsum(equation, *host, optimize=path)
-        return call(), _timed(call, warmup, rounds), f"np.einsum(optimize={path!r})"
+        # 死分支：``COMPARE_MODES`` 早已不含 ``numpy``（等价写法是
+        # ``--backend numpy --compare backend``）。保留它会让"参照只用 numpy"
+        # 这条误导看起来像是受支持的模式。
+        return None, None, translate("reference.unknown_compare", language,
+                                     compare=compare)
     if compare == "opt_einsum":
         try:
             import opt_einsum as oe
@@ -3241,12 +3362,24 @@ def _reference(compare, equation, host, operands, out_shape, dtype, xp,
             return None, None, translate("reference.opt_einsum_import_failed",
                                          language, exc_type=type(exc).__name__)
         path = "greedy" if ref_optimize is None else ref_optimize
+        backend = _opt_einsum_backend(operands, xp)
+        if backend is None:
+            return None, None, translate("reference.opt_einsum_backend_missing",
+                                         language, backend=_operand_backend(operands))
+        # 参照在**哪一侧**跑就同步哪一侧：opt_einsum 拿到的是 xp 数组（可能就在显存里），
+        # 不排空队列同样只会量到入队时间。
+        sync = _sync_for(operands if backend != "numpy" else host)
 
         def call():
-            return oe.contract(equation, *host, optimize=path)
+            return oe.contract(equation, *operands, optimize=path, backend=backend)
         try:
-            seconds = _timed(call, warmup, rounds)
-            return call(), seconds, f"opt_einsum.contract(optimize={path!r})"
+            seconds = _timed(call, warmup, rounds, sync)
+            # 参照结果一律转回主机侧：比较（``_relative_error``）与 ``max_abs_diff``
+            # 都在 numpy 上做，cupy 数组的隐式转换会直接抛
+            # ``TypeError: Implicit conversion to a NumPy array is not allowed``
+            # （2026-11-19 实测）。
+            return _to_host(call()), seconds, (
+                f"opt_einsum.contract(backend={backend!r}, optimize={path!r})")
         except Exception as exc:                # noqa: BLE001
             return None, None, translate("reference.opt_einsum_failed", language,
                                          exc_type=type(exc).__name__, exc=exc)
@@ -3263,7 +3396,7 @@ def _reference(compare, equation, host, operands, out_shape, dtype, xp,
         def call():
             return pe_contract(equation, other_ops, other, specialize, cache)
         try:
-            seconds = _timed(call, warmup, rounds)
+            seconds = _timed(call, warmup, rounds, _sync_for(other_ops))
             result = _to_host(call())
             return result, seconds, (
                 f"pyqcd.contract(backend={other!r}, {other}, "
@@ -3394,7 +3527,16 @@ def _print_detail(report: dict[str, Any], language: str = "zh") -> None:
     if "seconds" in report:
         print("time     : " + translate(
             "detail.time", language, ms=report["seconds"] * 1000,
-            warmup=report["warmup"], rounds=report["rounds"]), file=out)
+            warmup=report.get("warmup_effective", report["warmup"]),
+            rounds=report["rounds"]), file=out)
+        if report.get("warmup_raised"):
+            # 抬高了就必须说：否则同一命令在 GPU/CPU 上的 `warmup=` 对不上，
+            # 而读者只能看到"两次跑的数字不一样"。
+            print("time note: " + translate(
+                "detail.warmup_raised", language,
+                requested=report["warmup"],
+                used=report.get("warmup_effective", report["warmup"]),
+                minimum=ACCELERATED_MIN_WARMUP), file=out)
     if report.get("compare_optimize") is not None:
         effective = report.get("compare_optimize_effective")
         shown = translate("detail.ref_opt_not_applicable", language) \
@@ -5014,10 +5156,14 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     # ``0``/负数都是"不设上限"（CLI 已校验非负，这里的 0 是合法取值）。
     limit = float(timeout) if float(timeout) > 0.0 else None
     deadline = (time.monotonic() + float(budget)) if float(budget) > 0.0 else None
+    # 加速设备上抬 warmup（同 :func:`_effective_warmup`）：GPU 首调要建上下文/句柄/
+    # workspace，`--warmup 1` 盖不住冷启动，量出来的中位会低于脚本里的稳态耗时。
+    # 组级上限按**实际会用**的 warmup 算，否则预算与实际做的调用次数对不上。
+    effective_warmup, warmup_raised = _effective_warmup(warmup, host)
     # 组级上限仍是 ``limit × (1+warmup+rounds)``：它与 ``min_wall_ms`` 同口径（都看整组），
     # 换成子进程之后这条不变量不变，只是"到点"由父进程 kill 而不是等 SIGALRM 派发。
     group_limit = (None if limit is None
-                   else float(limit) * float(1 + warmup + rounds))
+                   else float(limit) * float(1 + effective_warmup + rounds))
     # 隔离方式：缺省**子进程**（能打断原生 C/CUDA），``PYQCD_EINSUM_TUNE_INPROCESS=1``
     # 或显式 ``isolate=False`` 才退回进程内 SIGALRM（打不断原生代码，只作对照实验）。
     isolated = (_tune_runner.isolation_enabled() if isolate is None
@@ -5167,7 +5313,7 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                                 "device": device,
                                 "backend": backend,
                                 "dtype": dtype,
-                                "warmup": warmup,
+                                "warmup": effective_warmup,
                                 "rounds": rounds,
                                 "min_wall_ms": min_wall.ms,
                                 "operands_dir": staged["dir"],
@@ -5235,7 +5381,7 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                             lambda: _guarded_call(
                                 lambda: _measure(call, None, deadline, min_wall),
                                 group_limit, deadline),
-                            warmup, rounds)
+                            effective_warmup, rounds, _sync_for(operands))
                 except _TunePruned as exc:
                     # 用户规则 §4：超过当前 ``min_wall_ms`` 的这一组**终止**、继续下一组，
                     # 并且不写缓存。原文与两个数值都进 ``reason``，一字不改地打出来。
@@ -5399,6 +5545,8 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
         "rate_flops_per_s": rate.flops_per_s,
         "rate_source": rate.source,
         "warmup": warmup,
+        "warmup_effective": effective_warmup,
+        "warmup_raised": warmup_raised,
         "rounds": rounds,
         "compare": str(compare or "none"),
         # ``--tune`` 的取值：``all``（完整模式）或 ``pass``（快速通过模式）。表尾的

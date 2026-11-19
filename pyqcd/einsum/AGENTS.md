@@ -854,23 +854,33 @@ verbose 的 `ref opt` 行与 `reference` 串都打**参照实际用的**，一�
 
 ```
 # CPU (--device cpu --backend numpy)，默认一行式
-PASS ... rel=3.45e-15 vs opt_einsum.contract(optimize='greedy')  9858.038ms
-       (ref 1350.031ms, 7.30x)  rss+4004MiB
+PASS ... rel=3.45e-15 vs opt_einsum.contract(backend='numpy', optimize='greedy')
+       9858.038ms (ref 1350.031ms, 7.30x)  rss+4004MiB
 
 # GPU (--device gpu --backend cupy --verbose true)
 equation : ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak
 device   : gpu  dtype=complex128  backend=cupy
 operands : 10 个，共 256,010,297 元素；输出 [400, 400] (160,000 元素)
-time     : 20.943 ms （warmup=1，rounds=5，中位）
-reference: opt_einsum.contract(optimize='greedy')
-ref time : 1489.477 ms  （pyqcd/参照 = 0.01×）
+time     : <实测> ms （warmup=2，rounds=5，中位）
+time note: 加速设备：warmup 由 1 抬到 2（至少丢弃 2 次调用…）
+reference: opt_einsum.contract(backend='cupy', optimize='greedy')
+ref time : <实测> ms
 rel      : 1.075e-15  (atol=1e-12)
 memory   : 输入张量 +3999 MiB RSS，+3906 MiB 显存
 peak     : RSS +4065 MiB，显存 +3909 MiB，总显存 32768 MiB
-pyqcd    : 0.4.2  /home/zhangxin/PyQCD/pyqcd/__init__.py
+pyqcd    : 0.5.9  /home/zhangxin/PyQCD/pyqcd/__init__.py
 kernel   : {'cuda': {'path': 'cuda_topology', 'steps': 9, 'copied': ()}}
-PASS ... 20.943ms (ref 1489.477ms, 0.01x)  vram+3909MiB
 ```
+
+> **⚠️ 0.5.9 之前记录的 GPU 耗时全部作废**（含本节历史版本写过的
+> `time : 20.943 ms` / `ref time : 1489.477 ms`）：那时 `_timed` **没有设备同步**，
+> cupy/torch 的异步下发让 `perf_counter` 停在入队那一刻，量到的是"命令排进队列要
+> 多久"。同机同操作数实测：单次 `500²` GEMM 不同步 ~0.1 ms、同步后 ~3 ms；用户在
+> 生产方程上看到脚本里约 900 ms，而 tune 表里写着 **0.32 ms**，那个数还被当成
+> `best` 写进了配置表。`--compare opt_einsum` 那时也只拿 numpy 副本当参照
+> （`oe.contract` 的 `backend` 缺省 `'auto'` 按数组类型选），GPU 上等于拿 CPU 数字
+> 比 GPU 数字。两处都已在 0.5.9 修好：**引用 GPU 耗时时必须确认输出里有
+> `backend=` 与 `warmup=2`**，否则那个数字不成立。
 
 三处读数各有用处：
 

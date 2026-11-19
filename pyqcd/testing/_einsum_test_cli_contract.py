@@ -904,6 +904,10 @@ def test_compare_optimize_dp_reaches_the_opt_einsum_reference():
     assert report["compare_optimize"] == "dp", report
     assert report["compare_optimize_effective"] == "dp", report
     assert "optimize='dp'" in report["reference"], report["reference"]
+    # 参照行**必须同时报出后端**：只写 ``optimize=`` 时，GPU 上拿 numpy 参照
+    # （`oe.contract` 的 backend 缺省 'auto' 按数组类型选）与主路径的 GPU 数字
+    # 并列展示，读者无从发现"这两个数不同机器"（2026-11-19 用户实测）。
+    assert "backend='numpy'" in report["reference"], report["reference"]
     # 主路径的字段没被这个选项改写
     assert report["optimize"] == "auto", report
 
@@ -917,7 +921,7 @@ def test_compare_optimize_dp_reaches_the_opt_einsum_reference():
                 compare="opt_einsum", optimize="auto", compare_optimize="dp")
     printed = buffer.getvalue()
     # verbose 的 reference 行打的是**参照实际用的**优化器
-    assert "reference: opt_einsum.contract(optimize='dp')" in printed, printed
+    assert "reference: opt_einsum.contract(backend='numpy', optimize='dp')" in printed, printed
     assert "ref opt  : 要 dp" in printed, printed
 
 

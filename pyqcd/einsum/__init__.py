@@ -20,7 +20,8 @@ import importlib
 from typing import Any
 
 from . import backends, paths
-from ._api import cache_clear, cache_stats, contract, contract_path
+from ._api import (cache_clear, cache_stats, contract, contract_path, last_kernel,
+                   last_profile)
 from ._expr import ContractExpression, contract_expression, format_const_einsum_str, shape_only
 from ._pathinfo import PathInfo
 from ._specialize import describe as specializations
@@ -66,6 +67,8 @@ __all__ = [
     "has_tensordot",
     "helpers",
     "infer_backend",
+    "last_kernel",
+    "last_profile",
     "parse_backend",
     "parser",
     "PATH_OPTIONS",

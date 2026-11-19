@@ -86,6 +86,7 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
   只有一列计时（`wall_ms` = 整次 `contract()` 的墙钟）。`--kernel-force`
   只接受单个逻辑值（`generic` / `dedicated` / `topology` / `backend`）。
   tune 按分支的有序清单遍历，`min_wall_ms` 剪枝，只写胜出的一组。
+* **0.5.9** — `--compare opt_einsum` 现在真的跑在操作数自己的后端上（`backend=` 传给 `oe.contract` 并写进参照行）；每次测量在样本前后都做设备同步，异步的 cupy/torch 因此报的是计算时间而不是入队时间（同一条方程脚本里 ~900 ms、tune 表里 0.32 ms）；加速设备把 warmup 抬到 ≥2 并如实标注；`optimize_topology_v2` 从 `contract` 签名删除（唯一接收方 topology v2 执行器 0.5.4 已删），再传它抛 `TypeError`；`pyqcd.einsum.last_kernel` / `last_profile` 正式导出。
 * **0.5.8** — `--tune` 与 `--kernel-force <内核>` 不再被内核的**预算门**挡住：arena / 单步 GEMM / pack 流量是**自动分派**的选路判据，不是能力上限，现在由 `_kernel_kupl.bypass_plan_gate()` 在这两条路上穿过，超预算的事实仍写进 `LAST_INFO['budget_gate']`。准入只保留环境性检查（原生库、dtype、torch 后端、无法编码的收缩），于是每一组 tune 都真的跑出 `wall_ms` ——`dedicated` 此前因 `pack/flops = 3.950` 被整档删掉 7 组。自动分派不变。
 * **0.5.7** — `--tune` 的子进程组一律 `profile=False`：遍历期间配置表既不读也不写，命中行不会再和父进程逐格显式下发的三轴冲突（0.5.6 引入的 9 组 `ProfileConflict` 回归，已修）。
 * **0.5.6** — `--tune` 的超时升级为**硬上限**：每组在全新解释器里跑、超时由父进程 kill 子进程，原生 C/CUDA 代码真的能被打断（SIGALRM 做不到）；进程启动开销单列，**不计入** `wall_ms`。两条**只看规划器**的预判剪枝把病态组挡在运行之前（`optimize=none` 在生产形状上要算 ~7.6e17 次浮点；`optimal` 仅规划就要 38 s）。设 `PYQCD_EINSUM_TUNE_INPROCESS=1` 退回旧的尽力而为路线。

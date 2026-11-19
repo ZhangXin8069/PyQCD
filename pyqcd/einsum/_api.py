@@ -173,20 +173,25 @@ def _resolve_optimize(optimize: Any, forced: tuple[str, ...]) -> Any:
     return _normalize_optimize(optimize)
 
 
+#: 拓扑内核在**生成计划**时用的收缩序。它不再是用户参数（``optimize_topology_v2``
+#: 已随 v2 通用执行器一并从公开签名删除）：v3 的收缩序固化在编译期步表
+#: ``topology_steps.h`` 里，这个值只影响 pack 流量建模按哪一份计划记账。
+_TOPOLOGY_PLAN_ORDER = "greedy"
+
+
 def _normalize_optimize_topology_v2(value: Any) -> str:
-    """``optimize_topology_v2`` 的合法拼写 → 7 个叶子之一；非法值当场抛。
+    """``optimize_topology_v2`` 的历史校验函数：**已不再对外暴露**。
 
-    与 ``_profile_cache`` 读表时同一口径（大小写与首尾空白不敏感，连字符旧写法
-    ``branch-1`` 归一成 ``branch_1``），因为它填的正是配置表里同名的那一列；两边
-    认不同的拼写会让同一次 tune 结论读回来时被判非法。
+    0.5.9 起这个参数从 :func:`contract` 的签名里删除（它的唯一接收方——拓扑内核的
+    v2 通用执行器——在 0.5.4 就删了）。本函数只剩两个用途，都留在内部：
 
-    非法值**必须早失败**：这个参数唯一的作用就是决定 v2 回落时生成哪份计划，
-    静默退回 ``greedy`` 会让"我要 optimal"变成一句无声的空话，而报告里看不出
-    差别——那正是本参数要消除的不确定性。
+    1. :data:`_TOPOLOGY_PLAN_ORDER` 的取值来源，``*_topology`` 入口的 ``optimize``
+       仍参与 pack 流量建模（不参与 v3 收缩序）；
+    2. 配置表 ``optimize_topology_v2`` 那一列的历史列仍按同一口径归一
+       （``_profile_cache._normalize_optimize`` 与之同源）。
 
-    ``None`` 同样按非法值报错，**不能**用 ``str(None)`` 归一：那恰好等于
-    ``"none"``（7 个叶子之一），会把"没给"静默解释成"不规划"，于是在 v2 上换掉
-    整份计划。"没给"只有一种写法——不写这个参数（签名缺省 ``greedy``）。
+    它**不再接受用户输入**：外部传入走 :func:`contract` 入口的显式 ``TypeError``，
+    不会被这里悄悄归一。非法值语义同旧版（7 个叶子，别的一律报错）。
     """
     if not isinstance(value, str):
         raise ValueError(
@@ -1095,7 +1100,6 @@ def _apply_equivalence(subscripts: str, operands: Sequence[Any], mapping: Any, *
                       optimize=optimize, memory_limit=memory_limit,
                       backend=backend, specialize=specialize,
                       kernel_force=kernel_force, as_equivalence=False,
-                      optimize_topology_v2=optimize_topology_v2,
                       profile=profile)
     if mapping.output_permutation is not None:
         result = result.transpose(tuple(mapping.output_permutation))
@@ -1686,7 +1690,6 @@ def contract(
     out: Any = None,
     use_blas: bool = True,
     optimize: Any = "auto",
-    optimize_topology_v2: str = "greedy",
     memory_limit: Any = None,
     backend: str = "auto",
     specialize: bool | None = None,
@@ -1721,16 +1724,10 @@ def contract(
         registered optimizer (``"greedy"``/``"optimal"``/``"dp"``), or
         ``True``/``None``/``"auto"`` (default) to let the planner decide.
     optimize_topology_v2 : str
-        Contraction order used **only when the ``topology`` kernel falls back to
-        its v2 generic executor** (``LAST_INFO['path'] == 'kupl_topology_v2'``).
-        One of ``greedy`` (default), ``optimal``, ``dp``, ``branch_1``,
-        ``branch_2``, ``branch_all``, ``none``; anything else (including ``None``,
-        which would otherwise read as the ``"none"`` leaf) raises ``ValueError`` —
-        never a silent fallback to ``greedy``. It is deliberately **separate from**
-        ``optimize``: that one is handed to every other kernel and stays at "no
-        planning" for ``topology``. On a v3 hit (``kupl_topology``) the compiled
-        step table supplies the order and ignores the plan's step order, so the
-        value cannot change that call's route or numbers.
+        **已删除（0.5.9）**。拓扑内核的 v2 通用执行器在 0.5.4 一并删除后，这个参数
+        就没有任何接收方了；留着它只会让人以为"换它就能换拓扑的收缩序"，而实际上
+        顺序早已固化在编译期步表 ``topology_steps.h`` 里。
+        现在传它会得到 ``TypeError``（写错名字的东西不该静默通过）。
     memory_limit : int | str | None
         Upper bound on any intermediate's element count. ``None``/``-1`` means
         unlimited, ``"max_input"`` means the largest input tensor.
@@ -1879,11 +1876,19 @@ def contract(
     # 因此这里只记下原值，解析放在 ``forced`` 求值之后（见 ``_resolve_optimize``）。
     requested_optimize = optimize
 
-    # ``optimize_topology_v2`` 在**入口**就校验：它只在 topology 回落到 v2 时才被
-    # 读到，若等到那时才报错，非法拼写就会随"这次没走 topology"而静默通过——同一份
-    # 调用换个内核才炸，等于把一个取值错误变成路径问题。归一后的值是唯一会下发到
-    # 原生计划的那个（见 ``_attempt_kernel``），``optimize`` 不参与。
-    optimize_topology_v2 = _normalize_optimize_topology_v2(optimize_topology_v2)
+    # ``optimize_topology_v2`` 已从公开签名删除（0.5.9）：它的唯一接收方是拓扑内核的
+    # v2 通用执行器，而 v2 在 0.5.4 就删除了。这里给内部调用链留一个固定值，是因为
+    # ``*_topology`` 入口的 ``optimize`` 仍参与 pack 流量建模（不参与 v3 的收缩序，
+    # 顺序来自编译期步表）；它不再是用户可调项。
+    optimize_topology_v2 = _TOPOLOGY_PLAN_ORDER
+    # 用户仍传旧参数时必须**明确报错**，不能让它落进 ``**kwargs`` 被当成后端关键字
+    # 静默吃掉（那会让人以为"换了次序"，实际什么也没变）。
+    if "optimize_topology_v2" in kwargs:
+        raise TypeError(
+            "optimize_topology_v2 已在 0.5.9 删除：拓扑内核的 v2 通用执行器在 0.5.4 "
+            "一并删除后，该参数没有任何接收方。v3 的收缩序固化在编译期步表 "
+            "topology_steps.h 里，不随调用变化；要换收缩序请用 optimize=。"
+        )
 
     # ``as_equivalence`` 先归一成三态：``bool("false")`` 是 ``True``，直接把字符串交给
     # 布尔判定会**反转**这个开关（本文件所有判定都只认布尔/None）。
@@ -2036,7 +2041,7 @@ def contract(
                                 backend=requested_backend, specialize=specialize,
                                 kernel_force=requested_kernel_force,
                                 as_equivalence=as_equivalence, cache=cache,
-                                optimize_topology_v2=optimize_topology_v2, **kwargs)
+                                **kwargs)
                         if info is not None:
                             info["kernel"] = record["ran"] or "generic"
                         if not quiet_profile:
@@ -2087,7 +2092,6 @@ def contract(
                             subscripts, operands, use_blas=use_blas, optimize=optimize,
                             memory_limit=memory_limit, backend=backend,
                             specialize=specialize_on, kernel_force=kernel_force,
-                            optimize_topology_v2=optimize_topology_v2,
                             cache=cache,
                             payload=info.get("equivalence") if info is not None else None)
                         if rewritten is not None:
@@ -2109,7 +2113,7 @@ def contract(
                             backend=requested_backend, specialize=specialize,
                             kernel_force=requested_kernel_force,
                             as_equivalence=as_equivalence, cache=cache,
-                            optimize_topology_v2=optimize_topology_v2, **kwargs)
+                            **kwargs)
                     if info is not None:
                         info["kernel"] = record["ran"] or "generic"
                     return _profile_end(info, kernel_result)
@@ -2176,8 +2180,7 @@ def contract(
         equivalence_result = _contract_via_equivalence(
             subscripts, operands, use_blas=use_blas, optimize=optimize,
             memory_limit=memory_limit, backend=backend, specialize=specialize_on,
-            kernel_force=kernel_force, optimize_topology_v2=optimize_topology_v2,
-            cache=cache, payload=payload)
+            kernel_force=kernel_force, cache=cache, payload=payload)
         if equivalence_result is not None:
             # 本次是**等价改写**跑成的：原方程上强制具体内核会失败（它本来就不在
             # 语料里），所以这个标签不可重放；但必须如实标注，别沿用初始值
