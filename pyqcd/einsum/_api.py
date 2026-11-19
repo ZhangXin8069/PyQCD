@@ -12,6 +12,7 @@ import time
 import warnings
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack
 from typing import Any
 
 from . import paths
@@ -750,21 +751,27 @@ def _resolve_forced_label(
 def _attempt_kernel(label: str, module: Any, attempt: Any, subscripts: Any,
                     operands: Sequence[Any],
                     optimize_topology_v2: str = "greedy") -> tuple[Any, str]:
-    """旁路负缓存后**真试一次**；返回 ``(result or None, 失败原因)``。
+    """旁路负缓存与预算门槛后**真试一次**；返回 ``(result or None, 失败原因)``。
 
     "强制即真试一次"：强制模式下不许被上一次的失败记录挡住，所以每个 attempt 前套上
     内核模块自己的 ``bypass_negative_cache()``（模块没提供就照旧）。异常收成该标签的
     原因向上报告，绝不静默跳过。
 
-    ``optimize_topology_v2`` **只**交给 ``*_topology`` 入口：那是"v2 回落时的收缩序"，
-    与 ``try_dedicated`` 的 ``optimize``（步表编码器的计划选择）同名不同义，串给
-    dedicated 会换掉它的计划口径。判别用 attempt 标签的后缀（表本身来自
-    ``_specialized_kernel_attempts``），不另立第二份后端表。
+    **同时旁路预算门槛**（``bypass_plan_gate()``）：arena / 单步 GEMM / pack 流量那几道
+    门是**选路策略**（"自动分派时这一格不划算"），不是能力上限。用户点名
+    ``--kernel-force dedicated`` 时他要的就是"这一个内核在这条方程上到底多快"——
+    在选路层就把他挡回去，等于永远不给那个数字（2026-11-19 用户实测：
+    ``pack/flops = 3.950 >= 1.0`` 直接判死，连一次下发都没有）。门槛仍会照算并写进
+    ``LAST_INFO['budget_gate']``，所以"跑了但超预算"这条事实不会丢。
     """
     extra = ({"optimize": optimize_topology_v2}
              if label.rpartition("_")[2] == "topology" else {})
     bypass = getattr(module, "bypass_negative_cache", None)
+    gate = getattr(module, "bypass_plan_gate", None)
+    gates = ExitStack()
     try:
+        if gate is not None:
+            gates.enter_context(gate())
         if bypass is None:
             result = attempt(subscripts, operands, **extra)
         else:
@@ -772,6 +779,8 @@ def _attempt_kernel(label: str, module: Any, attempt: Any, subscripts: Any,
                 result = attempt(subscripts, operands, **extra)
     except Exception as exc:  # noqa: BLE001 - 收成原因，由调用方统一报告
         return None, f"{type(exc).__name__}: {exc}"
+    finally:
+        gates.close()
     if result is not None:
         return result, ""
     # 失败后才读原因：早读会拿到上一次调用残留的值

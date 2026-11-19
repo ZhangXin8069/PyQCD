@@ -604,9 +604,11 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
     # KUPL 侧缓存返回 4 元组 (plan, output_shape, plan_buffer, plan_flops)；
     # 按 3 元组解包会抛 ValueError（在 try 之外，不会被吞成回落）。
     plan, output_shape, plan_buffer, plan_flops = cached
+    from . import _kernel_kupl
+
     stats = _kernel_kupl._plan_statistics(plan)
     plan_gate = _plan_fallback_reason(dtype, stats)
-    if plan_gate is not None:
+    if plan_gate is not None and not _kernel_kupl.plan_gate_bypassed():
         _kernel_kupl._negative_cache_store(negative_key, plan_gate, 4)
         return _fail(plan_gate, 4)
 
@@ -661,4 +663,8 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
         output_shape=tuple(output_shape),
         out="allocated" if out is None else "provided",
     )
+    if plan_gate is not None:
+        # 门槛被旁路（强制内核 / --tune）：跑是跑了，但事实要留下。
+        LAST_INFO["budget_gate"] = plan_gate
+        LAST_INFO["budget_gate_bypassed"] = True
     return output

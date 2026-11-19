@@ -705,29 +705,48 @@ C/CUDA 代码**"，并给可操作建议"GPU 上把 `--tune-timeout` 取足够�
 "打不断原生 / cannot interrupt native"且不含含糊句、`tune note :` 行同口径、
 `grep -c '尽力而为\|best-effort' pyqcd/einsum/test.py >= 2`、三处文案措辞一致）。
 
-### 9.1h tune 的卡死/超时/参照：四条判据（2026-11-19）
+### 9.1h tune 的卡死/超时/参照：五条判据（2026-11-19）
 
 判据与流程见 `docs/einsum_tune_timeout_20261119.md`，时间线见
-`logs/einsum-tune-timeout-20261119.txt`。改 tune 的超时、参照或准入之前先看这四条：
+`logs/einsum-tune-timeout-20261119.txt`。改 tune 的超时、参照或准入之前先看这五条：
 
-1. **超时窗口是"整组"不是"单次"**：一组 `1+warmup+rounds` 次调用（缺省 7 次），实际
+1. **超时窗口是"整组"且已升级为硬上限**：一组 `1+warmup+rounds` 次调用（缺省 7 次），
    装的是 `limit × 7` 的组级预算——按单次设限会把 `7 × limit` 花光，且与
-   `min_wall_ms` 剪枝（比整组中位）不同口径。`--help` 里"每一次调用"的措辞与实现不符，
-   已知、待改。
-2. **"卡死无输出"的两个真凶都不在收缩内核**：`_tune_reference` 那次完整 `np.einsum`
-   在**任何超时保护之外**（按输入元素总数 `> 2_000_000` 跳过，用户那条生产方程实测
-   **2.56e8** 个元素），以及 `optimal` 的纯 Python 穷举规划。用 `tune init :` 起止行 +
-   `STAT=Rl+/%CPU=100/GPU 0%` 定位，不要猜。
+   `min_wall_ms` 剪枝（比整组中位）不同口径。**缺省每组跑在全新解释器里**，超时由
+   父进程 `killpg` 强制生效，所以原生 C/CUDA 代码真的能被打断（`SIGALRM` 做不到：
+   只在字节码之间派发，实测超限 1.99 s 才抛）。进程启动开销单列在
+   `tune note :` 与 `isolation.startup`，**不计入** `wall_ms`。
+   `PYQCD_EINSUM_TUNE_INPROCESS=1` 才退回进程内尽力而为路线。
+2. **"卡死无输出"的三个真凶**：`_tune_reference` 那次完整 `np.einsum` 在**任何超时
+   保护之外**（按输入元素总数 `> 2_000_000` 跳过，用户那条生产方程实测 **2.56e8** 个
+   元素）；`optimal` 的纯 Python 穷举规划（本机这条方程实测 **38 s**）；`optimize=none`
+   的**单次 10 元朴素收缩**（`naive_cost = 7.6441e+17` FLOPs，硬超时也要等整组额度
+   210 s）。后两条现在由**预判剪枝**挡在运行之前：`_plan_probe()` 用
+   `contract_path(shapes=True, cache=False)` 问出该组自己的 FLOPs（0.1 ms）与规划耗时，
+   FLOPs 折算超上界 → `plan-only estimate, not measured`；规划自己超上界 →
+   `planning alone exceeded min_wall_ms`。用 `tune init :` 起止行 +
+   `STAT=Rl+/%CPU=100/GPU 0%` 定位。
 3. **跳过参照必须补自洽参照**：参照为 `None` 时全部 `rel=None`、`mismatch` 恒假，
    "rel 超容差必须判 MISMATCH"会静默失效。只允许两种写法：小形状真参照，或
-   "首个成功组合"自洽参照。
+   "首个成功组合"自洽参照。子进程路线下结果在 `row["_output"]` 那个 `.npy` 里、
+   进程内路线下在 `holder` 里，两条路都要能落到同一个 `got` 再判——换了执行位置
+   不等于可以不做数值校验。
 4. **`equiv_ok` / `match` 命中 ≠ 能执行**：命中只是签名查表；原生侧还有编译期步表覆盖
    与运行时 `status 4`。所以 `topology` 的准入结论是**上界**，"命中但不可执行"是真实
    状态（会让那一组落到 `error`）。
+5. **准入只判"能不能跑"，不判"划不划算"**（2026-11-19 用户裁定）：`--tune` 的语义是
+   把这张网格上**每一格都测出来**。所以 `arena / 单步 GEMM / pack 流量` 那几道
+   **收益**门不进准入——它们由 `_kernel_kupl.bypass_plan_gate()` 在强制内核与 tune
+   两条路上穿过去，那一格照旧真跑并留下实测 `wall_ms`，超预算的事实写进
+   `LAST_INFO['budget_gate']`。准入只剩环境性判据（`enabled()`、`dedicated_dtypes()`、
+   torch 后端、`_dedicated_cached()` 返回 `None`）。**自动分派仍走原来的门**，所以
+   seq=646 那类 8.9 s vs 0.39 s 的坑不会重新打开——`bypass_plan_gate()` 只在
+   强制内核与 tune 两组里进入。
 
 附带两条实测（写报告时别外推）：`fork` 子进程在本机必 `cudaErrorInitializationError`
 （父进程碰过 CUDA 后）；`spawn` 每组全新解释器实测 **497.6 ms**（含一次 CUDA gemm，
-min 425.4 / max 1174.5，n=5），22 组约 11 s 固定开销。
+min 425.4 / max 1174.5，n=5）；本机 `--tune` 实测启动开销中位 **88.1 ms**（`import
+pyqcd.einsum` 中位 126 ms 含解释器启动），15 组合计 990 ms。
 
 **顺带作废**：上面 §9.1f 第 2 条写的"笛卡尔积 24 组、
 `optimize ∈ {auto, greedy, optimal}`"已过时——现行是**分支化有序清单**
@@ -1502,3 +1521,70 @@ token 是 case 名（写 `subsection`）；更前面的全部是描述（写 `se
   `normalize(旧行) == 新行` 对全部行验收。
 - 判据、检查单与未收敛边界：`docs/einsum_topology_unification_20261118.md`；时间线：
   `logs/einsum-topology-unification-20261118.txt`。
+
+## 11. 排查清单：症状 → 先查什么
+
+按"看得见的症状"索引。每条的判据都是**实测**，不是推理；数字标了机器与日期。
+
+### 11.1 拓扑契约静默失败：`*.so` 比源码/步表旧（2026-11-19）
+
+**症状**：`python -m pyqcd.testing` 里只有 `test_topology_kernel_contracts` 红，三条
+断言都指向"原生 trace 一行都没有"，而数值与分派**全部正常**：
+
+```text
+FAIL test_complex_dtypes_reach_the_v3_step_table:
+  complex128 没有命中 v3 步表；原生 trace 只有：
+FAIL test_step_table_hits_succeed_and_outside_equations_are_unsupported:
+  corpus 方程 'cadb,menf,ac,em,bd,fn->': 原生 trace 出现 0 行 topology-specialized，与命中不一致
+FAIL test_pack_bound_guard_matches_the_native_step_layout_trace:
+  ambn,codp,egfh,ce,mo,bdf,nph->ag: 原生 0 行逐步诊断 vs Python 推演 6 步
+```
+
+**为什么静默**：`topology_apply.cpp` 的 `run_specialized` 是 fail-closed——步表里查不到
+这条拓扑就返回 `status 4`（`QCD_TOPOLOGY_UNSUPPORTED`），上层照旧走通用路径，**数值
+正确、`LAST_INFO['path']` 照旧写 `kupl_topology`**，只是没有
+`[pyqcd.einsum] topology-specialized: …` 这行 trace。于是只有那三个"抓原生 trace"的
+契约能看见它，任何数值测试都看不见。
+
+**真因**：`pyqcd/einsum/kupl/libpyqcdeinsum_kupl.so` 是 **11-12 16:27** 编的，而
+`cpp/kupl/einsum/src/topology_apply.cpp` 与 `src/topology_kernels.inc.gz` 都在
+**11-19 13:39** 才更新。旧 `.so` 链的是当时的 2582 条步表，新语料（8638 条）里
+基础表之外的方程一概 miss。重建后 `1,647,336 B → 4,275,032 B`，契约
+**24 passed/3 failed → 27 passed/0 failed**，整库 **152/1/1 → 153/1/0**。
+
+**三步定位**（都别猜，逐条打出来）：
+
+```bash
+# 1) 产物 vs 源码/步表的时间戳：产物早于任一 src 就是过期
+ls -l --time-style=+%F_%H:%M pyqcd/einsum/kupl/libpyqcdeinsum_kupl.so \
+      cpp/kupl/einsum/src/*.cpp cpp/kupl/einsum/src/*.h cpp/kupl/einsum/src/topology_kernels.inc*
+
+# 2) 产物里的记录数（nm 反解结构体尺寸，不依赖源码）：KUPL Record 对齐后 32 B
+nm -S -C pyqcd/einsum/kupl/libpyqcdeinsum_kupl.so | grep kTopoRecords
+#   276416 / 32 = 8638 ✓；若得到 2582（82624 / 32）就是这个坑
+#   CUDA 侧同口径：kQcdTopoEntries 24 B/条、kQcdTopoOrders 16 B/条
+
+# 3) 与步表自己的自述对账（不该差一条）
+grep -m1 'kTopoRecordCount =' cpp/kupl/einsum/src/topology_kernels.inc
+PYQCD_EINSUM_TOPOLOGY_TRACE=1 python -c "…corpus 方程 contract…"   # 应打印 topology-specialized
+```
+
+**修法**：`bash build-kupl.sh`（本机实测 **14 s**，`-march=native` 默认开；要可移植
+加 `PYQCD_EINSUM_NATIVE_ARCH=0`），然后**必须**按 `setup.py::_stage_native_library`
+的同一路径原子落位到包目录，否则改的是 `cpp/**/build/` 而 Python 仍加载旧的那份：
+
+```python
+import os, shutil
+src = "cpp/kupl/einsum/libpyqcdeinsum_kupl.so"
+dst = "pyqcd/einsum/kupl/libpyqcdeinsum_kupl.so"
+staged = dst + f".tmp.{os.getpid()}"
+shutil.copy2(src, staged); os.replace(staged, dst)     # 就地 O_TRUNC 覆盖会 SIGSEGV
+```
+
+**两条必须记住的边界**：
+
+- **`.so` 不入库**（`.gitignore:75` 的 `*.so`），`git status` 永远干净——"工作区没有
+  改动"不等于"产物是新的"。判断产物一律看时间戳与 `nm` 计数，不看 git。
+- **CUDA 侧有同一个坑**：`pyqcd/einsum/cuda/libpyqcdeinsum_cuda.so` 与
+  `einsum.cpython-*.so` 同样是未跟踪产物；CUDA 契约在没有 cupy/设备时**整档 skip**，
+  所以"CUDA 侧全绿"可能只是没跑（`_require_cuda()` 的 `SkipTest`）。

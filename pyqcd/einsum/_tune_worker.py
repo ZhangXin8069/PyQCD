@@ -252,7 +252,8 @@ def _kernel_info() -> dict[str, Any]:
         last = getattr(module, "LAST_INFO", None)
         if last:
             info[name] = {key: last[key] for key in
-                          ("path", "specialized", "steps", "dtype", "copied")
+                          ("path", "specialized", "steps", "dtype", "copied",
+                           "budget_gate", "budget_gate_bypassed")
                           if key in last}
     return info
 

@@ -132,17 +132,22 @@
   ``wall_ms`` 与 ``min_wall_ms`` 两个数值）、继续下一组、**不写缓存**；某组测到更小耗时
   则**立刻**把上界降为该值（后续所有组都用新上界剪枝）。``best`` 就是记录的最小耗时
   那一组。剪枝不豁免任何组——包括清单最前面的那几组。
-* **遍历前先探测再裁剪**（规格 §18，2026-11-18）：``dedicated`` / ``topology`` 会在
-  跑任何一组之前查一次**准入**——``dedicated`` 复用内核自己的 ``enabled()`` /
-  ``dedicated_dtypes()`` / ``_dedicated_cached()`` / ``*_plan_fallback_reason()``
-  （**计划 arena 超预算**的原文与阈值都来自内核，不在本模块另立数字），``topology``
-  用 ``_specialize.match(方程或等价改写)``。判为不可用的内核**整档**不跑，表里给一行
-  ``状态=skip``（**不是** ``error``：``error`` 只留给真正的意外），表尾另有
-  ``skipped-kernels:`` 逐条点名；``1/N`` 的 ``N`` 是**裁剪后**实际遍历的组数，
-  ``tune hdr`` / ``tune plan`` 两行写明"计划多少 → 实际多少"。
+* **遍历前先探测再裁剪**（规格 §18，2026-11-18；2026-11-19 收窄）：``dedicated`` /
+  ``topology`` 会在跑任何一组之前查一次**准入**——``dedicated`` 复用内核自己的
+  ``enabled()`` / ``dedicated_dtypes()`` / ``_dedicated_cached()``，``topology`` 用
+  ``_specialize.match(方程或等价改写)``。**只有环境性不可用**（原生库缺失、开关关掉、
+  dtype 没有步表路径、收缩无法编码成固定步表）才整档不跑并给一行 ``状态=skip``
+  （**不是** ``error``：``error`` 只留给真正的意外），表尾另有 ``skipped-kernels:``
+  逐条点名。
+* **收益/预算判据不再参与准入**：arena、单步 GEMM、pack 流量那几道门回答的是"自动
+  分派时这一格划不划算"，不是"能不能跑"。``--tune`` 的语义是**把这张网格上每一格都
+  测出来**，所以它们照旧逐组真跑（内核侧由 ``_kernel_kupl.bypass_plan_gate()`` 穿过
+  门槛），超预算这件事留在 ``LAST_INFO['budget_gate']`` 与实测 ``wall_ms`` 里
+  （2026-11-19 用户裁定：``dedicated`` 曾因 ``pack/flops = 3.950`` 被整档删掉 7 组，
+  用户根本看不到那一格的数字）。
 * **tune 的输出必须完整**（规格 §12/§13，2026-11-17）：遍历期间**每一组都给一行**
-  ``tune comb : 序号/总数  kernel_force=…  as_equivalence=…  optimize=…  backend=…
-  dtype=…  device=…  wall_ms=…  状态=<ok|timeout|error|mismatch|pruned|skip>  原因=…``
+ ``tune comb : 序号/总数  kernel_force=…  as_equivalence=…  optimize=…  backend=…
+ dtype=…  device=…  wall_ms=…  状态=<ok|timeout|error|mismatch|pruned|skip>  原因=…``
   （后三项是该组 **实际下发**的性能配置），与 ``--verbose`` 无关、不去重、不截断。
   ``timeout`` / ``error`` / ``mismatch`` / ``pruned`` 的**原因原文**逐字打出：原文含
   换行时逐行续打（``tune due  :``），绝不折叠成"…等 N 项"，也不只报首个。保存信息
@@ -3203,7 +3208,8 @@ def _kernel_info() -> dict[str, Any]:
         last = getattr(module, "LAST_INFO", None)
         if last:
             info[name] = {key: last[key] for key in
-                          ("path", "specialized", "steps", "dtype", "copied")
+                          ("path", "specialized", "steps", "dtype", "copied",
+                           "budget_gate", "budget_gate_bypassed")
                           if key in last}
     return info
 
@@ -3742,17 +3748,26 @@ TUNE_STATUS_SKIP = "skip"
 def _dedicated_unavailable_reason(equation: str, shapes: Sequence[Sequence[int]],
                                  dtype: Any, backend: str,
                                  device: str = "cpu") -> str | None:
-    """``dedicated`` 在**这条方程/形状/dtype/后端**上能不能用（只查准入，不执行）。
+    """``dedicated`` 在**这条方程/形状/dtype/后端**上**能不能跑**（只查环境，不执行）。
 
-    判据全部复用内核自己的函数，**不新造阈值**：``enabled()``（原生库/开关）、
-    ``dedicated_dtypes()``（dtype 有没有步表路径）、``_dedicated_cached()``（这条
-    收缩能不能编码成固定步表，只规划不下发）、
-    ``_cpu_plan_fallback_reason`` / ``_plan_fallback_reason``（**计划 arena 超预算**
-    这一类拒绝，原文里就带着阈值与两个数字，报告里逐字打出来）。
+    只留**环境性**判据，全部复用内核自己的函数：
 
-    返回 ``None`` = 可用；否则返回内核自己的**原文**（用户能与内核日志里同一句话对上）。
-    探测自身出错时同样返回 ``None``：宁可照旧逐组跑（看得见错误），也不凭一次失败
-    的探测把一个其实可用的内核整组裁掉。
+    * ``enabled()``——原生库缺失，或被 ``PYQCD_EINSUM_KERNEL_*`` 关掉；
+    * ``dedicated_dtypes()``——这个 dtype 没有步表路径（**不做隐式降精度**）；
+    * torch 后端——``try_dedicated`` 只吃 numpy / cupy 数组；
+    * ``_dedicated_cached()`` 返回 ``None``——这条收缩根本无法编码成固定步表。
+
+    **收益判据不在这里**（2026-11-19 用户裁定）：``_cpu_plan_fallback_reason`` /
+    ``_plan_fallback_reason`` 那几道门（arena、单步 GEMM、pack 流量）回答的是
+    "自动分派时这一格划不划算"，不是"这一格能不能跑"。``--tune`` 的语义是**把这张
+    网格上每一格都测出来**——在准入阶段按收益把整档裁掉，用户就永远看不到那一格的
+    ``wall_ms``（2026-11-19 用户实测：``dedicated`` 因为
+    ``pack/flops = 3.950 >= 1.0`` 被整档删掉，7 组连跑都没跑）。那些门现在由
+    ``_kernel_kupl.bypass_plan_gate()`` 穿过，真人真跑、实测见分晓。
+
+    返回 ``None`` = 能跑；否则返回内核自己的**原文**（用户能与内核日志里同一句话
+    对上）。探测自身出错时同样返回 ``None``：宁可照旧逐组跑（看得见错误），也不凭
+    一次失败的探测把一个其实能跑的内核整档裁掉。
     """
     try:
         from pyqcd.einsum import _kernel_cuda, _kernel_kupl
@@ -3760,7 +3775,7 @@ def _dedicated_unavailable_reason(equation: str, shapes: Sequence[Sequence[int]]
         name = str(backend or "").strip().lower()
         if name in ("", "auto"):
             # ``--backend auto`` 时真正生效的后端由设备定（与 ``_tune_key`` 的口径一致）：
-            # 拿错后端等于用另一个内核的预算去判它（CPU 8 GiB vs CUDA 3 GiB）。
+            # 拿错后端会让"有没有原生库"判反。
             gpu = str(device or "").strip().lower() in ("gpu", "cuda")
             name = "cupy" if gpu else "numpy"
         cupy = name in ("cupy", "cuda", "gpu")
@@ -3792,11 +3807,8 @@ def _dedicated_unavailable_reason(equation: str, shapes: Sequence[Sequence[int]]
             np_dtype, optimize, "cuda" if cupy else "kupl")
         if entry is None:
             return "the contraction path is not expressible as a fixed step table"
-        stats = _kernel_kupl._plan_statistics(entry[0])
-        gate = (module._plan_fallback_reason(np_dtype, stats) if cupy
-                else module._cpu_plan_fallback_reason(stats))
-        return None if gate is None else str(gate)
-    except Exception:                     # noqa: BLE001 - 探测失败不许裁掉可用内核
+        return None
+    except Exception:                     # noqa: BLE001 - 探测失败不许裁掉能跑的内核
         return None
 
 
@@ -4060,10 +4072,8 @@ def _tune_rel(row: dict[str, Any]) -> str:
     return "-" if value is None else f"{value:.3e}"
 
 
-#: 一组的分类取值（规格 §12.1 冻结，机器可读、**不翻译**）。``pruned`` 是
+#: 一组的状态取值（规格 §12.1 冻结，机器可读、**不翻译**）。``pruned`` 是
 #: ``min_wall_ms`` 剪枝：这一组**没被测完**（它比当前上界慢），因此同样不参与选优。
-#: ``skip`` 是**遍历前**就判定"该内核对这个形状没有路"（计划 arena 超预算、方程不可
-#: 特化……）：它既不是异常也不是"太慢"，不该混进 ``error``。
 TUNE_STATUS_OK = "ok"
 TUNE_STATUS_TIMEOUT = "timeout"
 TUNE_STATUS_ERROR = "error"
@@ -4080,13 +4090,18 @@ def tune_status(row: dict[str, Any]) -> str:
     而 §12.1 只给了四个取值；记成别的字面量会让"为什么这一格没有数"看不出是时间
     原因。``pruned`` 单独成一档（不折进 ``timeout``）：它说的是"比当前最快的那一组
     还慢"，与"这一组自己超过 ``--tune-timeout``"是两件不同的事，混在一起就没法回答
-    "到底是卡死了还是单纯不快"。``skip`` 同样单独成一档：它是**遍历前**的准入结论
-    （不是测量结果），折进 ``error`` 会让一次正常遍历看起来像 8 次意外。
+    "到底是卡死了还是单纯不快"。
 
     ``predicted``（只凭规划器 FLOPs 就判定不值得跑）**也归 ``pruned``**：两者都是
     "这一格没有被测完"，区别只在依据是估算还是实测，而 ``原因=`` 原文已经写明
     ``plan-only estimate, not measured``。不折进去的话，一行没有 ``median_ms`` 的
     记录会被读成 ``error``——那等于把"我们没跑"说成"它跑崩了"。
+
+    ``skip`` **只剩环境性不可用**（原生库缺失、被开关关掉、dtype 没有步表路径、
+    torch 后端给不了 numpy/cupy 数组）。**收益/预算判据一律不进这一档**（2026-11-19
+    用户裁定）：``--tune`` 的语义是"把这张网格上每一格都测出来"，arena / 单步 GEMM /
+    pack 流量那些门是**自动分派**的选路策略，不是能力上限——它们由
+    ``_kernel_kupl.bypass_plan_gate()`` 穿过，这一档照旧真跑并留下实测 ``wall_ms``。
     """
     if row.get("pruned") or row.get("predicted"):
         return TUNE_STATUS_PRUNED

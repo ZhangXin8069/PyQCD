@@ -9,7 +9,7 @@ latest release, and read the output and any notices printed during the install.*
 The package is distributed on PyPI as `pyqcd`; a single install gives you the whole
 toolkit and everything this site documents.
 
-Current release: `0.5.7`. To pin it: `pip install "pyqcd==0.5.7"`.
+Current release: `0.5.8`. To pin it: `pip install "pyqcd==0.5.8"`.
 
 ## Requirements
 

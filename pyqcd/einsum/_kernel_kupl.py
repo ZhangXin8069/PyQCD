@@ -105,6 +105,52 @@ def bypass_negative_cache():
             _NEGATIVE_CACHE_BYPASS -= 1
 
 
+# ── 预算门槛旁路（强制内核 / --tune 专用）───────────────────────────────────
+# ``_cpu_plan_fallback_reason`` / ``_topology_pack_bound_reason`` / CUDA 的
+# ``_plan_fallback_reason`` 是**选路策略**：它们回答"自动分派时该不该把这一格交给
+# 原生执行器"，依据是实测的收益（seq=646 的 topology 路线实测 5095 ms，同一条计划
+# 的 dedicated 侧被同一判据拒绝：1666300992 pack bytes / 216250112 FLOPs，见
+# ``logs/v202611151120.txt`` 的 S5）。它们**不是能力上限**——原生执行器本身完全能
+# 跑这些计划，只是慢。
+#
+# 所以"用户点名要跑"与"tune 要测出这一格的真实耗时"这两种场合必须能穿过它们：
+# 否则 ``--kernel-force dedicated`` 会在下发之前就被判死（用户永远得不到那个数字），
+# ``--tune`` 也永远量不到这一格的 ``wall_ms``。旁路用模块内计数器表达（0 = 不旁路，
+# 支持嵌套），与 ``bypass_negative_cache`` 同一套写法与理由：**不改 os.environ**，
+# 环境变量是调用方与并发线程共享的状态。
+_PLAN_GATE_BYPASS = 0
+_PLAN_GATE_BYPASS_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def bypass_plan_gate():
+    """上下文内**忽略预算门槛**（arena / 单步 GEMM / pack 流量）。
+
+    进入时 +1、退出（含异常路径）在 ``finally`` 里 -1，嵌套天然配平。
+
+    旁路期间门槛仍然**照算**并写进 ``LAST_INFO['budget_gate']``——"跑是跑了，但它
+    超过预算"这条事实必须留下，否则报告会把一次亏本执行说成健康。区别只在：
+    不再 ``_fail``、不再写负缓存。
+
+    谁会用：``_api._attempt_kernel``（``--kernel-force`` 的"强制即真试一次"）与
+    ``--tune`` 的每一组（tune 的语义就是"把每一格都测出来"，准入判定不归它管）。
+    自动分派**不经过**这里，策略照旧生效。
+    """
+    global _PLAN_GATE_BYPASS
+    with _PLAN_GATE_BYPASS_LOCK:
+        _PLAN_GATE_BYPASS += 1
+    try:
+        yield
+    finally:
+        with _PLAN_GATE_BYPASS_LOCK:
+            _PLAN_GATE_BYPASS -= 1
+
+
+def plan_gate_bypassed() -> bool:
+    """当前是否处于"忽略预算门槛"的上下文（CUDA 侧共用这一个标志）。"""
+    return _PLAN_GATE_BYPASS > 0
+
+
 def _negative_cache_enabled() -> bool:
     """Whether deterministic native rejections may be reused this call.
 
@@ -609,13 +655,14 @@ def _topology_pack_bound_reason(plan: Any, itemsize: int) -> str | None:
 
     为什么需要这道门：seq=646（``amwq`` 四轴各 100，distill 尺寸）的输出本身就是
     1e8 元素且末步 ``c_axes=[2,3,1,0]``（必须 unpack），只用 1.08e8 次乘加。任何
-    实现都得写下这 800 MB，但 topology 还会在中间体上整块 pack/unpack：绕过守卫
-    直调原生实测 **8.9 s**，而通用路径 0.39 s（23×）。dedicated 早就被同一个判据
-    拒掉，topology 缺这道门就会把它当成"命中最优路径"——修复后它仍然被拒
-    （末步 3.05 GiB unpack 流量）。seq=369/845 同属这一类：它们的**输入侧**确实
-    全可直连（因此新口径把估算从 3.36 GB 降到 3.20 GB），但末步同样是 1e8 元素的
-    非规范序输出，原生实测 7.8/8.0 s vs 通用路径 0.57 s —— 只修输入侧就放行会把
-    13–14× 的回归当成收益。
+    实现都得写下这 800 MB，但 topology 还会在中间体上整块 pack/unpack：本机实测
+    **topology 5095 ms**（``logs/v202611151120.txt`` S5），而同一条计划的 dedicated
+    侧被同一判据直接拒绝（1666300992 pack bytes / 216250112 FLOPs，同日志）。
+    dedicated 早就被这道门拒掉，topology 缺它就会把这一格当成"命中最优路径"——
+    修复后它仍然被拒（末步 3.05 GiB unpack 流量）。seq=369/845 同属这一类：它们的
+    **输入侧**确实全可直连（因此新口径把估算从 3.36 GB 降到 3.20 GB），但末步同样
+    是 1e8 元素的非规范序输出，原生实测 7.8/8.0 s vs 通用路径 0.57 s —— 只修输入侧
+    就放行会把 13–14× 的回归当成收益。
 
     口径的边界：本模型描述的是**编译期步表执行器**，也就是原生现在唯一的路线。
     未命中步表的计划直接判 status 4、由 Python 通用路径处理，不再有"原生 version-2
@@ -846,11 +893,12 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
     cached_unsupported = _cached_unsupported(negative_key)
     if cached_unsupported is not None:
         return _fail(*cached_unsupported)
+    heavy: str | None = None
     try:
         plan = _topology_plan(_topology_key(subscripts, operands, optimize),
                               subscripts, operands, optimize=optimize)
         heavy = _topology_pack_bound_reason(plan, np.dtype(dtype).itemsize)
-        if heavy is not None:
+        if heavy is not None and not plan_gate_bypassed():
             _negative_cache_store(negative_key, f"topology declined: {heavy}", 4)
             return _fail(f"topology declined: {heavy}", 4)
         result = kupl.topology_apply(plan, operands, out, info=LAST_INFO)
@@ -862,6 +910,10 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
             _negative_cache_store(negative_key, reason, 4)
         return _fail(reason, status)
     LAST_INFO["path"] = "kupl_topology"
+    if heavy is not None:
+        # 门槛被旁路：跑是跑了，但"它超过预算"这条事实必须留下（同 dedicated）。
+        LAST_INFO["budget_gate"] = f"topology declined: {heavy}"
+        LAST_INFO["budget_gate_bypassed"] = True
     return result
 
 
@@ -1486,7 +1538,8 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
     plan, output_shape, plan_buffer, plan_flops = cached
     stats = _plan_statistics(plan)
     plan_gate = _cpu_plan_fallback_reason(stats)
-    if plan_gate is not None:
+    bypassed = plan_gate_bypassed()
+    if plan_gate is not None and not bypassed:
         _negative_cache_store(negative_key, plan_gate, 4)
         return _fail(plan_gate, 4)
 
@@ -1536,4 +1589,9 @@ def try_dedicated(subscripts: Any, operands: Sequence[Any], out: Any = None,
         output_shape=tuple(output_shape),
         out="allocated" if out is None else "provided",
     )
+    if plan_gate is not None:
+        # 门槛被旁路（强制内核 / --tune）：跑是跑了，但"它超过预算"这条事实必须留下，
+        # 否则报告会把一次亏本执行说成健康路线。原文照抄门槛自己的措辞。
+        LAST_INFO["budget_gate"] = plan_gate
+        LAST_INFO["budget_gate_bypassed"] = True
     return output
