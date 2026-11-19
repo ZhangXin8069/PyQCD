@@ -34,8 +34,17 @@ import tempfile
 import time
 import unittest
 from typing import Any, Iterator
+from unittest.mock import patch
 
 from ..einsum import _tune_runner, _tune_worker
+
+
+def _cli() -> Any:
+    """CLI 模块（懒取，避免本模块 import 期就拖进 argparse）。"""
+    from ..einsum import test as cli
+
+    return cli
+
 
 #: 第 1 条的组级上限（秒）：比机器最快的进程启动还宽裕，又远小于 ``sleep``。
 HANG_LIMIT = 1.5
@@ -230,6 +239,65 @@ def test_isolation_default_is_subprocess_and_env_can_opt_out() -> None:
             os.environ[_tune_runner.INPROCESS_ENV] = saved
 
 
+def test_subprocess_groups_never_read_the_profile_table() -> None:
+    """契约 6/7：子进程里的每一组都 ``profile=False``，绝不因命中行报冲突。
+
+    回归点（2026-11-19 用户实测）：``tune_session()`` 的"遍历期间不读表"靠
+    ``_profile_cache._TUNING`` 这个**进程内**计数器，子进程里它恒为 0，于是每一组都
+    重新读表；命中行又把父进程显式下发的三轴盖掉 → ``_api`` 抛 ``ProfileConflict``，
+    15 组里 9 组记 ``error``。重新引入这条路必须让本契约红。
+    """
+    from ..einsum import _profile_cache
+
+    cli = _cli()
+    scratch = _Scratch()
+    saved_cwd = os.getcwd()
+    saved_env = {name: os.environ.get(name)
+                 for name in (_profile_cache.PROFILE_ENV, _profile_cache.DIR_ENV)}
+    saved_state = (_profile_cache._TABLE, _profile_cache._CONFIGURED_DIR,
+                   _profile_cache._LAST_ERROR)
+    combos = (("generic", "false", "greedy"),
+              ("generic", "false", "branch_1"),
+              ("generic", "false", "dp"))
+    try:
+        os.chdir(scratch.root)
+        os.environ[_profile_cache.PROFILE_ENV] = "1"
+        os.environ.pop(_profile_cache.DIR_ENV, None)
+        _profile_cache._TABLE = None
+        _profile_cache._CONFIGURED_DIR = ""
+        _profile_cache._LAST_ERROR = None
+        # 先写一条**与每一格都冲突**的命中行（kernel=backend、optimize=greedy）。
+        _profile_cache.write_winner(
+            {"shape": "6x6|6x6", "dtype": "complex128", "device": "cpu",
+             "equation": EQUATION, "backend": "numpy"},
+            {"kernel": "backend", "optimize": "greedy", "wall_ms": "1"},
+            note="-")
+        assert _profile_cache.profile_path() and os.path.exists(
+            _profile_cache.profile_path()), "前置条件：配置表必须真的存在"
+
+        with patch.object(cli, "tune_combos", lambda *a, **k: list(combos)):
+            tune = cli.run_tune(equation=EQUATION, shapes=SHAPES, warmup=1,
+                                rounds=1, isolate=True, profile=True)
+    finally:
+        os.chdir(saved_cwd)
+        for name, value in saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        (_profile_cache._TABLE, _profile_cache._CONFIGURED_DIR,
+         _profile_cache._LAST_ERROR) = saved_state
+        scratch.close()
+
+    conflicts = [row for row in tune["rows"] if row.get("error")]
+    assert not conflicts, (
+        "子进程遍历期间不得读配置表（否则每格都 ProfileConflict）",
+        [(row["kernel_force"], row["optimize"], str(row["reason"])[:80])
+         for row in conflicts])
+    assert all(row["status"] in ("ok", "pruned", "skip") for row in tune["rows"]), (
+        "只允许这三类状态", [(row["optimize"], row["status"]) for row in tune["rows"]])
+
+
 TESTS = (
     test_isolation_default_is_subprocess_and_env_can_opt_out,
     test_hard_timeout_kills_a_hanging_native_call,
@@ -237,6 +305,7 @@ TESTS = (
     test_startup_cost_is_reported_separately_from_wall_time,
     test_child_crash_is_an_error_not_a_timeout,
     test_in_group_pruning_still_runs_inside_the_child,
+    test_subprocess_groups_never_read_the_profile_table,
 )
 
 

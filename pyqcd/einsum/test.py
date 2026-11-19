@@ -5037,7 +5037,8 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     first_started = time.perf_counter()
     first_done = False
     if isolated:
-        _tune_init("isolation start  mode=subprocess  groups={}".format(len(combos)))
+        _tune_init("isolation start  mode=subprocess  profile_disabled=true  "
+                   "groups={}".format(len(combos)))
     try:
         # 规格 §3.1：遍历期间配置表**既不读也不写**。写侧由这里的 tune_session 负责，
         # 读侧也一并关掉——否则 ``auto`` 那几组会被历史命中劫持，量到的是"命中耗时"。
@@ -5164,6 +5165,11 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                                     "cache": cache,
                                 },
                                 "profile_kwargs": dict(extra),
+                                # 子进程里的 ``tune_session`` 不生效（``_TUNING`` 是进程内
+                                # 计数器），必须显式让每一组都 ``profile=False``，
+                                # 否则读表会把命中行的三轴盖到被测格子上，并抛出
+                                # ``ProfileConflict``（2026-11-19 用户实测 9 组 error）。
+                                "profile_off": True,
                                 "output_operand": output_path if want_output else None,
                                 "output_max_bytes": _tune_runner.OUTPUT_MAX_BYTES,
                             },

@@ -151,6 +151,22 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
         kwargs["kernel_force"] = job["kernel_force"]
     kwargs["as_equivalence"] = job.get("as_equivalence")
     kwargs["optimize"] = job.get("optimize")
+    if job.get("profile_off"):
+        # 遍历**必须**量"被测配置本身"：读表会让命中行把 ``optimize`` / ``kernel``
+        # 换掉，于是量到的不是这一格；更糟的是父进程按格显式下发的三轴会与命中行
+        # 冲突，``_api`` 抛 ``ProfileConflict``，每一格都变成 ``error``。
+        #
+        # 进程内路线靠 ``_profile_cache.tune_session()`` 的 ``_TUNING`` 实现同一件事，
+        # 但那是一个**进程内**计数器：子进程里它恒为 0，读表照旧发生（2026-11-19 用户
+        # 实测：9 组 ProfileConflict）。所以这里显式关掉本次调用的画像读写。
+        profile_name = "profile"
+        try:
+            import inspect
+
+            if profile_name in inspect.signature(pe.contract).parameters:
+                kwargs[profile_name] = False
+        except (TypeError, ValueError):         # pragma: no cover - 装饰器/扩展
+            kwargs.pop(profile_name, None)
 
     def clear_records() -> None:
         """清掉父进程留不下来的选路记录，让观察只反映**本组**。"""
