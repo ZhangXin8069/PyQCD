@@ -49,14 +49,14 @@ through an equivalent rewrite (operand reordering, output-axis permutation). In 
 `--explain true` names the corpus equation whose roles supplied the sizes, so the axis
 order never looks unexplained.
 
-### What the clock actually measures (0.5.9+)
+### What the clock actually measures (since the synchronised-timing fix)
 
 Two rules make the reported milliseconds comparable with a script of your own:
 
 - **The device is synchronised around every sample.** `cupy` and CUDA `torch` dispatch
   asynchronously, so `perf_counter()` around `contract()` alone would stop at
   *enqueue* time. Each measured sample is bracketed by a device sync (a no-op on CPU),
-  so the number is compute time on GPU too. Before 0.5.9 it was not, which made GPU
+  so the number is compute time on GPU too. Earlier releases did not do this, which made GPU
   timings look orders of magnitude too small — those historical numbers are void, see
   `docs/ERRATA_gpu_timing_20261119.md`（仓库内，不在本站）.
 - **`--warmup` is raised to at least 2 on an accelerated device.** The first call there
