@@ -50,7 +50,7 @@ __all__ = [
     "vertex",
 ]
 
-__version__ = "0.5.6"
+__version__ = "0.5.7"
 
 import importlib as _importlib
 

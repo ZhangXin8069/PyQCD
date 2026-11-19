@@ -86,6 +86,7 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
   只有一列计时（`wall_ms` = 整次 `contract()` 的墙钟）。`--kernel-force`
   只接受单个逻辑值（`generic` / `dedicated` / `topology` / `backend`）。
   tune 按分支的有序清单遍历，`min_wall_ms` 剪枝，只写胜出的一组。
+* **0.5.7** — `--tune` 的子进程组一律 `profile=False`：遍历期间配置表既不读也不写，命中行不会再和父进程逐格显式下发的三轴冲突（0.5.6 引入的 9 组 `ProfileConflict` 回归，已修）。
 * **0.5.6** — `--tune` 的超时升级为**硬上限**：每组在全新解释器里跑、超时由父进程 kill 子进程，原生 C/CUDA 代码真的能被打断（SIGALRM 做不到）；进程启动开销单列，**不计入** `wall_ms`。两条**只看规划器**的预判剪枝把病态组挡在运行之前（`optimize=none` 在生产形状上要算 ~7.6e17 次浮点；`optimal` 仅规划就要 38 s）。设 `PYQCD_EINSUM_TUNE_INPROCESS=1` 退回旧的尽力而为路线。
 * **0.5.5** — `--tune pass`（快速通过：只走 `[if_equivalence=false, if_specialized=false]` 这条线，禁用 `--compare` 与全部无关功能）、初始化阶段的 `tune init :` 起止进度行，以及**如实**的 `--tune-timeout` 契约（尽力而为：能打断 Python 循环、打不断原生 C/CUDA）；性能页删掉了过时的加速比，只保留"先跑 `--tune`、按自己的形状实测"。
 * **0.5.4** — 拓扑步表统一到 `ROLE_SHAPES`：`production`（生产异形轴）与 `uniform`（等长 `dim=4` 探针）**已删除**，`sizes` 改为必填；`optimize` 恰为七个下划线叶子；两张表统一用 `auto` 生成；删除 `kupl_topology_v2`、`--backend kupl|cuda`、`--compare numpy`；`--tune` 不再因参照收缩卡死，且**先改写再强制内核**。
