@@ -101,6 +101,16 @@
   best=kernel_force=… as_equivalence=… optimize=…  vram+…``。``--tune`` 时把**剪枝上界**
   与**最终 best 配置**一并写进这一行——数值相同也要都显示，因为"上界确实来自最优组"
   正是靠这两个数相等来确认的（2026-11-18 用户要求）。
+* **``--tune`` 的取值**（2026-11-18 用户裁定）：它**带取值**，不是开关。留空 /
+  ``true`` / ``all`` = ``all``（下面各条描述的完整模式）；``pass`` = **快速通过模式**
+  ——强制 B3 的 21 组（无 ``topology``）、``as_equivalence`` 固定 ``false``、跳过分支
+  探测与全部 ``--compare``/数值校验（``rel`` 一律 ``-``、不做 MISMATCH 判定），并关闭
+  提示/详解等无关功能，表尾注 ``pass 模式：跳过数值校验``；``false`` / 空串 = 不跑。
+  非法取值退出码 2，绝不静默当成 off（那会让拼写错误看起来像"跑了没输出"）。
+* **初始化过程输出**：遍历开始之前按阶段逐行打印 ``tune init :``（mode/形状规模/
+  分支探测**起止**/内核准入**起止**/session/首组**起止**）。字段名与取值是**机器可读**
+  的稳定 token、不跟 ``--language`` 翻译，耗时以 ``ms`` 取整——目的只有一个：
+  一旦卡住，立刻看得出卡在哪一步（2026-11-19 用户要求）。
 * **遍历调优**：``--tune``（缺省关）在**同一条**方程/形状/dtype/设备/后端上遍历
   三轴 ``kernel_force × as_equivalence × optimize``。**不是笛卡尔积**：清单按分支
   给出且**逐项有序**（共同前缀 ``dedicated`` → ``generic`` → 分支专属 ``topology``
@@ -155,12 +165,24 @@
   "走等价转换后的配置性能更佳"的记录。两种情形都**删除该键的其它所有行**（同键只允许
   1 行），删除条数如实打印。普通 ``contract()`` 调用**只读**，一个字节都不写。
 * **超时与预算**：``--tune-timeout``（缺省 30 秒）是**每一次** ``contract()`` 调用的
-  上限（warmup 与每一轮都算）：任一次超时 → 该组记 ``timeout``、继续下一组，中位只由
-  全部成功且未超时的调用构成（不拿部分样本凑）。``--tune-budget``（缺省 ``0`` = 不限）
-  是整轮上限，用尽即停止遍历并报"已测 N/M"。实现用 ``signal.setitimer`` + ``SIGALRM``：
-  **可能打断原生内核，建议在新进程里跑 tune**（信号只在主线程可用；装不上定时器时
-  退化成"跑完再按耗时判定"）。坏组合——超时、抛异常、``rel > atol+rtol``——**只打印、
-  不中断遍历**，并且一律不参与选优、不写进配置表。
+  上限（warmup 与每一轮都算）。它是**尽力而为上限（best-effort）**：能打断 Python 侧
+  长循环（例如 ``optimal`` 的穷举规划，实测 6.5 s），**打不断原生 C/CUDA 代码**——
+  信号只在 Python 字节码之间派发，原生代码不返回解释器时处理器永不执行，那一组只能
+  等调用返回后才被记 ``timeout``（实测 ``--tune`` 在 CPU 100%、GPU 0% 状态下挂了
+  3 分钟，超时完全失效；本机 2026-11-19 另测：单次 2.34 s 的原生 BLAS、上限 0.3 s，
+  实际 2.29 s 才抛，即**超限 1.99 s**）。所以 GPU 上请把 ``--tune-timeout`` 取足够大，
+  或先用 ``--tune pass`` 快速通过（跳过 compare 与等价改写）。fork 子进程隔离试过并
+  已回退：CUDA 上下文不跨 fork 复用，子进程必然 ``cudaErrorInitializationError``。
+  **窗口粒度是整组**：一组有 ``1+warmup+rounds`` 次调用（缺省 7 次），实际装的是
+  ``limit × 7`` 的**组级预算**——按单次设限会把 ``7 × limit`` 全花光，且与
+  ``min_wall_ms`` 剪枝（比整组中位）不同口径。副作用是**单次**略超上限而整组未超预算
+  时不判 timeout，这是刻意的。
+  任一次超过上限 → 该组记 ``timeout``、继续下一组，中位只由全部成功且未超时的调用
+  构成（不拿部分样本凑）。``--tune-budget``（缺省 ``0`` = 不限）是整轮上限，用尽即
+  停止遍历并报"已测 N/M"，同样是尽力而为：卡在原生代码里的那一组仍要等它返回。
+  信号只在主线程可用；装不上定时器时退化成"跑完再按耗时判定"。坏组合——超时、
+  抛异常、``rel > atol+rtol``——**只打印、不中断遍历**，并且一律不参与选优、
+  不写进配置表。
 """
 from __future__ import annotations
 
@@ -207,6 +229,8 @@ __all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES",
            "tune_unavailable_kernels", "tune_plan_trimmed",
            "tune_plan_sizes_trimmed",
            "TERMINATION_MESSAGE",
+           "TUNE_MODE_ALL", "TUNE_MODE_PASS", "TUNE_MODES", "parse_tune_mode",
+           "tune_mode_enabled", "TUNE_PASS_SKIP_NOTE", "TUNE_INIT_PREFIX",
            "run_tune", "print_tune", "tune_best"]
 
 class UsageError(SystemExit):
@@ -320,11 +344,28 @@ TUNE_MAX_COMBOS = 30
 TUNE_AXES = "kernel_force × as_equivalence × optimize"
 #: ``--tune-timeout``：**每一次** ``contract()`` 调用（warmup 与每一轮都算）的上限
 #: 秒数。``<= 0`` = 不设上限。超时的那一组记 ``timeout``、只打印、继续下一组。
-#: 缺省 **30**：一整轮 30 组、每组 warmup+rounds 次调用，100 秒的上限会让"某组卡死"
-#: 把一次遍历拖成半小时；30 秒足够覆盖本仓库已实测的生产尺寸（最大一组约 3 s）。
+#: 它是**尽力而为（best-effort）上限**，不是硬超时：能打断 Python 侧长循环，
+#: 打不断原生 C/CUDA 代码（详见 :func:`_guarded_call` 与模块 docstring）。
+#: 缺省 **30**：一轮 22/21 组（B1/B2、B3）每组 ``1+warmup+rounds`` 次调用，
+#: 上限取得过大时"某组卡死"就会把一次遍历拖成半小时；30 秒足够覆盖本仓库已实测的
+#: 生产尺寸（最大一组约 3 s），而真正打不断的原生调用无论取多小都得等它返回。
 DEFAULT_TUNE_TIMEOUT = 30.0
 #: ``--tune-budget``：整轮遍历的上限秒数，``0`` = 不限。用尽即停止遍历并报"已测 N/M"。
 DEFAULT_TUNE_BUDGET = 0.0
+#: ``--tune`` 的**取值**（2026-11-18 用户裁定）：它带取值，不是开关。``all`` = 完整模式
+#: （分支判定 + 22/21 组遍历 + 剪枝 + 参照校验），``pass`` = **快速通过模式**（强制
+#: ``B3`` 的 21 组、无 ``topology``、``as_equivalence`` 全 ``false``、不跑参照、
+#: 不判 MISMATCH）。
+TUNE_MODE_ALL = "all"
+TUNE_MODE_PASS = "pass"
+TUNE_MODE_OFF = "false"
+TUNE_MODES = (TUNE_MODE_ALL, TUNE_MODE_PASS)
+#: ``pass`` 模式的表尾注记：**固定原文**，两种语言逐字相同（它是"这一轮没做数值校验"
+#: 的唯一标记，翻译掉脚本就抓不到）。
+TUNE_PASS_SKIP_NOTE = "pass 模式：跳过数值校验"
+#: 初始化过程输出的前缀与方程显示上限（**机器可读**、不跟 ``--language`` 翻译）。
+TUNE_INIT_PREFIX = "tune init : "
+TUNE_INIT_EQUATION_CHARS = 60
 
 
 # ── 输出语言（--language） ──────────────────────────────────────────────────
@@ -617,7 +658,25 @@ MESSAGES: dict[str, dict[str, str]] = {
                "out=、额外 kwargs、逐元素方程与显式优化器路径不施加。缺省 {default}"),
     },
     "help.tune": {
-        "en": ("Sweep kernel_force × as_equivalence × optimize and report the median of "
+        "en": ("Mode argument, not a switch. Leave it empty (bare --tune), or write "
+               "true, True or all = the FULL sweep described below (branch probe + 22/21 "
+               "combinations + min_wall_ms pruning + numeric self-check). Write pass = "
+               "FAST PASS mode: the branch is forced to B3 (21 combinations, no "
+               "topology), as_equivalence is pinned to false, every --compare feature is "
+               "disabled (no reference is computed, rel stays '-', no MISMATCH verdict; "
+               "the table ends with 'pass mode: numerical check skipped'), and the side "
+               "features (--explain/--verbose breakdowns, the specialize notices, the "
+               "extra backend/dtype/device probe, the reference) are skipped so the run "
+               "is fast and never blocks. Leave it out (or write false / an empty string) "
+               "= run no sweep. Any other value is a usage error (exit code 2), never a "
+               "silent 'off'.\n"
+               "Before the sweep starts, progress lines prefixed 'tune init :' are "
+               "printed one per stage (mode/shapes, branch probe start+done, kernel "
+               "admission start+done, session start, first group start+done), each with "
+               "its own start and end and with timings in whole ms, so a hang shows "
+               "exactly which stage it is stuck in. In pass mode the branch probe lines "
+               "read 'skipped (pass mode)'.\n"
+               "Sweep kernel_force × as_equivalence × optimize and report the median of "
                "THIS run for every combination. The equation, shapes, dtype, device and "
                "backend are FIXED (they are this run's invariants); --compare defaults "
                "to OFF under --tune (no reference is timed unless you pass --compare "
@@ -662,7 +721,20 @@ MESSAGES: dict[str, dict[str, str]] = {
                "one whose rel exceeds --atol/--rtol is marked MISMATCH: all three are "
                "printed, the sweep continues, and none of them can win or be written. "
                "Default off"),
-        "zh": ("遍历 kernel_force × as_equivalence × optimize，逐组给出**本次**实测中位。"
+        "zh": ("**带取值的模式参数，不是开关**。留空（裸 --tune）或写 true / True / "
+               "all = 下面的**完整模式**（分支判定 + 22/21 组遍历 + min_wall_ms 剪枝 + "
+               "数值自检）；写 **pass = 快速通过模式**：强制 B3（21 组、无 topology）、"
+               "as_equivalence 固定 false、禁用 --compare 的**全部**功能（不解析参照、"
+               "不算 np.einsum、rel 一律 '-'、不做 MISMATCH 判定，表尾注"
+               "「pass 模式：跳过数值校验」），并跳过与 tune 本身无关的功能"
+               "（--explain/--verbose 的详解、专用路径提示、额外的 backend/dtype/device "
+               "探测、参照）——专注快速且无阻塞。不给该选项（或写 false / 空串）= "
+               "不跑遍历。其它取值一律用法错误（退出码 2），**绝不**静默当成 off。\n"
+               "遍历开始之前先逐阶段打印 'tune init :' 过程行（mode 与规模、分支探测"
+               "起止、内核准入起止、session 起止、首组起止），每步都有起有止、耗时用"
+               "整数 ms——卡住时一眼看出卡在哪一步；pass 模式的分支探测行写 "
+               "'skipped (pass mode)'。\n"
+               "遍历 kernel_force × as_equivalence × optimize，逐组给出**本次**实测中位。"
                "方程、形状、dtype、设备与后端**固定不动**（它们是本次的不变量）；"
                "--compare 在 --tune 下**缺省关闭**（不给就不跑参考基准；显式给出时由"
                "主路径照旧跑一次）。被遍历的三维由 --tune 自己"
@@ -693,23 +765,30 @@ MESSAGES: dict[str, dict[str, str]] = {
                "都不参与选优、也不写进配置表。缺省关闭"),
     },
     "help.tune_timeout": {
-        "en": ("Upper bound, in seconds, for EACH contract() call of --tune (warmup and "
-               "every round count). A combination whose call exceeds it is marked "
-               "timeout, is reported and skipped — never written — and the sweep "
-               "continues: a timeout never aborts the run. The median is taken over all "
-               "calls that succeeded within the bound (a partial sample set never "
-               "becomes a median). 0 or negative disables the bound. Implemented with "
-               "signal.setitimer + SIGALRM, which MAY INTERRUPT A NATIVE KERNEL — prefer "
-               "running tune in a fresh process. Signals are only available on the main "
-               "thread; where no timer can be armed the call is measured first and "
-               "judged afterwards. Default {default}"),
-        "zh": ("--tune 的**每一次** contract() 调用的上限秒数（warmup 与每一轮都算）。"
-               "任一次超过它 → 该组记 timeout、只打印并跳过、**绝不写配置表**，遍历继续"
-               "（超时永远不中止整轮）。中位只由全部在上限内成功的调用构成"
-               "（不拿部分样本凑中位）。0 或负数 = 不设上限。"
-               "实现用 signal.setitimer + SIGALRM：**可能打断原生内核**，建议在新进程里"
-               "跑 tune。信号只在主线程可用；装不上定时器时退化成「先跑完、再按耗时判定」。"
-               "缺省 {default}"),
+        "en": ("Best-effort upper bound, in seconds, for EACH contract() call of --tune "
+               "(warmup and every round count). It CAN interrupt long Python-side loops "
+               "(e.g. the optimal planner's exhaustive search) but CANNOT INTERRUPT "
+               "NATIVE C/CUDA code: SIGALRM is only delivered between Python bytecodes, "
+               "so a call stuck inside a native kernel runs to completion and is judged "
+               "timeout only after it returns. On GPU make the bound large enough, or "
+               "use --tune pass first (skips compare and equivalence rewriting). A "
+               "combination whose call exceeds the bound is marked timeout, is reported "
+               "and skipped, and the sweep continues: a timeout never aborts the run. "
+               "The median is taken over all calls that stayed within the bound (a "
+               "partial sample set never becomes a median). 0 or negative disables the "
+               "bound. Signals are only available on the main thread; where no timer can "
+               "be armed the call is measured first and judged afterwards. "
+               "Default {default}"),
+        "zh": ("--tune 的**每一次** contract() 调用的**尽力而为上限（best-effort）**"
+               "秒数（warmup 与每一轮都算）。它能打断 Python 侧的长循环（例如 optimal "
+               "的穷举规划），但**打不断原生 C/CUDA 代码**：SIGALRM 只在 Python 字节码"
+               "之间派发，卡在原生内核里的调用会跑完，返回之后才被判为 timeout。"
+               "GPU 上请把 --tune-timeout 取足够大，或先用 --tune pass 快速通过"
+               "（跳过 compare 与等价改写）。任一次超过它 → 该组记 timeout、只打印并"
+               "跳过、**绝不写配置表**，遍历继续（超时永远不中止整轮）。"
+               "中位只由全部在上限内成功的调用构成（不拿部分样本凑中位）。"
+               "0 或负数 = 不设上限。信号只在主线程可用；装不上定时器时退化成"
+               "「先跑完、再按耗时判定」。缺省 {default}"),
     },
     "help.tune_budget": {
         "en": ("Upper bound, in seconds, for the WHOLE --tune sweep. When it is used up "
@@ -1064,10 +1143,23 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": ("--tune sweeps {swept} itself, so the value you gave is ignored: {given!r}"),
         "zh": "--tune 会自行遍历 {swept}，已忽略你给的 {given!r}",
     },
+    # pass 模式禁用 --compare 时的那一行警告（`--compare` 与 pass 天然冲突）。
+    "tune.pass_compare_disabled": {
+        "en": ("--tune pass disables every --compare feature (no reference, rel stays "
+               "'-', no MISMATCH verdict), so the given --compare {value} is ignored"),
+        "zh": ("--tune pass 禁用 --compare 的全部功能（不算参照、rel 一律 '-'、"
+               "不判 MISMATCH），已忽略你给的 --compare {value}"),
+    },
     "tune.signal_note": {
-        "en": ("per-call timeout uses SIGALRM — it may interrupt a native kernel; "
-               "prefer running tune in a fresh process"),
-        "zh": ("单次超时用 SIGALRM 实现——可能打断原生内核，建议在新进程里跑 tune"),
+        "en": ("--tune-timeout is a best-effort upper bound: it can interrupt long "
+               "Python-side loops but cannot interrupt native C/CUDA code (a call stuck "
+               "inside a native kernel runs to completion and is judged timeout only "
+               "after it returns); on GPU make the bound large enough, or use --tune "
+               "pass first (skips compare and equivalence rewriting)"),
+        "zh": ("--tune-timeout 是尽力而为上限（best-effort）：能打断 Python 侧长循环，"
+               "但打不断原生 C/CUDA 代码（卡在原生内核里的调用会跑完，返回之后才被判为 "
+               "timeout）；GPU 上请把该上限取足够大，或先用 --tune pass 快速通过"
+               "（跳过 compare 与等价改写）"),
     },
     "tune.posthoc_note": {
         "en": ("no timer available here: each call is timed first and judged "
@@ -1283,6 +1375,13 @@ MESSAGES: dict[str, dict[str, str]] = {
     "error.profile": {
         "en": "--profile must be one of {values}, got {value!r}",
         "zh": "--profile 必须是 {values} 之一，得到 {value!r}",
+    },
+    "error.tune_mode": {
+        "en": ("--tune must be one of {values} (or empty / omitted = no sweep), got "
+               "{value!r}; 'pass' is the fast pass mode, everything else that is truthy "
+               "means the full mode"),
+        "zh": ("--tune 必须是 {values} 之一（留空或不给 = 不跑遍历），得到 {value!r}；"
+               "pass 是快速通过模式，其余真值一律是完整模式"),
     },
     "error.tune_timeout": {
         "en": "--tune-timeout must be >= 0 seconds (0 disables the bound), got {value!r}",
@@ -3408,6 +3507,91 @@ prune_reason = _tune_axes.prune_reason
 tune_plan = _tune_axes.tune_plan
 
 
+#: ``--tune`` 取值的**稳定名**（机器可读，不翻译）：``all`` / ``pass`` 两种模式，
+#: ``off`` 表示"不跑遍历"（不给该选项，或显式 ``false`` / 空串）。
+TUNE_MODE_NAMES = (TUNE_MODE_ALL, TUNE_MODE_PASS, TUNE_MODE_OFF)
+
+
+def parse_tune_mode(value: bool | None | str,
+                    language: str = "zh") -> str:
+    """``--tune`` 的取值 → ``"all"`` / ``"pass"`` / ``"off"``（**唯一解析点**）。
+
+    用户 2026-11-18 的裁定把 ``--tune`` 从开关变成了**带取值的模式参数**：
+
+    ======================  ==================================================
+    输入                   语义
+    ======================  ==================================================
+    留空 / ``None`` / ``True`` / ``true`` / ``True`` / ``all``   ``all``（完整模式）
+    ``pass``                ``pass``（快速通过模式）
+    ``false`` / 空串 / ``"0"`` / ``False``                      ``off``（不跑）
+    ======================  ==================================================
+
+    "留空"在 argparse 层是 ``const="true"``（``nargs="?"``），API 层是 ``None`` 或
+    ``True``——三者在**同一个**出口归一成 ``"all"``，下游只看模式名，不再各自判布尔。
+
+    未知取值抛 ``UsageError``（退出码 2）而不是静默当 ``off``：拼错一个字母就得到
+    "跑了一遍却没有输出"比直接报错更难查（tune 关闭时字面上什么都没有）。
+    """
+    if value is None or value is True:
+        return TUNE_MODE_ALL
+    if value is False:
+        return TUNE_MODE_OFF
+    text = str(value).strip().lower()
+    if text in ("", "false", "0", "no", "off"):
+        return TUNE_MODE_OFF
+    if text in ("true", "1", "yes", "on", TUNE_MODE_ALL):
+        return TUNE_MODE_ALL
+    if text == TUNE_MODE_PASS:
+        return TUNE_MODE_PASS
+    raise UsageError(translate("error.tune_mode", language,
+                               values=", ".join(TUNE_MODES), value=value))
+
+
+def tune_mode_enabled(value: bool | None | str,
+                      language: str = "zh") -> str | None:
+    """:func:`parse_tune_mode` 的"要不要跑"版本：``off`` → ``None``，其余原样。"""
+    mode = parse_tune_mode(value, language)
+    return None if mode == TUNE_MODE_OFF else mode
+
+
+def _tune_init(line: str) -> None:
+    """打一行初始化过程输出（**机器可读**、不跟 ``--language`` 翻译、只走 stderr）。
+
+    为什么必须逐阶段打：``--tune`` 在长方程上可能很久没有一行输出，卡住时无法区分
+    "还在探测"与"已经死在里面"。这七行把初始化切成有起有止的阶段，最后一行
+    ``first group start`` 一旦出现，说明遍历真的开始了。
+    """
+    print(TUNE_INIT_PREFIX + line, file=sys.stderr, flush=True)
+
+
+def _tune_init_ms(started: float) -> str:
+    """阶段耗时：整毫秒（0 位小数），**同一步的起止**用同一个口径。"""
+    return f"{int(round((time.perf_counter() - started) * 1000.0))}ms"
+
+
+def _tune_init_equation(equation: str) -> str:
+    """方程的过程输出摘要：前 :data:`TUNE_INIT_EQUATION_CHARS` 个字符（单行、不截断词）。"""
+    text = "".join(str(equation).split())
+    if len(text) <= TUNE_INIT_EQUATION_CHARS:
+        return text
+    return text[:TUNE_INIT_EQUATION_CHARS]
+
+
+def _tune_init_shapes(shapes: Sequence[Sequence[int]]) -> tuple[int, float]:
+    """``(输入元素总数, 估计字节 MiB)``：规模大到什么程度，先摆出来再开始跑。
+
+    字节按 ``complex128``（16 B/元素）估：它是本入口的缺省 dtype，也是**最大**的一档
+    ——给出的数因此是"至多"，不会把一个大形状说小。真实 dtype 由下一行自己带出来。
+    """
+    total = 0
+    for shape in shapes:
+        elements = 1
+        for axis in shape:
+            elements *= int(axis)
+        total += elements
+    return total, float(total) * 16.0 / (1024.0 * 1024.0)
+
+
 def tune_branch(equation: str, language: str = "zh") -> dict[str, Any]:
     """**只探测、不计时**：这条方程该走哪一条遍历清单（规格 §2）。
 
@@ -3567,6 +3751,12 @@ def _topology_unavailable_reason(equation: str,
     判据就是分支探测用的那两个 ``_specialize.match``：原方程能特化 → ``B1`` 的
     ``as_equivalence=false`` 那组可用；只有等价写法能特化 → ``B2`` 的
     ``as_equivalence=true`` 那组可用；两者都不行 → 整组跳过（试了也只能报不可用）。
+
+    **命中语料 ≠ 能执行**：``match`` 只算拓扑签名、查语料索引，而原生侧另有两道门
+    （编译期步表的覆盖、运行时的 ``status 4`` / ``QCD_TOPOLOGY_UNSUPPORTED``）。所以
+    "``match`` 命中"只是本函数能给出的**上界**；真不可执行时那一组仍会落到 ``error``。
+    要让这类失败也变 ``skip``，唯一可靠办法是准入时真跑一次，代价见
+    ``docs/einsum_tune_timeout_20261119.md`` §7 结尾。
     """
     try:
         from pyqcd.einsum import _specialize
@@ -3681,15 +3871,23 @@ def _warn_tune_ignored(message: str, language: str = "zh") -> None:
 #: 超过就跳过参照、改用"首个成功组合"的自洽校验：生产形状上的完整收缩可能几分钟
 #: 且不可中断，而 tune 不该为了一次参照把整轮拖死（2026-11-18 用户实测卡死）。
 #: 200 万元素（complex128 约 32 MB）足以覆盖契约与中小方程，同时把大方程挡在外面。
+#: 用户那条 10 算子生产方程实测 **256,010,297** 个输入元素（本门限的 **128 倍**），
+#: 即它必然走自洽参照那条路——这正是"卡死"与"校验仍在"能同时成立的唯一办法。
 TUNE_REFERENCE_MAX_ELEMENTS = 2_000_000
 
 
 def _tune_reference(equation: str, host: Sequence[Any]) -> tuple[Any, str]:
-    """``--tune`` 的唯一参照：``np.einsum(optimize="greedy")``（与缺省 ``--compare numpy`` 同源）。
+    """``--tune`` 的唯一参照：``np.einsum(optimize="greedy")``（numpy 参照的等价写法）。
 
-    只算一次、且不进任何一组的计时区：``--tune`` 把 ``compare`` 固定成 ``none``，
-    为的就是别把 30 份参照耗时再算一遍。算不出来时返回 ``(None, 原因)``——此时所有
-    组合的 ``rel`` 都是 ``None``，也就不做 MISMATCH 判定（如实标注，不猜）。
+    ``--compare`` 在 ``--tune`` 下缺省关闭，所以参照**只在这里算一次**，不进任何一组的
+    计时区——否则 22 组就要各付一次完整参照的耗时。算不出来时返回 ``(None, 原因)``。
+
+    **跳过参照不能让数值校验消失**：``rel`` 依赖参照，参照为 ``None`` 时所有组
+    ``rel=None``、``mismatch`` 恒假，契约里"``rel`` 超容差必须判 MISMATCH"会静默变成
+    永真。所以遍历循环对大形状改用"**首个成功组合**的结果"做自洽校验（成本为零，仍能
+    抓住"不同内核算出不同数"）。改这里时只允许两种写法：小形状真参照，或自洽参照；
+    **不能**只把参照设成 ``None`` 就完事。判据与实测见
+    ``docs/einsum_tune_timeout_20261119.md`` §5。
     """
     # 大规模形状上**不跑**参照：这是一次完整的 ``np.einsum`` 收缩，生产尺寸上可能
     # 算几分钟且**不可中断**（SIGALRM 打不断原生代码）。它就发生在任何超时保护之外，
@@ -3928,6 +4126,10 @@ def tune_table_lines(tune: dict[str, Any],
     if reason:
         footer += "  reason=" + reason
     lines.append(footer)
+    # ``pass`` 模式：表尾**必须**有一行明说"没做数值校验"。整张表的 ``rel`` 列全是
+    # ``-``、也没有任何 MISMATCH 判定——不写这一行，读者只会以为"全都没问题"。
+    if tune.get("pass_mode"):
+        lines.append("mode: " + TUNE_PASS_SKIP_NOTE)
     # 遍历前被排除的内核：**表尾**必须逐条点名（内核 + 被去掉的组数 + 内核原文）。
     # 它们不在上面的表格里（那 N 是裁剪后实际遍历的组数），所以不写这一段，"为什么
     # 少了 8 组"就永远查不到。
@@ -4080,8 +4282,10 @@ def _call_alarm(seconds: float, error: type[BaseException]):
 def _guarded_call(call, limit: float | None, deadline: float | None) -> None:
     """跑一次 ``call()``；超过 ``limit`` 秒（单次上限）或整轮 ``deadline`` 即中止。
 
-    装得上定时器就**中断**；装不上（非主线程 / 无 ``SIGALRM``）就退化成"先跑完、再按
-    耗时判定"——仍然如实判超时，只是没能省下那段墙钟。预算比单次上限更紧时按预算截断，
+    这是**尽力而为（best-effort）上限**，不是硬超时：装得上定时器、且调用一直在
+    Python 里跑，就**当场中断**；调用落进原生 C/CUDA 代码时信号派发不进去，只能等它
+    返回再判超时；装不上定时器（非主线程 / 无 ``SIGALRM``）则退化成"先跑完、再按耗时
+    判定"——仍然如实判超时，只是没能省下那段墙钟。预算比单次上限更紧时按预算截断，
     并抛 :class:`_TuneBudget`（它说明的是"整轮没时间了"，不是"这一组太慢"）。
     """
     seconds = limit
@@ -4095,14 +4299,21 @@ def _guarded_call(call, limit: float | None, deadline: float | None) -> None:
     if seconds is None:
         call()
         return
-    # 硬超时走**子进程**：SIGALRM 只在 Python 字节码之间派发，一旦调用进入原生
+    # 上限**不是硬超时**：SIGALRM 只在 Python 字节码之间派发，一旦调用进入原生
     # C/CUDA 代码（不返回解释器）就永远不触发——实测 10 算子方程的 `--tune` 会
-    # 在 CPU 100%、GPU 0% 状态下无限期挂着，`--tune-timeout` 完全失效。
-    # 子进程被父进程 kill 是唯一能真正打断原生代码的方式。
+    # 在 CPU 100%、GPU 0% 状态下挂 3 分钟以上，`--tune-timeout` 完全没生效。
     # 子进程隔离（fork）试过并**已回退**：CUDA 上下文不跨 fork 复用，GPU 上必然
-    # ``cudaErrorInitializationError``（2026-11-18 实测 22 组全 error）。因此这里
-    # 仍是 SIGALRM——它能打断 Python 长循环，但打不断原生 C/CUDA 代码，
-    # 这一点在 --help 里如实写明。
+    # ``cudaErrorInitializationError``（实测 22 组全 error）。因此这里仍是 SIGALRM——
+    # 它能打断 Python 长循环，但打不断原生 C/CUDA 代码，这一点在 --help 与
+    # ``tune note :`` 行里如实写明。
+    #
+    # 分档只看"能否回到解释器"，不看"耗时长不长"（本机 2026-11-19 实测）：
+    #   纯 Python 5 秒循环、上限 0.3 s       → 0.30 s 抛，准；
+    #   单次 5000³ 原生 BLAS、上限 0.3 s     → 2.29 s 才抛（该次调用本身 2.34 s），
+    #                                          即**超限 1.99 s**。
+    # 所以"上限"这个词对外只能写 best-effort；写成硬超时会把上面第二种情况说成保证。
+    # 另注意本函数在 tune 里收到的是**组级**上限（``limit × (1+warmup+rounds)``），
+    # 见 ``run_tune`` 的 ``group_limit`` 与 ``docs/einsum_tune_timeout_20261119.md`` §4。
     if not _tune_timer_available():
         started = time.perf_counter()
         call()
@@ -4504,8 +4715,20 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
              timeout: float = DEFAULT_TUNE_TIMEOUT,
              budget: float = DEFAULT_TUNE_BUDGET,
              compare: str = "none",
+             mode: bool | str | None = TUNE_MODE_ALL,
              language: str | None = None) -> dict[str, Any]:
     """遍历网格并返回 ``{"rows", "best", "write", ...}``（表格由 :func:`print_tune` 打）。
+
+    ``mode`` 是 ``--tune`` 的取值（:func:`parse_tune_mode`）：``all``（缺省）跑完整
+    模式，``pass`` 跑**快速通过模式**——分支直接钉成 ``B3``（21 组、无 ``topology``）、
+    ``as_equivalence`` 全 ``false``、不探测准入、不算参照、不判 MISMATCH，并静音专用
+    路径提示。``off`` 传到这里没有意义（调用方不该调用），按 ``all`` 处理而不是静默
+    什么都不做。
+
+    初始化阶段（遍历开始之前）逐行打印 ``tune init :``：mode 与规模、分支探测**起止**、
+    内核准入**起止**、session **起止**、首组**起止**。这些行**机器可读**、不跟
+    ``--language`` 翻译，耗时取整毫秒——卡住时直接看得出停在哪一步（2026-11-19 用户
+    要求"方便判断进度与健康性"）。
 
     **不变量**：方程、形状、dtype、设备、后端都只在这里取一次；每组只换
     ``kernel_force`` / ``as_equivalence`` / ``optimize``。``compare`` 不影响遍历的
@@ -4556,17 +4779,57 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
         raise UsageError(translate("error.tune_timeout", lang, value=timeout))
     if float(budget) < 0.0:
         raise UsageError(translate("error.tune_budget", lang, value=budget))
-    # 分支探测**先做**：只探测、不计时、不写表；清单与组数都由它定。
-    branch = tune_branch(equation, lang)
-    combos = _tune_combos_for(equation, lang)  # 超上限在构造任何张量之前就报错
+    # 模式解析放在**最前**（早于任何探测与张量构造）：非法取值必须立刻以退出码 2
+    # 结束，而不是先跑一段再报错。
+    tune_mode = parse_tune_mode(mode, lang)
+    pass_mode = tune_mode == TUNE_MODE_PASS
+    # ① mode 与本次不变量（方程 / 操作数个数 / dtype / 设备 / 后端）。
+    _tune_init("mode={}  equation={}  operands={}  dtype={}  device={}  backend={}".format(
+        tune_mode, _tune_init_equation(equation), len(shapes), dtype, device, backend))
+    total_elements, est_mib = _tune_init_shapes(shapes)
+    _tune_init("shapes ok  total_elements={}  est_bytes={}MiB".format(
+        total_elements, int(round(est_mib))))
+    # ② 分支探测**起止**。``pass`` 模式跳过整段探测（``_specialize.match`` 与
+    # ``normalize_equation`` 在长方程上可能很慢——那正是 pass 要避免的），直接把
+    # 分支钉成 ``B3``（既不改写、也不要求特化），清单因此天然没有 ``topology`` 组。
+    probe_started = time.perf_counter()
+    if pass_mode:
+        _tune_init("branch probe start  skipped (pass mode)")
+        branch: dict[str, Any] = {
+            "branch": TUNE_BRANCH_NONE, "raw_ok": False, "equiv_ok": False,
+            "target_equation": None}
+        _tune_init("branch probe done  skipped (pass mode)  raw_ok=false  "
+                   "equiv_ok=false  branch={}  {}".format(
+                       TUNE_BRANCH_NONE, _tune_init_ms(probe_started)))
+        combos = tune_combos(lang)
+    else:
+        _tune_init("branch probe start")
+        branch = tune_branch(equation, lang)
+        _tune_init("branch probe done  raw_ok={}  equiv_ok={}  branch={}  {}".format(
+            str(bool(branch.get("raw_ok"))).lower(),
+            str(bool(branch.get("equiv_ok"))).lower(),
+            branch.get("branch") or "-", _tune_init_ms(probe_started)))
+        combos = _tune_combos_for(equation, lang)  # 超上限在构造任何张量之前就报错
     np_dtype = np.dtype(dtype)
-    # 规格 §18「先探测再裁剪」：该内核对这个形状**本质上没有路**时（计划 arena 超预算、
-    # 方程不可特化……），整组跳过并在报告里写成 ``skip``——逐组跑一遍只会得到同一句
-    # 错误的 N 份副本，把真正的异常淹掉（2026-11-18 用户实测）。
+    # ③ 内核准入**起止**。``pass`` 模式整段跳过：清单里没有 ``topology`` 组，而
+    # ``dedicated`` 的准入本身要规划一次步表——两者都属于"与快速通过无关"的成本。
     planned = len(combos)
-    unavailable = tune_unavailable_kernels(
-        equation=equation, shapes=shapes, dtype=np_dtype, backend=backend,
-        device=device, branch=branch)
+    admit_started = time.perf_counter()
+    if pass_mode:
+        _tune_init("kernel admission start  skipped (pass mode)")
+        unavailable: dict[str, str] = {}
+        _tune_init("kernel admission done  skipped (pass mode)  unavailable=-  "
+                   "{}".format(_tune_init_ms(admit_started)))
+    else:
+        _tune_init("kernel admission start")
+        # 规格 §18「先探测再裁剪」：该内核对这个形状**本质上没有路**时（计划 arena 超
+        # 预算、方程不可特化……），整组跳过并在报告里写成 ``skip``——逐组跑一遍只会得到
+        # 同一句错误的 N 份副本，把真正的异常淹掉（2026-11-18 用户实测）。
+        unavailable = tune_unavailable_kernels(
+            equation=equation, shapes=shapes, dtype=np_dtype, backend=backend,
+            device=device, branch=branch)
+        _tune_init("kernel admission done  unavailable={}  {}".format(
+            ",".join(sorted(unavailable)) or "-", _tune_init_ms(admit_started)))
     combos, dropped = _tune_axes.plan_without(combos, unavailable)
     skipped_rows: list[dict[str, Any]] = [
         {"kernel_force": kernel, "skip": True, "status": TUNE_STATUS_SKIP,
@@ -4577,13 +4840,21 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     # 操作数只构造一次：每组看到的必须是同一批数据，否则"哪组更快"混进了数据差异。
     operands, host = _make_operands(xp, shapes, np_dtype, seed)
     # 实际下发的三列（§13.2）：整轮不变，但每组那行都要带着印出来。
-    dispatched = _dispatched_config(operands, equation=equation, backend=backend,
-                                     device=device, dtype=dtype)
+    # ``pass`` 模式跳过这把键的额外探测（``_tune_key`` 要跑 ``_api.parse_backend`` /
+    # ``_profile_devices``）：直接报命令行上的不变量，不为了三列诊断多花时间。
+    dispatched = ({"backend": str(backend or "-"), "dtype": str(dtype or "-"),
+                   "device": str(device or "-")} if pass_mode
+                  else _dispatched_config(operands, equation=equation, backend=backend,
+                                          device=device, dtype=dtype))
     # 参照**总是尝试**，但由 :data:`TUNE_REFERENCE_MAX_ELEMENTS` 挡住大形状：
     # 小形状照旧做真实 ``np.einsum``（数值校验保留），大形状跳过（那一次完整收缩
     # 可能几分钟且不可中断——2026-11-18 用户实测"tune 卡死无输出"的根因）。
     # ``--compare`` 只影响**普通调用**要不要另跑参照基准，不是 tune 的数值校验开关。
-    reference, reference_note = _tune_reference(equation, host)
+    # ``pass`` 模式**完全不算参照**：那是 pass 的语义（跳过数值校验），不是省事。
+    if pass_mode:
+        reference, reference_note = None, "skipped (pass mode)"
+    else:
+        reference, reference_note = _tune_reference(equation, host)
     extra = dict(profile_kwargs or {})
     tolerance = float(atol) + float(rtol)
     # ``limit`` = 每一次 contract() 调用的上限；``deadline`` = 整轮的上限。
@@ -4599,10 +4870,29 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     stopped = False
     # tune_session 是否真的开起来了（A 路接口缺席时是 False，报告里如实写）。
     session = False
+    # ``pass`` 模式静音库内提示（``_specialize.announce`` / ``announce_generic``）与
+    # 完整详解：这两者是"过程解说"，与"哪一组多快"无关，正是 pass 要关掉的东西。
+    # 只在本次调用期间生效，退出时**原样还回去**（不改调用方的进程状态）。
+    notice_saved: str | None = None
+    detail_saved: Any = None
+    set_detail = getattr(_specialize, "set_detail", None)
+    if pass_mode:
+        notice_saved = os.environ.get(_specialize.NOTICE_ENV)
+        os.environ[_specialize.NOTICE_ENV] = "0"
+        if callable(set_detail):
+            detail_saved = set_detail(False)
+    _tune_init("session start  profile_disabled=true")
+    first_combo = combos[0] if combos else None
+    first_started = time.perf_counter()
+    first_done = False
     try:
         # 规格 §3.1：遍历期间配置表**既不读也不写**。写侧由这里的 tune_session 负责，
         # 读侧也一并关掉——否则 ``auto`` 那几组会被历史命中劫持，量到的是"命中耗时"。
         with _tune_cache_session() as session:
+            if first_combo is None:
+                _tune_init("first group start  -  (no combination to run)")
+            else:
+                _tune_init("first group start  {}/{}/{}".format(*first_combo))
             for kernel, as_equiv, optimize in combos:
                 if deadline is not None and time.monotonic() >= deadline:
                     stopped = True
@@ -4650,6 +4940,13 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                     # 但**打不断原生 C/CUDA 代码**——CUDA 上下文不能跨 fork 复用，
                     # 子进程方案在 GPU 上必然 ``cudaErrorInitializationError``
                     # （2026-11-18 实测）。这一点写进 --help，不假装能做到。
+                    #
+                    # 为什么粒度是**整组**而不是单次：一组有 ``1+warmup+rounds`` 次调用
+                    # （缺省 7 次），按单次设限最坏会把 ``7 × limit`` 全花光，而且与
+                    # ``min_wall_ms`` 剪枝不同口径（剪枝比的是整组中位）。代价是**单次**
+                    # 调用略超上限但整组仍在预算内时不会被判 timeout——这是刻意的，
+                    # 否则一次慢 warmup 就会废掉整组。实测与判据见
+                    # ``docs/einsum_tune_timeout_20261119.md`` §4。
                     group_limit = (None if limit is None
                                    else float(limit) * float(1 + warmup + rounds))
                     seconds = _timed(
@@ -4694,10 +4991,14 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                     # 却仍能检出"不同内核/规划器算出不同数"这一类真实分歧——否则
                     # 跳过参照会让 MISMATCH 永远检不出来（2026-11-18 实测：契约
                     # ``rel 超容差必须判 MISMATCH`` 变成恒假）。
-                    if reference is None and holder:
+                    #
+                    # ``pass`` 模式整段不做：连"首个成功组当参照"也不做，否则
+                    # ``rel`` 会有一个数而表尾同时写着"跳过数值校验"——两句话互相
+                    # 矛盾，读者无从判断到底校验过没有。
+                    if not pass_mode and reference is None and holder:
                         reference = _to_host(holder[-1])
                         reference_note = "self(first ok combination)"
-                    if reference is not None and holder:
+                    if not pass_mode and reference is not None and holder:
                         row["rel"] = _relative_error(_to_host(holder[-1]), reference)
                         if not (row["rel"] <= tolerance):
                             row["mismatch"] = True
@@ -4716,12 +5017,28 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                 row["status"] = tune_status(row)
                 holder.clear()                  # 别把上一组的结果留到下一组
                 rows.append(row)
+                # 首组**收尾**行：它与上面的 ``first group start`` 成对，是"遍历真的
+                # 开始了、而且第一组已经有结论"的直接证据（卡在首组时不会有这一行）。
+                if not first_done:
+                    first_done = True
+                    _tune_init("first group done  {}/{}/{}  状态={}  {}".format(
+                        kernel, as_equiv, optimize, row["status"],
+                        _tune_init_ms(first_started)))
                 if stopped:                     # 预算用尽：不再开新的一组
                     break
     finally:
         # 闹钟窗口是模块级状态：单次调用若正好在收尾时被迟到的信号打断，那句"关窗口"
         # 可能少走一次。整轮结束时无条件清空，别把这个状态留给后面的人。
         _ALARM_WINDOW = None
+        # pass 模式静音的提示/详解**原样还回去**：这是本次调用的输出选择，不该改
+        # 调用方进程的状态（同语言设置与缓存开关的口径）。
+        if pass_mode:
+            if notice_saved is None:
+                os.environ.pop(_specialize.NOTICE_ENV, None)
+            else:
+                os.environ[_specialize.NOTICE_ENV] = notice_saved
+            if callable(set_detail):
+                set_detail(detail_saved)
 
     best = tune_best(rows)
     # 规格 §3.3：只写胜出的那一组（可能是一行配置，也可能是"target 配置 + 原键等价行"）。
@@ -4760,6 +5077,11 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
         "warmup": warmup,
         "rounds": rounds,
         "compare": str(compare or "none"),
+        # ``--tune`` 的取值：``all``（完整模式）或 ``pass``（快速通过模式）。表尾的
+        # "跳过数值校验"注记由它决定，JSON 消费方也据此判断 rel 为什么整列是 ``-``。
+        "mode": tune_mode,
+        "pass_mode": bool(pass_mode),
+        "skip_note": TUNE_PASS_SKIP_NOTE if pass_mode else None,
         # 本次遍历实际下发的三列（§13.2）：表格与 JSON 共用同一份取值。
         "dispatched": dict(dispatched),
         # 分支判定（只探测、不计时）：B1 原方程可特化 / B2 只有等价写法可特化 /
@@ -4944,8 +5266,9 @@ def print_tune(tune: dict[str, Any], language: str = "zh",
         warmup=tune.get("warmup"), rounds=tune.get("rounds"),
         compare=tune.get("compare") or "none",
         reference=tune.get("reference")), file=out)
-    # 超时是怎么实现的必须写在报告里：SIGALRM 可能打断原生内核，用户据此决定是否
-    # 换个干净进程再跑。装不上定时器时同样要说，否则"没超时"会被误读成"够快"。
+    # 超时的**真实能力**必须写在报告里：它是尽力而为上限，能打断 Python 侧长循环、
+    # 打不断原生 C/CUDA 代码——用户据此决定上限取多大、要不要改用 --tune pass。
+    # 装不上定时器时同样要说，否则"没超时"会被误读成"够快"。
     timer = tune.get("timer")
     if timer == "sigalrm":
         print("tune note : " + translate("tune.signal_note", language), file=out)
@@ -5288,8 +5611,12 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
                         choices=AS_EQUIVALENCE_MODES,
                         help=t("help.as_equivalence", env=AS_EQUIVALENCE_ENV,
                                default=DEFAULT_AS_EQUIVALENCE))
-    # ``--tune`` 是开关：``nargs="?"`` 让 ``--tune``、``--tune true``、``--tune false``
-    # 三种写法都成立（与 ``--verbose`` 同风格），缺省关闭。
+    # ``--tune`` 是**带取值的模式参数**（不是开关，2026-11-18 用户裁定）：
+    # ``nargs="?"`` 让 ``--tune``（留空 → ``all``）、``--tune pass``、``--tune false``
+    # 三种写法都成立；``const`` 是"留空"的取值，``default`` 是"没给"（= 不跑）。
+    # 取值本身的解析在 :func:`parse_tune_mode`（唯一出口），这里不做校验：argparse 的
+    # ``choices`` 会让 ``--tune pass`` 与 `--tune <其它选项>` 的报错文案变成 argparse
+    # 自带的英文列表，而本入口的错误文案要跟 ``--language`` 走。
     parser.add_argument("--tune", nargs="?", const="true", default="false",
                         help=t("help.tune"))
     # 超时/预算只在 --tune 下有语义：缺省值写进 --help，用户不必猜"没写会跑多久"。
@@ -5358,21 +5685,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser(language=language)
     args = parser.parse_args(argv)
     language = resolve_language(args.language)
+    # ``--tune`` 的取值 → 模式名（``all`` / ``pass`` / ``off``）。解析在这里**只做一次**：
+    # 后面每一处判定都看 ``tune_mode``，不再各自把字符串翻成布尔（``_as_bool("pass")``
+    # 是 ``False``——那会把 pass 模式静默变成"不跑"）。
+    tune_mode = parse_tune_mode(args.tune, language)
+    tune_on = tune_mode != TUNE_MODE_OFF
+    pass_mode = tune_mode == TUNE_MODE_PASS
     # ``--tune`` 自己会遍历这三轴：显式非 auto 取值只**警告 + 忽略**（每个参数一行），
     # 遍历照常进行、退出码仍为 0——顺手写上的一维不该让整轮 tune 变成用法错误。
-    tune_on = _as_bool(args.tune)
-    # 规格 §13.1：``--tune`` 下 compare **默认关闭**（不给 --compare 就不跑参考基准），
-    # 显式给出时照旧执行；普通调用仍缺省 ``DEFAULT_COMPARE``。这只决定"要不要另跑
-    # 参照"，不改遍历维度（tune 自己仍遍历 {auto,none,greedy}）。
-    compare_value = args.compare if args.compare is not None else (
-        "none" if tune_on else DEFAULT_COMPARE)
-    # ``--optimize`` 的 ``None`` 是"用户没给"（``auto`` 已从 CLI 可写集合里删除）：
-    # 这里还原成签名缺省值，报告行与 ``run()`` 看到的值与上一版逐字相同。
-    optimize_value = args.optimize if args.optimize is not None else DEFAULT_OPTIMIZE
+    # ``pass`` 模式也一样（它把 as_equivalence 钉成 false，同样不采纳用户给的值）。
     if tune_on:
         tune_conflicts(kernel_force=args.kernel_force,
                        as_equivalence=args.as_equivalence,
                        optimize=args.optimize, language=language)
+    # 规格 §13.1：``--tune`` 下 compare **默认关闭**（不给 --compare 就不跑参考基准），
+    # 显式给出时照旧执行；普通调用仍缺省 ``DEFAULT_COMPARE``。这只决定"要不要另跑
+    # 参照"，不改遍历维度（tune 自己仍遍历 {auto,none,greedy}）。
+    # ``pass`` 模式**禁用 --compare 的一切**（主路径与遍历都不跑参照）：用户显式给了
+    # 就制裁一行警告再忽略——静默忽略会让人以为数值真的校验过了。
+    if pass_mode and args.compare is not None and args.compare != "none":
+        _warn_tune_ignored(translate("tune.pass_compare_disabled", language,
+                                     value=args.compare), language)
+    compare_value = args.compare if args.compare is not None else (
+        "none" if tune_on else DEFAULT_COMPARE)
+    if pass_mode:
+        compare_value = "none"
+    # ``--optimize`` 的 ``None`` 是"用户没给"（``auto`` 已从 CLI 可写集合里删除）：
+    # 这里还原成签名缺省值，报告行与 ``run()`` 看到的值与上一版逐字相同。
+    optimize_value = args.optimize if args.optimize is not None else DEFAULT_OPTIMIZE
 
     if args.shape is None:
         # ``corpus_detail`` 是出参：命中来源（direct/equivalence）与命中的那条语料
@@ -5487,11 +5827,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             cache=cache_value, profile=profile_value,
             profile_kwargs=_contract_profile_kwargs(profile_value, args.profile_dir),
             timeout=args.tune_timeout, budget=args.tune_budget,
-            compare=compare_value,
+            compare=compare_value, mode=tune_mode,
             language=language,
         )
         result["tune"] = tune_summary["rows"]
-        print_tune(tune_summary, language, verbose=_as_bool(args.verbose))
+        # ``pass`` 模式关掉过程详解（``--verbose`` 里的"最快 5 行 / 每个内核最快一行"
+        # 与 ``--explain`` 的三段因果）：那是解说，不是"快速通过"要的东西。
+        print_tune(tune_summary, language,
+                   verbose=_as_bool(args.verbose) and not pass_mode)
 
     if args.json:
         # 写不进去属于**参数/环境错误**（退出码 2），不是数值失败（1）。

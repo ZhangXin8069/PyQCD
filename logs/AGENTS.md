@@ -1188,3 +1188,12 @@
 - 关键内容: ROLE_SHAPES 唯一形状源、旧表作废；判据=新旧 sha256 必须不同 + 两次生成必须相同 + --verify 全零；两表不可互译（cblas 字节码 vs int8 活表位置对）；.gz 入库与双侧解压（mtime=0）；图纸生成物纪律与 seq 连续 1..N；[match]/[kernel] 分离与"删功能同步改提示"；配套 docs/einsum_topology_unification_20261118.md
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+
+## einsum-tune-timeout - final - 2026-11-19 11:20:00 +0800
+- 主任务: qcd-einsum `--tune` 卡死/超时/参照/准入的经验落盘（只写文档与注释，不改可执行语句）
+- 日志文件: logs/einsum-tune-timeout-20261119.txt
+- 文件大小: 12187 bytes
+- 触发原因: 任务完成
+- 关键内容: best-effort 超时实测（纯 Python 0.30s 准点抛 / 原生 2.34s 调用超限 1.99s 才抛）、fork 必 cudaErrorInitializationError、spawn 每组 497.6ms、组级窗口 =7×limit、参照门 2e6 元素（生产方程 2.56e8）、跳过参照须补自洽参照、先改写再强制内核（rel=1.54e-16）、旧性能页 30 个比例全删；配套 docs/einsum_tune_timeout_20261119.md 与 logs/kf/EXP3.report.md
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

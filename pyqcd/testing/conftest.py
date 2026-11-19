@@ -244,6 +244,12 @@ from pyqcd.testing._einsum_cli_defaults_contract import (
 from pyqcd.testing._einsum_shape_from_corpus_equiv_contract import (
     test_einsum_shape_from_corpus_equiv_contracts,
 )
+# `--tune-timeout` 的**真实能力**契约（2026-11-19）：它是尽力而为上限，能打断 Python 侧
+# 长循环、打不断原生 C/CUDA 代码——help / `tune note :` / 模块 docstring 三处同口径，
+# 且不许再说"可能打断原生内核"或"建议在新进程里跑 tune"。
+from pyqcd.testing._einsum_tune_timeout_doc_contract import (
+    test_einsum_tune_timeout_doc_contracts,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。

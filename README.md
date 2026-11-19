@@ -101,6 +101,7 @@ send it back to the generic path. For what actually ran, read the `route` /
   wall clock of the whole `contract()` call). `--kernel-force` takes a single
   logical value (`generic` / `dedicated` / `topology` / `backend`). Tune sweeps an
   ordered per-branch list with `min_wall_ms` pruning and writes just the winner.
+* **0.5.5** — `--tune pass` (fast pass: the `[if_equivalence=false, if_specialized=false]` line only, `--compare` and every unrelated feature disabled), `tune init :` start/done progress lines for the initialisation phase, and an honest `--tune-timeout` contract (best-effort: interrupts Python loops, cannot interrupt native C/CUDA); the performance pages lost their stale ratios and now only say "run --tune, measure your own shape".
 * **0.5.4** — topology step tables unified on `ROLE_SHAPES`: `production` (anisotropic axes) and `uniform` (equal-length `dim=4` probe) are deleted, `sizes` is mandatory; `optimize` is exactly seven underscore leaves; both tables are generated with `auto`; `kupl_topology_v2`, `--backend kupl|cuda` and `--compare numpy` removed; `--tune` no longer hangs on the reference contraction and rewrites before forcing a kernel.
 * **0.5.3** — equivalence routing table, single-language notices, tune hardening.
 * **0.5.2** — `--tune` and the equivalence memo introduced.

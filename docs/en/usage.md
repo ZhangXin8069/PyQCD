@@ -18,8 +18,7 @@ b = (rng.standard_normal((4, 5)) + 1j * rng.standard_normal((4, 5))).astype(np.c
 # 1) Just compute it: parse the contract, plan, execute — one call.
 result = pe.contract("ij,jk->ik", a, b)
 
-# 2) Ask how it intends to do it: contract_path returns the order and the cost
-#    without touching the data.
+# 2) Ask how it intends to do it: contract_path returns the order and the cost.
 path, info = pe.contract_path("ij,jk->ik", a, b)
 print(int(info.opt_cost), path)
 
@@ -64,8 +63,7 @@ assert get_precision() in {"complex64", "complex128"}
 ### Turning specialisations off
 
 ```python
-# specialize=False affects this call only: skip the equation-specific path and use the
-# generic planner instead.
+# specialize=False affects this call only: use the generic planner instead.
 pe.contract("ij,jk->ik", a, b, specialize=False)
 
 # The result must be identical to the specialised path — specialisation only changes speed.
@@ -74,22 +72,23 @@ assert np.allclose(pe.contract("ij,jk->ik", a, b, specialize=False), a @ b)
 
 ### Runtime notices (first hit)
 
-Both kernels announce themselves **once per shape per process** the first time
-they run, so you can tell from the log which path a contraction took:
+When a specialised route is actually attempted, the engine announces it **once per
+shape per process**. The prose part of the line follows the locale (Chinese on `zh_*`
+locales, English otherwise), while these tokens are stable in both languages:
 
-```
-[pyqcd.einsum] specialized path: topology:9f3c... [kernel: kupl_dedicated] ...
-[pyqcd.einsum] generic path: no specialized shape matched (ij,jk->ik); ...
-```
+| Token | Meaning |
+|---|---|
+| `[pyqcd.einsum] specialized path:` / `专用路径:` | a shape-specialised route was matched |
+| `[match: topology]` | which shape family matched (`topology`, `kernel`, …) |
+| `[kernel: kupl_topology]` | the native kernel that actually executed the plan |
+| `[plan-cache]` | the shape was known but only its plan was reused |
+| `[pyqcd.einsum] generic path:` / `通用路径:` | no specialization; the generic pairwise contraction ran |
 
-* `specialized path … [kernel: ...]` — a native specialized kernel ran (2–4× faster).
-* `specialized path … [plan-cache]` — the shape is known but only its plan is reused.
-* `generic path …` — no specialization; the generic pairwise contraction ran.
-
-The notices follow the locale: Chinese on `zh_*` locales, English otherwise. Force
-it with `PYQCD_EINSUM_LANG=zh|en`. Turn the notices off with
-`PYQCD_EINSUM_NOTICE=0`; make the specialized one fire on **every** call with
-`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`. The full list of supported shapes is in
+Whether the specialised route is actually faster depends on your shape, dtype and
+device — measure it with `--tune` instead of trusting a page (see :doc:`performance`).
+Force the notice language with `PYQCD_EINSUM_LANG=zh|en`, turn the notices off with
+`PYQCD_EINSUM_NOTICE=0`, and make the specialized one fire on **every** call with
+`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1`. Which equations are covered is described in
 {doc}`appendix_specialized`.
 
 ### Querying one equation's specialized path
@@ -192,8 +191,7 @@ for mu in range(4):
 # Flow-time conversion: tau=1.0 at a=0.1 fm is how many GeV^-2?
 print(R.flow_time_gev_m2(1.0, a_fm=0.1))
 
-# Clover field-strength tensor F_{mu nu}, one tensor per (mu, nu) pair; then the
-# dual tensor F~_{01}.
+# Clover field-strength tensor F_{mu nu}, one tensor per (mu, nu) pair; then dual F~_{01}.
 F = {(mu, nu): G.clover_field_strength(U, mu, nu)
      for mu in range(4) for nu in range(4) if mu != nu}
 print(O.compute_dual_field_strength(F, 0, 1).shape)    # (2, 2, 2, 2, 3, 3)
@@ -206,8 +204,7 @@ assert O.compute_dual_field_strength(F, 0, 1).shape == (2, 2, 2, 2, 3, 3)
 Flow-based renormalised TMD:
 
 ```python
-# Gluon TMD after gradient-flow renormalisation: given a flow time tau and two sets of
-# separations (z, b), return the matrix element.
+# Gluon TMD after gradient-flow renormalisation: given a flow time tau and separations.
 result = R.gradient_flow_renormalized_tmd(
     U, tau=1.0, z_list=[0, 2, 4], b_list=[0], z_dir=2, b_dir=0)
 

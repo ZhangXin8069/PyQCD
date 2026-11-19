@@ -5,18 +5,18 @@ project is gluon TMD-PDF extraction with gradient-flow renormalisation; the
 package itself is the reusable tooling around that chain.
 
 ```bash
-pip install pyqcd
+pip install -U pyqcd
 ```
 
 Everything on this site is available from that single installation; no source
-checkout is required. Native acceleration is optional at runtime, but the
-default installation builds KUPL and therefore needs a C++17 toolchain.
+checkout is required. Native acceleration is optional at runtime and only changes
+speed, never results.
 
 ```python
 import pyqcd
 import pyqcd.einsum as pe
 
-print(pyqcd.__version__)    # e.g. 0.4.2
+print(pyqcd.__version__)    # e.g. 0.5.4
 print(pe.build_info())      # backend / native_available / native_library
 
 info = pe.build_info()
@@ -75,16 +75,29 @@ assert np.allclose(pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))(a, b), a 
 | Execution | `_execute.py` (BLAS dispatch + buffer pooling) |
 | Native | `_native.py` (ctypes) and `cuda/` (Cython extension) |
 
+### Configuration table
+
+The engine can keep a per-equation configuration table with exactly one owner:
+`--tune` writes it, ordinary calls only read it.
+
+* File: `pyqcd.einsum.profile.csv`, under `PYQCD_EINSUM_PROFILE_DIR` (default
+  `./.cache`). The bare name `profile.csv` is **not** the table.
+* Performance column: `wall_ms`, the wall clock of the **whole** `contract()` call
+  — there is no separate per-step timer.
+* `--tune` takes a value: empty / `true` = full sweep, `pass` = the fast pass that
+  skips compare and equivalence rewriting.
+
+See :doc:`performance` for the command, what a sweep prints, and how to read it.
+
 ### Native backends (optional)
 
 | Backend | Usable for | Built during `pip install` when |
 |---|---|---|
-| KUPL | CPU | a C++17 compiler is available; this is the default baseline and a missing toolchain fails the install |
-| CUDA | GPU | `nvcc` and Cython are available |
+| KUPL | CPU | a C++17 compiler is available |
+| CUDA | GPU | `nvcc` and Cython are available, and an NVIDIA toolchain is present |
 
-Use `PYQCD_SKIP_NATIVE_BUILD=1` (or `PYQCD_EINSUM_REQUIRE_NATIVE=0`) to request
-a pure-Python planner explicitly. CUDA is always opportunistic and never causes
-the installation to fail.
+Native acceleration is optional: when a library is missing the engine falls back
+to the generic route, and only the speed changes.
 
 ### Fallback invariants
 
@@ -93,8 +106,8 @@ the installation to fail.
 - `_native.py` only does `ctypes`; importing it never loads a library.
 - Any native failure emits a single warning and falls back to Python instead of
   raising.
-- A topology-specialised plan must pass CPU/GPU arena, single-GEMM and
-  pack-heavy resource gates before native allocation.
+- A topology-specialised plan must pass the arena, single-GEMM and pack-heavy
+  resource gates before native allocation.
 
 ### Introspection helpers
 
@@ -109,21 +122,11 @@ assert isinstance(info, dict) and "backend" in info
 assert len(pe.specializations()) >= 1
 ```
 
-## Production snapshot (first shipped in the 0.4 series)
+## Speed and self-checks
 
-Full-scene A100 evidence uses `Nx=Ny=Nz=32`, `Lt=64`, `Nev=100`, `Ns=4`,
-`Mom=8` and `complex128`. Ratios are `selected/generic`, so values below `1`
-are faster.
-
-| Evidence | CPU | GPU |
-|---|---|---|
-| 43 stratified paths, median | **0.861×** | **0.276×** |
-| 43 paths, not slower than PyQCD generic | **42/43** | **42/43** |
-| 43 paths, not slower than `opt_einsum` 3.4.0 (`dp`) | **36/43** | **42/43** |
-| Core long-chain `seq=6585` | **0.459×** | fallback |
-
-The full registry contains 8,638 topology paths. A plan-level audit admitted
-3,833 CPU and 2,864 GPU plans; unsafe or unprofitable plans fall back before
-native allocation. The release therefore claims broad speedups over PyQCD's
-generic route, not universal CPU superiority over `opt_einsum`. See
-:doc:`performance` for the exceptions, protocol and reproduction.
+This page quotes no performance numbers on purpose: a ratio only means something on
+the shape, dtype and device it was measured on. Calibrate on yours with
+`python -m pyqcd.einsum.test --tune` (:doc:`performance`), and check whether an
+equation has a specialised route at all with
+`python -m pyqcd.einsum.verify_specialized "<equation>"`
+({doc}`appendix_specialized`).

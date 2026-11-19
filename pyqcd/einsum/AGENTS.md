@@ -663,12 +663,76 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
    （`test.tune_combos()`；CLI 的 `--tune` 报错上限仍是 30）。`auto` 已从
    `kernel_force` 轴删除（2026-11-18）：该轴现在遍历的就是全部四个强制值。
 3. 单次调用 `timeout` 缺省 **30 s**（`--tune-timeout`）；**异常 / 超时 / MISMATCH 只打印、
-   不退出**，继续遍历下一组。
+   不退出**，继续遍历下一组。它是**尽力而为上限（best-effort）**，不是硬超时——
+   真实能力见下面「9.1g」。
 4. 遍历结束按 `wall_ms` 选最优，按 §3.3 三种情形写行（最优来自不等价 → 原 equation 写
    性能行；来自等价 → `target_equation` 写性能行 + 原 equation 写等价行）；两种情况都
    **先删同键其它所有行**（含更快的历史行，防止异环境污染）。
 5. 写不进去（目录不可写等）**如实外抛**，由 tune 打印"写配置表失败"后继续（不进
    `last_error()`）；tune 结束打印最终写入行与删除行数。
+
+### 9.1g `--tune-timeout` 是**尽力而为上限（best-effort）**，不是硬超时（2026-11-19）
+
+**它到底能做什么**（实现是 `signal.setitimer` + `SIGALRM`，处理器只在**回到解释器**
+时派发）：
+
+| 场景 | 能否打断 | 依据 |
+|---|---|---|
+| 纯 Python 长循环（`optimal` 的穷举规划） | 能 | 实测 6.5 s 的那次被当场中止 |
+| 原生 C / CUDA 代码（收缩内核内部） | **不能** | 信号不返回解释器就不派发；实测 `--tune` 在 CPU 100%、GPU 0% 状态下挂 3 分钟，超时完全失效 |
+| 非主线程 / 无 `SIGALRM` 的平台 | 不能（退化） | 装不上定时器，只能"先跑完、再按耗时判定"（`timer=posthoc`） |
+
+**因此三处文案必须同一口径**：`--help` 的 `--tune-timeout`（`help.tune_timeout`）、
+tune 启动时的 `tune note :` 行（`tune.signal_note`）、模块 docstring 的「超时与预算」
+那一段，都写"**尽力而为（best-effort）**：能打断 Python 侧长循环，**打不断原生
+C/CUDA 代码**"，并给可操作建议"GPU 上把 `--tune-timeout` 取足够大，或先用
+`--tune pass` 快速通过（跳过 compare 与等价改写）"。
+
+**禁止的两句话**：
+1. ~~"可能打断原生内核"~~ —— 含糊到等于没说（用户原话）。要么写"打不断"，要么别写；
+2. ~~"建议在新进程里跑 tune"~~ —— 那是把问题推给用户；真正的替代是调大上限或
+   `--tune pass`。
+
+**也不许写成"硬超时"**：`--tune-budget`（整轮上限）同理——卡在原生代码里的那一组
+仍要等它返回才能被判超时。
+
+**fork 子进程隔离试过并已回退**：`subprocess`/`fork` 能把原生调用放到能 kill 的地方，
+但 CUDA 上下文不跨 fork 复用（父进程只要碰过 CUDA，子进程第一次 `cupy.asarray` 就是
+`cudaErrorInitializationError`；实测 22 组全 error）。所以不要再"顺手改成子进程"
+来解决这条限制——要先解决设备对象与操作数构造的跨进程问题。
+
+契约：`pyqcd/testing/_einsum_tune_timeout_doc_contract.py`（4 项：`--help` 段落含
+"打不断原生 / cannot interrupt native"且不含含糊句、`tune note :` 行同口径、
+`grep -c '尽力而为\|best-effort' pyqcd/einsum/test.py >= 2`、三处文案措辞一致）。
+
+### 9.1h tune 的卡死/超时/参照：四条判据（2026-11-19）
+
+判据与流程见 `docs/einsum_tune_timeout_20261119.md`，时间线见
+`logs/einsum-tune-timeout-20261119.txt`。改 tune 的超时、参照或准入之前先看这四条：
+
+1. **超时窗口是"整组"不是"单次"**：一组 `1+warmup+rounds` 次调用（缺省 7 次），实际
+   装的是 `limit × 7` 的组级预算——按单次设限会把 `7 × limit` 花光，且与
+   `min_wall_ms` 剪枝（比整组中位）不同口径。`--help` 里"每一次调用"的措辞与实现不符，
+   已知、待改。
+2. **"卡死无输出"的两个真凶都不在收缩内核**：`_tune_reference` 那次完整 `np.einsum`
+   在**任何超时保护之外**（按输入元素总数 `> 2_000_000` 跳过，用户那条生产方程实测
+   **2.56e8** 个元素），以及 `optimal` 的纯 Python 穷举规划。用 `tune init :` 起止行 +
+   `STAT=Rl+/%CPU=100/GPU 0%` 定位，不要猜。
+3. **跳过参照必须补自洽参照**：参照为 `None` 时全部 `rel=None`、`mismatch` 恒假，
+   "rel 超容差必须判 MISMATCH"会静默失效。只允许两种写法：小形状真参照，或
+   "首个成功组合"自洽参照。
+4. **`equiv_ok` / `match` 命中 ≠ 能执行**：命中只是签名查表；原生侧还有编译期步表覆盖
+   与运行时 `status 4`。所以 `topology` 的准入结论是**上界**，"命中但不可执行"是真实
+   状态（会让那一组落到 `error`）。
+
+附带两条实测（写报告时别外推）：`fork` 子进程在本机必 `cudaErrorInitializationError`
+（父进程碰过 CUDA 后）；`spawn` 每组全新解释器实测 **497.6 ms**（含一次 CUDA gemm，
+min 425.4 / max 1174.5，n=5），22 组约 11 s 固定开销。
+
+**顺带作废**：上面 §9.1f 第 2 条写的"笛卡尔积 24 组、
+`optimize ∈ {auto, greedy, optimal}`"已过时——现行是**分支化有序清单**
+（`B1/B2 = 22`、`B3 = 21`，`optimize` 取 `greedy/branch_1/branch_2/dp/branch_all/
+optimal/none` 七个叶子），组数以 `tune_plan_size()` 为准，不是三轴常量相乘。
 
 ### 9.0 单方程测试的唯一接口：`python -m pyqcd.einsum.test`（强制）
 

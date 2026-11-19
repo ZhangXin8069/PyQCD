@@ -71,24 +71,21 @@ assert np.allclose(pe.contract("ij,jk->ik", a, b, specialize=False), a @ b)
 
 ### 运行时提示（首次命中）
 
-两种内核都会在**首次执行**时打印一条提示（每形态每进程一次），据此可直接判断
-某次收缩走了哪条路：
+当真的尝试走特化路线时，引擎会打印一条提示（每形态每进程一次）。句子的文字部分跟随
+locale（`zh_*` 说中文，其余说英文），而下面这些 token 在中英两种语言下**逐字相同**：
 
-```
-[pyqcd.einsum] 专用路径: topology:9f3c... [kernel: kupl_dedicated] ...
-[pyqcd.einsum] 通用路径: 未命中特化形态 (ij,jk->ik)；执行的是通用分步收缩。...
-```
+| Token | 含义 |
+|---|---|
+| `[pyqcd.einsum] specialized path:` / `专用路径:` | 命中了形状特化路线 |
+| `[match: topology]` | 命中的是哪个形态族（`topology`、`kernel` 等） |
+| `[kernel: kupl_topology]` | 真正执行该计划的原生内核 |
+| `[plan-cache]` | 形态已知，但只复用了计划 |
+| `[pyqcd.einsum] generic path:` / `通用路径:` | 未命中特化，走通用分步收缩 |
 
-* `专用路径 … [kernel: ...]` —— 跑了原生专用内核（快 2–4×）。
-* `专用路径 … [plan-cache]` —— 形态已知，但只复用了计划。
-* `通用路径 …` —— 未命中特化，走通用分步收缩。
-
-用 `PYQCD_EINSUM_NOTICE=0` 可完全关闭；用
-`PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 可让特化提示**每次命中**都打印。
-支持的全部形态见 {doc}`appendix_specialized`。
-
-提示语言跟随 locale（`zh_*` 说中文，其余说英文），可用
-`PYQCD_EINSUM_LANG=zh|en` 强制指定。
+特化路线是否真的更快取决于你的形状、dtype 与设备——请用 `--tune` 实测，而不是信文档
+（见 :doc:`performance`）。用 `PYQCD_EINSUM_LANG=zh|en` 强制提示语言，用
+`PYQCD_EINSUM_NOTICE=0` 关闭全部提示，用 `PYQCD_EINSUM_SPECIALIZE_VERBOSE=1` 让特化
+提示**每次命中**都打印。语料覆盖哪些方程见 {doc}`appendix_specialized`。
 
 ### 查询单条方程的特化路径
 

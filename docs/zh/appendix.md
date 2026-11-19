@@ -1,11 +1,12 @@
 # 附录：对比测试工作流与性能说明
 
 > **范围。** 本附录属于源码仓库内容。PyPI 包不包含 MatX/Einsums 桥、
-> 基准驱动，也不包含这里讨论的原始日志。
+> 基准驱动，也不包含这里讨论的原始日志。这些桥与其驱动已于 2026-11-15 **移出
+> 代码树**；下面记录的是它们当时的方法与结果。
 
 ## 接入一个新的对比引擎
 
-MatX 与 Einsums 的接入遵循同一套工作流，可直接复用于下一个引擎。
+已退役的 MatX 与 Einsums 接入曾遵循同一套工作流，可直接复用于下一个引擎。
 
 1. 将上游源码固定为 `refer/git-rep/<name>` 下的 Git submodule，并在
    `refer/git-rep/README.md` 记录来源、用途与固定 commit。
@@ -17,8 +18,8 @@ MatX 与 Einsums 的接入遵循同一套工作流，可直接复用于下一个
 4. 在 `pyqcd/testing/<name>/` 下新增 ctypes 绑定，并从官方文档提炼契约语料；
    所有未经实测的结论都要显式标注。
 5. 在 `pyqcd/testing/__init__.py` 与 `pyqcd/testing/conftest.py` 注册验证入口。
-6. 将引擎接入 `pyqcd/testing/einsum/bench_four_engines.py`，登记支持矩阵、
-   精度标签与 `N/A` 原因。
+6. 在 `pyqcd/testing/einsum/` 下新增多引擎对比驱动，登记支持矩阵、精度标签与
+   `N/A` 原因。（已退役的 `bench_four_engines.py` 已随桥删除。）
 7. 测试代码不得进入发行物：在 `find_packages` 中排除，并在 `MANIFEST.in`
    中 prune 其源码。
 8. 验收通过才算完成：桩构建；依赖具备时的真机构建；对独立 oracle 的正确性；
@@ -26,9 +27,10 @@ MatX 与 Einsums 的接入遵循同一套工作流，可直接复用于下一个
 
 ## 四引擎性能摘要
 
-测量环境为 i7-13620H（8 线程）与 RTX 4060 Laptop（8 GB）。每例 3 轮交替，
-先验证正确性再计时；桥使用预分配输出；CPU 线程固定为 `OMP=8`、`BLAS=8`。
-`opt_einsum` 运行在 NumPy/CuPy 之上，因此其数字表示“规划器 + 后端”。
+> **历史数据，当前代码树上不可复现。** 产出这两张表的 MatX/Einsums 桥与驱动已于
+> 2026-11-15 **移出**，标注 `(kernel)` 的两行对应更早删除的专用内核。数字只为记录
+> 已退役实现而保留。当前的数字请在**你自己的**形状上跑
+> `python -m pyqcd.einsum.test --tune` 取得（见 :doc:`performance`）。
 
 ### CPU（NumPy 数组，毫秒）
 
@@ -114,7 +116,7 @@ Einsums 内核本身约 75 ms，比同用例的 qcd 与 opt_einsum 都快。
 * 对每个引擎做线程扫描，同时报告固定档与最佳档。
 * 在第二台机器复核后再推广任何小倍率结论。
 
-完整报告、原始 JSON 与组件探针位于源码仓库：
+完整报告与原始 JSON 位于源码仓库：
 `docs/report_matx_einsums_bridge_20261110.md`、
-`logs/einsum-four-engine-20261110.txt`、
-`cpp/cpu/cpu-einsums/tests/bench_components.cpp`。
+`logs/einsum-four-engine-20261110.txt`。组件探针
+（`cpp/cpu/cpu-einsums/tests/bench_components.cpp`）已随桥一并删除。

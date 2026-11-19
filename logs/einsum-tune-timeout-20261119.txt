@@ -1,0 +1,286 @@
+# qcd-einsum `--tune` 超时/参照/准入：经验落盘时间线（2026-11-19）
+
+配套文档：`docs/einsum_tune_timeout_20261119.md`（判据与流程）。
+本文件只做**追溯**：关键命令 + 输出摘要 + 当时的判定。所有数字都在本工作树复跑过；
+凡无法复现的来源一律标 `[转述]`。本轮**只写文档与注释**，未改任何可执行语句，未做 git。
+
+素材：`logs/kf/{EXP3,SIGALRM_HONEST,TUNE_PASS_MODE,TUNE_FIX3,TUNE_RULE,WORKMAP}.md`
+（同一轮并行代理的任务书与报告）、`/tmp/perf_en.bak`（重写前的 `docs/en/performance.md`）。
+
+环境：Linux / RTX 4060 Laptop / cupy 14.2.0 / torch 2.15.0+cu132 / numpy 2.5.4 / Python 3.12.4。
+工作树 HEAD = `584979cd`（release 0.5.4），侵入性改动（`test.py`、两份 performance.md、
+`conftest.py`）来自同轮其它代理，非本轮产物。
+
+---
+
+## 00 · 背景
+
+用户实测：`--tune` 一条 10 算子方程，进程 `STAT=Rl+`、`%CPU=100`、`GPU 0%`，5 线程
+`futex_do_wait`，**3 分钟以上无输出**，`--tune-timeout` 完全没生效 `[转述 EXP3.md:18 与
+TUNE_HARD_TIMEOUT.md:11；本轮未复现该方程，只复现了机制]`。
+
+要落盘的教训分三类：
+
+1. **能力诚实**：超时到底能干什么、不能干什么；
+2. **语义顺序**：`as_equivalence` 与 `kernel_force` 的先后；
+3. **文档口径**：性能页与 `--help` 的自证。
+
+---
+
+## 01 · 复现"原生代码打不断"
+
+`_guarded_call` 的 limit=0.3 s，三种受测调用（本机 2026-11-19）：
+
+```
+$ python - <<'EOF'   # 纯 Python 5 秒循环
+import time; from pyqcd.einsum import test as cli
+def f():
+    t = time.perf_counter()
+    while time.perf_counter() - t < 5.0: pass
+try: cli._guarded_call(f, 0.3, None)
+except BaseException as e: print(type(e).__name__, round(time.perf_counter()-t0,2))
+EOF
+纯 Python 循环：_TuneTimeout，墙钟 0.30s（上限 0.3 s）
+```
+
+```
+$ python - <<'EOF'   # 单次 5000³ 原生 BLAS
+a = np.ones((5000,5000)); b = np.ones((5000,5000))
+单次 5000³ matmul（原生 BLAS）= 2.34s
+limit=0.3s -> _TuneTimeout, 实际墙钟 2.29s （超出上限 1.99s 才被判）
+EOF
+```
+
+判定：**按"能否回到解释器"分档**。`SIGALRM` 只在字节码之间派发，原生调用不返回解释器
+就永不触发；判超时只能等它返回。文案因此必须写"尽力而为（best-effort）"，禁止"硬超时"。
+
+`grep` 证据（现行代码）：
+
+```
+$ grep -c 'SIGALRM\|setitimer' pyqcd/einsum/test.py
+20                              # 实现仍在，未改成子进程
+$ grep -rn '_tune_worker\|run_job(' --include=*.py pyqcd | grep -v _tune_worker.py
+                                # 0 命中：子进程路线是孤岛
+$ grep -c '_run_group_in_subprocess' pyqcd/einsum/test.py
+0                               # 孤岛 docstring 里引用的函数根本不存在
+```
+
+---
+
+## 02 · `fork` 与 CUDA：本机复现失败
+
+```
+$ python - <<'EOF'
+import cupy, numpy as np, multiprocessing as mp
+a = cupy.asarray(np.ones((4,4))); cupy.matmul(a, a)      # 父进程先碰 CUDA
+p = mp.get_context("fork").Process(target=child, args=(q,)); p.start(); p.join(30)
+EOF
+parent cuda ok
+fork child exitcode: 0
+fork child result: ('error', 'CUDARuntimeError: cudaErrorInitializationError: initialization error')
+```
+
+判定：`fork` **进程能起来、退出码 0，但 CUDA 初始化必失败**（与用户复测的 22 组全 error
+一致 `[转述 SIGALRM_HONEST.md:13]`）。硬超时只剩 `spawn`（每组全新解释器）。
+
+---
+
+## 03 · `spawn` 的价格（本机实测，n=5 中位）
+
+```
+python -c pass                                  18.2 ms
+python -c "import numpy"                        70.1 ms
+python -c "import cupy"                        243.6 ms
+import cupy + 建上下文 + 一次 matmul             497.6 ms  (min 425.4 / max 1174.5)
+```
+
+22 组 → 约 **11 s** 固定开销（GPU 更多），且操作数需要落盘或重建。
+
+`[转述]` 任务书写"每组重建上下文约 1.7 s"——本轮**未复现**，本机约 0.50 s。引用他人
+数字时必须标注来源与是否复现。
+
+---
+
+## 04 · 参照：门限与两条退化
+
+`_tune_reference` 有问题时的表现是"遍历还没开始就卡住"——它在**任何** `_guarded_call`
+之外。现行门限按**输入元素总数**：
+
+```
+$ python - <<'EOF'   # 用户那条 10 算子方程（TUNE_FIX3.report.md §2 的原命令）
+shapes = [(400,4,1,1),(4,4,9,1),(4,400,400,400),(4,4,9,9),(4,4),(4,4),(4,4),(1,9,400),(1,9),(1,9,400)]
+输入元素总数: 256010297  门: 2000000  是否跳过参照: True
+EOF
+```
+
+即 **128 倍**于门限 → 跳过真参照，改走"首个成功组合"的自洽参照。
+
+判定：**只跳过、不补参照 = MISMATCH 永远检不出**（`rel` 依赖参照；`None` 时所有组
+`rel=None`、`mismatch` 恒假）。合法写法只有两种：小形状真参照，或大形状自洽参照。
+
+---
+
+## 05 · 超时粒度：组级窗口
+
+一组 = `1 + warmup + rounds` 次调用（缺省 `warmup=1`、`rounds=5` → **7** 次）：
+
+```
+$ python -c "from pyqcd.einsum import test as cli; print(1+cli.DEFAULT_WARMUP+cli.DEFAULT_ROUNDS)"
+7
+```
+
+代码（`test.py`，本轮**未改**，只加注释）：
+
+```python
+group_limit = float(limit) * float(1 + warmup + rounds)
+_guarded_call(lambda: _measure(call, None, deadline, min_wall), group_limit, deadline)
+```
+
+判定：按"单次"设上限会把 `7 × limit` 都花掉，且与 `min_wall_ms` 剪枝不同口径。组级窗口
+与剪枝同口径（都看整组中位）。**副作用**：`--help` 的"每一次 `contract()` 调用的上限"
+与实现不符——本轮只记录，未动那串文案（见文档 §4 第 2 条、§11 第 1 条）。
+
+---
+
+## 06 · 语义顺序：先改写，再强制内核
+
+```
+$ python - <<'EOF'
+eq = "cbda,menf,ac,em,bd,fn->"          # 原方程不在语料；改写后 cadb,... 在
+原方程语料命中: False
+改写后方程: cadb,menf,ac,em,bd,fn->  命中: True
+as_equivalence=False kernel_force=topology -> KernelUnavailableError
+as_equivalence=True  kernel_force=topology -> OK rel=1.54e-16
+EOF
+```
+
+判定：`as_equivalence=true` 的语义是"改写成语料形态**再**跑特化内核"。代码顺序必须是
+`_contract_via_equivalence` → `_run_forced_kernel`（`_api.py` 的 `elif forced:` 分支）。
+
+附带命名陷阱：`equiv_ok`（报障报告里写作 `equivalent_ok`）只表示**语料签名命中**，
+不表示能执行。CUDA 侧另有两道门，本机计数：
+
+```
+$ grep -c '^    {0x' cpp/cuda/einsum/src/topology_steps.h        # 表项
+8638
+$ grep -c '^static const int8_t kQcdTopoOrder' cpp/cuda/einsum/src/topology_steps.h
+3477                                                            # 不同步序
+$ grep -c 'QCD_TOPOLOGY_UNSUPPORTED' cpp/cuda/einsum/src/apply_contract.cu
+4                                                               # status 4 返回点
+```
+
+---
+
+## 07 · 准入探测：0 行 error 的来源
+
+`tune_unavailable_kernels()` 在遍历**前**探 `dedicated` 与 `topology`，不可用则整档
+`状态=skip`、`N` 用裁剪后组数。上一轮实测：
+
+```
+tune plan : planned=22  kept=15  trimmed=7  skipped-kernels=dedicated
+状态=error 计数 = 0
+```
+
+判定：**"该内核在这个形状上没有路" ≠ "这一组跑出了意外"**。前者是准入结论（`skip`），
+后者才是 `error`。`topology` 的 `status 4` 只能在**真下发之后**才知道，所以"命中语料"
+不等于"准入通过"——这条张力见文档 §7 结尾与 §11 第 4 条。
+
+---
+
+## 08 · `--tune` 三种形态实跑（`--profile false`，不污染配置表）
+
+```
+$ python -B -m pyqcd.einsum.test --equation 'ab,bc,cd->ad' \
+    --shape '[40,40],[40,40],[40,40]->[40,40]' --device cpu --dtype complex128 \
+    --warmup 1 --rounds 1 --tune pass --tune-timeout 10 --language zh-cn --profile false
+tune init : mode=pass  equation=ab,bc,cd->ad  operands=3  dtype=complex128  device=cpu  backend=auto
+tune init : shapes ok  total_elements=4800  est_bytes=0MiB
+tune init : branch probe start  skipped (pass mode)
+tune init : branch probe done  skipped (pass mode)  raw_ok=false  equiv_ok=false  branch=B3  0ms
+tune init : kernel admission start  skipped (pass mode)
+tune init : kernel admission done  skipped (pass mode)  unavailable=-  0ms
+tune init : session start  profile_disabled=true
+tune init : first group start  dedicated/false/greedy
+tune init : first group done  dedicated/false/greedy  状态=ok  5ms
+...
+best: kernel_force=backend  as_equivalence=false  optimize=none  wall_ms=0.056357
+mode: pass 模式：跳过数值校验
+PASS ab,bc,cd->ad  0.112ms  min_wall_ms=0.056357ms  best=kernel_force=backend ...
+```
+
+判定：**9 行** `tune init :`（`mode` / `shapes ok` / `session start` 各一行，另
+`branch probe`、`kernel admission`、`first group` **三对**起止）——起止成对就能一眼
+看出卡在哪一步。`pass` 模式确实把 `branch probe`/`kernel admission` 都标 `skipped`、
+21 组、无 `topology`。三种形态的解析唯一入口是 `parse_tune_mode()`；
+`_as_bool("pass")` 是 `False`，任何新入口都必须走它（否则 `--tune pass` 会静默变成"不跑"）。
+
+---
+
+## 09 · 文案契约 4 项（本轮复跑）
+
+```
+$ python -B -m pyqcd.testing._einsum_tune_timeout_doc_contract
+PASS test_help_section_states_the_limitation_and_drops_vague_wording
+PASS test_tune_note_line_states_the_same_limitation
+PASS test_source_mentions_best_effort_at_least_twice
+PASS test_three_places_agree_on_the_wording
+4 passed, 0 skipped, 0 failed
+```
+
+它校验的是"能力描述是否诚实"，不是数值——所以普通数值测试永远抓不到这类退化。
+
+---
+
+## 10 · 性能页：删掉了什么（量化）
+
+`/tmp/perf_en.bak`（重写前的 `docs/en/performance.md`）vs 现行新页：
+
+| 项 | 旧页 | 新页 |
+|---|---|---|
+| 行数 | 577 | 125 |
+| 表格行（以 `\|` 开头） | 104 | 5 |
+| 形如 `0.861x` 的比例 | **30** | **0** |
+| 表格内数字单元格 | 36 | 0 |
+| `seq=` 提及 | 5 | 0 |
+| 含数字的行 | 196 | — |
+| 数字 token 总数 | 588 | 42 |
+
+旧页 30 个比例全部基于已废弃口径（`production` 异形轴 / `uniform` `dim=4` 探针），
+与 `ROLE_SHAPES` 不可比；新页只留"先 tune + 以实测为准 + 怎么读输出"，**不给加速比**。
+
+`[转述]` 任务书说旧页"约 92 处数字"：按"含数字的行"=196、按"数字 token"=588、
+按"比例型"=30。**三种数法差 20 倍**，引用时必须带数法。
+
+---
+
+## 11 · 旧页里被删掉的东西（清单）
+
+- `## Production specialisation` 与 `### Six core production paths` 的 43 路径 / 6 路径
+  两张数据表（`0.861x`、`0.276x`、`0.528x`、`0.125x` 之类）；
+- `### Resource gates for all 8,638 plans`（3,833 / 2,864 这类准入计数）；
+- `## Historical generic-routing protocol`、`### Historical case coverage`、
+  `### Historical CPU results`、`### Historical GPU results`、`## Why historical generic
+  rows differ`、`## What runs where`、`## Topology-specialised kernels`、
+  `## Where the gains come from`、`## Repeated calls`、`## Memory`、`## Reproduce`、
+  `### Historical generic-kernel benchmark (15 generic paths)`、
+  `### Specialized-kernel smoke/sample benchmark (15 fixed paths)`；
+- 一整份可复跑的 15-case 基准脚本（`docs-skip` 标注的那段）。
+
+新页保留并强化的是"**为什么不信这页**"的三条理由（收缩序依赖形状、内核可用性依赖
+设备与库、跨机数字不可迁移）与"三实现交叉验证"的可执行检查。
+
+---
+
+## 12 · 本轮产物
+
+| 文件 | 性质 |
+|---|---|
+| `docs/einsum_tune_timeout_20261119.md` | 新建：判据与流程（11 节，含残余清单） |
+| `logs/einsum-tune-timeout-20261119.txt` | 新建：本文件（时间线） |
+| `logs/AGENTS.md` | 追加索引一节 |
+| `pyqcd/einsum/AGENTS.md` | 追加 §9.1h 经验小节 |
+| `skills/pyqcd-einsum/SKILL.md` | 追加 `[T4]` 经验小节 |
+| `pyqcd/einsum/test.py` | **仅** docstring/注释（见报告 §③） |
+
+**未动**：任何可执行语句、`cpp/**`、`docs/en/**`、`docs/zh/**`、`README*`、`_api.py`、
+`_tune_worker.py`、契约文件；未做 git 操作。

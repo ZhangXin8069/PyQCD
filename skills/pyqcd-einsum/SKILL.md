@@ -1893,3 +1893,28 @@ applyInitQcd/applyEndQcd` + `qcd_kupl_{topology,dedicated,family}_apply`）；
    （`KernelUnavailableError((requested,), …)` 会让 `", ".join()` 崩）；CLI 默认值用
    `None` 表示"没给"（填 `"generic"` 会被当成显式指定）；路径先 `expanduser()`
    再 `abspath()`，否则 `~/.cache` 变成字面目录、`--profile-dir` 静默失效。
+
+### [T4] tune 的卡死 / 超时 / 参照（2026-11-19）
+
+判据与流程：`docs/einsum_tune_timeout_20261119.md`；时间线：
+`logs/einsum-tune-timeout-20261119.txt`；`AGENTS.md` 对应小节 §9.1h。
+
+1. **`--tune-timeout` 是 best-effort，不是硬超时**：`SIGALRM` 只在字节码之间派发，
+   原生 C/CUDA 调用不返回解释器就永不触发。本机实测：纯 Python 循环 0.30 s 准点抛；
+   单次 **2.34 s** 的原生 BLAS、上限 0.3 s → **2.29 s 才抛（超限 1.99 s）**。文档只能
+   写"能打断 Python 长循环、打不断原生"，并给 `--tune pass` / 加大上限两条替代。
+2. **窗口是整组不是单次**：一组 `1+warmup+rounds`（缺省 **7**）次调用，装的是
+   `limit × 7` 的组级预算，才与 `min_wall_ms` 剪枝同口径；按单次设限会白花 `7 × limit`。
+3. **卡死先查两处非内核位置**：`_tune_reference` 的完整 `np.einsum`（在超时保护之外，
+   按输入元素总数 `> 2_000_000` 跳过；生产方程实测 **2.56e8** 个元素）与 `optimal` 的
+   纯 Python 穷举。定位靠 `tune init :` 起止行 + `STAT=Rl+/%CPU=100/GPU 0%`。
+4. **硬超时的两条路都别顺手换**：`fork` 在本机必失败（父进程碰过 CUDA 后子进程
+   `cudaErrorInitializationError`）；`spawn` 每组全新解释器实测 **497.6 ms**（含一次
+   CUDA gemm，n=5，min 425.4 / max 1174.5）→ 22 组约 11 s 固定开销。
+5. **语义顺序写死在 `_api.py`**：`as_equivalence=true` = "先改写成语料形态、再跑特化
+   内核"。实测 `cbda,...->` 原方程 `kernel_force=topology` 必失败，同一条 `as_equivalence=true`
+   → `rel=1.54e-16`。另：`equiv_ok` / `match` 命中只表示**签名命中**，CUDA 侧还有步表
+   覆盖与 `status 4` 两道门，"命中但不可执行"真实存在。
+6. **验收只用三条**：`python -B -m pyqcd.testing._einsum_tune_timeout_doc_contract`（4 项）、
+   `--tune` / `--tune pass` / 不给 三种形态各跑一次小方程（`--profile false`）、
+   小形状与大形状各验一次 `rel`（只验小形状会把"参照为 None ⇒ mismatch 恒假"放回去）。

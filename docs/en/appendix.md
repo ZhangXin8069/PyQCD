@@ -2,12 +2,13 @@
 
 > **Scope.** This appendix is source-checkout material. The PyPI package does
 > not ship the MatX/Einsums bridges, the benchmark driver or the raw logs
-> discussed here.
+> discussed here. Those bridges and their driver were **removed** from the tree
+> (2026-11-15); what follows records the protocol and results they produced.
 
 ## Adding a new comparison engine
 
-The MatX and Einsums integrations follow one workflow; reuse it for the next
-engine.
+The retired MatX and Einsums integrations followed one workflow; reuse it for the
+next engine.
 
 1. Pin the upstream source as a Git submodule under `refer/git-rep/<name>` and
    record its source, purpose and fixed commit in `refer/git-rep/README.md`.
@@ -21,8 +22,9 @@ engine.
    statement explicitly.
 5. Register the verification entry in `pyqcd/testing/__init__.py` and
    `pyqcd/testing/conftest.py`.
-6. Add the engine to `pyqcd/testing/einsum/bench_four_engines.py` with a
-   support matrix, a precision label and explicit `N/A` reasons.
+6. Add a multi-engine driver under `pyqcd/testing/einsum/` with a support matrix,
+   a precision label and explicit `N/A` reasons. (The retired
+   `bench_four_engines.py` was removed with the bridges.)
 7. Keep test code out of distributions: exclude the package from
    `find_packages` and prune its sources in `MANIFEST.in`.
 8. Accept only after: stub build; real build when dependencies exist;
@@ -31,10 +33,12 @@ engine.
 
 ## Four-engine performance summary
 
-Measured on an i7-13620H host (8 threads) and an RTX 4060 Laptop (8 GB).
-Median of 3 alternating rounds; correctness checked before timing; bridges use
-pre-allocated outputs; CPU threads pinned to `OMP=8`, `BLAS=8`. `opt_einsum`
-runs on NumPy/CuPy, so its numbers describe planner plus backend.
+> **Historic data, not reproducible on the current tree.** The MatX and Einsums
+> bridges and the driver that produced these tables were **removed** (2026-11-15),
+> and the two `(kernel)` rows refer to dedicated kernels that were removed earlier.
+> The numbers are kept only as a record of the retired implementations. For current
+> numbers, run `python -m pyqcd.einsum.test --tune` on your own shape
+> ({doc}`performance`).
 
 ### CPU (NumPy arrays, milliseconds)
 
@@ -126,7 +130,7 @@ per-call tensor allocation and copies. The Einsums kernel itself takes about
 * Sweep thread counts per engine and report both fixed and best-known settings.
 * Re-run on a second machine before generalising any small ratio.
 
-The full report, raw JSON and component probe live in the source repository:
-`docs/report_matx_einsums_bridge_20261110.md`,
-`logs/einsum-four-engine-20261110.txt` and
-`cpp/cpu/cpu-einsums/tests/bench_components.cpp`.
+The full report and raw JSON live in the source repository:
+`docs/report_matx_einsums_bridge_20261110.md` and
+`logs/einsum-four-engine-20261110.txt`. The component probe
+(`cpp/cpu/cpu-einsums/tests/bench_components.cpp`) went away with the bridges.
