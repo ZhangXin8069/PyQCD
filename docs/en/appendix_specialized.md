@@ -8,7 +8,7 @@ safe in a production start-up self-check.
 
 Coverage of the current corpus:
 
-* pyqcd version: `0.5.4`
+* pyqcd version: `0.5.6`
 * specialized paths: **8638** (2582 base table + 6056 appendix variants)
 * distinct topology signatures: **8638**, indexed in **24** buckets
 

@@ -151,7 +151,13 @@ def _delayed_contract(delays: Sequence[float], counter: dict[str, int]):
 
 def _run(work: str, tag: str, *, delays: Sequence[float],
          timeout: float = TIMEOUT) -> dict[str, Any]:
-    """在临时子目录里跑一次小清单 ``run_tune``（注入耗时、注入小清单）。"""
+    """在临时子目录里跑一次小清单 ``run_tune``（注入耗时、注入小清单）。
+
+    ``isolate=False`` 是**必须**的：本契约用 ``patch.object(pe, "contract", ...)`` 注入
+    耗时，而子进程路线（``--tune`` 的缺省）根本不在本进程里调 ``contract``，注入会失效
+    ——那样"哪一组该被剪枝"就由本机快慢决定，断言全成废纸。``min_wall_ms`` 的规则两条
+    路都实现（只是执行位置不同），所以进程内足够验机制。
+    """
     cli = _cli()
     directory = os.path.join(work, tag)
     os.makedirs(directory, exist_ok=True)
@@ -169,7 +175,7 @@ def _run(work: str, tag: str, *, delays: Sequence[float],
                             profile_kwargs={"profile": True,
                                             "profile_dir": os.path.join(directory,
                                                                         "cache")},
-                            timeout=timeout, language="zh-cn")
+                            timeout=timeout, isolate=False, language="zh-cn")
         # 报告文本也一起收：本契约要断言"逐组那一行 + 表尾"的原文，那是
         # ``print_tune`` 的产物（``run_tune`` 只返回字典、不打印）。
         cli.print_tune(tune, "zh-cn", verbose=False)

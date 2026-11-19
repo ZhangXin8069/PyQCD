@@ -7,7 +7,7 @@
 闹钟等于没装。2026-11-18 用户实测：10 算子方程的 ``--tune`` 在 ``STAT=Rl+``、
 ``%CPU=100``、``GPU 0%`` 状态下挂 3 分钟以上，``--tune-timeout`` 完全没生效。
 能真正打断原生代码的只有**父进程 kill 子进程**，所以受测调用搬到子进程里跑，
-超时由父进程强制生效（:func:`pyqcd.einsum.test._run_group_in_subprocess`）。
+超时由父进程强制生效（:func:`pyqcd.einsum._tune_runner.run_group`）。
 
 为什么是**新解释器**而不是 ``fork``
 -----------------------------------
@@ -16,19 +16,23 @@
 ``cudaErrorInitializationError``（本机 RTX 4060 + cupy 14.2 实测；反之父进程从未
 ``import cupy`` 时 fork 出来的子进程能正常初始化 CUDA）。而父进程必须碰 CUDA——它要
 建操作数、并从**设备对象**上读出 ``device='cupy:0'`` 这类键列。所以这里用
-``subprocess`` 起全新解释器：每组付一次进程启动（实测中位 ~250 ms，含 ``import cupy``），
-换来"父进程的 CUDA 状态一律不参与"。
+``subprocess`` 起全新解释器：每组付一次进程启动（本机实测 ``import pyqcd.einsum``
+中位 **126 ms**、``import cupy`` 约 **244 ms**），换来"父进程的 CUDA 状态一律不参与"。
 
 子进程**只做一件事**
 --------------------
 载入操作数 → 跑 ``warmup`` + ``rounds`` 次 ``contract()`` → 把观察结果（耗时样本、
 结果形状/dtype、是否异常、最近一次选路记录）写进结果文件。**写配置表、打印表格、
-选优、剪枝一律在这里不做**：那是父进程的编排工作，而且父进程才是能杀死本进程的一方。
+选优一律在这里不做**：那是父进程的编排工作，而且父进程才是能杀死本进程的一方。
+
+组内 ``min_wall_ms`` 剪枝仍在**这里**做：规则是"单次调用耗时超过当前上界即终止该组"，
+必须能在两次调用之间生效，否则一组 7 次调用会先跑完才被父进程判死。命中时写
+``status=pruned`` 与两个数值，父进程照原文 ``耗时大于min_wall_ms,此组被终止`` 打出。
 
 通信方式（三个文件，都在父进程给的临时目录里）
 ----------------------------------------------
-* ``job.json``：父进程 → 子进程的任务单（方程、形状、dtype、backend、三轴取值、
-  ``warmup``/``rounds``、操作数暂存路径、结果路径）。
+* ``job.json``：父进程 → 子进程的任务单（方程、dtype、backend、三轴取值、
+  ``warmup``/``rounds``、``min_wall_ms``、操作数目录、结果路径、可选输出路径）。
 * ``operands/*.npy``：父进程按固定 ``seed`` 生成**一次**、落盘，子进程按原样读回
   （``np.save``/``np.load`` 逐位无损，所以"子进程看到的数"与"同进程直接调用看到的数"
   是同一批）。**不从父进程搬设备内存**：父进程的 CUDA 状态一概不参与。
@@ -47,7 +51,7 @@ import sys
 import time
 from typing import Any
 
-__all__ = ["run_job", "main"]
+__all__ = ["run_job", "main", "Pruned", "SLEEP_ENV", "EXIT_ENV"]
 
 #: 让受测调用**人为卡住**的调试开关（秒，缺省未设＝不启用）。
 #:
@@ -62,13 +66,37 @@ SLEEP_ENV = "PYQCD_EINSUM_TUNE_WORKER_SLEEP"
 EXIT_ENV = "PYQCD_EINSUM_TUNE_WORKER_EXIT"
 
 
+class Pruned(RuntimeError):
+    """组内 ``min_wall_ms`` 剪枝：某一次调用比当前上界还慢，该组就此终止。
+
+    继承 ``RuntimeError`` 是有意的：它必须穿透库里那些 ``except Exception`` 的
+    "丢掉这次尝试、回退再跑一遍"，否则被终止的那一组会以通用路径重跑一遍，
+    "终止"就成了空话。父进程据此记 ``status=pruned``（不是 ``timeout``：这一组
+    并没有跑到时间上限，它只是比当前最快的那一组慢）。
+    """
+
+    def __init__(self, wall_ms: float, min_wall_ms: float | None) -> None:
+        super().__init__(f"pruned at {float(wall_ms):.6f}ms")
+        self.wall_ms = float(wall_ms)
+        self.min_wall_ms = None if min_wall_ms is None else float(min_wall_ms)
+
+
 def _load_operands(directory: str, device: str) -> list[Any]:
-    """按文件名顺序读回父进程暂存的操作数；非 CPU 设备上再搬到显存。"""
+    """按文件名顺序读回父进程暂存的操作数；非 CPU 设备上再搬到显存。
+
+    CPU 设备用 **mmap** 读：生产形状上操作数一共 3.9 GiB（本机实测 ``np.load`` 全量
+    拷入要 1.2 s），而这一份数据在父进程与全部组之间是**同一份**、且只读。mmap 让每组
+    只付页表映射的钱（本机 9.2 ms），真正的页在第一次收缩时由内核按需调入——
+    ``np.tensordot``/``np.einsum`` 的步进就是顺序读，与先拷一遍再算等价。
+
+    非 CPU 设备仍全量拷：``cupy.asarray`` 必须拿到真实的主机缓冲。
+    """
     import numpy as np
 
     paths = sorted(glob.glob(os.path.join(directory, "operand_*.npy")))
-    host = [np.load(path) for path in paths]
-    if str(device or "cpu").strip().lower() == "cpu":
+    cpu = str(device or "cpu").strip().lower() == "cpu"
+    host = [np.load(path, mmap_mode="r" if cpu else None) for path in paths]
+    if cpu:
         return host
     import cupy
 
@@ -93,7 +121,12 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
 
     ``mark_ready`` 在**第一次调用之前**被调用一次（父进程据此开始计 ``--tune-timeout``）。
     返回的字典就是写进 ``result.json`` 的内容；父进程只认这几个键：``median_s`` /
-    ``samples`` / ``shape`` / ``dtype`` / ``last_kernel`` / ``kernel_info``。
+    ``samples`` / ``shape`` / ``dtype`` / ``last_kernel`` / ``kernel_info`` /
+    ``saved_output`` / ``output_skipped_bytes``。
+
+    ``min_wall_ms``（可选）是组内剪枝上界：**每一次**调用测到的墙钟超过它就抛
+    :class:`Pruned`，不再跑完这一组。用户规则说的就是这个，只是执行位置在子进程里
+    ——父进程没有办法打断正在进行的那一次调用。
     """
     import statistics
 
@@ -107,11 +140,13 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
     backend = job.get("backend")
     warmup = max(int(job.get("warmup") or 0), 0)
     rounds = max(int(job.get("rounds") or 1), 1)
+    raw_bound = job.get("min_wall_ms")
+    min_wall_ms = None if raw_bound is None else float(raw_bound)
     operands = _load_operands(str(job["operands_dir"]), device)
     kwargs = dict(job.get("contract_kwargs") or {})
     kwargs.update(_filter_profile_kwargs(dict(job.get("profile_kwargs") or {})))
     kwargs["backend"] = backend
-    # 空串 = 调用方没指定（``None`` 一路传到 ``contract()``，由 ``_api`` 自己回落）。
+    # ``None`` = 调用方没指定（一路传到 ``contract()``，由 ``_api`` 自己回落）。
     if job.get("kernel_force") is not None:
         kwargs["kernel_force"] = job["kernel_force"]
     kwargs["as_equivalence"] = job.get("as_equivalence")
@@ -133,31 +168,60 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
     sleep = os.environ.get(SLEEP_ENV, "").strip()
     crash = os.environ.get(EXIT_ENV, "").strip()
     clear_records()
+    # ``wall_s`` 必须由**本进程**测：父进程只看得见 ``ready`` 文件什么时候出现，而轮询
+    # 粒度是毫秒级——一组只要跑得比这个粗，父进程量出来的"从 ready 到现在"就可能是
+    # 微秒级的假数（甚至比 ``median_s`` 还小）。这里从 mark_ready 之前起表，到样本
+    # 全部跑完为止，是**受测时间区**的真实墙钟。
+    ready_started = time.perf_counter()
     mark_ready()
     if crash:
         os._exit(int(crash))
     if sleep:
         # 模拟"进入原生代码后不返回"：就在计时区里睡，父进程只能靠 kill 打断。
         time.sleep(float(sleep))
-    for _ in range(warmup):
-        pe.contract(equation, *operands, **kwargs)
-    samples = []
-    result = None
-    for _ in range(rounds):
+
+    def measured() -> float:
+        """一次受测调用 → 秒；超过 ``min_wall_ms`` 抛 :class:`Pruned`。"""
         started = time.perf_counter()
-        result = pe.contract(equation, *operands, **kwargs)
-        samples.append(time.perf_counter() - started)
+        got = pe.contract(equation, *operands, **kwargs)
+        wall_s = time.perf_counter() - started
+        if min_wall_ms is not None and wall_s * 1000.0 > min_wall_ms:
+            raise Pruned(wall_s * 1000.0, min_wall_ms)
+        measured.result = got                         # type: ignore[attr-defined]
+        return wall_s
+
+    for _ in range(warmup):
+        measured()
+    samples: list[float] = []
+    for _ in range(rounds):
+        samples.append(measured())
+    result = getattr(measured, "result", None)
+
     summary: dict[str, Any] = {
+        "status": "ok",
         "median_s": float(statistics.median(samples)),
         "samples": [float(item) for item in samples],
         "shape": list(np.shape(result)),
         "dtype": str(getattr(result, "dtype", "")),
+        # 受测时间区的**真实**墙钟（本进程测，父进程的轮询粒度量不准这个量）。
+        "wall_s": time.perf_counter() - ready_started,
         "last_kernel": _api.last_kernel() if hasattr(_api, "last_kernel") else None,
         "kernel_info": _kernel_info(),
+        "saved_output": False,
     }
     output = job.get("output_operand")
     if output:
-        np.save(str(output), _to_host(result))
+        # 只有**小**输出才落盘：``rel`` 校验是可选的加分项，不该为它把磁盘写满。
+        limit = int(job.get("output_max_bytes") or 0)
+        host_result = _to_host(result)
+        if limit > 0 and int(host_result.nbytes) > limit:
+            summary["output_skipped_bytes"] = int(host_result.nbytes)
+        else:
+            try:
+                np.save(str(output), host_result)
+                summary["saved_output"] = True
+            except OSError as exc:              # pragma: no cover - 磁盘满/只读
+                summary["output_error"] = f"{type(exc).__name__}: {exc}"
     return summary
 
 
@@ -207,8 +271,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         summary = run_job(job, mark_ready)
+    except Pruned as exc:
+        # 剪枝是**判定**不是意外：父进程照 ``pruned`` 记账并原样打出那两个数值。
+        _write(result_path, {"status": "pruned",
+                             "pruned_wall_ms": exc.wall_ms,
+                             "pruned_min_wall_ms": exc.min_wall_ms})
+        return 0
     except BaseException as exc:                # noqa: BLE001 - 回传给父进程记账
-        _write(result_path, {"error": f"{type(exc).__name__}: {exc}",
+        _write(result_path, {"status": "error",
+                             "error": f"{type(exc).__name__}: {exc}",
                              "error_type": type(exc).__name__})
         return 1
     _write(result_path, summary)

@@ -165,24 +165,33 @@
   "走等价转换后的配置性能更佳"的记录。两种情形都**删除该键的其它所有行**（同键只允许
   1 行），删除条数如实打印。普通 ``contract()`` 调用**只读**，一个字节都不写。
 * **超时与预算**：``--tune-timeout``（缺省 30 秒）是**每一次** ``contract()`` 调用的
-  上限（warmup 与每一轮都算）。它是**尽力而为上限（best-effort）**：能打断 Python 侧
-  长循环（例如 ``optimal`` 的穷举规划，实测 6.5 s），**打不断原生 C/CUDA 代码**——
-  信号只在 Python 字节码之间派发，原生代码不返回解释器时处理器永不执行，那一组只能
-  等调用返回后才被记 ``timeout``（实测 ``--tune`` 在 CPU 100%、GPU 0% 状态下挂了
-  3 分钟，超时完全失效；本机 2026-11-19 另测：单次 2.34 s 的原生 BLAS、上限 0.3 s，
-  实际 2.29 s 才抛，即**超限 1.99 s**）。所以 GPU 上请把 ``--tune-timeout`` 取足够大，
-  或先用 ``--tune pass`` 快速通过（跳过 compare 与等价改写）。fork 子进程隔离试过并
-  已回退：CUDA 上下文不跨 fork 复用，子进程必然 ``cudaErrorInitializationError``。
+  上限（warmup 与每一轮都算）。**缺省每组跑在一个全新解释器里**，超时由父进程 kill
+  子进程强制生效——这是**硬上限**，能打断原生 C/CUDA 代码，代价是每组一次进程启动
+  （实测 ``import pyqcd.einsum`` 中位 126 ms、``import cupy`` 另约 244 ms），这段开销
+  **不计入** ``wall_ms``，单独累计在 ``tune note :`` 那一行与 ``isolation.startup`` 里。
+  ``PYQCD_EINSUM_TUNE_INPROCESS=1`` 退回进程内路线，那时上限是**尽力而为
+  （best-effort）**：能打断 Python 侧长循环（例如 ``optimal`` 的穷举规划，实测 6.5 s），
+  **打不断原生 C/CUDA 代码**——信号只在 Python 字节码之间派发，原生代码不返回解释器时
+  处理器永不执行，那一组只能等调用返回后才被记 ``timeout``（实测 ``--tune`` 在 CPU
+  100%、GPU 0% 状态下挂了 3 分钟，超时完全失效；本机 2026-11-19 另测：单次 2.34 s 的
+  原生 BLAS、上限 0.3 s，实际 2.29 s 才抛，即**超限 1.99 s**）。
+  子进程走 ``subprocess`` 而不是 ``fork``：CUDA 上下文不跨 ``fork`` 复用，fork 出来的
+  子进程必然 ``cudaErrorInitializationError``（实测 22 组全 error）。GPU 上请把
+  ``--tune-timeout`` 取足够大，或先用 ``--tune pass`` 快速通过（跳过 compare 与
+  等价改写）。
   **窗口粒度是整组**：一组有 ``1+warmup+rounds`` 次调用（缺省 7 次），实际装的是
   ``limit × 7`` 的**组级预算**——按单次设限会把 ``7 × limit`` 全花光，且与
-  ``min_wall_ms`` 剪枝（比整组中位）不同口径。副作用是**单次**略超上限而整组未超预算
-  时不判 timeout，这是刻意的。
+  ``min_wall_ms`` 剪枝（比整组中位）不同口径。
+  **预判剪枝**另有两条，只看规划器、不跑收缩：规划出来的 FLOPs 按已测吞吐折算后
+  明显超过上界（**估算**，原因里写 ``plan-only estimate, not measured``），或规划
+  **自己**就超过上界（规划是一次调用的一部分，这条是**实测**）。它们针对
+  ``optimize=none``（生产方程单次 1e17 次浮点）与 ``optimal``（规划 38 s）：
+  硬超时也能挡住，但要先把整组额度花光。命中即 ``状态=pruned``、``tune predict:``
+  单独报计数——它们**没被测过**，不许混进"测出来慢"。
   任一次超过上限 → 该组记 ``timeout``、继续下一组，中位只由全部成功且未超时的调用
   构成（不拿部分样本凑）。``--tune-budget``（缺省 ``0`` = 不限）是整轮上限，用尽即
-  停止遍历并报"已测 N/M"，同样是尽力而为：卡在原生代码里的那一组仍要等它返回。
-  信号只在主线程可用；装不上定时器时退化成"跑完再按耗时判定"。坏组合——超时、
-  抛异常、``rel > atol+rtol``——**只打印、不中断遍历**，并且一律不参与选优、
-  不写进配置表。
+  停止遍历并报"已测 N/M"。坏组合——超时、异常、``rel > atol+rtol``——
+  **只打印、不中断遍历**，并且一律不参与选优、不写进配置表。
 """
 from __future__ import annotations
 
@@ -200,7 +209,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from . import _tune_axes
+from . import _tune_axes, _tune_runner
 
 __all__ = ["main", "run", "parse_shape_spec", "DTYPES", "COMPARE_MODES",
            "COMPARE_OPTIMIZERS", "NUMPY_COMPARE_OPTIMIZERS", "DEVICES",
@@ -352,6 +361,11 @@ TUNE_AXES = "kernel_force × as_equivalence × optimize"
 DEFAULT_TUNE_TIMEOUT = 30.0
 #: ``--tune-budget``：整轮遍历的上限秒数，``0`` = 不限。用尽即停止遍历并报"已测 N/M"。
 DEFAULT_TUNE_BUDGET = 0.0
+#: 预判剪枝时**问规划器**的时间预算（秒）：`contract_path` 只规划、不收缩，但
+#: ``optimal`` 的穷举是纯 Python，本机这条 10 算子方程实测 **38 s**。问代价不该比
+#: 被测对象还贵，超过这个预算就放弃预判、照旧跑那一组（旧行为）。
+#: 2 秒足够覆盖 greedy/dp/branch_* 的全部实测值（最大 18 ms），又远小于一次收缩。
+PLAN_PROBE_SECONDS = 2.0
 #: ``--tune`` 的**取值**（2026-11-18 用户裁定）：它带取值，不是开关。``all`` = 完整模式
 #: （分支判定 + 22/21 组遍历 + 剪枝 + 参照校验），``pass`` = **快速通过模式**（强制
 #: ``B3`` 的 21 组、无 ``topology``、``as_equivalence`` 全 ``false``、不跑参照、
@@ -765,30 +779,42 @@ MESSAGES: dict[str, dict[str, str]] = {
                "都不参与选优、也不写进配置表。缺省关闭"),
     },
     "help.tune_timeout": {
-        "en": ("Best-effort upper bound, in seconds, for EACH contract() call of --tune "
-               "(warmup and every round count). It CAN interrupt long Python-side loops "
-               "(e.g. the optimal planner's exhaustive search) but CANNOT INTERRUPT "
-               "NATIVE C/CUDA code: SIGALRM is only delivered between Python bytecodes, "
-               "so a call stuck inside a native kernel runs to completion and is judged "
-               "timeout only after it returns. On GPU make the bound large enough, or "
-               "use --tune pass first (skips compare and equivalence rewriting). A "
-               "combination whose call exceeds the bound is marked timeout, is reported "
-               "and skipped, and the sweep continues: a timeout never aborts the run. "
-               "The median is taken over all calls that stayed within the bound (a "
-               "partial sample set never becomes a median). 0 or negative disables the "
-               "bound. Signals are only available on the main thread; where no timer can "
-               "be armed the call is measured first and judged afterwards. "
+        "en": ("Upper bound, in seconds, for EACH contract() call of --tune (warmup and "
+               "every round count). By default each combination runs in a FRESH "
+               "interpreter, so this is a HARD bound: the parent kills the child, which "
+               "means native C/CUDA code can really be interrupted (SIGALRM is only "
+               "delivered between Python bytecodes, so in-process it cannot). The price "
+               "is one process startup per combination (~126 ms; ~244 ms more when cupy "
+               "is imported), which is NOT counted in wall_ms and is reported separately "
+               "on the 'tune note :' line. PYQCD_EINSUM_TUNE_INPROCESS=1 goes back to "
+               "the in-process best-effort route, which can interrupt long Python-side "
+               "loops (e.g. the optimal planner's exhaustive search) but CANNOT "
+               "INTERRUPT NATIVE C/CUDA code: a call stuck inside a native kernel runs "
+               "to completion and is judged timeout only after it returns. On GPU make "
+               "the bound large enough, or use --tune pass first (skips compare and "
+               "equivalence rewriting). A combination whose call exceeds the bound is "
+               "marked timeout, is reported and skipped, and the sweep continues: a "
+               "timeout never aborts the run. The median is taken over all calls that "
+               "stayed within the bound (a partial sample set never becomes a median). "
+               "0 or negative disables the bound. A combination whose PLANNED flops "
+               "already dwarf the current bound is reported as pruned WITHOUT being "
+               "run, with 'plan-only estimate, not measured' in its reason. "
                "Default {default}"),
-        "zh": ("--tune 的**每一次** contract() 调用的**尽力而为上限（best-effort）**"
-               "秒数（warmup 与每一轮都算）。它能打断 Python 侧的长循环（例如 optimal "
-               "的穷举规划），但**打不断原生 C/CUDA 代码**：SIGALRM 只在 Python 字节码"
-               "之间派发，卡在原生内核里的调用会跑完，返回之后才被判为 timeout。"
+        "zh": ("--tune 的**每一次** contract() 调用的上限秒数（warmup 与每一轮都算）。"
+               "**缺省每组跑在一个全新解释器里**，所以这是**硬上限**：父进程 kill 子进程，"
+               "原生 C/CUDA 代码真的能被打断（SIGALRM 只在 Python 字节码之间派发，进程内"
+               "做不到）。代价是每组一次进程启动（约 126 ms；导入 cupy 再加约 244 ms），"
+               "这段开销**不计入 wall_ms**，单独报在 tune note 那一行。"
+               "设 PYQCD_EINSUM_TUNE_INPROCESS=1 退回进程内尽力而为路线：那时能打断 "
+               "Python 侧的长循环（例如 optimal 的穷举规划），但**打不断原生 C/CUDA 代码**"
+               "——卡在原生内核里的调用会跑完，返回之后才被判为 timeout。"
                "GPU 上请把 --tune-timeout 取足够大，或先用 --tune pass 快速通过"
                "（跳过 compare 与等价改写）。任一次超过它 → 该组记 timeout、只打印并"
                "跳过、**绝不写配置表**，遍历继续（超时永远不中止整轮）。"
                "中位只由全部在上限内成功的调用构成（不拿部分样本凑中位）。"
-               "0 或负数 = 不设上限。信号只在主线程可用；装不上定时器时退化成"
-               "「先跑完、再按耗时判定」。缺省 {default}"),
+               "0 或负数 = 不设上限。**规划出来的 FLOPs 已远超当前上界的组不会跑**，"
+               "状态记 pruned，原因里写明 plan-only estimate, not measured。"
+               "缺省 {default}"),
     },
     "help.tune_budget": {
         "en": ("Upper bound, in seconds, for the WHOLE --tune sweep. When it is used up "
@@ -1151,20 +1177,50 @@ MESSAGES: dict[str, dict[str, str]] = {
                "不判 MISMATCH），已忽略你给的 --compare {value}"),
     },
     "tune.signal_note": {
-        "en": ("--tune-timeout is a best-effort upper bound: it can interrupt long "
-               "Python-side loops but cannot interrupt native C/CUDA code (a call stuck "
-               "inside a native kernel runs to completion and is judged timeout only "
-               "after it returns); on GPU make the bound large enough, or use --tune "
-               "pass first (skips compare and equivalence rewriting)"),
-        "zh": ("--tune-timeout 是尽力而为上限（best-effort）：能打断 Python 侧长循环，"
-               "但打不断原生 C/CUDA 代码（卡在原生内核里的调用会跑完，返回之后才被判为 "
-               "timeout）；GPU 上请把该上限取足够大，或先用 --tune pass 快速通过"
-               "（跳过 compare 与等价改写）"),
+        "en": ("in-process route (PYQCD_EINSUM_TUNE_INPROCESS=1): --tune-timeout is a "
+               "best-effort upper bound here: it can interrupt long Python-side loops but "
+               "cannot interrupt native C/CUDA code (a call stuck inside a native kernel "
+               "runs to completion and is judged timeout only after it returns); on GPU "
+               "make the bound large enough, or use --tune pass first (skips compare and "
+               "equivalence rewriting). Drop the environment variable to get the hard "
+               "subprocess bound back"),
+        "zh": ("进程内路线（PYQCD_EINSUM_TUNE_INPROCESS=1）：--tune-timeout 是尽力而为上限"
+               "（best-effort），能打断 Python 侧长循环，但打不断原生 C/CUDA 代码（卡在"
+               "原生内核里的调用会跑完，返回之后才被判为 timeout）；GPU 上请把该上限取"
+               "足够大，或先用 --tune pass 快速通过（跳过 compare 与等价改写）。"
+               "去掉该环境变量即可回到子进程硬上限"),
     },
     "tune.posthoc_note": {
         "en": ("no timer available here: each call is timed first and judged "
                "afterwards, so a slow one still runs to completion"),
         "zh": ("本环境装不上定时器：每次调用先跑完再按耗时判定，超时的那次仍会跑完"),
+    },
+    "tune.subprocess_note": {
+        "en": ("isolation=subprocess: each combination runs in a FRESH interpreter, so "
+               "--tune-timeout really interrupts native C/CUDA code (the parent kills "
+               "the child); unlike the in-process SIGALRM route this is a hard bound. "
+               "The price is measurement overhead that is NOT part of wall_ms: "
+               "{groups} process startup(s), median {median} ms / total {total} ms, "
+               "plus a one-off {stage_mib} MiB operand staging in {stage_s} s. Compare "
+               "wall_ms only with other subprocess runs, never with an in-process "
+               "measurement. Set PYQCD_EINSUM_TUNE_INPROCESS=1 to go back to the "
+               "best-effort in-process route (cannot interrupt native code)"),
+        "zh": ("isolation=subprocess：每一组都在**全新解释器**里跑，所以 --tune-timeout "
+               "能真正打断原生 C/CUDA 代码（父进程 kill 子进程），这是硬上限，与进程内 "
+               "SIGALRM 路线不同。代价是**不计入 wall_ms** 的测量开销：{groups} 次进程"
+               "启动，中位 {median} ms / 合计 {total} ms，另有一次 {stage_mib} MiB 的"
+               "操作数暂存（{stage_s} s）。wall_ms 只能与其它子进程运行比较，不能与"
+               "进程内测量混着比。设 PYQCD_EINSUM_TUNE_INPROCESS=1 可退回进程内"
+               "尽力而为路线（打不断原生代码）"),
+    },
+    "tune.predicted": {
+        "en": ("{count} combination(s) were NOT run: planned FLOPs alone already exceed "
+               "the current min_wall_ms by a wide margin (rate {rate} flop/s from "
+               "{source}). These are estimates, not measurements: they are reported as "
+               "pruned but no wall_ms was taken"),
+        "zh": ("{count} 组**没有跑**：规划出来的 FLOPs 已明显超过当前 min_wall_ms"
+               "（吞吐 {rate} flop/s，取自 {source}）。这是**估算不是实测**：状态记为 "
+               "pruned 但没有取到任何 wall_ms"),
     },
     "tune.stop": {
         "en": ("measured {measured}/{total} ({skipped} combination(s) skipped): "
@@ -3906,6 +3962,70 @@ def _tune_reference(equation: str, host: Sequence[Any]) -> tuple[Any, str]:
         return None, f"n/a ({type(exc).__name__}: {exc})"
 
 
+def _plan_probe(equation: str, shapes: Sequence[Sequence[int]],
+                optimize: str) -> dict[str, Any]:
+    """问规划器：这一组**要跑多少运算**、以及**规划本身**花了多久。
+
+    返回 ``{"flops": float|None, "seconds": float|None, "limit_hit": bool,
+    "error": str|None}``：``flops`` 取不到就是 ``None``；``limit_hit`` 表示规划超过了
+    :data:`PLAN_PROBE_SECONDS`（此时 ``seconds`` 只是"至少这么久"的下界）。
+
+    为什么要先问规划器再跑：``--tune`` 里最贵的不是收缩本身，而是"跑一个明知不可行的
+    配置"——``optimize=none`` 在生产方程上是**单次 10 元朴素收缩**（本机实测
+    ``naive_cost = 7.6441e+17``），硬超时能挡住它，但要先把整组额度花光
+    （缺省 ``30s × 7 = 210s``）；而 :func:`pyqcd.einsum.contract_path` 给出这个数只要
+    **0.07 ms**。
+
+    为什么不用**朴素**位次代替各优化器自己的位次：那样 ``optimal``/``dp`` 会被误判成
+    "要跑 40 小时"（它们的规划结果比朴素小两个量级）。错剪会让真正的 ``best`` 永远
+    不出现，而报告里看不出来，所以必须按**这一组自己的**优化器问。
+
+    为什么 ``limit_hit`` 也能剪枝：``--tune-timeout`` 的上限量的是**整组**的
+    ``contract()``，而规划是那次调用的一部分。规划**单独**就超过当前 ``min_wall_ms``
+    时，这一组必然超过上界——这是**实测**结论（不是估算），只是被测到的是规划段。
+    ``optimal`` 在生产方程上规划要 38 s（本机实测），按这一条能在 2 s 内剪掉它。
+
+    只用 ``shapes=True`` 的 ``contract_path``，**不建张量、不跑收缩**，并显式
+    ``cache=False``：这一问只为预判，不该污染规划器缓存。
+    """
+    def probe() -> dict[str, Any]:
+        import pyqcd.einsum as pe
+
+        started = time.perf_counter()
+        _path, info = pe.contract_path(
+            equation, *[tuple(int(axis) for axis in shape) for shape in shapes],
+            shapes=True, optimize=_contract_optimize(optimize), cache=False)
+        return {"flops": float(info.opt_cost),
+                "seconds": time.perf_counter() - started,
+                "limit_hit": False, "error": None}
+
+    if not _tune_timer_available():
+        try:
+            return probe()
+        except Exception as exc:                # noqa: BLE001 - 预判失败不影响遍历
+            return {"flops": None, "seconds": None, "limit_hit": False,
+                    "error": f"{type(exc).__name__}: {exc}"}
+    # ``_guarded_call`` **没有返回值**（它只负责装上上限并调用）：结果必须自己收进闭包，
+    # 写 ``return _guarded_call(...) or {...}`` 会让每一次预判都退化成"问不出来"，
+    # 于是 FLOPs 判据永远不生效——本机实测就是这么漏掉 ``none`` 那一组的。
+    box: list[dict[str, Any]] = []
+
+    def record() -> None:
+        box.append(probe())
+
+    try:
+        _guarded_call(record, PLAN_PROBE_SECONDS, None)
+        return box[0]
+    except _TuneTimeout:
+        # 规划本身太贵：这**已经是**一条可用结论（见 docstring），但这里不替调用方
+        # 决定要不要剪——只如实报"至少花了 PLAN_PROBE_SECONDS"。
+        return {"flops": None, "seconds": PLAN_PROBE_SECONDS,
+                "limit_hit": True, "error": None}
+    except Exception as exc:                    # noqa: BLE001 - 预判失败不影响遍历
+        return {"flops": None, "seconds": None, "limit_hit": False,
+                "error": f"{type(exc).__name__}: {exc}"}
+
+
 def _tune_route(fields: dict[str, Any], kernel_info: Any) -> str:
     """本组实际走的路线：**稳定短标签**（``generic`` / ``backend`` / 原生 path / ``unavailable``）。
 
@@ -3962,8 +4082,13 @@ def tune_status(row: dict[str, Any]) -> str:
     还慢"，与"这一组自己超过 ``--tune-timeout``"是两件不同的事，混在一起就没法回答
     "到底是卡死了还是单纯不快"。``skip`` 同样单独成一档：它是**遍历前**的准入结论
     （不是测量结果），折进 ``error`` 会让一次正常遍历看起来像 8 次意外。
+
+    ``predicted``（只凭规划器 FLOPs 就判定不值得跑）**也归 ``pruned``**：两者都是
+    "这一格没有被测完"，区别只在依据是估算还是实测，而 ``原因=`` 原文已经写明
+    ``plan-only estimate, not measured``。不折进去的话，一行没有 ``median_ms`` 的
+    记录会被读成 ``error``——那等于把"我们没跑"说成"它跑崩了"。
     """
-    if row.get("pruned"):
+    if row.get("pruned") or row.get("predicted"):
         return TUNE_STATUS_PRUNED
     if row.get("skip"):
         return TUNE_STATUS_SKIP
@@ -4716,6 +4841,7 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
              budget: float = DEFAULT_TUNE_BUDGET,
              compare: str = "none",
              mode: bool | str | None = TUNE_MODE_ALL,
+             isolate: bool | None = None,
              language: str | None = None) -> dict[str, Any]:
     """遍历网格并返回 ``{"rows", "best", "write", ...}``（表格由 :func:`print_tune` 打）。
 
@@ -4724,6 +4850,18 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     ``as_equivalence`` 全 ``false``、不探测准入、不算参照、不判 MISMATCH，并静音专用
     路径提示。``off`` 传到这里没有意义（调用方不该调用），按 ``all`` 处理而不是静默
     什么都不做。
+
+    ``isolate`` 决定**这一组跑在哪里**：``None``（缺省）跟随
+    ``PYQCD_EINSUM_TUNE_INPROCESS``——未设时每组跑在**全新解释器**里，超时由父进程
+    kill 子进程强制生效，这是唯一能打断原生 C/CUDA 代码的办法（``SIGALRM`` 只在
+    字节码之间派发，实测超限 1.99 s 才抛）；显式 ``True``/``False`` 压过环境变量，
+    ``False`` 是进程内 ``SIGALRM`` 路线（打不断原生代码，只作对照实验与契约注入）。
+
+    子进程路线的两条**测量口径**必须记住：
+    * ``wall_ms`` 只装受测时间区（``1+warmup+rounds`` 次 ``contract()``），**不含**
+      每组一次的解释器启动与操作数载入，那部分单独累计进 ``isolation.startup``；
+    * 操作数按固定 ``seed`` 生成**一次**、落盘一次（``isolation.stage``），全部组共用
+      ——每组各落一份在生产形状上就是 21 × 3.8 GiB。
 
     初始化阶段（遍历开始之前）逐行打印 ``tune init :``：mode 与规模、分支探测**起止**、
     内核准入**起止**、session **起止**、首组**起止**。这些行**机器可读**、不跟
@@ -4861,10 +4999,23 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     # ``0``/负数都是"不设上限"（CLI 已校验非负，这里的 0 是合法取值）。
     limit = float(timeout) if float(timeout) > 0.0 else None
     deadline = (time.monotonic() + float(budget)) if float(budget) > 0.0 else None
+    # 组级上限仍是 ``limit × (1+warmup+rounds)``：它与 ``min_wall_ms`` 同口径（都看整组），
+    # 换成子进程之后这条不变量不变，只是"到点"由父进程 kill 而不是等 SIGALRM 派发。
+    group_limit = (None if limit is None
+                   else float(limit) * float(1 + warmup + rounds))
+    # 隔离方式：缺省**子进程**（能打断原生 C/CUDA），``PYQCD_EINSUM_TUNE_INPROCESS=1``
+    # 或显式 ``isolate=False`` 才退回进程内 SIGALRM（打不断原生代码，只作对照实验）。
+    isolated = (_tune_runner.isolation_enabled() if isolate is None
+                else bool(isolate))
     # ``min_wall_ms`` 初值 = ``--tune-timeout``（秒 → 毫秒）；``0`` = 不设上界。
     min_wall = _tune_axes.MinWall(
         ms=None if limit is None else limit * 1000.0,
         source="--tune-timeout")
+    # 预判剪枝的吞吐估计：只由**成功且未超时**的组更新（与 min_wall 同口径）。
+    rate = _tune_axes.Rate()
+    startup_s: list[float] = []
+    staged: dict[str, Any] = {}
+    stage_root: str | None = None
     rows: list[dict[str, Any]] = []
     measured = 0
     stopped = False
@@ -4885,6 +5036,8 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     first_combo = combos[0] if combos else None
     first_started = time.perf_counter()
     first_done = False
+    if isolated:
+        _tune_init("isolation start  mode=subprocess  groups={}".format(len(combos)))
     try:
         # 规格 §3.1：遍历期间配置表**既不读也不写**。写侧由这里的 tune_session 负责，
         # 读侧也一并关掉——否则 ``auto`` 那几组会被历史命中劫持，量到的是"命中耗时"。
@@ -4934,26 +5087,134 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                 _reset_last_kernel()
                 bad = False
                 seconds: float | None = None
+                observation: dict[str, Any] | None = None
+                # 本组规划出来的运算量（只在预判剪枝与吞吐记账时用）。
+                plan = (_plan_probe(equation, shapes, optimize) if isolated
+                        else {"flops": None, "seconds": None,
+                              "limit_hit": False, "error": None})
+                group_flops = plan.get("flops")
+                # 预判剪枝：这一组**不跑**，依据全部来自规划器，两条判据都写进 ``原因``。
+                # ① 规划出来的 FLOPs 按已测吞吐折算，明显超过当前上界（**估算**）；
+                # ② 规划**自己**就超过了当前上界（**实测**：规划是那次调用的一部分）。
+                # 针对的正是本例那个 ``optimize=none``（单次 1e17 次浮点）与
+                # ``optimal``（规划 38 s）：硬超时也能挡住，但要先白等整组额度。
+                skip_reason = ""
+                if isolated:
+                    limit_hit = bool(plan.get("limit_hit"))
+                    should_skip, estimate_reason = rate.should_skip(
+                        group_flops, min_wall.ms)
+                    plan_ms = plan.get("seconds")
+                    slower_plan = (limit_hit or (
+                        plan_ms is not None and min_wall.ms is not None
+                        and float(plan_ms) * 1000.0 > float(min_wall.ms)))
+                    if slower_plan:
+                        skip_reason = (
+                            "planning alone exceeded min_wall_ms  plan_ms={}{}  "
+                            "min_wall_ms={:.6f}  (planned, not contracted)".format(
+                                "-" if plan_ms is None else f"{float(plan_ms) * 1000.0:.6f}",
+                                " (>probe budget)" if limit_hit else "",
+                                float(min_wall.ms)))
+                    elif should_skip:
+                        skip_reason = estimate_reason
+                    if skip_reason:
+                        row["predicted"] = True
+                        row["reason"] = skip_reason
+                        row["status"] = TUNE_STATUS_PRUNED
+                        rows.append(row)
+                        if not first_done:
+                            first_done = True
+                            _tune_init("first group done  {}/{}/{}  状态={}  {}".format(
+                                kernel, as_equiv, optimize, row["status"],
+                                _tune_init_ms(first_started)))
+                        continue
                 try:
-                    # 整组（warmup + rounds）在**一个组级 SIGALRM 窗口**里跑：能打断
-                    # Python 侧的长循环（例如 ``optimal`` 的穷举规划，实测 6.5 s），
-                    # 但**打不断原生 C/CUDA 代码**——CUDA 上下文不能跨 fork 复用，
-                    # 子进程方案在 GPU 上必然 ``cudaErrorInitializationError``
-                    # （2026-11-18 实测）。这一点写进 --help，不假装能做到。
-                    #
-                    # 为什么粒度是**整组**而不是单次：一组有 ``1+warmup+rounds`` 次调用
-                    # （缺省 7 次），按单次设限最坏会把 ``7 × limit`` 全花光，而且与
-                    # ``min_wall_ms`` 剪枝不同口径（剪枝比的是整组中位）。代价是**单次**
-                    # 调用略超上限但整组仍在预算内时不会被判 timeout——这是刻意的，
-                    # 否则一次慢 warmup 就会废掉整组。实测与判据见
-                    # ``docs/einsum_tune_timeout_20261119.md`` §4。
-                    group_limit = (None if limit is None
-                                   else float(limit) * float(1 + warmup + rounds))
-                    seconds = _timed(
-                        lambda: _guarded_call(
-                            lambda: _measure(call, None, deadline, min_wall),
-                            group_limit, deadline),
-                        warmup, rounds)
+                    if isolated:
+                        # **子进程**路线（缺省）：父进程 kill 子进程才能打断原生
+                        # C/CUDA 代码。组级上限与 min_wall 都在子进程里生效
+                        # （后者必须能在两次调用之间判定，只有子进程做得到）。
+                        started = time.perf_counter()
+                        if stage_root is None:      # 操作数只落盘一次，21 组共用
+                            stage_root = _tune_runner.stage_dir()
+                            staged = _tune_runner.stage_operands(host, stage_root)
+                            _tune_init("stage done  files={}  bytes={}  {}".format(
+                                int(staged["count"]), int(staged["bytes"]),
+                                _tune_init_ms(started)))
+                        group_dir = os.path.join(
+                            stage_root, f"group_{len(rows):03d}")
+                        output_path = os.path.join(group_dir, "output.npy")
+                        # 数值校验仍然保留：小形状（有真参照）时让子进程把结果落回来，
+                        # 父进程照旧算 ``rel``。大形状本来就没有参照，不为它多写一次盘。
+                        want_output = (not pass_mode) and reference is not None
+                        observation = _tune_runner.run_group(
+                            {
+                                "equation": equation,
+                                "device": device,
+                                "backend": backend,
+                                "dtype": dtype,
+                                "warmup": warmup,
+                                "rounds": rounds,
+                                "min_wall_ms": min_wall.ms,
+                                "operands_dir": staged["dir"],
+                                "kernel_force": kernel,
+                                "as_equivalence": (as_equiv == "true"),
+                                # ``none`` → ``False``：清单用字符串，调用用布尔。
+                                "optimize": _contract_optimize(optimize),
+                                "contract_kwargs": {
+                                    "specialize": specialize,
+                                    "cache": cache,
+                                },
+                                "profile_kwargs": dict(extra),
+                                "output_operand": output_path if want_output else None,
+                                "output_max_bytes": _tune_runner.OUTPUT_MAX_BYTES,
+                            },
+                            workdir=group_dir,
+                            group_limit_s=group_limit,
+                            deadline=deadline)
+                        status = str(observation.get("status") or "ok")
+                        if observation.get("startup_s") is not None:
+                            startup_s.append(float(observation["startup_s"]))
+                        if status == "ok":
+                            seconds = float(observation["median_s"])
+                            # 子进程的选路记录随结果文件回来：``holder`` 里放它，
+                            # 下面 ``_tune_route`` 与报告都从这一处取，不再读本进程
+                            # 的 ``LAST_INFO``（那是父进程自己的，本组根本没在这里跑）。
+                            holder[:] = [observation.get("last_kernel")]
+                            if (want_output and observation.get("saved_output")
+                                    and os.path.exists(output_path)):
+                                row["_output"] = output_path
+                            if observation.get("output_skipped_bytes"):
+                                row["output_skipped_bytes"] = int(
+                                    observation["output_skipped_bytes"])
+                        elif status == "pruned":
+                            row["pruned"] = True
+                            row["wall_ms"] = round(
+                                float(observation.get("pruned_wall_ms") or 0.0), 6)
+                            row["reason"] = prune_reason(
+                                row["wall_ms"], observation.get("pruned_min_wall_ms"))
+                            bad = True
+                        elif status == "timeout":
+                            row["timeout"] = True
+                            row["reason"] = str(observation.get("reason") or "timeout")
+                            bad = True
+                        elif status == "budget":
+                            row["budget"] = True
+                            row["reason"] = str(observation.get("reason") or "budget")
+                            bad = True
+                            stopped = True
+                        else:
+                            row["error"] = str(observation.get("error_type")
+                                               or "TuneWorkerError")
+                            row["reason"] = str(observation.get("reason")
+                                                or observation.get("error") or "error")
+                            bad = True
+                    else:
+                        # **进程内**路线（``PYQCD_EINSUM_TUNE_INPROCESS=1``）：老行为，
+                        # SIGALRM 打不断原生 C/CUDA 代码，只作对照实验。
+                        seconds = _timed(
+                            lambda: _guarded_call(
+                                lambda: _measure(call, None, deadline, min_wall),
+                                group_limit, deadline),
+                            warmup, rounds)
                 except _TunePruned as exc:
                     # 用户规则 §4：超过当前 ``min_wall_ms`` 的这一组**终止**、继续下一组，
                     # 并且不写缓存。原文与两个数值都进 ``reason``，一字不改地打出来。
@@ -4979,13 +5240,20 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                     row["reason"] = f"{type(exc).__name__}: {exc}"
                     bad = True
                 row["route"] = _tune_route(
-                    kernel_force_fields(_last_kernel(), kernel,
-                                        kernel_labels(kernel, lang)),
-                    _kernel_info())
+                    kernel_force_fields(
+                        (observation.get("last_kernel")
+                         if observation and observation.get("status") == "ok"
+                         else None) or _last_kernel(),
+                        kernel, kernel_labels(kernel, lang)),
+                    (observation.get("kernel_info") if observation else None)
+                    or _kernel_info())
                 if not bad and seconds is not None:
                     row["median_ms"] = round(seconds * 1000.0, 6)
                     row["wall_ms"] = row["median_ms"]
                     measured += 1
+                    # 吞吐记账：供**后续组**的预判剪枝用。只用成功组（与 min_wall 同口径）。
+                    if group_flops:
+                        rate.observe(group_flops, seconds, (kernel, as_equiv, optimize))
                     # 参照：``compare`` 显式给出时用真实参照；``none``（``--tune``
                     # 缺省）时退化为**首个成功组合的结果**做自洽校验。后者成本为零，
                     # 却仍能检出"不同内核/规划器算出不同数"这一类真实分歧——否则
@@ -4995,19 +5263,30 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                     # ``pass`` 模式整段不做：连"首个成功组当参照"也不做，否则
                     # ``rel`` 会有一个数而表尾同时写着"跳过数值校验"——两句话互相
                     # 矛盾，读者无从判断到底校验过没有。
-                    if not pass_mode and reference is None and holder:
-                        reference = _to_host(holder[-1])
-                        reference_note = "self(first ok combination)"
-                    if not pass_mode and reference is not None and holder:
-                        row["rel"] = _relative_error(_to_host(holder[-1]), reference)
-                        if not (row["rel"] <= tolerance):
-                            row["mismatch"] = True
-                            row["reason"] = (
-                                "rel={:.3e} > atol+rtol={:g} (atol={:g}, rtol={:g}, "
-                                "reference={})".format(
-                                    row["rel"], tolerance, float(atol), float(rtol),
-                                    reference_note))
-                            bad = True
+                    #
+                    # 子进程路线下结果在**文件**里（``row["_output"]``）；进程内路线下
+                    # 它在 ``holder`` 里。两条路都归到同一个 ``got``，数值校验因此
+                    # 不因换了执行位置而消失——那正是"升级超时机制"最容易踩的坑。
+                    if not pass_mode:
+                        cached_output = row.pop("_output", None)
+                        got = None
+                        if cached_output and os.path.exists(cached_output):
+                            got = np.load(cached_output)
+                        elif not isolated and holder:
+                            got = _to_host(holder[-1])
+                        if got is not None:
+                            if reference is None:
+                                reference = np.asarray(got)
+                                reference_note = "self(first ok combination)"
+                            row["rel"] = _relative_error(got, reference)
+                            if not (row["rel"] <= tolerance):
+                                row["mismatch"] = True
+                                row["reason"] = (
+                                    "rel={:.3e} > atol+rtol={:g} (atol={:g}, rtol={:g}, "
+                                    "reference={})".format(
+                                        row["rel"], tolerance, float(atol), float(rtol),
+                                        reference_note))
+                                bad = True
                     # 用户规则 §4：这一组的中位比当前上界更小 → **立即**压低上界，
                     # 后续所有组都用它剪枝。只在"可用"的组上压低：数值不符/跑不成
                     # 的那些不该定义"要多快才算值得跑"。
@@ -5030,6 +5309,12 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
         # 闹钟窗口是模块级状态：单次调用若正好在收尾时被迟到的信号打断，那句"关窗口"
         # 可能少走一次。整轮结束时无条件清空，别把这个状态留给后面的人。
         _ALARM_WINDOW = None
+        # 操作数暂存目录是**本次遍历**的临时物：不删会在 /tmp 里留下 3.8 GiB 的 .npy
+        # （本机生产形状实测），下次 `--tune` 又会各留一份。删失败不抛（临时目录残留
+        # 不该让一次成功的遍历变成失败）。
+        if stage_root is not None:
+            _tune_runner.cleanup(stage_root)
+            stage_root = None
         # pass 模式静音的提示/详解**原样还回去**：这是本次调用的输出选择，不该改
         # 调用方进程的状态（同语言设置与缓存开关的口径）。
         if pass_mode:
@@ -5072,8 +5357,26 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                             else list(min_wall.config)),
         "min_wall_ms_initial": None if limit is None else float(limit) * 1000.0,
         "budget": float(budget),
-        "timer": "sigalrm" if (limit is not None and _tune_timer_available())
-                 else ("posthoc" if limit is not None else "off"),
+        # 超时机制的**实际执行位置**（机器可读）：``subprocess`` = 父进程 kill 子进程，
+        # 能打断原生 C/CUDA；``sigalrm`` = 进程内尽力而为；``posthoc`` = 装不上定时器；
+        # ``off`` = 没设上限。
+        "timer": ("subprocess" if isolated else
+                  ("sigalrm" if (limit is not None and _tune_timer_available())
+                   else ("posthoc" if limit is not None else "off"))),
+        # 子进程路线的**测量开销**（不混进 wall_ms）：每组一次解释器启动 + 导入 + 载入。
+        "isolation": {
+            "mode": "subprocess" if isolated else "inprocess",
+            "startup": _tune_runner.summarize_startup(startup_s),
+            "stage": {
+                "files": int(staged.get("count") or 0),
+                "bytes": int(staged.get("bytes") or 0),
+                "seconds": round(float(staged.get("seconds") or 0.0), 6),
+            } if staged else None,
+        },
+        # 预判剪枝的记账：命中了几组、当时的吞吐估计来自哪一组。
+        "predicted": sum(1 for row in rows if row.get("predicted")),
+        "rate_flops_per_s": rate.flops_per_s,
+        "rate_source": rate.source,
         "warmup": warmup,
         "rounds": rounds,
         "compare": str(compare or "none"),
@@ -5266,14 +5569,36 @@ def print_tune(tune: dict[str, Any], language: str = "zh",
         warmup=tune.get("warmup"), rounds=tune.get("rounds"),
         compare=tune.get("compare") or "none",
         reference=tune.get("reference")), file=out)
-    # 超时的**真实能力**必须写在报告里：它是尽力而为上限，能打断 Python 侧长循环、
-    # 打不断原生 C/CUDA 代码——用户据此决定上限取多大、要不要改用 --tune pass。
-    # 装不上定时器时同样要说，否则"没超时"会被误读成"够快"。
+    # 超时的**真实能力**必须写在报告里。子进程路线的能力更强（父进程 kill 子进程，
+    # 能打断原生 C/CUDA），但**测量开销**也更高——两件事都要说，否则读者会拿
+    # ``wall_ms`` 去和进程内口径比较。进程内路线仍只能尽力而为，装不上定时器时更要说，
+    # 否则"没超时"会被误读成"够快"。
     timer = tune.get("timer")
-    if timer == "sigalrm":
+    if timer == "subprocess":
+        isolation = tune.get("isolation") or {}
+        startup = isolation.get("startup") or {}
+        stage = isolation.get("stage") or {}
+        print("tune note : " + translate(
+            "tune.subprocess_note", language,
+            groups=int(startup.get("count") or 0),
+            median=("-" if startup.get("median_ms") is None
+                    else f"{float(startup['median_ms']):.1f}"),
+            total=("-" if startup.get("total_ms") is None
+                   else f"{float(startup['total_ms']):.1f}"),
+            stage_mib=f"{float(stage.get('bytes') or 0) / (1024.0 * 1024.0):.1f}",
+            stage_s=f"{float(stage.get('seconds') or 0.0):.2f}"), file=out)
+    elif timer == "sigalrm":
         print("tune note : " + translate("tune.signal_note", language), file=out)
     elif timer == "posthoc":
         print("tune note : " + translate("tune.posthoc_note", language), file=out)
+    # 预判剪枝：有几组**没跑**、依据是规划器的 FLOPs 而不是实测。它与 ``tune prune``
+    # 那条（比当前上界慢）是两件事，混在一起就会把"没测过"说成"测出来慢"。
+    if tune.get("predicted"):
+        print("tune predict: " + translate(
+            "tune.predicted", language, count=int(tune.get("predicted") or 0),
+            rate=("-" if tune.get("rate_flops_per_s") is None else
+                  f"{float(tune['rate_flops_per_s']):.6e}"),
+            source=tune.get("rate_source") or "-"), file=out)
     # §12.3：临时关闭缓存的提示必须整句给出（不是只有一个 session=true 的字段）。
     # 关不上时更要说明白——那几组量到的是"带历史命中"的耗时，读者必须知道。
     session = (tune.get("write") or {}).get("session")

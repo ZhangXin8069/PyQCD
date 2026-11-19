@@ -250,6 +250,13 @@ from pyqcd.testing._einsum_shape_from_corpus_equiv_contract import (
 from pyqcd.testing._einsum_tune_timeout_doc_contract import (
     test_einsum_tune_timeout_doc_contracts,
 )
+# `--tune` 的**组级硬超时**（2026-11-19）：缺省每组跑在**全新解释器**里，超时由父进程
+# kill 子进程强制生效——这是唯一能打断原生 C/CUDA 代码的办法（SIGALRM 只在字节码之间
+# 派发）。六项断言钉住：真能打断、只杀子进程组、启动开销单列、崩溃记 error 不记
+# timeout、组内 min_wall 剪枝仍在、`PYQCD_EINSUM_TUNE_INPROCESS=1` 才退回进程内。
+from pyqcd.testing._einsum_tune_isolation_contract import (
+    test_einsum_tune_isolation_contracts,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。
@@ -263,6 +270,8 @@ TESTS = (
     test_einsum_tune_equivalence_contracts,
     test_einsum_tune_plan_contracts,
     test_einsum_tune_report_contracts,
+    test_einsum_tune_timeout_doc_contracts,
+    test_einsum_tune_isolation_contracts,
     test_einsum_profile_readonly_contracts,
     test_einsum_profile_timing_contracts,
     test_einsum_optimize_none_contracts,

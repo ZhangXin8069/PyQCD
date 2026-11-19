@@ -353,6 +353,10 @@ def _run_tune_small(work: str, tag: str, combos: Sequence[tuple[str, str, str]],
 
     每组用独立目录：配置目录一换就换一张表，同一条用例里的几次运行（正对照/注入组）
     不会互相读到对方的行。``profile=True`` 由本模块显式打开，不依赖环境变量。
+
+    ``isolate=False`` 是**必须**的：本模块用 ``patch.object(cli, "_timed", ...)`` 与
+    ``patch.object(pe, "contract", ...)`` 注入假耗时与假数值，而子进程路线（``--tune``
+    的缺省）根本不在本进程里调它们——注入会静默失效，断言随之失去区分力。
     """
     cli = _cli()
     directory = os.path.join(work, tag)
@@ -367,7 +371,8 @@ def _run_tune_small(work: str, tag: str, combos: Sequence[tuple[str, str, str]],
         tune = cli.run_tune(equation=TUNE_EQUATION, shapes=TUNE_SHAPES,
                             warmup=1, rounds=1, profile=True,
                             profile_kwargs={"profile": True,
-                                            "profile_dir": cache_dir})
+                                            "profile_dir": cache_dir},
+                            isolate=False)
     summary = _profile_cache.summary()
     return tune, summary, _profile_disk_rows(summary.get("file"))
 
@@ -575,7 +580,8 @@ def test_tune_excludes_a_mismatching_combination_from_best():
             contextlib.redirect_stderr(stderr):
         tune = cli.run_tune(equation=TUNE_EQUATION, shapes=TUNE_SHAPES,
                             warmup=1, rounds=1,
-                            atol=cli.DEFAULT_ATOL, rtol=cli.DEFAULT_RTOL)
+                            atol=cli.DEFAULT_ATOL, rtol=cli.DEFAULT_RTOL,
+                            isolate=False)
         cli.print_tune(tune, verbose=False)
     printed = stderr.getvalue()
 
