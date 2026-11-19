@@ -6,9 +6,9 @@
 
 | 指标 | 优化前 | 优化后 | 变化 |
 |---|---|---|---|
-| E4（spatial=1、Nvec=100）GPU 事件中位 | 10.6 ms | **0.635 ms** | **16.7x 加速** |
-| opt_einsum（cupy, dp）同形状 | 1.204 ms | 1.204 ms | — |
-| cupy 自带 optimize | 0.994 ms | 0.994 ms | — |
+| E4（spatial=1、Nvec=100）GPU 事件中位 | 10.6 ms | **0.635 ms** | **16.7x 加速** `[作废]` |
+| opt_einsum（cupy, dp）同形状 | 1.204 ms | 1.204 ms | — `[作废]` |
+| cupy 自带 optimize | 0.994 ms | 0.994 ms | — `[作废]` |
 | **相对 opt_einsum** | **0.08x（12x 慢）** | **1.90x（快 1.9 倍）** | 由落后转为领先 |
 
 - 正确性：与 opt_einsum 结果 `max|Δ|/max|ref| = 4.306e-16`（契约 1e-12）。

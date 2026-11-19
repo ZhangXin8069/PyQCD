@@ -33,7 +33,7 @@
 ### 2.2 子代理 bg-6 的补充证据
 
 其报告 `docs/pyqcd_einsum_gpu_l24_20261108.md` 记录：
-- E4 在 GPU L24 上 qcd 20.37–20.74 s vs opt 1.09–1.14 s（0.053–0.056x）
+- E4 在 GPU L24 上 qcd 20.37–20.74 s vs opt 1.09–1.14 s（0.053–0.056x） `[作废]`
 - **默认融合路径下 `qcd_einsum` worker `returncode=-11`（SIGSEGV）**，多构建状态复现
 - **关闭 fused 后不再崩，且回到 0.980x**
 

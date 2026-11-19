@@ -182,9 +182,9 @@ bash pyqcd/testing/einsum/simple/run-all.sh
 | kernel | 接线 | 依据 |
 |---|---|---|
 | `kupl_nucleon`（E1，CPU） | ✅ | 1.12–1.41x 于通用，5.3–9.4x 于 opt |
-| `cuda_3pt`（P1/P2，GPU） | ✅ | 1.25–2.41x 于通用，1.25–9.29x 于 opt |
+| `cuda_3pt`（P1/P2，GPU） | ✅ | 1.25–2.41x 于通用，1.25–9.29x 于 opt `[作废]` |
 | `kupl_3pt`（P1/P2，CPU） | ❌ 撤回 | 0.94–1.01x，N≥50 略慢于 opt |
-| `cuda_nucleon`（E1，GPU） | ❌ | 0.60x（优化中，bg-21） |
+| `cuda_nucleon`（E1，GPU） | ❌ | 0.60x（优化中，bg-21） `[作废]` |
 
 ---
 
@@ -220,7 +220,7 @@ bash pyqcd/testing/einsum/simple/run-all.sh
 | E1 | `fused(needs-optimization)` | KUPL 1.1–1.4x；CUDA 0.86–1.88x，待优化 |
 | P1/P2 | `fused(needs-optimization)` | CUDA ≈1.8x；KUPL 待优化 |
 | E4 | `fused` | 仅 `z·y·x==1` 启用 |
-| E5 | `fused` | CPU 8.33x / GPU 3.37x |
+| E5 | `fused` | CPU 8.33x / GPU 3.37x `[作废]` |
 
 ### 9.4 回归（接线后）
 

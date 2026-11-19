@@ -40,6 +40,32 @@ def enabled() -> bool:
         '0', 'false', 'off', 'no')
 
 
+def bypass_plan_gate():
+    """上下文内忽略**预算门槛**（arena / 单步 GEMM / pack 流量）。
+
+    CUDA 侧没有自己的门槛旁路计数器，与 :func:`bypass_negative_cache` 同样转发
+    ``_kernel_kupl`` 的那一个（``_api._attempt_kernel`` 与本模块的
+    ``_plan_fallback_reason`` 都查同一个标志）。
+
+    为什么必须存在：``_api._attempt_kernel`` 按 ``getattr(module,
+    "bypass_plan_gate", None)`` 取，**模块没有就静默不旁路**。2026-11-19 用户实测
+    的后果是：``--device gpu --tune`` 的 ``dedicated`` 组被
+    ``plan arena exceeds the measured CUDA dedicated budget (4219857152 >= 3221225472
+    bytes)`` 判死、整组记 ``error``（59.5 s 才返回），而"tune 时每一格都要真跑"这条
+    规则在 CPU 上已经生效——同一个遗漏在 GPU 上等于没修。
+    """
+    from . import _kernel_kupl
+
+    return _kernel_kupl.bypass_plan_gate()
+
+
+def plan_gate_bypassed() -> bool:
+    """当前是否处于"忽略预算门槛"的上下文（与 ``_kernel_kupl`` 共用同一标志）。"""
+    from . import _kernel_kupl
+
+    return bool(_kernel_kupl.plan_gate_bypassed())
+
+
 def bypass_negative_cache():
     """上下文内忽略负缓存；用于强制内核时"强制即真试一次"。
 

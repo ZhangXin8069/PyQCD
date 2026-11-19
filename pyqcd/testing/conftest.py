@@ -263,6 +263,13 @@ from pyqcd.testing._einsum_tune_isolation_contract import (
 from pyqcd.testing._einsum_timing_compare_contract import (
     test_einsum_timing_compare_contracts,
 )
+# `--tune` 的**硬上限在每条路线上都生效**（2026-11-19 用户实测）：GPU 侧曾缺
+# `bypass_plan_gate`，`_api._attempt_kernel` 的 `getattr(..., None)` 静默不旁路 →
+# `dedicated` 组被 arena 门槛判死记 `error`（59.5 s 才返回）。四项断言钉住两个模块
+# 的旁路同名同义、共享同一标志、嵌套配平，以及组级窗口 = 单次上限 × 调用次数。
+from pyqcd.testing._einsum_tune_gate_contract import (
+    test_einsum_tune_gate_contracts,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。

@@ -39,7 +39,7 @@
 
 | 环境 | 用途 | 关键包 |
 |---|---|---|
-| `einsum-bench` | 基准驱动 | Python 3.12、numpy 2.5.4、opt_einsum 3.4.0、scipy、cupy 14.2（`cupy-cuda13x`） |
+| `einsum-bench` | 基准驱动 | Python 3.12、numpy 2.5.4、opt_einsum 3.4.0、scipy、cupy 14.2（`cupy-cuda13x`） `[作废]` |
 | `matx-cu` | MatX 桥构建 | CUDA 13.5 nvcc、cuTENSOR 2.8.1、cuTensorNet 2.14、NVTX dev、cuBLAS/cuSolver/cuRAND/cuFFT/cuSPARSE/nvjitlink dev、CUDA driver stub、GCC 13/14 |
 | `einsums-build` | Einsums 库与桥构建 | CMake、Ninja、GCC 13/14、OpenBLAS、HDF5、fmt、spdlog、mimalloc、cpptrace、Catch2、Apiary |
 
@@ -49,7 +49,7 @@ MatX 需要 CCCL 3.x 的新目录布局（`cuda/std/__algorithm`）；conda 的 
 ```bash
 mamba create -y -n einsum-bench -c conda-forge \
     python=3.12 numpy opt_einsum=3.4.0 scipy
-mamba run -n einsum-bench python -m pip install cupy-cuda13x
+mamba run -n einsum-bench python -m pip install cupy-cuda13x `[作废]`
 
 mamba create -y -n matx-cu -c conda-forge -c nvidia \
     "cuda-version=12.4" cuda-nvcc cuda-nvtx cuda-cudart-dev cutensor cuquantum
@@ -252,7 +252,7 @@ partial reduction 2.02。
 
 MatX 隔离复测（10 次预热、10 次采样）与上表一致性：element-wise 239.5 ms、
 outer 19.3 ms、full reduction 308.3 ms、matmul 648.5 ms、batched 162.8 ms、
-partial 17.9 ms。outer/element-wise 在轮询环境中会受其他引擎的显存/时钟影响，
+partial 17.9 ms。outer/element-wise 在轮询环境中会受其他引擎的显存/时钟影响， `[作废]`
 表中与隔离值的差异已在结论中保留。
 
 ### 5.4 Einsums 端到端 vs 真正计算
@@ -286,7 +286,7 @@ partial 17.9 ms。outer/element-wise 在轮询环境中会受其他引擎的显�
 |---|---|---|
 | Einsums 继承 pyqcd 的 4/2 线程档 | GEMM 2048 183.5 → 144.1 ms | 固定 `PYQCD_EINSUM_THREADS=off OMP=8 BLAS=8` |
 | MatX 预热不足 | batched 259.6 → 163.4 ms；outer 34.3 → 19.3 ms（隔离） | 自适应 5/2/1 次预热 |
-| 跨用例保留输出缓冲 | 显存临界，核子 2pt 0.88 s → 4.8 s | 每用例分配、用完释放 |
+| 跨用例保留输出缓冲 | 显存临界，核子 2pt 0.88 s → 4.8 s | 每用例分配、用完释放 `[作废]` |
 | 基准脚本计时轮询把 einsums 异常冒泡进 qcd/opt | ellipsis 三引擎误报 ERROR | 先逐引擎正确性，再统一轮询计时 |
 | Einsums 端到端当算力 | element-wise 被低估约 20×（75 ms vs 1.55 s） | 组件级拆分，报告纯计算与分配占比 |
 
@@ -362,7 +362,7 @@ CUDA_PATH=/tmp/cuda13hdr \
   修正前（预热/缓冲未修）GPU batched 曾达 1.67。
 - 跨轮复测（同一 case、同设置）：qcd CPU element-wise 244.5 / 301.6 / 309.0 ms；
   Einsums GEMM 4096 836.7 / 893.0 / 944.8 ms；MatX element-wise
-  161.1 / 195.5 ms；qcd GPU γ 夹心 877.4 / 796.4 ms——差异 **10–26%**。
+  161.1 / 195.5 ms；qcd GPU γ 夹心 877.4 / 796.4 ms——差异 **10–26%**。 `[作废]`
 - 因此：只有 **>~15%（CPU）/ >~25%（GPU）** 的差异可作方向性结论；
   5–10% 的差异一律不排名。
 

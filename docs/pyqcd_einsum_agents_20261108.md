@@ -11,7 +11,7 @@
 
 | 代理 | 交付 | 已验证结果 |
 |---|---|---|
-| **bg-1** | `cpp/cuda/einsum/src/e4_fused.cu`：FMA 累加 + 寄存器/occupancy 调整 | E4 GPU 10.6 ms → **0.635 ms（16.7x）**，rel 4.3e-16 |
+| **bg-1** | `cpp/cuda/einsum/src/e4_fused.cu`：FMA 累加 + 寄存器/occupancy 调整 | E4 GPU 10.6 ms → **0.635 ms（16.7x）**，rel 4.3e-16 `[作废]` |
 | **bg-2** | `cpp/kupl/einsum/src/apply_contract.cpp`：CPU 执行层 pack/GEMM 派发 | CPU E1（N=100）1.546 s → **0.531 s**，相对 opt **6.98x** |
 | **bg-9** | E4 kernel 继续优化（尝试记录） | 见其报告；已并入 bg-1 的版本 |
 | **bg-10** | `sandwich.cu` + `apply_contract.cpp`：E5 夹心路径 | E5 L24 CPU → **114 ms（opt 813 ms，7.1x）**；A/B 专用 142.7 vs 通用 1188.9 ms |
@@ -135,7 +135,7 @@ verify_native --backend kupl → 16 passed / 0 failed
 | 代理 | 结局 | 影响 |
 |---|---|---|
 | bg-9 | 撞轮次 | E4 kernel 的进一步调优未收尾；当前 E4 性能来自 bg-1 版本 |
-| bg-11 | 撞轮次 | 自述"我们的路径只比裸 cuBLAS 调用贵 1.01x"→ **15 算子路径在 GPU 上已无余量**；其"回退无效改动"未确认 |
+| bg-11 | 撞轮次 | 自述"我们的路径只比裸 cuBLAS 调用贵 1.01x"→ **15 算子路径在 GPU 上已无余量**；其"回退无效改动"未确认 `[作废]` |
 | bg-13 | 撞轮次 | KUPL 3pt kernel 未完成数值验证 |
 | bg-16 | 撞轮次 | CUDA 3pt kernel 未完成数值验证 |
 | bg-12 | 运行中 | CUDA 2pt kernel 编译不过 |
@@ -166,8 +166,8 @@ verify_native --backend kupl → 16 passed / 0 failed
 
 | 侧 | 组 | opt | 我们 | 倍率 | 备注 |
 |---|---|---|---|---|---|
-| GPU | E4 | 0.86 ms | 0.68 ms | 1.27x | too_short（<100 ms，仅诊断） |
-| GPU | E5 | 0.62 ms | 0.59 ms | 1.04x | too_short |
+| GPU | E4 | 0.86 ms | 0.68 ms | 1.27x | too_short（<100 ms，仅诊断） `[作废]` |
+| GPU | E5 | 0.62 ms | 0.59 ms | 1.04x | too_short `[作废]` |
 | CPU | E1 | 3.242 s | 0.565 s | **5.74x** | 生产组 |
 
 > GPU 两行均为 `too_short`，且测量期间仍有后台代理在跑，**不构成验收**；

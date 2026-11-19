@@ -829,7 +829,11 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "help.tune_timeout": {
         "en": ("Upper bound, in seconds, for EACH contract() call of --tune (warmup and "
-               "every round count). By default each combination runs in a FRESH "
+               "every round count). The window is enforced per GROUP: a combination makes "
+               "1+warmup+rounds calls, so its budget is this value times that count "
+               "(30 s x 7 = 210 s with the defaults) - seeing a combination return after "
+               "~80 s therefore does not mean the bound failed, it means the group had "
+               "not used its budget yet. By default each combination runs in a FRESH "
                "interpreter, so this is a HARD bound: the parent kills the child, which "
                "means native C/CUDA code can really be interrupted (SIGALRM is only "
                "delivered between Python bytecodes, so in-process it cannot). The price "
@@ -847,6 +851,9 @@ MESSAGES: dict[str, dict[str, str]] = {
                "stayed within the bound (a partial sample set never becomes a median). "
                "Default {default}"),
         "zh": ("--tune 的**每一次** contract() 调用的上限秒数（warmup 与每一轮都算）。"
+               "窗口按**组**执行：一组做 1+warmup+rounds 次调用，因此该组的预算是"
+               "这个值乘以次数（缺省 30 s × 7 = 210 s）——看到一组在 ~80 s 返回并不意味着"
+               "上限失效，只意味着它还没花完预算。"
                "**缺省每组跑在一个全新解释器里**，所以这是**硬上限**：父进程 kill 子进程，"
                "原生 C/CUDA 代码真的能被打断（SIGALRM 只在 Python 字节码之间派发，进程内"
                "做不到）。代价是每组一次进程启动（约 126 ms；导入 cupy 再加约 244 ms），"

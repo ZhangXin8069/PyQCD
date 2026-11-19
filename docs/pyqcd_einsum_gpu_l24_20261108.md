@@ -208,7 +208,7 @@ E5（第 1 次）与 S3（第 1 次）命中该判据，均已重跑并如上表
 
 4. **并发负载**：测量期间机器上有其他代理在编译（`nvcc`/`cicc`/`cc1plus`，同时 0–6 个）并运行**同一个**
    `bench_native` L24 GPU 基准（例如 06:45–06:53、07:10 附近的 `bench_native --profiles L24`）。
-   应对：每行测量前等待 GPU 计算进程清零（最多等 300 s），并采样 `nvidia-smi --query-compute-apps` 留证
+   应对：每行测量前等待 GPU 计算进程清零（最多等 300 s），并采样 `nvidia-smi --query-compute-apps` 留证 `[作废]`
    （`$COMMANDCODE_SCRATCHPAD/logs/*_interf.log`）。仍无法排除的残余干扰体现在样本离散度上
    （多数行 `max/min` = 1.04–1.25；E5 的 opt 侧 1.82–1.84 来自 warmup 未收敛）。
    未遇到/未执行 MPI、多进程吞吐、多卡对比。
