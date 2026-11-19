@@ -28,7 +28,7 @@ __all__ = [
     "TUNE_AS_EQUIVALENCE", "TUNE_OPTIMIZERS", "TUNE_PREFIX", "TUNE_TAIL",
     "TUNE_BRANCH_EXTRA", "TUNE_PLAN_SIZES", "tune_plan", "tune_plan_size",
     "plan_without", "trimmed_plan_size", "TERMINATION_MESSAGE", "prune_reason",
-    "MinWall", "Rate", "PREDICT_MIN_MS", "PREDICT_MARGIN",
+    "MinWall",
 ]
 
 #: 三个分支的稳定名（**机器可读**，不翻译）：原方程能特化 / 只有等价写法能特化 /
@@ -183,81 +183,3 @@ class MinWall:
         kernel, as_equiv, optimize = self.config
         return (f"kernel_force={kernel}  as_equivalence={as_equiv}  "
                 f"optimize={optimize}")
-
-
-#: 预判剪枝的两个门槛。它与 :data:`TERMINATION_MESSAGE` 那条**实测**规则是两件事：
-#: 实测算出这一组超过了当前 ``min_wall_ms``，原文逐字是"耗时大于min_wall_ms,此组被终止"；
-#: 而这里是**只凭规划器的 FLOPs** 就判定"它连跑都不值得跑"，原因里必须写明
-#: ``plan-only estimate, not measured``——两者混为一谈就等于编造观测。
-#:
-#: 为什么需要它：``optimize=none`` 这类组的单次调用要算 ``7.6e17`` 次浮点运算
-#: （2026-11-19 用户那条 10 算子生产方程实测），硬超时也只能等到上限才强杀
-#: （缺省 ``30s × 7 = 210s``）。而规划器给这条路径的 FLOPs 只要 0.07 ms，
-#: 于是"先问要跑多少运算，再决定跑不跑"能把 210 秒压到毫秒。
-#:
-#: 两个门槛同时满足才会剪，方向都是**保守**的：
-#: * ``PREDICT_MIN_MS``：预测耗时不到 1 秒的组一概照跑（预测量级只在小样本上不可靠）；
-#: * ``PREDICT_MARGIN``：预测要慢到当前上界的 4 倍才剪——速率来自**别的配置**的实测，
-#:   跨配置外推本来就有量级误差，留 4 倍余量后"漏剪"远多于"误剪"。
-PREDICT_MIN_MS = 1000.0
-PREDICT_MARGIN = 4.0
-
-
-@dataclass
-class Rate:
-    """已观测到的最高吞吐（FLOP/s）与"这一组要不要跑"的预判。
-
-    速率取**最大**而不是最小：预测耗时 = ``flops / rate``，用最大速率得到的预测耗时
-    最小，于是剪枝最少——"少剪"比"错剪"安全（错剪会让真正的 ``best`` 永远不出现，
-    而报告里看不出来）。
-
-    只由**成功且未超时**的组更新（``observe``），与 ``min_wall_ms`` 的口径一致：
-    坏组不该定义"要多快才算值得跑"。
-    """
-
-    flops_per_s: float | None = None
-    source: str = "-"
-
-    def observe(self, flops: float | None, seconds: float | None,
-                config: Iterable[str] | None = None) -> bool:
-        """记一次实测吞吐，返回是否把已有速率抬高（决定"预测"值变得更宽松）。"""
-        try:
-            value = float(flops) / float(seconds)          # type: ignore[arg-type]
-        except (TypeError, ValueError, ZeroDivisionError):
-            return False
-        if not value or value != value or value <= 0.0:     # NaN / 0 / 负数
-            return False
-        if self.flops_per_s is not None and value <= self.flops_per_s:
-            return False
-        self.flops_per_s = value
-        if config is not None:
-            kernel, as_equiv, optimize = (str(item) for item in config)
-            self.source = (f"kernel_force={kernel}  as_equivalence={as_equiv}  "
-                           f"optimize={optimize}")
-        return True
-
-    def predict_ms(self, flops: float | None) -> float | None:
-        """按已观测吞吐预测这一组要多少毫秒；没有速率或没有 FLOPs 时给 ``None``。"""
-        if self.flops_per_s is None or not flops:
-            return None
-        return float(flops) / float(self.flops_per_s) * 1000.0
-
-    def should_skip(self, flops: float | None,
-                    min_wall_ms: float | None) -> tuple[bool, str]:
-        """预判：这一组是否**明显**比当前上界还慢，返回 ``(剪不剪, 原因)``。
-
-        ``min_wall_ms is None``（不设上界）时永不剪：没有参照就没有"明显更慢"。
-        原因串是**机器可读**的稳定形态，并明确写 ``plan-only estimate, not measured``。
-        """
-        predicted = self.predict_ms(flops)
-        if predicted is None or min_wall_ms is None:
-            return False, ""
-        threshold = float(min_wall_ms) * PREDICT_MARGIN
-        if predicted < max(PREDICT_MIN_MS, threshold):
-            return False, ""
-        reason = (f"predicted_flops={float(flops):.6e}  "
-                  f"rate={float(self.flops_per_s):.6e}flop/s  "
-                  f"predicted_ms={predicted:.6f}  "
-                  f"threshold_ms={threshold:.6f}  "
-                  f"(plan-only estimate, not measured)")
-        return True, reason

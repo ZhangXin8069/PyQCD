@@ -41,6 +41,23 @@ python -m pyqcd.einsum.test --equation "ab,bc,cd->ad" \
 `--shape` 不限于字面命中：方程可以经等价改写（重排操作数、置换输出轴）到达某条语料
 条目。这时 `--explain true` 会点名提供尺寸的那条语料方程，轴序因此不会显得凭空而来。
 
+### 那个计时到底量的是什么（0.5.9 起）
+
+两条规则让报告里的毫秒与你自己脚本里的数字可比：
+
+- **每个样本前后都做设备同步。** `cupy` 与 CUDA 版 `torch` 是异步下发，只把
+  `perf_counter()` 套在 `contract()` 外面，表会停在**入队**那一刻。现在每个被测样本
+  进出各同步一次（CPU 上是空操作），所以 GPU 上报的也是计算时间。0.5.9 之前不是这样，
+  GPU 耗时因此小了若干个量级——那些历史数字**全部作废**，见
+  `docs/ERRATA_gpu_timing_20261119.md`（仓库内，不在本站）。
+- **加速设备上 `--warmup` 至少抬到 2。** 那里的首调还要建 CUDA 上下文、cuBLAS 句柄与
+  workspace，只丢一次会让中位低于脚本里的稳态。报告 `time :` 给的是**实际使用**的值，
+  被抬过时另有一行 `time note:`；`--json` 里是 `warmup_effective` / `warmup_raised`。
+
+`--compare opt_einsum` 的参照跑在**与操作数同一个后端**上（`backend=` 显式传入并写进
+参照行，例如 `opt_einsum.contract(backend='cupy', optimize='greedy')`）。若 `opt_einsum`
+没有注册该后端，它会如实报错而不会悄悄改用 numpy 量一遍——跨设备的"参照"不叫参照。
+
 ## 怎么读输出
 
 初始化阶段会在任何计量之前先自述过程。它的字段是稳定的机器可读 token，所以这一段

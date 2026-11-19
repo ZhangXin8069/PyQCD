@@ -187,12 +187,9 @@
   **窗口粒度是整组**：一组有 ``1+warmup+rounds`` 次调用（缺省 7 次），实际装的是
   ``limit × 7`` 的**组级预算**——按单次设限会把 ``7 × limit`` 全花光，且与
   ``min_wall_ms`` 剪枝（比整组中位）不同口径。
-  **预判剪枝**另有两条，只看规划器、不跑收缩：规划出来的 FLOPs 按已测吞吐折算后
-  明显超过上界（**估算**，原因里写 ``plan-only estimate, not measured``），或规划
-  **自己**就超过上界（规划是一次调用的一部分，这条是**实测**）。它们针对
-  ``optimize=none``（生产方程单次 1e17 次浮点）与 ``optimal``（规划 38 s）：
-  硬超时也能挡住，但要先把整组额度花光。命中即 ``状态=pruned``、``tune predict:``
-  单独报计数——它们**没被测过**，不许混进"测出来慢"。
+  **每一组都真的跑**：没有任何"预判/估算"式的跳过。跑得慢或跑不动由上限与真实
+  异常决定——超过上限记 ``timeout``（父进程 kill 子进程，这是**硬**上限），真抛异常
+  记 ``error``，比当前最快组慢则由 ``min_wall_ms`` 实测终止（``pruned``）。
   任一次超过上限 → 该组记 ``timeout``、继续下一组，中位只由全部成功且未超时的调用
   构成（不拿部分样本凑）。``--tune-budget``（缺省 ``0`` = 不限）是整轮上限，用尽即
   停止遍历并报"已测 N/M"。坏组合——超时、异常、``rel > atol+rtol``——
@@ -334,6 +331,38 @@ DEFAULT_CACHE = "auto"
 DEFAULT_AS_EQUIVALENCE = "auto"
 DEFAULT_ATOL = 1e-12
 DEFAULT_RTOL = 0.0
+#: 每种 dtype 的**相对**容差下界 = 该 dtype 的机器精度 × 这个倍数。
+#:
+#: 为什么需要：``--atol 1e-12`` 是拿 ``complex128`` 的精度定的，而单精度
+#: （``complex64``/``float32``，``eps ≈ 1.19e-7``）在一条 10 算子收缩上实测相对误差
+#: **1.9e-6**（≈ 16 eps，2026-11-19 生产方程实测；``complex128`` 同式 3.0e-15 ≈ 13 eps）。
+#: 用 1e-12 去判单精度，每一格都会 FAIL——那不是"数值不对"，是把双精度的尺子量单精度。
+#:
+#: 倍数取 64：实测最大 16 eps，留 4 倍余量；单精度因此落到 7.6e-6，
+#: 双精度仍是 1e-12（它本来就更松，取 max 即可）。
+DTYPE_TOLERANCE_EPS = 64.0
+
+
+def dtype_tolerance(dtype: Any) -> float:
+    """该 dtype 的相对容差下界（``eps × DTYPE_TOLERANCE_EPS``；认不出给 0）。"""
+    try:
+        return float(np.finfo(np.dtype(dtype)).eps) * DTYPE_TOLERANCE_EPS
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def effective_tolerance(atol: float | None, dtype: Any) -> float:
+    """本次判定实际用的相对容差。
+
+    ``atol is None`` = **自动档**（``--atol`` 没给）：取 dtype 的机器精度量级
+    （:func:`dtype_tolerance`；双精度仍是 1e-12）。这是**唯一**会按 dtype 变的路径。
+
+    ``atol`` 给了数值 = **用户说了算**：原样返回，绝不被自动抬高或压低——显式阈值是
+    可复现性的一部分（``--atol 1e-30`` 就该判失败，那是用户要的严格性）。
+    """
+    if atol is None:
+        return max(DEFAULT_ATOL, dtype_tolerance(dtype))
+    return float(atol)
 DEFAULT_ROUNDS = 5
 DEFAULT_WARMUP = 1
 DEFAULT_COMPARE = "none"
@@ -366,11 +395,6 @@ TUNE_AXES = "kernel_force × as_equivalence × optimize"
 DEFAULT_TUNE_TIMEOUT = 30.0
 #: ``--tune-budget``：整轮遍历的上限秒数，``0`` = 不限。用尽即停止遍历并报"已测 N/M"。
 DEFAULT_TUNE_BUDGET = 0.0
-#: 预判剪枝时**问规划器**的时间预算（秒）：`contract_path` 只规划、不收缩，但
-#: ``optimal`` 的穷举是纯 Python，本机这条 10 算子方程实测 **38 s**。问代价不该比
-#: 被测对象还贵，超过这个预算就放弃预判、照旧跑那一组（旧行为）。
-#: 2 秒足够覆盖 greedy/dp/branch_* 的全部实测值（最大 18 ms），又远小于一次收缩。
-PLAN_PROBE_SECONDS = 2.0
 #: ``--tune`` 的**取值**（2026-11-18 用户裁定）：它带取值，不是开关。``all`` = 完整模式
 #: （分支判定 + 22/21 组遍历 + 剪枝 + 参照校验），``pass`` = **快速通过模式**（强制
 #: ``B3`` 的 21 组、无 ``topology``、``as_equivalence`` 全 ``false``、不跑参照、
@@ -614,8 +638,17 @@ MESSAGES: dict[str, dict[str, str]] = {
               "（不写该选项时就用它），显式写它属于用法错误。",
     },
     "help.atol": {
-        "en": "**Relative** tolerance (normalised by max|expected|). Default {default}",
-        "zh": "**相对**容差（按 max|expected| 归一）。缺省 {default}",
+        "en": ("**Relative** tolerance (normalised by max|expected|). Omitted = automatic: "
+               "{default} for 64-bit dtypes, {single} for single precision (that dtype's "
+               "machine epsilon x 64 — a 10-operand contraction accumulates ~16 eps, so a "
+               "1e-12 threshold would fail every single-precision run). An explicit number "
+               "is used verbatim: no automatic raising or lowering. The report's `atol` "
+               "field is what was used, `atol_requested` is what you passed"),
+        "zh": ("**相对**容差（按 max|expected| 归一）。不写 = 自动档：64 位 dtype 用 "
+               "{default}，单精度用 {single}（该 dtype 机器精度 × 64——一条 10 算子收缩会"
+               "积累约 16 eps，拿 1e-12 判单精度会让每次运行都失败）。给了数值就**原样"
+               "生效**，不自动抬高也不自动压低。报告里 `atol` 是实际使用的值，"
+               "`atol_requested` 是你给的那个"),
     },
     "help.rtol": {
         "en": "Extra relative margin. Default {default}",
@@ -626,8 +659,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "计时轮数（取中位）。缺省 {default}",
     },
     "help.warmup": {
-        "en": "Warmup calls to discard (0 is not allowed). Default {default}",
-        "zh": "丢弃的预热次数（不可为 0）。缺省 {default}",
+        "en": ("Warmup calls to discard before timing (0 is not allowed). On an "
+               "accelerated device (cupy / torch on CUDA) the value is raised to at "
+               "least {minimum}: the first call there also builds the CUDA context, "
+               "cuBLAS handles and the workspace, so discarding only one call makes the "
+               "median lower than what a script sees. The report prints the effective "
+               "value (`time :` uses it, plus a `time note:` line when it was raised) "
+               "and `--json` carries `warmup_effective` / `warmup_raised`. "
+               "Default {default}"),
+        "zh": ("计时前丢弃的预热次数（不可为 0）。**加速设备**（cupy / torch + CUDA）上"
+               "会被抬到至少 {minimum}：那里的首调还要建 CUDA 上下文、cuBLAS 句柄与"
+               "workspace，只丢一次会让中位低于脚本里的稳态耗时。报告里给的是**实际"
+               "使用**的值（`time :` 用它，被抬过时另有一行 `time note:`），`--json` 的"
+               "`warmup_effective` / `warmup_raised` 也是实际值。缺省 {default}"),
     },
     "help.seed": {
         "en": "Random seed for the operands (every path sees the same data). Default 0",
@@ -801,9 +845,6 @@ MESSAGES: dict[str, dict[str, str]] = {
                "marked timeout, is reported and skipped, and the sweep continues: a "
                "timeout never aborts the run. The median is taken over all calls that "
                "stayed within the bound (a partial sample set never becomes a median). "
-               "0 or negative disables the bound. A combination whose PLANNED flops "
-               "already dwarf the current bound is reported as pruned WITHOUT being "
-               "run, with 'plan-only estimate, not measured' in its reason. "
                "Default {default}"),
         "zh": ("--tune 的**每一次** contract() 调用的上限秒数（warmup 与每一轮都算）。"
                "**缺省每组跑在一个全新解释器里**，所以这是**硬上限**：父进程 kill 子进程，"
@@ -817,9 +858,7 @@ MESSAGES: dict[str, dict[str, str]] = {
                "（跳过 compare 与等价改写）。任一次超过它 → 该组记 timeout、只打印并"
                "跳过、**绝不写配置表**，遍历继续（超时永远不中止整轮）。"
                "中位只由全部在上限内成功的调用构成（不拿部分样本凑中位）。"
-               "0 或负数 = 不设上限。**规划出来的 FLOPs 已远超当前上界的组不会跑**，"
-               "状态记 pruned，原因里写明 plan-only estimate, not measured。"
-               "缺省 {default}"),
+               "0 或负数 = 不设上限。缺省 {default}"),
     },
     "help.tune_budget": {
         "en": ("Upper bound, in seconds, for the WHOLE --tune sweep. When it is used up "
@@ -1122,8 +1161,10 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     # 结果行与警告
     "result.fail_rel": {
-        "en": "  rel={rel:.3e} > atol={atol:g}",
-        "zh": "  rel={rel:.3e} > atol={atol:g}",
+        "en": "  rel={rel:.3e} > tolerance={atol:g} (atol+rtol; --atol is a lower bound "
+               "that is raised to the dtype's machine precision)",
+        "zh": "  rel={rel:.3e} > tolerance={atol:g}（atol+rtol；--atol 是下限，会按 dtype "
+               "的机器精度抬高）",
     },
     "result.fail_shape": {
         "en": "  actual shape={actual} expected={expected}",
@@ -1226,15 +1267,6 @@ MESSAGES: dict[str, dict[str, str]] = {
                "操作数暂存（{stage_s} s）。wall_ms 只能与其它子进程运行比较，不能与"
                "进程内测量混着比。设 PYQCD_EINSUM_TUNE_INPROCESS=1 可退回进程内"
                "尽力而为路线（打不断原生代码）"),
-    },
-    "tune.predicted": {
-        "en": ("{count} combination(s) were NOT run: planned FLOPs alone already exceed "
-               "the current min_wall_ms by a wide margin (rate {rate} flop/s from "
-               "{source}). These are estimates, not measurements: they are reported as "
-               "pruned but no wall_ms was taken"),
-        "zh": ("{count} 组**没有跑**：规划出来的 FLOPs 已明显超过当前 min_wall_ms"
-               "（吞吐 {rate} flop/s，取自 {source}）。这是**估算不是实测**：状态记为 "
-               "pruned 但没有取到任何 wall_ms"),
     },
     "tune.stop": {
         "en": ("measured {measured}/{total} ({skipped} combination(s) skipped): "
@@ -1922,7 +1954,7 @@ def _relative_error(actual, expected) -> float:
 # ── 运行 ────────────────────────────────────────────────────────────────────
 def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[int, ...],
         device: str = DEFAULT_DEVICE, dtype: str = DEFAULT_DTYPE,
-        backend: str = DEFAULT_BACKEND, atol: float = DEFAULT_ATOL,
+        backend: str = DEFAULT_BACKEND, atol: float | None = None,
         rtol: float = DEFAULT_RTOL, compare: str = DEFAULT_COMPARE,
         optimize: Any = DEFAULT_OPTIMIZE, rounds: int = DEFAULT_ROUNDS,
         warmup: int = DEFAULT_WARMUP, seed: int = 0, verbose: bool = DEFAULT_VERBOSE,
@@ -2145,9 +2177,13 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
         # 缺陷（2026-11-15 第三轮巡查实证：complex64 语料方程 rel=1.82e-07，
         # ``--rtol 0.999`` FAIL 而 ``--rtol 1.0`` PASS）。而且 rtol 原先不进报告，
         # 同一个 PASS 无法复现。现在 atol/rtol/合成阈值三项都进报告。
-        report["atol"] = float(atol)
+        # 自动档（``atol is None``）按 dtype 的机器精度取阈值；显式给的数值原样生效。
+        # 报告里 ``atol`` 是**实际使用**的那个，``atol_requested`` 是用户给的（没给为 None）。
+        used_atol = effective_tolerance(atol, np_dtype)
+        report["atol"] = float(used_atol)
+        report["atol_requested"] = None if atol is None else float(atol)
         report["rtol"] = float(rtol)
-        report["tolerance"] = float(atol + rtol)
+        report["tolerance"] = float(used_atol + rtol)
         report["ok"] = bool(
             report["actual_shape"] == list(out_shape)
             and report["rel"] <= report["tolerance"])
@@ -4116,70 +4152,6 @@ def _tune_reference(equation: str, host: Sequence[Any]) -> tuple[Any, str]:
         return None, f"n/a ({type(exc).__name__}: {exc})"
 
 
-def _plan_probe(equation: str, shapes: Sequence[Sequence[int]],
-                optimize: str) -> dict[str, Any]:
-    """问规划器：这一组**要跑多少运算**、以及**规划本身**花了多久。
-
-    返回 ``{"flops": float|None, "seconds": float|None, "limit_hit": bool,
-    "error": str|None}``：``flops`` 取不到就是 ``None``；``limit_hit`` 表示规划超过了
-    :data:`PLAN_PROBE_SECONDS`（此时 ``seconds`` 只是"至少这么久"的下界）。
-
-    为什么要先问规划器再跑：``--tune`` 里最贵的不是收缩本身，而是"跑一个明知不可行的
-    配置"——``optimize=none`` 在生产方程上是**单次 10 元朴素收缩**（本机实测
-    ``naive_cost = 7.6441e+17``），硬超时能挡住它，但要先把整组额度花光
-    （缺省 ``30s × 7 = 210s``）；而 :func:`pyqcd.einsum.contract_path` 给出这个数只要
-    **0.07 ms**。
-
-    为什么不用**朴素**位次代替各优化器自己的位次：那样 ``optimal``/``dp`` 会被误判成
-    "要跑 40 小时"（它们的规划结果比朴素小两个量级）。错剪会让真正的 ``best`` 永远
-    不出现，而报告里看不出来，所以必须按**这一组自己的**优化器问。
-
-    为什么 ``limit_hit`` 也能剪枝：``--tune-timeout`` 的上限量的是**整组**的
-    ``contract()``，而规划是那次调用的一部分。规划**单独**就超过当前 ``min_wall_ms``
-    时，这一组必然超过上界——这是**实测**结论（不是估算），只是被测到的是规划段。
-    ``optimal`` 在生产方程上规划要 38 s（本机实测），按这一条能在 2 s 内剪掉它。
-
-    只用 ``shapes=True`` 的 ``contract_path``，**不建张量、不跑收缩**，并显式
-    ``cache=False``：这一问只为预判，不该污染规划器缓存。
-    """
-    def probe() -> dict[str, Any]:
-        import pyqcd.einsum as pe
-
-        started = time.perf_counter()
-        _path, info = pe.contract_path(
-            equation, *[tuple(int(axis) for axis in shape) for shape in shapes],
-            shapes=True, optimize=_contract_optimize(optimize), cache=False)
-        return {"flops": float(info.opt_cost),
-                "seconds": time.perf_counter() - started,
-                "limit_hit": False, "error": None}
-
-    if not _tune_timer_available():
-        try:
-            return probe()
-        except Exception as exc:                # noqa: BLE001 - 预判失败不影响遍历
-            return {"flops": None, "seconds": None, "limit_hit": False,
-                    "error": f"{type(exc).__name__}: {exc}"}
-    # ``_guarded_call`` **没有返回值**（它只负责装上上限并调用）：结果必须自己收进闭包，
-    # 写 ``return _guarded_call(...) or {...}`` 会让每一次预判都退化成"问不出来"，
-    # 于是 FLOPs 判据永远不生效——本机实测就是这么漏掉 ``none`` 那一组的。
-    box: list[dict[str, Any]] = []
-
-    def record() -> None:
-        box.append(probe())
-
-    try:
-        _guarded_call(record, PLAN_PROBE_SECONDS, None)
-        return box[0]
-    except _TuneTimeout:
-        # 规划本身太贵：这**已经是**一条可用结论（见 docstring），但这里不替调用方
-        # 决定要不要剪——只如实报"至少花了 PLAN_PROBE_SECONDS"。
-        return {"flops": None, "seconds": PLAN_PROBE_SECONDS,
-                "limit_hit": True, "error": None}
-    except Exception as exc:                    # noqa: BLE001 - 预判失败不影响遍历
-        return {"flops": None, "seconds": None, "limit_hit": False,
-                "error": f"{type(exc).__name__}: {exc}"}
-
-
 def _tune_route(fields: dict[str, Any], kernel_info: Any) -> str:
     """本组实际走的路线：**稳定短标签**（``generic`` / ``backend`` / 原生 path / ``unavailable``）。
 
@@ -4234,10 +4206,6 @@ def tune_status(row: dict[str, Any]) -> str:
     还慢"，与"这一组自己超过 ``--tune-timeout``"是两件不同的事，混在一起就没法回答
     "到底是卡死了还是单纯不快"。
 
-    ``predicted``（只凭规划器 FLOPs 就判定不值得跑）**也归 ``pruned``**：两者都是
-    "这一格没有被测完"，区别只在依据是估算还是实测，而 ``原因=`` 原文已经写明
-    ``plan-only estimate, not measured``。不折进去的话，一行没有 ``median_ms`` 的
-    记录会被读成 ``error``——那等于把"我们没跑"说成"它跑崩了"。
 
     ``skip`` **只剩环境性不可用**（原生库缺失、被开关关掉、dtype 没有步表路径、
     torch 后端给不了 numpy/cupy 数组）。**收益/预算判据一律不进这一档**（2026-11-19
@@ -4245,7 +4213,7 @@ def tune_status(row: dict[str, Any]) -> str:
     pack 流量那些门是**自动分派**的选路策略，不是能力上限——它们由
     ``_kernel_kupl.bypass_plan_gate()`` 穿过，这一档照旧真跑并留下实测 ``wall_ms``。
     """
-    if row.get("pruned") or row.get("predicted"):
+    if row.get("pruned"):
         return TUNE_STATUS_PRUNED
     if row.get("skip"):
         return TUNE_STATUS_SKIP
@@ -4988,7 +4956,7 @@ def _dispatched_config(operands: Sequence[Any], *, equation: str, backend: str,
 
 def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
              device: str = DEFAULT_DEVICE, dtype: str = DEFAULT_DTYPE,
-             backend: str = DEFAULT_BACKEND, atol: float = DEFAULT_ATOL,
+             backend: str = DEFAULT_BACKEND, atol: float | None = None,
              rtol: float = DEFAULT_RTOL, rounds: int = DEFAULT_ROUNDS,
              warmup: int = DEFAULT_WARMUP, seed: int = 0,
              specialize: bool | None = None, cache: bool | None = None,
@@ -5151,7 +5119,9 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     else:
         reference, reference_note = _tune_reference(equation, host)
     extra = dict(profile_kwargs or {})
-    tolerance = float(atol) + float(rtol)
+    # 与主路径同口径：自动档按 dtype 的机器精度取阈值，显式值原样生效。
+    # ``atol`` 可能是 ``None``（自动档）——``effective_tolerance`` 已经处理。
+    tolerance = effective_tolerance(atol, np_dtype) + float(rtol or 0.0)
     # ``limit`` = 每一次 contract() 调用的上限；``deadline`` = 整轮的上限。
     # ``0``/负数都是"不设上限"（CLI 已校验非负，这里的 0 是合法取值）。
     limit = float(timeout) if float(timeout) > 0.0 else None
@@ -5172,8 +5142,6 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     min_wall = _tune_axes.MinWall(
         ms=None if limit is None else limit * 1000.0,
         source="--tune-timeout")
-    # 预判剪枝的吞吐估计：只由**成功且未超时**的组更新（与 min_wall 同口径）。
-    rate = _tune_axes.Rate()
     startup_s: list[float] = []
     staged: dict[str, Any] = {}
     stage_root: str | None = None
@@ -5250,45 +5218,6 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                 bad = False
                 seconds: float | None = None
                 observation: dict[str, Any] | None = None
-                # 本组规划出来的运算量（只在预判剪枝与吞吐记账时用）。
-                plan = (_plan_probe(equation, shapes, optimize) if isolated
-                        else {"flops": None, "seconds": None,
-                              "limit_hit": False, "error": None})
-                group_flops = plan.get("flops")
-                # 预判剪枝：这一组**不跑**，依据全部来自规划器，两条判据都写进 ``原因``。
-                # ① 规划出来的 FLOPs 按已测吞吐折算，明显超过当前上界（**估算**）；
-                # ② 规划**自己**就超过了当前上界（**实测**：规划是那次调用的一部分）。
-                # 针对的正是本例那个 ``optimize=none``（单次 1e17 次浮点）与
-                # ``optimal``（规划 38 s）：硬超时也能挡住，但要先白等整组额度。
-                skip_reason = ""
-                if isolated:
-                    limit_hit = bool(plan.get("limit_hit"))
-                    should_skip, estimate_reason = rate.should_skip(
-                        group_flops, min_wall.ms)
-                    plan_ms = plan.get("seconds")
-                    slower_plan = (limit_hit or (
-                        plan_ms is not None and min_wall.ms is not None
-                        and float(plan_ms) * 1000.0 > float(min_wall.ms)))
-                    if slower_plan:
-                        skip_reason = (
-                            "planning alone exceeded min_wall_ms  plan_ms={}{}  "
-                            "min_wall_ms={:.6f}  (planned, not contracted)".format(
-                                "-" if plan_ms is None else f"{float(plan_ms) * 1000.0:.6f}",
-                                " (>probe budget)" if limit_hit else "",
-                                float(min_wall.ms)))
-                    elif should_skip:
-                        skip_reason = estimate_reason
-                    if skip_reason:
-                        row["predicted"] = True
-                        row["reason"] = skip_reason
-                        row["status"] = TUNE_STATUS_PRUNED
-                        rows.append(row)
-                        if not first_done:
-                            first_done = True
-                            _tune_init("first group done  {}/{}/{}  状态={}  {}".format(
-                                kernel, as_equiv, optimize, row["status"],
-                                _tune_init_ms(first_started)))
-                        continue
                 try:
                     if isolated:
                         # **子进程**路线（缺省）：父进程 kill 子进程才能打断原生
@@ -5418,9 +5347,6 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                     row["median_ms"] = round(seconds * 1000.0, 6)
                     row["wall_ms"] = row["median_ms"]
                     measured += 1
-                    # 吞吐记账：供**后续组**的预判剪枝用。只用成功组（与 min_wall 同口径）。
-                    if group_flops:
-                        rate.observe(group_flops, seconds, (kernel, as_equiv, optimize))
                     # 参照：``compare`` 显式给出时用真实参照；``none``（``--tune``
                     # 缺省）时退化为**首个成功组合的结果**做自洽校验。后者成本为零，
                     # 却仍能检出"不同内核/规划器算出不同数"这一类真实分歧——否则
@@ -5451,7 +5377,8 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                                 row["reason"] = (
                                     "rel={:.3e} > atol+rtol={:g} (atol={:g}, rtol={:g}, "
                                     "reference={})".format(
-                                        row["rel"], tolerance, float(atol), float(rtol),
+                                        row["rel"], tolerance,
+                                        effective_tolerance(atol, np_dtype), float(rtol),
                                         reference_note))
                                 bad = True
                     # 用户规则 §4：这一组的中位比当前上界更小 → **立即**压低上界，
@@ -5540,10 +5467,6 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                 "seconds": round(float(staged.get("seconds") or 0.0), 6),
             } if staged else None,
         },
-        # 预判剪枝的记账：命中了几组、当时的吞吐估计来自哪一组。
-        "predicted": sum(1 for row in rows if row.get("predicted")),
-        "rate_flops_per_s": rate.flops_per_s,
-        "rate_source": rate.source,
         "warmup": warmup,
         "warmup_effective": effective_warmup,
         "warmup_raised": warmup_raised,
@@ -5760,14 +5683,6 @@ def print_tune(tune: dict[str, Any], language: str = "zh",
         print("tune note : " + translate("tune.signal_note", language), file=out)
     elif timer == "posthoc":
         print("tune note : " + translate("tune.posthoc_note", language), file=out)
-    # 预判剪枝：有几组**没跑**、依据是规划器的 FLOPs 而不是实测。它与 ``tune prune``
-    # 那条（比当前上界慢）是两件事，混在一起就会把"没测过"说成"测出来慢"。
-    if tune.get("predicted"):
-        print("tune predict: " + translate(
-            "tune.predicted", language, count=int(tune.get("predicted") or 0),
-            rate=("-" if tune.get("rate_flops_per_s") is None else
-                  f"{float(tune['rate_flops_per_s']):.6e}"),
-            source=tune.get("rate_source") or "-"), file=out)
     # §12.3：临时关闭缓存的提示必须整句给出（不是只有一个 session=true 的字段）。
     # 关不上时更要说明白——那几组量到的是"带历史命中"的耗时，读者必须知道。
     session = (tune.get("write") or {}).get("session")
@@ -6136,14 +6051,18 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
     parser.add_argument("--optimize", default=None, choices=optimize_choices,
                         help=t("help.optimize",
                                values=" / ".join(optimize_choices or ())))
-    parser.add_argument("--atol", type=float, default=DEFAULT_ATOL,
-                        help=t("help.atol", default=f"{DEFAULT_ATOL:g}"))
+    # ``default=None`` = **自动档**：按 dtype 的机器精度取阈值（单精度 ~7.6e-6、
+    # 双精度 1e-12）。显式给数值则原样生效，不做任何自动抬/压。
+    parser.add_argument("--atol", type=float, default=None,
+                        help=t("help.atol", default=f"{DEFAULT_ATOL:g}",
+                               single=f"{float(np.finfo(np.complex64).eps) * DTYPE_TOLERANCE_EPS:.1e}"))
     parser.add_argument("--rtol", type=float, default=DEFAULT_RTOL,
                         help=t("help.rtol", default=f"{DEFAULT_RTOL:g}"))
     parser.add_argument("--rounds", type=int, default=DEFAULT_ROUNDS,
                         help=t("help.rounds", default=DEFAULT_ROUNDS))
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP,
-                        help=t("help.warmup", default=DEFAULT_WARMUP))
+                        help=t("help.warmup", default=DEFAULT_WARMUP,
+                               minimum=ACCELERATED_MIN_WARMUP))
     parser.add_argument("--seed", type=int, default=0, help=t("help.seed"))
     parser.add_argument("--verbose", default="false", help=t("help.verbose"))
     # ``auto`` 是 ``None``（跟随 --verbose），显式 true/false 压过它；缺省值写进
@@ -6350,7 +6269,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                             message=result["error"]))
         if "rel" in result:
             print(translate("result.fail_rel", language,
-                            rel=result["rel"], atol=args.atol))
+                            rel=result["rel"],
+                            atol=result.get("tolerance", "auto")))
             print(translate("result.fail_shape", language,
                             actual=result.get("actual_shape"),
                             expected=result["out_shape"]))

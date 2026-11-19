@@ -1,5 +1,7 @@
 # PyPI 发布硬化台账（2026-11-08 起）
 
+> **⚠️ 勘误（2026-11-19）**：本页记录的所有 **GPU 耗时 / GPU 倍率 / GPU 对照**均出自 0.5.9 之前的实现，那时计时**没有设备同步**（`cupy`/`torch` 异步下发，量到的是入队时间）、`--compare opt_einsum` 也只拿 numpy 副本当参照。这些数字**不得再作为证据引用**，详见 [`docs/ERRATA_gpu_timing_20261119.md`](./ERRATA_gpu_timing_20261119.md)。CPU 计时、数值结论与形状/dtype/命中结论不受影响。
+
 > 判定口径：**一律以 `pip install pyqcd==<ver>` 从 PyPI 远程安装到全新 venv 的结果为准**，
 > 本地 sdist、源码树里的 `import pyqcd` 都不算证据。
 > 约束：不修改核心代码（接口级 debug 允许）。经验实时回写 `skills/pypi-release/` 与

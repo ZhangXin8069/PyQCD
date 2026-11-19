@@ -720,12 +720,10 @@ C/CUDA 代码**"，并给可操作建议"GPU 上把 `--tune-timeout` 取足够�
 2. **"卡死无输出"的三个真凶**：`_tune_reference` 那次完整 `np.einsum` 在**任何超时
    保护之外**（按输入元素总数 `> 2_000_000` 跳过，用户那条生产方程实测 **2.56e8** 个
    元素）；`optimal` 的纯 Python 穷举规划（本机这条方程实测 **38 s**）；`optimize=none`
-   的**单次 10 元朴素收缩**（`naive_cost = 7.6441e+17` FLOPs，硬超时也要等整组额度
-   210 s）。后两条现在由**预判剪枝**挡在运行之前：`_plan_probe()` 用
-   `contract_path(shapes=True, cache=False)` 问出该组自己的 FLOPs（0.1 ms）与规划耗时，
-   FLOPs 折算超上界 → `plan-only estimate, not measured`；规划自己超上界 →
-   `planning alone exceeded min_wall_ms`。用 `tune init :` 起止行 +
-   `STAT=Rl+/%CPU=100/GPU 0%` 定位。
+   的**单次 10 元朴素收缩**（`naive_cost = 7.6441e+17` FLOPs）。三个都交给**硬上限**
+   处理：父进程到点 kill 子进程，该组记 `timeout` 后继续下一组。**没有任何"预判/估算"
+   式的跳过**（2026-11-19 用户裁定：`--tune` 的语义就是把每一组都真的测出来，判该不该
+   跑不该由库替用户决定）。定位用 `tune init :` 起止行 + `STAT=Rl+/%CPU=100/GPU 0%`。
 3. **跳过参照必须补自洽参照**：参照为 `None` 时全部 `rel=None`、`mismatch` 恒假，
    "rel 超容差必须判 MISMATCH"会静默失效。只允许两种写法：小形状真参照，或
    "首个成功组合"自洽参照。子进程路线下结果在 `row["_output"]` 那个 `.npy` 里、

@@ -1,5 +1,7 @@
 # pyqcd-einsum 专用 kernel 验收报告（2026-11-08 08:40）
 
+> **⚠️ 勘误（2026-11-19）**：本页记录的所有 **GPU 耗时 / GPU 倍率 / GPU 对照**均出自 0.5.9 之前的实现，那时计时**没有设备同步**（`cupy`/`torch` 异步下发，量到的是入队时间）、`--compare opt_einsum` 也只拿 numpy 副本当参照。这些数字**不得再作为证据引用**，详见 [`docs/ERRATA_gpu_timing_20261119.md`](./ERRATA_gpu_timing_20261119.md)。CPU 计时、数值结论与形状/dtype/命中结论不受影响。
+
 ## 1. 结论
 
 **B7 / B8 / B9 三项全部解决，当前 bug 数 = 0。**

@@ -49,6 +49,28 @@ through an equivalent rewrite (operand reordering, output-axis permutation). In 
 `--explain true` names the corpus equation whose roles supplied the sizes, so the axis
 order never looks unexplained.
 
+### What the clock actually measures (0.5.9+)
+
+Two rules make the reported milliseconds comparable with a script of your own:
+
+- **The device is synchronised around every sample.** `cupy` and CUDA `torch` dispatch
+  asynchronously, so `perf_counter()` around `contract()` alone would stop at
+  *enqueue* time. Each measured sample is bracketed by a device sync (a no-op on CPU),
+  so the number is compute time on GPU too. Before 0.5.9 it was not, which made GPU
+  timings look orders of magnitude too small — those historical numbers are void, see
+  `docs/ERRATA_gpu_timing_20261119.md`（仓库内，不在本站）.
+- **`--warmup` is raised to at least 2 on an accelerated device.** The first call there
+  also builds the CUDA context, cuBLAS handles and the workspace; discarding only one
+  call leaves the median below the steady state your script sees. The report prints the
+  **effective** value in `time :` and adds a `time note:` line when it was raised;
+  `--json` carries `warmup_effective` / `warmup_raised`.
+
+`--compare opt_einsum` runs the reference on the **same backend as the operands**
+(`backend=` is passed explicitly and echoed in the reference line, e.g.
+`opt_einsum.contract(backend='cupy', optimize='greedy')`). If `opt_einsum` has no
+registered backend for those operands it reports that instead of silently measuring on
+numpy — a cross-device "reference" is not a reference.
+
 ## Reading the output
 
 The initialisation phase narrates itself before any measurement. Its fields are stable
