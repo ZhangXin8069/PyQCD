@@ -265,6 +265,10 @@ def test_three_paths_agree_on_shape_dtype_and_values():
     """``generic`` / ``dedicated`` / ``backend``：shape、dtype 全同，rel ≤ 1e-12。"""
     operands = _operands()
     with _isolated():
+        default_dir = (_profile_cache.DEFAULT_DIR
+                       if os.path.isabs(_profile_cache.DEFAULT_DIR)
+                       else os.path.join(os.getcwd(), _profile_cache.DEFAULT_DIR))
+        default_existed = os.path.exists(default_dir)
         baseline = contract(EQUATION, *operands, kernel_force="generic", profile=False)
         backend = contract(EQUATION, *operands, kernel_force="backend", profile=False)
 
@@ -335,6 +339,10 @@ def test_profile_disabled_leaves_the_dispatch_untouched():
     """``profile=False``：记录仍在表里但不被施加，结果与通用基线一致。"""
     operands = _operands()
     with _isolated():
+        default_dir = (_profile_cache.DEFAULT_DIR
+                       if os.path.isabs(_profile_cache.DEFAULT_DIR)
+                       else os.path.join(os.getcwd(), _profile_cache.DEFAULT_DIR))
+        default_existed = os.path.exists(default_dir)
         baseline = contract(EQUATION, *operands, kernel_force="generic", profile=False)
         key = _seed("backend", wall_ms=0.001, operands=operands)
 
@@ -354,9 +362,11 @@ def test_profile_disabled_leaves_the_dispatch_untouched():
             "profile=False 的结果必须与通用基线一致", _rel_max(off, baseline))
         # 记录确实一直在（否则上面几条就是空断言）。
         assert _profile_cache.read_winner(key) is not None, "签名用的记录不见了"
-        # 关闭就是关闭：连默认的 ./.cache 都不许造出来。
-        assert not os.path.exists(os.path.join(os.getcwd(), _profile_cache.DEFAULT_DIR)), (
-            "profile=False 不许在 CWD 下建缓存目录", os.listdir(os.getcwd()))
+        # 关闭就是关闭：默认目录（自 2026-11-19 起是用户家目录下的绝对路径）不许因为
+        # 这次调用出现或被改写。它可能本来就存在（用户真的 tune 过），所以比较的是
+        # 进入本段之前的状态。
+        assert os.path.exists(default_dir) == default_existed, (
+            "profile=False 不许建出默认缓存目录", default_dir)
 
 
 # ── 5. 降级安全 ─────────────────────────────────────────────────────────────

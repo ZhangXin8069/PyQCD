@@ -27,20 +27,20 @@ CSV，普通 ``contract()`` 就用**一次顺序读**（进程内再加一层按
 记在行里但**不参与匹配**——同一张表可以被复制到别的机器上继续用。``shape`` 统一
 规范成 ``2x3|3x4``（``x`` 连轴、``|`` 连操作数，见 :func:`format_shape`），否则
 ``[2,3]`` / ``2x3`` / ``(2,3)`` 三种写法会把同一个形状拆成三个键；``equation`` 去掉
-全部空白。``kernel`` / ``optimize`` / ``optimize_topology_v2`` / ``wall_ms`` / 三个置换
-字段都是这条记录的**载荷**，不是键。
+全部空白。``kernel`` / ``optimize`` / ``wall_ms`` / 三个置换字段都是这条记录的**载荷**，不是键。
 
-两列 ``optimize``（7 叶子，冻结）
---------------------------------
-``optimize`` 与紧随其后的 ``optimize_topology_v2`` 都只认这 **7 个叶子**
-（:data:`OPTIMIZE_LEAVES`）：
+``optimize`` 列（7 叶子，冻结）
+------------------------------
+只认这 **7 个叶子**（:data:`OPTIMIZE_LEAVES`）：
 
 * ``greedy`` / ``optimal`` / ``dp`` / ``branch_1`` / ``branch_2`` / ``branch_all`` /
   ``none``。
 
-``optimize`` 是主执行器的收缩序；``optimize_topology_v2`` 是**历史列**（保留以兼容旧表）：
-它原本记的是"当 topology 回落到 v2 通用执行器时采用的
-收缩序"。后者留空 = 没有单独结论，按 :data:`DEFAULT_OPTIMIZE`（``greedy``）处理。
+留空 = 没有单独结论，按 :data:`DEFAULT_OPTIMIZE`（``greedy``）处理。
+
+历史上还有第二列 ``optimize_topology_v2``（"topology 回落到 v2 通用执行器时采用的
+收缩序"）。v2 执行器在 0.5.4 删除后那一列就没有任何写入者与读取者，0.5.12 把它从
+表里一并删掉（``schema_version`` 3 → 4）；老表照旧能读——缺列按空处理。
 
 读写口径：
 
@@ -54,8 +54,8 @@ CSV，普通 ``contract()`` 就用**一次顺序读**（进程内再加一层按
 
 ``schema_version`` 列
 ----------------------
-:data:`PROFILE_SCHEMA_VERSION` 记**写这一行时的列集合版本**（本版 ``3``：``optimize``
-之后多了 ``optimize_topology_v2``）。老文件没有这一列，读回按
+:data:`PROFILE_SCHEMA_VERSION` 记**写这一行时的列集合版本**（本版 ``4``：``optimize``
+起 **删除**了 ``optimize_topology_v2`` 那一列；``3`` 及以前有它）。老文件没有这一列，读回按
 :data:`LEGACY_SCHEMA_VERSION`（``0``）处理；老行**既不降级也不删除**，缺的列按空读，
 于是"老表 + 新列"能一起用。
 
@@ -104,17 +104,42 @@ CSV，普通 ``contract()`` 就用**一次顺序读**（进程内再加一层按
 （``threading.Lock`` 不随 ``fork`` 重置，父进程某线程持锁时 fork 会让子进程第一次
 读表就永久阻塞）。
 
-配置目录
---------
+配置目录（默认在**用户家目录**，不再相对 CWD）
+---------------------------------------------
 :func:`configure` 是唯一入口，分辨率优先级**依次**为：显式参数 >
-``PYQCD_EINSUM_PROFILE_DIR`` > :data:`DEFAULT_DIR`（``./.cache``，按当前工作目录取
-绝对路径）；空白与 ``None`` 都算"未给"，逐级下退。没调用过 :func:`configure` 时，
-第一次 IO 按同一口径自动解析一次。:func:`configure` 只记路径，**不碰磁盘**。
+``PYQCD_EINSUM_PROFILE_DIR`` > :data:`DEFAULT_DIR`；空白与 ``None`` 都算"未给"，
+逐级下退。没调用过 :func:`configure` 时，第一次 IO 按同一口径自动解析一次。
+:func:`configure` 只记路径，**不碰磁盘**。
+
+:data:`DEFAULT_DIR` 是**导入时解析好的绝对路径**（不再是"相对当前工作目录的目录名"）：
+``$XDG_CACHE_HOME/pyqcd.einsum``，没设 ``XDG_CACHE_HOME`` 时是
+``~/.cache/pyqcd.einsum``（:data:`DEFAULT_HOME_SUBDIR` 是最后那一段）。为什么不再相对
+CWD：相对 CWD 的默认值会让"在 A 目录 tune 出来的表，在 B 目录读不到"，``pip install``
+的用户每换一个工作目录就得重新 tune 一次，从仓库根跑测试还会往工作树里写 ``.cache``。
+显式目录（``--profile-dir`` / ``PYQCD_EINSUM_PROFILE_DIR``）不受影响，仍按
+"``~`` 先展开、再取绝对路径"解析。
+
+旧位置（``<CWD>/.cache/pyqcd.einsum.profile.csv``，本版之前的缺省）
+-----------------------------------------------------------------
+向后兼容是**一次性、只读**的：生效目录就是 :data:`DEFAULT_DIR`、家目录里还没有表、
+而旧位置**有**表时，读路径把旧表原样当来源（不复制、不移动、不写），并把这件事如实
+记进 :func:`source_note`（读侧同时警告一次）。写路径（:func:`write_winner`）永远落
+**家目录**：它先按同一来源读旧表做底稿（否则别的键会被冲掉），再把整表写到新位置；
+旧文件原样留在那儿等用户自己处理——改用户家目录/删用户文件都得先问过用户。
+
+记录表（``pyqcd.einsum.record.csv``，**只作参考、绝不参与命中**）
+--------------------------------------------------------------
+tune 的**全部测试组合**（不只是胜出的那一组）另存一张记录表：列集合是
+:data:`RECORD_COLUMNS` = :data:`PROFILE_COLUMNS` 的全部列 + 性能段末尾的
+``peak_memory_mb``，与配置表同目录（:func:`record_path`）。写口 :func:`write_records`
+**整表重写**（每次 tune 开始时清空、结束时写全量快照——追加会让同一把键留下几十行
+历史噪音）；读口 :func:`read_records` **只给报告/工具用**，``_api`` / 选路 / 命中提示
+一律不碰它。命中只有 :func:`read_winner` 一条路。
 
 环境变量
 --------
 ``PYQCD_EINSUM_PROFILE_DIR``
-    配置表目录；未设时用 ``./.cache``（相对当前工作目录）。
+    配置表/记录表目录；未设时用 :data:`DEFAULT_DIR`（家目录缓存，见上）。
 ``PYQCD_EINSUM_PROFILE``
     总开关，缺省 ``"1"``（开启）；``0/false/off/no`` 关闭，关闭时**不读也不写、
     连目录都不建**（零 IO）。
@@ -136,6 +161,7 @@ from typing import Any
 
 __all__ = [
     "DEFAULT_DIR",
+    "DEFAULT_HOME_SUBDIR",
     "DEFAULT_OPTIMIZE",
     "DIR_ENV",
     "DuplicateProfileEntry",
@@ -151,7 +177,9 @@ __all__ = [
     "ProfileConflict",
     "ProfileError",
     "ProfileMissing",
-    "TOPOLOGY_V2_FIELD",
+    "RECORD_COLUMNS",
+    "RECORD_FILENAME",
+    "RECORD_SCHEMA_VERSION",
     "best",
     "clear_cli_hint_context",
     "configure",
@@ -161,31 +189,67 @@ __all__ = [
     "format_shape",
     "last_error",
     "profile_path",
+    "read_records",
     "read_winner",
+    "record_path",
     "set_cli_hint_context",
+    "source_note",
     "summary",
     "tune_session",
+    "write_records",
     "write_winner",
 ]
 
 #: 配置表总开关：``0/false/off/no`` 关闭；缺省 ``"1"``（开启）。
 PROFILE_ENV = "PYQCD_EINSUM_PROFILE"
 
-#: 配置表目录覆盖；未设时用 :data:`DEFAULT_DIR`（相对当前工作目录）。
+#: 配置表目录覆盖；未设时用 :data:`DEFAULT_DIR`（家目录缓存，见下）。
 DIR_ENV = "PYQCD_EINSUM_PROFILE_DIR"
 
-#: 缺省目录（相对 CWD）。
-DEFAULT_DIR = ".cache"
+#: 缺省目录在缓存根下的那一段名字（``$XDG_CACHE_HOME/pyqcd.einsum`` 或
+#: ``~/.cache/pyqcd.einsum``）。
+DEFAULT_HOME_SUBDIR = "pyqcd.einsum"
+
+#: 旧缺省目录的目录名（本版之前是**相对当前工作目录**的 ``./.cache``）。只用于只读
+#: 回退（见 :func:`_legacy_path`），绝不作为写入目标。
+LEGACY_DIR_NAME = ".cache"
+
+
+def _default_dir_text() -> str:
+    """缺省配置目录的绝对路径：``$XDG_CACHE_HOME/pyqcd.einsum`` 或 ``~/.cache/...``。
+
+    遵循 XDG 口径（``XDG_CACHE_HOME`` 设了就用它，否则 ``~/.cache``）；两者都先
+    ``expanduser`` 再 ``abspath``，解析结果是**绝对路径**，与当前工作目录无关——这正是
+    本版要修的东西：相对 CWD 的缺省目录会让"在一个目录 tune 出来的表，换个目录读不到"。
+    """
+    root = os.environ.get("XDG_CACHE_HOME")
+    root = root.strip() if isinstance(root, str) else ""
+    if root:
+        root = os.path.abspath(os.path.expanduser(root))
+    else:
+        root = os.path.join(os.path.expanduser("~"), LEGACY_DIR_NAME)
+    return os.path.abspath(os.path.join(root, DEFAULT_HOME_SUBDIR))
+
+
+#: 缺省配置目录：**导入时解析好的绝对路径**（:data:`DEFAULT_HOME_SUBDIR` 是最后一段）。
+#: 语义已从"相对 CWD 的目录名"变成"绝对路径"：``pip install`` 的用户不会每换一个工作
+#: 目录就重新 tune 一次，从仓库根跑测试也不会往工作树里写 ``.cache``。
+#: 仍然公开、仍在 ``__all__`` 里——外部代码可以拿它做"表在哪"的展示与断言。
+DEFAULT_DIR = _default_dir_text()
 
 #: 配置表文件名（**冻结**；旧名 ``profile.csv`` 已废除）。
 PROFILE_FILENAME = "pyqcd.einsum.profile.csv"
 
+#: 记录表文件名：tune 的**全量测试组合**快照，只作参考，**绝不参与命中**。
+RECORD_FILENAME = "pyqcd.einsum.record.csv"
+
 #: 键字段（顺序即键序）；``shape`` 必须先过 :func:`format_shape` 归一化。
 KEY_FIELDS = ("shape", "dtype", "device", "equation", "backend")
 
-#: 配置表 schema 版本：**列集合**每变一次 +1。本版 ``3`` = ``optimize`` 之后新增
-#: ``optimize_topology_v2``（``2`` 及以前没有这一列）。写侧把它记进 ``schema_version``。
-PROFILE_SCHEMA_VERSION = 3
+#: 配置表 schema 版本：**列集合**每变一次 +1。本版 ``4`` = **删除**了
+#: ``optimize_topology_v2`` 那一列（``3`` 及以前有它）。写侧把它记进 ``schema_version``；
+#: 老行（``<=3``）按"缺列"读，不降级也不删除。
+PROFILE_SCHEMA_VERSION = 4
 
 #: 老行的 ``schema_version``：本版之前写的行没有那一列（或那一格为空）。
 LEGACY_SCHEMA_VERSION = 0
@@ -194,17 +258,18 @@ LEGACY_SCHEMA_VERSION = 0
 #: ``auto`` 不在这里——它已从规划器删除，出现在表里属于非法值（读侧警告 + 该行不匹配）。
 OPTIMIZE_LEAVES = ("greedy", "optimal", "dp", "branch_1", "branch_2", "branch_all", "none")
 
-#: ``optimize_topology_v2`` 留空（没有单独结论）时的缺省值。
+#: ``optimize`` 留空（没有单独结论）时的缺省值。
 DEFAULT_OPTIMIZE = "greedy"
 
-#: "topology 回落到 v2 通用执行器时采用的 optimize"那一列（紧跟 ``optimize`` 之后）。
-TOPOLOGY_V2_FIELD = "optimize_topology_v2"
-
-#: 必须落在 :data:`OPTIMIZE_LEAVES` 里的两列（其余拼写一律非法）。
-OPTIMIZE_FIELDS = ("optimize", TOPOLOGY_V2_FIELD)
+#: 必须落在 :data:`OPTIMIZE_LEAVES` 里的列（其余拼写一律非法）。
+#:
+#: 历史注记：这里曾经是两列（``optimize`` 与 ``optimize_topology_v2``）。后者记的是
+#: "topology 回落到 v2 通用执行器时采用的收缩序"，而 v2 执行器在 0.5.4 就删除了；
+#: 0.5.12 把这一列**从表里一并删除**（`schema_version` 因此 +1，老表按"缺列"读）。
+OPTIMIZE_FIELDS = ("optimize",)
 
 #: 性能载荷列：只有"性能行"带它们的值，等价行一律留空。
-PERFORMANCE_FIELDS = ("kernel", "optimize", TOPOLOGY_V2_FIELD, "wall_ms")
+PERFORMANCE_FIELDS = ("kernel", "optimize", "wall_ms")
 
 #: 置换载荷列（JSON 字符串；``null`` = 这一步不需要动）。
 PERMUTATION_FIELDS = ("operand_order", "operand_permutations", "output_permutation")
@@ -216,9 +281,28 @@ EQUIVALENCE_FIELDS = ("target_equation",) + PERMUTATION_FIELDS
 EQUIVALENCE_NOTE = "走等价转换后的配置性能更佳"
 
 #: 表头（顺序即写序，读侧按**名字**取值，所以容忍列序不同与多余列）。
-#: ``optimize_topology_v2`` 紧跟 ``optimize``；``schema_version`` 在最后一列。
+#: ``schema_version`` 在最后一列。
 PROFILE_COLUMNS = (KEY_FIELDS + PERFORMANCE_FIELDS + EQUIVALENCE_FIELDS
                    + ("note", "host", "updated_at", "pyqcd_version", "schema_version"))
+
+#: 记录表独有的那一列（峰值内存 MB），插在性能段末尾（``wall_ms`` 之后）。
+RECORD_MEMORY_FIELD = "peak_memory_mb"
+
+#: 记录表表头 = :data:`PROFILE_COLUMNS` 的全部列 + :data:`RECORD_MEMORY_FIELD`
+#: （插在 ``wall_ms`` 之后、等价载荷之前，也就是"性能段末尾"）。
+#:
+#: 为什么不直接把 ``peak_memory_mb`` 塞进 :data:`PERFORMANCE_FIELDS`：那会改掉
+#: :data:`PROFILE_COLUMNS`，而 ``profile.csv`` 的读侧、``write_winner`` 与多条冻结契约
+#: （表头逐字、``PERFORMANCE_FIELDS`` 只含 wall_ms 等）都依赖它；记录表**不参与命中**，
+#: 让它自带一份"profile 列 + 一列"的列元组是最小风险的选择。公共列逐字相同，所以两张表
+#: 的格式仍然一致（记录表是配置表的超集）。
+RECORD_COLUMNS = (KEY_FIELDS + PERFORMANCE_FIELDS + (RECORD_MEMORY_FIELD,)
+                  + EQUIVALENCE_FIELDS
+                  + ("note", "host", "updated_at", "pyqcd_version", "schema_version"))
+
+#: 记录表的 ``schema_version``：列集合每变一次 +1。``5`` = 在配置表 ``4`` 的列集合上
+#: 多一列 :data:`RECORD_MEMORY_FIELD`；更早的记录行缺这一格，按空读。
+RECORD_SCHEMA_VERSION = 5
 
 #: 超长文本字段的写盘上限（撑坏整张表的是这类字段，不是方程本身）。
 _CLIP_LIMITS = {"note": 200}
@@ -243,6 +327,12 @@ _CONFIGURED_DIR = ""
 
 #: 最近一次读失败的原因（写失败如实外抛，不记在这里）。
 _LAST_ERROR: str | None = None
+
+#: "本次读的表其实在**旧位置**"的说明；不是这种情况就是 ``None``（见 :func:`source_note`）。
+_SOURCE_NOTE: str | None = None
+
+#: 本次读到的表的真实路径（旧位置回退时是旧位置；否则 ``None`` = 生效目录）。
+_SOURCE_PATH: str | None = None
 
 #: 主机名只探测一次。
 _HOST: str | None = None
@@ -329,17 +419,22 @@ def configure(directory=None) -> str:
     """钉住配置表目录，返回绝对路径；**不抛异常、不碰磁盘**。
 
     分辨率优先级与 CLI/API 同口径：显式参数 > ``PYQCD_EINSUM_PROFILE_DIR`` >
-    :data:`DEFAULT_DIR`（``./.cache``）；``None`` 与空白都算"未给"，逐级下退。
+    :data:`DEFAULT_DIR`（**家目录缓存**的绝对路径，``$XDG_CACHE_HOME/pyqcd.einsum`` 或
+    ``~/.cache/pyqcd.einsum``，见模块 docstring）；``None`` 与空白都算"未给"，逐级下退。
 
-    换目录等于换一张表：解析缓存一并清空（否则会把旧目录的行当成新目录的）。目录
-    不存在也不建——读路径不写；真正建目录的是 :func:`write_winner`。
+    换目录等于换一张表：解析缓存与"来源说明"一并清空（否则会把旧目录的行当成新目录的）。
+    目录不存在也不建——读路径不写；真正建目录的是 :func:`write_winner`。
+
+    显式给了目录（参数或环境变量）就**完全不碰家目录**：只有落到缺省那一档时才会走
+    旧位置（``<CWD>/.cache``）的只读回退。
     """
-    global _CONFIGURED_DIR, _LAST_ERROR, _TABLE
+    global _CONFIGURED_DIR, _LAST_ERROR, _SOURCE_NOTE, _TABLE
     path = _resolve_dir_text(directory)
     with _LOCK:
         if _CONFIGURED_DIR != path:
             _TABLE = None
             _LAST_ERROR = None
+            _SOURCE_NOTE = None
         _CONFIGURED_DIR = path
     return path
 
@@ -348,8 +443,9 @@ def ensure_configured() -> str:
     """确保目录已解析并返回绝对路径；**已钉住的目录保持不变**。
 
     与 :func:`configure` 的分工：后者总按"参数 > ``PYQCD_EINSUM_PROFILE_DIR`` >
-    默认 ``./.cache``"重算，所以 ``configure(None)`` 会把调用方先前钉住的目录改回
-    默认；本函数只"补齐"，不"改写"——已有目录就沿用它，没有才按同一优先级解析。
+    默认 :data:`DEFAULT_DIR`（家目录缓存，不再是 ``./.cache``）"重算，所以
+    ``configure(None)`` 会把调用方先前钉住的目录改回默认；本函数只"补齐"，不"改写"
+    ——已有目录就沿用它，没有才按同一优先级解析。
     """
     return os.path.abspath(_dir_text())
 
@@ -382,13 +478,40 @@ def format_shape(shapes: Any) -> str:
 
 
 def profile_path() -> str:
-    """配置表的绝对路径（**不建目录、不读文件**）。"""
+    """配置表的绝对路径（**不建目录、不读文件**）。
+
+    这是**生效目录**下的路径，与"这一次读到的到底是哪张表"是两件事：生效目录是缺省
+    （家目录）而家目录里还没有表、旧位置（``<CWD>/.cache``）却有表时，读路径会回退到
+    旧表（见 :func:`source_note`），但本函数仍报家目录的路径——``write_winner`` 也永远
+    写这里。
+    """
     return os.path.join(_dir_text(), PROFILE_FILENAME)
+
+
+def record_path() -> str:
+    """记录表（``pyqcd.einsum.record.csv``）的绝对路径：与 :func:`profile_path` **同目录**。
+
+    **不建目录、不读文件**。记录表只作 tune 的全量参考，绝不参与命中。
+    """
+    return os.path.join(_dir_text(), RECORD_FILENAME)
 
 
 def last_error() -> str | None:
     """最近一次读失败的原因（写失败如实外抛，不记在这里）；没有就是 ``None``。"""
     return _LAST_ERROR
+
+
+def source_note() -> str | None:
+    """"本次读的表其实在**旧位置**"的说明；不是这种情况（或还没读过）就是 ``None``。
+
+    向后兼容只做**一次性、只读**回退：生效目录是缺省（家目录）、那里还没有表、而旧位置
+    （``<CWD>/.cache/pyqcd.einsum.profile.csv``，本版之前的缺省目录）有表时，读路径把旧表
+    原样当来源。函数名如实说明这件事——**不搬、不复制、不写**：改用户家目录或删用户文件
+    都得先问过用户，所以旧文件会一直留在那儿，直到用户自己处理。
+
+    读侧命中旧表时同时发一条 :class:`RuntimeWarning`（同一路径只报一次）。
+    """
+    return _SOURCE_NOTE
 
 
 def read_winner(key: Mapping[str, Any]) -> dict[str, str] | None:
@@ -403,7 +526,10 @@ def read_winner(key: Mapping[str, Any]) -> dict[str, str] | None:
     必须是被测配置本身的耗时）。返回的是**副本**，额外带 ``line``（该行在配置表里的
     数据行号，1-based），只用于把命中提示钉到具体记录。
 
-    ``optimize`` / ``optimize_topology_v2`` 两列已归一成 7 叶子之一或空（空 = 缺省
+    文件不存在时**只读**回退到旧位置（``<CWD>/.cache``，见 :func:`source_note`）：
+    生效目录不是缺省时不回退，所以显式 ``--profile-dir`` 的调用完全碰不到别的目录。
+
+    ``optimize`` 已归一成 7 叶子之一或空（空 = 缺省
     :data:`DEFAULT_OPTIMIZE`）；**有非法值的那一行不参与匹配**（``auto`` 这类旧值会触发
     一次警告，绝不静默当成 ``greedy``）。
     """
@@ -415,7 +541,7 @@ def read_winner(key: Mapping[str, Any]) -> dict[str, str] | None:
             return None                              # 遍历期间：读当无命中
         path = profile_path()
         try:
-            rows = _table_locked(path)
+            rows = _source_rows_locked(path)
         except FileNotFoundError:
             raise ProfileMissing(_cli_hint(token), path) from None
         except (OSError, csv.Error) as exc:
@@ -423,11 +549,12 @@ def read_winner(key: Mapping[str, Any]) -> dict[str, str] | None:
             return None
         matches = [row for row in rows
                    if not _skipped(row) and _row_key(row) == token]
+        source = _source_path_locked()
     _flush_warnings()
     if not matches:
         return None
     if len(matches) > 1:
-        raise DuplicateProfileEntry(matches, key=key, path=path)
+        raise DuplicateProfileEntry(matches, key=key, path=source)
     row = dict(matches[0])
     row.pop(_SKIP_FIELD, None)
     return row
@@ -437,8 +564,8 @@ def write_winner(key: Mapping[str, Any], config: Mapping[str, Any] | None = None
                  equivalence: Any = None, note: str = "") -> None:
     """写**唯一**获胜配置：先删掉同键所有行，再只写 1 行。**只有 tune 调用它**。
 
-    ``equivalence`` 为空 → 写性能配置（``kernel`` / ``optimize`` / ``optimize_topology_v2``
-    / ``wall_ms``）；非空 → 该行只含等价字段（``target_equation`` + 三个置换字段）+
+    ``equivalence`` 为空 → 写性能配置（``kernel`` / ``optimize`` / ``wall_ms``）；
+    非空 → 该行只含等价字段（``target_equation`` + 三个置换字段）+
     ``note``，性能字段留空（``note`` 为空时写 :data:`EQUIVALENCE_NOTE`）。
     ``equivalence`` 可以是映射，也可以是带 ``equation``/``operand_order``/
     ``operand_permutations``/``output_permutation`` 属性的对象（例如
@@ -452,6 +579,9 @@ def write_winner(key: Mapping[str, Any], config: Mapping[str, Any] | None = None
     时在这里创建。写失败（含无权限、磁盘满）**如实外抛**——唯一调用方是 tune，它负责
     打印"写配置表失败"并继续。
 
+    写入位置永远是 :func:`profile_path`（缺省就是**家目录**）：旧位置（``<CWD>/.cache``）
+    的表只当**只读底稿**（见 :func:`_store_locked`），既不搬也不删。
+
     总开关关闭、:func:`tune_session` 进行中：**静默不写**（遍历期间表一个字都不变）。
     因此胜出配置必须在 ``with tune_session()`` **之外**写。
     """
@@ -463,6 +593,60 @@ def write_winner(key: Mapping[str, Any], config: Mapping[str, Any] | None = None
         _store_locked(token, row)
     _flush_warnings()
     return None
+
+
+def write_records(rows: Sequence[Mapping[str, Any]], note: str = "") -> int:
+    """把本次 tune 的**全量测试组合**整表写进记录表（:func:`record_path`），返回行数。
+
+    记录表**只作参考**：``_api`` / 选路 / 命中提示一律不读它，命中只有
+    :func:`read_winner` 一条路。它的列集合是 :data:`RECORD_COLUMNS`
+    （:data:`PROFILE_COLUMNS` + 性能段末尾的 ``peak_memory_mb``），公共列逐字相同，所以
+    "格式与 ``pyqcd.einsum.profile.csv`` 相同"。
+
+    **整表重写**，不是追加：``rows`` 就是本次 tune 的全量快照（每次 tune 开始时清空、
+    结束时写全部行）。用户要的是"这一次跑出来的所有组"，追加只会让同一把键留下几十行
+    历史噪音。``rows`` 里的行按列名取值（缺列写空），``schema_version`` 一律写
+    :data:`RECORD_SCHEMA_VERSION`（``4``）。
+
+    ``note`` 不是一列：它是给调用方打日志用的说明（本函数不落盘它）；``note`` 列的取值
+    来自每一行自己的 ``note`` 字段。
+
+    写盘与 :func:`write_winner` 同口径：目录不存在就建、临时文件 + ``os.replace``
+    原子替换、**写失败如实外抛**（不静默）。
+
+    只在总开关关闭时静默不写（返回 ``0``）。:func:`tune_session` **不**拦它：遍历窗口
+    要保护的是"被测配置本身的耗时"，而记录表从不会被任何人读回（命中只走
+    :func:`read_winner`）——拦下来只会让"tune 结束时写全量快照"静默丢掉整张表。
+    """
+    del note                                          # 只用于调用方日志，不进表
+    row_list = [_record_row(row) for row in rows]
+    with _LOCK:
+        if not enabled():
+            return 0
+        path = record_path()
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        _write_rows(path, row_list, columns=RECORD_COLUMNS)
+    return len(row_list)
+
+
+def read_records() -> list[dict[str, str]]:
+    """读记录表（:func:`record_path`）的全部行；**只给报告/工具用**。
+
+    **本函数不得被 ``_api`` / 选路 / 命中提示调用**：记录表是"这一次 tune 的全量参考"，
+    不是缓存。命中判定只走 :func:`read_winner`——读记录表去匹配会让"没被选中的组"也
+    变成可选答案，那正好是本表存在的反面。
+
+    缺文件/读失败/坏行一律返回空表或跳过该行（**不抛**）：它只是给报告添一列证据，
+    坏了不该让调用方拿不到结果。返回的每一行都补齐 :data:`RECORD_COLUMNS` 全部列
+    （缺列按空；``4`` 之前的记录行没有 ``peak_memory_mb``，读作空串）。
+    """
+    path = record_path()
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(_MAX_LOAD_BYTES)
+    except OSError:
+        return []
+    return _parse_rows(raw, path, columns=RECORD_COLUMNS)
 
 
 @contextlib.contextmanager
@@ -505,6 +689,10 @@ def summary() -> dict[str, Any]:
     分开报只是为了同键多行时能一眼看出异常）；``invalid`` 是 ``optimize`` 两列含非法值、
     因此**不参与匹配**的行数（``read_winner`` 只认 ``rows - invalid`` 那些行）。读失败按
     0 行报，原因进 ``last_error``。**只读**：不建目录、不写文件。
+
+    计数口径与 :func:`read_winner` **同源**：家目录里没有表而旧位置（``<CWD>/.cache``）
+    有表时，这里数的也是那张旧表的行（:func:`source_note` 说明来源）；``file`` 仍是
+    生效目录下的路径（写入位置）。
     """
     path = profile_path()
     if not _switch_on():
@@ -513,7 +701,7 @@ def summary() -> dict[str, Any]:
     rows: list[dict[str, str]] = []
     try:
         with _LOCK:
-            rows = _table_locked(path)
+            rows = _source_rows_locked(path)
     except FileNotFoundError:
         pass
     except (OSError, csv.Error) as exc:
@@ -591,7 +779,7 @@ def _compose_row(token: tuple[str, ...], config: Mapping[str, Any] | None,
     """把键 + 载荷装配成一整行（列序见 :data:`PROFILE_COLUMNS`）。
 
     ``equivalence`` 非空就是**等价行**：只写等价字段 + ``note``，性能字段留空（含
-    ``optimize_topology_v2``——等价行没有"topology 回落到 v2"的结论）。给了等价载荷却
+    结论——等价行不写任何性能列）。给了等价载荷却
     解不出可执行的改写（没有目标方程，或三个置换字段全空）时抛 :class:`ProfileError`
     ——写一行两不靠的垃圾行比不写更坏。
 
@@ -625,6 +813,43 @@ def _compose_row(token: tuple[str, ...], config: Mapping[str, Any] | None,
         row[name] = _optimize_cell(name, source.get(name))
     row["wall_ms"] = _number(source.get("wall_ms"))
     row["note"] = _clip("note", _text(note))
+    return row
+
+
+def _record_row(source: Mapping[str, Any]) -> dict[str, str]:
+    """记录表的一行：按 :data:`RECORD_COLUMNS` 取值、归一，并写记录表自己的 schema 版本。
+
+    与配置表共用同一套单元格口径：``shape`` / ``equation`` 走 :func:`_canonical`
+    （两张表的键列逐字相同才能直接对照），两列 ``optimize`` 走
+    :func:`_normalize_optimize`（只落 7 叶子之一，非法拼写留空——记录表**不参与命中**，
+    所以不为它发"配置表写盘"那类警告），``note`` 走 :func:`_clip`。
+    ``schema_version`` 一律写 :data:`RECORD_SCHEMA_VERSION`——记录表的列集合是
+    "配置表的列 + ``peak_memory_mb``"，所以它的版本号**永远**比配置表大 1。
+
+    ``peak_memory_mb`` 不是数值列：调用方给什么就写什么（``_text``），解不出来的留空；
+    记录表不参与命中，多一列只是为了让人看懂"这一组吃了多少内存"。
+    """
+    row = {name: "" for name in RECORD_COLUMNS}
+    if not isinstance(source, Mapping):
+        return row
+    for name in KEY_FIELDS:
+        row[name] = _canonical(name, source.get(name))
+    row["kernel"] = _text(source.get("kernel"))
+    for name in OPTIMIZE_FIELDS:
+        row[name] = _normalize_optimize(source.get(name))
+    row["wall_ms"] = _number(source.get("wall_ms"))
+    row[RECORD_MEMORY_FIELD] = _text(source.get(RECORD_MEMORY_FIELD))
+    for name in EQUIVALENCE_FIELDS:
+        value = source.get(name)
+        if name in PERMUTATION_FIELDS:
+            row[name] = _payload_cell(value) if value is not None else ""
+        else:
+            row[name] = _text(value)
+    row["note"] = _clip("note", _text(source.get("note")))
+    row["host"] = _text(source.get("host")) or _host_name()
+    row["updated_at"] = _text(source.get("updated_at")) or _now()
+    row["pyqcd_version"] = _text(source.get("pyqcd_version")) or _version()
+    row["schema_version"] = str(RECORD_SCHEMA_VERSION)
     return row
 
 
@@ -781,11 +1006,13 @@ def _table_locked(path: str) -> list[dict[str, str]]:
     return rows
 
 
-def _parse_rows(raw: bytes, path: str = "") -> list[dict[str, str]]:
+def _parse_rows(raw: bytes, path: str = "",
+                columns: Sequence[str] = PROFILE_COLUMNS) -> list[dict[str, str]]:
     """整份字节 → 行列表（表头按**名字**取值；列数不对的行跳过）。
 
-    每一行都补齐 :data:`PROFILE_COLUMNS` 的全部列（**缺列老文件按空读**，``shape`` /
-    ``equation`` 按同一口径归一），并做两件与 schema 有关的事：
+    ``columns`` 是要补齐的列集合（配置表用 :data:`PROFILE_COLUMNS`，记录表用
+    :data:`RECORD_COLUMNS`；两者共用这一份解析口径）。每一行都补齐全部列（**缺列老文件
+    按空读**，``shape`` / ``equation`` 按同一口径归一），并做两件与 schema 有关的事：
 
     * ``schema_version`` 为空 → :data:`LEGACY_SCHEMA_VERSION`（老行照样可用）；
     * ``optimize`` 两列归一成 7 叶子或空（:func:`_normalize_optimize`）。出现非法值
@@ -794,21 +1021,22 @@ def _parse_rows(raw: bytes, path: str = "") -> list[dict[str, str]]:
     """
     if not raw.strip():
         return []
+    names = [str(name) for name in columns]
     text = raw.decode("utf-8", "replace")
     reader = csv.reader(io.StringIO(text))
     try:
         header = next(reader)
     except StopIteration:                            # pragma: no cover - 空文件已提前返回
         return []
-    columns = [_text(name) for name in header]
+    header_names = [_text(name) for name in header]
     rows: list[dict[str, str]] = []
     for fields in reader:
         if not any(field.strip() for field in fields):
             continue                                 # 空行
-        if len(fields) != len(columns):
+        if len(fields) != len(header_names):
             continue                                 # 列数不对：这一行坏了，只丢它
-        mapped = dict(zip(columns, fields))
-        row = {name: _text(mapped.get(name)) for name in PROFILE_COLUMNS}
+        mapped = dict(zip(header_names, fields))
+        row = {name: _text(mapped.get(name)) for name in names}
         row["shape"] = format_shape(row["shape"])
         row["equation"] = "".join(row["equation"].split())
         row["schema_version"] = (row["schema_version"]
@@ -825,11 +1053,15 @@ def _store_locked(token: tuple[str, ...], row: dict[str, str]) -> None:
 
     只有 tune 能走到这里：先读回整表（别把别的键的行冲掉），把同键行全部剔除，再追加
     新行。读不出旧表就**不写**（宁可这次 tune 的结论丢掉，也不能把别人的记录清空）。
+
+    底稿的来源与读路径同源（:func:`_source_rows_locked`）：家目录里还没有表、而旧位置
+    有表时，旧表就是底稿——**只读**它，然后把整表写到 :func:`profile_path`（家目录）。
+    旧文件原样留着：搬/删用户的文件得先问过用户。
     """
     global _TABLE
     path = profile_path()
     try:
-        rows = _table_locked(path)
+        rows = _source_rows_locked(path)
     except FileNotFoundError:
         rows = []
     except (OSError, csv.Error) as exc:
@@ -843,16 +1075,23 @@ def _store_locked(token: tuple[str, ...], row: dict[str, str]) -> None:
     _TABLE = None                                    # 下一次读重新解析
 
 
-def _write_rows(path: str, rows: Sequence[Mapping[str, Any]]) -> None:
-    """整表重写：先写临时文件再原子替换（中途失败不会留下半张表）。"""
+def _write_rows(path: str, rows: Sequence[Mapping[str, Any]], *,
+                columns: Sequence[str] = PROFILE_COLUMNS) -> None:
+    """整表重写：先写临时文件再原子替换（中途失败不会留下半张表）。
+
+    ``columns`` 是这张表的表头（默认 :data:`PROFILE_COLUMNS`；记录表传
+    :data:`RECORD_COLUMNS`）——写盘口径（临时文件 + ``os.replace``、``extrasaction``、
+    换行）只有这一份，两张表共用。
+    """
+    names = [str(name) for name in columns]
     temp = f"{path}.tmp{os.getpid()}.{threading.get_ident()}"
     try:
         with open(temp, "w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(PROFILE_COLUMNS),
+            writer = csv.DictWriter(handle, fieldnames=names,
                                     extrasaction="ignore", lineterminator="\n")
             writer.writeheader()
             for row in rows:
-                writer.writerow({name: row.get(name, "") for name in PROFILE_COLUMNS})
+                writer.writerow({name: row.get(name, "") for name in names})
         os.replace(temp, path)
     except BaseException:
         try:
@@ -880,9 +1119,10 @@ def _resolve_dir_text(directory: Any = None) -> str:
     空白与 ``None`` 都算"未给"——``""`` 不会挤掉环境变量、空环境变量不会挤掉默认值，
     这样 CLI 传空串与不传的行为一致。只算字符串，不建目录。
 
-    ``~`` / ``~user`` 先展开再取绝对路径：``os.path.abspath`` 会把 ``~`` 当字面量，
-    ``--profile-dir ~/.cache`` 于是解析成 ``<cwd>/~/.cache``，与 ``_api`` 侧
-    （``DIR_ENV`` / ``./.cache``）不是同一张表，CLI 的目录参数**静默失效**。
+    缺省那档就是 :data:`DEFAULT_DIR` 本身（**导入时已解析好的绝对路径**：家目录缓存，
+    与当前工作目录无关）。显式路径仍先 ``expanduser`` 再取绝对路径：``os.path.abspath``
+    会把 ``~`` 当字面量，``--profile-dir ~/.cache`` 于是解析成 ``<cwd>/~/.cache``，与
+    ``_api`` 侧（``DIR_ENV`` / 家目录缺省）不是同一张表，CLI 的目录参数**静默失效**。
     """
     for candidate in (directory, os.environ.get(DIR_ENV)):
         text = _text(candidate)
@@ -894,6 +1134,71 @@ def _resolve_dir_text(directory: Any = None) -> str:
 def _dir_text() -> str:
     """当前生效目录的绝对路径（:func:`configure` 钉过就用它，否则现算；不建目录）。"""
     return _CONFIGURED_DIR or _resolve_dir_text(None)
+
+
+def _is_default_dir() -> bool:
+    """生效目录是否就是缺省（家目录）那一档——只有它才走旧位置的只读回退。"""
+    try:
+        return os.path.normpath(_dir_text()) == os.path.normpath(DEFAULT_DIR)
+    except (TypeError, ValueError):                   # pragma: no cover - 路径千奇百怪
+        return False
+
+
+def _legacy_path() -> str | None:
+    """旧位置配置表的绝对路径；不适用（生效目录不是缺省）时返回 ``None``。
+
+    旧位置 = **当前工作目录**下的 ``.cache/pyqcd.einsum.profile.csv``（本版之前的缺省
+    目录，相对 CWD）。只在"生效目录是缺省目录"时才有意义：显式 ``--profile-dir`` 或
+    ``PYQCD_EINSUM_PROFILE_DIR`` 的调用不该被别的目录的表影响。
+    """
+    if not _is_default_dir():
+        return None
+    legacy = os.path.abspath(os.path.join(LEGACY_DIR_NAME, PROFILE_FILENAME))
+    if os.path.normpath(legacy) == os.path.normpath(profile_path()):
+        return None                                   # 两者重合：没有第二个来源
+    return legacy
+
+
+def _note_source_locked(path: str) -> None:
+    """登记"本次读的是旧位置的表"（持锁）：写 :func:`source_note`，并排一条警告。"""
+    global _SOURCE_NOTE, _SOURCE_PATH
+    note = (f"本次读的是旧位置的配置表 {path}（本版缺省目录已改到 {DEFAULT_DIR}）；"
+            "只读复用，没有复制、没有移动——要用新位置请重新 tune，或自己把文件搬过去。")
+    _SOURCE_NOTE = note
+    _SOURCE_PATH = path
+    _queue_warning(
+        (path, "source", "legacy"),
+        f"einsum 配置表：{note}")
+
+
+def _source_rows_locked(path: str) -> list[dict[str, str]]:
+    """读整张表：生效目录优先，缺文件时**只读**回退旧位置（持锁）。
+
+    回退只发生在"生效目录是缺省（家目录）、且那里还没有表"的时候（见
+    :func:`_legacy_path`）。两边都没有就抛 ``FileNotFoundError``——调用方据此报
+    :class:`ProfileMissing` 或按 0 行计数。旧表**原样读**：不复制、不移动、不写。
+    """
+    global _SOURCE_NOTE, _SOURCE_PATH
+    _SOURCE_NOTE = None
+    _SOURCE_PATH = None
+    try:
+        rows = _table_locked(path)
+    except FileNotFoundError:
+        legacy = _legacy_path()
+        if legacy is None:
+            raise
+        try:
+            rows = _table_locked(legacy)
+        except FileNotFoundError:
+            raise FileNotFoundError(path) from None
+        _note_source_locked(legacy)
+        return rows
+    return rows
+
+
+def _source_path_locked() -> str:
+    """本次读到的表的**真实**路径（旧位置回退时是旧位置的路径）；持锁读。"""
+    return _SOURCE_PATH or profile_path()
 
 
 def _error_locked(exc: BaseException) -> None:
@@ -1199,10 +1504,12 @@ def _reset_after_fork() -> None:
     tune 窗口里），解析缓存同理——首次使用时按文件重建。待发警告与"已警告过"的集合
     也一起清空：子进程的输出是独立的，父进程发过的警告不该在这里被吞掉。
     """
-    global _LOCK, _TABLE, _TUNING
+    global _LOCK, _TABLE, _TUNING, _SOURCE_NOTE, _SOURCE_PATH
     _LOCK = threading.Lock()
     _TABLE = None
     _TUNING = 0
+    _SOURCE_NOTE = None
+    _SOURCE_PATH = None
     _PENDING_WARNINGS.clear()
     _WARNED_CELLS.clear()
 

@@ -2,18 +2,28 @@
 
 这个入口是"日后默认的测试规范端"（见 ``pyqcd/einsum/AGENTS.md`` §9.0 与
 ``skills/pyqcd-einsum/SKILL.md``），所以它的**契约本身**也要有测试，否则某次改动
-把 ``--atol`` 改成绝对容差、或允许 ``--warmup 0``，所有引用它的结论都会悄悄失真。
+把 ``--atol`` 改成绝对容差、或在**不报告实际值**的情况下改 warmup/rounds 缺省，
+所有引用它的结论都会悄悄失真（缺省 ``--warmup 0`` / ``--rounds 1`` 是用户裁定，
+报告里的 ``warmup_effective`` / ``wall_ms`` 必须如实反映它们）。
 
 只测纯 Python 可判定的部分（不依赖原生库、不需要 GPU），因此任何机器都能跑。
 """
 from __future__ import annotations
 
+import os
 import re
 import unittest
 
 import numpy as np
 
 from pyqcd.einsum import test as cli
+
+# 本模块验证的是 CLI 的**纯 Python 口径**（形状解析、参数校验、容差、报告字段）。
+# 配置表与自动 tune 都会让 `cli.run` 走"实测过的最快路线"，于是本模块的断言会随
+# **用户家目录里那张真实表**变化（实测出现过命中的提示与 ProfileConflict）。
+# 因此在模块导入时显式关掉两者；`conftest.main()` 对整套测试做同一件事。
+os.environ.setdefault("PYQCD_EINSUM_PROFILE", "0")
+os.environ.setdefault("PYQCD_EINSUM_AUTOTUNE", "0")
 
 
 def test_shape_spec_round_trip():
@@ -96,15 +106,27 @@ def test_equation_requires_explicit_output():
     raise AssertionError("无 '->' 本应报错")
 
 
-def test_warmup_zero_is_refused():
-    """``--warmup 0`` 必须被拒绝：首调开销会完全支配测量。"""
+def test_warmup_zero_is_allowed_but_negative_is_refused():
+    """``--warmup 0`` 合法（2026-11-20 用户裁定：缺省就是 0），负数才是用法错误。
+
+    缺省取 0 的理由：遍历的目的是把整张网格量完，首调冷启动是**明确的取舍**；
+    要稳态数字就显式给值（加速设备上要了预热会被抬到 ``ACCELERATED_MIN_WARMUP``）。
+    断言 ``warmup=0`` 真的能跑通，是为了防止有人"顺手"把校验改回 ``< 1``
+    而让缺省值变成一个跑不起来的配置。
+    """
+    report = cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)], out_shape=(4, 4),
+                     warmup=0, rounds=1, compare="none")
+    assert report["ok"], report
+    assert report["warmup"] == 0, report["warmup"]
+    assert report["warmup_effective"] == 0, report["warmup_effective"]
+
     try:
         cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)], out_shape=(4, 4),
-                warmup=0, compare="none")
+                warmup=-1, compare="none")
     except SystemExit as exc:
         assert "warmup" in str(exc), exc
         return
-    raise AssertionError("warmup=0 本应被拒绝")
+    raise AssertionError("warmup=-1 本应被拒绝")
 
 
 def test_atol_is_relative_not_elementwise():
@@ -142,8 +164,10 @@ def test_defaults_are_documented_values():
     # 它原来的等价写法是 ``--backend numpy --compare backend``。
     assert cli.DEFAULT_COMPARE == "none"
     assert cli.DEFAULT_ATOL == 1e-12
-    assert cli.DEFAULT_ROUNDS == 5
-    assert cli.DEFAULT_WARMUP == 1
+    # 2026-11-20 用户裁定：**重复 1 轮、预热 0 轮**（此前是 3 / 1）。
+    # 一次实测就是"这一格现在的耗时"；要中位抹平抖动就显式给更大的值。
+    assert cli.DEFAULT_ROUNDS == 1, cli.DEFAULT_ROUNDS
+    assert cli.DEFAULT_WARMUP == 0, cli.DEFAULT_WARMUP
     assert cli.DEFAULT_VERBOSE is False
     assert set(cli.DTYPES) == {"complex128", "complex64", "float64", "float32"}
     assert set(cli.COMPARE_MODES) == {"opt_einsum", "backend", "none"}
@@ -161,7 +185,7 @@ def test_exit_codes_distinguish_usage_from_numeric_failure():
         lambda: cli._validate_against_equation("i,i->i", [(4,), (5,)]),
         lambda: cli._validate_against_equation("ij,jk", [(2, 2), (2, 2)]),
         lambda: cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)],
-                        out_shape=(4, 4), warmup=0, compare="none"),
+                        out_shape=(4, 4), warmup=-1, compare="none"),
         lambda: cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)],
                         out_shape=(4, 4), dtype="int8", compare="none"),
         lambda: cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)],
@@ -198,18 +222,45 @@ def test_memory_snapshot_is_outside_the_timed_region():
     assert delta["rss_mib"] == 3.5, delta
     assert delta["rss_mib_after"] == 13.5, delta
 
-    runs = [cli.run(equation="ij,jk->ik", shapes=[(256, 256), (256, 256)],
-                    out_shape=(256, 256), compare="opt_einsum", rounds=3, warmup=1)
-            for _ in range(2)]
-    for item in runs:
-        assert item["ok"], item
-        peak = item["memory"]["peak"]
-        # 增量可能为 0（小张量不让 VmRSS 上涨），但绝对值必须被记录。
-        assert peak.get("rss_mib") is not None, item["memory"]
-        assert peak["rss_mib_after"] > 0, item["memory"]
-    first, second = runs[0]["seconds"], runs[1]["seconds"]
-    # 宽松界：只防"采样插进计时循环"这类结构性错误，不做精确性能断言。
-    assert max(first, second) / min(first, second) < 2.0, (first, second)
+    # **结构性**判据，不用"两次耗时比值"：256² 的收缩只有几毫秒，比值在负载下
+    # 天然抖动（实测 8.2 ms vs 28.0 ms，比值 3.4），那条断言与"采样是否插进计时
+    # 循环"毫无关系，只会变成偶发红。这里直接在 `_timed` 打开期间盯着采样器：
+    # 任何一次 `_memory_snapshot` 落在计时区内就立即失败。
+    real_timed = cli._timed
+    real_snapshot = cli._memory_snapshot
+    inside = {"active": False, "violations": 0, "snapshots": 0}
+
+    def guarded_timed(call, warmup, rounds, sync=None):
+        inside["active"] = True
+        try:
+            return real_timed(call, warmup, rounds, sync)
+        finally:
+            inside["active"] = False
+
+    def guarded_snapshot(xp):
+        inside["snapshots"] += 1
+        if inside["active"]:
+            inside["violations"] += 1
+        return real_snapshot(xp)
+
+    cli._timed = guarded_timed
+    cli._memory_snapshot = guarded_snapshot
+    try:
+        item = cli.run(equation="ij,jk->ik", shapes=[(256, 256), (256, 256)],
+                       out_shape=(256, 256), compare="opt_einsum",
+                       rounds=3, warmup=1)
+    finally:
+        cli._timed = real_timed
+        cli._memory_snapshot = real_snapshot
+    assert item["ok"], item
+    peak = item["memory"]["peak"]
+    # 增量可能为 0（小张量不让 VmRSS 上涨），但绝对值必须被记录。
+    assert peak.get("rss_mib") is not None, item["memory"]
+    assert peak["rss_mib_after"] > 0, item["memory"]
+    assert inside["snapshots"] >= 2, (
+        "采样点必须真的被调用（构造前 / 构造后 / 收尾）", inside)
+    assert inside["violations"] == 0, (
+        "内存采样不许落在 _timed 的计时区内", inside)
 
 
 def test_reference_seconds_are_reported():
@@ -1549,7 +1600,7 @@ TESTS = (
     test_equation_shape_count_mismatch_is_rejected,
     test_equation_label_extent_mismatch_is_rejected,
     test_equation_requires_explicit_output,
-    test_warmup_zero_is_refused,
+    test_warmup_zero_is_allowed_but_negative_is_refused,
     test_atol_is_relative_not_elementwise,
     test_defaults_are_documented_values,
     test_exit_codes_distinguish_usage_from_numeric_failure,

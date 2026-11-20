@@ -372,7 +372,7 @@ kernel : requested=<generic|label,...>  ran=<label|none>  attempted=<label,...>
 | `kernel disabled (PYQCD_EINSUM_KERNEL_* = 0, or library missing)` | 后端被环境变量关了，或原生库没构建 |
 | `real dtype topology is declined by policy` | float64/float32 被 `_TOPOLOGY_DECLINED_DTYPES` 排除；`PYQCD_EINSUM_TOPOLOGY_REAL=1` 可做 A/B |
 | `... plan is pack-bound on CPU (...)` | 计划被 pack/flops 判据拒；这是如实拒绝，不是 bug |
-| `dtype ... native probe failed (2x2 matmul disagreed with numpy)` | 该 dtype 的 2×2 自检没过，需重建原生库 |
+| `dtype ... native probe failed at stage=<阶段>: <真实异常>` | 该 dtype 的原生自检没过；按 `stage` 查（`native` = 归档缺入口 → 重建；`tolerance` = 真算错；`dtype/shape` = 结构不符） |
 | `negative-cache hit: ...` | 上一次的拒绝被记住了。强制路径不该出现；自动模式下属正常 |
 
 ### 用户实报的那个 case
@@ -1918,3 +1918,62 @@ applyInitQcd/applyEndQcd` + `qcd_kupl_{topology,dedicated,family}_apply`）；
 6. **验收只用三条**：`python -B -m pyqcd.testing._einsum_tune_timeout_doc_contract`（4 项）、
    `--tune` / `--tune pass` / 不给 三种形态各跑一次小方程（`--profile false`）、
    小形状与大形状各验一次 `rel`（只验小形状会把"参照为 None ⇒ mismatch 恒假"放回去）。
+
+## 2026-11-20 增补：original 内核 / 峰值内存 / 记录表 / 自动 tune
+
+以下四条是同一批落地的事实，**细节证据**见 `logs/einsum-tune-20261119-facts.md`，
+使用者视角见 `docs/einsum_tune_diagnostics_20261119.md`。
+
+### `kernel_force="original"`
+
+`_kernel_force.ALLOWED_LABELS` 现在是五个（`generic` / `dedicated` / `topology` /
+`original` / `backend`）。`original` 把收缩交给 `opt_einsum.contract`，与 `backend`
+同地位（都不进专用分派），tune 里排在 `backend` **之前**。
+
+**名字必须转型**（实测结论，别凭记忆写）：
+
+| 本库叶子 | opt_einsum 实参 |
+|---|---|
+| `greedy` / `optimal` / `dp` | 同名 |
+| `branch_1` / `branch_2` | `branch-1` / `branch-2` |
+| `branch_all` | `branch-all` |
+| `none` | `False` |
+
+转型单点是 `_kernel_force.opt_einsum_path_name()`；`_api._original_einsum()` 只调它，
+不写第二份映射。`backend=` 由操作数类型推断（`_api._opt_einsum_backend_name`），
+**不读命令行**——`oe.contract` 的 backend 缺省 `'auto'` 按数组类型选，只传 numpy
+副本等于在另一台机器上做参照。
+
+### 峰值内存逐组测量
+
+`pyqcd/einsum/_memory.py` 提供 `reset_peak_memory()` / `peak_memory_mb()` /
+`release_memory()` / `memory_probe_available()` / `format_peak_mb()`，四个都**绝不抛
+异常**（失败进 `LAST_ERROR`）。约定：
+
+* 进一组前 `reset_peak_memory()`，组末 `peak_memory_mb()`，然后 `release_memory()`；
+* 子进程路线由 worker 做（显存属于那个进程），父进程只搬运 `peak_memory_mb`；
+* 单位是 **MiB**（1024² 字节），`format_peak_mb()` 输出 `1234MB` / `-`；
+* CPU 侧 `ru_maxrss`/`VmHWM` 是生命周期峰值、清不零，所以那个值是**下界**——docstring
+  里如实写着，别把它当精确组内峰值。
+
+### 记录表 `pyqcd.einsum.record.csv`
+
+与 `profile.csv` 同目录、同列 + 一列 `peak_memory_mb`，**整表重写**（每次 tune 一份
+快照）、**从不参与命中**（`_api` / 选路 / `read_winner` 都不读它）。
+命中配置表时 `_api._cheaper_memory_hint()` 会读它给一行"存在更省内存的配置"，判据：
+同键、峰值 < 当前一半、耗时 ≤ 当前 1.2 倍。
+
+### 首次调用自动 tune
+
+`pyqcd/einsum/_autotune.py`：配置表缺行时跑一整轮 tune 再重读表。三道边界——开关
+`PYQCD_EINSUM_AUTOTUNE`（缺省开）、同键每进程只试一次、`_RUNNING` 互斥（防 tune
+自己在内部调用回来）。**测试套件里必须关掉它**（`conftest.main()` 已设
+`PYQCD_EINSUM_AUTOTUNE=0`），否则一次回归会被拖成几十分钟。
+
+### 组数与剪枝口径（改了就要同步三处）
+
+B1/B2 = **29** 组、B3 = **28** 组（`original` 各占 7 组）；`TUNE_MAX_COMBOS = 32`；
+剪枝截止 = `2 × min_wall_ms`（`_tune_axes.MIN_WALL_FACTOR`），`原因=` 里同时给
+`min_wall_ms` 与 `cutoff_ms`。同步点：`pyqcd/einsum/test.py` 的模块 docstring 与
+`--help` 文案、`docs/{en,zh}/performance.md`、`pyqcd/testing/_einsum_tune_plan_contract.py`
+的 `SPEC_SIZES`。改一处漏一处会让契约红在"文案过期"而不是真的行为变了。

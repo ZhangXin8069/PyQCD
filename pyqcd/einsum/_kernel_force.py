@@ -13,14 +13,15 @@
 
 取值
 ----
-=================  ==========================================================
+===============  ==========================================================
 取值               含义（全部是**强制**值，没有"不强制"档）
-=================  ==========================================================
+===============  ==========================================================
 ``generic``（缺省） 强制通用路径：完全跳过专用 kernel（等价 ``specialize=False``）
 ``dedicated``      只允许**当前后端的** dedicated（numpy → kupl，cupy → cuda）
 ``topology``       只允许**当前后端的** topology
 ``backend``        直接调用 ``backend.einsum``，不进专用内核分派
-=================  ==========================================================
+``original``       交给 ``opt_einsum.contract``，后端由操作数推断
+===============  ==========================================================
 
 **为什么不提供 ``auto``**：自动选路交给 ``--tune`` 的实测结论。tune 在同一形状/dtype/
 设备上遍历 ``kernel_force × as_equivalence × optimize``，把**胜出那一组**写进配置表
@@ -45,6 +46,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 __all__ = [
     "ALLOWED_LABELS",
@@ -54,8 +56,11 @@ __all__ = [
     "KERNEL_FORCE_ENV",
     "KERNEL_LABELS",
     "KernelUnavailableError",
+    "ORIGINAL_LABEL",
+    "OPT_EINSUM_PATHS",
     "forced_labels",
     "generic_only",
+    "opt_einsum_path_name",
     "parse",
     "resolve",
 ]
@@ -69,6 +74,10 @@ GENERIC_LABEL = "generic"
 DEFAULT_LABEL = GENERIC_LABEL
 #: 直接调用 ``backend.einsum``，不进专用内核分派；与其它标签互斥。
 BACKEND_LABEL = "backend"
+#: 交给 ``opt_einsum.contract``：以 ``[shape,dtype,device,equation,backend]`` 为键
+#: 调外部实现的 einsum，收缩序同样由 ``optimize`` 决定。与 ``backend`` 同一地位
+#: （都不进专用内核分派），tune 里排在 ``backend`` **之前**。
+ORIGINAL_LABEL = "original"
 
 #: 可强制的**逻辑**标签：运行时按操作数后端解析成 ``*_dedicated`` / ``*_topology``。
 KERNEL_LABELS = frozenset({
@@ -76,8 +85,47 @@ KERNEL_LABELS = frozenset({
     "topology",
 })
 
-#: 全部合法取值（四个**具体**标签，没有 auto）：报错时按此集合列出。
-ALLOWED_LABELS = frozenset(KERNEL_LABELS | {GENERIC_LABEL, BACKEND_LABEL})
+#: 全部合法取值（五个**具体**标签，没有 auto）：报错时按此集合列出。
+ALLOWED_LABELS = frozenset(
+    KERNEL_LABELS | {GENERIC_LABEL, BACKEND_LABEL, ORIGINAL_LABEL})
+
+#: tune 的 ``optimize`` 叶子 → ``opt_einsum.contract_path(optimize=...)`` 的实参。
+#:
+#: **两侧拼写不同，实测得出**（``opt_einsum.paths._PATH_OPTIONS`` 里只有连字符）：
+#: ``branch_1``/``branch_2``/``branch_all`` 必须传 ``branch-1``/``branch-2``/
+#: ``branch-all``（传下划线是 ``KeyError: Path optimizer 'branch_1' not found``）；
+#: ``none`` 必须传 ``False``（传字符串 ``'none'`` / ``'false'`` 同样 KeyError，
+#: 只有 ``False`` 表示"不规划"，实测路径 ``[(0,1,2,3)]`` 与不优化一致）。
+#: 这张表是**单向**的：本库对外一律用下划线叶子，转型只发生在下发给 opt_einsum 处。
+OPT_EINSUM_PATHS: dict[str, Any] = {
+    "greedy": "greedy",
+    "branch_1": "branch-1",
+    "branch_2": "branch-2",
+    "dp": "dp",
+    "branch_all": "branch-all",
+    "optimal": "optimal",
+    "none": False,
+}
+
+
+def opt_einsum_path_name(optimize: Any) -> Any:
+    """本库的 ``optimize`` 叶子 → ``opt_einsum`` 的实参（``None`` = 不认识）。
+
+    ``None``（未给）与 ``"auto"`` 都回到 ``"greedy"``：``original`` 是"交给 opt_einsum"，
+    它没有"自动"这一档，缺省找一条确定的最短路即可——与主路径的 ``auto`` 语义不同，
+    这里不假装两者同义。``False``/``True`` 按主路径的布尔口径归一后再查表。
+    """
+    if optimize is None or optimize is True:
+        return "greedy"
+    if optimize is False:
+        return False
+    text = str(optimize).strip().lower().replace("-", "_")
+    if text in ("", "auto", "true"):
+        return "greedy"
+    if text in ("false", "off", "no", "0"):
+        return False
+    return OPT_EINSUM_PATHS.get(text)
+
 
 #: "不要专用内核"的既有拼写：它们**不是** auto 的替身，只映射到 ``generic``。
 #: 生态里 ``0/false/off/no`` 一向表示"关掉这个功能"，关掉专用内核就是走通用路径。

@@ -28,10 +28,13 @@ python -m pyqcd.einsum.test --equation "ab,bc,cd->ad" \
 | omitting `--tune` | no sweep; use the profile table or the built-in default |
 
 The sweep is **not** a Cartesian product: it walks a branch-dependent **ordered** list
-(22 groups for each specialisable branch, 21 for the plain branch), and a group is cut
-short as soon as it exceeds the current best time. The reported `wall_ms` is the wall
-clock of the **whole** `contract()` call, so the number you read is the number your
-program pays.
+(29 groups for each specialisable branch, 28 for the plain branch), and a group is cut
+short as soon as it exceeds **twice** the current best time (the reported `cutoff_ms` in
+the `pruned` reason is that bound; `min_wall_ms` is the best-time itself). The reported
+`wall_ms` is the wall clock of the **whole** `contract()` call, so the number you read is
+the number your program pays. Each group also reports its **peak memory / VRAM** in MB,
+measured per group and reset before the next one so a group never inherits its
+predecessor's footprint.
 
 ### The options that decide what is measured
 
@@ -40,7 +43,9 @@ program pays.
 | `--backend` | `auto` / `numpy` / `cupy` / `torch` | array library only; forcing a native kernel is `--kernel-force`, not a backend |
 | `--compare` | `opt_einsum` / `backend` / `none` | default **`none`**; the "numpy reference" is spelled `--backend numpy --compare backend` |
 | `--optimize` | `greedy` / `optimal` / `dp` / `branch_1` / `branch_2` / `branch_all` / `none` | `auto` is the built-in default selector, **not** a writable value |
-| `--kernel-force` | `generic` / `dedicated` / `topology` / `backend` | a single value, default `generic`; comma lists and `auto` are rejected |
+| `--warmup` | integer | default **0** (allowed and default since 2026-11-20: a sweep covers the grid, it does not chase sub-millisecond accuracy on every cell); a positive value on an accelerated device is raised to 2 |
+| `--rounds` | integer | default **1**, i.e. one measurement per cell; give a larger value to smooth out scheduler jitter |
+| `--kernel-force` | `generic` / `dedicated` / `topology` / `original` / `backend` | a single value, default `generic`; `original` hands the contraction to `opt_einsum.contract` (it honours `--optimize`, translating `branch_1`/`branch_2`/`branch_all`/`none` to `branch-1`/`branch-2`/`branch-all`/`False`); comma lists and `auto` are rejected |
 | `--shape` | `[..],[..]->[..]` | omitted: sizes are inferred from the corpus roles of the equation |
 | `--explain` | `auto` / `true` / `false` | with `--shape` omitted, a hit reached through an equivalent spelling prints `shape source: corpus(equivalence) via <equation>` |
 

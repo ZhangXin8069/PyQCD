@@ -163,6 +163,10 @@ def _prepare_contract_environment() -> None:
     os.environ[_equivalence.EQUIVALENCE_ENV] = "1"
     os.environ[_specialize.DISABLE_ENV] = "1"
     os.environ[_specialize.NOTICE_ENV] = "0"
+    # 自动 tune 会在"缺行"时写表，而本契约里有几条用例正是拿"表里已有 generic 行
+    # + 显式 kernel_force generic"来验组合语义（自动 tune 会覆盖那张临时表，
+    # 实测表现为 ProfileConflict）。本契约验的是选路与缓存，不是自动 tune。
+    os.environ["PYQCD_EINSUM_AUTOTUNE"] = "0"
     os.environ.pop(_kernel_force.KERNEL_FORCE_ENV, None)
 
 

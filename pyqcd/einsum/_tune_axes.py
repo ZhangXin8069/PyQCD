@@ -27,8 +27,8 @@ __all__ = [
     "TUNE_BRANCH_NONE", "TUNE_BRANCH_LABELS", "TUNE_KERNEL_FORCE",
     "TUNE_AS_EQUIVALENCE", "TUNE_OPTIMIZERS", "TUNE_PREFIX", "TUNE_TAIL",
     "TUNE_BRANCH_EXTRA", "TUNE_PLAN_SIZES", "tune_plan", "tune_plan_size",
-    "plan_without", "trimmed_plan_size", "TERMINATION_MESSAGE", "prune_reason",
-    "MinWall",
+    "plan_without", "trimmed_plan_size", "TERMINATION_MESSAGE", "MIN_WALL_FACTOR",
+    "prune_reason", "MinWall",
 ]
 
 #: 三个分支的稳定名（**机器可读**，不翻译）：原方程能特化 / 只有等价写法能特化 /
@@ -46,7 +46,12 @@ TUNE_BRANCH_LABELS = {
 
 #: 三个轴各自出现过的取值；``kernel_force`` 的顺序**就是**清单顺序，``optimize`` 的
 #: 顺序是「先跑最可能命中的、``none`` 放最后」的冻结次序。
-TUNE_KERNEL_FORCE = ("dedicated", "generic", "topology", "backend")
+#:
+#: ``original`` 与 ``backend`` 同一地位（都不进专用内核分派），按用户裁定排在
+#: ``backend`` **之前**：``opt_einsum`` 通常比后端朴素 ``einsum`` 快，先测它能让
+#: ``min_wall_ms`` 更早被压低，后面的格子一超界就终止。
+TUNE_KERNEL_FORCE = ("dedicated", "generic", "topology", "original", "backend")
+
 TUNE_AS_EQUIVALENCE = ("false", "true")
 TUNE_OPTIMIZERS = ("greedy", "branch_1", "branch_2", "dp", "branch_all",
                    "optimal", "none")
@@ -68,9 +73,11 @@ TUNE_BRANCH_EXTRA: dict[str, tuple[tuple[str, str, str], ...]] = {
 }
 
 TUNE_TAIL: tuple[tuple[str, str, str], ...] = tuple(
+    ("original", "false", optimize) for optimize in TUNE_OPTIMIZERS
+) + tuple(
     ("backend", "false", optimize) for optimize in TUNE_OPTIMIZERS)
 
-#: 每个分支的组数（冻结口径：B1/B2 = 22，B3 = 21）。
+#: 每个分支的组数（冻结口径：B1/B2 = 29，B3 = 28）。
 TUNE_PLAN_SIZES = {
     branch: len(TUNE_PREFIX) + len(TUNE_BRANCH_EXTRA[branch]) + len(TUNE_TAIL)
     for branch in TUNE_BRANCHES}
@@ -132,12 +139,28 @@ def trimmed_plan_size(branch: str, unavailable: Iterable[str] | None = None) -> 
 #: 用户给的规则原文，报告里要能 grep 到同一串字）。
 TERMINATION_MESSAGE = "耗时大于min_wall_ms,此组被终止"
 
+#: 剪枝截止 = 这个倍数 × 当前 ``min_wall_ms``（用户规则 2026-11-19：**两倍**）。
+#:
+#: 为什么不是 1×：``min_wall_ms`` 是"当前最快那一组的中位"，把它直接当硬截止等于
+#: "比最快慢一点点就终止"。实测里同一配置连续两组的抖动就有 10–20%，1× 会把大量
+#: 本来只是略慢的组合误杀，而它们的实测数字恰恰是判断"这条路值不值得"的证据。
+#: 2× 仍然强力（比最快慢一倍就没有被选中的可能），但不再把噪声当结论。
+MIN_WALL_FACTOR = 2.0
 
-def prune_reason(wall_ms: float, min_wall_ms: float | None) -> str:
-    """被剪枝那一组的 ``原因=``：固定原文 + 两个数值（``wall_ms`` / ``min_wall_ms``）。"""
+
+def prune_reason(wall_ms: float, min_wall_ms: float | None,
+                 factor: float = MIN_WALL_FACTOR) -> str:
+    """被剪枝那一组的 ``原因=``：固定原文 + 三个数值（``wall_ms``/``min_wall_ms``/截止）。
+
+    ``cutoff_ms`` 是**真正**比较用的截止（``factor × min_wall_ms``）。不写它就等于让
+    读者拿 ``wall_ms > min_wall_ms`` 自己去对，而那条不等式在这里本来就是假的
+    （``wall_ms`` 只超过 1× 却没超过 2× 的组不会被终止）。
+    """
     bound = "-" if min_wall_ms is None else f"{float(min_wall_ms):.6f}"
+    cutoff = ("-" if min_wall_ms is None
+              else f"{float(min_wall_ms) * float(factor):.6f}")
     return (f"{TERMINATION_MESSAGE}  wall_ms={float(wall_ms):.6f}  "
-            f"min_wall_ms={bound}")
+            f"min_wall_ms={bound}  cutoff_ms={cutoff}")
 
 
 @dataclass
@@ -148,6 +171,10 @@ class MinWall:
     之后每测到更小的一次调用就立刻改成那个值（后续所有组都用新上界剪枝）。
     ``config`` 是压低它那一组的 ``(kernel_force, as_equivalence, optimize)``。
 
+    真正的**截止**是 :attr:`cutoff_ms` = ``factor × ms``（:data:`MIN_WALL_FACTOR`
+    = 2.0，用户规则）。``ms`` 本身仍是记录下来的实测中位，报告与配置表里的那个数
+    ——两件事必须分开，否则"最终 best 是 A、截止却按 B 算"。
+
     ``ms is None`` 有两个来源，语义相同——**不设上界、一组都不剪**：
     ``--tune-timeout 0`` 是用户明确关掉了上限。此时 :meth:`observe` 也不许把上界
     从 ``None`` 拉起来：那会把"不限"悄悄变成"按第一个实测值剪枝"。
@@ -156,10 +183,17 @@ class MinWall:
     ms: float | None
     config: tuple[str, str, str] | None = None
     source: str = "--tune-timeout"
+    factor: float = MIN_WALL_FACTOR
+
+    @property
+    def cutoff_ms(self) -> float | None:
+        """真正比较用的毫秒截止（``factor × ms``）；``ms is None`` 时是 ``None``。"""
+        return None if self.ms is None else float(self.ms) * float(self.factor)
 
     def exceeds(self, wall_ms: float) -> bool:
-        """这一次调用是否超过当前上界（``ms is None`` = 不设上界，永不超界）。"""
-        return self.ms is not None and float(wall_ms) > float(self.ms)
+        """这一次调用是否超过**截止**（``ms is None`` = 不设上界，永不超界）。"""
+        cutoff = self.cutoff_ms
+        return cutoff is not None and float(wall_ms) > cutoff
 
     def observe(self, wall_ms: float, config: Iterable[str]) -> bool:
         """记录一次实测：更小就立刻更新上界与对应配置，返回是否更新。
@@ -175,6 +209,7 @@ class MinWall:
         self.ms = value
         self.config = tuple(str(item) for item in config)       # type: ignore[assignment]
         return True
+
 
     def config_text(self) -> str:
         """对应配置的一行文本（报告/表尾用）；还没有任何实测时给 ``-``。"""

@@ -18,8 +18,8 @@ from typing import Any
 from . import paths
 from ._pathinfo import PathInfo
 from ._sharing import einsum_cache_wrap
-from . import (_cache, _equivalence, _kernel_force, _profile_cache, _shape_paths,
-               _specialize, _threads)
+from . import (_autotune, _cache, _equivalence, _kernel_force, _profile_cache,
+               _shape_paths, _specialize, _threads)
 from .backends import dispatch as backends
 from .backends.dispatch import get_func, parse_backend
 
@@ -173,39 +173,11 @@ def _resolve_optimize(optimize: Any, forced: tuple[str, ...]) -> Any:
     return _normalize_optimize(optimize)
 
 
-#: 拓扑内核在**生成计划**时用的收缩序。它不再是用户参数（``optimize_topology_v2``
-#: 已随 v2 通用执行器一并从公开签名删除）：v3 的收缩序固化在编译期步表
-#: ``topology_steps.h`` 里，这个值只影响 pack 流量建模按哪一份计划记账。
+#: 拓扑内核在**生成计划**时用的收缩序（内部常量，**不是**用户参数）。
+#: v3 的收缩序固化在编译期步表 ``topology_steps.h`` 里，这个值只影响 pack 流量建模
+#: 按哪一份计划记账。历史上它曾以 ``optimize_topology_v2`` 的名字对外暴露，那个参数
+#: 已在 0.5.9 随 v2 通用执行器删除、并于 0.5.12 把内部残留一并清掉。
 _TOPOLOGY_PLAN_ORDER = "greedy"
-
-
-def _normalize_optimize_topology_v2(value: Any) -> str:
-    """``optimize_topology_v2`` 的历史校验函数：**已不再对外暴露**。
-
-    0.5.9 起这个参数从 :func:`contract` 的签名里删除（它的唯一接收方——拓扑内核的
-    v2 通用执行器——在 0.5.4 就删了）。本函数只剩两个用途，都留在内部：
-
-    1. :data:`_TOPOLOGY_PLAN_ORDER` 的取值来源，``*_topology`` 入口的 ``optimize``
-       仍参与 pack 流量建模（不参与 v3 收缩序）；
-    2. 配置表 ``optimize_topology_v2`` 那一列的历史列仍按同一口径归一
-       （``_profile_cache._normalize_optimize`` 与之同源）。
-
-    它**不再接受用户输入**：外部传入走 :func:`contract` 入口的显式 ``TypeError``，
-    不会被这里悄悄归一。非法值语义同旧版（7 个叶子，别的一律报错）。
-    """
-    if not isinstance(value, str):
-        raise ValueError(
-            f"optimize_topology_v2={value!r} 必须是字符串（7 个叶子之一）："
-            f"{'/'.join(_profile_cache.OPTIMIZE_LEAVES)}；缺省由签名给出（greedy）。"
-            "它只决定 topology 回落到 v2 通用执行器时采用的收缩序，不影响 v3 "
-            "步表命中的调用。")
-    text = value.strip().lower().replace("-", "_")
-    if text not in _profile_cache.OPTIMIZE_LEAVES:
-        raise ValueError(
-            f"optimize_topology_v2={value!r} 不是合法取值：只能是 "
-            f"{'/'.join(_profile_cache.OPTIMIZE_LEAVES)} 之一。它只决定 topology "
-            f"回落到 v2 通用执行器时采用的收缩序，不影响 v3 步表命中的调用。")
-    return text
 
 
 def _normalize_as_equivalence(value: Any) -> bool | None:
@@ -754,8 +726,7 @@ def _resolve_forced_label(
 
 
 def _attempt_kernel(label: str, module: Any, attempt: Any, subscripts: Any,
-                    operands: Sequence[Any],
-                    optimize_topology_v2: str = "greedy") -> tuple[Any, str]:
+                    operands: Sequence[Any]) -> tuple[Any, str]:
     """旁路负缓存与预算门槛后**真试一次**；返回 ``(result or None, 失败原因)``。
 
     "强制即真试一次"：强制模式下不许被上一次的失败记录挡住，所以每个 attempt 前套上
@@ -769,7 +740,9 @@ def _attempt_kernel(label: str, module: Any, attempt: Any, subscripts: Any,
     ``pack/flops = 3.950 >= 1.0`` 直接判死，连一次下发都没有）。门槛仍会照算并写进
     ``LAST_INFO['budget_gate']``，所以"跑了但超预算"这条事实不会丢。
     """
-    extra = ({"optimize": optimize_topology_v2}
+    # ``*_topology`` 入口照旧收 ``optimize``（它只影响 pack 流量建模，不参与 v3 的
+    # 收缩序），值来自内部常量 ``_TOPOLOGY_PLAN_ORDER``——不再是透传参数。
+    extra = ({"optimize": _TOPOLOGY_PLAN_ORDER}
              if label.rpartition("_")[2] == "topology" else {})
     bypass = getattr(module, "bypass_negative_cache", None)
     gate = getattr(module, "bypass_plan_gate", None)
@@ -797,7 +770,6 @@ def _run_forced_kernel(
     operands: Sequence[Any],
     requested: str,
     record: dict[str, Any],
-    optimize_topology_v2: str = "greedy",
 ) -> Any:  # noqa: D401 - 见 docstring
     """强制内核的唯一执行点：真试一次，跑不成即抛。
 
@@ -808,15 +780,15 @@ def _run_forced_kernel(
     没有"依次尝试多个"的分支：逗号链式已取消（见 :mod:`._kernel_force`），一个调用
     只有一条被要求的路线，跑不成就是跑不成。
 
-    ``optimize_topology_v2`` 原样交给 :func:`_attempt_kernel`（只有 ``*_topology``
-    入口会收到它）：v3 命中时它被忽略，v2 回落时它决定计划次序。
+    拓扑内核的 ``optimize`` 取自内部常量 :data:`_TOPOLOGY_PLAN_ORDER`（见
+    :func:`_attempt_kernel`）——调用方不再有可传的"计划次序"参数。
     """
     concrete = _resolve_forced_label(requested, operands)
     if concrete is not None:
         by_label = {entry[0]: entry for entry in _specialized_kernel_attempts(operands)}
         _label, module, attempt = by_label[concrete]
         result, reason = _attempt_kernel(
-            concrete, module, attempt, subscripts, operands, optimize_topology_v2)
+            concrete, module, attempt, subscripts, operands)
         record["attempted"] = (concrete,)
         if result is not None:
             record["ran"] = concrete
@@ -901,6 +873,82 @@ def _warn_specialized_kernel_once(exc: BaseException) -> None:
         RuntimeWarning,
         stacklevel=3,
     )
+
+
+def _original_einsum(backend_name: str, subscripts: str, operands: Sequence[Any],
+                     out: Any = None, optimize: Any = None):
+    """交给 ``opt_einsum.contract``：外部实现的 einsum，收缩序由 ``optimize`` 决定。
+
+    这是 ``kernel_force="original"`` 的唯一执行点，与 :func:`_backend_einsum` 同层
+    ——两者都**不进**专用内核分派，区别只在"谁来规划与执行"：
+    ``backend`` 是后端自己的 ``einsum``，``original`` 是 ``opt_einsum``。
+
+    ``optimize`` 在本库是**下划线叶子**（``branch_1`` / ``branch_all`` / ``none``），
+    而 ``opt_einsum`` 只认连字符与 ``False``（实测 ``KeyError: Path optimizer
+    'branch_1' not found``；字符串 ``'none'`` / ``'false'`` 同样 KeyError，只有
+    ``False`` 表示"不规划"）。转型单点在
+    :func:`pyqcd.einsum._kernel_force.opt_einsum_path_name`，这里不再写第二份映射。
+
+    ``backend_name`` 由**操作数**推断（``_opt_einsum_backend_name``），不读命令行：
+    ``opt_einsum`` 的 ``backend`` 缺省 ``'auto'`` 按数组模块选，只传 numpy 副本
+    等于在另一台机器上做参照（2026-11-19 用户实测过这个坑）。
+
+    失败一律外抛：``original`` 是**强制**标签，跑不成就该报错，不静默回落。
+    """
+    import opt_einsum as oe
+
+    from ._kernel_force import opt_einsum_path_name
+
+    if backend_name is None:
+        raise ValueError(
+            "opt_einsum does not have a backend for these operands: "
+            f"{type(operands[0]).__module__ if operands else 'no operand'}")
+    path = opt_einsum_path_name(optimize)
+    kwargs: dict[str, Any] = {"optimize": path, "backend": backend_name}
+    if out is not None:
+        kwargs["out"] = out
+    try:
+        return oe.contract(subscripts, *operands, **kwargs)
+    except TypeError:
+        # ``out=`` 在某些后端（实测 torch）没有实现：去掉它再试一次，但**不吞掉**
+        # 第一次的真实原因——重试也失败时把两个异常都写进消息。
+        if "out" not in kwargs:
+            raise
+        kwargs.pop("out")
+        try:
+            return oe.contract(subscripts, *operands, **kwargs)
+        except Exception as exc:                # noqa: BLE001 - 供上层如实报告
+            raise RuntimeError(
+                f"opt_einsum.contract(out=...) is not supported by backend "
+                f"{backend_name!r}, and the retry without out= failed too: "
+                f"{type(exc).__name__}: {exc}") from exc
+
+
+def _opt_einsum_backend_name(operands: Sequence[Any]) -> str | None:
+    """``opt_einsum.contract(backend=...)`` 该填什么；它不支持该后端时给 ``None``。
+
+    判据用 ``oe.backends.has_backend``（公开接口），失败才看内部表——后者只是兜底，
+    不让"公开接口不存在"变成"这个后端不可用"。
+    """
+    name = "numpy"
+    for operand in operands:
+        module = type(operand).__module__.split(".", 1)[0]
+        if module:
+            name = module
+            break
+    if name == "numpy":
+        return "numpy"
+    try:
+        import opt_einsum as oe
+    except Exception:                            # noqa: BLE001 - 没装就说不支持
+        return None
+    probe = getattr(oe.backends, "has_backend", None)
+    if callable(probe):
+        try:
+            return name if probe(name) else None
+        except Exception:                        # noqa: BLE001 - 探测失败按不支持
+            return None
+    return name if name in getattr(oe.backends, "_FUNCS_BACKENDS", {}) else None
 
 
 def _backend_einsum(backend_name: str, subscripts: str, operands: Sequence[Any],
@@ -1053,7 +1101,6 @@ def _equivalence_payload(row: dict[str, Any] | None) -> Any | None:
 def _apply_equivalence(subscripts: str, operands: Sequence[Any], mapping: Any, *,
                        use_blas: bool, optimize: Any, memory_limit: Any,
                        backend: str, specialize: bool, kernel_force: str | None,
-                       optimize_topology_v2: str = "greedy",
                        profile: bool = False) -> Any | None:
     """把一条改写**照做**：重排 → 按需 transpose + 连续副本 → 递归 → 按需转回。
 
@@ -1178,7 +1225,6 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
                               use_blas: bool, optimize: Any, memory_limit: Any,
                               backend: str, specialize: bool,
                               kernel_force: str | None,
-                              optimize_topology_v2: str = "greedy",
                               cache: bool | None = None,
                               payload: Any = None) -> Any | None:
     """用等价写法跑一次并把结果转回原输出轴序；不适用时返回 ``None``。
@@ -1205,8 +1251,7 @@ def _contract_via_equivalence(subscripts: str, operands: Sequence[Any], *,
         return None          # 映射的目的是命中特化形态，关掉就没意义
 
     call = dict(use_blas=use_blas, optimize=optimize, memory_limit=memory_limit,
-                backend=backend, specialize=specialize, kernel_force=kernel_force,
-                optimize_topology_v2=optimize_topology_v2)
+                backend=backend, specialize=specialize, kernel_force=kernel_force)
 
     if payload is not None:
         token = _equivalence_token(subscripts, payload)
@@ -1363,6 +1408,10 @@ def _profile_force_label(kernel: str) -> str | None:
         # 这里必须允许把 backend 作为建议交出去；调用方显式给了 kernel_force 或
         # 有 out= 时仍会被上层挡住（见 _profile_begin 的 caller_force/out 判定）。
         return _kernel_force.BACKEND_LABEL
+    if label == _kernel_force.ORIGINAL_LABEL:
+        # ``original`` 与 ``backend`` 同地位：tune 会在同一张网格里测它，它当然也可能
+        # 是最快的那一格。同样允许复用它，同样会被上层的 caller_force/out 挡住。
+        return _kernel_force.ORIGINAL_LABEL
     if label == "generic":
         # ``generic`` 同样可重放（``kernel_force="generic"`` 是合法取值），而且实测
         # 常是最快的一条：10 操作数方程上 generic 385 ms vs topology 2735 ms。
@@ -1395,6 +1444,102 @@ def _profile_ms_text(row: Mapping[str, Any]) -> str:
     return str(row.get("wall_ms") or "")
 
 
+def _cheaper_memory_hint(row: Mapping[str, Any]) -> str | None:
+    """命中行之外**是否还存在更省内存的配置**；有就给一行提示，没有就 ``None``。
+
+    数据源是记录表（``pyqcd.einsum.record.csv``，tune 的全量快照）。它**只**用于这
+    一条提示：选路、命中、数值一律不受影响——记录表不是缓存，用户把某一行手工搬进
+    配置文件才等于"选择那个更省的方案"。
+
+    **当前层的峰值只能从记录表里取**：配置表（``profile.csv``）没有
+    ``peak_memory_mb`` 这一列（它的列集合是冻结的），所以这里按
+    ``kernel`` + ``optimize`` 在记录表里找回命中那一行，读它的实测峰值。找不到就
+    静默——"不知道当前占多少"时给"有一个更省的"是没有依据的话。
+
+    峰值口径：``peak_memory_mb`` 是**扣掉操作数本身**之后的额外占用（见
+    ``_memory.reset_peak_memory(exclude_mb=...)``）。这条提示比较的正是这个量——
+    "换一个配置能少占多少"，而不是"输入有多大"（那个数每组都一样）。
+
+    判据刻意保守（任一不满足就不提示）：
+    * 同一个键（shape/dtype/device/equation/backend）下才有可比性；
+    * 候选行必须与命中行**不是同一格**，且有 ``peak_memory_mb``，
+      且**严格小于**当前那一格的一半；
+    * 候选的 ``wall_ms`` 不得超过当前那一格的 1.2 倍——"更省但慢一倍"不是建议，
+      那只是另一条路。
+
+    读失败、没有记录表、记录里一个 peak 都没有 → ``None``（静默）。提示是加分项，
+    绝不能因为一条提示让 ``contract()`` 失败或变慢。
+    """
+    try:
+        if not _profile_cache.enabled():
+            return None
+        reader = getattr(_profile_cache, "read_records", None)
+        path_getter = getattr(_profile_cache, "record_path", None)
+        if not callable(reader) or not callable(path_getter):
+            return None
+        records = reader()
+    except Exception:                            # noqa: BLE001 - 提示失败不影响调用
+        return None
+    if not records:
+        return None
+    wanted = {field: str(row.get(field) or "") for field in
+              ("shape", "dtype", "device", "equation", "backend")}
+    kernel = str(row.get("kernel") or "")
+    optimize = str(row.get("optimize") or "")
+    same_key = [record for record in records
+                if all(str(record.get(field) or "") == wanted[field]
+                       for field in wanted)]
+    if not same_key:
+        return None
+    current = None
+    for record in same_key:
+        if (str(record.get("kernel") or "") == kernel
+                and str(record.get("optimize") or "") == optimize):
+            current = record
+            break
+    if current is None:
+        return None
+    current_peak = _to_float(current.get("peak_memory_mb"))
+    current_ms = _to_float(current.get("wall_ms"))
+    if current_peak is None or current_peak <= 0.0:
+        return None
+    best: dict[str, Any] | None = None
+    best_peak = current_peak
+    for record in same_key:
+        if record is current:
+            continue
+        peak = _to_float(record.get("peak_memory_mb"))
+        if peak is None or peak <= 0.0 or peak >= best_peak * 0.5:
+            continue
+        ms = _to_float(record.get("wall_ms"))
+        if ms is not None and current_ms and ms > current_ms * 1.2:
+            continue
+        best, best_peak = record, peak
+    if best is None:
+        return None
+    target = str(path_getter())
+    profile = str(getattr(_profile_cache, "profile_path", lambda: "")())
+    fields = (f"kernel={best.get('kernel', '')} optimize={best.get('optimize', '')} "
+              f"wall_ms={best.get('wall_ms', '')} peak={best_peak:.0f}MB")
+    if _specialize.notice_language() == "zh":
+        return (f"[pyqcd.einsum] 存在更省内存的配置：{fields}"
+                f"（当前 {current_peak:.0f}MB）。可把 {target} 中那一行直接替换 "
+                f"{profile} 的对应项。")
+    return (f"[pyqcd.einsum] a lower-memory configuration exists: {fields} "
+            f"(currently {current_peak:.0f}MB). Replace the matching row in "
+            f"{profile} with that row from {target}.")
+
+
+def _to_float(value: Any) -> float | None:
+    """字符串/数字 → ``float``；空、``None``、坏值一律 ``None``（不猜 0）。"""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
                     applied: bool = False) -> None:
     """一行提示：**施加**了的命中每形态每进程打一次；其余只在 VERBOSE 时打。
@@ -1425,12 +1570,14 @@ def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
         source = _profile_cache.profile_path()
         line = str(row.get("line") or "").strip()
         where = f"{source}:{line}" if line else source
+        cheaper = _cheaper_memory_hint(row)
         if _specialize.notice_language() == "zh":
             print(
                 f"[pyqcd.einsum] profile 命中：{where}"
                 f" kernel={row.get('kernel', '')}"
                 f" optimize={row.get('optimize', '')}"
-                f" wall_ms={_profile_ms_text(row)}（已套用）",
+                f" wall_ms={_profile_ms_text(row)}（已套用）"
+                + ("" if cheaper is None else "\n" + cheaper),
                 flush=True,
             )
         else:
@@ -1438,7 +1585,8 @@ def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
                 f"[pyqcd.einsum] profile hit: {where}"
                 f" kernel={row.get('kernel', '')}"
                 f" optimize={row.get('optimize', '')}"
-                f" wall_ms={_profile_ms_text(row)} (applied)",
+                f" wall_ms={_profile_ms_text(row)} (applied)"
+                + ("" if cheaper is None else "\n" + cheaper),
                 flush=True,
             )
     elif row is not None:
@@ -1605,6 +1753,18 @@ def _profile_begin(profile: bool | None, profile_dir: str | None, subscripts: An
         "backend": backend_name,
     }
     row = _profile_read(key)
+    if row is None:
+        # 「默认第一次调用先 tune 再真跑」（用户裁定 2026-11-19）：缺行时跑一整轮
+        # ``--tune``，它自己负责把胜出行写进表；本函数随后**重读一次**——重读是必须
+        # 的，因为 tune 写的是"实测出来的最优格"，不重读就等于测完不用。
+        #
+        # 三道边界都在 ``_autotune`` 里：开关环境变量、同键每进程只试一次、
+        # 以及"tune 自己调用 contract 时不回来"的互斥。这里只负责"重读"这一件事，
+        # 不判断"值不值得 tune"——那是用户的缺省行为，不是本层的策略。
+        if _autotune.run_for(key=key, subscripts=subscripts, operands=operands,
+                             backend=backend_name, device=device,
+                             dtype=str(key.get("dtype") or "")):
+            row = _profile_read(key)
     info: dict[str, Any] = {
         "key": key,
         "requested_optimize": _profile_optimize(optimize),
@@ -1723,11 +1883,9 @@ def contract(
         ignored) for a single n-ary einsum, an explicit path, the name of a
         registered optimizer (``"greedy"``/``"optimal"``/``"dp"``), or
         ``True``/``None``/``"auto"`` (default) to let the planner decide.
-    optimize_topology_v2 : str
-        **已删除（0.5.9）**。拓扑内核的 v2 通用执行器在 0.5.4 一并删除后，这个参数
-        就没有任何接收方了；留着它只会让人以为"换它就能换拓扑的收缩序"，而实际上
-        顺序早已固化在编译期步表 ``topology_steps.h`` 里。
-        现在传它会得到 ``TypeError``（写错名字的东西不该静默通过）。
+    （``optimize_topology_v2`` **已彻底删除**：0.5.9 从签名移除、0.5.12 清掉内部残留。
+    传它会得到 ``TypeError``，因为它从来就只有一个接收方，而那个接收方在 0.5.4 就
+    随 v2 通用执行器一起删除了。要换收缩序请用 ``optimize=``。）
     memory_limit : int | str | None
         Upper bound on any intermediate's element count. ``None``/``-1`` means
         unlimited, ``"max_input"`` means the largest input tensor.
@@ -1876,18 +2034,16 @@ def contract(
     # 因此这里只记下原值，解析放在 ``forced`` 求值之后（见 ``_resolve_optimize``）。
     requested_optimize = optimize
 
-    # ``optimize_topology_v2`` 已从公开签名删除（0.5.9）：它的唯一接收方是拓扑内核的
-    # v2 通用执行器，而 v2 在 0.5.4 就删除了。这里给内部调用链留一个固定值，是因为
-    # ``*_topology`` 入口的 ``optimize`` 仍参与 pack 流量建模（不参与 v3 的收缩序，
-    # 顺序来自编译期步表）；它不再是用户可调项。
-    optimize_topology_v2 = _TOPOLOGY_PLAN_ORDER
-    # 用户仍传旧参数时必须**明确报错**，不能让它落进 ``**kwargs`` 被当成后端关键字
-    # 静默吃掉（那会让人以为"换了次序"，实际什么也没变）。
+    # ``optimize_topology_v2`` 已在 0.5.12 **彻底删除**（0.5.9 删公开签名、0.5.12 清
+    # 内部残留）：拓扑内核的 v2 通用执行器在 0.5.4 就删了，这个参数从来没有第二个
+    # 接收方。用户仍传旧名时由下面这道守卫明确报错——它不能落进 ``**kwargs`` 被当成
+    # 后端关键字静默吃掉（那会让人以为"换了次序"，实际什么也没变）。
     if "optimize_topology_v2" in kwargs:
         raise TypeError(
-            "optimize_topology_v2 已在 0.5.9 删除：拓扑内核的 v2 通用执行器在 0.5.4 "
-            "一并删除后，该参数没有任何接收方。v3 的收缩序固化在编译期步表 "
-            "topology_steps.h 里，不随调用变化；要换收缩序请用 optimize=。"
+            "optimize_topology_v2 已在 0.5.12 彻底删除（0.5.9 起就已不在签名里）："
+            "拓扑内核的 v2 通用执行器在 0.5.4 一并删除后，该参数没有任何接收方。"
+            "v3 的收缩序固化在编译期步表 topology_steps.h 里，不随调用变化；"
+            "要换收缩序请用 optimize=。"
         )
 
     # ``as_equivalence`` 先归一成三态：``bool("false")`` 是 ``True``，直接把字符串交给
@@ -1964,6 +2120,32 @@ def contract(
             info["kernel"] = _kernel_force.BACKEND_LABEL
         return _profile_end(info, backend_result)
 
+    if forced == (_kernel_force.ORIGINAL_LABEL,):
+        # ``original`` = "交给 opt_einsum"，与 ``backend`` 同一地位（都绕过专用内核
+        # 与等价改写），区别只在谁来规划与执行。``optimize`` **照收**：这正是它与
+        # ``backend`` 的实质差异——``backend.einsum`` 不接受我们的叶子名，而
+        # ``opt_einsum`` 接受（名字转型见 ``_kernel_force.opt_einsum_path_name``）。
+        # 失败不回落：强制标签的语义就是"跑不成即抛"。
+        backend_name = _opt_einsum_backend_name(operands)
+        if backend_name is None:
+            raise _kernel_force.KernelUnavailableError(
+                _kernel_force.ORIGINAL_LABEL, subscripts,
+                {_kernel_force.ORIGINAL_LABEL: (
+                    "opt_einsum has no backend for these operands "
+                    f"({type(operands[0]).__module__ if operands else 'no operand'})")},
+                attempted=(_kernel_force.ORIGINAL_LABEL,))
+        _LAST_KERNEL = {
+            "requested": requested_forced,
+            "ran": _kernel_force.ORIGINAL_LABEL,
+            "attempted": (),
+            "reasons": {},
+        }
+        original_result = _original_einsum(
+            backend_name, subscripts, operands, optimize=optimize)
+        if info is not None:
+            info["kernel"] = _kernel_force.ORIGINAL_LABEL
+        return _profile_end(info, original_result)
+
     # ``kernel_force="generic"`` 解析成 ``()``：调用方**明确要求**不走专用内核。匹配与
     # 等价改写的唯一目的都是命中特化形态，这条路上两者都不需要——跳过它们只是省时间
     # （一次签名/摘要/语料查询，外加一次改写查询），并且不再打"通用路径 / 专用路径"
@@ -2030,8 +2212,7 @@ def contract(
                         # 强制具体标签：按用户给的次序真试一次，跑不成即抛。
                         try:
                             kernel_result = _run_forced_kernel(
-                                subscripts, operands, forced[0], record,
-                                optimize_topology_v2)
+                                subscripts, operands, forced[0], record)
                         except _kernel_force.KernelUnavailableError:
                             if not forced_by_profile:
                                 raise
@@ -2102,8 +2283,7 @@ def contract(
                             return _profile_end(info, rewritten)
                     try:
                         kernel_result = _run_forced_kernel(
-                            subscripts, operands, forced[0], record,
-                            optimize_topology_v2)
+                            subscripts, operands, forced[0], record)
                     except _kernel_force.KernelUnavailableError:
                         if not forced_by_profile:
                             raise

@@ -14,8 +14,8 @@
 ------------
 1. **签名**：``contract`` **不**接受 ``optimize_topology_v2``（在 ``**kwargs`` 里
    传也要报 ``TypeError``，不能被后端关键字静默吃掉）；
-2. **不再是可写取值**：历史校验函数 ``_api._normalize_optimize_topology_v2`` 仍在
-   （配置表的历史列按同一口径归一），但它**不再由 contract 入口调用**；
+2. **内部残留也已清掉**（0.5.12）：``_api._normalize_optimize_topology_v2`` **不存在**，
+   配置表里的 ``optimize_topology_v2`` 那一列也**已删除**；
 3. **内核侧仍收 ``optimize``**：``try_topology_apply`` 的 ``optimize`` 只影响 pack
    流量建模按哪份计划记账，不参与 v3 的收缩序，默认 ``"greedy"``；
 4. **v3 命中时任何 ``optimize`` 都不改数值**（顺序来自步表，与 ``np.einsum``
@@ -84,6 +84,29 @@ def _rel(actual: Any, expected: np.ndarray) -> float:
 
 
 # ── 1. 签名与默认值 ─────────────────────────────────────────────────────────
+
+def test_the_internal_leftovers_are_gone() -> None:
+    """0.5.12：内部残留也清掉——历史校验函数与配置表那一列都不再存在。
+
+    为什么这条要单独钉：0.5.9 只删了签名，``_api._normalize_optimize_topology_v2``
+    与配置表的 ``optimize_topology_v2`` 列还留着，于是 grep 仍能搜到这个名字，
+    后来的人会以为"它还是个可用的东西、只是没接上"。彻底删除之后，任何 grep 命中都
+    只可能出现在**历史注记**里，语义没有歧义。
+    """
+    assert not hasattr(_api, "_normalize_optimize_topology_v2"), (
+        "历史校验函数应已删除（0.5.12）")
+    from ..einsum import _profile_cache
+
+    assert not hasattr(_profile_cache, "TOPOLOGY_V2_FIELD"), (
+        "列常量应已删除")
+    assert "optimize_topology_v2" not in _profile_cache.PROFILE_COLUMNS, (
+        "配置表不该再有这一列", _profile_cache.PROFILE_COLUMNS)
+    assert _profile_cache.PROFILE_SCHEMA_VERSION == 4, (
+        "删列要升 schema 版本", _profile_cache.PROFILE_SCHEMA_VERSION)
+    # 内部那份"计划次序"常量还在：``*_topology`` 入口照旧收一个 ``optimize``
+    # （只影响 pack 流量建模），但它不再是任何调用方可以传的参数。
+    assert _api._TOPOLOGY_PLAN_ORDER == "greedy", _api._TOPOLOGY_PLAN_ORDER
+
 
 def test_topology_apply_takes_optimize_defaulting_to_greedy() -> None:
     """两个后端的 ``try_topology_apply`` 都接受 ``optimize``，默认 ``"greedy"``。"""
@@ -173,6 +196,7 @@ def test_v3_numbers_ignore_optimize() -> None:
 
 
 TESTS = (
+    test_the_internal_leftovers_are_gone,
     test_topology_apply_takes_optimize_defaulting_to_greedy,
     test_the_removed_parameter_raises_instead_of_being_swallowed,
     test_topology_apply_still_takes_a_keyword_only_optimize,

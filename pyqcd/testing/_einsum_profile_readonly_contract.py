@@ -159,6 +159,9 @@ def _isolated() -> Iterator[str]:
                 for name in names:
                     os.environ.pop(name, None)
                 os.environ["PYQCD_EINSUM_PROFILE"] = "1"
+                # 自动 tune 会让"缺行"变成"写表"：本契约验的是
+                # **普通调用只读**这条不变量，所以显式关掉它。
+                os.environ["PYQCD_EINSUM_AUTOTUNE"] = "0"
                 _reset_state()
                 yield work
             finally:

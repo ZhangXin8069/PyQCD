@@ -233,7 +233,13 @@ def test_ensure_configured_keeps_pinned_dir():
         module = _profile_cache
         pinned = os.path.join(work, "pinned")
         env_dir = os.path.join(work, "env_cache")
-        default = os.path.join(os.path.abspath(work), module.DEFAULT_DIR)
+        # ``DEFAULT_DIR`` 自 2026-11-19 起是**绝对路径**（用户家目录下的
+        # ``~/.cache/pyqcd.einsum``），不再是相对 CWD 的 ``./.cache``。
+        # ``os.path.join(work, 绝对路径)`` 会把 work 直接丢掉，所以这里必须按
+        # "已经是绝对路径就原样用"来取。
+        default = (module.DEFAULT_DIR if os.path.isabs(module.DEFAULT_DIR)
+                   else os.path.join(os.path.abspath(work), module.DEFAULT_DIR))
+        default_existed = os.path.exists(default)
 
         assert module.configure(pinned) == os.path.abspath(pinned)
         assert not os.path.exists(pinned), (
@@ -251,16 +257,25 @@ def test_ensure_configured_keeps_pinned_dir():
         assert not os.path.exists(env_dir), (
             "ensure_configured 只管补齐，不得按环境变量另建目录")
 
-        # 2) 清空环境后 configure(None) 才按"env > 默认"重算 → 临时 CWD 下的 ./.cache。
+        # 2) 清空环境后 configure(None) 才按"env > 默认"重算 → 默认目录（用户家目录）。
         os.environ.pop(module.DIR_ENV, None)
         assert module.configure(None) == default, (
-            "configure(None) 必须回到默认 ./.cache", module.summary())
+            "configure(None) 必须回到默认目录", module.summary())
         state = module.summary()
         assert state["dir"] == default, state
         assert state["file"] == os.path.join(default, module.PROFILE_FILENAME), state
-        assert state["dir"].startswith(os.path.abspath(work)), (
-            "默认目录必须落在临时 CWD 下，仓库根不许出现 .cache", state)
-        assert not os.path.exists(default), "只解析路径，不得顺手建出默认目录"
+        # 默认目录**不再**落在 CWD 下（那是这次改动的目的），但绝不能是仓库根：
+        # 仓库根的 `.cache` 会被 git 忽略、又会被下一次测试读到，正是偶发失败的来源。
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(_profile_cache.__file__))))
+        assert not state["dir"].startswith(os.path.join(repo_root, ".cache")), (
+            "默认目录不许落在仓库根的 .cache", state, repo_root)
+        assert state["dir"] == module.DEFAULT_DIR, (
+            "默认目录必须就是 DEFAULT_DIR", state)
+        # 默认目录可能在跑测试之前就存在（用户在别的项目里真的 tune 过）。
+        # 能断言的是"configure 没有把它新建出来"：与进入时的状态比较。
+        assert os.path.exists(default) == default_existed, (
+            "只解析路径，不得顺手建出默认目录", default_existed)
 
         # 3) 再调 ensure：沿用当前目录，不重算。
         assert module.ensure_configured() == default, module.summary()
@@ -405,6 +420,7 @@ def test_disabled_profile_leaves_no_trace():
     """``PYQCD_EINSUM_PROFILE=0``：不建目录、写静默、读 ``None``、``summary`` 为假。"""
     with _isolated(disabled=True) as work:
         module = _profile_cache
+        default_existed = os.path.exists(module.DEFAULT_DIR)
         assert module.enabled() is False
         assert module.write_winner(_key(), {"kernel": "backend"}) is None
         assert module.write_winner(_key(), equivalence={
@@ -416,10 +432,12 @@ def test_disabled_profile_leaves_no_trace():
         assert state["rows"] == 0 and state["keys"] == 0, state
         assert state["last_error"] is None, state
 
-        # 零副作用：整个临时 CWD 里连目录都不许出现。
+        # 零副作用：整个临时 CWD 里连目录都不许出现，默认目录（家目录下）也不许被建。
         assert os.listdir(work) == [], ("关闭时不得产生任何文件", os.listdir(work))
-        assert not os.path.exists(os.path.join(work, module.DEFAULT_DIR)), (
-            "关闭时连 ./.cache 都不许建")
+        # 默认目录现在是**用户家目录**下的绝对路径，跑测试前它可能本来就在（用户真的
+        # tune 过）。这里能断言的是"关闭这一次调用没有把它新建出来"：比较进入前后。
+        assert os.path.exists(module.DEFAULT_DIR) == default_existed, (
+            "关闭时不得新建默认目录", module.DEFAULT_DIR, default_existed)
 
 
 TESTS = (

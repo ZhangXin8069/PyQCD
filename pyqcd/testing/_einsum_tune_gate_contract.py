@@ -109,19 +109,32 @@ def test_plan_gate_rejects_normally_but_not_under_bypass() -> None:
 def test_group_window_is_the_single_call_limit_times_calls_per_group() -> None:
     """组级窗口 = ``--tune-timeout × (1 + warmup + rounds)``，不是单次上限本身。
 
-    用户实测的困惑正来自这里：``--tune-timeout`` 缺省 30 s，一组 7 次调用 → 窗口
-    **210 s**；看到 59.5 s 返回就以为"超时没生效"，其实它连窗口的一半都不到。
+    用户实测的困惑正来自这里：``--tune-timeout`` 缺省 30 s，一组
+    ``1+0+1 = 2`` 次调用 → 窗口 **60 s**；看到 40 s 返回就以为"超时没生效"，
+    其实它离窗口还有一段。
     """
     from ..einsum import test as cli
 
     limit = float(cli.DEFAULT_TUNE_TIMEOUT)
     calls = 1 + cli.DEFAULT_WARMUP + cli.DEFAULT_ROUNDS
-    assert limit * calls >= 200.0, (
-        "缺省窗口应当是分钟量级（30 s × 7），否则本契约的口径说明已过期",
+    assert limit * calls >= 60.0, (
+        "缺省窗口应当是分钟量级（30 s × 2），否则本契约的口径说明已过期",
         limit, calls)
     # 乘数就是这三个数相加：改口径必须同时改这条断言与 AGENTS/性能页的 ×N 说明。
-    assert (cli.DEFAULT_WARMUP, cli.DEFAULT_ROUNDS) == (1, 5), (
-        "缺省 warmup/rounds 变了：文档与 AGENTS.md 的 ×7 口径要一起改")
+    # 2026-11-20 用户裁定：预热 0 轮、重复 1 轮 → 一组只做 2 次调用（1 次受测 + 1 次
+    # 预热位；warmup=0 时它就是纯计数）。窗口因此是 60 s，不是 150 s。
+    assert (cli.DEFAULT_WARMUP, cli.DEFAULT_ROUNDS) == (0, 1), (
+        "缺省 warmup/rounds 变了：文档与 AGENTS.md 的 ×N 口径要一起改")
+    # 剪枝截止是 2 × min_wall_ms（用户规则），不是 1 ×：这条不变量与窗口无关，
+    # 但两条都从同一处口径派生，放在一起才不会一改一漏。
+    from ..einsum import _tune_axes
+
+    assert float(_tune_axes.MIN_WALL_FACTOR) == 2.0, (
+        "剪枝截止倍数必须是 2×", _tune_axes.MIN_WALL_FACTOR)
+    probe = _tune_axes.MinWall(ms=100.0)
+    assert probe.cutoff_ms == 200.0, probe.cutoff_ms
+    assert probe.exceeds(199.0) is False, "1×~2× 之间不该被剪枝"
+    assert probe.exceeds(201.0) is True, "超过 2× 必须被剪枝"
 
 
 TESTS = (

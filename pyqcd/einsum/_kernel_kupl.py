@@ -269,6 +269,18 @@ TOPOLOGY_DTYPES: tuple[np.dtype, ...] = (
     np.dtype(np.complex128), np.dtype(np.complex64),
     np.dtype(np.float64), np.dtype(np.float32))
 _TOPOLOGY_DTYPE_SUPPORT: dict[np.dtype, bool] = {}
+#: 最近一次 ``_probe_dtype`` 的**实测事实**（stage + 真实 detail + 可核对数字）。
+#: 与 CUDA 侧同名同义、各存一份（两侧探的是不同入口）。
+LAST_PROBE: dict[str, object] = {}
+#: 逐 dtype 的探测事实；``_TOPOLOGY_DTYPE_SUPPORT`` 只存 bool，"四类各自为什么没过"
+#: 必须在这里留全量。引用前一律过 :func:`_cached_probe_record` 的一致性检查。
+_TOPOLOGY_DTYPE_PROBE: dict[np.dtype, dict[str, object]] = {}
+#: 没有事实可引用时的标记。它不是真实阶段，因此不在 ``PROBE_STAGES`` 里——
+#: 把"没记录"冒充成某个阶段就等于又编造一次原因。
+_UNRECORDED_STAGE = "unrecorded"
+#: 真实探测器允许推进到的阶段名（诊断文案直接引用，避免各处自由发挥）。
+PROBE_STAGES: tuple[str, ...] = (
+    "import", "build", "plan", "native", "shape", "dtype", "tolerance", "ok")
 _TOPOLOGY_PROBE_LOCK = threading.Lock()
 # 探测方程必须是**语料内**的拓扑：拓扑入口只服务 wick 语料的编译期步表，
 # 语料外的方程一律 UNSUPPORTED（不再兜底）。用 ``ij,jk->ik`` 探会在"查不到步表"
@@ -348,11 +360,23 @@ def _probe_dtype(dtype: np.dtype) -> bool:
 
     方程必须来自语料：拓扑入口只认编译期步表，语料外一律 UNSUPPORTED，用
     ``ij,jk->ik`` 之类探会把"没查表"误判成"dtype 不支持"，进而把语料方程也拦住。
+
+    **失败事实必须留痕**（2026-11-19 用户实测的教训）：本函数返回 ``bool``，但
+    "为什么失败"不能一起压成 ``False``——把六族失败统一说成"数值不一致"会让用户
+    去重建原生库却修不掉。每一步都经 :func:`_finish_probe` 把 ``stage`` 与真实异常
+    文本写进 :data:`LAST_PROBE` 与 :data:`_TOPOLOGY_DTYPE_PROBE`。
     """
+    dtype = np.dtype(dtype)
+    stage = "import"
+    fields: dict[str, object] = {
+        "equation": _PROBE_EQUATION,
+        "tolerance_relative": _PROBE_TOLERANCE.get(dtype.name),
+    }
     try:
         from ._api import contract_path
         from ._native_plan import encode_execution_plan
 
+        stage = "build"
         dimension = 2
         rng = np.random.default_rng(20261114)
         operands = []
@@ -362,17 +386,129 @@ def _probe_dtype(dtype: np.dtype) -> bool:
             if dtype.kind == "c":
                 values = values + 1j * rng.standard_normal(shape)
             operands.append(np.ascontiguousarray(values.astype(dtype)))
+        stage = "plan"
         _, path_info = contract_path(_PROBE_EQUATION, *operands)
         plan = encode_execution_plan(path_info.contraction_list, tuple(operands))
+        # 原生入口的取用归 "native"：它失败就是"归档里没有这个入口"，
+        # 归到 "plan" 会让用户去查规划而不是查归档。
+        stage = "native"
         actual = kupl.topology_apply(plan, tuple(operands))
         expected = np.einsum(_PROBE_EQUATION, *operands)
-        if tuple(actual.shape) != tuple(expected.shape) or actual.dtype != dtype:
-            return False
-        scale = float(np.max(np.abs(expected))) or 1.0
-        tolerance = _PROBE_TOLERANCE[dtype.name]
-        return bool(float(np.max(np.abs(actual - expected))) <= tolerance * scale)
-    except Exception:  # noqa: BLE001 - 探测失败 = 该 dtype 不可用，一律回落
-        return False
+
+        stage = "shape"
+        if tuple(actual.shape) != tuple(expected.shape):
+            return _finish_probe(
+                dtype, stage,
+                f"native shape {tuple(actual.shape)} != reference shape "
+                f"{tuple(expected.shape)}", fields)
+        stage = "dtype"
+        if actual.dtype != dtype:
+            return _finish_probe(
+                dtype, stage,
+                f"native dtype {actual.dtype} != requested dtype {dtype}; "
+                f"no implicit downcast is accepted", fields)
+
+        stage = "tolerance"
+        reference_max = float(np.max(np.abs(expected))) or 1.0
+        max_abs_diff = float(np.max(np.abs(actual - expected)))
+        tolerance = _PROBE_TOLERANCE[dtype.name] * reference_max
+        fields.update(max_abs_diff=max_abs_diff, tolerance=tolerance,
+                      reference_max=reference_max)
+        if max_abs_diff <= tolerance:
+            return _finish_probe(
+                dtype, "ok",
+                f"max|diff|={max_abs_diff:.3e} <= tol={tolerance:.3e} "
+                f"(relative {_PROBE_TOLERANCE[dtype.name]:g} x "
+                f"max|ref|={reference_max:.3e})", fields)
+        return _finish_probe(
+            dtype, stage,
+            f"max|diff|={max_abs_diff:.3e} > tol={tolerance:.3e} "
+            f"(relative {_PROBE_TOLERANCE[dtype.name]:g} x "
+            f"max|ref|={reference_max:.3e})", fields)
+    except Exception as error:  # noqa: BLE001 - 探测失败 = 该 dtype 不可用，一律回落
+        detail = (f"{type(error).__name__}: {error}" if str(error)
+                  else type(error).__name__)
+        return _finish_probe(dtype, stage, detail, fields)
+
+
+def _probe_record(dtype: np.dtype, stage: str, detail: str,
+                  fields: dict[str, object] | None = None) -> dict[str, object]:
+    """组装一条探测事实：``stage`` + 真实 ``detail`` + 可核对的数字。"""
+    record: dict[str, object] = {
+        "dtype": dtype.name,
+        "ok": stage == "ok",
+        "stage": stage,
+        "detail": detail,
+        "max_abs_diff": None,
+        "tolerance": None,
+        "reference_max": None,
+    }
+    record.update(fields or {})
+    return record
+
+
+def _finish_probe(dtype: np.dtype, stage: str, detail: str,
+                  fields: dict[str, object] | None = None) -> bool:
+    """落盘一条探测事实并给出 ``bool``（探测器的唯一返回值形状）。"""
+    record = _probe_record(dtype, stage, detail, fields)
+    LAST_PROBE.clear()
+    LAST_PROBE.update(record)
+    _TOPOLOGY_DTYPE_PROBE[dtype] = dict(record)
+    return bool(record["ok"])
+
+
+def _cached_probe_record(dtype: np.dtype) -> dict[str, object] | None:
+    """取该 dtype 的探测事实；只在与当前 bool 缓存**一致**时才可信。
+
+    ``_TOPOLOGY_DTYPE_SUPPORT`` 是生效判据、``_TOPOLOGY_DTYPE_PROBE`` 是诊断证据。
+    外部把前者清空/改写（测试的 ``_reset_dtype_support``）时后者就是陈旧证据：引用
+    它会写出"探测失败但 stage=ok、max|diff|=0"这种自相矛盾的文案。宁可说"没有
+    记录"，也不给出误导性诊断。
+    """
+    record = _TOPOLOGY_DTYPE_PROBE.get(dtype)
+    support = _TOPOLOGY_DTYPE_SUPPORT.get(dtype)
+    if record is None or support is None:
+        return None
+    if bool(record.get("ok")) != bool(support):
+        return None
+    return record
+
+
+def _probe_failure_clause(dtype: np.dtype) -> str:
+    """把逐 dtype 的探测事实渲染成一句可核对的原因。"""
+    record = _cached_probe_record(dtype)
+    if not record:
+        return ("with no recorded stage/detail (the probe was replaced, or its "
+                "cached verdict changed after it ran)")
+    return (f"at stage={record.get('stage') or 'unknown'}: "
+            f"{record.get('detail') or 'no detail recorded'}")
+
+
+def probe_dtypes() -> dict[str, dict[str, object]]:
+    """对 ``TOPOLOGY_DTYPES`` 四类各取一次实测事实，键是 dtype 名字符串。
+
+    复用 :func:`_topology_dtype_enabled` 的缓存：已探测过的 dtype **不会**重探。
+    顺序与 ``TOPOLOGY_DTYPES`` 一致，供 ``--gpu-probe`` 回答"四类各自可用性"。
+    """
+    report: dict[str, dict[str, object]] = {}
+    for dtype in TOPOLOGY_DTYPES:
+        try:
+            enabled = _topology_dtype_enabled(dtype)
+        except Exception as error:  # noqa: BLE001 - 汇总绝不抛，契约同探测
+            enabled = False
+            _TOPOLOGY_DTYPE_SUPPORT[dtype] = False
+            _TOPOLOGY_DTYPE_PROBE[dtype] = _probe_record(
+                dtype, _UNRECORDED_STAGE, f"{type(error).__name__}: {error}")
+        record = _cached_probe_record(dtype)
+        if record is None:
+            record = _probe_record(
+                dtype, "ok" if enabled else _UNRECORDED_STAGE,
+                "probe passed (no consistent stage/detail was recorded)"
+                if enabled else
+                "no consistent stage/detail was recorded for this dtype (the "
+                "probe was replaced, or its cached verdict changed after it ran)")
+        report[dtype.name] = dict(record)
+    return report
 
 
 def topology_dtypes() -> tuple[np.dtype, ...]:
@@ -396,8 +532,12 @@ def _topology_dtype_enabled(dtype: np.dtype) -> bool:
             if support is None:
                 try:
                     support = _probe_dtype(dtype)
-                except Exception:  # noqa: BLE001 - 探测器契约是不抛异常，这里再兜一层
+                except Exception as error:  # noqa: BLE001 - 探测器契约是不抛异常，这里再兜一层
                     support = False
+                    # 连兜底都触发了：仍然要留下真实原因，否则又是一句无信息文案。
+                    _TOPOLOGY_DTYPE_PROBE[dtype] = _probe_record(
+                        dtype, _UNRECORDED_STAGE,
+                        f"{type(error).__name__}: {error}")
                 _TOPOLOGY_DTYPE_SUPPORT[dtype] = support
     return support
 
@@ -422,7 +562,7 @@ def _topology_dtype_reason(dtype: np.dtype) -> str | None:
     if _topology_dtype_enabled(dtype):
         return None
     return (f"dtype {dtype} is inside the topology dtype contract but its native "
-            f"probe failed (2x2 matmul disagreed with numpy); falling back to the "
+            f"probe failed {_probe_failure_clause(dtype)}; falling back to the "
             f"generic path with no implicit downcast. Rebuild the native library "
             f"({_REBUILD_HINT}) to re-enable it")
 

@@ -34,11 +34,11 @@ TV 重设计（2026-11-17，§1/§2/§3/§7/§8）把这张表收成**标定产�
 14. **``wall_ms`` 是全程墙钟**：在 :func:`read_winner` 里注入一段睡眠——它不是收缩执行
     的时间，却必须出现在 ``wall_ms`` 里（§4 的"只有一列、且是整段 ``contract()``"）。
     观测口里不许残留旧字段名，也不许还有第二列拆分计时。
-15. **``optimize`` 两列的 7 叶子**（``optimize`` / ``optimize_topology_v2``）：7 个叶子
+15. **``optimize`` 列的 7 叶子**：7 个叶子
     写入读回一致；连字符旧写法（``branch-1``）读入归一成下划线、**不**视为非法。
 16. **``auto`` 是非法值**：读侧只警告**一次**，该行**不参与** ``read_winner`` 匹配
     （不静默当 ``greedy``）；``summary()`` 的 ``invalid`` 如实计数。
-17. **缺 ``optimize_topology_v2`` 列的老文件**照样能读：该列按空处理 = 缺省 ``greedy``。
+17. **带已删列（``optimize_topology_v2``）的老文件**照样能读：该列不再出现，缺省 ``greedy``。
 18. **``schema_version``**：新写为 :data:`PROFILE_SCHEMA_VERSION`（``3``），老行（文件里
     没有这一列）读回 ``0`` 且仍可用；老行不降级、不删除。
 
@@ -676,13 +676,16 @@ def test_optimize_leaves_roundtrip_and_legacy_hyphen_normalizes() -> None:
         key = _key()
         for leaf in _profile_cache.OPTIMIZE_LEAVES:
             _profile_cache.write_winner(key, {"kernel": "generic", "optimize": leaf,
-                                             _profile_cache.TOPOLOGY_V2_FIELD: leaf,
                                              "wall_ms": 0.5})
             _forget()
             row = _profile_cache.read_winner(key)
             assert row is not None, ("写进去的叶子必须能读回", leaf)
             assert row["optimize"] == leaf, ("写入读回必须一致", leaf, row)
-            assert row[_profile_cache.TOPOLOGY_V2_FIELD] == leaf, (leaf, row)
+        # 0.5.12：``optimize_topology_v2`` 那一列已从表里彻底删除。
+        assert "optimize_topology_v2" not in _profile_cache.PROFILE_COLUMNS, (
+            "该列已删除，不该再出现在表头", _profile_cache.PROFILE_COLUMNS)
+        assert not hasattr(_profile_cache, "TOPOLOGY_V2_FIELD"), (
+            "常量也应一并删除，否则还会有人去读它")
 
         # 连字符旧写法（手工写进表）：读入归一为下划线，**不**视为非法。
         _write_table(directory, [_row(key, kernel="generic", optimize="branch-1")])
@@ -720,37 +723,35 @@ def test_auto_row_warns_once_and_is_not_matched() -> None:
         assert state["invalid"] == 1, ("无效行要如实计数", state)
 
 
-# -- 17. 缺 ``optimize_topology_v2`` 列的老文件 --------------------------------
-def test_legacy_file_without_topology_v2_column_still_reads() -> None:
-    """§17：老表没有新列也能读；该列按空处理 = 缺省 ``greedy``。"""
+# -- 17. 带已删列的老文件 ------------------------------------------------
+def test_legacy_file_with_the_removed_column_still_reads() -> None:
+    """§17：老表**多**一列（已删的 ``optimize_topology_v2``）也能读，且该列不再出现。"""
     with _isolated() as work:
         directory = os.path.join(work, "cache")
         _profile_cache.configure(directory)
         key = _key()
-        columns = [name for name in _profile_cache.PROFILE_COLUMNS
-                   if name != _profile_cache.TOPOLOGY_V2_FIELD]
-        assert _profile_cache.TOPOLOGY_V2_FIELD not in columns
-        _write_table_with_columns(
-            directory, [_row(key, kernel="backend", optimize="dp")], columns)
+        legacy_columns = list(_profile_cache.PROFILE_COLUMNS)
+        legacy_columns.insert(
+            legacy_columns.index("optimize") + 1, "optimize_topology_v2")
+        legacy_row = _row(key, kernel="backend", optimize="dp")
+        legacy_row["optimize_topology_v2"] = "greedy"
+        _write_table_with_columns(directory, [legacy_row], legacy_columns)
 
         row = _profile_cache.read_winner(key)
-        assert row is not None, "缺新列的老文件必须照旧能读（不降级、不丢行）"
+        assert row is not None, "带已删列的老文件必须照旧能读（不降级、不丢行）"
         assert row["kernel"] == "backend", row
         assert row["optimize"] == "dp", row
-        assert row[_profile_cache.TOPOLOGY_V2_FIELD] == "", (
-            "缺列的老行按空读", row)
-        assert (row[_profile_cache.TOPOLOGY_V2_FIELD]
-                or _profile_cache.DEFAULT_OPTIMIZE) == "greedy", (
-            "空 = 缺省 greedy", row)
-        # 老列一行不少地还在（新列只是**多**出来的一格）。
+        assert "optimize_topology_v2" not in row, (
+            "已删的列不该再出现在读回的行里", sorted(row))
+        # 现存列一列不少地都在。
         for name in _profile_cache.PROFILE_COLUMNS:
             assert name in row, ("读回来的行必须补齐全部列", name, sorted(row))
 
 
 # -- 18. ``schema_version``：新写 3，老行 0 且仍可用 ---------------------------
-def test_schema_version_written_three_and_legacy_rows_read_zero() -> None:
-    """§18：``schema_version`` 新行写 3；老文件（无该列）读回 0 且照旧命中。"""
-    assert _profile_cache.PROFILE_SCHEMA_VERSION == 3, (
+def test_schema_version_written_four_and_legacy_rows_read_zero() -> None:
+    """§18：``schema_version`` 新行写 4；老文件（无该列）读回 0 且照旧命中。"""
+    assert _profile_cache.PROFILE_SCHEMA_VERSION == 4, (
         _profile_cache.PROFILE_SCHEMA_VERSION)
     assert _profile_cache.LEGACY_SCHEMA_VERSION == 0, (
         _profile_cache.LEGACY_SCHEMA_VERSION)
@@ -759,25 +760,22 @@ def test_schema_version_written_three_and_legacy_rows_read_zero() -> None:
         _profile_cache.configure(directory)
         key = _key()
         _profile_cache.write_winner(key, {"kernel": "generic", "optimize": "dp",
-                                         _profile_cache.TOPOLOGY_V2_FIELD: "greedy",
                                          "wall_ms": 1.0})
         _forget()
         written = _data_rows(_table_path(directory))[0]
-        assert written["schema_version"] == "3", ("新行写 3", written)
-        assert written[_profile_cache.TOPOLOGY_V2_FIELD] == "greedy", written
+        assert written["schema_version"] == "4", ("新行写 4", written)
         row = _profile_cache.read_winner(key)
-        assert row["schema_version"] == "3", row
+        assert row["schema_version"] == "4", row
         # 等价行也带 schema 版本（它同样按这一版的列集合写）。
         _profile_cache.write_winner(key, equivalence={
             "target_equation": "cadb,ac,bd->", "operand_order": [1, 0]})
         _forget()
-        assert _profile_cache.read_winner(key)["schema_version"] == "3", (
+        assert _profile_cache.read_winner(key)["schema_version"] == "4", (
             "等价行也要记 schema 版本")
 
         # 老文件：连 ``schema_version`` 这一列都没有。
         legacy_columns = [name for name in _profile_cache.PROFILE_COLUMNS
-                          if name not in (_profile_cache.TOPOLOGY_V2_FIELD,
-                                          "schema_version")]
+                          if name != "schema_version"]
         _write_table_with_columns(
             directory, [_row(key, kernel="backend", optimize="greedy")],
             legacy_columns)
@@ -810,8 +808,8 @@ TESTS = (
     test_wall_ms_covers_the_whole_contract_call,
     test_optimize_leaves_roundtrip_and_legacy_hyphen_normalizes,
     test_auto_row_warns_once_and_is_not_matched,
-    test_legacy_file_without_topology_v2_column_still_reads,
-    test_schema_version_written_three_and_legacy_rows_read_zero,
+    test_legacy_file_with_the_removed_column_still_reads,
+    test_schema_version_written_four_and_legacy_rows_read_zero,
 )
 
 

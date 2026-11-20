@@ -75,7 +75,14 @@ assert np.allclose(pe.contract_expression("ij,jk->ik", (2, 3), (3, 4))(a, b), a 
 引擎可以维护一张按方程索引的配置表，且只有一个写入者：`--tune` 写，普通调用只读。
 
 * 文件：`pyqcd.einsum.profile.csv`，目录由 `PYQCD_EINSUM_PROFILE_DIR` 决定
-  （缺省 `./.cache`）。裸名 `profile.csv` **不是**这张表。
+  （缺省 `$XDG_CACHE_HOME/pyqcd.einsum`，即 `~/.cache/pyqcd.einsum`）。裸名
+  `profile.csv` **不是**这张表。该目录按**用户**算，不按工作目录——tune 一次，
+  所有项目共用。
+* 参考表：`pyqcd.einsum.record.csv`，同目录、列与配置表相同但多一列
+  `peak_memory_mb`。它记录遍历里的**每一组**，且**从不**参与选路——把配置表里的某行
+  换成参考表里更省内存的一行，就是手动选择"更省"的方案。
+* 第一次调用缺行：缺省会先为该键跑一整轮 `--tune` 再执行；`PYQCD_EINSUM_AUTOTUNE=0`
+  可关闭。
 * 性能列：`wall_ms`，量的是**整个** `contract()` 调用的墙钟——没有单独的逐步计时列。
 * `--tune` 带取值：留空 / `true` = 完整遍历，`pass` = 跳过 compare 与等价改写的快速
   通过模式。

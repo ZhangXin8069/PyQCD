@@ -81,7 +81,15 @@ The engine can keep a per-equation configuration table with exactly one owner:
 `--tune` writes it, ordinary calls only read it.
 
 * File: `pyqcd.einsum.profile.csv`, under `PYQCD_EINSUM_PROFILE_DIR` (default
-  `./.cache`). The bare name `profile.csv` is **not** the table.
+  `$XDG_CACHE_HOME/pyqcd.einsum`, i.e. `~/.cache/pyqcd.einsum`). The bare name
+  `profile.csv` is **not** the table. The directory is per **user**, not per working
+  directory, so a table tuned once serves every project.
+* Reference table: `pyqcd.einsum.record.csv`, in the same directory, same columns as
+  the profile table plus a `peak_memory_mb` column. It records **every** group of the
+  sweep and is never consulted for dispatch — replacing a profile row with a record row
+  is how you opt into a cheaper (smaller-footprint) configuration by hand.
+* First call without a matching row: by default the engine runs a full `--tune` for
+  that key and then executes; `PYQCD_EINSUM_AUTOTUNE=0` turns that off.
 * Performance column: `wall_ms`, the wall clock of the **whole** `contract()` call
   — there is no separate per-step timer.
 * `--tune` takes a value: empty / `true` = full sweep, `pass` = the fast pass that

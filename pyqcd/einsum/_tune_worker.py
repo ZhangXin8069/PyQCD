@@ -81,23 +81,40 @@ class Pruned(RuntimeError):
         self.min_wall_ms = None if min_wall_ms is None else float(min_wall_ms)
 
 
-def _load_operands(directory: str, device: str) -> list[Any]:
-    """按文件名顺序读回父进程暂存的操作数；非 CPU 设备上再搬到显存。
+def _load_operands(directory: str, device: str, backend: Any = None) -> list[Any]:
+    """按文件名顺序读回父进程暂存的操作数，并**按 backend 转成该后端的数组**。
 
-    CPU 设备用 **mmap** 读：生产形状上操作数一共 3.9 GiB（本机实测 ``np.load`` 全量
-    拷入要 1.2 s），而这一份数据在父进程与全部组之间是**同一份**、且只读。mmap 让每组
-    只付页表映射的钱（本机 9.2 ms），真正的页在第一次收缩时由内核按需调入——
-    ``np.tensordot``/``np.einsum`` 的步进就是顺序读，与先拷一遍再算等价。
+    落盘一律是 ``.npy``（父进程用 ``np.save``），所以读回来必然是 numpy 家族；能不能
+    直接交给 ``contract()`` 取决于**后端**，不是设备：
 
-    非 CPU 设备仍全量拷：``cupy.asarray`` 必须拿到真实的主机缓冲。
+    * ``numpy`` / ``auto`` / 空 → 原样返回；
+    * ``torch`` → ``torch.from_numpy``（**不能**把 memmap 直接喂给 torch：
+      ``torch.tensordot`` 会报 ``argument 'input' must be Tensor, not memmap``，
+      2026-11-20 实测 tune 在 ``--backend torch`` 上 21 组全 ``error`` 正是这条）；
+    * 其余（``cupy``）→ ``cupy.asarray``。
+
+    ``mmap`` 只在 numpy 后端上开：它是"父进程与全部组共用同一份只读数据"的省钱手段，
+    而 torch/cupy 需要一个**真**数组（``torch.from_numpy`` 接受 ndarray 子类但会为
+    非可写缓冲发警告，而 memmap 恰好不可写；``cupy.asarray`` 更是要真实主机缓冲）。
     """
     import numpy as np
 
     paths = sorted(glob.glob(os.path.join(directory, "operand_*.npy")))
-    cpu = str(device or "cpu").strip().lower() == "cpu"
-    host = [np.load(path, mmap_mode="r" if cpu else None) for path in paths]
-    if cpu:
+    device_text = str(device or "cpu").strip().lower()
+    backend_text = str(backend or "").strip().lower()
+    cpu = device_text == "cpu"
+    numpy_like = backend_text in ("", "auto", "numpy")
+    use_mmap = cpu and numpy_like
+    host = [np.load(path, mmap_mode="r" if use_mmap else None) for path in paths]
+    if numpy_like:
         return host
+    if backend_text == "torch":
+        import torch
+
+        tensors = [torch.from_numpy(np.ascontiguousarray(item)) for item in host]
+        if not cpu:
+            tensors = [item.to("cuda") for item in tensors]
+        return tensors
     import cupy
 
     return [cupy.asarray(item) for item in host]
@@ -124,7 +141,8 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
     ``samples`` / ``shape`` / ``dtype`` / ``last_kernel`` / ``kernel_info`` /
     ``saved_output`` / ``output_skipped_bytes``。
 
-    ``min_wall_ms``（可选）是组内剪枝上界：**每一次**调用测到的墙钟超过它就抛
+    ``min_wall_ms``（可选）是组内剪枝**截止**（父进程按 ``MIN_WALL_FACTOR`` 乘过
+    当前最快中位）：**每一次**调用测到的墙钟超过它就抛
     :class:`Pruned`，不再跑完这一组。用户规则说的就是这个，只是执行位置在子进程里
     ——父进程没有办法打断正在进行的那一次调用。
     """
@@ -142,7 +160,9 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
     rounds = max(int(job.get("rounds") or 1), 1)
     raw_bound = job.get("min_wall_ms")
     min_wall_ms = None if raw_bound is None else float(raw_bound)
-    operands = _load_operands(str(job["operands_dir"]), device)
+    # backend 必须传下去：操作数的**类型**由后端决定（torch 要 Tensor，不是 memmap）。
+    operands = _load_operands(str(job["operands_dir"]), device,
+                              job.get("backend"))
     kwargs = dict(job.get("contract_kwargs") or {})
     kwargs.update(_filter_profile_kwargs(dict(job.get("profile_kwargs") or {})))
     kwargs["backend"] = backend
@@ -188,6 +208,28 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
     # 粒度是毫秒级——一组只要跑得比这个粗，父进程量出来的"从 ready 到现在"就可能是
     # 微秒级的假数（甚至比 ``median_s`` 还小）。这里从 mark_ready 之前起表，到样本
     # 全部跑完为止，是**受测时间区**的真实墙钟。
+    # 峰值内存/显存：在**本组**第一次调用之前立基线（``reset_peak_memory``），
+    # 组末读一次，然后 ``release_memory`` 把池/缓存还回去。逐组重置是必须的：
+    # 累加的峰值会把上一组的占用算到本组头上，剪优与剪枝都跟着错。
+    #
+    # **不调 ``memory_probe_available()``**：那是唯一会 ``import torch`` 的入口
+    # （本机 1.4 s）。子进程路线每组一个全新解释器，每组付一次 1.4 s 就是 29 × 1.4 s
+    # 的纯浪费，且它测的全是"这台机器有什么"（与这一组的耗时无关）。
+    # ``_memory`` 的采样用 ``_torch_if_ready`` / ``_cupy_if_ready``：只在模块已在
+    # ``sys.modules`` 里时才取句柄——**不为测量而 import**。
+    from pyqcd.einsum import _memory
+
+    # ``exclude_mb``：这批操作数**本来就要占**的那部分。它们由父进程暂存、本进程用
+    # mmap 读（CPU）或整份拷进显存（GPU），29 组看到的是同一份数据——不扣的话每组
+    # 都报同一个大数（生产形状实测 ~3923 MB），那个数只回答"输入有多大"。
+    # ``operands`` 的字节数就是这份常驻量最直接的量度。
+    resident_mb = 0.0
+    for operand in operands:
+        try:
+            resident_mb += float(operand.nbytes) / _memory.MB
+        except (AttributeError, TypeError):           # pragma: no cover - 非数组
+            continue
+    _memory.reset_peak_memory(exclude_mb=resident_mb)
     ready_started = time.perf_counter()
     mark_ready()
     if crash:
@@ -209,6 +251,8 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
         _sync.synchronize(*operands)
         wall_s = time.perf_counter() - started
         if min_wall_ms is not None and wall_s * 1000.0 > min_wall_ms:
+            # ``min_wall_ms`` 在这里收到的是**截止**（父进程已按
+            # ``_tune_axes.MIN_WALL_FACTOR`` 乘过），本进程不再乘第二遍。
             raise Pruned(wall_s * 1000.0, min_wall_ms)
         measured.result = got                         # type: ignore[attr-defined]
         return wall_s
@@ -228,6 +272,11 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
         "dtype": str(getattr(result, "dtype", "")),
         # 受测时间区的**真实**墙钟（本进程测，父进程的轮询粒度量不准这个量）。
         "wall_s": time.perf_counter() - ready_started,
+        # 本组峰值（MB，1024² 字节）：组内测量、组末释放。``0.0`` 表示"没测到"。
+        "peak_memory_mb": float(_memory.peak_memory_mb()),
+        # 扣掉的那部分如实写回来：读者据此知道"这个峰值不含输入本身"。
+        "peak_memory_excluded_mb": round(resident_mb, 1),
+        "peak_memory_notes": dict(_memory.LAST_ERROR) if _memory.LAST_ERROR else {},
         "last_kernel": _api.last_kernel() if hasattr(_api, "last_kernel") else None,
         "kernel_info": _kernel_info(),
         "saved_output": False,
@@ -245,6 +294,10 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
                 summary["saved_output"] = True
             except OSError as exc:              # pragma: no cover - 磁盘满/只读
                 summary["output_error"] = f"{type(exc).__name__}: {exc}"
+    # 本组结束：把池/缓存还给设备。放在 ``return`` 之前而不是父进程里——显存属于
+    # **本进程**，父进程清不到它。
+    _memory.release_memory(*operands)
+    summary["release_s"] = _memory.last_release_seconds()
     return summary
 
 

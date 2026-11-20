@@ -23,9 +23,11 @@ python -m pyqcd.einsum.test --equation "ab,bc,cd->ad" \
 | `--tune pass` | **快速通过**：直接走 `[if_equivalence=false, if_specialized=false]` 这条线，禁用 `--compare` 与全部与 tune 无关的功能，专注快速、无阻塞 |
 | 不给 `--tune` | 不遍历，按配置表或内置缺省执行 |
 
-遍历**不是**笛卡尔积：它按分支走一份**有序**清单（两个可特化分支各 22 组，普通分支
-21 组），任何一组一旦超过当前最快耗时就被当场终止。表里的 `wall_ms` 是**整个**
-`contract()` 调用的墙钟，因此读到的数就是你程序要付的数。
+遍历**不是**笛卡尔积：它按分支走一份**有序**清单（两个可特化分支各 29 组，普通分支
+28 组），任何一组一旦超过**当前最快耗时的两倍**就被当场终止（被终止那组的 `原因=` 里
+`cutoff_ms` 就是这个截止，`min_wall_ms` 才是最快耗时本身）。表里的 `wall_ms` 是**整个**
+`contract()` 调用的墙钟，因此读到的数就是你程序要付的数。每组另报**峰值内存/显存**
+（MB），逐组测量、进下一组前先释放，避免把上一组的占用算到本组头上。
 
 ### 决定"测什么"的几个选项
 
@@ -34,7 +36,9 @@ python -m pyqcd.einsum.test --equation "ab,bc,cd->ad" \
 | `--backend` | `auto` / `numpy` / `cupy` / `torch` | 只选数组库；强制原生内核用 `--kernel-force`，不是后端 |
 | `--compare` | `opt_einsum` / `backend` / `none` | 缺省 **`none`**；"与 numpy 对照"的写法是 `--backend numpy --compare backend` |
 | `--optimize` | `greedy` / `optimal` / `dp` / `branch_1` / `branch_2` / `branch_all` / `none` | `auto` 是内置的缺省选择器，**不是**可写取值 |
-| `--kernel-force` | `generic` / `dedicated` / `topology` / `backend` | 只接受单值，缺省 `generic`；逗号链式与 `auto` 一律拒绝 |
+| `--warmup` | 整数 | 缺省 **0**（2026-11-20 起合法且为缺省：遍历是把网格量完，不在每一格上追亚毫秒精度）；**显式给正值**时在加速设备上被抬到 2 |
+| `--rounds` | 整数 | 缺省 **1**，即每格只测一次；想要中位抹平调度抖动时显式给更大的值 |
+| `--kernel-force` | `generic` / `dedicated` / `topology` / `original` / `backend` | 只接受单值，缺省 `generic`；`original` 把收缩交给 `opt_einsum.contract`（同样吃 `--optimize`，`branch_1`/`branch_2`/`branch_all`/`none` 会被转成 `branch-1`/`branch-2`/`branch-all`/`False`）；逗号链式与 `auto` 一律拒绝 |
 | `--shape` | `[..],[..]->[..]` | 省略时按该方程在语料里的 roles 反推尺寸 |
 | `--explain` | `auto` / `true` / `false` | 省略 `--shape` 且经等价写法命中时，打印 `shape source: corpus(equivalence) via <方程>` |
 

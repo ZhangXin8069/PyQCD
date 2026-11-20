@@ -270,6 +270,38 @@ from pyqcd.testing._einsum_timing_compare_contract import (
 from pyqcd.testing._einsum_tune_gate_contract import (
     test_einsum_tune_gate_contracts,
 )
+# GPU 探测诊断契约（2026-11-19 用户实测）：探测失败的 stage/detail 必须如实留痕、
+# 拒绝原因不许复述写死的"2x2 matmul disagreed with numpy"、probe_dtypes 覆盖四类、
+# 端到端容差复用 _PROBE_TOLERANCE、"部分可用"的 verdict 必须如实（无 GPU 时 SKIP）。
+from pyqcd.testing._einsum_gpu_probe_diagnosis_contract import (
+    test_einsum_gpu_probe_diagnosis_contracts,
+)
+# 峰值内存契约（2026-11-19 用户要求"每组记录峰值内存/显存、进下一组前释放"）：
+# 四个公开函数绝不抛异常、reset 生效、已知大小的分配能被测出来、release 清池、
+# format_peak_mb 的三个边界、失败只记 LAST_ERROR 不改返回值。
+from pyqcd.testing._einsum_peak_memory_contract import (
+    test_einsum_peak_memory_contracts,
+)
+# 记录表契约（2026-11-20）：`pyqcd.einsum.record.csv` 只作参考、绝不参与命中——
+# 整表重写而非追加、列是配置表的超集、`read_records` 只许出现在"更省内存"提示里、
+# 关闭开关时不落盘、旧位置 `./.cache` 只读回退（不复制不移动）。
+from pyqcd.testing._einsum_record_table_contract import (
+    test_einsum_record_table_contracts,
+)
+# 暂存落点与新口径契约（2026-11-20 用户实测）：生产形状操作数 1.95 GiB 而 `/tmp`
+# 只剩 1.3 GiB → 写第 3 个操作数 ENOSPC → 29 组全部 error，且失败后没清理、残留
+# 2.0 GiB 毒害下一轮。八项断言钉住：tmpfs 落点优先、显式配置压过一切、空间不足时
+# 跳过该落点、`required_bytes` 含余量、`_ensure_room` 的报错说清"要多少/剩多少/
+# 怎么办"、写盘失败自清、操作数生成不绕道 complex128。
+from pyqcd.testing._einsum_tune_stage_contract import (
+    test_einsum_tune_stage_contracts,
+)
+# 九项需求端到端验收（2026-11-20）：GPU 诊断真实 stage / `original` 七种 optimize /
+# 家目录配置表 / 逐组峰值 / 2× 剪枝截止 / 记录表不参与命中 / warmup=0+rounds=1 /
+# "更省内存"提示的半数门槛 / 自动 tune 同键只试一次。一条需求对一条断言。
+from pyqcd.testing._einsum_nine_items_acceptance_contract import (
+    test_einsum_nine_items_acceptance_contracts,
+)
 
 #: 显式套件清单：供 ``from pyqcd.testing.conftest import TESTS`` 按名筛选
 #: （``main()`` 仍按 ``test_*`` 名字扫描，两者指向同一条用例）。
@@ -286,6 +318,12 @@ TESTS = (
     test_einsum_tune_timeout_doc_contracts,
     test_einsum_tune_isolation_contracts,
     test_einsum_timing_compare_contracts,
+    test_einsum_tune_gate_contracts,
+    test_einsum_gpu_probe_diagnosis_contracts,
+    test_einsum_peak_memory_contracts,
+    test_einsum_record_table_contracts,
+    test_einsum_tune_stage_contracts,
+    test_einsum_nine_items_acceptance_contracts,
     test_einsum_profile_readonly_contracts,
     test_einsum_profile_timing_contracts,
     test_einsum_optimize_none_contracts,
@@ -304,17 +342,23 @@ TESTS = (
 def main():
     """Run every test registered by the central testing package.
 
-    跑测试期间**强制关掉画像缓存**（``PYQCD_EINSUM_PROFILE=0``）：它的缺省目录是
-    CWD 下的 ``./.cache``，而普通 ``contract()`` 调用会**读**它来决定选路——如果
-    上一次测试往仓库根写了行，下一次测试就可能因为"缓存建议 backend"而换了路径，
-    表现为"单跑通过、全套偶发失败"。需要画像的契约自己用 ``profile=True`` + 临时
-    目录显式开启（显式参数压过环境变量），所以关掉不损失覆盖。
+    跑测试期间**强制关掉画像缓存**（``PYQCD_EINSUM_PROFILE=0``）：普通 ``contract()``
+    调用会**读**它来决定选路——如果上一次测试往表里写了行，下一次测试就可能因为
+    "缓存建议 backend"而换了路径，表现为"单跑通过、全套偶发失败"。需要画像的契约自己
+    用 ``profile=True`` + 临时目录显式开启（显式参数压过环境变量），所以关掉不损失覆盖。
+
+    **同时关掉自动 tune**（``PYQCD_EINSUM_AUTOTUNE=0``）：缺省行为是"第一次调用先
+    tune 再真跑"，在套件里那是每组几十个子进程、几百毫秒起步——它会把一次回归从
+    一分半拖成几十分钟，而且被测的是它自己。契约要验自动 tune 时用
+    :func:`pyqcd.einsum._autotune.run_for` 的显式调用，不靠缺省路径。
     """
     import traceback
     import unittest
 
     saved_profile = os.environ.get("PYQCD_EINSUM_PROFILE")
+    saved_autotune = os.environ.get("PYQCD_EINSUM_AUTOTUNE")
     os.environ["PYQCD_EINSUM_PROFILE"] = "0"
+    os.environ["PYQCD_EINSUM_AUTOTUNE"] = "0"
     passed = skipped = failed = 0
     try:
         for name, fn in sorted(globals().items()):
@@ -335,6 +379,10 @@ def main():
             os.environ.pop("PYQCD_EINSUM_PROFILE", None)
         else:
             os.environ["PYQCD_EINSUM_PROFILE"] = saved_profile
+        if saved_autotune is None:
+            os.environ.pop("PYQCD_EINSUM_AUTOTUNE", None)
+        else:
+            os.environ["PYQCD_EINSUM_AUTOTUNE"] = saved_autotune
     print(f"\n{passed} passed, {skipped} skipped, {failed} failed")
     return 1 if failed else 0
 

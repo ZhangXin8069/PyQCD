@@ -23,10 +23,16 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import os
 import re
 import sys
 import traceback
 from pathlib import Path
+
+#: 进程内关掉的两个开关（与 ``conftest.main()`` 同口径）：文档示例不该被用户家目录
+#: 里的配置表或自动 tune 改变选路。
+_PROFILE_ENV = "PYQCD_EINSUM_PROFILE"
+_AUTOTUNE_ENV = "PYQCD_EINSUM_AUTOTUNE"
 
 PAGES = ("overview", "usage", "performance", "install",
          "acknowledgements", "appendix")
@@ -86,6 +92,26 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path(args.root) if args.root else Path(__file__).resolve().parents[2]
     docs = root / "docs" / args.lang
+    # 文档示例必须**只依赖文档里写的东西**：用户家目录里的配置表与自动 tune 都会
+    # 改变选路（实测 ``kernel=backend`` 命中时整式交给后端、一个中间体都不产生，
+    # 于是 ``shared_intermediates`` 的断言拿到空 Counter）。与 ``conftest.main()``
+    # 同口径，进程内关掉两者，退出时原样还回去。
+    saved_env = {name: os.environ.get(name)
+                 for name in (_PROFILE_ENV, _AUTOTUNE_ENV)}
+    os.environ[_PROFILE_ENV] = "0"
+    os.environ[_AUTOTUNE_ENV] = "0"
+    try:
+        return _run_pages(args, docs)
+    finally:
+        for name, value in saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _run_pages(args: argparse.Namespace, docs: Path) -> int:
+    """逐页跑代码块并汇总（``main`` 的实体；环境隔离在调用方）。"""
     namespace: dict = {"__name__": "__docs__"}
     totals = [0, 0]
     failures: list[str] = []

@@ -140,10 +140,11 @@ def test_environment_auto_is_rejected():
             "环境变量 = auto（resolve(None)）")
 
 
-# ── 5. 四个合法标签（单值）──────────────────────────────────────────────────
-def test_all_four_labels_and_order():
-    """四个标签逐个可解析；逗号链式一律拒绝（一次只准写一个标签）。"""
-    assert set(LABELS) == {"backend", "dedicated", "generic", "topology"}, LABELS
+# ── 5. 五个合法标签（单值）──────────────────────────────────────────────────
+def test_all_five_labels_and_order():
+    """五个标签逐个可解析；逗号链式一律拒绝（一次只准写一个标签）。"""
+    assert set(LABELS) == {"backend", "dedicated", "generic", "original",
+                           "topology"}, LABELS
     with _no_force_env():
         for label in LABELS:
             assert _kernel_force.parse(label) == (label,), label
@@ -152,17 +153,33 @@ def test_all_four_labels_and_order():
         # 逗号链式（"按书写次序依次尝试"）已取消：同一调用里两条互相竞争的路线，
         # 报告里看不出谁说了算。generic / backend 与其它标签更是必须早失败。
         for bad in ("topology,dedicated", "dedicated,topology",
-                    "topology,topology", "generic,dedicated", "backend,topology"):
+                    "topology,topology", "generic,dedicated", "backend,topology",
+                    "original,backend"):
             _expect_rejected_multiple(bad, repr(bad))
-        # 具体标签原样交给 _api（generic 不产生 attempt 列表；backend 直接走后端）。
+        # 具体标签原样交给 _api（generic 不产生 attempt 列表；backend / original
+        # 都不进专用分派，但仍然是"强制"取值，所以在 forced_labels 里原样返回）。
         assert _kernel_force.forced_labels("topology") == ("topology",)
         assert _kernel_force.forced_labels("dedicated") == ("dedicated",)
         assert _kernel_force.forced_labels("generic") == ()
         assert _kernel_force.forced_labels("backend") == (
             _kernel_force.BACKEND_LABEL,)
+        assert _kernel_force.forced_labels("original") == (
+            _kernel_force.ORIGINAL_LABEL,)
         assert _kernel_force.generic_only("topology") is False
         assert _kernel_force.generic_only("backend") is False
+        assert _kernel_force.generic_only("original") is False
         assert _kernel_force.generic_only("generic") is True
+        # ``original`` 把本库的 optimize 叶子转成 opt_einsum 认的实参：连字符与
+        # ``False`` 是**实测**结论（下划线与字符串 'none' 都会 KeyError）。
+        assert _kernel_force.opt_einsum_path_name("branch_1") == "branch-1"
+        assert _kernel_force.opt_einsum_path_name("branch_2") == "branch-2"
+        assert _kernel_force.opt_einsum_path_name("branch_all") == "branch-all"
+        assert _kernel_force.opt_einsum_path_name("none") is False
+        assert _kernel_force.opt_einsum_path_name("greedy") == "greedy"
+        assert _kernel_force.opt_einsum_path_name("optimal") == "optimal"
+        assert _kernel_force.opt_einsum_path_name("dp") == "dp"
+        assert _kernel_force.opt_einsum_path_name(None) == "greedy"
+        assert _kernel_force.opt_einsum_path_name("bogus") is None
 
 
 TESTS = (
@@ -170,7 +187,7 @@ TESTS = (
     test_default_is_generic,
     test_cli_defaults_to_generic,
     test_environment_auto_is_rejected,
-    test_all_four_labels_and_order,
+    test_all_five_labels_and_order,
 )
 
 

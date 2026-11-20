@@ -25,9 +25,14 @@ CUDA 上下文不跨 ``fork`` 复用：父进程只要碰过 CUDA，``fork`` 出
 接受，每组各落一份则不可接受）。``np.save``/``np.load`` 逐位无损，所以"子进程看到的
 数"与"同进程直接调用看到的数"是同一批。
 
-落点由 ``PYQCD_EINSUM_TUNE_STAGE_DIR`` 指定；未设时用系统临时目录。需要更快的
-I/O 时把它指到 tmpfs（本机 ``/dev/shm`` 实测 2243 MiB/s），但要注意 tmpfs 占的是
-内存——操作数总字节超过可用内存时会 OOM。
+落点优先级：``PYQCD_EINSUM_TUNE_STAGE_DIR`` > **空间够用的 tmpfs**（``/dev/shm``、
+``/run/shm``）> 系统临时目录。tmpfs 不是"更快的可选项"而是**必需项**：本机 ``/tmp``
+是 7.8 GiB 的 tmpfs 且长期只剩 1 GiB 左右，而生产形状的操作数接近 2 GiB——直接写
+``/tmp`` 必然 ``ENOSPC``，实测表现为 29 组全部 ``error=OSError``（真正原因只有
+"磁盘满"一条，却被每组重报一次淹没）。
+
+落盘前按 :func:`required_bytes` 预检空间，不够就抛一条**说清要多少、剩多少、怎么办**
+的错误；写了一半失败会先删掉自己写的文件再抛（否则残留会毒害下一轮）。
 
 启动开销单列
 ------------
@@ -55,6 +60,7 @@ from typing import Any, Iterable, Sequence
 
 __all__ = [
     "INPROCESS_ENV", "STAGE_ENV", "READY_TIMEOUT_S", "OUTPUT_MAX_BYTES",
+    "required_bytes",
     "isolation_enabled", "stage_dir", "stage_operands", "run_group", "cleanup",
     "summarize_startup",
 ]
@@ -74,6 +80,9 @@ READY_TIMEOUT_S = 300.0
 
 #: 轮询文件系统的间隔（秒）。``ready``/结果文件都很小，0.005 s 足够灵敏又不烧 CPU。
 _POLL_S = 0.005
+#: 轮询间隔上限：一组动辄几十秒，5 ms 固定间隔等于每秒 200 次
+#: ``os.path.exists``。50 ms 的判据粒度相对组级窗口（60 s）可忽略。
+_POLL_MAX_S = 0.05
 
 #: 结果的输出张量超过这个字节数就不落盘：``rel`` 校验会退化成"未校验"并如实标注。
 #: 与参照相比它只是"多一次可选的 I/O"，不该因为一个巨大的输出把磁盘写满。
@@ -90,13 +99,89 @@ def isolation_enabled() -> bool:
     return text not in ("1", "true", "yes", "on")
 
 
-def stage_dir() -> str:
-    """操作数暂存目录：``PYQCD_EINSUM_TUNE_STAGE_DIR`` 或系统临时目录下的新目录。"""
+#: tmpfs 的候选根目录（按顺序取第一个存在且可写的）。
+#:
+#: 为什么优先 tmpfs 而不是 ``tempfile.gettempdir()``：生产形状上操作数接近 2 GiB，
+#: 而本机 ``/tmp`` 是 **7.8 GiB 的 tmpfs**、长期只余 1 GiB 左右——写 1.9 GiB 必然
+#: ``OSError: No space left on device``（2026-11-20 用户实测：29 组全部记
+#: ``error=OSError``/``KeyError``，而真正的原因只有"磁盘满"一条）。``/dev/shm``
+#: 同样是 tmpfs 但几乎没人用（本机 7.8 GiB 里只占 8 MiB），是暂存的更好落点。
+_TMPFS_ROOTS = ("/dev/shm", "/run/shm")
+
+
+def _available_bytes(path: str) -> int | None:
+    """``path`` 所在文件系统的可用字节数；取不到返回 ``None``（不猜 0）。"""
+    try:
+        stats = os.statvfs(path)
+    except (OSError, AttributeError):          # 非 POSIX 或路径消失
+        return None
+    return int(stats.f_bavail) * int(stats.f_frsize)
+
+
+def _pick_stage_root(needed_bytes: int = 0) -> str:
+    """选暂存根目录：显式配置 > 空间够用的 tmpfs > 系统临时目录。
+
+    ``needed_bytes`` 用来判"这个落点放得下吗"：tmpfs 与 ``/tmp`` 都可能只剩几百 MB，
+    写 1.9 GiB 会在**第 3 个操作数**上炸，而那时已经写了 1 GiB 垃圾。宁可落点选好
+    也不要在半路失败。
+    """
     configured = str(os.environ.get(STAGE_ENV, "")).strip()
     if configured:
         os.makedirs(configured, exist_ok=True)
-        return tempfile.mkdtemp(prefix="pyqcd-einsum-tune-", dir=configured)
-    return tempfile.mkdtemp(prefix="pyqcd-einsum-tune-")
+        return configured
+    candidates = [root for root in _TMPFS_ROOTS
+                  if os.path.isdir(root) and os.access(root, os.W_OK)]
+    candidates.append(tempfile.gettempdir())
+    for root in candidates:
+        room = _available_bytes(root)
+        if room is None or room >= needed_bytes:
+            return root
+    return tempfile.gettempdir()
+
+
+def stage_dir(needed_bytes: int = 0) -> str:
+    """操作数暂存目录（新建的唯一子目录）。
+
+    ``PYQCD_EINSUM_TUNE_STAGE_DIR`` 显式指定时**只用它**（用户说了算，空间不够会在
+    :func:`stage_operands` 里如实报错）；未设时按 :func:`_pick_stage_root` 的优先级
+    挑一个放得下的落点，再在其中建唯一子目录。
+    """
+    return tempfile.mkdtemp(prefix="pyqcd-einsum-tune-",
+                            dir=_pick_stage_root(needed_bytes))
+
+
+def required_bytes(operands: Sequence[Any]) -> int:
+    """把这批操作数落盘需要多少字节（含 5% 余量与 ``.npy`` 头）。
+
+    余量不是保守主义：``np.save`` 要写头 + 对齐，而文件系统本身也可能留 metadata；
+    差几十 KB 同样会让第 N 个操作数写到一半失败。
+    """
+    total = 0
+    for operand in operands:
+        try:
+            total += int(operand.nbytes)
+        except AttributeError:                # pragma: no cover - 非数组
+            total += int(getattr(operand, "size", 0)) * 8
+    return int(total * 1.05) + 4096
+
+
+def _ensure_room(directory: str, needed: int) -> None:
+    """落盘前检查空间；不够就抛一条**说清要多少、剩多少、怎么办**的错误。
+
+    为什么要在写之前判：不判的话失败发生在第 3 个操作数上，报的是
+    ``OSError: [Errno 28] No space left on device``——用户看不出"需要 1.9 GiB、
+    只剩 1.3 GiB"，也看不出"换个落点就行"。而 29 组会各报一次同一句话（实测），
+    把真正的原因淹没在噪音里。
+    """
+    room = _available_bytes(directory)
+    if room is None or room >= needed:
+        return
+    gib = float(needed) / 2 ** 30
+    left = float(room) / 2 ** 30
+    raise OSError(
+        f"暂存目录空间不足：需要 {gib:.2f} GiB（含 5% 余量），{directory} 只剩 "
+        f"{left:.2f} GiB。请腾出空间，或把 {STAGE_ENV} 指到更大的盘"
+        f"（本机 /dev/shm 通常可用，但它是 tmpfs、占的是内存）。")
 
 
 def stage_operands(operands: Sequence[Any], directory: str) -> dict[str, Any]:
@@ -108,15 +193,23 @@ def stage_operands(operands: Sequence[Any], directory: str) -> dict[str, Any]:
     """
     import numpy as np
 
+    _ensure_room(directory, required_bytes(operands))
     written = 0
     started = time.perf_counter()
-    for index, operand in enumerate(operands):
-        path = os.path.join(directory, f"operand_{index:02d}.npy")
-        np.save(path, operand)
-        try:
-            written += int(os.path.getsize(path))
-        except OSError:                       # pragma: no cover - 竞态，不影响正确性
-            written += int(getattr(operand, "nbytes", 0) or 0)
+    try:
+        for index, operand in enumerate(operands):
+            path = os.path.join(directory, f"operand_{index:02d}.npy")
+            np.save(path, operand)
+            try:
+                written += int(os.path.getsize(path))
+            except OSError:                   # pragma: no cover - 竞态，不影响正确性
+                written += int(getattr(operand, "nbytes", 0) or 0)
+    except BaseException:
+        # 写了一半就失败（空间不足、权限、信号）：**把自己写的清掉**再往外抛。
+        # 不清的后果是实测过的——2.0 GiB 残留在 /tmp 里，下一轮更没空间，
+        # 于是每一轮都以"全是 OSError"收场，而每轮都以为自己在排查 tune 逻辑。
+        cleanup(directory)
+        raise
     return {
         "dir": directory,
         "count": len(operands),
@@ -126,13 +219,24 @@ def stage_operands(operands: Sequence[Any], directory: str) -> dict[str, Any]:
 
 
 def _wait_for(path: str, deadline: float | None) -> bool:
-    """等 ``path`` 出现；``deadline`` 到点仍未出现则返回 ``False``。"""
+    """等 ``path`` 出现；``deadline`` 到点仍未出现则返回 ``False``。
+
+    **自适应退避**而不是固定 5 ms 轮询：固定间隔在生产尺寸上是每秒 200 次
+    ``os.path.exists``（一次系统调用），而一组动辄几十秒——白白烧 CPU，还会与子进程
+    抢 GIL/页缓存。前 50 ms 用 5 ms（快速路径：小算子组毫秒级就绪），之后按
+    ``min(50 ms, 上个间隔 × 1.5)`` 退避；判据粒度最差 50 ms，相对组级窗口可忽略。
+    """
+    interval = _POLL_S
+    started = time.monotonic()
     while True:
         if os.path.exists(path):
             return True
-        if deadline is not None and time.monotonic() >= deadline:
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
             return False
-        time.sleep(_POLL_S)
+        if now - started > 0.05:
+            interval = min(_POLL_MAX_S, interval * 1.5)
+        time.sleep(interval)
 
 
 def _read_json(path: str) -> dict[str, Any] | None:
@@ -258,7 +362,10 @@ def run_group(job: dict[str, Any], *, workdir: str,
                 "wall_s": time.monotonic() - ready_at,
                 "stdout": stdout, "stderr": stderr,
             }
-        time.sleep(_POLL_S)
+        # 同一套自适应退避：一组几十秒时不该每秒做 200 次系统调用。
+        interval = (min(_POLL_MAX_S, max(_POLL_S,
+                                         (time.monotonic() - ready_at) * 0.02)))
+        time.sleep(interval)
 
     wall_s = time.monotonic() - ready_at
     stdout, stderr = _drain(process)

@@ -237,22 +237,22 @@ def test_unavailable_kernel_is_skipped_not_errored():
 def test_trimmed_group_counts_are_computed_per_branch():
     """契约 3/4：``N`` 是**裁剪后**的组数，三条分支各算各的（不许共用一个数）。
 
-    冻结口径是 ``B1``/``B2`` = 22、``B3`` = 21；``dedicated`` 占 7 组（共同前缀里只有
+    冻结口径是 ``B1``/``B2`` = 29、``B3`` = 28；``dedicated`` 占 7 组（共同前缀里只有
     ``as_equivalence=false`` 那一遍），``topology`` 只在 ``B1``/``B2`` 各占 1 组。
-    于是裁剪后的期望值可以直接写死：``dedicated`` 不可用 → 15/15/14，
-    ``topology`` 不可用 → 21/21/21（``B3`` 本来就没有它），两者都不可用 → 14/14/14。
+    于是裁剪后的期望值可以直接写死：``dedicated`` 不可用 → 22/22/21，
+    ``topology`` 不可用 → 28/28/28（``B3`` 本来就没有它），两者都不可用 → 21/21/21。
     """
     cli = _cli()
-    assert cli.tune_plan_sizes_trimmed(()) == {"B1": 22, "B2": 22, "B3": 21}
-    assert cli.tune_plan_sizes_trimmed(["dedicated"]) == {"B1": 15, "B2": 15, "B3": 14}
-    assert cli.tune_plan_sizes_trimmed(["topology"]) == {"B1": 21, "B2": 21, "B3": 21}
+    assert cli.tune_plan_sizes_trimmed(()) == {"B1": 29, "B2": 29, "B3": 28}
+    assert cli.tune_plan_sizes_trimmed(["dedicated"]) == {"B1": 22, "B2": 22, "B3": 21}
+    assert cli.tune_plan_sizes_trimmed(["topology"]) == {"B1": 28, "B2": 28, "B3": 28}
     assert cli.tune_plan_sizes_trimmed(["dedicated", "topology"]) == {
-        "B1": 14, "B2": 14, "B3": 14}
+        "B1": 21, "B2": 21, "B3": 21}
     # 裁剪只动 ``kernel_force`` 那一轴：保留项的顺序必须与完整清单一致。
     kept = cli.tune_plan_trimmed("B1", ["dedicated"])
     assert kept == [combo for combo in cli.tune_plan("B1") if combo[0] != "dedicated"]
 
-    # 真跑一轮对账：报告里的 ``N`` 就是裁剪后的实际组数（不是 21 也不是 22）。
+    # 真跑一轮对账：报告里的 ``N`` 就是裁剪后的实际组数（不是 28 也不是 29）。
     with _isolated() as work:
         tune, printed = _run_tune(work, "counts",
                                   unavailable={"dedicated": ARENA_REASON})

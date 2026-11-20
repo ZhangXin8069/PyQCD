@@ -474,14 +474,18 @@ def test_tune_warns_and_ignores_the_axes_it_sweeps_itself():
 def test_tune_refuses_more_than_the_combination_cap():
     """把某一维加宽到超过 30 组：必须报用法错误（退出码 2），且不跑任何一组。"""
     cli = _require_tune()
-    limit = int(getattr(cli, "TUNE_MAX_COMBOS", 30))
-    assert limit == 30, ("冻结口径：--tune 的硬上限是 30 组", limit)
+    limit = int(getattr(cli, "TUNE_MAX_COMBOS", 0))
+    # 上限随清单组数一起变（B1/B2 = 29、B3 = 28）：它必须**严格大于**任何分支的
+    # 完整组数，否则一份合法清单会被自己的上限拒掉。这里不复述具体数字，只钉这条
+    # 不变量——具体组数由 `_einsum_tune_plan_contract` 负责。
+    assert limit > max(cli.tune_plan_sizes_trimmed({}).values()), (
+        "--tune 的硬上限必须大于任何分支的完整组数", limit)
 
     combos = list(cli.tune_combos())
     bundle = (len(cli.TUNE_KERNEL_FORCE) * len(cli.TUNE_AS_EQUIVALENCE)
               * len(cli.TUNE_OPTIMIZERS))
     # 2026-11-18 起缺省清单**不再**是三轴笛卡尔积：它按分支给**有序清单**
-    # （B1/B2 = 22、B3 = 21，逐项顺序见 `_einsum_tune_plan_contract`）。
+    # （组数与逐项顺序见 `_einsum_tune_plan_contract`）。
     # 这里只钉"无重复、不超过上限、且真的比笛卡尔积短"，组数与顺序由那条契约负责
     # ——两处都断言同一件事，早晚会打架。
     assert len(combos) == len(set(combos)) <= limit, (

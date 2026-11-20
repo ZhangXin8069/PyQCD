@@ -86,6 +86,11 @@ def _job(operands: str, **overrides: Any) -> dict[str, Any]:
         "optimize": False,
         "contract_kwargs": {},
         "profile_kwargs": {},
+        # **与生产一致**：``run_tune`` 每条作业都下发 ``profile_off=True``
+        # （``_TUNING`` 是进程内计数器，子进程里恒为 0，不显式关就会读表并把命中行的
+        # 三轴盖到被测格子上、抛 ``ProfileConflict``）。缺了这一位，本契约会随
+        # "用户家目录里有没有表"而红——2026-11-20 缺省目录改到家目录后实测如此。
+        "profile_off": True,
     }
     job.update(overrides)
     return job
@@ -262,7 +267,10 @@ def test_subprocess_groups_never_read_the_profile_table() -> None:
     try:
         os.chdir(scratch.root)
         os.environ[_profile_cache.PROFILE_ENV] = "1"
-        os.environ.pop(_profile_cache.DIR_ENV, None)
+        # **必须钉住目录**：缺省目录自 2026-11-20 起是用户家目录
+        # （``~/.cache/pyqcd.einsum``），pop 掉 DIR_ENV 会让本契约读到用户真实表，
+        # 那行 ``optimize=greedy`` 与这里逐格下发的 ``none`` 冲突 → 两组记 error。
+        os.environ[_profile_cache.DIR_ENV] = os.path.join(scratch.root, "profile")
         _profile_cache._TABLE = None
         _profile_cache._CONFIGURED_DIR = ""
         _profile_cache._LAST_ERROR = None

@@ -40,15 +40,18 @@ import pyqcd.einsum as pe
 from ..einsum import _profile_cache, _tune_axes
 
 #: 本契约自己用的小清单：四个格子，睡眠时长逐项给定（见 :data:`DELAYS`）。
-#: 用注入的小清单而不是 22 组：这里要验的是**机制**，"22 组本身有多快"与规则无关。
+#: 用注入的小清单而不是整轮几十组：这里要验的是**机制**，"整轮本身有多快"与规则无关。
 COMBOS = (("generic", "false", "greedy"),
           ("generic", "false", "branch_1"),
           ("generic", "false", "dp"),
           ("generic", "false", "branch_2"))
 
-#: 注入的耗时序列（秒）：第 1 组 20 ms 立起上界，第 2 组 5 ms 压低它，
-#: 第 3 组 10 ms 与第 4 组 30 ms 都超过 5 ms → 必须被剪枝。
-DELAYS = (0.020, 0.005, 0.010, 0.030)
+#: 注入的耗时序列（秒）：第 1 组 40 ms 立起上界，第 2 组 10 ms 压低它到 10 ms，
+#: 于是**截止**是 ``2 × 10 ms = 20 ms``（:data:`_tune_axes.MIN_WALL_FACTOR`）；
+#: 第 3 组 30 ms 与第 4 组 60 ms 都超过 20 ms → 必须被剪枝。数值挑成"远离判据边界"
+#: 是为了让断言在 2× 口径下稳定：原先的 10 ms 组正好压在 1× 边界上，乘 2 之后
+#: 它反而落在截止内（实测 11.0 ms vs 截止 11.0 ms），断言会随机器抖动。
+DELAYS = (0.040, 0.010, 0.030, 0.060)
 
 #: ``--tune-timeout`` 的显式取值（秒）= ``min_wall_ms`` 的初值来源。
 TIMEOUT = 30.0
@@ -62,17 +65,22 @@ SPEC_PREFIX = tuple(
     for kernel in ("dedicated", "generic")
     for optimize in ("greedy", "branch_1", "branch_2", "dp", "branch_all",
                      "optimal", "none"))
-SPEC_TAIL = tuple(("backend", "false", optimize)
+#: 尾部：``original`` 与 ``backend`` 同地位（都不进专用分派），按用户裁定排在
+#: ``backend`` **之前**，两者各测满 7 个 optimize。
+SPEC_TAIL = tuple(("original", "false", optimize)
                   for optimize in ("greedy", "branch_1", "branch_2", "dp",
-                                   "branch_all", "optimal", "none"))
+                                   "branch_all", "optimal", "none")) + tuple(
+    ("backend", "false", optimize)
+    for optimize in ("greedy", "branch_1", "branch_2", "dp",
+                     "branch_all", "optimal", "none"))
 SPEC_EXTRA = {
     _tune_axes.TUNE_BRANCH_RAW: (("topology", "false", "none"),),
     _tune_axes.TUNE_BRANCH_EQUIVALENT: (("topology", "true", "none"),),
     _tune_axes.TUNE_BRANCH_NONE: (),
 }
-SPEC_SIZES = {_tune_axes.TUNE_BRANCH_RAW: 22,
-              _tune_axes.TUNE_BRANCH_EQUIVALENT: 22,
-              _tune_axes.TUNE_BRANCH_NONE: 21}
+SPEC_SIZES = {_tune_axes.TUNE_BRANCH_RAW: 29,
+              _tune_axes.TUNE_BRANCH_EQUIVALENT: 29,
+              _tune_axes.TUNE_BRANCH_NONE: 28}
 
 #: 剪枝时必须逐字出现的原文（用户口径）。
 TERMINATION_TEXT = "耗时大于min_wall_ms,此组被终止"
@@ -213,7 +221,7 @@ def test_tune_plan_sizes_and_order_per_branch():
         assert cli._tune_axes.tune_plan_size(branch) == size, branch
     # 三个分支合起来覆盖了这两条 axis 取值（清单不许漏档）。
     sizes = [len(cli.tune_plan(branch)) for branch in cli.TUNE_BRANCHES]
-    assert sizes == [22, 22, 21], ("三个分支的组数", sizes)
+    assert sizes == [29, 29, 28], ("三个分支的组数", sizes)
     # ``topology`` 只在能特化的分支出现，且 ``B2`` 那一组必须带 as_equivalence=true。
     assert ("topology", "false", "none") in cli.tune_plan(
         cli.TUNE_BRANCH_RAW), "B1 必须试 topology（原方程能特化）"
@@ -289,7 +297,7 @@ def test_tune_prunes_slower_combinations_without_writing_them():
 
     pruned = [row for row in rows if row.get("pruned")]
     assert pruned, ("后两组必须被剪枝", [(r["optimize"], r["median_ms"]) for r in rows])
-    # 第 3、4 组的注入耗时（10 ms / 30 ms）都超过当时的 5 ms 上界。
+    # 第 3、4 组的注入耗时（30 ms / 60 ms）都超过当时的截止（2 × 10 ms = 20 ms）。
     assert [row["optimize"] for row in pruned] == ["dp", "branch_2"], pruned
     assert all(row["median_ms"] is None for row in pruned), pruned
     assert all(row["status"] == "pruned" for row in pruned), pruned
