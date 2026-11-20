@@ -1576,8 +1576,10 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     # 参照实现
     "reference.opt_einsum_import_failed": {
-        "en": "opt_einsum import failed: {exc_type}",
-        "zh": "opt_einsum 导入失败：{exc_type}",
+        "en": ("opt_einsum import failed: {exc_type} — install it with "
+               "`pip install \"pyqcd[einsum]\"` (or `pip install opt_einsum`)"),
+        "zh": ("opt_einsum 导入失败：{exc_type} —— 装它："
+               "`pip install \"pyqcd[einsum]\"`（或 `pip install opt_einsum`）"),
     },
     "reference.opt_einsum_failed": {
         "en": "opt_einsum execution failed: {exc_type}: {exc}",

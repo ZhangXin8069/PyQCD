@@ -40,6 +40,9 @@ classifiers = [
 cuda = ["cupy-cuda12x"]
 torch = ["torch"]
 plot = ["matplotlib>=3.6"]
+# ``kernel_force="original"`` 与 ``--compare opt_einsum`` 需要它。不放进必装依赖：
+# 纯 numpy 路径与原生内核都不需要它，而它在最小安装里只是几十 KB 的纯 Python 包。
+einsum = ["opt_einsum>=3.3"]
 
 [project.urls]
 Documentation = "https://py-qcd.readthedocs.io/"

@@ -895,7 +895,19 @@ def _original_einsum(backend_name: str, subscripts: str, operands: Sequence[Any]
 
     失败一律外抛：``original`` 是**强制**标签，跑不成就该报错，不静默回落。
     """
-    import opt_einsum as oe
+    try:
+        import opt_einsum as oe
+    except ImportError as exc:
+        # ``opt_einsum`` 是**可选依赖**（``pip install "pyqcd[einsum]"``）。缺它时
+        # 必须抛一个**说清装什么**的错误：裸 ``ModuleNotFoundError`` 会让用户以为
+        # 是 pyqcd 自己的 bug，而 ``original`` 的语义是"强制即真试一次、跑不成即抛"，
+        # 与其它内核的 ``KernelUnavailableError`` 一致才对。
+        raise _kernel_force.KernelUnavailableError(
+            _kernel_force.ORIGINAL_LABEL, subscripts,
+            {_kernel_force.ORIGINAL_LABEL: (
+                "opt_einsum is not installed; install it with "
+                '`pip install "pyqcd[einsum]"` (or `pip install opt_einsum`)')},
+            attempted=(_kernel_force.ORIGINAL_LABEL,)) from exc
 
     from ._kernel_force import opt_einsum_path_name
 
