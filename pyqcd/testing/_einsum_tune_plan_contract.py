@@ -47,10 +47,10 @@ COMBOS = (("generic", "false", "greedy"),
           ("generic", "false", "branch_2"))
 
 #: 注入的耗时序列（秒）：第 1 组 40 ms 立起上界，第 2 组 10 ms 压低它到 10 ms，
-#: 于是**截止**是 ``2 × 10 ms = 20 ms``（:data:`_tune_axes.MIN_WALL_FACTOR`）；
-#: 第 3 组 30 ms 与第 4 组 60 ms 都超过 20 ms → 必须被剪枝。数值挑成"远离判据边界"
-#: 是为了让断言在 2× 口径下稳定：原先的 10 ms 组正好压在 1× 边界上，乘 2 之后
-#: 它反而落在截止内（实测 11.0 ms vs 截止 11.0 ms），断言会随机器抖动。
+#: 于是**截止**就是 ``10 ms`` 本身（:data:`_tune_axes.MIN_WALL_FACTOR` = 1.0，
+#: 2026-11-21 起改回原 ``min_wall_ms`` 口径）；第 3 组 30 ms 与第 4 组 60 ms
+#: 都超过 10 ms → 必须被剪枝。数值挑成"远离判据边界"（3× 与 6×，以及低于它的 0.4×）
+#: 是为了让断言不随机器抖动误判。
 DELAYS = (0.040, 0.010, 0.030, 0.060)
 
 #: ``--tune-timeout`` 的显式取值（秒）= ``min_wall_ms`` 的初值来源。
@@ -59,17 +59,21 @@ TIMEOUT = 30.0
 EQUATION = "ij,jk,kl->il"
 SHAPES = [(6, 6), (6, 6), (6, 6)]
 
-#: 规格 §3 的**逐项顺序**（契约自己照抄一遍，不复用实现的常量：复用就验不出顺序）。
+#: 清单的**逐项顺序**（契约自己照抄一遍，不复用实现的常量：复用就验不出顺序）。
+#:
+#: 2026-11-21 用户裁定 ``original`` 排**第一位**（它是唯一能吃满 ``optimize`` 七档的
+#: 路线，先测它就能让 ``min_wall_ms`` 一开始被压到"这条方程到底能有多快"的量级），
+#: 之后才是 ``dedicated`` / ``generic``。
 SPEC_PREFIX = tuple(
+    ("original", "false", optimize)
+    for optimize in ("greedy", "branch_1", "branch_2", "dp", "branch_all",
+                     "optimal", "none")) + tuple(
     (kernel, "false", optimize)
     for kernel in ("dedicated", "generic")
     for optimize in ("greedy", "branch_1", "branch_2", "dp", "branch_all",
                      "optimal", "none"))
-#: 尾部：``original`` 与 ``backend`` 同地位（都不进专用分派），按用户裁定排在
-#: ``backend`` **之前**，两者各测满 7 个 optimize。
-SPEC_TAIL = tuple(("original", "false", optimize)
-                  for optimize in ("greedy", "branch_1", "branch_2", "dp",
-                                   "branch_all", "optimal", "none")) + tuple(
+#: 尾部只剩 ``backend``（后端自带 einsum，永远可跑，作为兜底基准），测满 7 个 optimize。
+SPEC_TAIL = tuple(
     ("backend", "false", optimize)
     for optimize in ("greedy", "branch_1", "branch_2", "dp",
                      "branch_all", "optimal", "none"))
@@ -222,6 +226,11 @@ def test_tune_plan_sizes_and_order_per_branch():
     # 三个分支合起来覆盖了这两条 axis 取值（清单不许漏档）。
     sizes = [len(cli.tune_plan(branch)) for branch in cli.TUNE_BRANCHES]
     assert sizes == [29, 29, 28], ("三个分支的组数", sizes)
+    # ``original`` 必须在**第一位**：它是唯一吃满 optimize 七档的路线，先跑它才能
+    # 让 min_wall_ms 一开始就被压到"这条方程能有多快"的量级（2026-11-21 用户裁定）。
+    for branch in cli.TUNE_BRANCHES:
+        assert cli.tune_plan(branch)[0][0] == "original", (
+            f"{branch} 的第一组必须是 original，实际 {cli.tune_plan(branch)[0]}")
     # ``topology`` 只在能特化的分支出现，且 ``B2`` 那一组必须带 as_equivalence=true。
     assert ("topology", "false", "none") in cli.tune_plan(
         cli.TUNE_BRANCH_RAW), "B1 必须试 topology（原方程能特化）"

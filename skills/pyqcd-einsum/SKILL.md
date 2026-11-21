@@ -1959,9 +1959,9 @@ applyInitQcd/applyEndQcd` + `qcd_kupl_{topology,dedicated,family}_apply`）；
 ### 记录表 `pyqcd.einsum.record.csv`
 
 与 `profile.csv` 同目录、同列 + 一列 `peak_memory_mb`，**整表重写**（每次 tune 一份
-快照）、**从不参与命中**（`_api` / 选路 / `read_winner` 都不读它）。
-命中配置表时 `_api._cheaper_memory_hint()` 会读它给一行"存在更省内存的配置"，判据：
-同键、峰值 < 当前一半、耗时 ≤ 当前 1.2 倍。
+快照）、**从不参与命中**：`_api` / 选路 / `read_winner` / 命中提示**一处都不读它**。
+（"存在更省内存的配置"那条提示已在 2026-11-21 按用户要求删除，热路径上因此不再有
+任何读记录表的 I/O；它现在是纯报告产物，只给报告与工具用。）
 
 ### 首次调用自动 tune
 

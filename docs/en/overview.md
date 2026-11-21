@@ -86,8 +86,9 @@ The engine can keep a per-equation configuration table with exactly one owner:
   directory, so a table tuned once serves every project.
 * Reference table: `pyqcd.einsum.record.csv`, in the same directory, same columns as
   the profile table plus a `peak_memory_mb` column. It records **every** group of the
-  sweep and is never consulted for dispatch — replacing a profile row with a record row
-  is how you opt into a cheaper (smaller-footprint) configuration by hand.
+  sweep and is never consulted for dispatch (nothing on the hot path reads it; only
+  reports and tooling do) — copying a record row into the profile table by hand is how
+  you opt into a cheaper configuration.
 * First call without a matching row: by default the engine runs a full `--tune` for
   that key and then executes; `PYQCD_EINSUM_AUTOTUNE=0` turns that off.
 * Performance column: `wall_ms`, the wall clock of the **whole** `contract()` call

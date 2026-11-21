@@ -125,16 +125,17 @@ def test_group_window_is_the_single_call_limit_times_calls_per_group() -> None:
     # 预热位；warmup=0 时它就是纯计数）。窗口因此是 60 s，不是 150 s。
     assert (cli.DEFAULT_WARMUP, cli.DEFAULT_ROUNDS) == (0, 1), (
         "缺省 warmup/rounds 变了：文档与 AGENTS.md 的 ×N 口径要一起改")
-    # 剪枝截止是 2 × min_wall_ms（用户规则），不是 1 ×：这条不变量与窗口无关，
-    # 但两条都从同一处口径派生，放在一起才不会一改一漏。
+    # 剪枝截止是 **1 × min_wall_ms**（2026-11-21 用户裁定"单测试项时间限制改回原
+    # min_wall_ms"；2026-11-19 曾临时改成 2×）。这条不变量与窗口无关，但两条都从
+    # 同一处口径派生，放在一起才不会一改一漏。
     from ..einsum import _tune_axes
 
-    assert float(_tune_axes.MIN_WALL_FACTOR) == 2.0, (
-        "剪枝截止倍数必须是 2×", _tune_axes.MIN_WALL_FACTOR)
+    assert float(_tune_axes.MIN_WALL_FACTOR) == 1.0, (
+        "剪枝截止倍数必须是 1×（＝ min_wall_ms 本身）", _tune_axes.MIN_WALL_FACTOR)
     probe = _tune_axes.MinWall(ms=100.0)
-    assert probe.cutoff_ms == 200.0, probe.cutoff_ms
-    assert probe.exceeds(199.0) is False, "1×~2× 之间不该被剪枝"
-    assert probe.exceeds(201.0) is True, "超过 2× 必须被剪枝"
+    assert probe.cutoff_ms == 100.0, probe.cutoff_ms
+    assert probe.exceeds(99.0) is False, "比 min_wall_ms 快的不该被剪枝"
+    assert probe.exceeds(101.0) is True, "超过 min_wall_ms 必须被剪枝"
 
 
 TESTS = (

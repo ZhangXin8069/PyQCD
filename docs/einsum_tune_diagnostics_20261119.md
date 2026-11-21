@@ -92,7 +92,10 @@ verdict        : CUDA fast path is active
 * 部分可用时 verdict 写 `partially active — dtype(s) X fall back`，不说 active 也
   不说 NOT active。
 
-## 8. 全量记录表与"更省内存的配置"
+## 8. 全量记录表（"更省内存的配置"提示已于 2026-11-21 删除）
+
+> **后续变更**：该提示已按用户要求在 0.5.14 删除——`_api` 不再读记录表，
+> 记录表回到纯报告地位（下面的段落保留为当时的记录）。
 
 `--tune` 除了写配置表（每个键只留胜出那一行），还整表写一份
 `pyqcd.einsum.record.csv`（同目录）：

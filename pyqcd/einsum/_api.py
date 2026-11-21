@@ -1456,92 +1456,6 @@ def _profile_ms_text(row: Mapping[str, Any]) -> str:
     return str(row.get("wall_ms") or "")
 
 
-def _cheaper_memory_hint(row: Mapping[str, Any]) -> str | None:
-    """命中行之外**是否还存在更省内存的配置**；有就给一行提示，没有就 ``None``。
-
-    数据源是记录表（``pyqcd.einsum.record.csv``，tune 的全量快照）。它**只**用于这
-    一条提示：选路、命中、数值一律不受影响——记录表不是缓存，用户把某一行手工搬进
-    配置文件才等于"选择那个更省的方案"。
-
-    **当前层的峰值只能从记录表里取**：配置表（``profile.csv``）没有
-    ``peak_memory_mb`` 这一列（它的列集合是冻结的），所以这里按
-    ``kernel`` + ``optimize`` 在记录表里找回命中那一行，读它的实测峰值。找不到就
-    静默——"不知道当前占多少"时给"有一个更省的"是没有依据的话。
-
-    峰值口径：``peak_memory_mb`` 是**扣掉操作数本身**之后的额外占用（见
-    ``_memory.reset_peak_memory(exclude_mb=...)``）。这条提示比较的正是这个量——
-    "换一个配置能少占多少"，而不是"输入有多大"（那个数每组都一样）。
-
-    判据刻意保守（任一不满足就不提示）：
-    * 同一个键（shape/dtype/device/equation/backend）下才有可比性；
-    * 候选行必须与命中行**不是同一格**，且有 ``peak_memory_mb``，
-      且**严格小于**当前那一格的一半；
-    * 候选的 ``wall_ms`` 不得超过当前那一格的 1.2 倍——"更省但慢一倍"不是建议，
-      那只是另一条路。
-
-    读失败、没有记录表、记录里一个 peak 都没有 → ``None``（静默）。提示是加分项，
-    绝不能因为一条提示让 ``contract()`` 失败或变慢。
-    """
-    try:
-        if not _profile_cache.enabled():
-            return None
-        reader = getattr(_profile_cache, "read_records", None)
-        path_getter = getattr(_profile_cache, "record_path", None)
-        if not callable(reader) or not callable(path_getter):
-            return None
-        records = reader()
-    except Exception:                            # noqa: BLE001 - 提示失败不影响调用
-        return None
-    if not records:
-        return None
-    wanted = {field: str(row.get(field) or "") for field in
-              ("shape", "dtype", "device", "equation", "backend")}
-    kernel = str(row.get("kernel") or "")
-    optimize = str(row.get("optimize") or "")
-    same_key = [record for record in records
-                if all(str(record.get(field) or "") == wanted[field]
-                       for field in wanted)]
-    if not same_key:
-        return None
-    current = None
-    for record in same_key:
-        if (str(record.get("kernel") or "") == kernel
-                and str(record.get("optimize") or "") == optimize):
-            current = record
-            break
-    if current is None:
-        return None
-    current_peak = _to_float(current.get("peak_memory_mb"))
-    current_ms = _to_float(current.get("wall_ms"))
-    if current_peak is None or current_peak <= 0.0:
-        return None
-    best: dict[str, Any] | None = None
-    best_peak = current_peak
-    for record in same_key:
-        if record is current:
-            continue
-        peak = _to_float(record.get("peak_memory_mb"))
-        if peak is None or peak <= 0.0 or peak >= best_peak * 0.5:
-            continue
-        ms = _to_float(record.get("wall_ms"))
-        if ms is not None and current_ms and ms > current_ms * 1.2:
-            continue
-        best, best_peak = record, peak
-    if best is None:
-        return None
-    target = str(path_getter())
-    profile = str(getattr(_profile_cache, "profile_path", lambda: "")())
-    fields = (f"kernel={best.get('kernel', '')} optimize={best.get('optimize', '')} "
-              f"wall_ms={best.get('wall_ms', '')} peak={best_peak:.0f}MB")
-    if _specialize.notice_language() == "zh":
-        return (f"[pyqcd.einsum] 存在更省内存的配置：{fields}"
-                f"（当前 {current_peak:.0f}MB）。可把 {target} 中那一行直接替换 "
-                f"{profile} 的对应项。")
-    return (f"[pyqcd.einsum] a lower-memory configuration exists: {fields} "
-            f"(currently {current_peak:.0f}MB). Replace the matching row in "
-            f"{profile} with that row from {target}.")
-
-
 def _to_float(value: Any) -> float | None:
     """字符串/数字 → ``float``；空、``None``、坏值一律 ``None``（不猜 0）。"""
     if value is None or value == "":
@@ -1582,14 +1496,12 @@ def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
         source = _profile_cache.profile_path()
         line = str(row.get("line") or "").strip()
         where = f"{source}:{line}" if line else source
-        cheaper = _cheaper_memory_hint(row)
         if _specialize.notice_language() == "zh":
             print(
                 f"[pyqcd.einsum] profile 命中：{where}"
                 f" kernel={row.get('kernel', '')}"
                 f" optimize={row.get('optimize', '')}"
-                f" wall_ms={_profile_ms_text(row)}（已套用）"
-                + ("" if cheaper is None else "\n" + cheaper),
+                f" wall_ms={_profile_ms_text(row)}（已套用）",
                 flush=True,
             )
         else:
@@ -1597,8 +1509,7 @@ def _profile_notice(info: dict[str, Any], *, row: dict[str, Any] | None = None,
                 f"[pyqcd.einsum] profile hit: {where}"
                 f" kernel={row.get('kernel', '')}"
                 f" optimize={row.get('optimize', '')}"
-                f" wall_ms={_profile_ms_text(row)} (applied)"
-                + ("" if cheaper is None else "\n" + cheaper),
+                f" wall_ms={_profile_ms_text(row)} (applied)",
                 flush=True,
             )
     elif row is not None:

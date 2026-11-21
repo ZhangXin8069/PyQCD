@@ -17,9 +17,10 @@
    只属于记录表——配置表的列集合是冻结的（多条契约依赖它），往里加一列等于改配置表格式。
 3. **整表重写而非追加**：两次 ``write_records`` 之后磁盘上只剩第二次那批行。追加会让同一
    把键在表里留下几十行历史噪音，用户拿它跟配置表对照时会看到一堆"没生效的组"。
-4. **不参与命中**：``_api.py`` 里除 ``_cheaper_memory_hint`` 之外**没有一处**读记录表，
-   ``_profile_cache.read_winner``（唯一命中入口）的函数体里连常量名都不出现。允许读它的
-   唯一地方是 ``_api._cheaper_memory_hint``，而且那是一条**提示**（不施加、不改选路）。
+4. **不参与命中**：``_api.py`` 里**没有一处**读记录表，``_profile_cache.read_winner``
+   （唯一命中入口）的函数体里连常量名都不出现，整个 ``pyqcd/einsum/`` 包里也没有第二个
+   模块读它。记录表回到纯粹的**报告**地位（2026-11-21 删掉"更省内存"提示之后，原先
+   ``_api._cheaper_memory_hint`` 那一处例外也一并消失）。
 5. **坏行跳过 / 缺列按空**：手写一张有坏行（少一列、多一列）的 CSV，``read_records()``
    不抛、好行照常返回、每行都补齐全部列键。记录表是"给报告添一列证据"，坏一行不该让
    报告拿不到结果。
@@ -69,15 +70,13 @@ RECORD_MEMORY_LITERAL = "peak_memory_mb"
 #: 0.5.12 起配置表删掉了 ``optimize_topology_v2`` 一列（3 → 4），记录表的版本随之 +1。
 RECORD_SCHEMA_LITERAL = 5
 
-#: ``_cheaper_memory_hint`` 的 docstring 里必须出现的"只用于提示"式表述（任一即可）。
-#: 这句话是这条提示**不施加任何东西**的唯一书面保证：措辞变了就得有人重新确认语义。
-HINT_ONLY_PHRASES = ("只用于", "只用来", "只作", "只给", "只供", "仅用于")
-
-#: 允许读记录表的**模块**（相对 ``pyqcd/einsum/``）：选路/命中路径上的模块一个都不许在
-#: 这里，除了既有的那条提示所在的 ``_api.py``（其内部还按函数体再卡一次，见第 4 条）。
-#: 真出现"纯报告模块"要读记录表时，把它加进这个白名单并在报告里说明它不参与选路——
-#: 白名单是显式的，所以"悄悄多读一处"一定会红。
-ALLOWED_RECORD_READER_MODULES = frozenset({"_api.py"})
+#: 允许读记录表的**模块**（相对 ``pyqcd/einsum/``）：**空集**。
+#:
+#: 2026-11-21 起记录表是纯报告：``write_records`` 写、``read_records`` 给工具读，
+#: 但没有任何运行时代码在 ``contract()`` 路径上读它。原先这里放行 ``_api.py``（那条
+#: "更省内存"提示），该提示已按用户要求删除，白名单随之清空——把任何模块加回来都
+#: 会让第 4 条断言红，这正是"别悄悄把 I/O 塞回热路径"的闸门。
+ALLOWED_RECORD_READER_MODULES: frozenset[str] = frozenset()
 
 #: 临时区：``data/tmp/``（相对仓库根），与仓库既有约定一致。
 _TMP_ENV = "PYQCD_TEST_TMP"
@@ -440,50 +439,38 @@ def test_write_records_rewrites_the_whole_table() -> None:
 # ── 4. 记录表不参与命中 ─────────────────────────────────────────────────────
 
 def test_records_never_reach_the_hit_path() -> None:
-    """``read_winner`` 里不出现记录表；唯一读它的地方是 ``_api._cheaper_memory_hint``。
+    """``read_winner`` 里不出现记录表；**整个 einsum 包里也没有一处读它**。
 
     为什么：命中判定只走 :func:`._profile_cache.read_winner`。一旦那里（或其它任何选路
     代码）读了记录表，"没被选中的组"就会变成可选答案——记录表是"测过什么"，不是"该用
-    什么"。所以这里用 ``grep -n`` 的口径钉住：记录表的读取只允许出现在一条**提示**里。
+    什么"。
 
-    口径说明（与任务书的一处张力）：``_cheaper_memory_hint`` 本身就住在 ``_api.py`` 里，
-    所以"``_api.py`` 里 ``read_records`` 出现 0 次"与"唯一允许读它的地方是
-    ``_cheaper_memory_hint``"不可能同时成立。本断言取**更强且可满足**的那一版：
-    ``_api.py`` 里除 ``_cheaper_memory_hint`` 的函数体之外出现 0 次（全包范围同理），
-    且该函数里至少要真读一次。
+    口径演变（2026-11-21）：原先这里允许**一处**例外——``_api._cheaper_memory_hint``，
+    它在每次命中时读一遍记录表，给出一行"存在更省内存的配置"的建议。该提示已按用户
+    要求删除（"把'更省内存或显存的提示输出'功能删去"），于是例外也一起消失：现在
+    除 ``_profile_cache`` 自己的定义与写入外，**任何模块出现 ``read_records`` 都算违约**。
+    这同时把热路径上的一次纯 I/O（每次 ``contract()`` 读 29 行）彻底去掉。
     """
     module = _profile_cache
     with _isolated() as work:
         module.configure(os.path.join(work, "cache"))
         api_path = os.path.abspath(_api.__file__)
         cache_path = os.path.abspath(module.__file__)
-        api_lines = _read_text(api_path).splitlines()
-        cache_lines = _read_text(cache_path).splitlines()
 
-        # (a) 那条提示必须存在（grep -n 等价：给出定义所在行）。
-        hint = _function_node(api_path, "_cheaper_memory_hint")
-        hint_span = (hint.lineno, hint.end_lineno)
-        def_lines = _needle_lines(api_lines, "def _cheaper_memory_hint")
-        assert def_lines == [hint_span[0]], (
-            f"grep -n 'def _cheaper_memory_hint' {os.path.basename(api_path)} 得到 "
-            f"{def_lines}，AST 说定义在第 {hint_span[0]} 行——"
-            "唯一允许读记录表的那条提示必须是一个能定位的定义")
+        # (a) 那条提示已经不存在（删功能不是删断言：这里钉住"别再加回来"）。
+        api_lines = _read_text(api_path).splitlines()
+        assert not _needle_lines(api_lines, "def _cheaper_memory_hint"), (
+            "_cheaper_memory_hint 已按用户要求删除，_api.py 里不该再有它的定义")
+        assert not hasattr(_api, "_cheaper_memory_hint"), (
+            "模块上也还能取到 _cheaper_memory_hint")
         api_hits = _needle_lines(api_lines, "read_records")
-        outside = [line for line in api_hits
-                   if not hint_span[0] <= line <= hint_span[1]]
-        assert not outside, (
-            f"_api.py 里 read_records 出现在 _cheaper_memory_hint（第 "
-            f"{hint_span[0]}-{hint_span[1]} 行）之外："
-            + "; ".join(_quote(api_lines, line) for line in outside)
-            + "——记录表绝不允许进入选路/命中路径")
-        inside = [line for line in api_hits
-                  if hint_span[0] <= line <= hint_span[1]]
-        assert inside, (
-            f"_api._cheaper_memory_hint（第 {hint_span[0]}-{hint_span[1]} 行）里没有 "
-            "read_records：这条提示的数据源应当是记录表（否则它读的就是别的东西）")
+        assert not api_hits, (
+            "_api.py 不该再读记录表（'更省内存'提示已删）："
+            + "; ".join(_quote(api_lines, line) for line in api_hits))
 
         # (b) 唯一的命中入口（read_winner）里连常量名都不许出现。
         winner = _function_node(cache_path, "read_winner")
+        cache_lines = _read_text(cache_path).splitlines()
         body = "\n".join(cache_lines[winner.lineno - 1:winner.end_lineno])
         for needle in ("read_records", "RECORD_FILENAME", "record_path"):
             count = body.count(needle)
@@ -494,7 +481,7 @@ def test_records_never_reach_the_hit_path() -> None:
                             for line in _needle_lines(cache_lines, needle)
                             if winner.lineno <= line <= winner.end_lineno))
 
-        # (c) 整个 einsum 包里，除 read_records 自己的定义模块外，只有这条提示能读它。
+        # (c) 整个 einsum 包里，除 read_records 自己的定义模块外，**没有**任何模块读它。
         #     白名单外的模块出现一次就算违约（"悄悄多读一处"必须红）。
         package = os.path.dirname(cache_path)
         offenders: list[str] = []
@@ -503,27 +490,11 @@ def test_records_never_reach_the_hit_path() -> None:
             if not name.endswith(".py") or os.path.abspath(path) == cache_path:
                 continue
             lines = _read_text(path).splitlines()
-            hits = _needle_lines(lines, "read_records")
-            if not hits or name not in ALLOWED_RECORD_READER_MODULES:
-                offenders.extend(f"{name}::{_quote(lines, line_no)}" for line_no in hits)
-                continue
-            for line_no in hits:
-                allowed = (os.path.abspath(path) == api_path
-                           and hint_span[0] <= line_no <= hint_span[1])
-                if not allowed:
-                    offenders.append(f"{name}::{_quote(lines, line_no)}")
+            for line_no in _needle_lines(lines, "read_records"):
+                offenders.append(f"{name}::{_quote(lines, line_no)}")
         assert not offenders, (
-            "以下位置读了记录表（唯一允许的是 _api._cheaper_memory_hint；白名单="
-            f"{sorted(ALLOWED_RECORD_READER_MODULES)}）：" + "; ".join(offenders))
-
-        # (d) 那条提示自己在文字上必须承认"只用于提示"（不施加、不改选路）。
-        doc = ast.get_docstring(hint) or ""
-        condensed = "".join(doc.replace("*", "").replace("`", "").split())
-        assert "提示" in doc and "只" in doc, (
-            f"_cheaper_memory_hint 的 docstring 必须说明它只用于提示，实际：{doc[:200]!r}")
-        assert any(phrase in condensed for phrase in HINT_ONLY_PHRASES), (
-            f"_cheaper_memory_hint 的 docstring 里没有 {'/'.join(HINT_ONLY_PHRASES)} "
-            f"这类『只用于提示』的表述：{doc[:200]!r}")
+            "以下位置读了记录表（2026-11-21 起一处都不允许——记录表只是报告）："
+            + "; ".join(offenders))
 
 
 # ── 5. 坏行跳过 / 缺列按空 ──────────────────────────────────────────────────

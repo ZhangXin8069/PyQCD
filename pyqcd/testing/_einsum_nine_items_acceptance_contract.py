@@ -22,16 +22,16 @@
 4. ``test_peak_memory_is_measured_and_rendered_per_group``
    需求 #4：``--tune`` 每组都要有峰值内存，四个公开函数可用、150 MB 分配测得出来、
    ``format_peak_mb`` 的边界与 ``tune_comb_lines`` 的 ``peak=`` 列都在。
-5. ``test_prune_cutoff_is_twice_the_best_wall``
-   需求 #5：剪枝截止是 **2 × min_wall_ms**，``原因=`` 里同时给出两个数。
+5. ``test_prune_cutoff_equals_min_wall_ms``
+   需求 #5：剪枝截止**就是 ``min_wall_ms`` 本身**（1×，2026-11-21 改回原口径）。
 6. ``test_record_table_replaces_and_stays_out_of_dispatch``
-   需求 #6：记录表文件名/列集合/整表重写语义，且 ``_api`` 里只有"更省内存"提示读它。
+   需求 #6：记录表文件名/列集合/整表重写语义，且 ``_api`` 一次都不读它（纯报告）。
 7. ``test_cli_defaults_are_zero_warmup_and_one_round``
    需求 #7：``DEFAULT_WARMUP == 0`` / ``DEFAULT_ROUNDS == 1``（argparse 与函数缺省同步），
    且"0 合法、负数非法"这条边界真的成立（显式 ``--warmup 0`` 跑得通、``-1`` 退出码 2、
    加速设备上 0 不被抬）。
-8. ``test_cheaper_memory_hint_requires_half_the_peak``
-   需求 #8：命中时要提示"存在更省内存的配置"（含两张表的文件名），候选只省 30% 时**不**提示。
+8. ``test_cheaper_memory_hint_is_gone``
+   需求 #8（2026-11-21 反转）："更省内存/显存"提示**已删除**，``_api`` 不再读记录表。
 9. ``test_autotune_runs_once_per_key_on_first_call``
    需求 #9：首次调用自动 tune，开关口径（``"0"`` 关、``"1"`` 开）、``reset()`` 清账、
    同键每进程只试一次。
@@ -663,39 +663,42 @@ def test_peak_memory_is_measured_and_rendered_per_group() -> None:
         text_unmeasured)
 
 
-# ── 5. 剪枝截止 2× ──────────────────────────────────────────────────────────
-def test_prune_cutoff_is_twice_the_best_wall() -> None:
-    """需求 #5：剪枝截止是 **2 × min_wall_ms**，且 ``原因=`` 里两个数都给。
+# ── 5. 剪枝截止 = min_wall_ms 本身（1×） ─────────────────────────────────────
+def test_prune_cutoff_equals_min_wall_ms() -> None:
+    """需求 #5：剪枝截止就是 **``min_wall_ms`` 本身**（1×，2026-11-21 用户裁定）。
 
-    ``MIN_WALL_FACTOR == 2.0``；``MinWall(ms=100.0).cutoff_ms == 200.0``；
-    ``exceeds(199.0) is False``、``exceeds(201.0) is True``；
-    ``prune_reason(2100, 1000)`` 同时含 ``min_wall_ms=1000.000000`` 与
-    ``cutoff_ms=2000.000000``。
+    ``MIN_WALL_FACTOR == 1.0``；``MinWall(ms=100.0).cutoff_ms == 100.0``；
+    ``exceeds(99.0) is False``、``exceeds(101.0) is True``；``prune_reason(2100, 1000)``
+    含 ``min_wall_ms=1000.000000`` 且**不再**追加 ``cutoff_ms``（两个数是同一个值，
+    写两遍只会让每行变长）。
 
-    为什么它会回归：``min_wall_ms`` 是"目前最快那一组的中位"，而真正比较用的是它的
-    2 倍。把 1× 当截止会让第一组之后几乎所有组都被剪掉（"最优"退化成"第一个跑完的"），
-    而报告里只写 ``wall_ms=… min_wall_ms=…`` 时读者拿 ``wall_ms > min_wall_ms`` 自己去
-    对，会得出"这个组本该被剪却没被剪"的错误结论。两个数都不进数值，只能靠断言钉住。
+    为什么它会回归：这条倍数决定"一组比最快慢多少就被终止"。2026-11-19 曾改成 2×
+    以避免抖动误杀，代价是每轮至少多付一倍时间；用户 2026-11-21 明确要求"单测试项
+    时间限制改回原 ``min_wall_ms``"，于是回到 1×——``--tune`` 的目的是快速扫完整张
+    网格，不是给每一格做精密测量。倍数回到 2 会让秒级形状上的轮次时间翻倍，而任何
+    数值测试都不会变红（只有耗时变长），只能靠断言钉住。
     """
     axes = _tune_axes()
 
-    assert float(axes.MIN_WALL_FACTOR) == 2.0, (
-        f"剪枝截止倍数必须是 2×，实际 {axes.MIN_WALL_FACTOR!r}")
+    assert float(axes.MIN_WALL_FACTOR) == 1.0, (
+        f"剪枝截止倍数必须是 1×（改回 min_wall_ms 本身），实际 {axes.MIN_WALL_FACTOR!r}")
     probe = axes.MinWall(ms=100.0)
-    assert probe.cutoff_ms == 200.0, (
-        f"MinWall(ms=100.0).cutoff_ms 应为 200.0，实际 {probe.cutoff_ms!r}")
-    assert probe.exceeds(199.0) is False, (
-        "1×~2× 之间的组不该被剪枝（199.0 ms < 200.0 ms 截止）")
-    assert probe.exceeds(201.0) is True, (
-        "超过 2× 截止必须被剪枝（201.0 ms > 200.0 ms）")
-    assert probe.exceeds(200.0) is False, (
+    assert probe.cutoff_ms == 100.0, (
+        f"MinWall(ms=100.0).cutoff_ms 应为 100.0，实际 {probe.cutoff_ms!r}")
+    assert probe.exceeds(99.0) is False, (
+        "比 min_wall_ms 快的组不该被剪枝（99.0 ms < 100.0 ms 截止）")
+    assert probe.exceeds(101.0) is True, (
+        "超过 min_wall_ms 必须被剪枝（101.0 ms > 100.0 ms）")
+    assert probe.exceeds(100.0) is False, (
         "恰好等于截止不算超界（判据是严格大于）")
 
     reason = axes.prune_reason(2100, 1000)
     assert "min_wall_ms=1000.000000" in reason, (
         f"原因里必须给出 min_wall_ms 的六位小数原值：{reason!r}")
-    assert "cutoff_ms=2000.000000" in reason, (
-        f"原因里必须给出真正的截止（2 × min_wall_ms）：{reason!r}")
+    assert "wall_ms=2100.000000" in reason, (
+        f"原因里必须给出实测 wall_ms：{reason!r}")
+    assert "cutoff_ms" not in reason, (
+        f"1× 下 cutoff 与 min_wall_ms 同值，不该重复写一遍：{reason!r}")
 
     unlimited = axes.MinWall(ms=None)
     assert unlimited.cutoff_ms is None, unlimited.cutoff_ms
@@ -710,7 +713,8 @@ def test_record_table_replaces_and_stays_out_of_dispatch() -> None:
     ``profile_path()`` 同目录；``RECORD_COLUMNS`` 是 ``PROFILE_COLUMNS`` 的超集且多出的
     恰好是 ``peak_memory_mb``；在 ``data/tmp`` 下 ``write_records([r1,r2])`` 后
     ``read_records()`` 长度 2、再 ``write_records([r3])`` 后长度 1（**整表替换**，不是
-    追加）；``_api`` 源码里 ``read_records`` 只出现在 :func:`_cheaper_memory_hint` 里。
+    追加）；``_api`` 源码里 ``read_records`` / ``record_path`` **一次都不出现**（记录表
+    只是报告，热路径不读它——2026-11-21 删掉"更省内存"提示之后）。
 
     为什么它会回归：记录表是"这一次 tune 的全量参考"，**不是缓存**。一旦有人把
     ``read_records`` 接到选路上（或把追加改成"每次都写一份"），命中判定就会从"没被选中的
@@ -772,18 +776,18 @@ def test_record_table_replaces_and_stays_out_of_dispatch() -> None:
             "表头必须逐字等于 RECORD_COLUMNS",
             rows_on_disk[0], list(pc.RECORD_COLUMNS))
 
+    # 记录表**不参与选路**：`_api` 里一次都不读它。
+    #
+    # 2026-11-21 起这条断言比原来更严：原先 `_api` 里还允许 `_cheaper_memory_hint`
+    # 这一处（命中时读记录表给"更省内存"的建议），该提示已按用户要求删除，于是
+    # `read_records` / `record_path` 在 `_api` 里应当是 **0 次**——记录表回到纯粹的
+    # 报告地位，每次 `contract()` 都不再为一行建议付 I/O。
     source = inspect.getsource(api)
-    tree = ast.parse(source)
     hits = [(lineno, text) for lineno, text in
-            enumerate(source.splitlines(), start=1) if "read_records" in text]
-    assert hits, "_api 里找不到 read_records——'更省内存'提示的数据源断了"
-    for lineno, text in hits:
-        owners = _enclosing_functions(tree, lineno)
-        assert owners, (
-            f"_api:{lineno} 的 read_records 在模块级（不在任何函数里）：{text!r}")
-        assert owners[0] == "_cheaper_memory_hint", (
-            f"_api:{lineno} 的 read_records 落在 {owners[0]!r} 里，"
-            f"但记录表只许用于 _cheaper_memory_hint 这条提示：{text!r}")
+            enumerate(source.splitlines(), start=1)
+            if "read_records" in text or "record_path" in text]
+    assert not hits, (
+        f"_api 不该读记录表（它只是报告），实际命中 {hits}")
 
 
 # ── 7. warmup=1 / rounds=3 ──────────────────────────────────────────────────
@@ -824,75 +828,46 @@ def test_cli_defaults_are_zero_warmup_and_one_round() -> None:
             f"{label}() 的 rounds 缺省必须也是 1", parameters["rounds"].default)
 
 
-# ── 8. "存在更省内存的配置"提示 ──────────────────────────────────────────────
-def test_cheaper_memory_hint_requires_half_the_peak() -> None:
-    """需求 #8：命中时要提示"存在更省内存的配置"，但候选只省 30% 时必须**不**提示。
+# ── 8. "更省内存"提示已删除 ──────────────────────────────────────────────────
+def test_cheaper_memory_hint_is_gone() -> None:
+    """需求 #8（2026-11-21 反转）：该提示**不存在**了，记录表也不再被 ``_api`` 读取。
 
-    直接调 ``_api._cheaper_memory_hint(row)``：用 ``write_records`` 写同键两行
-    （当前 40 MB / 候选 8 MB，``wall_ms`` 5.0 / 5.2），``write_winner`` 写当前那条，
-    断言返回的字符串非空、含 ``更省内存``（zh）或 ``lower-memory``（en）、含
-    ``record.csv`` 与 ``profile.csv`` 两个文件名；把候选峰值改成 28 MB（只省 30%）后
-    返回 ``None``。
+    用户原话是"tune 时应实时输出测试组的配置以及相关信息"、"简化流程"与"把'更省内存
+    或显存的提示输出'功能删去"。原实现的问题是：它让 **每一次命中**都去读一遍记录表
+    （同键全量扫描 + 比较峰值），而记录表有 29 行；在热路径上这是一次纯 I/O 开销，
+    换来的只是一行"还有更省的配置"的建议——选路、命中、数值一律不受影响。
 
-    为什么它会回归：这条提示是"tune 的全量快照"唯一的**用户可见出口**，但它只是一行
-    打印——判据（同键、峰值 < 当前一半、耗时 ≤ 当前 1.2 倍）写松一点就成了噪音：每个
-    命中都会建议用户"换一条更省的"，而那一条可能慢一倍。反过来判据写严到永不触发，
-    用户永远不知道记录表里躺着一个省 80% 内存的方案，两者都不会让任何数值测试变红。
+    本契约钉三件事：
+    1. ``_api`` 里**没有** ``_cheaper_memory_hint``；
+    2. ``_api`` 源码里**没有任何地方**读记录表（``read_records`` / ``record_path``
+       出现 0 次）——记录表回到"纯报告"地位，热路径不再碰它；
+    3. 命中提示本身仍照常工作（``applied`` 时一行 ``profile 命中：``），
+       删掉的只是追加的第二行。
+
+    为什么它会回归：有人看到 ``read_records`` 还在 ``_profile_cache`` 里，很容易再把它
+    接回命中提示"顺手加个建议"——那会把一次纯 I/O 塞回每次 ``contract()``，且在
+    生产形状上因为记录表 29 行而随组数线性变慢。``_api`` 源码里 0 次出现是唯一能
+    在不跑基准的情况下钉住它的断言。
     """
     pc = _profile_cache()
     api = _api_module()
-    specialize = _specialize()
+    api_path = os.path.join(os.path.dirname(api.__file__), "_api.py")
 
-    with _isolated() as tmp:
-        directory = os.path.join(tmp, "cache")
-        pc.configure(directory)
-        key = _key()
-        current = dict(key, kernel="generic", optimize="greedy",
-                       wall_ms=5.0, peak_memory_mb=40.0)
-        candidate = dict(key, kernel="generic", optimize="dp",
-                         wall_ms=5.2, peak_memory_mb=8.0)
-        assert pc.write_records([current, candidate]) == 2
-        pc.write_winner(key, {"kernel": "generic", "optimize": "greedy",
-                              "wall_ms": 5.0})
-        row = pc.read_winner(key)
-        assert row is not None, "write_winner 之后必须能读回那一行"
-        assert row.get("kernel") == "generic", row
-        assert row.get("optimize") == "greedy", row
+    assert not hasattr(api, "_cheaper_memory_hint"), (
+        "『更省内存/显存』提示已按用户要求删除，_api 里不该再有 _cheaper_memory_hint")
 
-        saved_language = specialize.set_language("zh")
-        try:
-            zh = api._cheaper_memory_hint(row)
-            specialize.set_language("en")
-            en = api._cheaper_memory_hint(row)
-        finally:
-            specialize.set_language(saved_language)
+    with open(api_path, encoding="utf-8") as handle:
+        lines = handle.readlines()
+    offenders = [(number, line.strip()) for number, line in enumerate(lines, 1)
+                 if ("read_records" in line or "record_path" in line
+                     or "更省内存" in line or "lower-memory" in line)]
+    assert not offenders, (
+        f"_api.py 不许再读记录表、也不许再提『更省内存』，实际命中 {offenders}")
 
-        assert isinstance(zh, str) and zh, (
-            f"候选省了一半内存（40 → 8 MB）时必须给出提示，实际 {zh!r}")
-        assert "更省内存" in zh, ("中文提示必须含『更省内存』", zh)
-        assert "record.csv" in zh, ("提示必须点名记录表文件名", zh)
-        assert "profile.csv" in zh, ("提示必须点名配置表文件名", zh)
-        assert "optimize=dp" in zh, ("提示必须点名候选那一格", zh)
-
-        assert isinstance(en, str) and en, (
-            f"英文下同样必须给出提示，实际 {en!r}")
-        assert "lower-memory" in en, ("英文提示必须含 lower-memory", en)
-        assert "record.csv" in en, ("英文提示必须点名记录表文件名", en)
-        assert "profile.csv" in en, ("英文提示必须点名配置表文件名", en)
-
-        # 候选只省 30%（40 → 28 MB）：不满足"一半"的门槛，必须静默。
-        weak_candidate = dict(key, kernel="generic", optimize="optimal",
-                              wall_ms=5.2, peak_memory_mb=28.0)
-        assert pc.write_records([current, weak_candidate]) == 2
-        assert api._cheaper_memory_hint(row) is None, (
-            "候选只省 30% 时不许提示（门槛是严格小于当前峰值的一半）")
-
-        # 只省一半但慢一倍：同样不提示（耗时门槛 1.2×）。
-        slow_candidate = dict(key, kernel="generic", optimize="branch_all",
-                              wall_ms=50.0, peak_memory_mb=8.0)
-        assert pc.write_records([current, slow_candidate]) == 2
-        assert api._cheaper_memory_hint(row) is None, (
-            "更省但慢 10 倍的候选不是建议（耗时门槛是当前 1.2×）")
+    # 记录表本身仍在（tune 的全量快照要留档），只是没人读它做提示了。
+    assert pc.RECORD_FILENAME == "pyqcd.einsum.record.csv", pc.RECORD_FILENAME
+    assert callable(getattr(pc, "read_records", None)), (
+        "read_records 仍要留着：报告/工具需要读全量快照，删掉它等于把记录表变成只写")
 
 
 # ── 9. 首次调用自动 tune ────────────────────────────────────────────────────
@@ -980,10 +955,10 @@ TESTS = (
     test_original_kernel_runs_all_seven_optimizers,
     test_default_profile_dir_lives_in_home_cache,
     test_peak_memory_is_measured_and_rendered_per_group,
-    test_prune_cutoff_is_twice_the_best_wall,
+    test_prune_cutoff_equals_min_wall_ms,
     test_record_table_replaces_and_stays_out_of_dispatch,
     test_cli_defaults_are_zero_warmup_and_one_round,
-    test_cheaper_memory_hint_requires_half_the_peak,
+    test_cheaper_memory_hint_is_gone,
     test_autotune_runs_once_per_key_on_first_call,
 )
 

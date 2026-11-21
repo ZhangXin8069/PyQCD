@@ -636,11 +636,10 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
 * **整表重写**（`write_records` → 临时文件 + `os.replace`），不是追加：`rows` 就是本次 tune
   的全量快照，追加只会让同一把键留下几十行历史噪音。`tune_session()` **不**拦它（它从不会
   被读回，拦下来只会静默丢掉整张表）；`PYQCD_EINSUM_PROFILE=0` 时返回 0 且**连目录都不建**。
-* **从不参与命中**：命中只有 `read_winner` 一条路。`_api` 里唯一读它的是
-  `_api._cheaper_memory_hint`——命中行之外若有"峰值**不到一半**且 `wall_ms` 不超过 1.2 倍"
-  的格子，就在命中提示后多打一行"存在更省内存的配置"（**只是提示**：不施加、不改选路、
-  不改数值；读不到就静默）。把它当缓存用会让"没被选中的组"也变成可选答案，
-  "tune 的结论"就退化成"tune 的过程"。契约：
+* **从不参与命中**：命中只有 `read_winner` 一条路，而且 `_api` / 选路 / 提示**一处都不读
+  记录表**（2026-11-21 用户裁掉"更省内存/显存"提示之后，热路径上那次纯 I/O 也一并消失；
+  记录表回到纯报告地位，只有工具/报告读它）。把它当缓存用会让"没被选中的组"也变成可选
+  答案，"tune 的结论"就退化成"tune 的过程"。契约：
   `pyqcd/testing/_einsum_record_table_contract.py`（7 项：同目录 + 冻结文件名、列超集且
   公共列序一致、整表重写、不参与命中、坏行跳过、关掉时零 IO、旧位置只读回退）。
 * 报告侧：`tune rec  : <绝对路径>  rows=<n>` 一行，`--profile false` 时不写并给原因。
@@ -802,24 +801,21 @@ C/CUDA 代码**"，并给可操作建议"GPU 上把 `--tune-timeout` 取足够�
     seq=646 那类 8.9 s vs 0.39 s 的坑不会重新打开——`bypass_plan_gate()` 只在
     强制内核与 tune 两组里进入。
 
-**剪枝截止 = `MIN_WALL_FACTOR` × `min_wall_ms`（`= 2.0`）**：`min_wall_ms` 是"当前最快那
-一组的中位"，但**真正比较用的截止**是 `MinWall.cutoff_ms = factor × ms`。为什么不按 1×：
-把它直接当硬截止等于"比最快慢一点点就终止"，而同一配置连续两组的抖动实测就有 10–20%，
-1× 会把大量本来只是略慢的组合误杀——它们的实测数字恰恰是判断"这条路值不值得"的证据。
-2× 仍然强力（比最快慢一倍就没有被选中的可能），但不再把噪声当结论。两件事必须分开：
-`ms` 仍是记录下来的实测中位（报告与配置表里的那个数），`cutoff_ms` 只用于剪枝比较，否则
-会出现"最终 best 是 A、截止却按 B 算"。
+**剪枝截止 = `MIN_WALL_FACTOR` × `min_wall_ms`，`MIN_WALL_FACTOR = 1.0`**（2026-11-21 用户
+裁定"单测试项时间限制改回原 `min_wall_ms`"）：截止就是当前最快那一组的中位本身，
+`wall_ms > min_wall_ms` 即终止。历史：2026-11-19 曾改成 2× 以避免抖动误杀（连续两组抖动
+实测 10–20%），但那让每轮至少多付一倍时间——`--tune` 的目的是**快速扫完整张网格**，
+不是给每一格做精密测量。
 
-`prune_reason(wall_ms, min_wall_ms, factor=MIN_WALL_FACTOR)` 因此给**三个**数值，固定原文
-仍逐字不变（用户口径，`--language` 也不翻译它）：
+`MinWall.cutoff_ms` 这个属性保留（`factor` 现在等于 1，两个数相同），`prune_reason` 在
+`factor == 1` 时**只打两个数值**，固定原文仍逐字不变（用户口径，`--language` 不翻译它）：
 
 ```text
-耗时大于min_wall_ms,此组被终止  wall_ms=<…>  min_wall_ms=<…>  cutoff_ms=<…>
+耗时大于min_wall_ms,此组被终止  wall_ms=<…>  min_wall_ms=<…>
 ```
 
-不写 `cutoff_ms` 就等于让读者拿 `wall_ms > min_wall_ms` 自己核对，而那条不等式在这里
-本来就是假的（`wall_ms` 只超过 1× 却没超过 2× 的组不会被终止）。`min_wall_ms=None`
-（`--tune-timeout 0`，不设上界）时三个数值里后两个写 `-`。
+`factor != 1` 时（只可能来自显式传入）才追加 `cutoff_ms=<…>`。`min_wall_ms=None`
+（`--tune-timeout 0`，不设上界）时写 `min_wall_ms=-`。
 
 附带两条实测（写报告时别外推）：`fork` 子进程在本机必 `cudaErrorInitializationError`
 （父进程碰过 CUDA 后）；`spawn` 每组全新解释器实测 **497.6 ms**（含一次 CUDA gemm，

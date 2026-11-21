@@ -28,9 +28,13 @@ python -m pyqcd.einsum.test --equation "ab,bc,cd->ad" \
 | omitting `--tune` | no sweep; use the profile table or the built-in default |
 
 The sweep is **not** a Cartesian product: it walks a branch-dependent **ordered** list
-(29 groups for each specialisable branch, 28 for the plain branch), and a group is cut
-short as soon as it exceeds **twice** the current best time (the reported `cutoff_ms` in
-the `pruned` reason is that bound; `min_wall_ms` is the best-time itself). The reported
+(29 groups for each specialisable branch, 28 for the plain branch). The first group is
+`original` (`opt_einsum`, the only route that honours all seven `optimize` values), so the
+bound is pinned to "how fast this equation can be" from the start. A group is cut short as
+soon as it exceeds **that best time itself** (`min_wall_ms`, 1x); the `pruned` reason
+reports both `wall_ms` and `min_wall_ms`. **Every group prints a `tune comb :` line the
+moment it finishes** (index/total, the three axes, wall_ms, peak, status, reason verbatim),
+so progress is visible before the sweep ends. The reported
 `wall_ms` is the wall clock of the **whole** `contract()` call, so the number you read is
 the number your program pays. Each group also reports its **peak memory / VRAM** in MB,
 measured per group and reset before the next one so a group never inherits its

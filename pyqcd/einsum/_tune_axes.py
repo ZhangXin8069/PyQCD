@@ -47,10 +47,12 @@ TUNE_BRANCH_LABELS = {
 #: 三个轴各自出现过的取值；``kernel_force`` 的顺序**就是**清单顺序，``optimize`` 的
 #: 顺序是「先跑最可能命中的、``none`` 放最后」的冻结次序。
 #:
-#: ``original`` 与 ``backend`` 同一地位（都不进专用内核分派），按用户裁定排在
-#: ``backend`` **之前**：``opt_einsum`` 通常比后端朴素 ``einsum`` 快，先测它能让
-#: ``min_wall_ms`` 更早被压低，后面的格子一超界就终止。
-TUNE_KERNEL_FORCE = ("dedicated", "generic", "topology", "original", "backend")
+#: ``original`` 排**第一位**（2026-11-21 用户裁定）：``opt_einsum`` 是唯一能吃满
+#: ``optimize`` 七档的路线，先测它能让 ``min_wall_ms`` 一开始就被压到"这条方程到底
+#: 能有多快"的量级，后面那些跑不动的格子立刻被剪掉——比先花时间在专用内核上更省。
+#: 这也是"简化流程、节省时间"的具体落点：最坏情况（专用内核全不可用）下不再先付
+#: 两档内核的启动与失败开销。
+TUNE_KERNEL_FORCE = ("original", "dedicated", "generic", "topology", "backend")
 
 TUNE_AS_EQUIVALENCE = ("false", "true")
 TUNE_OPTIMIZERS = ("greedy", "branch_1", "branch_2", "dp", "branch_all",
@@ -59,7 +61,12 @@ TUNE_OPTIMIZERS = ("greedy", "branch_1", "branch_2", "dp", "branch_all",
 #: 清单项是 ``(kernel_force, as_equivalence, optimize)``；``as_equivalence`` 用配置表
 #: 的字符串口径（``"true"`` / ``"false"``），``optimize`` 用清单标签（``none`` 在调用
 #: ``contract()`` 时换成 ``False``，写表时仍写 ``none``）。
+#:
+#: ``original`` 那一档放在**最前**（见 :data:`TUNE_KERNEL_FORCE`）：它跑得成的时候，
+#: 后面每组都要与它已经压低的 ``min_wall_ms`` 比，超界即终止。
 TUNE_PREFIX: tuple[tuple[str, str, str], ...] = tuple(
+    ("original", "false", optimize) for optimize in TUNE_OPTIMIZERS
+) + tuple(
     (kernel, "false", optimize)
     for kernel in ("dedicated", "generic")
     for optimize in TUNE_OPTIMIZERS)
@@ -73,8 +80,6 @@ TUNE_BRANCH_EXTRA: dict[str, tuple[tuple[str, str, str], ...]] = {
 }
 
 TUNE_TAIL: tuple[tuple[str, str, str], ...] = tuple(
-    ("original", "false", optimize) for optimize in TUNE_OPTIMIZERS
-) + tuple(
     ("backend", "false", optimize) for optimize in TUNE_OPTIMIZERS)
 
 #: 每个分支的组数（冻结口径：B1/B2 = 29，B3 = 28）。
@@ -139,28 +144,29 @@ def trimmed_plan_size(branch: str, unavailable: Iterable[str] | None = None) -> 
 #: 用户给的规则原文，报告里要能 grep 到同一串字）。
 TERMINATION_MESSAGE = "耗时大于min_wall_ms,此组被终止"
 
-#: 剪枝截止 = 这个倍数 × 当前 ``min_wall_ms``（用户规则 2026-11-19：**两倍**）。
+#: 剪枝截止 = 这个倍数 × 当前 ``min_wall_ms``。**1.0 = 直接用最快那一组的中位**
+#: （2026-11-21 用户裁定"单测试项时间限制改回原 min_wall_ms"）。
 #:
-#: 为什么不是 1×：``min_wall_ms`` 是"当前最快那一组的中位"，把它直接当硬截止等于
-#: "比最快慢一点点就终止"。实测里同一配置连续两组的抖动就有 10–20%，1× 会把大量
-#: 本来只是略慢的组合误杀，而它们的实测数字恰恰是判断"这条路值不值得"的证据。
-#: 2× 仍然强力（比最快慢一倍就没有被选中的可能），但不再把噪声当结论。
-MIN_WALL_FACTOR = 2.0
+#: 历史：2026-11-19 曾改成 2× 以避免抖动误杀（同一配置连续两组的抖动实测有 10–20%），
+#: 但那一档让每轮至少多付一倍时间——而 ``--tune`` 的目的是**快速扫完整张网格**，
+#: 不是给每一格做精密测量。回到 1× 后 ``ms`` 与截止是同一个数，``cutoff_ms`` 这个
+#: 字段仍然保留（``factor`` 只是现在等于 1），报告格式不变。
+MIN_WALL_FACTOR = 1.0
 
 
 def prune_reason(wall_ms: float, min_wall_ms: float | None,
                  factor: float = MIN_WALL_FACTOR) -> str:
-    """被剪枝那一组的 ``原因=``：固定原文 + 三个数值（``wall_ms``/``min_wall_ms``/截止）。
+    """被剪枝那一组的 ``原因=``：固定原文 + ``wall_ms`` / ``min_wall_ms`` 两个数值。
 
-    ``cutoff_ms`` 是**真正**比较用的截止（``factor × min_wall_ms``）。不写它就等于让
-    读者拿 ``wall_ms > min_wall_ms`` 自己去对，而那条不等式在这里本来就是假的
-    （``wall_ms`` 只超过 1× 却没超过 2× 的组不会被终止）。
+    ``cutoff_ms`` 只在 ``factor != 1`` 时才追加：1× 下它与 ``min_wall_ms`` 是同一个
+    数，写两遍只会让每行变长（当前 ``MIN_WALL_FACTOR = 1.0``，所以常规输出不带它）。
     """
     bound = "-" if min_wall_ms is None else f"{float(min_wall_ms):.6f}"
-    cutoff = ("-" if min_wall_ms is None
-              else f"{float(min_wall_ms) * float(factor):.6f}")
-    return (f"{TERMINATION_MESSAGE}  wall_ms={float(wall_ms):.6f}  "
-            f"min_wall_ms={bound}  cutoff_ms={cutoff}")
+    text = (f"{TERMINATION_MESSAGE}  wall_ms={float(wall_ms):.6f}  "
+            f"min_wall_ms={bound}")
+    if min_wall_ms is not None and float(factor) != 1.0:
+        text += f"  cutoff_ms={float(min_wall_ms) * float(factor):.6f}"
+    return text
 
 
 @dataclass

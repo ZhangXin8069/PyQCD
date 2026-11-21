@@ -4789,8 +4789,9 @@ def _tune_config(row: dict[str, Any], *, backend: str) -> dict[str, Any]:
         "wall_ms": value,
     }
     # ``peak_memory_mb`` 不在 ``PERFORMANCE_FIELDS`` 里（那是配置表的列集合，冻结），
-    # 但命中提示要用它做"更省内存"的比较——所以带上，写盘时按列名取值，配置表自然
-    # 忽略这一格。记录表则按 ``RECORD_COLUMNS`` 收下它。
+    # 但**记录表**要收下它——全量快照的价值正是"这一组吃多少内存"。写盘时按列名取值，
+    # 配置表自然忽略这一格。注意它只用于报告与事后分析：``_api`` 不再读记录表，
+    # 也不再有"更省内存"的提示（2026-11-21 用户裁掉）。
     if peak is not None:
         config["peak_memory_mb"] = round(float(peak), 1)
     return config
@@ -5324,6 +5325,10 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
             detail_saved = set_detail(False)
     _tune_init("session start  profile_disabled=true")
     first_combo = combos[0] if combos else None
+    # 进度行的分母：裁剪后**实际会被遍历**的组数（``plan_without`` 之后）。
+    # 与表尾 ``tune plan : planned=… kept=…`` 的 ``kept`` 是同一个数，两条输出
+    # 因此可以互相核对。
+    total_groups = len(combos)
     first_started = time.perf_counter()
     first_done = False
     if isolated:
@@ -5587,6 +5592,24 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                 row["status"] = tune_status(row)
                 holder.clear()                  # 别把上一组的结果留到下一组
                 rows.append(row)
+                # **实时进度行**（2026-11-21 用户要求"tune 时应实时输出测试组的配置
+                # 以及相关信息作为进度标识"）：这一组一有结论就立刻打到 **stderr**，
+                # 不攒到整轮结束。生产形状上 28 组要几百秒，只有攒着才打的话用户在
+                # 这期间看不到任何东西，无法判断"跑到第几组、这一组什么配置、多久"。
+                #
+                # 用 stderr 而不是 stdout：``tune init`` 与最终报告本来就在 stderr，
+                # 而 stdout 留给 ``PASS <equation>`` 那一行结果（脚本按它取值）。
+                # 行格式复用 :func:`tune_comb_lines`，与整轮结束后的汇总**同一份**文本
+                # ——不新增第二种格式，读者不必学两套。
+                #
+                # flush 是必须的：stderr 在重定向到文件时是块缓冲，不 flush 等于又把
+                # 实时性还给整轮结束。
+                for _line in tune_comb_lines(len(rows), total_groups, row):
+                    print(_line, file=sys.stderr, flush=True)
+                # 标记已实时打过：:func:`print_tune` 的整轮汇总据此跳过这一行，
+                # 免得同一份文本在屏幕上出现两次（``live_printed`` 只影响打印，
+                # 不进配置表、不进记录表——写盘的列集合是冻结的）。
+                row["live_printed"] = True
                 # 首组**收尾**行：它与上面的 ``first group start`` 成对，是"遍历真的
                 # 开始了、而且第一组已经有结论"的直接证据（卡在首组时不会有这一行）。
                 if not first_done:
@@ -5941,8 +5964,14 @@ def print_tune(tune: dict[str, Any], language: str = "zh",
     # 规格 §12.1：**每组一行、全部列出**——不受 --verbose 控制、不去重、不截断。
     # 坏组（timeout / error / mismatch / pruned）一样在这一段里，原因原文跟在
     # ``原因=`` 之后。
+    #
+    # 2026-11-21 起这些行**已经在组结束时实时打过一遍**（:func:`run_tune` 里的
+    # 进度行），这里跳过它们、只补没打过的（进程内路线、或调用方手工构造的
+    # ``tune`` 字典）。判据是行上的 ``live_printed`` 标记，不是"猜哪些打过"。
     total = len(rows)
     for index, row in enumerate(rows, 1):
+        if row.get("live_printed"):
+            continue
         for line in tune_comb_lines(index, total, row):
             print(line, file=out)
     # 被排除的内核**整组一行**（不是每组一行）：同一个原因重复 7 遍只会把表格淹掉，
