@@ -75,7 +75,7 @@
 | R27 | 30:30 | **0.1.23** | 用户要求继续排查 bug。四组针对性猎杀（缓存复用/out=/内存/切档竞态/原生回落）发现 **1 个真缺陷**：`_try_native_contract` 自身抛异常（规划/编译阶段）会直接冒到用户代码，违背"原生失败只回落"的硬不变量 | 0.1.23：`_core_contract` 对该调用加 try/except + 单次警告回落；新增回归用例 `test_native_failure_falls_back_without_raising`（模拟规划期抛错，断言结果正确、警告 ≤1、恢复后仍走原生）。其余 12 项"疑似"均经与 opt_einsum 对照确认一致（out dtype 截断同样只发 ComplexWarning、callable optimize 是 pyqcd 超集、零尺寸冲突 numpy 同样报 ValueError），未改动 |
 | R28 | 31:20 | **0.1.24** | 继续排查：路径有效性、显式 path、广播、奇异方程、out 别名、PathInfo 字段、backend/use_blas/memory_limit、以及 700 个随机方程差分 | 全部通过：4 类路径回放可复现、PathInfo 五个字段与 opt_einsum 逐值一致、out 与输入共享内存结果正确、`dp/optimal` 代价一致、随机方程 400（含重复标签/混合 dtype）+ 300（ellipsis + path 回放）**0 失配**。3 处"失败"复测后确认与参照一致（列表输入两边都接受、`contract_expression` 少参两边都 ValueError、`memory_limit=0` 两边同错）。新增 `_random_equations_contract.py`（48+28 例，0.05 s）接入套件，121 passed |
 | R29 | 32:10 | 0.1.24（无新发行） | 转向物理模块不变量：gamma 代数、SU(2) CG、Clover、Stout 幺正性、`plan_parallel` 公式 | 实质结论：**无新代码缺陷**。gamma 1..4 满足 `{γi,γj}=2δij`、γ5 与它们反交换、乘积 6..15 与文档定义逐元素一致、16/17 等于 `γ3γ1·(1±γ4)/2`；CG 完备性 Σ|c|²=1 且交换对称；Clover Hermitian/无迹/`F10=-F01`；Stout 涂抹保持 `UU†=1`（1e-10）。5 处"失败"全是我写错不变量（把乘积当 Clifford 生成元、SU2 入参格式、转置轴数、`N*Y` 应为 `N*X`、`N*a=n*b` 只在不封顶时成立）。**修正文档**：usage 页（中英）把 `N*a=n*b` 明确为"未封顶目标"，并说明 Y 会被任务数/CPU/内存压缩、压缩见 `notes` |
-| R30 | 33:40 | **0.1.25** | 用户实测 CPU/GPU 都差（matmul 0.41×、sandwich 0.75×）。定位：notebook 从 `/home/zhangxin/data` 运行，导入的是 **base conda 里的 0.1.12**（`site-packages`），该构建 ①无线程档（CPU 8×8 超订 → 2.6×）②CUDA `.so` 只含 `compute_70` SASS（无 PTX）→ sm_89 上 kernel 返回 **status 3** 静默回落（sandwich 66 ms vs 正常 8 ms）。用 0.1.12 精确复现其数字（28.69/35.78/25.69/106.78 与 kernel status=3） | 0.1.25：①新增 `python -m pyqcd --gpu-probe`（build_info/cupy/设备/算力/kernel 状态/命中提示/结论）②**该跑 kernel 却没跑时立即 RuntimeWarning**（含原因：开关关闭/形状不符/状态非零），同形态同原因只报一次，含 `test_kernel_skip_warns_immediately` 回归 ③文档三个基准脚本均打印 `pyqcd.__version__` 与 `__file__`，并新增「动手之前」小节提示旧安装会伪造"PyQCD 很慢"。新 venv 复跑：0.92× / 8.38× / 0.90× / 8.36× `[作废]` |
+| R30 | 33:40 | **0.1.25** | 用户实测 CPU/GPU 都差（matmul 0.41×、sandwich 0.75×）。定位：notebook 从用户数据目录运行，导入的是 **base conda 里的 0.1.12**（`site-packages`），该构建 ①无线程档（CPU 8×8 超订 → 2.6×）②CUDA `.so` 只含 `compute_70` SASS（无 PTX）→ sm_89 上 kernel 返回 **status 3** 静默回落（sandwich 66 ms vs 正常 8 ms）。用 0.1.12 精确复现其数字（28.69/35.78/25.69/106.78 与 kernel status=3） | 0.1.25：①新增 `python -m pyqcd --gpu-probe`（build_info/cupy/设备/算力/kernel 状态/命中提示/结论）②**该跑 kernel 却没跑时立即 RuntimeWarning**（含原因：开关关闭/形状不符/状态非零），同形态同原因只报一次，含 `test_kernel_skip_warns_immediately` 回归 ③文档三个基准脚本均打印 `pyqcd.__version__` 与 `__file__`，并新增「动手之前」小节提示旧安装会伪造“PyQCD 很慢”。新 venv 复跑：0.92× / 8.38× / 0.90× / 8.36× `[作废]` |
 | R31 | 34:30 | **0.1.26** | ①`_run_specialized_kernel` 读取失败原因**早于**调用（拿到上一次残留值）；②`probe()` 直接 `_announced.clear()` 破坏调用方提示状态 | 0.1.26：原因改为"失败后读取"并按形态过滤（E1→2pt、P1/P2→3pt，避免把 3pt 的原因报给 E1）；`probe()` 改为保存/恢复提示状态。用户授权后将 **base conda 环境由 0.1.12 升级到 0.1.26**，用其 notebook 原样复跑：CPU 0.90/7.23/0.79/4.59/0.81/0.35/1.11/1.08，CUDA nucleon 1.81×、sandwich **16.15×**、batched 0.94×，`--gpu-probe` 报 `CUDA fast path is active`（此前 0.41×/0.75× 的"差"全部由旧安装导致） |
 | R32 | 36:10 | **0.1.28** | 用户要求"通用计算也不应比 opt_einsum 慢"。交错测量暴露真因：①逐元素/置换类方程走分步执行（Hadamard 0.33×）；②KUPL **通用计划执行器**在 2D 链/矩阵乘上比 numpy 分步慢 6–10%，但在 batch/ellipsis 上是 5–10× 优势 | 0.1.28：①新增快速路径——**无求和标签**的方程直接交 backend 原生 einsum（Hadamard 89→30 ms，0.33×→1.00×）；②KUPL 计划执行器改为**按 batch 结构启用**（任一操作数 ndim≥3 才走，`PYQCD_EINSUM_KUPL_PLAN=1` 可强制），CUDA 不受影响。base env 交错复测：batch **10.6×**、ellipsis **5.8×**、chain 1.03×、complex 1.03×、hadamard 1.00×、outer 1.00×、4-op 1.00×、matmul 0.97×；文档脚本改为交错协议并附回归用例 |
 | R33 | 38:40 | **0.1.29** | 用户要求"单次 1–10 s、重复 3–5 次"的生产尺度基准。大尺寸暴露新缺陷：**cupy 批量 GEMM 16×1024² 只有 0.21×**（原生 batched GEMM 比 cuBLAS 慢 5 倍）；γ 夹心在 8192×1024 降到 1.6×（2.1 GB 工作区带宽限制）；核子 2pt nvec=112 降到 0.99×（cuBLAS 主导） | 0.1.29：cupy 输入且**无融合 kernel** 的方程在规划前直接交给 `cupy.einsum`（走 cuBLAS），融合形态仍走原生执行器；委托统一带 `optimize=True`。base env 生产尺度复验：CPU batched **11.6×**、ellipsis **7.1×**、Hadamard 1.26×、matmul 1.01×、chain 0.98×、complex 0.96×；GPU sandwich **2.0×**、batched 0.98×、nucleon 0.99×（后两者如实标注为持平/无余量）。文档两张表与基准脚本改为生产尺度（单次 0.4–2.7 s、3 次重复、交错协议） `[作废]` |
@@ -160,3 +160,74 @@ job `1648752` 复验：
 * PyPI 远程安装：`0.4.0`，导入路径位于 venv `site-packages`，
   `native_available=True`、`backend=kupl`
 * 历史标签链自检仍报告 5 个既有已推送标签注释问题；本任务未改写这些历史标签。
+
+## 0.5.16 发布闭环（GPU 归档完整性）
+
+### 故障现象
+
+用户执行 `pip install pyqcd -U` 后，在 A100 节点运行
+`python -m pyqcd --gpu-probe` 得到：
+
+```text
+kernel status : fallback — the topology entry did not run for any contract dtype:
+complex128=fail(stage=native: NativeUnavailable:
+qcd_cuda_topology_apply is not exported by the archive)
+```
+
+这不是“CUDA 不可用”的统一结论。0.5.15 的发布 sdist 可构建完整 CUDA 归档，
+本机现存 0.5.15 安装也实际导出全部 10 个必需符号；故障来自安装链允许
+**旧归档或半成品归档通过校验并进入 site-packages**：
+
+1. `cpp/cuda/einsum/make-nv.sh` 当时只硬校验 `applyPlanQcd`。同一份归档缺少
+   `qcd_cuda_topology_apply`、`qcd_cuda_dedicated_apply` 等入口时仍会被发布。
+2. `setup.py::NativeBuildExt` 在非校验退出码且同名 `.so` 已存在时会复用旧库；
+   `_stage_native_library` 仅按文件名复制，不验证运行期所需导出集。
+3. `package_data` 无条件按文件名打包 `libpyqcdeinsum_cuda.so`，于是构建日志中的
+   CUDA 警告不会阻止不完整归档进入 wheel；pip 成功后用户直到 probe 才发现问题。
+4. 原 probe 只给出一句缺符号原因，没有报告实际归档路径、文件是否存在，以及
+   `missing` / `load-failed` / `symbol-missing` 的差异，难以区分安装、加载和 ABI 问题。
+
+### 0.5.16 修复
+
+| 层 | 修复 |
+|---|---|
+| CUDA 构建 | `make-nv.sh` 硬校验冻结 C ABI、topology、dedicated 共 10 个导出；使用临时产物校验后原子发布；缺 `nm` 或校验失败以退出码 3 失败 |
+| 安装暂存 | `setup.py` 在扩展编译前、原生文件暂存前和 wheel 收集前都验证完整导出集；失败 CUDA 归档不进入 `package_data`，也不复用为可用后端 |
+| 构建可追溯性 | wheel 写入 `_build_config.json`，持久化请求/配置/实际安装后端与跳过原因；`python -m pyqcd` 可回放这些决定 |
+| 运行诊断 | `--gpu-probe` 输出实际 `cuda archive` 路径、`present`、`exported` 和 `missing` / `load-failed` / `symbol-missing` / `ready`；即使无 CuPy 也检查归档 |
+| 运行缓存 | 绑定缓存按 inode、大小与 mtime 刷新；同一路径归档被替换时要求重启，不继续声称旧 binding 有效 |
+| 第三方安装 | 缺 `nvcc` 明确说明只安装 KUPL；纯 Python 安装必须显式 `PYQCD_SKIP_NATIVE_BUILD=1`；wheel 不再错误标记为 `py3-none-any`；KUPL 默认使用可移植基线 ISA |
+| 发布门 | `release_check.py` 每次重建新鲜 sdist，真实构建 wheel，检查平台标签和 KUPL/CUDA 导出，扫描全部可读文本中的绝对路径，并运行中英文文档与双站 Sphinx |
+
+### 验证证据（2026-11-21）
+
+| 门禁 | 结果 |
+|---|---|
+| 安装态身份 | `pyqcd 0.5.16`、CuPy 13.2.0 均从测试 venv 的 `site-packages` 导入；使用 `-I`、`PYTHONNOUSERSITE=1`，且清空 PyQCD 覆盖变量 |
+| GPU probe | `gpu024` / NVIDIA A100-PCIE-40GB / compute 8.0；`cuda archive.status=ready`、`present=true`、`exported=true`；四种 dtype 全部成功，`max|diff|=0.0`；结论 `CUDA fast path is active` |
+| topology 实际执行 | `kernel_force.requested=topology`、`ran=cuda_topology`、`steps=1`；安装版本和包路径随 JSON 留存 |
+| GPU 定向契约 | GPU probe 诊断 `18 passed / 0 skipped / 0 failed`；topology `27 passed / 0 skipped / 0 failed` |
+| 全回归 | Slurm `4038294`，`gpu-debug` / `gpu024`：`COMPLETED 0:0`；`160 passed / 1 skipped / 0 failed` |
+| 静态制品（final4） | `twine check --strict` PASSED；3,303,568 bytes；SHA-256 `810f4081f198126e1f45246c26c692b406790c64530f2aab2f3b9d260beb283f`；199 个条目，0 个 testing 文件、0 个 `.so`、0 个 `data/tmp`、0 个绝对路径 |
+
+复查期间又修复了 CUDA binding 缓存的另一个边界：同一路径归档被成功加载后若被替换，
+“需重启”状态现在按绝对路径持久化；A→B→A 也不会重新加载旧路径。相关诊断契约最终为
+`15 passed / 4 skipped / 0 failed`（无 GPU 节点上的 4 项 CUDA 实测按环境跳过）。
+
+最终候选为 `final9`：
+
+| 项 | 值 |
+|---|---|
+| 文件 | `pyqcd-0.5.16.tar.gz` |
+| 大小 | 3,303,626 bytes |
+| SHA-256 | `8d8b68fdae2d8dd5d689e990a91291549cfc0c2f768b5fb29e3e70e4abd4f2c6` |
+| 静态门 | `twine check --strict` PASSED；199 个条目；0 docs / testing / `.so` / `data/tmp` / `AGENTS.md` / 绝对路径 |
+| 干净安装 | venv `include-system-site-packages=false`；`pip check` 无冲突；PyQCD 0.5.16 与 CuPy 13.6.0 均从该 venv 的 `site-packages` 导入 |
+| 原生导出 | CUDA 10/10、KUPL 3/3；`_build_config.json` 记录 `kupl`/`cuda` 均 built |
+| 安装三态 | CUDA extra：`backend=cuda`；KUPL-only：`backend=kupl` 且仅 1 个 KUPL `.so`；`PYQCD_SKIP_NATIVE_BUILD=1`：`backend=python`、0 个原生库；三者 `pip check` 均无冲突 |
+| 最终 A100 | Slurm `4038362`，`gpu-debug` / `gpu024`，`COMPLETED 0:0`；`cuda archive.status=ready`、四类 dtype `max|diff|=0.0`、`CUDA fast path is active`；topology JSON 为 `requested=topology`、`ran=cuda_topology`；GPU probe 诊断 `18 passed`、topology `27 passed`、全回归 `160 passed / 1 skipped / 0 failed` |
+
+十轮复查采用“完整门 + 定向门 + 最终制品门”的交叉口径：先前 `final7`/`final8` 的
+构建证据只用于发现缓存边界和过期 `egg-info`；`final9` 是由干净元数据重建、无 `docs/`
+泄漏的发布件。最终发布以本表 `final9` 哈希、安装三态、A100 和随后在线
+`release_check` 为准。

@@ -530,11 +530,11 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
     if any(operand.dtype != dtype for operand in operands[1:]):
         return _fail("mixed operand dtypes are not supported by the native path")
     # 先判库、再判 dtype：库缺失/缺符号的原因是"没有原生入口"，不该报成 dtype 问题。
-    from .cuda._program import topology_apply as native_topology_apply
-    from .cuda._program import topology_binding
+    from .cuda import _program
 
-    if topology_binding() is None:
-        return _fail("qcd_cuda_topology_apply is not exported by the archive")
+    binding, archive = _program.topology_binding_snapshot()
+    if binding is None:
+        return _fail(archive["detail"])
     dtype_reason = _topology_dtype_reason(np.dtype(dtype))
     if dtype_reason is not None:
         return _fail(dtype_reason)
@@ -562,7 +562,7 @@ def try_topology_apply(subscripts: Any, operands: Sequence[Any],
         return _fail(*cached_unsupported)
     try:
         plan = _topology_plan(_topology_key(subscripts, operands), subscripts, operands)
-        result = native_topology_apply(plan, operands, out=out, info=LAST_INFO)
+        result = _program.topology_apply(plan, operands, out=out, info=LAST_INFO)
     except Exception as error:  # noqa: BLE001 - 失败即回落，绝不抛给调用方
         LAST_INFO.clear()
         status = getattr(error, "status", None)

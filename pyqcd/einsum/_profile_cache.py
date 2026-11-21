@@ -346,6 +346,11 @@ _WARNED_CELLS: set[tuple[str, str, str]] = set()
 #: 行上的私有标记（不是列）：这一行的 ``optimize`` 两列有非法值，**不参与匹配**。
 _SKIP_FIELD = "_skip"
 
+# ``csv.reader`` rejects NUL at the stream level. Replace it with a private
+# in-band marker so CSV can still determine the logical record boundary; any
+# record containing this marker is discarded after parsing.
+_NUL_MARKER = "\x01PYQCD_NUL\x01"
+
 
 # -- 异常 -------------------------------------------------------------------
 class ProfileError(RuntimeError):
@@ -1022,7 +1027,7 @@ def _parse_rows(raw: bytes, path: str = "",
     if not raw.strip():
         return []
     names = [str(name) for name in columns]
-    text = raw.decode("utf-8", "replace")
+    text = raw.decode("utf-8", "replace").replace("\x00", _NUL_MARKER)
     reader = csv.reader(io.StringIO(text))
     try:
         header = next(reader)
@@ -1031,6 +1036,8 @@ def _parse_rows(raw: bytes, path: str = "",
     header_names = [_text(name) for name in header]
     rows: list[dict[str, str]] = []
     for fields in reader:
+        if any(_NUL_MARKER in field for field in fields):
+            continue                             # 包含 NUL：丢掉整条逻辑记录
         if not any(field.strip() for field in fields):
             continue                                 # 空行
         if len(fields) != len(header_names):

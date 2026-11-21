@@ -18,7 +18,8 @@ Environment:
   PYQCD_OPENBLAS_LIBRARY         Explicit OpenBLAS shared-library path.
   PYQCD_OPENBLAS_INCLUDE_DIR     Header directory paired with the override.
   PYQCD_OPENBLAS_FLAGS           Complete compiler/link flags for OpenBLAS.
-  PYQCD_SKIP_NATIVE_BUILD=1      Reuse an existing native library.
+  PYQCD_EINSUM_REUSE_NATIVE=1    Reuse the library built by this script.
+  PYQCD_SKIP_NATIVE_BUILD=1      Install the pure-Python planner only.
   PYQCD_EINSUM_SKIP_CYTHON=1     Explicitly skip extension compilation.
 EOF
 }
@@ -50,7 +51,7 @@ export PYQCD_EINSUM_BACKEND="$MODE"
 source "$ROOT/env.sh"
 
 PYQCD_EINSUM_BACKEND="$MODE" \
-PYQCD_SKIP_NATIVE_BUILD=1 \
+PYQCD_EINSUM_REUSE_NATIVE=1 \
 PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" \
     "$PYQCD_EINSUM_PYTHON" "$ROOT/setup.py" build_ext --inplace
 

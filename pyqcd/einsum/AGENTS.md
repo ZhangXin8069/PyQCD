@@ -1717,8 +1717,9 @@ grep -m1 'kTopoRecordCount =' cpp/kupl/einsum/src/topology_kernels.inc
 PYQCD_EINSUM_TOPOLOGY_TRACE=1 python -c "…corpus 方程 contract…"   # 应打印 topology-specialized
 ```
 
-**修法**：`bash build-kupl.sh`（本机实测 **14 s**，`-march=native` 默认开；要可移植
-加 `PYQCD_EINSUM_NATIVE_ARCH=0`），然后**必须**按 `setup.py::_stage_native_library`
+**修法**：`bash build-kupl.sh`（本机实测 **14 s**；默认 `PYQCD_EINSUM_NATIVE_ARCH=0`
+使用可移植基线 ISA + `-mtune=native`，同一 CPU 代际可显式设 `=1` 启用
+`-march=native`），然后**必须**按 `setup.py::_stage_native_library`
 的同一路径原子落位到包目录，否则改的是 `cpp/**/build/` 而 Python 仍加载旧的那份：
 
 ```python

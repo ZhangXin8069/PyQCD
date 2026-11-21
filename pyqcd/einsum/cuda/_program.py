@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import stat
 import threading
 from collections import namedtuple
 from pathlib import Path
@@ -35,6 +36,18 @@ _DESCRIPTOR_MAGIC = 0x51435444
 _DESCRIPTOR_VERSION = 1
 _DESCRIPTOR_HEADER_WORDS = 8
 _DESCRIPTOR_DIGEST_WORDS = 4
+_REQUIRED_CUDA_EXPORTS = (
+    "applyPlanQcd",
+    "applyContractQcd",
+    "applyCompileQcd",
+    "applyCompiledQcd",
+    "applyDestroyQcd",
+    "applyInitQcd",
+    "applyEndQcd",
+    "qcd_cuda_topology_apply",
+    "qcd_cuda_dedicated_apply",
+    "qcd_cuda_dedicated_dtypes",
+)
 
 DescriptorView = namedtuple(
     "DescriptorView",
@@ -76,6 +89,17 @@ def _bind_host_cublas() -> None:
             continue
 
 
+class TopologyBindingError(RuntimeError):
+    """Expected binding failure carrying the exact missing export names."""
+
+    def __init__(self, path: Path, missing: Sequence[str]) -> None:
+        self.path = Path(path)
+        self.missing = tuple(str(name) for name in missing)
+        super().__init__(
+            f"CUDA topology archive is missing required exports at {self.path}: "
+            f"{', '.join(self.missing)}")
+
+
 class TopologyBinding:
     """ctypes bridge for ``qcd_cuda_topology_apply``.
 
@@ -88,6 +112,14 @@ class TopologyBinding:
         self.path = Path(path) if path is not None else _library_path()
         _bind_host_cublas()
         self.library = ctypes.CDLL(str(self.path))
+        missing = []
+        for name in _REQUIRED_CUDA_EXPORTS:
+            try:
+                getattr(self.library, name)
+            except AttributeError:
+                missing.append(name)
+        if missing:
+            raise TopologyBindingError(self.path, missing)
         self.apply = self.library.qcd_cuda_topology_apply
         self.apply.argtypes = [
             ctypes.c_void_p,
@@ -103,23 +135,150 @@ class TopologyBinding:
 
 
 _binding_lock = threading.Lock()
-_binding_path: Path | None = None
-_binding: TopologyBinding | None = None
+_binding_stamps: dict[str, tuple[Any, ...]] = {}
+_bindings: dict[str, TopologyBinding] = {}
+_restart_required: dict[str, dict[str, Any]] = {}
+
+
+def _absolute_path(path: Path | str) -> Path:
+    """Return a stable absolute path for diagnostics and cache identity."""
+    return Path(os.path.abspath(os.path.expanduser(str(path))))
+
+
+def _binding_for_target_locked(
+        target: Path) -> tuple[TopologyBinding | None, dict[str, Any], bool]:
+    """Resolve one path while holding ``_binding_lock`` and return its snapshot."""
+    key = str(target)
+    try:
+        file_stat = os.stat(target)
+    except FileNotFoundError:
+        stamp = (key, "missing")
+        present = False
+    except OSError as error:
+        _bindings.pop(key, None)
+        _binding_stamps.pop(key, None)
+        failure = {
+            "path": key,
+            "present": False,
+            "status": "load-failed",
+            "detail": (
+                f"CUDA topology archive could not be inspected at {target}: "
+                f"{type(error).__name__}: {error}"
+            ),
+        }
+        return None, failure, False
+    else:
+        stamp = (
+            key,
+            int(file_stat.st_dev),
+            int(file_stat.st_ino),
+            int(file_stat.st_size),
+            int(file_stat.st_mtime_ns),
+        )
+        present = stat.S_ISREG(file_stat.st_mode)
+
+    restarted = _restart_required.get(key)
+    if restarted is not None:
+        report = dict(restarted)
+        report["present"] = present
+        return None, report, present
+
+    binding = _bindings.get(key)
+    previous_stamp = _binding_stamps.get(key)
+    if binding is not None:
+        if previous_stamp == stamp:
+            return binding, {
+                "path": key,
+                "present": True,
+                "status": "ready",
+                "detail": f"CUDA topology archive loaded from {key}",
+            }, present
+        # dlopen normally reuses a library already loaded by absolute path.
+        # Never keep reporting success if this path no longer names its archive.
+        _bindings.pop(key, None)
+        _binding_stamps.pop(key, None)
+        failure = {
+            "path": key,
+            "present": present,
+            "status": "load-failed",
+            "detail": (
+                f"CUDA topology archive changed at {target}; restart the Python "
+                "process before using the replacement archive"
+            ),
+        }
+        _restart_required[key] = dict(failure)
+        return None, failure, present
+
+    _binding_stamps[key] = stamp
+    failure = {
+        "path": key,
+        "present": present,
+        "status": "checking",
+        "detail": f"checking CUDA topology archive at {target}",
+    }
+    if not present:
+        failure = {
+            "path": key,
+            "present": False,
+            "status": "missing",
+            "detail": (
+                f"CUDA topology archive is missing at {target}; "
+                "reinstall pyqcd or set PYQCD_EINSUM_CUDA_LIB"
+            ),
+        }
+        return None, failure, present
+    try:
+        loaded = TopologyBinding(target)
+    except OSError as error:
+        failure = {
+            "path": key,
+            "present": True,
+            "status": "load-failed",
+            "detail": (
+                f"CUDA topology archive could not be loaded at {target}: "
+                f"{type(error).__name__}: {error}"
+            ),
+        }
+    except TopologyBindingError as error:
+        failure = {
+            "path": key,
+            "present": True,
+            "status": "symbol-missing",
+            "detail": (
+                f"{error}; rebuild pyqcd with "
+                "cpp/cuda/einsum/make-nv.sh"
+            ),
+        }
+    else:
+        _bindings[key] = loaded
+        failure = {
+            "path": key,
+            "present": True,
+            "status": "ready",
+            "detail": f"CUDA topology archive loaded from {target}",
+        }
+    return _bindings.get(key), failure, present
+
+
+def topology_binding_snapshot(
+        path: Path | None = None) -> tuple[TopologyBinding | None, dict[str, Any]]:
+    """Return a binding and its diagnostic snapshot from one locked check."""
+    target = _absolute_path(path if path is not None else _library_path())
+    with _binding_lock:
+        binding, report, _present = _binding_for_target_locked(target)
+    report["exported"] = binding is not None
+    return binding, report
 
 
 def topology_binding(path: Path | None = None) -> TopologyBinding | None:
     """Return the cached binding, or ``None`` when the archive lacks the symbol."""
-    global _binding, _binding_path
-    target = Path(path) if path is not None else _library_path()
-    with _binding_lock:
-        if _binding_path == target:
-            return _binding
-        _binding_path = target
-        try:
-            _binding = TopologyBinding(target)
-        except (OSError, AttributeError):
-            _binding = None
-        return _binding
+    return topology_binding_snapshot(path)[0]
+
+
+def topology_binding_report(path: Path | None = None) -> dict[str, Any]:
+    """Describe whether the selected archive exists, loads, and exports the entry."""
+    _binding, report = topology_binding_snapshot(path)
+    return report
 
 
 _PLAN_VIEW_LOCK = threading.Lock()
@@ -263,9 +422,10 @@ def topology_apply(
 
     from ..kupl.einsum import NativeUnavailable
 
-    binding = topology_binding(None if library_path is None else Path(library_path))
+    binding, report = topology_binding_snapshot(
+        None if library_path is None else Path(library_path))
     if binding is None:
-        raise NativeUnavailable("qcd_cuda_topology_apply is not exported by the archive")
+        raise NativeUnavailable(report["detail"])
 
     plan_data = _plan_buffer(plan)
     decoded, native_dtype, input_shapes, output_shape = _plan_view(plan_data)

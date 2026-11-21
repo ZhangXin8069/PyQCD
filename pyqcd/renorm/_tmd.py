@@ -2,7 +2,7 @@
 胶子 TMD-PDF 提取（梯度流重整化方案）——本库核心目标
 ====================================================
 
-参照 /root/PyQCD/refer/papers/gluon_tmd_gradient_flow_continuum.tex 构造：
+参照 `refer/papers/gluon_tmd_gradient_flow_continuum.tex` 构造：
 
 1. 伴随表示下的胶子准 TMD 算符（Eq.:M_adj_tmd）：
        M^{μλ;νρ}(z, b⊥) = F^{μλ}(z, b⊥)·U_{adj}(staple)·F^{νρ}(0)

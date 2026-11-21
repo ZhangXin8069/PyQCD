@@ -28,7 +28,10 @@
 from __future__ import annotations
 
 import inspect
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -250,6 +253,12 @@ def test_gpu_probe_report_carries_per_dtype_conclusions() -> None:
     if not _has_cuda():
         raise unittest.SkipTest("没有可用的 CUDA 设备，逐 dtype 结论无法实测")
     report = _probe.probe()
+    archive = report.get("cuda_archive")
+    assert isinstance(archive, dict), archive
+    assert {"path", "present", "exported", "status", "detail"} <= set(archive), archive
+    assert archive["present"] is True, archive
+    assert archive["exported"] is True, archive
+    assert archive["status"] == "ready", archive
     assert isinstance(report.get("dtypes"), dict), report.get("dtypes")
     assert tuple(report["dtypes"]) == DTYPE_NAMES, report["dtypes"]
     detail = report["kernel_status"]["detail"]
@@ -267,6 +276,13 @@ def test_format_report_shows_dtypes_right_after_kernel_status() -> None:
                        "array_backend": "numpy"},
         "cupy": None,
         "device": "synthetic",
+        "cuda_archive": {
+            "path": "/synthetic/libpyqcdeinsum_cuda.so",
+            "present": True,
+            "exported": True,
+            "status": "ready",
+            "detail": "synthetic",
+        },
         "kernel_enabled": None,
         "kernel_status": {"state": "fallback", "detail": "synthetic detail"},
         "dtypes": {"complex128": _fake_record("complex128", True),
@@ -277,11 +293,14 @@ def test_format_report_shows_dtypes_right_after_kernel_status() -> None:
     }
     lines = _probe.format_report(report).splitlines()
     labels = [line.strip().split(":")[0].strip() for line in lines]
-    assert labels[:6] == ["GPU probe", "build_info", "cupy", "device",
-                          "kernel enabled", "kernel status"], labels
-    assert labels[6] == "dtypes", ("dtypes 行必须紧跟 kernel status", labels)
-    assert labels[7] == "verdict", labels
-    dtypes_line = lines[6]
+    assert labels[:7] == ["GPU probe", "build_info", "cupy", "device",
+                          "cuda archive", "kernel enabled", "kernel status"], labels
+    assert labels[7] == "dtypes", ("dtypes 行必须紧跟 kernel status", labels)
+    assert labels[8] == "verdict", labels
+    archive_line = lines[4]
+    assert "ready path=/synthetic/libpyqcdeinsum_cuda.so" in archive_line, archive_line
+    assert "present=True exported=True" in archive_line, archive_line
+    dtypes_line = lines[7]
     assert "complex128=ok" in dtypes_line, dtypes_line
     assert "complex64=fail(stage=native" in dtypes_line, dtypes_line
     assert MISSING_SYMBOL in dtypes_line, dtypes_line
@@ -340,6 +359,255 @@ def test_all_dtypes_failing_keeps_the_original_verdict() -> None:
         assert f"{name}=fail(stage=" in detail, (name, detail)
 
 
+def test_topology_binding_report_distinguishes_missing_archive() -> None:
+    """缺库必须报告绝对路径、``present=False`` 与可执行的修复方向。"""
+    from ..einsum.cuda import _program
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        missing = Path(tmpdir) / "missing" / "libpyqcdeinsum_cuda.so"
+        with patch.object(_program, "_bindings", {}), \
+                patch.object(_program, "_binding_stamps", {}), \
+                patch.object(_program, "_restart_required", {}):
+            report = _program.topology_binding_report(missing)
+
+    assert report["status"] == "missing", report
+    assert report["present"] is False, report
+    assert report["exported"] is False, report
+    assert report["path"] == str(missing.absolute()), report
+    assert "PYQCD_EINSUM_CUDA_LIB" in report["detail"], report
+    assert "reinstall pyqcd" in report["detail"], report
+
+
+def test_topology_binding_report_distinguishes_load_failure() -> None:
+    """文件存在但不是可加载 ELF 时，不能误报成缺符号。"""
+    from ..einsum.cuda import _program
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        archive = Path(tmpdir) / "libpyqcdeinsum_cuda.so"
+        archive.write_bytes(b"not an elf archive")
+        with patch.object(_program, "_bindings", {}), \
+                patch.object(_program, "_binding_stamps", {}), \
+                patch.object(_program, "_restart_required", {}), \
+                patch.object(_program, "_bind_host_cublas", lambda: None):
+            report = _program.topology_binding_report(archive)
+
+    assert report["status"] == "load-failed", report
+    assert report["present"] is True, report
+    assert report["exported"] is False, report
+    assert "could not be loaded" in report["detail"], report
+    assert MISSING_SYMBOL not in report["detail"], report
+
+
+def test_topology_binding_report_distinguishes_missing_symbol() -> None:
+    """归档能打开但缺入口时，消息必须点名符号和实际归档路径。"""
+    from ..einsum.cuda import _program
+
+    class _LibraryWithoutTopology:
+        pass
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        archive = Path(tmpdir) / "libpyqcdeinsum_cuda.so"
+        archive.write_bytes(b"synthetic")
+        with patch.object(_program, "_bindings", {}), \
+                patch.object(_program, "_binding_stamps", {}), \
+                patch.object(_program, "_restart_required", {}), \
+                patch.object(_program, "_bind_host_cublas", lambda: None), \
+                patch.object(_program.ctypes, "CDLL",
+                             return_value=_LibraryWithoutTopology()):
+            report = _program.topology_binding_report(archive)
+
+    assert report["status"] == "symbol-missing", report
+    assert report["present"] is True, report
+    assert report["exported"] is False, report
+    assert "missing required exports" in report["detail"], report
+    assert "applyPlanQcd" in report["detail"], report
+    assert "qcd_cuda_topology_apply" in report["detail"], report
+    assert str(archive.absolute()) in report["detail"], report
+
+
+def test_topology_binding_report_refreshes_after_same_path_creation() -> None:
+    """A missing cached path must be retried when the archive later appears."""
+    from ..einsum.cuda import _program
+
+    class _LibraryWithoutTopology:
+        pass
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        archive = Path(tmpdir) / "libpyqcdeinsum_cuda.so"
+        with patch.object(_program, "_bindings", {}), \
+                patch.object(_program, "_binding_stamps", {}), \
+                patch.object(_program, "_restart_required", {}), \
+                patch.object(_program, "_bind_host_cublas", lambda: None), \
+                patch.object(_program.ctypes, "CDLL",
+                             return_value=_LibraryWithoutTopology()):
+            first = _program.topology_binding_report(archive)
+            archive.write_bytes(b"synthetic")
+            second = _program.topology_binding_report(archive)
+
+    assert first["status"] == "missing" and first["present"] is False, first
+    assert second["status"] == "symbol-missing", second
+    assert second["present"] is True, second
+
+
+def test_topology_binding_report_requires_restart_after_same_path_replacement() -> None:
+    """A ready archive must never be silently reloaded in the same process."""
+    from ..einsum.cuda import _program
+
+    class _ReadyLibrary:
+        pass
+
+    ready = _ReadyLibrary()
+    def entry(*_args):
+        return 0
+    entry.argtypes = []
+    entry.restype = 0
+    for name in _program._REQUIRED_CUDA_EXPORTS:
+        setattr(ready, name, entry)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        archive = Path(tmpdir) / "libpyqcdeinsum_cuda.so"
+        archive.write_bytes(b"first archive")
+        with patch.object(_program, "_bindings", {}), \
+                patch.object(_program, "_binding_stamps", {}), \
+                patch.object(_program, "_restart_required", {}), \
+                patch.object(_program, "_bind_host_cublas", lambda: None), \
+                patch.object(_program.ctypes, "CDLL", return_value=ready):
+            first = _program.topology_binding_report(archive)
+            archive.write_bytes(b"replacement archive with a different size")
+            second = _program.topology_binding_report(archive)
+            third = _program.topology_binding_report(archive)
+
+    assert first["status"] == "ready", first
+    assert second["status"] == "load-failed", second
+    assert second["exported"] is False, second
+    assert "restart the Python process" in second["detail"], second
+    assert third == second, (third, second)
+
+
+def test_topology_binding_report_keeps_restart_state_per_path() -> None:
+    """Switching archives must not reset a previously replaced path's verdict."""
+    from ..einsum.cuda import _program
+
+    class _ReadyLibrary:
+        pass
+
+    ready = _ReadyLibrary()
+    def entry(*_args):
+        return 0
+    entry.argtypes = []
+    entry.restype = 0
+    for name in _program._REQUIRED_CUDA_EXPORTS:
+        setattr(ready, name, entry)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        first = Path(tmpdir) / "first.so"
+        second = Path(tmpdir) / "second.so"
+        first.write_bytes(b"first archive")
+        second.write_bytes(b"second archive")
+        with patch.object(_program, "_bindings", {}), \
+                patch.object(_program, "_binding_stamps", {}), \
+                patch.object(_program, "_restart_required", {}), \
+                patch.object(_program, "_bind_host_cublas", lambda: None), \
+                patch.object(_program.ctypes, "CDLL", return_value=ready):
+            assert _program.topology_binding_report(first)["status"] == "ready"
+            assert _program.topology_binding_report(second)["status"] == "ready"
+            first.write_bytes(b"first archive replaced with new content")
+            replaced = _program.topology_binding_report(first)
+            other = _program.topology_binding_report(second)
+            revisited = _program.topology_binding_report(first)
+
+    assert replaced["status"] == "load-failed", replaced
+    assert "restart the Python process" in replaced["detail"], replaced
+    assert other["status"] == "ready", other
+    assert revisited == replaced, (revisited, replaced)
+
+
+def test_topology_binding_report_checks_the_full_cuda_export_set() -> None:
+    """A library exporting only the topology entry is not a complete archive."""
+    from ..einsum.cuda import _program
+
+    class _LibraryMissingDedicated:
+        pass
+
+    library = _LibraryMissingDedicated()
+    for name in _program._REQUIRED_CUDA_EXPORTS:
+        if name != "qcd_cuda_dedicated_apply":
+            setattr(library, name, object())
+    with tempfile.TemporaryDirectory() as tmpdir:
+        archive = Path(tmpdir) / "libpyqcdeinsum_cuda.so"
+        archive.write_bytes(b"synthetic")
+        with patch.object(_program, "_bindings", {}), \
+                patch.object(_program, "_binding_stamps", {}), \
+                patch.object(_program, "_restart_required", {}), \
+                patch.object(_program, "_bind_host_cublas", lambda: None), \
+                patch.object(_program.ctypes, "CDLL", return_value=library):
+            report = _program.topology_binding_report(archive)
+
+    assert report["status"] == "symbol-missing", report
+    assert "qcd_cuda_dedicated_apply" in report["detail"], report
+
+
+def test_topology_binding_report_converts_inspection_errors() -> None:
+    """Permission/stat failures must become a report instead of escaping."""
+    from ..einsum.cuda import _program
+
+    error = PermissionError("denied")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        archive = Path(tmpdir) / "libpyqcdeinsum_cuda.so"
+        with patch.object(_program, "_bindings", {}), \
+                patch.object(_program, "_binding_stamps", {}), \
+                patch.object(_program, "_restart_required", {}), \
+                patch.object(_program.os, "stat", side_effect=error):
+            report = _program.topology_binding_report(archive)
+
+    assert report["status"] == "load-failed", report
+    assert report["present"] is False, report
+    assert "could not be inspected" in report["detail"], report
+    assert "PermissionError: denied" in report["detail"], report
+
+
+def test_probe_checks_archive_even_without_cupy() -> None:
+    """No-GPU installs must still see whether the shipped CUDA archive is usable."""
+    archive = {
+        "path": "/synthetic/libpyqcdeinsum_cuda.so",
+        "present": False,
+        "exported": False,
+        "status": "missing",
+        "detail": "synthetic missing archive",
+    }
+    from ..einsum.cuda import _program
+
+    with patch.object(_probe, "_cupy", lambda: None), \
+            patch.object(_program, "topology_binding_report", lambda: archive):
+        report = _probe.probe()
+
+    assert report["cuda_archive"] == archive, report
+    assert report["kernel_status"]["state"] == "cupy-missing", report
+
+
+def test_cuda_build_rejects_missing_required_exports() -> None:
+    """CUDA 构建和安装暂存都必须硬校验 topology/dedicated 导出符号。"""
+    root = Path(__file__).resolve().parents[2]
+    make_script = root / "cpp" / "cuda" / "einsum" / "make-nv.sh"
+    setup_script = root / "setup.py"
+    required = (
+        "qcd_cuda_topology_apply",
+        "qcd_cuda_dedicated_apply",
+        "qcd_cuda_dedicated_dtypes",
+    )
+    build_source = make_script.read_text(encoding="utf-8")
+    setup_source = setup_script.read_text(encoding="utf-8")
+    for symbol in required:
+        assert symbol in build_source, (symbol, "missing from make-nv.sh")
+        assert symbol in setup_source, (symbol, "missing from setup.py staging gate")
+    assert "REQUIRED_EXPORTED_SYMBOLS" in build_source, build_source
+    assert "built library is missing required exports" in build_source, build_source
+    assert "binutils nm is required" in build_source, build_source
+    assert "exit 3" in build_source, build_source
+    assert "_missing_native_exports" in setup_source, setup_source
+    assert "library is missing required exports" in setup_source, setup_source
+    subprocess.run(["bash", "-n", str(make_script)], check=True)
+
+
 TESTS = (
     test_failed_probe_records_stage_and_detail,
     test_native_failure_is_recorded_verbatim,
@@ -350,6 +618,16 @@ TESTS = (
     test_format_report_shows_dtypes_right_after_kernel_status,
     test_partially_active_verdict_is_honest,
     test_all_dtypes_failing_keeps_the_original_verdict,
+    test_topology_binding_report_distinguishes_missing_archive,
+    test_topology_binding_report_distinguishes_load_failure,
+    test_topology_binding_report_distinguishes_missing_symbol,
+    test_topology_binding_report_refreshes_after_same_path_creation,
+    test_topology_binding_report_checks_the_full_cuda_export_set,
+    test_topology_binding_report_requires_restart_after_same_path_replacement,
+    test_topology_binding_report_keeps_restart_state_per_path,
+    test_topology_binding_report_converts_inspection_errors,
+    test_probe_checks_archive_even_without_cupy,
+    test_cuda_build_rejects_missing_required_exports,
 )
 
 

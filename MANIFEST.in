@@ -29,6 +29,7 @@ recursive-include cpp *.h *.cpp *.cu *.sh *.md *.py
 include cpp/kupl/einsum/src/topology_kernels.inc.gz
 prune cpp/kupl/einsum/build
 prune cpp/cuda/einsum/build
+prune cpp/kupl/einsum/tests
 
 # Pure-Python package plus the Cython sources of the optional CUDA extension.
 recursive-include pyqcd *.py *.pyx *.pxd *.pyi
@@ -42,4 +43,5 @@ global-exclude AGENTS.md
 
 # Build artefacts must never reach the sdist.
 prune build
+prune data/tmp
 global-exclude *.so *.log *.pyc

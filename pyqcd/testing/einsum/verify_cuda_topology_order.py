@@ -45,7 +45,7 @@ from pyqcd.einsum import _kernel_kupl
 from pyqcd.einsum import _wick_tasklist as tasklist
 from pyqcd.einsum._bench_scene import dims as scene_dims
 from pyqcd.einsum.bench_specialized import _label_sizes
-from pyqcd.einsum.cuda._program import topology_binding
+from pyqcd.einsum.cuda._program import topology_binding_report
 from pyqcd.testing._topology_kernel_gen import parse
 
 ARTIFACTS = pathlib.Path(__file__).resolve().parent / "artifacts"
@@ -102,9 +102,9 @@ def run(directory: pathlib.Path, dtypes: Sequence[str], sample: int | None,
     except ImportError:
         print("SKIP: cupy 不可用")
         return 0
-    if topology_binding() is None:
-        print("SKIP: libpyqcdeinsum_cuda.so 未导出 qcd_cuda_topology_apply"
-              "（先 bash cpp/cuda/einsum/make-nv.sh）")
+    archive = topology_binding_report()
+    if not archive["exported"]:
+        print(f"SKIP: {archive['detail']}")
         return 0
 
     table = predictions(directory)

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import contextlib
 import csv
+import io
 import json
 import os
 import signal
@@ -318,6 +319,44 @@ def test_corrupt_rows_are_skipped_not_fatal():
             _key(equation="ab,bc->ac", shape=[(4, 5), (5, 6)]))["kernel"] == "good_slow"
 
 
+def test_nul_in_quoted_multiline_record_does_not_swallow_later_rows():
+    """NUL filtering must preserve CSV logical-record boundaries."""
+    with _isolated() as work:
+        module = _profile_cache
+        directory = os.path.join(work, "cache")
+        module.configure(directory)
+        module.write_winner(_key(equation="ij,jk->ik"),
+                            {"kernel": "first", "wall_ms": 1.0})
+        module.write_winner(_key(equation="ab,bc->ac"),
+                            {"kernel": "second", "wall_ms": 2.0})
+        path = os.path.join(directory, module.PROFILE_FILENAME)
+        header, first = _read_rows(path)[:2]
+
+        bad = dict(zip(header, first))
+        bad["equation"] = "bad->x"
+        bad["note"] = "before\x00after\ncontinued"
+        after = dict(zip(header, first))
+        after["equation"] = "xy,yz->xz"
+        after["kernel"] = "after"
+        after["note"] = "valid row after corrupt multiline record"
+
+        with open(path, "ab") as handle:
+            for row in (bad, after):
+                stream = io.StringIO()
+                writer = csv.writer(stream, lineterminator="\n")
+                writer.writerow([row[name] for name in header])
+                handle.write(stream.getvalue().encode("utf-8"))
+        _forget()
+
+        state = module.summary()
+        picked = module.read_winner(_key(equation="xy,yz->xz"))
+
+    assert state["rows"] == 3, state
+    assert state["keys"] == 3, state
+    assert state["last_error"] is None, state
+    assert picked is not None and picked["kernel"] == "after", picked
+
+
 # ── 3. 超长字段写盘前截断 ───────────────────────────────────────────────────
 
 def test_overlong_text_fields_are_clipped():
@@ -443,6 +482,7 @@ def test_disabled_profile_leaves_no_trace():
 TESTS = (
     test_ensure_configured_keeps_pinned_dir,
     test_corrupt_rows_are_skipped_not_fatal,
+    test_nul_in_quoted_multiline_record_does_not_swallow_later_rows,
     test_overlong_text_fields_are_clipped,
     test_repeated_writes_keep_a_single_row_per_key,
     test_fork_child_can_summarize_while_parent_holds_lock,

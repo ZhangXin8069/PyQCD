@@ -9,7 +9,7 @@ latest release, and read the output and any notices printed during the install.*
 The package is distributed on PyPI as `pyqcd`; a single install gives you the whole
 toolkit and everything this site documents.
 
-Current release: `0.5.15`. To pin it: `pip install "pyqcd==0.5.15"`.
+Current release: `0.5.16`. To pin it: `pip install "pyqcd==0.5.16"`.
 
 ## Requirements
 
@@ -20,8 +20,15 @@ Current release: `0.5.15`. To pin it: `pip install "pyqcd==0.5.15"`.
 | `torch` | optional: the torch backend (`pip install "pyqcd[torch]"`) |
 | `cupy-cuda12x` | optional: GPU arrays (`pip install "pyqcd[cuda]"`) |
 | `matplotlib` | optional: plotting helpers (`pip install "pyqcd[plot]"`) |
+| C++17 compiler, `bash`, `nm`, OpenMP, OpenBLAS headers/library | default native KUPL build |
+| CUDA toolkit with `nvcc`, compatible host compiler | optional CUDA archive |
 
 `requires-python` is `>=3.9`. Python 3.8 is no longer supported.
+
+The default KUPL archive is compiled locally for this machine family with a
+portable baseline ISA. Set `PYQCD_EINSUM_NATIVE_ARCH=1` only when every process
+that imports the installation runs on the same CPU generation and you explicitly
+want `-march=native`.
 
 ## Optional extras
 
@@ -41,6 +48,10 @@ python -m pyqcd            # version, native backend, optional deps, subpackages
 python -m pyqcd --version  # version only
 python -m pyqcd --json     # machine-readable
 ```
+
+`python -m pyqcd` also prints the build-time configured/installed native backends
+and the reason CUDA was skipped, so those decisions remain visible after pip has
+discarded the successful build log.
 
 ```python
 import pyqcd
@@ -72,6 +83,40 @@ b = np.arange(12.0).reshape(3, 4)
 assert np.allclose(pe.contract("ij,jk->ik", a, b), a @ b)
 ```
 
+## GPU installation check
+
+CUDA is built from the sdist, so `nvcc` must be available in the **same shell
+that invokes `python -m pip`**. If it is absent, the install remains usable with
+the locally compiled KUPL CPU backend. On a GPU node, ask PyQCD what was actually loaded:
+
+```bash
+python -m pyqcd --gpu-probe
+python -m pyqcd --gpu-probe --json
+```
+
+Read the `cuda archive` line before interpreting `kernel enabled`. The latter is
+only the environment switch; the archive line contains the actual path and one
+of `ready`, `missing`, `load-failed`, or `symbol-missing`. A missing or incomplete
+CUDA archive is not fixed by setting an environment switch: load the CUDA
+toolchain, then reinstall with the same interpreter and no cache. The archive
+check also runs on CPU-only machines, so packaging defects are visible even when
+no device is present.
+
+```bash
+python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.16"
+```
+
+For an intentional no-compiler installation:
+
+```bash
+PYQCD_SKIP_NATIVE_BUILD=1 python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.16"
+```
+
+Build modes: `PYQCD_EINSUM_BACKEND=auto` is the default, `kupl` requests CPU
+native only, `cuda` attempts KUPL plus CUDA, and `PYQCD_SKIP_NATIVE_BUILD=1`
+installs the pure-Python planner with no `.so`. A failed default KUPL build is a
+hard error; set the explicit skip switch when a native compiler is unavailable.
+
 ## What the installed package contains
 
 `pip install pyqcd` installs the whole tool package — `pyqcd` itself plus
@@ -94,6 +139,7 @@ shows is reachable from the installed package alone.
 | `PYQCD_EINSUM_KERNEL_FORCE` | force one route: `generic` / `dedicated` / `topology` / `backend` (single value, default `generic`) |
 | `PYQCD_EINSUM_NOTICE=0` | silence the first-hit notices |
 | `PYQCD_EINSUM_LANG=zh\|en` | notice language |
+| `PYQCD_EINSUM_CUDA_LIB` | override the CUDA archive path used by diagnostics and topology execution |
 
 ## Backends and array types
 

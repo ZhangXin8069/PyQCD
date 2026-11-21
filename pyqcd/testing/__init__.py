@@ -2607,11 +2607,23 @@ def test_thread_safety():
 
 def test_contract_edge_cases():
     """收缩 API 的边界矩阵：全 dtype、ellipsis、标量、零尺寸、out=、错误类型。"""
+    import unittest
+
     from . import _contract_edge_cases_contract as contract
 
+    passed = skipped = 0
     for name in sorted(dir(contract)):
         if name.startswith("test_") and callable(getattr(contract, name)):
-            getattr(contract, name)()
+            try:
+                getattr(contract, name)()
+            except unittest.SkipTest as exc:
+                print(f"SKIP {name}: {exc}")
+                skipped += 1
+            else:
+                passed += 1
+    if passed == 0:
+        raise unittest.SkipTest(
+            f"contract edge cases did not run ({skipped} skipped)")
 
 
 def test_docs_api_contracts():
@@ -3132,11 +3144,23 @@ def test_label_sizes_contracts():
 
 def test_einsum_test_cli_contracts():
     """``python -m pyqcd.einsum.test`` 规范端：形状解析、参数校验、相对容差口径。"""
+    import unittest
+
     from . import _einsum_test_cli_contract as contract_module
 
+    passed = skipped = 0
     for name in sorted(dir(contract_module)):
         if name.startswith("test_"):
-            getattr(contract_module, name)()
+            try:
+                getattr(contract_module, name)()
+            except unittest.SkipTest as exc:
+                print(f"SKIP {name}: {exc}")
+                skipped += 1
+            else:
+                passed += 1
+    if passed == 0:
+        raise unittest.SkipTest(
+            f"einsum CLI contracts did not run ({skipped} skipped)")
 
 
 def test_einsum_equivalence_contracts():

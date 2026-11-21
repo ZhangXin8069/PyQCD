@@ -2381,9 +2381,9 @@ def build_tex(summary, run_dir, meff_vals, connected_ratio, disconn,
 % ===========================================================================
 \documentclass[11pt,a4paper]{article}
 \usepackage[UTF8]{ctex}
-\setCJKmainfont{AR PL SungtiL GB}[BoldFont=AR PL UMing CN]
-\setCJKsansfont{AR PL KaitiM GB}[BoldFont=AR PL UMing CN]
-\setCJKmonofont{AR PL UMing CN}
+\setCJKmainfont{FandolSong-Regular.otf}[BoldFont=FandolSong-Bold.otf,ItalicFont=FandolKai-Regular.otf]
+\setCJKsansfont{FandolHei-Regular.otf}[BoldFont=FandolHei-Bold.otf]
+\setCJKmonofont{FandolFang-Regular.otf}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{physics}
 \usepackage{braket}

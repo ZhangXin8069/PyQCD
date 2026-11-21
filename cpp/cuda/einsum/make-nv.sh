@@ -26,6 +26,18 @@ SHARED_CORE_SOURCES=(
 MODE=build
 REQUIRE_KERNELS=${PYQCD_EINSUM_REQUIRE_KERNELS:-0}
 PROVIDER_SYMBOLS=(qcd_cuda_permute qcd_cuda_hadamard qcd_cuda_batched_gemm)
+REQUIRED_EXPORTED_SYMBOLS=(
+    applyPlanQcd
+    applyContractQcd
+    applyCompileQcd
+    applyCompiledQcd
+    applyDestroyQcd
+    applyInitQcd
+    applyEndQcd
+    qcd_cuda_topology_apply
+    qcd_cuda_dedicated_apply
+    qcd_cuda_dedicated_dtypes
+)
 DEFAULT_ARCHITECTURES="6.0 7.0"
 
 usage() {
@@ -54,7 +66,7 @@ if ! cmp -s "$SCRIPT_DIR/include/einsum_define.h" "$SHARED_DIR/include/einsum_de
     printf 'error: CUDA/KUPL ABI headers differ:\n' >&2
     printf '       %s/include/einsum_define.h\n' "$SCRIPT_DIR" >&2
     printf '       %s/include/einsum_define.h\n' "$SHARED_DIR" >&2
-    exit 1
+    exit 3
 fi
 
 _discover_openblas() {
@@ -308,11 +320,28 @@ fi
 _pyqcd_notify "CUDA: done in $(( $(_pyqcd_now) - _PYQCD_T0 ))s"
 if [ ! -f "$TEMP_LIBRARY" ]; then
     printf 'error: nvcc reported success but %s is missing\n' "$TEMP_LIBRARY" >&2
-    exit 1
+    exit 3
 fi
-if ! nm -D --defined-only "$TEMP_LIBRARY" | awk '{print $NF}' | grep -qx applyPlanQcd; then
-    printf 'error: built library does not export applyPlanQcd\n' >&2
-    exit 1
+if ! command -v nm >/dev/null 2>&1; then
+    printf 'error: binutils nm is required to validate native exports\n' >&2
+    exit 3
+fi
+EXPORTS_FILE="$BUILD_DIR/defined-exports.txt"
+if ! nm -D --defined-only "$TEMP_LIBRARY" > "$EXPORTS_FILE" 2>"$BUILD_DIR/nm.log"; then
+    printf 'error: nm failed while validating built library; see %s\n' \
+        "$BUILD_DIR/nm.log" >&2
+    exit 3
+fi
+MISSING_EXPORTS=()
+for symbol in "${REQUIRED_EXPORTED_SYMBOLS[@]}"; do
+    if ! awk '{print $NF}' "$EXPORTS_FILE" | grep -qx "$symbol"; then
+        MISSING_EXPORTS+=("$symbol")
+    fi
+done
+if [ ${#MISSING_EXPORTS[@]} -gt 0 ]; then
+    printf 'error: built library is missing required exports: %s\n' \
+        "${MISSING_EXPORTS[*]}" >&2
+    exit 3
 fi
 
 MISSING=()
@@ -322,11 +351,11 @@ for symbol in "${PROVIDER_SYMBOLS[@]}"; do
     fi
 done
 if [ ${#MISSING[@]} -gt 0 ]; then
-    printf 'warning: missing CUDA providers: %s\n' "${MISSING[*]}" >&2
-    if [ "$REQUIRE_KERNELS" = "1" ]; then
-        printf 'error: --require-kernels forbids a planning-only archive\n' >&2
-        exit 1
-    fi
+        printf 'warning: missing CUDA providers: %s\n' "${MISSING[*]}" >&2
+        if [ "$REQUIRE_KERNELS" = "1" ]; then
+            printf 'error: --require-kernels forbids a planning-only archive\n' >&2
+            exit 3
+        fi
 fi
 
 # conda 的编译器 wrapper 无条件注入绝对 RUNPATH（连空 .so 都带），会拉进第二份

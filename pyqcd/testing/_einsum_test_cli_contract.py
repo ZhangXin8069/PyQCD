@@ -1053,31 +1053,49 @@ def test_compare_optimize_does_not_touch_the_main_path():
     # 的证据。
 
 
-def test_compare_optimize_is_inert_for_backend_and_none():
-    """``backend``/``none`` 没有可设的优化器：非 auto 值不报错，只标无效。
+def test_compare_optimize_is_inert_for_none():
+    """``none`` 没有可设的优化器：非 auto 值不报错，只标无效。
 
-    这两条参照路径的耗时不该被该选项影响；报告里 ``compare_optimize_effective``
-    为 ``None``，``reference`` 串里不出现优化器名。
+    报告里 ``compare_optimize_effective`` 为 ``None``，且不产生 reference。
     """
-    for compare in ("backend", "none"):
-        report = _compare_opt_run(compare=compare, compare_optimize="dp")
+    report = _compare_opt_run(compare="none", compare_optimize="dp")
+    assert report["ok"], report
+    assert report["compare_optimize"] == "dp", report
+    assert report["compare_optimize_effective"] is None, report
+    assert "reference" not in report, report
+
+    auto = _compare_opt_run(compare="none", compare_optimize="auto")
+    assert auto["ok"], auto
+    assert auto["compare_optimize_effective"] is None, auto
+
+    for value in cli.COMPARE_OPTIMIZERS:
+        assert cli.resolve_compare_optimize("none", "auto", value) is None, value
+
+
+def test_compare_optimize_is_inert_for_backend():
+    """``backend`` needs a usable second backend; the optimizer stays inert."""
+    try:
+        import cupy
+        if int(cupy.cuda.runtime.getDeviceCount()) < 1:
+            raise unittest.SkipTest("no CUDA device is visible")
+    except ImportError as error:
+        raise unittest.SkipTest(f"cupy unavailable: {error}") from error
+    except unittest.SkipTest:
+        raise
+    except Exception as error:  # noqa: BLE001 - only known CUDA runtime error skips
+        if type(error).__name__ == "CUDARuntimeError":
+            raise unittest.SkipTest(f"CUDA runtime unavailable: {error}") from error
+        raise
+
+    for value in ("dp", "auto"):
+        report = _compare_opt_run(compare="backend", compare_optimize=value)
         assert report["ok"], report
-        assert report["compare_optimize"] == "dp", report
+        assert report["compare_optimize"] == value, report
         assert report["compare_optimize_effective"] is None, report
-        if compare == "backend":
-            assert "optimize" not in report["reference"], report["reference"]
-        else:
-            assert "reference" not in report, report
+        assert "optimize" not in report["reference"], report["reference"]
 
-        auto = _compare_opt_run(compare=compare, compare_optimize="auto")
-        assert auto["ok"], auto
-        assert auto["compare_optimize_effective"] is None, auto
-
-    # 解析层同样不报错（无效但合法），且返回 None
-    for compare in ("backend", "none"):
-        for value in cli.COMPARE_OPTIMIZERS:
-            assert cli.resolve_compare_optimize(compare, "auto", value) is None, (
-                compare, value)
+    for value in cli.COMPARE_OPTIMIZERS:
+        assert cli.resolve_compare_optimize("backend", "auto", value) is None, value
 
 
 def test_help_lists_compare_optimize():
@@ -1626,7 +1644,8 @@ TESTS = (
     test_compare_optimize_dp_reaches_the_opt_einsum_reference,
     test_compare_optimize_rejects_names_the_reference_cannot_honour,
     test_compare_optimize_does_not_touch_the_main_path,
-    test_compare_optimize_is_inert_for_backend_and_none,
+    test_compare_optimize_is_inert_for_none,
+    test_compare_optimize_is_inert_for_backend,
     test_help_lists_compare_optimize,
     test_language_modes_and_default_are_documented,
     test_language_help_is_localised,

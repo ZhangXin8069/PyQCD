@@ -82,10 +82,20 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
 
 ## 版本变更摘要
 
-* **未发布** — 配置表**只有** `--tune` 会写，`contract()` 只读；同键 1 行，
+* **0.5.16** — 配置表**只有** `--tune` 会写，`contract()` 只读；同键 1 行，
   只有一列计时（`wall_ms` = 整次 `contract()` 的墙钟）。`--kernel-force`
   只接受单个逻辑值（`generic` / `dedicated` / `topology` / `backend`）。
   tune 按分支的有序清单遍历，`min_wall_ms` 剪枝，只写胜出的一组。
+  原生构建不再允许发布缺入口的 CUDA 归档：
+  `libpyqcdeinsum_cuda.so` 必须导出 topology、dedicated 与冻结 C ABI 入口，文件
+  暂存进包之前还会再校验一次。`--gpu-probe` 现在打印实际 `cuda archive` 路径，
+  并区分 `missing`、`load-failed`、`symbol-missing`；不再只让用户猜
+  `kernel enabled` 的含义。安装阶段若因 `nvcc` 缺席而不构建 CUDA，也会明确提示，
+  而不是让用户事后才发现已经回落。配置表中一行被 NUL 损坏时只跳过该行，不再让
+  整张已 tune 表失效；中文报告改用 TeX Live 自带的 Fandol 字体，不再依赖主机
+  特有的 AR PL 字体。本地 wheel 不再错标为 `py3-none-any`，而是使用平台标签；
+  `python -m pyqcd` 会回放持久化的构建后端决策，即使 pip 已丢弃成功构建日志也
+  仍可追溯。
 * **0.5.15** — 缺 `opt_einsum` 时 `original` 内核现在在**准入**阶段整档跳过：一行 `skip  kernel_force=original  组数=7` 并说明装法，不再留下七行看起来像七个独立失败的 `状态=error`（0.5.14 起它是第一组）。
 * **0.5.14** — `--tune` 现在**每组一跑完就**打一行 `tune comb :` 进度（序号/总数、三轴配置、实际下发的 backend/dtype/device、`wall_ms`、峰值、状态、原因原文），不再攒到整轮结束。`original`（`opt_einsum`）改为**第一组**，上界一开始就被压到方程的真实速度量级；剪枝截止改回 **`min_wall_ms` 本身**（1×，不再是 2×）。"存在更省内存的配置"提示连同命中路径上那次记录表读取一并删除。
 * **0.5.13** — `kernel_force="original"` 在缺 `opt_einsum` 时抛 `KernelUnavailableError` 并点明装法（`pip install "pyqcd[einsum]"`），不再是一句裸 `ModuleNotFoundError`；同时把 `opt_einsum>=3.3` 声明为新的 `einsum` 可选依赖。

@@ -96,6 +96,13 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(native, dict) and "backend" in native:
         print(f"  native backend : {native['backend']}")
         print(f"  library        : {native['native_library']}")
+        build_config = native.get("build_config") or {}
+        if build_config:
+            configured = ", ".join(build_config.get("configured_backends", [])) or "none"
+            installed = ", ".join(build_config.get("installed_backends", [])) or "none"
+            print(f"  build backends : configured={configured} installed={installed}")
+            for note in build_config.get("notes", []):
+                print(f"  build note     : {note}")
     else:
         print(f"  native backend : unknown ({native})")
     print("  subpackages    : " + ", ".join(report["subpackages"]))

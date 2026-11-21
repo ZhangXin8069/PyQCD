@@ -22,15 +22,18 @@ with the KUPL library.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
+import sysconfig
 import subprocess
 import time
 import warnings
 from pathlib import Path
 
 from setuptools import Extension, find_packages, setup
+from setuptools.command.bdist_wheel import bdist_wheel
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 from setuptools.command.sdist import sdist
@@ -38,11 +41,37 @@ from setuptools.command.sdist import sdist
 HOME = Path(__file__).resolve().parent
 RAW_BACKEND = os.environ.get("PYQCD_EINSUM_BACKEND", "auto").strip().lower()
 _WARNED_BACKENDS: set[str] = set()
+_BUILD_NOTES: list[str] = []
 
 # make.sh 用该退出码表示"产物校验失败"（与编译失败区分）：构建命令本身成功，
 # 但产出的 .so 不满足运行期前提（例如缺 OpenBLAS 运行库，装上去 dlopen 会失败）。
 # 这种库不能被当作可复用产物，否则源码树里的旧库会掩盖真实缺陷。
 VALIDATION_EXIT_CODE = 3
+
+_REQUIRED_NATIVE_EXPORTS = {
+    "kupl": (
+        "applyPlanQcd",
+        "qcd_kupl_topology_apply",
+        "qcd_kupl_dedicated_apply",
+    ),
+    "cuda": (
+        "applyPlanQcd",
+        "applyContractQcd",
+        "applyCompileQcd",
+        "applyCompiledQcd",
+        "applyDestroyQcd",
+        "applyInitQcd",
+        "applyEndQcd",
+        "qcd_cuda_topology_apply",
+        "qcd_cuda_dedicated_apply",
+        "qcd_cuda_dedicated_dtypes",
+    ),
+}
+
+
+def _remember_build_note(note: str) -> None:
+    if note not in _BUILD_NOTES:
+        _BUILD_NOTES.append(note)
 
 
 def _notify_progress(message: str) -> None:
@@ -79,6 +108,12 @@ def _cython_available() -> bool:
 
 def _resolve_backends(value: str) -> tuple[str, ...]:
     """Backends to build, in build order; KUPL is always the baseline."""
+    if os.environ.get("PYQCD_SKIP_NATIVE_BUILD") == "1":
+        note = ("native builds explicitly disabled; installing the pure-Python "
+                "planner only")
+        print(f"PyQCD einsum: {note}")
+        _remember_build_note(note)
+        return ()
     if value == "kupl":
         return ("kupl",)
     if value == "cuda":
@@ -86,11 +121,27 @@ def _resolve_backends(value: str) -> tuple[str, ...]:
     if value != "auto":
         raise RuntimeError(
             f"invalid PYQCD_EINSUM_BACKEND={value!r}; expected kupl, cuda, or auto")
-    if shutil.which(os.environ.get("NVCC", "nvcc")) and _cuda_sources():
-        if _cython_available():
-            return ("kupl", "cuda")
-        print("PyQCD einsum: Cython is unavailable, building the kupl backend only")
-    return ("kupl",)
+    nvcc = os.environ.get("NVCC", "nvcc")
+    if not shutil.which(nvcc):
+        note = ("CUDA backend not built because nvcc is not on PATH; the locally "
+                "compiled KUPL backend will still be installed. Load the CUDA "
+                "module before pip install to build CUDA")
+        print(f"PyQCD einsum: {note}.")
+        _remember_build_note(note)
+        return ("kupl",)
+    if not _cuda_sources():
+        note = ("CUDA backend not built because the sdist has no CUDA sources; "
+                "the locally compiled KUPL backend will still be installed")
+        print(f"PyQCD einsum: {note}.")
+        _remember_build_note(note)
+        return ("kupl",)
+    if not _cython_available():
+        note = ("CUDA backend not built because Cython is unavailable; the "
+                "locally compiled KUPL backend will still be installed")
+        print(f"PyQCD einsum: {note}.")
+        _remember_build_note(note)
+        return ("kupl",)
+    return ("kupl", "cuda")
 
 
 BACKENDS = _resolve_backends(RAW_BACKEND)
@@ -111,16 +162,83 @@ def _build_log(backend: str) -> Path:
     return HOME / "cpp" / backend / "einsum" / "build" / "build.log"
 
 
+def _missing_native_exports(path: Path, backend: str) -> tuple[str, ...]:
+    """Return required dynamic symbols absent from a native archive."""
+    required = _REQUIRED_NATIVE_EXPORTS[backend]
+    process = subprocess.run(
+        ["nm", "-D", "--defined-only", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    if process.returncode != 0:
+        detail = (process.stderr or process.stdout).strip()
+        raise RuntimeError(
+            f"could not inspect native exports in {path}: {detail or 'nm failed'}")
+    exported = {
+        line.split()[-1]
+        for line in process.stdout.splitlines()
+        if line.split()
+    }
+    return tuple(symbol for symbol in required if symbol not in exported)
+
+
 def _stage_native_library(backend: str) -> None:
     source = _native_library_path(backend)
     if not source.is_file():
         raise RuntimeError(f"native library was not built: {source}")
+    missing = _missing_native_exports(source, backend)
+    if missing:
+        raise RuntimeError(
+            f"native {backend} library is missing required exports: "
+            f"{', '.join(missing)} ({source})")
     destination = HOME / "pyqcd" / "einsum" / backend / source.name
     destination.parent.mkdir(parents=True, exist_ok=True)
     # 必须原子落位：就地 O_TRUNC 覆盖正在被其它进程 mmap 的 .so 会让其在退出期 SIGSEGV。
     staged = destination.with_name(destination.name + f".tmp.{os.getpid()}")
     shutil.copy2(source, staged)
     os.replace(staged, destination)
+
+
+def _native_package_data() -> dict[str, list[str]]:
+    """Return package data only for native archives validated by this build."""
+    data = {
+        "pyqcd": ["py.typed"],
+        "pyqcd.einsum.cuda": ["*.pyi", "*.pxd"],
+    }
+    for backend in BACKENDS:
+        source = _native_library_path(backend)
+        if not source.is_file():
+            continue
+        if _missing_native_exports(source, backend):
+            continue
+        data[f"pyqcd.einsum.{backend}"] = [source.name]
+    return data
+
+
+def _write_build_config(build_lib: str) -> None:
+    """Persist why this wheel has (or lacks) each native backend."""
+    package_data = _native_package_data()
+    installed = []
+    for backend in BACKENDS:
+        archive = f"libpyqcdeinsum_{backend}.so"
+        if archive in package_data.get(f"pyqcd.einsum.{backend}", ()):
+            installed.append(backend)
+    payload = {
+        "requested_backend": RAW_BACKEND,
+        "configured_backends": list(BACKENDS),
+        "installed_backends": installed,
+        "notes": list(_BUILD_NOTES),
+        "native_arch": os.environ.get("PYQCD_EINSUM_NATIVE_ARCH", "0"),
+        "cuda_architectures": os.environ.get(
+            "PYQCD_CUDA_ARCHITECTURES",
+            os.environ.get("CMAKE_CUDA_ARCHITECTURES", "")),
+    }
+    path = Path(build_lib) / "pyqcd" / "einsum" / "_build_config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _host_compiler_works(compiler: str | None = None) -> bool:
@@ -180,6 +298,10 @@ def _toolchain_problem(backend: str) -> str | None:
         if not _host_compiler_works(host):
             return (f"host C++ compiler {host!r} cannot compile a trivial program; "
                     "fix: repair the toolchain (apt install build-essential) or set CXX")
+        if shutil.which("nm") is None:
+            return ("binutils ('nm') is required to validate CUDA exports; "
+                    "fix: apt install binutils | dnf install binutils | "
+                    "conda install -c conda-forge binutils")
         return None
     if shutil.which("nm") is None:
         # make.sh 用 nm 校验 applyPlanQcd 导出符号；缺 nm 时它只会报“符号缺失”。
@@ -209,6 +331,7 @@ def _native_required(backend: str) -> bool:
 
 def _skip_native(reason: str, backend: str) -> None:
     """Warn about a skipped/failed native build, or abort for the KUPL baseline."""
+    _remember_build_note(f"{backend}: {reason}")
     detail = f"PyQCD einsum: {reason}. The native {backend} library is not installed."
     if backend != "cuda" and _native_required(backend):
         raise RuntimeError(
@@ -287,16 +410,29 @@ class NativeBuildExt(build_ext):
             return False
         _notify_progress(f"native {backend} library built in "
                          f"{time.time() - started:.1f}s")
+        _remember_build_note(f"{backend}: built")
         return True
 
     def run(self):
         built: dict[str, bool] = {}
         skip = os.environ.get("PYQCD_SKIP_NATIVE_BUILD") == "1"
+        reuse = os.environ.get("PYQCD_EINSUM_REUSE_NATIVE") == "1"
         for backend in BACKENDS:
-            built[backend] = (
-                _native_library_path(backend).is_file() if skip
-                else self._build_backend(backend)
-            )
+            if skip:
+                built[backend] = False
+            elif reuse:
+                built[backend] = _native_library_path(backend).is_file()
+            else:
+                built[backend] = self._build_backend(backend)
+            if built[backend]:
+                try:
+                    # 在编译 Cython 扩展前验证导出符号。否则一个缺 topology
+                    # 入口的旧库仍会让扩展链接成功，最终留下“装得上但 GPU
+                    # 路径不可用”的半成品。
+                    _stage_native_library(backend)
+                except (RuntimeError, OSError) as error:
+                    built[backend] = False
+                    _skip_native(str(error), backend)
         if not built.get("cuda", False):
             # CUDA 扩展链接 libpyqcdeinsum_cuda.so；没有它时编译必然失败。
             self.extensions = [
@@ -313,7 +449,11 @@ class NativeBuildPy(build_py):
     def run(self):
         self.run_command("build_ext")
         _stage_built_libraries()
+        package_data = _native_package_data()
+        self.distribution.package_data = package_data
+        self.package_data = package_data
         super().run()
+        _write_build_config(self.build_lib)
 
 
 class NativeSdist(sdist):
@@ -331,6 +471,24 @@ class NativeSdist(sdist):
             target.parent.mkdir(parents=True, exist_ok=True)
             if not target.is_file():
                 self.copy_file(str(source), str(target))
+
+
+class NativeBdistWheel(bdist_wheel):
+    """Mark every built wheel as platform-specific.
+
+    Even a KUPL-only or deliberately pure-Python wheel follows this project's
+    source-build install flow. Tagging it ``py3-none-any`` would be unsafe if a
+    native archive is present and misleading for downstream resolvers.
+    """
+
+    def get_tag(self) -> tuple[str, str, str]:
+        implementation, abi, platform = super().get_tag()
+        if platform != "any":
+            return implementation, abi, platform
+        platform = self.plat_name or sysconfig.get_platform()
+        platform = (
+            platform.lower().replace("-", "_").replace(".", "_").replace(" ", "_"))
+        return implementation, "none", platform
 
 
 def _extensions():
@@ -418,14 +576,14 @@ setup(
     ),
     package_data={
         "pyqcd": ["py.typed"],
-        "pyqcd.einsum.cuda": ["*.pyi", "*.pxd", "libpyqcdeinsum_cuda.so"],
-        "pyqcd.einsum.kupl": ["libpyqcdeinsum_kupl.so"],
+        "pyqcd.einsum.cuda": ["*.pyi", "*.pxd"],
     },
     ext_modules=_extensions(),
     cmdclass={
         "build_ext": NativeBuildExt,
         "build_py": NativeBuildPy,
         "sdist": NativeSdist,
+        "bdist_wheel": NativeBdistWheel,
     },
     zip_safe=False,
 )

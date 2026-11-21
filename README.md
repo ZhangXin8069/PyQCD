@@ -96,11 +96,23 @@ send it back to the generic path. For what actually ran, read the `route` /
 
 ## Version summary
 
-* **Unreleased** — the configuration table is written **only** by `--tune`;
+* **0.5.16** — the configuration table is written **only** by `--tune`;
   `contract()` is read-only. One row per key, one timing column (`wall_ms`, the
   wall clock of the whole `contract()` call). `--kernel-force` takes a single
   logical value (`generic` / `dedicated` / `topology` / `backend`). Tune sweeps an
   ordered per-branch list with `min_wall_ms` pruning and writes just the winner.
+  Native builds now fail before publishing an incomplete CUDA archive:
+  `libpyqcdeinsum_cuda.so` must export the topology, dedicated, and frozen C ABI
+  entries, and the same check is repeated before files are staged into the package.
+  `--gpu-probe` now prints the selected `cuda archive` path and distinguishes
+  `missing`, `load-failed`, and `symbol-missing`; `kernel enabled` is no longer the
+  only clue. Install output also states when CUDA was skipped because `nvcc` was
+  absent instead of leaving users to discover the fallback later. A NUL-corrupted
+  row in the tuned configuration table now skips only that row, and generated
+  Chinese reports use TeX Live's bundled Fandol fonts rather than host-specific
+  AR PL fonts. Local wheels are now tagged platform-specific instead of
+  `py3-none-any`, and `python -m pyqcd` replays the persisted build-time backend
+  decisions even after pip discards its successful build log.
 * **0.5.15** — when `opt_einsum` is absent, the `original` kernel is now skipped at admission with a single `skip  kernel_force=original  组数=7` line naming the fix, instead of leaving seven `状态=error` rows that look like seven independent failures (it is the first group since 0.5.14).
 * **0.5.14** — `--tune` now prints a `tune comb :` progress line for **every** group the moment it finishes (index/total, the three axes, the dispatched backend/dtype/device, `wall_ms`, peak, status, reason verbatim) instead of holding them until the sweep ends. `original` (`opt_einsum`) is now the **first** group, so the `min_wall_ms` bound is pinned to the equation's real speed from the start; the pruning cutoff went back to **`min_wall_ms` itself** (1x, not 2x). The "a lower-memory configuration exists" hint was removed along with the record-table read on the hit path.
 * **0.5.13** — `kernel_force="original"` now raises a `KernelUnavailableError` that names the fix (`pip install "pyqcd[einsum]"`) instead of a bare `ModuleNotFoundError` when `opt_einsum` is absent, and `opt_einsum>=3.3` is declared as the new `einsum` extra.

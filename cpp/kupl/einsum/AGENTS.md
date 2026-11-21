@@ -191,12 +191,10 @@ CUDA 12.4.131、RTX 4060 Laptop（`sm_89`）。跨后端总表与逐条复现命
    数值路径可用。判定口径：**日志里的 `OpenBLAS: not found` 不能当作 BLAS 不可用**。
    运行期可用 `PYQCD_EINSUM_CBLAS_LIB`（`src/apply_contract.cpp:269`）指定具体库。
 
-3. **`-march=native` 默认 ON，与 PyQCU 相反。** `NATIVE_ARCH=${PYQCD_EINSUM_NATIVE_ARCH:-1}`
-   （`make.sh:37-41`）默认追加 `-march=native -funroll-loops`；PyQCU 对应开关默认
-   OFF。后果是默认产物绑定构建机 ISA，跨机分发（含 Kunpeng/aarch64）有不可加载 /
-   非法指令风险；该风险本次**未实机复跑**，但两边默认值的差异是确定的。
-   需要可分发产物时应显式 `PYQCD_EINSUM_NATIVE_ARCH=0`（退回 `make.sh:38`
-   不含 `-march` 的基线 flags）。
+3. **`-march=native` 改为显式 opt-in。** `NATIVE_ARCH=${PYQCD_EINSUM_NATIVE_ARCH:-0}`
+   默认使用基线 ISA + `-mtune=native -funroll-loops`，避免登录节点与计算节点
+   CPU 代际不同导致非法指令。仅当所有运行节点保证同一 CPU 代际时设
+   `PYQCD_EINSUM_NATIVE_ARCH=1`，改用 `-march=native`。
 
 4. **发布方式与 PyQCU 一致（对照登记，非本次实测）。** 稳定软链 + `mv -Tf` 原子替换
    与 `cpp/kupl/qcu/make.sh` 同款（据 §2 记载）；与 PyQCU 的已知差异集中在第 3 条的

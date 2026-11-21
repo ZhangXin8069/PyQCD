@@ -85,6 +85,12 @@ def _kernel_status() -> dict[str, Any]:
         return result("disabled",
                       "PYQCD_EINSUM_KERNEL_CUDA=0 is set, or the library is absent")
 
+    from .cuda import _program
+
+    archive = _program.topology_binding_report()
+    if not archive["exported"]:
+        return result("fallback", archive["detail"], {})
+
     import numpy as np
 
     dtypes = kernel.probe_dtypes()
@@ -152,12 +158,16 @@ def probe() -> dict[str, Any]:
         "build_info": info,
         "cupy": None if cupy is None else cupy.__version__,
         "device": None,
+        "cuda_archive": None,
         "kernel_enabled": None,
         "kernel_status": None,
         "dtypes": {},
         "verdict": "",
         "hints": [],
     }
+    from .cuda import _program
+
+    report["cuda_archive"] = _program.topology_binding_report()
     if cupy is None:
         report["verdict"] = "cupy missing — GPU kernels cannot receive numpy data"
         report["kernel_status"] = {"state": "cupy-missing",
@@ -260,6 +270,18 @@ def _format_kernel_status(status: Any) -> str:
     return f"{state} — {detail}" if detail else str(state)
 
 
+def _format_cuda_archive(archive: Any) -> str:
+    """Render the selected archive path and whether its required entry is usable."""
+    if not isinstance(archive, dict):
+        return "n/a — not checked"
+    return (
+        f"{archive.get('status', 'unknown')} "
+        f"path={archive.get('path', 'unknown')} "
+        f"present={archive.get('present')} "
+        f"exported={archive.get('exported')}"
+    )
+
+
 def format_report(report: dict[str, Any]) -> str:
     info = report["build_info"]
     lines = [
@@ -270,6 +292,7 @@ def format_report(report: dict[str, Any]) -> str:
         f"  cupy           : {report['cupy']}",
         f"  device         : {report['device']} "
         f"(compute {report.get('compute_capability', '?')})",
+        f"  cuda archive   : {_format_cuda_archive(report.get('cuda_archive'))}",
         f"  kernel enabled : {report['kernel_enabled']}",
         "  kernel status  : " + _format_kernel_status(report.get("kernel_status")),
         f"  dtypes         : {_dtype_line(report.get('dtypes'))}",

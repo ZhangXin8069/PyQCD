@@ -8,6 +8,7 @@ pure Python planner (``None`` return, never an exception).
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -33,6 +34,16 @@ def requested_backend() -> str:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _build_config() -> dict[str, Any]:
+    """Return build-time backend decisions shipped with this installation."""
+    path = Path(__file__).resolve().with_name("_build_config.json")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _cuda_library_path() -> Path:
@@ -174,4 +185,5 @@ def build_info() -> dict[str, Any]:
         'native_available': backend != 'python',
         'array_backend': array_backend,
         'native_library': path,
+        'build_config': _build_config(),
     }

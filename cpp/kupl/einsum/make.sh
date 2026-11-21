@@ -49,10 +49,16 @@ _pyqcd_explain_build_log() {
     fi
 }
 BUILD_LOG="$BUILD_DIR/build.log"
-NATIVE_ARCH=${PYQCD_EINSUM_NATIVE_ARCH:-1}
+NATIVE_ARCH=${PYQCD_EINSUM_NATIVE_ARCH:-0}
 DEFAULT_FLAGS="-O3 -fopenmp -shared -fPIC -std=c++17 -fvisibility=hidden -Wall -Wextra"
 if [ "$NATIVE_ARCH" = "1" ]; then
     DEFAULT_FLAGS="$DEFAULT_FLAGS -march=native -funroll-loops"
+elif [ "$NATIVE_ARCH" = "0" ]; then
+    DEFAULT_FLAGS="$DEFAULT_FLAGS -mtune=native -funroll-loops"
+else
+    printf 'error: PYQCD_EINSUM_NATIVE_ARCH must be 0 or 1, got %s\n' \
+        "$NATIVE_ARCH" >&2
+    exit 2
 fi
 BASE_FLAGS=${PYQCD_EINSUM_FLAGS:-"$DEFAULT_FLAGS"}
 MODE=build
@@ -93,6 +99,8 @@ if ! command -v nm >/dev/null 2>&1; then
 fi
 if [ "$NATIVE_ARCH" = "1" ]; then
     _pyqcd_notify "KUPL (CPU): note: -march=native bakes this host's ISA; set PYQCD_EINSUM_NATIVE_ARCH=0 for portable binaries"
+else
+    _pyqcd_notify "KUPL (CPU): portable baseline ISA (no -march=native); set PYQCD_EINSUM_NATIVE_ARCH=1 for host-specific tuning"
 fi
 FLAGS=$BASE_FLAGS
 

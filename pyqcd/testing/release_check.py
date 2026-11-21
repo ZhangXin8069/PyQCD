@@ -14,16 +14,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import subprocess
 import sys
+import tarfile
+import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PAGES = ("overview", "usage", "performance", "install")
+PAGES = (
+    "overview", "usage", "performance", "install",
+    "acknowledgements", "appendix",
+)
 BLOCK = re.compile(r"```[a-z]*\n(.*?)```", re.S)
 
 PYPI_JSON = "https://pypi.org/pypi/pyqcd/json"
@@ -33,9 +40,10 @@ RTD = {
 }
 
 
-def _run(command: list[str], cwd: Path | None = None) -> tuple[int, str]:
+def _run(command: list[str], cwd: Path | None = None,
+         env: dict[str, str] | None = None) -> tuple[int, str]:
     proc = subprocess.run(command, cwd=str(cwd or ROOT), capture_output=True,
-                          text=True, timeout=1800)
+                          text=True, timeout=1800, env=env)
     return proc.returncode, (proc.stdout + proc.stderr)
 
 
@@ -59,13 +67,11 @@ class Report:
 
 
 def check_versions(report: Report) -> str:
-    import tomllib
-
     import pyqcd
     import pyqcd.einsum._version as version_module
+    from pyqcd.testing._toml_compat import load as load_toml
 
-    with (ROOT / "pyproject.toml").open("rb") as handle:
-        project = tomllib.load(handle)["project"]
+    project = load_toml(ROOT / "pyproject.toml")["project"]
     declared = project["version"]
     ok = (declared == pyqcd.__version__ == version_module.__version__
           and project["name"] == "pyqcd")
@@ -75,16 +81,25 @@ def check_versions(report: Report) -> str:
     return declared
 
 
-def check_sdist(report: Report, version: str) -> None:
-    sdist = ROOT / "dist" / f"pyqcd-{version}.tar.gz"
-    if not sdist.is_file():
-        code, output = _run([sys.executable, "-m", "build", "--sdist"])
-        report.add("sdist builds", code == 0, output.strip().splitlines()[-1][:80])
-    sdist = ROOT / "dist" / f"pyqcd-{version}.tar.gz"
-    if not sdist.is_file():
-        report.add("sdist present", False, "missing dist/*.tar.gz")
-        return
-    report.add("sdist present", True, sdist.name)
+def _fresh_area(name: str) -> Path:
+    path = ROOT / "data" / "tmp" / f"release-check-{name}-{time.time_ns()}"
+    path.mkdir(parents=True, exist_ok=False)
+    return path
+
+
+def check_sdist(report: Report, version: str) -> Path | None:
+    outdir = _fresh_area("sdist")
+    code, output = _run([
+        sys.executable, "-m", "build", "--sdist", "--no-isolation",
+        "--outdir", str(outdir),
+    ])
+    report.add("sdist builds fresh", code == 0,
+               output.strip().splitlines()[-1][:80] if output.strip() else "")
+    sdist = outdir / f"pyqcd-{version}.tar.gz"
+    if code != 0 or not sdist.is_file():
+        report.add("sdist present", False, f"missing fresh {sdist.name}")
+        return None
+    report.add("sdist present", True, str(sdist.relative_to(ROOT)))
 
     code, output = _run([sys.executable, "-m", "twine", "check", str(sdist)])
     report.add("twine check", code == 0,
@@ -93,6 +108,7 @@ def check_sdist(report: Report, version: str) -> None:
     listing = _run(["tar", "-tzf", str(sdist)])[1].splitlines()
     names = [line for line in listing if line and not line.endswith("/")]
     problems = []
+    relative = [name.split(f"pyqcd-{version}/", 1)[-1] for name in names]
     if any("pyqcd/testing" in name for name in names):
         problems.append("pyqcd/testing shipped")
     if any(name.endswith(".so") for name in names):
@@ -101,14 +117,118 @@ def check_sdist(report: Report, version: str) -> None:
         problems.append("py.typed missing")
     if any("AGENTS.md" in name for name in names):
         problems.append("AGENTS.md shipped")
+    if any(name.startswith(f"pyqcd-{version}/data/tmp/") for name in names):
+        problems.append("temporary data/tmp shipped")
+    if any("__pycache__" in name for name in names):
+        problems.append("__pycache__ shipped")
+    if any("/tests/" in name or name.endswith("/tests") for name in relative):
+        problems.append("test sources shipped")
     report.add("sdist contents", not problems,
                f"{len(names)} files; " + ("clean" if not problems else ", ".join(problems)))
 
-    sources = _run(["tar", "-xzOf", str(sdist),
-                    f"pyqcd-{version}/pyqcd.egg-info/SOURCES.txt"])[1]
-    absolute = [line for line in sources.splitlines() if "/home/" in line]
+    absolute = []
+    markers = (b"/root/", b"/home/", b"/public/home/", str(ROOT).encode())
+    with tarfile.open(sdist, "r:gz") as archive:
+        for member in archive.getmembers():
+            if not member.isfile() or member.size > (2 << 20):
+                continue
+            handle = archive.extractfile(member)
+            if handle is None:
+                continue
+            data = handle.read()
+            if any(marker in data for marker in markers):
+                absolute.append(member.name)
     report.add("sdist has no absolute paths", not absolute,
-               f"{len(absolute)} offending lines")
+               f"{len(absolute)} offending files"
+               + (f": {absolute[:3]}" if absolute else ""))
+    return sdist
+
+
+def check_native_gate(report: Report, sdist: Path | None) -> None:
+    """Build a wheel from the sdist and validate its platform tag and exports."""
+    cuda_required = {
+        "applyPlanQcd",
+        "applyContractQcd",
+        "applyCompileQcd",
+        "applyCompiledQcd",
+        "applyDestroyQcd",
+        "applyInitQcd",
+        "applyEndQcd",
+        "qcd_cuda_topology_apply",
+        "qcd_cuda_dedicated_apply",
+        "qcd_cuda_dedicated_dtypes",
+    }
+    kupl_required = {
+        "applyPlanQcd",
+        "qcd_kupl_topology_apply",
+        "qcd_kupl_dedicated_apply",
+    }
+    build_script = ROOT / "cpp" / "cuda" / "einsum" / "make-nv.sh"
+    setup_source = (ROOT / "setup.py").read_text(encoding="utf-8")
+    build_source = build_script.read_text(encoding="utf-8")
+    missing_source = [
+        symbol for symbol in cuda_required
+        if symbol not in build_source or symbol not in setup_source
+    ]
+    missing_source.extend(
+        symbol for symbol in kupl_required if symbol not in setup_source)
+    syntax = _run(["bash", "-n", str(build_script)])[0]
+    report.add("native source gate", not missing_source and syntax == 0,
+               "KUPL/CUDA export contracts present" if not missing_source and syntax == 0
+               else f"missing={missing_source} bash_n={syntax}")
+    if sdist is None:
+        report.add("native wheel artifact", False, "fresh sdist unavailable")
+        return
+
+    outdir = _fresh_area("wheel")
+    code, output = _run([
+        sys.executable, "-m", "pip", "wheel", "--no-cache-dir", "--no-deps",
+        "--no-build-isolation", "--wheel-dir", str(outdir), str(sdist),
+    ])
+    wheels = sorted(outdir.glob("*.whl"))
+    if code != 0 or len(wheels) != 1:
+        report.add("native wheel builds", False,
+                   f"exit={code} wheels={[wheel.name for wheel in wheels]}")
+        return
+    wheel = wheels[0]
+    pure_tag = wheel.name.endswith("-py3-none-any.whl")
+    report.add("wheel platform tag", not pure_tag, wheel.name)
+    extract = outdir / "extract"
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(extract)
+    archives = {
+        "kupl": extract / "pyqcd" / "einsum" / "kupl" / "libpyqcdeinsum_kupl.so",
+        "cuda": extract / "pyqcd" / "einsum" / "cuda" / "libpyqcdeinsum_cuda.so",
+    }
+    config_path = extract / "pyqcd" / "einsum" / "_build_config.json"
+    failures = []
+    try:
+        build_config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        build_config = {}
+        failures.append(f"build config unreadable: {error}")
+    if not archives["kupl"].is_file():
+        failures.append("KUPL archive missing")
+    configured = set(build_config.get("configured_backends", []))
+    installed = set(build_config.get("installed_backends", []))
+    if configured != installed:
+        failures.append(
+            f"configured={sorted(configured)} installed={sorted(installed)}")
+    for backend, required in (("kupl", kupl_required), ("cuda", cuda_required)):
+        path = archives[backend]
+        if not path.is_file():
+            if backend == "cuda":
+                continue
+            continue
+        code, output = _run(["nm", "-D", "--defined-only", str(path)])
+        found = {
+            line.split()[-1] for line in output.splitlines() if line.split()
+        }
+        missing = sorted(required - found)
+        if code != 0 or missing:
+            failures.append(f"{backend} nm={code} missing={missing}")
+    report.add("native wheel exports", not failures,
+               "validated isolated wheel" if not failures else "; ".join(failures))
 
 
 def _code_signature(source: str) -> str:
@@ -141,7 +261,11 @@ _CJK = re.compile(r"[\u4e00-\u9fff]")
 
 def check_docs(report: Report) -> None:
     code, output = _run([sys.executable, "-m", "pyqcd.testing.docs_examples"])
-    report.add("docs examples run", code == 0,
+    report.add("docs examples (en)", code == 0,
+               output.strip().splitlines()[-1][:80] if output.strip() else "")
+    code, output = _run([
+        sys.executable, "-m", "pyqcd.testing.docs_examples", "--lang", "zh"])
+    report.add("docs examples (zh)", code == 0,
                output.strip().splitlines()[-1][:80] if output.strip() else "")
 
     mismatched, unlocalized = [], []
@@ -170,10 +294,15 @@ def check_docs(report: Report) -> None:
                "no CJK in docs/en code blocks" if not unlocalized
                else f"CJK found: {unlocalized}")
 
+    build_root = _fresh_area("docs")
+    sphinx_env = os.environ.copy()
+    sphinx_env["LC_ALL"] = "C"
+    sphinx_env["LANG"] = "C"
     for lang in ("en", "zh"):
         code, _ = _run([sys.executable, "-m", "sphinx", "-b", "html",
-                        "-d", f"/tmp/relchk/{lang}/doctrees",
-                        "-W", f"docs/{lang}", f"/tmp/relchk/{lang}/html"])
+                        "-d", str(build_root / lang / "doctrees"),
+                        "-W", f"docs/{lang}", str(build_root / lang / "html")],
+                       env=sphinx_env)
         report.add(f"sphinx -W ({lang})", code == 0, f"exit={code}")
 
 
@@ -187,9 +316,17 @@ def check_pypi(report: Report, version: str) -> None:
     report.add("pypi latest version", info["version"] == version,
                f"pypi={info['version']} local={version}")
 
-    files = [item["filename"] for item in payload.get("urls", [])]
-    report.add("pypi ships sdist only", all(name.endswith(".tar.gz") for name in files),
-               ", ".join(files)[:80] or "(no files)")
+    files = list(payload.get("urls", []))
+    filenames = [item.get("filename", "") for item in files]
+    one_sdist = (
+        len(files) == 1
+        and files[0].get("packagetype") == "sdist"
+        and not files[0].get("yanked", False)
+        and filenames[0].endswith(".tar.gz")
+        and version in filenames[0]
+    )
+    report.add("pypi ships one sdist", one_sdist,
+               ", ".join(filenames)[:80] or "(no files)")
 
     description = info.get("description", "")
     # 探针只挑"每版都应存在"的稳定片段，避免数字随版本更新而失效
@@ -242,12 +379,13 @@ def check_rtd(report: Report, version: str) -> None:
 
 def check_remotes(report: Report) -> None:
     head = _run(["git", "rev-parse", "HEAD"])[1].strip()
-    targets = {
-        "gitlab": ["git", "ls-remote", "origin", "main"],
-        "gitee": ["git", "ls-remote", "git@gitee.com:zhangxin8069/PyQCD.git", "main"],
-    }
-    for name, command in targets.items():
-        code, output = _run(command)
+    code, output = _run(["git", "remote"])
+    remotes = [line.strip() for line in output.splitlines() if line.strip()]
+    if not remotes:
+        report.add("git remote configured", False, "no remotes")
+        return
+    for name in remotes:
+        code, output = _run(["git", "ls-remote", name, "main"])
         remote = output.split()[0] if code == 0 and output.strip() else ""
         report.add(f"remote in sync ({name})", remote == head,
                    f"local={head[:8]} {name}={remote[:8] or 'unreachable'}")
@@ -264,7 +402,8 @@ def main(argv: list[str] | None = None) -> int:
     report = Report()
     print("release check")
     version = check_versions(report)
-    check_sdist(report, version)
+    sdist = check_sdist(report, version)
+    check_native_gate(report, sdist)
     check_docs(report)
     check_docs_version(report, version)
     if not args.offline:

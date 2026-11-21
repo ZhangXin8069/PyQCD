@@ -13,11 +13,30 @@ the reference is about planning rather than numbers).
 
 from __future__ import annotations
 
+import unittest
+
 import numpy as np
 
 import pyqcd.einsum as pe
 
 RNG = np.random.default_rng(20261108)
+
+
+def _require_cupy():
+    try:
+        import cupy
+    except ImportError as error:
+        raise unittest.SkipTest("cupy is not installed") from error
+    try:
+        if int(cupy.cuda.runtime.getDeviceCount()) < 1:
+            raise unittest.SkipTest("no CUDA device is visible")
+    except unittest.SkipTest:
+        raise
+    except Exception as error:  # noqa: BLE001 - only CUDA runtime failures skip
+        if type(error).__name__ == "CUDARuntimeError":
+            raise unittest.SkipTest(f"CUDA runtime unavailable: {error}") from error
+        raise
+    return cupy
 
 
 def _rel_error(got, ref) -> float:
@@ -300,10 +319,7 @@ def test_kupl_plan_gate_by_batch_structure() -> None:
 
 def test_cupy_generic_path_delegates_to_cupy() -> None:
     """cupy 的通用方程必须在规划之前交回 cupy.einsum（原生 batched GEMM 慢 5 倍）。"""
-    try:
-        import cupy
-    except ImportError:
-        return                      # 没有 cupy 时跳过（该路径不可达）
+    cupy = _require_cupy()
 
     assert api_module()._cupy_operands([cupy.zeros((2, 2))]) is True
     assert api_module()._cupy_operands([cupy.zeros((2, 2)), np.zeros((2, 2))]) is False
@@ -325,11 +341,7 @@ def api_module():
 
 
 def test_out_keyword_on_backends_without_out_support() -> None:
-    """cupy/torch 的 einsum 没有 out=，必须按 opt_einsum 的语义回填。"""
-    try:
-        import cupy
-    except ImportError:
-        cupy = None
+    """torch/numpy 的 out= 兼容语义必须与 opt_einsum 一致。"""
     try:
         import torch
     except ImportError:
@@ -337,13 +349,6 @@ def test_out_keyword_on_backends_without_out_support() -> None:
 
     data = np.arange(9.0).reshape(3, 3) + 1
     expected = np.einsum("ij,jk->ik", data, data)
-
-    if cupy is not None and cupy.cuda.runtime.getDeviceCount() > 0:
-        source = cupy.asarray(data)
-        target = cupy.zeros((3, 3))
-        result = pe.contract("ij,jk->ik", source, source, out=target)
-        assert result is target
-        assert np.allclose(cupy.asnumpy(target), expected)
 
     if torch is not None:
         target = torch.zeros((3, 3))
@@ -353,3 +358,15 @@ def test_out_keyword_on_backends_without_out_support() -> None:
     target = np.zeros((3, 3))
     pe.contract("ij,jk->ik", data, data, out=target)
     assert np.allclose(target, expected)
+
+
+def test_out_keyword_on_cupy() -> None:
+    """CuPy's einsum has no out=; PyQCD must fill the caller's buffer."""
+    cupy = _require_cupy()
+    data = np.arange(9.0).reshape(3, 3) + 1
+    expected = np.einsum("ij,jk->ik", data, data)
+    source = cupy.asarray(data)
+    target = cupy.zeros((3, 3))
+    result = pe.contract("ij,jk->ik", source, source, out=target)
+    assert result is target
+    assert np.allclose(cupy.asnumpy(target), expected)

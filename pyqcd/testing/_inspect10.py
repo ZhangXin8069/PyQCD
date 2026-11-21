@@ -247,7 +247,8 @@ def round10() -> None:
     rc, out = run("git log --oneline -3")
     record("R10", "最近提交", rc == 0, out.strip().splitlines()[0][:70] if out.strip() else "n/a")
 
-    rc, out = run("python -c \"import tomllib;d=tomllib.load(open('pyproject.toml','rb'))['project'];"
+    rc, out = run("python -c \"from pyqcd.testing._toml_compat import load;"
+                  "d=load('pyproject.toml')['project'];"
                   "print(d['version']); print('mpi' in d.get('optional-dependencies',{}))\"")
     lines = out.strip().splitlines()
     if len(lines) >= 2:

@@ -195,13 +195,13 @@ def _require_kupl() -> None:
 
 
 def _require_cuda() -> None:
-    from ..einsum.cuda._program import topology_binding
+    from ..einsum.cuda._program import topology_binding_report
 
     if not _cupy_ready():
         raise unittest.SkipTest("cupy/CUDA device is not available")
-    if topology_binding() is None:
-        raise unittest.SkipTest(
-            "qcd_cuda_topology_apply is not exported by the archive")
+    report = topology_binding_report()
+    if not report["exported"]:
+        raise unittest.SkipTest(report["detail"])
 
 
 def _entry_status_recorder(
