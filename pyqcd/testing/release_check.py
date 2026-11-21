@@ -38,6 +38,12 @@ RTD = {
     "en": "https://py-qcd.readthedocs.io/en/latest/index.html",
     "zh": "https://py-qcd.readthedocs.io/zh-cn/latest/index.html",
 }
+PYPI_DESCRIPTION_PROBES = {
+    "repository section": "## Documentation and repositories",
+    "docs link": "py-qcd.readthedocs.io",
+    "cli": "python -m pyqcd",
+    "torch": "torch",
+}
 
 
 def _run(command: list[str], cwd: Path | None = None,
@@ -329,9 +335,8 @@ def check_pypi(report: Report, version: str) -> None:
                ", ".join(filenames)[:80] or "(no files)")
 
     description = info.get("description", "")
-    # 探针只挑"每版都应存在"的稳定片段，避免数字随版本更新而失效
-    probes = {"Repositories": "## Repositories", "docs link": "py-qcd.readthedocs.io",
-              "cli": "python -m pyqcd", "torch": "PyTorch"}
+    # 探针只挑"每版都应存在"的稳定片段，避免数字随版本更新而失效。
+    probes = PYPI_DESCRIPTION_PROBES
     missing = [label for label, probe in probes.items() if probe not in description]
     report.add("pypi page content", not missing,
                "all probes present" if not missing else f"missing: {missing}")

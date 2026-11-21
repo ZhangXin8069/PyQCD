@@ -212,3 +212,13 @@ def test_build_info_shape() -> None:
         assert key in info, f"build_info() is missing {key!r}"
     assert info["backend"] in {"cuda", "kupl", "python"}
     assert info["native_available"] is (info["backend"] != "python")
+
+
+def test_pypi_description_probes_match_the_published_readme() -> None:
+    """Keep release_check's PyPI page probes tied to the actual README headings."""
+    from pyqcd.testing.release_check import PYPI_DESCRIPTION_PROBES
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    missing = [label for label, probe in PYPI_DESCRIPTION_PROBES.items()
+               if probe not in readme]
+    assert not missing, f"README is missing release_check probes: {missing}"

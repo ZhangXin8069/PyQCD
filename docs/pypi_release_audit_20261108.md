@@ -231,3 +231,24 @@ qcd_cuda_topology_apply is not exported by the archive)
 构建证据只用于发现缓存边界和过期 `egg-info`；`final9` 是由干净元数据重建、无 `docs/`
 泄漏的发布件。最终发布以本表 `final9` 哈希、安装三态、A100 和随后在线
 `release_check` 为准。
+
+### 发布后远程复验（2026-11-21）
+
+- PyPI 上传后，`https://pypi.org/simple/pyqcd/` 在约 5 秒内出现 0.5.16；
+  `https://pypi.org/pypi/pyqcd/0.5.16/json` 只含一个 sdist，大小 3,303,626 bytes，
+  SHA-256 与本地 `final9` 完全一致。
+- 从 `https://pypi.org/simple` 使用 `pip --isolated --no-cache-dir` 安装
+  `pyqcd[cuda]==0.5.16` 到全新 venv 成功；PyQCD 与 CuPy 均从该 venv 的
+  `site-packages` 导入，`pip check` 无冲突，CUDA 10/10 导出齐全。
+- PyPI 安装态作业 `4038385` 在 `gpu-debug` / `gpu024` 上 `COMPLETED 0:0`：
+  `cuda archive.status=ready`、`exported=true`，四种 dtype 均 `max|diff|=0.0`，
+  结论 `CUDA fast path is active`；topology 测试 JSON 为
+  `requested=topology`、`ran=cuda_topology`。
+- Read the Docs 英文 build `36066970` 与中文 build `36066971` 都在提交
+  `06af58b7` 上成功，线上双语言页面均显示 0.5.16。
+- 在线 `release_check` 为 `22/22`。首次失败仅因页面探针仍要求旧标题
+  `## Repositories`/`PyTorch`；实际 README 与 PyPI 页面使用
+  `## Documentation and repositories`/`torch`。探针改为与当前 README 一致，
+  并增加 README/探针一致性回归后重跑通过。
+- GitLab 与 Gitee 的 `main` 都指向 `06af58b7`，annotated tag `stab49`
+  都指向 tag 对象 `db0ff07a56cdc78056b47ad0c289b4b636ad48a3`。
