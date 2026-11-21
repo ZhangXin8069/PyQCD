@@ -244,6 +244,27 @@ def test_tune_plan_sizes_and_order_per_branch():
     assert equiv["branch"] == "B2" and equiv["raw_ok"] is False, equiv
     none = cli.tune_branch("ij,jk->ik")
     assert none["branch"] == "B3" and not none["raw_ok"] and not none["equiv_ok"], none
+    # ``original`` 缺 ``opt_einsum`` 时必须在**准入**判掉，不能留到逐组跑。
+    #
+    # 为什么这条要单独钉：``original`` 现在是**第一组**，而它是唯一依赖可选包的内核。
+    # 缺包时如果不准入，用户最先看到的会是七行
+    # ``状态=error  原因=KernelUnavailableError: …``（2026-11-21 干净 venv 实测），
+    # 看起来像七个独立失败；准入判掉之后是**一行** ``skip  kernel_force=original
+    # 组数=7  原因=opt_einsum is not installed…``，还直接说了装什么。
+    missing = cli._original_unavailable_reason() if hasattr(
+        cli, "_original_unavailable_reason") else "missing helper"
+    assert callable(getattr(cli, "_original_unavailable_reason", None)), (
+        "tune_unavailable_kernels 需要一个 _original_unavailable_reason() 来做准入")
+    # 这里不 patch 全局 find_spec（会波及 import 机制），只验"两种世界里结论正确"：
+    # 装了 → None；没装 → 一条点明 pip 命令的原因。
+    import importlib.util as _ilu
+
+    if _ilu.find_spec("opt_einsum") is None:
+        assert isinstance(missing, str) and "pyqcd[einsum]" in missing, (
+            f"缺 opt_einsum 时原因里必须给出安装命令，实际 {missing!r}")
+    else:
+        assert missing is None, (
+            f"装了 opt_einsum 时 original 必须可用，实际原因 {missing!r}")
 
 
 # ── 2. min_wall_ms 初值 = --tune-timeout，且被更小值替换 ────────────────────

@@ -4090,6 +4090,30 @@ def _topology_unavailable_reason(equation: str,
             "spelling (_specialize.match missed)")
 
 
+def _original_unavailable_reason() -> str | None:
+    """``original`` 这一档跑不了的原因；能跑返回 ``None``。
+
+    目前只有一条：**``opt_einsum`` 没装**。它是可选依赖，而 ``original`` 的全部语义
+    就是"把收缩交给 ``opt_einsum.contract``"——缺包时那七组必然各自抛同一句
+    ``KernelUnavailableError``。在准入阶段判掉，用户可以拿到一行
+    ``skip  kernel_force=original  组数=7  ...  原因=opt_einsum is not installed…``，
+    而不是七行 ``状态=error``（2026-11-21 干净 venv 实测，且因为 ``original`` 现在是
+    第一组，那七行会挤在最前面）。
+
+    探测只用 ``importlib.util.find_spec``：**不 import** ``opt_einsum``，也不调
+    ``contract()``——准入这一层必须零副作用的快（``find_spec`` 在一次 tune 里只走一次）。
+    """
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("opt_einsum") is not None:
+            return None
+    except (ImportError, ValueError):        # pragma: no cover - 极少数损坏环境
+        pass
+    return ('opt_einsum is not installed; install it with '
+            '`pip install "pyqcd[einsum]"` (or `pip install opt_einsum`)')
+
+
 def tune_unavailable_kernels(*, equation: str,
                              shapes: Sequence[Sequence[int]] | None = None,
                              dtype: Any = None, backend: str = "auto",
@@ -4098,8 +4122,13 @@ def tune_unavailable_kernels(*, equation: str,
                              ) -> dict[str, str]:
     """遍历**前**的准入探测：``{kernel_force: 不可用原因}``（不执行任何收缩）。
 
-    ``generic`` / ``original`` / ``backend`` 恒可用（它们就是通用路径、opt_einsum 与
-    后端 einsum），所以这里只探 ``dedicated`` 与 ``topology``，别的内核名不猜。``shapes`` 缺失时只探 topology
+    ``generic`` / ``backend`` 恒可用（它们就是通用路径与后端 einsum）；``original``
+    在 ``opt_einsum`` **装得上**时恒可用——它是可选依赖（``pip install
+    "pyqcd[einsum]"``），缺包时七组 ``original`` 会各报一句同样的
+    ``KernelUnavailableError``（2026-11-21 干净 venv 实测：7 行 error 挤在最前面，
+    因为 ``original`` 现在是第一组）。缺包因此必须在**准入**这一层判掉：整档打成
+    ``skip`` 一行，说明"装什么就能测"，而不是让七行 error 冒充七个独立失败。
+    ``topology`` 与 ``dedicated`` 按原判据探测。``shapes`` 缺失时只探 topology
     ——``dedicated`` 的准入必须知道形状（步表按形状编码）。``backend`` 是 ``auto``
     时由 ``device`` 定实际内核（GPU/``cuda`` → CUDA，其余 → KUPL），否则两个内核的
     预算（3 GiB / 8 GiB）会张冠李戴。
@@ -4113,6 +4142,8 @@ def tune_unavailable_kernels(*, equation: str,
                     equation, shapes, dtype, backend, device)
         elif kernel == "topology":
             reason = _topology_unavailable_reason(equation, branch)
+        elif kernel == ORIGINAL_LABEL:
+            reason = _original_unavailable_reason()
         if reason:
             reasons[kernel] = str(reason)
     return reasons
