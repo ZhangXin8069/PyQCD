@@ -86,6 +86,7 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
   只有一列计时（`wall_ms` = 整次 `contract()` 的墙钟）。`--kernel-force`
   只接受单个逻辑值（`generic` / `dedicated` / `topology` / `backend`）。
   tune 按分支的有序清单遍历，`min_wall_ms` 剪枝，只写胜出的一组。
+* **0.5.14** — `--tune` 现在**每组一跑完就**打一行 `tune comb :` 进度（序号/总数、三轴配置、实际下发的 backend/dtype/device、`wall_ms`、峰值、状态、原因原文），不再攒到整轮结束。`original`（`opt_einsum`）改为**第一组**，上界一开始就被压到方程的真实速度量级；剪枝截止改回 **`min_wall_ms` 本身**（1×，不再是 2×）。"存在更省内存的配置"提示连同命中路径上那次记录表读取一并删除。
 * **0.5.13** — `kernel_force="original"` 在缺 `opt_einsum` 时抛 `KernelUnavailableError` 并点明装法（`pip install "pyqcd[einsum]"`），不再是一句裸 `ModuleNotFoundError`；同时把 `opt_einsum>=3.3` 声明为新的 `einsum` 可选依赖。
 * **0.5.12** — 新增 `original` 内核：把收缩交给 `opt_einsum.contract`（同样吃 `--optimize`，`branch_1`/`branch_2`/`branch_all`/`none` 会被转成 `branch-1`/`branch-2`/`branch-all`/`False`——下划线拼写在那里是 `KeyError`）；参与 `--tune`，排在 `backend` 之前。`--tune` 逐组记录**峰值内存/显存**（按组测量，并扣掉操作数本身的常驻量——那是输入不是开销），全量快照写进 `pyqcd.einsum.record.csv`（只作参考、绝不参与命中；命中时若存在更省内存的配置会打一行提示）。剪枝截止改为**最好耗时的 2 倍**，缺省改成 **warmup 0 / rounds 1**，配置表移到 `~/.cache/pyqcd.einsum`，缺行时首次调用自动跑一轮 tune（`PYQCD_EINSUM_AUTOTUNE=0` 可关）。`optimize_topology_v2` 彻底删除；操作数暂存改到 tmpfs 并做空间预检（`/tmp` 满曾让 29 组全部变成 `error`）。
 * **0.5.11** — GPU 侧补齐 `bypass_plan_gate()`：`--device gpu --tune` 的 `dedicated` 不再被 `plan arena exceeds the measured CUDA dedicated budget` 判死（`_api` 用 `getattr(module, ..., None)` 取旁路，缺名字就静默不旁路）。`--help` 的 `--tune-timeout` 写明窗口是**按组**的`单次上限 × (1+warmup+rounds)`（缺省 30 s × 7 = 210 s），看到 ~80 s 返回不代表上限失效；`docs/` 里每条历史 GPU 耗时行都带行内 `[作废]` 标注。
