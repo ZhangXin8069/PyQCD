@@ -1,0 +1,112 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-23 16:59:06 +0800
+批次: pypi-release-0517
+主任务: release: 发布 pyqcd 0.5.17（文档版项目页）并推送 stab51
+触发原因: 任务完成
+摘要: bump 0.5.17 并上传 sdist 刷新 PyPI 项目页；安装态自检通过；push main 并打 tag stab51（沿用 0.5.16 包实现，无代码改动）
+Git 根目录: /Users/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 发布前核对
+- 目标: 确认版本、PyPI 现状与发布内容边界。
+- 命令/操作: 读取最新标签（stab50）与提交；三处版本一致性脚本；
+  查询 https://pypi.org/pypi/pyqcd/json。
+- 关键输出: PyPI 最新 0.5.16（2026-11-21 上传，项目页无致谢）；本地版本 0.5.16。
+- 退出码: 0
+- 证据与判断: 同版本不可覆盖，需 bump 0.5.17 才能刷新项目页。
+
+### S2 — 版本同步与构建
+- 目标: 生成 0.5.17 sdist。
+- 命令/操作: 修改 pyproject.toml、pyqcd/__init__.py、pyqcd/einsum/_version.py；
+  同步 docs/en|zh/install.md、overview.md、appendix_specialized.md 的版本号；
+  README 双语版本摘要新增 0.5.17 文档发布条目；python -m build --sdist；
+  twine check；sdist 内容校验。
+- 关键输出: 构建成功，告警门 0；twine PASSED；16 个包、无 pyqcd.testing/.so/AGENTS.md、
+  py.typed 存在、SOURCES.txt 无绝对路径。
+- 退出码: 0
+
+### S3 — 上传与 PyPI 验证
+- 命令/操作: twine upload dist/pyqcd-0.5.17.tar.gz（token 仅从环境读取）；
+  查询 pypi JSON 与 simple index。
+- 关键输出: 上传 exit 0（过程中出现一次 SSLEOFError 重试，最终成功）；
+  JSON 0.5.17、唯一文件 pyqcd-0.5.17.tar.gz；项目页探针
+  ## Acknowledgements / Dong Hongxin / Reference Git repositories 各 1。
+- 退出码: 0
+- 证据与判断: PyPI 项目页已刷新，满足「只更新项目页」。
+
+### S4 — 干净 venv 安装自检
+- 命令/操作: python -m venv data/tmp/verify-0.5.17；清除 PYTHONPATH 后安装；
+  安装态脚本断言 site-packages、版本、11 个子包、contract、opt_cost、specializations。
+- 关键输出: 首次 pip 因 PYTHONPATH 指向仓库根把 pyqcd 误判为已安装；清除后隔离构建
+  缺 OpenBLAS 而 fail-closed（设计行为）；PYQCD_SKIP_NATIVE_BUILD=1 安装成功，
+  自检 version=0.5.17、backend=python、opt_cost=48.0、specializations=8638。
+- 退出码: 0（skip 路径）
+- 证据与判断: 原生 wheel 本机门失败原因是构建环境（conda 仅有 libopenblas、无 cblas.h，
+  clang++ 不支持 -fopenmp），与 0.5.17 内容无关。
+
+### S5 — 提交、推送与标签
+- 命令/操作: 提交 21256c87（release: 0.5.17）与 f0f77baf（docs: pin 0.5.17）；
+  git push origin main；tag-chain 自检；git tag -a stab51；git push origin stab51。
+- 关键输出: tag 链 PASS（153 个受管标签）；本地/远端 main 同为 f0f77baf；
+  本地/远端 stab51 同为 4c9bfec9。
+- 退出码: 0
+- 证据与判断: 发布完成，按用户指示沿用 0.5.16 的包实现，未重新构建原生 wheel。
+
+## 验证与证据
+- 版本三处一致: pyproject/pyqcd/einsum 均为 0.5.17（__native_version__ 保持 0.1.0）。
+- sdist: pyqcd-0.5.17.tar.gz，twine PASSED，16 包，洁净。
+- PyPI: latest=0.5.17，仅 sdist，项目页含新致谢探针各 1。
+- 安装态: site-packages 路径、0.5.17、11 子包、opt_cost=48.0、specializations=8638。
+- release_check --offline: 13/15；FAIL native wheel builds（本机构建环境限制）、
+  FAIL docs version pinned（已修复并提交，用户指示无需重新构建故未重跑）。
+- Git: origin main 与本地一致；stab51 新建并推送，对象哈希一致。
+- 未验证项: 本机原生 wheel 构建；RTD 线上重建（推送后触发，存在延迟）。
+
+## 变更与产物
+- 文件: pyproject.toml、pyqcd/__init__.py、pyqcd/einsum/_version.py、README.md、
+  README.zh-CN.md、docs/en|zh/install.md、docs/en|zh/overview.md、
+  docs/en|zh/appendix_specialized.md。
+- 产物: dist/pyqcd-0.5.17.tar.gz（已上传）；data/tmp/sphinx 与 data/tmp/verify-0.5.17
+  为本地验证缓存，不提交。
+- 未改动范围: pyqcd 业务代码、cpp 原生源码、refer 子库工作树。
+
+## 风险、限制与下一步
+- 风险: 本机缺 cblas.h 且 clang++ 无 -fopenmp，原生 wheel 门无法在本地通过；
+  按用户指示沿用 0.5.16 的已验证包实现（GPU 节点 22/22 记录见台账）。
+- 阻塞: 无。
+- 下一步: 等待 RTD 重建并复验 en/zh 页面；如需原生构建证据，在具备 OpenBLAS 与
+  g++/OpenMP 的 GPU 节点复跑 release_check --with-tests。
+
+## 用户输入指令
+发布pypi(只是更新项目页)并push~tag
+
+沿用0.5.16的包
+
+无需重新构建
+
+## Agent 全文报告
+--- report begin ---
+改动内容:
+1. 版本 bump 0.5.16 → 0.5.17（pyproject、pyqcd.__version__、einsum._version 三处），
+   同步 install/overview/appendix_specialized 的版本引用，README 双语新增 0.5.17
+   文档发布条目。
+2. 构建并上传 pyqcd-0.5.17.tar.gz，刷新 PyPI 项目页（致谢位于开头、对象单列子标题、
+   贡献者全名）。
+3. 提交并推送 main；创建并推送标签 stab51。
+
+推理依据:
+- PyPI 项目页描述只能通过上传新版本刷新，同版本不可覆盖，因此发 0.5.17；
+- 用户明确指示沿用 0.5.16 的包、无需重新构建，故 0.5.17 除版本号与文档外不改变实现。
+
+验证结果:
+- 三处版本一致；sdist 构建成功且 twine PASSED；16 包、无 testing/.so/AGENTS.md。
+- PyPI latest=0.5.17，唯一 sdist，项目页探针命中。
+- 干净 venv 安装自检通过（backend=python、opt_cost=48.0、specializations=8638）。
+- 本地/远端 main 与 stab51 哈希一致；tag 链自检 PASS。
+- 未验证: 本机原生 wheel 构建（环境缺 cblas.h、clang++ 无 -fopenmp），按用户指示不重建。
+
+后续步骤:
+- 等待 RTD 重建并复验双语言页面；原生构建证据沿用 0.5.16 的 GPU 节点记录。
+--- report end ---

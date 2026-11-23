@@ -1213,3 +1213,11 @@
 - 关键内容: 按更正把双语 README、双语 RTD 站点与 refer/git-rep/README.md 的致谢移到开头；每个参考代码来源、参考仓库与开源软件单列子标题；缩写替换为董宏鑫、苏世皓、黄丞乐、张鑫、曾春华
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pypi-release-0517 - final - 2026-11-23 16:59:06 +0800
+- 主任务: release: 发布 pyqcd 0.5.17（文档版项目页）并推送 stab51
+- 日志文件: logs/v2026112316-3.txt
+- 文件大小: 6057 bytes
+- 触发原因: 任务完成
+- 关键内容: bump 0.5.17 并上传 sdist 刷新 PyPI 项目页；安装态自检通过；push main 并打 tag stab51（沿用 0.5.16 包实现，无代码改动）
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
