@@ -124,3 +124,24 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
 ## 许可证
 
 MIT
+
+## 致谢
+
+PyQCD 重新实现的算法与工作流来自他人首先公开发表的成果，并运行在开源软件之上。
+本 README 把所参考的代码与固定 commit 的 Git 仓库统一放在结尾致谢，而不散落在正文。
+
+* **参考代码** —— `refer/donghx/`（董 HX：质子 2pt 蒸馏与 OPE 算符）、
+  `refer/zhangxin/`（张 X：胶子 PDF 工作流与数据分析框架）、`refer/huangcl/`
+  （黄 CL：多步 Chroma 流水线）、`refer/sush/`（苏 SH：蒸馏收缩与 `lqcddb`）、
+  `refer/zengch/`（曾 C：重整化、混合方案与拟合逻辑）。文献与教材归档在
+  `refer/papers/` 与 `refer/books/`。
+* **参考 Git 仓库** —— PyQUDA、LQCD_Skills、lamet-agent、EasyDistillation、
+  LQCD_Master、PyQCU、opt_einsum、Einsums、MatX，以 submodule 固定在
+  `refer/git-rep/`；各库的固定 commit 与许可证记录在 `refer/git-rep/README.md`。
+* **开源软件** —— NumPy、SciPy、opt_einsum、CuPy、MatX、Einsums、OpenBLAS、
+  LAPACK、Sphinx、MyST-Parser 与 Read the Docs。
+
+谨向上述参考代码的发布者，以及这些项目的作者与维护者致谢。正是公开的代码与文档，
+使 PyQCD 得以基于独立实现重新推导并修正自身；若仍有错误，责任完全在本项目。
+
+这些是格点 QCD 领域优秀的软件工具包。

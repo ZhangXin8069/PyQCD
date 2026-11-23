@@ -1197,3 +1197,11 @@
 - 关键内容: best-effort 超时实测（纯 Python 0.30s 准点抛 / 原生 2.34s 调用超限 1.99s 才抛）、fork 必 cudaErrorInitializationError、spawn 每组 497.6ms、组级窗口 =7×limit、参照门 2e6 元素（生产方程 2.56e8）、跳过参照须补自洽参照、先改写再强制内核（rel=1.54e-16）、旧性能页 30 个比例全删；配套 docs/einsum_tune_timeout_20261119.md 与 logs/kf/EXP3.report.md
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## readthedocs-acknowledgements - final - 2026-11-23 16:34:02 +0800
+- 主任务: docs: 参考代码与参考 Git 仓库统一置于文档结尾并加强致谢
+- 日志文件: logs/v2026112316.txt
+- 文件大小: 5521 bytes
+- 触发原因: 任务完成
+- 关键内容: 更新双语 README、双语 RTD 站点与 refer/git-rep/README.md：致谢页移到导航末尾，集中列出 refer/ 参考代码与 refer/git-rep/ 固定 commit 的参考仓库
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

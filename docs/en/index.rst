@@ -22,9 +22,9 @@ repository.
    usage
    performance
    install
-   acknowledgements
    appendix
    appendix_specialized
+   acknowledgements
 
 Where to start
 --------------
@@ -34,6 +34,13 @@ Where to start
 * :doc:`performance` — measured speed-ups over ``opt_einsum``, and where they
   do not apply.
 * :doc:`install` — installation, optional extras, native backends and knobs.
+* :doc:`acknowledgements` — the reference code, the pinned Git repositories and
+  the open-source software this package builds on.
+
+Other languages
+---------------
+
+* 中文 — https://py-qcd.readthedocs.io/zh-cn/latest/usage.html
 
 Repositories
 ------------
@@ -43,8 +50,3 @@ All three mirrors carry the same history:
 * 国内开发 (primary, GitLab) — https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD
 * 国内发布 (China mirror, Gitee) — https://gitee.com/zhangxin8069/PyQCD
 * 国外发布 (global mirror, GitHub) — https://github.com/zhangxin8069/PyQCD
-
-Other languages
----------------
-
-* 中文 — https://py-qcd.readthedocs.io/zh-cn/latest/usage.html

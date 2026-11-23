@@ -142,3 +142,30 @@ send it back to the generic path. For what actually ran, read the `route` /
 ## License
 
 MIT
+
+## Acknowledgements
+
+PyQCD re-implements algorithms and workflows that others published first, and it
+runs on open-source software. The reference code and the pinned Git repositories
+are acknowledged here, at the end of this README, rather than inside the body.
+
+* **Reference code** — `refer/donghx/` (Dong HX: proton two-point distillation
+  and OPE operators), `refer/zhangxin/` (Zhang X: gluon-PDF workflow and
+  analysis framework), `refer/huangcl/` (Huang CL: multi-step Chroma pipeline),
+  `refer/sush/` (Su SH: distillation contraction and `lqcddb`) and
+  `refer/zengch/` (Zeng C: renormalisation, hybrid scheme and fitting logic).
+  Literature and textbooks are archived under `refer/papers/` and
+  `refer/books/`.
+* **Reference Git repositories** — PyQUDA, LQCD_Skills, lamet-agent,
+  EasyDistillation, LQCD_Master, PyQCU, opt_einsum, Einsums and MatX, pinned as
+  submodules under `refer/git-rep/`; fixed commits and licences are recorded in
+  `refer/git-rep/README.md`.
+* **Open-source software** — NumPy, SciPy, opt_einsum, CuPy, MatX, Einsums,
+  OpenBLAS, LAPACK, Sphinx, MyST-Parser and Read the Docs.
+
+Our thanks go to everyone who published the reference code and to the authors
+and maintainers of these projects. Making code and documentation openly
+available is what let PyQCD be re-derived and corrected against independent
+implementations; any remaining error is ours alone.
+
+These are excellent software toolkits for lattice QCD.

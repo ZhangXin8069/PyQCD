@@ -1,0 +1,89 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-23 16:34:02 +0800
+批次: readthedocs-acknowledgements
+主任务: docs: 参考代码与参考 Git 仓库统一置于文档结尾并加强致谢
+触发原因: 任务完成
+摘要: 更新双语 README、双语 RTD 站点与 refer/git-rep/README.md：致谢页移到导航末尾，集中列出 refer/ 参考代码与 refer/git-rep/ 固定 commit 的参考仓库
+Git 根目录: /Users/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 盘点「参考代码 / 参考 Git 仓库」的现有落点
+- 目标: 确认哪些对外文档承载参考代码与参考仓库信息，以及它们当前所处位置。
+- 命令/操作: 读取 README.md、README.zh-CN.md、docs/en/index.rst、docs/zh/index.rst、
+  docs/en/acknowledgements.md、docs/zh/acknowledgements.md、refer/AGENTS.md、
+  refer/git-rep/README.md；grep 文档站与 docs/*.md 的 refer/、git-rep、Acknowledg、致谢。
+- 关键输出: 致谢页已存在但位于 toctree 中部（install 之后、appendix 之前）；双语 README
+  无致谢章节；refer/git-rep/README.md 末尾仅一句注脚致谢。
+- 退出码: 0
+- 证据与判断: 历史报告（docs/*.tex、带日期的 docs/*.md）是冻结证据，不纳入本次改动；
+  范围锁定为对外活文档（README 双语 + RTD 双语站 + 参考库清单）。
+
+### S2 — 实施改动
+- 目标: 把参考代码与参考 Git 仓库集中到文档结尾，并着重致谢。
+- 命令/操作: 重写两份 acknowledgements.md（开源软件 → 参考代码表 → 参考 Git 仓库表 →
+  谨致谢意）；两份 index.rst 的 toctree 把 acknowledgements 移到末尾，并把仓库镜像段
+  移到首页末尾；双语 README 在 License 之后新增 Acknowledgements/致谢；
+  refer/git-rep/README.md 的注脚扩为独立致谢章节。
+- 退出码: 0
+- 证据与判断: 致谢页保持 0 个 Python 代码块，不影响 docs_examples 的断言语义。
+
+## 验证与证据
+- toctree 门: en == zh == [overview, usage, performance, install, appendix,
+  appendix_specialized, acknowledgements]，末项为 acknowledgements。
+- 双语代码块门: overview/usage/performance/install/acknowledgements/appendix 全部 OK，
+  pages with mismatch: 0。
+- Sphinx -W 构建: docs/en exit 0（构建成功）、docs/zh exit 0（构建成功）。
+- 文档示例门: en total ok=19 skipped=1 failed=0；zh total ok=19 skipped=1 failed=0。
+- 文档 API 引用门: python -m pyqcd.testing._docs_api_contract exit 0。
+- 产物检查: 两站 acknowledgements.html 均存在，index.html 导航末项为 acknowledgements。
+- git diff --check: exit 0。
+- 未验证项: PyPI 项目页与线上 RTD 站点需推送/发版后才能复验。
+
+## 变更与产物
+- 文件: README.md、README.zh-CN.md、docs/en/index.rst、docs/zh/index.rst、
+  docs/en/acknowledgements.md、docs/zh/acknowledgements.md、refer/git-rep/README.md。
+- 产物: data/tmp/sphinx/{en,zh}/html（本地构建缓存，不提交）。
+- 未改动范围: pyqcd/ 代码、docs/*.tex 与带日期的历史报告、refer/git-rep 子库工作树
+  （LQCD_Master 的 submodule 状态为会话前既有，未触碰）。
+
+## 风险、限制与下一步
+- 风险: README 改动只在下一次 PyPI 发版后体现在项目页；RTD 需推送后重建才有线上效果。
+- 阻塞: 无。
+- 下一步: 提交本次文档改动并推送 GitLab/Gitee 两个远端以触发 RTD 重建；按发布节奏发版。
+
+## 用户输入指令
+只更新各个文档(包括readthedocs):将参考的代码和git库放到结尾位置,并着重致谢
+
+## Agent 全文报告
+--- report begin ---
+改动内容:
+1. docs/en/acknowledgements.md、docs/zh/acknowledgements.md 重写：新增「参考代码」表
+   （refer/donghx、refer/zhangxin、refer/huangcl、refer/sush、refer/zengch、papers/books）
+   与「参考 Git 仓库」表（PyQUDA、LQCD_Skills、lamet-agent、EasyDistillation、
+   LQCD_Master、PyQCU、opt_einsum、Einsums、MatX，含来源 URL 与参考内容），
+   并以「With our thanks / 谨致谢意」收尾。
+2. docs/en/index.rst、docs/zh/index.rst：toctree 中 acknowledgements 移至最后一项；
+   「Where to start / 从哪里开始」增加致谢条目；仓库镜像段移到首页末尾。
+3. README.md、README.zh-CN.md：在 License/许可证之后新增 Acknowledgements/致谢章节，
+   集中列出参考代码、参考 Git 仓库与开源软件，并以致谢段收尾。
+4. refer/git-rep/README.md：把原来的一句注脚致谢扩为独立「致谢」章节，逐项目致谢并
+   指向 refer/AGENTS.md 的参考代码清单。
+
+推理依据:
+- 参考代码与参考仓库属于「来源说明」而非正文方法，统一收进文档最后一页/最后一节既符合
+  阅读顺序，也避免在 overview/usage 等正文里重复。
+- RTD 侧只调整既有致谢页与导航，不新增页面，因此无需改 docs_examples 的 PAGES 常量。
+- 历史报告与 .tex 是带日期的冻结证据，改动会破坏证据链，故不纳入本次范围。
+
+验证结果:
+- toctree en/zh 完全一致且致谢页为末项；双语代码块门 0 mismatch；
+- Sphinx -W 两站构建 exit 0；docs_examples 两语言 failed=0；
+- _docs_api_contract exit 0；git diff --check exit 0；
+- 构建产物中 acknowledgements.html 存在且 index.html 导航末项为致谢页。
+
+后续步骤:
+- 提交并推送 GitLab/Gitee 以触发 RTD 重建；README 的致谢内容随下一次 PyPI 发版出现在
+  项目页。
+--- report end ---

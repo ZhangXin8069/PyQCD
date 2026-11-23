@@ -20,5 +20,18 @@ commit。子库工作树保持上游状态，不修改、不把上游文件混�
 （https://github.com/eliben/pycparser.git），需以 `git submodule update --init
 --recursive` 初始化。
 
-> 致谢：感谢上述项目及其作者公开软件与文档，为 PyQCD 的算法实现、接口设计和物理
-> 工作流提供了重要参考。These are excellent software toolkits for lattice QCD.
+## 致谢
+
+谨向表中每个项目的作者与维护者致谢：感谢你们把软件与文档公开发布，使 PyQCD 的
+算法实现、接口设计与物理工作流得以基于独立实现重新推导、交叉检查并修正。
+
+- 感谢 CLQCD（PyQUDA）、AI4LGT（LQCD_Skills）、Greyyy-HJC（lamet-agent）、
+  IHEP-LQCD（EasyDistillation）与 sjtu-sai-agents（LQCD_Master）公开格点 QCD 的
+  计算流程与 agent 工作流；
+- 感谢 PyQCU 维护者提供 torch、mpi4py 与 h5py 的架构范例；
+- 感谢 dgasmith（opt_einsum）、Einsums 与 NVIDIA（MatX）提供收缩规划与张量代数的
+  参考实现；
+- 感谢 PyQUDA 嵌套 submodule `pycparser` 的作者与维护者。
+
+参考的 Python 代码另见同级的 `refer/AGENTS.md` 目录清单；本清单只记录 Git 仓库。
+These are excellent software toolkits for lattice QCD.

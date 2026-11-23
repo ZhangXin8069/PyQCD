@@ -18,9 +18,9 @@ PyQCD 中文文档
    usage
    performance
    install
-   acknowledgements
    appendix
    appendix_specialized
+   acknowledgements
 
 从哪里开始
 ----------
@@ -29,6 +29,13 @@ PyQCD 中文文档
 * :doc:`usage` —— 每个主要模块的可运行示例。
 * :doc:`performance` —— 相对 ``opt_einsum`` 的实测加速，以及不适用的情况。
 * :doc:`install` —— 安装、可选 extras、原生后端与可调开关。
+* :doc:`acknowledgements` —— 参考代码、固定 commit 的 Git 仓库，以及本包所依赖的
+  开源软件。
+
+其他语言
+--------
+
+* English — https://py-qcd.readthedocs.io/en/latest/usage.html
 
 代码托管
 --------
@@ -38,8 +45,3 @@ PyQCD 中文文档
 * 国内开发（主开发，GitLab）— https://gitlab.itp.ac.cn/ZhangXin8069/PyQCD
 * 国内发布（国内镜像，Gitee）— https://gitee.com/zhangxin8069/PyQCD
 * 国外发布（海外镜像，GitHub）— https://github.com/zhangxin8069/PyQCD
-
-其他语言
---------
-
-* English — https://py-qcd.readthedocs.io/en/latest/usage.html
