@@ -10,29 +10,32 @@ engine with an **`opt_einsum`-compatible API**.
 ## Acknowledgements
 
 PyQCD re-implements algorithms and workflows that others published first, and it
-runs on open-source software. Every reference and every project is acknowledged
-below with its own heading; fixed commits and licences for the pinned
-repositories are recorded in `refer/git-rep/README.md`.
+runs on open-source software. The reference codes archived under `refer/` were
+published by the Lattice QCD Group at the Institute of Modern Physics, Chinese
+Academy of Sciences (https://www.lattice-qcd-at-imp.top/); we thank the group as
+a whole. Every project is acknowledged below with its own heading, and fixed
+commits and licences for the pinned repositories are recorded in
+`refer/git-rep/README.md`.
 
 ### Reference code
 
-#### `refer/donghx/` — Dong Hongxin
+#### `refer/donghx/`
 
 Proton two-point distillation and OPE operators.
 
-#### `refer/zhangxin/` — Zhang Xin
+#### `refer/zhangxin/`
 
 The complete gluon-PDF workflow and the data-analysis framework.
 
-#### `refer/huangcl/` — Huang Chengle
+#### `refer/huangcl/`
 
 The multi-step Chroma pipeline: contract, ratio, energy.
 
-#### `refer/sush/` — Su Shihao
+#### `refer/sush/`
 
 The distillation contraction framework and the `lqcddb` package.
 
-#### `refer/zengch/` — Zeng Chunhua
+#### `refer/zengch/`
 
 Renormalisation, the hybrid scheme and fitting logic — the origin of
 `pyqcd/renorm`.
@@ -128,11 +131,11 @@ Documentation hosting for the English and Chinese sites.
 
 ### With our thanks
 
-Our thanks go to everyone who published the code, workflows and notes archived
-under `refer/`, and to the authors and maintainers of every open-source project
-listed above. Making software and documentation openly available is what let
-this toolkit be re-derived, checked and corrected against independent
-implementations; any remaining error is ours alone.
+Our thanks go to the Lattice QCD Group at the Institute of Modern Physics, Chinese Academy of Sciences (https://www.lattice-qcd-at-imp.top/), for publishing the reference codes, workflows and
+notes archived under `refer/`, and to the authors and maintainers of every
+open-source project listed above. Making software and documentation openly
+available is what let this toolkit be re-derived, checked and corrected against
+independent implementations; any remaining error is ours alone.
 
 These are excellent software toolkits for lattice QCD.
 

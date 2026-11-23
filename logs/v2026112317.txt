@@ -1,0 +1,66 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-23 17:14:20 +0800
+批次: acknowledgements-group
+主任务: docs: 致谢主体统一为中国科学院近代物理研究所格点QCD课题组
+触发原因: 任务完成
+摘要: 将四份文档致谢中的个人名与拼音缩写统一为课题组致谢（含链接），跑通双语、Sphinx、文档示例与 API 门；按要求不重新构建、不发新版本
+Git 根目录: /Users/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 致谢主体统一
+- 目标: 把各文档致谢中的个人名（含字母缩写）统一为中国科学院近代物理研究所格点QCD课题组。
+- 命令/操作: 精确替换 README.md、README.zh-CN.md、docs/en/acknowledgements.md、
+  docs/zh/acknowledgements.md 的参考代码节引言、5 个个人目录标题与结尾致谢段；
+  每个文件 7 处，逐项断言恰好命中 1 次。
+- 关键输出: 4 个文件共 28 处替换；个人名与拼音缩写 grep 0 匹配；
+  课题组中文名/英文名与 https://www.lattice-qcd-at-imp.top/ 在四份文件各出现 2 次。
+- 退出码: 0
+- 证据与判断: 参考代码目录路径保留为代码位置，不再附带人名；致谢主体统一为课题组。
+
+## 验证与证据
+- 双语代码块门: pages with mismatch: 0。
+- Sphinx -E -W: docs/en 构建成功 exit 0；docs/zh 构建成功 exit 0。
+- 文档示例门: en/zh 均 total ok=19 skipped=1 failed=0。
+- 文档 API 引用门: python -m pyqcd.testing._docs_api_contract exit 0。
+- 课题组探针: 四份文件各命中 2 次（参考代码节 + 结尾致谢）。
+- git diff --check: exit 0。
+- 未验证项: PyPI 项目页仍为 0.5.17 的旧致谢措辞；按要求不重新构建、不发版。
+
+## 变更与产物
+- 文件: README.md、README.zh-CN.md、docs/en/acknowledgements.md、
+  docs/zh/acknowledgements.md。
+- 未改动范围: pyqcd 业务代码、版本号、dist 构建产物、refer 子库工作树。
+
+## 风险、限制与下一步
+- 风险: 线上 PyPI 项目页与 RTD 页面需推送重建或下次发版才反映本次措辞。
+- 阻塞: 无。
+- 下一步: 推送 main；不重新构建、不发新版本（沿用 0.5.16 的包实现）。
+
+## 用户输入指令
+各个'致谢'部分中的各个'人名'(包括字母缩写)改为统一致谢'中国科学院近代物理研究所格点QCD课题组'(https://www.lattice-qcd-at-imp.top/)
+
+沿用0.5.16的包
+
+无需重新构建
+
+## Agent 全文报告
+--- report begin ---
+改动内容:
+1. README.md / README.zh-CN.md：致谢引言改为课题组致谢并附链接；5 个个人目录标题去掉人名；
+   结尾致谢段改为课题组。
+2. docs/en|zh/acknowledgements.md：参考代码节引言、5 个个人标题、结尾致谢段同步。
+
+推理依据:
+- 用户要求统一致谢课题组，个人名与拼音缩写不再出现在致谢文本中；
+  目录路径保留为代码位置，不构成人名。
+
+验证结果:
+- 双语代码块门 0 mismatch；Sphinx -E -W 两站构建成功；
+- docs_examples 两语言 failed=0；_docs_api_contract exit 0；
+- 课题组名称与链接在四份文件各命中 2 次；人名残留 grep 0 匹配；git diff --check exit 0。
+
+后续步骤:
+- 推送 main；按要求不重新构建、不发新版本，项目页措辞随下次发版更新。
+--- report end ---

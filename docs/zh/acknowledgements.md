@@ -8,26 +8,27 @@ PyQCD 的推导、实现与验证，建立在他人首先公开发表的算法�
 
 ## 参考代码
 
-源码仓库的 `refer/` 目录按贡献者归档了 PyQCD 算法、约定与重整化逻辑的参考来源。
+源码仓库的 `refer/` 目录归档了由中国科学院近代物理研究所格点QCD课题组（https://www.lattice-qcd-at-imp.top/）公开发表的参考代码，
+PyQCD 的算法、约定与重整化逻辑由此重新推导。谨向课题组全体成员致谢。
 PyQCD 重新实现其逻辑，不 import、也不把参考实现内嵌进运行时。
 
-### `refer/donghx/` —— 董宏鑫
+### `refer/donghx/`
 
 质子 2pt 蒸馏与 OPE 算符。
 
-### `refer/zhangxin/` —— 张鑫
+### `refer/zhangxin/`
 
 完整胶子 PDF 工作流与数据分析框架。
 
-### `refer/huangcl/` —— 黄丞乐
+### `refer/huangcl/`
 
 多步 Chroma 流水线：contract、ratio、energy。
 
-### `refer/sush/` —— 苏世皓
+### `refer/sush/`
 
 蒸馏收缩框架与 `lqcddb` 包。
 
-### `refer/zengch/` —— 曾春华
+### `refer/zengch/`
 
 重整化、混合方案与拟合逻辑——`pyqcd/renorm` 的移植来源。
 
@@ -128,8 +129,8 @@ Sphinx 源文的 Markdown 解析器。
 
 ## 谨致谢意
 
-感谢所有把代码、工作流与笔记归档到 `refer/` 的作者，感谢上表每个开源项目的
-作者与维护者。正是这些公开的软件与文档，使本工具库得以基于独立实现重新推导、
-交叉检查并修正自身；若仍有错误，责任完全在 PyQCD 一方。
+感谢中国科学院近代物理研究所格点QCD课题组（https://www.lattice-qcd-at-imp.top/）公开发表归档到 `refer/` 的代码、工作流与笔记，
+感谢上述每个开源项目的作者与维护者。正是这些公开的软件与文档，使本工具库得以基于
+独立实现重新推导、交叉检查并修正自身；若仍有错误，责任完全在 PyQCD 一方。
 
 这些是格点 QCD 领域优秀的软件工具包。

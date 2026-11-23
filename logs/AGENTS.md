@@ -1221,3 +1221,11 @@
 - 关键内容: bump 0.5.17 并上传 sdist 刷新 PyPI 项目页；安装态自检通过；push main 并打 tag stab51（沿用 0.5.16 包实现，无代码改动）
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## acknowledgements-group - final - 2026-11-23 17:14:20 +0800
+- 主任务: docs: 致谢主体统一为中国科学院近代物理研究所格点QCD课题组
+- 日志文件: logs/v2026112317.txt
+- 文件大小: 3313 bytes
+- 触发原因: 任务完成
+- 关键内容: 将四份文档致谢中的个人名与拼音缩写统一为课题组致谢（含链接），跑通双语、Sphinx、文档示例与 API 门；按要求不重新构建、不发新版本
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

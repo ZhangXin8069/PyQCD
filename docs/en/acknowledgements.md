@@ -10,28 +10,28 @@ front, instead of being scattered through the body of the documentation.
 
 ## Reference code
 
-The `refer/` tree of the source repository archives the contributor-organised
-reference codes from which PyQCD's algorithms, conventions and renormalisation
-logic were re-derived. PyQCD re-implements their logic; it does not import or
-vendor their source into its runtime.
+The `refer/` tree of the source repository archives reference codes published by
+the Lattice QCD Group at the Institute of Modern Physics, Chinese Academy of Sciences (https://www.lattice-qcd-at-imp.top/), from which PyQCD's algorithms, conventions and renormalisation logic
+were re-derived. We thank the group as a whole. PyQCD re-implements their logic;
+it does not import or vendor their source into its runtime.
 
-### `refer/donghx/` — Dong Hongxin
+### `refer/donghx/`
 
 Proton two-point distillation and OPE operators.
 
-### `refer/zhangxin/` — Zhang Xin
+### `refer/zhangxin/`
 
 The complete gluon-PDF workflow and the data-analysis framework.
 
-### `refer/huangcl/` — Huang Chengle
+### `refer/huangcl/`
 
 The multi-step Chroma pipeline: contract, ratio, energy.
 
-### `refer/sush/` — Su Shihao
+### `refer/sush/`
 
 The distillation contraction framework and the `lqcddb` package.
 
-### `refer/zengch/` — Zeng Chunhua
+### `refer/zengch/`
 
 Renormalisation, the hybrid scheme and fitting logic — the origin of
 `pyqcd/renorm`.
@@ -137,10 +137,10 @@ Documentation hosting for the English and Chinese sites.
 
 ## With our thanks
 
-Our thanks go to everyone who published the code, workflows and notes archived
-under `refer/`, and to the authors and maintainers of every open-source project
-listed above. Making software and documentation openly available is what let
-this toolkit be re-derived, checked and corrected against independent
-implementations; any remaining error is ours alone.
+Our thanks go to the Lattice QCD Group at the Institute of Modern Physics, Chinese Academy of Sciences (https://www.lattice-qcd-at-imp.top/), for publishing the reference codes, workflows and
+notes archived under `refer/`, and to the authors and maintainers of every
+open-source project listed above. Making software and documentation openly
+available is what let this toolkit be re-derived, checked and corrected against
+independent implementations; any remaining error is ours alone.
 
 These are excellent software toolkits for lattice QCD.
