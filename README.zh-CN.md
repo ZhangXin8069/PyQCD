@@ -205,6 +205,9 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
 
 ## 版本变更摘要
 
+* **0.5.17** — 仅文档发布：致谢移到本 README 与两套 Read the Docs 站点的开头，
+  每个参考代码与固定 commit 的 Git 仓库单列子标题，贡献者使用全名。无代码改动；
+  本版用于刷新 PyPI 项目页。
 * **0.5.16** — 配置表**只有** `--tune` 会写，`contract()` 只读；同键 1 行，
   只有一列计时（`wall_ms` = 整次 `contract()` 的墙钟）。`--kernel-force`
   只接受单个逻辑值（`generic` / `dedicated` / `topology` / `backend`）。

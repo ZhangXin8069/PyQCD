@@ -225,6 +225,10 @@ send it back to the generic path. For what actually ran, read the `route` /
 
 ## Version summary
 
+* **0.5.17** — documentation-only release: the acknowledgements now open this
+  README and both Read the Docs sites, every reference code and pinned Git
+  repository has its own heading, and contributors are named in full. No code
+  changes; this release refreshes the PyPI project page.
 * **0.5.16** — the configuration table is written **only** by `--tune`;
   `contract()` is read-only. One row per key, one timing column (`wall_ms`, the
   wall clock of the whole `contract()` call). `--kernel-force` takes a single
