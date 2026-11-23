@@ -206,6 +206,9 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
 
 ## 版本变更摘要
 
+* **0.5.18** — 仅文档发布：致谢统一为中国科学院近代物理研究所格点QCD课题组
+  （https://www.lattice-qcd-at-imp.top/），不再逐个列出人名或拼音缩写。
+  无代码改动；本版用于刷新 PyPI 项目页。
 * **0.5.17** — 仅文档发布：致谢移到本 README 与两套 Read the Docs 站点的开头，
   每个参考代码与固定 commit 的 Git 仓库单列子标题，贡献者使用全名。无代码改动；
   本版用于刷新 PyPI 项目页。

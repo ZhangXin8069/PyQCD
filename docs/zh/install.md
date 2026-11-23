@@ -7,7 +7,7 @@ pip install -U pyqcd
 **强烈建议始终用 `pip install -U pyqcd` 安装最新版，并关注安装过程中的输出与任何提醒。**
 包以 `pyqcd` 的名字发布在 PyPI 上；一次安装就得到整个工具库，以及本站记录的全部内容。
 
-当前发行版：`0.5.17`。需要固定版本时：`pip install "pyqcd==0.5.17"`。
+当前发行版：`0.5.18`。需要固定版本时：`pip install "pyqcd==0.5.18"`。
 
 ## 依赖
 
@@ -95,13 +95,13 @@ python -m pyqcd --gpu-probe --json
 重新安装。即使机器没有 GPU，probe 也会检查归档，因此打包缺陷不会被设备缺席掩盖。
 
 ```bash
-python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.17"
+python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.18"
 ```
 
 需要明确安装纯 Python 规划器时：
 
 ```bash
-PYQCD_SKIP_NATIVE_BUILD=1 python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.17"
+PYQCD_SKIP_NATIVE_BUILD=1 python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.18"
 ```
 
 构建模式：`PYQCD_EINSUM_BACKEND=auto` 为缺省，`kupl` 只请求 CPU 原生，

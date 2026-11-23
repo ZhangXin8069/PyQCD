@@ -228,6 +228,11 @@ send it back to the generic path. For what actually ran, read the `route` /
 
 ## Version summary
 
+* **0.5.18** — documentation-only release: the acknowledgements now thank
+  the Lattice QCD Group at the Institute of Modern Physics, Chinese Academy
+  of Sciences (https://www.lattice-qcd-at-imp.top/) as a whole, replacing the
+  individual names and initials. No code changes; this release refreshes the
+  PyPI project page.
 * **0.5.17** — documentation-only release: the acknowledgements now open this
   README and both Read the Docs sites, every reference code and pinned Git
   repository has its own heading, and contributors are named in full. No code

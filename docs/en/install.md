@@ -9,7 +9,7 @@ latest release, and read the output and any notices printed during the install.*
 The package is distributed on PyPI as `pyqcd`; a single install gives you the whole
 toolkit and everything this site documents.
 
-Current release: `0.5.17`. To pin it: `pip install "pyqcd==0.5.17"`.
+Current release: `0.5.18`. To pin it: `pip install "pyqcd==0.5.18"`.
 
 ## Requirements
 
@@ -103,13 +103,13 @@ check also runs on CPU-only machines, so packaging defects are visible even when
 no device is present.
 
 ```bash
-python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.17"
+python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.18"
 ```
 
 For an intentional no-compiler installation:
 
 ```bash
-PYQCD_SKIP_NATIVE_BUILD=1 python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.17"
+PYQCD_SKIP_NATIVE_BUILD=1 python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.18"
 ```
 
 Build modes: `PYQCD_EINSUM_BACKEND=auto` is the default, `kupl` requests CPU
