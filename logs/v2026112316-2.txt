@@ -1,0 +1,88 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-23 16:42:29 +0800
+批次: readthedocs-acknowledgements
+主任务: docs: 致谢部分移至文档开头、对象单列子标题并使用贡献者全名
+触发原因: 任务完成
+摘要: 按更正把双语 README、双语 RTD 站点与 refer/git-rep/README.md 的致谢移到开头；每个参考代码来源、参考仓库与开源软件单列子标题；缩写替换为董宏鑫、苏世皓、黄丞乐、张鑫、曾春华
+Git 根目录: /Users/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 按更正调整致谢位置
+- 目标: 致谢部分从文档结尾改到开头，同时保留「每个对象单列子标题」。
+- 命令/操作: README.md、README.zh-CN.md 删除末尾致谢块并插到简介之后、Install/安装
+  之前；docs/en|zh/acknowledgements.md 的定位说明改为「第一页」；两份 index.rst 的
+  toctree 把 acknowledgements 提到首位，Where to start 条目同步前置；
+  refer/git-rep/README.md 的致谢移到标题之后，原正文加「参考库清单」标题。
+- 退出码: 0
+- 证据与判断: 每个对象使用三级/四级子标题（README 用 ####，致谢页用 ###），
+  与分类标题形成清晰层级；opt_einsum、Einsums、MatX 只保留在参考仓库节，避免重复标题。
+
+### S2 — 贡献者全名替换
+- 目标: 用用户提供的全名替换缩写。
+- 命令/操作: Python 精确替换四份文件中的 20 处标题：donghx→董宏鑫 / Dong Hongxin、
+  sush→苏世皓 / Su Shihao、huangcl→黄丞乐 / Huang Chengle、zhangxin→张鑫 / Zhang Xin、
+  zengch→曾春华 / Zeng Chunhua。
+- 退出码: 0
+- 证据与判断: 替换脚本逐项断言每处恰好命中 1 次；替换后缩写模式 grep 0 匹配。
+
+## 验证与证据
+- toctree 门: en == zh == [acknowledgements, overview, usage, performance, install,
+  appendix, appendix_specialized]，首项为致谢。
+- 双语代码块门: pages with mismatch: 0。
+- Sphinx -E -W: docs/en 构建成功 exit 0；docs/zh 构建成功 exit 0。
+- 文档示例门: en total ok=19 skipped=1 failed=0；zh 同。
+- 文档 API 引用门: python -m pyqcd.testing._docs_api_contract exit 0。
+- 产物检查: 两站 index.html 导航首项为 acknowledgements；致谢页存在。
+- README 位置: README.md 致谢第 10 行、Install 第 139 行；README.zh-CN.md 致谢第 9 行、
+  安装第 132 行，均在开头。
+- 缩写残留: Dong HX / Zhang X / Huang CL / Su SH / Zeng C 及中文缩写 0 匹配。
+- git diff --check: exit 0。
+
+## 变更与产物
+- 文件: README.md、README.zh-CN.md、docs/en/index.rst、docs/zh/index.rst、
+  docs/en/acknowledgements.md、docs/zh/acknowledgements.md、refer/git-rep/README.md。
+- 产物: data/tmp/sphinx/{en,zh}/html（本地构建缓存，不提交）。
+- 未改动范围: pyqcd/ 代码、docs/*.tex 与带日期的历史报告、refer/git-rep 子库工作树。
+
+## 风险、限制与下一步
+- 风险: README 只在下次 PyPI 发版后进入项目页；RTD 需推送后重建才生效。
+- 阻塞: 无。
+- 下一步: 提交本次文档改动并推送 GitLab/Gitee 触发 RTD 重建。
+
+## 用户输入指令
+只更新各个文档(包括readthedocs):将参考的代码和git库放到结尾位置,并着重致谢
+
+致谢的各个对象不够显眼:都应单列子标题
+
+更正:各个文档的致谢部分放到开头
+
+其中'donghx'指'董宏鑫','sush'指'苏世皓','huangcl'指'黄丞乐','zhangxin'指'张鑫(本人)','zengch'指'曾春华'
+
+## Agent 全文报告
+--- report begin ---
+改动内容:
+1. 位置：双语 README 的致谢章节移到简介之后、安装章节之前；RTD 两份 index.rst 的
+   toctree 与 Where to start 把致谢页提到首位；refer/git-rep/README.md 的致谢移到
+   文件标题之后，原正文标题为「参考库清单」。
+2. 显眼度：每个致谢对象单列子标题——参考代码 6 项（refer/donghx、refer/zhangxin、
+   refer/huangcl、refer/sush、refer/zengch、refer/papers+books）、参考 Git 仓库 9 项、
+   开源软件 8 项；opt_einsum/Einsums/MatX 只保留在参考仓库节以避免重复标题。
+3. 全名：董宏鑫、苏世皓、黄丞乐、张鑫、曾春华；英文页用 Dong Hongxin、Su Shihao、
+   Huang Chengle、Zhang Xin、Zeng Chunhua。
+
+推理依据:
+- 用户最新更正覆盖最初的「放到结尾」要求；致谢页与 README 均以最新的「开头」为准。
+- 每个对象一个子标题才能在导航与正文中一眼看到；分类标题保留层级但不再承载对象。
+- 同名对象只保留一处，避免 Sphinx 重复隐式目标告警导致 -W 构建失败。
+
+验证结果:
+- toctree 双语一致且致谢页为首项；双语代码块门 0 mismatch；
+- Sphinx -E -W 两站构建成功 exit 0；docs_examples 两语言 failed=0；
+- _docs_api_contract exit 0；缩写 grep 0 匹配；git diff --check exit 0；
+- README 与中文 README 的致谢章节均位于安装章节之前。
+
+后续步骤:
+- 提交并推送两个远端触发 RTD 重建；README 致谢随下一次 PyPI 发版进入项目页。
+--- report end ---

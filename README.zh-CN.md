@@ -6,6 +6,129 @@ PyQCD 是一个用 Python 编写的格点 QCD 工具库，可选原生加速。�
 梯度流、重整化、胶子 TMD-PDF 提取所需的基础组件，并自带一个
 **与 `opt_einsum` 兼容**的收缩引擎。
 
+## 致谢
+
+PyQCD 重新实现的算法与工作流来自他人首先公开发表的成果，并运行在开源软件之上。
+每个参考来源与每个项目都单列子标题；各固定 commit 仓库的提交号与许可证记录在
+`refer/git-rep/README.md`。
+
+### 参考代码
+
+#### `refer/donghx/` —— 董宏鑫
+
+质子 2pt 蒸馏与 OPE 算符。
+
+#### `refer/zhangxin/` —— 张鑫
+
+完整胶子 PDF 工作流与数据分析框架。
+
+#### `refer/huangcl/` —— 黄丞乐
+
+多步 Chroma 流水线：contract、ratio、energy。
+
+#### `refer/sush/` —— 苏世皓
+
+蒸馏收缩框架与 `lqcddb` 包。
+
+#### `refer/zengch/` —— 曾春华
+
+重整化、混合方案与拟合逻辑——`pyqcd/renorm` 的移植来源。
+
+#### `refer/papers/` 与 `refer/books/`
+
+物理推导与验证所用的文献与教材。
+
+### 参考 Git 仓库
+
+以 Git submodule 固定在 `refer/git-rep/`，工作树保持上游 commit 的只读状态。
+
+#### PyQUDA
+
+QUDA 的 Python/Cython 封装，面向 GPU/MPI 格点 QCD。
+https://github.com/CLQCD/PyQUDA
+
+#### LQCD_Skills
+
+从物理观测量到数值结果的格点 QCD agent 技能集合。
+https://github.com/AI4LGT/LQCD_Skills
+
+#### lamet-agent
+
+LaMET/LQCD 分析 agent 的 Python 脚手架。
+https://github.com/Greyyy-HJC/lamet-agent
+
+#### EasyDistillation
+
+蒸馏方法（本征矢、perambulator、elemental 自动缩并）的多后端实现。
+https://github.com/IHEP-LQCD/EasyDistillation
+
+#### LQCD_Master
+
+自然语言到 PyQUDA 程序与 Slurm 脚本的 agentic 流水线。
+https://github.com/sjtu-sai-agents/LQCD_Master
+
+#### PyQCU
+
+torch、mpi4py 与 h5py 架构范例。
+https://gitlab.itp.ac.cn/zhangxin8069/PyQCU
+
+#### opt_einsum
+
+收缩路径规划与成本诊断。
+https://github.com/dgasmith/opt_einsum
+
+#### Einsums
+
+C++20 张量代数、PackedGemm 与延迟执行。
+https://github.com/Einsums/Einsums
+
+#### MatX
+
+CUDA C++17 张量库与 GPU `einsum` 后端。
+https://github.com/NVIDIA/MatX
+
+### 开源软件
+
+#### NumPy
+
+数组语义，以及所有对比所用的参考数组行为。
+
+#### SciPy
+
+与 NumPy 配合的科学计算例程。
+
+#### CuPy
+
+CUDA 对比所使用的 GPU 数组后端。
+
+#### OpenBLAS
+
+被测引擎使用的 CPU BLAS 实现。
+
+#### LAPACK
+
+被测引擎使用的 CPU LAPACK 例程。
+
+#### Sphinx
+
+两套 Read the Docs 站点背后的文档生成器。
+
+#### MyST-Parser
+
+Sphinx 源文的 Markdown 解析器。
+
+#### Read the Docs
+
+英文与中文文档站的托管平台。
+
+### 谨致谢意
+
+感谢所有把代码、工作流与笔记归档到 `refer/` 的作者，感谢上表每个开源项目的
+作者与维护者。正是这些公开的软件与文档，使本工具库得以基于独立实现重新推导、
+交叉检查并修正自身；若仍有错误，责任完全在 PyQCD 一方。
+
+这些是格点 QCD 领域优秀的软件工具包。
+
 ## 安装
 
 ```bash
@@ -124,24 +247,3 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
 ## 许可证
 
 MIT
-
-## 致谢
-
-PyQCD 重新实现的算法与工作流来自他人首先公开发表的成果，并运行在开源软件之上。
-本 README 把所参考的代码与固定 commit 的 Git 仓库统一放在结尾致谢，而不散落在正文。
-
-* **参考代码** —— `refer/donghx/`（董 HX：质子 2pt 蒸馏与 OPE 算符）、
-  `refer/zhangxin/`（张 X：胶子 PDF 工作流与数据分析框架）、`refer/huangcl/`
-  （黄 CL：多步 Chroma 流水线）、`refer/sush/`（苏 SH：蒸馏收缩与 `lqcddb`）、
-  `refer/zengch/`（曾 C：重整化、混合方案与拟合逻辑）。文献与教材归档在
-  `refer/papers/` 与 `refer/books/`。
-* **参考 Git 仓库** —— PyQUDA、LQCD_Skills、lamet-agent、EasyDistillation、
-  LQCD_Master、PyQCU、opt_einsum、Einsums、MatX，以 submodule 固定在
-  `refer/git-rep/`；各库的固定 commit 与许可证记录在 `refer/git-rep/README.md`。
-* **开源软件** —— NumPy、SciPy、opt_einsum、CuPy、MatX、Einsums、OpenBLAS、
-  LAPACK、Sphinx、MyST-Parser 与 Read the Docs。
-
-谨向上述参考代码的发布者，以及这些项目的作者与维护者致谢。正是公开的代码与文档，
-使 PyQCD 得以基于独立实现重新推导并修正自身；若仍有错误，责任完全在本项目。
-
-这些是格点 QCD 领域优秀的软件工具包。

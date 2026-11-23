@@ -1,5 +1,52 @@
 # refer/git-rep 参考库清单
 
+## 致谢
+
+谨向下列每个项目的作者与维护者致谢：感谢你们把软件与文档公开发布，使 PyQCD 的
+算法实现、接口设计与物理工作流得以基于独立实现重新推导、交叉检查并修正。
+
+### PyQUDA
+
+感谢 CLQCD 公开 QUDA 的 Python/Cython 封装，为 GPU/MPI 格点计算的组织方式提供了范例。
+
+### LQCD_Skills
+
+感谢 AI4LGT 公开从物理观测量到数值结果的格点 QCD agent 技能集合。
+
+### lamet-agent
+
+感谢 Greyyy-HJC 公开 LaMET/LQCD 分析 agent 的 Python 脚手架。
+
+### EasyDistillation
+
+感谢 IHEP-LQCD 公开多后端蒸馏实现：本征矢、perambulator 与 elemental 自动缩并。
+
+### LQCD_Master
+
+感谢 sjtu-sai-agents 公开自然语言到 PyQUDA 程序与 Slurm 脚本的 agentic 流水线。
+
+### PyQCU
+
+感谢维护者公开 torch、mpi4py 与 h5py 的架构范例。
+
+### opt_einsum
+
+感谢 dgasmith 公开收缩路径规划与成本诊断工具。
+
+### Einsums
+
+感谢 Einsums 项目公开 C++20 张量代数、PackedGemm 与延迟执行实现。
+
+### MatX
+
+感谢 NVIDIA 公开 CUDA C++17 张量库与 GPU `einsum` 后端。
+
+### pycparser
+
+感谢 Eliben 等项目作者公开 C 解析器；它作为 PyQUDA 的嵌套 submodule 被使用。
+
+## 参考库清单
+
 本目录只读收录 lattice QCD 参考软件、技能库与数值基础设施库，全部以 Git submodule 固定在上游
 commit。子库工作树保持上游状态，不修改、不把上游文件混入主库源码。本库对这些库的
 分析文档统一存放于 `refer/git-rep/docs/`。
@@ -19,19 +66,3 @@ commit。子库工作树保持上游状态，不修改、不把上游文件混�
 `PyQUDA` 内部的 `pyquda_core/pycparser` 是其上游嵌套 submodule
 （https://github.com/eliben/pycparser.git），需以 `git submodule update --init
 --recursive` 初始化。
-
-## 致谢
-
-谨向表中每个项目的作者与维护者致谢：感谢你们把软件与文档公开发布，使 PyQCD 的
-算法实现、接口设计与物理工作流得以基于独立实现重新推导、交叉检查并修正。
-
-- 感谢 CLQCD（PyQUDA）、AI4LGT（LQCD_Skills）、Greyyy-HJC（lamet-agent）、
-  IHEP-LQCD（EasyDistillation）与 sjtu-sai-agents（LQCD_Master）公开格点 QCD 的
-  计算流程与 agent 工作流；
-- 感谢 PyQCU 维护者提供 torch、mpi4py 与 h5py 的架构范例；
-- 感谢 dgasmith（opt_einsum）、Einsums 与 NVIDIA（MatX）提供收缩规划与张量代数的
-  参考实现；
-- 感谢 PyQUDA 嵌套 submodule `pycparser` 的作者与维护者。
-
-参考的 Python 代码另见同级的 `refer/AGENTS.md` 目录清单；本清单只记录 Git 仓库。
-These are excellent software toolkits for lattice QCD.

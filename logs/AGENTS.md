@@ -1205,3 +1205,11 @@
 - 关键内容: 更新双语 README、双语 RTD 站点与 refer/git-rep/README.md：致谢页移到导航末尾，集中列出 refer/ 参考代码与 refer/git-rep/ 固定 commit 的参考仓库
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## readthedocs-acknowledgements - final - 2026-11-23 16:42:29 +0800
+- 主任务: docs: 致谢部分移至文档开头、对象单列子标题并使用贡献者全名
+- 日志文件: logs/v2026112316-2.txt
+- 文件大小: 5109 bytes
+- 触发原因: 任务完成
+- 关键内容: 按更正把双语 README、双语 RTD 站点与 refer/git-rep/README.md 的致谢移到开头；每个参考代码来源、参考仓库与开源软件单列子标题；缩写替换为董宏鑫、苏世皓、黄丞乐、张鑫、曾春华
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete

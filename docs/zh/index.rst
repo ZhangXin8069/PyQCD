@@ -14,23 +14,23 @@ PyQCD 中文文档
    :maxdepth: 2
    :caption: 目录
 
+   acknowledgements
    overview
    usage
    performance
    install
    appendix
    appendix_specialized
-   acknowledgements
 
 从哪里开始
 ----------
 
+* :doc:`acknowledgements` —— 参考代码、固定 commit 的 Git 仓库，以及本包所依赖的
+  开源软件。
 * :doc:`overview` —— 安装之后这个包能提供什么。
 * :doc:`usage` —— 每个主要模块的可运行示例。
 * :doc:`performance` —— 相对 ``opt_einsum`` 的实测加速，以及不适用的情况。
 * :doc:`install` —— 安装、可选 extras、原生后端与可调开关。
-* :doc:`acknowledgements` —— 参考代码、固定 commit 的 Git 仓库，以及本包所依赖的
-  开源软件。
 
 其他语言
 --------

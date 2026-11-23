@@ -7,6 +7,135 @@ provides building blocks for propagator and operator contractions, gradient flow
 renormalisation and gluon TMD-PDF extraction, plus a self-contained contraction
 engine with an **`opt_einsum`-compatible API**.
 
+## Acknowledgements
+
+PyQCD re-implements algorithms and workflows that others published first, and it
+runs on open-source software. Every reference and every project is acknowledged
+below with its own heading; fixed commits and licences for the pinned
+repositories are recorded in `refer/git-rep/README.md`.
+
+### Reference code
+
+#### `refer/donghx/` — Dong Hongxin
+
+Proton two-point distillation and OPE operators.
+
+#### `refer/zhangxin/` — Zhang Xin
+
+The complete gluon-PDF workflow and the data-analysis framework.
+
+#### `refer/huangcl/` — Huang Chengle
+
+The multi-step Chroma pipeline: contract, ratio, energy.
+
+#### `refer/sush/` — Su Shihao
+
+The distillation contraction framework and the `lqcddb` package.
+
+#### `refer/zengch/` — Zeng Chunhua
+
+Renormalisation, the hybrid scheme and fitting logic — the origin of
+`pyqcd/renorm`.
+
+#### `refer/papers/` and `refer/books/`
+
+Literature and textbooks used for the physics derivation and validation.
+
+### Reference Git repositories
+
+Pinned as Git submodules under `refer/git-rep/` and kept read-only at the
+upstream commit.
+
+#### PyQUDA
+
+Python/Cython wrapper around QUDA for GPU/MPI lattice QCD.
+https://github.com/CLQCD/PyQUDA
+
+#### LQCD_Skills
+
+Agent skills that take a physical observable to a numerical result.
+https://github.com/AI4LGT/LQCD_Skills
+
+#### lamet-agent
+
+Python scaffolding for LaMET/LQCD analysis agents.
+https://github.com/Greyyy-HJC/lamet-agent
+
+#### EasyDistillation
+
+Multi-backend distillation: eigenvectors, perambulators and elemental
+contraction.
+https://github.com/IHEP-LQCD/EasyDistillation
+
+#### LQCD_Master
+
+Natural language to PyQUDA programs and Slurm scripts.
+https://github.com/sjtu-sai-agents/LQCD_Master
+
+#### PyQCU
+
+torch, mpi4py and h5py architecture examples.
+https://gitlab.itp.ac.cn/zhangxin8069/PyQCU
+
+#### opt_einsum
+
+Contraction-path planning and cost diagnostics.
+https://github.com/dgasmith/opt_einsum
+
+#### Einsums
+
+C++20 tensor algebra, packed GEMM and deferred execution.
+https://github.com/Einsums/Einsums
+
+#### MatX
+
+CUDA C++17 tensor library and GPU `einsum` backends.
+https://github.com/NVIDIA/MatX
+
+### Open-source software
+
+#### NumPy
+
+Array semantics and the reference array behaviour used in every comparison.
+
+#### SciPy
+
+Scientific computing routines that complement NumPy.
+
+#### CuPy
+
+GPU array backend used by the CUDA comparisons.
+
+#### OpenBLAS
+
+CPU BLAS implementation used by the measured engines.
+
+#### LAPACK
+
+CPU LAPACK routines used by the measured engines.
+
+#### Sphinx
+
+Documentation generator behind both Read the Docs sites.
+
+#### MyST-Parser
+
+Markdown parsing for the Sphinx sources.
+
+#### Read the Docs
+
+Documentation hosting for the English and Chinese sites.
+
+### With our thanks
+
+Our thanks go to everyone who published the code, workflows and notes archived
+under `refer/`, and to the authors and maintainers of every open-source project
+listed above. Making software and documentation openly available is what let
+this toolkit be re-derived, checked and corrected against independent
+implementations; any remaining error is ours alone.
+
+These are excellent software toolkits for lattice QCD.
+
 ## Install
 
 ```bash
@@ -142,30 +271,3 @@ send it back to the generic path. For what actually ran, read the `route` /
 ## License
 
 MIT
-
-## Acknowledgements
-
-PyQCD re-implements algorithms and workflows that others published first, and it
-runs on open-source software. The reference code and the pinned Git repositories
-are acknowledged here, at the end of this README, rather than inside the body.
-
-* **Reference code** — `refer/donghx/` (Dong HX: proton two-point distillation
-  and OPE operators), `refer/zhangxin/` (Zhang X: gluon-PDF workflow and
-  analysis framework), `refer/huangcl/` (Huang CL: multi-step Chroma pipeline),
-  `refer/sush/` (Su SH: distillation contraction and `lqcddb`) and
-  `refer/zengch/` (Zeng C: renormalisation, hybrid scheme and fitting logic).
-  Literature and textbooks are archived under `refer/papers/` and
-  `refer/books/`.
-* **Reference Git repositories** — PyQUDA, LQCD_Skills, lamet-agent,
-  EasyDistillation, LQCD_Master, PyQCU, opt_einsum, Einsums and MatX, pinned as
-  submodules under `refer/git-rep/`; fixed commits and licences are recorded in
-  `refer/git-rep/README.md`.
-* **Open-source software** — NumPy, SciPy, opt_einsum, CuPy, MatX, Einsums,
-  OpenBLAS, LAPACK, Sphinx, MyST-Parser and Read the Docs.
-
-Our thanks go to everyone who published the reference code and to the authors
-and maintainers of these projects. Making code and documentation openly
-available is what let PyQCD be re-derived and corrected against independent
-implementations; any remaining error is ours alone.
-
-These are excellent software toolkits for lattice QCD.

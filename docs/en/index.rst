@@ -18,24 +18,24 @@ repository.
    :maxdepth: 2
    :caption: Contents
 
+   acknowledgements
    overview
    usage
    performance
    install
    appendix
    appendix_specialized
-   acknowledgements
 
 Where to start
 --------------
 
+* :doc:`acknowledgements` — the reference code, the pinned Git repositories and
+  the open-source software this package builds on.
 * :doc:`overview` — what the package provides once installed.
 * :doc:`usage` — runnable examples for every major module.
 * :doc:`performance` — measured speed-ups over ``opt_einsum``, and where they
   do not apply.
 * :doc:`install` — installation, optional extras, native backends and knobs.
-* :doc:`acknowledgements` — the reference code, the pinned Git repositories and
-  the open-source software this package builds on.
 
 Other languages
 ---------------
