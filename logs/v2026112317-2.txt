@@ -1,0 +1,80 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-23 17:17:20 +0800
+批次: pypi-release-0518
+主任务: release: 发布 pyqcd 0.5.18（课题组致谢文档版）并推送 stab52
+触发原因: 任务完成
+摘要: bump 0.5.18 并上传 sdist 刷新 PyPI 项目页；项目页验证课题组致谢且无人名；push main 与 stab52；沿用既有实现，无代码改动
+Git 根目录: /Users/zhangxin/PyQCD
+
+## 关键日志
+
+### S1 — 版本同步与构建
+- 目标: 生成 0.5.18 sdist，仅刷新项目页。
+- 命令/操作: bump pyproject.toml、pyqcd/__init__.py、pyqcd/einsum/_version.py；
+  同步 docs/en|zh 的 install.md、overview.md、appendix_specialized.md；
+  README 双语版本摘要新增 0.5.18 条目；python -m build --sdist；twine check；
+  sdist 内容校验。
+- 关键输出: 三处版本 0.5.18 一致；构建成功、告警门 0；twine PASSED；
+  16 个包、无 pyqcd.testing/.so/AGENTS.md、py.typed 与 README.zh-CN.md 存在。
+- 退出码: 0
+
+### S2 — 上传与项目页验证
+- 命令/操作: twine upload dist/pyqcd-0.5.18.tar.gz（token 仅从环境读取）；
+  查询 pypi JSON 与 simple index。
+- 关键输出: 0.5.18、唯一 sdist；项目页探针
+  ## Acknowledgements=1、Lattice QCD Group at the Institute of Modern Physics=3、
+  https://www.lattice-qcd-at-imp.top/=3；人名探针全部为 0。
+- 退出码: 0
+- 证据与判断: 项目页已刷新为课题组致谢版本，满足「只更新项目页」。
+
+### S3 — 提交、推送与标签
+- 命令/操作: 提交 f571d6d4（release: 0.5.18）；git push origin main；
+  创建并推送 stab52。
+- 关键输出: 本地/远端 stab52 均为 6072f77a；main 推送成功。
+- 退出码: 0
+
+## 验证与证据
+- 版本三处一致：0.5.18（__native_version__ 保持 0.1.0）。
+- sdist：pyqcd-0.5.18.tar.gz，twine PASSED，16 包，洁净。
+- PyPI：latest=0.5.18，仅 sdist；课题组名称/链接各 3 次；五个人名探针均为 0。
+- simple index：已见 pyqcd-0.5.18.tar.gz。
+- Git：main 推送成功；stab52 本地/远端对象哈希一致。
+- 未验证项: 本次未重跑干净 venv 安装自检；代码与 0.5.17 相同（仅版本号与文档变化），
+  沿用 0.5.17 的安装态结论；未重建原生 wheel（按要求沿用既有实现）。
+
+## 变更与产物
+- 文件: pyproject.toml、pyqcd/__init__.py、pyqcd/einsum/_version.py、README.md、
+  README.zh-CN.md、docs/en|zh/install.md、docs/en|zh/overview.md、
+  docs/en|zh/appendix_specialized.md。
+- 产物: dist/pyqcd-0.5.18.tar.gz（已上传）。
+- 未改动范围: pyqcd 业务代码、cpp 原生源码、refer 子库工作树。
+
+## 风险、限制与下一步
+- 风险: 未做安装态自检（代码未变）；RTD 线上页面需等待重建。
+- 阻塞: 无。
+- 下一步: 等待 RTD 重建并复验；下次代码变更时再跑完整 release_check --with-tests。
+
+## 用户输入指令
+发布pypi(只是更新项目页)并push~tag
+
+## Agent 全文报告
+--- report begin ---
+改动内容:
+1. 版本 bump 0.5.17 → 0.5.18，同步三处版本与 RTD install/overview/appendix_specialized。
+2. README 双语新增 0.5.18 摘要：致谢统一为中国科学院近代物理研究所格点QCD课题组。
+3. 构建并上传 pyqcd-0.5.18.tar.gz，刷新 PyPI 项目页；提交推送 main，创建并推送 stab52。
+
+推理依据:
+- 项目页只能随新版本 sdist 刷新，0.5.17 不可覆盖，因此发 0.5.18；
+- 代码未变，sdist 沿用既有实现，不重建原生 wheel。
+
+验证结果:
+- 三处版本一致；sdist 构建成功且 twine PASSED；16 包洁净；
+- PyPI latest=0.5.18、唯一 sdist；课题组名称/链接各 3 次，人名探针全 0；
+- main 与 stab52 推送成功，标签对象哈希本地/远端一致。
+- 未验证: 本次未重跑安装态自检（代码与 0.5.17 相同）。
+
+后续步骤:
+- 等待 RTD 重建并复验双语言页面。
+--- report end ---

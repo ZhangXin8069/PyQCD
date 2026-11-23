@@ -1229,3 +1229,11 @@
 - 关键内容: 将四份文档致谢中的个人名与拼音缩写统一为课题组致谢（含链接），跑通双语、Sphinx、文档示例与 API 门；按要求不重新构建、不发新版本
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## pypi-release-0518 - final - 2026-11-23 17:17:20 +0800
+- 主任务: release: 发布 pyqcd 0.5.18（课题组致谢文档版）并推送 stab52
+- 日志文件: logs/v2026112317-2.txt
+- 文件大小: 3938 bytes
+- 触发原因: 任务完成
+- 关键内容: bump 0.5.18 并上传 sdist 刷新 PyPI 项目页；项目页验证课题组致谢且无人名；push main 与 stab52；沿用既有实现，无代码改动
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
