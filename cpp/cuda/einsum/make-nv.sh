@@ -69,65 +69,6 @@ if ! cmp -s "$SCRIPT_DIR/include/einsum_define.h" "$SHARED_DIR/include/einsum_de
     exit 3
 fi
 
-_discover_openblas() {
-    _OPENBLAS_FLAGS=()
-    _OPENBLAS_SUMMARY="not found"
-
-    if [ -n "${PYQCD_OPENBLAS_FLAGS:-}" ]; then
-        read -r -a _OPENBLAS_FLAGS <<< "$PYQCD_OPENBLAS_FLAGS"
-        _OPENBLAS_SUMMARY="PYQCD_OPENBLAS_FLAGS"
-    elif [ -n "${PYQCD_OPENBLAS_LIBRARY:-}" ]; then
-        if [ ! -e "$PYQCD_OPENBLAS_LIBRARY" ]; then
-            printf 'error: PYQCD_OPENBLAS_LIBRARY does not exist: %s\n' \
-                "$PYQCD_OPENBLAS_LIBRARY" >&2
-            exit 1
-        fi
-        if [ -n "${PYQCD_OPENBLAS_INCLUDE_DIR:-}" ]; then
-            _OPENBLAS_FLAGS+=("-I$PYQCD_OPENBLAS_INCLUDE_DIR")
-        fi
-        _OPENBLAS_FLAGS+=("$PYQCD_OPENBLAS_LIBRARY")
-        _OPENBLAS_SUMMARY="$PYQCD_OPENBLAS_LIBRARY"
-    elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists openblas; then
-        read -r -a _OPENBLAS_FLAGS <<< "$(pkg-config --cflags --libs openblas)"
-        _OPENBLAS_SUMMARY="pkg-config openblas"
-    else
-        local header=""
-        local directory=""
-        local candidate=""
-        for candidate in \
-            "${OPENBLAS_ROOT:-}/include/cblas.h" \
-            "${OPENBLAS_HOME:-}/include/cblas.h" \
-            /usr/local/include/cblas.h \
-            /usr/include/cblas.h \
-            /usr/include/x86_64-linux-gnu/openblas-pthread/cblas.h \
-            /usr/include/x86_64-linux-gnu/openblas-openmp/cblas.h \
-            /usr/include/openblas/cblas.h \
-            /opt/OpenBLAS/include/cblas.h; do
-            if [ -n "$candidate" ] && [ -f "$candidate" ]; then
-                header=$candidate
-                directory=$(dirname "$candidate")
-                break
-            fi
-        done
-        if [ -n "$header" ]; then
-            _OPENBLAS_FLAGS+=("-I$directory")
-            local library=""
-            if command -v ldconfig >/dev/null 2>&1; then
-                library=$(ldconfig -p 2>/dev/null | awk '$1 == "libopenblas.so" {print $NF; exit}')
-            fi
-            if [ -n "$library" ] && [ -e "$library" ]; then
-                _OPENBLAS_FLAGS+=("$library")
-                _OPENBLAS_SUMMARY="$header; $library"
-            else
-                _OPENBLAS_FLAGS+=("-lopenblas")
-                _OPENBLAS_SUMMARY="$header; -lopenblas"
-            fi
-        fi
-    fi
-}
-
-_discover_openblas
-
 for source in "${SHARED_CORE_SOURCES[@]}"; do
     if [ ! -f "$source" ]; then
         printf 'error: shared source not found: %s\n' "$source" >&2
@@ -143,6 +84,9 @@ if [ ${#LOCAL_SOURCES[@]} -eq 0 ]; then
     exit 1
 fi
 SOURCES=("${SHARED_CORE_SOURCES[@]}" "${LOCAL_SOURCES[@]}")
+
+# CUDA GEMM 全部走 cuBLAS；共享的 plan/runtime 源不引用 CBLAS。不要把
+# OpenBLAS 链进来，否则 GPU 节点必须额外提供 libopenblas.so.0 才能 dlopen。
 
 # ── CUDA architecture resolution (multi-environment) ────────────────────────
 # 优先级（高 → 低）：
@@ -276,7 +220,6 @@ printf '  nvcc:     %s\n' "$($NVCC --version | tail -n 1)"
 printf '  arch:     %s (source: %s; cubin+PTX embedded)\n' \
     "${ARCH_LABELS[*]}" "$ARCH_SOURCE"
 printf '  arch:     %s\n' "${ARCH_LABELS[*]}"
-printf '  OpenBLAS: %s\n' "$_OPENBLAS_SUMMARY"
 printf '  sources:  %s\n' "$(for source in "${SOURCES[@]}"; do printf '%s ' "${source##*/}"; done)"
 printf '  output:   %s\n' "$PUBLIC_LIBRARY"
 
@@ -304,7 +247,6 @@ set +e
     -I"$SHARED_DIR/include" \
     -I"$SCRIPT_DIR/include" \
     "${SOURCES[@]}" \
-    "${_OPENBLAS_FLAGS[@]}" \
     -lcublas -lcudart \
     -Xlinker --version-script="$VERSION_SCRIPT" \
     -Xlinker -soname -Xlinker libpyqcdeinsum_cuda.so \
@@ -341,6 +283,18 @@ done
 if [ ${#MISSING_EXPORTS[@]} -gt 0 ]; then
     printf 'error: built library is missing required exports: %s\n' \
         "${MISSING_EXPORTS[*]}" >&2
+    exit 3
+fi
+
+# CUDA GEMM is cuBLAS-only. A CPU BLAS NEEDED entry makes the archive unloadable
+# on GPU nodes that do not carry the build host's OpenBLAS installation.
+if ! command -v readelf >/dev/null 2>&1; then
+    printf 'error: binutils readelf is required to validate CUDA dependencies\n' >&2
+    exit 3
+fi
+if readelf -d "$TEMP_LIBRARY" | grep -Eq \
+        'Shared library: \[(libopenblas|libcblas|libblas)'; then
+    printf 'error: CUDA archive must not depend on a CPU BLAS library\n' >&2
     exit 3
 fi
 

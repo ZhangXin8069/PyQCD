@@ -3,10 +3,11 @@
 这条规则替换了两件事，所以必须有契约盯住——两件事都属于"报告看起来正常、结论却是
 错的"那一类：
 
-1. **清单是有序的，不再是笛卡尔积**：三个分支各有**固定组数**（``B1`` = 22、
-   ``B2`` = 22、``B3`` = 21）且**逐项顺序**固定（``dedicated`` → ``generic`` →
-   ``topology`` → ``backend``，每个内核内 ``greedy/branch_1/branch_2/dp/branch_all/
-   optimal/none``）。顺序即执行顺序，而执行顺序决定剪枝的上界何时被压低——换一次
+1. **清单是有序的，不再是笛卡尔积**：三个分支各有**固定组数**（``B1`` = 29、
+   ``B2`` = 29、``B3`` = 28）且**逐项顺序**固定（``original`` → ``dedicated`` →
+   ``generic`` → ``topology`` → ``backend``，每个内核内 ``greedy/branch_1/
+   branch_2/dp/branch_all/optimal/none``）。顺序即执行顺序，而执行顺序决定剪枝的
+   上界何时被压低——换一次
    顺序，结论就换一套，而报告里看不出来。
 2. **``min_wall_ms`` 剪枝**：初值 = ``--tune-timeout``；任一组的单次 ``contract()``
    耗时超过当前上界即**终止该组**（原文 ``耗时大于min_wall_ms,此组被终止``）、继续下
@@ -17,7 +18,7 @@
 ------------
 本契约**不做任何"机器够快"的假设**：每组耗时由 :func:`_delayed_contract` 用
 ``time.sleep`` **注入**（按组下标取睡眠时长），于是"哪一组应当被剪枝"完全由注入表
-决定，而不是由本机快慢决定。``--tune-timeout`` 也显式给出（缺省 30 s → 初值
+决定，而不是由本机快慢决定。本契约显式给出 ``--tune-timeout 30 s``（初值
 30000 ms），所以第 2 条的"初值 = --tune-timeout"是**恒等式**，不是近似。
 
 可直接运行::
@@ -210,7 +211,7 @@ def _optimize_column(rows: Sequence[dict[str, Any]]) -> list[str]:
 
 # ── 1. 三支组数与逐项顺序 ────────────────────────────────────────────────────
 def test_tune_plan_sizes_and_order_per_branch():
-    """契约 1/5：``B1``/``B2`` = 22 组、``B3`` = 21 组，且顺序与清单逐项一致。
+    """契约 1/5：``B1``/``B2`` = 29 组、``B3`` = 28 组，且顺序与清单逐项一致。
 
     顺序是**执行顺序**（前缀 → 分支专属 → 尾部）：报告里的"哪一组先压低了上界"
     直接由它决定，所以逐项比对，而不是只比集合或组数。
@@ -269,7 +270,7 @@ def test_tune_plan_sizes_and_order_per_branch():
 
 # ── 2. min_wall_ms 初值 = --tune-timeout，且被更小值替换 ────────────────────
 def test_tune_min_wall_starts_at_timeout_and_shrinks():
-    """契约 2/5：初值 = ``--tune-timeout``（秒→毫秒）；中途被更小的实测中位替换。
+    """契约 2/5：初值 = ``--tune-timeout``（秒→毫秒）；中途被更小的实测最小值替换。
 
     注入的耗时序列是 20 ms → 5 ms → 10 ms → 30 ms：上界因此必须是
     ``30000 ms → 20 ms → 5 ms``，最后停在 5 ms（那之后的两组都超过它）。
@@ -285,13 +286,13 @@ def test_tune_min_wall_starts_at_timeout_and_shrinks():
     assert len(rows) == len(COMBOS), rows
     # 第 1、2 组是干净的 ok：它们依次把上界压到 20 ms、5 ms。
     assert [row["status"] for row in rows[:2]] == ["ok", "ok"], rows[:2]
-    first, second = rows[0]["median_ms"], rows[1]["median_ms"]
+    first, second = rows[0]["wall_ms"], rows[1]["wall_ms"]
     final = tune["min_wall_ms"]
     assert final is not None and float(final) <= float(second), (
         "上界必须已降到第 2 组的实测耗时", final, second)
     assert float(final) < float(first), (
         "上界必须被更小的实测值替换过", final, first)
-    assert final == second, ("上界就是记录到的最小中位", final, second)
+    assert final == second, ("上界就是记录到的最小值", final, second)
     assert tune["min_wall_config"] == list(COMBOS[1]), (
         "压低上界的那一组必须被记下来", tune["min_wall_config"], list(COMBOS[1]))
     # --tune-timeout 0 = 不设上界：初值与最终值都必须是 None，且一组都不剪。
@@ -307,7 +308,7 @@ def test_tune_prunes_slower_combinations_without_writing_them():
 
     三条共用同一次注入运行（同一份证据不该跑三遍）：``write_winner`` 只被调用 1 次且
     写的是 ``best``（= 3）、``原因=`` 里逐字含 :data:`TERMINATION_TEXT`（= 4）、
-    ``best`` 是可用组里最小的 ``median_ms``（= 5）。
+    ``best`` 是可用组里最小的 ``wall_ms``（= 5）。
     """
     cli = _require_plan()
     written: list[dict[str, Any]] = []
@@ -326,10 +327,10 @@ def test_tune_prunes_slower_combinations_without_writing_them():
         stderr = tune["_stderr"]
 
     pruned = [row for row in rows if row.get("pruned")]
-    assert pruned, ("后两组必须被剪枝", [(r["optimize"], r["median_ms"]) for r in rows])
-    # 第 3、4 组的注入耗时（30 ms / 60 ms）都超过当时的截止（2 × 10 ms = 20 ms）。
+    assert pruned, ("后两组必须被剪枝", [(r["optimize"], r["wall_ms"]) for r in rows])
+    # 第 3、4 组的注入耗时（30 ms / 60 ms）都超过当时的截止（1 × 10 ms = 10 ms）。
     assert [row["optimize"] for row in pruned] == ["dp", "branch_2"], pruned
-    assert all(row["median_ms"] is None for row in pruned), pruned
+    assert all(row["wall_ms"] is not None for row in pruned), pruned
     assert all(row["status"] == "pruned" for row in pruned), pruned
 
     # 原文逐字出现（含两个数值），且不折进任何其它分类。
@@ -350,10 +351,11 @@ def test_tune_prunes_slower_combinations_without_writing_them():
     assert len(disk) == 1, ("表里只该有胜出那一行", disk)
 
     # ``best`` = 记录的最小耗时组（第 2 组，5 ms）。
-    measured = [row for row in rows if row["median_ms"] is not None]
-    assert best is min(measured, key=lambda row: row["median_ms"]), (best, measured)
+    measured = [row for row in rows
+                if row["wall_ms"] is not None and not row.get("pruned")]
+    assert best is min(measured, key=lambda row: row["wall_ms"]), (best, measured)
     assert best["optimize"] == COMBOS[1][2], best
-    assert float(best["median_ms"]) == float(tune["min_wall_ms"]), (
+    assert float(best["wall_ms"]) == float(tune["min_wall_ms"]), (
         "best 与 min_wall_ms 必须是同一个数（否则两套账）", best, tune["min_wall_ms"])
     assert "tune best :" in stderr, stderr[-800:]
 

@@ -60,9 +60,8 @@ bash cpp/cuda/einsum/make-nv.sh --clean          # 删除 build/ 与公开软链
 bash cpp/cuda/einsum/make-nv.sh --require-kernels # 缺 kernel 实现时硬失败（CI 用）
 ```
 
-实际命令（`nvcc` 12.4 / sm_89，架构按
-`PYQCD_CUDA_ARCHITECTURES > CMAKE_CUDA_ARCHITECTURES > PYQCD_SM_ARCH >` 脚本内
-`DEFAULT_ARCHITECTURES="6.0 7.0"` 解析，`make-nv.sh:126-134`，**不探测 `nvidia-smi`**）：
+实际命令（架构按 `PYQCD_CUDA_ARCHITECTURES > CMAKE_CUDA_ARCHITECTURES >
+PYQCD_SM_ARCH > nvidia-smi 自动探测 > DEFAULT_ARCHITECTURES="6.0 7.0"` 解析）：
 
 ```bash
 nvcc -O3 -std=c++17 --shared -Xcompiler -fPIC -Xcompiler -fvisibility=hidden \
@@ -166,12 +165,11 @@ RTX 4060 Laptop（compute capability **8.9**）。跨后端总表与逐条复现
    `setup.py` 的 `auto` 分支在有 nvcc 且 `cpp/cuda/einsum/src/*.cu` 存在时选 CUDA
    （`install.sh:29-35`、`setup.py:29-31`），本机默认安装路径恰好绕开该失败。
 
-3. **OpenBLAS 探测打印 `not found`，实际由运行期 `dlopen` 解析。** 构建日志是
-   `OpenBLAS: not found`（无 `pkg-config`、无系统 `cblas.h`），但本库不链接 BLAS：
-   先试 `RTLD_DEFAULT`（进程内已有符号），再按 `libcblas.so.3` → `libcblas.so` →
-   `libopenblas.so.0` → `libopenblas.so` 的顺序 `dlopen`
-   （`cpp/kupl/einsum/src/apply_contract.cpp:287-290`）。本机
-   `ctypes.CDLL("libcblas.so.3")` 与 `ctypes.CDLL("libopenblas.so.0")` 均成功。
+3. **CUDA 不链接也不 `dlopen` CPU BLAS（0.5.19 起强制）。** GEMM 全部走 cuBLAS，
+   共享的 plan/runtime 源不引用 CBLAS。构建后用 `readelf -d` 检查，任何
+   `libopenblas` / `libcblas` / `libblas` NEEDED 都直接失败。原因：2026-11-24
+   `gpu-debug` 实测中，多余链接的 `libopenblas.so.0` 让 A100 上的归档
+   `ctypes.CDLL` 失败，probe 于是误报 `native_available=False`。
 
 4. **`-march=native` 默认与 PyQCU 相反（对照登记，本目录不涉及）。** `make-nv.sh` 用
    `-O3 -std=c++17`（`make-nv.sh:179`）编译，不含任何 `-march`；`-march=native`

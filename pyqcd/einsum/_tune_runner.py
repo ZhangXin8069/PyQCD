@@ -56,6 +56,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 __all__ = [
@@ -303,6 +304,13 @@ def run_group(job: dict[str, Any], *, workdir: str,
 
     environment = os.environ.copy()
     environment["PYTHONUNBUFFERED"] = "1"
+    # The caller may run from a temporary working directory. Pin the child to the
+    # same package root as this process so parent and worker cannot silently use
+    # different PyQCD versions.
+    package_root = str(Path(__file__).resolve().parents[2])
+    inherited_path = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = (
+        package_root + (os.pathsep + inherited_path if inherited_path else ""))
     # 子进程不继承父进程的调优开关：它跑的是**一组**，不是一整轮。
     environment.pop(INPROCESS_ENV, None)
     started = time.monotonic()

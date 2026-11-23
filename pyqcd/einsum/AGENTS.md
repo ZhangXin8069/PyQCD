@@ -710,9 +710,9 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
    一律未命中（量的是被测配置自己的耗时，不是历史命中），写侧**静默不写**（不排队）：
    胜出配置在 `with` 块**之外**写一次。
 2. 锁定键 `(shape, dtype, device, equation, backend)`，遍历其余性能维度：**不是**笛卡尔积，
-   而是**分支化有序清单**（`_tune_axes.tune_plan()`）：共同前缀 `dedicated` → `generic`
-   （每个内核内 `greedy/branch_1/branch_2/dp/branch_all/optimal/none`）→ 一条分支专属
-   `topology` → 尾部 `original` → `backend`。组数是**冻结口径**：`B1`/`B2` = **29**、
+   而是**分支化有序清单**（`_tune_axes.tune_plan()`）：共同前缀 `original` → `dedicated`
+   → `generic`（每个内核内 `greedy/branch_1/branch_2/dp/branch_all/optimal/none`）→
+   一条分支专属 `topology` → 尾部 `backend`。组数是**冻结口径**：`B1`/`B2` = **29**、
    `B3` = **28**（`TUNE_PLAN_SIZES`），硬上限 `TUNE_MAX_COMBOS = 32`，超了报用法错误而
    **绝不静默截断**。`auto` 已从 `kernel_force` 轴删除（2026-11-18）：该轴现在遍历全部
    五个强制值（含 `original`）。
@@ -726,10 +726,11 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
 5. 写不进去（目录不可写等）**如实外抛**，由 tune 打印"写配置表失败"后继续（不进
    `last_error()`）；tune 结束打印最终写入行与删除行数。
 
-### 9.1g `--tune-timeout` 是**尽力而为上限（best-effort）**，不是硬超时（2026-11-19）
+### 9.1g `--tune-timeout`：缺省子进程硬上限，进程内为 best-effort
 
-**它到底能做什么**（实现是 `signal.setitimer` + `SIGALRM`，处理器只在**回到解释器**
-时派发）：
+缺省每组在全新解释器中运行，父进程可 `killpg`，所以组级窗口是能打断原生 C/CUDA 的
+**硬上限**。`PYQCD_EINSUM_TUNE_INPROCESS=1` 才切到进程内
+`signal.setitimer` + `SIGALRM`，下表描述这条**进程内兼容路线**：
 
 | 场景 | 能否打断 | 依据 |
 |---|---|---|
@@ -738,18 +739,18 @@ use_blas；callable 与显式路径不缓存，返回值按**只读**复用）�
 | 非主线程 / 无 `SIGALRM` 的平台 | 不能（退化） | 装不上定时器，只能"先跑完、再按耗时判定"（`timer=posthoc`） |
 
 **因此三处文案必须同一口径**：`--help` 的 `--tune-timeout`（`help.tune_timeout`）、
-tune 启动时的 `tune note :` 行（`tune.signal_note`）、模块 docstring 的「超时与预算」
-那一段，都写"**尽力而为（best-effort）**：能打断 Python 侧长循环，**打不断原生
-C/CUDA 代码**"，并给可操作建议"GPU 上把 `--tune-timeout` 取足够大，或先用
-`--tune pass` 快速通过（跳过 compare 与等价改写）"。
+tune 的 `tune note :` 行、模块 docstring 的「超时与预算」段，都必须同时写清
+"缺省子进程是硬上限"与"进程内路线是 **best-effort**：能打断 Python 侧长循环，
+**打不断原生 C/CUDA 代码**"，并给可操作建议"GPU 上把 `--tune-timeout` 取足够大，
+或先用 `--tune pass` 快速通过（跳过 compare 与等价改写）"。
 
 **禁止的两句话**：
 1. ~~"可能打断原生内核"~~ —— 含糊到等于没说（用户原话）。要么写"打不断"，要么别写；
 2. ~~"建议在新进程里跑 tune"~~ —— 那是把问题推给用户；真正的替代是调大上限或
    `--tune pass`。
 
-**也不许写成"硬超时"**：`--tune-budget`（整轮上限）同理——卡在原生代码里的那一组
-仍要等它返回才能被判超时。
+**只允许在缺省子进程路线写"硬上限"**；进程内路线必须明确标为 best-effort。
+`--tune-budget` 同样按实际路线描述。
 
 **fork 子进程隔离试过并已回退，现缺省走 `spawn`**：`fork` 能把原生调用放到能 kill 的地方，
 但 CUDA 上下文不跨 fork 复用（父进程只要碰过 CUDA，子进程第一次 `cupy.asarray` 就是
@@ -766,12 +767,12 @@ C/CUDA 代码**"，并给可操作建议"GPU 上把 `--tune-timeout` 取足够�
 判据与流程见 `docs/einsum_tune_timeout_20261119.md`，时间线见
 `logs/einsum-tune-timeout-20261119.txt`。改 tune 的超时、参照或准入之前先看这五条：
 
-1. **超时窗口是"整组"且已升级为硬上限**：一组 `1+warmup+rounds` 次调用（缺省 `1+0+1 = 2` 次
-   `1+1+3 = 5` 次，见 `DEFAULT_WARMUP=1` / `DEFAULT_ROUNDS=3`），装的是
-   `limit × 2` 的组级预算——按单次设限会把 `2 × limit` 全花光，且与
-   `min_wall_ms` 剪枝（比整组中位）不同口径。按缺省 `--tune-timeout 30` 算，**组级窗口
-   = 30 × 2 = 60 s**；**显式**给的 warmup 在加速设备上被抬到 2（`ACCELERATED_MIN_WARMUP`），窗口随之
-   变成 **30 × 3 = 90 s**——`group_limit` 用的是**实际会用**的 warmup，所以预算与真正做的
+1. **超时窗口是"整组"且已升级为硬上限**：一组 `1+warmup+rounds` 次调用
+   （缺省 `1+1+3 = 5` 次，见 `DEFAULT_WARMUP=1` / `DEFAULT_ROUNDS=3`），装的是
+   `limit × 5` 的组级预算——按单次设限会把 `5 × limit` 全花光，且与
+   `min_wall_ms` 剪枝（比整组最小值）不同口径。按缺省 `--tune-timeout 15` 算，**组级窗口
+   = 15 × 5 = 75 s**；在加速设备上缺省 warmup 会被抬到 2（`ACCELERATED_MIN_WARMUP`），
+   窗口随之变成 **15 × 6 = 90 s**——`group_limit` 用的是**实际会用**的 warmup，所以预算与真正做的
    调用次数永远对得上。**缺省每组跑在全新解释器里**，超时由
    父进程 `killpg` 强制生效，所以原生 C/CUDA 代码真的能被打断（`SIGALRM` 做不到：
    只在字节码之间派发，实测超限 1.99 s 才抛）。进程启动开销单列在
@@ -802,7 +803,7 @@ C/CUDA 代码**"，并给可操作建议"GPU 上把 `--tune-timeout` 取足够�
     强制内核与 tune 两组里进入。
 
 **剪枝截止 = `MIN_WALL_FACTOR` × `min_wall_ms`，`MIN_WALL_FACTOR = 1.0`**（2026-11-21 用户
-裁定"单测试项时间限制改回原 `min_wall_ms`"）：截止就是当前最快那一组的中位本身，
+裁定"单测试项时间限制改回原 `min_wall_ms`"）：截止就是当前最快那一组的最小值本身，
 `wall_ms > min_wall_ms` 即终止。历史：2026-11-19 曾改成 2× 以避免抖动误杀（连续两组抖动
 实测 10–20%），但那让每轮至少多付一倍时间——`--tune` 的目的是**快速扫完整张网格**，
 不是给每一格做精密测量。
@@ -826,7 +827,7 @@ pyqcd.einsum` 中位 126 ms 含解释器启动），15 组合计 990 ms。
 `optimize ∈ {auto, greedy, optimal}`"已过时（上面已就地改成现行口径，留此条备查）——
 现行是**分支化有序清单**
 （`B1/B2 = 29`、`B3 = 28`，`optimize` 取 `greedy/branch_1/branch_2/dp/branch_all/
-optimal/none` 七个叶子，尾部 `original` → `backend` 各 7 组），组数以 `tune_plan_size()`
+optimal/none` 七个叶子，前缀含 `original`，尾部为 `backend`），组数以 `tune_plan_size()`
 为准，不是三轴常量相乘。
 
 ### 9.1i 每组的峰值内存/显存（2026-11-19）
@@ -933,7 +934,7 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 |---|---|---|
 | `--device` | `cpu` | `cpu`→numpy，`gpu`/`cuda`→cupy |
 | `--dtype` | `complex128` | 四类平权：complex128/complex64/float64/float32 |
-| `--backend` | `auto` | 原样传给 `contract(backend=...)`；可选 auto/numpy/cupy/torch/kupl/cuda |
+| `--backend` | `auto` | 原样传给 `contract(backend=...)`；可选 auto/numpy/cupy/torch；KUPL/CUDA 特化由 `--kernel-force` 选择，不是数组后端 |
 | `--compare` | `numpy` | 参照：numpy / opt_einsum / **backend**（跨后端互证）/ none |
 | `--compare-optimize` | `auto` | **只看参照**的收缩序优化器：auto / greedy / dp / optimal / branch-all / branch-2 / branch-1。`auto` = 沿用旧行为（numpy→`greedy`，opt_einsum→`greedy` 或跟随 `--optimize`）。两库名字不通用、**不做跨库重映射**：numpy 只认 `greedy`/`optimal`（`dp`/`branch-*` 报用法错误，退出码 2）；opt_einsum 按 `oe.paths` 注册表校验。`--compare backend`/`none` 下无效（verbose 提示，不报错） |
 | `--optimize` | 不写（内部按 `auto`） | 7 叶子之一：`greedy`/`optimal`/`dp`/`branch_1`/`branch_2`/`branch_all`/`none`，**只管主路径**。`auto` 不在 `choices` 里（它是缺省选择器，显式写它以退出码 2 结束）；缺省值是 `None` = "未指定"，`main` 再还原成 `auto` 交给 `run()` |
@@ -941,8 +942,8 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 | `--equivalence` | `auto` | 等价写法报告三态：`auto`=跟随 `PYQCD_EINSUM_EQUIVALENCE`（**缺省开启**，只有 `0/false/off/no` 才关闭）；`true`=总是查；`false`=不查。方程未命中任何特化路径、但存在能命中的等价写法时，`--verbose true` 的明细多一段 `equiv`：改写后的方程 + **输入侧张量调整**（`transpose(perm)` / `order=[...]`，无调整写 `-`）+ **输出侧结果回填**（`transpose(perm)`，无则写 `-`）。已命中特化的方程不出该段；没有等价写法时明写「无」。`--json` 多一个 `equivalence` 字段（`_equivalence.explain()` 原样），关闭时缺该字段。**只做报告**：不改 `contract()` 行为、不进计时区域、不改任何数值与耗时 |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一，不是逐元素绝对阈值） |
 | `--rtol` | `0` | 附加相对余量 |
-| `--rounds` | `1` | 计时轮数（中位）。`DEFAULT_ROUNDS`；原缺省 5 → 3 → **1**（2026-11-20 用户裁定"默认重复轮次为一次"） |
-| `--warmup` | `0` | 丢弃的预热次数（`DEFAULT_WARMUP`）。**0 合法且是缺省**（2026-11-20 用户裁定"预热轮次默认为零次"）；只拒绝负数。**显式给的正值**在加速设备上被抬到 2（`ACCELERATED_MIN_WARMUP`）；`0` 保持 `0` |
+| `--rounds` | `3` | 计时轮数；报告取这些样本的**最小值**（`DEFAULT_ROUNDS`） |
+| `--warmup` | `1` | 丢弃的预热次数（`DEFAULT_WARMUP`）。`0` 仍合法，用于明确计入冷启动；只拒绝负数。正数在加速设备上被抬到 2（`ACCELERATED_MIN_WARMUP`），`0` 保持 `0` |
 | `--seed` | `0` | 操作数随机种子（各路径同一批数据） |
 | `--verbose` | `false` | true 时把逐项明细打到 stderr |
 | `--language` | `auto` | 本入口的**输出语言**：`auto` / `en` / `zh-cn`。`auto` 只在 `PYQCD_EINSUM_LANG` **显式设了**时才跟随它（`en*`→英文，`zh*`→中文），未设时保持历史行为**中文**；因此缺省行为零变化。它**不跟随系统 locale**（本机 `LANG=C.UTF-8`，跟随 locale 会让不传选项的输出从中文变英文），全程复用 `_specialize.notice_language()` 的那一个环境变量，不另立开关。只影响文案：不改任何计算结果、不改 `--compare` 的选择、**不写**任何环境变量（同进程后续调用不受影响）。缺 key 时 `translate` 直接抛 `KeyError`，不做静默兜底 |
@@ -985,8 +986,9 @@ verbose 的 `ref opt` 行与 `reference` 串都打**参照实际用的**，一�
 **两条硬性口径**（改它就是改规范）：
 
 1. `--atol` 是相对容差。`np.allclose` 那种逐元素绝对阈值会误判接近零的元素。
-2. **warmup 不可为 0**。实测依据见 §9.0 的 `seq=2583` 首调/热态对比（本文件 `:481`），
-   单次测量会被 plan 缓存 + 原生库绑定 + JIT 完全支配。
+2. **warmup 缺省为 1**；`--warmup 0` 仍允许，用于明确测量冷启动。实测依据见 §9.0
+   的 `seq=2583` 首调/热态对比（本文件 `:481`），单次测量会被 plan 缓存 + 原生库绑定
+   + JIT 完全支配。
 
 典型输出（本条方程 10 操作数 / 2.56 亿输入元素）：
 
@@ -999,7 +1001,7 @@ PASS ... rel=3.45e-15 vs opt_einsum.contract(backend='numpy', optimize='greedy')
 equation : ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak
 device   : gpu  dtype=complex128  backend=cupy
 operands : 10 个，共 256,010,297 元素；输出 [400, 400] (160,000 元素)
-time     : <实测> ms （warmup=2，rounds=3，中位）
+time     : <实测> ms （warmup=2，rounds=3，取最小值）
 time note: 加速设备：warmup 由 1 抬到 2（至少丢弃 2 次调用…）
 reference: opt_einsum.contract(backend='cupy', optimize='greedy')
 ref time : <实测> ms
@@ -1029,7 +1031,7 @@ kernel   : {'cuda': {'path': 'cuda_topology', 'steps': 9, 'copied': ()}}
 | `peak` | 跑完收缩后的总增量，含中间体；GPU 侧另给池保留量与设备总显存，便于判断会不会 OOM |
 
 内存采样点只有三个（构造前 / 构造后 / 收尾），**都不在 `_timed` 的计时循环内**，
-因此不污染 `--rounds` 的中位。契约
+因此不污染 `--rounds` 的时序样本。契约
 `test_memory_snapshot_is_outside_the_timed_region` 用"同一命令连跑两次、耗时差异
 <2×"把这个结构性要求钉住。
 
@@ -1100,6 +1102,10 @@ conda run -n pyqcd-test python -m pip install -e /path/to/PyQCD \
 - **必须装 `openblas`**（含 `cblas.h` 与 `libopenblas.so` 软链）：KUPL 的每个 GEMM
   都走 cblas，缺开发包会让 `pip install` 在原生构建阶段直接失败（exit 3）。
   只有运行时 `libopenblas.so.0` 不够。
+- **CUDA 归档不链接 OpenBLAS**（0.5.19 起）：其中所有 GEMM 都走 cuBLAS，共享
+  plan/runtime 源也不引用 CBLAS。GPU 节点只需 CUDA runtime/cuBLAS 即可 dlopen
+  topology/dedicated 入口；把 `-lopenblas` 加回去会让没有构建机 OpenBLAS 的节点
+  静默落到 `native_available=False`。
 - 实测结果（V100，`--device gpu --backend cupy`）：
   `ambn,cgdh,ekfl,oipj,ce,mo,gi,bdf,np,hjl->ak` 走 `cuda_topology` 9 步，
   **20.3 ms**，rel 1.08e-15。

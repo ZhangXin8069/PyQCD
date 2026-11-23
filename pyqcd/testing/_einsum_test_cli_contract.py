@@ -3,7 +3,7 @@
 这个入口是"日后默认的测试规范端"（见 ``pyqcd/einsum/AGENTS.md`` §9.0 与
 ``skills/pyqcd-einsum/SKILL.md``），所以它的**契约本身**也要有测试，否则某次改动
 把 ``--atol`` 改成绝对容差、或在**不报告实际值**的情况下改 warmup/rounds 缺省，
-所有引用它的结论都会悄悄失真（缺省 ``--warmup 0`` / ``--rounds 1`` 是用户裁定，
+所有引用它的结论都会悄悄失真（缺省 ``--warmup 1`` / ``--rounds 3`` 是项目契约，
 报告里的 ``warmup_effective`` / ``wall_ms`` 必须如实反映它们）。
 
 只测纯 Python 可判定的部分（不依赖原生库、不需要 GPU），因此任何机器都能跑。
@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -107,13 +108,7 @@ def test_equation_requires_explicit_output():
 
 
 def test_warmup_zero_is_allowed_but_negative_is_refused():
-    """``--warmup 0`` 合法（2026-11-20 用户裁定：缺省就是 0），负数才是用法错误。
-
-    缺省取 0 的理由：遍历的目的是把整张网格量完，首调冷启动是**明确的取舍**；
-    要稳态数字就显式给值（加速设备上要了预热会被抬到 ``ACCELERATED_MIN_WARMUP``）。
-    断言 ``warmup=0`` 真的能跑通，是为了防止有人"顺手"把校验改回 ``< 1``
-    而让缺省值变成一个跑不起来的配置。
-    """
+    """``--warmup 0`` 仍合法，缺省为 1，负数才是用法错误。"""
     report = cli.run(equation="ij,jk->ik", shapes=[(4, 4), (4, 4)], out_shape=(4, 4),
                      warmup=0, rounds=1, compare="none")
     assert report["ok"], report
@@ -155,6 +150,14 @@ def test_atol_is_relative_not_elementwise():
     assert abs(rel - 1.0) < 1e-12, rel
 
 
+def test_timed_reports_the_minimum_sample():
+    """``_timed`` 报告三个样本的最小值，而不是中位数。"""
+    ticks = iter((0.010, 0.030, 0.040, 0.070, 0.080, 0.090))
+    with patch.object(cli.time, "perf_counter", side_effect=lambda: next(ticks)):
+        seconds = cli._timed(lambda: None, warmup=1, rounds=3)
+    assert abs(seconds - 0.010) < 1e-15, seconds
+
+
 def test_defaults_are_documented_values():
     """缺省值就是规范：任何改动都必须同步改 `--help` 与两份文档。"""
     assert cli.DEFAULT_DEVICE == "cpu"
@@ -164,10 +167,17 @@ def test_defaults_are_documented_values():
     # 它原来的等价写法是 ``--backend numpy --compare backend``。
     assert cli.DEFAULT_COMPARE == "none"
     assert cli.DEFAULT_ATOL == 1e-12
-    # 2026-11-20 用户裁定：**重复 1 轮、预热 0 轮**（此前是 3 / 1）。
-    # 一次实测就是"这一格现在的耗时"；要中位抹平抖动就显式给更大的值。
-    assert cli.DEFAULT_ROUNDS == 1, cli.DEFAULT_ROUNDS
-    assert cli.DEFAULT_WARMUP == 0, cli.DEFAULT_WARMUP
+    assert cli.DEFAULT_ROUNDS == 3, cli.DEFAULT_ROUNDS
+    assert cli.DEFAULT_WARMUP == 1, cli.DEFAULT_WARMUP
+    assert cli.DEFAULT_TUNE_TIMEOUT == 15.0, cli.DEFAULT_TUNE_TIMEOUT
+    assert cli.DEFAULT_TUNE_BUDGET == 1000.0, cli.DEFAULT_TUNE_BUDGET
+    parser = cli.build_parser(language="en")
+    args = parser.parse_args(["--equation", "ij,jk->ik",
+                              "--shape", "[2,2],[2,2]"])
+    assert args.warmup == 1, args.warmup
+    assert args.rounds == 3, args.rounds
+    assert args.tune_timeout == 15.0, args.tune_timeout
+    assert args.tune_budget == 1000.0, args.tune_budget
     assert cli.DEFAULT_VERBOSE is False
     assert set(cli.DTYPES) == {"complex128", "complex64", "float64", "float32"}
     assert set(cli.COMPARE_MODES) == {"opt_einsum", "backend", "none"}
@@ -1620,6 +1630,7 @@ TESTS = (
     test_equation_requires_explicit_output,
     test_warmup_zero_is_allowed_but_negative_is_refused,
     test_atol_is_relative_not_elementwise,
+    test_timed_reports_the_minimum_sample,
     test_defaults_are_documented_values,
     test_exit_codes_distinguish_usage_from_numeric_failure,
     test_memory_snapshot_is_outside_the_timed_region,

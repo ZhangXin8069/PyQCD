@@ -8,6 +8,7 @@
 *
 !*/
 /build/
+/cpp/*/einsum/build/
 
 # ==================================================
 # 2. Keep existing extensionless files

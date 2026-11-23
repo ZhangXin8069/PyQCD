@@ -9,7 +9,7 @@ latest release, and read the output and any notices printed during the install.*
 The package is distributed on PyPI as `pyqcd`; a single install gives you the whole
 toolkit and everything this site documents.
 
-Current release: `0.5.18`. To pin it: `pip install "pyqcd==0.5.18"`.
+Current release: `0.5.19`. To pin it: `pip install "pyqcd==0.5.19"`.
 
 ## Requirements
 
@@ -20,8 +20,8 @@ Current release: `0.5.18`. To pin it: `pip install "pyqcd==0.5.18"`.
 | `torch` | optional: the torch backend (`pip install "pyqcd[torch]"`) |
 | `cupy-cuda12x` | optional: GPU arrays (`pip install "pyqcd[cuda]"`) |
 | `matplotlib` | optional: plotting helpers (`pip install "pyqcd[plot]"`) |
-| C++17 compiler, `bash`, `nm`, OpenMP, OpenBLAS headers/library | default native KUPL build |
-| CUDA toolkit with `nvcc`, compatible host compiler | optional CUDA archive |
+| C++17 compiler, `bash`, binutils (`nm`, `readelf`), OpenMP, OpenBLAS headers/library | default native KUPL build and native archive validation |
+| CUDA toolkit with `nvcc`, compatible host compiler, binutils (`nm`, `readelf`) | optional CUDA archive |
 
 `requires-python` is `>=3.9`. Python 3.8 is no longer supported.
 
@@ -100,16 +100,18 @@ of `ready`, `missing`, `load-failed`, or `symbol-missing`. A missing or incomple
 CUDA archive is not fixed by setting an environment switch: load the CUDA
 toolchain, then reinstall with the same interpreter and no cache. The archive
 check also runs on CPU-only machines, so packaging defects are visible even when
-no device is present.
+no device is present. The CUDA archive uses cuBLAS, not the CPU OpenBLAS library,
+so a GPU node does not need the build host's OpenBLAS installation merely to load
+the topology and dedicated entries.
 
 ```bash
-python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.18"
+python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.19"
 ```
 
 For an intentional no-compiler installation:
 
 ```bash
-PYQCD_SKIP_NATIVE_BUILD=1 python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.18"
+PYQCD_SKIP_NATIVE_BUILD=1 python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.19"
 ```
 
 Build modes: `PYQCD_EINSUM_BACKEND=auto` is the default, `kupl` requests CPU

@@ -7,7 +7,7 @@ pip install -U pyqcd
 **强烈建议始终用 `pip install -U pyqcd` 安装最新版，并关注安装过程中的输出与任何提醒。**
 包以 `pyqcd` 的名字发布在 PyPI 上；一次安装就得到整个工具库，以及本站记录的全部内容。
 
-当前发行版：`0.5.18`。需要固定版本时：`pip install "pyqcd==0.5.18"`。
+当前发行版：`0.5.19`。需要固定版本时：`pip install "pyqcd==0.5.19"`。
 
 ## 依赖
 
@@ -18,8 +18,8 @@ pip install -U pyqcd
 | `torch` | 可选：torch 后端（`pip install "pyqcd[torch]"`） |
 | `cupy-cuda12x` | 可选：GPU 数组（`pip install "pyqcd[cuda]"`） |
 | `matplotlib` | 可选：作图辅助（`pip install "pyqcd[plot]"`） |
-| C++17 编译器、`bash`、`nm`、OpenMP、OpenBLAS 头文件/库 | 默认原生 KUPL 构建 |
-| 含 `nvcc` 和兼容主机编译器的 CUDA 工具链 | 可选 CUDA 归档 |
+| C++17 编译器、`bash`、binutils（`nm`、`readelf`）、OpenMP、OpenBLAS 头文件/库 | 默认原生 KUPL 构建与原生归档校验 |
+| 含 `nvcc`、兼容主机编译器和 binutils（`nm`、`readelf`）的 CUDA 工具链 | 可选 CUDA 归档 |
 
 `requires-python` 为 `>=3.9`。Python 3.8 已不再支持。
 
@@ -93,15 +93,17 @@ python -m pyqcd --gpu-probe --json
 以及 `ready`、`missing`、`load-failed`、`symbol-missing` 之一。CUDA 归档缺失或
 不完整时，设置环境开关并不能修复：应加载 CUDA 工具链，再用同一解释器、禁用缓存
 重新安装。即使机器没有 GPU，probe 也会检查归档，因此打包缺陷不会被设备缺席掩盖。
+CUDA 归档使用 cuBLAS，不依赖 CPU 侧 OpenBLAS；GPU 节点不需要为了加载 topology /
+dedicated 入口而额外安装构建机的 OpenBLAS。
 
 ```bash
-python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.18"
+python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.19"
 ```
 
 需要明确安装纯 Python 规划器时：
 
 ```bash
-PYQCD_SKIP_NATIVE_BUILD=1 python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.18"
+PYQCD_SKIP_NATIVE_BUILD=1 python -m pip install --force-reinstall --no-cache-dir "pyqcd==0.5.19"
 ```
 
 构建模式：`PYQCD_EINSUM_BACKEND=auto` 为缺省，`kupl` 只请求 CPU 原生，

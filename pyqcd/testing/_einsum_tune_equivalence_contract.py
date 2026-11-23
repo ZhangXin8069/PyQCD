@@ -604,7 +604,7 @@ def test_tune_excludes_a_mismatching_combination_from_best():
         "后端必须固定", {str(item["kwargs"].get("backend")) for item in calls})
 
     bad_row, winner_row = rows[bad], rows[winner]
-    assert bad_row["median_ms"] < winner_row["median_ms"], (bad_row, winner_row)
+    assert bad_row["wall_ms"] < winner_row["wall_ms"], (bad_row, winner_row)
     assert bad_row.get("mismatch") is True, ("rel 超 atol+rtol 必须判 MISMATCH", bad_row)
     assert bad_row["rel"] is not None and bad_row["rel"] > (
         cli.DEFAULT_ATOL + cli.DEFAULT_RTOL), bad_row
@@ -613,13 +613,13 @@ def test_tune_excludes_a_mismatching_combination_from_best():
         "MISMATCH 判定只该挑出注入的那一组（其余 rel 都在容差内）")
 
     # 若把"最快"当唯一判据，当选的正是那个 MISMATCH 组——本用例因此有区分力。
-    measured = [row for row in rows if row.get("median_ms") is not None]
-    assert min(measured, key=lambda row: row["median_ms"]) is bad_row, (
+    measured = [row for row in rows if row.get("wall_ms") is not None]
+    assert min(measured, key=lambda row: row["wall_ms"]) is bad_row, (
         "注入的假耗时必须让 MISMATCH 组成为最快的那一组")
 
     assert tune["best"] is not None, tune["best"]
     assert tune["best"] is not bad_row, ("MISMATCH 组不得被选为 best", tune["best"])
-    assert tune["best"]["median_ms"] == winner_row["median_ms"] == 2.0, (
+    assert tune["best"]["wall_ms"] == winner_row["wall_ms"] == 2.0, (
         "best 必须是可用组里最快的那一个（注入的假耗时）", tune["best"])
     assert (tune["best"]["kernel_force"], tune["best"]["as_equivalence"],
             tune["best"]["optimize"]) == combos[winner], tune["best"]
@@ -629,7 +629,7 @@ def test_tune_excludes_a_mismatching_combination_from_best():
     assert len(errored) == sum(1 for combo in combos
                                if combo[0] in ("dedicated", "topology")), (
         "KernelUnavailableError 只该记 error，不得中断遍历", len(errored))
-    assert all(row.get("median_ms") is None for row in errored), errored[:1]
+    assert all(row.get("wall_ms") is None for row in errored), errored[:1]
 
     # 非 verbose：只给表头 + 最优行（不出明细行），且最优行点名的是 winner。
     best_lines = [line for line in printed.splitlines()
@@ -682,7 +682,7 @@ def test_tune_keeps_no_row_for_a_timed_out_combination():
         # 表示"这一组没有可用的实测"，但必须**留下痕迹**，不许静默当成没跑过。
         assert row.get("timeout") is True or row.get("error") == "TimeoutError", (
             "超时的组合必须被标出来", row)
-        assert row["median_ms"] is None, row
+        assert row["wall_ms"] is None, row
         assert tune["best"] is not None and tune["best"] is not row, (
             "超时的组合不得被选为 best", tune["best"])
         _assert_only_the_winner_row_was_written(
@@ -709,7 +709,7 @@ def test_tune_keeps_no_row_for_a_raising_combination():
             "单组异常不该中断遍历", len(tune["rows"]))
         row = tune["rows"][bad]
         assert row["error"] == "RuntimeError", row
-        assert row["median_ms"] is None, row
+        assert row["wall_ms"] is None, row
         assert tune["best"] is not None and tune["best"] is not row, tune["best"]
         _assert_only_the_winner_row_was_written(
             tune, summary, rows, abandoned=abandoned)
@@ -752,8 +752,8 @@ def test_tune_keeps_no_row_for_a_mismatching_combination():
             cli.DEFAULT_ATOL + cli.DEFAULT_RTOL), row
         assert [item for item in tested if item.get("mismatch")] == [row], (
             "MISMATCH 只该挑出注入的那一组", tested)
-        measured = [item for item in tested if item.get("median_ms") is not None]
-        assert min(measured, key=lambda item: item["median_ms"]) is row, (
+        measured = [item for item in tested if item.get("wall_ms") is not None]
+        assert min(measured, key=lambda item: item["wall_ms"]) is row, (
             "注入的假耗时必须让 MISMATCH 组成为最快的那一组")
         assert tune["best"] is not None and tune["best"] is not row, (
             "MISMATCH 组不得被选为 best", tune["best"])

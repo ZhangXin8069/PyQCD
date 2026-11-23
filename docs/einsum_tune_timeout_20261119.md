@@ -14,19 +14,20 @@
 
 ## 1. 三条硬结论（先背下来）
 
-1. **`--tune-timeout` 是尽力而为（best-effort）上限，不是硬超时**。实现是
-   `signal.setitimer` + `SIGALRM`，处理器只在**回到解释器**时派发；调用卡在原生 C/CUDA
-   代码里时，闹钟到期也只是一次"迟到的配送"。
+1. **缺省路线是子进程硬上限，进程内路线才是 best-effort**。缺省每组在全新解释器中
+   运行，父进程可 `killpg`，因此能打断原生 C/CUDA；只有
+   `PYQCD_EINSUM_TUNE_INPROCESS=1` 才退回 `signal.setitimer` + `SIGALRM`，其处理器只在
+   **回到解释器**时派发。
 2. **`fork` 子进程隔离在这台机器上不可用**：父进程只要碰过 CUDA，fork 出来的子进程
-   第一次 `cupy.asarray` 就是 `cudaErrorInitializationError`。想硬超时只剩 `spawn`
-   （每组重建上下文），代价见 §6。
+   第一次 `cupy.asarray` 就是 `cudaErrorInitializationError`。现行实现用 `spawn`
+   全新解释器，代价见 §6。
 3. **"tune 卡死无输出"最常见的两个位置，都不是收缩内核**：一是 `_tune_reference` 那次
    完整 `np.einsum`（发生在任何超时保护之外），二是 `optimal` 的穷举规划（纯 Python，
    但可能几十秒）。先按 §3 的四步定位，再动代码。
 
 ---
 
-## 2. 能力边界：实测表（别写成"硬超时"）
+## 2. 进程内路线的能力边界（2026-11-19 实测）
 
 `_guarded_call(call, limit, ...)`，`limit = 0.3 s`，本机 2026-11-19：
 
@@ -37,8 +38,8 @@
 | 用户实测：`--tune` 一条 10 算子方程，`STAT=Rl+` / `%CPU=100` / `GPU 0%` | **3 分钟以上** `[转述]` | — | 闹钟完全不生效 |
 | 非主线程 / 无 `SIGALRM` 平台 | 跑完才判 | `timer=posthoc` | 退化路径，如实标注 |
 
-判据：**按"能否回到解释器"分档**，不按"耗时长不长"分档。写文档时只能说
-"能打断 Python 侧长循环、打不断原生 C/CUDA"，并且必须同时给可操作替代
+判据：**按"能否回到解释器"分档**，不按"耗时长不长"分档。进程内路线只能写
+"能打断 Python 侧长循环、打不断原生 C/CUDA"，并同时给可操作替代
 （把上限取足够大 / 先跑 `--tune pass`）。含糊句（"可能打断原生内核"、"建议在新进程里跑
 tune"）**禁止**出现——前者把能力说反又等于没说，后者把问题推给用户，而且本机根本做不到。
 契约 `pyqcd/testing/_einsum_tune_timeout_doc_contract.py` 逐字钉住这三处口径。
@@ -64,9 +65,9 @@ tune"）**禁止**出现——前者把能力说反又等于没说，后者把�
 
 ## 4. 超时粒度：为什么是"组级窗口"
 
-一组有 `1 + warmup + rounds` 次调用（缺省 `warmup=1`、`rounds=5` → **7 次**）。若按
-"每一次调用装一个上限"，最坏情况会把 `7 × limit` 全花光，而且与 `min_wall_ms` 剪枝
-**不同口径**（剪枝看的是整组中位）。
+一组有 `1 + warmup + rounds` 次调用（缺省 `warmup=1`、`rounds=3` → **5 次**），组级
+窗口缺省为 `15 × 5 = 75 s`。若按"每一次调用装一个上限"，最坏情况仍会把
+`5 × limit` 全花光，而且与 `min_wall_ms` 剪枝 **不同口径**（剪枝看整组样本最小值）。
 
 现行实现：
 
@@ -81,11 +82,11 @@ seconds = _timed(lambda: _guarded_call(
 
 1. 窗口是**整组预算**，不是"每次调用都必须在上限内"。单次调用超过 `limit` 但整组没超
    预算时**不会被判 timeout**——这是刻意的（否则一个慢 warmup 会废掉整组）。
-2. `--help` 的 `help.tune_timeout` 文案仍写"每一次 `contract()` 调用的上限"，与实现对不上；
-   下次改文案时一并修（本轮只写文档与注释，未动那串文案）。
+2. 文案必须同时说清缺省子进程硬上限和进程内 best-effort 边界，否则用户会把两条路线
+   混成一条。
 
 判据：**改粒度之前先问"这个上限与谁同口径"**。与 `min_wall_ms` 同口径 → 整组预算；
-与"单次调用不得超时"同口径 → 那就要接受 `7 × limit` 的代价，并把它写清楚。
+与"单次调用不得超时"同口径 → 那就要接受 `5 × limit` 的代价，并把它写清楚。
 
 ---
 
@@ -133,11 +134,10 @@ fork child result: ('error', 'CUDARuntimeError: cudaErrorInitializationError: in
 | `python -c "import cupy"` | 243.6 ms |
 | `import cupy` + 建 CUDA 上下文 + 一次 `matmul` | **497.6 ms**（min 425.4 / max 1174.5） |
 
-也就是说 22 组要多付 **约 11 s**（GPU 上还会更多），而且操作数要么落盘（`np.save`
-逐位无损）要么重建。仓库里 `pyqcd/einsum/_tune_worker.py` 就是这条路线的**孤立实现**：
-它没有调用方，docstring 里引用的 `pyqcd.einsum.test._run_group_in_subprocess`
-**并不存在**（全仓 grep = 0）。要做硬超时，接它之前先把这两件事说清：操作数怎么传、
-进程启动开销怎么记进报告。
+也就是说现行 28/29 组要多付 **约 14–15 s**（GPU 上还会更多），而且操作数要落盘
+（`np.save` 逐位无损）再按后端载入。`pyqcd/einsum/_tune_worker.py` 已是现行子进程
+路线的执行端，`_tune_runner.py` 负责启动、暂存、强杀与启动开销报告；这些开销明确
+**不计入 `wall_ms`**。
 
 > `[转述]` 任务书里的"spawn 每组约 1.7 s"本轮**未复现**：本机实测约 0.50 s（含一次
 > CUDA gemm）。引用他人数字时必须标来源与本机是否复现。
@@ -172,13 +172,13 @@ as_equivalence=True  kernel_force=topology -> OK rel=1.54e-16
 
 | 输入 | 语义 |
 |---|---|
-| 留空（裸 `--tune`）/ `true` / `True` / `all` | **完整模式**：分支探测 → 有序清单（B1/B2 = 22 组、B3 = 21 组）→ `min_wall_ms` 剪枝 → 参照校验 |
-| `pass` | **快速通过**：强制 B3 那条线（21 组、无 `topology`）、`as_equivalence` 全 `false`、`--compare` 全关、不跑参照、不判 MISMATCH，表尾注"pass 模式：跳过数值校验" |
+| 留空（裸 `--tune`）/ `true` / `True` / `all` | **完整模式**：分支探测 → 有序清单（B1/B2 = 29 组、B3 = 28 组）→ `min_wall_ms` 剪枝 → 参照校验 |
+| `pass` | **快速通过**：强制 B3 那条线（28 组、无 `topology`）、`as_equivalence` 全 `false`、`--compare` 全关、不跑参照、不判 MISMATCH，表尾注"pass 模式：跳过数值校验" |
 | 不给 / `false` / 空串 | 不遍历，只读配置表 |
 
 实测（`ab,bc,cd->ad`，CPU、`--profile false`）：`pass` 模式共 **9 行** `tune init :`
 （其中 `branch probe` / `kernel admission` / `first group` **三对**起止成对，其余
-`mode` / `shapes ok` / `session start` 各一行）、遍历 21 组、末行
+`mode` / `shapes ok` / `session start` 各一行）、遍历 28 组、末行
 `mode: pass 模式：跳过数值校验`。
 
 判据：**"不给"≠"给 true"**，而 `_as_bool("pass")` 是 `False`——任何新入口都必须走
@@ -190,10 +190,10 @@ as_equivalence=True  kernel_force=topology -> OK rel=1.54e-16
 
 ### 9.1 三处文案必须同口径
 
-`--help` 的 `help.tune_timeout`、tune 启动时的 `tune note :`（`tune.signal_note`）、模块
-docstring 的「超时与预算」段——三处都要写"尽力而为、打不断原生 C/CUDA"并给
-"`--tune pass` / 取足够大"的可操作建议。契约逐字校验（4 项，含"整份源码里不得出现
-含糊句"）。
+`--help` 的 `help.tune_timeout`、tune 启动时的 `tune note :`、模块 docstring 的
+「超时与预算」段——三处都要区分"缺省子进程硬上限"与"进程内 best-effort、打不断原生
+C/CUDA"，并给 "`--tune pass` / 取足够大" 的可操作建议。契约逐字校验（4 项，含
+"整份源码里不得出现含糊句"）。
 
 ### 9.2 性能页必须自证口径
 

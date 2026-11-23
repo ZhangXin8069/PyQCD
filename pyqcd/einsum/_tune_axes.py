@@ -7,14 +7,15 @@
 建不出来），而且笛卡尔积的**顺序**会把最慢的档排在前面——一次遍历有一半时间花在
 永远不会有结果的格子上。这里改成一条**按实测价值排序的清单**：
 
-1. 共同前缀（``as_equivalence=false``，``dedicated`` → ``generic``，每个内核内按
-   ``greedy/branch_1/branch_2/dp/branch_all/optimal/none``）：把最容易跑、最可能快的
-   格子放在最前，让 :class:`MinWall` 的上界尽早被压低，后面的格子一超界就直接终止。
+1. 共同前缀（``as_equivalence=false``，``original`` → ``dedicated`` → ``generic``，
+   每个内核内按 ``greedy/branch_1/branch_2/dp/branch_all/optimal/none``）：
+   ``original`` 是唯一吃满七个 optimize 叶子的路线，先跑它可让
+   :class:`MinWall` 的上界尽早被压低，后面的格子一超界就直接终止。
 2. 分支专属的一条（只有 ``as_equivalence=false`` 时原方程能特化 → 试 ``topology``；
    原方程不能特化但等价写法能 → 那条必须带 ``as_equivalence=true``；两者都不行 → 不试）；
 3. 尾部 ``backend``（后端自带的 einsum，永远可跑，作为兜底基准）。
 
-组数是**冻结口径**：``B1``/``B2`` = 22，``B3`` = 21。顺序逐项固定，改顺序就是改规范
+组数是**冻结口径**：``B1``/``B2`` = 29，``B3`` = 28。顺序逐项固定，改顺序就是改规范
 ——``--tune`` 的剪枝结论与 ``best`` 都建立在"先跑哪些格子"上。
 """
 from __future__ import annotations
@@ -113,7 +114,7 @@ def plan_without(combos: Sequence[tuple[str, str, str]],
 
     只有"这台机器根本给不了这条路线"才该走到这里：原生库缺失/被开关关掉、dtype 没有
     步表路径、torch 后端给不了 numpy/cupy 数组。那种情况下逐组跑一遍只会得到同一句
-    错误的 N 份副本（2026-11-18 用户实测：22 组里 8 组是这种噪音）。
+    错误的 N 份副本（2026-11-18 当轮清单里 8 组是这种噪音；现行清单已扩到 29/28 组）。
 
     **收益/预算判据不在这里**（2026-11-19 用户裁定）：arena、单步 GEMM、pack 流量
     这些门是**自动分派**的选路策略，不是能力上限——``--tune`` 的语义是"把这张网格上
@@ -144,7 +145,7 @@ def trimmed_plan_size(branch: str, unavailable: Iterable[str] | None = None) -> 
 #: 用户给的规则原文，报告里要能 grep 到同一串字）。
 TERMINATION_MESSAGE = "耗时大于min_wall_ms,此组被终止"
 
-#: 剪枝截止 = 这个倍数 × 当前 ``min_wall_ms``。**1.0 = 直接用最快那一组的中位**
+#: 剪枝截止 = 这个倍数 × 当前 ``min_wall_ms``。**1.0 = 直接用最快那一组的最小值**
 #: （2026-11-21 用户裁定"单测试项时间限制改回原 min_wall_ms"）。
 #:
 #: 历史：2026-11-19 曾改成 2× 以避免抖动误杀（同一配置连续两组的抖动实测有 10–20%），
@@ -178,7 +179,7 @@ class MinWall:
     ``config`` 是压低它那一组的 ``(kernel_force, as_equivalence, optimize)``。
 
     真正的**截止**是 :attr:`cutoff_ms` = ``factor × ms``（:data:`MIN_WALL_FACTOR`
-    = 2.0，用户规则）。``ms`` 本身仍是记录下来的实测中位，报告与配置表里的那个数
+    = 1.0）。``ms`` 本身仍是记录下来的样本最小值，报告与配置表里的那个数
     ——两件事必须分开，否则"最终 best 是 A、截止却按 B 算"。
 
     ``ms is None`` 有两个来源，语义相同——**不设上界、一组都不剪**：

@@ -26,10 +26,9 @@
    需求 #5：剪枝截止**就是 ``min_wall_ms`` 本身**（1×，2026-11-21 改回原口径）。
 6. ``test_record_table_replaces_and_stays_out_of_dispatch``
    需求 #6：记录表文件名/列集合/整表重写语义，且 ``_api`` 一次都不读它（纯报告）。
-7. ``test_cli_defaults_are_zero_warmup_and_one_round``
-   需求 #7：``DEFAULT_WARMUP == 0`` / ``DEFAULT_ROUNDS == 1``（argparse 与函数缺省同步），
-   且"0 合法、负数非法"这条边界真的成立（显式 ``--warmup 0`` 跑得通、``-1`` 退出码 2、
-   加速设备上 0 不被抬）。
+7. ``test_cli_defaults_are_one_warmup_and_three_rounds``
+   需求 #7：``DEFAULT_WARMUP == 1`` / ``DEFAULT_ROUNDS == 3``（argparse 与函数缺省同步），
+   且"0 合法、负数非法"这条边界仍然成立。
 8. ``test_cheaper_memory_hint_is_gone``
    需求 #8（2026-11-21 反转）："更省内存/显存"提示**已删除**，``_api`` 不再读记录表。
 9. ``test_autotune_runs_once_per_key_on_first_call``
@@ -378,8 +377,15 @@ def _subprocess_env(home: str, xdg: str | None) -> dict[str, str]:
         env["XDG_CACHE_HOME"] = xdg
     # ``cwd`` 可能被换到临时树里，所以显式把仓库根放进 ``PYTHONPATH``。
     repo_root = _repo_root()
+    # Changing ``HOME`` disables the parent's user-site discovery. Preserve the
+    # directory that supplied the already-imported numpy so the child can import
+    # ``pyqcd.einsum`` for the same reason the test process can.
+    dependency_site = os.path.dirname(os.path.dirname(os.path.abspath(np.__file__)))
+    paths = [repo_root, dependency_site]
     existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = repo_root + (os.pathsep + existing if existing else "")
+    if existing:
+        paths.append(existing)
+    env["PYTHONPATH"] = os.pathsep.join(paths)
     return env
 
 
@@ -650,7 +656,7 @@ def test_peak_memory_is_measured_and_rendered_per_group() -> None:
     cli = _cli()
     row = {"kernel_force": "generic", "as_equivalence": "false",
            "optimize": "greedy", "backend": "numpy", "dtype": "complex128",
-           "device": "cpu", "median_ms": 1.5, "peak_memory_mb": 12.0,
+           "device": "cpu", "wall_ms": 1.5, "peak_memory_mb": 12.0,
            "reason": "ok"}
     lines = cli.tune_comb_lines(1, 1, row)
     text = "\n".join(lines)
@@ -791,41 +797,36 @@ def test_record_table_replaces_and_stays_out_of_dispatch() -> None:
 
 
 # ── 7. warmup=1 / rounds=3 ──────────────────────────────────────────────────
-def test_cli_defaults_are_zero_warmup_and_one_round() -> None:
-    """需求 #7：``DEFAULT_WARMUP == 0`` 且 ``DEFAULT_ROUNDS == 1``（2026-11-20 用户裁定）。
+def test_cli_defaults_are_one_warmup_and_three_rounds() -> None:
+    """需求 #7：``DEFAULT_WARMUP == 1`` 且 ``DEFAULT_ROUNDS == 3``。
 
     除了两个模块常量，还要钉住 argparse 与 ``run()`` / ``run_tune()`` 的函数缺省——
-    三处必须同时是 0 / 1。
+    三处必须同时是 1 / 3。
 
     为什么它会回归：这是"一次 tune 每组做几次调用"的唯一来源，它同时决定
-    ``组级窗口 = --tune-timeout × (1 + warmup + rounds)``。用户在生产形状上实测
-    单组 ``dedicated/false/greedy`` 在 1/3 下要 **40.1 s**、29 组就是十几分钟，
-    因此缺省改成"不预热、只测一次"。反过来也一样要钉：有人为了"更稳"把它调回
-    1/3，遍历立刻慢 4 倍，而报告字面上看不出来。
+    ``组级窗口 = --tune-timeout × (1 + warmup + rounds)``。
     """
     cli = _cli()
 
-    assert cli.DEFAULT_WARMUP == 0, (
-        f"DEFAULT_WARMUP 必须是 0，实际 {cli.DEFAULT_WARMUP!r}"
-        "（用户裁定：预热缺省零次；要稳态数字就显式给值）")
-    assert cli.DEFAULT_ROUNDS == 1, (
-        f"DEFAULT_ROUNDS 必须是 1，实际 {cli.DEFAULT_ROUNDS!r}"
-        "（用户裁定：重复轮次缺省一次，即每格只测一次）")
+    assert cli.DEFAULT_WARMUP == 1, (
+        f"DEFAULT_WARMUP 必须是 1，实际 {cli.DEFAULT_WARMUP!r}")
+    assert cli.DEFAULT_ROUNDS == 3, (
+        f"DEFAULT_ROUNDS 必须是 3，实际 {cli.DEFAULT_ROUNDS!r}")
     assert isinstance(cli.DEFAULT_WARMUP, int) and isinstance(cli.DEFAULT_ROUNDS, int), (
         type(cli.DEFAULT_WARMUP), type(cli.DEFAULT_ROUNDS))
 
     parser = cli.build_parser(language="en")
     args = parser.parse_args(["--equation", "ij,jk->ik",
                               "--shape", "[4,4],[4,4]"])
-    assert args.warmup == 0, ("argparse 的 --warmup 缺省没跟上（应为 0）", args.warmup)
-    assert args.rounds == 1, ("argparse 的 --rounds 缺省没跟上（应为 1）", args.rounds)
+    assert args.warmup == 1, ("argparse 的 --warmup 缺省没跟上（应为 1）", args.warmup)
+    assert args.rounds == 3, ("argparse 的 --rounds 缺省没跟上（应为 3）", args.rounds)
 
     for function, label in ((cli.run, "run"), (cli.run_tune, "run_tune")):
         parameters = inspect.signature(function).parameters
-        assert parameters["warmup"].default == 0, (
-            f"{label}() 的 warmup 缺省必须也是 0", parameters["warmup"].default)
-        assert parameters["rounds"].default == 1, (
-            f"{label}() 的 rounds 缺省必须也是 1", parameters["rounds"].default)
+        assert parameters["warmup"].default == 1, (
+            f"{label}() 的 warmup 缺省必须也是 1", parameters["warmup"].default)
+        assert parameters["rounds"].default == 3, (
+            f"{label}() 的 rounds 缺省必须也是 3", parameters["rounds"].default)
 
 
 # ── 8. "更省内存"提示已删除 ──────────────────────────────────────────────────
@@ -957,7 +958,7 @@ TESTS = (
     test_peak_memory_is_measured_and_rendered_per_group,
     test_prune_cutoff_equals_min_wall_ms,
     test_record_table_replaces_and_stays_out_of_dispatch,
-    test_cli_defaults_are_zero_warmup_and_one_round,
+    test_cli_defaults_are_one_warmup_and_three_rounds,
     test_cheaper_memory_hint_is_gone,
     test_autotune_runs_once_per_key_on_first_call,
 )

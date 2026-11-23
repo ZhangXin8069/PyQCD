@@ -228,6 +228,17 @@ send it back to the generic path. For what actually ran, read the `route` /
 
 ## Version summary
 
+* **0.5.19** — the `qcd-einsum` measurement defaults are now `warmup=1`,
+  `rounds=3`, `tune-timeout=15`, and `tune-budget=1000`. Every reported
+  `wall_ms` is the **minimum** of the measured samples, and the deprecated
+  `median_ms` / `median_s` wall-time compatibility aliases are removed. Tune
+  workers are pinned to the caller's PyQCD source root so a temporary working
+  directory cannot silently load another installation. CLI help, the user
+  guide, performance pages, diagnostics, and internal contracts are synchronised
+  with these defaults. The CUDA archive now links only cuBLAS/CUDA runtime
+  libraries, so it no longer fails to load on GPU nodes that lack the build
+  host's OpenBLAS; a validated CUDA topology archive also counts as a native
+  backend in `build_info()` even when the optional Cython module is absent.
 * **0.5.18** — documentation-only release: the acknowledgements now thank
   the Lattice QCD Group at the Institute of Modern Physics, Chinese Academy
   of Sciences (https://www.lattice-qcd-at-imp.top/) as a whole, replacing the

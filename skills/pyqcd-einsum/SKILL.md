@@ -110,16 +110,16 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 |---|---|---|
 | `--device` | `cpu` | cpu / gpu / cuda |
 | `--dtype` | `complex128` | complex128 / complex64 / float64 / float32（四类平权） |
-| `--backend` | `auto` | auto / numpy / cupy / torch / kupl / cuda |
-| `--compare` | `numpy` | numpy / opt_einsum / **backend**（跨后端互证）/ none |
+| `--backend` | `auto` | 数组库 auto / numpy / cupy / torch；原生 KUPL/CUDA 由 `--kernel-force` 选择 |
+| `--compare` | `none` | opt_einsum / **backend**（跨后端互证）/ none |
 | `--compare-optimize` | `auto` | **只作用于参照**的优化器：auto / greedy / dp / optimal / branch-all / branch-2 / branch-1。auto = 沿用旧行为（numpy→`greedy`；opt_einsum→`greedy` 或跟随 `--optimize`）。**不跨库重映射**：numpy 只认 `greedy`/`optimal`（`dp`/`branch-*` 报用法错误，退出码 2），opt_einsum 按 `oe.paths` 注册表校验；`--compare backend`/`none` 下无效（仅提示） |
-| `--optimize` | `auto` | 同 `contract(optimize=...)`，**只管主路径** |
+| `--optimize` | 不写（内部选择 `auto`） | 7 个可写叶子；`auto` 是缺省选择器而非可写取值，**只管主路径** |
 | `--specialize` | `auto` | auto / true / false：auto 跟随 `PYQCD_EINSUM_SPECIALIZE`；true 强制特化；**false 强制通用路径**（排查原生内核问题的第一手段） |
 | `--equivalence` | `auto` | auto / true / false：auto 跟随 `PYQCD_EINSUM_EQUIVALENCE`（缺省开启，`0` 关闭）。未命中特化但存在等价写法时，`--verbose true` 给出改写后的方程 + **输入侧张量调整** + **输出侧结果回填**（无则 `-`）；已命中不出该段，无等价写法明写「无」。`--json` 带 `equivalence` 字段。**只做报告**：不改 `contract()` 行为、耗时与数值 |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一） |
 | `--rtol` | `0` | 附加相对余量 |
-| `--rounds` | `5` | 计时轮数（中位） |
-| `--warmup` | `1` | 预热丢弃次数，**不允许 0** |
+| `--rounds` | `3` | 计时轮数；报告取这些样本的**最小值** |
+| `--warmup` | `1` | 预热丢弃次数；`0` 仍可显式选择，用于测量冷启动 |
 | `--seed` | `0` | 操作数随机种子 |
 | `--verbose` | `false` | 明细打到 stderr |
 | `--language` | `auto` | 输出语言：`auto` / `en` / `zh-cn`。`auto` 只在 `PYQCD_EINSUM_LANG` 显式设了时跟随（`en*`/`zh*`），未设时为**中文**（缺省行为零变化，不跟随 locale）；只改文案，不改结果、不改 `--compare`、不写环境变量 |
@@ -129,8 +129,9 @@ python -m pyqcd.einsum.test --device gpu --dtype complex128 \
 **两条不可协商的口径**：
 
 1. `--atol` 是**相对**容差，不是 `np.allclose` 的逐元素绝对阈值（后者误判近零元素）。
-2. **warmup 不得为 0**：首调包含 plan 缓存 + 原生库绑定 + JIT，与热态不是一个量级。
-   实测对比与倍数只在 `pyqcd/einsum/AGENTS.md` §9.0 的 warmup 论证里，**本卡不复述数字**。
+2. **warmup 缺省为 1**：首调包含 plan 缓存 + 原生库绑定 + JIT，与热态不是一个量级；
+   `--warmup 0` 仍允许，语义是用户明确把冷启动计入样本。实测对比与倍数只在
+   `pyqcd/einsum/AGENTS.md` §9.0 的 warmup 论证里，**本卡不复述数字**。
 
 **输出里的 `kernel` 字段最有用**：直接给出实际原生路线
 （`kupl_dedicated` / `cuda_topology` / `kupl_topology` / `kupl_topology_v2`），
@@ -246,26 +247,27 @@ MISS 时本入口会查"换个写法能不能命中特化路径"（`pyqcd/einsum
 **它只改选路，不改数值。** 结果是哪条路算的永远等价，所以靠数值测试抓不到它的
 缺陷——判断它有没有生效只能看 `last_kernel()` 或报告里的 `kernel :` 行。
 
-### 取值（四种，全部是**强制**值——没有 `auto`）
+### 取值（五种，全部是**强制**值——没有 `auto`）
 
 | 取值 | 行为 | 失败时 |
 |---|---|---|
 | `generic`（缺省） | 完全跳过专用内核（= 不给该选项） | 不产生 warning（等价 `specialize=False`） |
 | `dedicated` | 只准**当前后端的** dedicated（numpy → `kupl_dedicated`，cupy → `cuda_dedicated`） | 抛 `KernelUnavailableError`，**绝不**回落 |
 | `topology` | 只准**当前后端的** topology（同上，`kupl_` / `cuda_`） | 同上 |
+| `original` | 交给 `opt_einsum.contract`；吃 `--optimize`，但不进专用分派 | `opt_einsum` 缺失或后端不支持时抛错 |
 | `backend` | 直接调后端自己的 `einsum`，**不进**专用分派（与其它取值互斥） | 后端自己抛什么就是什么 |
 
 `dedicated` / `topology` 是**逻辑名**（`_kernel_force.KERNEL_LABELS`），具体标签由操作数
-后端在运行时解析——不要再写死 `kupl_dedicated` 这类名字（已不合法）。逗号可给多个、
-按书写次序尝试（`topology,dedicated`）。写错取值不会静默忽略——`ValueError` 里列出
-合法集合 `backend, dedicated, generic, topology`。
+后端在运行时解析——不要再写死 `kupl_dedicated` 这类名字（已不合法）。每个入口只接受
+单个取值，逗号链已取消。写错取值不会静默忽略——`ValueError` 里列出合法集合
+`backend, dedicated, generic, original, topology`。
 
 > **为什么没有 `auto`（2026-11-18 用户决策）**：`kernel_force` 是**强制**属性，不该有
 > "未指定 → 自动分派"的隐藏档。自动选路交给 `--tune` 的**实测结论**：tune 在同一
-> 方程/形状/dtype/设备/后端上遍历 `kernel_force × as_equivalence × optimize`
-> （4 × 2 × 3 = 24 组），把胜出那一组写进配置表，普通调用按表施加。留 `auto` 会让
+> 方程/形状/dtype/设备/后端上遍历分支化有序清单（`B1/B2 = 29` 组、`B3 = 28` 组），
+> 把胜出那一组写进配置表，普通调用按表施加。留 `auto` 会让
 > "运行时猜的分派次序"与"表里的实测结论"两套规则互相竞争，而报告里看不出谁说了算。
-> 写 `auto`（大写、或混在逗号列表里）直接报错，消息点名 **tune** 并列出四个合法值。
+> 写 `auto`（大写或任何未知拼写）直接报错，消息点名 **tune** 并列出五个合法值。
 > `0/false/off/no` 这类"关掉"的旧拼写只映射到 `generic`，不是 `auto` 的替身。
 
 **旧写法要迁移**（这几条现在直接报用法错误）：
@@ -277,7 +279,7 @@ MISS 时本入口会查"换个写法能不能命中特化路径"（`pyqcd/einsum
 
 > **与 `docs/einsum_production_optimization_20261112.md` 不冲突（2026-11-18 复核）**：
 > 那份文档通篇只用 `generic` / `dedicated` 表示**运行时路径**（`kupl_dedicated` 等），
-> 没有把旧值当合法输入写过。口径：**输入侧**只认上表四个强制值（`_kernel_force.ALLOWED_LABELS`），
+> 没有把旧值当合法输入写过。口径：**输入侧**只认上表五个强制值（`_kernel_force.ALLOWED_LABELS`），
 > **输出侧**（`LAST_INFO['path']` / `route :`）仍是 `kupl_*` / `cuda_*`。有疑义以代码为准，
 > 内部契约见 `pyqcd/einsum/AGENTS.md` §9.1b。
 
@@ -408,13 +410,14 @@ PYQCD_EINSUM_KERNEL_FORCE=topology python -m pyqcd.einsum.test \
 真要验证内核能不能跑，只能用 `python -m pyqcd.einsum.test --kernel-force <value>`。
 
 契约：`python -B -m pyqcd.testing._einsum_kernel_force_explicit_contract`（5 项，取值口径：
-`auto` 报错并点名 tune、缺省 `generic`、CLI 缺省、环境变量 `auto` 报错、四标签次序）。
+`auto` 报错并点名 tune、缺省 `generic`、CLI 缺省、环境变量 `auto` 报错、五标签次序）。
 旧的 `_einsum_kernel_force_contract`（9 项）仍断言 `auto` 三态，待随 `_api` 接线重基线。
 
 ## 配置表：怎么用 / 怎么排查（2026-11-17 TV 重设计）
 
 `pyqcd/einsum/_profile_cache.py` 维护**一张**配置表 **`pyqcd.einsum.profile.csv`**
-（当前工作目录的 `./.cache/`，或 `profile_dir` / `PYQCD_EINSUM_PROFILE_DIR` 指定的目录）。
+（缺省 `$XDG_CACHE_HOME/pyqcd.einsum/`，未设时为 `~/.cache/pyqcd.einsum/`，或
+`profile_dir` / `PYQCD_EINSUM_PROFILE_DIR` 指定的目录）。
 它把 tune 标定出的 `(shape, dtype, device, equation, backend)` → `(kernel, optimize,
 wall_ms)` 落成一行 CSV；下一次同键调用用**一次顺序读**换掉重复的试跑与匹配。它**只改
 选路建议、不改数值**：方程、dtype、形状与结果都不动，关掉它永远不会有数值差异。
@@ -444,7 +447,7 @@ python -m pyqcd.einsum.test --device <device> --dtype <dtype> --equation "<equat
 
 | 我想… | 敲什么 |
 |---|---|
-| 用缺省（开，CSV 落在**当前工作目录**的 `./.cache/`） | 什么都不做（`--profile auto` 等于不给） |
+| 用缺省（开，CSV 落在用户缓存目录） | 什么都不做（`--profile auto` 等于不给） |
 | 换缓存目录 | `PYQCD_EINSUM_PROFILE_DIR=/path/to/dir …` 或 `--profile-dir /path/to/dir` |
 | 整进程关掉（不读不写不建目录） | `PYQCD_EINSUM_PROFILE=0 …` |
 | 只管这一次关掉 | CLI `--profile false`；API `contract(…, profile=False)` |
@@ -456,7 +459,7 @@ CLI 只有 `test.py` 有这两个选项：`--profile {auto,true,false}`（缺省
 收缩、也从不读画像。
 
 **`profile_dir` 的"保持"语义**：省略它（`None` 与空串都算"未给"）**不会**回到
-`PYQCD_EINSUM_PROFILE_DIR` 或 `./.cache`，而是保持已经钉住的目录——`_api` 只在
+`PYQCD_EINSUM_PROFILE_DIR` 或缺省用户缓存目录，而是保持已经钉住的目录——`_api` 只在
 `profile_dir` 为真时调 `configure()`，否则调 `ensure_configured()`，后者"只补齐、不改写"
 （`_api.py:1114-1115`）。所以第一次传 A、之后不传仍是 A；想换只能显式传另一个目录，
 而换目录 = 换一张表（解析缓存按路径失效）。只有从未配置过的首次调用才解析
@@ -551,9 +554,9 @@ shape,dtype,device,equation,backend,kernel,optimize,wall_ms,target_equation,oper
 | 旧文件还在，为什么完全没用 | `profile.csv` 是旧名，`profile_compare.csv` / `profile_equivalence.csv` 已删除——新代码都不读。重新 tune |
 | 想把配置表整个作废 | 删掉 `pyqcd.einsum.profile.csv`（或换 `PYQCD_EINSUM_PROFILE_DIR`） |
 
-**`.cache` 不要提交**：默认目录 `./.cache`（`_profile_cache.DEFAULT_DIR`）里是主机名、
-方程与形状；根 `.gitignore` 的 `.*` 规则已忽略它（`git check-ignore -v
-.cache/pyqcd.einsum.profile.csv` 复核），`MANIFEST.in` 也不收录任何缓存目录。
+**用户缓存不要提交**：默认目录 `~/.cache/pyqcd.einsum`（`_profile_cache.DEFAULT_DIR`）
+里是主机名、方程与形状；`MANIFEST.in` 不收录任何缓存目录。旧工作树位置
+`./.cache/pyqcd.einsum.profile.csv` 仅作为只读回退来源。
 
 想强制"这次完全按我的来，别读表"：`contract(..., profile=False, kernel_force="dedicated")`。
 想确认进程里表的状态：`p.summary()`（只读快照；读表本身是纯字典查找）。
@@ -575,8 +578,8 @@ shape,dtype,device,equation,backend,kernel,optimize,wall_ms,target_equation,oper
 - **`as_equivalence` 缺省 `auto`**：有 tune 写的等价标记行才改写；没有标记行、表缺失、
   缓存关闭、未命中都**不改写**。`true` / `false` 是显式强制，`force` 供 tune 刷新。
 - **tune 期间缓存关闭**：`tune_session()` 让读一律未命中、写静默不写；`--tune-timeout`
-  缺省 30 s，异常 / 超时 / MISMATCH **只打印不退出**；遍历
-  `as_equivalence × optimize`（`{auto, none, compare 目标}`）共 10 组，写入选优行并
+  缺省 15 s、`--tune-budget` 缺省 1000 s，异常 / 超时 / MISMATCH **只打印不退出**；
+  遍历分支化有序清单（`B1/B2 = 29` 组、`B3 = 28` 组），写入选优行并
   **删同键其它所有行（含更快的历史行）**，防异环境污染。
 
 ## 强制工作流
@@ -1848,6 +1851,20 @@ dim=16→5.54 MB(L3)、dim=24→38 MB(DRAM)。
    `grep -rn "mpi4py\|MPI\." pyqcd/ --include="*.py"` 判据，删除后只应命中
    明确写“已删除/不提供”的说明文档字符串。
 
+### CUDA 归档不得链接 OpenBLAS（2026-11-24）
+
+CUDA 归档的 GEMM 全部走 cuBLAS；共享的 plan/runtime 源不引用 CBLAS。曾经为了
+"统一依赖"把 `make-nv.sh` 也接上 `_discover_openblas`，结果 `gpu-debug` 的 A100
+能看见设备，但 `ctypes.CDLL` 因 `libopenblas.so.0: cannot open shared object file`
+失败，probe 误报 `native_available=False`。判据：
+
+- `ldd cpp/cuda/einsum/libpyqcdeinsum_cuda.so` 只能出现 `libcublas` /
+  `libcudart` 等 CUDA 依赖，不得出现 `libopenblas`；
+- `nm -D --undefined-only` 不得出现 `cblas_*`；
+- CUDA topology 归档已校验导出时，`build_info()` 即使没有可选 Cython 模块也必须报
+  `backend=cuda`、`native_available=True`；
+- 契约：`_einsum_gpu_probe_diagnosis_contract`。
+
 验证（本机 2026-11-12）：`bash cpp/kupl/einsum/make.sh` → SUCCESS（7 源，
 导出 `applyPlanQcd/applyContractQcd/applyCompileQcd/applyCompiledQcd/applyDestroyQcd/
 applyInitQcd/applyEndQcd` + `qcd_kupl_{topology,dedicated,family}_apply`）；
@@ -1899,18 +1916,18 @@ applyInitQcd/applyEndQcd` + `qcd_kupl_{topology,dedicated,family}_apply`）；
 判据与流程：`docs/einsum_tune_timeout_20261119.md`；时间线：
 `logs/einsum-tune-timeout-20261119.txt`；`AGENTS.md` 对应小节 §9.1h。
 
-1. **`--tune-timeout` 是 best-effort，不是硬超时**：`SIGALRM` 只在字节码之间派发，
-   原生 C/CUDA 调用不返回解释器就永不触发。本机实测：纯 Python 循环 0.30 s 准点抛；
-   单次 **2.34 s** 的原生 BLAS、上限 0.3 s → **2.29 s 才抛（超限 1.99 s）**。文档只能
-   写"能打断 Python 长循环、打不断原生"，并给 `--tune pass` / 加大上限两条替代。
-2. **窗口是整组不是单次**：一组 `1+warmup+rounds`（缺省 **7**）次调用，装的是
-   `limit × 7` 的组级预算，才与 `min_wall_ms` 剪枝同口径；按单次设限会白花 `7 × limit`。
+1. **缺省是子进程硬超时，进程内路线才是 best-effort**：缺省每组在全新解释器中运行，
+   父进程可 `killpg`，因此能打断原生 C/CUDA；只有
+   `PYQCD_EINSUM_TUNE_INPROCESS=1` 才退回 `SIGALRM`，那时只能打断 Python 长循环。
+   本机实测进程内单次 **2.34 s** 的原生 BLAS、上限 0.3 s → **2.29 s 才抛**。
+2. **窗口是整组不是单次**：一组 `1+warmup+rounds`（缺省 `1+1+3 = 5`）次调用，装的是
+   `limit × 5` 的组级预算，才与 `min_wall_ms` 剪枝同口径；按单次设限会白花 `5 × limit`。
 3. **卡死先查两处非内核位置**：`_tune_reference` 的完整 `np.einsum`（在超时保护之外，
    按输入元素总数 `> 2_000_000` 跳过；生产方程实测 **2.56e8** 个元素）与 `optimal` 的
    纯 Python 穷举。定位靠 `tune init :` 起止行 + `STAT=Rl+/%CPU=100/GPU 0%`。
 4. **硬超时的两条路都别顺手换**：`fork` 在本机必失败（父进程碰过 CUDA 后子进程
    `cudaErrorInitializationError`）；`spawn` 每组全新解释器实测 **497.6 ms**（含一次
-   CUDA gemm，n=5，min 425.4 / max 1174.5）→ 22 组约 11 s 固定开销。
+   CUDA gemm，n=5，min 425.4 / max 1174.5）→ 现行 28/29 组约 14 s 固定开销。
 5. **语义顺序写死在 `_api.py`**：`as_equivalence=true` = "先改写成语料形态、再跑特化
    内核"。实测 `cbda,...->` 原方程 `kernel_force=topology` 必失败，同一条 `as_equivalence=true`
    → `rel=1.54e-16`。另：`equiv_ok` / `match` 命中只表示**签名命中**，CUDA 侧还有步表

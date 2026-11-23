@@ -180,7 +180,7 @@ from pyqcd.testing._einsum_profile_robustness_contract import (
 from pyqcd.testing._einsum_tune_equivalence_contract import (
     test_einsum_tune_equivalence_contracts,
 )
-# `--tune` **分支化有序遍历 + min_wall_ms 剪枝**（2026-11-18）：B1/B2 = 22、B3 = 21 组
+# `--tune` **分支化有序遍历 + min_wall_ms 剪枝**：B1/B2 = 29、B3 = 28 组
 # 且逐项顺序固定；上界初值 = --tune-timeout、被更小实测值立刻压低；超过上界的组被终止
 # （原文 `耗时大于min_wall_ms,此组被终止`）、不写缓存；best = 最小耗时组。
 from pyqcd.testing._einsum_tune_plan_contract import (

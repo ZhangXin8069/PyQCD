@@ -49,7 +49,7 @@ import json
 import os
 import sys
 import time
-from typing import Any
+from typing import Any, Sequence
 
 __all__ = ["run_job", "main", "Pruned", "SLEEP_ENV", "EXIT_ENV"]
 
@@ -133,21 +133,24 @@ def _filter_profile_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in kwargs.items() if key in names}
 
 
+def _sample_minimum(samples: Sequence[float]) -> float:
+    """Return the fastest observed call time."""
+    return min(float(item) for item in samples)
+
+
 def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
     """跑一组 ``warmup`` + ``rounds`` 次 ``contract()``，返回观察结果。
 
     ``mark_ready`` 在**第一次调用之前**被调用一次（父进程据此开始计 ``--tune-timeout``）。
-    返回的字典就是写进 ``result.json`` 的内容；父进程只认这几个键：``median_s`` /
+    返回的字典就是写进 ``result.json`` 的内容；父进程只认这几个键：``minimum_s`` /
     ``samples`` / ``shape`` / ``dtype`` / ``last_kernel`` / ``kernel_info`` /
     ``saved_output`` / ``output_skipped_bytes``。
 
     ``min_wall_ms``（可选）是组内剪枝**截止**（父进程按 ``MIN_WALL_FACTOR`` 乘过
-    当前最快中位）：**每一次**调用测到的墙钟超过它就抛
+    当前最快最小值）：**每一次**调用测到的墙钟超过它就抛
     :class:`Pruned`，不再跑完这一组。用户规则说的就是这个，只是执行位置在子进程里
     ——父进程没有办法打断正在进行的那一次调用。
     """
-    import statistics
-
     import numpy as np
 
     import pyqcd.einsum as pe
@@ -206,7 +209,7 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
     clear_records()
     # ``wall_s`` 必须由**本进程**测：父进程只看得见 ``ready`` 文件什么时候出现，而轮询
     # 粒度是毫秒级——一组只要跑得比这个粗，父进程量出来的"从 ready 到现在"就可能是
-    # 微秒级的假数（甚至比 ``median_s`` 还小）。这里从 mark_ready 之前起表，到样本
+    # 微秒级的假数（甚至比 ``minimum_s`` 还小）。这里从 mark_ready 之前起表，到样本
     # 全部跑完为止，是**受测时间区**的真实墙钟。
     # 峰值内存/显存：在**本组**第一次调用之前立基线（``reset_peak_memory``），
     # 组末读一次，然后 ``release_memory`` 把池/缓存还回去。逐组重置是必须的：
@@ -263,10 +266,11 @@ def run_job(job: dict[str, Any], mark_ready) -> dict[str, Any]:
     for _ in range(rounds):
         samples.append(measured())
     result = getattr(measured, "result", None)
+    minimum_s = _sample_minimum(samples)
 
     summary: dict[str, Any] = {
         "status": "ok",
-        "median_s": float(statistics.median(samples)),
+        "minimum_s": float(minimum_s),
         "samples": [float(item) for item in samples],
         "shape": list(np.shape(result)),
         "dtype": str(getattr(result, "dtype", "")),

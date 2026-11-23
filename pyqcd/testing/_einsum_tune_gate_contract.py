@@ -109,21 +109,17 @@ def test_plan_gate_rejects_normally_but_not_under_bypass() -> None:
 def test_group_window_is_the_single_call_limit_times_calls_per_group() -> None:
     """组级窗口 = ``--tune-timeout × (1 + warmup + rounds)``，不是单次上限本身。
 
-    用户实测的困惑正来自这里：``--tune-timeout`` 缺省 30 s，一组
-    ``1+0+1 = 2`` 次调用 → 窗口 **60 s**；看到 40 s 返回就以为"超时没生效"，
-    其实它离窗口还有一段。
+    ``--tune-timeout`` 缺省 15 s，一组 ``1+1+3 = 5`` 次调用 → 窗口 **75 s**。
     """
     from ..einsum import test as cli
 
     limit = float(cli.DEFAULT_TUNE_TIMEOUT)
     calls = 1 + cli.DEFAULT_WARMUP + cli.DEFAULT_ROUNDS
-    assert limit * calls >= 60.0, (
-        "缺省窗口应当是分钟量级（30 s × 2），否则本契约的口径说明已过期",
+    assert limit == 15.0 and limit * calls == 75.0, (
+        "缺省窗口必须是 15 s × 5 = 75 s，否则本契约的口径说明已过期",
         limit, calls)
     # 乘数就是这三个数相加：改口径必须同时改这条断言与 AGENTS/性能页的 ×N 说明。
-    # 2026-11-20 用户裁定：预热 0 轮、重复 1 轮 → 一组只做 2 次调用（1 次受测 + 1 次
-    # 预热位；warmup=0 时它就是纯计数）。窗口因此是 60 s，不是 150 s。
-    assert (cli.DEFAULT_WARMUP, cli.DEFAULT_ROUNDS) == (0, 1), (
+    assert (cli.DEFAULT_WARMUP, cli.DEFAULT_ROUNDS) == (1, 3), (
         "缺省 warmup/rounds 变了：文档与 AGENTS.md 的 ×N 口径要一起改")
     # 剪枝截止是 **1 × min_wall_ms**（2026-11-21 用户裁定"单测试项时间限制改回原
     # min_wall_ms"；2026-11-19 曾临时改成 2×）。这条不变量与窗口无关，但两条都从

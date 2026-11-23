@@ -10,7 +10,7 @@
    ``contract()`` 返回那一刻时 GEMM 可能还在队列里。实测同一条方程脚本里 ~900 ms、
    ``--tune`` 写进配置表 **0.32 ms**，那个数还被当成 ``best``。
 3. **``--warmup 1`` 盖不住 GPU 冷启动**。首调要建 cuBLAS handle / workspace / 步表，
-   一次丢弃不够，中位因此低于脚本里的稳态耗时。
+   一次丢弃不够，最快样本仍可能混入启动成本。
 
 本模块钉住修复后的**可观测证据**，不依赖本机有没有 GPU（无设备时走 SKIP）：
 参照行必须写明后端；``_timed`` 必须在计时区前后调用同步器；加速设备上 warmup 至少
@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import pathlib
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -145,6 +146,27 @@ def test_worker_measures_with_synchronisation() -> None:
         "run_job 里必须能看到同步调用（它是 GPU 上 wall_ms 的唯一来源）")
 
 
+def test_worker_summary_uses_the_minimum_sample() -> None:
+    """The tune worker reports the fastest observation, not a median."""
+    from ..einsum import _tune_worker
+
+    assert _tune_worker._sample_minimum([0.30, 0.10, 0.20]) == 0.10
+
+
+def test_wall_time_has_no_legacy_median_alias() -> None:
+    """The worker and tune rows expose ``minimum_s``/``wall_ms`` only."""
+    from ..einsum import _tune_worker
+
+    source = pathlib.Path(_tune_worker.__file__).read_text(encoding="utf-8")
+    assert "median_s" not in source, "worker still emits the deprecated median_s alias"
+    assert "minimum_s" in source, "worker must expose the canonical minimum_s field"
+
+    rows = [{"wall_ms": 1.0}, {"wall_ms": None}]
+    assert cli.tune_best(rows) is rows[0]
+    # A legacy-only measurement must not be treated as a usable wall-time result.
+    assert cli.tune_best([{"median_ms": 0.1}]) is None
+
+
 # ── 3. 加速设备上 warmup 至少 2，并且如实标注 ───────────────────────────────
 
 def test_accelerated_device_raises_warmup_and_says_so() -> None:
@@ -206,6 +228,8 @@ TESTS = (
     test_timed_synchronises_around_each_sample,
     test_synchronize_is_a_noop_on_host_arrays,
     test_worker_measures_with_synchronisation,
+    test_worker_summary_uses_the_minimum_sample,
+    test_wall_time_has_no_legacy_median_alias,
     test_accelerated_device_raises_warmup_and_says_so,
     test_gpu_run_reports_the_effective_warmup,
     test_tune_groups_use_the_effective_warmup,

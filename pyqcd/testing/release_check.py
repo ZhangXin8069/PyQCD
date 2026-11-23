@@ -178,10 +178,16 @@ def check_native_gate(report: Report, sdist: Path | None) -> None:
     ]
     missing_source.extend(
         symbol for symbol in kupl_required if symbol not in setup_source)
+    cuda_cpu_blas_guard = (
+        "must not depend on a CPU BLAS library" in build_source
+        and "readelf" in setup_source
+    )
     syntax = _run(["bash", "-n", str(build_script)])[0]
-    report.add("native source gate", not missing_source and syntax == 0,
-               "KUPL/CUDA export contracts present" if not missing_source and syntax == 0
-               else f"missing={missing_source} bash_n={syntax}")
+    source_ok = not missing_source and syntax == 0 and cuda_cpu_blas_guard
+    report.add("native source gate", source_ok,
+               "KUPL/CUDA export and CUDA CPU-BLAS guards present" if source_ok
+               else f"missing={missing_source} bash_n={syntax} "
+                    f"cuda_cpu_blas_guard={cuda_cpu_blas_guard}")
     if sdist is None:
         report.add("native wheel artifact", False, "fresh sdist unavailable")
         return
@@ -233,6 +239,16 @@ def check_native_gate(report: Report, sdist: Path | None) -> None:
         missing = sorted(required - found)
         if code != 0 or missing:
             failures.append(f"{backend} nm={code} missing={missing}")
+    cuda_path = archives["cuda"]
+    if cuda_path.is_file():
+        code, output = _run(["readelf", "-d", str(cuda_path)])
+        cpu_blas = sorted({
+            name for name in ("libopenblas", "libcblas", "libblas")
+            if f"Shared library: [{name}" in output
+        })
+        if code != 0 or cpu_blas:
+            failures.append(
+                f"cuda readelf={code} cpu_blas={cpu_blas}")
     report.add("native wheel exports", not failures,
                "validated isolated wheel" if not failures else "; ".join(failures))
 

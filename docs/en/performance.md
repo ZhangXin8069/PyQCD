@@ -47,8 +47,8 @@ predecessor's footprint.
 | `--backend` | `auto` / `numpy` / `cupy` / `torch` | array library only; forcing a native kernel is `--kernel-force`, not a backend |
 | `--compare` | `opt_einsum` / `backend` / `none` | default **`none`**; the "numpy reference" is spelled `--backend numpy --compare backend` |
 | `--optimize` | `greedy` / `optimal` / `dp` / `branch_1` / `branch_2` / `branch_all` / `none` | `auto` is the built-in default selector, **not** a writable value |
-| `--warmup` | integer | default **0** (allowed and default since 2026-11-20: a sweep covers the grid, it does not chase sub-millisecond accuracy on every cell); a positive value on an accelerated device is raised to 2 |
-| `--rounds` | integer | default **1**, i.e. one measurement per cell; give a larger value to smooth out scheduler jitter |
+| `--warmup` | integer | default **1**; `0` remains allowed when cold-start cost is deliberately included. A positive value on an accelerated device is raised to 2 |
+| `--rounds` | integer | default **3**; the fastest observed sample is the reported time, so scheduler jitter is less likely to hide the best run |
 | `--kernel-force` | `generic` / `dedicated` / `topology` / `original` / `backend` | a single value, default `generic`; `original` hands the contraction to `opt_einsum.contract` (it honours `--optimize`, translating `branch_1`/`branch_2`/`branch_all`/`none` to `branch-1`/`branch-2`/`branch-all`/`False`); comma lists and `auto` are rejected |
 | `--shape` | `[..],[..]->[..]` | omitted: sizes are inferred from the corpus roles of the equation |
 | `--explain` | `auto` / `true` / `false` | with `--shape` omitted, a hit reached through an equivalent spelling prints `shape source: corpus(equivalence) via <equation>` |
@@ -68,9 +68,10 @@ Two rules make the reported milliseconds comparable with a script of your own:
   so the number is compute time on GPU too. Earlier releases did not do this, which made GPU
   timings look orders of magnitude too small — those historical numbers are void, see
   `docs/ERRATA_gpu_timing_20261119.md`（仓库内，不在本站）.
-- **`--warmup` is raised to at least 2 on an accelerated device.** The first call there
-  also builds the CUDA context, cuBLAS handles and the workspace; discarding only one
-  call leaves the median below the steady state your script sees. The report prints the
+- **A positive `--warmup` is raised to at least 2 on an accelerated device.** The first
+  call there also builds the CUDA context, cuBLAS handles and the workspace; discarding
+  only one call can still leave residual startup work in the fastest sample. `0` stays
+  `0` when explicitly requested. The report prints the
   **effective** value in `time :` and adds a `time note:` line when it was raised;
   `--json` carries `warmup_effective` / `warmup_raised`.
 
@@ -91,14 +92,15 @@ tune init : mode=all  equation=ab,bc,cd->ad  operands=3  dtype=complex128  devic
 tune init : shapes ok  total_elements=192  est_bytes=0MiB
 tune init : branch probe done  raw_ok=false  equiv_ok=false  branch=B3
 tune init : kernel admission done  unavailable=topology
-tune axes : kernel_force=dedicated,generic,topology,backend  as_equivalence=false,true  optimize=greedy,branch_1,branch_2,dp,branch_all,optimal,none
+tune axes : kernel_force=original,dedicated,generic,topology,backend  as_equivalence=false,true  optimize=greedy,branch_1,branch_2,dp,branch_all,optimal,none
 tune branch: branch=B3  raw_ok=false  equiv_ok=false  target_equation=-
-tune plan : planned=21  kept=21  trimmed=0  skipped-kernels=-
+tune plan : planned=28  kept=28  trimmed=0  skipped-kernels=-
 ```
 
 * `tune axes` — the three swept axes. `optimize` only ever holds the seven leaves
   `greedy` / `optimal` / `dp` / `branch_1` / `branch_2` / `branch_all` / `none`;
-  `kernel_force` only ever holds `dedicated` / `generic` / `topology` / `backend`.
+  `kernel_force` only ever holds `original` / `dedicated` / `generic` / `topology` /
+  `backend`.
 * `tune branch` — whether the equation itself, or an equivalent spelling of it, is
   specialisable. That is what decides whether a `topology` group exists at all.
 * `tune plan` — how many groups were planned and how many survive kernel admission; a
@@ -112,18 +114,18 @@ readable and **never translated**: `ok`, `pruned` (slower than the current bound
 cut), `timeout`, `error`, `mismatch` (outside the tolerance) and `skip` (that kernel
 fundamentally has no route for this shape).
 
-## The honest limit of `--tune-timeout`
+## The exact limit of `--tune-timeout`
 
-The per-call limit is implemented with `SIGALRM`, and it is a **best-effort** bound:
+The default is **15 seconds per `contract()` call**. Because one group performs
+`1 + warmup + rounds` calls, its group budget is `15 x 5 = 75 seconds` with the default
+`warmup=1` and `rounds=3`.
 
-- it **can** interrupt long **Python** loops (for example `optimal`'s exhaustive search
-  on nine or more operands);
-- it **cannot** interrupt native C/CUDA code: the signal is only delivered between
-  Python bytecodes, so a native call that never returns to the interpreter never runs
-  the handler. Forking a child process was tried and **reverted** — a CUDA context is
-  not inherited across `fork`, so the child dies with `cudaErrorInitializationError`.
-
-On GPU, therefore, give `--tune-timeout` a generous value, or use `--tune pass` first.
+By default each group runs in a **fresh interpreter**. The parent process can kill the
+child, so the group budget is a **hard** bound that also interrupts native C/CUDA code.
+Setting `PYQCD_EINSUM_TUNE_INPROCESS=1` switches to the in-process route, where
+`SIGALRM` is only a **best-effort** bound: it can interrupt long Python loops, but not a
+native call that never returns to the interpreter. On GPU, either keep the default
+subprocess isolation, choose a generous limit, or use `--tune pass` first.
 
 ## Correctness before speed
 
@@ -185,5 +187,5 @@ data has to share its conventions with *your* shape:
 - so a speed-up quoted for one accelerator usually does not survive the trip to your
   machine.
 
-Want numbers? Run one tune — that command prints the median wall time for your machine
-and your shape.
+Want numbers? Run one tune — that command prints the fastest observed wall time for
+your machine and your shape.

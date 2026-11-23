@@ -13,9 +13,9 @@
 1. **warmup**：临时脚本普遍测单次，而首调含 plan 缓存 + 原生库绑定 + JIT；
    实测 seq=2583 首调 45 ms vs 热态 0.56 ms（**80×**），单次测量完全失真。
    本模块因此**报告里区分"用户给的值"与"实际用的值"**（``warmup`` /
-   ``warmup_effective``，被抬过时另给 ``time note:`` 一行）。缺省 ``--warmup 0``
-   （2026-11-20 用户裁定）：遍历的目的是把整张网格量完，不预热是明确取舍；
-   要稳态数字就显式给值，加速设备上要了预热会被抬到 ``ACCELERATED_MIN_WARMUP``。
+   ``warmup_effective``，被抬过时另给 ``time note:`` 一行）。缺省 ``--warmup 1``；
+   ``--warmup 0`` 仍可由用户显式选择。加速设备上的正数会被抬到
+   ``ACCELERATED_MIN_WARMUP``，以免只丢一次仍把 CUDA 建上下文的时间算进稳态样本。
 2. **容差**：``np.allclose`` 的逐元素绝对阈值会误判接近零的元素；本模块统一用
    **相对**容差（按 ``max|expected|`` 归一），见 ``--atol``。
 3. **参照**：有人比 ``np.einsum``、有人比 ``opt_einsum``、有人不比，结论无法互比。
@@ -45,9 +45,9 @@
 ------------------------------------------------------
 * **容差**：``--atol`` 是**相对**容差（按 ``max|expected|`` 归一），不是逐元素
   ``np.allclose`` 的绝对阈值——后者对接近零的元素会误判。缺省 ``1e-12``。
-* **计时**：先丢弃一次（plan 缓存 + 原生库绑定 + JIT），再取 ``--rounds`` 次中位。
+* **计时**：先丢弃 ``--warmup`` 次，再取 ``--rounds`` 个样本的最小值。
   单次测量会被首调开销完全支配（实测 seq=2583 首调 45 ms vs 热态 0.56 ms），
-  所以 **warmup 不可关闭时不给 0**：``--warmup 0`` 会被拒绝。
+  因此缺省先预热一次；``--warmup 0`` 仍允许用于明确测量冷启动。
 * **参照**：``--compare`` 决定与谁比。``numpy`` 用 ``np.einsum(optimize=...)``；
   ``opt_einsum`` 用 ``oe.contract(optimize=...)``；``backend`` 用同一批张量上的
   **另一个后端**（CPU↔GPU 互证）；``none`` 只跑不比对。
@@ -119,8 +119,8 @@
   一旦卡住，立刻看得出卡在哪一步（2026-11-19 用户要求）。
 * **遍历调优**：``--tune``（缺省关）在**同一条**方程/形状/dtype/设备/后端上遍历
   三轴 ``kernel_force × as_equivalence × optimize``。**不是笛卡尔积**：清单按分支
-  给出且**逐项有序**（共同前缀 ``dedicated`` → ``generic`` → 分支专属 ``topology``
-  一条 → 尾部 ``original`` → ``backend``；每个内核内 ``greedy/branch_1/branch_2/dp/
+  给出且**逐项有序**（共同前缀 ``original`` → ``dedicated`` → ``generic`` → 分支专属
+  ``topology`` 一条 → 尾部 ``backend``；每个内核内 ``greedy/branch_1/branch_2/dp/
    branch_all/optimal/none``），B1/B2 = 29 组、B3 = 28 组（硬上限 32，超了报用法错误而不是
    截断）。分组判据只看两件事：原方程能否特化、以及等价写法能否特化——只探测、
    不计时、不写表。``--compare`` **缺省关闭**（不给就不跑参考基准；显式给出时
@@ -130,7 +130,7 @@
    ``--optimize`` 只要写了就与网格不同——它的 ``auto`` 根本不在可写集合里）
    时**各打一行 stderr
    警告后忽略它**（每个参数一行），遍历照常进行、
-   退出码仍为 0。每组沿用 ``--warmup``/``--rounds`` 取中位；``--verbose`` 时另按中位
+   退出码仍为 0。每组沿用 ``--warmup``/``--rounds`` 取最小值；``--verbose`` 时另按最小值
    升序给前 5 行 + 每个 ``kernel_force`` 取值的最快一行，既有输出行一字不动。报的是
    **单次运行的实测，不是基准**。
 * **``min_wall_ms`` 剪枝**：上界初值 = ``--tune-timeout``；任一组的单次 ``contract()``
@@ -169,13 +169,13 @@
 * **tune 是配置表的唯一写者**：整轮遍历包在 ``_profile_cache.tune_session()`` 里——
   期间配置表**既不读也不写**（读会把这一组量成"历史命中耗时"，写会留下没被选中的垃圾
   行）。遍历结束只写**胜出的那一组**，``wall_ms`` 就是整次 ``contract()`` 的墙钟
-  中位（:data:`TUNE_EQUIVALENCE_NOTE` 那条备注除外，见下）：
+  最小值（:data:`TUNE_EQUIVALENCE_NOTE` 那条备注除外，见下）：
   ``as_equivalence=false`` 胜出 → 以**原方程**写一条完整性能配置；``as_equivalence=true``
   胜出 → 以 ``target_equation`` 为方程写完整性能配置，**另**以原方程写一条**只含等价
   载荷**（``operand_order`` / ``operand_permutations`` / ``output_permutation``）+ 备注
   "走等价转换后的配置性能更佳"的记录。两种情形都**删除该键的其它所有行**（同键只允许
   1 行），删除条数如实打印。普通 ``contract()`` 调用**只读**，一个字节都不写。
-* **超时与预算**：``--tune-timeout``（缺省 30 秒）是**每一次** ``contract()`` 调用的
+* **超时与预算**：``--tune-timeout``（缺省 15 秒）是**每一次** ``contract()`` 调用的
   上限（warmup 与每一轮都算）。**缺省每组跑在一个全新解释器里**，超时由父进程 kill
   子进程强制生效——这是**硬上限**，能打断原生 C/CUDA 代码，代价是每组一次进程启动
   （实测 ``import pyqcd.einsum`` 中位 126 ms、``import cupy`` 另约 244 ms），这段开销
@@ -190,14 +190,14 @@
   子进程必然 ``cudaErrorInitializationError``（当时实测整轮全 error）。GPU 上请把
   ``--tune-timeout`` 取足够大，或先用 ``--tune pass`` 快速通过（跳过 compare 与
   等价改写）。
-  **窗口粒度是整组**：一组有 ``1+warmup+rounds`` 次调用（缺省 ``1+0+1 = 2`` 次），
-  实际装的是 ``limit × 2`` 的**组级预算**——按单次设限会把 ``2 × limit`` 全花光，且与
-  ``min_wall_ms`` 剪枝（比整组中位）不同口径。
+  **窗口粒度是整组**：一组有 ``1+warmup+rounds`` 次调用（缺省 ``1+1+3 = 5`` 次），
+  实际装的是 ``limit × 5`` 的**组级预算**——按单次设限会把 ``5 × limit`` 全花光，且与
+  ``min_wall_ms`` 剪枝（比整组最小值）不同口径。
   **每一组都真的跑**：没有任何"预判/估算"式的跳过。跑得慢或跑不动由上限与真实
   异常决定——超过上限记 ``timeout``（父进程 kill 子进程，这是**硬**上限），真抛异常
   记 ``error``，比当前最快组慢则由 ``min_wall_ms`` 实测终止（``pruned``）。
-  任一次超过上限 → 该组记 ``timeout``、继续下一组，中位只由全部成功且未超时的调用
-  构成（不拿部分样本凑）。``--tune-budget``（缺省 ``0`` = 不限）是整轮上限，用尽即
+  任一次超过上限 → 该组记 ``timeout``、继续下一组，最小值只由全部成功且未超时的调用
+  构成（不拿部分样本凑）。``--tune-budget``（缺省 ``1000`` 秒）是整轮上限，用尽即
   停止遍历并报"已测 N/M"。坏组合——超时、异常、``rel > atol+rtol``——
   **只打印、不中断遍历**，并且一律不参与选优、不写进配置表。
 """
@@ -208,7 +208,6 @@ import contextlib
 import json
 import os
 import signal
-import statistics
 import sys
 import threading
 import time
@@ -369,16 +368,12 @@ def effective_tolerance(atol: float | None, dtype: Any) -> float:
     if atol is None:
         return max(DEFAULT_ATOL, dtype_tolerance(dtype))
     return float(atol)
-#: 缺省 **1**：用户裁定（2026-11-20）"重复轮次默认一次"。中位退化成单次实测，
-#: 这是**要的**——tune 一轮 29 组，每多一轮就是 29 次生产尺寸收缩。要更稳的
-#: 数字就显式给 ``--rounds N``（中位由 N 次构成）。
-DEFAULT_ROUNDS = 1
-#: 缺省 **0**：用户裁定（2026-11-20）"预热轮次默认零次"。**允许为 0**——
-#: 首调确实带 plan 缓存/原生绑定/JIT 的冷启动，但那是用户明确要的取舍：
-#: tune 的价值是"把整张网格量完"，不是"把每一格量到亚毫秒精度"。
-#: 要稳态数字就显式给 ``--warmup N``（加速设备上会被抬到
-#: :data:`ACCELERATED_MIN_WARMUP`，见 :func:`_effective_warmup`）。
-DEFAULT_WARMUP = 0
+#: 缺省 **3**：每格采三个样本并报告最小值。最小值回答"这条路径最好能跑多快"，
+#: 比单次测量更抗调度抖动，也不会像中位数那样主动剔除最快样本。
+DEFAULT_ROUNDS = 3
+#: 缺省 **1**：先丢弃一次冷启动，再采三个受测样本。``0`` 仍合法；加速设备上
+#: 正数 warmup 会抬到 :data:`ACCELERATED_MIN_WARMUP`，见 :func:`_effective_warmup`。
+DEFAULT_WARMUP = 1
 DEFAULT_COMPARE = "none"
 DEFAULT_COMPARE_OPTIMIZE = "auto"
 DEFAULT_OPTIMIZE = "auto"
@@ -400,20 +395,15 @@ TUNE_MAX_COMBOS = 32
 #: 被 ``--tune`` 自行遍历的三维（报告与警告文案要用它说明"为什么你给的值被忽略"）。
 TUNE_AXES = "kernel_force × as_equivalence × optimize"
 #: ``--tune-timeout``：**每一次** ``contract()`` 调用（warmup 与每一轮都算）的上限
-#: 秒数。``<= 0`` = 不设上限。超时的那一组记 ``timeout``、只打印、继续下一组。
-#: 它是**尽力而为（best-effort）上限**，不是硬超时：能打断 Python 侧长循环，
-#: 打不断原生 C/CUDA 代码（详见 :func:`_guarded_call` 与模块 docstring）。
-#: 缺省 **30**：一轮 29/28 组（B1/B2、B3）每组 ``1+warmup+rounds`` 次调用
-#: （缺省 warmup=0 / rounds=1，所以是 **2 次** → 组级窗口 60 s）。上限取得过大时
-#: "某组卡死"就会把一次遍历拖成半小时；30 秒覆盖本仓库已实测的生产尺寸（CPU 组最大
-#: 约 5 s），而真正打不断的原生调用无论取多小都得等它返回。
-#:
-#: 用户实测（2026-11-20，GPU complex64 生产形状）：单组 `dedicated/false/greedy` 在
-#: warmup=1/rounds=3 下要 **40.1 s**，29 组就是十几分钟——这正是把缺省降到
-#: "预热 0 次、重复 1 次"的直接原因。
-DEFAULT_TUNE_TIMEOUT = 30.0
-#: ``--tune-budget``：整轮遍历的上限秒数，``0`` = 不限。用尽即停止遍历并报"已测 N/M"。
-DEFAULT_TUNE_BUDGET = 0.0
+#: 秒数。``0`` = 不设上限。超时的那一组记 ``timeout``、只打印、继续下一组。
+#: 缺省每组在全新解释器中运行，因此组级窗口是能打断原生 C/CUDA 的**硬上限**；
+#: ``PYQCD_EINSUM_TUNE_INPROCESS=1`` 的进程内路线才是 best-effort（详见
+#: :func:`_guarded_call` 与模块 docstring）。缺省 **15**：一组按
+#: ``1+warmup+rounds``（缺省 5 次）计，组级硬窗口为 75 秒。
+DEFAULT_TUNE_TIMEOUT = 15.0
+#: ``--tune-budget``：整轮遍历的缺省上限秒数。``0`` 仍表示不限；用尽即停止遍历并
+#: 报"已测 N/M"。
+DEFAULT_TUNE_BUDGET = 1000.0
 #: ``--tune`` 的**取值**（2026-11-18 用户裁定）：它带取值，不是开关。``all`` = 完整模式
 #: （分支判定 + 29/28 组遍历 + 剪枝 + 参照校验），``pass`` = **快速通过模式**（强制
 #: ``B3`` 的 28 组、无 ``topology``、``as_equivalence`` 全 ``false``、不跑参照、
@@ -468,8 +458,8 @@ MESSAGES: dict[str, dict[str, str]] = {
                "--scene distill\n\n"
                "Calibration: --atol is a **relative** tolerance (normalised by "
                "max|expected|); timing\n"
-               "discards --warmup calls then takes the median of --rounds; warmup 0 is "
-               "refused.\n"
+               "discards --warmup calls then takes the minimum of --rounds; warmup 0 "
+               "remains an explicit choice.\n"
                "Specialisation: --specialize auto (follows PYQCD_EINSUM_SPECIALIZE) / "
                "true (force\n"
                "specialised) / false (force generic — the first tool when debugging "
@@ -510,7 +500,7 @@ MESSAGES: dict[str, dict[str, str]] = {
                "  python -m pyqcd.einsum.test --equation 'cadb,menf,ac,em,bd,fn->' "
                "--scene distill\n\n"
                "口径: --atol 是**相对**容差（按 max|expected| 归一）；耗时先丢 --warmup "
-               "次再取 --rounds 次中位，warmup 不允许 0。\n"
+               "次再取 --rounds 个样本的最小值；warmup=0 可由用户显式选择。\n"
                "对照: --specialize auto（跟随 PYQCD_EINSUM_SPECIALIZE）/ true（强制特化）"
                "/ false（强制通用，排查原生内核问题的第一手段）。\n"
                "参照优化器: --compare-optimize 只管参照（主路径看 --optimize）；"
@@ -569,12 +559,13 @@ MESSAGES: dict[str, dict[str, str]] = {
                "并非 --backend。缺省 {default}"),
     },
     "help.compare": {
-        "en": ("Reference implementation: numpy=np.einsum(optimize=...), "
-               "opt_einsum=oe.contract(optimize=...), backend=cross-check on the other "
-               "backend, none=run without comparing. Default {default}"),
-        "zh": ("参照实现：numpy=np.einsum(optimize=...)、"
-               "opt_einsum=oe.contract(optimize=...)、"
-               "backend=另一后端互证、none=只跑不比。"
+        "en": ("Reference implementation: opt_einsum=oe.contract(optimize=...), "
+               "backend=cross-check on another backend (use "
+               "--backend numpy --compare backend for NumPy), none=run without "
+               "comparing. Default {default}"),
+        "zh": ("参照实现：opt_einsum=oe.contract(optimize=...)、"
+               "backend=另一后端互证（用 NumPy 对照写 "
+               "--backend numpy --compare backend）、none=只跑不比。"
                f"缺省 {DEFAULT_COMPARE}"),
     },
     "help.compare_optimize": {
@@ -678,31 +669,24 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "附加的相对余量。缺省 {default}",
     },
     "help.rounds": {
-        "en": ("Timing rounds (the median is taken). Default {default}, i.e. a single "
-               "measurement per cell — give a larger value when you want the median to "
-               "smooth out scheduler jitter."),
-        "zh": ("计时轮数（取中位）。缺省 {default}，即每格只测**一次**——想要中位抹平"
-               "调度抖动时显式给更大的值。"),
+        "en": ("Timing rounds (the minimum is reported). Default {default}. Keeping "
+               "several samples makes scheduler jitter less likely to hide the fastest "
+               "observed run."),
+        "zh": ("计时轮数（报告最小值）。缺省 {default}；保留多个样本可降低调度抖动"
+               "掩盖最快观测值的概率。"),
     },
     "help.warmup": {
-        "en": ("Warmup calls to discard before timing. **0 is allowed and is the "
-               "default**: the first call carries plan caching / native binding / JIT, "
-               "and skipping it is an explicit trade-off (a sweep is about covering the "
-               "grid, not about sub-millisecond accuracy on every cell). Ask for a "
-               "steady-state number by giving a value; on an accelerated device "
-               "(cupy / torch on CUDA) any warmup you do ask for is raised to at least "
-               "{minimum}, because there the first call also builds the CUDA context, "
-               "cuBLAS handles and the workspace. The report prints the effective value "
-               "(`time :` uses it, plus a `time note:` line when it was raised) and "
-               "`--json` carries `warmup_effective` / `warmup_raised`. "
-               "Default {default}"),
-        "zh": ("计时前丢弃的预热次数。**0 合法且是缺省**：首调包含 plan 缓存/原生库绑定/"
-               "JIT，跳过它是明确的取舍（遍历的目的是把网格量完，不是在每一格上追亚毫秒"
-               "精度）。要稳态数字就显式给值；**加速设备**（cupy / torch + CUDA）上你"
-               "要了预热就会被抬到至少 {minimum}——那里的首调还要建 CUDA 上下文、"
-               "cuBLAS 句柄与 workspace。报告里给的是**实际使用**的值（`time :` 用它，"
-               "被抬过时另有一行 `time note:`），`--json` 的 `warmup_effective` / "
-               "`warmup_raised` 也是实际值。缺省 {default}"),
+        "en": ("Warmup calls to discard before timing. Default {default}; 0 remains "
+               "allowed when cold-start cost is deliberately included. On an accelerated "
+               "device (cupy / torch on CUDA) a positive value is raised to at least "
+               "{minimum}, because the first call also builds the CUDA context, cuBLAS "
+               "handles and the workspace. The report prints the effective value and "
+               "`--json` carries `warmup_effective` / `warmup_raised`. Default {default}"),
+        "zh": ("计时前丢弃的预热次数。缺省 {default}；明确要把冷启动计入耗时时仍可传 0。"
+               "**加速设备**（cupy / torch + CUDA）上的正数会被抬到至少 {minimum}，"
+               "因为首调还要建 CUDA 上下文、cuBLAS 句柄与 workspace。报告给出实际使用"
+               "值，`--json` 的 `warmup_effective` / `warmup_raised` 也是实际值。"
+               "缺省 {default}"),
     },
     "help.seed": {
         "en": "Random seed for the operands (every path sees the same data). Default 0",
@@ -770,7 +754,7 @@ MESSAGES: dict[str, dict[str, str]] = {
                "its own start and end and with timings in whole ms, so a hang shows "
                "exactly which stage it is stuck in. In pass mode the branch probe lines "
                "read 'skipped (pass mode)'.\n"
-               "Sweep kernel_force × as_equivalence × optimize and report the median of "
+               "Sweep kernel_force × as_equivalence × optimize and report the minimum of "
                "THIS run for every combination. The equation, shapes, dtype, device and "
                "backend are FIXED (they are this run's invariants); --compare defaults "
                "to OFF under --tune (no reference is timed unless you pass --compare "
@@ -781,15 +765,15 @@ MESSAGES: dict[str, dict[str, str]] = {
                "other two other than auto) is IGNORED with one warning line per option "
                "on stderr (the sweep still runs and the exit code stays 0). The "
                "combinations are NOT a cartesian product: they form an ordered list per "
-               "branch (common prefix dedicated -> generic, then one branch-specific "
-               "topology combination, then the backend tail; inside each kernel "
+               "branch (common prefix original -> dedicated -> generic, then one "
+               "branch-specific topology combination, then the backend tail; inside each kernel "
                "greedy/branch_1/branch_2/dp/branch_all/optimal/none) with 29 "
                "combinations for B1/B2 and 28 for B3 (the branch is probed from whether "
                "the original equation and its equivalent spelling can be specialised; "
-               "probing does not time anything). Hard cap 30; more is a usage error, "
+               "probing does not time anything). Hard cap 32; more is a usage error, "
                "never a silent truncation. Each combination reuses --warmup / --rounds "
-               "and the median is what was measured now — a single-run measurement, NOT "
-               "a benchmark; that median IS the wall_ms of the winning row.\n"
+               "and the minimum is what was measured now — a single-run measurement, NOT "
+               "a benchmark; that minimum IS the wall_ms of the winning row.\n"
                "min_wall_ms pruning: the bound starts at --tune-timeout; a combination "
                "whose single contract() call is slower than the current bound is "
                "TERMINATED (reported as 'pruned', never written) and the sweep "
@@ -828,20 +812,20 @@ MESSAGES: dict[str, dict[str, str]] = {
                "起止、内核准入起止、session 起止、首组起止），每步都有起有止、耗时用"
                "整数 ms——卡住时一眼看出卡在哪一步；pass 模式的分支探测行写 "
                "'skipped (pass mode)'。\n"
-               "遍历 kernel_force × as_equivalence × optimize，逐组给出**本次**实测中位。"
+               "遍历 kernel_force × as_equivalence × optimize，逐组给出**本次**实测最小值。"
                "方程、形状、dtype、设备与后端**固定不动**（它们是本次的不变量）；"
                "--compare 在 --tune 下**缺省关闭**（不给就不跑参考基准；显式给出时由"
                "主路径照旧跑一次）。被遍历的三维由 --tune 自己"
                "提供：显式 --kernel-force / --as-equivalence / --optimize 只要不在网格里"
                "（--kernel-force 非 generic，另两轴非 auto），"
                "就会**被忽略**，每个参数在 stderr 上给一行警告（遍历照常进行，退出码仍为 "
-               "0）。组合**不是笛卡尔积**：按分支给出**有序清单**（共同前缀 dedicated "
-               "→ generic，再一条分支专属 topology，最后 original → backend 尾部；"
+               "0）。组合**不是笛卡尔积**：按分支给出**有序清单**（共同前缀 original "
+               "→ dedicated → generic，再一条分支专属 topology，最后 backend 尾部；"
                "每个内核内 greedy/branch_1/branch_2/dp/branch_all/optimal/none），"
                "B1/B2 = 29 组、B3 = 28 组（分支由「原方程能否特化、等价写法能否特化」"
                "探测得出，探测不计时）。硬上限 32，超出即用法错误，**绝不静默截断**。"
-               "每组沿用 --warmup / --rounds，中位就是此刻测到的值——"
-               "**单次运行的实测，不是基准**，那个中位**就是**胜出行里的 wall_ms。\n"
+               "每组沿用 --warmup / --rounds，最小值就是此刻测到的值——"
+               "**单次运行的实测，不是基准**，那个最小值**就是**胜出行里的 wall_ms。\n"
                "min_wall_ms 剪枝：上界初值 = --tune-timeout；某组的单次 contract() 耗时"
                "超过当前上界即**终止该组**（标 pruned、绝不写表）并继续下一组；任何一组"
                "测到更小耗时都**立刻**压低上界，后续所有组都用它剪枝。最优行就是记录到的"
@@ -862,8 +846,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en": ("Upper bound, in seconds, for EACH contract() call of --tune (warmup and "
                "every round count). The window is enforced per GROUP: a combination makes "
                "1+warmup+rounds calls, so its budget is this value times that count "
-               "(30 s x 2 = 60 s with the defaults) - seeing a combination return after "
-               "~80 s therefore does not mean the bound failed, it means the group had "
+               "({calls} calls, {window:g} s with the defaults) - seeing a combination "
+               "return near that window does not mean the bound failed; it means the "
+               "group had "
                "not used its budget yet. By default each combination runs in a FRESH "
                "interpreter, so this is a HARD bound: the parent kills the child, which "
                "means native C/CUDA code can really be interrupted (SIGALRM is only "
@@ -878,13 +863,13 @@ MESSAGES: dict[str, dict[str, str]] = {
                "the bound large enough, or use --tune pass first (skips compare and "
                "equivalence rewriting). A combination whose call exceeds the bound is "
                "marked timeout, is reported and skipped, and the sweep continues: a "
-               "timeout never aborts the run. The median is taken over all calls that "
-               "stayed within the bound (a partial sample set never becomes a median). "
+               "timeout never aborts the run. The minimum is taken over all calls that "
+               "stayed within the bound (a partial sample set never becomes a result). "
                "Default {default}"),
         "zh": ("--tune 的**每一次** contract() 调用的上限秒数（warmup 与每一轮都算）。"
                "窗口按**组**执行：一组做 1+warmup+rounds 次调用，因此该组的预算是"
-               "这个值乘以次数（缺省 30 s × 2 = 60 s）——看到一组在 ~40 s 返回并不意味着"
-               "上限失效，只意味着它还没花完预算。"
+               "这个值乘以次数（缺省 {calls} 次，共 {window:g} s）——看到一组接近这个"
+               "窗口返回并不意味着上限失效，只意味着它还没花完预算。"
                "**缺省每组跑在一个全新解释器里**，所以这是**硬上限**：父进程 kill 子进程，"
                "原生 C/CUDA 代码真的能被打断（SIGALRM 只在 Python 字节码之间派发，进程内"
                "做不到）。代价是每组一次进程启动（约 126 ms；导入 cupy 再加约 244 ms），"
@@ -895,15 +880,15 @@ MESSAGES: dict[str, dict[str, str]] = {
                "GPU 上请把 --tune-timeout 取足够大，或先用 --tune pass 快速通过"
                "（跳过 compare 与等价改写）。任一次超过它 → 该组记 timeout、只打印并"
                "跳过、**绝不写配置表**，遍历继续（超时永远不中止整轮）。"
-               "中位只由全部在上限内成功的调用构成（不拿部分样本凑中位）。"
-               "0 或负数 = 不设上限。缺省 {default}"),
+               "最小值只由全部在上限内成功的调用构成（不拿部分样本凑结果）。"
+               "0 = 不设上限；负数属于用法错误。缺省 {default}"),
     },
     "help.tune_budget": {
         "en": ("Upper bound, in seconds, for the WHOLE --tune sweep. When it is used up "
                "the remaining combinations are skipped and the report says how many were "
-               "measured out of the total. 0 = no bound. Default {default}"),
+               "measured out of the total. 0 = no bound. Default {default} s"),
         "zh": ("整轮 --tune 遍历的上限秒数。用尽即跳过剩余组合，并在报告里给出"
-               "「已测 N/M」。0 = 不限。缺省 {default}"),
+               "「已测 N/M」。0 = 不限。缺省 {default} 秒"),
     },
     "help.equivalence": {
         "en": ("Equivalence report tri-state. auto=follow {env} (on by default, which "
@@ -986,9 +971,11 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "help.profile_dir": {
         "en": ("Directory of the configuration profile (passed to "
-               "contract(profile_dir=...)); default {env} or ./.cache"),
+               "contract(profile_dir=...)); default {env} or "
+               "$XDG_CACHE_HOME/pyqcd.einsum (else ~/.cache/pyqcd.einsum)"),
         "zh": ("配置画像目录（传给 contract(profile_dir=...)）；"
-               "缺省 {env} 或 ./.cache"),
+               "缺省 {env} 或 $XDG_CACHE_HOME/pyqcd.einsum"
+               "（未设时为 ~/.cache/pyqcd.einsum）"),
     },
     # --verbose true 的明细
     "detail.operands": {
@@ -1026,16 +1013,16 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": " + ",
     },
     "detail.time": {
-        "en": "{ms:.3f} ms (warmup={warmup}, rounds={rounds}, median)",
-        "zh": "{ms:.3f} ms （warmup={warmup}，rounds={rounds}，中位）",
+        "en": "{ms:.3f} ms (warmup={warmup}, rounds={rounds}, minimum)",
+        "zh": "{ms:.3f} ms （warmup={warmup}，rounds={rounds}，最小值）",
     },
     "detail.warmup_raised": {
         "en": ("accelerated device: warmup raised {requested} -> {used} (at least "
                "{minimum} calls are discarded, because the first call also builds the "
-               "context/handles/workspace); the median below is measured with "
+               "context/handles/workspace); the minimum below is measured with "
                "warmup={used}"),
         "zh": ("加速设备：warmup 由 {requested} 抬到 {used}（至少丢弃 {minimum} 次调用，"
-               "因为首调还要建上下文/句柄/workspace）；下面那个中位是 warmup={used} "
+               "因为首调还要建上下文/句柄/workspace）；下面那个最小值是 warmup={used} "
                "测的"),
     },
     "detail.ref_opt": {
@@ -1231,12 +1218,12 @@ MESSAGES: dict[str, dict[str, str]] = {
     "tune.caption": {
         "en": ("{combos} combinations on the SAME equation/shape/dtype/device/backend; "
                "compare={compare} (off by default under --tune; given explicitly it is "
-               "timed once on the main path); warmup={warmup}, rounds={rounds}, median "
+               "timed once on the main path); warmup={warmup}, rounds={rounds}, minimum "
                "of THIS run; rel vs {reference}. Single-run measurement of this "
                "process, NOT a benchmark."),
         "zh": ("{combos} 组，方程/形状/dtype/设备/后端全部固定；compare={compare}"
                "（--tune 下缺省关闭，显式给出时由主路径跑一次）；"
-               "warmup={warmup}、rounds={rounds}，取**本次**中位；rel 对 {reference}。"
+               "warmup={warmup}、rounds={rounds}，取**本次**最小值；rel 对 {reference}。"
                "这是**单次运行的实测，不是基准**。"),
     },
     "tune.skip": {
@@ -1467,11 +1454,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh": "--compare 必须是 {values} 之一，得到 {value!r}",
     },
     "error.warmup_negative": {
-        "en": ("--warmup must be >= 0 (0 is the default and is allowed: the first call "
-               "carries plan caching / native library binding / JIT, and skipping the "
-               "warmup is a deliberate trade-off), got {value!r}"),
-        "zh": ("--warmup 必须 >= 0（0 是缺省且合法：首调包含 plan 缓存/原生库绑定/JIT，"
-               "不预热是明确的取舍），得到 {value!r}"),
+        "en": ("--warmup must be >= 0 (0 is allowed to include cold-start cost "
+               "explicitly; the default is 1), got {value!r}"),
+        "zh": ("--warmup 必须 >= 0（0 可用于明确计入冷启动；缺省为 1），"
+               "得到 {value!r}"),
     },
     "error.rounds": {
         "en": "--rounds must be >= 1",
@@ -1933,7 +1919,7 @@ def _make_operands(xp, shapes, dtype: np.dtype, seed: int):
 
 # ── 计时 ────────────────────────────────────────────────────────────────────
 def _timed(call, warmup: int, rounds: int, sync: Any = None) -> float:
-    """丢弃 ``warmup`` 次后取 ``rounds`` 次中位（秒），**含设备同步**。
+    """丢弃 ``warmup`` 次后取 ``rounds`` 次最小值（秒），**含设备同步**。
 
     为什么必须同步：``cupy`` / ``torch(cuda)`` 是异步下发，``call()`` 返回时 GEMM
     可能还在队列里，``perf_counter`` 已经停表——量到的是**入队时间**而非计算时间。
@@ -1955,7 +1941,7 @@ def _timed(call, warmup: int, rounds: int, sync: Any = None) -> float:
         call()
         sync()
         samples.append(time.perf_counter() - start)
-    return statistics.median(samples)
+    return min(samples)
 
 
 def _no_sync() -> None:
@@ -1979,8 +1965,7 @@ def _sync_for(operands: Sequence[Any]) -> Any:
 
 #: 加速设备上**至少**丢弃的调用次数。首调在 GPU 上要多付一次上下文/句柄/workspace
 #: 建立（cuBLAS handle、`cudaMalloc` 的 cudaMallocAsync 池、原生步表加载），一次
-#: warmup 盖不住——2026-11-19 用户实测：同一组方程脚本里约 900 ms，而 `--warmup 1`
-#: 的中位比它低一截，差异正是这段冷启动。
+#: warmup 盖不住；正数 warmup 因此会被抬到 2。
 ACCELERATED_MIN_WARMUP = 2
 
 
@@ -1993,10 +1978,8 @@ def _effective_warmup(warmup: int, operands: Sequence[Any]) -> tuple[int, bool]:
 
     accelerated = any(_sync.tensor_backend(item) in ("cupy", "torch")
                       for item in operands)
-    # **``0`` 保持 ``0``**（用户裁定 2026-11-20：预热缺省零次）。抬升只在"用户
-    # 明确要预热"时生效——显式 ``--warmup 1`` 表达了"我要稳态数字"的意图，此时
-    # 把它抬到 2 是补齐 GPU 冷启动；而缺省 ``0`` 表达的是"别多跑一次"，
-    # 替用户把它抬成 2 就等于让缺省值说假话。
+    # ``0`` 保持 ``0``（显式关闭预热）；正数在加速设备上抬到 2，以覆盖 GPU
+    # 上下文、句柄与 workspace 的冷启动。
     if accelerated and warmup > 0 and warmup < ACCELERATED_MIN_WARMUP:
         return ACCELERATED_MIN_WARMUP, True
     return warmup, False
@@ -2121,7 +2104,7 @@ def run(*, equation: str, shapes: Sequence[tuple[int, ...]], out_shape: tuple[in
     # ``kernel_force`` 如实报出路线，所以"没查"不等于"少了一条证据"。
     ref_optimize = resolve_compare_optimize(compare, optimize, compare_optimize,
                                             language=lang)
-    # ``0`` 合法（缺省就是 0，见 ``DEFAULT_WARMUP``）：负数才是用法错误。
+    # ``0`` 合法（显式关闭预热，见 ``DEFAULT_WARMUP``）：负数才是用法错误。
     if warmup < 0:
         raise UsageError(translate("error.warmup_negative", lang, value=warmup))
     if rounds < 1:
@@ -3548,7 +3531,7 @@ def _memory_snapshot(xp) -> dict[str, Any]:
     """采集进程内存与显存占用。
 
     只在**计时循环之外**调用（操作数构造后、收尾时各一次），因此不进入任何
-    measured region，不污染 ``--rounds`` 的中位数。三项都是 O(1) 查询或一次
+    measured region，不污染 ``--rounds`` 时序样本。三项都是 O(1) 查询或一次
     ``/proc`` 读取，开销在微秒量级：
 
     * ``rss_mib``：进程常驻集（``/proc/self/status`` 的 VmRSS，不受 allocator
@@ -3976,7 +3959,7 @@ def _tune_combos_for(equation: str,
 
     为什么单独一层：既有契约用 ``cli.tune_combos`` 的**一元**替身
     （``lambda language="zh": [...]``）注入小清单，好让"坏组合不留配置行"那几条断言
-    跑在 3 组上而不是 21 组上。替身不收 ``equation``，于是这里退回只传语言——注入的
+    跑在 3 组上而不是完整的 28/29 组上。替身不收 ``equation``，于是这里退回只传语言——注入的
     清单与真清单走的是同一条路径（都是"一串三元组"），不改变遍历语义。
     """
     try:
@@ -4275,9 +4258,15 @@ def _tune_route(fields: dict[str, Any], kernel_info: Any) -> str:
 
 
 def _tune_ms(row: dict[str, Any]) -> str:
-    """表格里的中位列：没测到就写 ``-``（不写 0，0 会被读成"极快"）。"""
-    value = row.get("median_ms")
+    """表格里的 ``wall_ms`` 列：没测到就写 ``-``（0 会被读成"极快"）。"""
+    value = _tune_wall_ms(row)
     return "-" if value is None else f"{value:.6f}ms"
+
+
+def _tune_wall_ms(row: dict[str, Any]) -> float | None:
+    """读取本组的最小观测耗时。"""
+    value = row.get("wall_ms")
+    return None if value is None else float(value)
 
 
 def _tune_rel(row: dict[str, Any]) -> str:
@@ -4323,7 +4312,7 @@ def tune_status(row: dict[str, Any]) -> str:
         return TUNE_STATUS_ERROR
     if row.get("mismatch"):
         return TUNE_STATUS_MISMATCH
-    return TUNE_STATUS_OK if row.get("median_ms") is not None else TUNE_STATUS_ERROR
+    return TUNE_STATUS_OK if _tune_wall_ms(row) is not None else TUNE_STATUS_ERROR
 
 
 def tune_comb_lines(index: int, total: int, row: dict[str, Any]) -> list[str]:
@@ -4340,7 +4329,7 @@ def tune_comb_lines(index: int, total: int, row: dict[str, Any]) -> list[str]:
     （原文一个字不改，也不折叠成"…等 N 项"）。字段名与状态取值是稳定 token，
     **不跟 --language 翻译**——脚本要能用它筛。
     """
-    wall = row.get("median_ms")
+    wall = _tune_wall_ms(row)
     wall_text = "-" if wall is None else f"{float(wall):.6f}"
     head = ("{}/{}  kernel_force={}  as_equivalence={}  optimize={}  "
             "backend={}  dtype={}  device={}  "
@@ -4384,14 +4373,14 @@ def tune_best(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
 
     ``error``（跑不成）、``timeout``（单次超上限）、``budget``（被整轮预算截断）、
     ``pruned``（超过当时的 ``min_wall_ms``、被终止）与 ``mismatch``（数值不符）一律
-    不参选：它们的 ``median_ms`` 要么不存在、要么不来自一份完整且合格的样本集。
+    不参选：它们的 ``wall_ms`` 要么不存在、要么不来自一份完整且合格的样本集。
     """
     usable = [row for row in rows
-              if row.get("median_ms") is not None
+              if _tune_wall_ms(row) is not None
               and not row.get("error") and not row.get("mismatch")
               and not row.get("timeout") and not row.get("budget")
               and not row.get("pruned")]
-    return min(usable, key=lambda row: row["median_ms"]) if usable else None
+    return min(usable, key=lambda row: _tune_wall_ms(row)) if usable else None
 
 
 def _absolute_path(path: Any) -> str | None:
@@ -4436,7 +4425,7 @@ def tune_table_lines(tune: dict[str, Any],
     body: list[tuple[str, ...]] = []
     total = len(rows)
     for index, row in enumerate(rows, 1):
-        wall = row.get("median_ms")
+        wall = _tune_wall_ms(row)
         body.append((
             f"{index}/{total}",
             str(row.get("kernel_force") or "-"),
@@ -4462,7 +4451,7 @@ def tune_table_lines(tune: dict[str, Any],
     if best is None:
         lines.append("best: none  (" + translate("tune.none", language) + ")")
     else:
-        wall = best.get("median_ms")
+        wall = _tune_wall_ms(best)
         lines.append(
             "best: kernel_force={}  as_equivalence={}  optimize={}  wall_ms={}"
             .format(best.get("kernel_force") or "-",
@@ -4528,9 +4517,9 @@ def _measure(call, limit: float | None, deadline: float | None,
     :func:`_guarded_call` 负责；这里只加一条用户规则：这一次调用比当前上界还慢
     → 抛 :class:`_TunePruned`，**终止该组**（不再跑完它的 warmup/rounds）。
 
-    为什么按**单次**剪枝却按**中位**抬高上界：规则原文两句说的就是这两件事——
+    为什么按**单次**剪枝却用**样本最小值**抬高上界：规则原文两句说的就是这两件事——
     "每一组的单次 contract() 调用耗时与 min_wall_ms 比较，超过即终止该组"，而
-    "某组某次调用得到更小 wall_ms → 立即更新"。上界取该组的实测中位（= 报表与配置表
+    "某组某次调用得到更小 wall_ms → 立即更新"。上界取该组样本最小值（= 报表与配置表
     里的 ``wall_ms``），于是"最终 best"与"记录的最小 wall_ms"是同一个数，不会出现
     "best 说 A、上界说 B"的两套账。
     """
@@ -4804,14 +4793,14 @@ def _tune_kernel_label(row: dict[str, Any]) -> str:
 def _tune_config(row: dict[str, Any], *, backend: str) -> dict[str, Any]:
     """胜出组的**性能配置**（写进配置表的那几列）。
 
-    ``wall_ms`` 是本次实测中**整次 ``contract()`` 的墙钟**中位（规格 §4 的口径：含
+    ``wall_ms`` 是本次实测中**整次 ``contract()`` 的墙钟样本最小值**（含
     规划、匹配、等价转换与缓存读写，那是必要成本），不是任何拆分出来的小数字。
     ``init_ms`` 不写：本入口不单独测它，凭报告里的 ``route`` 反推一个"看起来合理"的
     值就是编造。列名与 ``_profile_cache.PERFORMANCE_FIELDS`` 同源——写方按名字取值，
     这里换一个名字就等于把数字静默丢掉。
     """
-    median = row.get("median_ms")
-    value = float(median) if median is not None else 0.0
+    wall_ms = _tune_wall_ms(row)
+    value = float(wall_ms) if wall_ms is not None else 0.0
     peak = row.get("peak_memory_mb")
     config = {
         "backend": str(backend or ""),
@@ -5204,7 +5193,7 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
 
     ``timeout`` 是**每一次** ``contract()`` 调用（warmup 与每一轮都算）的上限秒数，
     ``budget`` 是整轮上限（``0`` = 不限）。任一次调用超时 → 该组记 ``timeout``；
-    中位只由全部成功且未超时的调用构成（``_timed`` 一抛出来就没有中位，不拿部分样本凑）。
+    最小值只由全部成功且未超时的调用构成（``_timed`` 一抛出来就没有结果，不拿部分样本凑）。
     预算用尽 → 立刻停止遍历，返回值里 ``stopped``/``measured`` 给出"已测 N/M"。
 
     任一组合抛异常（含强制内核的 ``KernelUnavailableError``）只在该行记
@@ -5220,7 +5209,7 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     lang = resolve_language(language)
     # 遍历期间库内的提示也必须与报告同语言（见 :func:`run` 处的说明）。
     _specialize.set_language(lang)
-    # ``0`` 合法（缺省就是 0，见 ``DEFAULT_WARMUP``）：负数才是用法错误。
+    # ``0`` 合法（显式关闭预热，见 ``DEFAULT_WARMUP``）：负数才是用法错误。
     if warmup < 0:
         raise UsageError(translate("error.warmup_negative", lang, value=warmup))
     if rounds < 1:
@@ -5320,7 +5309,7 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
     limit = float(timeout) if float(timeout) > 0.0 else None
     deadline = (time.monotonic() + float(budget)) if float(budget) > 0.0 else None
     # 加速设备上抬 warmup（同 :func:`_effective_warmup`）：GPU 首调要建上下文/句柄/
-    # workspace，`--warmup 1` 盖不住冷启动，量出来的中位会低于脚本里的稳态耗时。
+    # workspace，正数 warmup 会抬到 2，避免冷启动压低最小值。
     # 组级上限按**实际会用**的 warmup 算，否则预算与实际做的调用次数对不上。
     effective_warmup, warmup_raised = _effective_warmup(warmup, host)
     # 组级上限仍是 ``limit × (1+warmup+rounds)``：它与 ``min_wall_ms`` 同口径（都看整组），
@@ -5385,9 +5374,6 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                     "backend": dispatched["backend"],
                     "dtype": dispatched["dtype"],
                     "device": dispatched["device"],
-                    "median_ms": None,
-                    # ``wall_ms`` 是同一数值的**对外**名字（规格 §8/§12.1 的列名）：
-                    # 内部键 ``median_ms`` 另有既有读侧在用，两个都留着不丢信息。
                     "wall_ms": None,
                     "route": KERNEL_UNKNOWN,
                     "rel": None,
@@ -5456,8 +5442,8 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                                 "dtype": dtype,
                                 "warmup": effective_warmup,
                                 "rounds": rounds,
-                                # 子进程比的是**截止**（2 × 当前最快中位），
-                                # 不是那个中位本身（见 _tune_axes.MIN_WALL_FACTOR）。
+                                # 子进程比的是**截止**（factor × 当前最快最小值），
+                                # 不是那个最小值本身（见 _tune_axes.MIN_WALL_FACTOR）。
                                 "min_wall_ms": min_wall.cutoff_ms,
                                 "operands_dir": staged["dir"],
                                 "kernel_force": kernel,
@@ -5494,7 +5480,7 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                             row["peak_memory_notes"] = dict(
                                 observation["peak_memory_notes"])
                         if status == "ok":
-                            seconds = float(observation["median_s"])
+                            seconds = float(observation["minimum_s"])
                             # 子进程的选路记录随结果文件回来：``holder`` 里放它，
                             # 下面 ``_tune_route`` 与报告都从这一处取，不再读本进程
                             # 的 ``LAST_INFO``（那是父进程自己的，本组根本没在这里跑）。
@@ -5570,8 +5556,7 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                     (observation.get("kernel_info") if observation else None)
                     or _kernel_info())
                 if not bad and seconds is not None:
-                    row["median_ms"] = round(seconds * 1000.0, 6)
-                    row["wall_ms"] = row["median_ms"]
+                    row["wall_ms"] = round(seconds * 1000.0, 6)
                     measured += 1
                     # 参照：``compare`` 显式给出时用真实参照；``none``（``--tune``
                     # 缺省）时退化为**首个成功组合的结果**做自洽校验。后者成本为零，
@@ -5607,11 +5592,11 @@ def run_tune(*, equation: str, shapes: Sequence[tuple[int, ...]],
                                         effective_tolerance(atol, np_dtype), float(rtol),
                                         reference_note))
                                 bad = True
-                    # 用户规则 §4：这一组的中位比当前上界更小 → **立即**压低上界，
+                    # 用户规则 §4：这一组的最小值比当前上界更小 → **立即**压低上界，
                     # 后续所有组都用它剪枝。只在"可用"的组上压低：数值不符/跑不成
                     # 的那些不该定义"要多快才算值得跑"。
                     if not bad and min_wall.observe(
-                            row["median_ms"], (kernel, as_equiv, optimize)):
+                            row["wall_ms"], (kernel, as_equiv, optimize)):
                         row["min_wall"] = True
                 if not isolated:
                     # 进程内路线：峰值在本进程里，读一次再释放（子进程路线已回报）。
@@ -6011,8 +5996,8 @@ def print_tune(tune: dict[str, Any], language: str = "zh",
         for line in tune_skip_line(row, dispatched=tune.get("dispatched") or {}):
             print(line, file=out)
     if verbose:
-        measured = sorted((row for row in rows if row.get("median_ms") is not None),
-                          key=lambda row: row["median_ms"])
+        measured = sorted((row for row in rows if _tune_wall_ms(row) is not None),
+                          key=lambda row: _tune_wall_ms(row))
         for row in measured[:5]:
             print("tune row  : " + (_bold(_tune_line(row, best))
                                     if row is best else _tune_line(row, best)),
@@ -6072,7 +6057,7 @@ def print_tune(tune: dict[str, Any], language: str = "zh",
     else:
         print("tune best : kernel_force={}  as_equivalence={}  optimize={}  "
               "wall_ms={:.6f}".format(best["kernel_force"], best["as_equivalence"],
-                                      best["optimize"], best["median_ms"]), file=out)
+                                      best["optimize"], _tune_wall_ms(best)), file=out)
     # 规格 §13.3：**末尾**必须是一张对齐的汇总表，表尾 ``best:`` / ``saved:``。
     # 放在最后一行之后（而不是塞进上面的明细里）：读者扫一眼表尾就能拿到
     # "选谁、存哪、写了几行删了几行"，不必回头在 30 行明细里找。
@@ -6302,7 +6287,10 @@ def build_parser(language: str = "zh") -> argparse.ArgumentParser:
     # 超时/预算只在 --tune 下有语义：缺省值写进 --help，用户不必猜"没写会跑多久"。
     parser.add_argument("--tune-timeout", type=float, default=DEFAULT_TUNE_TIMEOUT,
                         help=t("help.tune_timeout",
-                               default=f"{DEFAULT_TUNE_TIMEOUT:g}"))
+                               default=f"{DEFAULT_TUNE_TIMEOUT:g}",
+                               calls=1 + DEFAULT_WARMUP + DEFAULT_ROUNDS,
+                               window=DEFAULT_TUNE_TIMEOUT * (
+                                   1 + DEFAULT_WARMUP + DEFAULT_ROUNDS)))
     parser.add_argument("--tune-budget", type=float, default=DEFAULT_TUNE_BUDGET,
                         help=t("help.tune_budget",
                                default=f"{DEFAULT_TUNE_BUDGET:g}"))
@@ -6576,12 +6564,12 @@ def _tune_pass_detail(tune: dict[str, Any]) -> str:
     唯一直接证据；只写一个，读者无法分辨"上界被压低"与"碰巧选到"。
 
     ``--tune-timeout 0``（不设上界）时 ``min_wall_ms`` 是 ``None``，此时退回 ``best``
-    的实测中位：报告里给的是"这个数"，而不是一个 ``None`` 让人以为没测到。
+    的实测最小值：报告里给的是"这个数"，而不是一个 ``None`` 让人以为没测到。
     """
     best = tune.get("best")
     bound = tune.get("min_wall_ms")
     if bound is None and isinstance(best, dict):
-        bound = best.get("median_ms")
+        bound = _tune_wall_ms(best)
     text = "  min_wall_ms=" + ("-" if bound is None else f"{float(bound):.6f}") + "ms"
     if not isinstance(best, dict):
         return text + "  best=none"

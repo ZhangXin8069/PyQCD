@@ -180,8 +180,8 @@ def test_startup_cost_is_reported_separately_from_wall_time() -> None:
     assert wall < startup, (
         "wall_s 只该装受测的时间区，不该含进程启动", (wall, startup))
     # ``wall_s`` 还必须盖住样本：它是那段时间的墙钟，不是"父进程看到的文件时刻"。
-    assert float(observation["median_s"]) <= wall, (
-        "wall_s 必须 >= 单次中位（否则父进程的轮询粒度被当成了测量）", observation)
+    assert float(observation["minimum_s"]) <= wall, (
+        "wall_s 必须 >= 样本最小值（否则父进程的轮询粒度被当成了测量）", observation)
 
 
 def test_child_crash_is_an_error_not_a_timeout() -> None:

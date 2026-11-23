@@ -6,7 +6,7 @@
 | 项 | 值 |
 |---|---|
 | 适用范围 | `python -m pyqcd.einsum.test`、`python -m pyqcd.einsum.verify_specialized`、`pyqcd.einsum.contract` |
-| 版本基线 | pyqcd 0.5.3（选项与行为按当前实现核对） |
+| 版本基线 | pyqcd 0.5.19（选项与行为按当前实现核对） |
 | 性能口径 | **本文不给出任何性能数字**；一切以你在目标机器上的实测为准 |
 | 已删除的历史名 | `profile.csv`（旧表名）、独立等价表、`--compare` 的 numpy 档、`dim=4` 等长探针与 `--optimize-topology-v2`；本文其余部分不再提 |
 
@@ -88,18 +88,18 @@ python -m pyqcd.einsum.test --equation "ij,jk->ik" --shape "[4,4],[4,4]->[4,4]"
 | 固定不动的维度 | 方程、形状、dtype、设备、后端 |
 | 遍历的三个轴 | `kernel_force × as_equivalence × optimize` |
 | 分支 | 探测得出（不计时）：**B1** 原方程可特化 / **B2** 只有等价写法可特化 / **B3** 都无法特化 |
-| 组数 | **B1、B2 各 22 组；B3 21 组**（冻结口径） |
-| 顺序 | 共同前缀（`dedicated` → `generic`，每个内核内 `greedy → branch_1 → branch_2 → dp → branch_all → optimal → none`）→ 一条分支专属 `topology` → `backend` 尾部（同样 7 个 optimize） |
+| 组数 | **B1、B2 各 29 组；B3 28 组**（冻结口径） |
+| 顺序 | 共同前缀（`original` → `dedicated` → `generic`，每个内核内 `greedy → branch_1 → branch_2 → dp → branch_all → optimal → none`）→ 一条分支专属 `topology` → `backend` 尾部（同样 7 个 optimize） |
 | 剪枝 | `min_wall_ms` 上界初值 = `--tune-timeout`；某组单次 `contract()` 超界即**终止该组**（标 `pruned`、绝不写表）并继续下一组；任何一组测到更小耗时都**立刻压低**上界，后续全部按新上界剪枝 |
-| 每组的数 | 沿用 `--warmup` / `--rounds`；该组中位就是写进表里的 `wall_ms` |
+| 每组的数 | 沿用 `--warmup` / `--rounds`；该组样本最小值就是写进表里的 `wall_ms` |
 | 表读写 | 整轮在 tune session 里：表**既不读也不写**；结束后只写**胜出的那一组**，并删除同键其它所有行 |
 | 失败处置 | 抛异常标 `error=`、超 `--tune-timeout` 标 `timeout`、误差超 `--atol`/`--rtol` 标 `MISMATCH`：**只打印、不退出**，不参与选优、不写表 |
 
 ### 3.3 输出怎么读
 
 ```text
-tune comb : 1/22  kernel_force=dedicated  as_equivalence=false  optimize=greedy  backend=numpy  wall_ms=<t1>  状态=ok  原因=-
-tune comb : 2/22  kernel_force=dedicated  as_equivalence=false  optimize=branch_1  backend=numpy  状态=pruned  原因=耗时大于min_wall_ms,此组被终止  wall_ms=<t2>  min_wall_ms=<t1>
+tune comb : 1/28  kernel_force=original  as_equivalence=false  optimize=greedy  backend=numpy  wall_ms=<t1>  状态=ok  原因=-
+tune comb : 2/28  kernel_force=original  as_equivalence=false  optimize=branch_1  backend=numpy  状态=pruned  原因=耗时大于min_wall_ms,此组被终止  wall_ms=<t2>  min_wall_ms=<t1>
 tune prune: N 组因超过 min_wall_ms 被提前终止；最终上界 min_wall_ms=<t_best>，由 kernel_force=dedicated  as_equivalence=false  optimize=dp 设定
 tune file : /tmp/xxx/pyqcd.einsum.profile.csv
 tune wrote: kind=config  shape='<shape>'  kernel=dedicated  optimize=dp  wall_ms=<t_best>  note=-
@@ -118,9 +118,9 @@ tune best : kernel_force=dedicated  as_equivalence=false  optimize=dp  wall_ms=<
 
 | 选项 | 缺省 | 含义 |
 |---|---|---|
-| `--tune [true\|false]` | 关 | 开启整轮遍历 |
-| `--tune-timeout` | `30` | **每一次** `contract()` 调用的上限秒数（warmup 与每轮都算）；`0` 或负数 = 不限。超时只跳过该组，绝不中止整轮 |
-| `--tune-budget` | `0` | 整轮遍历的总时长上限；用尽即跳过剩余组合并在报告里给出"已测 N/M"。`0` = 不限 |
+| `--tune [all\|pass]` | 关 | `all`（或裸 `--tune`）跑完整遍历；`pass` 跑快速通过模式；`false`/空串关闭 |
+| `--tune-timeout` | `15` | **每一次** `contract()` 调用的上限秒数；整组窗口为 `15 × (1 + warmup + rounds)` 秒。`0` = 不设上限。超时只跳过该组，绝不中止整轮 |
+| `--tune-budget` | `1000` | 整轮遍历的总时长上限（秒）；用尽即跳过剩余组合并在报告里给出"已测 N/M"。`0` = 不限 |
 | `--compare`（tune 下） | 关 | 不给就不跑参考基准；显式给出时主路径照旧跑一次参考，但不影响遍历维度 |
 
 显式 `--kernel-force` / `--as-equivalence` / `--optimize` 只要不在遍历网格里，就会
@@ -155,7 +155,7 @@ python -m pyqcd.einsum.test --equation "<同一条>" --shape "<同一形状>"
 | `--scene` | `distill` | 反推尺寸用的档：`distill` / `distill_curr` / `scene` / `full`（另有 `smoke` 冒烟档）。这些形状只作路径与正确性证据，见 §7 |
 | `--device` | `cpu` | `cpu` / `gpu` / `cuda`；后两者等价，都是**设备名**，后端由 `--backend` 选 |
 | `--dtype` | `complex128` | `complex128` / `complex64` / `float64` / `float32` |
-| `--backend` | `auto` | `auto` / `numpy` / `cupy` / `torch` |
+| `--backend` | `auto` | 数组库：`auto` / `numpy` / `cupy` / `torch`。原生 KUPL/CUDA 特化由 `--kernel-force` 选择，不是后端 |
 | `--atol` | `1e-12` | **相对**容差（按 `max\|expected\|` 归一），不是逐元素绝对阈值；单精度常需 `1e-6~1e-4` |
 | `--rtol` | `0` | 附加的相对余量 |
 | `--seed` | `0` | 操作数随机种子（各路径看到同一批数据） |
@@ -170,7 +170,7 @@ python -m pyqcd.einsum.test --equation "<同一条>" --shape "<同一形状>"
 |---|---|---|
 | `--optimize` | 不写（内部按 `auto`） | 收缩序。对外叶子 **7 个**：`greedy` / `optimal` / `dp` / `branch_1` / `branch_2` / `branch_all` / `none`（`none` = 按方程原序，不加规划）。`auto` 是缺省选择器（按算子数让规划器兜底选择），不是可写的叶子：它不在 `--optimize` 的 `choices` 里，显式写它以退出码 2 结束 |
 | `--specialize` | `auto` | `auto` 跟随 `PYQCD_EINSUM_SPECIALIZE`；`true` 强制允许特化（不保证命中，原生门照样会拒）；`false` 强制通用路径，是排查原生内核问题的第一手段 |
-| `--kernel-force` | `generic` | **只接受单个取值**：`generic`（完全跳过专用内核） / `dedicated` / `topology`（按操作数后端解析成 kupl/cuda） / `backend`（直接调后端 einsum）。强制而跑不成抛 `KernelUnavailableError`、退出码 2，**绝不回落**；强制尝试会旁路负缓存，保证真试一次 |
+| `--kernel-force` | `generic` | **只接受单个取值**：`generic`（完全跳过专用内核） / `dedicated` / `topology`（按操作数后端解析成 kupl/cuda） / `original`（交给 `opt_einsum.contract`） / `backend`（直接调后端 einsum）。强制而跑不成抛 `KernelUnavailableError`、退出码 2，**绝不回落**；强制尝试会旁路负缓存，保证真试一次 |
 | `--as-equivalence` | `auto` | `auto` / `true` / `false` / `force`。`auto` 只在表里有等价行时改写；`force` 忽略负标记、真的重查一次。改写后返回的数组始终是**原方程**的答案 |
 | `--equivalence` | `auto` | 只影响**报告**的等价段：`auto` / `true` / `false`。不改 `contract()` 行为、不改数值 |
 | `--explain` | `auto` | 首次详解三段 `plan` / `kernel` / `why`；`auto` 跟随 `--verbose`，`true` 强制打印 |
@@ -207,11 +207,11 @@ python -m pyqcd.einsum.test --equation "<同一条>" --shape "<同一形状>"
 
 | 选项 | 缺省 | 说明 |
 |---|---|---|
-| `--rounds` | `5` | 计时轮数，取中位 |
-| `--warmup` | `1` | 丢弃的预热次数；**不可为 0**（传 0 退出码 2：首调含缓存与原生库绑定，不丢弃会让耗时失真） |
+| `--rounds` | `3` | 计时轮数；这些样本的**最小值**写入报告与 `wall_ms` |
+| `--warmup` | `1` | 丢弃的预热次数；`0` 仍合法，用于明确把冷启动计入耗时时 |
 | `--cache` | `auto` | `auto` / `true` / `false`；显式 `true`/`false` 时 `--verbose true` 多一行 `cache :` 统计，`false` 既不读也不写 |
 | `--profile` | `auto` | 配置表三态：`auto` 跟随 `PYQCD_EINSUM_PROFILE`；`false` 本次不读不写、连目录都不建 |
-| `--profile-dir` | — | 钉住配置表目录；缺省 `PYQCD_EINSUM_PROFILE_DIR` 或 `./.cache`。**是"钉住"不是"单次覆盖"**：省略它不会回退到环境变量，只会沿用它 |
+| `--profile-dir` | — | 钉住配置表目录；缺省 `PYQCD_EINSUM_PROFILE_DIR` 或用户缓存目录 `$XDG_CACHE_HOME/pyqcd.einsum`（未设时 `~/.cache/pyqcd.einsum`）。**是"钉住"不是"单次覆盖"**：省略它不会回退到环境变量，只会沿用它 |
 | `--json` | — | **路径**不是开关：`--json /path/out.json`；写不进去退出码 2 |
 | `--verbose` | `false` | `true` 把逐项明细打到 stderr |
 | `--language` | `auto` | `auto` / `en` / `zh-cn`；只改文案，不改结果、不改 JSON 字段、不写环境变量 |
@@ -233,7 +233,8 @@ python -m pyqcd.einsum.test --equation "<同一条>" --shape "<同一形状>"
 
 ### 5.1 文件与位置
 
-表只有一张，缺省落在当前工作目录的 `./.cache/` 下，文件名：
+表只有一张，缺省落在 `$XDG_CACHE_HOME/pyqcd.einsum/`（未设时为
+`~/.cache/pyqcd.einsum/`）下，文件名：
 
 ```text
 pyqcd.einsum.profile.csv
@@ -242,7 +243,8 @@ pyqcd.einsum.profile.csv
 - **只有 `--tune` 能写**；普通 `contract()` **只读**：不追加、不更新、不重写文件。
 - `--profile-dir` 或 `PYQCD_EINSUM_PROFILE_DIR` 可改目录；`PYQCD_EINSUM_PROFILE=0`
   或 `--profile false` 整进程/本次关闭：不读、不写、连目录都不建。
-- 不要把它提交进版本库：里面有主机名、方程与形状。
+- 旧位置 `./.cache/pyqcd.einsum.profile.csv` 只作为只读回退来源。
+- 不要提交任何用户缓存：里面有主机名、方程与形状。
 
 ### 5.2 硬规矩
 
@@ -256,8 +258,9 @@ pyqcd.einsum.profile.csv
 
 ### 5.3 `wall_ms` 是唯一计时列
 
-`wall_ms` = **整个 `contract()` 调用的墙钟时间**：含等价转换（若有）、读表、
-未命中时的规划与匹配、内核执行；不含参照实现的计时与收尾落盘。
+`wall_ms` = **整个 `contract()` 调用的墙钟时间**，取 `--rounds` 个受测样本的
+**最小值**：含等价转换（若有）、读表、未命中时的规划与匹配、内核执行；不含参照
+实现的计时与收尾落盘。
 表里**没有第二列计时**可以与它相加或混比。
 
 两类行靠"哪几列有值"区分：

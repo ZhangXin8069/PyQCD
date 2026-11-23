@@ -302,6 +302,10 @@ def _toolchain_problem(backend: str) -> str | None:
             return ("binutils ('nm') is required to validate CUDA exports; "
                     "fix: apt install binutils | dnf install binutils | "
                     "conda install -c conda-forge binutils")
+        if shutil.which("readelf") is None:
+            return ("binutils ('readelf') is required to reject CUDA archives "
+                    "with CPU-BLAS dependencies; fix: apt install binutils | "
+                    "dnf install binutils | conda install -c conda-forge binutils")
         return None
     if shutil.which("nm") is None:
         # make.sh 用 nm 校验 applyPlanQcd 导出符号；缺 nm 时它只会报“符号缺失”。

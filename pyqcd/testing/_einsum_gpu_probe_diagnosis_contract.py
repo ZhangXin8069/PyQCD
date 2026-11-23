@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import subprocess
 import tempfile
 import unittest
@@ -602,10 +603,44 @@ def test_cuda_build_rejects_missing_required_exports() -> None:
     assert "REQUIRED_EXPORTED_SYMBOLS" in build_source, build_source
     assert "built library is missing required exports" in build_source, build_source
     assert "binutils nm is required" in build_source, build_source
+    assert "binutils readelf is required" in build_source, build_source
     assert "exit 3" in build_source, build_source
     assert "_missing_native_exports" in setup_source, setup_source
     assert "library is missing required exports" in setup_source, setup_source
+    assert "readelf" in setup_source, setup_source
     subprocess.run(["bash", "-n", str(make_script)], check=True)
+
+
+def test_cuda_archive_is_independent_of_host_openblas() -> None:
+    """CUDA GEMM uses cuBLAS; the archive must not acquire an OpenBLAS NEEDED entry.
+
+    A leftover ``-lopenblas`` made ``libpyqcdeinsum_cuda.so`` unloadable on
+    ``gpu-debug`` even though every GEMM symbol it uses came from cuBLAS.
+    """
+    root = Path(__file__).resolve().parents[2]
+    make_script = root / "cpp" / "cuda" / "einsum" / "make-nv.sh"
+    source = make_script.read_text(encoding="utf-8")
+    assert "_OPENBLAS_FLAGS" not in source, source
+    assert "-lopenblas" not in source, source
+    assert "-lcublas" in source, source
+    assert "must not depend on a CPU BLAS library" in source, source
+
+
+def test_cuda_topology_archive_counts_as_a_native_backend() -> None:
+    """A ready ctypes CUDA archive is native even without the optional Cython module."""
+    from ..einsum import _native
+
+    archive = Path("/synthetic/libpyqcdeinsum_cuda.so")
+    with patch.dict(os.environ, {"PYQCD_EINSUM_NATIVE": "auto"}, clear=False), \
+            patch.object(_native, "_cuda_module", lambda: None), \
+            patch.object(_native, "_cuda_archive_ready", lambda: True), \
+            patch.object(_native, "_cuda_library_path", lambda: archive):
+        assert _native.backend_name() == "cuda"
+        info = _native.build_info()
+
+    assert info["backend"] == "cuda", info
+    assert info["native_available"] is True, info
+    assert info["native_library"] == str(archive), info
 
 
 TESTS = (
@@ -628,6 +663,8 @@ TESTS = (
     test_topology_binding_report_converts_inspection_errors,
     test_probe_checks_archive_even_without_cupy,
     test_cuda_build_rejects_missing_required_exports,
+    test_cuda_archive_is_independent_of_host_openblas,
+    test_cuda_topology_archive_counts_as_a_native_backend,
 )
 
 

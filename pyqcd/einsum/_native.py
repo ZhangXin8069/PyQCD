@@ -72,6 +72,16 @@ def _cuda_entry(name: str = "applyPlanQcd") -> Any:
     return None if compiled is None else getattr(compiled, name, None)
 
 
+def _cuda_archive_ready() -> bool:
+    """Whether the ctypes CUDA topology archive loads and exports the frozen ABI."""
+    try:
+        from .cuda._program import topology_binding_report
+
+        return topology_binding_report(_cuda_library_path()).get("status") == "ready"
+    except Exception:  # noqa: BLE001 - build_info is diagnostic and must not raise
+        return False
+
+
 def _kupl_entry(name: str = "applyPlanQcd") -> Any:
     from .kupl import einsum as kupl
 
@@ -90,7 +100,7 @@ def library_path(backend: str | None = None) -> Path:
     """Return the archive the given backend would load."""
     name = backend or requested_backend()
     if name == "auto":
-        name = "cuda" if _cuda_entry() is not None else "kupl"
+        name = "cuda" if (_cuda_entry() is not None or _cuda_archive_ready()) else "kupl"
     if name == "cuda":
         return _cuda_library_path()
     from .kupl import einsum as kupl
@@ -103,6 +113,8 @@ def backend_name() -> str:
     for name in _order():
         entry = _cuda_entry() if name == "cuda" else _kupl_entry()
         if entry is not None:
+            return name
+        if name == "cuda" and _cuda_archive_ready():
             return name
     return "python"
 

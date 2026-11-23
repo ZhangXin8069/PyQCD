@@ -40,8 +40,8 @@ python -m pyqcd.einsum.test --equation "ab,bc,cd->ad" \
 | `--backend` | `auto` / `numpy` / `cupy` / `torch` | 只选数组库；强制原生内核用 `--kernel-force`，不是后端 |
 | `--compare` | `opt_einsum` / `backend` / `none` | 缺省 **`none`**；"与 numpy 对照"的写法是 `--backend numpy --compare backend` |
 | `--optimize` | `greedy` / `optimal` / `dp` / `branch_1` / `branch_2` / `branch_all` / `none` | `auto` 是内置的缺省选择器，**不是**可写取值 |
-| `--warmup` | 整数 | 缺省 **0**（2026-11-20 起合法且为缺省：遍历是把网格量完，不在每一格上追亚毫秒精度）；**显式给正值**时在加速设备上被抬到 2 |
-| `--rounds` | 整数 | 缺省 **1**，即每格只测一次；想要中位抹平调度抖动时显式给更大的值 |
+| `--warmup` | 整数 | 缺省 **1**；明确要把冷启动计入耗时时仍可传 `0`。正数在加速设备上会被抬到 2 |
+| `--rounds` | 整数 | 缺省 **3**；报告取最快样本，降低调度抖动掩盖最优观测值的概率 |
 | `--kernel-force` | `generic` / `dedicated` / `topology` / `original` / `backend` | 只接受单值，缺省 `generic`；`original` 把收缩交给 `opt_einsum.contract`（同样吃 `--optimize`，`branch_1`/`branch_2`/`branch_all`/`none` 会被转成 `branch-1`/`branch-2`/`branch-all`/`False`）；逗号链式与 `auto` 一律拒绝 |
 | `--shape` | `[..],[..]->[..]` | 省略时按该方程在语料里的 roles 反推尺寸 |
 | `--explain` | `auto` / `true` / `false` | 省略 `--shape` 且经等价写法命中时，打印 `shape source: corpus(equivalence) via <方程>` |
@@ -58,9 +58,10 @@ python -m pyqcd.einsum.test --equation "ab,bc,cd->ad" \
   进出各同步一次（CPU 上是空操作），所以 GPU 上报的也是计算时间。更早的发布不是这样，
   GPU 耗时因此小了若干个量级——那些历史数字**全部作废**，见
   `docs/ERRATA_gpu_timing_20261119.md`（仓库内，不在本站）。
-- **加速设备上 `--warmup` 至少抬到 2。** 那里的首调还要建 CUDA 上下文、cuBLAS 句柄与
-  workspace，只丢一次会让中位低于脚本里的稳态。报告 `time :` 给的是**实际使用**的值，
-  被抬过时另有一行 `time note:`；`--json` 里是 `warmup_effective` / `warmup_raised`。
+- **加速设备上的正 `--warmup` 至少抬到 2。** 那里的首调还要建 CUDA 上下文、cuBLAS
+  句柄与 workspace，只丢一次仍可能让最快样本混入残余启动成本；显式传 `0` 时保持 `0`。
+  报告 `time :` 给的是**实际使用**的值，被抬过时另有一行 `time note:`；`--json`
+  里是 `warmup_effective` / `warmup_raised`。
 
 `--compare opt_einsum` 的参照跑在**与操作数同一个后端**上（`backend=` 显式传入并写进
 参照行，例如 `opt_einsum.contract(backend='cupy', optimize='greedy')`）。若 `opt_einsum`
@@ -76,14 +77,15 @@ tune init : mode=all  equation=ab,bc,cd->ad  operands=3  dtype=complex128  devic
 tune init : shapes ok  total_elements=192  est_bytes=0MiB
 tune init : branch probe done  raw_ok=false  equiv_ok=false  branch=B3
 tune init : kernel admission done  unavailable=topology
-tune axes : kernel_force=dedicated,generic,topology,backend  as_equivalence=false,true  optimize=greedy,branch_1,branch_2,dp,branch_all,optimal,none
+tune axes : kernel_force=original,dedicated,generic,topology,backend  as_equivalence=false,true  optimize=greedy,branch_1,branch_2,dp,branch_all,optimal,none
 tune branch: branch=B3  raw_ok=false  equiv_ok=false  target_equation=-
-tune plan : planned=21  kept=21  trimmed=0  skipped-kernels=-
+tune plan : planned=28  kept=28  trimmed=0  skipped-kernels=-
 ```
 
 * `tune axes` —— 被遍历的三个轴。`optimize` 只会出现七个叶子
   `greedy` / `optimal` / `dp` / `branch_1` / `branch_2` / `branch_all` / `none`；
-  `kernel_force` 只会出现 `dedicated` / `generic` / `topology` / `backend`。
+  `kernel_force` 只会出现 `original` / `dedicated` / `generic` / `topology` /
+  `backend`。
 * `tune branch` —— 方程本身或它的等价写法能否特化，这决定清单里有没有 `topology` 组。
 * `tune plan` —— 计划多少组、经内核准入后还剩多少组；对本形状不可用的内核在这里被
   剔除并如实报告一次，因此"少了一组"不会被误读成静默跳过。
@@ -93,16 +95,16 @@ tune plan : planned=21  kept=21  trimmed=0  skipped-kernels=-
 **从不翻译**：`ok`、`pruned`（比当前上界慢而被剪枝）、`timeout`、`error`、
 `mismatch`（超出容差）、`skip`（该内核对本形状本质上没有路）。
 
-## `--tune-timeout` 的能力边界（如实说明）
+## `--tune-timeout` 的执行边界
 
-单次上限用 `SIGALRM` 实现，是**尽力而为（best-effort）**上限：
+缺省值是**每次 `contract()` 调用 15 秒**。一组执行
+`1 + warmup + rounds` 次调用，所以在缺省 `warmup=1`、`rounds=3` 下，组级预算是
+`15 x 5 = 75 秒`。
 
-- 能打断 **Python 侧长循环**（例如 `optimal` 在 9 个以上算子上的穷举规划）；
-- **打不断原生 C/CUDA 代码**：信号只在 Python 字节码之间派发，原生代码不返回解释器时
-  handler 永不执行。曾尝试 fork 子进程隔离并**已回退**——CUDA 上下文不跨 fork 复用，
-  子进程必然 `cudaErrorInitializationError`。
-
-因此 GPU 上请把 `--tune-timeout` 取足够大，或先用 `--tune pass` 快速通过。
+缺省每组运行在**全新解释器**中，父进程可以 kill 子进程，因此组级预算是能中断原生
+C/CUDA 代码的**硬上限**。设 `PYQCD_EINSUM_TUNE_INPROCESS=1` 才切回进程内路线；那时
+`SIGALRM` 只是**尽力而为**上限，能中断 Python 长循环，但打不断不返回解释器的原生调用。
+GPU 上可保留缺省子进程隔离、增大上限，或先用 `--tune pass` 快速通过。
 
 ## 正确性优先于速度
 
@@ -159,4 +161,4 @@ def check(equation, *operands):
 - 内核可用性取决于设备与库（CUDA 步表、KUPL 步表、BLAS 复数支持各不相同）；
 - 因此任何"在某某加速卡上快多少"的说法，换到你的机器上通常不成立。
 
-要数字，就自己跑一次 tune——那条命令打印的就是你这台机器、这个形状的真实中位耗时。
+要数字，就自己跑一次 tune——那条命令打印的就是你这台机器、这个形状的最快实测墙钟。

@@ -206,6 +206,14 @@ python -m pyqcd.einsum.verify_specialized "cadb,menf,ac,em,bd,fn->"
 
 ## 版本变更摘要
 
+* **0.5.19** — `qcd-einsum` 的测量缺省值改为 `warmup=1`、`rounds=3`、
+  `tune-timeout=15`、`tune-budget=1000`；报告的 `wall_ms` 取全部受测样本的
+  **最小值**，并删除已弃用的 `median_ms` / `median_s` 墙钟兼容别名。tune
+  子进程现在固定继承调用方的 PyQCD 源码根，切换临时工作目录也不会静默加载另一份
+  安装。CUDA 归档现在只链接 cuBLAS/CUDA runtime，不再因 GPU 节点缺少构建机
+  OpenBLAS 而加载失败；已校验的 CUDA topology 归档即使没有可选 Cython 模块，
+  也会在 `build_info()` 中如实记为原生后端。CLI 帮助、用户指南、性能页、
+  诊断手册与内部契约已同步更新。
 * **0.5.18** — 仅文档发布：致谢统一为中国科学院近代物理研究所格点QCD课题组
   （https://www.lattice-qcd-at-imp.top/），不再逐个列出人名或拼音缩写。
   无代码改动；本版用于刷新 PyPI 项目页。
