@@ -234,11 +234,13 @@ for tsrc in range(Nt):
         peram_u_src_root = peram_u_src_root[..., :Nev_max, :Nev_src].copy()
     else:
         peram_u_src_root = None
+        
     if rank == 1:
         peram_u_sink_root = backend.load(str(peram_sink_file))
         peram_u_sink_root = peram_u_sink_root[..., :Nev_max, :Nev_src].copy()
     else:
         peram_u_sink_root = None
+
     backend.cuda.get_current_stream().synchronize()
     comm.Barrier()
     peram_read_time = time.perf_counter() - step_start
@@ -253,14 +255,18 @@ for tsrc in range(Nt):
     peram_tcur_src_cache = []
     peram_src_tcur_cache = []
     peram_sink_tcur_cache = []
+
     for current_time in current_times:
         source_payload = peram_u_src_root[current_time] if rank == 0 else None
         sink_payload = peram_u_sink_root[current_time] if rank == 1 else None
+        
         peram_tcur_src = backend.asarray(get_mpi_data(source_payload, mdtype="Bcast", root=0))
         peram_tcur_sink = backend.asarray(get_mpi_data(sink_payload, mdtype="Bcast", root=1))
+        
         peram_tcur_src_cache.append(peram_tcur_src)
         peram_src_tcur_cache.append(cached_contract("ab,...bcef,cd->...dafe", gamma5_backend, peram_tcur_src.conj(), gamma5_backend, optimize="auto"))
         peram_sink_tcur_cache.append(cached_contract("ab,...bcef,cd->...dafe", gamma5_backend, peram_tcur_sink.conj(), gamma5_backend, optimize="auto"))
+        
     backend.cuda.get_current_stream().synchronize()
     peram_distribution_time = time.perf_counter() - step_start
     peram_distribution_total += peram_distribution_time
@@ -273,6 +279,7 @@ for tsrc in range(Nt):
     source_VdV = backend.asarray(get_mpi_data(source_payload, mdtype="Bcast", root=src_owner)).transpose(0, 2, 1).conj()
     source_payload = sink_VVV[src_index, npi_momentum_indices] if rank == src_owner else None
     source_VVV = backend.asarray(get_mpi_data(source_payload, mdtype="Bcast", root=src_owner)).conj()
+    
     # N 轴属于汇端质子，固定为零动量；M 轴才是源端 Nπ 动量。
     sink_payload = sink_VVV[sink_index, 0:1] if rank == sink_owner else None
     sink_VVV_t = backend.asarray(get_mpi_data(sink_payload, mdtype="Bcast", root=sink_owner))

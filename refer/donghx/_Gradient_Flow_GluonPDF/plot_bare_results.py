@@ -10,7 +10,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent
 TAUS = (0.05, 0.10, 0.20, 0.50, 0.80, 1.00)
 CHANNELS = ("unpolarized", "helicity", "transversity")
-FLAVORS = ("u_minus_d",)
+FLAVORS = ("u", "d")
 COLORS = {0.05: "#0072B2", 0.10: "#D55E00", 0.20: "#009E73", 0.50: "#CC79A7", 0.80: "#E69F00", 1.00: "#56B4E9"}
 COMPONENT = {"unpolarized": 0, "helicity": 1, "transversity": 1}
 # Keep a stable horizontal position for a flow time even while tau=1.00 is
@@ -37,15 +37,15 @@ def main() -> int:
                     if not path.is_file():
                         continue
                     with np.load(path, allow_pickle=False) as d:
-                        y = d["bare_matrix_element_raw_diagnostic"][comp, ip]
-                        e = d["statistical_error_raw_diagnostic"][comp, ip]
+                        y = d["bare_matrix_element"][comp, ip]
+                        e = d["total_error"][comp, ip]
                         ok = np.isfinite(y) & np.isfinite(e)
                         if not np.any(ok):
                             continue
                         ax.errorbar(d["delta_z_values"][ok] + FLOW_OFFSETS[tau], y[ok], yerr=e[ok], fmt="o", ms=3.0, capsize=1.5, linestyle="none", color=COLORS[tau], alpha=0.85, label=rf"$t_f/a^2={tau:g}$")
                 ax.axhline(0.0, color="black", lw=0.7); ax.grid(alpha=0.22)
                 ax.set_xlabel(r"$z/a$"); ax.set_xlim(-0.55, 20.55); ax.set_xticks(np.arange(0, 21, 2)); ax.set_title(rf"$P_z={pz}$", pad=9)
-            axes[0].set_ylabel("bare matrix element (primary-fit raw diagnostic)")
+            axes[0].set_ylabel("bare matrix element (Sumratio primary fit)")
             handles, labels = axes[0].get_legend_handles_labels()
             if handles:
                 # Reserve a dedicated band for the legend so it cannot collide
@@ -53,7 +53,7 @@ def main() -> int:
                 fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False,
                            bbox_to_anchor=(0.5, 0.915), columnspacing=1.5,
                            handletextpad=0.45, borderaxespad=0.0)
-            note = "Connected u-d; Sumratio T7-10 L=R=2; 100 bootstrap replicas"
+            note = "Connected flavor; Sumratio T7-10 L=R=2; 100 bootstrap replicas"
             if channel == "transversity": note += "; relative sign pending external confirmation"
             fig.suptitle(f"Gradient-flow {channel} bare matrix elements ({flavor.replace('_minus_', ' - ')})", y=0.985)
             fig.text(0.5, 0.018, note, ha="center", va="bottom", fontsize=9)

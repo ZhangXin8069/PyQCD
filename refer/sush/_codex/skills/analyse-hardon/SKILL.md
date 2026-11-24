@@ -29,6 +29,8 @@ For two-point functions, use a one-state/two-state exponential or a backward-pro
 
 ## Plotting conventions
 
+By default, generate figures only in PDF format. Do not generate PNG files or figures in any other format unless explicitly requested by the user.
+
 Unless the user explicitly requests another graphic, plot statistical data with `matplotlib.axes.Axes.errorbar`, showing `yerr`, labels, units, and the fit window. Use different colors, markers, or line styles for different momenta, operators, states, projections, or fit schemes, and state the physical meaning in the legend; do not overlay nearly identical colors. Fit curves and plateau bands may use `plot`/`fill_between`, but retain error bars on the original statistical points. Annotate `chi2/dof`, the window, and unit conversions such as `fm2GeV/alttc`.
 
 ## Minimal program structure

@@ -64,33 +64,8 @@ Cpt = '2pt'
 Projection = False
 use_equivalence = False
 ignore_dis = False
-optimize = ['greedy', 'dp', 'auto']
-dynamic_operator_groups = [
-    [s, t]
-    for sink_group in sink_operator
-    for source_group in source_operator
-    for s in sink_group
-    for t in source_group
-]
-# 此计划是变量清单：M4 到 M6 只提供其中的 peram/V/gamma 输入。
-dynamic_plan = run_wick_analysis(
-    dynamic_operator_groups, Cpt=Cpt,
-    use_equivalence=use_equivalence, ignore_dis=ignore_dis, verbose=False)
-required_peram = sorted({
-    (p[2], tuple(p[4]))
-    for entry in dynamic_plan
-    for p in entry[2]['peram'][entry[3]]
-})
-required_v = sorted({
-    (v[1], v[3])
-    for entry in dynamic_plan
-    for v in entry[2]['V']
-})
-required_gamma = sorted({
-    g[1]
-    for entry in dynamic_plan
-    for g in entry[2]['gamma_pos']
-})
+optimize = 'auto'
+
 # 下方 M4 到 M6 必须准确提供这些动态输入。
 
 corr_NN = backend.zeros((Nt, Lt, Ns, Ns, Mom_len, len(sink_operator), len(source_operator)), dtype = complex)
@@ -102,6 +77,8 @@ sink_VVV = np.zeros((Lt, Mom_len, Nev_src, Nev_src, Nev_src), dtype = complex)
 
 comm.Barrier()
 st_eigen = time.perf_counter()
+if rank == 0:
+    print(f'[conf {conf_id}] VVV/VDV preparation started', flush = True)
 for tsrc_indx, tsrc in enumerate(trank):
     eigvecs = backend.load(f'/nexdata/project/lqcd/sush/eigensystem/beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64/{conf_id}/{conf_id}_t{tsrc:03d}_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy')
     
@@ -116,12 +93,13 @@ if backend.__name__ == 'cupy':
     backend.cuda.get_current_stream().synchronize()
 comm.Barrier()
 if rank == 0:
-    print(f'load eigen and cal VVV VDV use time {(time.perf_counter() - st_eigen):.3f} s')
+    print(f'[conf {conf_id}] VVV/VDV preparation completed in {(time.perf_counter() - st_eigen):.3f} s', flush = True)
 
 # M5 peram 数据：加载并分发计划所需的 perambulator
 comm.Barrier()
 st_load = time.perf_counter()
 if rank == 0:
+    print(f'[conf {conf_id}] peram loading/distribution started', flush = True)
     peram_u = np.zeros((Nt, Nt, Ns, Ns, Nev_src, Nev_src), dtype = complex)
     for tsrc in range(Nt):
         peram_u[tsrc] = np.load(f'/nexdata/project/lqcd/sush/perambulators/beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64/light/{conf_id}/t{tsrc:03d}_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy')[..., :Nev_src, :Nev_src]
@@ -132,7 +110,7 @@ peram_u = get_mpi_data(peram_u, mdtype = 'TScatter', root = 0, axis = 1)
     
 comm.Barrier()
 if rank == 0:
-    print(f'load peram use time {(time.perf_counter() - st_load):.3f} s')
+    print(f'[conf {conf_id}] peram loading/distribution completed in {(time.perf_counter() - st_load):.3f} s', flush = True)
 
 # M6 注册表：只绑定 M3 所需的 gamma/V/peram 名称
 GR = GammaRegistry()
@@ -144,8 +122,11 @@ GR.register('gamma_5',  gamma(5))
 GR.register('Projector',  (gamma(4) + gamma(0))/2.0)
 
 # M7 动态循环：绑定当前切片并执行计划
+st_main = time.perf_counter()
 for tsrc in range(Nt):
     st_cal = time.perf_counter()
+    if rank == 0:
+        print(f'[conf {conf_id}] 2pt tsrc={tsrc} ({tsrc + 1}/{Nt}) started', flush = True)
     tsink_list, _, tsink_indx = get_mpi_tlist(Nt = Nt, t = [x for x in range(tsrc, tsrc + Nt//2, 1)], gtype = 'TScatter')
     
     VVV_src = backend.asarray(get_mpi_data(data = sink_VVV[tsrc//size, :], mdtype = 'Bcast', root = tsrc%size))
@@ -154,6 +135,7 @@ for tsrc in range(Nt):
     peram_u_src_src = get_mpi_data(data = peram_u[tsrc, tsrc//size, ..., :Nev_src, :Nev_src], mdtype = 'Bcast', root = tsrc%size)
     PR.register('light', ('tsrc', 'tsrc' ), backend.asarray(peram_u_src_src))
     for i in range(0, 3):
+        st_cal_i = time.perf_counter()
         for j in range(0, 3):
             for _tsink, tsink in enumerate(tsink_indx):
                 PR.register('light', ('tsink', 'tsrc'), backend.asarray(peram_u[tsrc, tsink]))
@@ -198,27 +180,42 @@ for tsrc in range(Nt):
                     )
 
                 corr_NN[tsrc, tsink, ..., i, j] = dc.calculate_all()
-                
+
+        if rank == 0:
+            if backend.__name__ == 'cupy':
+                backend.cuda.get_current_stream().synchronize()
+            print(f'[conf {conf_id}] rank=0 local tsrc={tsrc} sink_basis={i} completed in {(time.perf_counter() - st_cal_i):.3f} s', flush = True)
+
     if backend.__name__ == 'cupy':
         backend.cuda.get_current_stream().synchronize()
     comm.Barrier()
     if rank == 0:
-        print(f'calculate 2pt of tsrc {tsrc} use time {(time.perf_counter() - st_cal):.3f} s')
+        print(f'[conf {conf_id}] 2pt tsrc={tsrc} ({tsrc + 1}/{Nt}) completed in {(time.perf_counter() - st_cal):.3f} s', flush = True)
 
-# M8 收集与保存：收集、源时间平均、保存并打印总耗时
+if rank == 0:
+    print(f'[conf {conf_id}] main loop completed: {Nt} sources in {(time.perf_counter() - st_main):.3f} s', flush = True)
+
+# M8 收集与保存：收集、源时间求和、保存并打印总耗时
 comm.Barrier()
+st_gather = time.perf_counter()
+if rank == 0:
+    print(f'[conf {conf_id}] correlator gather started', flush = True)
 corr_NN = get_mpi_data(corr_NN, mdtype = 'TGather', root = 0, axis = 1)
 
 if rank == 0:
+    print(f'[conf {conf_id}] correlator gather completed in {(time.perf_counter() - st_gather):.3f} s', flush = True)
     corr_save_path = f'/public/home/sush/distillation/0v2b/result_nex/E32P29/Px0Py0Pz0/ENV_{Nev_src}/conf{conf_id}'
     import pathlib
     path = pathlib.Path(corr_save_path)
     if path.exists():
-        print('save_path:',corr_save_path)
+        print('save_path:',corr_save_path, flush = True)
     
     else:
         path.mkdir(parents = True, exist_ok = True)
-        print('mkdir_save_path:',corr_save_path)
+        print('mkdir_save_path:',corr_save_path, flush = True)
         
+    st_save = time.perf_counter()
+    print(f'[conf {conf_id}] source sum and save started', flush = True)
     backend.save(f'{corr_save_path}/corr_3pt_NN_2pt_src100.npy', loop_tsrc(corr_NN[:], indx = [0, 1], Boundary_Conditions = 'Antiperiodic'))
-    print(f'total elapsed time {time.perf_counter() - st_total:.3f} s')
+    print(f'[conf {conf_id}] saved {corr_save_path}/corr_3pt_NN_2pt_src100.npy; source sum/save time {(time.perf_counter() - st_save):.3f} s', flush = True)
+    print(f'[conf {conf_id}] total elapsed time {time.perf_counter() - st_total:.3f} s', flush = True)

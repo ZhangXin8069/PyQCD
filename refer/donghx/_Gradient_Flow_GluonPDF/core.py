@@ -1,179 +1,233 @@
-"""Lattice-unit estimator, reproducible noise, and immutable small artifacts."""
-from __future__ import annotations
-
+"""Single-device CUDA measurement helpers; numerical work requires a Slurm GPU allocation."""
+import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
-import tempfile
+import socket
+import subprocess
+import time
+import traceback
 
-import numpy as np
-
-ENSEMBLE = "beta6.41_mu-0.2295_ms-0.2050_L32x96"
-FLOW_SOURCE = Path("/public/home/donghx/Gradient_Flow/Blending_L32x96")
+ROOT = Path(__file__).resolve().parent
 
 
-def digest(path):
+def sha(path):
     h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(8 << 20), b''):
             h.update(block)
     return h.hexdigest()
 
 
-def canonical_hash(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()
-
-
-def atomic_npz(path, **payload):
-    """Publish without replacing another run's artifact, even on a race."""
+def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".kinetic-", suffix=".npz", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as f:
-            np.savez_compressed(f, **payload)
-            f.flush()
-            os.fsync(f.fileno())
-        os.link(tmp, path)
-    finally:
-        os.unlink(tmp)
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
+    os.replace(tmp, path)
 
 
-def metadata_array(value):
-    return np.array(json.dumps(value, sort_keys=True, allow_nan=False))
+def identity(path):
+    p = Path(path)
+    s = p.stat()
+    return dict(path=str(p.resolve()), bytes=s.st_size, mtime_ns=s.st_mtime_ns,
+                inode=s.st_ino, ctime_ns=s.st_ctime_ns)
 
 
-def gamma_dr():
-    # Same DeGrand--Rossi matrices as flow_common_l32x96.gamma_matrices.
-    g = np.zeros((4, 4, 4), complex)
-    g[0, 0, 3] = g[0, 1, 2] = 1j
-    g[0, 2, 1] = g[0, 3, 0] = -1j
-    g[1, 0, 3] = g[1, 3, 0] = -1
-    g[1, 1, 2] = g[1, 2, 1] = 1
-    g[2, 0, 2] = g[2, 3, 1] = 1j
-    g[2, 1, 3] = g[2, 2, 0] = -1j
-    g[3, 0, 2] = g[3, 1, 3] = g[3, 2, 0] = g[3, 3, 1] = 1
-    return g
+def dagger(a):
+    return a.swapaxes(-1, -2).conj()
 
 
-def shift_fermion(field, mu, forward, xp=np):
-    """field(t,z,y,x,spin,color); APBC only at the global temporal boundary."""
-    axis = 3 - mu
-    result = xp.roll(field, -1 if forward else 1, axis=axis)
-    if mu == 3:
-        edge = [slice(None)] * field.ndim
-        edge[axis] = -1 if forward else 0
-        result[tuple(edge)] *= -1
+def translated(a, offsets):
+    # a[t,z,y,x,color,color], physical direction mu maps to axis 3-mu.
+    for mu, displacement in enumerate(offsets):
+        if displacement:
+            a = cp.roll(a, -displacement, axis=3-mu)
+    return a
+
+
+def path_matrix(u, steps):
+    result = cp.broadcast_to(cp.eye(3, dtype=cp.complex128), u.shape[1:]).copy()
+    offset = [0, 0, 0, 0]
+    for signed_mu in steps:
+        mu = abs(signed_mu)-1
+        if signed_mu < 0:
+            offset[mu] -= 1
+            link = dagger(translated(u[mu], offset))
+        else:
+            link = translated(u[mu], offset)
+            offset[mu] += 1
+        result = result @ link
     return result
 
 
-def hop(field, gauge, mu, forward, xp=np):
-    """Periodic gauge(mu,t,z,y,x,color,color), with no embedded APBC phase."""
-    shifted = shift_fermion(field, mu, forward, xp)
-    link = gauge[mu]
-    if not forward:
-        link = xp.roll(link, 1, axis=3 - mu).swapaxes(-1, -2).conj()
-    return xp.einsum("...ab,...sb->...sa", link, shifted)
+LOOPS = [(mu, nu, 1, 1) for mu in range(4) for nu in range(mu+1, 4)]
+LOOPS += [(mu, 3, 2, 2) for mu in range(3)]
 
 
-def dslash_central(field, gauge, xp=np):
-    if field.ndim != 6 or field.shape[-2:] != (4, 3):
-        raise ValueError("Expected field(t,z,y,x,4,3)")
-    if gauge.shape != (4, *field.shape[:4], 3, 3):
-        raise ValueError("Gauge/fermion layout mismatch")
-    out = xp.zeros_like(field)
-    gamma = xp.asarray(gamma_dr())
+def closed_loops(u):
+    values = []
+    for mu, nu, r, t in LOOPS:
+        p = [mu+1]*r + [nu+1]*t + [-(mu+1)]*r + [-(nu+1)]*t
+        tr = cp.trace(path_matrix(u, p), axis1=-2, axis2=-1)
+        values.append([float(tr.real.mean()/3), float(((cp.abs(tr)**2-1)/8).mean())])
+    return np.asarray(values)
+
+
+def group_errors(u):
+    eye = cp.eye(3, dtype=cp.complex128)
+    unitarity, determinant = 0., 0.
     for mu in range(4):
-        delta = (hop(field, gauge, mu, True, xp) - hop(field, gauge, mu, False, xp)) / 2
-        out += xp.einsum("rs,...sc->...rc", gamma[mu], delta)
+        unitarity = max(unitarity, float(cp.max(cp.abs(u[mu] @ dagger(u[mu])-eye))))
+        a = u[mu]
+        det = (a[..., 0, 0]*(a[..., 1, 1]*a[..., 2, 2]-a[..., 1, 2]*a[..., 2, 1])
+               -a[..., 0, 1]*(a[..., 1, 0]*a[..., 2, 2]-a[..., 1, 2]*a[..., 2, 0])
+               +a[..., 0, 2]*(a[..., 1, 0]*a[..., 2, 1]-a[..., 1, 1]*a[..., 2, 0]))
+        determinant = max(determinant, float(cp.max(cp.abs(det-1))))
+    return dict(unitarity_max=unitarity, determinant_max=determinant)
+
+
+def quality(u):
+    # Matches QUDA: Delta = sum_mu[U_mu(x-mu)-U_mu(x)] - h.c., traceless.
+    delta = cp.zeros(u.shape[1:], dtype=cp.complex128)
+    action = 0.
+    for mu in range(4):
+        delta += cp.roll(u[mu], 1, axis=3-mu)-u[mu]
+        action += float(cp.trace(u[mu], axis1=-2, axis2=-1).real.mean())/12
+    delta -= dagger(delta)
+    tr = cp.trace(delta, axis1=-2, axis2=-1)/3
+    for color in range(3):
+        delta[..., color, color] -= tr
+    local = cp.sum(cp.abs(delta)**2, axis=(-2, -1))/3
+    return dict(theta=float(local.mean()), theta_local_max=float(local.max()),
+                gauge_functional=action)
+
+
+def lines(u, nmax):
+    fund = np.empty((3, 2, nmax+1), np.complex128)
+    adj = np.empty((3, 2, nmax+1), np.float64)
+    for mu in range(3):
+        for si, sign in enumerate([1, -1]):
+            product = cp.broadcast_to(cp.eye(3, dtype=cp.complex128), u.shape[1:]).copy()
+            fund[mu, si, 0] = adj[mu, si, 0] = 1
+            for n in range(1, nmax+1):
+                if sign == 1:
+                    link = cp.roll(u[mu], -(n-1), axis=3-mu)
+                else:
+                    link = dagger(cp.roll(u[mu], n, axis=3-mu))
+                product = product @ link
+                tr = cp.trace(product, axis1=-2, axis2=-1)
+                fund[mu, si, n] = complex(tr.mean()/3)
+                adj[mu, si, n] = float(((cp.abs(tr)**2-1)/8).mean())
+    reversal = max(float(np.max(abs(fund[:, 1]-fund[:, 0].conj()))),
+                   float(np.max(abs(adj[:, 1]-adj[:, 0]))))
+    assert np.isfinite(fund).all() and np.isfinite(adj).all()
+    assert reversal < CONTRACT['line_reversal_atol'], reversal
+    return fund, adj, reversal
+
+
+def random_su3(shape, seed):
+    # Product of three normalized random SU(2) embeddings; reproducible, not Haar SU(3).
+    rng = cp.random.RandomState(seed)
+    g = cp.broadcast_to(cp.eye(3, dtype=cp.complex128), (*shape, 3, 3)).copy()
+    for i, j in [(0, 1), (1, 2), (0, 2)]:
+        q = rng.standard_normal((*shape, 4), dtype=cp.float64)
+        q /= cp.sqrt(cp.sum(q*q, axis=-1))[..., None]
+        alpha, beta = q[..., 0]+1j*q[..., 1], q[..., 2]+1j*q[..., 3]
+        col_i, col_j = g[..., :, i].copy(), g[..., :, j].copy()
+        g[..., :, i] = col_i*alpha[..., None]-col_j*beta.conj()[..., None]
+        g[..., :, j] = col_i*beta[..., None]+col_j*alpha.conj()[..., None]
+    return g
+
+
+def transform(u, g):
+    result = cp.empty_like(u)
+    for mu in range(4):
+        result[mu] = g @ u[mu] @ dagger(cp.roll(g, -1, axis=3-mu))
+    return result
+
+
+def prepare(gauge):
+    gauge.toHost()
+    dr = gauge.gauge_dirac
+    dr.setPrecision(cuda=QudaPrecision.QUDA_DOUBLE_PRECISION)
+    dr.setReconstruct(cuda=QudaReconstructType.QUDA_RECONSTRUCT_NO)
+    dr.gauge_param.make_resident_gauge = 0
+    assert gauge.data.dtype == np.dtype('complex128')
+    return gauge
+
+
+def to_lex(gauge):
+    return cp.asarray(gauge.latt_info.lexico(gauge.data, True))
+
+
+def from_lex(u, li):
+    return prepare(LatticeGauge(li, li.evenodd(cp.asnumpy(u), True)))
+
+
+def fix(gauge, method, tolerance, max_steps):
+    prepare(gauge)
+    started = time.monotonic()
+    print('FIX_START', method, tolerance, max_steps, flush=True)
+    if method == 'OVR':
+        gauge.fixingOVR(4, max_steps, 100, 1.7, tolerance, 10, 1)
+    else:
+        gauge.fixingFFT(4, max_steps, 100, CONTRACT['fft_alpha_reset_per_chunk'], CONTRACT['fft_autotune'], tolerance, 1)
+    cp.cuda.get_current_stream().synchronize()
+    print('FIX_RETURN', method, time.monotonic()-started, flush=True)
+    return time.monotonic()-started
+
+
+def tiny_contract():
+    li = LatticeInfo([4, 4, 4, 4])
+    unit = cp.broadcast_to(cp.eye(3, dtype=cp.complex128), (4, 4, 4, 4, 4, 3, 3)).copy()
+    assert quality(unit)['theta'] == 0
+    assert np.max(abs(closed_loops(unit)-1)) < 1e-14
+    f, a, _ = lines(unit, 5)
+    assert np.max(abs(f-1)) < 1e-14 and np.max(abs(a-1)) < 1e-14
+    g = random_su3((4, 4, 4, 4), 11011)
+    pure = transform(unit, g)
+    assert np.max(abs(closed_loops(pure)-1)) < 2e-13
+    expected = g @ dagger(cp.roll(g, -3, axis=3))
+    assert float(cp.max(abs(path_matrix(pure, [1, 1, 1])-expected))) < 2e-13
+    out = dict(unit_and_pure_gauge_paths='PASS', algorithms={})
+    for method in ['OVR', 'FFT']:
+        field = from_lex(pure, li)
+        seconds = fix(field, method, 1e-12, 4000)
+        u = to_lex(field)
+        q = quality(u)
+        err = float(np.max(abs(closed_loops(u)-1)))
+        assert q['theta'] < 1.1e-12 and err < CONTRACT['closed_loop_atol'], (method, q, err)
+        out['algorithms'][method] = dict(**q, loop_error=err, seconds=seconds)
+        del field, u
     return out
 
 
-def laplace(field, gauge, xp=np):
-    out = -8 * field.copy()
-    for mu in range(4):
-        out += hop(field, gauge, mu, True, xp) + hop(field, gauge, mu, False, xp)
-    return out
+def measure(gauge, output, label, reference=None):
+    u = to_lex(gauge)
+    q = quality(u)
+    q.update(group_errors(u))
+    closed = closed_loops(u)
+    fund, adj, reversal = lines(u, CONTRACT['line_nmax'])
+    plaq = np.asarray(gauge.plaquette(), dtype=float)
+    independent_plaq = np.mean(closed[:6, 0])
+    assert abs(plaq[0]-independent_plaq) < CONTRACT['closed_loop_atol'], (plaq, independent_plaq)
+    assert max(q['unitarity_max'], q['determinant_max']) < CONTRACT['su3_atol'], q
+    q.update(line_reversal_error=reversal, quda_plaquette=plaq.tolist(), label=label)
+    if reference is not None:
+        q['closed_loop_max_change'] = float(np.max(abs(closed-reference)))
+        assert q['closed_loop_max_change'] < CONTRACT['closed_loop_atol'], q
+    target = output/(label+'.npz')
+    np.savez_compressed(target, fundamental=fund, adjoint=adj, closed_loops=closed,
+                        directions=np.array(['x', 'y', 'z']), signs=np.array([1, -1]),
+                        lengths_a=np.arange(CONTRACT['line_nmax']+1), loop_geometry=np.array(LOOPS))
+    with np.load(target, allow_pickle=False) as saved:
+        assert np.array_equal(saved['fundamental'], fund)
+    q['npz_sha256'] = sha(target)
+    write_json(output/(label+'.json'), q)
+    print('MEASURE', label, json.dumps(q), flush=True)
+    del u
+    cp.get_default_memory_pool().free_all_blocks()
+    return q, closed, fund
 
-
-def kinetic_sample(rho, phi, gauge, xp=np):
-    """-2/V rho^dagger Dslash phi; no division by spin/color dimensions."""
-    volume = int(np.prod(phi.shape[:4]))
-    return -2.0 * xp.vdot(rho, dslash_central(phi, gauge, xp)) / volume
-
-
-def z4_noise(shape, seed, conf, noise_id):
-    # Full spin/color/spacetime support, E[eta eta^dagger]=I, not unit-norm noise.
-    rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(conf), int(noise_id)]))
-    return np.asarray([1, 1j, -1, -1j], dtype=np.complex128)[rng.integers(0, 4, size=shape)]
-
-
-def unit_gauge(shape):
-    return np.broadcast_to(np.eye(3, dtype=complex), (4, *shape, 3, 3)).copy()
-
-
-def free_wilson_kinetic(lattice_xyzt, mass, flow_times):
-    """Exact finite-volume Wilson/free-flow trace; continuum Zchi need not be 1."""
-    shape = tuple(reversed(lattice_xyzt))
-    p = np.meshgrid(*[2 * np.pi * (np.arange(n) + (0.5 if i == 0 else 0)) / n
-                     for i, n in enumerate(shape)], indexing="ij")
-    s2 = sum(np.sin(k)**2 for k in p)
-    w = mass + sum(1 - np.cos(k) for k in p)
-    phat2 = 4 * sum(np.sin(k / 2)**2 for k in p)
-    return np.array([-8 * 3 * np.mean(np.exp(-2 * t * phat2) * s2 / (w*w + s2))
-                     for t in flow_times])
-
-
-def free_noise_reference(eta, mass, flow_times):
-    """Exact continuum-in-flow-time free lattice estimator for the SAME noise."""
-    shape = eta.shape[:4]
-    twist = np.exp(-1j * np.pi * np.arange(shape[0]) / shape[0]).reshape(-1, 1, 1, 1, 1, 1)
-    ek = np.fft.fftn(eta * twist, axes=(0, 1, 2, 3), norm="ortho")
-    p = np.meshgrid(*[2 * np.pi * (np.arange(n) + (0.5 if i == 0 else 0)) / n
-                     for i, n in enumerate(shape)], indexing="ij")
-    w = mass + sum(1 - np.cos(k) for k in p)
-    den = w*w + sum(np.sin(k)**2 for k in p)
-    gsin = sum(np.sin(p[3-mu])[..., None, None] * np.einsum("rs,...sc->...rc", g, ek)
-               for mu, g in enumerate(gamma_dr()))
-    qk = (w[..., None, None] * ek - 1j * gsin) / den[..., None, None]
-    dqk = sum(1j * np.sin(p[3-mu])[..., None, None] * np.einsum("rs,...sc->...rc", g, qk)
-                for mu, g in enumerate(gamma_dr()))
-    phat2 = 4 * sum(np.sin(k / 2)**2 for k in p)
-    return np.array([-2 * np.vdot(ek, np.exp(-2*t*phat2)[..., None, None] * dqk) / np.prod(shape)
-                     for t in flow_times])
-
-
-def validate_plan(plan):
-    if plan.get("schema") != "quark_ringed_measurement_plan_v1":
-        raise ValueError("Unsupported measurement plan")
-    size = plan["lattice_xyzt"]
-    if len(size) != 4 or any(type(n) is not int or n < 2 or n % 2 for n in size):
-        raise ValueError("Use four even positive lattice extents")
-    flow = np.asarray(plan["flow_times"], float)
-    eps = float(plan["epsilon"])
-    if flow.ndim != 1 or len(flow) == 0 or not np.isfinite(flow).all() or not np.isfinite(eps) or eps <= 0:
-        raise ValueError("Invalid flow schedule")
-    steps = np.rint(flow / eps).astype(int)
-    if steps[0] < 1 or np.any(np.diff(steps) <= 0) or not np.allclose(flow / eps, steps, rtol=0, atol=1e-10):
-        raise ValueError("Flow targets must be unique increasing integer steps")
-    for name in ("mass", "csw", "stout_rho", "tol", "residual_max", "a_fm"):
-        if not np.isfinite(plan[name]):
-            raise ValueError(f"Nonfinite {name}")
-    if plan["mass"] <= -4 or plan["tol"] <= 0 or plan["residual_max"] < plan["tol"] or plan["a_fm"] <= 0:
-        raise ValueError("Invalid mass/tolerances/spacing")
-    if plan["csw"] < 0 or plan["stout_rho"] < 0 or type(plan["stout_steps"]) is not int or plan["stout_steps"] < 0:
-        raise ValueError("Invalid valence action")
-    if plan["stout_dir_ignore"] != 4:
-        raise ValueError("The matched valence action uses four-dimensional stout")
-    if type(plan["maxiter"]) is not int or plan["maxiter"] <= 0:
-        raise ValueError("Invalid maxiter")
-    if plan["flow_gauge"] != "thin" or plan["fermion_boundary"] != "antiperiodic":
-        raise ValueError("Only thin-link flow with APBC is implemented")
-    if plan["mass_normalization"] != "QUDA_ASYMMETRIC_MASS_NORMALIZATION_full_MAT":
-        raise ValueError("Unsupported propagator normalization")
-    if not str(plan.get("action_provenance", "")).strip() or not str(plan.get("mass_treatment", "")).strip():
-        raise ValueError("Missing action/mass provenance")
-    if plan.get("free_field", False) and (plan["csw"] != 0 or plan["stout_steps"] != 0):
-        raise ValueError("Free validation uses csw=0 and no stout")
-    return steps

@@ -2,449 +2,222 @@ import os
 import sys
 
 test_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, '/public/home/sush/distillation/')
+sys.path.insert(0, os.path.join(test_dir, ".."))
 
 from function_contraction import *
 
-from opt_einsum import contract, contract_path
+import numpy
+from opt_einsum import contract
+
+from pyquda_utils import io
 
 import time
+backend_name = 'cupy'
 
-set_backend('numpy')
+set_backend(backend_name)
 backend = get_backend()
 
-lattice_size = [32, 32, 32, 64]
-grid_size = [1, 1, 1, 32]
+grid_size = [1, 1, 1, 1]
 
-def Readin_gauge(conf_file, lattice_size):
-    
-    Nz, Ny, Nx, Nt = lattice_size
-    
-    f = open("%s" % conf_file, "rb")
-    gauge = backend.fromfile(f, dtype=">f8")
-    gauge = backend.array(gauge)
+lattice_size = [32, 32, 32, 96]
 
-    gauge = gauge.reshape(Nt, Nx, Nx, Nx, 4, 3, 3, 2)
-    gauge = gauge[..., 0] + gauge[..., 1] * 1j
-    f.close()
+exact_eigen = 100
+N_eigen = [100, 200, 400, 600, 800]
+N_sum = [20, 20, 20, 20, 20]
+N_extract = [10, 10, 10, 10, 10]
+noise_eigen = 200
 
-    return gauge
+exact_eigen_name = 100
+N_eigen_name = [100, 200, 400, 600, 800]
+N_sum_name = [20, 20, 20, 20, 20]
+N_extract_name = [10, 10, 10, 10, 10]
+noise_eigen_name = 400
 
-conf_id = sys.argv[1]
+Nbin = 1
+N_stout = 20
 
-# param = creat_param(
-#     sink_operators = [['d^d', 'gamma_sink', 'u', 1]],
-#     source_operators = [['u^d', 'gamma_source', 'd', -1]]
-# )
-
-# corr = distillation_func(
-#     conf_id = conf_id,
-#     param = param.data(),
-    
-#     lattice_size = lattice_size, # Nx, Ny, Nz, Nt 
-#     grid_size = grid_size, 
-    
-#     backend = backend.__name__
-# )
-
-mpinit(grid_size = grid_size, latt_size = lattice_size, backend = backend.__name__)
-
-rank = getMPIRank()
-size = getMPISize()
-comm = getMPIComm()
-
-Nx, Ny, Nz, Nt = lattice_size
-Lx, Ly, Lz, Lt = [lattice_size[x]//grid_size[x] for x in range(len(lattice_size))]
-
-fun_eigen = corr_eigvecs(Nx = Nx, backend = backend)
-
-Mom_sink_VDV = [[0, 0, 0]] + sorted(creat_mom_list(Mom = [0, 0, 1], fix_Q2 = True)) + sorted(creat_mom_list(Mom = [0, 1, 1], fix_Q2 = True)) + sorted(creat_mom_list(Mom = [1, 1, 1], fix_Q2 = True))
-Mom_sink_VVV = [[0, 0, 0]] + sorted(creat_mom_list(Mom = [0, 0, 1], fix_Q2 = True))[::-1] + sorted(creat_mom_list(Mom = [0, 1, 1], fix_Q2 = True))[::-1] + sorted(creat_mom_list(Mom = [1, 1, 1], fix_Q2 = True))[::-1]
-
-# Mom_sink_VDV = [[0, 0, 0]]
-# Mom_sink_VVV = [[0, 0, 0]]
-
-Mom_len = len(Mom_sink_VDV)
-
-phase_exp_2pt = backend.zeros((Mom_len, Nx, Nx, Nx, Nc), dtype = complex)
-phase_exp_3pt = backend.zeros((Mom_len, Nx, Nx, Nx), dtype = complex)
-
-for Mom_indx in range(Mom_len):
-    phase_exp_2pt[Mom_indx] = fun_eigen.phase_exp_2pt(Mom = Mom_sink_VDV[Mom_indx])
-    phase_exp_3pt[Mom_indx] = fun_eigen.phase_exp_3pt(Mom = Mom_sink_VVV[Mom_indx])
+t_sep_list = [12]
 
 Nev_src = 100
 
-t_rank, _, _ = get_mpi_tlist(Nt = Nt, t = range(Nt), gtype = 'TScatter')
+Nev_curr_list = [100, 400]
+Nev_max = Nev_curr_list[-1]
 
-import numpy as np
+link_max = 0
 
-sink_VdV = backend.zeros((Lt, Mom_len, Nev_src, Nev_src), dtype = complex)
-sink_VVV = backend.zeros((Lt, Mom_len, Nev_src, Nev_src, Nev_src), dtype = complex)
+Mom_sink = [[0, 0, 0]]
+Mom_link = [[0, 0, 0]]
 
-st_eigen = time.perf_counter()
-for t_src_indx, t_src in enumerate(t_rank):
-    eigvecs = backend.load(f'/nexdata/project/lqcd/sush/eigensystem/beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64/{conf_id}/{conf_id}_t{t_src:03d}_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy')[:Nev_src]
+gauge_path = f'/public/group/lqcd/configurations/CLOVER/beta6.41_mu-0.2295_ms-0.2050_L32x96/beta6.41_mu-0.2295_ms-0.2050_L32x96_cfg_'
+
+conf_id = sys.argv[1]
+
+if backend_name == 'numpy':
+    from pyquda import initGrid
+    initGrid(grid_size = grid_size)
     
-    for Mom_indx in range(Mom_len):
-        sink_VdV[t_src_indx, (Mom_indx):((Mom_indx + 1))] = fun_eigen.Mom_VdV_sink_t_3(phase_exp = phase_exp_2pt[(Mom_indx):((Mom_indx + 1))], eigvecs = eigvecs[:Nev_src])
-        sink_VVV[t_src_indx, Mom_indx] = fun_eigen.Mom_VVV_sink_t_3(phase_exp = phase_exp_3pt[Mom_indx], eigvecs = eigvecs[:Nev_src])
-        
-# if rank == 0:
-#     sink_VVV = backend.load(f'/public/home/sush/distillation/0v2b/VVV/{conf_id}_VVV.npy')
-#     print(sink_VVV.shape)
-    
-# else:
-#     sink_VVV = None
-
-# sink_VVV = get_mpi_data(sink_VVV, mdtype = 'TScatter', axis = 0)
-
-if rank == 0:
-    print(f'load eigen and cal VVV VDV use time {(time.perf_counter() - st_eigen):.3f} s')
-    
-projection = (gamma(0) + gamma(4))/2
-
-
-
-gamma_delta = 1j * gamma(10) @ backend.asarray([gamma(1), gamma(2), gamma(3), gamma(4)])
-
-corr_2pt_delta1_pi0u_proton = backend.zeros((6, len(gamma_delta), Mom_len, 1, Nt, Lt), dtype = complex)
-corr_2pt_delta1_pi0d_proton = backend.zeros((4, len(gamma_delta), Mom_len, 1, Nt, Lt), dtype = complex)
-corr_2pt_delta1_pi1_neutron = backend.zeros((4, len(gamma_delta), Mom_len, 1, Nt, Lt), dtype = complex)
-
-corr_2pt_pi0u_proton_delta1 = backend.zeros((6, len(gamma_delta), 1, Mom_len, Nt, Lt), dtype = complex)
-corr_2pt_pi0d_proton_delta1 = backend.zeros((4, len(gamma_delta), 1, Mom_len, Nt, Lt), dtype = complex)
-corr_2pt_pi1_neutron_delta1 = backend.zeros((4, len(gamma_delta), 1, Mom_len, Nt, Lt), dtype = complex)
-
-corr_2pt_delta1_delta1 = backend.zeros((2, len(gamma_delta), 1, 1, Nt, Lt), dtype = complex)
-
-st_peram = time.perf_counter()
-
-peram_u = backend.zeros((Lt, Nt, Ns, Ns, Nev_src, Nev_src), dtype = complex)
-
-for t_src_indx, t_src in enumerate(t_rank):
-    peram_u[t_src_indx] = backend.load(
-        f'/nexdata/project/lqcd/sush/perambulators/beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64/light/{conf_id}/t{t_src:03d}_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy'
-        )[..., :Nev_src, :Nev_src]
-
-if rank == 0:
-    print(f'load peram of t_src {t_src} use time {(time.perf_counter() - st_peram):.3f} s')
-
-peram_u = contract('ab,Ttbcef,cd->tTdafe', gamma(5), peram_u.conj(), gamma(5))
-
-for t_src in range(Nt):
-    source_VdV = get_mpi_data(data = sink_VdV[t_src//size], mdtype = 'Bcast', root = t_src%size).transpose(0, 2, 1).conj()
-    source_VVV = backend.asarray(get_mpi_data(data = sink_VVV[t_src//size], mdtype = 'Bcast', root = t_src%size)).conj()
-    
-    t_sink_list_rank, _, t_sink_list_indx = get_mpi_tlist(Nt = Nt, t = range(t_src, t_src + 32, 1), gtype = 'TScatter')
-    peram_u_src_src = get_mpi_data(peram_u[t_src, t_src//size], mdtype = 'Bcast', root = t_src%size)
-    
-    st_cal = time.perf_counter()
-        
-    for t_sink_indx, t_sink in enumerate(t_sink_list_indx):
-        t_real_sink = t_sink_list_rank[t_sink_indx]
-        sink_VVV_t_sink = backend.asarray(sink_VVV[t_sink])
-        
-        for Mom_indx in range(max(1, Mom_len//9)):
-            # # corr_2pt_delta1_pi0u_proton[0, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            # #     'eifj,ambn,cgdh,okpl,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            # #     peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u_src_src,
-            # #     gamma_delta, gamma(5), gamma(7),
-            # #     sink_VVV_t_sink, source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            # #     projection
-            # # )
-            
-            # corr_2pt_delta1_pi0u_proton[1, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            #     'eifj,ambn,ckdl,ogph,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            #     peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u_src_src,
-            #     gamma_delta, gamma(5), gamma(7),
-            #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            #     projection
-            # )
-            
-            # corr_2pt_delta1_pi0u_proton[2, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            #     'eifj,agbh,cmdn,okpl,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            #     peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u_src_src,
-            #     gamma_delta, gamma(5), gamma(7),
-            #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            #     projection
-            # )
-            
-            # corr_2pt_delta1_pi0u_proton[3, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            #     'eifj,agbh,ckdl,ompn,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            #     peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u_src_src,
-            #     gamma_delta, gamma(5), gamma(7),
-            #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            #     projection
-            # )
-            
-            # corr_2pt_delta1_pi0u_proton[4, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            #     'eifj,akbl,cmdn,ogph,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            #     peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u_src_src,
-            #     gamma_delta, gamma(5), gamma(7),
-            #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            #     projection
-            # )
-            
-            # # corr_2pt_delta1_pi0u_proton[5, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            # #     'eifj,akbl,cgdh,ompn,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            # #     peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u_src_src,
-            # #     gamma_delta, gamma(5), gamma(7),
-            # #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            # #     projection
-            # # )
-
-            # corr_2pt_delta1_pi0d_proton[0, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            #     'emfn,oipj,agbh,ckdl,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            #     peram_u[t_src, t_sink], peram_u_src_src, peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            #     gamma_delta, gamma(5), gamma(7),
-            #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            #     projection
-            # )
-            
-            # # corr_2pt_delta1_pi0d_proton[1, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            # #     'emfn,oipj,akbl,cgdh,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            # #     peram_u[t_src, t_sink], peram_u_src_src, peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            # #     gamma_delta, gamma(5), gamma(7),
-            # #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            # #     projection
-            # # )
-            # corr_2pt_delta1_pi0d_proton[1, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = -1.0 * corr_2pt_delta1_pi0u_proton[4, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink]
-            
-            # # corr_2pt_delta1_pi0d_proton[2, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            # #     'eifj,ompn,agbh,ckdl,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            # #     peram_u[t_src, t_sink], peram_u_src_src, peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            # #     gamma_delta, gamma(5), gamma(7),
-            # #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            # #     projection
-            # # )
-            # corr_2pt_delta1_pi0d_proton[2, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = corr_2pt_delta1_pi0u_proton[3, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink]
-            
-            # # corr_2pt_delta1_pi0d_proton[3, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            # #     'eifj,ompn,akbl,cgdh,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            # #     peram_u[t_src, t_sink], peram_u_src_src, peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            # #     gamma_delta, gamma(5), gamma(7),
-            # #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            # #     projection
-            # # )
-            
-            # # corr_2pt_delta1_pi1_neutron[0, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            # #     'eifj,okpl,ambn,cgdh,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            # #     peram_u[t_src, t_sink], peram_u_src_src, peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            # #     gamma_delta, gamma(5), gamma(7),
-            # #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            # #     projection
-            # # )
-            
-            # # corr_2pt_delta1_pi1_neutron[1, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            # #     'eifj,okpl,agbh,cmdn,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            # #     peram_u[t_src, t_sink], peram_u_src_src, peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            # #     gamma_delta, gamma(5), gamma(7),
-            # #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            # #     projection
-            # # )
-            # corr_2pt_delta1_pi1_neutron[1, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = corr_2pt_delta1_pi0u_proton[2, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink]
-            
-            # # corr_2pt_delta1_pi1_neutron[2, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            # #     'ekfl,oipj,ambn,cgdh,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            # #     peram_u[t_src, t_sink], peram_u_src_src, peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            # #     gamma_delta, gamma(5), gamma(7),
-            # #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            # #     projection
-            # # )
-            # corr_2pt_delta1_pi1_neutron[2, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = -1.0 * corr_2pt_delta1_pi0u_proton[1, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink]
-            
-            # # corr_2pt_delta1_pi1_neutron[3, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = contract(
-            # #     'ekfl,oipj,agbh,cmdn,Gce,mo,gi,Nbdf,Mnp,Mhjl,ka->GMN',
-            # #     peram_u[t_src, t_sink], peram_u_src_src, peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            # #     gamma_delta, gamma(5), gamma(7),
-            # #     sink_VVV_t_sink[0:1], source_VdV[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[(9 * Mom_indx):(9 * (Mom_indx + 1))],
-            # #     projection
-            # # )
-            # corr_2pt_delta1_pi1_neutron[3, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink] = -1.0 * corr_2pt_delta1_pi0d_proton[0, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), :, t_src, t_sink]
-
-            #*******************************************************************************************************************************************************************************************
-            
-            corr_2pt_pi0u_proton_delta1[0, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-                'kmln,cadb,gehf,iojp,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-                peram_u[t_src, t_sink], peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-                gamma(5), gamma(7), gamma_delta, 
-                sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-                projection
-            )
-            
-            # corr_2pt_pi0u_proton_delta1[1, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-            #     'kmln,cadb,gohp,iejf,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-            #     peram_u[t_src, t_sink], peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-            #     gamma(5), gamma(7), gamma_delta, 
-            #     sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-            #     projection
-            # )
-            
-            corr_2pt_pi0u_proton_delta1[2, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-                'kmln,cedf,gahb,iojp,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-                peram_u[t_src, t_sink], peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-                gamma(5), gamma(7), gamma_delta, 
-                sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-                projection
-            )
-            
-            corr_2pt_pi0u_proton_delta1[3, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-                'kmln,cedf,gohp,iajb,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-                peram_u[t_src, t_sink], peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-                gamma(5), gamma(7), gamma_delta, 
-                sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-                projection
-            )
-            
-            # corr_2pt_pi0u_proton_delta1[4, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-            #     'kmln,codp,gahb,iejf,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-            #     peram_u[t_src, t_sink], peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-            #     gamma(5), gamma(7), gamma_delta, 
-            #     sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-            #     projection
-            # )
-            
-            corr_2pt_pi0u_proton_delta1[5, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-                'kmln,codp,gehf,iajb,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-                peram_u[t_src, t_sink], peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-                gamma(5), gamma(7), gamma_delta, 
-                sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-                projection
-            )
-
-            # corr_2pt_pi0d_proton_delta1[0, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-            #     'cadb,kmln,gehf,iojp,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-            #     peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-            #     gamma(5), gamma(7), gamma_delta, 
-            #     sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-            #     projection
-            # )
-            corr_2pt_pi0d_proton_delta1[0, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = corr_2pt_pi0u_proton_delta1[0, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink]
-            
-            # corr_2pt_pi0d_proton_delta1[1, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-            #     'cadb,kmln,gohp,iejf,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-            #     peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-            #     gamma(5), gamma(7), gamma_delta, 
-            #     sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-            #     projection
-            # )
-            # corr_2pt_pi0d_proton_delta1[1, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = corr_2pt_pi0u_proton_delta1[1, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink]
-            
-            corr_2pt_pi0d_proton_delta1[2, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-                'cmdn,kalb,gehf,iojp,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-                peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-                gamma(5), gamma(7), gamma_delta, 
-                sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-                projection
-            )
-            
-            # corr_2pt_pi0d_proton_delta1[3, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-            #     'cmdn,kalb,gohp,iejf,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-            #     peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-            #     gamma(5), gamma(7), gamma_delta, 
-            #     sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-            #     projection
-            # )
-            corr_2pt_pi0d_proton_delta1[3, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = -1.0 * corr_2pt_pi0u_proton_delta1[3, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink]
-            
-            # corr_2pt_pi1_neutron_delta1[0, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-            #     'cmdn,kolp,gahb,iejf,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-            #     peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-            #     gamma(5), gamma(7), gamma_delta, 
-            #     sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-            #     projection
-            # )
-            corr_2pt_pi1_neutron_delta1[0, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = -1.0 * corr_2pt_pi0u_proton_delta1[2, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink]
-            
-            # corr_2pt_pi1_neutron_delta1[1, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-            #     'cmdn,kolp,gehf,iajb,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-            #     peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-            #     gamma(5), gamma(7), gamma_delta, 
-            #     sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-            #     projection
-            # )
-            corr_2pt_pi1_neutron_delta1[1, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = -1.0 * corr_2pt_pi0d_proton_delta1[2, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink]
-            
-            # corr_2pt_pi1_neutron_delta1[2, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-            #     'codp,kmln,gahb,iejf,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-            #     peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-            #     gamma(5), gamma(7), gamma_delta, 
-            #     sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-            #     projection
-            # )
-            # corr_2pt_pi1_neutron_delta1[2, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = corr_2pt_pi0u_proton_delta1[4, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink]
-            
-            # corr_2pt_pi1_neutron_delta1[3, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = contract(
-            #     'codp,kmln,gehf,iajb,ac,em,Gik,Nbd,Nfnp,Mhjl,og->GMN',
-            #     peram_u[t_real_sink, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink],
-            #     gamma(5), gamma(7), gamma_delta, 
-            #     sink_VdV[t_sink, (9 * Mom_indx):(9 * (Mom_indx + 1))], sink_VVV_t_sink[(9 * Mom_indx):(9 * (Mom_indx + 1))], source_VVV[0:1],
-            #     projection
-            # )
-            corr_2pt_pi1_neutron_delta1[3, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink] = corr_2pt_pi0u_proton_delta1[5, :, :, (9 * Mom_indx):(9 * (Mom_indx + 1)), t_src, t_sink]
-                        
-
-        corr_2pt_delta1_delta1[0, ..., t_src, t_sink] = contract(
-            'eofp,ambn,cgdh,Gce,Gmo,Nbdf,Mnph,ga->GMN',
-            peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            gamma_delta, gamma_delta,
-            sink_VVV_t_sink[0:1], source_VVV[0:1],
-            projection
-        )
-        
-        corr_2pt_delta1_delta1[1, ..., t_src, t_sink] = contract(
-            'eofp,agbh,cmdn,Gce,Gmo,Nbdf,Mnph,ga->GMN',
-            peram_u[t_src, t_sink], peram_u[t_src, t_sink], peram_u[t_src, t_sink], 
-            gamma_delta, gamma_delta,
-            sink_VVV_t_sink[0:1], source_VVV[0:1],
-            projection
-        )
-        
-    if rank == 0:
-        print(f'calculate 2pt of t_src {t_src} use time {(time.perf_counter() - st_cal):.3f} s')
-
-corr_2pt_delta1_pi0u_proton = get_mpi_data(data = corr_2pt_delta1_pi0u_proton, mdtype = 'TGather', root = 0, axis = -1)
-corr_2pt_delta1_pi0d_proton = get_mpi_data(data = corr_2pt_delta1_pi0d_proton, mdtype = 'TGather', root = 0, axis = -1)
-corr_2pt_delta1_pi1_neutron = get_mpi_data(data = corr_2pt_delta1_pi1_neutron, mdtype = 'TGather', root = 0, axis = -1)
-
-corr_2pt_pi0u_proton_delta1 = get_mpi_data(data = corr_2pt_pi0u_proton_delta1, mdtype = 'TGather', root = 0, axis = -1)
-corr_2pt_pi0d_proton_delta1 = get_mpi_data(data = corr_2pt_pi0d_proton_delta1, mdtype = 'TGather', root = 0, axis = -1)
-corr_2pt_pi1_neutron_delta1 = get_mpi_data(data = corr_2pt_pi1_neutron_delta1, mdtype = 'TGather', root = 0, axis = -1)
-
-
-corr_2pt_delta1_delta1 = get_mpi_data(data = corr_2pt_delta1_delta1, mdtype = 'TGather', root = 0, axis = -1)
-
-if rank == 0:
-    corr_save_path = f'/public/home/sush/distillation/0v2b/result/E32P29/Px0Py0Pz0/ENV_{Nev_src}/conf{conf_id}'
-
-    import pathlib
-
-    path = pathlib.Path(corr_save_path)
-
-    if path.exists():
-        print('save_path:',corr_save_path)
+    if link_max != 0:
+        gauge = io.readQIOGauge(f'{gauge_path}{str(conf_id)}.lime')
+        gauge_link = (gauge.lexico())
+        gauge_link = stout_smear_ndarray(_U = gauge_link, nstep = 20, rho = 0.12)
+        del gauge
     
     else:
-        path.mkdir(parents = True, exist_ok = True)
-        print('mkdir_save_path:',corr_save_path)
-    
-    corr_2pt_delta1_pi0u_proton = loop_tsrc(corr_2pt_delta1_pi0u_proton, indx = [-2, -1], Boundary_Conditions = 'Antiperiodic')
-    corr_2pt_delta1_pi0d_proton = loop_tsrc(corr_2pt_delta1_pi0d_proton, indx = [-2, -1], Boundary_Conditions = 'Antiperiodic')
-    corr_2pt_delta1_pi1_neutron = loop_tsrc(corr_2pt_delta1_pi1_neutron, indx = [-2, -1], Boundary_Conditions = 'Antiperiodic')
-    
-    corr_2pt_pi0u_proton_delta1 = loop_tsrc(corr_2pt_pi0u_proton_delta1, indx = [-2, -1], Boundary_Conditions = 'Antiperiodic')
-    corr_2pt_pi0d_proton_delta1 = loop_tsrc(corr_2pt_pi0d_proton_delta1, indx = [-2, -1], Boundary_Conditions = 'Antiperiodic')
-    corr_2pt_pi1_neutron_delta1 = loop_tsrc(corr_2pt_pi1_neutron_delta1, indx = [-2, -1], Boundary_Conditions = 'Antiperiodic')
-    
-    corr_2pt_delta1_delta1 = loop_tsrc(corr_2pt_delta1_delta1, indx = [-2, -1], Boundary_Conditions = 'Antiperiodic')
-    
-    backend.save(f'{corr_save_path}/corr_2pt_delta1_delta1_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy', corr_2pt_delta1_delta1)
-    
-    backend.save(f'{corr_save_path}/corr_2pt_delta1_pi0u_proton_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy', corr_2pt_delta1_pi0u_proton)
-    backend.save(f'{corr_save_path}/corr_2pt_delta1_pi0d_proton_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy', corr_2pt_delta1_pi0d_proton)
-    backend.save(f'{corr_save_path}/corr_2pt_delta1_pi1_neutron_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy', corr_2pt_delta1_pi1_neutron)
+        gauge_link = False    
 
-    backend.save(f'{corr_save_path}/corr_2pt_pi0u_proton_delta1_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy', corr_2pt_pi0u_proton_delta1)
-    backend.save(f'{corr_save_path}/corr_2pt_pi0d_proton_delta1_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy', corr_2pt_pi0d_proton_delta1)
-    backend.save(f'{corr_save_path}/corr_2pt_pi1_neutron_delta1_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy', corr_2pt_pi1_neutron_delta1)
+elif backend_name == 'cupy':
+    from pyquda import init
+    init(resource_path=".cache", grid_size = grid_size, latt_size = lattice_size)
+    
+    if link_max != 0:
+        gauge = io.readQIOGauge(f'{gauge_path}{str(conf_id)}.lime')
+        gauge.smearSTOUT(20, 0.12, 3)
+        gauge_link = (gauge.lexico())
+        
+        del gauge
+    
+    else:
+        gauge_link = False
+
+# Mom_link = [[1, 1, 0], [1, 0, 1], [0, 1, 1], [-1, 1, 0], [-1, 0, 1], [0, -1, 1], [-1, -1, 0], [-1, 0, -1], [0, -1, -1], [1, -1, 0], [1, 0, -1], [0, 1, -1]]
+
+corr = distillation_func(
+    conf_id = conf_id,
+
+    quark_type = 'ud',
+    link_quark = 'u',
+
+    lattice_size = lattice_size, # Nx, Ny, Nz, Nt 
+    
+    Nev_src = Nev_src,
+
+    gauge = gauge_link,
+    conserved = False,
+    backend = backend_name
+)
+
+sink, VdV_link = \
+    corr.sink_link_V1(
+        eigen_name = [
+                f'_e{exact_eigen_name}_s{N_eigen_name}_{N_sum_name}_{N_extract_name}_BI_n{noise_eigen_name}_V1_stout_smear_20_0.12.npy'
+        ],
+        eigen_save_path = [
+                f'/nexdata/project/lqcd/sush/eigensystem/beta6.41_mu-0.2295_ms-0.2050_L32x96/{conf_id}/{conf_id}_t'
+                # f'/beegfs/group-bak/lqcd/sush/eigensystem/beta6.41_mu-0.2295_ms-0.2050_L32x96/{conf_id}/{conf_id}_t'
+                
+            ],
+        exact_eigen = exact_eigen,
+        N_eigen = N_eigen,
+        N_sum = N_sum,
+        N_extract = N_extract,
+        noise_eigen = noise_eigen,
+        Nev_src = Nev_src,
+        link_max = link_max,
+        link_dir = 'Z',
+        Mom = Mom_sink,
+        Mom_link = Mom_link,
+        bin = [Nbin, 0, 0, 0],
+        bin_type = 'no_bin',
+        ttype = ':03d',
+        read_type = 'numpy', # pickle
+        add_weight = True
+    )
+    
+param = gamma_dic()
+
+param['sink_operators'] = [['d', 'sink', 'u']]
+param['source_operators'] = [['u', 'source', 'd']]
+
+param['gamma_source'] = gamma(5)
+param['gamma_sink'] = gamma(5)
+
+param['gamma_curr'] = gamma(4)
+
+# param['gamma_forword'] = (gamma(0) + gamma(4))/2
+
+N_operator = len(param['sink_operators']) * len(param['source_operators'])
+
+corr_2pt_matrix = backend.zeros((N_operator, corr.Nt, corr.Gt), dtype = complex)
+corr_3pt_matrix = backend.zeros((len(Nev_curr_list), len(t_sep_list), N_operator, len(Mom_link), 2 * link_max + 1, corr.Nt, corr.Gt), dtype = complex)
+
+param['sink'] = sink[:, 0]
+param['source'] = sink[:, 0].conj().transpose(0, 2, 1)
+
+param['VdV_curr'] = VdV_link[:, :]
+
+param['Nev_src'] = Nev_src
+param['Nev_sink'] = Nev_src
+
+for t_src in range(0, corr.Nt, 1):
+    param['t_src'] = t_src
+    param['peram_u'] = param['peram_d_sep'] = \
+        corr.peram_V1(
+            peram_name=[[f'_e{exact_eigen_name}_s{N_eigen_name}_{N_sum_name}_{N_extract_name}_BI_n{noise_eigen_name}_V1_stout_smear_20_0.12.npy']],
+            peram_save_path = [[f'/nexdata/project/lqcd/sush/perambulators/beta6.41_mu-0.2295_ms-0.2050_L32x96/light/{conf_id}/t']],            
+            use_eigen = [exact_eigen, sum(N_sum), noise_eigen],
+            Nev_src = Nev_max,
+            read_type = backend.__name__,
+            t_load_type = 'slice',
+            t = f'{t_src:03d}',
+            # ttype = '03d'
+        )[0]
+    
+    corr_2pt_matrix[..., t_src, :] = (
+        corr.corr_all(
+            param = param,
+            Cpt = '2pt',
+            t_range = range(0, 36, 1),
+            contraction_same_indx = [[-1], [-1], [-1], [-1], [-1], [-1]]
+        )
+    )
+
+    for t_sep_indx, t_sep in enumerate(t_sep_list):
+
+        param['t_sep'] = t_sep
+        param['peram_u_sep'] = \
+            corr.peram_V1(
+                peram_name=[[f'_e{exact_eigen_name}_s{N_eigen_name}_{N_sum_name}_{N_extract_name}_BI_n{noise_eigen_name}_V1_stout_smear_20_0.12.npy']],
+                peram_save_path = [[f'/nexdata/project/lqcd/sush/perambulators/beta6.41_mu-0.2295_ms-0.2050_L32x96/light/{conf_id}/t']],
+                use_eigen = [exact_eigen, sum(N_sum), noise_eigen],
+                Nev_src = Nev_max,
+                read_type = backend_name,
+                t_load_type = 'slice',
+                t = f'{((t_sep + t_src)%corr.Nt):03d}'
+            )[0]
+        
+        for Nev_curr_indx, Nev_curr in enumerate(Nev_curr_list):
+            param['Nev_curr'] = Nev_curr
+
+            corr_3pt_matrix[Nev_curr_indx, t_sep_indx, ..., t_src, :] = (
+                corr.corr_all(
+                    param = param,
+                    Cpt = '3pt',
+                    t_range = range(0, 36, 1),
+                    link_quark = 'u',
+                    contraction_same_indx = [[-1], [-1], [0], [0, 1], [0], [0, 1]],
+                )
+            )
+            
+for Mom_indx, Mom_list in enumerate(Mom_link[:]):
+    for Nev_curr_indx, Nev_curr in enumerate(Nev_curr_list):
+        corr.write(
+            corr_save_path = f'/public/home/sush/distillation/pion_form_factor/result/{corr.Nx}x{corr.Nt}/Px{Mom_list[2]}Py{Mom_list[1]}Pz{Mom_list[0]}/ENV_{Nev_curr}/conf{conf_id}', 
+            corr_name = f'e{exact_eigen_name}_s{N_eigen_name}_{N_sum_name}_{N_extract_name}_BI_n{noise_eigen_name}_stout_smear_{N_stout}_0.12_src{Nev_src}_sink{Nev_src}',
+            corr_matrix = corr_2pt_matrix[0],
+            Cpt = '2pt',
+        )
+        
+        for t_sep_indx, t_sep in enumerate(t_sep_list):
+            corr.write(
+                t_sep = t_sep,
+                corr_save_path = f'/public/home/sush/distillation/pion_form_factor/result/{corr.Nx}x{corr.Nt}/Px{Mom_list[2]}Py{Mom_list[1]}Pz{Mom_list[0]}/ENV_{Nev_curr}/conf{conf_id}', 
+                corr_name = f'e{exact_eigen_name}_s{N_eigen_name}_{N_sum_name}_{N_extract_name}_BI_n{noise_eigen_name}_stout_smear_{N_stout}_0.12_src{Nev_src}_sink{Nev_curr}_curr{Nev_curr}', # linkZ, conserved
+                corr_matrix = corr_3pt_matrix[Nev_curr_indx, t_sep_indx, 0, Mom_indx, :], 
+                Cpt = '3pt',
+                gamma = f'050405',
+                conserved = corr.conserved,
+                link_quark = 'u',
+            )
+
+if corr.rank == 0:
+    print('complete')

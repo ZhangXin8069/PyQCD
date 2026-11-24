@@ -116,7 +116,10 @@ def load_verified(branch,tau,channel,flavor,expected,indices):
     assert str(d['axes_boot'])=='component,boot,p,z'
     assert str(d['channel'])==channel and str(d['flavor_combo'])==flavor
     assert str(d['weight_scheme'])==SCHEME and int(d['weight_applied_count'])==1
-    assert str(d['bootstrap_indices_sha256'])==INDEX_SHA
+    # Legacy moving fits do not embed a hash string, but must still contain the
+    # exact indices. Also check the manifest and physical .npy bytes separately.
+    if 'bootstrap_indices_sha256' in d:
+        assert str(d['bootstrap_indices_sha256'])==INDEX_SHA
     assert int(d['nconf'])==20 and int(d['nboot'])==NBOOT
     assert float(d['tau_a2'])==tau and float(d['a_fm'])==.0897
     assert int(d['fit_Tmin'])==7 and float(d['q_min'])==1e-3
@@ -160,12 +163,13 @@ def transform(branch,tau,channel,flavor,d,digest):
     metadata_keys=('ensemble','confs','nconf','nboot','seed','boot_indices','tau_a2','a_fm',
                    'flow_tag','epsilon','nstep','temporal_window','pz_values','signed_pz_values',
                    'delta_z_values','tseps','current_anchors','weight_scheme','weight_applied_count',
-                   'component_labels','bootstrap_indices_sha256','transversity_convention_status',
+                   'component_labels','transversity_convention_status',
                    'fit_Tmin','fit_Tmin_fm','q_min','chi2_dof_max','fit_model','aic_policy',
                    'estimator_id','sampling_scope','denominator_scope','momentum_average_stage')
     payload={key:d[key] for key in metadata_keys}
     payload.update(r)
     payload.update(channel=np.asarray(channel),flavor_combo=np.asarray(flavor),
+        bootstrap_indices_sha256=np.asarray(INDEX_SHA),
         axes_matrix=np.asarray('component,p,z'),axes_boot=np.asarray('component,boot,p,z'),
         axes_denominator=np.asarray('p'),axes_denominator_boot=np.asarray('boot,p'),
         normalization_scheme=np.asarray(LOCAL_SCHEME),
@@ -194,7 +198,7 @@ def transform(branch,tau,channel,flavor,d,digest):
         input_fit_sha256=np.asarray(digest),input_branch=np.asarray(branch),
         input_complete_sha256=np.asarray(sha(INPUTS[branch][0]/'complete.json')),
         code_lock_sha256=np.asarray(sha(HERE/'code_lock.json')),
-        pipeline_version=np.asarray('L32x64_B_paired_local_normalization_v1'),
+        pipeline_version=np.asarray('L32x64_B_paired_local_normalization_v2'),
         physical_result_status=np.asarray('finite_flow_connected_local_ratio_diagnostic; Zchi_cancels; NOT_ringed_absolute_MSbar_or_PDF'),
         line_mass_subtraction_applied=np.asarray(False),SFTE_applied=np.asarray(False),
         LaMET_matching_applied=np.asarray(False),local_charge_restored=np.asarray(False))
@@ -362,6 +366,9 @@ def main():
     summaries={}
     for branch,(root,flows,pz) in INPUTS.items():
         assert sha(root/INDEX_NAME)==INDEX_SHA
+        upstream_manifest=json.loads((root/'input_manifest.json').read_text())
+        assert upstream_manifest['bootstrap_indices_sha256']==INDEX_SHA
+        assert upstream_manifest['confs']==list(CONFS)
         receipt=json.loads((root/'complete.json').read_text())
         assert receipt['status'].startswith('COMPLETE_B_')
         assert receipt['nconf']==20 and receipt['nboot']==100

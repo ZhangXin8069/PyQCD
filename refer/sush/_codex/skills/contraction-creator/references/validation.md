@@ -1,10 +1,12 @@
-# Pre-generation Checklist
+# Generation acceptance checks
 
-1. Confirm that the script preserves `M0`–`M8` and the selected asset's top-level order.
-2. Derive peram, V, and gamma keys from the dynamic manifest and compare each with the actual registrations.
-3. Confirm that global-time ownership comes from `get_mpi_tlist`, including the selected `Scatter/TScatter` path and wraparound time.
-4. Check Registry dimensions, axes, conjugation, dtype, and backend against the einsum fields.
-5. Check operator flavor conservation, coefficients, gamma order, temporal-wrap sign, and GEVP positive definiteness when applicable.
-6. Confirm stage timers and total-runtime output on the root process.
-7. Record GPU and full-ensemble paths that were not run; do not add test files to the generated program.
-8. Confirm that the same-named `.sh` is delivered and compare it line by line using the submission-script whitelist.
+1. **Inputs:** all applicable fields in `input-contract.md` resolved with provenance. Ask about missing/contradictory values before creating outputs; example defaults do not fill gaps.
+2. **Reference:** record absolute Python/shell paths and hashes. Distinguish bundled assets from external programs; filenames/headings do not prove identity.
+3. **Text:** exact mode must pass `reference_copy.py check REFERENCE OUTPUT`. For adaptation pass exactly the declared `--replace OLD NEW` arguments and inspect a unified diff. Include comments/whitespace; AST equality is insufficient for byte identity.
+4. **Structure:** parameter/path edits preserve statement order, loop/scope nesting, registry/call placement, collective order and array residency. Map every hunk to an input/dependency/repair. Explain necessary new-physics extensions.
+5. **Static validity:** `ast.parse` Python without importing/executing production code; `bash -n` the shell. Check definitions of current/operator variables, paths and resource consistency. Syntax alone does not establish these.
+6. **Physics:** when operators change, derive the actual Wick plan outside the output. Check coefficients, flavor balance, gamma/Projector axes, peram directions, tensor axes/dtypes, eigenvector weights and wrap signs. Registry lookup does not prove physics.
+7. **MPI/estimator:** verify ownership using the selected source; `get_mpi_tlist` and `get_mpi_data` have different contracts. Verify gather axes, configuration mapping, sum/mean and relative-time axes. Do not label a source sum a mean.
+8. **Execution scope:** perform relevant small scientific checks when physics/API behavior changes, under workspace cluster rules; do not run an ensemble to compare text. State unrun GPU/MPI/data/numerical paths. Byte identity proves text reproducibility, not correctness of the reference.
+9. **Progress:** check `progress-timing.md` milestones, `flush=True`, every `tsrc`, second-level locality, main-loop vs whole-program timers, and a success message only after saving. No new MPI collectives may be inserted for logging; rank-dependent loops use only local timing/synchronization. Compare the computational statements and collective ordering before/after progress edits. An explicit byte-identical archival request can retain logging gaps, which must be reported.
+10. **Delivery:** same-stem Python/shell, no production test/manifest scaffolding, no automatic submission. Put diffs, validation and limitations in the task log, including authorized progress additions.

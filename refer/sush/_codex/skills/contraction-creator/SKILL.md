@@ -1,36 +1,62 @@
 ---
 name: contraction-creator
-description: Derive required variables with dynamic_contraction first, then create contraction programs using the fixed M0–M8 modules from the two NA800 CuPy/MPI reference files, recording stage and total runtimes.
+description: Create lattice-QCD contraction Python and Slurm scripts from a selected reference with minimal input-driven edits and stage/loop timing. Require physics, configuration, eigenvector, MPI, and I/O inputs; ask when missing. Preserve reference structure and verify declared differences.
 metadata:
-  short-description: Minimal dynamic-contraction code generation
+  short-description: Reference-preserving contraction generation
 ---
 
 # Contraction Program Builder
 
-This skill is paired with `$lqcddb`. Use `$lqcddb` for API facts, operator physics, and registry semantics; this skill only turns the target into a contraction program. The reference files are the sole minimal implementation units:
+Generate from an actual reference file, not from a recollection of its algorithm or a rewritten module outline. Use `$lqcddb` for source/API facts and physical checks; this skill owns program structure, required inputs, and delivery. API examples in `lqcddb/examples/` are not competing production templates.
 
-- 2pt: `assets/contraction.NN.I0.5.2pt.cupy.py`;
-- 3pt/GEVP: `assets/contraction.NJNp-.3pt.GEVP.cupy.na800.py`.
+## Required inputs: stop and ask when incomplete
 
-Read the selected file in full before generating code, and interpret it as fixed top-level modules `M0` through `M8` according to [references/module-layout.md](references/module-layout.md). See [references/submission-script.md](references/submission-script.md) for the paired submission-script rules. The modules are stable script blocks, not a new runtime framework. Preserve the order of imports, MPI/CuPy initialization, parameters, phases, eigenvector/VDV/VVV construction, perambulator distribution, registry registration, time/momentum loops, `dynamic_contraction` calls, `TGather`/`loop_tsrc`, and saving. Do not introduce `main`, `run`, loaders/factories, schedulers, physically meaningless helper functions, tests, or extra abstraction layers; do not merge the two templates.
+Before creating output files, read [references/input-contract.md](references/input-contract.md), collect the applicable required fields, and identify their sources in the user's request or earlier answers. Read-only investigation may continue while questions are pending. **If any applicable required field is missing, ambiguous, or contradictory, ask the user a concise, bundled question and wait; do not fill it with an example value or emit a purportedly runnable program.**
 
-## Build workflow
+The user may explicitly inherit a named reference: “all parameters as in `njn-3pt`, except …” supplies its documented values. Merely mentioning “3pt”, “NJN”, or “100 eigenvectors” does not. Do not ask again for values already supplied. Values uniquely determined by an explicitly selected ensemble/reference need not be repeated; record their provenance. Internal constants and registry indices are derived, not user questionnaire items.
 
-1. From the user target and `physics.md`, determine the sink, physical initial state, currents, flavors, gamma matrices, momenta, `Cpt`, time separation, and output axes. Pass a user-provided source operator through unchanged; otherwise use `conjugate_operator(initial_operator)` and preserve its coefficient.
-2. Complete the `M3 dynamic_manifest` first: use the `run_wick_analysis` core called by `dynamic_contraction` to find every peram, V, gamma, Projector, time label, and output axis, then decide what other modules must load. While registries are not ready, call only this analysis core; execute the actual `dynamic_contraction(...).calculate_all()` only in M7. Each 2pt group must be exactly `[sink, source]`, and each 3pt group exactly `[sink, source, current]`.
-3. Fill `M0`–`M2` and `M4`–`M6` in order, obtaining only the arrays required by the M3 manifest; register them using the owner/local-index and backend/dtype rules already present in the template.
-4. In `M7`, keep the common `dynamic_contraction(...).calculate_all()` shape, changing only operator groups, current-time/momentum slices, projections, and result axes. In `M8`, retain gathering, `loop_tsrc`, and saving, and print stage and total runtimes. Then copy the same-named `.sh` from the submission-script asset and modify only the partition, resources, configuration variables, and four path variables allowed by its whitelist.
+## Select and freeze one reference
 
-## Physics constraints during generation
+1. A user-specified reference takes priority. Otherwise select the matching bundled profile from [references/reference-profiles.md](references/reference-profiles.md), and record its absolute path and SHA-256. Ask if the choice is ambiguous.
+2. Read that Python file in full and its paired shell reference. The bundled files are `assets/contraction.NN.I0.5.2pt.cupy.py` (`nn-2pt`) and `assets/contraction.NJNp-.3pt.GEVP.cupy.na800.py` (`njn-3pt`); the shared shell baseline is `assets/contraction.NJNp-.3pt.GEVP.cupy.sh`.
+3. Compare the complete resolved input contract with the selected file, including paths, momentum order, source/current times, operator coefficients, gamma order, estimator, backend, and execution options. Matching only ensemble, Nev, and MPI count is insufficient. A configuration ID passed through `sys.argv[1]` does not require editing the Python file.
+4. Choose **exact copy** when no embedded value changes and the reference already supplies the requested progress output, or **minimal adaptation** when inputs differ or progress messages must be added. The maintained bundled assets include the default timing policy below. Do not replace the selected reference during generation. An external reference and a bundled snapshot may have different physics and parameters; never silently merge them.
 
-- Start with `ignore_dis=False` and `use_equivalence=False`; change them only with a graph-theoretic and tensor-identity proof.
-- Check quark/antiquark conservation, coefficients, gamma order, current flavor, and source/sink routing flavor by flavor.
-- Derive the antiperiodic wrap sign from the number of fermion lines crossing the boundary and apply it exactly once; preserve the complex correlator.
-- Obtain the global-time to `(owner, local_index)` mapping from `get_mpi_tlist`; use local indices through the template's Scatter/Bcast/TGather pattern and never treat global time as a local array index.
-- Before generation, compare an actual Wick plan with registry keys and einsum axes; use `validate_plan` only to report missing registrations from the existing API, and do not add test code to the script.
-- GEVP projection matrices must be Hermitian positive definite; do not change the physical lattice extent for a performance suggestion.
-- Every generated script must have the unified `M0` total timer and print vertex, peram, contraction-stage, and total runtimes on the root process.
+## Copy, then patch
 
-## Deliverables
+Read [references/allowed-edits.md](references/allowed-edits.md) and [references/module-layout.md](references/module-layout.md). Use [scripts/reference_copy.py](scripts/reference_copy.py) to copy bytes and apply explicitly enumerated replacements. It refuses an existing output, an ambiguous replacement, and undeclared differences at verification.
 
-Deliver only the minimal script requested by the user and its same-named submission `.sh`. Preserve the fixed Python text/structure from `M0`–`M8`; put necessary physical correlators, operator coefficients, registry keys/shapes/time axes, and output axes in short comments in `M3` or the corresponding module. Modify the submission script only within the whitelist in [references/submission-script.md](references/submission-script.md). Preserve differences from the original template; report GPU, full-ensemble, or multi-process paths that were not run. Explain every structural change and compare values before and after it. Do not add test files, manifest frameworks, or meaningless checks.
+```bash
+python3 <skill-dir>/scripts/reference_copy.py copy <reference.py> <output.py>
+python3 <skill-dir>/scripts/reference_copy.py check <reference.py> <output.py>
+# Example input-driven change; supply the same replacement to copy and check.
+python3 <skill-dir>/scripts/reference_copy.py copy <reference.py> <output.py> --replace 'Nev_src = 100' 'Nev_src = 64'
+```
+
+- For exact copies retain every byte: imports, names, comments, whitespace, expressions, unused declarations, timing, and call order. Do not add generated headers, input validators, manifests, or tests to the production file.
+- For numerical parameter/path changes edit their existing locations and dependent shapes/slices/launch values only. Retain block order, loop nesting, communication order, CPU/GPU residency, registry placement, contraction call form, and gather/save structure.
+- For changed physics derive the actual Wick plan with the selected library's `run_wick_analysis` **outside the generated production file**, before adapting data loading/registrations. Preserve 2pt `[sink, source]` and 3pt `[sink, source, current]` group semantics. Record tensors/axes in the task report; do not insert `dynamic_plan` or `required_*` sets merely to document this analysis.
+- Keep literal source tokens for an unchanged process. For a new process, pass an explicit source operator unchanged; otherwise conjugate the physical initial state, preserving the returned coefficient. Never assume the initial state is the final sink in a transition.
+- Do not introduce `main`, loaders, factories, scheduling layers, new CLI/config systems, reformatted imports, or generalized templates. Localize and explain necessary extensions for new physics; a topology change cannot be described as identical structure.
+
+## Physics and compatibility
+
+Check flavor balance, coefficients, gamma order, projection dimensions, peram direction, eigenvector axes/weights, boundary signs, and complex output. Verify time ownership against the selected `get_mpi_tlist` implementation; retain a reference's proven `t % size` / `t // size` expressions instead of rewriting them for style. The current implementation accepts both `Scatter` and `TScatter` in `get_mpi_tlist`; this does not make the corresponding `get_mpi_data` operations interchangeable.
+
+For a new observable start from `ignore_dis=False` and `use_equivalence=False` unless physical/topological justification supports otherwise. For an unchanged reference review existing flags without silently replacing them. If a defect/API incompatibility prevents a runnable result, explain it and make only the justified repair, recording its diff separately from parameter changes. Never claim both byte identity and a modified file. Literal archival copying is distinct from certifying physics/runtime correctness.
+
+`Projector=[proj_sink, proj_src]` is a spin-space map; it need not be square or positive definite. A positive-definite reference correlator on the retained subspace is a separate requirement when actually solving a GEVP. A filename containing `GEVP` does not request an eigensolver.
+
+## Verify and deliver
+
+Follow [references/validation.md](references/validation.md) and [references/submission-script.md](references/submission-script.md). Deliver the Python and same-stem `.sh` unless the user requests Python only. Do not submit a production job merely because files were created.
+
+Record the reference/hash, resolved parameters, exact/adapted mode, and each changed hunk with its input/repair/progress rationale in the task log. Exact mode requires byte equality; adaptation requires equality to the reference plus declared replacements and a structure review. Keep validation outside production files and state which GPU, MPI, data, and numerical paths were not run.
+
+## Default progress and timing
+
+Follow [references/progress-timing.md](references/progress-timing.md). Reuse existing timers/messages and add only missing milestones: VVV/VDV completion, peram readiness, every main-loop `tsrc`, meaningful progress in the first two loop levels when nested work is long, main-loop total time, gathering, save completion with the path, and whole-program elapsed time. Print stage starts before long work and use `flush=True` so redirected logs show the last reached stage.
+
+This requested progress policy authorizes small logging/timer additions to an otherwise matching reference; no extra permission or required input is needed. Preserve calculations, array axes/residency and loop/collective order. A default progress addition is an explicitly recorded difference, not byte identity to the old file. An explicit request for a literal/archival byte-identical copy overrides these additions; report its missing progress nodes instead. Matching inputs still produce identical bytes to a maintained bundled asset that already contains these messages.
+
+Default to root-only output. Label rank-local second-level timing as local; do not add a Barrier/Reduce inside loops with rank-dependent iteration counts or inside a root-only branch. Synchronize the relevant GPU stream before claiming completed GPU work, without synchronizing every contraction. Progress messages help locate slow/stalled stages; they do not prevent or recover from deadlocks.

@@ -10,12 +10,14 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from common import *
+from verification import audit_ratios, audit_selection
 
 
 def main():
     allocation();m=manifest();indices=shared_indices();rows=[];artifacts=[]
     plots=HERE/'plots';plots.mkdir(exist_ok=True)
-    for task in range(72):
+    ratio_checks=audit_ratios()
+    for task in range(len(FLOWS)*9):
         it,rem=divmod(task,9);ic,jf=divmod(rem,3);tau=FLOWS[it][0]
         channel=CHANNELS[ic];flavor=FLAVORS[jf]
         receipt=json.loads((HERE/'status'/f'fit_{task}.json').read_text())
@@ -23,15 +25,18 @@ def main():
         if receipt['status']!='PASS' or sha256(fp)!=receipt['output_sha256'] or sha256(rp)!=receipt['input_sha256']:
             raise ValueError('product SHA/receipt mismatch')
         with np.load(fp,allow_pickle=False) as d:
+            audit_selection(d)
             np.testing.assert_array_equal(d['boot_indices'],indices);np.testing.assert_array_equal(d['confs'],CONFS)
             assert int(d['fit_Tmin'])==7 and float(d['q_min'])==Q_MIN and float(d['chi2_dof_max'])==CHI_MAX
-            assert d['M_boot_selected'].shape==(2,100,3,21)
+            assert d['M_boot_selected'].shape==(2,NBOOT,len(PZ),DZ)
             w=d['candidate_weights'];wb=d['candidate_weights_boot']
             available=d['selected_available'];zero=d['exact_symmetry_zero']
             if not np.isfinite(d['M_boot_selected'][:, :, :, :]).all():
                 # Missing finite-candidate fits remain explicit; they are not fabricated or hidden.
                 print('REPORTED_MISSING_FIT_POINTS',task,int((~available).sum()),flush=True)
             np.testing.assert_allclose(w.sum(axis=0)[available&~zero],1.,rtol=2e-13,atol=2e-13)
+            np.testing.assert_allclose(wb.sum(axis=0)[:,available&~zero],1.,rtol=2e-13,atol=2e-13)
+            np.testing.assert_allclose(np.std(d['M_boot_selected'],axis=1,ddof=1),d['statistical_error'],equal_nan=True)
             for co in range(2):
                 for ip,pz in enumerate(PZ):
                     for z in range(21):
@@ -42,10 +47,10 @@ def main():
                             fallback_used=bool(d['fallback_used'][co,ip,z]),fallback_fraction=float(d['fallback_fraction'][co,ip,z]),
                             status=str(d['fallback_status'][co,ip,z]),source=str(fp)))
         artifacts.extend([dict(path=str(rp),sha256=sha256(rp)),dict(path=str(fp),sha256=sha256(fp))])
-    colors=plt.get_cmap('tab10')(np.arange(8));offsets=np.linspace(-.28,.28,8)
+    colors=plt.get_cmap('tab10')(np.arange(len(FLOWS)));offsets=np.linspace(-.28,.28,len(FLOWS))
     for channel in CHANNELS:
         for flavor in FLAVORS:
-            fig,axes=plt.subplots(3,2,figsize=(12,10),sharex=True,squeeze=False)
+            fig,axes=plt.subplots(len(PZ),2,figsize=(12,5.8),sharex=True,squeeze=False)
             for it,(tau,_) in enumerate(FLOWS):
                 with np.load(fit_path(tau,channel,flavor),allow_pickle=False) as d:
                     for ip,pz in enumerate(PZ):
@@ -61,27 +66,42 @@ def main():
                             if zero.any():ax.plot(x[zero],d['M_selected'][co,ip,zero],marker='x',linestyle='none',color=colors[it],ms=4)
                             ax.set_title(f'Pz={pz} | {COMPONENTS[co]}',fontsize=10)
                             ax.set_xlim(-.5,20.5);ax.grid(alpha=.2);ax.axhline(0,color='gray',lw=.5)
-                            if ip==2:ax.set_xlabel('z/a')
+                            if ip==len(PZ)-1:ax.set_xlabel('z/a')
                             if co==0:ax.set_ylabel('Connected bare matrix element')
             handles=[Line2D([],[],marker='o',ls='none',color=colors[it],label=fr'$\tau={tau:g}$') for it,(tau,_) in enumerate(FLOWS)]
             handles.extend([Line2D([],[],marker='o',ls='none',color='black',mfc='none',label='diagnostic fallback / incomplete quality'),
                             Line2D([],[],marker='x',ls='none',color='black',label='exact symmetry zero (not fitted)')])
             fig.legend(handles=handles,loc='upper center',bbox_to_anchor=(.5,.952),ncol=4,fontsize=8,frameon=False)
-            fig.suptitle(f'L32x64 A | {channel} {flavor} | Nconf30, Nboot100 | Ratio AIC Tmin7\n'
-                'Q >= 1e-3, chi2/dof <= 1e3; statistical error bars; positive-z diagnostic',fontsize=11,y=.995)
-            fig.tight_layout(rect=(0,0,1,.88))
+            fig.suptitle(f'L32x64 B Pz=0 | {channel} {flavor} | Nconf20, Nboot100 | Ratio AIC Tmin7\n'
+                'Q >= 1e-3, chi2/dof <= 1e3; statistical errors; z-line only, paired nonzero-P indices',fontsize=11,y=.995)
+            fig.tight_layout(rect=(0,0,1,.76))
             p=plots/f'bare_{channel}_{flavor}_allflow.pdf';fig.savefig(p);plt.close(fig)
             artifacts.append(dict(path=str(p),sha256=sha256(p)))
     path=HERE/'bare_matrix_progress.csv'
     with path.open('w',encoding='utf-8-sig',newline='') as f:
         writer=csv.DictWriter(f,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
-    atomic_json(HERE/'complete.json',dict(status='COMPLETE_A_SCHEME_RATIO_AND_BARE_FIT_DIAGNOSTICS',
+    ratio_receipts=[json.loads((HERE/'status'/f'ratio_{tau_tag(t)}.json').read_text()) for t,_ in FLOWS]
+    assert sum(r['raw_cases_reverified'] for r in ratio_receipts)==35280
+    for receipt in ratio_receipts:
+        assert receipt['status']=='PASS' and receipt['bootstrap_indices_sha256']==INDEX_SHA
+        assert sha256(receipt['projected'])==receipt['projected_sha256']
+        assert sha256(receipt['raw_case_ledger'])==receipt['raw_case_ledger_sha256']
+    strict_quality=sum(r['selected_available'] and not r['fallback_used'] and r['status']!='exact_symmetry_zero_not_fitted' for r in rows)
+    zeros=sum(r['status']=='exact_symmetry_zero_not_fitted' for r in rows)
+    atomic_json(HERE/'complete.json',dict(status='COMPLETE_B_PZ0_PAIRED_RATIO_AND_BARE_FIT_DIAGNOSTICS',
         timestamp=datetime.now().astimezone().isoformat(),job=os.environ['SLURM_JOB_ID'],
-        nconf=30,nboot=100,ratio_products=72,fit_products=72,plots=9,points=len(rows),
+        nconf=NCONF,nboot=NBOOT,Pz=0,ratio_products=len(FLOWS)*9,fit_products=len(FLOWS)*9,plots=9,points=len(rows),
+        raw_cases_reverified=35280,weight_scheme=SCHEME,flows=[t for t,_ in FLOWS],
         selected_available=sum(r['selected_available'] for r in rows),quality_complete=sum(r['quality_accepted'] for r in rows),
         fallback_points=sum(r['fallback_used'] for r in rows),missing_finite_points=sum(not r['selected_available'] for r in rows),
+        all_cuts_all_replicas_quality_no_fallback=strict_quality,exact_symmetry_zero_points=zeros,
+        independent_ratio_reconstruction_checks=ratio_checks,
+        independent_AIC_selection_audit='all central and all 100 replica weights, quality gates and error formulas verified',
+        paired_nonzero_analysis=str(PAIRED),progress_csv=str(path),progress_sha256=sha256(path),
         bootstrap_indices_sha256=m['bootstrap_indices_sha256'],artifacts=artifacts,
         remaining=['state isolation/window-systematic interpretation','transversity relative-sign external confirmation',
+                   'four-current sampling and non-midpoint temporal-window convergence',
+                   'blending higher shared-noise moments/independent-time generator confirmation',
                    'full six-direction estimator','Zchi/Ward, line mass, SFTE/LaMET: not part of this run']))
     print('SUMMARY_COMPLETE',len(rows),'points,9 PDFs',flush=True)
 

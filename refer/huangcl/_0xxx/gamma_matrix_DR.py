@@ -2,8 +2,6 @@
 # 输入: gamma(i) 的矩阵编号, 或 gamma_index(g) 的 4x4 矩阵
 # 输出: NumPy 复数 gamma 矩阵, 或矩阵非零元的 value,row,col
 
-import sys
-
 import numpy as np
 
 
@@ -76,18 +74,17 @@ def gamma(i):
         return np.matmul(g3, g5)
     elif i == 15:  # gamma4*gamma5
         return np.matmul(g4, g5)
-    elif i==16: #(gamma3*gamma1)
-        m1=np.matmul(g3,g1)
-        m2=0.5*(g0+g4)
-        return np.matmul(m1,m2)
-    elif i==17: #(gamma3*gamma1)
-        m1=np.matmul(g3,g1)
-        m2=0.5*(g0-g4)
-        return np.matmul(m1,m2)
-    
+    elif i == 16:  # (gamma3*gamma1)
+        m1 = np.matmul(g3, g1)
+        m2 = 0.5*(g0+g4)
+        return np.matmul(m1, m2)
+    elif i == 17:  # (gamma3*gamma1)
+        m1 = np.matmul(g3, g1)
+        m2 = 0.5*(g0-g4)
+        return np.matmul(m1, m2)
+
     else:
-        print("wrong gamma index")
-        sys.exit(-3)
+        raise ValueError("wrong gamma index")
 
 
 def gamma_index(g):

@@ -1,4 +1,4 @@
 interface:
   display_name: "Fit Bare Matrix Elements"
-  short_description: "Fit quark-PDF bare matrix elements with AIC"
-  default_prompt: "Use $fit-bare to fit the current quark-PDF bare matrix elements with the default Sumratio-difference AIC workflow."
+  short_description: "Fit and audit bare matrix elements with selectable models"
+  default_prompt: "Use $fit-bare with the requested estimator and fit model. For two-state C3/C2 use the symmetric expanded model, ratio-only per-z gaps shared by real/imaginary parts, unless other gap options are requested."

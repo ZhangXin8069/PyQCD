@@ -34,14 +34,16 @@ Mom_sink_VDV = [[0, 0, 0]] + sorted(creat_mom_list(Mom = [0, 0, 1], fix_Q2 = Tru
 Mom_sink_VVV = [[0, 0, 0]] + sorted(creat_mom_list(Mom = [0, 0, 1], fix_Q2 = True))[::-1] + sorted(creat_mom_list(Mom = [0, 1, 1], fix_Q2 = True))[::-1] + sorted(creat_mom_list(Mom = [1, 1, 1], fix_Q2 = True))[::-1]
 
 Mom_len = len(Mom_sink_VDV)
-source_mom_chunk = 9
+source_mom_chunk = 27
 # Conservative thresholds for all 27 source momenta: static scratch including
 # copies is 61.52/41.01/20.51 GiB for N=3/2/1; source chunking reduces this.
 # Allow 7.2 GiB for resident arrays and at least 8 GiB for CUDA/workspace.
 gpu_free_bytes, _ = backend.cuda.runtime.memGetInfo()
 # sink_mom_chunk = 3 if gpu_free_bytes >= 77*1024**3 else (2 if gpu_free_bytes >= 57*1024**3 else 1)
 # sink_mom_chunk = min(comm.allgather(sink_mom_chunk))
-sink_mom_chunk = 7
+
+sink_mom_chunk = 1
+sink_mom_len = 7
 
 phase_exp_2pt = backend.zeros((Mom_len, Nx, Nx, Nx, Nc), dtype = complex)
 phase_exp_3pt = backend.zeros((Mom_len, Nx, Nx, Nx), dtype = complex)
@@ -167,7 +169,7 @@ if rank == 0:
     print(f'load eigen and cal VVV VDV use time {(time.perf_counter() - st_eigen):.3f} s')
 
 # M5 Peram data: host time cache avoids ~19.6 GiB/rank of resident GPU data.
-corr_NJN_GEVP = backend.zeros((len(sink_operator), len(source_operator), len(current_operator), len(source_times), Lt, 4, Ns//2, Ns//2, sink_mom_chunk, Mom_len), dtype = complex)
+corr_NJN_GEVP = backend.zeros((len(sink_operator), len(source_operator), len(current_operator), len(source_times), Lt, 4, Ns//2, Ns//2, sink_mom_len, Mom_len), dtype = complex)
 # Eq. (19) defines the admixtures only at nonzero total N momentum.
 corr_NJN_GEVP[1:, ..., 0, :] = complex(np.nan, np.nan)
 
@@ -245,7 +247,7 @@ for source_indx, tsrc in enumerate(source_times):
             # A common N label pairs equal sink/current momenta; M labels
             # pair source N(-r) and pi(r). Neither label is summed or crossed.
             # Start at 1 for the two admixtures, where p_hat is undefined at 0.
-            for Mom_indx in range(1): #range(0 if i == 0 else 1, sink_mom_chunk, sink_mom_chunk):
+            for Mom_indx in range(1, sink_mom_len//sink_mom_chunk): #range(0 if i == 0 else 1, sink_mom_chunk, sink_mom_chunk):
                 Mom_stop = min(Mom_indx + sink_mom_chunk, Mom_len)
                 VR.register('VDV_0', 'tcur0', VdV_link[tcur0, Mom_indx:Mom_stop])
                 if i == 1:

@@ -1,23 +1,23 @@
-# Dynamic Contraction Workflow
+# Dynamic contraction API workflow
 
-Use this reference to create serial, CuPy, or MPI contraction programs; `dynamic_contraction` performs the actual tensor contraction. Use `../examples/nn_two_point_flat.py` for 2pt and `../examples/njn_three_point_flat.py` for 3pt and higher; begin a new program by copying the matching flat structure and then replacing the physical blocks.
+For complete program generation, `$contraction-creator` owns required inputs, reference selection and structure. The flat examples illustrate API usage only. This document explains preparation/review and must not cause additional runtime blocks to be inserted into an unchanged reference.
 
-## Input contract
+## Resolve physics and source
 
-Before starting, determine configurations, lattice and process grids, backend, source/sink operators, currents, momenta, `Cpt`, time separation, boundaries, the Nev cutoff, every Registry key, output axes, and save path. `physics.md` is authoritative for hadron valence-quark expressions, current conventions, and configuration tables; expand physical expressions into concrete tokens.
+Use the `source_root` selected through `SKILL.md`. Resolve operators, currents, coefficients, flavor balance, gamma order, momentum signs, temporal boundary and output axes. Preserve explicit source tokens; for a new process without them, conjugate the physical initial operator and retain its coefficient. Do not replace a reference's literal source with a helper call merely for style.
 
-When no source operator is provided, call `conjugate_operator` on the declared physical initial state and preserve every coefficient; a transition process must not use the final sink as the initial state. Use a user-provided source operator unchanged after validation. First check flavor conservation, gamma order, Fourier sign, and temporal boundary.
+## Derive tensors before adapting loading
 
-## Dynamic first
+For changed physics call `run_wick_analysis` outside the production file before modifying loading/registrations. Inspect actual plan entries for peram flavor/time directions, VDV/VVV names/time ends, gamma/projection labels, signs and output axes. Summarize these in the task report; do not require runtime `required_*` sets or M0–M8 blocks.
 
-First call the analysis core of `run_wick_analysis`, or inspect the plan that the `dynamic_contraction` constructor will use, to obtain peram flavor/time directions, VDV/VVV names and time ends, gamma/projection names, and `result_indx` output axes. Build `required_peram`, `required_v`, and `required_gamma` from these results; M4/M5/M6 prepare only these variables. Instantiate `dynamic_contraction` and call `calculate_all()` only after all registries are complete.
+Do not equate the combined Wick flavor string (`p[2]`, e.g. `dd^d`) with a registry key. Check `PeramRegistry.resolve` in the selected source: it resolves the quark flavor first, then the u/d `light` fallback. Shared light data still requires the appropriate flavor-degeneracy assumption.
 
-## Fixed top-level blocks
+Raw Wick V numbering is also not the final lookup key: dynamic contraction renumbers VDV/VVV separately within each time end. Use the selected `validate_plan`/tensor-resolution code to check registrations instead of comparing raw V tuples directly. Lookup success alone does not establish dimensions, time direction or numerical correctness.
 
-Keep this order: runtime and total timing; lattice/MPI; momentum phases; dynamic variable manifest; eigenvectors and VDV/VVV; peram reading and time distribution; registries; source/sink/insertion/momentum loops; `TGather`, `loop_tsrc`, and saving. Do not hide physical or ownership decisions in `main`, loader factories, or schedulers.
+Use new-observable defaults `ignore_dis=False`, `use_equivalence=False` unless justified. An exact reference copy retains its actual flags; report unsupported assumptions instead of silently changing them. Instantiate `dynamic_contraction` for execution only after registries are ready. Check real signatures in the selected source, not merely examples.
 
-Record shape, logical axes, absolute time, owner process/local index, conjugation/transpose, backend, and dtype for every registration. Do not infer the local index from integer division of `get_mpi_tlist`; all processes must execute collectives in the same order. Use `ignore_dis=False` and `use_equivalence=False` by default unless the disconnectedness criterion and equivalent-diagram identities have been proved.
+## Review data flow without restructuring
 
-## Timing and delivery
+Record tensor shape/axes, absolute time, owner/local index, conjugation, backend and dtype. Check collectives and mapping against the source; retain equivalent existing ownership expressions. Review gathering, all source-relative time axes, boundary factors and source sum/mean. Do not reorder data loading and registries to match a generic outline.
 
-M0 sets `st_total`; time vertices, peram, and each source-time contraction separately, and have M8 print stage and total runtimes on the root process. Synchronize the device before GPU timing; synchronize MPI timing only at stage boundaries reached by every rank. Baseline and optimized versions must preserve physical axes and numerical results; a Roofline estimate cannot replace a measurement. Clearly report GPU, MPI, and full-ensemble paths that were not run.
+Preserve existing timers and follow `$contraction-creator`'s requested stage/loop/save progress policy when generating programs. Add missing progress inline, flush messages, and identify root-local timing. Synchronize relevant GPU work only at coarse boundaries; do not introduce MPI collectives into rank-dependent loops for logging. Report these additions as differences when needed, preserving an explicit byte-identical archival request. State unrun GPU/MPI/full-ensemble paths and distinguish text equality from numerical validation.

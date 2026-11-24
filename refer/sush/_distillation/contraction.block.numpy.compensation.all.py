@@ -48,7 +48,7 @@ _weight = [L/noise_eigen, (L-1)/(noise_eigen-1), (L-2)/(noise_eigen-2), (L-3)/(n
 
 Nbin = 1
 N_stout = 20
-t_sep_list = [20]
+t_sep_list = [18]
 
 Nev_src = 50
 
@@ -57,7 +57,7 @@ Nev_max = max(Nev_curr_list + [Nev_src])
 
 link_max = 0
 Mom_sink = [[0, 0, 0]]
-Mom_link = creat_mom_list(Mom = [0, 0, 1], fix_Q2 = True)
+Mom_link = creat_mom_list(Mom = [1, 1, 1], fix_Q2 = True)
 mu_nu_indx, mu_nu_gamma, mu_indx, mu_gamma =  PFF_Mom_to_gamma_new(Mom_link[:], allow_t = False)
 
 mu_nu_gamma = backend.asarray(mu_nu_gamma)
@@ -113,7 +113,7 @@ N_operator = 1
 corr_2pt_matrix = backend.zeros((N_operator, Nt, Gt), dtype = complex)
 
 corr_2pt_mu_matrix = backend.zeros((len(Nev_curr_list), N_operator, len(Mom_link), 2, Nt, Gt), dtype = complex)
-corr_3pt_matrix = backend.zeros((len(Nev_curr_list), len(t_sep_list), N_operator, len(Mom_link), 2, Nt, Gt), dtype = complex)
+corr_3pt_matrix = backend.zeros((len(Nev_curr_list), len(t_sep_list), N_operator, len(Mom_link), len(mu_nu_indx[0, :, 0]), Nt, Gt), dtype = complex)
 
 # corr_3pt_matrix_dis_compensation = backend.zeros((1, len(t_sep_list), 2, len(Mom_link), 2, Nt, Gt), dtype = complex)
 # corr_3pt_matrix_con_compensation = backend.zeros((1, len(t_sep_list), 1, len(Mom_link), 2, Nt, Gt), dtype = complex)
@@ -125,6 +125,7 @@ for t_src in range(0, Nt, 1):
     source = backend.asarray(get_mpi_data(sink[t_src//size, 0].conj().transpose(1, 0), mdtype = 'Bcast', root = t_src%size, axis = 0))
     if rank == 0:
         peram_u = backend.load(f'/nexdata/project/lqcd/sush/perambulators/beta6.20_mu-0.2770_ms-0.2400_L24x72/light/{conf_id}/t{t_src:03d}_e50_s[100, 200, 300, 500, 800]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n500_V1_stout_smear_20_0.12.npy')
+        
     else:
         peram_u = None
     
@@ -1103,7 +1104,7 @@ for t_src in range(0, Nt, 1):
                 #     _weight[0] * _weight[1] * _weight[2] * _weight[3] * (C_ijkl - C_iiii - (C_ijjj - 4*C_iiii + C_iijj - 3*C_iiii) - (C_ijkk - 3 * (C_ijjj - 4*C_iiii) - 2 * (C_iijj - 3*C_iiii) - 6 * C_iiii))
                 # )
                 
-                compensation_all_matrix = backend.empty((3, 5, len(Mom_link), 2), dtype = complex)
+                compensation_all_matrix = backend.empty((3, 5, len(Mom_link), len(mu_nu_indx[0, :, 0])), dtype = complex)
 
                 compensation_all_matrix[0, 0] = A1; compensation_all_matrix[0, 1] = A2; compensation_all_matrix[0, 2] = A3; compensation_all_matrix[0, 3] = A4; compensation_all_matrix[0, 4] = A5
                 # compensation_all_matrix[1, 0] = B1; compensation_all_matrix[1, 1] = B2; compensation_all_matrix[1, 2] = B3; compensation_all_matrix[1, 3] = B4; compensation_all_matrix[1, 4] = B5

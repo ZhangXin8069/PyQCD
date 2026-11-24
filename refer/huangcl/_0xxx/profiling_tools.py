@@ -5,8 +5,6 @@
 """
 import resource
 
-import cupy as cp
-
 
 # ==================== 内存与显存监测 ====================
 def print_mem_peak(tag, use_gpu=True):
@@ -29,6 +27,8 @@ def print_mem_peak(tag, use_gpu=True):
     cpu_peak_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     message = f"{tag}: cpu rss peak {cpu_peak_gb / 1024**2:.1f} GB"
     if use_gpu:
+        # 仅在需要显存信息时导入 cupy, 纯 CPU 环境不依赖 cupy.
+        import cupy as cp
         pool = cp.get_default_memory_pool()
         message += (
             f", gpu used {pool.used_bytes() / 1024**3:.1f} GB"

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Flat NN two-point production template for ``lqcddb_update``.
+"""Legacy NN two-point API illustration for ``lqcddb_update``.
 
-This is the two-point companion to ``njn_three_point_flat.py``.  It keeps the
-same top-level modules and visible data flow; only the operator, registry and
-dynamic-contraction part changes because a two-point group has no current.
-Copy the sections for another two-point observable and replace the marked
-operator/momentum/path rows inline.  No orchestration helper functions are
-used.
+Not the default production baseline. Complete program generation follows
+$contraction-creator and its selected reference/input contract. Use this file
+as a structural baseline only when the user explicitly selects it.
 """
 
 # ============================================================================

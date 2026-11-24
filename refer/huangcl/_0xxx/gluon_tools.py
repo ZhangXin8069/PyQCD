@@ -276,5 +276,6 @@ def calc_ope_unpol(gauge, field_strength, l, direction, mu, nu):
         neg_wl,
     )
 
-    ope_unpol = np.sum(np.trace(ope, axis1=-2, axis2=-1), axis=(1, 2, 3))
+    ope_unpol = np.sum(np.trace(ope, axis1=-2, axis2=-1),
+                       axis=(1, 2, 3))  # also can use mean()
     return ope_unpol

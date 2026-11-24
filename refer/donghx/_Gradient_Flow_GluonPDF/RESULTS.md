@@ -1,57 +1,20 @@
-# τ/a² > 1.0 flow-time extrapolation
+# 绘图与斜率诊断结果
 
-This is a seven-point linear extrapolation using exactly
+使用C24P29 976、E32P29 1700、F32P30 887conf，所有flow、长度、表示正均值及jackknife对数均有效。
+全部72条固定长度/表示的四点相关逆sqrt直线拟合Q<.01；斜率均为负。不能视为合格最终d拟合。
 
-\[
-\tau/a^2=1.4,\;1.8,\;2.2,\;2.6,\;3.0,\;3.4,\;3.8,
-\qquad M(\tau)=M_0+c_\tau\tau .
-\]
+sqrt(t_f)图随flow增大而上升，反sqrt图斜率负；趋势符号一致，但纯两参数flow模型不足。
+有限flow、有限长度与离散化等贡献尚未分离；本次不归因到单一机制。
 
-The fit uses the shared 406-configuration, 1500-bootstrap ensemble
-(`seed=1115`) and the same correlated GLS covariance/SVD prescription as the
-earlier flow-time scans.  Errors are the standard deviation of the fitted
-bootstrap intercepts (`ddof=1`).  This is deliberately labeled a
-**large-flow diagnostic**, not a controlled small-flow extrapolation.
+以n=6为例（跨ensemble物理z不同，不能把该表当相同物理z比较）：
 
-For `z/a=6`, all seven points satisfy the necessary scale-separation check
-`sqrt(8 tau) < z`.  For `z/a=2` they do not: the largest flow radius is
-`sqrt(30.4)=5.51a`, so the figure is unrestricted and should not be used as a
-scale-separated result.
+|ensemble|z[fm]|b_F[fm]|b_A[fm]|chi2/dof F|chi2/dof A|
+|---|---:|---:|---:|---:|---:|
+|C24P29|0.6300|-0.067782 ± 2.1e-05|-0.150087 ± 5.2e-05|1134.5|952.3|
+|E32P29|0.5382|-0.055521 ± 1.2e-05|-0.123264 ± 2.8e-05|1787.4|1551.8|
+|F32P30|0.4650|-0.043251 ± 1.2e-05|-0.096346 ± 2.8e-05|3690.9|3578.5|
 
-## Accepted-only results
-
-`P/F` denotes passing/failing `Q >= 0.01`, `chi2/dof <= 3`, and finite replica
-fraction >= 0.90.  A missing entry means at least one of the seven input flow
-times did not have an accepted bare fit.
-
-| z/a | operator | Pz=3 | Pz=4 | Pz=5 |
-|---:|---|---:|---:|---:|
-| 2 | unpolarized TH-SH | unavailable | unavailable | unavailable |
-| 2 | helicity TH | -0.0350(0.0088) F | -0.0953(0.010) F | -0.106(0.015) F |
-| 2 | helicity TH+SH | -0.0432(0.012) F | -0.131(0.015) F | -0.143(0.025) F |
-| 6 | unpolarized TH-SH | unavailable | unavailable | +0.183(0.16) F |
-| 6 | helicity TH | -0.0221(0.013) F | unavailable | -0.185(0.024) P |
-| 6 | helicity TH+SH | -0.0279(0.019) F | -0.0294(0.020) F | -0.343(0.048) P |
-
-The very small Q values for most accepted-only fits show that the seven large
-flow points are not described by one common straight line when the data quality
-gates are applied.
-
-The separate `filled_fallback_diagnostic` branch supplies complete finite
-diagnostic input where the accepted branch is unavailable, but it is not an
-accepted fit and is not used to upgrade any result.
-
-## Files
-
-- `results_v1/flow_time_tau_gt_1p0_v1.npz`: numerical product, including
-  intercept/slope bootstrap arrays, covariance diagnostics, geometry flags,
-  and both estimator branches.
-- `results_v1/flow_time_tau_gt_1p0_points.csv`: row-wise table.
-- `results_v1/plots/tau_gt_1p0_fit_z6_accepted.png`: accepted-only 3x3 plot
-  for the scale-compatible `z/a=6` example.
-- `results_v1/plots/tau_gt_1p0_fit_z2_accepted.png`: unrestricted `z/a=2`
-  plot; included only to expose the oversmearing/large-flow behavior.
-- `analyze.py`, `plot.py`: reproducible analysis and plotting scripts.
-
-The plots use error bars without joining the data points.  Solid fit lines pass
-the quality gates; dashed lines are computed but fail those gates.
+b定义ln<W>=b/sqrt(t_f)+c。误差仅bin1 jackknife统计误差，未包含模型不足、自相关及系统误差。
+细图误差使用科学计数法，避免四位小数显示0.0000。
+图中Q<.01画虚线，不能只从接近直线的外观判断拟合好坏。
+相邻flow差分斜率图显示flow窗口依赖；未做small-flow或连续极限外推。

@@ -168,7 +168,11 @@ def project_flow(tau: float) -> tuple[np.ndarray, np.ndarray]:
                     raw = np.asarray(d[f"corr_3pt_{flav}"], np.complex128)
                     for ip in range(3):
                         # The stored 4x4 current-spin indices are fully contracted here.
-                        unpol = _project(raw, 3, ip, tsep, "unpolarized")
+                        # Unpolarized is the nopol projection (pol index 0)
+                        # with gamma_4.  The previous pilot accidentally used
+                        # pol35 here for raw 4x4 products; keep this branch
+                        # explicitly corrected and versioned.
+                        unpol = _project(raw, 0, ip, tsep, "unpolarized")
                         helic = PHASES["helicity"] * _project(raw, 3, ip, tsep, "helicity")
                         tr1 = _project(raw, 1, ip, tsep, "transversity_1")
                         tr2 = _project(raw, 2, ip, tsep, "transversity_2")
@@ -343,8 +347,15 @@ def run(replace: bool = False, skip_fit: bool = False, taus: tuple[float, ...] =
     (OUT / "input_manifest.json").write_text(json.dumps({"ensemble": ENSEMBLE, "confs": CONFS, "tseps": TSEPS, "taus": taus, "records": audit["records"], "missing": audit["missing"]}, indent=2), encoding="utf-8")
     if audit["missing"]:
         raise FileNotFoundError(f"Missing {len(audit['missing'])} input files; see {OUT / 'input_manifest.json'}")
-    indices = bootstrap_indices(); w = weights(indices)
-    np.save(OUT / "bootstrap_indices_Nboot100_seed1115.npy", indices)
+    index_path = OUT / "bootstrap_indices_Nboot100_seed1115.npy"
+    if index_path.is_file():
+        indices = np.load(index_path, allow_pickle=False)
+        if indices.shape != (NBOOT, NCONF) or not np.issubdtype(indices.dtype, np.integer):
+            raise ValueError(f"Existing bootstrap index contract mismatch: {index_path} {indices.shape} {indices.dtype}")
+    else:
+        indices = bootstrap_indices()
+        np.save(index_path, indices)
+    w = weights(indices)
     old_summary = {}
     if (OUT / "run_summary.json").is_file():
         try:
@@ -381,7 +392,7 @@ def run(replace: bool = False, skip_fit: bool = False, taus: tuple[float, ...] =
                 ratio_b = np.where(valid[None], ratio_b, np.nan + 1j * np.nan)
                 path = OUT / "ratios" / f"ratio_{flow_tag}_{channel}_{flavor}_Nboot100_seed1115.npz"
                 if replace or not path.exists():
-                    atomic_savez(path, ratio_original=ratio_o, ratio_boot=ratio_b, ratio_valid_mask=valid, denominator_original=den_mean, denominator_boot=den_boot, boot_indices=indices, confs=np.asarray(CONFS), pz_values=np.asarray(PZ, np.int32), tseps=np.asarray(TSEPS, np.int32), delta_z_values=np.arange(DZ, dtype=np.int32), tau_a2=np.asarray(tau), flow_tag=np.asarray(TAU_SPECS[tau]), axes_ratio_original=np.asarray(["vdv","pz","delta_z","tsep","tau"]), axes_ratio_boot=np.asarray(["boot","vdv","pz","delta_z","tsep","tau"]), vdv_labels=np.asarray(VDV), channel=np.asarray(channel), flavor_combo=np.asarray(flavor), ensemble=np.asarray(ENSEMBLE), nconf=np.asarray(NCONF, np.int32), nboot=np.asarray(NBOOT, np.int32), seed=np.asarray(SEED, np.int64), estimator_id=np.asarray("post_ratio_single_positive_z_vdv_average_v1"), transversity_convention_status=np.asarray(TRANSVERSITY_STATUS), source_averaging=np.asarray("arithmetic_mean_t_source_before_configuration_bootstrap_and_ratio"), pipeline_version=np.asarray("quark_bare_ratio_20_v1"))
+                    atomic_savez(path, ratio_original=ratio_o, ratio_boot=ratio_b, ratio_valid_mask=valid, denominator_original=den_mean, denominator_boot=den_boot, boot_indices=indices, confs=np.asarray(CONFS), pz_values=np.asarray(PZ, np.int32), tseps=np.asarray(TSEPS, np.int32), delta_z_values=np.arange(DZ, dtype=np.int32), tau_a2=np.asarray(tau), flow_tag=np.asarray(TAU_SPECS[tau]), axes_ratio_original=np.asarray(["vdv","pz","delta_z","tsep","tau"]), axes_ratio_boot=np.asarray(["boot","vdv","pz","delta_z","tsep","tau"]), vdv_labels=np.asarray(VDV), channel=np.asarray(channel), flavor_combo=np.asarray(flavor), ensemble=np.asarray(ENSEMBLE), nconf=np.asarray(NCONF, np.int32), nboot=np.asarray(NBOOT, np.int32), seed=np.asarray(SEED, np.int64), estimator_id=np.asarray("post_ratio_single_positive_z_vdv_average_v1"), transversity_convention_status=np.asarray(TRANSVERSITY_STATUS), source_averaging=np.asarray("arithmetic_mean_t_source_before_configuration_bootstrap_and_ratio"), unpolarized_projector=np.asarray("pol0_nopol_gamma4"), pipeline_version=np.asarray("quark_bare_ratio_20_ud_v2") )
                 if not skip_fit:
                     # Components requested by the established analysis are even-real and odd-imag.
                     original = np.stack((ratio_o[0].real, ratio_o[1].imag), axis=0)
@@ -390,7 +401,7 @@ def run(replace: bool = False, skip_fit: bool = False, taus: tuple[float, ...] =
                         fit = fit_one(original, boot, method)
                         fp = OUT / "fits" / f"{method}_{flow_tag}_{channel}_{flavor}_Nboot100_seed1115.npz"
                         if replace or not fp.exists():
-                            atomic_savez(fp, **fit, component_labels=np.asarray(["even_real","odd_imag"]), pz_values=np.asarray(PZ, np.int32), delta_z_values=np.arange(DZ, dtype=np.int32), candidate_labels=np.asarray([x[0] for x in candidates()]), primary_candidate=np.asarray("T7-10_L2_R2"), channel=np.asarray(channel), flavor_combo=np.asarray(flavor), tau_a2=np.asarray(tau), flow_tag=np.asarray(TAU_SPECS[tau]), input_ratio=np.asarray(str(path)), boot_indices=indices, confs=np.asarray(CONFS), nboot=np.asarray(NBOOT, np.int32), nconf=np.asarray(NCONF, np.int32), seed=np.asarray(SEED, np.int64), fit_method=np.asarray(method), analysis_scope=np.asarray("connected_bare_unrenormalized_unmatched_single_positive_z_gradient_flow"), transversity_convention_status=np.asarray(TRANSVERSITY_STATUS), pipeline_version=np.asarray("quark_bare_fit_20_v1"))
+                            atomic_savez(fp, **fit, component_labels=np.asarray(["even_real","odd_imag"]), pz_values=np.asarray(PZ, np.int32), delta_z_values=np.arange(DZ, dtype=np.int32), candidate_labels=np.asarray([x[0] for x in candidates()]), primary_candidate=np.asarray("T7-10_L2_R2"), channel=np.asarray(channel), flavor_combo=np.asarray(flavor), tau_a2=np.asarray(tau), flow_tag=np.asarray(TAU_SPECS[tau]), input_ratio=np.asarray(str(path)), boot_indices=indices, confs=np.asarray(CONFS), nboot=np.asarray(NBOOT, np.int32), nconf=np.asarray(NCONF, np.int32), seed=np.asarray(SEED, np.int64), fit_method=np.asarray(method), analysis_scope=np.asarray("connected_bare_unrenormalized_unmatched_single_positive_z_gradient_flow"), transversity_convention_status=np.asarray(TRANSVERSITY_STATUS), unpolarized_projector=np.asarray("pol0_nopol_gamma4"), pipeline_version=np.asarray("quark_bare_fit_20_ud_v2"))
         del c3, c2
     (OUT / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

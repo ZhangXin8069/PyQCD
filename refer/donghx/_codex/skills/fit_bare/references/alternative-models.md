@@ -50,22 +50,24 @@ fit-range AIC omission penalty for nested ranges.
 Single accepted-candidate results can supply a statistical error but cannot
 estimate a window systematic. Preserve this status explicitly.
 
-## Excited-state Ratio model
+## Two-state Ratio model
 
-When an independently validated C2 analysis supplies a gap, a diagnostic
-spectral form may be used, for example
+Read [two-state-ratio.md](two-state-ratio.md). The user-selectable symmetric
+expanded C3/C2 model defaults to a ratio-only gap independently fitted at each
+z, shared between its real and imaginary components. Joint C2 fitting and
+sharing the gap across all z are independent opt-in switches. Save likelihood,
+gap grouping, uncertainty and identifiability diagnostics. Sparse data can
+leave a free gap unidentifiable; preserve that status instead of silently
+imposing C2, priors, or z sharing.
 
-\[
-R(T,\tau)=M+A e^{-\Delta E\tau}
- +B e^{-\Delta E(T-\tau)}+C e^{-\Delta E T}.
-\]
+## Joint C2 and rational two-state C3/C2
 
-Do not freely fit a separate `DeltaE` for every `(channel,flavor,p,z)` with the
-current sparse separations. Share or constrain gaps using the C2 spectrum, and
-record whether the result is data-identifiable or prior-constrained. Ratio and
-Sumratio gaps refer to the same spectral energy differences only when derived
-from one consistent spectral decomposition; amplitudes and truncation terms
-are not the same.
+Read [joint-c2-ratio.md](joint-c2-ratio.md). This explicitly selected model
+shares the two-state gap and overlap ratio between measured C2 and the ratio
+spectral denominator. Use the full paired cross covariance. It supports
+independent per-z fits or one shared-z likelihood, registered gap bounds,
+profile and boundary diagnostics, and paired ratio-only comparisons. Its seven
+parameters for a real-only per-z fit differ from the expanded ratio's four.
 
 ## Comparison policy
 

@@ -27,19 +27,15 @@ jack = False  # debug == False
 
 @dataclass
 class SampleParams:
-    conf_short: str
+    conf_size: str
     conf_name: str
     conf_ids: list[int]
     Nt: int
     Nx: int
     P: int          # 动量大小 (正值)
-    # momP: int       # 动量符号, ±2
+    # momP: int       # 动量符号, ±2 (P=0 无动量符号, 已移除)
     Nsample: int
     dt_max: int
-    # 需要平均的 dir 列表, 如 ["pos_x", "pos_y", "pos_z", "neg_x", "neg_y", "neg_z"]
-    ave_dirs: list[str] = field(default_factory=lambda: [
-                                "pos_x", "pos_y", "pos_z",
-                                "neg_x", "neg_y", "neg_z"])
 
     @property
     def Nconf(self):
@@ -59,31 +55,26 @@ class PlotParams:
 @dataclass
 class OutputParams:
     """路径管理"""
-    base_dir: str = "1_result"
+    base_dir: str = "01_result"
     conf_short: str = ""
     P: int = 0
 
     @property
     def result_dir(self):
         return os.path.join(os.getcwd(), self.base_dir,
-                            self.conf_short, f"P{self.P}")
-
-    def get_sub_dir(self, name):
-        """返回子目录路径并创建"""
-        d = os.path.join(self.result_dir, name)
-        os.makedirs(d, exist_ok=True)
-        return d
-
-    def sub_dir_path(self, name):
-        """仅返回子目录路径, 不创建"""
-        return os.path.join(self.result_dir, name)
+                            self.conf_short, f"p{self.P}")
 
 
 # ===== 画图参数配置（按 |Pz| 索引）=====
 # ylim 固定为 [0, 0.8], dt_list 只与动量绝对值有关
 _plotpa_config = {
     # |Pz| : dt_list
-    0: list(range(8, 18))
+    # 2: list(range(5, 14)),
+    # 3: list(range(5, 13)),
+    # 4: list(range(5, 12)),
+    # 5: list(range(5, 11)),
+    # 6: list(range(2, 10)),
+    0: list(range(8, 18)),
 }
 
 # 固定参数
@@ -96,19 +87,19 @@ def init_config(conf_short: str):
     """初始化配置, 根据 conf_short 构造 dataclass 实例并创建输出目录
 
     输入:
-        conf_short: 配置简称, 如 "L24x72"
+        conf_short: 配置简称, 如 "c24p29"
 
     输出:
         sampa: SampleParams 实例
         plotpa: PlotParams 实例
         outpa: OutputParams 实例
     """
-    if conf_short == "L24x72":
+    if conf_short == "c24p29":
         # 12300 是空文件夹, 0 动量没有 14950
         _conf_ids = [x for x in range(
             4050, 48001, 50) if x not in (12300, 14950)]
         sampa = SampleParams(
-            conf_short="L24x72",
+            conf_size="L24x72",
             conf_name="beta6.20_mu-0.2770_ms-0.2400_L24x72",
             conf_ids=_conf_ids,
             Nt=72,
@@ -117,10 +108,6 @@ def init_config(conf_short: str):
             # momP=2,
             Nsample=3000,
             dt_max=20,
-            ave_dirs=[
-                "pos_x", "pos_y", "pos_z",
-                "neg_x", "neg_y", "neg_z"
-            ],
         )
 
         # 根据动量大小 P 构造画图参数 (ylim 固定 [0, 0.8])
@@ -157,15 +144,14 @@ def init_config(conf_short: str):
         sampa.Nsample = sampa.Nconf
 
     # ===== OutputParams =====
-    _base_dir = "0_debug" if debug else "1_result"
+    _base_dir = "00_debug" if debug else "01_result"
     outpa = OutputParams(
         base_dir=_base_dir,
         conf_short=conf_short,
         P=sampa.P,
     )
-    # 创建六个子目录 (pos_x, neg_x, pos_y, neg_y, pos_z, neg_z) 和 ave 目录
-    for _d in ["pos_x", "neg_x", "pos_y", "neg_y", "pos_z", "neg_z", "ave"]:
-        outpa.get_sub_dir(_d)
+    # 只保存 ave ratio, 只创建 ave 目录
+    os.makedirs(outpa.result_dir, exist_ok=True)
     # =========================
 
     return sampa, plotpa, outpa
@@ -204,17 +190,17 @@ def load_ope(sampa: SampleParams, axis: str, jack: bool):
     for i, conf_id in enumerate(sampa.conf_ids):
         _ope_ij_path = (
             f"/public/group/lqcd/donghx/Ope_Gluon/Result_hpy_4D_10times/"
-            f"{sampa.conf_short}/{axis}dir/{conf_id}/"
+            f"{sampa.conf_size}/{axis}dir/{conf_id}/"
             f"ops_mu{tdir1}_nu{tdir2}_dz{sampa.Nx}_conf{conf_id}.npz"
         )
         _ope_ti_path = (
             f"/public/group/lqcd/donghx/Ope_Gluon/Result_hpy_4D_10times/"
-            f"{sampa.conf_short}/{axis}dir/{conf_id}/"
+            f"{sampa.conf_size}/{axis}dir/{conf_id}/"
             f"ops_mu3_nu{tdir1}_dz{sampa.Nx}_conf{conf_id}.npz"
         )
         _ope_tj_path = (
             f"/public/group/lqcd/donghx/Ope_Gluon/Result_hpy_4D_10times/"
-            f"{sampa.conf_short}/{axis}dir/{conf_id}/"
+            f"{sampa.conf_size}/{axis}dir/{conf_id}/"
             f"ops_mu3_nu{tdir2}_dz{sampa.Nx}_conf{conf_id}.npz"
         )
         _ope_ij[i] = np.load(_ope_ij_path)["ops"]
@@ -265,23 +251,24 @@ def load_2pt(sampa: SampleParams):
 
 
 ########################################################################################
-def compute_ratio(sampa: SampleParams, _ope: np.ndarray, _corr: np.ndarray, jack: bool):
-    """用传入的 _ope 和 _corr 计算 3pt 与 ratio, 返回 ratio
+def compute_3pt(sampa: SampleParams, _ope: np.ndarray, _corr: np.ndarray):
+    """独立计算 3pt, 返回 Nconf 级别的原始数据 (未做时间平均, 未做 resample)
 
     输入:
         sampa: SampleParams 实例
-        _ope: OPE 数据, shape (Nconf, Nt, Nx)
-        _corr: 2pt 数据, shape (Nconf, Nt, Nt)
-        jack: 是否使用 jackknife
+        _ope: OPE 数据, para: conf, tau, z
+        _corr: 2pt 数据, para: conf, tf, ti
 
     输出:
-        ratio: ratio 数据, shape (Nsample, dt_max, dt_max, Nx)
+        corr2_rel: 2pt 数据, para: conf, ti(loop), dt
+        ope_rel: OPE 数据, para: conf, ti(loop), dtau, z
+        corr3: 3pt 数据, para: conf, ti(loop), dt, dtau, z
     """
-    print("==================== compute ratio start ====================")
+    print("==================== compute 3pt start ====================")
 
-    # _corr2: conf, tf, ti
-    # para: conf, ti(loop), dt
-    _corr2_rel = np.zeros((sampa.Nconf, sampa.Nt, sampa.dt_max), dtype=complex)
+    _corr2_rel = np.zeros(
+        (sampa.Nconf, sampa.Nt, sampa.dt_max), dtype=complex
+    )  # para: conf, ti(loop), dt
     _ope_rel = np.zeros(
         (sampa.Nconf, sampa.Nt, sampa.dt_max, sampa.Nx), dtype=complex
     )  # para: conf, ti(loop), dtau, z
@@ -294,11 +281,10 @@ def compute_ratio(sampa: SampleParams, _ope: np.ndarray, _corr: np.ndarray, jack
         ope_shift = np.roll(_ope, shift=-ti, axis=1)
         _ope_rel[:, ti, :, :] = ope_shift[:, :sampa.dt_max, :]
 
-    # para: conf, ti(loop), dt, dtau, z
     _corr3 = np.zeros(
         (sampa.Nconf, sampa.Nt, sampa.dt_max,
          sampa.dt_max, sampa.Nx), dtype=complex
-    )
+    )  # para: conf, ti(loop), dt, dtau, z
     for _dt in range(sampa.dt_max):
         for _dtau in range(_dt + 1):
             c2_slice = _corr2_rel[:, :, _dt]  # para: conf, ti(loop)
@@ -307,56 +293,15 @@ def compute_ratio(sampa: SampleParams, _ope: np.ndarray, _corr: np.ndarray, jack
                 c2_slice[:, :, np.newaxis]
 
     print("loop ti finish")
-    del _corr
-    gc.collect()
 
-    # 对 ti 求平均, 消除源时间依赖
-    corr2_avg = _corr2_rel.mean(axis=1)  # (Nconf, dt)
-    ope_avg = _ope_rel.mean(axis=1)      # (Nconf, dtau, z)
-    corr3_avg = _corr3.mean(axis=1)      # (Nconf, dt, dtau, z)
-
-    del _corr2_rel, _ope_rel, _corr3
-    gc.collect()
-
-    # resample
-    corr2 = resample(corr2_avg, sampa.Nsample, jack)  # (Nsample, dt)
-    ope = resample(ope_avg, sampa.Nsample, jack)       # (Nsample, dtau, z)
-
-    del corr2_avg, ope_avg
-    gc.collect()
-
-    corr3 = resample(corr3_avg, sampa.Nsample, jack)
-
-    # # corr3 按 dt 切片分别做 resample, 避免爆内存
-    # corr3 = np.zeros((sampa.Nsample, sampa.dt_max,
-    #                   sampa.dt_max, sampa.Nx), dtype=complex)
-    # for _dt in range(sampa.dt_max):
-    #     corr3[:, _dt, :, :] = resample(
-    #         corr3_avg[:, _dt, :, :], sampa.Nsample, jack)
-
-    del corr3_avg
-    gc.collect()
-
-    print("start to compute ratio")
-    # ratio: (Nsample, dt, dtau, z)
-    ratio = np.zeros((sampa.Nsample, sampa.dt_max,
-                     sampa.dt_max, sampa.Nx), dtype=float)
-    for _dt in range(sampa.dt_max):
-        corr3_dt = corr3[:, _dt, :, :]  # (Nsample, dtau, z)
-        corr2_dt = corr2[:, _dt]        # (Nsample,)
-
-        # disconnected 部分: <C3> - <C2> * <ope>
-        corr3_disc = corr3_dt - corr2_dt[:, np.newaxis, np.newaxis] * ope
-
-        # ratio = C3_disc / C2
-        ratio[:, _dt, :, :] = (
-            corr3_disc / corr2_dt[:, np.newaxis, np.newaxis]).real
-
-    print("ratio shape:", ratio.shape)
-    print("==================== compute ratio end ====================")
-    return ratio
+    print("corr2_rel shape:", _corr2_rel.shape)
+    print("ope_rel shape:", _ope_rel.shape)
+    print("corr3 shape:", _corr3.shape)
+    print("==================== compute 3pt end ====================")
+    return _corr2_rel, _ope_rel, _corr3
 
 
+########################################################################################
 def plot_ratio(ratio: np.ndarray, plotpa: PlotParams,
                save_dir: str, jack: bool, dir_name: str,
                Nconf: int, Nsample: int,
@@ -438,8 +383,8 @@ if __name__ == "__main__":
     # ===== 解析命令行参数 =====
     parser = argparse.ArgumentParser(
         description="Gluon unpolarized PDF ratio calculation and plot")
-    parser.add_argument("-c", type=str, default="L24x72",
-                        help="conf_short, e.g. L24x72 (default: L24x72)")
+    parser.add_argument("-c", type=str, default="c24p29",
+                        help="conf_short, e.g. c24p29 (default: c24p29)")
     parser.add_argument("-s", type=int, default=1,
                         choices=[1, 2], help="start part: 1=ratio, 2=plot (default: 1)")
     parser.add_argument("-e", type=int, default=2,
@@ -457,32 +402,88 @@ if __name__ == "__main__":
     print("jackknife:", jack)
     print("Nconf:", sampa.Nconf)
     print("Nsample:", sampa.Nsample)
-    print("conf_short:", sampa.conf_short)
+    print("conf_size:", sampa.conf_size)
     print("result base:", outpa.result_dir)
 
-    # ---- Part 1: compute ratio (按轴循环, 每个轴算一次 OPE + 正负方向 ratio, 只保存 ratio) ----
+    # ---- Part 1: compute ratio (按轴循环, 每个轴算一次 OPE + P=0 2pt 3pt,
+    #      每个方向算完 3pt 后先做时间平均, 3 个方向全部算完后一次做方向平均,
+    #      再 resample, 最后算 ratio, 只保存 ave ratio) ----
     if part_start <= 1:
+        time0 = time.perf_counter()
+
+        # 预分配 3 个方向、时间平均后的 Nconf 级别数组
+        # (corr3 未做时间平均时内存过大, 故时间平均在每个方向算完后立即做)
+        # para: dir, conf, dt
+        corr2_all = np.zeros((3, sampa.Nconf, sampa.dt_max), dtype=complex)
+        # para: dir, conf, dtau, z
+        ope_all = np.zeros(
+            (3, sampa.Nconf, sampa.dt_max, sampa.Nx), dtype=complex)
+        # para: dir, conf, dt, dtau, z
+        corr3_all = np.zeros(
+            (3, sampa.Nconf, sampa.dt_max, sampa.dt_max, sampa.Nx),
+            dtype=complex)
+
+        # P=0 只有 1 个 2pt, 只加载一次, 3 个 OPE 方向共享
+        _corr = load_2pt(sampa)
+
+        _dir_idx = 0  # 方向索引, 0..2
         for _axis in ["x", "y", "z"]:
-            # 1. 加载该轴的 OPE (只算一次, 正负方向共享)
-            time0 = time.perf_counter()
+            # 1. 加载该轴的 OPE
             _ope = load_ope(sampa, _axis, jack)
 
-            # pos 方向
-            _corr_pos = load_2pt(sampa)
-            ratio_pos = compute_ratio(sampa, _ope, _corr_pos, jack)
-            np.save(os.path.join(outpa.get_sub_dir(
-                f"pos_{_axis}"), "ratio.npy"), ratio_pos)
-            print(f"ratio (pos_{_axis}) saved")
-
-            # neg 方向 0动量无数据, 但为了匹配其它动量的文件格式, 还是会复制一份
-            ratio_neg = ratio_pos
-            np.save(os.path.join(outpa.get_sub_dir(
-                f"neg_{_axis}"), "ratio.npy"), ratio_neg)
-            print(f"ratio (neg_{_axis}) saved")
+            # 2. 用共享的 P=0 2pt 算 3pt -> 时间平均 (ti 平均) -> 存入预分配数组
+            corr2_rel, ope_rel, corr3 = compute_3pt(sampa, _ope, _corr)
+            corr2_all[_dir_idx] = corr2_rel.mean(axis=1)  # para: conf, dt
+            ope_all[_dir_idx] = ope_rel.mean(axis=1)      # para: conf, dtau, z
+            corr3_all[_dir_idx] = corr3.mean(
+                axis=1)      # para: conf, dt, dtau, z
+            _dir_idx += 1
 
             time1 = time.perf_counter()
             print(f"Peak Memory: {get_peak_memory_gb():.3f} GB")
             print(f"spend time: {(time1 - time0):.2f}s\n")
+
+        # 循环结束后统一回收内存
+        del _ope, _corr, corr2_rel, ope_rel, corr3
+        gc.collect()
+
+        # 3. 3 个方向全部算完后, 一次做方向平均 (Nconf 级别), 并立刻取实部
+        print("===== average corr2/ope/corr3 over 3 dirs =====")
+        corr2_ave = corr2_all.mean(axis=0).real  # para: conf, dt
+        ope_ave = ope_all.mean(axis=0).real      # para: conf, dtau, z
+        corr3_ave = corr3_all.mean(axis=0).real  # para: conf, dt, dtau, z
+        del corr2_all, ope_all, corr3_all
+        gc.collect()
+        print(f"corr2_ave shape: {corr2_ave.shape}")
+        print(f"ope_ave shape: {ope_ave.shape}")
+        print(f"corr3_ave shape: {corr3_ave.shape}")
+
+        # 4. resample
+        print("===== resample =====")
+        corr2 = resample(corr2_ave, sampa.Nsample, jack)  # para: sample, dt
+        # para: sample, dtau, z
+        ope = resample(ope_ave, sampa.Nsample, jack)
+        del corr2_ave, ope_ave
+        gc.collect()
+        # para: sample, dt, dtau, z
+        corr3 = resample(corr3_ave, sampa.Nsample, jack)
+        del corr3_ave
+        gc.collect()
+        print(f"corr2 shape: {corr2.shape}")
+        print(f"ope shape: {ope.shape}")
+        print(f"corr3 shape: {corr3.shape}")
+
+        # 5. resample 后再算 ratio (disconnected 部分: <C3>/<C2> - <ope>)
+        ratio_ave = corr3 / corr2[:, :, np.newaxis,
+                                  np.newaxis] - ope[:, np.newaxis, :, :]  # para: sample, dt, dtau, z
+        del corr2, ope, corr3
+        gc.collect()
+
+        # 6. 保存 ave ratio
+        np.save(os.path.join(outpa.result_dir, "ratio.npy"), ratio_ave)
+        print("ratio (ave) saved")
+        del ratio_ave
+        gc.collect()
 
         if part_end == 1:
             print("job finish")
@@ -490,39 +491,20 @@ if __name__ == "__main__":
     else:
         print("===== skip compute ratio, loading ratio from file =====")
 
-    # ---- Part 2: plot (六个目录分别画图 + ave 平均, 不保存 ave 数据) ----
+    # ---- Part 2: plot (只画 ave ratio) ----
     if part_start <= 2:
         time0 = time.perf_counter()
 
-        # 加载所有 6 个方向的 ratio
-        _dir_mom_map = {
-            "pos_x": (sampa.P, 0, 0),
-            "neg_x": (-sampa.P, 0, 0),
-            "pos_y": (0,  sampa.P, 0),
-            "neg_y": (0, -sampa.P, 0),
-            "pos_z": (0, 0,  sampa.P),
-            "neg_z": (0, 0, -sampa.P),
-            "ave":   (0, 0, sampa.P),
-        }
-        _all_ratios = {}
-        for _dir in ["pos_x", "neg_x", "pos_y", "neg_y", "pos_z", "neg_z"]:
-            load_path = os.path.join(outpa.sub_dir_path(_dir), "ratio.npy")
-            print(f"===== loading ratio ({_dir}) from {load_path} =====")
-            _all_ratios[_dir] = np.load(load_path)
-            print(f"  loaded, shape: {_all_ratios[_dir].shape}")
+        # 加载 ave ratio
+        load_path = os.path.join(outpa.result_dir, "ratio.npy")
+        print(f"===== loading ratio (ave) from {load_path} =====")
+        ratio_ave = np.load(load_path)
+        print(f"  loaded, shape: {ratio_ave.shape}")
 
-        # 计算 ave 平均 (不保存 npy)
-        print(f"===== computing ave over dirs: {sampa.ave_dirs} =====")
-        _ave_ratios = [_all_ratios[_d] for _d in sampa.ave_dirs]
-        _all_ratios["ave"] = np.mean(_ave_ratios, axis=0)
-        print(f"  ratio_ave shape: {_all_ratios['ave'].shape}")
-
-        # 统一画图: 6 个方向 + ave
-        for _dir in ["pos_x", "neg_x", "pos_y", "neg_y", "pos_z", "neg_z", "ave"]:
-            Px, Py, Pz = _dir_mom_map[_dir]
-            plot_ratio(_all_ratios[_dir], plotpa, outpa.sub_dir_path(_dir), jack, _dir,
-                       Nconf=sampa.Nconf, Nsample=sampa.Nsample,
-                       Px=Px, Py=Py, Pz=Pz)
+        # 画 ave 图
+        plot_ratio(ratio_ave, plotpa, outpa.result_dir, jack, "ave",
+                   Nconf=sampa.Nconf, Nsample=sampa.Nsample,
+                   Px=0, Py=0, Pz=sampa.P)
 
         time1 = time.perf_counter()
         print(f"spend time: {(time1 - time0):.2f}s\n")

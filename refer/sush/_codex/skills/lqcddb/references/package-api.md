@@ -4,7 +4,7 @@ Use this reference to choose import paths, call public functions, and modify sig
 
 ## Package identity and loading
 
-The distribution name is `lqcddb_update`, the import name is `lqcddb`, and the version comes from `pyproject.toml`. NumPy, SciPy, `opt_einsum`, and Matplotlib are base dependencies; CuPy, `mpi4py`, and SymPy are optional. The top-level `__getattr__` lazily loads concrete modules by name; set the backend before constructing `vector_creator`. Do not use wildcard imports because they initialize the complete public API and optional MPI/SymPy paths.
+For the default source tree the distribution name is `lqcddb_update`, the import name is `lqcddb`, and the version comes from `pyproject.toml`. Resolve `source_root` through `SKILL.md`; after switching roots verify package identity/exports rather than deriving the import name from the directory. NumPy, SciPy, `opt_einsum`, and Matplotlib are base dependencies; CuPy, `mpi4py`, and SymPy are optional. The top-level `__getattr__` lazily loads concrete modules. Prefer named imports in standalone probes to avoid initializing optional MPI/SymPy paths; retain a production reference's imports when copying/adapting it.
 
 ## Top-level public names
 

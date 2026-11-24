@@ -1,0 +1,3 @@
+interface:
+  display_name: "格点 QCD 收缩的 CUDA 特化"
+  short_description: "从 Wick 方程核查物理、选择收缩路径并验证专用 CUDA 实现"

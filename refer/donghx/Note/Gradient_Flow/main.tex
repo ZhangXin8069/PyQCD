@@ -33,9 +33,9 @@
 \DeclareMathOperator{\Tr}{Tr}
 
 \title{\textbf{Gradient-Flowed Quark and Gluon Quasi-PDFs in Lattice QCD}\\
-\large Theory, Distillation, and the \(32^3\times96\) Implementations}
+\large Theory, Distillation, and the \(32^3\times96\) and \(32^3\times64\) Implementations}
 \author{Hongxin Dong}
-\date{20 October 2026}
+\date{25 October 2026 \quad (gluon convention updated 24 November 2026)}
 
 \begin{document}
 \maketitle
@@ -67,8 +67,10 @@ and forms vacuum-subtracted disconnected correlations with stored nucleon
 two-point functions.  The raw terms are available at 14 flow times, and the
 new covariance-preserving C3/C2 product uses a common 406-configuration sample
 and resamples six operator choices to Nboot=1000.  The six choices are \(T\),
-\(T+S\), and \(T-S\) in each channel, with even separation for unpolarized
-and odd separation for helicity.  A convention audit finds that the stored
+\(T+S\), and \(T-S\) in each channel.  For subsequent analysis use the
+positive-separation unpolarized loop, which is exactly even, and the
+unaveraged odd difference for helicity.  The archived unpolarized selector
+used an unaveraged even sum.  A convention audit finds that the stored
 unpolarized combination is correct, whereas the stored helicity `combined'
 array used a legacy plus sign.  Its raw terms are sufficient to construct
 every requested choice without repeating gauge flow or the OPE measurement.
@@ -90,7 +92,15 @@ with 1700 configurations and 3000 paired bootstrap replicas: direct
 fixed-flow-pair time slopes, finite-time static energies, and candidate
 line-mass coefficients. Flow-window/model dependence and adjoint signal
 limitations currently prevent approval of a unique final coefficient.
-No nonperturbative line-mass subtraction has been applied to the PDFs.
+That 20 October snapshot did not apply a nonperturbative line subtraction.
+Section~\ref{sec:l32x64-moving-20261025} now records the separate L32x64
+scheme-B diagnostic: local normalization, one fixed candidate fundamental
+line subtraction, one-loop-boundary plus LL endpoint conversion, a
+pure-linear fixed-spacing flow intercept, and a paired Pz=0 residual-mass
+correction for four moving momenta.  Its numerical chain is complete, but
+the residual-mass fits have very large chi-squared and negligible quality
+probability.  The fixed candidate line mass, the finite-scheme closure and
+the scale hierarchy are not validated by numerical completion.
 \end{abstract}
 
 \tableofcontents
@@ -2798,6 +2808,8 @@ this note.  Minkowski space has
  F_{\mathrm M}^{\rho\sigma}.
  \label{eq:minkowski-tensor-convention}
 \end{equation}
+Lowering all four Minkowski indices gives \(\epsilon^{\mathrm M}_{0123}=-1\).
+In Euclidean signature the upper and lower epsilon components coincide.
 The implementation orders Euclidean coordinates as
 \begin{equation}
  (x,y,z,t)=(0,1,2,3),
@@ -2896,15 +2908,15 @@ fundamental representation.  Gauge transformations at the two endpoints
 cancel inside the trace, so Eq.~\eqref{eq:flowed-gluon-bilocal} is gauge
 invariant without gauge fixing.
 
-The code stores both line orientations and forms
+The historical writer stores both raw line orientations and the combinations
 \begin{align}
-  M^{\rm even}(z)&=M(+z)+M(-z),\\
+  M^{\rm even}_{\rm archive}(z)&=M(+z)+M(-z),\\
   M^{\rm odd}(z)&=M(+z)-M(-z).
   \label{eq:gluon-z-projections}
 \end{align}
-These are a sum and difference, not averages: there is no factor \(1/2\) in
-the stored arrays.  Keeping both raw orientations is important for testing
-Hermiticity, parity, and the exact linear identities.
+The archive uses the unaveraged sum and difference.  For subsequent analysis
+the unpolarized prescription uses the raw \(+z\) loop, while the helicity
+prescription uses the unaveraged odd difference.
 
 To put the two physics channels on identical footing, define the Euclidean
 primitive correlators
@@ -2978,11 +2990,30 @@ Eq.~\eqref{eq:unpolarized-wick-result}.  With code indices
 \end{align}
 This is exactly the index structure
 \(M_{tx;tx}+M_{ty;ty}-2M_{xy;xy}\) used in
-Ref.~\cite{ChenEtAl2025GluonPDF}.  The production physics selector uses its
-even-separation part.  The code saves \texttt{combined}, \(M_{ti;ti}\), and
-\(M_{ij;ij}\) separately; in the unified notation these are
-\(T_U-S_U\), \(T_U\), and \(S_U\), so the identity can be verified configuration by
-configuration.
+Ref.~\cite{ChenEtAl2025GluonPDF}, Eqs.~(2)--(3), and the Euclidean current
+of Ref.~\cite{KhanEtAl2021UnpolarizedGluon}, Eq.~(19).
+
+On each time slice the full spatial sum is invariant under a periodic
+translation of its starting site.  Reversing the line replaces it with its
+dagger, and cycling the color trace then exchanges the endpoint fields.
+Writing \(A,B\) for the two field-strength insertions, this gives
+\begin{equation}
+ M_{A;B}(-z,t)=M_{B;A}(+z,t),\qquad
+ U^E_{\mu\nu}(-z,t)=U^E_{\mu\nu}(+z,t).
+ \label{eq:unpolarized-positive-orientation}
+\end{equation}
+The second equality holds on each configuration since the insertions are
+identical.  Use \(\cO_U^{(\tau)}(+|z|)\) directly for all subsequent
+unpolarized analysis, including \(z=0\).  An explicit even average gives the
+same result.  The archived unaveraged even sum equals \(2\cO_U^{(\tau)}(+|z|)\).
+The factor of two in \(S_U=2U^E_{xy}\) counts the two transverse orderings
+and remains part of the operator.  When a full-axis Fourier integral is
+written as a positive-axis cosine integral, the Fourier prefactor accounts
+for the two half-axes.
+
+The writer saves \texttt{combined}, \(M_{ti;ti}\), and \(M_{ij;ij}\)
+separately.  Their combinations are \(T_U-S_U\), \(T_U\), and \(S_U\) with
+whichever orientation is selected.
 
 The statement that an analogous thin-link operator belongs to a convenient
 multiplicative-renormalization class does not prove that a finite-flow
@@ -3005,7 +3036,9 @@ and its spin-dependent contribution is odd under reversal of the separation,
   \label{eq:helicity-odd-z}
 \end{equation}
 The Minkowski target used for the helicity pseudo-distribution is
-\cite{BalitskyMorrisRadyushkin2022,EgererEtAl2022GluonHelicity}
+\cite{BalitskyMorrisRadyushkin2022,EgererEtAl2022GluonHelicity}.
+Each \(\widetilde M\) in this target already denotes the odd difference
+of the corresponding oriented bilocal.
 \begin{equation}
  \mathcal M_{\Delta g}^M
  =\sum_{i=x,y}\widetilde M^M_{0i;0i}
@@ -3042,13 +3075,19 @@ Eq.~\eqref{eq:code-dual-components} provide an immediate independent check:
 Thus the target relative sign is already visible without manipulating any
 four-index epsilon tensor.
 
-The same conclusion follows directly from Wick rotation.  From
-Eq.~\eqref{eq:wick-field-strength},
-\(F^M_{0i}=+\ii F^E_{ti}\), while
-Eq.~\eqref{eq:wick-dual-strength} gives
-\(\widetilde F^M_{0i}=\widetilde F^E_{ti}\),
-\(F^M_{xy}=F^E_{xy}\), and
-\(\widetilde F^M_{xy}=-\ii\widetilde F^E_{xy}\).  Hence
+The same conclusion follows directly from Wick rotation.
+\(F^M_{0i}=+\ii F^E_{ti}\) and
+\(\widetilde F^M_{0i}=\widetilde F^E_{ti}\) give the temporal phase \(+\ii\).
+For the spatial term, \(F^M_{xy}=F^E_{xy}\) and
+\begin{equation}
+ \widetilde F^M_{xy}
+ =\epsilon^M_{xy0z}F_M^{0z}
+ =(-1)(-\ii F^E_{tz})
+ =-\ii \widetilde F^E_{xy},\qquad
+ \widetilde F^E_{xy}=F^E_{zt}.
+\end{equation}
+The continuation can be applied to each raw orientation before the odd
+difference.  Suppressing the orientation labels for the termwise map gives
 \begin{align}
  \widetilde M^M_{0i;0i}
  &=\Tr\!\left[(+\ii F^E_{ti})W^\dagger
@@ -3073,18 +3112,19 @@ Wick phases.  Removing the common factor \(\ii\) yields the code-basis target
  T_H&\equiv H^E_{tx}+H^E_{ty},
  &S_H&\equiv2H^E_{xy}.
 \end{align}
-Its physical orientation is the unaveraged odd difference
+The helicity selector uses the unaveraged odd difference
 \begin{equation}
  \cO_{\Delta g}^{E,\mathrm{odd}}(z)
  =\cO_{\Delta g}^{E}(+z)-\cO_{\Delta g}^{E}(-z).
  \label{eq:helicity-correct-odd-combination}
 \end{equation}
-Thus unpolarized and helicity use the same Euclidean coefficient vector
-\((+1,+1,-2)\), or \(T_X-S_X\).  Their differences are the
-second tensor (\(F\) or \(\widetilde F\)), even versus odd separation, and
-the nucleon spin projector.  A different Wick direction or an overall dual
-orientation flips the entire helicity operator, but cannot change the
-relative sign between \(T_H\) and \(S_H\).
+Apply this difference once to the raw orientations, including zero at
+\(z=0\).  Taking the same difference separately in \(T_H\) and \(S_H\)
+gives the identical result.  The Euclidean coefficient vectors happen to
+coincide.  The unpolarized spatial sign comes from reversing \(xy\) to \(yx\)
+in the Minkowski contraction.  The helicity spatial sign comes from the
+dual Wick phase.  An overall change of the dual orientation multiplies
+all three helicity terms by the same sign.
 
 The old note's Eq.~(35), after its \(txyz\to xyzt\) orientation is treated
 consistently, maps to the diagnostic \(T_H+S_H\), while its Eq.~(36) maps to
@@ -3108,9 +3148,10 @@ where, only in this equation,
  \equiv\sum_{\bm x}\Tr\!\left[
  F^E_{\mu\nu}(x+z)W^\dagger F^E_{\rho\sigma}(x)W\right].
 \]
-These signs reproduce the individual contractions in the old Eq.~(35) after
-the index dictionary is applied and make the sole disputed longitudinal term
-explicit.
+In this notation \(U^E_{xy}=K_{xy;xy}\), while
+\(H^E_{xy}=K_{xy;zt}=-K_{xy;tz}\).  Thus the coefficient of \(H^E_{xy}\)
+is \(-2\) in the saved dual basis and the coefficient of \(K_{xy;tz}\)
+is \(+2\) in the explicit ordinary-field basis.
 
 For a boost along \(z\), Ref.~\cite{EgererEtAl2022GluonHelicity} relates this
 combination to invariant amplitudes by
@@ -3271,7 +3312,10 @@ Helicity & $-S_H$ & $T_H-S_H$, odd in $z$\\
 \bottomrule
 \end{tabular}
 \end{center}
-The corresponding labels, in this order, are
+The following labels are the archived schema, in array order.  The three
+unpolarized channels used the unaveraged even sum.  For a new product with
+single-orientation normalization use each unpolarized choice at \(+|z|\)
+according to Eq.~\eqref{eq:unpolarized-positive-orientation}.
 \begin{center}
 \begin{tabular}{p{0.43\textwidth}p{0.43\textwidth}}
 \texttt{unpolarized\_TU\_even} &
@@ -3515,7 +3559,7 @@ OPE projection & color-traceless\\
 Saved components & combined, \(M_{ti;ti}\), \(M_{ij;ij}\); new products
 recombine raw \texttt{Mtiti}/\texttt{Mijij}\\
 Operator choices & in each channel: no \(S\), \(T+S\), and \(T-S\),
-with even/odd $z$ projection as appropriate\\
+with the archived even sum for unpolarized and odd difference for helicity\\
 Ratio schema & {\scriptsize\texttt{gradient\_flow\_gluon\_c3\_c2\_bootstrap\_all\_operators\_v1}}\\
 Status & finite-flow bare disconnected C3/C2; six operators, N=406,
 Nboot=1000, all 14 flow times\\
@@ -3558,7 +3602,8 @@ measurements.
   \centering
   \includegraphics[width=0.98\textwidth]{figures/ratio_plateau_tau0p500_z2_P345.pdf}
   \caption{Diagnostic finite-flow bare ratios at \(\tau/a^2=0.5\) and
-  \(z/a=2\).  The unpolarized plot uses the even `combined' channel.  The
+  \(z/a=2\).  The unpolarized plot shows the archived unaveraged even
+  sum of the combined channel.  The
   helicity panel is retained only as a legacy sign diagnostic: it used the
   incorrect odd \(M_{ti;ti}^{H}+M_{ij;ij}^{H}\) combination and is not the
   target in Eq.~\eqref{eq:flowed-helicity-operator}.  Endpoint values can contain
@@ -4098,8 +4143,8 @@ The unified entry point is
 \begin{center}
 \nolinkurl{gluon_unpolarized_stages_CT18NLO_20260921/README.md}.
 \end{center}
-This branch uses \((T_U-S_U)_{\rm even}\), its real part, 406 common
-configurations, seed 1115, and 1000 paired bootstrap replicas. The actual
+This archived branch uses the unaveraged even sum of \(T_U-S_U\), its real
+part, 406 common configurations, seed 1115, and 1000 paired bootstrap replicas. The actual
 ratio estimator averages \(C_2,C_3\) inside the ensemble or replica,
 performs the vacuum subtraction and forms
 \(\operatorname{Re}C_3/\operatorname{Re}C_{2,\rm nopol}\).
@@ -4148,7 +4193,12 @@ the ratio carries \(1/(2E)\). No extra volume or color factor is inserted:
  \label{eq:october-gluon-normalization}
 \end{equation}
 For this convention \(Q(x)=xg(x)\) at positive \(x\), and
-\(H(0)=2\langle x\rangle_g\). The local point is matched independently:
+\(H(0)=2\langle x\rangle_g\).  For the same absolute normalization with
+the new positive-orientation convention,
+\(R_{\MSbar,\rm archive}=2R_{\MSbar,+}\), so the right-hand side for \(H\)
+becomes \(-4R_{\MSbar,+}/[4\pi\alpha_s(aE)]\) under the same field normalization
+assumption.  Ratios within one channel with the same constant factor in
+numerator and denominator are invariant.  The local point is matched by
 \begin{align}
  C_{\rm loc}(t)&=1+\frac{\alpha_sC_A}{4\pi}
  \left[\frac{11}{3}\{\ln(2\mu^2t)+\gamma_E\}+\frac73\right],\\
@@ -4513,8 +4563,9 @@ At this dated snapshot production was still active; all-request completion
 requires zero missing entries in the final audit, not merely existing
 directories. The four CPU partitions are
 \texttt{a192c1t}, \texttt{cpu6248R}, \texttt{cpueicc}, \texttt{i72c512g}.
-The primitive terms are saved separately as \(T_U,S_U,T_H,S_H\),
-with target \((T_U-S_U)_{\rm even}\) and \((T_H-S_H)_{\rm odd}\).
+The primitive terms are saved separately as \(T_U,S_U,T_H,S_H\).
+Use \((T_U-S_U)(+|z|)\) for subsequent unpolarized analysis and
+\((T_H-S_H)(+z)-(T_H-S_H)(-z)\) for helicity.
 The plus helicity combination and \(T_H\) remain diagnostics.
 For example, the separated primitives have shape \((2,4,25,64)\),
 with projection/orientation/separation/time axes; full complex values
@@ -5402,6 +5453,953 @@ The document date is 20 October 2026; this section records only verified
 existing results and pending decisions, not a new physics approval.
 
 \clearpage
+\section{L32x64 scheme-B moving quark PDF: complete 01--06 analysis}
+\label{sec:l32x64-moving-20261025}
+
+This section is the dated successor of the historical L32x64 scheme-A
+and earlier scheme-B snapshots.  It records the moving \(P_z=3,4,5,6\)
+analysis completed on 25 October 2026.  It does not overwrite or
+retroactively relabel the older results.  The complete handoff, including
+absolute paths and machine-readable manifests, is
+\path{/public/home/donghx/.codex/Markdown/gradient_flow_quark_pdf.md}.
+
+\subsection{Scope and status}
+
+The calculation uses the \(32^3\times64\) Clover ensemble with
+\(a=0.0897\,\mathrm{fm}\), thin (unsmeared) gauge links, 20 configurations,
+and the blending estimator called scheme B.  It evaluates connected
+unpolarized, helicity, and transversity matrix elements for the connected
+flavors \(u,d,u-d\).  The six stages are:
+\begin{enumerate}
+  \item the scheme-B \(C_3/C_2\) ratio and bare-matrix-element fit;
+  \item local even-real normalization;
+  \item one fixed candidate fundamental line subtraction;
+  \item one-loop gradient-flow endpoint conversion with LL running (RGR);
+  \item a pure-linear small-flow-time intercept at fixed lattice spacing;
+  \item a paired \(P_z=0\) residual-mass diagnostic applied to moving momenta.
+\end{enumerate}
+The result is a fixed-\(a\), finite-flow-to-\(\tau=0\) diagnostic matrix
+element.  It is not a continuum limit, a complete singlet result, or a
+final light-cone PDF.  Lambda extrapolation, Fourier reconstruction and
+the final GF-to-quasi/LaMET matching are not included in this section.
+\textit{Matching} below means only the GF endpoint conversion unless the
+LaMET step is stated explicitly.
+
+\subsection{Ensemble, momentum, separation and bootstrap}
+
+The input ensemble and gauge directory are
+\begin{center}
+\path{/public/group/lqcd/configurations/CLOVER/}
+\path{beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64}.
+\end{center}
+The moving configurations are
+\[
+  10000,10040,\ldots,10760,
+\]
+and the successor result root is
+\begin{center}
+\path{/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/}
+\path{quark_l32x64_B_moving_RGR_m0_20261025}.
+\end{center}
+The frozen 01--03 source is
+\path{quark_l32x64_B_pionDA_workflow_20261022/}; the existing \(P_z=0\)
+mass source is
+\path{quark_l32x64_B_m0_RGR_z12_20261025/}.
+
+The momentum label is an integer mode:
+\begin{equation}
+ P_z(n_z)=\frac{2\pi n_z}{L},\qquad n_z=3,4,5,6.
+\label{eq:l32x64-moving-momentum}
+\end{equation}
+With the stated spacing these modes are approximately
+\(1.30,1.73,2.16,2.59\,\mathrm{GeV}\).  The separation axis is independent:
+\[
+ z=n_z^{(z)}a,\qquad z/a=0,1,\ldots,20.
+\]
+The source-time label of the four-dimensional kernel is denoted by
+\(\sigma\), while \(\tau=t_f/a^2\) denotes dimensionless flow time.  An
+old cache path containing \texttt{tauNNN} is a source-time label, not
+zero flow.
+
+There are 100 paired bootstrap rows, generated with seed 1115 from
+\path{00_audit/bootstrap_indices_Nboot100_seed1115.npy}.  Its SHA256 is
+\begin{center}
+\path{86c034214702c29af6671956f4ff23c7749c4e34af103a9173d03da455b6056b}.
+\end{center}
+All stages keep the same configuration-index row.  The NPZ axis contract is
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Array & Shape & Meaning\\
+\midrule
+\texttt{value} & \((2,4,21)\) & component, \(P_z\), \(z/a\)\\
+\texttt{samples} & \((2,100,4,21)\) & component, bootstrap, \(P_z\), \(z/a\)\\
+\texttt{error} & \((2,4,21)\) & \(\operatorname{std}\) over bootstrap, ddof \(=1\)\\
+\bottomrule
+\end{tabular}
+\end{center}
+Component 0 is the real even projection.  Component 1 is already the real
+number \(\operatorname{Im}H_{\rm odd}\); it is not a complex array on which
+one should apply \(\operatorname{imag}\) again.  A complex display is
+\begin{equation}
+ H_{\rm display}=H_{\rm even,real}
+                 +\ii H_{\rm odd,imag}.
+\label{eq:l32x64-complex-display}
+\end{equation}
+
+\subsection{Flow equation, all-time basis and vertex}
+
+The thin gauge field is flowed from the unsmeared configuration:
+\begin{align}
+ \partial_t B_\mu(t,x)&=D_\nu G_{\nu\mu}(t,x),&
+ G_{\mu\nu}&=\partial_\mu B_\nu-\partial_\nu B_\mu+[B_\mu,B_\nu],
+ \label{eq:l32x64-gauge-flow}\\
+ \partial_t\chi(t,x)&=\Delta_{B(t)}\chi(t,x),&
+ \partial_t\bar\chi(t,x)&=\bar\chi(t,x)\overleftarrow{\Delta}_{B(t)}.
+ \label{eq:l32x64-fermion-flow}
+\end{align}
+The formal covariant heat-kernel solution is
+\begin{equation}
+ \chi(t,x)=\sum_y K_B(t;x,y)\psi(y),\qquad
+ \bar\chi(t,x)=\sum_y\bar\psi(y)K_B^\dagger(t;y,x).
+\label{eq:l32x64-kernel}
+\end{equation}
+Here the commutator convention absorbs the coupling into the
+anti-Hermitian matrix connection.  Hermitian component gauge potentials
+require the corresponding \(ig\) factors; the numerical code uses SU(3)
+links directly.  Link directions are \((x,y,z,t)\), whereas coordinate
+array axes are \((t,z,y,x)\).
+The production values are
+\begin{equation}
+ \tau\in\{0.2,0.3,0.4,0.5,0.6,0.7,0.8\},\qquad
+ \epsilon=0.01,\qquad
+ N_{\rm step}=\tau/\epsilon=20,30,40,50,60,70,80.
+\label{eq:l32x64-flow-grid}
+\end{equation}
+The upstream moving campaign also measured \(\tau=0.1\), but the present
+01--06 successor uses the seven checkpoints in
+Eq.~\eqref{eq:l32x64-flow-grid}.  For the selected radius cut,
+\begin{equation}
+ a<r_f<0.3\,\mathrm{fm}
+ \quad\Longleftrightarrow\quad
+ 0.125<\tau<1.3981946511\ldots .
+\label{eq:l32x64-radius-window}
+\end{equation}
+Thus \(\tau=0.1\), with \(r_f<a\), is absent from this postprocessing.
+This inequality selects measured checkpoints, not every real-valued
+flow time inside it.
+The smoothing radius is
+\begin{equation}
+ r_f=\sqrt{8t_f}=a\sqrt{8\tau}.
+\label{eq:l32x64-flow-radius}
+\end{equation}
+The weak scale check used by the D-loose branch is
+\begin{equation}
+ \frac{a}{r_f}<1,\qquad \frac{r_f}{|z|}<1,\qquad
+ \sqrt{t_f}|P_z|<1.
+\label{eq:l32x64-weak-window}
+\end{equation}
+It is a diagnostic scale window, not a substitute for a continuum
+extrapolation or a proof of flow-time independence.
+\begin{center}
+\begin{tabular}{@{}ccccc@{}}
+\toprule
+\(\tau\) & steps & \(r_f\,[\mathrm{fm}]\) & source-time half-window \(w\)
+ & \(\mu_f\,[\mathrm{GeV}]\)\\
+\midrule
+0.2 & 20 & 0.113463 & 5 & 2.60629\\
+0.3 & 30 & 0.138963 & 5 & 2.12803\\
+0.4 & 40 & 0.160460 & 6 & 1.84293\\
+0.5 & 50 & 0.179400 & 6 & 1.64836\\
+0.6 & 60 & 0.196523 & 7 & 1.50474\\
+0.7 & 70 & 0.212269 & 8 & 1.39312\\
+0.8 & 80 & 0.226925 & 8 & 1.30315\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Let \(V_n(\sigma,\boldsymbol{x})\) be an orthonormal three-dimensional
+Laplacian eigenvector,
+\begin{equation}
+ -\nabla^2_{\rm 3D}(\sigma)V_n(\sigma)
+   =\lambda_n(\sigma)V_n(\sigma),\qquad
+ V^\dagger(\sigma)V(\sigma)=\mathbf 1.
+\end{equation}
+Embedding one vector in four dimensions and applying the heat kernel gives
+\begin{align}
+ \eta_{\sigma n}(y)
+ &=\delta_{y_4,\sigma}V_n(\sigma,\boldsymbol{y}),\\
+ \Phi^{(t_f)}_{\sigma n}(x)
+ &=\sum_yK_B(t_f;x,y)\eta_{\sigma n}(y).
+\label{eq:l32x64-flowed-basis}
+\end{align}
+The embedded matrix has \(N_tN_v\) columns:
+\begin{equation}
+ \mathbb V_{x,(\sigma,n)}
+ =\delta_{x_4,\sigma}V_n(\sigma,\boldsymbol{x},c),\qquad
+ \mathbb V\in\mathbb C^{(N_tL_zL_yL_xN_c)\times(N_tN_v)},\qquad
+ \Phi=K\mathbb V.
+\label{eq:l32x64-embedded-dimension}
+\end{equation}
+The implementation applies the kernel to these existing columns rather
+than solving the complete dense space-time-color kernel.  Current
+\(N_v=400\) and source/sink \(N_v=200\) include compressed and high-noise
+columns, not exclusively exact low eigenmodes.
+Consequently \(\Phi_{\sigma n}^{(t_f)}(t_J)\) has support at current times
+different from its original time \(\sigma\).  The implementation keeps a
+finite temporal support window, which is an explicit systematic.
+The unflowed perambulator
+\(\mathcal P_f(\sigma_a,\sigma_b)
+=V^\dagger(\sigma_a)D_f^{-1}(\sigma_a,\sigma_b)V(\sigma_b)\)
+is reused; operator-only flow does not require a fresh Dirac inversion
+for every bilocal.  The time-dependent heat kernel is a flow-ordered
+exponential, not a unitary matrix.  In the free case it is
+\(K(p)=e^{-t_fp^2}\).  Flowed columns need not remain orthonormal, and
+reorthogonalizing them while leaving perambulators unchanged would
+change the estimator.
+
+For a spatial direction \(i\), the spin-independent vertex is
+\begin{equation}
+ J^{(t_f)}_{mn}(t_J;\sigma_a,\sigma_b;z,i)
+ =\sum_{\boldsymbol{x}}
+ \Phi^\dagger_{\sigma_a m}(t_J,\boldsymbol{x})
+ W_{B(t_f),i}(\boldsymbol{x},\boldsymbol{x}+z\hat{\boldsymbol i};t_J)
+ \Phi_{\sigma_b n}(t_J,\boldsymbol{x}+z\hat{\boldsymbol i}).
+\label{eq:l32x64-vertex}
+\end{equation}
+The vertex is spin independent; \(\Gamma\) is inserted in the later C3
+contraction.  A basis slice is stored with axes
+\((N_v,L_z,L_y,L_x,N_c)\), and a vertex block with
+\((\text{sign},z,\text{eigen}_{\rm left},\text{eigen}_{\rm right})\).
+
+For a spectral sector \(r\) of dimension \(d_r\), sampled with \(n_r\)
+vectors, \(w_r=d_r/n_r\).  The same-time second-order table is
+\begin{equation}
+ \omega^{(2)}_{mn}=
+ \begin{cases}
+ d_r/n_r,&m=n,\\
+ d_r(d_r-1)/[n_r(n_r-1)],&
+       m\ne n\ \text{in the same sector},\\
+ (d_r/n_r)(d_s/n_s),&m\in r,\ n\in s,\ r\ne s.
+ \end{cases}
+\label{eq:l32x64-omega-second}
+\end{equation}
+Scheme B uses the same-time table only when the original source times
+coincide and the independent product table otherwise:
+\begin{equation}
+ \Omega^B_{(\sigma_a,m),(\sigma_b,n)}
+ =\begin{cases}
+ \omega^{(2)}_{mn},&\sigma_a=\sigma_b,\\
+ w_{\sigma_a m}w_{\sigma_b n},&\sigma_a\ne\sigma_b.
+ \end{cases}
+\label{eq:l32x64-omega-B}
+\end{equation}
+The full current involves both original-time sums, schematically
+\begin{equation}
+ C_{3,\Gamma}
+ =\sum_{\sigma_a,\sigma_b}\sum_{m,n}
+ \Omega^B_{(\sigma_a,m),(\sigma_b,n)}
+ J_{mn}(t_J;\sigma_a,\sigma_b;z)\,
+ \mathcal C_{\Gamma;mn}(\sigma_a,\sigma_b),
+\label{eq:l32x64-double-time-sum}
+\end{equation}
+where \(\mathcal C\) contains the perambulators and spectator contraction.
+The equality test is on \(\sigma_a,\sigma_b\), not on \(t_J\).  Flow does
+not resample the vectors and therefore does not introduce an extra
+\(\tau\)-dependent weight.  The weight is applied once at its declared
+contraction point, not once at each endpoint and again in the time sum.
+
+\subsection{C2/C3, exact symmetry projection and ratio estimator}
+
+The four current anchors are \(t_J=0,16,32,63\), with
+\begin{equation}
+ t_{\rm src}=(t_J-d_t)\bmod64,\qquad
+ t_{\rm sink}=(t_{\rm src}+T)\bmod64 .
+\label{eq:l32x64-current-source-map}
+\end{equation}
+For fixed \(t_J\), changing insertion offset \(d_t\) changes the source.
+The denominator C2 must therefore retain the \(d_t\) axis and match C3
+term by term.  This sampling is not a complete 64-source average.
+
+The raw moving C3 axes are
+\[
+ (f,s_z,\Pi,\text{signed }P,z,m,o)=(2,2,4,8,21,4,4),
+\]
+and C2 has axes \((\Pi,\text{signed }P)=(4,8)\).
+The signed momentum order is \(+3,-3,+4,-4,+5,-5,+6,-6\), along \(z\)
+only.  Open current-spin indices \(m,o\) are not the \(2\times2\)
+reduced external-state spin indices.
+
+The frozen DeGrand--Rossi convention uses
+\(\gamma_5=\gamma_1\gamma_2\gamma_3\gamma_4\).  The implemented channels are
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+channel & current matrix & C3 projector & phase/combination\\
+\midrule
+unpolarized & \(\gamma_4\) & nopol & \(1\)\\
+helicity & \(\gamma_5\gamma_3\) & pol35 & \(-\ii\)\\
+transversity & \(\gamma_4\gamma_{1,2}\gamma_5\) & pol15, pol25
+ & transverse mean, then \(+\ii\)\\
+\bottomrule
+\end{tabular}
+\end{center}
+The saved current axes contract as
+\(\sum_{m,o}C_{mo}\Gamma_{mo}\); adding a transpose from an informal
+trace notation changes the executable convention.
+The relative transversity sign remains pending external physics
+confirmation.
+
+First average the four anchors inside each configuration.  At the
+configuration level construct connected \(u-d\) by subtracting the
+aligned numerators.  For each bootstrap index row \(I_{b\ell}\), form
+\begin{equation}
+ R^{(b)}_{P,s}
+ =\frac{\frac1{20}\sum_{\ell=1}^{20}C_{3,I_{b\ell};P,s}}
+ {\frac1{20}\sum_{\ell=1}^{20}C_{2,I_{b\ell};P,\mathrm{nopol}}}.
+\label{eq:l32x64-ratio-of-means}
+\end{equation}
+This branch uses a ratio of configuration means within each replica,
+with a complex matched nopol denominator.  It does not average
+configuration-level ratios or replace C2 by its real part/absolute value.
+Each signed momentum is divided separately before combining signs.
+Historical gluon estimators must not be substituted into this quark
+product without a new version and fit.
+
+The sign axis is minus then plus.  Its actual convention is
+\begin{align}
+ R_e(P)&=\frac{R_-(P)+R_+(P)}2,&
+ R_o(P)&=\frac{R_-(P)-R_+(P)}2,\\
+ R_e(|P|)&=\frac{R_e(+P)+R_e(-P)}2,&
+ R_o(|P|)&=\frac{R_o(+P)-R_o(-P)}2 .
+\label{eq:l32x64-even-odd}
+\end{align}
+Thus negative-momentum odd data receive a minus sign.  All three channels
+retain both \(\operatorname{Re}R_e\) and \(\operatorname{Im}R_o\);
+helicity is not reduced to one part before this complex ratio.
+The leading overlaps/exponentials cancel in a ratio, not \(Z_\chi\),
+line self energy, finite-flow effects, operator mixing or LaMET.
+Invalid common-axis padding remains NaN/masked and endpoint contacts
+remain excluded by the fit cuts.  The raw APBC/wrap signs are not
+multiplied again.
+
+\subsection{01--03: bare, local normalization and line subtraction}
+
+The bare ratio fit uses
+\begin{equation}
+ t_{\rm sep}/a=7,8,9,10,11,12,\qquad
+ t_{\rm sep}^{\rm min}=7,\qquad 7a=0.6279\,\mathrm{fm}.
+\label{eq:l32x64-tsep}
+\end{equation}
+The only fitted ratio model is the constant \(R(T,d_t)=M\), not a free
+two-state model.  There are 15 declared candidates:
+\(T_{\max}=8,9,10,11,12\) and symmetric cuts \(c=1,2,3\), with
+\(T=7,\ldots,T_{\max}\) and \(d_t=c,\ldots,T-c\).  The quality gates are
+\(Q\ge10^{-3}\) and \(\chi^2/\mathrm{dof}\le10^3\), not a raw chi-squared
+ceiling.  Stage 01 uses Schaefer--Strimmer correlation-to-identity
+shrinkage, SVD cut \(10^{-12}\), and relative/absolute jitter
+\(10^{-12}/10^{-18}\); this differs from the mode-deletion covariance
+prescription in stage 05.
+
+Inside each fixed cut, the candidate weights are
+\begin{equation}
+ \mathrm{AIC}_j=\chi_j^2+2k+2N_{\mathrm{omit},j},\quad k=1,\qquad
+ w_j=\frac{e^{-(\mathrm{AIC}_j-\mathrm{AIC}_{\min})/2}}
+ {\sum_{j'\in\mathcal A}e^{-(\mathrm{AIC}_{j'}-\mathrm{AIC}_{\min})/2}}.
+\label{eq:l32x64-bare-AIC}
+\end{equation}
+Center and replica gates/weights are computed separately.  After mixing
+within each cut, the usable cuts are averaged equally, not by normalizing
+AIC across different cuts.  If a cut has no quality-accepted candidate,
+the complete-bootstrap candidate standard deviation selects a minimum-error
+finite fallback; raw \(\chi^2\) and fixed candidate order break ties.
+Its fallback status is retained, rather than promoted to quality acceptance.
+No finite candidate means missing data.  Window/cut spreads and quality-only
+results remain separate; their systematic spread has not been added to
+the later statistical error.
+The source is
+\path{quark_l32x64_B_pionDA_workflow_20261022/01_bare/data/moving/}.
+
+For local normalization, define the even-real local denominator
+\begin{equation}
+ D_{\Gamma f}(P_z,t_f)=H^{\rm GF}_{\Gamma f,\mathrm{even,real}}(0,P_z,t_f),
+\qquad
+ M_{\Gamma f}(z,P_z,t_f)=
+ \frac{H^{\rm GF}_{\Gamma f}(z,P_z,t_f)}{D_{\Gamma f}(P_z,t_f)}.
+\label{eq:l32x64-local-norm}
+\end{equation}
+The same denominator is applied to both components and each bootstrap row:
+\begin{equation}
+ \mathcal M_c^{(b)}(z)=h_c^{(b)}(z)/D^{(b)}(0),\qquad
+ \mathcal M_{\mathrm{even,real}}(0)=1,\quad
+ \mathcal M_{\mathrm{odd,imag}}(0)=0.
+\end{equation}
+This cancels a common flowed-fermion field factor in this estimator and
+implements a local charge normalization.  It is not a proof that
+\(Z_\chi=1\), does not remove every endpoint factor, and does not make the
+connected \(u,d\) data a full singlet.  In general separately normalized
+\(u-d\) need not equal the difference of separately normalized \(u\) and
+\(d\).  The source is
+\path{quark_l32x64_B_pionDA_workflow_20261022/02_localnorm/data/moving/}.
+
+The fixed candidate line coefficient is
+\begin{equation}
+ d_F=0.374137,
+\end{equation}
+and exactly one exponent is applied:
+\begin{align}
+ L_F(z,\tau)&=\exp\left[
+ \frac{d_F|z/a|}{\sqrt{8\tau}}\right],\\
+ H_{03,c}(z,P_z,\tau)&=L_F(z,\tau)M_{02,c}(z,P_z,\tau).
+\label{eq:l32x64-line-subtraction}
+\end{align}
+At \(z=0\), \(L_F=1\), preserving the local constraints.  No additional
+\(C_F\), factor two, or second line-mass exponential is inserted.  The
+uncertainty and model dependence of the Wilson/Polyakov determination of
+\(d_F\) are not included in the statistical error.  The source is
+\path{quark_l32x64_B_pionDA_workflow_20261022/03_line/data/moving/}.
+
+\paragraph{Common field factor and charge normalization.}
+The ringed prescription of Refs.~\cite{MakinoSuzuki2014,BrambillaWang2024}
+uses one overall factor for the two endpoints,
+\begin{equation}
+ \mathring\chi=Z_\chi^{1/2}\chi,\qquad
+ Z_\chi=
+ \frac{-2N_c}{(4\pi)^2t_f^2
+ \langle\bar\chi\overleftrightarrow{\slashed D}\chi\rangle_{m_R=0}}.
+\label{eq:l32x64-ringed}
+\end{equation}
+For a common ensemble/flow normalization scalar,
+\(Z_\chi h(z)/[Z_\chi h(0)]=h(z)/h(0)\).
+This algebraic cancellation is not a measurement of \(Z_\chi=1\) or an
+absolute ringed matrix element.  A different per-configuration random
+normalization placed inside the ensemble average would require its own
+estimator and covariance analysis.  The local vector/axial/tensor charge
+has also been divided out and has not been restored.  The exact local
+point is a constraint, not an additional high-precision measurement.
+
+\paragraph{Candidate line-mass origin and scheme boundary.}
+The convention is \(h^{\rm GF}\sim e^{-m_F|z|}\), with
+\(m_F^{\rm NP}=d_F/r_f\).  The chosen central value is the upstream
+fundamental \(R/a=6\), \(T_w/a=8..12\), \(\tau_r=0.15\),
+\(\tau_{\max}=1.0\) flow-corrected diagnostic.  That flow fit has
+\(\chi^2/\mathrm{dof}=62.06299\) and \(Q=1.55\times10^{-52}\);
+it is not an approved universal coefficient.
+
+If a purely perturbative conversion is written as
+\(\mathcal R^{\MSbar}=(\zeta_\Gamma/C_\psi)
+e^{m_F^{\rm PT}|z|}\mathcal M\), substituting
+\(H_{03}=e^{m_F^{\rm NP}|z|}\mathcal M\) gives
+\begin{equation}
+ \mathcal R^{\MSbar}
+ =\frac{\zeta_\Gamma}{C_\psi}
+ e^{(m_F^{\rm PT}-m_F^{\rm NP})|z|}H_{03}
+ +\text{power and cutoff terms}.
+\label{eq:l32x64-NP-PT-identity}
+\end{equation}
+The present endpoint-only step defines an intermediate scheme \(S\).
+It does not establish that the remaining line-mass difference is finite,
+constant, or equal to the later fitted \(m_0\).  Adding the full PT
+exponential again would double count the line contribution.
+
+\subsection{04: gradient-flow endpoint conversion and RGR}
+
+\paragraph{Why local normalization changes the coefficient.}
+In the massless nonsinglet continuum prescription and nonzero-line
+small-flow-time limit, separately write
+\begin{align}
+ Z_\chi h_\Gamma^{\rm GF}(z)
+ &=C_\psi e^{-m_F^{\rm PT}|z|}h_\Gamma^{\MSbar}(z)+\Delta_z,\\
+ Z_\chi h_\Gamma^{\rm GF}(0)
+ &=\zeta_\Gamma h_\Gamma^{\MSbar}(0)+\Delta_0.
+\label{eq:l32x64-two-SFTEs}
+\end{align}
+Neglecting controlled remainders and taking their ratio yields
+\begin{equation}
+ \mathcal M_\Gamma=
+ \frac{C_\psi}{\zeta_\Gamma}e^{-m_F^{\rm PT}|z|}
+ \frac{h_\Gamma^{\MSbar}(z)}{h_\Gamma^{\MSbar}(0)}.
+\label{eq:l32x64-normalized-SFTE}
+\end{equation}
+Therefore the factor multiplied onto GF data is the inverse ratio
+\(\zeta_\Gamma/C_\psi\), not \(C_\psi\) or the forward ratio.
+
+With \(\ell_s=\alpha_s C_F/(4\pi)\) and
+\(L_f=\ln(2\mu^2t_fe^{\gamma_E})\), the corrected long-line coefficient
+\cite{BrambillaWang2024} and the local bilinear coefficients
+(\href{https://arxiv.org/abs/2311.16799}{arXiv:2311.16799},
+in the declared nonsinglet finite prescription) are
+\begin{align}
+ C_\psi&=1-\ell_s(3L_f+2+\ln432)+O(\alpha_s^2),\\
+ \zeta_{V/A}&=1+\ell_s(1/2-\ln432)+O(\alpha_s^2),\\
+ \zeta_T&=1+\ell_s(L_f-\ln432)+O(\alpha_s^2).
+\end{align}
+Expanding the ratio consistently through one loop gives
+\begin{align}
+ F_{V/A}^{\rm FO}&=1+\ell_s(3L_f+5/2)+O(\alpha_s^2),\\
+ F_T^{\rm FO}&=1+\ell_s(4L_f+2)+O(\alpha_s^2).
+\label{eq:l32x64-inverse-expanded}
+\end{align}
+The \(\ln432\) terms cancel.  The code uses this expanded polynomial,
+not an unexpanded rational ratio or exponentiation of its finite constant.
+The sign of a forward coefficient on a presentation slide must not be
+copied into this inverse multiplier without checking its direction.
+
+In physical units,
+\begin{equation}
+ t_f=\tau\left(\frac{a}{\hbar c}\right)^2\,\mathrm{GeV}^{-2},\qquad
+ \mu_t=\frac{e^{-\gamma_E/2}}{\sqrt{2t_f}}.
+\label{eq:l32x64-natural-scale}
+\end{equation}
+The implemented one-loop boundary factor is
+\begin{equation}
+ F_\Gamma^{\rm bdry}(\mu_b,t_f)=
+ 1+\frac{\alpha_s(\mu_b)C_F}{4\pi}
+ \left[p_\Gamma\ln\left(2\mu_b^2t_f e^{\gamma_E}\right)+c_\Gamma\right],
+\label{eq:l32x64-boundary-factor}
+\end{equation}
+with
+\[
+ C_F=\frac43,\quad \alpha_s(2\,\mathrm{GeV})=0.3,\quad n_f=3,\quad
+ \beta_0=11-\frac{2n_f}{3}.
+\]
+The channel constants are
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+channel & \(p_\Gamma\) & \(c_\Gamma\)\\
+\midrule
+unpolarized & 3 & 2.5\\
+helicity & 3 & 2.5\\
+transversity & 4 & 2.0\\
+\bottomrule
+\end{tabular}
+\end{center}
+The one-loop coupling is
+\begin{equation}
+ \alpha_s(\mu)=
+ \frac{\alpha_s(\mu_{\rm ref})}
+ {1+\beta_0\alpha_s(\mu_{\rm ref})
+       \ln(\mu/\mu_{\rm ref})/(2\pi)} .
+\label{eq:l32x64-alpha-running}
+\end{equation}
+The logarithmic coefficient in Eq.~\eqref{eq:l32x64-boundary-factor}
+implies, in this declared inverse-normalized-operator convention,
+\begin{equation}
+ \mu\frac{d\ln F_\Gamma}{d\mu}
+ =2p_\Gamma C_F\frac{\alpha_s}{4\pi}+O(\alpha_s^2),\qquad
+ \mu\frac{d\alpha_s}{d\mu}
+ =-\frac{\beta_0}{2\pi}\alpha_s^2+\cdots.
+\end{equation}
+Dividing these equations gives
+\(d\ln F_\Gamma=-(p_\Gamma C_F/\beta_0)d\ln\alpha_s\).
+For RGR, the boundary factor is evaluated at \(\mu_t\) and evolved to
+\(\mu\):
+\begin{align}
+ U_\Gamma(\mu,\mu_t)
+ &=\left[\frac{\alpha_s(\mu)}{\alpha_s(\mu_t)}\right]^{
+ -p_\Gamma C_F/\beta_0},\\
+ F_\Gamma^{\rm RGR}
+ &=U_\Gamma(\mu,\mu_t)F_\Gamma^{\rm bdry}(\mu_t,t_f),\\
+ H_{04,c}(z)&=F_\Gamma^{\rm RGR}H_{03,c}(z),\qquad z\ne0.
+\label{eq:l32x64-rgr}
+\end{align}
+The local point \(z=0\) is retained from stage 03 rather than applying the
+nonlocal formula to a local operator.  The FO branch replaces \(\mu_t\) by
+\(\mu\) and is a control branch, not mixed with RGR.  This implementation
+is one-loop boundary plus LL running, not NLL, not a complete finite-scheme
+proof, and not the final LaMET kernel.  Singlet quark-gluon mixing is absent.
+At the central natural scale the boundary logarithm vanishes.  The
+predecessor additionally probes independent flow or short-distance
+boundary factors 0.75 and 1.5; these are sensitivity tests, not a
+complete higher-order uncertainty.  Scales below 0.7 GeV or couplings
+above 0.6 are rejected, not frozen or clipped; values above 0.4 are
+flagged.  The moving main chain uses central RGR and a consistent FO
+control.  No LRR/PV or RAW multi-spacing self-renormalization parameter
+from \texttt{Renorm\_3ens\_nloRGR.py} has been imported.
+The coefficient implementation is
+\path{quark_l32x64_B_m0_RGR_z12_20261025/code/coefficients.py}.
+
+\subsection{05: pure-linear small-flow-time intercept}
+
+At fixed \(a,P_z,z,\Gamma,f\), the only selected model is
+\begin{equation}
+ H_{04,c}(\tau)=c_{0,c}+c_{1,c}\tau,\qquad H_{05,c}=c_{0,c}.
+\label{eq:l32x64-linear-flow}
+\end{equation}
+The fit uses at least four flow times, the widest contiguous allowed window,
+the full cross-flow covariance with ddof \(=1\), removal of correlation modes
+below relative eigenvalue \(10^{-8}\), and a raw rank gate \(10^{-12}\).
+Finite covariance, identifiable rank and positive degrees of freedom are
+hard gates.  There is no diagonal fallback, prior, quadratic model or AIC
+model average; \(\chi^2\) and \(Q\) are recorded only.
+
+The all-flow display policy uses all seven \(\tau\) values.  The D-loose
+policy imposes Eq.~\eqref{eq:l32x64-weak-window} and still requires four
+allowed points.  At \(z/a=1,2\), too few flow times pass, so D-loose
+retains missing values.  These missing values must not be filled from the
+all-flow display branch.
+
+For replicas \(B_{bi}\) at flow index \(i\), the covariance and its
+correlation decomposition are
+\begin{equation}
+ C_{ij}=\frac1{B-1}\sum_b
+ (B_{bi}-\overline B_i)(B_{bj}-\overline B_j),\qquad
+ D=\operatorname{diag}(\sqrt{C_{ii}}),\quad
+ D^{-1}CD^{-1}=U\Lambda U^T .
+\end{equation}
+For kept modes define
+\(W=\Lambda_{\rm kept}^{-1/2}U_{\rm kept}^TD^{-1}\).
+With \(X_i=(1,\tau_i)\), the retained-mode GLS map is
+\begin{equation}
+ K_{\rm GLS}=[(WX)^T(WX)]^{-1}(WX)^TW,\qquad
+ \widehat\beta=K_{\rm GLS}y,\qquad H_{05}=\widehat\beta_0.
+\label{eq:l32x64-gls-intercept}
+\end{equation}
+The actual implementation uses whitened, column-scaled least squares;
+when all modes are retained the ordinary full-\(C^{-1}\) solution is
+checked independently.  \(\mathrm{dof}=r_{\rm eff}-2>0\).
+The same linear map acts on every bootstrap row, preserving cross-flow
+correlations.  Errors are the standard deviation of 100 rows, with ddof
+\(=1\), not divided by \(\sqrt{100}\).  Since only one spacing exists,
+\(H_{05}\) is a fixed-\(a\) \(\tau\to0\) intercept, not a continuum limit.
+
+The origin of the stronger hierarchy is the typical flow momentum
+\(k\sim1/\sqrt{t_f}\): a lattice dispersion
+\(\widehat k^2=k^2+O(a^2k^4)\) induces a relative correction
+\(a^2/t_f\).  Long-line, moving-state and infrared remainders involve
+\(t_f/z^2\), \(t_fP_z^2\), and \(t_f\Lambda_{\rm QCD}^2\), respectively.
+In the present grid, \(a^2/t_f=1/\tau=1.25..5\), which is not
+parametrically small.  The weak radius cut \(r_f>a\) only implies
+\(\tau>1/8\).  RGR resums logarithms; it cannot fix these power
+corrections or a missing hierarchy.
+For \(z/a=1\) every selected flow has \(r_f>|z|\); for \(z/a=2\), only
+0.2, 0.3 and 0.4 pass \(r_f<|z|\), fewer than the required four points.
+At mode 6, \(\tau=0.8\) also fails the momentum condition because
+\(\sqrt{t_f}|P_z|=1.05372>1\); the D-loose mask excludes it.
+
+\subsection{06: paired \(P_z=0\) residual-mass diagnostic}
+
+Removing \(d_F/r_f\) does not by itself fix a finite length-dependent
+scheme freedom.  In an explicitly declared intermediate scheme one may
+test \(H_{S,\Gamma}=e^{-m_{0,\Gamma}|z|}
+\mathcal R_\Gamma^{\MSbar}+\text{remainders}\).
+This is a diagnostic condition here; neither the universality of a
+channel/flavor-dependent fitted mass nor complete finite-scheme closure
+has been established.
+
+In a suitable normalized short-distance nonsinglet amplitude, the OPE has
+the form
+\begin{equation}
+ \mathcal R_\Gamma(z,P,\mu)
+ =\sum_n C_{\Gamma n}(z^2\mu^2)
+ \frac{(\ii zP_z)^n}{n!}
+ \frac{\langle x^n\rangle_\Gamma}{\langle x^0\rangle_\Gamma}
+ +O(z^2\Lambda_{\rm QCD}^2,z^2M_N^2,\ldots).
+\label{eq:l32x64-short-distance-OPE}
+\end{equation}
+At Pz=0 the nonzero Ioffe-time powers vanish, but the radiative
+\(C_{0,\Gamma}\) coefficient does not become one.  Trace, other-amplitude,
+finite-spacing and mixing terms must still be checked for each projection.
+
+The user-prescribed one-loop short-distance targets are
+\begin{align}
+ L_z&=\ln\frac{z_{\mathrm{GeV}^{-1}}^2\mu^2}{4e^{-2\gamma_E}},\\
+ C_{0,\Gamma}^{\rm FO}
+ &=1+\frac{\alpha_s(\mu)C_F}{4\pi}
+       (p_\Gamma L_z+c_{0,\Gamma}),\qquad
+ (c_{0,V},c_{0,A},c_{0,T})=(5,7,4).
+\label{eq:l32x64-short-distance-target}
+\end{align}
+These constants differ from the flow endpoint constants \(5/2,5/2,2\).
+Use \(\mu_z=2e^{-\gamma_E}/|z|_{\mathrm{GeV}^{-1}}\) and the same
+declared evolution to obtain
+\begin{equation}
+ C_{0,\Gamma}^{\rm RGR}
+ =U_\Gamma(\mu,\mu_z)
+ \left[1+\frac{\alpha_s(\mu_z)C_F}{4\pi}
+ \left(p_\Gamma\ln\frac{z^2\mu_z^2}{4e^{-2\gamma_E}}
+       +c_{0,\Gamma}\right)\right].
+\label{eq:l32x64-C0-RGR}
+\end{equation}
+FO data use the FO target and mass, while RGR data use RGR; they are
+not interchanged to obtain a smaller error.
+
+The existing \(P_z=0\) branch fits \(m_0\) from \(z/a=1,2\), with \(b=0\):
+\begin{equation}
+ Y_i=\log\frac{H_S(z_i,0)}{C_{0,\Gamma}^{\rm RGR}(z_i,\mu)}
+ =-\frac{m_0^{\overline{\mathrm{MS}}}|z_{\rm fm}|}{\hbar c}.
+\label{eq:l32x64-m0-fit}
+\end{equation}
+The two lengths are 0.0897 and 0.1794 fm.  This is the later selected
+two-point window, not a strict \(z<0.15\,\mathrm{fm}\) fit; both lengths
+are below 0.3 fm.  There are two points and one parameter, hence one
+degree of freedom at full rank.  The exact \(z=0\) constraint is not
+inserted as extra fit information.  The intercept \(b\) of a diagnostic
+log-ratio fit would be an independent finite constant, not a second
+Wilson line mass, and the main prescription fixes it to zero.
+
+The central \(H_S\), target, and every bootstrap \(H_S^{(b)}\) must
+be positive and finite for this real logarithm.  No absolute value,
+clipping, or failed-replica removal is used.  A full covariance from
+the paired \(Y^{(b)}\) and the same mode-deletion GLS yields the mass.
+Alternative \(z/a=1,2,3\) and \(2,3\) windows and independent boundary-scale
+probes are diagnostics, not replacements selected point by point.
+D-loose has no qualifying \(z/a=1,2\) flow intercept and therefore no
+mass in this primary window.
+The moving branch does not refit this mass.  It applies the existing mass
+rows to each moving bootstrap row:
+\begin{equation}
+ H_{06,c}^{(b)}(P_z,z)=H_{05,c}^{(b)}(P_z,z)
+ \exp\left[
+ \frac{m_0^{(b)}(P_z=0)|z_{\rm fm}|}{\hbar c}\right].
+\label{eq:l32x64-m0-paired}
+\end{equation}
+The same real exponential is used for all four momenta and both components,
+and no independent resampling is introduced.
+
+\begin{center}
+\small
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+channel & flavor & \(m_0\,[\mathrm{GeV}]\) & \(\chi^2/\mathrm{dof}\) & \(Q\)\\
+\midrule
+unpolarized & \(u\) & \(-0.157170\pm0.000481\) & 142910 & 0\\
+unpolarized & \(d\) & \(-0.245370\pm0.000763\) & 95363 & 0\\
+unpolarized & \(u-d\) & \(-0.201458\pm0.001118\) & 24274 & 0\\
+helicity & \(u\) & \(-0.135751\pm0.002177\) & 3098.5 & 0\\
+helicity & \(d\) & \(-0.149782\pm0.003941\) & 1593.0 & 0\\
+helicity & \(u-d\) & \(-0.354539\pm0.000242\) & 264818 & 0\\
+transversity & \(u\) & \(-0.198098\pm0.001499\) & 18968 & 0\\
+transversity & \(d\) & \(-0.217740\pm0.002752\) & 7580 & 0\\
+transversity & \(u-d\) & \(-0.184031\pm0.002029\) & 7628 & 0\\
+\bottomrule
+\end{tabular}
+\end{center}
+The very large \(\chi^2/\mathrm{dof}\) and \(Q\simeq0\) make these
+conditional Pz=0 diagnostics statistically poor.  They document the
+transformation used in 06; they are not a validated universal residual
+mass or an approved \(\overline{\mathrm{MS}}\) determination.
+The CSV zeros in \(Q\) denote a negligible probability/numerical underflow,
+not an exact mathematical probability of zero.  The same-bootstrap
+propagation includes the conditional statistical fluctuations of this mass,
+but not \(d_F\), full perturbative, cutoff or scheme uncertainty.
+The negative central masses reduce the amplitude through the declared
+positive correction exponential; its sign is not changed to improve a plot.
+
+\subsection{Coverage, checks and result locations}
+
+For RGR with the all-flow display policy, the expected \(2\times4\times21
+\times9=1512\) component/momentum/separation points are all finite, as are
+151200 paired bootstrap entries.  There are 720 nonlocal nonzero odd-imag
+entries, 72 exact \(z=0\) constraints, 5472 independent full-covariance
+inverse checks, and nine Pz=0 endpoint/linear regression checks.  FO
+center/sample readback, 06 sign/unit/pairing checks, complex-component
+readback, PDF page count, rendering and marker-only error-bar checks pass.
+
+For D-loose, every channel/flavor has 152/168 finite points.  The 16
+missing points are the two components at \(z/a=1,2\) for four momenta,
+because fewer than four flow times survive the weak scale cuts.
+
+The recorded central flow-fit quality flags are
+\begin{center}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+RGR policy & fitted & diagnostic good & poor fit & local constraints\\
+\midrule
+all-flow display & 1440 & 949 & 491 & 72\\
+D-loose & 1296 & 861 & 435 & 72\\
+\bottomrule
+\end{tabular}
+\end{center}
+The diagnostic-good flag means \(Q\ge0.05\) and
+\(\chi^2/\mathrm{dof}\le3\) under the declared covariance, not a
+physical acceptance theorem.  Numeric completeness must not be confused
+with these quality counts.
+
+As a readback example, at mode 3, \(u-d\), \(z/a=4\), RGR/all-flow:
+\begin{center}
+\begin{tabular}{@{}llcc@{}}
+\toprule
+channel & component & stage 05 & stage 06\\
+\midrule
+unpolarized & even-real & \(1.377476\pm0.005465\) & \(0.954986\pm0.004043\)\\
+unpolarized & odd-imag & \(-0.646597\pm0.004929\) & \(-0.448278\pm0.003523\)\\
+helicity & even-real & \(1.445078\pm0.004081\) & \(0.758438\pm0.002115\)\\
+helicity & odd-imag & \(-0.868185\pm0.008006\) & \(-0.455660\pm0.004183\)\\
+transversity & even-real & \(1.422187\pm0.004291\) & \(1.017727\pm0.004420\)\\
+transversity & odd-imag & \(-0.903775\pm0.003047\) & \(-0.646747\pm0.003168\)\\
+\bottomrule
+\end{tabular}
+\end{center}
+These numbers, from \path{points.csv}, are reproducibility checks, not
+independent physical determinations.
+
+The machine-readable records are
+\begin{center}
+\begin{tabular}{@{}p{0.44\textwidth}p{0.43\textwidth}@{}}
+\toprule
+\path{verification.json}, \path{regression.json} & status, source and readback checks\\
+\path{coverage.csv}, \path{verification_coverage.csv} & point and bootstrap coverage\\
+\path{flow_fit_diagnostics.csv} & flow windows, ranks, \(\chi^2\), \(Q\)\\
+\path{m0_sources.csv} & Pz=0 mass source and quality flags\\
+\path{plots/index.csv} & figure index and axis audit\\
+\bottomrule
+\end{tabular}
+\end{center}
+They are under
+\path{/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/}
+\path{quark_l32x64_B_moving_RGR_m0_20261025/}.  The CPU Slurm job was
+3869986, with status \texttt{PASS\_MOVING06\_PAIRED\_RGR\_READBACK}.
+
+The main figures are
+\begin{center}
+\begin{tabular}{@{}p{0.44\textwidth}p{0.43\textwidth}@{}}
+\toprule
+\path{plots/01_bare.pdf}, \path{plots/02_localnorm.pdf} & bare and local-normalized\\
+\path{plots/03_line.pdf}, \path{plots/04_RGR_conversion.pdf} & line subtraction and RGR\\
+\path{plots/05_RGR_tau0_linear.pdf} & pure-linear flow intercept\\
+\path{plots/05_06_RGR_moving_comparison.pdf} & 05 versus 06, all four momenta\\
+\path{plots/06_RGR_m0_corrected.pdf} & 06 corrected moving result\\
+\path{plots/05_06_RGR_D_loose.pdf} & scale-window cross-check\\
+\path{plots/05_06_FO_moving_comparison.pdf} & FO control branch\\
+\bottomrule
+\end{tabular}
+\end{center}
+Stages 01--04 also have separate \(P_z\) PDFs.  Plots use marker-only
+error bars, no line joining different \(z\), \(x\in[-0.5,20.5]\), real
+limits \([-1,2]\), and imaginary limits \([-2,1]\).
+Finite-flow offsets change only displayed x positions, not physical
+separations.  Out-of-range points remain in NPZ and the clipping ledger.
+Each main PDF has nine pages, in channel order unpolarized, helicity,
+transversity and flavor order \(u,d,u-d\); pages 3, 6 and 9 show \(u-d\).
+The older
+\path{quark_l32x64_B_momentum_step_plots_20261025/}
+moving 04/05 plots read the earlier FO/quadratic-AIC branch and are not
+the main RGR/pure-linear products of this section.
+
+\paragraph{Stage files and compact bundles use different keys.}
+Stage files store \texttt{value} and \texttt{samples} with the axis contract
+above.  The compact nine-file bundle at \path{data/RGR/} instead uses
+stage-prefixed keys:
+\begin{center}
+\begin{tabular}{@{}p{0.51\textwidth}p{0.37\textwidth}@{}}
+\toprule
+Keys & Axes/shape\\
+\midrule
+\texttt{01\_bare\_value} through
+\texttt{04\_RGR\_conversion\_value}
+& \((c,\tau,P,z)=(2,7,4,21)\)\\
+\texttt{01\_bare\_samples} through
+\texttt{04\_RGR\_conversion\_samples}
+& \((c,\tau,b,P,z)=(2,7,100,4,21)\)\\
+\texttt{05\_tau0\_linear\_value},
+\texttt{06\_m0\_corrected\_value}
+& \((c,P,z)=(2,4,21)\)\\
+\texttt{05\_tau0\_linear\_samples},
+\texttt{06\_m0\_corrected\_samples}
+& \((c,b,P,z)=(2,100,4,21)\)\\
+\bottomrule
+\end{tabular}
+\end{center}
+Stage 05 additionally records the flow mask, beta/replicas, covariance,
+ranks, dof, chi-squared, \(Q\), constraints, usable counts and inherited
+fallback flags.  Stage 06 records the Pz=0 mass source/hash and paired
+mass/factor arrays.  Readers must use the explicit metadata, not infer
+flow and bootstrap axes from similar array sizes.
+
+\paragraph{Reproducible execution.}
+The frozen scripts are \path{code/moving_common.py},
+\path{code/run_cpu.py}, \path{code/plot_cpu.py},
+\path{code/verify_cpu.py} and \path{slurm/run_cpu.slurm}.
+The recorded original invocation is
+\begin{verbatim}
+cd /public/group/lqcd/donghx/Gradient_Flow_GluonPDF
+cd quark_l32x64_B_moving_RGR_m0_20261025
+/public/home/donghx/AnaConda/bin/python -B submit.py
+\end{verbatim}
+This wrapper refuses a second submission in the completed directory.
+It freezes hashes and invokes sbatch without login-node numerics.
+The CPU script uses partitions a192c1t, cpu6248R, cpueicc, i72c512g,
+one task/CPU, 8 GB and 45 minutes.  It clears Python-path overrides,
+disables GPUs and limits BLAS threads before running the numerical,
+plotting and verification scripts in order.  No new production task
+was submitted for this documentation update.  Changed analysis choices
+require an isolated successor, not edits of frozen code or outputs.
+
+\clearpage
+\begin{figure}[p]
+ \centering
+ \includegraphics[page=3,width=0.94\linewidth,height=0.76\textheight,keepaspectratio]{/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_moving_RGR_m0_20261025/plots/05_06_RGR_moving_comparison.pdf}
+ \caption{Latest scheme-B unpolarized connected \(u-d\), modes 3--6:
+ pure-linear fixed-spacing RGR flow intercept (05) compared with the
+ paired Pz=0 diagnostic mass correction (06).  The two columns retain
+ even-real and odd-imag.  The all-flow branch is display-only with
+ respect to scale control; its mass fit is statistically poor.  This
+ figure records the implemented transformation, not validated MSbar
+ matrix elements.}
+ \label{fig:l32x64-moving-V}
+\end{figure}
+\begin{figure}[p]
+ \centering
+ \includegraphics[page=6,width=0.94\linewidth,height=0.76\textheight,keepaspectratio]{/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_moving_RGR_m0_20261025/plots/05_06_RGR_moving_comparison.pdf}
+ \caption{The corresponding helicity \(u-d\) diagnostic.  The raw
+ \(\gamma_5\gamma_3\), pol35 contraction includes its \(-i\) phase before
+ the complex ratio and the two separation projections.  Both stored
+ real-valued components are multiplied by the same real mass factor;
+ the imaginary curve is retained.  All four momenta share the existing
+ Pz=0 mass replicas, with original bootstrap pairing.}
+ \label{fig:l32x64-moving-A}
+\end{figure}
+\begin{figure}[p]
+ \centering
+ \includegraphics[page=9,width=0.94\linewidth,height=0.76\textheight,keepaspectratio]{/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/quark_l32x64_B_moving_RGR_m0_20261025/plots/05_06_RGR_moving_comparison.pdf}
+ \caption{The corresponding transversity \(u-d\) diagnostic, with two
+ transverse contractions averaged and multiplied by \(+i\) in the
+ frozen DR convention.  Its external relative operator sign remains
+ pending confirmation.  Marker-only errors and the common real/imaginary
+ axis ranges follow the current plotting request; no point outside
+ those ranges is removed from the stored arrays.}
+ \label{fig:l32x64-moving-T}
+\end{figure}
+\clearpage
+
+\subsection{Fixed conventions, limitations and next operations}
+
+The following are data-contract conventions: thin input and
+\(a=0.0897\,\mathrm{fm}\); the 20 configurations and seed-1115 paired
+bootstrap table; \(\tau=0.2,\ldots,0.8\), \(\epsilon=0.01\), and the stated
+step counts; scheme-B equality on original source times; component 1 as
+the already projected real odd-imag number; \(t_{\rm sep}=7,\ldots,12\);
+even-real \(z=0\) normalization; one \(d_F=0.374137\) exponent; the
+one-loop boundary plus LL RGR constants; pure-linear stage 05; and paired
+Pz=0 stage 06.  A changed window, coefficient, mass source, or operator
+convention requires a new versioned output and manifest.
+
+The poor-\(Q\) \(m_0\) values cannot be called a successful mass fit.
+The all-flow branch has no scale gate, D-loose missing points must not be
+filled, \(d_F\) uncertainty has not been propagated, and only one lattice
+spacing is available.  Connected \(u,d\) are not a full singlet.  The
+one-loop-plus-LL conversion is not a complete finite-scheme or LaMET
+matching result, and transversity's relative sign remains pending external
+confirmation.
+
+The next concrete operations are: extend the existing block/Wick checks
+and the temporal-window study to non-midpoint insertions and shared-noise
+moments; check epsilon halving; retain local-normalization shape results
+with their proper endpoint coefficient, and obtain a documented kinetic,
+Ward or charge input only if an absolute ringed normalization is desired;
+reassess and propagate the Wilson/Polyakov \(d_F\) uncertainty;
+replace or qualify the poor Pz=0 mass prescription; vary momentum, volume,
+flow window and \(z_{\max}\); then perform lambda extrapolation, Fourier
+transformation and channel-appropriate GF-to-quasi/LaMET matching.  Singlet
+matching must include quark-gluon mixing.  A second lattice spacing is
+required before interpreting the intercept as a continuum limit.
+The 1700-configuration/3000-replica loop analysis cannot be paired to
+the 20-configuration/100-replica quark analysis merely by row number;
+an external-input or explicit joint-nuisance prescription is needed.
+
+\clearpage
 \section{Validation and systematic-error program}
 
 A production calculation should pass:
@@ -5478,8 +6476,9 @@ the combined, \(M_{ti;ti}\), and \(M_{ij;ij}\) components for both
 unpolarized and helicity channels.  The unpolarized combined selector is
 consistent with the Euclidean continuation.  The helicity raw components are
 also correct, but its legacy plus-sign combined ratio is not: the common
-Euclidean convention requires \(M_{ti;ti}-M_{ij;ij}\) in both channels, with
-an odd-separation projection for helicity.  Existing raw OPE files permit this
+Euclidean convention requires \(M_{ti;ti}-M_{ij;ij}\) in both channels.
+Use the positive orientation for unpolarized and the odd difference for
+helicity.  Existing raw OPE files permit this
 correction without repeating the flow.  The new C3/C2 product reconstructs, in
 order, \(T\), \(T+S\), and \(T-S\) for each channel and resamples each of the
 six choices to Nboot=1000.  Physical results still require state isolation,
@@ -5487,6 +6486,15 @@ normalization and mixing, continuum and flow-time control, matching, and
 finite-\(z\) reconstruction.  No HYP pre-smearing is used.
 Temporal truncation, distillation, and the limited scale hierarchy remain
 explicit systematics.
+
+The separate L32x64 scheme-B successor in
+Section~\ref{sec:l32x64-moving-20261025} now retains both complex-projection
+components through local normalization, one fixed candidate line
+subtraction, RGR endpoint conversion, a pure-linear fixed-spacing
+flow-time intercept and paired Pz=0 mass corrections at modes 3--6.
+Its complete arrays and figures are reproducible intermediates.
+Very poor residual-mass fits, an unvalidated finite line/endpoint scheme,
+and the absent continuum hierarchy remain unresolved.
 
 \appendix
 

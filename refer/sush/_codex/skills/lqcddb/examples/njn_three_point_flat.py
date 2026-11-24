@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""Flat NJNp three-point production template for ``lqcddb_update``.
+"""Legacy NJNp three-point API illustration for ``lqcddb_update``.
 
-This file is intentionally written as a downward-running production program,
-not as a ``main -> run -> loader`` call tree.  To build another contraction,
-copy the stable modules in order and replace the operator/current and registry
-lines marked ``OBSERVABLE-SPECIFIC``.  The numerical contraction is a
-Euclidean N-pi -> N one-current example; it is a template, not a claim that
-the selected physical current is universally appropriate.
-
-The reference mode keeps the complete source-time perambulator staging visible
-for auditability.  After the baseline agrees with a direct small-tensor
-calculation, replace only MODULE 7 by source-at-a-time streaming and retain
-the same registry keys, axes, and output layout.
+Not the default production baseline. Complete program generation follows
+$contraction-creator and its selected reference/input contract. This example
+uses a Euclidean N-pi to N current; it does not define a universal current or
+input contract. Use it as a baseline only if explicitly selected by the user.
 """
 
 # ============================================================================

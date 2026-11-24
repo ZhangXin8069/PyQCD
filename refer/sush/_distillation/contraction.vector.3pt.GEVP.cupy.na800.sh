@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=PNJN
-#SBATCH --array=0-99
+#SBATCH --array=30-99
 #SBATCH --nodes=1
 
 #SBATCH --error=test_pion_3pt_error
@@ -39,10 +39,10 @@ export UCX_TLS=rc,shm  # 仅使用InfiniBand和共享内存
 source /public/home/sush/envs/C12P12
 
 conf_start=1000
-gap=40
+gap=200
 gap_2=40
 
-for i in {0..0..1}
+for i in {0..4..1}
 do
     conf=$(( ${conf_start} + ${gap} * ${SLURM_ARRAY_TASK_ID} + ${i} * ${gap_2} ))
 

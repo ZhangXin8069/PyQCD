@@ -1,4 +1,4 @@
 interface:
   display_name: "格点量子色动力学数据库"
-  short_description: "构建并审查蒸馏收缩与谱学程序"
-  default_prompt: "使用 $lqcddb 说明和审查格点量子色动力学蒸馏、Wick 收缩、动态计划与谱学分析，保持物理约定不变。"
+  short_description: "依据所选源码解释蒸馏与收缩 API、张量轴和物理约定并进行审查"
+  default_prompt: "使用 $lqcddb 依据选定源码审查 API、Wick 计划和物理约定；生成完整收缩程序时遵循 $contraction-creator 的必填参数与参考复制规则。"

@@ -2,6 +2,8 @@
 
 本文记录从保留完整旋量指标的四维 2pt 结果，先进行宇称投影的 `4 -> 2` 降维，再进行 x、y、z 三个方向极化投影的计算流程。
 
+最新实现补充：2026-11-16，第 20 节记录外部宇称基并入 direct/exchange 后的显式 dp 路径、A100/DCU 实测和当前生产入口更新；此前各节保留其原有日期、算符定义与历史测试口径。
+
 ## 1. 输入数据与指标约定
 
 2pt 计算保存完整的旋量结构
@@ -611,3 +613,132 @@ $$
 2026-10-22 已提交数组任务 `3865253`，对应上述 10 个组态，每个任务分别计算两个动量；结束后通过 `afterany:3865253` 触发 CPU 汇总任务 `3865256`。提交时预约节点全部 16 张 GPU 已被占用，本测试尚在排队，不能据此给出实测收益或完整精度验证通过的结论。
 
 输出目录为 `/public/group/lqcd/donghx/2pt_gpu_new/L64x128/parity_five_L24_results/job_3865253/`。自动汇总程序 [summarize_five_l24.py](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/summarize_five_l24.py) 会重新读取全部保存张量，核验 shape、complex128、覆盖时间对和历史参考；写出 `timing_comparison.csv`、`summary.json` 与 `summary.md`。只有 20 个组态—动量案例全部通过才标记 `all_pass=true`；缺失或失败案例将保留在报告中，并使汇总任务以非零退出码结束。提速比采用同批样本耗时总和之比，避免直接平均逐组态加速比造成偏差。
+
+## 20. 外部宇称基内嵌收缩的显式 dp 路径及 A100/DCU 验证
+
+更新日期：2026-11-16。本节测试的是原算符 $C\gamma_5\gamma_4$ 的完整内部四维旋量、仅外部旋量正宇称降维方案，不是仅保留 $N_{+++}$，也不是第 18--19 节的四项二维或五次收缩方案。优化只改变求和顺序，不改变物理算符。
+
+### 20.1 保留的指标、共轭与符号
+
+固定正宇称基为
+
+$$
+U=\frac{1}{\sqrt2}\begin{pmatrix}I_2\\I_2\end{pmatrix},\qquad
+UU^\dagger=P_+,\qquad R_{trs}=\sum_{il}U_{ir}M_{til}U^*_{ls}.
+$$
+
+两端 gamma 的收缩保持生产约定：$Q_{tgjbe}=\sum_{hk}A_{gh}\tau_{thkbe}A_{jk}$。其中 $A=C\gamma_5\gamma_4$，不能擅自将第二个 $A$ 改为普通矩阵乘法的另一种指标次序。
+
+```python
+GAMMA = "gh,thkbe,jk->tgjbe"
+DIRECT = "tabc,tgjad,tgjbe,tilcf,def,ir,ls->trs"
+EXCHANGE = "tabc,tglaf,tgjbe,tijcd,def,ir,ls->trs"
+args = (sink_vvv, tau, Q, tau, source_vvv.conj(), U, U.conj())
+R = direct(*args) - exchange(*args)
+```
+
+这里的 $t$ 为当前 sink block 内的时间索引，source time 固定；VVV 的 $a,b,c,d,e,f$ 为本征模指标，$g,j,i,l$ 为四维旋量指标，$r,s$ 为二维外部旋量指标。两份 $\tau_u$ 与 $\tau_d$ 在简并轻夸克情况下数值相同，但 Wick 拓扑仍分别按 direct/exchange 保留。完整输入形状为
+
+```text
+sink_vvv       (B, Nev, Nev, Nev)
+tau, Q, tau    (B, 4, 4, Nev, Nev)    # 三个操作数
+source_vvv*    (Nev, Nev, Nev)
+U, U*          (4, 2), (4, 2)
+R              (B, 2, 2)
+```
+
+两个 $U$ 因子仍在多操作数 contraction 内部，不恢复成先生成 pb/pr/pl 的实现。保持负号 Fourier 相位、源顶点复共轭和 direct−exchange。保存的完整 contract 轴仍为 `(sink_time, source_time, r, s)`，dtype 为 `complex128`；raw contract 不额外加反周期符号，标量 nopol/pol 的边界符号及各 ensemble 的历史极化约定均保持原样。
+
+### 20.2 显式路径生成与缓存
+
+生产实现分为形状规划和数值执行两步：
+
+```python
+import opt_einsum as oe
+
+# shapes 是七个操作数的实际形状，规划时不分配大张量。
+path, info = oe.contract_path(equation, *shapes, shapes=True, optimize="dp")
+expression = oe.contract_expression(equation, *shapes, optimize=path)
+answer = expression(*gpu_arrays)
+```
+
+不能只记录“采用 dp”，而实际仍向执行入口传入 greedy。当前代码将 `contract_path` 返回的路径转换成不可变 tuple，并把该路径显式传给 `contract_expression`；路径及 expression 都按 `(block_size, Nev, optimizer)` 缓存。不同尾块大小重新按形状规划，同一形状在源时刻和动量循环中复用。缓存的是求和顺序和执行表达式，不是某一组输入的数值结果。
+
+在 opt_einsum 3.4.0、$B=1$、$N_{\rm ev}=300$ 下，实测所用路径为
+
+```python
+direct_path = ((2, 4), (1, 5), (0, 4), (0, 3), (1, 2), (0, 1))
+exchange_path = ((1, 6), (3, 5), (1, 4), (0, 3), (0, 2), (0, 1))
+```
+
+每一步 tuple 的位置指向该步剩余的操作数列表，不始终指向初始七个操作数。以上仅是该形状、该版本的可复现记录，程序不把它硬编码到其它 Nev 或 block size；未来版本须核对新日志及 metadata 中的实际路径。dp 优化的是路径成本模型，并不保证在所有设备上都是 wall time 最优。
+
+本次只更换 direct/exchange 的路径；小型 gamma dressing 仍保留原 greedy 方案，四维参考、物理投影和 I/O 算法不作捆绑变更。
+
+### 20.3 A100 和 DCU 实测设置
+
+- A100：任务 `4015422`，分区 `na100-ins`，预约 `donghx_250`，节点 `gpu029`，NVIDIA A100-SXM4-80GB；conf540。
+- DCU：任务 `328858`，通过 `ssh mgmt02` 提交到 `debug`，节点 `dcu004`，设备 Z100；conf520。环境构建任务为 `328857`，构建耗时不计入 contraction。
+- 两端均为 L64x128、Nev=300、Cg5g4、complex128、$\mathbf P=(0,0,-2)$、$\Delta t=5$、$B=1$，source/sink 分别为 0/5 和 127/4，后者包含时间边界。
+- opt_einsum 3.4.0、PyQCD 0.4.3；A100 使用 CuPy 14.1.1，DCU 使用 ROCm CuPy 12.0.0b3。A100 的 NumPy 为 2.2.6，DCU 为 1.23.5。
+- 五个模式分别独立子进程运行，每个源时刻两轮，第二轮反转模式顺序。两端各有 20 个实例；每项预热 2 次，direct/exchange 各正式计时 3 次，收缩和 gamma+收缩各正式计时 5 次。
+- 计时前后同步 GPU；输入读取、规划、VVV 构造和预热不进入下表。它不是完整 2pt 或完整组态的端到端计时。
+
+### 20.4 数值正确性
+
+两任务都正常完成，退出码 `0:0`；A100 于 2026-11-16 16:00:55 CST 结束，Slurm 记录总耗时 5 分 39 秒；DCU 于 16:16:17 CST 结束，总耗时 16 分 28 秒。总作业耗时包含不同的准备步骤，不能用于直接推断硬件倍率。
+
+每端均先在 Nev=3 上以独立 NumPy `optimize=False` 检验 gamma、direct、exchange；真实输入另核对历史 contract、各模式的 direct/exchange 和最终差。误差定义为
+
+$$
+\epsilon_\infty=\frac{\max|R-R_{\rm ref}|}{\max|R_{\rm ref}|},\qquad
+\epsilon_\infty\le10^{-10}.
+$$
+
+本次参考均非零。全部输出 shape 为 `(1,2,2)`、complex128 且有限。最大历史对照误差：A100 为 $5.995\times10^{-14}$，DCU 为 $6.202\times10^{-14}$。各模式 direct/exchange/最终差相对同端 `oe_greedy` 的最大归一化差分别为 $2.768\times10^{-15}$ 和 $9.832\times10^{-14}$，均在双精度舍入误差范围内，不是逐位相同。
+
+原地改变 perambulator、检查 $C(\lambda\tau)=\lambda^3 C(\tau)$ 的缓存更新测试也全部通过，其中 $\lambda=1.125$。结果检查阶段又重新读取各实例保存的最终、direct、exchange 数组，独立复核历史对照，不仅依赖日志中的 PASS。
+
+### 20.5 同设备收缩耗时与结论
+
+下表中每个耗时是该设备两个源时刻、两轮共 20 个 `gamma_plus_contraction` 同步计时样本的中位数，单位秒。加速比定义为同设备 `oe_greedy` 耗时除以该模式耗时；不是对逐实例倍率直接取平均。
+
+| 模式 | A100 秒/次 | 相对基准 | DCU 秒/次 | 相对基准 |
+| --- | ---: | ---: | ---: | ---: |
+| opt_einsum + greedy | 0.5346 | 1.00 | 1.8917 | 1.00 |
+| opt_einsum + 显式 dp | 0.3332 | 1.60 | 0.9169 | 2.06 |
+| PyQCD expression + greedy 路径 | 0.5264 | 1.02 | 1.8911 | 1.00 |
+| PyQCD expression + dp 路径 | 0.3413 | 1.57 | 0.9170 | 2.06 |
+| PyQCD 自动模式 | 0.5264 | 1.02 | 2.2261 | 0.85 |
+
+direct 是本次路径收益的主要来源：A100 上 opt_einsum 的 direct 约从 0.3451 秒降到 0.1367 秒；DCU 约从 1.3496 秒降到 0.3828 秒。exchange 没有同量级改善。A100 上 `oe_dp` 比原 greedy 减少约 38% 耗时，DCU 约减少 52%；同 dp 路径下，A100 的 PyQCD 反而比 opt_einsum 慢约 2.4%，DCU 基本相同。因此当前采用 opt_einsum 显式 dp，而不是仅作 import 替换。
+
+gamma、direct 和 exchange 的 PyQCD 预置 specialization 查询均未命中。A100 expression 实际启用了通用原生 `CudaProgram`，不能把它误称为命中了作者的专用 contraction。DCU 使用 Python 调度及 HIP CuPy 在 DCU 上执行，没有启用原生 CUDA 执行器，不是把大收缩退回 CPU。
+
+显存报告只有运行末的 CuPy pool 与设备空闲/总量快照，不是连续实测峰值。原生 CUDA 工作空间不完全计入 CuPy pool，不能把 PyQCD 原生模式的约 1.23 GiB pool 数值称为真实总显存。opt_einsum 的 pool 保留量在本次由 greedy 的约 17.32 GiB 变为 dp 的约 14.51 GiB，但同样不能直接作为所有运行的峰值保证。
+
+两个硬件使用不同 conf 和软件栈，跨设备绝对时间仅作背景；优化收益由各设备内部同输入 A/B 得出。不能把 1.60 或 2.06 倍直接外推为完整组态收益，也不能直接外推到 Nev=100、其它 block、其它算符、四项二维或五次收缩方案。
+
+### 20.6 生产代码更新及复现入口
+
+2026-11-16 已将以下当前入口的 fused 2×2 direct/exchange 默认改为显式 dp：
+
+- [L64x128 收缩模块](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/proton_spin2.py)及 [L64x128 主程序](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/Calc_2pt_zdir.py)。[提交脚本](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/submit_zdir.sh)明确传入 `--contract-optimize dp`。
+- [L24x72 收缩模块](/public/group/lqcd/donghx/2pt_gpu_new/L24x72/proton_spin2.py)及 [momentum-smearing 主程序](/public/group/lqcd/donghx/2pt_gpu_new/L24x72/Calc_2pt_momsmear.py)。
+- [L32x96 收缩模块](/public/group/lqcd/donghx/2pt_gpu_new/L32x96/proton_spin2.py)及 [momentum-smearing 主程序](/public/group/lqcd/donghx/2pt_gpu_new/L32x96/Calc_2pt_momsmear.py)。
+
+三个入口均支持 `--contract-optimize dp`（默认），也保留 `greedy`、`optimal` 作为显式路径对照。日志的 `CONTRACTION_PLAN(S)` 及输出 metadata 记录 opt_einsum 版本、optimizer、实际 block size、Nev、指标式和路径。gamma 预处理与独立四维参考不要求跟随该参数切换。
+
+历史 `dcu_negative_20261107/code`、其 SHA256 绑定的 manifest、已完成 benchmark 和嵌套的旧测试快照保持不变。**旧 DCU 提交脚本仍指向冻结代码，不会自动升级为 dp**；以后需要使用新版本入口或另建版本化 manifest，不能直接修改旧快照并冒充同一次任务续跑。此次没有重交生产任务或覆盖已有 contract。
+
+新增 [CPU 回归测试](/public/group/lqcd/donghx/2pt_gpu_new/tests/test_explicit_dp.py)检查三个模块的显式路径传递与缓存、不同 block/Nev 的路径、独立 NumPy 和四维后投影数值、complex128/shape、三次齐次缩放、CLI 默认值和旧快照哈希。生产形状只做 shape-only 规划，不在登录节点分配大型张量。L64x128 的 Nev=300、block=1 新默认路径应与两端已完成 `oe_dp` benchmark 的逐步路径完全一致；L24/L32 的本次同步更新只作 CPU 正确性与形状规划验证，不能声称已测得它们的完整 GPU 提速。
+
+```bash
+export PYTHONDONTWRITEBYTECODE=1
+python -B tests/test_explicit_dp.py
+python -B L64x128/test_proton_spin2.py
+```
+
+本次修改后的实际回归结果：上述新测试 6 个测试组全部通过；原有物理约定测试 28 个案例全部通过，逐 direct 项最大绝对差为 $2.274\times10^{-13}$（随机张量的绝对量纲，不是前述真实关联函数的归一化误差）。同一新测试在 `ssh mgmt02` 后加载 `/public/home/donghx/load_dcu_py38_cupy_mpi.sh` 的现有 `dcu_py38` 环境中再次运行，6 个测试组也全部通过。L24/L32 的 `--help` 和 L64 提交脚本 `bash -n` 检查通过。本次没有新提交 GPU 作业；表中的实测来自本节列出的已完成 A100/DCU 任务。
+
+变更前备份和本次回归日志位于 [explicit_dp_update_20261116](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/explicit_dp_update_20261116/)。A100 原始报告为 [summary.json](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/pyqcd043_a100_conf540_20261116/summary.json)、[逐源时刻 CSV](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/pyqcd043_a100_conf540_20261116/comparison.csv)和 [preflight.json](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/pyqcd043_a100_conf540_20261116/preflight.json)；DCU 对应 [summary.json](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/pyqcd043_dcu_test_20261116/summary.json)、[CSV](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/pyqcd043_dcu_test_20261116/comparison.csv)和 [preflight.json](/public/group/lqcd/donghx/2pt_gpu_new/L64x128/pyqcd043_dcu_test_20261116/preflight.json)。表中跨两源合并中位数需从各目录 `results/*.json` 的原始同步计时样本计算，不等同于把 CSV 中的各源中位数简单平均。

@@ -14,7 +14,7 @@ Tests that merely reproduce README equations or duplicate the implementation are
 
 ## Keep the source tree clean
 
-Use `rg --files` and `rg -n` to inventory files and definitions; inspect `src/lqcddb` first and do not treat `build/lib` as the current implementation. Use `ast.parse` for syntax checks that do not write files. For serial probes, set `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPATH=src`, and put caches and outputs in `/tmp`. Use named imports during serial checks so wildcard imports do not trigger optional MPI.
+Use `rg --files` and `rg -n` to inventory files and definitions; inspect `src/lqcddb` under the selected `source_root`, not `build/lib`. Use `ast.parse` for syntax checks without importing production code. For serial probes, set `PYTHONDONTWRITEBYTECODE=1` and use the selected tree's `src` on `PYTHONPATH`; put temporary caches/outputs in a task directory under the current workspace and clean them up afterward. Follow workspace cluster rules for executable tests. Use named imports during probes so wildcard imports do not trigger optional MPI; this does not require changing production-reference imports.
 
 If `pytest`, MPI, CUDA, production data, or scheduler resources are unavailable, report the limitation and continue with targeted serial checks. An explicit software change must preserve unrelated changes and modify the smallest consistent set among implementation, exports, stubs, documentation, and regression files; do not change physical conventions merely to pass a test.
 

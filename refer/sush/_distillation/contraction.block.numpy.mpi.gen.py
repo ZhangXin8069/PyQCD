@@ -66,7 +66,7 @@ V_list = [x for x in range(Nx**3)][rank*(Nx**3//size):(rank+1)*(Nx**3//size)]
 V_max = Nx**3
 
 eigen = corr_eigvecs(Nx = Nx)
-Mom_link = creat_mom_list(Mom = [1, 1, 1], fix_Q2 = True)
+Mom_link = creat_mom_list(Mom = [0, 0, 2], fix_Q2 = True)
 mu_nu_indx, mu_nu_gamma, mu_indx, mu_gamma =  PFF_Mom_to_gamma_new(Mom_link[:], allow_t = False)
 
 mu_nu_gamma = backend.asarray(mu_nu_gamma)

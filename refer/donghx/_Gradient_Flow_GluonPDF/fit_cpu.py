@@ -15,7 +15,7 @@ STATS=StatisticsConfig(covariance_shrinkage='schaefer_strimmer_correlation_to_id
     normal_rcond=1e-12,q_min=Q_MIN,correlated_chi2_dof_max=CHI_MAX,
     bootstrap_min_success=1.,minimum_accepted_windows=1,
     window_systematic='within_cut_AIC_weighted_variance_plus_separate_equal_cut_spread',
-    fit_window_status='fixed_Tmin7_user_Q1em3_chi2dof1e3')
+    fit_window_status=f'fixed_Tmin{TMIN}_physical_gt0p6fm_user_Q1em3_chi2dof1e3')
 
 
 def weights(scores):
@@ -28,13 +28,13 @@ def weights(scores):
 def candidate_fit(central,samples):
     """Require actual sample information before regularized one-parameter GLS."""
     y=np.asarray(central,float);b=np.asarray(samples,float)
-    if y.ndim!=1 or b.shape!=(100,len(y)) or len(y)<=1:
+    if y.ndim!=1 or b.shape!=(NBOOT,len(y)) or len(y)<=1:
         raise ValueError('bad shape or no positive data dof')
     if not np.isfinite(y).all() or not np.isfinite(b).all():raise ValueError('nonfinite candidate')
     variance=np.var(b,axis=0,ddof=1)
     if np.any(variance<=0):raise ValueError('zero bootstrap variance')
     standardized=(b-b.mean(axis=0))/np.sqrt(variance)
-    raw_correlation=standardized.T@standardized/99.
+    raw_correlation=standardized.T@standardized/(NBOOT-1.)
     eigen=np.linalg.eigvalsh(raw_correlation)
     rank=int(np.count_nonzero(eigen>1e-12*eigen.max()))
     if rank<1:raise ValueError('sample information cannot identify one parameter')
@@ -102,6 +102,8 @@ def select(values,chi,aic,accepted,errors,cut_indices):
 def main():
     p=argparse.ArgumentParser();p.add_argument('--task',type=int,required=True);arg=p.parse_args()
     allocation();manifest();started=time.monotonic()
+    if not 0<=arg.task<len(FLOWS)*len(CHANNELS)*len(FLAVORS):
+        raise ValueError(arg.task)
     it,rem=divmod(arg.task,9);ic,jf=divmod(rem,3)
     tau=FLOWS[it][0];channel=CHANNELS[ic];flavor=FLAVORS[jf]
     source=ratio_path(tau,channel,flavor);output=fit_path(tau,channel,flavor)
@@ -114,10 +116,10 @@ def main():
     source_hash=sha256(source)
     with np.load(source,allow_pickle=False) as d:
         ro=d['ratio_original'];rb=d['ratio_boot'];valid=d['ratio_valid_mask']
-        if ro.shape!=(2,3,21,6,11) or rb.shape!=(100,2,3,21,6,11):raise ValueError('ratio axes changed')
+        if ro.shape!=(2,len(PZ),DZ,len(TSEPS),13) or rb.shape!=(NBOOT,2,len(PZ),DZ,len(TSEPS),13):raise ValueError('ratio axes changed')
         if str(d['estimator_id'])!=ESTIMATOR or str(d['weight_scheme'])!=SCHEME:raise ValueError('wrong estimator/scheme')
         np.testing.assert_array_equal(d['confs'],CONFS);np.testing.assert_array_equal(d['boot_indices'],shared_indices())
-    nc=len(CANDIDATES);point=(2,3,21);shape=(nc,)+point;bs=(nc,100)+point
+    nc=len(CANDIDATES);point=(2,len(PZ),DZ);shape=(nc,)+point;bs=(nc,NBOOT)+point
     fields={name:np.full(shape,np.nan) for name in ('M','chi','Q','stat_error','AIC','condition','shrinkage')}
     integer={name:np.full(shape,-1,dtype=np.int16) for name in ('dof','sample_rank','effective_rank','model_rank')}
     candboot=np.full(bs,np.nan);chiboot=np.full(bs,np.nan);qboot=np.full(bs,np.nan);aicboot=np.full(bs,np.nan)
@@ -126,7 +128,7 @@ def main():
     raw_eigen=np.full(shape+(maxdata,),np.nan);reg_eigen=np.full_like(raw_eigen,np.nan)
     exactzero=np.zeros(point,bool)
     for co in range(2):
-        for ip in range(3):
+        for ip in range(len(PZ)):
             for iz in range(21):
                 if co==1 and iz==0:
                     mask=valid[co,ip,iz]
@@ -142,7 +144,7 @@ def main():
                     except (ValueError,np.linalg.LinAlgError,FloatingPointError) as exc:
                         reasons[j,co,ip,iz]=str(exc)[:128];continue
                     idx=(j,co,ip,iz);bi=(j,slice(None),co,ip,iz)
-                    omitted=sum(t-2*cut+1 for t in range(max(ts)+1,11))
+                    omitted=sum(t-2*cut+1 for t in range(max(ts)+1,max(TSEPS)+1))
                     for key in ('M','chi','Q','stat_error'):fields[key][idx]=r[key]
                     fields['AIC'][idx]=r['chi']+2+2*omitted
                     fields['condition'][idx]=r['covariance_condition'];fields['shrinkage'][idx]=r['shrinkage']
@@ -153,9 +155,9 @@ def main():
                     reg_eigen[idx][:len(y)]=r['covariance_eigenvalues']
                     reasons[idx]='identifiable_quality_pass' if r['accepted'] else 'identifiable_quality_rejected'
     selected=np.full(point,np.nan);quality=np.full(point,np.nan)
-    sb=np.full((100,)+point,np.nan);qb=np.full_like(sb,np.nan)
-    used=np.zeros((100,)+point,bool);central_fallback=np.zeros(point,bool)
-    fidx=np.full((100,len(CUTS))+point,-1,dtype=np.int16)
+    sb=np.full((NBOOT,)+point,np.nan);qb=np.full_like(sb,np.nan)
+    used=np.zeros((NBOOT,)+point,bool);central_fallback=np.zeros(point,bool)
+    fidx=np.full((NBOOT,len(CUTS))+point,-1,dtype=np.int16)
     cweights=np.zeros(shape);bweights=np.zeros(bs)
     within=np.full(point,np.nan);cutsys=np.full(point,np.nan)
     status=np.full(point,'no_finite_candidate',dtype='U64')
@@ -168,12 +170,14 @@ def main():
         r=select(fields['M'][idx],fields['chi'][idx],fields['AIC'][idx],accept[idx],fields['stat_error'][idx],cut_indices)
         selected[co,ip,iz]=r['value'];quality[co,ip,iz]=r['quality'];cweights[idx]=r['weights']
         central_fallback[co,ip,iz]=r['fallback'];within[co,ip,iz]=r['within'];cutsys[co,ip,iz]=r['cut_spread']
-        for boot in range(100):
+        for boot in range(NBOOT):
             bi=(slice(None),boot,co,ip,iz)
             br=select(candboot[bi],chiboot[bi],aicboot[bi],acceptboot[bi],fields['stat_error'][idx],cut_indices)
             sb[boot,co,ip,iz]=br['value'];qb[boot,co,ip,iz]=br['quality'];used[boot,co,ip,iz]=br['fallback']
             bweights[bi]=br['weights']
-            for q,j in enumerate(br['fallback_indices']):fidx[boot,q,co,ip,iz]=j
+            for j in br['fallback_indices']:
+                cut_slot=CUTS.index(CANDIDATES[j][2])
+                fidx[boot,cut_slot,co,ip,iz]=j
         if np.isfinite(selected[co,ip,iz]) and np.isfinite(sb[:,co,ip,iz]).all():
             status[co,ip,iz]='selected_with_diagnostic_fallback' if central_fallback[co,ip,iz] or used[:,co,ip,iz].any() else 'all_quality_selected'
     available=np.isfinite(selected)&np.isfinite(sb).all(axis=0)
@@ -199,19 +203,22 @@ def main():
         candidate_shrinkage=fields['shrinkage'],candidate_raw_correlation_eigenvalues=raw_eigen,
         candidate_regularized_covariance_eigenvalues=reg_eigen,candidate_status=reasons,
         candidate_labels=np.asarray([l for l,_,_ in CANDIDATES]),
-        fit_Tmin=np.asarray(7),fit_Tmin_fm=np.asarray(7*A_FM),q_min=np.asarray(Q_MIN),chi2_dof_max=np.asarray(CHI_MAX),
+        fit_Tmin=np.asarray(TMIN),fit_Tmin_fm=np.asarray(TMIN*A_FM),fit_Tmin_threshold_fm=np.asarray(.6),
+        q_min=np.asarray(Q_MIN),chi2_dof_max=np.asarray(CHI_MAX),
         chis_definition=np.asarray('correlated chi2 / dof; NOT raw chi2'),
         input_ratio_sha256=np.asarray(source_hash),fit_model=np.asarray('R(T,t_insert)=M'),
         aic_policy=np.asarray('chi2+2*k+2*N_omit; within each cut, then equal usable cuts; independent per replica'),
         bootstrap_error_definition=np.asarray('std(M_boot,ddof=1); no division by sqrt(Nboot)'),
         covariance_svdcut=np.asarray(1e-12),covariance_absolute_jitter=np.asarray(1e-18),
-        pipeline_version=np.asarray('L32x64_A_ratio_AIC_T7_boot100_v1'))
+        fit_quality_status=np.asarray('quality_and_fallback_reported_separately'),
+        physical_result_status=np.asarray('finite_flow_B_finite_window_connected_bare_diagnostic_no_state_isolation_claim'),
+        pipeline_version=np.asarray(f'{KEY}_B_ratio_AIC_T{TMIN}_boot200_20261101_v1'))
     with np.load(output,allow_pickle=False) as d:
-        assert d['M_boot_selected'].shape==(2,100,3,21)
+        assert d['M_boot_selected'].shape==(2,NBOOT,len(PZ),DZ)
         np.testing.assert_array_equal(d['boot_indices'],shared_indices())
     atomic_json(receipt_path,dict(status='PASS',task=arg.task,tau=tau,channel=channel,flavor=flavor,
         input_sha256=source_hash,output=str(output),output_sha256=sha256(output),
-        total_points=126,selected_available=int(available.sum()),quality_complete_points=int(qaccepted.sum()),
+        total_points=int(np.prod(point)),selected_available=int(available.sum()),quality_complete_points=int(qaccepted.sum()),
         fallback_points=int((central_fallback|used.any(axis=0)).sum()),exact_symmetry_zero_points=int(exactzero.sum()),
         no_finite_candidate_points=int((~available).sum()),seconds=time.monotonic()-started,
         job=os.environ['SLURM_JOB_ID'],physical_status='finite_flow_bare_diagnostic_no_state_isolation_claim'))

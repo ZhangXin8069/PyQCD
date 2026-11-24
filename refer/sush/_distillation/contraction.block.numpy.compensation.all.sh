@@ -1,14 +1,14 @@
 #!/bin/bash
 
 #SBATCH --job-name=Pi_ENV
-#SBATCH --array=50-79#72,96
+#SBATCH --array=1-2
 #SBATCH --nodes=1
 
 #SBATCH --error=test_pion_3pt_error
 #SBATCH --output=test_pion_3pt_output
 
 ##SBATCH --partition=na800-pcie
-#SBATCH --partition=cpueicc,cpu6248R
+#SBATCH --partition=i72c512g,cpu6248R,cpueicc
 ##SBATCH --partition=cpu-short
 ##SBATCH --partition=gpu-debug
 
@@ -38,42 +38,45 @@
 export UCX_TLS=rc,shm  # 仅使用InfiniBand和共享内存
 
 source /public/home/sush/envs/sm80
+conf_start=10000
+gap=800
+gap_2=200
 
-conf_stare=10000
-gap=200
+for i in {0..3..1}
+do
+    conf=$((conf_start + gap * SLURM_ARRAY_TASK_ID + i * gap_2))
 
-conf=$[${conf_stare}+${gap}*${SLURM_ARRAY_TASK_ID}]
+    run_dir=/public/home/sush/distillation/pion_form_factor
 
-run_dir=/public/home/sush/distillation/pion_form_factor
+    exe=${run_dir}/contraction.block.numpy.compensation.all.py
+    dir_file=${run_dir}/file/contraction.block.numpy.compensation.all.${conf}
 
-exe=${run_dir}/contraction.block.numpy.compensation.all.py
-dir_file=${run_dir}/file/contraction.block.numpy.compensation.all.${conf}
+    output_file=${run_dir}/output/contraction.block.numpy.compensation.all.${conf}.log
 
-output_file=${run_dir}/output/contraction.block.numpy.compensation.all.${conf}.log
-
-if [ ! -e "${run_dir}/output/" ];then
-    mkdir ${run_dir}/output/
-fi
-
-if [ ! -e "${run_dir}/file" ];then
-    mkdir ${run_dir}/file
-fi
-
-echo "${conf} job starts at" `date` > ${output_file}
-mkdir ${dir_file}
-
-if [ -d ${dir_file} ]; then
-    mpirun -n 24 --bind-to core --map-by core python -u $exe ${conf} >> ${output_file} 2>&1 
-
-    if [ $? -eq 0 ]; then
-        echo "Python 程序执行成功" >> ${output_file} 2>&1
-        rm -r ${dir_file}
-    else
-        echo "Python 程序执行失败" >> ${output_file} 2>&1
+    if [ ! -e "${run_dir}/output/" ];then
+        mkdir ${run_dir}/output/
     fi
 
-else
-    echo "calculate complete" >> ${output_file} 2>&1
-fi
+    if [ ! -e "${run_dir}/file" ];then
+        mkdir ${run_dir}/file
+    fi
 
-echo "$conf job ends at" `date` >> ${output_file}
+    echo "${conf} job starts at" `date` > ${output_file}
+    mkdir ${dir_file}
+
+    if [ -d ${dir_file} ]; then
+        mpirun -n 24 --bind-to core --map-by core python -u $exe ${conf} >> ${output_file} 2>&1 
+
+        if [ $? -eq 0 ]; then
+            echo "Python 程序执行成功" >> ${output_file} 2>&1
+            rm -r ${dir_file}
+        else
+            echo "Python 程序执行失败" >> ${output_file} 2>&1
+        fi
+
+    else
+        echo "calculate complete" >> ${output_file} 2>&1
+    fi
+
+    echo "$conf job ends at" `date` >> ${output_file}
+done

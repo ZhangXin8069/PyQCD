@@ -12,10 +12,10 @@
 #SBATCH --partition=nv100-ins,nv100-sug
 ##SBATCH --partition=gpu-debug
 #SBATCH --nodes=1
-#SBATCH --ntasks=8
-#SBATCH --ntasks-per-node=8
+#SBATCH --ntasks=2
+#SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=2
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:2
 
 ##SBATCH --partition=na800-pcie
 ##SBATCH --nodes=1
@@ -70,7 +70,7 @@ do
             exit 1
         }
 
-        mpirun -n 8 --bind-to core --map-by core python -u "${exe}" "${conf}" >> "${output_file}" 2>&1
+        mpirun -n 2 --bind-to core --map-by core python -u "${exe}" "${conf}" >> "${output_file}" 2>&1
         ret=$?
 
         if [ $ret -eq 0 ]; then

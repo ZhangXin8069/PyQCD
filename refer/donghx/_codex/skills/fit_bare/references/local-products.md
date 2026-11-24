@@ -90,12 +90,13 @@ status, and transversity convention status.
 
 - Verify all expected channel/flavor products and completion JSON files.
 - Verify NPZ hashes against completion records.
-- Verify all accepted candidates contain fixed `Tmin` and no difference reads
-  a lower separation.
-- Verify `M_boot_filled` has 1500 finite values at every retained point.
+- Verify all candidates lie in the registered physical interval, the full-T
+  window is registered per cut, and differences read no outside separation.
+- Verify replica coverage against actual declared Nboot; preserve unavailable slots.
 - Verify invalid accepted outputs remain NaN.
 - Verify shared configurations and bootstrap indices across all observables.
-- Verify AIC weights normalize within each comparable fixed-cut family.
+- Verify AIC weights normalize across the registered pooled cut/window family;
+  preserve the separate policy for observables changed by the cut.
 - Count central and replica fallbacks, including zero-dof cases.
 - Plot accepted, single-cut, and fallback points with distinct markers.
 
@@ -104,3 +105,15 @@ and nine PNG/PDF six-panel pairs. All 7,830,000 filled bootstrap values are
 finite. There are 4,787 accepted central points and 433 central fallbacks; 288
 fallbacks are the L24x72 `|P|=6` zero-dof single-difference diagnostic. Re-run
 the audit rather than quoting these counts after any input or code change.
+
+## Interval-AIC ratio pilot (2026-11-16)
+
+Reusable audited example: `Fit_SKILL/Ratio_TwoState_AIC_Interval_L32x96_20261116`.
+This example consumes the frozen C3/C2 `signals_P*.npz` in
+`Fit_SKILL/artifacts/two_state_ratio_3ens_unpolarized_ud_P034_N2000_20261115/L32x96`.
+These inputs carry the corrected ratio_v4 estimator id, 194 configurations,
+2000 paired bootstrap indices, even-real/odd-imag projections and masks.
+The pilot uses original replica rows 0:100, not a second bootstrap. See its
+manifest and README for the interval, covariance, selection and audit details.
+Historical commands above retain their historical candidate policy; do not
+claim that they implement the updated interval policy without checking code.

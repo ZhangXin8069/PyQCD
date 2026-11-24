@@ -1,3 +1,9 @@
+> Historical production reference: the fixed-Tmin grid, fixed-cut averaging,
+> quality thresholds and minimum-chi2 fallback below describe the old v2 run.
+> For a new requested interval scan, the main skill and `interval-aic.md`
+> supersede those grid/selection rules. Preserve this reference for reproducing
+> its existing artifacts; do not silently label the old code as updated.
+
 # Default forward-Sumratio-difference AIC model
 
 ## Observable and threshold

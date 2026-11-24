@@ -1,4 +1,3 @@
-#!/public/home/huangcl/.venv/bin/python
 """通用拟合工具包: 用可切换的拟合工具包对 bootstrap 样本逐个拟合.
 
 主要功能:

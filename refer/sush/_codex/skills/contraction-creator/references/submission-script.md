@@ -1,33 +1,24 @@
-# Contraction Submission-Script Rules
+# Paired submission script
 
-This skill uses only `/public/home/sush/distillation/0v2b/contraction.NJNp-.3pt.GEVP.cupy.py` as an external contraction-code reference and its paired `/public/home/sush/distillation/0v2b/contraction.NJNp-.3pt.GEVP.cupy.sh` as the submission-script reference. Do not read or cite other contraction programs in `0v2b`; the contraction code itself is generated from this skill's assets and M0–M8 rules.
+Use the shell paired with a user-specified reference when available. Bundled Python assets share `assets/contraction.NJNp-.3pt.GEVP.cupy.sh`. The external historical pair is `/public/home/sush/distillation/0v2b/contraction.NJNp-.3pt.GEVP.cupy.py` and its `.sh`; it differs from the bundled snapshot and is not its automatic replacement.
 
-## Paired outputs
+Deliver `<target>.py` and `<target>.sh` unless Python-only is requested. The bundled `.na800.py` asset need not determine the output basename: the 3pt shell targets `contraction.NJNp-.3pt.GEVP.cupy.py`, whose contents can be identical to that asset. A different requested basename changes only the existing shell path values.
 
-Whenever a contraction Python file is generated, generate a same-named `.sh` file. Copy the submission script from `assets/contraction.NJNp-.3pt.GEVP.cupy.sh`, preserving line order, blank lines, checks, environment setup, directory handling, GPU checks, `mpirun` options, success/failure handling, and cleanup logic. Keep the same stem as the Python file, for example:
+## Required settings and allowed patches
 
-```text
-contraction.<target>.py
-contraction.<target>.sh
-```
+Resolve settings from the input contract, earlier answers, or an explicitly inherited profile. Preserve other text, blank lines, environment setup, checks, redirection, return handling and cleanup.
 
-The script's `exe` must point to the generated Python file; `dir_file` and `output_file` must use the same target name and configuration variables.
+1. Partition/controller and resource directives: `--array`, `--nodes`, `--ntasks`, `--ntasks-per-node`, `--cpus-per-task`, `--gres`, `--gpus`, `--time`; matching `mpirun -n`.
+2. Configuration selection: `conf_start`, `gap`, `gap_2`, existing loop range/formula. An unrepresentable irregular list needs an explained small extension, never a substitution of configurations.
+3. Paths: `run_dir`, `exe`, `dir_file`, `output_file`.
+4. Environment loading or other text only for an explicitly supplied different setting or demonstrated compatibility repair; record the exception. An API-source selector alone does not request adding `PYTHONPATH` or a CLI to the generated file.
 
-## Only allowed modifications
+Keep job name, scheduler log directives, `UCX_TLS`, launch arguments, `--bind-to core --map-by core`, and cleanup unchanged without such an exception. Do not infer a production partition from a test partition or asset filename.
 
-Except for replacing values needed to adapt the generated filename during copying, do not add, delete, move, or reorder script lines:
+## Checks
 
-1. Partition: the enabled `#SBATCH --partition=...` value. Keep other candidate partition lines commented out.
-2. Compute resources: `--array`, `--nodes`, `--ntasks`, `--ntasks-per-node`, `--cpus-per-task`, `--gres`, `--gpus`, `--time`, and the `mpirun -n` directly tied to resources.
-3. Configuration variables: `conf_start`, `gap`, `gap_2`, configuration-loop ranges, and numeric values in the existing `conf` expression.
-4. Path variables: `run_dir`, `exe`, `dir_file`, and `output_file`.
-
-Keep `job-name`, `--error`, `--output`, environment variables, environment-loading commands, `UCX_TLS`, directory checks, GPU checks, Python launch arguments, output redirection, return-value handling, cleanup commands, and all other text identical to the reference script. Unless the user explicitly requests it, do not modify these items or add parameters, loops, checks, dependencies, or log formats.
-
-## Pre-generation checks
-
-- The Python file and submission script have the same stem, and `exe`, `dir_file`, and `output_file` all agree.
-- `mpirun -n` matches the allowed `--ntasks` setting; do not change `--bind-to core --map-by core`.
-- The configuration formula still uses the existing `SLURM_ARRAY_TASK_ID` and `conf_start/gap/gap_2` relation, changing only the values requested by the user.
-- Only whitelisted fields differ; use a line-by-line diff to confirm that the remaining text matches the asset.
-- Deliver both files, do not submit the job, and do not change the partition, resources, or configuration range on the user's behalf.
+- `prod(grid_size) == --ntasks == mpirun -n`; match tasks/node, nodes and GPUs. The maintained bundled profile uses two ranks; the historical external shell used eight.
+- `exe` targets the delivered Python basename; `dir_file` and `output_file` match its name/configuration. Verify the intended `run_dir` even if files are prepared elsewhere.
+- Expand the array/loop formula. Bundled `--array=0-49`, `conf_start=1000`, `gap=40`, `gap_2=40`, `i=0` means configurations 1000 through 2960 inclusive, step 40.
+- Identical paths/resources/configurations require byte equality. Otherwise enumerate and verify replacements using `reference_copy.py`, then review the whitelist diff.
+- Run `bash -n`; creating the pair does not request submission.

@@ -2,6 +2,8 @@
 
 本文针对本项目的四维 thin-link gradient-flow quark/gluon PDF 计算，解释 Wilson line 的线性发散、其与流时间的关系，以及用 Polyakov loop 或 Wilson loop 抽取线自能的原理和实际操作。公式采用自然单位，$\hbar=c=1$。
 
+**2026-11-11 最新 double-ratio 结果导航：**新增第 28 节，归档 2026-11-10 已分别完成的 **L32×64（1700 conf）与 L32×96（887 conf）、各 3000 配对 bootstrap** 拟合。使用已有闭合 Wilson loop 的长度–flow double ratio，不是规范固定开口线的新测量。第 28.5 节列出两套 ensemble 的基本表示候选，第 28.6 节解释 L32×96 的 $d_F=0.32982\pm0.00450$ 是加入经验有限-flow 修正后的条件结果，第 28.7 节记录伴随表示与失败覆盖，第 28.8 节给出 PDF 的 $\kappa=-d_F/\sqrt8$ 换算及零流极限边界。`final_d_F=null`、`final_d_A=null`，本次分析没有施加新的矩阵元减除；第 27 节的旧固定候选减除保留为历史。以下旧日期导航及正文按原日期理解。本次仅补充文档，未重跑数值分析。
+
 **2026-10-22 最新理论与实施状态导航：**新增第 27 节，集中回答局域归一化后 matching 系数怎样变化、有限残余质量 $m_0^{\overline{\rm MS}}$ 是什么，以及怎样使用 $P_z=0$ 数据确定它。第 27.3 节给出声明约定下的归一化一圈系数，第 27.6–27.8 节给出静止核子的短距离 OPE 目标、残余质量的拟合符号和当前窗口限制。2026-10-21 已完成 **固定候选 $d_F=0.374137$ 的局域归一化矩阵元试算减除**，但没有将其升级为正式 $d_F$，也没有确定 $m_0^{\overline{\rm MS}}$；具体结果入口见第 27.9 节。此前“没有对 PDF 施加减除”的表述是各段标注日期时的历史状态；最新状态是“已做诊断性矩阵元减除，尚非完整 $\overline{\rm MS}$ matching 或 PDF”。本次只更新本文，不改数值产品或提交新任务。
 
 **2026-10-20 最新结果导航：**第 26 节记录严格半径窗 $a<\sqrt{8t_f}<0.3\,\mathrm{fm}$ 下的 **1700 conf / 3000 配对 bootstrap** 新分析：固定流时间对的直接 Wilson 时间 log-ratio 拟合、完整有效静态势图、跨 flow 的 $d_F/d_A$ 候选、空间平台和新参考流时间扫描。请注意与第 25 节先拟合原始 $W$ 再作势差的路线区分。当前基本表示存在显著 flow-window/model 依赖，伴随表示尚无受控距离平台；`final_d_F=null`、`final_d_A=null`，**没有批准最终系数，也没有对 PDF 施加线质量减除**。第 26 节列出代码、参数样本、完整审计和图片地址。以下旧日期段落保留为历史，不代表最新最终结论。
@@ -3378,3 +3380,759 @@ $z=0$ 约束不算独立点；候选 $d_F$ 与 fallback 的质量状态不因后
 **生成/更新日期：2026-10-22（Asia/Shanghai）。**
 
 **本次会话标题：局域归一化的 gradient-flow 系数与 Pz0 残余质量条件。**
+
+## 28. L32×64 与 L32×96 的 Wilson-loop double-ratio 线性发散拟合（2026-11-10 完成，2026-11-11 归档）
+
+### 28.1 本次完成的工作及其与旧方法、Pion_DA 的关系
+
+已分别完成 **L32×64 的 1700 组态**与 **L32×96 的 887 组态**分析，每个 ensemble 使用
+3000 份配对 bootstrap，基本表示与伴随表示独立拟合。这里的“配对”指同一 ensemble
+内部跨距离、Wilson 时间边、flow 和表示共用抽样索引；两个 ensemble 的样本彼此独立。
+
+本次采用 `Pion_DA.pdf` 第 17 页的**长度–flow double-ratio 联合拟合思路在已有闭合矩形
+Wilson loop 上的对应实现**。PDF 中报告的 Wilson-line 数字来自开口线；本次没有新增
+规范固定开口线测量，也没有拟合强子矩阵元的 double ratio。因此可以说实现了该拟合
+思路的闭合圈版本，不能说已经逐项复现 PDF 的观测量和重整化处方。
+
+第 26 节旧方法固定空间边 $R$，先沿 Wilson 时间边 $T_W$ 拟合
+$-\log[\bar W(\tau)/\bar W(\tau_r)]$，再拟合所得相对有效质量的 flow 依赖。
+本次则**固定 $T_W$，直接对全部选中空间距离与 flow 的 $\log D$ 作相关联合拟合**，
+每个 flow 保留独立截距；逐 flow 的长度斜率只作为诊断图，不是联合拟合的二次输入。
+
+完成状态为 `PASS_NUMERICAL_DIAGNOSTIC_ONLY`。两套 ensemble 均保留
+`final_d_F=null`、`final_d_A=null`，没有据本次结果施加新的矩阵元减除。
+这不撤销第 27.9 节已经记录的旧固定候选 $d_F=0.374137$ 的诊断性减除历史。
+
+### 28.2 已用数据、物理 flow 半径和测量范围
+
+|ensemble|格距 $a$ / fm|组态数|原始圈范围|本次重采样|
+|---|---:|---:|---|---|
+|L32×64|0.0897|1700|$R/a=0..12$，$T_W/a=0..16$|复用已验证的 1700 份 delete-one JK 和 3000 份 bootstrap；seed `20261015`|
+|L32×96|0.0775|887|$R/a=0..16$，$T_W/a=0..20$|从已有逐组态圈生成 887 份 delete-one JK 和 3000 份 bootstrap；seed `2026111096`，每份抽取 887 个组态|
+
+两套输入都是 thin links 起步的四维 Wilson flow，RK3 积分，无预涂抹、无规范固定。
+基本表示使用方向平均后的实部；伴随表示使用原始测量中逐位置、逐方向构造的伴随
+character，不能由已平均的基本圈取平方，也没有用 Casimir scaling 代替伴随测量。
+
+L32×64 有 23 个原始 flow checkpoints：
+
+```text
+tau64 = 0, .05, .10, .15, .20, .25, .30, .35, .40, .45, .50,
+        .55, .60, .65, .80, 1.00, 1.40, 1.80, 2.20, 2.60,
+        3.00, 3.40, 3.80
+```
+
+L32×96 使用相同物理平滑半径的网格，实际无量纲流时间为
+
+$$
+\tau_{96}=\tau_{64}\left(\frac{0.0897}{0.0775}\right)^2
+=1.339619562955255\,\tau_{64},\qquad r_f=a\sqrt{8\tau}.
+$$
+
+下文以 $\tau_{64}$ 标记共同物理 flow 网格；**不能把这些标签直接当作 L32×96 的实际
+$t_f/a_{96}^2$**。主参考取实测的 $\tau_{64,r}=0.60$，即
+$\tau_{96,r}=0.8037717377731529$、$r_{f,r}=0.1965228536\,\mathrm{fm}$。
+这是最接近 PDF 所用 $0.20\,\mathrm{fm}$ 的已有点，没有插值为精确的 $0.20\,\mathrm{fm}$。
+
+原始输入入口：
+
+- L32×64 测量根目录：`/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_L32x64_allconf_B_20261015/runs/allconf_B_2026-10-15T205426.224554_0800/`。
+- L32×64 实际复用样本：[loop_resamples.npz](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/line_mass_d_boot3000_20261018/analysis/loop_resamples.npz)，同目录的 `bootstrap_indices.npz` 保存抽样索引。
+- L32×96 测量根目录：`/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_L32x96_matchedrf_20261101/runs/allconf_2026-11-01T154534.916707_0800/`。本次核验全部 40802 个基本/伴随 Wilson 数组及对应 flow 元数据的 SHA256。
+
+### 28.3 Double ratio、两条空间边的因子和实际模型
+
+令 $s=F,A$ 表示颜色表示，$n=R/a$，$\tau=t_f/a^2$，$q(\tau)=1/\sqrt{8\tau}$。
+中心估计量与每份重采样均先平均圈，再构造
+
+$$
+D_s(R,T_W;\tau,\tau_r)
+=\frac{\bar W_s(R,T_W;\tau)/\bar W_s(0,T_W;\tau)}
+{\bar W_s(R,T_W;\tau_r)/\bar W_s(0,T_W;\tau_r)}.
+$$
+
+归一化闭合圈的退化路径满足 $W_s(0,T_W;\tau)=1$，所以本实现的 double ratio 数值上
+化为跨 flow 的圈比值。这与强子 $h(z)/h(0)$ 的非平凡局域归一化有所不同。
+估计量是 $\log$ 作用于 ensemble/replica 的平均圈，**不是逐组态取对数后平均**。
+每个参与对数的均值必须为正且有限；不取绝对值、不裁剪、不删除失败 replica 来恢复误差。
+
+周长自能给出 $\log\bar W_s\supset-2m_s(R+T_W)$。固定 $T_W$，主模型为
+
+$$
+\boxed{\log D_s=-2n\,d_s[q(\tau)-q(\tau_r)]+B_{s,\tau,T_W}.}
+$$
+
+每个非参考 flow 都有自己的自由截距 $B_{s,\tau,T_W}$，吸收时间两边的自能差和其他
+与 $R$ 无关的项。长度斜率前的 **2 来自两条空间边**；拟合所得 $d_s$ 已按单条线定义，
+不能再除以 2。$R=0$ 和参考 flow 的恒等关系不作为额外独立拟合点。
+
+三个模型的机器名称与参数化为
+
+$$
+\begin{aligned}
+\texttt{paper\_leading}:\quad
+\log D_s&=-2n\,d_s(q-q_r)+B_{s,\tau,T_W},\\
+\texttt{flow\_c}:\quad
+\log D_s&=-2n\,[d_s(q-q_r)+c_s(\tau-\tau_r)]+B_{s,\tau,T_W},\\
+\texttt{lattice\_q3}:\quad
+\log D_s&=-2n\,[d_s(q-q_r)+e_s(q^3-q_r^3)]+B_{s,\tau,T_W}.
+\end{aligned}
+$$
+
+$c_s$ 与 $e_s$ 是经验性模型敏感性参数，后两种模型分别加一项，没有在本版同时拟合
+$c_s,e_s$。$c_s(\tau-\tau_r)$ 是格点单位相对有效线质量中的修正，不能直接当作跨格距
+通用的物理 $t_f$ 系数。独立截距不能消除依赖 $R$ 的有限-flow 相互作用、拐角/重叠和
+几何效应；特别在 $R$ 较长时，斜率仍可能含由另一边 $T_W$ 决定的相互作用贡献。
+
+### 28.4 预先声明的窗口、统计及实际操作顺序
+
+|flow 窗口|共同物理网格的 $\tau_{64}$ 区间|主参考与用途|
+|---|---|---|
+|`paper_range`|0.10–0.60|参考 0.60；含粗格距 $r_f<a$ 点，仅作 PDF 半径范围对照|
+|`a_resolved`|0.15–0.60|参考 0.60；$r_f>a$ 不等于 $a\ll r_f$|
+|`trim_low`|0.30–0.60|参考 0.60；去掉更小 flow 的敏感性检查|
+|`strict030`|0.15–1.00|参考 0.60；原始网格点满足 $a<r_f<0.30\,\mathrm{fm}$|
+|`strict030_ref05/ref08`|0.15–1.00|分别改用参考 0.50、0.80；不把参考点本身纳入数据|
+
+区间只包含已有测量点。`strict030` 主参考之外的目标标签完整列表为
+$0.15,0.20,0.25,0.30,0.35,0.40,0.45,0.50,0.55,0.65,0.80,1.00$；
+`trim_low` 为 $0.30,0.35,0.40,0.45,0.50,0.55$。
+`flow_c/lattice_q3` 只用于主参考下的 `a_resolved` 和 `strict030`。
+
+三个物理空间窗来自 L32×64 的 $R/a=4..8,6..10,8..12$；L32×96 使用落在同一物理
+区间内的真实整数距离，分别为 $5..9,7..11,10..13$。
+L32×64 的七个 $T_W/a$ 为 $4,6,8,10,12,14,16$；L32×96 就近取
+$5,7,9,12,14,16,19$。**两套实际物理几何并非完全相同**，本次没有联合拟合共同 $d$。
+每个 ensemble 共保存 $2\times7\times3\times10=420$ 个组合，包括失败窗口。
+
+实际流程与统计契约如下：
+
+1. 核验输入来源、组态/flow/表示轴与退化圈，复用或生成并保存 JK、bootstrap 和索引。
+2. 对中心、JK 与 bootstrap 分别形成正均值的 $\log D$，同一 ensemble 内保持配对。
+3. 固定使用 delete-one JK 的完整相关协方差。相关矩阵小于最大本征值 $10^{-8}$ 的模
+   被删除，原信息秩使用 $10^{-12}$ 阈值；无 prior、不静默对角化。保存样本秩、保留模
+   的有效秩、模型秩及条件数；秩不足和非正圈均显式记录失败。
+4. 固定 $T_W$，对选中 $R/\tau$ 直接作共同 $d_s$ 的联合拟合，所有 replica 使用同一
+   协方差处方。中心为原 ensemble 均值的拟合值；仅当 **3000/3000** 份样本全部有限时
+   报完整误差 `std(ddof=0)`，不再除以 $\sqrt{3000}$。
+5. 保存窗口、参考、模型和协方差删模敏感性；共同样本上的模型差使用配对 bootstrap。
+   未按 $Q$、$\chi^2$、最小误差或接近 PDF 数字来选择或平均最终系数。
+6. 用已知周长/面积模型检查符号、因子 2、$\sqrt8$、独立截距与恒等约束，并以独立 SVD
+   解复核所有有限拟合；回读样本和图文件。原数值分析和绘图均在 Slurm CPU 作业内完成。
+
+当前误差以 iid 组态重采样为前提，尚未完成自相关/blocking 检查，也没有包含全部模型、
+窗口、有限几何和格距系统误差。数值可辨识、完整 bootstrap 和模型质量分别记录。
+
+### 28.5 两个 ensemble 的基本表示结果
+
+以下为已有扫描中用于解释的条目，**不是预先指定的主结果或最终系数选择**。
+同一 ensemble 内的条目共享原始数据，不能作为独立测量平均。
+
+先看 `a_resolved`、`paper_leading` 的较短距离窗：
+
+|ensemble / fit label|$T_W/a$|$R/a$|$d_F\pm\mathrm{stat}$|$\chi^2/\mathrm{dof}$|$Q$|
+|---|---:|---|---|---:|---|
+|L32×64 / `fit0062`|8|4..8|$0.488858\pm0.000316$|3330.16|数值下溢为 0|
+|L32×96 / `fit0062`|9|5..9|$0.475190\pm0.000424$|2519.02|数值下溢为 0|
+
+两行均完整 3000/3000，但模型显著失配，极小统计误差不能支持采用其系数。
+
+较长距离、`trim_low`、`paper_leading` 的示例如下。flow 半径（含参考）为
+$0.13896264$–$0.19652285\,\mathrm{fm}$。
+
+|ensemble / fit label|$T_W/a$；$T_W$/fm|$R/a$；实际 $R$/fm|$d_F\pm\mathrm{stat}$|$\chi^2/\mathrm{dof}$|$Q$|
+|---|---|---|---|---:|---:|
+|L32×64 / `fit0115`|10；0.8970|8..12；0.7176–1.0764|$0.387950\pm0.005620$|0.4104|0.9864|
+|L32×96 / `fit0115`|12；0.9300|10..13；0.7750–1.0075|$0.370066\pm0.014500$|1.2341|0.2468|
+|L32×64 / `fit0135`|12；1.0764|6..10；0.5382–0.8970|$0.386853\pm0.004812$|1.3845|0.1271|
+|L32×96 / `fit0135`|14；1.0850|7..11；0.5425–0.8525|$0.378509\pm0.006946$|1.5050|0.0773|
+
+四行均完整 3000/3000。两行 `fit0115` 转成 PDF 的单线系数分别为
+$\kappa=-0.137161\pm0.001987$ 和 $-0.130838\pm0.005127$。
+这些窗口的拟合质量改善，但不能仅凭 $Q$ 或两个格距数值接近就宣布自能已受控。
+
+### 28.6 “有限-flow 修正得到 dF = 0.32982 ± 0.00450”到底指什么
+
+这是 **L32×96 基本表示、`fit0087`、`strict030`、`flow_c` 模型**的条件拟合结果：
+
+$$
+\boxed{d_F=0.3298167833\pm0.0044956102,\qquad
+\kappa=-0.1166078420\pm0.0015894382.}
+$$
+
+其实际几何为 $T_W/a=9$（$T_W=0.6975\,\mathrm{fm}$）、$R/a=10..13$
+（$R=0.7750$–$1.0075\,\mathrm{fm}$）；flow 半径为
+$0.09826143$–$0.25370991\,\mathrm{fm}$，参考为 $0.19652285\,\mathrm{fm}$。
+实际 $\tau_{96}$ 列表由第 28.4 节的 `strict030` 目标列表乘以
+$1.339619562955255$ 得到，并逐项保存在 `fit_results.csv/json` 中。
+
+“有限-flow 修正”指允许相对有效线质量同时包含
+
+$$
+a\Delta m_F^{\rm eff}
+=d_F\left(\frac1{\sqrt{8\tau}}-\frac1{\sqrt{8\tau_r}}\right)
++c_F(\tau-\tau_r).
+$$
+
+在允许第二项参与解释数据之后，第一项的无量纲系数才是这里的 $d_F$。
+它不是线质量本身，也不是把裸 Wilson loop 外推到 $t_f=0$ 后得到的值。
+若模型中的 leading 项可以解释为单线自能，则该部分为
+$m_{\mathrm{line},F}^{\rm leading}=d_F/r_f$；是否已经与其他长度相关贡献分离，仍需检验。
+
+完全相同数据和窗口的模型对照为
+
+|L32×96 模型 / label|$d_F\pm\mathrm{stat}$|$\chi^2/\mathrm{dof}$|$Q$|有效 bootstrap|
+|---|---|---:|---|---|
+|`paper_leading` / `fit0086`|$0.420357\pm0.001923$|25.6949|$7.68\times10^{-101}$|3000/3000|
+|`flow_c` / `fit0087`|$0.329817\pm0.004496$|1.5279|0.0613|3000/3000|
+
+两种模型的系数差按同一批样本配对计算为
+
+$$
+d_F^{\rm leading}-d_F^{\rm flow\_c}
+=0.09053992\pm0.00407450.
+$$
+
+因此模型变化明显大于固定模型的统计误差。$c_F$ 可能吸收有限-flow 相互作用、有限几何
+或 cutoff 污染，尚未被独立证明为完整、正确的有限-flow 修正；$0.00450$ 只含该窗口、
+模型及协方差处方下的 bootstrap 统计误差。这里的差值也不自动等于完整系统误差。
+
+L32×64 对应 `fit0087` 的中心为 $d_F=0.3530399446$，但只有 **2808/3000** 份
+bootstrap 有效，故没有完整统计误差；$\chi^2/\mathrm{dof}=2.6657$、
+$Q=2.85\times10^{-6}$。不能用这两个条目建立跨格距共同的受控结论。
+
+### 28.7 伴随表示和整体数值覆盖
+
+伴随表示已经独立完成同样的扫描，但没有得到正式 $d_A$。例如 `trim_low`、
+`paper_leading` 的 `fit0245`：
+
+|ensemble|$T_W/a$|$R/a$|$d_A\pm\mathrm{stat}$|$\chi^2/\mathrm{dof}$|有效 bootstrap|
+|---|---:|---|---|---:|---|
+|L32×64|6|4..8|$1.069628\pm0.000909$|441.7955|3000/3000|
+|L32×96|7|5..9|$0.993866\pm0.001512$|176.9725|3000/3000|
+
+两行的 $Q$ 均数值下溢为 0，不能采用；其他许多伴随窗口因平均圈非正或样本不完整而
+失败。不能用 $d_A=(C_A/C_F)d_F$ 替换这些缺失结果。
+
+|ensemble|全部组合|可辨识且有限中心|具有完整 3000 样本误差|
+|---|---:|---:|---:|
+|L32×64|420|164|106|
+|L32×96|420|148|106|
+
+这些是**数值覆盖计数**，不是物理验收通过数；失败及不完整条目保留在完整结果表中。
+
+### 28.8 与 PDF 数字的比较，以及是否需要 small-flow-time 外推
+
+`Pion_DA.pdf` 第 17 页的单线记号为
+
+$$
+\log|\mathcal R|=\kappa\left(\frac1{\sqrt{t_f}}-
+\frac1{\sqrt{t_{f,r}}}\right)z+B(t_f),\qquad
+\kappa=-0.1165\pm0.0001.
+$$
+
+与本文正线质量约定 $m_{\mathrm{line},F}=d_F/\sqrt{8t_f}$ 对齐后，
+
+$$
+\boxed{\kappa=-\frac{d_F}{\sqrt8},\qquad
+d_F^{\rm PDF}=0.32951176\pm0.00028284.}
+$$
+
+故旧 $d_F=0.37413696$ 与 PDF 对齐后的中心差约为 13.5%，不能直接拿正的 $d_F$ 与
+负的 $-0.1165$ 比较而称差了三倍。旧候选上游 flow 拟合仍有
+$\chi^2/\mathrm{dof}=62.06299$；新 double ratio 也存在显著模型/几何依赖。
+L32×96 的 `flow_c` 数字接近 PDF，是**特定修正模型下的相容**，并不证明更换 ratio
+就无条件复现了开口线结果。PDF 数字只用于 convention 对齐的比较，没有作为拟合先验。
+
+本次不需要先将裸 Wilson loop 作 $t_f\to0$ 外推：提取的正是有限正 flow 窗内
+$1/\sqrt{t_f}$ 项的系数。应区分 Wilson 时间边的大时间极限与 flow 时间的零流极限。
+固定格距时 $t_f=0$ 仍受格点 cutoff 调节，不能把连续 $d_F/\sqrt{8t_f}$ 公式一直延伸到零。
+对目标未流化算符的受控处理仍需线自能减除、有限方案转换、固定物理正 flow 的连续极限
+及小流时间分析，见第 5–6 节。当前仅有分别拟合的两个格距，尚未完成这些极限。
+
+跨 flow 比值可消去 flow 无关的共同贡献，但有限-flow 相互作用未必相消；与 flow 无关
+的残余质量 $m_0$ 也会从差分中消失。因此本次 double ratio 没有确定第 27 节的
+$m_0^{\overline{\rm MS}}$，也没有完成端点转换或 LaMET matching。
+
+### 28.9 完整产物、图表阅读与验收证据
+
+本版根目录为
+`/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/`。
+以下链接全部指向已完成产物：
+
+- [README：估计量、窗口与统计契约](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/README.md)、[INTERPRETATION：结果解读](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/INTERPRETATION.md)、[RESULTS：自动汇总与预定示例](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/RESULTS.md)。
+- [L32×64 完整拟合 CSV](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/L32x64/fit_results.csv)、[L32×96 完整拟合 CSV](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/L32x96/fit_results.csv)。同目录的 `fit_results.json` 和 `fit_samples.npz` 保存窗口元数据及 `fitNNNN__center/__jk/__boot` 参数样本。
+- [较长距离拟合示例，6 页](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/figures/long_distance_fit_examples.pdf)：第 1–3 页依次为 L32×64 的 `fit0115/fit0135/fit0087`，第 4–6 页为 L32×96 的对应条目；**第 6 页对应 $d_F=0.32982\pm0.00450$**。
+- [两个 ensemble 的较短距离窗对照，2 页](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/figures/ensemble_comparison.pdf)。
+- [L32×64 窗口/模型扫描](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/L32x64/figures/02_d_window_scan.pdf)、[L32×96 窗口/模型扫描](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/L32x96/figures/02_d_window_scan.pdf)。各目录另含 `01_double_ratio_length_fits.pdf`、`03_fit_quality.pdf`、`04_reference_scan.pdf`。
+- [关键模型差的配对误差](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/selected_model_paired_differences.csv)；各 ensemble 的 `paired_sensitivity.csv`、`covariance_cut_sensitivity.csv` 保存更广的模型/窗口及删模阈值诊断。
+- [实际扫描与输出代码](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/code/run.py)、[估计量与相关拟合核心](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/code/core.py)、[输入核验和重采样](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/code/inputs.py)。
+- [统一完成回执](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/complete.json)、[补充图回执](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_double_ratio_L64_L96_20261110/selected_figures_complete.json)。`config.json`、`source_lock.json`、`finish_lock.json`、`submission.json` 记录配置、源代码冻结和作业链；各 ensemble 还有 `input_audit.json`、`tests.json`、`validation.json`、`report.json`。
+
+原拟合数组作业 `3963955` 的两项均已完成数值与图形输出，但 CPU 节点缺少 `pdfinfo`，
+停在最后的 PDF 检查。随后统一验收作业 **3963970** 直接回读已有参数与 PDF 页树并
+完成汇总，退出码 0；没有改变或重跑拟合。补充图作业 **3963983** 也已完成。
+数值验收通过包括周长/面积、符号/因子、样本轴、正值/秩守卫及独立 SVD 复核；
+它们不替代有限 $T_W$、flow 窗口和 cutoff 的物理控制。
+
+本节于 **2026-11-11（Asia/Shanghai）**根据冻结的 CSV/JSON、源码及完成回执归档；
+本次更新仅写入本文，没有新增拟合或重采样作业。原文备份、暂存全文及差异记录位于
+`/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/documentation_updates/double_ratio_20261111/`。
+
+
+## 29. Quark PDF 的空间差分：谱分解、能隙诊断与 L32×96 测试记录（2026-11-12 测试，2026-11-13 归档）
+
+### 29.1 本节用途及与前文线性发散的区别
+
+本节记录对 quark PDF 的 ratio 与 self ratio 沿 Wilson-line 长度做差分的方法，以及已完成的 **L32×96、unpolarized、connected、u-d、P=0,3,4,5** 数值测试。这里的“差分”是对插入算符的空间长度 \(z\) 作有限差分，目的包括研究矩阵元的局部形状、插入时间依赖和两态模型的有效能隙稳定性。它与第 28 节 Wilson-loop 的长度–flow double ratio 属于不同分析；本次没有抽取新的线性发散系数，也没有确定新的 \(k\)、\(\delta m\) 或有限残余质量。
+
+本节以现有代码、冻结的 NPZ/CSV、完成状态及验证回执为依据。数值测试日期为 **2026-11-12**，本文整理日期为 **2026-11-13（Asia/Shanghai）**。已完成的是裸斜率与有效参数诊断，未替换 all-stage 生产结果。以下新增的代数说明不代表额外运行过拟合。
+
+先概括本次结果：差分可以抵消部分共模噪声，但并不普遍改善能隙的可辨识性；单独拟合差分信号得到的能隙不能解释为相邻两个能隙之差；主窗口中非零动量的相邻点联合拟合存在显著绝对残差问题，目前不能据此声称物理能谱随 \(z\) 改变。
+
+### 29.2 谱分解：什么随空间长度变化，什么应当共享
+
+设源位于零时刻，汇位于 \(T\)，算符插入时刻为 \(\tau\)，前向矩阵元的源汇动量均为 \(P\)。在忽略本次窗口中未显式建模的绕行与反向传播项时，写成
+
+\[
+C_2(T;P)=\sum_n A_n(P)e^{-E_n(P)T},
+\]
+
+\[
+C_3(z,T,\tau;P)=\sum_{n,m}B_{nm}(z,P)
+ e^{-E_n(P)(T-\tau)}e^{-E_m(P)\tau}.
+\]
+
+对相同源汇内插算符、动量、投影和 smear，传播能量 \(E_n(P)\) 及源汇重叠因子不依赖插入长度 \(z\)。非局域算符的矩阵元 \(\langle n,P|O(z)|m,P\rangle\) 随 \(z\) 变化，因此 \(B_{nm}(z,P)\) 变化。同一个传播态的能量也不因取实部或虚部而改变。
+
+保留基态与一个激发态、除去基态传播因子后，定义
+
+\[
+F_z(T,\tau;\Delta_z)=M_z+A_z e^{-\Delta_z\tau}
+ +B_z e^{-\Delta_z(T-\tau)}+C_z e^{-\Delta_zT}.
+\]
+
+这里 \(M_z\) 是对应约定下的基态裸矩阵元；\(A_z,B_z\) 是两个方向的跃迁振幅；\(C_z\) 是激发态对角项的系数，不能将其直接当作未经归一化的原始 \(B_{11}\)。本次没有强制两个跃迁振幅相等。
+
+严格物理谱式中同一 \(P\) 的能隙应当共享。逐 \(z\) 放开的 \(\Delta_z\) 则是有限时间、多态被截断为两态后的**有效参数**：不同 \(z\) 对更高态的权重不同，会使有效参数发生漂移。观测到这种漂移不能直接解释为物理能级因插入算符长度而改变。
+
+本次使用的分母为
+
+\[
+R_z=\frac{F_z}{D_R},\qquad D_R(T)=1+r_2e^{-\Delta_2T},
+\]
+
+\[
+G_z=\frac{F_z}{M_0},\qquad
+S_z=\frac{G_z}{D_S},\qquad
+D_S(T,\tau)=\frac{F_0(T,\tau;\Delta_0)}{M_0}.
+\]
+
+\(R_z\) 对应 C3/C2；\(S_z\) 对应 C3/C3(0)。分母使用上游 C2 或局域 C3 拟合给出的形状，并在每个配对 bootstrap 中传播其参数涨落。本次不是重新同时拟合全部 C2 与所有 C3 的全局联合似然。因此后述 \(\chi^2\) 和 \(Q\) 应按此条件拟合约定理解。
+
+### 29.3 有限差分的定义、方向平均及长时间极限
+
+对固定 \(P,T,\tau\)，定义
+
+\[
+D_hX(z,T,\tau)=\frac{X(z+h,T,\tau)-X(z,T,\tau)}{h},
+\qquad h=a\ \text{或}\ 2a.
+\]
+
+图中将该量放在区间中点
+
+\[
+z_{\mathrm{mid}}=z+\frac h2.
+\]
+
+若矩阵元无量纲，空间斜率的单位为 \(\mathrm{fm}^{-1}\)。对光滑函数，在中点展开可得
+
+\[
+D_hX(z)=X'\!\left(z+\frac h2\right)
+ +\frac{h^2}{24}X'''\!\left(z+\frac h2\right)+O(h^4).
+\]
+
+因此 \(h=a\) 与 \(h=2a\) 是对不同宽度区间的斜率估计，其天然中点也不完全重合；比较时必须同时检查横坐标与区间宽度。这两种步长的测试不是连续极限外推。
+
+在每一个方向、尚未作实虚投影与平均之前，公共分母不依赖 \(z\)，有代数恒等式
+
+\[
+D_hR_z=\frac{C_3(z+h)-C_3(z)}{hC_2},\qquad
+D_hS_z=\frac{C_3(z+h)-C_3(z)}{hC_3(0)}.
+\]
+
+本项目此次保留上游估计量：**在各方向内构造 ratio，随后作偶实部/奇虚部投影与方向平均**，最后在相同 bootstrap 内差分。空间差分是线性操作，可以在保持相同方向、投影、权重与有效掩码时与这些线性操作交换；不能由此将估计量替换为“先平均 C3、C2，再相除”。上式也不意味着方向平均后的 ratio 等于方向平均 C3 与 C2 的比值。
+
+在 \(\tau\) 和 \(T-\tau\) 都足够大时，
+
+\[
+D_hR_z\longrightarrow\frac{M_{z+h}-M_z}{h},
+\qquad
+D_hS_z\longrightarrow\frac{M_{z+h}/M_0-M_z/M_0}{h}.
+\]
+
+为比较相同的归一化形状，本次汇总图将 ratio 的裸斜率再除以同一 bootstrap 的 \(M_0\)。原始未归一化斜率仍完整保存。self 在局域点为一是代数归一化，不能据此断言所用局域流严格守恒、裸局域荷已经等于一，或跃迁污染已消失。
+
+### 29.4 共用能隙时差分模型的推导
+
+如果相邻两个长度共用同一个能隙 \(\Delta\)，则两态模型在差分下闭合。例如 ratio 满足
+
+\[
+D_hR_z=\frac{D_hM_z+D_hA_z e^{-\Delta\tau}
+ +D_hB_z e^{-\Delta(T-\tau)}+D_hC_z e^{-\Delta T}}{D_R(T)}.
+\]
+
+对 self，将分子中的 \(M_z,A_z,B_z,C_z\) 换为除以 \(M_0\) 后的系数、分母换为 \(D_S\)，可得相同结构。故可以直接拟合差分信号，提取矩阵元斜率及差分后的跃迁振幅。
+
+这也说明共模抵消的代价：若相邻长度的激发态振幅相近，差分后的跃迁项会变小。信号更平坦可能来自物理污染被抵消，也可能使能隙更难辨认。较小的信号误差不自动等于较小或更可靠的能隙误差。
+
+### 29.5 独立有效能隙时为什么差分能隙不是能隙之差
+
+若相邻长度在截断拟合中分别使用 \(\Delta_z\) 和 \(\Delta_{z+h}\)，则其中一个跃迁项的差分为
+
+\[
+\frac{A_{z+h}e^{-\Delta_{z+h}\tau}
+      -A_ze^{-\Delta_z\tau}}{h}.
+\]
+
+它一般是两个指数的线性组合，不能改写成指数衰减率为 \(\Delta_{z+h}-\Delta_z\) 的单个指数。在连续记号下，
+
+\[
+\partial_z\!\left[A(z)e^{-\Delta(z)\tau}\right]
+=e^{-\Delta(z)\tau}
+ \left[A'(z)-\tau A(z)\Delta'(z)\right].
+\]
+
+另两个指数项相应出现 \((T-\tau)\Delta'(z)\) 或 \(T\Delta'(z)\) 的贡献。若仍用一个有效能隙 \(\Delta_D\) 拟合差分，其作用是近似这个复合时间结构，因此，\(\Delta_D\) 一般不等于 \(\Delta_{z+h}-\Delta_z\)，后者必须通过相邻原始信号的双能隙联合拟合及配对相减来研究。
+
+本次还比较了两个操作次序：先差分信号再拟合，以及先逐点拟合再差分矩阵元。定义
+
+\[
+\delta dM_z=dM_z^{\mathrm{difference\ then\ fit}}
+ -\frac{M_{z+h}^{\mathrm{separate\ fits}}-M_z^{\mathrm{separate\ fits}}}{h}.
+\]
+
+由于两个次序使用的截断模型并非总是等价，结果不必相同。此比较是模型与窗口诊断，不能把两组高度相关的结果当作独立测量再平均以缩小误差。
+
+### 29.6 self 在局域端点的精确恒等项
+
+对于 self，有
+
+\[
+S_0=1,\qquad
+D_hS_0=\frac{S_h-1}{h}=\frac{G_h}{hD_S}-\frac1h.
+\]
+
+因此模型中包含一个已知的实部偏移量 \(-1/h\)，虚部偏移为零。若用 \(q_0\) 表示拟合分子常数项，则
+
+\[
+q_0=\frac{M_h}{hM_0},\qquad
+(D_hS_0)_{\mathrm{ground}}=q_0-\frac1h.
+\]
+
+实现中先从数据减去已知偏移，再拟合，最后在报告基态斜率时加入该偏移。精确恒等式没有统计涨落，不能作为一个具有自由能隙与独立激发态振幅的局域信号加入双能隙似然，否则会制造不可辨识参数或零模。
+
+本次四个动量、两个 cut 合计 **8 组 self 的相邻区间 [0,1]** 保存为 `unavailable`，原因是局域恒等式不能约束第二个能隙。其差分信号与矩阵元斜率仍有计算；“双能隙联合拟合不适用”不等于该区间数据遗漏。
+
+### 29.7 配对 bootstrap、协方差与信息量
+
+所有相关量复用同一组态顺序和 bootstrap 索引。在每个 replica 内构造
+
+\[
+D_hX^{(b)}=\frac{X_{z+h}^{(b)}-X_z^{(b)}}h,
+\]
+
+并由这些差分样本直接计算误差与完整协方差。标量情况下有
+
+\[
+\operatorname{Var}(D_hX)=\frac{\operatorname{Var}(X_{z+h})+
+ \operatorname{Var}(X_z)-2\operatorname{Cov}(X_{z+h},X_z)}{h^2}.
+\]
+
+忽略协方差会丢失相邻长度的共模抵消；误差也不能在线性相加后解释为配对误差。bootstrap 误差是 replica 分布的标准差，不再除以 \(\sqrt{N_{\mathrm{boot}}}\)。ratio 的归一化斜率及两种拟合次序之差都在同一 replica 内计算。
+
+将差分记为线性映射 \(d=Ly\)，则
+
+\[
+C_d=LC_yL^T.
+\]
+
+原始信号与其全部确定性差分同时进入似然会引入精确线性依赖，不能增加独立信息。本次相邻点联合拟合只堆叠两个原始信号，保留跨长度、跨时间和实虚部的相关性。
+
+若使用“一个锚点加全部差分”替换原始数据，这个完整变换可逆；在没有截断或正则化、协方差及模型均一致变换时，Gaussian 相关 \(\chi^2\) 保持不变。只保留差分会丢失共同常数模；使用不同的截断模型或 SVD 删除模式后，也不能再要求拟合结果严格不变。因此差分本身不是额外统计信息。
+
+### 29.8 固定汇时间再作插入时间差：跃迁污染诊断
+
+对每个 \(T\)，取最靠近 \(T/2\) 的合法插入点 \(\tau_0\)，定义
+
+\[
+K_h(z;T,\tau)=D_hR(z,T,\tau)-D_hR(z,T,\tau_0).
+\]
+
+在共用能隙的 ratio 模型下，
+
+\[
+K_h=\frac{D_hA_z\left(e^{-\Delta\tau}-e^{-\Delta\tau_0}\right)
++D_hB_z\left(e^{-\Delta(T-\tau)}-e^{-\Delta(T-\tau_0)}\right)}{D_R(T)}.
+\]
+
+基态项和激发态对角项在固定 \(T\) 下均与 \(\tau\) 无关，故被抵消。即使相邻点有效能隙不同，各自的基态与对角项仍会抵消，只是剩下更多跃迁指数。该构造检查的是相邻长度差中尚可分辨的插入时间依赖；它也可能抵消两个长度共同存在的污染，不能证明每个原始信号都已隔离基态。
+
+self 的 \(D_S(T,\tau)\) 自身依赖插入时间，因此普通 \(K_h\) 不具有同样的纯跃迁抵消解释。若未来要先乘回 \(D_S\) 再作诊断，必须重新传播局域分母的不确定度并标注模型依赖；本次没有新增这种分析。
+
+本次保存两种方法的时间差数组，但主跃迁诊断图只画 ratio。检验零假设时保留完整配对协方差，并排除恒等为零的参考点 \(\tau=\tau_0\)。没有拟合自由参数时，自由度为实际保留模式数。通过零假设只表示在当前精度和窗口内没有分辨出该时间依赖，不是所有激发态污染消失的证明。
+
+### 29.9 相邻长度的共用与独立能隙联合拟合
+
+为了直接研究两个有效能隙是否不同，使用同一数据向量
+
+\[
+y=\big[X(z),X(z+a)\big]
+\]
+
+及其完整协方差，比较
+
+\[
+H_{\mathrm{shared}}:\ \Delta_L=\Delta_R=\Delta,
+\qquad
+H_{\mathrm{independent}}:\ \Delta_L,\Delta_R\ \text{分别拟合}.
+\]
+
+每个长度的四个振幅独立。同一个长度的实部和虚部共用能隙，两个模型使用完全相同的 whitening 矩阵。独立模型多一个自由参数。在该约定下，
+
+\[
+\delta\chi^2=\chi^2_{\mathrm{shared}}-\chi^2_{\mathrm{independent}},
+\qquad
+\mathrm{AIC}_{\mathrm{independent}}-\mathrm{AIC}_{\mathrm{shared}}
+=2-\delta\chi^2.
+\]
+
+能隙差及其误差从配对样本得到：
+
+\[
+\delta\Delta^{(b)}=\Delta_R^{(b)}-\Delta_L^{(b)},\qquad
+\sigma_{\delta\Delta}=\operatorname{SD}_b(\delta\Delta^{(b)}).
+\]
+
+这里的差不是再除以空间步长的导数；如需有效能隙的差商，还应除以 \(a\)，并明确能量与长度单位。
+
+将 \(\delta\chi^2\) 代入一自由度卡方分布的尾概率仅作条件诊断，本次未作 bootstrap 检验分布校准和全长度多重检验校正。若绝对拟合质量未通过，较大的相对改善或若干倍误差的能隙差都不足以验证独立能隙模型。
+
+### 29.10 本次数据、窗口、协方差与质量门
+
+| 项目 | 实际采用的设置 |
+|---|---|
+| 体系与通道 | L32×96，unpolarized connected u-d |
+| 动量 | \(P=0,3,4,5\)，为项目的格点动量编号 |
+| 长度 | \(z/a=0,\ldots,20\) |
+| 格距 | \(a=0.0775\,\mathrm{fm}\) |
+| 重采样 | 194 个组态；2000 组 iid configuration bootstrap；seed=1115；每次抽样大小 194 |
+| 差分步长 | \(h=a,2a\)，分别为每种方法的 20、19 个区间 |
+| 汇时间 | 请求 \(T/a=5,\ldots,12\)；\(P=5\) 的最大值为 11，上游共同分母门排除了 12 |
+| 插入窗 | 主诊断 cut=2；窗口检查 cut=3；左右均切除相应端点，cut=3 下最小合法 \(T/a=6\) |
+| 复数分量 | \(P=0\) 所有长度只拟合实部；非零动量的局域精确零虚部不进入似然，其他长度联合实虚部 |
+| 能隙范围 | \(\ln(a\Delta)\in[-6,1.5]\)；无 gap 先验 |
+| 工作范围 | 早时间两态诊断，未使用此前平台生产的 \(T_{\min}=0.8\,\mathrm{fm}\) 门限 |
+
+协方差使用原始 bootstrap covariance，不采用 shrinkage。令 \(D\) 为逐分量标准差组成的对角阵，在相关矩阵上做硬删模：
+
+\[
+\rho=D^{-1}CD^{-1}=U\operatorname{diag}(\lambda_k)U^T,
+\qquad K=\{k:\lambda_k>10^{-8}\lambda_{\max}\},
+\]
+
+\[
+W=\operatorname{diag}(\lambda_K^{-1/2})U_K^TD^{-1},
+\qquad
+\chi^2=\lVert W(y-f)\rVert^2,
+\qquad
+\mathrm{dof}=N_{\mathrm{retained}}-N_{\mathrm{parameters}}.
+\]
+
+此处阈值虽保存为正数，其实际操作是删除小相关本征模，按 `gvar` 的符号习惯相当于负 `svdcut` 的硬截断；不是把小本征值抬升到阈值。原始 sample rank 使用相对阈值 \(10^{-10}\)，并以 \(194-1=193\) 为上限；effective rank 是实际保留模式数。所有 replica 使用同一点的固定 \(W\)，同时传播各自的配对分母参数。
+
+接受状态结合以下相互独立的要求：
+
+- 残差门：\(\chi^2/\mathrm{dof}<1000\)、\(Q>10^{-6}\)，有限 bootstrap 参数比例至少 90%。另存 \(\chi^2/N_{\mathrm{data}}\)，二者分母不同。
+- 信息与模型秩：sample rank 至少等于参数数，effective rank 严格大于参数数，局部完整 Jacobian 满秩。
+- 单有效能隙稳定：中心解不在边界、\(\chi^2_{\min}+1\) 轮廓在两侧闭合，至少 90% replica 满秩且非边界。
+- 独立双能隙稳定：中心满秩且非边界，至少 90% replica 满秩、非边界并满足记录的投影梯度驻点门。本次没有计算完整二维轮廓置信区间。
+
+一能隙使用粗网格和多盆地细化；双能隙中心值使用二维网格及多起点优化，bootstrap 使用二维网格、已有逐点解与共享解等起点及 variable projection。数值搜索和驻点检查不构成所有退化情形的全局最优证明。
+
+主阈值下 624 个差分拟合与 312 组联合数据均未删模。但相邻点联合最多有 176 个数据分量，而独立组态仅 194 个；满秩并不能排除逆协方差估计噪声。2000 个 bootstrap 不是 2000 个独立组态。
+
+### 29.11 差分矩阵元的实际结果与误差解释
+
+共完成 **624 个差分拟合**，每个保留 2000 组配对 bootstrap。cut=2 主窗口通过全部声明质量门的区间数如下：
+
+| \(P\) | ratio，\(h=a\) | self，\(h=a\) | ratio，\(h=2a\) | self，\(h=2a\) |
+|---|---:|---:|---:|---:|
+| 0 | 15/20 | 15/20 | 14/19 | 14/19 |
+| 3 | 10/20 | 10/20 | 10/19 | 9/19 |
+| 4 | 6/20 | 6/20 | 11/19 | 11/19 |
+| 5 | 2/20 | 3/20 | 5/19 | 5/19 |
+
+可见差分不是对每个长度都稳定的提取方案。尤其非零动量的部分区间，跃迁振幅相减后对能隙的约束变弱，出现边界、退化或长尾。即使通过既定 90% 稳定门，剩余尾部仍可能显著影响标准差。因此同时保存完整误差棒和固定显示范围的 zoom 图；zoom 只改变显示范围，没有修改保存数据或接受条件。
+
+以 \(P=3\)、cut=2、\([z/a,(z+h)/a]=[5,6]\) 的实部为例：
+
+| 方法 | 先差分后拟合 \((\mathrm{fm}^{-1})\) | 先逐点拟合后差分 \((\mathrm{fm}^{-1})\) | 两种次序的配对差异 |
+|---|---:|---:|---:|
+| ratio，原始裸斜率 | -1.64264 | -1.78355 | 约 3.23 个配对标准差 |
+| self，局域归一化斜率 | -1.40119 | -1.51711 | 约 3.16 个配对标准差 |
+
+这些是各方法内部两种操作次序的比较，ratio 与 self 两行的归一化不同，不能直接以两行的数值差判断方法不一致。两种次序在此例均通过各自声明的门，但截断模型不同，故仍存在可分辨的模型依赖。
+
+固定 \(T\) 的 ratio 跃迁差 \(K_h\) 在 cut=2、\(h=a\) 下，\(P=0,3,4,5\) 分别有 **0/20、7/20、3/20、0/20** 个区间未通过零时间依赖的质量门。较少拒绝次数可以来自污染抵消或检验精度不足，不能据此把 \(P=5\) 解释为比其他动量更干净。
+
+### 29.12 相邻点联合结果：能隙差必须与绝对质量一起读
+
+共有 312 组可拟合的相邻原始信号，每组分别运行共享和独立能隙模型，即额外 624 个拟合。两类合计 **1248 个实际拟合**；8 个局域 self 区间的 unavailable 状态不计作实际双能隙拟合。
+
+下表为通过全部质量门的“共享/独立”区间数：
+
+| \(P\) | cut=2 ratio | cut=2 self | cut=3 ratio | cut=3 self |
+|---|---:|---:|---:|---:|
+| 0 | 10/20，10/20 | 9/19，9/19 | 19/20，18/20 | 18/19，17/19 |
+| 3 | 0/20，0/20 | 0/19，0/19 | 5/20，5/20 | 4/19，4/19 |
+| 4 | 0/20，0/20 | 0/19，0/19 | 5/20，3/20 | 5/19，3/19 |
+| 5 | 0/20，0/20 | 0/19，0/19 | 2/20，0/20 | 1/19，0/19 |
+
+cut=2 中的非零动量有些能隙在数值上可以稳定优化，但绝对残差和 \(Q\) 不合格。cut=3 改善了部分区间，说明时间窗依赖必须保留；不能逐点挑选最好看的 cut 来拼接结论。
+
+下面列出 ratio 的代表区间。能隙差和配对标准差均采用格点单位，即表中报告 \(a\Delta_R-a\Delta_L\)。最后一列是独立模型的全部接受状态：
+
+| \(P\) | \(z/a\) 区间 | cut | 共享 \(\chi^2/\mathrm{dof}\) | 独立 \(\chi^2/\mathrm{dof}\) | \(a\Delta_R-a\Delta_L\) | 配对 SD | 独立模型接受 |
+|---|---|---:|---:|---:|---:|---:|---|
+| 0 | [5,6] | 2 | 2.502 | 2.522 | -0.00344 | 0.00339 | 否 |
+| 0 | [5,6] | 3 | 1.444 | 1.401 | +0.01898 | 0.01021 | 是 |
+| 3 | [5,6] | 2 | 4.575 | 4.602 | +0.00238 | 0.00479 | 否 |
+| 3 | [5,6] | 3 | 1.798 | 1.813 | +0.01249 | 0.02164 | 是 |
+| 4 | [9,10] | 2 | 4.877 | 4.728 | +0.21333 | 0.04936 | 否 |
+| 4 | [9,10] | 3 | 1.626 | 1.641 | +0.09982 | 0.34431 | 是 |
+| 5 | [3,4] | 2 | 2.034 | 2.050 | +0.02335 | 0.08612 | 否 |
+| 5 | [3,4] | 3 | 1.423 | 1.439 | +1.45493 | 1.54234 | 否 |
+
+其中 \(P=4\)、cut=2 的例子表面上有较显著的能隙差，且
+
+\[
+\delta\chi^2\simeq28.33.
+\]
+
+但两模型在该窗口的绝对质量不通过，cut=3 后误差明显扩大，故不能把该点升级为物理谱随长度变化的证据。独立模型的总 \(\chi^2\) 可以降低，同时因少一个自由度而使 \(\chi^2/\mathrm{dof}\) 略升；这不是嵌套模型矛盾。
+
+如需物理能量单位，使用
+
+\[
+\Delta[\mathrm{GeV}]=(a\Delta)\frac{0.1973269804\,\mathrm{GeV\,fm}}
+ {0.0775\,\mathrm{fm}}.
+\]
+
+### 29.13 SVD 敏感性及本次能回答到哪一步
+
+对预先固定的代表区间：\(P=0\) 的 [5,6]、\(P=3\) 的 [5,6]、\(P=4\) 的 [9,10]、\(P=5\) 的 [3,4]，分别检查两个 cut、两个方法和三个相对阈值
+
+\[
+10^{-8},\quad10^{-4},\quad10^{-3}.
+\]
+
+共得到 48 行**仅中心值重新优化**结果，没有重做 bootstrap，不能赋予新中心值新的误差，也没有据此改变生产阈值。
+
+在 cut=2 的代表 ratio 区间，将阈值改为 \(10^{-3}\) 时：
+
+| \(P\) | 删除模式数 | 独立模型 \(\chi^2/\mathrm{dof}\) 的变化 |
+|---|---:|---|
+| 0 | 26 | 约 2.522 降至 1.026 |
+| 3 | 9 | 约 4.602 降至 2.616 |
+| 4 | 3 | 约 4.728 降至 4.085 |
+| 5 | 0 | 不变 |
+
+代表数据在 \(10^{-4}\) 时没有删模。由此可见，较大的联合残差可能同时受有限组态的逆协方差噪声、跨长度模型张力、早时间窗口及更高态影响；不能统一归因于其中一个原因，更不能通过调阈值来追求合格 \(Q\)。
+
+目前可支持的结论是：差分能用于检视局部形状、共模抵消与跃迁时间依赖；本次没有证据支持它普遍提高能隙提取质量。若继续研究有效能隙随长度的稳定性，应先固定统一的候选窗口及 covariance 敏感性方案，检查绝对质量与参数可辨识性，再讨论能隙差；这属于后续工作，本节没有追加新拟合。
+
+### 29.14 裸空间斜率与重整化空间斜率的关系
+
+假设采用的乘性重整化约定是
+
+\[
+M_R(z)=\frac{M_B(z)}{Z_R(z)}.
+\]
+
+则
+
+\[
+\partial_zM_R(z)=\frac1{Z_R(z)}
+ \left[\partial_zM_B(z)-M_B(z)\partial_z\ln Z_R(z)\right].
+\]
+
+有限差分对应
+
+\[
+D_hM_R(z)=\frac{M_B(z+h)/Z_R(z+h)-M_B(z)/Z_R(z)}h,
+\]
+
+一般不等于先求裸斜率再除以一个端点的 \(Z_R\)。\(z=0\) 的局域归一化也不会自动消除非局域 Wilson line 随长度变化的线性质量和端点对数效应。
+
+因此本次差分的对象仍是裸信号；要比较重整化后的空间形状，需要对每个端点施加一致的重整化方案并传播相关误差。本次差分结果不构成对前文 Wilson-loop 线质量提取的替代，也没有提供新的线性发散系数。
+
+### 29.15 代码、数据格式、图表与复查入口
+
+代码根目录：
+
+`/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/Z_Difference_L32x96_UnpolUD_20261112/`
+
+结果根目录：
+
+`/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/`
+
+上游逐长度实虚共能隙结果：
+
+`/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/two_state_svd_jointRI_L32x96_unpolarized_ud_P0345_N2000_20261112/`
+
+| 文件或目录 | 内容与读取约定 |
+|---|---|
+| `README.md` | 测试方案、推导、参数约定、复现命令和结果汇总 |
+| `bootstrap_manifest.npz` | `confs` 形状 `(194,)`；`boot_indices` 形状 `(2000,194)`；次数、种子、抽样大小 |
+| `difference_fits/P*_cut*/{ratio,self}_hH_zLL_RR.npz` | 差分数据、协方差、单有效能隙模型、斜率及逐 replica 比较 |
+| `pair_fits/P*_cut*/{ratio,self}_zLL_RR.npz` | 同一相邻数据的独立模型和带 `shared_` 前缀的共享模型；共享跨长度 covariance |
+| `self_z00_01.unavailable.json` | 局域 self 恒等式不能辨识第二个能隙的明确状态 |
+| `difference_matrix_elements.csv` | 1092 行；按动量、cut、方法、步长、区间、分量保存原始/归一化斜率、配对差、拟合状态 |
+| `neighbor_joint_matrix_elements.csv` | 546 行；从相邻原始信号联合拟合导出的归一化矩阵元斜率及配对误差 |
+| `neighbor_gap_comparison.csv` | 312 行；两端能隙、配对能隙差、共享能隙、绝对质量、相对模型比较和稳定性 |
+| `transition_zero_tests.csv` | 624 行；固定汇时间的插入时间差零检验；self 不作纯跃迁解释 |
+| `representative_covariance_sensitivity.csv` | 48 行；三个 SVD 阈值下的中心值敏感性；`bootstrap_refitted=False` |
+| `source_hashes.json`、`provenance.json` | 来源哈希和统一数据/窗口设置 |
+| `summary.json`、`delivery_status.json` | 完成状态、计数和源码 SHA256 |
+| `validation_differences.json`、`validation_pairs.json` | 实际数据、协方差、拟合量和配对差的数值验收 |
+| `stationarity_audit.json` | 所选双能隙解的梯度驻点状态复核 |
+| `plots/` | 合计 35 个 PDF，包括 8 本全区间差分信号图 |
+
+差分 NPZ 的 `parameters` 长度为 \(4N_{\mathrm{component}}+1\)，最后一项是 \(a\Delta_D\)；`parameters_boot` 形状为 `(2000,Nparameter)`。`ground_slope`、`previous_ground_slope` 的分量轴分别对应保存的实虚分量；各自 `_boot` 的形状为 `(2000,Ncomponent)`，斜率单位为每 fm。`data_original`、`data_sd` 是按实数分量堆叠的数据轴；`coordinates_T`、`coordinates_tau` 是单分量时间坐标。`model_offset` 保存局域 self 的已知偏移，`temporal_difference_*` 保存时间差及标准差。
+
+联合 NPZ 的 `parameters` 最后两项依次为 \(a\Delta_L,a\Delta_R\)，前面按 `component_owners` 顺序保存每个分量的四个振幅；`shared_parameters` 最后一项为共用 \(a\Delta\)。`delta_gap_boot` 形状为 `(2000,)`，是每个 replica 两端能隙直接相减。输入大体积信号不重复复制，可由 `source_paths` 和 `source_sha256` 找到同一来源。每个拟合另有 `.sources.json` 记录源码及产物哈希。
+
+建议按下列顺序读图；下列链接均指向本次冻结产物：
+
+1. [主窗口一步差分矩阵元斜率：zoom](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/matrix_slopes_h1_cut2_zoom.pdf)，并同时核对[完整误差棒](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/matrix_slopes_h1_cut2.pdf)。
+2. [两步差分斜率](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/matrix_slopes_h2_cut2_zoom.pdf)与[差分拟合质量](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/difference_chi2_h1_cut2.pdf)。
+3. [P=3 一步差分的全长度信号及拟合](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/signals_P3_h1_cut2.pdf)；其他动量和步长对应 `signals_P*_h*_cut2.pdf`。
+4. [主窗口相邻能隙差](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/neighbor_gap_difference_cut2.pdf)与[共享/独立模型绝对质量](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/neighbor_model_chi2_cut2.pdf)。
+5. [cut=3 能隙差](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/neighbor_gap_difference_cut3.pdf)与[cut=3 绝对质量](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/neighbor_model_chi2_cut3.pdf)，查看窗口漂移。
+6. [协方差谱](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/neighbor_covariance_spectrum.pdf)、[相对模型改善](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/neighbor_nested_delta_chi2_cut2.pdf)和[P=3 跃迁时间差诊断](/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/artifacts/z_difference_L32x96_unpolarized_ud_P0345_N2000_20261112/plots/ratio_transition_diagnostic_P3_h1.pdf)。
+
+### 29.16 验收记录与归档范围
+
+本次文档更新核对了 `delivery_status.json` 的 `complete_validated_z_difference_diagnostic` 状态及以下原分析验收回执：
+
+- 差分验收通过，实际核验 624 个拟合及 2000 个 bootstrap，包含原始差分、covariance、选定 replica 的 \(\chi^2\)、配对参数差，以及 16 个局域 self 偏移等价性检查。
+- 相邻点验收通过，312 组数据、624 个模型拟合；共享与独立模型使用同一 covariance；配对能隙差可重建；所有 bootstrap 的最大嵌套 \(\chi^2\) 违例为零；另有 4 个中心值的独立非线性核对。
+- 双盆地优化交付前曾发现驻点指标使用了另一候选盆地的曲率作尺度。随后对所有 312 组保存解重新计算同一解的梯度和曲率，仅更新驻点、可辨识与接受状态，拟合参数及 \(\chi^2\) 未改变；最终统计和图片采用复核后状态。
+- 结果目录包含 35 个 PDF。数值验证和既有图表验收属于原测试记录；本次仅整理和核对既有产物，未重新提交分析任务。
+
+本次追加保留第 1–28 节的原始字节内容。更新前备份、新增章节、暂存全文、差异与文档核验记录保存于：
+
+`/public/group/lqcd/donghx/Diagram_GluonPDF/Fit_SKILL/documentation_updates/z_difference_20261113/`
+
+归档后的使用原则是：矩阵元斜率、跃迁时间差和有效能隙差分别回答不同问题；所有数值解释均应同时读取拟合质量、可辨识性、窗口与 covariance 敏感性。该测试仍属于裸矩阵元诊断，尚未由差分建立受控的物理能谱长度依赖。

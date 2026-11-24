@@ -22,4 +22,4 @@ For each diagram, record `result_indx`, `result_sign`, peram pairs, V type/time,
 
 ## Equivalent diagrams and boundaries
 
-The defaults are `use_equivalence=False` and `ignore_dis=False`. Before enabling equivalent diagrams, prove that gamma-transpose signs, VVV permutations, topology, time direction, and output axes are identical. The antiperiodic sign is determined by the actual number of fermion lines crossing the temporal boundary and is applied exactly once. Preserve the complex correlator unless a projection proves that its real or imaginary part may be taken.
+For new observables start with `use_equivalence=False` and `ignore_dis=False`. For reference reproduction retain its explicit flags and report any unsupported assumptions instead of silently resetting them. Before enabling equivalent diagrams, prove that gamma-transpose signs, VVV permutations, topology, time direction, and output axes are identical. The antiperiodic sign is determined by the actual number of fermion lines crossing the temporal boundary and is applied exactly once. Preserve the complex correlator unless a projection proves that its real or imaginary part may be taken.

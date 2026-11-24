@@ -3,8 +3,6 @@
 # 输出: NumPy 复数 gamma 矩阵, 或矩阵非零元的 value,row,col
 # 基变换: $\gamma^{(DP)} = S^\dagger \gamma^{(DR)} S$
 
-import sys
-
 import numpy as np
 
 # identity
@@ -46,6 +44,7 @@ g5[3, 1] = -1.0
 s = (-g2 + np.matmul(g1, g3)) / np.sqrt(2.0)
 s_dagger = np.transpose(np.conj(s))
 
+
 def gamma(i):
     """按编号返回 DP 基下的 gamma 矩阵."""
     if i == 0:  # identity
@@ -85,8 +84,7 @@ def gamma(i):
     elif i == 17:  # negative parity projection
         return 0.5 * (g0 - g4)
     else:
-        print("wrong gamma index")
-        sys.exit(-3)
+        raise ValueError("wrong gamma index")
 
 
 def gamma_index(g):
