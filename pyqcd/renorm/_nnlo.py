@@ -44,6 +44,14 @@
   时一圈乘 4、两圈乘 16）。
 - 短距 ``C₀^{NNLO}``：arXiv:2006.12370v3, Eq.(22)–(25)（``C₀ = iA(ω=0)/2``，
   ``ξ₄=0``）。
+
+ħc 约定
+-------
+本模块用 CODATA 的 ``ħc = HBARC_GEV_FM = 0.1973269804`` GeV·fm，与
+``_gradient_flow_quasi.GEV_FM = 5.067730716``（倒数 0.1973269805）一致。注意
+``_ensembles.fm_to_GeV = 0.197`` 是 zengch 遗留的两位有效数字约定，与 CODATA
+差 **0.166%**：把两者混用于同一个 ``L_f`` 会给出 0.17% 的系数偏移。引用本模块
+的结果时须写明所用 ħc。
 """
 from __future__ import annotations
 
