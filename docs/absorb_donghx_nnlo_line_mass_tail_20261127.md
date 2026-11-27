@@ -123,11 +123,13 @@ AIC、中点投影、GEVP 权重、色散模型比较）库内已有等价或更
 实测 3.36 s vs 上限 1.5 s×2），本次未触碰 `pyqcd/einsum` 与本项相关文件，改动后
 该失败**已不再出现**（属负载依赖的时序敏感项，登录节点并发高时偶发）。
 
-GPU 侧验证：已提交 Slurm 作业到 `gpu-debug`（唯一允许的 GPU 测试分区）：
-`sbatch data/tmp/gpu-contract.sbatch`（作业 `4057218`，`--gres=gpu:1 --mem=32G
---time=00:30:00`，只跑 `test_gpu_backend_consistency` /
-`test_gauge_observables_contracts` / `test_torch_backend_consistency`）。
-首次提交 `4057216` 因 `--mem=64G` 触发节点调度约束被撤回（未占用节点资源）。
+GPU 侧验证：本轮按用户决定**暂不要求**。曾提交 Slurm 作业到 `gpu-debug`（唯一允许的
+GPU 测试分区）：首版 `4057216`（`--mem=64G`）因节点调度约束无法起跑已撤回；缩到
+2 CPU / 8 GB 的 `4057224` 也长时间排队（`gpu-debug` 仅单节点 `gpu024`，被他人作业与
+预留占满），已 `scancel` **主动释放队列**，未占用任何计算节点资源。需要 GPU 证据时
+重新提交即可，日志脚本保留在 `data/tmp/gpu-contract.sbatch`（未跟踪）。
+因此 `test_gauge_observables_contracts` 与 `test_gpu_backend_consistency` 在登录节点
+仍因无 CUDA 驱动记为失败，属**未验证项**而非回归。
 
 ## 7. 服务器使用规范
 
@@ -140,9 +142,36 @@ GPU 侧验证：已提交 Slurm 作业到 `gpu-debug`（唯一允许的 GPU 测�
 
 ## 8. 后续步骤
 
-1. GPU 作业 `4057218` 完成后取日志，确认 2 项 GPU 契约转绿并记录到本文档。
+1. GPU 侧暂不要求（用户决定）：需要时 `sbatch data/tmp/gpu-contract.sbatch` 在
+   `gpu-debug` 上跑 `test_gpu_backend_consistency` / `test_gauge_observables_contracts` /
+   `test_torch_backend_consistency`，把结果补进本文档。
 2. 若要把两圈系数真正接入生产链（`hR_PDF` / `tmd_matching_hybrid`），需要新增
    `order=2` 分支与相应用户参数——本轮只提供系数代数，不改动既有 NLO 路径。
 3. 尾部解析式接入 `hR_x` 需要在 `_hybrid.py` 增加"尾部分段 + 解析积分"路径，
    并同时更新 `pyqcd/testing/_renorm_numerical_guards_contract.py` 的复数通道断言。
 4. 提交与打标签按用户指令执行（`push` + `tag`），标签沿 `stab<N>` 递增。
+
+## 9. 追加修复：FH 前向差分的 np.roll 回绕（stab55）
+
+静态复核 `pyqcd/analysis/_fh.py` 时发现 `compute_fh` 的前向差分写成
+`fh = temp - np.roll(temp, 1, axis=1)`。`temp` 是 `S(t)=Σ_{τ=nex}^{t−nex}R(t,τ)`，
+**不是周期量**，`np.roll` 的循环边界把最大 `tsep` 的累加搬到第 0 行：
+
+| nex | 修复前 `FH(0)` | 正确定义值 |
+|---|---|---|
+| 0 | `−S(t_max)`（实测 −66…−73，R≈10） | `R(0,0)` ≈ 10 |
+| >0 | `−S(t_max)` | 0（空和） |
+
+影响面：默认 `FitParams.dt_start=0`，若窗口含 `t=0` 会把这一行当作常数拟合数据点。
+参考实现 `refer/huangcl/_0xxx/feyn_hell_tools.py:65` 是同一写法（同源缺陷），
+本库按定义式修正，不改 refer。
+
+修法：`S(−1)=0` 的显式零填充差分（`np.concatenate` 前置零行），并更正 docstring
+里写错的求和上限（原文 `t+1−nex`，实现是 `t−nex`）。新增
+`_fh_window_contract.FHForwardDifferenceContractTests` 三条断言：`nex=0` 的
+`FH(0)=R(0,0)`、`nex>0` 前导行严格为零、内点等于显式 `S(t)−S(t−1)`；
+`pyqcd/analysis/AGENTS.md` 记录该不变量。
+
+验证：`_fh_window_contract` 单跑 14 tests OK；全量 `python -B -m pyqcd.testing`
+158 passed / 2 skipped / 2 failed（两项仍为登录节点 CUDA 驱动）。交付：
+提交 `d50d5b6d`（代码+契约）与 `2b059de9`（文档），标签 `stab55` 已推送。
