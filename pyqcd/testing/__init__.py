@@ -2982,6 +2982,15 @@ def test_production_branch_wiring_contracts():
     run()
 
 
+def test_renorm_default_golden_contracts():
+    """stab56 默认路径的逐位黄金值：历史产物必须可复现。"""
+    from ._renorm_default_golden_contract import (
+        test_renorm_default_golden_contracts as run,
+    )
+
+    run()
+
+
 def test_analysis_safety_contracts():
     """Pz 标签、ratio 轴、复 meff、等价图和 helicity 参数安全门。"""
     from ._analysis_safety_contract import (

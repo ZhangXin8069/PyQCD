@@ -113,7 +113,8 @@ def analytic_tail_fourier(x_, C, B, eta, lambda_left, channel="cos"):
     因此 ``channel='cos'`` 返回 ``I_cos/π``、``'sin'`` 返回 ``I_sin/π``。
     ``C``、``B`` 可为复数（Hermitian 数据的实/虚部各带各自幅度）——此时必须
     同时取 ``A_+`` 与 ``A_−``，只用 ``A_+`` 的实部会丢掉虚部幅度贡献。
-    实 ``C,B`` 时两条路径给出同一实数，返回 ``float``；否则返回 ``complex``。
+    实 ``C,B`` 时走 ``Re(A_+)/Im(A_+)`` 的历史路径（与 `stab54` 逐位一致），
+    返回 ``float``；复幅度返回 ``complex``。
 
     ``η`` 与 ``λ_L`` 必须为实正数；``λ_L > 0`` 是硬要求（``E₁`` 在 0 处发散，
     与 ``B/λ`` 的非可积性对应）。``B=0`` 即 LA（纯指数尾），``B≠0`` 为 NLA。
@@ -125,25 +126,34 @@ def analytic_tail_fourier(x_, C, B, eta, lambda_left, channel="cos"):
     flat = np.atleast_1d(x_values).ravel()
     if not np.isfinite(flat).all():
         raise ValueError("x_ 必须是有限实数")
-    C = complex(C)
-    B = complex(B)
-    if not np.isfinite(C) or not np.isfinite(B):
+    if isinstance(C, (bool, np.bool_)) or isinstance(B, (bool, np.bool_)):
+        raise ValueError("C 与 B 不得为布尔值")
+    C_real = not np.iscomplexobj(np.asarray(C))
+    B_real = not np.iscomplexobj(np.asarray(B))
+    C_value = float(np.real(C)) if C_real else complex(C)
+    B_value = float(np.real(B)) if B_real else complex(B)
+    if not np.isfinite(C_value) or not np.isfinite(B_value):
         raise ValueError("C 与 B 必须是有限复数")
     eta_value = _positive("eta", eta)
     lambda_left = _positive("lambda_left", lambda_left)
-    a_plus = _tail_moment(flat, C, B, eta_value, lambda_left)
+    if C_real and B_real:
+        # 历史路径逐位保持：实幅度时 Re(A₊) 就是 cos 通道、Im(A₊) 就是 sin
+        # 通道，不走 (A₊±A₋)/2（后者差 1 ULP，会破坏历史产物的逐位复现）。
+        a_plus = _tail_moment(flat, C_value, B_value, eta_value, lambda_left)
+        out = ((np.real(a_plus) if channel == "cos" else np.imag(a_plus))
+               / pi).reshape(x_values.shape)
+        if scalar:
+            return float(out[()])
+        return out
+    a_plus = _tail_moment(flat, C_value, B_value, eta_value, lambda_left)
     s_minus = eta_value + 1j * flat
-    a_minus = (C * np.exp(-s_minus * lambda_left) / s_minus
-               + B * exp1(s_minus * lambda_left))
+    a_minus = (C_value * np.exp(-s_minus * lambda_left) / s_minus
+               + B_value * exp1(s_minus * lambda_left))
     value = (0.5 * (a_plus + a_minus) if channel == "cos"
              else (a_plus - a_minus) / (2.0j))
     out = (value / pi).reshape(x_values.shape)
-    if np.isclose(out.imag, 0.0, rtol=0.0, atol=1e-14 * max(
-            1.0, float(np.max(np.abs(out.real), initial=0.0)))).all():
-        out = out.real
     if scalar:
-        single = out[()]
-        return complex(single) if np.iscomplexobj(out) else float(single)
+        return complex(out[()])
     return out
 
 

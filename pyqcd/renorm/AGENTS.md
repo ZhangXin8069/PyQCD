@@ -66,3 +66,24 @@ arXiv:2006.12370v3 Eq.(22)–(25)。代码为独立实现，不 import refer。
 `~1e-6`，`0.33` 时 `~7e-7`，`0.2` 时 `~1e-4`，`0.1` 时 `~9e-4`；`check=True`
 用 184 节点自洽复核，超过 `check_tolerance=1e-3` 抛 `ArithmeticError`。
 `numpy.polynomial.laguerre.laggauss` 在 `n ≥ 192` 自身出现 0/0，故节点上限 96。
+
+## 默认路径冻结（历史产物可复现，stab58）
+
+`pyqcd.renorm` 四个入口的**默认路径是冻结的**，由
+`pyqcd/testing/_renorm_default_golden_contract.py` 用 `np.array_equal`
+（NaN 位置须一致）锁定 `stab56` 的全精度黄金值：
+
+| 入口 | 冻结值来源 |
+|---|---|
+| `hR_x`(cos / hermitian / `tail_model='none'`) | 3 点全精度数组 |
+| `hR_PDF`(默认 `alpha_s`) | 首尾 4+3 点 + 数组和 |
+| `match_one`(`endpoint_order=1`) | 前 6 个实部 + `nansum` |
+| `tmd_matching_hybrid`(`matching_order=1`) | 3 点全精度数组 |
+
+规则：
+1. 新能力只能是**可选参数**，默认值与默认分支不得改动；metadata 只许加键，
+   既有键的值不得变。
+2. `analytic_tail_fourier` 在**实** `C,B` 时走 `Re(A₊)/Im(A₊)` 的历史代数路径
+   （`(A₊±A₋)/2` 会差 1 ULP，已实测破坏逐位复现）；仅复幅度才走双通道。
+3. 本契约失败时只有两条路：撤回改动，或显式升版并重算全部下游产物。
+   不允许"看起来差不多"放行。
