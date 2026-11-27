@@ -58,7 +58,12 @@ def load_one_ratio(data_root: str, conf_short: str, P: int, dir: str) -> np.ndar
 
 def compute_fh(ratio: np.ndarray, save_path: str, nex: int = 0,
                verbose=True) -> np.ndarray:
-    """FH 变换：FH(t) = Σ_{τ=nex}^{t+1−nex} R(t+1,τ) − Σ_{τ=nex}^{t−nex} R(t,τ)。
+    """FH 变换：FH(t) = S(t) − S(t−1)，S(t) = Σ_{τ=nex}^{t−nex} R(t,τ)。
+
+    ``S(−1)`` 按空和取 0（``t−1 < 2·nex`` 时该行未被填充），因此
+    ``FH(0) = S(0)``：``nex=0`` 时等于 ``R(0,0)``，``nex>0`` 时为 0。
+    前向差分必须显式零填充，不能用 ``np.roll``——回绕会把最大 ``tsep`` 的累加
+    减到第 0 行，使 ``FH(0)`` 变成 ``−S(t_max)``（量级 ~t_max·R）。
 
     Returns
     -------
@@ -71,7 +76,9 @@ def compute_fh(ratio: np.ndarray, save_path: str, nex: int = 0,
     temp = np.zeros((Nsample, dtmax, Nz))
     for dt in range(2 * nex, dtmax):
         temp[:, dt] = ratio[:, dt, nex:dt - nex + 1, :].sum(axis=1)
-    fh = temp - np.roll(temp, 1, axis=1)
+    previous = np.concatenate(
+        (np.zeros((Nsample, 1, Nz), dtype=temp.dtype), temp[:, :-1]), axis=1)
+    fh = temp - previous
 
     if verbose:
         print(f"    FH shape: (Nsample, dt, z) = {fh.shape}")

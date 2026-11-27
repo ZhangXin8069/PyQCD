@@ -201,5 +201,68 @@ class FHAdaptiveWindowContractTests(unittest.TestCase):
             fh_adaptive_windows(delta, [6, 7, 8], 6, 7)
 
 
+class FHForwardDifferenceContractTests(unittest.TestCase):
+    """``compute_fh`` 的前向差分必须是零填充，不能靠 ``np.roll`` 回绕。"""
+
+    @staticmethod
+    def _ratio(nsample=3, dtmax=8, nz=1, seed=7):
+        rng = np.random.default_rng(seed)
+        ratio = np.zeros((nsample, dtmax, dtmax, nz))
+        for dt in range(dtmax):
+            for tau in range(dt + 1):
+                ratio[:, dt, tau, :] = rng.normal(10.0, 1.0, (nsample, nz))
+        return ratio
+
+    def test_nex_zero_first_row_is_the_tau_zero_slice(self):
+        """FH(0) = S(0) = R(0,0)；回绕会把它变成 −S(t_max)。"""
+        import tempfile
+        from pathlib import Path
+
+        from pyqcd.analysis import compute_fh
+
+        ratio = self._ratio()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fh = compute_fh(ratio, str(Path(tmpdir) / "fh.npy"), nex=0,
+                            verbose=False)
+        np.testing.assert_allclose(fh[:, 0], ratio[:, 0, 0], rtol=0.0,
+                                   atol=1.0e-12)
+        self.assertLess(float(np.max(np.abs(fh[:, 0]))), 20.0)
+
+    def test_nex_positive_leading_rows_are_zero_until_the_sum_starts(self):
+        """nex>0 时 t < 2·nex 的累加为空和，前向差分给 0 而不是回绕值。"""
+        import tempfile
+        from pathlib import Path
+
+        from pyqcd.analysis import compute_fh
+
+        ratio = self._ratio(seed=11)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fh = compute_fh(ratio, str(Path(tmpdir) / "fh.npy"), nex=1,
+                            verbose=False)
+        np.testing.assert_allclose(fh[:, :2], 0.0, rtol=0.0, atol=0.0)
+        np.testing.assert_allclose(fh[:, 2], ratio[:, 2, 1], rtol=0.0,
+                                   atol=1.0e-12)
+
+    def test_interior_rows_match_the_definition(self):
+        """t ≥ 2·nex 的行必须等于 S(t) − S(t−1) 的显式求和。"""
+        import tempfile
+        from pathlib import Path
+
+        from pyqcd.analysis import compute_fh
+
+        ratio = self._ratio(nsample=2, dtmax=7, nz=2, seed=13)
+        nex = 1
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fh = compute_fh(ratio, str(Path(tmpdir) / "fh.npy"), nex=nex,
+                            verbose=False)
+        for dt in range(2 * nex, ratio.shape[1]):
+            current = ratio[:, dt, nex:dt - nex + 1, :].sum(axis=1)
+            previous = (
+                ratio[:, dt - 1, nex:dt - 1 - nex + 1, :].sum(axis=1)
+                if dt - 1 >= 2 * nex else np.zeros_like(current))
+            np.testing.assert_allclose(fh[:, dt], current - previous,
+                                       rtol=0.0, atol=1.0e-12)
+
+
 if __name__ == '__main__':
     unittest.main()

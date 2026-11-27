@@ -2700,9 +2700,13 @@ def test_continuum_extrapolation_identifiability_contracts():
 
 def test_fh_adaptive_window_contracts():
     """FH 窗口须滑动至 chi2 达标或显式报告耗尽。"""
-    from ._fh_window_contract import FHAdaptiveWindowContractTests
+    from ._fh_window_contract import (
+        FHAdaptiveWindowContractTests,
+        FHForwardDifferenceContractTests,
+    )
 
     _run_unittest_contract(FHAdaptiveWindowContractTests)
+    _run_unittest_contract(FHForwardDifferenceContractTests)
 
 
 def test_matching_grid_contracts():
