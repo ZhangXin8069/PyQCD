@@ -1,0 +1,111 @@
+[日志元数据]
+日志类型: final
+生成时间: 2026-11-27 16:23:28 +0800
+批次: absorb-donghx-nnlo-20261127
+主任务: absorb refer NNLO/line-mass/tail + push/tag stab54
+触发原因: 任务完成
+摘要: 吸收 refer 新增的三项两圈/线质量/解析尾公式，新增 27 条契约；157 passed/18 skipped/3 failed（失败均为登录节点 GPU 驱动与 einsum 时序项）；push main 并打标签 stab54
+Git 根目录: /public/home/zhangxin/PyQCD
+
+## 关键日志
+### S1 — 盘点新增 refer 内容（absorb Step 1–3）
+- 目标: 判定 stab53..HEAD（50ddfebd、e1d96bfc）新增 refer 内容的可吸收项
+- 命令/操作: `python3 configure/skills/absorb/scripts/absorb_inventory.py --root . --base stab53 --scope commits --output data/runs/absorb/inventory-20261127.json`
+- 关键输出: candidate_count=400；by_top_group=donghx 323/huangcl 45/sush 32；binary 144、python 137、markdown 62、shell 55；风险 executable-bit 32、dynamic-execution 25、network-access 4、scan-truncated 1
+- 退出码: 0
+- 证据与判断: 全部 origin=likely-foreign；未执行任何外来代码，只做静态阅读
+
+### S2 — 本库覆盖盘点（两路只读调查）
+- 目标: 判断哪些算法库内已覆盖、哪些缺失
+- 命令/操作: 两个只读子代理并行调查 pyqcd 物理层（排除 einsum）与新增 refer 算法
+- 关键输出: 缺失项=两圈 NNLO 系数、流化 Wilson 线闭式核、LA/NLA 解析尾；已覆盖=replica-gated AIC、中点投影、逐 JK 真空减除、GEVP 权重
+- 退出码: 0
+- 证据与判断: `grep -iE "nnlo|two.?loop|cusp|exp1"` 在 pyqcd/ 命中 0，确认三项确为空白
+
+### S3 — 实现三模块 + 契约
+- 目标: 最小适配落地，不引入外部依赖
+- 命令/操作: 新增 `pyqcd/renorm/{_nnlo,_line_mass,_tail}.py` 与 `pyqcd/testing/_nnlo_line_mass_tail_contract.py`
+- 关键输出: 27 条断言全绿；`F(x)` 对 200 位 mpmath 参考全区间相对误差 ≤4e-15；解析尾对 quad 差 1.1e-16
+- 退出码: 0
+- 证据与判断: 公式逐条与文献数值对齐（26、85.3591794985557、30.92223469310622）
+
+### S4 — 全量回归（改动前/后）
+- 目标: 确认无回归
+- 命令/操作: `python -B -m pyqcd.testing`（改前/改后各一次）
+- 关键输出: 改前 156 passed/2 skipped/3 failed；改后 158 passed/2 skipped/2 failed；最终轮 157 passed/18 skipped/3 failed
+- 退出码: 1（失败项为登录节点 CUDA 驱动与 einsum 硬超时时序敏感项）
+- 证据与判断: 3 个失败均未触碰本次改动文件；单跑 einsum tune 契约 7 passed 反证为负载依赖
+
+### S5 — 交付
+- 目标: push + tag
+- 命令/操作: `git push origin main`；`git tag -a stab54`；`git push origin stab54`
+- 关键输出: main 50ddfebd..ee8dab82；stab54 新建成功
+- 退出码: 0
+- 证据与判断: 标签沿 stab 序列递增，前驱经 `git describe --tags --abbrev=0 ee8dab82^` 确认为 stab53
+
+## 验证与证据
+- 测试/检查: `pyqcd.testing._nnlo_line_mass_tail_contract`、`pyqcd.testing`、`test_docs_api_contracts`、`test_release_metadata_contracts`、`form-audit.sh`、`form-large-files-check.sh`、`git diff --check`
+- 结果: 27 tests OK；全量 157 passed/18 skipped/3 failed；两份契约 PASS；form PASS；大文件通过 9 个文件；diff --check 无输出
+- 未验证项: gpu-debug Slurm 作业 4057224 仍在排队（预计 16:59 启动），GPU 侧 2 项契约尚未取得运行证据
+
+## 变更与产物
+- 文件: pyqcd/renorm/_nnlo.py、_line_mass.py、_tail.py、__init__.py、AGENTS.md；pyqcd/testing/_nnlo_line_mass_tail_contract.py、__init__.py、conftest.py；docs/absorb_donghx_nnlo_line_mass_tail_20261127.md
+- 产物: 提交 ee8dab82、标签 stab54
+- 未改动范围: refer/ 全树、pyqcd/einsum/ 全部内容
+
+## 风险、限制与下一步
+- 风险: 两圈系数只提供代数层，尚未接入 hR_PDF/tmd_matching_hybrid 生产分支；尾部解析式尚未替换 hR_x 的 λ_max 截断路径
+- 阻塞: gpu-debug 分区单节点被他人作业与预留占满，本地 GPU 契约验证排队中
+- 下一步: 作业 4057224 完成后取日志确认 2 项 GPU 契约转绿；按需把 order=2 与解析尾接入生产链
+
+## 用户输入指令
+吸收增添的refer中的内容到本库相关部分,并检查本库代码(将本库的pyqcd.einsum标记为已经处于稳定发布阶段,除非用户明确明文要求修改pyqcd.einsum,否则不再改动pyqcd.einsum相关内容,并且现在开发对象主要是pyqcd中的与格点QCD直接相关的物理代码,默认不再自动发布pypi),确认无误后push~tag,注意服务器用户使用规范,不要占用过多登陆节点资源,不要浪费计算节点资源(当前只允许使用gpu-debug节点进行gpu代码测试)
+
+## Agent 全文报告
+--- report begin ---
+本轮把 stab53..HEAD 新增 refer 内容（400 个候选）逐项定级，只吸收库内确实空白的三项物理公式，其余按"已覆盖/仅参考/拒绝"给出证据化处置。
+
+改动内容
+- 新增 `pyqcd/renorm/_nnlo.py`：局域归一化 `D_Γ=ζ_Γ/C_ψ` 的严格展开（V/T 通道）、
+  胶子 `U/H/P` 端点系数与严格逆、短距 `C₀` 的 NLO/NNLO。
+- 新增 `pyqcd/renorm/_line_mass.py`：树级流化传播子的线自能闭式 `F(x)`（含小 x
+  Taylor 分支）、长距展开余项 `R_K`、H3 对数差模型与有限段差分、`d_eff`。
+- 新增 `pyqcd/renorm/_tail.py`：LA/NLA 长距尾 `(C+B/λ)e^{−ηλ}` 的解析 Fourier
+  （`E₁` 闭式）、单幅度 GLS、以及 `λ_max` 截断误差诊断。
+- 三个模块经 `pyqcd/renorm/__init__.py` 导出，`pyqcd/renorm/AGENTS.md` 记录不变量；
+  新增 `pyqcd/testing/_nnlo_line_mass_tail_contract.py`（27 断言）并注册。
+- 记录文档 `docs/absorb_donghx_nnlo_line_mass_tail_20261127.md`：400 个候选的
+  处置矩阵、拒收理由（三个 huangcl 脚本运行即报错）、物理推理与验证证据。
+
+推理依据
+- `a_s ≡ α_s/(4π)` 约定下 `D_V^{NLO}=1+a_s(4L_f+10/3)`，由 `j₁−n₁=C_F(3L_f+5/2)`
+  可得，实现逐点复现到 1e-16。
+- `L_f²` 系数 26 = `(f₁₁²+β₀f₁₁)/2`（`f₁₁=4`、`β₀=9`）是独立 RG 检查，已断言。
+- 两圈 ringed 常数在 `J₂−N₂` 相消，用 `{-50,0,100}` 三组常数验证 `a₂` 不变。
+- `C₀^{NNLO}` 前因子是 `α_s²/(2π²)`，与 `(α_s/2π)²` 差 2 倍，最易抄错，已用比值锁定。
+- `F(x)` 定义式在 `x≲3e-3` 有灾难性抵消，改用五阶 Taylor 分段，全区间相对误差 ≤4e-15
+  （对 200 位 mpmath 实测）。
+- H3 参数计数 `N_f+1`（`N_f−1` 个截距 + 共同 d、k₃），契约直接断言。
+- 解析尾 `q_tail=(1/π)Re[C e^{−sλ_L}/s+B E₁(sλ_L)]` 与直接求积一致到 1.1e-16。
+
+验证结果
+- 新契约 27 tests OK；全量 `python -B -m pyqcd.testing` 最终 157 passed/18 skipped/3 failed，
+  3 个失败为登录节点无 CUDA 驱动（`cudaErrorInsufficientDriver`，契约要求不得 skip）
+  与 einsum tune 硬超时的时序敏感项；单跑该 einsum 契约 7 passed，反证为负载依赖。
+  改动前后对比：156→158 passed，失败 3→2（内含新增 1 项 PASS 与基线偶发项转绿）。
+- `pyqcd/einsum` 全程零改动，未触碰其任何文件。
+- form 审计 PASS、大文件检查通过、`git diff --check` 无输出。
+
+服务器规范
+- 全部静态检查与单元测试在登录节点执行，限制 `OMP_NUM_THREADS=3`/`MKL_NUM_THREADS=3`，
+  单次全量回归 4–5 分钟；未在登录节点编译 CUDA/KUPL。
+- GPU 验证只提交 `gpu-debug`（30 分钟上限），未使用任何生产 GPU 分区；为不占位，先
+  `scancel` 了因 `--mem=64G` 无法调度的首版作业，改用 2 CPU / 8 GB / 显式 GPU 型号重提。
+- 作业 4057224 仍排队（预计 16:59 起跑）；GPU 侧证据待其完成后补记。
+
+后续步骤
+- 取 4057224 日志确认 `test_gpu_backend_consistency`、`test_gauge_observables_contracts`
+  在 A100 上转绿；把结果补进记录文档。
+- 两圈与解析尾尚未接入 `hR_PDF`/`tmd_matching_hybrid`/`hR_x` 的生产分支，需另起一轮
+  并同步更新现有的复数通道契约。
+--- report end ---

@@ -1237,3 +1237,12 @@
 - 关键内容: bump 0.5.18 并上传 sdist 刷新 PyPI 项目页；项目页验证课题组致谢且无人名；push main 与 stab52；沿用既有实现，无代码改动
 - 验证: path, size, required sections, conflict markers
 - 批次状态: complete
+## absorb-donghx-nnlo-20261127 - final - 2026-11-27 16:23:28 +0800
+- 主任务: absorb refer NNLO/line-mass/tail + push/tag stab54
+- 日志文件: logs/v2026112716.txt
+- 文件大小: 8161 bytes
+- 触发原因: 任务完成
+- 关键内容: 吸收 refer 新增的三项两圈/线质量/解析尾公式，新增 27 条契约；157 passed/18 skipped/3 failed（失败均为登录节点 GPU 驱动与 einsum 时序项）；push main 并打标签 stab54
+- 验证: path, size, required sections, conflict markers
+- 批次状态: complete
+
