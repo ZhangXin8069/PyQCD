@@ -115,6 +115,7 @@ from pyqcd.testing import (  # noqa: F401
     test_gradient_flow_quasi_policy_contracts,
     test_tmd_physical_contracts,
     test_bare_sumratio_contracts,
+    test_nnlo_line_mass_tail_contracts,
     test_analysis_safety_contracts,
     test_infra_safety_contracts,
     test_einsum_native_contracts,

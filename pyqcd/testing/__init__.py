@@ -2960,6 +2960,15 @@ def test_bare_sumratio_contracts():
     run()
 
 
+def test_nnlo_line_mass_tail_contracts():
+    """NNLO 有限转换、H3 线质量核与解析尾 Fourier 的数值契约。"""
+    from ._nnlo_line_mass_tail_contract import (
+        test_nnlo_line_mass_tail_contracts as run,
+    )
+
+    run()
+
+
 def test_analysis_safety_contracts():
     """Pz 标签、ratio 轴、复 meff、等价图和 helicity 参数安全门。"""
     from ._analysis_safety_contract import (

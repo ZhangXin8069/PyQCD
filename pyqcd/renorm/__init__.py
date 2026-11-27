@@ -22,6 +22,20 @@ from ._hybrid import (
 )
 from ._matching import hR_PDF, C_gluon_ratio, C, Si
 from ._extrapolate import hR_form, build_fit_data, fit_hR_PDF_extrap, fit_hR_PDF_extrap_boot
+from ._nnlo import (
+    flow_log, local_ratio_coefficients, local_ratio_factor,
+    gluon_endpoint_coefficients, gluon_endpoint_factor,
+    short_distance_c0, HBARC_GEV_FM,
+)
+from ._line_mass import (
+    flow_radius, one_loop_amplitude, line_mass_kernel,
+    line_mass_kernel_remainder, line_mass, effective_slope,
+    finite_segment_kernel, h3_log_difference,
+)
+from ._tail import (
+    tail_shape, tail_amplitude_fit, analytic_tail_fourier,
+    tail_fourier_continuum, abrupt_cutoff_error,
+)
 from ._gradient_flow import (
     wilson_flow, wilson_flow_step, flow_derivative, staple_6,
     wilson_action_density, flow_action_density, scale_setting_t0, proj_su3,
@@ -73,6 +87,15 @@ __all__ = [
     # 外推
     "hR_form", "build_fit_data", "fit_hR_PDF_extrap",
     "fit_hR_PDF_extrap_boot",
+    # 两圈有限转换 / 线质量核 / 解析尾
+    "flow_log", "local_ratio_coefficients", "local_ratio_factor",
+    "gluon_endpoint_coefficients", "gluon_endpoint_factor",
+    "short_distance_c0", "HBARC_GEV_FM",
+    "flow_radius", "one_loop_amplitude", "line_mass_kernel",
+    "line_mass_kernel_remainder", "line_mass", "effective_slope",
+    "finite_segment_kernel", "h3_log_difference",
+    "tail_shape", "tail_amplitude_fit", "analytic_tail_fourier",
+    "tail_fourier_continuum", "abrupt_cutoff_error",
     # 梯度流
     "wilson_flow", "wilson_flow_step", "flow_derivative", "staple_6",
     "wilson_action_density", "flow_action_density", "scale_setting_t0",
