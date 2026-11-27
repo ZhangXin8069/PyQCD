@@ -20,7 +20,7 @@ from comparison_data_tools import compare_data  # noqa: E402  # type: ignore
 peram_shape = (4, 4, 100, 100)
 gamma_shape = (4, 4)
 vvv_shape = (100, 100, 100)
-n_run = 11
+n_run = 9
 
 # 命令行给出收缩路径时覆盖文件中的默认值, 便于 bash 调用.
 # if len(sys.argv) > 1:
@@ -113,9 +113,11 @@ def check_path(contract_path):
 
         print(f"{pyqcd_time:.2f} s")
 
-    compare_data([(pyqcd_result, opt_result, "contract")], show_details=True)
-    opt_median = float(np.median(opt_times[1:]))
-    pyqcd_median = float(np.median(pyqcd_times[1:]))
-    print(f"speedup (opt_einsum / pyqcd): {opt_median / pyqcd_median:.2f}x")
+    compare_data([(pyqcd_result, opt_result, "contract")])
+    opt_middle = sorted(opt_times[2:])
+    pyqcd_middle = sorted(pyqcd_times[2:])
+    opt_average = float(np.mean(opt_middle[2:5]))
+    pyqcd_average = float(np.mean(pyqcd_middle[2:5]))
+    print(f"speedup (opt_einsum / pyqcd): {opt_average / pyqcd_average:.2f}x")
     print(f"----------")
-    return opt_median, pyqcd_median
+    return opt_average, pyqcd_average

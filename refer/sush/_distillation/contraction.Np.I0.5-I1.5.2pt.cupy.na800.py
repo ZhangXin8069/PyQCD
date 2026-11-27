@@ -34,7 +34,7 @@ trank, _, _ = get_mpi_tlist(Nt=Nt, t=range(Nt), gtype='TScatter')
 Lt = len(trank)
 source_times = [int(sys.argv[2])] if len(sys.argv) > 2 else list(range(Nt))
 dt_start = int(sys.argv[3]) if len(sys.argv) > 3 else 0
-dt_stop = int(sys.argv[4]) if len(sys.argv) > 4 else Nt
+dt_stop = int(sys.argv[4]) if len(sys.argv) > 4 else Nt//2
 if any(t < 0 or t >= Nt for t in source_times) or not 0 <= dt_start < dt_stop <= Nt:
     raise ValueError('Require 0 <= source < 64 and 0 <= dt_start < dt_stop <= 64')
 vertex_times = sorted(set(source_times) | {(t+d) % Nt for t in source_times for d in range(dt_start, dt_stop)})

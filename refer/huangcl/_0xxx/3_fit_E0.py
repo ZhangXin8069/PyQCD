@@ -77,7 +77,7 @@ def init() -> Tuple[ReadConfig, FitConfig, PlotConfig]:
           figure_file.
     """
     CONF_SHORT = "c24p29"
-    MOMENTUM = 2
+    MOMENTUM = 0
     # 读取的总动量方向, 含正负两个方向, 平均时全部使用.
     MOM_DIRS = ["x"]
 
@@ -92,7 +92,7 @@ def init() -> Tuple[ReadConfig, FitConfig, PlotConfig]:
 
     FIT_T_DICT = {
         "c24p29": {
-            0: (7, 15), 2: (6, 13), 4: (6, 12), 6: (4, 11), 8: (4, 10),
+            0: (6, 15), 2: (6, 14), 4: (6, 12), 6: (4, 11), 8: (4, 10),
         },
         "c32p29": {
             0: (7, 15), 2: (5, 12), 4: (6, 10), 6: (6, 12), 8: (4, 10),

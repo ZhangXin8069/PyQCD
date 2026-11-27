@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=PNJN
-#SBATCH --array=23-89
+#SBATCH --array=22
 #SBATCH --nodes=1
 
 #SBATCH --error=test_pion_3pt_error

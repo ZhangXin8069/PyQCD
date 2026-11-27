@@ -8,8 +8,8 @@
 #SBATCH --mem=64G
 #SBATCH --time=00:30:00
 #SBATCH --chdir=/public/home/sush/distillation/test
-#SBATCH --output=/public/home/sush/distillation/test/benchmark.%j.out
-#SBATCH --error=/public/home/sush/distillation/test/benchmark.%j.err
+#SBATCH --output=/public/home/sush/distillation/test/benchmark.out
+#SBATCH --error=/public/home/sush/distillation/test/benchmark.err
 
 set -e
 source /public/home/sush/envs/C12P12

@@ -64,7 +64,7 @@ def init() -> Tuple[ReadConfig, PlotConfig]:
     Plot: 画图参数, 包含 xlim, ylim, energy_unit, title, figure_file.
     """
     CONF_SHORT = "c24p29"
-    MOMENTUM = 4
+    MOMENTUM = 0
     # 需要画出的总动量方向, 正负方向各一条曲线.
     MOM_DIRS = ["x"]
 
@@ -72,7 +72,7 @@ def init() -> Tuple[ReadConfig, PlotConfig]:
 
     # 各组态的读取参数, 键为 conf_short.
     CONF_DICT = {
-        "c24p29": {"conf_num": 219, "exclude_ids": [12300]},
+        "c24p29": {"conf_num": 299, "exclude_ids": [12300]},
         "c32p29": {"conf_num": 149, "exclude_ids": [18350]},
     }
 

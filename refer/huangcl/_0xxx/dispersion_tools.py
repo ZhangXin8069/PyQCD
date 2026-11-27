@@ -6,8 +6,8 @@
     fit_dispersion: 逐样本拟合色散关系, 返回 fit 的逐样本结果和均值结果.
     plot_dispersion: 画 E^2 的数据点和拟合带.
 
-model=0: E^2 = m^2 + k0 p^2.
-model=1: E^2 = m^2 + k0 p^2 + k1 p^4.
+model=0: E^2 = k0 + k1 p^2.
+model=1: E^2 = k0 + k1 p^2 + k2 p^4.
 """
 
 import sys
@@ -27,8 +27,8 @@ from snsc_params import get_conf  # noqa: E402  # type: ignore
 
 # 各模型的拟合参数名和公式, 键为 model 编号.
 DISPERSION_MODELS = {
-    0: (["m", "k0"], r"$E^2=m^2+k_0p^2$"),
-    1: (["m", "k0", "k1"], r"$E^2=m^2+k_0p^2+k_1a^2p^4$"),
+    0: (["k0", "k1"], r"$E^2=k_0+k_1p^2$"),
+    1: (["k0", "k1", "k2"], r"$E^2=k_0+k_1p^2+k_2a^2p^4$"),
 }
 
 
@@ -39,15 +39,15 @@ def model_dispersion(p2: np.ndarray, para: dict, model: int = 0) -> np.ndarray:
     参数:
     -----
     p2: 格点动量平方 p^2, para: momentum.
-    para: 拟合参数字典, m, k0, k1.
+    para: 拟合参数字典, k0, k1, k2.
 
     可选项:
     -----
     model: 0 保留到 p^2 项, 1 额外加入 p^4 项.
     """
-    e2 = para["m"] ** 2 + para["k0"] * p2
+    e2 = para["k0"] + para["k1"] * p2
     if model == 1:
-        e2 = e2 + para["k1"] * (p2 ** 2)
+        e2 = e2 + para["k2"] * (p2 ** 2)
     return e2
 
 
@@ -89,7 +89,7 @@ def fit_dispersion(
     p2 = calc_p2(conf_short, momenta)
     # para: sample, momentum
     e2 = e ** 2
-    p0 = {"m": 2.0, "k0": 1.0, "k1": 0.0}
+    p0 = {"k0": 4.0, "k1": 1.0, "k2": 0.0}
     samples, _, _, _, ymean, _ = fit(
         y=e2, x=p2,
         model=partial(model_dispersion, model=model),
@@ -159,6 +159,7 @@ def plot_dispersion(
         xlabel=r"$p^2$ (GeV$^2$)",
         ylabel=r"$E^2$ (GeV$^2$)",
         title=f"{formula}, {conf_short}",
+        x_offset=0.0,
         fit_data=fit_data,
         legend_loc="upper left",
     )

@@ -57,9 +57,9 @@ def main():
         for task in worker['tasks']:
             row=pm['tasks'][task]
             state.update(current_task=task,stage='moving_missing_only');atomic_json(path,state)
-            if task in gate['completed_moving_tasks']:
+            if (MOVING/'status'/f'task{task}.json').exists():
                 marker=json.loads((MOVING/'status'/f'task{task}.json').read_text())
-                assert marker['status']=='PASS' and marker['manifest_sha256']==moving.manifest_hash()
+                assert marker['status']=='PASS' and marker['manifest_sha256']==moving.manifest_hash() and marker['case_count']==252
                 print('VERIFIED_COMPLETED_MOVING_SKIP',task,row['conf'],row['flow_time_a2'],flush=True)
             else:
                 subprocess.run([sys.executable,'-B','-u',str(MOVING/'launch.py'),'--task',str(task)],
@@ -71,7 +71,7 @@ def main():
         subprocess.run([sys.executable,'-B','-u',str(P0/'launch.py'),'--worker',str(args.worker)],
                        cwd=str(P0),check=True)
         state.update(status='PASS',stage='moving_and_P0_four_flows_complete',timestamp=datetime.now().astimezone().isoformat())
-        atomic_json(path,state);print('CONF51_100_P0456_WORKER_PASS',args.worker,worker['conf'],flush=True)
+        atomic_json(path,state);print('CONF101_150_P0456_WORKER_PASS',args.worker,worker['conf'],flush=True)
     except BaseException as error:
         state.update(status='FAILED_OR_INTERRUPTED',error=str(error),timestamp=datetime.now().astimezone().isoformat())
         atomic_json(path,state);raise

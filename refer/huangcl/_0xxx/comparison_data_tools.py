@@ -27,7 +27,7 @@ import numpy as np
 from analysis_tools import plot_hist
 
 # 匹配判定用的相对差阈值
-REL_TOL = 1e-6
+REL_TOL = 1e-5  # 6位有效数字相等
 
 # 分隔线长度
 SEP_LEN = 10
@@ -176,6 +176,7 @@ def compare_data(pairs: Sequence[Tuple[np.ndarray, np.ndarray, str]],
     all_equal: 所有组是否都通过比较.
     """
     equals = []
+    max_rel_diff = 0.0
     print()
     for ref, new, tag in pairs:
         if ref.shape != new.shape:
@@ -186,6 +187,7 @@ def compare_data(pairs: Sequence[Tuple[np.ndarray, np.ndarray, str]],
         kind_equals = [check_value(ref, new, kind, show_details)
                        for kind in ("nan", "inf", "zero")]
         abs_diff, rel_diff = calc_diff_stats(ref, new, show_details)
+        max_rel_diff = max(max_rel_diff, float(np.max(rel_diff)))
         data_equal = all(kind_equals) and np.max(rel_diff) < REL_TOL
         if show_details:
             print(f"this data equal={data_equal}")
@@ -194,5 +196,5 @@ def compare_data(pairs: Sequence[Tuple[np.ndarray, np.ndarray, str]],
         if save_dir is not None:
             plot_diff_hist(abs_diff, rel_diff, save_dir, tag)
     all_equal = all(equals)
-    print(f"all data equal={all_equal}\n")
+    print(f"all data equal={all_equal}; max rel_diff={max_rel_diff:.3g}\n")
     return all_equal

@@ -1,4 +1,9 @@
 import sys
+import os
+from pathlib import Path
+
+sys.path.insert(0, '/public/home/sush/distillation/0v2b/3pt_acc')
+from threept import Workspace, contract, workspace_bytes
 
 # Phase-aware equivalence requires the current lqcddb implementation.
 sys.path.insert(0, '/public/home/sush/distillation/lqcddb_update/src')
@@ -16,13 +21,24 @@ backend = get_backend()
 lattice_size = [32, 32, 32, 64]
 grid_size = [1, 1, 1, 2]
 
+if not 2 <= len(sys.argv) <= 6:
+    raise SystemExit('Usage: e32p29.py CONF [TSEP [TSRC [TAU_START [TAU_STOP]]]]')
 conf_id = sys.argv[1]
 
-mpinit(grid_size = grid_size, latt_size = lattice_size, backend = backend.__name__)
+# Slurm can expose both allocated cards to both ranks, or a single card per rank.
+device = 0 if backend.cuda.runtime.getDeviceCount() == 1 else -1
+mpinit(grid_size = grid_size, latt_size = lattice_size, backend = backend.__name__, device = device)
 
 rank = getMPIRank()
 size = getMPISize()
 comm = getMPIComm()
+gpu = backend.cuda.Device()
+bindings = comm.allgather((os.uname().nodename, gpu.id, gpu.pci_bus_id))
+if len({host for host, _, _ in bindings}) != 1 or len({pci for _, _, pci in bindings}) != size:
+    raise RuntimeError(f'E32P29 needs two different GPUs on one node. MPI bindings: {bindings}')
+if rank == 0:
+    for owner_rank, (host, ordinal, pci) in enumerate(bindings):
+        print(f'conf={conf_id} rank={owner_rank} host={host} CUDA device={ordinal} PCI={pci}', flush=True)
 
 Nx, Ny, Nz, Nt = lattice_size
 Lx, Ly, Lz, Lt = [lattice_size[x]//grid_size[x] for x in range(len(lattice_size))]
@@ -35,13 +51,9 @@ Mom_sink_VVV = [[0, 0, 0]] + sorted(creat_mom_list(Mom = [0, 0, 1], fix_Q2 = Tru
 
 Mom_len = len(Mom_sink_VDV)
 source_mom_chunk = 27
-# Conservative thresholds for all 27 source momenta: static scratch including
-# copies is 61.52/41.01/20.51 GiB for N=3/2/1; source chunking reduces this.
-# Allow 7.2 GiB for resident arrays and at least 8 GiB for CUDA/workspace.
-gpu_free_bytes, _ = backend.cuda.runtime.memGetInfo()
-# sink_mom_chunk = 3 if gpu_free_bytes >= 77*1024**3 else (2 if gpu_free_bytes >= 57*1024**3 else 1)
-# sink_mom_chunk = min(comm.allgather(sink_mom_chunk))
-
+contract_dtype = np.dtype(os.environ.get('THREEPT_DTYPE', 'complex128'))
+if contract_dtype not in (np.complex64, np.complex128):
+    raise ValueError('THREEPT_DTYPE must be complex64 or complex128')
 sink_mom_chunk = 1
 sink_mom_len = 7
 
@@ -68,6 +80,20 @@ if not 5 <= current_start < current_stop <= tsep - 3:
 peram_sources = sorted(set(source_times) | {(t + tsep)%Nt for t in source_times})
 peram_source_index = {t: i for i, t in enumerate(peram_sources)}
 vertex_times = set(peram_sources) | {(t + dt)%Nt for t in source_times for dt in range(current_start, current_stop)}
+
+ensemble = 'beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64'
+file_tag = 'e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy'
+data_root = Path('/nexdata/project/lqcd/sush')
+eigen_dir = data_root / 'eigensystem' / ensemble / conf_id
+peram_dir = data_root / 'perambulators' / ensemble / 'light' / conf_id
+eigen_files = {t: eigen_dir / f'{conf_id}_t{t:03d}_{file_tag}' for t in sorted(vertex_times)}
+peram_files = {t: peram_dir / f't{t:03d}_{file_tag}' for t in peram_sources}
+missing = None
+if rank == 0:
+    missing = next((p for p in (*eigen_files.values(), *peram_files.values()) if not p.is_file()), None)
+missing = comm.bcast(missing, root=0)
+if missing is not None:
+    raise FileNotFoundError(f'E32P29 conf={conf_id}, missing input: {missing}')
 
 trank, _, _ = get_mpi_tlist(Nt = Nt, t = range(Nt), gtype = 'TScatter')
 
@@ -102,24 +128,7 @@ Cpt = '3pt'
 use_equivalence = True
 ignore_dis = True
 Projection = True
-optimize = ['greedy', 'dp', 'auto']
-dynamic_plan = []
-for i in range(len(sink_operator)):
-    for k in range(len(source_operator)):
-        for f in range(len(current_operator)):
-            operator_groups = [[s, t, current_operator[f]] for s in sink_operator[i] for t in source_operator[k]]
-            # Wick vertex order is sink, CURRENT, source (not sink, source, current).
-            Vindex = ['N', 'N', 'M', 'M'] if i == 0 else ['N', 'N', 'N', 'M', 'M']
-            Gindex = ['', 'G', '', ''] if i == 0 else ['', '', 'G', '', '']
-            dynamic_plan += run_wick_analysis(
-                operator_groups, Cpt = Cpt, Vindex = Vindex, Gindex = Gindex,
-                # Discover all keys; M7 uses the concrete gamma registry for merging.
-                use_equivalence = False, ignore_dis = ignore_dis, verbose = False)
-required_peram = sorted({(p[2], tuple(p[4])) for entry in dynamic_plan for p in entry[2]['peram'][entry[3]]})
-# There is at most one VVV and one VDV per time region; registry numbering
-# restarts independently for each kind and region, unlike raw Wick V names.
-required_v = sorted({(v[1].split('_')[0] + '_0', v[3]) for entry in dynamic_plan for v in entry[2]['V']})
-required_gamma = sorted({g[1] for entry in dynamic_plan for g in entry[2]['gamma_pos']})
+# The signed Wick expansion and endpoint projections are compiled into libthreept.so.
 # required peram: light, eight pairs of tsrc/tsink/tcur0 excluding current self;
 # required V: VVV_0 at tsrc/tsink, VDV_0 at tsrc/tsink/tcur0;
 # required gamma: gamma_7, gamma_5, gamma_1, Projector.
@@ -140,12 +149,14 @@ required_gamma = sorted({g[1] for entry in dynamic_plan for g in entry[2]['gamma
 VdV_link = backend.zeros((Lt, Mom_len, Nev_max, Nev_max), dtype = complex)
 sink_VVV = {}  # Cache endpoint VVV on the host; copy only the active endpoints.
 
+if rank == 0:
+    print(f'construct vertices for conf={conf_id}', flush=True)
 st_eigen = time.perf_counter()
 eigvecs = None
 for tsrc_indx, tsrc in enumerate(trank):
     if tsrc not in vertex_times:
         continue
-    eigvecs = backend.load(f'/nexdata/project/lqcd/sush/eigensystem/beta6.308_mu-0.2510_ms-0.2170_u00.859727_u0s0.954467_L32x64/{conf_id}/{conf_id}_t{tsrc:03d}_e100_s[100, 200, 400, 700, 1100]_[20, 20, 20, 20, 20]_[10, 10, 10, 10, 10]_BI_n200_V1_hpy.npy')
+    eigvecs = backend.load(eigen_files[tsrc])
 
     if tsrc in peram_source_index:
         sink_VVV[tsrc] = np.zeros((Mom_len, Nev_src, Nev_src, Nev_src), dtype = complex)
@@ -173,6 +184,28 @@ corr_NJN_GEVP = backend.zeros((len(sink_operator), len(source_operator), len(cur
 # Eq. (19) defines the admixtures only at nonzero total N momentum.
 corr_NJN_GEVP[1:, ..., 0, :] = complex(np.nan, np.nan)
 
+if rank == 0:
+    print(f'load perambulators for conf={conf_id}', flush=True)
+# st_load = time.perf_counter()
+# # Scatter the 64 sink times of each source file directly into the rank-local cache.
+# peram_u = np.empty((len(peram_sources), Lt, Ns, Ns, Nev_max, Nev_src), dtype=complex)
+# for source_index, tsrc in enumerate(peram_sources):
+#     slab = None
+#     if rank == 0:
+#         # Read one NPY file sequentially before MPI packs even and odd times.
+#         slab = np.load(peram_files[tsrc], allow_pickle=False)[..., :Nev_max, :Nev_src]
+#         if slab.shape != (Nt, Ns, Ns, Nev_max, Nev_src):
+#             raise ValueError(f'Unexpected perambulator slice {slab.shape} in {peram_files[tsrc]}')
+#         slab = np.asarray(slab, dtype=peram_u.dtype)
+#     get_mpi_data(data=slab, mdtype='TScatter', root=0, axis=0, recv_buff=peram_u[source_index])
+#     del slab
+#     if rank == 0 and (source_index + 1) % 8 == 0:
+#         print(f'conf={conf_id} distributed peram sources {source_index+1}/{len(peram_sources)}', flush=True)
+# backend.get_default_memory_pool().free_all_blocks()
+# backend.cuda.get_current_stream().synchronize()
+# comm.Barrier()
+# if rank == 0:
+#     print(f'load peram use time {time.perf_counter() - st_load :.3f} s')
 st_load = time.perf_counter()
 if rank == 0:
     peram_u = np.zeros((len(peram_sources), Nt, Ns, Ns, Nev_max, Nev_src), dtype = complex)
@@ -191,22 +224,18 @@ backend.cuda.get_current_stream().synchronize()
 comm.Barrier()
 if rank == 0:
     print(f'load peram use time {time.perf_counter() - st_load :.3f} s')
+# M6 The native schedule fixes the four Euclidean gammas, gamma_5, gamma_7
+# and the two projector columns. Inputs below have the registry orientations.
 
-# M6 Registries: retain the reference's projected-spin normalization.
-GR = GammaRegistry()
-VR = VRegistry()
-PR = PeramRegistry()
-
-GR.register('gamma_7', gamma(7))
-GR.register('gamma_5', gamma(5))
-GR.register('gamma_1', backend.stack([gamma(j + 1) for j in range(4)]))
-GR.register('Projector', [((gamma(4) + gamma(0))/2.0)[:, :2], ((gamma(4) + gamma(0))/2.0)[:, :2]])
-
-# M7 Dynamic loop
+# M7 Specialized CUDA contraction
+scratch = Workspace(max(workspace_bytes(i, Nev_src, Nev_max, source_mom_chunk, contract_dtype) for i in (0, 1)))
+st_main = time.perf_counter()
 if rank == 0:
     print(f'contraction settings: ranks={size} sources={len(source_times)} ignore_dis={ignore_dis} use_equivalence={use_equivalence} mu_batch=4 sink_mom_chunk={sink_mom_chunk} source_mom_chunk={source_mom_chunk}', flush = True)
 for source_indx, tsrc in enumerate(source_times):
     comm.Barrier()
+    if rank == 0:
+        print(f'begin tsrc={tsrc} ({source_indx+1}/{len(source_times)})', flush=True)
     st_cal = time.perf_counter()
     tsink = (tsrc + tsep)%Nt
     src_rank, src_indx = get_mpi_tlist(Nt = Nt, t = tsrc, gtype = 'find')
@@ -216,12 +245,13 @@ for source_indx, tsrc in enumerate(source_times):
 
     VVV_src = backend.asarray(get_mpi_data(data = sink_VVV[tsrc] if rank == src_rank else None, mdtype = 'Bcast', root = src_rank))
     VDV_src = backend.asarray(get_mpi_data(data = VdV_link[src_indx, :, :Nev_src, :Nev_src], mdtype = 'Bcast', root = src_rank))
-    VVV_src = VVV_src.conj()
-    VDV_src = VDV_src.conj().transpose(0, 2, 1)
+    VVV_src = backend.ascontiguousarray(VVV_src.conj(), dtype=contract_dtype)
+    VDV_src = backend.ascontiguousarray(VDV_src.conj().transpose(0, 2, 1), dtype=contract_dtype)
 
     VVV_sink = backend.asarray(get_mpi_data(data = sink_VVV[tsink] if rank == sink_rank else None, mdtype = 'Bcast', root = sink_rank))
     VDV_sink = backend.asarray(get_mpi_data(data = VdV_link[sink_indx, :, :Nev_src, :Nev_src], mdtype = 'Bcast', root = sink_rank))
-    VDV_sink = VDV_sink.conj().transpose(0, 2, 1)
+    VVV_sink = backend.ascontiguousarray(VVV_sink, dtype=contract_dtype)
+    VDV_sink = backend.ascontiguousarray(VDV_sink.conj().transpose(0, 2, 1), dtype=contract_dtype)
 
     _, _, tsink_indx = get_mpi_tlist(Nt = Nt, t = range(tsrc + current_start, tsrc + current_stop), gtype = 'TScatter')
 
@@ -229,87 +259,47 @@ for source_indx, tsrc in enumerate(source_times):
     peram_u_sink_src = get_mpi_data(data = peram_u[src_peram_indx, sink_indx, ..., :Nev_src, :Nev_src], mdtype = 'Bcast', root = sink_rank)
     peram_u_sink_sink = get_mpi_data(data = peram_u[sink_peram_indx, sink_indx, ..., :Nev_src, :Nev_src], mdtype = 'Bcast', root = sink_rank)
 
-    PR.register('light', ('tsrc', 'tsrc'), backend.asarray(peram_u_src_src))
-    PR.register('light', ('tsink', 'tsrc'), backend.asarray(peram_u_sink_src))
-    PR.register('light', ('tsrc', 'tsink'), seq_peram(backend.asarray(peram_u_sink_src)))
-    PR.register('light', ('tsink', 'tsink'), backend.asarray(peram_u_sink_sink))
+    ds = backend.asarray(peram_u_sink_src, dtype=contract_dtype, order='C')
+    endpoints = (backend.asarray(peram_u_src_src, dtype=contract_dtype, order='C'),
+                 ds, backend.ascontiguousarray(seq_peram(ds), dtype=contract_dtype),
+                 backend.asarray(peram_u_sink_sink, dtype=contract_dtype, order='C'))
 
     for tcur0 in tsink_indx:
-        peram_u_tcur0_tsrc = backend.asarray(peram_u[src_peram_indx, tcur0])
-        peram_u_tcur0_tsink = backend.asarray(peram_u[sink_peram_indx, tcur0])
-
-        PR.register('light', ('tcur0', 'tsrc'), peram_u_tcur0_tsrc)
-        PR.register('light', ('tsrc', 'tcur0'), seq_peram(peram_u_tcur0_tsrc))
-        PR.register('light', ('tcur0', 'tsink'), peram_u_tcur0_tsink)
-        PR.register('light', ('tsink', 'tcur0'), seq_peram(peram_u_tcur0_tsink))
-
+        st_current = time.perf_counter()
+        js = backend.asarray(peram_u[src_peram_indx, tcur0], dtype=contract_dtype, order='C')
+        jd = backend.asarray(peram_u[sink_peram_indx, tcur0], dtype=contract_dtype, order='C')
+        currents = (js, backend.ascontiguousarray(seq_peram(js), dtype=contract_dtype),
+                    jd, backend.ascontiguousarray(seq_peram(jd), dtype=contract_dtype))
         for i in range(len(sink_operator)):
-            # A common N label pairs equal sink/current momenta; M labels
-            # pair source N(-r) and pi(r). Neither label is summed or crossed.
-            # Start at 1 for the two admixtures, where p_hat is undefined at 0.
-            for Mom_indx in range(1, sink_mom_len//sink_mom_chunk): #range(0 if i == 0 else 1, sink_mom_chunk, sink_mom_chunk):
-                Mom_stop = min(Mom_indx + sink_mom_chunk, Mom_len)
-                VR.register('VDV_0', 'tcur0', VdV_link[tcur0, Mom_indx:Mom_stop])
-                if i == 1:
-                    VR.register('VDV_0', 'tsink', VDV_sink[0:1])
-                    VR.register('VVV_0', 'tsink', VVV_sink[Mom_indx:Mom_stop])
-                elif i == 2:
-                    VR.register('VDV_0', 'tsink', VDV_sink[Mom_indx:Mom_stop])
-                    VR.register('VVV_0', 'tsink', VVV_sink[0:1])
-                else:
-                    VR.register('VVV_0', 'tsink', VVV_sink[Mom_indx:Mom_stop])
-                if i > 0:
-                    sigma_p = backend.stack([Mom_times_sigma(Mom = p) / np.sqrt(sum(x*x for x in p)) for p in Mom_sink_VVV[Mom_indx:Mom_stop]])
-
+            for Mom_indx in range(1, sink_mom_len):
+                baryon = VVV_sink[0 if i == 2 else Mom_indx]
+                pion = VDV_sink[0 if i == 1 else Mom_indx] if i else None
+                vertex = backend.ascontiguousarray(VdV_link[tcur0, Mom_indx], dtype=contract_dtype)
                 for source_mom_start in range(0, Mom_len, source_mom_chunk):
-                    source_mom_stop = min(source_mom_start + source_mom_chunk, Mom_len)
-                    # The common M label pairs N(-r) and pi(r) within this block.
-                    VR.register('VDV_0', 'tsrc', VDV_src[source_mom_start:source_mom_stop])
-                    VR.register('VVV_0', 'tsrc', VVV_src[source_mom_start:source_mom_stop])
-                    for k in range(len(source_operator)):
-                        for f in range(len(current_operator)):
-                            if k == 0 and f == 0:
-                                continue  # Recover A,u from the three independent channels.
-                            operator_groups = [[s, t, current_operator[f]] for s in sink_operator[i] for t in source_operator[k]]
-                            Vindex = ['N', 'N', 'M', 'M'] if i == 0 else ['N', 'N', 'N', 'M', 'M']
-                            Gindex = ['', 'G', '', ''] if i == 0 else ['', '', 'G', '', '']
-                            dycn_NN = dynamic_contraction(
-                                operator_groups,
-                                peram_registry = PR,
-                                v_registry = VR,
-                                gamma_registry = GR,
-                                Cpt = Cpt,
-                                Vindex = Vindex,
-                                Gindex = Gindex,
-                                use_equivalence = use_equivalence,
-                                ignore_dis = ignore_dis,
-                                Projection = Projection,
-                                optimize = optimize,
-                                verbose = False,
-                                )
-
-                            corr = dycn_NN.calculate_all()  # (sN,sNpi,mu,p,r_block)
-                            if i > 0:
-                                # Current has phase exp(+i*p.x); sink has exp(-i*p.x).
-                                corr = cached_contract('Nab,bcGNM->acGNM', sigma_p, corr)
-                            corr_NJN_GEVP[i, k, f, source_indx, tcur0, ..., Mom_indx:Mom_stop, source_mom_start:source_mom_stop] = corr.transpose(2, 0, 1, 3, 4)
-
-                    corr_NJN_GEVP[i, 0, 0, source_indx, tcur0, ..., Mom_indx:Mom_stop, source_mom_start:source_mom_stop] = (
-                        (corr_NJN_GEVP[i, 1, 0, source_indx, tcur0, ..., Mom_indx:Mom_stop, source_mom_start:source_mom_stop]
-                         + corr_NJN_GEVP[i, 1, 1, source_indx, tcur0, ..., Mom_indx:Mom_stop, source_mom_start:source_mom_stop]) / np.sqrt(2)
-                        - corr_NJN_GEVP[i, 0, 1, source_indx, tcur0, ..., Mom_indx:Mom_stop, source_mom_start:source_mom_stop])
+                    block = slice(source_mom_start, min(source_mom_start + source_mom_chunk, Mom_len))
+                    corr = contract(*endpoints, *currents, baryon, pion, VVV_src[block],
+                                    VDV_src[block], vertex, basis=i, momentum=Mom_sink_VVV[Mom_indx], workspace=scratch)
+                    corr_NJN_GEVP[i, :, :, source_indx, tcur0, ..., Mom_indx, block] = corr
+        backend.cuda.get_current_stream().synchronize()
+        print(f'rank={rank} local tsrc={tsrc} tJ={trank[tcur0]} contraction seconds={time.perf_counter()-st_current:.3f}', flush=True)
 
     backend.cuda.get_current_stream().synchronize()
     comm.Barrier()
     if rank == 0:
         print(f'calculate 3pt of tsrc {tsrc} use time {(time.perf_counter() - st_cal):.3f} s')
-
+    
+del scratch
+if rank == 0:
+    print(f'main loop seconds={time.perf_counter()-st_main:.3f}, gathering', flush=True)
+st_gather = time.perf_counter()
 # M8 Gather and save. All operators carry odd fermion number (3 or 5).
 # One temporal wrap gives -1; meson pairs are periodic. Apply this once here.
 backend.get_default_memory_pool().free_all_blocks()
 corr_NJN_GEVP = get_mpi_data(corr_NJN_GEVP, mdtype = 'TGather', root = 0, axis = 4)
 
 if rank == 0:
+    print(f'gather seconds={time.perf_counter()-st_gather:.3f}, saving', flush=True)
+    st_save = time.perf_counter()
     corr_save_path = f'/public/home/sush/distillation/0v2b/result_nex/E32P29/Px0Py0Pz0/ENV_{Nev_src}/conf{conf_id}'
 
     import pathlib
@@ -333,6 +323,8 @@ if rank == 0:
         source_tag = f'_tsrc{source_times[0]}_noloop_equiv'
     if current_start != 5 or current_stop != tsep - 3:
         source_tag += f'_tau{current_start}-{current_stop - 1}'
+    if contract_dtype == np.complex64:
+        source_tag += '_complex64'
     backend.save(f'{corr_save_path}/corr_3pt_vector_GEVP_tsep{tsep}{source_tag}.npy', corr_sum)
     # Store only common correlators. These coefficients specify later combinations:
     # V^(1,0)=(C_d-C_u)/sqrt(2); V^(0,0)=(C_u+C_d)/sqrt(2), Eq. (S9).
@@ -343,11 +335,12 @@ if rank == 0:
             axes = ['N_basis', 'source_charge', 'current_flavor', 'tsrc_sum', 'tJ_minus_tsrc', 'mu', 'spin_N', 'spin_Npi', 'p', 'r'],
             N_basis = ['N(p)', 'sigma_p*N(p)pi(0)', 'sigma_p*N(0)pi(p)'],
             source_charge = ['p*pi0_E', 'n*pi+_E'], current_flavor = ['u', 'd'],
-            mu = [1, 2, 3, 4], p = Mom_sink_VVV, r = Mom_sink_VDV,
+            mu = [1, 2, 3, 4], p = Mom_sink_VVV[:sink_mom_len], r = Mom_sink_VDV,
             source_shell_q2 = np.sum(np.asarray(Mom_sink_VDV)**2, axis = 1),
             source_isospin = [0.5, 1.5], source_CG = [[np.sqrt(1/3), np.sqrt(2/3)], [-np.sqrt(2/3), np.sqrt(1/3)]],
             current_isospin = [1, 0], current_coefficients = [[-np.sqrt(1/2), np.sqrt(1/2)], [np.sqrt(1/2), np.sqrt(1/2)]],
-            N_admixture_valid = np.any(np.asarray(Mom_sink_VVV) != 0, axis = 1),
+            N_admixture_valid = np.any(np.asarray(Mom_sink_VVV[:sink_mom_len]) != 0, axis = 1),
+            sink_momentum_computed = np.arange(sink_mom_len) > 0, contraction_dtype = contract_dtype.name,
             insertion_time_offsets = np.arange(current_start, current_stop),
             current_window = [current_start, current_stop],
             momentum_component_order = ['pz', 'py', 'px'], current_convention = 'Euclidean; mu=4 is time',
@@ -355,11 +348,12 @@ if rank == 0:
             current_renormalized = False, source_time_reduction = 'sum',
             full_five_point = False, five_point_factorized = False, gevp_cross_terms = True,
             ignore_current_loops = ignore_dis, use_equivalence = use_equivalence,
-            batched_lorentz = True, batched_N_admixtures = False, shared_current_insertion = False,
+            batched_lorentz = True, batched_N_admixtures = False, shared_current_insertion = True,
             sink_mom_chunk = sink_mom_chunk, source_mom_chunk = source_mom_chunk,
             perambulator_storage = 'host', endpoint_VVV_storage = 'host',
             independent_channels = [[0, 1], [1, 0], [1, 1]], reconstructed_channel = [0, 0],
             isospin_reconstruction = 'C_Au=(C_Bu+C_Bd)/sqrt(2)-C_Ad'
             )
     
+    print(f'saved {corr_save_path}/corr_3pt_vector_GEVP_tsep{tsep}{source_tag}.npy and basis metadata in {time.perf_counter()-st_save:.3f} s', flush=True)
     print(f'total elapsed time {time.perf_counter() - st_total:.3f} s')

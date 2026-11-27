@@ -136,7 +136,9 @@ def make_fig_title(
     return title
 
 
-def plot_fh(conf_short=None, p=None, with_fit: bool = False) -> None:
+def plot_fh(
+        conf_short=None, p=None, ratio_type: int = 0,
+        with_fit: bool = False) -> None:
     """
     自动读取 fh 数据, 按画图配置中的 z_list 逐个 z 画图.
 
@@ -144,6 +146,7 @@ def plot_fh(conf_short=None, p=None, with_fit: bool = False) -> None:
     -----
     conf_short: 组态短名; 为 None 时使用 init() 中的默认值.
     p: 动量大小; 为 None 时使用 init() 中的默认值.
+    ratio_type: 选择输入的 ratio 类型.
     with_fit: 是否叠加 c0 +- 1 sigma 灰色带, 默认 False.
 
     说明:
@@ -153,7 +156,7 @@ def plot_fh(conf_short=None, p=None, with_fit: bool = False) -> None:
 
     Plot = init(conf_short, p)
 
-    fh_path = Plot.data_dir / "fh.npy"
+    fh_path = Plot.data_dir / f"fh_type{ratio_type}.npy"
     # para: sample, nex, dt, z
     fh = np.load(fh_path)
     print(f"loaded fh: {fh_path}, shape={fh.shape}")
@@ -190,7 +193,7 @@ def plot_fh(conf_short=None, p=None, with_fit: bool = False) -> None:
             _window = window[_z]
 
         fig_path = Plot.mom_dir / \
-            f"fh_{Plot.conf_short}_P{Plot.p}_z{_z}.png"
+            f"fh_type{ratio_type}_{Plot.conf_short}_P{Plot.p}_z{_z}.png"
         plot_fh_one(fh_z, _z, fig_path, Plot, c0, _window)
 
 
@@ -252,6 +255,8 @@ def plot_fh_one(
         x_offset=0.2,
         fit_data=fit_data,
         fit_x_offset=0.2,
+        show_xgrid=True,
+        show_ygrid=True,
     )
 
 
@@ -333,6 +338,7 @@ def plot_c0_z(
         y_data, figure_path,
         xlabel="z/a", ylabel=ylabel,
         xlim=Plot.z_xlim, ylim=ylim,
+        show_xgrid=True, show_ygrid=True,
         title=make_fig_title(f"{suffix} matrix", Plot.conf_short, p=Plot.p))
 
 
@@ -387,6 +393,7 @@ def plot_c0_z_all_p() -> None:
         y_data, figure_path,
         xlabel="z/a", ylabel="h_B(z)",
         xlim=Plot.z_xlim, ylim=Plot.c0_ylim,
+        show_xgrid=True, show_ygrid=True,
         title=make_fig_title("bare matrix", Plot.conf_short))
 
 

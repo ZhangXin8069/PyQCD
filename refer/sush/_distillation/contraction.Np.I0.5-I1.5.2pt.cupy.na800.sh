@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --job-name=Npi-Ihalf-Ithreehalf-na800
-#SBATCH --array=0-74#106
+#SBATCH --array=75-106
 #SBATCH --nodes=1
 #SBATCH --partition=na800-pcie
 #SBATCH --ntasks=1

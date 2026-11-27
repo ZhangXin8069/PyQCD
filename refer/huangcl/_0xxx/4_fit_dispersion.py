@@ -2,8 +2,8 @@
 """
 功能: 读取指定组态各动量的 E jackknife 样本, 按 init() 指定的色散模型逐样本拟合,
       全程使用格点单位制, use_p0 控制 p=0 的点是否参与拟合, 画图时始终画出.
-      model=0: E^2 = m^2 + k0 p^2;
-      model=1: E^2 = m^2 + k0 p^2 + k1 p^4.
+      model=0: E^2 = k0 + k1 p^2;
+      model=1: E^2 = k0 + k1 p^2 + k2 p^4.
 输入: 08_check_2pt/02_data/<conf_short>/fit_p<mom>.npz 中的 E0, 格点单位.
 输出: 02_data/<conf_short>/disp_<tag>.npz, fit 返回的逐样本结果和均值结果;
       02_data/<conf_short>/_rep_disp_<tag>.txt, 拟合参数表;
@@ -124,14 +124,15 @@ if __name__ == "__main__":
     # 3. 报表: 一行总体信息, 再逐参数输出逐样本的拟合结果, 最后是物理质量和日期.
     # 格点单位到 GeV 的换算因子.
     energy_unit = 0.1973 / get_conf(Config.conf_short)["lattice_spacing"]
-    # para: sample
-    mass = samples["m"] * energy_unit
+    c = np.sqrt(samples["k1"])
+    mass = np.sqrt(samples["k0"] / (samples["k1"] ** 2)) * energy_unit
     lines = [
         f"dispersion fit, conf_short={Config.conf_short}, "
         f"model={Config.model}, use_p0={Config.use_p0}, "
         f"chi2/dof={ymean['chi2dof']:.3g}",
+        f"c= {format_mean_err(c.mean(), sem(c, jackknife=True))}",
         f"mass= {format_mean_err(mass.mean(), sem(mass, jackknife=True))} GeV",
-        "sample mean(error):",
+        "parameters mean(error):",
     ]
     for name in samples:
         lines.append(

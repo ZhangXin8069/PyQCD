@@ -1,179 +1,365 @@
-\documentclass[UTF8,fontset=none,11pt,a4paper]{ctexart}
+\documentclass[11pt,a4paper]{article}
 \usepackage[margin=2.5cm]{geometry}
 \usepackage{amsmath,amssymb,bm,booktabs,tabularx}
 \usepackage{xurl}
 \usepackage[hidelinks]{hyperref}
-\setCJKmainfont[AutoFakeBold=2]{AR PL UMing CN}
-\setCJKsansfont{WenQuanYi Micro Hei}
-\setmonofont{DejaVu Sans Mono}
 \DeclareMathOperator{\Tr}{Tr}
 \newcommand{\ii}{\mathrm{i}}
 \newcommand{\OPE}{\mathcal O}
 \newcommand{\TE}{\widetilde F^{E}}
 \newcommand{\TM}{\widetilde F^{M}}
-\title{HYP 链接下的胶子 PDF 研究笔记\\[0.2em]\large 直 Wilson line 算符约定与原始 OPE}
+\title{Gluon PDFs with HYP-Smeared Links\\[0.2em]
+  \large Straight Wilson Line Operators and Code Conventions}
 \author{}
-\date{2026 年 11 月 24 日}
+\date{November 24, 2026}
 \begin{document}
 \maketitle
 
-本笔记记录 4D HYP smearing 10 次的直 Wilson line 胶子 OPE。
-分析采用 unpolarized 的正位移 \(\OPE_U^E(+|z|)\) 和 helicity 的奇差
-\(\OPE_H^E(+z)-\OPE_H^E(-z)\)。两个通道的欧氏组合均为时间分量和减去
-两倍空间分量。这里的 \(z\) 表示沿 Wilson line 的有符号空间位移。
-\(\nu=P_z z\) 为 Ioffe time，计算时用自然单位。
+This note documents the straight Wilson line gluon operators built from
+links after ten iterations of four-dimensional HYP smearing. The
+unpolarized analysis uses the positive displacement \(\OPE_U^E(+|z|)\),
+and the helicity analysis uses the full odd difference
+\(\OPE_H^E(+z)-\OPE_H^E(-z)\). Both Euclidean combinations are the sum of
+two time--space components minus twice the transverse spatial component.
+Here \(z\) is the signed displacement along the line and \(\nu=P_z z\) is the
+Ioffe time in natural units.
 
-\section{Minkowski 与 Euclidean 字典}
+\section{From Minkowski to Euclidean Space}
+\label{sec:wick-dictionary}
 
-Minkowski 顺序为 \((0,1,2,3)=(t,x,y,z)\)，度规
-\(g=\mathrm{diag}(1,-1,-1,-1)\)。取
-\(\epsilon_M^{0123}=+1\)，降指标后 \(\epsilon^M_{0123}=-1\)。
-欧氏格点的代码顺序为 \((x,y,z,t)=(0,1,2,3)\)，取
-\(\epsilon^E_{xyzt}=+1\)。采用同一 Wick 旋转
-\(x_M^0=-\ii x_E^t\)，场强字典为
+\subsection{Coordinates, metrics, and index positions}
+The Minkowski time coordinate is \(x_M^0\), with metric
+\(g_M=\operatorname{diag}(1,-1,-1,-1)\) in the order \((0,x,y,z)\).
+The Euclidean time coordinate is \(x_E^t=\tau\), with metric \(g_E=\delta\).
+Choose the continuation \(\Phi:x_E\mapsto x_M\) with
+\(x_M^0=-\ii\tau\) and \(x_M^i=x_E^i\). The temporal Jacobians and the
+pullback of the metric are
 \begin{align}
-  F^M_{0i}&=\ii F^E_{ti}, & F^M_{ij}&=F^E_{ij},\\
-  \TM_{\mu\nu}&=\tfrac12\epsilon^M_{\mu\nu\rho\sigma}F_M^{\rho\sigma},
-    & \TE_{\mu\nu}&=\tfrac12\epsilon^E_{\mu\nu\rho\sigma}F^E_{\rho\sigma},\\
-  \TM_{0i}&=\TE_{ti}, & \TM_{ij}&=-\ii\TE_{ij}.
+ \frac{\partial x_M^0}{\partial\tau}&=-\ii,&
+ \frac{\partial\tau}{\partial x_M^0}&=+\ii,\notag\\
+ ds_M^2=(dx_M^0)^2-d\bm x^2&\longrightarrow-d\tau^2-d\bm x^2,&
+ \Phi^*g_M&=-g_E.
+ \label{eq:wick-metric}
 \end{align}
-例如，欧氏代码中
-\(\TE_{30}=-F^E_{12}\)，
-\(\TE_{31}=+F^E_{02}\)，
-\(\TE_{01}=+F^E_{23}\)。
-Minkowski 的对偶张量中使用 \(F_M^{\rho\sigma}\)，因此升降指标的符号必须
-与 Wick 相位一起追踪。这里的 Wick 相位属于算符层。核子 helicity 投影、
-动量与自旋方向和最终比值的复数相位在 \(C_3/C_2\) 层另行定义。
-相关字典也见梯度流笔记第 8.3--8.7 节 \cite{FlowNote}。
+Here \(\Phi^*\) expresses a tensor in the continued coordinates. A covariant
+(lower) index is transformed by \(\partial x_M^\mu/\partial x_E^a\), while a
+contravariant (upper) index uses the inverse Jacobian. Indices are raised
+and lowered with \(g_M\) in Minkowski space and with \(g_E\) in Euclidean
+space. The labels \(M,E\) specify the signature: \(F^M_{\mu\nu}\) and
+\(F^E_{ab}\) have lower tensor indices, whereas \(F_M^{\mu\nu}\) and
+\(F_E^{ab}\) have upper tensor indices. The Euclidean code uses a separate
+numeric convention: \(0,1,2,3\) mean \(x,y,z,t\), respectively.
 
-\section{等时直线缩并与通道组装}
+\subsection{Wick factors from the gauge connection}
+The gauge connection is a matrix-valued one-form \(A=A_\mu dx^\mu\).
+Using the \(\ii g_s A_\mu dx^\mu\) Wilson line convention, take
+\(A_E=\Phi^*A_M\). Then
+\begin{equation}
+ A^E_t=-\ii A^M_0,\qquad A^E_i=A^M_i,\qquad
+ \partial_\tau=-\ii\partial_0,\qquad
+ \partial_0\equiv\frac{\partial}{\partial x_M^0}.
+ \label{eq:wick-potential}
+\end{equation}
+The Minkowski fields on the right are evaluated at \(x_M=\Phi(x_E)\).
+Substitution in \(F=dA-\ii g_s A\wedge A\) gives
+\begin{align}
+ F^E_{ti}
+ &=\partial_\tau A^E_i-\partial_i A^E_t-\ii g_s[A^E_t,A^E_i]\notag\\
+ &=(-\ii)\bigl(\partial_0 A^M_i-\partial_i A^M_0
+                     -\ii g_s[A^M_0,A^M_i]\bigr)
+ =-\ii F^M_{0i},\qquad F^E_{ij}=F^M_{ij}.
+ \label{eq:wick-curvature}
+\end{align}
+Equivalently, the curvature two-form obeys \(F_E=\Phi^*F_M\). Using
+\(F_M^{\mu\nu}=g_M^{\mu\alpha}g_M^{\nu\beta}F^M_{\alpha\beta}\) gives the
+following dictionary:
+\begin{align}
+ F^M_{0i}&\longrightarrow +\ii F^E_{ti},&
+ F_M^{0i}&=(+1)(-1)F^M_{0i}\longrightarrow-\ii F_E^{ti},\notag\\
+ F^M_{ij}&\longrightarrow F^E_{ij},&
+ F_M^{ij}&=(-1)(-1)F^M_{ij}\longrightarrow F_E^{ij}.
+ \label{eq:wick-field-components}
+\end{align}
+In Euclidean space \(F_E^{ti}=F^E_{ti}\). Thus the two Minkowski index
+placements give opposite Wick factors for a time--space component. Raising
+two spatial indices gives two minus signs, which cancel. The straight
+Wilson line is spatial and at equal time: \(dx^0=0\) and
+\(A_i^M dx_M^i\longrightarrow A_i^E dx_E^i\). It contributes no relative
+Wick phase.
 
-令 \(y=x+z\hat{\bm n}\)，\(W_z(x)\) 为从 \(x\) 到 \(y\) 的有向链接乘积。
-两端场强与 Wilson line 取自同一套已经 HYP 平滑的规范场。
-对每一个时间片 \(t/a\)，程序保存
+\subsection{Orientation and the dual field strength}
+Choose \(\epsilon_M^{0xyz}=+1\). Lowering all four indices with \(g_M\)
+gives \(\epsilon^M_{0xyz}=(+1)(-1)^3\epsilon_M^{0xyz}=-1\). The lattice
+orientation is \(\epsilon^E_{xyzt}=+1\); moving \(t\) to the front takes
+three transpositions, so \(\epsilon^E_{txyz}=-1\). By antisymmetry, the two
+lower-index tensors have equal numerical components in the same order
+(with \(0\) identified with \(t\)). The tensor pullback is a separate
+operation: it includes the temporal Jacobian, so
+\(\Phi^*\epsilon^M=-\ii\epsilon^E\).
+
+The lower-index dual fields are
+\begin{align}
+ \TM_{\mu\nu}&=\tfrac12\epsilon^M_{\mu\nu\rho\sigma}F_M^{\rho\sigma},&
+ \TE_{ab}&=\tfrac12\epsilon^E_{abcd}F_E^{cd}.
+ \label{eq:wick-dual-def}
+\end{align}
+For \(\TM_{0i}\), the complementary indices in the ordinary field strength
+are both spatial. For \(\TM_{ij}\), the complementary pair includes time,
+and the ordinary field strength in the dual has \emph{upper} indices.
+Consequently,
+\begin{equation}
+ \TM_{0i}\longrightarrow\TE_{ti},\qquad
+ \TM_{ij}\longrightarrow-\ii\TE_{ij}.
+ \label{eq:wick-dual-components}
+\end{equation}
+The same result follows from the pullback: \(\Phi^*g_M=-g_E\) contributes two
+cancelling minus signs when raising the curvature indices, leaving
+\(\Phi^*\TM=-\ii\TE\). In a \(ti\) component the left side already contains
+\((-\ii)\TM_{0i}\); in an \(ij\) component it is simply \(\TM_{ij}\). If the
+Minkowski dual itself is needed with upper indices, one further has
+\(\widetilde F_M^{0i}=-\TM_{0i}\) and \(\widetilde F_M^{ij}=\TM_{ij}\).
+The operator phase derived here and the phase of a nucleon spin projection
+are tracked separately. See also Secs.~8.3--8.7 of the gradient flow
+notes~\cite{FlowNote}.
+
+\section{Equal-Time Bilocals and Operator Combinations}
+
+Let \(y=x+z\hat{\bm n}\), and let \(W_z(x)\) be the ordered link product on
+the path from \(x\) to \(y\). Both endpoint fields and the line are built
+from the same HYP-smeared gauge field. On each time slice the program stores
 \begin{equation}
  M^E_{A;B}(t,z)=\sum_{\bm x}\Tr\!\left[
-    A(y,t)W_z^\dagger(x)B(x,t)W_z(x)\right] .
+ A(y,t)W_z^\dagger(x)B(x,t)W_z(x)\right].
  \label{eq:bilocal}
 \end{equation}
-\(U_{\mu\nu}=M^E_{F_{\mu\nu};F_{\mu\nu}}\)，
-\(H_{\mu\nu}=M^E_{F_{\mu\nu};\widetilde F_{\mu\nu}}\)。
-颜色迹用基本表示。若两端均为无迹场强，取
-\(\Tr(T^aT^b)=\delta^{ab}/2\)，则基本表示迹为相应伴随线颜色缩并的
-\(1/2\)。当前格点内核使用四叶 Clover
-\[
- F^{E,\mathrm{HYP}}_{\mu\nu}=-\frac{\ii}{8}
- (Q_{\mu\nu}-Q_{\mu\nu}^{\dagger})
-\]
-并保留色迹。与无迹 Clover 的差是
-\(\tfrac13\sum_{\bm x}\Tr A(y,t)\Tr B(x,t)\)，已有双场强文件无法单独给出这项。
-梯度流笔记的生产方案从 thin links 做 Wilson flow，并在两个端点去迹。
-二者可以采用同一张量组合，分别保留各自的算符归一化和重整化定义。
+We write \(K^E_{ab;cd}=M^E_{F^E_{ab};F^E_{cd}}\),
+\(U_{ab}=K^E_{ab;ab}\), and
+\(H^E_{ab}=M^E_{F^E_{ab};\TE_{ab}}\). The index pairs are fixed in these
+definitions. The ordered trace is in the fundamental representation.
+For traceless endpoint fields and \(\Tr(T^aT^b)=\delta^{ab}/2\), this trace
+is half the corresponding contraction with an adjoint link.
+
+The lattice kernel uses the four-plaquette clover
+\begin{equation}
+ F^{E,\mathrm{HYP}}_{\mu\nu}=-\frac{\ii}{8}(Q_{\mu\nu}-Q_{\mu\nu}^\dagger)
+ \label{eq:clover}
+\end{equation}
+and retains its color trace. The difference between the retained-trace and
+traceless versions of Eq.~\eqref{eq:bilocal} is
+\(\tfrac13\sum_{\bm x}\Tr A(y,t)\Tr B(x,t)\); the stored bilocals alone do not
+isolate it. The gradient flow production prescription starts with thin
+links, applies Wilson flow, and removes the color trace at the endpoints.
+The same tensor combination can be used in both prescriptions, with their
+respective normalization and renormalization conventions.
 
 \subsection{Unpolarized}
-
-沿 \(z\) 方向时，Khan 等的 Minkowski 组合
-\(\sum_{i=x,y}M^M_{0i;i0}+2M^M_{xy;yx}\) 消去了 \(\mathcal M_{gg}\)
-\cite{Khan,BMRU}。Wick 旋转后
-\(F^M_{0i}=+\ii F^E_{ti}\)、\(F^M_{i0}=-\ii F^E_{ti}\)，两项相乘为正，
-而空间反序给出负号。这给出 Khan 等的式 (19) 以及 Chen 等
-的式 (2)--(3) \cite{Khan,Chen}
+For a line along \(z\), the Minkowski combination
+\(\sum_{i=x,y}M^M_{0i;i0}+2M^M_{xy;yx}\) cancels
+\(\mathcal M_{gg}\)~\cite{Khan,BMRU}. The time pair gives
+\((+\ii)(-\ii)=+1\); the spatial pair has
+\(F^M_{yx}=-F^M_{xy}\). This yields the Euclidean combination in Eq.~(19)
+of Khan et al. and Eqs.~(2)--(3) of Chen et al.~\cite{Khan,Chen}:
 \begin{equation}
  \OPE_U^E(z)=U_{tx}(z)+U_{ty}(z)-2U_{xy}(z)=T_U(z)-S_U(z).
  \label{eq:unpol}
 \end{equation}
-其中 \(T_U=U_{tx}+U_{ty}\)，\(S_U=2U_{xy}\)。空间系数 2 来自
-\((i,j)=(x,y),(y,x)\) 两个反序分量。
+Here \(T_U=U_{tx}+U_{ty}\), \(S_U=2U_{xy}\), and the factor of two counts
+the ordered transverse pairs \((x,y)\) and \((y,x)\).
 
-完整周期空间求和下，把 \(-z\) 路径的起点移到另一端并循环颜色迹，
-得到
-\[
- M^E_{A;B}(-z)=M^E_{B;A}(+z),\qquad
- U_{\mu\nu}(-z)=U_{\mu\nu}(+z).
-\]
-这个等式在每个组态、每个时间片成立。实际读入时取 \(+|z|\)，也包括局域
-\(z=0\)。旧偶和等于 \(2\OPE_U^E(+|z|)\)，是历史存储的归一化。
-若用正半轴实现全轴 Fourier 变换，\(1/(2\pi)\) 的全轴变换系数对应
-\(1/\pi\) 的正半轴余弦变换系数。
-
-\subsection{Helicity}
-
-Egerer 等式 (5) 定义奇差，式 (10) 的 Minkowski 组合为
-\(\sum_{i=x,y}\widetilde M^M_{0i;0i}+2\widetilde M^M_{xy;xy}\)。
-Balitsky、Morris、Radyushkin 的式 (2.17)--(2.21) 说明它消去
-\(\widetilde{\mathcal M}_{gg}\)，并保留有限动量的
-\(m_N^2/P_z^2\) 项 \cite{Egerer,BMRH}。时间项由
-\(F^M_{0i}=\ii F^E_{ti}\) 带来 \(+\ii\)。空间项中的普通 \(F_{xy}\)
-在 Wick 旋转下保持不变，对偶场强给出
+For a full periodic spatial sum, shifting the origin to the other endpoint
+and using cyclicity of the color trace gives
 \begin{equation}
- \TM_{xy}
- =\epsilon^M_{xy0z}F_M^{0z}
- =(-1)(-\ii F^E_{tz})
- =-\ii\TE_{xy},\qquad \TE_{xy}=F^E_{zt}.
+ M^E_{A;B}(-z)=M^E_{B;A}(+z),\qquad U_{ab}(-z)=U_{ab}(+z).
+ \label{eq:endpoint-exchange}
+\end{equation}
+This holds for each configuration and time slice. The analysis uses
+\(+|z|\), including \(z=0\). The historical even sum is
+\(2\OPE_U^E(+|z|)\). For a full-axis Fourier transform normalized by
+\(1/(2\pi)\), the corresponding positive-axis cosine transform of an even
+function has prefactor \(1/\pi\).
+
+\subsection{Helicity: Index Positions and the Relative Wick Sign}
+\label{sec:helicity-wick}
+
+\paragraph{1. Minkowski components in the reference operator.}
+Equation (3) of Egerer et al.~\cite{Egerer} uses \(F^M_{\mu\alpha}(z)\) at
+the displaced endpoint and \(\TM_{\lambda\beta}(0)\) at the origin. Use
+\(W\) as shorthand for the color contraction with parallel transport and
+write, for fixed \(a,b\),
+\begin{equation}
+ H^M_{ab}(z)=F^M_{ab}(z)W\TM_{ab}(0),\qquad
+ J^M_{ab}(z)=\frac12\sum_{\rho,\sigma}\epsilon^M_{ab\rho\sigma}
+        F_M^{ab}(z)W F_M^{\rho\sigma}(0).
+ \label{eq:hel-mj}
+\end{equation}
+The two ordinary fields in \(J^M_{ab}\) have upper indices and the
+Levi-Civita tensor has lower indices. Equation (5) of the reference takes
+the full odd difference; Eq.~(10) selects the temporal and transverse
+spatial components. Before the odd difference, the combination is
+\begin{equation}
+ \OPE_H^M(z)=\sum_{i=x,y}H^M_{ti}(z)+\sum_{i,j=x,y}H^M_{ij}(z)
+            =H^M_{tx}(z)+H^M_{ty}(z)+2H^M_{xy}(z),
+ \label{eq:hel-minkowski}
+\end{equation}
+where the Minkowski label \(t\) denotes index \(0\). The \(xx\) and \(yy\)
+terms vanish. The \(xy\) and \(yx\) terms coincide because both
+antisymmetric fields change sign under the exchange. This gives the
+factor of two. The combination cancels the invariant amplitude
+\(\widetilde{\mathcal M}_{gg}\) and retains a finite momentum correction
+proportional to \(m_N^2/P_z^2\); see Sec.~2.4 of
+Ref.~\cite{BMRH} and Eq.~(13) of Ref.~\cite{Egerer}.
+
+\paragraph{2. Wick rotation with both ordinary field strengths raised.}
+For fixed \(a,b\), \(F^M_{ab}=g^M_{aa}g^M_{bb}F_M^{ab}\). Hence
+\begin{equation}
+ H^M_{tx}=-J^M_{tx},\qquad H^M_{ty}=-J^M_{ty},\qquad H^M_{xy}=+J^M_{xy}.
+ \label{eq:hel-raise}
+\end{equation}
+Equation~\eqref{eq:hel-minkowski} therefore uses
+\(-J^M_{tx}-J^M_{ty}+2J^M_{xy}\). A sum with positive coefficients for all
+three \(J^M\) components defines a different Minkowski operator.
+
+Every nonzero Levi-Civita component in \(J^M\) contains four distinct
+indices. The two upper-index fields thus contain time exactly once: at
+the displaced endpoint for \(J^M_{ti}\), and at the origin for
+\(J^M_{xy}\). The transformation in Eq.~\eqref{eq:wick-field-components}
+gives a common \(-\ii\), since the numerical lower-index
+Levi-Civita components agree in the same ordering. Thus
+\(J^M_{ab}\longrightarrow-\ii H^E_{ab}\) and
+\begin{align}
+ \OPE_H^M&=-J^M_{tx}-J^M_{ty}+2J^M_{xy}\notag\\
+ &\longrightarrow\ii\bigl(H^E_{tx}+H^E_{ty}-2H^E_{xy}\bigr).
+ \label{eq:hel-wick-raised-op}
+\end{align}
+In this representation the three Wick factors agree. The relative sign
+comes from the Minkowski metric factors in Eq.~\eqref{eq:hel-raise}.
+
+\paragraph{3. Check with the original index positions.}
+Expand the dual at the origin, keeping the left field at \(z\) and the
+right field at zero:
+\begin{align}
+ H^M_{tx}&=F^M_{0x}W(-F_M^{yz})
+ \longrightarrow(+\ii F^E_{tx})W(-F^E_{yz})=+\ii H^E_{tx},\notag\\
+ H^M_{ty}&=F^M_{0y}W(+F_M^{xz})
+ \longrightarrow(+\ii F^E_{ty})W(+F^E_{xz})=+\ii H^E_{ty}.
+ \label{eq:hel-wick-time}
+\end{align}
+Here the temporal index is on the \emph{lower-index} field at the displaced
+endpoint. For \(H^M_{xy}\), it is on the \emph{upper-index} field inside the
+dual at the origin. With \(\epsilon^M_{xy0z}=\epsilon^E_{xytz}=-1\),
+\begin{equation}
+ \TM_{xy}=-F_M^{0z}
+ \longrightarrow-(-\ii F^E_{tz})=+\ii F^E_{tz}
+ =-\ii F^E_{zt}=-\ii\TE_{xy}.
  \label{eq:helicity-wick-xy}
 \end{equation}
-因此 Minkowski 的加号组合是
-\(\ii(H_{tx}+H_{ty}-2H_{xy})\)。按代码只保存欧氏缩并的约定，定义
+Since \(F^M_{xy}\longrightarrow F^E_{xy}\), the spatial contribution is
+\(H^M_{xy}\longrightarrow-\ii H^E_{xy}\). The ratio of its Wick factor to
+that of the two time--space contributions is \(-1\). Reversing the time
+continuation changes the common phase and leaves this relative sign intact.
+
+A tensor pullback gives a further check. The full covariant bilocal
+\(F^M_{\mu\nu}W\TM_{\lambda\beta}\) pulls back to
+\(-\ii F^E_{ab}W\TE_{cd}\). In the \(0i;0i\) component, the left side has
+two free temporal indices and therefore a factor \((-\ii)^2=-1\):
+\(-H^M_{ti}=-\ii H^E_{ti}\). For \(xy;xy\), there is no temporal Jacobian on
+the left, giving \(H^M_{xy}=-\ii H^E_{xy}\). Removing the common
+\(+\ii\) from the continued operator defines
 \begin{align}
- \OPE_H^E(z)&=H_{tx}(z)+H_{ty}(z)-2H_{xy}(z)=T_H(z)-S_H(z),\\
- \OPE_{H,\mathrm{odd}}^E(z)&=\OPE_H^E(+z)-\OPE_H^E(-z).
+ \OPE_H^E(z)&=H^E_{tx}(z)+H^E_{ty}(z)-2H^E_{xy}(z)=T_H(z)-S_H(z),
+ \label{eq:hel-comb}\\
+ \OPE_{H,\mathrm{odd}}^E(z)&=\OPE_H^E(+z)-\OPE_H^E(-z),
  \label{eq:hel}
 \end{align}
-这里 \(T_H=H_{tx}+H_{ty}\)，\(S_H=2H_{xy}\)。用
-\(K_{\mu\nu;\rho\sigma}=M^E_{F_{\mu\nu};F_{\rho\sigma}}\) 展开，两个空间分量为
+where \(T_H=H^E_{tx}+H^E_{ty}\) and \(S_H=2H^E_{xy}\).
+
+\paragraph{4. Complementary components and normalization.}
+The \(1/2\) in the dual definition compensates for the two orders of the
+complementary indices:
+\begin{equation}
+ \tfrac12\bigl(\epsilon^E_{ab\rho\sigma}F^E_{\rho\sigma}
+       +\epsilon^E_{ab\sigma\rho}F^E_{\sigma\rho}\bigr)
+ =\epsilon^E_{ab\rho\sigma}F^E_{\rho\sigma}
+ \qquad(\rho,\sigma\ \text{fixed}).
+\end{equation}
+In particular,
 \begin{align}
- U_{xy}&=K_{xy;xy},    & -2U_{xy}&=-2K_{xy;xy},\\
- H_{xy}&=K_{xy;zt}=-K_{xy;tz}, & -2H_{xy}&=+2K_{xy;tz}.
+ \TE_{tx}&=-F^E_{yz},& \TE_{ty}&=+F^E_{xz},& \TE_{xy}&=+F^E_{zt},\notag\\
+ H^E_{tx}&=-K^E_{tx;yz},& H^E_{ty}&=+K^E_{ty;xz},&
+ H^E_{xy}&=K^E_{xy;zt}=-K^E_{xy;tz}.
  \label{eq:compare-xy}
 \end{align}
-两种空间项都写成 \(-2\) 乘各自的原始分量。Unpolarized 的负号
-来自 Minkowski 空间指标反序，helicity 的负号来自式
-\eqref{eq:helicity-wick-xy}。若直接用 \(F_{tz}\) 写 helicity 的第二端点，
-系数为 \(+2\)。\nolinkurl{Helicity_F01_Ft01} 已经用
-\(\widetilde F_{01}=F_{23}\) 缩并，因此该文件在式 \eqref{eq:hel} 中
-直接乘 \(-2\)。
+Thus Eq.~\eqref{eq:hel-comb} is
+\(-K^E_{tx;yz}+K^E_{ty;xz}+2K^E_{xy;tz}\). The last term is equivalently
+\(-2K^E_{xy;zt}\). The unpolarized spatial contribution
+\(-2K^E_{xy;xy}\) has the same weight in the stored-component basis; its
+sign comes from reversing the spatial indices at the second Minkowski
+endpoint.
 
-在同一组态、时间片和距离上先用恒定权重组合各方向，再做位移奇差，
-或者先对各张量分量做奇差再组合，结果相同。
-式 \eqref{eq:hel} 的差值不除以 2，局域点 \(z=0\) 严格为零。
-\(T_H+S_H\) 是空间项反号的对照。
+The odd difference commutes with taking the linear combination of the
+three raw channels. Equation~\eqref{eq:hel} follows Eq.~(5) of
+Ref.~\cite{Egerer} and vanishes exactly at \(z=0\). A unit-normalized odd
+projection would use half of this difference, giving a different overall
+normalization. That factor is independent of the \(1/2\) in the dual and
+the factor of two from summing over ordered transverse pairs.
 
-\section{代码、OPE 路径与读取方式}
+\section{Implementation and Stored Data}
+\label{sec:code-conventions}
 
-原始 OPE 根目录
+\subsection{Gauge layout, field strengths, and endpoint ordering}
+The OPE root is
 \begin{quote}
 \nolinkurl{/public/group/lqcd/donghx/Ope_Gluon/Result_hyp_4D_10times}
 \end{quote}
-代码位于根目录下的 \nolinkurl{Unified_Ope_code/}。
-\nolinkurl{gluon_ope.py} 是 NumPy 入口并包含公共内核。
-第 25 行定义空间轮换，第 61 行开始构造 Clover，第 133 行开始取对偶，
-第 177 行开始构造 Wilson line 并做缩并。
-\nolinkurl{gluon_ope_cupy.py} 是导入该内核的 CuPy/HIP 入口。
-输入是已经平滑的规范场，程序直接使用这些链接。
-\nolinkurl{Unified_Ope_code/README.md} 记录命令参数、输入的链接轴
-\((t,z,y,x,\mathrm{link},c,c)\) 和两个后端入口。
+The NumPy entry point and shared kernel are in
+\nolinkurl{Unified_Ope_code/gluon_ope.py}; the CuPy/HIP entry point
+\nolinkurl{Unified_Ope_code/gluon_ope_cupy.py} calls the same kernel.
+The input is already HYP smeared. The gauge array has layout
+\((N_t,N_z,N_y,N_x,4,3,3)\), with axes
+\((t,z,y,x,\mathrm{link},\mathrm{color},\mathrm{color})\). The direction
+labels on the link axis are \(0=x,1=y,2=z,3=t\). Thus for a spatial link
+label \(d\), the coordinate array axis is \(3-d\) (zero-based). In
+particular, the number \(0\) in the Minkowski derivation is time, but
+\texttt{F30} in a lattice filename is \(F^E_{tx}\).
 
-正式文件按
-\nolinkurl{<ensemble>/<xdir|ydir|zdir>/<conf>/<filename>.npy}
-排列。以下为目录中可读的四个 ensemble。表中的 \(N_t\) 对应输出时间轴。
-\begin{center}
-\begin{tabular}{lrrr}
-\toprule
-Ensemble & \(L/a\) & \(N_t\) & \(a\) {\rm [fm]} \\
-\midrule
-C32P29 & 32 & 64  & 0.1050 \\
-E32P29 & 32 & 64  & 0.0897 \\
-F32P30 & 32 & 96  & 0.0775 \\
-H48P32 & 48 & 144 & 0.0519 \\
-\bottomrule
-\end{tabular}
-\end{center}
-文件后缀使用轮换后的实际指标。每行前两个分量相加为 \(T\)，第三个分量乘 2
-为 \(S\)，适用于两个通道。
+\begin{description}
+\item[Clover and antisymmetry.] Lines 61--87 of \nolinkurl{gluon_ope.py}
+use the four oriented plaquettes in Eq.~\eqref{eq:clover}, starting with
+\((+\mu,+\nu,-\mu,-\nu)\). The cache (lines 110--131) stores the six pairs
+with \(\mu<\nu\), returns zero for \(\mu=\nu\), and implements
+\(F^E_{\nu\mu}=-F^E_{\mu\nu}\) for a reversed pair.
+\item[Dual.] Lines 40--45 fix \(\epsilon^E_{0123}=+1\) in the code order
+\(xyzt\). Lines 133--139 select the complementary pair \(c<d\) and return
+\(\epsilon^E_{abcd}F^E_{cd}\). This equals the full dual sum in
+Eq.~\eqref{eq:wick-dual-def}. For example,
+\(\widetilde F^E_{30}=-F^E_{12}\),
+\(\widetilde F^E_{31}=+F^E_{02}\), and
+\(\widetilde F^E_{01}=+F^E_{23}\).
+\item[Endpoints.] For a request \texttt{--indices MU NU RHO SIGMA},
+\texttt{MU NU} specifies the ordinary field at the displaced endpoint;
+\texttt{RHO SIGMA} specifies the ordinary field (unpolarized) or the dual
+(helicity) at the origin. Lines 197--238 form the color trace in
+Eq.~\eqref{eq:bilocal}: the kernel transports the first field back to
+the origin, yielding \(\Tr[W_z F(y)W_z^\dagger G(x)]\), the same trace by
+cyclicity. Positive and negative displacements use their own directed
+lines; changing the displacement does not transpose either index pair.
+\item[Raw normalization.] The kernel stores the full complex color trace
+summed over spatial sites. It includes no spatial volume divisor,
+\(g_s\) or \(a\) conversion factor, parity projection, or T/S weight.
+\end{description}
+
+\subsection{Direction rotations and component filenames}
+The request indices are specified in the \texttt{zdir} reference frame.
+Lines 24--52 of \nolinkurl{gluon_ope.py} apply the spatial cycles
+\((x,y,z)\mapsto(y,z,x)\) for \texttt{xdir} and
+\((x,y,z)\mapsto(z,x,y)\) for \texttt{ydir}, leaving time fixed. These are
+even permutations, so there is no additional sign for the dual. In
+particular, the order \(20\) in \texttt{ydir} is retained in the filename.
+The actual pair labels for both endpoints in the standard channels are:
 \begin{center}
 \begin{tabular}{lccc}
 \toprule
-Wilson line 方向 & 时间分量 1 & 时间分量 2 & 空间分量 \\
+Line direction & Time--space pair 1 & Time--space pair 2 & Spatial pair \\
 \midrule
 \texttt{xdir} & \(31\) & \(32\) & \(12\) \\
 \texttt{ydir} & \(32\) & \(30\) & \(20\) \\
@@ -182,35 +368,109 @@ Wilson line 方向 & 时间分量 1 & 时间分量 2 & 空间分量 \\
 \end{tabular}
 \end{center}
 
-以 \nolinkurl{F32P30/zdir/25400/} 为例，\(U_{30}(+z)\) 对应
-\nolinkurl{Unpol_F30_F30_dz23.npy}。\(H_{30}(+z)\) 和 \(H_{30}(-z)\) 分别对应
-\nolinkurl{Helicity_F30_Ft30_dz23.npy} 和
-\nolinkurl{Helicity_F30_Ft30_minus_dz23.npy}。数组为
-\texttt{complex128}，轴为 \((t/a,|z|/a)\)，\texttt{dz23} 含
-\(0,\ldots,23\) 共 24 列。旧档也有 \texttt{dz19} 和 \texttt{dz29}。
-组合时用相同组态、方向、时间片和共有距离列。保留复数到下游投影。
-旧的 \nolinkurl{Unpol_2F01F01_minus_F30F30_minus_F31F31}
-文件名对应 \(S_U-T_U\)，需要变号才能与式 \eqref{eq:unpol} 对齐。
-\nolinkurl{_receipts/} 记录组态级生产或导入来源和文件信息。
+For \texttt{zdir}, the helicity file stems and their contributions to
+Eq.~\eqref{eq:hel-comb} are:
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+File stem & Stored component & Ordinary-field form & Weight \\
+\midrule
+\nolinkurl{Helicity_F30_Ft30} & \(H^E_{tx}\) & \(-K^E_{tx;yz}\) & \(+1\) \\
+\nolinkurl{Helicity_F31_Ft31} & \(H^E_{ty}\) & \(+K^E_{ty;xz}\) & \(+1\) \\
+\nolinkurl{Helicity_F01_Ft01} & \(H^E_{xy}\) & \(+K^E_{xy;zt}\) & \(-2\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+The sign from selecting the complementary field is already built into
+\texttt{Ft}. In particular, reading \nolinkurl{Helicity_F01_Ft01} requires
+weight \(-2\). The coefficient \(+2\) applies if the second endpoint is
+written explicitly as \(F^E_{tz}=-F^E_{zt}\). The unpolarized files use
+\texttt{Unpol} and \texttt{F} in place of \texttt{Helicity} and \texttt{Ft};
+the same weights act on \((U_{tx},U_{ty},U_{xy})\).
 
-\paragraph{落盘 helicity 抽检}
-从 C32P29/37800、E32P29/8700、F32P30/1000、H48P32/2480 的
-HYP 规范场重建场强，用显式互补指标和正负 Wilson line 复算
-\texttt{zdir} 的三个分量。每组检查 \(t/a=0,N_t/2\) 和 \(|z|/a=0,1,2,3\)。
-192 个原始分量和 32 个奇差组合的最大绝对残差分别为
-\(2.31\times10^{-14}\) 和 \(2.49\times10^{-14}\)。
-另取 F32P30/39700 沿相同步骤与旧导入的 helicity 数据比较，
-用该组态生产回执中的 HYP 输入复算，原始分量最大绝对差为
-\(1.14\times10^{-3}\)，奇差最大绝对差为 \(5.73\times10^{-4}\)。
-这是该组态的数值复现差异，具体来源待确认。组态 1000 的通过结果
-适用于本次抽检的切片和距离。
+\subsection{Data layout and the F32P30 fit input}
+Production files are organized as
+\begin{quote}
+\nolinkurl{<ensemble>/<xdir|ydir|zdir>/<conf>/<filename>.npy}.
+\end{quote}
+For example, \nolinkurl{F32P30/zdir/25400/} contains
+\nolinkurl{Unpol_F30_F30_dz23.npy} for positive displacement, and
+\nolinkurl{Helicity_F30_Ft30_dz23.npy} and
+\nolinkurl{Helicity_F30_Ft30_minus_dz23.npy} for the two helicity
+displacements. The arrays are \texttt{complex128}, with axes
+\((t/a,|z|/a)\). The suffix \texttt{dz23} denotes distances \(0,\ldots,23\),
+including both endpoints. The archive also contains \texttt{dz19} and
+\texttt{dz29} products. Combine only common configurations, directions,
+time slices, and distances. Production and import provenance is recorded
+in \nolinkurl{_receipts/}; input and backend options are documented in
+\nolinkurl{Unified_Ope_code/README.md}.
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+Ensemble & \(L/a\) & \(N_t\) & \(a\) [fm] \\
+\midrule
+C32P29 & 32 & 64  & 0.1050 \\
+E32P29 & 32 & 64  & 0.0897 \\
+F32P30 & 32 & 96  & 0.0775 \\
+H48P32 & 48 & 144 & 0.0519 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For the F32P30 example at \(P_z=4(2\pi/L)\), the script
+\nolinkurl{Ope_Gluon/F32P30_P4_AdjacentAnchor075_20261124/run.py}
+uses component order \texttt{(30,31,01)} (lines 33--34). The file reader
+(lines 54--59 and 84--88) takes the real part of the positive-displacement
+unpolarized OPE and of the full helicity difference. For the disconnected
+contraction it uses the real \texttt{nopol} nucleon correlator for the
+unpolarized numerator and the imaginary \texttt{pol35} correlator for
+the helicity numerator; the real \texttt{nopol} correlator supplies the
+ratio denominator for both (lines 169--188). The code keeps three
+combinations, \(T\), \(T+S\), and \(T-S\), with \(T=O_{tx}+O_{ty}\) and
+\(S=2O_{xy}\). The combinations in Eqs.~\eqref{eq:unpol} and
+\eqref{eq:hel-comb} correspond to \(T-S\). The component cross-check in
+\nolinkurl{helicity_components.py} uses weights \((1,1,-2)\) (line 18) and
+assembles the full signal before fitting (lines 184--190).
+The independent calibration of the absolute spin and momentum phase
+of the historical \texttt{Im pol35} projection remains open.
+
+The legacy unpolarized filename
+\nolinkurl{Unpol_2F01F01_minus_F30F30_minus_F31F31} labels \(S_U-T_U\);
+its sign must be reversed to match Eq.~\eqref{eq:unpol}.
+
+\subsection{Numerical checks and coverage}
+A spot check with Abelian links and known plaquette angles tested all 12
+ordered clover components; the maximum absolute difference was
+\(5.55\times10^{-17}\). For HYP configuration F32P30/1000, an explicit
+color trace with ordinary complementary field strengths and directed
+Wilson lines was compared to the production files in all three spatial
+directions. At \(t/a=0,48\) and \(|z|/a=0,1,2,3\), the largest absolute
+difference was \(3.55\times10^{-14}\) for 144 helicity values (both
+orientations) and \(5.68\times10^{-14}\) for 72 unpolarized values (positive
+orientation). These checks cover the index order, relative signs, and
+transport at the sampled points.
+
+An earlier \texttt{zdir} check used four configurations:
+\begin{center}
+37800 (C32P29), 8700 (E32P29), 1000 (F32P30), and 2480 (H48P32).
+\end{center}
+The sampled time slices were \(t/a=0,N_t/2\), and the distances were
+\(|z|/a=0,1,2,3\).
+The largest absolute differences among 192 raw helicity values and 32
+combined odd values were \(2.31\times10^{-14}\) and
+\(2.49\times10^{-14}\), respectively. A separate comparison to the
+legacy import for F32P30/39700, using the gauge input recorded in the
+production receipt, gave differences up to \(1.14\times10^{-3}\) for raw
+components and \(5.73\times10^{-4}\) for odd differences. Its origin has
+not been identified; that configuration is excluded from the example fit.
 
 \begin{thebibliography}{9}
 \bibitem{Khan}
 T.~Khan et al., Phys.\ Rev.\ D \textbf{104}, 094516 (2021),
 \href{https://arxiv.org/abs/2107.08960v2}{arXiv:2107.08960v2}.
 \bibitem{BMRU}
-I.~Balitsky, W.~Morris and A.~Radyushkin, Phys.\ Lett.\ B \textbf{808},
+I.~Balitsky, W.~Morris, and A.~Radyushkin, Phys.\ Lett.\ B \textbf{808},
 135621 (2020), \href{https://arxiv.org/abs/1910.13963}{arXiv:1910.13963}.
 \bibitem{Chen}
 C.~Chen et al., \emph{Unpolarized gluon PDF of the nucleon from lattice QCD
@@ -220,10 +480,10 @@ at physical point in the continuum limit},
 C.~Egerer et al., Phys.\ Rev.\ D \textbf{106}, 094511 (2022),
 \href{https://arxiv.org/abs/2207.08733v2}{arXiv:2207.08733v2}.
 \bibitem{BMRH}
-I.~Balitsky, W.~Morris and A.~Radyushkin, JHEP \textbf{02}, 193 (2022),
+I.~Balitsky, W.~Morris, and A.~Radyushkin, JHEP \textbf{02}, 193 (2022),
 \href{https://arxiv.org/abs/2112.02011}{arXiv:2112.02011}.
 \bibitem{FlowNote}
 H.~Dong, \emph{Gradient-Flowed Quark and Gluon Quasi-PDFs in Lattice QCD},
-第 8 节，\nolinkurl{/public/home/donghx/Note/Gradient_Flow/main.pdf}.
+Sec.~8, \nolinkurl{/public/home/donghx/Note/Gradient_Flow/main.pdf}.
 \end{thebibliography}
 \end{document}

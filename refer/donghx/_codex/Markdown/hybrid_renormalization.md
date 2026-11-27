@@ -1811,7 +1811,7 @@ $$3.77\times10^{-15}.$$
 
 `BASE/06_renorm_RGR_LRR/` 已保存 **unpolarized connected u-d** 的 NLO、RGR、RGR+LRR 坐标空间对照，三个 ensemble 为 P3/P4，共用相同裸量和 bootstrap。该测试通过替换短距系数并重新拟合全部配套 ZR 参数实现，不是简单对现成矩阵元加一个曲线修正。三套整体 ZR 同样未通过数据 Q 门。
 
-截至本节核查，不能把该目录描述为九种 PDF 全部完成 RGR/LRR，更不能说本批 03 Fourier 和 05 matching 已改用 RGR/LRR：**当前九种 PDF 的 01–05 主线仍是 NLO 基线**。
+**当前九种 PDF 的 `01–05` 主线仍是 NLO 基线。** 第 16.6–16.9 节另外记录了 `06_renorm_RGR_LRR` 中仅针对 unpolarized connected $u-d$ 的同窗 RGR+LRR 全链诊断。
 
 Wilson-loop 绝对/相对线质量候选、约束及有限质量重新确定见第 7、11、13、14 节，以及 `/public/home/donghx/.codex/Markdown/linear_devergence.md`。当前 01–05 的 ZR 未输入这套 Wilson-loop 约束。历史 k、质量候选及当前 ZR k 不能不经有限方案对齐直接数值替换，也不应把两个方案下相近的重整化矩阵元解释为已经单独确定了 UV 与有限质量的分解。
 
@@ -1881,7 +1881,7 @@ with np.load(base / f'05_matching/{ch}/{fl}/{en}/P{p}.npz') as d:
 
 ### 16.1 适用范围与短距系数
 
-`BASE` 沿用第 15 节定义。`BASE/06_renorm_RGR_LRR` 是 HYP3D5 **unpolarized connected $u-d$** 的坐标空间诊断：C24P29/L24x72、E32P29/L32x64、F32P30/L32x96 的归一化 $P=0$ 裸矩阵元用于联合拟合 $Z_R$，再应用于各 ensemble 的 $P=3,4$。三种方案共用原常数平台裸量和同一套 2000 个配对 bootstrap。每种方案更换短距系数后，均重新确定有限质量 $m_0$ 和其余 $Z_R$ 参数；没有对既有 NLO 矩阵元额外乘一次演化因子。九种 PDF 的 `01–05` 主线仍采用固定阶 NLO；本节的 RGR/LRR 测试未传播到 lambda 外推、Fourier 或 lightcone matching。
+`BASE` 沿用第 15 节定义。`BASE/06_renorm_RGR_LRR` 是 HYP3D5 **unpolarized connected $u-d$** 的坐标空间诊断：C24P29/L24x72、E32P29/L32x64、F32P30/L32x96 的归一化 $P=0$ 裸矩阵元用于联合拟合 $Z_R$，再应用于各 ensemble 的 $P=3,4$。三种方案共用原常数平台裸量和同一套 2000 个配对 bootstrap。每种方案更换短距系数后，均重新确定有限质量 $m_0$ 和其余 $Z_R$ 参数；没有对既有 NLO 矩阵元额外乘一次演化因子。九种 PDF 的 `01–05` 主线仍采用固定阶 NLO。第 16.1–16.5 节记录坐标空间诊断；同一短窗的 NLO 与 NLO+RGR+LRR 两套输入已各自继续做 $\lambda$ 外推、Fourier 和 lightcone matching，详见第 16.6–16.9 节。
 
 令 $\mu=2\,\mathrm{GeV}$、$\mu_h=2e^{-\gamma_E}/|z|$、$\alpha_h=\alpha_s(\mu_h)$。当前 RGR 在自然尺度计算系数，再演化到 $\mu$；LRR 在同一自然尺度加入领先 renormalon 的主值（PV）Borel 和：
 
@@ -1975,3 +1975,238 @@ $$
 - [Notebook 公式核对](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/RGR_LRR_Notebook_Audit_20261123/README.md)；[基线三方案与协方差模型](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/README.md)；[因子分解图](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/scheme_cancellation/hybrid_factor_cancellation.pdf)。
 - [短距窗口扫描与复现](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/m0_window_scan/README.md)；[Wilson loop 联合拟合和残差](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/m0_window_scan_WL/README.md)。
 - [两个短距窗口下的 $H_0/Z_R$ 与短距 $C_0$ 比较](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/m0_window_scan_WL/plots_Renorm_matrix/Renorm_matrix_3ens_unpolarized_all_schemes.pdf)；[最新 $P=3,4$ 矩阵元图册](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/RGR_LRR_z1_225_hybrid_P34/RGR_LRR_z1_225_3ens_P34.pdf)；[数据格式与作图脚本](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/RGR_LRR_z1_225_hybrid_P34/README.md)。
+
+### 16.6 两次演化：坐标空间参考尺度与 PDF 因子化尺度
+
+RGR（重整化群重求和）处理固定阶展开中的尺度对数；LRR（领先 renormalon 重求和）规定与 Wilson line 线质量相关的领先 Borel 奇点和有限质量处方。**DGLAP 是动量空间 RGR 的一部分**：一旦选择随 $x$ 变化的 matching 尺度，就需要把结果转换到共同的因子化尺度。加入 LRR 本身不引入另一次 DGLAP 演化。
+
+| 环节 | 演化的对象和方程 | 本次的尺度 |
+|---|---|---|
+| 坐标空间短距约束 | $C_0$ 由非局域算符的反常维数演化，具体的 $U_\Gamma C_0$ 和 NLO 扣除见第 16.1 节。 | $\mu_{h,z}=2e^{-\gamma_E}/\lvert z\rvert\;\longrightarrow\;\mu_{\mathrm{ref}}=2\,\mathrm{GeV}$。 |
+| 动量空间 inverse matching | 在各 $x$ 的自然尺度提取 lightcone PDF，再用非单态 DGLAP 关系求共同尺度的 PDF。 | $\mu_{h,x}=\max(1\,\mathrm{GeV},\,2\lvert x\rvert P_z)\;\longrightarrow\;\mu_F=2\,\mathrm{GeV}$。 |
+
+两个 $2\,\mathrm{GeV}$ 目前取相同数值：$\mu_{\mathrm{ref}}$ 是拟合 $Z_R$ 的短距系数参考尺度，$\mu_F$ 是输出 PDF 的 $\overline{\mathrm{MS}}$ 因子化尺度。坐标空间先在 $\mu_{h,z}$ 计算带 PV（Cauchy 主值）与固定阶扣除的系数，再演化 $C_0$；把它代入 $P_z=0$ 的关联拟合，重拟 $Z_R$ 和 $m_0$，最后按第 16.2 节做 hybrid 拼接。演化通过短距拟合进入 $Z_R$ 模型。长度 $z_1=0.225\,\mathrm{fm}$ 是短距拟合上限，$z_s=0.25\,\mathrm{fm}$ 是 hybrid 拼接点；$P_z$、$\lambda=zP_z$、外推截断和局域荷均不指定最终 PDF 的因子化尺度。
+
+### 16.7 动量空间的 LRR 核和非单态 DGLAP 实现
+
+当前按固定 $n_f=3$、$\alpha_s(2\,\mathrm{GeV})=0.296$ 运行两圈耦合。RGR+LRR 使用在 $\mu_{h,x}$ 求值的一阶逆 hybrid 核。在一阶逆匹配中减去领先线质量修正，修正系数 $\Delta m_{\mathrm{LRR}}(\mu_{h,x})$ 取 PV 和减去其 NLO 展开后的剩余项，并与坐标空间共用 PV 和 NLO 扣除约定。代码用带权坐标矩阵元的 Fourier 变换计算该卷积；全实轴保荷的虚项对应权重中的常数减项：
+
+$$
+w_\epsilon(z;z_s)=\theta(|z|-z_s)
+\left[|z|e^{-\epsilon|z|}-z_s e^{-\epsilon z_s}\right],
+\qquad \epsilon_{\mathrm{central}}=0.06\,\mathrm{GeV}.
+$$
+
+式中 $z,z_s$ 用 $\mathrm{GeV}^{-1}$。另存 $\epsilon=0.02,0.10\,\mathrm{GeV}$ 的对照。这里的全实轴虚项与本地 hybrid 核配套；不能把它标成原论文 pion 的有限支撑虚项或 notebook 的完整 NNLO 结果。
+
+对 $0<x<1$，定义 $f_\pm(x,\mu)=q_{u-d}(x,\mu)\pm \bar q_{u-d}(x,\mu)$。使用非单态 NLO splitting 核，求解
+
+$$
+f_\pm(x,\mu_{h,x})
+=\int_x^1\frac{dy}{y}\,U_\pm^{\mathrm{NS}}\!\left(\frac{x}{y};\mu_{h,x},\mu_F\right) f_\pm(y,\mu_F).
+$$
+
+左侧来自自然尺度 inverse matching（含 LRR 修正）。右侧在同一个 $\mu_F$ 定义未知 PDF，用每一行对应的 $\mu_{h,x}$ 构造从共同尺度到自然尺度的演化算子，再利用 $y\ge x$ 的支撑做上三角反解；不能将每个 $x$ 当成独立点乘一个演化因子。得到共同尺度的 $q_{u-d}$ 和 $\bar q_{u-d}$ 后，按 $q_{u-d}(-x,\mu_F)=-\bar q_{u-d}(x,\mu_F)$ 重组负 $x$。固定阶 NLO 对照直接在 $\mu_F=2\,\mathrm{GeV}$ 做 inverse matching，无需另做 DGLAP；RGR+LRR 产物也已经完成这一步，和相同尺度的 LHAPDF 比较前不再演化。
+
+### 16.8 实际操作顺序与输出检查
+
+1. **同窗重整化。**用三个 ensemble 各自的 $P_z=0$ 裸量，两种方案共用同一批 2000 个配对 bootstrap，在 $z_1=0.225\,\mathrm{fm}$ 分别拟合 NLO 和 NLO+RGR+LRR 的 $Z_R$，应用到各 ensemble 的 $P=3,4$。`WL` 对两种方案使用同一 Wilson loop 相对线质量约束；`free` 对两种方案均不加该约束。供下游读取的同窗输入位于 `BASE/06_renorm_RGR_LRR/Lambda_NLO_vs_RGR_LRR_Matched_z1_225_20261124/data/`。
+2. **外推和 Fourier。**在每个 bootstrap 副本上，对实、虚部做关联复数尾部拟合，按 $\lambda=zP_z$ 做 Fourier；主结果积分到 $\lambda_{\max}=100$，同时保存 $25$ 和 $50$ 的截断对照。脚本 `fourier.py`，产物目录 `01_tail_fourier/`。
+3. **Matching 和局域荷。**用 `matching.py` 和 `rgr.py` 执行第 16.7 节的对应方案；逐样本把同一份局域矢量荷 $Z_V h_B(P_z=0,z=0)$ 乘回 normalized 结果。Matching 输出 `02_matching/<WL或free>/<NLO或RGR_LRR>/<ensemble>/P{3,4}.npz` 的 `normalized_boot` 与 `restored_boot` 轴为 `(bootstrap, x)`。
+4. **查输出尺度和参考。**NPZ 的 `mu_GeV` 是最终 $\mu_F$，两套均为 $2\,\mathrm{GeV}$（$Q^2=4\,\mathrm{GeV}^2$）。`scale_mu_h_absx` 以唯一的正 $|x|$ 排列，与含正负两侧的 `x` 数组并非一一等长；RGR+LRR 的 `unregulated_scale_min_mask` 在有符号 `x` 网格标出满足 $2|x|P_z\ge1\,\mathrm{GeV}$ 的点。CT18NLO 比较用 `BASE/05_matching/reference.py` 的 `xfxQ(pid, x, 2.0)`，对应归档的 `Q_GeV=2.0`；如调用 `xfxQ2` 则传入 `4.0`。恢复局域荷和画 $xq(x)$ 都不改变 $\mu_F$。
+
+实测元数据示例：`WL` 的 F32P30（L32x96）$P=4$，$P_z\simeq1.99975\,\mathrm{GeV}$。在 $x=0.20,0.50,0.70$，RGR+LRR 的中间尺度分别约为 $1.000,2.000,2.800\,\mathrm{GeV}$，其中第一点受 $1\,\mathrm{GeV}$ 下限控制；三点的最终 $\mu_F$ 都为 $2\,\mathrm{GeV}$。当前只对 unpolarized connected $u-d$ 跑完这套 RGR+LRR 全链。该比较仍是诊断：两套 $Z_R$ 均未通过质量门，matching 文件中的 `physical_quality_accepted` 为 `False`。
+
+### 16.9 复核入口
+
+- 坐标空间：`BASE/06_renorm_RGR_LRR/physics.py` 的 `running_and_evolution`、`details`，以及 `model.py` 的短距约束。理论对应 arXiv:2305.05212v2 式 (3)–(5) 的坐标空间演化与线质量方案。
+- 动量空间：`rgr.py` 的 `prepare`、`evolution_rows`、`invert`、`lrr_mass`，以及 `matching.py` 的 `resummed` 与产物元数据。RGR 参考 arXiv:2209.01236v2 式 (15) 和附录 D；LRR 核参考 arXiv:2305.05212v2 式 (15)–(17)。
+- [本次运行说明、数据格式与复现命令](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/Matched_z1_225_Unpolarized_UD_Lightcone_20261124/README.md)；[CT18NLO 对比图册](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/Matched_z1_225_Unpolarized_UD_Lightcone_20261124/plots/CT18NLO_unpolarized_ud_comparisons.pdf)。
+
+## 17. Lightcone matching 的推导、尺度与复现（2026-11-25）
+
+本节对应 HYP3D5 **unpolarized connected $u-d$** 的三 ensemble、$P=3,4$、2000 个配对 bootstrap。`BASE` 沿用第 15 节；以下用 `R = BASE/06_renorm_RGR_LRR` 简写路径。`WL` 和 `free` 分别表示加与不加 Wilson loop 相对线质量约束。这里区分两个独立的扫描：一是固定坐标参考尺度、改变 lightcone 输出尺度；二是重拟坐标参考尺度、固定 lightcone 输出尺度。第 16 节所说的两个 $2\,\mathrm{GeV}$ 是首轮运行的设置。
+
+### 17.1 四类尺度：每个尺度进入哪里？
+
+| 符号 | 当前取法 | 对应对象 |
+|---|---|---|
+| $\mu_{h,z}$ | $2e^{-\gamma_E}/\lvert z\rvert$，代入时 $z$ 用 $\mathrm{GeV}^{-1}$ | 坐标空间 $C_0$ 的自然尺度，使 NLO 系数中的短距对数消失。 |
+| $\mu_{\mathrm{ref}}$ | 基准 $2\,\mathrm{GeV}$；另重拟 $4\,\mathrm{GeV}$ | 将短距系数演化到此处，用于 $P_z=0$ 的 $Z_R$ 拟合与有限质量条件；也出现在拟合模型显式的对数归一化里。 |
+| $\mu_{h,x}$ | $\max(1\,\mathrm{GeV},\,2\lvert x\rvert P_z)$ | 动量空间逆 matching 的逐行求值尺度，也是自然尺度 lightcone 结果的尺度标签。$1\,\mathrm{GeV}$ 是本地代码的下限。 |
+| $\mu_F$ | 已输出 $1,2,4,10,20\,\mathrm{GeV}$（坐标参考尺度为 $2\,\mathrm{GeV}$） | 最终 $\overline{\mathrm{MS}}$ lightcone PDF 的统一因子化尺度，比较同尺度 LHAPDF 时用 $Q=\mu_F$。 |
+
+坐标空间的演化由非局域算符的反常维数控制；动量空间演化使用 lightcone 非单态 DGLAP。两处的 running 在本代码中都以 $\alpha_s(2\,\mathrm{GeV})=0.296$、固定 $n_f=3$ 为共同定标条件。从 $\mu_{\mathrm{ref}}=2$ 改到 $4\,\mathrm{GeV}$ 时用同一 running 得到 $\alpha_s(4\,\mathrm{GeV})=0.22150969$，没有独立更换耦合定标。$\mu_{h,x}$ 的下限仅用于数值处方，不能修复原本 $2\lvert x\rvert P_z$ 太小的微扰区间，也不能消除有限动量的幂修正。$z_1=0.225\,\mathrm{fm}$ 是短距拟合窗边界，$z_s=0.25\,\mathrm{fm}$ 是 hybrid 拼接点；它们和 $P_z$ 都应随结果记录。
+
+### 17.2 从 hybrid 矩阵元到固定阶逆 matching
+
+记 $H(z,P_z)$ 为在原点归一化的 hybrid 形状，$H(0,P_z)=1$。用 $z$ 的自然单位和 $\lambda=zP_z$，对每个 bootstrap 做尾部外推及 Fourier：
+
+$$
+\widetilde q_{\mathrm{hyb}}(x,P_z)=\frac{1}{2\pi}
+\int_{-\lambda_{\max}}^{\lambda_{\max}}d\lambda\,e^{+ix\lambda} H(\lambda/P_z,P_z),
+\qquad H(-z,P_z)=H(z,P_z)^*.
+$$
+
+在 LaMET 的 leading-twist 近似下，固定 quasi 的 hybrid 定义，quasi 和 lightcone shape 满足
+
+$$
+\begin{aligned}
+\widetilde q_{\mathrm{hyb}}(x,P_z)
+&= \int_{-1}^{1}\frac{dy}{\lvert y\rvert}\,
+C_{\mathrm{hyb}}\!\left(\xi,\frac{\mu_F}{\lvert y\rvert P_z},\lvert y\rvert P_z z_s\right)
+q_{\mathrm{shape}}(y,\mu_F)+\text{幂修正},
+\qquad \xi=\frac{x}{y},\\
+C_{\mathrm{hyb}}&=\delta(1-\xi)+\frac{\alpha_s(\mu_F)C_F}{2\pi}[R_{\mathrm{hyb}}]_+ +O(\alpha_s^2).
+\end{aligned}
+$$
+
+上式略去 hybrid 有限质量处方等已固定的参数。光锥端 $q(y,\mu_F)$ 的支撑为 $-1\le y\le1$，负 $y$ 对应 $-\bar q(\lvert y\rvert,\mu_F)$；有限 $P_z$ 的 quasi 可以有 $\lvert x\rvert>1$ 的值。有限质子质量以及更高 twist 会给出幂修正；小 $x$ 或 $x$ 接近 1 时，控制尺度 $\lvert x\rvert P_z$ 或 $(1-\lvert x\rvert)P_z$ 变小，不能只用统计误差评估结果。
+
+例：本地 unpolarized 的一圈实项在 $0<\xi<1$ 包含
+
+$$
+R_{\mathrm{bare}}(\xi,p,\mu_F)=\frac{1+\xi^2}{1-\xi}
+\left[\ln\!\left(\frac{4\xi(1-\xi)p^2}{\mu_F^2}\right)-1\right]+1,
+\qquad p=\lvert y\rvert P_z.
+$$
+
+这里 $R_{\mathrm{bare}}$ 是代码中同名的核函数分项。代码在所有三个 $\xi$ 区间计算实项，并在 vector 通道加 $3\operatorname{Si}((1-\xi)p z_s)/(\pi(1-\xi))$ 得到 hybrid 实项；再用实轴上的 plus 处方补齐虚项。作为分布，$[R]_+$ 对光滑测试函数的作用由 $\phi(\xi)-\phi(1)$ 给出，故对常数测试函数为零。数值上按比值变量 $\xi$ 写卷积：实项在 $y=x/\xi$ 取输入值，虚项在 $y=x$ 做局域减项；两者的动量参数分别为 $\lvert x/\xi\rvert P_z$ 和 $\lvert x\rvert P_z$。`matching_physics.py` 在完整实轴做 plus 积分，使用解析的 hybrid 虚项与紧致化积分尾。代码把卷积所需的 quasi Fourier 到 $[-6,6]$（步长 $0.01$），对网格外按零延拓；这仍是有限输入支撑近似。正、负 $x$ 必须与 Fourier 符号、核和 antiquark 约定一起使用。
+
+令 $K_{\mathrm{hyb}}$ 表示上述一圈卷积算符，$a_s=\alpha_s C_F/(2\pi)$。利用
+
+$$
+(\mathbf 1-a_sK_{\mathrm{hyb}})(\mathbf 1+a_sK_{\mathrm{hyb}})
+=\mathbf 1+O(\alpha_s^2),
+$$
+
+得到实际使用的一阶逆核：
+
+$$
+q_{\mathrm{shape}}(x,\mu_F)=\widetilde q_{\mathrm{hyb}}(x,P_z)
+-a_s(\mu_F)\big[K_{\mathrm{hyb}}(\mu_F)\widetilde q_{\mathrm{hyb}}\big](x)
++O(\alpha_s^2,\text{幂修正}).
+$$
+
+固定阶分支直接代入统一的 $\mu_F$（存档主对照取 $2\,\mathrm{GeV}$）。这里截断的是**匹配核**，因此不对一圈核矩阵做精确数值求逆；下节求逆的是不同尺度之间的线性演化关系。
+
+### 17.3 RGR+LRR：先在自然尺度匹配，再恢复统一光锥尺度
+
+**第一步：自然尺度逆匹配。** 在树级 $y=x$，逆核的短距大对数以 $\mu/(2\lvert x\rvert P_z)$ 为特征；用 $\mu_{h,x}$ 求值可避免把从该尺度到共同 $\mu_F$ 的大对数全压在有限阶系数里。实项卷积内部仍使用 $p=\lvert y\rvert P_z$；代码没有将所有积分点的 $p$ 替换成 $\lvert x\rvert P_z$。记 $q_h(x)\equiv q_{\mathrm{shape}}(x,\mu_{h,x})$，本地实现为
+
+$$
+\begin{aligned}
+q_h(x)
+={}&\widetilde q_{\mathrm{hyb}}(x,P_z)
+-a_s(\mu_{h,x})[K_{\mathrm{hyb}}(\mu_{h,x})\widetilde q_{\mathrm{hyb}}](x)\\
+&-\Delta m_{\mathrm{LRR}}(\mu_{h,x})\,\mathcal F_\lambda[w_\epsilon(z;z_s)H(z,P_z)](x),\\
+\Delta m_{\mathrm{LRR}}(\mu)&=\mu\left[S_{\mathrm{PV}}(\alpha_s(\mu))-\alpha_s(\mu)r_0(1,1)\right],\\
+w_\epsilon(z;z_s)&=\theta(\lvert z\rvert-z_s)\big[\lvert z\rvert e^{-\epsilon\lvert z\rvert}-z_s e^{-\epsilon z_s}\big].
+\end{aligned}
+$$
+
+$S_{\mathrm{PV}}$ 是代码的单位 $\mu\lvert z\rvert$ PV 求和，$\alpha_s r_0$ 是已包含在 NLO 内的一阶项。$w_\epsilon$ 的常数减项对应本地全实轴虚项，中央 $\epsilon=0.06\,\mathrm{GeV}$，与第 16.7 节相同。此处 $\Delta m_{\mathrm{LRR}}$ 是 matching 核的 PV 减除系数，区别于 $Z_R$ 拟合得到的有限质量 $m_0$。LRR 本身没有附加一轮 DGLAP。`rgr.prepare` 用两个固定尺度核矩阵提取一圈对数斜率，生成逐行不同 $\mu_{h,x}$ 的矩阵与 PV 系数。修正后的 LRR Fourier 先在均匀有符号 $x$ 网格计算，再取 $x=\pm(0.02,0.03,\ldots,0.99)$。这样不把移除 $x=0,\pm0.01$ 后的非均匀网格直接传给假设均匀间距的 CZT；`weighted_fourier` 还用直接 Simpson 积分在若干点核对。
+
+**第二步：非单态 DGLAP。** 对 $x>0$ 定义 $q=q_{u-d}$、$\bar q=\bar u-\bar d$，$f_\pm=q\pm\bar q$。约定下式中 $P_\pm^{\mathrm{NS}}$ 是 $d/d\ln\mu^2$ 的 splitting 核，依同一固定 $n_f$ 方案截断到 NLO：
+
+$$
+\frac{d f_\pm(x,\mu)}{d\ln\mu^2}=
+\int_x^1\frac{dy}{y}\,P_\pm^{\mathrm{NS}}(x/y,\alpha_s(\mu)) f_\pm(y,\mu).
+$$
+
+记 $U(\mu_b,\mu_a)$ 将统一尺度 $\mu_a$ 的 PDF 演化到统一尺度 $\mu_b$。自然尺度输入在每行有不同的尺度，故选择一个待求的统一尺度 $\mu_F$，逐行构造
+
+$$
+f_{\pm,h}(x_i)=\sum_{j\ge i}A_{\pm,ij}(\mu_F)f_\pm(y_j,\mu_F),
+\qquad A_{\pm,ij}(\mu_F)=\big[U_\pm(\mu_{h,x_i},\mu_F)\big]_{ij}.
+$$
+
+$x$ 网格由小到大排列，DGLAP 的 $y\ge x$ 支撑保证了矩阵上三角，因此可从最大 $x$ 向下代入（`rgr.invert` 使用 `solve_triangular`）。有两个分布、两个非单态核；最后用 $q=(f_++f_-)/2$、$\bar q=(f_+-f_-)/2$ 恢复正负 $x$ 的存储约定。这解释了代码里 $U(\mu_h,\mu_F)$ 的方向：先用共同尺度到自然尺度的关系建方程，反解后得到共同尺度的 PDF。自然尺度匹配结果不是单一尺度上的一条 PDF，不能逐 $x$ 乘一个演化因子。
+
+**第三步：恢复局域荷并比较。** 用同一 bootstrap 的 $g_V^R=Z_V h_B(P_z=0,z=0)$ 乘回统一尺度的 shape，输出 $q^R(x,\mu_F)=g_V^R q_{\mathrm{shape}}(x,\mu_F)$。对这里的非单态矢量荷，恢复局域荷和取 $xq$ 都不改变 $\mu_F$。已匹配到目标尺度的文件无需再次演化来做同尺度比较。用 LHAPDF `xfxQ(pid,x,Q)` 时传 $Q=\mu_F$，`xfxQ2` 则传 $Q^2=\mu_F^2$。上一轮固定 $\mu_{\mathrm{ref}}=2\,\mathrm{GeV}$ 求 $\mu_F=20\,\mathrm{GeV}$，直接反解与从已匹配的 $q(x,2\,\mathrm{GeV})$ 演化的归一化 PDF 逐样本最大差为 $8.21\times10^{-10}$。这是数值闭合检验；CT18NLO 的 $Q=1.3\,\mathrm{GeV}$ 曲线只是跨尺度参照，不参与演化。
+
+### 17.4 为什么改了重整化参考尺度，hybrid 矩阵元却几乎不变？
+
+**短距系数有变化。** 保持 $\mu_{h,z}$、相同 running、PV 处方和减除阶数时，反常维数只依赖于耦合；由演化的组合律，
+
+$$
+\begin{aligned}
+C_0(z;\mu_b)&=U_\Gamma(\mu_b,\mu_{h,z})C_{0,\mathrm{short}}(z;\mu_{h,z})\\
+&=U_\Gamma(\mu_b,\mu_a)C_0(z;\mu_a).
+\end{aligned}
+$$
+
+$C_{0,\mathrm{short}}$ 包含 NLO 与 PV 减 NLO 重叠。实测 $2\to4\,\mathrm{GeV}$ 时，所有短窗点和边界点都给出 $C_0(z;4)/C_0(z;2)=1.14642108\ldots$（`C0.npz`）。这是与 $z$ 无关的乘法变换；在短距条件 $H_0/Z_R=C_0$ 下，若条件被精确满足，$Z_R$ 会相应反向缩放。实际 $Z_R$ 是带先验和离散效应的关联拟合，不能假设它在所有长度精确按同一常数变换。
+
+**短距分支逐样本严格抵消。** 按第 16.2 节，$H(z,P_z)=S(P_z,z)/H_0(z,a)$（$\lvert z\rvert\le z_s$）。两轮使用相同裸矩阵元和同一归一化零动量矩阵元 $H_0$；该分支不读 $Z_R$，也不直接乘 $C_0$。核对 12 个坐标空间输出，所有短距点逐样本差值均为零。
+
+**长距分支消掉所有与 $z$ 无关的因子。** 写
+
+$$
+\begin{aligned}
+\ln Z_R(z,a;\mu)&=N(a;\mu)+[A(a;\mu)+m_0(\mu)]\lvert z\rvert+a^2 f(\lvert z\rvert;\mu),\\
+A(a;\mu)&=\frac{k(\mu)}{a\ln[a\Lambda(\mu)]},\\
+F_\mu(z,a)&=\frac{Z_R(z_s,a;\mu)}{H_0(z_s,a)\, Z_R(z,a;\mu)}.
+\end{aligned}
+$$
+
+由于两个 $Z_R$ 在同一 ensemble，$N(a;\mu)$（包括显式参考尺度的对数归一化和 $d$ 项）**在每一套参数内部精确抵消**。记 $\Delta B=B(\mu_b)-B(\mu_a)$，两套长距因子的差异只剩
+
+$$
+\ln\frac{F_{\mu_b}(z,a)}{F_{\mu_a}(z,a)}=
+-(\lvert z\rvert-z_s)\,\Delta[A(a)+m_0]
+-a^2\,\Delta[f(\lvert z\rvert)-f(z_s)].
+$$
+
+所以 $m_0$ 单项变化不等于实际矩阵元变化。$k,\Lambda,m_0,f$ 的改变共同决定这个差；$g$ 和 $d$ 可以通过共同拟合间接影响它。若只有乘法归一化改变，长距分支也会完全重合。在当前重拟的设置下仍有小的长度依赖残差。
+
+**配对数据核对。** 固定短窗、$z_s$、协方差、光锥输出 $\mu_F=4\,\mathrm{GeV}$ 以及同一批 bootstrap，比较 $\mu_{\mathrm{ref}}=2\to4\,\mathrm{GeV}$：
+
+| 量 | `WL` | `free` |
+|---|---:|---:|
+| $z_s<\lvert z\rvert\le0.95\,\mathrm{fm}$ 内 $\max\lvert\langle F_4/F_2-1\rangle_b\rvert$ | $0.060\%$ | $0.161\%$ |
+| $\max\lvert\langle\widetilde q_4-\widetilde q_2\rangle_b\rvert$（归一化 quasi） | $3.56\times10^{-4}$ | $1.37\times10^{-3}$ |
+| $\max\lvert\langle\Delta[xq^R(x,\mu_F=4\,\mathrm{GeV})]\rangle_b\rvert$ | $5.74\times10^{-5}$ | $1.87\times10^{-4}$ |
+
+后两行的区间为 $0.25\le x\le0.8$、$2xP_z\ge1\,\mathrm{GeV}$，下标 $2,4$ 在 quasi 行指**坐标参考尺度**。最大值覆盖三 ensemble、$P=3,4$。例如 F32P30、$P=4$、`WL` 在 $x=0.50$ 的 $xq^R$ 从 $0.327814$ 变为 $0.327802$，配对差为 $(-1.21\pm0.28)\times10^{-5}$，单条光锥曲线的 bootstrap 标准差约为 $0.0066$。同一方案的 $m_0$ 同时由 $0.3218$ 变为 $0.3031\,\mathrm{GeV}$，说明单看 $m_0$ 不能判断最终的尺度敏感性。
+
+这个近似不变是**当前归一化 hybrid 处方下的合理结果**。它检验的是坐标参考尺度的敏感性；与改变 $\mu_F$ 后 lightcone PDF 的 DGLAP 变化可以同时成立。$Z_R$ 的质量门仍未通过，$\lvert z\rvert>0.95\,\mathrm{fm}$ 属模型延伸，表中小差异不能用来估计有限 $P_z$、格距、长距外推或微扰截断等全部系统误差。
+
+### 17.5 quasi PDF 的尺度如何标注？它满足 DGLAP 吗？
+
+**标注方案、参考尺度和动量。** 可以记作 $\widetilde q_{\mathrm{hyb}}(x,P_z;z_s,\mu_{\mathrm{ref}},\mathrm{PV})$，必要时再附格距和尾部截断。对基准数据可以写 “hybrid RGR+LRR quasi shape，$\mu_{\mathrm{ref}}=2\,\mathrm{GeV}$”；$4\,\mathrm{GeV}$ 重拟数据则把参考尺度标签换成 $4\,\mathrm{GeV}$。这两档的区别来自输入矩阵元和其方案标记。Fourier 只是改变表示，不赋予 quasi 一个 lightcone 的 $\mu_F$。$P_z$ 是外部动量，$\mu_{h,x}$ 是 matching 的中间尺度，二者都不能当作 quasi 的统一因子化能标。把同一份 quasi 匹配到 $2$、$10$ 或 $20\,\mathrm{GeV}$，quasi 数据保持同一份。
+
+**标准 DGLAP 适用于匹配后的 leading-twist lightcone PDF。** 有限 $P_z$ 的 quasi 来自等时的空间双局域算符。改变 quasi 自身的重整化处方时，应按对应非局域算符的重整化群方程或方案转换处理，混合归一化方案还会抵消共同的乘法因子；Fourier 变换后即使出现卷积形式，也不等于标准 lightcone splitting 核。改变 $P_z$ 也不是对 quasi 做 DGLAP，因为匹配核和有限动量幂修正随 $P_z$ 改变。
+
+具体地，固定已重整化的 quasi 和 $P_z$，把第 17.2 节的 leading-twist 匹配写成 $\widetilde q=\mathcal C(\mu_F)\otimes q(\mu_F)$。因子化一致性给出（导数包括核内耦合的 running，卷积为算符复合）
+
+$$
+\frac{d \mathcal C}{d\ln\mu_F^2}=-\mathcal C\otimes P_{\mathrm{NS}},
+\qquad
+\frac{d \mathcal C^{-1}}{d\ln\mu_F^2}=P_{\mathrm{NS}}\otimes\mathcal C^{-1}.
+$$
+
+因此固定 quasi 输入时，由逆核抽取的 $q(\mu_F)=\mathcal C^{-1}(\mu_F)\otimes\widetilde q$ 随 $\mu_F$ 做 DGLAP。坐标参考尺度的抵消与光锥因子化尺度的演化是两条不同的关系。实际流程应先匹配，再对已匹配的 PDF 做所需的统一尺度演化，或按第 17.3 节一次得到所需的 $\mu_F$。要做与全球拟合的精确高尺度比较，还需核对重味阈值和扰动阶数；目前格点演化固定 $n_f=3$，CT18NLO 参考为可变味数。
+
+### 17.6 操作清单、输出字段与参考文献
+
+1. **建立坐标输入。** 按第 16.2 节在三个 ensemble 的 $P_z=0$ 上拟合 $Z_R$，将同一方案用于各 ensemble 的 $P=3,4$。保持 $z_1$、$z_s$、先验、covariance、PV 处方和 bootstrap 行号一致。改变 $\mu_{\mathrm{ref}}$ 要重做 $C_0$、短距条件和 $Z_R$ 拟合，再更新 hybrid 矩阵元；只改 $\mu_F$ 时直接复用已有 quasi 和自然尺度匹配结果。
+2. **外推与 Fourier。** `Matched_z1_225_Unpolarized_UD_Lightcone_20261124/fourier.py` 做关联复数尾部外推，主结果 $\lambda_{\max}=100$、步长 $0.05$，保存 $25,50$ 的截断对照。核入口是 `BASE/all_pdf_pipeline/matching_physics.py`。当前推荐复用 `RGR_LRR_ScaleScan_1_2_4GeV_20261124/compute.py` 生成的 `normalized_at_hard_boot`；该入口修正了归档脚本对 LRR 项使用缺中心点的 Fourier 网格的问题。正文涉及 $2\to10/20\,\mathrm{GeV}$ 的核对均以**修正后的** $\mu_F=2\,\mathrm{GeV}$ 结果为基准。
+3. **选择输出能标。** `MuRef2_Lightcone10_vs_CT18NLO1p3_20261125/compute.py` 与 `MuRef2_Lightcone20_vs_CT18NLO1p3_20261125/compute.py` 读入同一份自然尺度结果；`rgr.py` 中 `evolution_rows(..., mu_target=...)` 生成矩阵，`invert` 反解。配套的 `plot.py` 画出同尺度 CT18NLO 及跨尺度参考曲线。坐标尺度扫描的 `MuRef4GeV_20261125/{refit,lightcone,plot}.py` 固定两支的 $\mu_F=4\,\mathrm{GeV}$。各运行目录的 `README.md` 有环境和复现命令。
+4. **读取与质量检查。** 自然尺度结果 `normalized_at_hard_boot` 以及最终 `normalized_boot`（shape）、`restored_boot`（恢复荷）都按有符号 `x` 保存。单一输出尺度的形状为 `(2000,196)`；多尺度档在首轴加尺度维。`mu_F_GeV`（或旧文件的 `mu_GeV`）是输出尺度，`short_distance_reference_mu_GeV`（或 `mu_ref_GeV`）是坐标参考尺度。`scale_mu_h_absx` 与正的 `x_abs` 对应，`unregulated_scale_min_mask` 标记 $2\lvert x\rvert P_z\ge1\,\mathrm{GeV}$。`bootstrap_original_row_ids` 用于配对做差，`physical_quality_accepted=False` 表示诊断。作尺度比较前检查上游 $Z_R$ 的 $\chi^2/\mathrm{dof}$、$Q$、尾部触边率和 $\lambda_{\max}$ 敏感性。
+
+例如，从已有坐标输入和已归档的 $10\,\mathrm{GeV}$ 配对结果复现 $20\,\mathrm{GeV}$ 计算和绘图：
+
+```bash
+cd /public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/MuRef2_Lightcone20_vs_CT18NLO1p3_20261125
+export PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 MPLCONFIGDIR=/tmp/donghx_mu_F20_mpl
+/public/home/donghx/AnaConda/bin/python compute.py
+/public/home/donghx/AnaConda/bin/python plot.py
+```
+
+本地证据：
+
+- [坐标参考尺度扫描与数表](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/MuRef4GeV_20261125/README.md)；[坐标空间对照图](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/MuRef4GeV_20261125/plots/mu_ref_coordinate.pdf)。quasi 配对差由 `02_lightcone/{WL,free}/<ensemble>/P{3,4}.npz` 的 `quasi_boot` 两个参考尺度槽直接计算；`matrix_summary.csv` 和 `lightcone_summary.csv` 分别记录坐标与光锥的配对差。
+- [修正后的自然尺度 matching 与 $\mu_F=1,2,4\,\mathrm{GeV}$ 输出](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/RGR_LRR_ScaleScan_1_2_4GeV_20261124/README.md)；[$\mu_F=20\,\mathrm{GeV}$ 流程与验证](/public/group/lqcd/donghx/Diagram_GluonPDF/Quark_PDF/Constant_Anchor075_P34_AllStages_20261122/06_renorm_RGR_LRR/MuRef2_Lightcone20_vs_CT18NLO1p3_20261125/README.md)。
+
+理论来源：Ji 等 [arXiv:2008.03886](https://arxiv.org/abs/2008.03886)（hybrid 方案）；Chou、Chen [arXiv:2204.08343v4](https://arxiv.org/abs/2204.08343v4) 式 (35)、(38)、(39)（各通道 hybrid-ratio 一圈核）；Su 等 [arXiv:2209.01236v2](https://arxiv.org/abs/2209.01236v2) 式 (12)–(15) 和附录 D（逆核的 RG、自然尺度、从大到小 $x$ 的演化）；Zhang 等 [arXiv:2305.05212v2](https://arxiv.org/abs/2305.05212v2) 式 (3)–(5)、(15)–(17)（坐标系数 RGE 与 LRR 核，本地全实轴虚项的区别见第 16.7 节）；Ji、Zhang、Zhao [arXiv:1706.08962](https://arxiv.org/abs/1706.08962)（空间直 Wilson line 算符的乘法重整化）；Moch、Vermaseren、Vogt [hep-ph/0403192](https://arxiv.org/abs/hep-ph/0403192)（非单态 splitting 核，本地仅取到 NLO）。

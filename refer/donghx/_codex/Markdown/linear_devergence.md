@@ -1,8 +1,8 @@
 # Wilson loop 与 Wilson line 抽取线性发散：方法、结果与诊断归档
 
-初次归档：2026-11-15；最后更新：2026-11-20（北京时间，第12–16节保留各轮窗口/flow测试，第17节集中记录H3从流化传播子到拟合式的推导及三个ensemble系数汇总）。目标文件：`/public/home/donghx/.codex/Markdown/linear_devergence.md`。文件名沿用用户指定的 `linear_devergence` 拼写。
+初次归档：2026-11-15；最后更新：2026-11-24（北京时间，第17节保留H3推导与11月20日系数；第18节汇总补充flow后的窗口扫描、C24半盒检验和新版图）。目标文件：`/public/home/donghx/.codex/Markdown/linear_devergence.md`。文件名沿用用户指定的 `linear_devergence` 拼写。
 
-本文集中记录本项目已经完成的 Wilson-loop 静态势/相对质量分析、2026-11-10 的闭合圈 double-ratio 重拟合、2026-11-13 的 loop–line 配对子集比较、2026-11-15 的三 ensemble flowed Wilson-line 与 HYP Wilson-line 分析、2026-11-16使用既有 Quark PDF 裸量进行的线性发散减除、共同有限质量拟合和 hybrid 因子比较、2026-11-18至19日完成的长度/参考点审计、长距离局部斜率、单参数有限长度修正和C24P29/F32P30逐级扩展，以及11月20日统一H3、大三个flow窗口检验和C24P29两flow提取。第17节将H3的连续一圈Landau推导和三个ensemble的当前条件系数集中归档。结果读取已有冻结产物；本轮仅进行推导恒等式与来源核验，不重新拟合数据。
+本文集中记录本项目已经完成的 Wilson-loop 静态势/相对质量分析、2026-11-10 的闭合圈 double-ratio 重拟合、2026-11-13 的 loop–line 配对子集比较、2026-11-15 的三 ensemble flowed Wilson-line 与 HYP Wilson-line 分析、2026-11-16使用既有 Quark PDF 裸量进行的线性发散减除、共同有限质量拟合和 hybrid 因子比较、2026-11-18至19日完成的长度/参考点审计、长距离局部斜率、单参数有限长度修正和C24P29/F32P30逐级扩展，以及11月20日统一H3、大三个flow窗口检验和C24P29两flow提取。第17节记录H3的一圈Landau推导和当时的条件系数；**最新的8-flow数据、连续子区间和条件系数见第18节**。本次文档更新读取已完成的数值产物，不重新拟合数据。
 
 **截至本次归档，尚未批准统一的最终线性发散系数。数值分析正常完成与拟合模型通过质量验收是两件不同的事。** 文中的小统计误差不包括完整的模型、窗口、自相关、定标、有限体积和连续极限不确定度。第11节记录PDF矩阵元诊断减除；第12–13节记录有限长度/质量扩展模型；第14节保留全flow历史结论；第15节限定大三个flow后有C24伴随、E32两表示和F32伴随通过窗，C24基础联合仍失败；第16节C24两flow分别可拟合但跨pair系数不同；第17节汇总推导、数值、参数数及适用域，不将C24两flow与其余三flow结果混称为统一方案。均不构成最终系数批准，也没有替换生产版smooth ZR。
 
@@ -22,6 +22,7 @@
 | flowed Wilson line 三ensemble统一H3（2026-11-20） | C24P29：976；E32P29：1700；F32P30：887 | 7560个拟合；放宽后E32两表示有条件工作值，C24伴随仅脆弱单窗，C24基础与F32全flow仍失败 |
 | flowed Wilson line 大三个flow的H3（2026-11-20，第15节） | 同上三组全量数据；仅原flow1/2/3 | 复用1512个拟合、新增504项内部检验；C24伴随、E32两表示、F32伴随有范围内合理窗；F32基础仅三长度候选，C24基础仍失败 |
 | flowed Wilson line C24P29两flow（2026-11-20，第16节） | C24P29：976；主范围为大三个flow的三种pair | 6048项H3/leading扫描；最大pair两表示在0.630–1.155fm通过，宽窗d跨pair仍有约4.45–5.54sigma差异，未确立通用系数 |
+| flowed Wilson line 补充至8个flow（2026-11-24，第18节） | C24P29/E32P29/F32P30：976/1700/887；同组态配对，最大流半径0.249875 fm | 全8-flow不作生产系数；21个连续flow子区间扫描给出六个H3工作窗，E32基础表示仍有显著flow窗依赖 |
 | 3D HYP5 Wilson line | C24P29/E32P29/F32P30；各100 | 三组测量完整；系数仅为有限长度/方案诊断 |
 | 4D HYP10 Wilson line | C32P29/E32P29/F32P30；各100 | 三组测量完整；不是3D HYP10 |
 | 3D HYP10 Wilson line | 尚无本次可用的实测 campaign | 不能用4D HYP10重新命名替代 |
@@ -1496,3 +1497,55 @@ E32两表示和F32伴随可保留为这一flow域下的条件工作值。F32伴�
 CPU核验作业4029843正常完成（exit 0:0）：48项径向方程/传播子投影/核的导数与积分/指数余项/对数原函数/有限线段H3恒等式检查通过；三轮来源共57项冻结产物SHA256核对通过；机器表保存6条统一三flow状态（含C24基础失败格）及2条C24最大pair系数，共8条记录。new_fits=0。本轮安装另核对第2–16节原文保持不变。
 
 **最终状态：H3有明确的一圈有限长度形状来源，但自由幅度拟合不是完整一圈理论验证；现有结果仍为指定模型/窗口/flow域下的条件系数，final_coefficient_approved=false。没有更新生产PDF减除、smooth ZR或连续极限结果。**
+
+## 18. 2026-11-24：补充至8个flow后的H3窗口、半盒检验与lnW图
+
+### 18.1 数据与全8-flow拟合
+
+Landau规范起点 `start0`；C24P29、E32P29、F32P30分别使用976、1700、887个组态，各flow严格同组态配对，基础表示 F 与伴随表示 A 分开处理。三个ensemble对应相同的物理流半径，flow编号 `0–7` 依次为 **0.138963、0.160460、0.179400、0.196523、0.212269、0.226925、0.240690、0.249875 fm**；编号 `4–7` 为本轮补充数据。格点流时间为 $\tau=t_f/a^2$，$r_f=a\sqrt{8\tau}$；相同的物理 $r_f$ 并不意味着三个ensemble有相同的 $\tau$。
+
+继续使用§17.5的H3模型：对组态均值取对数后构造同一表示的flow差分 $D_i(z)=\ln\langle W(z,r_i)\rangle-\ln\langle W(z,r_{\rm ref})\rangle$。每个子区间以其中最大flow为参考。拟合有共同的无量纲 $d$ 和自由有限长度幅度 $k_3$，以及每个非参考flow的差分截距，参数总数为 $N_{\rm flow}+1$；减除质量约定为 $m_{\rm line}=d/r_f$。下列误差均为主设置（block=1，相关矩阵相对删模阈值 $10^{-8}$）的jackknife统计误差。
+
+全8-flow、$z_{\min}\ge 3r_{f,\max}$ 至安全上限的固定长窗结果（括号内为 $\chi^2/\mathrm{dof}$）：
+
+| Ensemble | $z$ [fm] | F：$d\pm\sigma_{\rm JK}$（$\chi^2/\mathrm{dof}$） | A：$d\pm\sigma_{\rm JK}$（$\chi^2/\mathrm{dof}$） |
+|---|---:|---:|---:|
+| C24P29 | 0.8400–1.1550 | 0.370724 ± 0.000276（134.75） | 0.829849 ± 0.001833（15.70） |
+| E32P29 | 0.8073–1.0764 | 0.367288 ± 0.000179（12.09） | 0.822941 ± 0.000940（1.80） |
+| F32P30 | 0.7750–0.9300 | 0.346094 ± 0.000323（25.09） | 0.777083 ± 0.001536（7.22） |
+
+三套ensemble的基础表示均无合格的全8-flow窗口。E32伴随表示在上述长窗的名义 $Q=0.0175$，但未通过留一flow检查。若纳入所有安全非零 $z$，六组的 $\chi^2/\mathrm{dof}$ 均大于 $2\times10^5$，且 $d$ 明显下移；这些是H3失配诊断，不是更精确的系数测量。
+
+### 18.2 连续flow子区间扫描与当前工作窗
+
+扫描所有包含3–8个连续flow的21个区间和 $z\ge0.5$ fm、至少3个连续长度的 $z$ 窗：共1680个窗口、15120个协方差拟合，复核560个与前轮重合的窗口。主窗上限为C24的 $z/a=11$、E32和F32的 $z/a=12$。候选要求 $z_{\min}/r_{f,\max}\ge3$、$d>0$ 且相对统计误差不超过10%，并检查 block=1/2/5 与全协方差、相对删模阈值 $10^{-8}/10^{-6}$ 的九种组合。严格门要求至少4个长度、九个变体的 $Q\ge0.01$。
+
+下表六个工作窗均通过严格门、留一flow训练及预测 $Q\ge0.01$，并有一个稳定的相邻 $z$ 窗和一个稳定的同 $z$ 相邻flow窗。相邻 $z$ 窗只改一端一格；相邻flow窗只改一端一格或整体平移一格。稳定要求 $d$ 的配对漂移同时不超过 $3\sigma$ 和3%。这只是局部稳定性，不等于所有通过窗共享一个 $d$；筛选不以最小 $\chi^2/\mathrm{dof}$ 为目标。
+
+| Ensemble | 表示 | flow编号（含两端） | $r_f$ [fm] | $z$ [fm] | $d\pm\sigma_{\rm JK}$ | $\chi^2/\mathrm{dof}$ | $Q$ |
+|---|---|---|---:|---:|---:|---:|---:|
+| C24P29 | F | 2–5 | 0.1794–0.2269 | 0.7350–1.1550 | 0.387234 ± 0.000543 | 1.337 | 0.203 |
+| C24P29 | A | 2–6 | 0.1794–0.2407 | 0.7350–1.1550 | 0.861606 ± 0.001864 | 0.851 | 0.614 |
+| E32P29 | F | 4–7 | 0.2123–0.2499 | 0.8073–1.0764 | 0.359193 ± 0.000816 | 0.602 | 0.755 |
+| E32P29 | A | 1–4 | 0.1605–0.2123 | 0.7176–1.0764 | 0.821117 ± 0.001281 | 1.258 | 0.248 |
+| F32P30 | F | 2–5 | 0.1794–0.2269 | 0.6975–0.9300 | 0.339095 ± 0.000547 | 1.730 | 0.097 |
+| F32P30 | A | 1–5 | 0.1605–0.2269 | 0.6975–0.9300 | 0.767827 ± 0.001374 | 1.846 | 0.0476 |
+
+**E32P29基础表示保留两个flow窗口，不合并。** 固定同一个 $z=0.8073$–$1.0764$ fm，flow `1–3`（$r_f=0.1605$–$0.1965$ fm）也通过拟合、留一flow及相邻 $z$ 窗检查，给出 $d=0.369198\pm0.000620$、$\chi^2/\mathrm{dof}=1.338$。从 `1–3` 换到表中的 `4–7`，$\Delta d=-0.010006\pm0.001050$（配对JK，约−2.7%、−9.53σ）。较大的flow窗拟合优度更好，却不能消除这一系统差异。一般应兼顾小flow端的格点效应与大flow端的有限 $z/r_f$ 修正，不能只按flow大小选窗。
+
+### 18.3 C24半盒点与新版图
+
+只改变C24拟合上限，从 $11a=1.155$ fm 延至半盒 $12a=1.260$ fm；固定对应的下限、flow和主协方差设置。对flow `2–5`（$z_{\min}=0.735$ fm），F/A的 $d$ 分别移动 +0.000295（1.68σ）和 +0.001344（1.62σ）；对全8-flow（$z_{\min}=0.840$ fm），分别移动 +0.001273（9.90σ）和 +0.003852（3.80σ），拟合仍明显失配。漂移显著性用同组态配对JK差值计算，不用独立误差相加。这不是有限体积效应的单独证据，但半盒点并非合格窗所必需，故只作敏感性测试，不进入主拟合。
+
+新版图纵轴为先平均再取对数的 $\ln\langle W\rangle$，不是H3使用的flow差分；横轴为 $1/\sqrt{\tau}$。每张图包含三个ensemble，全部8个flow统一使用圆点，无新旧flow分界线，颜色只表示 $z/a$，误差棒沿用JK，连线只连接数据。C24只画 $z/a=1$–$11$，E32/F32画 $z/a=1$–$12$，两种表示共560个图点。新版不覆盖旧图，不改变任何拟合产物。
+
+- 基础表示：[PDF](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_all8_lnW_20261124/figures_safe/lnW_vs_inv_sqrt_tau_fundamental.pdf) · [PNG](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_all8_lnW_20261124/figures_safe/lnW_vs_inv_sqrt_tau_fundamental.png)。
+- 伴随表示：[PDF](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_all8_lnW_20261124/figures_safe/lnW_vs_inv_sqrt_tau_adjoint.pdf) · [PNG](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_all8_lnW_20261124/figures_safe/lnW_vs_inv_sqrt_tau_adjoint.png)。
+
+### 18.4 数值来源与状态
+
+- 作业 `4045828`：[新增flow审计](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_larger_rf_20261124/input_audit.json) · [初轮配对扫描](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_larger_rf_20261124/RESULTS.zh-CN.md)。
+- 作业 `4045908`：[全8-flow结果](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_all8_lnW_20261124/RESULTS.zh-CN.md) · [绘图数据](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_all8_lnW_20261124/lnW_points.csv) · [新版绘图脚本](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_all8_lnW_20261124/code/replot_safe_lnW.py)。重复半盒检查时复用[全flow拟合脚本](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_all8_lnW_20261124/code/analyze_all8.py)中的H3设计矩阵和配对JK，固定下限并比较 $n_{\max}=11$ 与12。
+- 作业 `4047011`：[工作窗与配对对照](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_window_grid_20261124/RESULTS.zh-CN.md) · [窗口图](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_window_grid_20261124/window_grid.pdf) · [窗口详表](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_window_grid_20261124/window_audit.csv) · [同z配对比较](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_window_grid_20261124/same_z_flow_shifts.csv) · [校验清单](/public/group/lqcd/donghx/Gradient_Flow_GluonPDF/wilson_line_H3_window_grid_20261124/complete.json)。
+
+**状态：** 上表是指定H3模型、有限格距和选定flow–$z$窗下的条件结果；统计误差不含完整窗口、模型和连续极限误差。`final_coefficient_approved=false`，未替换生产线性发散减除系数。
