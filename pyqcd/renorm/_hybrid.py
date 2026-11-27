@@ -246,17 +246,36 @@ def hR_lambda(lambda_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
 
 
 def hR_x(x_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
-         zs, z_data, hR_pz, hR_0, zr_fit, conf, transform='cos'):
-    """傅里叶变换 → 准 PDF，并显式声明实/复通道约定。
+         zs, z_data, hR_pz, hR_0, zr_fit, conf, transform='cos',
+         tail_model='none', tail_params=None, return_metadata=False):
+    """傅里叶变换 → 准 PDF，并显式声明实/复通道约定与尾部处理。
 
     ``transform='cos'`` 只接受实数 hR，执行偶 cos 变换：
     ``(1/pi) ∫_0^L cos(xλ) hR(λ) dλ``。
     ``transform='hermitian'`` 接受实或复 hR，并对复 Hermitian 延拓
     ``h(-λ)=h(λ)^*`` 使用
     ``(1/pi) ∫_0^L [cos(xλ) Re hR + sin(xλ) Im hR] dλ``。
+
+    ``tail_model`` 决定 ``λ > λ_max`` 的处理——这是当前生产链的真空缺：
+    上游 ``fit_hR_lambda`` 已经把尾形 ``l₁λ^{−a₁}e^{−λ/λ₀}`` 拟好参数，
+    但截断在 ``λ_max = z_data[-1]·P_z`` 时整段丢掉，截断误差无法量化。
+
+    - ``'none'``（默认）：与历史行为逐位一致，只积到 ``λ_max``。
+    - ``'power_exp'``：把**已拟合的** ``l1_fit_/a1_fit_/lambda0_fit_`` 从
+      ``λ_max`` 积到 ∞ 并加上（Gauss–Laguerre）。这就是同一尾部模型的自洽
+      补全，因此是当前生产路径的可量化截断误差。
+    - ``'la_nla'``：改用长距渐近尾 ``(C+B/λ)e^{−ηλ}`` 的解析闭式
+      （``E₁``），由 ``tail_params=(C, B, eta)`` 提供；``C``、``B`` 可为复数，
+      实/虚部各带自己的幅度，``transform='hermitian'`` 时 cos 与 sin 通道都补。
+
+    ``return_metadata=True`` 时返回 ``(out, metadata)``，metadata 记录尾部模型、
+    补上的量级与所用参数，便于把截断系统误差写进报告。
     """
     if transform not in ('cos', 'hermitian'):
         raise ValueError("transform 必须是 'cos' 或 'hermitian'")
+    if tail_model not in ('none', 'power_exp', 'la_nla'):
+        raise ValueError(
+            "tail_model 必须是 'none'、'power_exp' 或 'la_nla'")
     lambda_data, _ = hR_z_Pz(
         z_data, Pz_, hR_pz, hR_0, zs, zr_fit, conf)
     lambda_max = float(lambda_data[-1])
@@ -295,10 +314,57 @@ def hR_x(x_, Pz_, lambda_extra_, l1_fit_, a1_fit_, lambda0_fit_,
             else:
                 out[:, j] = (1.0 / pi) * dlam * (
                     hr[:, j].real @ cosine + hr[:, j].imag @ sine)
-        return out
-    if transform == 'cos':
+    elif transform == 'cos':
         out = (1.0 / pi) * dlam * (hr @ cosine)
     else:
         out = (1.0 / pi) * dlam * (
             hr.real @ cosine + hr.imag @ sine)
-    return np.asarray(out, dtype=out_dtype)
+    out = np.asarray(out, dtype=out_dtype)
+
+    tail_piece = None
+    if tail_model != 'none':
+        from ._tail import analytic_tail_fourier, power_exp_tail_fourier
+
+        x_values = np.asarray(x_, dtype=float)
+        if tail_model == 'power_exp':
+            tail_piece = power_exp_tail_fourier(
+                x_values, l1_fit_, a1_fit_, lambda0_fit_, lambda_max)
+        else:
+            if tail_params is None or len(tuple(tail_params)) != 3:
+                raise ValueError(
+                    "tail_model='la_nla' 需要 tail_params=(C, B, eta)")
+            C, B, eta = tail_params
+            cos_piece = analytic_tail_fourier(
+                x_values, C, B, eta, lambda_max, channel='cos')
+            if transform == 'cos':
+                tail_piece = cos_piece
+            else:
+                sin_piece = analytic_tail_fourier(
+                    x_values, C, B, eta, lambda_max, channel='sin')
+                tail_piece = np.asarray(cos_piece) + 1j * np.asarray(sin_piece)
+        tail_piece = np.asarray(tail_piece)
+        if out.ndim > 1 and tail_piece.ndim == 1:
+            tail_piece = tail_piece[:, None]
+        out = out + tail_piece
+    if not return_metadata:
+        return out
+    metadata = {
+        "transform": transform,
+        "lambda_max": lambda_max,
+        "lambda_extra": float(lambda_extra),
+        "tail_model": tail_model,
+        "tail_applied": tail_piece is not None,
+        "tail_max_abs": (
+            None if tail_piece is None
+            else float(np.max(np.abs(tail_piece), initial=0.0))),
+        "tail_relative_to_cut": (
+            None if tail_piece is None
+            else float(np.max(np.abs(tail_piece), initial=0.0) / max(
+                float(np.max(np.abs(out - tail_piece), initial=0.0)), 1.0e-30))),
+        "tail_parameters": (
+            None if tail_model == 'none' else
+            ([float(l1_fit_), float(a1_fit_), float(lambda0_fit_)]
+             if tail_model == 'power_exp'
+             else [complex(value) for value in tuple(tail_params)])),
+    }
+    return out, metadata

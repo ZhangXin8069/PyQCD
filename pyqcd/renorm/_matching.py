@@ -177,8 +177,9 @@ def _matching_matrix(y_grid, x_grid, pz_gev, mu, lambda_s,
     return matrix
 
 
-def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3):
-    """NLO 胶子准 PDF 的显式一圈 plus-subtraction 匹配。
+def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3,
+           alpha_s=None, return_metadata=False):
+    """胶子准 PDF 的显式一圈 plus-subtraction 匹配。
 
     Args:
         xx: x 网格（含负值，向量；精确零节点不支持）
@@ -187,8 +188,17 @@ def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3):
         hR_tilde_data: hR(x) 数组（与 xx 同形）
         mu_: 匹配标度（GeV，默认 2.0）
         lambda_s_fm: 大 λ 截断（fm，默认 0.3）
-    Returns:
-        hR_PDF（光锥 PDF 匹配结果）。
+        alpha_s: 可选显式固定耦合。生产链要求端点转换、绝对归一化与匹配
+            用同一个 ``α_s``；``None`` 回落 ``A_s_run(mu_)*4π``（历史路径）。
+            与 :func:`~pyqcd.renorm._tmdextract.tmd_matching_hybrid` 的同名
+            参数语义一致——此前本函数无此入口，同一条链上两处耦合可能不同源。
+        return_metadata: 为 True 时返回 ``(matched, metadata)``。
+
+    阶数缺口（明确声明，不用近似冒充）：本函数**只有一圈**核 ``g_0..g_3``。
+    两圈 LaMET 匹配核 ``g^{(2)}(ξ)`` 不在已吸收的参考材料中——那批给的是有限
+    转换系数 ``D_Γ``、短距 ``C₀``、胶子端点 ``U/H/P``。两圈的**端点**修正走
+    :func:`~pyqcd.renorm._gradient_flow_quasi.match_one` 的
+    ``endpoint_order=2``；两圈的**局域归一化**走 :func:`local_ratio_factor`。
     """
     xx = _validate_uniform_grid(xx, "matching x grid")
     hR_tilde_data = np.asarray(hR_tilde_data)
@@ -196,17 +206,45 @@ def hR_PDF(xx, Pz_, conf, hR_tilde_data, mu_=2.0, lambda_s_fm=0.3):
         raise ValueError(
             f"hR_tilde_data shape {hR_tilde_data.shape} "
             f"does not match x grid {xx.shape}")
-    dx = xx[1] - xx[0]
 
-    # A_s ≡ α_s/(4π)（zengch 惯例），×4π 还原真耦合。
-    alpha_s = A_s_run(mu_) * 4.0 * pi
+    if alpha_s is None:
+        # A_s ≡ α_s/(4π)（zengch 惯例），×4π 还原真耦合。
+        alpha_s = A_s_run(mu_) * 4.0 * pi
+        alpha_s_source = "A_s_run(mu)*4*pi"
+    else:
+        if isinstance(alpha_s, (bool, np.bool_)):
+            raise ValueError("alpha_s 必须是有限非负标量")
+        try:
+            alpha_s = float(alpha_s)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("alpha_s 必须是有限非负标量") from exc
+        if not np.isfinite(alpha_s) or alpha_s < 0.0:
+            raise ValueError("alpha_s 必须是有限非负标量")
+        alpha_s_source = "explicit_input"
     Pz_GeV = pz_to_gev(Pz_, conf)
     lambda_s = lambda_s_fm / fm_to_GeV * Pz_GeV
 
     yy = xx
     matrix = _matching_matrix(yy, xx, Pz_GeV, mu_, lambda_s)
     coupling = alpha_s * CA / (2.0 * pi)
-    return hR_tilde_data - coupling * (matrix @ hR_tilde_data)
+    matched = hR_tilde_data - coupling * (matrix @ hR_tilde_data)
+    if not return_metadata:
+        return matched
+    return matched, {
+        "order": "one_loop",
+        "matching_kernel": "g0_g1_g2_g3_with_plus_subtraction",
+        "alpha_s": float(alpha_s),
+        "alpha_s_source": alpha_s_source,
+        "mu_GeV": float(mu_),
+        "Pz_GeV": float(Pz_GeV),
+        "lambda_s": float(lambda_s),
+        "two_loop_kernel": "unavailable",
+        "two_loop_kernel_reason": (
+            "已吸收文献只给有限转换系数（D_Γ、C₀、胶子端点 U/H/P），"
+            "未给两圈 LaMET 匹配核 g^(2)(ξ)；不以近似冒充"),
+        "two_loop_endpoint_hook": "match_one(endpoint_order=2)",
+        "physical_acceptance": False,
+    }
 
 
 def A_s_run(mu, Lambda_QCD=0.23, nf=3.0):

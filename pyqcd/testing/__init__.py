@@ -2973,6 +2973,15 @@ def test_nnlo_line_mass_tail_contracts():
     run()
 
 
+def test_production_branch_wiring_contracts():
+    """hR_PDF / tmd_matching_hybrid / hR_x / match_one 的新入口接线契约。"""
+    from ._production_branch_wiring_contract import (
+        test_production_branch_wiring_contracts as run,
+    )
+
+    run()
+
+
 def test_analysis_safety_contracts():
     """Pz 标签、ratio 轴、复 meff、等价图和 helicity 参数安全门。"""
     from ._analysis_safety_contract import (

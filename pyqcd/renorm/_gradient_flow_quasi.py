@@ -143,8 +143,9 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
               absolute_normalization_validated=False,
               normalization_provenance=None,
               physical_acceptance=False,
-              legacy_z0=False, legacy_plus_combined=False):
-    """对一个 schema-v2 OPE 数组施加显式 policy 的一圈转换。
+              legacy_z0=False, legacy_plus_combined=False,
+              endpoint_order=1):
+    """对一个 schema-v2 OPE 数组施加显式 policy 的端点转换。
 
     Args:
         z0_policy: ``"nan"``（默认）对 z=0 输出 NaN；``"reject"`` 拒绝
@@ -162,6 +163,14 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
         legacy_z0: ``z0_policy="legacy_endpoint"`` 的显式布尔别名。
         legacy_plus_combined: ``helicity_mode="legacy_plus_combined"`` 的
             显式布尔别名。
+        endpoint_order: 非局域端点因子的展开阶数。
+
+            - ``1``（默认，向后兼容）：用 ``1/c_perp²``、``1/(c∥c⊥)``、
+              ``1/c∥²`` 的**重求和**形式，与历史产物逐位一致。
+            - ``2``：改用 ``_nnlo.gluon_endpoint_factor`` 的严格级数逆
+              ``1 − c₁a_s + (c₁²−c₂)a_s²``（``U/H/P`` 三段），含两圈系数。
+              与 ``order=1`` 的严格级数只差 ``O(a_s²)``；与默认的重求和
+              形式亦差 ``O(a_s²)``，故两者不能混用于同一张表。
 
     Returns:
         ``(matched, metadata)``。metadata 将 scheme conversion、window
@@ -261,8 +270,30 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
         np.arange(array.shape[4], dtype=float) * float(a_fm) * GEV_FM
     )
     line = np.exp(-delta_m * z_gev)[None, None, None, None, :, None]
-    factor_unpolarized = 1.0 / (c_perp * c_perp)
-    factor_helicity = 1.0 / (c_parallel * c_perp)
+    if isinstance(endpoint_order, (bool, np.bool_)):
+        raise ValueError("endpoint_order 必须是整数 1 或 2，不得为布尔值")
+    endpoint_order = int(endpoint_order)
+    if endpoint_order not in (1, 2):
+        raise ValueError("endpoint_order 必须是 1 或 2")
+    if endpoint_order == 1:
+        factor_unpolarized = 1.0 / (c_perp * c_perp)
+        factor_helicity = 1.0 / (c_parallel * c_perp)
+        endpoint_form = "resummed_one_loop"
+    else:
+        # 严格二圈逆：1 - c1 a_s + (c1^2 - c2) a_s^2，段映射
+        # U -> 垂直-垂直对（unpolarized 的两个 c_perp），
+        # H -> 混合对（c_parallel * c_perp），P -> 平行对。
+        from ._const import Nf
+        from ._nnlo import flow_log, gluon_endpoint_factor
+
+        L_f = flow_log(tau, a_fm, mu_gev)
+        factor_unpolarized = gluon_endpoint_factor(
+            "U", alpha_s, L_f, nf=Nf, order=2)
+        factor_helicity = gluon_endpoint_factor(
+            "H", alpha_s, L_f, nf=Nf, order=2)
+        # 平行方向 c_parallel == 1，P 段在 L 上无一圈项，不参与
+        # unpolarized/helicity 的组合因子。
+        endpoint_form = "strict_two_loop_series"
     factors = np.asarray(
         [factor_unpolarized, factor_helicity], dtype=np.float64
     )
@@ -313,7 +344,11 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
         else "legacy_plus_combined_diagnostic"
     )
     scheme_conversion = (
-        "one_loop_endpoint_applied_with_kappa_F"
+        "two_loop_endpoint_applied_with_kappa_F"
+        if (endpoint_order == 2 and kappa_F is not None)
+        else "two_loop_endpoint_applied_without_kappa_F"
+        if endpoint_order == 2
+        else "one_loop_endpoint_applied_with_kappa_F"
         if kappa_F is not None
         else "one_loop_endpoint_applied_without_kappa_F"
     )
@@ -322,7 +357,9 @@ def match_one(arr, tau, a_fm, mu_gev, alpha_s, ca=CA, *,
         "status": FLOW_TO_QUASI_STATUS,
         "scheme_conversion": scheme_conversion,
         "scheme_conversion_details": {
-            "order": "one_loop",
+            "order": "one_loop" if endpoint_order == 1 else "two_loop",
+            "endpoint_order": endpoint_order,
+            "endpoint_form": endpoint_form,
             "kappa_F": None if kappa_F is None else float(kappa_F),
             "kappa_F_provided": kappa_F is not None,
             "absolute_normalization_validated": (

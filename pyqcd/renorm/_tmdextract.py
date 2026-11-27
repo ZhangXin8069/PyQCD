@@ -494,7 +494,8 @@ def soft_function_intrinsic(R_square, b_perp, mu=2.0):
 def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
                         cs_kernel=None, soft_factor=None, pz_scale=2.0,
                         x_tmd=None, lambda_s_fm=0.3,
-                        return_metadata=False, alpha_s=None):
+                        return_metadata=False, alpha_s=None,
+                        matching_order=1):
     """混合方案 TMD 匹配（Eq.:matching_tmd 的离散实现，1 圈核）。
 
     x·g̃(x, b⊥) = ∫(dy/|y|)·C^hybrid(x/y, λs, μ/(yPz))
@@ -525,12 +526,27 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
         return_metadata: 为 True 时额外返回匹配状态字典。
         alpha_s: 可选显式固定耦合。工作流必须把端点转换、绝对归一化和
             matching 使用同一值；None 仅保留历史 A_s_run 计算路径。
+        matching_order: 匹配核阶数。**只接受 1**：本库的离散核是
+            ``g_0..g_3`` 的一圈实现，两圈核 ``g^{(2)}(ξ)`` 未进入本库（已吸收的
+            参考材料给的是有限转换 ``D_Γ``/``C₀``/端点 ``U,H,P``，不是 LaMET
+            匹配核）。传 2 会显式抛 ``NotImplementedError`` 并说明可用的两圈
+            入口，而不是静默退回一圈。两圈的**端点**修正在
+            :func:`~pyqcd.renorm._gradient_flow_quasi.match_one` 的
+            ``endpoint_order=2``，两圈的**局域归一化**在
+            :func:`~pyqcd.renorm._nnlo.local_ratio_factor`。
     Returns:
         ``(x_grid, x·g̃(x,b⊥))``；``return_metadata=True`` 时再附状态字典。
     """
     x = _validate_uniform_grid(x_grid, "x_grid")
     y = (x if y_grid is None
          else _validate_uniform_grid(y_grid, "y_grid"))
+    if matching_order != 1:
+        raise NotImplementedError(
+            f"tmd_matching_hybrid 只有一圈核 g_0..g_3；"
+            f"matching_order={matching_order!r} 不受支持。两圈 LaMET 匹配核 "
+            "g^(2)(ξ) 不在本库（已吸收参考材料给的是有限转换 D_Γ/C₀ 与端点 "
+            "U/H/P）。可用的两圈入口：match_one(endpoint_order=2)（端点）与 "
+            "local_ratio_factor(order=2)（局域归一化）")
     if x_tmd is None:
         raise ValueError("x_tmd 不得为 None")
     yg = np.asarray(x_tmd)
@@ -628,6 +644,14 @@ def tmd_matching_hybrid(x_grid, y_grid=None, b_perp=None, mu=2.0, pz_gev=2.0,
             "rapidity_scale": "zeta_z=(2*abs(y)*pz_gev)^2",
             "reference_rapidity_scale": "zeta_ref=(2*pz_scale)^2",
             "light_cone_matching": "one_loop_gg_only_diagnostic",
+            "matching_order": 1,
+            "two_loop_kernel": "unavailable",
+            "two_loop_kernel_reason": (
+                "已吸收文献只给有限转换系数（D_Γ、C₀、胶子端点 U/H/P），"
+                "未给两圈 LaMET 匹配核 g^(2)(ξ)"),
+            "two_loop_endpoint_hook": "match_one(endpoint_order=2)",
+            "two_loop_local_normalization": (
+                "local_ratio_factor(order=2)"),
             "alpha_s": float(alpha_s),
             "alpha_s_source": alpha_s_source,
             "x_support": [float(x[0]), float(x[-1])],

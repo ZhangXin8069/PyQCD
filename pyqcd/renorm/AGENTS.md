@@ -34,3 +34,35 @@ dev8 对照轮（2026-08-24，对照 matching_new/fit_zr_new/fit_ratio）：修�
 `refer/donghx/_codex/Markdown/{linear_devergence,baryon_da,gradient_flow_quark_pdf}.md`；
 文献 arXiv:2610.40225v1 Eq.(32)(34)(40)、arXiv:2311.16799v2 Eq.(3.9)(3.11)、
 arXiv:2006.12370v3 Eq.(22)–(25)。代码为独立实现，不 import refer。
+
+## 生产分支接线（stab57）
+
+四个入口新增可选参数，**默认路径逐位不变**（`stab56` 产物可直接复现）：
+
+| 入口 | 新参数 | 行为 |
+|---|---|---|
+| `_matching.hR_PDF` | `alpha_s`、`return_metadata` | 可显式固定耦合（与 `tmd_matching_hybrid` 同语义），metadata 声明两圈核缺口 |
+| `_tmdextract.tmd_matching_hybrid` | `matching_order` | 只接受 1；传 2 抛 `NotImplementedError` 而非静默退回一圈 |
+| `_hybrid.hR_x` | `tail_model`、`tail_params`、`return_metadata` | `'none'`(默认)/`'power_exp'`/`'la_nla'`，把 `λ_max` 之后的尾部积到 ∞ |
+| `_gradient_flow_quasi.match_one` | `endpoint_order` | `1`(默认) 重求和 / `2` 严格二圈级数逆 |
+
+**两圈的三个真实入口**（不可互换、不可混用于同一张表）：
+1. 端点：`match_one(endpoint_order=2)`；
+2. 局域归一化：`_nnlo.local_ratio_factor(order=2)`；
+3. 短距：`_nnlo.short_distance_c0(order=2)`。
+
+**两圈 LaMET 匹配核 `g^(2)(ξ)` 不在本库**——已吸收的参考材料给的是有限转换系数
+（`D_Γ`、`C₀`）与端点（`U/H/P`），不是动量空间匹配核。`hR_PDF` 与
+`tmd_matching_hybrid` 都在 metadata 里写明 `two_loop_kernel="unavailable"` 及原因，
+绝不以下述近似冒充：不得把 `(5/6)L` 型共线对数当成完整两圈核（曾试写过，已撤回）。
+
+**尾部补全的量级**（`hR_x`，`z_max=1.0` fm、`Pz=4`、`λ_max≈1.27`、`λ₀=0.5`）：
+`power_exp` 补上 `~3e-11`（相对主体 `2.7e-11`，可忽略）；`la_nla` 取
+`(C,B,η)=(1,0.2,0.5)` 时补上 `~3.5e-3`（相对 `2.8e-3`，不可忽略）。两者差两个
+量级，说明**尾部模型选择本身就是系统误差**，metadata 的 `tail_relative_to_cut`
+就是给报告的该分量。
+
+**`power_exp_tail_fourier` 的精度契约**（GL 节点，`n=88`）：`λ_L/λ₀ ≥ 1` 时
+`~1e-6`，`0.33` 时 `~7e-7`，`0.2` 时 `~1e-4`，`0.1` 时 `~9e-4`；`check=True`
+用 184 节点自洽复核，超过 `check_tolerance=1e-3` 抛 `ArithmeticError`。
+`numpy.polynomial.laguerre.laggauss` 在 `n ≥ 192` 自身出现 0/0，故节点上限 96。
