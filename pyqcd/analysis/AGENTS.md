@@ -28,3 +28,8 @@ c0 裸矩阵元提取（`_ratio_fit.py`，zengch 逻辑移植）、
   （test12 风格：makedata 合成物理可解析数据 → verify 断言产物/形状/参数恢复）。
 `_analyse.py` 增 dis_connect disconnected 矩阵元构造（PFF/PDF）与分组聚合基元
 mean/sum_over_array_of_list（take+stack 等价实现）。
+
+FH 前向差分必须显式零填充（`S(−1)=0`），不能用 `np.roll`：`S(t)=Σ_{τ=nex}^{t−nex}R(t,τ)`
+不是周期量，回绕会把最大 `tsep` 的累加搬到第 0 行（`FH(0)` 从 `R(0,0)` 变成
+`−S(t_max)`，量级差一个 `t_max`）。契约 `_fh_window_contract.FHForwardDifferenceContractTests`
+锁定 `nex=0` 的 `FH(0)=R(0,0)`、`nex>0` 前导行归零、内点等于显式差分。
